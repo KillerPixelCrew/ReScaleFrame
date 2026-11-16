@@ -138,3 +138,68 @@ Entry remains
 `463b1eed47090204dbb301b0332ca5cb9e5938907a67274994d59980e5aed0c7`.
 This batch is built and device-tested; its next game capture must still verify
 stable history and the newly serialized same-source depth descriptor.
+
+## Plan-only capture and status correction
+
+The subsequent native-only trial exposed a separate generic host defect. Root
+reported source16183/native16705 captured only the three native inputs at the
+planning rectangle, with SR result NOT_READY(-3), before actual evaluation.
+The current baseline was c32d8f7 with the coordinator's full Release gate of
+224 passed and14 skipped. This receipt does not invalidate the earlier measured
+reset sequence, but shows that its capture request was placed too late to test
+planning itself.
+
+Source review found `Host::process` calling `capture_inputs` before testing
+RECONFIGURE. That function exchanges the pending capture request, opens a frame
+record and snapshots resources. Planning then published NOT_READY into both
+the overlay report and `last_result`, even after an unchanged successful plan.
+An actual evaluation could succeed immediately afterward, causing alternating
+preparation/evaluation result logs and transient not-ready status. A plan is
+only a configuration operation: it produces neither a render capture nor a new
+evaluation result.
+
+The minimal correction leaves capture acquisition exclusively in non-planning
+calls. A successful unchanged plan returns NOT_READY as before, while retaining
+the last actual evaluation report and result, including an actual refusal.
+Unchanged means the settings generation, running pipeline, backend, quality,
+preset and output dimensions already match before preparation, and preparation
+still reports ready. Cold, changed, disabled or unsuccessful preparation does
+not qualify and continues publishing preparation-only NOT_READY with no
+effective backend. A no-camera size plan has the same status rules; it never
+evaluates or reads camera matrices. Pending reset state is neither cleared nor
+manufactured by the unchanged-plan return. No provider, token, pacing, owner or
+capture completion rule changes.
+
+The existing real shared SR device fixture now requests capture before the
+plan/plan/evaluate sequence, asserts that planning creates no bundle, then
+requires the actual source's successful SR status, selected raster dimensions
+and backend reset constants. It retains the exact cold refusal, missing-depth
+refusal and eight-value reset sequence. Additional unchanged plans after each
+actual evaluation must preserve its success or refusal when Present samples
+the public report. A final real quality change must instead publish NOT_READY
+and no effective backend. The fixture still cancels its assembled-input dump;
+it makes no complete final-image or matched-Present capture claim.
+
+Only source/diff and UTF-8 checks were performed by this worker. The new device
+fixture and full Release gate are pending coordinator execution; the earlier
+224/14 gate does not validate this correction. The original failed run and
+capture remain evidence, with no new game or visual acceptance claimed.
+
+## Coordinator capture and diagnostic batch validation
+
+The coherent Windows Release VS2026 gate
+`verify-inventory-capture-diagnostics-20261116.log` passed:224 passed,14 skipped,
+238 total in118.80seconds, with clean Rust fmt/Clippy. The explicitly rebuilt
+hidden shared-SR device fixture passed in `capture-plan-device-20261116.log`: a
+capture request survived plan/plan calls and recorded the actual evaluation
+source/raster; unchanged plans preserved actual success/refusal status, while
+a genuine quality change cleared stale output status. The existing actual
+backend reset sequence remained1,0,1,0,1,0,1,0, with exact cold and missing-depth
+refusals. FG remained Off. This fixture does not claim complete final-image
+capture or a native game result.
+
+Built Runtime SHA256 `22830370ac079440177912e1b77680b37d55b7b1cd43915b6e2a68a4f70ce772`
+and Fallout4 Entry SHA256 `be2e0bbff6f030a2e69eade3bd3ea57f0d2ac54f996b00d6820b32d48034109f`
+identify this batch. CPU conjunction and reduced-scope receipts are built but
+not observed in a new game run; no image, source-binding, FG or latency repair
+is claimed from these diagnostics.

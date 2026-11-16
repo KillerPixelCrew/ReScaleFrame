@@ -267,9 +267,14 @@ bool emit_sr() {
     world.chain = inputs.chain;
     world.inputs = true;
     if (sr_off) return false; // Keep actual FG/native output facts, with no SR/output-state mutation.
-    if (!begin_output_resolution(world.depth_snapshot,pass)) { world.refused=true; return false; }
+    if (!begin_output_resolution(world.depth_snapshot,pass)) {
+        report_resolution_state(ResolutionStage::output_ready,pass,inputs.context.Get(),false,RSF_ERROR_NOT_READY,report);
+        world.refused=true; return false;
+    }
+    report_resolution_state(ResolutionStage::output_ready,pass,inputs.context.Get(),false,RSF_OK,report);
     int32_t result = RSF_ERROR_NOT_READY;
     try { result = reconstruct(inputs,pass); } catch (...) { (void)drain_auxiliaries(); }
+    report_resolution_state(ResolutionStage::evaluated,pass,inputs.context.Get(),result==RSF_OK,result,report);
     if (result != RSF_OK) { if (!end_output_resolution()) world.refused=true; return false; }
     world.published = true;
     diagnostic("Fallout4 producer-verified SR publication accepted before imagespace; scoped native output/auxiliary consumers active, FG remains unproven.");
@@ -334,6 +339,7 @@ void observe_viewport(void* manager, bool enabled) {
     }
     if (live.load(std::memory_order_acquire) && manager == reinterpret_cast<void*>(image() + 0x2f4d750)) {
         if (caller == image() + 0x21fa2ca) {
+            report_resolution_state(ResolutionStage::hudless,world.inputs ? world.pass : world.frame_pass,world.context.Get(),world.published,RSF_OK,report);
             try { emit_hudless(); } catch (...) { diagnostic("Fallout4 HUDless callback failed; native drawing retained."); }
         }
     }
@@ -453,7 +459,9 @@ void observe_imagespace() {
             if (!selected) return;
             const auto error = GetLastError();
             if (!drain_auxiliaries()) diagnostic("Fallout4 auxiliary retirement remains pending after native imagespace; owner retained.");
+            report_resolution_state(ResolutionStage::ui_return,world.inputs ? world.pass : world.frame_pass,world.context.Get(),world.published,RSF_OK,report);
             if (!end_output_resolution()) world.refused=true;
+            report_resolution_state(ResolutionStage::ui_restored,world.inputs ? world.pass : world.frame_pass,world.context.Get(),world.published,RSF_OK,report);
             if (output_resolution_busy()) { world.refused=true; diagnostic("Fallout4 native output-state cleanup remains owned; subsequent world admission blocked."); }
             world.in_imagespace = world.published = false;
             SetLastError(error);
@@ -474,11 +482,14 @@ void observe_effects(void* manager, uint32_t first, uint32_t last, uint32_t mode
     uintptr_t native_manager{};
     if (live.load(std::memory_order_acquire) && caller == image() + 0x21fa288 && first == 0 && last == 13 && mode == 1 && flags == 1 &&
         read(image() + 0x3e5e4b0, &native_manager, sizeof(native_manager)) && uintptr_t(manager) == native_manager) {
+        report_resolution_state(ResolutionStage::pre_sr,world.frame_pass,world.context.Get(),world.published,RSF_ERROR_NOT_READY,report);
         try { (void)emit_sr(); } catch (...) { diagnostic("Fallout4 SR callback failed; native imagespace retained."); }
     }
     SetLastError(error);
     effects(manager, first, last, mode, flags);
     const auto native_error=GetLastError();
+    if (caller==image()+0x21fa288 && first==0 && last==13 && mode==1 && flags==1)
+        report_resolution_state(ResolutionStage::effects_return,world.inputs ? world.pass : world.frame_pass,world.context.Get(),world.published,RSF_OK,report);
     if (caller==image()+0x21fa288 && first==0 && last==13 && mode==1 && flags==1 && world.auxiliary_open)
         if (!drain_auxiliaries()) diagnostic("Fallout4 VATS/auxiliary restoration refused at native Effects return; owner retained.");
     SetLastError(native_error);
@@ -667,7 +678,10 @@ void finish_render_scope() noexcept try {
         frames.fetch_sub(1,std::memory_order_acq_rel);
     }
     (void)drain_auxiliaries();
-    if (!finish_resolution_source()) world.refused=true;
+    const bool resolution_finished=finish_resolution_source();
+    if (!resolution_finished) world.refused=true;
+    report_resolution_state(ResolutionStage::source_retired,world.inputs ? world.pass : world.frame_pass,
+        world.context.Get(),world.published,resolution_finished ? RSF_OK : RSF_ERROR_NOT_READY,report);
     if (!resolution_busy() && !world.auxiliary_open) world = {};
 } catch (...) {}
 }

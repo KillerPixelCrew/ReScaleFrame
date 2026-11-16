@@ -1574,3 +1574,61 @@ native4CB273/null50 shutdown fault;21/21 entries restored, exact ENB proxy
 returned and custom INI unchanged. Native module absence is proved, but its
 foreground0 quality requests and absent bound owner are not SR/FG/latency
 acceptance. The gate log is verify-worker-vtable-20261116.log.
+
+
+### Post-vtable native-only remaining CPU gate receipt
+
+The coordinator built/pushed c32d8f7 with the exact vtable correction. The
+complete Windows Release VS2026 gate `verify-worker-vtable-20261116.log`
+passed224/14 (238total) in117.36seconds, Rust fmt/Clippy clean. Native-only
+PID66836/report172137-067 used Entry72B274B92AF5F5AFAC334F92E89EBC091812CD3A7FD05CF8B8A43713A393A449
+and Runtime8570CCC2... . Its128-row cycle trace now confirms exact destructor/
+vtable/Run, Main, worker, state and HWND predicates, including ordinary native7851.
+Nevertheless no RESERVE/SAMPLED/BIND was emitted. Foreground1 FG/latency settings
+applied, but status still showed no bound owner, pacing or markers; root later
+disabled them. Quality1 failed visual acceptance and is owned by the separate
+render investigation. Native Quit/Desktop reproduced4CB273/C0000005; root
+verified21 restored rows/custom unchanged. ENB remains deferred.
+
+No additional native layout failure is proved by this trace. It does not expose
+retained constructed/sealed/present/closed/invalid state or selected job/wrapper
+TLS, so those must be observed rather than inferred from a native Present hook
+or the SUBMISSION announcement. CPU-only receipts now report the first distinct
+scalar conjunctions at worker Poll admission (channel1) and existing Present
+phase admission (channel2), with a shared hard32-row atomic budget. Each row
+names its first missing zero-based bit, full mask, retained/requested/TLS source,
+submission, native frame/window, depths/selected scope, flags and threads. It
+reports a native candidate/refusal only, never core acceptance.
+
+Channel1 bit order is enabled, selected job, selected wrapper, job_depth1,
+wrapper_depth1, jobs1, no previous Poll, no raw writer, constructed, sealed,
+present, not closed, not invalid, different render thread, native_cycle,
+same cycle, same native state, same manager (all0x3ffff). Channel2 is enabled,
+current CPU source, constructed, not closed, not already present, requested frame,
+requested window, same render thread, native_cycle, same cycle, same native state
+(all0x7ff). Native read-only predicate values are copied even when an earlier
+term fails; no guard is loosened. Logging is outside worker_guard and does not
+emit an event, modify native state or create another ledger. Existing exact byte/
+pointer guards are unchanged. The ignored cpu-native-gate-diagnostics-freeze
+receipt records source hash and bit definitions. Diff checks passed; this new
+diagnostic source awaits coordinator compilation and bounded native observation.
+No worker build, process query, game/UI/attach or deployment was performed.
+
+## Coordinator capture and diagnostic batch validation
+
+The coherent Windows Release VS2026 gate
+`verify-inventory-capture-diagnostics-20261116.log` passed:224 passed,14 skipped,
+238 total in118.80seconds, with clean Rust fmt/Clippy. The explicitly rebuilt
+hidden shared-SR device fixture passed in `capture-plan-device-20261116.log`: a
+capture request survived plan/plan calls and recorded the actual evaluation
+source/raster; unchanged plans preserved actual success/refusal status, while
+a genuine quality change cleared stale output status. The existing actual
+backend reset sequence remained1,0,1,0,1,0,1,0, with exact cold and missing-depth
+refusals. FG remained Off. This fixture does not claim complete final-image
+capture or a native game result.
+
+Built Runtime SHA256 `22830370ac079440177912e1b77680b37d55b7b1cd43915b6e2a68a4f70ce772`
+and Fallout4 Entry SHA256 `be2e0bbff6f030a2e69eade3bd3ea57f0d2ac54f996b00d6820b32d48034109f`
+identify this batch. CPU conjunction and reduced-scope receipts are built but
+not observed in a new game run; no image, source-binding, FG or latency repair
+is claimed from these diagnostics.
