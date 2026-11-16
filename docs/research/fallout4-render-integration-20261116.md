@@ -996,3 +996,29 @@ Separate `enb-control-20261116-161307-318/enb-control.json` confirms restored=tr
 and exact wrapper SHA AC194BD525BB1C3CF363448F1D2B9F96DD859424E6FEAC00695B152B4B951388.
 The documentation/audit worker performed no process, game/UI, build, GPU or
 target-write operation. Earlier failed trials remain historical evidence.
+
+
+### Native-first order and successor trial disposition
+
+The successor association is now built in committed0992155, superseding its
+unbuilt status at the earlier paired controls. Full Release VS2026 verification
+passed223/15 with clean Rust fmt/Clippy and the new handoff fixture passed;
+this does not establish live binding. PID10792/report164621-778 used
+Runtime8570CCC2.../Entry87362E64... and sustained native-scale SR about55fps,
+but emitted no RESERVE/SAMPLED/BIND. Accepted FGOn/latency1 settings produced
+FGactive0/tags0 and latency paced0/markers0, not accepted FG or latency.
+The user explicitly rejected the duplicated-scene ENB Quality1 result.
+
+The ED9D observer's unexpected inner-vtable owner refusal occurred before
+hooks/file and does not prove a rendering defect. The native-cycle probe
+captured only armed/detached rows while later paused; no failed native predicate
+was observed. `post-close-disposition.json` records incomplete observation with
+owned-window-absent refusal, actual exit0 by UNVERIFIED method,20/20 restored and
+custom INI unchanged. Root close actions refused, so neither native Quit nor a
+close AV is claimed for this run.
+
+The explicit user order is complete native Fallout4.exe without F4SE/ENB first,
+including direct launch and proved module absence, then compatibility. That
+proof is forthcoming; prior native-scale SR within a modded run is not it.
+F4SE/ENB work is deferred, not dropped. No production code, build or
+game/process/UI action was performed for this documentation update.

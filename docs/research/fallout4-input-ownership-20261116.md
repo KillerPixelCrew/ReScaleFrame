@@ -1497,3 +1497,35 @@ identify the built working-source batch over committed07afb10. This supersedes
 its earlier unbuilt status only: live native successor binding and FG/latency
 admission remain pending. ENB-associated reduced image corruption remains a
 separate investigation. No worker build, game or process action was performed.
+
+
+The subsequent PID10792 predicate observer did not identify a failed predicate.
+Its durable JSONL contains only armed and time-budget-detached rows, errornull;
+the game was later observed paused with menu/ENB UI. That absence is not proof
+that native_cycle or the Present phase failed. The separate512-row ordering
+trace still proves ordinary world/wrapper Poll execution with mode1/running1/
+exit0 and no emitted RESERVE in that trial. Root reports actual exit0 and
+20/20 controller restoration; its refused close actions do not establish the
+exit method. No predicate-based production repair follows from these results.
+
+The latest user instruction orders native Fallout4.exe validation without
+F4SE/ENB first, with module absence proved, followed by compatibility only after
+native functionality passes. The bounded predicate helper is retained unchanged for a
+fresh native-only trial. Its current literal PID guard and config both name
+10792 and must be refreshed together only after the next owned PID is known;
+it must not be attached using the stale config. No production edit, build,
+process query, game action or renewed ENB investigation was performed here.
+
+
+Final PID10792/report164621-778 disposition is now authoritative in
+`post-close-disposition.json`: committed0992155, Runtime8570CCC2... and
+Entry87362E64... ran steady native-scale SR about55fps, with no RESERVE/SAMPLED/
+BIND emission. FGOn/latency1 settings accepted but FGactive0/tags0 and latency
+paced0/markers0 are not admission or latency acceptance. The ED9D inner observer
+refused unexpected inner vtable ownership before hooks/file; this is not proof
+of the rejected ENB Quality1 duplicated scene's cause. Observation did not
+complete (owned-window-absent refusal); actual exit0 has UNVERIFIED method,
+20/20 rows restored and custom INI unchanged. Root close actions refused; no
+close AV or native-Quit claim applies to this run. The cycle probe remains
+inconclusive. Native-only direct-executable/module-absence validation is next;
+compatibility remains deferred until the native phase passes.
