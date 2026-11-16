@@ -66,7 +66,15 @@ bool make_backup(ID3D11Device* device, ID3D11Texture2D* texture, Backup& b) {
     }
     b.original = texture; return true;
 }
-bool colour_format(DXGI_FORMAT f) {
+bool colour_format(ID3D11Device* device, DXGI_FORMAT f) {
+    if (f == DXGI_FORMAT_R11G11B10_FLOAT) {
+        // The nearest numeric path loads a snapshot and draws into a same-format
+        // RTV. Typed UAV access is not used and is not an admission requirement.
+        UINT support{};
+        constexpr UINT required = D3D11_FORMAT_SUPPORT_TEXTURE2D | D3D11_FORMAT_SUPPORT_SHADER_LOAD |
+            D3D11_FORMAT_SUPPORT_RENDER_TARGET;
+        return SUCCEEDED(device->CheckFormatSupport(f, &support)) && (support & required) == required;
+    }
     return f == DXGI_FORMAT_R8_UNORM || f == DXGI_FORMAT_R8G8B8A8_UNORM || f == DXGI_FORMAT_R16G16_FLOAT ||
         f == DXGI_FORMAT_R16_FLOAT || f == DXGI_FORMAT_R32_FLOAT || f == DXGI_FORMAT_R16G16B16A16_FLOAT;
 }
@@ -122,7 +130,7 @@ bool AuxiliarySurfaces::prepare(ID3D11DeviceContext* context, const rsf_game_ren
         if (a.kind == RSF_D3D11_AUXILIARY_DEPTH_STENCIL) {
             if (++depth_count > 1 || d.Format != DXGI_FORMAT_R24G8_TYPELESS || !(d.BindFlags & D3D11_BIND_DEPTH_STENCIL)) return false;
             for (float bound : a.source_rect) if (std::floor(bound) != bound) return false;
-        } else if (!colour_format(d.Format)) return false;
+        } else if (!colour_format(device.Get(), d.Format)) return false;
     }
     if (!s.vertex) {
         if (!rsf::compile_vertex(device.Get(), colour_shader, "auxiliary_scale", "vertex_main", &s.vertex, log, user) ||

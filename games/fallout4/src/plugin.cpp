@@ -15,7 +15,7 @@
 #include <string>
 
 namespace {
-constexpr char pending[] = "Verified native-raster SR callbacks; reduced quality, FG admission and measured latency pending validation.";
+constexpr char pending[] = "Guarded native/reduced SR callbacks; game quality, FG admission and measured latency pending validation.";
 std::mutex lifecycle;
 bool prepared{}, active{};
 rsf_game_host_services upstream{}, services{};
@@ -165,10 +165,11 @@ rsf_result prepare(const rsf_game_prepare_args* args) noexcept try {
         setup.motion.scale_x = setup.motion.scale_y = 1.0f;
         setup.motion.output_scale_x = setup.motion.output_scale_y = 1.0f;
         setup.colour_transport_default = 1;
-        setup.quality_choices = 1;
+        setup.quality_choices = 0x1f; // Existing standard Native/Quality/Balanced/Performance/Ultra Performance controls.
         setup.presentation_bridge = 3;
         setup.accept_window = rsf::fallout4::accept_window;
-        setup.capabilities = 0; // Whole-frame/submission leases await runtime validation; input admission remains unproven.
+        // Implemented producer declarations for cold admission tests, not acceptance.
+        setup.capabilities = RSF_D3D11_HOST_CAP_FG_INPUTS | RSF_D3D11_HOST_CAP_INPUT_TIMELINE;
         auto bound = *args->host;
         const auto result = create(&setup, &bound);
         if (result != RSF_OK) return result;

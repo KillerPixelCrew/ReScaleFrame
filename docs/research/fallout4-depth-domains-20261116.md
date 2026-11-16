@@ -412,3 +412,531 @@ exercise the mathematics, not the compiled adapter or a GPU. Receipts are
 `depth-domain-scalars-20261116.json` under the ignored research directory.
 New source whitespace was checked. No worker build, game run, deployment,
 shared-header/runtime edit or capability activation was performed.
+
+## Reduced producer raster and canonical crop implementation
+
+The next source change extends the same stack snapshot with the actual
+immediate-context RSGetViewports record at the selected post-prepass return,
+separately from Context shadow90..A4, dirty bits, normalized port6d0,
+logical color/depth/cube selectors, selected logical descriptor dimensions,
+FE4/FE5, actual ratios, bound DSV identity and scissor coverage. It reads the
+native 32-bit cube binding at shadow54 as an index, not a pointer. Foreign
+cube/color/depth selection, a bound DSV not viewing the current Main depth
+allocation, non-immediate/wrong-device context or non-R24/full-output depth
+allocation refuse. Selected color1 or absent color with depth1 is required;
+the descriptor getter's native color stride20 or depth stride1c is retained.
+
+Reduced publication requires actual submitted viewport XYWH to agree exactly
+with the pending shadow XYWH and all three keyed camera ports to match that
+normalized port. Depth endpoints may differ because the final camera restore
+can be pending. The selected descriptor must describe the full native output;
+ratios must be finite in(0,1], default viewport selection must be active and
+reduced ratios require the native dynamic flag. No actual dimension is inferred
+by multiplying/rounding those ratios. A scissor, when enabled, must cover the
+entire copied integer sample rectangle. Two producer reads compare the raster,
+shadow, selectors and DSV as well as the existing source/camera/cache facts.
+The reader later rechecks stable source facts but does not reinterpret later
+pre-SR RS state as the producer or require it to equal the old producer state.
+
+The integer rectangle uses repository LTRB pixel edges. For actual float
+viewport x/y/w/h, its left/top are ceil(x/y minus0.5); right/bottom are
+ceil(x+w/y+h minus0.5). This is the half-open viewport support evaluated at
+source texel centers, not a claim that every such pixel was covered by a
+primitive. The exact fractional XYWH stays in depth-domain descriptors.
+If actual/pending extents differ after native truncation, the module reports
+producer-shadow and refuses. A more precise native world draw/bind snapshot
+would then be required; finite pending values or nominal quantized sizes
+are not substituted. Main/depth allocation dimensions remain full output.
+
+The game-owned camera helper constructs the requested row-vector affine C
+from that actual viewport into the copied crop grid and postmultiplies native
+unjittered projection and current VP by C. Previous VP uses the previous
+copied raster's C in the existing reader history, with reset on missing or
+changed raster, size, frame/view or native history. The full depth-domain
+near/world transforms also postmultiply by current C, so their target camera
+agrees with the adjusted CameraABI1. No second history ledger was added.
+Camera output dimensions remain full output; render dimensions are crop
+right-left and bottom-top. Jitter is native cached NDC displacement times
+actual viewport extent/2, with the existing Y sign, rather than a rounded
+ratio product. The underlying projection is adjusted, not only its units.
+
+The actual native PS2607 arithmetic recorded in the shader-input audit gives
+previous-minus-current UV, Y down. Under steady raster, native UV displacement
+maps to crop UV by viewportWidth/cropWidth and viewportHeight/cropHeight.
+The reader now calls the pure game-owned camera_motion_to_uv helper to report
+the corresponding negative scales. Viewport-origin offsets cancel only for
+steady history; changed metrics reset history rather than claim the old
+vector still has that mapping. This extends the checked native encoder's
+units, not coverage or freshness of every native motion-writing variant.
+
+`read_native_inputs(inputs,report,producer)` takes the existing copied
+NativeDepthSnapshot as its optional third parameter. A supplied producer must
+still be current and agree with native frame/view/cache/context and the Main
+depth resource. Without one, the old ratio1/full-raster path remains required.
+Adapter wiring must pass its World snapshot and derive all rectangle widths
+from LTRB differences. No ratio writes, auxiliary transaction, consumer
+restoration or capability/quality activation is implemented by this reader.
+
+The module now has28 exact executable guards, all matched offline, and four
+additional named producer refusal stages. Three independent ignored scalar
+cases enumerate pixel centers and compare affine NDC, jitter and raw-native
+motion displacement against direct geometric pixel coordinates. The new
+compiled contract fixture `tests/fallout4_camera.cpp` links actual camera.cpp
+and covers asymmetric projection with non-origin fractional raster, inverse
+roundtrip, jitter, near/far invariants, translated previous-camera geometry,
+changed/missing raster reset, motion units and invalid inputs. It is registered
+as fallout4_camera_contract; it has been added but not built or executed by
+this worker. Scalar receipts are `reduced-raster-adapter-scalars-20261116.json`.
+The coordinator owns compilation, actual producer raster/DSV observation,
+normalization, native consumer restoration and moving SR/FG quality checks.
+
+## Checkpoint95 target-math investigation
+
+The coordinator's borderless2560x1600 checkpoint95ffa1e ABI23 trial,
+PID37768 in `native-raster-20261116-123332-773`, logged SR publication for
+source3484/native3955 and source3485/native3956. The next source3486/native3957
+reported the old aggregate target-math refusal with split bounds
+`0,0.01/0.01,1`. F10 did not complete within its12-second bound. Prior public
+effectiveSR1/result0 values describe earlier success, not sustained acceptance.
+The actual Quit UI later exited with C0000005 without a close trace, so its
+cause is unassigned; the earlier baseline close result does not identify this
+untraced failure. The separate guarded recovery restored all20 trial entries.
+No worker game interaction or recovery invocation was performed here.
+
+That old stage combined recovered-projection mismatch, nonfinite map stores
+and nonforward near/world W. The log includes the world origin approximately
+`[-80300.7,90804.2,7973.14]`, near15 and far353468, but no near origin,
+W coefficients or matrix-mismatch component. It cannot distinguish numerical
+cancellation from camera-coordinate-model failure.
+
+The native builder proof matters: cached V is rotation-only and the origin
+is copied separately at+210. The current inverse(V)*VP projection recovery
+does not insert that large world origin into the cached VP. Consequently
+origin magnitude alone is not evidence of an ill-conditioned translated VP
+in this implementation. The equivalent factorization through separate
+inverse projections and inverse views remains a possible numerical change,
+but no source-only observation here establishes it would fix this live fault.
+The current projection/cache validation, full cross-camera transform,
+canonical crop and tolerances are preserved rather than bypassed.
+
+The implementation now distinguishes projection-mismatch, finite-map,
+near-W and world-W, with raster-math reserved for invalid crop-affine math.
+Each retains its own first-receipt bit. Projection mismatch logs the largest
+normalized component mismatch, index, actual/expected values and the unchanged
+0.0005 relative tolerance with unit floor. Near/world W refusal logs the four
+affine W coefficients, one-D24-step clip-box minimum, interval width and both
+copied origins. These extra details are emitted only with that stage's first
+receipt, not per frame or as full matrix dumps. The existing W threshold
+remains strictly greater than1e-6.
+
+W-bound arithmetic is now a pure game-owned camera helper used by the actual
+depth module and the compiled camera fixture. Its formula and threshold are
+unchanged. The fixture independently enumerates all clip-box corners, retains
+negative-W and small-positive-W refusals, and covers nonfinite/missing maps.
+Additional actual-camera.cpp regressions use the observed large origin,
+rotation-only V, near/far ratio and all eight jitter phases, with independent
+analytic relative-camera history expectations. Inconsistent projection/cache
+inputs still refuse; no tolerance is widened. These new compiled cases have
+been authored but not built or executed by this worker, so they do not yet
+prove or disprove an actual implementation numerical defect.
+
+A separate semantic hypothesis remains: a near camera may represent a
+virtual first-person layer rather than the same absolute world as the world
+camera. In that case the shared-world translation T(aNear-aWorld) can be
+algebraically valid for its assumed model yet inappropriate for the composed
+layer. For example, an unobserved near origin0 paired with the recorded world
+origin would imply a large origin delta; a negative near-W bound could then
+be a coordinate-model refusal rather than precision loss. This example is
+not a claim that the native near origin was0. The new copied-origin/W receipt
+is needed first, followed by native near-root/camera producer tracing.
+
+The pinned reference intentionally uses near inverse projection followed by
+world projection for composed depth, but that alone does not prove the native
+virtual basis or justify silently selecting that model here. A future explicit
+virtual-view-Z convention could be appropriate under ABI23 scalar-depth
+semantics without asserting equal physical views. Such a change must retain
+actual near inverse freshness, sampled intervals/jitter and the target world
+camera, and state the changed depth convention. No such switch was made in
+this investigation. No new readback, GPU framework, capability or live-quality
+claim was introduced. The coordinator owns the next compiled gate and the
+next discriminating native observation.
+
+## Post-prepass logical target correction, 2026-11-16 13:21 report
+
+Question: why did the producer snapshot refuse before matrix validation in
+`native-raster-20261116-132159-236`? The copied first receipt was source16737,
+submission1, native17204, actual and pending raster0,0,2560,1600, dirty62,
+selectors26,1,UINT_MAX, ratio1,1, default1, dynamic0. The old implementation
+accepted only logical colour1 or none, so it returned before reading a
+descriptor. Its logged descriptor0x0 was zero-initialized, unreachable metadata,
+not an observed zero-sized native allocation. This corrects that interpretation;
+neither target allocation failure nor a matrix failure follows from this receipt.
+
+Read-only Capstone inspection of the same installed1.11.240.0 executable and
+fingerprint recorded above establishes the distinction between logical viewport
+ownership and submitted resource ownership. Pinned CommonLibF4 `BSGraphics.h`
+names logical26 `kGBufferAlbedoSpecular`, while logical1 is Main. That name is
+source evidence; the installed instructions supply the field semantics:
+
+| Native site | Exact association |
+| --- | --- |
+| `1839BC9..1839BCD` | `SetCurrentRenderTarget` stores R8D, the caller's logical ID, into shadow+84 only when EDX, the MRT slot, is0. |
+| `1839BDF..1839BE2` | The logical ID indexes RTM+DF4 at stride4 to obtain a physical target ID; none stays -1. |
+| `1839C2B..1839C4B` | The physical ID is stored into shadow+2C+slot*4; cube binding becomes none and target-dirty mask0x1 is set on a binding/mode change. |
+| `1839868..1839877` | Any nonnegative shadow+84 selects logical colour properties at RTM+ID*0x20. A negative selector falls back to the positive logical depth selector at shadow+88, stride0x1C plus0xC80. `18398DF` supplies the corresponding colour height+4. |
+| `1839CB1..1839CBB` | The logical depth ID is stored into shadow+88 and translated through RTM+F84; the physical result is the shadow+4C binding. |
+| `1823D2D`, `1823DB7..1823DD1` | Target submission tests dirty mask0x1, reads physical shadow+2C slots and loads RendererData+physical*0x30+0xA68 RTVs. These slots are not logical IDs. |
+| `1823E55..1823E8D`, `1823F14..1823F17` | Physical shadow+4C selects the native DSV variant/slice, then D3D context vtable+0x108 submits RTVs and DSV through OMSetRenderTargets. |
+
+These are data-flow observations, not an inference that a function name proves
+a hook or a resource. Local instruction receipts are `cpu2-1839b70.txt`,
+`cpu2-1823cf0.txt`, `cpu2-1824020.txt` and the retained width/height getter
+receipts. No shared analysis session or live process was accessed.
+
+The snapshot now reads the descriptor selected by this native logical path,
+without a special case for26. It still admits only logical colour IDs0..99 or none,
+logical depth1, no cube target and full-output descriptor dimensions. It
+requires target-dirty mask0x1 clear; the recorded62 satisfies this one condition,
+but that receipt does not prove any of the new resource checks passed.
+Logical count100 follows the colour-property span0..0xC80 at stride0x20 and
+the map span0xDF4..0xF84 at stride4, also matching the pinned logical enum count.
+It is distinct from the physical RendererData array's101 entries.
+The mapped physical colour ID must equal shadow's physical slot0. The actual
+immediate-context RTV0 must be the native RendererData RTV for that physical
+ID, and its queried resource must be the native texture, on the same device,
+with the selected descriptor's dimensions and single mip/slice/sample. A none
+selector instead requires both physical slot0 and actual RTV0 absent.
+Actual DSV identity with Main depth, R24/D24 format checks and full allocation
+are retained, and shadow's physical depth binding must match Main's mapped
+physical depth. Main colour1 publication remains the separate SR reader lease;
+it is not imposed on this GBuffer prepass viewport owner.
+
+Actual/pending raster XY equality, camera ports, current source/frame/cache,
+ratio/FE flags, scissor and matrix checks remain unchanged. Capture repeats the
+native reads and actual D3D queries, including the new copied physical IDs and
+colour identities, and refuses changes between the two snapshots. These are
+copied scope facts with no retained COM ownership or new source history.
+
+Bounded first refusals now distinguish `producer-selector`,
+`producer-descriptor`, `producer-target-dirty`, `producer-target-map` and
+`producer-colour`; `producer-target` remains the actual DSV check. The receipt
+includes `descriptor_read`, so an unread zero differs from a successfully read
+zero allocation, plus logical and physical selector values. No acceptance guard
+or tolerance was relaxed for pending viewport state or matrix validity.
+
+Checks: all35 activation byte guards matched the exact installed PE, including
+the logical-to-physical setter, descriptor getter and native OM submission;
+scoped diff whitespace checks passed. This worker ran no build, compiled
+fixture, game, GPU capture, deployment or commit. The corrected source is frozen
+for the coordinator's next combined gate. Live RTV/descriptor association,
+subsequent snapshot/math admission and sustained SR remain unvalidated by this
+change; earlier success counters are not evidence of sustained acceptance.
+
+The later documentation reconciliation uses final `loader-post-controller.log`
+for this132159 trial. FG configuration switched requested1/effective1/result0,
+but prepare remained selected_source0/inputs0/HUDless0/submission_ok0/result-8;
+no generated FG or latency acceptance follows. The tested pre-correction
+reduced-input batch passed221/15 in108.81seconds with clean fmt/Clippy; its
+generic scoped fixture passed55sources/41captures/39SR/34tags/34callbacks and
+rendered-source latency remained zero. These do not validate the new target fix.
+The authoritative resumed-restoration receipt verifies19 restorations plus1
+exact final user-config preservation,20 verified and custom INI unchanged.
+Actual exit code/method are unproven without an observer or retained exit
+handle; root's subsequent fresh CIM found no game. See the render note's
+132159 reconciliation for exact artifact hashes and receipt names. No further
+game/UI work is authorized while the user works on the desktop.
+
+## Near coordinate-basis investigation, bounded static result
+
+Question: does first-person depth describe a virtual layer best normalized as
+`inverse(PnearJ)*Pworld0`, or a physical point in the world coordinate system
+requiring the current full camera/origin transform? This follow-up worked
+backward from the verified near cache and draw setup, using only retained
+instruction receipts and new read-only Capstone scans of the exact installed
+1.11.240.0 SHA above. No production change or tolerance/model switch was made.
+
+The additional installed data flow is concrete:
+
+| Site and bytes | Observation |
+| --- | --- |
+| `21F2CA9: 488b0520f6c601`, `21F2CB0: 0f105370`, `21F2CB4: 0f109b80000000`, `21F2CBB: 0f10a390000000` | Near camera pointer is loaded from3E622D0; rotation data are loaded from the world camera in RBX. The following scalar stores21F2D07..21F2D7B copy world rotation components into near+70..9C. This setup aligns their rotational basis; it does not copy world translation. |
+| `21F2CC2: f30f1005eef5c601`, `21F2CCA: f30f1180a0000000` | Near camera translation X comes from separate global3E622B8 and is written at near+A0. The Y/Z pairs21F2CD2/DA and21F2CE5/ED read3E622BC/C0 into near+A4/A8. |
+| `21FA480: f30f1001`, `21FA484: f30f11052c7ec601` | A native three-float setter copies its argument into3E622B8..C0; the next pairs are21FA48C/491 and21FA499/49E. These globals are mutable inputs, not a proven constant zero origin. |
+| `C38E5A: 488d50a8`, `C38E6A: e8b1d93e00`, `C39109: 488d4c2430`, `C3910E: e86d135c01` | One direct native setter caller passes the same stack vector at current RSP+30 previously filled by1026820. The LEA atC38E5A uses the saved entry RSP; accounting for push/sub yields current RSP+30. |
+| `1026820: 488b89e0000000`, `102682F: 48ff6068` | That vector producer reads owner+E0 and, when nonnull, tail-dispatches virtual slot0x68. The null branch fills three floats from3448450..58. Static caller discovery does not resolve the active dynamic implementation, its units or coordinate convention. No default value was inferred from zero-filled/BSS storage. |
+| `21F95F2: 488b15d78cc601`, `21F95FF: e87c2663ff` | The later first-person draw selects the near camera with jitter requested, preserving the known near viewport interval. |
+| `21F9604: 488b05058cc601`, `21F960B: 488b4828`, `21F9614: f30f1105d44ac601` | Immediately before that draw, a separate position triple is read from world camera->field28->+60/64/68 and copied to3E5E0F0/F4/F8. The pinned NiAVObject layout identifies parent and local transform at these offsets; native shader/vertex consumption still needs tracing. This is not a copy of near+A0. |
+| `21F963D: e8dedafdff`, `21F9699: e8e22563ff` | The near draw calls21D7120, then setup restores the world camera. The draw routine traverses accumulator/batch work through2221890/2221940 and2220AC0. Its initial dispatch does not alone establish the per-geometry vertex transform or skinning basis. |
+
+The existing builder evidence remains necessary:182D750 produces rotation-only
+V, copies the camera translation separately to cache+210, keys the entry by
+camera and useJitter, and prepass21F38B0 stores transposed inverse near P in
+Context shadow+8A0. The post-prepass return21F9F78 is the admitted same-source
+snapshot point. Near translation restoration at21F2F3E..21F2F6D and
+21F8DAD..21F8DDC again copies3E622B8..C0; a finite retained cache is not evidence
+that an arbitrary later value belongs to this draw. These new instruction
+observations neither extend snapshot lifetime nor replace current-source checks.
+
+Pinned CS `Depth.hlsli` deliberately converts the near interval back to near
+projection depth, applies its saved near inverse and the world projection,
+then writes saturated target Z/W at the composed pixel. `CanonicalDepth.cpp`
+supplies those matrices and publishes an R32 product keyed to its world camera
+frame. This establishes the reference's projection-only scalar convention.
+It does not prove equal physical camera positions or explain the active native
+vertex basis. In particular, copying the world rotation while separately
+supplying near translation and a distinct world-derived draw-position triple
+supports investigating a virtual layer, but is insufficient to declare one.
+
+Bounded conclusion: static proof here does not select either model as the
+correct native interpretation. The full transform is mathematically justified
+only if both origin triples refer to the same physical coordinate space;
+the cache layout alone did not prove that premise. Conversely, reference
+projection-only normalization is an explicit composed view-Z convention, not
+evidence that native near vertices occupy world-camera coordinates. The earlier
+checkpoint95 generic `target-math` receipt, including its large world origin,
+cannot identify which premise or numerical check failed. The current target
+association correction may expose the already-added discriminating stages in a
+later authorized run; there is no basis for a speculative production fix now.
+
+The smallest next same-source receipt, if existing near-W/projection diagnostics
+do not settle it, is copied at the admitted post-prepass return: source,
+submission/native frame, camera/cache keys and jitter flags; both cache origins;
+3E622B8..C0; both camera world translations; the world-parent local position and
+3E5E0F0..F8; maximum near/world rotation difference; projection mismatch detail;
+and full-map versus projection-only W coefficients/minima plus Z/W for a few
+analytic clip probes. Record actual viewport/ranges and inverse freshness with
+it. These CPU scalars distinguish coordinate and precision hypotheses, but do
+not by themselves prove geometry ownership. To close that last premise, trace
+the active owner+E0 virtual slot0x68 and one actual first-person batch's
+object/skinning origin subtraction and bound shader constants through the
+21D7120 path. Copy only scalar identities/transform facts within that draw's
+lease, with no retained queue, vertex or native object pointers. A model change
+still requires that producer/consumer proof and an explicit scalar convention;
+it must not assert spatial reprojection or blanket FG geometry acceptance.
+
+Ignored receipts: `near-basis-camera-xrefs-20261116.json`,
+`near-basis-position-xrefs-20261116.json`,
+`near-basis-position-callers-20261116.json` and the targeted `cpu2-*` instruction
+files. Byte-pattern scans were search aids; only the aligned, locally checked
+instruction chains above were used as evidence. All35 depth guards still match
+the installed PE; the six frozen depth/camera/reader source hashes are unchanged
+against `near-basis-source-freeze-20261116.json`. No build, fixture execution,
+game/process/UI interaction, shared analysis session, deployment or commit was
+performed. This is an unresolved static prerequisite, not a new live finding.
+
+Build-status correction after that freeze: the root's scene/input/marker batch
+now compiles the logical-target correction with MSVC Release VS2026. Background
+CTest passed218/14 of232 selected tests, with four foreground tests excluded;
+fmt/Clippy and hidden generic marker/scoped device fixtures passed separately.
+This is not a full eng/verify pass and does not select a near-depth coordinate
+model. Current artifacts are undeployed, with no new native snapshot/math/SR
+acceptance. The prior source-only descriptions remain historical to their
+investigations; see the render note's background-batch section for exact logs,
+hashes and excluded tests. This correction is documentation only.
+
+Latest scheduling update: the user reports the PC available again. The root
+is running complete eng/verify Release VS2026 in
+`verify-scene-input-marker-20261116.log`; its result is pending at this
+documentation freeze. Root owns any subsequent deployment/game/UI work;
+this worker performed none. The earlier desktop exclusions describe the
+completed background run, not a continuing restriction.
+
+## Native near-W receipt and explicit composed view-Z convention
+
+New evidence: coordinator trial `native-raster-20261116-140447-020`, PID54248,
+uses Runtime90E86B69D96B29D5D74F42E1A5DF61289FC0C4B3CD72EC4B1EC9C793F9F13178
+and EntryDAC24A522E6596726DE933DFAC7CABC628A6DCB02FFC5751D0EF297ACBF0C39F.
+`loader-world-first-refusal.log` records the corrected target association passing,
+accepted resource/camera reads at native5212, ordinary source4733/native5213
+and one SR evaluation/publication. This is transient input acceptance, not
+sustained SR or image-quality/FG acceptance. Source4734/submission3/native5214
+then refuses specifically at near-W, not projection mismatch or resource owner:
+
+```text
+near_origin = [-0.00769183971, 0.0319054201, 120.485939]
+world_origin = [-80300.6641, 90804.2344, 7973.14453]
+W = [-1.49011612e-08, -3.55271368e-15, 107072.234, -107071.539]
+minimum_W = -107072.177263; near interval width = 0.00999999978
+```
+
+Actual/pending raster is0,0,2560,1600, descriptor_read1, descriptor2560x1600,
+logical colour26/depth1 and physical colour22/22/depth2. The receipt proves the
+shared-world near transform fails its forward-W bound for these actual copied
+origins/matrices. It does not prove numerical instability or hardware-depth
+corruption, and supplies no reason to widen a threshold.
+
+The previously unresolved position dispatch now has installed RTTI/construction
+proof. TypeDescriptor3073088 names `.?AVFirstPersonState@@` at3073098; complete
+object locator2A53DE0 precedes vtable25AAB08, whose slot+68 points to1021050.
+At102552E, `488d0dd3555801` loads that exact table;1025535 stores it in the new
+object and10255B2 `488986e0000000` stores the object into owner+E0. Thus the
+1026820 owner+E0 dispatch identified earlier is the constructed first-person
+state entry, rather than an unresolved arbitrary camera-state guess.
+
+Native1021050 reads the selected first-person camera node from state+50
+(`1021063:488b5150`), copies its world translation+A0/A4/A8 at1021070..1021087,
+and conditionally derives/subtracts state-specific offsets before returning the
+three-float position at102120F..1021266. It is not an unconditional copy of
+the world camera origin. Through1026820, the existing C38E6A stack output and
+C3910E setter call supply3E622B8..C0, which the near-camera producer copies to
+near+A0/A4/A8 and then to keyed cache+210 as previously proven.
+
+The state node selection is also explicit:1021290 traverses the supplied node
+hierarchy and writes the chosen camera/fallback to state+50 at1021391
+(`48897d50`). Its10212E8/10212F3/10212FE stores initialize local rotation rows
+from2F4C490/A0/B0, whose floats are [1,0,0,0], [0,1,0,0], [0,0,1,0].
+Correction to a preliminary worker handoff: these writes cover rotation and
+padding, not local translation+60, so they do not prove an identity whole-root
+transform. Neither the selected node's small recorded translation nor this
+rotation initialization proves the coordinate space of every skinned vertex.
+The later21F95FF near-camera selection, separate world-parent draw-position
+triple and21F963D batch execution remain the verified consumer order.
+
+The game adapter now explicitly defines the near domain as **composed view-Z**:
+undo actual jittered near projection, keep that local view-space depth, then
+project using the validated unjittered world projection at the same composed
+raster sample. In row-vector notation the map is
+`inverse(PnearJ)*Pworld0`. This adopts the pinned reference's canonical-depth
+intent under ABI23's scalar Z/W contract. It does not translate the local
+first-person camera pose into the physical world, assert equal absolute origins,
+or spatially reproject a first-person point. The earlier full near map was
+algebraically valid for its assumed shared-world model; the actual receipt and
+native independently supplied first-person pose no longer justify that premise
+for this composed convention. All world-domain mapping remains the original
+full `inverse(VPworldJ)*VPworld0`.
+
+No source, interval, native inverse or projection validation was bypassed.
+Capture still checks near/world origins for finiteness and exact freshness;
+keyed matrices, source/frame/context/resource identity, jitter, actual raster,
+depth ranges and the saved near inverse are unchanged. A new named near-basis
+guard requires near/world rotation-only cache V to match at the existing
+tolerance, consistent with the native copy producer. Recovered world P still
+must match the direct jitter0 cache P at the unchanged0.0005 relative tolerance.
+The near map uses that validated direct P to preserve native structural zeros,
+rather than treating tiny inv(V)*VP roundoff as a new off-axis projection.
+The game-local helper accepts only finite, invertible native forward perspective
+forms. Canonical raster affine postmultiplication, explicit Z/W clamp and all
+forward-W bounds, including the one-D24-step expansion and >1e-6 threshold,
+remain unchanged. A true negative-W/invalid matrix continues to refuse.
+
+The actual compiled camera fixture now calls the same helper used in production.
+Its independent analytic cases use the recorded two origins and synthetic near
+projection with stated near1/far1000, the observed world near15/far353468,
+nonzero source jitter and view distances20/200/800. Expected target depth comes
+from the analytic perspective view-Z equation, independently of matrix inverse
+composition. A separate physical-origin transform with the recorded origins
+must remain negative-W/refused; for a local distance40 its W is independently
+predicted by40+aNear.z-aWorld.z. Singular, non-perspective, nonfinite and absent
+inputs refuse and leave the composed map zero. Existing crop/history/jitter,
+cache inconsistency and W-threshold regressions remain. These new compiled
+cases were authored, not built or run by this worker.
+
+Read-only PE/RTTI checks and an independent analytic origin/view-Z oracle passed
+in `near-virtual-convention-proof-20261116.json`; detailed native getter/root
+receipts are `near-firstperson-translation-20261116.txt`,
+`near-firstperson-vtable-writers-20261116.json` and `near-root-*`.
+All35 existing activation guards still match the installed PE, with no changed
+expected bytes. Scoped diff checks passed. Source is frozen for root compilation
+and review. No worker game/process/UI interaction, attachment, build, GPU run,
+deployment or commit occurred. The root owns the live process and its close.
+Sustained native admission, visual near-layer depth quality, object/skinning
+coverage, later writers and FG geometry quality remain separate live/audit gaps;
+one accepted scalar normalization must not be promoted to blanket FG acceptance.
+
+## Recorded trial and composed-view-Z validation disposition
+
+The motivating live refusal is retained in
+`native-raster-20261116-140447-020/loader-world-first-refusal.log`: PID54248
+passed reader source4732/native5212, then GAMEPLAY source4733/native5213
+published one DLSS SR evaluation before aggregate HUDless refusal. The next
+source4734/native5214 failed near-W with actual W coefficients/minimum and
+small near/large world origins recorded. The aggregate HUDless message can
+also represent framebuffer-read failure and proves no comparison defect.
+There was no completed capture, sustained SR or near-layer/FG geometry-quality
+acceptance. This trial used Runtime90E86B69.../EntryDAC24A... after the complete
+scene/input/marker gate passed221/15 in144.40seconds, not the new composed map.
+
+The actual `fallout4_camera_contract` test exercising the composed-view-Z
+helper subsequently passed in0.01seconds, focused invocation exit0
+(`camera-composed-view-depth-20261116.log`). This upgrades the helper's status
+from authored-only to compiled and tested by the coordinator, with the numeric
+scope above. It does not validate composed first-person depth in a game frame.
+Initial complete `verify-composed-depth-hudless-20261116.log` failed only
+`anomaly_overlay_visibility` at its SetCursorPos precondition; focused
+`overlay-cursor-refocus-recheck-20261116.log` passed after normal desktop focus
+without a source change. Complete `verify-composed-depth-hudless-r2-20261116.log`
+is pending at this documentation freeze. The composed map and named HUDless/CPU
+attribution remain source-frozen with no new full-pass or live acceptance claim.
+
+The trial's NativeDesktopQuit exitedC0000005. Its30second passive trace expired
+before the final UI action and did not capture that fault. Controller/disposition
+receipts record20/20 restored entries, unchanged custom INI, prior user settings
+SHA13D80689... preserved and no forced game kill. This close limitation remains
+separate from the near-W math evidence; no new fault cause is assigned here.
+
+## Later composed-depth execution scope, PID61128
+
+Complete `verify-composed-depth-hudless-r2-20261116.log` subsequently passed:
+exit0,221passed15skipped,171.65seconds, fmt/Clippy clean. This supersedes the
+earlier pending r2 status in this note, not the separate latest padding batch.
+The new padding repair is source-frozen, not deployed in PID61128;
+`verify-reader-padding-20261116.log` is running/pending at this documentation
+freeze and has no result assigned here.
+
+Report `native-raster-20261116-143511-988` used Runtime90E86B69... and
+EntryB403DF6A.... Root manual quality0..4 apply/status and evaluation receipts
+show sustained DLSS SR execution at native2560x1600 and1707x1067/1485x928/
+1280x800/853x533, all to2560x1600, followed by return to native. This improves
+on PID54248's single evaluation but proves no composed first-person depth,
+motion, visual or FG geometry quality. No complete capture exists; the manual
+manifest remained capturing. Base FPS approximately4to6 even with SR Off has
+no performance attribution.
+
+HUDless owner-changed blocked FG trials. Exact deployed-object/image evidence
+proves NativeState equality compared uninitialized padding; its semantic-field
+repair is source-frozen in the next pending gate, not deployed here. Removed-MSG
+acceptance and marker-order0 are not prospective reservation/pacing or latency
+acceptance. Controller600scene/120quit timeouts and late root manual quality
+trials/scene-continue provide no controller acceptance.
+
+After native-Quit input did not complete, ordinary AltF4 produced the close
+failure captured by fresh durable trace-close-3:4CB273 read0x50 with exact
+baseline stack and NtTerminateProcessC0000005. This is not a normal/native-Quit
+exit or evidence of a depth fault. Later exact-run recovery ending
+84c7a0a118e143d6b24c41db1e459b4d supersedes post-close-disposition restored=false:
+20/20 entries verified restored, custom INI unchanged, original user settings
+SHA13D80689... restored after sealing the API-test mutation. Native borderless
+prefs/custom INI were preserved. No new experiment or source edit was performed
+by this documentation update.
+
+## Native-scale matched capture after padding repair
+
+The complete reader-padding r2 gate passed223/14 in119.87seconds with Rust
+fmt/Clippy clean. Retain its first221/15/1 XeSS activity/generated_windows
+failure and unchanged focused6.90second pass before the full r2 pass. Prior
+pending padding status above is superseded by this bounded build/live evidence.
+
+Report `native-raster-20261116-151505-988`, PID70400, Runtime90E86B69... and
+Entry463B1EED..., has manifest complete/matchedPresent source4121/native4598,
+16 captured images among30 entries, and an accepted native framebuffer reader.
+Native depth and SR scene depth were captured at2560x1600. This closes the
+missing native-scale capture fact, not the depth-domain/first-person geometry,
+motion, broad quality or visual audit. The FG-Off HUDless image remains
+unavailable; later live HUDless1 does not substitute a captured image.
+
+Explicit FG-on foreground1/base54/output54/active0/tags0 remained refused.
+Same-source inputs/HUDless/identity/matched/scene-supported/continuous and
+render-complete were1, while CPU mask1/flags0/paced0/prospective0 and
+owner_generation0 versus provider_generation2 showed absent bound/paced input
+ownership. No resource/depth failure is inferred. Removed-MSG acceptance and
+marker-order0 are not prospective input, FG or latency acceptance. World
+observation around55fps carries no performance attribution.
+
+The completed capture observation was followed by120second controller quit
+cleanup timeout. Actual action was ordinary AltF4 after Escape did not open a
+menu, despite observer filename trace-native-quit. It captured baseline4CB273
+read0x50 stack and NtTerminateProcessC0000005, not normal/native Quit or a new
+depth-fault attribution. Later exact recovery ending3103b81a21864e34ac33e15f1721a1b1
+verified20/20 restored, custom INI unchanged and user settings SHA13D80689...
+restored; native prefs/custom were preserved. This documentation update ran
+no new experiment and changed no production source.

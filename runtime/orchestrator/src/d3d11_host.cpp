@@ -26,6 +26,7 @@
 #include <mutex>
 #include <string>
 #include <cstdio>
+#include <cstring>
 #include <cmath>
 
 namespace {
@@ -78,7 +79,8 @@ struct Host {
     int32_t present_result{RSF_DLSS_OK};
     uint64_t present_pairs{};
     uint32_t ownership_reports{};
-    std::atomic<uint32_t> cpu_reports{};
+    std::atomic<uint32_t> cpu_reports{}, cpu_sample_reports{}, cpu_refusal_stages{};
+    std::atomic<uint32_t> cpu_stage_reports[RSF_GAME_CPU_SOURCE_ABORT + 1]{};
     static void log(void* user, const char* text) {
         auto& self = *static_cast<Host*>(user);
         if (self.upstream.log) self.upstream.log(self.upstream.user, text);
@@ -100,11 +102,41 @@ struct Host {
             const auto accepted = rsf_native_cpu_dispatch(event, [](void*, const rsf_game_cpu_event* fact) {
                 rsf_native_fg_cpu(fact);
             }, nullptr);
-            if (event && self.cpu_reports.fetch_add(1) < 24) {
-                char text[180]{}; std::snprintf(text, sizeof(text),
-                    "D3D11 CPU fact stage=%u source=%llu accepted=%d flags=0x%x",
-                    event->stage, static_cast<unsigned long long>(event->source_frame_id), accepted, event->flags);
-                log(&self, text);
+            // Keep startup receipts, plus bounded late stage samples and the first refusal
+            // of each stage. Read no extension fields until its declared size/version allows it.
+            const bool source_event = event && event->struct_size >= sizeof(*event) &&
+                event->stage >= RSF_GAME_CPU_SOURCE_RESERVE && event->stage <= RSF_GAME_CPU_SOURCE_ABORT;
+            const bool qualified = event && event->struct_size >= sizeof(*event) &&
+                event->stage <= RSF_GAME_CPU_SOURCE_ABORT &&
+                (source_event ? event->event_version == RSF_GAME_CPU_EVENT_VERSION_SOURCE :
+                    event->event_version <= RSF_GAME_CPU_EVENT_VERSION);
+            if (qualified) {
+                const bool initial = self.cpu_reports.fetch_add(1) < 24;
+                const uint32_t stage_bit = 1u << event->stage;
+                const bool first_refusal = !accepted && !(self.cpu_refusal_stages.fetch_or(stage_bit) & stage_bit);
+                const bool first_stage = self.cpu_stage_reports[event->stage].fetch_add(1) < 4;
+                // Reserve eleven of the 64 late rows for independent first-stage refusals.
+                const bool sampled = !initial && !first_refusal &&
+                    (first_stage || (event->source_frame_id && event->source_frame_id % 128 == 0)) &&
+                    self.cpu_sample_reports.fetch_add(1) < 53;
+                if (initial || first_refusal || sampled) {
+                    uint64_t native_generation{}, poll_begin{};
+                    uint32_t abort_reason{};
+                    if (source_event && event->struct_size >= RSF_GAME_CPU_SOURCE_EVENT_SIZE_1) {
+                        rsf_game_cpu_source_event source{};
+                        std::memcpy(&source,event,RSF_GAME_CPU_SOURCE_EVENT_SIZE_1);
+                        native_generation = source.native_generation; abort_reason = source.reason;
+                        if (event->struct_size >= sizeof(source)) {
+                            std::memcpy(&source,event,sizeof(source)); poll_begin = source.poll_begin_qpc;
+                        }
+                    }
+                    char text[320]{}; std::snprintf(text, sizeof(text),
+                        "D3D11 CPU fact session=%llu source=%llu stage=%u accepted=%d flags=0x%x version=%u size=%u native_generation=%llu poll_begin=%llu abort_reason=%u",
+                        static_cast<unsigned long long>(event->session_id), static_cast<unsigned long long>(event->source_frame_id),
+                        event->stage, accepted, event->flags, event->event_version, event->struct_size,
+                        static_cast<unsigned long long>(native_generation), static_cast<unsigned long long>(poll_begin), abort_reason);
+                    log(&self, text);
+                }
             }
             return; // This host owns normalization; do not dispatch the same fact upstream twice.
         }
@@ -342,7 +374,7 @@ struct Host {
         (void)rsf_input_dump_texture_record(context, &record, "native_depth", "Native scene device depth", pass.depth, RSF_DUMP_VIEW_DEPTH, 1);
         (void)rsf_input_dump_texture_record(context, &record, "native_motion", "Native motion in adapter-declared encoding", pass.motion, RSF_DUMP_VIEW_DENSE_MOTION, 8);
     }
-    void prepare_pipeline(const rsf_game_render_pass& pass, const rsf_render_settings& settings) {
+    bool prepare_pipeline(const rsf_game_render_pass& pass, const rsf_render_settings& settings) {
         if (settings.sr_enabled) {
             if (!running && !attempted) {
                 attempted = true;
@@ -385,6 +417,7 @@ struct Host {
         std::lock_guard lock(state);
         planned = {sizeof(planned), uint32_t(ready && settings.sr_enabled), pass.camera.output_width, pass.camera.output_height,
             ready ? status.render_width : pass.camera.output_width, ready ? status.render_height : pass.camera.output_height};
+        return ready;
     }
     int32_t process(ID3D11DeviceContext* context, const rsf_game_render_pass& pass,
         const rsf_d3d11_auxiliary_pass* auxiliary = nullptr) {
@@ -404,7 +437,7 @@ struct Host {
         if (generation != applied_generation) { attempted = false; reset = true; applied_generation = generation; }
         rsf_dlss_pipeline_set_colour_transport(transport.load(std::memory_order_acquire));
         rsf_dlss_pipeline_set_colour_correction(fidelity.load(std::memory_order_acquire));
-        prepare_pipeline(pass, settings);
+        const bool pipeline_ready = prepare_pipeline(pass, settings);
         const bool configure_only = (pass.flags & RSF_GAME_RENDER_RECONFIGURE) != 0;
         if (configure_only && !pass.camera_valid) return RSF_ERROR_NOT_READY;
         rsf_frame_record record{}; capture_inputs(context, pass, record);
@@ -424,7 +457,12 @@ struct Host {
                 if (!result && auxiliary && !auxiliaries->commit()) result = RSF_ERROR_NOT_READY;
                 if (result && auxiliary) (void)auxiliaries->restore();
                 if (!result) { reset = false; ++evaluated; } else { reset = true; ++refused; }
-            } else { result = configure_only ? RSF_ERROR_NOT_READY : running ? present_result : last_result; reset = true; }
+            } else {
+                result = configure_only ? RSF_ERROR_NOT_READY : running ? present_result : last_result;
+                // An unchanged, successful plan does not evaluate or invalidate temporal history.
+                // Genuine reconfiguration keeps its pending reset; failed preparation still resets.
+                if (!configure_only || !pipeline_ready) reset = true;
+            }
         } else reset = true;
         if (rsf_input_dump_wants(&record)) {
             if (!result) (void)rsf_input_dump_texture_record(context, &record, "sr_reinserted", "Reconstructed linear colour before native HDR", pass.color_output, RSF_DUMP_VIEW_HDR, 1);
@@ -677,7 +715,12 @@ extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_restore_auxiliaries(void* user
     if (scope->abi_version != RSF_D3D11_HOST_ABI_VERSION) return RSF_ERROR_ABI_MISMATCH;
     std::unique_lock presentation(self->presentation_guard, std::try_to_lock);
     if (!presentation.owns_lock()) return RSF_ERROR_BUSY;
-    if (!self->auxiliaries || !self->auxiliaries->matches(*scope)) return RSF_ERROR_NOT_READY;
+    if (!self->configured || self->execution_thread != GetCurrentThreadId() ||
+        scope->session_id != self->upstream.session_id) return RSF_ERROR_NOT_READY;
+    // An unsuccessful upscale may already have rolled back its preparation.
+    // Acknowledge that empty lease only on the verified session/graphics owner.
+    if (!self->auxiliaries || !self->auxiliaries->pending()) return RSF_OK;
+    if (!self->auxiliaries->matches(*scope)) return RSF_ERROR_NOT_READY;
     return self->auxiliaries->restore() ? RSF_OK : RSF_ERROR_NOT_READY;
 }
 catch (...) { return RSF_ERROR_NOT_READY; }

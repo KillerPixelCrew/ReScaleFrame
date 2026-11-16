@@ -280,3 +280,222 @@ not be used to normalize the entire texture.
 Validation here is source-only: all21 existing executable byte guards and scoped
 whitespace checks pass offline. The coordinator owns the focused rebuild and next
 world/F10 observation; no new game or device run was performed by this worker.
+
+## Reduced producer handoff, source only
+
+The reader now accepts an optional copied NativeDepthSnapshot as its third
+argument, after the existing report callback. Reduced inputs require this
+same-source post-prepass producer record; the legacy call without it still
+requires ratio1 and a full native viewport. The producer separately observes
+actual immediate-context RS viewport and bound Main DSV, validates pending
+shadow/camera-port agreement and scissor coverage, and reports its integer
+sample coverage as LTRB. Later reader RS state is checked for local stability
+but does not replace that producer observation. Allocation/output dimensions
+remain full output, and ratios are not rounded to invent render dimensions.
+
+Camera projection/VP are adjusted into that integer cropped raster with the
+native fractional viewport affine. Existing history stores current/previous
+raster maps and resets on missing or changed metrics; jitter and native UV
+motion conversions use the actual viewport extent. Target depth transforms
+match the same adjusted CameraABI1. Detailed predicates, mathematical limits
+and source-only evidence are in
+[the depth-domain note](fallout4-depth-domains-20261116.md#reduced-producer-raster-and-canonical-crop-implementation).
+The new fallout4_camera_contract fixture exercises actual camera.cpp and is
+registered but has not been run here. No game/build/deploy/ratio write or
+quality/capability activation was performed by this worker.
+
+
+## HUDless refusal attribution, 16 November 2026
+
+Retained report `native-raster-20261116-140447-020/loader-world-first-refusal.log`
+from the coordinator's PID54248 run records source4733/native5213 passing leased
+reader resources, GAMEPLAY screen facts and one DLSS SR publication at
+2560x1600. The next message says HUDless frame/window/context/outer-chain
+mismatch. That aggregate message was misleading: its first OR term was
+`!read_native_framebuffer(frame)`, which could fail before any identity term
+was evaluated. The retained message alone does not prove an identity mismatch,
+a bad FRAME basis, or the native location/content of another texture.
+
+Source review finds `screen_basis` copied from the accepted pre-SR pass;
+`world.pass` copies that same pass through FG_INPUTS, clearing borrowed resource
+pointers while retaining scalar frame/window/camera identity. The context and
+outer chain remain pinned in World. SR must already match the pre-world FRAME
+native frame/view/window and those context/chain pointers. No concrete basis
+comparison defect was established, so no check or texture provenance changed.
+
+The guarded Effects0..13 call at21fa283 returns21fa288; native viewport call
+21fa2c5 returns21fa2ca and is the existing HUDless callback. Its reader still
+resolves logical FrameBuffer0 through RTM2f4d750+df4 and native platform record
+RendererData+a58+index*30, leasing the actual RTV resource. It validates
+canonical COM device/texture identity, full allocation extent, outer chain/window
+and rereads owner/map/target stability. It neither substitutes GetBuffer nor
+claims a private view resource is FrameBuffer0.
+
+The source-only followup adds first-occurrence-per-named-stage receipts inside
+this existing framebuffer reader, independently of the shared16-message render
+diagnostic budget. They expose the first failed map/RTV/resource/device/extent/
+swap/owner-reread check and actual scalar/pointer/descriptor values. The caller
+now distinguishes framebuffer-read from native-frame, window, context,
+outer-chain and output-extent refusal, with pre-SR FRAME/screen native-frame
+basis values. Existing exact identity predicates and lifetime remain unchanged.
+The exact next fact is the first named framebuffer or HUDless stage from the
+next coherent coordinator artifact, not a higher generic log budget.
+
+Source4734/native5214 then failed the independent near-W depth model, which the
+native-facts owner handles separately. One SR submission is not sustained SR,
+HUDless/FG acceptance, reduced-quality validation, visual quality or latency.
+No worker build, game/process query, UI, attach, deployment or input occurred.
+The static receipt `hudless-attribution-static-20261116.json` records source
+signatures and matched callback bytes; it is not runtime validation.
+
+## Latest trial disposition and followup gate
+
+The full scene/input/marker batch passed
+`verify-scene-input-marker-20261116.log`: exit0,221passed15skipped,144.40seconds,
+fmt/Clippy clean. Its subsequent PID54248 trial is retained in
+`native-raster-20261116-140447-020`, including `disposition.json` and
+`loader-world-first-refusal.log`. Reader source4732/native5212 passed;
+GAMEPLAY source4733/native5213 reached one DLSS SR evaluation before the
+aggregate HUDless refusal described above. No framebuffer/identity comparison
+cause was established. Source4734/native5214 then refused near-W. The named
+HUDless followup remains source-frozen for the next coherent build, not
+runtime-validated by that older aggregate message.
+
+HWND41225678 client2560x1600/DPI144 and actual core-accepted stage5 window
+messages do not establish input consumption: no RESERVE/SAMPLED/BIND/ABORT
+receipt was observed. World-Off marker-order violations were0 in the bounded
+receipt, not latency acceptance. There was no complete SR capture or sustained
+SR/FG/quality acceptance. NativeDesktopQuit exitedC0000005; the30second trace
+expired before the final action and captured no close fault. All20 entries
+were restored, custom INI unchanged and prior user settings SHA13D80689...
+preserved, with no forced game kill.
+
+The composed-view-depth helper passed
+`camera-composed-view-depth-20261116.log`. The initial newer full batch
+`verify-composed-depth-hudless-20261116.log` failed only the overlay SetCursorPos
+precondition; `overlay-cursor-refocus-recheck-20261116.log` then exited0 after
+normal desktop focus without a source change. Complete
+`verify-composed-depth-hudless-r2-20261116.log` remains pending at this freeze.
+The named HUDless and CPU candidate-attribution source is not yet assigned a
+full-gate or gameplay pass. No new experiment or production edit was performed
+for this documentation update.
+
+
+## Matched Release snapshot-padding defect and repair
+
+The coordinator's `native-raster-20261116-143511-988` PID61128 report now records
+sustained SR after the independently owned composed-view Z correction. Its
+first framebuffer refusal is `owner-changed`, with before/after native4131,
+context1bb716a2110, chain1bb7156efd0 and window111652 equal. Logical0 has a
+null optional native texture pointer but a valid leased RTV resource,
+2560x1600, format28, one mip/array/sample, with the preceding canonical device
+and resource checks passed. That legitimate RTV ownership path is retained.
+The log does not dump every after-owner field or the differing object bytes.
+
+Read-only inspection of the actual MSVC Release object and linked Entry proves
+an independent comparison defect, rather than relying on padding speculation.
+The Entry SHA256 is
+`b403df6af9bf8cce128aedc0d698d6beac9f68bf60c47127c752a4749f985f98`, matching
+the run's files receipt. The object's read_native_framebuffer section matches
+all6011 linked code bytes except49 linker-relocated fields, uniquely at RVA bcd0.
+Its before/after snapshots start at RSP+1b0/+2b0. Initializers clear exactly122
+field bytes, ending with16-bit stores to RSP+228/+328 at function+152/+1d0;
+the six bytes at22a..22f and32a..32f remain untouched. Function+c66 loads
+R8D=128; c6c/c74 load the two snapshot addresses; the c7d relocation names
+memcmp. Thus a comparison really includes six uninitialized tail bytes in each
+snapshot. Retained `reader-padding-proof-20261116.json` and
+`reader-object-disassembly-20261116.txt` contain the binary/object provenance.
+This proves the emitted padding-read defect, not a live dump of the exact
+bytes that differed in PID61128.
+
+The repair compares exactly the fields read by each routine. owner() rereads
+renderer/device/context/chain/window/frame/width/height and compares all eight;
+it no longer compares padding or unused camera/temporal fields. The pre-SR
+state() comparison additionally checks camera/cache/count/TAA/disable/logical
+maps, both ratio elements, all four viewport elements, delta and both selector
+bytes. Float fields retain exact bit comparison, including signed zero and
+NaN payload representation; this change does not introduce numeric tolerance
+or loosen state admission. All owner rereads, map/target rereads, canonical
+COM/device/RTV/resource, extent and lifetime checks remain unchanged.
+
+The small game-private `native_input_state.h` holds the same snapshot and the
+actual two comparison helpers. Registered pure fixture
+`fallout4_input_state_contract` uses those helpers, poisons only the real six
+padding bytes to demonstrate the old false difference, and negatively checks
+every read pointer/integer/array element/float/selector. It also verifies that
+owner-only comparison ignores unread non-owner fields while full state does
+not. Fixture source is prepared for the coordinator's gate, not compiled or
+run by this worker. No new budget, hook, resource substitution, CPU policy,
+capability, build, process query, game/UI/attach or deployment was added.
+Actual HUDless/FG acceptance and the separate native-depth/input predicates
+remain pending the next coherent run.
+
+## Later sustained SR trial and exact HUDless padding finding
+
+Complete `verify-composed-depth-hudless-r2-20261116.log` subsequently passed:
+exit0,221passed15skipped,171.65seconds, fmt/Clippy clean. This supersedes the
+earlier pending r2 status in this note, not the separate latest padding batch.
+The new padding repair is source-frozen, not deployed in PID61128;
+`verify-reader-padding-20261116.log` is running/pending at this documentation
+freeze and has no result assigned here.
+
+Root's later `native-raster-20261116-143511-988`, PID61128, used Runtime90E86B69...
+and EntryB403DF6A.... Actual manual API quality/status receipts show sustained
+DLSS SR execution at native2560x1600, Quality1707x1067, Balanced1485x928,
+Performance1280x800 and Ultra Performance853x533 to2560x1600, then return native.
+The apply files verify only settings roundtrips; effective backend1/result0
+status and evaluation logs establish the separate execution scope. Base FPS
+remained approximately4to6 even with SR Off, with invalid output FPS; no
+performance attribution or visual-quality acceptance follows.
+
+The named HUDless owner-changed refusal now has exact static attribution:
+`reader-padding-proof-20261116.json` matches deployed EntryB403DF6A to its
+compiled object and proves the128byte NativeState memcmp includes uninitialized
+tail bytes. This corrects the earlier unresolved aggregate comparison hypothesis
+without changing resource provenance. The semantic-field repair is source-only
+in the next pending gate and was not deployed here. FG was not attempted.
+Accepted removed-MSG facts and marker-order0 do not establish prospective input;
+no reservation acknowledgements were observed. The manual manifest remained
+capturing, with no completed capture or full integration/latency acceptance.
+
+The controller600second scene and120second quit waits timed out; late manual
+trials/scene-continue are not controller acceptance. Native-Quit input did not
+complete. Ordinary AltF4 close was covered by fresh durable trace-close-3,
+which captured4CB273 read0x50 with the exact baseline stack and
+NtTerminateProcessC0000005. The post-close disposition's restored=false is
+superseded by the later exact-run recovery receipt ending84c7a0a118e143d6b24c41db1e459b4d:
+restored=true,20/20 verified, custom INI unchanged, root API-test mutation sealed
+and original user settings SHA13D80689... restored. Native borderless prefs and
+custom INI were preserved. This documentation reconciliation performed no
+code, build, game/UI/process query, attach or deployment.
+
+## Padding repair admitted; next refusal is input ownership
+
+Complete `verify-reader-padding-r2-20261116.log` passed223/14 in119.87seconds,
+fmt/Clippy clean. The initial221/15/1 XeSS inactive/generated_windows failure
+remains recorded; its unchanged focused recheck passed6.90seconds before full
+r2. The repair is now built/deployed evidence, superseding earlier source-only
+and pending descriptions, with narrow live native framebuffer-reader acceptance.
+
+PID70400 report `native-raster-20261116-151505-988` used Runtime90E86B69... and
+Entry463B1EED.... Manifest complete/matchedPresent at source4121/native4598 has
+16 captured images among30 entries. HUDless colour is explicitly unavailable
+in that FG-Off capture despite the accepted reader. Later same-source FG-on
+logs independently show inputs1/HUDless1/identity1/matched1/scene_supported1/
+continuous1/render_complete1. They refuse with cpu_mask1/flags0, paced0,
+prospective0, owner_generation0 versus provider_generation2 and reservation_read0.
+That is missing bound/paced input ownership, not missing resources. The
+reserved_bound1 predicate is vacuous for nonprospective sources and proves no
+accepted BIND. Removed-MSG acceptance and marker-order0 do not repair that gap.
+Foreground1/base54/output54/active0/tags0 is not generated FG or latency acceptance.
+
+World observation was approximately55fps, without performance attribution.
+Capture observation completed, but controller quit cleanup timed out120seconds.
+Ordinary AltF4 followed Escape not opening the native menu; trace-native-quit's
+filename is not a native-Quit receipt. Actual trace captured baseline4CB273
+read0x50 stack and NtTerminateProcessC0000005. Recovery receipt ending
+3103b81a21864e34ac33e15f1721a1b1 proves20/20 restored, custom INI unchanged and
+user settings SHA13D80689... back after sealing the root test mutation; native
+prefs/custom were preserved. No full visual/motion/quality, captured HUDless,
+performance, FG, prospective input/pacing, latency or normal-close acceptance
+is claimed. This followup changes documentation only.

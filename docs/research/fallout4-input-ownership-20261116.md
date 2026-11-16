@@ -836,3 +836,476 @@ Untracked receipts are `present-native-callers.json`,
 `present-renderer-owner-xrefs.json`, `cpu2-1818550.txt`, `cpu2-c38240.txt`
 and `cpu-c33000.txt` under `.local/fallout4-research/`. This was static
 instruction/source review only, without builds, a game run or shared REA.
+
+## Dequeued messages and delivered controller batches
+
+This follow-up establishes the smallest additional received-event facts for
+the existing CPU event interface. It is read-only PE/Capstone, pinned
+CommonLibF4 and staged F4SE0.7.9 source review against the same installed
+1.11.240 executable hash recorded above. No hook, capability, simulation
+marker, game/build/device run or shared analysis session was added.
+
+### Exact native PeekMessage contract
+
+PE imports identify executable IAT slot `2440a98` as USER32 PeekMessageA.
+The selected native calls are:
+
+| Native routine | Call bytes and RVA | Return | Removal argument | Result test |
+| --- | --- | --- | --- | --- |
+| `c336b0` | `c338e4: ff 15 ae d1 80 01` | `c338ea` | `c338d3: c7 44 24 20 01 00 00 00` | `c338ea: 85 c0 74 34` |
+| `c336b0` | `c33918: ff 15 7a d1 80 01` | `c3391e` | `c33907: c7 44 24 20 01 00 00 00` | `c3391e: 85 c0 75 ce` |
+| `c33950` | `c33985: ff 15 0d d1 80 01` | `c3398b` | `c33959: c7 44 24 20 01 00 00 00` | `c3398b: 85 c0 74 36` |
+| `c33950` | `c339bb: ff 15 d7 d0 80 01` | `c339c1` | `c339a9: c7 44 24 20 01 00 00 00` | `c339c1: 85 c0 75 cb` |
+
+All four pass RCX=MSG output pointer, RDX=null HWND, R8D=0 minimum,
+R9D=0 maximum and stack fifth argument1, PM_REMOVE. The ABI is
+`BOOL WINAPI(LPMSG,HWND,UINT,UINT,UINT)`, with the complete 32-bit BOOL in
+EAX. It is not an HRESULT and success is any nonzero BOOL, not a comparison
+with1. Both routines loop through TranslateMessage/DispatchMessageA only
+after success. The small pump's native local is48 bytes; x64 Windows MSG has
+message UINT at+8 after its HWND. The native caller owns that local through
+the wrapped call's return. Copy only message at+8 after original succeeds
+with removal, before any host callback or native dispatch; never read stale
+MSG data on FALSE or retain its pointer/payload.
+
+The smallest proposed executable-local interception is an owned thunk in
+that one IAT slot, forwarding through the saved current slot value exactly
+once with all arguments unchanged. Admit reporting only for the four return
+addresses above and their verified null filters/PM_REMOVE arguments. There
+are ten direct executable calls to this import: other callers at `c3a068`,
+`c3a09d`, `c3b0b5`, `c3b0eb`, `c424db` and `c42510` remain forwarded and
+unreported by this minimal contract. This avoids requiring a process-wide
+USER32 code detour or changing any native dispatch decision. Other module
+calls and existing F4SE/ENB chains must remain intact.
+
+Activation must validate the exact executable, PE import identity, selected
+call/argument/result-test guards and original nonnull IAT target, then install
+only if the cell still equals that saved target. Preserve an existing target
+chain rather than replacing it with a freshly resolved unwrapped API.
+Quiesce reporting first; restore the IAT only if it still contains this
+adapter's thunk and obey the existing plugin/module quiescence contract.
+Do not overwrite another owner's later IAT change. Entered-callback counting
+is necessary for draining but is not, alone, proof that no thread has fetched
+an old thunk address before module unload. Root must reuse its existing
+resident-hook/module lifecycle rather than infer a new unload guarantee here.
+
+Save incoming LastError before wrapper work, restore it before the original,
+capture native LastError immediately after original, and restore that native
+value after observation and on return. Return the original BOOL unchanged.
+No message is removed, dispatched, suppressed or reordered by the adapter.
+The fact is CPU INPUT_EVENT with source0, kind0, copied message_id and
+WINDOW_MESSAGE|INPUT_UNFRAMED. QPC is the actual observation after successful
+native removal, not a physical input sample or a simulation boundary. The
+adapter reports every admitted ID; core PCL registration/routing selects
+its SDK message ID and performs association/deduplication.
+Use zero-initialized current-size CPU event structures, current event_version,
+the active host session, and the actual observation QPC/frequency; leave all
+unrelated fields zero. The same envelope applies to the controller receipt.
+
+### Native controller queue and receiver lease
+
+The existing selected receiver is PlayerControls at global `31f0b80`,
+vtable `2571a30`, entry `ddbe50` guarded by
+`48 8b c4 56 57 48 83 ec 68`. Its ABI is
+`void(PlayerControls*, const InputEvent* head)`, not InputEvent**.
+Native dispatcher `1673ae0` passes its selected RDI head as RDX at
+`1673b6c`, receiver RSI as RCX at `1673b6f`, and calls slot0 at
+`1673b72: ff 10`, returning `1673b74`. PlayerControls copies that incoming
+head to RDI at `ddbe61`, then walks the nodes through+18 at
+`ddbffb: 48 8b 5b 18`. Event dispatch reads type+10 at
+`ddc44c: 48 63 45 10`. These instructions corroborate the source layouts,
+rather than trusting source field offsets alone.
+
+The queue global is `3273ae0`. Dispatcher forms queue+1478 at `1673aeb`,
+acquires its native read lock at `1673b00`, reacquires a nested read at
+`1673b30`, reads head+1480 and skips old events using node+20 against
+receiver+8. It advances receiver+8 from queue+1490 at `1673b53..1673b59`.
+The inner release at `1673b64` precedes the receiver call, but the outer read
+lock remains held until `1673b90`. Thus the original receiver hook already
+runs inside the queue's native protected list lease. Do not acquire another
+lock, release the native lock or retain a node after the callback.
+
+The lock distinction is concrete: `1659400` is shared/read acquisition,
+`16596d0` decrements the read count, while producer paths use exclusive
+`1659480` and release `16596e0`. Calling it a plain unlocked list, or treating
+the intermediate release as the final unlock, is incorrect. Read acquisition
+can nest under the current thread's exclusive ownership; that does not make
+the producer/consumer paths equivalent write-lock users.
+
+Append `1674610` links the actual node through+18, writes queue+1490 to
+node+20 at `1674662`, increments that queue counter at `1674665`, and sets
+the new tail's next to null at `167466b`. The receiver cursor therefore
+denotes the next sequence beyond previously offered nodes in the ordinary
+non-wrapping case. The native dispatcher already selects newly offered
+events; a separate adapter event ledger is unnecessary. This is a delivered
+queue sequence, not a hardware packet number or a physical event timestamp.
+
+Native InputEvent header facts are device int32+8, type int32+10, next pointer
++18 and queue timeCode uint32+20; source sizeof28 agrees with native reads.
+Pinned CommonLib INPUT_DEVICE assigns keyboard0/mouse1/gamepad2 and
+INPUT_EVENT_TYPE assigns button0/thumbstick4. F4SE0.7.9's GameInput definitions
+agree on these fields and enum values, and its queue/receiver globals match
+the installed native accesses. Do not reuse its old pool size as a bound.
+
+### Actual gamepad producers, not successful state polls
+
+PE RTTI ties vtable `267f0b8` to BSPCGamepadDevice; slot1 is `16777f0`.
+Handler vtable `267efc0` slot1 `16771b0` forwards through its concrete device's
+slot1 at `1677234`. The concrete poll calls thunk `1677bb7` at `1677847`;
+the thunk jumps through IAT `2440f10`, XINPUT1_3 ordinal2. The local System32
+DLL export directory names that ordinal XInputGetState. The native return
+test is `167784c: 85 c0`, rejecting nonzero status. This success does not
+itself establish a new delivered event and must not increment controller
+reception on every unchanged poll.
+
+The same poll iterates14 button masks through helper `1675fe0` at
+`16778a2`. That helper returns without enqueuing when both previous and
+current button states are false. For a native held/press/release event it
+passes the device kind from device+8 to button producer `1673c00` at
+`16760df`. The producer writes that kind to node+8 at `1673d1c` and appends
+the node at `1673d49`. Held events remain genuine delivered native events;
+this contract does not claim each one changed the hardware state.
+
+For thumbsticks, poll calls `1674170` at `1677a5f` and `1677b02` after native
+value checks. The producer verifies a thumbstick-type slot at `1674205`,
+writes literal device2 with `16742a4: c7 47 08 02 00 00 00`, fills its
+native fields and appends through `16742d4` -> `1674610`. This establishes
+the gamepad-kind tag and its real queue producer independently of an
+XInput-success heuristic. Trigger/button helper `1676120` also exists;
+the minimal proof does not rely on inferring activity from its raw values.
+
+### Minimal controller reporting contract and limits
+
+The already owned dispatcher/receiver hooks can expose this receipt without
+another native hook. At dispatcher entry, preserve an invocation-local
+selected-queue/receiver guard for exact caller `c342de`, current global queue
+and current global PlayerControls receiver; restore its parent after original
+returns. This guard must be independent of pending prospective poll binding:
+the existing consumer_admitted flag currently depends on pending.source and
+is insufficient to report every delivered controller batch. Invocation-local
+guard state is not a source ledger or resource owner.
+
+At receiver entry, require that selected dispatch guard, exact return
+`1673b74`, unchanged global receiver/vtable and enabled lifecycle. Before
+original, read only device/type/next through bounded safe native reads while
+the outer read lock is held. A small fixed walk cap such as256 is an adapter
+work bound, not a claimed engine pool capacity. Null list, unreadable node,
+unknown type or cap exhaustion before a qualifying node produce no receipt.
+Stop on the first device2 button0 or thumbstick4 and emit exactly one
+INPUT_EVENT, kind CONTROLLER, message0, source0, INPUT_UNFRAMED for that
+delivered batch. Do not read/export button, axis or key payload, invoke node
+virtual methods, report keyboard/mouse again, or report only because a poll
+succeeded. Preserve LastError before original and its resulting LastError
+afterward, the receiver's void ABI and every original callback/order.
+Perform this receipt before the existing prospective FRAME_BEGIN/BIND calls
+inside the hook, so the actual entry receipt reaches core's unframed pending
+queue before that consumer adopts its source. Do not assign pending.source
+to the received event or synthesize another input sample to force association.
+
+This reports delivery to PlayerControls even if its original later takes an
+early-return branch; it is not proof every node was processed or that a
+simulation completed. Source binding, sample token placement and absent
+native simulation markers retain their existing separate contracts. Menu-only
+receivers, virtual-keyboard/controller connection events and other device
+families remain outside this minimal proven receipt coverage.
+
+### Existing generic services remain separate
+
+Core native_cpu already accepts source0 unframed received kinds and registered
+message candidates into its bounded pending receipts, and owns later source
+association and one-ping-per-frame deduplication. Native_fg obtains the vendor
+message ID and routes the ping to the selected window. Those mechanisms do
+not need game-specific message selection. The existing generic mechanism
+demonstrated by the GLFW/GL input observer tests distinguishes PM_NOREMOVE
+from PM_REMOVE and handles window and thread-targeted pings; it is separate
+from proof that these particular native Fallout4 pump sites executed.
+
+The shared overlay's window procedure already handles its generic window/raw
+input/hotkey path. No CPU WINDOW_MESSAGE submission from that overlay procedure
+or the current Fallout4 creation path was found in this source review, so
+overlay input responsiveness is not claimed as native dequeue/latency evidence.
+If root reuses an existing window observer for delivered IDs, its fact is
+window delivery; the selected Peek wrapper adds actual native dequeue proof
+including thread messages. Duplicate observations still belong to core
+deduplication. No new observer or controller hook was implemented here.
+
+Ignored receipts `notification-imports-20261116.json`,
+`controller-vtables-20261116.json`, `notification-guards-20261116.json` and
+the `cpu2-c336b0/c33950/ddbe50/ddc350/1673ae0/16777f0/1674170/1674610`
+listings retain the native evidence. All31 selected exact byte guards matched.
+The initial name-only import scan found no named XInputGetState because the
+game imports ordinal2; the ordinal import/thunk and local export table resolved
+that failed approach. A broader constructor-vtable-reference search was not
+used as activation proof. Reduced/math source and compiled camera tests were
+kept frozen throughout this documentation-only task.
+
+
+## Native notification implementation followup, source frozen
+
+The later authorized source change implements the preceding contract in
+`games/fallout4/src/cpu_events.cpp/h`; the earlier statement that no notification
+hook was implemented describes the prior artifact. No new build or game test
+was performed for this change. The separate
+[marker-order audit](fallout4-latency-order-audit-20261116.md) explains why the
+retained order counter cannot be attributed to missing input notifications.
+The shared owner handles marker eligibility and actual runtime acknowledgements.
+
+The game-local PeekMessageA thunk uses only IAT2440a98. Cold plugin prepare
+already precedes native window/device creation; CPU prepare also verifies the
+exact executable fingerprint, all31 recorded instruction guards, four added
+queue lock acquire/release guards and six import-identity fields. Import
+identity is USER32.dll descriptor2ed1098, OriginalFirstThunk2ed1d60,
+FirstThunk2440a70, name2ed3736, index5 original-name slot2ed1d88 pointing to
+2ed35fe, with PeekMessageA at2ed3600. The cell is eight-byte aligned.
+The four added queue guards are1673b00=e8fb58feff,
+1673b30=e8cb58feff,1673b64=e8675bfeff,1673b90=e93b5bfeff. They preserve
+the exact outer read-lock lifetime across the native receiver callback.
+
+The continuation is the current executable import target, verified committed
+executable memory and pinned by containing module. Adapter and CPU callback
+modules are also pinned. The saved continuation is immutable after publication
+and remains callable after stop, including a late fetched thunk or a later
+owner that chains it. Publication and retirement use an aligned compare-exchange,
+not a blind write. A changed cell is preserved; ambiguous restart with a new
+continuation refuses. Page-protection restoration is a separate retained cleanup
+obligation. Reporting quiesces before retirement; entered callbacks keep stop
+BUSY. MinHook receiver cleanup retains its existing drain checks. This does not
+claim safety against an independently unloading external inline-hook target or
+unsynchronized competing changes to page protection.
+
+Only a successful original BOOL, selected return address, null filters and exact
+PM_REMOVE admit the copied message ID. Original arguments, return and LastError
+remain unchanged. No MSG payload survives the call. A missing/unreadable output
+refuses the receipt while preserving native work. Every other caller forwards.
+
+The existing dispatcher stores only a nested invocation-local queue/receiver
+pair, independent of pending poll reservations. Under its outer native read
+lock the receiver checks current globals/vtable and exact caller, then scans at
+most256 nodes for device2 button0/thumbstick4. Unknown/unreadable headers and
+exhausted walks emit nothing. One matching batch emits one source0 unframed
+controller receipt before FRAME_BEGIN/BIND. Native list pointers and payloads
+are never retained. Foreign/nested calls restore the parent invocation guard.
+
+New bounded log lines say `emitted`: first four MSG/controller receipts each,
+and first eight of each source stage then source%128 within64 total source
+receipts. The void callback cannot report runtime acceptance. No capability,
+source numbering, SIM event, INPUT_SAMPLE, vendor selection or pacing policy
+changed. The ignored static receipt `cpu-notification-static-20261116.json`
+records exact installed-file/source checks; Windows compilation, external-hook
+coexistence, actual native dequeue/controller delivery and input/FG/latency
+acceptance remain for the coordinator's coherent batch.
+
+Documentation follow-up: the scene/input/marker batch is now MSVC Release
+VS2026-built (`build-scene-input-marker-20261116.log`, exit0), with matching
+VERSION/Cargo and separate fmt/Clippy exit0. Background CTest passed218 and
+skipped14 of232 selected tests in82.22seconds; exactly four foreground tests
+were excluded under the recorded desktop scope, so full eng/verify has not
+passed for this batch. The hidden generic marker fixture passed admission,
+fallback refusal, keyed/bound derivation, failed start, repeated ends and the
+shared SR CPU token. The scene-input scoped fixture passed55sources,
+41captures,39SR,34tags and34generated callbacks, with rendered latency
+owner0/paced0/markers0. This closes the earlier compilation-pending statement
+only. Actual native dequeued MSG/controller receipts, foreign-hook coexistence,
+accepted poll binding/pacing and native FG/latency remain unvalidated. The
+current artifacts are not deployed; no game/UI/process activity was performed.
+Exact receipt names and artifact hashes are in the render research and engine
+metadata. Generic synthetic marker acceptance is not native game acceptance.
+
+Latest scheduling update: the user reports the PC available again. The root
+is running complete eng/verify Release VS2026 in
+`verify-scene-input-marker-20261116.log`; its result is pending at this
+documentation freeze. Root owns any subsequent deployment/game/UI work;
+this worker performed none. The earlier desktop exclusions describe the
+completed background run, not a continuing restriction.
+
+
+## Main poll attribution followup, source-only
+
+The coordinator's restored `native-raster-20261116-140447-020` run, PID54248,
+records accepted native WINDOW_MESSAGE receipts and marker_order_violations0
+through world entry, but no emitted/resolved SOURCE_RESERVE/SAMPLED/BIND/ABORT
+(stages7..10). This does not establish prospective ownership or justify
+fabricating it. The shared marker repair and native dequeue path are distinct
+from admission of the engine-buffer poll source.
+
+A new exact-file Capstone check confirms Main::Run loads RCX from singleton
+32dd130 atc315b4 (`488b0d75bb6a02`), then callsc339d0 atc315bb, returnc315c0.
+OnIdle retains that RCX in RDI atc33a05. The selected poll loads delta in XMM1
+atc342a6 and manager3e75cb8 into RCX atc342ae (`488b0d031a2403`), then
+callsc342b5/returnsc342ba. Other dispatcher calls remain wrapperc34ec3
+(`e878d6a300`, returnc34ec8) and workerbd764e (`e8edaea900`, returnbd7653),
+both loading the same manager into RCX. Dispatcher1672540 saves XMM1 and
+tests manager+35. No ABI, singleton/caller-address or existing AND-predicate
+defect was established. Native calls and fallback admission remain unchanged.
+
+The source change adds only first-occurrence predicate-combination receipts,
+limited to32 rows total across those three known caller classes. Repeated
+startup combinations do not spend rows needed for a later distinct world
+condition; no budget is consumed merely because another frame passed. Unknown
+callers are forwarded without a claimed classification. A fixed atomic set
+stores logging keys only, not frame/source ownership. No event or API changed.
+
+The original native-state reads retain their short-circuit order. They now
+name the first failed read/association/eligibility term, or eligible; a state
+not reached because an earlier AND term failed is explicitly `not-called`.
+The receipt is partial: subsequent zero fields have not necessarily been read.
+Predicate bits are enabled1, idle-depth-one2, no-overlap4, no-identity8,
+no-RAW-writer16, manager-match32, candidate64, idle-Main-present128 and
+Main-association256. Caller class independently identifies the selected-main
+term. Flags are a nonzero-byte mask for Main+24..2b; bit4/onIdle remains
+ignored by admission and by the deduplication key. Menu is Main+1d0. The
+receipt copies the candidate's entry facts and logs only after original Poll
+and its existing completion checks, restoring native LastError afterwards.
+It says native candidate, not core accepted; the host callback remains void.
+
+`cpu-poll-candidate-abi-20261116.txt` and
+`cpu-poll-candidate-static-20261116.json` retain the read-only instruction and
+source checks. An initial small decode began inside an instruction nearc342a0
+andbd7638; it was discarded and regenerated from the known starts c342a6 and
+bd763f. The four new cold guards cover the two verified pointer loads and two
+other caller instructions. No new hook, SIM/INPUT_SAMPLE, source ledger,
+capability, vendor policy, build or process/UI action was added. The next fact
+is the first distinct main-candidate predicate/state refusal, paired with core's
+separate acknowledgement if a source event is actually emitted.
+
+
+## Ordinary-world worker pipeline, static contract and pending observation
+
+The PID61128 `143511` trial's three native candidate classes are consistent
+with actual control flow, not a missing OnIdle detour. OnIdle derives R12B at
+c33a19..c33a27: menu count0 plus Main.freezeTime+2a=0 selects R12B=1.
+Atc341e7 (`4584e4`) andc341ea (`0f850d010000`), that ordinary unfrozen case
+jumps toc342fd, skipping both the selected Pollc342b5 and PlayerControls
+consumec342d9. The startup menu1 main receipt and world wrapper idle_depth0
+therefore expose a real coverage gap in the presently admitted main-only
+source path. Merely removing its menu/idle predicate is not a valid repair.
+
+The previous E8-only wrapper enumeration was incomplete. Nativebd5900 loads
+Main32dd130 and tail-jumps atbd5907 (`e9a4f50500`) toc34eb0. This is another
+static route, not proof that it executed. Wrapper entry has no incoming-Main
+use before loading the manager; Pollc34ec3 returns c34ec8, followed by native
+work and actual queue-to-PlayerControls dispatchc34ee7 (returnc34eec).
+The other proved callers remain bd6684 andbd6940. In bd6850, the latter
+wrapper call precedes UpdatePlayerc34fa0 atbd694c (returnbd6951).
+
+Native descriptor2f30fc0 contains functionbd6850 and the exact JobListEnd name
+pointer255dd10. Builderbd7050 compares that pointer and atbd71ff stores the
+end descriptor in native list+10, rather than enqueueing it as an ordinary
+list job. Mode1 workerbd7430/bd7478 submits each list atbd76bb, waits list+8
+atbd76cc, then directly calls its optional end descriptor atbd76dd, returning
+bd76df. That selected route therefore executes its end callback on the native
+mode1 worker invocation. A wrapper-only receipt does not yet distinguish this
+route from another wrapper caller, and idle_depth0 alone is not an OS TID.
+The observer below captures both real caller and TID to test the route.
+
+Ordinary OnIdle starts mode1 atc34035 -> bd5190: mode+68 must be0, is set1,
+and worker start event+58 is signaled. Mode2 is the separate continuous
+poll/consumer loop, not an ordinary-source substitute. The post-Swap
+c346bb -> bd51c0 path sets mode1 to0 and waits worker completion event+60.
+Thus this worker join happens after Swap, not before world rendering.
+
+The separate pre-Swap waitc34565 ->16982f0 selects group0/event0.
+Cleanup descriptor2f30b60 begins with bd58b0, named Signal render ok, which
+calls1698250 with event index0. That signal helper obtains its group from
+native TLS+9cc, while16982f0 takes an explicit group/event. The PE TLS template
+initializes9cc to0; setter1698330's sole direct call, bd44ee, sets1 on its
+initializing thread. This supports the intended worker0/Main1 profile but is
+not a substitute for observing resolved handles/groups on the selected paths.
+Atbd6a6b..bd6a7d, bd6850 waits explicit group1/event6 after Poll/controls/
+UpdatePlayer. Swap signals event6 atc335ca/c335cf, before its actual native
+Present callc335e7. Win32 imports confirm SetEvent and WaitForSingleObject,
+with WaitForSingleObjectEx used by the post-Swap worker join.
+
+The following is the static partial order for matching native event
+handles/cycles. Parallel branches deliberately have no invented relative
+Poll-versus-world edge:
+
+```mermaid
+flowchart TD
+    A[Ordinary OnIdle starts mode1] --> W[Worker submits and waits native descriptors]
+    W --> S[Cleanup SignalRenderOK: group0 event0]
+    S --> M[Main pre-Swap group0 event0 wait returns]
+    M --> R[Ordinary WorldBegin and world/UI draws]
+    W --> P[Selected JobListEnd: Poll then PlayerControls then UpdatePlayer]
+    P --> V[Worker waits group1 event6]
+    R --> E[Late Swap signals group1 event6]
+    E --> V
+    E --> T[Actual outer Present then Swap returns]
+    V --> C[Worker signals completion event60]
+    T --> J[Main post-Swap waits event60]
+    C --> J
+    J --> N[Later OnIdle and ordinary WorldBegin]
+```
+
+The missing fact is which consumed native control generation is visible to
+which world construction, including whether another worker poll/PlayerControls
+update intervenes before or during that construction. The join proves
+completion, not that the last poll belongs to the current Swap or automatically
+to the next redraw. Pending-before-BIND overlap/intervening-poll invalidation
+must remain; a genuinely consumed predecessor with a later source needs an
+explicit visibility/overlap contract, not blanket generation retention or
+blind rejection of every legitimate pipelined successor. Early worker RESERVE
+can also precede the current fallback's Swap-time source-ID allocation, so
+copying TLS Pending would invert source/render order. Core can block a RESERVE
+on predecessor Present: SignalRenderOK must be proven before any such blocking
+callback to avoid a pre-Swap deadlock. No implementation is approved by these
+static findings. No SIM event or physical input timestamp follows from them.
+
+The smallest candidate for review is a guarded mode1 JobListEnd/wrapper scope,
+actual c34eec ->1673b74 PlayerControls consumption, and a native-cycle-aware
+handoff into an ordinary world constructor. It must preserve all three poll
+classes, overlap/raw/queue checks, positive camera/screen/resource admission,
+explicit abort and skipped-source closure, and real source-ID ordering.
+Neither the background mode2 loop nor an arbitrary wrapper invocation qualifies.
+A new ledger, rendered-mode switch, cap removal or generic gate relaxation is
+not a substitute for the missing association.
+
+### Prepared passive ordering observer
+
+Ignored `trace-world-input-order-20261116.js` is frozen for coordinator review
+and execution only. Prefix it in a fresh Frida script with:
+
+```javascript
+globalThis.RSF_TRACE_CONFIG = {
+  expected_pid: ownedPid, // fresh coordinator-owned Fallout4 PID
+  expected_executable_sha256: 'fdcef37ac1230af6d0b0050eb2142b139ef3a867b37b9211fb6edfcc646072f8',
+  expected_entry_sha256: currentEntrySha256, // exact deployed file hash
+  output_path: 'D:/Coding/ReScaleFrame/.local/fallout4-research/<owned-report>/world-order.jsonl'
+};
+```
+
+It requires the exact process/path, file fingerprints and every site guard
+before installing any listener. Existing RSF hooks are preserved: only a
+native E9 with unchanged guarded suffix, optionally through the canonical
+MinHook FF25 relay, into the hash-matched Entry is accepted. Unknown chains
+refuse. It records all three Poll entry/return classes, wrapper outer caller,
+selected PlayerControls and queue invocation, UpdatePlayer, selected mode1
+end callback, actual pre/post-Swap waits, ordinary WorldBegin and native
+Present. Two guarded pre-wait sites copy actual event handles; the signal
+resolution site copies the actual native group/event and handle. No GetBuffer,
+input payload, native game-function call or ownership event is introduced.
+
+Rows contain real TID, QPC/frequency, native frame, queue generation/consumer
+cursor, native Main flags and mode, plus copied observer invocation IDs.
+These IDs are not engine source IDs. QPC uses private per-call scratch and
+exclusive NativeFunction scheduling, eliminating the draft shared-scratch
+race. LastError is preserved. Output is fresh exclusive-create JSONL with a
+flush per row. Timeout is15seconds including setup after guards; a separate
+hard512-row cap includes the final detach row. All listeners detach on either
+limit or setup/callback failure; incomplete invocations are explicit. No
+exception handler is installed, leaving native disposition unchanged. The
+trace perturbs scheduling and is not a performance or latency measurement.
+
+Node syntax and nine VM mock scenarios passed: PID/executable/Entry/early-byte/
+late-byte/unknown-relay refusals install zero hooks; native and owned-relay
+paths detach all16 listeners at512 rows; timeout detaches at15seconds; mocked
+LastError is preserved. This is not Frida/game validation. Retained receipts
+are `world-order-trace-sites-20261116.json`,
+`world-order-observer-mock-20261116.json` and
+`world-input-order-freeze-20261116.json`; native disassembly receipts use the
+`world-job-*`, `world-poll-*` and `world-update-table-*` prefixes.
+The coordinator's later PID70400 trial separately accepted actual HUDless and
+SR resources while FG still refused with prospective0/paced0/cpu_mask1; that
+supports prioritizing this real input-source association, not a resource or
+focus workaround. This worker performed no build, process query, game/UI,
+attach, deployment or input action.

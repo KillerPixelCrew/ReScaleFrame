@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "render_inputs.h"
 #include "camera.h"
+#include "depth_domains.h"
 #include "native_creation.h"
+#include "native_input_state.h"
 #include <windows.h>
 #include <array>
 #include <atomic>
@@ -33,12 +35,7 @@ bool same_object(IUnknown* a, IUnknown* b) noexcept {
 }
 struct NativeTarget { ID3D11Texture2D* texture; void* copy_texture; ID3D11RenderTargetView* rtv; ID3D11ShaderResourceView* srv; void* copy_srv; void* uav; };
 static_assert(sizeof(NativeTarget)==0x30);
-struct NativeState {
-    uintptr_t renderer{}, camera{}, cache{}, context{}, device{}, chain{}, window{};
-    uint32_t frame{}, width{}, height{}, count{}, taa{}, disable{}, colour{}, motion{}, depth{};
-    float ratio[2]{}, viewport[4]{}, delta_seconds{};
-    unsigned char default_viewport{}, dynamic_viewport{};
-};
+using detail::NativeState;
 enum class ReadStage : unsigned {
     unverified, owner, dimensions, delta, camera_owner, cache, temporal_flags,
     viewport_read, viewport_bounds, ratio, colour_map, motion_map, depth_map,
@@ -82,19 +79,19 @@ bool state(NativeState& out, ReadStage* failure = nullptr) noexcept {
     // State+88 is metadata, not the Context viewport submitted by the renderer.
     // Reduced raster still needs its separate producer/consumer contract.
     for (float ratio : out.ratio) if (!std::isfinite(ratio) || ratio<=0 || ratio>1) return no(ReadStage::ratio);
-    if (out.ratio[0]!=1 || out.ratio[1]!=1) return no(ReadStage::ratio);
     return true;
 }
 bool active_full_viewport(ID3D11DeviceContext* context, UINT width, UINT height,
-    UINT& count, D3D11_VIEWPORT& viewport) noexcept {
+    UINT& count, D3D11_VIEWPORT& viewport, bool full=true) noexcept {
     count=0; context->RSGetViewports(&count,nullptr);
     if (count!=1) return false;
     UINT capacity=1; context->RSGetViewports(&capacity,&viewport); count=capacity;
     return count==1 && std::isfinite(viewport.TopLeftX) && std::isfinite(viewport.TopLeftY) &&
         std::isfinite(viewport.Width) && std::isfinite(viewport.Height) &&
         std::isfinite(viewport.MinDepth) && std::isfinite(viewport.MaxDepth) &&
-        viewport.TopLeftX==0 && viewport.TopLeftY==0 &&
-        viewport.Width==float(width) && viewport.Height==float(height) &&
+        viewport.TopLeftX>=0 && viewport.TopLeftY>=0 && viewport.Width>0 && viewport.Height>0 &&
+        double(viewport.TopLeftX)+viewport.Width<=width && double(viewport.TopLeftY)+viewport.Height<=height &&
+        (!full || (viewport.TopLeftX==0 && viewport.TopLeftY==0 && viewport.Width==float(width) && viewport.Height==float(height))) &&
         // Depth endpoints describe the last native draw, not the projection or
         // encoding of every pixel already stored in the scene-depth texture.
         viewport.MinDepth>=0 && viewport.MinDepth<viewport.MaxDepth && viewport.MaxDepth<=1;
@@ -160,6 +157,8 @@ struct History {
     uintptr_t camera{};
     uint32_t frame{}, width{}, height{};
     NativeCamera native{};
+    CameraRaster raster{}, previous_raster{};
+    bool previous_raster_valid{};
     float jitter[2]{}, previous_jitter[2]{};
 };
 thread_local History history;
@@ -191,7 +190,7 @@ bool verify_render_inputs() noexcept try {
     verified.store(match,std::memory_order_release); return match;
 } catch (...) { return false; }
 
-bool read_native_inputs(NativeInputs& output, void (*report)(const char*)) noexcept try {
+bool read_native_inputs(NativeInputs& output, void (*report)(const char*), const NativeDepthSnapshot* producer) noexcept try {
     output={};
     NativeState before{},after{};
     NativeCamera native{},confirmed{};
@@ -253,6 +252,11 @@ bool read_native_inputs(NativeInputs& output, void (*report)(const char*)) noexc
     const auto refuse=[&](ReadStage reason) { receipt(reason); return false; };
     if (!verified.load(std::memory_order_acquire)) return refuse(ReadStage::unverified);
     if (!state(before,&stage)) return refuse(stage);
+    if (producer) {
+        if (!native_depth_snapshot_current(*producer) || producer->native_frame!=before.frame ||
+            producer->world_camera_key!=before.camera || producer->width!=before.width || producer->height!=before.height ||
+            producer->device_context_key!=before.context || producer->cache_key!=before.cache) return refuse(ReadStage::state_changed);
+    } else if (before.ratio[0]!=1 || before.ratio[1]!=1) return refuse(ReadStage::ratio);
     for (uint32_t i=0;i<before.count;++i) {
         const auto entry=before.cache+size_t(i)*0x250;
         uintptr_t key{}; unsigned char jitter{};
@@ -275,7 +279,7 @@ bool read_native_inputs(NativeInputs& output, void (*report)(const char*)) noexc
     result.context->GetDevice(&device);
     if (!same_object(device.Get(),reinterpret_cast<ID3D11Device*>(before.device)) ||
         FAILED(result.chain->GetDevice(IID_PPV_ARGS(&chain_device))) || !same_object(device.Get(),chain_device.Get())) return refuse(ReadStage::device);
-    if (!active_full_viewport(result.context.Get(),before.width,before.height,viewport_count,active_viewport)) return refuse(ReadStage::viewport_bounds);
+    if (!active_full_viewport(result.context.Get(),before.width,before.height,viewport_count,active_viewport,!producer)) return refuse(ReadStage::viewport_bounds);
     if (!view_texture(colour.srv,colour.texture,device.Get(),DXGI_FORMAT_R11G11B10_FLOAT,result.colour,colour_facts)) return refuse(ReadStage::colour_srv);
     if (!view_texture(motion.srv,motion.texture,device.Get(),DXGI_FORMAT_R16G16_FLOAT,result.motion,motion_facts)) return refuse(ReadStage::motion_srv);
     if (!view_texture(reinterpret_cast<ID3D11ShaderResourceView*>(depth_view),reinterpret_cast<ID3D11Texture2D*>(depth_texture),device.Get(),DXGI_FORMAT_UNKNOWN,result.depth,depth_facts)) return refuse(ReadStage::depth_srv);
@@ -289,30 +293,48 @@ bool read_native_inputs(NativeInputs& output, void (*report)(const char*)) noexc
     if (!extent(result.colour.Get(),before.width,before.height,c) || !extent(result.depth.Get(),before.width,before.height,d) ||
         !extent(result.motion.Get(),before.width,before.height,m) || c.Format!=DXGI_FORMAT_R11G11B10_FLOAT ||
         m.Format!=DXGI_FORMAT_R16G16_FLOAT || (d.Format!=DXGI_FORMAT_R24G8_TYPELESS && d.Format!=DXGI_FORMAT_R32_TYPELESS && d.Format!=DXGI_FORMAT_R32_FLOAT)) return refuse(ReadStage::extent_format);
-    const auto width=uint32_t(std::lround(float(before.width)*before.ratio[0]));
-    const auto height=uint32_t(std::lround(float(before.height)*before.ratio[1]));
+    CameraRaster raster{};
+    if (producer) {
+        std::memcpy(raster.xywh,producer->actual_raster,sizeof(raster.xywh));
+        std::memcpy(raster.crop,producer->render_rect,sizeof(raster.crop));
+        const auto& w=producer->world_camera;
+        if (producer->depth_key!=depth_texture || !close_matrix(native.view,w.view) ||
+            !close_matrix(native.projection,w.projection) || !close_matrix(native.view_projection_unjittered,w.view_projection_unjittered) ||
+            std::memcmp(native.position_adjust,w.origin,sizeof(w.origin))) return refuse(ReadStage::camera_changed);
+    } else {
+        raster.xywh[2]=float(before.width); raster.xywh[3]=float(before.height);
+        raster.crop[2]=int32_t(before.width); raster.crop[3]=int32_t(before.height);
+    }
+    const auto width=uint32_t(raster.crop[2]-raster.crop[0]);
+    const auto height=uint32_t(raster.crop[3]-raster.crop[1]);
     auxiliary(before,device.Get(),14,result.refraction_normals);
     auxiliary(before,device.Get(),30,result.pipboy);
     auxiliary(before,device.Get(),15,result.vats);
     auto& pass=result.pass;
     bool valid_history{};
-    if (!camera_frame(native,width,height,pass.camera,pass.previous_clip_to_clip,valid_history)) return refuse(ReadStage::camera_math);
-    if (!state(after) || std::memcmp(&before,&after,sizeof(before))) return refuse(ReadStage::state_changed);
-    if (!active_full_viewport(result.context.Get(),before.width,before.height,confirmed_viewport_count,confirmed_viewport) ||
+    const CameraRaster* previous_raster=nullptr;
+    if (history.seen && history.frame!=before.frame) previous_raster=&history.raster;
+    else if (history.previous_raster_valid) previous_raster=&history.previous_raster;
+    if (!camera_frame(native,width,height,pass.camera,pass.previous_clip_to_clip,valid_history,&raster,previous_raster)) return refuse(ReadStage::camera_math);
+    if (!state(after) || !detail::same_native_state(before,after)) return refuse(ReadStage::state_changed);
+    if (!active_full_viewport(result.context.Get(),before.width,before.height,confirmed_viewport_count,confirmed_viewport,!producer) ||
         std::memcmp(&active_viewport,&confirmed_viewport,sizeof(active_viewport))) return refuse(ReadStage::viewport_bounds);
+    if (producer && !native_depth_snapshot_current(*producer)) return refuse(ReadStage::state_changed);
     if (!camera(selected,confirmed) || std::memcmp(&native,&confirmed,sizeof(native))) return refuse(ReadStage::camera_changed);
     if (!history.seen || history.frame!=before.frame) {
         const auto previous=history;
         history={}; history.seen=true; history.camera=before.camera; history.frame=before.frame;
         history.width=width; history.height=height; history.native=native;
+        history.raster=raster; history.previous_raster=previous.raster; history.previous_raster_valid=previous.seen;
         std::memcpy(history.jitter,pass.camera.jitter_pixels,sizeof(history.jitter));
         history.reset=!previous.seen || !valid_history || previous.camera!=before.camera || before.frame!=uint32_t(previous.frame+1) ||
-            previous.width!=width || previous.height!=height ||
+            previous.width!=width || previous.height!=height || std::memcmp(&previous.raster,&raster,sizeof(raster)) ||
             !close_matrix(native.previous_view_projection_unjittered,previous.native.view_projection_unjittered) ||
             std::memcmp(native.previous_position_adjust,previous.native.position_adjust,sizeof(native.position_adjust));
         if (!history.reset) std::memcpy(history.previous_jitter,previous.jitter,sizeof(history.previous_jitter));
     } else if (history.camera!=before.camera || history.width!=width || history.height!=height ||
-        !close_matrix(native.view_projection_unjittered,history.native.view_projection_unjittered)) return refuse(ReadStage::history_changed);
+        !close_matrix(native.view_projection_unjittered,history.native.view_projection_unjittered) ||
+        std::memcmp(&history.raster,&raster,sizeof(raster))) return refuse(ReadStage::history_changed);
     pass.struct_size=sizeof(pass); pass.native_frame=before.frame;
     pass.family_key=pass.view_key=pass.history_key=before.camera;
     pass.viewport_key=pass.window_key=pass.rhi_viewport_key=before.window;
@@ -320,11 +342,14 @@ bool read_native_inputs(NativeInputs& output, void (*report)(const char*)) noexc
     pass.camera.output_width=before.width; pass.camera.output_height=before.height;
     pass.camera.frame_time_seconds=before.delta_seconds;
     std::memcpy(pass.camera.previous_jitter_pixels,history.previous_jitter,sizeof(history.previous_jitter));
-    pass.render_rect[2]=int32_t(width); pass.render_rect[3]=int32_t(height);
+    std::memcpy(pass.render_rect,raster.crop,sizeof(pass.render_rect));
     pass.output_rect[2]=int32_t(before.width); pass.output_rect[3]=int32_t(before.height);
     pass.color_input=pass.color_output=result.colour.Get(); pass.depth=result.depth.Get(); pass.motion=result.motion.Get();
     pass.swapchain=result.chain.Get(); pass.camera_valid=1;
-    pass.motion_to_uv[0]=pass.motion_to_uv[1]=-1; pass.motion_camera_included=1;
+    // Native velocity encodes previous-current UV in the native camera's
+    // viewport metric. The steady-history crop scales that displacement.
+    if (!camera_motion_to_uv(raster,pass.motion_to_uv)) return refuse(ReadStage::camera_math);
+    pass.motion_camera_included=1;
     receipt(ReadStage::accepted);
     output=std::move(result); return true;
 } catch (...) {
@@ -333,38 +358,77 @@ bool read_native_inputs(NativeInputs& output, void (*report)(const char*)) noexc
     return false;
 }
 
-bool read_native_framebuffer(NativeFramebuffer& output) noexcept try {
+bool read_native_framebuffer(NativeFramebuffer& output, void (*report)(const char*)) noexcept try {
     output={};
-    if (!verified.load(std::memory_order_acquire)) return false;
     NativeState before{},after{};
     uint32_t platform{},confirmed_platform{};
     NativeTarget target{},confirmed_target{};
-    const auto map=image()+targets_rva+0xdf4;
-    if (!owner(before) || !read(map,platform) || platform>=101 ||
-        !read(before.renderer+0xa58+size_t(platform)*0x30,target) || !target.rtv) return false;
     NativeFramebuffer result;
+    D3D11_RENDER_TARGET_VIEW_DESC rtv{};
+    D3D11_TEXTURE2D_DESC texture{};
+    DXGI_SWAP_CHAIN_DESC swap{};
+    ReadStage owner_failure=ReadStage::owner;
+    enum class Stage : unsigned {
+        unverified, owner, map, target, context, device, resource, target_texture,
+        chain_device, texture_device, extent, rtv, swap, window, swap_extent,
+        owner_changed, map_changed, target_changed, accepted
+    };
+    const auto receipt=[&](Stage stage) noexcept { try {
+        if (!report) return;
+        static std::atomic<uint32_t> reported{};
+        const auto bit=uint32_t(1)<<unsigned(stage);
+        if (reported.fetch_or(bit,std::memory_order_relaxed)&bit) return;
+        constexpr const char* names[]{"unverified","owner","map","target","context","device","resource","target-texture",
+            "chain-device","texture-device","extent","rtv","swap","window","swap-extent",
+            "owner-changed","map-changed","target-changed","accepted"};
+        char text[960]{};
+        std::snprintf(text,sizeof(text),
+            "Fallout4 framebuffer stage=%s partial=1 native=%u owner_stage=%s renderer=%p context=%p chain=%p window=%p output=%ux%u logical=0 platform=%u/%u native_texture=%p rtv=%p leased_texture=%p texture=%ux%u mip=%u array=%u samples=%u format=%u rtv_kind=%u rtv_mip=%u swap=%ux%u/%p after=%u/%p/%p/%p",
+            names[unsigned(stage)],before.frame,stage_names[unsigned(owner_failure)],
+            reinterpret_cast<void*>(before.renderer),reinterpret_cast<void*>(before.context),reinterpret_cast<void*>(before.chain),
+            reinterpret_cast<void*>(before.window),before.width,before.height,platform,confirmed_platform,
+            static_cast<void*>(target.texture),static_cast<void*>(target.rtv),static_cast<void*>(result.texture.Get()),
+            texture.Width,texture.Height,texture.MipLevels,texture.ArraySize,texture.SampleDesc.Count,unsigned(texture.Format),
+            unsigned(rtv.ViewDimension),rtv.Texture2D.MipSlice,swap.BufferDesc.Width,swap.BufferDesc.Height,
+            static_cast<void*>(swap.OutputWindow),after.frame,reinterpret_cast<void*>(after.context),
+            reinterpret_cast<void*>(after.chain),reinterpret_cast<void*>(after.window));
+        report(text);
+    } catch (...) {} };
+    const auto refuse=[&](Stage stage) { receipt(stage); return false; };
+    if (!verified.load(std::memory_order_acquire)) return refuse(Stage::unverified);
+    const auto map=image()+targets_rva+0xdf4;
+    if (!owner(before,&owner_failure)) return refuse(Stage::owner);
+    if (!read(map,platform) || platform>=101) return refuse(Stage::map);
+    if (!read(before.renderer+0xa58+size_t(platform)*0x30,target) || !target.rtv) return refuse(Stage::target);
     result.context=reinterpret_cast<ID3D11DeviceContext*>(before.context);
     result.chain=reinterpret_cast<IDXGISwapChain*>(before.chain);
-    if (result.context->GetType()!=D3D11_DEVICE_CONTEXT_IMMEDIATE) return false;
+    if (result.context->GetType()!=D3D11_DEVICE_CONTEXT_IMMEDIATE) return refuse(Stage::context);
     ComPtr<ID3D11Device> device,chain_device,texture_device;
     result.context->GetDevice(&device);
     ComPtr<ID3D11Resource> resource; target.rtv->GetResource(&resource);
-    if (!same_object(device.Get(),reinterpret_cast<ID3D11Device*>(before.device)) || !resource ||
-        FAILED(resource.As(&result.texture)) ||
-        (target.texture && !same_object(target.texture,result.texture.Get())) ||
-        FAILED(result.chain->GetDevice(IID_PPV_ARGS(&chain_device))) || !same_object(device.Get(),chain_device.Get())) return false;
+    if (!same_object(device.Get(),reinterpret_cast<ID3D11Device*>(before.device))) return refuse(Stage::device);
+    if (!resource || FAILED(resource.As(&result.texture))) return refuse(Stage::resource);
+    if (target.texture && !same_object(target.texture,result.texture.Get())) return refuse(Stage::target_texture);
+    if (FAILED(result.chain->GetDevice(IID_PPV_ARGS(&chain_device))) || !same_object(device.Get(),chain_device.Get()))
+        return refuse(Stage::chain_device);
     result.texture->GetDevice(&texture_device);
-    D3D11_RENDER_TARGET_VIEW_DESC rtv{}; target.rtv->GetDesc(&rtv);
-    D3D11_TEXTURE2D_DESC texture{}; DXGI_SWAP_CHAIN_DESC swap{};
-    if (!same_object(texture_device.Get(),device.Get()) || !extent(result.texture.Get(),before.width,before.height,texture) ||
-        rtv.ViewDimension!=D3D11_RTV_DIMENSION_TEXTURE2D || rtv.Texture2D.MipSlice ||
-        FAILED(result.chain->GetDesc(&swap)) || swap.OutputWindow!=reinterpret_cast<HWND>(before.window) ||
-        swap.BufferDesc.Width!=before.width || swap.BufferDesc.Height!=before.height ||
-        !owner(after) || std::memcmp(&before,&after,sizeof(before)) ||
-        !read(map,confirmed_platform) || platform!=confirmed_platform ||
-        !read(before.renderer+0xa58+size_t(platform)*0x30,confirmed_target) ||
-        std::memcmp(&target,&confirmed_target,sizeof(target))) return false;
+    target.rtv->GetDesc(&rtv);
+    if (!same_object(texture_device.Get(),device.Get())) return refuse(Stage::texture_device);
+    if (!extent(result.texture.Get(),before.width,before.height,texture)) return refuse(Stage::extent);
+    if (rtv.ViewDimension!=D3D11_RTV_DIMENSION_TEXTURE2D || rtv.Texture2D.MipSlice) return refuse(Stage::rtv);
+    if (FAILED(result.chain->GetDesc(&swap))) return refuse(Stage::swap);
+    if (swap.OutputWindow!=reinterpret_cast<HWND>(before.window)) return refuse(Stage::window);
+    if (swap.BufferDesc.Width!=before.width || swap.BufferDesc.Height!=before.height) return refuse(Stage::swap_extent);
+    if (!owner(after,&owner_failure) || !detail::same_native_owner(before,after)) return refuse(Stage::owner_changed);
+    if (!read(map,confirmed_platform) || platform!=confirmed_platform) return refuse(Stage::map_changed);
+    if (!read(before.renderer+0xa58+size_t(platform)*0x30,confirmed_target) ||
+        std::memcmp(&target,&confirmed_target,sizeof(target))) return refuse(Stage::target_changed);
     result.native_frame=before.frame; result.window_key=before.window;
+    receipt(Stage::accepted);
     output=std::move(result); return true;
-} catch (...) { return false; }
+} catch (...) {
+    static std::atomic_flag reported=ATOMIC_FLAG_INIT;
+    if (report && !reported.test_and_set(std::memory_order_relaxed)) try { report("Fallout4 framebuffer stage=exception"); } catch (...) {}
+    return false;
+}
 }

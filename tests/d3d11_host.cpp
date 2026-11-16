@@ -82,6 +82,14 @@ int main() {
     check(rsf_d3d11_host_create(&setup, &upstream) == RSF_ERROR_BUSY, "Second process owner refused");
     check(rsf_d3d11_host_set_active(&cookie, 1) == RSF_ERROR_INVALID_ARGUMENT, "Only the returned owner controls activation");
     check(rsf_d3d11_host_set_active(host.user, 1) == RSF_OK && rsf_d3d11_host_set_active(host.user, 0) == RSF_OK, "Thread-safe activation and suspension");
+    rsf_d3d11_auxiliary_scope cleanup{sizeof(cleanup),RSF_D3D11_HOST_ABI_VERSION,91,1,1};
+    check(rsf_d3d11_host_restore_auxiliaries(&cookie,&cleanup)==RSF_ERROR_INVALID_ARGUMENT,"Auxiliary cleanup verifies host user");
+    --cleanup.struct_size;
+    check(rsf_d3d11_host_restore_auxiliaries(host.user,&cleanup)==RSF_ERROR_INVALID_ARGUMENT,"Auxiliary cleanup verifies scope size");
+    ++cleanup.struct_size; ++cleanup.abi_version;
+    check(rsf_d3d11_host_restore_auxiliaries(host.user,&cleanup)==RSF_ERROR_ABI_MISMATCH,"Auxiliary cleanup verifies ABI before empty acknowledgement");
+    --cleanup.abi_version;
+    check(rsf_d3d11_host_restore_auxiliaries(host.user,&cleanup)==RSF_ERROR_NOT_READY,"Unbound graphics owner cannot acknowledge empty cleanup");
     rsf_game_cpu_event event{}; event.struct_size = sizeof(event); event.session_id = 91;
     host.cpu_event(host.user, &event); host.log(host.user, "contract");
     check(cpu_calls == 1 && logs == 1, "Callbacks forwarded exactly once");

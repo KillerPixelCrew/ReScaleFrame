@@ -524,7 +524,29 @@ extern "C" RSF_RUNTIME_API void rsf_input_dump_pass_metadata(const rsf_game_rend
         << ",\"motion_camera_included\":" << pass->motion_camera_included << ",\"motion_to_uv\":";
     array(out, pass->motion_to_uv, 2);
     out << ",\"render_rect\":[" << pass->render_rect[0] << ',' << pass->render_rect[1] << ',' << pass->render_rect[2] << ',' << pass->render_rect[3]
-        << "],\"output_rect\":[" << pass->output_rect[0] << ',' << pass->output_rect[1] << ',' << pass->output_rect[2] << ',' << pass->output_rect[3] << "]}\n";
+        << "],\"output_rect\":[" << pass->output_rect[0] << ',' << pass->output_rect[1] << ',' << pass->output_rect[2] << ',' << pass->output_rect[3] << ']';
+    const auto& depth = pass->depth_domains;
+    out << ",\"depth_domains\":{\"requested\":" << rsf_game_depth_domains_requested(&depth)
+        << ",\"struct_size\":" << depth.struct_size << ",\"version\":" << depth.version
+        << ",\"domain_count\":" << depth.domain_count << ",\"clear_enabled\":" << depth.clear_enabled
+        << ",\"clear_value\":"; number(out, depth.clear_value);
+    out << ",\"reserved\":[" << depth.reserved[0] << ',' << depth.reserved[1] << ',' << depth.reserved[2]
+        << "],\"domains\":[";
+    // Both inline slots are copied facts, including unused/malformed descriptors. Never
+    // trust domain_count as an array bound or reinterpret the adapter's depth policy here.
+    for (uint32_t i = 0; i < 2; ++i) {
+        if (i) out << ',';
+        const auto& domain = depth.domains[i];
+        out << "{\"classify_min\":"; number(out, domain.classify_min);
+        out << ",\"classify_max\":"; number(out, domain.classify_max);
+        out << ",\"endpoint_flags\":" << domain.endpoint_flags << ",\"reserved\":" << domain.reserved
+            << ",\"viewport_xywh\":"; array(out, domain.viewport_xywh, 4);
+        out << ",\"viewport_min_depth\":"; number(out, domain.viewport_min_depth);
+        out << ",\"viewport_max_depth\":"; number(out, domain.viewport_max_depth);
+        out << ",\"source_clip_to_target_clip\":"; array(out, domain.source_clip_to_target_clip, 16);
+        out << '}';
+    }
+    out << "]}}\n";
 } catch (...) { failed(); }
 extern "C" RSF_RUNTIME_API void rsf_input_dump_result(const rsf_frame_record* record, const char* stage, uint32_t backend, int32_t result) try
 {

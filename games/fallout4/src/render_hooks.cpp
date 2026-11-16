@@ -6,6 +6,7 @@
 #include "screen.h"
 #include "native_creation.h"
 #include "depth_domains.h"
+#include <rescaleframe/d3d11_host.h>
 #include <MinHook.h>
 #include <windows.h>
 #include <array>
@@ -25,6 +26,7 @@ using Effects = void (*)(void*, uint32_t, uint32_t, uint32_t, uint32_t);
 using TaaActive = bool (*)(void*);
 using NativePresent = void (*)(void*);
 using Prepass = void (*)();
+using DynamicResolution = void (*)(void*, void*, void*, void*, void*);
 Viewport viewport{};
 Imagespace imagespace{};
 WorldBegin world_begin{};
@@ -32,19 +34,23 @@ Effects effects{};
 TaaActive taa_active{};
 NativePresent native_present{};
 Prepass prepass{};
+DynamicResolution dynamic_resolution{};
+decltype(&rsf_d3d11_host_upscale_auxiliaries) upscale_auxiliaries{};
+decltype(&rsf_d3d11_host_restore_auxiliaries) restore_auxiliaries{};
 rsf_game_host_services host{};
 std::atomic<bool> live{};
-std::atomic<uint32_t> entered{}, windows{}, frames{};
+std::atomic<uint32_t> entered{}, windows{}, frames{}, auxiliaries{};
 struct World {
     CpuIdentity cpu{};
     rsf_game_render_pass pass{}, frame_pass{}, submission_pass{}, screen_basis{};
     NativeScreen screen{};
     NativeDepthSnapshot depth_snapshot{};
+    rsf_d3d11_auxiliary_scope auxiliary_scope{};
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
     Microsoft::WRL::ComPtr<IDXGISwapChain> chain;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> final_colour;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> colour, depth, motion;
-    bool in_imagespace{}, inputs{}, published{}, window_open{}, frame_open{}, submission_open{}, refused{}, depth_interrupted{};
+    bool in_imagespace{}, inputs{}, published{}, window_open{}, frame_open{}, submission_open{}, refused{}, depth_interrupted{}, auxiliary_open{}, raster_refused{};
 };
 thread_local World world;
 thread_local bool ordinary_world{};
@@ -153,16 +159,73 @@ void close_submission() {
     notify(world.submission_pass,world.context.Get(),0);
     world.submission_open=false;
 }
+bool drain_auxiliaries() noexcept {
+    if (!world.auxiliary_open) return true;
+    int32_t result=RSF_ERROR_NOT_READY;
+    try { result=restore_auxiliaries(host.user,&world.auxiliary_scope); } catch (...) {}
+    if (result!=RSF_OK) { world.refused=true; return false; }
+    world.auxiliary_open=false; auxiliaries.fetch_sub(1,std::memory_order_acq_rel);
+    return true;
+}
+bool auxiliary_colour(ID3D11Texture2D* texture, const NativeInputs& inputs) {
+    if (!texture) return false;
+    Microsoft::WRL::ComPtr<ID3D11Device> device,owner;
+    inputs.context->GetDevice(&device); texture->GetDevice(&owner);
+    D3D11_TEXTURE2D_DESC d{}; texture->GetDesc(&d);
+    if (!same_object(device.Get(),owner.Get()) || d.Width!=inputs.pass.camera.output_width || d.Height!=inputs.pass.camera.output_height ||
+        d.MipLevels!=1 || d.ArraySize!=1 || d.SampleDesc.Count!=1 || d.SampleDesc.Quality || d.Usage!=D3D11_USAGE_DEFAULT) return false;
+    UINT support{};
+    constexpr UINT required=D3D11_FORMAT_SUPPORT_TEXTURE2D|D3D11_FORMAT_SUPPORT_SHADER_LOAD|D3D11_FORMAT_SUPPORT_RENDER_TARGET;
+    if (FAILED(device->CheckFormatSupport(d.Format,&support)) || (support&required)!=required) return false;
+    return d.Format==DXGI_FORMAT_R8_UNORM || d.Format==DXGI_FORMAT_R8G8B8A8_UNORM || d.Format==DXGI_FORMAT_R16G16_FLOAT ||
+        d.Format==DXGI_FORMAT_R16_FLOAT || d.Format==DXGI_FORMAT_R32_FLOAT || d.Format==DXGI_FORMAT_R16G16B16A16_FLOAT || d.Format==DXGI_FORMAT_R11G11B10_FLOAT;
+}
+int32_t reconstruct(NativeInputs& inputs, const rsf_game_render_pass& pass) {
+    const bool reduced=pass.camera.render_width!=pass.camera.output_width || pass.camera.render_height!=pass.camera.output_height ||
+        pass.render_rect[0]!=0 || pass.render_rect[1]!=0;
+    if (!reduced) return host.process_upscale(host.user,inputs.context.Get(),&pass);
+    D3D11_TEXTURE2D_DESC depth{}; inputs.depth->GetDesc(&depth);
+    if (depth.Format!=DXGI_FORMAT_R24G8_TYPELESS || !auxiliary_colour(inputs.motion.Get(),inputs)) return RSF_ERROR_NATIVE_REFUSED;
+    std::array<rsf_d3d11_auxiliary_surface,5> surfaces{};
+    uint32_t count{};
+    const auto add=[&](ID3D11Texture2D* texture,uint32_t kind,uint32_t flags,const char* name,const char* source) {
+        auto& surface=surfaces[count++]; surface.struct_size=sizeof(surface); surface.kind=kind; surface.texture=texture;
+        for (unsigned i=0;i<4;++i) { surface.source_rect[i]=float(pass.render_rect[i]); surface.output_rect[i]=pass.output_rect[i]; }
+        if (kind==RSF_D3D11_AUXILIARY_COLOUR) {
+            surface.source_rect[0]=world.depth_snapshot.actual_raster[0]; surface.source_rect[1]=world.depth_snapshot.actual_raster[1];
+            surface.source_rect[2]=surface.source_rect[0]+world.depth_snapshot.actual_raster[2];
+            surface.source_rect[3]=surface.source_rect[1]+world.depth_snapshot.actual_raster[3];
+        }
+        surface.jitter_pixels[0]=pass.camera.jitter_pixels[0]; surface.jitter_pixels[1]=pass.camera.jitter_pixels[1];
+        surface.flags=flags; surface.name=name; surface.source_name=source;
+    };
+    add(inputs.depth.Get(),RSF_D3D11_AUXILIARY_DEPTH_STENCIL,0,"native_depth_expanded","native_depth_partitioned");
+    add(inputs.motion.Get(),RSF_D3D11_AUXILIARY_COLOUR,0,"native_motion_expanded","native_motion_reduced");
+    const auto optional=[&](ID3D11Texture2D* texture,uint32_t flags,const char* name,const char* source) {
+        if (!auxiliary_colour(texture,inputs) || same_object(texture,static_cast<ID3D11Texture2D*>(pass.color_output))) return;
+        for (uint32_t i=0;i<count;++i) if (same_object(texture,static_cast<ID3D11Texture2D*>(surfaces[i].texture))) return;
+        add(texture,RSF_D3D11_AUXILIARY_COLOUR,flags,name,source);
+    };
+    optional(inputs.pipboy.Get(),0,"native_pipboy_expanded","native_pipboy_reduced");
+    optional(inputs.vats.Get(),RSF_D3D11_AUXILIARY_RESTORE_CONTENTS,"native_vats_expanded","native_vats_reduced");
+    optional(inputs.refraction_normals.Get(),0,"native_refraction_expanded","native_refraction_reduced");
+    const rsf_d3d11_auxiliary_pass request{sizeof(request),RSF_D3D11_HOST_ABI_VERSION,&pass,count,surfaces.data()};
+    world.auxiliary_scope={sizeof(world.auxiliary_scope),RSF_D3D11_HOST_ABI_VERSION,pass.session_id,pass.native_frame,pass.view_key};
+    world.auxiliary_open=true; auxiliaries.fetch_add(1,std::memory_order_acq_rel);
+    const auto result=upscale_auxiliaries(host.user,inputs.context.Get(),&request);
+    if (result!=RSF_OK) (void)drain_auxiliaries();
+    return result;
+}
 bool emit_sr() {
-    if (!world.in_imagespace || !same_source() || world.inputs || !host.process_upscale) return false;
+    if (!world.in_imagespace || !same_source() || world.inputs || world.raster_refused || world.auxiliary_open || !host.process_upscale) return false;
     NativeInputs inputs;
-    if (!read_native_inputs(inputs, report)) return false;
+    if (!read_native_inputs(inputs, report, &world.depth_snapshot)) return false;
     auto pass = inputs.pass;
     identify(pass);
     pass.role = RSF_GAME_RENDER_SR;
     pass.pass_key = image() + 0x21fa283;
     if (!native_resolution_inputs(pass)) {
-        diagnostic("Fallout4 SR refused: reduced native region requires verified auxiliary/consumer restoration; no native-input substitution.");
+        diagnostic("Fallout4 SR refused: actual producer LTRB crop/camera/output extents disagree.");
         return false;
     }
     if (!world.frame_open || pass.native_frame!=world.frame_pass.native_frame ||
@@ -181,10 +244,14 @@ bool emit_sr() {
     auto planning = pass;
     planning.flags |= RSF_GAME_RENDER_RECONFIGURE;
     try { (void)host.process_upscale(host.user, inputs.context.Get(), &planning); } catch (...) { return false; }
+    rsf_game_render_config requested{sizeof(requested)};
+    const bool sr_off=host.render_config && host.render_config(host.user,&requested) && !requested.enabled &&
+        requested.output_width==pass.camera.output_width && requested.output_height==pass.camera.output_height;
     world.colour=inputs.colour; world.depth=inputs.depth; world.motion=inputs.motion;
     world.screen_basis=pass;
     auto fg = pass;
     screen_facts(fg,true);
+    if (world.screen.refusals || world.screen.screen!=RSF_SCREEN_GAMEPLAY || !same_source()) return false;
     fg.role = RSF_GAME_RENDER_FG_INPUTS;
     notify(fg, inputs.context.Get(), 1);
     notify(fg, inputs.context.Get(), 0);
@@ -199,25 +266,43 @@ bool emit_sr() {
     world.context = inputs.context;
     world.chain = inputs.chain;
     world.inputs = true;
-    if (!begin_output_resolution()) return false;
+    if (sr_off) return false; // Keep actual FG/native output facts, with no SR/output-state mutation.
+    if (!begin_output_resolution(world.depth_snapshot,pass)) { world.refused=true; return false; }
     int32_t result = RSF_ERROR_NOT_READY;
-    try { result = host.process_upscale(host.user, inputs.context.Get(), &pass); } catch (...) {}
-    if (result != RSF_OK) { end_output_resolution(); return false; }
+    try { result = reconstruct(inputs,pass); } catch (...) { (void)drain_auxiliaries(); }
+    if (result != RSF_OK) { if (!end_output_resolution()) world.refused=true; return false; }
     world.published = true;
-    diagnostic("Fallout4 native-raster SR publication accepted before imagespace; native TAA excluded only for this output scope, FG remains unproven.");
+    diagnostic("Fallout4 producer-verified SR publication accepted before imagespace; scoped native output/auxiliary consumers active, FG remains unproven.");
     return true;
 }
 void emit_hudless() {
     if (!world.in_imagespace || !world.inputs || world.window_open || !same_source()) return;
     NativeFramebuffer frame;
-    if (!read_native_framebuffer(frame) || frame.native_frame != world.pass.native_frame ||
-        frame.window_key != world.pass.window_key || frame.context.Get() != world.context.Get() || frame.chain.Get() != world.chain.Get()) {
-        diagnostic("Fallout4 HUDless refused: native frame/window/context/outer chain does not match the pre-SR lease.");
-        return;
-    }
+    const auto refuse=[&](unsigned stage, const char* name) {
+        static std::atomic<uint32_t> reported{};
+        if (reported.fetch_or(uint32_t(1)<<stage,std::memory_order_relaxed)&(uint32_t(1)<<stage)) return;
+        char message[700]{};
+        std::snprintf(message,sizeof(message),
+            "Fallout4 HUDless stage=%s source=%llu native=%llu/%llu frame_basis=%llu screen_basis=%llu window=%p/%p context=%p/%p outer_chain=%p/%p",
+            name,static_cast<unsigned long long>(world.cpu.source),
+            static_cast<unsigned long long>(frame.native_frame),static_cast<unsigned long long>(world.pass.native_frame),
+            static_cast<unsigned long long>(world.frame_pass.native_frame),static_cast<unsigned long long>(world.screen_basis.native_frame),
+            reinterpret_cast<void*>(frame.window_key),reinterpret_cast<void*>(world.pass.window_key),
+            static_cast<void*>(frame.context.Get()),static_cast<void*>(world.context.Get()),
+            static_cast<void*>(frame.chain.Get()),static_cast<void*>(world.chain.Get()));
+        report(message);
+    };
+    // A failed logical-0 read is not evidence that any identity comparison failed.
+    if (!read_native_framebuffer(frame,report)) { refuse(0,"framebuffer-read"); return; }
+    if (frame.native_frame!=world.pass.native_frame) { refuse(1,"native-frame"); return; }
+    if (frame.window_key!=world.pass.window_key) { refuse(2,"window"); return; }
+    if (frame.context.Get()!=world.context.Get()) { refuse(3,"context"); return; }
+    if (frame.chain.Get()!=world.chain.Get()) { refuse(4,"outer-chain"); return; }
     D3D11_TEXTURE2D_DESC description{};
     frame.texture->GetDesc(&description);
-    if (description.Width != world.pass.camera.output_width || description.Height != world.pass.camera.output_height || description.SampleDesc.Count != 1) return;
+    if (description.Width != world.pass.camera.output_width || description.Height != world.pass.camera.output_height || description.SampleDesc.Count != 1) {
+        refuse(5,"output-extent"); return;
+    }
     auto final = world.pass;
     screen_facts(final,false);
     final.role = RSF_GAME_RENDER_FINAL_SCENE;
@@ -243,6 +328,10 @@ void observe_viewport(void* manager, bool enabled) {
 #endif
     viewport(manager, enabled);
     const auto error = GetLastError();
+    if (manager==reinterpret_cast<void*>(image()+0x2f4d750) && !native_viewport_write(enabled)) {
+        world.refused=true;
+        diagnostic("Fallout4 owned full-output selector write failed after native viewport intent; scope retained.");
+    }
     if (live.load(std::memory_order_acquire) && manager == reinterpret_cast<void*>(image() + 0x2f4d750)) {
         if (caller == image() + 0x21fa2ca) {
             try { emit_hudless(); } catch (...) { diagnostic("Fallout4 HUDless callback failed; native drawing retained."); }
@@ -265,7 +354,7 @@ void observe_world_begin() {
         bool previous;
         ~Restore() { ordinary_world = previous; }
     } restore{ordinary_world};
-    if (selected && !world.frame_open && begin_cpu_render()) {
+    if (selected && !world.frame_open && !world.auxiliary_open && !resolution_busy() && begin_cpu_render()) {
         ordinary_world=true;
         world={}; world.cpu=current_cpu_identity();
         try {
@@ -277,6 +366,37 @@ void observe_world_begin() {
     }
     SetLastError(error);
     world_begin();
+}
+void observe_dynamic_resolution(void* manager,void* a,void* b,void* c,void* d) {
+    Entry entry;
+    const auto error=GetLastError();
+#if defined(_MSC_VER)
+    const auto caller=uintptr_t(_ReturnAddress());
+#else
+    const auto caller=uintptr_t(__builtin_return_address(0));
+#endif
+    if (world.frame_open) world.depth_snapshot={};
+    SetLastError(error);
+    dynamic_resolution(manager,a,b,c,d);
+    const auto native_error=GetLastError();
+    const bool overlapping=manager==reinterpret_cast<void*>(image()+0x2f4d750) && resolution_busy();
+    if (overlapping) {
+        world.raster_refused=world.refused=true;
+        if (!native_resolution_write()) diagnostic("Fallout4 native DR ownership transfer refused; pending scope retained.");
+    }
+    if (live.load(std::memory_order_acquire) && caller==image()+0x21f9f34 &&
+        manager==reinterpret_cast<void*>(image()+0x2f4d750) && !overlapping && world.frame_open && world.submission_open && !world.inputs && same_source()) {
+        Owner owner_now{};
+        const rsf_game_render_pass candidate{};
+        const auto screen=classify_native_screen(world.cpu,candidate,true);
+        if (screen.refusals==ScreenWorldLeaseInvalid && owner(owner_now) &&
+            owner_now.frame==world.frame_pass.native_frame && owner_now.view==world.frame_pass.view_key &&
+            owner_now.window==world.frame_pass.window_key && owner_now.context==uintptr_t(world.context.Get()) && owner_now.chain==uintptr_t(world.chain.Get())) {
+            if (!configure_native_resolution(host,world.frame_pass,world.context.Get()) && (resolution_busy() || resolution_refused()))
+                world.raster_refused=world.refused=true;
+        }
+    } else if (world.frame_open && resolution_busy()) world.raster_refused=world.refused=true;
+    SetLastError(native_error);
 }
 void observe_prepass() {
     Entry entry;
@@ -332,7 +452,9 @@ void observe_imagespace() {
         ~Cleanup() {
             if (!selected) return;
             const auto error = GetLastError();
-            end_output_resolution();
+            if (!drain_auxiliaries()) diagnostic("Fallout4 auxiliary retirement remains pending after native imagespace; owner retained.");
+            if (!end_output_resolution()) world.refused=true;
+            if (output_resolution_busy()) { world.refused=true; diagnostic("Fallout4 native output-state cleanup remains owned; subsequent world admission blocked."); }
             world.in_imagespace = world.published = false;
             SetLastError(error);
         }
@@ -356,6 +478,10 @@ void observe_effects(void* manager, uint32_t first, uint32_t last, uint32_t mode
     }
     SetLastError(error);
     effects(manager, first, last, mode, flags);
+    const auto native_error=GetLastError();
+    if (caller==image()+0x21fa288 && first==0 && last==13 && mode==1 && flags==1 && world.auxiliary_open)
+        if (!drain_auxiliaries()) diagnostic("Fallout4 VATS/auxiliary restoration refused at native Effects return; owner retained.");
+    SetLastError(native_error);
 }
 bool observe_taa(void* effect) {
     Entry entry;
@@ -411,6 +537,7 @@ struct Hook {
     bool created{};
 };
 Hook hooks[]{
+    {0x1839ed0, "\x48\x83\xec\x18\x8b\x05\x5e\x48\x71\x01", 10, reinterpret_cast<void*>(&observe_dynamic_resolution), reinterpret_cast<void**>(&dynamic_resolution)},
     {0x21f38b0, "\x48\x89\x5c\x24\x08\x48\x89\x6c\x24\x10", 10, reinterpret_cast<void*>(&observe_prepass), reinterpret_cast<void**>(&prepass)},
     {0x1818550, "\x40\x53\x48\x83\xec\x20", 6, reinterpret_cast<void*>(&observe_native_present), reinterpret_cast<void**>(&native_present)},
     {0x21f0ac0, "\x48\x8b\xc4\x53\x48\x81\xec\xb0\x00\x00\x00", 11, reinterpret_cast<void*>(&observe_world_begin), reinterpret_cast<void**>(&world_begin)},
@@ -440,6 +567,11 @@ bool verify_render_hooks() noexcept try {
         read(image() + 0x2915eb0 + 8 * sizeof(void*), &native_taa, sizeof(native_taa)) &&
         native_taa == image() + 0x2214fc0 && call(0xc335e7,0x1818550) &&
         call(0x21f9f73, 0x21f38b0) &&
+        call(0x21f9f2f, 0x1839ed0) &&
+        call(0x21f9f69, 0x21f30b0) &&
+        call(0x21f32a5, 0x182bf20) && call(0x21f32bb, 0x182bf20) && call(0x21f32d1, 0x182bf20) &&
+        call(0x182c02d, 0x182d750) &&
+        call(0x182c597, 0x1817ef0) &&
         guard(0xc335e0, "\x48\x8d\x0d\x19\x27\xdf\x02", 7) &&
         guard(0x1818572, "\x48\x8b\x05\x37\x8e\x0c\x02", 7) &&
         guard(0x181858a, "\x48\x8b\x48\x18", 4) &&
@@ -455,6 +587,10 @@ bool verify_render_hooks() noexcept try {
 bool prepare_render_hooks(const rsf_game_host_services& services) {
     if (live.load(std::memory_order_acquire) || render_hooks_busy() || !services.process_upscale || !services.render_pass ||
         !verify_render_hooks() || !verify_render_inputs()) return false;
+    const auto runtime=GetModuleHandleW(L"ReScaleFrame.Runtime.dll");
+    upscale_auxiliaries=reinterpret_cast<decltype(upscale_auxiliaries)>(GetProcAddress(runtime,"rsf_d3d11_host_upscale_auxiliaries"));
+    restore_auxiliaries=reinterpret_cast<decltype(restore_auxiliaries)>(GetProcAddress(runtime,"rsf_d3d11_host_restore_auxiliaries"));
+    if (!upscale_auxiliaries || !restore_auxiliaries || !services.render_config) return false;
     std::array<Hook*, sizeof(hooks) / sizeof(hooks[0])> created{};
     size_t count{};
     for (auto& hook : hooks) {
@@ -486,12 +622,13 @@ bool start_render_hooks() {
         (void)MH_ApplyQueued();
         return false;
     }
-    report("Fallout4 verified world/SR/HUDless/TAA native-raster callbacks enabled; reduced consumer and native input admission remain gated.");
+    report("Fallout4 guarded native DR/SR/auxiliary output callbacks enabled; actual producer and screen admission required, FG/input capabilities remain gated.");
     return true;
 }
 void quiesce_render_hooks() { live.store(false, std::memory_order_release); }
 bool stop_render_hooks() {
     quiesce_render_hooks();
+    if (render_hooks_busy()) return false;
     bool disabled = true;
     for (auto& hook : hooks) if (hook.created) {
         const auto result = MH_DisableHook(reinterpret_cast<void*>(image() + hook.rva));
@@ -500,7 +637,7 @@ bool stop_render_hooks() {
     return disabled && !render_hooks_busy();
 }
 bool render_hooks_busy() {
-    return entered.load(std::memory_order_acquire) || windows.load(std::memory_order_acquire) || frames.load(std::memory_order_acquire) || resolution_busy();
+    return entered.load(std::memory_order_acquire) || windows.load(std::memory_order_acquire) || frames.load(std::memory_order_acquire) || auxiliaries.load(std::memory_order_acquire) || resolution_busy();
 }
 void finish_render_scope() noexcept try {
     if (!world.cpu.source) return;
@@ -524,7 +661,8 @@ void finish_render_scope() noexcept try {
         world.frame_open=false;
         frames.fetch_sub(1,std::memory_order_acq_rel);
     }
-    end_output_resolution();
-    if (!resolution_busy()) world = {};
+    (void)drain_auxiliaries();
+    if (!finish_resolution_source()) world.refused=true;
+    if (!resolution_busy() && !world.auxiliary_open) world = {};
 } catch (...) {}
 }

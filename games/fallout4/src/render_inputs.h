@@ -6,6 +6,7 @@
 #include <wrl/client.h>
 
 namespace rsf::fallout4 {
+struct NativeDepthSnapshot;
 // Stack-owned synchronous callback lease. Never retain this snapshot after the
 // native callback; allocation references do not retain the frame's contents.
 struct NativeInputs {
@@ -27,9 +28,11 @@ struct NativeFramebuffer {
 bool verify_render_inputs() noexcept;
 // Supplies native resource/camera/rect/frame facts only. Caller supplies the
 // verified session/source/submission/scope, role, screen and eligibility facts.
-bool read_native_inputs(NativeInputs&, void (*report)(const char*) = nullptr) noexcept;
+bool read_native_inputs(NativeInputs&, void (*report)(const char*) = nullptr,
+    const NativeDepthSnapshot* producer = nullptr) noexcept;
 // Logical FrameBuffer0 resolved after imagespace. The caller owns the explicit
 // FINAL_SCENE/WINDOW begin/end lease, including native Swap, and checks the
 // retained pre-SR scalar identity before publishing it as this source's output.
-bool read_native_framebuffer(NativeFramebuffer&) noexcept;
+// Optional receipts name the first failed native reader predicate per stage.
+bool read_native_framebuffer(NativeFramebuffer&, void (*report)(const char*) = nullptr) noexcept;
 }

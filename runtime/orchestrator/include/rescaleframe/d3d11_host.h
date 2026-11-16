@@ -185,7 +185,10 @@ typedef struct rsf_d3d11_auxiliary_scope {
    shader work, copies, snapshots and binding restoration belong to the runtime. */
 RSF_RUNTIME_API int32_t rsf_d3d11_host_upscale_auxiliaries(void* services_user, void* immediate_context,
     const rsf_d3d11_auxiliary_pass*);
-/* Restoration is permitted while the host is suspended so quiesce can drain. */
+/* Restoration is permitted while suspended so quiesce can drain. On the verified
+   session and graphics-owner thread, no pending transaction is idempotent OK,
+   including preparation already rolled back. A pending lease still requires its
+   exact native frame/view scope; mismatch never cancels that lease. */
 RSF_RUNTIME_API int32_t rsf_d3d11_host_restore_auxiliaries(void* services_user,
     const rsf_d3d11_auxiliary_scope*);
 

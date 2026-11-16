@@ -715,10 +715,251 @@ Native snapshot freshness, actual normalization/SR quality, full reduced scales,
 FG/latency admission and shader/motion/visual quality audit remain mandatory
 pending; the generic fixture does not supply those native facts.
 
-At this consolidation, PID37012 still runs the exact older ABI22 deployment,
+At that earlier consolidation, PID37012 still ran the exact older ABI22 deployment,
 not these rebuilt artifacts. Its report112938-741 retains scene/native-Quit
 timeouts after focus denial, no keys sent, and result.restored=false. The
 receipt-bound deferred recovery remains ready and unexecuted. The existing
 failure/result evidence and original backups remain authoritative; no successful
 close or restoration is claimed. This follow-up edits documentation/metadata
 only and did not build, run or interact with the game, deploy or commit files.
+
+## Authoritative reduced-input gate and native132159 reconciliation
+
+The later coherent batch passed coordinator Windows Release VS2026
+`verify-reduced-inputs-20261116.log`:221 passed/15 skipped in108.81seconds,
+with clean Cargo fmt/Clippy. Rebuilt `reduced-scoped-fixture-20261116.log`
+records55 sources,41 captures,39 SR evaluations,34 tags and34 generated
+callbacks. Rendered-source latency owner/availability/pacing/markers/effective,
+PCL and report counters are zero. This gate covers the reduced-input batch
+before the new logical-target correction, not in-progress marker/input edits.
+Generic callbacks establish neither native game admission nor physical scanout
+or measured latency. Earlier gate and artifact receipts above remain historical.
+
+Trial `native-raster-20261116-132159-236`, PID6188, ran Runtime
+`0915AA960358E5F01388AFA9DE1CFC4862231F7A5C7ED021F807F03850069170`
+and Entry
+`DD11963187EAF7A87B2788BC4104A1634D5575A2CF2909AFB46C63F8D518A95F`.
+`world-observation.json` records the visible first-person ExitSave shower
+interior in the user-requested borderless2560x1600 window. Ordinary FRAME
+source16737/submission1/native17204 reached the post-prepass producer check.
+Actual/pending raster matched0,0,2560,1600 with dirty62 and logical selectors
+26,1,UINT_MAX. The Main-only colour selector gate refused before descriptor
+read, so logged descriptor0x0 was not an observed zero allocation. The
+[depth note](fallout4-depth-domains-20261116.md) records the installed native
+logical descriptor/physical binding proof and guarded source correction.
+That correction is unbuilt and has no live acceptance yet. The run establishes
+neither sustained SR nor a completed capture.
+
+The final loader authority is `loader-post-controller.log`, not the earlier
+copied `loader.log`. It records `Generation runtime switch requested=1
+effective=1 result=0`, followed by FG prepare selected_source0, inputs0,
+HUDless0, submission_ok0 and result-8. This accepts the configuration switch
+only, not a usable FG source or generated frame. The exact preserved final
+`settings-post-controller.ini` contains SR1/backend3, FG1/backend1 and latency0.
+It is not evidence of latency acceptance. Producer capability declarations
+remain distinct from accepted sources, readiness and measured quality.
+
+No observer or retained exit handle establishes this run's exit code or method.
+The root subsequently reported fresh CIM with no game process. Authoritative
+`resumed-restoration-20261116T1240374349703Z-7d62efdd9d58420d97d2b819bc08567a.json`
+records19 restored entries and1 exact user-config preservation, all20 verified,
+with custom INI unchanged and fresh sealed post-exit loader evidence. This is
+not20 restorations and supplies no normal-exit claim. The original controller
+failure/result files remain unchanged. Root later resolved the earlier PID37012
+trial with reported orderly exit0 and20 restorations; its original timeouts
+and restored=false receipt remain historical, rather than current state.
+
+This follow-up changed documentation/metadata only, parsed JSON/UTF-8 and
+checked scoped diffs. It performed no build, process interaction, game/UI work,
+launch, capture, deployment or commit. User desktop work pauses further game/UI
+activity. Reduced live raster/quality, sustained SR, FG, input/pacing/latency
+and full visual/coexistence validation remain outstanding.
+
+## Scene/input/marker background batch, historical pretrial freeze
+
+Root `build-scene-input-marker-20261116.log` completed exit0 with MSVC Release
+VS2026 and matching VERSION/Cargo. Background CTest
+`ctest-scene-input-marker-background-20261116.log` completed exit0:218 passed,
+14 skipped of232 selected tests in82.22seconds. The four foreground exclusions
+in `background-validation-scope-20261116.json` were
+`anomaly_fg_dlss_sr5_device`, `anomaly_fg_dlss_sroff_device`,
+`anomaly_fg_fsr3_sroff_device` and `anomaly_fg_xess_sr5_device`.
+That JSON's initial execution=pending text is a pre-run scope inventory; the
+later CTest log supplies the execution result. At that background freeze this was not a full eng/verify
+pass; the later complete gate below supersedes that status. Separate `Rust-checks-scene-input-marker-20261116.log`
+records fmt and Clippy exit0.
+
+`hidden-marker-scene-input-20261116.log` completed exit0 and passed generic
+marker admission, fallback refusal, keyed/bound derivation, failed start,
+repeated ends and shared D3D12 DLSS SR/CPU-token coverage. Rebuilt
+`scene-input-scoped-fixture-20261116.log` completed exit0 with55 sources,
+41 captures,39 SR evaluations,34 tags and34 generated callbacks. Its
+rendered-source latency owner/paced/markers remain0. These are bounded generic
+synthetic/device results, not native input delivery or game latency acceptance.
+
+The current built Runtime SHA is
+`90E86B69D96B29D5D74F42E1A5DF61289FC0C4B3CD72EC4B1EC9C793F9F13178`,
+Entry `DAC24A522E6596726DE933DFAC7CABC628A6DCB02FFC5751D0EF297ACBF0C39F`,
+carrier `E4A809E7A7A7D802C7C83691727575FC288EB515130D54D60B608BDD7CF22C98`.
+This includes the logical-target association correction and current scene/input
+and marker work. It supersedes earlier unbuilt descriptions as build status
+only. At that freeze it had not been deployed and had no new game/SR/FG/latency acceptance; PID6188
+and its failed producer receipt remain historical evidence from the prior
+artifacts. Four excluded foreground tests, full eng/verify and native moving
+scene/resource/input/pacing/quality validation remain outstanding. No launch,
+focus, input, process interaction or game-target write was performed during
+this documentation follow-up while the user works on the desktop.
+
+## Complete gate and bounded native trial disposition
+
+Complete `verify-scene-input-marker-20261116.log` subsequently exited0 with
+221passed15skipped in144.40seconds and Cargo fmt/Clippy clean. This supersedes
+the prior pending full-gate status for the Runtime90E86B69.../EntryDAC24A...
+batch only. The older background subset and hidden/scoped fixture results
+above remain generic device evidence, not gameplay acceptance.
+
+The coordinator then ran `native-raster-20261116-140447-020`, PID54248, with
+those exact matching artifacts. HWND41225678 had client2560x1600/DPI144.
+`loader-world-first-refusal.log` records logical-target association admitted
+physical22/nativeRTV0 with MainDSV2, reader source4732/native5212 accepted,
+and GAMEPLAY source4733/native5213 reaching one DLSS SR evaluation. Aggregate
+HUDless refusal immediately followed; source4734/native5214 then failed near-W.
+The log retains actual W coefficients/minimum and the small near/large world
+origins. The aggregate HUDless message also covers a failed framebuffer read,
+so it proves no identity-comparison defect. No completed F10 capture or
+sustained SR/FG/latency/visual acceptance follows from that single evaluation.
+
+Actual WINDOWS_MESSAGE facts were emitted and core accepted stage5. No
+RESERVE/SAMPLED/BIND/ABORT acknowledgement was observed. Bounded world-Off
+marker_order_violations remained0; no prospective-source, pacing or latency
+acceptance is implied.
+
+NativeDesktopQuit returned C0000005. The passive trace was armed at
+1794834812850 and detached at1794834842852 after30seconds, before the final UI
+action. It captured no close fault, and its REA session was closed. This exit
+cannot be assigned to an earlier localized AV. `result.json` and
+`disposition.json` record capture timeout, no complete observation, restored=true,
+20/20 files restored, custom INI unchanged, prior user settings SHA
+`13D80689F5966B360A3B004FC90374C2E575BAFAB46A6F7540F8615D2FE3AB0F`
+preserved, and no forced game kill. This differs from historical PID6188's
+19restorations plus1preserved config and unproven exit.
+
+The explicit composed first-person view-Z correction and named HUDless/CPU
+candidate-attribution followups are source-frozen. The actual camera helper
+fixture passed in `camera-composed-view-depth-20261116.log`. Initial complete
+`verify-composed-depth-hudless-20261116.log` failed only
+`anomaly_overlay_visibility` at its SetCursorPos precondition; focused
+`overlay-cursor-refocus-recheck-20261116.log` exited0 after normal desktop focus,
+with no source change. Complete `verify-composed-depth-hudless-r2-20261116.log`
+is pending at this documentation freeze. No full-pass or new game acceptance
+is claimed for that newer source. This reconciliation performs no code, build,
+game/process/UI, attach or deployment action.
+
+## Later PID61128 quality execution, close and recovery
+
+Complete `verify-composed-depth-hudless-r2-20261116.log` subsequently passed:
+exit0,221passed15skipped,171.65seconds, fmt/Clippy clean. This supersedes the
+earlier pending r2 status in this note, not the separate latest padding batch.
+The new padding repair is source-frozen, not deployed in PID61128;
+`verify-reader-padding-20261116.log` is running/pending at this documentation
+freeze and has no result assigned here.
+
+The later report `native-raster-20261116-143511-988`, PID61128/start
+2026-11-16T13:35:13.6556257Z, used Runtime
+`90E86B69D96B29D5D74F42E1A5DF61289FC0C4B3CD72EC4B1EC9C793F9F13178`
+and Entry
+`B403DF6AF9BF8CCE128AEDC0D698D6BEAC9F68BF60C47127C752A4749F985F98`.
+Root manual public-API trials sustained DLSS SR evaluation and effective SR1
+status at each following input, all to2560x1600, then returned to native:
+
+| Quality | Actual input |
+| --- | --- |
+| Native0 | 2560x1600 |
+| Quality1 | 1707x1067 |
+| Balanced2 | 1485x928 |
+| Performance3 | 1280x800 |
+| Ultra Performance4 | 853x533 |
+
+`quality0..4-apply.txt` reports settings_roundtrip_verified=true, while explicitly
+not claiming provider or active verification from the setter alone. Separate
+`status-quality0..4.txt`, `status-sustained-native.txt` and evaluation logs supply
+the execution evidence. `status-sr-off.txt` confirms effective SR0 for the Off
+comparison. Base FPS was approximately4to6 across these samples, including Off;
+output_fps_valid was0. No performance cause or speedup is attributed.
+
+HUDless failed at owner-changed. Exact linked-object/image evidence in
+`reader-padding-proof-20261116.json` matches the deployed reader and proves its
+128byte NativeState comparison included uninitialized tail padding. The
+semantic-field comparison repair is in the next source batch, not this trial.
+FG was not attempted while HUDless refused. No completed SR capture exists:
+the manual manifest remained capturing. Accepted removed-window-message facts
+and bounded marker_order_violations0 supply no prospective-source or latency
+acceptance; no reservation acknowledgements were observed.
+
+The controller timed out its600second scene and120second quit waits. Root's
+later manual quality trials and late scene-continue signal do not turn that
+controller result into acceptance. Native-Quit input did not complete;
+ordinary AltF4 then initiated close. Fresh durable `trace-close-3.jsonl`
+captured native4CB273 reading0x50 with the exact baseline stack, then
+NtTerminateProcessC0000005. This is an actual localized recurrence on ordinary
+close, not normal exit or verified native Quit, and it assigns no SR fault cause.
+Unlike PID54248's expired observer, this trace covered the close failure.
+
+`post-close-disposition.json` records those observations before recovery, with
+restored=false. Later
+`resumed-restoration-20261116T1400271617884Z-84c7a0a118e143d6b24c41db1e459b4d.json`
+completed exit0 and proves restored=true,20/20 entries verified, custom INI
+unchanged. Exact root API-test settings SHA107F6F6976... were durably sealed
+before restoring original backup0018 SHA
+`13D80689F5966B360A3B004FC90374C2E575BAFAB46A6F7540F8615D2FE3AB0F`.
+Native borderless2560x1600 prefs and custom INI were preserved. Earlier trial
+failures remain historical. This establishes sustained SR execution telemetry,
+not physical/visual quality, complete capture, performance, FG, prospective
+input/pacing, latency or full integration acceptance. This update performed
+no production edit, build, game/process/UI, attachment or deployment action.
+
+## Reader-padding r2 and completed native capture, PID70400
+
+The pending padding batch above subsequently passed complete
+`verify-reader-padding-r2-20261116.log`: exit0,223passed14skipped,119.87seconds,
+Rust fmt/Clippy clean. Preserve the first `verify-reader-padding-20261116.log`
+result221passed15skipped1failed: XeSS activity/generated_windows was inactive.
+The unchanged `reader-padding-xess-recheck-20261116.log` passed6.90seconds, then
+the full r2 run passed. This supersedes the earlier pending padding status.
+
+Root report `native-raster-20261116-151505-988`, PID70400, used Runtime
+`90E86B69D96B29D5D74F42E1A5DF61289FC0C4B3CD72EC4B1EC9C793F9F13178`
+and Entry
+`463B1EED47090204DBB301B0332CA5CB9E5938907A67274994D59980E5AED0C7`.
+The native framebuffer reader accepted after the padding repair. The controller
+completed its observation: manifest complete, matched_present=true,
+source4121/native4598. There are16 captured images among30 entries, including
+native colour/depth/motion, SR intermediate/output and actual Present colour.
+The HUDless image is unavailable in this FG-Off capture. Later live HUDless1
+receipts do not retroactively supply that image. Approximately55fps was observed
+in the world; no performance attribution or full visual/motion quality follows.
+
+Explicit FG-on status recorded foreground1, base54/output54fps, active0 and
+tags0. The sealed post-exit loader retains same-source prepare rows with
+inputs1, HUDless1, identity1, matched1, scene_supported1, continuous1 and
+render_complete1. They also show cpu_mask1/flags0, paced0/prospective0,
+provider_generation2/owner_generation0, reservation_read0, cpu_valid0 and
+submission_ok0. The missing bound/paced input owner explains this refusal;
+resource/HUDless absence does not. In this nonprospective case reserved_bound1
+is not a BIND acknowledgement. Accepted removed-MSG and bounded marker-order0
+remain facts, not prospective input/pacing, generated FG or latency acceptance.
+
+Observation completion did not imply cleanup success: controller quit cleanup
+timed out120seconds. Escape did not open the native menu, then ordinary AltF4
+closed the window. `trace-native-quit.jsonl` is a misleading filename, not a
+verified native-Quit action. It captured the exact baseline4CB273 read0x50
+stack and NtTerminateProcessC0000005. No normal/native-Quit or new SR-fault
+cause is claimed. `post-close-disposition.json` and the later authoritative
+`resumed-restoration-20261116T1420476452502Z-3103b81a21864e34ac33e15f1721a1b1.json`
+record actual recovery exit0,20/20 verified, custom INI unchanged and original
+user settings SHA13D80689... restored after sealing the root API mutation.
+That supersedes the original controller's restored=false. Native prefs/custom
+were preserved. This is narrow native SR capture/reader acceptance; broad
+visual/motion/quality, captured HUDless coverage, performance, FG, prospective
+input/pacing, latency and full integration acceptance remain outstanding.
+Only documentation was changed for this reconciliation.

@@ -101,6 +101,85 @@ int main() {
     const float cleared[]{0,0,0,0}; context->ClearRenderTargetView(aux_target.Get(), cleared);
     check(transaction.restore() && read(device.Get(), context.Get(), aux.Get(), 4) == std::vector<unsigned char>(192),
         "later native consumer clear survives auxiliary retirement");
+    // Packed positive finite HDR channels must retain numeric nearest semantics.
+    // These are normal unsigned-float values, not colour-space declarations.
+    std::array<uint32_t,48> hdr_pixels{};
+    for (uint32_t i=0;i<hdr_pixels.size();++i) {
+        const uint32_t r=(((i%9)+11)<<6) | ((i*7)&63);
+        const uint32_t g=(((i%7)+12)<<6) | ((i*11)&63);
+        const uint32_t b=(((i%5)+13)<<5) | ((i*3)&31);
+        hdr_pixels[i]=r | (g<<11) | (b<<22);
+    }
+    UINT hdr_support{};
+    constexpr UINT hdr_required=D3D11_FORMAT_SUPPORT_TEXTURE2D | D3D11_FORMAT_SUPPORT_SHADER_LOAD |
+        D3D11_FORMAT_SUPPORT_RENDER_TARGET;
+    const bool hdr_capable=SUCCEEDED(device->CheckFormatSupport(DXGI_FORMAT_R11G11B10_FLOAT,&hdr_support)) &&
+        (hdr_support&hdr_required)==hdr_required;
+    check(hdr_capable,"WARP supports numeric R11G11B10 texture load and render target");
+    auto hdr=texture(device.Get(),DXGI_FORMAT_R11G11B10_FLOAT,hdr_pixels.data(),4,D3D11_BIND_RENDER_TARGET);
+    if (!hdr) return 1;
+    D3D11_TEXTURE2D_DESC hdr_desc{}; hdr->GetDesc(&hdr_desc);
+    check(hdr_desc.Format==DXGI_FORMAT_R11G11B10_FLOAT && hdr_desc.Width==8 && hdr_desc.Height==6 &&
+        hdr_desc.SampleDesc.Count==1,"actual packed HDR source descriptor");
+    const auto hdr_before=read(device.Get(),context.Get(),hdr.Get(),4);
+    const auto hdr_main_before=read(device.Get(),context.Get(),main.Get(),16);
+    rsf_d3d11_auxiliary_surface hdr_surface{sizeof(hdr_surface),RSF_D3D11_AUXILIARY_COLOUR,hdr.Get(),
+        {1.25f,.75f,5.5f,4.75f},{2,1,8,6},{.25f,-.125f}};
+    hdr_surface.flags=RSF_D3D11_AUXILIARY_RESTORE_CONTENTS;
+    const rsf_d3d11_auxiliary_pass hdr_request{sizeof(hdr_request),RSF_D3D11_HOST_ABI_VERSION,&pass,1,&hdr_surface};
+    const bool hdr_prepared=transaction.prepare(context.Get(),pass,hdr_request,nullptr,nullptr);
+    check(hdr_prepared==hdr_capable,"packed HDR admission follows actual load/RTV capability");
+    if (hdr_prepared) {
+        check(read(device.Get(),context.Get(),hdr.Get(),4)==hdr_before &&
+            read(device.Get(),context.Get(),main.Get(),16)==hdr_main_before,"packed HDR prepare leaves engine resources untouched");
+        context->ClearRenderTargetView(target.Get(),reconstructed);
+        check(transaction.commit(),"packed HDR nearest transaction commits");
+        const auto expanded=read(device.Get(),context.Get(),hdr.Get(),4);
+        check(expanded.size()==192,"packed HDR expanded readback");
+        const auto channel=[](uint32_t packed,unsigned shift,unsigned mantissa) {
+            const uint32_t code=packed>>shift;
+            return std::ldexp(1.f+float(code&((1u<<mantissa)-1))/float(1u<<mantissa),int((code>>mantissa)&31)-15);
+        };
+        for (int y=0;y<6;++y) for (int x=0;x<8;++x) if (expanded.size()==192) {
+            uint32_t expected=hdr_pixels[size_t(y)*8+x], actual{};
+            if (x>=2 && y>=1) {
+                const int sx=std::clamp(int(std::floor(1.25f+(float(x)+.5f-2)/6*4.25f-.25f)),1,4);
+                const int sy=std::clamp(int(std::floor(.75f+(float(y)+.5f-1)/5*4+.125f)),1,4);
+                expected=hdr_pixels[size_t(sy)*8+sx];
+            }
+            std::memcpy(&actual,expanded.data()+(size_t(y)*8+x)*4,4);
+            check(actual==expected,"packed HDR nearest crop/expand preserves exact channels and outside texels");
+            for (unsigned component=0;component<3;++component) {
+                const unsigned shift=component==0 ? 0u : component==1 ? 11u : 22u;
+                const unsigned mantissa=component==2 ? 5u : 6u;
+                const float value=channel(actual,shift,mantissa);
+                check(std::isfinite(value) && value>0 && value==channel(expected,shift,mantissa),
+                    "positive finite R11G11B10 values retain native numeric magnitude");
+            }
+        }
+        const auto hdr_sr_colour=read(device.Get(),context.Get(),main.Get(),16);
+        check(transaction.restore() && !transaction.pending() && read(device.Get(),context.Get(),hdr.Get(),4)==hdr_before,
+            "packed HDR RESTORE_CONTENTS restores every native source bit");
+        check(read(device.Get(),context.Get(),main.Get(),16)==hdr_sr_colour,"packed HDR restore retains accepted SR colour");
+        check(transaction.prepare(context.Get(),pass,hdr_request,nullptr,nullptr),"packed HDR prepare failed-SR rollback");
+        context->ClearRenderTargetView(target.Get(),failed_colour);
+        check(transaction.restore() && !transaction.pending() && read(device.Get(),context.Get(),main.Get(),16)==hdr_sr_colour &&
+            read(device.Get(),context.Get(),hdr.Get(),4)==hdr_before,"failed SR cancels packed HDR transaction and restores native output");
+        pass.color_output_readable=immutable.Get();
+        check(!transaction.prepare(context.Get(),pass,hdr_request,nullptr,nullptr) && !transaction.pending() &&
+            read(device.Get(),context.Get(),main.Get(),16)==hdr_sr_colour && read(device.Get(),context.Get(),hdr.Get(),4)==hdr_before,
+            "packed HDR preparation failure preserves all source/destination bytes and clears transaction");
+        pass.color_output_readable=nullptr;
+        hdr_surface.flags=0;
+        check(transaction.prepare(context.Get(),pass,hdr_request,nullptr,nullptr) && transaction.commit(),
+            "packed HDR without RESTORE_CONTENTS commits");
+        ComPtr<ID3D11RenderTargetView> hdr_target;
+        check(SUCCEEDED(device->CreateRenderTargetView(hdr.Get(),nullptr,&hdr_target)),"packed HDR native consumer RTV");
+        if (hdr_target) context->ClearRenderTargetView(hdr_target.Get(),cleared);
+        check(transaction.restore() && read(device.Get(),context.Get(),hdr.Get(),4)==std::vector<unsigned char>(192),
+            "packed HDR later native clear survives non-restoring retirement");
+    } else check(!transaction.pending() && read(device.Get(),context.Get(),hdr.Get(),4)==hdr_before &&
+        read(device.Get(),context.Get(),main.Get(),16)==hdr_main_before,"unsupported packed HDR leaves transaction and native contents unchanged");
     // A non-origin rectangle in a two-channel UNORM mask must become local R32,
     // with adapter weights and existing independent reactive/bias hints preserved.
     std::array<uint8_t, 96> mask_values{};

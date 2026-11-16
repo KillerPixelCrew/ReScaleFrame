@@ -198,6 +198,17 @@ int main(int argc, char** argv)
     render_only.session_id = generic.session_id; render_only.native_frame = generic.frame_id; render_only.view_key = generic.view_id;
     render_only.flags = RSF_GAME_RENDER_PRIMARY | RSF_GAME_RENDER_NO_FG;
     rsf_input_dump_pass_metadata(&render_only);
+    const auto metadata_bundle = [&](uint64_t source, uint64_t native) {
+        for (const auto& entry : std::filesystem::directory_iterator(root / "website")) {
+            const auto json = read(entry.path() / "engine_pass.json");
+            if (json.find("\"source_frame_id\":" + std::to_string(source) + ",") != std::string::npos &&
+                json.find("\"native_frame\":" + std::to_string(native) + ",") != std::string::npos) return entry.path();
+        }
+        return std::filesystem::path{};
+    };
+    const auto legacy_pass_json = read(metadata_bundle(0,generic.frame_id) / "engine_pass.json");
+    check(legacy_pass_json.find("\"depth_domains\":{\"requested\":0,\"struct_size\":0,\"version\":0,\"domain_count\":0") != std::string::npos,
+        "Legacy zero depth descriptor is explicit in engine pass metadata.");
     auto wrong_render = render_only; ++wrong_render.native_frame;
     rsf_input_dump_pass(context.Get(), &wrong_render, 1);
     check(!rsf_input_dump_active(), "Another native render cannot join the capture");
@@ -212,9 +223,53 @@ int main(int argc, char** argv)
     check(rsf_input_dump_begin_record(&generic, 1) != 0, "Source identity and native render identity may differ");
     auto source_bound = render_only;
     source_bound.source_frame_id = generic.frame_id; source_bound.native_frame = 12001;
+    auto& domains = source_bound.depth_domains;
+    domains.struct_size = sizeof(domains); domains.version = RSF_DEPTH_DOMAINS_VERSION;
+    domains.domain_count = 2; domains.clear_enabled = 1; domains.clear_value = 1;
+    domains.domains[0].classify_max = 0.25f;
+    domains.domains[0].endpoint_flags = RSF_DEPTH_DOMAIN_INCLUDE_MIN;
+    domains.domains[1].classify_min = 0.25f; domains.domains[1].classify_max = 1;
+    domains.domains[1].endpoint_flags = RSF_DEPTH_DOMAIN_INCLUDE_MIN | RSF_DEPTH_DOMAIN_INCLUDE_MAX;
+    for (unsigned i = 0; i < 2; ++i) {
+        auto& domain = domains.domains[i];
+        domain.viewport_xywh[0] = 1.25f + float(i); domain.viewport_xywh[1] = 0.75f;
+        domain.viewport_xywh[2] = 959.875f; domain.viewport_xywh[3] = 539.75f;
+        domain.viewport_min_depth = i ? 0.25f : 0; domain.viewport_max_depth = i ? 1 : 0.25f;
+        for (unsigned j = 0; j < 16; ++j) domain.source_clip_to_target_clip[j] = float(j + 1) * (i ? -0.125f : 0.125f);
+    }
     rsf_input_dump_pass_metadata(&source_bound);
+    const auto selected_bundle = metadata_bundle(source_bound.source_frame_id,source_bound.native_frame);
+    const auto domain_json = read(selected_bundle / "engine_pass.json");
+    check(domain_json.find("\"requested\":1,\"struct_size\":" + std::to_string(sizeof(domains)) +
+        ",\"version\":1,\"domain_count\":2,\"clear_enabled\":1,\"clear_value\":1,\"reserved\":[0,0,0]") != std::string::npos,
+        "Depth descriptor version, count, clear and reserved fields are copied exactly.");
+    check(domain_json.find("\"classify_min\":0,\"classify_max\":0.25,\"endpoint_flags\":1") != std::string::npos &&
+        domain_json.find("\"classify_min\":0.25,\"classify_max\":1,\"endpoint_flags\":3") != std::string::npos,
+        "Both domain classification endpoints and inclusion rules are retained.");
+    check(domain_json.find("\"viewport_xywh\":[1.25,0.75,959.875,539.75],\"viewport_min_depth\":0,\"viewport_max_depth\":0.25") != std::string::npos &&
+        domain_json.find("\"viewport_xywh\":[2.25,0.75,959.875,539.75],\"viewport_min_depth\":0.25,\"viewport_max_depth\":1") != std::string::npos,
+        "Actual fractional allocation viewport and both sampled depth ranges remain exact.");
+    check(domain_json.find("\"source_clip_to_target_clip\":[0.125,0.25,0.375,0.5,0.625,0.75,0.875,1,1.125,1.25,1.375,1.5,1.625,1.75,1.875,2]") != std::string::npos &&
+        domain_json.find("\"source_clip_to_target_clip\":[-0.125,-0.25,-0.375,-0.5,-0.625,-0.75,-0.875,-1,-1.125,-1.25,-1.375,-1.5,-1.625,-1.75,-1.875,-2]") != std::string::npos,
+        "Every element of both row-major projective transforms is copied without transposition.");
     auto stale_native = source_bound; ++stale_native.native_frame;
+    stale_native.depth_domains.domains[0].source_clip_to_target_clip[0] = 999;
     rsf_input_dump_pass_metadata(&stale_native);
+    check(read(selected_bundle / "engine_pass.json") == domain_json,
+        "Stale native identity cannot overwrite selected depth-domain facts.");
+    auto short_metadata = source_bound; --short_metadata.struct_size;
+    rsf_input_dump_pass_metadata(&short_metadata);
+    check(read(selected_bundle / "engine_pass.json") == domain_json, "Short pass cannot overwrite depth-domain metadata.");
+    auto nonfinite_metadata = source_bound;
+    nonfinite_metadata.depth_domains.clear_value = std::numeric_limits<float>::infinity();
+    nonfinite_metadata.depth_domains.domains[1].source_clip_to_target_clip[15] = std::numeric_limits<float>::quiet_NaN();
+    nonfinite_metadata.depth_domains.domain_count = UINT32_MAX;
+    rsf_input_dump_pass_metadata(&nonfinite_metadata);
+    const auto safe_json = read(selected_bundle / "engine_pass.json");
+    check(safe_json.find("\"domain_count\":4294967295") != std::string::npos && safe_json.find("\"clear_value\":null") != std::string::npos &&
+        safe_json.find("-1.875,null]") != std::string::npos,
+        "Malformed domain count stays bounded to two copied slots and nonfinite facts remain valid JSON.");
+    rsf_input_dump_pass_metadata(&source_bound);
     rsf_input_dump_pass(reinterpret_cast<void*>(uintptr_t(1)), &stale_native, 1);
     check(!rsf_input_dump_active(), "Matching source cannot admit another native render before touching graphics");
     rsf_input_dump_pass(context.Get(), &source_bound, 1);

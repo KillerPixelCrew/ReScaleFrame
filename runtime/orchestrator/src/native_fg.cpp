@@ -92,11 +92,14 @@ void complete_frame(uint64_t id) {
 }
 uint64_t now_qpc() { LARGE_INTEGER now{}; QueryPerformanceCounter(&now); return uint64_t(now.QuadPart); }
 rsf_backend_result frame_acquire(uint64_t id);
-rsf_backend_result frame_marker(uint64_t id, rsf_latency_marker marker) {
-    if (rendered_source.load()) return RSF_BACKEND_OK;
-    const auto accepted=rsf_native_cpu_marker(id,uint32_t(marker));
-    return accepted > 0 ? rsf_d3d11_present_marker(rsf_d3d11_present_generation(), id, marker, 0) :
-        accepted == 0 ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+rsf_backend_result frame_marker(uint64_t id, rsf_latency_marker marker, bool* marked = nullptr) {
+    if (marked) *marked = false;
+    if (rendered_source.load()) { if (marked) *marked = true; return RSF_BACKEND_OK; }
+    const auto accepted = rsf_native_cpu_marker(id,uint32_t(marker));
+    if (accepted <= 0) return accepted == 0 ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    const auto result = rsf_d3d11_present_marker(rsf_d3d11_present_generation(), id, marker, 0);
+    if (marked) *marked = result == RSF_BACKEND_OK;
+    return result;
 }
 rsf_backend_result frame_abort(uint64_t id) { return rsf_d3d11_present_abort(id); }
 bool frame_live(rsf_streamline_host* host, uint64_t id) {
@@ -192,7 +195,8 @@ struct CpuOwner {
     bool submitted = false, ended = false, failed = false, render_complete = false;
     bool paced = false, pacing_started = false;
     bool prospective = false;
-    bool render_started = false;
+    bool render_started = false, render_starting = false, submit_ending = false;
+    bool present_started = false, present_starting = false, present_ended = false, present_ending = false;
     bool audited = false;
     uint32_t expected_count = 0, scene_begins = 0, scene_ends = 0, sr_calls = 0, presents = 0, windows = 0;
     uint32_t rhi_begins = 0, rhi_ends = 0, screen = 0, native_frame = 0, mismatched_window = 0;
@@ -887,9 +891,26 @@ namespace {
 // RenderSubmitEnd, once per frame. Ordered frames send it before PresentStart; the threaded
 // order keeps UE's EndFrame position, after Present.
 void end_render_marker(uint64_t id, const char* stage) {
-    bool repeated = false;
-    with_frame(id, [&](CpuOwner& frame) { repeated = frame.submit_ended; frame.submit_ended = true; });
-    if (!repeated) trace(stage, id, frame_marker(id, RSF_LATENCY_RENDER_SUBMIT_END));
+    bool end = false;
+    uint64_t session{};
+    with_frame(id, [&](CpuOwner& frame) {
+        if (!frame.failed && frame.render_started && !frame.submit_ended && !frame.submit_ending)
+            { session = frame.session; end = frame.submit_ending = true; }
+    });
+    if (!end) return;
+    rsf_native_cpu_frame facts{}; facts.struct_size = sizeof(facts);
+    const bool known = rsf_native_cpu_read(session,id,&facts) != 0;
+    const uint32_t required = facts.flags & RSF_GAME_CPU_INPUT_KEYED ? 7u : 4u;
+    if (!rendered_source.load() && (!known || facts.failed || (facts.marker_mask & required) != required)) {
+        with_frame(id, [](CpuOwner& frame) { frame.submit_ending = false; }); return;
+    }
+    bool marked = false;
+    const auto result = frame_marker(id, RSF_LATENCY_RENDER_SUBMIT_END, &marked);
+    with_frame(id, [&](CpuOwner& frame) {
+        frame.submit_ending = false;
+        frame.submit_ended = marked; frame.failed |= result != RSF_BACKEND_OK;
+    });
+    trace(stage, id, result);
 }
 }
 extern "C" RSF_RUNTIME_API void rsf_native_fg_frame(const rsf_game_render_pass* pass, uint32_t begin) {
@@ -926,38 +947,53 @@ extern "C" RSF_RUNTIME_API void rsf_native_fg_frame(const rsf_game_render_pass* 
 namespace {
 void start_render_marker(uint64_t id) {
     bool start = false;
-    with_frame(id, [&](CpuOwner& frame) { if (!frame.failed && !frame.render_started) start = frame.render_started = true; });
-    if (start) {
-        if (rendered_source.load()) return;
-        uint64_t session{};
-        bool prospective = false, post_update = false;
-        with_frame(id,[&](const CpuOwner& f) {
-            session=f.session; prospective=f.prospective;
-            post_update=f.submitted && f.scene_begins && f.first_submission && f.first_view &&
-                f.provider_generation==rsf_d3d11_present_generation();
+    uint64_t session{};
+    bool prospective = false, post_update = false;
+    with_frame(id, [&](CpuOwner& frame) {
+        if (frame.failed || frame.render_started || frame.render_starting) return;
+        if (rendered_source.load()) { frame.render_started = true; return; }
+        start = frame.render_starting = true;
+        session = frame.session; prospective = frame.prospective;
+        post_update = frame.submitted && frame.scene_begins && frame.first_submission && frame.first_view &&
+            frame.provider_generation == rsf_d3d11_present_generation();
+    });
+    if (!start) return;
+    // Reserve only the attempt across callbacks. No end marker is authorized until the
+    // CPU ledger and provider have both accepted the actual submission start.
+    const auto finish = [&](bool accepted, bool failed = false) {
+        with_frame(id, [&](CpuOwner& frame) {
+            frame.render_starting = false; frame.render_started = accepted; frame.failed |= failed;
         });
-        rsf_native_cpu_frame facts{}; facts.struct_size=sizeof(facts);
-        const bool known = rsf_native_cpu_read(session,id,&facts) != 0;
-        rsf_native_cpu_reservation reservation{sizeof(reservation)};
-        const bool bound = prospective && rsf_native_cpu_reservation_read(session,id,&reservation) &&
-            reservation.state==RSF_NATIVE_CPU_RESERVATION_BOUND && reservation.poll_begin_qpc;
-        if (prospective && (!known || !bound || !post_update || facts.failed ||
-            (facts.flags & RSF_GAME_CPU_INPUT_SUBSTITUTE) || (facts.stage_mask & 7u)!=7u)) {
-            with_frame(id,[](CpuOwner& f) {f.failed=true;}); return;
-        }
-        if (known && (facts.flags & RSF_GAME_CPU_INPUT_KEYED) &&
-            (prospective ? !(facts.stage_mask & 8u) : !(facts.marker_mask & 2u))) {
-            // Simulation can overlap rendering. Close the vendor interval at submission, while retaining
-            // the engine's later simulation-end fact and exposing the derived boundary in status.
-            LARGE_INTEGER frequency{};QueryPerformanceFrequency(&frequency);
-            const rsf_game_cpu_event derived{sizeof(derived),RSF_GAME_CPU_SIMULATION_END,session,id,now_qpc(),
-                uint64_t(frequency.QuadPart),0,0,0,RSF_GAME_CPU_EVENT_VERSION,
-                RSF_GAME_CPU_INPUT_KEYED | RSF_GAME_CPU_DERIVED_BOUNDARY};
-            const auto accepted = rsf_native_cpu_dispatch(&derived,[](void*,const rsf_game_cpu_event* event) {rsf_native_fg_cpu(event);},nullptr);
-            if (prospective && !accepted) { with_frame(id,[](CpuOwner& f) {f.failed=true;}); return; }
-        }
-        trace("actual graphics submit begin", id, frame_marker(id, RSF_LATENCY_RENDER_SUBMIT_START));
+    };
+    rsf_native_cpu_frame facts{}; facts.struct_size = sizeof(facts);
+    if (!rsf_native_cpu_read(session, id, &facts) || facts.failed) { finish(false); return; }
+    rsf_native_cpu_reservation reservation{sizeof(reservation)};
+    const bool bound = prospective && rsf_native_cpu_reservation_read(session,id,&reservation) &&
+        reservation.state == RSF_NATIVE_CPU_RESERVATION_BOUND && reservation.poll_begin_qpc;
+    if (prospective && (!bound || !post_update || (facts.flags & RSF_GAME_CPU_INPUT_SUBSTITUTE) ||
+        (facts.stage_mask & 7u) != 7u)) { finish(false, true); return; }
+    // Unkeyed FRAME_BEGIN/END fallback has no simulation interval to close or submit.
+    // Legacy keyed inference and valid bound polls retain their existing derivation.
+    if ((facts.stage_mask & 3u) != 3u || !(facts.marker_mask & 1u)) { finish(false); return; }
+    if ((facts.flags & RSF_GAME_CPU_INPUT_KEYED) &&
+        (prospective ? !(facts.stage_mask & 8u) : !(facts.marker_mask & 2u))) {
+        LARGE_INTEGER frequency{}; QueryPerformanceFrequency(&frequency);
+        const rsf_game_cpu_event derived{sizeof(derived),RSF_GAME_CPU_SIMULATION_END,session,id,now_qpc(),
+            uint64_t(frequency.QuadPart),0,0,0,RSF_GAME_CPU_EVENT_VERSION,
+            RSF_GAME_CPU_INPUT_KEYED | RSF_GAME_CPU_DERIVED_BOUNDARY};
+        const auto accepted = rsf_native_cpu_dispatch(&derived,[](void*,const rsf_game_cpu_event* event) {rsf_native_fg_cpu(event);},nullptr);
+        if (prospective && !accepted) { finish(false, true); return; }
     }
+    facts.struct_size = sizeof(facts);
+    if (!rsf_native_cpu_read(session,id,&facts) || facts.failed) { finish(false); return; }
+    const uint32_t required = facts.flags & RSF_GAME_CPU_INPUT_KEYED ? 3u : 1u;
+    if ((facts.marker_mask & required) != required) {
+        finish(false); return;
+    }
+    bool marked = false;
+    const auto result = frame_marker(id, RSF_LATENCY_RENDER_SUBMIT_START, &marked);
+    finish(marked, result != RSF_BACKEND_OK);
+    trace("actual graphics submit begin", id, result);
 }
 }
 extern "C" RSF_RUNTIME_API void rsf_native_latency_graphics(uint32_t api) { if (api==11 || api==12) graphics_api.store(api); }
@@ -969,10 +1005,45 @@ extern "C" RSF_RUNTIME_API void rsf_native_latency_present(uint64_t id,void* cha
     if (begin) {
         start_render_marker(id);
         if (!threaded_reflex.load()) end_render_marker(id,"render submission end before present");
-        if (!rendered_source.load()) anti_lag_present(id,chain);
-        trace("present begin",id,frame_marker(id,RSF_LATENCY_PRESENT_START));
+        bool start = false;
+        uint64_t session{};
+        with_frame(id, [&](CpuOwner& frame) {
+            if (frame.failed || !frame.render_started || frame.present_started || frame.present_starting) return;
+            session = frame.session; start = frame.present_starting = true;
+        });
+        if (!start) return;
+        rsf_native_cpu_frame facts{}; facts.struct_size = sizeof(facts);
+        const bool rendered = rendered_source.load() != 0;
+        const bool known = rsf_native_cpu_read(session,id,&facts) != 0;
+        const bool ordered = (facts.flags & RSF_GAME_CPU_INPUT_KEYED) || !threaded_reflex.load();
+        bool submit_ended = false;
+        with_frame(id, [&](const CpuOwner& frame) { submit_ended = frame.submit_ended; });
+        const uint32_t required = facts.flags & RSF_GAME_CPU_INPUT_KEYED ? 15u : 4u;
+        if ((ordered && !submit_ended) || (!rendered && (!known || facts.failed || (facts.marker_mask & required) != required))) {
+            with_frame(id, [](CpuOwner& frame) { frame.present_starting = false; }); return;
+        }
+        if (!rendered) anti_lag_present(id,chain);
+        bool marked = false;
+        const auto result = frame_marker(id,RSF_LATENCY_PRESENT_START,&marked);
+        with_frame(id, [&](CpuOwner& frame) {
+            frame.present_starting = false; frame.present_started = marked; frame.failed |= result != RSF_BACKEND_OK;
+        });
+        trace("present begin",id,result);
     } else {
-        trace("present end",id,frame_marker(id,RSF_LATENCY_PRESENT_END)); complete_frame(id);
+        bool end = false;
+        with_frame(id, [&](CpuOwner& frame) {
+            if (!frame.failed && frame.present_started && !frame.present_ended && !frame.present_ending)
+                end = frame.present_ending = true;
+        });
+        if (end) {
+            bool marked = false;
+            const auto result = frame_marker(id,RSF_LATENCY_PRESENT_END,&marked);
+            with_frame(id, [&](CpuOwner& frame) {
+                frame.present_ending = false; frame.present_ended = marked; frame.failed |= result != RSF_BACKEND_OK;
+            });
+            trace("present end",id,result);
+        }
+        complete_frame(id);
     }
 }
 extern "C" RSF_RUNTIME_API int rsf_native_latency_frame_get(rsf_native_latency_frame* out) {
