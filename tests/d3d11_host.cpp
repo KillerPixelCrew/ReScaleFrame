@@ -4,6 +4,12 @@
 #include <rescaleframe/native_fg.h>
 #include <cstdio>
 #include <cstddef>
+static_assert(sizeof(rsf_d3d11_reduced_frame) == 56);
+static_assert(alignof(rsf_d3d11_reduced_frame) == 8);
+static_assert(offsetof(rsf_d3d11_reduced_frame,token) == 16);
+static_assert(offsetof(rsf_d3d11_reduced_frame,owner) == 24);
+static_assert(offsetof(rsf_d3d11_reduced_frame,surfaces) == 40);
+static_assert(offsetof(rsf_d3d11_reduced_frame,temporal_result) == 48);
 static_assert(sizeof(rsf_d3d11_chain_dispatch) == 72);
 static_assert(offsetof(rsf_d3d11_chain_dispatch, receiver) == 16);
 static_assert(offsetof(rsf_d3d11_chain_dispatch, args) == 24);
@@ -82,6 +88,19 @@ int main() {
     check(rsf_d3d11_host_create(&setup, &upstream) == RSF_ERROR_BUSY, "Second process owner refused");
     check(rsf_d3d11_host_set_active(&cookie, 1) == RSF_ERROR_INVALID_ARGUMENT, "Only the returned owner controls activation");
     check(rsf_d3d11_host_set_active(host.user, 1) == RSF_OK && rsf_d3d11_host_set_active(host.user, 0) == RSF_OK, "Thread-safe activation and suspension");
+    rsf_d3d11_reduced_frame recovery{sizeof(recovery),RSF_D3D11_REDUCED_FRAME_ABI_VERSION};
+    void* unreadable=reinterpret_cast<void*>(uintptr_t(1));
+    check(rsf_d3d11_host_reduced_frame(&cookie,unreadable,&recovery)==RSF_ERROR_INVALID_ARGUMENT,"recovery validates host before graphics");
+    --recovery.struct_size;
+    check(rsf_d3d11_host_reduced_frame(host.user,unreadable,&recovery)==RSF_ERROR_INVALID_ARGUMENT,"recovery validates size before graphics");
+    ++recovery.struct_size; ++recovery.abi_version;
+    check(rsf_d3d11_host_reduced_frame(host.user,unreadable,&recovery)==RSF_ERROR_ABI_MISMATCH,"independent recovery negotiation");
+    --recovery.abi_version; recovery.operation=5;
+    check(rsf_d3d11_host_reduced_frame(host.user,unreadable,&recovery)==RSF_ERROR_INVALID_ARGUMENT,"unknown recovery operation refused");
+    recovery.operation=0; recovery.reserved=1;
+    check(rsf_d3d11_host_reduced_frame(host.user,unreadable,&recovery)==RSF_ERROR_INVALID_ARGUMENT,"reserved recovery bits refused");
+    recovery.reserved=0; recovery.owner=static_cast<const rsf_game_render_pass*>(unreadable);
+    check(rsf_d3d11_host_reduced_frame(host.user,unreadable,&recovery)==RSF_ERROR_NOT_READY,"unconfigured recovery owner refused before resource reads");
     rsf_d3d11_auxiliary_scope cleanup{sizeof(cleanup),RSF_D3D11_HOST_ABI_VERSION,91,1,1};
     check(rsf_d3d11_host_restore_auxiliaries(&cookie,&cleanup)==RSF_ERROR_INVALID_ARGUMENT,"Auxiliary cleanup verifies host user");
     --cleanup.struct_size;

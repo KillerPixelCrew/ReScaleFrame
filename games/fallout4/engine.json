@@ -1,6 +1,6 @@
 {
   "game": "Fallout 4",
-  "status": "Native-first validation active: PID56312 admits bound/paced sources and FG tags but user rejects flicker/visual defects; final log has1243 active/inactive transitions and1122 skipped-present warnings, all three captures partial. Reduced recovery source is unbuilt; moving shader/near-depth, stable FG and latency remain unaccepted; compatibility deferred, readiness0",
+  "status": "Native-first validation active: reduced recovery built and generic-device-tested, undeployed at this freeze; PID56312 flicker/visual defects and three partial captures remain rejected. No moving/shader/TAA-history/stable-FG/end-to-end latency acceptance; compatibility deferred, readiness0",
   "executable": {
     "name": "Fallout4.exe",
     "version": "1.11.240.0",
@@ -35,7 +35,7 @@
     "depth": "Native partitioned Main logical1 depth; copied same-source post-prepass domains required before generic ABI23 normalization, live native snapshot/normalization acceptance pending",
     "motion": "GBufferMotionVectors logical32 R16G16_FLOAT, previous-minus-current UV source convention, valid zero; native coverage unverified",
     "fg": "Freeze depth/motion before SR; HUD-less RT0 after imagespace before UI at Render_UI+AE0xc5 post-call; final WINDOW lease through actual outer Present",
-    "input_timeline": "Implemented native reservation/poll and actual consumer binding producers are declared for cold validation; actual accepted ledger/pacing/FG admission remains pending, fallback input-unbound sources remain core-refused"
+    "input_timeline": "Native intention trial admits actual bound/paced/completed sources and FG tags, but unstable activity/visual defects remain rejected; built bounded native-cycle receipts await live attribution, no stable FG/end-to-end latency acceptance"
   },
   "coexistence_baseline": {
     "f4se": "0.7.9",
@@ -48,7 +48,7 @@
   },
   "source_foundation": {
     "abi": "Host8/Game23/Frame2/Camera1; provisional FG_INPUTS|INPUT_TIMELINE declarations3 for cold validation, no RENDERED_SOURCE, readiness0",
-    "implementation": "Core-planned native DR at guarded five-argument UpdateDynamicResolution, producer LTRB/canonical camera inputs, explicit pre-mutation FG capture and single auxiliary SR transaction; scoped unit selector/full viewport and source-end restoration",
+    "implementation": "Core-planned native DR with pre-commit raster/resource/output preflight and independently versioned reduced-frame recovery token; genuine temporal camera/depth/FG inputs remain separate, single temporal auxiliary evaluation, explicit spatial FINISH and Effects-boundary/native-state retirement",
     "steam": "Existing exact seven-method/ten-load profile extracted to integrations/steam, game-owned cold callbacks retained; no shared runtime game branch",
     "validation": "ServingThread vtable correction Windows Release VS2026 gate224passed14skipped117.36s,238total/no failures,Rust fmt/Clippy clean; worker handoff contract passed0.01s; Entry72B274B92AF5F5AFAC334F92E89EBC091812CD3A7FD05CF8B8A43713A393A449 deployed PID66836, vtable predicates pass but native input/FG/latency admission pending"
   },
@@ -56,7 +56,7 @@
   "native_render_callbacks": {
     "world": "WorldBegin21f0ac0 selected only by ordinary caller c382a0/returnc382a5, viewport21f0ae6->1839ec0; CPU owns sole source/submission and exact QPC identity",
     "sr": "RenderUI21fa200, call21fa283->2185420 with native ImageSpaceManager/0/13/1/1 preserved; reader leases Main1/depth1/motion32 and explicit camera",
-    "taa": "Native RTTI vtable2915eb0 slot8->2214fc0, exact native conditions preserved; exclusion only after successful SR inside selected whole RenderUI",
+    "taa": "Native RTTI vtable2915eb0 slot8->2214fc0, exact original conditions preserved; built recovery exclusion requires an actually host-defined full image and current owned native output inside RenderUI, with temporal publication distinct; native TAA-history transition acceptance pending",
     "hudless": "Viewport call21fa2c5 returns21fa2ca after imagespace, logicalRT0 resolved independently of outer chain GetBuffer; same native frame/window/context/chain required",
     "window": "Pinned lease from HUDless until CPU finish_render_scope after unchanged Swap including native Present, before clearing CPU identity",
     "restoration": "Native jitter saved/zeroed only for output scope and conditionally restored at whole RenderUI exit; failed restoration retains busy ownership",
@@ -67,6 +67,7 @@
     "depth": "Guarded prepass21F38B0/callerreturn21F9F78 copies same-source NativeDepthSnapshot; pass.depth_domains required before planning/explicit FG_INPUTS/SR; source native depth remains unchanged"
   },
   "validation": {
+    "generic_provider_concurrency": "Source audit proves worker cached-state read/session lifetime and DLSS abort mutation synchronization defects; repair underway before next deployment. Recovery gate/device passes remain scoped to frozen pre-repair binaries; no flicker causation claim. See docs/research/provider-status-worker-lifetime-audit-20261116.md",
     "native_intention_fg_trial": {
       "receipt": ".local/fallout4-research/native-raster-20261116-192707-484",
       "source_commit": "e495934507425cc1a9eae7b8352bcfc874bbb358",
@@ -823,6 +824,88 @@
         "tests/fallout4_worker_handoff.cpp": "322951815d3171102fa3b188c4f9dbb3aaf122445ac364b17c695f5fb2536bf0"
       },
       "live": "not yet deployed"
+    },
+    "reduced_recovery_built": {
+      "authority": ".local/fallout4-research/reduced-recovery-built-20261116.json",
+      "source_head": "e4f283df078e357e695f60970196f612c8f2e8a9",
+      "configuration": "Windows Release VS2026",
+      "gate": {
+        "path": ".local\\fallout4-research\\verify-reduced-recovery-20261116.log",
+        "sha256": "1211fb2f94e68f4b7cde0de9725deb14c6074785223982bf1a544dfd799db37e",
+        "exit_code": 0,
+        "passed": 224,
+        "skipped": 14,
+        "total": 238,
+        "test_seconds": 113.57,
+        "rust_fmt_clippy": "passed"
+      },
+      "device_contract_seconds": {
+        "depth_scale": 0.04,
+        "auxiliary_sr": 0.1,
+        "d3d11_host": 0.07,
+        "worker_handoff": 0.01,
+        "camera": 0.01
+      },
+      "artifacts": [
+        {
+          "path": "build/windows-x64/bin/Release/ReScaleFrame.Runtime.dll",
+          "sha256": "95cbc864de2723d93e90f1651599f273ed5dfa970d89e763c452241ac49ac54c",
+          "size": 1601024
+        },
+        {
+          "path": "build/windows-x64/bin/Release/ReScaleFrame.Game.Fallout4.dll",
+          "sha256": "9b5c79df0b2dd2e5036b5df1cc71bbcff8773b1a124030b8746b40849f8d4e1f",
+          "size": 303104
+        },
+        {
+          "path": "build/windows-x64/plugin-carrier/bin/Release/xinput1_3.dll",
+          "sha256": "e4a809e7a7a7d802c7c83691727575fc288eb515130d54d60b608bdd7cf22c98",
+          "size": 39936
+        }
+      ],
+      "hidden_recovery": {
+        "revision": 4,
+        "build_log": ".local/fallout4-research/build-reduced-recovery-shared-sr-r4-20261116.log",
+        "build_exit": 0,
+        "run_log": ".local/fallout4-research/test-reduced-recovery-shared-sr-r4-20261116.log",
+        "run_exit": 0,
+        "scope": "Actual temporal success, real pre-submit failure with spatial recovery, no-camera/frozen settings recovery and suspended retirement; no native game acceptance"
+      },
+      "fixture_corrections": {
+        "build_log": ".local\\fallout4-research\\build-reduced-recovery-shared-sr-20261116.log",
+        "exit_code": 1,
+        "error": "C4456 shadowed raster local at258; fixture not executed",
+        "r2": {
+          "build_log": ".local/fallout4-research/build-reduced-recovery-shared-sr-r2-20261116.log",
+          "build_exit": 0,
+          "run_log": ".local/fallout4-research/test-reduced-recovery-shared-sr-r2-20261116.log",
+          "run_exit": 1,
+          "diagnosis": "Historical r2 failure: fixture expected cold source1 RESERVE before scene/pipeline readiness; expectation corrected for r4, no production relaxation"
+        },
+        "r3": {
+          "build_log": ".local/fallout4-research/build-reduced-recovery-shared-sr-r3-20261116.log",
+          "build_exit": 0,
+          "run_log": ".local/fallout4-research/test-reduced-recovery-shared-sr-r3-20261116.log",
+          "run_exit": 1,
+          "diagnosis": "Historical r3 failure: fixture omitted reactivation plan refresh; fixture plan corrected for r4, shipping artifacts unchanged"
+        },
+        "r4": {
+          "build_log": ".local/fallout4-research/build-reduced-recovery-shared-sr-r4-20261116.log",
+          "build_exit": 0,
+          "run_log": ".local/fallout4-research/test-reduced-recovery-shared-sr-r4-20261116.log",
+          "run_exit": 0
+        },
+        "latest_pass": 4,
+        "corrections": "r1 shadowing rename; r2 cold reservation expectation; r3 missing reactivation plan, all fixture-only with original failures retained"
+      },
+      "hidden_marker": {
+        "log": ".local/fallout4-research/test-recovery-hidden-marker-20261116.log",
+        "exit_code": 0,
+        "mode": "plain hidden, exact two arguments, no optional visible mode"
+      },
+      "shipping_artifacts_unchanged_across_fixture_corrections": true,
+      "deployed": false,
+      "limits": "Generic hidden device fixtures and built source only; no native recovery snapshot/visual/moving shader/TAA-history/FG/latency acceptance. PID56312 rejection and partial captures remain unresolved."
     }
   },
   "reduced_consumer_research": "docs/research/fallout4-reduced-consumers-20261116.md",
@@ -838,10 +921,11 @@
       "RENDERED_SOURCE": false,
       "meaning": "Implemented producer declarations awaiting bounded admission, not validation or backend enablement"
     },
-    "generic_handoff": "Existing HostABI8 auxiliary transaction, shared numeric R11 support and idempotent empty cleanup acknowledgement",
+    "generic_handoff": "HostABI8/Game23 with independently versioned56-byte reduced-frame requestABI1: RESERVE/SEAL/FINISH/RETIRE/CANCEL; one temporal auxiliary transaction or explicit numeric nearest native recovery",
     "native_restore": "Owned exact writes restore; superseded scalar values and borrowed triangle changes are preserved and refused without false busy; failed actual retirement/unsafe owner association retains busy and pins",
-    "pending": "Native-only direct-executable/module-absence validation, all quality/visual/input/FG/latency and close acceptance first; F4SE/ENB coexistence deferred until native phase passes",
-    "new_target_correction_built": true
+    "pending": "Native-only moving/all-quality/shader/buffer/recovery/TAA-history/stable-FG/end-to-end latency acceptance first; PID56312 visual rejection remains, F4SE/ENB compatibility deferred",
+    "new_target_correction_built": true,
+    "recovery_validation": "Built/full Release224passed14skipped238total113.57s, Rust clean; explicit hidden recovery r4 and hidden marker fixtures pass; undeployed and native acceptance pending"
   },
   "work_order": {
     "authority": "Latest explicit user instruction",

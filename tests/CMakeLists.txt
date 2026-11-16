@@ -278,7 +278,7 @@ target_link_libraries(rsf_sampler_bias PRIVATE ReScaleFrame::Graphics ReScaleFra
 add_test(NAME sampler_bias_device COMMAND rsf_sampler_bias)
 set_tests_properties(sampler_bias_device PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
 
-add_executable(rsf_d3d11_host_test d3d11_host.cpp)
+add_executable(rsf_d3d11_host_test d3d11_host.cpp d3d11_host_c_header.c)
 target_include_directories(rsf_d3d11_host_test PRIVATE "$<TARGET_PROPERTY:rsf_orchestrator,INTERFACE_INCLUDE_DIRECTORIES>")
 target_link_libraries(rsf_d3d11_host_test PRIVATE "$<TARGET_LINKER_FILE:rsf_orchestrator>" rsf_build_options)
 add_dependencies(rsf_d3d11_host_test rsf_orchestrator)

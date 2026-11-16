@@ -9,6 +9,7 @@
 #include <intrin.h>
 #include <d3d11.h>
 #include <cstdio>
+#include <initializer_list>
 
 namespace rsf::fallout4 {
 namespace {
@@ -152,7 +153,8 @@ bool native_resolution_inputs(const rsf_game_render_pass& pass) noexcept {
         pass.output_rect[0]==0 && pass.output_rect[1]==0 &&
         uint32_t(pass.output_rect[2])==pass.camera.output_width && uint32_t(pass.output_rect[3])==pass.camera.output_height;
 }
-bool configure_native_resolution(const rsf_game_host_services& host,const rsf_game_render_pass& frame,void* context) noexcept try {
+bool configure_native_resolution(const rsf_game_host_services& host,const rsf_game_render_pass& frame,void* context,
+    bool (*reserve)(const rsf_game_render_pass&)) noexcept try {
     if (state.input || state.output || !context || !host.render_config || !host.process_upscale) return false;
     const auto cpu=current_cpu_identity();
     if (cpu.session!=frame.session_id || cpu.source!=frame.source_frame_id || cpu.submission!=frame.submission_id || !cpu_source_is_current(cpu)) return false;
@@ -178,6 +180,15 @@ bool configure_native_resolution(const rsf_game_host_services& host,const rsf_ga
     for (float value:state.native_ratio) if (!std::isfinite(value) || value<=0 || value>1) return false;
     state.input_ratio[0]=float(config.render_width)/float(width); state.input_ratio[1]=float(config.render_height)/float(height);
     state.input_active=static_cast<unsigned char>(config.render_width!=width || config.render_height!=height);
+    if (state.input_active) {
+        planning=frame; planning.role=RSF_GAME_RENDER_SR;
+        planning.camera.output_width=width; planning.camera.output_height=height;
+        planning.camera.render_width=config.render_width; planning.camera.render_height=config.render_height;
+        planning.render_rect[0]=planning.render_rect[1]=planning.output_rect[0]=planning.output_rect[1]=0;
+        planning.render_rect[2]=int32_t(config.render_width); planning.render_rect[3]=int32_t(config.render_height);
+        planning.output_rect[2]=int32_t(width); planning.output_rect[3]=int32_t(height);
+        if (!reserve || !preflight_output_resolution(planning,context) || !reserve(planning)) { state={}; return false; }
+    }
     state.input=true; owners.fetch_add(1,std::memory_order_acq_rel);
     for (unsigned i=0;i<2;++i) {
         state.ratio_owned[i]=true;
@@ -204,8 +215,36 @@ bool native_resolution_write() noexcept {
     state.output_activation=true;
     return write(targets+0xfe5,off);
 }
+bool preflight_output_resolution(const rsf_game_render_pass& pass,void* context,NativeOutputOwner* output) noexcept {
+    if (output) *output={};
+    uintptr_t engine{},renderer{},chain{},window{},graph{},view{},manager{},triangle{};
+    uint32_t frame{},disabled{},width{},height{},dirty{};
+    float raster[6]{},jitter[2]{};
+    const auto base=image(),targets=base+targets_rva;
+    if (!context || !native_context(engine) || !read(base+0x38e13a0,renderer) || renderer!=base+0x3a25d10 ||
+        !read(renderer+0x50,chain) || chain!=uintptr_t(context) ||
+        !read(renderer+0x70,chain) || chain!=uintptr_t(pass.swapchain) ||
+        !read(renderer+0x58,window) || window!=pass.window_key ||
+        !read(base+0x32dd338,graph) || !graph || !read(graph+0x140,view) || view!=pass.view_key ||
+        !read(base+state_rva+0x98,frame) || frame!=pass.native_frame ||
+        !read(base+state_rva+0x78,width) || width!=pass.camera.output_width ||
+        !read(base+state_rva+0x7c,height) || height!=pass.camera.output_height ||
+        !read(targets+0xfe8,disabled) || disabled ||
+        !read(engine+0x1b70+0x90,raster) || !read(engine+0x1b70,dirty) ||
+        !read(base+state_rva+4,jitter) || !read(base+0x3e5e4b0,manager) || !manager) return false;
+    NativeOutputOwner facts{}; facts.context=engine; facts.manager=manager;
+    unsigned i{};
+    for (auto offset:{0x28u,0x38u,0x40u}) {
+        if (!read(manager+offset,triangle) || !triangle) return false;
+        facts.triangles[i++]=triangle;
+    }
+    for (float v:raster) if (!std::isfinite(v)) return false;
+    for (float v:jitter) if (!std::isfinite(v)) return false;
+    if (output) *output=facts;
+    return true;
+}
 bool begin_output_resolution(const NativeDepthSnapshot& snapshot,const rsf_game_render_pass& pass) noexcept {
-    if (state.output || !native_depth_snapshot_current(snapshot)) return false;
+    if (state.output || !(snapshot.raster_valid ? native_raster_snapshot_current(snapshot) : native_depth_snapshot_current(snapshot))) return false;
     if (!state.input) {
         state={}; state.native_frame=pass.native_frame; state.window=pass.window_key;
         state.width=pass.camera.output_width; state.height=pass.camera.output_height;

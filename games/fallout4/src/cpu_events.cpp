@@ -131,20 +131,74 @@ bool same_state(const NativeState& a, const NativeState& b) {
         a.receiver == b.receiver && a.flags == b.flags && a.menu == b.menu &&
         a.polling_enabled == b.polling_enabled;
 }
-bool native_cycle(WorkerCycle& proof, NativeState& native, bool joining) {
+enum class CyclePhase : unsigned {
+    other, bound_current, reserve_entry, reserve_return, sampled, consumer_begin,
+    frame_return, bind_return, consumer_return, job_complete, swap_claim,
+    join_entry, join_return, world_adopt, present
+};
+bool native_cycle(WorkerCycle& proof, NativeState& native, bool joining, CyclePhase phase=CyclePhase::other) {
     uintptr_t worker{},vtable{},destructor{},entry{},renderer{},window{};
     unsigned char running{},exiting{}; uint32_t mode{};
-    if (!state(native,nullptr,proof.main) || !read(image()+0x32a12f0,worker) || worker!=image()+0x32a1320 ||
-        !read(worker,vtable) || vtable!=image()+0x255e3b8 ||
-        !read(vtable,destructor) || destructor!=image()+0xbd72e0 || !read(vtable+8,entry) || entry!=image()+0xbd7430 ||
-        !read(worker+0x58,proof.start_event) || !proof.start_event ||
-        !read(worker+0x60,proof.complete_event) || !proof.complete_event || !read(worker+0x68,mode) || (mode!=1 && !(joining && mode==0)) ||
-        !read(worker+0x6e,running) || !running || !read(worker+0x6c,exiting) || exiting ||
-        !read(native.main+0x30,window) || !window || !read(image()+0x38e13a0,renderer) || renderer!=image()+0x3a25d10 ||
-        !read(renderer+0x58,proof.window) || proof.window!=window || !read(image()+0x3d87238,proof.frame)) return false;
+    const auto expected=proof;
+    StateRead state_stage=StateRead::not_called;
+    uint32_t reached{},passed{},first{};
+    const auto test=[&](unsigned index,bool value) {
+        reached|=uint32_t(1)<<index;
+        if (value) passed|=uint32_t(1)<<index;
+        else first=index;
+        return value;
+    };
+    // Each term retains the original evaluation/read order and short circuit.
+    if (!test(0,state(native,&state_stage,proof.main)) || !test(1,read(image()+0x32a12f0,worker)) || !test(2,worker==image()+0x32a1320) ||
+        !test(3,read(worker,vtable)) || !test(4,vtable==image()+0x255e3b8) ||
+        !test(5,read(vtable,destructor)) || !test(6,destructor==image()+0xbd72e0) || !test(7,read(vtable+8,entry)) || !test(8,entry==image()+0xbd7430) ||
+        !test(9,read(worker+0x58,proof.start_event)) || !test(10,bool(proof.start_event)) ||
+        !test(11,read(worker+0x60,proof.complete_event)) || !test(12,bool(proof.complete_event)) || !test(13,read(worker+0x68,mode)) || !test(14,!(mode!=1 && !(joining && mode==0))) ||
+        !test(15,read(worker+0x6e,running)) || !test(16,bool(running)) || !test(17,read(worker+0x6c,exiting)) || !test(18,!exiting) ||
+        !test(19,read(native.main+0x30,window)) || !test(20,bool(window)) || !test(21,read(image()+0x38e13a0,renderer)) || !test(22,renderer==image()+0x3a25d10) ||
+        !test(23,read(renderer+0x58,proof.window)) || !test(24,proof.window==window) || !test(25,read(image()+0x3d87238,proof.frame))) {
+        // No new native reads. A failed read can leave an old/partial value;
+        // reached/passed and known bits, never its scalar alone, establish it.
+        static std::array<std::atomic<uint64_t>,15> stages{};
+        static std::atomic<uint32_t> budget{};
+        const auto stage=first ? first : 26+unsigned(state_stage);
+        const auto bit=uint64_t(1)<<stage;
+        const auto index=unsigned(phase);
+        if (host.log && index<stages.size() && !(stages[index].fetch_or(bit,std::memory_order_relaxed)&bit) &&
+            budget.fetch_add(1,std::memory_order_relaxed)<32) {
+            const auto error=GetLastError();
+            constexpr const char* phases[]{"other","bound-current","reserve-entry","reserve-return","sampled","consumer-begin",
+                "frame-return","bind-return","consumer-return","job-complete","swap-claim","join-entry","join-return","world-adopt","present"};
+            const auto known=[&](unsigned read_bit) { return unsigned((passed&(uint32_t(1)<<read_bit))!=0); };
+            char text[1700]{};
+            std::snprintf(text,sizeof(text),
+                "Fallout4 native-cycle refusal phase=%s first=%u state_stage=%u reached=0x%x passed=0x%x joining=%u source=%llu thread_source=%llu worker_source=%llu expected_native=%u frame_known=%u native=%u depths=%u/%u/%u/%u state_known=0x%x main=%p expected_main=%p manager=%p queue=%p receiver=%p menu=%u polling=%u flags=%u,%u,%u,%u,%u,%u,%u,%u worker_known=%u worker=%p vtable_known=%u vtable=%p destructor_known=%u destructor=%p run_known=%u run=%p start_known=%u start=%p complete_known=%u complete=%p mode_known=%u mode=%u running_known=%u running=%u exit_known=%u exit=%u main_window_known=%u main_window=%p renderer_known=%u renderer=%p render_window_known=%u render_window=%p",
+                phases[index],first,unsigned(state_stage),reached,passed,unsigned(joining),
+                static_cast<unsigned long long>(expected.source),static_cast<unsigned long long>(identity.source),static_cast<unsigned long long>(worker_source),
+                expected.frame,known(25),proof.frame,idle_depth,swap_depth,job_depth,wrapper_depth,
+                (unsigned(state_stage)>unsigned(StateRead::main_read)?1u:0u) |
+                (unsigned(state_stage)>unsigned(StateRead::manager_read)?2u:0u) |
+                (unsigned(state_stage)>unsigned(StateRead::polling_read)?4u:0u) |
+                (unsigned(state_stage)>unsigned(StateRead::queue_read)?8u:0u) |
+                (unsigned(state_stage)>unsigned(StateRead::receiver_read)?16u:0u) |
+                (unsigned(state_stage)>unsigned(StateRead::flags_read)?32u:0u) |
+                (unsigned(state_stage)>unsigned(StateRead::menu_read)?64u:0u),
+                reinterpret_cast<void*>(native.main),reinterpret_cast<void*>(expected.main),reinterpret_cast<void*>(native.manager),
+                reinterpret_cast<void*>(native.queue),reinterpret_cast<void*>(native.receiver),unsigned(native.menu),unsigned(native.polling_enabled),
+                unsigned(native.flags[0]),unsigned(native.flags[1]),unsigned(native.flags[2]),unsigned(native.flags[3]),
+                unsigned(native.flags[4]),unsigned(native.flags[5]),unsigned(native.flags[6]),unsigned(native.flags[7]),
+                known(1),reinterpret_cast<void*>(worker),known(3),reinterpret_cast<void*>(vtable),known(5),reinterpret_cast<void*>(destructor),known(7),reinterpret_cast<void*>(entry),
+                known(9),reinterpret_cast<void*>(proof.start_event),known(11),reinterpret_cast<void*>(proof.complete_event),known(13),mode,
+                known(15),unsigned(running),known(17),unsigned(exiting),known(19),reinterpret_cast<void*>(window),known(21),reinterpret_cast<void*>(renderer),known(23),reinterpret_cast<void*>(proof.window));
+            try { host.log(host.user,text); } catch (...) {}
+            SetLastError(error);
+        }
+        return false;
+    }
     proof.main=native.main; proof.worker=worker; proof.manager=native.manager; proof.queue=native.queue; proof.receiver=native.receiver;
     return true;
 }
+
 Pending ticket_pending(const Future& value) {
     Pending p{}; const auto& f=value.facts;
     p.source=f.cpu.source; p.generation=f.generation; p.raw=f.raw; p.sample_begin=f.poll_begin; p.frequency=f.cpu.frequency;
@@ -524,7 +578,7 @@ bool bound_current_valid(const RenderCycle& c, bool strict_raw) noexcept {
     const bool state_valid=state(native,nullptr,c.key.main) && same_state(native,c.state);
     const bool cursor_read=state_valid && read(native.receiver+8,cursor);
     auto proof=c.key;
-    const bool cycle_valid=native_cycle(proof,cycle_state,c.joining) && proof==c.key && same_state(cycle_state,c.state);
+    const bool cycle_valid=native_cycle(proof,cycle_state,c.joining,CyclePhase::bound_current) && proof==c.key && same_state(cycle_state,c.state);
     const bool queue_read=cycle_valid && read(cycle_state.queue+0x1490,queued);
     std::lock_guard lock(worker_guard);
     if (!enabled.load() || current_render.key!=c.key || current_render.invalid ||
@@ -638,7 +692,7 @@ bool reserve_worker_poll(void* manager, uintptr_t caller, uint64_t& generation, 
     const auto c=render_copy(); auto proof=c.key; NativeState native{};
     const auto tid=GetCurrentThreadId();
     const bool worker_call=caller==image()+0xc34ec8;
-    const bool native_valid_before=worker_call && native_cycle(proof,native,false);
+    const bool native_valid_before=worker_call && native_cycle(proof,native,false,CyclePhase::reserve_entry);
     uint32_t queued{},consumed{};
     const bool binding_unchanged=!c.binding.source || (c.binding.bound && c.binding.source==c.cpu.source &&
         same_state(c.binding.state,native) && raw_revision.load()==c.binding.raw &&
@@ -697,7 +751,7 @@ bool reserve_worker_poll(void* manager, uintptr_t caller, uint64_t& generation, 
         after=current_render;
     }
     proof=copy.facts.predecessor;
-    const bool native_valid=sent && enabled.load() && native_cycle(proof,native,after.joining) &&
+    const bool native_valid=sent && enabled.load() && native_cycle(proof,native,after.joining,CyclePhase::reserve_return) &&
         proof==copy.facts.predecessor && same_state(native,copy.state) && !raw_writers.load() &&
         raw_revision.load()==revision && polls.load()==1 && poll_generation.load()==generation;
     bool armed=false,unsafe_bound=false;
@@ -722,7 +776,7 @@ void sample_worker_poll(uint64_t generation, uint64_t began) {
     const auto f=future_copy();
     if (!worker_source || f.facts.cpu.source!=worker_source) return;
     const auto c=render_copy(); auto proof=f.facts.predecessor; NativeState native{}; uint32_t cursor{};
-    const bool valid=enabled.load() && native_cycle(proof,native,c.joining) && proof==f.facts.predecessor &&
+    const bool valid=enabled.load() && native_cycle(proof,native,c.joining,CyclePhase::sampled) && proof==f.facts.predecessor &&
         same_state(native,f.state) && polls.load()==1 && !raw_writers.load() &&
         read(native.queue+0x1490,cursor);
     Future sampled{}; bool send=false;
@@ -773,11 +827,11 @@ void downstream_receipt(const char* phase, const Future& f, const WorkerCycle& p
         unsigned(f.facts.callback_inflight),unsigned(f.facts.callback_returned),unsigned(f.facts.native_poll_started),unsigned(f.reserve_announced));
     try { host.log(host.user,text); } catch (...) {}
 }
-bool worker_consumer_proof(const Future& f, WorkerCycle& proof, uint32_t& cursor, bool before_bind, PhaseChecks* receipt = nullptr) {
+bool worker_consumer_proof(const Future& f, WorkerCycle& proof, uint32_t& cursor, bool before_bind, PhaseChecks* receipt = nullptr, CyclePhase phase=CyclePhase::consumer_begin) {
     const auto c=render_copy(); NativeState native{}; PhaseChecks ignored{};
     auto& trace=receipt ? *receipt : ignored;
     proof=f.facts.predecessor;
-    return trace.test(0,enabled.load()) && trace.test(1,native_cycle(proof,native,c.joining)) &&
+    return trace.test(0,enabled.load()) && trace.test(1,native_cycle(proof,native,c.joining,phase)) &&
         trace.test(2,proof==f.facts.predecessor) && trace.test(3,same_state(native,f.state)) &&
         trace.test(4,!polls.load()) && trace.test(5,(trace.generation=poll_generation.load())==f.facts.generation) &&
         trace.test(6,(!before_bind || (!raw_writers.load() && raw_revision.load()==f.facts.raw))) &&
@@ -807,12 +861,12 @@ bool begin_worker_consumer(void* receiver, uintptr_t caller) {
     if (!begun.facts.frame_begun) { invalidate_worker(RSF_GAME_CPU_ABORT_STATE_CHANGED,true); return false; }
     const bool frame_sent=emit_identity(begun.facts.cpu,RSF_GAME_CPU_FRAME_BEGIN,0);
     const auto check=future_copy();
-    if (!frame_sent || !worker_consumer_proof(check,proof,cursor,true)) {
+    if (!frame_sent || !worker_consumer_proof(check,proof,cursor,true,nullptr,CyclePhase::frame_return)) {
         invalidate_worker(RSF_GAME_CPU_ABORT_STATE_CHANGED,false); return false;
     }
     const bool bound_sent=source_fact(ticket_pending(check),RSF_GAME_CPU_SOURCE_BIND);
     PhaseChecks trace{};
-    const bool still_valid=trace.test(11,bound_sent) && worker_consumer_proof(check,proof,cursor,true,&trace);
+    const bool still_valid=trace.test(11,bound_sent) && worker_consumer_proof(check,proof,cursor,true,&trace,CyclePhase::bind_return);
     bool refused=false;
     {
         std::lock_guard lock(worker_guard);
@@ -830,7 +884,7 @@ void end_worker_consumer() {
     const auto f=future_copy(); WorkerCycle proof{}; uint32_t cursor{};
     if (!worker_source || f.facts.cpu.source!=worker_source) return;
     PhaseChecks trace{};
-    const bool valid=worker_consumer_proof(f,proof,cursor,false,&trace);
+    const bool valid=worker_consumer_proof(f,proof,cursor,false,&trace,CyclePhase::consumer_return);
     bool refused=false;
     {
         std::lock_guard lock(worker_guard);
@@ -1054,7 +1108,7 @@ void observe_swap(void* main) {
         const auto f=future_copy(); auto proof=f.facts.predecessor; NativeState native{}; uint32_t cursor{},sequence{};
         proof.source=f.facts.cpu.source; proof.idle=idle_serial;
         PhaseChecks trace{};
-        const bool valid=trace.test(0,f.facts.active()) && trace.test(1,enabled.load()) && trace.test(2,native_cycle(proof,native,false)) &&
+        const bool valid=trace.test(0,f.facts.active()) && trace.test(1,enabled.load()) && trace.test(2,native_cycle(proof,native,false,CyclePhase::swap_claim)) &&
             trace.test(3,proof.main==uintptr_t(main)) && trace.test(4,same_state(native,f.state)) && trace.test(5,read(native.receiver+8,cursor)) &&
             trace.test(6,read(native.queue+0x1490,sequence)) && trace.test(7,sequence==cursor) && trace.test(8,!polls.load());
         trace.queue=sequence;
@@ -1107,7 +1161,7 @@ void observe_job_end(void* argument) {
     const auto f=future_copy();
     if (worker_source && f.facts.cpu.source==worker_source) {
         const auto current=render_copy(); proof=f.facts.predecessor; uint32_t cursor{}; PhaseChecks trace{};
-        const bool valid=trace.test(0,enabled.load()) && trace.test(1,native_cycle(proof,native,current.joining)) &&
+        const bool valid=trace.test(0,enabled.load()) && trace.test(1,native_cycle(proof,native,current.joining,CyclePhase::job_complete)) &&
             trace.test(2,proof==f.facts.predecessor) && trace.test(3,same_state(native,f.state)) &&
             trace.test(4,(trace.generation=poll_generation.load())==f.facts.generation) &&
             trace.test(5,read(native.receiver+8,cursor)) && trace.test(6,cursor==f.facts.cursor);
@@ -1156,7 +1210,7 @@ uint32_t observe_worker_join() {
         entry_trace.test(2,idle_depth==1) && entry_trace.test(3,!swap_depth) && entry_trace.test(4,c.swapped) &&
         entry_trace.test(5,c.closed) && entry_trace.test(6,c.tid==GetCurrentThreadId()) &&
         entry_trace.test(7,c.key.main==uintptr_t(idle_main)) && entry_trace.test(8,c.key.idle==idle_serial) &&
-        entry_trace.test(9,native_cycle(proof,native,false)) && entry_trace.test(10,proof==c.key);
+        entry_trace.test(9,native_cycle(proof,native,false,CyclePhase::join_entry)) && entry_trace.test(10,proof==c.key);
     const auto entry_proof=proof;
     if (selected) { std::lock_guard lock(worker_guard); if (current_render.key==c.key) current_render.joining=true; }
     SetLastError(error); const auto result=original_worker_join(); const auto native_error=GetLastError();
@@ -1165,7 +1219,7 @@ uint32_t observe_worker_join() {
     // nonnull mode1 branch that actually tail-calls WaitForSingleObjectEx.
     PhaseChecks trace{};
     const bool valid=trace.test(0,selected) && trace.test(1,enabled.load()) && trace.test(2,result==WAIT_OBJECT_0) &&
-        trace.test(3,native_cycle(proof,native,true)) && trace.test(4,proof==c.key) && trace.test(5,read(proof.worker+0x68,mode)) &&
+        trace.test(3,native_cycle(proof,native,true,CyclePhase::join_return)) && trace.test(4,proof==c.key) && trace.test(5,read(proof.worker+0x68,mode)) &&
         trace.test(6,mode==0) && trace.test(7,same_state(native,f.state)) && trace.test(8,read(native.receiver+8,cursor)) &&
         trace.test(9,cursor==f.facts.cursor) && trace.test(10,read(native.queue+0x1490,sequence)) && trace.test(11,sequence==cursor) &&
         trace.test(12,(trace.generation=poll_generation.load())==f.facts.generation);
@@ -1271,7 +1325,7 @@ bool begin_cpu_render() noexcept {
         (pending.source && invalid_pending()) || !drain_current_abort()) return false;
     auto f=future_copy(); WorkerCycle proof{}; NativeState native{}; uint32_t cursor{},sequence{};
     proof.session=identity.session; proof.source=identity.source; proof.idle=idle_serial; proof.main=uintptr_t(idle_main);
-    const bool native_valid=native_cycle(proof,native,false);
+    const bool native_valid=native_cycle(proof,native,false,CyclePhase::world_adopt);
     PhaseChecks trace{};
     const bool adoption_valid=trace.test(0,future_claimed) && trace.test(1,native_valid) && trace.test(2,same_state(native,f.state)) &&
         trace.test(3,!polls.load()) && trace.test(4,read(native.receiver+8,cursor)) && trace.test(5,read(native.queue+0x1490,sequence)) && trace.test(6,sequence==cursor);
@@ -1302,7 +1356,7 @@ bool begin_cpu_render() noexcept {
 bool begin_cpu_present_phase(const CpuIdentity& source, uint64_t native_frame, uint64_t window) noexcept {
     const bool source_current=cpu_source_is_current(source);
     const auto c=render_copy(); auto proof=c.key; NativeState native{};
-    const bool native_valid=native_cycle(proof,native,false);
+    const bool native_valid=native_cycle(proof,native,false,CyclePhase::present);
     const auto bits=predicate_bits(std::array<bool,11>{enabled.load(),source_current,c.constructed,!c.closed,!c.present,
         native_frame==c.key.frame,window==c.key.window,c.tid==GetCurrentThreadId(),native_valid,proof==c.key,same_state(native,c.state)});
     if (bits!=0x7ffu) { gate_receipt(2,bits,0x7ffu,c,proof,source); return false; }

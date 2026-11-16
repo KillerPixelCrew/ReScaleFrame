@@ -165,7 +165,9 @@ rsf_result prepare(const rsf_game_prepare_args* args) noexcept try {
         setup.motion.scale_x = setup.motion.scale_y = 1.0f;
         setup.motion.output_scale_x = setup.motion.output_scale_y = 1.0f;
         setup.colour_transport_default = 1;
-        setup.quality_choices = 0x1f; // Existing standard Native/Quality/Balanced/Performance/Ultra Performance controls.
+        // Reduction requires the independently negotiated recovery export.
+        // Older runtimes retain the standard Native control and native raster.
+        setup.quality_choices = GetProcAddress(runtime,"rsf_d3d11_host_reduced_frame") ? 0x1f : 1;
         setup.presentation_bridge = 3;
         setup.accept_window = rsf::fallout4::accept_window;
         // Implemented producer declarations for cold admission tests, not acceptance.

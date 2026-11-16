@@ -229,3 +229,48 @@ Present's eligibility/configuration/prepare outcome and provider state before
 and after it. Preserve all existing refusal and ordering checks. This update
 changes only research and ignored analytic data; no new source, build, process,
 device or visual experiment was performed.
+
+## Bounded default failure receipts, source freeze
+
+The next source-only change adds `Native failure stage=...` receipts in
+`native_fg.cpp`. Each of15 named stages logs at most once for the module
+lifetime, independently of debug settings. An absent logger does not consume
+the receipt. The sink is copied under the settings mutex and invoked after
+metadata locks are released. No new state queries, options, API, waits, tokens
+or admission behavior are introduced.
+
+| Stage | Existing failure boundary and detail |
+| --- | --- |
+| sr-prerequisite | First missing context1, frame2, source4 or camera-motion inclusion8 |
+| sr-token | Existing exact source-token lookup returned null |
+| sr-initialize | Existing shared transfer initialization refused |
+| sr-shared-evaluate | Deeper shared evaluation returned native-8; internal branch still unknown |
+| pace-dependency | Reservation read failed1, not Open2, invalid dependency4 or pending deadline8 |
+| pace-selection | Prospective source lacks an actual pacer or selection was denied |
+| pace-call | Existing pacing result failed; denied bit distinguishes a call that was not made |
+| render-owner | Existing owner was already failed before render-start admission; normal repeated starts remain silent |
+| render-cpu | Initial CPU read unknown or already failed |
+| render-prospective | Detail bits: not bound1, no verified post-update association2, substitute input4, incomplete mask7 bit8 |
+| render-input | Existing input/sample or simulation-start marker prerequisite absent |
+| render-derived-end | Existing prospective derived-end dispatch refused; copied masks precede that dispatch |
+| render-recheck | Existing post-dispatch CPU read unknown or failed |
+| render-markers | Required marker predecessor mask is in detail |
+| render-provider | Existing render-start marker result failed or did not mark; detail is marked0/1 |
+
+Pacing selection/call detail stores the selected pacing enum in the low bits,
+denied in bit16 and, for selection receipts, actual_pacer in bit17. A selection
+receipt with result0 can still mean no actual prospective pacer; it does not
+fabricate a failed SDK return. Session, provider generation, CPU facts and
+reservation each have explicit known flags. Unknown values are zero with known0.
+The render provider generation is captured only if the original short-circuited
+post-update comparison reaches its existing generation query; SR receipts do
+not add a query to populate it. CPU and reservation snapshots are the existing
+local reads, not refreshed diagnostics. A render-provider receipt alone cannot
+distinguish CPU marker admission from a provider return with the same result.
+
+The ignored `native-fg-failure-receipts-freeze-20261116.json` records hashes and
+source-only checks. The existing native/vendor call-site sequence, pacing and
+clock/wait call-site sequence were compared against HEAD and retained. This is
+not a compiled control-flow proof or a device test. Root owns the upcoming
+combined build and live measurement; the original source-begin/token failure
+and visual defects remain unresolved until discriminating receipts exist.

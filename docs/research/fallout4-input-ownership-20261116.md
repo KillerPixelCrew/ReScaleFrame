@@ -1799,3 +1799,38 @@ Runtime SHA256 `22830370ac079440177912e1b77680b37d55b7b1cd43915b6e2a68a4f70ce772
 The source hashes match the frozen manifest. This is compiled/contract-tested,
 not yet native-tested; bound-source adoption, reason4, FG and complete latency
 remain unaccepted until the next owned native run.
+
+
+### Internal native-cycle failure attribution, next diagnostic batch
+
+Root's final PID56312 log from the built intention batch records repeated FG active/inactive transitions, then `consumer-return`/`bind-return` failures at their `native_cycle` term. These rows do not identify which internal native predicate failed. Later `swap-claim` reached0xeff/passed0xe7f identifies a different, concrete comparison. This diagnostic source batch does not repair either failure or establish complete FG/latency acceptance. It does not change the eight frozen recovery-adapter files or their unbuilt status.
+
+`native_cycle` now wraps its existing ordered short-circuit terms in a local scalar receipt. It retains all thirteen native `read` expressions in the same order, the original `state` reads and guards, mode/joining rule, output assignments and caller transitions. Each failure reports the first false term plus reached/passed masks; successful calls add no receipt. The existing `StateRead` result is copied through its optional receipt pointer without another engine read. A known bit is set only after that field's existing read succeeded. An unknown scalar can contain an incoming or partially copied value and must not be interpreted as an observed zero or actual owner.
+
+| Internal terms | Meaning |
+| --- | --- |
+| 0 | Existing Main/manager/polling/queue/receiver/vtable/flags/menu state eligibility; `state_stage` names its existing substage numerically |
+| 1/2 | Worker global read / exact worker instance |
+| 3/4 | Worker vtable read / exact vtable255E3B8 |
+| 5/6,7/8 | Slot0 destructor read/match BD72E0; slot1 Run read/match BD7430 |
+| 9/10,11/12 | Start and completion event read/nonnull |
+| 13/14 | Worker mode read / mode1, or mode0 only in existing joining case |
+| 15/16,17/18 | Running read/nonnull and exit read/false |
+| 19/20 | Main+30 window read/nonnull |
+| 21/22,23/24 | Exact renderer global read/match, renderer+58 window read/equality |
+| 25 | Native frame read |
+
+The bounded line includes the already supplied proof source/expected frame, available TLS source/worker source/depths, joining argument, existing native scalars and known flags. `state_known` bits0..6 correspond to Main, manager, polling byte, queue, receiver, flags and menu, derived only from the reached `StateRead` result. Existing caller sites receive diagnostic phase labels such as reserve-entry/return, consumer-begin, FRAME-return, BIND-return, consumer-return, job-complete, join-entry/return, swap-claim, World-adopt and Present. These are adapter callback labels, not new engine events or core acceptance. First distinct internal stage per phase is deduplicated atomically; one global hard32-row cap prevents per-frame logging. Logging is outside the metadata mutex and preserves LastError; it does not reread native objects or call core admission.
+
+The later `swap-claim` mask difference is bit7, exactly `sequence==cursor` in `observe`, after successful reads of receiver+8 into cursor at bit5 and native queue+1490 into sequence at bit6. Bit8 `!polls` is not reached after that comparison fails. Bits9..11 can still be reached/passed in the separate metadata-locked conjunction before its stored `valid` boolean is tested; their presence does not imply the native sequence/cursor check passed. The actual helper claim at bit12 was not reached. Thus this row proves queue sequence and delivered/consumed cursor differ at the claim read, not that worker mode, native join, a particular timing race or core callback acknowledgement caused the difference. No generation/cursor retention or guard change follows from that observation alone.
+
+Ignored manifest `native-cycle-stage-diagnostics-freeze-20261116.json` records the CPU source hash and static checks: all26 terms retain their order, all13 native read expressions and image calls retain their order/count, `state` and both guard bodies match HEAD, metadata lock scopes contain no native reads or host callbacks, and all56 new format arguments match the receipt. Worker helper/tests and all eight adapter hashes remain unchanged. `git diff --check` passes. No build, test execution, process query, REA, attachment, game/UI action or deployment was performed. Actual internal failed predicate attribution remains pending root compilation and the next bounded live receipt; the loaded trial binary was not changed.
+
+
+### Root combined recovery/CPU diagnostic build, undeployed freeze
+
+The later root combined Release VS2026 gate `verify-reduced-recovery-20261116.log` passed224/14,238 total in113.57seconds with Rust fmt/Clippy clean. The handoff and camera contracts each passed0.01seconds; depth_scale, auxiliary and host checks passed0.04/0.10/0.07seconds. This builds the bounded internal native-cycle receipts without a new actual failed-stage observation. Entry SHA256 is `9B5C79DF0B2DD2E5036B5DF1CC71BBCFF8773B1A124030B8746B40849F8D4E1F`; Runtime is `95CBC864DE2723D93E90F1651599F273ED5DFA970D89E763C452241AC49AC54C`. Authority is `.local/fallout4-research/reduced-recovery-built-20261116.json`.
+
+Explicit hidden recovery r4 passed actual temporal evaluation, real pre-submit failure/spatial recovery, no-camera/frozen-settings recovery and suspended retirement. The separate hidden marker check passed. Three fixture-only failures/corrections and their original logs remain in the [recovery note](fallout4-native-reduced-recovery-20261116.md): shadowed local, cold-reservation expectation and missing reactivation planning. Shipping artifact hashes remained unchanged across them. Neither hidden check supplies native moving-input continuity, physical scanout or measured latency.
+
+This recovery/diagnostic build is undeployed at this freeze. PID56312 remains visually rejected with flicker and missing full final captures; repeated FG transitions and bounded source snapshots are not stable FG or latency acceptance. Native consumer/BIND predicate attribution and the swap-claim cursor mismatch remain pending actual receipts. No timing-based repair, fabricated event, source-generation relaxation or new acceptance follows from this build. Full native shader/moving/TAA-history/FG/latency validation is still required before the deferred compatibility phase.

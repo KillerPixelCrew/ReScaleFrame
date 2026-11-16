@@ -13,6 +13,7 @@
 #include <rescaleframe/srv_format.h>
 #include "native_regions.h"
 #include "native_reinsert.h"
+#include "native_sr_completion.h"
 #include <d3d11.h>
 #include <cstring>
 #include <cstddef>
@@ -51,6 +52,7 @@ bool same_depth_layout(const rsf_game_depth_domains& a, const rsf_game_depth_dom
 }
 // The existing pipeline has one active immediate context. This record shares that ownership.
 History history;
+thread_local bool native_destinations_ordered = false;
 std::atomic<uint32_t> native_enabled{0};
 std::mutex surface_guard;
 rsf_game_render_config surface_config{};
@@ -122,6 +124,10 @@ struct Bindings {
 extern "C" RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_native_sr_evaluate(void* context,
     const rsf_game_render_pass* pass) try
 {
+    // Providers receive the pipeline's private output, not native destinations.
+    // Native publication occurs only in native_reinsert on this immediate stream.
+    // Cross-API uploads copy native inputs into owned shared slots before dispatch.
+    native_destinations_ordered = true;
     if (!context || !pass || pass->struct_size < sizeof(*pass) || pass->role != RSF_GAME_RENDER_SR ||
         !pass->camera_valid || !pass->color_input || !pass->color_output || !pass->depth || !pass->motion ||
         pass->render_rect[0] < 0 || pass->render_rect[1] < 0 || pass->output_rect[0] < 0 || pass->output_rect[1] < 0)
@@ -225,7 +231,9 @@ extern "C" RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_native_sr_evaluate(void*
     std::memcpy(history.output_rect, pass->output_rect, sizeof(history.output_rect));
     return RSF_DLSS_PIPELINE_OK;
 }
-catch (...) { history = {}; return RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED; }
+catch (...) { native_destinations_ordered = false; history = {}; return RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED; }
+
+bool rsf_native_sr_native_destinations_ordered() { return native_destinations_ordered; }
 
 
 namespace {

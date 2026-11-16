@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <rescaleframe/depth_scale.h>
+#include "../runtime/graphics/src/depth_scale_private.h"
 #include <d3d11.h>
 #include <wrl/client.h>
 #include <algorithm>
@@ -57,6 +58,16 @@ int main() {
     check(rsf_depth_scale_create(deferred.Get(), &setup, &scale) == RSF_DEPTH_SCALE_INVALID_ARGUMENT && !scale, "deferred context refused");
     check(rsf_depth_scale_create(context.Get(), &setup, &scale) == 0 && scale, "create transaction");
     if (!scale) return 1;
+    const D3D11_VIEWPORT reserve_viewport{1,2,7,9,.2f,.8f}; context->RSSetViewports(1,&reserve_viewport);
+    check(rsf_depth_scale_reserve(scale,texture.Get()),"allocation-only depth readiness");
+    D3D11_VIEWPORT unchanged{}; UINT viewport_count=1; context->RSGetViewports(&viewport_count,&unchanged);
+    check(!std::memcmp(&unchanged,&reserve_viewport,sizeof(unchanged)) && read(device.Get(),context.Get(),texture.Get())==original,
+        "reserve leaves native packed contents and viewport unchanged");
+    auto invalid_desc=d; invalid_desc.Format=DXGI_FORMAT_R32_TYPELESS;
+    ComPtr<ID3D11Texture2D> unsupported;
+    check(SUCCEEDED(device->CreateTexture2D(&invalid_desc,nullptr,&unsupported)),"unsupported depth reserve fixture");
+    check(!rsf_depth_scale_reserve(scale,unsupported.Get()) && read(device.Get(),context.Get(),texture.Get())==original,
+        "unsupported reserve refuses without changing native contents");
     rsf_depth_scale_frame frame{sizeof(frame), RSF_DEPTH_SCALE_ABI_VERSION, texture.Get(), {0, 0, 16, 16}, {0, 0, 16, 16}, {0, 0}};
     check(rsf_depth_scale_commit(scale) == RSF_DEPTH_SCALE_INVALID_ARGUMENT, "commit requires prepared image");
     frame.struct_size--;

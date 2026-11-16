@@ -344,7 +344,7 @@ bool read_native_inputs(NativeInputs& output, void (*report)(const char*), const
     std::memcpy(pass.camera.previous_jitter_pixels,history.previous_jitter,sizeof(history.previous_jitter));
     std::memcpy(pass.render_rect,raster.crop,sizeof(pass.render_rect));
     pass.output_rect[2]=int32_t(before.width); pass.output_rect[3]=int32_t(before.height);
-    pass.color_input=pass.color_output=result.colour.Get(); pass.depth=result.depth.Get(); pass.motion=result.motion.Get();
+    pass.color_input=pass.color_output=pass.color_output_readable=result.colour.Get(); pass.depth=result.depth.Get(); pass.motion=result.motion.Get();
     pass.swapchain=result.chain.Get(); pass.camera_valid=1;
     // Native velocity encodes previous-current UV in the native camera's
     // viewport metric. The steady-history crop scales that displacement.
@@ -357,6 +357,85 @@ bool read_native_inputs(NativeInputs& output, void (*report)(const char*), const
     if (report && !(reader_reported.fetch_or(bit,std::memory_order_relaxed)&bit)) try { report("Fallout4 reader stage=exception"); } catch (...) {}
     return false;
 }
+
+bool read_native_raster_inputs(NativeInputs& output, const rsf_game_render_pass& frame,
+    const NativeDepthSnapshot* producer) noexcept try {
+    output={}; NativeInputs result; NativeState before{},after{};
+    const auto base=image(),targets=base+targets_rva;
+    uintptr_t graph{},view{},confirmed_graph{},confirmed_view{};
+    uint32_t colour_slot{},motion_slot{},depth_slot{},confirmed_colour{},confirmed_motion{},confirmed_depth{};
+    NativeTarget colour{},motion{},confirmed_colour_target{},confirmed_motion_target{};
+    uintptr_t depth_texture{},depth_srv{},confirmed_depth_texture{},confirmed_depth_srv{};
+    if (!verified.load(std::memory_order_acquire) || !owner(before) ||
+        frame.native_frame!=before.frame || frame.window_key!=before.window ||
+        reinterpret_cast<uintptr_t>(frame.swapchain)!=before.chain ||
+        !read(base+world_graph_pointer,graph) || !graph || !read(graph+0x140,view) || view!=frame.view_key ||
+        (producer && (!native_raster_snapshot_current(*producer) || producer->native_frame!=before.frame ||
+            producer->world_camera_key!=view || producer->device_context_key!=before.context ||
+            producer->window_key!=before.window || producer->chain_key!=before.chain))) return false;
+    if (!read(targets+0xdf4+4,colour_slot) || colour_slot>=101 ||
+        !read(targets+0xdf4+32*4,motion_slot) || motion_slot>=101 ||
+        !read(targets+0xf84+4,depth_slot) || depth_slot>=13 ||
+        !read(before.renderer+0xa58+size_t(colour_slot)*0x30,colour) ||
+        !read(before.renderer+0xa58+size_t(motion_slot)*0x30,motion) ||
+        !read(before.renderer+0x1d48+size_t(depth_slot)*0x98,depth_texture) ||
+        !read(before.renderer+0x1d48+size_t(depth_slot)*0x98+0x88,depth_srv)) return false;
+    result.context=reinterpret_cast<ID3D11DeviceContext*>(before.context);
+    result.chain=reinterpret_cast<IDXGISwapChain*>(before.chain);
+    ComPtr<ID3D11Device> device,chain_device;
+    result.context->GetDevice(&device);
+    DXGI_SWAP_CHAIN_DESC swap{};
+    if (result.context->GetType()!=D3D11_DEVICE_CONTEXT_IMMEDIATE ||
+        !same_object(device.Get(),reinterpret_cast<ID3D11Device*>(before.device)) ||
+        FAILED(result.chain->GetDevice(IID_PPV_ARGS(&chain_device))) || !same_object(device.Get(),chain_device.Get()) ||
+        FAILED(result.chain->GetDesc(&swap)) || swap.OutputWindow!=reinterpret_cast<HWND>(before.window) ||
+        swap.BufferDesc.Width!=before.width || swap.BufferDesc.Height!=before.height ||
+        !accept_window(nullptr,reinterpret_cast<void*>(before.window))) return false;
+    ViewFacts colour_facts{},motion_facts{},depth_facts{};
+    if (!view_texture(colour.srv,colour.texture,device.Get(),DXGI_FORMAT_R11G11B10_FLOAT,result.colour,colour_facts) ||
+        !view_texture(motion.srv,motion.texture,device.Get(),DXGI_FORMAT_R16G16_FLOAT,result.motion,motion_facts) ||
+        !view_texture(reinterpret_cast<ID3D11ShaderResourceView*>(depth_srv),reinterpret_cast<ID3D11Texture2D*>(depth_texture),
+            device.Get(),DXGI_FORMAT_R24_UNORM_X8_TYPELESS,result.depth,depth_facts) || !colour.rtv) return false;
+    ComPtr<ID3D11Resource> resource; colour.rtv->GetResource(&resource);
+    D3D11_RENDER_TARGET_VIEW_DESC rtv{}; colour.rtv->GetDesc(&rtv);
+    D3D11_TEXTURE2D_DESC c{},d{},m{};
+    if (!same_object(resource.Get(),result.colour.Get()) || rtv.Format!=DXGI_FORMAT_R11G11B10_FLOAT ||
+        rtv.ViewDimension!=D3D11_RTV_DIMENSION_TEXTURE2D || rtv.Texture2D.MipSlice ||
+        !extent(result.colour.Get(),before.width,before.height,c) || c.Format!=DXGI_FORMAT_R11G11B10_FLOAT ||
+        !extent(result.depth.Get(),before.width,before.height,d) || d.Format!=DXGI_FORMAT_R24G8_TYPELESS ||
+        !extent(result.motion.Get(),before.width,before.height,m) || m.Format!=DXGI_FORMAT_R16G16_FLOAT ||
+        c.SampleDesc.Quality || d.SampleDesc.Quality || m.SampleDesc.Quality) return false;
+    // No inactive-consumer predicate has been established. Require all three
+    // native allocations, independently, rather than omitting a missing field.
+    auxiliary(before,device.Get(),14,result.refraction_normals);
+    auxiliary(before,device.Get(),30,result.pipboy);
+    auxiliary(before,device.Get(),15,result.vats);
+    if (!result.refraction_normals || !result.pipboy || !result.vats) return false;
+    if (!owner(after) || !detail::same_native_owner(before,after) ||
+        !read(base+world_graph_pointer,confirmed_graph) || confirmed_graph!=graph ||
+        !read(graph+0x140,confirmed_view) || confirmed_view!=view ||
+        !read(targets+0xdf4+4,confirmed_colour) || confirmed_colour!=colour_slot ||
+        !read(targets+0xdf4+32*4,confirmed_motion) || confirmed_motion!=motion_slot ||
+        !read(targets+0xf84+4,confirmed_depth) || confirmed_depth!=depth_slot ||
+        !read(before.renderer+0xa58+size_t(colour_slot)*0x30,confirmed_colour_target) ||
+        std::memcmp(&colour,&confirmed_colour_target,sizeof(colour)) ||
+        !read(before.renderer+0xa58+size_t(motion_slot)*0x30,confirmed_motion_target) ||
+        std::memcmp(&motion,&confirmed_motion_target,sizeof(motion)) ||
+        !read(before.renderer+0x1d48+size_t(depth_slot)*0x98,confirmed_depth_texture) || confirmed_depth_texture!=depth_texture ||
+        !read(before.renderer+0x1d48+size_t(depth_slot)*0x98+0x88,confirmed_depth_srv) || confirmed_depth_srv!=depth_srv ||
+        (producer && (producer->depth_key!=depth_texture || !native_raster_snapshot_current(*producer)))) return false;
+    auto& pass=result.pass; pass=frame; pass.role=RSF_GAME_RENDER_SR; pass.pass_key=base+0x21fa283;
+    pass.flags|=RSF_GAME_RENDER_NO_FG; pass.screen=RSF_SCREEN_UNKNOWN;
+    pass.camera={}; pass.camera_valid=0; pass.depth_domains={};
+    pass.color_input=pass.color_output=pass.color_output_readable=result.colour.Get();
+    pass.depth=result.depth.Get(); pass.motion=result.motion.Get(); pass.swapchain=result.chain.Get();
+    pass.output_rect[0]=pass.output_rect[1]=0;
+    pass.output_rect[2]=int32_t(before.width); pass.output_rect[3]=int32_t(before.height);
+    pass.camera.output_width=before.width; pass.camera.output_height=before.height;
+    if (producer) std::memcpy(pass.render_rect,producer->render_rect,sizeof(pass.render_rect));
+    else std::memcpy(pass.render_rect,pass.output_rect,sizeof(pass.render_rect));
+    output=std::move(result); return true;
+} catch (...) { return false; }
 
 bool read_native_framebuffer(NativeFramebuffer& output, void (*report)(const char*)) noexcept try {
     output={};
