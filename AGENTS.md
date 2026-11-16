@@ -70,6 +70,41 @@ One implementation serves every game and every vendor.
 
 ## Research and tool setup
 
+### Reference completeness and shader coverage
+
+Before designing a render integration from a working reference, inventory its full relevant
+implementation, not selected hook or SDK snippets. Pin the revision and consumed dependencies;
+account for every subsystem, feature and shader family, including shared code, settings,
+lifecycle, failure recovery, compatibility restrictions and tests. Trace the complete frame
+from native producers through reconstruction and final presentation. Maintain a comparison of
+reference mechanisms against RSF: implemented, deliberately different with evidence, missing,
+or unverified. A file list alone is not a semantic inventory. Reuse a recorded inventory while
+its revision and assumptions remain valid; reopen it when new evidence contradicts them.
+
+For shipped games, inspect the matching executable and native shader bytecode as well as
+reference source. Use REA when executable semantics require it, retaining actual tool evidence
+and failed approaches. An unavailable decompiler does not turn reference names into native
+proof. Shared engine ancestry, a nearby release, Address Library entries and matching strings
+are leads, not permission to reuse layouts, ABI, shader conventions or hook ordering.
+
+Every SR/FG integration requires a full shader and buffer coverage audit. Account for graphics
+and compute stages, permutations, actual resource bindings and formats, depth/motion writes,
+previous object/instance/bone/deformation history, transparent and forward paths, particles,
+water, volumes, UI and downstream consumers. Distinguish shader declarations from active draw
+bindings and valid zero motion from missing writes. Determine and implement verified required
+shader, buffer or producer repairs at their owner. Listing a missing input is not completing
+that repair; fabricated vectors or substituted current history do not close the gap.
+
+Native, reduced-resolution and failure paths all need valid output. Once a reduced frame is
+rendered, returning to native code is not proof that it will reconstruct the active rectangle.
+Verify recovery and every later consumer. SDK success, a green build, a stationary image or a
+single quality setting cannot establish visual or temporal correctness. Retain user-rejected
+images as failed acceptance evidence and test all required qualities, motion and transitions.
+Capture actual evaluation frames with matching source/view/resource identity; preparation-only
+or partial captures cannot prove the failing frame. Keep unresolved required coverage and
+repairs as completion blockers, without shrinking the user's goal or adopting a reference's
+unsupported-mod policy as RSF's delivery policy.
+
 Repository skills use the open [Agent Skills format](https://agentskills.io/specification) under `.agents/skills/<name>/SKILL.md`. Keep one shared skill source with standard YAML metadata. Clients with different discovery paths can load the linked file explicitly; do not fork its instructions per agent.
 
 Every reverse-engineering result must explain the question, why the approach was chosen, how it was found, the evidence, and where and when the runtime uses it. Record relevant fingerprints, source revisions, units, frame/view identity, resource lifetime, failed approaches, and uncertainty. Keep `games/<id>/engine.json`, research notes, and the implementation tracker consistent.
