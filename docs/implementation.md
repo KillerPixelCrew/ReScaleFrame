@@ -11,6 +11,10 @@ The complete Community Shaders ownership inventory and independent Claude
 inventory now cover pinned revision e0e7115 and all four consumed dependencies.
 The [reconciled inventory](research/fallout4-community-shaders-inventory-root-20261116.md)
 records supporting passes, shader changes and recovery beyond the SR call.
+The user-supplied [Fallout4 address-library check](research/fallout4-address-library-20261116.md)
+adds the actual1.11.240 database, both Ryan-rsm-McKenzie upstream references and
+12 matching AE call targets. Version-specific IDs confirm the previous1.11.221
+offset correction; no production offset or F4SE dependency changed.
 The [shader/buffer audit](research/fallout4-full-shader-buffer-audit-20261116.md)
 accounts for3939 native records, including138 unnamed HS/DS, with explicit
 motion/history gaps and required producer/binding work. This is offline source
