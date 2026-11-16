@@ -72,7 +72,7 @@
     "depth": "Guarded prepass21F38B0/callerreturn21F9F78 copies same-source NativeDepthSnapshot; pass.depth_domains required before planning/explicit FG_INPUTS/SR; source native depth remains unchanged"
   },
   "validation": {
-    "generic_provider_concurrency": "Source audit proves worker cached-state read/session lifetime and DLSS abort mutation synchronization defects; repair underway before next deployment. Recovery gate/device passes remain scoped to frozen pre-repair binaries; no flicker causation claim. See docs/research/provider-status-worker-lifetime-audit-20261116.md",
+    "generic_provider_concurrency": "Copied status/lifetime and DLSS invalidation fixes passed Release225/14,239total112.89seconds,Rust clean, explicit concurrent snapshot/hidden SDK marker/shared-SR recovery fixtures. RuntimeE2C4958ADA60BDC04ADA49A4AB1B9F268FC813F436B1ED420949A3154B9309D9,Entry9B5C79DF...,fresh Rust panelEBEA30F0... built but undeployed; initial missing-panel failure retained and resolved with actual panel path. Equivalent FSR/XeSS mutation paths remain separate work; no flicker causation or native acceptance. See docs/research/provider-status-worker-lifetime-audit-20261116.md",
     "native_intention_fg_trial": {
       "receipt": ".local/fallout4-research/native-raster-20261116-192707-484",
       "source_commit": "e495934507425cc1a9eae7b8352bcfc874bbb358",

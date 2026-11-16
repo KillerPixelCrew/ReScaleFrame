@@ -633,11 +633,12 @@ uint32_t select_cpu_pacing(uint64_t id, uint32_t mode, uint32_t limit) {
             if (SUCCEEDED(adapter->GetDesc1(&desc)) && !(desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)) owner.vendor=desc.VendorId;
         }
     }
-    const auto backend = rsf_d3d11_present_backend();
-    owner.context.bind(graphics_api.load() == 12 || backend == RSF_FG_BACKEND_FSR3 || backend == RSF_FG_BACKEND_FSR4 ? 12u : 11u, owner.device, owner.vendor);
     rsf_fg_status state{}; state.struct_size=sizeof(state);
-    const auto* provider = rsf_d3d11_present_provider(); auto* session = rsf_d3d11_present_session();
-    if (provider && session) (void)provider->status(session,&state);
+    rsf_d3d11_present_status snapshot{sizeof(snapshot),RSF_PRESENT_STATUS_VERSION};
+    const bool status_known = rsf_d3d11_present_status_get(&snapshot) == RSF_BACKEND_OK;
+    if (status_known) state = snapshot.state;
+    const auto backend = status_known ? snapshot.backend : rsf_d3d11_present_backend();
+    owner.context.bind(graphics_api.load() == 12 || backend == RSF_FG_BACKEND_FSR3 || backend == RSF_FG_BACKEND_FSR4 ? 12u : 11u, owner.device, owner.vendor);
     auto* host=rsf_d3d11_present_host();
     rsf_streamline_latency_status reflex{}; reflex.struct_size=sizeof(reflex);
     const bool reflex_available=host && rsf_streamline_host_latency_status(host,&reflex)==RSF_BACKEND_OK &&
@@ -677,8 +678,9 @@ void anti_lag_status(rsf_fg_status& status) {
     }
     if (owner.pacing==RSF_PACING_XELL) {
         rsf_fg_status current{}; current.struct_size=sizeof(current);
-        const auto* api=rsf_d3d11_present_provider(); auto* session=rsf_d3d11_present_session();
-        if (api && session && api->status(session,&current)==RSF_BACKEND_OK) {
+        rsf_d3d11_present_status snapshot{sizeof(snapshot),RSF_PRESENT_STATUS_VERSION};
+        if (rsf_d3d11_present_status_get(&snapshot)==RSF_BACKEND_OK) {
+            current=snapshot.state;
             status.pacing_owner=RSF_PACING_XELL; status.low_latency_available=current.low_latency_available;
             status.effective_reflex=current.effective_reflex; status.latency_paced_frames=current.latency_paced_frames;
         }

@@ -11,6 +11,7 @@
 #include <atomic>
 #include <mutex>
 #include <shared_mutex>
+#include "provider_status_snapshot.h"
 #include <string>
 #include <new>
 #include <cstdio>
@@ -27,6 +28,7 @@ std::string streamline_directory;
 std::string engine_version, project_id;
 std::mutex creation_guard;
 std::shared_mutex provider_guard;
+rsf::presentation::ProviderStatusSnapshot provider_status;
 std::atomic<uint32_t> active_backend{RSF_FG_BACKEND_DLSS}, requested_backend{UINT32_MAX};
 std::atomic<uint32_t> backend_choices{(RSF_FG_BACKEND_ALL | 1u) & ~(1u << RSF_FG_BACKEND_FSR4)};
 std::atomic<int32_t> switch_result{0};
@@ -97,6 +99,7 @@ class Bridge final : public IDXGISwapChain4 {
     ComPtr<IDXGIFactory> parent;
     ComPtr<IDXGISwapChain4> physical;
     std::atomic<bool> physical_pending{false};
+    uint32_t provider_backend{};
     std::mutex physical_guard;
     std::atomic<UINT> application_presents{0};
     template<class Call> HRESULT query_physical(Call call) {
@@ -163,8 +166,8 @@ class Bridge final : public IDXGISwapChain4 {
     uint32_t timing_slots = 0;
     void trace_pacing(const std::array<uint64_t, 6>& ticks, uint32_t index, UINT sync, UINT physical_flags) {
         rsf_fg_status state{}; state.struct_size = sizeof(state);
-        if (!settings.debug_timing || !settings.log || !tick_ms || !provider || !generation_api() ||
-            generation_api()->status(provider, &state) != RSF_BACKEND_OK) return;
+        if (!settings.debug_timing || !settings.log || !tick_ms || !provider || !backend_api(provider_backend) ||
+            backend_api(provider_backend)->status(provider, &state) != RSF_BACKEND_OK) return;
         const auto end = ticks.back();
         if (!timing_epoch) { timing_epoch = end; timing_sdk_start = state.total_presented; previous_present = ticks[0]; return; }
         const double interval = double(ticks[0] - previous_present) * tick_ms; previous_present = ticks[0];
@@ -226,7 +229,7 @@ class Bridge final : public IDXGISwapChain4 {
         if (FAILED(queue->Signal(complete.Get(), ++serial)) || FAILED(wait(complete.Get(), serial))) return E_FAIL;
         if (provider) {
             rsf_fg_retirement retirement{}; retirement.struct_size = sizeof(retirement);
-            if (generation_api()->retirement(provider, &retirement) != RSF_BACKEND_OK ||
+            if (backend_api(provider_backend)->retirement(provider, &retirement) != RSF_BACKEND_OK ||
                 FAILED(wait(static_cast<ID3D12Fence*>(retirement.fence), retirement.value))) return E_FAIL;
         }
         return S_OK;
@@ -320,8 +323,17 @@ class Bridge final : public IDXGISwapChain4 {
             result = RSF_BACKEND_ERROR_INIT_FAILED;
         if (result == RSF_BACKEND_OK) result = api->configure(provider, &fg_off);
         if (result != RSF_BACKEND_OK) { replacement.Reset(); if (provider) api->destroy(provider); provider = nullptr; }
-        else publish_physical(replacement, static_cast<ID3D12CommandQueue*>(setup.chain.d3d12_queue));
+        else { provider_backend = backend; publish_physical(replacement, static_cast<ID3D12CommandQueue*>(setup.chain.d3d12_queue)); }
         return result;
+    }
+    // Every current provider.status is a cached-only copy. SDK polling stays in
+    // the existing owner callbacks, outside the short snapshot publication lock.
+    void publish_status() {
+        const auto* api = backend_api(provider_backend);
+        rsf_fg_status status{sizeof(status)};
+        if (provider && api && api->status(provider, &status) == RSF_BACKEND_OK)
+            (void)provider_status.publish(provider_backend, chain_generation.load(), status);
+        else provider_status.clear();
     }
     HRESULT ensure_physical() {
         // Never create the HWND owner from an outer wrapper's constructor query.
@@ -339,12 +351,13 @@ class Bridge final : public IDXGISwapChain4 {
         }
         if (!description.Windowed && FAILED(physical->SetFullscreenState(TRUE, nullptr))) return E_FAIL;
         active_session.store(provider, std::memory_order_release); host_paced.store(paced_by_host());
+        provider_status.activate(active_backend.load(), chain_generation.load()); publish_status();
         return S_OK;
     }
     // The provider session is the latency owner only when it does not pace through the host.
     bool paced_by_host() {
         rsf_fg_status state{}; state.struct_size = sizeof(state);
-        return host && provider && generation_api() && generation_api()->status(provider, &state) == RSF_BACKEND_OK &&
+        return host && provider && backend_api(provider_backend) && backend_api(provider_backend)->status(provider, &state) == RSF_BACKEND_OK &&
             state.pacing_owner == RSF_PACING_REFLEX;
     }
     // Streamline's proxy queue takes the proxy list; any other provider queue takes the native
@@ -373,10 +386,11 @@ class Bridge final : public IDXGISwapChain4 {
         char ownership[256]{}; std::snprintf(ownership, sizeof(ownership),
             "Generation switch identity facade=%p old_physical=%p old_provider=%p requested=%u",
             static_cast<void*>(this), static_cast<void*>(physical.Get()), provider, backend); log(ownership);
+        provider_status.invalidate();
         clear_physical();
         active_session.store(nullptr); host_paced.store(false);
-        if (provider) backend_api(previous)->destroy(provider);
-        provider = nullptr;
+        if (provider) backend_api(provider_backend)->destroy(provider);
+        provider = nullptr; provider_backend = 0;
         creating = true;
         if (host) {
             (void)rsf_streamline_host_reflex(host, RSF_REFLEX_OFF, 0);
@@ -395,6 +409,7 @@ class Bridge final : public IDXGISwapChain4 {
         creating = false;
         if (fullscreen && physical) physical->SetFullscreenState(TRUE, nullptr);
         active_backend.store(effective); active_session.store(provider); host_paced.store(paced_by_host()); ++chain_generation;
+        provider_status.activate(effective, chain_generation.load()); publish_status();
         timing_epoch = 0; reset_timing();
         post_switch_frames = 4;
         switch_result.store(result);
@@ -404,8 +419,15 @@ class Bridge final : public IDXGISwapChain4 {
             static_cast<void*>(this), static_cast<void*>(physical.Get()), provider, effective); log(ownership);
     }
     ~Bridge() {
-        if (active_chain.load() == this) outer_alias.store(nullptr, std::memory_order_release);
-        if (active_chain.load() == this) { active_chain.store(nullptr); active_interop.store(nullptr); active_session.store(nullptr); host_paced.store(false); }
+        {
+            // Drain existing shared provider leases before unpublishing. Release
+            // this lock before GPU drain; new leases cannot obtain this session.
+            std::lock_guard<std::shared_mutex> lock(provider_guard);
+            if (active_chain.load() == this) {
+                provider_status.invalidate(); outer_alias.store(nullptr, std::memory_order_release);
+                active_chain.store(nullptr); active_interop.store(nullptr); active_session.store(nullptr); host_paced.store(false);
+            }
+        }
         // On device failure retain GPU-reachable storage for the process rather than free it.
         if (FAILED(drain())) {
             log("presentation bridge: retirement failed; retaining provider and shared inputs");
@@ -418,7 +440,7 @@ class Bridge final : public IDXGISwapChain4 {
         }
         release_surfaces(); rsf_shared_fence_destroy(shared_fence);
         physical.Reset();
-        if (provider) generation_api()->destroy(provider);
+        if (provider) backend_api(provider_backend)->destroy(provider);
         if (completion_event) CloseHandle(completion_event);
         if (application_ready) CloseHandle(application_ready);
         if (host && active_host.load() != host) {
@@ -444,7 +466,7 @@ public:
     // signals one private fence that covers both. Present thread, between Present and the next one.
     rsf_backend_result retire(void* session, void* list, void** fence, uint64_t* value) {
         auto* queue = provider_queue.load();
-        const auto* api = generation_api();
+        const auto* api = backend_api(provider_backend);
         if (!queue || !api || !session || session != provider) return RSF_BACKEND_ERROR_NOT_READY;
         // The fence exists before anything is queued, so a failure never leaves the list unsignalled.
         if (!retired && FAILED(static_cast<ID3D12Device*>(graphics.native_device)->CreateFence(0, D3D12_FENCE_FLAG_NONE,
@@ -586,8 +608,9 @@ public:
         host_paced.store(paced_by_host());
         active_interop.store(interop_queue.Get(), std::memory_order_release);
         active_chain.store(this, std::memory_order_release);
+        provider_status.activate(active_backend.load(), chain_generation.load()); publish_status();
         rsf_fg_status status{}; status.struct_size = sizeof(status);
-        if (settings.log && provider && generation_api()->status(provider, &status) == RSF_BACKEND_OK) {
+        if (settings.log && provider && backend_api(provider_backend)->status(provider, &status) == RSF_BACKEND_OK) {
             char text[240]; std::snprintf(text, sizeof(text), "Generation support=%u max generated=%u dynamic=%u VSync=%u minimum=%u latency available=%u version=%s",
                 status.supported, status.max_generated_frames, status.dynamic_supported, status.vsync_supported,
                 status.min_dimension, status.low_latency_available, status.version_name); log(text);
@@ -635,7 +658,8 @@ public:
         if (settings.debug_timing) ticks[4] = clock_tick();
         event.completed = 1; event.result = result;
         if (settings.latency_event) settings.latency_event(settings.user, &event);
-        if (provider) generation_api()->after_present(provider);
+        if (provider) backend_api(provider_backend)->after_present(provider);
+        publish_status();
         switch_receipt("retire-enter");
         if (settings.retire) settings.retire(settings.user, provider);
         switch_receipt("retire-done");
@@ -710,6 +734,7 @@ public:
                             render_buffers[render_index].Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_PRESENT);
                     void* command = provider_list(slot.list.Get());
                     if (settings.prepare) settings.prepare(settings.user, this, nullptr, command, buffer.Get(), host, provider, sync);
+                    publish_status();
                     step = "command list Close"; stage = slot.list->Close();
                     if (SUCCEEDED(stage)) { step = "physical Present";
                         ID3D12CommandList* lists[]{static_cast<ID3D12GraphicsCommandList*>(command)}; present_queue->ExecuteCommandLists(1, lists);
@@ -766,6 +791,7 @@ public:
                         static_cast<ID3D12Resource*>(rsf_shared_surface_d3d12(surfaces[0])), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON);
                     void* command = provider_list(slot.list.Get());
                     if (settings.prepare) settings.prepare(settings.user, this, context.Get(), command, buffer.Get(), host, provider, sync);
+                    publish_status();
                     if (SUCCEEDED(slot.list->Close())) {
                         ID3D12CommandList* lists[]{static_cast<ID3D12GraphicsCommandList*>(command)}; queue->ExecuteCommandLists(1, lists);
                         const auto copied = ++serial;
@@ -851,7 +877,8 @@ public:
                 texture->AddRef(); if (texture->Release() > 1) return DXGI_ERROR_INVALID_CALL;
             }
         }
-        if (provider && generation_api()->configure(provider, &fg_off) != RSF_BACKEND_OK) return E_FAIL;
+        if (provider && backend_api(provider_backend)->configure(provider, &fg_off) != RSF_BACKEND_OK) return E_FAIL;
+        publish_status();
         if (native12 && settings.runtime_switching) {
             for (const auto& buffer : render_buffers) if (buffer) {
                 buffer->AddRef(); if (buffer->Release() > 1) return DXGI_ERROR_INVALID_CALL;
@@ -1225,6 +1252,7 @@ extern "C" int rsf_d3d11_present_has_owner() {
     return active_chain.load(std::memory_order_acquire) != nullptr && (!scoped_interception || scoped_admitted.load(std::memory_order_acquire));
 }
 extern "C" const rsf_generation_provider* rsf_d3d11_present_provider() { return generation_api(); }
+extern "C" int32_t rsf_d3d11_present_status_get(rsf_d3d11_present_status* status) { return provider_status.read(status); }
 extern "C" void* rsf_d3d11_present_session() { return active_session.load(std::memory_order_acquire); }
 extern "C" uint32_t rsf_d3d11_present_backend() { return active_backend.load(); }
 extern "C" uint32_t rsf_d3d11_present_backend_choices() { return backend_choices.load(); }
