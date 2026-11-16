@@ -7,6 +7,16 @@ explicit direct-executable/module-absence proof recorded for PID64940. Compatibi
 is deferred until native validation passes, not dropped. No further ENB trials
 are scheduled in the native phase.
 
+Native-only PID66836/report172137-067 deployed c32d8f7/Entry72B274B9...:
+module absence and corrected worker vtable/destructor/Run predicates passed.
+No RESERVE/BIND/pacing/markers were observed. The user rejected the Quality1
+duplicated rectangle without ENB, so ENB is not required to trigger the visual
+failure. Reduced SR acceptance is refused. The partial matched capture has
+only3 native inputs at full rect after reload and does not represent that
+failed reduced frame. Native Quit then Desktop reproduced4CB273/C0000005;
+21/21 staged files restored, including ENB, and custom INI stayed unchanged.
+Native producer and input-gate investigations continue before compatibility.
+
 The native-only PID64940/report170725-854 predicate trace identified an exact
 ServingThread guard defect: vtable255E3B8 has destructorBD72E0 at slot0 and
 RunBD7430 at slot1. The adapter had mistaken slot1's address for the vtable.

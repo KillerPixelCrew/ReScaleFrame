@@ -144,3 +144,12 @@ The controller reports observation_completed=false and restored=true, with
 all21 manifest entries restored, including the exact ENB proxy quarantined
 before launch. The custom INI stayed byte-identical. The run supplies native
 module and close evidence, not SR quality, FG or latency acceptance.
+
+The next native-only PID66836/report172137-067 exercised the visible native
+pause menu Quit, then its Desktop action with held mouse input. The immediate
+refresh found no screenshot target. The armed passive observer recorded the
+same4CB273/null50 access violation and C0000005 termination; controller exit
+and restoration receipts agree. All21 staged files restored, including the
+ENB proxy, and custom INI remained byte-identical. This extends the fault to
+the observed native Quit/Desktop path with RSF and no F4SE/ENB. It still does
+not prove an unmodified native-only baseline or justify a shared runtime fix.
