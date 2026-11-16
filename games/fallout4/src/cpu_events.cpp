@@ -504,11 +504,14 @@ bool drain_future() noexcept {
     }
     return ended;
 }
-void invalidate_worker(uint32_t reason, bool invalidate_current) noexcept {
+void invalidate_worker(uint32_t reason, bool invalidate_current, const WorkerCycle* poll_owner = nullptr) noexcept {
     {
         std::lock_guard lock(worker_guard);
         future.facts.refuse(reason);
-        if (invalidate_current && current_render.constructed && !current_render.closed && !current_render.invalid) {
+        const bool poll_only=poll_owner && *poll_owner==current_render.key && enabled.load() &&
+            !raw_writers.load() && polls.load()==1;
+        if (invalidate_current && current_render.constructed && !current_render.closed && !current_render.invalid &&
+            detail::invalidates_render_source(current_render.binding.source,poll_only)) {
             current_render.invalid=true;
             current_render.abort_pending=current_render.binding.source!=0;
         }
@@ -733,7 +736,12 @@ void observe_poll(void* manager, float delta) {
     NativeState before{};
     StateRead state_read=StateRead::not_called;
     const bool mapped=caller==image()+0xc34ec8 && reserve_worker_poll(manager,generation,previous_polls);
-    if (!mapped) invalidate_worker(previous_polls ? RSF_GAME_CPU_ABORT_OVERLAP : RSF_GAME_CPU_ABORT_INTERVENING_POLL,true);
+    if (!mapped) {
+        const auto current=render_copy(); auto proof=current.key; NativeState native{};
+        const bool poll_only=enabled.load() && !previous_polls && !raw_writers.load() &&
+            native_cycle(proof,native,false) && proof==current.key && same_state(native,current.state);
+        invalidate_worker(previous_polls ? RSF_GAME_CPU_ABORT_OVERLAP : RSF_GAME_CPU_ABORT_INTERVENING_POLL,true,poll_only ? &current.key : nullptr);
+    }
     const auto lifecycle=enabled.load(std::memory_order_acquire);
     const auto depth_at_poll=idle_depth;
     const auto source_at_poll=identity.source;

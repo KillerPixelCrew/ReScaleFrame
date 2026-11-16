@@ -3,6 +3,12 @@
 #include "cpu_events.h"
 
 namespace rsf::fallout4::detail {
+// Poll generation belongs to a bound sample, not an input-unbound render
+// association. poll_only requires unchanged native owner/state and no lifecycle,
+// raw-writer or overlapping-poll refusal; every other refusal invalidates both.
+constexpr bool invalidates_render_source(uint64_t bound_source, bool poll_only) noexcept {
+    return bound_source!=0 || !poll_only;
+}
 struct WorkerCycle {
     uint64_t session{}, source{}, idle{};
     uintptr_t main{}, worker{}, window{}, manager{}, queue{}, receiver{}, start_event{}, complete_event{};
