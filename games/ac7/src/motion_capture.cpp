@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include <rescaleframe/ac7_hooks.h>
 #include <rescaleframe/ac7_memory.h>
 #include <rescaleframe/ac7_motion_capture.h>

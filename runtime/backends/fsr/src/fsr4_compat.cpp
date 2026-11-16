@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "fsr4_compat.h"
 #include "fsr4_compat_core.h"
 #include <wrl/client.h>

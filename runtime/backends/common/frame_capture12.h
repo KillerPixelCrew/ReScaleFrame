@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #pragma once
 #include "d3d12_helpers.h"
 #include <rescaleframe/game_frame.h>

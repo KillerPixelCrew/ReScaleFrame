@@ -1,5 +1,5 @@
 #include <rescaleframe/native_cpu.h>
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "package.h"
 #include "bridge.h"
 #include "vulkan_bridge.h"

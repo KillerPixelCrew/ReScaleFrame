@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 #pragma once
 /* Reads of live engine memory that must fail soft. Internal to the AC7 module. */
 #include <windows.h>

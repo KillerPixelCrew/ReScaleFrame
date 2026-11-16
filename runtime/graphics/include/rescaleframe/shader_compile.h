@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 #pragma once
 /* One HLSL compile, header-only so a module that does not link rsf_graphics (the AC7 render scope)
    can use it too.

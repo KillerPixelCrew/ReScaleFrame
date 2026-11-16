@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // SR Stages 4 and 5 on a D3D11 device, through the adapter's production pieces.
 //
 //   decode    The Runtime graphics library's motion decode and dense resolve (motion_decode.cpp, motion_resolve.cpp) with

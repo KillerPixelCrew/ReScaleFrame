@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 #pragma once
 /* The [UnitySR] settings both Unity entry points read (the SR host and the shared generation
    install), so a relative path and the frame-generation choice resolve the same way in both. */

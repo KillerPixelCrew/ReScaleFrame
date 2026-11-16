@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include <rescaleframe/native_fg.h>
 #include "latency_antilag.h"
 #include "latency_policy.h"

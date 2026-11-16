@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 #include <rescaleframe/ac7_ui_rules.h>
 #include <rescaleframe/ui_identify.h>
 #include <cstring>

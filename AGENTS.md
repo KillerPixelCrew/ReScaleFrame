@@ -248,8 +248,13 @@ function in the Ghidra project while the evidence is in front of you.
 ## Native ABI
 
 `sdk/game/include/rescaleframe/game_api.h` is the versioned contract between orchestrator and
-plugins. It is MIT while the rest of the repository is GPL-3.0-only, so keep it self-contained and
-free of GPL includes.
+plugins. Keep it self-contained and free of GPL includes.
+
+## License
+
+ReScaleFrame is MIT. Never copy GPL or other copyleft code into it, including ports of shaders
+or algorithms; write first-party code from permissive sources or from behaviour. The existing
+exceptions keep their upstream terms and are listed in `docs/dependencies.md`.
 
 Mechanics that the header and `tests/plugin_contract.cpp` jointly enforce:
 

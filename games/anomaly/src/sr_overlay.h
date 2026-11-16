@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #pragma once
 // The link between the SR stages and the shared overlay service, without a link-time dependency in either direction
 // (the overlay fixtures build overlay_service.cpp without the SR stages and vice versa). sr::configure publishes the

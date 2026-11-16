@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "vulkan_creation.h"
 #include <rescaleframe/native_xess_vulkan_requirements.h>
 #include <rescaleframe/native_latency_vulkan_requirements.h>

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* XeSS, behind the contract every vendor implements.
  *
  * Nothing vendor-specific here for the same reason as the other two: everything a caller needs is in

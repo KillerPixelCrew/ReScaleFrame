@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Real-object contract for the Anomaly overlay hooks. A fake overlay API table is started through the
 // production start() with hooks enabled, then a WARP swap chain and the system DirectInput mouse and
 // keyboard prove the engine boundaries reach it. The engine itself is not involved. Exits 77 (skip)

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Tessellated motion chain device fixture. Uses the LOCAL deployment from tools/anomaly_motion_deploy.py (licensed shader
 // bodies, never tracked): RSF_ANOMALY_MOTION_DEPLOY, else <repo>/.local/anomaly/motion-deploy-tess, else
 // <repo>/.local/anomaly/motion-deploy. Exits 77 when no deployment with the dx11/tess.hs and dx11/tess.ds roots exists,

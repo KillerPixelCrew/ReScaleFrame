@@ -1,7 +1,7 @@
 ---
 name: game-render-analysis
 description: Integrate or investigate ReScaleFrame rendering through complete reference inventories, shader and buffer audits, verified engine producers and bounded captures. Use for SR/FG/latency integrations, executable analysis, upscaler defects and graphics interoperability. Route Unreal 4 and TrueSky details to their repository skills.
-license: GPL-3.0-only
+license: MIT
 ---
 
 # Game render analysis

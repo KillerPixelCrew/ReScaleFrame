@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "motion_policy.h"
 #include <cmath>
 #include <cstring>

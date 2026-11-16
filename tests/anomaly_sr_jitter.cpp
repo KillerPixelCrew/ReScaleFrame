@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // SR Stage 3 jitter and mip bias arithmetic (games/anomaly/src/sr_jitter.h) without the game: the Halton(2,3) sequence
 // and its phase count and resets, the NDC offset applied to X-Ray row-vector projections, Fmatrix::mul, the
 // first-person no-double-jitter rule, the mip bias delta, the state published to the motion stage and the SR pass, and

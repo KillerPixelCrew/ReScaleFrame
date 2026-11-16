@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Real private state transitions with CPU-only SDK configuration; no COM calls.
 #include "../runtime/vulkan/fsr4-fg/bridge.cpp"
 #include "../runtime/orchestrator/src/native_fg_fsr4_vulkan.cpp"

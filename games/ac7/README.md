@@ -109,5 +109,5 @@ uses matching view/depth selections and unjittered constants across VS, PS, HS, 
 - [Capture research](../../docs/research/ac7-frame-capture.md)
 - [Framework implementation tracker](../../docs/implementation.md)
 
-ReScaleFrame is GPL-3.0-only except for its MIT Game SDK. NVIDIA, AMD and Intel runtime files
+ReScaleFrame is MIT; its sharpening shaders are GPL-3.0-only ports of OptiScaler. NVIDIA, AMD and Intel runtime files
 retain their separate included terms and notices.

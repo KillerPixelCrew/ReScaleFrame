@@ -204,7 +204,7 @@ payload, including the post-processing correction, DLSS model selection,
 guarded RTX 40 MFG support and current Auto policy. This archive was built and
 checked without launching the game; the acceptance above refers to earlier
 game sessions. MSI Claw hardware acceptance is pending.
-First-party code is GPL-3.0-only; see LICENSE.txt. Vendor and Harmony notices
+First-party code is MIT; see LICENSE.txt. Vendor and Harmony notices
 are included alongside their runtimes. No game assets, game assemblies,
 decompiles, logs or machine-specific deployment baseline are included.
 '@

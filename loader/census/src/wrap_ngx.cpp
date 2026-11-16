@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // NVIDIA NGX (DLSS) entry points. The parameter object is read through its virtual getters.
 //
 // Layout source: nvsdk_ngx_params.h, NVSDK_NGX_Parameter, declared in the order

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // DXGI and D3D12: factory and device creation, command queues, swapchain creation and presentation.
 //
 // The factory, device, queue and swapchain methods are detoured at the address their vtable slot

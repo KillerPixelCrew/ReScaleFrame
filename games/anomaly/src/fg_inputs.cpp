@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "fg_inputs.h"
 #include "sr_pass.h"
 #include <rescaleframe/d3d11_state.h>

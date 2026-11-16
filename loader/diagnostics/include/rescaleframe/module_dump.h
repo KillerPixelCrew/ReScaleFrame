@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* Loader diagnostics: read the running main module and write it out for offline analysis.
 
    This exists because a protected executable can be unreadable on disk while being perfectly

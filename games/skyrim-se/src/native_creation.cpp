@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "native_creation.h"
 #include "compatibility.h"
 #include "steam_present.h"

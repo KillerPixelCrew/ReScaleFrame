@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* Read a loaded module out of its own address space and write it as a file whose raw offsets
    equal its virtual addresses, so the result maps one to one onto runtime addresses.
 

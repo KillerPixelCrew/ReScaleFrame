@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // A deliberately blocked GPU queue fills all UI slots. The fourth frame must
 // retain its overlay and safely reuse a slot after the prior work completes.
 #include <rescaleframe/overlay_d3d12.h>

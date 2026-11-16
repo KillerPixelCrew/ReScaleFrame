@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "native_settings.h"
 #include <windows.h>
 #include <MinHook.h>

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "cpu_events.h"
 #include "input_ownership.h"
 #include "screen_classification.h"

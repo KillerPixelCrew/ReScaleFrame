@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Anomaly's use of the Runtime's shared overlay (rsf_get_overlay_api). Everything the Runtime must
 // not know lives here: the engine window class, the Present and DirectInput boundaries, what this
 // adapter can and cannot apply. The service never loads a second Runtime; it queries the one the

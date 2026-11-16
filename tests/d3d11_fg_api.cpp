@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 // rsf_get_d3d11_fg_api through a dllimport of the real Runtime DLL, as an adapter uses it: the
 // size/version refusal contract, a complete table, and graphics-free behaviour of the entries
 // that need no device (CPU ordering, scene/window identity, source binding, inputs query).

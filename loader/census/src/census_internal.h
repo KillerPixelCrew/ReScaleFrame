@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Internal types shared by the census translation units. Nothing here crosses the DLL boundary.
 #pragma once
 

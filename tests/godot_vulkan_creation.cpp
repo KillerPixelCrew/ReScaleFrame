@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Synthetic Vulkan creation boundary. No loader, SDK DLL or GPU is exercised.
 #include "../integrations/godot/native/vulkan_creation.cpp"
 #include <cstdio>

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Anomaly frame generation on a real D3D11 device and the real Runtime DLL, through the adapter's production stage
 // (games/anomaly/src/fg_stage.cpp) called exactly as native_observer.cpp calls it from the engine boundaries:
 //

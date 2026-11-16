@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* Choosing between three vendors, on a machine that has none of them.
  *
  * This is the point of negotiation being a pure function. The combinations that matter are the ones

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #pragma once
 // Per-draw history decision for the core VS b13 buffer. Pure; no engine memory or D3D.
 #include "motion_constants.h"

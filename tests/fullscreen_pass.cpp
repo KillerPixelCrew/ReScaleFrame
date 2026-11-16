@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* The composite, checked against arithmetic rather than against a screenshot.
  *
  * `final = ui.rgb + (1 - ui.a) * scene.rgb` is what all three frame generation SDKs ask for, so it

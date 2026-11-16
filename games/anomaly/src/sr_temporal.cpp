@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "sr_temporal.h"
 #include "sr_plan.h"
 #include <rescaleframe/sr_session.h>

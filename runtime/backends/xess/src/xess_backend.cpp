@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* XeSS-SR through the official DX12 API. Native D3D11 and frame generation are unavailable
    in this implementation. Build capability is separate from runtime and adapter support. */
 

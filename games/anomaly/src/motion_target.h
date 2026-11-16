@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #pragma once
 // RTV2 bind preservation for the G-buffer pass. Pure state machine over the engine's RCache render-target cache
 // (CBackend::pRT[4], pZB, m_bChangedRTorZB; sr_profile.h backend_*_offset), no D3D types.

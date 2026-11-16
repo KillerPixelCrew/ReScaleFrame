@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "../games/fallout4/src/camera.h"
 #include <cmath>
 #include <cstdio>

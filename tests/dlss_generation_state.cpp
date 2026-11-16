@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "../runtime/backends/dlss/src/dlss_generation_state.h"
 #include <atomic>
 #include <barrier>

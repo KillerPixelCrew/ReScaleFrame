@@ -1,5 +1,5 @@
 #include <rescaleframe/native_cpu.h>
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "api.h"
 #include "vulkan_control.h"
 #include <rescaleframe/native_sr_d3d12.h>

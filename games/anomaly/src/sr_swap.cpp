@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "sr_swap.h"
 #include "sr_profile.h"
 #include <cmath>

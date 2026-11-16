@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #pragma once
 // Synchronous current-thread receipt, not GPU quiescence. Provider writes are
 // isolated to private output; any native writes are ordered on the immediate

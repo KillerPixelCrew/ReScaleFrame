@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include <rescaleframe/gl_pipeline.h>
 #include <rescaleframe/native_cpu.h>
 #include <rescaleframe/input_dump.h>

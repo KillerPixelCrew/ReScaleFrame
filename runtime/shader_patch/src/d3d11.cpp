@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include <rescaleframe/shader_patch.h>
 #include <d3d11.h>
 #include <MinHook.h>

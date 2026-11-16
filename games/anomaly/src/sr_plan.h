@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #pragma once
 // SR Stage 2 render/output plan (docs/research/anomaly-sr-seam.md section 10). Pure arithmetic, no engine or D3D
 // dependency, so tests/anomaly_sr_plan.cpp checks every rounding rule without the game.

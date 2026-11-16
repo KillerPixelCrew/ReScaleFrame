@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Exercise the private adapter through an independent engine ABI caller and queued executor.
 #define RSF_AC7_GRAPH_TEST 1
 #include "../games/ac7/src/native_renderer.cpp"

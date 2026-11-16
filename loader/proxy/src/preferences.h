@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 #ifndef RSF_PREFERENCES_H
 #define RSF_PREFERENCES_H
 #include <stdint.h>

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* Draw one texture over another, with the blend the job needs and nothing else.
 
    Three things in this runtime want the same triangle: the debug view that puts a reconstruction on

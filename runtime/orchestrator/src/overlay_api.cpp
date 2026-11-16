@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // The Runtime's shared overlay, published to DLL-loaded D3D11 adapters. It drives the existing
 // D3D11 overlay host (panel, renderer, window/cursor input) on the chain the adapter presents and
 // forwards frame-generation choices to the shared presentation owner. All policy is adapter data.

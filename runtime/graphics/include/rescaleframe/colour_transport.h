@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 #ifndef RSF_COLOUR_TRANSPORT_H
 #define RSF_COLOUR_TRANSPORT_H
 #include <stdint.h>

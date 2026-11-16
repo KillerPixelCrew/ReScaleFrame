@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 #ifndef RSF_OVERLAY_FG_STATS_H
 #define RSF_OVERLAY_FG_STATS_H
 /* The frame-generation half of rsf_overlay_stats, filled the same way for the D3D11 proxy

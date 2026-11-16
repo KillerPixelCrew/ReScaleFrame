@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Far skinned characters: the G-buffer VS/PS pairs X-Ray draws a skinned model with on either side of r__dtex_range.
 // Uses the LOCAL deployment from tools/anomaly_motion_deploy.py (licensed shader bodies, never tracked):
 // RSF_ANOMALY_MOTION_DEPLOY, else <repo>/.local/anomaly/motion-deploy. Exits 77 without it, without d3dcompiler_43 or

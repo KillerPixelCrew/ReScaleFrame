@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "native_regions.h"
 #include <rescaleframe/shader_compile.h>
 #include <rescaleframe/srv_format.h>

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // SR Stages 4 and 5 pass construction (games/anomaly/src/sr_pass.h, sr_plan.h) without the game or a GPU: the motion
 // decode parameters and their CPU reference on (0,0,1,0) versus (0,0,0,0), the X-Ray projection planes, the camera
 // matrices handed to the pipeline (clip-to-previous reprojects a world point exactly), jitter units and depth

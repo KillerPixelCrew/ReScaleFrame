@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "../runtime/graphics/src/sharpening/d3d11.h"
 #include <d3d11.h>
 #include <wrl/client.h>

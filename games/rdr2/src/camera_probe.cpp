@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Capture the worker-local view at the native DLSS/FSR2 boundary. These raw snapshots do not
 // assert a matrix layout: the matching disassembly and numeric validation establish that later.
 #include "camera_probe.h"

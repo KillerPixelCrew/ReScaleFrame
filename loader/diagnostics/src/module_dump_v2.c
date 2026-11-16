@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* Structured sidecar sections: guarded memory access, threads, function starts from the exception
    directory and the caller-supplied name list. RTTI lives in module_dump_rtti.c. */
 

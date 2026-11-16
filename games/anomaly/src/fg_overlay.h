@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #pragma once
 // What the shared overlay (overlay_service.cpp) needs from frame generation, published by fg_stage.cpp once the
 // presentation bridge is installed. Null: no bridge, FG is not available and the panel offers no FG choices.

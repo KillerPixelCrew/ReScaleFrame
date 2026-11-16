@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #pragma once
 // The binder first writes the stock vector through R_constants::GetCBuffer and dx10ConstantBuffer::set. Correct its
 // CPU staging copy before Flush uploads it, preserving the engine's stage/slot ownership and dirty protocol.

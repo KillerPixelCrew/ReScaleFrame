@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "render_hooks.h"
 #include "cpu_events.h"
 #include "render_inputs.h"

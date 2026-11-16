@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "engine_settings.h"
 #include "engine_settings_policy.h"
 #include <windows.h>

@@ -85,7 +85,7 @@ they do not install tools or rewrite game assemblies. See the
 and the distinction between compilation and target-player contract validation.
 
 The package includes Streamline/DLSS, FidelityFX and XeSS runtime notices, Harmony's
-license, the first-party GPL license, Game SDK MIT license, Rust notices and MinHook's license.
+license, the first-party MIT license, the sharpening GPL-3.0 text, Rust notices and MinHook's license.
 Its payload comes from Release artifacts and vendor SDKs, with an explicit allowlist that
 excludes game binaries, game assemblies, decompiles, logs, backups and machine-specific
 original-file baselines. The older verified-deployment input remains an optional mode.
@@ -118,9 +118,9 @@ Without the headers, the checkout still builds; the relevant API reports that th
 RenderDoc and Streamline source/header licenses are separate from the licenses covering NVIDIA runtime binaries such as `nvngx_dlss.dll` and `nvngx_dlssg.dll`. The FidelityFX signed DX12 DLLs carry the SDK release's bundled binary redistribution terms; ship `Kits/FidelityFX/docs/license.md` and `3rdpartynotice.md` beside them. The earlier statement grouping these signed binaries under MIT was incorrect for the inspected SDK 2.3 package. The XeSS headers and samples carry Intel's SDK licence and the `libxess*.dll` / `libxell.dll` binaries have separate Intel redistribution terms; confirm both against the shipped text before any redistribution. Check the exact release's included terms and notices in every case. The AC7 release includes the retail Streamline interposer/common/DLSS/PCL DLLs and NVIDIA DLSS 310.9.1.0, unmodified, with the SDK licenses and notices. The corrected AC7 package also includes FidelityFX SDK 2.3.0 upscaling (FSR 2/3/4) and XeSS SR 2.0.2 with their terms and notices. Frame generation and Reflex are not included in that published SR package. Current-source
 deployments use separate FG DLLs and shared latency services. Vendor binaries stay untracked in Git.
 
-The Skyrim and Fallout 4 Community Shaders presentation bridges, fo4test, OptiScaler and SpecialK were studied for the plan and not copied: they are GPL or carry their own exceptions, and `AGENTS.md` forbids copying reference code because it was useful to study.
+The Skyrim and Fallout 4 Community Shaders presentation bridges, fo4test and SpecialK were studied for the plan and not copied. OptiScaler was studied too, but the RCAS, depth-aware RCAS and DAS sharpening shaders in `runtime/graphics/src/sharpening/` are ports of it and stay GPL-3.0-only (see that directory's THIRD_PARTY.md). These projects they are GPL or carry their own exceptions, and `AGENTS.md` forbids copying reference code because it was useful to study.
 
-First-party code and documentation use GPL-3.0-only; `sdk/game/` uses MIT. Reference projects retain their own licenses. Record provenance and check compatibility before incorporating their code.
+First-party code and documentation are MIT. The only exception is the OptiScaler-derived sharpening shaders in `runtime/graphics/src/sharpening/` (GPL-3.0-only), which keep their upstream terms. Any binary that links the sharpening sources is GPL-3.0-only as a whole until they are replaced. Reference projects retain their own licenses. Record provenance and check compatibility before incorporating their code.
 
 
 ## Packaging the AC7 release

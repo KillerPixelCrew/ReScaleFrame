@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* Shared between the module dump writer and its structured sidecar sections. Not installed. */
 
 #ifndef RSF_MODULE_DUMP_INTERNAL_H

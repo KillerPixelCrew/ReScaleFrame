@@ -145,7 +145,7 @@ The source comparison supports using small pieces and documented approaches rath
 
 Licensing observations are from the inspected files, not a complete legal compatibility review. Luma adds a commercial-use permission condition. UEVR provides no general reuse grant in its current LICENSE, and no separate permissive grant was established for UESDK. OptiScaler and Special K have GPL terms; Community Shaders projects add their own exceptions. SKIF has MIT terms. ReShade uses a BSD-style license. UE4SS is MIT; patternsleuth declares MIT OR Apache-2.0. The egui components offer MIT/Apache licensing. Intel runtimes have separate binary redistribution terms and are not open-source implementations.
 
-ReScaleFrame uses MIT for the Game SDK and GPL-3.0-only for its runtime and game plugins. Check the actual terms of any incorporated reference code or vendor dependency. A linking exception in one repository does not automatically cover another dependency. Preserve vendor DLLs unchanged and ship applicable notices.
+ReScaleFrame is MIT, except files derived from GPL reference code, which keep their upstream terms (see docs/dependencies.md). Check the actual terms of any incorporated reference code or vendor dependency. A linking exception in one repository does not automatically cover another dependency. Preserve vendor DLLs unchanged and ship applicable notices.
 
 Keep the first scope Windows x64, AC7, Intel SR/MFG/XeLL, and SDR. The orchestrator can define backend boundaries for DLSS and FSR now without requiring every vendor/API combination to ship with the first AC7 version. MFG remains part of the first complete AC7 target.
 

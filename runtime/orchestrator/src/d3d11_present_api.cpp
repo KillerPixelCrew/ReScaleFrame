@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 #include <rescaleframe/d3d11_present_api.h>
 
 extern "C" RSF_RUNTIME_API rsf_result rsf_get_d3d11_present_api(rsf_d3d11_present_api* api) {

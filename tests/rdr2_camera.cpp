@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "../games/rdr2/src/render_camera.h"
 #include <array>
 #include <cmath>

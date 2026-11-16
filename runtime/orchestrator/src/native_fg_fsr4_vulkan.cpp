@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #define VK_USE_PLATFORM_WIN32_KHR
 #include <windows.h>
 #include <vulkan/vulkan.h>

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 #pragma once
 /* Lower-case hex SHA-256 of a file, with every handle owned by a guard so no exit path leaks one.
    Header-only; consumers link bcrypt (rsf_runtime_common does). The unity-mono plugin and the

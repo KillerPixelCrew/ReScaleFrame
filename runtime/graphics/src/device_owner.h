@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 #pragma once
 /* Internal to rsf_graphics: whether an object belongs to a device. A resource created on another
    device faults inside the driver rather than failing, so each pass checks what the caller handed

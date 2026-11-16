@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // First-party declaration prototype. No geometry or pixel output is modified.
 // Deliberately no fixed register: reflected binding must be established per
 // compiled variant before any runtime upload. Unused declarations can disappear.

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 #include <rescaleframe/d3d11_fg_api.h>
 #include <rescaleframe/native_cpu.h>
 #include <rescaleframe/native_scene.h>

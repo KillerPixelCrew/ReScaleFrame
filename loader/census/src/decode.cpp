@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Decoders shared by several vendors: DXGI formats, D3D11 and D3D12 resource descriptions and
 // string arguments. Every read of game memory goes through SEH.
 #include <d3d11.h>

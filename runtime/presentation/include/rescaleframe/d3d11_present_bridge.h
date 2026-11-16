@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 #ifndef RSF_D3D11_PRESENT_BRIDGE_H
 #define RSF_D3D11_PRESENT_BRIDGE_H
 #include <rescaleframe/streamline_host.h>

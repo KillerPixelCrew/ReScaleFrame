@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "native_fg_dlss_vulkan_capture.h"
 #include "../../vulkan/streamline/present-capture.h"
 #include <atomic>

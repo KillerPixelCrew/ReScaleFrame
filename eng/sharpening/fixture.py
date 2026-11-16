@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: MIT
 # RCAS math derived from OptiScaler 2fff542 and AMD FidelityFX (MIT).
 # See runtime/graphics/src/sharpening/THIRD_PARTY.md.
 """Compare OptiScaler's linear HDR RCAS with perceptually encoded RCAS.

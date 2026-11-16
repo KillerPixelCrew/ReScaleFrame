@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* Put a texture on the screen, over whatever the game was about to present.
 
    This exists because a reconstruction that only writes into a texture cannot be judged. Counters

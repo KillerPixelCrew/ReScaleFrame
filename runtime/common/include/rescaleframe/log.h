@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 #pragma once
 /* The printf-style log helper every library had its own copy of. The sinks are all
    `void (*)(void* user, const char* message)`, so one function covers them whatever the typedef is

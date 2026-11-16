@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Contract for how the Anomaly adapter binds and configures the Runtime's shared overlay API. It uses
 // fake API tables, so it proves refusal paths and the exact data the adapter hands the Runtime, not
 // that the panel works. No hook is installed here (install_hooks=false or the start refuses first).

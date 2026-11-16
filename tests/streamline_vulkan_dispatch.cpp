@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #define VK_NO_PROTOTYPES
 #include <vulkan/vulkan.h>
 #include "../runtime/vulkan/streamline/sdk-fixes/ngx-vulkan-dispatch.h"

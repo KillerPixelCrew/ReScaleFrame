@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "bridge.h"
 #include <rescaleframe/sha256_file.h>
 #include <windows.h>

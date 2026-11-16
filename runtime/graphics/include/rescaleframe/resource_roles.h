@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* Work out what a texture is for, from the descriptor it was created with.
 
    A backend needs four specific targets out of the several hundred a frame allocates. Frame capture

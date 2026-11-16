@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Explicit device regression, never registered in CTest. Scratch SDK root only.
 // Hidden-window callbacks are not proof of physical scanout or gameplay quality.
 // Exit 77 means prerequisites/hidden presentation prevented a generation receipt;

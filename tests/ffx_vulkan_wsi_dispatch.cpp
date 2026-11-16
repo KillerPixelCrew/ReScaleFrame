@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #define RSF_FFX_WSI_IMPLEMENTATION
 #include "../runtime/vulkan/fsr3/wsi-dispatch.h"
 #include <cstdio>

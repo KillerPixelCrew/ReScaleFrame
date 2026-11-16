@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #pragma once
 #include <rescaleframe/shader_patch.h>
 // D3D11 side of the motion MRT: the RGBA16F target, the b13 buffers and the invalidation replay for occluding draws

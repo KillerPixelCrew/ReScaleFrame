@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // The display-range colour transport on WARP: the encode lands on its analytic curve, decode
 // inverts it, and a saturated reconstruction takes the scene's own highlight.
 #include <rescaleframe/colour_transport.h>

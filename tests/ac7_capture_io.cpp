@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include <rescaleframe/ac7_motion_capture.h>
 #include <rescaleframe/d3d11_observer.h>
 #include <rescaleframe/frame_tap.h>

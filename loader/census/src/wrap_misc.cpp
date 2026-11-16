@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Latency and Streamline entry points: NVAPI Reflex through nvapi_QueryInterface, NvLowLatencyVk,
 // Streamline (sl.interposer and the feature functions it hands out) and AMD's Anti-Lag 2 and AGS
 // loaders.

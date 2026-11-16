@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // A parameter object laid out like NVSDK_NGX_Parameter (nvsdk_ngx_params.h): the declaration order
 // below is the SDK's, so the compiler arranges the vtable the way the vendor's DLL would.
 #pragma once

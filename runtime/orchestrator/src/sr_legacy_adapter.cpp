@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Compatibility for the existing decoded-frame pipeline. New plugins submit SDK frame records.
 #include "sr_legacy_adapter.h"
 #include <rescaleframe/sr_bridge.h>

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* Entropy measurement. No platform dependency, so it is testable anywhere. */
 
 #include <rescaleframe/module_dump.h>

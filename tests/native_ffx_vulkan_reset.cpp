@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Synthetic FFX presenter lifecycle. No vendor DLL, Vulkan device or GPU work.
 #include "../runtime/orchestrator/src/native_fg_vulkan.cpp"
 #include <cstdio>

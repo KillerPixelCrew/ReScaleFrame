@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // RSF-authored. Anomaly SR Stage 1 reinsertion pass (docs/research/anomaly-sr-seam.md 2.2 and 5).
 //
 // Input t0: the render-size FP16 twin of $user$generic0 at the S-B seam. It holds the engine's "low" tonemap

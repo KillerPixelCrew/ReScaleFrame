@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "../games/ac7/src/velocity_shader.h"
 #include <rescaleframe/shader_compile.h>
 #include <rescaleframe/ac7_velocity_pass.h>

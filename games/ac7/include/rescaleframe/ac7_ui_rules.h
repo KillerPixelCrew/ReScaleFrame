@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* Which draws in an AC7 frame are the interface.
 
    This is a game fact, so it lives here rather than in the runtime, and it is deliberately a pure

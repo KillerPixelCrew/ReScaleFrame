@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 #ifndef RSF_NAMED_FRAME_DUMP_H
 #define RSF_NAMED_FRAME_DUMP_H
 #include <rescaleframe/runtime.h>

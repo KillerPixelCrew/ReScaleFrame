@@ -3,7 +3,7 @@
   "version": "1",
   "name": "Anomaly motion",
   "api": "d3d11",
-  "license": "GPL-3.0-only",
+  "license": "MIT",
   "payload": {
     "rsf_core_vertex.h": "../../shaders/core/rsf_core_vertex.h",
     "rsf_core_pixel.h": "../../shaders/core/rsf_core_pixel.h",

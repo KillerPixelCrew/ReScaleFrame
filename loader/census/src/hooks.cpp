@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Hook layer: GetProcAddress and LoadLibrary interception, vendor module export detours, and the
 // bookkeeping that binds a wrapper to the function it forwards to.
 #include <cwchar>

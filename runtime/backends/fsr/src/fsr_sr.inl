@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Included inside the backend's private namespace, with SDK headers included at file scope.
 struct FsrSession {
     std::shared_ptr<Fsr4Compatibility> compatibility;

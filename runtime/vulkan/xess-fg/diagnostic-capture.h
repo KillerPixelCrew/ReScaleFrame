@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #pragma once
 #include "capture_api.h"
 #include "../../common/include/rescaleframe/sha256_file.h"

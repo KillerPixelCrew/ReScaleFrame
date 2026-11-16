@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // SR Stage 3 jitter against the real motion pixel shader writer on a D3D11 device (hardware with the debug layer when
 // present, else WARP; 77 when neither exists). No game code and no engine shader runs.
 //

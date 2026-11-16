@@ -158,6 +158,6 @@ instructions, controls, requirements and package-specific information.
 
 ## License
 
-First-party code is [GPL-3.0-only](LICENSE), except the [MIT Game SDK](sdk/game/LICENSE).
+ReScaleFrame is [MIT](LICENSE). The only exception is the OptiScaler-derived sharpening shaders in `runtime/graphics/src/sharpening/` (GPL-3.0-only), which keep their upstream terms.
 The [managed Vulkan migration](runtime/managed/NOTICE.md) retains its original notices and
 license terms. Vendor runtimes and other dependencies retain their own licenses.

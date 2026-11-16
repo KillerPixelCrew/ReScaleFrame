@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "adapter_options.h"
 #include "native_observer.h"
 #include "build_profile.h"

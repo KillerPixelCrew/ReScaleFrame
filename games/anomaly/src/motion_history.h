@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #pragma once
 // Draw-time history for the motion MRT: the previous frame's camera per projection domain and the previous frame's
 // instance snapshots (world, bone palette) from the geometry feed (geometry_feed.h to_snapshot()).

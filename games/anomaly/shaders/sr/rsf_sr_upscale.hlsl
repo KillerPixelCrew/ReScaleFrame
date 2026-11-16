@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // RSF-authored. Anomaly SR Stage 2 seam pass (docs/research/anomaly-sr-seam.md section 10).
 //
 // One full-screen draw at output size, after the engine's own targets are restored at the S-B seam:

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "../integrations/godot/native/api.h"
 #include "../integrations/unity/native/package.h"
 #include <windows.h>

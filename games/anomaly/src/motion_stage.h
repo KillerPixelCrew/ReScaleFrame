@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #pragma once
 // Motion MRT for the standard 1.5.3 DX11 executable. Opt-in, rides on Mode=Observe:
 //   [Anomaly] Motion=1                 load motion shader variants, bind RTV2 during the G-buffer pass

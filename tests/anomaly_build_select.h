@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Test helper: which exact Anomaly build profile (games/anomaly/src/build_profile.h) a fixture runs against. CTest
 // registers the profile-dependent fixtures once per build; the build is the argument "standard" (default) or "avx".
 #pragma once

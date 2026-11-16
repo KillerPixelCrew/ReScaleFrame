@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* What a reconstruction or a frame generator has to be, said once, for all three vendors.
  *
  * Today's DLSS path is written against Streamline's own shapes, which worked while there was one

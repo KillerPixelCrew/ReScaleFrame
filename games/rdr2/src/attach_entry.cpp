@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Research-only late attachment after a guarded startup refusal. Load this helper by its
 // absolute staging path; never replace files in a running installation or load another runtime.
 #include <rescaleframe/plugin_session.h>

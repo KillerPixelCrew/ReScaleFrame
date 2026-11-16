@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 #pragma once
 /* Internal to rsf_graphics: replace one COM vtable slot, remembering what was there. */
 #include <windows.h>

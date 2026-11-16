@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Real D3D12 readbacks with simulated NGX execution. This is not RDR2 camera/game acceptance.
 #include <windows.h>
 #include <d3d12.h>

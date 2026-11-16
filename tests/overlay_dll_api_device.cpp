@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Hidden-window D3D11 fixture for rsf_get_overlay_api with the real Rust panel
 // (RSF_OVERLAY_DLL). Opens and closes the panel over several Presents, runs a game-style
 // ShowCursor hide loop while it is open, and exercises resize and device-reset notifications.

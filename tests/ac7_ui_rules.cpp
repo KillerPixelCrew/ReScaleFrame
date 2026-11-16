@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* The AC7 interface classifier, without a device.
  *
  * The rule is a pure function over facts the frame tap shadows, so it can be driven from a table.

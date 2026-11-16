@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 #ifndef RSF_D3D11_SR_API_H
 #define RSF_D3D11_SR_API_H
 

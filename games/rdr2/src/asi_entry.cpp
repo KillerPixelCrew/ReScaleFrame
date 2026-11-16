@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // ASI entry. The game's ASI loader (ScriptHookRDR2 or Ultimate ASI Loader) calls LoadLibrary on
 // this module, so no system DLL is impersonated and nothing is forwarded. The directory holding
 // the .asi is the deployment root: ReScaleFrame.ini beside it, the runtime and plugin in a

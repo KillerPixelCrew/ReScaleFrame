@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Hidden-window fixture for the Anomaly overlay's evidence path. It starts the production adapter service
 // (install_hooks=false) against the REAL Runtime and the REAL Rust panel (RSF_OVERLAY_DLL), opens the
 // panel over a hidden D3D11 swap chain, and checks what a run without desktop capture relies on:

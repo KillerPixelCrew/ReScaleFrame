@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Frozen-input precision experiment. This is not ordered game-frame replay.
 #include <rescaleframe/dlss.h>
 #include <rescaleframe/texture_dump.h>

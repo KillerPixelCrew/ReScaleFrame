@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 #ifndef RSF_FRAME_GENERATION_H
 #define RSF_FRAME_GENERATION_H
 #include <rescaleframe/backend.h>

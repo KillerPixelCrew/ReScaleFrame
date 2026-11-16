@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "effect.h"
 #include "runtime_control.h"
 #include <godot_cpp/core/class_db.hpp>

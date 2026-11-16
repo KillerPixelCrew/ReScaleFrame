@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #pragma once
 // Frame generation for Anomaly through the Runtime's shared D3D11 presentation bridge (rsf_get_d3d11_present_api)
 // and its D3D11 FG tagging path (rsf_get_d3d11_fg_api). The adapter owns the engine boundaries, the screen policy

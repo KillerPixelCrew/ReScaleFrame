@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* The layer the interface is diverted into, and the alpha question that decides whether it works.
  *
  * The layer itself is simple. What is not simple, and what this test exists for, is that a

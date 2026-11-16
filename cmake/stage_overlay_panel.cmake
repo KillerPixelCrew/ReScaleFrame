@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: MIT
 # Build-time step of the rsf_overlay_panel_stage target (see the top-level CMakeLists.txt).
 #
 # The Rust panel, rescaleframe_overlay.dll, is built by cargo into target/<profile>/. Packagers and

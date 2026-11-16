@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #pragma once
 // Every adapter option, as the shared overlay shows it (AGENTS.md Rule 2). Stages add the options they can change
 // while the game runs; register_restart_options() adds the ones read only at startup, so they can still be set and

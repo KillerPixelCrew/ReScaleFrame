@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "script_input.h"
 #include "engine_settings.h"
 #include <rescaleframe/render_frontend.h>

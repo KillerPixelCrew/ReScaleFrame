@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* SHA-256 (FIPS 180-4). Self-contained so the sidecar needs no crypto provider. */
 
 #include "module_dump_internal.h"

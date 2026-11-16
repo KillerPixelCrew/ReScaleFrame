@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #pragma once
 // SR Stages 4 and 5 (docs/research/anomaly-sr-seam.md section 12): the adapter's use of the Runtime's shared D3D11 SR
 // pipeline through rsf_get_d3d11_sr_api. The adapter borrows the carrier-loaded Runtime and never loads a second one.

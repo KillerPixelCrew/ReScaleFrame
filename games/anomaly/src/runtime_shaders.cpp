@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "runtime_shaders.h"
 #include <d3dcompiler.h>
 #include <fstream>

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 
 #include <rescaleframe/scene_promote.h>
 #include <rescaleframe/fullscreen_pass.h>

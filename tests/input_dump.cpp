@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Exercise a complete handoff with known pixels on WARP, then decode the PNGs independently.
 #include <rescaleframe/input_dump.h>
 #include <rescaleframe/native_window.h>

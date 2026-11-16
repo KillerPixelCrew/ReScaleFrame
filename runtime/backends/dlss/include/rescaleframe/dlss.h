@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* DLSS super resolution, reached through Streamline.
 
    Streamline is the DLSS SDK. There has been no separate one since DLSS 2, so "integrating DLSS"

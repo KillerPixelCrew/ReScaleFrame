@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #pragma once
 // SR world-window twin swap, mechanics (b) of docs/research/anomaly-sr-seam.md 1.4.
 //

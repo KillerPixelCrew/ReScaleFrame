@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Explicit device regression: <scratch runtime root with streamline/>. Hidden window,
 // real shared DLSS evaluation, FG Off. Never uses or changes a game installation.
 #include <rescaleframe/d3d11_host.h>

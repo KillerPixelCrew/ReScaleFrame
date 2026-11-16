@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* FidelityFX, behind the contract every vendor implements.
  *
  * There is nothing vendor-specific in this header on purpose. Everything a caller needs is in

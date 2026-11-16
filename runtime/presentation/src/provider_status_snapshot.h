@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #ifndef RSF_PROVIDER_STATUS_SNAPSHOT_H
 #define RSF_PROVIDER_STATUS_SNAPSHOT_H
 #include <rescaleframe/d3d11_present_bridge.h>

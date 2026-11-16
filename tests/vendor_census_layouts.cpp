@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Checks the structure offsets the census decoders use against the vendor headers in the tree
 // (untracked, under vendor/ and references/). The census itself replicates the layouts so that it
 // builds without those headers; this test is what keeps the copies honest. It is built only when

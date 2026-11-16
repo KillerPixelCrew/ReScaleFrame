@@ -1,7 +1,7 @@
 ---
 name: unreal4-render-integration
 description: Integrate and debug upscaling in shipped Unreal Engine 4 games by tracing view and render-target ownership, post-process dependencies, UI raster density, temporal conventions and queued RHI lifetimes. Use for reusable UE4 renderer concepts; use the UE4.18 skill for matched AC7 addresses and layouts.
-license: GPL-3.0-only
+license: MIT
 ---
 
 # Unreal 4 render integration

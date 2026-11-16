@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Compile-time consistency of the per-build Anomaly profiles (games/anomaly/src/*profile*.h, build_profile.h), checked for
 // the standard and the AVX table alike. This does not read the game executable: the byte guards and layouts are checked
 // against the installed executables by tests/anomaly_{geometry,sr,motion,fg}_evidence.py --verify [--exe avx].

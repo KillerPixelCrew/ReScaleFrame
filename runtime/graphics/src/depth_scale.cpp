@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include <rescaleframe/depth_scale.h>
 #include "depth_scale_private.h"
 #include <rescaleframe/d3d11_state.h>

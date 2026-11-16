@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #if !defined(RSF_TEST_SPLIT_STUB) && !defined(RSF_TEST_SPLIT_DISABLED)
 // The runtime's existing PUBLIC build definition also reaches its consumers.
 // This test deliberately checks the DLL import declarations instead.

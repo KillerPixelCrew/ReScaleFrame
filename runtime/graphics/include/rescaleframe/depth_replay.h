@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 #ifndef RSF_DEPTH_REPLAY_H
 #define RSF_DEPTH_REPLAY_H
 #include <rescaleframe/frame_tap.h>

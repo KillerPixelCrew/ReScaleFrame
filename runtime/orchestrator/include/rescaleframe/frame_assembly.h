@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* Turn what a game plugin knows about a frame into what a backend asks for.
 
    This is the orchestrator's job by the ownership split: a plugin knows where its engine keeps

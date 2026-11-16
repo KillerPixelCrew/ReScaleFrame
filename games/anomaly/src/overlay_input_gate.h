@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Anomaly input policy for the shared overlay. The engine polls buffered DirectInput mouse and
 // keyboard devices, so a window subclass alone cannot keep the game from acting on input while the
 // panel is open. This gate sits between the engine and the real device methods. It owns only the

@@ -7,6 +7,6 @@
   "dependencies": {
     "com.unity.render-pipelines.universal": "17.6.0"
   },
-  "license": "GPL-3.0-only",
+  "license": "MIT",
   "samples": [{"displayName": "Temporal Demo", "description": "Animated URP scene and runtime SR, FG and latency controls.", "path": "Samples~/TemporalDemo"}]
 }

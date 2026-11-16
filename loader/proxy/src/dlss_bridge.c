@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* Research carrier for standalone AC7. The runtime loads and prepares the game DLL before
    graphics activation. With native ownership, the game DLL supplies graph inputs, frame/view
    identity and output pools; the runtime evaluates SR on the queued RHI stream. The D3D binding

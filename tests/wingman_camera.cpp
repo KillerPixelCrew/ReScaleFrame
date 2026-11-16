@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include "../games/project-wingman/src/native_camera.h"
 #include <array>
 #include <cmath>

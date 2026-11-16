@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: MIT */
 /* Find the frame's reconstruction inputs while the game is rendering them.
 
    A super resolution backend needs scene colour, motion, depth and an exposure value from the same

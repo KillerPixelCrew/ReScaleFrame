@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 // The geometry producer's CBackend::constants.flush detour (redirected onto a fixture function in this executable)
 // calls the shared flush slot (geometry_set_flush_callback) AFTER the original flush, with the draw facts the motion
 // stage keys on: outside any scope, inside a context scope only, and inside a visual's draw scope. No game code runs.

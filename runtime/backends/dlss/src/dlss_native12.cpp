@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+// SPDX-License-Identifier: MIT
 #include <rescaleframe/dlss_native12.h>
 #include "streamline_frame.h"
 #include "streamline_load.h"
