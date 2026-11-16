@@ -12,6 +12,13 @@ _Static_assert(offsetof(rsf_d3d11_fg_api, struct_size) == 0, "size prefix");
 _Static_assert(offsetof(rsf_d3d11_fg_api, abi_version) == sizeof(uint32_t), "version prefix");
 _Static_assert(offsetof(rsf_d3d11_fg_api, set_log) == 8, "first function offset");
 
+_Static_assert(sizeof(rsf_game_depth_domain) == 104, "copied depth domain layout");
+_Static_assert(sizeof(rsf_game_depth_domains) == 240, "copied depth descriptor layout");
+_Static_assert(offsetof(rsf_game_render_pass, depth_domains) == offsetof(rsf_game_render_pass, temporal_mask_weights) + 16,
+    "append-only depth facts follow ABI22 tail");
+_Static_assert(RSF_GAME_ABI_VERSION == 23, "render pass consumer negotiation");
+_Static_assert(RSF_D3D11_FG_API_VERSION == 3, "FG table negotiates new pass");
+
 int main(void) {
     rsf_d3d11_fg_api api = {0};
     rsf_get_d3d11_fg_api_fn query = &rsf_get_d3d11_fg_api;

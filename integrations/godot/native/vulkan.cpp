@@ -439,6 +439,7 @@ int render_vulkan_impl(void* commands, const rsf_godot_vk_packet* packet,
         (packet->pass.role != RSF_GAME_RENDER_SR && packet->pass.role != RSF_GAME_RENDER_FINAL_SCENE) || !packet->pass.camera_valid) return 0;
     std::lock_guard lock(guard);
     const auto& pass = packet->pass;
+    if (rsf_game_depth_domains_requested(&pass.depth_domains)) return 0;
     const auto& camera = pass.camera;
     rsf_frame_record record{}; record.struct_size = sizeof(record); record.abi_version = RSF_GAME_FRAME_ABI_VERSION;
     record.session_id = pass.session_id; record.frame_id = pass.source_frame_id; record.view_id = static_cast<uint32_t>(pass.view_key);

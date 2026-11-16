@@ -180,6 +180,7 @@ extern "C" void rsfg_cpu(const rsf_game_cpu_event* event)
 extern "C" int rsfg_render(void* owning_device, void* owning_queue, void* commands, const rsf_game_render_pass* pass) try
 {
     if (!booted || !owning_device || !owning_queue || !commands || !pass || pass->struct_size < sizeof(*pass)) return 0;
+    if (rsf_game_depth_domains_requested(&pass->depth_domains)) return 0;
     if (!device) {
         device = static_cast<ID3D12Device*>(owning_device);
         queue = static_cast<ID3D12CommandQueue*>(owning_queue);

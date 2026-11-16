@@ -7,6 +7,48 @@
 extern "C" {
 #endif
 
+/* Depth-only conversion at existing composed raster samples. No spatial reprojection.
+   Matrices are row-major, multiplied by a source clip row vector. Producer clip includes
+   its actual jitter; target clip is the enclosing camera's unjittered space, D3D Z [0,1].
+   Transformed XY is not written or asserted. Different-FOV overlays remain a composed
+   depth approximation and need independent native motion/quality validation. */
+#define RSF_DEPTH_DOMAINS_VERSION 1u
+#define RSF_DEPTH_DOMAIN_INCLUDE_MIN 1u
+#define RSF_DEPTH_DOMAIN_INCLUDE_MAX 2u
+typedef struct rsf_game_depth_domain {
+    float classify_min;
+    float classify_max;
+    uint32_t endpoint_flags;
+    uint32_t reserved;
+    /* Actual source-allocation pixel viewport and sampled device-depth interval. */
+    float viewport_xywh[4];
+    float viewport_min_depth;
+    float viewport_max_depth;
+    float source_clip_to_target_clip[16];
+} rsf_game_depth_domain;
+typedef struct rsf_game_depth_domains {
+    uint32_t struct_size;
+    uint32_t version;
+    uint32_t domain_count;
+    uint32_t clear_enabled;
+    /* Exact decoded UNORM clear, tested before domains; becomes target far clear. */
+    float clear_value;
+    uint32_t reserved[3];
+    rsf_game_depth_domain domains[2];
+} rsf_game_depth_domains;
+/* Any nonzero byte requests mapping, including malformed descriptors. All-zero retains
+   legacy exact-copy depth. ABI23 mapping supports only single-sample R16/R24 UNORM depth.
+   Ordered disjoint intervals must cover [0,1], with optional clear-only endpoints/gap.
+   Viewport unmapping permits at most one source-format quantization step at endpoints.
+   CPU bounds validation guarantees finite arithmetic and positive W; Z/W is explicitly
+   clipped to [0,1]. Unknown versions/partial coverage refuse, never fall back to raw. */
+static inline uint32_t rsf_game_depth_domains_requested(const rsf_game_depth_domains* value) {
+    const unsigned char* bytes = (const unsigned char*)value;
+    uint32_t i;
+    for (i = 0; i < (uint32_t)sizeof(*value); ++i) if (bytes[i]) return 1u;
+    return 0u;
+}
+
 /* Copied engine rendering identity. Keys identify owners and must not be dereferenced by a host.
    native_frame is not an input/simulation frame ID and does not authorize frame generation. */
 typedef struct rsf_game_render_pass {
@@ -90,6 +132,9 @@ typedef struct rsf_game_render_pass {
        and are adapter facts. A nonfinite weighted sample rejects history fully. */
     void* temporal_mask;
     float temporal_mask_weights[4];
+    /* ABI23: copied current-source depth facts, leased with depth; render_rect and
+       camera supply the active raster and target projection/jitter convention. */
+    rsf_game_depth_domains depth_domains;
 } rsf_game_render_pass;
 
 #define RSF_GAME_RENDER_SR 1u

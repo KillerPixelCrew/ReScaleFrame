@@ -354,7 +354,7 @@ int main(int argc, char** argv) {
     const auto verify = [&](bool condition, const char* label) {
         if (!condition) { std::printf("FAIL: %s\n", label); failed = true; }
     };
-    bool refuse_inputs_late = false;
+    bool refuse_inputs_late = false, refuse_depth_late = false;
     auto frame = [&](bool reconstruct, bool primary, bool reset, int expect_capture) {
         ++source;
         cpu(host, source, RSF_GAME_CPU_FRAME_BEGIN);
@@ -390,6 +390,13 @@ int main(int argc, char** argv) {
         // FRAME precedes every source-owned GPU input and SR callback.
         pass.role = RSF_GAME_RENDER_FRAME; host.render_pass(host.user, context.Get(), &pass, 1);
         pass.role = RSF_GAME_RENDER_SUBMISSION; host.render_pass(host.user, context.Get(), &pass, 1);
+        if (scoped) {
+            auto& domains=pass.depth_domains;
+            domains.struct_size=sizeof(domains); domains.version=RSF_DEPTH_DOMAINS_VERSION; domains.domain_count=1;
+            auto& domain=domains.domains[0]; domain.classify_max=domain.viewport_max_depth=1; domain.endpoint_flags=3;
+            domain.viewport_xywh[2]=float(active_width); domain.viewport_xywh[3]=float(active_height);
+            identity(domain.source_clip_to_target_clip);
+        }
         pass.role = RSF_GAME_RENDER_FG_INPUTS;
         host.render_pass(host.user, context.Get(), &pass, 1);
         host.render_pass(host.user, context.Get(), &pass, 0);
@@ -403,9 +410,15 @@ int main(int argc, char** argv) {
         // Match the native adapter: retain inputs before SR can mutate them.
         auto sr_pass = pass; sr_pass.role = RSF_GAME_RENDER_SR;
         sr_pass.flags |= RSF_GAME_RENDER_NO_FG; // SR metadata does not grant FG eligibility.
+        if (scoped) sr_pass.depth_domains.domains[0].source_clip_to_target_clip[14]=.125f;
         const auto sr_result = host.process_upscale(host.user, context.Get(), &sr_pass);
         if (reconstruct && sr_result == RSF_OK) ++sr_evaluated;
         if (reconstruct && native_reinsertion) verify(sr_result == RSF_OK, "warmed reduced SR must reinsert into native colour allocation");
+        if (refuse_depth_late) {
+            auto malformed=pass; ++malformed.depth_domains.version;
+            host.render_pass(host.user,context.Get(),&malformed,1);
+            host.render_pass(host.user,context.Get(),&malformed,0);
+        }
         if (refuse_inputs_late) {
             auto refused = pass; refused.role = RSF_GAME_RENDER_FG_INPUTS; refused.flags |= RSF_GAME_RENDER_NO_FG;
             host.render_pass(host.user,context.Get(),&refused,1);
@@ -574,6 +587,18 @@ int main(int argc, char** argv) {
     verify(after_refusal.tagged_frames == before_refusal.tagged_frames && after_refusal.reason == RSF_NATIVE_FG_REASON_RESET,
         "genuine late FG refusal remains sticky despite eligible duplicate and WINDOW");
     if (!failed) frame(true,true,false,true);
+    if (scoped) {
+        rsf_native_fg_status before_depth{}; before_depth.struct_size=sizeof(before_depth);
+        verify(rsf_native_fg_status_get(&before_depth)!=0,"query before malformed repeated depth lease");
+        refuse_depth_late=true;
+        if (!failed) frame(true,true,false,true);
+        refuse_depth_late=false;
+        rsf_native_fg_status after_depth{}; after_depth.struct_size=sizeof(after_depth);
+        verify(rsf_native_fg_status_get(&after_depth)!=0 && after_depth.tagged_frames==before_depth.tagged_frames &&
+            after_depth.reason==RSF_NATIVE_FG_REASON_RESET,
+            "refused repeated depth descriptor cannot authorize retained same-source inputs");
+        if (!failed) frame(true,true,false,true);
+    }
     rsf_native_fg_status before_invalid{}; before_invalid.struct_size = sizeof(before_invalid);
     if (!rsf_native_fg_status_get(&before_invalid)) return fail("query before-nonprimary FG status");
     if (!failed) frame(true, false, false, -1);

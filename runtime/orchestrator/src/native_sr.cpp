@@ -15,6 +15,7 @@
 #include "native_reinsert.h"
 #include <d3d11.h>
 #include <cstring>
+#include <cstddef>
 #include <wrl/client.h>
 #include <array>
 #include <atomic>
@@ -25,7 +26,29 @@ struct History {
     uint64_t session = 0, owner = 0, frame = 0;
     uint32_t width = 0, height = 0;
     int32_t render_rect[4]{}, output_rect[4]{};
+    rsf_game_depth_domains depth_domains{};
 };
+bool same_device_inputs(void* raw_context, const rsf_game_render_pass& pass) {
+    auto* context=static_cast<ID3D11DeviceContext*>(raw_context);
+    if (context->GetType()!=D3D11_DEVICE_CONTEXT_IMMEDIATE) return false;
+    Microsoft::WRL::ComPtr<ID3D11Device> device; context->GetDevice(&device);
+    Microsoft::WRL::ComPtr<IUnknown> identity;
+    if (!device || FAILED(device.As(&identity))) return false;
+    void* textures[]{pass.color_input,pass.color_output,pass.depth,pass.motion,pass.exposure,
+        pass.color_output_readable,pass.temporal_mask};
+    for (void* pointer:textures) if (pointer) {
+        Microsoft::WRL::ComPtr<ID3D11Device> owner;
+        static_cast<ID3D11Texture2D*>(pointer)->GetDevice(&owner);
+        Microsoft::WRL::ComPtr<IUnknown> other;
+        if (!owner || FAILED(owner.As(&other)) || other.Get()!=identity.Get()) return false;
+    }
+    return true;
+}
+bool same_depth_layout(const rsf_game_depth_domains& a, const rsf_game_depth_domains& b) {
+    if (a.domain_count!=b.domain_count || a.version!=b.version || a.clear_enabled!=b.clear_enabled || a.clear_value!=b.clear_value) return false;
+    for (size_t i=0;i<2;++i) if (std::memcmp(&a.domains[i],&b.domains[i],offsetof(rsf_game_depth_domain,source_clip_to_target_clip))) return false;
+    return true; // Current-source projective matrices may change every frame.
+}
 // The existing pipeline has one active immediate context. This record shares that ownership.
 History history;
 std::atomic<uint32_t> native_enabled{0};
@@ -135,12 +158,18 @@ extern "C" RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_native_sr_evaluate(void*
         history.owner != pass->history_key || pass->native_frame != uint32_t(history.frame + 1) ||
         history.width != source.render_width || history.height != source.render_height ||
         std::memcmp(history.render_rect, pass->render_rect, sizeof(history.render_rect)) ||
-        std::memcmp(history.output_rect, pass->output_rect, sizeof(history.output_rect));
+        std::memcmp(history.output_rect, pass->output_rect, sizeof(history.output_rect)) ||
+        !same_depth_layout(history.depth_domains,pass->depth_domains);
     rsf_dlss_pipeline_frame frame{};
     frame.struct_size = sizeof(frame); frame.abi_version = RSF_DLSS_PIPELINE_ABI_VERSION;
     frame.scene_color = pass->color_input; frame.depth = pass->depth; frame.game_motion = pass->motion;
     frame.exposure = nullptr; frame.render_width = source.render_width;
     frame.render_height = source.render_height; frame.camera = &camera;
+    if (!same_device_inputs(context,*pass)) return RSF_DLSS_PIPELINE_ERROR_INVALID_ARGUMENT;
+    D3D11_TEXTURE2D_DESC mapped_depth_desc{};
+    static_cast<ID3D11Texture2D*>(pass->depth)->GetDesc(&mapped_depth_desc);
+    if (!rsf_native_regions_depth_valid(&pass->depth_domains,mapped_depth_desc.Format,pass->render_rect))
+        return RSF_DLSS_PIPELINE_ERROR_INVALID_ARGUMENT;
     Bindings bindings(context); if (!bindings.valid) return RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED;
     static_cast<ID3D11DeviceContext*>(context)->SetPredication(nullptr, FALSE);
     const auto resized = rsf_dlss_pipeline_resize_output(output_width, output_height, nullptr, nullptr);
@@ -149,7 +178,7 @@ extern "C" RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_native_sr_evaluate(void*
     static_cast<ID3D11Texture2D*>(pass->color_input)->GetDesc(&color_desc);
     static_cast<ID3D11Texture2D*>(pass->depth)->GetDesc(&depth_desc);
     static_cast<ID3D11Texture2D*>(pass->motion)->GetDesc(&motion_desc);
-    const bool local_inputs = !pass->render_rect[0] && !pass->render_rect[1] &&
+    const bool local_inputs = !rsf_game_depth_domains_requested(&pass->depth_domains) && !pass->render_rect[0] && !pass->render_rect[1] &&
         color_desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT &&
         color_desc.Width == source.render_width && color_desc.Height == source.render_height &&
         depth_desc.Width == source.render_width && depth_desc.Height == source.render_height &&
@@ -158,7 +187,7 @@ extern "C" RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_native_sr_evaluate(void*
         ID3D11Texture2D *color = nullptr, *depth = nullptr, *motion = nullptr;
         if (!rsf_native_regions_prepare(static_cast<ID3D11DeviceContext*>(context),
             static_cast<ID3D11Texture2D*>(pass->color_input), static_cast<ID3D11Texture2D*>(pass->depth),
-            static_cast<ID3D11Texture2D*>(pass->motion), pass->render_rect, &color, &depth, &motion))
+            static_cast<ID3D11Texture2D*>(pass->motion), pass->render_rect, &color, &depth, &motion, &pass->depth_domains, source.depth_inverted != 0))
             return RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED;
         frame.scene_color = color; frame.depth = depth; frame.game_motion = motion;
     }
@@ -191,6 +220,7 @@ extern "C" RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_native_sr_evaluate(void*
     }
     history.session = pass->session_id; history.owner = pass->history_key; history.frame = pass->native_frame;
     history.width = source.render_width; history.height = source.render_height;
+    history.depth_domains=pass->depth_domains;
     std::memcpy(history.render_rect, pass->render_rect, sizeof(history.render_rect));
     std::memcpy(history.output_rect, pass->output_rect, sizeof(history.output_rect));
     return RSF_DLSS_PIPELINE_OK;
@@ -219,6 +249,19 @@ extern "C" RSF_RUNTIME_API int32_t rsf_native_sr_capture_fg(void* raw_context,
     if (!raw_context || !pass || pass->struct_size < sizeof(*pass) ||
         pass->role != RSF_GAME_RENDER_FG_INPUTS || !motion || motion->struct_size < sizeof(*motion))
         return RSF_ERROR_INVALID_ARGUMENT;
+    // A refused repeated explicit lease must not leave an earlier same-source capture eligible.
+    struct Refusal {
+        const rsf_game_render_pass* pass;
+        bool accepted{};
+        ~Refusal() {
+            if (accepted || !pass->source_frame_id) return;
+            auto refused=*pass; refused.flags|=RSF_GAME_RENDER_NO_FG;
+            rsf_game_render_pass previous=refused;
+            (void)rsf_native_fg_scene_swap(&previous);
+            rsf_native_fg_scene(&refused);
+            (void)rsf_native_fg_scene_swap(&previous);
+        }
+    } refusal{pass};
     if (!pass->source_frame_id || !pass->camera_valid || !pass->color_input || !pass->depth || !pass->motion ||
         !pass->session_id || !pass->submission_id || !pass->motion_camera_included ||
         !pass->motion_to_uv[0] || !pass->motion_to_uv[1]) return RSF_ERROR_NOT_READY;
@@ -233,6 +276,11 @@ extern "C" RSF_RUNTIME_API int32_t rsf_native_sr_capture_fg(void* raw_context,
     auto* context = static_cast<ID3D11DeviceContext*>(raw_context);
     if (context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) return RSF_ERROR_INVALID_ARGUMENT;
     rsf_native_fg_stage("normalize-enter", pass->source_frame_id, pass->native_frame, 0);
+    if (!same_device_inputs(context,*pass)) return RSF_ERROR_INVALID_ARGUMENT;
+    D3D11_TEXTURE2D_DESC mapped_depth_desc{};
+    static_cast<ID3D11Texture2D*>(pass->depth)->GetDesc(&mapped_depth_desc);
+    if (!rsf_native_regions_depth_valid(&pass->depth_domains,mapped_depth_desc.Format,pass->render_rect))
+        return RSF_ERROR_INVALID_ARGUMENT;
     Bindings bindings(context); if (!bindings.valid) return RSF_ERROR_NOT_READY;
     context->SetPredication(nullptr, FALSE);
     Microsoft::WRL::ComPtr<ID3D11Device> device; context->GetDevice(&device);
@@ -252,7 +300,7 @@ extern "C" RSF_RUNTIME_API int32_t rsf_native_sr_capture_fg(void* raw_context,
     ID3D11Texture2D *color{}, *depth{}, *vectors{};
     if (!rsf_native_regions_prepare(context, static_cast<ID3D11Texture2D*>(pass->color_input),
         static_cast<ID3D11Texture2D*>(pass->depth), static_cast<ID3D11Texture2D*>(pass->motion),
-        pass->render_rect, &color, &depth, &vectors) ||
+        pass->render_rect, &color, &depth, &vectors, &pass->depth_domains, source.depth_inverted != 0) ||
         rsf_motion_decode_run(inputs.decode, context, vectors, motion) != RSF_MOTION_DECODE_OK)
         return RSF_ERROR_NOT_READY;
     rsf_motion_resolve_params resolve{}; resolve.struct_size = sizeof(resolve);
@@ -288,7 +336,8 @@ extern "C" RSF_RUNTIME_API int32_t rsf_native_sr_capture_fg(void* raw_context,
         fg_history.owner != pass->history_key || pass->native_frame != uint32_t(fg_history.frame + 1) ||
         fg_history.width != source.render_width || fg_history.height != source.render_height ||
         std::memcmp(fg_history.render_rect, pass->render_rect, sizeof(fg_history.render_rect)) ||
-        std::memcmp(fg_history.output_rect, pass->output_rect, sizeof(fg_history.output_rect));
+        std::memcmp(fg_history.output_rect, pass->output_rect, sizeof(fg_history.output_rect)) ||
+        !same_depth_layout(fg_history.depth_domains,pass->depth_domains);
 
     camera.motion_decoded = 1; camera.has_motion_sentinel = 0; camera.camera_motion_included = 1;
     camera.motion_scale[0] = 1.0f / float(inputs.width); camera.motion_scale[1] = 1.0f / float(inputs.height);
@@ -315,8 +364,10 @@ extern "C" RSF_RUNTIME_API int32_t rsf_native_sr_capture_fg(void* raw_context,
     if (!rsf_native_fg_inputs_ready(pass->source_frame_id)) return RSF_ERROR_NOT_READY;
     fg_history.session = pass->session_id; fg_history.owner = pass->history_key; fg_history.frame = pass->native_frame;
     fg_history.width = source.render_width; fg_history.height = source.render_height;
+    fg_history.depth_domains=pass->depth_domains;
     std::memcpy(fg_history.render_rect, pass->render_rect, sizeof(fg_history.render_rect));
     std::memcpy(fg_history.output_rect, pass->output_rect, sizeof(fg_history.output_rect));
+    refusal.accepted=true;
     return RSF_OK;
 } catch (...) { return RSF_ERROR_NOT_READY; }
 

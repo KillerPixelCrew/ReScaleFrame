@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstring>
 #include <cstdio>
+#include <limits>
 
 namespace {
 using Microsoft::WRL::ComPtr;
@@ -180,6 +181,155 @@ int main() {
             "foreign resources leave bindings and output pointers unchanged");
         context->OMSetRenderTargets(0,nullptr,nullptr);
     }
+    // Depth domains reuse the production crop/normalization path, including an
+    // output-only D24 allocation. No vendor runtime is needed for these values.
+    std::array<uint32_t,48> domain_pixels{}, packed_vectors{};
+    const uint32_t codes[]{0,32767,32768,65535,32769,65534,16384,49152};
+    for (size_t i=0;i<48;++i) domain_pixels[i]=codes[(i+2*(i/8)+6)%8];
+    // R16 UNORM makes the split's exact decoded boundary observable.
+    std::array<uint16_t,48> depth16{};
+    for (size_t i=0;i<48;++i) depth16[i]=uint16_t(domain_pixels[i]);
+    auto region_depth=texture(device.Get(),DXGI_FORMAT_R16_TYPELESS,depth16.data(),2,D3D11_BIND_DEPTH_STENCIL);
+    auto region_motion=texture(device.Get(),DXGI_FORMAT_R16G16_FLOAT,packed_vectors.data(),4,D3D11_BIND_SHADER_RESOURCE);
+    if (!region_depth || !region_motion) return 1;
+    const auto region_before=read(device.Get(),context.Get(),region_depth.Get(),2);
+    const int32_t region_rect[]{2,1,6,5};
+    rsf_game_depth_domains domains{}; domains.struct_size=sizeof(domains); domains.version=RSF_DEPTH_DOMAINS_VERSION;
+    domains.domain_count=2; domains.clear_enabled=1; domains.clear_value=1;
+    const float split=float(32768)/65535.f;
+    for (unsigned i=0;i<2;++i) {
+        auto& d=domains.domains[i];
+        d.classify_min=d.viewport_min_depth=i ? split : 0;
+        d.classify_max=d.viewport_max_depth=i ? 1.f : split;
+        d.endpoint_flags=i ? RSF_DEPTH_DOMAIN_INCLUDE_MAX : 3u;
+        d.viewport_xywh[2]=8; d.viewport_xywh[3]=6;
+        d.source_clip_to_target_clip[0]=d.source_clip_to_target_clip[5]=d.source_clip_to_target_clip[10]=d.source_clip_to_target_clip[15]=1;
+    }
+    // X changes deliberately: this operation writes target Z/W at the same sample.
+    domains.domains[0].source_clip_to_target_clip[12]=.3f;
+    domains.domains[0].source_clip_to_target_clip[10]=.5f;
+    domains.domains[0].source_clip_to_target_clip[11]=.5f;
+    domains.domains[1].source_clip_to_target_clip[10]=2;
+    domains.domains[1].source_clip_to_target_clip[14]=-.5f;
+    ID3D11Texture2D *local_color{}, *local_depth{}, *local_motion{};
+    const auto normalize=[&](const rsf_game_depth_domains& request, ID3D11Texture2D* source=nullptr) {
+        return rsf_native_regions_prepare(context.Get(),immutable.Get(),source ? source : region_depth.Get(),
+            region_motion.Get(),region_rect,&local_color,&local_depth,&local_motion,&request,false);
+    };
+    const bool mapped=region_depth && region_motion && normalize(domains);
+    check(mapped,"normalize exhaustive UNORM depth domains without readback in production");
+    if (mapped) {
+        D3D11_TEXTURE2D_DESC d{}; local_depth->GetDesc(&d);
+        check(d.Width==4 && d.Height==4 && d.Format==DXGI_FORMAT_R32_FLOAT,"domain depth crop is render-local R32");
+        const auto values=read(device.Get(),context.Get(),local_depth,4);
+        check(values.size()==64,"mapped depth readback");
+        for (size_t y=0;y<4;++y) for (size_t x=0;x<4;++x) {
+            const double stored=double(depth16[(y+1)*8+x+2])/65535;
+            double expected=1;
+            if (stored!=1) {
+                const bool first_domain= float(stored)<=split;
+                const auto& domain=domains.domains[first_domain ? 0 : 1];
+                const double z=(stored-domain.viewport_min_depth)/(domain.viewport_max_depth-domain.viewport_min_depth);
+                expected=first_domain ? (.5*z)/(1+.5*z) : std::clamp(2*z-.5,0.0,1.0);
+            }
+            float actual{}; if (values.size()==64) std::memcpy(&actual,values.data()+(y*4+x)*4,4);
+            check(std::abs(actual-expected)<2e-5,"UNORM split, offset crop, homogeneous divide, changed XY and explicit clipping");
+        }
+        auto boundary_clear=domains; boundary_clear.clear_value=split;
+        boundary_clear.domains[0].endpoint_flags=RSF_DEPTH_DOMAIN_INCLUDE_MIN;
+        check(normalize(boundary_clear),"explicit clear owns otherwise excluded shared endpoint");
+        const auto clear_values=read(device.Get(),context.Get(),local_depth,4);
+        for (size_t y=0;y<4;++y) for (size_t x=0;x<4;++x) if (depth16[(y+1)*8+x+2]==32768) {
+            float actual{}; if (clear_values.size()==64) std::memcpy(&actual,clear_values.data()+(y*4+x)*4,4);
+            check(clear_values.size()==64 && actual==1,"clear takes precedence over homogeneous projection");
+        }
+        auto fractional=domains;
+        for (auto& domain:fractional.domains) {
+            domain.viewport_xywh[0]=2.25f; domain.viewport_xywh[1]=1.25f;
+            domain.viewport_xywh[2]=domain.viewport_xywh[3]=3.5f;
+        }
+        fractional.domains[0].source_clip_to_target_clip[2]=.1f;
+        fractional.domains[0].source_clip_to_target_clip[6]=.1f;
+        check(normalize(fractional),"fractional viewport covers sample centers without covering outer texel edges");
+        const auto fractional_values=read(device.Get(),context.Get(),local_depth,4);
+        for (size_t y=0;y<4;++y) for (size_t x=0;x<4;++x) {
+            const double stored=double(depth16[(y+1)*8+x+2])/65535;
+            const bool first_domain=float(stored)<=split;
+            const double z=first_domain ? stored/split : (stored-split)/(1-split);
+            const double nx=2*(double(x)+2.5-2.25)/3.5-1;
+            const double ny=1-2*(double(y)+1.5-1.25)/3.5;
+            const double expected=stored==1 ? 1 : first_domain ? std::clamp((.5*z+.1*nx+.1*ny)/(1+.5*z),0.0,1.0) : std::clamp(2*z-.5,0.0,1.0);
+            float actual{}; if (fractional_values.size()==64) std::memcpy(&actual,fractional_values.data()+(y*4+x)*4,4);
+            check(fractional_values.size()==64 && std::abs(actual-expected)<2e-5,"fractional viewport unmaps actual sample-center NDC");
+        }
+        auto uncovered=fractional; uncovered.domains[0].viewport_xywh[2]=3.25f;
+        check(!normalize(uncovered),"viewport right edge at last sample center is uncovered");
+        uncovered=fractional; uncovered.domains[0].viewport_xywh[3]=3.25f;
+        check(!normalize(uncovered),"viewport bottom edge at last sample center is uncovered");
+        auto invalid=domains; --invalid.struct_size; check(!normalize(invalid),"short depth descriptor refused");
+        invalid=domains; ++invalid.version; check(!normalize(invalid),"unknown depth version refused");
+        invalid=domains; invalid.domain_count=3; check(!normalize(invalid),"excess depth domains refused");
+        invalid=domains; invalid.reserved[0]=1; check(!normalize(invalid),"reserved depth field refused");
+        invalid=domains; invalid.domains[1].classify_min+=.01f; check(!normalize(invalid),"partial-domain gap refused");
+        invalid=domains; invalid.domains[1].endpoint_flags|=1; check(!normalize(invalid),"ambiguous included boundary refused");
+        invalid=domains; invalid.domains[0].viewport_max_depth=split-.001f; check(!normalize(invalid),"unmapping outside quantization tolerance refused");
+        invalid=domains; invalid.domains[1].viewport_min_depth=std::nextafter(split,1.f);
+        check(normalize(invalid),"one UNORM step endpoint tolerance accepted");
+        invalid=domains; invalid.domains[0].source_clip_to_target_clip[11]=-1; check(!normalize(invalid),"possible zero W at box corner refused");
+        invalid=domains; invalid.domains[0].source_clip_to_target_clip[15]=1e-8f; check(!normalize(invalid),"near-zero W refused");
+        invalid=domains; invalid.domains[0].source_clip_to_target_clip[15]=-1; check(!normalize(invalid),"negative W refused");
+        invalid=domains; invalid.domains[0].source_clip_to_target_clip[0]=std::numeric_limits<float>::infinity();
+        check(!normalize(invalid),"nonfinite matrix refused");
+        invalid=domains; invalid.domains[0].source_clip_to_target_clip[0]=0; check(!normalize(invalid),"singular matrix refused");
+        invalid=domains; invalid.domains[0].source_clip_to_target_clip[10]=1e30f; check(!normalize(invalid),"overflow-risk matrix refused");
+        invalid=domains; invalid.domains[0].viewport_xywh[0]=3; check(!normalize(invalid),"viewport missing part of crop refused");
+        std::array<float,48> floats{}; floats.fill(.25f);
+        auto float_depth=texture(device.Get(),DXGI_FORMAT_R32_FLOAT,floats.data(),4,D3D11_BIND_SHADER_RESOURCE);
+        if (!float_depth) return 1;
+        check(!normalize(domains,float_depth.Get()),"mapped float depth has no finite-sample contract");
+        const rsf_game_depth_domains zero{};
+        check(normalize(zero,float_depth.Get()),"zero descriptor retains legacy R32 exact-copy path");
+        if (second_device) {
+            auto foreign=texture(other_device.Get(),DXGI_FORMAT_R16_TYPELESS,depth16.data(),2,D3D11_BIND_DEPTH_STENCIL);
+            if (!foreign) return 1;
+            auto* bound=aux_target.Get(); context->OMSetRenderTargets(1,&bound,nullptr);
+            auto* retained_depth=local_depth;
+            check(!normalize(domains,foreign.Get()),"foreign depth refused before readable copy or cache mutation");
+            auto foreign_color=texture(other_device.Get(),DXGI_FORMAT_R32G32B32A32_FLOAT,colour.data(),16,D3D11_BIND_SHADER_RESOURCE);
+            auto foreign_motion=texture(other_device.Get(),DXGI_FORMAT_R16G16_FLOAT,packed_vectors.data(),4,D3D11_BIND_SHADER_RESOURCE);
+            if (!foreign_color || !foreign_motion) return 1;
+            check(!rsf_native_regions_prepare(context.Get(),foreign_color.Get(),region_depth.Get(),region_motion.Get(),region_rect,
+                &local_color,&local_depth,&local_motion,&domains,false),"foreign region colour refused");
+            check(!rsf_native_regions_prepare(context.Get(),immutable.Get(),region_depth.Get(),foreign_motion.Get(),region_rect,
+                &local_color,&local_depth,&local_motion,&domains,false),"foreign region motion refused");
+            ComPtr<ID3D11RenderTargetView> retained; context->OMGetRenderTargets(1,&retained,nullptr);
+            check(retained.Get()==bound && local_depth==retained_depth,"foreign depth preserves outputs and native bindings");
+            context->OMSetRenderTargets(0,nullptr,nullptr);
+        }
+        // Exercise D24 quantized values and one-step endpoint tolerance separately.
+        std::array<uint32_t,48> depth24{};
+        for (size_t i=0;i<48;++i) depth24[i]=uint32_t(i%5)+0x7ffffeu;
+        auto d24=texture(device.Get(),DXGI_FORMAT_R24G8_TYPELESS,depth24.data(),4,D3D11_BIND_DEPTH_STENCIL);
+        if (!d24) return 1;
+        auto mapped24=domains;
+        const float split24=float(0x800000)/16777215.f;
+        mapped24.domains[0].classify_max=mapped24.domains[0].viewport_max_depth=split24;
+        mapped24.domains[1].classify_min=mapped24.domains[1].viewport_min_depth=split24;
+        check(normalize(mapped24,d24.Get()),"D24 exact decoded split accepted");
+        const auto values24=read(device.Get(),context.Get(),local_depth,4);
+        for (size_t y=0;y<4;++y) for (size_t x=0;x<4;++x) {
+            const double stored=double(depth24[(y+1)*8+x+2])/16777215;
+            const bool first_domain=float(stored)<=split24;
+            const double z=first_domain ? stored/split24 : (stored-split24)/(1-split24);
+            const double expected=first_domain ? (.5*z)/(1+.5*z) : std::clamp(2*z-.5,0.0,1.0);
+            float actual{}; if (values24.size()==64) std::memcpy(&actual,values24.data()+(y*4+x)*4,4);
+            check(values24.size()==64 && std::abs(actual-expected)<2e-5,"D24 quantization retains correct split-side depth");
+        }
+        check(read(device.Get(),context.Get(),d24.Get(),4)==std::vector<unsigned char>(
+            reinterpret_cast<const unsigned char*>(depth24.data()),reinterpret_cast<const unsigned char*>(depth24.data()+48)),
+            "native D24 bits unchanged");
+    }
+    check(read(device.Get(),context.Get(),region_depth.Get(),2)==region_before,"native partitioned depth unchanged");
     rsf_native_regions_release();
     return failures ? 1 : 0;
 }

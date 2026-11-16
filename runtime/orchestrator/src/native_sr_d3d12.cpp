@@ -162,6 +162,7 @@ DXGI_FORMAT depth_view_format(DXGI_FORMAT format)
 }
 bool inputs_valid(rsf_sr12& self, const rsf_game_render_pass& pass)
 {
+    if (rsf_game_depth_domains_requested(&pass.depth_domains)) return false;
     if (!pass.camera_valid || pass.camera.struct_size != sizeof(rsf_camera_frame) ||
         pass.camera.abi_version != RSF_GAME_CAMERA_ABI_VERSION || !pass.native_frame || !pass.session_id ||
         !pass.history_key || pass.camera.render_width != self.width || pass.camera.render_height != self.height ||
@@ -508,6 +509,7 @@ extern "C" rsf_backend_result rsf_sr12_capture_scene(rsf_sr12* self, void* comma
 {
     if (!self || !commands || !pass || pass->struct_size < sizeof(*pass) || slot >= 3 || !pass->color_input)
         return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    if (rsf_game_depth_domains_requested(&pass->depth_domains)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     const auto& record = self->captured_records[slot];
     if (record.frame_id != (pass->source_frame_id ? pass->source_frame_id : pass->native_frame) || record.session_id != pass->session_id ||
         self->captured_lists[slot] != commands) return RSF_BACKEND_ERROR_STALE_RESOURCES;
