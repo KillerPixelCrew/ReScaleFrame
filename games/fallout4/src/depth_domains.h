@@ -19,9 +19,23 @@ struct NativeDepthSnapshot {
     unsigned char mode{};
     float intervals[4]{}, jitter[2]{}, ratio[2]{}, near_inverse_transposed[16]{};
     NativeDepthCamera near_camera{}, world_camera{}, world_unjittered_camera{};
+    // Producer-only raster, copied after prepass. Rect is integer LTRB sample coverage.
+    int32_t render_rect[4]{};
+    float actual_raster[6]{}, shadow_raster[6]{}, normalized_port[4]{};
+    uint32_t shadow_dirty{}, colour_selector{}, depth_selector{}, cube_selector{};
+    uint32_t descriptor_width{}, descriptor_height{};
+    bool descriptor_read{};
+    uint64_t cube_key{}, depth_dsv_key{};
+    // Logical viewport owner and submitted slot0 physical owner are distinct.
+    uint32_t colour_slot{}, bound_colour_slot{}, bound_depth_slot{};
+    uint64_t colour_texture_key{}, colour_rtv_key{};
+    int32_t scissor[4]{};
+    bool scissor_enabled{};
+    unsigned char default_viewport{}, dynamic_viewport{};
     bool valid{};
 };
 bool verify_native_depth_domains() noexcept;
+bool native_depth_snapshot_current(const NativeDepthSnapshot&) noexcept;
 // Caller must have returned from original prepass21F38B0 at exact call21F9F73
 // (return21F9F78) inside the ordinary, unchanged CPU render source lease.
 // Optional bounded first receipt per named refusal stage, matching the input reader.

@@ -422,3 +422,116 @@ before its main body, so the retained full entry-to-return listing is used.
 Earlier arbitrary triangle windows began mid-instruction; the new complete
 2186110 entry-to-return decode supplies the evidence here. No dead REA/Ghidra
 session was retried, and no runtime/device acceptance is implied.
+
+
+## Guarded reduced handoff implementation, source only
+
+On baseline95ffa1e plus this working batch, the adapter now implements the
+reduced path. This is not a worker build or game result. The root separately
+compiled the reader/camera numeric fixture and WARP auxiliary fixture, including
+the shared R11 numeric path; the complete new adapter still needs its coherent
+gate and a fresh game capture. No deployment or game interaction was performed
+by this worker.
+
+The added UpdateDynamicResolution1839ED0 detour uses the native five-pointer
+ABI: RTM plus four NiPoint3 pointers, including the original stack fifth
+argument. Exact selected call21F9F2F returns21F9F34. Every original call runs
+unchanged, with original LastError preserved. Only the existing ordinary FRAME,
+current CPU source, native owner/view/context/chain and early native screen
+refusal checks admit a candidate. The early query intentionally lacks a current
+world-camera/resource lease and may contain exactly ScreenWorldLeaseInvalid;
+it is not labeled GAMEPLAY or validcamera. Native TAA must be1/disable0 and
+FE8 must be0, checked again after core planning. The adapter never writes FE8.
+
+The core RECONFIGURE/render_config services supply dimensions and backend
+policy. A valid enabled plan publishes FB8/FBC ratios and FE5 after original
+native DR; FE4 must already be the native ordinary-world true selector.
+Native21F30B0 then refreshes near/world jittered and unjittered caches, before
+prepass. Exact calls21F32A5/BB/D1 target182BF20, which unconditionally calls
+builder182D750 at182C02D. The first static check caught an incorrect direct
+builder-target assumption from an old JSON label; installed instructions and
+the full native update receipt supplied this corrected guard chain. No cache
+invalidation, native history reset, vendor jitter or copied proxy code was added.
+
+Publication consumes read_native_inputs with the current producer snapshot.
+Integer crop fields are LTRB; actual_raster is floatXYWH. Reader-provided
+canonical camera/jitter/history/motion facts and the same copied depth-domain
+descriptor precede planning, explicit FG_INPUTS and any output mutation. Full
+positive native screen/camera/source admission is still required there. Missing
+facts retain native rendering rather than relabel a full allocation as reduced.
+
+Reduced SR calls the existing auxiliary transaction exactly once for actual
+evaluation. Mandatory raw D24/stencil and motion32 use nearest reconstruction;
+optional PipBoy30, VATS15 and refraction14 are independently filtered by device,
+allocation/crop, numeric format, feature support and alias identity. VATS alone
+requests RESTORE_CONTENTS. Its contents restore immediately after the unchanged
+Effects0..13 return21FA288; flags0 auxiliaries retire snapshots without undoing
+subsequent native writes. The transaction's depth is raw partitioned game depth,
+not the separately normalized vendor crop. No bilinear discrete filtering,
+persistent native target replacement, private GPU allocation or new ABI exists.
+
+Full-output borrowing saves ratios/activation, FE4, jitter and shadow viewport.
+It selects ratios1/FE5false/FE4false so the guarded native RenderEffect branch
+uses existing unit manager28. Manager28/38/40 pointers and refcounts are never
+mutated; the genuine manager48 partial branch remains native. Thus baked
+manager38 UVs cannot accidentally select reduced sampling during this scope.
+The existing native1817EF0 explicit-size ABI rebuilds full-output shadow viewport
+from verified Context and W/H, rather than the previous auxiliary target size;
+its native camera-setter caller182C597 and explicit-size branch are guarded.
+Only successful SR suppresses native TAA for this RenderUI. Failure restores
+owned output state before unchanged native imagespace/TAA fallback. Known SR-Off
+plans do not borrow output state. Genuine native FE4 writes, even same-value
+false, update the eventual restore intent; true writes are temporarily borrowed
+as false during the output scope. Normal HUDless false leaves native full-output
+viewport intent intact instead of resurrecting old FE4true/reduced metadata.
+
+Input ratio ownership ends after original Swap. An observed complete native DR
+writer supersedes our input values, including equal writes, while the source
+obligation remains until Swap. During output, that writer's new restore intent
+is preserved while the temporary full-output values are reasserted. Unexpected
+producer overlap refuses this temporal source. Unknown scalar values differing
+from both saved and owned values belong to the new writer: preserve them, retire
+our field flag and mark the source refused. A changed borrowed triangle pointer
+likewise refuses the source without a false busy hold after actual writes retire.
+Failed reads/writes retain ownership. Native shadow restoration additionally
+requires the exact active TLS/fallback Context; renderer/device-context/chain/
+window/frame/view changes prevent unsafe writes. A recreated owner during an
+unretired scope is unsupported and remains busy rather than writing into a new
+or freed object. Global input fields can retire at Swap without assuming the
+old native shadow remains bound, because they do not dereference that shadow.
+
+The auxiliary obligation is marked before calling the service and cleared only
+on explicit restoreOK. The shared owner added the approved idempotent empty
+acknowledgement with host/session/thread checks; mismatched pending work still
+refuses. Neither a nonzero SR result nor a native pointer change proves GPU
+cleanup. Pending auxiliary or actual native-state retirement blocks replacing
+the existing World and its resource pins; no busy counter is reset to restart.
+Hooks remain enabled while quiescing scopes drain.
+
+The existing standard Native/Quality/Balanced/Performance/Ultra Performance
+mask0x1F is exposed in source. Backend choices remain core-owned. The coordinator
+also authorized named FG_INPUTS|INPUT_TIMELINE declarations3 for cold tests of
+the implemented facts, with no RENDERED_SOURCE and readiness0. These flags are
+not accepted-input, latency, tags or generated-output claims. No fake SIM or
+INPUT_SAMPLE event was added, and fallback unbound sources retain core refusal.
+
+Static PE checks passed8 entry guards,17 direct calls,7 Present continuations
+and11 resolution guards. Eleven scalar decision-model cases cover owned,
+already-restored and superseded values, read/write failure, borrowed geometry
+change, unsafe owner, same-value native viewport intent and independent explicit
+auxiliary retirement. This model/source audit is not compiled production test
+coverage. Receipts: reduced-implementation-guards-20261116.json and
+reduced-ownership-scalars-20261116.json. Resize/backend/quality changes require
+fresh core plans and producer facts; an in-flight owner mismatch refuses and
+retains actual obligations. Live reduced raster, pre-SR lens-flare/SSLR binding
+coverage, first-person/raw-motion coverage, partial/mod paths and moving output
+quality remain required capture evidence. The existing conditional lens-flare
+gap is not a demonstrated defect and no shader replacement is inferred from it.
+
+Later coordinator correction: old PID37012 eventually exited orderly0 and20
+restorations completed. Checkpoint95 ABI23 PID37768 then ran borderless
+2560x1600 at144DPI, foreground1, with held keys and world observation; only the
+first2 SR publications were reported before a target-math refusal at
+source3486/native3957, with no F10. Native Quit exitedC0000005 without a new
+trace/cause claim, and20 entries were restored. None of that exercised this
+unbuilt reduced adapter. Root owns the combined gate and next bounded run.

@@ -20,6 +20,7 @@
 #include <cmath>
 #include <algorithm>
 #include <cstdio>
+#include <thread>
 #include <filesystem>
 #include <vector>
 #include <cstring>
@@ -305,6 +306,22 @@ int main(int argc, char** argv) {
     const rsf_d3d11_presentation_binding binding{sizeof(binding),RSF_D3D11_HOST_ABI_VERSION,chain.Get()};
     if (rsf_d3d11_host_bind_presentation(host.user,&binding) != RSF_OK)
         return fail("bind verified application presentation before source facts");
+    rsf_d3d11_auxiliary_scope empty_cleanup{sizeof(empty_cleanup),RSF_D3D11_HOST_ABI_VERSION,host.session_id,1,1};
+    if (rsf_d3d11_host_restore_auxiliaries(host.user,&empty_cleanup)!=RSF_OK ||
+        rsf_d3d11_host_restore_auxiliaries(host.user,&empty_cleanup)!=RSF_OK)
+        return fail("verified owner acknowledges empty cleanup before preparation and on repeat");
+    auto wrong_session=empty_cleanup; ++wrong_session.session_id;
+    if (rsf_d3d11_host_restore_auxiliaries(host.user,&wrong_session)!=RSF_ERROR_NOT_READY)
+        return fail("empty cleanup refuses a foreign session");
+    int32_t foreign_thread_result=RSF_OK;
+    std::thread wrong_thread([&] { foreign_thread_result=rsf_d3d11_host_restore_auxiliaries(host.user,&empty_cleanup); });
+    wrong_thread.join();
+    if (foreign_thread_result!=RSF_ERROR_NOT_READY) return fail("empty cleanup refuses a foreign graphics thread");
+    rsf_d3d11_auxiliary_pass failed_before_prepare{sizeof(failed_before_prepare),RSF_D3D11_HOST_ABI_VERSION,nullptr,0,nullptr};
+    if (rsf_d3d11_host_upscale_auxiliaries(host.user,context.Get(),&failed_before_prepare)!=RSF_ERROR_INVALID_ARGUMENT ||
+        rsf_d3d11_host_restore_auxiliaries(host.user,&empty_cleanup)!=RSF_OK)
+        return fail("failure before auxiliary preparation acknowledges no retained lease");
+
     if (outer) {
         rsf_d3d11_chain_dispatch typed{}; typed.struct_size = sizeof(typed); typed.abi_version = RSF_D3D11_HOST_ABI_VERSION;
         typed.receiver = outer->inner.Get(); typed.method = RSF_D3D11_DISPATCH_PRESENT1;
@@ -354,7 +371,7 @@ int main(int argc, char** argv) {
     const auto verify = [&](bool condition, const char* label) {
         if (!condition) { std::printf("FAIL: %s\n", label); failed = true; }
     };
-    bool refuse_inputs_late = false, refuse_depth_late = false;
+    bool refuse_inputs_late = false, refuse_depth_late = false, exercise_auxiliary_cleanup = false;
     auto frame = [&](bool reconstruct, bool primary, bool reset, int expect_capture) {
         ++source;
         cpu(host, source, RSF_GAME_CPU_FRAME_BEGIN);
@@ -411,7 +428,42 @@ int main(int argc, char** argv) {
         auto sr_pass = pass; sr_pass.role = RSF_GAME_RENDER_SR;
         sr_pass.flags |= RSF_GAME_RENDER_NO_FG; // SR metadata does not grant FG eligibility.
         if (scoped) sr_pass.depth_domains.domains[0].source_clip_to_target_clip[14]=.125f;
-        const auto sr_result = host.process_upscale(host.user, context.Get(), &sr_pass);
+        rsf_d3d11_auxiliary_surface auxiliary{sizeof(auxiliary),RSF_D3D11_AUXILIARY_COLOUR,motion.Get(),
+            {0,0,float(active_width),float(active_height)},{0,0,int32_t(width),int32_t(height)},{0,0}};
+        auxiliary.flags=RSF_D3D11_AUXILIARY_RESTORE_CONTENTS;
+        const rsf_d3d11_auxiliary_pass auxiliary_request{sizeof(auxiliary_request),RSF_D3D11_HOST_ABI_VERSION,&sr_pass,1,&auxiliary};
+        const auto sr_result = exercise_auxiliary_cleanup ?
+            rsf_d3d11_host_upscale_auxiliaries(host.user,context.Get(),&auxiliary_request) :
+            host.process_upscale(host.user, context.Get(), &sr_pass);
+        if (exercise_auxiliary_cleanup) {
+            const rsf_d3d11_auxiliary_scope cleanup{sizeof(cleanup),RSF_D3D11_HOST_ABI_VERSION,host.session_id,source,1};
+            verify(sr_result==RSF_OK,"warmed auxiliary transaction commits before cleanup checks");
+            auto mismatch=cleanup; ++mismatch.native_frame;
+            verify(rsf_d3d11_host_restore_auxiliaries(host.user,&mismatch)==RSF_ERROR_NOT_READY,
+                "mismatched pending auxiliary scope refuses without releasing ownership");
+            mismatch=cleanup; ++mismatch.view_key;
+            verify(rsf_d3d11_host_restore_auxiliaries(host.user,&mismatch)==RSF_ERROR_NOT_READY,"pending cleanup refuses wrong view");
+            mismatch=cleanup; ++mismatch.session_id;
+            verify(rsf_d3d11_host_restore_auxiliaries(host.user,&mismatch)==RSF_ERROR_NOT_READY,"pending cleanup refuses foreign session");
+            int32_t thread_result=RSF_OK;
+            std::thread other([&] { thread_result=rsf_d3d11_host_restore_auxiliaries(host.user,&cleanup); }); other.join();
+            verify(thread_result==RSF_ERROR_NOT_READY,"pending cleanup refuses foreign thread");
+            verify(rsf_d3d11_host_upscale_auxiliaries(host.user,context.Get(),&auxiliary_request)==RSF_ERROR_BUSY,
+                "refused cleanup leaves the original pending transaction owned");
+            verify(rsf_d3d11_host_restore_auxiliaries(host.user,&cleanup)==RSF_OK &&
+                rsf_d3d11_host_restore_auxiliaries(host.user,&cleanup)==RSF_OK,"successful cleanup and empty repeat acknowledge OK");
+            D3D11_TEXTURE2D_DESC staging_desc{}; output->GetDesc(&staging_desc);
+            staging_desc.Usage=D3D11_USAGE_STAGING; staging_desc.BindFlags=staging_desc.MiscFlags=0;
+            staging_desc.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
+            ComPtr<ID3D11Texture2D> invalid_mirror;
+            verify(SUCCEEDED(device->CreateTexture2D(&staging_desc,nullptr,&invalid_mirror)),"create unsupported readable mirror for rollback");
+            auto rollback_pass=sr_pass; rollback_pass.color_output_readable=invalid_mirror.Get();
+            auto invalid_request=auxiliary_request; invalid_request.pass=&rollback_pass;
+            verify(rsf_d3d11_host_upscale_auxiliaries(host.user,context.Get(),&invalid_request)!=RSF_OK,
+                "second destination failure rolls back partially prepared auxiliary transaction");
+            verify(rsf_d3d11_host_restore_auxiliaries(host.user,&cleanup)==RSF_OK &&
+                rsf_d3d11_host_restore_auxiliaries(host.user,&cleanup)==RSF_OK,"rolled-back empty cleanup and repeat acknowledge OK");
+        }
         if (reconstruct && sr_result == RSF_OK) ++sr_evaluated;
         if (reconstruct && native_reinsertion) verify(sr_result == RSF_OK, "warmed reduced SR must reinsert into native colour allocation");
         if (refuse_depth_late) {
@@ -507,7 +559,11 @@ int main(int argc, char** argv) {
     active_width = 640; active_height = 360; native_reinsertion = true;
     std::puts("Phase: bounded 10-source DLSS Quality warmup, render640x360 in960x540 native colour allocation, FG Off");
     const auto warmup_evaluated_before = sr_evaluated;
-    for (unsigned i = 0; i < 10 && !failed; ++i) frame(true, true, i == 0, 0);
+    for (unsigned i = 0; i < 10 && !failed; ++i) {
+        exercise_auxiliary_cleanup=scoped && i==9;
+        frame(true,true,i==0,0);
+    }
+    exercise_auxiliary_cleanup=false;
     verify(sr_evaluated == warmup_evaluated_before + 10, "all bounded reduced warmup sources must evaluate SR");
     // Inspect an output pixel outside the active input rectangle: reinsertion must
     // overwrite the marker in the same R11G11B10 native allocation, not a side target.

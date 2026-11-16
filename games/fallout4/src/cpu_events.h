@@ -6,7 +6,10 @@ namespace rsf::fallout4 {
 // Identity is borrowed during the guarded Swap. A proved PlayerControls
 // consumer may adopt a reserved engine-buffer poll source before Swap;
 // otherwise Swap opens a rendered source. No simulation/GPU stage is implied.
-// Native keyboard/mouse RAWINPUT receipts are reported separately, unframed.
+// Native RAWINPUT, selected removed window messages and delivered gamepad
+// batches are separate unframed receipts. They never assert a physical sample.
+// The executable-local message thunk and its saved continuation stay pinned
+// after stop, including when a later IAT owner retains our address.
 struct CpuIdentity {
     uint64_t session{}, source{}, submission{}, began_qpc{}, frequency{};
 };

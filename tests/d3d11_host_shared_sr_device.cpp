@@ -5,6 +5,9 @@
 #include <rescaleframe/dlss_pipeline.h>
 #include <rescaleframe/d3d11_present_api.h>
 #include <rescaleframe/native_fg.h>
+#include <rescaleframe/native_cpu.h>
+#include <rescaleframe/input_dump.h>
+#include <rescaleframe/overlay_api.h>
 #include <d3d11.h>
 #include <d3d11sdklayers.h>
 #include <dxgi1_6.h>
@@ -14,6 +17,10 @@
 #include <cstdio>
 #include <filesystem>
 #include <vector>
+#include <algorithm>
+#include <fstream>
+#include <iterator>
+#include <string>
 
 using Microsoft::WRL::ComPtr;
 namespace {
@@ -110,8 +117,27 @@ int main(int argc, char** argv) {
     ComPtr<ID3D11InfoQueue> diagnostics; (void)device.As(&diagnostics);
     std::printf("D3D11 debug queue available=%u\n", diagnostics ? 1u : 0u);
     if (diagnostics) diagnostics->ClearStoredMessages();
-    for (uint64_t source = 1; source <= 8; ++source) {
+    const auto capture_root = root / "captures" / "website";
+    const auto bundles = [&] {
+        std::vector<std::filesystem::path> found;
+        if (std::filesystem::exists(capture_root)) for (const auto& entry : std::filesystem::directory_iterator(capture_root))
+            if (entry.is_directory()) found.push_back(entry.path());
+        return found;
+    };
+    rsf_overlay_api overlay{sizeof(overlay),RSF_OVERLAY_API_VERSION};
+    if (rsf_get_overlay_api(&overlay) != RSF_OK) return 1;
+    // Source1 must refuse without its pre-configuration CPU begin/token; Present then
+    // completes cold setup. Sources2..10 drive real owned plan/evaluate pairs.
+    // Successful providers supply sr_constants.json through the existing assembled-frame dump.
+    for (uint64_t source = 1; source <= 10; ++source) {
         cpu(host, source, RSF_GAME_CPU_FRAME_BEGIN);
+        rsf_native_cpu_frame cpu_facts{}; cpu_facts.struct_size = sizeof(cpu_facts);
+        const bool cpu_owned = rsf_native_cpu_read(host.session_id,source,&cpu_facts) != 0;
+        const bool token_owned = rsf_streamline_host_token(presentation.host(),source) != nullptr;
+        if (source == 1 ? (cpu_owned || token_owned) : (!cpu_owned || cpu_facts.stage_mask != 1u || !token_owned)) {
+            std::printf("FAIL: source=%llu cold/owned CPU-token admission cpu=%u token=%u mask=%u\n",
+                static_cast<unsigned long long>(source),unsigned(cpu_owned),unsigned(token_owned),cpu_facts.stage_mask); return 1;
+        }
         const float scene_color[]{0.25f, 0.5f, 0.75f, 1}, zero[4]{}, unwritten[]{3, 0, 3, 1};
         context->ClearRenderTargetView(color_view.Get(), scene_color); context->ClearRenderTargetView(motion_view.Get(), zero);
         context->ClearRenderTargetView(output_view.Get(), unwritten); context->ClearDepthStencilView(depth_view.Get(), D3D11_CLEAR_DEPTH, 0.5f, 0);
@@ -131,13 +157,73 @@ int main(int argc, char** argv) {
         camera.render_width = 640; camera.render_height = 360; camera.output_width = width; camera.output_height = height;
         camera.jitter_pixels[0] = source % 2 ? 0.25f : -0.25f;
         pass.render_rect[2] = 640; pass.render_rect[3] = 360; pass.output_rect[2] = int32_t(width); pass.output_rect[3] = int32_t(height);
+        if (source == 4) {
+            rsf_render_settings settings{sizeof(settings),RSF_RENDER_FRONTEND_ABI_VERSION};
+            if (overlay.settings_get(&settings) != RSF_OK) return 1;
+            settings.sr_quality = 0; // Real Quality -> native change through the public setting.
+            if (overlay.settings_apply(&settings) != RSF_OK) return 1;
+        }
+        auto planning = pass; planning.flags |= RSF_GAME_RENDER_RECONFIGURE;
+        if (host.process_upscale(host.user, context.Get(), &planning) != RSF_ERROR_NOT_READY) return 1;
+        // A second unchanged plan must neither manufacture nor clear a pending reset.
+        if (host.process_upscale(host.user, context.Get(), &planning) != RSF_ERROR_NOT_READY) return 1;
+        if (source > 1) {
+            auto no_camera = planning; no_camera.camera_valid = 0;
+            if (host.process_upscale(host.user, context.Get(), &no_camera) != RSF_ERROR_NOT_READY) return 1;
+            rsf_game_render_config config{sizeof(config)};
+            if (!host.render_config(host.user,&config) || !config.enabled) return 1;
+            pass.camera.render_width = config.render_width; pass.camera.render_height = config.render_height;
+            pass.render_rect[2] = int32_t(config.render_width); pass.render_rect[3] = int32_t(config.render_height);
+        }
+        const bool fail_evaluation = source == 6;
+        if (fail_evaluation) pass.depth = nullptr; // Real SR refusal, never a fabricated provider result.
+        if (source == 9) pass.flags |= RSF_GAME_RENDER_RESET;
+        const auto before = bundles();
+        if (!fail_evaluation && rsf_d3d11_host_request_capture(host.user) != RSF_OK) return 1;
         const auto result = host.process_upscale(host.user, context.Get(), &pass);
         std::printf("Shared SR source=%llu result=%d\n", static_cast<unsigned long long>(source), result);
-        if (result != RSF_OK || FAILED(chain->Present(0, 0))) return 1;
+        std::filesystem::path selected;
+        for (const auto& candidate : bundles())
+            if (std::find(before.begin(),before.end(),candidate) == before.end()) {
+                if (!selected.empty()) return 1;
+                selected = candidate;
+            }
+        if (source == 1) {
+            // Host::cpu correctly discarded FRAME_BEGIN before bridge_bound. The first
+            // real scene configures the host but cannot retroactively acquire its token.
+            rsf_dlss_pipeline_status cold{sizeof(cold)};
+            if (result != RSF_DLSS_PIPELINE_ERROR_EVALUATE_FAILED ||
+                rsf_dlss_pipeline_get_status(&cold) != RSF_DLSS_PIPELINE_OK || cold.frames_evaluated || cold.frames_refused != 1 ||
+                rsf_native_cpu_read(host.session_id,source,&cpu_facts) || rsf_streamline_host_token(presentation.host(),source) ||
+                selected.empty() || std::filesystem::exists(selected / "sr_constants.json")) {
+                std::puts("FAIL: cold source must refuse before assembled backend submission"); return 1;
+            }
+            rsf_input_dump_cancel(host.session_id);
+            std::puts("PASS: cold source refused without retained CPU begin/token or backend constants; completing Present");
+        } else if (fail_evaluation) {
+            if (result != RSF_DLSS_PIPELINE_ERROR_INVALID_ARGUMENT || !selected.empty()) return 1;
+        } else {
+            if (result != RSF_OK) return 1;
+            if (selected.empty()) { std::puts("FAIL: assembled backend constants capture absent"); return 1; }
+            std::ifstream input(selected / "sr_constants.json",std::ios::binary);
+            const std::string constants{std::istreambuf_iterator<char>(input),{}};
+            const bool expected_reset = source == 2 || source == 4 || source == 7 || source == 9;
+            if (constants.find(expected_reset ? "\"reset\":1" : "\"reset\":0") == std::string::npos) {
+                std::printf("FAIL: source=%llu actual provider reset expected=%u constants=%s\n",
+                    static_cast<unsigned long long>(source),unsigned(expected_reset),constants.c_str()); return 1;
+            }
+            std::printf("Plan/evaluate source=%llu actual backend reset=%u verified\n",
+                static_cast<unsigned long long>(source),unsigned(expected_reset));
+            rsf_input_dump_cancel(host.session_id); // Read only this fixture's assembled constants, no Present/capture claim.
+        }
+        const auto presented = chain->Present(0, 0);
+        if (FAILED(presented)) return 1;
+        if (source == 1) std::printf("PASS: cold source Present returned 0x%08lx; next source must own CPU/token\n",
+            static_cast<unsigned long>(presented));
         cpu(host, source, RSF_GAME_CPU_FRAME_END);
     }
     rsf_dlss_pipeline_status status{}; status.struct_size = sizeof(status);
-    if (rsf_dlss_pipeline_get_status(&status) != RSF_DLSS_PIPELINE_OK || status.frames_evaluated != 8 || status.frames_refused) return 1;
+    if (rsf_dlss_pipeline_get_status(&status) != RSF_DLSS_PIPELINE_OK || status.frames_evaluated != 8 || status.frames_refused != 1) return 1;
     rsf_native_fg_status generation{}; generation.struct_size = sizeof(generation);
     if (!rsf_native_fg_status_get(&generation) || generation.requested.mode != RSF_FG_OFF ||
         generation.vendor.effective_mode != RSF_FG_OFF || generation.tagged_frames) return 1;

@@ -1,6 +1,6 @@
 {
   "game": "Fallout 4",
-  "status": "ABI23 Windows Release gate and generic device fixtures passed; bounded older-build main-menu startup only, live native depth/SR/FG/latency/quality acceptance pending, rendering_ready remains0",
+  "status": "Reader-padding full gate223/14 passed; PID70400 native SR capture complete/matched and framebuffer reader accepted, FG refused absent bound input owner; restored20/20 after baseline close AV, no FG/latency/full-quality acceptance, rendering_ready remains0",
   "executable": {
     "name": "Fallout4.exe",
     "version": "1.11.240.0",
@@ -33,7 +33,7 @@
     "depth": "Native partitioned Main logical1 depth; copied same-source post-prepass domains required before generic ABI23 normalization, live native snapshot/normalization acceptance pending",
     "motion": "GBufferMotionVectors logical32 R16G16_FLOAT, previous-minus-current UV source convention, valid zero; native coverage unverified",
     "fg": "Freeze depth/motion before SR; HUD-less RT0 after imagespace before UI at Render_UI+AE0xc5 post-call; final WINDOW lease through actual outer Present",
-    "input_timeline": "Unresolved device poll/worker consumption/reservation ownership; message-loop reference markers alone are insufficient"
+    "input_timeline": "Implemented native reservation/poll and actual consumer binding producers are declared for cold validation; actual accepted ledger/pacing/FG admission remains pending, fallback input-unbound sources remain core-refused"
   },
   "coexistence_baseline": {
     "f4se": "0.7.9",
@@ -45,10 +45,10 @@
     "limits": "Packaged ENB FPSLimit61 retained; no RSF SR/FG/latency/visual/coexistence acceptance"
   },
   "source_foundation": {
-    "abi": "Host8/Game23/Frame2/Camera1, input/rendered-source/complete-FG capabilities0",
-    "implementation": "Guarded cold creation and ordinary WorldBegin FRAME/SUBMISSION using CPU-owned source, pre-Present submission end, WINDOW/FRAME through outer Present and Swap; pre-imagespace mapped depth/FG-input capture and SR; native-only quality",
+    "abi": "Host8/Game23/Frame2/Camera1; provisional FG_INPUTS|INPUT_TIMELINE declarations3 for cold validation, no RENDERED_SOURCE, readiness0",
+    "implementation": "Core-planned native DR at guarded five-argument UpdateDynamicResolution, producer LTRB/canonical camera inputs, explicit pre-mutation FG capture and single auxiliary SR transaction; scoped unit selector/full viewport and source-end restoration",
     "steam": "Existing exact seven-method/ten-load profile extracted to integrations/steam, game-owned cold callbacks retained; no shared runtime game branch",
-    "validation": "Coordinator Windows Release VS2026 ABI23 gate exit0:220passed15skipped,107.24s,fmt/Clippy clean; generic WARP auxiliary and scoped device fixtures passed, not live native acceptance"
+    "validation": "Complete reader-padding-r2 Release VS2026 gate exit0,223passed14skipped119.87seconds, fmt/Clippy clean; prior XeSS activity failure passed unchanged focused6.90s recheck before fullr2"
   },
   "research": "docs/research/fallout4-render-integration-20261116.md",
   "native_render_callbacks": {
@@ -58,9 +58,9 @@
     "hudless": "Viewport call21fa2c5 returns21fa2ca after imagespace, logicalRT0 resolved independently of outer chain GetBuffer; same native frame/window/context/chain required",
     "window": "Pinned lease from HUDless until CPU finish_render_scope after unchanged Swap including native Present, before clearing CPU identity",
     "restoration": "Native jitter saved/zeroed only for output scope and conditionally restored at whole RenderUI exit; failed restoration retains busy ownership",
-    "refusals": "Early scopes UNKNOWN/NO_FG; GAMEPLAY only from positive same-source native screen/camera/resource conjunction; sticky refusal withholds pre-Present completion, capabilities0; no fake SIM event",
-    "reduced_quality": "Locked native-only; native dynamic-resolution publication, auxiliary reinsertion/consumers, resize/lensflare and output triangle restoration not yet active",
-    "checks": "Read-only PE7entry10call7Present-continuation guards plus module guards; ABI23 combined Release and generic device checks passed, live native source acceptance pending",
+    "refusals": "Planning uses early refusal-only native query, never fake GAMEPLAY/validcamera; temporal publication requires full current producer/reader/screen conjunction; source changes and lost ownership refuse, capabilities declare producers only",
+    "reduced_quality": "PID61128 DLSS SR telemetry sustained at native2560x1600 and1707x1067/1485x928/1280x800/853x533 to2560x1600, return native; no completed capture or visual/performance acceptance",
+    "checks": "Full reader-padding-r2 gate223/14 passed; PID70400 complete matched native SR capture and framebuffer reader accepted. Live FG sources remain missing bound/paced CPU owner, not missing GPU input/HUDless resources",
     "frame_submission": "One admitted ordinary-world FRAME/SUBMISSION; guarded native1818550 entry fromC335EC ends valid submission before outer Present; invalid completion withheld until refused post-Swap cleanup",
     "depth": "Guarded prepass21F38B0/callerreturn21F9F78 copies same-source NativeDepthSnapshot; pass.depth_domains required before planning/explicit FG_INPUTS/SR; source native depth remains unchanged"
   },
@@ -68,22 +68,10 @@
     "native_raster_gate": ".local/fallout4-research/verify-native-raster-20261116.log",
     "configuration": "Windows Release VS2026",
     "result": "exit0,221passed14skipped,Cargo fmt and Clippy clean",
-    "live_acceptance": "Bounded main-menu startup only; no verified scene source or effective SR evaluation",
-    "limits": "Full reduced scales, live native depth/SR parity, generated FG, latency and shader/motion/visual-quality audit remain mandatory pending; generic fixture callbacks do not prove game acceptance",
+    "live_acceptance": "PID70400 manifest complete/matchedPresent source4121/native4598 with16captured of30image entries and native framebuffer reader accepted; FG explicitly refused absent bound input owner despite resources/HUDless ready, no generated FG/latency/full-quality acceptance",
+    "limits": "Complete native SR capture and sustained execution telemetry established; captured HUDless unavailable at FG Off, full motion/shader/depth visual quality, broad quality/performance, prospective input/pacing/FG/latency and normal coexistence close remain unaccepted",
     "first_native_raster_trial": "native-raster-20261116-093321-487 PID48088 prepared/started and scoped-bound; physical chain INVALID_CALL twice, exitC0000005, observation incomplete,21/21restored; no SR acceptance",
     "armed_startup_trial": "native-raster-20261116-095900-661 PID58104 exact-SHA armed; AVbc83c1 read98 withRCX0, absent BSBethesdaPlatform singleton30e7108, beforeSR; exitC0000005 and21files restored, causeunassigned",
-    "latest_generic_gate": {
-      "receipt": ".local/fallout4-research/verify-depth-domains-r2-20261116.log",
-      "configuration": "Windows Release VS2026",
-      "exit_code": 0,
-      "passed": 220,
-      "skipped": 15,
-      "seconds": 107.24,
-      "cargo_fmt_clippy": "clean",
-      "warp_auxiliary_sr_device_152": "passed",
-      "skip_limit": "anomaly_fg_dlss_sroff_device foreground-denied, not activity acceptance",
-      "prior_failure": "Previous gate failed Windows near macro collision in new auxiliary fixture; renamed locals and coherent r2 gate passed"
-    },
     "main_menu_control": {
       "receipt": ".local/fallout4-research/native-raster-20261116-100638-894",
       "pid": 60620,
@@ -100,20 +88,21 @@
       "limits": "Startup-route sensitivity only; no unmodded QASmoke cause, SR/world/FG/latency/visual acceptance"
     },
     "depth_scoped_fixture": {
-      "receipt": ".local/fallout4-research/depth-scoped-fixture-20261116.log",
+      "receipt": ".local/fallout4-research/scene-input-scoped-fixture-20261116.log",
       "exit_code": 0,
       "sources": 55,
       "captures": 41,
       "sr_evaluations": 39,
       "tags": 34,
       "generated_callbacks": 34,
-      "limits": "Generic rebuilt device fixture, not live Fallout4 source validation, physical scanout or measured latency"
+      "rendered_source_latency": "owner0/paced0/markers0; no latency acceptance",
+      "limits": "Generic device fixture, not native game acceptance, physical scanout or measured latency"
     },
     "abi23_built_artifacts": {
       "runtime_sha256": "228191101080FDB81D2FAFD83B804F6D698AB6764524C80EC521671166A8C88C",
       "entry_sha256": "022392700C3A0DBEE2B175A728546C5680A51B544A85CF1B0F25783C37DF15FD",
       "carrier_sha256": "E4A809E7A7A7D802C7C83691727575FC288EB515130D54D60B608BDD7CF22C98",
-      "deployment": "Not deployed in current live trial: PID37012 remains on exact older ABI22 deployment"
+      "deployment": "Historical checkpoint95 artifact hashes, not PID6188; see latest_native_world_trial for that run"
     },
     "deferred_live_trial": {
       "receipt": ".local/fallout4-research/native-raster-20261116-112938-741",
@@ -124,12 +113,344 @@
       "native_quit_timeout_seconds": 120,
       "focus_denied": true,
       "keys_sent": false,
-      "restored": false,
-      "recovery": "Exact-run guarded recovery source-frozen and unexecuted; requires no game/launcher and unchanged file hashes, with authorized sealed loader-log exception",
-      "limits": "No successful close, native depth snapshot/SR quality/FG/latency acceptance"
+      "recovery": "No worker invocation; coordinator later reports completed restoration, method not inferred here",
+      "limits": "No successful close, native depth snapshot/SR quality/FG/latency acceptance",
+      "original_controller_restored": false,
+      "later_root_resolution": "Coordinator subsequently reports old PID37012 orderly exit0 and20 restored; original failure/results remain historical"
+    },
+    "borderless_checkpoint95_root_report": {
+      "pid": 37768,
+      "game_abi": 23,
+      "client": [
+        2560,
+        1600
+      ],
+      "dpi": 144,
+      "foreground": 1,
+      "held_keys_worked": true,
+      "reported_sr_publications": 2,
+      "later_refusal": "target-math source3486/native3957; no F10 capture",
+      "native_quit_exit": "C0000005, untraced, no new cause assigned",
+      "restored_entries": 20,
+      "limits": "Checkpoint native-scale transient SR telemetry, not this reduced source batch, visual/FG/latency/full coexistence acceptance"
+    },
+    "latest_native_world_trial": {
+      "receipt": ".local/fallout4-research/native-raster-20261116-151505-988",
+      "disposition": "post-close-disposition.json",
+      "pid": 70400,
+      "start_utc": "2026-11-16T14:15:07.4426232Z",
+      "runtime_sha256": "90E86B69D96B29D5D74F42E1A5DF61289FC0C4B3CD72EC4B1EC9C793F9F13178",
+      "entry_sha256": "463B1EED47090204DBB301B0332CA5CB9E5938907A67274994D59980E5AED0C7",
+      "capture": {
+        "manifest": "manifest.json",
+        "status": "complete",
+        "matched_present": true,
+        "source": 4121,
+        "native_frame": 4598,
+        "captured_images": 16,
+        "image_entries": 30,
+        "hudless_color": "unavailable in FG-Off capture; accepted native framebuffer reader and later live HUDless1 do not create a captured HUDless image"
+      },
+      "observed_world_fps": "approximately55; observation only, no performance attribution",
+      "fg_status": {
+        "foreground": 1,
+        "base_fps": 54,
+        "output_fps": 54,
+        "active": 0,
+        "tagged_frames": 0,
+        "accepted": false
+      },
+      "fg_prepare": {
+        "inputs": 1,
+        "hudless": 1,
+        "identity": 1,
+        "matched": 1,
+        "scene_supported": 1,
+        "continuous": 1,
+        "render_complete": 1,
+        "cpu_mask": 1,
+        "cpu_flags": 0,
+        "paced": 0,
+        "prospective": 0,
+        "provider_generation": 2,
+        "owner_generation": 0,
+        "reservation_read": 0,
+        "submission_ok": 0,
+        "cpu_valid": 0,
+        "meaning": "Missing bound/paced input owner; not a resource failure. reserved_bound1 alone is not a binding acknowledgement when prospective0/reservation_read0"
+      },
+      "input_timeline": "Accepted removed-MSG and bounded marker-order0 only; no prospective reservation acceptance or latency validation",
+      "controller": "observation_completed=true, matched complete capture, then120second quit cleanup timeout; original result restoredfalse superseded by exact recovery",
+      "close_action": "Ordinary AltF4 after Escape did not open native menu",
+      "native_quit_verified": false,
+      "exit_code": "C0000005",
+      "close_trace": "trace-native-quit.jsonl filename is misleading; actual AltF4 captured exact baseline4CB273 read0x50 stack and NtTerminateProcessC0000005",
+      "restoration_receipt": "resumed-restoration-20261116T1420476452502Z-3103b81a21864e34ac33e15f1721a1b1.json",
+      "restored": true,
+      "restored_entries": 20,
+      "manifest_entries": 20,
+      "custom_ini_unchanged": true,
+      "restored_user_settings_sha256": "13D80689F5966B360A3B004FC90374C2E575BAFAB46A6F7540F8615D2FE3AB0F",
+      "limits": "Narrow native SR capture/reader acceptance; no captured HUDless image, full visual/motion/quality, generated FG, prospective input/pacing, latency, normal/native-Quit or full integration acceptance"
+    },
+    "previous_full_generic_gate": {
+      "receipt": ".local/fallout4-research/verify-reduced-inputs-20261116.log",
+      "configuration": "Windows Release VS2026",
+      "exit_code": 0,
+      "passed": 221,
+      "skipped": 15,
+      "seconds": 108.81,
+      "cargo_fmt_clippy": "clean",
+      "scope": "Coherent reduced-input batch before logical-target correction; marker/input worker edits still in progress, no native latency acceptance"
+    },
+    "latest_background_batch": {
+      "build_receipt": ".local/fallout4-research/build-scene-input-marker-20261116.log",
+      "configuration": "MSVC Release VS2026",
+      "build_exit_code": 0,
+      "version_cargo_matched": true,
+      "ctest_receipt": ".local/fallout4-research/ctest-scene-input-marker-background-20261116.log",
+      "ctest_exit_code": 0,
+      "passed": 218,
+      "skipped": 14,
+      "selected_tests": 232,
+      "seconds": 82.22,
+      "excluded_foreground_tests": [
+        "anomaly_fg_dlss_sr5_device",
+        "anomaly_fg_dlss_sroff_device",
+        "anomaly_fg_fsr3_sroff_device",
+        "anomaly_fg_xess_sr5_device"
+      ],
+      "scope_receipt": ".local/fallout4-research/background-validation-scope-20261116.json",
+      "rust_receipt": ".local/fallout4-research/Rust-checks-scene-input-marker-20261116.log",
+      "cargo_fmt_clippy_exit_code": 0,
+      "full_eng_verify_passed": false,
+      "hidden_marker_receipt": ".local/fallout4-research/hidden-marker-scene-input-20261116.log",
+      "hidden_marker_result": "exit0: generic marker admission/fallback/keyed/bound derivation/failed start/repeated ends and shared SR CPU token passed",
+      "runtime_sha256": "90E86B69D96B29D5D74F42E1A5DF61289FC0C4B3CD72EC4B1EC9C793F9F13178",
+      "entry_sha256": "DAC24A522E6596726DE933DFAC7CABC628A6DCB02FFC5751D0EF297ACBF0C39F",
+      "carrier_sha256": "E4A809E7A7A7D802C7C83691727575FC288EB515130D54D60B608BDD7CF22C98",
+      "deployed": true,
+      "game_accepted": false,
+      "limits": "Historical partial background gate; same coherent artifacts subsequently passed full gate and ran one bounded restored trial, without sustained SR/FG/latency acceptance",
+      "full_gate_followup": "verify-scene-input-marker-20261116.log completed exit0,221passed15skipped144.40s, fmt/Clippy clean; not the newer composed-depth/HUDless batch gate"
+    },
+    "previous_native_world_trial": {
+      "receipt": ".local/fallout4-research/native-raster-20261116-132159-236",
+      "pid": 6188,
+      "runtime_sha256": "0915AA960358E5F01388AFA9DE1CFC4862231F7A5C7ED021F807F03850069170",
+      "entry_sha256": "DD11963187EAF7A87B2788BC4104A1634D5575A2CF2909AFB46C63F8D518A95F",
+      "client": [
+        2560,
+        1600
+      ],
+      "window_mode": "user-requested borderless",
+      "scene": "Visible first-person shower interior from ExitSave",
+      "source": 16737,
+      "submission": 1,
+      "native_frame": 17204,
+      "refusal": "producer-target: selector26 rejected by disproven Main-only viewport gate; logged descriptor0x0 was unread metadata",
+      "final_loader": "loader-post-controller.log",
+      "fg_switch": "requested1/effective1/result0; configuration switch only",
+      "fg_prepare": "selected_source0/inputs0/hudless0/submission_ok0/result-8; no generated FG acceptance",
+      "final_settings": "settings-post-controller.ini:SR1/backend3/FG1/backend1/latency0 preserved",
+      "exit_code": null,
+      "exit_method": "Unproven: no observer or retained exit handle; root subsequently reports fresh CIM with no game",
+      "recovery_receipt": "resumed-restoration-20261116T1240374349703Z-7d62efdd9d58420d97d2b819bc08567a.json",
+      "restored_entries": 19,
+      "exact_user_config_preserved": 1,
+      "verified_entries": 20,
+      "custom_ini_unchanged": true,
+      "limits": "No sustained SR, completed capture, native FG, latency or full visual/coexistence acceptance"
+    },
+    "scene_input_marker_full_gate": {
+      "receipt": ".local/fallout4-research/verify-scene-input-marker-20261116.log",
+      "exit_code": 0,
+      "passed": 221,
+      "skipped": 15,
+      "seconds": 144.4,
+      "cargo_fmt_clippy": "clean",
+      "scope": "Preceded PID54248; earlier safe218/14 and hidden/scoped fixture results remain historical generic evidence"
+    },
+    "composed_depth_hudless_followup": {
+      "source": "Composed first-person view-Z correction, named HUDless stages and CPU candidate attribution frozen",
+      "camera_fixture": ".local/fallout4-research/camera-composed-view-depth-20261116.log",
+      "camera_fixture_result": "fallout4_camera_contract passed0.01s, focused test exit0",
+      "initial_gate": ".local/fallout4-research/verify-composed-depth-hudless-20261116.log",
+      "initial_gate_result": "Failed only anomaly_overlay_visibility SetCursorPos precondition",
+      "focused_recheck": ".local/fallout4-research/overlay-cursor-refocus-recheck-20261116.log",
+      "focused_recheck_result": "exit0 after normal desktop focus, no source change",
+      "r2_gate": ".local/fallout4-research/verify-composed-depth-hudless-r2-20261116.log",
+      "r2_result": "exit0,221passed15skipped171.65seconds; fmt/Clippy clean, completed before the manual PID61128 SR quality trials"
+    },
+    "previous_native_world_trial_140447": {
+      "receipt": ".local/fallout4-research/native-raster-20261116-140447-020",
+      "disposition": "disposition.json",
+      "pid": 54248,
+      "runtime_sha256": "90E86B69D96B29D5D74F42E1A5DF61289FC0C4B3CD72EC4B1EC9C793F9F13178",
+      "entry_sha256": "DAC24A522E6596726DE933DFAC7CABC628A6DCB02FFC5751D0EF297ACBF0C39F",
+      "hwnd": 41225678,
+      "client": [
+        2560,
+        1600
+      ],
+      "dpi": 144,
+      "logical_target": "physical22/nativeRTV0 with MainDSV2 admitted; reader source4732/native5212 accepted",
+      "sr_evaluations": 1,
+      "sr_source": 4733,
+      "sr_native_frame": 5213,
+      "screen": "GAMEPLAY",
+      "hudless": "Aggregate refusal also includes framebuffer-reader failure; no identity comparison defect proven",
+      "next_refusal": "near-W source4734/native5214; actual W coefficients/minimum and small near/large world origins retained in loader-world-first-refusal.log",
+      "window_message": "Actual WINDOWS_MESSAGE emitted and core accepted stage5; not a prospective poll acknowledgement",
+      "prospective_source_receipts": 0,
+      "bounded_world_off_marker_order_violations": 0,
+      "exit_code": "C0000005",
+      "exit_method": "NativeDesktopQuit; no forced game kill",
+      "close_trace": {
+        "armed_ms": 1794834812850,
+        "detached_ms": 1794834842852,
+        "covered_final_quit": false,
+        "fault_localized": false,
+        "rea_session_closed": true
+      },
+      "restored": true,
+      "restored_entries": 20,
+      "manifest_entries": 20,
+      "custom_ini_unchanged": true,
+      "preserved_user_settings_sha256": "13D80689F5966B360A3B004FC90374C2E575BAFAB46A6F7540F8615D2FE3AB0F",
+      "limits": "No completed SR capture, sustained SR, native FG, latency, normal exit or new localized close-fault acceptance"
+    },
+    "reader_padding_followup": {
+      "proof": ".local/fallout4-research/reader-padding-proof-20261116.json",
+      "source": "Semantic-field NativeState equality built and deployed for bounded PID70400; native framebuffer reader accepted",
+      "first_gate": ".local/fallout4-research/verify-reader-padding-20261116.log",
+      "first_gate_result": "221passed15skipped1failed, XeSS inactive/generated_windows check",
+      "unchanged_focused_recheck": ".local/fallout4-research/reader-padding-xess-recheck-20261116.log",
+      "unchanged_focused_result": "exit0,6.90seconds, no source change",
+      "gate": ".local/fallout4-research/verify-reader-padding-r2-20261116.log",
+      "result": "exit0,223passed14skipped119.87seconds,Cargo fmt/Clippy clean",
+      "scope": "Narrow padding comparison/reader and native-scale matched SR capture; not full integration acceptance"
+    },
+    "previous_native_world_trial_143511": {
+      "receipt": ".local/fallout4-research/native-raster-20261116-143511-988",
+      "disposition": "post-close-disposition.json",
+      "pid": 61128,
+      "start_utc": "2026-11-16T13:35:13.6556257Z",
+      "runtime_sha256": "90E86B69D96B29D5D74F42E1A5DF61289FC0C4B3CD72EC4B1EC9C793F9F13178",
+      "entry_sha256": "B403DF6AF9BF8CCE128AEDC0D698D6BEAC9F68BF60C47127C752A4749F985F98",
+      "sr_execution": "Sustained DLSS SR evaluation telemetry across native, Quality, Balanced, Performance, Ultra Performance and return to native; no complete capture or visual-quality acceptance",
+      "quality_inputs": {
+        "native": [
+          2560,
+          1600
+        ],
+        "quality": [
+          1707,
+          1067
+        ],
+        "balanced": [
+          1485,
+          928
+        ],
+        "performance": [
+          1280,
+          800
+        ],
+        "ultra_performance": [
+          853,
+          533
+        ]
+      },
+      "output": [
+        2560,
+        1600
+      ],
+      "quality_receipts": "quality0..4-apply.txt and status-quality0..4.txt; settings roundtrip true, separately observed effective SR1/result0; apply helper alone does not prove provider activity",
+      "performance": "Base approximately4to6fps including SR Off; output FPS invalid, no performance attribution",
+      "hudless": "owner-changed refusal; exact linked-object/image evidence proves comparison included uninitialized NativeState padding; semantic-field repair is source-only in next pending gate, not deployed in this trial",
+      "fg": "Not attempted because HUDless admission failed; no FG acceptance",
+      "capture": "manual manifest remained capturing; no completed capture",
+      "input_timeline": "Accepted removed-window-message stage5 and bounded marker-order violations0 only; no prospective reservation acknowledgements or latency acceptance",
+      "prospective_source_receipts": 0,
+      "bounded_marker_order_violations": 0,
+      "controller": "600second scene wait and120second quit wait timed out; later root manual public-API quality trials and late scene-continue signal are not controller acceptance",
+      "close_action": "Ordinary AltF4 after native-Quit input did not complete",
+      "native_quit_verified": false,
+      "exit_code": "C0000005",
+      "close_trace": "Fresh durable trace-close-3.jsonl captured native4CB273 read0x50 with the exact previously recorded baseline stack, then NtTerminateProcessC0000005; not a new SR fault attribution",
+      "restoration_receipt": "resumed-restoration-20261116T1400271617884Z-84c7a0a118e143d6b24c41db1e459b4d.json",
+      "restored": true,
+      "restored_entries": 20,
+      "manifest_entries": 20,
+      "custom_ini_unchanged": true,
+      "restored_user_settings_sha256": "13D80689F5966B360A3B004FC90374C2E575BAFAB46A6F7540F8615D2FE3AB0F",
+      "settings_seal": "Exact root-owned public-API mutation107F6F6976... sealed before restoring original backup0018; no native prefs/custom writes",
+      "limits": "Sustained SR execution telemetry only; no completed capture, physical/visual-quality, performance, FG, prospective-input, latency, normal/native-Quit or full integration acceptance"
+    },
+    "planning_history_followup": {
+      "scope": "Built and device-tested generic history/metadata correction; next live validation pending",
+      "gate": {
+        "log": "verify-planning-history-20261116.log",
+        "configuration": "Windows Release VS2026",
+        "exit_code": 0,
+        "passed": 223,
+        "skipped": 14,
+        "seconds": 128.36,
+        "cargo_fmt": "passed",
+        "cargo_clippy": "passed"
+      },
+      "hidden_device": {
+        "log": "planning-history-device-r2-20261116.log",
+        "exit_code": 0,
+        "cold_source_refusal_verified": true,
+        "successful_evaluations": 8,
+        "source_ids": [
+          2,
+          3,
+          4,
+          5,
+          7,
+          8,
+          9,
+          10
+        ],
+        "actual_backend_reset": [
+          1,
+          0,
+          1,
+          0,
+          1,
+          0,
+          1,
+          0
+        ],
+        "fg": "Off"
+      },
+      "runtime_sha256": "8570CCC20A05FCDE6C533E8BD3748C827CF6D1ED842062C1E90596E5BF2375B3",
+      "entry_sha256": "463B1EED47090204DBB301B0332CA5CB9E5938907A67274994D59980E5AED0C7",
+      "research": "docs/research/native-sr-planning-history-20261116.md",
+      "retained_failures": [
+        "build-planning-history-20261116.log included nonexistent rsf_input_dump target; corrected command used rsf_input_dump_test",
+        "planning-history-device-20261116.log demanded cold bootstrap success without a source token; fixture corrected to require explicit cold refusal, without changing production readiness"
+      ]
     }
   },
   "reduced_consumer_research": "docs/research/fallout4-reduced-consumers-20261116.md",
   "startup_research": "docs/research/fallout4-native-startup-av-20261116.md",
-  "depth_hook_research": "docs/research/fallout4-depth-hook-integration-20261116.md"
+  "depth_hook_research": "docs/research/fallout4-depth-hook-integration-20261116.md",
+  "reduced_source_phase": {
+    "baseline": "95ffa1e plus current working source",
+    "adapter_built": true,
+    "quality_choices": 31,
+    "capabilities": {
+      "FG_INPUTS": true,
+      "INPUT_TIMELINE": true,
+      "RENDERED_SOURCE": false,
+      "meaning": "Implemented producer declarations awaiting bounded admission, not validation or backend enablement"
+    },
+    "generic_handoff": "Existing HostABI8 auxiliary transaction, shared numeric R11 support and idempotent empty cleanup acknowledgement",
+    "native_restore": "Owned exact writes restore; superseded scalar values and borrowed triangle changes are preserved and refused without false busy; failed actual retirement/unsafe owner association retains busy and pins",
+    "pending": "Prospective BIND/input owner and core pacing/FG/latency remain unaccepted despite complete native SR capture/resource admission; captured HUDless image, full visual/motion/quality/performance and normal close still outstanding",
+    "new_target_correction_built": true
+  }
 }

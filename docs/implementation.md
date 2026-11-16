@@ -2,45 +2,53 @@
 
 ## Fallout 4 AE native render callbacks, 16 November 2026
 
-The combined ABI23 batch passed Windows Release VS2026
-`verify-depth-domains-r2-20261116.log`: exit0,220 passed/15 skipped,107.24seconds
-and clean Cargo fmt/Clippy. WARP auxiliary_sr_device152 passed. The separately
-rebuilt scoped device fixture passed55 sources,41 captures,39 SR evaluations
-and34 tags/generated callbacks. These are generic device results, not live
-Fallout4 depth, generated presentation, physical scanout or latency acceptance.
-The previous gate failed a Windows near-macro collision in the new auxiliary
-fixture; renamed locals fixed compilation before the coherent r2 pass. The
-foreground-denied anomaly_fg_dlss_sroff_device skip is not an activity pass.
+The complete reader-padding r2 gate passed223 tests,14 skipped in119.87seconds,
+Rust fmt/Clippy clean (`verify-reader-padding-r2-20261116.log`). Retain the first
+run's221passed15skipped1failed XeSS inactive/generated_windows check; an
+unchanged focused recheck passed6.90seconds before the complete r2 pass.
+Earlier scene/input/marker and composed-depth full gates and generic hidden/
+scoped device results remain historical evidence.
 
-The adapter now builds with the guarded post-prepass depth snapshot and ABI23
-mapping descriptor before planning, explicit FG_INPUTS and SR. One ordinary
-WorldBegin FRAME/SUBMISSION uses the existing CPU source; guarded1818550 closes
-valid submission before native outer Present, while WINDOW/FRAME survive
-Present and close after Swap. Native source depth stays intact. Seven hook
-entries,10 calls and7 Present continuation guards match the installed PE,
-with native module guards required at startup. Early unknown facts and later
-screen/source refusals stay honest. Capabilities remain0, quality bit0-only and
-rendering_ready0. Full reduced scales, FG, latency, shader/motion audit and
-visual/full-coexistence acceptance remain mandatory pending.
+Root trial `native-raster-20261116-151505-988`, PID70400, used Runtime90E86B69...
+and Entry463B1EED... (full hashes in [engine metadata](../games/fallout4/engine.json)).
+The semantic-field padding repair was deployed and the native framebuffer
+reader accepted. `manifest.json` is complete, matched_present=true,
+source4121/native4598, with16 captured images among30 entries. Native world
+observation was approximately55fps. The FG-Off capture's HUDless image is
+explicitly unavailable; reader acceptance and later live HUDless1 receipts do
+not supply that missing image or prove full visual/motion/depth quality.
 
-Current PID37012 (`native-raster-20261116-112938-741`) still uses the older
-ABI22 deployment. The300-second scene and120-second native-Quit handoffs timed
-out after Windows denied focus; no keys were sent. Controller39768 exited with
-restored=false while the game remained open. Guarded deferred recovery is ready
-but unexecuted; no successful close or restoration is claimed. The ABI23 built
-Runtime/Entry/carrier hashes are recorded in
-[engine metadata](../games/fallout4/engine.json), not attributed to that old run.
+FG was explicitly requested with foreground1, base54/output54fps, active0 and
+zero tags. Same-source prepare logs had inputs1/HUDless1/identity1/matched1/
+scene_supported1/continuous1/render_complete1, but cpu_mask1/flags0/paced0/
+prospective0, provider_generation2/owner_generation0 and reservation_read0.
+This is an absent bound/paced input owner, not a resource failure. The
+reserved_bound1 predicate alone is not a BIND acknowledgement on a
+nonprospective source. Accepted removed-MSG and marker-order0 remain narrower
+facts than prospective input, generated FG or latency acceptance.
 
-Earlier main-menu control PID60620 (`native-raster-20261116-100638-894`)
-completed45seconds with1,806 application Presents, foreground1, normal exit0
-and20/20 restorations, with unchanged custom INI. SR remained0, waiting for
-verified inputs. That proves startup-route sensitivity only. The same-save
-no-RSF F4SE/ENB baseline later reproduced native4CB273/null50 close AV and
-upper-left/black-margin scaling; neither is proven RSF-introduced. Subsequent
-DPI setup corrected measured client/chain fit, without world SR acceptance.
-See [native hook contract](research/fallout4-render-integration-20261116.md),
-[depth handoff](research/fallout4-depth-hook-integration-20261116.md) and
-[reduced consumers](research/fallout4-reduced-consumers-20261116.md).
+The controller completed its capture observation, then timed out120second quit
+cleanup. Ordinary AltF4 followed Escape not opening the native menu. The
+`trace-native-quit.jsonl` filename does not establish native Quit: the trace
+captured baseline4CB273 read0x50 with the exact baseline stack and
+NtTerminateProcessC0000005. No normal/native-Quit or new SR crash-cause claim is
+made. The original result restored=false is superseded by authoritative
+`resumed-restoration-20261116T1420476452502Z-3103b81a21864e34ac33e15f1721a1b1.json`:
+exit0,20/20 verified, custom INI unchanged, original user settings SHA13D80689...
+restored after sealing the root test mutation. Native prefs/custom were preserved.
+
+The prior PID61128 sustained native/all-quality SR execution telemetry remains
+valid within its scope; this newer native-scale capture does not establish broad
+quality/performance, HUDless image coverage, FG, latency or full integration
+acceptance. Rendering_ready remains0. See [render evidence](research/fallout4-render-integration-20261116.md),
+[native inputs](research/fallout4-native-inputs-20261116.md) and
+[depth conventions](research/fallout4-depth-domains-20261116.md).
+A later shared-host correction preserves temporal history across unchanged
+planning calls and records copied depth domains in captures. Its complete
+Release gate passed223/14 in128.36seconds; the separate hidden device fixture
+verified stable backend reset0 and genuine-change/failure reset1. Runtime8570CCC2...
+is built and device-tested, with live validation pending. See
+[planning history](research/native-sr-planning-history-20261116.md).
 
 ## Skyrim SE experimental reduced-resolution SR, 15 November 2026
 

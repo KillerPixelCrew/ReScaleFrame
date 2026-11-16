@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "depth_domains.h"
+#include "camera.h"
 #include <windows.h>
 #include <d3d11.h>
 #include <wrl/client.h>
@@ -23,24 +24,58 @@ std::atomic<bool> verified{};
 enum class Stage : unsigned {
     unverified, source, tls, owner, dimensions, cache, range, camera_owner, depth_owner,
     cache_duplicate, cache_missing, camera_read, camera_math, world_cache, near_inverse,
-    target_math, pass_association, target_camera, depth_format, depth_view, state_changed, count
+    raster_math, pass_association, target_camera, depth_format, depth_view, state_changed,
+    producer_raster, producer_target, producer_shadow, producer_scissor,
+    projection_mismatch, finite_map, near_w, world_w,
+    producer_selector, producer_descriptor, producer_target_dirty, producer_target_map, producer_colour, near_basis, count
 };
 constexpr const char* names[]{"unverified","source","tls","owner","dimensions","cache","range",
     "camera-owner","depth-owner","cache-duplicate","cache-missing","camera-read","camera-math",
-    "world-cache","near-inverse","target-math","pass-association","target-camera","depth-format","depth-view","state-changed"};
+    "world-cache","near-inverse","raster-math","pass-association","target-camera","depth-format","depth-view","state-changed",
+    "producer-raster","producer-target","producer-shadow","producer-scissor",
+    "projection-mismatch","finite-map","near-W","world-W",
+    "producer-selector","producer-descriptor","producer-target-dirty","producer-target-map","producer-colour","near-basis"};
 static_assert(std::size(names)==unsigned(Stage::count) && unsigned(Stage::count)<=64);
 std::atomic<uint64_t> reported{};
-bool refuse(Stage stage, const NativeDepthSnapshot& s, void (*report)(const char*)) noexcept {
+struct MathFailure {
+    unsigned index{};
+    float actual{}, expected{}, relative_error{};
+    double w[4]{}, minimum_w{}, range{};
+};
+bool refuse(Stage stage, const NativeDepthSnapshot& s, void (*report)(const char*), const MathFailure* detail=nullptr) noexcept {
     if (report) try {
         const auto bit=uint64_t(1)<<unsigned(stage);
         if (!(reported.fetch_or(bit,std::memory_order_relaxed)&bit)) {
-            char text[400]{};
+            char text[800]{};
             std::snprintf(text,sizeof(text),
-                "Fallout4 depth stage=%s source=%llu submission=%llu native=%llu mode=%u range=%g,%g/%g,%g",
+                "Fallout4 depth stage=%s source=%llu submission=%llu native=%llu mode=%u range=%g,%g/%g,%g raster=%g,%g,%g,%g shadow=%g,%g,%g,%g dirty=%u selectors=%u,%u,%u descriptor=%ux%u descriptor_read=%u physical=%u/%u,%u ratio=%g,%g default=%u dynamic=%u",
                 names[unsigned(stage)],static_cast<unsigned long long>(s.identity.source),
                 static_cast<unsigned long long>(s.identity.submission),static_cast<unsigned long long>(s.native_frame),
-                unsigned(s.mode),double(s.intervals[0]),double(s.intervals[1]),double(s.intervals[2]),double(s.intervals[3]));
+                unsigned(s.mode),double(s.intervals[0]),double(s.intervals[1]),double(s.intervals[2]),double(s.intervals[3]),
+                double(s.actual_raster[0]),double(s.actual_raster[1]),double(s.actual_raster[2]),double(s.actual_raster[3]),
+                double(s.shadow_raster[0]),double(s.shadow_raster[1]),double(s.shadow_raster[2]),double(s.shadow_raster[3]),
+                s.shadow_dirty,s.colour_selector,s.depth_selector,s.cube_selector,s.descriptor_width,s.descriptor_height,
+                unsigned(s.descriptor_read),
+                s.colour_slot,s.bound_colour_slot,s.bound_depth_slot,
+                double(s.ratio[0]),double(s.ratio[1]),unsigned(s.default_viewport),unsigned(s.dynamic_viewport));
             report(text);
+            if (detail && (stage==Stage::projection_mismatch || stage==Stage::near_w || stage==Stage::world_w)) {
+                char math_text[520]{};
+                if (stage==Stage::projection_mismatch) {
+                    std::snprintf(math_text,sizeof(math_text),
+                        "Fallout4 depth math stage=%s source=%llu native=%llu mismatch_index=%u actual=%.9g expected=%.9g relative_error=%.9g tolerance=0.0005",
+                        names[unsigned(stage)],static_cast<unsigned long long>(s.identity.source),static_cast<unsigned long long>(s.native_frame),
+                        detail->index,double(detail->actual),double(detail->expected),double(detail->relative_error));
+                } else {
+                    std::snprintf(math_text,sizeof(math_text),
+                        "Fallout4 depth math stage=%s source=%llu native=%llu W=%.9g,%.9g,%.9g,%.9g minimum=%.12g range=%.9g near_origin=%.9g,%.9g,%.9g world_origin=%.9g,%.9g,%.9g",
+                        names[unsigned(stage)],static_cast<unsigned long long>(s.identity.source),static_cast<unsigned long long>(s.native_frame),
+                        detail->w[0],detail->w[1],detail->w[2],detail->w[3],detail->minimum_w,detail->range,
+                        double(s.near_camera.origin[0]),double(s.near_camera.origin[1]),double(s.near_camera.origin[2]),
+                        double(s.world_camera.origin[0]),double(s.world_camera.origin[1]),double(s.world_camera.origin[2]));
+                }
+                report(math_text);
+            }
         }
     } catch (...) {}
     return false;
@@ -83,15 +118,14 @@ bool matches(FXMMATRIX value, const float* expected) noexcept {
     for (unsigned i=0;i<16;++i) if (!close(actual[i],expected[i])) return false;
     return true;
 }
-bool forward_domain(FXMMATRIX value, float range) noexcept {
+bool forward_domain(FXMMATRIX value, float range, MathFailure& detail) noexcept {
     float m[16]{};
     if (!store(value,m) || !(range>0)) return false;
-    // Include one D24 step beyond each unmapping endpoint. W is affine,
-    // so its minimum over the clip box is attained at a corner.
-    const double epsilon=1.0/(16777215.0*double(range));
-    const double low=double(m[15])-std::abs(double(m[3]))-std::abs(double(m[7]))+
-        std::min(-epsilon*double(m[11]),(1.0+epsilon)*double(m[11]));
-    return std::isfinite(low) && low>1e-6;
+    CameraDepthBound bound{};
+    const bool forward=camera_depth_domain_forward(m,range,bound);
+    std::memcpy(detail.w,bound.coefficients,sizeof(detail.w));
+    detail.minimum_w=bound.minimum; detail.range=bound.range;
+    return forward;
 }
 bool camera(uintptr_t entry, uintptr_t key, unsigned char jitter, NativeDepthCamera& output) noexcept {
     uintptr_t actual_key{}; unsigned char actual_jitter{};
@@ -102,9 +136,10 @@ bool camera(uintptr_t entry, uintptr_t key, unsigned char jitter, NativeDepthCam
 }
 bool valid_camera(const NativeDepthCamera& value) noexcept {
     for (float v : value.origin) if (!std::isfinite(v)) return false;
-    // Initial mapping is only the existing full native raster path.
-    constexpr float full[]{0,1,1,0};
-    for (unsigned i=0;i<4;++i) if (value.port[i]!=full[i]) return false;
+    // Camera ports remain native normalized facts; producer raster validates
+    // their common allocation-space viewport independently of the ratios.
+    for (float v : value.port) if (!std::isfinite(v) || v<0 || v>1) return false;
+    if (!(value.port[1]>value.port[0]) || !(value.port[2]>value.port[3])) return false;
     XMMATRIX inv{};
     return inverse(matrix(value.view),inv) && inverse(matrix(value.projection),inv) &&
         inverse(matrix(value.view_projection),inv) && inverse(matrix(value.view_projection_unjittered),inv) &&
@@ -137,7 +172,9 @@ bool sample(const CpuIdentity& cpu, NativeDepthSnapshot& out, Stage& stage) noex
     if (!read(state+0x140,out.cache_key) || !out.cache_key ||
         !read(state+0x150,out.cache_count) || !out.cache_count || out.cache_count>256 ||
         !read(state+0xac,out.taa) || !out.taa || !read(state+0xb0,out.disable) || out.disable ||
-        !read(state+4,out.jitter) || !read(base+targets_rva+0xfb8,out.ratio) || out.ratio[0]!=1 || out.ratio[1]!=1) return false;
+        !read(state+4,out.jitter) || !read(base+targets_rva+0xfb8,out.ratio) ||
+        !read(base+targets_rva+0xfe4,out.default_viewport) || !read(base+targets_rva+0xfe5,out.dynamic_viewport)) return false;
+    for (float ratio : out.ratio) if (!std::isfinite(ratio) || ratio<=0 || ratio>1) return false;
     stage=Stage::range;
     if (!read(base+0x3e62250,out.mode) || out.mode ||
         !read(base+0x3e62190,out.intervals[0]) || !read(base+0x2f97b30,out.intervals[1]) ||
@@ -177,10 +214,10 @@ bool same(const NativeDepthSnapshot& a, const NativeDepthSnapshot& b) noexcept {
     return identity(a.identity,b.identity) &&
         std::tie(a.native_frame,a.renderer_key,a.context_key,a.device_context_key,a.device_key,a.window_key,a.chain_key,
             a.graph_key,a.near_camera_key,a.world_camera_key,a.cache_key,a.depth_key,a.depth_srv_key,a.width,a.height,
-            a.cache_count,a.depth_slot,a.taa,a.disable,a.mode)==
+            a.cache_count,a.depth_slot,a.taa,a.disable,a.mode,a.default_viewport,a.dynamic_viewport)==
         std::tie(b.native_frame,b.renderer_key,b.context_key,b.device_context_key,b.device_key,b.window_key,b.chain_key,
             b.graph_key,b.near_camera_key,b.world_camera_key,b.cache_key,b.depth_key,b.depth_srv_key,b.width,b.height,
-            b.cache_count,b.depth_slot,b.taa,b.disable,b.mode) &&
+            b.cache_count,b.depth_slot,b.taa,b.disable,b.mode,b.default_viewport,b.dynamic_viewport) &&
         !std::memcmp(a.intervals,b.intervals,sizeof(a.intervals)) && !std::memcmp(a.jitter,b.jitter,sizeof(a.jitter)) &&
         !std::memcmp(a.ratio,b.ratio,sizeof(a.ratio)) &&
         !std::memcmp(a.near_inverse_transposed,b.near_inverse_transposed,sizeof(a.near_inverse_transposed)) &&
@@ -188,7 +225,8 @@ bool same(const NativeDepthSnapshot& a, const NativeDepthSnapshot& b) noexcept {
         !std::memcmp(&a.world_camera,&b.world_camera,sizeof(a.world_camera)) &&
         !std::memcmp(&a.world_unjittered_camera,&b.world_unjittered_camera,sizeof(a.world_unjittered_camera));
 }
-bool math(const NativeDepthSnapshot& s, XMMATRIX& near_map, XMMATRIX& world_map, XMMATRIX& target_projection, Stage& stage) noexcept {
+bool math(const NativeDepthSnapshot& s, XMMATRIX& near_map, XMMATRIX& world_map, XMMATRIX& target_projection,
+    Stage& stage, MathFailure& detail) noexcept {
     stage=Stage::camera_math;
     if (!valid_camera(s.near_camera) || !valid_camera(s.world_camera) || !valid_camera(s.world_unjittered_camera)) return false;
     for (float v : s.jitter) if (!std::isfinite(v)) return false;
@@ -198,29 +236,172 @@ bool math(const NativeDepthSnapshot& s, XMMATRIX& near_map, XMMATRIX& world_map,
     if (std::memcmp(w.origin,u.origin,sizeof(w.origin)) || !matches(matrix(w.view),u.view) ||
         !matches(matrix(w.view_projection_unjittered),u.view_projection) ||
         !matches(matrix(u.view_projection),u.view_projection_unjittered)) return false;
-    XMMATRIX inv_view{}, inv_near_projection{}, inv_near{}, inv_world{};
+    stage=Stage::near_basis;
+    if (!matches(matrix(s.near_camera.view),w.view)) return false;
+    XMMATRIX inv_view{}, inv_near_projection{}, inv_world{};
     stage=Stage::near_inverse;
     if (!inverse(matrix(w.view),inv_view) || !inverse(matrix(s.near_camera.projection),inv_near_projection) ||
         !matches(XMMatrixTranspose(inv_near_projection),s.near_inverse_transposed) ||
-        !inverse(matrix(s.near_camera.view_projection),inv_near) || !inverse(matrix(w.view_projection),inv_world)) return false;
+        !inverse(matrix(w.view_projection),inv_world)) return false;
     target_projection=XMMatrixMultiply(inv_view,matrix(w.view_projection_unjittered));
-    stage=Stage::target_math;
-    if (!matches(target_projection,u.projection)) return false;
-    const auto& n=s.near_camera.origin;
-    const auto& o=w.origin;
-    const auto delta=XMMatrixTranslation(n[0]-o[0],n[1]-o[1],n[2]-o[2]);
-    near_map=XMMatrixMultiply(XMMatrixMultiply(inv_near,delta),matrix(w.view_projection_unjittered));
+    stage=Stage::projection_mismatch;
+    float recovered[16]{};
+    if (!store(target_projection,recovered)) { stage=Stage::finite_map; return false; }
+    bool projection_matches=true;
+    for (unsigned i=0;i<16;++i) {
+        const float error=std::abs(recovered[i]-u.projection[i])/std::max({1.0f,std::abs(recovered[i]),std::abs(u.projection[i])});
+        if (error>=detail.relative_error) {
+            detail.index=i; detail.actual=recovered[i]; detail.expected=u.projection[i]; detail.relative_error=error;
+        }
+        if (!close(recovered[i],u.projection[i])) projection_matches=false;
+    }
+    if (!projection_matches) return false;
+    // Native first-person roots supply a separate local camera pose. Describe
+    // the composed pixel's view Z, never translate it into physical world space.
+    float near_values[16]{};
+    stage=Stage::near_basis;
+    // The direct jitter0 projection has just passed the unchanged recovered-P
+    // comparison; use its native structural zeros instead of roundoff in inv(V)*VP.
+    if (!camera_composed_view_depth(s.near_camera.projection,u.projection,near_values)) return false;
+    near_map=matrix(near_values);
     world_map=XMMatrixMultiply(inv_world,matrix(w.view_projection_unjittered));
     float checked[16]{};
-    return store(near_map,checked) && store(world_map,checked) && store(target_projection,checked) &&
-        forward_domain(near_map,s.intervals[1]-s.intervals[0]) &&
-        forward_domain(world_map,s.intervals[3]-s.intervals[2]);
+    stage=Stage::finite_map;
+    if (!store(near_map,checked) || !store(world_map,checked) || !store(target_projection,checked)) return false;
+    stage=Stage::near_w;
+    if (!forward_domain(near_map,s.intervals[1]-s.intervals[0],detail)) return false;
+    stage=Stage::world_w;
+    return forward_domain(world_map,s.intervals[3]-s.intervals[2],detail);
 }
 bool same_object(IUnknown* a, IUnknown* b) noexcept {
     ComPtr<IUnknown> left,right;
     return a && b && SUCCEEDED(a->QueryInterface(IID_PPV_ARGS(&left))) &&
         SUCCEEDED(b->QueryInterface(IID_PPV_ARGS(&right))) && left.Get()==right.Get();
 }
+bool producer_raster(NativeDepthSnapshot& s, Stage& stage) noexcept {
+    stage=Stage::producer_raster;
+    auto* context=reinterpret_cast<ID3D11DeviceContext*>(s.device_context_key);
+    if (context->GetType()!=D3D11_DEVICE_CONTEXT_IMMEDIATE) return false;
+    ComPtr<ID3D11Device> device; context->GetDevice(&device);
+    if (!same_object(device.Get(),reinterpret_cast<ID3D11Device*>(s.device_key))) return false;
+    UINT count{}; context->RSGetViewports(&count,nullptr);
+    if (count!=1) return false;
+    D3D11_VIEWPORT actual{}; context->RSGetViewports(&count,&actual);
+    if (count!=1) return false;
+    const float values[]{actual.TopLeftX,actual.TopLeftY,actual.Width,actual.Height,actual.MinDepth,actual.MaxDepth};
+    std::memcpy(s.actual_raster,values,sizeof(values));
+    for (float v : values) if (!std::isfinite(v)) return false;
+    if (actual.TopLeftX<0 || actual.TopLeftY<0 || actual.Width<=0 || actual.Height<=0 ||
+        double(actual.TopLeftX)+actual.Width>s.width || double(actual.TopLeftY)+actual.Height>s.height ||
+        actual.MinDepth<0 || actual.MaxDepth>1 || actual.MinDepth>=actual.MaxDepth) return false;
+    // Half-open viewport support evaluated at source texel centers.
+    s.render_rect[0]=int32_t(std::ceil(double(actual.TopLeftX)-0.5));
+    s.render_rect[1]=int32_t(std::ceil(double(actual.TopLeftY)-0.5));
+    s.render_rect[2]=int32_t(std::ceil(double(actual.TopLeftX)+actual.Width-0.5));
+    s.render_rect[3]=int32_t(std::ceil(double(actual.TopLeftY)+actual.Height-0.5));
+    if (s.render_rect[2]<=s.render_rect[0] || s.render_rect[3]<=s.render_rect[1]) return false;
+    stage=Stage::producer_target;
+    ComPtr<ID3D11RenderTargetView> rtv;
+    ComPtr<ID3D11DepthStencilView> dsv; context->OMGetRenderTargets(1,&rtv,&dsv);
+    if (!dsv) return false;
+    s.depth_dsv_key=reinterpret_cast<uintptr_t>(dsv.Get());
+    ComPtr<ID3D11Resource> depth; dsv->GetResource(&depth);
+    if (!same_object(depth.Get(),reinterpret_cast<ID3D11Texture2D*>(s.depth_key))) return false;
+    ComPtr<ID3D11Texture2D> texture;
+    if (FAILED(depth.As(&texture))) return false;
+    D3D11_TEXTURE2D_DESC allocation{}; texture->GetDesc(&allocation);
+    if (allocation.Width!=s.width || allocation.Height!=s.height || allocation.Format!=DXGI_FORMAT_R24G8_TYPELESS ||
+        allocation.MipLevels!=1 || allocation.ArraySize!=1 || allocation.SampleDesc.Count!=1 || allocation.SampleDesc.Quality) return false;
+    D3D11_DEPTH_STENCIL_VIEW_DESC ds{}; dsv->GetDesc(&ds);
+    if (ds.Format!=DXGI_FORMAT_D24_UNORM_S8_UINT || ds.ViewDimension!=D3D11_DSV_DIMENSION_TEXTURE2D || ds.Texture2D.MipSlice) return false;
+    const auto shadow=s.context_key+0x1b70, targets=image()+targets_rva;
+    stage=Stage::producer_selector;
+    uint32_t cube{};
+    if (!read(shadow,s.shadow_dirty) || !read(shadow+0x90,s.shadow_raster) ||
+        !read(shadow+0x6d0,s.normalized_port) || !read(shadow+0x84,s.colour_selector) ||
+        !read(shadow+0x88,s.depth_selector) || !read(shadow+0x8c,s.cube_selector) || !read(shadow+0x54,cube)) return false;
+    s.cube_key=cube;
+    if (cube!=UINT32_MAX || s.depth_selector!=1 || (s.colour_selector>=100 && s.colour_selector!=UINT32_MAX)) return false;
+    // Native width/height getters use the logical slot0 selector, not Main's ID.
+    // SetCurrentRenderTarget separately maps that ID to the physical OM slot.
+    stage=Stage::producer_descriptor;
+    const auto descriptor=s.colour_selector!=UINT32_MAX?targets+size_t(s.colour_selector)*0x20:targets+0xc80+0x1c;
+    if (!read(descriptor,s.descriptor_width) || !read(descriptor+4,s.descriptor_height)) return false;
+    s.descriptor_read=true;
+    if (s.descriptor_width!=s.width || s.descriptor_height!=s.height) return false;
+    stage=Stage::producer_target_dirty;
+    if (s.shadow_dirty&1) return false;
+    stage=Stage::producer_target_map;
+    if (!read(shadow+0x2c,s.bound_colour_slot) || !read(shadow+0x4c,s.bound_depth_slot) ||
+        s.bound_depth_slot!=s.depth_slot) return false;
+    s.colour_slot=UINT32_MAX;
+    if (s.colour_selector!=UINT32_MAX &&
+        (!read(targets+0xdf4+size_t(s.colour_selector)*4,s.colour_slot) || s.colour_slot>=101)) return false;
+    if (s.bound_colour_slot!=s.colour_slot) return false;
+    stage=Stage::producer_colour;
+    if (s.colour_selector==UINT32_MAX) {
+        if (rtv) return false;
+    } else {
+        uintptr_t native_texture{},native_rtv{};
+        const auto target=s.renderer_key+0xa58+size_t(s.colour_slot)*0x30;
+        if (!read(target,native_texture) || !native_texture || !read(target+0x10,native_rtv) || !native_rtv ||
+            !rtv || !same_object(rtv.Get(),reinterpret_cast<ID3D11RenderTargetView*>(native_rtv))) return false;
+        ComPtr<ID3D11Resource> colour; rtv->GetResource(&colour);
+        ComPtr<ID3D11Texture2D> colour_texture;
+        if (!colour || FAILED(colour.As(&colour_texture)) ||
+            !same_object(colour_texture.Get(),reinterpret_cast<ID3D11Texture2D*>(native_texture))) return false;
+        ComPtr<ID3D11Device> colour_device; colour_texture->GetDevice(&colour_device);
+        D3D11_TEXTURE2D_DESC colour_allocation{}; colour_texture->GetDesc(&colour_allocation);
+        D3D11_RENDER_TARGET_VIEW_DESC colour_view{}; rtv->GetDesc(&colour_view);
+        if (!same_object(colour_device.Get(),device.Get()) || colour_allocation.Width!=s.descriptor_width ||
+            colour_allocation.Height!=s.descriptor_height || colour_allocation.MipLevels!=1 ||
+            colour_allocation.ArraySize!=1 || colour_allocation.SampleDesc.Count!=1 || colour_allocation.SampleDesc.Quality ||
+            colour_view.ViewDimension!=D3D11_RTV_DIMENSION_TEXTURE2D || colour_view.Texture2D.MipSlice) return false;
+        s.colour_texture_key=native_texture; s.colour_rtv_key=native_rtv;
+    }
+    stage=Stage::producer_shadow;
+    for (float v : s.shadow_raster) if (!std::isfinite(v)) return false;
+    for (unsigned i=0;i<4;++i) if (s.shadow_raster[i]!=s.actual_raster[i] ||
+        s.normalized_port[i]!=s.world_camera.port[i] || s.near_camera.port[i]!=s.world_camera.port[i] ||
+        s.world_unjittered_camera.port[i]!=s.world_camera.port[i]) return false;
+    const auto& port=s.normalized_port;
+    if (!s.default_viewport || ((s.ratio[0]<1 || s.ratio[1]<1) && !s.dynamic_viewport) ||
+        actual.TopLeftX!=float(s.width)*port[0] || actual.TopLeftY!=float(s.height)*(1-port[2]) ||
+        actual.Width>float(s.width)*(port[1]-port[0]) || actual.Height>float(s.height)*(port[2]-port[3])) return false;
+    stage=Stage::producer_scissor;
+    ComPtr<ID3D11RasterizerState> rasterizer; context->RSGetState(&rasterizer);
+    D3D11_RASTERIZER_DESC rs{}; if (rasterizer) rasterizer->GetDesc(&rs);
+    s.scissor_enabled=rs.ScissorEnable!=FALSE;
+    if (rs.ScissorEnable) {
+        UINT scissors{}; context->RSGetScissorRects(&scissors,nullptr);
+        if (scissors!=1) return false;
+        D3D11_RECT rectangle{}; context->RSGetScissorRects(&scissors,&rectangle);
+        if (scissors!=1 || rectangle.left>s.render_rect[0] || rectangle.top>s.render_rect[1] ||
+            rectangle.right<s.render_rect[2] || rectangle.bottom<s.render_rect[3]) return false;
+        s.scissor[0]=rectangle.left; s.scissor[1]=rectangle.top;
+        s.scissor[2]=rectangle.right; s.scissor[3]=rectangle.bottom;
+    }
+    return true;
+}
+bool same_raster(const NativeDepthSnapshot& a, const NativeDepthSnapshot& b) noexcept {
+    return !std::memcmp(a.render_rect,b.render_rect,sizeof(a.render_rect)) &&
+        !std::memcmp(a.actual_raster,b.actual_raster,sizeof(a.actual_raster)) &&
+        !std::memcmp(a.shadow_raster,b.shadow_raster,sizeof(a.shadow_raster)) &&
+        !std::memcmp(a.normalized_port,b.normalized_port,sizeof(a.normalized_port)) &&
+        a.descriptor_read==b.descriptor_read &&
+        a.scissor_enabled==b.scissor_enabled && !std::memcmp(a.scissor,b.scissor,sizeof(a.scissor)) &&
+        std::tie(a.shadow_dirty,a.colour_selector,a.depth_selector,a.cube_selector,a.descriptor_width,a.descriptor_height,a.cube_key,a.depth_dsv_key,
+            a.colour_slot,a.bound_colour_slot,a.bound_depth_slot,a.colour_texture_key,a.colour_rtv_key)==
+        std::tie(b.shadow_dirty,b.colour_selector,b.depth_selector,b.cube_selector,b.descriptor_width,b.descriptor_height,b.cube_key,b.depth_dsv_key,
+            b.colour_slot,b.bound_colour_slot,b.bound_depth_slot,b.colour_texture_key,b.colour_rtv_key);
+}
+}
+
+bool native_depth_snapshot_current(const NativeDepthSnapshot& snapshot) noexcept {
+    Stage stage=Stage::source; NativeDepthSnapshot current{};
+    return verified.load(std::memory_order_acquire) && snapshot.valid &&
+        identity(snapshot.identity,current_cpu_identity()) && cpu_source_is_current(snapshot.identity) &&
+        sample(snapshot.identity,current,stage) && same(snapshot,current) && cpu_source_is_current(snapshot.identity);
 }
 
 bool verify_native_depth_domains() noexcept {
@@ -246,7 +427,20 @@ bool verify_native_depth_domains() noexcept {
         guard(0x182db38,"\x40\x88\xab\x40\x02\x00\x00") &&
         guard(0x21f0e25,"\x84\xc0\x75\x04\x44\x0f\x28\xc8") &&
         guard(0x21f0e2d,"\xf3\x44\x0f\x11\x0d\xfa\x6c\xda\x00") &&
-        guard(0x21f0e44,"\xf3\x0f\x11\x35\x48\x13\xc7\x01");
+        guard(0x21f0e44,"\xf3\x0f\x11\x35\x48\x13\xc7\x01") &&
+        guard(0x183985b,"\x48\x63\x88\xf4\x1b\x00\x00") &&
+        guard(0x1839868,"\x85\xc9\x78\x0c\x48\x8b\xc1\x48\xc1\xe0\x05\x42\x8b\x04\x00") &&
+        guard(0x1839bc9,"\x85\xd2\x75\x07\x44\x89\x83\x84\x00\x00\x00") &&
+        guard(0x1839bdf,"\x49\x63\xc0\x8b\xb4\x81\xf4\x0d\x00\x00") &&
+        guard(0x1839c3c,"\x89\x74\xab\x2c\xc7\x43\x54\xff\xff\xff\xff\x89\x7c\xab\x5c\x83\x0b\x01") &&
+        guard(0x1839cb1,"\x48\x63\xc2\x41\x89\x92\x88\x00\x00\x00\x8b\x8c\x81\x84\x0f\x00\x00") &&
+        guard(0x1823db7,"\x48\x63\x47\xd0\x83\xf8\xff\x74\x47\x48\x8d\x0c\x40\x48\x8b\x05\xd5\xd5\x0b\x02\x48\x03\xc9\x83\x3f\x00\x48\x8b\x94\xc8\x68\x0a\x00\x00") &&
+        guard(0x1823f14,"\x48\x8b\x01\xff\x90\x08\x01\x00\x00") &&
+        guard(0x1839878,"\x48\x63\x88\x88\x00\x00\x00") &&
+        guard(0x1839883,"\x48\x6b\xc9\x1c\x42\x8b\x84\x01\x80\x0c\x00\x00") &&
+        guard(0x18398df,"\x48\xc1\xe0\x05\x42\x8b\x44\x00\x04") &&
+        guard(0x181805f,"\x83\x0b\x02\x89\x83\xa4\x00\x00\x00") &&
+        guard(0x182430d,"\x4c\x8d\x87\x90\x00\x00\x00\xba\x01\x00\x00\x00\x48\x8b\x01\xff\x90\x60\x01\x00\x00");
     verified.store(okay,std::memory_order_release); return okay;
 }
 
@@ -254,12 +448,13 @@ bool capture_native_depth_domains(const CpuIdentity& cpu, NativeDepthSnapshot& o
     output={}; NativeDepthSnapshot before{}, after{};
     before.identity=cpu;
     Stage stage=Stage::unverified;
+    MathFailure detail{};
     XMMATRIX near_map{},world_map{},projection{};
     if (!verified.load(std::memory_order_acquire)) return refuse(stage,before,report);
     if (!identity(cpu,current_cpu_identity()) || !cpu_source_is_current(cpu)) return refuse(Stage::source,before,report);
-    if (!sample(cpu,before,stage) || !math(before,near_map,world_map,projection,stage)) return refuse(stage,before,report);
-    if (!sample(cpu,after,stage)) return refuse(stage,after,report);
-    if (!same(before,after)) return refuse(Stage::state_changed,after,report);
+    if (!sample(cpu,before,stage) || !producer_raster(before,stage) || !math(before,near_map,world_map,projection,stage,detail)) return refuse(stage,before,report,&detail);
+    if (!sample(cpu,after,stage) || !producer_raster(after,stage)) return refuse(stage,after,report);
+    if (!same(before,after) || !same_raster(before,after)) return refuse(Stage::state_changed,after,report);
     if (!identity(cpu,current_cpu_identity()) || !cpu_source_is_current(cpu)) return refuse(Stage::source,after,report);
     before.valid=true; output=before; return true;
 }
@@ -277,18 +472,29 @@ bool make_native_depth_domains(const NativeDepthSnapshot& snapshot, const CpuIde
         pass.window_key!=snapshot.window_key || pass.viewport_key!=snapshot.window_key || pass.rhi_viewport_key!=snapshot.window_key ||
         reinterpret_cast<uintptr_t>(pass.depth)!=snapshot.depth_key || reinterpret_cast<uintptr_t>(pass.swapchain)!=snapshot.chain_key ||
         !pass.camera_valid || pass.camera.struct_size<sizeof(pass.camera) || pass.camera.abi_version!=RSF_GAME_CAMERA_ABI_VERSION ||
-        pass.camera.depth_inverted || pass.camera.render_width!=snapshot.width || pass.camera.render_height!=snapshot.height ||
+        pass.camera.depth_inverted || pass.camera.render_width!=uint32_t(snapshot.render_rect[2]-snapshot.render_rect[0]) ||
+        pass.camera.render_height!=uint32_t(snapshot.render_rect[3]-snapshot.render_rect[1]) ||
         pass.camera.output_width!=snapshot.width || pass.camera.output_height!=snapshot.height) return refuse(Stage::pass_association,snapshot,report);
     for (unsigned i=0;i<4;++i) {
         const int32_t expected=i<2?0:static_cast<int32_t>(i==2?snapshot.width:snapshot.height);
-        if (pass.render_rect[i]!=expected || pass.output_rect[i]!=expected) return refuse(Stage::pass_association,snapshot,report);
+        if (pass.render_rect[i]!=snapshot.render_rect[i] || pass.output_rect[i]!=expected) return refuse(Stage::pass_association,snapshot,report);
     }
     NativeDepthSnapshot current{},confirmed{};
     Stage stage=Stage::source;
+    MathFailure detail{};
     XMMATRIX near_map{},world_map{},projection{},inverse_projection{},view_world{};
     if (!sample(cpu,current,stage)) return refuse(stage,current,report);
     if (!same(snapshot,current)) return refuse(Stage::state_changed,current,report);
-    if (!math(snapshot,near_map,world_map,projection,stage)) return refuse(stage,snapshot,report);
+    if (!math(snapshot,near_map,world_map,projection,stage,detail)) return refuse(stage,snapshot,report,&detail);
+    float native_projection[16]{}, affine[16]{};
+    CameraRaster raster{};
+    std::memcpy(raster.xywh,snapshot.actual_raster,sizeof(raster.xywh));
+    std::memcpy(raster.crop,snapshot.render_rect,sizeof(raster.crop));
+    if (!store(projection,native_projection)) return refuse(Stage::finite_map,snapshot,report);
+    if (!camera_raster_transform(raster,affine)) return refuse(Stage::raster_math,snapshot,report);
+    projection=XMMatrixMultiply(projection,matrix(affine));
+    near_map=XMMatrixMultiply(near_map,matrix(affine));
+    world_map=XMMatrixMultiply(world_map,matrix(affine));
     if (!inverse(projection,inverse_projection) || !matches(projection,pass.camera.view_to_clip) ||
         !matches(inverse_projection,pass.camera.clip_to_view)) return refuse(Stage::target_camera,snapshot,report);
     const auto& w=snapshot.world_camera;
@@ -297,9 +503,9 @@ bool make_native_depth_domains(const NativeDepthSnapshot& snapshot, const CpuIde
         !matches(view_world,pass.camera.view_to_world)) return refuse(Stage::target_camera,snapshot,report);
     float target[16]{};
     if (!store(projection,target)) return refuse(Stage::target_camera,snapshot,report);
-    for (unsigned i=0;i<16;++i) if (i!=8 && i!=9 && !close(w.projection[i],target[i])) return refuse(Stage::target_camera,snapshot,report);
-    if (!close(pass.camera.jitter_pixels[0],(w.projection[8]-target[8])*float(snapshot.width)*0.5f) ||
-        !close(pass.camera.jitter_pixels[1],-(w.projection[9]-target[9])*float(snapshot.height)*0.5f)) return refuse(Stage::target_camera,snapshot,report);
+    for (unsigned i=0;i<16;++i) if (i!=8 && i!=9 && !close(w.projection[i],native_projection[i])) return refuse(Stage::target_camera,snapshot,report);
+    if (!close(pass.camera.jitter_pixels[0],(w.projection[8]-native_projection[8])*snapshot.actual_raster[2]*0.5f) ||
+        !close(pass.camera.jitter_pixels[1],-(w.projection[9]-native_projection[9])*snapshot.actual_raster[3]*0.5f)) return refuse(Stage::target_camera,snapshot,report);
     auto* depth=static_cast<ID3D11Texture2D*>(pass.depth);
     D3D11_TEXTURE2D_DESC desc{}; depth->GetDesc(&desc);
     ComPtr<ID3D11Device> device; depth->GetDevice(&device);
@@ -321,9 +527,9 @@ bool make_native_depth_domains(const NativeDepthSnapshot& snapshot, const CpuIde
         domain.classify_min=i?snapshot.intervals[1]:0; domain.classify_max=i?1:snapshot.intervals[1];
         // Explicit reference-aligned ownership policy, not primitive provenance.
         domain.endpoint_flags=RSF_DEPTH_DOMAIN_INCLUDE_MAX | (i?0u:RSF_DEPTH_DOMAIN_INCLUDE_MIN);
-        domain.viewport_xywh[2]=float(snapshot.width); domain.viewport_xywh[3]=float(snapshot.height);
+        std::memcpy(domain.viewport_xywh,snapshot.actual_raster,sizeof(domain.viewport_xywh));
         domain.viewport_min_depth=snapshot.intervals[i*2]; domain.viewport_max_depth=snapshot.intervals[i*2+1];
-        if (!store(i?world_map:near_map,domain.source_clip_to_target_clip)) return refuse(Stage::target_math,snapshot,report);
+        if (!store(i?world_map:near_map,domain.source_clip_to_target_clip)) return refuse(Stage::finite_map,snapshot,report);
     }
     if (!sample(cpu,confirmed,stage)) return refuse(stage,confirmed,report);
     if (!same(snapshot,confirmed)) return refuse(Stage::state_changed,confirmed,report);
