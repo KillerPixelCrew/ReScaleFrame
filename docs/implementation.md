@@ -24,6 +24,14 @@ clean. The hidden shared-SR device fixture also passed request retention, actual
 result/raster capture, status preservation and the existing reset sequence.
 Runtime22830370... and EntryBE2E0BBF... are built, not yet game-tested.
 
+The downstream diagnostics were then deployed in native-only PID64776.
+Quality1 and return-native captures completed with matched SR0/Present0;
+FG stayed inactive and no prospective source reached the new receipts.
+The bounded512-row ordering trace spans0.2875seconds and cannot equate
+native Present entry with the adapter's later phase arming. Reason4 remains
+unlocalized. Normal World-to-MainMenu-to-Desktop exit0 and all21 original
+file states were verified without a cleanup timeout on this run.
+
 Native-only PID47344/e83bb70 completed matched SR0/Present0 captures at all
 five standard scale settings:1707x1067,1485x928,1280x800,853x533 and return
 2560x1600. Reduced captures retain26of40 products including final colour;
