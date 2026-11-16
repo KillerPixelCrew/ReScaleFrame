@@ -54,6 +54,11 @@ add_test(NAME wingman_camera_contract COMMAND rsf_wingman_camera)
 target_link_libraries(rsf_plugin_contract PRIVATE ReScaleFrame::GameSDK rsf_build_options)
 add_dependencies(rsf_plugin_contract rsf_game_ac7 rsf_game_project_wingman rsf_game_rdr2 rsf_game_unity_mono)
 add_dependencies(rsf_plugin_contract rsf_game_skyrim_se)
+add_dependencies(rsf_plugin_contract rsf_game_fallout4)
+add_test(NAME game_fallout4_plugin_contract COMMAND rsf_plugin_contract
+    "$<TARGET_FILE_NAME:rsf_game_fallout4>" fallout4)
+set_tests_properties(game_fallout4_plugin_contract PROPERTIES
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:rsf_game_fallout4>")
 target_compile_definitions(rsf_plugin_contract PRIVATE _CRT_SECURE_NO_WARNINGS)
 add_executable(rsf_unity_sr_d3d12_test unity_sr_d3d12.cpp)
 target_include_directories(rsf_unity_sr_d3d12_test PRIVATE ../games/unity-mono/include)

@@ -17,6 +17,9 @@ struct Fixture {
 };
 
 constexpr Fixture fixtures[] = {
+    {L"fallout4", "fallout4", "Fallout4.exe",
+     "fdcef37ac1230af6d0b0050eb2142b139ef3a867b37b9211fb6edfcc646072f8",
+     RSF_ERROR_NATIVE_REFUSED, RSF_GAME_RECOGNIZED},
     {L"skyrim-se", "skyrim-se", "SkyrimSE.exe",
      "846efccf0c1374d71f892907f46549560f2fcb0a75cb87a3eed438baa0f1402f",
      RSF_ERROR_NATIVE_REFUSED, RSF_GAME_RECOGNIZED},
@@ -151,7 +154,7 @@ int wmain(int argc, wchar_t* argv[])
     probe.executable_name_utf8 = fixture->executable;
 
     if (fixture->prepare_result == RSF_ERROR_NOT_READY || std::strcmp(fixture->id, "project-wingman") == 0 ||
-        std::strcmp(fixture->id, "skyrim-se") == 0) {
+        std::strcmp(fixture->id, "skyrim-se") == 0 || std::strcmp(fixture->id, "fallout4") == 0) {
         passed &= check(api.hooks.prepare(nullptr) == RSF_ERROR_INVALID_ARGUMENT &&
                         api.hooks.start(nullptr) == RSF_ERROR_INVALID_ARGUMENT &&
                         api.hooks.quiesce(nullptr) == RSF_ERROR_INVALID_ARGUMENT &&
