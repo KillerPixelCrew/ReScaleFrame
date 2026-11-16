@@ -50,7 +50,13 @@ undeployed at this freeze. Compatibility remains deferred until native validatio
 
 The subsequent [provider ownership audit](research/provider-status-worker-lifetime-audit-20261116.md)
 found a generic cross-thread cached-state read and unleased session lifetime,
-plus a separate worker-abort mutation race. Deployment is held for those repairs.
+plus a separate worker-abort mutation race. The copied-status/lifetime and DLSS
+invalidation fixes passed the next225/14 Release gate,239 total in112.89seconds,
+Rust checks clean, plus explicit concurrent snapshot, hidden SDK marker and
+shared-SR recovery fixtures. RuntimeE2C4958A... is built, undeployed at this
+checkpoint. A missing real panel caused the first shared-SR status check to
+fail; a fresh release panel and explicit path resolved that prerequisite, with
+the failure retained. Equivalent FSR/XeSS mutation paths remain separate work.
 The audit establishes source defects, not their causation of the reported flicker.
 
 The combined reduced-recovery Windows Release VS2026 gate passed224/14,

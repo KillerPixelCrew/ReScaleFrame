@@ -122,3 +122,101 @@ process-owned host lifetime are separate from the unleased provider session.
 
 Only the new note and ignored receipt were written. No frozen production
 source, build, test, device, process or game state changed.
+
+## Authorized snapshot implementation, source freeze
+
+Root authorized the copied-reader/lifetime repair after reviewing the audit.
+The earlier no-production-change statement describes that audit phase. This
+new source phase changes only the presentation bridge/header, its private
+snapshot helper, the two native_fg worker readers and the existing bridge
+fixture. The earlier diagnostics remain unchanged. Root's reported224/14
+Release and hidden marker pass precede this change and do not validate it.
+
+`rsf_d3d11_present_status_get` is a size/version-checked C boundary returning
+copied rsf_fg_status, backend, provider generation and validity. Short headers
+return INVALID_ARGUMENT; mismatched versions return ABI_MISMATCH. No valid
+snapshot returns NOT_READY and a cleared state with valid0. Snapshot validity
+means the copied owner observation is available, not that generation is active,
+the source is admitted, or its provider supports a requested feature.
+
+The new private `ProviderStatusSnapshot` owns no pointers or resources. Its
+mutex covers only copying, activation, invalidation and publication. Activation
+begins a new backend/generation epoch with no valid state. Invalidation also
+closes publication, rejecting a late stale copy even for the previous epoch;
+owner reactivation is required. A transient failed cached observation clears
+validity without closing that epoch. Publication checks the complete state
+header and matching backend/generation.
+
+The owner publishes after initial/lazy physical setup, completed replacement,
+prepare callbacks, existing provider.after_present and resize's Off
+configuration. Those observations call provider.status only, which is the
+cached-copy function for current DLSS, FSR and XeSS providers. No new SDK poll
+or physical Present is added. State is copied outside the snapshot mutex and
+then published briefly. Existing owner status uses remain owner-only; the two
+worker paths never load a provider/session pointer. Pacing selection uses the
+backend from the same successful snapshot; absent state retains the existing
+unavailable-provider behavior, with no new fallback selection policy.
+
+Replacement invalidates before clearing or deleting its published session.
+Destruction takes provider_guard exclusively to drain already-entered shared
+provider leases, invalidate the snapshot and unpublish the session. It releases
+that lock before the existing GPU drain, resource retirement or provider
+destruction. Later wrapped calls cannot acquire the old session. Each Bridge
+retains the concrete provider_backend that created its session, and uses that
+API for retirement/destruction rather than a possibly changed global backend.
+The existing failure path that retains GPU-reachable storage after a failed
+drain remains a limitation; this change does not call retained storage a safe
+shutdown or claim it was freed.
+
+Lock order is provider_guard then the short snapshot mutex at lifecycle
+boundaries. A worker takes AntiLagOwner.guard then the snapshot mutex, releases
+the snapshot lock before any host/provider pacing call, and never acquires
+provider_guard while holding the snapshot lock. Snapshot operations call no
+logger, COM object or provider. No snapshot lock spans physical Present, SDK
+sleep, CPU dependency wait or GPU drain.
+
+The existing `tests/d3d11_present_bridge.cpp` now includes a pure compiled
+`--status-snapshot` mode before any graphics setup. It exercises the actual
+cache and cold exported query: short/version headers, unavailable output,
+late-publication rejection, wrong backend/generation, transient clear/recovery,
+two concurrent readers across4087 publication epochs, invalidation and a
+retained value after publisher storage destruction. This does not fabricate a
+provider or claim provider/device acceptance. The normal bridge fixture also
+runs these checks before its existing scenarios. A real bridge destruction/
+provider-switch device run is still coordinator-owned and required; these
+cache tests do not dynamically prove that lifecycle path.
+
+The remaining mutating-wrapper audit found a separate concrete race:
+DLSS abort_frame clears history_valid/prepared_enabled/state.active while
+owner configure/prepare/poll use those fields. The shared provider lifetime
+lease alone does not synchronize mutation. It was immediately reported to
+root, which assigned its provider-private repair to another worker. No vendor
+backend implementation is changed here, and the snapshot is not presented as
+repairing that race. XeLL begin_frame and other provider mutations still need
+their own synchronization contracts; copying status is not a substitute for
+them.
+
+The ignored `provider-status-snapshot-freeze-20261116.json` pins this source
+batch. Only UTF-8/LF, diff and source checks were performed by this worker;
+compiled fixtures, full Release, device and game validation remain root-owned.
+
+## Root verification
+
+The coherent bridge and DLSS state batch passed Windows Release VS2026:
+225 passed,14 skipped,239 total,112.89 seconds, with Rust fmt/Clippy clean.
+The production copied-state concurrency test passed0.01 seconds. The separate
+compiled `--status-snapshot` case and the exact two-argument hidden SDK marker/
+Present/resize/retirement fixture passed. The rebuilt shared-SR recovery fixture
+also passed after root supplied the freshly release-built Rust panel through
+`RSF_OVERLAY_DLL`. Its first run failed because panel DLL error126 prevented
+public Present status sampling; that failure is retained and no assertion was
+relaxed. The full receipt is `provider-concurrency-built-20261116.json`.
+
+Runtime SHA256 is
+`e2c4958ada60bdc04ada49a4ab1b9f268fc813f436b1ed420949a3154b9309d9`.
+The adapter remains `9b5c79df...`, carrier `e4a809e7...` and fresh panel
+`ebea30f0...`. These binaries remain undeployed at this checkpoint. The
+[provider-local fix](dlss-generation-state-invalidation-20261116.md) covers the
+reported DLSS mutation race; equivalent FSR/XeSS abort fields require separate
+review/repair. These checks do not establish that a race caused the user's
+flicker or prove native visual, FG, latency or compatibility acceptance.

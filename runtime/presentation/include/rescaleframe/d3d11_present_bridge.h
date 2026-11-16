@@ -88,6 +88,18 @@ int rsf_d3d11_present_dispatch_owned(void* receiver, uint32_t sync_interval, uin
    exact inner receiver only, including Release during refusal or cancellation. */
 void rsf_d3d11_chain_dispatch_owned(rsf_d3d11_chain_dispatch* request);
 int rsf_d3d11_present_has_owner(void);
+/* Any thread. Copied owner-published provider state, never an SDK poll or borrowed
+   session. Invalidated before replacement; NOT_READY means no valid snapshot. */
+#define RSF_PRESENT_STATUS_VERSION 1u
+typedef struct rsf_d3d11_present_status {
+    uint32_t struct_size, version;
+    uint32_t valid, backend;
+    uint64_t generation;
+    rsf_fg_status state;
+} rsf_d3d11_present_status;
+int32_t rsf_d3d11_present_status_get(rsf_d3d11_present_status* status);
+/* Graphics owner only, borrowed through its current callback/COM lease.
+   Cross-thread consumers use status_get or the matched lifetime wrappers below. */
 const rsf_generation_provider* rsf_d3d11_present_provider(void);
 void* rsf_d3d11_present_session(void);
 uint32_t rsf_d3d11_present_backend(void);

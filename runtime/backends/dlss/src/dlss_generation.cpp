@@ -4,6 +4,7 @@
 #include "reflex_audit.h"
 #include "streamline_load.h"
 #include "mfg_unlock.h"
+#include "dlss_generation_state.h"
 #include "../../common/fg_helpers.h"
 #include "../../common/d3d12_helpers.h"
 #include <wrl/client.h>
@@ -172,12 +173,8 @@ bool copy_text(char* destination, size_t size, const char* source)
 struct DlssSession {
     rsf_streamline_host* host = nullptr;
     ComPtr<IDXGISwapChain4> chain;
-    rsf_fg_status state{};
-    sl::DLSSGState sdk_state{};
-    rsf_fg_options options{};
+    rsf::DlssGenerationState copied;
     rsf_ui_mode ui_mode = RSF_UI_MODE_NONE;
-    bool history_valid = false, prepared_enabled = false;
-    uint64_t last_prepare = 0;
 };
 // The in-flight slot carrying `id`, or null. Zero is the empty-slot marker and never matches.
 rsf_streamline_host::Token* find_slot(rsf_streamline_host& host, uint64_t id)
@@ -198,22 +195,23 @@ bool same_generation(const rsf_fg_options& a, const rsf_fg_options& b)
 }
 rsf_backend_result poll(DlssSession& self)
 {
-    if (self.host->get_state(sl::ViewportHandle(0), self.sdk_state, nullptr) != sl::Result::eOk)
+    const auto before = self.copied.read();
+    sl::DLSSGState sdk_state{};
+    if (self.host->get_state(sl::ViewportHandle(0), sdk_state, nullptr) != sl::Result::eOk)
         return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    auto& state = self.state;
-    state.max_generated_frames = self.sdk_state.numFramesToGenerateMax;
+    auto state = before.status;
+    state.max_generated_frames = sdk_state.numFramesToGenerateMax;
     state.mfg_unlock_status = self.host->mfg.status;
     // Both the initialized SDK limit and the verified compiled allocation must agree.
     if (state.mfg_unlock_status == RSF_MFG_UNLOCK_READY)
         state.max_generated_frames = std::min(state.max_generated_frames, self.host->mfg.maximum);
     else if (state.mfg_unlock_status == RSF_MFG_UNLOCK_REFUSED)
         state.max_generated_frames = std::min(state.max_generated_frames, 1u);
-    state.dynamic_supported = self.sdk_state.bIsDynamicMFGSupported == sl::eTrue;
+    state.dynamic_supported = sdk_state.bIsDynamicMFGSupported == sl::eTrue;
     if (state.mfg_unlock_status == RSF_MFG_UNLOCK_REFUSED) state.dynamic_supported = 0;
-    state.vsync_supported = self.sdk_state.bIsVsyncSupportAvailable == sl::eTrue;
-    state.min_dimension = self.sdk_state.minWidthOrHeight;
-    state.vendor_status = static_cast<int32_t>(self.sdk_state.status);
-    state.total_presented += self.sdk_state.numFramesActuallyPresented;
+    state.vsync_supported = sdk_state.bIsVsyncSupportAvailable == sl::eTrue;
+    state.min_dimension = sdk_state.minWidthOrHeight;
+    state.vendor_status = static_cast<int32_t>(sdk_state.status);
     state.valid_statistics = RSF_FG_STAT_TOTAL_PRESENTED | RSF_FG_STAT_ACTIVITY;
     std::lock_guard<std::mutex> marker_lock(self.host->marker_guard);
     sl::ReflexState reflex{};
@@ -239,16 +237,17 @@ rsf_backend_result poll(DlssSession& self)
             report_driver_sleep(*self.host);
         }
     }
-    state.active = self.prepared_enabled && self.sdk_state.status == sl::DLSSGStatus::eOk &&
-        self.sdk_state.numFramesActuallyPresented > 1;
-    self.host->cached_capability = state;
+    const rsf_fg_retirement retirement{sizeof(retirement),sdk_state.inputsProcessingCompletionFence,
+        sdk_state.lastPresentInputsProcessingCompletionFenceValue};
+    self.host->cached_capability = self.copied.polled(before.revision,state,sdk_state.numFramesActuallyPresented,
+        sdk_state.status == sl::DLSSGStatus::eOk && sdk_state.numFramesActuallyPresented > 1,retirement);
     return RSF_BACKEND_OK;
 }
 void destroy(void* pointer)
 {
     auto* self = static_cast<DlssSession*>(pointer); if (!self) return;
     if (self->chain) {
-        if (self->state.effective_mode != RSF_FG_OFF) {
+        if (self->copied.read().status.effective_mode != RSF_FG_OFF) {
             sl::DLSSGOptions off{}; self->host->set_options(sl::ViewportHandle(0), off);
         }
         self->chain.Reset();
@@ -288,26 +287,29 @@ rsf_backend_result create(const rsf_generation_setup* setup, void** out, void** 
     }
     auto* self = new (std::nothrow) DlssSession; if (!self) return RSF_BACKEND_ERROR_INIT_FAILED;
     self->host = &host; ++host.borrowers; self->ui_mode = setup->chain.ui_mode;
-    self->state.struct_size = sizeof(self->state); self->state.supported = 1;
-    self->state.auto_supported = 1;
-    self->state.pacing_owner = RSF_PACING_REFLEX;
+    rsf_fg_status initial{};
+    initial.struct_size = sizeof(initial); initial.supported = 1;
+    initial.auto_supported = 1;
+    initial.pacing_owner = RSF_PACING_REFLEX;
     sl::FeatureVersion version{};
     if (host.version(sl::kFeatureDLSS_G, version) == sl::Result::eOk && version.versionNGX) {
         const auto& ngx = version.versionNGX;
-        self->state.version_id = (uint64_t(ngx.major) << 48) | (uint64_t(ngx.minor) << 32) | ngx.build;
-        std::snprintf(self->state.version_name, sizeof(self->state.version_name), "DLSS-G NGX %u.%u.%u (SL %u.%u.%u)",
+        initial.version_id = (uint64_t(ngx.major) << 48) | (uint64_t(ngx.minor) << 32) | ngx.build;
+        std::snprintf(initial.version_name, sizeof(initial.version_name), "DLSS-G NGX %u.%u.%u (SL %u.%u.%u)",
             ngx.major, ngx.minor, ngx.build, version.versionSL.major, version.versionSL.minor, version.versionSL.build);
     } else {
-        std::snprintf(self->state.version_name, sizeof(self->state.version_name), "DLSS-G runtime version unavailable");
+        std::snprintf(initial.version_name, sizeof(initial.version_name), "DLSS-G runtime version unavailable");
     }
-    if (setup->version_id && setup->version_id != self->state.version_id) {
+    if (setup->version_id && setup->version_id != initial.version_id) {
         destroy(self); return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     }
     auto result = RSF_BACKEND_OK;
     if (host.borrowers > 1) {
-        self->state = host.cached_capability; self->state.active = 0;
-        self->state.total_presented = 0; self->state.valid_statistics = 0;
-    } else result = poll(*self);
+        initial = host.cached_capability; initial.active = 0;
+        initial.total_presented = 0; initial.valid_statistics = 0;
+    }
+    self->copied.initialize(initial);
+    if (host.borrowers <= 1) result = poll(*self);
     if (result != 0) { destroy(self); return result; }
     if (setup->chain.hwnd) {
         if (host.borrowers > 1) { destroy(self); return RSF_BACKEND_ERROR_NOT_READY; }
@@ -330,15 +332,16 @@ rsf_backend_result configure(void* pointer, const rsf_fg_options* options)
     if (!pointer) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     const auto validation = rsf::fg_options_result(options); if (validation != 0) return validation;
     auto& self = *static_cast<DlssSession*>(pointer);
+    const auto before = self.copied.read();
     if (!self.chain) return RSF_BACKEND_ERROR_NOT_READY;
-    if (self.options.struct_size && same_generation(self.options, *options) &&
-        self.options.reflex_mode == options->reflex_mode && self.options.frame_limit_us == options->frame_limit_us)
+    if (before.options.struct_size && same_generation(before.options, *options) &&
+        before.options.reflex_mode == options->reflex_mode && before.options.frame_limit_us == options->frame_limit_us)
         return RSF_BACKEND_OK;
-    if (options->mode == RSF_FG_DYNAMIC && !self.state.dynamic_supported) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
-    if (options->mode == RSF_FG_AUTO && self.state.mfg_unlock_status == RSF_MFG_UNLOCK_REFUSED)
+    if (options->mode == RSF_FG_DYNAMIC && !before.status.dynamic_supported) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
+    if (options->mode == RSF_FG_AUTO && before.status.mfg_unlock_status == RSF_MFG_UNLOCK_REFUSED)
         return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     if (options->mode == RSF_FG_FIXED && !options->generated_frames) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (options->mode != RSF_FG_OFF && !self.state.low_latency_available) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
+    if (options->mode != RSF_FG_OFF && !before.status.low_latency_available) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     // Active DLSS-G needs Reflex's runtime frame tracking. Preserve the requested
     // preference, while reporting the required effective mode separately.
     const uint32_t mode = options->mode != RSF_FG_OFF && options->reflex_mode == RSF_REFLEX_OFF ?
@@ -346,20 +349,17 @@ rsf_backend_result configure(void* pointer, const rsf_fg_options* options)
     const auto latency = rsf_streamline_host_reflex(self.host, mode, options->frame_limit_us);
     if (latency != 0) return latency;
     // A Reflex mode or limit change leaves generation and its history alone.
-    if (self.options.struct_size && same_generation(self.options, *options)) {
-        self.options = *options; self.state.effective_reflex = mode;
+    if (before.options.struct_size && same_generation(before.options, *options)) {
+        self.copied.configured(*options,mode,0,false);
         return RSF_BACKEND_OK;
     }
     sl::DLSSGOptions fg{}; fg.mode = static_cast<sl::DLSSGMode>(options->mode);
-    fg.numFramesToGenerate = std::min(options->generated_frames, self.state.max_generated_frames);
+    fg.numFramesToGenerate = std::min(options->generated_frames, before.status.max_generated_frames);
     fg.dynamicTargetFrameRate = options->dynamic_target_fps;
     fg.flags = sl::DLSSGFlags::eRetainResourcesWhenOff;
     fg.enableUserInterfaceRecomposition = self.ui_mode == RSF_UI_MODE_BACKBUFFER_HUDLESS_UI ? sl::eTrue : sl::eFalse;
     if (self.host->set_options(sl::ViewportHandle(0), fg) != sl::Result::eOk) return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    self.options = *options; self.state.effective_mode = options->mode;
-    self.state.configured_mode = options->mode;
-    self.state.effective_generated_frames = options->mode == RSF_FG_FIXED ? fg.numFramesToGenerate : 0;
-    self.state.effective_reflex = mode; self.state.active = 0; self.history_valid = false;
+    self.copied.configured(*options,mode,options->mode == RSF_FG_FIXED ? fg.numFramesToGenerate : 0,true);
     return RSF_BACKEND_OK;
 }
 rsf_backend_result begin(void* pointer, uint64_t id)
@@ -367,7 +367,7 @@ rsf_backend_result begin(void* pointer, uint64_t id)
     if (!pointer || !id) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     auto& self = *static_cast<DlssSession*>(pointer);
     const auto result = rsf_streamline_host_begin(self.host, id);
-    if (result == RSF_BACKEND_OK && self.state.effective_reflex != RSF_REFLEX_OFF) ++self.state.latency_paced_frames;
+    if (result == RSF_BACKEND_OK) self.copied.paced();
     return result;
 }
 rsf_backend_result marker(void* pointer, rsf_latency_marker marker, uint64_t id, uint32_t controller)
@@ -603,11 +603,12 @@ rsf_backend_result prepare(void* pointer, void* command, const rsf_fg_frame* fra
     if (!pointer) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     auto& self = *static_cast<DlssSession*>(pointer);
     auto result = rsf::fg_frame(frame, self.host->native_device.Get()); if (result != 0) return result;
-    if (!self.chain || frame->record->frame_id <= self.last_prepare) return RSF_BACKEND_ERROR_NOT_READY;
+    const auto before = self.copied.read();
+    if (!self.chain || frame->record->frame_id <= before.last_prepare) return RSF_BACKEND_ERROR_NOT_READY;
     const auto& record = *frame->record;
     if (record.source_provenance == RSF_FRAME_SOURCE_RENDERED) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     const auto& camera = record.camera;
-    const bool enabled = frame->interpolate && self.options.mode != RSF_FG_OFF;
+    const bool enabled = frame->interpolate && before.options.mode != RSF_FG_OFF;
     if (enabled) {
         if (!command) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
         void* native_command = rsf_streamline_host_native(self.host, command);
@@ -618,19 +619,19 @@ rsf_backend_result prepare(void* pointer, void* command, const rsf_fg_frame* fra
         (self.ui_mode == RSF_UI_MODE_BACKBUFFER_HUDLESS_UI && !frame->ui.resource)))
         return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     sl::DLSSGOptions options{};
-    options.mode = enabled ? static_cast<sl::DLSSGMode>(self.options.mode) : sl::DLSSGMode::eOff;
-    options.numFramesToGenerate = self.options.mode == RSF_FG_FIXED ?
-        std::min(self.options.generated_frames, self.state.max_generated_frames) : 1;
-    options.dynamicTargetFrameRate = self.options.dynamic_target_fps;
+    options.mode = enabled ? static_cast<sl::DLSSGMode>(before.options.mode) : sl::DLSSGMode::eOff;
+    options.numFramesToGenerate = before.options.mode == RSF_FG_FIXED ?
+        std::min(before.options.generated_frames, before.status.max_generated_frames) : 1;
+    options.dynamicTargetFrameRate = before.options.dynamic_target_fps;
     options.flags = sl::DLSSGFlags::eRetainResourcesWhenOff;
     options.enableUserInterfaceRecomposition = self.ui_mode == RSF_UI_MODE_BACKBUFFER_HUDLESS_UI ? sl::eTrue : sl::eFalse;
-    if (self.state.effective_mode != uint32_t(options.mode) &&
+    if (before.status.effective_mode != uint32_t(options.mode) &&
         self.host->set_options(sl::ViewportHandle(0), options) != sl::Result::eOk) return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    self.state.effective_mode = enabled ? self.options.mode : RSF_FG_OFF;
-    self.state.effective_generated_frames = enabled && self.options.mode == RSF_FG_FIXED ? options.numFramesToGenerate : 0;
-    self.state.active = 0; self.prepared_enabled = enabled;
-    if (!enabled) { self.last_prepare = record.frame_id; self.history_valid = false; return RSF_BACKEND_OK; }
-    std::lock_guard<std::mutex> lock(self.host->marker_guard);
+    if (!self.copied.stage_prepare(before.revision,record.frame_id,enabled ? before.options.mode : RSF_FG_OFF,
+        enabled && before.options.mode == RSF_FG_FIXED ? options.numFramesToGenerate : 0)) return RSF_BACKEND_ERROR_NOT_READY;
+    if (!enabled) return self.copied.complete_prepare(before.revision,record.frame_id,false) ?
+        RSF_BACKEND_OK : RSF_BACKEND_ERROR_NOT_READY;
+    std::unique_lock<std::mutex> marker_lock(self.host->marker_guard);
     auto* slot = find_slot(*self.host, record.frame_id); if (!slot || !slot->token) return RSF_BACKEND_ERROR_NOT_READY;
     auto* token = slot->token;
     sl::Constants constants{};
@@ -653,7 +654,7 @@ rsf_backend_result prepare(void* pointer, void* command, const rsf_fg_frame* fra
     constants.depthInverted = camera.depth_inverted ? sl::eTrue : sl::eFalse;
     constants.cameraMotionIncluded = sl::eTrue; constants.motionVectors3D = sl::eFalse;
     constants.motionVectorsJittered = camera.motion_jittered ? sl::eTrue : sl::eFalse;
-    constants.reset = !self.history_valid || record.frame_id != self.last_prepare + 1 ||
+    constants.reset = !before.history_valid || record.frame_id != before.last_prepare + 1 ||
         (record.flags & RSF_FRAME_FLAG_RESET) ? sl::eTrue : sl::eFalse;
     // The SR side may already have set this frame's shared constants.
     if (!slot->common[0]) {
@@ -673,14 +674,16 @@ rsf_backend_result prepare(void* pointer, void* command, const rsf_fg_frame* fra
     }
     if (self.host->tags(*token, sl::ViewportHandle(0), tags, count, static_cast<sl::CommandBuffer*>(command)) != sl::Result::eOk)
         return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    self.history_valid = true; self.last_prepare = record.frame_id; return RSF_BACKEND_OK;
+    marker_lock.unlock();
+    return self.copied.complete_prepare(before.revision,record.frame_id,true) ?
+        RSF_BACKEND_OK : RSF_BACKEND_ERROR_NOT_READY;
 }
 rsf_backend_result after(void* pointer) { return pointer ? poll(*static_cast<DlssSession*>(pointer)) : RSF_BACKEND_ERROR_INVALID_ARGUMENT; }
 rsf_backend_result retirement(void* pointer, rsf_fg_retirement* out)
 {
     if (!pointer || !out || out->struct_size < sizeof(*out)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    const auto& state = static_cast<DlssSession*>(pointer)->sdk_state;
-    out->fence = state.inputsProcessingCompletionFence; out->value = state.lastPresentInputsProcessingCompletionFenceValue;
+    const auto copy = static_cast<DlssSession*>(pointer)->copied.read().retirement;
+    out->fence = copy.fence; out->value = copy.value;
     return RSF_BACKEND_OK;
 }
 rsf_backend_result abort_frame(void* pointer, uint64_t id)
@@ -688,10 +691,14 @@ rsf_backend_result abort_frame(void* pointer, uint64_t id)
     if (!pointer || !id) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     auto& self = *static_cast<DlssSession*>(pointer);
     const auto result = rsf_streamline_host_abort(self.host, id); if (result != 0) return result;
-    self.history_valid = false; self.prepared_enabled = false; self.state.active = 0;
+    self.copied.abort();
     return RSF_BACKEND_OK;
 }
-const rsf_generation_provider provider{sizeof(provider), create, configure, begin, marker, prepare, after, rsf::session_status<DlssSession>, retirement, destroy, abort_frame};
+rsf_backend_result status(void* pointer, rsf_fg_status* out) {
+    if (!pointer || !out || out->struct_size < sizeof(*out)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    *out = static_cast<DlssSession*>(pointer)->copied.read().status; return RSF_BACKEND_OK;
+}
+const rsf_generation_provider provider{sizeof(provider), create, configure, begin, marker, prepare, after, status, retirement, destroy, abort_frame};
 }
 static rsf_backend_result create_host(const rsf_streamline_host_setup* setup, void* existing_device, void* existing_queue, rsf_streamline_host** out)
 {
