@@ -551,8 +551,11 @@ extern "C" RSF_RUNTIME_API void rsf_input_dump_pass_metadata(const rsf_game_rend
 extern "C" RSF_RUNTIME_API void rsf_input_dump_result(const rsf_frame_record* record, const char* stage, uint32_t backend, int32_t result) try
 {
     auto& s = state(); std::lock_guard lock(s.guard);
-    if (!rsf_input_dump_wants(record) || !stage || (std::string(stage) != "sr" && std::string(stage) != "fg")) return;
-    if (std::string(stage) == "sr") s.sr_result = result;
+    if (!rsf_input_dump_wants(record) || !stage) return;
+    const std::string name(stage);
+    if (name!="sr" && name!="fg" && name!="sequence_capture" &&
+        name!="automatic_sr_failure" && name!="spatial_recovery") return;
+    if (name=="sr") s.sr_result = result;
     std::ofstream out(s.bundle / (std::string(stage) + "_status.json"), std::ios::binary);
     out << "{\"session_id\":" << record->session_id << ",\"source_frame_id\":" << record->frame_id << ",\"view_id\":" << record->view_id
         << ",\"backend\":" << backend << ",\"result\":" << result << "}\n";
@@ -644,7 +647,12 @@ extern "C" RSF_RUNTIME_API void rsf_input_dump_fg(void* context, const rsf_game_
 } catch (...) { failed(); }
 extern "C" RSF_RUNTIME_API void rsf_input_dump_fg_prepare(const rsf_game_render_pass* pass, const rsf_fg_frame* frame, int32_t result) try
 {
-    if (!frame || !frame->record || (state().generic ? !rsf_input_dump_wants(frame->record) : !matches(pass))) return;
+    // FG owns a distinct resource pool generation from the SR capture. Join
+    // stages by the exact native pass identity, retaining FG's generation below.
+    if (!frame || !frame->record || frame->record->struct_size<sizeof(*frame->record) ||
+        frame->record->abi_version!=RSF_GAME_FRAME_ABI_VERSION || !matches(pass) ||
+        frame->record->session_id!=pass->session_id || frame->record->frame_id!=pass->source_frame_id ||
+        frame->record->view_id!=uint32_t(pass->view_key)) return;
     auto& s = state(); const auto& record = *frame->record;
     std::ofstream out(s.bundle / "fg_constants.json", std::ios::binary | std::ios::trunc);
     out << "{\"source_frame_id\":" << record.frame_id << ",\"session_id\":" << record.session_id

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "../../common/fg_helpers.h"
+#include "../../common/generation_state.h"
 #include "../../common/d3d12_helpers.h"
 #include "../../common/frame_capture12.h"
 #include "ffx_version.h"
@@ -31,8 +32,7 @@ struct FfxSession {
     ffxCreateContextDescFrameGenerationVersion api_version{};
     ffxCreateBackendDX12Desc backend{};
     ffxOverrideVersion override_version{};
-    rsf_fg_status state{};
-    rsf_fg_options options{};
+    rsf::GenerationState copied;
     rsf_ui_mode ui_mode = RSF_UI_MODE_NONE;
     std::atomic<uint64_t> generated{0}, presented{0};
     std::atomic<uint64_t> dispatched{0};
@@ -41,11 +41,10 @@ struct FfxSession {
     rsf_backend_log_fn log = nullptr;
     void* log_user = nullptr;
     uint64_t sequence = 0;
-    uint64_t last_prepare = 0, observed_generated = 0;
+    uint64_t observed_generated = 0;
     uint32_t counter_reports = 0;
     UINT last_dxgi_present = 0;
     float view_space_to_meters = 1;
-    bool history_valid = false, prepared_enabled = false;
 };
 bool native_state(uint32_t state, D3D12_RESOURCE_STATES& out)
 {
@@ -147,6 +146,7 @@ rsf_backend_result create(const rsf_generation_setup* setup, void** out, void** 
     if (setup->chain.ui_mode != RSF_UI_MODE_NONE && setup->chain.ui_mode != RSF_UI_MODE_BACKBUFFER_HUDLESS)
         return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     auto* self = new (std::nothrow) FfxSession; if (!self) return RSF_BACKEND_ERROR_INIT_FAILED;
+    rsf_fg_status initial{};
     self->device = static_cast<ID3D12Device*>(setup->chain.d3d12_device); self->ui_mode = setup->chain.ui_mode;
     self->queue = static_cast<ID3D12CommandQueue*>(setup->chain.d3d12_queue);
     self->log = setup->chain.log; self->log_user = setup->chain.log_user;
@@ -166,11 +166,11 @@ rsf_backend_result create(const rsf_generation_setup* setup, void** out, void** 
     versions.createDescType = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION;
     versions.device = self->device.Get(); versions.outputCount = &count; versions.versionIds = ids; versions.versionNames = names;
     if (self->query(nullptr, &versions.header) != FFX_API_RETURN_OK || count > 32) { destroy(self); return RSF_BACKEND_ERROR_NOT_SUPPORTED; }
-    rsf::select_ffx_version(ids, names, count, setup->feature_major, setup->version_id, self->state.version_id,
-        self->state.version_name, sizeof(self->state.version_name));
-    if (!self->state.version_id) { destroy(self); return RSF_BACKEND_ERROR_NOT_SUPPORTED; }
+    rsf::select_ffx_version(ids, names, count, setup->feature_major, setup->version_id, initial.version_id,
+        initial.version_name, sizeof(initial.version_name));
+    if (!initial.version_id) { destroy(self); return RSF_BACKEND_ERROR_NOT_SUPPORTED; }
     self->backend.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_DX12; self->backend.device = self->device.Get();
-    self->override_version.header.type = FFX_API_DESC_TYPE_OVERRIDE_VERSION; self->override_version.versionId = self->state.version_id;
+    self->override_version.header.type = FFX_API_DESC_TYPE_OVERRIDE_VERSION; self->override_version.versionId = initial.version_id;
     self->backend.header.pNext = &self->override_version.header;
     self->api_version.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION_VERSION;
     self->api_version.version = FFX_FRAMEGENERATION_VERSION; self->api_version.header.pNext = &self->backend.header;
@@ -188,18 +188,18 @@ rsf_backend_result create(const rsf_generation_setup* setup, void** out, void** 
         char text[1024]{};
         std::snprintf(text, sizeof(text),
             "FSR FG create generation: FFX result=%u requested_major=%u selected=%s id=%llu API=%u.%u.%u root=%s",
-            created_generation, setup->feature_major, self->state.version_name,
-            static_cast<unsigned long long>(self->state.version_id), uint32_t(FFX_FRAMEGENERATION_VERSION_MAJOR),
+            created_generation, setup->feature_major, initial.version_name,
+            static_cast<unsigned long long>(initial.version_id), uint32_t(FFX_FRAMEGENERATION_VERSION_MAJOR),
             uint32_t(FFX_FRAMEGENERATION_VERSION_MINOR), uint32_t(FFX_FRAMEGENERATION_VERSION_PATCH), setup->runtime_directory_utf8);
         self->log(self->log_user, text);
     }
     if (created_generation != FFX_API_RETURN_OK) { destroy(self); return RSF_BACKEND_ERROR_INIT_FAILED; }
     ffxQueryGetProviderVersion actual{}; actual.header.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
-    if (self->query(&self->generation, &actual.header) != FFX_API_RETURN_OK || actual.versionId != self->state.version_id) {
+    if (self->query(&self->generation, &actual.header) != FFX_API_RETURN_OK || actual.versionId != initial.version_id) {
         destroy(self); return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     }
-    self->state.struct_size = sizeof(self->state); self->state.supported = 1; self->state.max_generated_frames = 1;
-    self->state.vsync_supported = 1;
+    initial.struct_size = sizeof(initial); initial.supported = 1; initial.max_generated_frames = 1;
+    initial.vsync_supported = 1;
     if (setup->chain.hwnd) {
         ComPtr<IDXGIFactory2> factory;
         const auto created_factory = CreateDXGIFactory2(0, IID_PPV_ARGS(&factory));
@@ -232,6 +232,7 @@ rsf_backend_result create(const rsf_generation_setup* setup, void** out, void** 
         if (created_swapchain != FFX_API_RETURN_OK || !raw) { destroy(self); return RSF_BACKEND_ERROR_INIT_FAILED; }
         self->chain.Attach(raw);
     }
+    self->copied.initialize(initial);
     *out = self; *chain = self->chain.Get(); return RSF_BACKEND_OK;
 }
 rsf_backend_result configure(void* pointer, const rsf_fg_options* options)
@@ -242,12 +243,13 @@ rsf_backend_result configure(void* pointer, const rsf_fg_options* options)
     if (options->reflex_mode != RSF_REFLEX_OFF || options->frame_limit_us)
         return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     auto& self = *static_cast<FfxSession*>(pointer);
+    const auto before=self.copied.read();
     if (!self.chain) return RSF_BACKEND_ERROR_NOT_READY;
     if (options->mode != RSF_FG_OFF && !options->generated_frames) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     // Called at every application Present. Repeating the request must not disable generation
     // or reset temporal history between two consecutive source frames.
-    if (self.options.struct_size && self.options.mode == options->mode &&
-        self.options.generated_frames == options->generated_frames) return RSF_BACKEND_OK;
+    if (before.options.struct_size && before.options.mode == options->mode &&
+        before.options.generated_frames == options->generated_frames) return RSF_BACKEND_OK;
     ffxConfigureDescFrameGeneration config{};
     config.header.type = FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION;
     config.swapChain = self.chain.Get(); config.frameGenerationEnabled = false;
@@ -255,9 +257,7 @@ rsf_backend_result configure(void* pointer, const rsf_fg_options* options)
     config.frameID = ++self.sequence;
     if (self.configure(&self.generation, &config.header) != FFX_API_RETURN_OK)
         return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    self.options = *options; self.state.configured_mode = options->mode; self.state.effective_mode = RSF_FG_OFF;
-    self.state.effective_generated_frames = 0;
-    self.history_valid = false; self.state.active = 0;
+    self.copied.configured(*options,RSF_FG_OFF,0,RSF_REFLEX_OFF,true);
     return RSF_BACKEND_OK;
 }
 rsf_backend_result begin(void* pointer, uint64_t id)
@@ -274,9 +274,10 @@ rsf_backend_result prepare(void* pointer, void* command, const rsf_fg_frame* fra
     auto& self = *static_cast<FfxSession*>(pointer);
     auto result = rsf::fg_frame(frame, self.device.Get()); if (result != 0) return result;
     if (!self.chain) return RSF_BACKEND_ERROR_NOT_READY;
+    auto before=self.copied.read();
     const auto& record = *frame->record;
-    if (record.frame_id <= self.last_prepare) return RSF_BACKEND_ERROR_NOT_READY;
-    const bool enabled = frame->interpolate && self.options.mode != RSF_FG_OFF;
+    if (record.frame_id <= before.last_prepare) return RSF_BACKEND_ERROR_NOT_READY;
+    const bool enabled = frame->interpolate && before.options.mode != RSF_FG_OFF;
     if (enabled) {
         result = rsf::fg_command(command, self.device.Get()); if (result != 0) return result;
         DXGI_SWAP_CHAIN_DESC1 current{};
@@ -293,7 +294,8 @@ rsf_backend_result prepare(void* pointer, void* command, const rsf_fg_frame* fra
             self.description.backBufferFormat = ffxApiGetSurfaceFormatDX12(current.Format);
             if (self.create(&self.generation, &self.description.header, nullptr) != FFX_API_RETURN_OK)
                 return RSF_BACKEND_ERROR_INIT_FAILED;
-            self.history_valid = false;
+            if (!self.copied.reset_history(before.revision)) return RSF_BACKEND_ERROR_NOT_READY;
+            before.history_valid = false;
         }
         if (record.output_width != self.description.displaySize.width || record.output_height != self.description.displaySize.height ||
             record.render_width > self.description.maxRenderSize.width || record.render_height > self.description.maxRenderSize.height)
@@ -333,11 +335,13 @@ rsf_backend_result prepare(void* pointer, void* command, const rsf_fg_frame* fra
         config.HUDLessColor = ffxApiGetResourceDX12(static_cast<ID3D12Resource*>(frame->hudless.resource));
     }
     if (self.configure(&self.generation, &config.header) != FFX_API_RETURN_OK) return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    self.state.effective_mode = enabled ? self.options.mode : RSF_FG_OFF;
-    self.state.effective_generated_frames = enabled ? 1 : 0;
-    self.state.active = 0;
-    self.prepared_enabled = enabled;
-    if (!enabled) { self.history_valid = false; self.last_prepare = record.frame_id; return RSF_BACKEND_OK; }
+    const bool staged=self.copied.stage_prepare(before.revision,record.frame_id,enabled ? before.options.mode : RSF_FG_OFF,
+        enabled ? 1u : 0u);
+    if (!enabled) {
+        const bool completed=self.copied.complete_prepare(before.revision,record.frame_id,false,RSF_FG_OFF,0);
+        return staged && completed ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_NOT_READY;
+    }
+    if (!staged) return RSF_BACKEND_ERROR_NOT_READY;
     ffxDispatchDescFrameGenerationPrepareV2 data{};
     data.header.type = FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATION_PREPARE_V2;
     data.frameID = self.sequence; data.commandList = command;
@@ -347,7 +351,7 @@ rsf_backend_result prepare(void* pointer, void* command, const rsf_fg_frame* fra
     data.frameTimeDelta = record.frame_time_ms; data.cameraNear = record.camera.near_plane;
     data.cameraFar = record.camera.far_plane; data.cameraFovAngleVertical = record.camera.vertical_fov_radians;
     data.viewSpaceToMetersFactor = self.view_space_to_meters;
-    data.reset = (record.flags & RSF_FRAME_FLAG_RESET) || !self.history_valid || record.frame_id != self.last_prepare + 1;
+    data.reset = (record.flags & RSF_FRAME_FLAG_RESET) || !before.history_valid || record.frame_id != before.last_prepare + 1;
     data.depth = ffxApiGetResourceDX12(static_cast<ID3D12Resource*>(frame->depth.resource));
     data.motionVectors = ffxApiGetResourceDX12(static_cast<ID3D12Resource*>(frame->motion.resource));
     // Perspective W follows view Z. Unity's right-handed projection looks down
@@ -362,33 +366,38 @@ rsf_backend_result prepare(void* pointer, void* command, const rsf_fg_frame* fra
     const auto dispatched = self.dispatch(&self.generation, &data.header);
     (void)self.capture.event(record, "fsr-prepare", data.frameID, data.reset, static_cast<int32_t>(dispatched));
     if (dispatched != FFX_API_RETURN_OK) {
-        self.history_valid = false; self.prepared_enabled = false; return RSF_BACKEND_ERROR_FEATURE_FAILED;
+        (void)self.copied.reset_history(before.revision); return RSF_BACKEND_ERROR_FEATURE_FAILED;
     }
-    self.history_valid = true; self.last_prepare = record.frame_id; return RSF_BACKEND_OK;
+    return self.copied.complete_prepare(before.revision,record.frame_id,true,before.options.mode,1) ?
+        RSF_BACKEND_OK : RSF_BACKEND_ERROR_NOT_READY;
 }
 rsf_backend_result after(void* pointer)
 {
     if (!pointer) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     auto& self = *static_cast<FfxSession*>(pointer);
+    const auto before=self.copied.read();
     if (self.capture.pending() && wait(self) == RSF_BACKEND_OK)
         (void)self.capture.flush_after_queue(self.queue.Get());
-    self.state.generated_callbacks = self.ui_mode == RSF_UI_MODE_NONE ? self.generated.load() : self.dispatched.load();
-    self.state.present_callbacks = self.presented.load(); self.state.vendor_status = self.dispatch_result.load();
-    self.state.valid_statistics = RSF_FG_STAT_ACTIVITY | (self.ui_mode == RSF_UI_MODE_NONE ? RSF_FG_STAT_PRESENT_CALLBACKS : 0u);
-    const auto observed = self.ui_mode == RSF_UI_MODE_NONE ? self.state.generated_callbacks : self.dispatched.load();
-    self.state.active = self.prepared_enabled && observed > self.observed_generated;
+    rsf::GenerationState::Observation observation{};
+    observation.replace_statistics=observation.replace_callbacks=true;
+    observation.generated_callbacks = self.ui_mode == RSF_UI_MODE_NONE ? self.generated.load() : self.dispatched.load();
+    observation.present_callbacks = self.presented.load(); observation.vendor_status = self.dispatch_result.load();
+    observation.valid_statistics = RSF_FG_STAT_ACTIVITY | (self.ui_mode == RSF_UI_MODE_NONE ? RSF_FG_STAT_PRESENT_CALLBACKS : 0u);
+    const auto observed = self.ui_mode == RSF_UI_MODE_NONE ? observation.generated_callbacks : self.dispatched.load();
+    observation.active = observed > self.observed_generated;
     self.observed_generated = observed;
     UINT count = 0;
     const auto counter_result = self.chain->GetLastPresentCount(&count);
     if (SUCCEEDED(counter_result)) {
         const UINT delta = count >= self.last_dxgi_present || self.last_dxgi_present > 0xf0000000u ?
             count - self.last_dxgi_present : count;
-        self.state.total_presented += delta; self.last_dxgi_present = count;
-        self.state.valid_statistics |= RSF_FG_STAT_TOTAL_PRESENTED;
+        observation.total_presented_delta = delta; self.last_dxgi_present = count;
+        observation.valid_statistics |= RSF_FG_STAT_TOTAL_PRESENTED;
     }
+    (void)self.copied.observed(before.revision,observation);
     if (self.log && self.counter_reports++ < 6) {
         char text[176]; std::snprintf(text, sizeof(text), "FSR FG counters source=%llu generated=%llu DXGI_present_count=%u query=%08lx",
-            static_cast<unsigned long long>(self.last_prepare), static_cast<unsigned long long>(self.dispatched.load()),
+            static_cast<unsigned long long>(before.last_prepare), static_cast<unsigned long long>(self.dispatched.load()),
             count, static_cast<unsigned long>(counter_result)); self.log(self.log_user, text);
     }
     return RSF_BACKEND_OK;
@@ -405,10 +414,14 @@ rsf_backend_result abort_frame(void* pointer, uint64_t id)
 {
     if (!pointer || !id) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     auto& self = *static_cast<FfxSession*>(pointer);
-    self.history_valid = false; self.prepared_enabled = false; self.state.active = 0;
+    self.copied.abort();
     return RSF_BACKEND_OK;
 }
-const rsf_generation_provider provider{sizeof(provider), create, configure, begin, marker, prepare, after, rsf::session_status<FfxSession>, retirement, destroy, abort_frame};
+rsf_backend_result status(void* pointer, rsf_fg_status* out) {
+    if (!pointer || !out || out->struct_size<sizeof(*out)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    *out=static_cast<FfxSession*>(pointer)->copied.read().status; return RSF_BACKEND_OK;
+}
+const rsf_generation_provider provider{sizeof(provider), create, configure, begin, marker, prepare, after, status, retirement, destroy, abort_frame};
 }
 extern "C" const rsf_generation_provider* rsf_generation_fsr() { return &provider; }
 extern "C" uint32_t rsf_generation_fsr4_supported(void* device, const char* directory)

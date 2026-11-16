@@ -8,7 +8,7 @@
 use core::ffi::c_char;
 
 /// Version of the interface this build implements, matching `RSF_OVERLAY_ABI_VERSION`.
-pub const RSF_OVERLAY_ABI_VERSION: u32 = 17;
+pub const RSF_OVERLAY_ABI_VERSION: u32 = 18;
 
 /// Result code returned by the fallible entry points.
 pub type RsfOverlayResult = i32;
@@ -210,6 +210,18 @@ pub struct RsfOverlayStats {
     pub latency_reserved: u32,
     /// Frames the pacing owner has paced; a rising count shows the latency SDK is running.
     pub latency_paced_frames: u64,
+    /// Whether the registered SDK PCL message is available.
+    pub pcl_available: u32,
+    /// Reserved ABI padding, zero.
+    pub pcl_reserved: u32,
+    /// Observed keyboard, mouse and controller receipt counts.
+    pub input_receipts: [u64; 3],
+    /// Successful notification routes, including SDK coalescing.
+    pub pcl_routed: u64,
+    /// Failed provider notification calls.
+    pub pcl_failed: u64,
+    /// Receipts without a unique eligible frame owner.
+    pub pcl_unmatched: u64,
 }
 
 /// A toggle: `value` is 0 or 1.
@@ -536,7 +548,7 @@ mod tests {
         // ABI 2 held 124 bytes of fields padded to 128 by the eight byte alignment the two
         // pointers impose, so ABI 3's first appended field lands in that padding at 124 rather
         // than after it. That is exactly why the padding is written down here.
-        assert_eq!(size_of::<RsfOverlayStats>(), 360);
+        assert_eq!(size_of::<RsfOverlayStats>(), 416);
         assert_eq!(size_of::<RsfOverlayHostOption>(), 40);
         assert_eq!(offset_of!(RsfOverlayStats, backend_name), 16);
         assert_eq!(offset_of!(RsfOverlayStats, refusal_reason), 24);
@@ -607,6 +619,11 @@ mod tests {
         assert_eq!(offset_of!(RsfOverlayStats, latency_pacing_owner), 344);
         assert_eq!(offset_of!(RsfOverlayStats, latency_reserved), 348);
         assert_eq!(offset_of!(RsfOverlayStats, latency_paced_frames), 352);
+        assert_eq!(offset_of!(RsfOverlayStats, pcl_available), 360);
+        assert_eq!(offset_of!(RsfOverlayStats, input_receipts), 368);
+        assert_eq!(offset_of!(RsfOverlayStats, pcl_routed), 392);
+        assert_eq!(offset_of!(RsfOverlayStats, pcl_failed), 400);
+        assert_eq!(offset_of!(RsfOverlayStats, pcl_unmatched), 408);
     }
 
     #[test]

@@ -114,6 +114,8 @@ int32_t rsf_d3d11_present_begin(uint64_t id, uint64_t* generation);
 int32_t rsf_d3d11_present_pace(uint64_t id, rsf_pacing_owner owner, uint64_t* generation);
 int32_t rsf_d3d11_present_marker(uint64_t generation, uint64_t id, rsf_latency_marker marker, uint32_t controller);
 int32_t rsf_d3d11_present_acquire(uint64_t id);
+/* Actual notification only; never a sleep, acquire or simulated input-sample marker. */
+int32_t rsf_d3d11_present_receipt(uint64_t generation, uint64_t id, uint32_t kinds, uint32_t message);
 int32_t rsf_d3d11_present_input(uint64_t id, uint32_t kinds, uint32_t message);
 int32_t rsf_d3d11_present_abort(uint64_t id);
 #ifdef __cplusplus

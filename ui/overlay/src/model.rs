@@ -110,6 +110,16 @@ pub struct GenerationStats {
     pub latency_owner: u32,
     /// Frames the pacing owner has paced.
     pub latency_paced_frames: u64,
+    /// Whether the registered SDK PCL message is available.
+    pub pcl_available: bool,
+    /// Observed keyboard, mouse and controller receipt counts.
+    pub input_receipts: [u64; 3],
+    /// Successful notification routes, including SDK coalescing.
+    pub pcl_routed: u64,
+    /// Failed provider notification calls.
+    pub pcl_failed: u64,
+    /// Receipts without a unique eligible frame owner.
+    pub pcl_unmatched: u64,
     /// Requested Reflex mode.
     pub requested_reflex: u32,
     /// Effective Reflex mode.

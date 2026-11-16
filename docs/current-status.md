@@ -1,5 +1,24 @@
 # Current implementation and validation
 
+16 November 2026: Fallout 4 1.11.240 has user-accepted DLSS SR/FG in the tested
+moving scene. XeSS FG's 128-frame stall was traced with a CPU dump and matching
+Steam-overlay binary analysis to a Present-lock cycle. The shared Steam
+integration now dispatches registered RSF facades before that lock. A later
+physical VSync interval correction improved the observed XeSS result from about
+23-28 base FPS to 82 base/164 presented FPS; the user accepted the improvement.
+These are scoped game observations, not a controlled vendor benchmark.
+
+Actual native input and simulation callbacks supply latency markers. Reflex
+Off/On/Boost and live PCL receipt delivery have recorded evidence; derived
+boundaries do not authorize SDK markers. XeLL settings completion guarding is
+built and CPU-tested but awaits deployment and a game settings-switch check.
+AMD Anti-Lag has focused contract coverage, with no AMD device acceptance on
+this NVIDIA machine. Full shader/material and lifecycle coverage remain tracked
+separately. No release or broad rendering-readiness claim is made. GPU
+autocapture is disabled. See the
+[latency and XeSS investigation](research/fallout4-actual-latency-boundaries-20261116.md)
+and [SR dropout investigation](research/fallout4-sr-dropout-20261116.md).
+
 15 November 2026: Skyrim SE 1.7.104 has an experimental no-SKSE pre-HDR path.
 Bounded vanilla QASmoke runs evaluated DLSS at native 1711x1048, reinserted into
 native colour, captured actual backend inputs/output and matched native Present.

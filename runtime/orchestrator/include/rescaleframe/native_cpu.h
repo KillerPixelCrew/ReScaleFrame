@@ -26,6 +26,25 @@ typedef struct rsf_native_cpu_counters {
     uint32_t struct_size;
     uint64_t frames, input_events[3], pings, substitutes, duplicates, order_violations, expired_messages, unframed_inputs, derived_frame_ends;
 } rsf_native_cpu_counters;
+/* Receipt telemetry is independent of per-frame sampled-input attribution. */
+typedef struct rsf_native_input_receipts {
+    uint32_t struct_size, version;
+    uint64_t session_id, accepted, rejected, duplicates;
+    uint64_t input_kinds[3], window_messages, ping_candidates;
+} rsf_native_input_receipts;
+RSF_RUNTIME_API int rsf_native_input_receipts_get(rsf_native_input_receipts*);
+RSF_RUNTIME_API int rsf_native_cpu_is_ping_message(uint32_t message);
+typedef struct rsf_native_latency_window {
+    uint32_t struct_size, version;
+    uint64_t session_id, window_key;
+} rsf_native_latency_window;
+typedef struct rsf_native_input_routes {
+    uint32_t struct_size, version;
+    uint64_t matched_window, matched_thread, unmatched, routed, failed, last_receipt, last_source;
+} rsf_native_input_routes;
+RSF_RUNTIME_API int32_t rsf_native_latency_window_bind(const rsf_native_latency_window*);
+RSF_RUNTIME_API int rsf_native_input_routes_get(rsf_native_input_routes*);
+
 /* Shared latency status, independent of the selected rendering provider. Version 1. */
 typedef struct rsf_native_latency_status {
     uint32_t struct_size, version, owner, available, effective_mode, pcl_available, report_available;

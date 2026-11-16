@@ -63,7 +63,8 @@ One implementation serves every game and every vendor.
   it does not decide what they mean.
 - An integration never calls a vendor latency or frame-generation SDK, never places a sleep, never
   picks a latency technology and never chooses marker semantics. If an engine cannot report an event,
-  the orchestrator derives the substitute in one place and says so in its status.
+  the orchestrator reports it unavailable. Latency markers and timestamps must come
+  from verified actual engine/input callbacks; synthetic or guessed markers are forbidden.
 - Extend the existing event interface (append-only, versioned) instead of adding a parallel one per
   game. Latency or vendor policy found in an adapter or host is a Rule 1 violation: move it into the
   orchestrator and leave the integration with the calls that report its engine's events.
@@ -132,7 +133,7 @@ Check the environment before recommending installation. [docs/tooling.md](docs/t
   tested or found out. Do them when asked. What must not happen is routine build verification
   reaching into a game install, or a change to one that nobody asked for. Back up what you replace.
 - Track implementation in `docs/implementation.md`. Distinguish built, synthetic-tested, game-tested, and device-tested results.
-- Run `eng/verify.ps1` for native/SDK/Rust changes. Use focused checks for documentation-only edits.
+- Run the full `eng/verify.ps1` suite only at the end of a work session before releasing, not during iterative work. During development, use focused builds and non-disruptive checks relevant to the change. Do not run device, visible-window, or unrelated integration fixtures mid-session unless the user explicitly requests them. Use focused checks for documentation-only edits.
 - Keep component versions aligned through `VERSION` and the Cargo workspace version; verification checks the match.
 - Release RSF as a whole, never one integration at a time. One GitHub release per RSF version
   (tag `vX.Y.Z`, built from one commit) carries every shipping integration as its own download
@@ -144,7 +145,7 @@ Check the environment before recommending installation. [docs/tooling.md](docs/t
 
 ## Build and verify
 
-`eng/verify.ps1` is the native/lint gate and matches CI. It compares `VERSION` against the Cargo workspace
+`eng/verify.ps1` is the final pre-release native/lint gate and matches CI. Run it at the end of a work session before releasing, not mid-work where its fixtures can disrupt the user’s computer work. It compares `VERSION` against the Cargo workspace
 version, configures, builds, and tests the native tree, then runs `cargo fmt --check` and
 `cargo clippy -D warnings`. Run `cargo test --workspace --locked` separately when Rust behaviour is affected; the script does not execute those tests.
 
@@ -258,7 +259,7 @@ Mechanics that the header and `tests/plugin_contract.cpp` jointly enforce:
 - Extend structs by appending fields and bumping `RSF_GAME_ABI_VERSION`, never by reordering.
 - Plugin-returned strings are immutable, plugin-owned, and valid until the DLL unloads. Probe strings
   are borrowed for the duration of the call.
-- Current game ABI is 13. `game_renderer.h` defines leased rendering passes, CPU events and host
+- Current game ABI is 24. `game_renderer.h` defines leased rendering passes, CPU events and host
   services; `game_frame.h` defines frame/camera ABI 1. The older ABI 2 sketches in the representation
   plan are historical design, not the current contract. Native resource pointers cross under explicit
   callback leases; frame identity alone does not establish final Present ownership.

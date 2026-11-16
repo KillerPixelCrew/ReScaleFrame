@@ -29,7 +29,7 @@ extern "C" {
 /* 5: input gains a host-timed, noninteractive startup hint opacity. */
 /* 16: the touch panel. Stats carry an opaque layout word the host stores, and intent can ask to
    close the panel and to store a new layout word. */
-#define RSF_OVERLAY_ABI_VERSION 17u
+#define RSF_OVERLAY_ABI_VERSION 18u
 /* 17: latency pacing owner and accepted pacing count follow the layout preferences. */
 #define RSF_OVERLAY_FG_RUNTIME_SWITCH 0x80000000u
 
@@ -182,6 +182,10 @@ typedef struct rsf_overlay_stats {
     uint32_t latency_pacing_owner;
     uint32_t latency_reserved;
     uint64_t latency_paced_frames;
+    /* ABI 18. Actual input receipts and notification routing, not unique SDK marker counts. */
+    uint32_t pcl_available, pcl_reserved;
+    uint64_t input_receipts[3];
+    uint64_t pcl_routed, pcl_failed, pcl_unmatched;
 } rsf_overlay_stats;
 
 /* What the user asked for, this frame. A `*_changed` flag rather than a comparison against the
