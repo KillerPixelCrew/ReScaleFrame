@@ -745,7 +745,50 @@
       "seconds": 122.4,
       "rust_fmt_clippy": "pass",
       "entry_sha256": "d0784e75cc475ca14629cf182da59158900056a64ef437f786e4930720366cb6",
-      "deployment": "not yet deployed; diagnostics only, no event or admission-policy change"
+      "deployment": "Native-only PID64776 deployed D0784E75; complete SR captures and exit0/restoration21of21; no prospective source emissions, so reason4 not localized"
+    },
+    "native_source_phase_trial": {
+      "report": ".local/fallout4-research/native-raster-20261116-185056-143",
+      "pid": 64776,
+      "commit": "a99d155d7d00c76b034586e2b7cc5c5b1c28c470",
+      "entry_sha256": "d0784e75cc475ca14629cf182da59158900056a64ef437f786e4930720366cb6",
+      "runtime_sha256": "22830370ac079440177912e1b77680b37d55b7b1cd43915b6e2a68a4f70ce772",
+      "native_module_absence_verified": true,
+      "captures": [
+        {
+          "quality": 1,
+          "source": 6569,
+          "native_frame": 7022,
+          "status": "complete",
+          "sr_result": 0,
+          "present_result": 0,
+          "captured": 26,
+          "listed": 40
+        },
+        {
+          "quality": 0,
+          "source": 16176,
+          "native_frame": 16644,
+          "status": "complete",
+          "sr_result": 0,
+          "present_result": 0,
+          "captured": 16,
+          "listed": 30
+        }
+      ],
+      "prospective_source_emissions": 0,
+      "downstream_rows": 0,
+      "fg_active": 0,
+      "fg_tags": 0,
+      "latency_owner": 0,
+      "paced_frames": 0,
+      "exit_code": 0,
+      "controller_restored": true,
+      "independently_verified_original_entries": 21,
+      "trace_rows": 512,
+      "trace_span_seconds": 0.2875122,
+      "trace_limit": "row budget, not 15 seconds; native entry is before adapter Present-phase arming and instrumentation perturbs scheduling",
+      "research": "docs/research/fallout4-native-scale-capture-validation-20261116.md"
     }
   },
   "reduced_consumer_research": "docs/research/fallout4-reduced-consumers-20261116.md",

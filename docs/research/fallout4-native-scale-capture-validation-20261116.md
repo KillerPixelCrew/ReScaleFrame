@@ -120,3 +120,39 @@ buffer/history, moving/near coverage, failure recovery and resize/backend/window
 transitions still need validation and required repairs. Bound input adoption,
 actual FG output and complete latency remain blockers. F4SE/ENB compatibility
 follows native completion. Readiness flags remain0.
+
+## Downstream receipt deployment, PID64776
+
+Commit a99d155 deployed the compiled downstream diagnostics as Entry
+`d0784e75cc475ca14629cf182da59158900056a64ef437f786e4930720366cb6`,
+with unchanged Runtime22830370. Direct native PID64776 started at
+2026-11-16T17:50:58.4740058Z; report is
+`.local/fallout4-research/native-raster-20261116-185056-143`.
+Repeated module receipts verified F4SE and non-system D3D11 absence.
+
+Quality1 source6569/native7022 completed26 of40 products with SR0 and
+matched Present0. Return-native source16176/native16644 completed16 of30
+with the same results. FG remained active0/tags0. Saved latency snapshots
+had owner0/paced0/markers0/order0, and the retained pre-close log contains
+no prospective source emission or downstream receipt. This trial therefore
+cannot localize the prior reason4 aborts. The first-distinct native gate
+receipt remains mask3f9ff, lacking sealed/present at that poll.
+
+Root rebound only the prior observer's exact Entry hash and fresh PID/report
+configuration. All16 native/owned-detour guards passed. REA retained
+`ev_11044b61541499dd2d41bfa4e9a83db62a5fb420675ea3040337f46a4e780b92`;
+the durable512-row trace spans0.2875122seconds and stops at its row budget,
+not15seconds. It includes15 worker Poll/controls/UpdatePlayer sequences on
+TID67832 and main rendering/join on TID48216. Native Present entry is before
+the adapter hook body arms its CPU phase, and instrumentation changes timing.
+Polls overlapping that observed invocation do not prove the private phase
+was armed or justify loosening source/admission gates. No live source or
+end-to-end latency acceptance follows from this trace.
+
+Root observed Save-and-Quit to actual MainMenu and confirmed QuitDesktop
+within the controller handoff. This time the controller completed with
+exit0, observation_completed=true, restored=true and no experiment/cleanup
+error. Root independently checked all21 original destination states against
+the backup manifest, including ENB and user settings. No forced close or kill
+occurred. These clean close/restoration facts are separate from unresolved
+input binding, earlier duplicated images and required moving/shader coverage.
