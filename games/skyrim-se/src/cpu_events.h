@@ -13,6 +13,8 @@ bool cpu_stop();
 bool cpu_busy();
 uint64_t cpu_source();
 bool cpu_render_identity(rsf_game_render_pass&);
+// Bounded producer receipts at actual FG_INPUTS/WINDOW emission, with no policy changes.
+void cpu_render_diagnostic(const char* stage, const rsf_game_render_pass&);
 // Exact native World source and gameplay classification only. This permits the
 // host's render eligibility check; prospective input ownership is tracked separately.
 bool cpu_rendered_source_eligible() noexcept;

@@ -66,6 +66,26 @@ using CreateHwnd = HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, HWND,
 Create original_create = nullptr;
 CreateHwnd original_hwnd = nullptr;
 thread_local bool creating = false;
+bool scoped_interception = false;
+std::atomic<uint64_t> creation_tokens{0};
+std::atomic<uint64_t> active_creation_token{0};
+std::atomic<void*> outer_alias{nullptr}; // Retained by the host after successful admission.
+std::atomic<bool> scoped_admitted{false};
+struct CreationScope {
+    uint64_t token = 0;
+    HWND window = nullptr;
+    ComPtr<IDXGISwapChain> captured;
+};
+thread_local CreationScope creation_scope;
+bool same_identity(IUnknown* left, IUnknown* right) {
+    if (!left || !right) return false;
+    ComPtr<IUnknown> a,b;
+    return SUCCEEDED(left->QueryInterface(IID_PPV_ARGS(&a))) &&
+        SUCCEEDED(right->QueryInterface(IID_PPV_ARGS(&b))) && a.Get() == b.Get();
+}
+bool capture_creation(HWND window) {
+    return !scoped_interception || (creation_scope.token && creation_scope.window == window && !creation_scope.captured);
+}
 
 void log(const char* message) { if (settings.log) settings.log(settings.user, message); }
 uint64_t clock_tick() { LARGE_INTEGER now{}; QueryPerformanceCounter(&now); return uint64_t(now.QuadPart); }
@@ -127,6 +147,7 @@ class Bridge final : public IDXGISwapChain4 {
     uint64_t serial = 0;
     uint32_t next_slot = 0;
     bool faulted = false;
+    std::atomic<uint32_t> failed_buffer_reports{0};
     uint32_t post_switch_frames = 0;
     void switch_receipt(const char* stage, HRESULT result = S_OK) {
         if (!post_switch_frames) return;
@@ -265,7 +286,15 @@ class Bridge final : public IDXGISwapChain4 {
             auto* owner_queue = native12 ? direct_queue.Get() : static_cast<ID3D12CommandQueue*>(graphics.native_queue);
             const HRESULT created = original_create ? original_create(parent.Get(), owner_queue, &desc, &plain) :
                 parent->CreateSwapChain(owner_queue, &desc, &plain);
-            if (FAILED(created) || FAILED(plain.As(&replacement)))
+            if (FAILED(created)) {
+                char text[320]{}; std::snprintf(text, sizeof(text),
+                    "Physical chain creation refused HRESULT=0x%08lx facade=%p factory=%p queue=%p window=%p size=%ux%u format=%u buffers=%u effect=%u flags=0x%x native12=%u",
+                    static_cast<unsigned long>(created), static_cast<void*>(this), static_cast<void*>(parent.Get()),
+                    static_cast<void*>(owner_queue), static_cast<void*>(desc.OutputWindow), desc.BufferDesc.Width, desc.BufferDesc.Height,
+                    uint32_t(desc.BufferDesc.Format), desc.BufferCount, uint32_t(desc.SwapEffect), desc.Flags, uint32_t(native12));
+                log(text); return RSF_BACKEND_ERROR_INIT_FAILED;
+            }
+            if (FAILED(plain.As(&replacement)))
                 return RSF_BACKEND_ERROR_INIT_FAILED;
             publish_physical(replacement, owner_queue);
             return RSF_BACKEND_OK;
@@ -288,6 +317,8 @@ class Bridge final : public IDXGISwapChain4 {
         return result;
     }
     HRESULT ensure_physical() {
+        // Never create the HWND owner from an outer wrapper's constructor query.
+        if (scoped_interception && creation_scope.token) return DXGI_ERROR_WAS_STILL_DRAWING;
         if (!physical_pending.exchange(false)) return current_physical() ? S_OK : DXGI_ERROR_WAS_STILL_DRAWING;
         // Overlay creation callbacks retain per-call device/queue state. A provider's
         // nested native creation must happen after the engine's factory call returns.
@@ -366,6 +397,7 @@ class Bridge final : public IDXGISwapChain4 {
             static_cast<void*>(this), static_cast<void*>(physical.Get()), provider, effective); log(ownership);
     }
     ~Bridge() {
+        if (active_chain.load() == this) outer_alias.store(nullptr, std::memory_order_release);
         if (active_chain.load() == this) { active_chain.store(nullptr); active_interop.store(nullptr); active_session.store(nullptr); host_paced.store(false); }
         // On device failure retain GPU-reachable storage for the process rather than free it.
         if (FAILED(drain())) {
@@ -398,6 +430,7 @@ class Bridge final : public IDXGISwapChain4 {
             settings.log, settings.user, RSF_SL_PROFILE_DLSS_FG, 1};
     }
 public:
+    void refuse_creation() { faulted = true; scoped_admitted.store(false); outer_alias.store(nullptr); }
     void* presentation_queue() { return provider_queue.load(); }
     void* command_list(void* list) { return provider_list(static_cast<ID3D12GraphicsCommandList*>(list)); }
     // Joins vendor retirement on the provider queue, optionally runs a closed list there, and
@@ -567,7 +600,12 @@ public:
         return E_NOINTERFACE;
     }
     ULONG STDMETHODCALLTYPE AddRef() override { return ++references; }
-    ULONG STDMETHODCALLTYPE Release() override { const auto value = --references; if (!value) delete this; return value; }
+    ULONG STDMETHODCALLTYPE Release() override {
+        const volatile ULONG result = release_owned(); return result;
+    }
+    __declspec(noinline) ULONG release_owned() {
+        const auto value = --references; if (!value) delete this; return value;
+    }
     HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID key, UINT bytes, const void* data) override { return query_physical([&](IDXGISwapChain4* chain) { return chain->SetPrivateData(key, bytes, data); }); }
     HRESULT STDMETHODCALLTYPE SetPrivateDataInterface(REFGUID key, const IUnknown* data) override { return query_physical([&](IDXGISwapChain4* chain) { return chain->SetPrivateDataInterface(key, data); }); }
     HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID key, UINT* bytes, void* data) override { return query_physical([&](IDXGISwapChain4* chain) { return chain->GetPrivateData(key, bytes, data); }); }
@@ -607,6 +645,13 @@ public:
         if (selected != UINT32_MAX) switch_provider(selected);
     }
     HRESULT STDMETHODCALLTYPE Present(UINT sync, UINT flags) override {
+        // Keep a real call/return boundary: external hook installers may follow
+        // an entry tail jump and otherwise detour the private continuation too.
+        const volatile HRESULT result = present_owned(sync, flags);
+        return result;
+    }
+    // A downstream wrapper continuation must not reenter the detoured virtual entry.
+    __declspec(noinline) HRESULT present_owned(UINT sync, UINT flags) {
         if (faulted) return DXGI_ERROR_DEVICE_REMOVED;
         if (flags & DXGI_PRESENT_TEST) return query_physical([&](IDXGISwapChain4* chain) { return chain->Present(sync, flags); });
         switch_receipt("application-enter");
@@ -737,27 +782,56 @@ public:
         return result;
     }
     HRESULT STDMETHODCALLTYPE GetBuffer(UINT index, REFIID iid, void** out) override {
-        const auto initialized = ensure_physical(); if (FAILED(initialized)) return initialized;
-        if (native12 && settings.runtime_switching) {
-            if (!out) return E_POINTER; *out = nullptr;
-            return index < description.BufferCount && render_buffers[index] ? render_buffers[index]->QueryInterface(iid, out) : DXGI_ERROR_INVALID_CALL;
-        }
-        if (native12) return query_physical([&](IDXGISwapChain4* chain) { return chain->GetBuffer(index, iid, out); });
         if (!out) return E_POINTER;
+        // Physical creation can fail before a resource is queried. Never leave a
+        // caller's previous/uninitialized pointer behind on that failure path.
         *out = nullptr;
-        if (index >= description.BufferCount || !surfaces[index]) return DXGI_ERROR_INVALID_CALL;
-        return static_cast<IUnknown*>(rsf_shared_surface_d3d11(surfaces[index]))->QueryInterface(iid, out);
+        // Virtual application buffers already exist. Outer wrappers may inspect,
+        // annotate and upload them before they finish their creation call.
+        if (!native12) {
+            if (index >= description.BufferCount || !surfaces[index]) return DXGI_ERROR_INVALID_CALL;
+            return static_cast<IUnknown*>(rsf_shared_surface_d3d11(surfaces[index]))->QueryInterface(iid, out);
+        }
+        if (settings.runtime_switching)
+            return index < description.BufferCount && render_buffers[index] ? render_buffers[index]->QueryInterface(iid, out) : DXGI_ERROR_INVALID_CALL;
+        const auto initialized = ensure_physical();
+        if (FAILED(initialized)) {
+            if (failed_buffer_reports.fetch_add(1, std::memory_order_relaxed) < 4) {
+                char text[320]{}; std::snprintf(text, sizeof(text),
+                    "GetBuffer refused HRESULT=0x%08lx facade=%p index=%u IID=%08lx-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x output=%p native12=%u physical_pending=%u",
+                    static_cast<unsigned long>(initialized), static_cast<void*>(this), index, static_cast<unsigned long>(iid.Data1),
+                    uint32_t(iid.Data2), uint32_t(iid.Data3), uint32_t(iid.Data4[0]), uint32_t(iid.Data4[1]),
+                    uint32_t(iid.Data4[2]), uint32_t(iid.Data4[3]), uint32_t(iid.Data4[4]), uint32_t(iid.Data4[5]),
+                    uint32_t(iid.Data4[6]), uint32_t(iid.Data4[7]),
+                    *out, uint32_t(native12), uint32_t(physical_pending.load()));
+                log(text);
+            }
+            return initialized;
+        }
+        return query_physical([&](IDXGISwapChain4* chain) { return chain->GetBuffer(index, iid, out); });
     }
     HRESULT STDMETHODCALLTYPE SetFullscreenState(BOOL enabled, IDXGIOutput* target) override {
+        const volatile HRESULT result = set_fullscreen_owned(enabled,target); return result;
+    }
+    __declspec(noinline) HRESULT set_fullscreen_owned(BOOL enabled, IDXGIOutput* target) {
         const auto initialized = ensure_physical(); if (FAILED(initialized)) return initialized;
         if (FAILED(drain())) return E_FAIL;
         const auto chain = current_physical(); return chain ? chain->SetFullscreenState(enabled, target) : DXGI_ERROR_WAS_STILL_DRAWING;
     }
     HRESULT STDMETHODCALLTYPE GetFullscreenState(BOOL* enabled, IDXGIOutput** target) override {
+        if (physical_pending.load()) {
+            if (!enabled && !target) return E_INVALIDARG;
+            if (enabled) *enabled = !description.Windowed;
+            if (target) *target = nullptr;
+            return S_OK;
+        }
         return query_physical([&](IDXGISwapChain4* chain) { return chain->GetFullscreenState(enabled, target); });
     }
     HRESULT STDMETHODCALLTYPE GetDesc(DXGI_SWAP_CHAIN_DESC* out) override { if (!out) return E_POINTER; if (native12 && !settings.runtime_switching) return query_physical([&](IDXGISwapChain4* chain) { return chain->GetDesc(out); }); *out = description; return S_OK; }
     HRESULT STDMETHODCALLTYPE ResizeBuffers(UINT count, UINT width, UINT height, DXGI_FORMAT format, UINT flags) override {
+        const volatile HRESULT result = resize_buffers_owned(count,width,height,format,flags); return result;
+    }
+    __declspec(noinline) HRESULT resize_buffers_owned(UINT count, UINT width, UINT height, DXGI_FORMAT format, UINT flags) {
         const auto initialized = ensure_physical(); if (FAILED(initialized)) return initialized;
         if (count > surfaces.size() || faulted) return DXGI_ERROR_INVALID_CALL;
         if (!width || !height) { RECT rect{}; if (!GetClientRect(description.OutputWindow, &rect)) return E_FAIL; width = UINT(rect.right); height = UINT(rect.bottom); }
@@ -811,26 +885,39 @@ public:
         return result;
     }
     HRESULT STDMETHODCALLTYPE GetLastPresentCount(UINT* out) override {
-        if (native12 && settings.runtime_switching) {
+        if ((native12 && settings.runtime_switching) || physical_pending.load()) {
             if (!out) return E_POINTER; *out = application_presents.load(); return S_OK;
         }
         return query_physical([&](IDXGISwapChain4* chain) { return chain->GetLastPresentCount(out); });
     }
-    HRESULT STDMETHODCALLTYPE GetDesc1(DXGI_SWAP_CHAIN_DESC1* out) override { if (!out) return E_POINTER; const auto result = query_physical([&](IDXGISwapChain4* chain) { return chain->GetDesc1(out); }); if (SUCCEEDED(result) && (!native12 || settings.runtime_switching)) { out->BufferCount = description.BufferCount; out->SwapEffect = description.SwapEffect; out->Flags = description.Flags; } return result; }
-    HRESULT STDMETHODCALLTYPE GetFullscreenDesc(DXGI_SWAP_CHAIN_FULLSCREEN_DESC* out) override {
-        const auto result = query_physical([&](IDXGISwapChain4* chain) { return chain->GetFullscreenDesc(out); });
-        // A provider's proxy chain was not created with the application's mode. Report the
-        // application's own refresh, scanline order and scaling, as DXGI would for its chain.
-        if (SUCCEEDED(result) && out && (!native12 || settings.runtime_switching)) {
-            out->RefreshRate = description.BufferDesc.RefreshRate;
-            out->ScanlineOrdering = description.BufferDesc.ScanlineOrdering;
-            out->Scaling = description.BufferDesc.Scaling;
+    HRESULT STDMETHODCALLTYPE GetDesc1(DXGI_SWAP_CHAIN_DESC1* out) override {
+        if (!out) return E_POINTER;
+        if (!native12 || settings.runtime_switching) {
+            *out = {description.BufferDesc.Width,description.BufferDesc.Height,description.BufferDesc.Format,FALSE,
+                description.SampleDesc,description.BufferUsage,description.BufferCount,DXGI_SCALING_STRETCH,
+                description.SwapEffect,DXGI_ALPHA_MODE_UNSPECIFIED,description.Flags};
+            return S_OK;
         }
-        return result;
+        return query_physical([&](IDXGISwapChain4* chain) { return chain->GetDesc1(out); });
     }
-    HRESULT STDMETHODCALLTYPE GetHwnd(HWND* out) override { return query_physical([&](IDXGISwapChain4* chain) { return chain->GetHwnd(out); }); }
+    HRESULT STDMETHODCALLTYPE GetFullscreenDesc(DXGI_SWAP_CHAIN_FULLSCREEN_DESC* out) override {
+        if (!out) return E_POINTER;
+        if (!native12 || settings.runtime_switching) {
+            *out = {description.BufferDesc.RefreshRate,description.BufferDesc.ScanlineOrdering,
+                description.BufferDesc.Scaling,description.Windowed};
+            return S_OK;
+        }
+        return query_physical([&](IDXGISwapChain4* chain) { return chain->GetFullscreenDesc(out); });
+    }
+    HRESULT STDMETHODCALLTYPE GetHwnd(HWND* out) override { if (!out) return E_POINTER; *out = description.OutputWindow; return S_OK; }
     HRESULT STDMETHODCALLTYPE GetCoreWindow(REFIID, void** out) override { if (out) *out = nullptr; return E_NOINTERFACE; }
-    HRESULT STDMETHODCALLTYPE Present1(UINT sync, UINT flags, const DXGI_PRESENT_PARAMETERS* params) override { if (params && (params->DirtyRectsCount || params->pScrollRect)) return DXGI_ERROR_INVALID_CALL; return Present(sync, flags); }
+    HRESULT STDMETHODCALLTYPE Present1(UINT sync, UINT flags, const DXGI_PRESENT_PARAMETERS* params) override {
+        const volatile HRESULT result = present1_owned(sync,flags,params); return result;
+    }
+    __declspec(noinline) HRESULT present1_owned(UINT sync, UINT flags, const DXGI_PRESENT_PARAMETERS* params) {
+        if (params && (params->DirtyRectsCount || params->pScrollRect)) return DXGI_ERROR_INVALID_CALL;
+        return present_owned(sync, flags);
+    }
     BOOL STDMETHODCALLTYPE IsTemporaryMonoSupported() override {
         std::lock_guard<std::mutex> lock(physical_guard); return physical ? physical->IsTemporaryMonoSupported() : FALSE;
     }
@@ -877,8 +964,19 @@ public:
         std::lock_guard<std::mutex> lock(physical_guard); return physical ? physical->GetCurrentBackBufferIndex() : 0;
     }
     HRESULT STDMETHODCALLTYPE CheckColorSpaceSupport(DXGI_COLOR_SPACE_TYPE value, UINT* out) override { return query_physical([&](IDXGISwapChain4* chain) { return chain->CheckColorSpaceSupport(value, out); }); }
-    HRESULT STDMETHODCALLTYPE SetColorSpace1(DXGI_COLOR_SPACE_TYPE value) override { return query_physical([&](IDXGISwapChain4* chain) { return chain->SetColorSpace1(value); }); }
-    HRESULT STDMETHODCALLTYPE ResizeBuffers1(UINT count, UINT width, UINT height, DXGI_FORMAT format, UINT flags, const UINT* masks, IUnknown* const* queues) override { if (masks || queues) return DXGI_ERROR_INVALID_CALL; return ResizeBuffers(count, width, height, format, flags); }
+    HRESULT STDMETHODCALLTYPE SetColorSpace1(DXGI_COLOR_SPACE_TYPE value) override {
+        const volatile HRESULT result = set_color_space_owned(value); return result;
+    }
+    __declspec(noinline) HRESULT set_color_space_owned(DXGI_COLOR_SPACE_TYPE value) {
+        return query_physical([&](IDXGISwapChain4* chain) { return chain->SetColorSpace1(value); });
+    }
+    HRESULT STDMETHODCALLTYPE ResizeBuffers1(UINT count, UINT width, UINT height, DXGI_FORMAT format, UINT flags, const UINT* masks, IUnknown* const* queues) override {
+        const volatile HRESULT result = resize_buffers1_owned(count,width,height,format,flags,masks,queues); return result;
+    }
+    __declspec(noinline) HRESULT resize_buffers1_owned(UINT count, UINT width, UINT height, DXGI_FORMAT format, UINT flags, const UINT* masks, IUnknown* const* queues) {
+        if (masks || queues) return DXGI_ERROR_INVALID_CALL;
+        return resize_buffers_owned(count,width,height,format,flags);
+    }
     HRESULT STDMETHODCALLTYPE SetHDRMetaData(DXGI_HDR_METADATA_TYPE type, UINT bytes, void* data) override { return query_physical([&](IDXGISwapChain4* chain) { return chain->SetHDRMetaData(type, bytes, data); }); }
 };
 
@@ -896,23 +994,26 @@ HRESULT create_bridge(IDXGIFactory* factory, IUnknown* unknown, const DXGI_SWAP_
     auto* bridge = new(std::nothrow) Bridge;
     HRESULT result = bridge ? bridge->initialize(factory, unknown, desc) : E_OUTOFMEMORY;
     if (SUCCEEDED(result)) {
-        char text[192]; std::snprintf(text, sizeof(text), "presentation bridge: application chain %ux%u refresh=%u/%u windowed=%d buffers=%u flags=0x%x",
+        char text[192]; std::snprintf(text, sizeof(text), "presentation bridge: application chain %ux%u refresh=%u/%u windowed=%d buffers=%u flags=0x%x effect=%u",
             desc.BufferDesc.Width, desc.BufferDesc.Height, desc.BufferDesc.RefreshRate.Numerator, desc.BufferDesc.RefreshRate.Denominator,
-            desc.Windowed, desc.BufferCount, desc.Flags);
+            desc.Windowed, desc.BufferCount, desc.Flags, uint32_t(desc.SwapEffect));
         log(text);
     }
     if (SUCCEEDED(result)) *out = bridge;
-    else if (bridge) bridge->Release();
+    else if (bridge) bridge->release_owned(); // Not published; never enter an external Release hook.
     creating = false;
     return result;
 }
 HRESULT STDMETHODCALLTYPE create_hook(IDXGIFactory* factory, IUnknown* device, DXGI_SWAP_CHAIN_DESC* desc, IDXGISwapChain** out) {
-    if (desc && SUCCEEDED(create_bridge(factory, device, *desc, out))) return S_OK;
+    if (desc && capture_creation(desc->OutputWindow) && SUCCEEDED(create_bridge(factory, device, *desc, out))) {
+        if (scoped_interception) creation_scope.captured = *out;
+        return S_OK;
+    }
     return original_create(factory, device, desc, out);
 }
 HRESULT STDMETHODCALLTYPE hwnd_hook(IDXGIFactory2* factory, IUnknown* device, HWND hwnd,
     const DXGI_SWAP_CHAIN_DESC1* desc, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* fullscreen, IDXGIOutput* output, IDXGISwapChain1** out) {
-    if (desc && !output && !desc->Stereo) {
+    if (desc && !output && !desc->Stereo && capture_creation(hwnd)) {
         // Keep the application's fullscreen mode. Dropping its refresh rate made GetDesc report
         // 0/0, which RDR2 matched to its lowest listed mode (30 Hz on a 30-120 Hz panel).
         DXGI_SWAP_CHAIN_DESC translated{}; translated.BufferDesc = {desc->Width, desc->Height,
@@ -922,7 +1023,11 @@ HRESULT STDMETHODCALLTYPE hwnd_hook(IDXGIFactory2* factory, IUnknown* device, HW
         translated.SampleDesc = desc->SampleDesc; translated.BufferUsage = desc->BufferUsage; translated.BufferCount = desc->BufferCount;
         translated.OutputWindow = hwnd; translated.Windowed = fullscreen ? fullscreen->Windowed : TRUE; translated.SwapEffect = desc->SwapEffect; translated.Flags = desc->Flags;
         ComPtr<IDXGISwapChain> bridge;
-        if (SUCCEEDED(create_bridge(factory, device, translated, &bridge))) return bridge->QueryInterface(IID_PPV_ARGS(out));
+        if (SUCCEEDED(create_bridge(factory, device, translated, &bridge))) {
+            const auto result = bridge->QueryInterface(IID_PPV_ARGS(out));
+            if (SUCCEEDED(result) && scoped_interception) creation_scope.captured = bridge;
+            return result;
+        }
     }
     return original_hwnd(factory, device, hwnd, desc, fullscreen, output, out);
 }
@@ -999,6 +1104,50 @@ extern "C" int rsf_d3d11_present_install(const rsf_d3d11_present_setup* setup) {
     if (MH_EnableHook(table[10]) != MH_OK || MH_EnableHook(table[15]) != MH_OK) { MH_DisableHook(table[10]); MH_RemoveHook(table[10]); MH_RemoveHook(table[15]); original_create = nullptr; return 0; }
     log("presentation bridge: cold-start D3D11 swapchain interception installed"); return 1;
 }
+extern "C" int rsf_d3d11_present_install_scoped(const rsf_d3d11_present_setup* setup) {
+    scoped_interception = true;
+    if (!rsf_d3d11_present_install(setup)) { scoped_interception = false; return 0; }
+    return 1;
+}
+extern "C" int32_t rsf_d3d11_present_creation_begin(void* window, uint64_t* token) {
+    if (!token || *token || !window || !IsWindow(static_cast<HWND>(window))) return E_INVALIDARG;
+    if (!scoped_interception || !original_create || creation_scope.token || creating || active_chain.load()) return DXGI_ERROR_INVALID_CALL;
+    uint64_t idle = 0;
+    const auto selected = ++creation_tokens;
+    if (!active_creation_token.compare_exchange_strong(idle,selected)) return DXGI_ERROR_INVALID_CALL;
+    creation_scope.window = static_cast<HWND>(window);
+    creation_scope.token = selected;
+    *token = creation_scope.token;
+    return S_OK;
+}
+extern "C" int32_t rsf_d3d11_present_creation_end(void* window, uint64_t token, void* device, void* context, void* outer) {
+    if (!token || token != creation_scope.token || window != creation_scope.window) return E_INVALIDARG;
+    auto captured = std::move(creation_scope.captured);
+    creation_scope = {}; // Close even when native creation failed or its outputs refuse.
+    active_creation_token.store(0);
+    struct Refusal {
+        Bridge* bridge;
+        bool accepted = false;
+        ~Refusal() { if (bridge && !accepted) bridge->refuse_creation(); }
+    } refusal{static_cast<Bridge*>(captured.Get())};
+    if (!captured || !device || !context || !outer) return DXGI_ERROR_UNSUPPORTED;
+    ComPtr<ID3D11Device> captured_device, context_device, outer_device;
+    DXGI_SWAP_CHAIN_DESC desc{};
+    auto* chain = static_cast<IDXGISwapChain*>(outer);
+    if (captured.Get() != active_chain.load() ||
+        !same_identity(chain,captured.Get()) || FAILED(chain->GetDesc(&desc)) || desc.OutputWindow != window ||
+        FAILED(captured->GetDevice(IID_PPV_ARGS(&captured_device))) || FAILED(chain->GetDevice(IID_PPV_ARGS(&outer_device)))) return E_INVALIDARG;
+    auto* immediate = static_cast<ID3D11DeviceContext*>(context);
+    if (immediate->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) return E_INVALIDARG;
+    immediate->GetDevice(&context_device);
+    if (!same_identity(captured_device.Get(),static_cast<IUnknown*>(device)) ||
+        !same_identity(captured_device.Get(),outer_device.Get()) || !same_identity(captured_device.Get(),context_device.Get())) return E_INVALIDARG;
+    outer_alias.store(outer, std::memory_order_release);
+    scoped_admitted.store(true, std::memory_order_release);
+    refusal.accepted = true;
+    log("presentation bridge: scoped inner owner and final outer chain canonical identity verified; outer Present retained");
+    return S_OK;
+}
 extern "C" rsf_streamline_host* rsf_d3d11_present_host() { return active_host.load(std::memory_order_acquire); }
 extern "C" int rsf_d3d11_present_graphics(rsf_streamline_graphics* graphics) {
     auto* queue = active_interop.load(std::memory_order_acquire);
@@ -1012,9 +1161,62 @@ extern "C" void* rsf_d3d11_present_queue() {
     return bridge->presentation_queue();
 }
 extern "C" int rsf_d3d11_present_is_owner(void* swapchain) {
-    return swapchain && active_chain.load(std::memory_order_acquire) == swapchain;
+    auto* active = static_cast<IDXGISwapChain*>(active_chain.load(std::memory_order_acquire));
+    if (!swapchain || !active || (scoped_interception && !scoped_admitted.load(std::memory_order_acquire))) return 0;
+    if (active == swapchain) return 1;
+    return outer_alias.load(std::memory_order_acquire) == swapchain &&
+        same_identity(static_cast<IDXGISwapChain*>(swapchain),active);
 }
-extern "C" int rsf_d3d11_present_has_owner() { return active_chain.load(std::memory_order_acquire) != nullptr; }
+extern "C" int rsf_d3d11_present_dispatch_owned(void* receiver, uint32_t sync, uint32_t flags, int32_t* result) {
+    if (!result) return 0;
+    rsf_d3d11_chain_dispatch request{}; request.receiver = receiver; request.method = RSF_D3D11_DISPATCH_PRESENT;
+    request.args.present = {sync,flags};
+    rsf_d3d11_chain_dispatch_owned(&request);
+    if (request.handled) *result = request.result.hresult;
+    return int(request.handled);
+}
+extern "C" void rsf_d3d11_chain_dispatch_owned(rsf_d3d11_chain_dispatch* request) {
+    auto* bridge = static_cast<Bridge*>(active_chain.load(std::memory_order_acquire));
+    if (!request || !bridge || request->receiver != bridge) return;
+    request->handled = 1;
+    if (request->method == RSF_D3D11_DISPATCH_RELEASE) {
+        // Consumes exactly the caller's reference. The object may be gone on return.
+        request->result.references = bridge->release_owned(); return;
+    }
+    // The caller's live COM lease makes this AddRef safe, including during shutdown.
+    // Keep that exact owner alive across all callbacks without holding a host lock.
+    ComPtr<IDXGISwapChain4> lease = bridge;
+    request->result.hresult = E_FAIL;
+    try {
+        if (scoped_interception && !scoped_admitted.load(std::memory_order_acquire)) {
+            request->result.hresult = DXGI_ERROR_INVALID_CALL; return;
+        }
+        const auto& args = request->args;
+        switch (request->method) {
+        case RSF_D3D11_DISPATCH_PRESENT:
+            request->result.hresult = bridge->present_owned(args.present.sync_interval,args.present.flags); break;
+        case RSF_D3D11_DISPATCH_PRESENT1:
+            request->result.hresult = bridge->present1_owned(args.present1.sync_interval,args.present1.flags,
+                static_cast<const DXGI_PRESENT_PARAMETERS*>(args.present1.parameters)); break;
+        case RSF_D3D11_DISPATCH_SET_FULLSCREEN_STATE:
+            request->result.hresult = bridge->set_fullscreen_owned(BOOL(args.fullscreen.fullscreen),
+                static_cast<IDXGIOutput*>(args.fullscreen.target)); break;
+        case RSF_D3D11_DISPATCH_RESIZE_BUFFERS:
+            request->result.hresult = bridge->resize_buffers_owned(args.resize_buffers.buffer_count,
+                args.resize_buffers.width,args.resize_buffers.height,DXGI_FORMAT(args.resize_buffers.format),args.resize_buffers.flags); break;
+        case RSF_D3D11_DISPATCH_SET_COLOR_SPACE1:
+            request->result.hresult = bridge->set_color_space_owned(DXGI_COLOR_SPACE_TYPE(args.color_space.color_space)); break;
+        case RSF_D3D11_DISPATCH_RESIZE_BUFFERS1:
+            request->result.hresult = bridge->resize_buffers1_owned(args.resize_buffers1.buffer_count,
+                args.resize_buffers1.width,args.resize_buffers1.height,DXGI_FORMAT(args.resize_buffers1.format),
+                args.resize_buffers1.flags,args.resize_buffers1.node_masks,
+                reinterpret_cast<IUnknown* const*>(args.resize_buffers1.present_queues)); break;
+        }
+    } catch (...) { /* A known facade must never fall through to a native receiver. */ }
+}
+extern "C" int rsf_d3d11_present_has_owner() {
+    return active_chain.load(std::memory_order_acquire) != nullptr && (!scoped_interception || scoped_admitted.load(std::memory_order_acquire));
+}
 extern "C" const rsf_generation_provider* rsf_d3d11_present_provider() { return generation_api(); }
 extern "C" void* rsf_d3d11_present_session() { return active_session.load(std::memory_order_acquire); }
 extern "C" uint32_t rsf_d3d11_present_backend() { return active_backend.load(); }

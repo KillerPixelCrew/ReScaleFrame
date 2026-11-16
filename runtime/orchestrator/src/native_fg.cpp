@@ -487,7 +487,8 @@ uint64_t join_previous_present(uint64_t previous) {
     return now_qpc() - started;
 }
 }
-extern "C" RSF_RUNTIME_API void rsf_native_fg_stage(const char* stage, uint64_t source, uint64_t native_frame, int32_t result) {
+static void log_fg_stage(const char* stage, uint64_t source, uint64_t native_frame, int32_t result,
+    const CpuOwner* owner = nullptr, const rsf_game_render_pass* window = nullptr) {
     rsf_backend_log_fn sink = nullptr; void* user = nullptr;
     { std::lock_guard lock(settings_guard);
       if (requested.mode == RSF_FG_OFF) return;
@@ -495,16 +496,48 @@ extern "C" RSF_RUNTIME_API void rsf_native_fg_stage(const char* stage, uint64_t 
     if (!sink || !stage) return;
     static std::mutex receipt_guard;
     static uint64_t previous_generation{};
-    static uint32_t lines{};
+    static uint32_t lines{}, stage_lines{}, prepare_lines{}, prepare_calls{};
     const auto generation = rsf_d3d11_present_generation();
     { std::lock_guard lock(receipt_guard);
-      if (generation != previous_generation) { previous_generation = generation; lines = 0; }
+      if (generation != previous_generation) {
+          previous_generation = generation; lines = stage_lines = prepare_lines = prepare_calls = 0;
+      }
+      // Reserve rows for matching late-switch producer samples, not just startup.
+      if (owner) {
+          const bool first = prepare_calls++ < 8;
+          if ((!first && (!source || source % 128)) || prepare_lines >= 64) return;
+          ++prepare_lines;
+      } else if (stage_lines++ >= 32) return;
       if (lines++ >= 96) return; }
-    char text[256]{}; std::snprintf(text, sizeof(text),
+    char text[1536]{}; std::snprintf(text, sizeof(text),
         "FG stage=%s generation=%llu source=%llu native_frame=%llu result=%d thread=%lu",
         stage, static_cast<unsigned long long>(generation), static_cast<unsigned long long>(source),
         static_cast<unsigned long long>(native_frame), result, static_cast<unsigned long>(GetCurrentThreadId()));
+    if (owner && window) {
+        // These independent read-only snapshots are diagnostic, not admission.
+        // Read only after acquiring a row in the existing per-generation budget.
+        rsf_native_cpu_frame cpu{}; cpu.struct_size = sizeof(cpu);
+        const bool cpu_read = window->source_frame_id && rsf_native_cpu_read(window->session_id,window->source_frame_id,&cpu);
+        rsf_native_cpu_reservation reservation{sizeof(reservation)};
+        const bool reservation_read = window->source_frame_id && rsf_native_cpu_reservation_read(
+            window->session_id,window->source_frame_id,&reservation);
+        const auto used = std::strlen(text);
+        std::snprintf(text+used,sizeof(text)-used,
+            " owner_id=%llu owner_session=%llu window_session=%llu submitted=%u render_complete=%u paced=%u prospective=%u owner_failed=%u owner_generation=%llu provider_generation=%llu "
+            "cpu_read=%u cpu_failed=%u cpu_mask=%u cpu_flags=%u reservation_read=%u reservation_state=%u reservation_abort=%u predecessor_present=%d poll_begin=%llu owner_ready=%llu",
+            static_cast<unsigned long long>(owner->id), static_cast<unsigned long long>(owner->session),
+            static_cast<unsigned long long>(window->session_id), uint32_t(owner->submitted), uint32_t(owner->render_complete),
+            uint32_t(owner->paced), uint32_t(owner->prospective), uint32_t(owner->failed),
+            static_cast<unsigned long long>(owner->provider_generation),
+            static_cast<unsigned long long>(generation), uint32_t(cpu_read), cpu.failed, cpu.stage_mask, cpu.flags,
+            uint32_t(reservation_read), reservation.state, reservation.abort_reason, reservation.predecessor_present,
+            static_cast<unsigned long long>(reservation.poll_begin_qpc),
+            static_cast<unsigned long long>(owner->ready_qpc));
+    }
     sink(user, text);
+}
+extern "C" RSF_RUNTIME_API void rsf_native_fg_stage(const char* stage, uint64_t source, uint64_t native_frame, int32_t result) {
+    log_fg_stage(stage,source,native_frame,result);
 }
 extern "C" RSF_RUNTIME_API void rsf_native_fg_rendered_source_set(uint32_t enabled) {
     rendered_source.store(enabled != 0);
@@ -1086,9 +1119,18 @@ extern "C" RSF_RUNTIME_API void rsf_native_fg_capture(void* context, const rsf_d
     { std::lock_guard lock(settings_guard); if (requested.mode == RSF_FG_OFF) return; }
     auto& value = transfer(); if (!initialize(value, context)) return;
     auto& slot = slot_for(value, scene.source_frame_id);
-    // Idempotent per frame: SR evaluation, or an earlier capture, already filled this slot for
-    // this pass. Running again would also wait on this frame's own unsubmitted fence value.
-    if (slot.prepared && holds(slot, scene)) return;
+    // Reuse matching explicit inputs without recopying. A fallback SR capture
+    // cannot supply admission for, or replace, the producer's explicit lease.
+    if (slot.prepared && holds(slot, scene)) {
+        if (scene.role != RSF_GAME_RENDER_FG_INPUTS) return;
+        if (slot.pass.role == RSF_GAME_RENDER_FG_INPUTS) {
+            // A repeated explicit lease can refuse this source, never erase an
+            // earlier refusal. SR metadata is not an FG admission authority.
+            slot.pass.flags |= scene.flags & (RSF_GAME_RENDER_RESET | RSF_GAME_RENDER_NO_FG);
+            return;
+        }
+        // Explicit inputs supersede a fallback SR capture, including its contents.
+    }
     rsf_native_fg_stage("capture-resources", scene.source_frame_id, scene.native_frame, 0);
     if (!frame->depth || !frame->motion || !resources(value, slot, *frame, false)) return;
     rsf_native_fg_stage("capture-copy", scene.source_frame_id, scene.native_frame, 0);
@@ -1111,6 +1153,7 @@ extern "C" RSF_RUNTIME_API rsf_dlss_result rsf_native_fg_evaluate(void* context,
     with_frame(scene.source_frame_id, [](CpuOwner& owner) { ++owner.sr_calls; });
     auto& value = transfer(); if (!initialize(value, context)) return RSF_DLSS_ERROR_NOT_READY;
     auto& slot = slot_for(value, scene.source_frame_id);
+    const bool explicit_inputs = slot.prepared && holds(slot,scene) && slot.pass.role == RSF_GAME_RENDER_FG_INPUTS;
     if (!resources(value, slot, *frame, true)) return RSF_DLSS_ERROR_FEATURE_FAILED;
     if (FAILED(slot.allocator->Reset()) || FAILED(slot.list->Reset(slot.allocator.Get(), nullptr))) return RSF_DLSS_ERROR_FEATURE_FAILED;
     auto translated = *frame;
@@ -1179,7 +1222,11 @@ extern "C" RSF_RUNTIME_API rsf_dlss_result rsf_native_fg_evaluate(void* context,
     // The D3D11 output consumer also belongs to this lease. A D3D12 evaluation fence alone
     // cannot authorize destroying/reallocating shared storage while this copy is outstanding.
     if (!signal11(value, slot.complete)) return RSF_DLSS_ERROR_FEATURE_FAILED;
-    slot.source = scene.source_frame_id; slot.pass = scene; slot.prepared = result == RSF_DLSS_OK; slot.hudless_ready = false;
+    slot.source = scene.source_frame_id;
+    // SR may carry conservative NO_FG metadata even after the native producer
+    // supplied eligible FG inputs. Retain that matching explicit provenance.
+    if (!explicit_inputs) slot.pass = scene;
+    slot.prepared = result == RSF_DLSS_OK; slot.hudless_ready = false;
     slot.evaluate_ticks = now_qpc() - started;
     return result;
 }
@@ -1259,7 +1306,21 @@ extern "C" RSF_RUNTIME_API void rsf_native_fg_prepare(void*, void* chain, void*,
         generated, 0, status.pacing_owner != RSF_PACING_NONE ? options.reflex_mode : RSF_REFLEX_OFF,
         status.pacing_owner == RSF_PACING_NONE ? 0u : options.frame_limit_us / presents_per_frame};
     // Options are owner-thread calls. The provider handles transition-only SDK option updates.
-    rsf_native_fg_stage("prepare-configure", window.source_frame_id, selected ? selected->pass.native_frame : 0, valid ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_NOT_READY);
+    char prepare_stage[640]{};
+    std::snprintf(prepare_stage,sizeof(prepare_stage),
+        "prepare-configure selected_source=%llu window_native=%llu screen=%u pass_flags=%u window_flags=%u inputs=%u pass_reset=%u pass_no_fg=%u window_no_fg=%u continuous=%u "
+        "window_match=%u rendered=%u no_pacer=%u submission_ok=%u reserved_bound=%u cpu_valid=%u matched=%u hudless=%u identity=%u scene_supported=%u vsync=%u valid=%u",
+        static_cast<unsigned long long>(selected ? selected->pass.source_frame_id : 0),
+        static_cast<unsigned long long>(window.native_frame), selected ? selected->pass.screen : 0u,
+        selected ? selected->pass.flags : 0u, window.flags, uint32_t(inputs),
+        uint32_t(selected && (selected->pass.flags & RSF_GAME_RENDER_RESET)),
+        uint32_t(selected && (selected->pass.flags & RSF_GAME_RENDER_NO_FG)),
+        uint32_t((window.flags & RSF_GAME_RENDER_NO_FG) != 0), uint32_t(continuous),
+        uint32_t(window_matched), uint32_t(rendered), uint32_t(no_pacer_required), uint32_t(submitted_frame),
+        uint32_t(reserved_bound), uint32_t(cpu_valid), uint32_t(matched), uint32_t(hudless),
+        uint32_t(identity), uint32_t(scene_supported), uint32_t(vsync), uint32_t(valid));
+    log_fg_stage(prepare_stage, window.source_frame_id, selected ? selected->pass.native_frame : 0,
+        valid ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_NOT_READY, &cpu_owner, &window);
     const auto configuration = rsf_d3d11_present_provider()->configure(provider, &configured);
     rsf_native_fg_stage("prepare-configured", window.source_frame_id, selected ? selected->pass.native_frame : 0, configuration);
     rsf_backend_log_fn diagnostic = nullptr; void* diagnostic_user = nullptr;

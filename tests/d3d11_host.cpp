@@ -3,6 +3,11 @@
 #include <rescaleframe/native_sr.h>
 #include <rescaleframe/native_fg.h>
 #include <cstdio>
+#include <cstddef>
+static_assert(sizeof(rsf_d3d11_chain_dispatch) == 72);
+static_assert(offsetof(rsf_d3d11_chain_dispatch, receiver) == 16);
+static_assert(offsetof(rsf_d3d11_chain_dispatch, args) == 24);
+static_assert(offsetof(rsf_d3d11_chain_dispatch, result) == 64);
 #include <limits>
 namespace {
 unsigned errors{}, cpu_calls{}, logs{};
@@ -34,7 +39,7 @@ int main() {
     setup.presentation_bridge = 1;
     check(rsf_d3d11_host_create(&setup, &host) == RSF_ERROR_INVALID_ARGUMENT,
         "Cold presentation requires an adapter window filter before any hooks are installed");
-    setup.presentation_bridge = 3;
+    setup.presentation_bridge = 4;
     check(rsf_d3d11_host_create(&setup, &host) == RSF_ERROR_INVALID_ARGUMENT, "Unknown presentation mode refused");
     setup.presentation_bridge = 0;
     setup.capabilities = 8;
@@ -98,6 +103,47 @@ int main() {
     check(host.render_config(host.user, &config) == 1 && !config.enabled,
         "Cold native pass facts do not touch graphics or activate generation");
     auto* fake = reinterpret_cast<void*>(uintptr_t(1));
+    rsf_d3d11_chain_dispatch call{}; call.struct_size = sizeof(call); call.abi_version = RSF_D3D11_HOST_ABI_VERSION;
+    call.receiver = fake; call.method = RSF_D3D11_DISPATCH_RELEASE; call.handled = 1; call.result.references = 123;
+    check(rsf_d3d11_host_dispatch_chain(&cookie,&call) == RSF_ERROR_INVALID_ARGUMENT && call.handled == 1,
+        "Typed chain dispatch checks host before touching outputs");
+    --call.struct_size;
+    check(rsf_d3d11_host_dispatch_chain(host.user,&call) == RSF_ERROR_INVALID_ARGUMENT, "Short typed dispatch refused");
+    ++call.struct_size; ++call.abi_version;
+    check(rsf_d3d11_host_dispatch_chain(host.user,&call) == RSF_ERROR_ABI_MISMATCH, "Typed dispatch ABI checked");
+    --call.abi_version; call.method = 0;
+    check(rsf_d3d11_host_dispatch_chain(host.user,&call) == RSF_ERROR_INVALID_ARGUMENT, "Unknown method cannot forward");
+    for (uint32_t method = RSF_D3D11_DISPATCH_RELEASE; method <= RSF_D3D11_DISPATCH_RESIZE_BUFFERS1; ++method) {
+        call.method = method; call.handled = 1;
+        call.args.resize_buffers1.node_masks = static_cast<const uint32_t*>(fake);
+        call.args.resize_buffers1.present_queues = static_cast<void* const*>(fake);
+        check(rsf_d3d11_host_dispatch_chain(host.user,&call) == RSF_OK && !call.handled && call.result.references == 123,
+            "Every unowned typed method preserves result without argument or receiver dereference");
+    }
+    rsf_d3d11_present_dispatch dispatch{sizeof(dispatch),RSF_D3D11_HOST_ABI_VERSION,fake,2,0x80,1,123};
+    check(rsf_d3d11_host_dispatch_present(&cookie,&dispatch) == RSF_ERROR_INVALID_ARGUMENT &&
+        dispatch.handled == 1 && dispatch.native_result == 123, "Present dispatch validates owner before outputs");
+    --dispatch.struct_size;
+    check(rsf_d3d11_host_dispatch_present(host.user,&dispatch) == RSF_ERROR_INVALID_ARGUMENT,
+        "Short Present dispatch refused before receiver dereference");
+    ++dispatch.struct_size; ++dispatch.abi_version;
+    check(rsf_d3d11_host_dispatch_present(host.user,&dispatch) == RSF_ERROR_ABI_MISMATCH,
+        "Present dispatch ABI checked");
+    --dispatch.abi_version;
+    check(rsf_d3d11_host_dispatch_present(host.user,&dispatch) == RSF_OK && !dispatch.handled &&
+        dispatch.native_result == 123 && dispatch.receiver == fake && dispatch.sync_interval == 2 && dispatch.flags == 0x80,
+        "Unowned Present receiver is not dereferenced and preserves native result and arguments");
+    rsf_d3d11_creation_scope scope{sizeof(scope), RSF_D3D11_HOST_ABI_VERSION, fake, 0};
+    check(rsf_d3d11_host_creation_begin(&cookie,&scope) == RSF_ERROR_INVALID_ARGUMENT, "Creation scope owner checked");
+    --scope.struct_size;
+    check(rsf_d3d11_host_creation_begin(host.user,&scope) == RSF_ERROR_INVALID_ARGUMENT, "Short creation scope refused");
+    ++scope.struct_size; ++scope.abi_version;
+    check(rsf_d3d11_host_creation_begin(host.user,&scope) == RSF_ERROR_ABI_MISMATCH, "Creation scope ABI checked");
+    --scope.abi_version;
+    check(rsf_d3d11_host_creation_begin(host.user,&scope) == RSF_ERROR_NOT_READY && !scope.token,
+        "Unscoped host preserves scope output without dereferencing native pointers");
+    check(rsf_d3d11_host_creation_end(host.user,&scope,nullptr) == RSF_ERROR_NOT_READY,
+        "Unscoped host cannot close another creation transaction");
     void* original_chain = fake;
     rsf_d3d11_native_chain native_creation_request{sizeof(native_creation_request), RSF_D3D11_HOST_ABI_VERSION, fake, fake, &original_chain};
     check(rsf_d3d11_host_wrap_native_swapchain(&cookie, &native_creation_request) == RSF_ERROR_INVALID_ARGUMENT,

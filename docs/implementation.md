@@ -2,6 +2,28 @@
 
 ## Skyrim SE experimental reduced-resolution SR, 15 November 2026
 
+The ABI8 wrapper-routing batch passed the coordinator's Windows Release gate:
+219 passed,15 skipped, Cargo fmt/Clippy clean, plus scoped creation and plain
+bridge final-Release checks. PID20280
+(`input-acceptance-20261116-020919`) completed bounded SR/provider-switch
+observation and normal close: exit0, ExitProcess0 with no observed AV, clean
+observer detach and four hash-verified restorations. This exercises the ENB
+outer-chain path with Steam typed continuation routing; it does not establish
+generated FG, visual correctness or complete mod coexistence. Same-source
+FG_INPUTS/WINDOW samples1152/1280/1408/1536 have adapter flags0x6, eligible1,
+bound1 and refusal0, but the core retains flags22 including NO_FG despite the
+matching admission facts. The subsequent explicit-provenance repair passed
+`verify-explicit-fg-provenance-20261116.log`: exit0,219 passed,15 skipped and
+fmt/Clippy clean. Its focused device regression passed53 sources,39 captures,
+37 SR evaluations and33 tags/callbacks, including genuine sticky refusal.
+PID52400 (`input-acceptance-20261116-021712`) now retains matching flags6,
+continuous1 and valid1, with317 tags; PID47748 (`20261116-022508`) records316
+tags. Both exited0 and restored four files. Generated output remained inactive,
+so tags do not establish full FG acceptance. The latter foreground experiment
+left WindowsTerminal PID35804 foreground and supports no focus conclusion.
+See [close-chain routing](research/skyrim-close-chain-routing-20261116.md)
+and [Steam continuation](research/skyrim-steam-present-continuation-20261116.md).
+
 The INPUT_TIMELINE connection has bounded game evidence in
 `.local/skyrim-research/input-acceptance-20261115-231558`: DLSS FG active1,
 Reflex effective1, 333 tags/676 provider presentations, normal exit0 and verified

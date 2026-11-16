@@ -3,10 +3,11 @@
 #include <rescaleframe/runtime.h>
 #include <rescaleframe/game_api.h>
 #include <rescaleframe/motion_decode.h>
+#include <rescaleframe/d3d11_chain_dispatch.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
-#define RSF_D3D11_HOST_ABI_VERSION 5u
+#define RSF_D3D11_HOST_ABI_VERSION 8u
 /* Implemented fact producers, not backend availability or per-frame acceptance. */
 #define RSF_D3D11_HOST_CAP_FG_INPUTS 1u
 #define RSF_D3D11_HOST_CAP_INPUT_TIMELINE 2u
@@ -29,7 +30,8 @@ typedef struct rsf_d3d11_host_setup {
     /* Optional cold presentation bridge. The adapter supplies native window
        selection; runtime switching starts with plain presentation and FG Off.
        Callback code/user remain valid for process lifetime. */
-    /* 0 disabled, 1 factory interception, 2 adapter-owned outer creation root. */
+    /* 0 disabled, 1 factory interception, 2 late outer replacement,
+       3 adapter-scoped factory interception below external wrappers. */
     uint32_t presentation_bridge;
     int (*accept_window)(void* user, void* window);
     void* presentation_user;
@@ -58,12 +60,51 @@ RSF_RUNTIME_API int32_t rsf_d3d11_host_create(const rsf_d3d11_host_setup*, rsf_g
 /* Any thread. Suspend callbacks during adapter quiescence; no graphics retirement occurs here.
    The returned host is process-lived and starts suspended. */
 RSF_RUNTIME_API int32_t rsf_d3d11_host_set_active(void* services_user, uint32_t active);
+
+typedef struct rsf_d3d11_present_dispatch {
+    uint32_t struct_size, abi_version;
+    void* receiver;
+    uint32_t sync_interval, flags;
+    uint32_t handled;
+    int32_t native_result;
+} rsf_d3d11_present_dispatch;
+/* Downstream continuation after external Present pre-work. The caller leases the
+   receiver through this synchronous call. Only the exact registered inner facade
+   is handled; no QI, dereference or result change occurs for an unowned receiver.
+   A known but unavailable facade remains handled with a failing native_result.
+   On RSF_OK, handled=0 delegates to the caller's current native continuation;
+   handled=1 returns native_result, including failures, without further forwarding.
+   A service error must not fall through to a native implementation. No external
+   callback or continuation pointer is stored; host/runtime remain process-lived. */
+RSF_RUNTIME_API int32_t rsf_d3d11_host_dispatch_present(void* services_user,
+    rsf_d3d11_present_dispatch*);
+/* Same exact-inner continuation contract for the tagged native methods. Unknown
+   methods are invalid. Unowned receivers/arguments are never dereferenced and
+   their result is preserved. Release consumes exactly the caller's reference:
+   no additional lease is taken and no object access follows a final release.
+   All other methods borrow a live receiver and arguments synchronously. */
+RSF_RUNTIME_API int32_t rsf_d3d11_host_dispatch_chain(void* services_user,
+    rsf_d3d11_chain_dispatch*);
 typedef struct rsf_d3d11_native_chain {
     uint32_t struct_size, abi_version;
     void* device;
     void* immediate_context;
     void** swapchain;
 } rsf_d3d11_native_chain;
+typedef struct rsf_d3d11_creation_scope {
+    uint32_t struct_size, abi_version;
+    void* window;
+    uint64_t token;
+} rsf_d3d11_creation_scope;
+/* Mode 3: bracket the adapter's full native creation call on the same thread.
+   Begin requires token=0. End is mandatory after successful Begin; null result
+   cancels. A nonnull result borrows final outer outputs and verifies the captured
+   inner owner without replacing/releasing those outputs. Nested scopes refuse.
+   All structures are size/version checked; token/window must match Begin. */
+/* A valid scope with a malformed result still closes/cancels. A malformed scope
+   header or wrong token/thread leaves the real owning scope open for correct End. */
+RSF_RUNTIME_API int32_t rsf_d3d11_host_creation_begin(void*, rsf_d3d11_creation_scope*);
+RSF_RUNTIME_API int32_t rsf_d3d11_host_creation_end(void*, const rsf_d3d11_creation_scope*, const rsf_d3d11_native_chain*);
 /* Cold creation owner, after the complete outer native creation call returns.
    Device/context are borrowed. On success replaces the caller-owned chain reference
    with the final application facade and releases that original reference. Failure

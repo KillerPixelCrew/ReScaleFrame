@@ -95,6 +95,7 @@ void snapshot(bool after) {
         window_pass.scene_surface = nullptr;
         window_pass.swapchain = window_chain.Get();
         pending.store(true, std::memory_order_release);
+        cpu_render_diagnostic("WINDOW", window_pass);
         host.render_pass(host.user, context, &window_pass, 1);
     }
     const rsf_d3d11_host_capture request{
@@ -204,6 +205,7 @@ bool prepare_presentation_inputs(void* manager, const rsf_game_host_services& se
     if (!read(current_frame, base + 0x33363f4) || current_frame != frame ||
         !cpu_render_identity(current) || current.source_frame_id != pass.source_frame_id ||
         current.submission_id != pass.submission_id || current.scope_id != pass.scope_id) return false;
+    cpu_render_diagnostic("FG_INPUTS", pass);
     services.render_pass(services.user, context.Get(), &pass, 1);
     services.render_pass(services.user, context.Get(), &pass, 0);
     identify_presentation_inputs(pass);

@@ -760,6 +760,26 @@ bool cpu_rendered_source_eligible() noexcept {
     return current && rendered_source_eligible(active.load(std::memory_order_acquire) && current->render_scope,
         current->primary_world_entries, current->screen);
 }
+void cpu_render_diagnostic(const char* stage, const rsf_game_render_pass& pass) {
+    if (!current || !current->host.log || (current->source > 8 && current->source % 128 != 0)) return;
+    static std::atomic<uint32_t> reports{};
+    if (reports.fetch_add(1, std::memory_order_relaxed) >= 64) return;
+    const auto& frame = *current;
+    const auto owned = prospective.owned();
+    char message[760]{};
+    std::snprintf(message, sizeof(message),
+        "Skyrim render producer stage=%s source=%llu cpu_source=%llu native=%llu scope=%llu cpu_scope=%llu flags=0x%x screen=%u cpu_screen=%u active=%u world_entries=%u eligible=%u render_entered=%u simulation_ended=%u primary_count=%u reservation=%llu owned_source=%llu owned_phase=%u bound=%u refusal=%u poll=%llu job=%llu entry_readable=%u queued_move=%u input_ambiguous=%u; diagnostic only",
+        stage, static_cast<unsigned long long>(pass.source_frame_id), static_cast<unsigned long long>(frame.source),
+        static_cast<unsigned long long>(pass.native_frame), static_cast<unsigned long long>(pass.scope_id),
+        static_cast<unsigned long long>(frame.render_scope), pass.flags, unsigned(pass.screen), unsigned(frame.screen),
+        unsigned(active.load(std::memory_order_acquire)), frame.primary_world_entries, unsigned(cpu_rendered_source_eligible()),
+        unsigned(frame.render_entered), unsigned(frame.simulation_ended), frame.primary_count,
+        static_cast<unsigned long long>(frame.reservation.source), static_cast<unsigned long long>(owned.source), unsigned(owned.phase),
+        unsigned(owned.source == frame.source && owned.phase == ProspectiveSources::bound), unsigned(frame.refusal),
+        static_cast<unsigned long long>(frame.reservation.poll_generation), static_cast<unsigned long long>(frame.reservation.job_generation),
+        unsigned(frame.entry_readable), unsigned(frame.queued_move), unsigned(frame.input_ambiguous));
+    try { frame.host.log(frame.host.user, message); } catch (...) {}
+}
 uint32_t cpu_input_kinds(const void* list) noexcept { return input_kinds(list); }
 bool cpu_input_consumption(CpuInputConsumption& result) noexcept {
     result = {};
