@@ -15,7 +15,12 @@
     "community_shaders_shared": "6e67083a54090d10806484549d07f75b7fbc8dc2",
     "scope": "Complete parent ownership inventory at pinned revision and four consumed dependencies; native semantics checked separately against exact executable, active bindings and moving coverage still required",
     "streamline": "68bad8fe3ad61d25b1f94a17939c34ab3ce17d88",
-    "bethesda_devbench": "1d804c5241019ecc456a4c7d385109c90f56ce1f"
+    "bethesda_devbench": "1d804c5241019ecc456a4c7d385109c90f56ce1f",
+    "ryan_commonlibf4": "67173f8d44b9a928dbab983d25e576ac5f1e83ac",
+    "fallout4_addresslibgen": "4fa4032619631fa1314e1f55f8cc3eae7620f009",
+    "user_address_library_archive_sha256": "385ceddcf7c44d6c50cbf67eea82387f1e036447e1aabc7832ad690ce5c8bb56",
+    "user_address_library_ae240_sha256": "65985cc2259384a13cffb538d74776e422e62b0cd3766485a000620242b72b06",
+    "user_address_library_validation": "652306 sorted unique AE240 ID/RVA pairs;16 applicable anchor symbols resolved plus1 OG-only ID0;12 AE E8 call targets match installed executable. Static research only, no game installation or production offset changes. docs/research/fallout4-address-library-20261116.md"
   },
   "creation_instructions": {
     "authority": "Coordinator independent objdump receipt, not complete ownership proof",
