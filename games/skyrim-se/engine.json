@@ -532,6 +532,19 @@
     "provenance_validation": "verify-explicit-fg-provenance-20261116.log exit0:219passed15skipped fmt/Clippy clean; focused device regression53sources39captures37SR33tags/callbacks including genuine sticky refusal; PID52400 input-acceptance-20261116-021712 matching retainedflags6 continuous1 valid1 and317tags; PID47748 20261116-022508 records316tags; both exit0 and restore4files",
     "remaining": "Historical retainedflags22 discrepancy corrected by explicit-provenance repair, but generated output remains inactive; no fullFG, visual, latency or full coexistence acceptance; PID47748 foreground experiment left WindowsTerminal35804 foreground and proves no focus conclusion; no general readiness change"
   },
+  "display_tweaks_coexistence": {
+    "skse_version": "2.3.1, user archive, 64 verified files and valid Ian Patterson native signatures",
+    "display_version": "0.5.25",
+    "display_sha256": "df7f352a3f13736709c5f9d265ebf311d9d77d373a9a1b8cbe2aee7fdd8ba9f4",
+    "address_library": "Format5 runtime1.7.104.0 SHA8aab3dd251d135b849bd983f86a4a205c920fa3e81f8e30c0e63ccfef9423842 verified against public Enderal commit c9ea2a850dd2bac1b90f02a32a00929f6e6a62d5 Git LFS",
+    "observed": "PID29080 startup-20261116-074039 loaded SKSE and Display, RSF prepare0/start-5; close requested and process exited, exit code unavailable",
+    "source_change": "Exact Display profile validates game1012320 E8 relay to DLL27250, retained slot5e168->game15b9412 and DLL27334 return before existing single thunk scope admission; direct native route retained, no Display/settings/runtime policy edits",
+    "validation": "Baseline909e17e plus uncommitted trial: Windows Release VS2026 gate exit0 220passed14skipped fmt/Clippy clean; PID60008 input-acceptance-20261116-080226 via SKSE completed observation with prepare0/start0, exact Display route and canonical outer/inner verified, fresh mod logs and module paths retained",
+    "telemetry": "DLSS SR effective1 1280x720->1920x1080; DLSS FG requested/effective/active/generated1,693tags at source4196,4368applicationPresents1389outputPresents, outputFPSvalid1 base116/output232 reasonActive; latency requested/effective1 and renderer/FG/SR/vendor results0; matching late flags6 valid1 submitted/render_complete/paced/prospective1 failed0 cpu_mask15 marker-order0",
+    "limits": "Bounded combined-mod vendor generation telemetry accepted; physical scanout, measured latency, pickup visual quality and full coexistence unmeasured; runtime foreground1 is only a point sample with controller Foreground false, no causal focus/Display comparison; close completed and no Skyrim remained, exit_code null, four restorations hashverified; no general readiness change",
+    "deployment": "Tested Entry SHA0a1129a5c0fd610d7f6e9200e518dfb586f376e085ff292a0bbab7c7a3b74fc3 permanently deployed after restoration; backup deploy-display-repair-20261116-080404, Runtime and INI unchanged",
+    "evidence": "docs/research/skyrim-display-tweaks-creation-20261116.md"
+  },
   "all_shader_audit": {
     "date": "2026-11-15",
     "containers": 16044,
