@@ -271,3 +271,12 @@ coverage outside that container and all moving native/reduced/failure cases
 remain mandatory completion work. The user's requested repairs must be
 implemented after proof at their actual owner and validated, not closed as an
 interface-only or stationary-only integration.
+
+## Matched native history producer follow-up
+
+The [native motion history producer note](fallout4-native-motion-history-producers-20261116.md)
+resolves the installed sequence-update call, full chained player/prepass function
+ranges, all 16 base world-to-previous copy words and the prepass's distinct
+current/previous reflected destinations. Its actual REA player-update dossier
+and independent PE evidence remain separate. Live repeated-update, object
+lifetime, selected shader/binding and moving-image proof still precede a repair.
