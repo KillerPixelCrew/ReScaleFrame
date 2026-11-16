@@ -1,6 +1,6 @@
 {
   "game": "Fallout 4",
-  "status": "Commit07afb10 planning-history full gate223/14 passed; ENB-on Quality1 capture has nested rectangles already in native Main, wrapper-absent stationary Quality1 control is clean; both matched captures restored20/20 after baseline close AV, ENB wrapper additionally restored, no reduced coexistence/FG/latency acceptance, rendering_ready remains0",
+  "status": "Worker successor association built/full-gate-tested223passed15skipped; live binding/FG/latency pending, ENB-on reduced native Main corruption remains separate; rendering_ready remains0",
   "executable": {
     "name": "Fallout4.exe",
     "version": "1.11.240.0",
@@ -48,7 +48,7 @@
     "abi": "Host8/Game23/Frame2/Camera1; provisional FG_INPUTS|INPUT_TIMELINE declarations3 for cold validation, no RENDERED_SOURCE, readiness0",
     "implementation": "Core-planned native DR at guarded five-argument UpdateDynamicResolution, producer LTRB/canonical camera inputs, explicit pre-mutation FG capture and single auxiliary SR transaction; scoped unit selector/full viewport and source-end restoration",
     "steam": "Existing exact seven-method/ten-load profile extracted to integrations/steam, game-owned cold callbacks retained; no shared runtime game branch",
-    "validation": "Commit07afb10 complete Release VS2026 planning-history gate223passed14skipped128.36s Rustclean; hidden planning-history-device-r2 actual backend reset sequence1,0,1,0,1,0,1,0 passed; CPU futurehandoff in progress/unbuilt"
+    "validation": "Worker successor Windows Release VS2026 gate223passed15skipped130.66s,238total/no failures,Rust fmt/Clippy clean; new worker handoff contract passed0.01s; native admission pending"
   },
   "research": "docs/research/fallout4-render-integration-20261116.md",
   "native_render_callbacks": {
@@ -486,13 +486,30 @@
         "sha256": "AC194BD525BB1C3CF363448F1D2B9F96DD859424E6FEAC00695B152B4B951388"
       },
       "limits": "Save Sanctuary Hills level1/8min versus prior ExitSave6min, camera orientation/jitter/history differ; ENB-presence association, not sole-cause proof; no reduced coexistence/FG/latency acceptance"
+    },
+    "worker_successor_gate": {
+      "receipt": ".local/fallout4-research/verify-worker-successor-20261116.log",
+      "configuration": "Windows Release VS2026",
+      "exit_code": 0,
+      "total": 238,
+      "passed": 223,
+      "skipped": 15,
+      "test_seconds": 130.66,
+      "rust": "Cargo fmt/Clippy clean",
+      "worker_handoff_contract": "passed0.01s",
+      "additional_skip": "anomaly_fg_dlss_sroff_device15.34s; skipped, not activity acceptance",
+      "runtime_sha256": "8570CCC20A05FCDE6C533E8BD3748C827CF6D1ED842062C1E90596E5BF2375B3",
+      "entry_sha256": "87362E64C3F48E85FCBA48A5E1D1C1921C986A098D318E3778859A3F1859DFF1",
+      "carrier_sha256": "E4A809E7A7A7D802C7C83691727575FC288EB515130D54D60B608BDD7CF22C98",
+      "source": "Six frozen code/fixture/CMake hashes unchanged; committed07afb10 plus built worker successor working source",
+      "limits": "Built and contract-tested only; live native source binding, FG/latency admission pending; ENB reduced image corruption separate"
     }
   },
   "reduced_consumer_research": "docs/research/fallout4-reduced-consumers-20261116.md",
   "startup_research": "docs/research/fallout4-native-startup-av-20261116.md",
   "depth_hook_research": "docs/research/fallout4-depth-hook-integration-20261116.md",
   "reduced_source_phase": {
-    "baseline": "Committed07afb10 plus separate CPU futurehandoff working source, unbuilt",
+    "baseline": "Committed07afb10 plus worker successor working source, built/full gate passed",
     "adapter_built": true,
     "quality_choices": 31,
     "capabilities": {
@@ -503,7 +520,7 @@
     },
     "generic_handoff": "Existing HostABI8 auxiliary transaction, shared numeric R11 support and idempotent empty cleanup acknowledgement",
     "native_restore": "Owned exact writes restore; superseded scalar values and borrowed triangle changes are preserved and refused without false busy; failed actual retirement/unsafe owner association retains busy and pins",
-    "pending": "CPU futurehandoff in progress/unbuilt; ENB reduced-Main producer cause unresolved, moving temporal/near/active-effect audits and full coexistence/FG/latency acceptance pending",
+    "pending": "Live worker successor source binding/FG/latency admission pending; ENB reduced-Main producer cause unresolved, moving temporal/near/active-effect audits and full coexistence acceptance pending",
     "new_target_correction_built": true
   }
 }

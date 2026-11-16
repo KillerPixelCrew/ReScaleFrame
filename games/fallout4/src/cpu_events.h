@@ -5,7 +5,9 @@
 namespace rsf::fallout4 {
 // Identity is borrowed during the guarded Swap. A proved PlayerControls
 // consumer may adopt a reserved engine-buffer poll source before Swap;
-// otherwise Swap opens a rendered source. No simulation/GPU stage is implied.
+// a selected mode1 worker can hand one consumed successor through its native
+// post-Swap join to the next ordinary world. Otherwise Swap opens a rendered
+// source. No simulation/GPU stage is implied.
 // Native RAWINPUT, selected removed window messages and delivered gamepad
 // batches are separate unframed receipts. They never assert a physical sample.
 // The executable-local message thunk and its saved continuation stay pinned
@@ -23,7 +25,12 @@ CpuIdentity current_cpu_identity() noexcept;
 // Supplies a render-pass association, never an ExecuteCommandLists fact.
 bool begin_cpu_render() noexcept;
 // The caller separately proves its WorldBegin parent. Reserved sources also
-// require unchanged poll/raw-input generation and eligible native state.
+// require strict pre-bind poll/raw ownership. A sealed rendered predecessor
+// survives only its explicitly mapped successor; unmatched changes refuse.
 // A rendered fallback does not assert input ownership or classify gameplay.
 bool cpu_source_is_current(const CpuIdentity&) noexcept;
+// Called only by the existing guarded native Present detour after verified
+// owner/screen checks and SUBMISSION completion. These are native phase facts.
+bool begin_cpu_present_phase(const CpuIdentity&, uint64_t native_frame, uint64_t window) noexcept;
+void end_cpu_present_phase(const CpuIdentity&) noexcept;
 }
