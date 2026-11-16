@@ -1,6 +1,6 @@
 {
   "game": "Fallout 4",
-  "status": "Native-first validation active: five standard-scale actual SR/Present captures completed after qualified unbound-source correction; earlier duplication and moving shader/near-depth coverage remain unresolved, FG/tagging/adoption and end-to-end latency unaccepted, compatibility deferred, readiness0",
+  "status": "Native-first validation active: PID56312 admits bound/paced sources and FG tags but user rejects flicker/visual defects; final log has1243 active/inactive transitions and1122 skipped-present warnings, all three captures partial. Reduced recovery source is unbuilt; moving shader/near-depth, stable FG and latency remain unaccepted; compatibility deferred, readiness0",
   "executable": {
     "name": "Fallout4.exe",
     "version": "1.11.240.0",
@@ -67,6 +67,21 @@
     "depth": "Guarded prepass21F38B0/callerreturn21F9F78 copies same-source NativeDepthSnapshot; pass.depth_domains required before planning/explicit FG_INPUTS/SR; source native depth remains unchanged"
   },
   "validation": {
+    "native_intention_fg_trial": {
+      "receipt": ".local/fallout4-research/native-raster-20261116-192707-484",
+      "source_commit": "e495934507425cc1a9eae7b8352bcfc874bbb358",
+      "pid": 56312,
+      "entry_sha256": "F7B95E792207530BC11E5DDAB53165514AF9E4489057CDE3911F3C570F3318AF",
+      "runtime_sha256": "22830370AC079440177912E1B77680B37D55B7B1CD43915B6E2A68A4F70CE772",
+      "gate": "Windows Release VS2026:224passed14skipped238total102.79seconds; Rust fmt/Clippy clean",
+      "scope": "Direct native executable; repeated F4SE/non-systemD3D11/loader module absence; stationary shower interior from ExitSave",
+      "observed": "Actual bound/paced/completed source snapshots and FG tags; final log1244 effective rows/1243 changes,852 out-of-order plus188sync/82async mutex skipped-present warnings,243 order-violation deltas; bounded logs are not per-frame rates",
+      "visual_result": "FAILED: user reports flicker and split-image defects; illustrated screenshot is not asserted to match a serialized source from this run",
+      "captures": "Sources15309/native15502 and23503/native23447:25of40; source27349/native27180:15of30. All partial,SR0,present_result-3,final_colour unavailable; matched_presenttrue is not final-output acceptance",
+      "close": "Observed World-to-MainMenu-to-QuitDesktop, exit0; controller restoredtrue/cleanup_errornull; all21 original destination states/hashes independently verified, custom INI unchanged",
+      "remaining": "Exact failed CPU/reservation/native-cycle predicate, stable FG and full final capture, reduced failure recovery, moving shader/buffer/depth quality and end-to-end latency; new recovery source not deployed in this run",
+      "research": "docs/research/fallout4-bound-cpu-marker-audit-20261116.md"
+    },
     "native_only_vtable_trial": "native-raster-20261116-172137-067 PID66836/c32d8f7: direct launch and zero F4SE/non-systemD3D11/loader proof; corrected worker vtable/destructor/Run predicates pass, no RESERVE/BIND/pacing/markers; user rejects Quality1 duplicated scene rectangle without ENB; partial matched source16183/native16705 captured only3 native inputs at full rect after reload, not the failed reduced image; native Quit/Desktop reproduces4CB273/C0000005,21/21 restored and custom INI unchanged",
     "native_raster_gate": ".local/fallout4-research/verify-native-raster-20261116.log",
     "configuration": "Windows Release VS2026",
