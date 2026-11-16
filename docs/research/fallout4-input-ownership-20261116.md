@@ -1529,3 +1529,48 @@ complete (owned-window-absent refusal); actual exit0 has UNVERIFIED method,
 close AV or native-Quit claim applies to this run. The cycle probe remains
 inconclusive. Native-only direct-executable/module-absence validation is next;
 compatibility remains deferred until the native phase passes.
+
+
+### Native-only worker vtable mismatch, exact correction
+
+Fresh native-only PID64940/report170725-854 supplies the first actual failing
+native_cycle predicate, unlike the earlier paused probe. Its128-row predicate
+trace has ordinary WorldBegin native5721 with eligible Main flags/menu, enabled
+manager, matching receiver/worker instance/renderer/HWND, mode1/running1/exit0.
+The observed worker vptr is image+255E3B8; its first function is BD72E0. The
+adapter incorrectly demanded image+255E3C0 as the vptr and BD7430 at slot0.
+The root retained separate native-module-first absence proof; no F4SE/ENB
+compatibility work is resumed by this correction.
+
+The exact game SHA remains fdcef37ac1230af6d0b0050eb2142b139ef3a867b37b9211fb6edfcc646072f8.
+Independent PE inspection proves QWORD255E3B0 points to COL29C88D8, signature1,
+object/cd offsets0 and self29C88D8. TypeDescriptor2FFFB48 names
+`.?AVServingThread@JobListManager@@`. Vtable255E3B8 slot0 is BD72E0 and slot1
+(byte offset8, address255E3C0) is BD7430. Constructor BD4526 selects object
+32A1320; BD4535 loads vtable255E3B8; BD453C publishes the object at32A12F0;
+BD4546 stores that vptr into32A1320. BD72EA also loads255E3B8 and BD72F4 stores
+it through RCX during scalar deleting destruction; the function closes both
+handles, clears32A12F0 and conditionally deletes. BD7430 remains the Run body.
+The earlier slot-address-as-vtable inference was wrong, not a native variation.
+
+The minimal adapter correction checks exact vptr255E3B8, exact destructor at
+slot0 and Run at+8. Cold guards additionally check the exact COL pointer and
+both slot targets. All source/phase/state/handle checks, callbacks, policy and
+hook set remain unchanged. The ignored predicate template now distinguishes
+slot0 destructor from slot1 Run. No ticket-helper abstraction or mirrored
+constant-only fixture was added; existing sequence fixture/source hashes other
+than cpu_events.cpp remain unchanged. `worker-vtable-layout-proof-20261116.json`
+and its disassembly receipt retain the offline row, exact static evidence and
+new source hash. Node syntax and diff checks passed; compilation and actual
+source admission remain for the coordinator's next batch after game exit.
+
+Coordinator verification of this correction passed the full Windows Release
+VS2026 gate, exit0:238 total,224 passed,14 skipped in117.36seconds, Rust
+fmt/Clippy clean. The handoff contract passed0.01seconds. Built Entry SHA
+72B274B92AF5F5AFAC334F92E89EBC091812CD3A7FD05CF8B8A43713A393A449
+and unchanged Runtime8570CCC20A05FCDE6C533E8BD3748C827CF6D1ED842062C1E90596E5BF2375B3
+identify the next undeployed batch. PID64940 exited after root Alt+F4 with the
+native4CB273/null50 shutdown fault;21/21 entries restored, exact ENB proxy
+returned and custom INI unchanged. Native module absence is proved, but its
+foreground0 quality requests and absent bound owner are not SR/FG/latency
+acceptance. The gate log is verify-worker-vtable-20261116.log.

@@ -1022,3 +1022,15 @@ including direct launch and proved module absence, then compatibility. That
 proof is forthcoming; prior native-scale SR within a modded run is not it.
 F4SE/ENB work is deferred, not dropped. No production code, build or
 game/process/UI action was performed for this documentation update.
+
+The subsequent native-direct PID64940/report170725-854 proves module absence:
+zero F4SE modules, non-system D3D11 modules and loader processes. Its actual
+ordinary-world trace exposed the ServingThread slot/address guard defect,
+corrected as documented in the input note. Full Windows Release VS2026 gate
+verify-worker-vtable-20261116.log passed224/14,238 total in117.36seconds,
+Rust fmt/Clippy clean. Entry72B274B9... is built and undeployed; Runtime8570CCC2...
+is unchanged. No live binding or FG/latency acceptance follows from the build.
+Quality requests deferred at foreground0 are not acceptance; the later
+mirror/character scene retained native processing. Root Alt+F4 reproduced
+4CB273/null50/C0000005 with F4SE/ENB absent. The controller restored21/21 files,
+including the quarantined ENB proxy, with byte-identical custom INI.

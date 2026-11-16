@@ -3,9 +3,19 @@
 ## Fallout 4 AE native render callbacks, 16 November 2026
 
 User priority is now fully native Fallout4.exe without F4SE/ENB first, with
-explicit direct-executable/module-absence proof still forthcoming. Compatibility
+explicit direct-executable/module-absence proof recorded for PID64940. Compatibility
 is deferred until native validation passes, not dropped. No further ENB trials
 are scheduled in the native phase.
+
+The native-only PID64940/report170725-854 predicate trace identified an exact
+ServingThread guard defect: vtable255E3B8 has destructorBD72E0 at slot0 and
+RunBD7430 at slot1. The adapter had mistaken slot1's address for the vtable.
+The correction passed full Release VS2026 verification:224 passed,14 skipped,
+238 total in117.36seconds, with clean Rust fmt/Clippy. Entry72B274B9... is built
+but not yet deployed; Runtime8570CCC2... is unchanged. Live binding, FG and
+latency remain pending. Native module receipts prove F4SE/ENB absent. Closing
+reproduced native4CB273/C0000005; all21 staged entries restored and custom INI
+unchanged. Deferred foreground0 quality requests do not establish SR acceptance.
 
 Committed0992155 ran PID10792/report164621-778 with Runtime8570CCC2... and
 Entry87362E64...: native-scale SR was steady about55fps, but no RESERVE/SAMPLED/

@@ -130,10 +130,11 @@ bool same_state(const NativeState& a, const NativeState& b) {
         a.polling_enabled == b.polling_enabled;
 }
 bool native_cycle(WorkerCycle& proof, NativeState& native, bool joining) {
-    uintptr_t worker{},vtable{},entry{},renderer{},window{};
+    uintptr_t worker{},vtable{},destructor{},entry{},renderer{},window{};
     unsigned char running{},exiting{}; uint32_t mode{};
     if (!state(native,nullptr,proof.main) || !read(image()+0x32a12f0,worker) || worker!=image()+0x32a1320 ||
-        !read(worker,vtable) || vtable!=image()+0x255e3c0 || !read(vtable,entry) || entry!=image()+0xbd7430 ||
+        !read(worker,vtable) || vtable!=image()+0x255e3b8 ||
+        !read(vtable,destructor) || destructor!=image()+0xbd72e0 || !read(vtable+8,entry) || entry!=image()+0xbd7430 ||
         !read(worker+0x58,proof.start_event) || !proof.start_event ||
         !read(worker+0x60,proof.complete_event) || !proof.complete_event || !read(worker+0x68,mode) || (mode!=1 && !(joining && mode==0)) ||
         !read(worker+0x6e,running) || !running || !read(worker+0x6c,exiting) || exiting ||
@@ -184,9 +185,11 @@ bool guards() {
     constexpr unsigned char join_branch[]{0x83,0x79,0x68,0x01,0x75,0x1a,0xc7,0x41,0x68,0x00,0x00,0x00,0x00};
     constexpr unsigned char join_arguments[]{0x45,0x33,0xc0,0x48,0x8b,0x49,0x60,0xba,0xff,0xff,0xff,0xff};
     constexpr unsigned char join_wait[]{0x48,0xff,0x25,0x2c,0xb1,0x86,0x01};
-    uintptr_t descriptor{},name{},worker_entry{};
+    uintptr_t descriptor{},name{},worker_col{},worker_destructor{},worker_entry{};
     return read(image()+0x2f30fc0,descriptor) && descriptor==image()+0xbd6850 &&
         read(image()+0x2f30fc8,name) && name==image()+0x255dd10 &&
+        read(image()+0x255e3b0,worker_col) && worker_col==image()+0x29c88d8 &&
+        read(image()+0x255e3b8,worker_destructor) && worker_destructor==image()+0xbd72e0 &&
         read(image()+0x255e3c0,worker_entry) && worker_entry==image()+0xbd7430 && bytes(0xbd6850,job,sizeof(job)) && bytes(0xc34eb0,wrapper,sizeof(wrapper)) && bytes(0xbd51c0,join,sizeof(join)) &&
         bytes(0xbd76d2,callback,sizeof(callback)) && bytes(0xbd6940,wrapper_call,sizeof(wrapper_call)) &&
         bytes(0xc34ee7,worker_consume,sizeof(worker_consume)) && bytes(0xc346bb,join_call,sizeof(join_call)) &&
