@@ -1730,3 +1730,72 @@ describes limited reservations, not rendered-source latency acceptance.
 [Native scale validation](fallout4-native-scale-capture-validation-20261116.md)
 records exact capture identities, numeric replay, exit0 proof and21-entry
 recovery while retaining the controller timeout and earlier visual rejection.
+
+
+### Qualified pre-native-Poll intention, next source batch
+
+The coordinator's a99d155 native-only PID64776/report185056-143 completed two
+SR0/matchedPresent0 captures (source6569/native7022 Quality1 and source16176/
+native16644 return to native), then World->MainMenu->Desktop exit0 with21/21
+restored/hash-verified. FG tags/active and latency owner/paced remained0. The
+512-row observer executes before adapter hook bodies and perturbs scheduling;
+its ordering does not prove private Present arming or identify reason4.
+
+Review of C34565 group0/event0 wait -> C346AC Swap -> ordinary WorldBegin
+C382A5 proves that an already constructed predecessor has passed the pre-Swap
+wait. Its ID exists before the selected JobListEnd BD76DF/wrapper C34EC8 Poll
+intention. Requiring private sealed/present here was an overly narrow proxy for
+that dependency, but deleting it alone would break bound-source validity because
+poll attempt counters advance before the synchronous core callback or real Poll.
+The approved replacement preserves only the actual no-native-poll-yet interval.
+
+This batch atomically publishes one qualified existing Future ticket with the
+attempt counters under worker_guard, after native preflight outside the lock.
+A bound predecessor may remain current only with exact cycle/session/source/
+worker/job ownership, one callback intention/one in-flight poll, generation+1,
+unchanged raw/no writer, and unchanged native queued/consumed cursor. Main makes
+native reads outside the lock and rechecks scalar ownership/lifecycle/counters
+inside it, so it cannot mistake an advanced counter without its matching ticket
+for a completed native poll. Both bound-current and legacy invalid_pending paths
+use that same narrow proof. No new ledger, option, public ABI or generic rule is
+introduced. Native/source validation before construction still refuses.
+
+The callback-return critical section always expires protection. Core still owns
+actual predecessor Present outcome,20ms deadline, provider readiness and pacing;
+void delivery is not acceptance. Before original Poll, a bound predecessor still
+live/unsealed strictly invalidates/refuses. Only the existing sealed/mapped
+contract or a completed retained cycle permits its continuation. Raw revision is
+captured immediately after RESERVE and before the unchanged actual Poll. A final
+scalar check precedes native entry; SAMPLED requires the actual entry marker.
+The original native call executes exactly once even after refusal. Existing
+pre-bind raw/poll/cursor rules, actual flags0 FRAME_BEGIN/BIND, exact mode/result/
+join/native+1 and abort/partial-FRAME_END drain are retained.
+
+Reentrant unmatched polls, raw/lifecycle/state changes and withdrawal remove
+protection; busy tickets cannot be overwritten or force-cleared. An unannounced
+local ticket has no host ABORT obligation; once RESERVE delivery is announced,
+normal explicit retirement remains owed even if the callback throws or core
+refuses. Native and host calls remain outside the metadata mutex. Existing
+bounded receipts now distinguish callback-inflight/returned, native-Poll entry
+and announced delivery; channel1 bits9/10 mean existing constructed source and
+unchanged bound sample rather than sealed/present, and channel3 reports callback
+return/arming failure. No marker/pacing/backend or image policy moved to adapter.
+
+The production-helper fixture now covers cross-thread intention -> Main Present
+progress -> callback return -> actual Poll -> consume -> native join -> immediate
+World+1, plus timeout-before-seal, raw/intervening generation/queue/cursor change,
+wrong source/owner, preconstruction/early consumer, quiesce/withdrawal and ID
+regressions. These fixtures were authored, not executed by this worker. Static
+mutex/guard/native-call-once/format and diff checks passed; code/test hashes were
+frozen before this note. Compilation, actual source admission, earlier reason4
+attribution and full shader/moving/FG/latency acceptance remain for coordinator
+validation. No worker build/game/process/UI/REA/attach/deploy/commit occurred.
+
+Coordinator Windows Release VS2026 validation passed the intention batch:
+224 passed, 14 skipped, 238 total in 102.79 seconds, with Rust fmt/Clippy
+clean. The extended actual-helper handoff fixture passed in 0.01 seconds.
+Built Entry SHA256 `f7b95e792207530bc11e5ddab53165514af9e4489057cde3911f3c570f3318af` and unchanged
+Runtime SHA256 `22830370ac079440177912e1b77680b37d55b7b1cd43915b6e2a68a4f70ce772` identify the batch.
+The source hashes match the frozen manifest. This is compiled/contract-tested,
+not yet native-tested; bound-source adoption, reason4, FG and complete latency
+remain unaccepted until the next owned native run.

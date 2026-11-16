@@ -789,6 +789,25 @@
       "trace_span_seconds": 0.2875122,
       "trace_limit": "row budget, not 15 seconds; native entry is before adapter Present-phase arming and instrumentation perturbs scheduling",
       "research": "docs/research/fallout4-native-scale-capture-validation-20261116.md"
+    },
+    "prepoll_intention_gate": {
+      "configuration": "Windows Release VS2026",
+      "exit_code": 0,
+      "total": 238,
+      "passed": 224,
+      "skipped": 14,
+      "test_seconds": 102.79,
+      "rust_fmt_clippy": "pass",
+      "worker_handoff_seconds": 0.01,
+      "entry_sha256": "f7b95e792207530bc11e5ddab53165514af9e4489057cde3911f3c570f3318af",
+      "runtime_sha256": "22830370ac079440177912e1b77680b37d55b7b1cd43915b6e2a68a4f70ce772",
+      "log": "verify-prepoll-intention-20261116.log",
+      "source_hashes": {
+        "games/fallout4/src/cpu_events.cpp": "ed829db5f8b62bd59d9c65d5f479f307d6d47bb68d638b5724c897c978ede8f9",
+        "games/fallout4/src/worker_handoff.h": "a131cf20c6c7627e38ae4f89cefaabeb72f3c4c8647f209ac95e6d74b67580ab",
+        "tests/fallout4_worker_handoff.cpp": "322951815d3171102fa3b188c4f9dbb3aaf122445ac364b17c695f5fb2536bf0"
+      },
+      "live": "not yet deployed"
     }
   },
   "reduced_consumer_research": "docs/research/fallout4-reduced-consumers-20261116.md",

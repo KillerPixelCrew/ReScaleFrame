@@ -20,7 +20,10 @@ CpuIdentity successor() { return {7,41,0,0,10000000}; }
 WorkerTicket consumed_ticket() {
     WorkerTicket ticket;
     check(ticket.reserve(predecessor(),successor(),9,true),"reserve after predecessor allocation/Present entry");
-    check(ticket.arm(predecessor(),9,12,true),"raw revision snapped after RESERVE return");
+    check(ticket.begin_callback(0,0,0),"registered no-native-poll-yet callback");
+    ticket.end_callback();
+    check(ticket.arm(predecessor(),9,12,true,true),"raw revision snapped after RESERVE return");
+    ticket.native_poll_entry();
     check(ticket.sample(9,12,77,1000,true),"actual poll completed");
     check(ticket.begin(1010,9,12,77,true),"actual receiver begins future flags0 frame");
     check(ticket.bind(9,12,77,true),"strict matching sample binds at receiver");
@@ -59,7 +62,7 @@ int main() {
         }
     }
     WorkerTicket empty;
-    check(!empty.reserve(predecessor(),successor(),9,false),"early/straddling poll cannot reserve before Present entry");
+    check(!empty.reserve(predecessor(),successor(),9,false),"poll cannot reserve before ordinary world/source construction");
     auto bad_source=successor(); bad_source.source=40;
     check(!empty.reserve(predecessor(),bad_source,9,true),"future id must follow allocated predecessor");
     auto unknown=predecessor(); unknown.source=0;
@@ -67,7 +70,11 @@ int main() {
 
     WorkerTicket pending;
     check(pending.reserve(predecessor(),successor(),9,true),"pending fixture reserve");
-    check(pending.arm(predecessor(),9,12,true),"post-wait raw revision may differ from pre-reserve raw revision");
+    check(pending.begin_callback(0,0,0),"unbound predecessor callback begins");
+    pending.end_callback();
+    check(pending.arm(predecessor(),9,12,true,true),"post-wait raw revision may differ from pre-reserve raw revision");
+    check(!pending.sample(9,12,77,1000,true),"arming does not fabricate an actual native Poll");
+    pending.native_poll_entry();
     check(!pending.sample(10,12,77,1000,true),"intervening poll before sample refuses");
     check(!pending.sample(9,13,77,1000,true),"overlapped raw sample refuses");
     check(pending.sample(9,12,77,1000,true),"unchanged actual sample succeeds");
@@ -100,6 +107,41 @@ int main() {
     check(stopped.refusal==1 && stopped.active() && stopped.frame_begun,"quiesce retains sticky abort/frame-end obligations");
     check(!stopped.claim(next_swap(),77,9),"quiesced ticket cannot be replaced with fallback ahead of abort drain");
 
+    // Intention protection belongs only to the one unchanged consumed sample.
+    WorkerTicket intention;
+    check(intention.reserve(predecessor(),successor(),9,true) && intention.begin_callback(8,12,76),
+        "construct/source allocation precede a genuine callback intention");
+    check(intention.protects_bound(predecessor(),40,8,9,12,76,76,true),"exact bound predecessor is protected");
+    check(!intention.protects_bound(predecessor(),39,8,9,12,76,76,true),"wrong bound source cannot borrow intention");
+    check(!intention.protects_bound(predecessor(),40,7,9,12,76,76,true),"wrong previous generation refuses");
+    check(!intention.protects_bound(predecessor(),40,8,10,12,76,76,true),"intervening or nested Poll removes protection");
+    check(!intention.protects_bound(predecessor(),40,8,9,13,76,76,true),"raw change during intention refuses current bound source");
+    check(!intention.protects_bound(predecessor(),40,8,9,12,77,77,true),"consumed cursor advance refuses");
+    check(!intention.protects_bound(predecessor(),40,8,9,12,76,77,true),"queued mutation without consumption also refuses");
+    changed=predecessor(); ++changed.main;
+    check(!intention.protects_bound(changed,40,8,9,12,76,76,true),"changed native Main/owner refuses");
+    check(!intention.protects_bound(predecessor(),40,8,9,12,76,76,false),"lifecycle/native/raw-writer proof failure refuses");
+    check(!intention.begin(1010,9,12,76,true),"consumer cannot adopt callback intention before actual Poll");
+    intention.end_callback();
+    check(!intention.arm(predecessor(),9,12,true,WorkerTicket::poll_safe(40,false,false)),
+        "core timeout before actual seal does not retain bound generation");
+    check(!intention.callback_inflight && !intention.protects_bound(predecessor(),40,8,9,12,76,76,true),
+        "timeout expires protection before native continuation");
+    intention.refuse(RSF_GAME_CPU_ABORT_STATE_CHANGED); intention.native_poll_entry();
+    check(intention.native_poll_started && !intention.sample(9,12,77,1000,true),
+        "native call still proceeds while refused ticket cannot publish sample");
+    WorkerTicket gap;
+    check(gap.reserve(predecessor(),successor(),10,true) && !gap.begin_callback(8,12,76),
+        "a generation gap cannot create bound protection");
+    WorkerTicket withdrawn;
+    check(withdrawn.reserve(predecessor(),successor(),9,true) && withdrawn.begin_callback(8,12,76),"withdrawal fixture intention");
+    withdrawn.refuse(RSF_GAME_CPU_ABORT_QUIESCE);
+    check(!withdrawn.protects_bound(predecessor(),40,8,9,12,76,76,true),"quiesce/reentrant withdrawal immediately removes protection");
+    withdrawn.end_callback();
+    check(!withdrawn.arm(predecessor(),9,12,true,true) && withdrawn.active(),"withdrawn intention retains abort ownership until drained");
+    check(WorkerTicket::poll_safe(0,false,false) && WorkerTicket::poll_safe(40,true,false) && WorkerTicket::poll_safe(40,false,true),
+        "unbound, completed, or genuinely sealed predecessors permit normal native continuation");
+
     // Exercise the real scalar helper across the producer/graphics handoff. The
     // simulated blocking host callback must release the adapter's scalar lock;
     // Present and the original native join can progress while it is blocked.
@@ -107,10 +149,16 @@ int main() {
     std::latch reserve_entered(1),present_returned(1);
     WorkerTicket cross;
     std::thread worker([&] {
-        { std::lock_guard lock(guard); check(cross.reserve(predecessor(),successor(),9,true),"worker reserves with predecessor phase open"); }
+        { std::lock_guard lock(guard);
+            check(cross.reserve(predecessor(),successor(),9,true),"constructed predecessor admits intention before Present");
+            check(cross.begin_callback(8,12,76),"register exact bound-source callback intention");
+        }
         reserve_entered.count_down(); present_returned.wait();
         { std::lock_guard lock(guard);
-            check(cross.arm(predecessor(),9,20,true),"RESERVE returns after Present exit; retained phase proof suffices");
+            cross.end_callback();
+            check(!cross.protects_bound(predecessor(),40,8,9,12,76,76,true),"callback return always expires bound protection");
+            check(cross.arm(predecessor(),9,20,true,WorkerTicket::poll_safe(40,true,true)),"core returns after Main Present progress");
+            cross.native_poll_entry();
             check(cross.sample(9,20,77,1000,true),"worker actual poll after core wait");
             check(cross.begin(1010,9,20,77,true) && cross.bind(9,20,77,true),"actual receiver FRAME_BEGIN/BIND");
             check(cross.consumed(9,77,true) && cross.complete(true),"native worker consumed source completion");
@@ -119,6 +167,11 @@ int main() {
     reserve_entered.wait();
     const bool unlocked=guard.try_lock(); check(unlocked,"no scalar lock held across blocking host callback");
     if (unlocked) guard.unlock();
+    { std::lock_guard lock(guard);
+        check(cross.protects_bound(predecessor(),40,8,9,12,76,76,true),
+            "Main bound source remains valid during exact pre-poll intention and can reach Present");
+        check(!WorkerTicket::poll_safe(40,false,false),"a live unsealed bound predecessor forbids actual Poll");
+    }
     present_returned.count_down(); worker.join();
     { std::lock_guard lock(guard);
         check(cross.join(predecessor(),true) && cross.claim(next_swap(),77,9),"post-Swap join transfers ticket to next graphics Swap");

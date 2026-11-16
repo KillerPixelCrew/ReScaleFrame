@@ -29,22 +29,44 @@ struct WorkerTicket {
     CpuIdentity cpu{};
     uint64_t generation{}, raw{}, poll_begin{};
     uint32_t cursor{}, refusal{};
-    bool frame_begun{};
+    bool frame_begun{}, callback_inflight{}, callback_returned{}, native_poll_started{};
+    uint64_t predecessor_generation{}, predecessor_raw{};
+    uint32_t predecessor_cursor{};
     bool active() const { return phase!=Phase::empty; }
     bool valid() const { return active() && !refusal; }
     void refuse(uint32_t reason) { if (active() && !refusal) refusal=reason; }
-    bool reserve(const WorkerCycle& owner, const CpuIdentity& future, uint64_t gen, bool present) {
-        if (active() || !present || !owner.source || future.source<=owner.source || future.session!=owner.session || !gen) return false;
+    bool reserve(const WorkerCycle& owner, const CpuIdentity& future, uint64_t gen, bool constructed) {
+        if (active() || !constructed || !owner.source || future.source<=owner.source || future.session!=owner.session || !gen) return false;
         predecessor=owner; cpu=future; generation=gen; phase=Phase::reserved; return true;
     }
-    bool arm(const WorkerCycle& owner, uint64_t gen, uint64_t revision, bool native_valid) {
-        // Present may have returned while RESERVE waited. Its original entry
-        // proof is retained in predecessor, not demanded again here.
-        if (!valid() || phase!=Phase::reserved || owner!=predecessor || gen!=generation || !native_valid) return false;
+    bool begin_callback(uint64_t bound_generation, uint64_t bound_raw, uint32_t bound_cursor) {
+        if (!valid() || phase!=Phase::reserved || callback_inflight || callback_returned || native_poll_started ||
+            (bound_generation && (generation<=bound_generation || generation-bound_generation!=1))) return false;
+        predecessor_generation=bound_generation; predecessor_raw=bound_raw; predecessor_cursor=bound_cursor;
+        callback_inflight=true; return true;
+    }
+    void end_callback() noexcept {
+        callback_returned=callback_inflight; callback_inflight=false;
+    }
+    bool protects_bound(const WorkerCycle& owner, uint64_t source, uint64_t bound_generation,
+        uint64_t gen, uint64_t revision, uint32_t consumed, uint32_t queued, bool native_valid) const {
+        return valid() && phase==Phase::reserved && callback_inflight && !native_poll_started &&
+            owner==predecessor && source==predecessor.source && predecessor_generation &&
+            bound_generation==predecessor_generation && gen==generation && generation>bound_generation &&
+            generation-bound_generation==1 && revision==predecessor_raw &&
+            consumed==predecessor_cursor && queued==consumed && native_valid;
+    }
+    static bool poll_safe(uint64_t bound_source, bool closed, bool sealed) noexcept {
+        return !bound_source || closed || sealed;
+    }
+    bool arm(const WorkerCycle& owner, uint64_t gen, uint64_t revision, bool native_valid, bool predecessor_safe) {
+        if (!valid() || phase!=Phase::reserved || callback_inflight || !callback_returned ||
+            owner!=predecessor || gen!=generation || !native_valid || !predecessor_safe) return false;
         raw=revision; phase=Phase::armed; return true;
     }
+    void native_poll_entry() noexcept { callback_inflight=false; native_poll_started=true; }
     bool sample(uint64_t gen, uint64_t revision, uint32_t sequence, uint64_t began, bool native_valid) {
-        if (!valid() || phase!=Phase::armed || gen!=generation || revision!=raw || !native_valid) return false;
+        if (!valid() || phase!=Phase::armed || !native_poll_started || gen!=generation || revision!=raw || !native_valid) return false;
         cursor=sequence; poll_begin=began; phase=Phase::sampled; return true;
     }
     bool begin(uint64_t now, uint64_t gen, uint64_t revision, uint32_t sequence, bool native_valid) {
