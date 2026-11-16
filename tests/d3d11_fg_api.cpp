@@ -4,6 +4,7 @@
 // that need no device (CPU ordering, scene/window identity, source binding, inputs query).
 #include <rescaleframe/d3d11_fg_api.h>
 #include <rescaleframe/d3d11_present_api.h>
+#include <rescaleframe/native_cpu.h>
 #include <windows.h>
 #include <cstdio>
 #include <cstring>
@@ -86,6 +87,37 @@ int main() {
     check(event(RSF_GAME_CPU_FRAME_BEGIN, 2) == 0, "a repeated frame id is refused");
     rsf_game_cpu_event short_event{sizeof(short_event) - 1, RSF_GAME_CPU_FRAME_BEGIN, session, 3, now(), f, 1, 0, 0};
     check(api.cpu(&short_event) == 0, "short CPU event refused");
+
+    // A real bound poll can establish CPU facts without granting a vendor owner.
+    rsf_game_cpu_source_event reserved{};
+    reserved.header = {sizeof(reserved), RSF_GAME_CPU_SOURCE_RESERVE, session, 3, now(), f,
+        0, 0, 0, RSF_GAME_CPU_EVENT_VERSION_SOURCE, 0};
+    reserved.native_generation = 1;
+    check(api.cpu(&reserved.header) == 1, "prospective poll reservation accepted without graphics");
+    reserved.header.stage = RSF_GAME_CPU_SOURCE_SAMPLED;
+    reserved.poll_begin_qpc = now(); reserved.header.timestamp_qpc = now();
+    reserved.header.flags = RSF_GAME_CPU_SOURCE_PRODUCED;
+    check(api.cpu(&reserved.header) == 1, "real poll completion accepted");
+    rsf_game_cpu_event begin{sizeof(begin), RSF_GAME_CPU_FRAME_BEGIN, session, 3, now(), f,
+        0, 0, 0, RSF_GAME_CPU_EVENT_VERSION, 0};
+    check(api.cpu(&begin) == 1, "flags0 prospective frame adopted");
+    reserved.header.stage = RSF_GAME_CPU_SOURCE_BIND; reserved.header.timestamp_qpc = now();
+    reserved.header.flags = 0; reserved.poll_begin_qpc = 0;
+    check(api.cpu(&reserved.header) == 1, "consumer binds real poll");
+    rsf_native_cpu_frame observed{}; observed.struct_size = sizeof(observed);
+    check(rsf_native_cpu_read(session, 3, &observed) && observed.stage_mask == 7u &&
+        (observed.flags & RSF_GAME_CPU_DERIVED_BOUNDARY) && !observed.pacing_qpc && !observed.marker_mask,
+        "derived CPU begin does not invent vendor pacing or markers");
+    rsf_game_render_pass unowned_submission{}; unowned_submission.struct_size = sizeof(unowned_submission);
+    unowned_submission.role = RSF_GAME_RENDER_SUBMISSION; unowned_submission.session_id = session;
+    unowned_submission.source_frame_id = unowned_submission.submission_id = unowned_submission.view_key = 3;
+    unowned_submission.flags = RSF_GAME_RENDER_PRIMARY | RSF_GAME_RENDER_AFTER_SIMULATION;
+    api.pass(nullptr, &unowned_submission, 1);
+    rsf_native_latency_render(3, 1); // an arbitrary graphics notification has no verified owner
+    check(rsf_native_cpu_read(session, 3, &observed) && observed.stage_mask == 7u && !observed.marker_mask,
+        "post-update pass without presentation ownership cannot derive vendor interval end");
+    begin.stage = RSF_GAME_CPU_FRAME_END; begin.timestamp_qpc = now(); begin.flags = RSF_GAME_CPU_RENDER_SKIPPED;
+    check(api.cpu(&begin) == 1, "explicit skipped partial prospective frame closes without graphics");
 
     // Render passes: short structures are refused; WINDOW scope needs its identity fields.
     rsf_game_render_pass pass{}; pass.struct_size = sizeof(pass) - 1; pass.role = RSF_GAME_RENDER_WINDOW;

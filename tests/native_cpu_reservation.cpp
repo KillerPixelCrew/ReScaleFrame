@@ -11,6 +11,8 @@ int failures{};
 #define CHECK(x) do { if (!(x)) { std::printf("FAIL %d: %s\n", __LINE__, #x); ++failures; } } while (false)
 constexpr uint64_t session = 41;
 std::vector<rsf_game_cpu_event> delivered;
+bool withdraw_on_bind{};
+bool actual_begin_on_bind{};
 void sink(void*, const rsf_game_cpu_event* event) {
     // Source callbacks must see the committed ledger and may reenter it without deadlock.
     if (event->stage >= RSF_GAME_CPU_SOURCE_RESERVE) {
@@ -21,6 +23,22 @@ void sink(void*, const rsf_game_cpu_event* event) {
         if (event->stage == RSF_GAME_CPU_SOURCE_BIND) CHECK(value.state == RSF_NATIVE_CPU_RESERVATION_BOUND);
     }
     delivered.push_back(*event);
+    if (event->stage == RSF_GAME_CPU_SOURCE_BIND && withdraw_on_bind) {
+        withdraw_on_bind = false;
+        rsf_game_cpu_source_event abort{};
+        abort.header = *event; abort.header.struct_size = sizeof(abort);
+        abort.header.stage = RSF_GAME_CPU_SOURCE_ABORT; ++abort.header.timestamp_qpc;
+        abort.reason = RSF_GAME_CPU_ABORT_QUIESCE;
+        CHECK(rsf_native_cpu_dispatch(&abort.header, sink, nullptr));
+    }
+    if (event->stage == RSF_GAME_CPU_SOURCE_BIND && actual_begin_on_bind) {
+        actual_begin_on_bind = false;
+        auto actual = *event; actual.struct_size = sizeof(actual);
+        actual.event_version = RSF_GAME_CPU_EVENT_VERSION;
+        actual.stage = RSF_GAME_CPU_SIMULATION_BEGIN; ++actual.timestamp_qpc;
+        actual.flags = RSF_GAME_CPU_INPUT_KEYED;
+        CHECK(rsf_native_cpu_dispatch(&actual, sink, nullptr));
+    }
 }
 rsf_game_cpu_event fact(uint64_t source, uint32_t stage, uint64_t stamp, uint32_t flags = 0) {
     return {sizeof(rsf_game_cpu_event), stage, session, source, stamp, 1000, 1, 0, 0,
@@ -266,11 +284,14 @@ int main() {
     CHECK(send(fact(2, RSF_GAME_CPU_FRAME_BEGIN, 50)));
     CHECK(rsf_native_cpu_read(session, 2, &frame) && frame.stage_mask == 1u && !frame.timestamps_qpc[1]);
     CHECK(bind(2, 55));
-    CHECK(rsf_native_cpu_read(session, 2, &frame) && frame.stage_mask == 3u && frame.timestamps_qpc[1] == 34);
+    CHECK(rsf_native_cpu_read(session, 2, &frame) && frame.stage_mask == 7u && frame.timestamps_qpc[1] == 34 &&
+        frame.timestamps_qpc[2] == 55 && (frame.flags & RSF_GAME_CPU_DERIVED_BOUNDARY));
     CHECK(!frame.pacing_qpc && !frame.input_ready_qpc && !frame.marker_mask && !frame.input_mask && !frame.pings);
     CHECK(frame.timestamps_qpc[1] < frame.timestamps_qpc[0]);
-    CHECK(delivered.size() == 2 && delivered[0].stage == RSF_GAME_CPU_FRAME_BEGIN &&
-        delivered[1].stage == RSF_GAME_CPU_SOURCE_BIND); // no synthetic INPUT_SAMPLE/marker
+    CHECK(delivered.size() == 3 && delivered[0].stage == RSF_GAME_CPU_FRAME_BEGIN &&
+        delivered[1].stage == RSF_GAME_CPU_SOURCE_BIND && delivered[2].stage == RSF_GAME_CPU_SIMULATION_BEGIN &&
+        (delivered[2].flags & RSF_GAME_CPU_DERIVED_BOUNDARY) &&
+        !(delivered[2].flags & RSF_GAME_CPU_INPUT_SUBSTITUTE)); // no second INPUT_SAMPLE or pace
     const auto after_bind = delivered.size();
     CHECK(!bind(2, 56) && delivered.size() == after_bind);
     CHECK(send(fact(2, RSF_GAME_CPU_SIMULATION_BEGIN, 56)));
@@ -323,6 +344,67 @@ int main() {
     CHECK(rsf_native_cpu_marker(5,0) == -1);
     CHECK(rsf_native_cpu_read(session, 5, &frame) && frame.stage_mask == 29u && !frame.failed &&
         !frame.timestamps_qpc[1] && !frame.pacing_qpc && !frame.marker_mask);
+    // A flags0 frame is canonical only after real input ownership is established.
+    CHECK(reserve(6, 160, 5) && sampled(6, 162));
+    auto unkeyed = fact(6, RSF_GAME_CPU_FRAME_BEGIN, 170); unkeyed.flags = 0;
+    CHECK(send(unkeyed) && bind(6, 171));
+    CHECK(rsf_native_cpu_read(session, 6, &frame) && frame.stage_mask == 7u &&
+        (frame.flags & RSF_GAME_CPU_INPUT_KEYED) && frame.timestamps_qpc[1] == 161);
+    auto derived_end = fact(6, RSF_GAME_CPU_SIMULATION_END, 180, RSF_GAME_CPU_DERIVED_BOUNDARY);
+    CHECK(send(derived_end));
+    const auto derived_delivered = delivered.size();
+    CHECK(send(derived_end) && delivered.size() == derived_delivered);
+    auto actual_begin = fact(6, RSF_GAME_CPU_SIMULATION_BEGIN, 172); actual_begin.flags = 0;
+    auto bad_clock = actual_begin; bad_clock.qpc_frequency = 999;
+    CHECK(!send(bad_clock));
+    auto backwards = actual_begin; backwards.timestamp_qpc = 169;
+    CHECK(!send(backwards));
+    auto crosses_end = actual_begin; crosses_end.timestamp_qpc = 181;
+    CHECK(!send(crosses_end));
+    CHECK(send(actual_begin) && delivered.size() == derived_delivered);
+    CHECK(rsf_native_cpu_read(session, 6, &frame) && frame.timestamps_qpc[2] == 172 &&
+        (frame.flags & RSF_GAME_CPU_DERIVED_BOUNDARY)); // end remains derived
+    auto actual_end = fact(6, RSF_GAME_CPU_SIMULATION_END, 181); actual_end.flags = 0;
+    CHECK(send(actual_end) && delivered.size() == derived_delivered);
+    CHECK(rsf_native_cpu_read(session, 6, &frame) && frame.timestamps_qpc[3] == 181 &&
+        !(frame.flags & RSF_GAME_CPU_DERIVED_BOUNDARY));
+    CHECK(send(fact(6, RSF_GAME_CPU_FRAME_END, 182)));
+    // Withdrawal from the synchronous bind sink must prevent derived simulation.
+    CHECK(reserve(7, 190, 6) && sampled(7, 192));
+    CHECK(send(fact(7, RSF_GAME_CPU_FRAME_BEGIN, 200)));
+    withdraw_on_bind = true;
+    CHECK(bind(7, 201));
+    CHECK(rsf_native_cpu_read(session, 7, &frame) && frame.stage_mask == 3u &&
+        !(frame.flags & RSF_GAME_CPU_DERIVED_BOUNDARY));
+    CHECK(send(fact(7, RSF_GAME_CPU_FRAME_END, 203, RSF_GAME_CPU_RENDER_SKIPPED)));
+    // Missing end remains missing for an explicitly skipped source; no completion promotion.
+    CHECK(reserve(8, 210, 7) && sampled(8, 212));
+    CHECK(send(fact(8, RSF_GAME_CPU_FRAME_BEGIN, 220)) && bind(8, 221));
+    CHECK(abort_source(8, 222, RSF_GAME_CPU_ABORT_STATE_CHANGED));
+    CHECK(send(fact(8, RSF_GAME_CPU_FRAME_END, 223, RSF_GAME_CPU_RENDER_SKIPPED)));
+    CHECK(rsf_native_cpu_read(session, 8, &frame) && frame.stage_mask == 23u && frame.ended && !frame.failed &&
+        !frame.timestamps_qpc[3]);
+    CHECK(reserve(9, 230, 8) && sampled(9, 232));
+    CHECK(send(fact(9, RSF_GAME_CPU_FRAME_BEGIN, 240)) && bind(9, 241));
+    CHECK(!send(fact(9, RSF_GAME_CPU_FRAME_END, 243))); // unflagged partial still refuses
+    CHECK(reserve(10, 250, 9) && sampled(10, 252));
+    CHECK(send(fact(10, RSF_GAME_CPU_FRAME_BEGIN, 260)));
+    actual_begin_on_bind = true;
+    CHECK(bind(10, 261));
+    CHECK(rsf_native_cpu_read(session, 10, &frame) && frame.stage_mask == 7u &&
+        frame.timestamps_qpc[2] == 262 && !(frame.flags & RSF_GAME_CPU_DERIVED_BOUNDARY));
+    CHECK(send(fact(10, RSF_GAME_CPU_SIMULATION_END, 263)) && send(fact(10, RSF_GAME_CPU_FRAME_END, 264)));
+    // Replacing end first must not erase the still-derived begin's provenance.
+    CHECK(reserve(11, 270, 10) && sampled(11, 272));
+    CHECK(send(fact(11, RSF_GAME_CPU_FRAME_BEGIN, 280)) && bind(11, 281));
+    CHECK(send(fact(11, RSF_GAME_CPU_SIMULATION_END, 290, RSF_GAME_CPU_DERIVED_BOUNDARY)));
+    CHECK(send(fact(11, RSF_GAME_CPU_SIMULATION_END, 291)));
+    CHECK(rsf_native_cpu_read(session, 11, &frame) && frame.timestamps_qpc[2] == 281 &&
+        frame.timestamps_qpc[3] == 291 && (frame.flags & RSF_GAME_CPU_DERIVED_BOUNDARY));
+    CHECK(send(fact(11, RSF_GAME_CPU_SIMULATION_BEGIN, 282)));
+    CHECK(rsf_native_cpu_read(session, 11, &frame) && frame.timestamps_qpc[2] == 282 &&
+        !(frame.flags & RSF_GAME_CPU_DERIVED_BOUNDARY));
+    CHECK(send(fact(11, RSF_GAME_CPU_FRAME_END, 292)));
     rsf_native_cpu_release();
     std::printf("%d failures\n", failures);
     return failures ? 1 : 0;

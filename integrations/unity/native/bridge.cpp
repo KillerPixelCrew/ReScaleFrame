@@ -118,7 +118,7 @@ bool prepare_surface(uint32_t index, ID3D11Texture2D* texture)
     if (format == DXGI_FORMAT_R8G8B8A8_TYPELESS || format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB) format = DXGI_FORMAT_R8G8B8A8_UNORM;
     if (format == DXGI_FORMAT_B8G8R8A8_TYPELESS || format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB) format = DXGI_FORMAT_B8G8R8A8_UNORM;
     rsf_shared_surface_setup setup{sizeof(setup), RSF_SHARED_SURFACE_ABI_VERSION, desc.Width, desc.Height,
-        static_cast<uint32_t>(format), 1, services.log, services.user};
+        static_cast<uint32_t>(format), 1, services.log, services.user, 0};
     rsf_shared_surface* replacement = nullptr;
     if (rsf_shared_surface_create(device11.Get(), device12.Get(), &setup, &replacement) != RSF_SHARED_OK) return false;
     rsf_shared_surface_destroy(surface.surface); surface.surface = replacement; surface.description = desc;

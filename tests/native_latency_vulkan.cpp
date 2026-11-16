@@ -176,6 +176,20 @@ int main() {
     const auto reflex_sleeps=slept;
     rsf_game_cpu_event fact{sizeof(fact),0,77,100,1000,1000,1,0,0,1,RSF_GAME_CPU_INPUT_KEYED};
     rsf_latencyvk_cpu(&fact);
+    // This sink has no prospective owner/token contract. Source v2 must remain
+    // outside native_cpu adoption and cannot acquire a late pace or marker.
+    const auto before_prospective_sleep = slept;
+    const auto before_prospective_xell = xell_sleeps;
+    const auto before_prospective_markers = xell_markers.size();
+    rsf_game_cpu_source_event unsupported{};
+    unsupported.header = {sizeof(unsupported), RSF_GAME_CPU_SOURCE_RESERVE, 77, 101, 1001, 1000,
+        0, 0, 0, RSF_GAME_CPU_EVENT_VERSION_SOURCE, 0};
+    unsupported.native_generation = 1;
+    rsf_latencyvk_cpu(&unsupported.header);
+    rsf_native_cpu_reservation absent{}; absent.struct_size = sizeof(absent);
+    require(!rsf_native_cpu_reservation_read(77, 101, &absent) && slept == before_prospective_sleep &&
+        xell_sleeps == before_prospective_xell && xell_markers.size() == before_prospective_markers,
+        "Vulkan prospective source remains refused without its owner contract");
     fact.stage=RSF_GAME_CPU_INPUT_SAMPLE;fact.timestamp_qpc=1010;rsf_latencyvk_cpu(&fact);rsf_latencyvk_cpu(&fact);
     fact.stage=RSF_GAME_CPU_SIMULATION_BEGIN;fact.timestamp_qpc=1011;rsf_latencyvk_cpu(&fact);
     fact.stage=RSF_GAME_CPU_INPUT_EVENT;fact.timestamp_qpc=1012;fact.input_kind=7;rsf_latencyvk_cpu(&fact);rsf_latencyvk_cpu(&fact);

@@ -826,6 +826,7 @@ extern "C" RSF_RUNTIME_API void rsf_native_fg_cpu(const rsf_game_cpu_event* even
     } else if (event->stage == RSF_GAME_CPU_PACING) {
         if (!(event->event_version==RSF_GAME_CPU_EVENT_VERSION && (event->flags & RSF_GAME_CPU_INPUT_KEYED))) pace_cpu_frame(id);
     } else if (event->stage == RSF_GAME_CPU_SIMULATION_BEGIN) {
+        if (event->flags & RSF_GAME_CPU_DERIVED_BOUNDARY) ++derived_boundaries;
         bool reserved = false;
         with_frame(id, [&](const CpuOwner& frame) { reserved = frame.prospective && !frame.failed; });
         if (reserved) {
@@ -847,6 +848,7 @@ extern "C" RSF_RUNTIME_API void rsf_native_fg_cpu(const rsf_game_cpu_event* even
         if (reserved && (event->flags & (RSF_GAME_CPU_INPUT_UNFRAMED | RSF_GAME_CPU_WINDOW_MESSAGE))) return;
         trace("input received", id, rsf_d3d11_present_input(id, event->input_kind, event->message_id));
     } else if (event->stage == RSF_GAME_CPU_SIMULATION_END) {
+        if (event->flags & RSF_GAME_CPU_DERIVED_BOUNDARY) ++derived_boundaries;
         trace("simulation end", id, frame_marker(id, RSF_LATENCY_SIMULATION_END));
     } else if (event->stage == RSF_GAME_CPU_FRAME_END) {
         rsf_native_cpu_frame cpu{}; cpu.struct_size = sizeof(cpu);
@@ -927,17 +929,32 @@ void start_render_marker(uint64_t id) {
     with_frame(id, [&](CpuOwner& frame) { if (!frame.failed && !frame.render_started) start = frame.render_started = true; });
     if (start) {
         if (rendered_source.load()) return;
-        uint64_t session{}; with_frame(id,[&](const CpuOwner& f) {session=f.session;});
+        uint64_t session{};
+        bool prospective = false, post_update = false;
+        with_frame(id,[&](const CpuOwner& f) {
+            session=f.session; prospective=f.prospective;
+            post_update=f.submitted && f.scene_begins && f.first_submission && f.first_view &&
+                f.provider_generation==rsf_d3d11_present_generation();
+        });
         rsf_native_cpu_frame facts{}; facts.struct_size=sizeof(facts);
-        if (rsf_native_cpu_read(session,id,&facts) && (facts.flags & RSF_GAME_CPU_INPUT_KEYED) && !(facts.marker_mask & 2u)) {
+        const bool known = rsf_native_cpu_read(session,id,&facts) != 0;
+        rsf_native_cpu_reservation reservation{sizeof(reservation)};
+        const bool bound = prospective && rsf_native_cpu_reservation_read(session,id,&reservation) &&
+            reservation.state==RSF_NATIVE_CPU_RESERVATION_BOUND && reservation.poll_begin_qpc;
+        if (prospective && (!known || !bound || !post_update || facts.failed ||
+            (facts.flags & RSF_GAME_CPU_INPUT_SUBSTITUTE) || (facts.stage_mask & 7u)!=7u)) {
+            with_frame(id,[](CpuOwner& f) {f.failed=true;}); return;
+        }
+        if (known && (facts.flags & RSF_GAME_CPU_INPUT_KEYED) &&
+            (prospective ? !(facts.stage_mask & 8u) : !(facts.marker_mask & 2u))) {
             // Simulation can overlap rendering. Close the vendor interval at submission, while retaining
             // the engine's later simulation-end fact and exposing the derived boundary in status.
-            ++derived_boundaries;
             LARGE_INTEGER frequency{};QueryPerformanceFrequency(&frequency);
             const rsf_game_cpu_event derived{sizeof(derived),RSF_GAME_CPU_SIMULATION_END,session,id,now_qpc(),
                 uint64_t(frequency.QuadPart),0,0,0,RSF_GAME_CPU_EVENT_VERSION,
                 RSF_GAME_CPU_INPUT_KEYED | RSF_GAME_CPU_DERIVED_BOUNDARY};
-            (void)rsf_native_cpu_dispatch(&derived,[](void*,const rsf_game_cpu_event* event) {rsf_native_fg_cpu(event);},nullptr);
+            const auto accepted = rsf_native_cpu_dispatch(&derived,[](void*,const rsf_game_cpu_event* event) {rsf_native_fg_cpu(event);},nullptr);
+            if (prospective && !accepted) { with_frame(id,[](CpuOwner& f) {f.failed=true;}); return; }
         }
         trace("actual graphics submit begin", id, frame_marker(id, RSF_LATENCY_RENDER_SUBMIT_START));
     }
