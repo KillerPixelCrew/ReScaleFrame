@@ -1,6 +1,6 @@
 {
   "game": "Fallout 4",
-  "status": "Worker successor association built/full-gate-tested223passed15skipped; live binding/FG/latency pending, ENB-on reduced native Main corruption remains separate; rendering_ready remains0",
+  "status": "Native-first validation without F4SE/ENB is active; source0992155 full gate223passed15skipped; native-scale SR execution observed but live bound input/FG/latency unaccepted; compatibility deferred, rendering_ready remains0",
   "executable": {
     "name": "Fallout4.exe",
     "version": "1.11.240.0",
@@ -501,15 +501,34 @@
       "runtime_sha256": "8570CCC20A05FCDE6C533E8BD3748C827CF6D1ED842062C1E90596E5BF2375B3",
       "entry_sha256": "87362E64C3F48E85FCBA48A5E1D1C1921C986A098D318E3778859A3F1859DFF1",
       "carrier_sha256": "E4A809E7A7A7D802C7C83691727575FC288EB515130D54D60B608BDD7CF22C98",
-      "source": "Six frozen code/fixture/CMake hashes unchanged; committed07afb10 plus built worker successor working source",
+      "source": "Committed0992155; six frozen code/fixture/CMake hashes unchanged",
       "limits": "Built and contract-tested only; live native source binding, FG/latency admission pending; ENB reduced image corruption separate"
+    },
+    "worker_successor_live": {
+      "receipt": ".local/fallout4-research/native-raster-20261116-164621-778",
+      "authority": "post-close-disposition.json",
+      "pid": 10792,
+      "source_commit": "0992155",
+      "runtime_sha256": "8570CCC20A05FCDE6C533E8BD3748C827CF6D1ED842062C1E90596E5BF2375B3",
+      "entry_sha256": "87362E64C3F48E85FCBA48A5E1D1C1921C986A098D318E3778859A3F1859DFF1",
+      "observed": "Native-scale SR steady about55fps; no RESERVE/SAMPLED/BIND receipts; FGOn/latency1 settings accepted but FGactive0/tags0 and latency paced0/markers0, not acceptance",
+      "quality1": "ENB duplicated-scene result explicitly rejected by user",
+      "inner_observer": "ED9D refused before hooks/file because inner vtable owner was unexpected; not proof of render defect",
+      "cycle_observer": "Two rows armed/time-budget-detached; later paused/menu/ENB UI, no native predicate data or failed-predicate proof",
+      "observation_completed": false,
+      "controller_error": "Owned live window absent; helper refused.",
+      "exit_code": 0,
+      "exit_method": "UNVERIFIED; root close action refused/never executed",
+      "restored_rows": 20,
+      "custom_ini_unchanged": true,
+      "limits": "No close AV/native Quit claim; no native-only module-absence, full quality, bound input/FG/latency acceptance"
     }
   },
   "reduced_consumer_research": "docs/research/fallout4-reduced-consumers-20261116.md",
   "startup_research": "docs/research/fallout4-native-startup-av-20261116.md",
   "depth_hook_research": "docs/research/fallout4-depth-hook-integration-20261116.md",
   "reduced_source_phase": {
-    "baseline": "Committed07afb10 plus worker successor working source, built/full gate passed",
+    "baseline": "Committed0992155 worker successor built/full gate passed223/15",
     "adapter_built": true,
     "quality_choices": 31,
     "capabilities": {
@@ -520,7 +539,12 @@
     },
     "generic_handoff": "Existing HostABI8 auxiliary transaction, shared numeric R11 support and idempotent empty cleanup acknowledgement",
     "native_restore": "Owned exact writes restore; superseded scalar values and borrowed triangle changes are preserved and refused without false busy; failed actual retirement/unsafe owner association retains busy and pins",
-    "pending": "Live worker successor source binding/FG/latency admission pending; ENB reduced-Main producer cause unresolved, moving temporal/near/active-effect audits and full coexistence acceptance pending",
+    "pending": "Native-only direct-executable/module-absence validation, all quality/visual/input/FG/latency and close acceptance first; F4SE/ENB coexistence deferred until native phase passes",
     "new_target_correction_built": true
+  },
+  "work_order": {
+    "authority": "Latest explicit user instruction",
+    "first": "Complete native Fallout4.exe integration without F4SE/ENB; direct-executable launch and module-absence proof forthcoming",
+    "then": "F4SE0.7.9 and ENB0.501 compatibility after native validation passes; deferred, not dropped"
   }
 }

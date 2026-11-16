@@ -2,14 +2,31 @@
 
 ## Fallout 4 AE native render callbacks, 16 November 2026
 
+User priority is now fully native Fallout4.exe without F4SE/ENB first, with
+explicit direct-executable/module-absence proof still forthcoming. Compatibility
+is deferred until native validation passes, not dropped. No further ENB trials
+are scheduled in the native phase.
+
+Committed0992155 ran PID10792/report164621-778 with Runtime8570CCC2... and
+Entry87362E64...: native-scale SR was steady about55fps, but no RESERVE/SAMPLED/
+BIND receipts appeared. FGOn/latency1 settings were accepted; FGactive0/tags0,
+paced0/markers0 and absent CPU owner do not accept FG or latency. The user
+explicitly rejected the duplicated ENB Quality1 scene. The ED9D inner observer
+refused before hooks/file on unexpected vtable ownership, separately from that
+image defect. The two-row cycle probe was inconclusive while later paused.
+`post-close-disposition.json` is authoritative: observation_completed=false,
+owned-window-absent refusal, actual exit0 by UNVERIFIED method,20/20 restored and
+custom INI unchanged. Root close actions refused; no close AV/native-Quit claim
+is made for this run. No failed native predicate has yet been identified.
+
 The worker successor association is now built and contract-tested. The full
 Windows Release VS2026 gate (`verify-worker-successor-20261116.log`) exited0:
 238 total,223 passed,15 skipped in130.66seconds, Rust fmt/Clippy clean and no
 failures. `fallout4_worker_handoff_contract` passed0.01seconds; the additional
 skip was `anomaly_fg_dlss_sroff_device`15.34seconds, not activity acceptance.
 Six frozen code/fixture/CMake hashes were unchanged. Runtime8570CCC2...,
-Entry87362E64... and carrierE4A809E7... identify this working-source batch over
-committed07afb10; full hashes are in the engine metadata. Live native binding,
+Entry87362E64... and carrierE4A809E7... identify committed0992155, built over
+07afb10; full hashes are in the engine metadata. Live native binding,
 FG and latency admission remain pending. ENB-associated reduced native Main
 corruption below is a separate unresolved image issue, not resolved by this gate.
 See [input ownership](research/fallout4-input-ownership-20261116.md).
