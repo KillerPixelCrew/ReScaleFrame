@@ -32,8 +32,13 @@ struct NativeDepthSnapshot {
     int32_t scissor[4]{};
     bool scissor_enabled{};
     unsigned char default_viewport{}, dynamic_viewport{};
-    bool valid{};
+    bool valid{}, raster_valid{};
 };
+// Raster ownership deliberately does not require sampled CPU attribution or
+// temporal matrices/history. It never establishes temporal admission.
+bool capture_native_raster(const CpuIdentity&, NativeDepthSnapshot&,
+    void (*report)(const char*) = nullptr) noexcept;
+bool native_raster_snapshot_current(const NativeDepthSnapshot&) noexcept;
 bool verify_native_depth_domains() noexcept;
 bool native_depth_snapshot_current(const NativeDepthSnapshot&) noexcept;
 // Caller must have returned from original prepass21F38B0 at exact call21F9F73

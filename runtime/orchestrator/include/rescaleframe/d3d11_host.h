@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #pragma once
+#include <stddef.h>
 #include <rescaleframe/runtime.h>
 #include <rescaleframe/game_api.h>
 #include <rescaleframe/motion_decode.h>
@@ -191,6 +192,53 @@ RSF_RUNTIME_API int32_t rsf_d3d11_host_upscale_auxiliaries(void* services_user, 
    exact native frame/view scope; mismatch never cancels that lease. */
 RSF_RUNTIME_API int32_t rsf_d3d11_host_restore_auxiliaries(void* services_user,
     const rsf_d3d11_auxiliary_scope*);
+
+/* Independent request negotiation: existing Host/Game service layouts do not change. */
+#define RSF_D3D11_REDUCED_FRAME_ABI_VERSION 1u
+#define RSF_D3D11_REDUCED_RESERVE 0u
+#define RSF_D3D11_REDUCED_SEAL 1u
+#define RSF_D3D11_REDUCED_FINISH 2u
+#define RSF_D3D11_REDUCED_RETIRE 3u
+#define RSF_D3D11_REDUCED_CANCEL 4u
+#define RSF_D3D11_REDUCED_NONE 0u
+#define RSF_D3D11_REDUCED_RESERVED 1u
+#define RSF_D3D11_REDUCED_SEALED 2u
+#define RSF_D3D11_REDUCED_TEMPORAL 3u
+#define RSF_D3D11_REDUCED_SPATIAL 4u
+#define RSF_D3D11_REDUCED_CANCELLED 5u
+#define RSF_D3D11_REDUCED_UNSAFE 6u
+#define RSF_D3D11_REDUCED_CLEANUP_PENDING 7u
+#define RSF_D3D11_REDUCED_FULL_OUTPUT_DEFINED 0x1u
+#define RSF_D3D11_REDUCED_TEMPORAL_OUTPUT 0x2u
+#define RSF_D3D11_REDUCED_SPATIAL_OUTPUT 0x4u
+#define RSF_D3D11_REDUCED_NEXT_REDUCTION_ALLOWED 0x8u
+#define RSF_D3D11_REDUCED_CLEANUP_REQUIRED 0x10u
+#define RSF_D3D11_REDUCED_REQUIRED_RECOVERY_FAILED 0x20u
+#define RSF_D3D11_REDUCED_TEMPORAL_ATTEMPTED 0x40u
+typedef struct rsf_d3d11_reduced_frame {
+    uint32_t struct_size, abi_version;
+    uint32_t operation, disposition; /* disposition is host output */
+    uint64_t token; /* zero on RESERVE; host output, exact identity thereafter */
+    const rsf_game_render_pass* owner;
+    uint32_t surface_count, reserved; /* reserved must be zero */
+    const rsf_d3d11_auxiliary_surface* surfaces;
+    int32_t temporal_result; /* host output, meaningful with TEMPORAL_ATTEMPTED */
+    uint32_t result_flags; /* host output */
+} rsf_d3d11_reduced_frame;
+/* Graphics-owner transaction, independent of temporal camera admission. owner and
+   surfaces are synchronous borrowed facts; retained descriptors and resource leases
+   are copied. RESERVE allocates without reading/writing native contents or bindings,
+   before native reduction. SEAL snapshots the exact produced source. FINISH retains
+   actual matching temporal success or reconstructs numeric-nearest colour and raw
+   consumers, without fabricating temporal inputs/success. Initial spatial mapping
+   requires integer source rectangles and zero resampling offsets for all surfaces.
+   RETIRE drains content obligations on the same owner, including while suspended.
+   CANCEL is valid only for an unused reservation. Failures retain pending ownership;
+   a successful Main is never rolled back by later retirement failure. No next
+   reduction is authorized until the prior ticket drains. Unknown/device-lost owners
+   refuse. All output fields come from the host, never caller success claims. */
+RSF_RUNTIME_API int32_t rsf_d3d11_host_reduced_frame(void* services_user, void* immediate_context,
+    rsf_d3d11_reduced_frame*);
 
 typedef struct rsf_d3d11_sampler_bias {
     uint32_t struct_size, abi_version;

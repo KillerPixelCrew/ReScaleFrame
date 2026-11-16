@@ -26,6 +26,10 @@ struct NativeFramebuffer {
     uint64_t native_frame{}, window_key{};
 };
 bool verify_render_inputs() noexcept;
+// Raster/resource lease only. No temporal camera/history/depth admission. All
+// downstream allocations are conservatively required before native reduction.
+bool read_native_raster_inputs(NativeInputs&, const rsf_game_render_pass& frame,
+    const NativeDepthSnapshot* producer = nullptr) noexcept;
 // Supplies native resource/camera/rect/frame facts only. Caller supplies the
 // verified session/source/submission/scope, role, screen and eligibility facts.
 bool read_native_inputs(NativeInputs&, void (*report)(const char*) = nullptr,

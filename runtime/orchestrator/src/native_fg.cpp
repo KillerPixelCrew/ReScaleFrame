@@ -49,6 +49,33 @@ Sink current_sink(bool debug_only) {
     std::lock_guard<std::mutex> lock(settings_guard);
     return debug_only && !requested.debug ? Sink{} : Sink{logger, log_user};
 }
+enum class FailureStage : uint32_t {
+    SrPrerequisite, SrToken, SrInitialize, PaceDependency, PaceSelection, PaceCall,
+    RenderCpu, RenderProspective, RenderInput, RenderDerivedEnd, RenderRecheck, RenderMarkers, RenderProvider, SrSharedEvaluate, RenderOwner
+};
+// One receipt per named failure stage for this module lifetime, independent of debug.
+// Unknown metadata stays explicitly unknown; diagnostics never query native/vendor state.
+void failure_receipt(FailureStage stage, uint64_t source, uint64_t session, int32_t result,
+    uint32_t detail, uint64_t generation = 0, const rsf_native_cpu_frame* cpu = nullptr,
+    const rsf_native_cpu_reservation* reservation = nullptr) {
+    static std::atomic<uint32_t> reported{};
+    const uint32_t bit = 1u << uint32_t(stage);
+    if (reported.load(std::memory_order_relaxed) & bit) return;
+    const auto sink = current_sink(false);
+    if (!sink.fn || (reported.fetch_or(bit, std::memory_order_relaxed) & bit)) return;
+    static constexpr const char* names[]{"sr-prerequisite", "sr-token", "sr-initialize", "pace-dependency",
+        "pace-selection", "pace-call", "render-cpu", "render-prospective", "render-input", "render-derived-end",
+        "render-recheck", "render-markers", "render-provider", "sr-shared-evaluate", "render-owner"};
+    char text[600]{};
+    std::snprintf(text, sizeof(text),
+        "Native failure stage=%s source=%llu session=%llu session_known=%u result=%d detail=0x%x generation_known=%u generation=%llu "
+        "cpu_known=%u cpu_mask=%u marker_mask=%u cpu_flags=%u cpu_failed=%u reservation_known=%u reservation_state=%u predecessor_present=%d",
+        names[uint32_t(stage)], static_cast<unsigned long long>(source), static_cast<unsigned long long>(session),
+        uint32_t(session != 0), result, detail, uint32_t(generation != 0), static_cast<unsigned long long>(generation), uint32_t(cpu != nullptr),
+        cpu ? cpu->stage_mask : 0, cpu ? cpu->marker_mask : 0, cpu ? cpu->flags : 0, cpu ? cpu->failed : 0,
+        uint32_t(reservation != nullptr), reservation ? reservation->state : 0, reservation ? reservation->predecessor_present : 0);
+    sink.fn(sink.user, text);
+}
 void trace(const char* stage, uint64_t id, int32_t result) {
     rsf_backend_log_fn sink = nullptr; void* user = nullptr;
     { std::lock_guard<std::mutex> lock(settings_guard);
@@ -680,15 +707,20 @@ void pace_cpu_frame(uint64_t id, const rsf_native_cpu_reservation* reservation =
         // Reflex computes this sleep from the previous frame. Let its Present finish first.
         uint64_t joined = 0;
         bool dependency_ready = true;
+        bool dependency_known = false;
+        uint32_t dependency_failure = 0;
+        rsf_native_cpu_reservation current{sizeof(current)};
         if (reservation) {
             const auto joining = now_qpc(); const auto deadline = GetTickCount64() + 20;
-            rsf_native_cpu_reservation current{sizeof(current)};
             for (;;) {
-                if (!rsf_native_cpu_reservation_read(reservation->session_id, id, &current) ||
-                    current.state != RSF_NATIVE_CPU_RESERVATION_OPEN) { dependency_ready = false; break; }
+                dependency_known = rsf_native_cpu_reservation_read(reservation->session_id, id, &current) != 0;
+                if (!dependency_known || current.state != RSF_NATIVE_CPU_RESERVATION_OPEN) {
+                    dependency_failure = dependency_known ? 2u : 1u; dependency_ready = false; break;
+                }
                 if (current.predecessor_present == RSF_NATIVE_CPU_DEPENDENCY_PRESENTED ||
                     current.predecessor_present == RSF_NATIVE_CPU_DEPENDENCY_NONE) break;
                 if (current.predecessor_present != RSF_NATIVE_CPU_DEPENDENCY_PENDING || GetTickCount64() >= deadline) {
+                    dependency_failure = current.predecessor_present == RSF_NATIVE_CPU_DEPENDENCY_PENDING ? 8u : 4u;
                     dependency_ready = false; break;
                 }
                 (void)WaitForSingleObject(completion_event(), 1);
@@ -698,6 +730,8 @@ void pace_cpu_frame(uint64_t id, const rsf_native_cpu_reservation* reservation =
         if (!dependency_ready) {
             with_frame(id, [&](CpuOwner& frame) { frame.failed = true; frame.join_ticks = joined; });
             (void)frame_abort(id); trace("reserved source predecessor Present unavailable", id, RSF_BACKEND_ERROR_NOT_READY);
+            failure_receipt(FailureStage::PaceDependency, id, reservation->session_id, RSF_BACKEND_ERROR_NOT_READY,
+                dependency_failure, 0, nullptr, dependency_known ? &current : nullptr);
             return;
         }
         const auto started = now_qpc();
@@ -725,6 +759,12 @@ void pace_cpu_frame(uint64_t id, const rsf_native_cpu_reservation* reservation =
             if (!threaded || reservation) frame.join_ticks = joined;
         });
         if (reservation && result != RSF_BACKEND_OK) (void)frame_abort(id);
+        if (reservation && (!actual_pacer || denied))
+            failure_receipt(FailureStage::PaceSelection, id, reservation->session_id, result,
+                uint32_t(pacing) | (uint32_t(denied) << 16) | (uint32_t(actual_pacer) << 17), generation, nullptr, reservation);
+        if (result != RSF_BACKEND_OK)
+            failure_receipt(FailureStage::PaceCall, id, reservation ? reservation->session_id : 0, result,
+                uint32_t(pacing) | (uint32_t(denied) << 16), generation, nullptr, reservation);
 
 }
 }
@@ -947,17 +987,21 @@ extern "C" RSF_RUNTIME_API void rsf_native_fg_frame(const rsf_game_render_pass* 
 namespace {
 void start_render_marker(uint64_t id) {
     bool start = false;
-    uint64_t session{};
-    bool prospective = false, post_update = false;
+    uint64_t session{}, provider_generation{};
+    bool prospective = false, post_update = false, owner_failed = false;
     with_frame(id, [&](CpuOwner& frame) {
-        if (frame.failed || frame.render_started || frame.render_starting) return;
+        if (frame.failed) { owner_failed = true; session = frame.session; return; }
+        if (frame.render_started || frame.render_starting) return;
         if (rendered_source.load()) { frame.render_started = true; return; }
         start = frame.render_starting = true;
         session = frame.session; prospective = frame.prospective;
         post_update = frame.submitted && frame.scene_begins && frame.first_submission && frame.first_view &&
-            frame.provider_generation == rsf_d3d11_present_generation();
+            frame.provider_generation == (provider_generation = rsf_d3d11_present_generation());
     });
-    if (!start) return;
+    if (!start) {
+        if (owner_failed) failure_receipt(FailureStage::RenderOwner,id,session,RSF_BACKEND_ERROR_NOT_READY,1);
+        return;
+    }
     // Reserve only the attempt across callbacks. No end marker is authorized until the
     // CPU ledger and provider have both accepted the actual submission start.
     const auto finish = [&](bool accepted, bool failed = false) {
@@ -966,15 +1010,26 @@ void start_render_marker(uint64_t id) {
         });
     };
     rsf_native_cpu_frame facts{}; facts.struct_size = sizeof(facts);
-    if (!rsf_native_cpu_read(session, id, &facts) || facts.failed) { finish(false); return; }
+    const bool cpu_known = rsf_native_cpu_read(session, id, &facts) != 0;
+    if (!cpu_known || facts.failed) {
+        finish(false); failure_receipt(FailureStage::RenderCpu,id,session,RSF_BACKEND_ERROR_NOT_READY,0,provider_generation,cpu_known ? &facts : nullptr); return;
+    }
     rsf_native_cpu_reservation reservation{sizeof(reservation)};
-    const bool bound = prospective && rsf_native_cpu_reservation_read(session,id,&reservation) &&
+    const bool reservation_known = prospective && rsf_native_cpu_reservation_read(session,id,&reservation);
+    const bool bound = reservation_known &&
         reservation.state == RSF_NATIVE_CPU_RESERVATION_BOUND && reservation.poll_begin_qpc;
     if (prospective && (!bound || !post_update || (facts.flags & RSF_GAME_CPU_INPUT_SUBSTITUTE) ||
-        (facts.stage_mask & 7u) != 7u)) { finish(false, true); return; }
+        (facts.stage_mask & 7u) != 7u)) {
+        finish(false, true);
+        failure_receipt(FailureStage::RenderProspective,id,session,RSF_BACKEND_ERROR_NOT_READY,
+            uint32_t(!bound) | (uint32_t(!post_update) << 1) | (uint32_t((facts.flags & RSF_GAME_CPU_INPUT_SUBSTITUTE) != 0) << 2) |
+            (uint32_t((facts.stage_mask & 7u) != 7u) << 3),provider_generation,&facts,reservation_known ? &reservation : nullptr); return;
+    }
     // Unkeyed FRAME_BEGIN/END fallback has no simulation interval to close or submit.
     // Legacy keyed inference and valid bound polls retain their existing derivation.
-    if ((facts.stage_mask & 3u) != 3u || !(facts.marker_mask & 1u)) { finish(false); return; }
+    if ((facts.stage_mask & 3u) != 3u || !(facts.marker_mask & 1u)) {
+        finish(false); failure_receipt(FailureStage::RenderInput,id,session,RSF_BACKEND_ERROR_NOT_READY,0,provider_generation,&facts); return;
+    }
     if ((facts.flags & RSF_GAME_CPU_INPUT_KEYED) &&
         (prospective ? !(facts.stage_mask & 8u) : !(facts.marker_mask & 2u))) {
         LARGE_INTEGER frequency{}; QueryPerformanceFrequency(&frequency);
@@ -982,18 +1037,25 @@ void start_render_marker(uint64_t id) {
             uint64_t(frequency.QuadPart),0,0,0,RSF_GAME_CPU_EVENT_VERSION,
             RSF_GAME_CPU_INPUT_KEYED | RSF_GAME_CPU_DERIVED_BOUNDARY};
         const auto accepted = rsf_native_cpu_dispatch(&derived,[](void*,const rsf_game_cpu_event* event) {rsf_native_fg_cpu(event);},nullptr);
-        if (prospective && !accepted) { finish(false, true); return; }
+        if (prospective && !accepted) {
+            finish(false, true); failure_receipt(FailureStage::RenderDerivedEnd,id,session,RSF_BACKEND_ERROR_NOT_READY,0,provider_generation,&facts,&reservation); return;
+        }
     }
     facts.struct_size = sizeof(facts);
-    if (!rsf_native_cpu_read(session,id,&facts) || facts.failed) { finish(false); return; }
+    const bool recheck_known = rsf_native_cpu_read(session,id,&facts) != 0;
+    if (!recheck_known || facts.failed) {
+        finish(false); failure_receipt(FailureStage::RenderRecheck,id,session,RSF_BACKEND_ERROR_NOT_READY,0,provider_generation,recheck_known ? &facts : nullptr); return;
+    }
     const uint32_t required = facts.flags & RSF_GAME_CPU_INPUT_KEYED ? 3u : 1u;
     if ((facts.marker_mask & required) != required) {
-        finish(false); return;
+        finish(false); failure_receipt(FailureStage::RenderMarkers,id,session,RSF_BACKEND_ERROR_NOT_READY,required,provider_generation,&facts); return;
     }
     bool marked = false;
     const auto result = frame_marker(id, RSF_LATENCY_RENDER_SUBMIT_START, &marked);
     finish(marked, result != RSF_BACKEND_OK);
     trace("actual graphics submit begin", id, result);
+    if (result != RSF_BACKEND_OK || !marked)
+        failure_receipt(FailureStage::RenderProvider,id,session,result,uint32_t(marked),provider_generation,&facts,reservation_known ? &reservation : nullptr);
 }
 }
 extern "C" RSF_RUNTIME_API void rsf_native_latency_graphics(uint32_t api) { if (api==11 || api==12) graphics_api.store(api); }
@@ -1244,10 +1306,20 @@ extern "C" RSF_RUNTIME_API rsf_dlss_result rsf_native_fg_evaluate(void* context,
         rsf_input_dump_sr(context, frame, RSF_SR_DLSS);
         return rsf_dlss_evaluate(context, frame);
     }
-    if (!context || !frame || !scene.source_frame_id || !frame->camera_motion_included ||
-        !rsf_streamline_host_token(rsf_d3d11_present_host(), scene.source_frame_id)) return RSF_DLSS_ERROR_NOT_READY;
+    const uint32_t missing = !context ? 1u : !frame ? 2u : !scene.source_frame_id ? 4u : !frame->camera_motion_included ? 8u : 0u;
+    if (missing) {
+        failure_receipt(FailureStage::SrPrerequisite,scene.source_frame_id,scene.session_id,RSF_DLSS_ERROR_NOT_READY,missing);
+        return RSF_DLSS_ERROR_NOT_READY;
+    }
+    if (!rsf_streamline_host_token(rsf_d3d11_present_host(), scene.source_frame_id)) {
+        failure_receipt(FailureStage::SrToken,scene.source_frame_id,scene.session_id,RSF_DLSS_ERROR_NOT_READY,0);
+        return RSF_DLSS_ERROR_NOT_READY;
+    }
     with_frame(scene.source_frame_id, [](CpuOwner& owner) { ++owner.sr_calls; });
-    auto& value = transfer(); if (!initialize(value, context)) return RSF_DLSS_ERROR_NOT_READY;
+    auto& value = transfer(); if (!initialize(value, context)) {
+        failure_receipt(FailureStage::SrInitialize,scene.source_frame_id,scene.session_id,RSF_DLSS_ERROR_NOT_READY,0);
+        return RSF_DLSS_ERROR_NOT_READY;
+    }
     auto& slot = slot_for(value, scene.source_frame_id);
     const bool explicit_inputs = slot.prepared && holds(slot,scene) && slot.pass.role == RSF_GAME_RENDER_FG_INPUTS;
     if (!resources(value, slot, *frame, true)) return RSF_DLSS_ERROR_FEATURE_FAILED;
@@ -1301,6 +1373,8 @@ extern "C" RSF_RUNTIME_API rsf_dlss_result rsf_native_fg_evaluate(void* context,
     value.context11->Flush();
     if (FAILED(queue->Wait(fence, uploaded))) return RSF_DLSS_ERROR_FEATURE_FAILED;
     const auto result = rsf_dlss_evaluate_shared(slot.list.Get(), &translated, scene.source_frame_id);
+    if (result == RSF_DLSS_ERROR_NOT_READY)
+        failure_receipt(FailureStage::SrSharedEvaluate,scene.source_frame_id,scene.session_id,result,0);
     if (result == RSF_DLSS_OK)
         rsf::copy_transitioned(slot.list.Get(), surface12(slot.surfaces[4]), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON,
             slot.output.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);

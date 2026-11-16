@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <rescaleframe/depth_scale.h>
+#include "depth_scale_private.h"
 #include <rescaleframe/d3d11_state.h>
 #include <rescaleframe/shader_compile.h>
 #include <wrl/client.h>
@@ -106,20 +107,14 @@ extern "C" int32_t rsf_depth_scale_create(void* raw_context, const rsf_depth_sca
 }
 catch (...) { return RSF_DEPTH_SCALE_RESOURCE_FAILED; }
 
-extern "C" int32_t rsf_depth_scale_prepare(rsf_depth_scale* p, const rsf_depth_scale_frame* frame) try
-{
-    if (!p || !frame || frame->struct_size < sizeof(*frame)) return RSF_DEPTH_SCALE_INVALID_ARGUMENT;
-    if (frame->abi_version != RSF_DEPTH_SCALE_ABI_VERSION) return RSF_DEPTH_SCALE_ABI_MISMATCH;
-    if (p->thread != GetCurrentThreadId() || p->original) return RSF_DEPTH_SCALE_BUSY;
-    if (!frame->texture || !std::isfinite(frame->jitter_pixels[0]) || !std::isfinite(frame->jitter_pixels[1]) ||
-        std::abs(frame->jitter_pixels[0]) > 16384 || std::abs(frame->jitter_pixels[1]) > 16384) return RSF_DEPTH_SCALE_INVALID_ARGUMENT;
-    auto* texture = static_cast<ID3D11Texture2D*>(frame->texture);
+// Allocation-only shared primitive. It never inspects contents or changes bindings.
+bool rsf_depth_scale_reserve(rsf_depth_scale* p, ID3D11Texture2D* texture) try {
+    if (!p || !texture || p->thread != GetCurrentThreadId() || p->original) return false;
     D3D11_TEXTURE2D_DESC d{}; texture->GetDesc(&d);
     ComPtr<ID3D11Device> owner; texture->GetDevice(&owner);
-    if (owner.Get() != p->device.Get() || d.Format != DXGI_FORMAT_R24G8_TYPELESS || d.MipLevels != 1 ||
-        d.ArraySize != 1 || d.SampleDesc.Count != 1 || d.Usage != D3D11_USAGE_DEFAULT ||
-        !(d.BindFlags & D3D11_BIND_DEPTH_STENCIL) || !rect_valid(frame->source_rect, d) || !rect_valid(frame->output_rect, d))
-        return RSF_DEPTH_SCALE_INVALID_ARGUMENT;
+    if (owner.Get() != p->device.Get() || FAILED(p->device->GetDeviceRemovedReason()) ||
+        d.Format != DXGI_FORMAT_R24G8_TYPELESS || d.MipLevels != 1 || d.ArraySize != 1 ||
+        d.SampleDesc.Count != 1 || d.Usage != D3D11_USAGE_DEFAULT || !(d.BindFlags & D3D11_BIND_DEPTH_STENCIL)) return false;
     if (!p->snapshot || p->width != d.Width || p->height != d.Height) {
         // Build the complete replacement set before replacing the reusable resources.
         ComPtr<ID3D11Texture2D> snapshot, output;
@@ -131,17 +126,37 @@ extern "C" int32_t rsf_depth_scale_prepare(rsf_depth_scale* p, const rsf_depth_s
         D3D11_DEPTH_STENCIL_VIEW_DESC dsv{}; dsv.Format = DXGI_FORMAT_D24_UNORM_S8_UINT; dsv.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
         if (FAILED(p->device->CreateTexture2D(&d, nullptr, &snapshot)) ||
             FAILED(p->device->CreateTexture2D(&d, nullptr, &output)) ||
-            FAILED(p->device->CreateShaderResourceView(snapshot.Get(), &srv, &depth))) return RSF_DEPTH_SCALE_RESOURCE_FAILED;
+            FAILED(p->device->CreateShaderResourceView(snapshot.Get(), &srv, &depth))) return false;
         srv.Format = DXGI_FORMAT_X24_TYPELESS_G8_UINT;
         if (FAILED(p->device->CreateShaderResourceView(snapshot.Get(), &srv, &stencil)) ||
-            FAILED(p->device->CreateDepthStencilView(output.Get(), &dsv, &target))) return RSF_DEPTH_SCALE_RESOURCE_FAILED;
+            FAILED(p->device->CreateDepthStencilView(output.Get(), &dsv, &target))) return false;
         p->snapshot = snapshot; p->output = output; p->depth_view = depth; p->stencil_view = stencil; p->output_view = target;
         p->width = d.Width; p->height = d.Height;
     }
+    return true;
+} catch (...) { return false; }
+
+static int32_t render_depth(rsf_depth_scale* p, const rsf_depth_scale_frame* frame, bool capture) try
+{
+    if (!p || !frame || frame->struct_size < sizeof(*frame)) return RSF_DEPTH_SCALE_INVALID_ARGUMENT;
+    if (frame->abi_version != RSF_DEPTH_SCALE_ABI_VERSION) return RSF_DEPTH_SCALE_ABI_MISMATCH;
+    if (p->thread != GetCurrentThreadId() || p->committed ||
+        (capture ? bool(p->original) : p->original.Get() != frame->texture)) return RSF_DEPTH_SCALE_BUSY;
+    if (!frame->texture || !std::isfinite(frame->jitter_pixels[0]) || !std::isfinite(frame->jitter_pixels[1]) ||
+        std::abs(frame->jitter_pixels[0]) > 16384 || std::abs(frame->jitter_pixels[1]) > 16384) return RSF_DEPTH_SCALE_INVALID_ARGUMENT;
+    auto* texture = static_cast<ID3D11Texture2D*>(frame->texture);
+    D3D11_TEXTURE2D_DESC d{}; texture->GetDesc(&d);
+    ComPtr<ID3D11Device> owner; texture->GetDevice(&owner);
+    if (owner.Get() != p->device.Get() || d.Format != DXGI_FORMAT_R24G8_TYPELESS || d.MipLevels != 1 ||
+        d.ArraySize != 1 || d.SampleDesc.Count != 1 || d.Usage != D3D11_USAGE_DEFAULT ||
+        !(d.BindFlags & D3D11_BIND_DEPTH_STENCIL) || !rect_valid(frame->source_rect, d) || !rect_valid(frame->output_rect, d))
+        return RSF_DEPTH_SCALE_INVALID_ARGUMENT;
+    if (capture && !rsf_depth_scale_reserve(p, texture)) return RSF_DEPTH_SCALE_RESOURCE_FAILED;
     Bindings bindings(p->context.Get());
     if (!bindings.valid) return RSF_DEPTH_SCALE_RESOURCE_FAILED;
     auto* c = p->context.Get(); c->ClearState();
-    c->CopyResource(p->snapshot.Get(), texture); c->CopyResource(p->output.Get(), p->snapshot.Get());
+    if (capture) c->CopyResource(p->snapshot.Get(), texture);
+    c->CopyResource(p->output.Get(), p->snapshot.Get());
     c->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     c->VSSetShader(p->vertex.Get(), nullptr, 0); c->PSSetShader(p->depth_shader.Get(), nullptr, 0);
     c->RSSetState(p->raster.Get());
@@ -165,6 +180,13 @@ extern "C" int32_t rsf_depth_scale_prepare(rsf_depth_scale* p, const rsf_depth_s
     p->original = texture; return RSF_DEPTH_SCALE_OK;
 }
 catch (...) { return RSF_DEPTH_SCALE_RESOURCE_FAILED; }
+
+extern "C" int32_t rsf_depth_scale_prepare(rsf_depth_scale* p, const rsf_depth_scale_frame* frame) {
+    return render_depth(p, frame, true);
+}
+int32_t rsf_depth_scale_redraw(rsf_depth_scale* p, const rsf_depth_scale_frame* frame) {
+    return render_depth(p, frame, false);
+}
 
 extern "C" int32_t rsf_depth_scale_commit(rsf_depth_scale* p)
 {

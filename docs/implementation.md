@@ -41,9 +41,29 @@ not FG acceptance. Normal World-to-MainMenu-to-QuitDesktop exit0 and all21
 original file states were verified; controller restoration completed without
 cleanup error. The [final-log audit](research/fallout4-bound-cpu-marker-audit-20261116.md)
 separates these observations from the still-unproved failing source predicate
-and split-image writer. Native reduced-frame recovery is source-frozen in the
-adapter and still under shared implementation; no build or deployment of that
-batch is claimed. Compatibility remains deferred until native validation.
+and split-image writer. Native reduced-frame recovery is now built and generic-device-tested, but
+undeployed at this freeze. Compatibility remains deferred until native validation.
+
+The subsequent [provider ownership audit](research/provider-status-worker-lifetime-audit-20261116.md)
+found a generic cross-thread cached-state read and unleased session lifetime,
+plus a separate worker-abort mutation race. Deployment is held for those repairs.
+The audit establishes source defects, not their causation of the reported flicker.
+
+The combined reduced-recovery Windows Release VS2026 gate passed224/14,
+238 total in113.57seconds with Rust fmt/Clippy clean. Depth-scale, auxiliary and
+host device/contract checks passed0.04/0.10/0.07seconds; handoff and camera
+contracts each passed0.01seconds. The explicit hidden recovery r4 fixture passed
+actual temporal evaluation, real pre-submit failure followed by spatial recovery,
+no-camera/frozen-settings recovery and suspended retirement. The hidden marker
+fixture passed separately. Runtime95CBC864... and Entry9B5C79DF... are built and
+generic-device-tested, not deployed/native recovery accepted. The authority is
+`.local/fallout4-research/reduced-recovery-built-20261116.json`; exact hashes and
+logs are retained in the [recovery note](research/fallout4-native-reduced-recovery-20261116.md).
+Three fixture-only corrections are retained with their failures: shadowed local
+rename, cold reservation expectation, and missing reactivation planning. Shipping
+artifact hashes did not change across those corrections. PID56312 flicker and
+missing full final captures remain rejected; moving/shader/buffer/TAA-history,
+stable FG and end-to-end latency acceptance remain open.
 
 The downstream diagnostics were then deployed in native-only PID64776.
 Quality1 and return-native captures completed with matched SR0/Present0;

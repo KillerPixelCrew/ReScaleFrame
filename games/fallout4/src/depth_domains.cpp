@@ -278,7 +278,7 @@ bool same_object(IUnknown* a, IUnknown* b) noexcept {
     return a && b && SUCCEEDED(a->QueryInterface(IID_PPV_ARGS(&left))) &&
         SUCCEEDED(b->QueryInterface(IID_PPV_ARGS(&right))) && left.Get()==right.Get();
 }
-bool producer_raster(NativeDepthSnapshot& s, Stage& stage) noexcept {
+bool producer_raster(NativeDepthSnapshot& s, Stage& stage, bool temporal=true) noexcept {
     stage=Stage::producer_raster;
     auto* context=reinterpret_cast<ID3D11DeviceContext*>(s.device_context_key);
     if (context->GetType()!=D3D11_DEVICE_CONTEXT_IMMEDIATE) return false;
@@ -362,9 +362,11 @@ bool producer_raster(NativeDepthSnapshot& s, Stage& stage) noexcept {
     stage=Stage::producer_shadow;
     for (float v : s.shadow_raster) if (!std::isfinite(v)) return false;
     for (unsigned i=0;i<4;++i) if (s.shadow_raster[i]!=s.actual_raster[i] ||
-        s.normalized_port[i]!=s.world_camera.port[i] || s.near_camera.port[i]!=s.world_camera.port[i] ||
-        s.world_unjittered_camera.port[i]!=s.world_camera.port[i]) return false;
+        (temporal && (s.normalized_port[i]!=s.world_camera.port[i] || s.near_camera.port[i]!=s.world_camera.port[i] ||
+        s.world_unjittered_camera.port[i]!=s.world_camera.port[i]))) return false;
     const auto& port=s.normalized_port;
+    for (float value:port) if (!std::isfinite(value) || value<0 || value>1) return false;
+    if (!(port[1]>port[0]) || !(port[2]>port[3])) return false;
     if (!s.default_viewport || ((s.ratio[0]<1 || s.ratio[1]<1) && !s.dynamic_viewport) ||
         actual.TopLeftX!=float(s.width)*port[0] || actual.TopLeftY!=float(s.height)*(1-port[2]) ||
         actual.Width>float(s.width)*(port[1]-port[0]) || actual.Height>float(s.height)*(port[2]-port[3])) return false;
@@ -383,6 +385,42 @@ bool producer_raster(NativeDepthSnapshot& s, Stage& stage) noexcept {
     }
     return true;
 }
+// Only native owner/raster prerequisites. No temporal cache, projection, history
+// or CPU sample-validity predicate is admitted through this boundary.
+bool raster_owner(const CpuIdentity& cpu, NativeDepthSnapshot& out) noexcept {
+    const auto base=image(), state=base+graphics_rva, targets=base+targets_rva;
+    out.identity=cpu;
+    uint32_t index{},frame{}; uintptr_t block{},tls_device{};
+    if (!read(base+0x3e73018,index) || index>4096) return false;
+    const auto slots=static_cast<uintptr_t>(__readgsqword(0x58));
+    if (!slots || !read(slots+size_t(index)*sizeof(uintptr_t),block) || !block ||
+        !read(block+0xb20,out.context_key) || !read(block+0xb18,tls_device)) return false;
+    if (!out.context_key && !read(base+0x38e1398,out.context_key)) return false;
+    if (!out.context_key || !read(base+0x38e13a0,out.renderer_key) || out.renderer_key!=base+0x3a25d10 ||
+        !read(out.renderer_key+0x48,out.device_key) || !out.device_key ||
+        !read(out.renderer_key+0x50,out.device_context_key) || !out.device_context_key || tls_device!=out.device_context_key ||
+        !read(out.renderer_key+0x58,out.window_key) || !out.window_key ||
+        !read(out.renderer_key+0x70,out.chain_key) || !out.chain_key ||
+        !read(state+0x98,frame) || !read(state+0x78,out.width) || !read(state+0x7c,out.height) ||
+        !out.width || !out.height || out.width>16384 || out.height>16384 ||
+        !read(base+0x32dd338,out.graph_key) || !out.graph_key ||
+        !read(out.graph_key+0x140,out.world_camera_key) || !out.world_camera_key ||
+        !read(targets+0xfb8,out.ratio) || !read(targets+0xfe4,out.default_viewport) ||
+        !read(targets+0xfe5,out.dynamic_viewport) ||
+        !read(targets+0xf84+4,out.depth_slot) || out.depth_slot>=13 ||
+        !read(out.renderer_key+0x1d48+size_t(out.depth_slot)*0x98,out.depth_key) || !out.depth_key ||
+        !read(out.renderer_key+0x1d48+size_t(out.depth_slot)*0x98+0x88,out.depth_srv_key) || !out.depth_srv_key) return false;
+    out.native_frame=frame;
+    for (float v:out.ratio) if (!std::isfinite(v) || v<=0 || v>1) return false;
+    return true;
+}
+bool same_raster_owner(const NativeDepthSnapshot& a,const NativeDepthSnapshot& b) noexcept {
+    return identity(a.identity,b.identity) &&
+        std::tie(a.native_frame,a.renderer_key,a.context_key,a.device_context_key,a.device_key,a.window_key,a.chain_key,
+            a.graph_key,a.world_camera_key,a.width,a.height,a.depth_slot,a.depth_key,a.depth_srv_key)==
+        std::tie(b.native_frame,b.renderer_key,b.context_key,b.device_context_key,b.device_key,b.window_key,b.chain_key,
+            b.graph_key,b.world_camera_key,b.width,b.height,b.depth_slot,b.depth_key,b.depth_srv_key);
+}
 bool same_raster(const NativeDepthSnapshot& a, const NativeDepthSnapshot& b) noexcept {
     return !std::memcmp(a.render_rect,b.render_rect,sizeof(a.render_rect)) &&
         !std::memcmp(a.actual_raster,b.actual_raster,sizeof(a.actual_raster)) &&
@@ -395,6 +433,24 @@ bool same_raster(const NativeDepthSnapshot& a, const NativeDepthSnapshot& b) noe
         std::tie(b.shadow_dirty,b.colour_selector,b.depth_selector,b.cube_selector,b.descriptor_width,b.descriptor_height,b.cube_key,b.depth_dsv_key,
             b.colour_slot,b.bound_colour_slot,b.bound_depth_slot,b.colour_texture_key,b.colour_rtv_key);
 }
+}
+
+bool capture_native_raster(const CpuIdentity& cpu, NativeDepthSnapshot& output, void (*report)(const char*)) noexcept {
+    output={}; NativeDepthSnapshot before{},after{}; Stage stage=Stage::source;
+    if (!verified.load(std::memory_order_acquire) || !identity(cpu,current_cpu_identity()) ||
+        !raster_owner(cpu,before) || !producer_raster(before,stage,false) ||
+        !raster_owner(cpu,after) || !producer_raster(after,stage,false) ||
+        !same_raster_owner(before,after) || !same_raster(before,after) ||
+        std::memcmp(before.ratio,after.ratio,sizeof(before.ratio)) ||
+        before.default_viewport!=after.default_viewport || before.dynamic_viewport!=after.dynamic_viewport ||
+        !identity(cpu,current_cpu_identity())) return refuse(stage,before,report);
+    before.raster_valid=true; output=before; return true;
+}
+bool native_raster_snapshot_current(const NativeDepthSnapshot& snapshot) noexcept {
+    NativeDepthSnapshot current{};
+    return verified.load(std::memory_order_acquire) && snapshot.raster_valid &&
+        identity(snapshot.identity,current_cpu_identity()) && raster_owner(snapshot.identity,current) &&
+        same_raster_owner(snapshot,current);
 }
 
 bool native_depth_snapshot_current(const NativeDepthSnapshot& snapshot) noexcept {

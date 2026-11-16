@@ -13,6 +13,7 @@
 #include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <utility>
 #if defined(_MSC_VER)
 #include <intrin.h>
 #endif
@@ -37,14 +38,21 @@ Prepass prepass{};
 DynamicResolution dynamic_resolution{};
 decltype(&rsf_d3d11_host_upscale_auxiliaries) upscale_auxiliaries{};
 decltype(&rsf_d3d11_host_restore_auxiliaries) restore_auxiliaries{};
+decltype(&rsf_d3d11_host_reduced_frame) reduced_frame{};
 rsf_game_host_services host{};
 std::atomic<bool> live{};
-std::atomic<uint32_t> entered{}, windows{}, frames{}, auxiliaries{};
+std::atomic<uint32_t> entered{}, windows{}, frames{}, auxiliaries{}, recoveries{};
 struct World {
     CpuIdentity cpu{};
     rsf_game_render_pass pass{}, frame_pass{}, submission_pass{}, screen_basis{};
     NativeScreen screen{};
-    NativeDepthSnapshot depth_snapshot{};
+    NativeDepthSnapshot depth_snapshot{}, raster_snapshot{};
+    NativeInputs recovery_inputs{};
+    NativeOutputOwner recovery_output_owner{};
+    std::array<rsf_d3d11_auxiliary_surface,5> recovery_surfaces{};
+    uint64_t recovery_token{};
+    uint32_t recovery_flags{}, recovery_disposition{};
+    bool recovery_committed{}, recovery_sealed{}, recovery_finished{}, full_output_resolved{};
     rsf_d3d11_auxiliary_scope auxiliary_scope{};
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
     Microsoft::WRL::ComPtr<IDXGISwapChain> chain;
@@ -167,6 +175,138 @@ bool drain_auxiliaries() noexcept {
     world.auxiliary_open=false; auxiliaries.fetch_sub(1,std::memory_order_acq_rel);
     return true;
 }
+bool recovery_refusal(unsigned stage,const char* message) noexcept {
+    static std::atomic<uint32_t> stages{};
+    if (!(stages.fetch_or(1u<<stage,std::memory_order_relaxed)&(1u<<stage))) report(message);
+    if (world.recovery_committed || world.recovery_token) world.refused=true;
+    return false;
+}
+bool recovery_call(uint32_t operation) noexcept {
+    static_assert(sizeof(rsf_d3d11_reduced_frame)==56);
+    if (!world.recovery_token || !reduced_frame || !world.recovery_inputs.context) return false;
+    rsf_d3d11_reduced_frame request{};
+    request.struct_size=sizeof(request); request.abi_version=RSF_D3D11_REDUCED_FRAME_ABI_VERSION;
+    request.operation=operation; request.token=world.recovery_token;
+    request.owner=&world.recovery_inputs.pass;
+    request.surface_count=uint32_t(world.recovery_surfaces.size()); request.surfaces=world.recovery_surfaces.data();
+    int32_t result=RSF_ERROR_NOT_READY;
+    try { result=reduced_frame(host.user,world.recovery_inputs.context.Get(),&request); } catch (...) {}
+    world.recovery_flags=request.result_flags; world.recovery_disposition=request.disposition;
+    if (operation==RSF_D3D11_REDUCED_FINISH) {
+        world.full_output_resolved=(request.result_flags&RSF_D3D11_REDUCED_FULL_OUTPUT_DEFINED)!=0;
+        world.published=world.full_output_resolved && (request.result_flags&RSF_D3D11_REDUCED_TEMPORAL_OUTPUT)!=0;
+        if (!world.published) world.refused=true;
+        char text[330]{};
+        std::snprintf(text,sizeof(text),"Fallout4 reduced recovery source=%llu native=%llu result=%d disposition=%u flags=0x%x temporal_result=%d temporal_attempted=%u",
+            static_cast<unsigned long long>(world.cpu.source),static_cast<unsigned long long>(request.owner->native_frame),
+            result,request.disposition,request.result_flags,request.temporal_result,
+            unsigned((request.result_flags&RSF_D3D11_REDUCED_TEMPORAL_ATTEMPTED)!=0));
+        static std::atomic<uint32_t> rows{};
+        if (rows.fetch_add(1,std::memory_order_relaxed)<32) report(text);
+    }
+    if (result==RSF_OK && (operation==RSF_D3D11_REDUCED_CANCEL || operation==RSF_D3D11_REDUCED_RETIRE) &&
+        (request.result_flags&RSF_D3D11_REDUCED_NEXT_REDUCTION_ALLOWED)) {
+        world.recovery_token=0; world.recovery_inputs={}; world.recovery_surfaces={};
+        recoveries.fetch_sub(1,std::memory_order_acq_rel);
+    }
+    return result==RSF_OK;
+}
+void recovery_surfaces(const rsf_game_render_pass& pass) noexcept {
+    const std::array<ID3D11Texture2D*,5> textures{world.recovery_inputs.depth.Get(),world.recovery_inputs.motion.Get(),
+        world.recovery_inputs.pipboy.Get(),world.recovery_inputs.vats.Get(),world.recovery_inputs.refraction_normals.Get()};
+    constexpr const char* names[]{"native_depth_expanded","native_motion_expanded","native_pipboy_expanded","native_vats_expanded","native_refraction_expanded"};
+    for (size_t i=0;i<textures.size();++i) {
+        auto& surface=world.recovery_surfaces[i]; surface={}; surface.struct_size=sizeof(surface);
+        surface.kind=i==0 ? RSF_D3D11_AUXILIARY_DEPTH_STENCIL : RSF_D3D11_AUXILIARY_COLOUR;
+        surface.texture=textures[i]; surface.name=names[i]; surface.source_name=names[i];
+        surface.flags=i==3 ? RSF_D3D11_AUXILIARY_RESTORE_CONTENTS : 0;
+        for (unsigned j=0;j<4;++j) { surface.source_rect[j]=float(pass.render_rect[j]); surface.output_rect[j]=pass.output_rect[j]; }
+        // Numeric nearest recovery keeps the native jittered integer lattice.
+        // These zero operator offsets do not report zero native camera jitter.
+    }
+}
+bool reserve_recovery(const rsf_game_render_pass& planned) noexcept {
+    if (!live.load(std::memory_order_acquire) || !reduced_frame || world.recovery_token || !world.frame_open || !same_source())
+        return recovery_refusal(0,"Fallout4 reduction preflight refused: recovery export/current source unavailable or previous token remains owned.");
+    NativeInputs inputs;
+    if (!read_native_raster_inputs(inputs,world.frame_pass) ||
+        !preflight_output_resolution(planned,world.context.Get(),&world.recovery_output_owner))
+        return recovery_refusal(1,"Fallout4 reduction preflight refused: required native raster resources or full-output owner unavailable; native ratios retained.");
+    std::memcpy(inputs.pass.render_rect,planned.render_rect,sizeof(planned.render_rect));
+    world.recovery_inputs=std::move(inputs); recovery_surfaces(world.recovery_inputs.pass);
+    rsf_d3d11_reduced_frame request{};
+    request.struct_size=sizeof(request); request.abi_version=RSF_D3D11_REDUCED_FRAME_ABI_VERSION;
+    request.operation=RSF_D3D11_REDUCED_RESERVE; request.owner=&world.recovery_inputs.pass;
+    request.surface_count=uint32_t(world.recovery_surfaces.size()); request.surfaces=world.recovery_surfaces.data();
+    int32_t result=RSF_ERROR_NOT_READY;
+    try { result=reduced_frame(host.user,world.recovery_inputs.context.Get(),&request); } catch (...) {}
+    if (request.token) {
+        world.recovery_token=request.token; recoveries.fetch_add(1,std::memory_order_acq_rel);
+        world.recovery_flags=request.result_flags; world.recovery_disposition=request.disposition;
+    }
+    NativeInputs confirmed; NativeOutputOwner output_owner{};
+    const bool unchanged=result==RSF_OK && request.token && request.disposition==RSF_D3D11_REDUCED_RESERVED &&
+        live.load(std::memory_order_acquire) && same_source() && preflight_output_resolution(planned,world.context.Get(),&output_owner) &&
+        output_owner==world.recovery_output_owner &&
+        read_native_raster_inputs(confirmed,world.frame_pass) &&
+        same_object(confirmed.colour.Get(),world.recovery_inputs.colour.Get()) &&
+        same_object(confirmed.depth.Get(),world.recovery_inputs.depth.Get()) &&
+        same_object(confirmed.motion.Get(),world.recovery_inputs.motion.Get()) &&
+        same_object(confirmed.pipboy.Get(),world.recovery_inputs.pipboy.Get()) &&
+        same_object(confirmed.vats.Get(),world.recovery_inputs.vats.Get()) &&
+        same_object(confirmed.refraction_normals.Get(),world.recovery_inputs.refraction_normals.Get());
+    if (!unchanged) {
+        if (world.recovery_token) (void)recovery_call(RSF_D3D11_REDUCED_CANCEL);
+        return recovery_refusal(2,"Fallout4 reduction reservation refused or native owner/resources changed before ratio commitment.");
+    }
+    // Mark before the caller's first ratio write. Even a partial native-state
+    // write must retain the reservation until explicit cancellation/retirement.
+    world.recovery_committed=true;
+    return true;
+}
+bool seal_recovery() noexcept {
+    if (!world.recovery_token) return true;
+    if (world.recovery_sealed) return true;
+    NativeInputs current; NativeOutputOwner output_owner{};
+    if (!world.raster_snapshot.raster_valid || !read_native_raster_inputs(current,world.frame_pass,&world.raster_snapshot))
+        return recovery_refusal(3,"Fallout4 committed recovery refused: same-frame native raster/resource producer unavailable; token retained.");
+    const auto& old=world.recovery_inputs;
+    if (!same_object(current.context.Get(),old.context.Get()) || !same_object(current.chain.Get(),old.chain.Get()) ||
+        !same_object(current.colour.Get(),old.colour.Get()) || !same_object(current.depth.Get(),old.depth.Get()) ||
+        !same_object(current.motion.Get(),old.motion.Get()) || !same_object(current.refraction_normals.Get(),old.refraction_normals.Get()) ||
+        !same_object(current.pipboy.Get(),old.pipboy.Get()) || !same_object(current.vats.Get(),old.vats.Get()) ||
+        !preflight_output_resolution(current.pass,current.context.Get(),&output_owner) ||
+        output_owner!=world.recovery_output_owner)
+        return recovery_refusal(4,"Fallout4 committed recovery refused: resources/native output owner changed since reservation; token retained.");
+    world.recovery_inputs=std::move(current); recovery_surfaces(world.recovery_inputs.pass);
+    if (!recovery_call(RSF_D3D11_REDUCED_SEAL))
+        return recovery_refusal(5,"Fallout4 committed recovery SEAL refused; no temporal publication, token retained.");
+    world.recovery_sealed=true; return true;
+}
+bool finish_recovery() noexcept {
+    if (!world.recovery_token || !world.recovery_committed) return true;
+    if (world.recovery_finished) return world.full_output_resolved;
+    // Missing producer/owner proof is an unresolved committed frame, never an
+    // invitation to read the new owner's resources or cancel the obligation.
+    NativeOutputOwner output_owner{};
+    if (!world.recovery_sealed || !native_raster_snapshot_current(world.raster_snapshot) ||
+        !preflight_output_resolution(world.recovery_inputs.pass,world.recovery_inputs.context.Get(),&output_owner) ||
+        output_owner!=world.recovery_output_owner)
+        return recovery_refusal(6,"Fallout4 committed recovery FINISH withheld: native producer/output owner unverified; foreign resources untouched, token retained.");
+    if (!output_resolution_busy() && !begin_output_resolution(world.raster_snapshot,world.recovery_inputs.pass)) {
+        return recovery_refusal(7,"Fallout4 committed recovery full-output native scope refused; token retained.");
+    }
+    const bool okay=recovery_call(RSF_D3D11_REDUCED_FINISH);
+    world.recovery_finished=okay && world.full_output_resolved;
+    if (!okay || !world.full_output_resolved) world.refused=true;
+    return world.recovery_finished;
+}
+bool retire_recovery() noexcept {
+    if (!world.recovery_token) return true;
+    if (!world.recovery_committed) return recovery_call(RSF_D3D11_REDUCED_CANCEL);
+    if (!finish_recovery()) return false;
+    return recovery_call(RSF_D3D11_REDUCED_RETIRE);
+}
 bool auxiliary_colour(ID3D11Texture2D* texture, const NativeInputs& inputs) {
     if (!texture) return false;
     Microsoft::WRL::ComPtr<ID3D11Device> device,owner;
@@ -209,17 +349,30 @@ int32_t reconstruct(NativeInputs& inputs, const rsf_game_render_pass& pass) {
     optional(inputs.pipboy.Get(),0,"native_pipboy_expanded","native_pipboy_reduced");
     optional(inputs.vats.Get(),RSF_D3D11_AUXILIARY_RESTORE_CONTENTS,"native_vats_expanded","native_vats_reduced");
     optional(inputs.refraction_normals.Get(),0,"native_refraction_expanded","native_refraction_reduced");
+    if (world.recovery_token && count!=world.recovery_surfaces.size()) return RSF_ERROR_NATIVE_REFUSED;
     const rsf_d3d11_auxiliary_pass request{sizeof(request),RSF_D3D11_HOST_ABI_VERSION,&pass,count,surfaces.data()};
-    world.auxiliary_scope={sizeof(world.auxiliary_scope),RSF_D3D11_HOST_ABI_VERSION,pass.session_id,pass.native_frame,pass.view_key};
-    world.auxiliary_open=true; auxiliaries.fetch_add(1,std::memory_order_acq_rel);
+    if (!world.recovery_token) {
+        world.auxiliary_scope={sizeof(world.auxiliary_scope),RSF_D3D11_HOST_ABI_VERSION,pass.session_id,pass.native_frame,pass.view_key};
+        world.auxiliary_open=true; auxiliaries.fetch_add(1,std::memory_order_acq_rel);
+    }
+    // The host adopts the sealed recovery originals while retaining this actual
+    // fractional viewport/jitter temporal mapping. One evaluation, one owner.
     const auto result=upscale_auxiliaries(host.user,inputs.context.Get(),&request);
-    if (result!=RSF_OK) (void)drain_auxiliaries();
+    if (result!=RSF_OK && !world.recovery_token) (void)drain_auxiliaries();
     return result;
 }
 bool emit_sr() {
-    if (!world.in_imagespace || !same_source() || world.inputs || world.raster_refused || world.auxiliary_open || !host.process_upscale) return false;
+    // Seal originals before any temporal reader, CPU attribution or screen gate.
+    const bool sealed=seal_recovery();
+    struct Resolve { ~Resolve() { (void)finish_recovery(); } } resolve;
+    if (!sealed) { world.refused=true; return false; }
+    if (!live.load(std::memory_order_acquire) || !world.in_imagespace || !same_source() || world.inputs || world.raster_refused || world.auxiliary_open || !host.process_upscale) return false;
     NativeInputs inputs;
     if (!read_native_inputs(inputs, report, &world.depth_snapshot)) return false;
+    if (world.recovery_token && (!same_object(inputs.colour.Get(),world.recovery_inputs.colour.Get()) ||
+        !same_object(inputs.depth.Get(),world.recovery_inputs.depth.Get()) || !same_object(inputs.motion.Get(),world.recovery_inputs.motion.Get()) ||
+        !same_object(inputs.pipboy.Get(),world.recovery_inputs.pipboy.Get()) || !same_object(inputs.vats.Get(),world.recovery_inputs.vats.Get()) ||
+        !same_object(inputs.refraction_normals.Get(),world.recovery_inputs.refraction_normals.Get()))) return false;
     auto pass = inputs.pass;
     identify(pass);
     pass.role = RSF_GAME_RENDER_SR;
@@ -255,7 +408,7 @@ bool emit_sr() {
     fg.role = RSF_GAME_RENDER_FG_INPUTS;
     notify(fg, inputs.context.Get(), 1);
     notify(fg, inputs.context.Get(), 0);
-    if (!same_source()) world.refused = true;
+    if (!same_source()) { world.refused = true; return false; }
     // The host normalizes and retains these contents synchronously before SR.
     // No borrowed resource pointer survives in the scalar identity below.
     world.pass = fg;
@@ -275,8 +428,14 @@ bool emit_sr() {
     int32_t result = RSF_ERROR_NOT_READY;
     try { result = reconstruct(inputs,pass); } catch (...) { (void)drain_auxiliaries(); }
     report_resolution_state(ResolutionStage::evaluated,pass,inputs.context.Get(),result==RSF_OK,result,report);
-    if (result != RSF_OK) { if (!end_output_resolution()) world.refused=true; return false; }
+    if (result != RSF_OK) {
+        // A sealed ticket owns rollback/recovery; retain its output scope until
+        // FINISH so spatial resolution is not followed by reduced selectors.
+        if (!world.recovery_token && !end_output_resolution()) world.refused=true;
+        return false;
+    }
     world.published = true;
+    if (!world.recovery_token) world.full_output_resolved=true;
     diagnostic("Fallout4 producer-verified SR publication accepted before imagespace; scoped native output/auxiliary consumers active, FG remains unproven.");
     return true;
 }
@@ -360,7 +519,7 @@ void observe_world_begin() {
         bool previous;
         ~Restore() { ordinary_world = previous; }
     } restore{ordinary_world};
-    if (selected && !world.frame_open && !world.auxiliary_open && !resolution_busy() && begin_cpu_render()) {
+    if (selected && !world.frame_open && !world.auxiliary_open && !world.recovery_token && !resolution_busy() && begin_cpu_render()) {
         ordinary_world=true;
         world={}; world.cpu=current_cpu_identity();
         try {
@@ -398,7 +557,7 @@ void observe_dynamic_resolution(void* manager,void* a,void* b,void* c,void* d) {
         if (screen.refusals==ScreenWorldLeaseInvalid && owner(owner_now) &&
             owner_now.frame==world.frame_pass.native_frame && owner_now.view==world.frame_pass.view_key &&
             owner_now.window==world.frame_pass.window_key && owner_now.context==uintptr_t(world.context.Get()) && owner_now.chain==uintptr_t(world.chain.Get())) {
-            if (!configure_native_resolution(host,world.frame_pass,world.context.Get()) && (resolution_busy() || resolution_refused()))
+            if (!configure_native_resolution(host,world.frame_pass,world.context.Get(),reserve_recovery) && (resolution_busy() || resolution_refused()))
                 world.raster_refused=world.refused=true;
         }
     } else if (world.frame_open && resolution_busy()) world.raster_refused=world.refused=true;
@@ -416,12 +575,12 @@ void observe_prepass() {
     struct Exit { ~Exit() { --prepass_depth; } } exit;
     const auto identity = world.cpu;
     // FRAME admission records the ordinary parent beyond WorldBegin's return.
-    const bool selected = live.load(std::memory_order_acquire) && prepass_depth == 1 &&
+    const bool selected = (live.load(std::memory_order_acquire) || world.recovery_token) && prepass_depth == 1 &&
         caller == image() + 0x21f9f78 && world.frame_open &&
-        world.submission_open && !world.inputs && same_source();
+        world.submission_open && !world.inputs;
     // Every producer call invalidates the previous copy, including foreign views.
     if (world.frame_open) {
-        world.depth_snapshot = {};
+        world.depth_snapshot = {}; world.raster_snapshot = {};
         if (prepass_depth != 1) world.depth_interrupted = true;
         if (world.inputs) world.refused = true;
     }
@@ -429,9 +588,10 @@ void observe_prepass() {
     SetLastError(error);
     prepass();
     const auto native_error = GetLastError();
-    if (selected && live.load(std::memory_order_acquire) &&
+    if (selected && (live.load(std::memory_order_acquire) || world.recovery_token) &&
         world.frame_open && world.submission_open && !world.inputs &&
-        !world.depth_interrupted && cpu_source_is_current(identity) && same_source()) {
+        !world.depth_interrupted) {
+        (void)capture_native_raster(identity,world.raster_snapshot,report);
         NativeDepthSnapshot snapshot{};
         if (capture_native_depth_domains(identity, snapshot, report) &&
             cpu_source_is_current(identity) && same_source()) {
@@ -451,19 +611,21 @@ void observe_imagespace() {
 #else
     const auto caller = uintptr_t(__builtin_return_address(0));
 #endif
-    const bool selected = live.load(std::memory_order_acquire) && !world.in_imagespace && same_source() &&
+    const bool selected = !world.in_imagespace && world.frame_open &&
+        ((live.load(std::memory_order_acquire) && same_source()) || world.recovery_token) &&
         (caller == image() + 0xc383c7 || caller == image() + 0xc39d6f || caller == image() + 0xc39e13);
     struct Cleanup {
         bool selected;
         ~Cleanup() {
             if (!selected) return;
             const auto error = GetLastError();
+            if (!retire_recovery()) diagnostic("Fallout4 reduced recovery remains owned after imagespace; next reduction blocked.");
             if (!drain_auxiliaries()) diagnostic("Fallout4 auxiliary retirement remains pending after native imagespace; owner retained.");
             report_resolution_state(ResolutionStage::ui_return,world.inputs ? world.pass : world.frame_pass,world.context.Get(),world.published,RSF_OK,report);
             if (!end_output_resolution()) world.refused=true;
             report_resolution_state(ResolutionStage::ui_restored,world.inputs ? world.pass : world.frame_pass,world.context.Get(),world.published,RSF_OK,report);
             if (output_resolution_busy()) { world.refused=true; diagnostic("Fallout4 native output-state cleanup remains owned; subsequent world admission blocked."); }
-            world.in_imagespace = world.published = false;
+            world.in_imagespace = world.published = world.full_output_resolved = false;
             SetLastError(error);
         }
     } cleanup{selected};
@@ -480,7 +642,7 @@ void observe_effects(void* manager, uint32_t first, uint32_t last, uint32_t mode
 #endif
     const auto error = GetLastError();
     uintptr_t native_manager{};
-    if (live.load(std::memory_order_acquire) && caller == image() + 0x21fa288 && first == 0 && last == 13 && mode == 1 && flags == 1 &&
+    if ((live.load(std::memory_order_acquire) || world.recovery_token) && caller == image() + 0x21fa288 && first == 0 && last == 13 && mode == 1 && flags == 1 &&
         read(image() + 0x3e5e4b0, &native_manager, sizeof(native_manager)) && uintptr_t(manager) == native_manager) {
         report_resolution_state(ResolutionStage::pre_sr,world.frame_pass,world.context.Get(),world.published,RSF_ERROR_NOT_READY,report);
         try { (void)emit_sr(); } catch (...) { diagnostic("Fallout4 SR callback failed; native imagespace retained."); }
@@ -490,6 +652,8 @@ void observe_effects(void* manager, uint32_t first, uint32_t last, uint32_t mode
     const auto native_error=GetLastError();
     if (caller==image()+0x21fa288 && first==0 && last==13 && mode==1 && flags==1)
         report_resolution_state(ResolutionStage::effects_return,world.inputs ? world.pass : world.frame_pass,world.context.Get(),world.published,RSF_OK,report);
+    if (caller==image()+0x21fa288 && first==0 && last==13 && mode==1 && flags==1 && world.recovery_token)
+        if (!retire_recovery()) diagnostic("Fallout4 recovery VATS retirement refused at original Effects return; ownership retained.");
     if (caller==image()+0x21fa288 && first==0 && last==13 && mode==1 && flags==1 && world.auxiliary_open)
         if (!drain_auxiliaries()) diagnostic("Fallout4 VATS/auxiliary restoration refused at native Effects return; owner retained.");
     SetLastError(native_error);
@@ -498,7 +662,8 @@ bool observe_taa(void* effect) {
     Entry entry;
     const auto result = taa_active(effect);
     const auto error = GetLastError();
-    const bool excluded = live.load(std::memory_order_acquire) && world.in_imagespace && world.published && same_source();
+    const bool excluded = world.in_imagespace && world.full_output_resolved &&
+        (world.raster_snapshot.raster_valid ? native_raster_snapshot_current(world.raster_snapshot) : same_source());
     SetLastError(error);
     return result && !excluded;
 }
@@ -606,6 +771,8 @@ bool prepare_render_hooks(const rsf_game_host_services& services) {
     const auto runtime=GetModuleHandleW(L"ReScaleFrame.Runtime.dll");
     upscale_auxiliaries=reinterpret_cast<decltype(upscale_auxiliaries)>(GetProcAddress(runtime,"rsf_d3d11_host_upscale_auxiliaries"));
     restore_auxiliaries=reinterpret_cast<decltype(restore_auxiliaries)>(GetProcAddress(runtime,"rsf_d3d11_host_restore_auxiliaries"));
+    reduced_frame=reinterpret_cast<decltype(reduced_frame)>(GetProcAddress(runtime,"rsf_d3d11_host_reduced_frame"));
+    // Independent export negotiation. An older runtime retains native raster.
     if (!upscale_auxiliaries || !restore_auxiliaries || !services.render_config) return false;
     std::array<Hook*, sizeof(hooks) / sizeof(hooks[0])> created{};
     size_t count{};
@@ -653,7 +820,7 @@ bool stop_render_hooks() {
     return disabled && !render_hooks_busy();
 }
 bool render_hooks_busy() {
-    return entered.load(std::memory_order_acquire) || windows.load(std::memory_order_acquire) || frames.load(std::memory_order_acquire) || auxiliaries.load(std::memory_order_acquire) || resolution_busy();
+    return entered.load(std::memory_order_acquire) || windows.load(std::memory_order_acquire) || frames.load(std::memory_order_acquire) || auxiliaries.load(std::memory_order_acquire) || recoveries.load(std::memory_order_acquire) || resolution_busy();
 }
 void finish_render_scope() noexcept try {
     if (!world.cpu.source) return;
@@ -677,11 +844,12 @@ void finish_render_scope() noexcept try {
         world.frame_open=false;
         frames.fetch_sub(1,std::memory_order_acq_rel);
     }
+    (void)retire_recovery();
     (void)drain_auxiliaries();
     const bool resolution_finished=finish_resolution_source();
     if (!resolution_finished) world.refused=true;
     report_resolution_state(ResolutionStage::source_retired,world.inputs ? world.pass : world.frame_pass,
         world.context.Get(),world.published,resolution_finished ? RSF_OK : RSF_ERROR_NOT_READY,report);
-    if (!resolution_busy() && !world.auxiliary_open) world = {};
+    if (!resolution_busy() && !world.auxiliary_open && !world.recovery_token) world = {};
 } catch (...) {}
 }

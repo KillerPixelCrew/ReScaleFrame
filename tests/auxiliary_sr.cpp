@@ -55,7 +55,12 @@ int main() {
     AuxiliarySurfaces transaction;
     const D3D11_VIEWPORT viewport{2,1,3,4,0,1}; context->RSSetViewports(1, &viewport);
     context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_POINTLIST);
-    check(transaction.prepare(context.Get(), pass, request, nullptr, nullptr), "prepare depth and fractional colour region");
+    check(transaction.reserve(context.Get(), pass, request, nullptr, nullptr), "reserve depth and fractional colour allocations");
+    check(read(device.Get(),context.Get(),depth.Get(),4)==depth_before && read(device.Get(),context.Get(),main.Get(),16)==colour_before,
+        "allocation-only auxiliary reserve leaves native contents untouched");
+    D3D11_VIEWPORT reserve_saved{}; UINT reserve_count=1; context->RSGetViewports(&reserve_count,&reserve_saved);
+    check(!std::memcmp(&reserve_saved,&viewport,sizeof(viewport)),"reserve does not alter native viewport bindings");
+    check(transaction.seal(), "seal depth and fractional colour region using reserved allocations");
     check(transaction.pending() && !transaction.prepare(context.Get(), pass, request, nullptr, nullptr), "overlap refused without cancelling the lease");
     check(read(device.Get(), context.Get(), depth.Get(), 4) == depth_before && read(device.Get(), context.Get(), aux.Get(), 4) == aux_before &&
         read(device.Get(), context.Get(), main.Get(), 16) == colour_before, "preparation leaves every native resource untouched");
@@ -180,6 +185,106 @@ int main() {
             "packed HDR later native clear survives non-restoring retirement");
     } else check(!transaction.pending() && read(device.Get(),context.Get(),hdr.Get(),4)==hdr_before &&
         read(device.Get(),context.Get(),main.Get(),16)==hdr_main_before,"unsupported packed HDR leaves transaction and native contents unchanged");
+    // Recovery uses one immutable snapshot across an abandoned temporal mapping and
+    // the integer raw-consumer mapping. No temporal camera is manufactured.
+    {
+        std::array<float,192> values{};
+        std::array<uint32_t,48> vectors{};
+        for (size_t i=0;i<48;++i) {
+            values[i*4]=float(i+1); values[i*4+1]=float(i+2); values[i*4+2]=float(i+3); values[i*4+3]=1;
+            vectors[i]=uint32_t(0x3000+i) | (uint32_t(0xb000+i)<<16);
+        }
+        auto scene=texture(device.Get(),DXGI_FORMAT_R32G32B32A32_FLOAT,values.data(),16,D3D11_BIND_RENDER_TARGET);
+        auto raw_motion=texture(device.Get(),DXGI_FORMAT_R16G16_FLOAT,vectors.data(),4,D3D11_BIND_RENDER_TARGET);
+        auto native_depth=texture(device.Get(),DXGI_FORMAT_R24G8_TYPELESS,depths.data(),4,D3D11_BIND_DEPTH_STENCIL);
+        auto content=texture(device.Get(),DXGI_FORMAT_R8G8B8A8_UNORM,pixels.data(),4,D3D11_BIND_RENDER_TARGET);
+        if (!scene || !raw_motion || !native_depth || !content) return 1;
+        rsf_game_render_pass raster{}; raster.color_input=raster.color_output=scene.Get();
+        raster.session_id=1; raster.native_frame=81; raster.view_key=91;
+        std::array<rsf_d3d11_auxiliary_surface,4> raw{};
+        raw[0]={sizeof(raw[0]),RSF_D3D11_AUXILIARY_DEPTH_STENCIL,native_depth.Get(),{1,1,5,4},{1,0,8,6},{0,0}};
+        raw[1]={sizeof(raw[1]),RSF_D3D11_AUXILIARY_COLOUR,raw_motion.Get(),{1,1,5,4},{1,0,8,6},{0,0}};
+        raw[2]={sizeof(raw[2]),RSF_D3D11_AUXILIARY_COLOUR,content.Get(),{1,1,5,4},{1,0,8,6},{0,0}};
+        raw[2].flags=RSF_D3D11_AUXILIARY_RESTORE_CONTENTS;
+        raw[3]={sizeof(raw[3]),RSF_D3D11_AUXILIARY_COLOUR,scene.Get(),{1,1,5,4},{1,0,8,6},{0,0}};
+        const rsf_d3d11_auxiliary_pass recovery{sizeof(recovery),RSF_D3D11_HOST_ABI_VERSION,&raster,4,raw.data()};
+        AuxiliarySurfaces pending;
+        const auto original_scene=read(device.Get(),context.Get(),scene.Get(),16);
+        const auto original_content=read(device.Get(),context.Get(),content.Get(),4);
+        check(pending.reserve(context.Get(),raster,recovery,nullptr,nullptr,true),"recovery preflight includes Main and raw consumers without camera");
+        check(read(device.Get(),context.Get(),scene.Get(),16)==original_scene,"reserve never snapshots or writes native content");
+        check(pending.cancel() && !pending.pending(),"unused reservation cancels before producer");
+        check(pending.reserve(context.Get(),raster,recovery,nullptr,nullptr,true),"second recovery reservation");
+        for (float& v : values) v*=2;
+        context->UpdateSubresource(scene.Get(),0,nullptr,values.data(),8*16,0);
+        check(pending.seal(),"seal observes actual native production after allocation-only reserve");
+        check(!pending.cancel(),"sealed producer cannot cancel its output obligation");
+        auto fractional=raw; fractional[1].source_rect[0]=.8f; fractional[1].jitter_pixels[0]=.25f;
+        const rsf_d3d11_auxiliary_pass temporal_mapping{sizeof(temporal_mapping),RSF_D3D11_HOST_ABI_VERSION,&raster,3,fractional.data()};
+        check(pending.temporal_prepare(temporal_mapping),"actual temporal fractional mapping reuses sealed originals");
+        // Simulate a later native Main write only after sealing, without corrupting recovery source.
+        ComPtr<ID3D11RenderTargetView> scene_target, content_target;
+        check(SUCCEEDED(device->CreateRenderTargetView(scene.Get(),nullptr,&scene_target)) &&
+            SUCCEEDED(device->CreateRenderTargetView(content.Get(),nullptr,&content_target)),"recovery consumer views");
+        const float overwritten[]{99,98,97,1}; context->ClearRenderTargetView(scene_target.Get(),overwritten);
+        check(pending.spatial_prepare() && pending.commit(),"failed/skipped temporal recovers from immutable original products");
+        auto output_scene=read(device.Get(),context.Get(),scene.Get(),16);
+        auto output_depth=read(device.Get(),context.Get(),native_depth.Get(),4);
+        auto output_motion=read(device.Get(),context.Get(),raw_motion.Get(),4);
+        for (int y=0;y<6;++y) for (int x=0;x<8;++x) {
+            const int sx=x ? std::clamp(int(std::floor(1+(float(x)+.5f-1)/7*4)),1,4) : x;
+            const int sy=x ? std::clamp(int(std::floor(1+(float(y)+.5f)/6*3)),1,3) : y;
+            const size_t dst=size_t(y)*8+size_t(x), src=size_t(sy)*8+size_t(sx);
+            check(output_scene.size()==768 && !std::memcmp(output_scene.data()+dst*16,values.data()+src*4,16),
+                "Main nearest crop mapping and untouched outside output rectangle use sealed source");
+            uint32_t actual_depth{},actual_motion{};
+            if (output_depth.size()==192) std::memcpy(&actual_depth,output_depth.data()+dst*4,4);
+            if (output_motion.size()==192) std::memcpy(&actual_motion,output_motion.data()+dst*4,4);
+            check(output_depth.size()==192 && actual_depth==depths[src],"raw D24 partition and all stencil bits retained");
+            check(output_motion.size()==192 && actual_motion==vectors[src],"raw motion stored values not rescaled or replaced");
+        }
+        context->ClearRenderTargetView(content_target.Get(),overwritten);
+        ComPtr<ID3D11RenderTargetView> motion_target;
+        ComPtr<ID3D11DepthStencilView> native_depth_target;
+        D3D11_DEPTH_STENCIL_VIEW_DESC ds{}; ds.Format=DXGI_FORMAT_D24_UNORM_S8_UINT; ds.ViewDimension=D3D11_DSV_DIMENSION_TEXTURE2D;
+        check(SUCCEEDED(device->CreateRenderTargetView(raw_motion.Get(),nullptr,&motion_target)) &&
+            SUCCEEDED(device->CreateDepthStencilView(native_depth.Get(),&ds,&native_depth_target)),"later raw consumer views");
+        context->ClearRenderTargetView(motion_target.Get(),overwritten);
+        context->ClearDepthStencilView(native_depth_target.Get(),D3D11_CLEAR_DEPTH|D3D11_CLEAR_STENCIL,.2f,213);
+        const auto later_depth=read(device.Get(),context.Get(),native_depth.Get(),4);
+        const auto later_motion=read(device.Get(),context.Get(),raw_motion.Get(),4);
+        check(pending.restore() && !pending.pending(),"explicit content obligations drain");
+        check(read(device.Get(),context.Get(),content.Get(),4)==original_content &&
+            read(device.Get(),context.Get(),scene.Get(),16)==output_scene &&
+            read(device.Get(),context.Get(),raw_motion.Get(),4)==later_motion &&
+            read(device.Get(),context.Get(),native_depth.Get(),4)==later_depth,
+            "restore-content consumer restores original while accepted Main and flags-zero later contents survive");
+        auto malformed=raw; malformed[0].source_rect[2]=9;
+        const rsf_d3d11_auxiliary_pass invalid{sizeof(invalid),RSF_D3D11_HOST_ABI_VERSION,&raster,4,malformed.data()};
+        check(!pending.reserve(context.Get(),raster,invalid,nullptr,nullptr,true) && !pending.pending() &&
+            read(device.Get(),context.Get(),scene.Get(),16)==output_scene,"failed complete preflight cannot mutate Main");
+    }
+    if (hdr_capable) {
+        auto native_main=texture(device.Get(),DXGI_FORMAT_R11G11B10_FLOAT,hdr_pixels.data(),4,D3D11_BIND_RENDER_TARGET);
+        if (!native_main) return 1;
+        D3D11_TEXTURE2D_DESC native_desc{}; native_main->GetDesc(&native_desc);
+        check(native_desc.Format==DXGI_FORMAT_R11G11B10_FLOAT,"recovery uses actual packed numeric Main descriptor");
+        rsf_game_render_pass owner{}; owner.session_id=1; owner.native_frame=82; owner.view_key=91;
+        owner.color_input=owner.color_output=native_main.Get();
+        rsf_d3d11_auxiliary_surface colour_only{sizeof(colour_only),RSF_D3D11_AUXILIARY_COLOUR,native_main.Get(),{1,1,5,4},{1,0,8,6},{0,0}};
+        const rsf_d3d11_auxiliary_pass inputs{sizeof(inputs),RSF_D3D11_HOST_ABI_VERSION,&owner,1,&colour_only};
+        AuxiliarySurfaces recovery;
+        check(recovery.reserve(context.Get(),owner,inputs,nullptr,nullptr,true) && recovery.seal() && recovery.commit(),
+            "packed numeric Main reconstructs without camera or temporal inputs");
+        const auto output=read(device.Get(),context.Get(),native_main.Get(),4);
+        for (int y=0;y<6;++y) for (int x=0;x<8;++x) {
+            const int sx=x ? std::clamp(int(std::floor(1+(float(x)+.5f-1)/7*4)),1,4) : x;
+            const int sy=x ? std::clamp(int(std::floor(1+(float(y)+.5f)/6*3)),1,3) : y;
+            uint32_t actual{}; if (output.size()==192) std::memcpy(&actual,output.data()+(size_t(y)*8+size_t(x))*4,4);
+            check(output.size()==192 && actual==hdr_pixels[size_t(sy)*8+size_t(sx)],"packed Main exact positive numeric nearest and outside pixels");
+        }
+        check(recovery.restore() && read(device.Get(),context.Get(),native_main.Get(),4)==output,"retirement never restores successful packed Main");
+    }
     // A non-origin rectangle in a two-channel UNORM mask must become local R32,
     // with adapter weights and existing independent reactive/bias hints preserved.
     std::array<uint8_t, 96> mask_values{};

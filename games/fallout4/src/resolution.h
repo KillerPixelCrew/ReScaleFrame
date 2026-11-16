@@ -9,7 +9,14 @@ void report_resolution_state(ResolutionStage, const rsf_game_render_pass&, void*
     bool published, int32_t result, void (*report)(const char*)) noexcept;
 bool verify_resolution() noexcept;
 bool native_resolution_inputs(const rsf_game_render_pass&) noexcept;
-bool configure_native_resolution(const rsf_game_host_services&, const rsf_game_render_pass&, void* context) noexcept;
+bool configure_native_resolution(const rsf_game_host_services&, const rsf_game_render_pass&, void* context,
+    bool (*reserve)(const rsf_game_render_pass&)) noexcept;
+struct NativeOutputOwner {
+    uint64_t context{}, manager{}, triangles[3]{};
+    bool operator==(const NativeOutputOwner&) const = default;
+};
+bool preflight_output_resolution(const rsf_game_render_pass&, void* context,
+    NativeOutputOwner* = nullptr) noexcept;
 // Called only after the complete original guarded native DR writer returns.
 bool native_resolution_write() noexcept;
 // Borrow native full-output state for the synchronous transaction. On refusal,

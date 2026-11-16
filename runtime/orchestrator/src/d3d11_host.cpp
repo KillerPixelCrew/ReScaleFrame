@@ -16,6 +16,7 @@
 #include <rescaleframe/frame_generation.h>
 #include "render_settings_store.h"
 #include "auxiliary_sr.h"
+#include "native_sr_completion.h"
 #include "sampler_bias.h"
 #include <windows.h>
 #include <d3d11.h>
@@ -28,6 +29,8 @@
 #include <cstdio>
 #include <cstring>
 #include <cmath>
+#include <array>
+#include <cstddef>
 
 namespace {
 using Microsoft::WRL::ComPtr;
@@ -43,10 +46,58 @@ std::string utf8(const std::wstring& value) {
     if (size) WideCharToMultiByte(CP_UTF8, 0, value.data(), int(value.size()), result.data(), size, nullptr, nullptr);
     return result;
 }
+static_assert(sizeof(rsf_d3d11_reduced_frame) == 56);
+static_assert(offsetof(rsf_d3d11_reduced_frame, token) == 16);
+static_assert(offsetof(rsf_d3d11_reduced_frame, owner) == 24);
+static_assert(offsetof(rsf_d3d11_reduced_frame, surfaces) == 40);
+static_assert(offsetof(rsf_d3d11_reduced_frame, temporal_result) == 48);
+struct ReducedFrame {
+    AuxiliarySurfaces products;
+    rsf_game_render_pass owner{};
+    std::array<rsf_d3d11_auxiliary_surface, 10> surfaces{};
+    std::array<ComPtr<ID3D11Texture2D>, 11> leases;
+    ComPtr<ID3D11DeviceContext> context;
+    ComPtr<IDXGISwapChain> chain;
+    uint64_t token{};
+    uint32_t generation{}, count{}, flags{}, disposition{};
+    int32_t temporal_result{RSF_ERROR_NOT_READY};
+    bool pending{}, attempted{}, ordered{true}, temporal{}, sealed{};
+    bool matches(const rsf_game_render_pass& p, bool crop = true) const {
+        const auto& a = owner;
+        return p.role == a.role && p.session_id == a.session_id && p.source_frame_id == a.source_frame_id &&
+            p.submission_id == a.submission_id && p.native_frame == a.native_frame && p.view_key == a.view_key &&
+            p.family_key == a.family_key && p.scope_id == a.scope_id && p.pass_key == a.pass_key &&
+            p.viewport_key == a.viewport_key && p.window_key == a.window_key && p.rhi_viewport_key == a.rhi_viewport_key &&
+            p.resource_generation == a.resource_generation && p.swapchain == a.swapchain &&
+            p.color_input == a.color_input && p.color_output == a.color_output &&
+            p.color_output_readable == a.color_output_readable &&
+            !std::memcmp(p.output_rect,a.output_rect,sizeof(a.output_rect)) &&
+            (!crop || !std::memcmp(p.render_rect,a.render_rect,sizeof(a.render_rect)));
+    }
+    bool temporal_surfaces(const rsf_d3d11_auxiliary_pass* request) const {
+        if (!count) return !request || !request->surface_count;
+        if (!request || request->surface_count != count || !request->surfaces) return false;
+        for (uint32_t i = 0; i < count; ++i) {
+            const auto& p = request->surfaces[i]; const auto& a = surfaces[i];
+            if (p.struct_size < sizeof(p) || p.texture != a.texture || p.kind != a.kind || p.flags != a.flags ||
+                std::memcmp(p.output_rect,a.output_rect,sizeof(a.output_rect))) return false;
+        }
+        return true;
+    }
+    void output(rsf_d3d11_reduced_frame& r) const {
+        r.token = token; r.disposition = disposition; r.result_flags = flags; r.temporal_result = temporal_result;
+    }
+    void release() {
+        for (auto& resource : leases) resource.Reset();
+        pending = false; // Keep exact context/chain identity for idempotent acknowledgement.
+    }
+};
 struct Host {
     std::mutex state;
     std::mutex presentation_guard;
     std::unique_ptr<AuxiliarySurfaces> auxiliaries;
+    std::unique_ptr<ReducedFrame> reduced;
+    uint64_t next_reduced_token{1};
     SamplerBias sampler_bias;
     rsf_game_host_services upstream{};
     std::wstring ini, section;
@@ -78,7 +129,7 @@ struct Host {
     int32_t last_result{RSF_ERROR_NOT_READY};
     int32_t present_result{RSF_DLSS_OK};
     uint64_t present_pairs{};
-    uint32_t ownership_reports{};
+    uint32_t ownership_reports{}, capture_refusal_terms{};
     std::atomic<uint32_t> cpu_reports{}, cpu_sample_reports{}, cpu_refusal_stages{};
     std::atomic<uint32_t> cpu_stage_reports[RSF_GAME_CPU_SOURCE_ABORT + 1]{};
     static void log(void* user, const char* text) {
@@ -244,8 +295,9 @@ struct Host {
         auto& self = *static_cast<Host*>(user);
         std::unique_lock presentation(self.presentation_guard, std::try_to_lock);
         if (!presentation.owns_lock()) return;
+        uint32_t event_thread{};
         if (!self.active.load(std::memory_order_acquire) || !event || (event->flags & DXGI_PRESENT_TEST) ||
-            GetCurrentThreadId() != self.execution_thread ||
+            (event_thread = GetCurrentThreadId()) != self.execution_thread ||
             (self.bridge_installed && !rsf_d3d11_present_is_owner(event->swapchain)) ||
             !same_object(static_cast<IUnknown*>(event->swapchain),self.chain.Get())) return;
         (void)rsf_native_window_present(event);
@@ -275,10 +327,27 @@ struct Host {
         if (self.capture_pending && rsf_input_dump_wants(&self.capture_record)) {
             if (!(self.capture_record.flags & RSF_FRAME_FLAG_AMBIGUOUS_ID)) {
                 rsf_game_render_pass window{}; window.struct_size = sizeof(window);
-                if (!rsf_native_window_match(event->swapchain, &window) ||
-                    window.session_id != self.capture_record.session_id || window.source_frame_id != self.capture_record.frame_id ||
-                    window.native_frame != self.capture_native_frame || window.view_key != self.capture_view ||
-                    rsf_native_scene_present_path(&window) == RSF_NATIVE_SCENE_PRESENT_NONE) {
+                uint32_t reached{}, passed{}, scene_path = UINT32_MAX;
+                const auto term = [&](uint32_t bit, bool ok) { reached |= bit; if (ok) passed |= bit; return ok; };
+                // Preserve the original short circuit: no WINDOW or scene query is added.
+                if (!term(1,rsf_native_window_match(event->swapchain, &window) != 0) ||
+                    !term(2,window.session_id == self.capture_record.session_id) ||
+                    !term(4,window.source_frame_id == self.capture_record.frame_id) ||
+                    !term(8,window.native_frame == self.capture_native_frame) || !term(16,window.view_key == self.capture_view) ||
+                    !term(32,(scene_path = rsf_native_scene_present_path(&window)) != RSF_NATIVE_SCENE_PRESENT_NONE)) {
+                    const auto failed = reached & ~passed;
+                    // At most one receipt for each of the six first failing terms.
+                    if (!(self.capture_refusal_terms & failed)) {
+                        self.capture_refusal_terms |= failed;
+                        char text[720]{}; std::snprintf(text,sizeof(text),
+                            "D3D11 capture Present refused reached=0x%x passed=0x%x failed=0x%x capture_session=%llu source=%llu native=%llu view=%llu window_session=%llu source=%llu native=%llu view=%llu completed=%u thread=%u scene_path=%u",
+                            reached,passed,failed,static_cast<unsigned long long>(self.capture_record.session_id),
+                            static_cast<unsigned long long>(self.capture_record.frame_id),static_cast<unsigned long long>(self.capture_native_frame),
+                            static_cast<unsigned long long>(self.capture_view),static_cast<unsigned long long>(window.session_id),
+                            static_cast<unsigned long long>(window.source_frame_id),static_cast<unsigned long long>(window.native_frame),
+                            static_cast<unsigned long long>(window.view_key),event->completed,event_thread,scene_path);
+                        log(&self,text);
+                    }
                     rsf_input_dump_complete(&self.capture_record, RSF_ERROR_NOT_READY); self.capture_pending = false;
                 }
             }
@@ -354,7 +423,7 @@ struct Host {
         log(this, "D3D11 callback host configured; FG/latency controls follow declared capabilities and native eligibility.");
         return observer;
     }
-    void capture_inputs(void* context, const rsf_game_render_pass& pass, rsf_frame_record& record) {
+    void capture_inputs(void* context, const rsf_game_render_pass& pass, rsf_frame_record& record, void* original_colour = nullptr) {
         record.struct_size = sizeof(record); record.abi_version = RSF_GAME_FRAME_ABI_VERSION;
         record.frame_id = pass.source_frame_id ? pass.source_frame_id : pass.native_frame;
         record.session_id = pass.session_id; record.view_id = uint32_t(pass.view_key);
@@ -367,7 +436,7 @@ struct Host {
         if (!rsf_input_dump_begin_record(&record, backend)) return;
         rsf_input_dump_pass_metadata(&pass);
         rsf_input_dump_pass(context, &pass, 1);
-        (void)rsf_input_dump_texture_record(context, &record, "native_color", "Native pre-tonemap scene colour", pass.color_input, RSF_DUMP_VIEW_HDR, 1);
+        (void)rsf_input_dump_texture_record(context, &record, "native_color", "Native pre-tonemap scene colour", original_colour ? original_colour : pass.color_input, RSF_DUMP_VIEW_HDR, 1);
         if (pass.temporal_mask)
             (void)rsf_input_dump_texture_record(context, &record, "native_temporal_mask",
                 "Native numeric temporal rejection mask before weighted normalization", pass.temporal_mask, RSF_DUMP_VIEW_RAW, 1);
@@ -424,13 +493,25 @@ struct Host {
         std::unique_lock presentation(presentation_guard, std::try_to_lock);
         if (!presentation.owns_lock()) return RSF_ERROR_BUSY;
         if (!active.load(std::memory_order_acquire)) return RSF_ERROR_NOT_READY;
+        const bool recovery = reduced && reduced->pending;
+        if (recovery && (!reduced->sealed || !reduced->matches(pass) ||
+            (pass.flags & RSF_GAME_RENDER_RECONFIGURE) || reduced->attempted)) return RSF_ERROR_BUSY;
         if (auxiliaries && auxiliaries->pending()) return RSF_ERROR_BUSY;
+        if (recovery && (!reduced->temporal_surfaces(auxiliary) ||
+            reduced->context.Get() != context || reduced->generation != requested_generation.load(std::memory_order_acquire))) return RSF_ERROR_NOT_READY;
         // Bind ownership from a verified scene lease, never from an early loading callback.
         if ((pass.flags & RSF_GAME_RENDER_RECONFIGURE) && !scene_bound) return RSF_ERROR_NOT_READY;
         if (!initialize(context, pass) || !observer || execution_thread != GetCurrentThreadId()) return RSF_ERROR_NOT_READY;
         ComPtr<ID3D11Device> current; context->GetDevice(&current);
         if (!same_object(current.Get(),device.Get()) || pass.swapchain != chain.Get() || context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE)
             return RSF_ERROR_NOT_READY;
+        // Reject foreign temporal resources before auxiliary preparation or capture.
+        void* borrowed[]{pass.color_input,pass.color_output,pass.color_output_readable,pass.depth,pass.motion,pass.exposure,pass.temporal_mask};
+        for (void* texture : borrowed) if (texture) {
+            ComPtr<ID3D11Device> resource_device;
+            static_cast<ID3D11Texture2D*>(texture)->GetDevice(&resource_device);
+            if (!same_object(resource_device.Get(),device.Get())) return RSF_ERROR_INVALID_ARGUMENT;
+        }
         scene_bound = true;
         rsf_render_settings settings{}; { std::lock_guard lock(state); settings = desired; }
         const auto generation = requested_generation.load();
@@ -438,10 +519,12 @@ struct Host {
             settings.sr_enabled && backend == settings.sr_backend && quality == settings.sr_quality &&
             preset == settings.dlss_preset && output_width == pass.camera.output_width &&
             output_height == pass.camera.output_height;
-        if (generation != applied_generation) { attempted = false; reset = true; applied_generation = generation; }
-        rsf_dlss_pipeline_set_colour_transport(transport.load(std::memory_order_acquire));
-        rsf_dlss_pipeline_set_colour_correction(fidelity.load(std::memory_order_acquire));
-        const bool pipeline_ready = prepare_pipeline(pass, settings);
+        if (!recovery && generation != applied_generation) { attempted = false; reset = true; applied_generation = generation; }
+        if (!recovery) {
+            rsf_dlss_pipeline_set_colour_transport(transport.load(std::memory_order_acquire));
+            rsf_dlss_pipeline_set_colour_correction(fidelity.load(std::memory_order_acquire));
+        }
+        const bool pipeline_ready = recovery ? running : prepare_pipeline(pass, settings);
         const bool configure_only = (pass.flags & RSF_GAME_RENDER_RECONFIGURE) != 0;
         // Planning returns no output. An unchanged successful plan also has no new
         // evaluation result to publish, including when the last evaluation failed.
@@ -460,10 +543,22 @@ struct Host {
                 auto evaluated_pass = pass;
                 if (reset) evaluated_pass.flags |= RSF_GAME_RENDER_RESET;
                 if (auxiliary && !auxiliaries) auxiliaries = std::make_unique<AuxiliarySurfaces>();
-                const bool prepared = !auxiliary || auxiliaries->prepare(context, evaluated_pass, *auxiliary, log, this);
+                const bool prepared = recovery ? (!auxiliary || reduced->products.temporal_prepare(*auxiliary)) :
+                    (!auxiliary || auxiliaries->prepare(context, evaluated_pass, *auxiliary, log, this));
+                if (recovery) { reduced->attempted = true; reduced->flags |= RSF_D3D11_REDUCED_TEMPORAL_ATTEMPTED; }
                 result = prepared ? rsf_native_sr_evaluate(context, &evaluated_pass) : RSF_ERROR_NOT_READY;
-                if (!result && auxiliary && !auxiliaries->commit()) result = RSF_ERROR_NOT_READY;
-                if (result && auxiliary) (void)auxiliaries->restore();
+                if (recovery) {
+                    reduced->ordered = !prepared || rsf_native_sr_native_destinations_ordered();
+                    if (!result && !reduced->products.commit(true)) {
+                        result = RSF_ERROR_NOT_READY;
+                        // A partial native commit remains an owned cleanup obligation.
+                        reduced->ordered = false;
+                    }
+                    reduced->temporal_result = result; reduced->temporal = result == RSF_OK;
+                } else {
+                    if (!result && auxiliary && !auxiliaries->commit()) result = RSF_ERROR_NOT_READY;
+                    if (result && auxiliary && !auxiliaries->restore()) result = RSF_ERROR_BUSY;
+                }
                 if (!result) { reset = false; ++evaluated; } else { reset = true; ++refused; }
             } else {
                 result = configure_only ? RSF_ERROR_NOT_READY : running ? present_result : last_result;
@@ -701,6 +796,194 @@ extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_bind_presentation(void* user,
     return RSF_OK;
 }
 catch (...) { return RSF_ERROR_NOT_READY; }
+extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_reduced_frame(void* user, void* raw_context,
+    rsf_d3d11_reduced_frame* request) try
+{
+    auto* self = owner.load(std::memory_order_acquire);
+    if (!self || user != self || !request || request->struct_size < sizeof(*request)) return RSF_ERROR_INVALID_ARGUMENT;
+    if (request->abi_version != RSF_D3D11_REDUCED_FRAME_ABI_VERSION) return RSF_ERROR_ABI_MISMATCH;
+    if (request->operation > RSF_D3D11_REDUCED_CANCEL || request->reserved) return RSF_ERROR_INVALID_ARGUMENT;
+    std::unique_lock presentation(self->presentation_guard, std::try_to_lock);
+    if (!presentation.owns_lock()) return RSF_ERROR_BUSY;
+    // Session/thread/token guards precede all borrowed graphics dereferences.
+    if (!self->configured || self->execution_thread != GetCurrentThreadId() || !raw_context ||
+        !request->owner || request->owner->struct_size < sizeof(*request->owner) ||
+        request->owner->session_id != self->upstream.session_id) return RSF_ERROR_NOT_READY;
+    request->disposition = RSF_D3D11_REDUCED_NONE; request->result_flags = 0;
+    request->temporal_result = RSF_ERROR_NOT_READY;
+    const auto& pass = *request->owner;
+    const bool reserve = request->operation == RSF_D3D11_REDUCED_RESERVE;
+    if (!reserve) {
+        if (!self->reduced || !request->token || request->token != self->reduced->token ||
+            raw_context != self->reduced->context.Get() ||
+            !self->reduced->matches(pass, request->operation != RSF_D3D11_REDUCED_SEAL)) return RSF_ERROR_NOT_READY;
+    } else if (request->token || (self->reduced && self->reduced->pending) ||
+        (self->auxiliaries && self->auxiliaries->pending())) return RSF_ERROR_BUSY;
+    auto* context = static_cast<ID3D11DeviceContext*>(raw_context);
+    if (reserve) {
+        if (!self->active.load(std::memory_order_acquire) || !self->scene_bound || !self->running ||
+            pass.role != RSF_GAME_RENDER_SR || !pass.source_frame_id || !pass.native_frame || !pass.view_key ||
+            pass.swapchain != self->chain.Get() || !pass.color_input || !pass.color_output ||
+            (pass.flags & RSF_GAME_RENDER_RECONFIGURE) || request->surface_count > 8 ||
+            (request->surface_count && !request->surfaces) || !self->next_reduced_token) return RSF_ERROR_NOT_READY;
+        rsf_game_render_config plan{};
+        { std::lock_guard lock(self->state); plan = self->planned; }
+        const auto generation = self->requested_generation.load(std::memory_order_acquire);
+        if (!plan.enabled || generation != self->applied_generation ||
+            pass.render_rect[0] < 0 || pass.render_rect[1] < 0 ||
+            pass.render_rect[2] <= pass.render_rect[0] || pass.render_rect[3] <= pass.render_rect[1] ||
+            uint32_t(pass.render_rect[2]-pass.render_rect[0]) != plan.render_width ||
+            uint32_t(pass.render_rect[3]-pass.render_rect[1]) != plan.render_height ||
+            pass.output_rect[0] < 0 || pass.output_rect[1] < 0 ||
+            pass.output_rect[2] <= pass.output_rect[0] || pass.output_rect[3] <= pass.output_rect[1] ||
+            uint32_t(pass.output_rect[2]-pass.output_rect[0]) != plan.output_width ||
+            uint32_t(pass.output_rect[3]-pass.output_rect[1]) != plan.output_height) return RSF_ERROR_NOT_READY;
+        ComPtr<ID3D11Device> device; context->GetDevice(&device);
+        ComPtr<ID3D11DeviceContext> immediate; self->device->GetImmediateContext(&immediate);
+        if (context != immediate.Get() || !same_object(device.Get(),self->device.Get()) ||
+            context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE || FAILED(device->GetDeviceRemovedReason())) return RSF_ERROR_NOT_READY;
+        auto* private_output = static_cast<IUnknown*>(rsf_dlss_pipeline_output_texture());
+        if (private_output && (same_object(static_cast<IUnknown*>(pass.color_input),private_output) ||
+            same_object(static_cast<IUnknown*>(pass.color_output),private_output) ||
+            same_object(static_cast<IUnknown*>(pass.color_output_readable),private_output))) return RSF_ERROR_INVALID_ARGUMENT;
+        if (!self->reduced) self->reduced = std::make_unique<ReducedFrame>();
+        auto& ticket = *self->reduced;
+        ticket.owner = pass; ticket.count = request->surface_count;
+        // Only copied scalar identity and explicit resource leases survive the callback.
+        ticket.owner.depth = ticket.owner.motion = ticket.owner.exposure = ticket.owner.temporal_mask = nullptr;
+        ticket.owner.ui_input = ticket.owner.scene_surface = ticket.owner.sampled_texture = nullptr;
+        ticket.owner.camera_valid = 0; ticket.owner.depth_domains = {};
+        for (uint32_t i = 0; i < ticket.count; ++i) {
+            const auto& a = request->surfaces[i];
+            if (a.struct_size < sizeof(a) || a.kind > RSF_D3D11_AUXILIARY_COLOUR ||
+                (a.flags & ~RSF_D3D11_AUXILIARY_RESTORE_CONTENTS) || !a.texture || a.texture == pass.color_input || a.texture == pass.color_output ||
+                a.texture == pass.color_output_readable ||
+                (private_output && same_object(static_cast<IUnknown*>(a.texture),private_output))) return RSF_ERROR_INVALID_ARGUMENT;
+            ticket.surfaces[i] = a; ticket.surfaces[i].name = ticket.surfaces[i].source_name = nullptr;
+        }
+        uint32_t total = ticket.count;
+        const auto append_main = [&](void* destination) {
+            auto& a = ticket.surfaces[total++]; a = {}; a.struct_size = sizeof(a);
+            a.kind = RSF_D3D11_AUXILIARY_COLOUR; a.texture = destination;
+            for (unsigned j = 0; j < 4; ++j) { a.source_rect[j] = float(pass.render_rect[j]); a.output_rect[j] = pass.output_rect[j]; }
+        };
+        append_main(pass.color_output);
+        if (pass.color_output_readable && pass.color_output_readable != pass.color_output) append_main(pass.color_output_readable);
+        const rsf_d3d11_auxiliary_pass inputs{sizeof(inputs),RSF_D3D11_HOST_ABI_VERSION,&pass,total,ticket.surfaces.data()};
+        if (!ticket.products.reserve(context,pass,inputs,Host::log,self,true)) return RSF_ERROR_NOT_READY;
+        ticket.context = context; ticket.chain = self->chain; ticket.generation = generation;
+        ticket.leases[0] = static_cast<ID3D11Texture2D*>(pass.color_input);
+        for (uint32_t i = 0; i < total; ++i) ticket.leases[i+1] = static_cast<ID3D11Texture2D*>(ticket.surfaces[i].texture);
+        ticket.token = self->next_reduced_token++; ticket.pending = true; ticket.sealed = ticket.attempted = ticket.temporal = false;
+        ticket.ordered = true; ticket.flags = 0; ticket.temporal_result = RSF_ERROR_NOT_READY;
+        ticket.disposition = RSF_D3D11_REDUCED_RESERVED; ticket.output(*request); return RSF_OK;
+    }
+    auto& ticket = *self->reduced;
+    // A retired ticket remains an exact idempotent acknowledgement until next RESERVE.
+    if (!ticket.pending) {
+        ticket.output(*request);
+        const bool repeated = request->operation == RSF_D3D11_REDUCED_RETIRE ||
+            (request->operation == RSF_D3D11_REDUCED_FINISH && (ticket.flags & RSF_D3D11_REDUCED_FULL_OUTPUT_DEFINED)) ||
+            (request->operation == RSF_D3D11_REDUCED_CANCEL && ticket.disposition == RSF_D3D11_REDUCED_CANCELLED);
+        return repeated ? RSF_OK : RSF_ERROR_NOT_READY;
+    }
+    const auto incomplete = [&](uint32_t disposition) {
+        ticket.disposition = disposition; ticket.flags |= RSF_D3D11_REDUCED_CLEANUP_REQUIRED;
+        if (!(ticket.flags & RSF_D3D11_REDUCED_FULL_OUTPUT_DEFINED))
+            ticket.flags |= RSF_D3D11_REDUCED_REQUIRED_RECOVERY_FAILED;
+        {
+            std::lock_guard lock(self->state);
+            if (!(ticket.flags & RSF_D3D11_REDUCED_FULL_OUTPUT_DEFINED)) self->report.effective_backend = 0;
+            std::snprintf(self->report.reason,sizeof(self->report.reason),"Reduced-frame cleanup pending; output_defined=%u",
+                unsigned((ticket.flags & RSF_D3D11_REDUCED_FULL_OUTPUT_DEFINED) != 0));
+        }
+        ticket.output(*request); return RSF_ERROR_BUSY;
+    };
+    if (FAILED(self->device->GetDeviceRemovedReason())) return incomplete(RSF_D3D11_REDUCED_UNSAFE);
+    if (request->operation == RSF_D3D11_REDUCED_CANCEL) {
+        if (ticket.sealed || !ticket.products.cancel()) return RSF_ERROR_NOT_READY;
+        ticket.disposition = RSF_D3D11_REDUCED_CANCELLED;
+        ticket.flags = RSF_D3D11_REDUCED_NEXT_REDUCTION_ALLOWED; ticket.output(*request);
+        ticket.release(); return RSF_OK;
+    }
+    if (request->operation == RSF_D3D11_REDUCED_SEAL) {
+        if (ticket.sealed ||
+            request->surface_count != ticket.count || (ticket.count && !request->surfaces)) return RSF_ERROR_NOT_READY;
+        auto refined = ticket.surfaces;
+        for (uint32_t i = 0; i < ticket.count; ++i) refined[i] = request->surfaces[i];
+        uint32_t total = ticket.count + 1;
+        if (pass.color_output_readable && pass.color_output_readable != pass.color_output) ++total;
+        for (uint32_t i = ticket.count; i < total; ++i)
+            for (unsigned j = 0; j < 4; ++j) refined[i].source_rect[j] = float(pass.render_rect[j]);
+        const rsf_d3d11_auxiliary_pass inputs{sizeof(inputs),RSF_D3D11_HOST_ABI_VERSION,&pass,total,refined.data()};
+        if (!ticket.products.refine(inputs)) return RSF_ERROR_INVALID_ARGUMENT;
+        std::memcpy(ticket.owner.render_rect,pass.render_rect,sizeof(pass.render_rect));
+        for (uint32_t i = 0; i < total; ++i) {
+            ticket.surfaces[i] = refined[i]; ticket.surfaces[i].name = ticket.surfaces[i].source_name = nullptr;
+        }
+        // Failure after snapshot entry cannot be cancelled as an unused reservation.
+        ticket.sealed = true;
+        if (!ticket.products.seal()) {
+            ticket.ordered = false; return incomplete(RSF_D3D11_REDUCED_UNSAFE);
+        }
+        ticket.disposition = RSF_D3D11_REDUCED_SEALED; ticket.output(*request); return RSF_OK;
+    }
+    if (!ticket.sealed) return RSF_ERROR_NOT_READY;
+    if (request->operation == RSF_D3D11_REDUCED_FINISH) {
+        if (ticket.flags & RSF_D3D11_REDUCED_FULL_OUTPUT_DEFINED) { ticket.output(*request); return RSF_OK; }
+        if (!ticket.ordered || (self->auxiliaries && self->auxiliaries->pending())) {
+            return incomplete(RSF_D3D11_REDUCED_UNSAFE);
+        }
+        if (!ticket.temporal && (!ticket.products.spatial_prepare() || !ticket.products.commit())) {
+            ticket.ordered = false; return incomplete(RSF_D3D11_REDUCED_CLEANUP_PENDING);
+        }
+        ticket.flags |= RSF_D3D11_REDUCED_FULL_OUTPUT_DEFINED | RSF_D3D11_REDUCED_CLEANUP_REQUIRED |
+            (ticket.temporal ? RSF_D3D11_REDUCED_TEMPORAL_OUTPUT : RSF_D3D11_REDUCED_SPATIAL_OUTPUT);
+        ticket.disposition = ticket.temporal ? RSF_D3D11_REDUCED_TEMPORAL : RSF_D3D11_REDUCED_SPATIAL;
+        if (!ticket.temporal) {
+            self->reset = true;
+            std::lock_guard lock(self->state); self->report.effective_backend = 0;
+            self->report.last_result = ticket.temporal_result;
+            self->report.inputs = RSF_OVERLAY_SR_INPUT_COLOR;
+            self->report.render_width = uint32_t(pass.render_rect[2]-pass.render_rect[0]);
+            self->report.render_height = uint32_t(pass.render_rect[3]-pass.render_rect[1]);
+            self->report.output_width = uint32_t(pass.output_rect[2]-pass.output_rect[0]);
+            self->report.output_height = uint32_t(pass.output_rect[3]-pass.output_rect[1]);
+            std::snprintf(self->report.reason,sizeof(self->report.reason),"Spatial reduced-frame recovery; temporal result %d attempted=%u",
+                ticket.temporal_result,unsigned(ticket.attempted));
+        }
+        if (!ticket.temporal) {
+            rsf_frame_record record{};
+            if (self->capture_pending && self->capture_native_frame == pass.native_frame &&
+                self->capture_view == pass.view_key && self->capture_record.frame_id == pass.source_frame_id)
+                record = self->capture_record;
+            else {
+                auto raster = ticket.owner;
+                raster.camera.render_width = uint32_t(raster.render_rect[2]-raster.render_rect[0]);
+                raster.camera.render_height = uint32_t(raster.render_rect[3]-raster.render_rect[1]);
+                raster.camera.output_width = uint32_t(raster.output_rect[2]-raster.output_rect[0]);
+                raster.camera.output_height = uint32_t(raster.output_rect[3]-raster.output_rect[1]);
+                self->capture_inputs(context,raster,record,ticket.products.original_colour());
+            }
+            if (rsf_input_dump_wants(&record)) {
+                (void)rsf_input_dump_texture_record(context,&record,"spatial_recovered",
+                    "Numeric-nearest recovery, not temporal SR acceptance",pass.color_output,RSF_DUMP_VIEW_HDR,1);
+                rsf_input_dump_result(&record,"spatial_recovery",0,RSF_OK);
+                self->capture_record = record; self->capture_native_frame = pass.native_frame;
+                self->capture_view = pass.view_key; self->capture_pending = true;
+            }
+        }
+        ticket.output(*request); return RSF_OK;
+    }
+    if (!(ticket.flags & RSF_D3D11_REDUCED_FULL_OUTPUT_DEFINED)) return RSF_ERROR_BUSY;
+    if (!ticket.products.restore()) {
+        return incomplete(RSF_D3D11_REDUCED_CLEANUP_PENDING);
+    }
+    ticket.flags &= ~RSF_D3D11_REDUCED_CLEANUP_REQUIRED;
+    ticket.flags |= RSF_D3D11_REDUCED_NEXT_REDUCTION_ALLOWED; ticket.output(*request);
+    ticket.release(); return RSF_OK;
+}
+catch (...) { return RSF_ERROR_BUSY; }
 extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_upscale_auxiliaries(void* user, void* context,
     const rsf_d3d11_auxiliary_pass* request) try
 {
@@ -725,6 +1008,7 @@ extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_restore_auxiliaries(void* user
     if (!presentation.owns_lock()) return RSF_ERROR_BUSY;
     if (!self->configured || self->execution_thread != GetCurrentThreadId() ||
         scope->session_id != self->upstream.session_id) return RSF_ERROR_NOT_READY;
+    if (self->reduced && self->reduced->pending) return RSF_ERROR_BUSY;
     // An unsuccessful upscale may already have rolled back its preparation.
     // Acknowledge that empty lease only on the verified session/graphics owner.
     if (!self->auxiliaries || !self->auxiliaries->pending()) return RSF_OK;
