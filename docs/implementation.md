@@ -27,10 +27,23 @@ Runtime22830370... and EntryBE2E0BBF... are built, not yet game-tested.
 The pre-native-Poll intention correction passed the full Windows Release
 VS2026 gate: 224 passed, 14 skipped, 238 total in 102.79 seconds, with Rust
 checks clean and the extended production-helper handoff fixture passing in
-0.01 seconds. Entry F7B95E79... is built but not yet deployed. The adapter
+0.01 seconds. Entry F7B95E79... was deployed in native-only PID56312. The adapter
 reports a genuine selected poll intention while the core owns its wait;
 strict protection expires before actual native polling. Adoption and native
-FG/latency acceptance still require the next measured run.
+FG/latency acceptance remains incomplete.
+
+That run admits actual bound/paced/completed source snapshots and FG tags,
+but the user rejects flicker and visual defects. The final retained log has
+1243 active/inactive transitions,852 out-of-order and270 mutex skipped-present
+warnings. All three captures remain partial with present_result-3 and no final
+colour, despite successful SR evaluation. This is failed visual validation,
+not FG acceptance. Normal World-to-MainMenu-to-QuitDesktop exit0 and all21
+original file states were verified; controller restoration completed without
+cleanup error. The [final-log audit](research/fallout4-bound-cpu-marker-audit-20261116.md)
+separates these observations from the still-unproved failing source predicate
+and split-image writer. Native reduced-frame recovery is source-frozen in the
+adapter and still under shared implementation; no build or deployment of that
+batch is claimed. Compatibility remains deferred until native validation.
 
 The downstream diagnostics were then deployed in native-only PID64776.
 Quality1 and return-native captures completed with matched SR0/Present0;

@@ -10,6 +10,22 @@ deployment, network installation or REA target change was performed.
 
 ## Identity, revisions and baseline
 
+Latest root native-only trial: PID56312/report192707-484 deployed commit
+`e495934`, Entry `F7B95E79...` and Runtime `22830370...`, following the full
+Release224/14 gate. Actual bound/paced/completed source snapshots and FG tags
+were observed, but the user rejected flicker and split-image defects. The
+final log records1243 active/inactive transitions and1122 vendor skipped-present
+warnings. All three captures are partial with SR0, present_result-3 and no
+final colour; their matched_present field does not prove completed output.
+The [bound CPU/marker audit](fallout4-bound-cpu-marker-audit-20261116.md)
+records exact counts, source examples and missing failure predicates. No stable
+FG, moving quality or latency acceptance follows from activation counters.
+World-to-MainMenu-to-QuitDesktop exited0, controller restoration completed,
+and root independently verified all21 original file states and unchanged
+custom INI. The separate [recovery adapter](fallout4-native-reduced-recovery-20261116.md)
+is unbuilt source and was not deployed in this trial. Earlier trial statements
+below remain historical evidence with their original scope.
+
 Installed executable: `Fallout4.exe`, version1.11.240.0,55343016 bytes, DX11,
 SHA256 `fdcef37ac1230af6d0b0050eb2142b139ef3a867b37b9211fb6edfcc646072f8`.
 The source lead is `references/fallout4-community-shaders` at
