@@ -34,6 +34,9 @@ void query() {
     table->abi_version = RSF_D3D11_SR_API_VERSION + 1;
     CHECK(rsf_get_d3d11_sr_api(table) == RSF_ERROR_ABI_MISMATCH);
     for (std::size_t i = 2 * sizeof(uint32_t); i < sizeof(buffer); ++i) CHECK(buffer[i] == 0xcd);
+    table->abi_version=3u; // Previous table accepted the shorter GameABI22 pass.
+    CHECK(rsf_get_d3d11_sr_api(table)==RSF_ERROR_ABI_MISMATCH);
+    CHECK(table->abi_version==3u && table->struct_size==sizeof(rsf_d3d11_sr_api));
     // Larger capacity: the known prefix is filled, struct_size is the Runtime's, bytes beyond are untouched.
     table->struct_size = sizeof(buffer);
     table->abi_version = RSF_D3D11_SR_API_VERSION;

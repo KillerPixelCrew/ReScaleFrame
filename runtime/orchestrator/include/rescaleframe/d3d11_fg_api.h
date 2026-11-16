@@ -10,8 +10,8 @@
 extern "C" {
 #endif
 
-/* Version 2 carries Game ABI 21 CPU facts; old runtimes must refuse this table. */
-#define RSF_D3D11_FG_API_VERSION 2u
+/* Version 3 carries Game ABI 23 depth domains; old tables must refuse. */
+#define RSF_D3D11_FG_API_VERSION 3u
 #define RSF_D3D11_FG_API_ENTRY_POINT "rsf_get_d3d11_fg_api"
 
 /* DLL access to the Runtime's one D3D11 frame-generation tagging path (native_fg.h), the

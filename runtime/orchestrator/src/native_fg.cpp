@@ -1070,6 +1070,12 @@ extern "C" RSF_RUNTIME_API int rsf_native_fg_scene_swap(rsf_game_render_pass* ou
     output->struct_size = sizeof(*output); return 1;
 }
 extern "C" RSF_RUNTIME_API void rsf_native_fg_scene(const rsf_game_render_pass* pass) {
+    if (pass && pass->struct_size<sizeof(*pass)) return;
+    if (pass && pass->role==RSF_GAME_RENDER_FG_INPUTS && pass->source_frame_id &&
+        (pass->flags&RSF_GAME_RENDER_NO_FG) && rsf_d3d11_present_has_owner()) {
+        auto& held=slot_for(transfer(),pass->source_frame_id);
+        if (held.prepared && holds(held,*pass)) held.pass.flags|=RSF_GAME_RENDER_NO_FG;
+    }
     scene = pass ? *pass : rsf_game_render_pass{};
     if (!pass || pass->source_frame_id || !bound_source.source_frame_id) return;
     // An adapter-built pass without frame identity: the FG copy takes the declared source.
@@ -1144,6 +1150,8 @@ extern "C" RSF_RUNTIME_API void rsf_native_fg_capture(void* context, const rsf_d
             // A repeated explicit lease can refuse this source, never erase an
             // earlier refusal. SR metadata is not an FG admission authority.
             slot.pass.flags |= scene.flags & (RSF_GAME_RENDER_RESET | RSF_GAME_RENDER_NO_FG);
+            if (std::memcmp(&slot.pass.depth_domains,&scene.depth_domains,sizeof(scene.depth_domains)))
+                slot.pass.flags |= RSF_GAME_RENDER_NO_FG;
             return;
         }
         // Explicit inputs supersede a fallback SR capture, including its contents.

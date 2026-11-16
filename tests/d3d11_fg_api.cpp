@@ -39,7 +39,7 @@ int main() {
         refuses_without_writes(size, RSF_D3D11_FG_API_VERSION, RSF_ERROR_INVALID_ARGUMENT);
         refuses_without_writes(size, UINT32_MAX, RSF_ERROR_INVALID_ARGUMENT);   // size wins over version
     }
-    for (const uint32_t version : {0u, RSF_D3D11_FG_API_VERSION + 1u, UINT32_MAX})
+    for (const uint32_t version : {0u, 2u, RSF_D3D11_FG_API_VERSION + 1u, UINT32_MAX})
         refuses_without_writes(sizeof(rsf_d3d11_fg_api), version, RSF_ERROR_ABI_MISMATCH);
 
     // A larger caller capacity: the known prefix is filled, the tail is untouched.

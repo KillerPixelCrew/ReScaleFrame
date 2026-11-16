@@ -210,6 +210,7 @@ extern "C" uint32_t rsf_gl_pipeline_pcl_message(rsf_gl_pipeline* self) {
 }
 extern "C" rsf_backend_result rsf_gl_pipeline_evaluate(rsf_gl_pipeline* self,const rsf_game_render_pass* input) {
     if(!self||!self->sr||!input||input->struct_size<sizeof(*input))return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    if(rsf_game_depth_domains_requested(&input->depth_domains))return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     auto pass=*input;pass.session_id=self->session;pass.resource_generation=self->generation;pass.color_input=self->textures[0].resource;
     pass.depth=self->textures[1].resource;pass.motion=self->textures[2].resource;pass.color_output=self->textures[3].resource;
     void* commands=nullptr;uint32_t slot=0;auto result=rsf_gl_begin(self->sharing,4,self->surfaces.data(),&commands,&slot);if(result!=RSF_BACKEND_OK)return result;
@@ -223,6 +224,7 @@ extern "C" rsf_backend_result rsf_gl_pipeline_evaluate(rsf_gl_pipeline* self,con
 }
 extern "C" rsf_backend_result rsf_gl_pipeline_hudless(rsf_gl_pipeline* self,const rsf_game_render_pass* input) {
     if(!self||!self->sr||!input||input->struct_size<sizeof(*input))return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    if(rsf_game_depth_domains_requested(&input->depth_domains))return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     auto pass=*input;pass.session_id=self->session;pass.color_input=self->textures[4].resource;
     void* commands=nullptr;uint32_t slot=0;auto result=rsf_gl_begin(self->sharing,1,&self->surfaces[4],&commands,&slot);if(result!=RSF_BACKEND_OK)return result;
     auto* list=static_cast<ID3D12GraphicsCommandList*>(commands);barrier(list,pass.color_input,D3D12_RESOURCE_STATE_COMMON,D3D12_RESOURCE_STATE_RENDER_TARGET);

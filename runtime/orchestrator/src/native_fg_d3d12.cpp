@@ -473,6 +473,7 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fg12_render_begin(uint64_t ses
     return result;
 } catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 extern "C" RSF_RUNTIME_API void rsf_fg12_hudless(void* commands, const rsf_game_render_pass* pass) {
+    if (!pass || pass->struct_size<sizeof(*pass) || rsf_game_depth_domains_requested(&pass->depth_domains)) return;
     if (commands && pass && pass->struct_size >= sizeof(*pass) && pass->color_input) {
         rsf_frame_record capture_record{}; capture_record.struct_size = sizeof(capture_record);
         if (rsf_input_dump_current(&capture_record) && capture_record.session_id == pass->session_id &&
@@ -498,7 +499,8 @@ extern "C" RSF_RUNTIME_API void rsf_fg12_hudless(void* commands, const rsf_game_
     slot.hudless_ready = copy(static_cast<ID3D12GraphicsCommandList*>(commands), source, slot.hudless, D3D12_RESOURCE_STATE_RENDER_TARGET, &slot.hudless_state);
 }
 extern "C" RSF_RUNTIME_API void rsf_fg12_window(const rsf_game_render_pass* pass) {
-    if (!pass || !rsf_d3d11_present_is_owner(pass->swapchain)) return;
+    if (!pass || pass->struct_size<sizeof(*pass) || rsf_game_depth_domains_requested(&pass->depth_domains) ||
+        !rsf_d3d11_present_is_owner(pass->swapchain)) return;
     ComPtr<IDXGISwapChain3> chain;
     if (FAILED(static_cast<IUnknown*>(pass->swapchain)->QueryInterface(IID_PPV_ARGS(&chain)))) return;
     const auto index = chain->GetCurrentBackBufferIndex();

@@ -219,6 +219,7 @@ struct Host {
     {
         if (!pass || pass->struct_size < sizeof(*pass) || !commands || !pass->camera_valid ||
             pass->session_id != session) return RSF_ERROR_INVALID_ARGUMENT;
+        if (rsf_game_depth_domains_requested(&pass->depth_domains)) return RSF_ERROR_INVALID_ARGUMENT;
         std::lock_guard lock(guard);
         flush_captures();
         settings();

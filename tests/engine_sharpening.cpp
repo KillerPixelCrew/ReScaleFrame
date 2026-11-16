@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 #include <limits>
+static_assert(RSF_GODOT_ABI_VERSION==3, "embedded render pass uses coherent ABI");
 static_assert(sizeof(rsf_godot_settings)==100 && offsetof(rsf_godot_settings,sharpening)==44);
 static_assert(sizeof(rsf_unity_package_settings)==100 && offsetof(rsf_unity_package_settings,sharpening)==44);
 static_assert(sizeof(rsf_srvk_frame)==384 && offsetof(rsf_srvk_frame,exposure)==272 && offsetof(rsf_srvk_frame,sharpening)==312);
