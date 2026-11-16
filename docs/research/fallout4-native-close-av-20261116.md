@@ -128,3 +128,19 @@ worker game run, native Quit acceptance or build is claimed.
 Untracked static receipts: `close-owner-native.txt`, `close-global-native.txt`,
 `cpu2-c31700.txt`, `cpu2-c319c0.txt` and `cpu2-da67d0.txt` under
 `.local/fallout4-research/`. No production hooks or capabilities changed.
+
+## Native-only close observation
+
+On 16 November, direct-launch PID64940 in report170725-854 ran without
+F4SE or ENB loaded. The first native module receipt records zero F4SE modules,
+zero non-system D3D11 modules and zero loader processes. After the coordinator
+sent Alt+F4, the passive observer recorded the same native 4CB273 read of
+address50 and shutdown unwind, followed by C0000005 termination. The immediate
+window refresh found the window gone. This extends the observed failure to
+the native-only RSF trial; it does not prove an unmodified native baseline or
+the native Quit menu behavior.
+
+The controller reports observation_completed=false and restored=true, with
+all21 manifest entries restored, including the exact ENB proxy quarantined
+before launch. The custom INI stayed byte-identical. The run supplies native
+module and close evidence, not SR quality, FG or latency acceptance.
