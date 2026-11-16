@@ -214,3 +214,16 @@ for the extra wrapper quarantine and exact SHA
 `AC194BD525BB1C3CF363448F1D2B9F96DD859424E6FEAC00695B152B4B951388`.
 This is additional ENB restoration, distinct from the controller's20-row manifest.
 No worker build, GPU/game/process/UI action or target write was performed.
+
+## Native five-scale completed capture checkpoint
+
+The qualified unbound-renderer correction in e83bb70 ran native-only PID47344
+and produced complete matched SR0/Present0 captures at Quality, Balanced,
+Performance, Ultra Performance and return native. Root stationary outputs were
+clean; four reduced crop/depth/auxiliary numeric replays matched their recorded
+conventions with no near-domain samples. The earlier duplicated-image rejection
+is not overturned and moving/buffer-history/FG/latency acceptance remains open.
+The [dedicated validation note](fallout4-native-scale-capture-validation-20261116.md)
+records exact sources, artifacts, foreground FG refusal, limited paced-reservation
+counters, actual exit0 and verified21-entry recovery separately from the
+controller close timeout.

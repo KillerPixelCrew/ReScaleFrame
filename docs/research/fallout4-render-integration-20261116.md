@@ -1091,3 +1091,16 @@ world-to-desktop/AltF4 history and does not repair its native AV. Authoritative
 unchanged custom INI, including exact ENB restoration. No forced kill occurred.
 No complete final-image, moving/all-quality, FG/latency or compatibility acceptance
 is added.
+
+## Native five-scale completed capture checkpoint
+
+The qualified unbound-renderer correction in e83bb70 ran native-only PID47344
+and produced complete matched SR0/Present0 captures at Quality, Balanced,
+Performance, Ultra Performance and return native. Root stationary outputs were
+clean; four reduced crop/depth/auxiliary numeric replays matched their recorded
+conventions with no near-domain samples. The earlier duplicated-image rejection
+is not overturned and moving/buffer-history/FG/latency acceptance remains open.
+The [dedicated validation note](fallout4-native-scale-capture-validation-20261116.md)
+records exact sources, artifacts, foreground FG refusal, limited paced-reservation
+counters, actual exit0 and verified21-entry recovery separately from the
+controller close timeout.

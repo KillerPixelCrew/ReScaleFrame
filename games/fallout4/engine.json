@@ -1,6 +1,6 @@
 {
   "game": "Fallout 4",
-  "status": "Native-first validation active; PID66836 proves F4SE/ENB absence and corrected vtable predicates, but Quality1 duplicated rectangle is visually rejected and bound-input/FG/latency remain unaccepted; full gate224passed14skipped, compatibility deferred, rendering_ready remains0",
+  "status": "Native-first validation active: five standard-scale actual SR/Present captures completed after qualified unbound-source correction; earlier duplication and moving shader/near-depth coverage remain unresolved, FG/tagging/adoption and end-to-end latency unaccepted, compatibility deferred, readiness0",
   "executable": {
     "name": "Fallout4.exe",
     "version": "1.11.240.0",
@@ -610,6 +610,142 @@
       "runtime_sha256": "22830370ac079440177912e1b77680b37d55b7b1cd43915b6e2a68a4f70ce772",
       "entry_sha256": "c5d02f9c350e9520d9564df50b6d06d847066ff93a7f486b55d56cfa67e1fb92",
       "live_status": "not yet deployed; no source binding, final capture or image repair acceptance"
+    },
+    "native_standard_scale_trial": {
+      "report": ".local\\fallout4-research\\native-raster-20261116-182408-464",
+      "pid": 47344,
+      "commit": "e83bb70d864873fd868cbdf6c5f563bb1d724130",
+      "runtime_sha256": "22830370ac079440177912e1b77680b37d55b7b1cd43915b6e2a68a4f70ce772",
+      "entry_sha256": "c5d02f9c350e9520d9564df50b6d06d847066ff93a7f486b55d56cfa67e1fb92",
+      "capture_summary": [
+        {
+          "quality": 1,
+          "source": 6352,
+          "native_frame": 6812,
+          "render": [
+            1707,
+            1067
+          ],
+          "output": [
+            2560,
+            1600
+          ],
+          "status": "complete",
+          "sr_result": 0,
+          "present_result": 0,
+          "captured": 26,
+          "entries": 40
+        },
+        {
+          "quality": 2,
+          "source": 16600,
+          "native_frame": 17060,
+          "render": [
+            1485,
+            928
+          ],
+          "output": [
+            2560,
+            1600
+          ],
+          "status": "complete",
+          "sr_result": 0,
+          "present_result": 0,
+          "captured": 26,
+          "entries": 40
+        },
+        {
+          "quality": 3,
+          "source": 22836,
+          "native_frame": 23296,
+          "render": [
+            1280,
+            800
+          ],
+          "output": [
+            2560,
+            1600
+          ],
+          "status": "complete",
+          "sr_result": 0,
+          "present_result": 0,
+          "captured": 26,
+          "entries": 40
+        },
+        {
+          "quality": 4,
+          "source": 24000,
+          "native_frame": 24460,
+          "render": [
+            853,
+            533
+          ],
+          "output": [
+            2560,
+            1600
+          ],
+          "status": "complete",
+          "sr_result": 0,
+          "present_result": 0,
+          "captured": 26,
+          "entries": 40
+        },
+        {
+          "quality": 0,
+          "source": 26408,
+          "native_frame": 26868,
+          "render": [
+            2560,
+            1600
+          ],
+          "output": [
+            2560,
+            1600
+          ],
+          "status": "complete",
+          "sr_result": 0,
+          "present_result": 0,
+          "captured": 16,
+          "entries": 30
+        }
+      ],
+      "fg_snapshot": {
+        "foreground": 1,
+        "active": 0,
+        "tags": 0,
+        "reason": "Frame inputs or submission not matched"
+      },
+      "latency_snapshot": {
+        "owner": 1,
+        "paced": 3,
+        "markers": 9,
+        "derived_boundaries": 6,
+        "order_violations": 0
+      },
+      "exit_code": 0,
+      "exit_proof": "exact creation-matched retained process object; observed World to MainMenu to QuitDesktop",
+      "controller_cleanup": "original120second handoff timeout/restoredfalse retained",
+      "recovery_receipt": ".local\\fallout4-research\\native-raster-20261116-182408-464\\resumed-restoration-20261116T1739498960236Z-dac148946b964e5596ef558cb9da86a6.json",
+      "restored_entries": 21,
+      "custom_ini_unchanged": true,
+      "limits": [
+        "No broad motion, first-person domain, shader binding/history, failure recovery or performance acceptance",
+        "No generated frames or end-to-end rendered-source latency",
+        "Compatibility remains deferred",
+        "Controller cleanup timeout retained separately from actual exit0 and exact recovery"
+      ],
+      "research": "docs/research/fallout4-native-scale-capture-validation-20261116.md"
+    },
+    "downstream_source_phase_gate": {
+      "log": "verify-downstream-source-phase-20261116.log",
+      "exit_code": 0,
+      "total": 238,
+      "passed": 224,
+      "skipped": 14,
+      "seconds": 122.4,
+      "rust_fmt_clippy": "pass",
+      "entry_sha256": "d0784e75cc475ca14629cf182da59158900056a64ef437f786e4930720366cb6",
+      "deployment": "not yet deployed; diagnostics only, no event or admission-policy change"
     }
   },
   "reduced_consumer_research": "docs/research/fallout4-reduced-consumers-20261116.md",
