@@ -1309,3 +1309,191 @@ SR resources while FG still refused with prospective0/paced0/cpu_mask1; that
 supports prioritizing this real input-source association, not a resource or
 focus workaround. This worker performed no build, process query, game/UI,
 attach, deployment or input action.
+
+
+## Actual worker/control/redraw ordering, PID64716
+
+Offline analysis of `native-raster-20261116-155136-917/world-order.jsonl`
+uses the coordinator's unchanged Entry
+`463b1eed47090204dbb301b0332ca5cb9e5938907a67274994d59980e5aed0c7`,
+Runtime8570ccc2 prefix and source07afb10. The trace SHA256 is
+`e729803c339f0465037ba80ffe994434f766c4715db7888fef87f07a95fcd517`.
+It durably armed all16 listeners and ended with512 rows, row-budget,
+error=null. Actual QPC span is0.2556211seconds at frequency10000000, not a
+15-second observation: the row cap ended it first. There are15 ordinary-world
+entries at native4228..4242 and14 complete adjacent-world associations.
+Frame4227 is a prefix-only Present/join; frame4242's Present/Swap/Idle remain
+incomplete at detach. Observer invocation IDs below are never engine source IDs.
+
+Main/World/Swap/Present/joins run on actual TID32752. All15 observed polls are
+wrapperc34ec8 on TID61804, nested in wrapper entry callerbd6945 and selected
+JobListEnd entry callerbd76df. The same TID invokes actual PlayerControls
+return1673b74 and UpdatePlayer returnbd6951, with native mode1 throughout.
+There is no main or continuous-worker Poll in this bounded world interval;
+that is not proof those other classes never execute elsewhere. Each selected
+PlayerControls invocation has a nonnull borrowed event head. This establishes
+actual entry into the receiver, not device kind, payload, a physical timestamp
+or processing of every event in the list.
+
+Every WorldBegin N occurs before Poll N. World N begins with native queue
+append counter and receiver cursor both G. Poll N returns with queue G+1,
+cursor still G. Dispatcher advances its cursor to G+1 before invoking
+PlayerControls; its original returns, then UpdatePlayer returns. All14 complete
+next-world entries N+1 have queue/cursor G+1, with no intervening observed Poll,
+PlayerControls or UpdatePlayer after that UpdatePlayer return. The observed
+counters run2174..2189; they are native event-append timeCodes, not the
+adapter's all-poll generation, hardware packet numbers or a general frame ID.
+
+A concrete first pair makes the ordering reviewable:
+
+| Trace row | Native frame | Actual fact |
+| --- | --- | --- |
+|16 |4228 | Main WorldBegin, queue/cursor2174 |
+|18/19 |4228 | Main signals group1/event6 and enters native Present |
+|22/23 |4228 | Worker Poll enters/returns, queue2174->2175, cursor2174 |
+|25/26 |4228 | Actual PlayerControls enters/returns with cursor2175 |
+|29/31 |4228 | UpdatePlayer enters/returns |
+|32..35 |4228 | Worker waits group1/event6, returns from JobListEnd |
+|36..40 |4228 | Present returns, post-Swap worker join returns |
+|50 |4229 | Next WorldBegin, queue/cursor2175 |
+
+All14 complete controls/update sequences finish before the preceding Present
+returns. Thirteen of15 Poll entries occur after that native Present entry;
+two, native4232 and4237, straddle it. In those two cases Present entry already
+sees the new queue counter but still the old receiver cursor. All15 actual
+PlayerControls entries occur after native Present entry. Therefore queue
+advance is concretely different from overwriting the already consumed control
+state used for the preceding world. Blanket all-poll invalidation of that
+already rendered bound predecessor would erase this real pipeline overlap.
+Pending-before-BIND samples must still reject overlap/intervening polls.
+
+Resolved native fences are consistent across the trace: group0/event0 handle
+53d8 is signaled30 times and waited15 times before Swap; group1/event6 handle
+53c4 is signaled16 times including the prefix and waited15 times in JobListEnd;
+worker completion handle5404 has15 actual post-Swap wait entries. Every captured
+wait wrapper returns raw0 after its guarded native wait path. The completion
+SetEvent itself was not instrumented, so its source location remains the static
+bd775c proof. Group0 signals include15 task-pool-thread observations before
+the corresponding world and15 inside worker UpdatePlayer. Matching handles do
+not identify which particular signal/reset cycle woke a wait; signal producer
+return addresses and ResetEvent cycles were not recorded. Actual direct order
+World-before-Poll is nevertheless observed in every complete cycle. Some
+worker tail-wait caller RVAs fall outside the image, consistent with observer
+return trampolines; use the original JobListEnd entry caller and copied nested
+observer IDs for that association, not those values as native game addresses.
+
+The narrow candidate for coordinator review is an explicit successor source
+from this selected mode1 callback, with actual queue consumption and a checked
+handoff across the post-Swap join into a subsequent ordinary world constructor.
+A conservative admission phase can require that the same-native-frame ordinary
+predecessor already exists and has reached its verified Present phase before
+RESERVE can block. Thirteen of15 Poll entries pass the trace's Present-entry
+ordering test; this is not13 admitted sources, because actual CPU/session/
+resource/screen/phase publication predicates were not evaluated by this trace.
+The phase guard would prevent both source-ID inversion before current Swap
+allocation and blocking RESERVE before Main's render-ready wait. A positive
+handoff must still match native Main/window/worker cycle, actual consumed
+queue generation, current primary view/camera and screen, and reject unknown
+poll/consumer/transition facts. Source-ID and actual FRAME_BEGIN/BIND ordering,
+predecessor-overlap metadata, lifecycle and skipped/aborted completion remain
+for review before implementation. No SIM/input event is manufactured by the
+association.
+
+This trace supports successor visibility over14 adjacent observed worlds; it
+does not establish universal scheduling or permission to waive later source
+changes. A later mapped poll after proven consumption is different from an
+unmatched overwrite before consumption. The exact adapter latch/overlap
+contract must reflect that difference rather than retaining a global equality
+check forever or simply clearing it. No production source was changed here.
+`world-order-analysis-20261116.json` in the report records asserted pairs,
+rows, TIDs, counters, handles and partial-boundary limits. No worker build,
+game/process query, UI, attach or deployment occurred; quality1 image defects
+and remaining vendor acceptance are separate investigations.
+
+
+### Implemented bounded worker successor association, pending validation
+
+The next source-only batch implements the reviewed successor contract against
+this exact executable and the observed mode1 path. It adds three game-local
+entry detours: JobListEnd bd6850 (selected return bd76df), wrapper c34eb0
+(selected return bd6945), and post-Swap join bd51c0 (selected return c346c0).
+The existing Poll/dispatcher/PlayerControls hooks select returns c34ec8,
+c34eec and1673b74. No mod vtable is changed. The existing guarded native
+Present detour reports entry only after the current ordinary world owner and
+SUBMISSION completion match, then reports return after unchanged native work.
+No second Present hook, input sample or simulation event is introduced.
+
+One mutex protects copied current-render facts and one future ticket only.
+It is never held across a host callback, original native call or wait. The
+predecessor must already have an allocated source, ordinary native world and
+verified Present entry before the future ID is allocated. RESERVE names that
+predecessor and reports overlap. A blocking RESERVE can return after native
+Present and during the selected main join; the retained cycle remains the
+proof, rather than demanding that Present still be open. Raw revision is
+captured immediately after RESERVE, before the unchanged actual Poll, and
+rechecked through SAMPLED and actual consumer BIND. Actual FRAME_BEGIN has
+flags0; BIND provides the core's keyed promotion. Callback return only proves
+emission completed, not core acceptance.
+
+The worker receiver must match the sampled native queue/cursor, Main, session,
+window, worker/profile, native frame, polling eligibility and state. Native
+consumer return and selected callback return complete that copied handoff.
+Main's actual post-Swap wait then permits a claim at the immediately following
+Swap and adoption only at its ordinary WorldBegin with native frame+1. No
+second FRAME_BEGIN or fallback ID is allocated ahead of an outstanding ticket.
+Unknown polls/consumers, early or straddling polls, overlap, state changes and
+missing successors explicitly refuse. A consumed source does not compare later
+raw arrivals retroactively; an unmatched later Poll still invalidates the
+unadopted ticket. Only its explicitly mapped successor can overlap the sealed
+rendered predecessor. The original main-thread path and rendered fallback
+remain available without asserting input ownership.
+
+The join has an important native ABI limit. Only nonnull worker/mode1 enters
+bd51cc..bd51e5, writes mode0 and tail-calls WaitForSingleObjectEx with the saved
+completion handle, INFINITE and alertable0. Early bd51ec RET leaves EAX
+undefined. The adapter interprets WAIT_OBJECT_0 only for the exact selected
+Main-thread branch, captured nonnull handles and matching post-wait owner;
+foreign/no-op return bits and LastError are forwarded without interpretation.
+All hook calls preserve original arguments/native result and LastError.
+Quiesce or invalidation retains explicit SOURCE_ABORT and, if begun, skipped
+FRAME_END obligations. Failed cleanup remains owned; counters are not reset to
+force restart. Only successfully removed hooks and drained obligations retire
+the copied cycle during stop.
+
+The ignored `worker-successor-source-freeze-20261116.json` records27 exact
+instruction guards and three relocated descriptor/vtable pointers checked from
+the on-disk matching executable, plus frozen source hashes. The full mode1
+join branch/arguments are guarded in addition to its entry and caller. Default
+Python lacked pefile, so the read-only check decoded PE section headers directly
+instead of installing a package. The authored production-helper fixture covers
+RESERVE returning after Present exit across threads, strict pre-bind raw/poll
+checks, consumed cursor, unknown/id ordering, early/no-op join, changed handles,
+immediate successor/native+1 and sticky quiesce obligations. Worker checks were
+byte/pointer comparison and diff whitespace only; compilation, fixture results
+and native admission/provider validation belong to the coordinator gate.
+
+This implements a factual candidate association, not full FG/latency acceptance.
+Correction to the earlier flush explanation: native_cpu INPUT_EVENT explicitly
+refuses attribution of INPUT_UNFRAMED/WINDOW_MESSAGE observations to a
+prospective reserved source, even if a keyed FRAME_BEGIN flushed them. A
+pending notification receipt is not proof that this sample consumed it; the
+flags0 no-flush behavior is therefore not the attribution cause. Existing
+negative counts and source guards remain unchanged. No fabricated keyed flag
+or BIND-flush workaround is introduced. PCL notification routing is a separate
+generic proposal; reduced image quality and native close behavior remain
+separate investigations.
+
+
+Coordinator build result: the frozen successor batch passed the complete
+Windows Release VS2026 gate `verify-worker-successor-20261116.log`, exit0,
+238 total/223 passed/15 skipped in130.66seconds, Cargo fmt/Clippy clean and no
+failures. The new `fallout4_worker_handoff_contract` passed0.01seconds. The
+fifteenth skip was `anomaly_fg_dlss_sroff_device`15.34seconds; it is not activity
+acceptance. All six frozen code/fixture/CMake hashes were verified unchanged.
+Runtime SHA8570CCC20A05FCDE6C533E8BD3748C827CF6D1ED842062C1E90596E5BF2375B3,
+Entry SHA87362E64C3F48E85FCBA48A5E1D1C1921C986A098D318E3778859A3F1859DFF1
+and carrier SHAE4A809E7A7A7D802C7C83691727575FC288EB515130D54D60B608BDD7CF22C98
+identify the built working-source batch over committed07afb10. This supersedes
+its earlier unbuilt status only: live native successor binding and FG/latency
+admission remain pending. ENB-associated reduced image corruption remains a
+separate investigation. No worker build, game or process action was performed.

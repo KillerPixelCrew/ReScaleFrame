@@ -2,6 +2,18 @@
 
 ## Fallout 4 AE native render callbacks, 16 November 2026
 
+The worker successor association is now built and contract-tested. The full
+Windows Release VS2026 gate (`verify-worker-successor-20261116.log`) exited0:
+238 total,223 passed,15 skipped in130.66seconds, Rust fmt/Clippy clean and no
+failures. `fallout4_worker_handoff_contract` passed0.01seconds; the additional
+skip was `anomaly_fg_dlss_sroff_device`15.34seconds, not activity acceptance.
+Six frozen code/fixture/CMake hashes were unchanged. Runtime8570CCC2...,
+Entry87362E64... and carrierE4A809E7... identify this working-source batch over
+committed07afb10; full hashes are in the engine metadata. Live native binding,
+FG and latency admission remain pending. ENB-associated reduced native Main
+corruption below is a separate unresolved image issue, not resolved by this gate.
+See [input ownership](research/fallout4-input-ownership-20261116.md).
+
 The complete reader-padding r2 gate passed223 tests,14 skipped in119.87seconds,
 Rust fmt/Clippy clean (`verify-reader-padding-r2-20261116.log`). Retain the first
 run's221passed15skipped1failed XeSS inactive/generated_windows check; an
@@ -61,7 +73,8 @@ final stationary shower image are clean. Crop/depth/auxiliary/reinsertion
 numeric audits agree in both. This associates wrapper presence with the
 observed defect, not ENB sole-cause proof: save labels/time, camera orientation,
 jitter and history differ. Reduced coexistence, moving quality, FG and latency
-remain unaccepted. CPU futurehandoff is separately in progress and unbuilt.
+remain unaccepted. CPU futurehandoff is now built/full-gate-tested as recorded above;
+live admission remains pending.
 
 Both root controls used ordinary AltF4 during the close handoff, hit the known
 4CB273/null50 C0000005 baseline fault and restored20/20 controller rows.

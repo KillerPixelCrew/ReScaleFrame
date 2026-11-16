@@ -499,6 +499,7 @@ void observe_native_present(void* renderer) {
 #else
     const auto caller=uintptr_t(__builtin_return_address(0));
 #endif
+    bool cpu_phase=false;
     if (caller==image()+0xc335ec && renderer==reinterpret_cast<void*>(image()+0x3a25d00) && world.submission_open) {
         Owner current{};
         uintptr_t current_window{},current_chain{};
@@ -513,6 +514,7 @@ void observe_native_present(void* renderer) {
             if (world.inputs) screen_facts(world.pass,false);
             if (!world.refused) {
                 close_submission();
+                cpu_phase=begin_cpu_present_phase(world.cpu,world.frame_pass.native_frame,world.frame_pass.window_key);
                 static std::atomic_flag announced = ATOMIC_FLAG_INIT;
                 if (!announced.test_and_set(std::memory_order_relaxed))
                     report("Fallout4 native SUBMISSION end before original outer Present; FRAME/WINDOW remain open.");
@@ -527,6 +529,9 @@ void observe_native_present(void* renderer) {
     }
     SetLastError(error);
     native_present(renderer);
+    const auto native_error=GetLastError();
+    if (cpu_phase) end_cpu_present_phase(world.cpu);
+    SetLastError(native_error);
 }
 struct Hook {
     uintptr_t rva;
