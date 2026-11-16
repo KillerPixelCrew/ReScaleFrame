@@ -700,26 +700,35 @@ bool cpu_prepare(const rsf_game_host_services& host)
 }
 bool cpu_start()
 {
-    if (active.load(std::memory_order_acquire) || entered.load(std::memory_order_acquire)) return false;
+    const auto refused = [](const char* stage, uint32_t rva, int status = 0) {
+        if (services.log) {
+            char message[180]{};
+            std::snprintf(message, sizeof(message), "Skyrim CPU start refused: %s RVA=%X status=%d", stage, rva, status);
+            services.log(services.user, message);
+        }
+        return false;
+    };
+    if (active.load(std::memory_order_acquire) || entered.load(std::memory_order_acquire)) return refused("active or entered", 0);
     // Only disabled targets contain the original guard bytes. Never compare our
     // own enabled MinHook jump against the original prologue on a failed rollback.
-    for (const auto& hook : hooks) if (!hook.created || hook.enabled) return false;
+    for (const auto& hook : hooks) if (!hook.created || hook.enabled) return refused("hook state", hook.rva);
     const auto* base = reinterpret_cast<const unsigned char*>(GetModuleHandleW(nullptr));
     uintptr_t named_callback{};
     if (!copy_input(&named_callback, base + 0x20b5130, sizeof(named_callback)) ||
-        named_callback != uintptr_t(base + 0x6e6030)) return false;
+        named_callback != uintptr_t(base + 0x6e6030)) return refused("named callback", 0x20b5130);
     for (const auto& query : screen_query_guards)
-        if (std::memcmp(base + query.rva, query.bytes.data(), query.bytes.size())) return false;
+        if (std::memcmp(base + query.rva, query.bytes.data(), query.bytes.size())) return refused("screen query bytes", query.rva);
     for (const auto& hook : hooks)
-        if (std::memcmp(hook.target, hook.bytes.data(), hook.bytes.size())) return false;
+        if (std::memcmp(hook.target, hook.bytes.data(), hook.bytes.size())) return refused("hook bytes", hook.rva);
     job_ownership.reset();
     input_ownership.invalidate();
     prospective.reset();
     worker_consumption.source.store(0);
     for (auto& hook : hooks) {
-        if (!hook.created || MH_EnableHook(hook.target) != MH_OK) {
+        const auto status = hook.created ? MH_EnableHook(hook.target) : MH_ERROR_NOT_CREATED;
+        if (status != MH_OK) {
             // A failed start leaves preparation and its borrowed services valid for retry.
-            (void)disable_hooks(); return false;
+            (void)disable_hooks(); return refused("hook enable", hook.rva, int(status));
         }
         hook.enabled = true;
     }

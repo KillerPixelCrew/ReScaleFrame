@@ -324,16 +324,16 @@ bool match_target()
     constexpr unsigned char upload_expected[]{0x48,0x89,0x5c,0x24,0x08,0x55,0x48,0x8d,0xac,0x24,0xe0,0xfd,0xff,0xff,0x48,0x81,0xec,0x20,0x03,0x00,0x00};
     unsigned char upload_actual[sizeof(upload_expected)]{};
     upload_target = reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr)) + 0x100ae80;
-    return rsf::skyrim::sampling_guard() && rsf::skyrim::presentation_inputs_guard() && copy(process_actual, process_target, sizeof(process_actual)) &&
-        !std::memcmp(process_actual, process_expected, sizeof(process_actual)) &&
-        copy(call_actual, site, sizeof(call_actual)) &&
-        !std::memcmp(call_actual, call_expected, sizeof(call_actual)) &&
-        copy(reset_actual, reset_site, sizeof(reset_actual)) && !std::memcmp(reset_actual, reset_expected, sizeof(reset_actual)) &&
-        copy(resolution_actual, resolution_target, sizeof(resolution_actual)) && !std::memcmp(resolution_actual, resolution_expected, sizeof(resolution_actual)) &&
-        copy(end_actual, end_target, sizeof(end_actual)) && !std::memcmp(end_actual, end_expected, sizeof(end_actual)) &&
-        copy(viewport_actual, reinterpret_cast<const unsigned char*>(GetModuleHandleW(nullptr)) + 0x1009960, sizeof(viewport_actual)) &&
-        !std::memcmp(viewport_actual, viewport_expected, sizeof(viewport_actual)) &&
-        copy(upload_actual, upload_target, sizeof(upload_actual)) && !std::memcmp(upload_actual, upload_expected, sizeof(upload_actual));
+    const auto checked = [](bool valid, const char* stage) { if (!valid) reason = stage; return valid; };
+    return checked(rsf::skyrim::sampling_guard(), "Skyrim render guard refused: sampler1010DE0.") &&
+        checked(rsf::skyrim::presentation_inputs_guard(), "Skyrim render guard refused: presentation inputs.") &&
+        checked(copy(process_actual, process_target, sizeof(process_actual)) && !std::memcmp(process_actual, process_expected, sizeof(process_actual)), "Skyrim render guard refused: process14EDBF0.") &&
+        checked(copy(call_actual, site, sizeof(call_actual)) && !std::memcmp(call_actual, call_expected, sizeof(call_actual)), "Skyrim render guard refused: process caller153ADE7.") &&
+        checked(copy(reset_actual, reset_site, sizeof(reset_actual)) && !std::memcmp(reset_actual, reset_expected, sizeof(reset_actual)), "Skyrim render guard refused: reset1544DF4.") &&
+        checked(copy(resolution_actual, resolution_target, sizeof(resolution_actual)) && !std::memcmp(resolution_actual, resolution_expected, sizeof(resolution_actual)), "Skyrim render guard refused: resolution101E130.") &&
+        checked(copy(end_actual, end_target, sizeof(end_actual)) && !std::memcmp(end_actual, end_expected, sizeof(end_actual)), "Skyrim render guard refused: renderer end1009F70.") &&
+        checked(copy(viewport_actual, reinterpret_cast<const unsigned char*>(GetModuleHandleW(nullptr)) + 0x1009960, sizeof(viewport_actual)) && !std::memcmp(viewport_actual, viewport_expected, sizeof(viewport_actual)), "Skyrim render guard refused: viewport1009960.") &&
+        checked(copy(upload_actual, upload_target, sizeof(upload_actual)) && !std::memcmp(upload_actual, upload_expected, sizeof(upload_actual)), "Skyrim render guard refused: upload100AE80.");
 }
 
 rsf_result prepare(const rsf_game_prepare_args* args) noexcept try
@@ -468,27 +468,42 @@ rsf_result start(const rsf_game_start_args* args) noexcept try
     const auto valid = rsf_game::validate(args); if (valid != RSF_OK) return valid;
     std::lock_guard<std::mutex> lock(lifecycle);
     if (!prepared) return RSF_ERROR_NOT_READY;
+    const auto refused = [](const char* stage) {
+        reason = stage;
+        if (services.log) services.log(services.user, stage);
+        return RSF_ERROR_NATIVE_REFUSED;
+    };
+    const auto enable = [](void* address, const char* stage) {
+        const auto status = MH_EnableHook(address);
+        if (status != MH_OK && services.log) {
+            char message[180]{};
+            std::snprintf(message, sizeof(message), "Skyrim start refused at %s: MinHook status=%d", stage, int(status));
+            services.log(services.user, message);
+        }
+        return status == MH_OK;
+    };
     if (!rsf::skyrim::compatibility_checkpoint(reason)) {
         if (services.log) services.log(services.user, reason);
         return RSF_ERROR_NATIVE_REFUSED;
     }
     if (enabled) return RSF_OK;
-    if (!match_target()) { reason = "Native hook bytes changed before enable; start refused."; return RSF_ERROR_NATIVE_REFUSED; }
-    if (MH_EnableHook(target) != MH_OK) return RSF_ERROR_NATIVE_REFUSED;
-    if (MH_EnableHook(process_target) != MH_OK) {
+    reason = "Skyrim start refused: executable identity or jitter101E360 guard changed before enable.";
+    if (!match_target()) { if (services.log) services.log(services.user, reason); return RSF_ERROR_NATIVE_REFUSED; }
+    if (!enable(target, "jitter")) return RSF_ERROR_NATIVE_REFUSED;
+    if (!enable(process_target, "process-main")) {
         MH_DisableHook(target);
         return RSF_ERROR_NATIVE_REFUSED;
     }
-    if (MH_EnableHook(resolution_target) != MH_OK) {
+    if (!enable(resolution_target, "resolution")) {
         MH_DisableHook(process_target); MH_DisableHook(target);
         return RSF_ERROR_NATIVE_REFUSED;
     }
-    if (MH_EnableHook(end_target) != MH_OK) {
+    if (!enable(end_target, "renderer-end")) {
         MH_DisableHook(resolution_target);
         MH_DisableHook(process_target); MH_DisableHook(target);
         return RSF_ERROR_NATIVE_REFUSED;
     }
-    if (MH_EnableHook(upload_target) != MH_OK) {
+    if (!enable(upload_target, "frame-upload")) {
         MH_DisableHook(end_target); MH_DisableHook(resolution_target);
         MH_DisableHook(process_target); MH_DisableHook(target);
         return RSF_ERROR_NATIVE_REFUSED;
@@ -496,13 +511,13 @@ rsf_result start(const rsf_game_start_args* args) noexcept try
     if (!rsf::skyrim::sampling_start(services)) {
         MH_DisableHook(upload_target); MH_DisableHook(end_target); MH_DisableHook(resolution_target);
         MH_DisableHook(process_target); MH_DisableHook(target);
-        return RSF_ERROR_NATIVE_REFUSED;
+        return refused("Skyrim start refused: sampler guard, binding service or hook enable failed.");
     }
     if (!rsf::skyrim::presentation_inputs_start(services)) {
         (void)rsf::skyrim::sampling_stop();
         MH_DisableHook(upload_target); MH_DisableHook(end_target); MH_DisableHook(resolution_target);
         MH_DisableHook(process_target); MH_DisableHook(target);
-        return RSF_ERROR_NATIVE_REFUSED;
+        return refused("Skyrim start refused: presentation-input guard or hook enable failed.");
     }
     if (!rsf::skyrim::cpu_start()) {
         (void)rsf::skyrim::presentation_inputs_stop();
@@ -511,7 +526,7 @@ rsf_result start(const rsf_game_start_args* args) noexcept try
         MH_DisableHook(end_target);
         MH_DisableHook(resolution_target);
         MH_DisableHook(process_target); MH_DisableHook(target);
-        return RSF_ERROR_NATIVE_REFUSED;
+        return refused("Skyrim start refused: CPU guard or hook enable failed.");
     }
     if (!rsf::skyrim::native_creation_start()) {
         (void)rsf::skyrim::cpu_disable();
@@ -519,8 +534,7 @@ rsf_result start(const rsf_game_start_args* args) noexcept try
         (void)rsf::skyrim::sampling_stop();
         MH_DisableHook(upload_target); MH_DisableHook(end_target); MH_DisableHook(resolution_target);
         MH_DisableHook(process_target); MH_DisableHook(target);
-        reason = "Native outer creation thunk could not be enabled; native presentation retained.";
-        return RSF_ERROR_NATIVE_REFUSED;
+        return refused("Skyrim start refused: native creation guard or hook enable failed; native presentation retained.");
     }
     enabled = true;
     if (host_active) (void)host_active(services.user, 1);

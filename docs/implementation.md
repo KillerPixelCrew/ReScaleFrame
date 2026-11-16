@@ -2,6 +2,23 @@
 
 ## Skyrim SE experimental reduced-resolution SR, 15 November 2026
 
+The Display creation repair passed the Windows Release VS2026 gate:220 passed,
+14 skipped, fmt/Clippy clean (`verify-display-coexistence-20261116.log`).
+Baseline909e17e plus the working trial ran through SKSE2.3.1 with Display
+Tweaks0.5.25, matching Address Library, ENB, Steam and RTSS in bounded PID60008
+(`input-acceptance-20261116-080226`): prepare/start0, exact guarded Display
+route and canonical outer/inner admission verified. Final vendor telemetry
+reports DLSS SR1280x720 to1920x1080, FG active/generated1,693 tags and
+base116/output232FPS, with renderer/SR/FG/vendor results0 and latency effective1.
+This accepts bounded vendor generation telemetry, not physical scanout, measured
+latency, pickup visual quality or full coexistence. Runtime foreground1 was only
+a point sample; no cause for prior inactivity is established. Observation and
+CloseMainWindow completed, no Skyrim remained and four restorations were
+verified, but exit_code was null. The tested Entry was then permanently deployed
+with backup; Runtime and INI were unchanged. Earlier PID29080 prepare0/start-5
+remains historical, with its first refusing stage unproven. See
+[Display creation ownership](research/skyrim-display-tweaks-creation-20261116.md).
+
 The ABI8 wrapper-routing batch passed the coordinator's Windows Release gate:
 219 passed,15 skipped, Cargo fmt/Clippy clean, plus scoped creation and plain
 bridge final-Release checks. PID20280
