@@ -1632,3 +1632,42 @@ and Fallout4 Entry SHA256 `be2e0bbff6f030a2e69eade3bd3ea57f0d2ac54f996b00d6820b3
 identify this batch. CPU conjunction and reduced-scope receipts are built but
 not observed in a new game run; no image, source-binding, FG or latency repair
 is claimed from these diagnostics.
+
+
+### Input-unbound renderer survives a separately refused future poll
+
+The read-only cpu-phase-fallback-short-circuit audit found that the channel1
+mask3f9ff lacked only sealed/present. Unmatched-Poll handling then marked every
+constructed/open current renderer invalid, including an input-unbound flags0
+fallback. same_source could reject that source before the existing Present-phase
+function was called. This is a per-source short-circuit, not permanent global
+unreachability: a later copied log snapshot already contains five each emitted
+RESERVE/SAMPLED/BIND/ABORT, without proving core acceptance or adoption.
+
+The next source batch separates that single generation-only fact. An unmatched
+Poll still increments the strict generation and always refuses/drains the future
+ticket. Preserving the current renderer requires input binding.source0, enabled
+lifecycle, no overlapping poll/raw writer, a fresh identical native cycle/state,
+and the same retained cycle rechecked under worker_guard. The lock rechecks live
+lifecycle/raw-writer/poll count. Bound predecessors still invalidate for every
+unmatched poll. Lifecycle/raw/native-state failures get no exception; other
+invalidation callers retain their existing behavior. The selected Present/native
+owner/current-source checks and early-future phase refusal are unchanged. No
+callback or native call is made under the scalar lock.
+
+The existing production-helper fixture now exercises unbound preserved versus
+bound invalidated, refused future remaining unclaimable with abort/end ownership,
+early future rejection, and lifecycle/raw/native refusals for both source kinds.
+The exact native guard body, reservation admission and Present-phase conjunctions
+are unchanged from HEAD. Source/diff checks passed; fixture code was authored but
+not run or built by this worker. This is next-batch source only: the loaded game
+is unchanged, reason4 abort attribution is not solved, and it is neither an image
+repair nor FG/latency acceptance. Root owns compilation and bounded validation.
+
+Coordinator validation passed the full Windows Release VS2026 gate
+`verify-unbound-renderer-poll-20261116.log`:224 passed,14 skipped,238total in
+110.40seconds, Rust fmt/Clippy clean. The extended actual production-helper
+handoff contract passed0.01seconds. Runtime remains `22830370ac079440177912e1b77680b37d55b7b1cd43915b6e2a68a4f70ce772`;
+new Entry is `c5d02f9c350e9520d9564df50b6d06d847066ff93a7f486b55d56cfa67e1fb92`.
+This is built and contract-tested, not yet deployed. Core admission/adoption,
+final-image capture, native visual quality, FG and latency still need live proof.

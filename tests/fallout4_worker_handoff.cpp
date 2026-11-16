@@ -2,6 +2,7 @@
 #include "../games/fallout4/src/worker_handoff.h"
 #include <atomic>
 #include <cstdio>
+#include <initializer_list>
 #include <latch>
 #include <mutex>
 #include <thread>
@@ -37,6 +38,26 @@ WorkerCycle next_swap() {
 }
 }
 int main() {
+    // The same unmatched generation refuses a future ticket in both cases;
+    // only the current renderer's claim to sampled input changes the outcome.
+    for (const uint64_t bound_source : {uint64_t(0),uint64_t(40)}) {
+        auto future=joined_ticket();
+        future.refuse(RSF_GAME_CPU_ABORT_INTERVENING_POLL);
+        const bool invalid=rsf::fallout4::detail::invalidates_render_source(bound_source,true);
+        check(invalid==(bound_source!=0),"pure unmatched future poll preserves only input-unbound renderer");
+        check(!future.claim(next_swap(),77,9) && future.frame_begun && future.refusal,
+            "preserved renderer never revives the refused future or drops abort/end obligations");
+        WorkerTicket early;
+        check(!early.reserve(predecessor(),successor(),10,false),"unbound preservation never admits an early future");
+        // These are explicitly not poll-only facts in the production callsite:
+        // quiesce, active raw writer/overlap, and native owner/state mismatch.
+        for (const uint32_t reason : {RSF_GAME_CPU_ABORT_QUIESCE,RSF_GAME_CPU_ABORT_OVERLAP,RSF_GAME_CPU_ABORT_STATE_CHANGED}) {
+            auto refused=consumed_ticket(); refused.refuse(reason);
+            check(rsf::fallout4::detail::invalidates_render_source(bound_source,false),
+                "lifecycle/raw/native refusal invalidates bound and unbound renderer");
+            check(refused.refusal==reason && !refused.complete(true),"native refusal remains sticky on future ticket");
+        }
+    }
     WorkerTicket empty;
     check(!empty.reserve(predecessor(),successor(),9,false),"early/straddling poll cannot reserve before Present entry");
     auto bad_source=successor(); bad_source.source=40;

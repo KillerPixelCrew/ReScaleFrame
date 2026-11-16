@@ -597,6 +597,19 @@
       "close": "observed native World to MainMenu then native QuitDesktop confirm, exit0; distinct from prior direct-world C0000005",
       "restoration": "verified21of21 destinations match originals, customINI unchanged, no forced kill",
       "limits": "No complete final-image, moving/all-quality/near-depth, bound-owner/FG/latency or compatibility acceptance"
+    },
+    "unbound_poll_correction_gate": {
+      "gate": "verify-unbound-renderer-poll-20261116.log",
+      "exit_code": 0,
+      "tests": 238,
+      "passed": 224,
+      "skipped": 14,
+      "seconds": 110.4,
+      "worker_handoff_contract_seconds": 0.01,
+      "rust_fmt_clippy": "pass",
+      "runtime_sha256": "22830370ac079440177912e1b77680b37d55b7b1cd43915b6e2a68a4f70ce772",
+      "entry_sha256": "c5d02f9c350e9520d9564df50b6d06d847066ff93a7f486b55d56cfa67e1fb92",
+      "live_status": "not yet deployed; no source binding, final capture or image repair acceptance"
     }
   },
   "reduced_consumer_research": "docs/research/fallout4-reduced-consumers-20261116.md",

@@ -24,6 +24,14 @@ clean. The hidden shared-SR device fixture also passed request retention, actual
 result/raster capture, status preservation and the existing reset sequence.
 Runtime22830370... and EntryBE2E0BBF... are built, not yet game-tested.
 
+The qualified unbound-renderer poll correction passed the next full Release
+VS2026 gate:224 passed,14 skipped,238 total in110.40seconds, Rust checks clean
+and extended handoff contract0.01seconds. Input-unbound render ownership can
+survive only a generation-only unmatched poll with unchanged native ownership;
+future tickets still refuse and bound predecessors retain strict invalidation.
+EntryC5D02F9C... is built, not yet deployed. Final capture, native visual and
+actual bound-source/FG/latency results remain unproved.
+
 Native-only PID71716/report180644-293 deployed4657522/Runtime22830370... and
 EntryBE2E0BBF... . Quality1 actually evaluated1707x1067 to2560x1600 with SR0;
 stationary/menu/focus observations were clean, without reproducing or overturning
