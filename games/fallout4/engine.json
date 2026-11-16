@@ -1,6 +1,6 @@
 {
   "game": "Fallout 4",
-  "status": "Native-first validation active; PID64940 proves F4SE/ENB module absence and identifies corrected ServingThread vtable guard; new full gate224passed14skipped, correction built undeployed; native SR quality/input/FG/latency acceptance pending, compatibility deferred, rendering_ready remains0",
+  "status": "Native-first validation active; PID66836 proves F4SE/ENB absence and corrected vtable predicates, but Quality1 duplicated rectangle is visually rejected and bound-input/FG/latency remain unaccepted; full gate224passed14skipped, compatibility deferred, rendering_ready remains0",
   "executable": {
     "name": "Fallout4.exe",
     "version": "1.11.240.0",
@@ -48,7 +48,7 @@
     "abi": "Host8/Game23/Frame2/Camera1; provisional FG_INPUTS|INPUT_TIMELINE declarations3 for cold validation, no RENDERED_SOURCE, readiness0",
     "implementation": "Core-planned native DR at guarded five-argument UpdateDynamicResolution, producer LTRB/canonical camera inputs, explicit pre-mutation FG capture and single auxiliary SR transaction; scoped unit selector/full viewport and source-end restoration",
     "steam": "Existing exact seven-method/ten-load profile extracted to integrations/steam, game-owned cold callbacks retained; no shared runtime game branch",
-    "validation": "ServingThread vtable correction Windows Release VS2026 gate224passed14skipped117.36s,238total/no failures,Rust fmt/Clippy clean; worker handoff contract passed0.01s; Entry72B274B92AF5F5AFAC334F92E89EBC091812CD3A7FD05CF8B8A43713A393A449 built undeployed, native admission pending"
+    "validation": "ServingThread vtable correction Windows Release VS2026 gate224passed14skipped117.36s,238total/no failures,Rust fmt/Clippy clean; worker handoff contract passed0.01s; Entry72B274B92AF5F5AFAC334F92E89EBC091812CD3A7FD05CF8B8A43713A393A449 deployed PID66836, vtable predicates pass but native input/FG/latency admission pending"
   },
   "research": "docs/research/fallout4-render-integration-20261116.md",
   "native_render_callbacks": {
@@ -65,6 +65,7 @@
     "depth": "Guarded prepass21F38B0/callerreturn21F9F78 copies same-source NativeDepthSnapshot; pass.depth_domains required before planning/explicit FG_INPUTS/SR; source native depth remains unchanged"
   },
   "validation": {
+    "native_only_vtable_trial": "native-raster-20261116-172137-067 PID66836/c32d8f7: direct launch and zero F4SE/non-systemD3D11/loader proof; corrected worker vtable/destructor/Run predicates pass, no RESERVE/BIND/pacing/markers; user rejects Quality1 duplicated scene rectangle without ENB; partial matched source16183/native16705 captured only3 native inputs at full rect after reload, not the failed reduced image; native Quit/Desktop reproduces4CB273/C0000005,21/21 restored and custom INI unchanged",
     "native_raster_gate": ".local/fallout4-research/verify-native-raster-20261116.log",
     "configuration": "Windows Release VS2026",
     "result": "exit0,221passed14skipped,Cargo fmt and Clippy clean",
