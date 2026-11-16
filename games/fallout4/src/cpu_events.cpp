@@ -81,7 +81,7 @@ struct RenderCycle {
 struct Future {
     WorkerTicket facts{};
     NativeState state{};
-    bool busy{}, retiring{}, abort_sent{};
+    bool busy{}, retiring{}, abort_sent{}, reserve_announced{};
 };
 std::mutex worker_guard;
 RenderCycle current_render;
@@ -495,7 +495,7 @@ bool drain_future() noexcept {
         if (!future.facts.refusal || future.busy || future.retiring) return false;
         future.retiring=true; copy=future;
     }
-    const bool aborted=copy.abort_sent || source_fact(ticket_pending(copy),RSF_GAME_CPU_SOURCE_ABORT,copy.facts.refusal);
+    const bool aborted=!copy.reserve_announced || copy.abort_sent || source_fact(ticket_pending(copy),RSF_GAME_CPU_SOURCE_ABORT,copy.facts.refusal);
     const bool ended=aborted && (!copy.facts.frame_begun || emit_identity(copy.facts.cpu,RSF_GAME_CPU_FRAME_END,0));
     {
         std::lock_guard lock(worker_guard);
@@ -519,9 +519,29 @@ void invalidate_worker(uint32_t reason, bool invalidate_current, const WorkerCyc
     }
     (void)drain_current_abort(); (void)drain_future();
 }
+bool bound_current_valid(const RenderCycle& c, bool strict_raw) noexcept {
+    NativeState native{},cycle_state{}; uint32_t cursor{},queued{};
+    const bool state_valid=state(native,nullptr,c.key.main) && same_state(native,c.state);
+    const bool cursor_read=state_valid && read(native.receiver+8,cursor);
+    auto proof=c.key;
+    const bool cycle_valid=native_cycle(proof,cycle_state,c.joining) && proof==c.key && same_state(cycle_state,c.state);
+    const bool queue_read=cycle_valid && read(cycle_state.queue+0x1490,queued);
+    std::lock_guard lock(worker_guard);
+    if (!enabled.load() || current_render.key!=c.key || current_render.invalid ||
+        current_render.binding.source!=c.binding.source || !state_valid) return false;
+    if (current_render.sealed && current_render.mapped) return true;
+    const auto gen=poll_generation.load(), revision=raw_revision.load();
+    if (!polls.load() && gen==c.binding.generation && cursor_read && cursor==c.binding.queue_generation &&
+        (!strict_raw || (!raw_writers.load() && revision==c.binding.raw))) return true;
+    return current_render.constructed && !current_render.closed && current_render.mapped &&
+        future.busy && !future.retiring && polls.load()==1 && jobs.load()==1 && !raw_writers.load() &&
+        cursor_read && queue_read && same_state(cycle_state,future.state) &&
+        future.facts.protects_bound(proof,c.binding.source,c.binding.generation,gen,revision,cursor,queued,cycle_valid);
+}
 bool mapped_current(uint64_t source) {
     const auto c=render_copy();
-    return c.cpu.source==source && c.sealed && c.mapped && !c.invalid;
+    return c.cpu.source==source && !c.invalid && c.mapped &&
+        ((c.sealed) || (c.binding.source && bound_current_valid(c,true)));
 }
 void abort_pending(uint32_t reason) noexcept {
     if (!pending.source) return;
@@ -614,39 +634,87 @@ template<size_t N> uint32_t predicate_bits(const std::array<bool,N>& terms) {
     for (size_t i=0;i<N;++i) if (terms[i]) bits|=uint32_t(1)<<i;
     return bits;
 }
-bool reserve_worker_poll(void* manager, uint64_t generation, uint32_t previous_polls) {
-    const auto c=render_copy();
-    auto proof=c.key; NativeState native{};
+bool reserve_worker_poll(void* manager, uintptr_t caller, uint64_t& generation, uint32_t& previous_polls) {
+    const auto c=render_copy(); auto proof=c.key; NativeState native{};
     const auto tid=GetCurrentThreadId();
-    const bool native_valid_before=native_cycle(proof,native,false);
-    const auto bits=predicate_bits(std::array<bool,18>{enabled.load(std::memory_order_acquire),job_selected,wrapper_selected,
-        job_depth==1,wrapper_depth==1,jobs.load()==1,!previous_polls,!raw_writers.load(),
-        c.constructed,c.sealed,c.present,!c.closed,!c.invalid,c.tid!=tid,native_valid_before,proof==c.key,
-        same_state(native,c.state),native.manager==uintptr_t(manager)});
-    if (bits!=0x3ffffu) { gate_receipt(1,bits,0x3ffffu,c,proof,{}); return false; }
-    LARGE_INTEGER frequency{}; QueryPerformanceFrequency(&frequency);
-    Future copy{};
+    const bool worker_call=caller==image()+0xc34ec8;
+    const bool native_valid_before=worker_call && native_cycle(proof,native,false);
+    uint32_t queued{},consumed{};
+    const bool binding_unchanged=!c.binding.source || (c.binding.bound && c.binding.source==c.cpu.source &&
+        same_state(c.binding.state,native) && raw_revision.load()==c.binding.raw &&
+        read(native.queue+0x1490,queued) && queued==c.binding.queue_generation &&
+        read(native.receiver+8,consumed) && consumed==queued);
+    LARGE_INTEGER frequency{};
+    if (native_valid_before) QueryPerformanceFrequency(&frequency);
+    Future copy{}; uint32_t bits{}; bool registered=false;
     {
         std::lock_guard lock(worker_guard);
-        if (!enabled.load() || current_render.key!=c.key || !current_render.present || current_render.invalid ||
-            future.facts.active() || polls.load()!=1 || poll_generation.load()!=generation) return false;
-        const CpuIdentity next{host.session_id,next_source.fetch_add(1),0,0,static_cast<uint64_t>(frequency.QuadPart)};
-        if (!future.facts.reserve(c.key,next,generation,true)) return false;
-        future.state=native; future.busy=true; current_render.mapped=true; copy=future; worker_source=next.source;
+        // Publish the one qualified no-native-poll-yet intention with its attempt
+        // counters. Main cannot observe an advanced counter without this ticket.
+        previous_polls=polls.fetch_add(1);
+        generation=poll_generation.fetch_add(1)+1;
+        const bool source_exists=current_render.cpu.source && current_render.cpu.submission &&
+            current_render.cpu.session==host.session_id && current_render.key.source==current_render.cpu.source;
+        const bool binding_ready=binding_unchanged && (!c.binding.source ||
+            (generation>c.binding.generation && generation-c.binding.generation==1 && raw_revision.load()==c.binding.raw));
+        bits=predicate_bits(std::array<bool,18>{enabled.load(),job_selected,wrapper_selected,
+            job_depth==1,wrapper_depth==1,jobs.load()==1,!previous_polls,!raw_writers.load(),
+            current_render.constructed,source_exists,binding_ready,!current_render.closed,!current_render.invalid,
+            c.tid!=tid,native_valid_before,proof==current_render.key,same_state(native,current_render.state),native.manager==uintptr_t(manager)});
+        if (worker_call && !pending.source && bits==0x3ffffu && !future.facts.active()) {
+            const CpuIdentity next{host.session_id,next_source.fetch_add(1),0,0,static_cast<uint64_t>(frequency.QuadPart)};
+            if (future.facts.reserve(c.key,next,generation,true) && future.facts.begin_callback(
+                c.binding.source ? c.binding.generation : 0,c.binding.raw,c.binding.queue_generation)) {
+                future.state=native; future.busy=true; current_render.mapped=true;
+                copy=future; worker_source=next.source; registered=true;
+            } else {
+                // This local candidate has not announced RESERVE or acquired any
+                // host obligation. Never clear an older or published ticket here.
+                future={};
+            }
+        }
     }
-    const bool sent=source_fact(ticket_pending(copy),RSF_GAME_CPU_SOURCE_RESERVE);
-    // RESERVE may have waited for predecessor Present. Raw input received during
-    // that wait belongs before this actual poll, not to an overlapped sample.
+    if (!registered) {
+        if (worker_call) gate_receipt(1,bits,0x3ffffu,c,proof,{});
+        return false;
+    }
+    bool announce=false;
+    {
+        std::lock_guard lock(worker_guard);
+        if (future.facts.cpu.source==copy.facts.cpu.source && future.facts.valid() && enabled.load() &&
+            current_render.key==copy.facts.predecessor && !current_render.invalid) {
+            future.reserve_announced=true; announce=true;
+        } else future.facts.refuse(RSF_GAME_CPU_ABORT_STATE_CHANGED);
+    }
+    const bool sent=announce && source_fact(ticket_pending(copy),RSF_GAME_CPU_SOURCE_RESERVE);
+    // The raw snapshot belongs immediately after the synchronous callback and
+    // before original Poll. Callback return is not a core acceptance receipt.
     const auto revision=raw_revision.load();
-    const auto after=render_copy(); proof=copy.facts.predecessor;
+    RenderCycle after{};
+    {
+        std::lock_guard lock(worker_guard);
+        if (future.facts.cpu.source==copy.facts.cpu.source) future.facts.end_callback();
+        after=current_render;
+    }
+    proof=copy.facts.predecessor;
     const bool native_valid=sent && enabled.load() && native_cycle(proof,native,after.joining) &&
         proof==copy.facts.predecessor && same_state(native,copy.state) && !raw_writers.load() &&
         raw_revision.load()==revision && polls.load()==1 && poll_generation.load()==generation;
+    bool armed=false,unsafe_bound=false;
     {
         std::lock_guard lock(worker_guard);
-        if (future.facts.cpu.source==copy.facts.cpu.source &&
-            (!native_valid || current_render.key!=copy.facts.predecessor || current_render.invalid ||
-             !future.facts.arm(proof,generation,revision,true))) future.facts.refuse(RSF_GAME_CPU_ABORT_STATE_CHANGED);
+        if (future.facts.cpu.source==copy.facts.cpu.source) {
+            const bool predecessor_safe=WorkerTicket::poll_safe(current_render.binding.source,current_render.closed,current_render.sealed);
+            unsafe_bound=current_render.key==copy.facts.predecessor && !predecessor_safe;
+            if (native_valid && current_render.key==copy.facts.predecessor && !current_render.invalid &&
+                future.facts.arm(proof,generation,revision,true,predecessor_safe)) armed=true;
+            else future.facts.refuse(RSF_GAME_CPU_ABORT_STATE_CHANGED);
+        }
+    }
+    if (unsafe_bound) invalidate_worker(RSF_GAME_CPU_ABORT_STATE_CHANGED,true);
+    if (!armed) {
+        const auto mask=predicate_bits(std::array<bool,4>{sent,native_valid,!unsafe_bound,armed});
+        gate_receipt(3,mask,0xfu,after,proof,copy.facts.cpu);
     }
     return true;
 }
@@ -685,7 +753,7 @@ void downstream_receipt(const char* phase, const Future& f, const WorkerCycle& p
     if (!f.facts.active() || f.facts.refusal || !host.log || downstream_receipts.fetch_add(1)>=32) return;
     char text[1400]{};
     std::snprintf(text,sizeof(text),
-        "Fallout4 CPU downstream candidate/refusal phase=%s source=%llu ticket_phase=%u predecessor=%llu proof_source=%llu native=%u/%u idle=%llu/%llu tls_idle=%llu generation=%llu/%llu cursor=%u/%u queue=%u reached=0x%x passed=0x%x busy=%u retiring=%u main=%p/%p window=%p/%p worker=%p/%p manager=%p/%p queue_owner=%p/%p receiver=%p/%p events=%p,%p/%p,%p session=%llu/%llu wait_result_known=%u wait_result=0x%x mode_known=%u mode=%u.",
+        "Fallout4 CPU downstream candidate/refusal phase=%s source=%llu ticket_phase=%u predecessor=%llu proof_source=%llu native=%u/%u idle=%llu/%llu tls_idle=%llu generation=%llu/%llu cursor=%u/%u queue=%u reached=0x%x passed=0x%x busy=%u retiring=%u main=%p/%p window=%p/%p worker=%p/%p manager=%p/%p queue_owner=%p/%p receiver=%p/%p events=%p,%p/%p,%p session=%llu/%llu wait_result_known=%u wait_result=0x%x mode_known=%u mode=%u callback_inflight=%u callback_returned=%u native_poll_started=%u reserve_announced=%u.",
         phase,static_cast<unsigned long long>(f.facts.cpu.source),static_cast<unsigned>(f.facts.phase),
         static_cast<unsigned long long>(f.facts.predecessor.source),static_cast<unsigned long long>(proof.source),
         f.facts.predecessor.frame,proof.frame,static_cast<unsigned long long>(f.facts.predecessor.idle),
@@ -701,7 +769,8 @@ void downstream_receipt(const char* phase, const Future& f, const WorkerCycle& p
         reinterpret_cast<void*>(f.facts.predecessor.start_event),reinterpret_cast<void*>(f.facts.predecessor.complete_event),
         reinterpret_cast<void*>(proof.start_event),reinterpret_cast<void*>(proof.complete_event),
         static_cast<unsigned long long>(f.facts.predecessor.session),static_cast<unsigned long long>(proof.session),
-        unsigned(checks.result_known),checks.native_result,unsigned(checks.mode_known),checks.native_mode);
+        unsigned(checks.result_known),checks.native_result,unsigned(checks.mode_known),checks.native_mode,
+        unsigned(f.facts.callback_inflight),unsigned(f.facts.callback_returned),unsigned(f.facts.native_poll_started),unsigned(f.reserve_announced));
     try { host.log(host.user,text); } catch (...) {}
 }
 bool worker_consumer_proof(const Future& f, WorkerCycle& proof, uint32_t& cursor, bool before_bind, PhaseChecks* receipt = nullptr) {
@@ -781,12 +850,11 @@ void observe_poll(void* manager, float delta) {
     const auto caller = reinterpret_cast<uintptr_t>(__builtin_return_address(0));
 #endif
     const auto error = GetLastError();
-    const auto previous_polls = polls.fetch_add(1);
-    const auto generation = poll_generation.fetch_add(1) + 1;
+    uint32_t previous_polls{}; uint64_t generation{};
+    const bool mapped=reserve_worker_poll(manager,caller,generation,previous_polls);
     if (pending.source) abort_pending(previous_polls ? RSF_GAME_CPU_ABORT_OVERLAP : RSF_GAME_CPU_ABORT_INTERVENING_POLL);
     NativeState before{};
     StateRead state_read=StateRead::not_called;
-    const bool mapped=caller==image()+0xc34ec8 && reserve_worker_poll(manager,generation,previous_polls);
     if (!mapped) {
         const auto current=render_copy(); auto proof=current.key; NativeState native{};
         const bool poll_only=enabled.load() && !previous_polls && !raw_writers.load() &&
@@ -846,6 +914,24 @@ void observe_poll(void* manager, float delta) {
         pending.frequency = static_cast<uint64_t>(frequency.QuadPart);
         pending.raw = raw_revision.load(); pending.state = before;
         source_event(RSF_GAME_CPU_SOURCE_RESERVE);
+    }
+    if (mapped) {
+        bool unsafe=false;
+        {
+            std::lock_guard lock(worker_guard);
+            if (future.facts.cpu.source==worker_source) {
+                unsafe=!enabled.load() || current_render.key!=future.facts.predecessor || current_render.invalid ||
+                    polls.load()!=1 || poll_generation.load()!=generation || raw_writers.load() ||
+                    raw_revision.load()!=future.facts.raw ||
+                    !WorkerTicket::poll_safe(current_render.binding.source,current_render.closed,current_render.sealed);
+                if (unsafe) future.facts.refuse(RSF_GAME_CPU_ABORT_STATE_CHANGED);
+            }
+        }
+        if (unsafe) invalidate_worker(RSF_GAME_CPU_ABORT_STATE_CHANGED,true);
+        {
+            std::lock_guard lock(worker_guard);
+            if (future.facts.cpu.source==worker_source) future.facts.native_poll_entry();
+        }
     }
     SetLastError(error);
     const auto sample_begin = qpc();
@@ -1177,12 +1263,7 @@ bool cpu_source_is_current(const CpuIdentity& expected) noexcept {
     const auto c=render_copy();
     if (c.cpu.source!=identity.source) return false;
     if (c.invalid) return false;
-    if (c.binding.source) {
-        NativeState native{}; uint32_t cursor{};
-        if (!state(native,nullptr,c.key.main) || !same_state(native,c.state)) return false;
-        if (!(c.sealed && c.mapped) && (polls.load() || poll_generation.load()!=c.binding.generation ||
-            !read(native.receiver+8,cursor) || cursor!=c.binding.queue_generation)) return false;
-    }
+    if (c.binding.source && !bound_current_valid(c,false)) return false;
     return true;
 }
 bool begin_cpu_render() noexcept {

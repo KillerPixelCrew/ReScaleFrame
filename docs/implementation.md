@@ -24,6 +24,14 @@ clean. The hidden shared-SR device fixture also passed request retention, actual
 result/raster capture, status preservation and the existing reset sequence.
 Runtime22830370... and EntryBE2E0BBF... are built, not yet game-tested.
 
+The pre-native-Poll intention correction passed the full Windows Release
+VS2026 gate: 224 passed, 14 skipped, 238 total in 102.79 seconds, with Rust
+checks clean and the extended production-helper handoff fixture passing in
+0.01 seconds. Entry F7B95E79... is built but not yet deployed. The adapter
+reports a genuine selected poll intention while the core owns its wait;
+strict protection expires before actual native polling. Adoption and native
+FG/latency acceptance still require the next measured run.
+
 The downstream diagnostics were then deployed in native-only PID64776.
 Quality1 and return-native captures completed with matched SR0/Present0;
 FG stayed inactive and no prospective source reached the new receipts.
