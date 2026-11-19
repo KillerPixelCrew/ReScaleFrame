@@ -12,5 +12,8 @@ crate-type = ["staticlib"]
 [dependencies]
 rsf-game-sys = { path = "../../sdk/game" }
 
+[build-dependencies]
+cc = "1"
+
 [lints]
 workspace = true

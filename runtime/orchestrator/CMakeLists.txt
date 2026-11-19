@@ -20,7 +20,6 @@ target_link_libraries(rsf_native_cpu PUBLIC ReScaleFrame::GameSDK PRIVATE rsf_bu
 
 add_library(rsf_orchestrator_core OBJECT
     src/runtime.cpp
-    src/plugin_session.cpp
     src/native_scene.cpp
     src/native_window.cpp
     src/native_fg.cpp

@@ -37,6 +37,16 @@ from it. Bindgen 0.72.1 with libclang 18.1.1 reproduced the Windows x64 bindings
 byte for byte. Cargo compiled their layout assertions, the workspace passed
 formatting, Clippy and 75 tests, and the four focused Release fixtures passed.
 
+Rust now owns plugin DLL lifetime, the stable copy of host services, preparation
+and all session transitions. A nonblocking reader/writer lock admits concurrent
+status calls and refuses overlapping transitions. Small C++ callback guards
+contain exceptions from native plugins before control returns to Rust.
+The new DLL fixture passed in Debug and Release MSVC, covering reentrant calls,
+short input, ABI mismatch, exceptions during preparation, partial ownership,
+busy stop and eventual module unload. Both Anomaly DX11 build probes refused
+preparation in a foreign process with a cleared handle and unloaded adapter.
+These checks exercise admission and teardown without activating game rendering.
+
 ## Fallout 4 AE native render callbacks, 16 November 2026
 
 User priority is now fully native Fallout4.exe without F4SE/ENB first, with

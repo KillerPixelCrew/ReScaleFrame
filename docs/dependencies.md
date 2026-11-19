@@ -1,5 +1,9 @@
 # Dependencies
 
+The orchestrator uses the Cargo build dependency `cc` to compile the native
+plugin exception guards. Cargo.lock pins it and its build tools. The guards
+link into the orchestrator static library for both embedded and DLL consumers.
+
 ## REA development tooling
 
 `tools/rea` pins `rea-agents` 6.4.0 from npm, whose published Git revision is
