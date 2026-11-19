@@ -8,16 +8,13 @@
 #include <rescaleframe/native_scene.h>
 #include <rescaleframe/native_translucency.h>
 #include <rescaleframe/d3d11_state.h>
-#include <rescaleframe/fullscreen_pass.h>
 #include <rescaleframe/motion_resolve.h>
-#include <rescaleframe/srv_format.h>
 #include "native_regions.h"
 #include "native_reinsert.h"
 #include "native_sr_completion.h"
 #include <d3d11.h>
 #include <cstring>
 #include <wrl/client.h>
-#include <array>
 
 enum class Temporal : uint32_t { Sr, Fg };
 extern "C" void rsf_core_native_sr_camera(Temporal, const rsf_game_render_pass*, rsf_pipeline_camera_frame*);
@@ -26,6 +23,8 @@ extern "C" void rsf_core_native_sr_reset(Temporal);
 extern "C" void rsf_core_native_sr_publish_surface(uint32_t width, uint32_t height,
     uint32_t render_width, uint32_t render_height);
 extern "C" void rsf_core_native_sr_clear_surface();
+extern "C" void rsf_core_native_exposure_release();
+void* rsf_native_scalar_exposure(void* context, void* input);
 
 namespace {
 struct FgSceneScope {
@@ -52,63 +51,6 @@ bool same_device_inputs(void* raw_context, const rsf_game_render_pass& pass) {
     return true;
 }
 thread_local bool native_destinations_ordered = false;
-struct ExposureResources {
-    Microsoft::WRL::ComPtr<ID3D11Device> device;
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> scalar;
-    Microsoft::WRL::ComPtr<ID3D11RenderTargetView> target;
-    struct Source {
-        Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
-        Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> view;
-    };
-    std::array<Source, 2> sources;
-    uint32_t next = 0;
-    rsf_fullscreen_pass* blit = nullptr;
-    void release() {
-        rsf_fullscreen_pass_destroy(blit); blit = nullptr;
-        for (auto& source : sources) { source.view.Reset(); source.texture.Reset(); }
-        target.Reset(); scalar.Reset(); device.Reset(); next = 0;
-    }
-};
-ExposureResources& exposure_resources() { static ExposureResources instance; return instance; }
-ID3D11Texture2D* scalar_exposure(ID3D11DeviceContext* context, ID3D11Texture2D* source)
-{
-    if (!source) return nullptr;
-    D3D11_TEXTURE2D_DESC descriptor{}; source->GetDesc(&descriptor);
-    if (descriptor.Width != 1 || descriptor.Height != 1 || descriptor.ArraySize != 1 || descriptor.SampleDesc.Count != 1)
-        return nullptr;
-    if (descriptor.Format == DXGI_FORMAT_R32_FLOAT) return source;
-    const DXGI_FORMAT format = rsf::srv_format(descriptor.Format);
-    if (format != DXGI_FORMAT_R32G32B32A32_FLOAT && format != DXGI_FORMAT_R16G16B16A16_FLOAT &&
-        format != DXGI_FORMAT_R32G32_FLOAT && format != DXGI_FORMAT_R16G16_FLOAT) return nullptr;
-    auto& resources = exposure_resources(); Microsoft::WRL::ComPtr<ID3D11Device> device;
-    context->GetDevice(&device);
-    if (resources.device.Get() != device.Get()) resources.release();
-    if (!resources.scalar) {
-        resources.device = device;
-        D3D11_TEXTURE2D_DESC scalar{}; scalar.Width = scalar.Height = scalar.MipLevels = scalar.ArraySize = 1;
-        scalar.Format = DXGI_FORMAT_R32_FLOAT; scalar.SampleDesc.Count = 1;
-        scalar.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
-        rsf_fullscreen_setup setup{sizeof(setup), RSF_FULLSCREEN_PASS_ABI_VERSION, nullptr, nullptr};
-        if (FAILED(device->CreateTexture2D(&scalar, nullptr, &resources.scalar)) ||
-            FAILED(device->CreateRenderTargetView(resources.scalar.Get(), nullptr, &resources.target)) ||
-            rsf_fullscreen_pass_create(device.Get(), &setup, &resources.blit) != RSF_FULLSCREEN_OK) {
-            resources.release(); return nullptr;
-        }
-    }
-    ExposureResources::Source* selected = nullptr;
-    for (auto& entry : resources.sources) if (entry.texture.Get() == source) { selected = &entry; break; }
-    if (!selected) {
-        auto& entry = resources.sources[resources.next++ % resources.sources.size()];
-        entry.view.Reset(); entry.texture.Reset();
-        D3D11_SHADER_RESOURCE_VIEW_DESC view{}; view.Format = format;
-        view.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D; view.Texture2D.MipLevels = 1;
-        if (FAILED(device->CreateShaderResourceView(source, &view, &entry.view))) return nullptr;
-        entry.texture = source; selected = &entry;
-    }
-    const rsf_fullscreen_draw draw{sizeof(draw), RSF_FULLSCREEN_COPY, 1, 1, 1};
-    return rsf_fullscreen_pass_draw(resources.blit, context, resources.target.Get(), selected->view.Get(), &draw) ==
-        RSF_FULLSCREEN_OK ? resources.scalar.Get() : nullptr;
-}
 struct Bindings {
     void* context;
     rsf_d3d11_state saved{};
@@ -171,7 +113,7 @@ extern "C" RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_native_sr_evaluate(void*
             return RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED;
         frame.scene_color = color; frame.depth = depth; frame.game_motion = motion;
     }
-    frame.exposure = scalar_exposure(static_cast<ID3D11DeviceContext*>(context), static_cast<ID3D11Texture2D*>(pass->exposure));
+    frame.exposure = rsf_native_scalar_exposure(context, pass->exposure);
     // Rect-local like the cropped inputs, and only for this view's own frame and rectangle.
     rsf_native_translucency_masks masks{}; masks.struct_size = sizeof(masks);
     if (rsf_native_translucency_take(pass, &masks)) {
@@ -324,7 +266,7 @@ extern "C" RSF_RUNTIME_API void rsf_native_sr_release_resources(void)
 {
     rsf_native_scene_reset(); rsf_native_window_reset(); rsf_native_cpu_release(); rsf_native_composition_release();
     rsf_native_sr_set_enabled(0);
-    exposure_resources().release(); rsf_native_regions_release();
+    rsf_core_native_exposure_release(); rsf_native_regions_release();
     fg_inputs().release(); rsf_native_reinsert_release(); rsf_core_native_sr_reset(Temporal::Sr);
     rsf_native_translucency_release();
     rsf_core_native_sr_clear_surface();

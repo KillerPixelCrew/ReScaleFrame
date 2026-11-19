@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
-use crate::d3d11_output::{GraphicsCache, texture_desc};
+use crate::d3d11_output::{FullscreenBlit, GraphicsCache, texture_desc};
 use crate::d3d11_output_abi::*;
 use std::ffi::c_void;
 use std::ptr::NonNull;
@@ -83,41 +83,6 @@ impl Output {
             texture,
             convert_to,
         })
-    }
-}
-
-type DrawRgba = unsafe extern "C" fn(
-    *mut rsf_fullscreen_pass,
-    *mut c_void,
-    *mut c_void,
-    *mut c_void,
-    u32,
-    u32,
-) -> u32;
-
-struct FullscreenBlit {
-    pass: NonNull<rsf_fullscreen_pass>,
-    draw: DrawRgba,
-    destroy: unsafe extern "C" fn(*mut rsf_fullscreen_pass),
-}
-
-impl FullscreenBlit {
-    unsafe fn new(device: &ComRef, kernels: &rsf_d3d11_reinsert_kernels) -> Option<Self> {
-        let create = kernels.create_blit?;
-        let draw = kernels.draw_rgba?;
-        let destroy = kernels.destroy_blit?;
-        let pass = NonNull::new(unsafe { create(device.as_ptr()) })?;
-        Some(Self {
-            pass,
-            draw,
-            destroy,
-        })
-    }
-}
-
-impl Drop for FullscreenBlit {
-    fn drop(&mut self) {
-        unsafe { (self.destroy)(self.pass.as_ptr()) };
     }
 }
 
@@ -224,17 +189,15 @@ impl Conversions {
                 continue;
             }
             let output = slot.as_ref()?;
-            if unsafe {
-                (self.blit.draw)(
-                    self.blit.pass.as_ptr(),
+            if !unsafe {
+                self.blit.draw(
                     context,
                     output.target.as_ptr(),
                     view,
                     rect.width(),
                     rect.height(),
                 )
-            } == 0
-            {
+            } {
                 return None;
             }
             *copy = output.texture.as_ptr();
@@ -321,7 +284,14 @@ unsafe fn reinsert(
             conversions
         } else {
             *cache = None;
-            let blit = unsafe { FullscreenBlit::new(&device, kernels) }?;
+            let blit = unsafe {
+                FullscreenBlit::new(
+                    &device,
+                    kernels.create_blit?,
+                    kernels.draw_rgba?,
+                    kernels.destroy_blit?,
+                )
+            }?;
             cache.insert(Conversions {
                 blit,
                 slots: [None, None],

@@ -15,6 +15,8 @@ mod native_composition;
 #[cfg(windows)]
 mod native_cpu;
 #[cfg(windows)]
+mod native_exposure;
+#[cfg(windows)]
 mod native_reinsert;
 
 #[cfg(windows)]

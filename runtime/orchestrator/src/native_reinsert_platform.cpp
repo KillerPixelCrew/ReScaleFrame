@@ -7,6 +7,7 @@
 extern "C" uint32_t rsf_core_native_reinsert(void* context, void* source,
     void* destination, void* readable, const int32_t rect[4], const rsf_d3d11_reinsert_kernels* kernels);
 extern "C" void rsf_core_native_reinsert_release();
+extern "C" void rsf_core_native_exposure_release();
 
 extern "C" {
 static rsf_fullscreen_pass* create_blit(void* device) try
@@ -24,6 +25,22 @@ static uint32_t draw_rgba(rsf_fullscreen_pass* blit, void* context, void* target
     return rsf_fullscreen_pass_draw(blit, context, target, source, &draw) == RSF_FULLSCREEN_OK;
 }
 catch (...) { return 0; }
+
+static uint32_t draw_scalar(rsf_fullscreen_pass* blit, void* context, void* target,
+    void* source, uint32_t width, uint32_t height) try
+{
+    const rsf_fullscreen_draw draw{sizeof(draw), RSF_FULLSCREEN_COPY, 1, width, height};
+    return rsf_fullscreen_pass_draw(blit, context, target, source, &draw) == RSF_FULLSCREEN_OK;
+}
+catch (...) { return 0; }
+}
+
+extern "C" void* rsf_core_native_scalar_exposure(void* context, void* input,
+    decltype(&create_blit), decltype(&draw_scalar), decltype(&rsf_fullscreen_pass_destroy));
+
+void* rsf_native_scalar_exposure(void* context, void* input)
+{
+    return rsf_core_native_scalar_exposure(context, input, create_blit, draw_scalar, rsf_fullscreen_pass_destroy);
 }
 
 bool rsf_native_reinsert(ID3D11DeviceContext* context, ID3D11Texture2D* source,
@@ -42,6 +59,7 @@ struct ReleaseAtUnload {
     ~ReleaseAtUnload() {
         rsf_native_composition_release();
         rsf_core_native_reinsert_release();
+        rsf_core_native_exposure_release();
     }
 } release_at_unload;
 }

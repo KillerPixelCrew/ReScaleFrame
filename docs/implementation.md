@@ -158,6 +158,18 @@ that layout. It preserves 32-bit rollover and also follows consecutive 64-bit
 native frame IDs without confusing them with their truncated values.
 The native render configuration is published from one Rust snapshot.
 
+The native D3D11 exposure cache now lives in Rust and shares the fullscreen
+pass owner with output reinsertion. It borrows a valid 1×1 R32 scalar
+directly, converts supported float vectors with the existing copy shader,
+and returns no exposure for unsupported or failed inputs. A failed SRV
+creation preserves the previous cache entry. The format and sample checks
+have a synthetic fixture. The conversion itself remains device-unverified.
+
+Eight focused SR, FG, host and Anomaly input fixtures passed in Debug and
+Release. All 89 Rust tests and workspace Clippy passed. The reinsertion
+device fixture built in both configurations. The Release runtime and AC7
+carrier kept all 381 and 256 baseline export names and ordinals.
+
 Seven focused frame assembly, D3D11 host and Anomaly fixtures passed in
 Debug and Release. All 88 Rust tests and workspace Clippy passed. The Release
 runtime and linked AC7 carrier kept their 381 and 256 baseline export names
