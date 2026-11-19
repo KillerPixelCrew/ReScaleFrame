@@ -163,6 +163,14 @@ paths. All 78 Rust tests and Clippy passed. Debug runtime and carrier exports
 matched the verified baseline by name and ordinal. Direct-backbuffer device
 and live game verification remain pending.
 
+The native FG status reader and overlay now use Rust to merge current
+capabilities with the last eligible completed Present from the same provider
+generation. The existing status assertions run against the linked Rust core,
+and the FG session fixture still exercises the runtime DLL. Seven focused
+status, session, window and Anomaly fixtures passed in Debug and Release.
+The linked AC7 carrier built in both configurations. All 78 Rust tests and
+workspace Clippy passed. No device or game run was performed.
+
 ## Fallout 4 AE native render callbacks, 16 November 2026
 
 User priority is now fully native Fallout4.exe without F4SE/ENB first, with

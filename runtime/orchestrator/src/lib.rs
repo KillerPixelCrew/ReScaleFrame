@@ -14,6 +14,8 @@ mod fg_leases;
 #[cfg(windows)]
 mod fg_session;
 #[cfg(windows)]
+mod fg_status;
+#[cfg(windows)]
 mod frame_assembly;
 mod frame_sequencer;
 #[cfg(windows)]

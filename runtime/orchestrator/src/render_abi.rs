@@ -8,6 +8,7 @@ pub const RSF_API_D3D12: u32 = 2;
 pub const RSF_FG_ABI_VERSION: u32 = 2;
 pub const RSF_FG_BACKEND_AUTO: u32 = 7;
 pub const RSF_FG_BACKEND_ALL: u32 = 58;
+pub const RSF_FG_OFF: u32 = 0;
 pub const RSF_FG_FIXED: u32 = 1;
 pub const RSF_FG_AUTO: u32 = 2;
 pub const RSF_FG_DYNAMIC: u32 = 3;
@@ -15,11 +16,16 @@ pub const RSF_PACING_NONE: u32 = 0;
 pub const RSF_PACING_REFLEX: u32 = 1;
 pub const RSF_REFLEX_OFF: u32 = 0;
 pub const RSF_REFLEX_BOOST: u32 = 2;
+pub const RSF_FG_STAT_TOTAL_PRESENTED: u32 = 1;
+pub const RSF_FG_STAT_GENERATED_PRESENTED: u32 = 2;
+pub const RSF_FG_STAT_PRESENT_CALLBACKS: u32 = 8;
+pub const RSF_FG_STAT_ACTIVITY: u32 = 16;
 pub const RSF_RENDER_LINK_ABI_VERSION: u32 = 1;
 pub const RSF_SR_SESSION_ABI_VERSION: u32 = 1;
 pub const RSF_SR_FSR2: u32 = 2;
 pub const RSF_SR_XESS: u32 = 5;
 pub const RSF_DLSS_ABI_VERSION: u32 = 5;
+pub const RSF_NATIVE_FG_REASON_NONE: u32 = 0;
 pub const RSF_FRAME_ASSEMBLY_ABI_VERSION: u32 = 1;
 pub type rsf_latency_marker = u32;
 pub type rsf_vendor = u32;
@@ -1075,6 +1081,79 @@ const _: () = {
         [::core::mem::offset_of!(rsf_dlss_frame, color_encoded) - 480usize];
     ["Offset of field: rsf_dlss_frame::preset"]
         [::core::mem::offset_of!(rsf_dlss_frame, preset) - 484usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_native_fg_options {
+    pub struct_size: u32,
+    pub mode: u32,
+    pub generated_frames: u32,
+    pub reflex_mode: u32,
+    pub frame_limit_us: u32,
+    pub debug: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_native_fg_options"][::core::mem::size_of::<rsf_native_fg_options>() - 24usize];
+    ["Alignment of rsf_native_fg_options"]
+        [::core::mem::align_of::<rsf_native_fg_options>() - 4usize];
+    ["Offset of field: rsf_native_fg_options::struct_size"]
+        [::core::mem::offset_of!(rsf_native_fg_options, struct_size) - 0usize];
+    ["Offset of field: rsf_native_fg_options::mode"]
+        [::core::mem::offset_of!(rsf_native_fg_options, mode) - 4usize];
+    ["Offset of field: rsf_native_fg_options::generated_frames"]
+        [::core::mem::offset_of!(rsf_native_fg_options, generated_frames) - 8usize];
+    ["Offset of field: rsf_native_fg_options::reflex_mode"]
+        [::core::mem::offset_of!(rsf_native_fg_options, reflex_mode) - 12usize];
+    ["Offset of field: rsf_native_fg_options::frame_limit_us"]
+        [::core::mem::offset_of!(rsf_native_fg_options, frame_limit_us) - 16usize];
+    ["Offset of field: rsf_native_fg_options::debug"]
+        [::core::mem::offset_of!(rsf_native_fg_options, debug) - 20usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_native_fg_status {
+    pub struct_size: u32,
+    pub requested: rsf_native_fg_options,
+    pub vendor: rsf_fg_status,
+    pub available: u32,
+    pub reason: u32,
+    pub last_result: i32,
+    pub source_frame_id: u64,
+    pub tagged_frames: u64,
+    pub source_provenance: u32,
+    pub input_qpc: u64,
+    pub source_qpc: u64,
+    pub source_qpc_frequency: u64,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_native_fg_status"][::core::mem::size_of::<rsf_native_fg_status>() - 352usize];
+    ["Alignment of rsf_native_fg_status"][::core::mem::align_of::<rsf_native_fg_status>() - 8usize];
+    ["Offset of field: rsf_native_fg_status::struct_size"]
+        [::core::mem::offset_of!(rsf_native_fg_status, struct_size) - 0usize];
+    ["Offset of field: rsf_native_fg_status::requested"]
+        [::core::mem::offset_of!(rsf_native_fg_status, requested) - 4usize];
+    ["Offset of field: rsf_native_fg_status::vendor"]
+        [::core::mem::offset_of!(rsf_native_fg_status, vendor) - 32usize];
+    ["Offset of field: rsf_native_fg_status::available"]
+        [::core::mem::offset_of!(rsf_native_fg_status, available) - 288usize];
+    ["Offset of field: rsf_native_fg_status::reason"]
+        [::core::mem::offset_of!(rsf_native_fg_status, reason) - 292usize];
+    ["Offset of field: rsf_native_fg_status::last_result"]
+        [::core::mem::offset_of!(rsf_native_fg_status, last_result) - 296usize];
+    ["Offset of field: rsf_native_fg_status::source_frame_id"]
+        [::core::mem::offset_of!(rsf_native_fg_status, source_frame_id) - 304usize];
+    ["Offset of field: rsf_native_fg_status::tagged_frames"]
+        [::core::mem::offset_of!(rsf_native_fg_status, tagged_frames) - 312usize];
+    ["Offset of field: rsf_native_fg_status::source_provenance"]
+        [::core::mem::offset_of!(rsf_native_fg_status, source_provenance) - 320usize];
+    ["Offset of field: rsf_native_fg_status::input_qpc"]
+        [::core::mem::offset_of!(rsf_native_fg_status, input_qpc) - 328usize];
+    ["Offset of field: rsf_native_fg_status::source_qpc"]
+        [::core::mem::offset_of!(rsf_native_fg_status, source_qpc) - 336usize];
+    ["Offset of field: rsf_native_fg_status::source_qpc_frequency"]
+        [::core::mem::offset_of!(rsf_native_fg_status, source_qpc_frequency) - 344usize];
 };
 #[repr(C)]
 #[derive(Copy, Clone)]
