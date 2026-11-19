@@ -7,6 +7,7 @@ fn main() {
         "src/sampler_bias_com.cpp",
         "src/settings_store_format.cpp",
         "src/d3d11_output_platform.cpp",
+        "src/native_regions_com.cpp",
     ];
     for source in sources {
         println!("cargo:rerun-if-changed={source}");
