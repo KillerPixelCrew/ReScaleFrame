@@ -16,6 +16,12 @@ target_include_directories(rsf_shader_patch_device_test PRIVATE ../runtime/shade
 target_link_libraries(rsf_shader_patch_device_test PRIVATE rsf_shader_patch rsf_build_options d3d11 d3dcompiler dxgi)
 add_test(NAME shader_patch_synthetic_device COMMAND rsf_shader_patch_device_test)
 include("${CMAKE_CURRENT_SOURCE_DIR}/d3d11_present_api.cmake")
+add_executable(rsf_native_window_test native_window.cpp)
+target_include_directories(rsf_native_window_test PRIVATE
+    "$<TARGET_PROPERTY:rsf_orchestrator,INTERFACE_INCLUDE_DIRECTORIES>")
+target_link_libraries(rsf_native_window_test PRIVATE "$<TARGET_LINKER_FILE:rsf_orchestrator>" rsf_build_options)
+add_dependencies(rsf_native_window_test rsf_orchestrator)
+add_test(NAME native_window_contract COMMAND rsf_native_window_test)
 include("${CMAKE_CURRENT_SOURCE_DIR}/d3d11_fg_api.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/overlay_dll_api.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/anomaly_support.cmake")

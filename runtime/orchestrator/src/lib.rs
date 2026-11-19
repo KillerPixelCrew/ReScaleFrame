@@ -19,6 +19,8 @@ mod frame_sequencer;
 #[cfg(windows)]
 mod native_scene;
 #[cfg(windows)]
+mod native_window;
+#[cfg(windows)]
 mod plugin_session;
 #[cfg(windows)]
 mod render_abi;

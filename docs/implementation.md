@@ -151,6 +151,18 @@ baseline of 381 runtime and 256 carrier names and ordinals. The older Release
 carrier artifact predates four receipt-routing exports already present at
 the migration baseline. WARP execution and gameplay testing remain pending.
 
+The native window scope stack and Present pre/post pairing now run in Rust.
+The scene and window modules use the same generated ABI types. The CPU-only
+window fixture covers nesting, overflow, mismatched end, COM aliases, thread
+isolation, Present pairing, and scene revalidation. It also checks that a
+copied scope reports the prefix size the runtime actually stored.
+
+The integrated window, FG lease, D3D11 FG and Present ABI, and both Anomaly
+input fixtures passed in Debug and Release. The eight fixtures use CPU-only
+paths. All 78 Rust tests and Clippy passed. Debug runtime and carrier exports
+matched the verified baseline by name and ordinal. Direct-backbuffer device
+and live game verification remain pending.
+
 ## Fallout 4 AE native render callbacks, 16 November 2026
 
 User priority is now fully native Fallout4.exe without F4SE/ENB first, with
