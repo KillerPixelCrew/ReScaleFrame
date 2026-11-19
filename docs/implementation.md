@@ -151,6 +151,18 @@ baseline of 381 runtime and 256 carrier names and ordinals. The older Release
 carrier artifact predates four receipt-routing exports already present at
 the migration baseline. WARP execution and gameplay testing remain pending.
 
+Native D3D11 SR and explicit FG capture now share Rust camera assembly and
+history continuity checks. Each path keeps its own successful-frame history.
+The history compares depth-domain layout and accepts projection changes within
+that layout. It preserves 32-bit rollover and also follows consecutive 64-bit
+native frame IDs without confusing them with their truncated values.
+The native render configuration is published from one Rust snapshot.
+
+Seven focused frame assembly, D3D11 host and Anomaly fixtures passed in
+Debug and Release. All 88 Rust tests and workspace Clippy passed. The Release
+runtime and linked AC7 carrier kept their 381 and 256 baseline export names
+and ordinals. Device and in-game validation remain pending.
+
 The native window scope stack and Present pre/post pairing now run in Rust.
 The scene and window modules use the same generated ABI types. The CPU-only
 window fixture covers nesting, overflow, mismatched end, COM aliases, thread
