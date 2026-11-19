@@ -60,6 +60,7 @@ struct World {
     wait_fails: bool,
     warm_up_wait_fails: bool,
     queue_wait_fails: bool,
+    warm_signal_fails: bool,
     device_ready: bool,
 }
 
@@ -76,6 +77,7 @@ thread_local! {
         wait_fails: false,
         warm_up_wait_fails: false,
         queue_wait_fails: false,
+        warm_signal_fails: false,
         device_ready: true,
     });
 }
@@ -305,7 +307,11 @@ unsafe extern "C" fn queue_wait(_: Handle, _: Handle, value: u64) -> i32 {
     event(format!("d3d12 wait {value}"));
     i32::from(!world(|world| world.queue_wait_fails))
 }
-unsafe extern "C" fn queue_signal(_: Handle, _: Handle, value: u64) -> i32 {
+unsafe extern "C" fn queue_signal(_: Handle, fence: Handle, value: u64) -> i32 {
+    if name(fence) == "warm fence" {
+        event(format!("d3d12 signal warm fence {value}"));
+        return i32::from(!world(|world| world.warm_signal_fails));
+    }
     event(format!("d3d12 signal {value}"));
     1
 }
@@ -689,7 +695,7 @@ fn timed_out_teardown_retains_the_bridge_unless_the_device_is_removed() {
 
 #[test]
 fn warm_up_retains_its_resources_until_gpu_completion() {
-    let scene = Scene::new();
+    let mut scene = Scene::new();
     assert_eq!(
         unsafe { rsf_sr_bridge_warm_up(scene.bridge, 64, 64, 128, 128, 1) },
         OK
@@ -720,6 +726,7 @@ fn warm_up_retains_its_resources_until_gpu_completion() {
         assert_eq!(refs(handle), 0);
     }
 
+    // An unobserved completion leaves the dispatch pending with every object it references.
     world(|world| world.warm_up_wait_fails = true);
     let before = world(|world| world.created.len());
     assert_eq!(
@@ -732,6 +739,33 @@ fn warm_up_retains_its_resources_until_gpu_completion() {
         8,
         "three inputs, output, allocator, list, fence, event"
     );
+    assert!(!take_events().contains(&"close event".to_owned()));
+
+    // Nothing that uses or changes the SDK context runs, nothing new is submitted, and teardown
+    // keeps the bridge; each call only checks the warm-up fence.
+    let bridge = scene.bridge;
+    assert_eq!(
+        unsafe { rsf_sr_bridge_warm_up(bridge, 64, 64, 128, 128, 0) },
+        NOT_READY
+    );
+    assert_eq!(unsafe { rsf_sr_bridge_select(bridge, 3, 0, 0) }, NOT_READY);
+    assert_eq!(
+        unsafe { rsf_sr_bridge_select(bridge, SR_NONE, 0, 0) },
+        NOT_READY
+    );
+    assert_eq!(
+        unsafe { rsf_sr_bridge_set_auto_exposure(bridge, 0) },
+        NOT_READY
+    );
+    assert_eq!(scene.evaluate(), NOT_READY);
+    unsafe { rsf_sr_bridge_destroy(bridge) };
+    for event in take_events() {
+        assert!(
+            event == "wait warm fence 1" || event == "wait fence12 0",
+            "{event} while a warm-up is pending"
+        );
+    }
+    assert_eq!(world(|world| world.created.len()), before + pending.len());
     for &handle in &pending {
         assert_eq!(
             refs(handle),
@@ -740,10 +774,88 @@ fn warm_up_retains_its_resources_until_gpu_completion() {
             name(handle)
         );
     }
-    assert!(!take_events().contains(&"close event".to_owned()));
-    // The retained objects are leaked by design; release them so the teardown check holds.
-    for handle in pending {
-        unsafe { (*handle.cast::<Fake>()).refs.set(0) };
+    assert_eq!(
+        refs(find("session")),
+        1,
+        "the SDK session outlives the warm-up"
+    );
+
+    // Observed completion releases the dispatch and the bridge is usable again.
+    world(|world| world.warm_up_wait_fails = false);
+    assert_eq!(unsafe { rsf_sr_bridge_select(bridge, 3, 0, 0) }, OK);
+    assert_eq!(
+        take_events(),
+        [
+            "wait warm fence 1",
+            "close event",
+            "wait fence12 0",
+            "select 3"
+        ]
+    );
+    for &handle in &pending {
+        assert_eq!(refs(handle), 0, "{} not released", name(handle));
     }
+    assert_eq!(
+        unsafe { rsf_sr_bridge_warm_up(bridge, 64, 64, 128, 128, 0) },
+        OK
+    );
+    assert!(take_events().contains(&"submit".to_owned()));
+    scene.destroy();
+}
+
+#[test]
+fn warm_up_signal_failure_is_accepted_only_after_an_ordered_retry() {
+    let mut scene = Scene::new();
+    world(|world| world.warm_signal_fails = true);
+    assert_eq!(
+        unsafe { rsf_sr_bridge_warm_up(scene.bridge, 64, 64, 128, 128, 0) },
+        FEATURE_FAILED
+    );
+    let events = take_events();
+    assert!(events.contains(&"d3d12 signal warm fence 1".to_owned()));
+    assert!(
+        !events
+            .iter()
+            .any(|event| event.starts_with("wait warm fence"))
+    );
+    // The fake fence would report completion, but without a signal queued behind the list its
+    // value proves nothing, so the bridge retries the signal and does not wait.
+    assert_eq!(scene.evaluate(), NOT_READY);
+    assert_eq!(take_events(), ["d3d12 signal warm fence 1"]);
+
+    world(|world| world.warm_signal_fails = false);
+    assert_eq!(scene.evaluate(), OK);
+    let events = take_events();
+    assert_eq!(
+        events[..3],
+        [
+            "d3d12 signal warm fence 1",
+            "wait warm fence 1",
+            "close event"
+        ]
+    );
+    assert!(events.contains(&"evaluate".to_owned()));
+    scene.destroy();
+}
+
+#[test]
+fn device_removal_releases_a_pending_warm_up() {
+    let scene = Scene::new();
+    world(|world| world.warm_up_wait_fails = true);
+    assert_eq!(
+        unsafe { rsf_sr_bridge_warm_up(scene.bridge, 64, 64, 128, 128, 0) },
+        FEATURE_FAILED
+    );
+    take_events();
+    world(|world| world.device_ready = false);
+    assert_eq!(
+        unsafe { rsf_sr_bridge_select(scene.bridge, SR_NONE, 0, 0) },
+        OK
+    );
+    assert_eq!(take_events()[..2], ["wait warm fence 1", "close event"]);
+    assert!(world(|world| world
+        .logs
+        .iter()
+        .any(|log| log.contains("removed device"))));
     scene.destroy();
 }

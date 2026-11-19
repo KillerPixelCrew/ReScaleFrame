@@ -174,9 +174,23 @@ struct Validated {
     desc: TextureDesc,
 }
 
-// Fields drop in declaration order: the SDK session first, then shared resources, the fence and
-// event, and the devices last.
+// A warm-up dispatch whose GPU completion was not observed. The submitted list references these
+// objects and the session's SDK context, so all of them stay alive until it is reaped.
+struct PendingWarmUp {
+    _resources: [Option<ComRef>; 4],
+    _target: ComRef,
+    _commands: Commands,
+    fence: ComRef,
+    event: Owned,
+    // Whether a signal of 1 on `fence` is queued behind the list. Without one, the fence value
+    // proves nothing about the list.
+    signaled: bool,
+}
+
+// Fields drop in declaration order: any pending warm-up and the SDK session first, then shared
+// resources, the fence and event, and the devices last.
 pub(crate) struct Bridge {
+    warm_up: Option<PendingWarmUp>,
     session: Owned,
     surfaces: Option<Surfaces>,
     output: Option<ComRef>,
@@ -279,6 +293,7 @@ impl Bridge {
         }
         let session = Owned::new(session, p.session_destroy).ok_or(INIT_FAILED)?;
         Ok(Self {
+            warm_up: None,
             session,
             surfaces: None,
             output: None,
@@ -426,8 +441,42 @@ impl Bridge {
         OK
     }
 
+    // Releases a pending warm-up once its own fence, signalled behind its list on the bridge
+    // queue, reaches 1, or once the device is removed. A failed first signal is retried here; the
+    // queue runs nothing else while a warm-up is pending, so a retried signal is ordered after the
+    // list. Returns whether no warm-up is pending.
+    fn reap_warm_up(&mut self, timeout_ms: u32) -> bool {
+        let p = self.platform;
+        let Some(pending) = &mut self.warm_up else {
+            return true;
+        };
+        let fence = com(&pending.fence);
+        if !pending.signaled {
+            pending.signaled = unsafe { (p.queue_signal)(com(&self.queue), fence, 1) } != 0;
+        }
+        let completed = pending.signaled
+            && unsafe { (p.wait_fence)(fence, 1, pending.event.get(), timeout_ms) } != 0;
+        if !completed && unsafe { (p.device_ready)(com(&self.device12)) } != 0 {
+            return false;
+        }
+        self.warm_up = None;
+        let state = if completed {
+            "completed"
+        } else {
+            "abandoned with the removed device"
+        };
+        self.say(&format!(
+            "SR warm-up GPU work {state}; releasing its resources"
+        ));
+        true
+    }
+
     fn select(&mut self, backend: u32, quality: u32, version_id: u64) -> i32 {
         if self.faulted && backend != SR_NONE {
+            return NOT_READY;
+        }
+        // Any selection, including none, may close the SDK context the warm-up still uses.
+        if !self.reap_warm_up(FENCE_TIMEOUT_MS) {
             return NOT_READY;
         }
         if !self.wait() {
@@ -444,6 +493,10 @@ impl Bridge {
         if self.auto_exposure == enabled {
             return OK;
         }
+        // Changing exposure recreates the SDK context.
+        if !self.reap_warm_up(FENCE_TIMEOUT_MS) {
+            return NOT_READY;
+        }
         if !self.wait() {
             return self.gpu_failure();
         }
@@ -457,6 +510,10 @@ impl Bridge {
 
     fn evaluate(&mut self, context_pointer: Handle, frame: *const rsf_sr_frame) -> i32 {
         if self.faulted {
+            return NOT_READY;
+        }
+        // A frame call only polls, so a hung warm-up does not stall the render thread.
+        if !self.reap_warm_up(0) {
             return NOT_READY;
         }
         let p = self.platform;
@@ -658,6 +715,10 @@ impl Bridge {
         if self.faulted {
             return NOT_READY;
         }
+        // One pending warm-up at most.
+        if !self.reap_warm_up(FENCE_TIMEOUT_MS) {
+            return NOT_READY;
+        }
         let p = self.platform;
         let device = com(&self.device12);
         let inputs = [
@@ -739,13 +800,23 @@ impl Bridge {
         let started = Instant::now();
         let mut result = unsafe { (p.session_warm_up)(self.session.get(), list, &frame) };
         let queue = com(&self.queue);
-        let mut retired = true;
+        let mut pending = None;
         if unsafe { (p.submit)(queue, list) } != 0 {
-            let completed = unsafe { (p.queue_signal)(queue, com(&fence), 1) } != 0
+            let signaled = unsafe { (p.queue_signal)(queue, com(&fence), 1) } != 0;
+            let completed = signaled
                 && unsafe { (p.wait_fence)(com(&fence), 1, event.get(), WARM_UP_TIMEOUT_MS) } != 0;
-            retired = completed || unsafe { (p.device_ready)(device) } == 0;
             if !completed && result == OK {
                 result = FEATURE_FAILED;
+            }
+            if !completed && unsafe { (p.device_ready)(device) } != 0 {
+                pending = Some(PendingWarmUp {
+                    _resources: resources,
+                    _target: target,
+                    _commands: commands,
+                    fence,
+                    event,
+                    signaled,
+                });
             }
         } else if result == OK {
             result = FEATURE_FAILED;
@@ -753,19 +824,19 @@ impl Bridge {
         let elapsed = started.elapsed().as_millis();
         let state = if result == OK { "done" } else { "failed" };
         self.say(&format!("SR warm-up dispatch {state} in {elapsed} ms"));
-        if !retired {
-            // The submitted list may still reference these resources, and the fence may still
-            // signal the event. Keep them alive until process exit, as teardown does.
-            self.say(
-                "SR warm-up GPU completion failed; retaining its resources until process exit",
-            );
-            std::mem::forget((resources, target, commands, fence, event));
+        if pending.is_some() {
+            // The submitted list may still reference these resources and the SDK context, and
+            // the fence may still signal the event. Operations that would change or use the
+            // context are refused until reap_warm_up observes completion or device removal.
+            self.say("SR warm-up GPU completion not observed; keeping its resources pending");
+            self.warm_up = pending;
         }
         result
     }
 
     fn retire(&mut self) -> bool {
-        self.wait() || unsafe { (self.platform.device_ready)(com(&self.device12)) } == 0
+        (self.wait() && self.reap_warm_up(FENCE_TIMEOUT_MS))
+            || unsafe { (self.platform.device_ready)(com(&self.device12)) } == 0
     }
 }
 
