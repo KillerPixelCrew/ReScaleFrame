@@ -179,6 +179,18 @@ exports, including overlay table ordinals 144 and 145. The two carrier export
 lists also matched. The overlay device fixture built in Release. Device,
 visible-window and gameplay checks remain pending.
 
+Rust now validates the split Vulkan SR C ABI and tracks the producer and
+continuation submission lease. The older ABI 2 frame prefix still zero-fills
+the appended image, and a refused request retains the original command
+buffer. A provider failure preserves its returned continuation. The existing
+native provider owns Vulkan and D3D12 objects and GPU completion.
+
+The enabled-stub, disabled-provider and DLL split contracts passed in Debug
+and Release with three related Vulkan and Anomaly fixtures. The C11 split
+header, runtime and linked carriers built. All 101 Rust tests and Clippy
+passed. The Release runtime and both carriers retained their verified
+381, 256 and 273 export names and ordinals. Device execution remains pending.
+
 The native D3D11 exposure cache now lives in Rust and shares the fullscreen
 pass owner with output reinsertion. It borrows a valid 1×1 R32 scalar
 directly, converts supported float vectors with the existing copy shader,

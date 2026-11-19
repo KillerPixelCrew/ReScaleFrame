@@ -302,7 +302,7 @@ int32_t rsf_fsr4vk_evaluate(rsf_fsr4vk* self, void* current_commands, const rsf_
         *continuation_commands = nullptr;
         self->terminal = true; return result ? result : VK_ERROR_INITIALIZATION_FAILED;
     }
-    if (self->lease.tracked) self->lease.continuation = *continuation_commands;
+    self->lease.resume(*continuation_commands);
     self->last_done = done; self->last_frame = record.frame_id; self->session = record.session_id; self->initialized = true;
     rsf_fsr4_bridge_frame dispatch{}; dispatch.struct_size = sizeof(dispatch); dispatch.abi_version = 1;
     dispatch.color = self->images[0].dx12; dispatch.depth = self->images[1].dx12;

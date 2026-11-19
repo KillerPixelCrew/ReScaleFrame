@@ -77,6 +77,10 @@ mod sr_history;
 mod sr_legacy;
 #[cfg(windows)]
 mod sr_session;
+#[cfg(windows)]
+mod vulkan_sr_abi;
+#[cfg(windows)]
+mod vulkan_sr_split;
 
 // C callers can recover from allocation failure. A successful handle is
 // released with Box::from_raw after its owner has retired outstanding users.

@@ -8,7 +8,6 @@
 #include <cstdio>
 #include <cstddef>
 #include <stdexcept>
-#include "../runtime/orchestrator/src/native_sr_split_lease.h"
 
 namespace {
 int failures = 0;
@@ -61,20 +60,6 @@ int32_t rsf_fsr4vk_submitted(rsf_fsr4vk*,void*) { return provider_result; }
 #endif
 
 int main() {
-    rsf::sr::SplitLease lease;
-    void* producer = reinterpret_cast<void*>(10);
-    void* resumed = reinterpret_cast<void*>(11);
-    lease.begin(producer);
-    check(!lease.pending() && !lease.submitted(producer), "legacy submission contract unchanged");
-    lease.tracked = true; lease.begin(producer); lease.continuation = resumed;
-    check(lease.pending(), "recorded work retains owner before submission");
-    check(!lease.submitted(resumed) && lease.pending(), "out of order continuation refused");
-    check(!lease.submitted(reinterpret_cast<void*>(12)), "unrelated submission cannot release lease");
-    check(lease.submitted(producer) && lease.pending(), "producer alone cannot release continuation");
-    check(!lease.submitted(producer), "duplicate notification refused");
-    check(lease.submitted(resumed) && !lease.pending(), "both successful submissions release CPU admission");
-    lease.begin(producer);
-    check(lease.pending(), "failed split retains partially recorded producer");
     auto* fake = reinterpret_cast<rsf_fsr4vk*>(1);
     void* commands = reinterpret_cast<void*>(1);
     rsf_srvk_setup setup{};

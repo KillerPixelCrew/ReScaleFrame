@@ -1,119 +1,98 @@
 // SPDX-License-Identifier: MIT
 #include <rescaleframe/native_sr_split_vulkan.h>
-#include <cstddef>
-#include <cstring>
 #if defined(RSF_VULKAN_FSR4_ENABLED)
 #include "native_sr_fsr4_vulkan.h"
 #endif
 
-#if defined(RSF_VULKAN_FSR4_ENABLED)
 namespace {
-int32_t public_result(int32_t result) {
-    if (result == RSF_FSR4_BRIDGE_INVALID_ARGUMENT) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (result == RSF_FSR4_BRIDGE_ABI_MISMATCH) return RSF_BACKEND_ERROR_ABI_MISMATCH;
+struct Provider {
+    int32_t (*create)(const rsf_srvk_setup*, const rsf_fsr4vk_handoff*, rsf_fsr4vk**);
+    int32_t (*plan)(const rsf_fsr4vk*, uint32_t*, uint32_t*);
+    int32_t (*evaluate)(rsf_fsr4vk*, void*, const rsf_srvk_frame*, void**);
+    int32_t (*destroy)(rsf_fsr4vk*);
+    void (*retire)(rsf_fsr4vk*, void*);
+    int32_t (*submitted)(rsf_fsr4vk*, void*);
+    int32_t (*info)(const rsf_fsr4vk*, rsf_srvk_fsr4_provider_info*);
+};
+
+#if defined(RSF_VULKAN_FSR4_ENABLED)
+template<auto Call, class... Args>
+int32_t invoke(Args... args) noexcept try
+{
+    return Call(args...);
+}
+catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
+
+int32_t read_info(const rsf_fsr4vk* owner, rsf_srvk_fsr4_provider_info* out) noexcept
+{
+    rsf_fsr4_bridge_info native{sizeof(native), RSF_FSR4_BRIDGE_ABI_VERSION};
+    const auto result = invoke<rsf_fsr4vk_info>(owner, &native);
+    if (result == RSF_BACKEND_OK) {
+        out->adapter_luid = native.adapter_luid;
+        out->provider_version = native.provider_version;
+        out->vendor_id = native.vendor_id;
+        out->int8_compatibility = native.int8_compatibility;
+    }
     return result;
 }
+
+void retire_commands(rsf_fsr4vk* owner, void* commands) noexcept try
+{
+    rsf_fsr4vk_retire_commands(owner, commands);
 }
-#endif
+catch (...) {}
 
-extern "C" int32_t rsf_srvk_fsr4_create(const rsf_srvk_setup* setup,
-    const rsf_fsr4vk_handoff* handoff, rsf_fsr4vk** owner) try {
-    if (!owner) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    *owner = nullptr;
-    if (!setup || setup->struct_size < sizeof(*setup) || !handoff || handoff->struct_size < sizeof(*handoff))
-        return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (setup->abi_version != RSF_SRVK_ABI_VERSION || (handoff->abi_version != RSF_SRVK_SPLIT_ABI_VERSION && handoff->abi_version != RSF_SRVK_SPLIT_TRACKED_ABI_VERSION))
-        return RSF_BACKEND_ERROR_ABI_MISMATCH;
-    if (setup->backend != RSF_SR_FSR4) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
-    if (setup->quality > 4 || !setup->instance || !setup->physical_device || !setup->device ||
-        !setup->instance_proc || !setup->device_proc || !setup->output_width || !setup->output_height ||
-        !setup->runtime_directory_utf8 || !*setup->runtime_directory_utf8 || handoff->timeline_enabled != 1 ||
-        handoff->queue_family >= 0xfffffffdu || !handoff->split_record ||
-        setup->depth_inverted > 1 || setup->depth_infinite > 1 || setup->motion_jittered > 1)
-        return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-#if defined(RSF_VULKAN_FSR4_ENABLED)
-    return public_result(rsf_fsr4vk_create(setup, handoff, owner));
+constexpr Provider native{
+    invoke<rsf_fsr4vk_create>, invoke<rsf_fsr4vk_plan>, invoke<rsf_fsr4vk_evaluate>,
+    invoke<rsf_fsr4vk_destroy>, retire_commands, invoke<rsf_fsr4vk_submitted>, read_info,
+};
+constexpr const Provider* provider = &native;
 #else
-    return RSF_BACKEND_ERROR_NOT_COMPILED;
-#endif
-} catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
-
-extern "C" int32_t rsf_srvk_fsr4_plan(const rsf_fsr4vk* owner, uint32_t* width, uint32_t* height) try {
-    if (width) *width = 0;
-    if (height) *height = 0;
-    if (!owner || !width || !height) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-#if defined(RSF_VULKAN_FSR4_ENABLED)
-    return public_result(rsf_fsr4vk_plan(owner, width, height));
-#else
-    return RSF_BACKEND_ERROR_NOT_COMPILED;
-#endif
-} catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
-
-extern "C" int32_t rsf_srvk_fsr4_evaluate(rsf_fsr4vk* owner, void* commands,
-    const rsf_srvk_frame* frame, void** continuation) try {
-    if (!continuation) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    *continuation = commands;
-    if (!owner || !commands || !frame || frame->struct_size < offsetof(rsf_srvk_frame, bias_current_color) ||
-        (frame->struct_size != offsetof(rsf_srvk_frame, bias_current_color) && frame->struct_size < sizeof(*frame)))
-        return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (frame->abi_version != RSF_SRVK_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
-    rsf_srvk_frame normalized{};
-    std::memcpy(&normalized, frame, frame->struct_size >= sizeof(normalized) ? sizeof(normalized) : offsetof(rsf_srvk_frame, bias_current_color));
-    normalized.struct_size = sizeof(normalized);
-    frame = &normalized;
-    if (!frame->record || frame->record->struct_size < sizeof(*frame->record))
-        return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (frame->record->abi_version != RSF_GAME_FRAME_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
-    if (frame->record->camera.struct_size < sizeof(frame->record->camera)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (frame->record->camera.abi_version != RSF_GAME_CAMERA_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
-    if (frame->reactive.image || frame->composition.image) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
-#if defined(RSF_VULKAN_FSR4_ENABLED)
-    return public_result(rsf_fsr4vk_evaluate(owner, commands, frame, continuation));
-#else
-    return RSF_BACKEND_ERROR_NOT_COMPILED;
-#endif
-} catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
-
-extern "C" int32_t rsf_srvk_fsr4_destroy(rsf_fsr4vk* owner) try {
-    if (!owner) return RSF_BACKEND_OK;
-#if defined(RSF_VULKAN_FSR4_ENABLED)
-    return public_result(rsf_fsr4vk_destroy(owner));
-#else
-    return RSF_BACKEND_ERROR_NOT_COMPILED;
-#endif
-} catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
-
-extern "C" void rsf_srvk_fsr4_retire_commands(rsf_fsr4vk* self,void* commands) {
-#if defined(RSF_VULKAN_FSR4_ENABLED)
-    rsf_fsr4vk_retire_commands(self,commands);
-#else
-    (void)self; (void)commands;
+constexpr const Provider* provider = nullptr;
 #endif
 }
 
-extern "C" int32_t rsf_srvk_fsr4_submitted(rsf_fsr4vk* owner, void* commands) try {
-    if (!owner || !commands) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-#if defined(RSF_VULKAN_FSR4_ENABLED)
-    return public_result(rsf_fsr4vk_submitted(owner, commands));
-#else
-    return RSF_BACKEND_ERROR_NOT_COMPILED;
-#endif
-} catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
+extern "C" {
+int32_t rsf_core_srvk_fsr4_create(const Provider*, const rsf_srvk_setup*, const rsf_fsr4vk_handoff*, rsf_fsr4vk**);
+int32_t rsf_core_srvk_fsr4_plan(const Provider*, const rsf_fsr4vk*, uint32_t*, uint32_t*);
+int32_t rsf_core_srvk_fsr4_evaluate(const Provider*, rsf_fsr4vk*, void*, const rsf_srvk_frame*, void**);
+int32_t rsf_core_srvk_fsr4_destroy(const Provider*, rsf_fsr4vk*);
+void rsf_core_srvk_fsr4_retire_commands(const Provider*, rsf_fsr4vk*, void*);
+int32_t rsf_core_srvk_fsr4_submitted(const Provider*, rsf_fsr4vk*, void*);
+int32_t rsf_core_srvk_fsr4_info(const Provider*, const rsf_fsr4vk*, rsf_srvk_fsr4_provider_info*);
 
-extern "C" int32_t rsf_srvk_fsr4_info(const rsf_fsr4vk* owner, rsf_srvk_fsr4_provider_info* info) try {
-    if (!info || info->struct_size < sizeof(*info)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    info->adapter_luid = info->provider_version = 0;
-    info->vendor_id = info->int8_compatibility = 0;
-    if (info->abi_version != RSF_SRVK_FSR4_INFO_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
-    if (!owner) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-#if defined(RSF_VULKAN_FSR4_ENABLED)
-    rsf_fsr4_bridge_info native{sizeof(native), RSF_FSR4_BRIDGE_ABI_VERSION};
-    const int32_t result = public_result(rsf_fsr4vk_info(owner, &native));
-    if (result) return result;
-    info->adapter_luid = native.adapter_luid; info->provider_version = native.provider_version;
-    info->vendor_id = native.vendor_id; info->int8_compatibility = native.int8_compatibility;
-    return RSF_BACKEND_OK;
-#else
-    return RSF_BACKEND_ERROR_NOT_COMPILED;
-#endif
-} catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
+int32_t rsf_srvk_fsr4_create(const rsf_srvk_setup* setup, const rsf_fsr4vk_handoff* handoff, rsf_fsr4vk** owner)
+{
+    return rsf_core_srvk_fsr4_create(provider, setup, handoff, owner);
+}
+
+int32_t rsf_srvk_fsr4_plan(const rsf_fsr4vk* owner, uint32_t* width, uint32_t* height)
+{
+    return rsf_core_srvk_fsr4_plan(provider, owner, width, height);
+}
+
+int32_t rsf_srvk_fsr4_evaluate(rsf_fsr4vk* owner, void* commands, const rsf_srvk_frame* frame, void** continuation)
+{
+    return rsf_core_srvk_fsr4_evaluate(provider, owner, commands, frame, continuation);
+}
+
+int32_t rsf_srvk_fsr4_destroy(rsf_fsr4vk* owner)
+{
+    return rsf_core_srvk_fsr4_destroy(provider, owner);
+}
+
+void rsf_srvk_fsr4_retire_commands(rsf_fsr4vk* owner, void* commands)
+{
+    rsf_core_srvk_fsr4_retire_commands(provider, owner, commands);
+}
+
+int32_t rsf_srvk_fsr4_submitted(rsf_fsr4vk* owner, void* commands)
+{
+    return rsf_core_srvk_fsr4_submitted(provider, owner, commands);
+}
+
+int32_t rsf_srvk_fsr4_info(const rsf_fsr4vk* owner, rsf_srvk_fsr4_provider_info* info)
+{
+    return rsf_core_srvk_fsr4_info(provider, owner, info);
+}
+}
