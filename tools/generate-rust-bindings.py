@@ -66,3 +66,16 @@ generate("runtime/orchestrator/src/native_sr_abi.rs", "runtime/orchestrator/incl
           "-Isdk/game/include"],
          ["--blocklist-type", "rsf_pipeline_camera_frame",
           "--raw-line", "use crate::render_abi::rsf_pipeline_camera_frame;"])
+generate("runtime/orchestrator/src/gl_pipeline_abi.rs", "runtime/orchestrator/include/rescaleframe/gl_pipeline.h",
+         "rsf_(gl_pipeline_(setup|options|surfaces|status)|gl_texture_info|sr12_setup|fg12_setup|dlss_setup)",
+         "RSF_(GL_(RGBA16F|R32F|RG16F|RGBA8)|UI_MODE_BACKBUFFER_HUDLESS)",
+         ["-include", "rescaleframe/native_sr_d3d12.h", "-include", "rescaleframe/native_fg_d3d12.h",
+          "-Iruntime/orchestrator/include", "-Iruntime/backends/dlss/include", "-Iruntime/graphics/include",
+          "-Iruntime/contract/include", "-Iruntime/presentation/include", "-Isdk/game/include"],
+         ["--blocklist-type", "rsf_(native_fg_options|native_fg_status|sharpening_options|backend_log_fn|fg_options|fg_status|generation_provider|generation_setup|fg_mode|reflex_mode|pacing_owner|fg_retirement|quality|ui_mode|vendor|gfx_api|latency_mode|latency_marker|lifetime|backend_result|sr_backend)",
+          "--raw-line", "use crate::render_abi::rsf_backend_log_fn;",
+          "--raw-line", "use crate::render_abi::rsf_native_fg_options;",
+          "--raw-line", "use crate::render_abi::rsf_native_fg_status;",
+          "--raw-line", "use crate::render_abi::rsf_sharpening_options;",
+          "--with-derive-default",
+          "--with-derive-custom-struct", "rsf_(gl_pipeline_(setup|options|status)|sr12_setup|fg12_setup)=Copy,Clone"])

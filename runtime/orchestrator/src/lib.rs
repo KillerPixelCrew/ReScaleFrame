@@ -39,6 +39,10 @@ mod fg_status;
 mod frame_assembly;
 mod frame_sequencer;
 #[cfg(windows)]
+mod gl_pipeline;
+#[cfg(windows)]
+mod gl_pipeline_abi;
+#[cfg(windows)]
 mod latency_antilag;
 #[cfg(windows)]
 mod latency_lease;

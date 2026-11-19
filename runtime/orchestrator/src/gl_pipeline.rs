@@ -1,0 +1,1156 @@
+// SPDX-License-Identifier: MIT
+// OpenGL pipeline: GL scene surfaces shared with a D3D12 device, a native SR session and a DXGI
+// child window whose presentation the FG owner intercepts. This owner decides session and frame
+// identity, surface and SR session lifetime, configuration admission, SR backend switching and
+// fallback, the FG provider request and teardown order. gl_pipeline_platform.cpp supplies one call
+// per platform operation; graphics work stays on the caller's GL context and graphics thread.
+use crate::com_ref::ComRef;
+use crate::cpu_abi::rsf_native_cpu_frame;
+use crate::gl_pipeline_abi::*;
+use crate::render_abi::{
+    RSF_DLSS_ABI_VERSION, RSF_FG_BACKEND_AUTO, RSF_FG_OFF, RSF_REFLEX_OFF, rsf_backend_log_fn,
+    rsf_native_fg_options, rsf_native_fg_status, rsf_sharpening_options,
+};
+use rsf_game_sys::{
+    RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_INPUT_EVENT, RSF_GAME_CPU_INPUT_KEYED,
+    RSF_GAME_CPU_INPUT_UNFRAMED, RSF_GAME_CPU_WINDOW_MESSAGE, RSF_GAME_RENDER_WINDOW,
+    rsf_game_cpu_event, rsf_game_render_pass as Pass,
+};
+use std::ffi::{CStr, CString, c_char, c_int, c_void};
+use std::ptr::{self, NonNull};
+use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::{Mutex, MutexGuard, TryLockError};
+
+const OK: i32 = 0;
+const INVALID: i32 = -1;
+const INIT_FAILED: i32 = -6;
+const NOT_READY: i32 = -8;
+const FEATURE_FAILED: i32 = -9;
+
+// Public SR backend IDs (sr_session.h), pinned by static_asserts in gl_pipeline_platform.cpp.
+const SR_NONE: u32 = 0;
+const SR_DLSS: u32 = 1;
+const SR_FSR2: u32 = 2;
+const SR_FSR3: u32 = 3;
+const SR_FSR4: u32 = 4;
+const SR_XESS: u32 = 5;
+const SR_SPATIAL: u32 = 6;
+const SR_AUTO: u32 = 7;
+// Automatic selection keeps the first backend whose session the SDKs actually create.
+const AUTO_ORDER: [u32; 5] = [SR_DLSS, SR_FSR4, SR_XESS, SR_FSR3, SR_FSR2];
+const MAX_QUALITY: u32 = 5;
+const DLSS_ENGINE_CUSTOM: u32 = 0;
+const SR12_ABI_VERSION: u32 = 1;
+
+// D3D12 states and the DXGI back-buffer format, pinned in gl_pipeline_platform.cpp.
+const STATE_COMMON: u32 = 0;
+const STATE_PRESENT: u32 = 0;
+const STATE_RENDER_TARGET: u32 = 0x4;
+const STATE_SHADER_INPUT: u32 = 0x40;
+const STATE_COPY_DEST: u32 = 0x400;
+const STATE_COPY_SOURCE: u32 = 0x800;
+const CHAIN_FORMAT: u32 = 28; // R8G8B8A8_UNORM
+const CHAIN_BUFFERS: u32 = 3;
+
+// Published GL surfaces, in rsf_gl_pipeline_surfaces order. The first three have the render
+// extent, the rest the output extent. Scene, depth, motion and output form the SR transaction.
+const SCENE: usize = 0;
+const DEPTH: usize = 1;
+const MOTION: usize = 2;
+const OUTPUT: usize = 3;
+const HUDLESS: usize = 4;
+const COMPOSED: usize = 5;
+const SURFACES: usize = 6;
+const SR_SURFACES: u32 = 4;
+
+type Handle = *mut c_void;
+type Log = rsf_backend_log_fn;
+
+// Field order matches `Platform` in gl_pipeline_platform.cpp.
+#[repr(C)]
+pub(crate) struct Platform {
+    gl_open: unsafe extern "C" fn(Log, Handle, *mut Handle) -> i32,
+    gl_graphics: unsafe extern "C" fn(Handle, *mut Handle, *mut Handle) -> i32,
+    gl_texture_create: unsafe extern "C" fn(Handle, u32, u32, u32, *mut Handle) -> i32,
+    gl_texture_get: unsafe extern "C" fn(Handle, *mut rsf_gl_texture_info) -> i32,
+    gl_texture_destroy: unsafe extern "C" fn(Handle),
+    gl_begin: unsafe extern "C" fn(Handle, u32, *const Handle, *mut Handle, *mut u32) -> i32,
+    gl_submit: unsafe extern "C" fn(Handle, u32, *const Handle) -> i32,
+    gl_drain: unsafe extern "C" fn(Handle) -> i32,
+    gl_close: unsafe extern "C" fn(Handle) -> i32,
+    window_valid: unsafe extern "C" fn(Handle) -> c_int,
+    window_create: unsafe extern "C" fn(Handle) -> Handle,
+    window_destroy: unsafe extern "C" fn(Handle) -> c_int,
+    window_child_of: unsafe extern "C" fn(Handle, Handle) -> c_int,
+    window_resize: unsafe extern "C" fn(Handle, u32, u32) -> c_int,
+    window_show: unsafe extern "C" fn(Handle),
+    chain_create: unsafe extern "C" fn(Handle, Handle, u32, u32, *mut Handle) -> i32,
+    chain_associate: unsafe extern "C" fn(Handle, Handle),
+    chain_resize: unsafe extern "C" fn(Handle, u32, u32, u32, u32) -> i32,
+    chain_back_buffer: unsafe extern "C" fn(Handle) -> Handle,
+    chain_present: unsafe extern "C" fn(Handle, u32) -> i32,
+    adapter_identity: unsafe extern "C" fn(Handle, *mut u32, *mut u32) -> c_int,
+    transition: unsafe extern "C" fn(Handle, Handle, u32, u32),
+    copy_resource: unsafe extern "C" fn(Handle, Handle, Handle),
+    sr_create: unsafe extern "C" fn(*const rsf_sr12_setup, *mut Handle) -> i32,
+    sr_plan: unsafe extern "C" fn(Handle, *mut u32, *mut u32) -> i32,
+    sr_evaluate: unsafe extern "C" fn(Handle, Handle, *const Pass, u32) -> i32,
+    sr_set_sharpening: unsafe extern "C" fn(Handle, *const rsf_sharpening_options) -> i32,
+    sr_destroy: unsafe extern "C" fn(Handle),
+    fg_install: unsafe extern "C" fn(*const rsf_fg12_setup) -> i32,
+    fg_options: unsafe extern "C" fn(*const rsf_native_fg_options),
+    fg_cpu: unsafe extern "C" fn(*const rsf_game_cpu_event),
+    fg_hudless: unsafe extern "C" fn(Handle, *const Pass),
+    fg_submitted: unsafe extern "C" fn(u64, u64),
+    fg_window: unsafe extern "C" fn(*const Pass),
+    fg_status: unsafe extern "C" fn(*mut rsf_native_fg_status) -> c_int,
+    present_host: unsafe extern "C" fn() -> Handle,
+    present_is_owner: unsafe extern "C" fn(Handle) -> c_int,
+    present_backend: unsafe extern "C" fn() -> u32,
+    present_request: unsafe extern "C" fn(u32) -> i32,
+    present_switch_result: unsafe extern "C" fn() -> i32,
+    present_abort: unsafe extern "C" fn(u64) -> i32,
+    pcl_message: unsafe extern "C" fn() -> u32,
+    cpu_read: unsafe extern "C" fn(u64, u64, *mut rsf_native_cpu_frame) -> c_int,
+    latency_completed: unsafe extern "C" fn(u64) -> c_int,
+    latency_end_session: unsafe extern "C" fn(u64),
+    dump_cancel: unsafe extern "C" fn(u64),
+    // Header-inline contract predicates, single-sourced in the published headers.
+    dlss_preset_valid: unsafe extern "C" fn(u32) -> c_int,
+    sharpening_valid: unsafe extern "C" fn(*const rsf_sharpening_options) -> c_int,
+    sharpening_defaults: unsafe extern "C" fn(*mut rsf_sharpening_options),
+    fg_default_backend: unsafe extern "C" fn(u32, u32) -> u32,
+    depth_domains_requested: unsafe extern "C" fn(*const Pass) -> u32,
+}
+
+impl Platform {
+    fn sharpening_defaults(&self) -> rsf_sharpening_options {
+        let mut options = unsafe { std::mem::zeroed() };
+        unsafe { (self.sharpening_defaults)(&mut options) };
+        options
+    }
+
+    fn depth_domains_requested(&self, pass: &Pass) -> bool {
+        unsafe { (self.depth_domains_requested)(pass) != 0 }
+    }
+
+    fn valid_options(&self, options: &rsf_gl_pipeline_options, width: u32, height: u32) -> bool {
+        width != 0
+            && height != 0
+            && options.sr_backend <= SR_AUTO
+            && options.sr_backend != SR_SPATIAL
+            && options.quality <= MAX_QUALITY
+            && unsafe { (self.dlss_preset_valid)(options.dlss_preset) } != 0
+            && options.generation.struct_size as usize >= size_of::<rsf_native_fg_options>()
+            && (options.sharpening.struct_size == 0
+                || unsafe { (self.sharpening_valid)(&options.sharpening) } != 0)
+    }
+}
+
+fn failed(result: i32) -> bool {
+    result < 0
+}
+
+// A platform object released by its own destroy call.
+struct Owned {
+    handle: NonNull<c_void>,
+    release: unsafe extern "C" fn(Handle),
+}
+
+impl Owned {
+    fn new(handle: Handle, release: unsafe extern "C" fn(Handle)) -> Option<Self> {
+        NonNull::new(handle).map(|handle| Self { handle, release })
+    }
+
+    fn get(&self) -> Handle {
+        self.handle.as_ptr()
+    }
+}
+
+impl Drop for Owned {
+    fn drop(&mut self) {
+        unsafe { (self.release)(self.handle.as_ptr()) };
+    }
+}
+
+// Strings, the caller's log and the presentation window that SDK and presentation hooks reach
+// through their `user` pointer. Once FG is installed its hooks keep this for the process lifetime.
+struct Shared {
+    log: Log,
+    user: Handle,
+    window: AtomicPtr<c_void>,
+    root: CString,
+    fidelityfx: CString,
+    xess: CString,
+    streamline: CString,
+    interposer: CString,
+    version: CString,
+    project: CString,
+}
+
+impl Shared {
+    fn log(&self, message: &str) {
+        if let (Some(log), Ok(text)) = (self.log, CString::new(message)) {
+            unsafe { log(self.user, text.as_ptr()) };
+        }
+    }
+}
+
+unsafe extern "C" fn hook_log(user: Handle, message: *const c_char) {
+    let shared = unsafe { &*user.cast::<Shared>() };
+    if let Some(log) = shared.log {
+        unsafe { log(shared.user, message) };
+    }
+}
+
+unsafe extern "C" fn hook_accept(user: Handle, window: Handle) -> c_int {
+    let shared = unsafe { &*user.cast::<Shared>() };
+    c_int::from(shared.window.load(Ordering::Acquire) == window)
+}
+
+// What the published SR session and surfaces were built for. A request that differs rebuilds.
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct Shape {
+    width: u32,
+    height: u32,
+    backend: u32,
+    quality: u32,
+    dlss_preset: u32,
+}
+
+// One SR session and its six GL surfaces. Fields drop in declaration order: the SR session releases
+// before the surfaces it was evaluated with.
+struct Surfaces {
+    sr: Owned,
+    textures: Vec<Owned>,
+    handles: [Handle; SURFACES],
+    info: [rsf_gl_texture_info; SURFACES],
+    render_width: u32,
+    render_height: u32,
+    shape: Shape,
+}
+
+impl Surfaces {
+    fn resource(&self, slot: usize) -> Handle {
+        self.info[slot].resource
+    }
+}
+
+struct State {
+    sharing: Handle,
+    device: Handle,
+    queue: Handle,
+    window: Handle,
+    chain: Option<ComRef>,
+    shown: bool,
+    closed: bool,
+    width: u32,
+    height: u32,
+    generation: u32,
+    status: rsf_gl_pipeline_status,
+    active: Option<Surfaces>,
+}
+
+pub(crate) struct Pipeline {
+    platform: &'static Platform,
+    shared: &'static Shared,
+    session: u64,
+    own_window: bool,
+    // Graphics-owner state. CPU, input, abort and PCL calls never take it.
+    state: Mutex<State>,
+}
+
+fn new_status() -> rsf_gl_pipeline_status {
+    rsf_gl_pipeline_status {
+        struct_size: size_of::<rsf_gl_pipeline_status>() as u32,
+        ..Default::default()
+    }
+}
+
+// Frees the hook state on an open failure that happens before any hook could retain it.
+struct SharedGuard(*mut Shared);
+
+impl SharedGuard {
+    fn get(&self) -> &Shared {
+        unsafe { &*self.0 }
+    }
+
+    fn user(&self) -> Handle {
+        self.0.cast()
+    }
+
+    fn keep(mut self) -> &'static Shared {
+        let shared = std::mem::replace(&mut self.0, ptr::null_mut());
+        unsafe { &*shared }
+    }
+}
+
+impl Drop for SharedGuard {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            drop(unsafe { Box::from_raw(self.0) });
+        }
+    }
+}
+
+fn empty_info() -> rsf_gl_texture_info {
+    rsf_gl_texture_info {
+        struct_size: size_of::<rsf_gl_texture_info>() as u32,
+        ..Default::default()
+    }
+}
+
+fn surface_format(slot: usize) -> u32 {
+    match slot {
+        DEPTH => RSF_GL_R32F,
+        MOTION => RSF_GL_RG16F,
+        HUDLESS | COMPOSED => RSF_GL_RGBA8,
+        _ => RSF_GL_RGBA16F,
+    }
+}
+
+fn qpc() -> (u64, u64) {
+    use windows_sys::Win32::System::Performance::{
+        QueryPerformanceCounter, QueryPerformanceFrequency,
+    };
+    let (mut now, mut frequency) = (0i64, 0i64);
+    unsafe {
+        QueryPerformanceCounter(&mut now);
+        QueryPerformanceFrequency(&mut frequency);
+    }
+    (now as u64, frequency as u64)
+}
+
+fn session_seed() -> u64 {
+    unsafe { windows_sys::Win32::System::SystemInformation::GetTickCount64() }.wrapping_add(1)
+}
+
+// Reads a caller structure only after its leading struct_size shows the whole structure.
+unsafe fn read_sized<T: Copy>(value: *const T) -> Option<T> {
+    if value.is_null() || (unsafe { value.cast::<u32>().read() } as usize) < size_of::<T>() {
+        return None;
+    }
+    Some(unsafe { value.read() })
+}
+
+fn concat(base: &CStr, suffix: &str) -> CString {
+    let mut bytes = base.to_bytes().to_vec();
+    bytes.extend_from_slice(suffix.as_bytes());
+    CString::new(bytes).expect("paths built from C strings contain no NUL")
+}
+
+fn lock(pipeline: &Pipeline) -> Option<MutexGuard<'_, State>> {
+    // Graphics-owner calls are serialized by contract. A concurrent or reentrant call is refused
+    // instead of waiting on, or racing, the graphics owner.
+    match pipeline.state.try_lock() {
+        Ok(state) => Some(state),
+        Err(TryLockError::Poisoned(state)) => Some(state.into_inner()),
+        Err(TryLockError::WouldBlock) => None,
+    }
+}
+
+impl Pipeline {
+    fn log(&self, message: &str) {
+        self.shared.log(message);
+    }
+
+    fn create_sr(
+        &self,
+        state: &State,
+        backend: u32,
+        options: &rsf_gl_pipeline_options,
+        width: u32,
+        height: u32,
+    ) -> (i32, Option<Owned>) {
+        let p = self.platform;
+        let shared = self.shared;
+        let user = ptr::from_ref(shared).cast_mut().cast::<c_void>();
+        let setup = rsf_sr12_setup {
+            struct_size: size_of::<rsf_sr12_setup>() as u32,
+            abi_version: SR12_ABI_VERSION,
+            device: state.device,
+            backend,
+            quality: options.quality,
+            output_width: width,
+            output_height: height,
+            inverted_depth: 0,
+            fsr2_directory_utf8: shared.fidelityfx.as_ptr(),
+            fsr3_directory_utf8: shared.fidelityfx.as_ptr(),
+            fsr4_directory_utf8: shared.fidelityfx.as_ptr(),
+            xess_directory_utf8: shared.xess.as_ptr(),
+            dlss: rsf_dlss_setup {
+                struct_size: size_of::<rsf_dlss_setup>() as u32,
+                abi_version: RSF_DLSS_ABI_VERSION,
+                interposer_path_utf8: shared.interposer.as_ptr(),
+                plugin_directory_utf8: shared.streamline.as_ptr(),
+                log_directory_utf8: shared.root.as_ptr(),
+                application_id: 0,
+                engine: DLSS_ENGINE_CUSTOM,
+                engine_version_utf8: shared.version.as_ptr(),
+                project_id_utf8: shared.project.as_ptr(),
+                require_signature: 1,
+                log: Some(hook_log),
+                log_user: user,
+                preset: options.dlss_preset,
+            },
+            log: Some(hook_log),
+            user,
+            render_width: 0,
+            render_height: 0,
+            streamline_host: unsafe { (p.present_host)() },
+            // OpenGL scenes are SDR.
+            input_sdr: 1,
+            engine_input_extents: 0,
+            external_exposure: 0,
+            dlss_registration: ptr::null_mut(),
+        };
+        let mut sr = ptr::null_mut();
+        let result = unsafe { (p.sr_create)(&setup, &mut sr) };
+        let sr = Owned::new(sr, p.sr_destroy);
+        if result == OK {
+            (result, sr)
+        } else {
+            (result, None)
+        }
+    }
+
+    // Selects and creates the SR session. A failed vendor session falls back to SR off, which still
+    // normalizes inputs and supplies the output surface.
+    fn select_sr(
+        &self,
+        state: &mut State,
+        options: &rsf_gl_pipeline_options,
+        width: u32,
+        height: u32,
+    ) -> Result<(u32, Owned), i32> {
+        let mut selected = options.sr_backend;
+        let (mut result, mut sr) = (INVALID, None);
+        if selected == SR_AUTO {
+            for candidate in AUTO_ORDER {
+                (result, sr) = self.create_sr(state, candidate, options, width, height);
+                if result == OK {
+                    selected = candidate;
+                    break;
+                }
+            }
+        } else {
+            (result, sr) = self.create_sr(state, selected, options, width, height);
+        }
+        state.status.sr_result = result;
+        if sr.is_none() {
+            selected = SR_NONE;
+            (result, sr) = self.create_sr(state, SR_NONE, options, width, height);
+        }
+        match sr {
+            Some(sr) if result == OK => Ok((selected, sr)),
+            _ => Err(if result == OK { INIT_FAILED } else { result }),
+        }
+    }
+
+    // Builds the complete replacement while the published GL names stay alive, so a rejected
+    // resize or switch leaves the caller with its previous surfaces and SR session.
+    fn prepare(
+        &self,
+        state: &mut State,
+        options: &rsf_gl_pipeline_options,
+        shape: Shape,
+    ) -> Result<(u32, Surfaces), i32> {
+        let p = self.platform;
+        let (selected, sr) = self.select_sr(state, options, shape.width, shape.height)?;
+        let (mut render_width, mut render_height) = (0, 0);
+        unsafe { (p.sr_plan)(sr.get(), &mut render_width, &mut render_height) };
+        let mut surfaces = Surfaces {
+            sr,
+            textures: Vec::with_capacity(SURFACES),
+            handles: [ptr::null_mut(); SURFACES],
+            info: [empty_info(); SURFACES],
+            render_width,
+            render_height,
+            shape,
+        };
+        for slot in 0..SURFACES {
+            let (width, height) = if slot <= MOTION {
+                (render_width, render_height)
+            } else {
+                (shape.width, shape.height)
+            };
+            let mut texture = ptr::null_mut();
+            let result = unsafe {
+                (p.gl_texture_create)(
+                    state.sharing,
+                    width,
+                    height,
+                    surface_format(slot),
+                    &mut texture,
+                )
+            };
+            let owned = Owned::new(texture, p.gl_texture_destroy);
+            let Some(owned) = owned.filter(|_| result == OK) else {
+                return Err(if result == OK { INIT_FAILED } else { result });
+            };
+            surfaces.handles[slot] = owned.get();
+            unsafe { (p.gl_texture_get)(owned.get(), &mut surfaces.info[slot]) };
+            surfaces.textures.push(owned);
+        }
+        if (state.width, state.height) != (shape.width, shape.height) {
+            if unsafe { (p.window_resize)(state.window, shape.width, shape.height) } == 0 {
+                self.log("OpenGL: event-thread window resize refused.");
+                return Err(FEATURE_FAILED);
+            }
+            let chain = state.chain.as_ref().map_or(ptr::null_mut(), ComRef::as_ptr);
+            let resized = unsafe {
+                (p.chain_resize)(
+                    chain,
+                    CHAIN_BUFFERS,
+                    shape.width,
+                    shape.height,
+                    CHAIN_FORMAT,
+                )
+            };
+            if failed(resized) {
+                self.log(&format!(
+                    "OpenGL: DXGI resize {}x{} failed (0x{:08x})",
+                    shape.width, shape.height, resized as u32
+                ));
+                return Err(FEATURE_FAILED);
+            }
+        }
+        Ok((selected, surfaces))
+    }
+
+    fn request_fg(&self, state: &mut State, requested: u32) {
+        let p = self.platform;
+        let mut backend = requested;
+        if backend == RSF_FG_BACKEND_AUTO {
+            let (mut vendor, mut software) = (0, 0);
+            backend =
+                if unsafe { (p.adapter_identity)(state.device, &mut vendor, &mut software) } != 0 {
+                    unsafe { (p.fg_default_backend)(vendor, software) }
+                } else {
+                    0
+                };
+        }
+        if backend != unsafe { (p.present_backend)() } {
+            state.status.fg_switch_result = unsafe { (p.present_request)(backend) };
+        }
+    }
+
+    fn configure(
+        &self,
+        state: &mut State,
+        options: &rsf_gl_pipeline_options,
+        width: u32,
+        height: u32,
+    ) -> i32 {
+        let p = self.platform;
+        let shape = Shape {
+            width,
+            height,
+            backend: options.sr_backend,
+            quality: options.quality,
+            dlss_preset: options.dlss_preset,
+        };
+        state.status.requested_sr = options.sr_backend;
+        state.status.requested_fg = options.fg_backend;
+        unsafe { (p.fg_options)(&options.generation) };
+        self.request_fg(state, options.fg_backend);
+        let sharpening = if options.sharpening.struct_size != 0 {
+            options.sharpening
+        } else {
+            p.sharpening_defaults()
+        };
+        if let Some(active) = state.active.as_ref().filter(|active| active.shape == shape) {
+            return unsafe { (p.sr_set_sharpening)(active.sr.get(), &sharpening) };
+        }
+        let drained = unsafe { (p.gl_drain)(state.sharing) };
+        if drained != OK {
+            return drained;
+        }
+        let (selected, surfaces) = match self.prepare(state, options, shape) {
+            Ok(prepared) => prepared,
+            Err(result) => return result,
+        };
+        // The previous session and surfaces are released here, after the drain above.
+        state.active = Some(surfaces);
+        state.width = width;
+        state.height = height;
+        state.status.effective_sr = selected;
+        state.status.evaluated = 0;
+        if let Some(active) = &state.active {
+            unsafe { (p.sr_set_sharpening)(active.sr.get(), &sharpening) };
+        }
+        state.generation = state.generation.wrapping_add(1);
+        OK
+    }
+
+    // Opens a GL-to-D3D12 transaction over `handles`. The transaction is always submitted, including
+    // when recording refuses, so the GL wait is signalled.
+    fn transaction(
+        &self,
+        state: &State,
+        handles: &[Handle],
+        record: impl FnOnce(Handle, u32) -> i32,
+    ) -> Result<i32, i32> {
+        let p = self.platform;
+        let (mut commands, mut slot) = (ptr::null_mut(), 0);
+        let count = handles.len() as u32;
+        let begun = unsafe {
+            (p.gl_begin)(
+                state.sharing,
+                count,
+                handles.as_ptr(),
+                &mut commands,
+                &mut slot,
+            )
+        };
+        if begun != OK {
+            return Err(begun);
+        }
+        let result = record(commands, slot);
+        let submitted = unsafe { (p.gl_submit)(state.sharing, count, handles.as_ptr()) };
+        if submitted != OK {
+            return Err(submitted);
+        }
+        Ok(result)
+    }
+
+    fn evaluate(&self, state: &mut State, input: &Pass) -> i32 {
+        let p = self.platform;
+        let Some(active) = state.active.as_ref() else {
+            return INVALID;
+        };
+        if p.depth_domains_requested(input) {
+            return INVALID;
+        }
+        let mut pass = *input;
+        pass.session_id = self.session;
+        pass.resource_generation = state.generation;
+        pass.color_input = active.resource(SCENE);
+        pass.depth = active.resource(DEPTH);
+        pass.motion = active.resource(MOTION);
+        pass.color_output = active.resource(OUTPUT);
+        let target = |slot: usize| {
+            if slot == OUTPUT {
+                STATE_COPY_DEST
+            } else {
+                STATE_SHADER_INPUT
+            }
+        };
+        let handles = &active.handles[..SR_SURFACES as usize];
+        let result = self.transaction(state, handles, |list, slot| {
+            for i in SCENE..=OUTPUT {
+                unsafe { (p.transition)(list, active.resource(i), STATE_COMMON, target(i)) };
+            }
+            let result = unsafe { (p.sr_evaluate)(active.sr.get(), list, &pass, slot) };
+            for i in SCENE..=OUTPUT {
+                unsafe { (p.transition)(list, active.resource(i), target(i), STATE_COMMON) };
+            }
+            result
+        });
+        let result = match result {
+            Ok(result) => result,
+            Err(result) => return result,
+        };
+        unsafe { (p.fg_submitted)(self.session, pass.source_frame_id) };
+        state.status.sr_result = result;
+        if result == OK && state.status.effective_sr != SR_NONE {
+            state.status.evaluated += 1;
+        }
+        result
+    }
+
+    fn hudless(&self, state: &State, input: &Pass) -> i32 {
+        let p = self.platform;
+        let Some(active) = state.active.as_ref() else {
+            return INVALID;
+        };
+        if p.depth_domains_requested(input) {
+            return INVALID;
+        }
+        let mut pass = *input;
+        pass.session_id = self.session;
+        pass.color_input = active.resource(HUDLESS);
+        let result = self.transaction(state, &active.handles[HUDLESS..=HUDLESS], |list, _| {
+            unsafe { (p.transition)(list, pass.color_input, STATE_COMMON, STATE_RENDER_TARGET) };
+            unsafe { (p.fg_hudless)(list, &pass) };
+            unsafe { (p.transition)(list, pass.color_input, STATE_RENDER_TARGET, STATE_COMMON) };
+            OK
+        });
+        match result {
+            Ok(_) => {
+                unsafe { (p.fg_submitted)(self.session, pass.source_frame_id) };
+                OK
+            }
+            Err(result) => result,
+        }
+    }
+
+    fn present(&self, state: &mut State, frame: u64, vsync: u32) -> i32 {
+        let p = self.platform;
+        let (Some(active), Some(chain)) = (state.active.as_ref(), state.chain.as_ref()) else {
+            return INVALID;
+        };
+        let Some(buffer) = (unsafe { ComRef::from_owned((p.chain_back_buffer)(chain.as_ptr())) })
+        else {
+            return FEATURE_FAILED;
+        };
+        let composed = active.resource(COMPOSED);
+        let copied = self.transaction(state, &active.handles[COMPOSED..=COMPOSED], |list, _| {
+            unsafe {
+                (p.transition)(list, composed, STATE_COMMON, STATE_COPY_SOURCE);
+                (p.transition)(list, buffer.as_ptr(), STATE_PRESENT, STATE_COPY_DEST);
+                (p.copy_resource)(list, buffer.as_ptr(), composed);
+                (p.transition)(list, buffer.as_ptr(), STATE_COPY_DEST, STATE_PRESENT);
+                (p.transition)(list, composed, STATE_COPY_SOURCE, STATE_COMMON);
+            }
+            OK
+        });
+        if let Err(result) = copied {
+            return result;
+        }
+        let mut window: Pass = unsafe { std::mem::zeroed() };
+        window.struct_size = size_of::<Pass>() as u32;
+        window.role = RSF_GAME_RENDER_WINDOW;
+        window.session_id = self.session;
+        window.source_frame_id = frame;
+        window.view_key = 1;
+        window.swapchain = chain.as_ptr();
+        unsafe { (p.fg_window)(&window) };
+        let presented = unsafe { (p.chain_present)(chain.as_ptr(), u32::from(vsync != 0)) };
+        drop(buffer);
+        if failed(presented) {
+            return FEATURE_FAILED;
+        }
+        if !state.shown {
+            unsafe { (p.window_show)(state.window) };
+            state.shown = true;
+        }
+        OK
+    }
+
+    fn close(&self, state: &mut State) -> i32 {
+        let p = self.platform;
+        if state.closed {
+            return OK;
+        }
+        let drained = unsafe { (p.gl_drain)(state.sharing) };
+        if drained != OK {
+            return drained;
+        }
+        // DLSS SR borrows the chain's Streamline host, so release SR before that host.
+        state.active = None;
+        state.chain = None;
+        let closed = unsafe { (p.gl_close)(state.sharing) };
+        if closed != OK {
+            return closed;
+        }
+        state.sharing = ptr::null_mut();
+        state.device = ptr::null_mut();
+        state.queue = ptr::null_mut();
+        unsafe {
+            (p.latency_end_session)(self.session);
+            (p.dump_cancel)(self.session);
+        }
+        if self.own_window {
+            unsafe { (p.window_destroy)(state.window) };
+        }
+        state.window = ptr::null_mut();
+        self.shared.window.store(ptr::null_mut(), Ordering::Release);
+        state.closed = true;
+        OK
+    }
+
+    fn cpu_event(
+        &self,
+        stage: u32,
+        frame: u64,
+        kinds: u32,
+        message: u32,
+        flags: u32,
+    ) -> rsf_game_cpu_event {
+        let (now, frequency) = qpc();
+        rsf_game_cpu_event {
+            struct_size: size_of::<rsf_game_cpu_event>() as u32,
+            stage,
+            session_id: self.session,
+            source_frame_id: frame,
+            timestamp_qpc: now,
+            qpc_frequency: frequency,
+            render_expected: 0,
+            input_kind: kinds,
+            message_id: message,
+            event_version: RSF_GAME_CPU_EVENT_VERSION,
+            flags,
+        }
+    }
+
+    fn input(&self, frame: u64, kinds: u32, message: u32) -> i32 {
+        let p = self.platform;
+        if kinds & !7 != 0 || (kinds == 0 && message == 0) {
+            return INVALID;
+        }
+        let mut flags = RSF_GAME_CPU_INPUT_KEYED;
+        if frame != 0 {
+            // Input belongs to an open CPU frame. A closed SDK token is never reused.
+            let mut facts: rsf_native_cpu_frame = unsafe { std::mem::zeroed() };
+            facts.struct_size = size_of::<rsf_native_cpu_frame>() as u32;
+            let known = unsafe { (p.cpu_read)(self.session, frame, &mut facts) } != 0;
+            if !known || facts.ended != 0 || unsafe { (p.latency_completed)(frame) } != 0 {
+                return NOT_READY;
+            }
+        } else {
+            flags |= if message != 0 {
+                RSF_GAME_CPU_WINDOW_MESSAGE
+            } else {
+                RSF_GAME_CPU_INPUT_UNFRAMED
+            };
+        }
+        let event = self.cpu_event(RSF_GAME_CPU_INPUT_EVENT, frame, kinds, message, flags);
+        unsafe { (p.fg_cpu)(&event) };
+        OK
+    }
+}
+
+fn open(setup: &rsf_gl_pipeline_setup, platform: &'static Platform) -> Result<Pipeline, i32> {
+    let p = platform;
+    if unsafe { (p.window_valid)(setup.hwnd) } == 0
+        || setup.runtime_directory_utf8.is_null()
+        || setup.engine_version_utf8.is_null()
+        || setup.project_id_utf8.is_null()
+    {
+        return Err(INVALID);
+    }
+    let root = unsafe { CStr::from_ptr(setup.runtime_directory_utf8) };
+    let streamline = concat(root, "/streamline");
+    let guard = SharedGuard(Box::into_raw(Box::new(Shared {
+        log: setup.log,
+        user: setup.user,
+        window: AtomicPtr::new(ptr::null_mut()),
+        root: root.to_owned(),
+        fidelityfx: concat(root, "/fidelityfx"),
+        xess: concat(root, "/xess"),
+        interposer: concat(&streamline, "/sl.interposer.dll"),
+        streamline,
+        version: unsafe { CStr::from_ptr(setup.engine_version_utf8) }.to_owned(),
+        project: unsafe { CStr::from_ptr(setup.project_id_utf8) }.to_owned(),
+    })));
+    let (shared, user) = (guard.get(), guard.user());
+    let mut sharing = ptr::null_mut();
+    let result = unsafe { (p.gl_open)(Some(hook_log), user, &mut sharing) };
+    if result != OK {
+        return Err(result);
+    }
+    let (mut device, mut queue) = (ptr::null_mut(), ptr::null_mut());
+    unsafe { (p.gl_graphics)(sharing, &mut device, &mut queue) };
+    // Once WGL has presented even a loading screen, DXGI creation on that HWND returns
+    // E_ACCESSDENIED. A child gives the native chain its own compositor surface while GLFW keeps
+    // the original context, events and window lifecycle.
+    let own_window = setup.presentation_hwnd.is_null();
+    let mut window = if own_window {
+        unsafe { (p.window_create)(setup.hwnd) }
+    } else {
+        setup.presentation_hwnd
+    };
+    if !window.is_null() && unsafe { (p.window_child_of)(window, setup.hwnd) } == 0 {
+        shared.log("OpenGL: presentation child must belong to the GLFW event thread.");
+        if own_window {
+            unsafe { (p.window_destroy)(window) };
+        }
+        window = ptr::null_mut();
+    }
+    if window.is_null() {
+        unsafe { (p.gl_close)(sharing) };
+        return Err(INIT_FAILED);
+    }
+    shared.window.store(window, Ordering::Release);
+    let fg = rsf_fg12_setup {
+        struct_size: size_of::<rsf_fg12_setup>() as u32,
+        backend: 0,
+        max_generated_frames: 15,
+        runtime_directory_utf8: shared.fidelityfx.as_ptr(),
+        options: rsf_native_fg_options {
+            struct_size: size_of::<rsf_native_fg_options>() as u32,
+            mode: RSF_FG_OFF,
+            generated_frames: 1,
+            reflex_mode: RSF_REFLEX_OFF,
+            frame_limit_us: 0,
+            debug: 0,
+        },
+        depth_inverted: 0,
+        depth_infinite: 0,
+        units_to_meters: 1.0,
+        log: Some(hook_log),
+        user,
+        accept_window: Some(hook_accept),
+        runtime_switching: 1,
+        ui_mode: RSF_UI_MODE_BACKBUFFER_HUDLESS,
+        fsr3_directory_utf8: shared.fidelityfx.as_ptr(),
+        fsr4_directory_utf8: shared.fidelityfx.as_ptr(),
+        xess_directory_utf8: shared.xess.as_ptr(),
+        streamline_directory_utf8: shared.streamline.as_ptr(),
+        engine_type: DLSS_ENGINE_CUSTOM,
+        engine_version_utf8: shared.version.as_ptr(),
+        project_id_utf8: shared.project.as_ptr(),
+    };
+    let result = unsafe { (p.fg_install)(&fg) };
+    if result != OK {
+        unsafe {
+            if own_window {
+                (p.window_destroy)(window);
+            }
+            (p.gl_close)(sharing);
+        }
+        return Err(result);
+    }
+    // Installed presentation hooks retain `user` and its strings for the process lifetime.
+    let shared = guard.keep();
+    let mut chain = ptr::null_mut();
+    let created =
+        unsafe { (p.chain_create)(queue, window, CHAIN_BUFFERS, CHAIN_FORMAT, &mut chain) };
+    let chain = unsafe { ComRef::from_owned(chain) };
+    let owner = chain
+        .as_ref()
+        .map_or(0, |chain| unsafe { (p.present_is_owner)(chain.as_ptr()) });
+    if failed(created) || owner == 0 {
+        shared.log(&format!(
+            "OpenGL: DXGI creation result=0x{:08x}, intercepted={}",
+            created as u32, owner
+        ));
+        shared.log("OpenGL: native presentation refused; GL presentation must be retained.");
+        // The hooks may already observe this chain and window; keep the GL owner, chain and child
+        // alive as the native implementation did.
+        std::mem::forget(chain);
+        return Err(INIT_FAILED);
+    }
+    let chain = chain.expect("created chain");
+    unsafe { (p.chain_associate)(chain.as_ptr(), window) };
+    Ok(Pipeline {
+        platform,
+        shared,
+        session: session_seed(),
+        own_window,
+        state: Mutex::new(State {
+            sharing,
+            device,
+            queue,
+            window,
+            chain: Some(chain),
+            shown: false,
+            closed: false,
+            width: 0,
+            height: 0,
+            generation: 0,
+            status: new_status(),
+            active: None,
+        }),
+    })
+}
+
+/// # Safety
+/// `setup` is null or readable for its `struct_size`; `out` is null or writable. `platform` is the
+/// static table from gl_pipeline_platform.cpp.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_gl_pipeline_open(
+    setup: *const rsf_gl_pipeline_setup,
+    out: *mut *mut Pipeline,
+    platform: *const Platform,
+) -> i32 {
+    if out.is_null() {
+        return INVALID;
+    }
+    unsafe { out.write(ptr::null_mut()) };
+    let (Some(setup), Some(platform)) =
+        (unsafe { read_sized(setup) }, unsafe { platform.as_ref() })
+    else {
+        return INVALID;
+    };
+    match open(&setup, platform) {
+        Ok(pipeline) => {
+            let raw = crate::allocate_handle(pipeline);
+            if raw.is_null() {
+                return INIT_FAILED;
+            }
+            unsafe { out.write(raw) };
+            OK
+        }
+        Err(result) => result,
+    }
+}
+
+fn with_state(pipeline: *mut Pipeline, run: impl FnOnce(&Pipeline, &mut State) -> i32) -> i32 {
+    let Some(pipeline) = (unsafe { pipeline.as_ref() }) else {
+        return INVALID;
+    };
+    let Some(mut state) = lock(pipeline) else {
+        return NOT_READY;
+    };
+    if state.closed {
+        return INVALID;
+    }
+    run(pipeline, &mut state)
+}
+
+/// Graphics owner, at a drained boundary before the CPU frame begins.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_gl_pipeline_configure(
+    pipeline: *mut Pipeline,
+    options: *const rsf_gl_pipeline_options,
+    width: u32,
+    height: u32,
+) -> i32 {
+    let Some(options) = (unsafe { read_sized(options) }) else {
+        return INVALID;
+    };
+    let valid = unsafe { pipeline.as_ref() }
+        .is_some_and(|pipeline| pipeline.platform.valid_options(&options, width, height));
+    if !valid {
+        return INVALID;
+    }
+    with_state(pipeline, |pipeline, state| {
+        pipeline.configure(state, &options, width, height)
+    })
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_gl_pipeline_get_surfaces(
+    pipeline: *mut Pipeline,
+    out: *mut rsf_gl_pipeline_surfaces,
+) -> i32 {
+    if unsafe { read_sized(out) }.is_none() {
+        return INVALID;
+    }
+    with_state(pipeline, |_, state| {
+        let Some(active) = state.active.as_ref() else {
+            return INVALID;
+        };
+        let name = |slot: usize| active.info[slot].texture;
+        unsafe {
+            out.write(rsf_gl_pipeline_surfaces {
+                struct_size: size_of::<rsf_gl_pipeline_surfaces>() as u32,
+                render_width: active.render_width,
+                render_height: active.render_height,
+                output_width: state.width,
+                output_height: state.height,
+                scene: name(SCENE),
+                depth: name(DEPTH),
+                motion: name(MOTION),
+                output: name(OUTPUT),
+                hudless: name(HUDLESS),
+                composed: name(COMPOSED),
+            })
+        };
+        OK
+    })
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_gl_pipeline_cpu(pipeline: *mut Pipeline, frame: u64, stage: u32) {
+    let Some(pipeline) = (unsafe { pipeline.as_ref() }) else {
+        return;
+    };
+    let event = pipeline.cpu_event(stage, frame, 0, 0, RSF_GAME_CPU_INPUT_KEYED);
+    unsafe { (pipeline.platform.fg_cpu)(&event) };
+}
+
+/// Input consumer on the CPU frame owner, or an unframed window message from the event thread.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_gl_pipeline_input(
+    pipeline: *mut Pipeline,
+    frame: u64,
+    kinds: u32,
+    message: u32,
+) -> i32 {
+    match unsafe { pipeline.as_ref() } {
+        Some(pipeline) => pipeline.input(frame, kinds, message),
+        None => INVALID,
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_gl_pipeline_pcl_message(pipeline: *mut Pipeline) -> u32 {
+    match unsafe { pipeline.as_ref() } {
+        Some(pipeline) => unsafe { (pipeline.platform.pcl_message)() },
+        None => 0,
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_gl_pipeline_abort(pipeline: *mut Pipeline, frame: u64) -> i32 {
+    match unsafe { pipeline.as_ref() } {
+        Some(pipeline) if frame != 0 => unsafe { (pipeline.platform.present_abort)(frame) },
+        _ => INVALID,
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_gl_pipeline_evaluate(pipeline: *mut Pipeline, input: *const Pass) -> i32 {
+    let Some(input) = (unsafe { read_sized(input) }) else {
+        return INVALID;
+    };
+    with_state(pipeline, |pipeline, state| pipeline.evaluate(state, &input))
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_gl_pipeline_hudless(pipeline: *mut Pipeline, input: *const Pass) -> i32 {
+    let Some(input) = (unsafe { read_sized(input) }) else {
+        return INVALID;
+    };
+    with_state(pipeline, |pipeline, state| pipeline.hudless(state, &input))
+}
+
+/// Every present carries its nonzero CPU frame ID, including menus.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_gl_pipeline_present(
+    pipeline: *mut Pipeline,
+    frame: u64,
+    vsync: u32,
+) -> i32 {
+    if frame == 0 {
+        return INVALID;
+    }
+    with_state(pipeline, |pipeline, state| {
+        pipeline.present(state, frame, vsync)
+    })
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_gl_pipeline_status_get(
+    pipeline: *mut Pipeline,
+    out: *mut rsf_gl_pipeline_status,
+) -> i32 {
+    if unsafe { read_sized(out) }.is_none() {
+        return INVALID;
+    }
+    let Some(pipeline) = (unsafe { pipeline.as_ref() }) else {
+        return INVALID;
+    };
+    let Some(state) = lock(pipeline) else {
+        return NOT_READY;
+    };
+    let p = pipeline.platform;
+    let mut status = state.status;
+    drop(state);
+    status.struct_size = size_of::<rsf_gl_pipeline_status>() as u32;
+    status.effective_fg = unsafe { (p.present_backend)() };
+    status.fg_switch_result = unsafe { (p.present_switch_result)() };
+    status.generation.struct_size = size_of::<rsf_native_fg_status>() as u32;
+    unsafe { (p.fg_status)(&mut status.generation) };
+    unsafe { out.write(status) };
+    OK
+}
+
+/// Releases graphics resources after draining. The handle stays valid for the process lifetime and
+/// refuses graphics calls afterwards; a repeated close succeeds.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_gl_pipeline_close(pipeline: *mut Pipeline) -> i32 {
+    let Some(pipeline) = (unsafe { pipeline.as_ref() }) else {
+        return OK;
+    };
+    let Some(mut state) = lock(pipeline) else {
+        return NOT_READY;
+    };
+    pipeline.close(&mut state)
+}
+
+#[cfg(test)]
+mod tests;
