@@ -12,6 +12,8 @@ mod render_abi;
 #[cfg(windows)]
 mod render_links;
 mod sr_history;
+#[cfg(windows)]
+mod sr_session;
 
 // C callers can recover from allocation failure. A successful handle is
 // released with Box::from_raw after its owner has retired outstanding users.

@@ -9,12 +9,12 @@ bindgen = os.environ.get("BINDGEN", "bindgen")
 if subprocess.check_output([bindgen, "--version"], text=True).strip() != "bindgen 0.72.1":
     raise SystemExit("Install bindgen-cli 0.72.1 to regenerate the SDK bindings")
 
-def generate(output, header, types, constants, clang_args):
+def generate(output, header, types, constants, clang_args, extra=()):
     bindings = subprocess.check_output([
         bindgen, header, "--allowlist-type", types, "--allowlist-var", constants,
         "--raw-line", "#![allow(non_camel_case_types)]",
         "--no-derive-debug", "--use-core", "--no-doc-comments", "--rust-edition", "2024",
-        "--rust-target", "1.85", "--", "--target=x86_64-pc-windows-msvc", *clang_args,
+        "--rust-target", "1.85", *extra, "--", "--target=x86_64-pc-windows-msvc", *clang_args,
     ], cwd=root).replace(b"\r\n", b"\n")
     output = root / output
     if not output.exists() or output.read_bytes() != bindings:
@@ -24,9 +24,12 @@ def generate(output, header, types, constants, clang_args):
 
 
 generate("sdk/game/src/lib.rs", "sdk/game/include/rescaleframe/game_api.h",
-         "rsf_get_game_plugin_api_fn", "RSF_.*", ["-Isdk/game/include"])
+         "rsf_(get_game_plugin_api_fn|frame_record)", "RSF_.*", ["-Isdk/game/include"])
 generate("runtime/orchestrator/src/render_abi.rs", "runtime/orchestrator/include/rescaleframe/frame_assembly.h",
-         "rsf_(frame_resources|pipeline_camera_frame|dlss_frame|fg_choice|render_link)",
-         "RSF_(FRAME_ASSEMBLY_ABI_VERSION|DLSS_ABI_VERSION|FG_BACKEND_(AUTO|ALL)|RENDER_LINK_ABI_VERSION)",
-         ["-include", "rescaleframe/fg_choice.h", "-include", "rescaleframe/render_links.h", "-Iruntime/orchestrator/include",
-          "-Iruntime/contract/include", "-Iruntime/backends/dlss/include", "-Isdk/game/include"])
+         "rsf_(frame_resources|pipeline_camera_frame|dlss_frame|fg_choice|render_link|sr_session_setup|sr_session_status|sr_provider)",
+         "RSF_(FRAME_ASSEMBLY_ABI_VERSION|DLSS_ABI_VERSION|FG_BACKEND_(AUTO|ALL)|RENDER_LINK_ABI_VERSION|SR_SESSION_ABI_VERSION|BACKEND_ABI_VERSION|API_D3D12|SR_(FSR2|XESS))",
+         ["-include", "rescaleframe/fg_choice.h", "-include", "rescaleframe/render_links.h",
+          "-include", "rescaleframe/sr_session.h", "-Iruntime/orchestrator/include",
+          "-Iruntime/contract/include", "-Iruntime/backends/dlss/include", "-Isdk/game/include"],
+         ["--blocklist-type", "rsf_(frame_record|frame_id|frame_phase|screen_class|camera_frame)",
+          "--raw-line", "use rsf_game_sys::rsf_frame_record;"])

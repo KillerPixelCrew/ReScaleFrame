@@ -79,6 +79,9 @@ pub const RSF_GAME_RENDER_FEEDBACK_PRESENT_UNAVAILABLE: u32 = 6;
 pub const RSF_GAME_RENDER_FEEDBACK_HOST_REFUSED: u32 = 7;
 pub const RSF_GAME_ABI_VERSION: u32 = 24;
 pub const RSF_GAME_ENTRY_POINT: &[u8; 24] = b"rsf_get_game_plugin_api\0";
+pub type rsf_frame_id = u64;
+pub type rsf_frame_phase = u32;
+pub type rsf_screen_class = u32;
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct rsf_camera_frame {
@@ -144,6 +147,72 @@ const _: () = {
         [::core::mem::offset_of!(rsf_camera_frame, motion_jittered) - 376usize];
     ["Offset of field: rsf_camera_frame::frame_time_seconds"]
         [::core::mem::offset_of!(rsf_camera_frame, frame_time_seconds) - 380usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_frame_record {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    pub frame_id: rsf_frame_id,
+    pub session_id: u64,
+    pub view_id: u32,
+    pub resource_generation: u32,
+    pub phase: rsf_frame_phase,
+    pub flags: u32,
+    pub screen: rsf_screen_class,
+    pub render_width: u32,
+    pub render_height: u32,
+    pub output_width: u32,
+    pub output_height: u32,
+    pub input_qpc: u64,
+    pub frame_time_ms: f32,
+    pub camera: rsf_camera_frame,
+    pub source_provenance: u32,
+    pub source_qpc: u64,
+    pub source_qpc_frequency: u64,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_frame_record"][::core::mem::size_of::<rsf_frame_record>() - 480usize];
+    ["Alignment of rsf_frame_record"][::core::mem::align_of::<rsf_frame_record>() - 8usize];
+    ["Offset of field: rsf_frame_record::struct_size"]
+        [::core::mem::offset_of!(rsf_frame_record, struct_size) - 0usize];
+    ["Offset of field: rsf_frame_record::abi_version"]
+        [::core::mem::offset_of!(rsf_frame_record, abi_version) - 4usize];
+    ["Offset of field: rsf_frame_record::frame_id"]
+        [::core::mem::offset_of!(rsf_frame_record, frame_id) - 8usize];
+    ["Offset of field: rsf_frame_record::session_id"]
+        [::core::mem::offset_of!(rsf_frame_record, session_id) - 16usize];
+    ["Offset of field: rsf_frame_record::view_id"]
+        [::core::mem::offset_of!(rsf_frame_record, view_id) - 24usize];
+    ["Offset of field: rsf_frame_record::resource_generation"]
+        [::core::mem::offset_of!(rsf_frame_record, resource_generation) - 28usize];
+    ["Offset of field: rsf_frame_record::phase"]
+        [::core::mem::offset_of!(rsf_frame_record, phase) - 32usize];
+    ["Offset of field: rsf_frame_record::flags"]
+        [::core::mem::offset_of!(rsf_frame_record, flags) - 36usize];
+    ["Offset of field: rsf_frame_record::screen"]
+        [::core::mem::offset_of!(rsf_frame_record, screen) - 40usize];
+    ["Offset of field: rsf_frame_record::render_width"]
+        [::core::mem::offset_of!(rsf_frame_record, render_width) - 44usize];
+    ["Offset of field: rsf_frame_record::render_height"]
+        [::core::mem::offset_of!(rsf_frame_record, render_height) - 48usize];
+    ["Offset of field: rsf_frame_record::output_width"]
+        [::core::mem::offset_of!(rsf_frame_record, output_width) - 52usize];
+    ["Offset of field: rsf_frame_record::output_height"]
+        [::core::mem::offset_of!(rsf_frame_record, output_height) - 56usize];
+    ["Offset of field: rsf_frame_record::input_qpc"]
+        [::core::mem::offset_of!(rsf_frame_record, input_qpc) - 64usize];
+    ["Offset of field: rsf_frame_record::frame_time_ms"]
+        [::core::mem::offset_of!(rsf_frame_record, frame_time_ms) - 72usize];
+    ["Offset of field: rsf_frame_record::camera"]
+        [::core::mem::offset_of!(rsf_frame_record, camera) - 76usize];
+    ["Offset of field: rsf_frame_record::source_provenance"]
+        [::core::mem::offset_of!(rsf_frame_record, source_provenance) - 460usize];
+    ["Offset of field: rsf_frame_record::source_qpc"]
+        [::core::mem::offset_of!(rsf_frame_record, source_qpc) - 464usize];
+    ["Offset of field: rsf_frame_record::source_qpc_frequency"]
+        [::core::mem::offset_of!(rsf_frame_record, source_qpc_frequency) - 472usize];
 };
 #[repr(C)]
 #[derive(Copy, Clone)]

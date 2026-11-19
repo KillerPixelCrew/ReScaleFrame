@@ -76,6 +76,19 @@ session lifetime, embedded policy and the Anomaly SR API contract. All 76 Rust
 workspace tests passed. The Release DLL retains all 381 baseline export names
 and ordinals. No device or game run was performed for these changes.
 
+The D3D12 SR session now owns FSR and XeSS contexts, copied SDK paths, and
+frame history in Rust. The C creation entry wires the existing provider tables
+and shared frame validator into that owner. A provider reporting success without
+a context leaves the current backend active. Warm-up rejects a stale output
+extent without dispatching or consuming frame identity.
+
+Release and Debug MSVC passed the SR session, FG session, frame assembly,
+embedded policy and Anomaly SR contract fixtures. The Release AC7 carrier
+exported the SR session functions without importing the runtime DLL. The
+current C++ Anomaly adapter built in the same configuration. The Release
+runtime retained all 381 baseline export names and ordinals, and all 76
+Rust workspace tests passed. Device and in-game validation remain pending.
+
 ## Fallout 4 AE native render callbacks, 16 November 2026
 
 User priority is now fully native Fallout4.exe without F4SE/ENB first, with

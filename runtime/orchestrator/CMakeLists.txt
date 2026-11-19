@@ -40,7 +40,7 @@ add_library(rsf_orchestrator_core OBJECT
     src/fg_session.cpp
     src/fg_providers.cpp
     src/fg_leases.cpp
-    src/sr_session.cpp
+    src/sr_session_backends.cpp
     src/sr_bridge.cpp
     src/sr_legacy_adapter.cpp
     src/dlss_pipeline.cpp)
@@ -62,11 +62,13 @@ add_custom_target(rsf_rust_core
     WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
     BYPRODUCTS "${rsf_rust_archive}"
     COMMAND_EXPAND_LISTS VERBATIM)
-add_dependencies(rsf_orchestrator_core rsf_rust_core)
-target_link_libraries(rsf_orchestrator_core PUBLIC "${rsf_rust_archive}" ntdll userenv ws2_32 dbghelp)
+add_library(rsf_orchestrator_rust INTERFACE)
+add_dependencies(rsf_orchestrator_rust rsf_rust_core)
+target_link_libraries(rsf_orchestrator_rust INTERFACE "${rsf_rust_archive}" ntdll userenv ws2_32 dbghelp)
 if(MSVC)
-    target_link_libraries(rsf_orchestrator_core PUBLIC synchronization)
+    target_link_libraries(rsf_orchestrator_rust INTERFACE synchronization)
 endif()
+target_link_libraries(rsf_orchestrator_core PUBLIC rsf_orchestrator_rust)
 target_compile_definitions(rsf_orchestrator_core PRIVATE RSF_STREAMLINE_HOST_BUILD)
 # Public because the orchestrator's own headers name a backend's frame structure and the decode
 # pass's parameters.

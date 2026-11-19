@@ -9,7 +9,7 @@ namespace {
 bool passed = true;
 uint32_t closes = 0;
 uint32_t reset_seen = 0;
-bool fail_open = false, fail_plan = false, fail_frame = false;
+bool fail_open = false, empty_open = false, fail_plan = false, fail_frame = false;
 struct Fake { uint32_t family; };
 void check(bool ok, const char* text) { if (!ok) { std::fprintf(stderr, "FAIL: %s\n", text); passed = false; } }
 rsf_backend_result probe(const rsf_backend_probe_desc*, rsf_backend_caps*) { return RSF_BACKEND_OK; }
@@ -17,6 +17,7 @@ rsf_backend_result open(const rsf_sr_open_desc* desc, void** session)
 {
     *session = nullptr;
     if (fail_open) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
+    if (empty_open) return RSF_BACKEND_OK;
     check(desc->runtime_directory_utf8 && std::strcmp(desc->runtime_directory_utf8, "copied-path") == 0,
           "session must own a copy of its SDK paths");
     *session = new Fake{desc->fsr_major};
@@ -60,6 +61,12 @@ int main()
     rsf_sr_session_status status{}; status.struct_size = sizeof(status);
     rsf_sr_session_get_status(session, &status);
     check(status.requested == RSF_SR_FSR4 && status.effective == RSF_SR_FSR2 && closes == 0, "refusal preserves effective backend");
+    fail_open = false; empty_open = true;
+    check(rsf_sr_session_select(session, RSF_SR_FSR4, RSF_QUALITY_QUALITY, 0) == RSF_BACKEND_ERROR_INIT_FAILED,
+          "success without a context refuses the switch");
+    rsf_sr_session_get_status(session, &status);
+    check(status.effective == RSF_SR_FSR2 && closes == 0, "missing context preserves effective backend");
+    empty_open = false;
     fail_open = false; fail_plan = true;
     check(rsf_sr_session_select(session, RSF_SR_XESS, RSF_QUALITY_QUALITY, 0) != 0 && closes == 1, "failed plan closes replacement only");
     fail_plan = false;
@@ -90,6 +97,11 @@ int main()
     check(rsf_sr_session_evaluate(session, &setup, &frame) == 0 && reset_seen, "first frame reset");
     ++record.frame_id;
     check(rsf_sr_session_evaluate(session, &setup, &frame) == 0 && !reset_seen, "contiguous frame keeps history");
+    record.output_width = 127;
+    check(rsf_sr_session_warm_up(session, &setup, &frame) == RSF_BACKEND_ERROR_STALE_RESOURCES && !reset_seen,
+          "warm-up refuses an output extent from another context");
+    record.output_width = 128;
+    check(rsf_sr_session_warm_up(session, &setup, &frame) == 0 && reset_seen, "warm-up resets without consuming the frame");
     check(rsf_sr_session_evaluate(session, &setup, &frame) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "duplicate refused");
     ++record.frame_id;
     check(rsf_sr_session_evaluate(session, &setup, &frame) == 0 && reset_seen, "history reset after refused input");
