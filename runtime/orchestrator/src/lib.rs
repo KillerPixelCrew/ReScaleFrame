@@ -7,7 +7,15 @@ mod cpu_abi;
 #[cfg(windows)]
 mod cpu_reservations;
 #[cfg(windows)]
+mod d3d11_output;
+#[cfg(windows)]
+mod d3d11_output_abi;
+#[cfg(windows)]
+mod native_composition;
+#[cfg(windows)]
 mod native_cpu;
+#[cfg(windows)]
+mod native_reinsert;
 
 #[cfg(windows)]
 mod fg_choice;

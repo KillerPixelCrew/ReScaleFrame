@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
+use crate::d3d11_output_abi::{
+    rsf_d3d11_output_child_device, rsf_d3d11_output_device_ok, rsf_d3d11_output_is_immediate,
+};
 use std::borrow::Borrow;
 use std::ffi::c_void;
 use std::ptr::{self, NonNull};
@@ -12,8 +15,6 @@ type Slots<T> = [Option<T>; SLOT_COUNT];
 type Entries<T> = [Option<Entry<T>>; CACHE_CAPACITY];
 
 unsafe extern "C" {
-    fn rsf_sampler_bias_com_is_immediate(context: *mut c_void) -> i32;
-    fn rsf_sampler_bias_com_device(child: *mut c_void) -> *mut c_void;
     fn rsf_sampler_bias_com_read_slots(context: *mut c_void, out: *mut *mut c_void);
     fn rsf_sampler_bias_com_write_slot(context: *mut c_void, slot: u32, sampler: *mut c_void);
     fn rsf_sampler_bias_com_read_bias(sampler: *mut c_void) -> f32;
@@ -22,7 +23,6 @@ unsafe extern "C" {
         original: *mut c_void,
         bias: f32,
     ) -> *mut c_void;
-    fn rsf_sampler_bias_com_device_ready(device: *mut c_void) -> i32;
 }
 
 struct Entry<T> {
@@ -185,11 +185,11 @@ unsafe extern "C" fn rsf_sampler_bias_apply(
         .owner
         .as_ref()
         .is_some_and(|owner| owner.context != context || owner.thread != thread)
-        || unsafe { rsf_sampler_bias_com_is_immediate(context) } == 0
+        || unsafe { rsf_d3d11_output_is_immediate(context) } == 0
     {
         return 0;
     }
-    let Some(device) = NonNull::new(unsafe { rsf_sampler_bias_com_device(context) }).map(ComRef)
+    let Some(device) = (unsafe { ComRef::from_owned(rsf_d3d11_output_child_device(context)) })
     else {
         return 0;
     };
@@ -203,8 +203,8 @@ unsafe extern "C" fn rsf_sampler_bias_apply(
 
     let baselines = baselines.map(NonNull::new);
     for sampler in baselines.iter().flatten() {
-        let owner = NonNull::new(unsafe { rsf_sampler_bias_com_device(sampler.as_ptr()) });
-        if owner.map(ComRef).is_none_or(|owner| owner.0 != device.0) {
+        let owner = unsafe { ComRef::from_owned(rsf_d3d11_output_child_device(sampler.as_ptr())) };
+        if owner.is_none_or(|owner| owner.0 != device.0) {
             return 0;
         }
     }
@@ -229,7 +229,7 @@ unsafe extern "C" fn rsf_sampler_bias_apply(
     else {
         return 0;
     };
-    if unsafe { rsf_sampler_bias_com_device_ready(device_ptr) } == 0 {
+    if unsafe { rsf_d3d11_output_device_ok(device_ptr) } == 0 {
         return 0;
     }
 
@@ -253,7 +253,7 @@ unsafe extern "C" fn rsf_sampler_bias_apply(
     });
     // PSSetSamplers is void. If the device was lost during commit, report it and
     // retain the ownership record for the bindings this call attempted.
-    unsafe { rsf_sampler_bias_com_device_ready(device_ptr) }
+    (unsafe { rsf_d3d11_output_device_ok(device_ptr) }) as i32
 }
 
 #[cfg(test)]

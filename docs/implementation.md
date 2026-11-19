@@ -240,6 +240,19 @@ both linked carriers matched the 381, 256 and 273 baseline export names and
 ordinals. All 86 Rust tests and Clippy passed. Live vendor and game execution
 remain pending.
 
+Rust now owns D3D11 composition capture and native output reinsertion.
+Composition completion requires matching frame identity and the same D3D11
+stream. Reinsertion prepares both outputs before publishing them and restores
+the caller's bindings through the existing graphics kernels. Output and
+sampler owners share COM lifetime and D3D11 device checks.
+
+The integrated native reinsertion, presentation bridge and sampler device
+fixtures built in Debug and Release. Ten focused D3D11, Anomaly input,
+settings and lease fixtures passed in both configurations, alongside all 87
+Rust tests and workspace Clippy. Release runtime and both carriers retain
+381, 256 and 273 export names and ordinals. Device and in-game tests remain
+pending.
+
 ## Fallout 4 AE native render callbacks, 16 November 2026
 
 User priority is now fully native Fallout4.exe without F4SE/ENB first, with

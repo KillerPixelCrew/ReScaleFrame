@@ -5,19 +5,6 @@
 static_assert(D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT == 16);
 static_assert(D3D11_MIP_LOD_BIAS_MIN == -16.0f && D3D11_MIP_LOD_BIAS_MAX == 15.99f);
 
-extern "C" int32_t rsf_sampler_bias_com_is_immediate(void* context)
-{
-    return static_cast<ID3D11DeviceContext*>(context)->GetType() == D3D11_DEVICE_CONTEXT_IMMEDIATE;
-}
-
-extern "C" void* rsf_sampler_bias_com_device(void* child)
-{
-    // Both the context and sampler interfaces inherit ID3D11DeviceChild.
-    ID3D11Device* device = nullptr;
-    static_cast<ID3D11DeviceChild*>(child)->GetDevice(&device);
-    return device;
-}
-
 extern "C" void rsf_sampler_bias_com_read_slots(void* context, void** out)
 {
     constexpr auto count = D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT;
@@ -50,9 +37,4 @@ extern "C" void* rsf_sampler_bias_com_clone(void* device, void* original, float 
         return nullptr;
     }
     return replacement;
-}
-
-extern "C" int32_t rsf_sampler_bias_com_device_ready(void* device)
-{
-    return SUCCEEDED(static_cast<ID3D11Device*>(device)->GetDeviceRemovedReason());
 }

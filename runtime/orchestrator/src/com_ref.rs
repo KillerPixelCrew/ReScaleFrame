@@ -13,6 +13,14 @@ unsafe extern "C" {
 pub(super) struct ComRef(pub(super) NonNull<c_void>);
 
 impl ComRef {
+    pub(super) unsafe fn from_owned(object: *mut c_void) -> Option<Self> {
+        NonNull::new(object).map(Self)
+    }
+
+    pub(super) fn as_ptr(&self) -> *mut c_void {
+        self.0.as_ptr()
+    }
+
     pub(super) unsafe fn retain(object: *mut c_void) -> Self {
         let object = NonNull::new(object).expect("live COM interface");
         unsafe { rsf_com_add_ref(object.as_ptr()) };
