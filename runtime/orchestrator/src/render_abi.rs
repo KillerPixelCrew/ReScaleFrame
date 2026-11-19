@@ -14,6 +14,7 @@ pub const RSF_FG_AUTO: u32 = 2;
 pub const RSF_FG_DYNAMIC: u32 = 3;
 pub const RSF_PACING_NONE: u32 = 0;
 pub const RSF_PACING_REFLEX: u32 = 1;
+pub const RSF_PACING_XELL: u32 = 2;
 pub const RSF_REFLEX_OFF: u32 = 0;
 pub const RSF_REFLEX_BOOST: u32 = 2;
 pub const RSF_FG_STAT_TOTAL_PRESENTED: u32 = 1;

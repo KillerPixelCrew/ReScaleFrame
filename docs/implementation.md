@@ -227,6 +227,19 @@ workspace Clippy passed. The sampler WARP fixture built in both configurations.
 The Release runtime and AC7 carrier match the verified 381 and 256 export
 names and ordinals. Device and gameplay tests remain pending.
 
+Rust now owns the shared pacing selection, the process-wide Windows event
+lease and Direct3D Anti-Lag 2 lifecycle and counters. The existing driver
+seam still makes the vendor calls. The named event coordinates the DLL and
+embedded runtime copies, and the migration preserves the caller's ordering
+and locking around vendor updates.
+
+Six focused latency, reservation, D3D11 ABI and Anomaly input fixtures passed
+in Debug and Release. The mock provider fixtures covered pacing arbitration,
+duplicate updates, failure and graphics API ownership. The Release DLL and
+both linked carriers matched the 381, 256 and 273 baseline export names and
+ordinals. All 86 Rust tests and Clippy passed. Live vendor and game execution
+remain pending.
+
 ## Fallout 4 AE native render callbacks, 16 November 2026
 
 User priority is now fully native Fallout4.exe without F4SE/ENB first, with

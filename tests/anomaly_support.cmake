@@ -270,5 +270,5 @@ target_compile_definitions(rsf_latency_event_contract_test PRIVATE RSF_RUNTIME_B
 add_test(NAME latency_input_event_contract COMMAND rsf_latency_event_contract_test)
 add_executable(rsf_latency_antilag_test "${CMAKE_CURRENT_LIST_DIR}/latency_antilag.cpp")
 target_include_directories(rsf_latency_antilag_test PRIVATE "${PROJECT_SOURCE_DIR}/runtime/orchestrator/src")
-target_link_libraries(rsf_latency_antilag_test PRIVATE ReScaleFrame::Contract rsf_build_options)
+target_link_libraries(rsf_latency_antilag_test PRIVATE rsf_orchestrator_rust ReScaleFrame::Contract rsf_build_options)
 add_test(NAME latency_antilag2_contract COMMAND rsf_latency_antilag_test)
