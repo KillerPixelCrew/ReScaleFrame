@@ -46,3 +46,10 @@ generate("runtime/orchestrator/src/scene_abi.rs", "runtime/orchestrator/include/
          ["-include", "rescaleframe/native_scene.h", "-Iruntime/orchestrator/include",
           "-Iruntime/graphics/include", "-Isdk/game/include"],
          ["--with-derive-default"])
+generate("runtime/orchestrator/src/auxiliary_sr_abi.rs", "runtime/orchestrator/src/auxiliary_sr_platform.h",
+         "rsf_(aux_platform|d3d11_auxiliary_surface)",
+         "RSF_(AUX_.*|D3D11_AUXILIARY_.*|DEPTH_SCALE_(ABI_VERSION|OK))",
+         ["-Iruntime/orchestrator/include", "-Iruntime/graphics/include",
+          "-Iruntime/presentation/include", "-Isdk/game/include"],
+         ["--blocklist-type", "rsf_game_log_fn",
+          "--raw-line", "use rsf_game_sys::rsf_game_log_fn;", "--with-derive-default"])

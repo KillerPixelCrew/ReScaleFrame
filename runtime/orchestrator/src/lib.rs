@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MIT
 
 #[cfg(windows)]
+mod auxiliary_sr;
+#[cfg(windows)]
+mod auxiliary_sr_abi;
+#[cfg(windows)]
 mod com_ref;
 #[cfg(windows)]
 mod cpu_abi;
