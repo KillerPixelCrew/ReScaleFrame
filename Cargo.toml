@@ -1,5 +1,5 @@
 [workspace]
-members = ["ui/overlay", "runtime/backends/rsf-upscaler", "runtime/orchestrator"]
+members = ["ui/overlay", "runtime/backends/rsf-upscaler", "runtime/orchestrator", "sdk/game"]
 resolver = "3"
 
 [workspace.package]

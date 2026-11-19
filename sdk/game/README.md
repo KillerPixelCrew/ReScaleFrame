@@ -1,10 +1,15 @@
 # Game SDK
 
-The MIT-licensed native C ABI joins the orchestrator and game plugins. Current game ABI is **13**,
+The MIT-licensed native C ABI joins the orchestrator and game plugins. Current game ABI is **24**,
 defined in [game_api.h](include/rescaleframe/game_api.h). It includes executable recognition and
 `prepare`, `start`, `quiesce`, `stop` and `status` hooks. [game_renderer.h](include/rescaleframe/game_renderer.h)
 defines host services, CPU events and rendering callbacks; [game_frame.h](include/rescaleframe/game_frame.h)
-defines frame/camera records with its own ABI version 1.
+defines frame ABI 2 and camera ABI 1.
+
+Rust callers use the workspace crate `rsf-game-sys`. Its generated types include
+compile-time Windows x64 size, alignment and field-offset checks. After changing
+the headers, run `python sdk/game/generate-bindings.py` with bindgen-cli 0.72.1
+and libclang available. Ordinary builds use the checked-in bindings.
 
 Use fixed-width fields, `struct_size`, and ABI versions. Keep STL/Rust types and allocator ownership inside their DLLs. The header must compile as C and C++.
 

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use rsf_game_sys::RSF_FRAME_SOURCE_RENDERED;
 use std::alloc::{Layout, alloc};
 use std::ptr;
 use std::sync::Mutex;
@@ -6,7 +7,6 @@ use std::sync::Mutex;
 const INVALID_ARGUMENT: i32 = -1;
 const INIT_FAILED: i32 = -6;
 const NOT_READY: i32 = -8;
-const SOURCE_RENDERED: u32 = 1;
 const ALL_MARKERS: u32 = 0b111_1111;
 const RENDER_MARKERS: u32 = 0b111_1000;
 
@@ -72,7 +72,11 @@ fn begin(handle: Option<&Handle>, id: u64, source: u64) -> i32 {
     *ledger.slot(id) = SequenceState {
         struct_size: size_of::<SequenceState>() as u32,
         frame_id: id,
-        source_provenance: if source == 0 { 0 } else { SOURCE_RENDERED },
+        source_provenance: if source == 0 {
+            0
+        } else {
+            RSF_FRAME_SOURCE_RENDERED
+        },
         source_qpc: source,
         ..Default::default()
     };
@@ -120,7 +124,7 @@ unsafe extern "C" fn rsf_frame_sequencer_marker(
     if slot.frame_id != id || slot.failed != 0 {
         return NOT_READY;
     }
-    let rendered = slot.source_provenance == SOURCE_RENDERED;
+    let rendered = slot.source_provenance == RSF_FRAME_SOURCE_RENDERED;
     let required = if rendered {
         RENDER_MARKERS
     } else {
@@ -179,7 +183,7 @@ unsafe extern "C" fn rsf_frame_sequencer_finish(handle: *const Handle, id: u64) 
         return NOT_READY;
     }
     let frame = std::mem::take(slot);
-    let required = if frame.source_provenance == SOURCE_RENDERED {
+    let required = if frame.source_provenance == RSF_FRAME_SOURCE_RENDERED {
         RENDER_MARKERS
     } else {
         ALL_MARKERS

@@ -31,6 +31,12 @@ baseline by name and ordinal. A synthetic comparison against the previous local
 DLL matched results and returned state for 30,000 seeded sequencer operations.
 The locked Rust workspace tests and orchestrator Clippy check also passed.
 
+The workspace now includes `rsf-game-sys`, generated from the C plugin entry
+point and its transitive types. The sequencer imports rendered-frame provenance
+from it. Bindgen 0.72.1 with libclang 18.1.1 reproduced the Windows x64 bindings
+byte for byte. Cargo compiled their layout assertions, the workspace passed
+formatting, Clippy and 75 tests, and the four focused Release fixtures passed.
+
 ## Fallout 4 AE native render callbacks, 16 November 2026
 
 User priority is now fully native Fallout4.exe without F4SE/ENB first, with
