@@ -417,6 +417,10 @@ target_link_libraries(rsf_fg_leases_test PRIVATE rsf_orchestrator rsf_build_opti
 add_test(NAME fg_leases COMMAND rsf_fg_leases_test)
 set_tests_properties(fg_leases PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
+add_executable(rsf_fg_leases_faults_test fg_leases_faults.cpp)
+target_link_libraries(rsf_fg_leases_faults_test PRIVATE rsf_orchestrator rsf_build_options)
+add_test(NAME fg_leases_faults COMMAND rsf_fg_leases_faults_test)
+
 add_library(rsf_fg_c_header OBJECT fg_c_header.c)
 target_include_directories(rsf_fg_c_header PRIVATE ../runtime/orchestrator/include)
 target_link_libraries(rsf_fg_c_header PRIVATE ReScaleFrame::DLSS rsf_build_options)

@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+#include <rescaleframe/fg_leases.h>
 #include <rescaleframe/frame_sequencer.h>
 #include <rescaleframe/gpu_policy.h>
 /* Export Rust static-library entry points from each PE that embeds the core. */
@@ -50,3 +51,10 @@ RSF_EXPORT(rsf_fg_session_get_status)
 RSF_EXPORT(rsf_fg_session_destroy)
 RSF_EXPORT(rsf_native_scene_for_window)
 RSF_EXPORT(rsf_native_scene_reset)
+RSF_EXPORT(rsf_fg_leases_create)
+RSF_EXPORT(rsf_fg_leases_acquire)
+RSF_EXPORT(rsf_fg_leases_submit)
+RSF_EXPORT(rsf_fg_leases_seal)
+RSF_EXPORT(rsf_fg_leases_collect)
+RSF_EXPORT(rsf_fg_leases_cancel)
+RSF_EXPORT(rsf_fg_leases_destroy)

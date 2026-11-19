@@ -10,6 +10,8 @@ mod fg_choice;
 #[cfg(windows)]
 mod fg_dispatch;
 #[cfg(windows)]
+mod fg_leases;
+#[cfg(windows)]
 mod fg_session;
 #[cfg(windows)]
 mod frame_assembly;
