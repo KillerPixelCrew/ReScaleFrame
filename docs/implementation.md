@@ -189,6 +189,19 @@ validates output extents before subtraction, scopes the scene identity and
 graphics bindings, and commits history only after successful reinsertion.
 The explicit FG capture path still invokes its separate existing entry.
 
+The cross-API SR bridge now owns the same-adapter D3D12 queue, command slots,
+shared textures, fences and provider session in Rust. A timed-out warm-up
+holds one pending submission and its provider resources. The bridge refuses
+operations that would reuse or retire them until it observes ordered fence
+completion or device removal. The native glue reads each COM output only
+after the call that initializes it.
+
+The integrated Debug and Release builds passed ten focused SR and Anomaly
+ABI fixtures and built the SR bridge, backend switch and temporal device
+fixtures. All 99 Rust tests passed, including transfer ordering and pending
+warm-up retention. The Release DLL and both carriers retain 381, 256 and
+273 baseline exports. Device and in-game execution remain pending.
+
 Eight focused host, frame and Anomaly ABI fixtures passed in Debug and
 Release, and all 91 Rust tests passed. The linked AC7 carrier and rendered
 host device fixture built in both configurations. Device and game execution

@@ -27,7 +27,15 @@ RSF_RUNTIME_API rsf_backend_result rsf_sr_bridge_evaluate(rsf_sr_bridge* bridge,
    D3D12 queue with blank resources of the given sizes (the formats the evaluate path uses), waited
    for on the CPU. FSR4 builds its pipelines at its first dispatch, which is 25 s on a cold driver
    cache. Needs no D3D11 immediate context. `manual_exposure` also supplies a 1x1 exposure texture. The next evaluate starts
-   without history. Sizes must match what the backend will be evaluated at. */
+   without history. Sizes must match what the backend will be evaluated at.
+   When the dispatch was submitted but its completion was not observed (a timed-out wait or a failed
+   queue signal) and the device was not removed, the first error is returned and the dispatch stays
+   pending with its resources and the SDK context alive. While it is pending, warm_up, select
+   (including RSF_SR_NONE), a set_auto_exposure change and evaluate return
+   RSF_BACKEND_ERROR_NOT_READY, and destroy keeps the bridge until process exit. Each of those calls
+   first checks the dispatch's own fence, re-signalled behind it on the bridge queue if the first
+   signal failed, or device removal; evaluate only polls, the others wait up to 10 s. Once either is
+   observed the resources are released and the bridge is usable again. */
 RSF_RUNTIME_API rsf_backend_result rsf_sr_bridge_warm_up(rsf_sr_bridge* bridge, uint32_t render_width,
     uint32_t render_height, uint32_t output_width, uint32_t output_height, uint32_t manual_exposure);
 RSF_RUNTIME_API rsf_backend_result rsf_sr_bridge_get_status(const rsf_sr_bridge* bridge,

@@ -40,7 +40,7 @@ add_library(rsf_orchestrator_core OBJECT
     src/fg_session_platform.cpp
     src/fg_providers.cpp
     src/sr_session_backends.cpp
-    src/sr_bridge.cpp
+    src/sr_bridge_platform.cpp
     src/sr_legacy_adapter.cpp
     src/dlss_pipeline.cpp)
 target_include_directories(rsf_orchestrator_core PUBLIC include)

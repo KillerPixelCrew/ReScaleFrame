@@ -18,7 +18,7 @@ No new numerical in-game FPS comparison accompanied the final acceptance.
 | Sparse velocity validity and camera motion | `runtime/graphics/src/motion_resolve.cpp`; [motion research](../../../../docs/research/ac7-motion-vectors.md) and [stability](../../../../docs/research/ac7-stability-20261001.md) |
 | Wing/cloud masking, cloud resolution | Game-owned TrueSky hooks and `games/ac7/src/truesky_depth.cpp`; [aircraft/cloud research](../../../../docs/research/ac7-plane-artifacts-20261002.md) |
 | Colour drift and producer precision | Native scene-format policy plus `runtime/graphics/src/colour_fidelity.cpp`; [colour research](../../../../docs/research/ac7-ui-hdr-20260930.md) |
-| FSR/XeSS transfer, FSR4 capability | `runtime/orchestrator/src/sr_bridge.cpp`, `runtime/backends/fsr/src/fsr4_compat.cpp`; [interop research](../../../../docs/research/sr-interop-performance-20261002.md) |
+| FSR/XeSS transfer, FSR4 capability | `runtime/orchestrator/src/sr_bridge.rs` (with `sr_bridge_platform.cpp`), `runtime/backends/fsr/src/fsr4_compat.cpp`; [interop research](../../../../docs/research/sr-interop-performance-20261002.md) |
 
 ## Failed assumptions that changed the design
 

@@ -51,7 +51,7 @@ struct Session {
 }
 
 // A caller may provide only the size field when reporting a short structure.
-unsafe fn has_capacity<T>(value: *const T) -> bool {
+pub(crate) unsafe fn has_capacity<T>(value: *const T) -> bool {
     !value.is_null() && (unsafe { value.cast::<u32>().read() } as usize) >= size_of::<T>()
 }
 
