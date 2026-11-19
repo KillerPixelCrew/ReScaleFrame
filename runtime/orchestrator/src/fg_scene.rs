@@ -62,6 +62,30 @@ thread_local! {
     static SCENE: Cell<Pass> = const { Cell::new(EMPTY) };
 }
 
+fn apply_bound(pass: &mut Pass) {
+    if let Some(bound) = BOUND.get() {
+        bound.apply(pass);
+    }
+}
+
+pub(super) fn with_scene<R>(pass: &Pass, call: impl FnOnce() -> R) -> R {
+    struct Restore(Pass);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SCENE.set(self.0);
+        }
+    }
+    let mut scene = Pass {
+        struct_size: PASS_SIZE,
+        ..*pass
+    };
+    if scene.source_frame_id == 0 {
+        apply_bound(&mut scene);
+    }
+    let _restore = Restore(SCENE.replace(scene));
+    call()
+}
+
 unsafe fn full_pass(pass: *const Pass) -> bool {
     !pass.is_null() && unsafe { pass.cast::<u32>().read() } >= PASS_SIZE
 }
@@ -112,9 +136,7 @@ unsafe extern "C" fn rsf_core_native_fg_scene_set(
         ..unsafe { pass.read() }
     };
     if scene.source_frame_id == 0 {
-        if let Some(bound) = BOUND.get() {
-            bound.apply(&mut scene);
-        }
+        apply_bound(&mut scene);
     } else if scene.role == RSF_GAME_RENDER_FG_INPUTS && scene.flags & RSF_GAME_RENDER_NO_FG != 0 {
         // Only a refusal reported with the original explicit lease may mark held inputs.
         unsafe { refuse_held_inputs(pass) };

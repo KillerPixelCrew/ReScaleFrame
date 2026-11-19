@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
-use crate::d3d11_output::{FullscreenBlit, GraphicsCache, texture_desc};
+use crate::d3d11_output::{FullscreenBlit, GraphicsCache, SavedBindings, texture_desc};
 use crate::d3d11_output_abi::*;
 use std::ffi::c_void;
 use std::ptr::NonNull;
@@ -206,35 +206,6 @@ impl Conversions {
     }
 }
 
-struct Bindings {
-    context: *mut c_void,
-    saved: rsf_d3d11_state,
-    restore: unsafe extern "C" fn(*mut c_void, *mut rsf_d3d11_state),
-}
-
-impl Bindings {
-    unsafe fn save(context: *mut c_void, kernels: &rsf_d3d11_reinsert_kernels) -> Option<Self> {
-        let save = kernels.save?;
-        let restore = kernels.restore?;
-        let mut saved = rsf_d3d11_state::default();
-        if unsafe { save(context, &mut saved) } == 0 {
-            return None;
-        }
-        // Moving the opaque snapshot transfers the single restore obligation.
-        Some(Self {
-            context,
-            saved,
-            restore,
-        })
-    }
-}
-
-impl Drop for Bindings {
-    fn drop(&mut self) {
-        unsafe { (self.restore)(self.context, &mut self.saved) };
-    }
-}
-
 static REINSERT: GraphicsCache<Option<Conversions>> = GraphicsCache::new(None);
 
 unsafe fn reinsert(
@@ -272,7 +243,7 @@ unsafe fn reinsert(
         target.convert_to,
         mirror.and_then(|output| output.convert_to),
     ];
-    let _bindings = unsafe { Bindings::save(context, kernels) }?;
+    let _bindings = unsafe { SavedBindings::new(context, kernels.save?, kernels.restore?) }?;
     // Remove conflicting UAVs, native shader stages and predication. The
     // shared state scope restores the bindings and preserves UAV counters.
     unsafe { rsf_d3d11_output_clear_state(context) };

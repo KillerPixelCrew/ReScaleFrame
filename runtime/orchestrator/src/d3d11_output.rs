@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
 use crate::d3d11_output_abi::{
-    rsf_d3d11_output_texture_desc, rsf_d3d11_texture_desc, rsf_fullscreen_pass,
+    rsf_d3d11_output_texture_desc, rsf_d3d11_state, rsf_d3d11_texture_desc, rsf_fullscreen_pass,
 };
 use std::ffi::c_void;
 use std::ptr::NonNull;
@@ -54,6 +54,39 @@ impl FullscreenBlit {
 impl Drop for FullscreenBlit {
     fn drop(&mut self) {
         unsafe { (self.destroy)(self.pass.as_ptr()) };
+    }
+}
+
+pub(super) type SaveBindings = unsafe extern "C" fn(*mut c_void, *mut rsf_d3d11_state) -> u32;
+pub(super) type RestoreBindings = unsafe extern "C" fn(*mut c_void, *mut rsf_d3d11_state);
+
+pub(super) struct SavedBindings {
+    context: *mut c_void,
+    saved: rsf_d3d11_state,
+    restore: RestoreBindings,
+}
+
+impl SavedBindings {
+    pub(super) unsafe fn new(
+        context: *mut c_void,
+        save: SaveBindings,
+        restore: RestoreBindings,
+    ) -> Option<Self> {
+        let mut saved = rsf_d3d11_state::default();
+        if unsafe { save(context, &mut saved) } == 0 {
+            return None;
+        }
+        Some(Self {
+            context,
+            saved,
+            restore,
+        })
+    }
+}
+
+impl Drop for SavedBindings {
+    fn drop(&mut self) {
+        unsafe { (self.restore)(self.context, &mut self.saved) };
     }
 }
 

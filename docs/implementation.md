@@ -183,6 +183,17 @@ remain 381, 256 and 273 with matching names and ordinals. The worker's VS2022
 attempt stopped at C2026 in the existing sharpening shader string.
 Device and game execution remain pending.
 
+The native D3D11 SR evaluation sequence now runs in Rust. The native table
+supplies the existing region, mask, pipeline and publication kernels. Rust
+validates output extents before subtraction, scopes the scene identity and
+graphics bindings, and commits history only after successful reinsertion.
+The explicit FG capture path still invokes its separate existing entry.
+
+Eight focused host, frame and Anomaly ABI fixtures passed in Debug and
+Release, and all 91 Rust tests passed. The linked AC7 carrier and rendered
+host device fixture built in both configurations. Device and game execution
+remain pending.
+
 Seven focused frame assembly, D3D11 host and Anomaly fixtures passed in
 Debug and Release. All 88 Rust tests and workspace Clippy passed. The Release
 runtime and linked AC7 carrier kept their 381 and 256 baseline export names

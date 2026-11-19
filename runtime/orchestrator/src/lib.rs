@@ -45,6 +45,10 @@ mod latency_lease;
 #[cfg(windows)]
 mod native_scene;
 #[cfg(windows)]
+mod native_sr;
+#[cfg(windows)]
+mod native_sr_abi;
+#[cfg(windows)]
 mod native_sr_state;
 #[cfg(windows)]
 mod native_window;

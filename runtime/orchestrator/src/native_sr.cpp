@@ -59,96 +59,114 @@ struct Bindings {
     ~Bindings() { if (valid) rsf_d3d11_state_restore(context, &saved); }
 };
 }
-extern "C" RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_native_sr_evaluate(void* context,
-    const rsf_game_render_pass* pass) try
+namespace {
+int sr_call_failed() noexcept
 {
-    // Providers receive the pipeline's private output, not native destinations.
-    // Native publication occurs only in native_reinsert on this immediate stream.
-    // Cross-API uploads copy native inputs into owned shared slots before dispatch.
-    native_destinations_ordered = true;
-    if (!context || !pass || pass->struct_size < sizeof(*pass) || pass->role != RSF_GAME_RENDER_SR ||
-        !pass->camera_valid || !pass->color_input || !pass->color_output || !pass->depth || !pass->motion ||
-        pass->render_rect[0] < 0 || pass->render_rect[1] < 0 || pass->output_rect[0] < 0 || pass->output_rect[1] < 0)
-        return RSF_DLSS_PIPELINE_ERROR_INVALID_ARGUMENT;
-    const auto& source = pass->camera;
-    if (source.struct_size < sizeof(source) || source.abi_version != RSF_GAME_CAMERA_ABI_VERSION ||
-        !source.render_width || !source.render_height) return RSF_DLSS_PIPELINE_ERROR_ABI_MISMATCH;
-    if (pass->render_rect[2] <= pass->render_rect[0] || pass->render_rect[3] <= pass->render_rect[1] ||
-        pass->output_rect[2] <= pass->output_rect[0] || pass->output_rect[3] <= pass->output_rect[1] ||
-        source.render_width != uint32_t(pass->render_rect[2] - pass->render_rect[0]) ||
-        source.render_height != uint32_t(pass->render_rect[3] - pass->render_rect[1]))
-        return RSF_DLSS_PIPELINE_ERROR_INVALID_ARGUMENT;
-    const uint32_t output_width = uint32_t(pass->output_rect[2] - pass->output_rect[0]);
-    const uint32_t output_height = uint32_t(pass->output_rect[3] - pass->output_rect[1]);
-    rsf_pipeline_camera_frame camera{};
-    rsf_core_native_sr_camera(Temporal::Sr, pass, &camera);
-    rsf_dlss_pipeline_frame frame{};
-    frame.struct_size = sizeof(frame); frame.abi_version = RSF_DLSS_PIPELINE_ABI_VERSION;
-    frame.scene_color = pass->color_input; frame.depth = pass->depth; frame.game_motion = pass->motion;
-    frame.exposure = nullptr; frame.render_width = source.render_width;
-    frame.render_height = source.render_height; frame.camera = &camera;
-    if (!same_device_inputs(context,*pass)) return RSF_DLSS_PIPELINE_ERROR_INVALID_ARGUMENT;
-    D3D11_TEXTURE2D_DESC mapped_depth_desc{};
-    static_cast<ID3D11Texture2D*>(pass->depth)->GetDesc(&mapped_depth_desc);
-    if (!rsf_native_regions_depth_valid(&pass->depth_domains,mapped_depth_desc.Format,pass->render_rect))
-        return RSF_DLSS_PIPELINE_ERROR_INVALID_ARGUMENT;
-    Bindings bindings(context); if (!bindings.valid) return RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED;
-    static_cast<ID3D11DeviceContext*>(context)->SetPredication(nullptr, FALSE);
-    const auto resized = rsf_dlss_pipeline_resize_output(output_width, output_height, nullptr, nullptr);
-    if (resized != RSF_DLSS_PIPELINE_OK) { rsf_core_native_sr_reset(Temporal::Sr); return resized; }
-    D3D11_TEXTURE2D_DESC color_desc{}, depth_desc{}, motion_desc{};
-    static_cast<ID3D11Texture2D*>(pass->color_input)->GetDesc(&color_desc);
-    static_cast<ID3D11Texture2D*>(pass->depth)->GetDesc(&depth_desc);
-    static_cast<ID3D11Texture2D*>(pass->motion)->GetDesc(&motion_desc);
-    const bool local_inputs = !rsf_game_depth_domains_requested(&pass->depth_domains) && !pass->render_rect[0] && !pass->render_rect[1] &&
-        color_desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT &&
-        color_desc.Width == source.render_width && color_desc.Height == source.render_height &&
-        depth_desc.Width == source.render_width && depth_desc.Height == source.render_height &&
-        motion_desc.Width == source.render_width && motion_desc.Height == source.render_height;
-    if (!local_inputs) {
-        ID3D11Texture2D *color = nullptr, *depth = nullptr, *motion = nullptr;
-        if (!rsf_native_regions_prepare(static_cast<ID3D11DeviceContext*>(context),
-            static_cast<ID3D11Texture2D*>(pass->color_input), static_cast<ID3D11Texture2D*>(pass->depth),
-            static_cast<ID3D11Texture2D*>(pass->motion), pass->render_rect, &color, &depth, &motion, &pass->depth_domains, source.depth_inverted != 0))
-            return RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED;
-        frame.scene_color = color; frame.depth = depth; frame.game_motion = motion;
-    }
-    frame.exposure = rsf_native_scalar_exposure(context, pass->exposure);
-    // Rect-local like the cropped inputs, and only for this view's own frame and rectangle.
-    rsf_native_translucency_masks masks{}; masks.struct_size = sizeof(masks);
-    if (rsf_native_translucency_take(pass, &masks)) {
-        frame.color_before_transparency = masks.color_before_transparency;
-        frame.transparency_layer = masks.transparency_layer;
-        frame.reactive_mask = masks.reactive; frame.transparency_mask = masks.coverage; frame.bias_mask = masks.bias;
-        frame.motion_depth_layer = masks.motion_depth;
-    }
-    if (pass->temporal_mask) {
-        ID3D11Texture2D *reactive = nullptr, *bias = nullptr;
-        if (!rsf_native_regions_temporal_mask(static_cast<ID3D11DeviceContext*>(context),
-                static_cast<ID3D11Texture2D*>(pass->temporal_mask), pass->render_rect, pass->temporal_mask_weights,
-                static_cast<ID3D11Texture2D*>(frame.reactive_mask), static_cast<ID3D11Texture2D*>(frame.bias_mask),
-                &reactive, &bias)) return RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED;
-        frame.reactive_mask = reactive; frame.bias_mask = bias;
-    }
-    const auto result = [&] {
-        FgSceneScope scope(*pass);
-        rsf_native_fg_scene(pass);
-        return rsf_dlss_pipeline_on_frame(context, &frame);
-    }();
-    if (result != RSF_DLSS_PIPELINE_OK) { rsf_core_native_sr_reset(Temporal::Sr); return result; }
-    auto* output = static_cast<ID3D11Texture2D*>(rsf_dlss_pipeline_output_texture());
-    auto* target = static_cast<ID3D11Texture2D*>(pass->color_output);
-    auto* readable = static_cast<ID3D11Texture2D*>(pass->color_output_readable);
-    if (!rsf_native_reinsert(static_cast<ID3D11DeviceContext*>(context), output, target, readable, pass->output_rect)) {
-        rsf_core_native_sr_reset(Temporal::Sr); return RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED;
-    }
-    rsf_core_native_sr_commit(Temporal::Sr, pass);
-    return RSF_DLSS_PIPELINE_OK;
-}
-catch (...) {
     native_destinations_ordered = false;
     rsf_core_native_sr_reset(Temporal::Sr);
     return RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED;
+}
+
+int validate_device(void* context, const rsf_game_render_pass* pass) try
+{
+    return same_device_inputs(context, *pass);
+}
+catch (...) { (void)sr_call_failed(); return -1; }
+
+int depth_layout(const rsf_game_render_pass* pass) try
+{
+    D3D11_TEXTURE2D_DESC depth{};
+    static_cast<ID3D11Texture2D*>(pass->depth)->GetDesc(&depth);
+    if (!rsf_native_regions_depth_valid(&pass->depth_domains, depth.Format, pass->render_rect))
+        return -1;
+    return rsf_game_depth_domains_requested(&pass->depth_domains);
+}
+catch (...) { (void)sr_call_failed(); return -2; }
+
+void clear_predication(void* context)
+{
+    static_cast<ID3D11DeviceContext*>(context)->SetPredication(nullptr, FALSE);
+}
+
+int resize_output(uint32_t width, uint32_t height) try
+{
+    return rsf_dlss_pipeline_resize_output(width, height, nullptr, nullptr);
+}
+catch (...) { return sr_call_failed(); }
+
+int prepare_regions(void* context, const rsf_game_render_pass* pass, void** textures) try
+{
+    ID3D11Texture2D *color = nullptr, *depth = nullptr, *motion = nullptr;
+    if (!rsf_native_regions_prepare(static_cast<ID3D11DeviceContext*>(context),
+        static_cast<ID3D11Texture2D*>(pass->color_input), static_cast<ID3D11Texture2D*>(pass->depth),
+        static_cast<ID3D11Texture2D*>(pass->motion), pass->render_rect, &color, &depth, &motion,
+        &pass->depth_domains, pass->camera.depth_inverted != 0)) return 0;
+    textures[0] = color; textures[1] = depth; textures[2] = motion;
+    return 1;
+}
+catch (...) { (void)sr_call_failed(); return 0; }
+
+int take_translucency(const rsf_game_render_pass* pass, rsf_native_translucency_masks* masks) try
+{
+    return rsf_native_translucency_take(pass, masks);
+}
+catch (...) { (void)sr_call_failed(); return -1; }
+
+int merge_mask(void* context, const rsf_game_render_pass* pass, rsf_dlss_pipeline_frame* frame) try
+{
+    ID3D11Texture2D *reactive = nullptr, *bias = nullptr;
+    if (!rsf_native_regions_temporal_mask(static_cast<ID3D11DeviceContext*>(context),
+        static_cast<ID3D11Texture2D*>(pass->temporal_mask), pass->render_rect, pass->temporal_mask_weights,
+        static_cast<ID3D11Texture2D*>(frame->reactive_mask), static_cast<ID3D11Texture2D*>(frame->bias_mask),
+        &reactive, &bias)) return 0;
+    frame->reactive_mask = reactive; frame->bias_mask = bias;
+    return 1;
+}
+catch (...) { (void)sr_call_failed(); return 0; }
+
+int evaluate_pipeline(void* context, const rsf_dlss_pipeline_frame* frame) try
+{
+    return rsf_dlss_pipeline_on_frame(context, frame);
+}
+catch (...) { return sr_call_failed(); }
+
+int publish_output(void* context, const rsf_game_render_pass* pass) try
+{
+    return rsf_native_reinsert(static_cast<ID3D11DeviceContext*>(context),
+        static_cast<ID3D11Texture2D*>(rsf_dlss_pipeline_output_texture()),
+        static_cast<ID3D11Texture2D*>(pass->color_output),
+        static_cast<ID3D11Texture2D*>(pass->color_output_readable), pass->output_rect);
+}
+catch (...) { (void)sr_call_failed(); return 0; }
+
+struct SrServices {
+    decltype(&validate_device) validate_device;
+    decltype(&depth_layout) depth_layout;
+    decltype(&rsf_d3d11_state_save) save;
+    decltype(&rsf_d3d11_state_restore) restore;
+    decltype(&clear_predication) clear_predication;
+    decltype(&resize_output) resize_output;
+    decltype(&prepare_regions) prepare_regions;
+    decltype(&rsf_native_scalar_exposure) exposure;
+    decltype(&take_translucency) take_translucency;
+    decltype(&merge_mask) merge_mask;
+    decltype(&evaluate_pipeline) evaluate_pipeline;
+    decltype(&publish_output) publish_output;
+};
+}
+
+extern "C" rsf_dlss_pipeline_result rsf_core_native_sr_evaluate(void*, const rsf_game_render_pass*, const SrServices*);
+
+extern "C" RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_native_sr_evaluate(void* context,
+    const rsf_game_render_pass* pass)
+{
+    static constexpr SrServices services{
+        validate_device, depth_layout, rsf_d3d11_state_save, rsf_d3d11_state_restore, clear_predication,
+        resize_output, prepare_regions, rsf_native_scalar_exposure, take_translucency, merge_mask,
+        evaluate_pipeline, publish_output,
+    };
+    native_destinations_ordered = true;
+    return rsf_core_native_sr_evaluate(context, pass, &services);
 }
 
 bool rsf_native_sr_native_destinations_ordered() { return native_destinations_ordered; }

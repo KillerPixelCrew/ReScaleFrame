@@ -59,3 +59,10 @@ generate("runtime/orchestrator/src/auxiliary_sr_abi.rs", "runtime/orchestrator/s
           "-Iruntime/presentation/include", "-Isdk/game/include"],
          ["--blocklist-type", "rsf_game_log_fn",
           "--raw-line", "use rsf_game_sys::rsf_game_log_fn;", "--with-derive-default"])
+generate("runtime/orchestrator/src/native_sr_abi.rs", "runtime/orchestrator/include/rescaleframe/native_sr.h",
+         "rsf_(dlss_pipeline_frame|native_translucency_masks)", "RSF_DLSS_PIPELINE_ABI_VERSION",
+         ["-include", "rescaleframe/native_translucency.h", "-Iruntime/orchestrator/include",
+          "-Iruntime/backends/dlss/include", "-Iruntime/graphics/include", "-Iruntime/contract/include",
+          "-Isdk/game/include"],
+         ["--blocklist-type", "rsf_pipeline_camera_frame",
+          "--raw-line", "use crate::render_abi::rsf_pipeline_camera_frame;"])
