@@ -500,10 +500,8 @@ target_link_libraries(rsf_latency_host_test PRIVATE rsf_orchestrator rsf_build_o
 add_test(NAME latency_host COMMAND rsf_latency_host_test)
 set_tests_properties(latency_host PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
-add_executable(rsf_render_links_test render_links.cpp ../runtime/orchestrator/src/render_links.cpp)
-target_compile_definitions(rsf_render_links_test PRIVATE RSF_RUNTIME_BUILD)
-target_include_directories(rsf_render_links_test PRIVATE ../runtime/orchestrator/include)
-target_link_libraries(rsf_render_links_test PRIVATE ReScaleFrame::Contract rsf_build_options)
+add_executable(rsf_render_links_test render_links.cpp)
+target_link_libraries(rsf_render_links_test PRIVATE rsf_orchestrator rsf_build_options)
 add_test(NAME render_links COMMAND rsf_render_links_test)
 set_tests_properties(render_links PROPERTIES TIMEOUT 120)
 

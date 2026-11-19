@@ -9,6 +9,20 @@ mod frame_sequencer;
 mod plugin_session;
 #[cfg(windows)]
 mod render_abi;
+#[cfg(windows)]
+mod render_links;
+mod sr_history;
+
+// C callers can recover from allocation failure. A successful handle is
+// released with Box::from_raw after its owner has retired outstanding users.
+fn allocate_handle<T>(value: T) -> *mut T {
+    const { assert!(size_of::<T>() != 0) }
+    let raw = unsafe { std::alloc::alloc(std::alloc::Layout::new::<T>()).cast::<T>() };
+    if !raw.is_null() {
+        unsafe { raw.write(value) };
+    }
+    raw
+}
 
 // Public backend IDs from rescaleframe/sr_session.h, checked by the native ABI test.
 const NONE: u32 = 0;

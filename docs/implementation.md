@@ -61,6 +61,21 @@ C headers. Debug and Release MSVC passed frame assembly, FG settings, the
 embedded GPU policy and the Anomaly SR API contract. The rebuilt Release DLL
 matched the baseline's 381 export names and ordinals. These are CPU/ABI checks.
 
+The bounded render-link table now lives in Rust. Its native fixture calls the
+runtime DLL and checks competing binds, cross-thread lookup, stale generations
+and late release after key reuse. It exercises the public contract synthetically.
+The table, frame sequencer and plugin sessions share fallible handle allocation.
+
+On the D3D11 SR path used by Anomaly, Rust now claims a pending history reset
+before calling the evaluator and restores it on refusal. The previous success
+path could clear a second reset requested during evaluation. A regression test
+requests that second reset inside the callback and checks the following frames.
+The temporary reset copy also reports its actual prefix size for extended input
+structures. Debug and Release MSVC passed render links, FG session, plugin
+session lifetime, embedded policy and the Anomaly SR API contract. All 76 Rust
+workspace tests passed. The Release DLL retains all 381 baseline export names
+and ordinals. No device or game run was performed for these changes.
+
 ## Fallout 4 AE native render callbacks, 16 November 2026
 
 User priority is now fully native Fallout4.exe without F4SE/ENB first, with

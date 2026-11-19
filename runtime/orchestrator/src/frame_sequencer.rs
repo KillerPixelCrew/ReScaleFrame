@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: MIT
 use rsf_game_sys::RSF_FRAME_SOURCE_RENDERED;
-use std::alloc::{Layout, alloc};
-use std::ptr;
 use std::sync::Mutex;
 
 const INVALID_ARGUMENT: i32 = -1;
@@ -41,19 +39,14 @@ unsafe extern "C" fn rsf_frame_sequencer_create(capacity: u32, out: *mut *mut Ha
     if out.is_null() || !(1..=64).contains(&capacity) {
         return INVALID_ARGUMENT;
     }
-    // Allocation failure is a recoverable result in the public C API.
-    let handle = unsafe { alloc(Layout::new::<Handle>()).cast::<Handle>() };
+    let handle = crate::allocate_handle(Mutex::new(Ledger {
+        capacity: capacity as usize,
+        last_begin: 0,
+        slots: [SequenceState::default(); 64],
+    }));
+    unsafe { out.write(handle) };
     if handle.is_null() {
-        unsafe { out.write(ptr::null_mut()) };
         return INIT_FAILED;
-    }
-    unsafe {
-        handle.write(Mutex::new(Ledger {
-            capacity: capacity as usize,
-            last_begin: 0,
-            slots: [SequenceState::default(); 64],
-        }));
-        out.write(handle);
     }
     0
 }

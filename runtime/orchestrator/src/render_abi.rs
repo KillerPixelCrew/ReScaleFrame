@@ -4,6 +4,7 @@
 
 pub const RSF_FG_BACKEND_AUTO: u32 = 7;
 pub const RSF_FG_BACKEND_ALL: u32 = 58;
+pub const RSF_RENDER_LINK_ABI_VERSION: u32 = 1;
 pub const RSF_DLSS_ABI_VERSION: u32 = 5;
 pub const RSF_FRAME_ASSEMBLY_ABI_VERSION: u32 = 1;
 #[repr(C)]
@@ -23,6 +24,36 @@ const _: () = {
         [::core::mem::offset_of!(rsf_fg_choice, choices) - 4usize];
     ["Offset of field: rsf_fg_choice::last_result"]
         [::core::mem::offset_of!(rsf_fg_choice, last_result) - 8usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_render_link {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    pub session_id: u64,
+    pub source_frame_id: u64,
+    pub submission_id: u64,
+    pub resource_generation: u64,
+    pub producer_key: u64,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_render_link"][::core::mem::size_of::<rsf_render_link>() - 48usize];
+    ["Alignment of rsf_render_link"][::core::mem::align_of::<rsf_render_link>() - 8usize];
+    ["Offset of field: rsf_render_link::struct_size"]
+        [::core::mem::offset_of!(rsf_render_link, struct_size) - 0usize];
+    ["Offset of field: rsf_render_link::abi_version"]
+        [::core::mem::offset_of!(rsf_render_link, abi_version) - 4usize];
+    ["Offset of field: rsf_render_link::session_id"]
+        [::core::mem::offset_of!(rsf_render_link, session_id) - 8usize];
+    ["Offset of field: rsf_render_link::source_frame_id"]
+        [::core::mem::offset_of!(rsf_render_link, source_frame_id) - 16usize];
+    ["Offset of field: rsf_render_link::submission_id"]
+        [::core::mem::offset_of!(rsf_render_link, submission_id) - 24usize];
+    ["Offset of field: rsf_render_link::resource_generation"]
+        [::core::mem::offset_of!(rsf_render_link, resource_generation) - 32usize];
+    ["Offset of field: rsf_render_link::producer_key"]
+        [::core::mem::offset_of!(rsf_render_link, producer_key) - 40usize];
 };
 pub type rsf_dlss_quality = u32;
 #[repr(C)]

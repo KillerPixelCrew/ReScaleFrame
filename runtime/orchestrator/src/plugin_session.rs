@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 use rsf_game_sys::*;
-use std::alloc::{Layout, alloc};
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::RwLock;
@@ -140,18 +139,15 @@ unsafe extern "C" fn rsf_plugin_session_prepare(
 
     // A plugin may retain the services address until stop succeeds. Allocate
     // its final owner before prepare and preserve recoverable allocation failure.
-    let raw = unsafe { alloc(Layout::new::<Session>()).cast::<Session>() };
+    let raw = crate::allocate_handle(Session {
+        _module: module,
+        hooks: api.hooks,
+        services: options.services,
+        phase: RwLock::new(Phase::Partial),
+    });
     if raw.is_null() {
         return NOT_READY;
     }
-    unsafe {
-        raw.write(Session {
-            _module: module,
-            hooks: api.hooks,
-            services: options.services,
-            phase: RwLock::new(Phase::Partial),
-        })
-    };
     // Keep the allocation at the same address throughout the plugin's lease.
     let session = unsafe { &*raw };
     let result = unsafe { rsf_plugin_call_prepare(&session.hooks, &session.services) };

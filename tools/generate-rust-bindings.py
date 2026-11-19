@@ -26,7 +26,7 @@ def generate(output, header, types, constants, clang_args):
 generate("sdk/game/src/lib.rs", "sdk/game/include/rescaleframe/game_api.h",
          "rsf_get_game_plugin_api_fn", "RSF_.*", ["-Isdk/game/include"])
 generate("runtime/orchestrator/src/render_abi.rs", "runtime/orchestrator/include/rescaleframe/frame_assembly.h",
-         "rsf_(frame_resources|pipeline_camera_frame|dlss_frame|fg_choice)",
-         "RSF_(FRAME_ASSEMBLY_ABI_VERSION|DLSS_ABI_VERSION|FG_BACKEND_(AUTO|ALL))",
-         ["-include", "rescaleframe/fg_choice.h", "-Iruntime/orchestrator/include",
+         "rsf_(frame_resources|pipeline_camera_frame|dlss_frame|fg_choice|render_link)",
+         "RSF_(FRAME_ASSEMBLY_ABI_VERSION|DLSS_ABI_VERSION|FG_BACKEND_(AUTO|ALL)|RENDER_LINK_ABI_VERSION)",
+         ["-include", "rescaleframe/fg_choice.h", "-include", "rescaleframe/render_links.h", "-Iruntime/orchestrator/include",
           "-Iruntime/contract/include", "-Iruntime/backends/dlss/include", "-Isdk/game/include"])
