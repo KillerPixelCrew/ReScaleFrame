@@ -31,6 +31,12 @@ int main(void) {
     if (query(&api) != RSF_OK || api.struct_size != sizeof(api) || api.abi_version != RSF_OVERLAY_API_VERSION) return 1;
     if (!api.configure || !api.present || !api.notify || !api.visible || !api.set_visible || !api.toggle ||
         !api.capture || !api.status || !api.settings_get || !api.settings_apply) return 1;
+    struct { rsf_overlay_api api; uint32_t tail; } extended = {0};
+    extended.api.struct_size = sizeof(extended);
+    extended.api.abi_version = RSF_OVERLAY_API_VERSION;
+    extended.tail = 0xfeedfaceu;
+    if (query(&extended.api) != RSF_OK || extended.api.struct_size != sizeof(api) ||
+        extended.tail != 0xfeedfaceu) return 1;
 
     memset(&capture, 0, sizeof(capture)); capture.struct_size = sizeof(capture);
     if (api.capture(&capture) != RSF_OK || capture.started || capture.captured) return 1;

@@ -342,7 +342,7 @@ unsafe fn sharpening_options<'a>(options: *const Sharpening) -> Option<&'a Sharp
 /// `ini` and `section` are terminated UTF-16 strings, `defaults` and `output` are valid for
 /// their full rsf_render_settings size, and `sharpening` is readable for its `struct_size`.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_settings_store_read(
+pub(crate) unsafe extern "C" fn rsf_settings_store_read(
     ini: PCWSTR,
     section: PCWSTR,
     defaults: *const Settings,
@@ -366,7 +366,7 @@ unsafe extern "C" fn rsf_settings_store_read(
 /// # Safety
 /// `ini` and `section` are terminated UTF-16 strings; `request` is a full rsf_render_settings.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_settings_store_write(
+pub(crate) unsafe extern "C" fn rsf_settings_store_write(
     ini: PCWSTR,
     section: PCWSTR,
     request: *const Settings,
@@ -380,14 +380,14 @@ unsafe extern "C" fn rsf_settings_store_write(
 /// # Safety
 /// `ini` and `section` are terminated UTF-16 strings.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_settings_store_read_layout(ini: PCWSTR, section: PCWSTR) -> u32 {
+pub(crate) unsafe extern "C" fn rsf_settings_store_read_layout(ini: PCWSTR, section: PCWSTR) -> u32 {
     File::new(ini, section).map_or(0, |file| file.integer(OVERLAY_LAYOUT, 0))
 }
 
 /// # Safety
 /// `ini` and `section` are terminated UTF-16 strings.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_settings_store_write_layout(
+pub(crate) unsafe extern "C" fn rsf_settings_store_write_layout(
     ini: PCWSTR,
     section: PCWSTR,
     value: u32,
