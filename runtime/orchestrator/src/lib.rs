@@ -4,6 +4,8 @@
 mod cpu_abi;
 #[cfg(windows)]
 mod cpu_reservations;
+#[cfg(windows)]
+mod native_cpu;
 
 #[cfg(windows)]
 mod fg_choice;

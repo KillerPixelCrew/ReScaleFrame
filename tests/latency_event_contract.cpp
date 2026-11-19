@@ -14,7 +14,15 @@ int send(rsf_game_cpu_event event) { return rsf_native_cpu_dispatch(&event,&sink
 }
 int main() {
     rsf_native_cpu_release();
-    CHECK(send(fact(1,RSF_GAME_CPU_FRAME_BEGIN,10)));
+    alignas(rsf_game_cpu_event) uint32_t short_packet[]{sizeof(uint32_t), UINT32_MAX};
+    CHECK(!rsf_native_cpu_dispatch(reinterpret_cast<const rsf_game_cpu_event*>(short_packet), &sink, nullptr));
+    CHECK(!rsf_native_cpu_read(9, 1, reinterpret_cast<rsf_native_cpu_frame*>(short_packet)));
+    CHECK(short_packet[0] == sizeof(uint32_t) && short_packet[1] == UINT32_MAX);
+    struct ExtendedEvent { rsf_game_cpu_event value; uint64_t tail; };
+    ExtendedEvent extended{fact(1, RSF_GAME_CPU_FRAME_BEGIN, 10), 123};
+    extended.value.struct_size = sizeof(extended);
+    CHECK(rsf_native_cpu_dispatch(&extended.value, &sink, nullptr));
+    CHECK(delivered.size() == 1 && delivered[0].struct_size == sizeof(rsf_game_cpu_event));
     CHECK(send(fact(1,RSF_GAME_CPU_INPUT_SAMPLE,20)));
     CHECK(send(fact(1,RSF_GAME_CPU_SIMULATION_BEGIN,21)));
     const auto count=delivered.size();

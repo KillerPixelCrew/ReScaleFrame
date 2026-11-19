@@ -171,6 +171,20 @@ status, session, window and Anomaly fixtures passed in Debug and Release.
 The linked AC7 carrier built in both configurations. All 78 Rust tests and
 workspace Clippy passed. No device or game run was performed.
 
+The native CPU dispatcher now shares one Rust lock with the reservation ledger.
+CPU facts, input receipts, pending messages, and marker bookkeeping use that
+owner. Native sinks run after the lock is released. The small C++ bridge keeps
+the Windows pacing lease and calls the existing receipt replay check under its
+original license. Short structures are refused before borrowing the whole
+record. Copied v1 events and receipt packets advertise their actual size.
+
+The integrated Release DLL and both carriers match the worker's verified
+baseline at 381, 256, and 273 export names and ordinals respectively. The C++
+Anomaly adapter built. Fourteen focused tests passed in Debug and Release,
+covering both Anomaly input profiles, receipt and reservation contracts,
+native Vulkan latency with mock providers, and D3D11 window and ABI paths.
+Device and in-game verification remain pending.
+
 ## Fallout 4 AE native render callbacks, 16 November 2026
 
 User priority is now fully native Fallout4.exe without F4SE/ENB first, with

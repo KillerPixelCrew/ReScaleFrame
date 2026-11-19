@@ -78,6 +78,85 @@ const _: () = {
 };
 #[repr(C)]
 #[derive(Copy, Clone)]
+pub struct rsf_native_cpu_counters {
+    pub struct_size: u32,
+    pub frames: u64,
+    pub input_events: [u64; 3usize],
+    pub pings: u64,
+    pub substitutes: u64,
+    pub duplicates: u64,
+    pub order_violations: u64,
+    pub expired_messages: u64,
+    pub unframed_inputs: u64,
+    pub derived_frame_ends: u64,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_native_cpu_counters"]
+        [::core::mem::size_of::<rsf_native_cpu_counters>() - 96usize];
+    ["Alignment of rsf_native_cpu_counters"]
+        [::core::mem::align_of::<rsf_native_cpu_counters>() - 8usize];
+    ["Offset of field: rsf_native_cpu_counters::struct_size"]
+        [::core::mem::offset_of!(rsf_native_cpu_counters, struct_size) - 0usize];
+    ["Offset of field: rsf_native_cpu_counters::frames"]
+        [::core::mem::offset_of!(rsf_native_cpu_counters, frames) - 8usize];
+    ["Offset of field: rsf_native_cpu_counters::input_events"]
+        [::core::mem::offset_of!(rsf_native_cpu_counters, input_events) - 16usize];
+    ["Offset of field: rsf_native_cpu_counters::pings"]
+        [::core::mem::offset_of!(rsf_native_cpu_counters, pings) - 40usize];
+    ["Offset of field: rsf_native_cpu_counters::substitutes"]
+        [::core::mem::offset_of!(rsf_native_cpu_counters, substitutes) - 48usize];
+    ["Offset of field: rsf_native_cpu_counters::duplicates"]
+        [::core::mem::offset_of!(rsf_native_cpu_counters, duplicates) - 56usize];
+    ["Offset of field: rsf_native_cpu_counters::order_violations"]
+        [::core::mem::offset_of!(rsf_native_cpu_counters, order_violations) - 64usize];
+    ["Offset of field: rsf_native_cpu_counters::expired_messages"]
+        [::core::mem::offset_of!(rsf_native_cpu_counters, expired_messages) - 72usize];
+    ["Offset of field: rsf_native_cpu_counters::unframed_inputs"]
+        [::core::mem::offset_of!(rsf_native_cpu_counters, unframed_inputs) - 80usize];
+    ["Offset of field: rsf_native_cpu_counters::derived_frame_ends"]
+        [::core::mem::offset_of!(rsf_native_cpu_counters, derived_frame_ends) - 88usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_native_input_receipts {
+    pub struct_size: u32,
+    pub version: u32,
+    pub session_id: u64,
+    pub accepted: u64,
+    pub rejected: u64,
+    pub duplicates: u64,
+    pub input_kinds: [u64; 3usize],
+    pub window_messages: u64,
+    pub ping_candidates: u64,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_native_input_receipts"]
+        [::core::mem::size_of::<rsf_native_input_receipts>() - 80usize];
+    ["Alignment of rsf_native_input_receipts"]
+        [::core::mem::align_of::<rsf_native_input_receipts>() - 8usize];
+    ["Offset of field: rsf_native_input_receipts::struct_size"]
+        [::core::mem::offset_of!(rsf_native_input_receipts, struct_size) - 0usize];
+    ["Offset of field: rsf_native_input_receipts::version"]
+        [::core::mem::offset_of!(rsf_native_input_receipts, version) - 4usize];
+    ["Offset of field: rsf_native_input_receipts::session_id"]
+        [::core::mem::offset_of!(rsf_native_input_receipts, session_id) - 8usize];
+    ["Offset of field: rsf_native_input_receipts::accepted"]
+        [::core::mem::offset_of!(rsf_native_input_receipts, accepted) - 16usize];
+    ["Offset of field: rsf_native_input_receipts::rejected"]
+        [::core::mem::offset_of!(rsf_native_input_receipts, rejected) - 24usize];
+    ["Offset of field: rsf_native_input_receipts::duplicates"]
+        [::core::mem::offset_of!(rsf_native_input_receipts, duplicates) - 32usize];
+    ["Offset of field: rsf_native_input_receipts::input_kinds"]
+        [::core::mem::offset_of!(rsf_native_input_receipts, input_kinds) - 40usize];
+    ["Offset of field: rsf_native_input_receipts::window_messages"]
+        [::core::mem::offset_of!(rsf_native_input_receipts, window_messages) - 64usize];
+    ["Offset of field: rsf_native_input_receipts::ping_candidates"]
+        [::core::mem::offset_of!(rsf_native_input_receipts, ping_candidates) - 72usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
 pub struct rsf_native_cpu_reservation {
     pub struct_size: u32,
     pub state: u32,
