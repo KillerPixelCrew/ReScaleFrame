@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: MIT
 
 #[cfg(windows)]
+mod cpu_abi;
+#[cfg(windows)]
+mod cpu_reservations;
+
+#[cfg(windows)]
 mod fg_choice;
 #[cfg(windows)]
 mod fg_session;

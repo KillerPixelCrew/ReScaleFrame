@@ -104,6 +104,18 @@ matched the baseline. Rust workspace tests and Clippy passed. The generic FG
 session is currently exercised by fixtures. Anomaly uses the separate native FG
 path, whose device and in-game validation remain pending.
 
+The native CPU reservation ledger and predecessor Present outcomes now live in
+Rust. Rust validates reservation transitions and promotes a reported poll
+timestamp only after bind proves which frame consumed it. The existing CPU
+dispatcher still owns the frame lock and calls the sink outside it. The
+latency input fixture links the same CPU library as the runtime.
+
+Debug and Release MSVC passed six focused fixtures, including the Standard and
+AVX Anomaly adapter input contracts through the rebuilt DLL. These fixtures
+exercise the event path with graphics activation disabled. The C++ Anomaly DLL
+and linked AC7 carrier built in Release. All 381 runtime export names and
+ordinals matched the baseline. Rust workspace tests and Clippy passed.
+
 ## Fallout 4 AE native render callbacks, 16 November 2026
 
 User priority is now fully native Fallout4.exe without F4SE/ENB first, with

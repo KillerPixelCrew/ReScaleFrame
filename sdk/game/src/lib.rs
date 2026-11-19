@@ -519,6 +519,35 @@ const _: () = {
 pub type rsf_game_cpu_event_fn = ::core::option::Option<
     unsafe extern "C" fn(user: *mut ::core::ffi::c_void, event: *const rsf_game_cpu_event),
 >;
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_game_cpu_source_event {
+    pub header: rsf_game_cpu_event,
+    pub predecessor_source_id: u64,
+    pub native_generation: u64,
+    pub reason: u32,
+    pub reserved: u32,
+    pub poll_begin_qpc: u64,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_game_cpu_source_event"]
+        [::core::mem::size_of::<rsf_game_cpu_source_event>() - 96usize];
+    ["Alignment of rsf_game_cpu_source_event"]
+        [::core::mem::align_of::<rsf_game_cpu_source_event>() - 8usize];
+    ["Offset of field: rsf_game_cpu_source_event::header"]
+        [::core::mem::offset_of!(rsf_game_cpu_source_event, header) - 0usize];
+    ["Offset of field: rsf_game_cpu_source_event::predecessor_source_id"]
+        [::core::mem::offset_of!(rsf_game_cpu_source_event, predecessor_source_id) - 64usize];
+    ["Offset of field: rsf_game_cpu_source_event::native_generation"]
+        [::core::mem::offset_of!(rsf_game_cpu_source_event, native_generation) - 72usize];
+    ["Offset of field: rsf_game_cpu_source_event::reason"]
+        [::core::mem::offset_of!(rsf_game_cpu_source_event, reason) - 80usize];
+    ["Offset of field: rsf_game_cpu_source_event::reserved"]
+        [::core::mem::offset_of!(rsf_game_cpu_source_event, reserved) - 84usize];
+    ["Offset of field: rsf_game_cpu_source_event::poll_begin_qpc"]
+        [::core::mem::offset_of!(rsf_game_cpu_source_event, poll_begin_qpc) - 88usize];
+};
 pub type rsf_game_process_upscale_fn = ::core::option::Option<
     unsafe extern "C" fn(
         user: *mut ::core::ffi::c_void,
