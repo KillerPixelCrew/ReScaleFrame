@@ -136,11 +136,6 @@ fn camera(pass: &Pass, history: Option<History>) -> Camera {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_native_sr_camera(kind: u32, pass: &Pass, out: *mut Camera) {
-    unsafe { out.write(camera_for(kind, pass)) };
-}
-
 pub(super) fn camera_for(kind: u32, pass: &Pass) -> Camera {
     let previous = HISTORY
         .lock()
@@ -151,8 +146,7 @@ pub(super) fn camera_for(kind: u32, pass: &Pass) -> Camera {
     camera(pass, previous)
 }
 
-#[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_core_native_sr_commit(kind: u32, pass: &Pass) {
+pub(super) fn commit_history(kind: u32, pass: &Pass) {
     if let Some(slot) = HISTORY.lock().unwrap().get_mut(kind as usize) {
         *slot = Some(History::from_pass(pass));
     }

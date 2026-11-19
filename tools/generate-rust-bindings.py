@@ -60,7 +60,7 @@ generate("runtime/orchestrator/src/auxiliary_sr_abi.rs", "runtime/orchestrator/s
          ["--blocklist-type", "rsf_game_log_fn",
           "--raw-line", "use rsf_game_sys::rsf_game_log_fn;", "--with-derive-default"])
 generate("runtime/orchestrator/src/native_sr_abi.rs", "runtime/orchestrator/include/rescaleframe/native_sr.h",
-         "rsf_(dlss_pipeline_frame|native_translucency_masks)", "RSF_DLSS_PIPELINE_ABI_VERSION",
+         "rsf_(dlss_pipeline_frame|native_translucency_masks|motion_decode_params)", "RSF_DLSS_PIPELINE_ABI_VERSION",
          ["-include", "rescaleframe/native_translucency.h", "-Iruntime/orchestrator/include",
           "-Iruntime/backends/dlss/include", "-Iruntime/graphics/include", "-Iruntime/contract/include",
           "-Isdk/game/include"],

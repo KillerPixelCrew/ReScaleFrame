@@ -189,6 +189,17 @@ validates output extents before subtraction, scopes the scene identity and
 graphics bindings, and commits history only after successful reinsertion.
 The explicit FG capture path still invokes its separate existing entry.
 
+The explicit D3D11 FG input path now sequences region preparation, motion
+decode and resolve, and capture in Rust. It retains decode/resolve state for
+the same device and extent and restores the immediate-context bindings.
+An explicit refusal still invalidates earlier held inputs for that exact
+source. The native bridge contains the existing graphics and capture calls.
+
+Eight focused SR, FG, D3D11 and Anomaly fixtures passed in Debug and Release.
+The rendered FG host device fixture built in both configurations. Release
+runtime and AC7 carrier exports matched the verified 381 and 256 baseline
+names and ordinals. Device and gameplay execution remain pending.
+
 The cross-API SR bridge now owns the same-adapter D3D12 queue, command slots,
 shared textures, fences and provider session in Rust. A timed-out warm-up
 holds one pending submission and its provider resources. The bridge refuses

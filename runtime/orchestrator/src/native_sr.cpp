@@ -13,12 +13,9 @@
 #include "native_reinsert.h"
 #include "native_sr_completion.h"
 #include <d3d11.h>
-#include <cstring>
 #include <wrl/client.h>
 
-enum class Temporal : uint32_t { Sr, Fg };
-extern "C" void rsf_core_native_sr_camera(Temporal, const rsf_game_render_pass*, rsf_pipeline_camera_frame*);
-extern "C" void rsf_core_native_sr_commit(Temporal, const rsf_game_render_pass*);
+enum class Temporal : uint32_t { Sr };
 extern "C" void rsf_core_native_sr_reset(Temporal);
 extern "C" void rsf_core_native_sr_publish_surface(uint32_t width, uint32_t height,
     uint32_t render_width, uint32_t render_height);
@@ -27,16 +24,8 @@ extern "C" void rsf_core_native_exposure_release();
 void* rsf_native_scalar_exposure(void* context, void* input);
 
 namespace {
-struct FgSceneScope {
-    rsf_game_render_pass previous;
-    explicit FgSceneScope(const rsf_game_render_pass& current) : previous(current) {
-        (void)rsf_native_fg_scene_swap(&previous);
-    }
-    ~FgSceneScope() { (void)rsf_native_fg_scene_swap(&previous); }
-};
 bool same_device_inputs(void* raw_context, const rsf_game_render_pass& pass) {
     auto* context=static_cast<ID3D11DeviceContext*>(raw_context);
-    if (context->GetType()!=D3D11_DEVICE_CONTEXT_IMMEDIATE) return false;
     Microsoft::WRL::ComPtr<ID3D11Device> device; context->GetDevice(&device);
     Microsoft::WRL::ComPtr<IUnknown> identity;
     if (!device || FAILED(device.As(&identity))) return false;
@@ -51,14 +40,8 @@ bool same_device_inputs(void* raw_context, const rsf_game_render_pass& pass) {
     return true;
 }
 thread_local bool native_destinations_ordered = false;
-struct Bindings {
-    void* context;
-    rsf_d3d11_state saved{};
-    bool valid;
-    explicit Bindings(void* c) : context(c), valid(rsf_d3d11_state_save(c, &saved) != 0) {}
-    ~Bindings() { if (valid) rsf_d3d11_state_restore(context, &saved); }
-};
 }
+
 namespace {
 int sr_call_failed() noexcept
 {
@@ -153,6 +136,11 @@ struct SrServices {
     decltype(&evaluate_pipeline) evaluate_pipeline;
     decltype(&publish_output) publish_output;
 };
+constexpr SrServices sr_services{
+    validate_device, depth_layout, rsf_d3d11_state_save, rsf_d3d11_state_restore, clear_predication,
+    resize_output, prepare_regions, rsf_native_scalar_exposure, take_translucency, merge_mask,
+    evaluate_pipeline, publish_output,
+};
 }
 
 extern "C" rsf_dlss_pipeline_result rsf_core_native_sr_evaluate(void*, const rsf_game_render_pass*, const SrServices*);
@@ -160,132 +148,90 @@ extern "C" rsf_dlss_pipeline_result rsf_core_native_sr_evaluate(void*, const rsf
 extern "C" RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_native_sr_evaluate(void* context,
     const rsf_game_render_pass* pass)
 {
-    static constexpr SrServices services{
-        validate_device, depth_layout, rsf_d3d11_state_save, rsf_d3d11_state_restore, clear_predication,
-        resize_output, prepare_regions, rsf_native_scalar_exposure, take_translucency, merge_mask,
-        evaluate_pipeline, publish_output,
-    };
     native_destinations_ordered = true;
-    return rsf_core_native_sr_evaluate(context, pass, &services);
+    return rsf_core_native_sr_evaluate(context, pass, &sr_services);
 }
 
 bool rsf_native_sr_native_destinations_ordered() { return native_destinations_ordered; }
 
 
 namespace {
-struct FgInputs {
-    Microsoft::WRL::ComPtr<ID3D11Device> device;
-    rsf_motion_decode* decode{};
-    rsf_motion_resolve* resolve{};
-    uint32_t width{}, height{};
-    void release() {
-        rsf_motion_decode_destroy(decode); decode = nullptr;
-        rsf_motion_resolve_destroy(resolve); resolve = nullptr;
-        device.Reset(); width = height = 0;
-        rsf_core_native_sr_reset(Temporal::Fg);
-    }
-};
-FgInputs& fg_inputs() { static FgInputs value; return value; }
-}
-extern "C" RSF_RUNTIME_API int32_t rsf_native_sr_capture_fg(void* raw_context,
-    const rsf_game_render_pass* pass, const rsf_motion_decode_params* motion) try
+rsf_motion_decode* create_decode(void* device, uint32_t width, uint32_t height) try
 {
-    if (!raw_context || !pass || pass->struct_size < sizeof(*pass) ||
-        pass->role != RSF_GAME_RENDER_FG_INPUTS || !motion || motion->struct_size < sizeof(*motion))
-        return RSF_ERROR_INVALID_ARGUMENT;
-    // A refused repeated explicit lease must not leave an earlier same-source capture eligible.
-    struct Refusal {
-        const rsf_game_render_pass* pass;
-        bool accepted{};
-        ~Refusal() {
-            if (accepted || !pass->source_frame_id) return;
-            auto refused=*pass; refused.flags|=RSF_GAME_RENDER_NO_FG;
-            FgSceneScope scope(refused);
-            rsf_native_fg_scene(&refused);
-        }
-    } refusal{pass};
-    if (!pass->source_frame_id || !pass->camera_valid || !pass->color_input || !pass->depth || !pass->motion ||
-        !pass->session_id || !pass->submission_id || !pass->motion_camera_included ||
-        !pass->motion_to_uv[0] || !pass->motion_to_uv[1]) return RSF_ERROR_NOT_READY;
-    const auto& source = pass->camera;
-    if (source.struct_size < sizeof(source) || source.abi_version != RSF_GAME_CAMERA_ABI_VERSION)
-        return RSF_ERROR_ABI_MISMATCH;
-    if (pass->render_rect[0] < 0 || pass->render_rect[1] < 0 ||
-        pass->render_rect[2] <= pass->render_rect[0] || pass->render_rect[3] <= pass->render_rect[1] ||
-        source.render_width != uint32_t(pass->render_rect[2] - pass->render_rect[0]) ||
-        source.render_height != uint32_t(pass->render_rect[3] - pass->render_rect[1]) ||
-        !source.output_width || !source.output_height) return RSF_ERROR_INVALID_ARGUMENT;
-    auto* context = static_cast<ID3D11DeviceContext*>(raw_context);
-    if (context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) return RSF_ERROR_INVALID_ARGUMENT;
-    rsf_native_fg_stage("normalize-enter", pass->source_frame_id, pass->native_frame, 0);
-    if (!same_device_inputs(context,*pass)) return RSF_ERROR_INVALID_ARGUMENT;
-    D3D11_TEXTURE2D_DESC mapped_depth_desc{};
-    static_cast<ID3D11Texture2D*>(pass->depth)->GetDesc(&mapped_depth_desc);
-    if (!rsf_native_regions_depth_valid(&pass->depth_domains,mapped_depth_desc.Format,pass->render_rect))
-        return RSF_ERROR_INVALID_ARGUMENT;
-    Bindings bindings(context); if (!bindings.valid) return RSF_ERROR_NOT_READY;
-    context->SetPredication(nullptr, FALSE);
-    Microsoft::WRL::ComPtr<ID3D11Device> device; context->GetDevice(&device);
-    auto& inputs = fg_inputs();
-    if (inputs.device.Get() != device.Get() || inputs.width != source.render_width || inputs.height != source.render_height)
-        inputs.release();
-    if (!inputs.decode) {
-        inputs.device = device; inputs.width = source.render_width; inputs.height = source.render_height;
-        rsf_motion_decode_setup setup{sizeof(setup), RSF_MOTION_DECODE_ABI_VERSION,
-            inputs.width, inputs.height, DXGI_FORMAT_R32G32_FLOAT, nullptr, nullptr};
-        if (rsf_motion_decode_create(device.Get(), &setup, &inputs.decode) != RSF_MOTION_DECODE_OK ||
-            !rsf_motion_resolve_create(device.Get(), inputs.width, inputs.height, &inputs.resolve)) {
-            inputs.release(); return RSF_ERROR_NOT_READY;
-        }
-    }
-    rsf_native_fg_stage("normalize-regions-decode", pass->source_frame_id, pass->native_frame, 0);
-    ID3D11Texture2D *color{}, *depth{}, *vectors{};
-    if (!rsf_native_regions_prepare(context, static_cast<ID3D11Texture2D*>(pass->color_input),
-        static_cast<ID3D11Texture2D*>(pass->depth), static_cast<ID3D11Texture2D*>(pass->motion),
-        pass->render_rect, &color, &depth, &vectors, &pass->depth_domains, source.depth_inverted != 0) ||
-        rsf_motion_decode_run(inputs.decode, context, vectors, motion) != RSF_MOTION_DECODE_OK)
-        return RSF_ERROR_NOT_READY;
-    rsf_motion_resolve_params resolve{}; resolve.struct_size = sizeof(resolve);
-    std::memcpy(resolve.clip_to_previous, source.clip_to_previous_clip, sizeof(resolve.clip_to_previous));
-    resolve.decoded_to_pixels[0] = -float(inputs.width) * pass->motion_to_uv[0];
-    resolve.decoded_to_pixels[1] = -float(inputs.height) * pass->motion_to_uv[1];
-    resolve.has_sentinel = motion->zero_means_unwritten || motion->validity_enabled;
-    resolve.sentinel = motion->invalid_value;
-    std::memcpy(resolve.jitter_pixels, source.jitter_pixels, sizeof(resolve.jitter_pixels));
-    rsf_native_fg_stage("normalize-resolve", pass->source_frame_id, pass->native_frame, 0);
-    if (!rsf_motion_resolve_run(inputs.resolve, context, rsf_motion_decode_texture(inputs.decode), depth, &resolve))
-        return RSF_ERROR_NOT_READY;
-    rsf_pipeline_camera_frame camera{};
-    rsf_core_native_sr_camera(Temporal::Fg, pass, &camera);
+    const rsf_motion_decode_setup setup{sizeof(setup), RSF_MOTION_DECODE_ABI_VERSION,
+        width, height, DXGI_FORMAT_R32G32_FLOAT, nullptr, nullptr};
+    rsf_motion_decode* decode = nullptr;
+    return rsf_motion_decode_create(device, &setup, &decode) == RSF_MOTION_DECODE_OK ? decode : nullptr;
+}
+catch (...) { return nullptr; }
 
-    camera.motion_decoded = 1; camera.has_motion_sentinel = 0; camera.camera_motion_included = 1;
-    camera.motion_scale[0] = 1.0f / float(inputs.width); camera.motion_scale[1] = 1.0f / float(inputs.height);
-    rsf_frame_resources resources{}; resources.struct_size = sizeof(resources);
-    resources.color_in = color; resources.color_out = color;
-    resources.depth = rsf_motion_resolve_depth(inputs.resolve); resources.motion = rsf_motion_resolve_motion(inputs.resolve);
-    resources.render_width = inputs.width; resources.render_height = inputs.height;
-    resources.output_width = source.output_width; resources.output_height = source.output_height;
-    resources.quality = RSF_DLSS_QUALITY_NATIVE;
-    rsf_dlss_frame frame{}; frame.struct_size = sizeof(frame);
-    if (rsf_assemble_dlss_frame(&camera, &resources, &frame) != RSF_FRAME_ASSEMBLY_OK) return RSF_ERROR_NOT_READY;
-    auto captured = *pass;
-    if (camera.reset) captured.flags |= RSF_GAME_RENDER_RESET;
-    FgSceneScope scope(captured);
-    rsf_native_fg_stage("normalize-capture", pass->source_frame_id, pass->native_frame, 0);
-    rsf_native_fg_capture(context, &frame);
-    rsf_native_fg_stage("normalize-captured", pass->source_frame_id, pass->native_frame, 0);
-    if (!rsf_native_fg_inputs_ready(pass->source_frame_id)) return RSF_ERROR_NOT_READY;
-    rsf_core_native_sr_commit(Temporal::Fg, pass);
-    refusal.accepted=true;
-    return RSF_OK;
-} catch (...) { return RSF_ERROR_NOT_READY; }
+rsf_motion_resolve* create_resolve(void* device, uint32_t width, uint32_t height) try
+{
+    rsf_motion_resolve* resolve = nullptr;
+    return rsf_motion_resolve_create(device, width, height, &resolve) ? resolve : nullptr;
+}
+catch (...) { return nullptr; }
+
+int decode_motion(rsf_motion_decode* decode, void* context, void* motion,
+    const rsf_motion_decode_params* params) try
+{
+    return rsf_motion_decode_run(decode, context, motion, params) == RSF_MOTION_DECODE_OK;
+}
+catch (...) { return 0; }
+
+int resolve_motion(rsf_motion_resolve* resolve, void* context, void* motion, void* depth,
+    const rsf_motion_resolve_params* params) try
+{
+    return rsf_motion_resolve_run(resolve, context, motion, depth, params);
+}
+catch (...) { return 0; }
+
+int capture_fg(void* context, const rsf_dlss_frame* frame, uint64_t source, uint64_t native) try
+{
+    rsf_native_fg_stage("normalize-capture", source, native, 0);
+    rsf_native_fg_capture(context, frame);
+    rsf_native_fg_stage("normalize-captured", source, native, 0);
+    return rsf_native_fg_inputs_ready(source);
+}
+catch (...) { return 0; }
+
+struct FgServices {
+    decltype(&create_decode) create_decode;
+    decltype(&create_resolve) create_resolve;
+    decltype(&decode_motion) decode;
+    decltype(&resolve_motion) resolve;
+    decltype(&rsf_motion_decode_texture) decoded_texture;
+    decltype(&rsf_motion_resolve_depth) depth;
+    decltype(&rsf_motion_resolve_motion) motion;
+    decltype(&rsf_motion_decode_destroy) destroy_decode;
+    decltype(&rsf_motion_resolve_destroy) destroy_resolve;
+    decltype(&rsf_native_fg_stage) stage;
+    decltype(&capture_fg) capture;
+    decltype(&rsf_native_fg_scene) refuse;
+};
+constexpr FgServices fg_services{
+    create_decode, create_resolve, decode_motion, resolve_motion, rsf_motion_decode_texture,
+    rsf_motion_resolve_depth, rsf_motion_resolve_motion, rsf_motion_decode_destroy, rsf_motion_resolve_destroy,
+    rsf_native_fg_stage, capture_fg, rsf_native_fg_scene,
+};
+}
+
+extern "C" int32_t rsf_core_native_sr_capture_fg(void* context, const rsf_game_render_pass* pass,
+    const rsf_motion_decode_params* motion, const SrServices*, const FgServices*);
+extern "C" void rsf_core_native_sr_fg_inputs_release();
+
+extern "C" RSF_RUNTIME_API int32_t rsf_native_sr_capture_fg(void* context, const rsf_game_render_pass* pass,
+    const rsf_motion_decode_params* motion)
+{
+    return rsf_core_native_sr_capture_fg(context, pass, motion, &sr_services, &fg_services);
+}
 
 extern "C" RSF_RUNTIME_API void rsf_native_sr_release_resources(void)
 {
     rsf_native_scene_reset(); rsf_native_window_reset(); rsf_native_cpu_release(); rsf_native_composition_release();
     rsf_native_sr_set_enabled(0);
     rsf_core_native_exposure_release(); rsf_native_regions_release();
-    fg_inputs().release(); rsf_native_reinsert_release(); rsf_core_native_sr_reset(Temporal::Sr);
+    rsf_core_native_sr_fg_inputs_release(); rsf_native_reinsert_release(); rsf_core_native_sr_reset(Temporal::Sr);
     rsf_native_translucency_release();
     rsf_core_native_sr_clear_surface();
 }

@@ -7,7 +7,7 @@ unsafe fn has_capacity<T>(p: *const T) -> bool {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_assemble_dlss_frame(
+pub(super) unsafe extern "C" fn rsf_assemble_dlss_frame(
     camera: *const rsf_pipeline_camera_frame,
     resources: *const rsf_frame_resources,
     out: *mut rsf_dlss_frame,
