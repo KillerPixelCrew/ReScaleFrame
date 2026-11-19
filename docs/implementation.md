@@ -129,6 +129,18 @@ Release runtime retained all 381 export names and ordinals. The 77 Rust workspac
 tests include a synthetic regression for nested capture and short frames.
 Device and gameplay validation remain pending.
 
+The per-thread D3D11 scene registry and presentation-path selection now run
+in Rust. The native bridge still queries canonical COM identity and the
+current backbuffer dimensions. The registry retains numeric identity only,
+and refuses to replace an incomplete live record on a slot collision.
+A synthetic regression covers incomplete, direct, sampled and ambiguous paths.
+
+Five focused D3D11 and Anomaly ABI fixtures passed in both Debug and Release.
+The linked AC7 carrier built in both configurations. All 381 Release DLL
+export names and ordinals matched the baseline, and all 78 Rust tests passed.
+The D3D11 presentation device fixture built in Release. Its device path and
+in-game verification remain pending.
+
 ## Fallout 4 AE native render callbacks, 16 November 2026
 
 User priority is now fully native Fallout4.exe without F4SE/ENB first, with

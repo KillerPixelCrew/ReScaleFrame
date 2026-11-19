@@ -37,3 +37,6 @@ generate("runtime/orchestrator/src/cpu_abi.rs", "runtime/orchestrator/include/re
          "rsf_native_cpu_(frame|reservation|reservation_counters)",
          "RSF_NATIVE_CPU_(RESERVATION_.*|DEPENDENCY_.*|PRESENT_.*)",
          ["-Iruntime/orchestrator/include", "-Isdk/game/include"])
+generate("runtime/orchestrator/src/scene_abi.rs", "runtime/orchestrator/include/rescaleframe/native_scene.h",
+         "rsf_native_scene_identity", "RSF_NATIVE_SCENE_PRESENT_.*",
+         ["-Iruntime/orchestrator/include", "-Isdk/game/include"])

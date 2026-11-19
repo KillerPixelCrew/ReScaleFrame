@@ -15,11 +15,15 @@ mod fg_session;
 mod frame_assembly;
 mod frame_sequencer;
 #[cfg(windows)]
+mod native_scene;
+#[cfg(windows)]
 mod plugin_session;
 #[cfg(windows)]
 mod render_abi;
 #[cfg(windows)]
 mod render_links;
+#[cfg(windows)]
+mod scene_abi;
 mod sr_history;
 #[cfg(windows)]
 mod sr_session;
