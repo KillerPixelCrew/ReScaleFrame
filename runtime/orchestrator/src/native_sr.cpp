@@ -23,6 +23,13 @@
 #include <mutex>
 
 namespace {
+struct FgSceneScope {
+    rsf_game_render_pass previous;
+    explicit FgSceneScope(const rsf_game_render_pass& current) : previous(current) {
+        (void)rsf_native_fg_scene_swap(&previous);
+    }
+    ~FgSceneScope() { (void)rsf_native_fg_scene_swap(&previous); }
+};
 struct History {
     uint64_t session = 0, owner = 0, frame = 0;
     uint32_t width = 0, height = 0;
@@ -214,9 +221,11 @@ extern "C" RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_native_sr_evaluate(void*
                 &reactive, &bias)) return RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED;
         frame.reactive_mask = reactive; frame.bias_mask = bias;
     }
-    rsf_native_fg_scene(pass);
-    const auto result = rsf_dlss_pipeline_on_frame(context, &frame);
-    rsf_native_fg_scene(nullptr);
+    const auto result = [&] {
+        FgSceneScope scope(*pass);
+        rsf_native_fg_scene(pass);
+        return rsf_dlss_pipeline_on_frame(context, &frame);
+    }();
     if (result != RSF_DLSS_PIPELINE_OK) { history = {}; return result; }
     auto* output = static_cast<ID3D11Texture2D*>(rsf_dlss_pipeline_output_texture());
     auto* target = static_cast<ID3D11Texture2D*>(pass->color_output);
@@ -264,10 +273,8 @@ extern "C" RSF_RUNTIME_API int32_t rsf_native_sr_capture_fg(void* raw_context,
         ~Refusal() {
             if (accepted || !pass->source_frame_id) return;
             auto refused=*pass; refused.flags|=RSF_GAME_RENDER_NO_FG;
-            rsf_game_render_pass previous=refused;
-            (void)rsf_native_fg_scene_swap(&previous);
+            FgSceneScope scope(refused);
             rsf_native_fg_scene(&refused);
-            (void)rsf_native_fg_scene_swap(&previous);
         }
     } refusal{pass};
     if (!pass->source_frame_id || !pass->camera_valid || !pass->color_input || !pass->depth || !pass->motion ||
@@ -359,13 +366,7 @@ extern "C" RSF_RUNTIME_API int32_t rsf_native_sr_capture_fg(void* raw_context,
     if (rsf_assemble_dlss_frame(&camera, &resources, &frame) != RSF_FRAME_ASSEMBLY_OK) return RSF_ERROR_NOT_READY;
     auto captured = *pass;
     if (camera.reset) captured.flags |= RSF_GAME_RENDER_RESET;
-    struct SceneScope {
-        rsf_game_render_pass previous;
-        explicit SceneScope(const rsf_game_render_pass& current) : previous(current) {
-            (void)rsf_native_fg_scene_swap(&previous);
-        }
-        ~SceneScope() { (void)rsf_native_fg_scene_swap(&previous); }
-    } scope(captured);
+    FgSceneScope scope(captured);
     rsf_native_fg_stage("normalize-capture", pass->source_frame_id, pass->native_frame, 0);
     rsf_native_fg_capture(context, &frame);
     rsf_native_fg_stage("normalize-captured", pass->source_frame_id, pass->native_frame, 0);

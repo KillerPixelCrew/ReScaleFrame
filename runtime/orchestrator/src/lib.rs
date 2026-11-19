@@ -14,6 +14,8 @@ mod fg_dispatch;
 #[cfg(windows)]
 mod fg_leases;
 #[cfg(windows)]
+mod fg_scene;
+#[cfg(windows)]
 mod fg_session;
 #[cfg(windows)]
 mod fg_status;

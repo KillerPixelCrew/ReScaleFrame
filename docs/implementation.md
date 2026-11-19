@@ -199,6 +199,16 @@ SR temporal device fixture built. The Release runtime and carrier matched
 their verified 381 and 256 export names and ordinals. Alternate-backend device
 and in-game evaluation remain pending.
 
+Rust now owns the per-thread FG scene scope and the scalar identity bound by
+an adapter. A pass carrying its own source keeps that identity. An anonymous
+pass can borrow the bound source identity while retaining its original leased
+textures. D3D11 SR restores the enclosing FG scope after evaluation. The
+native host fixture verifies those rules and nested restoration.
+
+Seven focused D3D11 and Anomaly fixtures passed in Debug and Release.
+The linked AC7 carrier built in both configurations. Device and in-game
+execution remain pending.
+
 ## Fallout 4 AE native render callbacks, 16 November 2026
 
 User priority is now fully native Fallout4.exe without F4SE/ENB first, with

@@ -91,7 +91,6 @@ void trace(const char* stage, uint64_t id, int32_t result) {
     if (sink) { char text[160]; std::snprintf(text, sizeof(text), "FG/Reflex %s source=%llu result=%d", stage,
         static_cast<unsigned long long>(id), result); sink(user, text); }
 }
-thread_local rsf_game_render_pass scene{};
 // The game's screen class decides, through the one rule every generation consumer applies.
 bool generates_on(uint32_t screen) {
     rsf_frame_record record{}; record.struct_size = sizeof(record); record.screen = screen;
@@ -1259,34 +1258,20 @@ extern "C" RSF_RUNTIME_API void rsf_native_fg_submission(const rsf_game_render_p
         with_frame(id, [](CpuOwner& frame) { frame.submit_end = now_qpc(); frame.render_complete = true; });
     }
 }
+extern "C" void rsf_core_native_fg_scene_set(const rsf_game_render_pass*,
+    void (*refuse_held_inputs)(const rsf_game_render_pass*));
+extern "C" void rsf_core_native_fg_scene_read(rsf_game_render_pass*);
+
 namespace {
-thread_local rsf_game_render_pass bound_source{};
-}
-extern "C" RSF_RUNTIME_API void rsf_native_fg_bind_source(const rsf_game_render_pass* identity) {
-    bound_source = identity && identity->struct_size >= sizeof(*identity) && identity->source_frame_id ? *identity : rsf_game_render_pass{};
-}
-extern "C" RSF_RUNTIME_API int rsf_native_fg_scene_swap(rsf_game_render_pass* output) {
-    if (!output || output->struct_size < sizeof(*output)) return 0;
-    const auto previous = scene; scene = *output; *output = previous;
-    output->struct_size = sizeof(*output); return 1;
-}
-extern "C" RSF_RUNTIME_API void rsf_native_fg_scene(const rsf_game_render_pass* pass) {
-    if (pass && pass->struct_size<sizeof(*pass)) return;
-    if (pass && pass->role==RSF_GAME_RENDER_FG_INPUTS && pass->source_frame_id &&
-        (pass->flags&RSF_GAME_RENDER_NO_FG) && rsf_d3d11_present_has_owner()) {
+void refuse_held_inputs(const rsf_game_render_pass* pass) {
+    if (rsf_d3d11_present_has_owner()) {
         auto& held=slot_for(transfer(),pass->source_frame_id);
         if (held.prepared && holds(held,*pass)) held.pass.flags|=RSF_GAME_RENDER_NO_FG;
     }
-    scene = pass ? *pass : rsf_game_render_pass{};
-    if (!pass || pass->source_frame_id || !bound_source.source_frame_id) return;
-    // An adapter-built pass without frame identity: the FG copy takes the declared source.
-    scene.session_id = bound_source.session_id; scene.source_frame_id = bound_source.source_frame_id;
-    scene.submission_id = bound_source.submission_id; scene.view_key = bound_source.view_key;
-    scene.family_key = bound_source.family_key; scene.viewport_key = bound_source.viewport_key;
-    scene.scope_id = bound_source.scope_id; scene.native_frame = bound_source.native_frame;
-    scene.screen = bound_source.screen;
-    scene.flags = (pass->flags & ~RSF_GAME_RENDER_NO_FG) |
-        (bound_source.flags & (RSF_GAME_RENDER_RESET | RSF_GAME_RENDER_PRIMARY | RSF_GAME_RENDER_AFTER_SIMULATION | RSF_GAME_RENDER_NO_FG));
+}
+}
+extern "C" RSF_RUNTIME_API void rsf_native_fg_scene(const rsf_game_render_pass* pass) {
+    rsf_core_native_fg_scene_set(pass, refuse_held_inputs);
 }
 namespace {
 // Colour formats the HUD-less copy can carry: D3D11-shareable display formats, SDR and HDR.
@@ -1338,6 +1323,8 @@ extern "C" RSF_RUNTIME_API void rsf_native_fg_final(void* context, const rsf_gam
     rsf_native_fg_stage("final-done", pass->source_frame_id, pass->native_frame, slot.hudless_ready ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_NOT_READY);
 }
 extern "C" RSF_RUNTIME_API void rsf_native_fg_capture(void* context, const rsf_dlss_frame* frame) {
+    rsf_game_render_pass scene;
+    rsf_core_native_fg_scene_read(&scene);
     if (context && frame && frame->camera_motion_included) rsf_input_dump_fg(context, &scene, frame);
     if (!rsf_d3d11_present_has_owner() || !context || !frame || !scene.source_frame_id || !frame->camera_motion_included) return;
     { std::lock_guard lock(settings_guard); if (requested.mode == RSF_FG_OFF) return; }
@@ -1374,6 +1361,8 @@ extern "C" RSF_RUNTIME_API rsf_dlss_result rsf_native_fg_evaluate(void* context,
         rsf_input_dump_sr(context, frame, RSF_SR_DLSS);
         return rsf_dlss_evaluate(context, frame);
     }
+    rsf_game_render_pass scene;
+    rsf_core_native_fg_scene_read(&scene);
     const uint32_t missing = !context ? 1u : !frame ? 2u : !scene.source_frame_id ? 4u : !frame->camera_motion_included ? 8u : 0u;
     if (missing) {
         failure_receipt(FailureStage::SrPrerequisite,scene.source_frame_id,scene.session_id,RSF_DLSS_ERROR_NOT_READY,missing);

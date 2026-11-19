@@ -86,6 +86,30 @@ int main() {
     check(rsf_native_fg_scene_swap(&inner) == 1 && inner.source_frame_id == 42, "Nested scene saved exactly");
     check(rsf_native_fg_scene_swap(&inner) == 1 && inner.source_frame_id == 43, "Nested scene restored exactly");
     check(rsf_native_fg_scene_swap(&outer) == 1 && outer.source_frame_id == 42, "Outer scene restored exactly");
+    rsf_game_render_pass bound{sizeof(bound)};
+    bound.source_frame_id = 101;
+    bound.session_id = 91;
+    bound.submission_id = 109;
+    bound.flags = RSF_GAME_RENDER_PRIMARY | RSF_GAME_RENDER_AFTER_SIMULATION;
+    bound.color_input = &bound;
+    rsf_native_fg_bind_source(&bound);
+    rsf_game_render_pass anonymous{sizeof(anonymous)};
+    anonymous.role = RSF_GAME_RENDER_SR;
+    anonymous.flags = RSF_GAME_RENDER_NO_FG;
+    anonymous.color_input = &anonymous;
+    rsf_native_fg_scene(&anonymous);
+    rsf_game_render_pass resolved{sizeof(resolved)};
+    check(rsf_native_fg_scene_swap(&resolved) == 1 && resolved.source_frame_id == 101 &&
+        resolved.session_id == 91 && resolved.submission_id == 109 && resolved.flags == bound.flags &&
+        resolved.color_input == &anonymous && !anonymous.source_frame_id && anonymous.flags == RSF_GAME_RENDER_NO_FG,
+        "Bound source supplies only identity and FG admission to the captured copy");
+    anonymous.source_frame_id = 102;
+    rsf_native_fg_scene(&anonymous);
+    resolved = {sizeof(resolved)};
+    check(rsf_native_fg_scene_swap(&resolved) == 1 && resolved.source_frame_id == 102 &&
+        resolved.flags == RSF_GAME_RENDER_NO_FG, "A source-owned pass keeps its own identity and admission");
+    rsf_native_fg_bind_source(nullptr);
+    rsf_native_fg_scene(nullptr);
     rsf_game_render_pass inputs{}; inputs.struct_size = sizeof(inputs); inputs.role = RSF_GAME_RENDER_FG_INPUTS;
     auto* invalid_context = reinterpret_cast<void*>(uintptr_t(1));
     check(rsf_native_sr_capture_fg(invalid_context, &inputs, &setup.motion) == RSF_ERROR_NOT_READY,
