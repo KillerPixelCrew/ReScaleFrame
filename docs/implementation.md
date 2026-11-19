@@ -185,6 +185,20 @@ covering both Anomaly input profiles, receipt and reservation contracts,
 native Vulkan latency with mock providers, and D3D11 window and ABI paths.
 Device and in-game verification remain pending.
 
+The D3D11 alternate SR adapter now assembles the FSR and XeSS frame record
+and owns exposure settling, motion-resolve reuse and resource generation
+in Rust. The existing graphics kernels still produce the dense motion and
+depth. The conversion keeps previous-minus-current displacement in render
+pixels, and the bridge receives the textures under the existing synchronous
+lease. The Rust exposure fixture covers 30-frame settling, immediate auto
+fallback and retention of the previous policy after a refusal.
+
+Five focused SR and FG ABI fixtures passed in Debug and Release, and all 79
+Rust tests and workspace Clippy passed. The linked AC7 carrier and Anomaly's
+SR temporal device fixture built. The Release runtime and carrier matched
+their verified 381 and 256 export names and ordinals. Alternate-backend device
+and in-game evaluation remain pending.
+
 ## Fallout 4 AE native render callbacks, 16 November 2026
 
 User priority is now fully native Fallout4.exe without F4SE/ENB first, with

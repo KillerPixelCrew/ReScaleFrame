@@ -34,6 +34,8 @@ mod render_links;
 mod scene_abi;
 mod sr_history;
 #[cfg(windows)]
+mod sr_legacy;
+#[cfg(windows)]
 mod sr_session;
 
 // C callers can recover from allocation failure. A successful handle is

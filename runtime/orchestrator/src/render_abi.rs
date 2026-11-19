@@ -1157,6 +1157,38 @@ const _: () = {
 };
 #[repr(C)]
 #[derive(Copy, Clone)]
+pub struct rsf_motion_resolve_params {
+    pub struct_size: u32,
+    pub clip_to_previous: [f32; 16usize],
+    pub decoded_to_pixels: [f32; 2usize],
+    pub sentinel: f32,
+    pub has_sentinel: u32,
+    pub depth_layer: *mut ::core::ffi::c_void,
+    pub jitter_pixels: [f32; 2usize],
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_motion_resolve_params"]
+        [::core::mem::size_of::<rsf_motion_resolve_params>() - 104usize];
+    ["Alignment of rsf_motion_resolve_params"]
+        [::core::mem::align_of::<rsf_motion_resolve_params>() - 8usize];
+    ["Offset of field: rsf_motion_resolve_params::struct_size"]
+        [::core::mem::offset_of!(rsf_motion_resolve_params, struct_size) - 0usize];
+    ["Offset of field: rsf_motion_resolve_params::clip_to_previous"]
+        [::core::mem::offset_of!(rsf_motion_resolve_params, clip_to_previous) - 4usize];
+    ["Offset of field: rsf_motion_resolve_params::decoded_to_pixels"]
+        [::core::mem::offset_of!(rsf_motion_resolve_params, decoded_to_pixels) - 68usize];
+    ["Offset of field: rsf_motion_resolve_params::sentinel"]
+        [::core::mem::offset_of!(rsf_motion_resolve_params, sentinel) - 76usize];
+    ["Offset of field: rsf_motion_resolve_params::has_sentinel"]
+        [::core::mem::offset_of!(rsf_motion_resolve_params, has_sentinel) - 80usize];
+    ["Offset of field: rsf_motion_resolve_params::depth_layer"]
+        [::core::mem::offset_of!(rsf_motion_resolve_params, depth_layer) - 88usize];
+    ["Offset of field: rsf_motion_resolve_params::jitter_pixels"]
+        [::core::mem::offset_of!(rsf_motion_resolve_params, jitter_pixels) - 96usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
 pub struct rsf_pipeline_camera_frame {
     pub struct_size: u32,
     pub abi_version: u32,
