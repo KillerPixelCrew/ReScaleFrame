@@ -2,6 +2,7 @@
 fn main() {
     println!("cargo:rerun-if-changed=src/plugin_callbacks.cpp");
     println!("cargo:rerun-if-changed=src/fg_leases_com.cpp");
+    println!("cargo:rerun-if-changed=src/settings_store_format.cpp");
     println!("cargo:rerun-if-changed=../../sdk/game/include");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         let mut build = cc::Build::new();
@@ -15,6 +16,7 @@ fn main() {
             .include("../../sdk/game/include")
             .file("src/plugin_callbacks.cpp")
             .file("src/fg_leases_com.cpp")
+            .file("src/settings_store_format.cpp")
             .compile("rsf_orchestrator_native");
     }
 }

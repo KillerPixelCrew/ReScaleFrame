@@ -134,6 +134,11 @@ void store_format(const std::wstring& ini) {
         wchar_t crt[64]{}; std::swprintf(crt,std::size(crt),L"%.9g",static_cast<double>(special));
         if (raw(ini,section,L"Contrast")!=crt) { check(false,"special decimal text matches CRT"); std::printf("  CRT '%ls' store '%ls'\n",crt,raw(ini,section,L"Contrast").c_str()); }
     }
+    // Missing post-pass keys take the C defaults, whatever the host aggregate holds.
+    rsf_render_settings zero{sizeof(zero),RSF_RENDER_FRONTEND_ABI_VERSION};
+    const auto unset=rsf::render_settings::sharpening(rsf::render_settings::read(ini,L"Empty",zero));
+    const auto c_defaults=rsf_sharpening_defaults();
+    check(!std::memcmp(&unset,&c_defaults,sizeof(unset)),"missing post-pass keys read as rsf_sharpening_defaults");
     // A section beyond the store's buffer is refused rather than truncated.
     const std::wstring large(40000,L'x');
     WritePrivateProfileStringW(L"Large",L"Padding",large.c_str(),ini.c_str());

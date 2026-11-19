@@ -113,55 +113,26 @@ fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-// printf "%.9g" as the UCRT writes it: nine significant digits round-trip every float, ties
-// round to even, trailing zeros are dropped and the exponent has at least two digits.
-fn decimal(value: f32) -> String {
-    let value = f64::from(value);
-    if value.is_nan() {
-        let bits = value.to_bits();
-        return if bits >> 63 == 0 {
-            "nan".into()
-        } else if bits & ((1 << 51) - 1) == 0 {
-            "-nan(ind)".into()
-        } else {
-            "-nan".into()
-        };
-    }
-    if value.is_infinite() {
-        return if value < 0.0 { "-inf" } else { "inf" }.into();
-    }
-    if value == 0.0 {
-        return if value.is_sign_negative() { "-0" } else { "0" }.into();
-    }
-    let scientific = format!("{value:.8e}");
-    let (mantissa, exponent) = scientific.split_once('e').unwrap_or((&scientific, "0"));
-    let exponent: i32 = exponent.parse().unwrap_or(0);
-    fn trim(text: &str) -> &str {
-        if text.contains('.') {
-            text.trim_end_matches('0').trim_end_matches('.')
-        } else {
-            text
-        }
-    }
-    if !(-4..9).contains(&exponent) {
-        let sign = if exponent < 0 { '-' } else { '+' };
-        format!("{}e{sign}{:02}", trim(mantissa), exponent.unsigned_abs())
-    } else {
-        let fixed = format!("{:.*}", (8 - exponent) as usize, value);
-        trim(&fixed).into()
-    }
+unsafe extern "C" {
+    // The CRT's "%.9g" through a C++ leaf, so locale, rounding and inf/nan spellings are the CRT's.
+    fn rsf_settings_store_format_decimal(value: f32, text: *mut u16, capacity: usize) -> i32;
+    // The CRT parser the store has always used, so locale, hex, inf and nan spellings match.
+    fn wcstof(text: *const u16, end: *mut *mut u16) -> f32;
+}
+
+// Terminated UTF-16 text. "%.9g" of a float needs at most 16 characters.
+fn decimal(value: f32) -> Vec<u16> {
+    let mut text = [0u16; 32];
+    let length = unsafe { rsf_settings_store_format_decimal(value, text.as_mut_ptr(), text.len()) };
+    // Unreachable for a float; an empty value would read back as the key's fallback.
+    usize::try_from(length).map_or_else(|_| vec![0], |length| text[..=length].to_vec())
 }
 
 fn text(value: Value) -> Vec<u16> {
     match value {
         Value::Integer(value) => wide(&value.to_string()),
-        Value::Decimal(value) => wide(&decimal(value)),
+        Value::Decimal(value) => decimal(value),
     }
-}
-
-unsafe extern "C" {
-    // The CRT parser the store has always used, so locale, hex, inf and nan spellings match.
-    fn wcstof(text: *const u16, end: *mut *mut u16) -> f32;
 }
 
 struct File {
@@ -245,11 +216,11 @@ impl File {
     }
 }
 
-fn read(file: &File, defaults: &Settings) -> Settings {
+// The shared post-pass keys fall back to `sharpening` (the facade passes rsf_sharpening_defaults),
+// not to the host defaults, because existing host aggregate initializers leave those fields zero.
+fn read(file: &File, defaults: &Settings, sharpening: &Sharpening) -> Settings {
     let value = |key, fallback| file.integer(key, fallback);
     let number = |key, fallback| file.decimal(key, fallback);
-    // The shared post-pass keys fall back to rsf_sharpening_defaults, not to the host defaults,
-    // because existing host aggregate initializers leave those fields zero.
     Settings {
         struct_size: size_of::<Settings>() as u32,
         abi_version: RSF_RENDER_FRONTEND_ABI_VERSION,
@@ -263,18 +234,18 @@ fn read(file: &File, defaults: &Settings) -> Settings {
         frame_limit_us: value("FrameLimitUs", defaults.frame_limit_us),
         status_overlay: u32::from(value("StatusOverlay", defaults.status_overlay) != 0),
         sr_quality: value("SRQuality", defaults.sr_quality),
-        sharpening_mode: value("SharpeningMode", 0),
-        sharpening_sharpness: number("Sharpness", 0.4),
-        sharpening_mas: value("MAS", 0),
-        sharpening_motion_sharpness: number("MotionSharpness", 0.2),
-        sharpening_motion_threshold: number("MotionThreshold", 0.0),
-        sharpening_motion_scale_limit: number("MotionScaleLimit", 10.0),
-        sharpening_contrast_enabled: value("ContrastEnabled", 0),
-        sharpening_contrast: number("Contrast", 0.0),
-        sharpening_depth_scale: number("DADepthScale", 35.0),
-        sharpening_depth_bias: number("DADepthBias", 0.001),
-        sharpening_clamp_output: value("DAClampOutput", 0),
-        sharpening_debug: value("SharpeningDebug", 0),
+        sharpening_mode: value("SharpeningMode", sharpening.mode),
+        sharpening_sharpness: number("Sharpness", sharpening.sharpness),
+        sharpening_mas: value("MAS", sharpening.mas),
+        sharpening_motion_sharpness: number("MotionSharpness", sharpening.motion_sharpness),
+        sharpening_motion_threshold: number("MotionThreshold", sharpening.motion_threshold),
+        sharpening_motion_scale_limit: number("MotionScaleLimit", sharpening.motion_scale_limit),
+        sharpening_contrast_enabled: value("ContrastEnabled", sharpening.contrast_enabled),
+        sharpening_contrast: number("Contrast", sharpening.contrast),
+        sharpening_depth_scale: number("DADepthScale", sharpening.depth_scale),
+        sharpening_depth_bias: number("DADepthBias", sharpening.depth_bias),
+        sharpening_clamp_output: value("DAClampOutput", sharpening.clamp_output),
+        sharpening_debug: value("SharpeningDebug", sharpening.debug),
     }
 }
 
@@ -350,25 +321,44 @@ fn write_sharpening(
     OK
 }
 
-/// Reads the owned keys, falling back to `defaults` for missing frontend values.
+// A full rsf_sharpening_options of this ABI, or None. Only the leading struct_size is read until
+// it shows the whole structure is present.
+unsafe fn sharpening_options<'a>(options: *const Sharpening) -> Option<&'a Sharpening> {
+    if options.is_null() {
+        return None;
+    }
+    let size = unsafe { options.cast::<u32>().read() } as usize;
+    if size < size_of::<Sharpening>() {
+        return None;
+    }
+    let options = unsafe { &*options };
+    (options.abi_version == RSF_SHARPENING_ABI_VERSION).then_some(options)
+}
+
+/// Reads the owned keys. Missing frontend values take `defaults`, missing post-pass values take
+/// `sharpening`.
 ///
 /// # Safety
 /// `ini` and `section` are terminated UTF-16 strings, `defaults` and `output` are valid for
-/// their full rsf_render_settings size.
+/// their full rsf_render_settings size, and `sharpening` is readable for its `struct_size`.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_settings_store_read(
     ini: PCWSTR,
     section: PCWSTR,
     defaults: *const Settings,
+    sharpening: *const Sharpening,
     output: *mut Settings,
 ) -> i32 {
     let Some(file) = File::new(ini, section) else {
         return INVALID_ARGUMENT;
     };
+    let Some(sharpening) = (unsafe { sharpening_options(sharpening) }) else {
+        return INVALID_ARGUMENT;
+    };
     if defaults.is_null() || output.is_null() {
         return INVALID_ARGUMENT;
     }
-    let value = read(&file, unsafe { &*defaults });
+    let value = read(&file, unsafe { &*defaults }, sharpening);
     unsafe { output.write(value) };
     OK
 }
@@ -427,14 +417,9 @@ unsafe extern "C" fn rsf_settings_store_write_sharpening(
     let Some(file) = File::new(ini, section) else {
         return INVALID_ARGUMENT;
     };
-    let Some(options) = (unsafe { options.as_ref() }) else {
+    let Some(options) = (unsafe { sharpening_options(options) }) else {
         return INVALID_ARGUMENT;
     };
-    if (options.struct_size as usize) < size_of::<Sharpening>()
-        || options.abi_version != RSF_SHARPENING_ABI_VERSION
-    {
-        return INVALID_ARGUMENT;
-    }
     write_sharpening(&file, options, &mut |file, key, value| {
         file.write(key, value)
     })
@@ -446,7 +431,8 @@ mod tests {
 
     #[test]
     fn decimal_matches_general_nine_digit_format() {
-        let cases: [(f32, &str); 16] = [
+        // Smoke cases for the CRT leaf; the native fixture compares it with swprintf at scale.
+        let cases: [(f32, &str); 17] = [
             (0.4, "0.400000006"),
             (0.2, "0.200000003"),
             (0.001, "0.00100000005"),
@@ -463,9 +449,10 @@ mod tests {
             (1.0 + 1.0 / 512.0, "1.00195312"),
             (f32::INFINITY, "inf"),
             (f32::NAN, "nan"),
+            (-f32::NAN, "-nan(ind)"),
         ];
         for (value, expected) in cases {
-            assert_eq!(decimal(value), expected, "{value:e}");
+            assert_eq!(decimal(value), wide(expected), "{value:e}");
         }
     }
 
@@ -550,7 +537,7 @@ mod tests {
             abi_version: RSF_RENDER_FRONTEND_ABI_VERSION,
             ..unsafe { std::mem::zeroed() }
         };
-        let read = read(&file, &empty);
+        let read = read(&file, &empty, &sharpening());
         assert_eq!(read.sharpening_mode, 3);
         assert_eq!(read.sharpening_sharpness, 0.64);
         assert_eq!(read.sharpening_depth_bias, 0.0037);
@@ -570,11 +557,18 @@ mod tests {
         defaults.sr_enabled = 1;
         defaults.sr_backend = 7;
         defaults.generated_frames = 1;
-        let mut request = read(&file, &defaults);
+        // Missing post-pass keys take the caller's sharpening fallbacks.
+        let fallback = Sharpening {
+            sharpness: 0.55,
+            depth_scale: 77.0,
+            ..sharpening()
+        };
+        let mut request = read(&file, &defaults, &fallback);
         assert_eq!(request.sr_enabled, 0);
         assert_eq!(request.sr_backend, 7);
-        assert_eq!(request.sharpening_sharpness, 0.4);
-        assert_eq!(request.sharpening_depth_scale, 35.0);
+        assert_eq!(request.sharpening_mode, 3);
+        assert_eq!(request.sharpening_sharpness, 0.55);
+        assert_eq!(request.sharpening_depth_scale, 77.0);
         request.sr_enabled = 1;
         request.generated_frames = 3;
         request.sharpening_contrast = 1.1;
@@ -584,7 +578,7 @@ mod tests {
         assert!(contents.contains("OverlayLayout=5"));
         assert!(!contents.contains("sr=0"));
         assert!(contents.contains("Contrast=1.10000002"));
-        let saved = read(&file, &defaults);
+        let saved = read(&file, &defaults, &fallback);
         assert_eq!(saved.sr_enabled, 1);
         assert_eq!(saved.generated_frames, 3);
         assert_eq!(saved.sharpening_contrast, 1.1);
@@ -605,5 +599,37 @@ mod tests {
         assert_eq!(file.decimal("C", 0.4), -8.0);
         assert!(file.decimal("D", 0.4).is_nan());
         assert_eq!(file.decimal("Missing", 0.001), 0.001);
+    }
+
+    #[test]
+    fn short_sharpening_options_are_refused_from_their_prefix() {
+        let ini = Temporary::new("short");
+        let section = wide("Rendering");
+        // Only the four-byte prefix exists; nothing past it may be read.
+        let short = [4u32];
+        let options = short.as_ptr().cast::<Sharpening>();
+        let result = unsafe {
+            rsf_settings_store_write_sharpening(ini.0.as_ptr(), section.as_ptr(), options)
+        };
+        assert_eq!(result, INVALID_ARGUMENT);
+        let defaults: Settings = unsafe { std::mem::zeroed() };
+        let mut output: Settings = unsafe { std::mem::zeroed() };
+        let result = unsafe {
+            rsf_settings_store_read(
+                ini.0.as_ptr(),
+                section.as_ptr(),
+                &defaults,
+                options,
+                &mut output,
+            )
+        };
+        assert_eq!(result, INVALID_ARGUMENT);
+        let mut wrong = sharpening();
+        wrong.abi_version += 1;
+        let result = unsafe {
+            rsf_settings_store_write_sharpening(ini.0.as_ptr(), section.as_ptr(), &wrong)
+        };
+        assert_eq!(result, INVALID_ARGUMENT);
+        assert!(ini.contents().is_empty());
     }
 }

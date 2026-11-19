@@ -11,7 +11,8 @@
 extern "C" {
 // Internal to the runtime and its embedding carriers; none is exported.
 rsf_result rsf_settings_store_read(const wchar_t* ini, const wchar_t* section,
-    const rsf_render_settings* defaults, rsf_render_settings* output);
+    const rsf_render_settings* defaults, const rsf_sharpening_options* sharpening_defaults,
+    rsf_render_settings* output);
 rsf_result rsf_settings_store_write(const wchar_t* ini, const wchar_t* section,
     const rsf_render_settings* request);
 uint32_t rsf_settings_store_read_layout(const wchar_t* ini, const wchar_t* section);
@@ -58,11 +59,12 @@ inline void initialize_sharpening(rsf_render_settings& s) {
         sharpening(s, rsf_sharpening_defaults());
 }
 
-// Missing frontend keys take the host defaults; missing post-pass keys take the sharpening defaults.
+// Missing frontend keys take the host defaults; missing post-pass keys take rsf_sharpening_defaults.
 inline rsf_render_settings read(const std::wstring& ini, const std::wstring& section, const rsf_render_settings& defaults)
 {
     rsf_render_settings out{sizeof(out), RSF_RENDER_FRONTEND_ABI_VERSION};
-    (void)rsf_settings_store_read(ini.c_str(), section.c_str(), &defaults, &out);
+    const auto sharpening_defaults = rsf_sharpening_defaults();
+    (void)rsf_settings_store_read(ini.c_str(), section.c_str(), &defaults, &sharpening_defaults, &out);
     return out;
 }
 
