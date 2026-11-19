@@ -39,7 +39,6 @@
 #include <rescaleframe/native_composition.h>
 #include <rescaleframe/native_cpu.h>
 #include <rescaleframe/native_window.h>
-#include <rescaleframe/native_scene.h>
 
 #include <ctype.h>
 #include <stdio.h>
@@ -71,10 +70,8 @@ static void on_native_pass(void* user, void* list, const rsf_game_render_pass* p
 static void route_dump(void* context, void* texture, const char* name);
 static void on_native_scope(void* user, void* list, const rsf_game_render_pass* pass, uint32_t begin)
 { (void)user; (void)list; rsf_ac7_motion_capture_native_pass(pass, begin); rsf_ac7_velocity_scope(pass); }
-static void deliver_native_cpu(void* user, const rsf_game_cpu_event* event)
-{ (void)user; rsf_native_fg_cpu(event); }
 static void on_native_cpu(void* user, const rsf_game_cpu_event* event)
-{ (void)user; rsf_native_cpu_dispatch(event, deliver_native_cpu, NULL); }
+{ (void)user; (void)rsf_native_fg_dispatch_cpu(event); }
 
 int rsf_bridge_prepare_game(const wchar_t* plugin_path, const char* executable_sha256,
                             rsf_bridge_log_fn log, void* log_user)
@@ -770,20 +767,10 @@ static void on_native_pass(void* user, void* list, const rsf_game_render_pass* p
         snprintf(name, sizeof(name), "native_pass_%u_output", pass->role);
         route_dump(bridge.context, pass->color_output, name);
     }
-    if (pass->role == RSF_GAME_RENDER_TEXTURE_BINDING && !begin) rsf_native_scene_texture_binding(pass);
-    if (pass->role == RSF_GAME_RENDER_FINAL_SCENE) {
-        rsf_native_scene_pass(pass, begin);
-        if (!begin) rsf_native_fg_final(bridge.context, pass);
-    }
-    if (pass->role == RSF_GAME_RENDER_WINDOW) {
-        if (!begin) rsf_native_fg_window_end(pass);
-        rsf_native_window_scope(pass, begin);
-    }
+    (void)rsf_native_fg_dispatch_pass(bridge.context, pass, begin);
     if ((pass->role == RSF_GAME_RENDER_TRANSLUCENCY || pass->role == RSF_GAME_RENDER_CLOUD_DEPTH ||
          pass->role == RSF_GAME_RENDER_MATERIALS) && bridge.started)
         rsf_native_translucency_pass(bridge.context, pass, begin);
-    if (pass->role == RSF_GAME_RENDER_SUBMISSION) rsf_native_fg_submission(pass, begin);
-    if (pass->role == RSF_GAME_RENDER_FRAME) rsf_native_fg_frame(pass, begin);
     if (bridge.started && pass->role == RSF_GAME_RENDER_UI_COMPOSITE) {
         const int captured = rsf_native_composition_capture(bridge.context, pass, begin);
         if (captured && !begin && bridge.route_dump_frames) {

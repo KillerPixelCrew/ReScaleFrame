@@ -116,6 +116,19 @@ exercise the event path with graphics activation disabled. The C++ Anomaly DLL
 and linked AC7 carrier built in Release. All 381 runtime export names and
 ordinals matched the baseline. Rust workspace tests and Clippy passed.
 
+The D3D11 FG table and embedded AC7 carrier now share one Rust render-pass
+dispatcher and one CPU callback entry. The dispatcher preserves each native
+service's acceptance and ordering. Scoped capture rejects an undersized frame
+and restores the outer scene identity after the synchronous call. The thin
+native bridge supplies the existing services and the DLL table.
+
+Debug and Release MSVC passed both D3D11 FG ABI fixtures, both Anomaly input
+contracts and the Anomaly SR contract. The C11 fixture now checks game ABI 24,
+which already existed on the branch. Both linked AC7 builds succeeded. The
+Release runtime retained all 381 export names and ordinals. The 77 Rust workspace
+tests include a synthetic regression for nested capture and short frames.
+Device and gameplay validation remain pending.
+
 ## Fallout 4 AE native render callbacks, 16 November 2026
 
 User priority is now fully native Fallout4.exe without F4SE/ENB first, with
