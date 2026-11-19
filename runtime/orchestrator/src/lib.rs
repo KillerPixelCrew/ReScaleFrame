@@ -78,6 +78,8 @@ mod sr_legacy;
 #[cfg(windows)]
 mod sr_session;
 #[cfg(windows)]
+mod vulkan_sr;
+#[cfg(windows)]
 mod vulkan_sr_abi;
 #[cfg(windows)]
 mod vulkan_sr_split;

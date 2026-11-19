@@ -113,7 +113,7 @@ unsafe extern "C" fn rsf_core_srvk_fsr4_plan(
     public_result(unsafe { (provider.plan)(owner, width, height) })
 }
 
-unsafe fn normalize_frame(frame: *const Frame) -> Result<Frame, i32> {
+pub(super) unsafe fn normalize_frame(frame: *const Frame) -> Result<Frame, i32> {
     if frame.is_null() {
         return Err(INVALID);
     }

@@ -191,6 +191,19 @@ header, runtime and linked carriers built. All 101 Rust tests and Clippy
 passed. The Release runtime and both carriers retained their verified
 381, 256 and 273 export names and ordinals. Device execution remains pending.
 
+The main Vulkan SR path now shares Rust frame-prefix normalization with the
+split path. Rust validates the setup, fallback image pair, frame identity,
+camera and image leases, and tracks history and SDK device-proc registration.
+The provider and native GPU commands still run through the existing backend.
+The synthetic checks cover proc aliases and final deregistration, and verify
+that XeSS can use an actual extent different from its plan when its camera
+and images agree.
+
+Six Vulkan, latency and Anomaly ABI fixtures passed in Debug and Release.
+All 103 Rust tests and workspace Clippy passed. Both linked carriers built
+and retained their export lists, alongside all 381 runtime exports.
+Device and in-game verification remain pending.
+
 The native D3D11 exposure cache now lives in Rust and shares the fullscreen
 pass owner with output reinsertion. It borrows a valid 1×1 R32 scalar
 directly, converts supported float vectors with the existing copy shader,

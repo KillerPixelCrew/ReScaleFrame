@@ -6,7 +6,11 @@ use rsf_game_sys::rsf_frame_record;
 
 pub const RSF_FSR4_BRIDGE_INVALID_ARGUMENT: i32 = -11001;
 pub const RSF_FSR4_BRIDGE_ABI_MISMATCH: i32 = -11002;
+pub const RSF_SR_DLSS: u32 = 1;
+pub const RSF_SR_FSR2: u32 = 2;
+pub const RSF_SR_FSR3: u32 = 3;
 pub const RSF_SR_FSR4: u32 = 4;
+pub const RSF_SR_XESS: u32 = 5;
 pub const RSF_SRVK_ABI_VERSION: u32 = 2;
 pub const RSF_SRVK_SPLIT_ABI_VERSION: u32 = 1;
 pub const RSF_SRVK_SPLIT_TRACKED_ABI_VERSION: u32 = 2;
@@ -162,6 +166,45 @@ const _: () = {
         [::core::mem::offset_of!(rsf_srvk_frame, log_user) - 376usize];
     ["Offset of field: rsf_srvk_frame::bias_current_color"]
         [::core::mem::offset_of!(rsf_srvk_frame, bias_current_color) - 384usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_srvk_fallback {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    pub instance: *mut ::core::ffi::c_void,
+    pub physical_device: *mut ::core::ffi::c_void,
+    pub device: *mut ::core::ffi::c_void,
+    pub instance_proc: rsf_vk_get_proc,
+    pub device_proc: rsf_vk_get_proc,
+    pub command_buffer: *mut ::core::ffi::c_void,
+    pub color: rsf_srvk_image,
+    pub output: rsf_srvk_image,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_srvk_fallback"][::core::mem::size_of::<rsf_srvk_fallback>() - 136usize];
+    ["Alignment of rsf_srvk_fallback"][::core::mem::align_of::<rsf_srvk_fallback>() - 8usize];
+    ["Offset of field: rsf_srvk_fallback::struct_size"]
+        [::core::mem::offset_of!(rsf_srvk_fallback, struct_size) - 0usize];
+    ["Offset of field: rsf_srvk_fallback::abi_version"]
+        [::core::mem::offset_of!(rsf_srvk_fallback, abi_version) - 4usize];
+    ["Offset of field: rsf_srvk_fallback::instance"]
+        [::core::mem::offset_of!(rsf_srvk_fallback, instance) - 8usize];
+    ["Offset of field: rsf_srvk_fallback::physical_device"]
+        [::core::mem::offset_of!(rsf_srvk_fallback, physical_device) - 16usize];
+    ["Offset of field: rsf_srvk_fallback::device"]
+        [::core::mem::offset_of!(rsf_srvk_fallback, device) - 24usize];
+    ["Offset of field: rsf_srvk_fallback::instance_proc"]
+        [::core::mem::offset_of!(rsf_srvk_fallback, instance_proc) - 32usize];
+    ["Offset of field: rsf_srvk_fallback::device_proc"]
+        [::core::mem::offset_of!(rsf_srvk_fallback, device_proc) - 40usize];
+    ["Offset of field: rsf_srvk_fallback::command_buffer"]
+        [::core::mem::offset_of!(rsf_srvk_fallback, command_buffer) - 48usize];
+    ["Offset of field: rsf_srvk_fallback::color"]
+        [::core::mem::offset_of!(rsf_srvk_fallback, color) - 56usize];
+    ["Offset of field: rsf_srvk_fallback::output"]
+        [::core::mem::offset_of!(rsf_srvk_fallback, output) - 96usize];
 };
 #[repr(C)]
 #[derive(Copy, Clone)]

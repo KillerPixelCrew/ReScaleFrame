@@ -2,12 +2,15 @@
 #include <rescaleframe/native_sr_vulkan.h>
 #include "native_dlss_vulkan.h"
 #include "native_xess_vulkan.h"
-#include <cmath>
 #include "../../backends/common/sharpening.h"
 #include <memory>
 #include <limits>
-#include <cstddef>
 #include <cstring>
+
+extern "C" int32_t rsf_core_srvk_setup_admit(const rsf_srvk_setup*);
+extern "C" int32_t rsf_core_srvk_fallback_admit(const rsf_srvk_fallback*);
+extern "C" int32_t rsf_core_srvk_normalize(const rsf_srvk_frame*, rsf_srvk_frame*);
+extern "C" int32_t rsf_core_srvk_frame_admit(const rsf_srvk_setup*, const rsf_srvk_frame*, uint32_t, uint32_t, uint32_t);
 
 #if defined(RSF_HAVE_FFX_VK)
 #include <windows.h>
@@ -17,36 +20,38 @@
 #include "../../backends/fsr/src/ffx_version.h"
 #include "../../backends/common/frame_capture_vk.h"
 #include <filesystem>
-#include <mutex>
-#include <unordered_map>
 #include <cstring>
 
 namespace {
-struct DeviceDispatch { rsf_vk_get_proc proc; uint32_t references; };
-std::mutex dispatch_guard;
-std::unordered_map<void*, DeviceDispatch> dispatches;
-PFN_vkVoidFunction VKAPI_PTR sdk_device_proc(VkDevice device, const char* name) noexcept try {
-    rsf_vk_get_proc proc = nullptr;
-    {
-        std::lock_guard lock(dispatch_guard);
-        auto found = dispatches.find(device);
-        if (found == dispatches.end()) return nullptr;
-        proc = found->second.proc;
-    }
-    auto result = proc(device, name);
-    // Godot enables core Vulkan 1.1+ functionality without every promoted KHR
-    // extension name. Older FidelityFX queries the KHR spellings explicitly.
-    if (!result && name) {
-        struct Alias { const char* extension; const char* core; };
-        constexpr Alias aliases[] = {
-            {"vkGetBufferMemoryRequirements2KHR", "vkGetBufferMemoryRequirements2"},
-            {"vkGetImageMemoryRequirements2KHR", "vkGetImageMemoryRequirements2"},
-            {"vkBindBufferMemory2KHR", "vkBindBufferMemory2"},
-            {"vkBindImageMemory2KHR", "vkBindImageMemory2"}};
-        for (const auto& alias : aliases) if (std::strcmp(name, alias.extension) == 0) result = proc(device, alias.core);
-    }
-    return reinterpret_cast<PFN_vkVoidFunction>(result);
-} catch (...) { return nullptr; }
+static_assert(VK_FORMAT_R8_UNORM == 9 && VK_FORMAT_R16G16_SFLOAT == 83 &&
+    VK_FORMAT_R16G16B16A16_SFLOAT == 97 && VK_FORMAT_R32_SFLOAT == 100 && VK_FORMAT_D32_SFLOAT == 126);
+static_assert(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL == 5 && VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL == 7);
+
+extern "C" int32_t rsf_core_srvk_dispatch_register(void*, rsf_vk_get_proc);
+extern "C" void rsf_core_srvk_dispatch_unregister(void*);
+extern "C" rsf_vk_function rsf_core_srvk_dispatch_lookup(void*, const char*,
+    int32_t (*)(rsf_vk_get_proc, void*, const char*, rsf_vk_function*));
+
+int32_t call_device_proc(rsf_vk_get_proc proc, void* device, const char* name, rsf_vk_function* result) noexcept try
+{
+    *result = proc(device, name);
+    return 1;
+}
+catch (...) { return 0; }
+
+PFN_vkVoidFunction VKAPI_PTR sdk_device_proc(VkDevice device, const char* name) noexcept
+{
+    return reinterpret_cast<PFN_vkVoidFunction>(rsf_core_srvk_dispatch_lookup(device, name, call_device_proc));
+}
+
+struct History {
+    uint64_t frame{}, session{};
+    uint32_t view{}, generation{};
+};
+static_assert(sizeof(History) == 24);
+extern "C" uint32_t rsf_core_srvk_history_reset(const History*, const rsf_frame_record*);
+extern "C" void rsf_core_srvk_history_commit(History*, const rsf_frame_record*);
+
 struct Image {
     VkImage image = VK_NULL_HANDLE;
     VkDeviceMemory memory = VK_NULL_HANDLE;
@@ -78,8 +83,8 @@ struct rsf_srvk {
     VkPhysicalDeviceMemoryProperties memory_properties{};
     Image output, zero_mask;
     uint32_t width = 0, height = 0;
-    uint64_t version = 0, last_frame = 0, last_session = 0;
-    uint32_t last_view = 0, last_generation = 0;
+    uint64_t version = 0;
+    History history;
     bool registered = false;
     rsf::FrameCaptureVk capture;
     ~rsf_srvk() {
@@ -89,11 +94,7 @@ struct rsf_srvk {
             if (image->image && destroy_image) destroy_image(static_cast<VkDevice>(setup.device), image->image, nullptr);
             if (image->memory && free_memory) free_memory(static_cast<VkDevice>(setup.device), image->memory, nullptr);
         }
-        if (registered) {
-            std::lock_guard lock(dispatch_guard);
-            auto found = dispatches.find(setup.device);
-            if (found != dispatches.end() && --found->second.references == 0) dispatches.erase(found);
-        }
+        if (registered) rsf_core_srvk_dispatch_unregister(setup.device);
         if (module) FreeLibrary(module);
     }
 };
@@ -150,9 +151,7 @@ FfxApiResource resource(const rsf_srvk_image& image, bool output = false) {
     value.state = output ? FFX_API_RESOURCE_STATE_UNORDERED_ACCESS : FFX_API_RESOURCE_STATE_COMPUTE_READ;
     return value;
 }
-bool valid_image(const rsf_srvk& self, const rsf_srvk_image& image, uint32_t width, uint32_t height, uint32_t layout) {
-    return image.device == self.setup.device && image.image && image.width == width && image.height == height && image.layout == layout;
-}
+
 }
 #else
 struct rsf_srvk {
@@ -160,17 +159,11 @@ struct rsf_srvk {
 #endif
 
 extern "C" RSF_RUNTIME_API rsf_backend_result rsf_srvk_spatial_fallback(const rsf_srvk_fallback* call) try {
-    if (!call || call->struct_size < sizeof(*call)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (call->abi_version != RSF_SRVK_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
+    const auto admission = rsf_core_srvk_fallback_admit(call);
+    if (admission != RSF_BACKEND_OK) return admission;
+#if defined(RSF_HAVE_FFX_VK)
     const auto& source = call->color;
     const auto& output = call->output;
-    if (!call->instance || !call->physical_device || !call->device || !call->instance_proc || !call->device_proc || !call->command_buffer ||
-        source.device != call->device || output.device != call->device || !source.image || !output.image ||
-        source.image == output.image || !source.copy_source || source.format != 97 || output.format != 97 ||
-        source.layout != 5 || output.layout != 7 || !source.width || !source.height || !output.width || !output.height ||
-        source.width > INT32_MAX || source.height > INT32_MAX || output.width > INT32_MAX || output.height > INT32_MAX)
-        return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-#if defined(RSF_HAVE_FFX_VK)
     auto properties = reinterpret_cast<PFN_vkGetPhysicalDeviceFormatProperties>(call->instance_proc(call->instance, "vkGetPhysicalDeviceFormatProperties"));
     auto barrier = reinterpret_cast<PFN_vkCmdPipelineBarrier>(call->device_proc(call->device, "vkCmdPipelineBarrier"));
     auto blit = reinterpret_cast<PFN_vkCmdBlitImage>(call->device_proc(call->device, "vkCmdBlitImage"));
@@ -209,13 +202,8 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_srvk_spatial_fallback(const rs
 extern "C" RSF_RUNTIME_API rsf_backend_result rsf_srvk_create(const rsf_srvk_setup* setup, rsf_srvk** out) try {
     if (!out) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     *out = nullptr;
-    if (!setup || setup->struct_size < sizeof(*setup)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (setup->abi_version != RSF_SRVK_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
-    if (!setup->instance || !setup->physical_device || !setup->device || !setup->device_proc || !setup->instance_proc ||
-        !setup->runtime_directory_utf8 || !setup->output_width || !setup->output_height ||
-        (setup->quality > 4 && (setup->backend != RSF_SR_XESS || setup->quality > 5)) ||
-        setup->depth_inverted > 1 || setup->depth_infinite > 1 || setup->motion_jittered > 1) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (setup->backend != RSF_SR_DLSS && setup->backend != RSF_SR_XESS && setup->backend != RSF_SR_FSR2 && setup->backend != RSF_SR_FSR3) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
+    const auto admission = rsf_core_srvk_setup_admit(setup);
+    if (admission != RSF_BACKEND_OK) return admission;
 #if defined(RSF_HAVE_FFX_VK)
     auto self = std::make_unique<rsf_srvk>(); self->setup = *setup;
     if (setup->backend == RSF_SR_XESS) {
@@ -241,12 +229,9 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_srvk_create(const rsf_srvk_set
     self->query = reinterpret_cast<PfnFfxQuery>(GetProcAddress(self->module, "ffxQuery"));
     self->dispatch = reinterpret_cast<PfnFfxDispatch>(GetProcAddress(self->module, "ffxDispatch"));
     if (!self->create || !self->destroy || !self->query || !self->dispatch) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
-    {
-        std::lock_guard lock(dispatch_guard);
-        auto [found, inserted] = dispatches.try_emplace(setup->device, DeviceDispatch{setup->device_proc, 0});
-        if (!inserted && found->second.proc != setup->device_proc) return RSF_BACKEND_ERROR_WRONG_API;
-        ++found->second.references; self->registered = true;
-    }
+    const auto registered = rsf_core_srvk_dispatch_register(setup->device, setup->device_proc);
+    if (registered != RSF_BACKEND_OK) return registered;
+    self->registered = true;
 #define RSF_VK_LOAD(member, function) self->member = device_function<PFN_##function>(*self, #function); if (!self->member) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT
     RSF_VK_LOAD(create_image, vkCreateImage); RSF_VK_LOAD(destroy_image, vkDestroyImage);
     RSF_VK_LOAD(requirements, vkGetImageMemoryRequirements); RSF_VK_LOAD(allocate, vkAllocateMemory);
@@ -308,46 +293,16 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_srvk_plan(const rsf_srvk* self
 }
 
 extern "C" RSF_RUNTIME_API rsf_backend_result rsf_srvk_evaluate(rsf_srvk* self, void* commands, const rsf_srvk_frame* input) try {
-    if (!self || !commands || !input || input->struct_size < offsetof(rsf_srvk_frame, bias_current_color)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (input->struct_size != offsetof(rsf_srvk_frame, bias_current_color) && input->struct_size < sizeof(*input)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (input->abi_version != RSF_SRVK_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
+    if (!self || !commands) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     rsf_srvk_frame normalized{};
-    const size_t input_size = input->struct_size >= sizeof(normalized) ? sizeof(normalized) : offsetof(rsf_srvk_frame, bias_current_color);
-    std::memcpy(&normalized, input, input_size);
-    normalized.struct_size = sizeof(normalized);
+    const auto prefix = rsf_core_srvk_normalize(input, &normalized);
+    if (prefix != RSF_BACKEND_OK) return prefix;
     input = &normalized;
     if (input->sharpening.struct_size && !rsf::sharpening_settings::valid(input->sharpening)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
 #if defined(RSF_HAVE_FFX_VK)
+    const auto admission = rsf_core_srvk_frame_admit(&self->setup, input, self->width, self->height, self->xess != nullptr);
+    if (admission != RSF_BACKEND_OK) return admission;
     const auto* record = input->record;
-    if (!record || record->struct_size < sizeof(*record)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    // XeSS recommends an optimal plan but owns a queried inclusive input range.
-    // Common validation still requires every image and camera to match the real
-    // record; only its backend may admit a size different from the plan.
-    const uint32_t width = self->xess ? record->render_width : self->width;
-    const uint32_t height = self->xess ? record->render_height : self->height;
-    if (!width || !height || record->abi_version != RSF_GAME_FRAME_ABI_VERSION ||
-        record->camera.struct_size < sizeof(record->camera) || record->camera.abi_version != RSF_GAME_CAMERA_ABI_VERSION ||
-        !record->session_id || !record->frame_id || record->render_width != width || record->render_height != height ||
-        record->output_width != self->setup.output_width || record->output_height != self->setup.output_height ||
-        record->camera.render_width != record->render_width || record->camera.render_height != record->render_height ||
-        record->camera.output_width != record->output_width || record->camera.output_height != record->output_height ||
-        record->camera.depth_inverted != self->setup.depth_inverted || record->camera.motion_jittered != self->setup.motion_jittered ||
-        !std::isfinite(record->frame_time_ms) || record->frame_time_ms <= 0 ||
-        !std::isfinite(input->motion_scale_x) || !std::isfinite(input->motion_scale_y) || !input->motion_scale_x || !input->motion_scale_y ||
-        !std::isfinite(input->pre_exposure) || input->pre_exposure <= 0 ||
-        !std::isfinite(record->camera.near_plane) || record->camera.near_plane <= 0 ||
-        !std::isfinite(record->camera.far_plane) || record->camera.far_plane < 0 ||
-        (!self->setup.depth_infinite && record->camera.far_plane <= record->camera.near_plane) ||
-        !std::isfinite(record->camera.vertical_fov_radians) || record->camera.vertical_fov_radians <= 0 || record->camera.vertical_fov_radians >= 3.141593f ||
-        !std::isfinite(record->camera.jitter_pixels[0]) || !std::isfinite(record->camera.jitter_pixels[1])) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (!valid_image(*self, input->color, width, height, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) || input->color.format != VK_FORMAT_R16G16B16A16_SFLOAT ||
-        !valid_image(*self, input->depth, width, height, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) || (input->depth.format != VK_FORMAT_D32_SFLOAT && input->depth.format != VK_FORMAT_R32_SFLOAT) ||
-        !valid_image(*self, input->motion, width, height, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) || input->motion.format != VK_FORMAT_R16G16_SFLOAT ||
-        !valid_image(*self, input->output, self->setup.output_width, self->setup.output_height, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) || input->output.format != VK_FORMAT_R16G16B16A16_SFLOAT)
-        return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    for (const auto* mask : {&input->reactive, &input->composition, &input->bias_current_color}) if (mask->image &&
-        (!valid_image(*self, *mask, width, height, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) || mask->format != VK_FORMAT_R8_UNORM))
-        return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     (void)rsf_input_dump_begin_record(record, self->setup.backend);
     if (rsf_input_dump_wants(record)) {
         auto capture_list = static_cast<VkCommandBuffer>(commands);
@@ -385,8 +340,7 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_srvk_evaluate(rsf_srvk* self, 
     data.cameraFar = record->camera.far_plane > 0 ? record->camera.far_plane : std::numeric_limits<float>::max();
     data.cameraFovAngleVertical = record->camera.vertical_fov_radians; data.viewSpaceToMetersFactor = 1;
     rsf::ffx_sharpening(data,input->sharpening.struct_size?rsf::sharpening_settings::vendor_sharpness(input->sharpening,self->setup.backend):0);
-    data.reset = (record->flags & RSF_FRAME_FLAG_RESET) || self->last_frame + 1 != record->frame_id || self->last_session != record->session_id ||
-        self->last_view != record->view_id || self->last_generation != record->resource_generation;
+    data.reset = rsf_core_srvk_history_reset(&self->history, record) != 0;
     rsf::capture_sr_parameters(*record, self->setup.backend, input->motion_scale_x, input->motion_scale_y, input->pre_exposure, data.reset);
     if (self->capture.wants(record->frame_id)) {
         (void)self->capture.record(list, input->color, *record, "sr-linear-color", data.reset);
@@ -394,7 +348,7 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_srvk_evaluate(rsf_srvk* self, 
         (void)self->capture.record(list, input->motion, *record, "sr-motion-uv", data.reset);
     }
     if (self->dispatch(&self->effect, &data.header) != FFX_API_RETURN_OK) {
-        self->last_frame = 0; rsf_input_dump_result(record, "sr", self->setup.backend, RSF_BACKEND_ERROR_FEATURE_FAILED); return RSF_BACKEND_ERROR_FEATURE_FAILED;
+        self->history.frame = 0; rsf_input_dump_result(record, "sr", self->setup.backend, RSF_BACKEND_ERROR_FEATURE_FAILED); return RSF_BACKEND_ERROR_FEATURE_FAILED;
     }
     (void)self->sharpen.run(self->setup,commands,*input,self->output.image);
     (void)self->capture.record(list, output, *record, "sr-output-linear", data.reset);
@@ -404,7 +358,7 @@ extern "C" RSF_RUNTIME_API rsf_backend_result rsf_srvk_evaluate(rsf_srvk* self, 
     self->copy(list, self->output.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
         reinterpret_cast<VkImage>(static_cast<uintptr_t>(input->output.image)), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
     transition(*self, list, self->output.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL, VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_SHADER_WRITE_BIT);
-    self->last_frame = record->frame_id; self->last_session = record->session_id; self->last_view = record->view_id; self->last_generation = record->resource_generation;
+    rsf_core_srvk_history_commit(&self->history, record);
     rsf_input_dump_result(record, "sr", self->setup.backend, RSF_BACKEND_OK);
     return RSF_BACKEND_OK;
 #else
