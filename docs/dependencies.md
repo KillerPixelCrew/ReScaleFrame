@@ -3,6 +3,7 @@
 The orchestrator uses the Cargo build dependency `cc` to compile the native
 plugin exception guards. Cargo.lock pins it and its build tools. The guards
 link into the orchestrator static library for both embedded and DLL consumers.
+The Windows build uses Microsoft's `windows-sys` bindings for profile storage.
 
 ## REA development tooling
 

@@ -8,7 +8,7 @@ defines frame ABI 2 and camera ABI 1.
 
 Rust callers use the workspace crate `rsf-game-sys`. Its generated types include
 compile-time Windows x64 size, alignment and field-offset checks. After changing
-the headers, run `python sdk/game/generate-bindings.py` with bindgen-cli 0.72.1
+the headers, run `python tools/generate-rust-bindings.py` with bindgen-cli 0.72.1
 and libclang available. Ordinary builds use the checked-in bindings.
 
 Use fixed-width fields, `struct_size`, and ABI versions. Keep STL/Rust types and allocator ownership inside their DLLs. The header must compile as C and C++.

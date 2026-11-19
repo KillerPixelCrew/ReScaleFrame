@@ -47,6 +47,20 @@ busy stop and eventual module unload. Both Anomaly DX11 build probes refused
 preparation in a foreign process with a cleared handle and unloaded adapter.
 These checks exercise admission and teardown without activating game rendering.
 
+FG provider settings and D3D11 frame assembly now run in Rust. The settings
+owner retains the UTF-16 INI path and uses the same Windows profile functions.
+All 3,084 mask/fallback combinations in a synthetic comparison against the
+previous local DLL matched for startup, Auto resolution, memory-only save and
+status. The native settings fixture also checked disk persistence.
+
+Frame assembly now rejects short outputs, including a zero capacity, before
+writing. The old assembler accepted them and wrote an entire backend frame.
+Both calls in the D3D11 pipeline and the native SR caller set the full size.
+The shared binding generator takes the frame layout and provider mask from the
+C headers. Debug and Release MSVC passed frame assembly, FG settings, the
+embedded GPU policy and the Anomaly SR API contract. The rebuilt Release DLL
+matched the baseline's 381 export names and ordinals. These are CPU/ABI checks.
+
 ## Fallout 4 AE native render callbacks, 16 November 2026
 
 User priority is now fully native Fallout4.exe without F4SE/ENB first, with

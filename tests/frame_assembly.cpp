@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <initializer_list>
 
 namespace {
 
@@ -114,6 +115,13 @@ int main()
     const rsf_frame_resources resources = make_resources();
 
     rsf_dlss_frame frame{};
+    for (uint32_t short_size : {0u, uint32_t(sizeof(frame) - 1)}) {
+        frame.struct_size = short_size;
+        frame.abi_version = UINT32_MAX;
+        check(rsf_assemble_dlss_frame(&camera, &resources, &frame) == RSF_FRAME_ASSEMBLY_ERROR_INVALID_ARGUMENT &&
+              frame.struct_size == short_size && frame.abi_version == UINT32_MAX,
+              "A short output must be refused before writing its frame.");
+    }
     frame.struct_size = sizeof(frame);
     check(rsf_assemble_dlss_frame(&camera, &resources, &frame) == RSF_FRAME_ASSEMBLY_OK,
           "A usable frame must assemble.");

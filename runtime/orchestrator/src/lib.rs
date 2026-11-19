@@ -1,8 +1,14 @@
 // SPDX-License-Identifier: MIT
 
+#[cfg(windows)]
+mod fg_choice;
+#[cfg(windows)]
+mod frame_assembly;
 mod frame_sequencer;
 #[cfg(windows)]
 mod plugin_session;
+#[cfg(windows)]
+mod render_abi;
 
 // Public backend IDs from rescaleframe/sr_session.h, checked by the native ABI test.
 const NONE: u32 = 0;
