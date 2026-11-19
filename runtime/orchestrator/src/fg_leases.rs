@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use crate::com_ref::ComRef;
 use crate::render_abi::{rsf_backend_result, rsf_fg_retirement};
 use std::ffi::c_void;
 use std::ptr::{self, NonNull};
@@ -15,42 +16,22 @@ const FEATURE_FAILED: rsf_backend_result = -9;
 const STALE_RESOURCES: rsf_backend_result = -10;
 
 unsafe extern "C" {
-    fn rsf_fg_lease_com_add_ref(object: *mut c_void);
-    fn rsf_fg_lease_com_release(object: *mut c_void);
     fn rsf_fg_lease_com_get_device(child: *mut c_void, device: *mut *mut c_void) -> i32;
     fn rsf_d3d12_fence_completed(fence: *mut c_void) -> u64;
 }
 
-struct ComRef(NonNull<c_void>);
-
-impl ComRef {
-    // The caller borrows a live COM interface for this call.
-    unsafe fn retain(object: *mut c_void) -> Self {
-        let object = NonNull::new(object).unwrap();
-        unsafe { rsf_fg_lease_com_add_ref(object.as_ptr()) };
-        Self(object)
-    }
-
-    // GetDevice supplies an already retained interface.
-    unsafe fn device(child: *mut c_void) -> Option<Self> {
-        let mut device = ptr::null_mut();
-        let result = unsafe { rsf_fg_lease_com_get_device(child, &mut device) };
-        let device = NonNull::new(device).map(Self);
-        if result < 0 { None } else { device }
-    }
-}
-
-impl Drop for ComRef {
-    fn drop(&mut self) {
-        unsafe { rsf_fg_lease_com_release(self.0.as_ptr()) };
-    }
+unsafe fn device(child: *mut c_void) -> Option<ComRef> {
+    let mut device = ptr::null_mut();
+    let result = unsafe { rsf_fg_lease_com_get_device(child, &mut device) };
+    let device = NonNull::new(device).map(ComRef);
+    if result < 0 { None } else { device }
 }
 
 unsafe fn same_device(first: *mut c_void, second: *mut c_void) -> bool {
-    let Some(first) = (unsafe { ComRef::device(first) }) else {
+    let Some(first) = (unsafe { device(first) }) else {
         return false;
     };
-    unsafe { ComRef::device(second) }.is_some_and(|second| first.0 == second.0)
+    unsafe { device(second) }.is_some_and(|second| first.0 == second.0)
 }
 
 struct FencePoint {

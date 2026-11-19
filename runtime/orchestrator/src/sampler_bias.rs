@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use crate::com_ref::ComRef;
 use std::borrow::Borrow;
 use std::ffi::c_void;
 use std::ptr::{self, NonNull};
@@ -7,13 +8,10 @@ use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 const SLOT_COUNT: usize = 16;
 const CACHE_CAPACITY: usize = 32;
 
-type ComPtr = NonNull<c_void>;
 type Slots<T> = [Option<T>; SLOT_COUNT];
 type Entries<T> = [Option<Entry<T>>; CACHE_CAPACITY];
 
 unsafe extern "C" {
-    fn rsf_sampler_bias_com_add_ref(object: *mut c_void);
-    fn rsf_sampler_bias_com_release(object: *mut c_void);
     fn rsf_sampler_bias_com_is_immediate(context: *mut c_void) -> i32;
     fn rsf_sampler_bias_com_device(child: *mut c_void) -> *mut c_void;
     fn rsf_sampler_bias_com_read_slots(context: *mut c_void, out: *mut *mut c_void);
@@ -25,28 +23,6 @@ unsafe extern "C" {
         bias: f32,
     ) -> *mut c_void;
     fn rsf_sampler_bias_com_device_ready(device: *mut c_void) -> i32;
-}
-
-// Each instance owns one COM reference. COM getters and clone creation transfer theirs.
-struct ComRef(ComPtr);
-
-impl Clone for ComRef {
-    fn clone(&self) -> Self {
-        unsafe { rsf_sampler_bias_com_add_ref(self.0.as_ptr()) };
-        Self(self.0)
-    }
-}
-
-impl Drop for ComRef {
-    fn drop(&mut self) {
-        unsafe { rsf_sampler_bias_com_release(self.0.as_ptr()) };
-    }
-}
-
-impl Borrow<ComPtr> for ComRef {
-    fn borrow(&self) -> &ComPtr {
-        &self.0
-    }
 }
 
 struct Entry<T> {
@@ -248,8 +224,7 @@ unsafe extern "C" fn rsf_sampler_bias_apply(
             let replacement = NonNull::new(unsafe {
                 rsf_sampler_bias_com_clone(device_ptr, original_ptr, adjusted)
             })?;
-            unsafe { rsf_sampler_bias_com_add_ref(original_ptr) };
-            Some((ComRef(original), ComRef(replacement)))
+            Some((unsafe { ComRef::retain(original_ptr) }, ComRef(replacement)))
         })
     else {
         return 0;

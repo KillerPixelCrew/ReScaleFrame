@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 
 #[cfg(windows)]
+mod com_ref;
+#[cfg(windows)]
 mod cpu_abi;
 #[cfg(windows)]
 mod cpu_reservations;
@@ -36,6 +38,8 @@ mod render_links;
 mod sampler_bias;
 #[cfg(windows)]
 mod scene_abi;
+#[cfg(windows)]
+mod settings_store;
 mod sr_history;
 #[cfg(windows)]
 mod sr_legacy;

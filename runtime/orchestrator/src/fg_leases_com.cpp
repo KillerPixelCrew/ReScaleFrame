@@ -2,17 +2,6 @@
 #include <d3d12.h>
 #include <cstdint>
 
-// The resource, fence and device interfaces share the IUnknown prefix.
-extern "C" void rsf_fg_lease_com_add_ref(void* object)
-{
-    static_cast<IUnknown*>(object)->AddRef();
-}
-
-extern "C" void rsf_fg_lease_com_release(void* object)
-{
-    static_cast<IUnknown*>(object)->Release();
-}
-
 extern "C" int32_t rsf_fg_lease_com_get_device(void* child, void** out)
 {
     // Both resource and fence interfaces inherit the ID3D12DeviceChild prefix.

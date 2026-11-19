@@ -5,16 +5,6 @@
 static_assert(D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT == 16);
 static_assert(D3D11_MIP_LOD_BIAS_MIN == -16.0f && D3D11_MIP_LOD_BIAS_MAX == 15.99f);
 
-extern "C" void rsf_sampler_bias_com_add_ref(void* object)
-{
-    static_cast<IUnknown*>(object)->AddRef();
-}
-
-extern "C" void rsf_sampler_bias_com_release(void* object)
-{
-    static_cast<IUnknown*>(object)->Release();
-}
-
 extern "C" int32_t rsf_sampler_bias_com_is_immediate(void* context)
 {
     return static_cast<ID3D11DeviceContext*>(context)->GetType() == D3D11_DEVICE_CONTEXT_IMMEDIATE;

@@ -209,6 +209,24 @@ Seven focused D3D11 and Anomaly fixtures passed in Debug and Release.
 The linked AC7 carrier built in both configurations. Device and in-game
 execution remain pending.
 
+Rust now owns D3D11 sampler selection, its bounded cache and the retained COM
+references. Sampler bias and FG leases share COM reference management.
+The sampler prepares every replacement before publishing bindings or the
+applied mask, so a late failure preserves earlier ownership.
+
+The shared live settings store now persists the existing INI keys in Rust.
+Decimal text uses the UCRT in the current locale, and sharpening defaults
+come from the public C contract. A partial sharpening write attempts to
+restore the previous profile values. Windows returns those values without the
+original quote spelling. The native render host still reads its FG mode and
+some other keys directly.
+
+The integrated Debug and Release builds passed nine focused settings,
+overlay, Anomaly input, D3D11 host and FG lease tests. All 86 Rust tests and
+workspace Clippy passed. The sampler WARP fixture built in both configurations.
+The Release runtime and AC7 carrier match the verified 381 and 256 export
+names and ordinals. Device and gameplay tests remain pending.
+
 ## Fallout 4 AE native render callbacks, 16 November 2026
 
 User priority is now fully native Fallout4.exe without F4SE/ENB first, with
