@@ -1,5 +1,17 @@
 # Implementation tracker
 
+## Rust orchestrator and first Anomaly port
+
+The [migration plan](rust-migration.md) records the baseline and cutover order.
+The first source inspection found that the public frame sequencer opened a rendered
+frame and assigned its provenance under separate locks. Direct callers could read
+or retire the slot between those operations. The FG session adds its own outer
+lock. The sequencer now publishes the frame and source timestamp together.
+Built the Release FG session fixture with MSVC and passed the focused `fg_session`
+CTest. This exercises sequencing semantics. The race was identified by source
+inspection. The isolated build omitted the optional corrected Vulkan Streamline
+runtime because the local receipt disagrees with the present capture header.
+
 ## Fallout 4 AE native render callbacks, 16 November 2026
 
 User priority is now fully native Fallout4.exe without F4SE/ENB first, with

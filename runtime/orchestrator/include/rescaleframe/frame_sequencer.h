@@ -1,6 +1,4 @@
 /* SPDX-License-Identifier: MIT */
-/* Unwired scaffolding: no production caller yet. Kept for the planned ABI 2 frame-callback
-   work (see docs/representation-plan.md). Do not delete as dead code. */
 #ifndef RSF_FRAME_SEQUENCER_H
 #define RSF_FRAME_SEQUENCER_H
 #include <rescaleframe/frame_generation.h>
