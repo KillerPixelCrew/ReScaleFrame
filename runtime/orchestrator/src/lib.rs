@@ -13,6 +13,8 @@ mod fg_session;
 mod frame_assembly;
 mod frame_sequencer;
 #[cfg(windows)]
+mod native_window;
+#[cfg(windows)]
 mod plugin_session;
 #[cfg(windows)]
 mod render_abi;
@@ -21,6 +23,8 @@ mod render_links;
 mod sr_history;
 #[cfg(windows)]
 mod sr_session;
+#[cfg(windows)]
+mod window_abi;
 
 // C callers can recover from allocation failure. A successful handle is
 // released with Box::from_raw after its owner has retired outstanding users.
