@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 fn main() {
     println!("cargo:rerun-if-changed=src/plugin_callbacks.cpp");
+    println!("cargo:rerun-if-changed=src/fg_leases_com.cpp");
     println!("cargo:rerun-if-changed=../../sdk/game/include");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         let mut build = cc::Build::new();
@@ -13,6 +14,7 @@ fn main() {
             .warnings_into_errors(true)
             .include("../../sdk/game/include")
             .file("src/plugin_callbacks.cpp")
-            .compile("rsf_plugin_callbacks");
+            .file("src/fg_leases_com.cpp")
+            .compile("rsf_orchestrator_native");
     }
 }
