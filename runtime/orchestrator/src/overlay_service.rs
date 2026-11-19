@@ -67,13 +67,58 @@ static CLAIMED: AtomicBool = AtomicBool::new(false);
 static CONFIG: OnceLock<Config> = OnceLock::new();
 static LIFECYCLE: AtomicU8 = AtomicU8::new(COLD);
 static STATE: LazyLock<Mutex<State>> = LazyLock::new(|| Mutex::new(State::default()));
-// Serialize persistence and its side effects so a request cannot overtake an earlier write.
-static APPLY: Mutex<()> = Mutex::new(());
+static APPLY_ACTIVE: AtomicBool = AtomicBool::new(false);
+// Keep refusal accounting independent of the settings lock, which covers INI I/O.
+static APPLY_DIAGNOSTICS: Mutex<ApplyDiagnostics> = Mutex::new(ApplyDiagnostics {
+    attempts: 0,
+    refused: 0,
+    last_result: OK,
+});
 
 fn state() -> MutexGuard<'static, State> {
     STATE
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn apply_diagnostics() -> MutexGuard<'static, ApplyDiagnostics> {
+    APPLY_DIAGNOSTICS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[derive(Clone, Copy)]
+struct ApplyDiagnostics {
+    attempts: u32,
+    refused: u32,
+    last_result: i32,
+}
+
+fn record_apply(result: i32) -> u32 {
+    let mut diagnostics = apply_diagnostics();
+    diagnostics.attempts = diagnostics.attempts.wrapping_add(1);
+    diagnostics.refused = diagnostics.refused.wrapping_add(u32::from(result != OK));
+    diagnostics.last_result = result;
+    diagnostics.attempts
+}
+
+// Keep persistence, forwarding and notification in order. A callback's reentrant
+// update receives BUSY immediately, even if it came through a different thread.
+struct ApplyAdmission;
+
+impl ApplyAdmission {
+    fn try_enter() -> Option<Self> {
+        APPLY_ACTIVE
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .ok()
+            .map(|_| Self)
+    }
+}
+
+impl Drop for ApplyAdmission {
+    fn drop(&mut self) {
+        APPLY_ACTIVE.store(false, Ordering::Release);
+    }
 }
 
 const fn abi_size<T>() -> u32 {
@@ -371,9 +416,6 @@ struct State {
     presents_drawn: u64,
     request_result: i32,
     panel_apply_result: i32,
-    apply_attempts: u32,
-    apply_refused: u32,
-    last_apply_result: i32,
     options: [i32; OPTION_LIMIT],
     ui_preferences: u32,
     rates: Rates,
@@ -393,9 +435,6 @@ impl Default for State {
             presents_drawn: 0,
             request_result: OK,
             panel_apply_result: OK,
-            apply_attempts: 0,
-            apply_refused: 0,
-            last_apply_result: OK,
             options: [0; OPTION_LIMIT],
             ui_preferences: 0,
             rates: Rates::default(),
@@ -559,13 +598,7 @@ fn applied_result(requested: i32, fallback: i32) -> i32 {
 }
 
 fn log_apply(config: Option<&Config>, request: Option<&Settings>, origin: &str, result: i32) {
-    let attempt = {
-        let mut state = state();
-        state.apply_attempts = state.apply_attempts.wrapping_add(1);
-        state.apply_refused = state.apply_refused.wrapping_add(u32::from(result != OK));
-        state.last_apply_result = result;
-        state.apply_attempts
-    };
+    let attempt = record_apply(result);
     if let Some(config) = config.filter(|_| attempt <= APPLY_LOG_LIMIT) {
         if let Some(value) = request {
             let outcome = if result == OK {
@@ -588,9 +621,11 @@ fn log_apply(config: Option<&Config>, request: Option<&Settings>, origin: &str, 
 
 fn apply(config: &Config, request: impl FnOnce(Settings) -> Settings, origin: &str) -> i32 {
     let (applied, result, requested) = {
-        let _apply = APPLY
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(_admission) = ApplyAdmission::try_enter() else {
+            // Record overlaps without invoking the adapter again inside its callback.
+            record_apply(BUSY);
+            return BUSY;
+        };
         let mut state = state();
         let mut value = request(state.settings);
         value.struct_size = abi_size::<Settings>();
@@ -610,7 +645,6 @@ fn apply(config: &Config, request: impl FnOnce(Settings) -> Settings, origin: &s
             unsafe { (platform().set_sharpening.unwrap())(&value) };
             let requested = forward_fg(&value);
             self::state().request_result = requested;
-            // The C contract allows status/diagnostics here and excludes settings reentry.
             if let Some(changed) = config.callbacks.changed {
                 unsafe { changed(config.callbacks.user, &value) };
             }
@@ -1342,6 +1376,7 @@ unsafe extern "C" fn rsf_core_get_overlay_diagnostics(
     } else {
         0
     };
+    let apply = *apply_diagnostics();
     let mut value = {
         let state = state();
         rsf_overlay_diagnostics {
@@ -1352,9 +1387,9 @@ unsafe extern "C" fn rsf_core_get_overlay_diagnostics(
             chain_height: state.chain_size[1],
             presents: state.presents,
             presents_drawn: state.presents_drawn,
-            apply_attempts: state.apply_attempts,
-            apply_refused: state.apply_refused,
-            last_apply_result: state.last_apply_result,
+            apply_attempts: apply.attempts,
+            apply_refused: apply.refused,
+            last_apply_result: apply.last_result,
             ..Default::default()
         }
     };

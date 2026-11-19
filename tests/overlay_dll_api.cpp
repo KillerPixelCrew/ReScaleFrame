@@ -20,7 +20,26 @@ void check(bool condition, const char* what)
 }
 int changed_calls = 0;
 rsf_render_settings last_changed{};
-void on_changed(void*, const rsf_render_settings* applied) { ++changed_calls; last_changed = *applied; }
+struct CallbackContext {
+    const rsf_overlay_api& api;
+    bool reenter{};
+};
+void on_changed(void* user, const rsf_render_settings* applied)
+{
+    ++changed_calls;
+    last_changed = *applied;
+    auto& context = *static_cast<CallbackContext*>(user);
+    if (!context.reenter) return;
+    context.reenter = false;
+    rsf_render_settings snapshot{sizeof(snapshot), RSF_RENDER_FRONTEND_ABI_VERSION};
+    check(context.api.settings_get(&snapshot) == RSF_OK &&
+        snapshot.sr_backend == applied->sr_backend && snapshot.fg_enabled == applied->fg_enabled,
+        "settings_changed can read the newly published request");
+    auto nested = *applied;
+    nested.sr_backend = 1;
+    nested.fg_enabled = 0;
+    check(context.api.settings_apply(&nested) == RSF_ERROR_BUSY, "settings_changed receives BUSY for a nested write");
+}
 std::wstring ini_path()
 {
     wchar_t directory[MAX_PATH]{};
@@ -117,6 +136,8 @@ int main()
     setup.fg_backend_choices = (1u << RSF_FG_BACKEND_FSR3) | (1u << RSF_FG_BACKEND_AUTO);
     setup.latency_choices = (1u << RSF_REFLEX_OFF) | (1u << RSF_REFLEX_ON);
     setup.max_generated_frames = 1;
+    CallbackContext callback{api};
+    setup.user = &callback;
     setup.settings_changed = on_changed;
 
     check(api.configure(nullptr) == RSF_ERROR_INVALID_ARGUMENT, "null setup");
@@ -171,7 +192,8 @@ int main()
     request = settings;
     request.sr_enabled = 1; request.sr_backend = 3; request.sr_quality = 1;
     request.fg_enabled = 1; request.fg_backend = RSF_FG_BACKEND_FSR3; request.latency = RSF_REFLEX_ON; request.frame_limit_us = 8333;
-    check(api.settings_apply(&request) == RSF_OK, "valid apply");
+    callback.reenter = true;
+    check(api.settings_apply(&request) == RSF_OK, "outer apply succeeds with a reentrant callback");
     check(changed_calls == 1 && last_changed.sr_backend == 3 && last_changed.fg_backend == RSF_FG_BACKEND_FSR3, "adapter notified once");
     check(read(ini, L"SR") == 1 && read(ini, L"SRBackend") == 3 && read(ini, L"SRQuality") == 1 && read(ini, L"FG") == 1 &&
         read(ini, L"FGBackend") == RSF_FG_BACKEND_FSR3 && read(ini, L"Latency") == RSF_REFLEX_ON &&
@@ -179,6 +201,9 @@ int main()
         "persisted in adapter section; foreign key and layout kept");
     rsf_render_settings reread{sizeof(reread), RSF_RENDER_FRONTEND_ABI_VERSION};
     check(api.settings_get(&reread) == RSF_OK && reread.sr_backend == 3 && reread.fg_enabled == 1, "get reflects apply");
+    rsf_native_fg_status fg{sizeof(fg)};
+    check(rsf_native_fg_status_get(&fg) && fg.requested.mode == RSF_FG_FIXED,
+        "nested write leaves the outer FG request forwarded");
 
     auto sharpen_request = reread;
     sharpen_request.sharpening_mode = 2; sharpen_request.sharpening_sharpness = 0.75f;
@@ -215,7 +240,6 @@ int main()
             "save failure retains the INI, in-memory settings and callback count");
     }
 
-    rsf_native_fg_status fg{}; fg.struct_size = sizeof(fg);
     check(rsf_native_fg_status_get(&fg) && fg.requested.mode == RSF_FG_FIXED && fg.requested.generated_frames == 1 &&
         fg.requested.reflex_mode == RSF_REFLEX_ON && fg.requested.frame_limit_us == 8333, "FG options forwarded to presentation owner");
 
@@ -234,8 +258,8 @@ int main()
     check(api.set_visible(1) == RSF_ERROR_NOT_READY, "configured but not started");
     rsf_overlay_diagnostics diagnostics{sizeof(diagnostics)};
     check(rsf_get_overlay_diagnostics(&diagnostics) == RSF_OK && !diagnostics.started && !diagnostics.presents &&
-        diagnostics.apply_attempts == 11 && diagnostics.apply_refused == 8 &&
-        diagnostics.last_apply_result == RSF_ERROR_NOT_READY, "diagnostics count short and failed writes");
+        diagnostics.apply_attempts == 12 && diagnostics.apply_refused == 9 &&
+        diagnostics.last_apply_result == RSF_ERROR_NOT_READY, "diagnostics count short, reentrant and failed writes");
 
     DeleteFileW(ini.c_str());
     if (failures) return 1;
