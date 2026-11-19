@@ -26,10 +26,12 @@ typedef struct rsf_native_composition_frame {
     uint32_t flags;
     uint64_t viewport_key;
 } rsf_native_composition_frame;
-/* All calls, including reads, run on the graphics execution owner. Capture is demand-driven:
-   zero disables, UINT32_MAX enables continuous capture, otherwise capture that many scopes. */
+/* Requests may come from diagnostics on another thread. Capture, read and release run on the
+   graphics execution owner. Zero disables, UINT32_MAX enables continuous capture, otherwise
+   capture that many scopes. */
 RSF_RUNTIME_API void rsf_native_composition_request(uint32_t scopes);
-/* Every consumer must match session/view/native frame; snapshots do not establish input identity. */
+/* Begin and end must use the same context and scope. Every consumer must match session/view/native
+   frame; snapshots do not establish input identity. */
 RSF_RUNTIME_API int rsf_native_composition_capture(void* context,
     const rsf_game_render_pass* pass, uint32_t begin);
 RSF_RUNTIME_API int rsf_native_composition_read(rsf_native_composition_frame* frame);

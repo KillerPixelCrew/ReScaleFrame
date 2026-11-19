@@ -45,3 +45,9 @@ generate("runtime/orchestrator/src/scene_abi.rs", "runtime/orchestrator/include/
          ["-include", "rescaleframe/native_scene.h", "-Iruntime/orchestrator/include",
           "-Iruntime/graphics/include", "-Isdk/game/include"],
          ["--with-derive-default"])
+generate("runtime/orchestrator/src/d3d11_output_abi.rs", "runtime/orchestrator/src/d3d11_output_platform.h",
+         "rsf_(native_composition_frame|d3d11_reinsert_kernels)", "RSF_D3D11_(FORMAT_.*|USAGE_.*|BIND_.*)",
+         ["-include", "rescaleframe/native_composition.h", "-Iruntime/orchestrator/include",
+          "-Iruntime/graphics/include", "-Isdk/game/include"],
+         ["--with-derive-default", "--no-copy", "rsf_d3d11_state",
+          "--allowlist-function", "rsf_d3d11_output_.*"])

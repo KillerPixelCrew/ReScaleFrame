@@ -2,6 +2,10 @@
 fn main() {
     println!("cargo:rerun-if-changed=src/plugin_callbacks.cpp");
     println!("cargo:rerun-if-changed=src/fg_leases_com.cpp");
+    println!("cargo:rerun-if-changed=src/d3d11_output_platform.cpp");
+    println!("cargo:rerun-if-changed=src/d3d11_output_platform.h");
+    println!("cargo:rerun-if-changed=../graphics/include/rescaleframe/d3d11_state.h");
+    println!("cargo:rerun-if-changed=../graphics/include/rescaleframe/srv_format.h");
     println!("cargo:rerun-if-changed=../../sdk/game/include");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         let mut build = cc::Build::new();
@@ -13,6 +17,8 @@ fn main() {
             .cpp(true)
             .warnings_into_errors(true)
             .include("../../sdk/game/include")
+            .include("../graphics/include")
+            .file("src/d3d11_output_platform.cpp")
             .file("src/plugin_callbacks.cpp")
             .file("src/fg_leases_com.cpp")
             .compile("rsf_orchestrator_native");
