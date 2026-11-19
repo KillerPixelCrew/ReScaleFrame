@@ -21,6 +21,16 @@ Release DLL. This compares the two artifacts on this machine. The focused crate
 format and Clippy checks and locked workspace tests passed with Rust 1.100.0.
 Cross-build, device and in-game validation of the port remain pending.
 
+The frame sequencer and the two GPU policy exports now implement their public C
+entry points directly in Rust. A native export list serves the DLL and embedded
+consumers. The FG session fixture now calls the built DLL and checks rejection of
+a short sequence-state output. Release MSVC passed that fixture, both GPU policy
+fixtures, and the Anomaly SR runtime API contract. Debug MSVC passed the FG
+session and embedded policy fixtures. All 381 Release exports matched the local
+baseline by name and ordinal. A synthetic comparison against the previous local
+DLL matched results and returned state for 30,000 seeded sequencer operations.
+The locked Rust workspace tests and orchestrator Clippy check also passed.
+
 ## Fallout 4 AE native render callbacks, 16 November 2026
 
 User priority is now fully native Fallout4.exe without F4SE/ENB first, with

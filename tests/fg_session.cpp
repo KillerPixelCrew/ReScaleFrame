@@ -139,6 +139,10 @@ int main()
     CHECK(rsf_frame_sequencer_create(2, &ledger) == 0);
     CHECK(rsf_frame_sequencer_begin_rendered(ledger, 1, 0) == RSF_BACKEND_ERROR_INVALID_ARGUMENT);
     CHECK(rsf_frame_sequencer_begin_rendered(ledger, 1, 100) == 0);
+    alignas(rsf_sequence_state) uint32_t short_state[] = {sizeof(uint32_t), 0xdeadbeef};
+    CHECK(rsf_frame_sequencer_get(ledger, 1, reinterpret_cast<rsf_sequence_state*>(short_state))
+          == RSF_BACKEND_ERROR_INVALID_ARGUMENT);
+    CHECK(short_state[0] == sizeof(uint32_t) && short_state[1] == 0xdeadbeef);
     rsf_sequence_state rendered{sizeof(rendered)};
     CHECK(rsf_frame_sequencer_get(ledger, 1, &rendered) == 0);
     CHECK(rendered.source_provenance == RSF_FRAME_SOURCE_RENDERED && rendered.source_qpc == 100 && !rendered.timestamps[0]);

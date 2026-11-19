@@ -381,12 +381,8 @@ target_link_libraries(rsf_sr_pipeline_test PRIVATE rsf_orchestrator rsf_build_op
 add_test(NAME sr_pipeline COMMAND rsf_sr_pipeline_test)
 set_tests_properties(sr_pipeline PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
 
-add_executable(rsf_fg_session_test fg_session.cpp ../runtime/orchestrator/src/fg_session.cpp
-    ../runtime/orchestrator/src/frame_sequencer.cpp)
-target_compile_definitions(rsf_fg_session_test PRIVATE RSF_RUNTIME_BUILD)
-target_include_directories(rsf_fg_session_test PRIVATE ../runtime/orchestrator/include
-    ../runtime/presentation/include ../runtime/backends/dlss/include ../runtime/graphics/include)
-target_link_libraries(rsf_fg_session_test PRIVATE ReScaleFrame::Contract rsf_build_options d3d12)
+add_executable(rsf_fg_session_test fg_session.cpp)
+target_link_libraries(rsf_fg_session_test PRIVATE rsf_orchestrator rsf_build_options)
 add_test(NAME fg_session COMMAND rsf_fg_session_test)
 set_tests_properties(fg_session PROPERTIES TIMEOUT 120)
 

@@ -31,14 +31,13 @@ add_library(rsf_orchestrator_core OBJECT
     src/native_translucency.cpp
     src/native_sr_d3d12.cpp
     src/gl_pipeline.cpp
-    src/gpu_policy.cpp
+    src/rust_exports.c
     src/callback_render_host.cpp
     src/render_host.cpp
     src/overlay_d3d12.cpp
     src/overlay_native12.cpp
     ../../loader/proxy/src/overlay_host.cpp
     src/native_regions.cpp
-    src/frame_sequencer.cpp
     src/render_links.cpp
     src/fg_session.cpp
     src/fg_choice.cpp
@@ -68,7 +67,10 @@ add_custom_target(rsf_rust_core
     BYPRODUCTS "${rsf_rust_archive}"
     COMMAND_EXPAND_LISTS VERBATIM)
 add_dependencies(rsf_orchestrator_core rsf_rust_core)
-target_link_libraries(rsf_orchestrator_core PUBLIC "${rsf_rust_archive}")
+target_link_libraries(rsf_orchestrator_core PUBLIC "${rsf_rust_archive}" ntdll userenv ws2_32 dbghelp)
+if(MSVC)
+    target_link_libraries(rsf_orchestrator_core PUBLIC synchronization)
+endif()
 target_compile_definitions(rsf_orchestrator_core PRIVATE RSF_STREAMLINE_HOST_BUILD)
 # Public because the orchestrator's own headers name a backend's frame structure and the decode
 # pass's parameters.

@@ -1,0 +1,19 @@
+/* SPDX-License-Identifier: MIT */
+#include <rescaleframe/frame_sequencer.h>
+#include <rescaleframe/gpu_policy.h>
+/* Export Rust static-library entry points from each PE that embeds the core. */
+#ifdef _MSC_VER
+#define RSF_EXPORT(name) __pragma(comment(linker, "/export:" #name))
+#else
+#define RSF_EXPORT(name) __asm__(".section .drectve\n.ascii \" -export:" #name "\"\n.text");
+#endif
+
+RSF_EXPORT(rsf_gpu_default_sr_backend)
+RSF_EXPORT(rsf_gpu_select_sr_backend)
+RSF_EXPORT(rsf_frame_sequencer_create)
+RSF_EXPORT(rsf_frame_sequencer_begin)
+RSF_EXPORT(rsf_frame_sequencer_begin_rendered)
+RSF_EXPORT(rsf_frame_sequencer_marker)
+RSF_EXPORT(rsf_frame_sequencer_get)
+RSF_EXPORT(rsf_frame_sequencer_finish)
+RSF_EXPORT(rsf_frame_sequencer_destroy)
