@@ -28,6 +28,8 @@ mod render_abi;
 mod render_links;
 #[cfg(windows)]
 mod scene_abi;
+#[cfg(windows)]
+mod settings_store;
 mod sr_history;
 #[cfg(windows)]
 mod sr_session;

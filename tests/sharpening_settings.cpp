@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MIT
 #include "../runtime/orchestrator/src/render_settings_store.h"
 #include "../runtime/backends/common/sharpening.h"
+#include <windows.h>
+#include <cwchar>
+#include <iterator>
+#include <string>
 #include <rescaleframe/overlay.h>
 #include <rescaleframe/d3d11_sr_api.h>
 #include <cstddef>
@@ -80,6 +84,66 @@ static_assert(offsetof(rsf_d3d11_sr_api, request_dump) == 96);
 static_assert(offsetof(rsf_d3d11_sr_api, set_sharpening) == 104);
 namespace { int failures=0;
 void check(bool result,const char* label) { if (!result) { ++failures; std::printf("FAIL: %s\n",label); } }
+std::wstring raw(const std::wstring& ini,const wchar_t* section,const wchar_t* key) {
+    wchar_t text[128]{}; GetPrivateProfileStringW(section,key,L"<missing>",text,128,ini.c_str()); return text;
+}
+// The store's file format: every owned key name and the CRT's %.9g text for decimals, which
+// earlier releases wrote and their users' INI files contain.
+void store_format(const std::wstring& ini) {
+    const wchar_t* section=L"Format";
+    WritePrivateProfileStringW(section,L"OverlayLayout",L"9",ini.c_str());
+    WritePrivateProfileStringW(section,L"sharpness",L"0.1",ini.c_str());
+    rsf_render_settings s{sizeof(s),RSF_RENDER_FRONTEND_ABI_VERSION,1,3,2,1,4,3,2,16667,1,4};
+    rsf::render_settings::initialize_sharpening(s);
+    s.sharpening_mode=2; s.sharpening_mas=1; s.sharpening_contrast_enabled=1; s.sharpening_clamp_output=1; s.sharpening_debug=1;
+    check(rsf::render_settings::write(ini,section,s)==RSF_OK,"format write");
+    const wchar_t* expected[][2]={{L"SR",L"1"},{L"SRBackend",L"3"},{L"DLSSPreset",L"2"},{L"FG",L"1"},{L"FGBackend",L"4"},
+        {L"FGGeneratedFrames",L"3"},{L"Latency",L"2"},{L"FrameLimitUs",L"16667"},{L"StatusOverlay",L"1"},{L"SRQuality",L"4"},
+        {L"SharpeningMode",L"2"},{L"Sharpness",L"0.400000006"},{L"MAS",L"1"},{L"MotionSharpness",L"0.200000003"},
+        {L"MotionThreshold",L"0"},{L"MotionScaleLimit",L"10"},{L"ContrastEnabled",L"1"},{L"Contrast",L"0"},
+        {L"DADepthScale",L"35"},{L"DADepthBias",L"0.00100000005"},{L"DAClampOutput",L"1"},{L"SharpeningDebug",L"1"}};
+    for (const auto& entry:expected) check(raw(ini,section,entry[0])==entry[1],"owned key name and text");
+    check(raw(ini,section,L"OverlayLayout")==L"9" && rsf::render_settings::read_overlay_layout(ini,section)==9,"layout survives a settings write");
+    wchar_t lines[4096]{}; const auto length=GetPrivateProfileSectionW(section,lines,4096,ini.c_str());
+    int sharpness_lines=0;
+    for (const wchar_t* line=lines; line<lines+length && *line; line+=std::wcslen(line)+1)
+        if (!_wcsnicmp(line,L"Sharpness=",10)) ++sharpness_lines;
+    check(sharpness_lines==1,"differently cased owned key replaced");
+    // Every decimal is written as the CRT formats it and reads back to the same bits.
+    uint32_t state=0x1234567u;
+    for (int i=0;i<1600;++i) {
+        float value;
+        if (i<512) value=1.0f+static_cast<float>(i)/512.0f;           // exact ties at the tenth digit
+        else if (i<520) { const float edge[]={0.0f,-0.0f,1e-5f,1e-4f,123456792.0f,1234567936.0f,3.4028235e38f,1.17549435e-38f}; value=edge[i-512]; }
+        else { state=state*1664525u+1013904223u; uint32_t bits=state; if (((bits>>23)&0xff)==0xff) bits^=1u<<23; std::memcpy(&value,&bits,4); }
+        s.sharpening_contrast=value;
+        if (rsf::render_settings::write(ini,section,s)!=RSF_OK) { check(false,"decimal write"); break; }
+        wchar_t crt[64]{}; std::swprintf(crt,std::size(crt),L"%.9g",static_cast<double>(value));
+        const auto text=raw(ini,section,L"Contrast");
+        const auto back=rsf::render_settings::read(ini,section,s).sharpening_contrast;
+        if (text!=crt || std::memcmp(&back,&value,4)) {
+            check(false,"decimal text matches CRT %.9g and round-trips");
+            std::printf("  value %a: store '%ls' CRT '%ls'\n",static_cast<double>(value),text.c_str(),crt);
+            break;
+        }
+    }
+    for (float special:{std::numeric_limits<float>::infinity(),-std::numeric_limits<float>::infinity(),
+             std::numeric_limits<float>::quiet_NaN(),-std::numeric_limits<float>::quiet_NaN()}) {
+        s.sharpening_contrast=special;
+        check(rsf::render_settings::write(ini,section,s)==RSF_OK,"special write");
+        wchar_t crt[64]{}; std::swprintf(crt,std::size(crt),L"%.9g",static_cast<double>(special));
+        if (raw(ini,section,L"Contrast")!=crt) { check(false,"special decimal text matches CRT"); std::printf("  CRT '%ls' store '%ls'\n",crt,raw(ini,section,L"Contrast").c_str()); }
+    }
+    // A section beyond the store's buffer is refused rather than truncated.
+    const std::wstring large(40000,L'x');
+    WritePrivateProfileStringW(L"Large",L"Padding",large.c_str(),ini.c_str());
+    check(rsf::render_settings::write(ini,L"Large",s)==RSF_ERROR_INVALID_ARGUMENT && raw(ini,L"Large",L"SR")==L"<missing>","oversized section refused unchanged");
+    auto bad=rsf_sharpening_defaults(); bad.depth_scale=601;
+    check(rsf::render_settings::write_sharpening(ini,section,bad)==RSF_ERROR_INVALID_ARGUMENT && raw(ini,section,L"DADepthScale")==L"35","invalid sharpening write refused unchanged");
+    auto short_options=rsf_sharpening_defaults(); short_options.struct_size-=4;
+    check(rsf_settings_store_write_sharpening(ini.c_str(),section,&short_options)==RSF_ERROR_INVALID_ARGUMENT,"store refuses short sharpening options");
+    check(rsf_settings_store_write(ini.c_str(),nullptr,&s)==RSF_ERROR_INVALID_ARGUMENT && rsf_settings_store_write(ini.c_str(),section,nullptr)==RSF_ERROR_INVALID_ARGUMENT,"store refuses missing arguments");
+}
 }
 int main() {
     auto defaults=rsf_sharpening_defaults();
@@ -168,6 +232,7 @@ int main() {
     }
     wchar_t engine[32]{}; GetPrivateProfileStringW(L"Rendering",L"EngineQuality",L"",engine,32,path);
     check(std::wstring(engine)==L"untouched","callback persistence preserves engine settings");
+    store_format(ini);
     DeleteFileW(path);
     std::printf("sharpening_settings: %d failures\n",failures);
     return failures?1:0;
