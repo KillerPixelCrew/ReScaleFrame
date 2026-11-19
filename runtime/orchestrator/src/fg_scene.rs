@@ -119,11 +119,10 @@ unsafe extern "C" fn rsf_native_fg_scene_swap(in_out: *mut Pass) -> i32 {
     1
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_native_fg_scene_set(
-    pass: *const Pass,
-    refuse_held_inputs: unsafe extern "C" fn(*const Pass),
-) {
+// The copied scene for one graphics callback. Only a refusal reported with the original explicit
+// lease may mark inputs already held for that source.
+// `pass` is null or a caller-sized structure; a short one is ignored.
+pub(crate) unsafe fn set_scene(pass: *const Pass, refuse_held_inputs: impl FnOnce(&Pass)) {
     if pass.is_null() {
         SCENE.set(EMPTY);
         return;
@@ -131,20 +130,19 @@ unsafe extern "C" fn rsf_core_native_fg_scene_set(
     if !unsafe { full_pass(pass) } {
         return;
     }
+    let pass = unsafe { &*pass };
     let mut scene = Pass {
         struct_size: PASS_SIZE,
-        ..unsafe { pass.read() }
+        ..*pass
     };
     if scene.source_frame_id == 0 {
         apply_bound(&mut scene);
     } else if scene.role == RSF_GAME_RENDER_FG_INPUTS && scene.flags & RSF_GAME_RENDER_NO_FG != 0 {
-        // Only a refusal reported with the original explicit lease may mark held inputs.
-        unsafe { refuse_held_inputs(pass) };
+        refuse_held_inputs(pass);
     }
     SCENE.set(scene);
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_native_fg_scene_read(out: *mut Pass) {
-    unsafe { out.write(SCENE.get()) };
+pub(crate) fn read_scene() -> Pass {
+    SCENE.get()
 }
