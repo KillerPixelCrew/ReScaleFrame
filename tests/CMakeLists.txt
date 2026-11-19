@@ -288,9 +288,9 @@ target_compile_definitions(rsf_native_cpu_reservation_test PRIVATE RSF_RUNTIME_B
 target_link_libraries(rsf_native_cpu_reservation_test PRIVATE ReScaleFrame::GameSDK rsf_native_cpu rsf_build_options)
 add_test(NAME native_cpu_reservation_contract COMMAND rsf_native_cpu_reservation_test)
 
-add_executable(rsf_sampler_bias sampler_bias.cpp ../runtime/orchestrator/src/sampler_bias.cpp)
+add_executable(rsf_sampler_bias sampler_bias.cpp)
 target_include_directories(rsf_sampler_bias PRIVATE ../runtime/orchestrator/include ../runtime/presentation/include)
-target_link_libraries(rsf_sampler_bias PRIVATE ReScaleFrame::Graphics ReScaleFrame::GameSDK rsf_build_options)
+target_link_libraries(rsf_sampler_bias PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics ReScaleFrame::GameSDK rsf_build_options)
 add_test(NAME sampler_bias_device COMMAND rsf_sampler_bias)
 set_tests_properties(sampler_bias_device PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
 

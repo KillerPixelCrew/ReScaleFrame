@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: MIT
-#include "../runtime/orchestrator/src/sampler_bias.h"
+#include "../runtime/orchestrator/src/sampler_bias_bridge.h"
+#include <rescaleframe/d3d11_host.h>
+#include <d3d11.h>
+#include <wrl/client.h>
 #include <cstdio>
 #include <cmath>
 #include <cstring>
+#include <memory>
 
 using Microsoft::WRL::ComPtr;
 int main() {
@@ -24,31 +28,42 @@ int main() {
     check(SUCCEEDED(device->CreateSamplerState(&desc, &foreign)), "foreign sampler");
     ID3D11SamplerState* initial[]{native.Get(), comparison.Get()}; context->PSSetSamplers(0, 2, initial);
     auto get = [&](UINT slot) { ComPtr<ID3D11SamplerState> value; context->PSGetSamplers(slot, 1, &value); return value; };
-    SamplerBias cache;
+    std::unique_ptr<rsf_sampler_bias_cache, decltype(&rsf_sampler_bias_destroy)>
+        cache{rsf_sampler_bias_create(), rsf_sampler_bias_destroy};
+    if (!cache) return 1;
     rsf_d3d11_sampler_bias request{sizeof(request), RSF_D3D11_HOST_ABI_VERSION, 1};
+    auto apply = [&](ID3D11DeviceContext* owner) {
+        return rsf_sampler_bias_apply(cache.get(), owner, request.samplers,
+            request.slot_mask, request.bias, &request.applied_mask) != 0;
+    };
     request.samplers[0] = native.Get(); request.samplers[1] = comparison.Get(); request.slot_mask = 1; request.bias = -1.5f;
-    check(cache.apply(context.Get(), request) && request.applied_mask == 1, "selected binding");
+    check(apply(context.Get()) && request.applied_mask == 1, "selected binding");
     auto changed = get(0); D3D11_SAMPLER_DESC actual{}; changed->GetDesc(&actual);
     D3D11_SAMPLER_DESC original{}; native->GetDesc(&original);
     check(std::abs(actual.MipLODBias + 1.25f) < 1e-6f, "additive bias");
     actual.MipLODBias = original.MipLODBias;
     check(std::memcmp(&actual, &original, sizeof(actual)) == 0, "all other fields preserved");
     check(get(1) == comparison, "unselected comparison untouched");
-    check(cache.apply(context.Get(), request) && get(0) == changed, "immutable cached object reused");
+    check(apply(context.Get()) && get(0) == changed, "immutable cached object reused");
     auto* foreign_pointer = foreign.Get(); context->PSSetSamplers(0, 1, &foreign_pointer);
-    check(cache.apply(context.Get(), request) && request.applied_mask == 0 && get(0) == foreign, "foreign renderer binding preserved");
+    check(apply(context.Get()) && request.applied_mask == 0 && get(0) == foreign, "foreign renderer binding preserved");
     context->PSSetSamplers(0, 1, initial);
-    check(cache.apply(context.Get(), request), "reacquire native binding");
+    check(apply(context.Get()), "reacquire native binding");
     for (unsigned i = 0; i < 80; ++i) {
         request.bias = -.01f * float(i + 1);
-        check(cache.apply(context.Get(), request) && request.applied_mask == 1, "cache eviction while bound");
+        check(apply(context.Get()) && request.applied_mask == 1, "cache eviction while bound");
     }
+    auto prior = get(0);
+    context->PSSetSamplers(1, 1, &foreign_pointer);
+    request.samplers[1] = foreign.Get(); request.slot_mask = 3; request.bias = 15.0f;
+    check(!apply(context.Get()) && request.applied_mask == 0 && get(0) == prior && get(1) == foreign,
+        "out-of-range bias in a later slot preserves bindings and clears the applied mask");
     request.slot_mask = 0;
-    check(cache.apply(context.Get(), request) && request.applied_mask == 0 && get(0) == native, "drain restores exact baseline after eviction");
+    check(apply(context.Get()) && request.applied_mask == 0 && get(0) == native, "drain restores exact baseline after eviction");
     request.slot_mask = 0x10000;
-    check(!cache.apply(context.Get(), request) && get(0) == native, "invalid mask leaves bindings unchanged");
+    check(!apply(context.Get()) && get(0) == native, "invalid mask leaves bindings unchanged");
     request.slot_mask = 0;
     ComPtr<ID3D11DeviceContext> deferred; device->CreateDeferredContext(0, &deferred);
-    check(!cache.apply(deferred.Get(), request), "deferred context refused");
+    check(!apply(deferred.Get()), "deferred context refused");
     std::printf("Sampler bias: %d failures\n", failures); return failures ? 1 : 0;
 }

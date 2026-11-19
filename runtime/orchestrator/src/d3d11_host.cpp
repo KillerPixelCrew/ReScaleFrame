@@ -18,7 +18,7 @@
 #include "render_settings_store.h"
 #include "auxiliary_sr.h"
 #include "native_sr_completion.h"
-#include "sampler_bias.h"
+#include "sampler_bias_bridge.h"
 #include <windows.h>
 #include <d3d11.h>
 #include <dxgi.h>
@@ -99,7 +99,8 @@ struct Host {
     std::unique_ptr<AuxiliarySurfaces> auxiliaries;
     std::unique_ptr<ReducedFrame> reduced;
     uint64_t next_reduced_token{1};
-    SamplerBias sampler_bias;
+    std::unique_ptr<rsf_sampler_bias_cache, decltype(&rsf_sampler_bias_destroy)>
+        sampler_bias{nullptr, rsf_sampler_bias_destroy};
     rsf_game_host_services upstream{};
     std::wstring ini, section;
     std::string root, identity, fingerprint, version, project;
@@ -1079,7 +1080,9 @@ extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_bind_sampler_bias(void* user, 
     if (!presentation.owns_lock()) return RSF_ERROR_BUSY;
     if (!self->scene_bound || self->execution_thread != GetCurrentThreadId() ||
         request->session_id != self->upstream.session_id || (!self->active && request->slot_mask)) return RSF_ERROR_NOT_READY;
-    return self->sampler_bias.apply(static_cast<ID3D11DeviceContext*>(raw_context), *request) ? RSF_OK : RSF_ERROR_NOT_READY;
+    if (!self->sampler_bias) self->sampler_bias.reset(rsf_sampler_bias_create());
+    return rsf_sampler_bias_apply(self->sampler_bias.get(), raw_context, request->samplers,
+        request->slot_mask, request->bias, &request->applied_mask) ? RSF_OK : RSF_ERROR_NOT_READY;
 }
 catch (...) { return RSF_ERROR_NOT_READY; }
 extern "C" RSF_RUNTIME_API int32_t rsf_d3d11_host_capture_texture(void* user, void* raw_context,

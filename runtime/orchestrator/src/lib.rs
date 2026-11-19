@@ -33,6 +33,8 @@ mod render_abi;
 #[cfg(windows)]
 mod render_links;
 #[cfg(windows)]
+mod sampler_bias;
+#[cfg(windows)]
 mod scene_abi;
 mod sr_history;
 #[cfg(windows)]
