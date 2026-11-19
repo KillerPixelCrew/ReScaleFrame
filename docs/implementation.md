@@ -141,6 +141,16 @@ export names and ordinals matched the baseline, and all 78 Rust tests passed.
 The D3D11 presentation device fixture built in Release. Its device path and
 in-game verification remain pending.
 
+Rust now owns generic FG resource and fence leases. The lease table and
+FG session share the native D3D12 fence query. The CPU-only fault fixture
+checked reference balance, both fences' failure paths, and refusal to reuse
+an occupied slot. The native WARP fixture built in Debug and Release.
+The fault fixture and five related CPU and ABI fixtures passed in both
+configurations. The integrated Debug PE exports match the worker's verified
+baseline of 381 runtime and 256 carrier names and ordinals. The older Release
+carrier artifact predates four receipt-routing exports already present at
+the migration baseline. WARP execution and gameplay testing remain pending.
+
 ## Fallout 4 AE native render callbacks, 16 November 2026
 
 User priority is now fully native Fallout4.exe without F4SE/ENB first, with

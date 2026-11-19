@@ -22,7 +22,7 @@ extern "C" int32_t rsf_fg_lease_com_get_device(void* child, void** out)
     return result;
 }
 
-extern "C" uint64_t rsf_fg_lease_com_fence_completed(void* fence)
+extern "C" uint64_t rsf_d3d12_fence_completed(void* fence)
 {
     return static_cast<ID3D12Fence*>(fence)->GetCompletedValue();
 }

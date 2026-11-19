@@ -18,7 +18,7 @@ unsafe extern "C" {
     fn rsf_fg_lease_com_add_ref(object: *mut c_void);
     fn rsf_fg_lease_com_release(object: *mut c_void);
     fn rsf_fg_lease_com_get_device(child: *mut c_void, device: *mut *mut c_void) -> i32;
-    fn rsf_fg_lease_com_fence_completed(fence: *mut c_void) -> u64;
+    fn rsf_d3d12_fence_completed(fence: *mut c_void) -> u64;
 }
 
 struct ComRef(NonNull<c_void>);
@@ -67,7 +67,7 @@ enum FenceState {
 
 impl FencePoint {
     fn state(&self) -> FenceState {
-        let completed = unsafe { rsf_fg_lease_com_fence_completed(self.fence.0.as_ptr()) };
+        let completed = unsafe { rsf_d3d12_fence_completed(self.fence.0.as_ptr()) };
         if completed == u64::MAX {
             FenceState::DeviceRemoved
         } else if completed >= self.value {
