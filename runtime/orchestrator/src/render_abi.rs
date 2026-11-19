@@ -5,14 +5,23 @@ use rsf_game_sys::rsf_frame_record;
 
 pub const RSF_BACKEND_ABI_VERSION: u32 = 4;
 pub const RSF_API_D3D12: u32 = 2;
+pub const RSF_FG_ABI_VERSION: u32 = 2;
 pub const RSF_FG_BACKEND_AUTO: u32 = 7;
 pub const RSF_FG_BACKEND_ALL: u32 = 58;
+pub const RSF_FG_FIXED: u32 = 1;
+pub const RSF_FG_AUTO: u32 = 2;
+pub const RSF_FG_DYNAMIC: u32 = 3;
+pub const RSF_PACING_NONE: u32 = 0;
+pub const RSF_PACING_REFLEX: u32 = 1;
+pub const RSF_REFLEX_OFF: u32 = 0;
+pub const RSF_REFLEX_BOOST: u32 = 2;
 pub const RSF_RENDER_LINK_ABI_VERSION: u32 = 1;
 pub const RSF_SR_SESSION_ABI_VERSION: u32 = 1;
 pub const RSF_SR_FSR2: u32 = 2;
 pub const RSF_SR_XESS: u32 = 5;
 pub const RSF_DLSS_ABI_VERSION: u32 = 5;
 pub const RSF_FRAME_ASSEMBLY_ABI_VERSION: u32 = 1;
+pub type rsf_latency_marker = u32;
 pub type rsf_vendor = u32;
 pub type rsf_gfx_api = u32;
 pub type rsf_quality = u32;
@@ -351,6 +360,387 @@ const _: () = {
 };
 #[repr(C)]
 #[derive(Copy, Clone)]
+pub struct rsf_fg_swapchain_desc {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    pub hwnd: *mut ::core::ffi::c_void,
+    pub d3d12_device: *mut ::core::ffi::c_void,
+    pub d3d12_queue: *mut ::core::ffi::c_void,
+    pub width: u32,
+    pub height: u32,
+    pub format: u32,
+    pub buffer_count: u32,
+    pub max_generated_frames: u32,
+    pub ui_mode: rsf_ui_mode,
+    pub latency: rsf_latency_mode,
+    pub allow_tearing: u32,
+    pub log: rsf_backend_log_fn,
+    pub log_user: *mut ::core::ffi::c_void,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_fg_swapchain_desc"][::core::mem::size_of::<rsf_fg_swapchain_desc>() - 80usize];
+    ["Alignment of rsf_fg_swapchain_desc"]
+        [::core::mem::align_of::<rsf_fg_swapchain_desc>() - 8usize];
+    ["Offset of field: rsf_fg_swapchain_desc::struct_size"]
+        [::core::mem::offset_of!(rsf_fg_swapchain_desc, struct_size) - 0usize];
+    ["Offset of field: rsf_fg_swapchain_desc::abi_version"]
+        [::core::mem::offset_of!(rsf_fg_swapchain_desc, abi_version) - 4usize];
+    ["Offset of field: rsf_fg_swapchain_desc::hwnd"]
+        [::core::mem::offset_of!(rsf_fg_swapchain_desc, hwnd) - 8usize];
+    ["Offset of field: rsf_fg_swapchain_desc::d3d12_device"]
+        [::core::mem::offset_of!(rsf_fg_swapchain_desc, d3d12_device) - 16usize];
+    ["Offset of field: rsf_fg_swapchain_desc::d3d12_queue"]
+        [::core::mem::offset_of!(rsf_fg_swapchain_desc, d3d12_queue) - 24usize];
+    ["Offset of field: rsf_fg_swapchain_desc::width"]
+        [::core::mem::offset_of!(rsf_fg_swapchain_desc, width) - 32usize];
+    ["Offset of field: rsf_fg_swapchain_desc::height"]
+        [::core::mem::offset_of!(rsf_fg_swapchain_desc, height) - 36usize];
+    ["Offset of field: rsf_fg_swapchain_desc::format"]
+        [::core::mem::offset_of!(rsf_fg_swapchain_desc, format) - 40usize];
+    ["Offset of field: rsf_fg_swapchain_desc::buffer_count"]
+        [::core::mem::offset_of!(rsf_fg_swapchain_desc, buffer_count) - 44usize];
+    ["Offset of field: rsf_fg_swapchain_desc::max_generated_frames"]
+        [::core::mem::offset_of!(rsf_fg_swapchain_desc, max_generated_frames) - 48usize];
+    ["Offset of field: rsf_fg_swapchain_desc::ui_mode"]
+        [::core::mem::offset_of!(rsf_fg_swapchain_desc, ui_mode) - 52usize];
+    ["Offset of field: rsf_fg_swapchain_desc::latency"]
+        [::core::mem::offset_of!(rsf_fg_swapchain_desc, latency) - 56usize];
+    ["Offset of field: rsf_fg_swapchain_desc::allow_tearing"]
+        [::core::mem::offset_of!(rsf_fg_swapchain_desc, allow_tearing) - 60usize];
+    ["Offset of field: rsf_fg_swapchain_desc::log"]
+        [::core::mem::offset_of!(rsf_fg_swapchain_desc, log) - 64usize];
+    ["Offset of field: rsf_fg_swapchain_desc::log_user"]
+        [::core::mem::offset_of!(rsf_fg_swapchain_desc, log_user) - 72usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_fg_frame {
+    pub struct_size: u32,
+    pub record: *const rsf_frame_record,
+    pub backbuffer: rsf_backend_resource,
+    pub hudless: rsf_backend_resource,
+    pub ui: rsf_backend_resource,
+    pub depth: rsf_backend_resource,
+    pub motion: rsf_backend_resource,
+    pub motion_scale_x: f32,
+    pub motion_scale_y: f32,
+    pub interpolate: u32,
+    pub generated_frames: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_fg_frame"][::core::mem::size_of::<rsf_fg_frame>() - 272usize];
+    ["Alignment of rsf_fg_frame"][::core::mem::align_of::<rsf_fg_frame>() - 8usize];
+    ["Offset of field: rsf_fg_frame::struct_size"]
+        [::core::mem::offset_of!(rsf_fg_frame, struct_size) - 0usize];
+    ["Offset of field: rsf_fg_frame::record"]
+        [::core::mem::offset_of!(rsf_fg_frame, record) - 8usize];
+    ["Offset of field: rsf_fg_frame::backbuffer"]
+        [::core::mem::offset_of!(rsf_fg_frame, backbuffer) - 16usize];
+    ["Offset of field: rsf_fg_frame::hudless"]
+        [::core::mem::offset_of!(rsf_fg_frame, hudless) - 64usize];
+    ["Offset of field: rsf_fg_frame::ui"][::core::mem::offset_of!(rsf_fg_frame, ui) - 112usize];
+    ["Offset of field: rsf_fg_frame::depth"]
+        [::core::mem::offset_of!(rsf_fg_frame, depth) - 160usize];
+    ["Offset of field: rsf_fg_frame::motion"]
+        [::core::mem::offset_of!(rsf_fg_frame, motion) - 208usize];
+    ["Offset of field: rsf_fg_frame::motion_scale_x"]
+        [::core::mem::offset_of!(rsf_fg_frame, motion_scale_x) - 256usize];
+    ["Offset of field: rsf_fg_frame::motion_scale_y"]
+        [::core::mem::offset_of!(rsf_fg_frame, motion_scale_y) - 260usize];
+    ["Offset of field: rsf_fg_frame::interpolate"]
+        [::core::mem::offset_of!(rsf_fg_frame, interpolate) - 264usize];
+    ["Offset of field: rsf_fg_frame::generated_frames"]
+        [::core::mem::offset_of!(rsf_fg_frame, generated_frames) - 268usize];
+};
+pub type rsf_fg_mode = u32;
+pub type rsf_pacing_owner = u32;
+pub type rsf_reflex_mode = u32;
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_fg_options {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    pub mode: rsf_fg_mode,
+    pub generated_frames: u32,
+    pub dynamic_target_fps: f32,
+    pub reflex_mode: rsf_reflex_mode,
+    pub frame_limit_us: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_fg_options"][::core::mem::size_of::<rsf_fg_options>() - 28usize];
+    ["Alignment of rsf_fg_options"][::core::mem::align_of::<rsf_fg_options>() - 4usize];
+    ["Offset of field: rsf_fg_options::struct_size"]
+        [::core::mem::offset_of!(rsf_fg_options, struct_size) - 0usize];
+    ["Offset of field: rsf_fg_options::abi_version"]
+        [::core::mem::offset_of!(rsf_fg_options, abi_version) - 4usize];
+    ["Offset of field: rsf_fg_options::mode"]
+        [::core::mem::offset_of!(rsf_fg_options, mode) - 8usize];
+    ["Offset of field: rsf_fg_options::generated_frames"]
+        [::core::mem::offset_of!(rsf_fg_options, generated_frames) - 12usize];
+    ["Offset of field: rsf_fg_options::dynamic_target_fps"]
+        [::core::mem::offset_of!(rsf_fg_options, dynamic_target_fps) - 16usize];
+    ["Offset of field: rsf_fg_options::reflex_mode"]
+        [::core::mem::offset_of!(rsf_fg_options, reflex_mode) - 20usize];
+    ["Offset of field: rsf_fg_options::frame_limit_us"]
+        [::core::mem::offset_of!(rsf_fg_options, frame_limit_us) - 24usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_fg_status {
+    pub struct_size: u32,
+    pub supported: u32,
+    pub active: u32,
+    pub max_generated_frames: u32,
+    pub dynamic_supported: u32,
+    pub vsync_supported: u32,
+    pub min_dimension: u32,
+    pub effective_generated_frames: u32,
+    pub effective_mode: rsf_fg_mode,
+    pub pacing_owner: rsf_pacing_owner,
+    pub effective_reflex: rsf_reflex_mode,
+    pub low_latency_available: u32,
+    pub valid_statistics: u32,
+    pub total_presented: u64,
+    pub generated_presented: u64,
+    pub version_id: u64,
+    pub vendor_status: i32,
+    pub version_name: [::core::ffi::c_char; 128usize],
+    pub auto_supported: u32,
+    pub configured_mode: rsf_fg_mode,
+    pub present_callbacks: u64,
+    pub generated_callbacks: u64,
+    pub mfg_unlock_status: u32,
+    pub latency_paced_frames: u64,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_fg_status"][::core::mem::size_of::<rsf_fg_status>() - 256usize];
+    ["Alignment of rsf_fg_status"][::core::mem::align_of::<rsf_fg_status>() - 8usize];
+    ["Offset of field: rsf_fg_status::struct_size"]
+        [::core::mem::offset_of!(rsf_fg_status, struct_size) - 0usize];
+    ["Offset of field: rsf_fg_status::supported"]
+        [::core::mem::offset_of!(rsf_fg_status, supported) - 4usize];
+    ["Offset of field: rsf_fg_status::active"]
+        [::core::mem::offset_of!(rsf_fg_status, active) - 8usize];
+    ["Offset of field: rsf_fg_status::max_generated_frames"]
+        [::core::mem::offset_of!(rsf_fg_status, max_generated_frames) - 12usize];
+    ["Offset of field: rsf_fg_status::dynamic_supported"]
+        [::core::mem::offset_of!(rsf_fg_status, dynamic_supported) - 16usize];
+    ["Offset of field: rsf_fg_status::vsync_supported"]
+        [::core::mem::offset_of!(rsf_fg_status, vsync_supported) - 20usize];
+    ["Offset of field: rsf_fg_status::min_dimension"]
+        [::core::mem::offset_of!(rsf_fg_status, min_dimension) - 24usize];
+    ["Offset of field: rsf_fg_status::effective_generated_frames"]
+        [::core::mem::offset_of!(rsf_fg_status, effective_generated_frames) - 28usize];
+    ["Offset of field: rsf_fg_status::effective_mode"]
+        [::core::mem::offset_of!(rsf_fg_status, effective_mode) - 32usize];
+    ["Offset of field: rsf_fg_status::pacing_owner"]
+        [::core::mem::offset_of!(rsf_fg_status, pacing_owner) - 36usize];
+    ["Offset of field: rsf_fg_status::effective_reflex"]
+        [::core::mem::offset_of!(rsf_fg_status, effective_reflex) - 40usize];
+    ["Offset of field: rsf_fg_status::low_latency_available"]
+        [::core::mem::offset_of!(rsf_fg_status, low_latency_available) - 44usize];
+    ["Offset of field: rsf_fg_status::valid_statistics"]
+        [::core::mem::offset_of!(rsf_fg_status, valid_statistics) - 48usize];
+    ["Offset of field: rsf_fg_status::total_presented"]
+        [::core::mem::offset_of!(rsf_fg_status, total_presented) - 56usize];
+    ["Offset of field: rsf_fg_status::generated_presented"]
+        [::core::mem::offset_of!(rsf_fg_status, generated_presented) - 64usize];
+    ["Offset of field: rsf_fg_status::version_id"]
+        [::core::mem::offset_of!(rsf_fg_status, version_id) - 72usize];
+    ["Offset of field: rsf_fg_status::vendor_status"]
+        [::core::mem::offset_of!(rsf_fg_status, vendor_status) - 80usize];
+    ["Offset of field: rsf_fg_status::version_name"]
+        [::core::mem::offset_of!(rsf_fg_status, version_name) - 84usize];
+    ["Offset of field: rsf_fg_status::auto_supported"]
+        [::core::mem::offset_of!(rsf_fg_status, auto_supported) - 212usize];
+    ["Offset of field: rsf_fg_status::configured_mode"]
+        [::core::mem::offset_of!(rsf_fg_status, configured_mode) - 216usize];
+    ["Offset of field: rsf_fg_status::present_callbacks"]
+        [::core::mem::offset_of!(rsf_fg_status, present_callbacks) - 224usize];
+    ["Offset of field: rsf_fg_status::generated_callbacks"]
+        [::core::mem::offset_of!(rsf_fg_status, generated_callbacks) - 232usize];
+    ["Offset of field: rsf_fg_status::mfg_unlock_status"]
+        [::core::mem::offset_of!(rsf_fg_status, mfg_unlock_status) - 240usize];
+    ["Offset of field: rsf_fg_status::latency_paced_frames"]
+        [::core::mem::offset_of!(rsf_fg_status, latency_paced_frames) - 248usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_fg_retirement {
+    pub struct_size: u32,
+    pub fence: *mut ::core::ffi::c_void,
+    pub value: u64,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_fg_retirement"][::core::mem::size_of::<rsf_fg_retirement>() - 24usize];
+    ["Alignment of rsf_fg_retirement"][::core::mem::align_of::<rsf_fg_retirement>() - 8usize];
+    ["Offset of field: rsf_fg_retirement::struct_size"]
+        [::core::mem::offset_of!(rsf_fg_retirement, struct_size) - 0usize];
+    ["Offset of field: rsf_fg_retirement::fence"]
+        [::core::mem::offset_of!(rsf_fg_retirement, fence) - 8usize];
+    ["Offset of field: rsf_fg_retirement::value"]
+        [::core::mem::offset_of!(rsf_fg_retirement, value) - 16usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_generation_setup {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    pub chain: rsf_fg_swapchain_desc,
+    pub runtime_directory_utf8: *const ::core::ffi::c_char,
+    pub feature_major: u32,
+    pub version_id: u64,
+    pub engine_type: u32,
+    pub engine_version_utf8: *const ::core::ffi::c_char,
+    pub project_id_utf8: *const ::core::ffi::c_char,
+    pub require_signature: u32,
+    pub development_runtime: u32,
+    pub depth_inverted: u32,
+    pub depth_infinite: u32,
+    pub motion_jittered: u32,
+    pub motion_at_display_resolution: u32,
+    pub hdr: u32,
+    pub view_space_to_meters: f32,
+    pub streamline_host: *mut ::core::ffi::c_void,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_generation_setup"][::core::mem::size_of::<rsf_generation_setup>() - 176usize];
+    ["Alignment of rsf_generation_setup"][::core::mem::align_of::<rsf_generation_setup>() - 8usize];
+    ["Offset of field: rsf_generation_setup::struct_size"]
+        [::core::mem::offset_of!(rsf_generation_setup, struct_size) - 0usize];
+    ["Offset of field: rsf_generation_setup::abi_version"]
+        [::core::mem::offset_of!(rsf_generation_setup, abi_version) - 4usize];
+    ["Offset of field: rsf_generation_setup::chain"]
+        [::core::mem::offset_of!(rsf_generation_setup, chain) - 8usize];
+    ["Offset of field: rsf_generation_setup::runtime_directory_utf8"]
+        [::core::mem::offset_of!(rsf_generation_setup, runtime_directory_utf8) - 88usize];
+    ["Offset of field: rsf_generation_setup::feature_major"]
+        [::core::mem::offset_of!(rsf_generation_setup, feature_major) - 96usize];
+    ["Offset of field: rsf_generation_setup::version_id"]
+        [::core::mem::offset_of!(rsf_generation_setup, version_id) - 104usize];
+    ["Offset of field: rsf_generation_setup::engine_type"]
+        [::core::mem::offset_of!(rsf_generation_setup, engine_type) - 112usize];
+    ["Offset of field: rsf_generation_setup::engine_version_utf8"]
+        [::core::mem::offset_of!(rsf_generation_setup, engine_version_utf8) - 120usize];
+    ["Offset of field: rsf_generation_setup::project_id_utf8"]
+        [::core::mem::offset_of!(rsf_generation_setup, project_id_utf8) - 128usize];
+    ["Offset of field: rsf_generation_setup::require_signature"]
+        [::core::mem::offset_of!(rsf_generation_setup, require_signature) - 136usize];
+    ["Offset of field: rsf_generation_setup::development_runtime"]
+        [::core::mem::offset_of!(rsf_generation_setup, development_runtime) - 140usize];
+    ["Offset of field: rsf_generation_setup::depth_inverted"]
+        [::core::mem::offset_of!(rsf_generation_setup, depth_inverted) - 144usize];
+    ["Offset of field: rsf_generation_setup::depth_infinite"]
+        [::core::mem::offset_of!(rsf_generation_setup, depth_infinite) - 148usize];
+    ["Offset of field: rsf_generation_setup::motion_jittered"]
+        [::core::mem::offset_of!(rsf_generation_setup, motion_jittered) - 152usize];
+    ["Offset of field: rsf_generation_setup::motion_at_display_resolution"]
+        [::core::mem::offset_of!(rsf_generation_setup, motion_at_display_resolution) - 156usize];
+    ["Offset of field: rsf_generation_setup::hdr"]
+        [::core::mem::offset_of!(rsf_generation_setup, hdr) - 160usize];
+    ["Offset of field: rsf_generation_setup::view_space_to_meters"]
+        [::core::mem::offset_of!(rsf_generation_setup, view_space_to_meters) - 164usize];
+    ["Offset of field: rsf_generation_setup::streamline_host"]
+        [::core::mem::offset_of!(rsf_generation_setup, streamline_host) - 168usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_generation_provider {
+    pub struct_size: u32,
+    pub create: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: *const rsf_generation_setup,
+            session: *mut *mut ::core::ffi::c_void,
+            present_chain: *mut *mut ::core::ffi::c_void,
+        ) -> rsf_backend_result,
+    >,
+    pub configure: ::core::option::Option<
+        unsafe extern "C" fn(
+            session: *mut ::core::ffi::c_void,
+            options: *const rsf_fg_options,
+        ) -> rsf_backend_result,
+    >,
+    pub begin_frame: ::core::option::Option<
+        unsafe extern "C" fn(
+            session: *mut ::core::ffi::c_void,
+            frame_id: u64,
+        ) -> rsf_backend_result,
+    >,
+    pub marker: ::core::option::Option<
+        unsafe extern "C" fn(
+            session: *mut ::core::ffi::c_void,
+            marker: rsf_latency_marker,
+            frame_id: u64,
+            controller_input: u32,
+        ) -> rsf_backend_result,
+    >,
+    pub prepare: ::core::option::Option<
+        unsafe extern "C" fn(
+            session: *mut ::core::ffi::c_void,
+            command_list: *mut ::core::ffi::c_void,
+            frame: *const rsf_fg_frame,
+        ) -> rsf_backend_result,
+    >,
+    pub after_present: ::core::option::Option<
+        unsafe extern "C" fn(session: *mut ::core::ffi::c_void) -> rsf_backend_result,
+    >,
+    pub status: ::core::option::Option<
+        unsafe extern "C" fn(
+            session: *mut ::core::ffi::c_void,
+            status: *mut rsf_fg_status,
+        ) -> rsf_backend_result,
+    >,
+    pub retirement: ::core::option::Option<
+        unsafe extern "C" fn(
+            session: *mut ::core::ffi::c_void,
+            retirement: *mut rsf_fg_retirement,
+        ) -> rsf_backend_result,
+    >,
+    pub destroy: ::core::option::Option<unsafe extern "C" fn(session: *mut ::core::ffi::c_void)>,
+    pub abort_frame: ::core::option::Option<
+        unsafe extern "C" fn(
+            session: *mut ::core::ffi::c_void,
+            frame_id: u64,
+        ) -> rsf_backend_result,
+    >,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_generation_provider"]
+        [::core::mem::size_of::<rsf_generation_provider>() - 88usize];
+    ["Alignment of rsf_generation_provider"]
+        [::core::mem::align_of::<rsf_generation_provider>() - 8usize];
+    ["Offset of field: rsf_generation_provider::struct_size"]
+        [::core::mem::offset_of!(rsf_generation_provider, struct_size) - 0usize];
+    ["Offset of field: rsf_generation_provider::create"]
+        [::core::mem::offset_of!(rsf_generation_provider, create) - 8usize];
+    ["Offset of field: rsf_generation_provider::configure"]
+        [::core::mem::offset_of!(rsf_generation_provider, configure) - 16usize];
+    ["Offset of field: rsf_generation_provider::begin_frame"]
+        [::core::mem::offset_of!(rsf_generation_provider, begin_frame) - 24usize];
+    ["Offset of field: rsf_generation_provider::marker"]
+        [::core::mem::offset_of!(rsf_generation_provider, marker) - 32usize];
+    ["Offset of field: rsf_generation_provider::prepare"]
+        [::core::mem::offset_of!(rsf_generation_provider, prepare) - 40usize];
+    ["Offset of field: rsf_generation_provider::after_present"]
+        [::core::mem::offset_of!(rsf_generation_provider, after_present) - 48usize];
+    ["Offset of field: rsf_generation_provider::status"]
+        [::core::mem::offset_of!(rsf_generation_provider, status) - 56usize];
+    ["Offset of field: rsf_generation_provider::retirement"]
+        [::core::mem::offset_of!(rsf_generation_provider, retirement) - 64usize];
+    ["Offset of field: rsf_generation_provider::destroy"]
+        [::core::mem::offset_of!(rsf_generation_provider, destroy) - 72usize];
+    ["Offset of field: rsf_generation_provider::abort_frame"]
+        [::core::mem::offset_of!(rsf_generation_provider, abort_frame) - 80usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
 pub struct rsf_fg_choice {
     pub backend: u32,
     pub choices: u32,
@@ -473,6 +863,79 @@ const _: () = {
         [::core::mem::offset_of!(rsf_sr_session_status, version_id) - 48usize];
     ["Offset of field: rsf_sr_session_status::version_name"]
         [::core::mem::offset_of!(rsf_sr_session_status, version_name) - 56usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_fg_host {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    pub user: *mut ::core::ffi::c_void,
+    pub quiesce: ::core::option::Option<
+        unsafe extern "C" fn(user: *mut ::core::ffi::c_void) -> rsf_backend_result,
+    >,
+    pub resume: ::core::option::Option<unsafe extern "C" fn(user: *mut ::core::ffi::c_void)>,
+    pub release: ::core::option::Option<
+        unsafe extern "C" fn(user: *mut ::core::ffi::c_void) -> rsf_backend_result,
+    >,
+    pub adopt: ::core::option::Option<
+        unsafe extern "C" fn(
+            user: *mut ::core::ffi::c_void,
+            chain: *mut ::core::ffi::c_void,
+        ) -> rsf_backend_result,
+    >,
+    pub restore_plain: ::core::option::Option<
+        unsafe extern "C" fn(user: *mut ::core::ffi::c_void) -> rsf_backend_result,
+    >,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_fg_host"][::core::mem::size_of::<rsf_fg_host>() - 56usize];
+    ["Alignment of rsf_fg_host"][::core::mem::align_of::<rsf_fg_host>() - 8usize];
+    ["Offset of field: rsf_fg_host::struct_size"]
+        [::core::mem::offset_of!(rsf_fg_host, struct_size) - 0usize];
+    ["Offset of field: rsf_fg_host::abi_version"]
+        [::core::mem::offset_of!(rsf_fg_host, abi_version) - 4usize];
+    ["Offset of field: rsf_fg_host::user"][::core::mem::offset_of!(rsf_fg_host, user) - 8usize];
+    ["Offset of field: rsf_fg_host::quiesce"]
+        [::core::mem::offset_of!(rsf_fg_host, quiesce) - 16usize];
+    ["Offset of field: rsf_fg_host::resume"]
+        [::core::mem::offset_of!(rsf_fg_host, resume) - 24usize];
+    ["Offset of field: rsf_fg_host::release"]
+        [::core::mem::offset_of!(rsf_fg_host, release) - 32usize];
+    ["Offset of field: rsf_fg_host::adopt"][::core::mem::offset_of!(rsf_fg_host, adopt) - 40usize];
+    ["Offset of field: rsf_fg_host::restore_plain"]
+        [::core::mem::offset_of!(rsf_fg_host, restore_plain) - 48usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_fg_session_status {
+    pub struct_size: u32,
+    pub has_provider: u32,
+    pub plain_available: u32,
+    pub chain_generation: u64,
+    pub last_switch: rsf_backend_result,
+    pub last_frame: rsf_backend_result,
+    pub provider: rsf_fg_status,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_fg_session_status"][::core::mem::size_of::<rsf_fg_session_status>() - 288usize];
+    ["Alignment of rsf_fg_session_status"]
+        [::core::mem::align_of::<rsf_fg_session_status>() - 8usize];
+    ["Offset of field: rsf_fg_session_status::struct_size"]
+        [::core::mem::offset_of!(rsf_fg_session_status, struct_size) - 0usize];
+    ["Offset of field: rsf_fg_session_status::has_provider"]
+        [::core::mem::offset_of!(rsf_fg_session_status, has_provider) - 4usize];
+    ["Offset of field: rsf_fg_session_status::plain_available"]
+        [::core::mem::offset_of!(rsf_fg_session_status, plain_available) - 8usize];
+    ["Offset of field: rsf_fg_session_status::chain_generation"]
+        [::core::mem::offset_of!(rsf_fg_session_status, chain_generation) - 16usize];
+    ["Offset of field: rsf_fg_session_status::last_switch"]
+        [::core::mem::offset_of!(rsf_fg_session_status, last_switch) - 24usize];
+    ["Offset of field: rsf_fg_session_status::last_frame"]
+        [::core::mem::offset_of!(rsf_fg_session_status, last_frame) - 28usize];
+    ["Offset of field: rsf_fg_session_status::provider"]
+        [::core::mem::offset_of!(rsf_fg_session_status, provider) - 32usize];
 };
 pub type rsf_dlss_quality = u32;
 #[repr(C)]

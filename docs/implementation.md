@@ -89,6 +89,21 @@ current C++ Anomaly adapter built in the same configuration. The Release
 runtime retained all 381 baseline export names and ordinals, and all 76
 Rust workspace tests passed. Device and in-game validation remain pending.
 
+The generic FG session now owns chain switching, provider lifetime and frame
+sequencing in Rust. It shares the frame ledger with the public sequencer and
+uses the existing C predicates and D3D12 fence query. The transition keeps state
+unavailable while host callbacks run, so a producer called from `resume`
+receives `NOT_READY` without deadlocking. The pending chain and resources stay
+owned until the provider reports fence completion and the host releases its
+references.
+
+Debug and Release MSVC passed the FG and SR session fixtures, the embedded
+policy fixture and the Anomaly SR API contract. Release also built the linked
+AC7 carrier and C++ Anomaly adapter. All 381 runtime export names and ordinals
+matched the baseline. Rust workspace tests and Clippy passed. The generic FG
+session is currently exercised by fixtures. Anomaly uses the separate native FG
+path, whose device and in-game validation remain pending.
+
 ## Fallout 4 AE native render callbacks, 16 November 2026
 
 User priority is now fully native Fallout4.exe without F4SE/ENB first, with

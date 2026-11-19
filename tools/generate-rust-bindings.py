@@ -26,10 +26,10 @@ def generate(output, header, types, constants, clang_args, extra=()):
 generate("sdk/game/src/lib.rs", "sdk/game/include/rescaleframe/game_api.h",
          "rsf_(get_game_plugin_api_fn|frame_record)", "RSF_.*", ["-Isdk/game/include"])
 generate("runtime/orchestrator/src/render_abi.rs", "runtime/orchestrator/include/rescaleframe/frame_assembly.h",
-         "rsf_(frame_resources|pipeline_camera_frame|dlss_frame|fg_choice|render_link|sr_session_setup|sr_session_status|sr_provider)",
-         "RSF_(FRAME_ASSEMBLY_ABI_VERSION|DLSS_ABI_VERSION|FG_BACKEND_(AUTO|ALL)|RENDER_LINK_ABI_VERSION|SR_SESSION_ABI_VERSION|BACKEND_ABI_VERSION|API_D3D12|SR_(FSR2|XESS))",
+         "rsf_(frame_resources|pipeline_camera_frame|dlss_frame|fg_choice|render_link|sr_session_setup|sr_session_status|sr_provider|fg_host|fg_session_status|generation_provider)",
+         "RSF_(FRAME_ASSEMBLY_ABI_VERSION|DLSS_ABI_VERSION|FG_(BACKEND_(AUTO|ALL)|ABI_VERSION|FIXED|AUTO|DYNAMIC)|PACING_(NONE|REFLEX)|REFLEX_(OFF|BOOST)|RENDER_LINK_ABI_VERSION|SR_SESSION_ABI_VERSION|BACKEND_ABI_VERSION|API_D3D12|SR_(FSR2|XESS))",
          ["-include", "rescaleframe/fg_choice.h", "-include", "rescaleframe/render_links.h",
-          "-include", "rescaleframe/sr_session.h", "-Iruntime/orchestrator/include",
+          "-include", "rescaleframe/sr_session.h", "-include", "rescaleframe/fg_session.h", "-Iruntime/orchestrator/include",
           "-Iruntime/contract/include", "-Iruntime/backends/dlss/include", "-Isdk/game/include"],
          ["--blocklist-type", "rsf_(frame_record|frame_id|frame_phase|screen_class|camera_frame)",
           "--raw-line", "use rsf_game_sys::rsf_frame_record;"])

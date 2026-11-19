@@ -3,6 +3,8 @@
 #[cfg(windows)]
 mod fg_choice;
 #[cfg(windows)]
+mod fg_session;
+#[cfg(windows)]
 mod frame_assembly;
 mod frame_sequencer;
 #[cfg(windows)]

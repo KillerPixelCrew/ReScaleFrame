@@ -53,7 +53,13 @@ rsf_backend_result quiesce(void*)
     if (live_session) CHECK(rsf_fg_session_begin(live_session, 100) == RSF_BACKEND_ERROR_NOT_READY);
     quiescent = true; return RSF_BACKEND_OK;
 }
-void resume(void*) { CHECK(quiescent); quiescent = false; }
+void resume(void*)
+{
+    CHECK(quiescent);
+    // Resume may synchronously wake a producer while the transition is still unpublished.
+    if (live_session) CHECK(rsf_fg_session_begin(live_session, 100) == RSF_BACKEND_ERROR_NOT_READY);
+    quiescent = false;
+}
 rsf_backend_result release(void*) { CHECK(quiescent); return RSF_BACKEND_OK; }
 rsf_backend_result adopt(void*, void* chain) { CHECK(quiescent && chain && physical == 1); return RSF_BACKEND_OK; }
 rsf_backend_result plain(void*) { CHECK(quiescent && !physical); ++restored; return RSF_BACKEND_OK; }
