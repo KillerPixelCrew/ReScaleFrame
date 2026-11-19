@@ -548,6 +548,26 @@ const _: () = {
     ["Offset of field: rsf_game_cpu_source_event::poll_begin_qpc"]
         [::core::mem::offset_of!(rsf_game_cpu_source_event, poll_begin_qpc) - 88usize];
 };
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_game_cpu_receipt_event {
+    pub header: rsf_game_cpu_event,
+    pub receipt_id: u64,
+    pub window_key: u64,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_game_cpu_receipt_event"]
+        [::core::mem::size_of::<rsf_game_cpu_receipt_event>() - 80usize];
+    ["Alignment of rsf_game_cpu_receipt_event"]
+        [::core::mem::align_of::<rsf_game_cpu_receipt_event>() - 8usize];
+    ["Offset of field: rsf_game_cpu_receipt_event::header"]
+        [::core::mem::offset_of!(rsf_game_cpu_receipt_event, header) - 0usize];
+    ["Offset of field: rsf_game_cpu_receipt_event::receipt_id"]
+        [::core::mem::offset_of!(rsf_game_cpu_receipt_event, receipt_id) - 64usize];
+    ["Offset of field: rsf_game_cpu_receipt_event::window_key"]
+        [::core::mem::offset_of!(rsf_game_cpu_receipt_event, window_key) - 72usize];
+};
 pub type rsf_game_process_upscale_fn = ::core::option::Option<
     unsafe extern "C" fn(
         user: *mut ::core::ffi::c_void,

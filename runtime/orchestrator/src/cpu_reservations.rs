@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::cpu_abi::*;
 use rsf_game_sys::*;
-use std::sync::Mutex;
 
 type Reservation = rsf_native_cpu_reservation;
 type Counters = rsf_native_cpu_reservation_counters;
@@ -12,7 +11,9 @@ const EMPTY_COUNTERS: Counters = Counters {
     ..unsafe { std::mem::zeroed() }
 };
 
-struct Book {
+/// Prospective source reservations and predecessor Present outcomes. The native
+/// CPU dispatcher owns it under its state lock; it never calls out.
+pub(crate) struct Book {
     entries: [Reservation; 16],
     highest: u64,
     counters: Counters,
@@ -20,8 +21,6 @@ struct Book {
     next_outcome: usize,
     presented_through: u64,
 }
-
-static BOOK: Mutex<Book> = Mutex::new(Book::new());
 
 fn live(state: u32) -> bool {
     matches!(
@@ -44,7 +43,7 @@ fn abort(entry: &mut Reservation, reason: u32, counters: &mut Counters) {
 }
 
 impl Book {
-    const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             entries: [EMPTY; 16],
             highest: 0,
@@ -76,6 +75,22 @@ impl Book {
         } else {
             RSF_NATIVE_CPU_DEPENDENCY_PENDING as i32
         }
+    }
+
+    /// The stored entry, without the predecessor outcome.
+    pub(crate) fn get(&self, session: u64, source: u64) -> Option<Reservation> {
+        self.find(session, source).map(|index| self.entries[index])
+    }
+
+    /// The stored entry with its predecessor's Present outcome as known now.
+    pub(crate) fn read(&self, session: u64, source: u64) -> Option<Reservation> {
+        let mut reservation = self.get(session, source)?;
+        reservation.predecessor_present = self.dependency(reservation.predecessor_source_id);
+        Some(reservation)
+    }
+
+    pub(crate) fn counters(&self) -> Counters {
+        self.counters
     }
 
     fn reserve(
@@ -207,6 +222,104 @@ impl Book {
         }
         true
     }
+
+    /// A version 2 source fact. `None` is a malformed packet; every refusal counts.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn source_event(
+        &mut self,
+        event: Option<&rsf_game_cpu_source_event>,
+        session: u64,
+        frequency: u64,
+        last_begin: u64,
+        known_predecessor: bool,
+        frame: &mut rsf_native_cpu_frame,
+        rendered: bool,
+    ) -> bool {
+        if let Some(event) = event
+            && valid(event, session, frequency)
+            && self.event(event, last_begin, known_predecessor, frame, rendered)
+        {
+            return true;
+        }
+        self.counters.rejected = self.counters.rejected.wrapping_add(1);
+        false
+    }
+
+    /// FRAME_BEGIN adopts a sampled reservation for its own identity and supersedes others.
+    pub(crate) fn begin(&mut self, event: &rsf_game_cpu_event) {
+        let Book {
+            entries, counters, ..
+        } = self;
+        for entry in entries
+            .iter_mut()
+            .filter(|entry| entry.state != 0 && entry.session_id == event.session_id)
+        {
+            if entry.source_frame_id == event.source_frame_id {
+                if entry.state == RSF_NATIVE_CPU_RESERVATION_SAMPLED
+                    && entry.qpc_frequency == event.qpc_frequency
+                    && event.timestamp_qpc >= entry.sampled_qpc
+                {
+                    entry.state = RSF_NATIVE_CPU_RESERVATION_ADOPTED;
+                    entry.frame_begin_qpc = event.timestamp_qpc;
+                    counters.adopted = counters.adopted.wrapping_add(1);
+                } else if live(entry.state) {
+                    abort(entry, RSF_GAME_CPU_ABORT_OVERLAP, counters);
+                }
+            } else if live(entry.state) {
+                abort(entry, RSF_GAME_CPU_ABORT_SUPERSEDED, counters);
+            }
+        }
+    }
+
+    pub(crate) fn end(&mut self, session: u64, source: u64) {
+        let Some(index) = self.find(session, source) else {
+            return;
+        };
+        match self.entries[index].state {
+            RSF_NATIVE_CPU_RESERVATION_ADOPTED => {
+                self.entries[index].state = RSF_NATIVE_CPU_RESERVATION_UNBOUND;
+                self.counters.unbound = self.counters.unbound.wrapping_add(1);
+            }
+            RSF_NATIVE_CPU_RESERVATION_BOUND => {
+                self.entries[index].state = RSF_NATIVE_CPU_RESERVATION_CLOSED;
+                self.counters.closed = self.counters.closed.wrapping_add(1);
+            }
+            _ => {}
+        }
+    }
+
+    /// The first outcome reported for a source stands; later reports are refused.
+    pub(crate) fn present_result(
+        &mut self,
+        current: u64,
+        session: u64,
+        source: u64,
+        outcome: u32,
+        native_result: i32,
+    ) -> bool {
+        if session == 0 || session != current || source == 0 {
+            return false;
+        }
+        let state = match outcome {
+            RSF_NATIVE_CPU_PRESENT_RETURNED if native_result >= 0 => {
+                RSF_NATIVE_CPU_DEPENDENCY_PRESENTED
+            }
+            RSF_NATIVE_CPU_PRESENT_RETURNED => RSF_NATIVE_CPU_DEPENDENCY_FAILED,
+            RSF_NATIVE_CPU_PRESENT_RESULT_UNKNOWN => RSF_NATIVE_CPU_DEPENDENCY_UNVERIFIED,
+            RSF_NATIVE_CPU_PRESENT_ABORTED => RSF_NATIVE_CPU_DEPENDENCY_CANCELLED,
+            _ => return false,
+        };
+        if self.outcomes.iter().any(|&(id, _)| id == source) {
+            return false;
+        }
+        let index = self.next_outcome;
+        self.outcomes[index] = (source, state as i32);
+        self.next_outcome = (index + 1) % self.outcomes.len();
+        if state == RSF_NATIVE_CPU_DEPENDENCY_PRESENTED {
+            self.presented_through = self.presented_through.max(source);
+        }
+        true
+    }
 }
 
 fn valid(event: &rsf_game_cpu_source_event, session: u64, frequency: u64) -> bool {
@@ -233,142 +346,4 @@ fn valid(event: &rsf_game_cpu_source_event, session: u64, frequency: u64) -> boo
         && (event.poll_begin_qpc == 0
             || (fact.stage == RSF_GAME_CPU_SOURCE_SAMPLED
                 && event.poll_begin_qpc <= fact.timestamp_qpc))
-}
-
-// The C++ dispatcher keeps its frame lock across each of these calls. No
-// runtime callback executes under the Rust reservation lock.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_cpu_source_event(
-    event: *const rsf_game_cpu_source_event,
-    session: u64,
-    frequency: u64,
-    last_begin: u64,
-    known_predecessor: i32,
-    frame: *mut rsf_native_cpu_frame,
-    rendered: i32,
-) -> i32 {
-    let mut book = BOOK.lock().unwrap();
-    if let Some(event) = unsafe { event.as_ref() }
-        && valid(event, session, frequency)
-        && book.event(
-            event,
-            last_begin,
-            known_predecessor != 0,
-            unsafe { &mut *frame },
-            rendered != 0,
-        )
-    {
-        return 1;
-    }
-    book.counters.rejected = book.counters.rejected.wrapping_add(1);
-    0
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_cpu_reservation_begin(event: *const rsf_game_cpu_event) {
-    let event = unsafe { &*event };
-    let mut book = BOOK.lock().unwrap();
-    let Book {
-        entries, counters, ..
-    } = &mut *book;
-    for entry in entries
-        .iter_mut()
-        .filter(|entry| entry.state != 0 && entry.session_id == event.session_id)
-    {
-        if entry.source_frame_id == event.source_frame_id {
-            if entry.state == RSF_NATIVE_CPU_RESERVATION_SAMPLED
-                && entry.qpc_frequency == event.qpc_frequency
-                && event.timestamp_qpc >= entry.sampled_qpc
-            {
-                entry.state = RSF_NATIVE_CPU_RESERVATION_ADOPTED;
-                entry.frame_begin_qpc = event.timestamp_qpc;
-                counters.adopted = counters.adopted.wrapping_add(1);
-            } else if live(entry.state) {
-                abort(entry, RSF_GAME_CPU_ABORT_OVERLAP, counters);
-            }
-        } else if live(entry.state) {
-            abort(entry, RSF_GAME_CPU_ABORT_SUPERSEDED, counters);
-        }
-    }
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_cpu_reservation_end(session: u64, source: u64) {
-    let mut book = BOOK.lock().unwrap();
-    let Some(index) = book.find(session, source) else {
-        return;
-    };
-    match book.entries[index].state {
-        RSF_NATIVE_CPU_RESERVATION_ADOPTED => {
-            book.entries[index].state = RSF_NATIVE_CPU_RESERVATION_UNBOUND;
-            book.counters.unbound = book.counters.unbound.wrapping_add(1);
-        }
-        RSF_NATIVE_CPU_RESERVATION_BOUND => {
-            book.entries[index].state = RSF_NATIVE_CPU_RESERVATION_CLOSED;
-            book.counters.closed = book.counters.closed.wrapping_add(1);
-        }
-        _ => {}
-    }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_cpu_reservation_read(
-    session: u64,
-    source: u64,
-    out: *mut Reservation,
-    include_dependency: i32,
-) -> i32 {
-    let book = BOOK.lock().unwrap();
-    let Some(index) = book.find(session, source) else {
-        return 0;
-    };
-    let mut reservation = book.entries[index];
-    if include_dependency != 0 {
-        reservation.predecessor_present = book.dependency(reservation.predecessor_source_id);
-    }
-    unsafe { out.write(reservation) };
-    1
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_cpu_reservation_counters(out: *mut Counters) {
-    unsafe { out.write(BOOK.lock().unwrap().counters) };
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_cpu_present_result(
-    current: u64,
-    session: u64,
-    source: u64,
-    outcome: u32,
-    native_result: i32,
-) -> i32 {
-    if session == 0 || session != current || source == 0 {
-        return 0;
-    }
-    let state = match outcome {
-        RSF_NATIVE_CPU_PRESENT_RETURNED if native_result >= 0 => {
-            RSF_NATIVE_CPU_DEPENDENCY_PRESENTED
-        }
-        RSF_NATIVE_CPU_PRESENT_RETURNED => RSF_NATIVE_CPU_DEPENDENCY_FAILED,
-        RSF_NATIVE_CPU_PRESENT_RESULT_UNKNOWN => RSF_NATIVE_CPU_DEPENDENCY_UNVERIFIED,
-        RSF_NATIVE_CPU_PRESENT_ABORTED => RSF_NATIVE_CPU_DEPENDENCY_CANCELLED,
-        _ => return 0,
-    };
-    let mut book = BOOK.lock().unwrap();
-    if book.outcomes.iter().any(|&(id, _)| id == source) {
-        return 0;
-    }
-    let index = book.next_outcome;
-    book.outcomes[index] = (source, state as i32);
-    book.next_outcome = (index + 1) % book.outcomes.len();
-    if state == RSF_NATIVE_CPU_DEPENDENCY_PRESENTED {
-        book.presented_through = book.presented_through.max(source);
-    }
-    1
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_cpu_reservations_clear() {
-    *BOOK.lock().unwrap() = Book::new();
 }

@@ -24,7 +24,7 @@ def generate(output, header, types, constants, clang_args, extra=()):
 
 
 generate("sdk/game/src/lib.rs", "sdk/game/include/rescaleframe/game_api.h",
-         "rsf_(get_game_plugin_api_fn|frame_record|game_cpu_source_event)", "RSF_.*", ["-Isdk/game/include"])
+         "rsf_(get_game_plugin_api_fn|frame_record|game_cpu_(source|receipt)_event)", "RSF_.*", ["-Isdk/game/include"])
 generate("runtime/orchestrator/src/render_abi.rs", "runtime/orchestrator/include/rescaleframe/frame_assembly.h",
          "rsf_(frame_resources|pipeline_camera_frame|dlss_frame|fg_choice|render_link|sr_session_setup|sr_session_status|sr_provider|fg_host|fg_session_status|generation_provider)",
          "RSF_(FRAME_ASSEMBLY_ABI_VERSION|DLSS_ABI_VERSION|FG_(BACKEND_(AUTO|ALL)|ABI_VERSION|FIXED|AUTO|DYNAMIC)|PACING_(NONE|REFLEX)|REFLEX_(OFF|BOOST)|RENDER_LINK_ABI_VERSION|SR_SESSION_ABI_VERSION|BACKEND_ABI_VERSION|API_D3D12|SR_(FSR2|XESS))",
@@ -34,6 +34,6 @@ generate("runtime/orchestrator/src/render_abi.rs", "runtime/orchestrator/include
          ["--blocklist-type", "rsf_(frame_record|frame_id|frame_phase|screen_class|camera_frame)",
           "--raw-line", "use rsf_game_sys::rsf_frame_record;"])
 generate("runtime/orchestrator/src/cpu_abi.rs", "runtime/orchestrator/include/rescaleframe/native_cpu.h",
-         "rsf_native_cpu_(frame|reservation|reservation_counters)",
+         "rsf_native_(cpu_(frame|counters|reservation|reservation_counters)|input_receipts)",
          "RSF_NATIVE_CPU_(RESERVATION_.*|DEPENDENCY_.*|PRESENT_.*)",
          ["-Iruntime/orchestrator/include", "-Isdk/game/include"])
