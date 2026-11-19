@@ -55,6 +55,10 @@ mod native_sr_state;
 #[cfg(windows)]
 mod native_window;
 #[cfg(windows)]
+mod overlay_abi;
+#[cfg(windows)]
+mod overlay_service;
+#[cfg(windows)]
 mod plugin_session;
 #[cfg(windows)]
 mod render_abi;

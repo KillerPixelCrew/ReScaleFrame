@@ -12,7 +12,7 @@ const PRESENT_STATISTICS: u32 = RSF_FG_STAT_TOTAL_PRESENTED
 const EMPTY_PROVIDER: ProviderStatus = unsafe { std::mem::zeroed() };
 const EMPTY_NATIVE: NativeStatus = unsafe { std::mem::zeroed() };
 
-fn completed_activity(
+pub(crate) fn completed_activity(
     mut fresh: ProviderStatus,
     completed: Option<&ProviderStatus>,
     eligible: bool,
@@ -40,7 +40,7 @@ fn completed_activity(
     fresh
 }
 
-fn deactivate(status: &mut ProviderStatus) {
+pub(crate) fn deactivate(status: &mut ProviderStatus) {
     status.active = 0;
     status.effective_mode = RSF_FG_OFF;
     status.effective_generated_frames = 0;

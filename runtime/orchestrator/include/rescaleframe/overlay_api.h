@@ -187,9 +187,12 @@ typedef struct rsf_overlay_capture {
    - status: any thread. Requested values are the persisted settings; effective
      values are the adapter's last sr_report and the presentation owner's provider
      status sampled at the last present().
-   - settings_get/settings_apply: any thread except from settings_changed. apply
-     validates against the setup choices, persists, forwards FG and then calls
-     settings_changed. Refused requests change nothing. */
+   - settings_get: any thread, including settings_changed, where it sees the
+     newly persisted settings.
+   - settings_apply: any thread. Validates against the setup choices, persists,
+     forwards FG and then calls settings_changed. A request with a valid size
+     and version returns BUSY while another settings update is in progress,
+     including from settings_changed. Refused requests change nothing. */
 typedef struct rsf_overlay_api {
     uint32_t struct_size;
     uint32_t abi_version;

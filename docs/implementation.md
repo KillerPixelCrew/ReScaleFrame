@@ -158,6 +158,27 @@ that layout. It preserves 32-bit rollover and also follows consecutive 64-bit
 native frame IDs without confusing them with their truncated values.
 The native render configuration is published from one Rust snapshot.
 
+Rust now owns native D3D11 region preparation, depth-domain validation and
+temporal-mask sequencing. The three HLSL literals match the pre-port bytes.
+The worker compared 100,000 deterministic depth preflights against the
+previous implementation in each build configuration. Eight integrated CPU
+and ABI fixtures passed in Debug and Release, and the auxiliary and rendered
+FG host device fixtures built. Device execution remains pending.
+
+The D3D11 overlay service now owns its configuration, adapter callbacks,
+capture authorization, settings application and status in Rust. The existing
+panel remains the input and draw frontend. A settings callback can read back
+the applied request. A write attempted during an active apply receives
+`RSF_ERROR_BUSY`, so it cannot deadlock or replace the outer write.
+The integrated bindgen recipe reproduced the overlay bindings byte for byte.
+
+Nine integrated overlay, settings, D3D11 host and Anomaly input fixtures
+passed in Debug and Release, alongside all 100 Rust tests. The C++ Anomaly
+adapter and both linked carriers built. The runtime retained 381 baseline
+exports, including overlay table ordinals 144 and 145. The two carrier export
+lists also matched. The overlay device fixture built in Release. Device,
+visible-window and gameplay checks remain pending.
+
 The native D3D11 exposure cache now lives in Rust and shares the fullscreen
 pass owner with output reinsertion. It borrows a valid 1×1 R32 scalar
 directly, converts supported float vectors with the existing copy shader,

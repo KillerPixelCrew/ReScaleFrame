@@ -20,7 +20,26 @@ void check(bool condition, const char* what)
 }
 int changed_calls = 0;
 rsf_render_settings last_changed{};
-void on_changed(void*, const rsf_render_settings* applied) { ++changed_calls; last_changed = *applied; }
+struct CallbackContext {
+    const rsf_overlay_api& api;
+    bool reenter{};
+};
+void on_changed(void* user, const rsf_render_settings* applied)
+{
+    ++changed_calls;
+    last_changed = *applied;
+    auto& context = *static_cast<CallbackContext*>(user);
+    if (!context.reenter) return;
+    context.reenter = false;
+    rsf_render_settings snapshot{sizeof(snapshot), RSF_RENDER_FRONTEND_ABI_VERSION};
+    check(context.api.settings_get(&snapshot) == RSF_OK &&
+        snapshot.sr_backend == applied->sr_backend && snapshot.fg_enabled == applied->fg_enabled,
+        "settings_changed can read the newly published request");
+    auto nested = *applied;
+    nested.sr_backend = 1;
+    nested.fg_enabled = 0;
+    check(context.api.settings_apply(&nested) == RSF_ERROR_BUSY, "settings_changed receives BUSY for a nested write");
+}
 std::wstring ini_path()
 {
     wchar_t directory[MAX_PATH]{};
@@ -30,6 +49,25 @@ std::wstring ini_path()
 uint32_t read(const std::wstring& ini, const wchar_t* key)
 {
     return GetPrivateProfileIntW(L"Overlay", key, 0xdead, ini.c_str());
+}
+void short_request_at_page_boundary(const rsf_overlay_api& api)
+{
+    SYSTEM_INFO system{};
+    GetSystemInfo(&system);
+    const auto length = system.dwPageSize;
+    auto* pages = static_cast<unsigned char*>(VirtualAlloc(nullptr, size_t{length} * 2, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+    check(pages != nullptr, "allocated short-request fixture");
+    if (!pages) return;
+    DWORD previous{};
+    if (VirtualProtect(pages + length, length, PAGE_NOACCESS, &previous)) {
+        auto* prefix = reinterpret_cast<uint32_t*>(pages + length - sizeof(uint32_t));
+        *prefix = sizeof(uint32_t);
+        check(api.settings_apply(reinterpret_cast<const rsf_render_settings*>(prefix)) == RSF_ERROR_INVALID_ARGUMENT,
+            "short settings refused without reading fields for the diagnostic log");
+    } else {
+        check(false, "guarded the page after the size word");
+    }
+    VirtualFree(pages, 0, MEM_RELEASE);
 }
 rsf_render_settings defaults()
 {
@@ -81,6 +119,7 @@ int main()
     DeleteFileW(ini.c_str());
     // A foreign key must survive; an unsupported saved backend falls back to the default.
     check(WritePrivateProfileStringW(L"Overlay", L"Foreign", L"7", ini.c_str()) &&
+        WritePrivateProfileStringW(L"Overlay", L"OverlayLayout", L"5", ini.c_str()) &&
         WritePrivateProfileStringW(L"Overlay", L"SRBackend", L"9", ini.c_str()) &&
         WritePrivateProfileStringW(L"Overlay", L"SRQuality", L"3", ini.c_str()), "seed INI");
 
@@ -97,6 +136,8 @@ int main()
     setup.fg_backend_choices = (1u << RSF_FG_BACKEND_FSR3) | (1u << RSF_FG_BACKEND_AUTO);
     setup.latency_choices = (1u << RSF_REFLEX_OFF) | (1u << RSF_REFLEX_ON);
     setup.max_generated_frames = 1;
+    CallbackContext callback{api};
+    setup.user = &callback;
     setup.settings_changed = on_changed;
 
     check(api.configure(nullptr) == RSF_ERROR_INVALID_ARGUMENT, "null setup");
@@ -145,18 +186,24 @@ int main()
     request = settings; request.abi_version = 1;
     check(api.settings_apply(&request) == RSF_ERROR_ABI_MISMATCH, "settings version");
     check(api.settings_apply(nullptr) == RSF_ERROR_INVALID_ARGUMENT, "null settings");
+    short_request_at_page_boundary(api);
     check(changed_calls == 0 && read(ini, L"FG") == 0xdead, "refusals changed nothing");
 
     request = settings;
     request.sr_enabled = 1; request.sr_backend = 3; request.sr_quality = 1;
     request.fg_enabled = 1; request.fg_backend = RSF_FG_BACKEND_FSR3; request.latency = RSF_REFLEX_ON; request.frame_limit_us = 8333;
-    check(api.settings_apply(&request) == RSF_OK, "valid apply");
+    callback.reenter = true;
+    check(api.settings_apply(&request) == RSF_OK, "outer apply succeeds with a reentrant callback");
     check(changed_calls == 1 && last_changed.sr_backend == 3 && last_changed.fg_backend == RSF_FG_BACKEND_FSR3, "adapter notified once");
     check(read(ini, L"SR") == 1 && read(ini, L"SRBackend") == 3 && read(ini, L"SRQuality") == 1 && read(ini, L"FG") == 1 &&
         read(ini, L"FGBackend") == RSF_FG_BACKEND_FSR3 && read(ini, L"Latency") == RSF_REFLEX_ON &&
-        read(ini, L"FrameLimitUs") == 8333 && read(ini, L"Foreign") == 7, "persisted in adapter section; foreign key kept");
+        read(ini, L"FrameLimitUs") == 8333 && read(ini, L"Foreign") == 7 && read(ini, L"OverlayLayout") == 5,
+        "persisted in adapter section; foreign key and layout kept");
     rsf_render_settings reread{sizeof(reread), RSF_RENDER_FRONTEND_ABI_VERSION};
     check(api.settings_get(&reread) == RSF_OK && reread.sr_backend == 3 && reread.fg_enabled == 1, "get reflects apply");
+    rsf_native_fg_status fg{sizeof(fg)};
+    check(rsf_native_fg_status_get(&fg) && fg.requested.mode == RSF_FG_FIXED,
+        "nested write leaves the outer FG request forwarded");
 
     auto sharpen_request = reread;
     sharpen_request.sharpening_mode = 2; sharpen_request.sharpening_sharpness = 0.75f;
@@ -172,7 +219,27 @@ int main()
     auto invalid_sharpening = sharpen_request; invalid_sharpening.sharpening_sharpness = 8;
     check(api.settings_apply(&invalid_sharpening) == RSF_ERROR_INVALID_ARGUMENT, "invalid sharpening refused");
 
-    rsf_native_fg_status fg{}; fg.struct_size = sizeof(fg);
+    struct { rsf_render_settings value; uint32_t tail; } extended{sharpen_request, 0xfeedfaceu};
+    extended.value.struct_size = sizeof(extended);
+    check(api.settings_apply(&extended.value) == RSF_OK && changed_calls == 3 &&
+        last_changed.struct_size == sizeof(sharpen_request), "larger request accepted; callback receives the runtime size");
+    check(api.settings_get(&extended.value) == RSF_OK && extended.value.struct_size == sizeof(sharpen_request) &&
+        extended.tail == 0xfeedfaceu, "get writes only the known settings prefix");
+
+    // Keep the section readable while denying the store its write handle.
+    const HANDLE blocked = CreateFileW(ini.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    check(blocked != INVALID_HANDLE_VALUE, "opened INI with writes denied");
+    if (blocked != INVALID_HANDLE_VALUE) {
+        request = sharpen_request;
+        request.fg_enabled = 0;
+        request.sr_backend = 1;
+        check(api.settings_apply(&request) == RSF_ERROR_NOT_READY, "save failure refused");
+        CloseHandle(blocked);
+        check(api.settings_get(&reread) == RSF_OK && reread.sr_backend == 3 && reread.fg_enabled == 1 &&
+            changed_calls == 3 && read(ini, L"SRBackend") == 3 && read(ini, L"FG") == 1,
+            "save failure retains the INI, in-memory settings and callback count");
+    }
+
     check(rsf_native_fg_status_get(&fg) && fg.requested.mode == RSF_FG_FIXED && fg.requested.generated_frames == 1 &&
         fg.requested.reflex_mode == RSF_REFLEX_ON && fg.requested.frame_limit_us == 8333, "FG options forwarded to presentation owner");
 
@@ -189,6 +256,10 @@ int main()
     check(api.notify(nullptr, RSF_OVERLAY_NOTIFY_RESIZE) == RSF_OK && api.notify(nullptr, RSF_OVERLAY_NOTIFY_DEVICE_RESET) == RSF_OK,
         "resize and reset notifications");
     check(api.set_visible(1) == RSF_ERROR_NOT_READY, "configured but not started");
+    rsf_overlay_diagnostics diagnostics{sizeof(diagnostics)};
+    check(rsf_get_overlay_diagnostics(&diagnostics) == RSF_OK && !diagnostics.started && !diagnostics.presents &&
+        diagnostics.apply_attempts == 12 && diagnostics.apply_refused == 9 &&
+        diagnostics.last_apply_result == RSF_ERROR_NOT_READY, "diagnostics count short, reentrant and failed writes");
 
     DeleteFileW(ini.c_str());
     if (failures) return 1;

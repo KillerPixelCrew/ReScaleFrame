@@ -9,11 +9,12 @@ bindgen = os.environ.get("BINDGEN", "bindgen")
 if subprocess.check_output([bindgen, "--version"], text=True).strip() != "bindgen 0.72.1":
     raise SystemExit("Install bindgen-cli 0.72.1 to regenerate the SDK bindings")
 
-def generate(output, header, types, constants, clang_args, extra=()):
+def generate(output, header, types, constants, clang_args, extra=(), *, use_core=True):
     bindings = subprocess.check_output([
         bindgen, header, "--allowlist-type", types, "--allowlist-var", constants,
         "--raw-line", "#![allow(non_camel_case_types)]",
-        "--no-derive-debug", "--use-core", "--no-doc-comments", "--rust-edition", "2024",
+        "--no-derive-debug", *(["--use-core"] if use_core else []),
+        "--no-doc-comments", "--rust-edition", "2024",
         "--rust-target", "1.85", *extra, "--", "--target=x86_64-pc-windows-msvc", *clang_args,
     ], cwd=root).replace(b"\r\n", b"\n")
     output = root / output
@@ -66,3 +67,24 @@ generate("runtime/orchestrator/src/native_sr_abi.rs", "runtime/orchestrator/incl
           "-Isdk/game/include"],
          ["--blocklist-type", "rsf_pipeline_camera_frame",
           "--raw-line", "use crate::render_abi::rsf_pipeline_camera_frame;"])
+# Match the overlay's existing std paths and import types that other modules already own.
+generate("runtime/orchestrator/src/overlay_abi.rs", "runtime/orchestrator/src/overlay_platform.h",
+         "wchar_t|rsf_overlay_(api|service_setup|service_option|capture|diagnostics|sr_report|stats|intent|"
+         "host_option|input_counters|platform|quality)|rsf_native_(latency_status|input_routes)|rsf_render_status",
+         "RSF_OVERLAY_(API_VERSION|CAPTURE_.*|NOTIFY_.*|SR_INPUT_.*|SERVICE_OPTION_(TOGGLE|NUMBER|LIMIT)|"
+         "HOST_OPTION_(TOGGLE|NUMBER)|FG_RUNTIME_SWITCH)|RSF_NATIVE_FG_REASON_(RESET|SCENE_UNSUPPORTED|"
+         "HUDLESS_MISSING)|RSF_(REFLEX_ON|SR_NONE|SR_DLSS|SR_FSR3|SR_FSR4|SR_SPATIAL)",
+         ["-include", "rescaleframe/overlay_api.h", "-include", "rescaleframe/overlay.h",
+          "-include", "rescaleframe/overlay_input.h", "-include", "rescaleframe/native_fg.h",
+          "-include", "rescaleframe/native_cpu.h", "-include", "rescaleframe/sr_session.h",
+          "-Isdk/game/include", "-Iruntime/orchestrator/include", "-Iruntime/contract/include",
+          "-Iruntime/presentation/include", "-Iruntime/graphics/include",
+          "-Iruntime/backends/dlss/include", "-Iui/overlay/include"],
+         ["--no-recursive-allowlist", "--with-derive-default",
+          "--raw-line", "use crate::cpu_abi::rsf_native_cpu_counters;",
+          "--raw-line", "use crate::render_abi::{\n"
+                        "    rsf_generation_provider, rsf_native_fg_options, rsf_native_fg_status, rsf_render_settings,\n"
+                        "    rsf_sharpening_options,\n"
+                        "};",
+          "--raw-line", "use rsf_game_sys::rsf_game_log_fn;"],
+         use_core=False)
