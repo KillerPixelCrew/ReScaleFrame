@@ -21,6 +21,8 @@ mod native_cpu;
 #[cfg(windows)]
 mod native_exposure;
 #[cfg(windows)]
+mod native_regions;
+#[cfg(windows)]
 mod native_reinsert;
 
 #[cfg(windows)]
