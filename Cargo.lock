@@ -387,6 +387,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsf-orchestrator"
+version = "0.1.2"
+
+[[package]]
 name = "rsf-upscaler"
 version = "0.1.2"
 

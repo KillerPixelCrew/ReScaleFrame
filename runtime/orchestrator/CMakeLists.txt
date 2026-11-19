@@ -52,6 +52,23 @@ add_library(rsf_orchestrator_core OBJECT
 target_include_directories(rsf_orchestrator_core PUBLIC include)
 target_compile_definitions(rsf_orchestrator_core PUBLIC RSF_RUNTIME_BUILD)
 target_link_libraries(rsf_orchestrator_core PUBLIC rsf_native_cpu)
+find_program(RSF_CARGO cargo REQUIRED)
+if(MSVC)
+    set(rsf_rust_target x86_64-pc-windows-msvc)
+else()
+    set(rsf_rust_target x86_64-pc-windows-gnu)
+endif()
+set(rsf_cargo_dir "${CMAKE_BINARY_DIR}/cargo")
+set(rsf_rust_profile "$<IF:$<CONFIG:Debug>,debug,release>")
+set(rsf_rust_archive "${rsf_cargo_dir}/${rsf_rust_target}/${rsf_rust_profile}/${CMAKE_STATIC_LIBRARY_PREFIX}rsf_orchestrator${CMAKE_STATIC_LIBRARY_SUFFIX}")
+add_custom_target(rsf_rust_core
+    COMMAND "${RSF_CARGO}" build --locked -p rsf-orchestrator
+        --target ${rsf_rust_target} --target-dir "${rsf_cargo_dir}" $<$<NOT:$<CONFIG:Debug>>:--release>
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    BYPRODUCTS "${rsf_rust_archive}"
+    COMMAND_EXPAND_LISTS VERBATIM)
+add_dependencies(rsf_orchestrator_core rsf_rust_core)
+target_link_libraries(rsf_orchestrator_core PUBLIC "${rsf_rust_archive}")
 target_compile_definitions(rsf_orchestrator_core PRIVATE RSF_STREAMLINE_HOST_BUILD)
 # Public because the orchestrator's own headers name a backend's frame structure and the decode
 # pass's parameters.

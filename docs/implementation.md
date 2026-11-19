@@ -12,6 +12,15 @@ CTest. This exercises sequencing semantics. The race was identified by source
 inspection. The isolated build omitted the optional corrected Vulkan Streamline
 runtime because the local receipt disagrees with the present capture header.
 
+SR backend selection now runs in the `rsf-orchestrator` Cargo static library.
+The two public C entry points forward to one Rust implementation. Release MSVC
+passed `gpu_sr_policy`, `gpu_sr_policy_embedded` and `anomaly_sr_runtime_api_contract`.
+PE inspection confirmed that only the DLL policy fixture imports the runtime.
+All 381 export names and ordinals in the rebuilt DLL matched the previous local
+Release DLL. This compares the two artifacts on this machine. The focused crate
+format and Clippy checks and locked workspace tests passed with Rust 1.100.0.
+Cross-build, device and in-game validation of the port remain pending.
+
 ## Fallout 4 AE native render callbacks, 16 November 2026
 
 User priority is now fully native Fallout4.exe without F4SE/ENB first, with

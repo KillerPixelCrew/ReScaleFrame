@@ -12,7 +12,7 @@ The repository pins Rust in `rust-toolchain.toml` and selects Visual Studio 2022
 | [Visual Studio / C++ Build Tools](https://visualstudio.microsoft.com/downloads/) | VS 2022 or 2026 C++ tools and Windows SDK for the reference x64 build |
 | [CMake](https://cmake.org/download/) | A version supporting the selected VS generator (preset schema requires 3.25+; VS 2026 needs a newer generator-capable CMake). Configuring fetches [MinHook](https://github.com/TsudaKageyu/minhook) v1.3.4 (BSD-2-Clause) from GitHub for the Present and cursor detours, so the first configure needs the network |
 | [Streamline SDK](https://github.com/NVIDIA-RTX/Streamline/releases) | `sl.h` and its headers under `vendor/streamline/include` (untracked), or the DLSS backend compiles out and reports `RSF_DLSS_ERROR_NOT_COMPILED`; the game folder's `ReScaleFrame\streamline` holds the release's `bin/x64` |
-| [Rust via rustup](https://rustup.rs/) | Pinned Rust toolchain and egui tests |
+| [Rust via rustup](https://rustup.rs/) | CMake invokes Cargo to build the orchestrator static library. The MSVC build uses the `x86_64-pc-windows-msvc` Rust target and the MinGW cross-build needs `x86_64-pc-windows-gnu`. Cargo also builds the overlay and upscaler. |
 | [PowerShell](https://github.com/PowerShell/PowerShell) | `eng/verify.ps1` |
 | [Python 3](https://www.python.org/downloads/) | PE, capture, and view-buffer tools |
 
