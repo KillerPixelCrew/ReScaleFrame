@@ -52,3 +52,10 @@ generate("runtime/orchestrator/src/d3d11_output_abi.rs", "runtime/orchestrator/s
           "-Iruntime/graphics/include", "-Isdk/game/include"],
          ["--with-derive-default", "--no-copy", "rsf_d3d11_state",
           "--allowlist-function", "rsf_d3d11_output_.*"])
+generate("runtime/orchestrator/src/auxiliary_sr_abi.rs", "runtime/orchestrator/src/auxiliary_sr_platform.h",
+         "rsf_(aux_platform|d3d11_auxiliary_surface)",
+         "RSF_(AUX_.*|D3D11_AUXILIARY_.*|DEPTH_SCALE_(ABI_VERSION|OK))",
+         ["-Iruntime/orchestrator/include", "-Iruntime/graphics/include",
+          "-Iruntime/presentation/include", "-Isdk/game/include"],
+         ["--blocklist-type", "rsf_game_log_fn",
+          "--raw-line", "use rsf_game_sys::rsf_game_log_fn;", "--with-derive-default"])

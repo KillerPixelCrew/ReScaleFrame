@@ -265,7 +265,7 @@ set_tests_properties(depth_scale_device PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 
 
 add_executable(rsf_auxiliary_sr auxiliary_sr.cpp ../runtime/orchestrator/src/auxiliary_sr.cpp ../runtime/orchestrator/src/native_regions.cpp)
 target_include_directories(rsf_auxiliary_sr PRIVATE ../runtime/orchestrator/include ../runtime/presentation/include)
-target_link_libraries(rsf_auxiliary_sr PRIVATE ReScaleFrame::Graphics ReScaleFrame::GameSDK rsf_build_options)
+target_link_libraries(rsf_auxiliary_sr PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics ReScaleFrame::GameSDK rsf_build_options)
 add_test(NAME auxiliary_sr_device COMMAND rsf_auxiliary_sr)
 set_tests_properties(auxiliary_sr_device PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
 

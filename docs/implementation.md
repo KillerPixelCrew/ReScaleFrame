@@ -170,6 +170,19 @@ Release. All 89 Rust tests and workspace Clippy passed. The reinsertion
 device fixture built in both configurations. The Release runtime and AC7
 carrier kept all 381 and 256 baseline export names and ordinals.
 
+Rust now owns auxiliary D3D11 SR allocation, capture, redraw, publication and
+rollback. An unsuccessful readable-backup reservation releases the Main
+reference before returning. The fake COM regression covers that refusal and
+a subsequent reservation. The numeric colour HLSL matches the pre-port bytes
+with SHA-256 `aaa2e98ef182b920c795050b022b02cad81a518abfbd1e08d1af560b4269cea7`.
+
+Ten focused fixtures and all 90 Rust tests passed on the integrated branch.
+The VS2026 Debug and Release builds included the DLL, both linked carriers,
+the auxiliary fixture and rendered FG host fixture. Release export counts
+remain 381, 256 and 273 with matching names and ordinals. The worker's VS2022
+attempt stopped at C2026 in the existing sharpening shader string.
+Device and game execution remain pending.
+
 Seven focused frame assembly, D3D11 host and Anomaly fixtures passed in
 Debug and Release. All 88 Rust tests and workspace Clippy passed. The Release
 runtime and linked AC7 carrier kept their 381 and 256 baseline export names
