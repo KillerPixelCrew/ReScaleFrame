@@ -88,3 +88,14 @@ generate("runtime/orchestrator/src/overlay_abi.rs", "runtime/orchestrator/src/ov
                         "};",
           "--raw-line", "use rsf_game_sys::rsf_game_log_fn;"],
          use_core=False)
+generate("runtime/orchestrator/src/fg12_abi.rs", "runtime/orchestrator/src/fg12_platform.h",
+         "rsf_(fg12_(setup|texture_desc|readback_layout|calls)|d3d11_present_setup|streamline_host|native_latency_frame|"
+         "observer_present(_event)?_fn|backend_log_fn)",
+         "RSF_(NATIVE_FG_REASON_(NOT_PREPARED|SCENE_UNSUPPORTED|RESET|HUDLESS_MISSING)|UI_MODE_NONE|GAME_LATENCY_(SLEEP|MODE))",
+         ["-include", "rescaleframe/fg_choice.h", "-Iruntime/orchestrator/include", "-Iruntime/contract/include",
+          "-Iruntime/backends/dlss/include", "-Iruntime/graphics/include", "-Iruntime/presentation/include",
+          "-Isdk/game/include"],
+         ["--no-recursive-allowlist",
+          "--raw-line", "use crate::render_abi::{rsf_backend_result, rsf_fg_frame, rsf_generation_provider, rsf_native_fg_options};",
+          "--raw-line", "use crate::{overlay_abi::rsf_native_latency_status, scene_abi::rsf_observer_present_event};",
+          "--raw-line", "use rsf_game_sys::{rsf_frame_record, rsf_game_cpu_event, rsf_game_cpu_event_fn, rsf_game_render_pass};"])

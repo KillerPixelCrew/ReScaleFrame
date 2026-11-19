@@ -40,8 +40,8 @@ RSF_RUNTIME_API void rsf_fg12_capture(void* command_list, const rsf_frame_record
 RSF_RUNTIME_API void rsf_fg12_hudless(void* command_list, const rsf_game_render_pass*);
 /* Confirm that the list containing capture was actually submitted to the owning queue. */
 RSF_RUNTIME_API void rsf_fg12_submitted(uint64_t session_id, uint64_t frame_id);
-/* With render/Present callbacks quiescent, retire this session's CPU tokens. Returns zero
-   while its tagged GPU inputs are still in use; the caller must retain the session. */
+/* After quiescing render/Present callbacks and draining the caller's own recordings, retire
+   this session's CPU tokens. Returns zero while the provider still holds tagged GPU inputs. */
 RSF_RUNTIME_API int rsf_fg12_end_session(uint64_t session_id);
 RSF_RUNTIME_API void rsf_fg12_window(const rsf_game_render_pass*);
 RSF_RUNTIME_API int rsf_fg12_status(rsf_native_fg_status*);

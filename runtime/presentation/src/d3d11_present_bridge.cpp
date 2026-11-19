@@ -461,6 +461,13 @@ class Bridge final : public IDXGISwapChain4 {
 public:
     void refuse_creation() { faulted = true; scoped_admitted.store(false); outer_alias.store(nullptr); }
     void* presentation_queue() { return provider_queue.load(); }
+    void* source_queue() {
+        auto* queue = interop_queue.Get();
+        if (!native12 && host && queue)
+            queue = static_cast<ID3D12CommandQueue*>(rsf_streamline_host_native(host, queue));
+        if (queue) queue->AddRef();
+        return queue;
+    }
     void* command_list(void* list) { return provider_list(static_cast<ID3D12GraphicsCommandList*>(list)); }
     // Joins vendor retirement on the provider queue, optionally runs a closed list there, and
     // signals one private fence that covers both. Present thread, between Present and the next one.
@@ -1211,6 +1218,13 @@ extern "C" void* rsf_d3d11_present_queue() {
     auto* bridge = static_cast<Bridge*>(active_chain.load(std::memory_order_acquire));
     if (!bridge) return nullptr;
     return bridge->presentation_queue();
+}
+extern "C" void* rsf_d3d11_present_source_queue() {
+    // The same lock fences owner unpublication. A transition must not block the producer.
+    std::shared_lock<std::shared_mutex> lock(provider_guard, std::try_to_lock);
+    if (!lock.owns_lock()) return nullptr;
+    auto* bridge = static_cast<Bridge*>(active_chain.load(std::memory_order_acquire));
+    return bridge ? bridge->source_queue() : nullptr;
 }
 extern "C" int rsf_d3d11_present_is_owner(void* swapchain) {
     auto* active = static_cast<IDXGISwapChain*>(active_chain.load(std::memory_order_acquire));

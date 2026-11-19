@@ -70,6 +70,9 @@ int rsf_d3d11_present_graphics(rsf_streamline_graphics* graphics);
 /* Present owner only. Borrowed creation queue for the current physical provider, distinct
    from the D3D11 SR/upload queue. Valid until the next drained provider transition. */
 void* rsf_d3d11_present_queue(void);
+/* Owned reference to the D3D12 source queue (application or upload). A submission callback
+   can signal its source-work fence independently of the current physical provider queue. */
+void* rsf_d3d11_present_source_queue(void);
 /* The list a provider-queue consumer should record into for a list created on the shared
    device: the native list behind a Streamline proxy unless the provider queue is Streamline's.
    Null when it cannot be unwrapped. Borrowed for the list's lifetime. */
