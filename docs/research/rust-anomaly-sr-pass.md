@@ -71,3 +71,23 @@ and all 16 by-name Runtime lookups, including the SR table, colour transport
 and input dump functions. The Runtime is borrowed dynamically. The staged
 Release imports for CRT conversion and time are absent, consistent with the
 earlier SR and FG stage ports (`3c4b0d0` and `f7a0f83`).
+
+## Offscreen device acceptance
+
+The merged MSVC Release build at `58fe95acdca6` passed the following
+offscreen fixtures. The staged loader, Runtime, adapter, panel and
+motion pack have SHA-256 receipts. Fixture and vendor hashes and full
+logs are under `.local/anomaly/staging/58fe95acdca6/device-evidence/`.
+
+| Fixture | Device evidence |
+| --- | --- |
+| Round trip and spatial seam | Intel UHD hardware. The exhaustive FP16 round trip stayed within one code value. The seam preserved position and depth bit-for-bit at the tested extents. Valid bindings produced zero debug-layer errors. The deliberate mismatched RTV/DSV controls produced the expected errors. |
+| Jitter | Intel UHD hardware. The static scene measured 0.0033 render pixels of residual motion over 93,312 pixels and 18 phases. The pan and uncorrected jitter controls passed. |
+| Decode, thin motion, prepare and reinsert | RTX 4070 Laptop GPU. All three cases passed with zero debug-layer errors. Valid zero and missing motion remained distinct, the thin mover and edge checks passed, and the reinsertion stayed within one UNORM8 code. |
+| Vendor evaluation and switching | RTX 4070 Laptop GPU. DLSS, DLSS with automatic exposure, FSR3, FSR4, XeSS and the return to DLSS each evaluated 24 of 24 frames. Pipeline and pass refusals were zero. The checked outputs contained no non-finite pixels. |
+
+The offscreen DLSS fixture reported that Streamline did not observe
+`presentCommon`. This run covers SR evaluation and switching with real
+textures and vendor DLLs. In-game presentation, input, overlay interaction
+and plugin teardown still require game evidence. The fixture reads and
+removes its temporary comparison images as part of the run.

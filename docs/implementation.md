@@ -384,6 +384,14 @@ passed syntax checks under MSVC 19.44 with warnings denied. The
 adapter DLL exports, Runtime lookup and motion pack match the
 staged baseline.
 
+The offscreen SR acceptance run at `58fe95acdca6` passed the
+round-trip, jitter, decode, thin-motion and prepare/reinsert fixtures
+on hardware. DLSS, FSR3, FSR4 and XeSS each evaluated all test frames
+in the vendor switch fixture, including the return to DLSS. The
+offscreen DLSS run logged the expected absence of a Present callback.
+The staged artifacts and fixture receipts are recorded separately
+from game results. See [the device acceptance results](research/rust-anomaly-sr-pass.md#offscreen-device-acceptance).
+
 The first source inspection found that the public frame sequencer opened a rendered
 frame and assigned its provenance under separate locks. Direct callers could read
 or retire the slot between those operations. The FG session adds its own outer
