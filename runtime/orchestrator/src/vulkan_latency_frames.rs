@@ -18,7 +18,7 @@ const PASS_PREFIX: usize = offset_of!(rsf_game_render_pass, source_frame_id) + s
 // Values consumed by the existing Vulkan SDK marker bridges.
 #[derive(Clone, Copy)]
 #[repr(i32)]
-enum Marker {
+pub(super) enum Marker {
     SubmitBegin = 2,
     SubmitEnd = 3,
     PresentBegin = 4,
@@ -182,4 +182,9 @@ pub(crate) extern "C" fn rsf_core_latencyvk_legacy_render(frame: u64) {
 #[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_core_latencyvk_legacy_present(begin: u32) -> u64 {
     FRAMES.lock().unwrap().legacy.present(begin != 0)
+}
+
+pub(super) fn legacy_present_source() -> Option<u64> {
+    let frame = FRAMES.lock().unwrap().legacy.presenting;
+    (frame != 0).then_some(frame)
 }

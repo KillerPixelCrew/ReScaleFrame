@@ -128,6 +128,8 @@ mod sr_session;
 #[cfg(windows)]
 mod vulkan_antilag;
 #[cfg(windows)]
+mod vulkan_dx12_fg;
+#[cfg(windows)]
 mod vulkan_fg;
 #[cfg(windows)]
 mod vulkan_fg_abi;
@@ -155,6 +157,8 @@ mod vulkan_sr;
 mod vulkan_sr_abi;
 #[cfg(windows)]
 mod vulkan_sr_split;
+#[cfg(windows)]
+mod vulkan_xess_fg;
 
 // C callers can recover from allocation failure. A successful handle is
 // released with Box::from_raw after its owner has retired outstanding users.

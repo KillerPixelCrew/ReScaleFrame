@@ -55,8 +55,17 @@ struct Calls {
 template<class T = void>
 T* fake(uint64_t id) { return reinterpret_cast<T*>(id); }
 
+const rsf_vkfg_platform images{
+    [](void*) -> uint32_t { return 1; },
+    [](void*, uint32_t, uint32_t, uint32_t, uint64_t* image) -> int32_t { *image = calls.next_handle++; return 0; },
+    [](void*, uint64_t, uint64_t* bytes, uint32_t* types) { *bytes = 1; *types = 1; },
+    [](void*, uint64_t, uint32_t, uint64_t* memory) -> int32_t { *memory = calls.next_handle++; return 0; },
+    [](void*, uint64_t image, uint64_t memory) -> int32_t { CHECK(image && memory); return 0; },
+    nullptr, nullptr,
+    [](void*, uint64_t image) { CHECK(image); ++calls.images_destroyed; },
+    [](void*, uint64_t memory) { CHECK(memory); },
+};
 const rsf_fsr4gvk_ops platform{
-    [](const auto*, uint64_t* luid) -> int32_t { *luid = adapter; return 0; },
     [](const char*, uint16_t* out, int32_t) -> int32_t { out[0] = 'X'; return 2; },
     [](uint64_t, const uint16_t*, auto*) -> int32_t { return 0; },
     [](const auto* create, rsf_fsr4fg_bridge** bridge) -> int32_t {
@@ -96,50 +105,51 @@ const rsf_fsr4gvk_ops platform{
         *out = fake<rsf_dx12vk_interop>(2);
         return 0;
     },
-    [](auto*, uint32_t format, uint32_t width, uint32_t height, rsf_dx12vk_shared_image* image) -> int32_t {
-        const auto id = calls.next_handle++;
-        *image = {id, fake(id), format, width, height};
-        return 0;
+    {
+        [](auto*, uint32_t format, uint32_t width, uint32_t height, rsf_dx12vk_shared_image* image) -> int32_t {
+            const auto id = calls.next_handle++;
+            *image = {id, fake(id), format, width, height};
+            return 0;
+        },
+        [](const auto*) -> uint64_t { return completion_timeline; },
+        [](auto*, uint32_t drained) -> int32_t { CHECK(drained == 1); return calls.fail_importer_destroy ? injected_error : 0; },
     },
-    [](const auto*) -> uint64_t { return completion_timeline; },
-    [](auto*, uint32_t drained) -> int32_t { CHECK(drained == 1); return calls.fail_importer_destroy ? injected_error : 0; },
-    [](const auto*, rsf_fsr4gvk_platform** out) -> int32_t { *out = fake<rsf_fsr4gvk_platform>(3); return 0; },
-    [](auto*) {},
-    [](auto*, uint64_t* pool) -> int32_t { *pool = calls.next_handle++; return 0; },
-    [](auto*, uint64_t) { ++calls.pools_destroyed; },
-    [](auto*, const auto*, uint64_t* image, uint64_t* memory) -> int32_t {
-        *image = calls.next_handle++; *memory = calls.next_handle++;
-        return 0;
+    {
+        [](const auto*, uint64_t* luid) -> int32_t { *luid = adapter; return 0; },
+        [](const auto*, uint32_t, rsf_fsr4gvk_platform** out) -> int32_t { *out = fake<rsf_fsr4gvk_platform>(3); return 0; },
+        [](auto*) {},
+        [](auto*, uint64_t* pool) -> int32_t { *pool = calls.next_handle++; return 0; },
+        [](auto*, uint64_t) { ++calls.pools_destroyed; },
+        &images,
+        [](auto*, uint64_t, void** list) -> int32_t { *list = fake(calls.next_handle++); return 0; },
+        [](auto*, void*) -> int32_t { return 0; },
+        [](auto*, void*) -> int32_t { return 0; },
+        [](auto*, void*, const auto*, const auto*, uint32_t initialized) { calls.initialized_copies.push_back(initialized); },
+        [](auto*, void*, const auto*) { ++calls.cleared; },
+        [](auto*, uint64_t, uint64_t) -> int32_t { return 0; },
+        [](auto*, void*, const rsf_fsr4gvk_present_info* info, uint64_t timeline, uint64_t previous, uint64_t ready) -> int32_t {
+            CHECK(timeline == completion_timeline && previous == calls.last_done && ready == previous + 1);
+            CHECK(info->wait_count == 1 && info->waits[0] == 88);
+            return 0;
+        },
+        [](auto*, uint64_t timeline, uint64_t value, uint64_t timeout) -> int32_t {
+            CHECK(timeline == completion_timeline && timeout != 0 && value <= calls.last_done);
+            return 0;
+        },
+        [](auto*, uint64_t* fence) -> int32_t { *fence = calls.next_handle++; return 0; },
+        [](auto*, uint64_t fence) -> int32_t {
+            calls.markers.push_back(fence);
+            return calls.fail_marker ? injected_error : 0;
+        },
+        [](auto*, uint64_t fence, uint64_t) -> int32_t { calls.waits.push_back(fence); return 0; },
+        [](auto*, uint64_t) {},
+        [](auto*) -> int32_t { ++calls.idles; return 0; },
+        [](auto*, uint64_t provider, uint32_t backend) { CHECK(provider == 700 && backend == 4); },
+        [](auto*, void*, const auto*, const auto*, const char*, uint64_t group) { CHECK(group != 0); },
+        [](auto*, uint64_t group) { calls.marked_complete.push_back(group); },
+        [](auto*, uint64_t group) { calls.discarded.push_back(group); },
+        [](auto*) -> int32_t { return 0; },
     },
-    [](auto*, uint64_t image, uint64_t memory) { CHECK(image && memory); ++calls.images_destroyed; },
-    [](auto*, uint64_t, void** list) -> int32_t { *list = fake(calls.next_handle++); return 0; },
-    [](auto*, void*) -> int32_t { return 0; },
-    [](auto*, void*) -> int32_t { return 0; },
-    [](auto*, void*, const auto*, const auto*, uint32_t initialized) { calls.initialized_copies.push_back(initialized); },
-    [](auto*, void*, const auto*) { ++calls.cleared; },
-    [](auto*, uint64_t, uint64_t) -> int32_t { return 0; },
-    [](auto*, void*, const rsf_fsr4gvk_present_info* info, uint64_t timeline, uint64_t previous, uint64_t ready) -> int32_t {
-        CHECK(timeline == completion_timeline && previous == calls.last_done && ready == previous + 1);
-        CHECK(info->wait_count == 1 && info->waits[0] == 88);
-        return 0;
-    },
-    [](auto*, uint64_t timeline, uint64_t value, uint64_t timeout) -> int32_t {
-        CHECK(timeline == completion_timeline && timeout != 0 && value <= calls.last_done);
-        return 0;
-    },
-    [](auto*, uint64_t* fence) -> int32_t { *fence = calls.next_handle++; return 0; },
-    [](auto*, uint64_t fence) -> int32_t {
-        calls.markers.push_back(fence);
-        return calls.fail_marker ? injected_error : 0;
-    },
-    [](auto*, uint64_t fence, uint64_t) -> int32_t { calls.waits.push_back(fence); return 0; },
-    [](auto*, uint64_t) {},
-    [](auto*) -> int32_t { ++calls.idles; return 0; },
-    [](auto*, uint64_t provider) { CHECK(provider == 700); },
-    [](auto*, void*, const auto*, const auto*, const char*, uint64_t group) { CHECK(group != 0); },
-    [](auto*, uint64_t group) { calls.marked_complete.push_back(group); },
-    [](auto*, uint64_t group) { calls.discarded.push_back(group); },
-    [](auto*) -> int32_t { return 0; },
 };
 
 rsf_fgvk_setup setup() {
