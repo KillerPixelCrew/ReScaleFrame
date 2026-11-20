@@ -91,7 +91,7 @@ set_tests_properties(anomaly_sr_swap_contract anomaly_sr_swap_unknown_selection 
 # in anomaly_sr_swap_contract and the upscale/depth-twin fixture in anomaly_sr_roundtrip_device.
 add_executable(rsf_anomaly_sr_plan_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_plan.cpp")
 target_include_directories(rsf_anomaly_sr_plan_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
-target_link_libraries(rsf_anomaly_sr_plan_test PRIVATE rsf_build_options)
+target_link_libraries(rsf_anomaly_sr_plan_test PRIVATE rsf_anomaly_rust rsf_build_options)
 add_test(NAME anomaly_sr_plan_contract COMMAND rsf_anomaly_sr_plan_test)
 set_tests_properties(anomaly_sr_plan_contract PROPERTIES TIMEOUT 30)
 
@@ -160,7 +160,7 @@ target_link_libraries(rsf_anomaly_sr_hooks_test PRIVATE rsf_anomaly_motion_bridg
 # motion PS writer with production b13 bytes and jitter (77 when no D3D11 device exists). None of them runs game code.
 add_executable(rsf_anomaly_sr_jitter_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_jitter.cpp")
 target_include_directories(rsf_anomaly_sr_jitter_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
-target_link_libraries(rsf_anomaly_sr_jitter_test PRIVATE rsf_build_options)
+target_link_libraries(rsf_anomaly_sr_jitter_test PRIVATE rsf_anomaly_rust rsf_build_options)
 add_test(NAME anomaly_sr_jitter_contract COMMAND rsf_anomaly_sr_jitter_test)
 add_test(NAME anomaly_sr_jitter_unknown_selection COMMAND rsf_anomaly_sr_jitter_test unknown-case)
 set_tests_properties(anomaly_sr_jitter_unknown_selection PROPERTIES WILL_FAIL TRUE)
@@ -184,7 +184,7 @@ endif()
 # (<root>/{streamline,fidelityfx,xess}) and an NVIDIA adapter, and is registered when RSF_ANOMALY_SR_VENDOR_ROOT exists.
 add_executable(rsf_anomaly_sr_pass_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_pass.cpp")
 target_include_directories(rsf_anomaly_sr_pass_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
-target_link_libraries(rsf_anomaly_sr_pass_test PRIVATE ReScaleFrame::GameSDK ReScaleFrame::Graphics rsf_build_options)
+target_link_libraries(rsf_anomaly_sr_pass_test PRIVATE rsf_anomaly_rust ReScaleFrame::GameSDK ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME anomaly_sr_pass_contract COMMAND rsf_anomaly_sr_pass_test)
 add_test(NAME anomaly_sr_pass_unknown_selection COMMAND rsf_anomaly_sr_pass_test unknown-case)
 set_tests_properties(anomaly_sr_pass_unknown_selection PROPERTIES WILL_FAIL TRUE)
@@ -252,7 +252,7 @@ target_sources(rsf_anomaly_sr_hooks_test PRIVATE "${RSF_ANOMALY_SR_SRC}/runtime_
 # Jittered deferred reconstruction: float-precision round trips and all six native constant-buffer stages.
 add_executable(rsf_anomaly_sr_reconstruction_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_reconstruction.cpp")
 target_include_directories(rsf_anomaly_sr_reconstruction_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
-target_link_libraries(rsf_anomaly_sr_reconstruction_test PRIVATE rsf_build_options)
+target_link_libraries(rsf_anomaly_sr_reconstruction_test PRIVATE rsf_anomaly_rust rsf_build_options)
 add_test(NAME anomaly_sr_reconstruction_contract COMMAND rsf_anomaly_sr_reconstruction_test)
 add_test(NAME anomaly_sr_reconstruction_window_contract COMMAND rsf_anomaly_sr_swap_test stage3_position_reconstruction)
 set_tests_properties(anomaly_sr_reconstruction_contract anomaly_sr_reconstruction_window_contract PROPERTIES TIMEOUT 30)

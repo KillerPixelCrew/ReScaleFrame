@@ -316,6 +316,16 @@ Clippy and the exact adapter export comparison passed. The FG device
 fixture built. Captured images and the live panel controls need game
 verification.
 
+Anomaly's SR render sizing, mip-bias arithmetic, jitter sequence and
+publication, and burst settling rules now run directly in Rust. The
+native fixtures call those implementations through the private ABI.
+The old phase-count conversion failed the extreme extent regression.
+The Rust calculation caps the floating-point count before conversion.
+Thirteen focused MSVC contracts passed in both configurations, all
+269 locked Rust tests passed, and the Anomaly DLL exports matched.
+The four native arithmetic fixtures also passed MSVC 19.44 syntax
+checking with warnings denied.
+
 The first source inspection found that the public frame sequencer opened a rendered
 frame and assigned its provenance under separate locks. Direct callers could read
 or retire the slot between those operations. The FG session adds its own outer

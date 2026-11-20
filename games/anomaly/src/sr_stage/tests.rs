@@ -20,7 +20,6 @@ struct Fake {
     evaluate: bool,
     reinsert: bool,
     hooks_created: bool,
-    next_reset: bool,
     passes: Vec<rsf_anomaly_sr_pass>,
     logs: Vec<String>,
 }
@@ -65,53 +64,6 @@ unsafe extern "C" fn frame_facts(
     };
     record(format!("facts world={world} temporal={temporal}"));
 }
-unsafe extern "C" fn make_plan(
-    ow: u32,
-    oh: u32,
-    scale: f32,
-    out: *mut rsf_anomaly_sr_plan,
-) -> bool {
-    let rw = (ow as f32 * scale).round() as u32;
-    let rh = (oh as f32 * scale).round() as u32;
-    unsafe {
-        out.write(rsf_anomaly_sr_plan {
-            output_width: ow,
-            output_height: oh,
-            render_width: rw,
-            render_height: rh,
-            scale,
-        })
-    };
-    ow != 0 && oh != 0
-}
-unsafe extern "C" fn plan_for_render(
-    ow: u32,
-    oh: u32,
-    rw: u32,
-    rh: u32,
-    out: *mut rsf_anomaly_sr_plan,
-) -> bool {
-    unsafe {
-        out.write(rsf_anomaly_sr_plan {
-            output_width: ow,
-            output_height: oh,
-            render_width: rw,
-            render_height: rh,
-            scale: 0.5,
-        })
-    };
-    true
-}
-extern "C" fn clamp_scale(value: f32) -> f32 {
-    if value.is_nan() || value <= 0.0 || !value.is_finite() {
-        0.67
-    } else {
-        value.clamp(0.33, 1.0)
-    }
-}
-extern "C" fn clamp_mip_offset(value: f32) -> f32 {
-    value.clamp(-2.0, 1.0)
-}
 unsafe extern "C" fn controller(out: *mut rsf_anomaly_sr_controller) {
     let (open, jittered, refused) = fake(|f| (f.window_open, f.jittered, f.refused));
     unsafe {
@@ -144,72 +96,6 @@ unsafe extern "C" fn prepare(facts: *const rsf_anomaly_sr_frame_facts) -> bool {
         f.jittered = open && facts.jitter;
     });
     open
-}
-unsafe extern "C" fn jitter_next(
-    _: u32,
-    _: u32,
-    _: u32,
-    _: u32,
-    _: u64,
-    continuous: bool,
-    reset: *mut bool,
-) -> rsf_anomaly_sr_jitter_sample {
-    record(format!("jitter continuous={continuous}"));
-    unsafe { reset.write(fake(|f| f.next_reset)) };
-    rsf_anomaly_sr_jitter_sample {
-        x: 0.25,
-        y: -0.25,
-        index: 1,
-        phase_count: 8,
-    }
-}
-#[allow(clippy::too_many_arguments)]
-unsafe extern "C" fn next_state(
-    last: *const JitterState,
-    scope: bool,
-    applied: bool,
-    sample: *const rsf_anomaly_sr_jitter_sample,
-    rw: u32,
-    rh: u32,
-    reset: bool,
-    out: *mut JitterState,
-) {
-    let (last, sample) = unsafe { (*last, *sample) };
-    let state = if scope {
-        JitterState {
-            scope: true,
-            applied: false,
-            current_x: 0.0,
-            current_y: 0.0,
-            ..last
-        }
-    } else {
-        JitterState {
-            frame: last.frame + 1,
-            applied,
-            current_x: if applied { sample.x } else { 0.0 },
-            current_y: if applied { sample.y } else { 0.0 },
-            render_width: rw,
-            render_height: rh,
-            reset,
-            ..default_jitter()
-        }
-    };
-    unsafe { out.write(state) };
-}
-unsafe extern "C" fn jitter_uv(state: *const JitterState, out: *mut rsf_anomaly_sr_jitter_uv) {
-    let s = unsafe { *state };
-    let u = if s.applied && s.render_width != 0 {
-        s.current_x / s.render_width as f32
-    } else {
-        0.0
-    };
-    unsafe {
-        out.write(rsf_anomaly_sr_jitter_uv {
-            current_u: u,
-            ..Default::default()
-        })
-    };
 }
 extern "C" fn geometry_active() -> bool {
     true
@@ -424,13 +310,6 @@ fn platform() -> Box<Platform> {
         shutdown: Some(shutdown),
         set_swap_enabled: Some(set_swap_enabled),
         controller: Some(controller),
-        make_plan: Some(make_plan),
-        plan_for_render: Some(plan_for_render),
-        clamp_scale: Some(clamp_scale),
-        clamp_mip_offset: Some(clamp_mip_offset),
-        jitter_next: Some(jitter_next),
-        next_state: Some(next_state),
-        jitter_uv: Some(jitter_uv),
         bilinear: Some(bilinear),
         temporal_ready: Some(temporal_ready),
         temporal_targets: Some(temporal_targets),
@@ -569,16 +448,16 @@ fn scope_frames_neither_jitter_nor_read_the_main_camera() {
     fake(|f| f.scope = true);
     driver.prepare(null_mut());
     let order = calls();
-    assert!(
-        !order
-            .iter()
-            .any(|c| c == "camera" || c.starts_with("jitter"))
-    );
+    assert!(!order.iter().any(|c| c == "camera"));
+    assert_eq!(driver.lock().as_ref().unwrap().sequence.frames, 0);
     assert!(driver.jitter().scope);
     fake(|f| f.scope = false);
     driver.prepare(null_mut());
     let order = calls();
-    assert!(position(&order, "camera") < position(&order, "jitter continuous=false"));
+    assert!(
+        position(&order, "camera")
+            < position(&order, "prepare stage=2 jitter=true render=1286x724")
+    );
     assert!(
         order
             .iter()
@@ -586,15 +465,19 @@ fn scope_frames_neither_jitter_nor_read_the_main_camera() {
     );
     let published = driver.jitter();
     assert!(published.applied && published.frame == 1);
-    assert_eq!(driver.jitter_uv().current_u, 0.25 / 1280.0);
+    assert_eq!(driver.jitter_uv().current_u, 0.0);
+    assert_eq!(driver.jitter_uv().current_v, (-1.0f32 / 6.0) / 720.0);
+    assert!(published.reset);
     // A frame without H1 (menu, loading) between two main frames breaks continuity; consecutive frames keep it.
     driver.frame_end();
     driver.prepare(null_mut());
-    assert!(calls().iter().any(|c| c == "jitter continuous=true"));
+    assert!(!driver.jitter().reset);
+    assert_eq!(driver.jitter().sequence_index, 1);
     driver.frame_end();
     driver.frame_end();
     driver.prepare(null_mut());
-    assert!(calls().iter().any(|c| c == "jitter continuous=false"));
+    assert!(driver.jitter().reset);
+    assert_eq!(driver.jitter().sequence_index, 0);
 }
 
 #[test]
@@ -604,8 +487,7 @@ fn live_jitter_off_skips_the_sample() {
     driver.set_option(RSF_ANOMALY_SR_OPTION_JITTER, 0);
     assert_eq!(calls(), ["save SRJitter=0"]);
     driver.prepare(null_mut());
-    let order = calls();
-    assert!(!order.iter().any(|c| c.starts_with("jitter")));
+    assert_eq!(driver.lock().as_ref().unwrap().sequence.frames, 0);
     assert!(!driver.jitter().applied);
 }
 

@@ -56,6 +56,7 @@ void halton_sequence() {
     CHECK(jitter_phase_count(1286, 1920) == 18 && jitter_phase_count(858, 1280) == 18);
     CHECK(jitter_phase_count(960, 1920) == 32 && jitter_phase_count(1920, 1920) == 8 && jitter_phase_count(1500, 1920) == 14);
     CHECK(jitter_phase_count(0, 1920) == 8 && jitter_phase_count(2000, 1920) == 8 && jitter_phase_count(100, 1920) == 64);
+    CHECK(jitter_phase_count(1, UINT32_MAX) == 64);
 }
 
 void sequence_resets() {

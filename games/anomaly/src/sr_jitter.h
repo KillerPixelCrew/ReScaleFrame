@@ -13,6 +13,8 @@
 // by temporal::jitter_projection (column vectors) on the transposed matrix, which for row vectors is
 // M[i][0] += 2x/W * M[i][3] and M[i][1] -= 2y/H * M[i][3] for every row i (for a perspective matrix: _31 and _32).
 #include "../temporal/math.h"
+#include "sr_stage_platform.h"
+#include <bit>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -20,23 +22,9 @@
 
 namespace rsf::anomaly::sr {
 // ---- Halton (2, 3) sequence -----------------------------------------------------------------------------------------
-// Radical inverse of `index` (>= 1) in `base`.
-inline double halton(uint32_t index, uint32_t base) noexcept {
-    double result = 0.0, fraction = 1.0;
-    while (index > 0) {
-        fraction /= base;
-        result += fraction * (index % base);
-        index /= base;
-    }
-    return result;
-}
-// Phase count: ceil(8 * (output / render)^2) per axis ratio, the common practice (FSR 2 ffxFsr2GetJitterPhaseCount),
-// clamped to [8, 64]. 1920 -> 1286 and 1280 -> 858 (scale 0.67) give 18, scale 0.5 gives 32, scale 1.0 gives 8.
+inline double halton(uint32_t index, uint32_t base) noexcept { return rsf_anomaly_sr_halton(index, base); }
 inline uint32_t jitter_phase_count(uint32_t render_width, uint32_t output_width) noexcept {
-    if (!render_width || !output_width || render_width > output_width) return 8;
-    const double ratio = double(output_width) / double(render_width);
-    const auto count = static_cast<uint32_t>(std::ceil(8.0 * ratio * ratio - 1e-9));
-    return count < 8 ? 8 : count > 64 ? 64 : count;
+    return rsf_anomaly_sr_phase_count(render_width, output_width);
 }
 struct JitterSample {
     float x{}, y{};                 // render pixels, in [-0.5, 0.5)
@@ -45,9 +33,7 @@ struct JitterSample {
 };
 // Sample `index` of a sequence of `phase_count`: Halton(index mod phases + 1, 2/3) - 0.5. Index 0 is (0, -1/6).
 inline JitterSample jitter_sample(uint32_t index, uint32_t phase_count) noexcept {
-    if (!phase_count) phase_count = 8;
-    const uint32_t i = index % phase_count;
-    return {static_cast<float>(halton(i + 1, 2) - 0.5), static_cast<float>(halton(i + 1, 3) - 0.5), i, phase_count};
+    return std::bit_cast<JitterSample>(rsf_anomaly_sr_jitter_sample_at(index, phase_count));
 }
 
 // The main-view sequence. Restarts at index 0 when the render or output size, the device reset generation or the
@@ -60,73 +46,36 @@ struct JitterKey {
 };
 class JitterSequence {
 public:
-    // The sample for the next main-view world frame.
+    JitterSequence() noexcept { state_.phases = 8; }
     JitterSample next(const JitterKey& key, bool continuous) noexcept {
-        const uint32_t phases = jitter_phase_count(key.render_width, key.output_width);
-        if (!started_ || !(key == key_) || !continuous || phases != phases_) {
-            if (started_) ++resets_;
-            started_ = true;
-            key_ = key;
-            phases_ = phases;
-            index_ = 0;
-            reset_ = true;
-        } else reset_ = false;
-        const auto sample = jitter_sample(index_, phases_);
-        index_ = (index_ + 1) % phases_;
-        ++frames_;
-        return sample;
+        const uint32_t dimensions[4]{key.render_width, key.render_height, key.output_width, key.output_height};
+        return std::bit_cast<JitterSample>(rsf_anomaly_sr_sequence_next(&state_, &dimensions, key.generation, continuous));
     }
-    bool last_was_reset() const noexcept { return reset_; }
-    uint64_t resets() const noexcept { return resets_; }
-    uint64_t frames() const noexcept { return frames_; }
-    uint32_t phase_count() const noexcept { return phases_; }
-    // Index of the sample next() returns next.
-    uint32_t next_index() const noexcept { return index_; }
+    bool last_was_reset() const noexcept { return state_.reset; }
+    uint64_t resets() const noexcept { return state_.resets; }
+    uint64_t frames() const noexcept { return state_.frames; }
+    uint32_t phase_count() const noexcept { return state_.phases; }
+    uint32_t next_index() const noexcept { return state_.index; }
     void clear() noexcept { *this = {}; }
 private:
-    JitterKey key_{};
-    bool started_{}, reset_{};
-    uint32_t phases_{8}, index_{};
-    uint64_t resets_{}, frames_{};
+    rsf_anomaly_sr_jitter_sequence state_{};
 };
 
-// ---- burst capture gating -----------------------------------------------------------------------------------------------
-// A Stage 3 jitter burst must hold consecutive, clean main-view frames. The wave 6 game run started it while the "Press any
-// key to continue" screen was up: the world still renders under that screen (frames reach H1, so frames_without_world does
-// not move), and every final image was the loading screen. The adapter reads the engine's loading-screen flag and feeds it
-// here with its count of frames that never reached H1 (menu, loading, first frame after a reset).
+// Stage 3 bursts wait for consecutive main-view frames outside the loading screen.
 class BurstGate {
 public:
-    static constexpr uint32_t default_settle_frames = 30;
-    struct Verdict {
-        bool capture{};   // this frame may be captured
-        bool discard{};   // frames already taken are no longer consecutive or clean: drop them
-    };
-    BurstGate(uint32_t settle_frames = default_settle_frames) noexcept : settle_(settle_frames) {}
-    // One call per main-view frame at H1. A loading screen or any frame without a world since the previous call breaks the
-    // run; a burst starts only after `settle_frames` unbroken frames and, once started, continues while they stay unbroken.
+    static constexpr uint32_t default_settle_frames = RSF_ANOMALY_SR_BURST_SETTLE;
+    using Verdict = rsf_anomaly_sr_burst_verdict;
+    BurstGate(uint32_t settle_frames = default_settle_frames) noexcept { state_.settle = settle_frames; }
     Verdict frame(bool loading_screen, uint64_t frames_without_world, bool frames_taken) noexcept {
-        const bool broken = loading_screen || !marked_ || frames_without_world != mark_;
-        mark_ = frames_without_world;
-        marked_ = true;
-        if (broken) {
-            clear_ = 0;
-            ++held_;
-            if (frames_taken) ++restarts_;
-            return {false, frames_taken};
-        }
-        ++clear_;
-        return {frames_taken || clear_ >= settle_, false};
+        return rsf_anomaly_sr_burst_frame(&state_, loading_screen, frames_without_world, frames_taken);
     }
-    // The loading screen showed up while the frame already armed was in flight (checked before Present).
-    void interrupted() noexcept { clear_ = 0; ++held_; ++restarts_; }
-    uint64_t clear_frames() const noexcept { return clear_; }
-    uint64_t held() const noexcept { return held_; }          // frames a capture was held back or broken
-    uint64_t restarts() const noexcept { return restarts_; }  // bursts that lost frames and started over
+    void interrupted() noexcept { rsf_anomaly_sr_burst_interrupted(&state_); }
+    uint64_t clear_frames() const noexcept { return state_.clear; }
+    uint64_t held() const noexcept { return state_.held; }
+    uint64_t restarts() const noexcept { return state_.restarts; }
 private:
-    uint32_t settle_{};
-    uint64_t mark_{}, clear_{}, held_{}, restarts_{};
-    bool marked_{};
+    rsf_anomaly_sr_burst_gate state_{};
 };
 
 // ---- engine (row-vector) matrices -----------------------------------------------------------------------------------
@@ -170,15 +119,12 @@ inline EngineMatrix engine_mul(const EngineMatrix& a, const EngineMatrix& b) noe
 // fraction; log2 of the ratio restores the output's mip selection, the offset is the reconstruction policy.
 // Default 0: with -0.3 the ground texture aliased into per-frame grain under the jitter, and DLSS presets J and K
 // kept the history of far walking characters on that grain as a trail behind them (FSR and XeSS did not).
-inline constexpr float min_mip_bias_offset = -2.0f, max_mip_bias_offset = 1.0f, default_mip_bias_offset = 0.0f;
-inline float clamp_mip_bias_offset(float value) noexcept {
-    if (!std::isfinite(value)) return default_mip_bias_offset;
-    return value < min_mip_bias_offset ? min_mip_bias_offset : value > max_mip_bias_offset ? max_mip_bias_offset : value;
-}
+inline constexpr float min_mip_bias_offset = RSF_ANOMALY_SR_MIN_MIP_OFFSET;
+inline constexpr float max_mip_bias_offset = RSF_ANOMALY_SR_MAX_MIP_OFFSET;
+inline constexpr float default_mip_bias_offset = RSF_ANOMALY_SR_DEFAULT_MIP_OFFSET;
+inline float clamp_mip_bias_offset(float value) noexcept { return rsf_anomaly_sr_clamp_mip_offset(value); }
 inline float window_mip_bias_delta(uint32_t render_width, uint32_t output_width, float offset) noexcept {
-    if (!render_width || !output_width) return 0.0f;
-    const double delta = std::log2(double(render_width) / double(output_width)) + clamp_mip_bias_offset(offset);
-    return static_cast<float>(delta < -3.0 ? -3.0 : delta > 1.0 ? 1.0 : delta);
+    return rsf_anomaly_sr_mip_delta(render_width, output_width, offset);
 }
 
 // ---- what the adapter publishes for the motion stage and the SR pass ---------------------------------------------
@@ -196,38 +142,20 @@ struct JitterState {
 struct JitterUv {
     float current_u{}, current_v{}, previous_u{}, previous_v{};   // viewport UV, Y down (core PS b13 rsf_jitter)
 };
+static_assert(sizeof(JitterState) == sizeof(rsf_anomaly_sr_jitter_state) &&
+    offsetof(JitterState, reset) == offsetof(rsf_anomaly_sr_jitter_state, reset));
 inline JitterUv jitter_uv(const JitterState& s) noexcept {
-    JitterUv uv{};
-    if (s.applied && s.render_width && s.render_height) {
-        uv.current_u = s.current_x / float(s.render_width);
-        uv.current_v = s.current_y / float(s.render_height);
-    }
-    if (s.previous_applied && s.previous_render_width && s.previous_render_height) {
-        uv.previous_u = s.previous_x / float(s.previous_render_width);
-        uv.previous_v = s.previous_y / float(s.previous_render_height);
-    }
-    return uv;
+    const auto state = std::bit_cast<rsf_anomaly_sr_jitter_state>(s);
+    rsf_anomaly_sr_jitter_uv uv{};
+    rsf_anomaly_sr_jitter_to_uv(&state, &uv);
+    return {uv.current_u, uv.current_v, uv.previous_u, uv.previous_v};
 }
-// Advance the published state for one H1. `applied` = the window opened and the projection carries `sample`.
 inline JitterState next_state(const JitterState& last_main, bool scope, bool applied, const JitterSample& sample,
     uint32_t render_width, uint32_t render_height, bool reset) noexcept {
-    JitterState s{};
-    if (scope) { s = last_main; s.scope = true; s.applied = s.previous_applied = false; s.current_x = s.current_y = 0;
-        s.previous_x = s.previous_y = 0; return s; }
-    s.frame = last_main.frame + 1;
-    s.sequence_index = sample.index;
-    s.phase_count = sample.phase_count;
-    s.applied = applied;
-    s.current_x = applied ? sample.x : 0.0f;
-    s.current_y = applied ? sample.y : 0.0f;
-    s.render_width = render_width;
-    s.render_height = render_height;
-    s.previous_applied = last_main.applied;
-    s.previous_x = last_main.current_x;
-    s.previous_y = last_main.current_y;
-    s.previous_render_width = last_main.render_width;
-    s.previous_render_height = last_main.render_height;
-    s.reset = reset;
-    return s;
+    const auto last = std::bit_cast<rsf_anomaly_sr_jitter_state>(last_main);
+    const auto next_sample = std::bit_cast<rsf_anomaly_sr_jitter_sample>(sample);
+    rsf_anomaly_sr_jitter_state out{};
+    rsf_anomaly_sr_next_jitter(&last, scope, applied, &next_sample, render_width, render_height, reset, &out);
+    return std::bit_cast<JitterState>(out);
 }
 }

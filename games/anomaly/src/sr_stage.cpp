@@ -315,8 +315,6 @@ Host host;
 SwapController controller{host};
 HookSet hooks;
 TemporalDriver driver;
-JitterSequence sequence;
-BurstGate burst_gate;
 
 // GPU time of the world window (H1 prologue to the S-B seam) and of the seam pass, from D3D11 timestamp queries read
 // back without stalling a few frames later. Runs whenever the hooks are installed, so a capture-only stock run
@@ -410,15 +408,6 @@ JitterState to_native(const rsf_anomaly_sr_jitter_state& s) noexcept {
     out.previous_render_width = s.previous_render_width; out.previous_render_height = s.previous_render_height;
     out.scope = s.scope; out.applied = s.applied; out.previous_applied = s.previous_applied; out.reset = s.reset;
     return out;
-}
-rsf_anomaly_sr_jitter_state to_c(const JitterState& s) noexcept {
-    return {s.frame, s.sequence_index, s.phase_count, s.current_x, s.current_y, s.previous_x, s.previous_y,
-        s.render_width, s.render_height, s.previous_render_width, s.previous_render_height, s.scope, s.applied,
-        s.previous_applied, s.reset};
-}
-JitterSample to_native(const rsf_anomaly_sr_jitter_sample& s) noexcept { return {s.x, s.y, s.index, s.phase_count}; }
-rsf_anomaly_sr_plan to_c(const ScalePlan& p) noexcept {
-    return {p.output_width, p.output_height, p.render_width, p.render_height, p.scale};
 }
 ViewCamera to_native(const rsf_anomaly_sr_camera& c) noexcept {
     ViewCamera out{};
@@ -746,50 +735,12 @@ const rsf_anomaly_sr_stage_platform platform{
         std::copy(std::begin(c.skipped), std::end(c.skipped), out->skipped);
         std::copy(std::begin(c.restores), std::end(c.restores), out->restores);
     },
-    .make_plan = [](uint32_t ow, uint32_t oh, float scale, rsf_anomaly_sr_plan* out) {
-        ScalePlan plan{};
-        const bool ok = sr::make_plan(ow, oh, scale, plan);
-        *out = to_c(plan);
-        return ok;
-    },
-    .plan_for_render = [](uint32_t ow, uint32_t oh, uint32_t rw, uint32_t rh, rsf_anomaly_sr_plan* out) {
-        ScalePlan plan{};
-        const bool ok = make_plan_for_render(ow, oh, rw, rh, plan);
-        *out = to_c(plan);
-        return ok;
-    },
-    .clamp_scale = [](float value) { return sr::clamp_scale(value); },
-    .clamp_mip_offset = [](float value) { return clamp_mip_bias_offset(value); },
-    .mip_delta = [](uint32_t rw, uint32_t ow, float offset) { return window_mip_bias_delta(rw, ow, offset); },
-    .jitter_next = [](uint32_t rw, uint32_t rh, uint32_t ow, uint32_t oh, uint64_t generation, bool continuous, bool* reset) {
-        const auto sample = sequence.next({rw, rh, ow, oh, generation}, continuous);
-        *reset = sequence.last_was_reset();
-        return rsf_anomaly_sr_jitter_sample{sample.x, sample.y, sample.index, sample.phase_count};
-    },
-    .jitter_clear = [] { sequence.clear(); },
-    .jitter_resets = [] { return sequence.resets(); },
-    .next_state = [](const rsf_anomaly_sr_jitter_state* last, bool scope, bool applied, const rsf_anomaly_sr_jitter_sample* sample,
-        uint32_t rw, uint32_t rh, bool reset, rsf_anomaly_sr_jitter_state* out) {
-        *out = to_c(sr::next_state(to_native(*last), scope, applied, to_native(*sample), rw, rh, reset));
-    },
-    .jitter_uv = [](const rsf_anomaly_sr_jitter_state* state, rsf_anomaly_sr_jitter_uv* out) {
-        const auto uv = sr::jitter_uv(to_native(*state));
-        *out = {uv.current_u, uv.current_v, uv.previous_u, uv.previous_v};
-    },
     .camera_cut = [](const float* previous, const float* current, float distance, float degrees) {
         Matrix a{}, b{};
         std::copy_n(previous, 16, a.begin());
         std::copy_n(current, 16, b.begin());
         return sr::camera_cut(pose_of(a), pose_of(b), CutRule{distance, degrees});
     },
-    .gate_frame = [](bool loading, uint64_t without_world, bool taken, bool* capture, bool* discard) {
-        const auto verdict = burst_gate.frame(loading, without_world, taken);
-        *capture = verdict.capture;
-        *discard = verdict.discard;
-    },
-    .gate_interrupted = [] { burst_gate.interrupted(); },
-    .gate_reset = [] { burst_gate = {}; },
-    .gate_stats = [](uint64_t* held, uint64_t* restarts) { *held = burst_gate.held(); *restarts = burst_gate.restarts(); },
     .timer_begin = [] { gpu_timer.begin(host.device(), host.context()); },
     .timer_seam = [](bool swapped) { gpu_timer.seam(host.context(), swapped); },
     .timer_finish = [] { gpu_timer.finish(host.context()); },

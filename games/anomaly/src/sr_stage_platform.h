@@ -3,7 +3,7 @@
 // The private boundary between the Rust SR stage driver (sr_stage.rs) and its native leaves (sr_stage.cpp).
 // Rust owns the lifecycle, view admission, frame preparation and seam ordering, jitter and camera publication,
 // capture and burst bookkeeping, options and status. The leaves keep guarded engine reads, the stage hooks and
-// trampolines, the SwapController and its D3D11 host, the jitter/plan math headers and the C++ TemporalDriver facade.
+// trampolines, the SwapController and its D3D11 host, and the C++ TemporalDriver facade.
 // Every callback runs on the calling thread; none of them re-enters the Rust stage lock except the seam passes,
 // which receive the locked state as `cookie` from the seam or prepare call that holds it.
 #include <stdbool.h>
@@ -52,6 +52,52 @@ typedef struct rsf_anomaly_sr_plan {
     uint32_t output_width, output_height, render_width, render_height;
     float scale;
 } rsf_anomaly_sr_plan;
+
+#define RSF_ANOMALY_SR_MIN_SCALE 0.33f
+#define RSF_ANOMALY_SR_MAX_SCALE 1.0f
+#define RSF_ANOMALY_SR_DEFAULT_SCALE 0.67f
+#define RSF_ANOMALY_SR_MIN_MIP_OFFSET (-2.0f)
+#define RSF_ANOMALY_SR_MAX_MIP_OFFSET 1.0f
+#define RSF_ANOMALY_SR_DEFAULT_MIP_OFFSET 0.0f
+#define RSF_ANOMALY_SR_BURST_SETTLE 30u
+
+typedef struct rsf_anomaly_sr_jitter_sequence {
+    uint64_t generation, frames, resets;
+    uint32_t dimensions[4], phases, index;
+    bool started, reset;
+} rsf_anomaly_sr_jitter_sequence;
+typedef struct rsf_anomaly_sr_burst_gate {
+    uint64_t mark, clear, held, restarts;
+    uint32_t settle;
+    bool marked;
+} rsf_anomaly_sr_burst_gate;
+typedef struct rsf_anomaly_sr_burst_verdict {
+    bool capture, discard;
+} rsf_anomaly_sr_burst_verdict;
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+float rsf_anomaly_sr_clamp_scale(float);
+uint32_t rsf_anomaly_sr_render_extent(uint32_t output, float scale);
+bool rsf_anomaly_sr_make_plan(uint32_t output_width, uint32_t output_height, float scale, rsf_anomaly_sr_plan*);
+bool rsf_anomaly_sr_plan_for_render(uint32_t output_width, uint32_t output_height, uint32_t render_width,
+    uint32_t render_height, rsf_anomaly_sr_plan*);
+float rsf_anomaly_sr_clamp_mip_offset(float);
+float rsf_anomaly_sr_mip_delta(uint32_t render_width, uint32_t output_width, float offset);
+double rsf_anomaly_sr_halton(uint32_t index, uint32_t base);
+uint32_t rsf_anomaly_sr_phase_count(uint32_t render_width, uint32_t output_width);
+rsf_anomaly_sr_jitter_sample rsf_anomaly_sr_jitter_sample_at(uint32_t index, uint32_t phases);
+rsf_anomaly_sr_jitter_sample rsf_anomaly_sr_sequence_next(rsf_anomaly_sr_jitter_sequence*,
+    const uint32_t (*dimensions)[4], uint64_t generation, bool continuous);
+void rsf_anomaly_sr_next_jitter(const rsf_anomaly_sr_jitter_state*, bool scope, bool applied,
+    const rsf_anomaly_sr_jitter_sample*, uint32_t render_width, uint32_t render_height, bool reset, rsf_anomaly_sr_jitter_state*);
+void rsf_anomaly_sr_jitter_to_uv(const rsf_anomaly_sr_jitter_state*, rsf_anomaly_sr_jitter_uv*);
+rsf_anomaly_sr_burst_verdict rsf_anomaly_sr_burst_frame(rsf_anomaly_sr_burst_gate*, bool loading, uint64_t without_world, bool taken);
+void rsf_anomaly_sr_burst_interrupted(rsf_anomaly_sr_burst_gate*);
+#ifdef __cplusplus
+}
+#endif
 
 // FrameFacts (sr_swap.h). The leaf fills the engine reads and addresses; Rust fills sizes, jitter and bias.
 typedef struct rsf_anomaly_sr_frame_facts {
@@ -183,26 +229,8 @@ typedef struct rsf_anomaly_sr_stage_platform {
     void (*set_swap_enabled)(bool);
     void (*controller)(rsf_anomaly_sr_controller*);
     void (*swap_counters)(rsf_anomaly_sr_swap_counters*);
-    // Plan and jitter math (sr_plan.h, sr_jitter.h, sr_pass.h). The sequence and burst gate are leaf objects.
-    bool (*make_plan)(uint32_t output_width, uint32_t output_height, float scale, rsf_anomaly_sr_plan* out);
-    bool (*plan_for_render)(uint32_t output_width, uint32_t output_height, uint32_t render_width, uint32_t render_height,
-        rsf_anomaly_sr_plan* out);
-    float (*clamp_scale)(float);
-    float (*clamp_mip_offset)(float);
-    float (*mip_delta)(uint32_t render_width, uint32_t output_width, float offset);
-    rsf_anomaly_sr_jitter_sample (*jitter_next)(uint32_t render_width, uint32_t render_height, uint32_t output_width,
-        uint32_t output_height, uint64_t generation, bool continuous, bool* reset);
-    void (*jitter_clear)(void);
-    uint64_t (*jitter_resets)(void);
-    void (*next_state)(const rsf_anomaly_sr_jitter_state* last, bool scope, bool applied,
-        const rsf_anomaly_sr_jitter_sample* sample, uint32_t render_width, uint32_t render_height, bool reset,
-        rsf_anomaly_sr_jitter_state* out);
-    void (*jitter_uv)(const rsf_anomaly_sr_jitter_state*, rsf_anomaly_sr_jitter_uv*);
+    // Camera pose in the engine's row-vector convention (sr_pass.h).
     bool (*camera_cut)(const float* previous_view, const float* view, float distance, float degrees);
-    void (*gate_frame)(bool loading, uint64_t frames_without_world, bool taken, bool* capture, bool* discard);
-    void (*gate_interrupted)(void);
-    void (*gate_reset)(void);
-    void (*gate_stats)(uint64_t* held, uint64_t* restarts);
     // GPU timestamps of the world window and the seam pass.
     void (*timer_begin)(void);
     void (*timer_seam)(bool swapped);

@@ -2,8 +2,14 @@
 // SR stage driver (docs/research/anomaly-sr-seam.md sections 9 to 12, docs/research/rust-anomaly-sr-stage.md).
 // Rust owns the lifecycle, source identity and view admission, the H1 preparation and S-B seam ordering, the
 // published jitter and main-view camera, the frame dump and burst bookkeeping, the options and the status text.
-// sr_stage.cpp keeps guarded engine reads, trampolines, the SwapController and its D3D11 host, the jitter and plan
-// math headers and the TemporalDriver facade over the existing Rust temporal driver.
+// sr_stage.cpp keeps guarded engine reads, trampolines, the SwapController and its D3D11 host,
+// and the TemporalDriver facade over the existing Rust temporal driver.
+mod math;
+
+use self::math::{
+    BurstGate, DEFAULT_MIP_OFFSET, DEFAULT_SCALE, JitterSequence, clamp_mip_offset, clamp_scale,
+    jitter_to_uv, make_plan, mip_delta, next_jitter, plan_for_render,
+};
 use crate::lease::Lease;
 use crate::sr_stage_abi::*;
 use rsf_game_sys::{RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record};
@@ -28,8 +34,6 @@ const BACKEND_XESS: u32 = 5;
 const BACKENDS: u32 =
     (1 << BACKEND_DLSS) | (1 << BACKEND_FSR3) | (1 << BACKEND_FSR4) | (1 << BACKEND_XESS);
 const QUALITIES: u32 = 0x1f;
-const DEFAULT_SCALE: f32 = 0.67;
-const DEFAULT_MIP_OFFSET: f32 = 0.0;
 // Refusal (sr_temporal.h).
 const REFUSAL_PREPARE: u8 = 2;
 const REFUSAL_REINSERT: u8 = 5;
@@ -269,7 +273,7 @@ impl Ini<'_> {
         if text[end..].iter().any(|&c| c != 0x20 && c != 0x09) {
             return (DEFAULT_SCALE, true); // trailing garbage: "0.67x"
         }
-        let scale = leaf!(self.platform, clamp_scale(value as f32));
+        let scale = clamp_scale(value as f32);
         (scale, value.is_nan() || value <= 0.0 || !value.is_finite())
     }
     // SRMipBias: a decimal offset clamped to [-2, 1], or "off".
@@ -295,7 +299,7 @@ impl Ini<'_> {
         {
             return (DEFAULT_MIP_OFFSET, true);
         }
-        (leaf!(self.platform, clamp_mip_offset(value as f32)), true)
+        (clamp_mip_offset(value as f32), true)
     }
     fn float(&self, key: &CStr, fallback: f32, low: f32, high: f32) -> f32 {
         let text = self.text(key, c"");
@@ -471,6 +475,7 @@ struct State {
     published: JitterState,
     no_world_mark: u64,
     jitter_enabled: bool,
+    sequence: JitterSequence,
     frame_camera: rsf_anomaly_sr_camera,
     previous_camera: rsf_anomaly_sr_camera,
     frame_cut: bool,
@@ -479,6 +484,7 @@ struct State {
     dump: Option<rsf_anomaly_sr_dump>,
     capture: Capture,
     burst: Burst,
+    burst_gate: BurstGate,
     reported: Reported,
 }
 
@@ -501,6 +507,7 @@ impl Default for State {
             published: default_jitter(),
             no_world_mark: u64::MAX,
             jitter_enabled: false,
+            sequence: JitterSequence::new(),
             frame_camera: Default::default(),
             previous_camera: Default::default(),
             frame_cut: false,
@@ -509,6 +516,7 @@ impl Default for State {
             dump: None,
             capture: Capture::default(),
             burst: Burst::default(),
+            burst_gate: BurstGate::new(),
             reported: Reported::default(),
         }
     }
@@ -647,8 +655,7 @@ impl Stage {
 
     fn publish(&self, state: &mut State, value: JitterState) {
         state.published = value;
-        let mut uv = rsf_anomaly_sr_jitter_uv::default();
-        leaf!(self.platform(), jitter_uv(&value, &mut uv));
+        let uv = jitter_to_uv(&value);
         for (slot, value) in
             self.uv
                 .iter()
@@ -778,7 +785,7 @@ impl Stage {
     }
 
     pub(crate) fn set_scale(&self, value: f32) {
-        let scale = leaf!(self.platform(), clamp_scale(value));
+        let scale = clamp_scale(value);
         self.with(|state| state.current_scale = scale);
     }
 
@@ -865,11 +872,11 @@ impl Stage {
         let swap =
             (stage == 1 || world_window(stage)) && (stage != 5 || leaf!(p, driver_enabled()));
         leaf!(p, set_swap_enabled(swap));
-        state.current_scale = leaf!(p, clamp_scale(state.config.scale));
+        state.current_scale = clamp_scale(state.config.scale);
         state.scale_generation = u64::MAX;
         // Stage 3: the main projection is jittered here, the first-person ones only through the shared rmNear slot.
         // Without that slot (geometry hooks refused) the weapon would shimmer against the world, so jitter stays off.
-        leaf!(p, jitter_clear());
+        state.sequence = JitterSequence::new();
         state.main_state = default_jitter();
         self.publish(state, default_jitter());
         state.no_world_mark = u64::MAX;
@@ -1035,7 +1042,7 @@ impl Stage {
             );
             return;
         };
-        leaf!(self.platform(), gate_reset());
+        state.burst_gate = BurstGate::new();
         state.burst = Burst {
             directory: directory.join(format!("sr-jitter-{:016x}", state.session)),
             wanted: state.config.capture_count,
@@ -1090,14 +1097,11 @@ impl Stage {
         );
         facts.stage = 1;
         if !world_window(stage) {
-            leaf!(
-                p,
-                make_plan(
-                    facts.device_width,
-                    facts.device_height,
-                    1.0,
-                    &mut state.last_plan
-                )
+            state.last_plan = make_plan(facts.device_width, facts.device_height, 1.0).unwrap_or(
+                rsf_anomaly_sr_plan {
+                    scale: 1.0,
+                    ..Default::default()
+                },
             );
             return facts;
         }
@@ -1118,16 +1122,8 @@ impl Stage {
             }
             state.scale_generation = facts.generation;
         }
-        let mut plan = rsf_anomaly_sr_plan::default();
-        if leaf!(
-            p,
-            make_plan(
-                facts.device_width,
-                facts.device_height,
-                state.current_scale,
-                &mut plan
-            )
-        ) {
+        if let Some(plan) = make_plan(facts.device_width, facts.device_height, state.current_scale)
+        {
             facts.render_width = plan.render_width;
             facts.render_height = plan.render_height;
             state.last_plan = plan;
@@ -1145,16 +1141,8 @@ impl Stage {
                     &mut height
                 )
             )
-            && leaf!(
-                p,
-                plan_for_render(
-                    facts.device_width,
-                    facts.device_height,
-                    width,
-                    height,
-                    &mut plan
-                )
-            )
+            && let Some(plan) =
+                plan_for_render(facts.device_width, facts.device_height, width, height)
         {
             facts.render_width = plan.render_width;
             facts.render_height = plan.render_height;
@@ -1163,13 +1151,10 @@ impl Stage {
         facts.stage = 2;
         if temporal(stage) {
             facts.mip_bias = self.live.mip_bias.load(Ordering::Relaxed);
-            facts.mip_bias_delta = leaf!(
-                p,
-                mip_delta(
-                    facts.render_width,
-                    facts.device_width,
-                    self.live_mip_offset()
-                )
+            facts.mip_bias_delta = mip_delta(
+                facts.render_width,
+                facts.device_width,
+                self.live_mip_offset(),
             );
         }
         facts
@@ -1233,23 +1218,20 @@ impl Stage {
         }
         let continuous = state.no_world_mark == state.frames_without_world; // no menu/loading frame since the last main H1
         state.no_world_mark = state.frames_without_world;
-        let mut reset = false;
-        let sample = leaf!(
-            self.platform(),
-            jitter_next(
+        let sample = state.sequence.next(
+            [
                 facts.render_width,
                 facts.render_height,
                 facts.device_width,
                 facts.device_height,
-                facts.generation,
-                continuous,
-                &mut reset,
-            )
+            ],
+            facts.generation,
+            continuous,
         );
         facts.jitter = true;
         facts.jitter_x = sample.x;
         facts.jitter_y = sample.y;
-        (sample, reset)
+        (sample, state.sequence.reset)
     }
 
     fn publish_jitter(
@@ -1269,38 +1251,18 @@ impl Stage {
         } else {
             (facts.render_width, facts.render_height)
         };
-        let mut next = default_jitter();
-        if facts.scope {
-            leaf!(
-                self.platform(),
-                next_state(
-                    &state.main_state,
-                    true,
-                    false,
-                    sample,
-                    width,
-                    height,
-                    false,
-                    &mut next
-                )
-            );
-            self.publish(state, next);
-            return;
-        }
-        leaf!(
-            self.platform(),
-            next_state(
-                &state.main_state,
-                false,
-                applied,
-                sample,
-                width,
-                height,
-                reset,
-                &mut next
-            )
+        let next = next_jitter(
+            &state.main_state,
+            facts.scope,
+            applied,
+            sample,
+            width,
+            height,
+            reset,
         );
-        state.main_state = next;
+        if !facts.scope {
+            state.main_state = next;
+        }
         self.publish(state, next);
     }
 
@@ -1389,24 +1351,18 @@ impl Stage {
         if !burst.enabled || burst.finished || facts.scope {
             return;
         }
-        let (mut capture, mut discard) = (false, false);
         let loading = self.loading();
-        leaf!(
-            self.platform(),
-            gate_frame(
-                loading,
-                state.frames_without_world,
-                !burst.frames.is_empty(),
-                &mut capture,
-                &mut discard
-            )
+        let verdict = state.burst_gate.frame(
+            loading,
+            state.frames_without_world,
+            !burst.frames.is_empty(),
         );
-        if discard && !state.burst.finished {
+        if verdict.discard {
             state.burst.frames.clear();
             state.burst.armed = false;
         }
         let c = self.controller();
-        if !capture || !c.window_open || state.world_frames < state.burst.start {
+        if !verdict.capture || !c.window_open || state.world_frames < state.burst.start {
             return;
         }
         if state.burst.frames.len() >= state.burst.wanted as usize {
@@ -1835,7 +1791,7 @@ impl Stage {
             if self.loading() {
                 // The loading screen appeared during this frame and may be the presented image: start over.
                 state.burst.frames.clear();
-                leaf!(p, gate_interrupted());
+                state.burst_gate.interrupted();
             } else {
                 let fp = self
                     .counters()
@@ -1967,11 +1923,10 @@ impl Stage {
         let now = self.counters();
         let stage = state.config.stage;
         let jitter = state.main_state;
-        let sequence_resets = leaf!(p, jitter_resets());
+        let sequence_resets = state.sequence.resets;
         let mip_applied = c.mip_bias_applied || now.mip_applied != 0;
         let loading = self.loading();
-        let (mut held, mut restarts) = (0, 0);
-        leaf!(p, gate_stats(&mut held, &mut restarts));
+        let (held, restarts) = (state.burst_gate.held, state.burst_gate.restarts);
         let burst = &state.burst;
         let burst_state = if !burst.enabled {
             "off".into()
