@@ -17,6 +17,7 @@
 #define VK_NO_PROTOTYPES
 #include <windows.h>
 #include <vulkan/vulkan.h>
+#include "vulkan_fg_resources_native.h"
 #include <sl.h>
 #include <sl_dlss_g.h>
 #include <DirectXMath.h>
@@ -26,18 +27,13 @@ namespace {
 std::atomic<bool> occupied{false};
 std::atomic<int32_t> asynchronous_error{0};
 const sl::ViewportHandle viewport(0);
-struct Image {
-    VkImage image = VK_NULL_HANDLE; VkDeviceMemory memory = VK_NULL_HANDLE;
-    VkImageView view = VK_NULL_HANDLE;
-    uint32_t width = 0, height = 0; VkFormat format = VK_FORMAT_UNDEFINED;
-    bool initialized = false;
-};
+using Image = rsf_vkfg_image;
 struct Slot : rsf_fgvk_frame_slot {
     bool sdk_inputs_pending = false;
     VkSemaphore sdk_inputs_completion = VK_NULL_HANDLE;
     uint64_t sdk_inputs_value = 0;
-    VkFence source_completion = VK_NULL_HANDLE, consumer_completion = VK_NULL_HANDLE;
-    Image depth, motion, color;
+    rsf_vkfg_fences fences{};
+    Image depth{}, motion{}, color{};
 };
 template<class T> T entry(void* module, const char* name) { return reinterpret_cast<T>(GetProcAddress(static_cast<HMODULE>(module), name)); }
 sl::float4x4 matrix(const float* values) {
@@ -61,14 +57,9 @@ struct rsf_dlssgvk {
     PFN_vkCreateSwapchainKHR create_chain = nullptr; PFN_vkDestroySwapchainKHR destroy_chain = nullptr;
     PFN_vkGetSwapchainImagesKHR images = nullptr; PFN_vkAcquireNextImageKHR acquire = nullptr;
     PFN_vkQueuePresentKHR present = nullptr;
-    PFN_vkCreateImage create_image = nullptr; PFN_vkDestroyImage destroy_image = nullptr;
-    PFN_vkGetImageMemoryRequirements requirements = nullptr; PFN_vkAllocateMemory allocate = nullptr;
-    PFN_vkFreeMemory free_memory = nullptr; PFN_vkBindImageMemory bind = nullptr;
-    PFN_vkCreateImageView create_view = nullptr; PFN_vkDestroyImageView destroy_view = nullptr;
+    rsf::vkfg::Device gpu;
     PFN_vkCmdPipelineBarrier barrier = nullptr; PFN_vkCmdCopyImage copy = nullptr;
-    PFN_vkDeviceWaitIdle idle = nullptr; PFN_vkCreateFence create_fence = nullptr;
-    PFN_vkDestroyFence destroy_fence = nullptr; PFN_vkResetFences reset_fences = nullptr;
-    PFN_vkWaitForFences wait_fences = nullptr;
+    PFN_vkDeviceWaitIdle idle = nullptr;
     PFN_vkWaitSemaphores wait_semaphores = nullptr;
     VkSemaphore last_inputs_completion = VK_NULL_HANDLE;
     uint64_t last_inputs_value = 0;
@@ -79,19 +70,11 @@ struct rsf_dlssgvk {
         {sizeof(rsf_fgvk_status), RSF_FGVK_ABI_VERSION}};
     rsf::FrameCaptureVk capture;
     rsf::DlssPresentCapture present_capture;
-    void free_image(Image& image) {
-        const auto device = static_cast<VkDevice>(setup.graphics.device);
-        if (image.view) destroy_view(device, image.view, nullptr);
-        if (image.image) destroy_image(device, image.image, nullptr);
-        if (image.memory) free_memory(device, image.memory, nullptr);
-        image = {};
-    }
     ~rsf_dlssgvk() {
-        const auto device = static_cast<VkDevice>(setup.graphics.device);
         for (auto& slot : slots) {
-            for (auto* image : {&slot.depth, &slot.motion, &slot.color}) free_image(*image);
-            if (slot.source_completion) destroy_fence(device, slot.source_completion, nullptr);
-            if (slot.consumer_completion) destroy_fence(device, slot.consumer_completion, nullptr);
+            for (auto* image : {&slot.depth, &slot.motion, &slot.color})
+                rsf_core_vkfg_release_image(&rsf::vkfg::platform, &gpu, image);
+            rsf_core_vkfg_release_fences(&rsf::vkfg::platform, &gpu, &slot.fences);
         }
         if (claimed) occupied = false;
     }
@@ -184,30 +167,6 @@ rsf_backend_result invoke(rsf_dlssgvk& self, rsf_slvk_callback callback, uint64_
     const rsf_slvk_call call{sizeof(call), RSF_SLVK_ABI_VERSION, session, frame, callback, user ? user : &self};
     return rsf_slvk_invoke(&call);
 }
-bool allocate(rsf_dlssgvk& self, Image& image, uint32_t width, uint32_t height, VkFormat format) {
-    if (image.image && image.width == width && image.height == height && image.format == format) return true;
-    self.free_image(image);
-    const auto device = static_cast<VkDevice>(self.setup.graphics.device);
-    VkImageCreateInfo info{}; info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO; info.imageType = VK_IMAGE_TYPE_2D;
-    info.extent = {width, height, 1}; info.mipLevels = info.arrayLayers = 1; info.format = format;
-    info.samples = VK_SAMPLE_COUNT_1_BIT; info.tiling = VK_IMAGE_TILING_OPTIMAL;
-    info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-    if (self.create_image(device, &info, nullptr, &image.image) != VK_SUCCESS) return false;
-    VkMemoryRequirements requirements{}; self.requirements(device, image.image, &requirements);
-    uint32_t type = UINT32_MAX;
-    for (uint32_t i = 0; i < self.memory.memoryTypeCount; ++i) if ((requirements.memoryTypeBits & (1u << i)) &&
-        (self.memory.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) { type = i; break; }
-    if (type == UINT32_MAX) return false;
-    VkMemoryAllocateInfo allocation{}; allocation.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocation.allocationSize = requirements.size; allocation.memoryTypeIndex = type;
-    if (self.allocate(device, &allocation, nullptr, &image.memory) != VK_SUCCESS || self.bind(device, image.image, image.memory, 0) != VK_SUCCESS) return false;
-    VkImageViewCreateInfo view{}; view.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    view.image = image.image; view.viewType = VK_IMAGE_VIEW_TYPE_2D; view.format = format;
-    view.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    if (self.create_view(device, &view, nullptr, &image.view) != VK_SUCCESS) return false;
-    image.width = width; image.height = height; image.format = format;
-    return true;
-}
 void transition(rsf_dlssgvk& self, VkCommandBuffer commands, VkImage image, VkImageLayout before, VkImageLayout after) {
     VkImageMemoryBarrier barrier{}; barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     barrier.image = image; barrier.oldLayout = before; barrier.newLayout = after;
@@ -220,11 +179,11 @@ void transition(rsf_dlssgvk& self, VkCommandBuffer commands, VkImage image, VkIm
 void stage(rsf_dlssgvk& self, VkCommandBuffer commands, const rsf_srvk_image& source, Image& destination) {
     const auto image = reinterpret_cast<VkImage>(source.image);
     transition(self, commands, image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-    transition(self, commands, destination.image, destination.initialized ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    transition(self, commands, rsf::vkfg::image_handle(destination), destination.initialized ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     VkImageCopy region{}; region.srcSubresource = region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}; region.extent = {source.width, source.height, 1};
-    self.copy(commands, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, destination.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    self.copy(commands, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, rsf::vkfg::image_handle(destination), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
     transition(self, commands, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    transition(self, commands, destination.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    transition(self, commands, rsf::vkfg::image_handle(destination), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     destination.initialized = true;
 }
 sl::Resource resource(const Image& image) {
@@ -348,16 +307,14 @@ extern "C" rsf_backend_result rsf_dlssgvk_create(const rsf_fgvk_setup* setup, rs
 #define RSF_LOAD(member, function) self->member = reinterpret_cast<PFN_##function>(graphics.device_proc(graphics.device, #function)); if (!self->member) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT
     RSF_LOAD(create_chain, vkCreateSwapchainKHR); RSF_LOAD(destroy_chain, vkDestroySwapchainKHR);
     RSF_LOAD(images, vkGetSwapchainImagesKHR); RSF_LOAD(acquire, vkAcquireNextImageKHR); RSF_LOAD(present, vkQueuePresentKHR);
-    RSF_LOAD(create_image, vkCreateImage); RSF_LOAD(destroy_image, vkDestroyImage); RSF_LOAD(requirements, vkGetImageMemoryRequirements);
-    RSF_LOAD(allocate, vkAllocateMemory); RSF_LOAD(free_memory, vkFreeMemory); RSF_LOAD(bind, vkBindImageMemory);
-    RSF_LOAD(create_view, vkCreateImageView); RSF_LOAD(destroy_view, vkDestroyImageView); RSF_LOAD(barrier, vkCmdPipelineBarrier); RSF_LOAD(copy, vkCmdCopyImage);
-    RSF_LOAD(idle, vkDeviceWaitIdle); RSF_LOAD(create_fence, vkCreateFence); RSF_LOAD(destroy_fence, vkDestroyFence);
-    RSF_LOAD(reset_fences, vkResetFences); RSF_LOAD(wait_fences, vkWaitForFences);
-    RSF_LOAD(wait_semaphores, vkWaitSemaphores);
+    RSF_LOAD(barrier, vkCmdPipelineBarrier); RSF_LOAD(copy, vkCmdCopyImage);
+    RSF_LOAD(idle, vkDeviceWaitIdle); RSF_LOAD(wait_semaphores, vkWaitSemaphores);
 #undef RSF_LOAD
     auto properties = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties>(graphics.instance_proc(graphics.instance, "vkGetPhysicalDeviceMemoryProperties"));
     if (!properties) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
     properties(static_cast<VkPhysicalDevice>(graphics.physical_device), &self->memory);
+    if (!self->gpu.load(*setup, true)) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
+    self->gpu.memory_types(self->memory);
     self->capture.set_provider(0, RSF_SR_DLSS, true);
     if (!self->capture.initialize(static_cast<VkDevice>(graphics.device), graphics.device_proc, self->memory)) return RSF_BACKEND_ERROR_INIT_FAILED;
     // DLSS copies completed/generated frames into the real WSI images. Their
@@ -455,16 +412,12 @@ extern "C" rsf_backend_result rsf_dlssgvk_prepare(rsf_dlssgvk* self, void* comma
     auto& slot = self->slots[record.frame_id % self->slots.size()];
     if (!rsf_core_fgvk_can_prepare(&slot)) return RSF_BACKEND_ERROR_NOT_READY;
     if (wait_inputs(*self, slot) != RSF_BACKEND_OK) return RSF_BACKEND_ERROR_NOT_READY;
-    const auto device = static_cast<VkDevice>(self->setup.graphics.device);
-    for (auto fence : {slot.source_pending ? slot.source_completion : VK_NULL_HANDLE, slot.consumer_pending ? slot.consumer_completion : VK_NULL_HANDLE})
-        if (fence && self->wait_fences(device, 1, &fence, VK_TRUE, 15000000000ull) != VK_SUCCESS) return RSF_BACKEND_ERROR_NOT_READY;
-    slot.source_pending = slot.consumer_pending = false;
-    VkFenceCreateInfo info{}; info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-    for (auto* fence : {&slot.source_completion, &slot.consumer_completion}) if (!*fence && self->create_fence(device, &info, nullptr, fence) != VK_SUCCESS)
+    const auto fences = rsf_core_vkfg_prepare_fences(&rsf::vkfg::platform, &self->gpu, &slot, &slot.fences);
+    if (fences != RSF_BACKEND_OK) return fences;
+    if (!rsf_core_vkfg_ensure_image(&rsf::vkfg::platform, &self->gpu, &slot.depth, record.render_width, record.render_height, VK_FORMAT_R32_SFLOAT, 1) ||
+        !rsf_core_vkfg_ensure_image(&rsf::vkfg::platform, &self->gpu, &slot.motion, record.render_width, record.render_height, VK_FORMAT_R16G16_SFLOAT, 1) ||
+        !rsf_core_vkfg_ensure_image(&rsf::vkfg::platform, &self->gpu, &slot.color, self->width, self->height, VK_FORMAT_R8G8B8A8_UNORM, 1))
         return RSF_BACKEND_ERROR_INIT_FAILED;
-    if (!allocate(*self, slot.depth, record.render_width, record.render_height, VK_FORMAT_R32_SFLOAT) ||
-        !allocate(*self, slot.motion, record.render_width, record.render_height, VK_FORMAT_R16G16_SFLOAT) ||
-        !allocate(*self, slot.color, self->width, self->height, VK_FORMAT_R8G8B8A8_UNORM)) return RSF_BACKEND_ERROR_INIT_FAILED;
     rsf_core_fgvk_prepare_begin(&self->timeline, &slot, &record, commands);
     RecordCall call{*self, *input, static_cast<VkCommandBuffer>(commands), slot};
     const auto result = invoke(*self, prepare, record.session_id, record.frame_id, &call);
@@ -500,18 +453,13 @@ extern "C" void rsf_dlssgvk_submitted(rsf_dlssgvk* self, void* const* commands, 
     for (size_t i = 0; i < states.size(); ++i) states[i] = &self->slots[i];
     rsf_fgvk_submit_plan plan{};
     rsf_core_fgvk_submitted(states.data(), commands, count, &plan);
-    const auto device = static_cast<VkDevice>(self->setup.graphics.device);
     for (size_t i = 0; i < states.size(); ++i) {
         auto& slot = self->slots[i];
         const auto bit = 1u << i;
         if (plan.discarded_prepare & bit) slot.depth.initialized = slot.motion.initialized = false;
         if (plan.discarded_hudless & bit) slot.color.initialized = false;
         if (!(plan.fences & bit)) continue;
-        // Prepare and HUD-less may submit separately. Fence each actual handoff.
-        if ((slot.source_pending && self->wait_fences(device, 1, &slot.source_completion, VK_TRUE, 15000000000ull) != VK_SUCCESS) ||
-            self->reset_fences(device, 1, &slot.source_completion) != VK_SUCCESS || self->setup.graphics_submit(self->setup.queue_user,
-            0, nullptr, reinterpret_cast<uint64_t>(slot.source_completion)) != VK_SUCCESS) slot.completion_unknown = true;
-        else slot.source_pending = true;
+        rsf_core_vkfg_fence_submission(&rsf::vkfg::platform, &self->gpu, &slot, &slot.fences, 0);
     }
 #else
     (void)self; (void)commands; (void)count;
@@ -546,10 +494,7 @@ static int32_t dlss_present(rsf_dlssgvk* self, const void* present_info, const r
     if (valid) self->present_capture.remember(slot.record, self->count, self->status, self->enabled);
     const auto result = self->present(static_cast<VkQueue>(self->setup.queues[0]), &info);
     if (valid && (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR)) {
-        const auto device = static_cast<VkDevice>(self->setup.graphics.device);
-        if (self->reset_fences(device, 1, &slot.consumer_completion) != VK_SUCCESS || self->setup.graphics_submit(self->setup.queue_user,
-            0, nullptr, reinterpret_cast<uint64_t>(slot.consumer_completion)) != VK_SUCCESS) slot.completion_unknown = true;
-        else slot.consumer_pending = true;
+        rsf_core_vkfg_fence_submission(&rsf::vkfg::platform, &self->gpu, &slot, &slot.fences, 1);
     }
     const auto state = invoke(*self, [](void*, uintptr_t, void* user) -> rsf_backend_result { return query_state(*static_cast<rsf_dlssgvk*>(user)); });
     if (valid && (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR)) {

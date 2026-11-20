@@ -7,7 +7,8 @@
 namespace {
 uint64_t handles = 100;
 uint32_t resets = 0, submits = 0, waits = 0, copies = 0, sdk_records = 0;
-bool reject_prepare = false, reject_wait = false;
+bool reject_prepare = false, reject_wait = false, reject_bind = false;
+uint32_t destroyed_images = 0, freed_memories = 0;
 void require(bool value, const char* text) { if (!value) { std::fprintf(stderr, "%s\n", text); std::exit(1); } }
 template<class T> T handle() { return reinterpret_cast<T>(++handles); }
 VkResult VKAPI_PTR create_fence(VkDevice, const VkFenceCreateInfo*, const VkAllocationCallbacks*, VkFence* out) { *out = handle<VkFence>(); return VK_SUCCESS; }
@@ -21,11 +22,11 @@ int32_t submit(void*, uint32_t count, const void* commands, uint64_t fence) {
     require(!count && !commands && fence, "fences are queued after successful host submissions"); ++submits; return VK_SUCCESS;
 }
 VkResult VKAPI_PTR create_image(VkDevice, const VkImageCreateInfo*, const VkAllocationCallbacks*, VkImage* out) { *out = handle<VkImage>(); return VK_SUCCESS; }
-void VKAPI_PTR destroy_image(VkDevice, VkImage, const VkAllocationCallbacks*) {}
+void VKAPI_PTR destroy_image(VkDevice, VkImage, const VkAllocationCallbacks*) { ++destroyed_images; }
 void VKAPI_PTR requirements(VkDevice, VkImage, VkMemoryRequirements* out) { out->size = 4096; out->memoryTypeBits = 1; }
 VkResult VKAPI_PTR allocate(VkDevice, const VkMemoryAllocateInfo*, const VkAllocationCallbacks*, VkDeviceMemory* out) { *out = handle<VkDeviceMemory>(); return VK_SUCCESS; }
-void VKAPI_PTR free_memory(VkDevice, VkDeviceMemory, const VkAllocationCallbacks*) {}
-VkResult VKAPI_PTR bind(VkDevice, VkImage, VkDeviceMemory, VkDeviceSize) { return VK_SUCCESS; }
+void VKAPI_PTR free_memory(VkDevice, VkDeviceMemory, const VkAllocationCallbacks*) { ++freed_memories; }
+VkResult VKAPI_PTR bind(VkDevice, VkImage, VkDeviceMemory, VkDeviceSize) { return reject_bind ? VK_ERROR_UNKNOWN : VK_SUCCESS; }
 void VKAPI_PTR barrier(VkCommandBuffer, VkPipelineStageFlags, VkPipelineStageFlags, VkDependencyFlags, uint32_t, const VkMemoryBarrier*,
     uint32_t, const VkBufferMemoryBarrier*, uint32_t, const VkImageMemoryBarrier*) {}
 void VKAPI_PTR copy(VkCommandBuffer, VkImage, VkImageLayout, VkImage, VkImageLayout, uint32_t, const VkImageCopy*) { ++copies; }
@@ -74,10 +75,22 @@ int main() {
     SetEnvironmentVariableW(L"RSF_VULKAN_FRAME_CAPTURE_DIR", nullptr); SetEnvironmentVariableW(L"RSF_VULKAN_TIMING_FILE", nullptr);
     rsf_ffxgvk self{}; self.setup.graphics.device = reinterpret_cast<void*>(1); self.setup.graphics.depth_inverted = 1;
     self.setup.graphics_submit = submit; self.setup.queues[0] = reinterpret_cast<void*>(2); self.width = 640; self.height = 360; self.enabled = true;
-    self.create_fence = create_fence; self.destroy_fence = destroy_fence; self.reset_fences = reset_fences; self.wait_fences = wait_fences;
-    self.create_image = create_image; self.destroy_image = destroy_image; self.requirements = requirements; self.allocate = allocate;
-    self.free_memory = free_memory; self.bind = bind; self.barrier = barrier; self.copy = copy; self.dispatch = dispatch; self.configure = configure;
-    self.memory_properties.memoryTypeCount = 1; self.memory_properties.memoryTypes[0].propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+    self.gpu.device = static_cast<VkDevice>(self.setup.graphics.device);
+    self.gpu.graphics_submit = self.setup.graphics_submit;
+    self.gpu.create_fence = create_fence; self.gpu.destroy_fence = destroy_fence; self.gpu.reset_fences = reset_fences; self.gpu.wait_fences = wait_fences;
+    self.gpu.create_image = create_image; self.gpu.destroy_image = destroy_image; self.gpu.requirements = requirements; self.gpu.allocate = allocate;
+    self.gpu.free_memory = free_memory; self.gpu.bind = bind; self.barrier = barrier; self.copy = copy; self.dispatch = dispatch; self.configure = configure;
+    self.gpu.local_types = 1;
+    rsf_vkfg_image cached{};
+    require(rsf_core_vkfg_ensure_image(&rsf::vkfg::platform, &self.gpu, &cached, 640, 360, VK_FORMAT_R8G8B8A8_UNORM, 0),
+        "initial private image is fully bound");
+    const auto initial = cached.image;
+    reject_bind = true;
+    require(!rsf_core_vkfg_ensure_image(&rsf::vkfg::platform, &self.gpu, &cached, 1280, 720, VK_FORMAT_R8G8B8A8_UNORM, 0) &&
+        cached.image == initial && cached.width == 640 && destroyed_images == 1 && freed_memories == 1,
+        "failed private image replacement rolls back without touching the committed cache");
+    reject_bind = false;
+    rsf_core_vkfg_release_image(&rsf::vkfg::platform, &self.gpu, &cached);
     self.chain = reinterpret_cast<VkSwapchainKHR>(3); self.functions.pOutQueuePresentKHR = present;
     self.functions.pOutGetSwapchainImagesKHR = swapchain_images;
     uint64_t image_handles[8] = {99, 99, 99, 99, 99, 99, 99, 99};
@@ -152,7 +165,8 @@ int main() {
     auto older = record(99, 3, 8, 3), newer = record(99, 4, 8, 3);
     complete(self, older, a, a); rsf_ffxgvk_submitted(&self, &a, 1);
     complete(self, newer, b, b); rsf_ffxgvk_submitted(&self, &b, 1);
-    require(rsf_ffxgvk_present_source(&self, &info, &older) == VK_SUCCESS && self.status.enabled && self.status.source_frame == 3 && self.latest == 4,
+    require(rsf_ffxgvk_present_source(&self, &info, &older) == VK_SUCCESS && self.status.enabled &&
+        self.status.source_frame == 3 && self.timeline.last_prepared.frame_id == 4,
         "older output selects its own submitted guides without rewinding the producer");
     require(rsf_ffxgvk_present_source(&self, &info, &newer) == VK_SUCCESS && self.status.enabled && self.status.source_frame == 4,
         "newer prepared source remains available after the older Present");

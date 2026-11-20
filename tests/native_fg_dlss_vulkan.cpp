@@ -67,7 +67,7 @@ void submitted_slot(rsf_dlssgvk& self, uint64_t frame, void* prepare, void* hudl
     slot.prepared = slot.hudless = true;
     slot.recorded_prepare = slot.recorded_hudless = true;
     slot.prepare_commands = prepare; slot.hudless_commands = hudless;
-    slot.source_completion = reinterpret_cast<VkFence>(1); slot.consumer_completion = reinterpret_cast<VkFence>(2);
+    slot.fences = {1, 2};
     rsf_core_fgvk_prepare_accepted(&self.timeline, &slot);
 }
 }
@@ -97,7 +97,9 @@ int main() {
     require(rsf_dlssgvk_images(&self, &image_count, image_handles) == VK_INCOMPLETE && image_count == 2,
         "short proxy image enumeration remains incomplete");
     self.options = options; self.state = state; self.present = present;
-    self.reset_fences = reset_fences; self.wait_fences = wait_fences; self.destroy_fence = destroy_fence;
+    self.gpu.device = static_cast<VkDevice>(self.setup.graphics.device);
+    self.gpu.graphics_submit = self.setup.graphics_submit;
+    self.gpu.reset_fences = reset_fences; self.gpu.wait_fences = wait_fences; self.gpu.destroy_fence = destroy_fence;
     self.wait_semaphores = wait_semaphores;
     self.status.max_generated_frames = 3;
     uint32_t image_layout = 0;

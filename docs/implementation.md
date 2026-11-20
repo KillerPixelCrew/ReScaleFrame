@@ -355,6 +355,17 @@ Clippy and binding regeneration passed. Runtime, carrier and Minecraft
 Release exports matched. Real D3D12/Vulkan import and game behavior await
 device validation.
 
+The DLSS and FidelityFX Vulkan FG paths now share Rust ownership of their
+private images and source and consumer fences. A failed image replacement
+releases the partial allocation and preserves the committed image. A failed
+completion signal keeps the slot unavailable for reuse. Native leaves still
+issue every wait, reset, allocation and queue submission.
+
+Seven focused Vulkan contracts passed in Debug and Release, including
+FidelityFX failed-bind rollback, split submissions and duplicate refusal.
+All 192 locked Rust tests, formatting and Clippy passed. Device timing and
+in-game behavior remain unverified.
+
 The shared frame-capture owner now keeps requests, exact capture identity,
 metadata, ticket publication and GPU completion bounds in Rust. It closes
 new reservations at the first matched Present and lets pending readbacks

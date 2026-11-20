@@ -56,6 +56,9 @@ generate("runtime/orchestrator/src/dx12_vulkan_interop_abi.rs", "runtime/orchest
          "rsf_dx12vk_(platform|shared_image|interop_callbacks)", "RSF_DX12VK_INTEROP_.*",
          ["-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Iruntime/graphics/include", "-Isdk/game/include"],
          ["--no-recursive-allowlist", "--raw-line", "use crate::vulkan_sr_abi::rsf_srvk_setup;"])
+generate("runtime/orchestrator/src/vulkan_fg_resources_abi.rs", "runtime/orchestrator/src/vulkan_fg_resources.h",
+         "rsf_vkfg_(platform|image|fences)", "NOTHING",
+         ["-Isdk/game/include"], ["--no-recursive-allowlist", "--with-derive-default"])
 generate("runtime/orchestrator/src/cpu_abi.rs", "runtime/orchestrator/include/rescaleframe/native_cpu.h",
          "rsf_native_(cpu_(frame|counters|reservation|reservation_counters)|input_receipts)",
          "RSF_NATIVE_CPU_(RESERVATION_.*|DEPENDENCY_.*|PRESENT_.*)",
