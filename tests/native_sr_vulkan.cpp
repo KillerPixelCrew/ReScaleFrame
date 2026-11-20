@@ -24,8 +24,92 @@ void require(bool value, const char* message) { if (!value) throw std::runtime_e
 #include <array>
 #include <fstream>
 #include <filesystem>
+#include "../runtime/backends/common/frame_capture_vk.h"
 
 namespace {
+struct CaptureEvent { bool copied = false; };
+struct CaptureCommands { CaptureEvent* event = nullptr; };
+struct CaptureDevice {
+    std::array<uint8_t, 4> pixels{};
+    uint32_t mapped = 0, released = 0;
+};
+
+rsf_vk_function capture_proc(void*, const char* name)
+{
+#define CAPTURE_PROC(symbol, ...) \
+    if (std::strcmp(name, #symbol) == 0) return reinterpret_cast<rsf_vk_function>(+(__VA_ARGS__))
+    CAPTURE_PROC(vkCreateBuffer, [](VkDevice, const VkBufferCreateInfo*, const VkAllocationCallbacks*, VkBuffer* out) {
+        *out = reinterpret_cast<VkBuffer>(1); return VK_SUCCESS;
+    });
+    CAPTURE_PROC(vkDestroyBuffer, [](VkDevice, VkBuffer, const VkAllocationCallbacks*) {});
+    CAPTURE_PROC(vkGetBufferMemoryRequirements, [](VkDevice, VkBuffer, VkMemoryRequirements* out) {
+        *out = {4, 1, 1};
+    });
+    CAPTURE_PROC(vkAllocateMemory, [](VkDevice, const VkMemoryAllocateInfo*, const VkAllocationCallbacks*, VkDeviceMemory* out) {
+        *out = reinterpret_cast<VkDeviceMemory>(1); return VK_SUCCESS;
+    });
+    CAPTURE_PROC(vkFreeMemory, [](VkDevice, VkDeviceMemory, const VkAllocationCallbacks*) {});
+    CAPTURE_PROC(vkBindBufferMemory, [](VkDevice, VkBuffer, VkDeviceMemory, VkDeviceSize) { return VK_SUCCESS; });
+    CAPTURE_PROC(vkMapMemory, [](VkDevice raw, VkDeviceMemory, VkDeviceSize, VkDeviceSize, VkMemoryMapFlags, void** out) {
+        auto& device = *reinterpret_cast<CaptureDevice*>(raw);
+        ++device.mapped; *out = device.pixels.data(); return VK_SUCCESS;
+    });
+    CAPTURE_PROC(vkUnmapMemory, [](VkDevice, VkDeviceMemory) {});
+    CAPTURE_PROC(vkCmdPipelineBarrier, [](VkCommandBuffer, VkPipelineStageFlags, VkPipelineStageFlags, VkDependencyFlags,
+        uint32_t, const VkMemoryBarrier*, uint32_t, const VkBufferMemoryBarrier*, uint32_t, const VkImageMemoryBarrier*) {});
+    CAPTURE_PROC(vkCmdCopyImageToBuffer, [](VkCommandBuffer, VkImage, VkImageLayout, VkBuffer, uint32_t, const VkBufferImageCopy*) {});
+    CAPTURE_PROC(vkCreateEvent, [](VkDevice, const VkEventCreateInfo*, const VkAllocationCallbacks*, VkEvent* out) {
+        *out = reinterpret_cast<VkEvent>(new CaptureEvent); return VK_SUCCESS;
+    });
+    CAPTURE_PROC(vkCmdSetEvent, [](VkCommandBuffer raw, VkEvent event, VkPipelineStageFlags) {
+        reinterpret_cast<CaptureCommands*>(raw)->event = reinterpret_cast<CaptureEvent*>(event);
+    });
+    CAPTURE_PROC(vkGetEventStatus, [](VkDevice, VkEvent event) {
+        return reinterpret_cast<CaptureEvent*>(event)->copied ? VK_EVENT_SET : VK_EVENT_RESET;
+    });
+    CAPTURE_PROC(vkDestroyEvent, [](VkDevice raw, VkEvent event, const VkAllocationCallbacks*) {
+        ++reinterpret_cast<CaptureDevice*>(raw)->released; delete reinterpret_cast<CaptureEvent*>(event);
+    });
+#undef CAPTURE_PROC
+    return nullptr;
+}
+
+void capture_retirement_contract()
+{
+    const auto directory = std::filesystem::temp_directory_path() / ("rsf-srvk-contract-" + std::to_string(GetCurrentProcessId()));
+    SetEnvironmentVariableW(L"RSF_VULKAN_FRAME_CAPTURE_DIR", directory.c_str());
+    SetEnvironmentVariableW(L"RSF_FRAME_CAPTURE_FIRST", L"1");
+    SetEnvironmentVariableW(L"RSF_FRAME_CAPTURE_COUNT", L"1");
+    CaptureDevice device;
+    rsf::FrameCaptureVk capture{rsf::FrameCaptureVk::Completion::command_retirement};
+    VkPhysicalDeviceMemoryProperties memory{};
+    memory.memoryTypeCount = 1;
+    memory.memoryTypes[0].propertyFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    require(capture.initialize(reinterpret_cast<VkDevice>(&device), capture_proc, memory), "tracked capture initialized");
+    rsf_frame_record frame{};
+    frame.session_id = frame.frame_id = 1;
+    const rsf_srvk_image source{&device, 1, VK_FORMAT_R8_UNORM, 2, 2, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1};
+    CaptureCommands submitted, abandoned, drained;
+    const auto first = reinterpret_cast<VkCommandBuffer>(&submitted);
+    const auto second = reinterpret_cast<VkCommandBuffer>(&abandoned);
+    const auto third = reinterpret_cast<VkCommandBuffer>(&drained);
+    require(capture.record(first, source, frame, "submitted", 0, false) &&
+        capture.record(second, source, frame, "abandoned", 0, false) &&
+        capture.record(third, source, frame, "drained", 0, false), "tracked readbacks recorded");
+    submitted.event->copied = drained.event->copied = true;
+    require(capture.wants(frame.frame_id) && !device.mapped, "completed copy still needs retirement");
+    capture.retire_commands(first);
+    require(device.mapped == 1 && device.released == 1 && capture.pending_count() == 2, "retirement selects the exact command buffer");
+    capture.retire_commands(second);
+    require(device.mapped == 1 && device.released == 2 && capture.pending_count() == 1, "abandoned recording is discarded without mapping");
+    require(capture.flush() && device.mapped == 2 && device.released == 3 && capture.pending_count() == 0, "full drain retires remaining executed readbacks");
+    require(std::filesystem::file_size(directory / "1-1-submitted-0.raw") == 4 &&
+        !std::filesystem::exists(directory / "1-1-abandoned-0.raw"), "capture bytes only come from executed copies");
+    for (const auto* filename : {"1-1-submitted-0.raw", "1-1-submitted-0.json", "1-1-drained-0.raw",
+        "1-1-drained-0.json", "capture-errors.log"}) std::filesystem::remove(directory / filename);
+    std::filesystem::remove(directory);
+}
+
 struct Image { VkImage image = VK_NULL_HANDLE; VkDeviceMemory memory = VK_NULL_HANDLE; uint32_t width, height; VkFormat format; uint32_t copy_source = 0; };
 struct Gpu {
     HMODULE module = nullptr;
@@ -375,7 +459,19 @@ int main(int argc, char** argv) try {
     require(rsf_srvk_plan(nullptr, nullptr, nullptr) == RSF_BACKEND_ERROR_INVALID_ARGUMENT &&
         rsf_srvk_evaluate(nullptr, nullptr, nullptr) == RSF_BACKEND_ERROR_INVALID_ARGUMENT &&
         rsf_srvk_dlss_preset(nullptr, 0) == RSF_BACKEND_ERROR_INVALID_ARGUMENT && rsf_srvk_destroy(nullptr) == RSF_BACKEND_OK, "null lifecycle contract");
-    if (argc == 1) { std::puts("PASS: native Vulkan SR C ABI guards"); return 0; }
+    if (argc == 1) {
+#if defined(RSF_TEST_VULKAN)
+        capture_retirement_contract();
+#else
+        const rsf_vk_get_proc no_proc = [](void*, const char*) -> rsf_vk_function { return nullptr; };
+        uint32_t object = 0;
+        const rsf_srvk_setup setup{sizeof(setup), RSF_SRVK_ABI_VERSION, &object, &object, &object,
+            no_proc, no_proc, RSF_SR_FSR3, 1, 128, 72, 1, 1, 0, "unused"};
+        require(rsf_srvk_create(&setup, &context) == RSF_BACKEND_ERROR_NOT_COMPILED && !context, "feature-disabled provider refusal");
+#endif
+        std::puts("PASS: native Vulkan SR C ABI guards");
+        return 0;
+    }
     const char* directory = std::getenv("RSF_VULKAN_SR_RUNTIME");
     if (!directory) { std::puts("SKIP: set RSF_VULKAN_SR_RUNTIME for the Vulkan device fixture"); return 77; }
 #if defined(RSF_TEST_VULKAN)

@@ -20,6 +20,8 @@ class FrameCaptureVk {
     struct Readback {
         VkBuffer buffer = VK_NULL_HANDLE;
         VkDeviceMemory memory = VK_NULL_HANDLE;
+        VkCommandBuffer commands = VK_NULL_HANDLE;
+        VkEvent copied = VK_NULL_HANDLE;
         VkDeviceSize bytes = 0;
         rsf_srvk_image image{};
         rsf_frame_record identity{};
@@ -38,6 +40,7 @@ class FrameCaptureVk {
     uint64_t provider = 0;
     uint32_t backend = 0;
     bool generation = false;
+    bool command_completion = false;
     VkDevice device = VK_NULL_HANDLE;
     VkPhysicalDeviceMemoryProperties memory_properties{};
     PFN_vkCreateBuffer create_buffer = nullptr;
@@ -50,9 +53,14 @@ class FrameCaptureVk {
     PFN_vkUnmapMemory unmap = nullptr;
     PFN_vkCmdPipelineBarrier barrier = nullptr;
     PFN_vkCmdCopyImageToBuffer copy = nullptr;
+    PFN_vkCreateEvent create_event = nullptr;
+    PFN_vkDestroyEvent destroy_event = nullptr;
+    PFN_vkCmdSetEvent set_event = nullptr;
+    PFN_vkGetEventStatus event_status = nullptr;
     std::vector<std::unique_ptr<Readback>> pending;
     std::mutex guard;
     void release(Readback& value) {
+        if (value.copied) destroy_event(device, value.copied, nullptr);
         if (value.buffer) destroy_buffer(device, value.buffer, nullptr);
         if (value.memory) free_memory(device, value.memory, nullptr);
         value.buffer = VK_NULL_HANDLE; value.memory = VK_NULL_HANDLE;
@@ -61,7 +69,9 @@ class FrameCaptureVk {
         if (!directory.empty()) std::ofstream(directory / "capture-errors.log", std::ios::app) << frame << ' ' << role << '\n';
     } catch (...) {}
 public:
-    FrameCaptureVk() noexcept { try {
+    enum class Completion { shared_submission, command_retirement };
+    FrameCaptureVk() noexcept : FrameCaptureVk(Completion::shared_submission) {}
+    explicit FrameCaptureVk(Completion completion) noexcept : command_completion(completion == Completion::command_retirement) { try {
         wchar_t path[32768]{}, value[32]{};
         const auto size = GetEnvironmentVariableW(L"RSF_VULKAN_FRAME_CAPTURE_DIR", path, 32768);
         if (!size || size >= 32768) return;
@@ -76,7 +86,7 @@ public:
     size_t pending_count() { std::lock_guard lock(guard); return pending.size(); }
     void set_provider(uint64_t version, uint32_t selected, bool fg = false) { provider = version; backend = selected; generation = fg; }
     bool wants(uint64_t frame) const {
-        (void)const_cast<FrameCaptureVk*>(this)->flush(true);
+        if (!command_completion) (void)const_cast<FrameCaptureVk*>(this)->flush(true);
         return (enabled() && frame >= first && frame - first < count) || rsf_input_dump_wants_frame(frame);
     }
     bool initialize(VkDevice value, rsf_vk_get_proc proc, const VkPhysicalDeviceMemoryProperties& properties) {
@@ -87,6 +97,10 @@ public:
         RSF_CAPTURE_LOAD(free_memory, vkFreeMemory); RSF_CAPTURE_LOAD(bind, vkBindBufferMemory);
         RSF_CAPTURE_LOAD(map, vkMapMemory); RSF_CAPTURE_LOAD(unmap, vkUnmapMemory);
         RSF_CAPTURE_LOAD(barrier, vkCmdPipelineBarrier); RSF_CAPTURE_LOAD(copy, vkCmdCopyImageToBuffer);
+        if (command_completion) {
+            RSF_CAPTURE_LOAD(create_event, vkCreateEvent); RSF_CAPTURE_LOAD(destroy_event, vkDestroyEvent);
+            RSF_CAPTURE_LOAD(set_event, vkCmdSetEvent); RSF_CAPTURE_LOAD(event_status, vkGetEventStatus);
+        }
 #undef RSF_CAPTURE_LOAD
         return true;
     }
@@ -114,6 +128,7 @@ public:
         default: failure(role, identity.frame_id); return false;
         }
         auto owned = std::make_unique<Readback>();
+        owned->commands = commands;
         owned->image = source; owned->identity = identity; owned->role = role; owned->reset = reset;
         owned->submission_group = submission_group;
         owned->legacy = enabled() && identity.frame_id >= first && identity.frame_id - first < count;
@@ -146,6 +161,10 @@ public:
         if (allocate(device, &allocation, nullptr, &value.memory) != VK_SUCCESS || bind(device, value.buffer, value.memory, 0) != VK_SUCCESS) {
             failure(role, identity.frame_id); return false;
         }
+        if (command_completion) {
+            VkEventCreateInfo event{}; event.sType = VK_STRUCTURE_TYPE_EVENT_CREATE_INFO;
+            if (create_event(device, &event, nullptr, &value.copied) != VK_SUCCESS) { failure(role, identity.frame_id); return false; }
+        }
         VkImageMemoryBarrier image{}; image.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
         image.oldLayout = VkImageLayout(source.layout); image.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         image.srcAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT; image.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
@@ -165,6 +184,7 @@ public:
         host.buffer = value.buffer; host.size = VK_WHOLE_SIZE;
         barrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT | VK_PIPELINE_STAGE_HOST_BIT,
             0, 0, nullptr, 1, &host, 1, &image);
+        if (value.copied) set_event(commands, value.copied, VK_PIPELINE_STAGE_TRANSFER_BIT);
         value.recorded = true;
         return true;
     } catch (...) { failure(role, identity.frame_id); return false; }
@@ -187,12 +207,18 @@ public:
             value->discarded = true;
         }
     }
-    // A full flush requires the owner to drain every referencing command buffer.
-    bool flush(bool ready_only = false) noexcept try {
+    // Only match a retired recording when its caller has proven completion.
+    // A full flush requires all recorded work to have drained.
+    void retire_commands(VkCommandBuffer commands) noexcept {
+        if (command_completion && commands) (void)flush(false, commands);
+    }
+    bool flush(bool ready_only = false, VkCommandBuffer completed_commands = VK_NULL_HANDLE) noexcept try {
         std::lock_guard lock(guard);
         bool okay = true;
         for (auto it = pending.begin(); it != pending.end();) {
             auto& value = **it;
+            if (completed_commands && value.commands != completed_commands) { ++it; continue; }
+            if (ready_only && command_completion) { ++it; continue; }
             if (value.submission_group && !value.group_complete) {
                 if (ready_only) { ++it; continue; }
                 if (!value.discarded) {
@@ -203,7 +229,12 @@ public:
             }
             if (ready_only && value.legacy && !value.core_ticket) { ++it; continue; }
             if (!value.recorded) { okay = false; rsf_input_dump_failed(value.core_ticket, value.core_name.c_str(), RSF_TEXTURE_ERROR_STAGING_FAILED); release(value); it = pending.erase(it); continue; }
-            if (value.core_ticket && !value.group_complete &&
+            // A drain makes freeing safe, but cannot prove an abandoned recording ran.
+            if (command_completion && event_status(device, value.copied) != VK_EVENT_SET) {
+                okay = false; rsf_input_dump_failed(value.core_ticket, value.core_name.c_str(), RSF_TEXTURE_ERROR_MAP_FAILED);
+                release(value); it = pending.erase(it); continue;
+            }
+            if (value.core_ticket && !command_completion && !value.group_complete &&
                 !rsf_input_dump_gpu_ready(value.core_ticket, value.core_name.c_str(), 3, device)) {
                 if (ready_only) { ++it; continue; }
                 okay = false; rsf_input_dump_failed(value.core_ticket, value.core_name.c_str(), RSF_TEXTURE_ERROR_MAP_FAILED);
@@ -240,14 +271,14 @@ public:
             raw.write(static_cast<const char*>(data), static_cast<std::streamsize>(value.bytes)); unmap(device, value.memory);
             std::ofstream json(directory / (stem + ".json"));
             const auto& camera = value.identity.camera;
-            const auto pixel_bytes = value.image.format == VK_FORMAT_R16G16B16A16_SFLOAT ? 8 : 4;
             json << std::setprecision(9) << "{\n\"role\":\"" << value.role << "\",\n\"frame\":" << value.identity.frame_id
                 << ",\n\"session\":" << value.identity.session_id << ",\n\"view\":" << value.identity.view_id
                 << ",\n\"generation\":" << value.identity.resource_generation << ",\n\"flags\":" << value.identity.flags
                 << ",\n\"frame_time_ms\":" << value.identity.frame_time_ms << ",\n\"width\":" << value.image.width
-                << ",\n\"height\":" << value.image.height << ",\n\"row_pitch\":" << value.image.width * pixel_bytes
+                << ",\n\"height\":" << value.image.height << ",\n\"row_pitch\":" << value.bytes / value.image.height
                 << ",\n\"offset\":0,\n\"vk_format\":" << value.image.format << ",\n\"bytes\":" << value.bytes
-                << ",\n\"sdk_dispatch_reset\":" << value.reset << ",\n\"completion\":\"owner-drained-context-retirement\""
+                << ",\n\"sdk_dispatch_reset\":" << value.reset << ",\n\"completion\":\""
+                << (completed_commands ? "owner-drained-command-retirement" : "owner-drained-context-retirement") << '"'
                 << ",\n\"" << (generation ? "fg_backend" : "sr_backend") << "\":" << backend << ",\n\"provider_version_id\":" << provider
                 << ",\n\"render_size\":[" << camera.render_width << ',' << camera.render_height << "],\n\"output_size\":[" << camera.output_width << ',' << camera.output_height
                 << "],\n\"jitter_pixels\":[" << camera.jitter_pixels[0] << ',' << camera.jitter_pixels[1] << "],\n\"matrix_convention\":\"row_vectors\"";

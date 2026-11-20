@@ -392,6 +392,18 @@ Runtime, carrier and Minecraft exports matched. The worker also verified
 the feature-disabled build. Device and game execution remain pending.
 See [the FSR4 Vulkan FG audit](research/rust-vulkan-fsr4-fg-cutover.md).
 
+The ordinary Vulkan SR owner now manages FidelityFX context selection,
+staging, dispatch, history, output publication and checked teardown in Rust.
+The existing provider boundaries and SRVK ABI remain intact. FSR2/3
+readbacks require command retirement and proof that the copy ran. FSR4 FG
+readbacks retain their separate submission-group proof in the shared helper.
+
+The combined Release build passed 14 focused Vulkan contracts, including
+both readback paths, split SR, XeSS and the DLL export check. All 196 locked
+Rust tests, formatting and Clippy passed. Runtime, both carriers and
+Minecraft exports matched. Device and in-game validation remain open.
+See [the Vulkan SR cutover audit](research/rust-vulkan-sr-cutover.md).
+
 The OpenGL pipeline now keeps its shared surface and SR lifecycle, frame
 identity, fallback and FG requests in Rust. Native callbacks handle OpenGL,
 DXGI and the presentation child window. A rejected SR rebuild remains

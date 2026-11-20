@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use crate::render_abi::rsf_sharpening_options;
 use crate::sr_session::has_capacity;
 use crate::vulkan_sr_abi::*;
 use crate::vulkan_sr_split::normalize_frame;
@@ -7,10 +8,12 @@ use rsf_game_sys::{
 };
 use std::collections::HashMap;
 use std::ffi::{CStr, c_char, c_void};
+use std::ptr::{self, NonNull};
 use std::sync::{LazyLock, Mutex};
 
 const INVALID: i32 = -1;
 const ABI_MISMATCH: i32 = -2;
+const NOT_COMPILED: i32 = -3;
 const INIT_FAILED: i32 = -6;
 const NOT_SUPPORTED: i32 = -7;
 const WRONG_API: i32 = -12;
@@ -23,14 +26,27 @@ const R32_FLOAT: u32 = 100;
 const D32_FLOAT: u32 = 126;
 const SHADER_READ: u32 = 5;
 const TRANSFER_DST: u32 = 7;
+const GENERAL: u32 = 1;
+const TRANSFER_SRC_USAGE: u32 = 1;
+const TRANSFER_DST_USAGE: u32 = 2;
+const SAMPLED_USAGE: u32 = 4;
+const STORAGE_USAGE: u32 = 8;
+const LINEAR_BLIT: u32 = 0x400 | 0x800 | 0x1000;
+
+const FFX_HDR: u32 = 1;
+const FFX_JITTER_CANCELLATION: u32 = 4;
+const FFX_INVERTED_DEPTH: u32 = 8;
+const FFX_INFINITE_DEPTH: u32 = 16;
+const FFX_AUTO_EXPOSURE: u32 = 32;
+const SHARPENING_VENDOR: u32 = 4;
+const MAX_VERSIONS: usize = 32;
 
 type Setup = rsf_srvk_setup;
 type Frame = rsf_srvk_frame;
 type Image = rsf_srvk_image;
 type Device = *mut c_void;
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_srvk_setup_admit(setup: *const Setup) -> i32 {
+unsafe fn setup_admit(setup: *const Setup) -> i32 {
     if !unsafe { has_capacity(setup) } {
         return INVALID;
     }
@@ -77,8 +93,7 @@ fn valid_image(
         && formats.contains(&image.format)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_srvk_fallback_admit(call: *const rsf_srvk_fallback) -> i32 {
+unsafe fn fallback_admit(call: *const rsf_srvk_fallback) -> i32 {
     if !unsafe { has_capacity(call) } {
         return INVALID;
     }
@@ -119,25 +134,7 @@ unsafe extern "C" fn rsf_core_srvk_fallback_admit(call: *const rsf_srvk_fallback
     0
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_srvk_normalize(frame: *const Frame, out: *mut Frame) -> i32 {
-    match unsafe { normalize_frame(frame) } {
-        Ok(frame) => {
-            unsafe { out.write(frame) };
-            0
-        }
-        Err(error) => error,
-    }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_srvk_frame_admit(
-    setup: &Setup,
-    frame: &Frame,
-    planned_width: u32,
-    planned_height: u32,
-    xess: u32,
-) -> i32 {
+unsafe fn frame_admit(setup: &Setup, frame: &Frame, planned: [u32; 2]) -> i32 {
     if !unsafe { has_capacity(frame.record) } {
         return INVALID;
     }
@@ -145,10 +142,10 @@ unsafe extern "C" fn rsf_core_srvk_frame_admit(
     let camera = &record.camera;
     // XeSS owns a queried inclusive range. All leased images still follow
     // the actual camera/record size, even when it differs from the plan.
-    let render = if xess != 0 {
+    let render = if setup.backend == RSF_SR_XESS {
         [record.render_width, record.render_height]
     } else {
-        [planned_width, planned_height]
+        planned
     };
     let output = [setup.output_width, setup.output_height];
     if render.contains(&0)
@@ -216,8 +213,7 @@ struct Dispatch {
 
 static DISPATCH: LazyLock<Mutex<HashMap<usize, Dispatch>>> = LazyLock::new(Mutex::default);
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_srvk_dispatch_register(device: Device, proc: rsf_vk_get_proc) -> i32 {
+fn dispatch_register(device: Device, proc: rsf_vk_get_proc) -> i32 {
     let Some(proc) = proc else { return INVALID };
     let mut dispatch = DISPATCH.lock().unwrap();
     if let Some(entry) = dispatch.get_mut(&(device as usize)) {
@@ -243,8 +239,7 @@ extern "C" fn rsf_core_srvk_dispatch_register(device: Device, proc: rsf_vk_get_p
     0
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_srvk_dispatch_unregister(device: Device) {
+fn dispatch_unregister(device: Device) {
     let mut dispatch = DISPATCH.lock().unwrap();
     if let Some(entry) = dispatch.get_mut(&(device as usize)) {
         entry.references -= 1;
@@ -288,7 +283,7 @@ unsafe extern "C" fn rsf_core_srvk_dispatch_lookup(
     }
 }
 
-#[repr(C)]
+#[derive(Default)]
 struct History {
     frame: u64,
     session: u64,
@@ -296,25 +291,562 @@ struct History {
     generation: u32,
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_srvk_history_reset(history: &History, record: &rsf_frame_record) -> u32 {
-    u32::from(
+impl History {
+    fn needs_reset(&self, record: &rsf_frame_record) -> bool {
         record.flags & RSF_FRAME_FLAG_RESET != 0
-            || history.frame.wrapping_add(1) != record.frame_id
-            || history.session != record.session_id
-            || history.view != record.view_id
-            || history.generation != record.resource_generation,
-    )
+            || self.frame.wrapping_add(1) != record.frame_id
+            || self.session != record.session_id
+            || self.view != record.view_id
+            || self.generation != record.resource_generation
+    }
+
+    fn commit(&mut self, record: &rsf_frame_record) {
+        *self = Self {
+            frame: record.frame_id,
+            session: record.session_id,
+            view: record.view_id,
+            generation: record.resource_generation,
+        };
+    }
+}
+
+type Handle = *mut c_void;
+type Capture = unsafe extern "C" fn(Handle, Handle, &Image, &rsf_frame_record, *const c_char, u32);
+
+// Private platform ABI. Rust owns the public handle and sequences these leaves.
+#[repr(C)]
+struct Platform {
+    dlss: LegacyOps,
+    xess: LegacyOps,
+    ffx: FfxOps,
+    fallback_probe: unsafe extern "C" fn(&rsf_srvk_fallback, &mut Blit) -> i32,
+    fallback_record: unsafe extern "C" fn(&rsf_srvk_fallback, &Blit) -> i32,
+    dump_begin: unsafe extern "C" fn(&rsf_frame_record, u32) -> i32,
+    dump_wants: unsafe extern "C" fn(&rsf_frame_record) -> i32,
+    dump_result: unsafe extern "C" fn(&rsf_frame_record, *const c_char, u32, i32),
+}
+
+#[repr(C)]
+struct LegacyOps {
+    create: unsafe extern "C" fn(&Setup, &mut Handle) -> i32,
+    plan: unsafe extern "C" fn(Handle, &mut u32, &mut u32) -> i32,
+    evaluate: unsafe extern "C" fn(Handle, Handle, &Frame) -> i32,
+    destroy: unsafe extern "C" fn(Handle) -> i32,
+    retire_commands: unsafe extern "C" fn(Handle, Handle),
+    preset: Option<unsafe extern "C" fn(Handle, u32) -> i32>,
+}
+
+#[repr(C)]
+struct FfxOps {
+    open: unsafe extern "C" fn(&Setup, &mut Handle) -> i32,
+    close: unsafe extern "C" fn(Handle),
+    initialize_graphics: unsafe extern "C" fn(Handle, &Setup) -> i32,
+    versions: unsafe extern "C" fn(Handle, &mut [Version; MAX_VERSIONS], &mut u64) -> i32,
+    create_effect: unsafe extern "C" fn(Handle, &Setup, u64, u32) -> i32,
+    effective_version: unsafe extern "C" fn(Handle, &mut u64) -> i32,
+    destroy_effect: unsafe extern "C" fn(Handle) -> i32,
+    plan: unsafe extern "C" fn(Handle, &Setup, &mut u32, &mut u32) -> i32,
+    allocate: unsafe extern "C" fn(Handle, &mut Image, u32, &mut u64) -> i32,
+    release: unsafe extern "C" fn(Handle, u64, u64),
+    initialize_mask: unsafe extern "C" fn(Handle, Handle, u64),
+    initialize_output: unsafe extern "C" fn(Handle, Handle, u64),
+    dispatch: unsafe extern "C" fn(Handle, Handle, &FfxDispatch) -> i32,
+    copy_output: unsafe extern "C" fn(Handle, Handle, &Image, &Image),
+    sharpen: unsafe extern "C" fn(Handle, &Setup, Handle, &Frame, u64) -> i32,
+    clear_sharpen: unsafe extern "C" fn(Handle),
+    log: unsafe extern "C" fn(&Frame, *const c_char),
+    capture_provider: unsafe extern "C" fn(Handle, u64, u32),
+    capture_record: Capture,
+    capture_wants: unsafe extern "C" fn(Handle, u64) -> i32,
+    capture_parameters: unsafe extern "C" fn(&Frame, u32, u32),
+    retire_commands: unsafe extern "C" fn(Handle, Handle),
+    flush_capture: unsafe extern "C" fn(Handle),
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct Blit {
+    barrier: rsf_vk_function,
+    blit: rsf_vk_function,
+    features: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct Version {
+    id: u64,
+    major: u32,
+    minor: u32,
+    patch: u32,
+}
+
+#[repr(C)]
+struct FfxDispatch<'a> {
+    frame: &'a Frame,
+    reactive: Image,
+    composition: Image,
+    output: Image,
+    far_plane: f32,
+    sharpness: f32,
+    reset: u32,
+}
+
+const _: () = {
+    assert!(size_of::<Platform>() == 320);
+    assert!(size_of::<Blit>() == 24 && size_of::<Version>() == 24);
+    assert!(size_of::<FfxDispatch>() == 144);
+    assert!(std::mem::offset_of!(FfxDispatch, reset) == 136);
+};
+
+struct StagingImage {
+    description: Image,
+    memory: u64,
+}
+
+impl StagingImage {
+    fn new(device: Device, [width, height]: [u32; 2], format: u32, layout: u32) -> Self {
+        Self {
+            description: Image {
+                device,
+                image: 0,
+                width,
+                height,
+                format,
+                layout,
+                copy_source: 0,
+            },
+            memory: 0,
+        }
+    }
+}
+
+struct DispatchLease(Device);
+
+impl Drop for DispatchLease {
+    fn drop(&mut self) {
+        dispatch_unregister(self.0);
+    }
+}
+
+struct FidelityFx {
+    ops: &'static FfxOps,
+    handle: Handle,
+    dispatch_lease: Option<DispatchLease>,
+    effect_live: bool,
+    initialized: bool,
+    output: StagingImage,
+    zero_mask: StagingImage,
+    history: History,
+    sharpen_failed: bool,
+}
+
+fn check(result: i32) -> Result<(), i32> {
+    if result == 0 { Ok(()) } else { Err(result) }
+}
+
+fn select_version(versions: &[Version], major: u32) -> Option<u64> {
+    // The opaque ID is paired with a parsed SDK version. Preserve the first
+    // matching entry on ties, including when the ID is zero.
+    let mut best: Option<&Version> = None;
+    for version in versions.iter().filter(|version| version.major == major) {
+        if best.is_none_or(|best| (version.minor, version.patch) > (best.minor, best.patch)) {
+            best = Some(version);
+        }
+    }
+    best.map(|version| version.id)
+}
+
+impl FidelityFx {
+    unsafe fn create(ops: &'static FfxOps, setup: &Setup) -> Result<(Self, [u32; 2]), i32> {
+        let output = [setup.output_width, setup.output_height];
+        let mut handle = ptr::null_mut();
+        check(unsafe { (ops.open)(setup, &mut handle) })?;
+        let mut owner = Self {
+            ops,
+            handle,
+            dispatch_lease: None,
+            effect_live: false,
+            initialized: false,
+            output: StagingImage::new(setup.device, output, RGBA16_FLOAT, GENERAL),
+            zero_mask: StagingImage::new(setup.device, [0, 0], R8_UNORM, SHADER_READ),
+            history: History::default(),
+            sharpen_failed: false,
+        };
+        check(dispatch_register(setup.device, setup.device_proc))?;
+        owner.dispatch_lease = Some(DispatchLease(setup.device));
+        check(unsafe { (ops.initialize_graphics)(handle, setup) })?;
+        let mut versions = [Version::default(); MAX_VERSIONS];
+        let mut count = 0;
+        check(unsafe { (ops.versions)(handle, &mut versions, &mut count) })?;
+        let count = usize::try_from(count).map_err(|_| NOT_SUPPORTED)?;
+        let version = select_version(versions.get(..count).ok_or(NOT_SUPPORTED)?, setup.backend)
+            .ok_or(NOT_SUPPORTED)?;
+        let flags = FFX_HDR
+            | FFX_AUTO_EXPOSURE
+            | (setup.depth_inverted * FFX_INVERTED_DEPTH)
+            | (setup.depth_infinite * FFX_INFINITE_DEPTH)
+            | (setup.motion_jittered * FFX_JITTER_CANCELLATION);
+        // Creation can leave a partial context for the cleanup leaf.
+        owner.effect_live = true;
+        check(unsafe { (ops.create_effect)(handle, setup, version, flags) })?;
+        let mut effective = 0;
+        check(unsafe { (ops.effective_version)(handle, &mut effective) })?;
+        if effective != version {
+            return Err(NOT_SUPPORTED);
+        }
+        unsafe { (ops.capture_provider)(handle, version, setup.backend) };
+
+        let plan = if setup.backend == RSF_SR_FSR2 && setup.quality == 0 {
+            output
+        } else {
+            let (mut width, mut height) = (0, 0);
+            check(unsafe { (ops.plan)(handle, setup, &mut width, &mut height) })?;
+            [width, height]
+        };
+        if plan.contains(&0) {
+            return Err(INIT_FAILED);
+        }
+        [
+            owner.zero_mask.description.width,
+            owner.zero_mask.description.height,
+        ] = plan;
+        let mask_usage = TRANSFER_DST_USAGE | SAMPLED_USAGE;
+        let output_usage = mask_usage | STORAGE_USAGE | TRANSFER_SRC_USAGE;
+        for (image, usage) in [
+            (&mut owner.output, output_usage),
+            (&mut owner.zero_mask, mask_usage),
+        ] {
+            image.description.copy_source = u32::from(usage & TRANSFER_SRC_USAGE != 0);
+            check(unsafe {
+                (ops.allocate)(handle, &mut image.description, usage, &mut image.memory)
+            })?;
+        }
+        Ok((owner, plan))
+    }
+
+    fn record_capture(
+        &self,
+        commands: Handle,
+        image: &Image,
+        record: &rsf_frame_record,
+        role: &CStr,
+        reset: u32,
+    ) {
+        unsafe {
+            (self.ops.capture_record)(self.handle, commands, image, record, role.as_ptr(), reset)
+        };
+    }
+
+    fn evaluate(
+        &mut self,
+        platform: &Platform,
+        setup: &Setup,
+        commands: Handle,
+        frame: &Frame,
+        record: &rsf_frame_record,
+    ) -> i32 {
+        let ops = self.ops;
+        let handle = self.handle;
+        if unsafe { (platform.dump_wants)(record) } != 0 {
+            self.record_capture(
+                commands,
+                &frame.color,
+                record,
+                c"sr-source-jittered",
+                record.flags & RSF_FRAME_FLAG_RESET,
+            );
+            for (image, role) in [
+                (&frame.bias_current_color, c"sr-bias-mask"),
+                (&frame.reactive, c"sr-reactive-mask"),
+                (&frame.composition, c"sr-transparency-mask"),
+            ] {
+                if image.image != 0 {
+                    self.record_capture(commands, image, record, role, 0);
+                }
+            }
+        }
+        let output = self.output.description;
+        let zero = self.zero_mask.description;
+        if !self.initialized {
+            // The ABI requires submission in recording order, including a
+            // failed dispatch. First-use layouts survive a rejected SR result.
+            unsafe {
+                (ops.initialize_mask)(handle, commands, zero.image);
+                (ops.initialize_output)(handle, commands, output.image);
+            }
+            self.initialized = true;
+        }
+        let reset = u32::from(self.history.needs_reset(record));
+        let settings = &frame.sharpening;
+        let dispatch = FfxDispatch {
+            frame,
+            reactive: if frame.reactive.image != 0 {
+                frame.reactive
+            } else {
+                zero
+            },
+            composition: if frame.composition.image != 0 {
+                frame.composition
+            } else {
+                zero
+            },
+            output,
+            far_plane: if record.camera.far_plane > 0.0 {
+                record.camera.far_plane
+            } else {
+                f32::MAX
+            },
+            sharpness: if settings.struct_size != 0 && settings.mode == SHARPENING_VENDOR {
+                settings.sharpness
+            } else {
+                0.0
+            },
+            reset,
+        };
+        unsafe { (ops.capture_parameters)(frame, setup.backend, reset) };
+        if unsafe { (ops.capture_wants)(handle, record.frame_id) } != 0 {
+            self.record_capture(commands, &frame.color, record, c"sr-linear-color", reset);
+            self.record_capture(commands, &frame.depth, record, c"sr-depth", reset);
+            self.record_capture(commands, &frame.motion, record, c"sr-motion-uv", reset);
+        }
+        let result = unsafe { (ops.dispatch)(handle, commands, &dispatch) };
+        if result != 0 {
+            self.history = History::default();
+            return result;
+        }
+        if unsafe { (ops.sharpen)(handle, setup, commands, frame, output.image) } == 0
+            && !self.sharpen_failed
+        {
+            self.sharpen_failed = true;
+            unsafe {
+                (ops.log)(
+                    frame,
+                    c"Vulkan sharpening unavailable; retaining vendor output".as_ptr(),
+                )
+            };
+        }
+        self.record_capture(commands, &output, record, c"sr-output-linear", reset);
+        unsafe { (ops.copy_output)(handle, commands, &output, &frame.output) };
+        self.history.commit(record);
+        0
+    }
+
+    fn retire_commands(&self, commands: Handle) {
+        // The host calls this after GPU completion and reset of the specified buffer.
+        unsafe { (self.ops.retire_commands)(self.handle, commands) };
+    }
+
+    fn destroy(&mut self) -> i32 {
+        // The ABI requires the caller to drain all work referencing this owner.
+        unsafe { (self.ops.flush_capture)(self.handle) };
+        let result = unsafe { (self.ops.destroy_effect)(self.handle) };
+        if result == 0 {
+            self.effect_live = false;
+        }
+        result
+    }
+}
+
+impl Drop for FidelityFx {
+    fn drop(&mut self) {
+        // Public destruction only drops the owner after the SDK accepts it.
+        // The remaining best-effort SDK cleanup is for failed construction.
+        unsafe {
+            (self.ops.clear_sharpen)(self.handle);
+            if self.effect_live {
+                (self.ops.destroy_effect)(self.handle);
+            }
+            for image in [&self.output, &self.zero_mask] {
+                (self.ops.release)(self.handle, image.description.image, image.memory);
+            }
+            (self.ops.close)(self.handle);
+        }
+    }
+}
+
+enum Backend {
+    Legacy {
+        ops: &'static LegacyOps,
+        handle: Handle,
+    },
+    Ffx(FidelityFx),
+}
+
+struct Owner {
+    setup: Setup,
+    platform: &'static Platform,
+    backend: Backend,
+    render: [u32; 2],
+}
+
+impl Owner {
+    unsafe fn create(platform: &'static Platform, mut setup: Setup) -> Result<Self, i32> {
+        let legacy = match setup.backend {
+            RSF_SR_DLSS => Some(&platform.dlss),
+            RSF_SR_XESS => Some(&platform.xess),
+            _ => None,
+        };
+        let (backend, render) = if let Some(ops) = legacy {
+            let mut handle = ptr::null_mut();
+            check(unsafe { (ops.create)(&setup, &mut handle) })?;
+            let (mut width, mut height) = (0, 0);
+            // These providers set the plan at successful construction.
+            let _ = unsafe { (ops.plan)(handle, &mut width, &mut height) };
+            (Backend::Legacy { ops, handle }, [width, height])
+        } else {
+            let (owner, render) = unsafe { FidelityFx::create(&platform.ffx, &setup) }?;
+            (Backend::Ffx(owner), render)
+        };
+        setup.runtime_directory_utf8 = ptr::null();
+        Ok(Self {
+            setup,
+            platform,
+            backend,
+            render,
+        })
+    }
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_srvk_history_commit(history: &mut History, record: &rsf_frame_record) {
-    *history = History {
-        frame: record.frame_id,
-        session: record.session_id,
-        view: record.view_id,
-        generation: record.resource_generation,
+unsafe extern "C" fn rsf_core_srvk_create(
+    platform: Option<&'static Platform>,
+    setup: *const Setup,
+    out: *mut Handle,
+) -> i32 {
+    if out.is_null() {
+        return INVALID;
+    }
+    unsafe { out.write(ptr::null_mut()) };
+    let admission = unsafe { setup_admit(setup) };
+    if admission != 0 {
+        return admission;
+    }
+    let Some(platform) = platform else {
+        return NOT_COMPILED;
     };
+    match unsafe { Owner::create(platform, *setup) } {
+        Ok(owner) => {
+            unsafe { out.write(Box::into_raw(Box::new(owner)).cast()) };
+            0
+        }
+        Err(error) => error,
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_srvk_plan(
+    owner: *const Owner,
+    width: *mut u32,
+    height: *mut u32,
+) -> i32 {
+    let Some(owner) = (unsafe { owner.as_ref() }) else {
+        return INVALID;
+    };
+    if width.is_null() || height.is_null() {
+        return INVALID;
+    }
+    unsafe {
+        width.write(owner.render[0]);
+        height.write(owner.render[1]);
+    }
+    0
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_srvk_evaluate(
+    owner: *mut Owner,
+    commands: Handle,
+    frame: *const Frame,
+    sharpening_valid: unsafe extern "C" fn(&rsf_sharpening_options) -> i32,
+) -> i32 {
+    if owner.is_null() || commands.is_null() {
+        return INVALID;
+    }
+    let frame = match unsafe { normalize_frame(frame) } {
+        Ok(frame) => frame,
+        Err(error) => return error,
+    };
+    if frame.sharpening.struct_size != 0 && unsafe { sharpening_valid(&frame.sharpening) } == 0 {
+        return INVALID;
+    }
+    let owner = unsafe { &mut *owner };
+    let admission = unsafe { frame_admit(&owner.setup, &frame, owner.render) };
+    if admission != 0 {
+        return admission;
+    }
+    let record = unsafe { &*frame.record };
+    unsafe { (owner.platform.dump_begin)(record, owner.setup.backend) };
+    let result = match &mut owner.backend {
+        Backend::Legacy { ops, handle } => unsafe { (ops.evaluate)(*handle, commands, &frame) },
+        Backend::Ffx(ffx) => ffx.evaluate(owner.platform, &owner.setup, commands, &frame, record),
+    };
+    unsafe { (owner.platform.dump_result)(record, c"sr".as_ptr(), owner.setup.backend, result) };
+    result
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_srvk_retire_commands(owner: *mut Owner, commands: Handle) {
+    if commands.is_null() {
+        return;
+    }
+    if let Some(owner) = unsafe { owner.as_mut() } {
+        match &mut owner.backend {
+            Backend::Legacy { ops, handle } => unsafe { (ops.retire_commands)(*handle, commands) },
+            Backend::Ffx(ffx) => ffx.retire_commands(commands),
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_srvk_destroy(owner: *mut Owner) -> i32 {
+    let Some(raw) = NonNull::new(owner) else {
+        return 0;
+    };
+    let result = match &mut unsafe { &mut *owner }.backend {
+        Backend::Legacy { ops, handle } => unsafe { (ops.destroy)(*handle) },
+        Backend::Ffx(ffx) => ffx.destroy(),
+    };
+    if result == 0 {
+        drop(unsafe { Box::from_raw(raw.as_ptr()) });
+    }
+    result
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_srvk_dlss_preset(owner: *mut Owner, preset: u32) -> i32 {
+    let Some(owner) = (unsafe { owner.as_mut() }) else {
+        return INVALID;
+    };
+    if let Backend::Legacy { ops, handle } = &mut owner.backend
+        && let Some(set_preset) = ops.preset
+    {
+        return unsafe { set_preset(*handle, preset) };
+    }
+    NOT_SUPPORTED
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_srvk_spatial_fallback(
+    platform: Option<&Platform>,
+    call: *const rsf_srvk_fallback,
+) -> i32 {
+    let admission = unsafe { fallback_admit(call) };
+    if admission != 0 {
+        return admission;
+    }
+    let Some(platform) = platform else {
+        return NOT_SUPPORTED;
+    };
+    let call = unsafe { &*call };
+    let mut blit = Blit::default();
+    let result = unsafe { (platform.fallback_probe)(call, &mut blit) };
+    if result != 0 {
+        return result;
+    }
+    if blit.barrier.is_none() || blit.blit.is_none() || blit.features & LINEAR_BLIT != LINEAR_BLIT {
+        return NOT_SUPPORTED;
+    }
+    unsafe { (platform.fallback_record)(call, &blit) }
 }
 
 #[cfg(test)]
@@ -324,11 +856,12 @@ mod tests {
     #[test]
     fn xess_actual_extent_may_differ_from_the_plan() {
         let device = std::ptr::dangling_mut::<u8>().cast();
-        let setup = Setup {
+        let mut setup = Setup {
             device,
             output_width: 128,
             output_height: 72,
             depth_infinite: 1,
+            backend: RSF_SR_XESS,
             ..unsafe { std::mem::zeroed() }
         };
         let mut record: rsf_frame_record = unsafe { std::mem::zeroed() };
@@ -375,16 +908,12 @@ mod tests {
             ..unsafe { std::mem::zeroed() }
         };
         unsafe {
-            assert_eq!(rsf_core_srvk_frame_admit(&setup, &frame, 80, 45, 1), 0);
-            assert_eq!(
-                rsf_core_srvk_frame_admit(&setup, &frame, 80, 45, 0),
-                INVALID
-            );
+            assert_eq!(frame_admit(&setup, &frame, [80, 45]), 0);
+            setup.backend = RSF_SR_FSR3;
+            assert_eq!(frame_admit(&setup, &frame, [80, 45]), INVALID);
+            setup.backend = RSF_SR_XESS;
             frame.depth.width = 80;
-            assert_eq!(
-                rsf_core_srvk_frame_admit(&setup, &frame, 80, 45, 1),
-                INVALID
-            );
+            assert_eq!(frame_admit(&setup, &frame, [80, 45]), INVALID);
         }
     }
 
@@ -417,12 +946,9 @@ mod tests {
     fn vulkan_dispatch_keeps_aliases_and_retires_only_after_last_registration() {
         let mut device_id = 0u8;
         let device = std::ptr::from_mut(&mut device_id).cast();
-        assert_eq!(rsf_core_srvk_dispatch_register(device, Some(adapter)), 0);
-        assert_eq!(rsf_core_srvk_dispatch_register(device, Some(adapter)), 0);
-        assert_eq!(
-            rsf_core_srvk_dispatch_register(device, Some(different)),
-            WRONG_API
-        );
+        assert_eq!(dispatch_register(device, Some(adapter)), 0);
+        assert_eq!(dispatch_register(device, Some(adapter)), 0);
+        assert_eq!(dispatch_register(device, Some(different)), WRONG_API);
         let alias = unsafe {
             rsf_core_srvk_dispatch_lookup(
                 device,
@@ -431,13 +957,16 @@ mod tests {
             )
         };
         assert!(alias.is_some_and(|p| std::ptr::fn_addr_eq(p, promoted as unsafe extern "C" fn())));
-        rsf_core_srvk_dispatch_unregister(device);
+        dispatch_unregister(device);
         assert!(
             unsafe { rsf_core_srvk_dispatch_lookup(device, c"vkOther".as_ptr(), call) }.is_some()
         );
-        rsf_core_srvk_dispatch_unregister(device);
+        dispatch_unregister(device);
         assert!(
             unsafe { rsf_core_srvk_dispatch_lookup(device, c"vkOther".as_ptr(), call) }.is_none()
         );
     }
 }
+
+#[cfg(test)]
+mod owner_tests;
