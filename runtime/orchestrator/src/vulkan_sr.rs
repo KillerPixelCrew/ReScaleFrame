@@ -20,17 +20,17 @@ const WRONG_API: i32 = -12;
 
 // Vulkan C ABI values, checked against the native headers at the graphics bridge.
 const R8_UNORM: u32 = 9;
-const RG16_FLOAT: u32 = 83;
-const RGBA16_FLOAT: u32 = 97;
-const R32_FLOAT: u32 = 100;
+pub(super) const RG16_FLOAT: u32 = 83;
+pub(super) const RGBA16_FLOAT: u32 = 97;
+pub(super) const R32_FLOAT: u32 = 100;
 const D32_FLOAT: u32 = 126;
-const SHADER_READ: u32 = 5;
-const TRANSFER_DST: u32 = 7;
-const GENERAL: u32 = 1;
+pub(super) const SHADER_READ: u32 = 5;
+pub(super) const TRANSFER_DST: u32 = 7;
+pub(super) const GENERAL: u32 = 1;
 const TRANSFER_SRC_USAGE: u32 = 1;
 const TRANSFER_DST_USAGE: u32 = 2;
-const SAMPLED_USAGE: u32 = 4;
-const STORAGE_USAGE: u32 = 8;
+pub(super) const SAMPLED_USAGE: u32 = 4;
+pub(super) const STORAGE_USAGE: u32 = 8;
 const LINEAR_BLIT: u32 = 0x400 | 0x800 | 0x1000;
 
 const FFX_HDR: u32 = 1;
@@ -38,7 +38,7 @@ const FFX_JITTER_CANCELLATION: u32 = 4;
 const FFX_INVERTED_DEPTH: u32 = 8;
 const FFX_INFINITE_DEPTH: u32 = 16;
 const FFX_AUTO_EXPOSURE: u32 = 32;
-const SHARPENING_VENDOR: u32 = 4;
+pub(super) const SHARPENING_VENDOR: u32 = 4;
 const MAX_VERSIONS: usize = 32;
 
 type Setup = rsf_srvk_setup;
@@ -79,7 +79,7 @@ unsafe fn setup_admit(setup: *const Setup) -> i32 {
     }
 }
 
-fn valid_image(
+pub(super) fn valid_image(
     image: &Image,
     device: Device,
     extent: [u32; 2],
@@ -134,21 +134,15 @@ unsafe fn fallback_admit(call: *const rsf_srvk_fallback) -> i32 {
     0
 }
 
-unsafe fn frame_admit(setup: &Setup, frame: &Frame, planned: [u32; 2]) -> i32 {
-    if !unsafe { has_capacity(frame.record) } {
-        return INVALID;
-    }
-    let record = unsafe { &*frame.record };
+pub(super) fn valid_frame_record(
+    setup: &Setup,
+    frame: &Frame,
+    record: &rsf_frame_record,
+    render: [u32; 2],
+    output: [u32; 2],
+) -> bool {
     let camera = &record.camera;
-    // XeSS owns a queried inclusive range. All leased images still follow
-    // the actual camera/record size, even when it differs from the plan.
-    let render = if setup.backend == RSF_SR_XESS {
-        [record.render_width, record.render_height]
-    } else {
-        planned
-    };
-    let output = [setup.output_width, setup.output_height];
-    if render.contains(&0)
+    !(render.contains(&0)
         || record.abi_version != RSF_GAME_FRAME_ABI_VERSION
         || camera.struct_size < size_of_val(camera) as u32
         || camera.abi_version != RSF_GAME_CAMERA_ABI_VERSION
@@ -175,8 +169,23 @@ unsafe fn frame_admit(setup: &Setup, frame: &Frame, planned: [u32; 2]) -> i32 {
         || (setup.depth_infinite == 0 && camera.far_plane <= camera.near_plane)
         || !(0.0..=std::f32::consts::PI).contains(&camera.vertical_fov_radians)
         || camera.vertical_fov_radians == 0.0
-        || !camera.jitter_pixels.into_iter().all(f32::is_finite)
-    {
+        || !camera.jitter_pixels.into_iter().all(f32::is_finite))
+}
+
+unsafe fn frame_admit(setup: &Setup, frame: &Frame, planned: [u32; 2]) -> i32 {
+    if !unsafe { has_capacity(frame.record) } {
+        return INVALID;
+    }
+    let record = unsafe { &*frame.record };
+    // XeSS owns a queried inclusive range. All leased images still follow
+    // the actual camera/record size, even when it differs from the plan.
+    let render = if setup.backend == RSF_SR_XESS {
+        [record.render_width, record.render_height]
+    } else {
+        planned
+    };
+    let output = [setup.output_width, setup.output_height];
+    if !valid_frame_record(setup, frame, record, render, output) {
         return INVALID;
     }
     let device = setup.device;

@@ -110,6 +110,7 @@ pub struct rsf_dx12vk_platform {
         unsafe extern "C" fn(
             arg1: *mut ::core::ffi::c_void,
             format: u32,
+            extra_usage: u32,
             importable: *mut u32,
             max_width: *mut u32,
             max_height: *mut u32,
@@ -121,6 +122,7 @@ pub struct rsf_dx12vk_platform {
             format: u32,
             width: u32,
             height: u32,
+            extra_usage: u32,
             arg2: *mut u64,
         ) -> i32,
     >,

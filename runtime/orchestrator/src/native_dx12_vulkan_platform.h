@@ -10,9 +10,9 @@ typedef struct rsf_dx12vk_platform {
     int32_t (*create_timeline)(void*, uint64_t*);
     int32_t (*import_timeline)(void*, uint64_t, void*);
     void (*destroy_timeline)(void*, uint64_t);
-    int32_t (*image_properties)(void*, uint32_t format, uint32_t* importable,
+    int32_t (*image_properties)(void*, uint32_t format, uint32_t extra_usage, uint32_t* importable,
         uint32_t* max_width, uint32_t* max_height);
-    int32_t (*create_image)(void*, uint32_t format, uint32_t width, uint32_t height, uint64_t*);
+    int32_t (*create_image)(void*, uint32_t format, uint32_t width, uint32_t height, uint32_t extra_usage, uint64_t*);
     void (*image_requirements)(void*, uint64_t image, uint64_t* bytes, uint32_t* types);
     int32_t (*handle_memory_types)(void*, void* handle, uint32_t*);
     uint32_t (*device_local_types)(void*);
@@ -25,6 +25,7 @@ typedef struct rsf_dx12vk_platform {
 #ifdef __cplusplus
 extern "C" {
 #endif
+const rsf_dx12vk_platform* rsf_dx12vk_platform_ops();
 int32_t rsf_core_dx12vk_interop_create(const rsf_dx12vk_platform*, const rsf_srvk_setup*,
     const rsf_dx12vk_interop_callbacks*, uint32_t timeline_enabled, rsf_dx12vk_interop**);
 #ifdef __cplusplus

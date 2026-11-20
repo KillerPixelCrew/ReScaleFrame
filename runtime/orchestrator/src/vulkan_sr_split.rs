@@ -38,19 +38,12 @@ fn public_result(result: i32) -> i32 {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_srvk_fsr4_create(
-    provider: *const Provider,
+pub(super) unsafe fn admit_setup(
     setup: *const Setup,
     handoff: *const Handoff,
-    owner: *mut Handle,
-) -> i32 {
-    if owner.is_null() {
-        return INVALID;
-    }
-    unsafe { owner.write(ptr::null_mut()) };
+) -> Result<(Setup, Handoff), i32> {
     if !unsafe { has_capacity(setup) && has_capacity(handoff) } {
-        return INVALID;
+        return Err(INVALID);
     }
     let (facts, lease) = unsafe { (&*setup, &*handoff) };
     if facts.abi_version != RSF_SRVK_ABI_VERSION
@@ -59,10 +52,10 @@ unsafe extern "C" fn rsf_core_srvk_fsr4_create(
             RSF_SRVK_SPLIT_ABI_VERSION | RSF_SRVK_SPLIT_TRACKED_ABI_VERSION
         )
     {
-        return ABI_MISMATCH;
+        return Err(ABI_MISMATCH);
     }
     if facts.backend != RSF_SR_FSR4 {
-        return NOT_SUPPORTED;
+        return Err(NOT_SUPPORTED);
     }
     if facts.quality > 4
         || facts.instance.is_null()
@@ -81,7 +74,31 @@ unsafe extern "C" fn rsf_core_srvk_fsr4_create(
         || facts.depth_infinite > 1
         || facts.motion_jittered > 1
     {
+        return Err(INVALID);
+    }
+    Ok((*facts, *lease))
+}
+
+pub(super) fn private_setup_result(error: i32) -> i32 {
+    match error {
+        ABI_MISMATCH => RSF_FSR4_BRIDGE_ABI_MISMATCH,
+        _ => RSF_FSR4_BRIDGE_INVALID_ARGUMENT,
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_srvk_fsr4_create(
+    provider: *const Provider,
+    setup: *const Setup,
+    handoff: *const Handoff,
+    owner: *mut Handle,
+) -> i32 {
+    if owner.is_null() {
         return INVALID;
+    }
+    unsafe { owner.write(ptr::null_mut()) };
+    if let Err(error) = unsafe { admit_setup(setup, handoff) } {
+        return error;
     }
     let Some(provider) = (unsafe { provider.as_ref() }) else {
         return NOT_COMPILED;
@@ -246,7 +263,7 @@ unsafe extern "C" fn rsf_core_srvk_fsr4_info(
 
 #[repr(C)]
 #[derive(Default)]
-struct SplitLease {
+pub(super) struct SplitLease {
     tracked: u32,
     producer: Handle,
     continuation: Handle,
@@ -254,39 +271,64 @@ struct SplitLease {
 
 const _: () = assert!(size_of::<SplitLease>() == 24);
 
+impl SplitLease {
+    pub(super) fn new(version: u32) -> Self {
+        Self {
+            tracked: u32::from(version == RSF_SRVK_SPLIT_TRACKED_ABI_VERSION),
+            ..Self::default()
+        }
+    }
+
+    pub(super) fn pending(&self) -> bool {
+        self.tracked != 0 && (!self.producer.is_null() || !self.continuation.is_null())
+    }
+
+    pub(super) fn begin(&mut self, commands: Handle) {
+        if self.tracked != 0 {
+            self.producer = commands;
+        }
+    }
+
+    pub(super) fn resume(&mut self, commands: Handle) {
+        if self.tracked != 0 {
+            self.continuation = commands;
+        }
+    }
+
+    pub(super) fn submitted(&mut self, commands: Handle) -> bool {
+        if self.tracked == 0 || commands.is_null() {
+            return false;
+        }
+        if commands == self.producer {
+            self.producer = ptr::null_mut();
+            return true;
+        }
+        if self.producer.is_null() && commands == self.continuation {
+            self.continuation = ptr::null_mut();
+            return true;
+        }
+        false
+    }
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn rsf_core_split_pending(lease: &SplitLease) -> i32 {
-    i32::from(lease.tracked != 0 && (!lease.producer.is_null() || !lease.continuation.is_null()))
+    i32::from(lease.pending())
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_core_split_begin(lease: &mut SplitLease, commands: Handle) {
-    if lease.tracked != 0 {
-        lease.producer = commands;
-    }
+    lease.begin(commands);
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_core_split_resume(lease: &mut SplitLease, commands: Handle) {
-    if lease.tracked != 0 {
-        lease.continuation = commands;
-    }
+    lease.resume(commands);
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_core_split_submitted(lease: &mut SplitLease, commands: Handle) -> i32 {
-    if lease.tracked == 0 || commands.is_null() {
-        return 0;
-    }
-    if commands == lease.producer {
-        lease.producer = ptr::null_mut();
-        return 1;
-    }
-    if lease.producer.is_null() && commands == lease.continuation {
-        lease.continuation = ptr::null_mut();
-        return 1;
-    }
-    0
+    i32::from(lease.submitted(commands))
 }
 
 #[cfg(test)]
