@@ -46,7 +46,7 @@ pub(super) fn make_plan(ow: u32, oh: u32, scale: f32) -> Option<Plan> {
     })
 }
 
-pub(super) fn plan_for_render(ow: u32, oh: u32, rw: u32, rh: u32) -> Option<Plan> {
+pub(crate) fn plan_for_render(ow: u32, oh: u32, rw: u32, rh: u32) -> Option<Plan> {
     if ow == 0
         || oh == 0
         || rw > ow

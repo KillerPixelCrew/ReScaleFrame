@@ -13,6 +13,9 @@ pub const RSF_ANOMALY_SR_DEFAULT_MIP_OFFSET: f64 = 0.0;
 pub const RSF_ANOMALY_SR_BURST_SETTLE: u32 = 30;
 pub const RSF_ANOMALY_SR_SKIPS: u32 = 6;
 pub const RSF_ANOMALY_SR_RESTORES: u32 = 6;
+pub const RSF_ANOMALY_SR_MAIN_VIEW_KEY: u32 = 1;
+pub const RSF_ANOMALY_SR_MOTION_TO_UV: f64 = 1.0;
+pub const RSF_ANOMALY_SR_MOTION_CAMERA_INCLUDED: u32 = 0;
 pub const RSF_ANOMALY_SR_OPTION_COLOUR_TRANSPORT: u32 = 0;
 pub const RSF_ANOMALY_SR_OPTION_EXPOSURE_AUTO: u32 = 1;
 pub const RSF_ANOMALY_SR_OPTION_FIRST_PERSON_ZERO: u32 = 2;
@@ -647,6 +650,116 @@ const _: () = {
 };
 #[repr(C)]
 #[derive(Copy, Clone)]
+pub struct rsf_anomaly_sr_pass_inputs {
+    pub frame: rsf_anomaly_sr_pass,
+    pub session: u64,
+    pub reset: bool,
+    pub color: *mut ::core::ffi::c_void,
+    pub color_output: *mut ::core::ffi::c_void,
+    pub depth: *mut ::core::ffi::c_void,
+    pub motion: *mut ::core::ffi::c_void,
+    pub exposure: *mut ::core::ffi::c_void,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_anomaly_sr_pass_inputs"]
+        [::core::mem::size_of::<rsf_anomaly_sr_pass_inputs>() - 416usize];
+    ["Alignment of rsf_anomaly_sr_pass_inputs"]
+        [::core::mem::align_of::<rsf_anomaly_sr_pass_inputs>() - 8usize];
+    ["Offset of field: rsf_anomaly_sr_pass_inputs::frame"]
+        [::core::mem::offset_of!(rsf_anomaly_sr_pass_inputs, frame) - 0usize];
+    ["Offset of field: rsf_anomaly_sr_pass_inputs::session"]
+        [::core::mem::offset_of!(rsf_anomaly_sr_pass_inputs, session) - 360usize];
+    ["Offset of field: rsf_anomaly_sr_pass_inputs::reset"]
+        [::core::mem::offset_of!(rsf_anomaly_sr_pass_inputs, reset) - 368usize];
+    ["Offset of field: rsf_anomaly_sr_pass_inputs::color"]
+        [::core::mem::offset_of!(rsf_anomaly_sr_pass_inputs, color) - 376usize];
+    ["Offset of field: rsf_anomaly_sr_pass_inputs::color_output"]
+        [::core::mem::offset_of!(rsf_anomaly_sr_pass_inputs, color_output) - 384usize];
+    ["Offset of field: rsf_anomaly_sr_pass_inputs::depth"]
+        [::core::mem::offset_of!(rsf_anomaly_sr_pass_inputs, depth) - 392usize];
+    ["Offset of field: rsf_anomaly_sr_pass_inputs::motion"]
+        [::core::mem::offset_of!(rsf_anomaly_sr_pass_inputs, motion) - 400usize];
+    ["Offset of field: rsf_anomaly_sr_pass_inputs::exposure"]
+        [::core::mem::offset_of!(rsf_anomaly_sr_pass_inputs, exposure) - 408usize];
+};
+impl Default for rsf_anomaly_sr_pass_inputs {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
+#[derive(Default, Copy, Clone)]
+pub struct rsf_anomaly_sr_planes {
+    pub near_plane: f32,
+    pub far_plane: f32,
+    pub vertical_fov: f32,
+    pub valid: bool,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_anomaly_sr_planes"][::core::mem::size_of::<rsf_anomaly_sr_planes>() - 16usize];
+    ["Alignment of rsf_anomaly_sr_planes"]
+        [::core::mem::align_of::<rsf_anomaly_sr_planes>() - 4usize];
+    ["Offset of field: rsf_anomaly_sr_planes::near_plane"]
+        [::core::mem::offset_of!(rsf_anomaly_sr_planes, near_plane) - 0usize];
+    ["Offset of field: rsf_anomaly_sr_planes::far_plane"]
+        [::core::mem::offset_of!(rsf_anomaly_sr_planes, far_plane) - 4usize];
+    ["Offset of field: rsf_anomaly_sr_planes::vertical_fov"]
+        [::core::mem::offset_of!(rsf_anomaly_sr_planes, vertical_fov) - 8usize];
+    ["Offset of field: rsf_anomaly_sr_planes::valid"]
+        [::core::mem::offset_of!(rsf_anomaly_sr_planes, valid) - 12usize];
+};
+#[repr(C)]
+#[derive(Default, Copy, Clone)]
+pub struct rsf_anomaly_sr_pose {
+    pub position: [f64; 3usize],
+    pub forward: [f64; 3usize],
+    pub valid: bool,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_anomaly_sr_pose"][::core::mem::size_of::<rsf_anomaly_sr_pose>() - 56usize];
+    ["Alignment of rsf_anomaly_sr_pose"][::core::mem::align_of::<rsf_anomaly_sr_pose>() - 8usize];
+    ["Offset of field: rsf_anomaly_sr_pose::position"]
+        [::core::mem::offset_of!(rsf_anomaly_sr_pose, position) - 0usize];
+    ["Offset of field: rsf_anomaly_sr_pose::forward"]
+        [::core::mem::offset_of!(rsf_anomaly_sr_pose, forward) - 24usize];
+    ["Offset of field: rsf_anomaly_sr_pose::valid"]
+        [::core::mem::offset_of!(rsf_anomaly_sr_pose, valid) - 48usize];
+};
+#[repr(C)]
+#[derive(Default, Copy, Clone)]
+pub struct rsf_anomaly_sr_reset_facts {
+    pub first: bool,
+    pub device: bool,
+    pub settings: bool,
+    pub sequence: bool,
+    pub cut: bool,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_anomaly_sr_reset_facts"]
+        [::core::mem::size_of::<rsf_anomaly_sr_reset_facts>() - 5usize];
+    ["Alignment of rsf_anomaly_sr_reset_facts"]
+        [::core::mem::align_of::<rsf_anomaly_sr_reset_facts>() - 1usize];
+    ["Offset of field: rsf_anomaly_sr_reset_facts::first"]
+        [::core::mem::offset_of!(rsf_anomaly_sr_reset_facts, first) - 0usize];
+    ["Offset of field: rsf_anomaly_sr_reset_facts::device"]
+        [::core::mem::offset_of!(rsf_anomaly_sr_reset_facts, device) - 1usize];
+    ["Offset of field: rsf_anomaly_sr_reset_facts::settings"]
+        [::core::mem::offset_of!(rsf_anomaly_sr_reset_facts, settings) - 2usize];
+    ["Offset of field: rsf_anomaly_sr_reset_facts::sequence"]
+        [::core::mem::offset_of!(rsf_anomaly_sr_reset_facts, sequence) - 3usize];
+    ["Offset of field: rsf_anomaly_sr_reset_facts::cut"]
+        [::core::mem::offset_of!(rsf_anomaly_sr_reset_facts, cut) - 4usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
 pub struct rsf_anomaly_sr_seam {
     pub twin_surface: *mut ::core::ffi::c_void,
     pub engine_surface: *mut ::core::ffi::c_void,
@@ -878,14 +991,6 @@ pub struct rsf_anomaly_sr_stage_platform {
         ::core::option::Option<unsafe extern "C" fn(arg1: *mut rsf_anomaly_sr_controller)>,
     pub swap_counters:
         ::core::option::Option<unsafe extern "C" fn(arg1: *mut rsf_anomaly_sr_swap_counters)>,
-    pub camera_cut: ::core::option::Option<
-        unsafe extern "C" fn(
-            previous_view: *const f32,
-            view: *const f32,
-            distance: f32,
-            degrees: f32,
-        ) -> bool,
-    >,
     pub timer_begin: ::core::option::Option<unsafe extern "C" fn()>,
     pub timer_seam: ::core::option::Option<unsafe extern "C" fn(swapped: bool)>,
     pub timer_finish: ::core::option::Option<unsafe extern "C" fn()>,
@@ -1010,7 +1115,7 @@ pub struct rsf_anomaly_sr_stage_platform {
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
     ["Size of rsf_anomaly_sr_stage_platform"]
-        [::core::mem::size_of::<rsf_anomaly_sr_stage_platform>() - 608usize];
+        [::core::mem::size_of::<rsf_anomaly_sr_stage_platform>() - 600usize];
     ["Alignment of rsf_anomaly_sr_stage_platform"]
         [::core::mem::align_of::<rsf_anomaly_sr_stage_platform>() - 8usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::frame_facts"]
@@ -1065,106 +1170,104 @@ const _: () = {
         [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, controller) - 192usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::swap_counters"]
         [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, swap_counters) - 200usize];
-    ["Offset of field: rsf_anomaly_sr_stage_platform::camera_cut"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, camera_cut) - 208usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::timer_begin"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, timer_begin) - 216usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, timer_begin) - 208usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::timer_seam"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, timer_seam) - 224usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, timer_seam) - 216usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::timer_finish"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, timer_finish) - 232usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, timer_finish) - 224usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::timer_reset"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, timer_reset) - 240usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, timer_reset) - 232usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::timer_sample"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, timer_sample) - 248usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, timer_sample) - 240usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::host_stats"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, host_stats) - 256usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, host_stats) - 248usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::host_reset"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, host_reset) - 264usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, host_reset) - 256usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::staging_copy"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, staging_copy) - 272usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, staging_copy) - 264usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::release"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, release) - 280usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, release) - 272usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::write_raw"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, write_raw) - 288usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, write_raw) - 280usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::bilinear"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, bilinear) - 296usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, bilinear) - 288usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::round_trip"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, round_trip) - 304usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, round_trip) - 296usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::temporal_ready"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, temporal_ready) - 312usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, temporal_ready) - 304usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::temporal_targets"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, temporal_targets) - 320usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, temporal_targets) - 312usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::motion_target"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, motion_target) - 328usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, motion_target) - 320usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::motion_view"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, motion_view) - 336usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, motion_view) - 328usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::seam_prepare"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, seam_prepare) - 344usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, seam_prepare) - 336usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::temporal_textures"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, temporal_textures) - 352usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, temporal_textures) - 344usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::reinsert"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, reinsert) - 360usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, reinsert) - 352usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::driver_bind"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, driver_bind) - 368usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, driver_bind) - 360usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::driver_enabled"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, driver_enabled) - 376usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, driver_enabled) - 368usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::driver_output_format"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, driver_output_format) - 384usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, driver_output_format) - 376usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::driver_planned"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, driver_planned) - 392usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, driver_planned) - 384usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::driver_boundary"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, driver_boundary) - 400usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, driver_boundary) - 392usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::driver_evaluate"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, driver_evaluate) - 408usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, driver_evaluate) - 400usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::driver_request_dump"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, driver_request_dump) - 416usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, driver_request_dump) - 408usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::driver_count"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, driver_count) - 424usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, driver_count) - 416usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::driver_count_bilinear"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, driver_count_bilinear) - 432usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, driver_count_bilinear) - 424usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::driver_count_prepared"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, driver_count_prepared) - 440usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, driver_count_prepared) - 432usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::driver_stop"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, driver_stop) - 448usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, driver_stop) - 440usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::driver_report"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, driver_report) - 456usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, driver_report) - 448usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::driver_overlay_report"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, driver_overlay_report) - 464usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, driver_overlay_report) - 456usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::driver_request"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, driver_request) - 472usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, driver_request) - 464usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::verify_guards"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, verify_guards) - 480usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, verify_guards) - 472usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::hooks_created"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, hooks_created) - 488usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, hooks_created) - 480usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::set_engine"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, set_engine) - 496usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, set_engine) - 488usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::install_hooks"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, install_hooks) - 504usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, install_hooks) - 496usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::install_position_slot"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, install_position_slot) - 512usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, install_position_slot) - 504usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::disable_hooks"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, disable_hooks) - 520usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, disable_hooks) - 512usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::set_rm_near"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, set_rm_near) - 528usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, set_rm_near) - 520usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::remove_hooks"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, remove_hooks) - 536usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, remove_hooks) - 528usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::dump_exports"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, dump_exports) - 544usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, dump_exports) - 536usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::ini_int"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, ini_int) - 552usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, ini_int) - 544usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::ini_text"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, ini_text) - 560usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, ini_text) - 552usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::configured_ini"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, configured_ini) - 568usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, configured_ini) - 560usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::persist_int"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, persist_int) - 576usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, persist_int) - 568usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::persist_text"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, persist_text) - 584usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, persist_text) - 576usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::apply_colour_transport"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, apply_colour_transport) - 592usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, apply_colour_transport) - 584usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::vendor_file"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, vendor_file) - 600usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, vendor_file) - 592usize];
 };
 #[repr(C)]
 #[derive(Default, Copy, Clone)]

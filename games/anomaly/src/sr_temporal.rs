@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
+use crate::sr_pass::{PassInputs, ResetFacts, ResetReason, build_pass, reset_reason};
+use crate::sr_stage::plan_for_render;
+use rsf_game_sys::rsf_game_log_fn;
 use rsf_game_sys::sr_abi::*;
-use rsf_game_sys::{rsf_game_log_fn, rsf_game_render_pass};
 use std::cell::UnsafeCell;
 use std::ffi::{CStr, CString, c_char, c_void};
-use std::mem::MaybeUninit;
 use std::ptr::{null, null_mut};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Instant;
@@ -180,16 +181,6 @@ struct DriverOptions {
     qualities: u32,
     initial: Settings,
     setup: rsf_dlss_pipeline_setup,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct ResetFacts {
-    first: bool,
-    device: bool,
-    settings: bool,
-    sequence: bool,
-    cut: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -384,18 +375,6 @@ struct RenderState {
 struct Driver {
     render: UnsafeCell<RenderState>,
     published: Mutex<Published>,
-}
-
-impl Default for ResetFacts {
-    fn default() -> Self {
-        Self {
-            first: true,
-            device: false,
-            settings: false,
-            sequence: false,
-            cut: false,
-        }
-    }
 }
 
 impl Driver {
@@ -691,14 +670,17 @@ impl RenderState {
 }
 
 type SetTransport = Option<unsafe extern "C" fn(u32)>;
-type Plan = unsafe extern "C" fn(u32, u32, u32, u32) -> bool;
-type BuildPass =
-    unsafe extern "C" fn(Raw, *const ResetFacts, u64, *mut rsf_game_render_pass, *mut u8) -> u8;
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_sr_create() -> *mut Driver {
     Box::into_raw(Box::new(Driver {
-        render: UnsafeCell::new(RenderState::default()),
+        render: UnsafeCell::new(RenderState {
+            resets: ResetFacts {
+                first: true,
+                ..ResetFacts::default()
+            },
+            ..RenderState::default()
+        }),
         published: Mutex::default(),
     }))
 }
@@ -836,14 +818,13 @@ unsafe extern "C" fn rsf_anomaly_sr_plan(
     oh: u32,
     rw: *mut u32,
     rh: *mut u32,
-    valid_plan: Plan,
 ) -> bool {
     let status = driver.published().status;
     let pipeline = status.pipeline;
     if !status.running
         || pipeline.running == 0
         || [pipeline.output_width, pipeline.output_height] != [ow, oh]
-        || !unsafe { valid_plan(ow, oh, pipeline.render_width, pipeline.render_height) }
+        || plan_for_render(ow, oh, pipeline.render_width, pipeline.render_height).is_none()
     {
         return false;
     }
@@ -895,10 +876,8 @@ impl Published {
 unsafe extern "C" fn rsf_anomaly_sr_evaluate(
     driver: &Driver,
     context: Raw,
-    inputs: Raw,
+    inputs: &mut PassInputs,
     facts: &ResetFacts,
-    motion_missing: bool,
-    build: BuildPass,
 ) -> bool {
     let render = unsafe { &mut *driver.render.get() };
     let Some(api) = render.api.filter(|_| !render.device.is_null()) else {
@@ -911,41 +890,22 @@ unsafe extern "C" fn rsf_anomaly_sr_evaluate(
         settings: facts.settings || render.resets.settings,
         ..*facts
     };
-    let mut pass = MaybeUninit::uninit();
-    let mut reset = 0;
-    // The existing engine pass builder copies camera and identity and borrows textures
-    // from this seam. A successful build initializes the full SDK structure.
-    let error = unsafe {
-        build(
-            inputs,
-            &facts,
-            render.session,
-            pass.as_mut_ptr(),
-            &mut reset,
-        )
-    };
-    if error != 0 {
-        let errors = [
-            "none",
-            "sizes",
-            "camera",
-            "projection",
-            "jitter",
-            "resources",
-        ];
-        let mut published = driver.published();
-        if let Some(count) = published.counters.pass_errors.get_mut(error as usize) {
-            *count += 1;
+    let reset = reset_reason(&facts);
+    inputs.session = render.session;
+    inputs.reset = reset != ResetReason::None;
+    let pass = match build_pass(inputs) {
+        Ok(pass) => pass,
+        Err(error) => {
+            let mut published = driver.published();
+            published.counters.pass_errors[error as usize] += 1;
+            published.count(Refusal::Pass);
+            published.status.last_evaluated = false;
+            published
+                .status
+                .reason(&format!("SR input refused: {}", error.name()));
+            return false;
         }
-        published.count(Refusal::Pass);
-        published.status.last_evaluated = false;
-        published.status.reason(&format!(
-            "SR input refused: {}",
-            errors.get(error as usize).unwrap_or(&"unknown")
-        ));
-        return false;
-    }
-    let pass = unsafe { pass.assume_init() };
+    };
     // Runtime consumes this pass synchronously while the native caller still owns its leases.
     let result = unsafe { api.evaluate.expect("validated SR evaluate")(context, &pass) };
     let pipeline = render.pipeline_status();
@@ -960,7 +920,7 @@ unsafe extern "C" fn rsf_anomaly_sr_evaluate(
         status.pipeline = pipeline;
     }
     status.jitter = pass.camera.jitter_pixels;
-    status.motion_present = !pass.motion.is_null() && !motion_missing;
+    status.motion_present = !pass.motion.is_null() && !inputs.frame.motion_missing;
     status.exposure_present = !pass.exposure.is_null();
     if result != OK {
         let index = if (-10..=-1).contains(&result) {
@@ -977,10 +937,8 @@ unsafe extern "C" fn rsf_anomaly_sr_evaluate(
         ));
         return false;
     }
-    if reset != 0
-        && let Some(count) = counters.resets.get_mut(reset as usize)
-    {
-        *count += 1;
+    if reset != ResetReason::None {
+        counters.resets[reset as usize] += 1;
     }
     render.resets.first = false;
     render.resets.device = false;

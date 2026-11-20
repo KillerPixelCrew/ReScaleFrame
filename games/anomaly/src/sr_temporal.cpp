@@ -16,14 +16,12 @@ struct DriverOptions {
     rsf_dlss_pipeline_setup setup;
 };
 using SetTransport = void (*)(uint32_t);
-using BuildPass = PassError (*)(void*, const ResetFacts*, uint64_t, rsf_game_render_pass*, ResetReason*);
-using Plan = bool (*)(uint32_t, uint32_t, uint32_t, uint32_t);
 
 static_assert(sizeof(rsf_d3d11_sr_api) == 112 && offsetof(rsf_d3d11_sr_api, start) == 16 &&
     offsetof(rsf_d3d11_sr_api, set_sharpening) == 104);
 static_assert(sizeof(DriverOptions) == 200 && offsetof(DriverOptions, setup) == 32);
 static_assert(sizeof(SrSettings) == 16 && offsetof(SrSettings, backend) == 4);
-static_assert(sizeof(ResetFacts) == 5 && sizeof(TemporalStatusData) == 288 &&
+static_assert(sizeof(TemporalStatusData) == 288 &&
     offsetof(TemporalStatusData, reason_utf8) == 188);
 static_assert(sizeof(TemporalCounters) == 424);
 
@@ -33,19 +31,6 @@ uint64_t session_id() noexcept {
     return static_cast<uint64_t>(qpc.QuadPart) | 1u;
 }
 
-PassError leased_pass(void* inputs, const ResetFacts* facts, uint64_t session, rsf_game_render_pass* pass,
-    ResetReason* reason) noexcept {
-    auto& in = *static_cast<PassInputs*>(inputs);
-    *reason = reset_reason(*facts);
-    in.reset = *reason != ResetReason::None;
-    in.session = session;
-    return build_pass(in, *pass);
-}
-
-bool valid_plan(uint32_t ow, uint32_t oh, uint32_t rw, uint32_t rh) noexcept {
-    ScalePlan plan{};
-    return make_plan_for_render(ow, oh, rw, rh, plan);
-}
 }
 
 extern "C" {
@@ -59,9 +44,9 @@ void rsf_anomaly_sr_request(TemporalState*, const SrSettings*) noexcept;
 bool rsf_anomaly_sr_enabled(const TemporalState*) noexcept;
 bool rsf_anomaly_sr_running(const TemporalState*) noexcept;
 void* rsf_anomaly_sr_output_texture(const TemporalState*) noexcept;
-bool rsf_anomaly_sr_plan(const TemporalState*, uint32_t, uint32_t, uint32_t*, uint32_t*, Plan) noexcept;
+bool rsf_anomaly_sr_plan(const TemporalState*, uint32_t, uint32_t, uint32_t*, uint32_t*) noexcept;
 void rsf_anomaly_sr_boundary(TemporalState*, void*, uint32_t, uint32_t) noexcept;
-bool rsf_anomaly_sr_evaluate(TemporalState*, void*, void*, const ResetFacts*, bool, BuildPass) noexcept;
+bool rsf_anomaly_sr_evaluate(TemporalState*, void*, rsf_anomaly_sr_pass_inputs*, const rsf_anomaly_sr_reset_facts*) noexcept;
 bool rsf_anomaly_sr_request_dump(const TemporalState*, const char*) noexcept;
 void rsf_anomaly_sr_count(TemporalState*, Refusal) noexcept;
 void rsf_anomaly_sr_count_bilinear(TemporalState*) noexcept;
@@ -132,13 +117,21 @@ uint32_t TemporalDriver::output_format() const noexcept {
     return desc.Format;
 }
 bool TemporalDriver::planned_render(uint32_t ow, uint32_t oh, uint32_t& rw, uint32_t& rh) const noexcept {
-    return rsf_anomaly_sr_plan(state_, ow, oh, &rw, &rh, valid_plan);
+    return rsf_anomaly_sr_plan(state_, ow, oh, &rw, &rh);
 }
 void TemporalDriver::boundary(ID3D11Device* device, uint32_t ow, uint32_t oh) noexcept {
     rsf_anomaly_sr_boundary(state_, device, ow, oh);
 }
 bool TemporalDriver::evaluate(ID3D11DeviceContext* context, PassInputs& inputs, const ResetFacts& facts) noexcept {
-    return rsf_anomaly_sr_evaluate(state_, context, &inputs, &facts, inputs.motion_missing, leased_pass);
+    auto args = pass_inputs(inputs);
+    const bool evaluated = evaluate(context, args, facts);
+    inputs.session = args.session;
+    inputs.reset = args.reset;
+    return evaluated;
+}
+bool TemporalDriver::evaluate(ID3D11DeviceContext* context, rsf_anomaly_sr_pass_inputs& inputs, const ResetFacts& facts) noexcept {
+    const auto reset = reset_facts(facts);
+    return rsf_anomaly_sr_evaluate(state_, context, &inputs, &reset);
 }
 bool TemporalDriver::request_dump(const std::string& prefix) noexcept {
     return rsf_anomaly_sr_request_dump(state_, prefix.c_str());

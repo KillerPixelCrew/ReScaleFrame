@@ -9,6 +9,7 @@ struct Fake {
     ini: Vec<(&'static str, &'static str)>,
     scope: bool,
     generation: u64,
+    eye_x: f32,
     window_open: bool,
     jittered: bool,
     refused: bool,
@@ -102,8 +103,13 @@ extern "C" fn geometry_active() -> bool {
 }
 unsafe extern "C" fn read_camera(out: *mut rsf_anomaly_sr_camera) -> bool {
     let camera = unsafe { &mut *out };
-    camera.view[0] = 1.0;
-    camera.projection[0] = 1.0;
+    let x = fake(|f| f.eye_x);
+    camera.view = [
+        1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, -x, 0.0, 0.0, 1.0,
+    ];
+    camera.projection = [
+        1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.001, 1.0, 0.0, 0.0, -0.2, 0.0,
+    ];
     record("camera");
     true
 }
@@ -478,6 +484,27 @@ fn scope_frames_neither_jitter_nor_read_the_main_camera() {
     driver.prepare(null_mut());
     assert!(driver.jitter().reset);
     assert_eq!(driver.jitter().sequence_index, 0);
+}
+
+#[test]
+fn h1_detects_a_cut_from_the_previous_main_camera() {
+    let table = platform();
+    let driver = installed(5, &table);
+    let cut = || driver.lock().as_ref().unwrap().frame_cut;
+    driver.prepare(null_mut());
+    assert!(!cut());
+    driver.frame_end();
+    fake(|f| f.eye_x = 4.0);
+    driver.prepare(null_mut());
+    assert!(!cut());
+    driver.frame_end();
+    fake(|f| f.eye_x = 8.25);
+    driver.prepare(null_mut());
+    assert!(cut());
+    driver.frame_end();
+    fake(|f| f.eye_x = f32::NAN);
+    driver.prepare(null_mut());
+    assert!(!cut());
 }
 
 #[test]

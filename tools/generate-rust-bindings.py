@@ -103,7 +103,7 @@ generate("games/anomaly/src/sr_swap_abi.rs", "games/anomaly/src/sr_swap_platform
          ["--no-recursive-allowlist", "--with-derive-default", "--raw-line", "#![allow(dead_code)]"])
 generate("games/anomaly/src/sr_stage_abi.rs", "games/anomaly/src/sr_stage_platform.h",
          "rsf_anomaly_sr_(log|settings|stage_(config|platform)|jitter_(state|sample|uv|sequence)|burst_(gate|verdict)|plan|frame_facts|controller|"
-         "swap_counters|camera|pass|seam|motion_target|temporal_textures|timer|dump|choices)",
+         "swap_counters|camera|pass(_inputs)?|planes|pose|reset_facts|seam|motion_target|temporal_textures|timer|dump|choices)",
          "RSF_ANOMALY_SR_.*", [],
          ["--no-recursive-allowlist", "--with-derive-default", "--raw-line", "#![allow(dead_code)]",
           "--raw-line", "use rsf_game_sys::rsf_frame_record;"])
