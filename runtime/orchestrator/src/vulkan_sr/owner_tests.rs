@@ -1,0 +1,554 @@
+// SPDX-License-Identifier: MIT
+use super::*;
+
+const FAILED: i32 = -9;
+
+#[derive(Debug, PartialEq)]
+enum Call {
+    Create(u64, u32),
+    Plan,
+    Allocate(u64, u32, u32, u32),
+    Mask,
+    Output,
+    Dispatch(u32, u64, u64, f32, f32),
+    Capture(String),
+    Sharpen,
+    Log,
+    Copy(u64, u64),
+    Retire(usize),
+    Flush,
+    Destroy,
+    Clear,
+    Release(u64, u64),
+    Close,
+}
+
+struct Fake {
+    calls: Vec<Call>,
+    effective: u64,
+    fail_allocation: bool,
+    dispatch_result: i32,
+    destroy_result: i32,
+}
+
+impl Default for Fake {
+    fn default() -> Self {
+        Self {
+            calls: Vec::new(),
+            effective: 33,
+            fail_allocation: false,
+            dispatch_result: 0,
+            destroy_result: 0,
+        }
+    }
+}
+
+unsafe fn fake<'a>(handle: Handle) -> &'a mut Fake {
+    unsafe { &mut *handle.cast() }
+}
+
+unsafe extern "C" fn proc(_: Handle, _: *const c_char) -> rsf_vk_function {
+    None
+}
+
+impl Fake {
+    fn setup(&mut self, backend: u32) -> Setup {
+        let device = ptr::from_mut(self).cast();
+        Setup {
+            struct_size: size_of::<Setup>() as u32,
+            abi_version: RSF_SRVK_ABI_VERSION,
+            instance: device,
+            physical_device: device,
+            device,
+            instance_proc: Some(proc),
+            device_proc: Some(proc),
+            backend,
+            quality: 1,
+            output_width: 128,
+            output_height: 72,
+            depth_inverted: 1,
+            depth_infinite: 1,
+            motion_jittered: 1,
+            runtime_directory_utf8: c"unused".as_ptr(),
+        }
+    }
+}
+
+// The stubs have the same calling convention as the C++ platform table.
+macro_rules! leaf {
+    (|$($arg:tt: $ty:ty),*| -> $ret:ty $body:block) => {{
+        unsafe extern "C" fn callback($($arg: $ty),*) -> $ret $body
+        callback
+    }};
+}
+
+static PLATFORM: Platform = Platform {
+    dlss: LegacyOps {
+        create: leaf!(|setup: &Setup, out: &mut Handle| -> i32 {
+            *out = setup.device;
+            0
+        }),
+        plan: leaf!(|_: Handle, width: &mut u32, height: &mut u32| -> i32 {
+            *width = 64;
+            *height = 36;
+            0
+        }),
+        evaluate: leaf!(|_: Handle, _: Handle, _: &Frame| -> i32 { FAILED }),
+        destroy: leaf!(|handle: Handle| -> i32 { unsafe { fake(handle).destroy_result } }),
+        retire_commands: leaf!(|handle: Handle, commands: Handle| -> () {
+            unsafe { fake(handle).calls.push(Call::Retire(commands as usize)) }
+        }),
+        preset: Some(leaf!(|_: Handle, preset: u32| -> i32 {
+            if preset == 11 { 0 } else { INVALID }
+        })),
+    },
+    xess: LegacyOps {
+        create: leaf!(|_: &Setup, _: &mut Handle| -> i32 { NOT_COMPILED }),
+        plan: leaf!(|_: Handle, _: &mut u32, _: &mut u32| -> i32 { NOT_COMPILED }),
+        evaluate: leaf!(|_: Handle, _: Handle, _: &Frame| -> i32 { NOT_COMPILED }),
+        destroy: leaf!(|_: Handle| -> i32 { NOT_COMPILED }),
+        retire_commands: leaf!(|_: Handle, _: Handle| -> () {}),
+        preset: None,
+    },
+    ffx: FfxOps {
+        open: leaf!(|setup: &Setup, out: &mut Handle| -> i32 {
+            *out = setup.device;
+            0
+        }),
+        close: leaf!(|handle: Handle| -> () { unsafe { fake(handle).calls.push(Call::Close) } }),
+        initialize_graphics: leaf!(|_: Handle, _: &Setup| -> i32 { 0 }),
+        versions: leaf!(|_: Handle,
+                         versions: &mut [Version; MAX_VERSIONS],
+                         count: &mut u64|
+         -> i32 {
+            for (index, (id, major, minor, patch)) in [
+                (29, 2, 9, 0),
+                (32, 3, 2, 9),
+                (33, 3, 3, 0),
+                (34, 3, 3, 0),
+                (41, 4, 1, 0),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                versions[index] = Version {
+                    id,
+                    major,
+                    minor,
+                    patch,
+                };
+            }
+            *count = 5;
+            0
+        }),
+        create_effect: leaf!(
+            |handle: Handle, _: &Setup, version: u64, flags: u32| -> i32 {
+                unsafe { fake(handle).calls.push(Call::Create(version, flags)) };
+                0
+            }
+        ),
+        effective_version: leaf!(|handle: Handle, effective: &mut u64| -> i32 {
+            *effective = unsafe { fake(handle).effective };
+            0
+        }),
+        destroy_effect: leaf!(|handle: Handle| -> i32 {
+            let state = unsafe { fake(handle) };
+            state.calls.push(Call::Destroy);
+            state.destroy_result
+        }),
+        plan: leaf!(
+            |handle: Handle, _: &Setup, width: &mut u32, height: &mut u32| -> i32 {
+                unsafe { fake(handle).calls.push(Call::Plan) };
+                *width = 64;
+                *height = 36;
+                0
+            }
+        ),
+        allocate: leaf!(
+            |handle: Handle, image: &mut Image, usage: u32, memory: &mut u64| -> i32 {
+                let state = unsafe { fake(handle) };
+                image.image = if image.format == R8_UNORM { 15 } else { 14 };
+                state.calls.push(Call::Allocate(
+                    image.image,
+                    image.width,
+                    image.height,
+                    usage,
+                ));
+                if state.fail_allocation && image.image == 15 {
+                    return INIT_FAILED;
+                }
+                *memory = image.image + 100;
+                0
+            }
+        ),
+        release: leaf!(|handle: Handle, image: u64, memory: u64| -> () {
+            unsafe { fake(handle).calls.push(Call::Release(image, memory)) }
+        }),
+        initialize_mask: leaf!(|handle: Handle, _: Handle, _: u64| -> () {
+            unsafe { fake(handle).calls.push(Call::Mask) }
+        }),
+        initialize_output: leaf!(|handle: Handle, _: Handle, _: u64| -> () {
+            unsafe { fake(handle).calls.push(Call::Output) }
+        }),
+        dispatch: leaf!(|handle: Handle, _: Handle, call: &FfxDispatch| -> i32 {
+            let state = unsafe { fake(handle) };
+            state.calls.push(Call::Dispatch(
+                call.reset,
+                call.reactive.image,
+                call.composition.image,
+                call.far_plane,
+                call.sharpness,
+            ));
+            state.dispatch_result
+        }),
+        copy_output: leaf!(
+            |handle: Handle, _: Handle, output: &Image, target: &Image| -> () {
+                unsafe {
+                    fake(handle)
+                        .calls
+                        .push(Call::Copy(output.image, target.image))
+                }
+            }
+        ),
+        sharpen: leaf!(
+            |handle: Handle, _: &Setup, _: Handle, _: &Frame, _: u64| -> i32 {
+                unsafe { fake(handle).calls.push(Call::Sharpen) };
+                0
+            }
+        ),
+        clear_sharpen: leaf!(|handle: Handle| -> () {
+            unsafe { fake(handle).calls.push(Call::Clear) }
+        }),
+        log: leaf!(|frame: &Frame, _: *const c_char| -> () {
+            unsafe { fake(frame.log_user).calls.push(Call::Log) }
+        }),
+        capture_provider: leaf!(|_: Handle, _: u64, _: u32| -> () {}),
+        capture_record: leaf!(|handle: Handle,
+                               _: Handle,
+                               _: &Image,
+                               _: &rsf_frame_record,
+                               role: *const c_char,
+                               _: u32|
+         -> () {
+            let role = unsafe { CStr::from_ptr(role) }
+                .to_string_lossy()
+                .into_owned();
+            unsafe { fake(handle).calls.push(Call::Capture(role)) };
+        }),
+        capture_wants: leaf!(|_: Handle, _: u64| -> i32 { 1 }),
+        capture_parameters: leaf!(|_: &Frame, _: u32, _: u32| -> () {}),
+        retire_commands: leaf!(|handle: Handle, commands: Handle| -> () {
+            unsafe { fake(handle).calls.push(Call::Retire(commands as usize)) }
+        }),
+        flush_capture: leaf!(|handle: Handle| -> () {
+            unsafe { fake(handle).calls.push(Call::Flush) }
+        }),
+    },
+    fallback_probe: leaf!(|call: &rsf_srvk_fallback, out: &mut Blit| -> i32 {
+        out.barrier = Some(unused);
+        out.blit = Some(unused);
+        out.features = call.output.copy_source;
+        0
+    }),
+    fallback_record: leaf!(|_: &rsf_srvk_fallback, _: &Blit| -> i32 { 123 }),
+    dump_begin: leaf!(|_: &rsf_frame_record, _: u32| -> i32 { 1 }),
+    dump_wants: leaf!(|_: &rsf_frame_record| -> i32 { 1 }),
+    dump_result: leaf!(|_: &rsf_frame_record, _: *const c_char, _: u32, _: i32| -> () {}),
+};
+
+unsafe extern "C" fn unused() {}
+unsafe extern "C" fn sharpen_valid(_: &rsf_sharpening_options) -> i32 {
+    1
+}
+
+fn frame_record() -> rsf_frame_record {
+    let mut record: rsf_frame_record = unsafe { std::mem::zeroed() };
+    record.struct_size = size_of::<rsf_frame_record>() as u32;
+    record.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+    record.session_id = 2;
+    record.frame_id = 1;
+    record.render_width = 64;
+    record.render_height = 36;
+    record.output_width = 128;
+    record.output_height = 72;
+    record.frame_time_ms = 16.0;
+    let camera = &mut record.camera;
+    camera.struct_size = size_of_val(camera) as u32;
+    camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
+    camera.render_width = record.render_width;
+    camera.render_height = record.render_height;
+    camera.output_width = record.output_width;
+    camera.output_height = record.output_height;
+    camera.depth_inverted = 1;
+    camera.motion_jittered = 1;
+    camera.near_plane = 0.1;
+    camera.vertical_fov_radians = 1.0;
+    record
+}
+
+fn frame_input(setup: &Setup, record: &rsf_frame_record) -> Frame {
+    let image = |id, format| Image {
+        device: setup.device,
+        image: id,
+        format,
+        width: record.render_width,
+        height: record.render_height,
+        layout: SHADER_READ,
+        copy_source: 1,
+    };
+    let sharpening = rsf_sharpening_options {
+        struct_size: size_of::<rsf_sharpening_options>() as u32,
+        mode: SHARPENING_VENDOR,
+        sharpness: 0.75,
+        ..unsafe { std::mem::zeroed() }
+    };
+    Frame {
+        struct_size: size_of::<Frame>() as u32,
+        abi_version: RSF_SRVK_ABI_VERSION,
+        record,
+        color: image(1, RGBA16_FLOAT),
+        depth: image(2, D32_FLOAT),
+        motion: image(3, RG16_FLOAT),
+        output: Image {
+            width: record.output_width,
+            height: record.output_height,
+            layout: TRANSFER_DST,
+            ..image(4, RGBA16_FLOAT)
+        },
+        reactive: image(5, R8_UNORM),
+        bias_current_color: image(7, R8_UNORM),
+        motion_scale_x: -64.0,
+        motion_scale_y: 36.0,
+        pre_exposure: 1.0,
+        sharpening,
+        log_user: setup.device,
+        ..unsafe { std::mem::zeroed() }
+    }
+}
+
+#[test]
+fn ffx_owner_reuses_staging_and_only_publishes_an_accepted_output() {
+    let mut state = Fake::default();
+    let setup = state.setup(RSF_SR_FSR3);
+    let mut owner = ptr::null_mut();
+    assert_eq!(
+        unsafe { rsf_core_srvk_create(Some(&PLATFORM), &setup, &mut owner) },
+        0
+    );
+    let owner = owner.cast();
+    assert_eq!(
+        state.calls,
+        [
+            Call::Create(33, 61),
+            Call::Plan,
+            Call::Allocate(14, 128, 72, 15),
+            Call::Allocate(15, 64, 36, 6),
+        ]
+    );
+    let (mut width, mut height) = (0, 0);
+    assert_eq!(
+        unsafe { rsf_core_srvk_plan(owner, &mut width, &mut height) },
+        0
+    );
+    assert_eq!((width, height), (64, 36));
+    assert_eq!(
+        unsafe { rsf_core_srvk_dlss_preset(owner, 11) },
+        NOT_SUPPORTED
+    );
+
+    let commands = ptr::dangling_mut::<u8>().cast();
+    let mut record = frame_record();
+    for (sequence, failure) in [(1, false), (2, true), (3, false), (4, false)] {
+        record.frame_id = sequence;
+        state.dispatch_result = if failure { FAILED } else { 0 };
+        let mut frame = frame_input(&setup, &record);
+        if sequence == 1 {
+            frame.struct_size = std::mem::offset_of!(Frame, bias_current_color) as u32;
+            let mut refused = frame_input(&setup, &record);
+            refused.depth.width += 1;
+            let previous = state.calls.len();
+            assert_eq!(
+                unsafe { rsf_core_srvk_evaluate(owner, commands, &refused, sharpen_valid) },
+                INVALID
+            );
+            assert_eq!(state.calls.len(), previous);
+        }
+        let previous = state.calls.len();
+        assert_eq!(
+            unsafe { rsf_core_srvk_evaluate(owner, commands, &frame, sharpen_valid) },
+            state.dispatch_result
+        );
+        let calls = &state.calls[previous..];
+        assert_eq!(calls.contains(&Call::Mask), sequence == 1);
+        assert_eq!(calls.contains(&Call::Output), sequence == 1);
+        assert_eq!(
+            calls.contains(&Call::Capture("sr-bias-mask".into())),
+            sequence != 1
+        );
+        assert!(calls.contains(&Call::Dispatch(
+            u32::from(sequence == 1 || sequence == 3),
+            5,
+            15,
+            f32::MAX,
+            0.75
+        )));
+        assert_eq!(calls.contains(&Call::Copy(14, 4)), !failure);
+        assert_eq!(
+            calls.contains(&Call::Capture("sr-output-linear".into())),
+            !failure
+        );
+        assert_eq!(calls.contains(&Call::Log), sequence == 1);
+    }
+    unsafe { rsf_core_srvk_retire_commands(owner, commands) };
+    assert_eq!(state.calls.last(), Some(&Call::Retire(commands as usize)));
+
+    state.destroy_result = FAILED;
+    assert_eq!(unsafe { rsf_core_srvk_destroy(owner) }, FAILED);
+    assert!(state.calls.ends_with(&[Call::Flush, Call::Destroy]));
+    assert!(
+        DISPATCH
+            .lock()
+            .unwrap()
+            .contains_key(&(setup.device as usize))
+    );
+    assert!(!state.calls.contains(&Call::Close));
+    state.destroy_result = 0;
+    assert_eq!(unsafe { rsf_core_srvk_destroy(owner) }, 0);
+    assert!(state.calls.ends_with(&[
+        Call::Destroy,
+        Call::Clear,
+        Call::Release(14, 114),
+        Call::Release(15, 115),
+        Call::Close
+    ]));
+    assert!(
+        !DISPATCH
+            .lock()
+            .unwrap()
+            .contains_key(&(setup.device as usize))
+    );
+}
+
+#[test]
+fn ffx_creation_refusal_unwinds_partial_resources_and_native_aa_skips_the_query() {
+    let mut state = Fake {
+        effective: 29,
+        fail_allocation: true,
+        ..Fake::default()
+    };
+    let mut setup = state.setup(RSF_SR_FSR2);
+    setup.quality = 0;
+    let mut owner = ptr::null_mut();
+    assert_eq!(
+        unsafe { rsf_core_srvk_create(Some(&PLATFORM), &setup, &mut owner) },
+        INIT_FAILED
+    );
+    assert!(owner.is_null());
+    assert_eq!(
+        state.calls,
+        [
+            Call::Create(29, 61),
+            Call::Allocate(14, 128, 72, 15),
+            Call::Allocate(15, 128, 72, 6),
+            Call::Clear,
+            Call::Destroy,
+            Call::Release(14, 114),
+            Call::Release(15, 0),
+            Call::Close,
+        ]
+    );
+    assert!(
+        !DISPATCH
+            .lock()
+            .unwrap()
+            .contains_key(&(setup.device as usize))
+    );
+
+    state.calls.clear();
+    state.effective = 33;
+    assert_eq!(
+        unsafe { rsf_core_srvk_create(Some(&PLATFORM), &setup, &mut owner) },
+        NOT_SUPPORTED
+    );
+    assert_eq!(
+        state.calls,
+        [
+            Call::Create(29, 61),
+            Call::Clear,
+            Call::Destroy,
+            Call::Release(0, 0),
+            Call::Release(0, 0),
+            Call::Close,
+        ]
+    );
+    assert!(owner.is_null());
+}
+
+#[test]
+fn legacy_owner_preserves_provider_failures_and_preset_routing() {
+    let mut state = Fake::default();
+    let setup = state.setup(RSF_SR_DLSS);
+    let mut raw = ptr::null_mut();
+    assert_eq!(
+        unsafe { rsf_core_srvk_create(None, &setup, &mut raw) },
+        NOT_COMPILED
+    );
+    assert_eq!(
+        unsafe { rsf_core_srvk_create(Some(&PLATFORM), &setup, &mut raw) },
+        0
+    );
+    let owner = raw.cast();
+    assert_eq!(unsafe { rsf_core_srvk_dlss_preset(owner, 11) }, 0);
+    assert_eq!(unsafe { rsf_core_srvk_dlss_preset(owner, 99) }, INVALID);
+    let commands = ptr::dangling_mut::<u8>().cast();
+    let record = frame_record();
+    let frame = frame_input(&setup, &record);
+    assert_eq!(
+        unsafe { rsf_core_srvk_evaluate(owner, commands, &frame, sharpen_valid) },
+        FAILED
+    );
+    unsafe { rsf_core_srvk_retire_commands(owner, commands) };
+    state.destroy_result = FAILED;
+    assert_eq!(unsafe { rsf_core_srvk_destroy(owner) }, FAILED);
+    state.destroy_result = 0;
+    assert_eq!(unsafe { rsf_core_srvk_destroy(owner) }, 0);
+    assert_eq!(state.calls, [Call::Retire(commands as usize)]);
+}
+
+#[test]
+fn fallback_checks_admission_and_linear_blit_capabilities_before_recording() {
+    let mut state = Fake::default();
+    let setup = state.setup(RSF_SR_FSR3);
+    let record = frame_record();
+    let frame = frame_input(&setup, &record);
+    let mut call = rsf_srvk_fallback {
+        struct_size: size_of::<rsf_srvk_fallback>() as u32,
+        abi_version: RSF_SRVK_ABI_VERSION,
+        instance: setup.instance,
+        physical_device: setup.physical_device,
+        device: setup.device,
+        instance_proc: setup.instance_proc,
+        device_proc: setup.device_proc,
+        command_buffer: setup.device,
+        color: frame.color,
+        output: frame.output,
+    };
+    assert_eq!(
+        unsafe { rsf_core_srvk_spatial_fallback(None, &call) },
+        NOT_SUPPORTED
+    );
+    assert_eq!(
+        unsafe { rsf_core_srvk_spatial_fallback(Some(&PLATFORM), &call) },
+        NOT_SUPPORTED
+    );
+    call.output.copy_source = LINEAR_BLIT;
+    assert_eq!(
+        unsafe { rsf_core_srvk_spatial_fallback(Some(&PLATFORM), &call) },
+        123
+    );
+    call.output.image = call.color.image;
+    assert_eq!(
+        unsafe { rsf_core_srvk_spatial_fallback(Some(&PLATFORM), &call) },
+        INVALID
+    );
+}
