@@ -200,7 +200,9 @@ already composited into the SR input, while RR expects it to be left out.
   - The kernel restores compute state.
 - *The handover.* The plugin hands the texture over as `RSF_GAME_RENDER_CLOUD_DEPTH`. The
   runtime gives it to the next scene-colour translucency pass with the same rectangle and
-  otherwise discards it.
+  otherwise discards it. Since the Rust cutover the session must match too, and a composite
+  arriving after a frame's first translucency pass, before that view's SR pass, is refused as
+  late ([rust-native-translucency-cutover.md](rust-native-translucency-cutover.md)).
 - *The resolve.* Pixels without object velocity now reproject at the nearer of cloud and scene
   depth. The depth given to backends stays scene depth.
 - *Prerequisite.* The relay needs the device that TrueSky's depth producer relay recorded. If

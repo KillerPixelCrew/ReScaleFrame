@@ -121,6 +121,38 @@ int main()
     rsf_native_translucency_pass(context.Get(), &later, 0);
     auto later_sr = pass(RSF_GAME_RENDER_SR, 5, 0);
     passed &= rsf_native_translucency_take(&later_sr, &masks) == 1 && !masks.motion_depth;
+
+    auto frame = [&](uint64_t number) {
+        auto scope = pass(RSF_GAME_RENDER_TRANSLUCENCY, number, 0); scope.color_input = scene.Get();
+        rsf_native_translucency_pass(context.Get(), &scope, 1);
+        rsf_native_translucency_pass(context.Get(), &scope, 0);
+        auto sr_pass = pass(RSF_GAME_RENDER_SR, number, 0);
+        masks = {}; masks.struct_size = sizeof(masks);
+        return rsf_native_translucency_take(&sr_pass, &masks) == 1;
+    };
+    // A composite reported for another session is not adopted.
+    auto foreign = cloud; foreign.session_id = 9;
+    rsf_native_translucency_pass(context.Get(), &foreign, 1);
+    passed &= frame(6) && !masks.motion_depth;
+    // A composite after the frame's first translucency pass began is late for every frame.
+    auto late = pass(RSF_GAME_RENDER_TRANSLUCENCY, 7, 0); late.color_input = scene.Get();
+    rsf_native_translucency_pass(context.Get(), &late, 1);
+    rsf_native_translucency_pass(context.Get(), &cloud, 1);
+    rsf_native_translucency_pass(context.Get(), &late, 0);
+    auto late_sr = pass(RSF_GAME_RENDER_SR, 7, 0);
+    passed &= rsf_native_translucency_take(&late_sr, &masks) == 1 && !masks.motion_depth;
+    passed &= frame(8) && !masks.motion_depth;
+    // A borrowed cloud depth stays intact while the next composite is stored.
+    rsf_native_translucency_pass(context.Get(), &cloud, 1);
+    passed &= frame(9) && masks.motion_depth;
+    void* borrowed = masks.motion_depth;
+    const float farther = 0.5f;
+    const D3D11_BOX texel{1, 1, 0, 2, 2, 1};
+    context->UpdateSubresource(clouds.Get(), 0, &texel, &farther, 4, 4);
+    rsf_native_translucency_pass(context.Get(), &cloud, 1);
+    if (borrowed) passed &= read(borrowed)[9] == 0.25f;
+    passed &= frame(10) && masks.motion_depth && masks.motion_depth != borrowed;
+    if (masks.motion_depth) passed &= read(masks.motion_depth)[9] == 0.5f;
     rsf_native_translucency_release();
     std::puts(passed ? "native_translucency passed" : "native_translucency FAILED");
     return passed ? 0 : 1;

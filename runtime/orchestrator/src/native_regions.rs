@@ -37,13 +37,13 @@ const BGRA8_UNORM: u32 = 87;
 const BIND_UNORDERED_ACCESS: u32 = 128;
 
 #[derive(Clone, Copy)]
-struct Region {
-    bounds: [u32; 4],
-    extent: [u32; 2],
+pub(super) struct Region {
+    pub(super) bounds: [u32; 4],
+    pub(super) extent: [u32; 2],
 }
 
 impl Region {
-    fn new([left, top, right, bottom]: [i32; 4]) -> Option<Self> {
+    pub(super) fn new([left, top, right, bottom]: [i32; 4]) -> Option<Self> {
         if left < 0 || top < 0 || right <= left || bottom <= top {
             return None;
         }
@@ -57,14 +57,14 @@ impl Region {
         [self.bounds[0], self.bounds[1]]
     }
 
-    fn fits(self, desc: &rsf_d3d11_texture_desc) -> bool {
+    pub(super) fn fits(self, desc: &rsf_d3d11_texture_desc) -> bool {
         desc.samples == 1
             && desc.layers == 1
             && self.bounds[2] <= desc.width
             && self.bounds[3] <= desc.height
     }
 
-    fn groups(self) -> [u32; 2] {
+    pub(super) fn groups(self) -> [u32; 2] {
         self.extent.map(|size| size.div_ceil(8))
     }
 }
@@ -398,13 +398,13 @@ unsafe extern "C" {
     fn rsf_regions_dispatch(context: Object, pass: &Dispatch);
 }
 
-struct SourceView {
+pub(super) struct SourceView {
     view: ComRef,
     texture: ComRef,
 }
 
 impl SourceView {
-    unsafe fn get(
+    pub(super) unsafe fn get(
         cache: &mut Option<Self>,
         device: Object,
         texture: Object,
