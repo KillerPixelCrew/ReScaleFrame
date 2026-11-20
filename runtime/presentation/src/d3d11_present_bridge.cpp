@@ -371,7 +371,14 @@ class Bridge final : public IDXGISwapChain4 {
         }
         if (!settings.runtime_switching || (backend == RSF_FG_BACKEND_DLSS && !host)) { switch_result.store(RSF_BACKEND_ERROR_NOT_SUPPORTED); return; }
         if (backend == active_backend.load()) { switch_result.store(0); return; }
-        std::lock_guard<std::shared_mutex> lock(provider_guard);
+        std::unique_lock lock(provider_guard, std::try_to_lock);
+        if (!lock.owns_lock()) {
+            // A pacer may still need this Present thread to finish the older
+            // frame. Retry at another completed Present without displacing a newer request.
+            uint32_t empty = UINT32_MAX;
+            (void)requested_backend.compare_exchange_strong(empty, backend);
+            return;
+        }
         const auto previous = active_backend.load();
         auto result = FAILED(drain()) ? RSF_BACKEND_ERROR_NOT_READY : RSF_BACKEND_OK;
         if (result == RSF_BACKEND_OK && backend && backend != RSF_FG_BACKEND_DLSS) {
@@ -1329,14 +1336,22 @@ extern "C" int32_t rsf_d3d11_present_begin(uint64_t id, uint64_t* generation) {
         return api && context ? api->begin_frame(context, id) : RSF_BACKEND_OK;
     });
 }
-extern "C" int32_t rsf_d3d11_present_pace(uint64_t id, rsf_pacing_owner owner, uint64_t* generation) {
+static int32_t pace(uint64_t id, rsf_pacing_owner owner, const uint64_t* expected, uint64_t* generation) {
     return with_provider([&](const rsf_generation_provider* api, void* context, rsf_streamline_host* host) -> int32_t {
-        if (generation) *generation=chain_generation.load();
+        const auto current = chain_generation.load();
+        if (generation) *generation = current;
+        if (expected && *expected != current) return RSF_BACKEND_ERROR_NOT_READY;
         if (!id || owner>RSF_PACING_ANTILAG2) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
         if (owner==RSF_PACING_REFLEX) return host ? rsf_streamline_host_sleep(host,id) : RSF_BACKEND_ERROR_NOT_READY;
         if (owner==RSF_PACING_XELL) return api && context ? api->begin_frame(context,id) : RSF_BACKEND_ERROR_NOT_READY;
         return RSF_BACKEND_OK; // Anti-Lag update lives in the core; none has no sleeper.
     });
+}
+extern "C" int32_t rsf_d3d11_present_pace(uint64_t id, rsf_pacing_owner owner, uint64_t* generation) {
+    return pace(id, owner, nullptr, generation);
+}
+extern "C" int32_t rsf_d3d11_present_pace_for_generation(uint64_t id, rsf_pacing_owner owner, uint64_t generation) {
+    return pace(id, owner, &generation, nullptr);
 }
 extern "C" int32_t rsf_d3d11_present_marker(uint64_t generation, uint64_t id, rsf_latency_marker marker, uint32_t controller) {
     return with_provider([&](const rsf_generation_provider* api, void* context, rsf_streamline_host* host) -> int32_t {

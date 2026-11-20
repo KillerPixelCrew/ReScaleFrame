@@ -3,7 +3,7 @@
 // transfer device and fence, per-source input slots, the scene depth/motion capture and SR evaluation
 // that fill them, HUD-less copies, provider admission at Prepare, retirement, Present observation and
 // window-end sequencing, and the requested/observed FG status. native_fg_platform.cpp supplies one call
-// per COM, SDK, frame-dump or CPU-ledger operation. CPU pacing and latency markers stay in native_fg.cpp.
+// per COM, SDK or frame-dump operation. native_fg_cpu.rs owns CPU pacing and latency markers.
 use crate::com_ref::ComRef;
 use crate::cpu_abi::{
     RSF_NATIVE_CPU_PRESENT_RETURNED, RSF_NATIVE_CPU_RESERVATION_BOUND,
@@ -13,9 +13,12 @@ use crate::cpu_abi::{
 use crate::fg_scene::{read_scene, set_scene};
 use crate::fg_status;
 use crate::native_cpu::{
-    rsf_native_cpu_present_result, rsf_native_cpu_read, rsf_native_cpu_reservation_read,
+    rendered_source, rsf_native_cpu_present_result, rsf_native_cpu_read,
+    rsf_native_cpu_reservation_read,
 };
 use crate::native_fg_abi::*;
+use crate::native_fg_cpu::{self as cpu_owner, Failure, Frame as CpuOwner};
+use crate::native_fg_cpu_abi::rsf_nfg_cpu_platform;
 use crate::render_abi::{
     RSF_FG_ABI_VERSION, RSF_FG_DYNAMIC, RSF_FG_FIXED, RSF_FG_OFF, RSF_PACING_NONE,
     RSF_PACING_REFLEX, RSF_REFLEX_BOOST, RSF_REFLEX_OFF, rsf_backend_log_fn as Log,
@@ -72,7 +75,7 @@ fn lock<T>(value: &Mutex<T>) -> MutexGuard<'_, T> {
     value.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-fn now_qpc() -> u64 {
+pub(crate) fn now_qpc() -> u64 {
     let mut now = 0i64;
     unsafe { windows_sys::Win32::System::Performance::QueryPerformanceCounter(&mut now) };
     now as u64
@@ -123,10 +126,14 @@ static SETTINGS: Mutex<Settings> = Mutex::new(Settings {
 });
 
 #[derive(Clone, Copy)]
-struct Sink(Log, Handle);
+pub(crate) struct Sink(Log, Handle);
 
 impl Sink {
-    fn say(self, text: &str) {
+    pub(crate) fn available(self) -> bool {
+        self.0.is_some()
+    }
+
+    pub(crate) fn say(self, text: &str) {
         if let Some(log) = self.0
             && let Ok(text) = CString::new(text)
         {
@@ -135,9 +142,8 @@ impl Sink {
     }
 }
 
-// The logger, read under its lock. Never call the platform while SETTINGS is held: the CPU owner's
-// diagnostics read options back through rsf_core_native_fg_options.
-fn sink(debug_only: bool) -> Sink {
+// Copy the sink under its lock before invoking the callback.
+pub(crate) fn sink(debug_only: bool) -> Sink {
     let settings = lock(&SETTINGS);
     if debug_only && settings.requested.debug == 0 {
         Sink(None, ptr::null_mut())
@@ -146,25 +152,29 @@ fn sink(debug_only: bool) -> Sink {
     }
 }
 
-fn requested() -> Options {
+pub(crate) fn requested() -> Options {
     lock(&SETTINGS).requested
 }
 
 fn stage(p: &Platform, name: &CStr, source: u64, native: u64, result: i32) {
-    call!(
-        p,
-        cpu_stage,
-        name.as_ptr(),
+    cpu_owner::stage(
+        cpu_platform(p),
+        call!(p, present_generation),
+        &name.to_string_lossy(),
         source,
         native,
         result,
-        ptr::null(),
-        ptr::null()
+        None,
     );
 }
 
-fn trace(p: &Platform, name: &CStr, source: u64, result: i32) {
-    call!(p, cpu_trace, name.as_ptr(), source, result);
+fn trace(name: &CStr, source: u64, result: i32) {
+    cpu_owner::trace(&name.to_string_lossy(), source, result);
+}
+
+fn cpu_platform(p: &Platform) -> &rsf_nfg_cpu_platform {
+    // The native graphics callback table supplies a process-lifetime CPU platform.
+    unsafe { &*p.cpu }
 }
 
 // The game's screen class decides, through the one rule every generation consumer applies.
@@ -655,22 +665,6 @@ fn platform<'a>(platform: *const Platform) -> Option<&'a Platform> {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_native_fg_options(out: *mut Options) {
-    if !out.is_null() {
-        unsafe { out.write(requested()) };
-    }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_native_fg_logger(sink_out: *mut Log, user: *mut Handle) {
-    let settings = lock(&SETTINGS);
-    unsafe {
-        sink_out.write(settings.log);
-        user.write(settings.log_user);
-    }
-}
-
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_native_fg_options_set(options: *const Options) {
     if options.is_null() || unsafe { options.cast::<u32>().read() } < size_of::<Options>() as u32 {
         return;
@@ -709,7 +703,7 @@ unsafe extern "C" fn rsf_core_native_fg_status_get(
     }
     let generation = call!(p, present_generation);
     let owner = call!(p, present_has_owner) != 0;
-    let rendered = call!(p, cpu_rendered_source) != 0;
+    let rendered = rendered_source();
     let mut out = {
         let settings = lock(&SETTINGS);
         let mut out = fg_status::coherent(
@@ -738,7 +732,7 @@ unsafe extern "C" fn rsf_core_native_fg_status_get(
         out.vendor.low_latency_available = 0;
     }
     if owner && !rendered {
-        call!(p, cpu_anti_lag_status, &mut out.vendor);
+        cpu_owner::pacing_status(cpu_platform(p), &mut out.vendor);
     }
     if rendered {
         out.vendor.effective_reflex = RSF_REFLEX_OFF;
@@ -948,7 +942,7 @@ unsafe extern "C" fn rsf_core_native_fg_capture(
     slot.pass = scene;
     slot.prepared = true;
     slot.hudless_ready = false;
-    call!(p, cpu_count, source, RSF_NFG_COUNT_SR_CALL);
+    cpu_owner::count_sr(source);
     stage(p, c"capture-done", source, native, 0);
 }
 
@@ -980,29 +974,27 @@ unsafe extern "C" fn rsf_core_native_fg_evaluate(
     } else {
         0
     };
-    let failure = |stage: u32, result: i32, detail: u32| {
-        call!(
-            p,
-            cpu_failure,
+    let failure = |stage, result, detail| {
+        cpu_owner::sr_failure(
             stage,
             scene.source_frame_id,
             scene.session_id,
             result,
-            detail
+            detail,
         );
     };
     let Some(frame) = frame.filter(|_| missing == 0) else {
-        failure(RSF_NFG_FAILURE_SR_PREREQUISITE, NOT_READY, missing);
+        failure(Failure::SrPrerequisite, NOT_READY, missing);
         return NOT_READY;
     };
     let source = scene.source_frame_id;
     if call!(p, host_token, host, source) == 0 {
-        failure(RSF_NFG_FAILURE_SR_TOKEN, NOT_READY, 0);
+        failure(Failure::SrToken, NOT_READY, 0);
         return NOT_READY;
     }
-    call!(p, cpu_count, source, RSF_NFG_COUNT_SR_CALL);
+    cpu_owner::count_sr(source);
     let Some(device) = initialize(p, context) else {
-        failure(RSF_NFG_FAILURE_SR_INITIALIZE, NOT_READY, 0);
+        failure(Failure::SrInitialize, NOT_READY, 0);
         return NOT_READY;
     };
     let index = slot_index(source);
@@ -1102,7 +1094,7 @@ unsafe extern "C" fn rsf_core_native_fg_evaluate(
     }
     let result = call!(p, dlss_evaluate_shared, list, &translated, source);
     if result == NOT_READY {
-        failure(RSF_NFG_FAILURE_SR_SHARED_EVALUATE, result, 0);
+        failure(Failure::SrSharedEvaluate, result, 0);
     }
     if result == OK {
         let staging = d3d12(&slot.surfaces[STAGING]);
@@ -1297,22 +1289,23 @@ unsafe extern "C" fn rsf_core_native_fg_prepare(
     };
     let mut cpu: CpuFrame = empty();
     cpu.struct_size = size_of::<CpuFrame>() as u32;
-    let mut owner: rsf_nfg_cpu_owner = empty();
+    let mut owner = CpuOwner::default();
     let backend = call!(p, present_backend);
     let no_pacer = status.pacing_owner == RSF_PACING_NONE
         && options.reflex_mode == RSF_REFLEX_OFF
         && options.frame_limit_us == 0
         && (backend == RSF_NFG_FG_BACKEND_FSR3 || backend == RSF_NFG_FG_BACKEND_FSR4);
-    let rendered = call!(p, cpu_rendered_source) != 0;
+    let rendered = rendered_source();
     let generation = call!(p, present_generation);
     let mut submitted = false;
     if window_matched {
-        call!(p, cpu_owner_read, source, &mut owner);
+        owner = cpu_owner::frame_read(source);
         submitted = owner.id == source
-            && owner.submitted != 0
-            && owner.render_complete != 0
-            && (rendered || owner.paced != 0 || (owner.prospective != 0 && no_pacer))
-            && owner.failed == 0
+            && owner.session == window.session_id
+            && owner.submitted
+            && owner.render_complete
+            && (rendered || owner.paced || (owner.prospective && no_pacer))
+            && !owner.failed
             && owner.provider_generation == generation;
     }
     let held = selected.as_deref();
@@ -1341,7 +1334,7 @@ unsafe extern "C" fn rsf_core_native_fg_prepare(
         && cpu.stage_mask & 9 == 9
         && owner.session == window.session_id
         && owner.id == source
-        && owner.failed == 0
+        && !owner.failed
         && owner.rhi_begins == 1
         && owner.source_qpc != 0
         && owner.source_frequency != 0
@@ -1351,7 +1344,7 @@ unsafe extern "C" fn rsf_core_native_fg_prepare(
         && owner.first_view == window.view_key;
     let mut bound: Reservation = empty();
     bound.struct_size = size_of::<Reservation>() as u32;
-    let reserved_bound = owner.prospective == 0
+    let reserved_bound = !owner.prospective
         || (unsafe { rsf_native_cpu_reservation_read(window.session_id, source, &mut bound) } != 0
             && (bound.state == RSF_NATIVE_CPU_RESERVATION_BOUND
                 || bound.state == RSF_NATIVE_CPU_RESERVATION_CLOSED)
@@ -1364,8 +1357,8 @@ unsafe extern "C" fn rsf_core_native_fg_prepare(
         && cpu.flags & RSF_GAME_CPU_INPUT_SUBSTITUTE == 0
         && cpu.stage_mask & 7 == 7
         && owner.id == source
-        && (owner.paced != 0 || (owner.prospective != 0 && no_pacer))
-        && owner.failed == 0
+        && (owner.paced || (owner.prospective && no_pacer))
+        && !owner.failed
         && reserved_bound;
     let admission = Admission {
         window_matched,
@@ -1398,14 +1391,13 @@ unsafe extern "C" fn rsf_core_native_fg_prepare(
         && admission.cpu_valid
         && owner.id == source
     {
-        call!(
-            p,
-            cpu_report_timing,
+        cpu_owner::report_timing(
+            cpu_platform(p),
             &cpu,
             &owner,
             held.pass.screen,
             held.wait_ticks,
-            held.evaluate_ticks
+            held.evaluate_ticks,
         );
     }
     // The requested limit is the interval of rendered frames, before generation. With generation
@@ -1467,19 +1459,16 @@ unsafe extern "C" fn rsf_core_native_fg_prepare(
         u32::from(vsync),
         u32::from(valid)
     );
-    if let Ok(row) = CString::new(row) {
-        let result = if valid { OK } else { NOT_READY };
-        call!(
-            p,
-            cpu_stage,
-            row.as_ptr(),
-            source,
-            native,
-            result,
-            &owner,
-            &window
-        );
-    }
+    let result = if valid { OK } else { NOT_READY };
+    cpu_owner::stage(
+        cpu_platform(p),
+        generation,
+        &row,
+        source,
+        native,
+        result,
+        Some((&owner, &window)),
+    );
     let configuration = provider_configure(provider, session, &configured);
     stage(p, c"prepare-configured", source, native, configuration);
     let eligibility = admission.eligibility(screen);
@@ -1657,7 +1646,7 @@ unsafe extern "C" fn rsf_core_native_fg_prepare(
             settings.cached.tagged_frames += 1;
         }
     }
-    trace(p, c"prepare/tags", source, preparation);
+    trace(c"prepare/tags", source, preparation);
     TAGGED.set(Some(index));
     if !selected.prepared {
         configured.mode = RSF_FG_OFF;
@@ -1793,7 +1782,6 @@ unsafe extern "C" fn rsf_core_native_fg_retire(session: Handle, platform: *const
     }
     let source = slot.as_ref().map_or(0, |s| s.source);
     trace(
-        p,
         c"retirement failed; slot held until a later retirement",
         source,
         result,
@@ -1825,8 +1813,8 @@ unsafe extern "C" fn rsf_core_native_fg_present(
             0
         };
         PRESENTING.set((presenting, session));
-        call!(p, cpu_present_observed, presenting);
-        call!(p, cpu_latency_present, presenting, event.swapchain, 1);
+        cpu_owner::present_observed(presenting, session);
+        cpu_owner::latency_present(cpu_platform(p), presenting, event.swapchain, true);
     } else {
         let (presenting, session) = PRESENTING.get();
         let generation = call!(p, present_generation);
@@ -1839,7 +1827,7 @@ unsafe extern "C" fn rsf_core_native_fg_present(
                 event.result,
             );
         }
-        call!(p, cpu_latency_present, presenting, event.swapchain, 0);
+        cpu_owner::latency_present(cpu_platform(p), presenting, event.swapchain, false);
         PRESENTING.set((0, 0));
     }
 }
@@ -1858,17 +1846,16 @@ unsafe extern "C" fn rsf_core_native_fg_window_end(pass: *const Pass, platform: 
     if source == 0 || (owner && call!(p, present_is_owner, pass.swapchain) == 0) {
         return;
     }
-    call!(p, cpu_count, source, RSF_NFG_COUNT_WINDOW);
+    cpu_owner::count_window(source);
     if !owner {
         return;
     }
-    let (mut live, mut presented) = (0u32, 0u32);
-    call!(p, cpu_progress, source, &mut live, &mut presented);
+    let (live, presented) = cpu_owner::progress(cpu_platform(p), source);
     // The window ended without presenting a live source: its token cannot carry a later frame.
-    if live != 0 && presented == 0 {
+    if live && !presented {
         call!(p, present_abort, source);
-        call!(p, cpu_fail, source);
-        call!(p, cpu_complete, source);
+        cpu_owner::fail(source);
+        cpu_owner::complete(cpu_platform(p), source);
     }
 }
 

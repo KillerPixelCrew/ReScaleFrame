@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::native_cpu::read_frame;
+use crate::native_cpu::frame_facts;
 use rsf_game_sys::{
     RSF_GAME_CPU_SIMULATION_END, RSF_GAME_RENDER_PRESENT, RSF_GAME_RENDER_SUBMISSION,
     rsf_game_render_pass,
@@ -162,7 +162,7 @@ pub(crate) unsafe extern "C" fn rsf_core_latencyvk_execution(
         (RSF_GAME_RENDER_PRESENT, 0) => Marker::PresentEnd,
         _ => return INVALID,
     };
-    if !read_frame(frame.session, frame.id).is_some_and(|facts| {
+    if !frame_facts(frame.session, frame.id).is_some_and(|facts| {
         facts.failed == 0 && facts.stage_mask & (1 << RSF_GAME_CPU_SIMULATION_END) != 0
     }) {
         return NOT_READY;

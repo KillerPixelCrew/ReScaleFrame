@@ -214,10 +214,7 @@ constexpr rsf_nfg_platform platform{
     fence_completed, wait_fence, flush, copy_resource, context_signal, context_wait, create_commands, create_output,
     reset_commands, close_commands, execute, transition, copy_transitioned, queue_signal, queue_wait,
     dlss_evaluate, dlss_evaluate_shared, dump_sr, rsf_input_dump_fg, rsf_input_dump_fg_prepare, dump_named,
-    rsf_nfg_cpu_rendered_source, rsf_nfg_cpu_owner_read, rsf_nfg_cpu_count, rsf_nfg_cpu_present_observed,
-    rsf_nfg_cpu_progress, rsf_nfg_cpu_fail, rsf_nfg_cpu_complete, rsf_native_latency_present,
-    rsf_nfg_cpu_anti_lag_status, rsf_nfg_cpu_stage, rsf_nfg_cpu_trace, rsf_nfg_cpu_failure,
-    rsf_nfg_cpu_report_timing,
+    &rsf_native_fg_cpu_platform,
 };
 }
 

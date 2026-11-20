@@ -374,6 +374,19 @@ all 141 Rust workspace tests and Clippy passed. Release exports matched
 the Runtime and both carriers. Device and in-game validation remain open.
 See [the D3D11 host cutover audit](research/rust-d3d11-host-cutover.md).
 
+Direct3D CPU frame timing, routed markers, receipt accounting and pacing now
+live in Rust. Each marker carries the provider generation that admitted its
+source. Reflex status remains readable during sleep, and Anti-Lag 2 render
+markers can complete while a later input update blocks. The Vulkan and
+Direct3D paths share CPU fact lookup and limiter conversion.
+
+All 19 focused CPU and ABI contracts passed in Debug and Release, including
+both Anomaly input profiles and both Vulkan latency fixtures. All 141 Rust
+workspace tests, formatting, Clippy and binding regeneration passed.
+Release exports matched the Runtime and both carriers. Real provider
+switching, device timing and game behavior await validation.
+See [the Direct3D CPU cutover audit](research/rust-native-fg-cpu-cutover.md).
+
 The native D3D11 exposure cache now lives in Rust and shares the fullscreen
 pass owner with output reinsertion. It borrows a valid 1×1 R32 scalar
 directly, converts supported float vectors with the existing copy shader,
