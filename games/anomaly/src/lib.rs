@@ -22,6 +22,9 @@ const ABI_MISMATCH: i32 = -2;
 const AMD64: u16 = 0x8664;
 const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "\0");
 
+#[cfg(windows)]
+mod bootstrap;
+
 #[repr(C)]
 struct BuildIdentity {
     executable: *const c_char,

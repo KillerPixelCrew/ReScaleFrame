@@ -91,6 +91,15 @@ configurations. The merge added a Rust regression for routing and nested
 poll retirement. The actual detour still needs live adapter validation.
 See [the input cutover audit](research/rust-anomaly-input.md).
 
+Anomaly's cold entry and startup retry state now live in Rust. The
+entry borrows the Runtime already loaded by the thin carrier. A partial
+session refuses before changing stage setup, and retrying an unfinished
+step keeps the completed options and stage registration. The merged
+native leaf uses the Rust input receipt route. The worker passed the
+focused startup, plugin and input contracts in both configurations, and
+the startup retry regression passed on the merged branch.
+See [the cold-entry cutover audit](research/rust-anomaly-bootstrap.md).
+
 The first source inspection found that the public frame sequencer opened a rendered
 frame and assigned its provenance under separate locks. Direct callers could read
 or retire the slot between those operations. The FG session adds its own outer
