@@ -13,7 +13,7 @@ set_tests_properties(anomaly_fg_policy_contract anomaly_fg_policy_unknown_select
 # The device fixture: the adapter's production FG stage and SR TemporalDriver against the real Runtime DLL, on the
 # NVIDIA adapter, with the vendor package from RSF_ANOMALY_SR_VENDOR_ROOT (anomaly_support.cmake).
 add_executable(rsf_anomaly_fg_device_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_fg_device.cpp"
-    "${RSF_ANOMALY_FG_SRC}/fg_stage.cpp" "${RSF_ANOMALY_FG_SRC}/fg_inputs.cpp")
+    "${RSF_ANOMALY_FG_SRC}/fg_stage_platform.cpp" "${RSF_ANOMALY_FG_SRC}/fg_inputs.cpp")
 target_include_directories(rsf_anomaly_fg_device_test PRIVATE "${RSF_ANOMALY_FG_SRC}"
     "${PROJECT_SOURCE_DIR}/runtime/backends/dlss/include"
     "$<TARGET_PROPERTY:rsf_orchestrator,INTERFACE_INCLUDE_DIRECTORIES>")
@@ -32,7 +32,7 @@ if(RSF_ANOMALY_SR_VENDOR_ROOT AND EXISTS "${RSF_ANOMALY_SR_VENDOR_ROOT}/streamli
 endif()
 
 # native_observer.cpp calls the FG stage from its boundaries.
-target_sources(rsf_anomaly_sr_hooks_test PRIVATE "${RSF_ANOMALY_FG_SRC}/fg_stage.cpp" "${RSF_ANOMALY_FG_SRC}/fg_inputs.cpp")
+target_sources(rsf_anomaly_sr_hooks_test PRIVATE "${RSF_ANOMALY_FG_SRC}/fg_stage_platform.cpp" "${RSF_ANOMALY_FG_SRC}/fg_inputs.cpp")
 target_link_libraries(rsf_anomaly_sr_hooks_test PRIVATE rsf_anomaly_rust)
 target_include_directories(rsf_anomaly_sr_hooks_test PRIVATE "$<TARGET_PROPERTY:rsf_orchestrator,INTERFACE_INCLUDE_DIRECTORIES>")
 

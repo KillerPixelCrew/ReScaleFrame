@@ -1,4 +1,4 @@
-"""Frame generation: read-only check of the engine sites games/anomaly/src/fg_stage.cpp relies on, against the installed exe.
+"""Frame generation: read-only check of the engine sites games/anomaly/src/fg_stage.rs relies on, against the installed exe.
 
 FG input facts additionally use the guarded CInput primary vtable slot 0. It is driven from guarded boundaries the native observer already hooks
 (games/anomaly/src/native_profile.h) and reads HW.pBaseZB (games/anomaly/src/sr_profile.h) for the SR-off depth.

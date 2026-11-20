@@ -1,10 +1,16 @@
 // SPDX-License-Identifier: MIT
 #[cfg(windows)]
 mod bootstrap;
+#[cfg(any(windows, test))]
 mod fg_inputs;
+#[cfg(any(windows, test))]
 mod fg_inputs_abi;
 mod fg_policy;
 mod fg_policy_abi;
+#[cfg(windows)]
+mod fg_stage;
+#[cfg(windows)]
+mod fg_stage_abi;
 mod geometry_registry;
 mod geometry_registry_abi;
 mod input;

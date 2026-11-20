@@ -23,7 +23,7 @@ struct Frame {
     decision: Decision,
 }
 
-struct Policy {
+pub(crate) struct Policy {
     scope_hold: u32,
     engine_frame: u32,
     last_scope: Option<u32>,
@@ -37,7 +37,7 @@ struct Policy {
 }
 
 impl Policy {
-    fn new(scope_hold: u32) -> Self {
+    pub(crate) fn new(scope_hold: u32) -> Self {
         Self {
             scope_hold,
             engine_frame: 0,
@@ -52,7 +52,7 @@ impl Policy {
         }
     }
 
-    fn begin(&mut self, engine_frame: u32, extent: [u32; 2], cut: bool) -> Decision {
+    pub(crate) fn begin(&mut self, engine_frame: u32, extent: [u32; 2], cut: bool) -> Decision {
         self.engine_frame = engine_frame;
         self.counts.source_frames += 1;
         let mut decision = Decision {
@@ -91,7 +91,7 @@ impl Policy {
         decision
     }
 
-    fn end(&mut self) -> Decision {
+    pub(crate) fn end(&mut self) -> Decision {
         let frame = &mut self.frame;
         let decision = &mut frame.decision;
         if !frame.level {
@@ -119,6 +119,54 @@ impl Policy {
         self.previous_fed = fed;
         *decision
     }
+
+    pub(crate) fn device_reset(&mut self) {
+        if self.pending == RSF_ANOMALY_RESET_NONE {
+            self.pending = RSF_ANOMALY_RESET_DEVICE;
+        }
+    }
+
+    pub(crate) fn scope(&mut self) {
+        if !self.frame.scope {
+            self.counts.scope_frames += 1;
+        }
+        self.frame.scope = true;
+        self.last_scope = Some(self.engine_frame);
+        self.frame.decision.skip = RSF_ANOMALY_SKIP_SCOPE;
+        self.frame.decision.screen = HELD;
+        self.frame.decision.tag = 0;
+    }
+
+    pub(crate) fn ui_boundary(&mut self) -> Decision {
+        let decision = self.frame.decision;
+        if !self.frame.level {
+            self.frame.level = true;
+            self.counts.level_frames += 1;
+            if decision.tag != 0 && decision.screen == GAMEPLAY {
+                self.counts.tagged += 1;
+            }
+        }
+        decision
+    }
+
+    pub(crate) fn inputs(&mut self, ready: bool) -> Decision {
+        if self.frame.level && self.frame.decision.skip == RSF_ANOMALY_SKIP_NONE && !ready {
+            self.frame.decision.skip = RSF_ANOMALY_SKIP_NO_INPUTS;
+        }
+        self.frame.decision
+    }
+
+    pub(crate) fn presented(&mut self) {
+        self.frame.presented = true;
+    }
+
+    pub(crate) fn current(&self) -> Decision {
+        self.frame.decision
+    }
+
+    pub(crate) fn counters(&self) -> Counters {
+        self.counts
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -138,10 +186,7 @@ extern "C" fn rsf_anomaly_fg_history_reset(history: &History, scope_hold: u32) {
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_fg_device_reset(history: &History) {
-    let mut policy = history.lock().unwrap();
-    if policy.pending == RSF_ANOMALY_RESET_NONE {
-        policy.pending = RSF_ANOMALY_RESET_DEVICE;
-    }
+    history.lock().unwrap().device_reset();
 }
 
 #[unsafe(no_mangle)]
@@ -160,43 +205,22 @@ extern "C" fn rsf_anomaly_fg_begin(
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_fg_scope(history: &History) {
-    let mut policy = history.lock().unwrap();
-    if !policy.frame.scope {
-        policy.counts.scope_frames += 1;
-    }
-    policy.frame.scope = true;
-    policy.last_scope = Some(policy.engine_frame);
-    policy.frame.decision.skip = RSF_ANOMALY_SKIP_SCOPE;
-    policy.frame.decision.screen = HELD;
-    policy.frame.decision.tag = 0;
+    history.lock().unwrap().scope();
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_fg_ui_boundary(history: &History) -> Decision {
-    let mut policy = history.lock().unwrap();
-    let decision = policy.frame.decision;
-    if !policy.frame.level {
-        policy.frame.level = true;
-        policy.counts.level_frames += 1;
-        if decision.tag != 0 && decision.screen == GAMEPLAY {
-            policy.counts.tagged += 1;
-        }
-    }
-    decision
+    history.lock().unwrap().ui_boundary()
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_fg_inputs(history: &History, ready: u32) -> Decision {
-    let mut policy = history.lock().unwrap();
-    if policy.frame.level && policy.frame.decision.skip == RSF_ANOMALY_SKIP_NONE && ready == 0 {
-        policy.frame.decision.skip = RSF_ANOMALY_SKIP_NO_INPUTS;
-    }
-    policy.frame.decision
+    history.lock().unwrap().inputs(ready != 0)
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_fg_presented(history: &History) {
-    history.lock().unwrap().frame.presented = true;
+    history.lock().unwrap().presented();
 }
 
 #[unsafe(no_mangle)]
@@ -206,10 +230,10 @@ extern "C" fn rsf_anomaly_fg_end(history: &History) -> Decision {
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_fg_current(history: &History) -> Decision {
-    history.lock().unwrap().frame.decision
+    history.lock().unwrap().current()
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_fg_count(history: &History, out: &mut Counters) {
-    *out = history.lock().unwrap().counts;
+    *out = history.lock().unwrap().counters();
 }

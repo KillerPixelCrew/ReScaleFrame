@@ -2,7 +2,7 @@
 #pragma once
 // Frame generation for Anomaly through the Runtime's shared D3D11 presentation bridge (rsf_get_d3d11_present_api)
 // and its D3D11 FG tagging path (rsf_get_d3d11_fg_api). The adapter owns the engine boundaries, the screen policy
-// (fg_policy.h), the HUD-less boundary and the SR-off depth/motion pass (fg_inputs.h). The Runtime owns the vendor
+// (fg_policy.rs), the HUD-less boundary and the SR-off depth/motion pass (fg_inputs.rs). The Runtime owns the vendor
 // providers, presentation, pacing, latency markers, shared surfaces and their retirement.
 //
 // INI ([Anomaly], all optional except FG):
@@ -27,6 +27,7 @@
 // Threads: everything except configure/install/status runs on the engine thread, which renders and Presents.
 #include "overlay_hooks.h"
 #include "build_profile.h"
+#include "fg_stage_platform.h"
 #include <rescaleframe/game_api.h>
 #include <rescaleframe/d3d11_fg_api.h>
 #include <rescaleframe/d3d11_present_api.h>
@@ -34,11 +35,8 @@
 #include <cstdint>
 #include <string>
 
-struct ID3D11Device;
-struct ID3D11DeviceContext;
-struct IDXGISwapChain;
-
 namespace rsf::anomaly::fg {
+// Direct configuration for the device and CPU fixtures.
 struct Options {
     bool bridge{};                    // FG=1 or FGBridge (default 1)
     bool enabled{};                   // FG
@@ -52,11 +50,10 @@ struct Options {
     uint32_t capture_start{600}, capture_count{3}, capture_interval{300};
     std::wstring capture_dir;
     std::wstring streamline_dir, fidelityfx_dir, xess_dir;
-    bool selected() const noexcept { return bridge; }
 };
-Options read_options(const wchar_t* ini) noexcept;
+bool configure_ini(const wchar_t* ini, bool apply, HMODULE runtime, const BuildProfile& build,
+    rsf_game_log_fn log) noexcept;
 void configure(const Options&, rsf_game_log_fn log, void* user) noexcept;
-const Options& options() noexcept;
 
 // Cold start, before the engine creates its device: binds both Runtime tables and installs the bridge's swap-chain
 // interception. False leaves presentation stock (logged). One call per process.
@@ -72,10 +69,6 @@ void set_depth_view_source(void* (*source)()) noexcept;
 // The overlay's Present sink, called from the bridge's before_present with the engine-facing swap chain, after every
 // tag of the frame and before the upload. Set once by the bootstrap after the overlay started.
 void set_overlay_sink(const overlay::PresentSink& sink) noexcept;
-// True when the bridge presents and `chain` is not its engine-facing chain (a provider's physical or proxy chain):
-// the overlay must not draw on it.
-bool foreign_chain(IDXGISwapChain* chain) noexcept;
-
 // Native engine facts. The Runtime owns pacing, marker mapping and input deduplication.
 void input_begin(uint32_t engine_frame) noexcept;
 void input_received(uint32_t kinds, uint32_t message_id = 0) noexcept;
@@ -90,11 +83,6 @@ void device_reset() noexcept;                                                   
 // Per-window and total counters for the observer's periodic log. Nothing when not installed.
 void report(void (*emit)(void*, const char*), void* user) noexcept;
 
-struct Status {
-    bool installed{}, owner{};
-    uint32_t backend{}, choices{}, requested_mode{}, effective_mode{}, generated{}, reason{};
-    uint64_t source_frames{}, level_frames{}, tagged{}, fed{}, presented{}, unpresented{}, runtime_tagged{},
-        vendor_presented{}, captures{};
-};
+using Status = rsf_anomaly_fg_status;
 Status status() noexcept;
 }

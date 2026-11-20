@@ -42,14 +42,8 @@ typedef struct rsf_anomaly_input_platform {
     float first_person_limit, validity_threshold;
 } rsf_anomaly_input_platform;
 
-typedef struct rsf_anomaly_input_owner rsf_anomaly_input_owner;
 #ifdef __cplusplus
-extern "C" {
-#endif
-uint32_t rsf_anomaly_input_run(rsf_anomaly_input_owner**, const rsf_anomaly_input_platform*,
-    void*, const rsf_anomaly_input_frame*, rsf_anomaly_input_log, void*);
-void* rsf_anomaly_input_output(const rsf_anomaly_input_owner*, uint32_t motion);
-void rsf_anomaly_input_release(rsf_anomaly_input_owner*);
-#ifdef __cplusplus
+namespace rsf::anomaly::fg {
+const rsf_anomaly_input_platform& input_platform() noexcept;
 }
 #endif

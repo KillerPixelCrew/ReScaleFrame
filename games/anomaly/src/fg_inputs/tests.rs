@@ -124,38 +124,23 @@ fn foreign_depth_refuses_the_copy_and_foreign_motion_falls_back_to_camera_motion
         width: 9,
         height: 17,
     };
-    let mut owner = ptr::null_mut();
-    let mut run = || {
-        rsf_anomaly_input_run(
-            &mut owner,
-            &PLATFORM,
-            context,
-            &frame,
-            None,
-            ptr::null_mut(),
-        )
-    };
-    assert_eq!(run(), Result::Resources as u32);
+    let mut owner = Owner::new(&PLATFORM);
+    assert_eq!(
+        owner.run(context, &frame, None, ptr::null_mut()),
+        Result::Resources
+    );
     assert_eq!(state.submissions.get(), 0);
     depth.owner = context;
     // Refresh the pointer after modifying the borrowed texture.
     let mut frame = frame;
     frame.depth = ptr::from_mut(&mut depth).cast();
     assert_eq!(
-        rsf_anomaly_input_run(
-            &mut owner,
-            &PLATFORM,
-            context,
-            &frame,
-            None,
-            ptr::null_mut()
-        ),
-        Result::Ok as u32
+        owner.run(context, &frame, None, ptr::null_mut()),
+        Result::Ok
     );
     assert_eq!(state.submissions.get(), 1);
     assert_eq!(state.last_motion.get(), 0.0);
-    assert!(!rsf_anomaly_input_output(unsafe { owner.as_ref() }, 0).is_null());
-    unsafe { rsf_anomaly_input_release(owner) };
+    assert!(owner.outputs().is_some());
 }
 
 #[test]
@@ -170,46 +155,25 @@ fn failed_resize_keeps_the_previous_generation_for_retry_without_publishing_it()
         width: 9,
         height: 17,
     };
-    let mut owner = ptr::null_mut();
+    let mut owner = Owner::new(&PLATFORM);
     assert_eq!(
-        rsf_anomaly_input_run(
-            &mut owner,
-            &PLATFORM,
-            context,
-            &frame,
-            None,
-            ptr::null_mut()
-        ),
-        Result::Ok as u32
+        owner.run(context, &frame, None, ptr::null_mut()),
+        Result::Ok
     );
     frame.width = 12;
     depth.desc.width = frame.width;
     frame.depth = ptr::from_mut(&mut depth).cast();
     state.fail_resize.set(true);
     assert_eq!(
-        rsf_anomaly_input_run(
-            &mut owner,
-            &PLATFORM,
-            context,
-            &frame,
-            None,
-            ptr::null_mut()
-        ),
-        Result::Resources as u32
+        owner.run(context, &frame, None, ptr::null_mut()),
+        Result::Resources
     );
-    assert!(rsf_anomaly_input_output(unsafe { owner.as_ref() }, 0).is_null());
+    assert!(owner.outputs().is_none());
     assert_eq!(state.released_targets.get(), 0);
     state.fail_resize.set(false);
     assert_eq!(
-        rsf_anomaly_input_run(
-            &mut owner,
-            &PLATFORM,
-            context,
-            &frame,
-            None,
-            ptr::null_mut()
-        ),
-        Result::Ok as u32
+        owner.run(context, &frame, None, ptr::null_mut()),
+        Result::Ok
     );
     assert_eq!(
         (
@@ -219,6 +183,6 @@ fn failed_resize_keeps_the_previous_generation_for_retry_without_publishing_it()
         ),
         (1, 3, 1)
     );
-    unsafe { rsf_anomaly_input_release(owner) };
+    drop(owner);
     assert_eq!(state.released_targets.get(), 2);
 }
