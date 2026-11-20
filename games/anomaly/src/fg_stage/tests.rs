@@ -1,5 +1,28 @@
 // SPDX-License-Identifier: MIT
 use super::*;
+
+#[test]
+fn sr_off_motion_requires_the_current_engine_frame_and_view() {
+    let render = Render {
+        native_frame: 7,
+        extent: [1280, 720],
+        ..Default::default()
+    };
+    let texture = ptr::dangling_mut::<u8>().cast();
+    let mut target = rsf_anomaly_fg_motion_target {
+        texture,
+        width: 1280,
+        height: 720,
+        frame: 6,
+        written: true,
+        main: true,
+    };
+    assert!(render.motion_input(target).is_null());
+    target.frame = 7;
+    assert_eq!(render.motion_input(target), texture);
+    target.main = false;
+    assert!(render.motion_input(target).is_null());
+}
 use crate::fg_inputs_abi::rsf_anomaly_input_platform;
 use std::cell::{Cell, RefCell};
 

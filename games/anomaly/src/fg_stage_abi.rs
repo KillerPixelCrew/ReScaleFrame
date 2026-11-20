@@ -913,6 +913,7 @@ pub struct rsf_anomaly_fg_motion_target {
     pub texture: *mut ::core::ffi::c_void,
     pub width: u32,
     pub height: u32,
+    pub frame: u32,
     pub written: bool,
     pub main: bool,
 }
@@ -928,10 +929,12 @@ const _: () = {
         [::core::mem::offset_of!(rsf_anomaly_fg_motion_target, width) - 8usize];
     ["Offset of field: rsf_anomaly_fg_motion_target::height"]
         [::core::mem::offset_of!(rsf_anomaly_fg_motion_target, height) - 12usize];
+    ["Offset of field: rsf_anomaly_fg_motion_target::frame"]
+        [::core::mem::offset_of!(rsf_anomaly_fg_motion_target, frame) - 16usize];
     ["Offset of field: rsf_anomaly_fg_motion_target::written"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_motion_target, written) - 16usize];
+        [::core::mem::offset_of!(rsf_anomaly_fg_motion_target, written) - 20usize];
     ["Offset of field: rsf_anomaly_fg_motion_target::main"]
-        [::core::mem::offset_of!(rsf_anomaly_fg_motion_target, main) - 17usize];
+        [::core::mem::offset_of!(rsf_anomaly_fg_motion_target, main) - 21usize];
 };
 impl Default for rsf_anomaly_fg_motion_target {
     fn default() -> Self {

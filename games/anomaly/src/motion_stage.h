@@ -57,9 +57,6 @@ bool quiesce() noexcept;
 bool active() noexcept;
 // Log lines for the observer's periodic report. Nothing when inactive.
 void report(void (*emit)(void*, const char*), void* user) noexcept;
-// Current and previous jitter in normalized viewport UV (Y down) for the core PS b13. Zero until SR jitter exists.
-// Foliage draws always receive previous jitter zero (their previous projection is unjittered).
-void set_jitter_uv(float current_u, float current_v, float previous_u, float previous_v) noexcept;
 
 struct MotionCounters {
     static constexpr std::size_t families = 8, outcomes = 10, reasons = 16;

@@ -6,6 +6,7 @@
 //! previous draw data to the native stage. Rust owns the history storage.
 
 mod foliage;
+mod window;
 
 use crate::geometry_registry_abi::rsf_anomaly_geometry_key as InstanceKey;
 use std::borrow::Cow;

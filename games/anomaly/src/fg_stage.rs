@@ -191,6 +191,20 @@ struct Render {
     frame_time: f32,
 }
 
+impl Render {
+    fn motion_input(&self, target: rsf_anomaly_fg_motion_target) -> Raw {
+        if target.written
+            && target.main
+            && target.frame == self.native_frame
+            && [target.width, target.height] == self.extent
+        {
+            target.texture
+        } else {
+            ptr::null_mut()
+        }
+    }
+}
+
 #[derive(Clone, Copy, Default)]
 struct Totals {
     policy: Counters,
@@ -450,12 +464,7 @@ impl Stage {
             return;
         };
         let target = unsafe { self.platform.motion_target.unwrap()() };
-        let motion =
-            if target.written && target.main && [target.width, target.height] == render.extent {
-                target.texture
-            } else {
-                ptr::null_mut()
-            };
+        let motion = render.motion_input(target);
         let [width, height] = render.extent;
         let frame = rsf_anomaly_input_frame {
             depth: depth.as_ptr(),

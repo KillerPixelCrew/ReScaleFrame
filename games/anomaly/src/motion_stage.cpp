@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "motion_stage.h"
+#include "motion_window.h"
 #include "adapter_options.h"
 #include "geometry_feed.h"
 #include "motion_d3d11.h"
@@ -179,7 +180,6 @@ geometry::RetirementQueue retirements;
 MotionCounters stats{};
 MotionCounters reported{};
 std::atomic<bool> hooks_active{};
-std::atomic<float> jitter[4]{};
 HookSet hooks;
 std::array<void*, motion_site_count> originals{};
 using Unary = void(__fastcall*)(void*);
@@ -197,39 +197,35 @@ struct Host final : BinderHost {
 } binder_host;
 MotionBinder binder{binder_host, {sr::backend_rt_offset, sr::backend_zb_offset, sr::backend_rt_changed_offset}};
 
-struct Window {
-    bool open{};
-    bool target_ok{};
-    bool have_frame{};
-    uint32_t frame{};
-    temporal::ViewId view{};
-    void* position_rtv{};
-    void* position_surface{};
-    ID3D11DeviceContext* context{};
-} window;
+rsf_anomaly_motion_window window{};
+static_assert(sizeof(window) == 40 && offsetof(rsf_anomaly_motion_window, target_ok) == 39);
+static_assert(sizeof(rsf_anomaly_motion_draw) == 48 && offsetof(rsf_anomaly_motion_draw, kind) == 40);
 bool draw_hooks_ok{}, draw_hooks_refused{};
 // CRenderTarget::rt_Position (sr_profile.h target_slots "$user$position"), the RT0 of every G-buffer bind.
 constexpr uint32_t position_offset = sr::target_slots[0].offset;
 static_assert(position_offset == 0x378);
 
-struct Pending {
-    bool active{};
-    ID3D11DeviceContext* context{};
-    bool replay{};
-    bool restore{};
-    ID3D11VertexShader* vs{};
-    ID3D11PixelShader* ps{};
-    bool restore_tess{};               // the hull and domain stages were swapped too
-    ID3D11HullShader* hs{};
-    ID3D11DomainShader* ds{};
-};
-thread_local Pending pending;
-void restore_stock(ID3D11DeviceContext* context, const Pending& taken) noexcept {
-    context->VSSetShader(taken.vs, nullptr, 0);
-    context->PSSetShader(taken.ps, nullptr, 0);
-    if (taken.restore_tess) {
-        context->HSSetShader(taken.hs, nullptr, 0);
-        context->DSSetShader(taken.ds, nullptr, 0);
+void restore_stock(const rsf_anomaly_motion_draw& taken) noexcept {
+    auto* context = static_cast<ID3D11DeviceContext*>(taken.context);
+    context->VSSetShader(static_cast<ID3D11VertexShader*>(taken.vs), nullptr, 0);
+    context->PSSetShader(static_cast<ID3D11PixelShader*>(taken.ps), nullptr, 0);
+    if (taken.tessellated) {
+        context->HSSetShader(static_cast<ID3D11HullShader*>(taken.hs), nullptr, 0);
+        context->DSSetShader(static_cast<ID3D11DomainShader*>(taken.ds), nullptr, 0);
+    }
+}
+
+void cancel_pending_draw() noexcept {
+    rsf_anomaly_motion_draw taken;
+    if (!rsf_anomaly_motion_draw_take(nullptr, &taken)) return;
+    if (taken.kind == RSF_ANOMALY_DRAW_RESTORE) restore_stock(taken);
+    ++stats.stale_restores;
+}
+
+void arm_replay(ID3D11DeviceContext* context) noexcept {
+    if (configured.invalidate) {
+        const rsf_anomaly_motion_draw draw{context, nullptr, nullptr, nullptr, nullptr, RSF_ANOMALY_DRAW_REPLAY, false};
+        rsf_anomaly_motion_draw_arm(&draw);
     }
 }
 
@@ -244,46 +240,41 @@ DrawIndexedInstancedFn original_draw_indexed_instanced{};
 DrawInstancedFn original_draw_instanced{};
 std::array<void*, 4> draw_targets{};
 
-template<class Redraw> void finish_draw(ID3D11DeviceContext* context, const Pending& taken, Redraw&& redraw) noexcept {
-    if (taken.replay) {
+template<class Redraw> void around_draw(ID3D11DeviceContext* context, Redraw&& redraw) {
+    rsf_anomaly_motion_draw taken;
+    if (!rsf_anomaly_motion_draw_take(context, &taken)) {
+        redraw(context);
+        return;
+    }
+    if (!hooks_active.load(std::memory_order_acquire)) {
+        if (taken.kind == RSF_ANOMALY_DRAW_RESTORE) restore_stock(taken);
+        redraw(context);
+        return;
+    }
+    redraw(context);
+    if (taken.kind == RSF_ANOMALY_DRAW_REPLAY) {
         switch (device_state.invalidate(context, redraw)) {
         case ReplayResult::Done: ++stats.replays; break;
         case ReplayResult::SkippedNoDepthWrite: ++stats.replay_skipped_no_depth_write; break;
         default: ++stats.replay_failed; break;
         }
     }
-    if (taken.restore) {
-        restore_stock(context, taken);
+    if (taken.kind == RSF_ANOMALY_DRAW_RESTORE) {
+        restore_stock(taken);
         ++stats.restores;
     }
 }
 void STDMETHODCALLTYPE draw_indexed_hook(ID3D11DeviceContext* c, UINT count, UINT start, INT base) {
-    if (!pending.active || pending.context != c) { original_draw_indexed(c, count, start, base); return; }
-    const Pending taken = pending;
-    pending = {};
-    original_draw_indexed(c, count, start, base);
-    finish_draw(c, taken, [&](ID3D11DeviceContext* x) { original_draw_indexed(x, count, start, base); });
+    around_draw(c, [&](ID3D11DeviceContext* x) { original_draw_indexed(x, count, start, base); });
 }
 void STDMETHODCALLTYPE draw_hook(ID3D11DeviceContext* c, UINT count, UINT start) {
-    if (!pending.active || pending.context != c) { original_draw(c, count, start); return; }
-    const Pending taken = pending;
-    pending = {};
-    original_draw(c, count, start);
-    finish_draw(c, taken, [&](ID3D11DeviceContext* x) { original_draw(x, count, start); });
+    around_draw(c, [&](ID3D11DeviceContext* x) { original_draw(x, count, start); });
 }
 void STDMETHODCALLTYPE draw_indexed_instanced_hook(ID3D11DeviceContext* c, UINT count, UINT instances, UINT start, INT base, UINT first) {
-    if (!pending.active || pending.context != c) { original_draw_indexed_instanced(c, count, instances, start, base, first); return; }
-    const Pending taken = pending;
-    pending = {};
-    original_draw_indexed_instanced(c, count, instances, start, base, first);
-    finish_draw(c, taken, [&](ID3D11DeviceContext* x) { original_draw_indexed_instanced(x, count, instances, start, base, first); });
+    around_draw(c, [&](ID3D11DeviceContext* x) { original_draw_indexed_instanced(x, count, instances, start, base, first); });
 }
 void STDMETHODCALLTYPE draw_instanced_hook(ID3D11DeviceContext* c, UINT count, UINT instances, UINT start, UINT first) {
-    if (!pending.active || pending.context != c) { original_draw_instanced(c, count, instances, start, first); return; }
-    const Pending taken = pending;
-    pending = {};
-    original_draw_instanced(c, count, instances, start, first);
-    finish_draw(c, taken, [&](ID3D11DeviceContext* x) { original_draw_instanced(x, count, instances, start, first); });
+    around_draw(c, [&](ID3D11DeviceContext* x) { original_draw_instanced(x, count, instances, start, first); });
 }
 // ID3D11DeviceContext vtable slots (d3d11.h declaration order): DrawIndexed 12, Draw 13, DrawIndexedInstanced 20,
 // DrawInstanced 21.
@@ -600,6 +591,7 @@ void window_open(void* target) noexcept try {
         if (action == BindAction::Unbound) ++stats.close_unbinds;
     }
     if (device_state.device() != device) {
+        rsf_anomaly_motion_window_reset(&window);
         device_state.reset();
         history.reset_all();
         foliage_history.reset_all();
@@ -614,35 +606,30 @@ void window_open(void* target) noexcept try {
         !guarded_copy(&rtv, crt + sr::crt_rtv_offset, sizeof(rtv)) || !guarded_copy(&surface, crt + sr::crt_surface_offset, sizeof(surface)) ||
         !rtv || !surface) return;
     uint32_t frame{};
-    read_global(np().device_frame_rva, frame);
+    if (!read_global(np().device_frame_rva, frame)) return;
     const auto view = geometry::current_render_view(image, *build);
     if (!view) return;
-    window.context = context;
-    window.position_rtv = rtv;
-    window.position_surface = surface;
-    const bool new_frame = !window.have_frame || window.frame != frame || window.view != *view;
+    NativeObservation observation{sizeof(observation), observation_abi};
+    const uint64_t generation = rsf_anomaly_observation(&observation) == RSF_OK ? observation.resets : 0;
+    const bool new_frame = rsf_anomaly_motion_window_begin(&window, context, rtv, surface,
+        frame, static_cast<uint8_t>(*view), generation);
+    bool target_ok = window.target_ok;
     if (new_frame) {
-        window.have_frame = true;
-        window.frame = frame;
-        window.view = *view;
         stats.retirements += retirements.drain([](void*, temporal::InstanceKey key) { history.retire(key); }, nullptr);
-        NativeObservation observation{sizeof(observation), observation_abi};
-        const uint64_t generation = rsf_anomaly_observation(&observation) == RSF_OK ? observation.resets : 0;
         uint32_t options3{};
         const bool msaa = !read_global(srp().render_options_word3_rva, options3) || (options3 & sr::dx10_msaa_bit);
-        window.target_ok = false;
         ComPtr<ID3D11Texture2D> texture;
         if (!msaa && SUCCEEDED(static_cast<IUnknown*>(surface)->QueryInterface(IID_PPV_ARGS(&texture)))) {
             D3D11_TEXTURE2D_DESC desc{};
             texture->GetDesc(&desc);
             switch (device_state.ensure_target(desc)) {
             case TargetResult::Created: ++stats.target_created; [[fallthrough]];
-            case TargetResult::Ready: window.target_ok = true; break;
+            case TargetResult::Ready: target_ok = true; break;
             case TargetResult::Multisampled: ++stats.msaa_frames; break;
             default: ++stats.target_failed; break;
             }
         } else if (msaa) ++stats.msaa_frames;
-        if (window.target_ok) {
+        if (target_ok) {
             device_state.clear(context);
             ++stats.clears;
             history.begin_frame(*view, frame, generation, device_state.width(), device_state.height());
@@ -650,15 +637,15 @@ void window_open(void* target) noexcept try {
             stats.foliage_table_overflows = foliage_history.table_overflows();
         }
         ++stats.frames;
-        if (window.target_ok && *view == temporal::ViewId::Main && configured.capture) capture_arm(frame);
+        if (target_ok && *view == temporal::ViewId::Main && configured.capture) capture_arm(frame);
     }
-    window.open = true;
+    rsf_anomaly_motion_window_open(&window, target_ok);
     ++stats.windows;
 } catch (...) {}
 
 void window_close() noexcept {
-    if (!window.open) return;
-    window.open = false;
+    cancel_pending_draw();
+    if (!rsf_anomaly_motion_window_close(&window)) return;
     if (device_state.rtv()) {
         const auto action = binder.close(image + srp().backend_rva, device_state.rtv());
         if (action == BindAction::Unbound) ++stats.close_unbinds;
@@ -667,6 +654,7 @@ void window_close() noexcept {
     if (capture.active) capture_finish();
 }
 void __fastcall scene_begin_hook(void* self) {
+    cancel_pending_draw();
     reinterpret_cast<Unary>(originals[site_phase_scene_begin])(self);
     window_open(self);
 }
@@ -847,12 +835,8 @@ HistoryReason prepare_foliage(const geometry::DrawTimeFacts& facts, const Varian
 }
 
 void on_flush(const geometry::DrawTimeFacts& facts) noexcept try {
-    if (pending.active) {
-        // A flush without the draw call it precedes (a compute dispatch): put the stock shaders back now.
-        if (pending.restore && pending.context) restore_stock(pending.context, pending);
-        pending = {};
-        ++stats.stale_restores;
-    }
+    // A flush may have prepared a draw the engine subsequently skipped.
+    cancel_pending_draw();
     if (!hooks_active.load(std::memory_order_relaxed) || !image) return;
     auto* backend = image + srp().backend_rva;
     if (!window.open) {
@@ -868,7 +852,7 @@ void on_flush(const geometry::DrawTimeFacts& facts) noexcept try {
         return;
     }
     ++stats.window_draws;
-    auto* context = window.context;
+    auto* context = static_cast<ID3D11DeviceContext*>(window.context);
     const bool main = facts.pass == geometry::DrawPass::Main;
     const auto action = binder.on_draw(backend, window.target_ok && main, window.position_rtv, device_state.rtv());
     switch (action) {
@@ -987,7 +971,7 @@ void on_flush(const geometry::DrawTimeFacts& facts) noexcept try {
         ++stats.class_unpaired[klass];
         count_band(stats.band_unpaired);
         count_unpaired(vs, ps, klass);
-        pending = {true, context, configured.invalidate, false, nullptr, nullptr};
+        arm_replay(context);
         return;
     }
     const bool foliage = vertex->family == Family::FoliageTree || vertex->family == Family::FoliageDetail;
@@ -1047,7 +1031,7 @@ void on_flush(const geometry::DrawTimeFacts& facts) noexcept try {
     if (!uploaded) {
         if (foliage) ++(vertex->family == Family::FoliageTree ? stats.tree_stock : stats.detail_stock);
         ++stats.upload_failures;
-        pending = {true, context, configured.invalidate, false, nullptr, nullptr};
+        arm_replay(context);
         return;
     }
     ++stats.motion_draws;
@@ -1059,7 +1043,8 @@ void on_flush(const geometry::DrawTimeFacts& facts) noexcept try {
         context->DSSetShader(domain->ds.Get(), nullptr, 0);
         ++stats.tess_swapped;
     }
-    pending = {true, context, false, true, vs, ps, staged, stages.hs, stages.ds};
+    const rsf_anomaly_motion_draw draw{context, vs, ps, stages.hs, stages.ds, RSF_ANOMALY_DRAW_RESTORE, staged};
+    rsf_anomaly_motion_draw_arm(&draw);
 } catch (...) {}
 
 bool guards_match(std::byte* module, uint32_t image_size, const MotionProfile& profile, const char** failed) noexcept {
@@ -1145,9 +1130,6 @@ const char* draw_class_name(std::size_t c) noexcept {
     return c < MotionCounters::classes ? names[c] : "unknown";
 }
 bool active() noexcept { return hooks_active.load() && pack_enabled.load(); }
-void set_jitter_uv(float current_u, float current_v, float previous_u, float previous_v) noexcept {
-    jitter[0] = current_u; jitter[1] = current_v; jitter[2] = previous_u; jitter[3] = previous_v;
-}
 
 bool install(std::byte* module, uint32_t image_size, const BuildProfile& selected) noexcept try {
     if (hooks_active.load()) return true;
@@ -1218,7 +1200,8 @@ bool quiesce() noexcept {
     geometry::geometry_set_flush_callback(nullptr);
     geometry::geometry_enable_foliage_identity(false);
     const bool disabled = hooks.disable();
-    window.open = false;
+    cancel_pending_draw();
+    rsf_anomaly_motion_window_reset(&window);
     if (dump_ready) { capture_abandon(); dump.cancel(capture.record.session_id); }
     // The draw detours stay installed (another thread may be inside one) but are inert without pending work.
     return disabled;
@@ -1232,7 +1215,7 @@ MotionCounters counters() noexcept {
 FrameTarget frame_target() noexcept {
     if (!hooks_active.load(std::memory_order_acquire) || !pack_enabled.load() || !window.have_frame) return {};
     return {device_state.texture(), device_state.width(), device_state.height(), window.frame,
-        window.view == temporal::ViewId::Main, window.target_ok && device_state.texture() != nullptr};
+        window.view == static_cast<uint8_t>(temporal::ViewId::Main), window.target_ok && device_state.texture() != nullptr};
 }
 
 void report(void (*emit)(void*, const char*), void* user) noexcept try {

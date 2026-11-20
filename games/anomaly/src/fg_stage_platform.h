@@ -23,7 +23,7 @@ typedef struct rsf_anomaly_fg_status {
 
 typedef struct rsf_anomaly_fg_motion_target {
     void* texture;
-    uint32_t width, height;
+    uint32_t width, height, frame;
     bool written, main;
 } rsf_anomaly_fg_motion_target;
 

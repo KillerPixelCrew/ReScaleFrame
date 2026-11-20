@@ -207,6 +207,22 @@ pack matched the staged baseline. The overlay hooks and FG device
 fixtures built. Live panel input, settings changes and presentation
 remain open on the merged adapter.
 
+Rust now tracks Anomaly's motion window identity and the pending action
+for the next immediate-context draw. A repeated scene window keeps its
+target for the same engine frame, view and reset generation. A device
+change invalidates the published target. Scene boundaries and a later
+flush retire any abandoned action before it can affect a different
+pass. The four draw detours share one native replay and restore path.
+SR-off FG now admits object motion only for the same engine frame, main
+view and extent. When the target is stale it uses the existing camera
+motion fallback. Removing the frame check failed the new regression.
+
+The motion window and FG changes passed 11 native CPU contracts in
+both MSVC configurations and 236 locked Rust tests, formatting and
+Clippy. The adapter kept the same three export names and ordinals and
+dynamic Runtime lookup. The FG device fixture built. Live draw
+retirement and SR-off FG still need device and gameplay validation.
+
 The first source inspection found that the public frame sequencer opened a rendered
 frame and assigned its provenance under separate locks. Direct callers could read
 or retire the slot between those operations. The FG session adds its own outer

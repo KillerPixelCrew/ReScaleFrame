@@ -56,7 +56,7 @@ const rsf_anomaly_fg_platform& platform() noexcept {
         [] { return sr::options().world_window(); },
         [] {
             const auto target = motion::frame_target();
-            return rsf_anomaly_fg_motion_target{target.texture, target.width, target.height, target.written, target.main};
+            return rsf_anomaly_fg_motion_target{target.texture, target.width, target.height, target.frame, target.written, target.main};
         },
         &immediate_context, &backbuffer, &depth_texture, &output_window,
     };
