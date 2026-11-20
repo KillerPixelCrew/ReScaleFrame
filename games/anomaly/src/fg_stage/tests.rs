@@ -2,6 +2,35 @@
 use super::*;
 
 #[test]
+fn changing_scope_hold_applies_to_the_next_source_without_resetting_history() {
+    use crate::fg_policy_abi::{RSF_ANOMALY_RESET_SCOPE_END, RSF_ANOMALY_SKIP_SCOPE};
+
+    let mut policy = Policy::new(4);
+    let extent = [1280, 720];
+    policy.begin(10, extent, false);
+    policy.ui_boundary();
+    policy.inputs(true);
+    policy.presented();
+    assert_eq!(policy.end().skip, RSF_ANOMALY_SKIP_NONE);
+
+    policy.begin(11, extent, false);
+    policy.scope();
+    policy.ui_boundary();
+    policy.presented();
+    assert_eq!(policy.end().skip, RSF_ANOMALY_SKIP_SCOPE);
+    assert_eq!(policy.begin(12, extent, false).skip, RSF_ANOMALY_SKIP_SCOPE);
+    policy.set_scope_hold(1);
+    assert_eq!(policy.current().skip, RSF_ANOMALY_SKIP_SCOPE);
+    policy.ui_boundary();
+    policy.presented();
+    policy.end();
+
+    let resumed = policy.begin(13, extent, false);
+    assert_eq!(resumed.skip, RSF_ANOMALY_SKIP_NONE);
+    assert_eq!(resumed.reset, RSF_ANOMALY_RESET_SCOPE_END);
+}
+
+#[test]
 fn sr_off_motion_requires_the_current_engine_frame_and_view() {
     let render = Render {
         native_frame: 7,

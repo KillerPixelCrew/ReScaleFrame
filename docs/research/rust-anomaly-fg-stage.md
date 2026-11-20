@@ -79,6 +79,14 @@ stock-shader restores. DLSS-G reported an effective requested mode and
 handoff in game. Generated presentation and live image comparison are
 still open. VSync was enabled and the game remained in the background.
 
+The saved checkpoint contains 182 steady reporting windows with 120
+game frames and 120 SDK presents each. The earlier Standard run contains
+23 windows with 120 game frames and 240 SDK presents. The DLSS backend
+queries `numFramesActuallyPresented` after Present and uses an OK result
+with a count greater than one as its active signal. The two runs differ
+in SR and window state. Their logs establish the presentation difference
+and leave its cause open. [NVIDIA Streamline guide](https://github.com/NVIDIA-RTX/Streamline/blob/main/docs/ProgrammingGuideDLSS_G.md#130-how-to-obtain-the-actual-frame-times-and-number-of-frames-presented)
+
 Windows refused the foreground transition before input was delivered.
 The game ignored a window close request, so the test harness stopped its
 own disposable process. Its exit code was `-1`. Overlay open/close, input

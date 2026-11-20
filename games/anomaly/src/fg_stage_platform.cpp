@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "fg_stage.h"
+#include "adapter_options.h"
 #include "motion_stage.h"
 #include "sr_pass.h"
 #include "sr_stage.h"
@@ -67,6 +68,24 @@ const rsf_anomaly_fg_platform& platform() noexcept {
 bool configure_ini(const wchar_t* ini, bool apply, HMODULE runtime, const BuildProfile& build,
     rsf_game_log_fn log) noexcept {
     return rsf_anomaly_fg_configure_ini(ini, apply, runtime, build.sr->hw_base_zb_rva, log, &platform());
+}
+
+void register_options() noexcept {
+    options::add({"Frame generation scope hold (frames)", false, 1, 64, 1, 1, false,
+        []() noexcept {
+            return static_cast<int32_t>(rsf_anomaly_fg_get_scope_hold(
+                static_cast<uint32_t>(options::read_int(L"FGScopeHold", 4))));
+        },
+        [](int32_t value) noexcept {
+            if (value >= 1 && value <= 64 && options::write_int(L"FGScopeHold", value))
+                rsf_anomaly_fg_set_scope_hold(static_cast<uint32_t>(value));
+        }});
+    options::add({"Frame generation debug logging", true, 0, 1, 1, 1, true,
+        []() noexcept { return options::read_int(L"FGDebug", 0) != 0 ? 1 : 0; },
+        [](int32_t value) noexcept { options::write_int(L"FGDebug", value != 0 ? 1 : 0); }});
+    options::add({"Frame generation development runtime", true, 0, 1, 1, 1, true,
+        []() noexcept { return options::read_int(L"FGDevelopment", 0) != 0 ? 1 : 0; },
+        [](int32_t value) noexcept { options::write_int(L"FGDevelopment", value != 0 ? 1 : 0); }});
 }
 
 void configure(const Options& options, rsf_game_log_fn log, void* user) noexcept {

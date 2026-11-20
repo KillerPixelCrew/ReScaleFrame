@@ -52,6 +52,16 @@ impl Policy {
         }
     }
 
+    #[cfg(windows)]
+    pub(crate) fn scope_hold(&self) -> u32 {
+        self.scope_hold
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn set_scope_hold(&mut self, frames: u32) {
+        self.scope_hold = frames;
+    }
+
     pub(crate) fn begin(&mut self, engine_frame: u32, extent: [u32; 2], cut: bool) -> Decision {
         self.engine_frame = engine_frame;
         self.counts.source_frames += 1;

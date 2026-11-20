@@ -744,6 +744,26 @@ extern "C" fn rsf_anomaly_fg_installed() -> bool {
 }
 
 #[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_fg_get_scope_hold(fallback: u32) -> u32 {
+    installed().map_or_else(
+        || fallback.clamp(1, 64),
+        |stage| stage.engine.lock().unwrap().policy.scope_hold(),
+    )
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_fg_set_scope_hold(frames: u32) {
+    if let Some(stage) = installed() {
+        stage
+            .engine
+            .lock()
+            .unwrap()
+            .policy
+            .set_scope_hold(frames.clamp(1, 64));
+    }
+}
+
+#[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_fg_set_depth_source(source: rsf_anomaly_fg_depth_source) {
     *DEPTH_SOURCE.lock().unwrap() = source;
 }

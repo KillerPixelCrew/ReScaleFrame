@@ -896,28 +896,22 @@ impl Overlay {
             ..Default::default()
         };
         if unsafe { (api.settings_get)(&mut saved) } == OK {
+            log.say(format_args!(
+                "Anomaly overlay configured: saved SR={} SRBackend={} SRQuality={} DLSSPreset={} FG={} StatusOverlay={}. \
+                 SR backend choices={:#x}, quality choices={:#x}, FG backend choices={:#x}.",
+                saved.sr_enabled,
+                saved.sr_backend,
+                saved.sr_quality,
+                saved.dlss_preset,
+                saved.fg_enabled,
+                saved.status_overlay,
+                setup.sr_backend_choices,
+                setup.sr_quality_choices,
+                setup.fg_backend_choices
+            ));
             if setup.sr_backend_choices != 0 {
-                log.say(format_args!(
-                    "Anomaly overlay configured: saved SR={} SRBackend={} SRQuality={} DLSSPreset={} FG={} StatusOverlay={}. SR choices: \
-                     backends {:#x}, qualities {:#x} (SRStage=5); FG choices {:#x} (0: no bridge, FG stays Off).",
-                    saved.sr_enabled,
-                    saved.sr_backend,
-                    saved.sr_quality,
-                    saved.dlss_preset,
-                    saved.fg_enabled,
-                    saved.status_overlay,
-                    setup.sr_backend_choices,
-                    setup.sr_quality_choices,
-                    setup.fg_backend_choices
-                ));
                 // The persisted (and validated) choice is what SR starts with.
                 service.leaves.request_sr(&saved);
-            } else {
-                log.say(format_args!(
-                    "Anomaly overlay configured: saved SR={} FG={} StatusOverlay={}. SR and FG are not wired in this adapter; \
-                     the panel offers FG Off only and reports SR as unavailable.",
-                    saved.sr_enabled, saved.fg_enabled, saved.status_overlay
-                ));
             }
         }
         if options.install_hooks != 0 {

@@ -34,13 +34,12 @@ inline void add(const Option& option) noexcept {
 inline int32_t read_int(const wchar_t* key, int32_t fallback) noexcept {
     return ini_path().empty() ? fallback : static_cast<int32_t>(GetPrivateProfileIntW(L"Anomaly", key, fallback, ini_path().c_str()));
 }
-inline void write_text(const wchar_t* key, const wchar_t* value) noexcept {
-    if (!ini_path().empty()) WritePrivateProfileStringW(L"Anomaly", key, value, ini_path().c_str());
+inline bool write_text(const wchar_t* key, const wchar_t* value) noexcept {
+    return !ini_path().empty() && WritePrivateProfileStringW(L"Anomaly", key, value, ini_path().c_str()) != FALSE;
 }
-inline void write_int(const wchar_t* key, int32_t value) noexcept {
+inline bool write_int(const wchar_t* key, int32_t value) noexcept {
     wchar_t text[16]{};
-    std::swprintf(text, 16, L"%d", value);
-    write_text(key, text);
+    return std::swprintf(text, 16, L"%d", value) > 0 && write_text(key, text);
 }
 
 // Options that are only read at startup: the panel saves them for the next start.

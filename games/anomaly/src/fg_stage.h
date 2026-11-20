@@ -53,6 +53,7 @@ struct Options {
 };
 bool configure_ini(const wchar_t* ini, bool apply, HMODULE runtime, const BuildProfile& build,
     rsf_game_log_fn log) noexcept;
+void register_options() noexcept;
 void configure(const Options&, rsf_game_log_fn log, void* user) noexcept;
 
 // Cold start, before the engine creates its device: binds both Runtime tables and installs the bridge's swap-chain

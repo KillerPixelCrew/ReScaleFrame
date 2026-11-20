@@ -332,8 +332,13 @@ fn setup_translates_what_the_adapter_can_apply() {
         (RSF_OVERLAY_SERVICE_OPTION_TOGGLE, 1, 0)
     );
 
-    SR_OFFER.store(1, Ordering::SeqCst);
     FG_LINK.store(1, Ordering::SeqCst);
+    let fg_only = make_setup(&leaves, &start, INI.as_ptr(), &[], &mut table);
+    assert_eq!(fg_only.sr_backend_choices, 0);
+    assert_ne!(fg_only.fg_backend_choices, 0);
+    assert_eq!(fg_only.defaults.fg_enabled, 1);
+
+    SR_OFFER.store(1, Ordering::SeqCst);
     let setup = make_setup(&leaves, &start, INI.as_ptr(), &[], &mut table);
     SR_OFFER.store(0, Ordering::SeqCst);
     FG_LINK.store(0, Ordering::SeqCst);

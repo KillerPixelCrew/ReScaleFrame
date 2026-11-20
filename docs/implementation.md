@@ -273,6 +273,16 @@ Both embedded SR shaders matched the source and staged binary byte for
 byte. SR and FG device fixtures built. The new device path still needs
 execution and live SR acceptance.
 
+The Anomaly overlay now shows the FG scope hold and saves changes before
+applying them to the Rust FG policy. Changes take effect on the next
+source frame and preserve the reset after a scope hold. The two options
+that select FG startup diagnostics and development runtimes are marked
+as requiring a restart. The startup log reports SR and FG choices
+independently, including the FG-only setup seen in the Standard checkpoint.
+Nine focused MSVC contracts passed in both configurations. All 257 locked
+Rust tests, Clippy, formatting and adapter export parity passed. Live
+overlay changes and generated presentation remain open.
+
 The first source inspection found that the public frame sequencer opened a rendered
 frame and assigned its provenance under separate locks. Direct callers could read
 or retire the slot between those operations. The FG session adds its own outer

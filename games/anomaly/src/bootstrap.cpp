@@ -43,7 +43,7 @@ constexpr rsf_anomaly_bootstrap_leaves leaves{
             return true;
         } catch (...) { return false; }
     },
-    [](const wchar_t* ini) noexcept { options::register_restart_options(ini); },
+    [](const wchar_t* ini) noexcept { options::register_restart_options(ini); fg::register_options(); },
     [](const wchar_t* ini, bool configure, rsf_game_log_fn log) noexcept {
         const auto options = sr::read_options(ini);
         if (configure && options.selected()) sr::configure(options, log, nullptr);
