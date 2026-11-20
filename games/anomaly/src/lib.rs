@@ -9,6 +9,8 @@ mod geometry_registry;
 mod geometry_registry_abi;
 mod input;
 mod motion;
+mod sr_swap;
+mod sr_swap_abi;
 mod sr_temporal;
 
 use rsf_game_sys::{

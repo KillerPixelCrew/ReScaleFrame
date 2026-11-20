@@ -5,7 +5,8 @@
 //
 // The world window renders at render size: round(output * scale) per axis, with one scale for both axes, clamped to
 // [min_scale, max_scale] and to [1, output]. Targets the engine creates at a fraction of the screen keep that
-// fraction of the render size, computed with the engine's own integer division (rt_half_depth is Device.dwWidth / 2).
+// fraction of the render size, computed with the engine's own integer division (rt_half_depth is Device.dwWidth / 2);
+// sr_swap.rs applies that twin rule.
 #include <cmath>
 #include <cstdint>
 
@@ -69,15 +70,4 @@ inline bool make_plan_for_render(uint32_t output_width, uint32_t output_height, 
     return true;
 }
 
-// Size rule of a twinned engine target, from its created extent relative to the output extent.
-enum class Extent : uint8_t { Full, Half };
-// The twin extent for one axis: Full -> render, Half -> render / 2 (engine integer division). False when the engine
-// extent is neither the output extent nor (when `half_allowed`) output / 2, or when the result would be zero.
-inline bool twin_extent(uint32_t engine, uint32_t output, uint32_t render, bool half_allowed, uint32_t& twin, Extent& rule) noexcept {
-    twin = 0;
-    if (!engine || !output || !render || render > output) return false;
-    if (engine == output) { rule = Extent::Full; twin = render; return true; }
-    if (half_allowed && engine == output / 2 && render / 2) { rule = Extent::Half; twin = render / 2; return true; }
-    return false;
-}
 }

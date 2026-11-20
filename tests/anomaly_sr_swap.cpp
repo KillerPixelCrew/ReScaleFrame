@@ -3,6 +3,8 @@
 // the offsets of games/anomaly/src/sr_profile.h, plus fake Device.dwWidth/dwHeight, HW.pBaseZB and the SSAO helper's
 // static viewport for Stage 2. Every exit path must leave the engine bytes exactly as they were.
 // No game code, D3D device or executable is involved.
+#include "sr_jitter.h"
+#include "sr_plan.h"
 #include "sr_profile.h"
 #include "sr_swap.h"
 
@@ -206,7 +208,7 @@ struct FakeHost final : SwapHost {
             f.height = r.spec[i].height;
             f.format = wrong_format ? d3dfmt_a8r8g8b8 : r.spec[i].promote ? d3dfmt_a16b16g16r16f : r.engine[i].fields.format;
             if (wrong_format && !r.spec[i].promote) f.format = 1;
-            f.desc.fill(std::byte{0x77});
+            std::memset(f.desc, 0x77, sizeof(f.desc));
         }
         if (r.stage == 2) {
             out.depth_dsv = &twin_objects[60];
@@ -1141,6 +1143,33 @@ void stage3_sun_cascades() {
     c.controller.sun_cascades_end(token);
     CHECK(c.stock() && c.host.upload_calls == uploads && c.controller.counters().foreign_changes == 0);
 }
+// A refused sun cascade closes the window after the engine has rendered into the twins: the H1 epilogue set the
+// render-size viewport and u_setrt set CRenderTarget::dwWidth/dwHeight to the twin size. The rest of the frame renders
+// stock at output size, so this exit restores both like combine_end, frame_end and close_stale.
+void stage3_sun_rollback() {
+    for (int failure = 0; failure < 3; ++failure) {
+        Case c;
+        CHECK(c.controller.prepare(c.engine.facts3()));
+        c.controller.prepared();
+        put<uint32_t>(c.engine.target.data(), target_width_offset, 1286);
+        put<uint32_t>(c.engine.target.data(), target_height_offset, 724);
+        bool token{};
+        if (failure == 0) {
+            c.host.fail_write_at = c.host.write_count;   // unjittering Device.mProject faults
+            token = c.controller.sun_cascades_begin();
+            CHECK(!token);
+        } else {
+            token = c.controller.sun_cascades_begin();
+            CHECK(token);
+            if (failure == 1) c.host.fail_write_at = c.host.write_count;   // re-jittering faults
+            else c.host.fail_upload_at = c.host.upload_calls;             // set_P faults
+        }
+        c.controller.sun_cascades_end(token);
+        CHECK(c.stock() && c.controller.refused() && !c.controller.window_open());
+        CHECK(c.host.viewports.size() == 2 && c.host.viewports.back() == std::make_pair(1920u, 1080u));
+        CHECK(restores(c.controller, Restore::Rollback) == 1);
+    }
+}
 
 void stage3_position_reconstruction() {
     Case c;
@@ -1186,7 +1215,8 @@ int main(int argc, char** argv) {
         {"stage2_normal", stage2_normal}, {"stage2_optional_odd", stage2_optional_and_odd}, {"stage2_layout", stage2_layout},
         {"stage2_exits", stage2_exits}, {"stage2_foreign", stage2_foreign}, {"stage2_ssao_viewport", stage2_ssao_viewport},
         {"stage2_write_faults", stage2_write_faults}, {"stage2_lifecycle", stage2_lifecycle}, {"stage3_normal", stage3_normal},
-        {"stage3_exits", stage3_exits}, {"stage3_foreign_ineligible", stage3_foreign_and_ineligible}, {"stage3_sun_cascades", stage3_sun_cascades}, {"stage3_position_reconstruction", stage3_position_reconstruction}};
+        {"stage3_exits", stage3_exits}, {"stage3_foreign_ineligible", stage3_foreign_and_ineligible}, {"stage3_sun_cascades", stage3_sun_cascades}, {"stage3_sun_rollback", stage3_sun_rollback},
+        {"stage3_position_reconstruction", stage3_position_reconstruction}};
     int ran = 0;
     for (const auto& item : cases) {
         if (argc > 1 && std::string_view{argv[1]} != item.name) continue;
