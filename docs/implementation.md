@@ -246,6 +246,22 @@ All 120 Rust workspace tests, formatting and Clippy passed. Release exports
 matched the Runtime and both carriers (381, 256 and 273). Device and in-game
 verification remain pending.
 
+Vulkan Streamline token identity, marker deduplication and pacing admission
+now live in Rust. Source IDs outside the SDK's 32-bit range are refused.
+A delayed cancellation only clears its own session and source. Input with
+an unrelated window message is rejected before emitting a controller marker.
+The native SDK options and sleep run outside the state locks. While they
+borrow the current token, a competing acquisition or SDK shutdown cannot
+invalidate it, and older tokens remain available for Present markers.
+
+Five focused Vulkan cases passed in Debug and Release, including a synthetic
+Reflex sleep with a concurrent older Present, checked shutdown and token
+acquisition. The available Runtime build omits the optional native Streamline
+package, and the latency contract exercises that code path with an SDK double.
+All 120 Rust tests, formatting and Clippy passed. Release export names and
+ordinals matched the Runtime and both carriers. Device and game validation
+remain pending.
+
 The OpenGL pipeline now keeps its shared surface and SR lifecycle, frame
 identity, fallback and FG requests in Rust. Native callbacks handle OpenGL,
 DXGI and the presentation child window. A rejected SR rebuild remains

@@ -7,6 +7,9 @@ use rsf_game_sys::{
 use std::mem::{offset_of, size_of, take};
 use std::sync::Mutex;
 
+mod streamline;
+use streamline::StreamlineFrames;
+
 const INVALID: i32 = -1;
 const NOT_READY: i32 = -8;
 const EXECUTION_SLOTS: usize = 128;
@@ -83,6 +86,7 @@ impl LegacyPresent {
 struct Frames {
     executions: [Option<Execution>; EXECUTION_SLOTS],
     legacy: LegacyPresent,
+    streamline: StreamlineFrames,
 }
 
 impl Frames {
@@ -93,6 +97,7 @@ impl Frames {
                 rendered: 0,
                 presenting: 0,
             },
+            streamline: StreamlineFrames::new(),
         }
     }
 
@@ -101,6 +106,9 @@ impl Frames {
     }
 
     fn boundary(&mut self, frame: Frame, skipped: bool) {
+        if skipped {
+            self.streamline.cancel(frame);
+        }
         let slot = self.slot(frame);
         let matches = slot.is_some_and(|record| record.frame == frame);
         if skipped {
@@ -164,11 +172,6 @@ unsafe extern "C" fn rsf_core_latencyvk_execution(
         Some(record) if record.frame == frame => record.advance(marker),
         _ => NOT_READY,
     }
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_latencyvk_legacy_reset() {
-    FRAMES.lock().unwrap().legacy = LegacyPresent::default();
 }
 
 #[unsafe(no_mangle)]

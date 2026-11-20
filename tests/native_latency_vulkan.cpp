@@ -35,6 +35,7 @@ void cpu(uint64_t frame, uint32_t stage, uint32_t expected = 1) {
 }
 }
 namespace {std::mutex sleep_guard;std::condition_variable sleep_changed;bool block_xell=false,xell_entered=false,release_xell=false;
+bool block_reflex=false,reflex_entered=false,release_reflex=false;
 uint32_t xell_sleeps{},xell_mode{}; std::vector<Marker> xell_markers;}
 extern "C" rsf_backend_result rsf_fgvk_backend(const rsf_fgvk* context,uint32_t* backend) {
     if (!context || !backend) return RSF_BACKEND_ERROR_INVALID_ARGUMENT; *backend=5;return RSF_BACKEND_OK;
@@ -73,7 +74,16 @@ int VulkanStorySlBeginFrame(uint32_t frame) {
 }
 uintptr_t VulkanStorySlCurrentFrameToken() { return current; }
 int VulkanStorySlTokenMatches(uintptr_t token, uint32_t index) { return token && *reinterpret_cast<uint32_t*>(token) == index; }
-int VulkanStorySlReflexSleep() { if(check_input_registration) require(pcl_bound_thread==GetCurrentThreadId(),"input thread already registered before sleep"); ++slept; return 0; }
+int VulkanStorySlReflexSleep() {
+    if(check_input_registration) require(pcl_bound_thread==GetCurrentThreadId(),"input thread already registered before sleep");
+    std::unique_lock lock(sleep_guard);
+    if (block_reflex) {
+        reflex_entered=true;
+        sleep_changed.notify_all();
+        sleep_changed.wait(lock,[]{return release_reflex;});
+    }
+    ++slept; return 0;
+}
 int VulkanStorySlMarkerForToken(uintptr_t token, uint32_t kind) { if(check_input_registration) require(pcl_bound_thread==GetCurrentThreadId(),"input thread already registered before SDK marker"); markers.push_back({*reinterpret_cast<uint32_t*>(token), kind}); return 0; }
 int VulkanStorySlQueuePresentSynchronized(uintptr_t, void*, const void*) { return 0; }
 int VulkanStorySlVulkanWsiCall(rsf_vk_wsi_call callback, void* user) { return callback(user); }
@@ -117,6 +127,8 @@ int main() {
     require(slept == 1 && options == 1, "one pacing call per CPU frame");
     const size_t before_input = markers.size();
     require(rsf_latencyvk_input(1, 1, 0) == RSF_BACKEND_OK && rsf_latencyvk_input(1, 2, 0) == RSF_BACKEND_OK && markers.size() == before_input, "keyboard/mouse cannot spoof controller or deprecated markers");
+    require(rsf_latencyvk_input(1, 4, 0xc124) == RSF_BACKEND_ERROR_INVALID_ARGUMENT && markers.size() == before_input,
+        "an unrelated window message cannot partially emit a controller marker");
     require(rsf_latencyvk_input(1, 4, 0) == RSF_BACKEND_OK && rsf_latencyvk_input(1, 4, 0) == RSF_BACKEND_OK && markers.size() == before_input + 1, "controller sampled once per source");
     require(rsf_latencyvk_input(1, 0, 0xc124) == RSF_BACKEND_ERROR_INVALID_ARGUMENT, "foreign Windows message refused");
     require(rsf_latencyvk_input(1, 0, 0xc123) == RSF_BACKEND_OK, "registered latency ping");
@@ -125,6 +137,9 @@ int main() {
     rsf_latencyvk_present(1); rsf_latencyvk_present(0);
     require(markers.size() == completed, "secondary Present cannot reuse completed source identity");
     require(markers.front().frame == 1 && markers.front().kind == 0 && markers.back().kind == 5, "simulation through Present on one source token");
+    const auto before_oversize = current;
+    cpu(uint64_t(UINT32_MAX) + 2, RSF_GAME_CPU_FRAME_BEGIN);
+    require(current == before_oversize,"an out-of-range source cannot replace a 32-bit SDK token");
     cpu(2, RSF_GAME_CPU_FRAME_BEGIN); cpu(2, RSF_GAME_CPU_PACING); cpu(2, RSF_GAME_CPU_FRAME_END, 0);
     const auto newest = current;
     require(rsf_slvk_invoke(&lease) == RSF_BACKEND_ERROR_FEATURE_FAILED && current == newest, "older render lease cannot rewind pacing token");
@@ -371,5 +386,36 @@ int main() {
     shutdown_allowed=false;require(rsf_latencyvk_shutdown()==RSF_BACKEND_ERROR_FEATURE_FAILED,"checked shutdown failure is retained");
     {rsf::latency::PresentationLease retained;require(retained.get()==next_context,"failed SDK shutdown retains live context binding");}
     shutdown_allowed=true;require(rsf_latencyvk_shutdown()==RSF_BACKEND_OK,"checked shutdown retry releases binding");
+    require(rsf_latencyvk_initialize(&setup)==RSF_BACKEND_OK && rsf_latencyvk_options(1,12345)==RSF_BACKEND_OK,
+        "Reflex-only session initialized without a presentation owner");
+    cpu(1,RSF_GAME_CPU_FRAME_BEGIN);
+    cpu(2,RSF_GAME_CPU_FRAME_BEGIN);
+    const auto pacing_token=current;
+    block_reflex=true;
+    std::thread reflex_sleeper([]{cpu(2,RSF_GAME_CPU_PACING);});
+    {
+        std::unique_lock lock(sleep_guard);
+        require(sleep_changed.wait_for(lock,std::chrono::seconds(2),[]{return reflex_entered;}),"Reflex sleep entered");
+    }
+    require(rsf_latencyvk_shutdown()==RSF_BACKEND_ERROR_NOT_READY,"Reflex sleep protects its SDK session without a presentation context");
+    cpu(3,RSF_GAME_CPU_FRAME_BEGIN);
+    require(current==pacing_token,"a concurrent begin cannot replace an active Reflex pacing token");
+    const auto before_present=markers.size();
+    rsf_latencyvk_render(1); rsf_latencyvk_present(1); rsf_latencyvk_present(0);
+    require(markers.size()==before_present+3 && markers.back().frame==1 && markers.back().kind==5,
+        "the older source can finish Present while Reflex sleep is blocked");
+    {std::lock_guard lock(sleep_guard);release_reflex=true;sleep_changed.notify_all();}
+    reflex_sleeper.join();
+    block_reflex=false;
+    cpu(3,RSF_GAME_CPU_FRAME_BEGIN);
+    require(VulkanStorySlTokenMatches(current,3),"the next token can be acquired after pacing completes");
+    cpu(9,RSF_GAME_CPU_FRAME_BEGIN);
+    cpu(3,RSF_GAME_CPU_FRAME_END,0);
+    rsf_slvk_call newer{sizeof(newer),RSF_SLVK_ABI_VERSION,1,9,
+        [](void*, uintptr_t token, void*) -> rsf_backend_result {
+            return VulkanStorySlTokenMatches(token,9) ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_NOT_READY;
+        },nullptr};
+    require(rsf_slvk_invoke(&newer)==RSF_BACKEND_OK,"a delayed cancel cannot erase a newer token in the same slot");
+    require(rsf_latencyvk_shutdown()==RSF_BACKEND_OK,"Reflex-only shutdown succeeds after sleep");
     return 0;
 }

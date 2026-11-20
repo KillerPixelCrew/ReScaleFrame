@@ -19,13 +19,27 @@ extern "C" {
 void rsf_core_latencyvk_frames_reset();
 void rsf_core_latencyvk_frame_boundary(uint64_t session, uint64_t frame, uint32_t skipped);
 int32_t rsf_core_latencyvk_execution(const rsf_game_render_pass*, uint32_t begin);
-void rsf_core_latencyvk_legacy_reset();
 void rsf_core_latencyvk_legacy_render(uint64_t frame);
 uint64_t rsf_core_latencyvk_legacy_present(uint32_t begin);
 }
 
 #if defined(RSF_HAVE_STREAMLINE_VK)
 extern "C" {
+struct rsf_vulkan_sdk_tokens {
+    uintptr_t (*begin)(uint32_t);
+    uintptr_t (*current)();
+    int32_t (*matches)(uintptr_t, uint32_t);
+    int32_t (*mark)(uintptr_t, uint32_t);
+};
+void rsf_core_latencyvk_token_begin(uint64_t session, uint64_t frame, const rsf_vulkan_sdk_tokens*);
+uintptr_t rsf_core_latencyvk_token_lookup(uint64_t session, uint64_t frame, const rsf_vulkan_sdk_tokens*);
+int32_t rsf_core_latencyvk_token_pace_begin(uint64_t session, uint64_t frame, const rsf_vulkan_sdk_tokens*);
+void rsf_core_latencyvk_token_pace_end();
+int32_t rsf_core_latencyvk_token_pacing();
+void rsf_core_latencyvk_token_mark(uint64_t session, uint64_t frame, uint32_t kind, const rsf_vulkan_sdk_tokens*);
+int32_t rsf_core_latencyvk_token_input(uint64_t session, uint64_t frame, uint32_t kind, uint32_t message, uint32_t pcl_message,
+    const rsf_vulkan_sdk_tokens*);
+
 int VulkanStorySlInitializeFeatures(const wchar_t*, const char*, uint32_t, uint32_t, uint32_t);
 void* VulkanStorySlModule();
 int VulkanStorySlShutdownChecked();
@@ -59,11 +73,6 @@ uint32_t mode = 0, interval = 0;
 std::atomic<uint32_t> active_owner{0};
 std::atomic<uint64_t> facts_session{0};
 bool xell_owner(const rsf::latency::PresentationLease& lease) {uint32_t backend{}; auto* p=lease.get(); return p && rsf_fgvk_backend(p,&backend)==RSF_BACKEND_OK && backend==5;}
-uint64_t session = 0;
-struct Token { uint64_t frame = 0; uintptr_t token = 0; uint32_t stages = 0; };
-// The pinned SDK retains six handles. Validate its current index before every
-// use, since a new acquisition can replace an older SDK-owned handle.
-std::array<Token, 6> tokens{};
 rsf_latencyvk_status status{sizeof(status), RSF_LATENCYVK_ABI_VERSION};
 #if defined(RSF_HAVE_STREAMLINE_VK)
 bool accepted(int result) {
@@ -71,12 +80,20 @@ bool accepted(int result) {
     if (result) ++status.refused_calls;
     return result == 0;
 }
-void marker(uint64_t frame, uint32_t kind) {
-    auto& slot = tokens[frame % tokens.size()];
-    if (!bound || !frame || slot.frame != frame || !VulkanStorySlTokenMatches(slot.token, static_cast<uint32_t>(frame)) || (slot.stages & (1u << kind))) return;
-    if (accepted(VulkanStorySlMarkerForToken(slot.token, kind))) {
-        slot.stages |= 1u << kind; ++status.marker_calls;
-    }
+constexpr rsf_vulkan_sdk_tokens sdk_tokens{
+    [](uint32_t index) -> uintptr_t {
+        return accepted(VulkanStorySlBeginFrame(index)) ? VulkanStorySlCurrentFrameToken() : 0;
+    },
+    VulkanStorySlCurrentFrameToken,
+    VulkanStorySlTokenMatches,
+    [](uintptr_t token, uint32_t kind) {
+        const auto result = VulkanStorySlMarkerForToken(token, kind);
+        if (accepted(result)) ++status.marker_calls;
+        return result;
+    },
+};
+void marker(uint64_t frame, uint32_t kind, uint64_t session = 0) {
+    if (bound) rsf_core_latencyvk_token_mark(session, frame, kind, &sdk_tokens);
 }
 bool bind(bool input_thread = false) {
     const DWORD thread = GetCurrentThreadId();
@@ -130,7 +147,6 @@ extern "C" rsf_backend_result rsf_slvk_initialize(const rsf_slvk_setup* setup) t
         (setup->features & RSF_SLVK_DLSS_FG) ? 1u : 0u,
         (setup->features & RSF_SLVK_DLSS_SR) ? 1u : 0u))) return RSF_BACKEND_ERROR_LOAD_FAILED;
     bound = false; pcl_thread = 0; pcl_epoch_ready=false; mode = interval = 0;
-    tokens = {}; session = 0;
     rsf_core_latencyvk_frames_reset();
     status = {sizeof(status), RSF_LATENCYVK_ABI_VERSION};
     initialized = true;
@@ -148,10 +164,8 @@ extern "C" rsf_backend_result rsf_slvk_invoke(const rsf_slvk_call* call) try {
 #if defined(RSF_HAVE_STREAMLINE_VK)
     uintptr_t token = 0;
     if (call->frame_id) {
-        const auto& slot = tokens[call->frame_id % tokens.size()];
-        if (session != call->session_id || slot.frame != call->frame_id ||
-            !VulkanStorySlTokenMatches(slot.token, static_cast<uint32_t>(call->frame_id))) return RSF_BACKEND_ERROR_NOT_READY;
-        token = slot.token;
+        token = rsf_core_latencyvk_token_lookup(call->session_id, call->frame_id, &sdk_tokens);
+        if (!token) return RSF_BACKEND_ERROR_NOT_READY;
     }
     void* module = VulkanStorySlModule();
     return module ? call->callback(module, token, call->user) : RSF_BACKEND_ERROR_NOT_READY;
@@ -198,6 +212,15 @@ extern "C" rsf_backend_result rsf_latencyvk_options(uint32_t requested,uint32_t 
     if (owner==RSF_PACING_XELL) return rsf_fgvk_latency_options(presentation_lease.get(),1,limit);
     return !owner && (requested || limit) ? RSF_BACKEND_ERROR_NOT_SUPPORTED : RSF_BACKEND_OK;
 }
+static rsf_backend_result input(uint64_t session, uint64_t frame, uint32_t kind, uint32_t message) {
+#if defined(RSF_HAVE_STREAMLINE_VK)
+    std::lock_guard lock(mutex);
+    if (!initialized || !bound) return RSF_BACKEND_ERROR_NOT_READY;
+    return rsf_core_latencyvk_token_input(session, frame, kind, message, status.pcl_message, &sdk_tokens);
+#else
+    (void)session; (void)frame; (void)kind; (void)message; return RSF_BACKEND_ERROR_NOT_SUPPORTED;
+#endif
+}
 static void cpu_fact(void*,const rsf_game_cpu_event* event) {
     if (!event || event->struct_size<sizeof(*event) || !event->session_id || !event->source_frame_id) return;
     if ((event->flags&(RSF_GAME_CPU_INPUT_SUBSTITUTE|RSF_GAME_CPU_DERIVED_BOUNDARY)) &&
@@ -215,7 +238,7 @@ static void cpu_fact(void*,const rsf_game_cpu_event* event) {
     }
 #endif
     if (event->stage==RSF_GAME_CPU_INPUT_EVENT) {
-        (void)rsf_latencyvk_input(id,event->input_kind,event->message_id);
+        (void)input(event->session_id,id,event->input_kind,event->message_id);
         return;
     }
     if (event->stage==RSF_GAME_CPU_FRAME_BEGIN) {facts_session.store(event->session_id);rsf::latency::amd_vk_begin(id);}
@@ -248,30 +271,21 @@ static void cpu_fact(void*,const rsf_game_cpu_event* event) {
 #if defined(RSF_HAVE_STREAMLINE_VK)
     if (!initialized || !bind()) return;
     if (event->stage==RSF_GAME_CPU_FRAME_BEGIN) {
-        if (session!=event->session_id) {tokens={};session=event->session_id;rsf_core_latencyvk_legacy_reset();}
-        auto& slot=tokens[id%tokens.size()];
-        if (slot.frame==id) return;
-        slot={};
-        if (accepted(VulkanStorySlBeginFrame(static_cast<uint32_t>(id)))) slot={id,VulkanStorySlCurrentFrameToken(),0};
-    } else if (pacing && owner) {
-        auto& slot=tokens[id%tokens.size()];
-        if (slot.frame==id && slot.token==VulkanStorySlCurrentFrameToken() &&
-            VulkanStorySlTokenMatches(slot.token,static_cast<uint32_t>(id)) && !(slot.stages & (1u<<31))) {
-            slot.stages|=1u<<31;
-            lock.unlock();
-            const auto applied=rsf::vk_timed_call("reflex_options",id,[&] {
-                return VulkanStorySlSetReflexInterval(owner==RSF_PACING_REFLEX ? int(requested) : 0,owner==RSF_PACING_REFLEX ? limit : 0);
-            });
-            const auto slept=applied==0 && owner==RSF_PACING_REFLEX ? rsf::vk_timed_call("reflex_sleep",id,[] {return VulkanStorySlReflexSleep();}) : 0;
-            lock.lock();
-            if (!accepted(applied) || !accepted(slept)) return;
-            status.mode=owner==RSF_PACING_REFLEX ? requested : 0;
-            if (owner==RSF_PACING_REFLEX) ++status.sleep_calls;
-        }
+        rsf_core_latencyvk_token_begin(event->session_id, id, &sdk_tokens);
+    } else if (pacing && owner && rsf_core_latencyvk_token_pace_begin(event->session_id, id, &sdk_tokens)) {
+        lock.unlock();
+        const auto applied=rsf::vk_timed_call("reflex_options",id,[&] {
+            return VulkanStorySlSetReflexInterval(owner==RSF_PACING_REFLEX ? int(requested) : 0,owner==RSF_PACING_REFLEX ? limit : 0);
+        });
+        const auto slept=applied==0 && owner==RSF_PACING_REFLEX ? rsf::vk_timed_call("reflex_sleep",id,[] {return VulkanStorySlReflexSleep();}) : 0;
+        lock.lock();
+        rsf_core_latencyvk_token_pace_end();
+        if (!accepted(applied) || !accepted(slept)) return;
+        status.mode=owner==RSF_PACING_REFLEX ? requested : 0;
+        if (owner==RSF_PACING_REFLEX) ++status.sleep_calls;
     }
-    if (event->stage==RSF_GAME_CPU_SIMULATION_BEGIN) marker(id,0);
-    else if (event->stage==RSF_GAME_CPU_SIMULATION_END) marker(id,1);
-    else if (skipped) tokens[id%tokens.size()]={};
+    if (event->stage==RSF_GAME_CPU_SIMULATION_BEGIN) marker(id,0,event->session_id);
+    else if (event->stage==RSF_GAME_CPU_SIMULATION_END) marker(id,1,event->session_id);
 #endif
 }
 // PCL targets its registered input thread, which need not own an engine window.
@@ -342,35 +356,7 @@ extern "C" int rsf_latencyvk_ping(void* window) {
     return window && status.pcl_message>=0xc000 && PostMessageW(static_cast<HWND>(window),status.pcl_message,0,0);
 }
 extern "C" rsf_backend_result rsf_latencyvk_input(uint64_t frame, uint32_t kind, uint32_t message) {
-    std::lock_guard lock(mutex);
-#if defined(RSF_HAVE_STREAMLINE_VK)
-    auto& slot = tokens[frame % tokens.size()];
-    if (!initialized || !bound || !frame || slot.frame != frame || !VulkanStorySlTokenMatches(slot.token, static_cast<uint32_t>(frame))) return RSF_BACKEND_ERROR_NOT_READY;
-    if (kind & ~7u) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if ((kind & 4u) && message && !(slot.stages & (1u<<13))) {
-        if (!accepted(VulkanStorySlMarkerForToken(slot.token,13))) return RSF_BACKEND_ERROR_FEATURE_FAILED;
-        slot.stages|=1u<<13; ++status.marker_calls;
-    }
-    uint32_t marker_kind = 0;
-    if (message) {
-        if (!status.pcl_message || message != status.pcl_message) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-        if (slot.stages & (1u<<8)) return RSF_BACKEND_OK;
-        marker_kind = 8;
-    } else if (kind & 4u) {
-        if (slot.stages & (1u << 13)) return RSF_BACKEND_OK;
-        marker_kind = 13;
-    } else {
-        // Keyboard/mouse timing uses real input dequeue and registered PCL
-        // pings. Marker 6 is deprecated; marker 13 is controller-only.
-        return kind ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    }
-    if (!accepted(VulkanStorySlMarkerForToken(slot.token, marker_kind))) return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    slot.stages |= 1u << marker_kind;
-    ++status.marker_calls;
-    return RSF_BACKEND_OK;
-#else
-    (void)frame; (void)kind; (void)message; return RSF_BACKEND_ERROR_NOT_SUPPORTED;
-#endif
+    return input(0, frame, kind, message);
 }
 extern "C" void rsf_latencyvk_render(uint64_t frame) {
     rsf::latency::PresentationLease presentation_lease;
@@ -400,7 +386,7 @@ extern "C" rsf_backend_result rsf_latencyvk_execution(const rsf_game_render_pass
         if (admitted <= 0) return admitted;
         kind = static_cast<uint32_t>(admitted);
 #if defined(RSF_HAVE_STREAMLINE_VK)
-        if (session == pass->session_id) marker(pass->source_frame_id, kind);
+        marker(pass->source_frame_id, kind, pass->session_id);
 #endif
     }
     const auto owner = active_owner.load();
@@ -456,6 +442,7 @@ extern "C" rsf_backend_result rsf_latencyvk_shutdown() {
     if(!presentation_shutdown) return RSF_BACKEND_ERROR_NOT_READY;
     std::lock_guard lock(mutex);
 #if defined(RSF_HAVE_STREAMLINE_VK)
+    if (rsf_core_latencyvk_token_pacing()) return RSF_BACKEND_ERROR_NOT_READY;
     if (initialized && !accepted(VulkanStorySlShutdownChecked())) return RSF_BACKEND_ERROR_FEATURE_FAILED;
 #endif
     presentation_shutdown.commit();
@@ -463,7 +450,7 @@ extern "C" rsf_backend_result rsf_latencyvk_shutdown() {
     rsf_native_latency_release_claim(2);
     (void)rsf_native_cpu_release_session(facts_session.exchange(0));
 
-    initialized = bound = false; pcl_thread = 0; pcl_epoch_ready=false; tokens = {}; session = 0;
+    initialized = bound = false; pcl_thread = 0; pcl_epoch_ready=false;
     rsf_core_latencyvk_frames_reset();
     return RSF_BACKEND_OK;
 }
