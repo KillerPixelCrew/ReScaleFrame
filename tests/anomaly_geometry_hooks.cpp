@@ -41,7 +41,10 @@ bool call_flush = false;
 std::optional<temporal::ViewId> expected_view = temporal::ViewId::Scope;
 std::optional<temporal::ProjectionDomain> expected_domain = temporal::ProjectionDomain::FirstPerson;
 Flush flush_target{};
-Unary near_target{}, normal_target{};
+Unary near_target{}, normal_target{}, emissive_target{};
+std::byte* phase_at_flush{};
+std::optional<std::uint32_t> flush_phase;
+std::byte* world_at_flush{};
 __declspec(noinline) void* __fastcall duplicate_fixture(void*, void*);
 __declspec(noinline) void __fastcall render_fixture(void*, float);
 __declspec(noinline) void* __fastcall create_fixture(void* owner, const char* name, void* reader)
@@ -79,7 +82,15 @@ __declspec(noinline) void __fastcall render_fixture(void* instance, float lod)
         CHECK(capture && capture->world && capture->world->at(0, 3) == 123);
         observed_generation = identity->key.generation;
     }
-    if (call_flush) flush_target();
+    if (call_flush) {
+        std::uint32_t entry_phase{};
+        if (flush_phase) {
+            std::memcpy(&entry_phase, phase_at_flush, sizeof(entry_phase));
+            std::memcpy(phase_at_flush, &*flush_phase, sizeof(*flush_phase));
+        }
+        flush_target();
+        if (flush_phase) std::memcpy(phase_at_flush, &entry_phase, sizeof(entry_phase));
+    }
 }
 __declspec(noinline) void __fastcall skin_st_fixture(void* instance, float lod)
 {
@@ -96,7 +107,15 @@ __declspec(noinline) void __fastcall skin_pm_fixture(void* instance, float lod)
     CHECK(capture && capture->bones.size() == 1 && capture->bones[0].at(0, 3) == 789);
 }
 std::uint32_t flush_calls{};
-__declspec(noinline) void __fastcall flush_fixture() { ++flush_calls; if (flush_calls == 0xffffffffu) std::abort(); }
+__declspec(noinline) void __fastcall flush_fixture()
+{
+    ++flush_calls;
+    if (world_at_flush) {
+        const float translation = 321;
+        std::memcpy(world_at_flush + 12 * sizeof(float), &translation, sizeof(translation));
+    }
+    if (flush_calls == 0xffffffffu) std::abort();
+}
 // Foliage fixtures: a tree visual and CDetailManager::Render, both reaching the D3D draw through the flush.
 std::array<std::byte, 512> tree_visual{};
 __declspec(noinline) void __fastcall tree_st_fixture(void* instance, float lod)
@@ -119,8 +138,13 @@ __declspec(noinline) void __fastcall detail_fixture(void* self)
     flush_target();
 }
 std::vector<DrawTimeFacts> seen_facts;
+std::optional<double> callback_translation;
+std::uint32_t callback_flush_calls{};
 void collect_facts(const DrawTimeFacts& facts) noexcept
 {
+    callback_flush_calls = flush_calls;
+    callback_translation = facts.capture && facts.capture->world
+        ? std::optional{facts.capture->world->at(0, 3)} : std::nullopt;
     DrawTimeFacts copy = facts;
     copy.capture = nullptr;
     seen_facts.push_back(copy);
@@ -141,6 +165,7 @@ Context context_now()
     return {identity->view, identity->domain};
 }
 Context hud_context, sorted_before, sorted_hud, sorted_after, emissive_before, emissive_hud, emissive_after;
+bool nested_window{};
 std::uint32_t hud_calls{}, near_calls{}, normal_calls{};
 __declspec(noinline) void __fastcall hud_fixture(void* self)
 {
@@ -156,6 +181,14 @@ __declspec(noinline) void __fastcall sorted_fixture(void* self)
     sorted_before = context_now();
     near_target(self);
     sorted_hud = context_now();
+    if (nested_window) {
+        {
+            const DrawContextScope child_view(temporal::ViewId::Main, temporal::ProjectionDomain::World);
+            emissive_target(self);
+            CHECK((context_now() == Context{temporal::ViewId::Main, temporal::ProjectionDomain::World}));
+        }
+        CHECK(context_now() == sorted_hud);
+    }
     normal_target(self);
     sorted_after = context_now();
 }
@@ -165,6 +198,10 @@ __declspec(noinline) void __fastcall emissive_fixture(void* self)
     emissive_before = context_now();
     near_target(self);
     emissive_hud = context_now();
+    if (nested_window) {
+        normal_target(self);
+        emissive_after = context_now();
+    }
     // A function that leaves without rmNormal must still close the window before the enclosing scopes unwind.
 }
 void retired(void*, temporal::InstanceKey key) noexcept
@@ -202,6 +239,7 @@ int main(int argc, char** argv)
     const float world[16]{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 123, 0, 0, 1};
     const float identity_world[16]{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
     std::memcpy(module.data() + gp.world_matrix_rva, world, sizeof(world));
+    phase_at_flush = module.data() + gp.render_phase_rva;
     const void* table = module.data() + gp.hierarchy_vtables[0];
     std::memcpy(visual.data(), &table, sizeof(table));
     void* child_list[]{child.data()};
@@ -244,6 +282,7 @@ int main(int argc, char** argv)
     const auto hud = reinterpret_cast<Unary>(fixtures[7]);
     const auto sorted = reinterpret_cast<Unary>(fixtures[8]);
     const auto emissive = reinterpret_cast<Unary>(fixtures[9]);
+    emissive_target = emissive;
     near_target = reinterpret_cast<Unary>(fixtures[10]);
     normal_target = reinterpret_cast<Unary>(fixtures[11]);
     const auto tree_st = reinterpret_cast<Render>(fixtures[12]);
@@ -313,6 +352,22 @@ int main(int argc, char** argv)
         CHECK(after.flush_total[0] == before.flush_total[0] + 1 && after.flush_in_visual[0] == before.flush_in_visual[0]);
         CHECK(after.captured == before.captured && sunk.size() == 1);
     }
+    // The shared callback observes the same copy after the original flush, even
+    // if the engine changes its CPU world matrix during that call.
+    {
+        const auto calls_before = flush_calls;
+        geometry_set_flush_callback(&collect_facts);
+        world_at_flush = module.data() + gp.world_matrix_rva;
+        const DrawContextScope context(temporal::ViewId::Scope, temporal::ProjectionDomain::FirstPerson);
+        render(child.data(), 0.375f);
+        CHECK(callback_flush_calls == calls_before + 1 && callback_translation == 123);
+        float sampled[16]{};
+        CHECK(read_world_matrix(sampled) && sampled[12] == 321);
+        CHECK(sunk.size() == 2 && sunk.back().world && sunk.back().world->at(0, 3) == 123);
+        std::memcpy(world_at_flush, world, sizeof(world));
+        world_at_flush = nullptr;
+        geometry_set_flush_callback(nullptr);
+    }
     // An identified draw with no view/projection context is still captured; the missing context is counted.
     {
         expected_view.reset();
@@ -355,6 +410,28 @@ int main(int argc, char** argv)
         CHECK(sunk.empty() && unknown.captured == before.captured);
         const std::uint32_t normal_phase = phase_normal;
         std::memcpy(module.data() + gp.render_phase_rva, &normal_phase, sizeof(normal_phase));
+    }
+    // Entry classification and actual flush phase are separate facts. An
+    // identified main entry cannot put a shadow or unknown flush into history.
+    {
+        const auto before = geometry_coverage();
+        const auto calls_before = flush_calls;
+        const DrawContextScope context(temporal::ViewId::Scope, temporal::ProjectionDomain::FirstPerson);
+        geometry_set_flush_callback(&collect_facts);
+        seen_facts.clear();
+        for (const auto phase : {phase_smap, std::uint32_t{7}}) {
+            flush_phase = phase;
+            render(child.data(), 0.375f);
+        }
+        flush_phase.reset();
+        geometry_set_flush_callback(nullptr);
+        const auto after = geometry_coverage();
+        CHECK(flush_calls == calls_before + 2 && sunk.empty() && after.captured == before.captured);
+        CHECK(seen_facts.size() == 2 && !callback_translation);
+        CHECK(seen_facts[0].pass == DrawPass::Shadow && seen_facts[1].pass == DrawPass::Unknown);
+        for (const auto& facts : seen_facts)
+            CHECK(facts.in_visual && facts.classification.pass == DrawPass::Main &&
+                facts.classification.verdict == DrawVerdict::Identified);
     }
     // Unregistered rigid visuals: level geometry (exactly Fidentity) needs no object motion; anything else is a gap.
     expect_identity = false;
@@ -546,6 +623,32 @@ int main(int argc, char** argv)
         normal_target(&hud_calls);
     }
     CHECK(context_now() == outside);
+    {
+        set_viewport(true, 2, 4);
+        const RenderViewScope view;
+        const Context world_scope{temporal::ViewId::Scope, temporal::ProjectionDomain::World};
+        const Context hud_scope{temporal::ViewId::Scope, temporal::ProjectionDomain::FirstPerson};
+        const Context world_main{temporal::ViewId::Main, temporal::ProjectionDomain::World};
+        const Context hud_main{temporal::ViewId::Main, temporal::ProjectionDomain::FirstPerson};
+        const auto before = geometry_coverage();
+        nested_window = true;
+        sorted(&hud_calls);
+        nested_window = false;
+        CHECK(sorted_before == world_scope && sorted_hud == hud_scope && sorted_after == world_scope);
+        CHECK(emissive_before == world_main && emissive_hud == hud_main && emissive_after == world_main);
+        CHECK(context_now() == world_scope && geometry_coverage().near_windows == before.near_windows + 2);
+
+        geometry_test_bind_module(nullptr, build);
+        {
+            const RenderViewScope unavailable;
+            CHECK((context_now() == Context{std::nullopt, temporal::ProjectionDomain::World}));
+            hud(&hud_calls);
+            CHECK((hud_context == Context{std::nullopt, temporal::ProjectionDomain::FirstPerson}));
+        }
+        geometry_test_bind_module(module.data(), build);
+        CHECK(context_now() == world_scope);
+    }
+    CHECK(context_now() == outside);
     set_viewport(false, 2, 4);
     {
         const RenderViewScope view;
@@ -553,7 +656,7 @@ int main(int argc, char** argv)
     }
     {
         const auto coverage = geometry_coverage();
-        CHECK(coverage.views_main >= 1 && coverage.views_scope >= 1 && coverage.hud_scopes >= 1 && coverage.near_windows == 2);
+        CHECK(coverage.views_main >= 1 && coverage.views_scope >= 2 && coverage.hud_scopes >= 2 && coverage.near_windows == 4);
     }
     std::vector<std::string> lines;
     geometry_report_coverage(&collect_line, &lines);

@@ -4,12 +4,7 @@
 #include "geometry_retirement.h"
 #include <algorithm>
 #include <array>
-#include <atomic>
-#include <cstdio>
 #include <cstring>
-#include <iterator>
-#include <mutex>
-#include <new>
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -57,307 +52,255 @@ std::size_t IdentityRegistry::retire_all(void (*apply)(void*, InstanceKey), void
     return count;
 }
 
+
 namespace {
+using Engine = rsf_anomaly_geometry_engine;
+using Matrix = rsf_anomaly_geometry_matrix;
+using Context = rsf_anomaly_geometry_context;
+using Visual = rsf_anomaly_geometry_visual;
+using Window = rsf_anomaly_geometry_window;
+static_assert(sizeof(Engine) == 16 && sizeof(Context) == 16 && sizeof(Window) == 32 && sizeof(Visual) == 80);
+static_assert(sizeof(rsf_anomaly_geometry_facts) == 32 && sizeof(rsf_anomaly_geometry_platform) == 128);
+static_assert(sizeof(GeometryStats) == 40 && sizeof(GeometryCoverage) == 1472);
+static_assert(sizeof(rsf_anomaly_geometry_palette) == 24 && sizeof(rsf_anomaly_geometry_view_sample) == 8);
+static_assert(sizeof(rsf_anomaly_geometry_child_range) == 24 && sizeof(rsf_anomaly_geometry_callback) == 24);
+static_assert(sizeof(rsf_anomaly_geometry_writer) == 24 && sizeof(Matrix) == 128);
+static_assert(static_cast<std::uint8_t>(DrawKind::Rigid) == RSF_ANOMALY_GEOMETRY_RIGID);
+static_assert(static_cast<std::uint8_t>(DrawKind::HardwareSkinned) == RSF_ANOMALY_GEOMETRY_HARDWARE_SKINNED);
+static_assert(static_cast<std::uint8_t>(DrawKind::SingleBone) == RSF_ANOMALY_GEOMETRY_SINGLE_BONE);
+static_assert(static_cast<std::uint8_t>(DrawKind::SoftwareSkinned) == RSF_ANOMALY_GEOMETRY_SOFTWARE_SKINNED);
+static_assert(static_cast<std::uint8_t>(DrawKind::Tree) == RSF_ANOMALY_GEOMETRY_TREE);
+static_assert(static_cast<std::uint8_t>(temporal::ViewId::Main) == RSF_ANOMALY_GEOMETRY_MAIN);
+static_assert(static_cast<std::uint8_t>(temporal::ViewId::Scope) == RSF_ANOMALY_GEOMETRY_SCOPE);
+static_assert(static_cast<std::uint8_t>(temporal::ProjectionDomain::World) == RSF_ANOMALY_GEOMETRY_WORLD);
+static_assert(static_cast<std::uint8_t>(temporal::ProjectionDomain::FirstPerson) == RSF_ANOMALY_GEOMETRY_FIRST_PERSON);
+
+template<class T>
+std::optional<T> optional_enum(std::uint8_t value) noexcept
+{
+    if (value == RSF_ANOMALY_GEOMETRY_UNSET) return {};
+    return static_cast<T>(value);
+}
+
+template<class T>
+std::uint8_t encode_enum(std::optional<T> value) noexcept
+{
+    return value ? static_cast<std::uint8_t>(*value) : static_cast<std::uint8_t>(RSF_ANOMALY_GEOMETRY_UNSET);
+}
+
 bool safe_copy(void* output, const void* input, std::size_t size) noexcept
 {
     if (!input) return false;
     __try { std::memcpy(output, input, size); return true; }
     __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
-std::optional<temporal::Mat4> read_matrix(const float* input) noexcept
+
+template<class T>
+bool read(std::uintptr_t address, T& value) noexcept
 {
-    float values[16];
-    if (!safe_copy(values, input, sizeof(values))) return {};
-    temporal::Mat4 matrix;
-    for (std::size_t row = 0; row < 4; ++row)
-        for (std::size_t col = 0; col < 4; ++col) matrix.at(row, col) = values[col * 4 + row];
-    if (!temporal::finite(matrix) || matrix.at(3, 0) != 0 || matrix.at(3, 1) != 0 ||
-        matrix.at(3, 2) != 0 || matrix.at(3, 3) != 1) return {};
-    return matrix;
-}
-}
-thread_local DrawContextScope* DrawContextScope::current_{};
-DrawContextScope::DrawContextScope(std::optional<temporal::ViewId> view,
-    std::optional<temporal::ProjectionDomain> domain) noexcept
-    : view_(view), domain_(domain), previous_(current_)
-{
-    current_ = this;
-}
-DrawContextScope::DrawContextScope(InheritView, std::optional<temporal::ProjectionDomain> domain) noexcept
-    : domain_(domain), previous_(current_)
-{
-    if (previous_) view_ = previous_->view_;
-    current_ = this;
-}
-DrawContextScope::~DrawContextScope() { current_ = previous_; }
-thread_local DrawScope* DrawScope::current_{};
-DrawScope::DrawScope(const IdentityRegistry& registry, std::optional<InstanceKey> key,
-    DrawKind kind, const float* world, const std::byte* skeleton, DrawClassification classification,
-    std::uint64_t visual) noexcept
-    : registry_(registry), previous_(current_)
-{
-    identity_.key = key.value_or(InstanceKey{});
-    identity_.kind = kind;
-    identity_.world = world;
-    identity_.skeleton = skeleton;
-    identity_.classification = classification;
-    identity_.visual = visual;
-    if (const auto context = DrawContextScope::current_) {
-        identity_.view = context->view_;
-        identity_.domain = context->domain_;
-    }
-    current_ = this;
-}
-DrawScope::~DrawScope() { current_ = previous_; }
-const DrawIdentity* borrow_draw() noexcept
-{
-    const auto scope = DrawScope::current_;
-    if (!scope) return nullptr;
-    const auto& key = scope->identity_.key;
-    return scope->registry_.find(key.owner, key.visual) == key ? &scope->identity_ : nullptr;
-}
-std::optional<DrawCapture> capture_current_draw() noexcept
-{
-    const auto identity = borrow_draw();
-    if (!identity) return {};
-    DrawCapture result;
-    result.key = identity->key;
-    result.kind = identity->kind;
-    result.view = identity->view;
-    result.domain = identity->domain;
-    result.world = read_matrix(identity->world);
-    if (identity->skeleton && identity->kind == DrawKind::HardwareSkinned) {
-        std::uint16_t mode{};
-        std::uint32_t count{};
-        const std::byte* parent{};
-        const std::byte* instances{};
-        if (!safe_copy(&mode, identity->skeleton + 56, sizeof(mode)) || mode < 2 || mode > 5 ||
-            !safe_copy(&count, identity->skeleton + 60, sizeof(count)) || count == 0 || count > 1024 ||
-            !safe_copy(&parent, identity->skeleton + 8, sizeof(parent)) || !parent ||
-            !safe_copy(&instances, parent + bone_instances_offset, sizeof(instances)) || !instances) return result;
-        try {
-            result.bones.reserve(count);
-            for (std::uint32_t index = 0; index < count; ++index) {
-                const auto matrix = read_matrix(reinterpret_cast<const float*>(
-                    instances + index * bone_instance_stride + render_transform_offset));
-                if (!matrix) { result.bones.clear(); return result; }
-                result.bones.push_back(*matrix);
-            }
-            result.palette_layout = sbones_palette_layout;
-        } catch (...) { result.bones.clear(); result.palette_layout = 0; }
-    }
-    return result;
+    return safe_copy(&value, reinterpret_cast<const void*>(address), sizeof(T));
 }
 
-DrawVerdict classify_draw(const DrawFacts& facts) noexcept
+Engine bind(const std::byte* module, const BuildProfile& build) noexcept
 {
-    const rsf_anomaly_geometry_draw draw{static_cast<int32_t>(facts.pass), static_cast<int32_t>(facts.type),
-        static_cast<int32_t>(facts.lookup), facts.capturing, facts.world_readable, facts.world_identity,
-        facts.foliage_identity};
-    return static_cast<DrawVerdict>(rsf_anomaly_geometry_classify(&draw));
-}
-const char* pass_name(DrawPass pass) noexcept
-{
-    switch (pass) {
-    case DrawPass::Main: return "main";
-    case DrawPass::Shadow: return "shadow";
-    default: return "other";
-    }
-}
-const char* visual_type_name(VisualType type) noexcept
-{
-    static constexpr const char* names[] = {"static", "progressive", "skeleton_st", "skeleton_pm", "tree_st", "tree_pm"};
-    const auto index = static_cast<std::size_t>(type);
-    return index < std::size(names) ? names[index] : "unknown";
-}
-const char* verdict_name(DrawVerdict verdict) noexcept
-{
-    static constexpr const char* names[] = {"identified", "ignored_shadow", "ignored_static_world", "unidentified_dynamic",
-        "unidentified_deformed", "unidentified_ambiguous", "unidentified_unreadable", "unidentified_nocapture",
-        "identified_foliage"};
-    const auto index = static_cast<std::size_t>(verdict);
-    return index < std::size(names) ? names[index] : "unknown";
+    return {reinterpret_cast<std::uintptr_t>(module), reinterpret_cast<std::uintptr_t>(&build)};
 }
 
-namespace {
-// Microsoft x64 C++ member ABI: RCX=this, RDX=name/source/ref, R8=reader/BOOL;
-// the second argument float in Render is XMM1, never XMM0 or an integer register.
+const BuildProfile& build_of(Engine engine) noexcept
+{
+    return *reinterpret_cast<const BuildProfile*>(engine.profile);
+}
+
+// Microsoft x64 C++ member ABI puts the visual's second argument in XMM1.
 using Create = void*(__fastcall*)(void*, const char*, void*);
 using Duplicate = void*(__fastcall*)(void*, void*);
 using Delete = void(__fastcall*)(void*, void**, std::int32_t);
 using Render = void(__fastcall*)(void*, float);
 using Flush = void(__fastcall*)();
 using Unary = void(__fastcall*)(void*);
-std::array<void*, 17> originals{};
-IdentityRegistry native_identities;
-std::mutex native_lifecycle;
-GeometrySink sink;
-DrawSink draw_sink;
-std::atomic<std::byte*> native_module{};
-// The exact build the module was installed (or test-bound) with; its geometry table is the only one read.
-std::atomic<const BuildProfile*> native_build{};
-std::atomic<bool> capture_enabled{};
-std::atomic<bool> hooks_enabled{};
+std::array<void*, geometry_site_count> originals{};
 HookSet native_hooks;
-std::atomic<std::uint64_t> models_registered{}, models_retired{}, draws_identified{}, draws_unidentified{}, capture_faults{};
-constexpr std::size_t coverage_cells = GeometryCoverage::passes * GeometryCoverage::types * GeometryCoverage::verdicts;
-std::array<std::atomic<std::uint64_t>, coverage_cells> coverage_draws{};
-std::array<std::atomic<std::uint64_t>, GeometryCoverage::passes> flush_total{}, flush_in_visual{};
-std::atomic<std::uint64_t> captured{}, capture_stale{}, capture_no_world{}, capture_no_palette{}, capture_no_context{}, sunk{};
-std::atomic<std::uint64_t> views_main{}, views_scope{}, hud_scopes{}, near_windows{};
-std::array<std::atomic<std::uint64_t>, GeometryCoverage::passes> detail_renders{}, flush_in_detail{};
-std::atomic<bool> foliage_identity{};
-std::size_t coverage_index(DrawPass pass, VisualType type, DrawVerdict verdict) noexcept
+
+bool guard(Engine engine, std::uint32_t image_size) noexcept
 {
-    return (static_cast<std::size_t>(pass) * GeometryCoverage::types + static_cast<std::size_t>(type)) *
-        GeometryCoverage::verdicts + static_cast<std::size_t>(verdict);
+    if (!engine.module || image_size != build_of(engine).image_size()) return false;
+    const auto* module = reinterpret_cast<const std::byte*>(engine.module);
+    const auto& profile = *build_of(engine).geometry;
+    const auto guarded = [&](const NativeSite& site) {
+        std::array<std::byte, 16> bytes;
+        return site.rva <= image_size - bytes.size() &&
+            safe_copy(bytes.data(), module + site.rva, bytes.size()) && bytes == site.expected &&
+            unique_guards_match(module, image_size, profile.geometry_unique_guards, site.rva);
+    };
+    for (const auto& site : profile.geometry_layout_sites) if (!guarded(site)) return false;
+    for (const auto& site : profile.geometry_sites) if (!guarded(site)) return false;
+    return true;
 }
-// CRender::phase at the time of the call. Only the two engine phases are named; anything else is "other".
-DrawPass read_pass(const std::byte* module) noexcept
+
+bool hook_install(Engine engine, std::uint32_t size) noexcept
+{
+    auto* module = reinterpret_cast<std::byte*>(engine.module);
+    return native_hooks.install(module, size, native_geometry_hook_sites(build_of(engine)));
+}
+
+bool children(Engine engine, std::uintptr_t visual, rsf_anomaly_geometry_child_range* range) noexcept
+{
+    std::uintptr_t vtable{};
+    if (!read(visual, vtable)) return false;
+    const auto& tables = build_of(engine).geometry->hierarchy_vtables;
+    if (std::none_of(tables.begin(), tables.end(), [&](auto rva) { return vtable == engine.module + rva; }))
+        return true;
+    std::int32_t borrowed{};
+    return read(visual + hierarchy_children_offset + sizeof(*range), borrowed) &&
+        (borrowed || read(visual + hierarchy_children_offset, *range));
+}
+
+std::uint8_t pass(Engine engine) noexcept
 {
     std::uint32_t phase{};
-    const auto* build = native_build.load();
-    if (!module || !build || !safe_copy(&phase, module + build->geometry->render_phase_rva, sizeof(phase))) return DrawPass::Unknown;
-    return phase == phase_normal ? DrawPass::Main : phase == phase_smap ? DrawPass::Shadow : DrawPass::Unknown;
+    if (read(engine.module + build_of(engine).geometry->render_phase_rva, phase)) {
+        if (phase == phase_normal) return RSF_ANOMALY_PASS_MAIN;
+        if (phase == phase_smap) return RSF_ANOMALY_PASS_SHADOW;
+    }
+    return RSF_ANOMALY_PASS_UNKNOWN;
 }
-bool is_identity_matrix(const float (&values)[16]) noexcept
+
+bool view(Engine engine, rsf_anomaly_geometry_view_sample* sample) noexcept
 {
-    static constexpr float identity[16]{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
-    return std::memcmp(values, identity, sizeof(identity)) == 0;
+    const auto& build = build_of(engine);
+    const auto viewport = engine.module + build.geometry->second_viewport_rva;
+    return read(viewport, sample->active) && read(viewport + second_viewport_delay_offset, sample->delay) &&
+        read(engine.module + build.native->device_frame_rva, sample->frame);
 }
-// A faulted capture stays off until the next guarded install, rather than guessing which lifetimes were lost.
-void fault() noexcept { capture_faults.fetch_add(1); capture_enabled = false; }
-thread_local std::uint32_t factory_depth{};
-struct FactoryScope {
-    FactoryScope() { ++factory_depth; }
-    ~FactoryScope() { --factory_depth; }
+
+std::uintptr_t world(Engine engine) noexcept
+{
+    return engine.module ? engine.module + build_of(engine).geometry->world_matrix_rva : 0;
+}
+
+bool skin_mode(std::uintptr_t skeleton, std::uint16_t* mode) noexcept
+{
+    return read(skeleton + 56, *mode);
+}
+
+bool palette(std::uintptr_t skeleton, rsf_anomaly_geometry_palette* sample) noexcept
+{
+    sample->layout = sbones_palette_layout;
+    return skin_mode(skeleton, &sample->mode) && read(skeleton + 60, sample->count);
+}
+
+std::uintptr_t bone_instances(std::uintptr_t skeleton) noexcept
+{
+    std::uintptr_t parent{}, instances{};
+    return read(skeleton + 8, parent) && parent && read(parent + bone_instances_offset, instances) ? instances : 0;
+}
+
+bool matrix(std::uintptr_t address, float* out) noexcept
+{
+    return safe_copy(out, reinterpret_cast<const void*>(address), sizeof(float) * 16);
+}
+
+bool bone(std::uintptr_t instances, std::uint32_t index, float* out) noexcept
+{
+    return matrix(instances + index * bone_instance_stride + render_transform_offset, out);
+}
+
+std::int64_t tree_lod(std::uintptr_t visual) noexcept
+{
+    std::uint32_t lod{};
+    return read(visual + tree_pm_last_lod_offset, lod) ? static_cast<std::int64_t>(lod) : -1;
+}
+
+constexpr rsf_anomaly_geometry_platform platform{
+    guard,
+    []() noexcept { return native_hooks.created(); },
+    hook_install,
+    []() noexcept { return native_hooks.enable(); },
+    []() noexcept { return native_hooks.disable(); },
+    children,
+    [](std::uintptr_t address, std::uintptr_t* result) noexcept { return read(address, *result); },
+    pass, view, world, matrix, skin_mode, palette, bone_instances, bone, tree_lod,
 };
 
-std::vector<std::uint64_t> visual_tree(void* root)
+DrawClassification classification(std::uint8_t pass, std::uint8_t type, std::uint8_t verdict) noexcept
 {
-    std::vector<std::uint64_t> result;
-    if (!root) return result;
-    result.push_back(reinterpret_cast<std::uintptr_t>(root));
-    const auto module = native_module.load();
-    const auto* build = native_build.load();
-    if (!module || !build) return result;
-    for (std::size_t i = 0; i < result.size(); ++i) {
-        if (result.size() > 4096) throw std::bad_alloc{}; // Fail capture closed, leave engine untouched.
-        const auto visual = reinterpret_cast<const std::byte*>(result[i]);
-        const std::byte* vtable{};
-        if (!safe_copy(&vtable, visual, sizeof(vtable))) throw std::bad_alloc{};
-        bool hierarchy = false;
-        for (const auto rva : build->geometry->hierarchy_vtables) hierarchy |= vtable == module + rva;
-        if (!hierarchy) continue;
-        std::int32_t borrowed_children{};
-        if (!safe_copy(&borrowed_children, visual + 120, sizeof(borrowed_children))) throw std::bad_alloc{};
-        if (borrowed_children) continue; // A linked level visual does not inherit this model's lifetime.
-        std::uintptr_t range[3];
-        if (!safe_copy(range, visual + hierarchy_children_offset, sizeof(range)) ||
-            range[1] < range[0] || range[2] < range[1] || (range[1] - range[0]) % sizeof(void*) ||
-            (range[1] - range[0]) / sizeof(void*) > 4096) throw std::bad_alloc{};
-        for (auto item = range[0]; item < range[1]; item += sizeof(void*)) {
-            std::uint64_t child{};
-            if (!safe_copy(&child, reinterpret_cast<const void*>(item), sizeof(child)) || !child) throw std::bad_alloc{};
-            if (std::find(result.begin(), result.end(), child) == result.end()) result.push_back(child);
-        }
-    }
+    return {static_cast<DrawPass>(pass), static_cast<VisualType>(type), static_cast<DrawVerdict>(verdict)};
+}
+
+temporal::Mat4 copy_matrix(const Matrix& input) noexcept
+{
+    temporal::Mat4 result;
+    std::copy_n(input.values, result.values.size(), result.values.begin());
     return result;
 }
-void retire_key(std::uint64_t owner, std::uint64_t visual)
-{
-    const auto key = native_identities.retire(owner, visual);
-    if (!key) return;
-    models_retired.fetch_add(1);
-    if (sink.retired) sink.retired(sink.context, *key);
-}
-void model_returned(void* owner, void* visual) noexcept
-{
-    if (!capture_enabled.load() || !visual || factory_depth) return;
-    try {
-        const std::lock_guard lock(native_lifecycle);
-        const auto tree = visual_tree(visual);
-        const auto address = reinterpret_cast<std::uintptr_t>(owner);
-        // Retire the entire pooled hierarchy before publishing ANY new generation.
-        for (const auto item : tree) retire_key(address, item);
-        for (const auto item : tree) {
-            if (native_identities.acquire(address, item)) models_registered.fetch_add(1); else fault();
-        }
-    } catch (...) { fault(); }
-}
-void model_retiring(void* owner, void** reference) noexcept
-{
-    if (!capture_enabled.load()) return;
-    try {
-        void* visual{};
-        if (!safe_copy(&visual, reference, sizeof(visual))) { fault(); return; }
-        const std::lock_guard lock(native_lifecycle);
-        for (const auto item : visual_tree(visual)) retire_key(reinterpret_cast<std::uintptr_t>(owner), item);
-    } catch (...) { fault(); }
-}
+
+// The facade supplies the existing C++ snapshot's storage. Rust decides when
+// to sample, which rows are valid and when this copy is ready to publish.
+using CaptureStorage = std::optional<DrawCapture>;
+constexpr rsf_anomaly_geometry_writer writer{
+    [](void* user, const Visual* scope, const Matrix* matrix, std::uint32_t count) noexcept {
+        auto& capture = static_cast<CaptureStorage*>(user)->emplace();
+        capture.key = {scope->key.owner, scope->key.visual, scope->key.generation};
+        capture.kind = static_cast<DrawKind>(scope->kind);
+        capture.view = optional_enum<temporal::ViewId>(scope->view);
+        capture.domain = optional_enum<temporal::ProjectionDomain>(scope->domain);
+        if (matrix) capture.world = copy_matrix(*matrix);
+        try { capture.bones.reserve(count); return true; }
+        catch (...) { return false; }
+    },
+    [](void* user, std::uint32_t, const Matrix* matrix) noexcept {
+        (**static_cast<CaptureStorage*>(user)).bones.push_back(copy_matrix(*matrix));
+    },
+    [](void* user, std::uint64_t layout) noexcept -> const void* {
+        auto& capture = **static_cast<CaptureStorage*>(user);
+        if (!layout) capture.bones.clear();
+        capture.palette_layout = layout;
+        return &capture;
+    },
+};
+
+struct FactoryScope {
+    FactoryScope() noexcept { rsf_anomaly_geometry_factory_enter(); }
+    ~FactoryScope() { rsf_anomaly_geometry_factory_leave(); }
+};
+
 void* __fastcall create_hook(void* self, const char* name, void* reader)
 {
     void* result;
     { const FactoryScope factory; result = reinterpret_cast<Create>(originals[0])(self, name, reader); }
-    model_returned(self, result);
+    rsf_anomaly_geometry_model_return(&platform, reinterpret_cast<std::uintptr_t>(self), reinterpret_cast<std::uintptr_t>(result));
     return result;
 }
+
 void* __fastcall child_hook(void* self, const char* name, void* reader)
 {
     void* result;
     { const FactoryScope factory; result = reinterpret_cast<Create>(originals[1])(self, name, reader); }
-    model_returned(self, result);
+    rsf_anomaly_geometry_model_return(&platform, reinterpret_cast<std::uintptr_t>(self), reinterpret_cast<std::uintptr_t>(result));
     return result;
 }
+
 void* __fastcall duplicate_hook(void* self, void* source)
 {
     void* result;
     { const FactoryScope factory; result = reinterpret_cast<Duplicate>(originals[2])(self, source); }
-    model_returned(self, result);
+    rsf_anomaly_geometry_model_return(&platform, reinterpret_cast<std::uintptr_t>(self), reinterpret_cast<std::uintptr_t>(result));
     return result;
 }
+
 void __fastcall delete_hook(void* self, void** reference, std::int32_t discard)
 {
-    model_retiring(self, reference);
+    rsf_anomaly_geometry_model_delete(&platform, reinterpret_cast<std::uintptr_t>(self), reinterpret_cast<std::uintptr_t>(reference));
     reinterpret_cast<Delete>(originals[3])(self, reference, discard);
 }
+
 void render_visual(std::size_t index, void* self, float lod, DrawKind kind, VisualType type, std::uint32_t skeleton_offset = 0)
 {
-    const auto* build = native_build.load();
-    const auto module = build ? native_module.load() : nullptr;
-    DrawFacts facts;
-    facts.type = type;
-    facts.capturing = capture_enabled.load() && !factory_depth;
-    facts.foliage_identity = foliage_identity.load(std::memory_order_relaxed);
-    facts.pass = read_pass(module);
-    std::optional<InstanceKey> key;
-    if (facts.capturing) {
-        const auto probe = native_identities.probe_visual(reinterpret_cast<std::uintptr_t>(self));
-        facts.lookup = probe.lookup;
-        key = probe.key;
-    }
-    const auto skeleton = skeleton_offset ? static_cast<const std::byte*>(self) + skeleton_offset : nullptr;
-    if (skeleton) {
-        std::uint16_t mode{};
-        if (safe_copy(&mode, skeleton + 56, sizeof(mode))) {
-            kind = mode == 0 ? DrawKind::SoftwareSkinned : mode == 1 ? DrawKind::SingleBone : DrawKind::HardwareSkinned;
-        }
-    }
-    // The world matrix is read here only to tell level geometry (exactly Fidentity, set by r_dsgraph_render_graph and
-    // insert_static) from an unregistered moving object. It is never used as a motion input.
-    if (module && facts.capturing && facts.lookup == VisualLookup::Missing && facts.pass != DrawPass::Shadow) {
-        float values[16];
-        facts.world_readable = safe_copy(values, module + build->geometry->world_matrix_rva, sizeof(values));
-        facts.world_identity = facts.world_readable && is_identity_matrix(values);
-    }
-    const DrawClassification classification{facts.pass, type, classify_draw(facts)};
-    coverage_draws[coverage_index(classification.pass, type, classification.verdict)].fetch_add(1);
-    (key || classification.verdict == DrawVerdict::IdentifiedFoliage ? draws_identified : draws_unidentified).fetch_add(1);
-    DrawScope scope(native_identities, key, kind,
-        module ? reinterpret_cast<const float*>(module + build->geometry->world_matrix_rva) : nullptr, skeleton, classification,
-        reinterpret_cast<std::uintptr_t>(self));
+    const auto* skeleton = skeleton_offset ? static_cast<const std::byte*>(self) + skeleton_offset : nullptr;
+    const DrawScope draw(self, kind, type, skeleton);
     reinterpret_cast<Render>(originals[index])(self, lod);
 }
+
 void __fastcall rigid_hook(void* self, float lod) { render_visual(4, self, lod, DrawKind::Rigid, VisualType::Static); }
 void __fastcall progressive_hook(void* self, float lod) { render_visual(5, self, lod, DrawKind::Rigid, VisualType::Progressive); }
 void __fastcall skeleton_st_hook(void* self, float lod) { render_visual(6, self, lod, DrawKind::HardwareSkinned, VisualType::SkeletonST, skeleton_st_offset); }
@@ -365,368 +308,313 @@ void __fastcall skeleton_pm_hook(void* self, float lod) { render_visual(7, self,
 void __fastcall tree_st_hook(void* self, float lod) { render_visual(8, self, lod, DrawKind::Tree, VisualType::TreeST); }
 void __fastcall tree_pm_hook(void* self, float lod) { render_visual(9, self, lod, DrawKind::Tree, VisualType::TreePM); }
 
-// Draw-time call site. CBackend::constants.flush runs once per D3D draw (or dispatch), after every state apply and
-// immediately before DrawIndexed/Draw, so the world matrix and bone palette are the ones the draw uses.
-std::atomic<FlushCallback> flush_callback{};
 void __fastcall flush_hook()
 {
     DrawTimeFacts facts;
-    std::optional<DrawCapture> capture;
+    CaptureStorage capture;
     observe_draw_facts(facts, capture);
     reinterpret_cast<Flush>(originals[geometry_site_flush])();
-    // After the original: every native upload is done and the engine's D3D draw call is next.
-    if (const auto callback = flush_callback.load(std::memory_order_acquire)) callback(facts);
+    // Native uploads are complete and the engine's D3D draw is next.
+    rsf_anomaly_geometry_publish_flush(&facts);
 }
 
-// First-person projection. r_dsgraph_render_hud draws mapHUD under the HUD projection for its whole body.
-thread_local std::uint32_t hud_window_depth{};
-// The rmNear..rmNormal window spans two hook calls, so its scope lives in thread-local raw storage. That keeps the
-// thread-local trivially destructible; the pinned adapter never unloads, and a window is always closed by rmNormal
-// or by the enclosing sorted/emissive hook before any outer scope ends.
-thread_local DrawContextScope* near_scope{};
-alignas(DrawContextScope) thread_local std::byte near_storage[sizeof(DrawContextScope)];
-void open_near_window() noexcept
-{
-    near_scope = ::new (static_cast<void*>(near_storage))
-        DrawContextScope(DrawContextScope::InheritView{}, temporal::ProjectionDomain::FirstPerson);
-}
-void close_near_window() noexcept
-{
-    if (!near_scope) return;
-    near_scope->~DrawContextScope();
-    near_scope = nullptr;
-}
 void __fastcall render_hud_hook(void* self)
 {
-    std::optional<DrawContextScope> context;
-    if (capture_enabled.load()) {
-        context.emplace(DrawContextScope::InheritView{}, temporal::ProjectionDomain::FirstPerson);
-        hud_scopes.fetch_add(1);
-    }
+    struct HudScope {
+        Context scope{};
+        bool entered{rsf_anomaly_geometry_hud_enter(&scope)};
+        ~HudScope() { if (entered) rsf_anomaly_geometry_context_leave(&scope); }
+    } hud;
     reinterpret_cast<Unary>(originals[geometry_site_render_hud])(self);
 }
-// r_dsgraph_render_sorted/emissive draw their world half under the main projection, then switch to the HUD projection
-// and call rmNear() for their HUD half. Between rmNear and rmNormal inside such a window the domain is first-person.
+
 struct HudWindow {
-    HudWindow() noexcept { ++hud_window_depth; }
-    ~HudWindow() { if (--hud_window_depth == 0) close_near_window(); }
+    Window scope{};
+    HudWindow() noexcept { rsf_anomaly_geometry_window_enter(&scope); }
+    ~HudWindow() { rsf_anomaly_geometry_window_leave(&scope); }
 };
+
 void __fastcall render_sorted_hook(void* self)
 {
-    const HudWindow window;
+    HudWindow window;
     reinterpret_cast<Unary>(originals[geometry_site_render_sorted])(self);
 }
+
 void __fastcall render_emissive_hook(void* self)
 {
-    const HudWindow window;
+    HudWindow window;
     reinterpret_cast<Unary>(originals[geometry_site_render_emissive])(self);
 }
-std::atomic<RmNearCallback> rm_near_callback{};
+
 void __fastcall rm_near_hook(void* self)
 {
     reinterpret_cast<Unary>(originals[geometry_site_rm_near])(self);
-    if (hud_window_depth && !near_scope && capture_enabled.load()) {
-        open_near_window();
-        near_windows.fetch_add(1);
-    }
-    if (const auto callback = rm_near_callback.load(std::memory_order_acquire)) callback(self);
-}
-void __fastcall rm_normal_hook(void* self)
-{
-    close_near_window();
-    reinterpret_cast<Unary>(originals[geometry_site_rm_normal])(self);
-}
-// CDetailManager::Render. hw_Render fills the VS `array` rows and issues every grass draw before it returns, in the
-// G-buffer and in the shadow passes, so a draw-time flush with this depth set belongs to a detail batch.
-thread_local std::uint32_t detail_window_depth{};
-void __fastcall detail_render_hook(void* self)
-{
-    struct Window {
-        Window() noexcept { ++detail_window_depth; }
-        ~Window() { --detail_window_depth; }
-    } window;
-    if (capture_enabled.load(std::memory_order_relaxed))
-        detail_renders[static_cast<std::size_t>(read_pass(native_module.load()))].fetch_add(1);
-    reinterpret_cast<Unary>(originals[geometry_site_detail_render])(self);
-}
+    rsf_anomaly_geometry_near_enter();
+    rsf_anomaly_geometry_publish_near(self);
 }
 
-void observe_draw_facts(DrawTimeFacts& facts, std::optional<DrawCapture>& kept) noexcept
+void __fastcall rm_normal_hook(void* self)
 {
-    const auto scope = DrawScope::current_;
-    if (scope) {
-        facts.in_visual = true;
-        facts.classification = scope->identity_.classification;
-        facts.kind = scope->identity_.kind;
-        facts.view = scope->identity_.view;
-        facts.domain = scope->identity_.domain;
-        facts.visual = scope->identity_.visual;
-        facts.type = scope->identity_.classification.type;
-        if (facts.type == VisualType::TreePM && facts.visual) {
-            std::uint32_t lod{};
-            if (safe_copy(&lod, reinterpret_cast<const std::byte*>(facts.visual) + tree_pm_last_lod_offset, sizeof(lod)))
-                facts.tree_lod = lod;
-        }
-    } else if (const auto context = DrawContextScope::current_) {
-        facts.view = context->view_;
-        facts.domain = context->domain_;
-    }
-    const auto pass = read_pass(native_module.load());
-    facts.pass = pass;
-    facts.detail = detail_window_depth != 0;
-    if (!capture_enabled.load(std::memory_order_relaxed)) return;
-    flush_total[static_cast<std::size_t>(pass)].fetch_add(1);
-    if (facts.detail) flush_in_detail[static_cast<std::size_t>(pass)].fetch_add(1);
-    if (!scope) return;
-    flush_in_visual[static_cast<std::size_t>(pass)].fetch_add(1);
-    const auto& classification = scope->identity_.classification;
-    // Shadow, Z-fill and every unidentified verdict write no per-instance motion. Only an identified main-pass draw
-    // is captured; capture_current_draw() re-validates the identity against the registry.
-    if (classification.verdict != DrawVerdict::Identified || classification.pass != DrawPass::Main) return;
-    const auto capture = capture_current_draw();
-    if (!capture) { capture_stale.fetch_add(1); return; }
-    captured.fetch_add(1);
-    if (!capture->view || !capture->domain) capture_no_context.fetch_add(1);
-    if (!capture->world) capture_no_world.fetch_add(1);
-    if (capture->kind == DrawKind::HardwareSkinned && capture->bones.empty()) capture_no_palette.fetch_add(1);
-    if (draw_sink.draw) { draw_sink.draw(draw_sink.context, *capture); sunk.fetch_add(1); }
-    kept = std::move(capture);
-    facts.capture = &*kept;
+    rsf_anomaly_geometry_near_leave();
+    reinterpret_cast<Unary>(originals[geometry_site_rm_normal])(self);
 }
-void geometry_observe_draw() noexcept
+
+void __fastcall detail_render_hook(void* self)
 {
-    DrawTimeFacts facts;
-    std::optional<DrawCapture> capture;
-    observe_draw_facts(facts, capture);
+    struct DetailScope {
+        DetailScope() noexcept { rsf_anomaly_geometry_detail_enter(&platform); }
+        ~DetailScope() { rsf_anomaly_geometry_detail_leave(); }
+    } detail;
+    reinterpret_cast<Unary>(originals[geometry_site_detail_render])(self);
 }
-void geometry_set_flush_callback(FlushCallback value) noexcept
-{
-    flush_callback.store(value, std::memory_order_release);
-}
-void geometry_enable_foliage_identity(bool value) noexcept { foliage_identity.store(value, std::memory_order_relaxed); }
-bool geometry_foliage_identity_enabled() noexcept { return foliage_identity.load(std::memory_order_relaxed); }
-namespace {
+
 // The dx10ConstantBuffer behind CBackend::m_aVertexConstants[slot], only when it reports the reflected size.
-const std::byte* vertex_constant_data(std::uint32_t slot, std::uint32_t expected_size, std::uint32_t offset,
+std::uintptr_t vertex_constant_data(std::uint32_t slot, std::uint32_t expected_size, std::uint32_t offset,
     std::uint32_t bytes) noexcept
 {
-    const auto module = native_module.load();
-    const auto* build = native_build.load();
-    if (!module || !build || slot >= constant_buffer_slots || !expected_size || bytes > expected_size ||
-        offset > expected_size - bytes) return nullptr;
-    const std::byte* object{};
+    const auto engine = rsf_anomaly_geometry_binding();
+    if (!engine.module || slot >= constant_buffer_slots || !expected_size || bytes > expected_size ||
+        offset > expected_size - bytes) return 0;
+    std::uintptr_t object{}, data{};
     std::uint32_t size{};
-    const std::byte* data{};
-    if (!safe_copy(&object, module + build->geometry->vertex_constant_buffers_rva + slot * sizeof(object), sizeof(object)) || !object ||
-        !safe_copy(&size, object + constant_buffer_size_offset, sizeof(size)) || size != expected_size ||
-        !safe_copy(&data, object + constant_buffer_data_offset, sizeof(data)) || !data) return nullptr;
+    if (!read(engine.module + build_of(engine).geometry->vertex_constant_buffers_rva + slot * sizeof(object), object) ||
+        !object || !read(object + constant_buffer_size_offset, size) || size != expected_size ||
+        !read(object + constant_buffer_data_offset, data) || !data) return 0;
     return data + offset;
 }
 }
+
+DrawContextScope::DrawContextScope(std::optional<temporal::ViewId> view,
+    std::optional<temporal::ProjectionDomain> domain) noexcept
+{
+    rsf_anomaly_geometry_context_enter(&scope_, encode_enum(view), encode_enum(domain), false);
+}
+
+DrawContextScope::DrawContextScope(InheritView, std::optional<temporal::ProjectionDomain> domain) noexcept
+{
+    rsf_anomaly_geometry_context_enter(&scope_, RSF_ANOMALY_GEOMETRY_UNSET, encode_enum(domain), true);
+}
+
+DrawContextScope::~DrawContextScope() { rsf_anomaly_geometry_context_leave(&scope_); }
+
+DrawScope::DrawScope(const IdentityRegistry& registry, std::optional<InstanceKey> key, DrawKind kind,
+    const float* world, const std::byte* skeleton, DrawClassification classification, std::uint64_t visual) noexcept
+{
+    scope_.registry = registry.state_;
+    scope_.key = geometry_key(key.value_or(InstanceKey{}));
+    scope_.world = reinterpret_cast<std::uintptr_t>(world);
+    scope_.skeleton = reinterpret_cast<std::uintptr_t>(skeleton);
+    scope_.visual = visual;
+    scope_.kind = static_cast<std::uint8_t>(kind);
+    scope_.pass = static_cast<std::uint8_t>(classification.pass);
+    scope_.type = static_cast<std::uint8_t>(classification.type);
+    scope_.verdict = static_cast<std::uint8_t>(classification.verdict);
+    enter();
+}
+
+DrawScope::DrawScope(void* visual, DrawKind kind, VisualType type, const std::byte* skeleton) noexcept
+{
+    scope_.visual = reinterpret_cast<std::uintptr_t>(visual);
+    scope_.skeleton = reinterpret_cast<std::uintptr_t>(skeleton);
+    scope_.kind = static_cast<std::uint8_t>(kind);
+    scope_.type = static_cast<std::uint8_t>(type);
+    rsf_anomaly_geometry_classify_visual(&platform, &scope_);
+    enter();
+}
+
+void DrawScope::enter() noexcept
+{
+    scope_.facade = &identity_;
+    rsf_anomaly_geometry_visual_enter(&scope_);
+    identity_ = {{scope_.key.owner, scope_.key.visual, scope_.key.generation}, static_cast<DrawKind>(scope_.kind),
+        optional_enum<temporal::ViewId>(scope_.view), optional_enum<temporal::ProjectionDomain>(scope_.domain),
+        reinterpret_cast<const float*>(scope_.world), reinterpret_cast<const std::byte*>(scope_.skeleton),
+        classification(scope_.pass, scope_.type, scope_.verdict), scope_.visual};
+}
+
+DrawScope::~DrawScope() { rsf_anomaly_geometry_visual_leave(&scope_); }
+
+const DrawIdentity* borrow_draw() noexcept
+{
+    return static_cast<const DrawIdentity*>(rsf_anomaly_geometry_borrow_draw());
+}
+
+std::optional<DrawCapture> capture_current_draw() noexcept
+{
+    CaptureStorage capture;
+    (void)rsf_anomaly_geometry_capture(&platform, &writer, &capture);
+    return capture;
+}
+
+DrawVerdict classify_draw(const DrawFacts& facts) noexcept
+{
+    const rsf_anomaly_geometry_draw draw{static_cast<std::int32_t>(facts.pass), static_cast<std::int32_t>(facts.type),
+        static_cast<std::int32_t>(facts.lookup), facts.capturing, facts.world_readable, facts.world_identity,
+        facts.foliage_identity};
+    return static_cast<DrawVerdict>(rsf_anomaly_geometry_classify(&draw));
+}
+
+const char* pass_name(DrawPass pass) noexcept
+{
+    return rsf_anomaly_geometry_pass_name(static_cast<std::uint8_t>(pass));
+}
+
+const char* visual_type_name(VisualType type) noexcept
+{
+    return rsf_anomaly_geometry_type_name(static_cast<std::uint8_t>(type));
+}
+
+const char* verdict_name(DrawVerdict verdict) noexcept
+{
+    return rsf_anomaly_geometry_verdict_name(static_cast<std::uint8_t>(verdict));
+}
+
+void observe_draw_facts(DrawTimeFacts& facts, CaptureStorage& capture) noexcept
+{
+    rsf_anomaly_geometry_facts raw;
+    const auto* kept = rsf_anomaly_geometry_observe(&platform, &writer, &capture, &raw);
+    facts = {raw.in_visual, static_cast<DrawPass>(raw.pass), classification(raw.visual_pass, raw.type, raw.verdict),
+        static_cast<DrawKind>(raw.kind), optional_enum<temporal::ViewId>(raw.view),
+        optional_enum<temporal::ProjectionDomain>(raw.domain), static_cast<const DrawCapture*>(kept), raw.visual,
+        static_cast<VisualType>(raw.type), raw.tree_lod, raw.detail};
+}
+
+void geometry_observe_draw() noexcept
+{
+    DrawTimeFacts facts;
+    CaptureStorage capture;
+    observe_draw_facts(facts, capture);
+}
+
+void geometry_set_flush_callback(FlushCallback value) noexcept
+{
+    rsf_anomaly_geometry_set_flush({reinterpret_cast<rsf_anomaly_geometry_fn>(value), 0,
+        [](rsf_anomaly_geometry_fn fn, std::uintptr_t, const void* facts) noexcept {
+            reinterpret_cast<FlushCallback>(fn)(*static_cast<const DrawTimeFacts*>(facts));
+        }});
+}
+
+void geometry_set_rm_near_callback(RmNearCallback value) noexcept
+{
+    rsf_anomaly_geometry_set_near({reinterpret_cast<rsf_anomaly_geometry_fn>(value), 0,
+        [](rsf_anomaly_geometry_fn fn, std::uintptr_t, const void* self) noexcept {
+            reinterpret_cast<RmNearCallback>(fn)(const_cast<void*>(self));
+        }});
+}
+
+void geometry_set_sink(GeometrySink value) noexcept
+{
+    rsf_anomaly_geometry_set_retired({reinterpret_cast<rsf_anomaly_geometry_fn>(value.retired),
+        reinterpret_cast<std::uintptr_t>(value.context),
+        [](rsf_anomaly_geometry_fn fn, std::uintptr_t user, const void* payload) noexcept {
+            const auto& key = *static_cast<const rsf_anomaly_geometry_key*>(payload);
+            reinterpret_cast<decltype(GeometrySink::retired)>(fn)(reinterpret_cast<void*>(user),
+                {key.owner, key.visual, key.generation});
+        }});
+}
+
+void geometry_set_draw_sink(DrawSink value) noexcept
+{
+    rsf_anomaly_geometry_set_draw({reinterpret_cast<rsf_anomaly_geometry_fn>(value.draw),
+        reinterpret_cast<std::uintptr_t>(value.context),
+        [](rsf_anomaly_geometry_fn fn, std::uintptr_t user, const void* payload) noexcept {
+            reinterpret_cast<decltype(DrawSink::draw)>(fn)(reinterpret_cast<void*>(user),
+                *static_cast<const DrawCapture*>(payload));
+        }});
+}
+
+void geometry_enable_foliage_identity(bool value) noexcept { rsf_anomaly_geometry_set_foliage(value); }
+bool geometry_foliage_identity_enabled() noexcept { return rsf_anomaly_geometry_foliage(); }
+
 bool read_vertex_constants(std::uint32_t slot, std::uint32_t expected_size, std::uint32_t offset, void* out,
     std::uint32_t bytes) noexcept
 {
     const auto source = vertex_constant_data(slot, expected_size, offset, bytes);
-    return source && safe_copy(out, source, bytes);
+    return source && safe_copy(out, reinterpret_cast<const void*>(source), bytes);
 }
+
 bool write_vertex_constants(std::uint32_t slot, std::uint32_t expected_size, std::uint32_t offset, const void* in,
     std::uint32_t bytes) noexcept
 {
-    const auto target = const_cast<std::byte*>(vertex_constant_data(slot, expected_size, offset, bytes));
-    if (!target || !in) return false;
-    __try { std::memcpy(target, in, bytes); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    const auto target = vertex_constant_data(slot, expected_size, offset, bytes);
+    return target && safe_copy(reinterpret_cast<void*>(target), in, bytes);
 }
+
 bool read_world_matrix(float (&out)[16]) noexcept
 {
-    const auto module = native_module.load();
-    const auto* build = native_build.load();
-    return module && build && safe_copy(out, module + build->geometry->world_matrix_rva, sizeof(out));
+    return read(world(rsf_anomaly_geometry_binding()), out);
 }
+
 std::optional<temporal::ViewId> current_render_view(const std::byte* module, const BuildProfile& build) noexcept
 {
-    if (!module) return {};
-    bool active{};
-    std::uint8_t delay{};
-    std::uint32_t frame{};
-    const auto viewport = build.geometry->second_viewport_rva;
-    if (!safe_copy(&active, module + viewport, sizeof(active)) ||
-        !safe_copy(&delay, module + viewport + second_viewport_delay_offset, sizeof(delay)) ||
-        !safe_copy(&frame, module + build.native->device_frame_rva, sizeof(frame))) return {};
-    // Same expression as CSecondVPParams::IsSVPFrame; a zero delay would divide by zero in the engine, so it is "main".
-    return active && delay && frame % delay == 0 ? temporal::ViewId::Scope : temporal::ViewId::Main;
+    return optional_enum<temporal::ViewId>(rsf_anomaly_geometry_view(&platform, bind(module, build)));
 }
+
 RenderViewScope::RenderViewScope() noexcept
+    : entered_(rsf_anomaly_geometry_render_enter(&platform, &scope_)) {}
+
+RenderViewScope::~RenderViewScope()
 {
-    if (!capture_enabled.load()) return;
-    const auto* build = native_build.load();
-    const auto view = build ? current_render_view(native_module.load(), *build) : std::nullopt;
-    if (!view) return;
-    (*view == temporal::ViewId::Scope ? views_scope : views_main).fetch_add(1);
-    scope_.emplace(view, temporal::ProjectionDomain::World);
+    if (entered_) rsf_anomaly_geometry_context_leave(&scope_);
 }
-RenderViewScope::~RenderViewScope() = default;
-void geometry_set_draw_sink(DrawSink value) noexcept
-{
-    const std::lock_guard lock(native_lifecycle);
-    draw_sink = value;
-}
+
 std::span<const HookSite> native_geometry_hook_sites(const BuildProfile& build) noexcept
 {
-    static std::array<HookSite, geometry_site_count> result;
-    result = [&build] {
-        const std::array<void*, 17> replacements{reinterpret_cast<void*>(&create_hook), reinterpret_cast<void*>(&child_hook),
-            reinterpret_cast<void*>(&duplicate_hook), reinterpret_cast<void*>(&delete_hook), reinterpret_cast<void*>(&rigid_hook),
-            reinterpret_cast<void*>(&progressive_hook), reinterpret_cast<void*>(&skeleton_st_hook), reinterpret_cast<void*>(&skeleton_pm_hook),
-            reinterpret_cast<void*>(&tree_st_hook), reinterpret_cast<void*>(&tree_pm_hook), reinterpret_cast<void*>(&flush_hook),
-            reinterpret_cast<void*>(&render_hud_hook), reinterpret_cast<void*>(&render_sorted_hook),
-            reinterpret_cast<void*>(&render_emissive_hook), reinterpret_cast<void*>(&rm_near_hook), reinterpret_cast<void*>(&rm_normal_hook),
-            reinterpret_cast<void*>(&detail_render_hook)};
-        std::array<HookSite, geometry_site_count> sites;
-        const auto& geometry_sites = build.geometry->geometry_sites;
-        for (std::size_t i = 0; i < sites.size(); ++i)
-            sites[i] = {geometry_sites[i].name, geometry_sites[i].rva, geometry_sites[i].expected, replacements[i], &originals[i]};
-        return sites;
-    }();
-    return result;
+    static std::array<HookSite, geometry_site_count> sites;
+    const std::array<void*, geometry_site_count> replacements{reinterpret_cast<void*>(&create_hook),
+        reinterpret_cast<void*>(&child_hook), reinterpret_cast<void*>(&duplicate_hook), reinterpret_cast<void*>(&delete_hook),
+        reinterpret_cast<void*>(&rigid_hook), reinterpret_cast<void*>(&progressive_hook), reinterpret_cast<void*>(&skeleton_st_hook),
+        reinterpret_cast<void*>(&skeleton_pm_hook), reinterpret_cast<void*>(&tree_st_hook), reinterpret_cast<void*>(&tree_pm_hook),
+        reinterpret_cast<void*>(&flush_hook), reinterpret_cast<void*>(&render_hud_hook), reinterpret_cast<void*>(&render_sorted_hook),
+        reinterpret_cast<void*>(&render_emissive_hook), reinterpret_cast<void*>(&rm_near_hook),
+        reinterpret_cast<void*>(&rm_normal_hook), reinterpret_cast<void*>(&detail_render_hook)};
+    for (std::size_t i = 0; i < sites.size(); ++i) {
+        const auto& site = build.geometry->geometry_sites[i];
+        sites[i] = {site.name, site.rva, site.expected, replacements[i], &originals[i]};
+    }
+    return sites;
 }
-void geometry_set_rm_near_callback(RmNearCallback value) noexcept
-{
-    rm_near_callback.store(value, std::memory_order_release);
-}
-void geometry_set_sink(GeometrySink value) noexcept
-{
-    const std::lock_guard lock(native_lifecycle);
-    sink = value;
-}
+
 bool install_native_geometry(std::byte* module, std::uint32_t image_size, const BuildProfile& build) noexcept
 {
-    if (!module || image_size != build.image_size() || hooks_enabled.load()) return false;
-    const auto& profile = *build.geometry;
-    const auto guarded = [&](const NativeSite& site) {
-        std::array<std::byte, 16> bytes;
-        return site.rva <= image_size - bytes.size() && safe_copy(bytes.data(), module + site.rva, bytes.size()) &&
-            bytes == site.expected && unique_guards_match(module, image_size, profile.geometry_unique_guards, site.rva);
-    };
-    for (const auto& site : profile.geometry_layout_sites) if (!guarded(site)) return false;
-    for (const auto& site : profile.geometry_sites) if (!guarded(site)) return false;
-    // Trampolines are process-lifetime: a re-enable must be the same module and the same build.
-    if (native_hooks.created() && (native_module.load() != module || native_build.load() != &build)) return false;
-    geometry_retire_all(); // A new capture epoch never inherits identities that missed deletes while disabled.
-    native_build = &build;
-    native_module = module;
-    capture_enabled = true;
-    const bool installed = native_hooks.created() ? native_hooks.enable()
-        : native_hooks.install(module, image_size, native_geometry_hook_sites(build));
-    hooks_enabled = installed;
-    if (!installed) capture_enabled = false;
-    return installed;
+    return rsf_anomaly_geometry_install(&platform, bind(module, build), image_size);
 }
-bool disable_native_geometry() noexcept
-{
-    capture_enabled = false;
-    if (!native_hooks.created()) return false;
-    const auto disabled = native_hooks.disable();
-    if (disabled) hooks_enabled = false;
-    geometry_retire_all(); // Deletes are no longer observed, so no identity may outlive the epoch.
-    return disabled;
-}
-bool geometry_hooks_active() noexcept { return hooks_enabled.load() && capture_enabled.load(); }
-void geometry_retire_all() noexcept
-{
-    try {
-        const std::lock_guard lock(native_lifecycle);
-        native_identities.retire_all([](void*, InstanceKey key) {
-            models_retired.fetch_add(1);
-            if (sink.retired) sink.retired(sink.context, key);
-        }, nullptr);
-    } catch (...) { fault(); }
-}
+
+bool disable_native_geometry() noexcept { return rsf_anomaly_geometry_disable(&platform); }
+bool geometry_hooks_active() noexcept { return rsf_anomaly_geometry_active(); }
+void geometry_retire_all() noexcept { rsf_anomaly_geometry_reset(); }
+
 GeometryStats geometry_stats() noexcept
 {
-    return {models_registered.load(), models_retired.load(), draws_identified.load(), draws_unidentified.load(),
-        capture_faults.load()};
+    GeometryStats result;
+    rsf_anomaly_geometry_stats_read(&result);
+    return result;
 }
+
 GeometryCoverage geometry_coverage() noexcept
 {
     GeometryCoverage result;
-    for (std::size_t pass = 0; pass < GeometryCoverage::passes; ++pass) {
-        for (std::size_t type = 0; type < GeometryCoverage::types; ++type)
-            for (std::size_t verdict = 0; verdict < GeometryCoverage::verdicts; ++verdict)
-                result.draws[pass][type][verdict] = coverage_draws[(pass * GeometryCoverage::types + type) *
-                    GeometryCoverage::verdicts + verdict].load();
-        result.flush_total[pass] = flush_total[pass].load();
-        result.flush_in_visual[pass] = flush_in_visual[pass].load();
-    }
-    for (std::size_t pass = 0; pass < GeometryCoverage::passes; ++pass) {
-        result.detail_renders[pass] = detail_renders[pass].load();
-        result.flush_in_detail[pass] = flush_in_detail[pass].load();
-    }
-    result.captured = captured.load(); result.capture_stale = capture_stale.load();
-    result.capture_no_world = capture_no_world.load(); result.capture_no_palette = capture_no_palette.load();
-    result.capture_no_context = capture_no_context.load(); result.sunk = sunk.load();
-    result.views_main = views_main.load(); result.views_scope = views_scope.load();
-    result.hud_scopes = hud_scopes.load(); result.near_windows = near_windows.load();
+    rsf_anomaly_geometry_coverage_read(&result);
     return result;
 }
+
 void geometry_report_coverage(void (*emit)(void*, const char*), void* user) noexcept
 {
     if (!emit) return;
-    const auto c = geometry_coverage();
-    using ull = unsigned long long;
-    char text[900];
-    std::uint64_t by_verdict[GeometryCoverage::verdicts]{}, by_pass[GeometryCoverage::passes]{};
-    for (std::size_t pass = 0; pass < GeometryCoverage::passes; ++pass)
-        for (std::size_t type = 0; type < GeometryCoverage::types; ++type)
-            for (std::size_t verdict = 0; verdict < GeometryCoverage::verdicts; ++verdict) {
-                by_verdict[verdict] += c.draws[pass][type][verdict];
-                by_pass[pass] += c.draws[pass][type][verdict];
-            }
-    // identified + ignored_* are covered; unidentified_* is the measured gap that matters for motion vectors.
-    std::snprintf(text, sizeof(text),
-        "Anomaly geometry coverage render-entries main=%llu shadow=%llu other=%llu | identified=%llu (foliage=%llu) ignored_shadow=%llu "
-        "ignored_static_world=%llu | unidentified dynamic=%llu deformed=%llu ambiguous=%llu unreadable=%llu nocapture=%llu",
-        static_cast<ull>(by_pass[0]), static_cast<ull>(by_pass[1]), static_cast<ull>(by_pass[2]),
-        static_cast<ull>(by_verdict[0] + by_verdict[8]), static_cast<ull>(by_verdict[8]),
-        static_cast<ull>(by_verdict[1]), static_cast<ull>(by_verdict[2]),
-        static_cast<ull>(by_verdict[3]), static_cast<ull>(by_verdict[4]), static_cast<ull>(by_verdict[5]),
-        static_cast<ull>(by_verdict[6]), static_cast<ull>(by_verdict[7]));
-    emit(user, text);
-    for (std::size_t pass = 0; pass < GeometryCoverage::passes; ++pass)
-        for (std::size_t type = 0; type < GeometryCoverage::types; ++type) {
-            const auto& row = c.draws[pass][type];
-            std::uint64_t sum{};
-            for (const auto value : row) sum += value;
-            if (!sum) continue;
-            std::snprintf(text, sizeof(text),
-                "Anomaly geometry coverage pass=%s type=%s identified=%llu ignored_shadow=%llu ignored_static_world=%llu "
-                "unidentified_dynamic=%llu unidentified_deformed=%llu unidentified_other=%llu identified_foliage=%llu",
-                pass_name(static_cast<DrawPass>(pass)), visual_type_name(static_cast<VisualType>(type)),
-                static_cast<ull>(row[0]), static_cast<ull>(row[1]), static_cast<ull>(row[2]), static_cast<ull>(row[3]),
-                static_cast<ull>(row[4]), static_cast<ull>(row[5] + row[6] + row[7]), static_cast<ull>(row[8]));
-            emit(user, text);
-        }
-    std::snprintf(text, sizeof(text),
-        "Anomaly geometry draw-time flush main=%llu(in_visual=%llu) shadow=%llu(in_visual=%llu) other=%llu(in_visual=%llu) "
-        "| captured=%llu sunk=%llu stale=%llu no_world=%llu no_palette=%llu no_context=%llu "
-        "| views main=%llu scope=%llu hud_scopes=%llu near_windows=%llu "
-        "| detail renders main=%llu shadow=%llu other=%llu flush main=%llu shadow=%llu other=%llu",
-        static_cast<ull>(c.flush_total[0]), static_cast<ull>(c.flush_in_visual[0]),
-        static_cast<ull>(c.flush_total[1]), static_cast<ull>(c.flush_in_visual[1]),
-        static_cast<ull>(c.flush_total[2]), static_cast<ull>(c.flush_in_visual[2]),
-        static_cast<ull>(c.captured), static_cast<ull>(c.sunk), static_cast<ull>(c.capture_stale),
-        static_cast<ull>(c.capture_no_world), static_cast<ull>(c.capture_no_palette), static_cast<ull>(c.capture_no_context),
-        static_cast<ull>(c.views_main), static_cast<ull>(c.views_scope), static_cast<ull>(c.hud_scopes), static_cast<ull>(c.near_windows),
-        static_cast<ull>(c.detail_renders[0]), static_cast<ull>(c.detail_renders[1]), static_cast<ull>(c.detail_renders[2]),
-        static_cast<ull>(c.flush_in_detail[0]), static_cast<ull>(c.flush_in_detail[1]), static_cast<ull>(c.flush_in_detail[2]));
-    emit(user, text);
+    struct Report {
+        decltype(emit) emit_line;
+        void* user;
+    } report{emit, user};
+    rsf_anomaly_geometry_report([](void* context, const char* line) noexcept {
+        const auto& report = *static_cast<const Report*>(context);
+        report.emit_line(report.user, line);
+    }, &report);
 }
+
 #ifdef RSF_ANOMALY_GEOMETRY_TESTING
 void geometry_test_bind_module(std::byte* module, const BuildProfile& build) noexcept
 {
-    native_build = &build;
-    native_module = module;
-    capture_enabled = true;
+    rsf_anomaly_geometry_test_bind(bind(module, build));
 }
 #endif
 }

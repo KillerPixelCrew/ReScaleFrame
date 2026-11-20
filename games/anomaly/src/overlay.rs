@@ -149,7 +149,9 @@ impl AdapterOption {
 static REGISTRY: Mutex<Vec<AdapterOption>> = Mutex::new(Vec::new());
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_overlay_option_add(option: *const rsf_anomaly_overlay_option) {
+pub(crate) unsafe extern "C" fn rsf_anomaly_overlay_option_add(
+    option: *const rsf_anomaly_overlay_option,
+) {
     if let Some(option) = unsafe { option.as_ref() }.and_then(AdapterOption::new) {
         lock(&REGISTRY).push(option);
     }

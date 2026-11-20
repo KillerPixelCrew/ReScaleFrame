@@ -335,6 +335,24 @@ all 270 locked Rust tests passed, and the rebuilt panel and all four
 Release export inventories passed verification. Use the Runtime and
 panel from this build when exercising the full Anomaly option list.
 
+Anomaly's geometry and motion stages now own the render scopes, draw
+facts, shader variants and linkage, draw retirement and capture timing
+in Rust. Native leaves retain the verified engine guards, trampolines
+and graphics calls. The geometry regressions cover a flush in a
+different phase, nested first-person restoration, and unreadable
+nested view identity on both profiles. Motion invalidates linkage when
+a variant changes and ties capture completion to the admitted main-view
+frame, context and resources. See [the geometry audit](research/rust-anomaly-native-geometry.md) and [the motion stage audit](research/rust-anomaly-motion-stage.md).
+
+The geometry and motion merge passed 35 focused MSVC contracts in
+both configurations and 273 locked Rust tests. Four licensed shader
+cases skipped inside the shader-tool suite. The adapter exports,
+dynamic Runtime lookup and rebuilt motion pack match the baseline.
+Read-only geometry, SR and FG evidence checks passed against both
+copied executables. The motion, SR and FG device fixtures built.
+Moving-game imagery, active providers and live scope transitions
+remain open.
+
 The first source inspection found that the public frame sequencer opened a rendered
 frame and assigned its provenance under separate locks. Direct callers could read
 or retire the slot between those operations. The FG session adds its own outer

@@ -1,70 +1,26 @@
 // SPDX-License-Identifier: MIT
 #include "motion_stage.h"
-#include "motion_window.h"
-#include "adapter_options.h"
+#include "motion_stage_platform.h"
 #include "geometry_feed.h"
+#include "geometry_retirement.h"
 #include "motion_d3d11.h"
 #include "motion_foliage.h"
-#include "motion_history.h"
-#include "motion_policy.h"
-#include "build_profile.h"
-#include "motion_target.h"
-#include "native_geometry.h"
 #include "native_hooks.h"
 #include "native_observer.h"
-#include "shader_d3d.h"
-#include "shader_loader.h"
 #include "runtime_shaders.h"
 #include "sr_profile.h"
 #include "sr_stage.h"
-#include <rescaleframe/game_frame.h>
-#include <rescaleframe/texture_dump.h>
 #include <MinHook.h>
-#include <d3d11.h>
 #include <intrin.h>
-#include <windows.h>
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <cstdio>
 #include <cstring>
-#include <filesystem>
-#include <fstream>
-#include <map>
 #include <memory>
-#include <mutex>
-#include <shared_mutex>
-#include <string>
-#include <tuple>
-#include <unordered_map>
-#include <vector>
+#include <type_traits>
 
 namespace rsf::anomaly::motion {
 namespace {
-// ---- configuration and logging -----------------------------------------------------------------------------------
-MotionOptions configured{};
-rsf_game_log_fn log_fn{};
-void* log_user{};
-void say(const char* message) noexcept {
-    if (log_fn) try { log_fn(log_user, message); } catch (...) {}
-}
-void sayf(const char* format, ...) noexcept {
-    char text[768];
-    va_list args;
-    va_start(args, format);
-    std::vsnprintf(text, sizeof(text), format, args);
-    va_end(args);
-    say(text);
-}
-std::string utf8(const std::wstring& value) {
-    if (value.empty()) return {};
-    const int size = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), int(value.size()), nullptr, 0, nullptr, nullptr);
-    std::string result(size > 0 ? size : 0, '\0');
-    if (size > 0) WideCharToMultiByte(CP_UTF8, 0, value.c_str(), int(value.size()), result.data(), size, nullptr, nullptr);
-    return result;
-}
-
-// ---- engine memory -------------------------------------------------------------------------------------------
 std::byte* image{};
 bool guarded_copy(void* output, const void* input, std::size_t size) noexcept {
     if (!output || !input) return false;
@@ -93,143 +49,12 @@ bool bytes_match(const std::byte* address, const char* hex) noexcept {
     return true;
 }
 
-// ---- core frame dump service (Runtime exports) ----------------------------------------------------------------
-struct DumpApi {
-    void (*configure)(const char*, const char*, const char*, rsf_dump_log_fn, void*){};
-    void (*request)(){};
-    void (*poll)(){};
-    int (*requested)(){};
-    int (*begin_record)(const rsf_frame_record*, uint32_t){};
-    int (*texture_record)(void*, const rsf_frame_record*, const char*, const char*, void*, rsf_dump_view, float){};
-    void (*complete)(const rsf_frame_record*, int32_t){};
-    void (*cancel)(uint64_t){};
-    bool bind(HMODULE runtime) noexcept {
-        const auto get = [runtime](const char* name) { return reinterpret_cast<void*>(GetProcAddress(runtime, name)); };
-        configure = reinterpret_cast<decltype(configure)>(get("rsf_input_dump_configure"));
-        request = reinterpret_cast<decltype(request)>(get("rsf_input_dump_request"));
-        poll = reinterpret_cast<decltype(poll)>(get("rsf_input_dump_poll"));
-        requested = reinterpret_cast<decltype(requested)>(get("rsf_input_dump_requested"));
-        begin_record = reinterpret_cast<decltype(begin_record)>(get("rsf_input_dump_begin_record"));
-        texture_record = reinterpret_cast<decltype(texture_record)>(get("rsf_input_dump_texture_record"));
-        complete = reinterpret_cast<decltype(complete)>(get("rsf_input_dump_complete"));
-        cancel = reinterpret_cast<decltype(cancel)>(get("rsf_input_dump_cancel"));
-        return configure && request && poll && requested && begin_record && texture_record && complete && cancel;
-    }
-};
-DumpApi dump{};
-bool dump_ready{};
-struct Capture {
-    bool active{};
-    rsf_frame_record record{};
-    uint32_t remaining{};
-    uint64_t next{};
-} capture;
-
-// ---- shader variants ---------------------------------------------------------------------------------------------
-struct Variant {
-    ComPtr<IUnknown> stock;            // pinned so the address cannot be reused by another shader
-    ComPtr<ID3D11VertexShader> vs;
-    ComPtr<ID3D11PixelShader> ps;
-    ComPtr<ID3D11HullShader> hs;       // DX11\tess.hs variant (TessHull)
-    ComPtr<ID3D11DomainShader> ds;     // DX11\tess.ds variant (TessDomain)
-    ID3D11Device* device{};
-    Family family{};
-    int skin{-2};
-    Reflection reflection;
-    ShaderRequest request;
-    std::vector<std::byte> original_bytecode;
-    FoliageLayout foliage;             // foliage VS only: where the engine stages its constants (from the STOCK reflection)
-};
-std::shared_mutex registry_guard;
-std::unordered_map<const void*, std::shared_ptr<const Variant>> registry;
-std::map<std::pair<const void*, const void*>, bool> link_cache;   // render thread only
-std::map<std::array<const void*, 4>, bool> tess_link_cache;        // stock VS, HS, DS, PS; render thread only
-std::mutex loader_guard, stats_guard;
-// Diagnostics only: the shader-cache root of every VS/PS the engine created (allowlisted or not), by stock object.
-// An address the engine later releases may name a newer shader; the periodic log is evidence, never a decision input.
-std::shared_mutex names_guard;
-std::unordered_map<const void*, std::string> shader_names;
-std::unordered_map<const void*, ModelElement> shader_elements;   // model VS roots: HQ / LQ / tessellation element
-constexpr std::size_t shader_names_limit = 16384;
-// Draws without a linkable variant pair since the last report, by (stock VS, stock PS, draw class).
-struct UnpairedKey {
-    const void* vs{};
-    const void* ps{};
-    std::size_t draw_class{};
-    bool operator<(const UnpairedKey& o) const noexcept {
-        return std::tie(vs, ps, draw_class) < std::tie(o.vs, o.ps, o.draw_class);
-    }
-};
-std::mutex unpaired_guard;
-std::map<UnpairedKey, std::uint64_t> unpaired_pairs;
-constexpr std::size_t unpaired_pairs_limit = 4096;
-D3DShaderApi* shader_api{};
-std::unique_ptr<ShaderLoader> loader;
-std::unique_ptr<RuntimeShaders> runtime_shaders;
-std::atomic<bool> pack_enabled{}, reload_requested{};
-std::atomic<int32_t> pack_status{};
-char pack_label[96] = "Motion shader pack: not loaded";
-std::atomic<bool> dump_shaders{};
-uint32_t refusal_logs{}, replace_logs{};
-
-// ---- D3D11 and engine state --------------------------------------------------------------------------------------
-MotionDevice device_state;
-MotionHistory history;
-FoliageHistory foliage_history;
-geometry::RetirementQueue retirements;
-MotionCounters stats{};
-MotionCounters reported{};
-std::atomic<bool> hooks_active{};
 HookSet hooks;
 std::array<void*, motion_site_count> originals{};
+geometry::RetirementQueue retirements;
 using Unary = void(__fastcall*)(void*);
 using CreateShader = long long(__fastcall*)(const char*, const void*, unsigned, const char*, void**, char);
 
-struct Host final : BinderHost {
-    ID3D11DeviceContext* context{};
-    bool read(const void* address, void* out, std::size_t size) noexcept override { return guarded_copy(out, address, size); }
-    bool write(void* address, const void* in, std::size_t size) noexcept override { return guarded_write(address, in, size); }
-    void set_targets(void* const (&targets)[4], void* depth) noexcept override {
-        if (context) context->OMSetRenderTargets(4, reinterpret_cast<ID3D11RenderTargetView* const*>(targets),
-            static_cast<ID3D11DepthStencilView*>(depth));
-    }
-    void clear_targets() noexcept override { if (context) context->OMSetRenderTargets(0, nullptr, nullptr); }
-} binder_host;
-MotionBinder binder{binder_host, {sr::backend_rt_offset, sr::backend_zb_offset, sr::backend_rt_changed_offset}};
-
-rsf_anomaly_motion_window window{};
-static_assert(sizeof(window) == 40 && offsetof(rsf_anomaly_motion_window, target_ok) == 39);
-static_assert(sizeof(rsf_anomaly_motion_draw) == 48 && offsetof(rsf_anomaly_motion_draw, kind) == 40);
-bool draw_hooks_ok{}, draw_hooks_refused{};
-// CRenderTarget::rt_Position (sr_profile.h target_slots "$user$position"), the RT0 of every G-buffer bind.
-constexpr uint32_t position_offset = sr::target_slots[0].offset;
-static_assert(position_offset == 0x378);
-
-void restore_stock(const rsf_anomaly_motion_draw& taken) noexcept {
-    auto* context = static_cast<ID3D11DeviceContext*>(taken.context);
-    context->VSSetShader(static_cast<ID3D11VertexShader*>(taken.vs), nullptr, 0);
-    context->PSSetShader(static_cast<ID3D11PixelShader*>(taken.ps), nullptr, 0);
-    if (taken.tessellated) {
-        context->HSSetShader(static_cast<ID3D11HullShader*>(taken.hs), nullptr, 0);
-        context->DSSetShader(static_cast<ID3D11DomainShader*>(taken.ds), nullptr, 0);
-    }
-}
-
-void cancel_pending_draw() noexcept {
-    rsf_anomaly_motion_draw taken;
-    if (!rsf_anomaly_motion_draw_take(nullptr, &taken)) return;
-    if (taken.kind == RSF_ANOMALY_DRAW_RESTORE) restore_stock(taken);
-    ++stats.stale_restores;
-}
-
-void arm_replay(ID3D11DeviceContext* context) noexcept {
-    if (configured.invalidate) {
-        const rsf_anomaly_motion_draw draw{context, nullptr, nullptr, nullptr, nullptr, RSF_ANOMALY_DRAW_REPLAY, false};
-        rsf_anomaly_motion_draw_arm(&draw);
-    }
-}
-
-// ---- D3D11 immediate-context draw detours ------------------------------------------------------------------------
 using DrawIndexedFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT, INT);
 using DrawFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT);
 using DrawIndexedInstancedFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT, UINT, INT, UINT);
@@ -240,29 +65,10 @@ DrawIndexedInstancedFn original_draw_indexed_instanced{};
 DrawInstancedFn original_draw_instanced{};
 std::array<void*, 4> draw_targets{};
 
-template<class Redraw> void around_draw(ID3D11DeviceContext* context, Redraw&& redraw) {
-    rsf_anomaly_motion_draw taken;
-    if (!rsf_anomaly_motion_draw_take(context, &taken)) {
-        redraw(context);
-        return;
-    }
-    if (!hooks_active.load(std::memory_order_acquire)) {
-        if (taken.kind == RSF_ANOMALY_DRAW_RESTORE) restore_stock(taken);
-        redraw(context);
-        return;
-    }
-    redraw(context);
-    if (taken.kind == RSF_ANOMALY_DRAW_REPLAY) {
-        switch (device_state.invalidate(context, redraw)) {
-        case ReplayResult::Done: ++stats.replays; break;
-        case ReplayResult::SkippedNoDepthWrite: ++stats.replay_skipped_no_depth_write; break;
-        default: ++stats.replay_failed; break;
-        }
-    }
-    if (taken.kind == RSF_ANOMALY_DRAW_RESTORE) {
-        restore_stock(taken);
-        ++stats.restores;
-    }
+template<class Call> void around_draw(ID3D11DeviceContext* context, Call&& call) {
+    rsf_anomaly_motion_stage_draw(context, [](void* user, void* immediate) {
+        (*static_cast<std::remove_reference_t<Call>*>(user))(static_cast<ID3D11DeviceContext*>(immediate));
+    }, &call);
 }
 void STDMETHODCALLTYPE draw_indexed_hook(ID3D11DeviceContext* c, UINT count, UINT start, INT base) {
     around_draw(c, [&](ID3D11DeviceContext* x) { original_draw_indexed(x, count, start, base); });
@@ -278,18 +84,17 @@ void STDMETHODCALLTYPE draw_instanced_hook(ID3D11DeviceContext* c, UINT count, U
 }
 // ID3D11DeviceContext vtable slots (d3d11.h declaration order): DrawIndexed 12, Draw 13, DrawIndexedInstanced 20,
 // DrawInstanced 21.
-bool install_draw_hooks(ID3D11DeviceContext* context) noexcept {
-    if (draw_hooks_ok) return true;
-    if (draw_hooks_refused || !context) return false;
+bool install_draw_hooks(void* context) noexcept {
+    if (!context) return false;
     void** vtable{};
-    if (!guarded_copy(&vtable, context, sizeof(vtable)) || !vtable) { draw_hooks_refused = true; return false; }
+    if (!guarded_copy(&vtable, context, sizeof(vtable)) || !vtable) return false;
     const std::array<std::size_t, 4> slots{12, 13, 20, 21};
     const std::array<void*, 4> replacements{reinterpret_cast<void*>(&draw_indexed_hook), reinterpret_cast<void*>(&draw_hook),
         reinterpret_cast<void*>(&draw_indexed_instanced_hook), reinterpret_cast<void*>(&draw_instanced_hook)};
     std::array<void**, 4> trampolines{reinterpret_cast<void**>(&original_draw_indexed), reinterpret_cast<void**>(&original_draw),
         reinterpret_cast<void**>(&original_draw_indexed_instanced), reinterpret_cast<void**>(&original_draw_instanced)};
     const auto initialized = MH_Initialize();
-    if (initialized != MH_OK && initialized != MH_ERROR_ALREADY_INITIALIZED) { draw_hooks_refused = true; return false; }
+    if (initialized != MH_OK && initialized != MH_ERROR_ALREADY_INITIALIZED) return false;
     std::size_t created = 0;
     for (std::size_t i = 0; i < slots.size(); ++i) {
         void* target{};
@@ -300,752 +105,13 @@ bool install_draw_hooks(ID3D11DeviceContext* context) noexcept {
     }
     if (created != slots.size()) {
         for (std::size_t i = 0; i < created; ++i) (void)MH_RemoveHook(draw_targets[i]);
-        draw_hooks_refused = true;
-        say("Anomaly motion refused: the immediate context's draw entry points could not be hooked; shaders stay stock.");
         return false;
     }
     for (const auto target : draw_targets)
-        if (MH_QueueEnableHook(target) != MH_OK) { draw_hooks_refused = true; return false; }
-    if (MH_ApplyQueued() != MH_OK) { draw_hooks_refused = true; return false; }
-    draw_hooks_ok = true;
-    say("Anomaly motion: immediate-context Draw/DrawIndexed/DrawInstanced/DrawIndexedInstanced detours installed.");
+        if (MH_QueueEnableHook(target) != MH_OK) return false;
+    if (MH_ApplyQueued() != MH_OK) return false;
     return true;
 }
-
-// ---- create_shader detour ----------------------------------------------------------------------------------------
-std::size_t family_index(Family family) noexcept { return static_cast<std::size_t>(family) < MotionCounters::families ? static_cast<std::size_t>(family) : 0; }
-// "...\shaders_cache\r4\deffer_model_bump_4.vs\2048..." -> "deffer_model_bump_4.vs"; a plain source name stays as is.
-std::string shader_root_name(const std::string& file) {
-    std::size_t end = file.size();
-    while (end) {
-        const auto slash = file.find_last_of("\\/", end - 1);
-        const auto begin = slash == std::string::npos ? 0 : slash + 1;
-        const auto part = file.substr(begin, end - begin);
-        if (part.size() > 3 && (part.ends_with(".vs") || part.ends_with(".ps") || part.ends_with(".hs") || part.ends_with(".ds")))
-            return part;
-        if (slash == std::string::npos) break;
-        end = slash;
-    }
-    return file.size() > 64 ? file.substr(file.size() - 64) : file;
-}
-void remember_name(void** result, const std::string& file) noexcept try {
-    void* engine_object{};
-    void* stock{};
-    if (!guarded_copy(&engine_object, result, sizeof(engine_object)) || !engine_object ||
-        !guarded_copy(&stock, static_cast<std::byte*>(engine_object) + shader_object_offset, sizeof(stock)) || !stock) return;
-    const auto root = shader_root_name(file);
-    std::unique_lock lock(names_guard);
-    if (shader_names.size() < shader_names_limit || shader_names.contains(stock)) {
-        shader_names[stock] = root;
-        shader_elements[stock] = model_element(root);
-    }
-} catch (...) {}
-std::string name_of(const void* shader) {
-    if (!shader) return "none";
-    std::shared_lock lock(names_guard);
-    const auto found = shader_names.find(shader);
-    return found == shader_names.end() ? "unknown" : found->second;
-}
-ModelElement element_of(const void* shader) noexcept {
-    if (!shader) return ModelElement::Unknown;
-    std::shared_lock lock(names_guard);
-    const auto found = shader_elements.find(shader);
-    return found == shader_elements.end() ? ModelElement::Unknown : found->second;
-}
-void shader_created(const char* target, const void* buffer, unsigned size, const char* file, void** result,
-    const void* return_address, const std::byte* caller_rsp) noexcept try {
-    char stage{};
-    // 'h'/'d': create_shader<SHS>/<SDS> (motion_profile.h tess_create_sites) leave the object at the same offset.
-    if (!target || !guarded_copy(&stage, target, 1) || (stage != 'v' && stage != 'p' && stage != 'h' && stage != 'd') || !buffer ||
-        !size || !result) return;
-    ShaderRequest request;
-    for (std::size_t i = 0; i < 16; ++i) {
-        char c{};
-        if (!guarded_copy(&c, target + i, 1) || !c) break;
-        request.target.push_back(c);
-    }
-    request.bytecode = {static_cast<const std::byte*>(buffer), size};
-    if (file) for (std::size_t i = 0; i < 520; ++i) {
-        char c{};
-        if (!guarded_copy(&c, file + i, 1) || !c) break;
-        request.file_name.push_back(c);
-    }
-    remember_name(result, request.file_name);
-    const auto reader = [](const void* address, void* out, std::size_t bytes) { return guarded_copy(out, address, bytes); };
-    const auto frame = read_request(mp(), image, return_address, caller_rsp, reader, request);
-    std::unique_lock lock(loader_guard);
-    if (!loader) return;
-    if (frame != FrameStatus::Ok) {
-        { std::lock_guard s(stats_guard); ++stats.frame_refusals; }
-        if (refusal_logs < 32) { ++refusal_logs; sayf("Anomaly motion shader frame refused (status %d): %s", int(frame), request.file_name.c_str()); }
-        return;
-    }
-    const auto* entry = loader->lookup(request.source);
-    if (!entry) { std::lock_guard s(stats_guard); ++stats.shaders[0][static_cast<std::size_t>(Outcome::NotAllowlisted)]; return; }
-    auto prepared = loader->prepare(request);
-    std::shared_ptr<Variant> variant;
-    if (prepared.outcome == Outcome::Replaced || prepared.outcome == Outcome::ReplacedFromCache) {
-        void* engine_object{};
-        IUnknown* stock{};
-        ID3D11Device* device{};
-        read_global(srp().hw_device_rva, device);
-        if (!guarded_copy(&engine_object, result, sizeof(engine_object)) || !engine_object ||
-            !guarded_copy(&stock, static_cast<std::byte*>(engine_object) + shader_object_offset, sizeof(stock)) || !stock || !device) {
-            prepared.outcome = Outcome::CreateFailed;
-            prepared.detail = "engine shader object or device unreadable";
-        } else {
-            variant = std::make_shared<Variant>();
-            variant->stock = stock;
-            variant->device = device;
-            variant->family = entry->family;
-            variant->skin = prepared.skin;
-            variant->request = request;
-            variant->original_bytecode.assign(request.bytecode.begin(), request.bytecode.end());
-            variant->request.bytecode = variant->original_bytecode;
-            void* replacement{};
-            const auto attached = runtime_shaders->api().attach_d3d11(device);
-            const auto made = attached == 0 ? runtime_shaders->api().create_d3d11(device, request.target.c_str(),
-                {prepared.variant.data(), prepared.variant.size()}, &replacement) : attached;
-            const HRESULT hr = made == 0 ? S_OK : E_FAIL;
-            if (stage == 'v') variant->vs.Attach(static_cast<ID3D11VertexShader*>(replacement));
-            else if (stage == 'p') variant->ps.Attach(static_cast<ID3D11PixelShader*>(replacement));
-            else if (stage == 'h') variant->hs.Attach(static_cast<ID3D11HullShader*>(replacement));
-            else variant->ds.Attach(static_cast<ID3D11DomainShader*>(replacement));
-            if (FAILED(hr)) {
-                prepared.outcome = Outcome::CreateFailed;
-                prepared.detail = attached != 0 ? "Runtime D3D11 interception refused" :
-                    "Create*Shader 0x" + std::to_string(static_cast<unsigned long>(hr));
-                variant.reset();
-            } else {
-                variant->reflection = std::move(prepared.reflection);
-                if (stage == 'v' && (entry->family == Family::FoliageTree || entry->family == Family::FoliageDetail)) {
-                    variant->foliage = make_foliage_layout(entry->family, prepared.stock);
-                    if (!variant->foliage.usable && refusal_logs < 32) {
-                        ++refusal_logs;
-                        sayf("Anomaly motion foliage layout unusable for %s (variables missing from the stock reflection); "
-                             "its draws keep the all-invalid foliage buffer.", entry->name.c_str());
-                    }
-                }
-                std::unique_lock r(registry_guard);
-                registry[stock] = variant;
-            }
-        }
-    }
-    {
-        std::lock_guard s(stats_guard);
-        ++stats.shaders[family_index(entry->family)][static_cast<std::size_t>(prepared.outcome)];
-    }
-    if (variant) {
-        if (replace_logs < 24) {
-            ++replace_logs;
-            sayf("Anomaly motion variant %s %s skin=%d (%s) for %s", entry->name.c_str(), family_name(entry->family),
-                prepared.skin, outcome_name(prepared.outcome), request.file_name.c_str());
-        }
-    } else if (refusal_logs < 32) {
-        ++refusal_logs;
-        sayf("Anomaly motion kept stock %s (%s): %s; %s", entry->name.c_str(), outcome_name(prepared.outcome),
-            prepared.detail.substr(0, 300).c_str(), request.file_name.c_str());
-    }
-} catch (...) {}
-
-long long __fastcall create_shader_hook(const char* target, const void* buffer, unsigned size, const char* file,
-    void** result, char disasm) {
-    {
-        std::lock_guard lock(loader_guard);
-        ID3D11Device* device{};
-        if (runtime_shaders && hooks_active.load(std::memory_order_acquire) &&
-            read_global(srp().hw_device_rva, device) && device)
-            runtime_shaders->api().attach_d3d11(device);
-    }
-    const auto hr = reinterpret_cast<CreateShader>(originals[site_create_shader])(target, buffer, size, file, result, disasm);
-    if (static_cast<int32_t>(hr) >= 0 && hooks_active.load(std::memory_order_acquire))
-        shader_created(target, buffer, size, file, result, _ReturnAddress(),
-            static_cast<const std::byte*>(_AddressOfReturnAddress()) + 8);
-    return hr;
-}
-
-// ---- capture -------------------------------------------------------------------------------------------------------
-void capture_abandon() noexcept {
-    if (!capture.active) return;
-    dump.complete(&capture.record, E_FAIL);
-    capture.active = false;
-    ++stats.capture_failed;
-}
-void capture_arm(uint32_t engine_frame) noexcept {
-    if (!dump_ready) return;
-    capture_abandon();
-    dump.poll();
-    const bool scheduled = capture.remaining && stats.frames >= capture.next;
-    if (scheduled) dump.request();
-    if (!dump.requested()) return;
-    auto& r = capture.record;
-    r = {};
-    r.struct_size = sizeof(r);
-    r.abi_version = RSF_GAME_FRAME_ABI_VERSION;
-    r.frame_id = static_cast<rsf_frame_id>(engine_frame) + 1;
-    r.session_id = 0x4d4f54494f4eull;   // "MOTION"
-    r.view_id = 0;
-    r.phase = RSF_PHASE_RENDER_SUBMIT;
-    r.screen = RSF_SCREEN_UNKNOWN;
-    r.render_width = r.output_width = device_state.width();
-    r.render_height = r.output_height = device_state.height();
-    if (!dump.begin_record(&r, 0)) return;
-    capture.active = true;
-    ++stats.captures;
-    if (scheduled) { --capture.remaining; capture.next = stats.frames + configured.capture_interval; }
-}
-void capture_take(const char* name, const char* description, void* texture, rsf_dump_view view, float scale) noexcept {
-    if (!texture || !window.context) return;
-    if (dump.texture_record(window.context, &capture.record, name, description, texture, view, scale)) ++stats.images;
-    else ++stats.capture_failed;
-}
-void capture_finish() noexcept {
-    if (!capture.active) return;
-    capture_take("anomaly_motion", "Motion RTV2 after the G-buffer pass, RGBA16F (current-minus-previous UV x, UV y down, validity, 0)",
-        device_state.texture(), RSF_DUMP_VIEW_RAW, 1.0f);
-    capture_take("anomaly_motion_view", "Motion RTV2 as dense motion (UV x20)", device_state.texture(), RSF_DUMP_VIEW_DENSE_MOTION, 20.0f);
-    capture_take("anomaly_gbuffer_position", "rt_Position after the G-buffer pass (packed normal, view Z, material)",
-        window.position_surface, RSF_DUMP_VIEW_RAW, 1.0f);
-    dump.complete(&capture.record, S_OK);
-    capture.active = false;
-}
-void bind_dump() noexcept try {
-    if (sr::options().capture) { say("Anomaly motion capture refused: SRStageCapture owns the frame dump service this run."); return; }
-    const HMODULE runtime = GetModuleHandleW(L"ReScaleFrame.Runtime.dll");
-    if (!runtime || !dump.bind(runtime)) { say("Anomaly motion capture refused: Runtime frame dump exports missing."); return; }
-    wchar_t root[32768]{};
-    std::wstring directory;
-    const DWORD custom = GetEnvironmentVariableW(L"RSF_DUMP_DIR", root, 32768);
-    if (custom && custom < 32768) directory = root;
-    else {
-        const DWORD size = GetEnvironmentVariableW(L"LOCALAPPDATA", root, 32768);
-        if (!size || size >= 32768) { say("Anomaly motion capture refused: LOCALAPPDATA unavailable."); return; }
-        directory = std::wstring(root) + L"\\ReScaleFrame\\Anomaly";
-    }
-    dump.configure(utf8(directory).c_str(), "Anomaly", build->sha256, log_fn, log_user);
-    dump_ready = true;
-    capture.remaining = configured.capture_count;
-    capture.next = configured.capture_start;
-} catch (...) { dump_ready = false; }
-
-// ---- G-buffer window ---------------------------------------------------------------------------------------------
-void reload_pack() {
-    if (!reload_requested.exchange(false) || !shader_api || !image || !build) return;
-    std::lock_guard lock(loader_guard);
-    auto candidate = std::make_unique<RuntimeShaders>();
-    const std::filesystem::path root(configured.shader_dir);
-    std::string error;
-    if (!candidate->open(root / "motion.rsfpatch", root / "cache", image, mp(), error)) {
-        pack_status.store(2); sayf("Motion pack reload kept previous generation: %s", error.c_str()); return;
-    }
-    std::unordered_map<const void*, std::shared_ptr<const Variant>> next;
-    std::vector<std::pair<const void*, std::shared_ptr<const Variant>>> previous;
-    { std::shared_lock r(registry_guard); for (const auto& item : registry) previous.push_back(item); }
-    for (const auto& [key, old] : previous) {
-        const auto entry = candidate->manifest.by_original.find(sha256_hex(old->request.source));
-        if (entry == candidate->manifest.by_original.end()) continue;
-        const auto result = candidate->prepare(old->request, entry->second, *shader_api);
-        if (result.outcome != Outcome::Replaced && result.outcome != Outcome::ReplacedFromCache) {
-            pack_status.store(2); sayf("Motion pack reload kept previous generation: %s", result.detail.c_str()); return;
-        }
-        auto updated = std::make_shared<Variant>(*old);
-        updated->request.bytecode = updated->original_bytecode;
-        void* shader{};
-        if (candidate->api().create_d3d11(old->device, old->request.target.c_str(),
-            {result.variant.data(), result.variant.size()}, &shader) != 0) {
-            pack_status.store(2); say("Motion pack reload kept previous generation: shader creation"); return;
-        }
-        switch (entry->second.stage) {
-        case 'v': updated->vs.Attach(static_cast<ID3D11VertexShader*>(shader)); break;
-        case 'p': updated->ps.Attach(static_cast<ID3D11PixelShader*>(shader)); break;
-        case 'h': updated->hs.Attach(static_cast<ID3D11HullShader*>(shader)); break;
-        case 'd': updated->ds.Attach(static_cast<ID3D11DomainShader*>(shader)); break;
-        }
-        updated->reflection = result.reflection;
-        next.emplace(key, std::move(updated));
-    }
-    auto replacement_loader = std::make_unique<ShaderLoader>(candidate->manifest, *shader_api, *shader_api,
-        [](const ShaderRequest& request, const ManifestEntry& entry) { return runtime_shaders->prepare(request, entry, *shader_api); });
-    { std::unique_lock r(registry_guard); registry.swap(next); }
-    runtime_shaders = std::move(candidate); loader = std::move(replacement_loader);
-    link_cache.clear(); tess_link_cache.clear(); history.reset_all(); foliage_history.reset_all();
-    pack_status.store(1); say("Motion shader pack reloaded from runtime source; history reset.");
-}
-void window_open(void* target) noexcept try {
-    if (dump_shaders.exchange(false) && runtime_shaders) {
-        const auto path = std::filesystem::path(configured.shader_dir) / "cache" / "shader-dump";
-        sayf("Runtime shader dump result=%d", runtime_shaders->api().dump(path.c_str()));
-    }
-    reload_pack();
-    if (!hooks_active.load(std::memory_order_acquire) || !pack_enabled.load()) return;
-    ID3D11Device* device{};
-    ID3D11DeviceContext* context{};
-    std::byte* engine_target{};
-    if (!read_global(srp().hw_device_rva, device) || !read_global(srp().hw_context_rva, context) || !device || !context ||
-        !read_global(srp().render_implementation_rva + sr::render_target_offset, engine_target) || engine_target != target) return;
-    if (!install_draw_hooks(context)) return;
-    binder_host.context = context;
-    if (binder.cache_may_hold_motion() && device_state.rtv()) {
-        const auto action = binder.close(image + srp().backend_rva, device_state.rtv());
-        if (action == BindAction::Fault) { ++stats.binder_faults; return; }
-        if (action == BindAction::Unbound) ++stats.close_unbinds;
-    }
-    if (device_state.device() != device) {
-        rsf_anomaly_motion_window_reset(&window);
-        device_state.reset();
-        history.reset_all();
-        foliage_history.reset_all();
-        link_cache.clear();
-        tess_link_cache.clear();
-        if (!device_state.create(device, log_fn, log_user)) { say("Anomaly motion: device resources could not be created."); return; }
-    }
-    std::byte* crt{};
-    void* rtv{};
-    void* surface{};
-    if (!guarded_copy(&crt, engine_target + position_offset, sizeof(crt)) || !crt ||
-        !guarded_copy(&rtv, crt + sr::crt_rtv_offset, sizeof(rtv)) || !guarded_copy(&surface, crt + sr::crt_surface_offset, sizeof(surface)) ||
-        !rtv || !surface) return;
-    uint32_t frame{};
-    if (!read_global(np().device_frame_rva, frame)) return;
-    const auto view = geometry::current_render_view(image, *build);
-    if (!view) return;
-    NativeObservation observation{sizeof(observation), observation_abi};
-    const uint64_t generation = rsf_anomaly_observation(&observation) == RSF_OK ? observation.resets : 0;
-    const bool new_frame = rsf_anomaly_motion_window_begin(&window, context, rtv, surface,
-        frame, static_cast<uint8_t>(*view), generation);
-    bool target_ok = window.target_ok;
-    if (new_frame) {
-        stats.retirements += retirements.drain([](void*, temporal::InstanceKey key) { history.retire(key); }, nullptr);
-        uint32_t options3{};
-        const bool msaa = !read_global(srp().render_options_word3_rva, options3) || (options3 & sr::dx10_msaa_bit);
-        ComPtr<ID3D11Texture2D> texture;
-        if (!msaa && SUCCEEDED(static_cast<IUnknown*>(surface)->QueryInterface(IID_PPV_ARGS(&texture)))) {
-            D3D11_TEXTURE2D_DESC desc{};
-            texture->GetDesc(&desc);
-            switch (device_state.ensure_target(desc)) {
-            case TargetResult::Created: ++stats.target_created; [[fallthrough]];
-            case TargetResult::Ready: target_ok = true; break;
-            case TargetResult::Multisampled: ++stats.msaa_frames; break;
-            default: ++stats.target_failed; break;
-            }
-        } else if (msaa) ++stats.msaa_frames;
-        if (target_ok) {
-            device_state.clear(context);
-            ++stats.clears;
-            history.begin_frame(*view, frame, generation, device_state.width(), device_state.height());
-            foliage_history.begin_frame(*view, frame, generation, device_state.width(), device_state.height());
-            stats.foliage_table_overflows = foliage_history.table_overflows();
-        }
-        ++stats.frames;
-        if (target_ok && *view == temporal::ViewId::Main && configured.capture) capture_arm(frame);
-    }
-    rsf_anomaly_motion_window_open(&window, target_ok);
-    ++stats.windows;
-} catch (...) {}
-
-void window_close() noexcept {
-    cancel_pending_draw();
-    if (!rsf_anomaly_motion_window_close(&window)) return;
-    if (device_state.rtv()) {
-        const auto action = binder.close(image + srp().backend_rva, device_state.rtv());
-        if (action == BindAction::Unbound) ++stats.close_unbinds;
-        else if (action == BindAction::Fault) ++stats.binder_faults;
-    }
-    if (capture.active) capture_finish();
-}
-void __fastcall scene_begin_hook(void* self) {
-    cancel_pending_draw();
-    reinterpret_cast<Unary>(originals[site_phase_scene_begin])(self);
-    window_open(self);
-}
-void __fastcall scene_end_hook(void* self) {
-    window_close();
-    reinterpret_cast<Unary>(originals[site_phase_scene_end])(self);
-}
-
-// ---- draw-time (after CBackend::constants.flush) ----------------------------------------------------------------
-std::shared_ptr<const Variant> find_variant(const void* shader) noexcept {
-    if (!shader) return {};
-    std::shared_lock lock(registry_guard);
-    const auto found = registry.find(shader);
-    return found == registry.end() ? nullptr : found->second;
-}
-bool read_camera(CameraSample& out) noexcept {
-    float view[16], projection[16];
-    const auto* xforms = image + srp().backend_rva + sr::backend_xforms_offset;
-    if (!guarded_copy(view, xforms + sr::xforms_view_offset, sizeof(view)) ||
-        !guarded_copy(projection, xforms + sr::xforms_project_offset, sizeof(projection))) return false;
-    out.view = from_engine(view);
-    out.projection = from_engine(projection);
-    return true;
-}
-void count_reason(HistoryReason reason) noexcept {
-    const auto i = static_cast<std::size_t>(reason);
-    if (i < MotionCounters::reasons) ++stats.reasons_by[i];
-    (reason == HistoryReason::Valid ? stats.valid_draws : stats.invalid_draws) += 1;
-}
-// What a G-buffer draw is, for the per-class counters (draw_class_name).
-std::size_t draw_class(const geometry::DrawTimeFacts& f) noexcept {
-    using geometry::DrawKind;
-    if (f.detail) return 6;
-    if (!f.in_visual) return 7;
-    if (f.classification.verdict == geometry::DrawVerdict::IgnoredStaticWorld) return 0;
-    switch (f.kind) {
-    case DrawKind::Rigid: return 1;
-    case DrawKind::HardwareSkinned: return 2;
-    case DrawKind::SingleBone: return 3;
-    case DrawKind::SoftwareSkinned: return 4;
-    default: return 5;
-    }
-}
-constexpr std::size_t tessellated_class = 8;
-static_assert(MotionCounters::bands == distance_bands, "character band counters follow motion_policy.h distance_band");
-// The hull, domain and geometry shaders bound for this draw. The engine keeps its own references; the raw pointers stay
-// valid through the draw.
-struct BoundStages {
-    ID3D11HullShader* hs{};
-    ID3D11DomainShader* ds{};
-    ID3D11GeometryShader* gs{};
-    bool any() const noexcept { return hs || ds || gs; }
-};
-BoundStages intermediate_stages(ID3D11DeviceContext* context) noexcept {
-    BoundStages s;
-    context->HSGetShader(&s.hs, nullptr, nullptr);
-    context->DSGetShader(&s.ds, nullptr, nullptr);
-    context->GSGetShader(&s.gs, nullptr, nullptr);
-    if (s.hs) s.hs->Release();
-    if (s.ds) s.ds->Release();
-    if (s.gs) s.gs->Release();
-    return s;
-}
-void count_unpaired(const void* vs, const void* ps, std::size_t klass) noexcept try {
-    std::lock_guard lock(unpaired_guard);
-    const UnpairedKey key{vs, ps, klass};
-    if (const auto found = unpaired_pairs.find(key); found != unpaired_pairs.end()) ++found->second;
-    else if (unpaired_pairs.size() < unpaired_pairs_limit) unpaired_pairs.emplace(key, 1);
-} catch (...) {}
-// ---- foliage (trees and grass) -------------------------------------------------------------------------------------
-// The VS constants of a foliage draw are read from the engine's staged copy after the flush uploaded them, so they are
-// exactly what the draw uses. See motion_foliage.h for identity and the grass row hygiene.
-bool read_constant(const ConstantRef& ref, void* out, std::uint32_t max_bytes) noexcept {
-    if (!ref.present) return true;   // a variable the compiler removed stays zero in the record and in b13
-    return geometry::read_vertex_constants(ref.buffer, ref.buffer_size, ref.offset, out, ref.size < max_bytes ? ref.size : max_bytes);
-}
-bool read_foliage_constants(const FoliageLayout& layout, FoliageConstants& out) noexcept {
-    return read_constant(layout.consts, out.consts, 16) && read_constant(layout.wave, out.wave, 16) &&
-        read_constant(layout.wind, out.wind, 16);
-}
-// Marks every instance row the engine has not filled for the NEXT batch. The batch just read was already uploaded by the
-// flush (UpdateSubresource copies at call time), the engine writes groups 0..n-1 again before its next draw and the
-// vertices of a draw only address those groups, so the unwritten tail is never read; poisoned it identifies itself.
-void poison_batch(const FoliageLayout& layout) noexcept {
-    DetailRows rows;
-    poison_detail_rows(rows);
-    if (geometry::write_vertex_constants(layout.array.buffer, layout.array.buffer_size, layout.array.offset, rows.data(),
-            static_cast<std::uint32_t>(sizeof(float) * foliage_detail_floats))) ++stats.foliage_poisoned;
-    else ++stats.foliage_poison_failed;
-}
-// A grass flush whose rows are not otherwise consumed (shadow passes, draws outside the motion pass): keep the engine's
-// staged batch marked so the first G-buffer batch of the next frame does not inherit stale groups.
-void poison_only(ID3D11DeviceContext* context) noexcept {
-    if (!configured.foliage || !context) return;
-    ID3D11VertexShader* vs{};
-    context->VSGetShader(&vs, nullptr, nullptr);
-    if (vs) vs->Release();
-    const auto variant = find_variant(vs);
-    if (variant && variant->family == Family::FoliageDetail && variant->foliage.usable) poison_batch(variant->foliage);
-}
-bool is_identity(const float (&values)[16]) noexcept {
-    static constexpr float identity[16]{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
-    return std::memcmp(values, identity, sizeof(identity)) == 0;
-}
-// Everything a foliage draw's history needs. Records the draw for the next frame whether or not the pair gets swapped.
-HistoryReason prepare_foliage(const geometry::DrawTimeFacts& facts, const Variant& vertex, const void* vs_key,
-    bool context_known, CameraStatus camera, FoliageVertexBytes& bytes) noexcept {
-    pack_foliage_invalid(bytes);
-    if (!configured.foliage || !vertex.foliage.usable) return HistoryReason::Foliage;
-    const auto& layout = vertex.foliage;
-    const auto previous_jitter = sr::current_jitter_uv();
-    const CameraSample* previous_camera = context_known ? history.previous_camera(*facts.view, *facts.domain) : nullptr;
-    const bool active = context_known && foliage_history.active(*facts.view);
-    if (vertex.family == Family::FoliageTree) {
-        TreeDrawInput in;
-        in.family = vertex.family;
-        in.in_visual = facts.in_visual;
-        in.kind = facts.kind;
-        in.verdict = facts.classification.verdict;
-        in.context = context_known;
-        in.camera_conflict = camera == CameraStatus::Conflict;
-        in.previous_camera = previous_camera;
-        in.previous_jitter_u = previous_jitter.previous_u;
-        in.previous_jitter_v = previous_jitter.previous_v;
-        in.current.lod = facts.tree_lod;
-        const bool tree = facts.in_visual && facts.kind == geometry::DrawKind::Tree && facts.visual;
-        in.constants_ok = tree && read_constant(layout.xform, in.current.xform, sizeof(in.current.xform)) &&
-            read_foliage_constants(layout, in.current.constants);
-        if (in.constants_ok && active) in.previous = foliage_history.record_tree(*facts.view, facts.visual, in.current);
-        const auto decision = decide_tree(in);
-        if (decision.reason != HistoryReason::Valid) return decision.reason;
-        if (!pack_foliage_tree(decision.previous_clip, in.previous->xform, in.previous->constants, bytes))
-            return HistoryReason::FoliageNoConstants;
-        return HistoryReason::Valid;
-    }
-    DetailDrawInput in;
-    in.family = vertex.family;
-    in.detail_window = facts.detail;
-    in.context = context_known;
-    in.camera_conflict = camera == CameraStatus::Conflict;
-    in.previous_camera = previous_camera;
-    in.previous_jitter_u = previous_jitter.previous_u;
-    in.previous_jitter_v = previous_jitter.previous_v;
-    float world[16];
-    in.world_readable = geometry::read_world_matrix(world);
-    in.world_identity = in.world_readable && is_identity(world);
-    DetailRows rows;
-    FoliageConstants current;
-    in.constants_ok = facts.detail && read_foliage_constants(layout, current) &&
-        geometry::read_vertex_constants(layout.array.buffer, layout.array.buffer_size, layout.array.offset, rows.data(),
-            static_cast<std::uint32_t>(sizeof(float) * foliage_detail_floats));
-    DetailRemap remap;
-    if (in.constants_ok) {
-        // Route: the shader permutation and its wave set (the wave 0 and wave 1 batches share one permutation).
-        std::uint64_t route = reinterpret_cast<std::uintptr_t>(vs_key);
-        for (const float w : {current.wave[0], current.wave[1], current.wave[2]}) {
-            std::uint32_t bits;
-            std::memcpy(&bits, &w, sizeof(bits));
-            route = (route ^ bits) * 1099511628211ull;
-        }
-        if (active) remap = foliage_history.record_detail(*facts.view, route, current, rows);
-        else remap.live = count_live_groups(rows);
-        poison_batch(layout);
-        stats.detail_items += remap.live;
-        stats.detail_items_matched += remap.matched;
-        stats.detail_items_unmatched += remap.unmatched;
-        stats.detail_conflicts += remap.conflicts;
-    }
-    in.live_groups = remap.live;
-    in.route_found = remap.route_found;
-    const auto decision = decide_detail(in);
-    if (decision.reason != HistoryReason::Valid) return decision.reason;
-    // The route existed last frame but none of this batch's instances did: nothing to bind.
-    if (remap.matched == 0) return HistoryReason::FoliageNoPrevious;
-    if (!pack_foliage_detail(decision.previous_clip, remap.previous, remap.items, remap.live, bytes))
-        return HistoryReason::FoliageNoConstants;
-    return HistoryReason::Valid;
-}
-
-void on_flush(const geometry::DrawTimeFacts& facts) noexcept try {
-    // A flush may have prepared a draw the engine subsequently skipped.
-    cancel_pending_draw();
-    if (!hooks_active.load(std::memory_order_relaxed) || !image) return;
-    auto* backend = image + srp().backend_rva;
-    if (!window.open) {
-        if (binder.cache_may_hold_motion() && device_state.rtv()) {
-            const auto action = binder.on_draw(backend, false, nullptr, device_state.rtv());
-            if (action == BindAction::Unbound) ++stats.unbinds;
-            else if (action == BindAction::Fault) ++stats.binder_faults;
-        }
-        if (facts.detail) {
-            ID3D11DeviceContext* engine_context{};
-            if (read_global(srp().hw_context_rva, engine_context)) poison_only(engine_context);
-        }
-        return;
-    }
-    ++stats.window_draws;
-    auto* context = static_cast<ID3D11DeviceContext*>(window.context);
-    const bool main = facts.pass == geometry::DrawPass::Main;
-    const auto action = binder.on_draw(backend, window.target_ok && main, window.position_rtv, device_state.rtv());
-    switch (action) {
-    case BindAction::Bound: ++stats.rebinds; break;
-    case BindAction::AlreadyBound: ++stats.already_bound; break;
-    case BindAction::Unbound: ++stats.unbinds; break;
-    case BindAction::Conflict: ++stats.conflicts; break;
-    case BindAction::Fault: ++stats.binder_faults; break;
-    default: break;
-    }
-    // History for the next frame: every main-pass draw's camera, every identified draw's snapshot.
-    CameraStatus camera = CameraStatus::NoFrame;
-    DrawSnapshotView previous;
-    const bool context_known = facts.view && facts.domain;
-    bool stale = false;
-    if (main && context_known && history.active(*facts.view)) {
-        CameraSample sample;
-        if (read_camera(sample)) camera = history.observe_camera(*facts.view, *facts.domain, sample);
-        if (camera == CameraStatus::Conflict) ++stats.camera_conflicts;
-        if (facts.capture) {
-            geometry::FeedStatus why{};
-            if (const auto snapshot = geometry::to_snapshot(*facts.capture, why)) {
-                previous = history.record(*facts.view, facts.capture->key, *snapshot);
-                stale = previous && stale_palette(previous, draw_snapshot_view(*snapshot));
-                ++stats.snapshots;
-            }
-        }
-    }
-    if (!binder.motion_bound() || !context) {
-        if (facts.detail) poison_only(context);
-        return;
-    }
-    // Character draws by camera distance (diagnostics only; MotionCounters::band_*). `band` stays out of range for
-    // everything that is not a skinned visual in the main pass.
-    std::size_t band = MotionCounters::bands;
-    if (main && facts.in_visual && (facts.kind == geometry::DrawKind::HardwareSkinned ||
-            facts.kind == geometry::DrawKind::SingleBone || facts.kind == geometry::DrawKind::SoftwareSkinned)) {
-        band = distance_bands - 1;
-        float world[16];
-        CameraSample sample;
-        if (geometry::read_world_matrix(world) && read_camera(sample))
-            band = distance_band(camera_distance(sample.view, from_engine(world)));
-        if (stale) ++stats.band_stale_palette[band];
-    }
-    const auto count_band = [band](std::uint64_t (&field)[MotionCounters::bands]) noexcept {
-        if (band < MotionCounters::bands) ++field[band];
-    };
-    ID3D11VertexShader* vs{};
-    ID3D11PixelShader* ps{};
-    context->VSGetShader(&vs, nullptr, nullptr);
-    context->PSGetShader(&ps, nullptr, nullptr);
-    // The engine keeps its own references; these raw pointers stay valid through the draw.
-    if (vs) vs->Release();
-    if (ps) ps->Release();
-    if (band < MotionCounters::bands) {
-        switch (element_of(vs)) {
-        case ModelElement::High: ++stats.band_hq[band]; break;
-        case ModelElement::Low: ++stats.band_lq[band]; break;
-        case ModelElement::Tessellated: ++stats.band_tess[band]; break;
-        default: break;
-        }
-    }
-    const auto vertex = find_variant(vs);
-    const auto pixel = find_variant(ps);
-    const bool tree_draw = facts.in_visual && facts.kind == geometry::DrawKind::Tree;
-    const bool detail_draw = facts.detail;
-    // A foliage VS variant's history is prepared (and recorded for the next frame) whether or not the pixel shader has a
-    // variant to pair with; the swap below only decides what this draw writes.
-    FoliageVertexBytes foliage_bytes;
-    HistoryReason foliage_reason = HistoryReason::Foliage;
-    const bool foliage_vertex = vertex && (vertex->family == Family::FoliageTree || vertex->family == Family::FoliageDetail);
-    if (foliage_vertex) foliage_reason = prepare_foliage(facts, *vertex, vs, context_known, camera, foliage_bytes);
-    else pack_foliage_invalid(foliage_bytes);
-    if (detail_draw && !foliage_vertex) poison_only(context);
-    // The variants extend the VS->PS interface (TEXCOORD12/13). With a hull and domain shader bound (X-Ray's DX11\tess
-    // pass for PN/displacement materials when r4_enable_tessellation is on, used by near skinned character models), the
-    // PS reads its input from the domain stage: the whole chain VS -> HS -> DS -> PS is swapped, and only when every
-    // stage has a verified variant and every interface links (tess_chain_linkable). Otherwise the stock VS/PS cannot
-    // write defined motion through the stock HS/DS, so the draw keeps its stock shaders and gets the invalidation replay.
-    // A geometry shader is never swapped.
-    const auto stages = intermediate_stages(context);
-    const bool staged = stages.any();
-    const auto device = device_state.device();
-    std::shared_ptr<const Variant> hull, domain;
-    bool paired = vertex && pixel && vertex->vs && pixel->ps && vertex->device == device && pixel->device == device;
-    if (!staged && paired) {
-        const std::pair<const void*, const void*> key{vs, ps};
-        auto found = link_cache.find(key);
-        if (found == link_cache.end()) found = link_cache.emplace(key, linkable(vertex->reflection, pixel->reflection)).first;
-        paired = found->second;
-    } else if (staged) {
-        if (!stages.gs) {
-            hull = find_variant(stages.hs);
-            domain = find_variant(stages.ds);
-        }
-        const bool core_vertex = paired && (vertex->family == Family::CoreStatic || vertex->family == Family::CoreModel);
-        paired = core_vertex && !stages.gs && hull && domain && hull->hs && domain->ds && hull->device == device &&
-            domain->device == device;
-        if (stages.gs) ++stats.tess_geometry;
-        else if (!paired) ++stats.tess_no_variant;
-        else {
-            const std::array<const void*, 4> key{vs, stages.hs, stages.ds, ps};
-            auto found = tess_link_cache.find(key);
-            if (found == tess_link_cache.end())
-                found = tess_link_cache.emplace(key, tess_chain_linkable(vertex->reflection, hull->reflection, domain->reflection,
-                    pixel->reflection)).first;
-            paired = found->second;
-            if (!paired) ++stats.tess_unlinked;
-        }
-    }
-    const std::size_t klass = staged ? tessellated_class : draw_class(facts);
-    if (!paired) {
-        if (tree_draw) ++stats.tree_stock;
-        if (detail_draw) ++stats.detail_stock;
-        ++stats.unpaired_draws;
-        ++stats.class_unpaired[klass];
-        count_band(stats.band_unpaired);
-        count_unpaired(vs, ps, klass);
-        arm_replay(context);
-        return;
-    }
-    const bool foliage = vertex->family == Family::FoliageTree || vertex->family == Family::FoliageDetail;
-    bool uploaded = false;
-    if (foliage) {
-        uploaded = device_state.set_foliage_vertex(context, foliage_bytes);
-        count_reason(foliage_reason);
-        const bool valid = foliage_reason == HistoryReason::Valid;
-        ++(valid ? stats.class_valid : stats.class_invalid)[klass];
-        if (vertex->family == Family::FoliageTree) ++(valid ? stats.tree_valid : stats.tree_invalid);
-        else ++(valid ? stats.detail_valid : stats.detail_invalid);
-    } else {
-        CoreDrawInput input;
-        input.family = vertex->family;
-        input.skin = vertex->skin;
-        input.in_visual = facts.in_visual;
-        input.verdict = facts.classification.verdict;
-        input.kind = facts.kind;
-        input.context = context_known;
-        input.camera_conflict = camera == CameraStatus::Conflict;
-        input.previous_camera = context_known ? history.previous_camera(*facts.view, *facts.domain) : nullptr;
-        input.previous = previous;
-        const auto decision = decide_core(input);
-        CoreVertexBytes bytes;
-        bool valid = decision.reason == HistoryReason::Valid;
-        if (valid) {
-            valid = pack_core_vertex(decision.previous_wvp, decision.bones.span(), decision.flags, bytes);
-            count_reason(valid ? HistoryReason::Valid : HistoryReason::TooManyBones);
-        } else {
-            pack_core_invalid(bytes);
-            count_reason(decision.reason);
-            if (decision.reason == HistoryReason::NoPreviousInstance) count_band(stats.band_no_previous);
-        }
-        ++(valid ? stats.class_valid : stats.class_invalid)[klass];
-        count_band(valid ? stats.band_valid : stats.band_invalid);
-        uploaded = device_state.set_core_vertex(context, bytes);
-        if (staged) {
-            // The domain stage rebuilds the previous patch from the VS's previous object-space control points.
-            // A refused pack (no history, or non-finite split matrices) writes history x = 0, and the domain stage then
-            // writes validity 0 for the whole draw whatever the VS says.
-            TessDomainBytes tess;
-            if (!pack_tess_domain(decision.previous_wv, decision.previous_projection, valid, tess) && valid) ++stats.tess_pack_refused;
-            uploaded = uploaded && device_state.set_tess_domain(context, tess);
-        }
-    }
-    D3D11_VIEWPORT viewport{};
-    UINT viewports = 1;
-    context->RSGetViewports(&viewports, &viewport);
-    // SR Stage 3 publishes the jitter of this frame's world and first-person projections (and of the previous main-view
-    // frame, whose jittered camera the history recorded) at phase_scene_prepare; zero below Stage 3 and on scope frames.
-    const auto sr_jitter = sr::current_jitter_uv();
-    PixelInputs inputs{viewport.TopLeftX, viewport.TopLeftY, viewport.Width, viewport.Height,
-        sr_jitter.current_u, sr_jitter.current_v, foliage ? 0.0f : sr_jitter.previous_u, foliage ? 0.0f : sr_jitter.previous_v};
-    PixelBytes pixel_bytes;
-    pack_pixel(inputs, pixel_bytes);   // an unusable viewport writes control 0: invalid motion, native shading intact
-    uploaded = uploaded && device_state.set_pixel(context, pixel_bytes);
-    if (!uploaded) {
-        if (foliage) ++(vertex->family == Family::FoliageTree ? stats.tree_stock : stats.detail_stock);
-        ++stats.upload_failures;
-        arm_replay(context);
-        return;
-    }
-    ++stats.motion_draws;
-    if (foliage) ++(vertex->family == Family::FoliageTree ? stats.tree_replaced : stats.detail_replaced);
-    context->VSSetShader(vertex->vs.Get(), nullptr, 0);
-    context->PSSetShader(pixel->ps.Get(), nullptr, 0);
-    if (staged) {
-        context->HSSetShader(hull->hs.Get(), nullptr, 0);
-        context->DSSetShader(domain->ds.Get(), nullptr, 0);
-        ++stats.tess_swapped;
-    }
-    const rsf_anomaly_motion_draw draw{context, vs, ps, stages.hs, stages.ds, RSF_ANOMALY_DRAW_RESTORE, staged};
-    rsf_anomaly_motion_draw_arm(&draw);
-} catch (...) {}
 
 bool guards_match(std::byte* module, uint32_t image_size, const MotionProfile& profile, const char** failed) noexcept {
     for (const auto& site : profile.motion_sites) {
@@ -1071,264 +137,357 @@ bool guards_match(std::byte* module, uint32_t image_size, const MotionProfile& p
     if (!guarded_copy(&name, module + profile.source_name_rva, 1) || name != 0) { *failed = "D3DCompile pSourceName"; return false; }
     return true;
 }
+
+rsf_anomaly_shader_bytes bytes(std::string_view s) noexcept {
+    return {reinterpret_cast<const uint8_t*>(s.data()), s.size()};
 }
-
-MotionOptions read_options(const wchar_t* ini) noexcept try {
-    MotionOptions result{};
-    if (!ini) return result;
-    result.enabled = GetPrivateProfileIntW(L"Anomaly", L"Motion", 0, ini) == 1;
-    result.shader_dir = (std::filesystem::path(ini).parent_path() / L"ReScaleFrame" / L"patches").wstring();
-    result.invalidate = GetPrivateProfileIntW(L"Anomaly", L"MotionInvalidate", 1, ini) != 0;
-    result.foliage = GetPrivateProfileIntW(L"Anomaly", L"MotionFoliage", 1, ini) != 0;
-    result.capture = GetPrivateProfileIntW(L"Anomaly", L"MotionCapture", 0, ini) != 0;
-    result.capture_start = GetPrivateProfileIntW(L"Anomaly", L"MotionCaptureStart", 600, ini);
-    result.capture_count = GetPrivateProfileIntW(L"Anomaly", L"MotionCaptureCount", 3, ini);
-    result.capture_interval = GetPrivateProfileIntW(L"Anomaly", L"MotionCaptureInterval", 300, ini);
-    if (result.capture_count > 16) result.capture_count = 16;
-    if (!result.capture_interval) result.capture_interval = 1;
-    return result;
-} catch (...) { return {}; }
-
-void configure(const MotionOptions& value, rsf_game_log_fn log, void* user) noexcept try {
-    if (hooks_active.load()) return;
-    configured = value;
-    pack_enabled.store(value.enabled);
-    options::add({pack_label, true, 0, 1, 1, 1, false,
-        []() noexcept {
-            const auto status = pack_status.load();
-            rsf_patch_counters core{sizeof(core), RSF_SHADER_PATCH_VERSION};
-            if (status == 1 && runtime_shaders) runtime_shaders->api().counters(&core);
-            if (status == 1 && core.refused)
-                std::snprintf(pack_label, sizeof(pack_label), "Motion shader pack: loaded (%llu refusals)",
-                    static_cast<unsigned long long>(core.refused));
-            else std::snprintf(pack_label, sizeof(pack_label), "Motion shader pack: %s",
-                status == 1 ? "loaded" : status == 2 ? "reload refused; previous pack active" : "not loaded");
-            return pack_enabled.load() ? 1 : 0;
-        },
-        [](int32_t v) noexcept { pack_enabled.store(v != 0); options::write_int(L"Motion", v ? 1 : 0); }});
-    options::add({"Reload motion shader pack", true, 0, 1, 1, 1, false,
-        []() noexcept { return 0; }, [](int32_t v) noexcept { if (v) reload_requested.store(true); }});
-    options::add({"Dump intercepted shaders", true, 0, 1, 1, 1, false,
-        []() noexcept { return 0; }, [](int32_t v) noexcept { if (v) dump_shaders.store(true); }});
-    options::add({"Tree and grass motion", true, 0, 1, 1, 1, false,
-        []() noexcept { return configured.foliage ? 1 : 0; },
-        [](int32_t v) noexcept {
-            configured.foliage = v != 0;
-            geometry::geometry_enable_foliage_identity(configured.foliage);
-            options::write_int(L"MotionFoliage", v ? 1 : 0);
-        }});
-    options::add({"Invalidate motion under stock draws", true, 0, 1, 1, 1, false,
-        []() noexcept { return configured.invalidate ? 1 : 0; },
-        [](int32_t v) noexcept { configured.invalidate = v != 0; options::write_int(L"MotionInvalidate", v ? 1 : 0); }});
-    log_fn = log;
-    log_user = user;
-} catch (...) {}
-const MotionOptions& options() noexcept { return configured; }
-const char* draw_class_name(std::size_t c) noexcept {
-    static constexpr const char* names[MotionCounters::classes] = {"static_world", "rigid", "skinned", "single_bone",
-        "soft_skinned", "tree", "detail", "no_visual", "tessellated"};
-    return c < MotionCounters::classes ? names[c] : "unknown";
+rsf_anomaly_shader_bytes bytes(std::span<const std::byte> s) noexcept {
+    return {reinterpret_cast<const uint8_t*>(s.data()), s.size()};
 }
-bool active() noexcept { return hooks_active.load() && pack_enabled.load(); }
+void* hw_device() noexcept {
+    void* device{};
+    read_global(srp().hw_device_rva, device);
+    return device;
+}
+void* hw_context() noexcept {
+    void* context{};
+    read_global(srp().hw_context_rva, context);
+    return context;
+}
+void* backend() noexcept { return image ? image + srp().backend_rva : nullptr; }
 
-bool install(std::byte* module, uint32_t image_size, const BuildProfile& selected) noexcept try {
-    if (hooks_active.load()) return true;
-    if (!module || image_size != selected.image_size()) { say("Anomaly motion refused: image size differs from the verified build."); return false; }
-    // Trampolines are process-lifetime: a re-start must be the build the first install verified.
-    if (hooks.created() && build != &selected) { say("Anomaly motion refused: a different build than the installed hooks."); return false; }
-    const char* failed = "unknown";
-    if (!hooks.created() && !guards_match(module, image_size, *selected.motion, &failed)) {
-        sayf("Anomaly motion refused, shaders stay stock: guard mismatch at %s", failed);
-        return false;
-    }
-    if (!geometry::geometry_hooks_active()) { say("Anomaly motion refused: geometry hooks (draw-time site) are not active."); return false; }
-    build = &selected;
-    image = module;
-    {
-        std::lock_guard lock(loader_guard);
-        if (!loader) {
-            const std::filesystem::path root(configured.shader_dir);
-            static D3DShaderApi api(engine_compiler_module);
-            runtime_shaders = std::make_unique<RuntimeShaders>();
-            std::string error;
-            if (!api.ready() || !runtime_shaders->open(root / "motion.rsfpatch", root / "cache", module, *selected.motion, error)) {
-                sayf("Anomaly motion pack refused: %s", error.c_str()); return false;
-            }
-            shader_api = &api;
-            set_shader_runtime(runtime_shaders->api());
-            ID3D11Device* device{};
-            if (read_global(selected.sr->hw_device_rva, device) && device) runtime_shaders->api().attach_d3d11(device);
-            const auto roots = runtime_shaders->manifest.by_original.size();
-            loader = std::make_unique<ShaderLoader>(runtime_shaders->manifest, api, api,
-                [](const ShaderRequest& request, const ManifestEntry& entry) { return runtime_shaders->prepare(request, entry, api); });
-            sayf("Anomaly runtime shader pack: %zu allowlisted roots, namespace %s", roots,
-                loader->manifest().name_space.substr(0, 16).c_str());
-            pack_status.store(1);
-        }
-    }
-    const auto& motion_sites = mp().motion_sites;
+void shader_created(const char* target, const void* buffer, unsigned size, const char* file,
+    void** result, const void* return_address, const void* caller_rsp) noexcept {
+    char stage{};
+    if (!guarded_copy(&stage, target, 1) || (stage != 'v' && stage != 'p' && stage != 'h' && stage != 'd') ||
+        !buffer || !size) return;
+    void* engine_object{};
+    void* stock{};
+    if (!guarded_copy(&engine_object, result, sizeof(engine_object)) || !engine_object ||
+        !guarded_copy(&stock, static_cast<std::byte*>(engine_object) + shader_object_offset, sizeof(stock)) || !stock) return;
+    char filename[520];
+    std::size_t len = 0;
+    if (file) for (; len < sizeof(filename); ++len)
+        if (!guarded_copy(filename + len, file + len, 1) || !filename[len]) break;
+    rsf_anomaly_motion_stage_shader(static_cast<uint8_t>(stage), target, buffer, size, bytes(std::string_view(filename, len)),
+        stock, return_address, caller_rsp);
+}
+long long __fastcall create_shader_hook(const char* target, const void* buffer, unsigned size, const char* file,
+    void** result, char disasm) {
+    rsf_anomaly_motion_stage_attach();
+    const auto hr = reinterpret_cast<CreateShader>(originals[site_create_shader])(target, buffer, size, file, result, disasm);
+    if (static_cast<int32_t>(hr) >= 0 && rsf_anomaly_motion_stage_admits())
+        shader_created(target, buffer, size, file, result, _ReturnAddress(),
+            static_cast<const std::byte*>(_AddressOfReturnAddress()) + 8);
+    return hr;
+}
+void __fastcall scene_begin_hook(void* self) {
+    rsf_anomaly_motion_stage_cancel_draw();
+    reinterpret_cast<Unary>(originals[site_phase_scene_begin])(self);
+    rsf_anomaly_motion_stage_open(self);
+}
+void __fastcall scene_end_hook(void* self) {
+    rsf_anomaly_motion_stage_close();
+    reinterpret_cast<Unary>(originals[site_phase_scene_end])(self);
+}
+struct CaptureBorrow {
+    const geometry::DrawCapture* capture;
+    std::optional<temporal::InstanceSnapshot> snapshot;
+};
+void flush(const geometry::DrawTimeFacts& facts) noexcept {
+    CaptureBorrow capture{facts.capture, {}};
+    const DrawFacts draw{facts.capture ? &capture : nullptr, facts.visual, facts.tree_lod,
+        static_cast<uint8_t>(facts.pass), static_cast<uint8_t>(facts.kind), static_cast<uint8_t>(facts.classification.verdict),
+        facts.view ? static_cast<uint8_t>(*facts.view) : uint8_t{255},
+        facts.domain ? static_cast<uint8_t>(*facts.domain) : uint8_t{255}, facts.in_visual, facts.detail};
+    rsf_anomaly_motion_stage_flush(&draw);
+}
+bool snapshot(void* raw, SnapshotFacts* out) noexcept {
+    auto& borrow = *static_cast<CaptureBorrow*>(raw);
+    geometry::FeedStatus why{};
+    borrow.snapshot = geometry::to_snapshot(*borrow.capture, why);
+    if (!borrow.snapshot) return false;
+    const auto& value = *borrow.snapshot;
+    *out = {geometry::geometry_key(borrow.capture->key), &value.world, value.bones.data(), value.bones.size(),
+        value.palette_layout, static_cast<uint8_t>(value.domain), static_cast<uint8_t>(value.kind)};
+    return true;
+}
+bool install_hooks(void* module, uint32_t size, const void* profile) noexcept {
+    build = static_cast<const BuildProfile*>(profile);
+    image = static_cast<std::byte*>(module);
+    if (hooks.created()) return hooks.enable();
+    const auto& s = mp().motion_sites;
     const std::array<HookSite, motion_site_count> sites{{
-        {motion_sites[site_create_shader].name, motion_sites[site_create_shader].rva, motion_sites[site_create_shader].expected,
+        {s[site_create_shader].name, s[site_create_shader].rva, s[site_create_shader].expected,
             reinterpret_cast<void*>(&create_shader_hook), &originals[site_create_shader]},
-        {motion_sites[site_phase_scene_begin].name, motion_sites[site_phase_scene_begin].rva, motion_sites[site_phase_scene_begin].expected,
+        {s[site_phase_scene_begin].name, s[site_phase_scene_begin].rva, s[site_phase_scene_begin].expected,
             reinterpret_cast<void*>(&scene_begin_hook), &originals[site_phase_scene_begin]},
-        {motion_sites[site_phase_scene_end].name, motion_sites[site_phase_scene_end].rva, motion_sites[site_phase_scene_end].expected,
+        {s[site_phase_scene_end].name, s[site_phase_scene_end].rva, s[site_phase_scene_end].expected,
             reinterpret_cast<void*>(&scene_end_hook), &originals[site_phase_scene_end]}}};
-    geometry::geometry_set_sink({&retirements, &geometry::RetirementQueue::sink});
-    geometry::geometry_set_flush_callback(&on_flush);
-    geometry::geometry_enable_foliage_identity(configured.foliage);
-    hooks_active = true;
-    const bool installed = hooks.created() ? hooks.enable() : hooks.install(module, image_size, sites);
-    if (!installed) {
-        hooks_active = false;
-        geometry::geometry_set_flush_callback(nullptr);
-        geometry::geometry_enable_foliage_identity(false);
-        say("Anomaly motion refused: guarded detour installation failed; shaders stay stock.");
-        return false;
+    return hooks.install(image, size, sites);
+}
+bool window_facts(void* target, WindowFacts* facts) noexcept {
+    auto* device = hw_device();
+    auto* context = hw_context();
+    std::byte* engine_target{};
+    if (!target || !device || !context || !read_global(srp().render_implementation_rva + sr::render_target_offset, engine_target) ||
+        engine_target != target) return false;
+    constexpr auto position_offset = sr::target_slots[0].offset;
+    static_assert(position_offset == 0x378);
+    std::byte* crt{};
+    void* rtv{};
+    void* surface{};
+    if (!guarded_copy(&crt, engine_target + position_offset, sizeof(crt)) || !crt ||
+        !guarded_copy(&rtv, crt + sr::crt_rtv_offset, sizeof(rtv)) ||
+        !guarded_copy(&surface, crt + sr::crt_surface_offset, sizeof(surface)) || !rtv || !surface) return false;
+    uint32_t frame{};
+    if (!read_global(np().device_frame_rva, frame)) return false;
+    const auto view = geometry::current_render_view(image, *build);
+    if (!view) return false;
+    NativeObservation observation{sizeof(observation), observation_abi};
+    const auto generation = rsf_anomaly_observation(&observation) == RSF_OK ? observation.resets : 0;
+    *facts = {device, context, backend(), rtv, surface, generation, frame, static_cast<uint8_t>(*view)};
+    return true;
+}
+int32_t target_facts(void* surface, TargetFacts* out) noexcept {
+    uint32_t options3{};
+    if (!read_global(srp().render_options_word3_rva, options3) || (options3 & sr::dx10_msaa_bit))
+        return RSF_MOTION_MULTISAMPLED;
+    ComPtr<ID3D11Texture2D> texture;
+    if (FAILED(static_cast<IUnknown*>(surface)->QueryInterface(IID_PPV_ARGS(&texture)))) return RSF_MOTION_FAILED;
+    D3D11_TEXTURE2D_DESC desc{};
+    texture->GetDesc(&desc);
+    *out = {desc.Width, desc.Height, desc.SampleDesc.Count, desc.ArraySize};
+    return RSF_MOTION_READY;
+}
+bool camera(float (*view)[16], float (*projection)[16]) noexcept {
+    const auto* xforms = image + srp().backend_rva + sr::backend_xforms_offset;
+    return guarded_copy(view, xforms + sr::xforms_view_offset, sizeof(*view)) &&
+        guarded_copy(projection, xforms + sr::xforms_project_offset, sizeof(*projection));
+}
+
+template<class Shader, auto Get>
+void* bound_shader(ID3D11DeviceContext* context) noexcept {
+    ComPtr<Shader> shader;
+    (context->*Get)(&shader, nullptr, nullptr);
+    // The caller is inside constants.flush. The engine retains its stock shader.
+    return shader.Get();
+}
+void bound_shaders(void* raw, ShaderObjects* out, bool all_stages) noexcept {
+    auto* c = static_cast<ID3D11DeviceContext*>(raw);
+    const auto vs = bound_shader<ID3D11VertexShader, &ID3D11DeviceContext::VSGetShader>(c);
+    if (!all_stages) { *out = {vs, nullptr, nullptr, nullptr, nullptr}; return; }
+    *out = {
+        vs,
+        bound_shader<ID3D11HullShader, &ID3D11DeviceContext::HSGetShader>(c),
+        bound_shader<ID3D11DomainShader, &ID3D11DeviceContext::DSGetShader>(c),
+        bound_shader<ID3D11PixelShader, &ID3D11DeviceContext::PSGetShader>(c),
+        bound_shader<ID3D11GeometryShader, &ID3D11DeviceContext::GSGetShader>(c)
+    };
+}
+void set_shaders(void* raw, const ShaderObjects* shader, bool tess) noexcept {
+    auto* c = static_cast<ID3D11DeviceContext*>(raw);
+    c->VSSetShader(static_cast<ID3D11VertexShader*>(shader->vs), nullptr, 0);
+    c->PSSetShader(static_cast<ID3D11PixelShader*>(shader->ps), nullptr, 0);
+    if (tess) {
+        c->HSSetShader(static_cast<ID3D11HullShader*>(shader->hs), nullptr, 0);
+        c->DSSetShader(static_cast<ID3D11DomainShader*>(shader->ds), nullptr, 0);
     }
-    if (configured.capture) bind_dump();
-    sayf("Anomaly motion hooks installed: create_shader, phase_scene_begin/end, constants.flush slot; MotionInvalidate=%d "
-         "MotionCapture=%d (start=%u count=%u interval=%u) MotionFoliage=%d. No SR/FG consumer reads the target.",
-        configured.invalidate ? 1 : 0, configured.capture ? 1 : 0, configured.capture_start, configured.capture_count,
-        configured.capture_interval, configured.foliage ? 1 : 0);
+}
+constexpr rsf_anomaly_motion_bind_platform bind_platform{
+    [](void*, const void* address, void* out, size_t size) -> uint32_t { return guarded_copy(out, address, size); },
+    [](void*, void* address, const void* in, size_t size) -> uint32_t { return guarded_write(address, in, size); },
+    [](void* context, void* const* targets, void* depth) {
+        if (context) static_cast<ID3D11DeviceContext*>(context)->OMSetRenderTargets(4,
+            reinterpret_cast<ID3D11RenderTargetView* const*>(targets), static_cast<ID3D11DepthStencilView*>(depth));
+    },
+    [](void* context) { if (context) static_cast<ID3D11DeviceContext*>(context)->OMSetRenderTargets(0, nullptr, nullptr); }
+};
+
+struct RequestStorage {
+    ShaderRequest request;
+    std::vector<std::byte> copied;
+};
+D3DShaderApi& reflector() {
+    static D3DShaderApi api(engine_compiler_module);
+    return api;
+}
+void* open_pack(void* module, const void* profile, const wchar_t* pack, const wchar_t* cache,
+    PackInfo* info, char* message, size_t size) noexcept try {
+    auto result = std::make_unique<RuntimeShaders>();
+    std::string error;
+    if (!reflector().ready()) error = "engine D3DCompiler unavailable";
+    else if (result->open(pack, cache, static_cast<std::byte*>(module), *static_cast<const BuildProfile*>(profile)->motion, error)) {
+        *info = {bytes(result->manifest.name_space), result->manifest.by_original.size()};
+        return result.release();
+    }
+    std::snprintf(message, size, "%s", error.c_str());
+    return nullptr;
+} catch (...) { return nullptr; }
+void* decode_request(const char* target, const void* buffer, uint32_t size, const void* ret, const void* stack,
+    uint8_t* status, rsf_anomaly_shader_bytes* source) noexcept try {
+    auto storage = std::make_unique<RequestStorage>();
+    auto& request = storage->request;
+    for (std::size_t i = 0; i < 16; ++i) {
+        char c{};
+        if (!guarded_copy(&c, target + i, 1) || !c) break;
+        request.target.push_back(c);
+    }
+    request.bytecode = {static_cast<const std::byte*>(buffer), size};
+    const auto reader = [](const void* address, void* out, std::size_t count) { return guarded_copy(out, address, count); };
+    *status = static_cast<uint8_t>(read_request(mp(), image, ret, static_cast<const std::byte*>(stack), reader, request));
+    *source = bytes(request.source);
+    return storage.release();
+} catch (...) { return nullptr; }
+bool copy_bytecode(void* raw) noexcept try {
+    auto& storage = *static_cast<RequestStorage*>(raw);
+    storage.copied.resize(storage.request.bytecode.size());
+    if (!guarded_copy(storage.copied.data(), storage.request.bytecode.data(), storage.copied.size())) return false;
+    storage.request.bytecode = storage.copied;
     return true;
 } catch (...) { return false; }
-
-bool quiesce() noexcept {
-    if (!hooks.created()) return true;
-    hooks_active = false;
-    geometry::geometry_set_flush_callback(nullptr);
-    geometry::geometry_enable_foliage_identity(false);
-    const bool disabled = hooks.disable();
-    cancel_pending_draw();
-    rsf_anomaly_motion_window_reset(&window);
-    if (dump_ready) { capture_abandon(); dump.cancel(capture.record.session_id); }
-    // The draw detours stay installed (another thread may be inside one) but are inert without pending work.
-    return disabled;
+bool find_entry(void* handle, const uint8_t (*hash)[64], ShaderEntry* out) noexcept {
+    const auto& roots = static_cast<RuntimeShaders*>(handle)->manifest.by_original;
+    const auto key = std::string_view(reinterpret_cast<const char*>(*hash), 64);
+    // Transparent lookup avoids copying the digest at each create_shader.
+    const auto entry = roots.find(key);
+    if (entry == roots.end()) return false;
+    const auto& root = entry->second;
+    *out = {&root, bytes(root.name), static_cast<uint8_t>(root.stage), static_cast<uint8_t>(root.family)};
+    return true;
 }
-
-MotionCounters counters() noexcept {
-    std::lock_guard lock(stats_guard);
-    return stats;
-}
-
-FrameTarget frame_target() noexcept {
-    if (!hooks_active.load(std::memory_order_acquire) || !pack_enabled.load() || !window.have_frame) return {};
-    return {device_state.texture(), device_state.width(), device_state.height(), window.frame,
-        window.view == static_cast<uint8_t>(temporal::ViewId::Main), window.target_ok && device_state.texture() != nullptr};
-}
-
-void report(void (*emit)(void*, const char*), void* user) noexcept try {
-    if (!emit || !hooks_active.load()) return;
-    MotionCounters now;
-    { std::lock_guard lock(stats_guard); now = stats; }
-    char text[900];
-    using ull = unsigned long long;
-    if (runtime_shaders) {
-        rsf_patch_counters core{sizeof(core),RSF_SHADER_PATCH_VERSION}; runtime_shaders->api().counters(&core);
-        std::snprintf(text, sizeof(text),
-            "Runtime shaders intercepted=%llu runtime_built=%llu cache_hits=%llu refused=%llu "
-            "source=%llu hash=%llu anchor=%llu compile=%llu original=%llu reflection=%llu format=%llu internal=%llu",
-            static_cast<ull>(core.intercepted), static_cast<ull>(core.built), static_cast<ull>(core.cache_hits),
-            static_cast<ull>(core.refused), static_cast<ull>(core.refusals[3]), static_cast<ull>(core.refusals[4]),
-            static_cast<ull>(core.refusals[5]), static_cast<ull>(core.refusals[6]), static_cast<ull>(core.refusals[7]),
-            static_cast<ull>(core.refusals[8]), static_cast<ull>(core.refusals[9]), static_cast<ull>(core.refusals[10]));
-        emit(user, text);
-    }
-    const auto d = [&](uint64_t MotionCounters::*field) { return static_cast<ull>(now.*field - reported.*field); };
-    std::snprintf(text, sizeof(text),
-        "Anomaly motion window frames=%llu windows=%llu clears=%llu draws=%llu motion=%llu valid=%llu invalid=%llu unpaired=%llu "
-        "replays=%llu replay_no_depth_write=%llu replay_failed=%llu | rtv2 rebinds=%llu already=%llu unbinds=%llu close_unbinds=%llu "
-        "conflicts=%llu faults=%llu | restores=%llu stale=%llu snapshots=%llu camera_conflicts=%llu retired=%llu upload_failures=%llu msaa=%llu",
-        d(&MotionCounters::frames), d(&MotionCounters::windows), d(&MotionCounters::clears), d(&MotionCounters::window_draws),
-        d(&MotionCounters::motion_draws), d(&MotionCounters::valid_draws), d(&MotionCounters::invalid_draws),
-        d(&MotionCounters::unpaired_draws), d(&MotionCounters::replays), d(&MotionCounters::replay_skipped_no_depth_write),
-        d(&MotionCounters::replay_failed), d(&MotionCounters::rebinds), d(&MotionCounters::already_bound), d(&MotionCounters::unbinds),
-        d(&MotionCounters::close_unbinds), d(&MotionCounters::conflicts), d(&MotionCounters::binder_faults), d(&MotionCounters::restores),
-        d(&MotionCounters::stale_restores), d(&MotionCounters::snapshots), d(&MotionCounters::camera_conflicts),
-        d(&MotionCounters::retirements), d(&MotionCounters::upload_failures), d(&MotionCounters::msaa_frames));
-    emit(user, text);
-    std::string reasons = "Anomaly motion invalid reasons";
-    for (std::size_t i = 1; i < MotionCounters::reasons; ++i) {
-        char item[64];
-        std::snprintf(item, sizeof(item), " %s=%llu", history_reason_name(static_cast<HistoryReason>(i)),
-            static_cast<ull>(now.reasons_by[i] - reported.reasons_by[i]));
-        reasons += item;
-    }
-    emit(user, reasons.c_str());
-    std::snprintf(text, sizeof(text),
-        "Anomaly motion foliage tree replaced=%llu stock=%llu valid=%llu invalid=%llu | detail replaced=%llu stock=%llu valid=%llu "
-        "invalid=%llu | detail items=%llu matched=%llu unmatched=%llu conflicts=%llu | rows poisoned=%llu poison_failed=%llu "
-        "table_overflows=%llu",
-        d(&MotionCounters::tree_replaced), d(&MotionCounters::tree_stock), d(&MotionCounters::tree_valid),
-        d(&MotionCounters::tree_invalid), d(&MotionCounters::detail_replaced), d(&MotionCounters::detail_stock),
-        d(&MotionCounters::detail_valid), d(&MotionCounters::detail_invalid), d(&MotionCounters::detail_items),
-        d(&MotionCounters::detail_items_matched), d(&MotionCounters::detail_items_unmatched),
-        d(&MotionCounters::detail_conflicts), d(&MotionCounters::foliage_poisoned), d(&MotionCounters::foliage_poison_failed),
-        d(&MotionCounters::foliage_table_overflows));
-    emit(user, text);
-    std::snprintf(text, sizeof(text),
-        "Anomaly motion tessellation chains swapped=%llu no_variant=%llu unlinked=%llu geometry_shader=%llu pack_refused=%llu",
-        d(&MotionCounters::tess_swapped), d(&MotionCounters::tess_no_variant), d(&MotionCounters::tess_unlinked),
-        d(&MotionCounters::tess_geometry), d(&MotionCounters::tess_pack_refused));
-    emit(user, text);
-    {
-        std::string classes = "Anomaly motion classes";
-        for (const auto& [label, field] : {std::pair{"valid", &MotionCounters::class_valid},
-                 std::pair{"invalid", &MotionCounters::class_invalid}, std::pair{"unpaired", &MotionCounters::class_unpaired}}) {
-            classes += std::string(" | ") + label;
-            for (std::size_t c = 0; c < MotionCounters::classes; ++c) {
-                char item[48];
-                std::snprintf(item, sizeof(item), " %s=%llu", draw_class_name(c), static_cast<ull>((now.*field)[c] - (reported.*field)[c]));
-                classes += item;
-            }
-        }
-        emit(user, classes.c_str());
-        // Character draws by camera distance: what a far NPC actually gets (history decision, unpaired, element).
-        std::string bands = "Anomaly motion character bands";
-        for (std::size_t b = 0; b < MotionCounters::bands; ++b) {
-            const auto v = [&](std::uint64_t (MotionCounters::*field)[MotionCounters::bands]) {
-                return static_cast<ull>((now.*field)[b] - (reported.*field)[b]);
-            };
-            char item[200];
-            std::snprintf(item, sizeof(item), " | %s valid=%llu invalid=%llu unpaired=%llu no_previous=%llu stale_palette=%llu "
-                "hq=%llu lq=%llu tess=%llu", distance_band_name(b), v(&MotionCounters::band_valid), v(&MotionCounters::band_invalid),
-                v(&MotionCounters::band_unpaired), v(&MotionCounters::band_no_previous), v(&MotionCounters::band_stale_palette),
-                v(&MotionCounters::band_hq), v(&MotionCounters::band_lq), v(&MotionCounters::band_tess));
-            bands += item;
-        }
-        emit(user, bands.c_str());
-        std::map<UnpairedKey, std::uint64_t> pairs;
-        { std::lock_guard lock(unpaired_guard); pairs.swap(unpaired_pairs); }
-        std::vector<std::pair<std::uint64_t, UnpairedKey>> top;
-        for (const auto& [key, count] : pairs) top.emplace_back(count, key);
-        std::sort(top.begin(), top.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
-        if (!top.empty()) {
-            std::string line = "Anomaly motion unpaired (draws without a linkable variant pair, invalid motion):";
-            for (std::size_t i = 0; i < top.size() && i < 10; ++i) {
-                const auto& key = top[i].second;
-                line += " " + name_of(key.vs) + "+" + name_of(key.ps) + "[" + draw_class_name(key.draw_class) + "]=" +
-                    std::to_string(top[i].first);
-            }
-            if (top.size() > 10) line += " (+" + std::to_string(top.size() - 10) + " more pairs)";
-            emit(user, line.c_str());
-        }
-    }
-    std::string shaders = "Anomaly motion shaders (totals)";
-    for (std::size_t f = 0; f < MotionCounters::families; ++f)
-        for (std::size_t o = 0; o < MotionCounters::outcomes; ++o) {
-            if (!now.shaders[f][o]) continue;
-            char item[96];
-            std::snprintf(item, sizeof(item), " %s.%s=%llu", f ? family_name(static_cast<Family>(f)) : "other",
-                outcome_name(static_cast<Outcome>(o)), static_cast<ull>(now.shaders[f][o]));
-            shaders += item;
-        }
-    char tail[200];
-    std::snprintf(tail, sizeof(tail), " frame_refusals=%llu | target created=%llu failed=%llu | captures=%llu images=%llu capture_failed=%llu",
-        static_cast<ull>(now.frame_refusals), static_cast<ull>(now.target_created), static_cast<ull>(now.target_failed),
-        static_cast<ull>(now.captures), static_cast<ull>(now.images), static_cast<ull>(now.capture_failed));
-    shaders += tail;
-    emit(user, shaders.c_str());
-    reported = now;
+void prepare_shader(void* pack, void* raw, const void* root, ShaderResult* out) noexcept try {
+    const auto& request = static_cast<RequestStorage*>(raw)->request;
+    auto storage = std::make_unique<Prepared>(
+        static_cast<RuntimeShaders*>(pack)->prepare(request, *static_cast<const ManifestEntry*>(root), reflector()));
+    *out = {storage.get(), bytes(storage->detail), storage->skin, static_cast<uint8_t>(storage->outcome)};
+    storage.release();
 } catch (...) {}
+void* create_shader(void* pack, void* raw, void* device, void* reflection, bool attach, bool* refused) noexcept {
+    const auto& api = static_cast<RuntimeShaders*>(pack)->api();
+    if (attach && api.attach_d3d11(device) != RSF_PATCH_OK) { *refused = true; return nullptr; }
+    void* shader{};
+    const auto& request = static_cast<RequestStorage*>(raw)->request;
+    auto& buffer = *static_cast<Prepared*>(reflection);
+    const auto result = api.create_d3d11(device, request.target.c_str(), {buffer.variant.data(), buffer.variant.size()}, &shader);
+    if (result == RSF_PATCH_OK) {
+        // The installed draw needs only the replacement interface.
+        std::vector<std::byte>().swap(buffer.variant);
+        buffer.stock = {};
+        buffer.entry = nullptr;
+        return shader;
+    }
+    if (shader) static_cast<IUnknown*>(shader)->Release();
+    return nullptr;
+}
+bool bind_dump(DumpApi* out) noexcept {
+    const HMODULE runtime = GetModuleHandleW(L"ReScaleFrame.Runtime.dll");
+    if (!runtime) return false;
+    const auto get = [runtime](const char* name) { return reinterpret_cast<void*>(GetProcAddress(runtime, name)); };
+    *out = {
+        reinterpret_cast<decltype(out->configure)>(get("rsf_input_dump_configure")),
+        reinterpret_cast<decltype(out->request)>(get("rsf_input_dump_request")),
+        reinterpret_cast<decltype(out->poll)>(get("rsf_input_dump_poll")),
+        reinterpret_cast<decltype(out->requested)>(get("rsf_input_dump_requested")),
+        reinterpret_cast<decltype(out->begin_record)>(get("rsf_input_dump_begin_record")),
+        reinterpret_cast<decltype(out->texture_record)>(get("rsf_input_dump_texture_record")),
+        reinterpret_cast<decltype(out->complete)>(get("rsf_input_dump_complete")),
+        reinterpret_cast<decltype(out->cancel)>(get("rsf_input_dump_cancel"))
+    };
+    return out->configure && out->request && out->poll && out->requested && out->begin_record &&
+        out->texture_record && out->complete && out->cancel;
+}
+
+const MotionPlatform platform{
+    sizeof(MotionPlatform), motion_platform_abi, &motion_device_platform(), &bind_platform,
+    {sr::backend_rt_offset, sr::backend_zb_offset, sr::backend_rt_changed_offset},
+    [](void* module, uint32_t size, const void* profile) -> const char* {
+        const char* failed = "unknown";
+        return guards_match(static_cast<std::byte*>(module), size, *static_cast<const BuildProfile*>(profile)->motion, &failed)
+            ? nullptr : failed;
+    },
+    geometry::geometry_hooks_active,
+    [](bool enabled) {
+        if (enabled) geometry::geometry_set_sink({&retirements, &geometry::RetirementQueue::sink});
+        geometry::geometry_set_flush_callback(enabled ? flush : nullptr);
+    },
+    geometry::geometry_enable_foliage_identity, install_hooks, [] { return hooks.disable(); }, [] { return hooks.created(); },
+    install_draw_hooks, window_facts, target_facts, backend, hw_context, hw_device,
+    [](void* c, void* rtv) {
+        static constexpr float zero[4]{};
+        static_cast<ID3D11DeviceContext*>(c)->ClearRenderTargetView(static_cast<ID3D11RenderTargetView*>(rtv), zero);
+    },
+    bound_shaders, set_shaders,
+    [](const rsf_anomaly_motion_device_view* view, void* c, Redraw draw, void* user) {
+        return static_cast<uint8_t>(MotionDevice::invalidate(*view, static_cast<ID3D11DeviceContext*>(c),
+            [&](ID3D11DeviceContext* context) { draw(user, context); }));
+    },
+    camera, [](float (*world)[16]) { return geometry::read_world_matrix(*world); }, snapshot,
+    [](Retire apply, void* user) -> size_t {
+        struct Sink { Retire apply; void* user; } sink{apply, user};
+        return retirements.drain([](void* u, temporal::InstanceKey key) {
+            const auto& s = *static_cast<const Sink*>(u);
+            const auto native = geometry::geometry_key(key);
+            s.apply(s.user, &native);
+        }, &sink);
+    },
+    geometry::read_vertex_constants, geometry::write_vertex_constants,
+    [](void* raw, MotionDrawState* out) {
+        D3D11_VIEWPORT viewport{};
+        UINT count = 1;
+        static_cast<ID3D11DeviceContext*>(raw)->RSGetViewports(&count, &viewport);
+        const auto jitter = sr::current_jitter_uv();
+        *out = {{viewport.TopLeftX, viewport.TopLeftY, viewport.Width, viewport.Height},
+            {jitter.current_u, jitter.current_v, jitter.previous_u, jitter.previous_v}};
+    },
+    open_pack, [](void* pack) { delete static_cast<RuntimeShaders*>(pack); },
+    [](void* pack) { set_shader_runtime(static_cast<RuntimeShaders*>(pack)->api()); },
+    [](void* pack, void* device) { static_cast<RuntimeShaders*>(pack)->api().attach_d3d11(device); },
+    [](void* pack, const wchar_t* path) { return static_cast<RuntimeShaders*>(pack)->api().dump(path); },
+    [](void* pack, PatchCounters* out) {
+        rsf_patch_counters raw{sizeof(raw), RSF_SHADER_PATCH_VERSION};
+        static_cast<RuntimeShaders*>(pack)->api().counters(&raw);
+        *out = {raw.intercepted, raw.built, raw.cache_hits, raw.refused, {}};
+        std::copy(std::begin(raw.refusals), std::end(raw.refusals), out->refusals);
+    },
+    decode_request, [](void* request) { delete static_cast<RequestStorage*>(request); },
+    copy_bytecode,
+    find_entry, prepare_shader, [](void* reflection) { delete static_cast<Prepared*>(reflection); },
+    [](void* raw, uint8_t family, FoliageLayout* out) {
+        *out = make_foliage_layout(static_cast<Family>(family), static_cast<Prepared*>(raw)->stock);
+        return out->usable;
+    },
+    [](const void* vs, const void* hs, const void* ds, const void* ps) {
+        const auto reflection = [](const void* raw) -> const Reflection& {
+            return static_cast<const Prepared*>(raw)->reflection;
+        };
+        return hs ? tess_chain_linkable(reflection(vs), reflection(hs), reflection(ds), reflection(ps)) :
+            linkable(reflection(vs), reflection(ps));
+    },
+    create_shader, [] { return sr::options().capture; }, bind_dump
+};
+
+static_assert(sizeof(WindowFacts) == 56 && sizeof(DrawFacts) == 32 && sizeof(SnapshotFacts) == 64);
+static_assert(sizeof(ShaderObjects) == 40 && sizeof(ShaderEntry) == 32 && sizeof(ShaderResult) == 32);
+static_assert(sizeof(FoliageLayout) == 108 && offsetof(FoliageLayout, xform) == 4 && offsetof(FoliageLayout, usable) == 104);
+static_assert(sizeof(MotionPlatform) == 368 && offsetof(MotionPlatform, guards) == 40);
+static_assert(sizeof(FrameTarget) == 24 && offsetof(FrameTarget, main) == 20);
+static_assert(static_cast<uint8_t>(ReplayResult::Done) == 0 && static_cast<uint8_t>(ReplayResult::SkippedNoDepthWrite) == 1);
+static_assert(RSF_PHASE_RENDER_SUBMIT == 2 && RSF_DUMP_VIEW_DENSE_MOTION == 7);
+}
+
+void configure(const wchar_t* ini, rsf_game_log_fn log, void* user) noexcept {
+    rsf_anomaly_motion_stage_configure(&platform, ini, log, user);
+}
+bool install(std::byte* module, uint32_t size, const BuildProfile& selected) noexcept {
+    return rsf_anomaly_motion_stage_install(&platform, module, size, &selected, selected.image_size(), selected.sha256);
+}
+bool quiesce() noexcept { return rsf_anomaly_motion_stage_quiesce(); }
+bool active() noexcept { return rsf_anomaly_motion_stage_enabled(); }
+void report(void (*emit)(void*, const char*), void* user) noexcept { rsf_anomaly_motion_stage_report(emit, user); }
+FrameTarget frame_target() noexcept {
+    FrameTarget target;
+    rsf_anomaly_motion_stage_frame_target(&target);
+    return target;
+}
 }

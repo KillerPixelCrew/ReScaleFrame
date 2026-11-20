@@ -18,6 +18,7 @@
 #include <cstdint>
 
 namespace rsf::anomaly::motion {
+const rsf_anomaly_motion_device_platform& motion_device_platform() noexcept;
 void set_shader_runtime(const rsf_shader_patch_api&) noexcept;
 using Microsoft::WRL::ComPtr;
 using LogFn = void (*)(void*, const char*);
@@ -53,8 +54,13 @@ public:
     // Re-issues the draw (`redraw(context)`) as the invalidation pass described above.
     template<class Redraw> ReplayResult invalidate(ID3D11DeviceContext* context, Redraw&& redraw) noexcept
     {
+        return invalidate(view(), context, static_cast<Redraw&&>(redraw));
+    }
+    template<class Redraw> static ReplayResult invalidate(const rsf_anomaly_motion_device_view& resources,
+        ID3D11DeviceContext* context, Redraw&& redraw) noexcept
+    {
         Saved saved;
-        const auto prepared = begin_replay(context, saved);
+        const auto prepared = begin_replay(resources, context, saved);
         if (prepared != ReplayResult::Done) { end_replay(context, saved); return prepared; }
         redraw(context);
         end_replay(context, saved);
@@ -76,8 +82,8 @@ private:
         UINT class_count{};
         bool modified{};
     };
-    ReplayResult begin_replay(ID3D11DeviceContext*, Saved&) noexcept;
-    void end_replay(ID3D11DeviceContext*, Saved&) noexcept;
+    static ReplayResult begin_replay(const rsf_anomaly_motion_device_view&, ID3D11DeviceContext*, Saved&) noexcept;
+    static void end_replay(ID3D11DeviceContext*, Saved&) noexcept;
     rsf_anomaly_motion_device_view view() const noexcept {
         rsf_anomaly_motion_device_view result;
         rsf_anomaly_motion_device_get(owner_, &result);

@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 //! Anomaly draw-time history and the verified b13 register layouts.
 //!
-//! The native motion stage supplies one render-thread owner, guarded draw facts
-//! and call-scoped buffer storage. The private C ABI lends camera data and
-//! previous draw data to the native stage. Rust owns the history storage.
+//! The motion stage consumes guarded draw facts and borrows previous draw data
+//! through upload. The private C ABI also serves the native contract fixtures.
 
 mod foliage;
+#[cfg(windows)]
+mod stage;
+#[cfg(any(windows, test))]
 mod window;
 
 use crate::geometry_registry_abi::rsf_anomaly_geometry_key as InstanceKey;
@@ -679,6 +681,8 @@ enum HistoryReason {
     CameraConflict = 7,
     NoPreviousInstance = 8,
     TooManyBones = 9,
+    #[cfg(windows)]
+    Foliage = 10,
     FoliageNoConstants = 11,
     FoliageNoPrevious = 12,
     FoliageLodChanged = 13,

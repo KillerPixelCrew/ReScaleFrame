@@ -15,7 +15,7 @@ use windows_sys::Win32::Security::Cryptography::{BCRYPT_SHA256_ALG_HANDLE, BCryp
 
 #[derive(Clone, Copy)]
 #[repr(C)]
-struct Span<T> {
+pub(crate) struct Span<T> {
     data: *const T,
     len: usize,
 }
@@ -31,7 +31,7 @@ impl<T> From<&[T]> for Span<T> {
 
 impl<T> Span<T> {
     // Borrow only while the native owner (or the synchronous Rust caller) keeps it alive.
-    unsafe fn as_slice<'a>(&self) -> &'a [T] {
+    pub(crate) unsafe fn as_slice<'a>(&self) -> &'a [T] {
         if self.len == 0 {
             &[]
         } else {
@@ -40,7 +40,7 @@ impl<T> Span<T> {
     }
 }
 
-type Bytes = Span<u8>;
+pub(crate) type Bytes = Span<u8>;
 
 #[derive(Clone, Copy)]
 #[repr(C)]
@@ -68,7 +68,7 @@ struct Identity {
     stage: u8,
 }
 
-fn sha256(bytes: &[u8]) -> Option<[u8; 64]> {
+pub(crate) fn sha256(bytes: &[u8]) -> Option<[u8; 64]> {
     let len = u32::try_from(bytes.len()).ok()?;
     let mut digest = [0; 32];
     let status = unsafe {

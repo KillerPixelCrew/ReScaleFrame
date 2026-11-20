@@ -89,7 +89,7 @@ impl<'a> Cache<'a> {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_motion_bind_draw(
+pub(crate) extern "C" fn rsf_anomaly_motion_bind_draw(
     state: &mut State,
     platform: &Platform,
     host: *mut c_void,
@@ -149,7 +149,7 @@ extern "C" fn rsf_anomaly_motion_bind_draw(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_motion_bind_close(
+pub(crate) extern "C" fn rsf_anomaly_motion_bind_close(
     state: &mut State,
     platform: &Platform,
     host: *mut c_void,

@@ -88,21 +88,27 @@ impl Device {
     }
 }
 
-struct Owner {
+pub(crate) struct Owner {
     platform: &'static Platform,
     device: Option<Device>,
     uploads: u64,
     upload_skips: u64,
 }
 
+impl Owner {
+    pub(crate) fn new(platform: &'static Platform) -> Self {
+        Self {
+            platform,
+            device: None,
+            uploads: 0,
+            upload_skips: 0,
+        }
+    }
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_motion_device_new(platform: &'static Platform) -> *mut Owner {
-    Box::into_raw(Box::new(Owner {
-        platform,
-        device: None,
-        uploads: 0,
-        upload_skips: 0,
-    }))
+    Box::into_raw(Box::new(Owner::new(platform)))
 }
 
 #[unsafe(no_mangle)]
@@ -120,7 +126,7 @@ extern "C" fn rsf_anomaly_motion_device_reset(owner: Option<&mut Owner>) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_motion_device_create(
+pub(crate) extern "C" fn rsf_anomaly_motion_device_create(
     owner: &mut Owner,
     device: *mut c_void,
     log: Log,
@@ -132,7 +138,7 @@ extern "C" fn rsf_anomaly_motion_device_create(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_motion_device_target(
+pub(crate) extern "C" fn rsf_anomaly_motion_device_target(
     owner: Option<&mut Owner>,
     width: u32,
     height: u32,
@@ -154,7 +160,10 @@ extern "C" fn rsf_anomaly_motion_device_target(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_motion_device_get(owner: Option<&Owner>, out: &mut MaybeUninit<View>) {
+pub(crate) extern "C" fn rsf_anomaly_motion_device_get(
+    owner: Option<&Owner>,
+    out: &mut MaybeUninit<View>,
+) {
     let out = out.write(View::default());
     let Some(owner) = owner else { return };
     out.uploads = owner.uploads;
@@ -172,7 +181,7 @@ extern "C" fn rsf_anomaly_motion_device_get(owner: Option<&Owner>, out: &mut May
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_motion_device_upload(
+pub(crate) extern "C" fn rsf_anomaly_motion_device_upload(
     owner: Option<&mut Owner>,
     context: *mut c_void,
     kind: i32,

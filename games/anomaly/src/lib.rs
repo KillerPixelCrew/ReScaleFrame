@@ -20,6 +20,8 @@ mod motion_device;
 mod motion_device_abi;
 mod motion_target;
 mod motion_target_abi;
+mod native_geometry;
+mod native_geometry_abi;
 #[cfg(windows)]
 mod native_observer;
 #[cfg(windows)]
