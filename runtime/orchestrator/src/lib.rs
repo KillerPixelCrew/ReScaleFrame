@@ -79,6 +79,8 @@ mod gl_pipeline_abi;
 #[cfg(windows)]
 mod input_dump;
 #[cfg(windows)]
+mod input_dump_vulkan;
+#[cfg(windows)]
 mod latency_antilag;
 #[cfg(windows)]
 mod latency_lease;
