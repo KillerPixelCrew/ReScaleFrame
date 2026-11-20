@@ -56,6 +56,7 @@ FetchContent_Declare(minhook
 FetchContent_MakeAvailable(minhook)
 
 include(CTest)
+include(cmake/rust_static.cmake)
 add_subdirectory(sdk/game)
 add_subdirectory(loader)
 add_subdirectory(runtime/contract)

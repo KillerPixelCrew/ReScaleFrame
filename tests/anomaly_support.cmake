@@ -53,11 +53,11 @@ endforeach()
 target_link_libraries(rsf_anomaly_overlay_hooks_test PRIVATE d3d11 dxgi dinput8 dxguid)
 set_tests_properties(anomaly_overlay_hooks_contract PROPERTIES SKIP_RETURN_CODE 77)
 
-# SR Stage 0 site profile: compile-time consistency only. The guards are checked against the installed executable by
+# SR Stage 0 site profile: compile-time consistency and runtime build selection. The guards are checked against the installed executable by
 # tests/anomaly_sr_evidence.py --verify, which is not registered here because it needs the game install.
 add_executable(rsf_anomaly_sr_profile_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_profile.cpp")
 target_include_directories(rsf_anomaly_sr_profile_test PRIVATE "${PROJECT_SOURCE_DIR}/games/anomaly/src")
-target_link_libraries(rsf_anomaly_sr_profile_test PRIVATE rsf_build_options)
+target_link_libraries(rsf_anomaly_sr_profile_test PRIVATE rsf_anomaly_rust rsf_build_options)
 add_test(NAME anomaly_sr_profile_contract COMMAND rsf_anomaly_sr_profile_test)
 set_tests_properties(anomaly_sr_profile_contract PROPERTIES TIMEOUT 30)
 

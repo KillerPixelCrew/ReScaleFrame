@@ -21,8 +21,9 @@ add_library(rsf_game_anomaly SHARED src/plugin.cpp src/bootstrap.cpp src/native_
     src/native_geometry.cpp src/geometry_feed.cpp
     src/overlay_input_gate.cpp src/overlay_hooks.cpp src/overlay_service.cpp
     src/sr_swap.cpp src/sr_d3d11.cpp src/sr_stage.cpp)
+rsf_add_rust_static(rsf_anomaly_rust rsf_rust_anomaly rsf-anomaly rsf_anomaly)
 target_include_directories(rsf_game_anomaly PRIVATE "${PROJECT_SOURCE_DIR}/runtime/orchestrator/include")
-target_link_libraries(rsf_game_anomaly PRIVATE ReScaleFrame::GameSDK ReScaleFrame::Contract ReScaleFrame::RuntimeCommon minhook rsf_build_options)
+target_link_libraries(rsf_game_anomaly PRIVATE rsf_anomaly_rust ReScaleFrame::GameSDK ReScaleFrame::Contract ReScaleFrame::RuntimeCommon minhook rsf_build_options)
 # Stage 1 uses only the generic immediate-context state scope (d3d11_state) and the texture-dump view enum header.
 target_link_libraries(rsf_game_anomaly PRIVATE ReScaleFrame::Graphics rsf_anomaly_sr_shaders d3d11)
 set_target_properties(rsf_game_anomaly PROPERTIES OUTPUT_NAME "ReScaleFrame.Game.Anomaly")

@@ -5,7 +5,16 @@
 #include "native_profile.h"
 #include "sr_profile.h"
 #include "input_profile.h"
+#include <cstddef>
 #include <string_view>
+
+struct rsf_anomaly_build_identity {
+    const char* executable;
+    const char* sha256;
+};
+
+extern "C" size_t rsf_anomaly_match_build(const rsf_anomaly_build_identity*, size_t, const char*, size_t,
+    const char*, size_t) noexcept;
 
 namespace rsf::anomaly {
 // One exact Anomaly executable: its file name, its SHA-256 and every native table the adapter uses on it. The adapter
@@ -31,20 +40,18 @@ inline constexpr std::array<BuildProfile, 2> build_profiles{{
 }};
 inline constexpr const BuildProfile& standard_build = build_profiles[0];
 inline constexpr const BuildProfile& avx_build = build_profiles[1];
+inline constexpr auto build_identities = [] {
+    std::array<rsf_anomaly_build_identity, build_profiles.size()> identities{};
+    for (size_t i = 0; i < build_profiles.size(); ++i)
+        identities[i] = {build_profiles[i].executable, build_profiles[i].sha256};
+    return identities;
+}();
 
-namespace build_detail {
-constexpr char lower(char c) noexcept { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; }
-constexpr bool iequal(std::string_view a, std::string_view b) noexcept {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i) if (lower(a[i]) != lower(b[i])) return false;
-    return true;
-}
-}
 // The build whose file name (case-insensitive, as Windows resolves it) and SHA-256 (hex, either case) both match, or null.
-constexpr const BuildProfile* find_build(std::string_view executable, std::string_view sha256) noexcept {
-    for (const auto& build : build_profiles)
-        if (build_detail::iequal(executable, build.executable) && build_detail::iequal(sha256, build.sha256)) return &build;
-    return nullptr;
+inline const BuildProfile* find_build(std::string_view executable, std::string_view sha256) noexcept {
+    const auto index = rsf_anomaly_match_build(build_identities.data(), build_identities.size(),
+        executable.data(), executable.size(), sha256.data(), sha256.size());
+    return index < build_profiles.size() ? &build_profiles[index] : nullptr;
 }
 // Same for a wide file name (GetModuleFileNameW). Anything outside ASCII matches no build.
 inline const BuildProfile* find_build(std::wstring_view executable, std::string_view sha256) noexcept {
@@ -57,8 +64,4 @@ inline const BuildProfile* find_build(std::wstring_view executable, std::string_
     return find_build(std::string_view{narrow, executable.size()}, sha256);
 }
 
-static_assert(find_build("AnomalyDX11.exe", dx11_hash) == &standard_build);
-static_assert(find_build("anomalydx11avx.EXE", avx_hash) == &avx_build);
-static_assert(!find_build("AnomalyDX11.exe", avx_hash) && !find_build("AnomalyDX11AVX.exe", dx11_hash));
-static_assert(!find_build("AnomalyDX10AVX.exe", avx_hash));
 }

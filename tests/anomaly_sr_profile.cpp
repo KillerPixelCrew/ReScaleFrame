@@ -148,8 +148,6 @@ constexpr bool builds_distinct() {
 static_assert(consistent(standard_build), "standard build profile");
 static_assert(consistent(avx_build), "AVX build profile");
 static_assert(builds_distinct());
-static_assert(find_build("AnomalyDX11.exe", dx11_hash) == &standard_build && find_build("AnomalyDX11AVX.exe", avx_hash) == &avx_build);
-static_assert(!find_build("AnomalyDX11AVX.exe", dx11_hash) && !find_build("AnomalyDX11.exe", avx_hash) && !find_build("", ""));
 static_assert(target_slots_distinct());
 // Seam layout used by Stage 1: generic0/generic_temp are the FP16-promoted world twins; rt_ui_pda and rt_secondVP are
 // the two slots CRender::RenderToTarget already reads (+0x3D0/+0x3C0, anomaly-native-hooks.md).

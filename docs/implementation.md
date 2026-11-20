@@ -9,8 +9,7 @@ focused MSVC contracts passed in Debug and Release, covering plugin
 lifecycle, cold-start refusal, native hooks, the D3D11 host, SR and overlay
 API wiring, FG settings, and Standard and AVX input hooks and events.
 The SR API and D3D11 host fixtures load the Runtime DLL. The stubbed
-engine and overlay fixtures verify only the adapter contracts. Anomaly
-hardware and game validation remain pending before its Rust cutover.
+engine and overlay fixtures verify the adapter contracts.
 The read-only SR evidence verifier also passed against the installed
 Anomaly 1.5.3 Standard and AVX executables. It checked 17 function guards,
 6 call-site guards, 7 extended guards, 6 first-person sites and 26
@@ -24,6 +23,20 @@ AVX evaluated DLSS and presented DLSS-G before and after a resize and
 exited normally. Release D3D11 and D3D12 sharpening device fixtures passed.
 The matched run, evidence paths and remaining acceptance gaps are in
 [the C++ adapter baseline](research/rust-anomaly-cpp-baseline.md).
+
+The Anomaly adapter now builds its own Rust static library. Rust builds
+the versioned plugin API and matches exact executable names and hashes
+for both DLL detection and the bootstrap and observer's native profile
+selection. These callers derive their identity list from the existing
+native build profiles. The C++ boundary supplies the verified native
+hook callbacks. The DLL keeps the same three export names and ordinals
+and resolves its single existing Runtime at startup.
+
+The profile-selection, plugin, lifecycle, cold bootstrap, SR API and
+both input-hook CPU contracts passed in MSVC Debug and Release.
+All 216 locked Rust tests, formatting, Clippy, the four Runtime/carrier
+export inventories and the Anomaly export comparison passed. The live
+evidence above applies to the earlier C++ adapter revision.
 
 The first source inspection found that the public frame sequencer opened a rendered
 frame and assigned its provenance under separate locks. Direct callers could read

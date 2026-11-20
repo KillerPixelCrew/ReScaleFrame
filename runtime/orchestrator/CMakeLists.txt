@@ -47,27 +47,7 @@ add_library(rsf_orchestrator_core OBJECT
 target_include_directories(rsf_orchestrator_core PUBLIC include)
 target_compile_definitions(rsf_orchestrator_core PUBLIC RSF_RUNTIME_BUILD)
 target_link_libraries(rsf_orchestrator_core PUBLIC rsf_native_cpu)
-find_program(RSF_CARGO cargo REQUIRED)
-if(MSVC)
-    set(rsf_rust_target x86_64-pc-windows-msvc)
-else()
-    set(rsf_rust_target x86_64-pc-windows-gnu)
-endif()
-set(rsf_cargo_dir "${CMAKE_BINARY_DIR}/cargo")
-set(rsf_rust_profile "$<IF:$<CONFIG:Debug>,debug,release>")
-set(rsf_rust_archive "${rsf_cargo_dir}/${rsf_rust_target}/${rsf_rust_profile}/${CMAKE_STATIC_LIBRARY_PREFIX}rsf_orchestrator${CMAKE_STATIC_LIBRARY_SUFFIX}")
-add_custom_target(rsf_rust_core
-    COMMAND "${RSF_CARGO}" build --locked -p rsf-orchestrator
-        --target ${rsf_rust_target} --target-dir "${rsf_cargo_dir}" $<$<NOT:$<CONFIG:Debug>>:--release>
-    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
-    BYPRODUCTS "${rsf_rust_archive}"
-    COMMAND_EXPAND_LISTS VERBATIM)
-add_library(rsf_orchestrator_rust INTERFACE)
-add_dependencies(rsf_orchestrator_rust rsf_rust_core)
-target_link_libraries(rsf_orchestrator_rust INTERFACE "${rsf_rust_archive}" ntdll userenv ws2_32 dbghelp)
-if(MSVC)
-    target_link_libraries(rsf_orchestrator_rust INTERFACE synchronization)
-endif()
+rsf_add_rust_static(rsf_orchestrator_rust rsf_rust_core rsf-orchestrator rsf_orchestrator)
 target_link_libraries(rsf_orchestrator_core PUBLIC rsf_orchestrator_rust)
 target_link_libraries(rsf_native_cpu PRIVATE rsf_orchestrator_rust)
 target_link_libraries(rsf_frame_dump PRIVATE rsf_orchestrator_rust)

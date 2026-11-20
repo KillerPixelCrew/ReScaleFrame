@@ -28,6 +28,12 @@ FG activation and refusal-free settings changes, as well as eight game
 backbuffer captures from the panel open and close events. The AVX folder
 contains before/after resize images and separate engine and adapter logs.
 
+In the same 270×330 wall region outside the overlay in the three Standard
+window captures, mean RGB was (28.003, 22.824, 20.776) for RCAS,
+(28.010, 22.817, 20.750) for Depth RCAS and (28.345, 23.097, 21.001)
+for Depth DAS. Mean B/R was 0.74192, 0.74081 and 0.74092, respectively.
+These are display-pixel samples from separate frames in one fixed view.
+
 ## Device and focused evidence
 
 The Release D3D11 `sharpening` and D3D12 `sharpening_d3d12` fixtures passed.
