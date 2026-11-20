@@ -434,6 +434,21 @@ matched. The isolated worker also built linked Godot and verified the
 FSR4-disabled Runtime. Device synchronization and game behavior remain open.
 See [the split Vulkan FSR4 cutover audit](research/rust-vulkan-fsr4-sr-cutover.md).
 
+Vulkan XeSS SR now owns SDK and context lifetime, render-size admission,
+private input and output images, temporal reset, captures and teardown in
+Rust. It uses the Vulkan image allocator shared with DLSS SR and FG.
+A refused evaluation clears history and leaves the caller's output for
+spatial recovery. Captures require proof that the retired command buffer
+executed the copy.
+
+Ten focused CPU contracts passed in MSVC Debug and Release, including
+XeSS range and allocation checks and the sibling Vulkan providers.
+All 211 locked Rust tests, formatting and Clippy passed. Runtime, both
+carriers and Minecraft Release exports matched. The worker also built
+the linked Godot DLL and verified the header-disabled Runtime. GPU and
+game validation remain open.
+See [the XeSS SR cutover audit](research/rust-xess-vulkan-sr-cutover.md).
+
 The Vulkan DLSS SR owner now manages its SDK lease, preset, temporal history
 and private images in Rust. It shares Vulkan image allocation with FG and
 publishes the engine output only after accepted SDK evaluation. A refused

@@ -85,7 +85,8 @@ struct FfxOps {
     void (*flush_capture)(FfxNative*);
 };
 struct Platform {
-    LegacyOps dlss, xess;
+    LegacyOps dlss;
+    const rsf::xess_vk::Ops* xess;
     FfxOps ffx;
     int32_t (*fallback_probe)(const rsf_srvk_fallback*, Blit*);
     int32_t (*fallback_record)(const rsf_srvk_fallback*, const Blit*);
@@ -93,7 +94,7 @@ struct Platform {
     int32_t (*dump_wants)(const rsf_frame_record*);
     void (*dump_result)(const rsf_frame_record*, const char*, uint32_t, int32_t);
 };
-static_assert(sizeof(Platform) == 320 && sizeof(Blit) == 24 && sizeof(Version) == 24);
+static_assert(sizeof(Platform) == 280 && sizeof(Blit) == 24 && sizeof(Version) == 24);
 static_assert(sizeof(FfxDispatch) == 144 && offsetof(FfxDispatch, reset) == 136);
 static_assert(VK_FORMAT_R8_UNORM == 9 && VK_FORMAT_R16G16_SFLOAT == 83 &&
     VK_FORMAT_R16G16B16A16_SFLOAT == 97 && VK_FORMAT_R32_SFLOAT == 100 && VK_FORMAT_D32_SFLOAT == 126);
@@ -482,9 +483,7 @@ constexpr Platform native{
     {legacy_create<rsf_dlssvk, rsf_dlssvk_create>, legacy_call<rsf_dlssvk, rsf_dlssvk_plan>,
         legacy_call<rsf_dlssvk, rsf_dlssvk_evaluate>, legacy_call<rsf_dlssvk, rsf_dlssvk_destroy>,
         legacy_retire<rsf_dlssvk, rsf_dlssvk_retire_commands>, legacy_call<rsf_dlssvk, rsf_dlssvk_preset>},
-    {legacy_create<rsf_xessvk, rsf_xessvk_create>, legacy_call<rsf_xessvk, rsf_xessvk_plan>,
-        legacy_call<rsf_xessvk, rsf_xessvk_evaluate>, legacy_call<rsf_xessvk, rsf_xessvk_destroy>,
-        legacy_retire<rsf_xessvk, rsf_xessvk_retire_commands>, nullptr},
+    rsf::xess_vk::platform,
     {open, [](FfxNative* owner) { delete owner; }, initialize_graphics, versions, create_effect,
         effective_version, destroy_effect, plan, allocate, release, initialize_mask, initialize_output, dispatch, copy_output,
         [](FfxNative* owner, const rsf_srvk_setup* setup, void* commands, const rsf_srvk_frame* frame, uint64_t output) -> int32_t {

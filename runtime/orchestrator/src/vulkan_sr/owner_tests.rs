@@ -82,7 +82,7 @@ macro_rules! leaf {
     }};
 }
 
-static PLATFORM: Platform = Platform {
+pub(super) static PLATFORM: Platform = Platform {
     dlss: LegacyOps {
         create: leaf!(|setup: &Setup, out: &mut Handle| -> i32 {
             *out = setup.device;
@@ -102,14 +102,7 @@ static PLATFORM: Platform = Platform {
             if preset == 11 { 0 } else { INVALID }
         })),
     },
-    xess: LegacyOps {
-        create: leaf!(|_: &Setup, _: &mut Handle| -> i32 { NOT_COMPILED }),
-        plan: leaf!(|_: Handle, _: &mut u32, _: &mut u32| -> i32 { NOT_COMPILED }),
-        evaluate: leaf!(|_: Handle, _: Handle, _: &Frame| -> i32 { NOT_COMPILED }),
-        destroy: leaf!(|_: Handle| -> i32 { NOT_COMPILED }),
-        retire_commands: leaf!(|_: Handle, _: Handle| -> () {}),
-        preset: None,
-    },
+    xess: Some(&super::xess::tests::OPS),
     ffx: FfxOps {
         open: leaf!(|setup: &Setup, out: &mut Handle| -> i32 {
             *out = setup.device;
