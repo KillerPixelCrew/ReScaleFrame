@@ -30,6 +30,8 @@ mod overlay;
 mod overlay_abi;
 #[cfg(windows)]
 mod shader_loader;
+mod sr_swap;
+mod sr_swap_abi;
 mod sr_temporal;
 
 use rsf_game_sys::{

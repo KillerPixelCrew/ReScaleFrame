@@ -7,6 +7,8 @@
 #include "motion_stage.h"
 #include "sr_d3d11.h"
 #include "build_profile.h"
+#include "sr_jitter.h"
+#include "sr_plan.h"
 #include "sr_swap.h"
 #include "sr_reconstruction.h"
 #include "sr_temporal.h"

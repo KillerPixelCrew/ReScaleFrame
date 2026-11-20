@@ -61,3 +61,27 @@ resize, moving-game output and measured latency remain unverified for this
 revision. Scope hold, capture and development diagnostics use cold INI
 settings. The panel continues to expose the bridge and shared frontend
 settings.
+
+## Standard game checkpoint
+
+On `9b304d1`, a separate copy of the Standard 1.5.3 game loaded the
+existing autosave on an RTX 4070 Laptop GPU. The executable hash matched
+the Standard profile. The test used the merged adapter and Runtime,
+the baseline carrier and panel, and the matching motion pack. It ran
+windowed at 1280×720 with `SRStage=0`, `SR=0`, motion enabled and DLSS-G
+requested. The installed game and the earlier C++ baseline were untouched.
+
+The adapter reported 21,930 level frames with HUD-less tags and accepted
+FG inputs, and zero `no_inputs` refusals in its periodic windows. The motion
+stage reported successful variant cache hits, paired shader draws and
+stock-shader restores. DLSS-G reported an effective requested mode and
+`active=0` throughout the saved status records. This verifies the native-size
+handoff in game. Generated presentation and live image comparison are
+still open. VSync was enabled and the game remained in the background.
+
+Windows refused the foreground transition before input was delivered.
+The game ignored a window close request, so the test harness stopped its
+own disposable process. Its exit code was `-1`. Overlay open/close, input
+resumption and normal teardown remain open on the migrated adapter.
+Artifact hashes, configuration and logs are in
+`.local/anomaly/staging/live-rust-fg-overlay/evidence/`.

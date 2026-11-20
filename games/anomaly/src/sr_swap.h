@@ -19,47 +19,43 @@
 // bias lowered through SetMipLODBias. Every exit path restores them with the twins.
 //
 // Every other exit (end of phase_combine without a seam, a stale window at the next prepare, end of frame, shutdown, a
-// failed write) also restores. This file has no D3D or Windows dependency so the state machine is tested on fake
-// layouts (tests/anomaly_sr_swap.cpp).
-#include "sr_jitter.h"
-#include "sr_plan.h"
-#include <array>
+// failed write, a refused sun cascade) also restores. The state machine is owned by sr_swap.rs. SwapController forwards
+// each hook to it and lends a SwapHost's guarded engine copies and D3D/engine calls as its platform, so the contract is
+// tested on fake layouts (tests/anomaly_sr_swap.cpp) through the production owner.
+#include "sr_swap_platform.h"
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+
+// Field-wise equality of the shared record (padding is not compared).
+inline bool operator==(const rsf_anomaly_swap_fields& a, const rsf_anomaly_swap_fields& b) noexcept {
+    return a.surface == b.surface && a.rtv == b.rtv && a.dsv == b.dsv && a.uav == b.uav && a.width == b.width &&
+        a.height == b.height && a.format == b.format && a.texture_surface == b.texture_surface &&
+        a.desc_cache == b.desc_cache && std::memcmp(a.desc, b.desc, sizeof(a.desc)) == 0 && a.srv == b.srv;
+}
 
 namespace rsf::anomaly::sr {
-inline constexpr std::size_t texture2d_desc_size = 44;   // D3D11_TEXTURE2D_DESC, cached in CTexture::desc
+inline constexpr std::size_t texture2d_desc_size = RSF_ANOMALY_SWAP_DESC_SIZE;
 inline constexpr uint32_t d3dfmt_a8r8g8b8 = 21, d3dfmt_a16b16g16r16f = 113;
 
-// The swapped values of one render target: its CRT record and the CTexture it is bound through.
-struct TargetFields {
-    void* surface{};
-    void* rtv{};
-    void* dsv{};
-    void* uav{};
-    uint32_t width{}, height{}, format{};   // CRT dwWidth, dwHeight, fmt (D3DFORMAT)
-    void* texture_surface{};                // CTexture::pSurface
-    void* desc_cache{};                     // CTexture::desc_cache
-    std::array<std::byte, texture2d_desc_size> desc{};
-    void* srv{};                            // CTexture::m_pSRView
-    bool operator==(const TargetFields&) const = default;
-};
-// One engine target: where its CRT and CTexture live, and the values read from them. `present` is false for an
-// optional target whose ref_rt is null.
-struct EngineTarget {
-    std::byte* crt{};
-    std::byte* texture{};
-    TargetFields fields;
-    bool present{};
-};
+// The swapped values of one render target (sr_swap_platform.h).
+using TargetFields = rsf_anomaly_swap_fields;
+// One engine target, its CRT and CTexture and the values read from them.
+using EngineTarget = rsf_anomaly_swap_target;
+// What H1 read for this frame. A zero `stage` means Stage 1.
+using FrameFacts = rsf_anomaly_swap_facts;
+using TwinSpec = rsf_anomaly_swap_spec;
+using TwinRequest = rsf_anomaly_swap_request;
+using TwinSet = rsf_anomaly_swap_twins;
+using UpscaleInputs = rsf_anomaly_swap_upscale;
+using SwapCounters = rsf_anomaly_swap_counters;
 
 // Order of sr_world_targets (sr_profile.h). Stage 1 uses the first stage1_slot_count slots.
 enum class Slot : uint8_t { Generic0, GenericTemp, Position, Albedo, Accumulator, Generic1, Generic2, HalfDepth, SsaoTemp, Count };
-inline constexpr std::size_t slot_count = static_cast<std::size_t>(Slot::Count);
-inline constexpr std::size_t stage1_slot_count = 2;
+inline constexpr std::size_t slot_count = RSF_ANOMALY_SWAP_SLOT_COUNT;
+inline constexpr std::size_t stage1_slot_count = RSF_ANOMALY_SWAP_STAGE1_SLOT_COUNT;
 inline constexpr std::size_t slot_index(Slot slot) noexcept { return static_cast<std::size_t>(slot); }
-// Slots whose twins are R16G16B16A16_FLOAT regardless of the engine format (the S-B colour and its copy partner).
-inline constexpr bool slot_promoted(std::size_t slot) noexcept { return slot < stage1_slot_count; }
+static_assert(static_cast<std::size_t>(Slot::Count) == slot_count);
 
 // Why an H1 call did not open a window.
 enum class Skip : uint8_t {
@@ -77,79 +73,29 @@ enum class Restore : uint8_t {
     CombineEnd,    // phase_combine returned with the window open: the seam did not fire; refuses further swaps
     StalePrepare,  // the next H1 found the window still open
     Shutdown,      // quiesce/stop or capture teardown
-    Rollback,      // an exchange write failed part way
+    Rollback,      // an exchange or sun cascade write failed: refuses further swaps
     FrameEnd,      // IRenderDeviceRender::End found the window open (defensive; combine_end should have run)
     Count
 };
+static_assert(static_cast<uint32_t>(Skip::Depth) == RSF_ANOMALY_SWAP_SKIP_DEPTH &&
+    static_cast<uint32_t>(Skip::Count) == RSF_ANOMALY_SWAP_SKIP_COUNT);
+static_assert(static_cast<uint32_t>(Restore::Rollback) == RSF_ANOMALY_SWAP_RESTORE_ROLLBACK &&
+    static_cast<uint32_t>(Restore::FrameEnd) == RSF_ANOMALY_SWAP_RESTORE_FRAME_END &&
+    static_cast<uint32_t>(Restore::Count) == RSF_ANOMALY_SWAP_RESTORE_COUNT);
 const char* skip_name(Skip) noexcept;
 const char* restore_name(Restore) noexcept;
 
-struct FrameFacts {
-    std::byte* render_target{};    // CRenderTarget* passed to phase_scene_prepare
-    std::byte* backend{};          // &RCache, for the texture-slot cache invalidation; null skips it
-    uint64_t device{};             // HW.pDevice identity
-    uint64_t generation{};         // reset generation (native observer)
-    uint32_t device_width{}, device_height{};   // Device.dwWidth/dwHeight at H1: the output size
-    bool scope{}, msaa{};
-    // Stage 2. stage 1 ignores everything below.
-    uint32_t stage{1};
-    uint32_t render_width{}, render_height{};   // from make_plan(device size, SRScale)
-    std::byte* device_size{};      // &Device.dwWidth (dwHeight follows at +4)
-    std::byte* base_zb{};          // &HW.pBaseZB
-    std::byte* base_rt{};          // &HW.pBaseRT
-    std::byte* ssao_viewport{};    // &set_viewport's static D3D11_VIEWPORT; null leaves it alone
-    std::byte* ssao_viewport_guard{};
-    // Stage 3 (section 11), applied only when the stage 2 window opens. stage stays 2: the swap is identical.
-    bool jitter{};                 // jitter Device.mProject by (jitter_x, jitter_y) render pixels (+X right, +Y down)
-    float jitter_x{}, jitter_y{};
-    std::byte* device_view{};      // &Device.mView, &Device.mProject, &Device.mFullTransform (Fmatrix, 64 bytes each)
-    std::byte* device_project{};
-    std::byte* device_full_transform{};
-    bool mip_bias{};               // add mip_bias_delta to the sampler cache's bias for the window
-    float mip_bias_delta{};
-    std::byte* sampler_bias{};     // &SSManager.m_uiMipLODBias: read only, changed through SwapHost::set_mip_bias
-};
-
-// What the host must create on a twin-key change.
-struct TwinSpec {
-    bool present{};
-    uint32_t width{}, height{};
-    bool promote{};                // R16G16B16A16_FLOAT instead of the engine format
-};
-struct TwinRequest {
-    uint32_t stage{1};
-    std::array<EngineTarget, slot_count> engine{};
-    std::array<TwinSpec, slot_count> spec{};
-    void* engine_dsv{};            // stage 2: HW.pBaseZB, validated by the host
-    void* engine_rtv{};            // stage 2: HW.pBaseRT (the back buffer view)
-    uint32_t render_width{}, render_height{}, output_width{}, output_height{};
-};
-struct TwinSet {
-    std::array<TargetFields, slot_count> targets{};
-    void* depth_dsv{};             // stage 2 depth twin: D24_UNORM_S8_UINT view of an R24G8_TYPELESS texture
-    void* depth_srv{};             // R24_UNORM_X8_TYPELESS view of the same texture
-    uint32_t depth_width{}, depth_height{};
-    void* base_rt{};               // stage 2: render-size scratch RTV standing in for HW.pBaseRT inside the window
-};
 enum class MakeResult : uint8_t {
     Created,
     Failed,     // allocation or shader creation failed: stay stock until the twin key changes
     Depth,      // stage 2: the engine depth view is not usable; refuse
     Refused,    // an engine target is not twinnable (format/shape); refuse
 };
-// The seam pass of Stage 2: render-size inputs, output-size engine targets.
-struct UpscaleInputs {
-    const TargetFields* generic0_twin{};    // FP16, engine low tonemap space
-    const TargetFields* position_twin{};
-    const TargetFields* generic1_twin{};
-    void* depth_srv{};
-    const TargetFields* generic0{};         // engine UNORM8 originals at output size
-    const TargetFields* position{};
-    const TargetFields* generic1{};
-    void* engine_dsv{};
-    uint32_t render_width{}, render_height{}, output_width{}, output_height{};
-};
+static_assert(static_cast<uint32_t>(MakeResult::Failed) == RSF_ANOMALY_SWAP_MAKE_FAILED &&
+    static_cast<uint32_t>(MakeResult::Depth) == RSF_ANOMALY_SWAP_MAKE_DEPTH &&
+    static_cast<uint32_t>(MakeResult::Refused) == RSF_ANOMALY_SWAP_MAKE_REFUSED);
 
+// The native leaf: guarded engine copies and the D3D11 and engine calls the owner sequences.
 class SwapHost {
 public:
     // Engine memory access. Production guards both against access violations.
@@ -175,27 +121,15 @@ protected:
     ~SwapHost() = default;
 };
 
-struct SwapCounters {
-    uint64_t prepares{}, eligible{}, swapped{}, seams{}, seams_without_window{}, round_trips{}, round_trip_failures{};
-    uint64_t combine_ends{}, rm_near_in_window{}, twin_generations{}, twin_drops{}, foreign_changes{}, write_faults{};
-    uint64_t allocation_failures{}, viewports{}, ssao_viewport_swaps{};
-    // Stage 3. jittered: windows whose main projection carries the jitter. fp_*: rmNear calls inside a jittered window
-    // (jittered a freshly built first-person projection / found one the adapter already wrote / left an unknown one).
-    uint64_t jittered{}, jitter_invalid{}, fp_jittered{}, fp_already{}, fp_foreign{}, projection_restores{};
-    uint64_t mip_applied{}, mip_restored{}, mip_unchanged{};
-    uint64_t sun_calls{}, sun_unjittered{}, sun_restored{}, sun_refused{};
-    uint64_t position_corrected{}, position_stock{}, position_refused{};
-    std::array<uint64_t, static_cast<std::size_t>(Skip::Count)> skipped{};
-    std::array<uint64_t, static_cast<std::size_t>(Restore::Count)> restores{};
-};
-
+// The hooks' handle on the Rust owner. Render thread only, under the SR stage guard. `host` outlives the controller.
 class SwapController {
 public:
-    explicit SwapController(SwapHost& host) noexcept : host_(host) {}
+    explicit SwapController(SwapHost& host) noexcept;
+    ~SwapController();
     SwapController(const SwapController&) = delete;
     SwapController& operator=(const SwapController&) = delete;
     // false: every prepare is skipped as Off and the engine is never touched (capture-only stock runs).
-    void set_swap_enabled(bool enabled) noexcept { swap_enabled_ = enabled; }
+    void set_swap_enabled(bool enabled) noexcept;
     // Restores a window left open by an earlier frame (counted as StalePrepare). The H1 hook calls this before it
     // reads Device.dwWidth for the next FrameFacts; prepare() does it too.
     void close_stale() noexcept;
@@ -210,113 +144,43 @@ public:
     // Before IRenderDeviceRender::End. Restores and refuses when a window survived the whole frame.
     void frame_end() noexcept;
     // CRender::rmNear, after the original (the shared geometry slot). Counted inside the window; with Stage 3 jitter
-    // it jitters a freshly built first-person projection once (first_person_action, sr_jitter.h).
+    // it jitters a freshly built first-person projection once.
     void rm_near() noexcept;
     // Around CRender::render_sun_cascades: fit shadows to the saved main camera, then restore the exact jittered pair
-    // and upload it through set_P. The token is true only when begin suspended jitter; pass it once to end.
+    // and upload it through set_P. The token is true only when begin suspended jitter; pass it once to end. A refusal
+    // closes the window and returns the engine to output size.
     bool sun_cascades_begin() noexcept;
     void sun_cascades_end(bool suspended) noexcept;
     // After the engine binder uploads stock values, correct its constant for the jittered G-buffer camera.
     void position_constant_setup(void* constant) noexcept;
     // Stage 3 state of the open (or last) window.
-    bool jitter_applied() const noexcept { return projection_.applied; }
-    bool mip_bias_applied() const noexcept { return bias_.applied; }
-    float window_mip_bias() const noexcept { return bias_.window; }
-    float saved_mip_bias() const noexcept { return bias_.saved; }
+    bool jitter_applied() const noexcept { return view_->jitter_applied; }
+    bool mip_bias_applied() const noexcept { return view_->mip_bias_applied; }
+    float window_mip_bias() const noexcept { return view_->window_mip_bias; }
+    float saved_mip_bias() const noexcept { return view_->saved_mip_bias; }
     // Restore if open, then drop the twins. Safe at any time on the render thread.
     void shutdown() noexcept;
-    bool window_open() const noexcept { return open_; }
-    bool refused() const noexcept { return refusal_ != nullptr; }
-    const char* refusal() const noexcept { return refusal_; }
-    uint64_t twin_generation() const noexcept { return counters_.twin_generations; }
-    const SwapCounters& counters() const noexcept { return counters_; }
+    bool window_open() const noexcept { return view_->open; }
+    bool refused() const noexcept { return view_->refusal != nullptr; }
+    const char* refusal() const noexcept { return view_->refusal; }
+    uint64_t twin_generation() const noexcept { return view_->counters.twin_generations; }
+    // Owned by the Rust state and updated by every call; a held reference sees later counts.
+    const SwapCounters& counters() const noexcept { return view_->counters; }
     // The engine fields saved at the last exchange (valid while the window is open) and the current twins.
-    const std::array<EngineTarget, slot_count>& engine() const noexcept { return engine_; }
-    const std::array<TargetFields, slot_count>& twins() const noexcept { return twins_.targets; }
-    const TwinSet& twin_set() const noexcept { return twins_; }
+    using Targets = EngineTarget[slot_count];
+    using Twins = TargetFields[slot_count];
+    const Targets& engine() const noexcept { return view_->engine; }
+    const Twins& twins() const noexcept { return view_->twins.targets; }
+    const TwinSet& twin_set() const noexcept { return view_->twins; }
     // Stage and sizes of the last window that opened (diagnostics and capture records).
-    uint32_t stage() const noexcept { return stage_; }
-    uint32_t render_width() const noexcept { return render_width_; }
-    uint32_t render_height() const noexcept { return render_height_; }
-    uint32_t output_width() const noexcept { return output_width_; }
-    uint32_t output_height() const noexcept { return output_height_; }
+    uint32_t stage() const noexcept { return view_->stage; }
+    uint32_t render_width() const noexcept { return view_->render_width; }
+    uint32_t render_height() const noexcept { return view_->render_height; }
+    uint32_t output_width() const noexcept { return view_->output_width; }
+    uint32_t output_height() const noexcept { return view_->output_height; }
 
 private:
-    struct TwinKey {
-        uint32_t stage{};
-        std::byte* render_target{};
-        std::array<std::byte*, slot_count> crt{};
-        std::array<void*, slot_count> surface{};
-        void* engine_dsv{};
-        void* engine_rtv{};
-        uint64_t device{}, generation{};
-        uint32_t width{}, height{}, render_width{}, render_height{};
-        bool operator==(const TwinKey&) const = default;
-    };
-    // Engine globals Stage 2 exchanges, with the values saved at the exchange.
-    struct Globals {
-        std::byte* device_size{};
-        std::byte* base_zb{};
-        std::byte* base_rt{};
-        std::byte* viewport{};
-        std::byte* viewport_guard{};
-        uint32_t width{}, height{};          // Device.dwWidth/dwHeight (output)
-        void* zb{};                           // HW.pBaseZB (engine DSV)
-        void* rt{};                           // HW.pBaseRT (engine back buffer RTV)
-        bool viewport_swapped{};
-        bool viewport_guard_was_set{};       // the static was initialised when the window opened
-        float viewport_width{}, viewport_height{};
-    };
-    // Stage 3: the projection and sampler bias the window changed, with the values to restore.
-    struct Projection {
-        std::byte* view{};
-        std::byte* project{};
-        std::byte* full{};
-        bool written{};                       // this window changed Device.mProject/mFullTransform
-        bool uploaded{};                      // RCache holds the jittered projection
-        bool applied{};                       // the window's main projection carries the jitter
-        float x{}, y{};
-        std::array<float, 16> saved_project{}, saved_full{}, jittered{}, last_first_person{};
-        bool have_first_person{};
-        bool sun_suspended{};
-        EngineMatrix sun_full{};
-    };
-    struct Bias {
-        std::byte* field{};
-        bool applied{};
-        float saved{}, window{};
-    };
-    bool open_temporal(const FrameFacts&) noexcept;
-    void restore_temporal(Restore) noexcept;
-    std::size_t slots() const noexcept { return stage_ == 1 ? stage1_slot_count : slot_count; }
-    bool read_targets(const FrameFacts&, std::array<EngineTarget, slot_count>&, TwinRequest&) noexcept;
-    bool twins_match(const TwinRequest&) const noexcept;
-    bool store(const EngineTarget&, const TargetFields&) noexcept;
-    bool load(const EngineTarget&, TargetFields&) noexcept;
-    bool open_globals() noexcept;
-    void restore_globals(bool rollback) noexcept;
-    bool viewport_initialised() noexcept;
-    void restore(Restore) noexcept;
-    void invalidate_caches() noexcept;
-    void refuse(const char* reason) noexcept { if (!refusal_) refusal_ = reason; }
-    void drop() noexcept;
-
-    SwapHost& host_;
-    bool swap_enabled_{};
-    bool open_{};
-    bool have_twins_{};
-    bool failed_key_valid_{};
-    const char* refusal_{};
-    std::byte* backend_{};
-    std::byte* render_target_{};
-    uint32_t stage_{1};
-    uint32_t render_width_{}, render_height_{}, output_width_{}, output_height_{};
-    TwinKey key_{}, failed_key_{};
-    std::array<EngineTarget, slot_count> engine_{};
-    TwinSet twins_{};
-    Globals globals_{};
-    Projection projection_{};
-    Bias bias_{};
-    SwapCounters counters_{};
+    rsf_anomaly_swap* state_{};
+    const rsf_anomaly_swap_view* view_{};
 };
 }

@@ -15,7 +15,7 @@ struct Twin {
     ComPtr<ID3D11RenderTargetView> rtv;
     ComPtr<ID3D11ShaderResourceView> srv;
     ComPtr<ID3D11UnorderedAccessView> uav;
-    TargetFields fields;
+    TargetFields fields{};
 };
 enum class TwinError : uint8_t { None, NotTexture, Shape, Format, Support, Create, Depth };
 const char* twin_error_name(TwinError) noexcept;

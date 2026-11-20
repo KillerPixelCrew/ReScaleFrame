@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: MIT
+// The native side of the SR world-window swap: the verified engine layout from sr_profile.h, and the SwapHost calls
+// lent to the Rust owner (sr_swap.rs) as its platform.
 #include "sr_swap.h"
 #include "sr_profile.h"
-#include <cmath>
-#include <cstring>
-#include <iterator>
 #include <string_view>
 
 namespace rsf::anomaly::sr {
@@ -25,558 +24,97 @@ consteval bool world_targets_match_profile() {
         sr_world_targets[slot_index(Slot::GenericTemp)].d3d_format == d3dfmt_a8r8g8b8;
 }
 static_assert(sr_world_targets.size() == slot_count);
+static_assert(sr_world_absent_offsets.size() == RSF_ANOMALY_SWAP_ABSENT_COUNT);
 static_assert(world_targets_match_profile());
 static_assert(texture_desc_offset + texture2d_desc_size <= texture_srv_offset);
 static_assert(crt_format_offset + sizeof(uint32_t) <= crt_order_offset);
 static_assert(ssao_viewport_height_offset == ssao_viewport_width_offset + sizeof(float));
+static_assert(sizeof(rsf_anomaly_swap_fields) == 120 && offsetof(rsf_anomaly_swap_fields, desc) == 64);
+
+// The layout shared by both executable profiles, in the Rust owner's form.
+constexpr rsf_anomaly_swap_layout engine_layout() noexcept {
+    rsf_anomaly_swap_layout layout{};
+    layout.struct_size = sizeof(layout);
+    layout.crt_surface = crt_surface_offset;
+    layout.crt_rtv = crt_rtv_offset;
+    layout.crt_dsv = crt_dsv_offset;
+    layout.crt_uav = crt_uav_offset;
+    layout.crt_texture = crt_texture_offset;
+    layout.crt_width = crt_width_offset;
+    layout.crt_height = crt_height_offset;
+    layout.crt_format = crt_format_offset;
+    layout.texture_surface = texture_surface_offset;
+    layout.texture_desc_cache = texture_desc_cache_offset;
+    layout.texture_desc = texture_desc_offset;
+    layout.texture_srv = texture_srv_offset;
+    layout.target_width = target_width_offset;
+    layout.target_height = target_height_offset;
+    layout.backend_texture_list = backend_texture_list_offset;
+    layout.backend_ctable = backend_ctable_offset;
+    layout.backend_textures[0] = {backend_textures_ps_offset, backend_textures_ps_count};
+    layout.backend_textures[1] = {backend_textures_vs_offset, backend_textures_vs_count};
+    layout.backend_textures[2] = {backend_textures_gs_offset, backend_textures_stage_count};
+    layout.backend_textures[3] = {backend_textures_hs_offset, backend_textures_stage_count};
+    layout.backend_textures[4] = {backend_textures_ds_offset, backend_textures_stage_count};
+    layout.backend_textures[5] = {backend_textures_cs_offset, backend_textures_stage_count};
+    layout.ssao_viewport_width = ssao_viewport_width_offset;
+    layout.format_a16b16g16r16f = d3dfmt_a16b16g16r16f;
+    layout.format_r16f = d3dfmt_r16f;
+    layout.format_r32f = d3dfmt_r32f;
+    for (std::size_t i = 0; i < slot_count; ++i)
+        layout.world[i] = {sr_world_targets[i].offset, sr_world_targets[i].d3d_format, sr_world_targets[i].optional,
+            sr_world_targets[i].half_allowed};
+    for (std::size_t i = 0; i < sr_world_absent_offsets.size(); ++i) layout.absent[i] = sr_world_absent_offsets[i];
+    return layout;
+}
+constexpr rsf_anomaly_swap_layout verified_layout = engine_layout();
+
+SwapHost& host_of(void* user) noexcept { return *static_cast<SwapHost*>(user); }
+bool read(void* user, const void* address, void* output, std::size_t size) noexcept {
+    return host_of(user).read(address, output, size);
+}
+bool write(void* user, void* address, const void* input, std::size_t size) noexcept {
+    return host_of(user).write(address, input, size);
+}
+uint32_t make_twins(void* user, const rsf_anomaly_swap_request* request, rsf_anomaly_swap_twins* twins) noexcept {
+    return static_cast<uint32_t>(host_of(user).make_twins(*request, *twins));
+}
+void drop_twins(void* user) noexcept { host_of(user).drop_twins(); }
+bool round_trip(void* user, const rsf_anomaly_swap_fields* twin, const rsf_anomaly_swap_fields* engine) noexcept {
+    return host_of(user).round_trip(*twin, *engine);
+}
+bool upscale(void* user, const rsf_anomaly_swap_upscale* inputs) noexcept { return host_of(user).upscale(*inputs); }
+void set_viewport(void* user, uint32_t width, uint32_t height) noexcept { host_of(user).set_viewport(width, height); }
+bool upload_projection(void* user, const void* matrix) noexcept { return host_of(user).upload_projection(matrix); }
+bool set_mip_bias(void* user, float value) noexcept { return host_of(user).set_mip_bias(value); }
+bool correct_position_constant(void* user, void* constant, float x, float y) noexcept {
+    return host_of(user).correct_position_constant(constant, x, y);
+}
+// Shown only if creation failed, which a complete platform and this layout never cause.
+constexpr rsf_anomaly_swap_view unavailable{.refusal = "The SR swap owner could not be created."};
 }
 
-const char* skip_name(Skip skip) noexcept {
-    static constexpr const char* names[] = {"off", "scope", "msaa", "layout", "twins", "depth"};
-    const auto index = static_cast<std::size_t>(skip);
-    return index < std::size(names) ? names[index] : "unknown";
-}
-const char* restore_name(Restore restore) noexcept {
-    static constexpr const char* names[] = {"seam", "combine_end", "stale_prepare", "shutdown", "rollback", "frame_end"};
-    const auto index = static_cast<std::size_t>(restore);
-    return index < std::size(names) ? names[index] : "unknown";
-}
+const char* skip_name(Skip skip) noexcept { return rsf_anomaly_swap_skip_name(static_cast<uint32_t>(skip)); }
+const char* restore_name(Restore restore) noexcept { return rsf_anomaly_swap_restore_name(static_cast<uint32_t>(restore)); }
 
-bool SwapController::load(const EngineTarget& target, TargetFields& out) noexcept {
-    auto* crt = target.crt;
-    auto* texture = target.texture;
-    return host_.read(crt + crt_surface_offset, &out.surface, sizeof(void*)) &&
-        host_.read(crt + crt_rtv_offset, &out.rtv, sizeof(void*)) &&
-        host_.read(crt + crt_dsv_offset, &out.dsv, sizeof(void*)) &&
-        host_.read(crt + crt_uav_offset, &out.uav, sizeof(void*)) &&
-        host_.read(crt + crt_width_offset, &out.width, sizeof(uint32_t)) &&
-        host_.read(crt + crt_height_offset, &out.height, sizeof(uint32_t)) &&
-        host_.read(crt + crt_format_offset, &out.format, sizeof(uint32_t)) &&
-        host_.read(texture + texture_surface_offset, &out.texture_surface, sizeof(void*)) &&
-        host_.read(texture + texture_desc_cache_offset, &out.desc_cache, sizeof(void*)) &&
-        host_.read(texture + texture_desc_offset, out.desc.data(), out.desc.size()) &&
-        host_.read(texture + texture_srv_offset, &out.srv, sizeof(void*));
+SwapController::SwapController(SwapHost& host) noexcept {
+    const rsf_anomaly_swap_platform platform{&host, &read, &write, &make_twins, &drop_twins, &round_trip, &upscale,
+        &set_viewport, &upload_projection, &set_mip_bias, &correct_position_constant};
+    state_ = rsf_anomaly_swap_create(&verified_layout, &platform);
+    view_ = state_ ? rsf_anomaly_swap_view_of(state_) : &unavailable;
 }
-bool SwapController::store(const EngineTarget& target, const TargetFields& in) noexcept {
-    auto* crt = target.crt;
-    auto* texture = target.texture;
-    return host_.write(crt + crt_surface_offset, &in.surface, sizeof(void*)) &&
-        host_.write(crt + crt_rtv_offset, &in.rtv, sizeof(void*)) &&
-        host_.write(crt + crt_dsv_offset, &in.dsv, sizeof(void*)) &&
-        host_.write(crt + crt_uav_offset, &in.uav, sizeof(void*)) &&
-        host_.write(crt + crt_width_offset, &in.width, sizeof(uint32_t)) &&
-        host_.write(crt + crt_height_offset, &in.height, sizeof(uint32_t)) &&
-        host_.write(crt + crt_format_offset, &in.format, sizeof(uint32_t)) &&
-        host_.write(texture + texture_surface_offset, &in.texture_surface, sizeof(void*)) &&
-        host_.write(texture + texture_desc_cache_offset, &in.desc_cache, sizeof(void*)) &&
-        host_.write(texture + texture_desc_offset, in.desc.data(), in.desc.size()) &&
-        host_.write(texture + texture_srv_offset, &in.srv, sizeof(void*));
-}
+SwapController::~SwapController() { rsf_anomaly_swap_destroy(state_); }
 
-bool SwapController::read_targets(const FrameFacts& facts, std::array<EngineTarget, slot_count>& engine,
-    TwinRequest& request) noexcept {
-    engine = {};
-    request = {};
-    request.stage = stage_;
-    request.output_width = facts.device_width;
-    request.output_height = facts.device_height;
-    request.render_width = stage_ == 1 ? facts.device_width : facts.render_width;
-    request.render_height = stage_ == 1 ? facts.device_height : facts.render_height;
-    for (std::size_t i = 0; i < slots(); ++i) {
-        const auto& world = sr_world_targets[i];
-        auto& out = engine[i];
-        if (!host_.read(facts.render_target + world.offset, &out.crt, sizeof(void*))) return false;
-        if (!out.crt) {
-            if (stage_ == 2 && world.optional) continue;   // option off: the engine never renders into it
-            return false;
-        }
-        if (!host_.read(out.crt + crt_texture_offset, &out.texture, sizeof(void*)) || !out.texture) return false;
-        if (!load(out, out.fields)) return false;
-        const auto& f = out.fields;
-        // Verified layout: a colour CRT of the expected format whose CTexture binds that same surface.
-        if (!f.surface || !f.rtv || f.dsv || !f.srv || f.texture_surface != f.surface ||
-            (f.desc_cache && f.desc_cache != f.surface))
-            return false;
-        if (world.d3d_format ? f.format != world.d3d_format : f.format != d3dfmt_r16f && f.format != d3dfmt_r32f) return false;
-        auto& spec = request.spec[i];
-        if (stage_ == 1) {
-            if (f.width != facts.device_width || f.height != facts.device_height) return false;
-            spec = {true, f.width, f.height, true};
-        } else {
-            Extent horizontal{}, vertical{};
-            uint32_t width{}, height{};
-            if (!twin_extent(f.width, facts.device_width, facts.render_width, world.half_allowed, width, horizontal) ||
-                !twin_extent(f.height, facts.device_height, facts.render_height, world.half_allowed, height, vertical) ||
-                horizontal != vertical)
-                return false;
-            spec = {true, width, height, slot_promoted(i)};
-        }
-        out.present = true;
-    }
-    // Distinct records and surfaces (two slots sharing a CRT would be exchanged twice).
-    for (std::size_t i = 0; i < slots(); ++i)
-        for (std::size_t j = i + 1; j < slots(); ++j)
-            if (engine[i].present && engine[j].present &&
-                (engine[i].crt == engine[j].crt || engine[i].fields.surface == engine[j].fields.surface))
-                return false;
-    if (stage_ == 2)
-        for (const auto offset : sr_world_absent_offsets) {
-            std::byte* crt{};
-            if (!host_.read(facts.render_target + offset, &crt, sizeof(crt)) || crt) return false;
-        }
-    request.engine = engine;
-    return true;
-}
-
-bool SwapController::twins_match(const TwinRequest& request) const noexcept {
-    for (std::size_t i = 0; i < slots(); ++i) {
-        const auto& spec = request.spec[i];
-        const auto& twin = twins_.targets[i];
-        const auto& original = request.engine[i].fields;
-        if (!spec.present) {
-            if (!(twin == TargetFields{})) return false;
-            continue;
-        }
-        if (!twin.surface || !twin.rtv || twin.dsv || !twin.srv || twin.texture_surface != twin.surface ||
-            twin.desc_cache != twin.surface || twin.format != (spec.promote ? d3dfmt_a16b16g16r16f : original.format) ||
-            twin.width != spec.width || twin.height != spec.height || bool(twin.uav) != bool(original.uav) ||
-            twin.surface == original.surface)
-            return false;
-    }
-    if (request.stage == 2 && (!twins_.depth_dsv || !twins_.depth_srv || twins_.depth_dsv == request.engine_dsv ||
-        twins_.depth_width != request.render_width || twins_.depth_height != request.render_height || !twins_.base_rt ||
-        twins_.base_rt == request.engine_rtv))
-        return false;
-    return true;
-}
-
-void SwapController::invalidate_caches() noexcept {
-    if (!backend_) return;
-    // CBackend::set_Textures returns early on T == _T and then compares CTexture*, which a surface swap does not
-    // change. Clearing T and every per-stage CTexture* slot forces the next set_Textures to bind the new SRVs.
-    void* null{};
-    bool ok = host_.write(backend_ + backend_texture_list_offset, &null, sizeof(null));
-    const struct { uint32_t offset, count; } stages[] = {{backend_textures_ps_offset, backend_textures_ps_count},
-        {backend_textures_vs_offset, backend_textures_vs_count}, {backend_textures_gs_offset, backend_textures_stage_count},
-        {backend_textures_hs_offset, backend_textures_stage_count}, {backend_textures_ds_offset, backend_textures_stage_count},
-        {backend_textures_cs_offset, backend_textures_stage_count}};
-    for (const auto& stage : stages)
-        for (uint32_t i = 0; i < stage.count; ++i)
-            ok = host_.write(backend_ + stage.offset + i * sizeof(void*), &null, sizeof(null)) && ok;
-    // Stage 2 changes Device.dwWidth/dwHeight, which the screen_res and pos_decompression_params binders read when
-    // CBackend::set_Constants processes a constant table. set_Constants returns early on ctable == C, so clearing
-    // ctable makes the next set_Element re-run every binder with the current size.
-    if (stage_ == 2) ok = host_.write(backend_ + backend_ctable_offset, &null, sizeof(null)) && ok;
-    if (!ok) { ++counters_.write_faults; refuse("RCache caches could not be invalidated."); }
-}
-void SwapController::drop() noexcept {
-    if (!have_twins_) return;
-    host_.drop_twins();
-    have_twins_ = false;
-    twins_ = {};
-    key_ = {};
-    ++counters_.twin_drops;
-}
-
-bool SwapController::viewport_initialised() noexcept {
-    int32_t guard{};
-    // MSVC magic static: 0 never initialised, -1 initialisation in progress, anything else initialised.
-    return globals_.viewport_guard && host_.read(globals_.viewport_guard, &guard, sizeof(guard)) && guard != 0 && guard != -1;
-}
-bool SwapController::open_globals() noexcept {
-    auto& g = globals_;
-    bool ok = host_.write(g.device_size, &render_width_, sizeof(uint32_t)) &&
-        host_.write(g.device_size + sizeof(uint32_t), &render_height_, sizeof(uint32_t)) &&
-        host_.write(g.base_zb, &twins_.depth_dsv, sizeof(void*)) &&
-        host_.write(g.base_rt, &twins_.base_rt, sizeof(void*));
-    if (ok && g.viewport && viewport_initialised()) {
-        float saved[2]{};
-        const float window[2]{float(render_width_) * 0.5f, float(render_height_) * 0.5f};
-        if (host_.read(g.viewport + ssao_viewport_width_offset, saved, sizeof(saved))) {
-            g.viewport_width = saved[0];
-            g.viewport_height = saved[1];
-            g.viewport_swapped = true;   // before the write: a partial write is restored too
-            ok = host_.write(g.viewport + ssao_viewport_width_offset, window, sizeof(window));
-            if (ok) ++counters_.ssao_viewport_swaps;
-        } else ok = false;
-    }
-    return ok;
-}
-void SwapController::restore_globals(bool rollback) noexcept {
-    auto& g = globals_;
-    uint32_t size[2]{};
-    void* zb{};
-    void* rt{};
-    if (!rollback && host_.read(g.device_size, size, sizeof(size)) && (size[0] != render_width_ || size[1] != render_height_)) {
-        ++counters_.foreign_changes;
-        refuse("Device.dwWidth/dwHeight changed inside the world window.");
-    }
-    if (!rollback && host_.read(g.base_zb, &zb, sizeof(zb)) && zb != twins_.depth_dsv) {
-        ++counters_.foreign_changes;
-        refuse("HW.pBaseZB changed inside the world window.");
-    }
-    if (!rollback && host_.read(g.base_rt, &rt, sizeof(rt)) && rt != twins_.base_rt) {
-        ++counters_.foreign_changes;
-        refuse("HW.pBaseRT changed inside the world window.");
-    }
-    const uint32_t output[2]{g.width, g.height};
-    bool ok = host_.write(g.device_size, output, sizeof(output)) && host_.write(g.base_zb, &g.zb, sizeof(void*)) &&
-        host_.write(g.base_rt, &g.rt, sizeof(void*));
-    if (g.viewport_swapped) {
-        const float saved[2]{g.viewport_width, g.viewport_height};
-        ok = host_.write(g.viewport + ssao_viewport_width_offset, saved, sizeof(saved)) && ok;
-        g.viewport_swapped = false;
-    } else if (!rollback && g.viewport && !g.viewport_guard_was_set && viewport_initialised()) {
-        // First SSAO call of the process happened inside the window and stored render/2: store what stock would have.
-        const float stock[2]{float(g.width) * 0.5f, float(g.height) * 0.5f};
-        ok = host_.write(g.viewport + ssao_viewport_width_offset, stock, sizeof(stock)) && ok;
-    }
-    // CRenderTarget::dwWidth/dwHeight follow the last u_setrt (a render-size twin): make rmNear/rmNormal and the
-    // next viewport describe the output again.
-    if (!rollback && render_target_) {
-        ok = host_.write(render_target_ + target_width_offset, &g.width, sizeof(uint32_t)) &&
-            host_.write(render_target_ + target_height_offset, &g.height, sizeof(uint32_t)) && ok;
-    }
-    if (!ok) { ++counters_.write_faults; refuse("An engine global could not be restored."); }
-}
-
-bool SwapController::open_temporal(const FrameFacts& facts) noexcept {
-    auto& p = projection_;
-    if (facts.jitter && facts.device_view && facts.device_project && facts.device_full_transform) {
-        p.view = facts.device_view;
-        p.project = facts.device_project;
-        p.full = facts.device_full_transform;
-        EngineMatrix view{};
-        if (!host_.read(p.project, p.saved_project.data(), sizeof(EngineMatrix)) || !host_.read(p.view, view.data(), sizeof(view)) ||
-            !host_.read(p.full, p.saved_full.data(), sizeof(EngineMatrix)))
-            return false;
-        const auto jittered = jitter_engine_projection(p.saved_project, facts.jitter_x, facts.jitter_y, render_width_, render_height_);
-        if (!jittered) ++counters_.jitter_invalid;   // a non-finite projection: this window renders unjittered
-        else {
-            p.jittered = *jittered;
-            const auto full = engine_mul(p.jittered, view);
-            p.written = true;    // before the writes: a partial write is restored too
-            if (!host_.write(p.project, p.jittered.data(), sizeof(EngineMatrix)) || !host_.write(p.full, full.data(), sizeof(full)))
-                return false;
-            p.uploaded = true;   // before the call: a faulting upload is still followed by the restoring upload
-            if (!host_.upload_projection(p.project)) return false;
-            p.applied = true;
-            p.x = facts.jitter_x;
-            p.y = facts.jitter_y;
-            ++counters_.jittered;
-        }
-    }
-    if (facts.mip_bias && facts.sampler_bias) {
-        auto& b = bias_;
-        b.field = facts.sampler_bias;
-        if (!host_.read(b.field, &b.saved, sizeof(float)) || !std::isfinite(b.saved)) return false;
-        b.window = b.saved + facts.mip_bias_delta;
-        if (b.window == b.saved) ++counters_.mip_unchanged;   // SetMipLODBias would return early: nothing to restore
-        else {
-            b.applied = true;
-            float now{};
-            if (!host_.set_mip_bias(b.window) || !host_.read(b.field, &now, sizeof(now)) || now != b.window) return false;
-            ++counters_.mip_applied;
-        }
-    }
-    return true;
-}
-void SwapController::restore_temporal(Restore reason) noexcept {
-    const bool rollback = reason == Restore::Rollback;
-    auto& p = projection_;
-    if (p.written) {
-        EngineMatrix current{};
-        // Outside the temporary sun window, first-person sites restore the jittered main projection themselves.
-        // Anything else is foreign: restore anyway and refuse further swaps.
-        if (!rollback && !p.sun_suspended && host_.read(p.project, current.data(), sizeof(current)) && current != p.jittered) {
-            ++counters_.foreign_changes;
-            refuse("Device.mProject changed inside the world window.");
-        }
-        bool ok = host_.write(p.project, p.saved_project.data(), sizeof(EngineMatrix)) &&
-            host_.write(p.full, p.saved_full.data(), sizeof(EngineMatrix));
-        // Shutdown writes engine memory only; the next frame's SetCacheXform uploads Device.mProject again.
-        if (ok && p.uploaded && reason != Restore::Shutdown) ok = host_.upload_projection(p.project);
-        if (ok) ++counters_.projection_restores;
-        else { ++counters_.write_faults; refuse("Device.mProject could not be restored."); }
-        p.written = p.uploaded = p.sun_suspended = false;
-    }
-    auto& b = bias_;
-    if (b.applied) {
-        float current{};
-        if (!rollback && host_.read(b.field, &current, sizeof(current)) && current != b.window) {
-            ++counters_.foreign_changes;
-            refuse("The sampler mip bias changed inside the world window.");
-        }
-        // Also on shutdown: nothing else would ever put the user's bias back.
-        if (host_.set_mip_bias(b.saved)) ++counters_.mip_restored;
-        else { ++counters_.write_faults; refuse("The sampler mip bias could not be restored."); }
-        b.applied = false;
-    }
-}
-
-void SwapController::restore(Restore reason) noexcept {
-    if (!open_) return;
-    restore_temporal(reason);
-    for (std::size_t i = 0; i < slots(); ++i) {
-        if (!engine_[i].present) continue;
-        TargetFields current{};
-        // Inside the window nothing but the engine's own binds should touch these fields. A different value means
-        // something replaced them (surface_set on a twinned texture): restore anyway and refuse further swaps.
-        if (load(engine_[i], current) && !(current == twins_.targets[i]) && reason != Restore::Rollback) {
-            ++counters_.foreign_changes;
-            refuse("A twinned engine field changed inside the world window.");
-        }
-        if (!store(engine_[i], engine_[i].fields)) {
-            ++counters_.write_faults;
-            refuse("An engine field write failed while restoring.");
-        }
-    }
-    if (stage_ == 2) restore_globals(reason == Restore::Rollback);
-    open_ = false;
-    invalidate_caches();
-    ++counters_.restores[static_cast<std::size_t>(reason)];
-}
-
-void SwapController::close_stale() noexcept {
-    if (!open_) return;
-    restore(Restore::StalePrepare);
-    if (stage_ == 2) { host_.set_viewport(output_width_, output_height_); ++counters_.viewports; }
-}
-
-bool SwapController::prepare(const FrameFacts& facts) noexcept {
-    ++counters_.prepares;
-    close_stale();
-    projection_ = {};   // after close_stale, which needs the previous window's values
-    bias_ = {};
-    const auto skip = [this](Skip reason) { ++counters_.skipped[static_cast<std::size_t>(reason)]; return false; };
-    if (!swap_enabled_ || refusal_) return skip(Skip::Off);
-    if (facts.scope) return skip(Skip::Scope);
-    if (facts.msaa) return skip(Skip::Msaa);
-    stage_ = facts.stage == 2 ? 2u : 1u;
-    if (stage_ == 2 && (!facts.device_size || !facts.base_zb || !facts.base_rt || !facts.render_width || !facts.render_height ||
-        facts.render_width > facts.device_width || facts.render_height > facts.device_height)) {
-        refuse("The Stage 2 frame facts are incomplete.");
-        return skip(Skip::Layout);
-    }
-    std::array<EngineTarget, slot_count> engine{};
-    TwinRequest request{};
-    if (!facts.render_target || !read_targets(facts, engine, request)) {
-        refuse(stage_ == 1 ? "generic0/generic_temp do not match the verified CRT/CTexture layout."
-                           : "A world target does not match the verified CRT/CTexture layout.");
-        return skip(Skip::Layout);
-    }
-    if (stage_ == 2) {
-        uint32_t size[2]{};
-        if (!host_.read(facts.device_size, size, sizeof(size)) || size[0] != facts.device_width || size[1] != facts.device_height) {
-            refuse("Device.dwWidth/dwHeight do not match the frame facts.");
-            return skip(Skip::Layout);
-        }
-        if (!host_.read(facts.base_zb, &request.engine_dsv, sizeof(void*)) || !request.engine_dsv) {
-            refuse("HW.pBaseZB is unreadable or null.");
-            return skip(Skip::Depth);
-        }
-        if (!host_.read(facts.base_rt, &request.engine_rtv, sizeof(void*)) || !request.engine_rtv) {
-            refuse("HW.pBaseRT is unreadable or null.");
-            return skip(Skip::Layout);
-        }
-    }
-    TwinKey key{stage_, facts.render_target, {}, {}, request.engine_dsv, request.engine_rtv, facts.device, facts.generation,
-        facts.device_width, facts.device_height, request.render_width, request.render_height};
-    for (std::size_t i = 0; i < slot_count; ++i) { key.crt[i] = engine[i].crt; key.surface[i] = engine[i].fields.surface; }
-    if (failed_key_valid_ && key == failed_key_) return skip(Skip::Twins);   // allocation failed for this exact shape
-    if (!have_twins_ || !(key == key_)) {
-        // Reset, resolution or scale change, or a recreated CRenderTarget: drop the old twins and build new ones.
-        drop();
-        TwinSet made{};
-        switch (host_.make_twins(request, made)) {
-        case MakeResult::Created: break;
-        case MakeResult::Failed:
-            ++counters_.allocation_failures;
-            failed_key_ = key;
-            failed_key_valid_ = true;
-            return skip(Skip::Twins);
-        case MakeResult::Depth:
-            refuse("HW.pBaseZB is not a single-sample D24S8 depth view of output size.");
-            return skip(Skip::Depth);
-        default:
-            refuse("An engine target cannot be twinned.");
-            return skip(Skip::Twins);
-        }
-        twins_ = made;
-        have_twins_ = true;
-        if (!twins_match(request)) {
-            drop();
-            refuse("Created twins do not match the engine targets.");
-            return skip(Skip::Twins);
-        }
-        key_ = key;
-        failed_key_valid_ = false;
-        ++counters_.twin_generations;
-    }
-    ++counters_.eligible;
-    backend_ = facts.backend;
-    render_target_ = facts.render_target;
-    engine_ = engine;
-    output_width_ = facts.device_width;
-    output_height_ = facts.device_height;
-    render_width_ = request.render_width;
-    render_height_ = request.render_height;
-    globals_ = {};
-    if (stage_ == 2) {
-        globals_ = {facts.device_size, facts.base_zb, facts.base_rt, facts.ssao_viewport, facts.ssao_viewport_guard,
-            facts.device_width, facts.device_height, request.engine_dsv, request.engine_rtv};
-        globals_.viewport_guard_was_set = viewport_initialised();
-    }
-    open_ = true;
-    bool written = true;
-    for (std::size_t i = 0; i < slots() && written; ++i)
-        if (engine_[i].present) written = store(engine_[i], twins_.targets[i]);
-    if (written && stage_ == 2) written = open_globals();
-    if (!written) {
-        ++counters_.write_faults;
-        refuse("An engine field write failed during the twin exchange.");
-        restore(Restore::Rollback);
-        return false;
-    }
-    invalidate_caches();
-    if (stage_ == 2 && !open_temporal(facts)) {
-        ++counters_.write_faults;
-        refuse("The Stage 3 projection or mip bias could not be applied.");
-        restore(Restore::Rollback);
-        return false;
-    }
-    ++counters_.swapped;
-    return true;
-}
-
-void SwapController::prepared() noexcept {
-    // phase_scene_prepare bound rt_Position (render size) with u_setrt(Device.dwWidth, ...), but the viewport is still
-    // the one CRender::Render's rmNormal set from the previous frame's output-size target.
-    if (!open_ || stage_ != 2) return;
-    host_.set_viewport(render_width_, render_height_);
-    ++counters_.viewports;
-}
-
-bool SwapController::seam() noexcept {
-    if (!open_) { ++counters_.seams_without_window; return false; }
-    ++counters_.seams;
-    restore(Restore::Seam);
-    ++counters_.round_trips;
-    bool ok;
-    if (stage_ == 1) ok = host_.round_trip(twins_.targets[0], engine_[0].fields);
-    else {
-        UpscaleInputs inputs{&twins_.targets[slot_index(Slot::Generic0)], &twins_.targets[slot_index(Slot::Position)],
-            &twins_.targets[slot_index(Slot::Generic1)], twins_.depth_srv, &engine_[slot_index(Slot::Generic0)].fields,
-            &engine_[slot_index(Slot::Position)].fields, &engine_[slot_index(Slot::Generic1)].fields, globals_.zb,
-            render_width_, render_height_, output_width_, output_height_};
-        ok = host_.upscale(inputs);
-        host_.set_viewport(output_width_, output_height_);
-        ++counters_.viewports;
-    }
-    if (!ok) {
-        ++counters_.round_trip_failures;
-        refuse("The seam pass failed; engine generic0 holds no world image for this frame.");
-    }
-    return true;
-}
-
-void SwapController::combine_end() noexcept {
-    ++counters_.combine_ends;
-    if (!open_) return;
-    restore(Restore::CombineEnd);
-    if (stage_ == 2) { host_.set_viewport(output_width_, output_height_); ++counters_.viewports; }
-    refuse("phase_combine returned without the S-B seam; the frame was rendered without its world image.");
-}
-
-void SwapController::frame_end() noexcept {
-    if (!open_) return;
-    restore(Restore::FrameEnd);
-    if (stage_ == 2) { host_.set_viewport(output_width_, output_height_); ++counters_.viewports; }
-    refuse("A world window was still open at the end of the frame.");
-}
-
-void SwapController::position_constant_setup(void* constant) noexcept {
-    // Shadow fitting temporarily borrows an unjittered Device camera, but its accumulation still samples the
-    // jittered G-buffer. The saved raster jitter, not sun_suspended or current Device.mProject, owns these rays.
-    if (!open_ || !projection_.applied) { ++counters_.position_stock; return; }
-    if (host_.correct_position_constant(constant, projection_.x, projection_.y)) ++counters_.position_corrected;
-    else { ++counters_.position_refused; refuse("Deferred position constant correction refused."); }
-}
-
-bool SwapController::sun_cascades_begin() noexcept {
-    ++counters_.sun_calls;
-    auto& p = projection_;
-    if (!open_ || !p.applied || !p.written) return false;
-    // A reentrant call borrows the already unjittered camera and must not restore the outer call's token.
-    if (p.sun_suspended) return false;
-    EngineMatrix current{};
-    bool ok = host_.read(p.project, current.data(), sizeof(current)) && current == p.jittered &&
-        host_.read(p.full, p.sun_full.data(), sizeof(p.sun_full));
-    if (ok) {
-        p.sun_suspended = true;   // rollback restores partial writes too
-        const bool project = host_.write(p.project, p.saved_project.data(), sizeof(EngineMatrix));
-        const bool full = host_.write(p.full, p.saved_full.data(), sizeof(EngineMatrix));
-        ok = project && full;
-    }
-    if (ok) { ++counters_.sun_unjittered; return true; }
-    ++counters_.sun_refused;
-    ++counters_.write_faults;
-    refuse("The sun cascade camera could not be unjittered.");
-    p.sun_suspended = false;
-    restore(Restore::Rollback);   // refuse further SR; run the original with the stock engine state
-    return false;
-}
-void SwapController::sun_cascades_end(bool suspended) noexcept {
-    if (!suspended) return;
-    auto& p = projection_;
-    if (!p.sun_suspended) return;
-    p.sun_suspended = false;
-    // The original leaves RCache with its unjittered Device projection. set_P rebuilds the derived engine matrices;
-    // writing Device alone would leave the following world passes with the wrong constants.
-    const bool project = host_.write(p.project, p.jittered.data(), sizeof(EngineMatrix));
-    const bool full = host_.write(p.full, p.sun_full.data(), sizeof(EngineMatrix));
-    const bool uploaded = project && full && host_.upload_projection(p.project);
-    if (uploaded) { ++counters_.sun_restored; return; }
-    ++counters_.sun_refused;
-    ++counters_.write_faults;
-    refuse("The jittered camera could not be restored after sun cascades.");
-    restore(Restore::Rollback);
-}
-
-void SwapController::rm_near() noexcept {
-    if (!open_) return;
-    ++counters_.rm_near_in_window;
-    auto& p = projection_;
-    if (!p.written || !p.applied || p.sun_suspended) return;
-    EngineMatrix current{}, view{};
-    if (!host_.read(p.project, current.data(), sizeof(current)) || !host_.read(p.view, view.data(), sizeof(view))) {
-        ++counters_.fp_foreign;
-        return;
-    }
-    switch (first_person_action(current, p.jittered, p.have_first_person ? &p.last_first_person : nullptr)) {
-    case FirstPersonAction::AlreadyJittered: ++counters_.fp_already; return;
-    case FirstPersonAction::Foreign: ++counters_.fp_foreign; return;
-    case FirstPersonAction::Jitter: break;
-    }
-    // The site built Device.mProject (psHUD_FOV), mFullTransform = mProject * mView, and uploaded it; it restores
-    // the jittered main projection itself afterwards. Apply the same pixel offset to the fresh matrix.
-    const auto jittered = jitter_engine_projection(current, p.x, p.y, render_width_, render_height_);
-    if (!jittered) { ++counters_.jitter_invalid; return; }
-    const auto full = engine_mul(*jittered, view);
-    if (!host_.write(p.project, jittered->data(), sizeof(EngineMatrix)) || !host_.write(p.full, full.data(), sizeof(full)) ||
-        !host_.upload_projection(p.project)) {
-        ++counters_.write_faults;
-        refuse("A first-person projection could not be jittered.");
-        return;
-    }
-    p.last_first_person = *jittered;
-    p.have_first_person = true;
-    ++counters_.fp_jittered;
-}
-
-void SwapController::shutdown() noexcept {
-    restore(Restore::Shutdown);
-    drop();
-    failed_key_valid_ = false;
-}
+void SwapController::set_swap_enabled(bool enabled) noexcept { rsf_anomaly_swap_set_enabled(state_, enabled); }
+void SwapController::close_stale() noexcept { rsf_anomaly_swap_close_stale(state_); }
+bool SwapController::prepare(const FrameFacts& facts) noexcept { return rsf_anomaly_swap_prepare(state_, &facts); }
+void SwapController::prepared() noexcept { rsf_anomaly_swap_prepared(state_); }
+bool SwapController::seam() noexcept { return rsf_anomaly_swap_seam(state_); }
+void SwapController::combine_end() noexcept { rsf_anomaly_swap_combine_end(state_); }
+void SwapController::frame_end() noexcept { rsf_anomaly_swap_frame_end(state_); }
+void SwapController::rm_near() noexcept { rsf_anomaly_swap_rm_near(state_); }
+bool SwapController::sun_cascades_begin() noexcept { return rsf_anomaly_swap_sun_begin(state_); }
+void SwapController::sun_cascades_end(bool suspended) noexcept { rsf_anomaly_swap_sun_end(state_, suspended); }
+void SwapController::position_constant_setup(void* constant) noexcept { rsf_anomaly_swap_position_constant(state_, constant); }
+void SwapController::shutdown() noexcept { rsf_anomaly_swap_shutdown(state_); }
 }

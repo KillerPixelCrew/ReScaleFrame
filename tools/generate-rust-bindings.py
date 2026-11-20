@@ -93,6 +93,10 @@ generate("games/anomaly/src/overlay_abi.rs", "games/anomaly/src/overlay_platform
          ["--no-recursive-allowlist", "--with-derive-default", "--raw-line", "#![allow(dead_code)]",
           "--raw-line", "use rsf_game_sys::sr_abi::rsf_overlay_sr_report;",
           "--raw-line", "use rsf_game_sys::{rsf_game_log_fn, rsf_result};"])
+generate("games/anomaly/src/sr_swap_abi.rs", "games/anomaly/src/sr_swap_platform.h",
+         "rsf_anomaly_swap_(fields|target|facts|spec|request|twins|upscale|counters|world_target|range|layout|platform|view)",
+         "RSF_ANOMALY_SWAP_.*", [],
+         ["--no-recursive-allowlist", "--with-derive-default", "--raw-line", "#![allow(dead_code)]"])
 generate("runtime/orchestrator/src/render_abi.rs", "runtime/orchestrator/include/rescaleframe/frame_assembly.h",
          "rsf_(frame_resources|pipeline_camera_frame|dlss_frame|fg_choice|render_link|sr_session_setup|sr_session_status|sr_provider|fg_host|fg_session_status|generation_provider|native_fg_status|motion_resolve_params|render_settings|sharpening_options)",
          "RSF_(FRAME_ASSEMBLY_ABI_VERSION|DLSS_ABI_VERSION|FG_(BACKEND_(AUTO|ALL)|ABI_VERSION|OFF|FIXED|AUTO|DYNAMIC|STAT_(TOTAL_PRESENTED|GENERATED_PRESENTED|PRESENT_CALLBACKS|ACTIVITY))|NATIVE_FG_REASON_NONE|PACING_(NONE|REFLEX|XELL)|REFLEX_(OFF|BOOST)|RENDER_LINK_ABI_VERSION|SR_SESSION_ABI_VERSION|BACKEND_ABI_VERSION|API_D3D12|SR_(FSR2|XESS)|RENDER_FRONTEND_ABI_VERSION|SHARPENING_ABI_VERSION)",

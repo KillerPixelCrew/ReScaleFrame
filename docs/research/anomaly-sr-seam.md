@@ -662,7 +662,7 @@ world frames). Both require `Mode=Observe`, because the native observer's `prepa
 executable. `SRStage` values other than 1 are off. `SRStageCapture=1` with `SRStage=0` installs the same
 hooks but never swaps, so a stock run can dump the same seam image.
 
-**Code.** `games/anomaly/src/sr_swap.{h,cpp}` (state machine, no D3D), `sr_d3d11.{h,cpp}` (twins and the
+**Code.** `games/anomaly/src/sr_swap.rs` (state machine, no D3D; `sr_swap.{h,cpp}` lend it the native leaf, see [the Rust swap cutover](rust-anomaly-sr-swap.md)), `sr_d3d11.{h,cpp}` (twins and the
 pass), `sr_stage.{h,cpp}` (hooks, engine reads, diagnostics, capture), `sr_tonemap.h` (CPU reference) and
 `shaders/sr/rsf_sr_roundtrip.hlsl` (RSF-authored, embedded at build time, compiled at runtime with the
 system `d3dcompiler_47`). `bootstrap.cpp` reads the keys; `native_observer.cpp` installs Stage 1 after the
@@ -783,7 +783,7 @@ applies at the next `vid_restart`. `SRStageCapture` works unchanged. `SRStage` v
 render aspect differs from `Device.fASPECT` by the rounding only: the projection is unchanged, and the pixel-to-NDC
 mapping (`pos_decompression_params`, the viewport) uses the render dimensions, so both cover the same frustum.
 
-**What the world window swaps.** At H1, on an eligible frame, in this order (all in `sr_swap.cpp`):
+**What the world window swaps.** At H1, on an eligible frame, in this order (all in `sr_swap.rs`, formerly `sr_swap.cpp`):
 
 | Field | Window value | Evidence and reason |
 | --- | --- | --- |

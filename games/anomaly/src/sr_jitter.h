@@ -164,19 +164,6 @@ inline EngineMatrix engine_mul(const EngineMatrix& a, const EngineMatrix& b) noe
     return m;
 }
 
-// ---- first-person sites (rmNear callback) ---------------------------------------------------------------------------
-// The six first-person sites rebuild Device.mProject with build_projection (so _31 = _32 = 0), upload it and call
-// rmNear; the shared rmNear slot then jitters that fresh matrix with the same pixel offset. A projection the adapter
-// already wrote (the jittered main projection, or the last first-person matrix it jittered) is never jittered again,
-// and a projection with a nonzero _31/_32 that the adapter did not write is left alone.
-enum class FirstPersonAction : uint8_t { Jitter, AlreadyJittered, Foreign };
-inline FirstPersonAction first_person_action(const EngineMatrix& current, const EngineMatrix& main_jittered,
-    const EngineMatrix* last_written) noexcept {
-    if (current == main_jittered || (last_written && current == *last_written)) return FirstPersonAction::AlreadyJittered;
-    if (current[8] == 0.0f && current[9] == 0.0f) return FirstPersonAction::Jitter;
-    return FirstPersonAction::Foreign;
-}
-
 // ---- mip bias ------------------------------------------------------------------------------------------------------
 // Added to the sampler cache's current bias (the user's r__tf_mipbias) for the world window: log2(render / output)
 // plus `offset` (SRMipBias), clamped to [-3, 1]. Rendering at a fraction of the output samples mips chosen for that

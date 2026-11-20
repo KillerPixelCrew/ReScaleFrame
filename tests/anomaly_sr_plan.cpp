@@ -61,29 +61,12 @@ void plans() {
     CHECK(make_plan(1, 1, 0.5f, plan) && plan.render_width == 1 && plan.render_height == 1 && plan.identity());
 }
 
-void extents() {
-    uint32_t twin{};
-    Extent rule{};
-    CHECK(twin_extent(1920, 1920, 1286, false, twin, rule) && twin == 1286 && rule == Extent::Full);
-    CHECK(twin_extent(960, 1920, 1286, true, twin, rule) && twin == 643 && rule == Extent::Half);
-    CHECK(!twin_extent(960, 1920, 1286, false, twin, rule) && twin == 0);    // half not allowed for this target
-    CHECK(twin_extent(959, 1919, 1286, true, twin, rule) && twin == 643);     // engine integer division of an odd output
-    CHECK(twin_extent(539, 1079, 723, true, twin, rule) && twin == 361);
-    CHECK(!twin_extent(480, 1920, 1286, true, twin, rule));                 // quarter size: not a known rule
-    CHECK(!twin_extent(0, 1920, 1286, true, twin, rule) && !twin_extent(1920, 0, 1286, true, twin, rule));
-    CHECK(!twin_extent(1920, 1920, 2000, true, twin, rule));               // render larger than output
-    CHECK(!twin_extent(0, 1, 1, true, twin, rule) && twin_extent(1, 1, 1, true, twin, rule) && twin == 1);
-    CHECK(!twin_extent(1, 3, 1, true, twin, rule));                         // half of a 1-pixel render is empty
-    CHECK(twin_extent(1920, 1920, 1920, true, twin, rule) && twin == 1920 && rule == Extent::Full);   // scale 1.0
-    CHECK(twin_extent(960, 1920, 1920, true, twin, rule) && twin == 960 && rule == Extent::Half);
-}
 }
 
 int main() {
     scales();
     rounding();
     plans();
-    extents();
     std::printf("%d failure(s)\n", failures);
     return failures ? 1 : 0;
 }

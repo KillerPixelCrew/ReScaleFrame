@@ -123,25 +123,6 @@ void ndc_offset() {
     }
 }
 
-void first_person_rule() {
-    const auto main = *jitter_engine_projection(perspective(1.2f, 1.7778f), 0.25f, -0.1f, 1286, 724);
-    const auto fresh = perspective(0.9f, 1.7778f, 0.05f);
-    const auto fp = *jitter_engine_projection(fresh, 0.25f, -0.1f, 1286, 724);
-    // A freshly built first-person projection is jittered; the jittered main projection and the last first-person
-    // matrix the adapter wrote are never jittered again (rmNear without a rebuild, a second rmNear at the same site).
-    CHECK(first_person_action(fresh, main, nullptr) == FirstPersonAction::Jitter);
-    CHECK(first_person_action(main, main, nullptr) == FirstPersonAction::AlreadyJittered);
-    CHECK(first_person_action(fp, main, &fp) == FirstPersonAction::AlreadyJittered);
-    // Without the record of what was written, a jittered first-person matrix has _31/_32 != 0: left alone, not jittered.
-    CHECK(first_person_action(fp, main, nullptr) == FirstPersonAction::Foreign);
-    // Applying the jitter twice would double the offset: the rule prevents that, and a single application is exact.
-    const auto twice = *jitter_engine_projection(fp, 0.25f, -0.1f, 1286, 724);
-    CHECK(near(twice[8], 2 * fp[8], 1e-8) && first_person_action(twice, main, &fp) == FirstPersonAction::Foreign);
-    // A zero sample leaves _31/_32 at zero: the fresh matrix is "jittered" by nothing, which is harmless.
-    const auto zero = *jitter_engine_projection(fresh, 0.0f, 0.0f, 1286, 724);
-    CHECK(zero == fresh);
-}
-
 void mip_bias() {
     CHECK(near(window_mip_bias_delta(1286, 1920, -0.3f), std::log2(1286.0 / 1920.0) - 0.3, 1e-6));
     CHECK(near(window_mip_bias_delta(960, 1920, 0.0f), -1.0, 1e-7) && window_mip_bias_delta(1920, 1920, 0.0f) == 0.0f);
@@ -252,7 +233,7 @@ void burst_gate() {
 
 int main(int argc, char** argv) {
     struct { const char* name; void (*run)(); } cases[] = {{"halton", halton_sequence}, {"sequence", sequence_resets},
-        {"ndc", ndc_offset}, {"first_person", first_person_rule}, {"mip_bias", mip_bias}, {"published", published_state},
+        {"ndc", ndc_offset}, {"mip_bias", mip_bias}, {"published", published_state},
         {"motion_cancellation", motion_cancellation}, {"burst_gate", burst_gate}};
     int ran = 0;
     for (const auto& item : cases) {

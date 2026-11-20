@@ -280,7 +280,7 @@ void twins(Device& d) {
     CHECK(desc.Width == 320 && desc.Height == 200 && desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT && desc.SampleDesc.Count == 1);
     CHECK(twin.fields.surface == twin.texture.Get() && twin.fields.texture_surface == twin.fields.surface &&
         twin.fields.desc_cache == twin.fields.surface && twin.fields.rtv && twin.fields.srv && !twin.fields.uav &&
-        twin.fields.format == d3dfmt_a16b16g16r16f && std::memcmp(twin.fields.desc.data(), &desc, sizeof(desc)) == 0);
+        twin.fields.format == d3dfmt_a16b16g16r16f && std::memcmp(twin.fields.desc, &desc, sizeof(desc)) == 0);
     Twin with_uav;
     CHECK(make_twin(d.device.Get(), engine.Get(), true, with_uav) == TwinError::None && with_uav.fields.uav);
     auto wrong = texture(d.device.Get(), 64, 64, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
@@ -592,7 +592,7 @@ void world_twins(Device& d) {
     if (twin.texture) twin.texture->GetDesc(&desc);
     CHECK(desc.Width == 64 && desc.Height == 36 && desc.Format == DXGI_FORMAT_R16_FLOAT && (desc.BindFlags & D3D11_BIND_UNORDERED_ACCESS));
     CHECK(twin.fields.uav && twin.fields.format == 111 && twin.fields.width == 64 && twin.fields.desc_cache == twin.fields.surface &&
-        std::memcmp(twin.fields.desc.data(), &desc, sizeof(desc)) == 0);
+        std::memcmp(twin.fields.desc, &desc, sizeof(desc)) == 0);
     // A typeless engine texture with UNORM views: the twin views copy the engine view formats.
     auto typeless = texture(dev, 96, 54, DXGI_FORMAT_R8G8B8A8_TYPELESS, bind);
     D3D11_RENDER_TARGET_VIEW_DESC rtv_desc{DXGI_FORMAT_R8G8B8A8_UNORM, D3D11_RTV_DIMENSION_TEXTURE2D};

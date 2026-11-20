@@ -87,7 +87,7 @@ TwinError create_twin(ID3D11Device* device, ID3D11Resource* engine, ID3D11Render
     f.width = created.Width;
     f.height = created.Height;
     f.format = d3d_format;
-    std::memcpy(f.desc.data(), &created, sizeof(created));
+    std::memcpy(f.desc, &created, sizeof(created));
     return TwinError::None;
 }
 
