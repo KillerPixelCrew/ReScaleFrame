@@ -245,14 +245,14 @@ void DlssPresentCapture::flush() {
     rsf_core_dlss_capture_drained(state->ledger);
     if (rsf_core_dlss_capture_can_flush(state->ledger)) (void)state->capture.flush();
 }
-rsf_backend_result DlssPresentCapture::shutdown() {
+rsf_backend_result DlssPresentCapture::detach() {
     if (!state) return RSF_BACKEND_OK;
     if (state->registered) {
         const rsf_sl_present_capture_registration registration{sizeof(registration), RSF_SL_PRESENT_CAPTURE_ABI_VERSION, state->setup.graphics.device, nullptr, state.get()};
         if (state->registration(&registration) != VK_SUCCESS) return RSF_BACKEND_ERROR_NOT_READY;
         state->registered = false;
     }
-    flush(); state.reset(); return RSF_BACKEND_OK;
+    return RSF_BACKEND_OK;
 }
 }
 #else
@@ -263,6 +263,6 @@ DlssPresentCapture::~DlssPresentCapture() = default;
 rsf_backend_result DlssPresentCapture::initialize(const rsf_fgvk_setup&) { return RSF_BACKEND_OK; }
 void DlssPresentCapture::remember(const rsf_frame_record&, uint32_t, const rsf_dlssgvk_status&, bool) {}
 void DlssPresentCapture::flush() {}
-rsf_backend_result DlssPresentCapture::shutdown() { return RSF_BACKEND_OK; }
+rsf_backend_result DlssPresentCapture::detach() { return RSF_BACKEND_OK; }
 }
 #endif

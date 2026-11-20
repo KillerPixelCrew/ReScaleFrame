@@ -14,8 +14,8 @@ public:
     DlssPresentCapture& operator=(const DlssPresentCapture&) = delete;
     rsf_backend_result initialize(const rsf_fgvk_setup&);
     void remember(const rsf_frame_record&, uint32_t generated_count, const rsf_dlssgvk_status&, bool configured);
-    /* Presenter and GPU must already be drained before these operations. */
+    /* Presenter and GPU must already be drained. Detach keeps state alive until owner deletion. */
     void flush();
-    rsf_backend_result shutdown();
+    rsf_backend_result detach();
 };
 }
