@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-#include <rescaleframe/overlay_d3d12.h>
+#include "overlay_native12_platform.h"
 #include <rescaleframe/overlay_input.h>
 #include <windows.h>
 #include <d3d12.h>
@@ -8,9 +8,7 @@
 #include <wrl/client.h>
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <cstring>
-#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -31,13 +29,10 @@ struct Frame {
     ComPtr<ID3D12DescriptorHeap> srv, rtv;
     ComPtr<ID3D12Resource> vertices, indices;
     std::vector<ComPtr<IUnknown>> keep;
-    uint64_t completion{};
+    rsf_overlay_draw_data draw{};
 };
 struct Texture { ComPtr<ID3D12Resource> resource; };
 struct Panel {
-    std::mutex guard;
-    std::atomic<bool> ready{};
-    bool failed{};
     HMODULE module{};
     rsf_overlay* ui{};
     decltype(&rsf_overlay_frame) layout{};
@@ -46,21 +41,15 @@ struct Panel {
     ComPtr<ID3D12Device> device;
     ComPtr<ID3D12CommandQueue> queue;
     ComPtr<ID3D12Fence> fence;
+    HANDLE completion_event{};
     ComPtr<ID3D12RootSignature> root;
     ComPtr<ID3D12PipelineState> pipeline;
     ComPtr<ID3DBlob> vertex_shader, pixel_shader;
     DXGI_FORMAT format{DXGI_FORMAT_UNKNOWN};
     std::array<Frame,3> frames;
     std::unordered_map<uint64_t,Texture> textures;
-    uint64_t serial{}, started{}, previous{};
-    UINT stride{}, cursor{};
-    bool was_visible{};
-    unsigned trace_left{};
-    void (*logger)(void*,const char*){};
-    void* user{};
-    void log(const char* message) { if (logger) logger(user,message); }
+    UINT stride{};
 };
-Panel& panel() { static auto* value = new Panel; return *value; }
 void transition(ID3D12GraphicsCommandList* commands, ID3D12Resource* resource,
     D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after)
 {
@@ -79,13 +68,13 @@ bool upload_buffer(Panel& p, uint64_t size, ComPtr<ID3D12Resource>& buffer)
     return SUCCEEDED(p.device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&desc,
         D3D12_RESOURCE_STATE_GENERIC_READ,nullptr,IID_PPV_ARGS(&buffer)));
 }
-bool initialize(Panel& p, ID3D12Device* device, ID3D12CommandQueue* queue, HWND window)
+bool initialize(Panel& p, ID3D12Device* device, ID3D12CommandQueue* queue, HWND window, rsf_overlay12_log logger, void* user)
 {
     wchar_t path[32768]{};
     if (!GetEnvironmentVariableW(L"RSF_OVERLAY_DLL",path,32768)) {
         HMODULE own{};
         if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-            reinterpret_cast<LPCWSTR>(&panel),&own) || !GetModuleFileNameW(own,path,32768)) return false;
+            reinterpret_cast<LPCWSTR>(&initialize),&own) || !GetModuleFileNameW(own,path,32768)) return false;
         std::wstring file=path;const auto slash=file.find_last_of(L"/\\");
         if (slash==std::wstring::npos) return false;
         file.resize(slash+1);file+=L"rescaleframe_overlay.dll";
@@ -127,10 +116,8 @@ bool initialize(Panel& p, ID3D12Device* device, ID3D12CommandQueue* queue, HWND 
         heap.Type=D3D12_DESCRIPTOR_HEAP_TYPE_RTV;heap.NumDescriptors=1;heap.Flags=D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
         if (FAILED(device->CreateDescriptorHeap(&heap,IID_PPV_ARGS(&frame.rtv)))) return false;
     }
-    const rsf_overlay_input_options input{sizeof(input),RSF_OVERLAY_INPUT_ABI_VERSION,0,p.logger,p.user};
+    const rsf_overlay_input_options input{sizeof(input),RSF_OVERLAY_INPUT_ABI_VERSION,0,logger,user};
     if (rsf_overlay_input_install(window,&input)!=RSF_OVERLAY_INPUT_OK) return false;
-    p.started=p.previous=GetTickCount64();p.ready=true;
-    p.log("RSF native D3D12 overlay ready; Insert opens settings. No D3D11-on-12 resources.");
     return true;
 }
 bool pipeline(Panel& p, Frame& frame, DXGI_FORMAT format)
@@ -228,69 +215,94 @@ bool draw(Panel& p, Frame& frame, ID3D12Resource* target, const rsf_overlay_draw
     }
     transition(commands,target,D3D12_RESOURCE_STATE_RENDER_TARGET,D3D12_RESOURCE_STATE_PRESENT);return true;
 }
+void* create_panel(void* device, void* queue, void* chain, rsf_overlay12_log logger, void* user) noexcept try {
+    DXGI_SWAP_CHAIN_DESC desc{};
+    if (FAILED(static_cast<IDXGISwapChain*>(chain)->GetDesc(&desc))) return nullptr;
+    static auto* panel = new Panel;
+    return initialize(*panel, static_cast<ID3D12Device*>(device), static_cast<ID3D12CommandQueue*>(queue),
+        desc.OutputWindow, logger, user) ? panel : nullptr;
+} catch (...) { return nullptr; }
+
+uint64_t completed(void* panel) {
+    return static_cast<Panel*>(panel)->fence->GetCompletedValue();
 }
-uint32_t rsf_overlay_native12_visible() { return panel().ready ? rsf_overlay_input_visible() : 0; }
-void rsf_overlay_native12_toggle() { if (panel().ready) rsf_overlay_input_set_visible(rsf_overlay_input_visible()?0u:1u); }
-int rsf_overlay_native12_present(void* device, void* queue, void* chain, const rsf_overlay_stats* stats,
-    rsf_overlay_intent* intent, void (*logger)(void*,const char*), void* user) try
-{
-    auto& p=panel();std::unique_lock lock(p.guard,std::try_to_lock);
-    if (!lock.owns_lock()||p.failed||!device||!queue||!chain||!stats) return 0;
-    auto fail=[&] {p.log("Native D3D12 overlay refused graphics work; see validation evidence.");p.failed=true;rsf_overlay_input_set_visible(0);return 0;};
-    if (!p.ready) {
-        p.logger=logger;p.user=user;DXGI_SWAP_CHAIN_DESC desc{};
-        if (FAILED(static_cast<IDXGISwapChain*>(chain)->GetDesc(&desc))||
-            !initialize(p,static_cast<ID3D12Device*>(device),static_cast<ID3D12CommandQueue*>(queue),desc.OutputWindow)) return fail();
-    }
-    if (p.device.Get()!=device||p.queue.Get()!=queue) return 0;
-    const auto now=GetTickCount64();if (!rsf_overlay_input_visible()&&!stats->show_performance_hud&&now-p.started>=8000) return 0;
-    Frame* selected{};const auto completed=p.fence->GetCompletedValue();if (completed==UINT64_MAX) return fail();
-    for (UINT i=0;i<p.frames.size();++i) {auto& candidate=p.frames[(p.cursor+i)%p.frames.size()];if (candidate.completion<=completed){selected=&candidate;p.cursor=(p.cursor+i+1)%static_cast<UINT>(p.frames.size());break;}}
-    // A full ring is backpressure, not permission to omit this frame's UI.
-    // Wait only for our oldest already-submitted list, whose Signal was queued
-    // before returning from its Present callback. No unsubmitted engine work
-    // or future Present is needed to satisfy this fence.
-    if (!selected) {
-        selected=&*std::min_element(p.frames.begin(),p.frames.end(),
-            [](const Frame& a,const Frame& b){return a.completion<b.completion;});
-        const auto event=CreateEventW(nullptr,FALSE,FALSE,nullptr);
-        if (!event) return fail();
-        const auto armed=p.fence->SetEventOnCompletion(selected->completion,event);
-        const auto waited=SUCCEEDED(armed)?WaitForSingleObject(event,5000):WAIT_FAILED;
-        CloseHandle(event);
-        if (waited!=WAIT_OBJECT_0 || p.fence->GetCompletedValue()==UINT64_MAX) return fail();
-        p.cursor=static_cast<UINT>(selected-p.frames.data()+1)%static_cast<UINT>(p.frames.size());
-    }
-    auto& frame=*selected;frame.keep.clear();
-    if (FAILED(frame.allocator->Reset())||FAILED(frame.commands->Reset(frame.allocator.Get(),nullptr))) return fail();
+
+uint32_t wait(void* panel, uint64_t value) {
+    auto& owner=*static_cast<Panel*>(panel);
+    if (!owner.completion_event) owner.completion_event=CreateEventW(nullptr,FALSE,FALSE,nullptr);
+    if (!owner.completion_event) return 0;
+    const auto armed=owner.fence->SetEventOnCompletion(value,owner.completion_event);
+    const auto waited=SUCCEEDED(armed)?WaitForSingleObject(owner.completion_event,5000):WAIT_FAILED;
+    // A timed-out fence may still signal. Keep its event alive with the panel.
+    return waited==WAIT_OBJECT_0;
+}
+
+void* begin_frame(void* native, uint32_t slot, void* chain, uint32_t* width, uint32_t* height) noexcept try {
+    auto& panel=*static_cast<Panel*>(native);
+    auto& frame=panel.frames[slot];
+    frame.keep.clear();
+    if (FAILED(frame.allocator->Reset())||FAILED(frame.commands->Reset(frame.allocator.Get(),nullptr))) return nullptr;
     ComPtr<IDXGISwapChain3> swapchain;ComPtr<ID3D12Resource> target;
     if (FAILED(static_cast<IDXGISwapChain*>(chain)->QueryInterface(IID_PPV_ARGS(&swapchain)))||
-        FAILED(swapchain->GetBuffer(swapchain->GetCurrentBackBufferIndex(),IID_PPV_ARGS(&target)))) return fail();
-    const auto desc=target->GetDesc();const auto width=static_cast<UINT>(desc.Width),height=desc.Height;
-    if (!pipeline(p,frame,desc.Format)) return fail();
-    const bool visible=rsf_overlay_input_visible()!=0;
-    if (visible&&!p.was_visible) p.trace_left=4;
-    p.was_visible=visible;const bool trace=visible&&p.trace_left;
-    if (trace) {--p.trace_left;p.log("Overlay12: input/layout begin");}
+        FAILED(swapchain->GetBuffer(swapchain->GetCurrentBackBufferIndex(),IID_PPV_ARGS(&target)))) return nullptr;
+    const auto desc=target->GetDesc();
+    if (!desc.Width || desc.Width>UINT_MAX || !desc.Height || !pipeline(panel,frame,desc.Format)) return nullptr;
+    *width=static_cast<uint32_t>(desc.Width);
+    *height=desc.Height;
+    return target.Detach();
+} catch (...) { return nullptr; }
+
+uint32_t layout(void* native, uint32_t slot, uint32_t width, uint32_t height, float elapsed,
+    float hint_alpha, const rsf_overlay_stats* stats, rsf_overlay_intent* decided) noexcept try {
+    auto& panel=*static_cast<Panel*>(native);
+    auto& data=panel.frames[slot].draw;
     rsf_overlay_input input{};input.struct_size=sizeof(input);
-    if (rsf_overlay_input_collect(&input,width,height,static_cast<float>(now-p.previous)/1000)!=RSF_OVERLAY_INPUT_OK) return fail();
-    p.previous=now;input.startup_hint_alpha=now-p.started<7000?1.0f:now-p.started<8000?static_cast<float>(8000-(now-p.started))/1000:0;
-    rsf_overlay_draw_data data{};data.struct_size=sizeof(data);rsf_overlay_intent decided{};decided.struct_size=sizeof(decided);
-    if (p.layout(p.ui,&input,stats,&data,&decided)!=RSF_OVERLAY_OK) return fail();
-    // The close button and a tap outside the sheet.
-    if (decided.close_requested) rsf_overlay_input_set_visible(0u);
-    if (trace) p.log("Overlay12: atlas uploads and draw recording");
+    if (rsf_overlay_input_collect(&input,width,height,elapsed)!=RSF_OVERLAY_INPUT_OK) return 0;
+    input.startup_hint_alpha=hint_alpha;
+    data={};data.struct_size=sizeof(data);
+    return panel.layout(panel.ui,&input,stats,&data,decided)==RSF_OVERLAY_OK;
+} catch (...) { return 0; }
+
+uint32_t record(void* native, uint32_t slot, void* target, uint32_t width, uint32_t height) noexcept try {
+    auto& panel=*static_cast<Panel*>(native);
+    auto& frame=panel.frames[slot];
     rsf_overlay_texture_update updates[32]{};
-    for (UINT count;(count=p.updates(p.ui,updates,32))!=0;) for (UINT i=0;i<count;++i) if (!texture(p,frame,updates[i])) return fail();
-    if (!draw(p,frame,target.Get(),data,width,height)) return fail();
-    uint64_t ids[32]{};
-    for (UINT count;(count=p.frees(p.ui,ids,32))!=0;) for (UINT i=0;i<count;++i) {
-        const auto found=p.textures.find(ids[i]);if(found!=p.textures.end()){frame.keep.emplace_back(found->second.resource);p.textures.erase(found);}
+    for (UINT count;(count=panel.updates(panel.ui,updates,32))!=0;) {
+        if (count>32) return 0;
+        for (UINT i=0;i<count;++i) if (!texture(panel,frame,updates[i])) return 0;
     }
-    if (FAILED(frame.commands->Close())) return fail();
-    if (trace) p.log("Overlay12: queue submission begin");
-    ID3D12CommandList* lists[]{frame.commands.Get()};p.queue->ExecuteCommandLists(1,lists);
-    frame.completion=++p.serial;if (FAILED(p.queue->Signal(p.fence.Get(),frame.completion))) return fail();
-    if (trace) p.log("Overlay12: submission completed");
-    if (intent) *intent=decided;return 1;
-} catch (...) { panel().failed=true;return 0; }
+    if (!draw(panel,frame,static_cast<ID3D12Resource*>(target),frame.draw,width,height)) return 0;
+    uint64_t ids[32]{};
+    for (UINT count;(count=panel.frees(panel.ui,ids,32))!=0;) {
+        if (count>32) return 0;
+        for (UINT i=0;i<count;++i) {
+            const auto found=panel.textures.find(ids[i]);
+            if (found!=panel.textures.end()) {frame.keep.emplace_back(found->second.resource);panel.textures.erase(found);}
+        }
+    }
+    return SUCCEEDED(frame.commands->Close());
+} catch (...) { return 0; }
+
+uint32_t submit(void* native, uint32_t slot, uint64_t value) {
+    auto& panel=*static_cast<Panel*>(native);
+    ID3D12CommandList* lists[]{panel.frames[slot].commands.Get()};
+    panel.queue->ExecuteCommandLists(1,lists);
+    return SUCCEEDED(panel.queue->Signal(panel.fence.Get(),value));
+}
+
+constexpr rsf_overlay12_platform platform{
+    create_panel, rsf_overlay_input_visible, rsf_overlay_input_set_visible,
+    completed, wait, begin_frame, layout, record, submit,
+};
+}
+
+uint32_t rsf_overlay_native12_visible() {
+    return rsf_core_overlay12_visible(&platform);
+}
+void rsf_overlay_native12_toggle() {
+    rsf_core_overlay12_toggle(&platform);
+}
+int rsf_overlay_native12_present(void* device, void* queue, void* chain, const rsf_overlay_stats* stats,
+    rsf_overlay_intent* intent, void (*logger)(void*,const char*), void* user) {
+    return rsf_core_overlay12_present(&platform, device, queue, chain, stats, intent, logger, user);
+}

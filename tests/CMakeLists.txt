@@ -362,7 +362,7 @@ set_tests_properties(overlay_host PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:rsf_overlay_host>")
 add_executable(rsf_overlay_native12_test overlay_native12.cpp ../runtime/orchestrator/src/overlay_native12.cpp)
 target_include_directories(rsf_overlay_native12_test PRIVATE ../runtime/orchestrator/include)
-target_link_libraries(rsf_overlay_native12_test PRIVATE ReScaleFrame::Graphics rsf_build_options d3d12 d3dcompiler dxgi)
+target_link_libraries(rsf_overlay_native12_test PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics rsf_build_options d3d12 d3dcompiler dxgi)
 add_dependencies(rsf_overlay_native12_test rsf_overlay_panel_fixture)
 add_test(NAME overlay_native12_backpressure COMMAND rsf_overlay_native12_test "$<TARGET_FILE:rsf_overlay_panel_fixture>")
 set_tests_properties(overlay_native12_backpressure PROPERTIES TIMEOUT 30 SKIP_RETURN_CODE 77)

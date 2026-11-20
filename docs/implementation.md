@@ -411,6 +411,19 @@ retained their Release exports. The Unity D3D12 fixture built. Real device,
 observer, vendor and game behavior remain unverified.
 See [the D3D12 render-host cutover audit](research/rust-render-host-cutover.md).
 
+The native D3D12 overlay now admits and retires its Present slots in Rust.
+It waits only on the oldest submitted overlay fence when its ring is full,
+checks the requested value after waking, and keeps the native completion
+event alive if the wait times out. The Rust owner also controls visibility,
+startup timing and failure state. The native renderer keeps its existing
+shader, GPU resources and atlas draw calls.
+
+Seven focused frontend, overlay and ABI contracts passed in Debug and
+Release. The D3D12 overlay shader is byte-identical. All 162 locked Rust
+tests, formatting, Clippy and binding regeneration passed. Runtime,
+carrier and Minecraft Release exports matched. The backpressure device
+fixture built. Device execution and game validation remain pending.
+
 Rust owns native D3D11 FG transfer slots, leases, shared-host SR evaluation,
 HUD-less capture, Prepare, Present and retirement. Prepare now refuses a
 contended slot as `NOT_PREPARED`. It shares the existing Rust scene and

@@ -83,6 +83,10 @@ mod native_window;
 #[cfg(windows)]
 mod overlay_abi;
 #[cfg(windows)]
+mod overlay_native12;
+#[cfg(windows)]
+mod overlay_native12_abi;
+#[cfg(windows)]
 mod overlay_service;
 #[cfg(windows)]
 mod plugin_session;
