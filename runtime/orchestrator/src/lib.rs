@@ -144,6 +144,10 @@ mod vulkan_fg_resources_abi;
 #[cfg(windows)]
 mod vulkan_fsr4_fg;
 #[cfg(windows)]
+mod vulkan_fsr4_sr;
+#[cfg(windows)]
+mod vulkan_fsr4_sr_abi;
+#[cfg(windows)]
 mod vulkan_latency;
 #[cfg(windows)]
 mod vulkan_latency_abi;

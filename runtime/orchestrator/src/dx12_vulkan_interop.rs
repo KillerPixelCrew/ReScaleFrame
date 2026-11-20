@@ -22,11 +22,13 @@ const IMAGE_SLOTS: usize = 24;
 type Handle = *mut c_void;
 type Callbacks = rsf_dx12vk_interop_callbacks;
 type Platform = rsf_dx12vk_platform;
+pub(super) type FenceFactory = unsafe extern "C" fn(Handle, *mut Handle) -> i32;
+pub(super) type ImageRelease = unsafe extern "C" fn(Handle);
 type Output = rsf_dx12vk_shared_image;
 const INVALID: i32 = RSF_DX12VK_INTEROP_INVALID_ARGUMENT;
 const ABI_MISMATCH: i32 = RSF_DX12VK_INTEROP_ABI_MISMATCH;
 
-fn checked(result: i32) -> Result<(), i32> {
+pub(super) fn checked(result: i32) -> Result<(), i32> {
     if result == 0 { Ok(()) } else { Err(result) }
 }
 
@@ -45,15 +47,79 @@ struct Image {
     dx12: Handle,
 }
 
-struct Owner {
+pub(super) struct Owner {
     platform: &'static Platform,
     native: Handle,
-    callbacks: Callbacks,
+    release_image: ImageRelease,
+    legacy: Option<Callbacks>,
     timeline: u64,
     images: [Option<Image>; IMAGE_SLOTS],
 }
 
 impl Owner {
+    pub(super) fn adapter_luid(platform: &Platform, setup: &rsf_srvk_setup) -> Result<u64, i32> {
+        let mut luid = 0;
+        checked(unsafe { (platform.adapter_luid.unwrap())(setup, &mut luid) })?;
+        Ok(luid)
+    }
+
+    pub(super) fn open(
+        platform: &'static Platform,
+        setup: &rsf_srvk_setup,
+        release_image: ImageRelease,
+    ) -> Result<Self, i32> {
+        let mut native = ptr::null_mut();
+        checked(unsafe { (platform.open.unwrap())(setup, &mut native) })?;
+        if native.is_null() {
+            return Err(INITIALIZATION_FAILED);
+        }
+        Ok(Self {
+            platform,
+            native,
+            release_image,
+            legacy: None,
+            timeline: 0,
+            images: std::array::from_fn(|_| None),
+        })
+    }
+
+    pub(super) fn timeline(&self) -> u64 {
+        self.timeline
+    }
+
+    pub(super) fn add_image(
+        &mut self,
+        format: u32,
+        extent: [u32; 2],
+        extra_usage: u32,
+        create: impl FnOnce(*mut Handle, *mut Handle) -> i32,
+    ) -> Result<Output, i32> {
+        let index = self
+            .images
+            .iter()
+            .position(Option::is_none)
+            .ok_or(TOO_MANY_OBJECTS)?;
+        let mut image = Image::default();
+        let result = self.import_image(format, extent, extra_usage, &mut image, create);
+        if let Err(error) = result
+            && self.legacy.is_some()
+        {
+            // The legacy caller can retry individual imports on a live owner.
+            self.release(&image);
+            return Err(error);
+        }
+        let output = Output {
+            image: image.image,
+            dx12_resource: image.dx12,
+            format,
+            width: extent[0],
+            height: extent[1],
+        };
+        // A construction transaction owns partial imports through checked cleanup.
+        self.images[index] = Some(image);
+        result.map(|()| output)
+    }
+
     fn release(&self, image: &Image) {
         unsafe {
             if image.image != 0 {
@@ -63,12 +129,16 @@ impl Owner {
                 (self.platform.free_memory.unwrap())(self.native, image.memory);
             }
             if !image.dx12.is_null() {
-                (self.callbacks.release_image.unwrap())(image.dx12);
+                (self.release_image)(image.dx12);
             }
         }
     }
 
-    fn import_timeline(&mut self) -> Result<(), i32> {
+    pub(super) fn import_timeline(
+        &mut self,
+        user: Handle,
+        create: FenceFactory,
+    ) -> Result<(), i32> {
         let platform = self.platform;
         if unsafe { (platform.timeline_importable.unwrap())(self.native) } == 0 {
             return Err(INVALID_EXTERNAL_HANDLE);
@@ -78,8 +148,7 @@ impl Owner {
             return Err(INITIALIZATION_FAILED);
         }
         let mut raw = ptr::null_mut();
-        let result =
-            unsafe { (self.callbacks.create_fence.unwrap())(self.callbacks.user, &mut raw) };
+        let result = unsafe { create(user, &mut raw) };
         let handle = unsafe { owned_handle(raw) };
         checked(result)?;
         let handle = handle.ok_or(INVALID_EXTERNAL_HANDLE)?;
@@ -88,13 +157,21 @@ impl Owner {
         })
     }
 
-    fn import_image(&self, format: u32, width: u32, height: u32) -> Result<Image, i32> {
+    fn import_image(
+        &self,
+        format: u32,
+        [width, height]: [u32; 2],
+        extra_usage: u32,
+        image: &mut Image,
+        create: impl FnOnce(*mut Handle, *mut Handle) -> i32,
+    ) -> Result<(), i32> {
         let platform = self.platform;
         let (mut importable, mut max_width, mut max_height) = (0, 0, 0);
         checked(unsafe {
             (platform.image_properties.unwrap())(
                 self.native,
                 format,
+                extra_usage,
                 &mut importable,
                 &mut max_width,
                 &mut max_height,
@@ -104,25 +181,12 @@ impl Owner {
             return Err(FORMAT_NOT_SUPPORTED);
         }
 
-        let mut pending = PendingImage {
-            owner: self,
-            image: Image::default(),
-        };
         let mut raw = ptr::null_mut();
-        let result = unsafe {
-            (self.callbacks.create_image.unwrap())(
-                self.callbacks.user,
-                width,
-                height,
-                format,
-                &mut raw,
-                &mut pending.image.dx12,
-            )
-        };
+        let result = create(&mut raw, &mut image.dx12);
         let handle = unsafe { owned_handle(raw) };
         checked(result)?;
         let handle = handle.ok_or(INVALID_EXTERNAL_HANDLE)?;
-        if pending.image.dx12.is_null() {
+        if image.dx12.is_null() {
             return Err(INVALID_EXTERNAL_HANDLE);
         }
         checked(unsafe {
@@ -131,17 +195,18 @@ impl Owner {
                 format,
                 width,
                 height,
-                &mut pending.image.image,
+                extra_usage,
+                &mut image.image,
             )
         })?;
-        if pending.image.image == 0 {
+        if image.image == 0 {
             return Err(INITIALIZATION_FAILED);
         }
         let (mut bytes, mut image_types, mut handle_types) = (0, 0, 0);
         unsafe {
             (platform.image_requirements.unwrap())(
                 self.native,
-                pending.image.image,
+                image.image,
                 &mut bytes,
                 &mut image_types,
             )
@@ -162,31 +227,18 @@ impl Owner {
         checked(unsafe {
             (platform.allocate_memory.unwrap())(
                 self.native,
-                pending.image.image,
+                image.image,
                 handle.as_raw_handle(),
                 bytes,
                 memory_types.trailing_zeros(),
-                &mut pending.image.memory,
+                &mut image.memory,
             )
         })?;
-        if pending.image.memory == 0 {
+        if image.memory == 0 {
             return Err(INITIALIZATION_FAILED);
         }
-        checked(unsafe {
-            (platform.bind_image.unwrap())(self.native, pending.image.image, pending.image.memory)
-        })?;
-        Ok(std::mem::take(&mut pending.image))
-    }
-}
-
-struct PendingImage<'a> {
-    owner: &'a Owner,
-    image: Image,
-}
-
-impl Drop for PendingImage<'_> {
-    fn drop(&mut self) {
-        self.owner.release(&self.image);
+        checked(unsafe { (platform.bind_image.unwrap())(self.native, image.image, image.memory) })?;
+        Ok(())
     }
 }
 
@@ -238,34 +290,24 @@ unsafe extern "C" fn rsf_core_dx12vk_interop_create(
     {
         return ABI_MISMATCH;
     }
-    let mut luid = 0;
-    let result = unsafe { (platform.adapter_luid.unwrap())(setup, &mut luid) };
-    if result != 0 {
-        return result;
-    }
+    let luid = match Owner::adapter_luid(platform, setup) {
+        Ok(luid) => luid,
+        Err(error) => return error,
+    };
     if luid != callbacks.adapter_luid {
         return INVALID_EXTERNAL_HANDLE;
     }
-    let mut native = ptr::null_mut();
-    let result = unsafe { (platform.open.unwrap())(setup, &mut native) };
-    if result != 0 {
-        return result;
-    }
-    if native.is_null() {
-        return INITIALIZATION_FAILED;
-    }
-    let raw = allocate_handle(Owner {
-        platform,
-        native,
-        callbacks: *callbacks,
-        timeline: 0,
-        images: std::array::from_fn(|_| None),
-    });
+    let mut owner = match Owner::open(platform, setup, callbacks.release_image.unwrap()) {
+        Ok(owner) => owner,
+        Err(error) => return error,
+    };
+    owner.legacy = Some(*callbacks);
+    let raw = allocate_handle(owner);
     if raw.is_null() {
         return OUT_OF_HOST_MEMORY;
     }
     let mut owner = unsafe { Box::from_raw(raw) };
-    if let Err(error) = owner.import_timeline() {
+    if let Err(error) = owner.import_timeline(callbacks.user, callbacks.create_fence.unwrap()) {
         return error;
     }
     unsafe { out.write(Box::into_raw(owner)) };
@@ -303,24 +345,16 @@ unsafe extern "C" fn rsf_dx12vk_interop_image(
     if width == 0 || height == 0 || !matches!(format, BGRA8_UNORM | R32_FLOAT | RG16_FLOAT) {
         return INVALID;
     }
-    let Some(index) = owner.images.iter().position(Option::is_none) else {
-        return TOO_MANY_OBJECTS;
-    };
-    let image = match owner.import_image(format, width, height) {
-        Ok(image) => image,
-        Err(error) => return error,
-    };
-    unsafe {
-        out.write(Output {
-            image: image.image,
-            dx12_resource: image.dx12,
-            format,
-            width,
-            height,
-        })
-    };
-    owner.images[index] = Some(image);
-    0
+    let callbacks = owner.legacy.unwrap();
+    match owner.add_image(format, [width, height], 0, |handle, resource| unsafe {
+        (callbacks.create_image.unwrap())(callbacks.user, width, height, format, handle, resource)
+    }) {
+        Ok(image) => {
+            unsafe { out.write(image) };
+            0
+        }
+        Err(error) => error,
+    }
 }
 
 #[unsafe(no_mangle)]

@@ -404,6 +404,21 @@ Rust tests, formatting and Clippy passed. Runtime, both carriers and
 Minecraft exports matched. Device and in-game validation remain open.
 See [the Vulkan SR cutover audit](research/rust-vulkan-sr-cutover.md).
 
+Split Vulkan FSR4 SR now owns frame admission, shared-image imports,
+producer and continuation identity, history and teardown in Rust. It uses
+the same D3D12/Vulkan importer as the other interop callers. A refused SDK
+evaluation still returns the resumed command buffer for the host's spatial
+fallback. Once checked SDK teardown starts, the owner closes frame
+admission and retains resources when cleanup refuses.
+
+The integrated build passed ten focused CPU contracts in MSVC Debug and
+Release, including the FSR4 state test, both split stubs and the shared
+importer test. All 206 locked Rust tests, formatting, Clippy and binding
+regeneration passed. Runtime, both carriers and Minecraft Release exports
+matched. The isolated worker also built linked Godot and verified the
+FSR4-disabled Runtime. Device synchronization and game behavior remain open.
+See [the split Vulkan FSR4 cutover audit](research/rust-vulkan-fsr4-sr-cutover.md).
+
 The Vulkan DLSS SR owner now manages its SDK lease, preset, temporal history
 and private images in Rust. It shares Vulkan image allocation with FG and
 publishes the engine output only after accepted SDK evaluation. A refused

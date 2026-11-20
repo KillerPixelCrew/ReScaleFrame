@@ -100,7 +100,8 @@ endif()
 set(RSF_XESS_VK_INCLUDE "${CMAKE_SOURCE_DIR}/vendor/xess/inc" CACHE PATH "XeSS Vulkan API headers")
 if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND
    ((EXISTS "${RSF_XESS_VK_INCLUDE}/xess_fg/xefg_swapchain_d3d12.h" AND EXISTS "${RSF_XESS_VK_INCLUDE}/xell/xell_d3d12.h") OR
-    EXISTS "${RSF_FFX_INCLUDE}/../../framegeneration/include/ffx_framegeneration.h"))
+    EXISTS "${RSF_FFX_INCLUDE}/../../framegeneration/include/ffx_framegeneration.h" OR
+    (EXISTS "${RSF_FFX_INCLUDE}/dx12/ffx_api_dx12.h" AND EXISTS "${RSF_FFX_INCLUDE}/../../upscalers/include/ffx_upscale.h")))
     target_sources(rsf_native_vulkan PRIVATE src/native_dx12_vulkan_interop.cpp)
     target_include_directories(rsf_native_vulkan SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}")
     target_link_libraries(rsf_native_vulkan PRIVATE d3d12 dxgi)

@@ -2,13 +2,9 @@
 #define VK_USE_PLATFORM_WIN32_KHR
 #include <windows.h>
 #include <vulkan/vulkan.h>
-#include <array>
-#include <cmath>
-#include <cstring>
+#include <memory>
 #include <new>
-#include <string>
-#include "native_sr_fsr4_vulkan.h"
-#include "native_sr_split_lease.h"
+#include "native_sr_fsr4_vulkan_platform.h"
 #include "../../backends/common/frame_capture_vk.h"
 #include "sharpening_vulkan.h"
 
@@ -17,358 +13,180 @@ extern "C" int VulkanStoryFsr4CreateSharedImage(rsf_fsr4_bridge*, uint32_t, uint
     uint32_t, uint32_t, HANDLE*, ID3D12Resource**);
 extern "C" void VulkanStoryFsr4ReleaseImage(ID3D12Resource*);
 extern "C" int VulkanStoryFsr4CreateSharedFence(rsf_fsr4_bridge*, HANDLE*);
-extern "C" int VulkanStoryFsr4WaitIdle(rsf_fsr4_bridge*);
 extern "C" int VulkanStoryFsr4PrepareDestroy(rsf_fsr4_bridge*);
 extern "C" int VulkanStoryFsr4DestroyChecked(rsf_fsr4_bridge*);
 
-struct rsf_fsr4vk {
-    rsf::sharpening::Vulkan sharpen;
-    rsf_srvk_setup setup{};
-    rsf_fsr4vk_handoff handoff{};
-    rsf::sr::SplitLease lease;
-    rsf_fsr4_bridge* bridge{};
+static_assert(sizeof(rsf_fsr4_bridge_create) == 56 && offsetof(rsf_fsr4_bridge_create, output_width) == 32);
+static_assert(sizeof(rsf_fsr4_bridge_frame) == 112 && offsetof(rsf_fsr4_bridge_frame, reset) == 92 &&
+    offsetof(rsf_fsr4_bridge_frame, done_value) == 104);
+static_assert(sizeof(rsf_fsr4_bridge_info) == sizeof(rsf_srvk_fsr4_provider_info) &&
+    offsetof(rsf_fsr4_bridge_info, provider_version) == offsetof(rsf_srvk_fsr4_provider_info, provider_version));
+static_assert(VK_FORMAT_R16G16B16A16_SFLOAT == 97 && VK_FORMAT_R32_SFLOAT == 100 && VK_FORMAT_R16G16_SFLOAT == 83);
+static_assert(RSF_FSR4_BRIDGE_ABI_VERSION == 1 && VK_NOT_READY == 1 &&
+    VK_ERROR_OUT_OF_HOST_MEMORY == -1 && VK_ERROR_INITIALIZATION_FAILED == -3 && VK_ERROR_UNKNOWN == -13);
+static_assert(VK_IMAGE_LAYOUT_UNDEFINED == 0 && VK_IMAGE_LAYOUT_GENERAL == 1 &&
+    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL == 5 && VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL == 6 &&
+    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL == 7 && VK_IMAGE_USAGE_SAMPLED_BIT == 4 && VK_IMAGE_USAGE_STORAGE_BIT == 8);
+
+namespace {
+enum Transfer : uint32_t { local, acquire_external, release_external };
+
+struct Graphics {
     VkDevice device{};
-    VkPhysicalDevice physical{};
-    VkSemaphore timeline{};
-    struct Image { VkImage image{}; VkDeviceMemory memory{}; ID3D12Resource* dx12{}; uint32_t width{}, height{}; };
-    std::array<Image, 4> images{}; // color, depth, motion, output
-    uint32_t width{}, height{};
-    uint64_t last_frame{}, last_done{}, session{};
-    uint32_t view{}, generation{};
-    bool initialized{}, terminal{}, usable{}, history_valid{};
-    rsf::FrameCaptureVk capture;
-    PFN_vkGetPhysicalDeviceImageFormatProperties2 image_properties{};
     PFN_vkGetPhysicalDeviceMemoryProperties memory_properties{};
-    PFN_vkCreateImage create_image{};
-    PFN_vkDestroyImage destroy_image{};
-    PFN_vkGetImageMemoryRequirements requirements{};
-    PFN_vkGetMemoryWin32HandlePropertiesKHR handle_properties{};
-    PFN_vkAllocateMemory allocate{};
-    PFN_vkFreeMemory free_memory{};
-    PFN_vkBindImageMemory bind{};
-    PFN_vkCreateSemaphore create_semaphore{};
-    PFN_vkDestroySemaphore destroy_semaphore{};
-    PFN_vkImportSemaphoreWin32HandleKHR import_semaphore{};
     PFN_vkCmdPipelineBarrier barrier{};
     PFN_vkCmdCopyImage copy{};
     PFN_vkWaitSemaphores wait{};
     PFN_vkDeviceWaitIdle idle{};
+    rsf::sharpening::Vulkan sharpen;
+    rsf::FrameCaptureVk capture;
 };
 
-namespace {
-int create_image(rsf_fsr4vk& self, rsf_fsr4vk::Image& slot, uint32_t format, uint32_t width, uint32_t height, bool writable) {
-    VkPhysicalDeviceExternalImageFormatInfo external_query{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_IMAGE_FORMAT_INFO};
-    external_query.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT;
-    VkPhysicalDeviceImageFormatInfo2 query{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2};
-    query.pNext = &external_query; query.format = static_cast<VkFormat>(format); query.type = VK_IMAGE_TYPE_2D;
-    query.tiling = VK_IMAGE_TILING_OPTIMAL;
-    query.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | (writable ? VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT : 0u);
-    VkExternalImageFormatProperties external{VK_STRUCTURE_TYPE_EXTERNAL_IMAGE_FORMAT_PROPERTIES};
-    VkImageFormatProperties2 properties{VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2}; properties.pNext = &external;
-    VkResult result = self.image_properties(self.physical, &query, &properties);
-    if (result) return result;
-    if (!(external.externalMemoryProperties.externalMemoryFeatures & VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT) ||
-        width > properties.imageFormatProperties.maxExtent.width || height > properties.imageFormatProperties.maxExtent.height)
-        return VK_ERROR_FORMAT_NOT_SUPPORTED;
-    HANDLE handle = nullptr;
-    int native_result = VulkanStoryFsr4CreateSharedImage(self.bridge, width, height, format, writable ? 1u : 0u, &handle, &slot.dx12);
-    if (native_result) return native_result;
-    VkExternalMemoryImageCreateInfo external_create{VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO};
-    external_create.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT;
-    VkImageCreateInfo create{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO}; create.pNext = &external_create;
-    create.imageType = query.type; create.format = query.format; create.extent = {width, height, 1};
-    create.mipLevels = create.arrayLayers = 1; create.samples = VK_SAMPLE_COUNT_1_BIT;
-    create.tiling = query.tiling; create.usage = query.usage;
-    result = self.create_image(self.device, &create, nullptr, &slot.image);
-    VkMemoryRequirements requirements{};
-    VkMemoryWin32HandlePropertiesKHR native{VK_STRUCTURE_TYPE_MEMORY_WIN32_HANDLE_PROPERTIES_KHR};
-    if (!result) {
-        self.requirements(self.device, slot.image, &requirements);
-        result = self.handle_properties(self.device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT, handle, &native);
-    }
-    if (!result) {
-        VkPhysicalDeviceMemoryProperties memory{}; self.memory_properties(self.physical, &memory);
-        uint32_t index = memory.memoryTypeCount;
-        for (uint32_t i = 0; i < memory.memoryTypeCount; ++i)
-            if ((requirements.memoryTypeBits & native.memoryTypeBits & (1u << i)) &&
-                (memory.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) { index = i; break; }
-        if (index == memory.memoryTypeCount) result = VK_ERROR_INCOMPATIBLE_DRIVER;
-        else {
-            VkMemoryDedicatedAllocateInfo dedicated{VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO}; dedicated.image = slot.image;
-            VkImportMemoryWin32HandleInfoKHR import{VK_STRUCTURE_TYPE_IMPORT_MEMORY_WIN32_HANDLE_INFO_KHR};
-            import.pNext = &dedicated; import.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT; import.handle = handle;
-            VkMemoryAllocateInfo allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO}; allocate.pNext = &import;
-            allocate.allocationSize = requirements.size; allocate.memoryTypeIndex = index;
-            result = self.allocate(self.device, &allocate, nullptr, &slot.memory);
-            if (!result) result = self.bind(self.device, slot.image, slot.memory, 0);
-        }
-    }
-    CloseHandle(handle);
-    slot.width = width; slot.height = height;
+int32_t open(const rsf_srvk_setup* setup, void** out) noexcept try {
+    auto native = std::unique_ptr<Graphics>(new (std::nothrow) Graphics{});
+    if (!native) return VK_ERROR_OUT_OF_HOST_MEMORY;
+    native->device = static_cast<VkDevice>(setup->device);
+    native->memory_properties = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties>(
+        setup->instance_proc(setup->instance, "vkGetPhysicalDeviceMemoryProperties"));
+#define DEVICE(field, name) native->field = reinterpret_cast<PFN_##name>(setup->device_proc(setup->device, #name))
+    DEVICE(barrier, vkCmdPipelineBarrier);
+    DEVICE(copy, vkCmdCopyImage);
+    DEVICE(wait, vkWaitSemaphores);
+    DEVICE(idle, vkDeviceWaitIdle);
+#undef DEVICE
+    if (!native->memory_properties || !native->barrier || !native->copy || !native->wait || !native->idle)
+        return VK_ERROR_EXTENSION_NOT_PRESENT;
+    *out = native.release();
+    return VK_SUCCESS;
+} catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
+
+void close(void* graphics) { delete static_cast<Graphics*>(graphics); }
+
+template<auto Call, class... Args>
+int32_t checked(Args... args) noexcept try {
+    return Call(args...);
+} catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
+
+int32_t create_fence(void* bridge, void** handle) noexcept {
+    return checked<VulkanStoryFsr4CreateSharedFence>(static_cast<rsf_fsr4_bridge*>(bridge), handle);
+}
+
+int32_t create_image(rsf_fsr4_bridge* bridge, uint32_t width, uint32_t height, uint32_t format,
+    uint32_t writable, void** handle, void** resource) noexcept {
+    ID3D12Resource* image{};
+    const int32_t result = checked<VulkanStoryFsr4CreateSharedImage>(bridge, width, height, format, writable, handle, &image);
+    *resource = image;
     return result;
 }
-int wait_done(rsf_fsr4vk& self) {
-    if (!self.last_done) return 0;
-    VkSemaphoreWaitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
-    wait.semaphoreCount = 1; wait.pSemaphores = &self.timeline; wait.pValues = &self.last_done;
-    return self.wait(self.device, &wait, 10000000000ull);
+
+void release_image(void* resource) { VulkanStoryFsr4ReleaseImage(static_cast<ID3D12Resource*>(resource)); }
+
+int32_t capture_initialize(void* graphics, const rsf_srvk_setup* setup, uint64_t provider) noexcept try {
+    auto& native = *static_cast<Graphics*>(graphics);
+    VkPhysicalDeviceMemoryProperties memory{};
+    native.memory_properties(static_cast<VkPhysicalDevice>(setup->physical_device), &memory);
+    native.capture.set_provider(provider, RSF_SR_FSR4);
+    return native.capture.initialize(native.device, setup->device_proc, memory) ? VK_SUCCESS : VK_ERROR_INITIALIZATION_FAILED;
+} catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
+
+void capture_begin(const rsf_frame_record* record) { (void)rsf_input_dump_begin_record(record, RSF_SR_FSR4); }
+
+void capture_record(void* graphics, void* commands, const rsf_srvk_image* image, const rsf_frame_record* record,
+    const char* role, uint32_t reset) {
+    (void)static_cast<Graphics*>(graphics)->capture.record(static_cast<VkCommandBuffer>(commands), *image, *record, role, reset);
 }
-void transition(rsf_fsr4vk& self, VkCommandBuffer commands, VkImage image, VkImageLayout before,
-    VkImageLayout after, bool acquire_external = false, bool release_external = false) {
+
+void capture_parameters(const rsf_srvk_frame* frame, uint32_t reset) {
+    rsf::capture_sr_parameters(*frame->record, RSF_SR_FSR4, frame->motion_scale_x, frame->motion_scale_y, frame->pre_exposure, reset);
+}
+
+int32_t capture_flush(void* graphics) { return static_cast<Graphics*>(graphics)->capture.flush() ? 1 : 0; }
+
+void transition(void* graphics, void* commands, uint64_t image, uint32_t before, uint32_t after,
+    uint32_t queue_family, uint32_t transfer) {
+    const auto& native = *static_cast<const Graphics*>(graphics);
     VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-    barrier.srcAccessMask = before == VK_IMAGE_LAYOUT_UNDEFINED || acquire_external ? 0 : VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-    barrier.dstAccessMask = release_external ? 0 : VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-    barrier.oldLayout = before; barrier.newLayout = after;
-    // VK_QUEUE_FAMILY_EXTERNAL transfers require the actual owning family. The
-    // host supplies it through the handoff, independently of SR ABI 1.
-    barrier.srcQueueFamilyIndex = acquire_external ? VK_QUEUE_FAMILY_EXTERNAL : self.handoff.queue_family;
-    barrier.dstQueueFamilyIndex = release_external ? VK_QUEUE_FAMILY_EXTERNAL : self.handoff.queue_family;
-    if (!acquire_external && !release_external) barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.image = image; barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    self.barrier(commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-        0, 0, nullptr, 0, nullptr, 1, &barrier);
+    barrier.srcAccessMask = before == VK_IMAGE_LAYOUT_UNDEFINED || transfer == acquire_external ? 0 : VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+    barrier.dstAccessMask = transfer == release_external ? 0 : VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+    barrier.oldLayout = static_cast<VkImageLayout>(before);
+    barrier.newLayout = static_cast<VkImageLayout>(after);
+    barrier.srcQueueFamilyIndex = transfer == acquire_external ? VK_QUEUE_FAMILY_EXTERNAL : queue_family;
+    barrier.dstQueueFamilyIndex = transfer == release_external ? VK_QUEUE_FAMILY_EXTERNAL : queue_family;
+    if (transfer == local) barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = reinterpret_cast<VkImage>(image);
+    barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    native.barrier(static_cast<VkCommandBuffer>(commands), VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 }
-bool input_valid(const rsf_fsr4vk& self, const rsf_srvk_image& input, uint32_t format) {
-    return input.device == self.setup.device && input.image && input.copy_source && input.format == format &&
-        input.width == self.width && input.height == self.height && input.layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+void copy(void* graphics, void* commands, uint64_t src, uint64_t dst, uint32_t width, uint32_t height) {
+    VkImageCopy region{};
+    region.srcSubresource = region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.extent = {width, height, 1};
+    static_cast<const Graphics*>(graphics)->copy(static_cast<VkCommandBuffer>(commands),
+        reinterpret_cast<VkImage>(src), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        reinterpret_cast<VkImage>(dst), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+}
+
+int32_t split(const rsf_fsr4vk_handoff* handoff, void* commands, uint64_t timeline,
+    uint64_t previous, uint64_t ready, uint64_t done, void** continuation) noexcept try {
+    return handoff->split_record(handoff->user, commands, timeline, previous, ready, done, continuation);
+} catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
+
+int32_t sharpening_valid(const rsf_sharpening_options* settings) {
+    return rsf::sharpening_settings::valid(*settings) ? 1 : 0;
+}
+
+void sharpen(void* graphics, const rsf_srvk_setup* setup, void* commands, const rsf_srvk_frame* frame, uint64_t image) noexcept try {
+    (void)static_cast<Graphics*>(graphics)->sharpen.run(*setup, static_cast<VkCommandBuffer>(commands), *frame, reinterpret_cast<VkImage>(image));
+} catch (...) {
+    // A diagnostic callback must not interrupt the shared output handoff.
+}
+
+void retire(void* graphics, void* commands) { static_cast<Graphics*>(graphics)->sharpen.retire(commands); }
+void clear_sharpen(void* graphics) { static_cast<Graphics*>(graphics)->sharpen.clear(); }
+
+int32_t wait(void* graphics, uint64_t timeline, uint64_t value, uint64_t timeout) {
+    const auto& native = *static_cast<const Graphics*>(graphics);
+    const auto semaphore = reinterpret_cast<VkSemaphore>(timeline);
+    VkSemaphoreWaitInfo info{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
+    info.semaphoreCount = 1;
+    info.pSemaphores = &semaphore;
+    info.pValues = &value;
+    return native.wait(native.device, &info, timeout);
+}
+
+int32_t idle(void* graphics) {
+    const auto& native = *static_cast<const Graphics*>(graphics);
+    return native.idle(native.device);
+}
+
+const rsf_fsr4vk_platform& platform() {
+    static const rsf_fsr4vk_platform ops{
+        rsf_dx12vk_platform_ops(), open, close, checked<RsfFsr4BridgeCreate>, checked<RsfFsr4BridgePlan>,
+        checked<RsfFsr4BridgeInfo>, create_fence, create_image, release_image, capture_initialize, capture_begin,
+        capture_record, capture_parameters, capture_flush, transition, copy, split, sharpening_valid,
+        checked<RsfFsr4BridgeSharpness>, checked<RsfFsr4BridgeEvaluate>, sharpen, retire, clear_sharpen, wait, idle,
+        checked<VulkanStoryFsr4PrepareDestroy>, checked<VulkanStoryFsr4DestroyChecked>,
+    };
+    return ops;
 }
 }
 
-int32_t rsf_fsr4vk_create(const rsf_srvk_setup* setup, const rsf_fsr4vk_handoff* handoff, rsf_fsr4vk** output) {
-    if (!output) return RSF_FSR4_BRIDGE_INVALID_ARGUMENT;
-    *output = nullptr;
-    if (!setup || setup->struct_size < sizeof(*setup) || !handoff || handoff->struct_size < sizeof(*handoff)) return RSF_FSR4_BRIDGE_INVALID_ARGUMENT;
-    if (setup->abi_version != RSF_SRVK_ABI_VERSION || (handoff->abi_version != RSF_SRVK_SPLIT_ABI_VERSION && handoff->abi_version != RSF_SRVK_SPLIT_TRACKED_ABI_VERSION)) return RSF_FSR4_BRIDGE_ABI_MISMATCH;
-    if (setup->backend != 4 || setup->quality > 4 || !setup->instance || !setup->physical_device || !setup->device ||
-        !setup->instance_proc || !setup->device_proc || !setup->output_width || !setup->output_height ||
-        !setup->runtime_directory_utf8 || handoff->timeline_enabled != 1 || !handoff->split_record || handoff->queue_family >= VK_QUEUE_FAMILY_FOREIGN_EXT ||
-        setup->depth_inverted > 1 || setup->depth_infinite > 1 || setup->motion_jittered > 1) return RSF_FSR4_BRIDGE_INVALID_ARGUMENT;
-    int length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, setup->runtime_directory_utf8, -1, nullptr, 0);
-    if (length <= 1) return RSF_FSR4_BRIDGE_INVALID_ARGUMENT;
-    std::wstring directory(static_cast<size_t>(length), L'\0');
-    if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, setup->runtime_directory_utf8, -1, directory.data(), length)) return RSF_FSR4_BRIDGE_INVALID_ARGUMENT;
-    auto* self = new (std::nothrow) rsf_fsr4vk{};
-    if (!self) return VK_ERROR_OUT_OF_HOST_MEMORY;
-    self->setup = *setup; self->setup.runtime_directory_utf8 = nullptr; self->handoff = *handoff;
-    self->lease.tracked = handoff->abi_version == RSF_SRVK_SPLIT_TRACKED_ABI_VERSION;
-    self->device = static_cast<VkDevice>(setup->device); self->physical = static_cast<VkPhysicalDevice>(setup->physical_device);
-    auto ip = setup->instance_proc; auto dp = setup->device_proc;
-#define I(field, name) self->field = reinterpret_cast<PFN_##name>(ip(setup->instance, #name))
-#define D(field, name) self->field = reinterpret_cast<PFN_##name>(dp(setup->device, #name))
-    I(image_properties, vkGetPhysicalDeviceImageFormatProperties2); I(memory_properties, vkGetPhysicalDeviceMemoryProperties);
-    D(create_image, vkCreateImage); D(destroy_image, vkDestroyImage); D(requirements, vkGetImageMemoryRequirements);
-    D(handle_properties, vkGetMemoryWin32HandlePropertiesKHR); D(allocate, vkAllocateMemory); D(free_memory, vkFreeMemory);
-    D(bind, vkBindImageMemory); D(create_semaphore, vkCreateSemaphore); D(destroy_semaphore, vkDestroySemaphore);
-    D(import_semaphore, vkImportSemaphoreWin32HandleKHR); D(barrier, vkCmdPipelineBarrier); D(copy, vkCmdCopyImage);
-    D(wait, vkWaitSemaphores); D(idle, vkDeviceWaitIdle);
-#undef I
-#undef D
-    auto getProperties = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(ip(setup->instance, "vkGetPhysicalDeviceProperties2"));
-    auto semaphoreProperties = reinterpret_cast<PFN_vkGetPhysicalDeviceExternalSemaphoreProperties>(ip(setup->instance, "vkGetPhysicalDeviceExternalSemaphoreProperties"));
-    if (!self->image_properties || !self->memory_properties || !self->create_image || !self->destroy_image || !self->requirements ||
-        !self->handle_properties || !self->allocate || !self->free_memory || !self->bind || !self->create_semaphore ||
-        !self->destroy_semaphore || !self->import_semaphore || !self->barrier || !self->copy || !self->wait || !self->idle ||
-        !getProperties || !semaphoreProperties) { delete self; return VK_ERROR_EXTENSION_NOT_PRESENT; }
-    VkPhysicalDeviceIDProperties identity{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
-    VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2}; properties.pNext = &identity;
-    getProperties(self->physical, &properties);
-    uint64_t luid = 0; std::memcpy(&luid, identity.deviceLUID, sizeof(luid));
-    if (!identity.deviceLUIDValid || !luid) { delete self; return VK_ERROR_INVALID_EXTERNAL_HANDLE; }
-    // From here an exception or refused checked cleanup must retain the owner.
-    *output = self;
-    rsf_fsr4_bridge_create create{sizeof(create), 1, luid, reinterpret_cast<const uint16_t*>(directory.c_str()),
-        setup->output_width, setup->output_height, setup->output_width, setup->output_height,
-        setup->depth_inverted, setup->depth_infinite, setup->motion_jittered, 0};
-    int result = RsfFsr4BridgeCreate(&create, &self->bridge);
-    if (!result) result = RsfFsr4BridgePlan(self->bridge, setup->quality, &self->width, &self->height);
-    if (!result) {
-        rsf_fsr4_bridge_info provider{sizeof(provider), RSF_FSR4_BRIDGE_ABI_VERSION};
-        result = RsfFsr4BridgeInfo(self->bridge, &provider);
-        if (!result) {
-            VkPhysicalDeviceMemoryProperties memory{};
-            self->memory_properties(self->physical, &memory);
-            self->capture.set_provider(provider.provider_version, 4);
-            if (!self->capture.initialize(self->device, setup->device_proc, memory)) result = VK_ERROR_INITIALIZATION_FAILED;
-        }
-    }
-    VkSemaphoreTypeCreateInfo type{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO}; type.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
-    VkPhysicalDeviceExternalSemaphoreInfo query{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_SEMAPHORE_INFO};
-    query.pNext = &type; query.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_D3D12_FENCE_BIT;
-    VkExternalSemaphoreProperties external{VK_STRUCTURE_TYPE_EXTERNAL_SEMAPHORE_PROPERTIES};
-    if (!result) {
-        semaphoreProperties(self->physical, &query, &external);
-        if (!(external.externalSemaphoreFeatures & VK_EXTERNAL_SEMAPHORE_FEATURE_IMPORTABLE_BIT)) result = VK_ERROR_INVALID_EXTERNAL_HANDLE;
-    }
-    HANDLE handle = nullptr;
-    if (!result) {
-        VkSemaphoreCreateInfo semaphore{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO}; semaphore.pNext = &type;
-        result = self->create_semaphore(self->device, &semaphore, nullptr, &self->timeline);
-    }
-    if (!result) result = VulkanStoryFsr4CreateSharedFence(self->bridge, &handle);
-    if (!result) {
-        VkImportSemaphoreWin32HandleInfoKHR import{VK_STRUCTURE_TYPE_IMPORT_SEMAPHORE_WIN32_HANDLE_INFO_KHR};
-        import.semaphore = self->timeline; import.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_D3D12_FENCE_BIT; import.handle = handle;
-        result = self->import_semaphore(self->device, &import);
-    }
-    if (handle) CloseHandle(handle);
-    const uint32_t formats[] = {VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R32_SFLOAT, VK_FORMAT_R16G16_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT};
-    for (uint32_t i = 0; i < self->images.size() && !result; ++i)
-        result = create_image(*self, self->images[i], formats[i], i == 3 ? setup->output_width : self->width,
-            i == 3 ? setup->output_height : self->height, i == 3);
-    if (result) { if (!rsf_fsr4vk_destroy(self)) *output = nullptr; return result; }
-    self->usable = true;
-    return 0;
+int32_t rsf_fsr4vk_create(const rsf_srvk_setup* setup, const rsf_fsr4vk_handoff* handoff, rsf_fsr4vk** out) {
+    return rsf_core_fsr4vk_create(&platform(), setup, handoff, out);
 }
-
-int32_t rsf_fsr4vk_plan(const rsf_fsr4vk* self, uint32_t* width, uint32_t* height) {
-    if (!self || !self->usable || self->terminal || !width || !height) return RSF_FSR4_BRIDGE_INVALID_ARGUMENT;
-    *width = self->width; *height = self->height; return 0;
+int32_t rsf_fsr4vk_plan(const rsf_fsr4vk* owner, uint32_t* width, uint32_t* height) {
+    return rsf_core_fsr4vk_plan(owner, width, height);
 }
-int32_t rsf_fsr4vk_info(const rsf_fsr4vk* self, rsf_fsr4_bridge_info* info) {
-    return self ? RsfFsr4BridgeInfo(self->bridge, info) : RSF_FSR4_BRIDGE_INVALID_ARGUMENT;
+int32_t rsf_fsr4vk_evaluate(rsf_fsr4vk* owner, void* commands, const rsf_srvk_frame* frame, void** continuation) {
+    return rsf_core_fsr4vk_evaluate(owner, commands, frame, continuation);
 }
-
-int32_t rsf_fsr4vk_evaluate(rsf_fsr4vk* self, void* current_commands, const rsf_srvk_frame* frame, void** continuation_commands) {
-    if (!continuation_commands) return RSF_FSR4_BRIDGE_INVALID_ARGUMENT;
-    *continuation_commands = nullptr;
-    if (self && (self->terminal || !self->usable)) return RSF_FSR4_BRIDGE_INVALID_ARGUMENT;
-    *continuation_commands = current_commands;
-    if (!self || !current_commands || !frame || frame->struct_size < sizeof(*frame) || !frame->record)
-        return RSF_FSR4_BRIDGE_INVALID_ARGUMENT;
-    if (frame->abi_version != RSF_SRVK_ABI_VERSION) return RSF_FSR4_BRIDGE_ABI_MISMATCH;
-    if (frame->sharpening.struct_size && !rsf::sharpening_settings::valid(frame->sharpening)) return RSF_FSR4_BRIDGE_INVALID_ARGUMENT;
-    const auto& record = *frame->record;
-    if (record.struct_size < sizeof(record) || record.abi_version != RSF_GAME_FRAME_ABI_VERSION ||
-        record.camera.struct_size < sizeof(record.camera) || record.camera.abi_version != RSF_GAME_CAMERA_ABI_VERSION ||
-        !record.frame_id || record.frame_id <= self->last_frame || !record.session_id || !record.view_id || !record.resource_generation ||
-        (self->session && (self->session != record.session_id || self->view != record.view_id)) ||
-        self->last_done > UINT64_MAX - 2 || frame->reactive.image || frame->composition.image ||
-        record.render_width != self->width || record.render_height != self->height ||
-        record.output_width != self->setup.output_width || record.output_height != self->setup.output_height ||
-        record.camera.render_width != self->width || record.camera.render_height != self->height ||
-        record.camera.output_width != record.output_width || record.camera.output_height != record.output_height ||
-        record.camera.depth_inverted != self->setup.depth_inverted || record.camera.motion_jittered != self->setup.motion_jittered ||
-        (record.flags & (RSF_FRAME_FLAG_NO_SR | RSF_FRAME_FLAG_AMBIGUOUS_ID)) ||
-        !std::isfinite(record.frame_time_ms) || record.frame_time_ms <= 0 ||
-        !std::isfinite(record.camera.near_plane) || record.camera.near_plane <= 0 ||
-        !std::isfinite(record.camera.far_plane) || record.camera.far_plane < 0 ||
-        (!self->setup.depth_infinite && record.camera.far_plane <= record.camera.near_plane) ||
-        !std::isfinite(record.camera.vertical_fov_radians) || record.camera.vertical_fov_radians <= 0 || record.camera.vertical_fov_radians >= 3.141593f ||
-        !std::isfinite(record.camera.jitter_pixels[0]) || !std::isfinite(record.camera.jitter_pixels[1]) ||
-        !std::isfinite(frame->motion_scale_x) || !std::isfinite(frame->motion_scale_y) || !frame->motion_scale_x || !frame->motion_scale_y ||
-        !std::isfinite(frame->pre_exposure) || frame->pre_exposure <= 0 ||
-        !input_valid(*self, frame->color, VK_FORMAT_R16G16B16A16_SFLOAT) || !input_valid(*self, frame->depth, VK_FORMAT_R32_SFLOAT) ||
-        !input_valid(*self, frame->motion, VK_FORMAT_R16G16_SFLOAT) || frame->output.device != self->setup.device || !frame->output.image ||
-        frame->output.image == frame->color.image || frame->output.image == frame->depth.image || frame->output.image == frame->motion.image ||
-        frame->output.format != VK_FORMAT_R16G16B16A16_SFLOAT || frame->output.width != record.output_width ||
-        frame->output.height != record.output_height || frame->output.layout != VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
-        return RSF_FSR4_BRIDGE_INVALID_ARGUMENT;
-    if (self->lease.pending()) return VK_NOT_READY;
-    (void)rsf_input_dump_begin_record(&record, 4);
-    const auto commands = static_cast<VkCommandBuffer>(current_commands);
-    (void)self->capture.record(commands, frame->color, record, "sr-source-jittered", record.flags & RSF_FRAME_FLAG_RESET);
-    const uint32_t reset = record.flags & RSF_FRAME_FLAG_RESET;
-    (void)self->capture.record(commands, frame->color, record, "sr-linear-color", reset);
-    (void)self->capture.record(commands, frame->depth, record, "sr-depth", reset);
-    (void)self->capture.record(commands, frame->motion, record, "sr-motion-uv", reset);
-    const rsf_srvk_image* inputs[] = {&frame->color, &frame->depth, &frame->motion};
-    for (uint32_t i = 0; i < 3; ++i) {
-        const auto& input = *inputs[i]; const auto& target = self->images[i];
-        VkImage source = reinterpret_cast<VkImage>(input.image);
-        transition(*self, commands, source, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-        transition(*self, commands, target.image, self->initialized ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, self->initialized);
-        VkImageCopy copy{}; copy.srcSubresource = copy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}; copy.extent = {self->width, self->height, 1};
-        self->copy(commands, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, target.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
-        transition(*self, commands, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-        transition(*self, commands, target.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL, false, true);
-    }
-    if (!self->initialized) {
-        transition(*self, commands, self->images[3].image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
-        transition(*self, commands, self->images[3].image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, false, true);
-    }
-    const uint64_t ready = self->last_done + 1, done = ready + 1;
-    self->lease.begin(current_commands);
-    *continuation_commands = nullptr;
-    int result = 0;
-    try {
-        result = self->handoff.split_record(self->handoff.user, current_commands, reinterpret_cast<uint64_t>(self->timeline),
-            self->last_done, ready, done, continuation_commands);
-    } catch (...) {
-        self->terminal = true; *continuation_commands = nullptr;
-        return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    }
-    if (result || !*continuation_commands || *continuation_commands == current_commands) {
-        *continuation_commands = nullptr;
-        self->terminal = true; return result ? result : VK_ERROR_INITIALIZATION_FAILED;
-    }
-    self->lease.resume(*continuation_commands);
-    self->last_done = done; self->last_frame = record.frame_id; self->session = record.session_id; self->initialized = true;
-    rsf_fsr4_bridge_frame dispatch{}; dispatch.struct_size = sizeof(dispatch); dispatch.abi_version = 1;
-    dispatch.color = self->images[0].dx12; dispatch.depth = self->images[1].dx12;
-    dispatch.motion = self->images[2].dx12; dispatch.output = self->images[3].dx12;
-    dispatch.render_width = self->width; dispatch.render_height = self->height;
-    dispatch.output_width = record.output_width; dispatch.output_height = record.output_height;
-    dispatch.jitter_x = record.camera.jitter_pixels[0]; dispatch.jitter_y = record.camera.jitter_pixels[1];
-    dispatch.motion_scale_x = frame->motion_scale_x; dispatch.motion_scale_y = frame->motion_scale_y;
-    dispatch.delta_ms = record.frame_time_ms; dispatch.near_plane = record.camera.near_plane;
-    dispatch.far_plane = record.camera.far_plane; dispatch.vertical_fov = record.camera.vertical_fov_radians;
-    dispatch.pre_exposure = frame->pre_exposure;
-    dispatch.reset = !self->history_valid || (record.flags & RSF_FRAME_FLAG_RESET) || self->generation != record.resource_generation ? 1u : 0u;
-    self->view = record.view_id; self->generation = record.resource_generation;
-    dispatch.ready_value = ready; dispatch.done_value = done;
-    (void)RsfFsr4BridgeSharpness(self->bridge,frame->sharpening.struct_size&&frame->sharpening.mode==RSF_SHARPENING_VENDOR?frame->sharpening.sharpness:0.0f);
-    self->history_valid = false;
-    result = RsfFsr4BridgeEvaluate(self->bridge, &dispatch);
-    if (result) return result; // Host records fallback in the returned continuation.
-    self->history_valid = true;
-    const auto continuation = static_cast<VkCommandBuffer>(*continuation_commands);
-    const auto& output = self->images[3];
-    // D3D12 owns the shared output until the continuation's timeline wait.
-    // Acquire it before any Vulkan sharpening access, including its barriers.
-    transition(*self, continuation, output.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, true);
-    (void)self->sharpen.run(self->setup,continuation,*frame,output.image);
-    transition(*self, continuation, output.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-    VkImageCopy copy{}; copy.srcSubresource = copy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    copy.extent = {record.output_width, record.output_height, 1};
-    self->copy(continuation, output.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        reinterpret_cast<VkImage>(frame->output.image), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
-    // The engine output promises only transfer destination. Capture the owned
-    // source of that exact whole-image copy, whose allocation supports reads.
-    const rsf_srvk_image captured_output{self->setup.device, reinterpret_cast<uint64_t>(output.image),
-        VK_FORMAT_R16G16B16A16_SFLOAT, output.width, output.height, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, 1};
-    rsf::capture_sr_parameters(record, RSF_SR_FSR4, frame->motion_scale_x, frame->motion_scale_y, frame->pre_exposure, dispatch.reset);
-    (void)self->capture.record(continuation, captured_output, record, "sr-output-linear", dispatch.reset);
-    transition(*self, continuation, output.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL, false, true);
-    return 0;
+int32_t rsf_fsr4vk_info(const rsf_fsr4vk* owner, rsf_fsr4_bridge_info* info) {
+    return rsf_core_fsr4vk_info(owner, info);
 }
-
-int32_t rsf_fsr4vk_destroy(rsf_fsr4vk* self) {
-    if (!self) return 0;
-    if (self->terminal || self->lease.pending()) return VK_NOT_READY;
-    int result = wait_done(*self);
-    if (!result) result = self->idle(self->device);
-    if (!result && self->bridge) result = VulkanStoryFsr4PrepareDestroy(self->bridge);
-    if (!result && !self->capture.flush()) result = VK_ERROR_UNKNOWN;
-    if (result) return result;
-    self->usable = false;
-    self->sharpen.clear();
-    for (auto& image : self->images) {
-        if (image.image) self->destroy_image(self->device, image.image, nullptr);
-        if (image.memory) self->free_memory(self->device, image.memory, nullptr);
-        if (image.dx12) VulkanStoryFsr4ReleaseImage(image.dx12);
-        image = {};
-    }
-    if (self->timeline) self->destroy_semaphore(self->device, self->timeline, nullptr);
-    self->timeline = VK_NULL_HANDLE;
-    result = VulkanStoryFsr4DestroyChecked(self->bridge);
-    if (result) return result;
-    delete self; return 0;
-}
-
-void rsf_fsr4vk_retire_commands(rsf_fsr4vk* self,void* commands) { if (self) self->sharpen.retire(commands); }
-
-int32_t rsf_fsr4vk_submitted(rsf_fsr4vk* self, void* commands) {
-    if (!self || !commands || !self->lease.submitted(commands)) return RSF_FSR4_BRIDGE_INVALID_ARGUMENT;
-    return 0;
+int32_t rsf_fsr4vk_destroy(rsf_fsr4vk* owner) { return rsf_core_fsr4vk_destroy(owner); }
+void rsf_fsr4vk_retire_commands(rsf_fsr4vk* owner, void* commands) { rsf_core_fsr4vk_retire_commands(owner, commands); }
+int32_t rsf_fsr4vk_submitted(rsf_fsr4vk* owner, void* commands) {
+    return rsf_core_fsr4vk_submitted(owner, commands);
 }

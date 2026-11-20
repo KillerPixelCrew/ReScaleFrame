@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <vulkan/vulkan.h>
 #include <cstring>
+#include <memory>
 #include <new>
 #include "native_dx12_vulkan_platform.h"
 
@@ -30,7 +31,7 @@ struct Dispatch {
     PFN_vkImportSemaphoreWin32HandleKHR import_semaphore{};
 };
 
-int32_t adapter_luid(const rsf_srvk_setup* setup, uint64_t* luid) {
+int32_t adapter_luid(const rsf_srvk_setup* setup, uint64_t* luid) noexcept try {
     const auto get = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
         setup->instance_proc(setup->instance, "vkGetPhysicalDeviceProperties2"));
     if (!get) return VK_ERROR_EXTENSION_NOT_PRESENT;
@@ -41,10 +42,10 @@ int32_t adapter_luid(const rsf_srvk_setup* setup, uint64_t* luid) {
     static_assert(sizeof(*luid) == VK_LUID_SIZE);
     std::memcpy(luid, identity.deviceLUID, sizeof(*luid));
     return identity.deviceLUIDValid && *luid ? VK_SUCCESS : VK_ERROR_INVALID_EXTERNAL_HANDLE;
-}
+} catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 
-int32_t open(const rsf_srvk_setup* setup, void** out) {
-    auto* native = new (std::nothrow) Dispatch{};
+int32_t open(const rsf_srvk_setup* setup, void** out) noexcept try {
+    auto native = std::unique_ptr<Dispatch>(new (std::nothrow) Dispatch{});
     if (!native) return VK_ERROR_OUT_OF_HOST_MEMORY;
     native->physical = static_cast<VkPhysicalDevice>(setup->physical_device);
     native->device = static_cast<VkDevice>(setup->device);
@@ -70,12 +71,11 @@ int32_t open(const rsf_srvk_setup* setup, void** out) {
         !native->handle_properties || !native->allocate_memory || !native->free_memory ||
         !native->bind_image || !native->create_semaphore || !native->destroy_semaphore ||
         !native->import_semaphore) {
-        delete native;
         return VK_ERROR_EXTENSION_NOT_PRESENT;
     }
-    *out = native;
+    *out = native.release();
     return VK_SUCCESS;
-}
+} catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 
 void close(void* native) { delete static_cast<Dispatch*>(native); }
 
@@ -119,7 +119,7 @@ void destroy_timeline(void* opaque, uint64_t timeline) {
 
 constexpr auto usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 
-int32_t image_properties(void* opaque, uint32_t format, uint32_t* importable, uint32_t* max_width, uint32_t* max_height) {
+int32_t image_properties(void* opaque, uint32_t format, uint32_t extra_usage, uint32_t* importable, uint32_t* max_width, uint32_t* max_height) {
     const auto& native = *static_cast<const Dispatch*>(opaque);
     VkPhysicalDeviceExternalImageFormatInfo external_query{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_IMAGE_FORMAT_INFO};
     external_query.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT;
@@ -128,7 +128,7 @@ int32_t image_properties(void* opaque, uint32_t format, uint32_t* importable, ui
     query.format = static_cast<VkFormat>(format);
     query.type = VK_IMAGE_TYPE_2D;
     query.tiling = VK_IMAGE_TILING_OPTIMAL;
-    query.usage = usage;
+    query.usage = usage | extra_usage;
     VkExternalImageFormatProperties external{VK_STRUCTURE_TYPE_EXTERNAL_IMAGE_FORMAT_PROPERTIES};
     VkImageFormatProperties2 properties{VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2};
     properties.pNext = &external;
@@ -141,7 +141,7 @@ int32_t image_properties(void* opaque, uint32_t format, uint32_t* importable, ui
     return result;
 }
 
-int32_t create_image(void* opaque, uint32_t format, uint32_t width, uint32_t height, uint64_t* out) {
+int32_t create_image(void* opaque, uint32_t format, uint32_t width, uint32_t height, uint32_t extra_usage, uint64_t* out) {
     const auto& native = *static_cast<const Dispatch*>(opaque);
     VkExternalMemoryImageCreateInfo external{VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO};
     external.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT;
@@ -153,7 +153,7 @@ int32_t create_image(void* opaque, uint32_t format, uint32_t width, uint32_t hei
     create.mipLevels = create.arrayLayers = 1;
     create.samples = VK_SAMPLE_COUNT_1_BIT;
     create.tiling = VK_IMAGE_TILING_OPTIMAL;
-    create.usage = usage;
+    create.usage = usage | extra_usage;
     VkImage image{};
     const auto result = native.create_image(native.device, &create, nullptr, &image);
     *out = reinterpret_cast<uint64_t>(image);
@@ -226,6 +226,8 @@ constexpr rsf_dx12vk_platform platform{
     allocate_memory, bind_image, destroy_image, free_memory,
 };
 }
+
+const rsf_dx12vk_platform* rsf_dx12vk_platform_ops() { return &dx12vk_platform::platform; }
 
 int32_t rsf_dx12vk_interop_create(const rsf_srvk_setup* setup, const rsf_dx12vk_interop_callbacks* callbacks,
     uint32_t timeline_enabled, rsf_dx12vk_interop** output) {
