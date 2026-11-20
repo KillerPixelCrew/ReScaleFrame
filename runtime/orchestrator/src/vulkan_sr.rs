@@ -317,7 +317,7 @@ type Capture = unsafe extern "C" fn(Handle, Handle, &Image, &rsf_frame_record, *
 #[repr(C)]
 struct Platform {
     dlss: LegacyOps,
-    xess: LegacyOps,
+    xess: Option<&'static xess::XessOps>,
     ffx: FfxOps,
     fallback_probe: unsafe extern "C" fn(&rsf_srvk_fallback, &mut Blit) -> i32,
     fallback_record: unsafe extern "C" fn(&rsf_srvk_fallback, &Blit) -> i32,
@@ -392,7 +392,7 @@ struct FfxDispatch<'a> {
 }
 
 const _: () = {
-    assert!(size_of::<Platform>() == 320);
+    assert!(size_of::<Platform>() == 280);
     assert!(size_of::<Blit>() == 24 && size_of::<Version>() == 24);
     assert!(size_of::<FfxDispatch>() == 144);
     assert!(std::mem::offset_of!(FfxDispatch, reset) == 136);
@@ -670,6 +670,7 @@ enum Backend {
         handle: Handle,
     },
     Ffx(FidelityFx),
+    Xess(Box<xess::XessOwner>),
 }
 
 struct Owner {
@@ -681,21 +682,26 @@ struct Owner {
 
 impl Owner {
     unsafe fn create(platform: &'static Platform, mut setup: Setup) -> Result<Self, i32> {
-        let legacy = match setup.backend {
-            RSF_SR_DLSS => Some(&platform.dlss),
-            RSF_SR_XESS => Some(&platform.xess),
-            _ => None,
-        };
-        let (backend, render) = if let Some(ops) = legacy {
-            let mut handle = ptr::null_mut();
-            check(unsafe { (ops.create)(&setup, &mut handle) })?;
-            let (mut width, mut height) = (0, 0);
-            // These providers set the plan at successful construction.
-            let _ = unsafe { (ops.plan)(handle, &mut width, &mut height) };
-            (Backend::Legacy { ops, handle }, [width, height])
-        } else {
-            let (owner, render) = unsafe { FidelityFx::create(&platform.ffx, &setup) }?;
-            (Backend::Ffx(owner), render)
+        let (backend, render) = match setup.backend {
+            RSF_SR_DLSS => {
+                let ops = &platform.dlss;
+                let mut handle = ptr::null_mut();
+                check(unsafe { (ops.create)(&setup, &mut handle) })?;
+                let (mut width, mut height) = (0, 0);
+                // This provider sets the plan at successful construction.
+                let _ = unsafe { (ops.plan)(handle, &mut width, &mut height) };
+                (Backend::Legacy { ops, handle }, [width, height])
+            }
+            RSF_SR_XESS => {
+                let ops = platform.xess.ok_or(NOT_COMPILED)?;
+                let owner = unsafe { xess::XessOwner::create(ops, &setup) }?;
+                let plan = owner.plan();
+                (Backend::Xess(Box::new(owner)), plan)
+            }
+            _ => {
+                let (owner, render) = unsafe { FidelityFx::create(&platform.ffx, &setup) }?;
+                (Backend::Ffx(owner), render)
+            }
         };
         setup.runtime_directory_utf8 = ptr::null();
         Ok(Self {
@@ -779,6 +785,7 @@ unsafe extern "C" fn rsf_core_srvk_evaluate(
     let result = match &mut owner.backend {
         Backend::Legacy { ops, handle } => unsafe { (ops.evaluate)(*handle, commands, &frame) },
         Backend::Ffx(ffx) => ffx.evaluate(owner.platform, &owner.setup, commands, &frame, record),
+        Backend::Xess(xess) => xess.evaluate(commands, &frame),
     };
     unsafe { (owner.platform.dump_result)(record, c"sr".as_ptr(), owner.setup.backend, result) };
     result
@@ -793,6 +800,7 @@ unsafe extern "C" fn rsf_core_srvk_retire_commands(owner: *mut Owner, commands: 
         match &mut owner.backend {
             Backend::Legacy { ops, handle } => unsafe { (ops.retire_commands)(*handle, commands) },
             Backend::Ffx(ffx) => ffx.retire_commands(commands),
+            Backend::Xess(xess) => xess.retire_commands(commands),
         }
     }
 }
@@ -805,6 +813,7 @@ unsafe extern "C" fn rsf_core_srvk_destroy(owner: *mut Owner) -> i32 {
     let result = match &mut unsafe { &mut *owner }.backend {
         Backend::Legacy { ops, handle } => unsafe { (ops.destroy)(*handle) },
         Backend::Ffx(ffx) => ffx.destroy(),
+        Backend::Xess(xess) => xess.destroy(),
     };
     if result == 0 {
         drop(unsafe { Box::from_raw(raw.as_ptr()) });
@@ -970,3 +979,5 @@ mod tests {
 
 #[cfg(test)]
 mod owner_tests;
+
+mod xess;

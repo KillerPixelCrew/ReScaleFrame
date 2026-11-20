@@ -75,7 +75,9 @@ preseed the two individual features and retain all storage through
 `vkCreateDevice`. This result is specific to the pinned payload and tested GPU;
 unknown future requirements must refuse safely.
 
-The private provider lives in `runtime/orchestrator/src/native_xess_vulkan.cpp`.
+The private provider lived in `runtime/orchestrator/src/native_xess_vulkan.cpp`.
+Its policy now lives in `vulkan_sr/xess.rs`, and the C++ file keeps the SDK and
+Vulkan leaves ([Rust cutover](rust-xess-vulkan-sr-cutover.md)).
 An early requirements service loads the explicit private SDK directory before
 Vulkan creation. The successful DLL load stays mapped through process exit,
 because Godot retires host services before its Vulkan device. A live SR context
