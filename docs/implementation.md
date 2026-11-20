@@ -204,6 +204,20 @@ All 103 Rust tests and workspace Clippy passed. Both linked carriers built
 and retained their export lists, alongside all 381 runtime exports.
 Device and in-game verification remain pending.
 
+Rust now owns Vulkan FG dispatch across DLSS, FFX3, FSR4 and XeSS. It admits
+one primary swapchain, stores the selected provider and generated count, and
+retains the owner when cleanup needs another attempt. The provider-specific
+Vulkan, DX12 and SDK operations and the existing XeLL borrow gate stay behind
+the private native callbacks. Creation now refuses success without a provider
+handle, and a failed drain reopens latency borrows when retirement permits it.
+
+Five Vulkan CPU and DLL ABI contracts passed in Debug and Release. The
+synthetic providers exercised partial creation, retryable cleanup, failed
+drain and retirement during an in-flight XeLL sleep. All 103 workspace Rust
+tests, formatting, Clippy and byte-for-byte binding regeneration passed.
+Release export names and ordinals matched for the Runtime and both carriers
+(381, 256 and 273). Device and in-game verification remain pending.
+
 The native D3D11 exposure cache now lives in Rust and shares the fullscreen
 pass owner with output reinsertion. It borrows a valid 1×1 R32 scalar
 directly, converts supported float vectors with the existing copy shader,

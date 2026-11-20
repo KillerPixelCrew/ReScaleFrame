@@ -37,6 +37,12 @@ generate("runtime/orchestrator/src/render_abi.rs", "runtime/orchestrator/include
           "-Iruntime/presentation/include", "-Isdk/game/include"],
          ["--blocklist-type", "rsf_(frame_record|frame_id|frame_phase|screen_class|camera_frame)",
           "--raw-line", "use rsf_game_sys::rsf_frame_record;"])
+generate("runtime/orchestrator/src/vulkan_fg_abi.rs", "runtime/orchestrator/src/native_fg_vulkan_platform.h",
+         "rsf_fgvk(_(setup|frame|status|host_options|latency_status|provider|platform))?",
+         "RSF_FGVK_.*",
+         ["-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Iruntime/graphics/include", "-Isdk/game/include"],
+         ["--no-recursive-allowlist", "--raw-line", "use crate::vulkan_sr_abi::{rsf_srvk_image, rsf_srvk_setup};",
+          "--raw-line", "use rsf_game_sys::rsf_frame_record;", "--raw-line", "type rsf_backend_result = i32;"])
 generate("runtime/orchestrator/src/cpu_abi.rs", "runtime/orchestrator/include/rescaleframe/native_cpu.h",
          "rsf_native_(cpu_(frame|counters|reservation|reservation_counters)|input_receipts)",
          "RSF_NATIVE_CPU_(RESERVATION_.*|DEPENDENCY_.*|PRESENT_.*)",

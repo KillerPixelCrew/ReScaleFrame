@@ -15,6 +15,7 @@ rsf_dlssgvk dlss;
 uint32_t ffx_creates = 0, dlss_creates = 0, destroys = 0;
 uint32_t enabled = 0, generated_count = 1, calls = 0;
 bool refuse_destroy = false, refuse_create = false, refuse_state = false;
+bool missing_owner = false, fail_after_create = false, fail_drain = false;
 const rsf_fgvk_setup* borrowed_setup = nullptr;
 const rsf_frame_record* presented_source = nullptr;
 uint32_t explicit_presents = 0;
@@ -27,7 +28,10 @@ extern "C" {
 rsf_backend_result rsf_ffxgvk_create(const rsf_fgvk_setup* setup, rsf_ffxgvk** out, uint64_t* chain) {
     ++ffx_creates; borrowed_setup = setup;
     if (refuse_create) return RSF_BACKEND_ERROR_INIT_FAILED;
-    *out = &ffx; *chain = 33; return RSF_BACKEND_OK;
+    *chain = 33;
+    if (missing_owner) return RSF_BACKEND_OK;
+    *out = &ffx;
+    return fail_after_create ? RSF_BACKEND_ERROR_INIT_FAILED : RSF_BACKEND_OK;
 }
 rsf_backend_result rsf_dlssgvk_create(const rsf_fgvk_setup* setup, rsf_dlssgvk** out, uint64_t* chain) {
     ++dlss_creates; borrowed_setup = setup; *out = &dlss; *chain = 11; return RSF_BACKEND_OK;
@@ -65,7 +69,10 @@ rsf_backend_result rsf_dlssgvk_get_status(rsf_dlssgvk*, rsf_dlssgvk_status* stat
     status->presentation.abi_version = RSF_FGVK_ABI_VERSION; status->presentation.prepared = 10;
     status->max_generated_frames = 3; return RSF_BACKEND_OK;
 }
-rsf_backend_result rsf_ffxgvk_drain(rsf_ffxgvk*) { return refuse_destroy ? RSF_BACKEND_ERROR_NOT_READY : RSF_BACKEND_OK; }
+rsf_backend_result rsf_ffxgvk_drain(rsf_ffxgvk*) {
+    if (fail_drain) return RSF_BACKEND_ERROR_FEATURE_FAILED;
+    return refuse_destroy ? RSF_BACKEND_ERROR_NOT_READY : RSF_BACKEND_OK;
+}
 rsf_backend_result rsf_dlssgvk_drain(rsf_dlssgvk*) { return refuse_destroy ? RSF_BACKEND_ERROR_NOT_READY : RSF_BACKEND_OK; }
 rsf_backend_result rsf_ffxgvk_destroy(rsf_ffxgvk*) { return retire(); }
 rsf_backend_result rsf_dlssgvk_destroy(rsf_dlssgvk*) { return retire(); }
@@ -353,6 +360,24 @@ int main() {
     refuse_destroy=false;require(rsf_fgvk_destroy(owner)==RSF_BACKEND_OK,"partial unattached owner cleanup retry");
     {rsf::latency::PresentationLease retained;require(retained.get()==other_context,"partial-owner cleanup cannot release another active binding");}
     require(rsf::latency::presentation_unbind()==RSF_BACKEND_OK,"independent binding released by its owner");
+    missing_owner = true;
+    require(rsf_fgvk_create(&setup, &owner, &chain) == RSF_BACKEND_ERROR_INIT_FAILED && !owner && !chain,
+        "success without a provider is refused and does not publish the chain");
+    missing_owner = false;
+    fail_after_create = true;
+    const auto before_partial = destroys;
+    require(rsf_fgvk_create(&setup, &owner, &chain) == RSF_BACKEND_ERROR_INIT_FAILED && !owner && !chain &&
+        destroys == before_partial + 1, "failed create retires the partial provider before freeing the claim");
+    fail_after_create = false;
+    require(rsf_fgvk_create(&setup, &owner, &chain) == RSF_BACKEND_OK, "claim is reusable after early failures");
+    fail_drain = true;
+    require(rsf_fgvk_drain(owner) == RSF_BACKEND_ERROR_FEATURE_FAILED, "drain failure is forwarded");
+    {
+        const rsf::latency::PresentationLease lease;
+        require(lease.get() == owner && !lease.closing(), "failed drain reopens CPU borrows");
+    }
+    fail_drain = false;
+    require(rsf_fgvk_destroy(owner) == RSF_BACKEND_OK, "provider retires after a failed drain");
     require(rsf_fgvk_destroy(nullptr) == RSF_BACKEND_OK && rsf_fgvk_drain(nullptr) == RSF_BACKEND_OK, "null retirement remains idempotent");
     std::puts("Synthetic Vulkan FG provider dispatch and ownership checks passed");
 }
