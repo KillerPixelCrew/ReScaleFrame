@@ -44,7 +44,12 @@ add_custom_target(rsf_anomaly_patch_pack ALL
 
 # SR Stages 4 and 5 (src/sr_temporal.h): the Runtime's shared D3D11 SR pipeline through rsf_get_d3d11_sr_api. The
 # pipeline headers name the DLSS backend's frame types; nothing links the backend.
-target_sources(rsf_game_anomaly PRIVATE src/sr_temporal.cpp)
+add_library(rsf_anomaly_sr_temporal STATIC src/sr_temporal.cpp)
+target_include_directories(rsf_anomaly_sr_temporal PRIVATE
+    "${PROJECT_SOURCE_DIR}/runtime/orchestrator/include" "${PROJECT_SOURCE_DIR}/runtime/backends/dlss/include")
+target_link_libraries(rsf_anomaly_sr_temporal PRIVATE
+    rsf_anomaly_rust ReScaleFrame::GameSDK ReScaleFrame::Contract ReScaleFrame::Graphics rsf_build_options)
+target_link_libraries(rsf_game_anomaly PRIVATE rsf_anomaly_sr_temporal)
 target_include_directories(rsf_game_anomaly PRIVATE "${PROJECT_SOURCE_DIR}/runtime/backends/dlss/include")
 
 # Frame generation (src/fg_stage.h): the Runtime's shared D3D11 presentation bridge and FG tagging path through

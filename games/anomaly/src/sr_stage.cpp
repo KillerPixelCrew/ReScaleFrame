@@ -1185,7 +1185,6 @@ void configure(const StageOptions& value, rsf_game_log_fn log, void* user) noexc
         temporal.exposure_auto = value.exposure_auto;
         temporal.colour_transport = value.colour_transport;
         temporal.first_person_zero = value.first_person_zero;
-        temporal.cut = value.cut;
         temporal.streamline = utf8(value.streamline_dir);
         temporal.fidelityfx = utf8(value.fidelityfx_dir);
         temporal.xess = utf8(value.xess_dir);

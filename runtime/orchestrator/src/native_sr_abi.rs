@@ -3,54 +3,7 @@
 #![allow(non_camel_case_types)]
 use crate::render_abi::rsf_pipeline_camera_frame;
 
-pub const RSF_DLSS_PIPELINE_ABI_VERSION: u32 = 5;
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct rsf_motion_decode_params {
-    pub struct_size: u32,
-    pub scale_x: f32,
-    pub scale_y: f32,
-    pub bias_x: f32,
-    pub bias_y: f32,
-    pub output_scale_x: f32,
-    pub output_scale_y: f32,
-    pub invalid_value: f32,
-    pub zero_means_unwritten: u32,
-    pub validity_enabled: u32,
-    pub validity_channel: u32,
-    pub validity_threshold: f32,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_motion_decode_params"]
-        [::core::mem::size_of::<rsf_motion_decode_params>() - 48usize];
-    ["Alignment of rsf_motion_decode_params"]
-        [::core::mem::align_of::<rsf_motion_decode_params>() - 4usize];
-    ["Offset of field: rsf_motion_decode_params::struct_size"]
-        [::core::mem::offset_of!(rsf_motion_decode_params, struct_size) - 0usize];
-    ["Offset of field: rsf_motion_decode_params::scale_x"]
-        [::core::mem::offset_of!(rsf_motion_decode_params, scale_x) - 4usize];
-    ["Offset of field: rsf_motion_decode_params::scale_y"]
-        [::core::mem::offset_of!(rsf_motion_decode_params, scale_y) - 8usize];
-    ["Offset of field: rsf_motion_decode_params::bias_x"]
-        [::core::mem::offset_of!(rsf_motion_decode_params, bias_x) - 12usize];
-    ["Offset of field: rsf_motion_decode_params::bias_y"]
-        [::core::mem::offset_of!(rsf_motion_decode_params, bias_y) - 16usize];
-    ["Offset of field: rsf_motion_decode_params::output_scale_x"]
-        [::core::mem::offset_of!(rsf_motion_decode_params, output_scale_x) - 20usize];
-    ["Offset of field: rsf_motion_decode_params::output_scale_y"]
-        [::core::mem::offset_of!(rsf_motion_decode_params, output_scale_y) - 24usize];
-    ["Offset of field: rsf_motion_decode_params::invalid_value"]
-        [::core::mem::offset_of!(rsf_motion_decode_params, invalid_value) - 28usize];
-    ["Offset of field: rsf_motion_decode_params::zero_means_unwritten"]
-        [::core::mem::offset_of!(rsf_motion_decode_params, zero_means_unwritten) - 32usize];
-    ["Offset of field: rsf_motion_decode_params::validity_enabled"]
-        [::core::mem::offset_of!(rsf_motion_decode_params, validity_enabled) - 36usize];
-    ["Offset of field: rsf_motion_decode_params::validity_channel"]
-        [::core::mem::offset_of!(rsf_motion_decode_params, validity_channel) - 40usize];
-    ["Offset of field: rsf_motion_decode_params::validity_threshold"]
-        [::core::mem::offset_of!(rsf_motion_decode_params, validity_threshold) - 44usize];
-};
+pub use rsf_game_sys::sr_abi::{RSF_DLSS_PIPELINE_ABI_VERSION, rsf_motion_decode_params};
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct rsf_dlss_pipeline_frame {

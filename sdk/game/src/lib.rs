@@ -2,6 +2,8 @@
 
 #![allow(non_camel_case_types)]
 
+pub mod sr_abi;
+
 pub const RSF_GAME_FRAME_ABI_VERSION: u32 = 2;
 pub const RSF_GAME_CAMERA_ABI_VERSION: u32 = 1;
 pub const RSF_FRAME_FLAG_RESET: u32 = 1;
