@@ -26,11 +26,9 @@ struct Device {
     PFN_vkResetFences reset_fences{};
     PFN_vkWaitForFences wait_fences{};
 
-    bool load(const rsf_fgvk_setup& setup, bool with_view) {
-        device = static_cast<VkDevice>(setup.graphics.device);
-        graphics_submit = setup.graphics_submit;
-        queue_user = setup.queue_user;
-#define RSF_VKFG_LOAD(member, name) member = reinterpret_cast<PFN_##name>(setup.graphics.device_proc(device, #name)); if (!member) return false
+    bool load_images(const rsf_srvk_setup& setup, bool with_view) {
+        device = static_cast<VkDevice>(setup.device);
+#define RSF_VKFG_LOAD(member, name) member = reinterpret_cast<PFN_##name>(setup.device_proc(device, #name)); if (!member) return false
         RSF_VKFG_LOAD(create_image, vkCreateImage);
         RSF_VKFG_LOAD(destroy_image, vkDestroyImage);
         RSF_VKFG_LOAD(requirements, vkGetImageMemoryRequirements);
@@ -41,6 +39,15 @@ struct Device {
             RSF_VKFG_LOAD(create_view, vkCreateImageView);
             RSF_VKFG_LOAD(destroy_view, vkDestroyImageView);
         }
+#undef RSF_VKFG_LOAD
+        return true;
+    }
+
+    bool load(const rsf_fgvk_setup& setup, bool with_view) {
+        if (!load_images(setup.graphics, with_view)) return false;
+        graphics_submit = setup.graphics_submit;
+        queue_user = setup.queue_user;
+#define RSF_VKFG_LOAD(member, name) member = reinterpret_cast<PFN_##name>(setup.graphics.device_proc(device, #name)); if (!member) return false
         RSF_VKFG_LOAD(create_fence, vkCreateFence);
         RSF_VKFG_LOAD(destroy_fence, vkDestroyFence);
         RSF_VKFG_LOAD(reset_fences, vkResetFences);
@@ -60,7 +67,7 @@ inline VkImage image_handle(const rsf_vkfg_image& image) { return reinterpret_ca
 
 inline constexpr rsf_vkfg_platform platform{
     [](void* user) { return static_cast<Device*>(user)->local_types; },
-    [](void* user, uint32_t width, uint32_t height, uint32_t format, uint64_t* out) -> int32_t {
+    [](void* user, uint32_t width, uint32_t height, uint32_t format, uint32_t usage, uint64_t* out) -> int32_t {
         const auto& native = *static_cast<Device*>(user);
         VkImageCreateInfo info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
         info.imageType = VK_IMAGE_TYPE_2D;
@@ -69,7 +76,7 @@ inline constexpr rsf_vkfg_platform platform{
         info.format = static_cast<VkFormat>(format);
         info.samples = VK_SAMPLE_COUNT_1_BIT;
         info.tiling = VK_IMAGE_TILING_OPTIMAL;
-        info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        info.usage = usage;
         VkImage image{};
         const auto result = native.create_image(native.device, &info, nullptr, &image);
         *out = reinterpret_cast<uint64_t>(image);

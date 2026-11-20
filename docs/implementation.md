@@ -404,6 +404,20 @@ Rust tests, formatting and Clippy passed. Runtime, both carriers and
 Minecraft exports matched. Device and in-game validation remain open.
 See [the Vulkan SR cutover audit](research/rust-vulkan-sr-cutover.md).
 
+The Vulkan DLSS SR owner now manages its SDK lease, preset, temporal history
+and private images in Rust. It shares Vulkan image allocation with FG and
+publishes the engine output only after accepted SDK evaluation. A refused
+SDK release keeps the owner available for retry. Readback publication uses
+the command-retirement proof from the shared Vulkan capture helper.
+
+Six focused Vulkan contracts passed in Debug and Release. The synthetic
+DLSS fixture compiles the enabled SDK headers and covers failed evaluation,
+history reset, command retirement and retryable release. All 204 locked
+Rust tests, formatting, Clippy and binding regeneration passed. Runtime,
+carrier and Minecraft Release exports matched. The ordinary Runtime uses
+the optional Streamline stub in this build. Device and game validation
+remain open.
+
 The OpenGL pipeline now keeps its shared surface and SR lifecycle, frame
 identity, fallback and FG requests in Rust. Native callbacks handle OpenGL,
 DXGI and the presentation child window. A rejected SR rebuild remains

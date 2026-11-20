@@ -284,7 +284,7 @@ unsafe extern "C" fn rsf_core_srvk_dispatch_lookup(
 }
 
 #[derive(Default)]
-struct History {
+pub(super) struct History {
     frame: u64,
     session: u64,
     view: u32,
@@ -292,7 +292,7 @@ struct History {
 }
 
 impl History {
-    fn needs_reset(&self, record: &rsf_frame_record) -> bool {
+    pub(super) fn needs_reset(&self, record: &rsf_frame_record) -> bool {
         record.flags & RSF_FRAME_FLAG_RESET != 0
             || self.frame.wrapping_add(1) != record.frame_id
             || self.session != record.session_id
@@ -300,7 +300,7 @@ impl History {
             || self.generation != record.resource_generation
     }
 
-    fn commit(&mut self, record: &rsf_frame_record) {
+    pub(super) fn commit(&mut self, record: &rsf_frame_record) {
         *self = Self {
             frame: record.frame_id,
             session: record.session_id,

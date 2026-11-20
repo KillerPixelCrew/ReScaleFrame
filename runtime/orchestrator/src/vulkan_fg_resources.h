@@ -4,7 +4,7 @@
 
 typedef struct rsf_vkfg_image {
     uint64_t image, memory, view;
-    uint32_t width, height, format, initialized;
+    uint32_t width, height, format, usage, initialized;
 } rsf_vkfg_image;
 
 typedef struct rsf_vkfg_fences {
@@ -13,7 +13,7 @@ typedef struct rsf_vkfg_fences {
 
 typedef struct rsf_vkfg_platform {
     uint32_t (*local_memory_types)(void*);
-    int32_t (*create_image)(void*, uint32_t width, uint32_t height, uint32_t format, uint64_t*);
+    int32_t (*create_image)(void*, uint32_t width, uint32_t height, uint32_t format, uint32_t usage, uint64_t*);
     void (*requirements)(void*, uint64_t image, uint64_t* size, uint32_t* types);
     int32_t (*allocate)(void*, uint64_t size, uint32_t type, uint64_t*);
     int32_t (*bind)(void*, uint64_t image, uint64_t memory);
@@ -35,6 +35,8 @@ extern "C" {
    committed image or fence. Failed replacement leaves the old image intact. */
 uint32_t rsf_core_vkfg_ensure_image(const rsf_vkfg_platform*, void*, rsf_vkfg_image*,
     uint32_t width, uint32_t height, uint32_t format, uint32_t with_view);
+uint32_t rsf_core_vkfg_ensure_image_usage(const rsf_vkfg_platform*, void*, rsf_vkfg_image*,
+    uint32_t width, uint32_t height, uint32_t format, uint32_t usage, uint32_t with_view);
 void rsf_core_vkfg_release_image(const rsf_vkfg_platform*, void*, rsf_vkfg_image*);
 int32_t rsf_core_vkfg_prepare_fences(const rsf_vkfg_platform*, void*, rsf_fgvk_frame_slot*, rsf_vkfg_fences*);
 void rsf_core_vkfg_fence_submission(const rsf_vkfg_platform*, void*, rsf_fgvk_frame_slot*,

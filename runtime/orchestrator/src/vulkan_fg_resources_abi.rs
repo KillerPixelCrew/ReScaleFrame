@@ -11,11 +11,12 @@ pub struct rsf_vkfg_image {
     pub width: u32,
     pub height: u32,
     pub format: u32,
+    pub usage: u32,
     pub initialized: u32,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of rsf_vkfg_image"][::core::mem::size_of::<rsf_vkfg_image>() - 40usize];
+    ["Size of rsf_vkfg_image"][::core::mem::size_of::<rsf_vkfg_image>() - 48usize];
     ["Alignment of rsf_vkfg_image"][::core::mem::align_of::<rsf_vkfg_image>() - 8usize];
     ["Offset of field: rsf_vkfg_image::image"]
         [::core::mem::offset_of!(rsf_vkfg_image, image) - 0usize];
@@ -29,8 +30,10 @@ const _: () = {
         [::core::mem::offset_of!(rsf_vkfg_image, height) - 28usize];
     ["Offset of field: rsf_vkfg_image::format"]
         [::core::mem::offset_of!(rsf_vkfg_image, format) - 32usize];
+    ["Offset of field: rsf_vkfg_image::usage"]
+        [::core::mem::offset_of!(rsf_vkfg_image, usage) - 36usize];
     ["Offset of field: rsf_vkfg_image::initialized"]
-        [::core::mem::offset_of!(rsf_vkfg_image, initialized) - 36usize];
+        [::core::mem::offset_of!(rsf_vkfg_image, initialized) - 40usize];
 };
 #[repr(C)]
 #[derive(Default, Copy, Clone)]
@@ -58,6 +61,7 @@ pub struct rsf_vkfg_platform {
             width: u32,
             height: u32,
             format: u32,
+            usage: u32,
             arg2: *mut u64,
         ) -> i32,
     >,

@@ -7,6 +7,7 @@ use std::ffi::c_void;
 
 const INIT_FAILED: i32 = -6;
 const NOT_READY: i32 = -8;
+const SAMPLED_TRANSFER: u32 = 0x7;
 
 struct Replacement<'a> {
     platform: &'a Platform,
@@ -50,10 +51,34 @@ extern "C" fn rsf_core_vkfg_ensure_image(
     format: u32,
     with_view: u32,
 ) -> u32 {
+    rsf_core_vkfg_ensure_image_usage(
+        platform,
+        user,
+        current,
+        width,
+        height,
+        format,
+        SAMPLED_TRANSFER,
+        with_view,
+    )
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_core_vkfg_ensure_image_usage(
+    platform: &Platform,
+    user: *mut c_void,
+    current: &mut Image,
+    width: u32,
+    height: u32,
+    format: u32,
+    usage: u32,
+    with_view: u32,
+) -> u32 {
     if current.image != 0
         && current.width == width
         && current.height == height
         && current.format == format
+        && current.usage == usage
         && (with_view == 0 || current.view != 0)
     {
         return 1;
@@ -64,8 +89,9 @@ extern "C" fn rsf_core_vkfg_ensure_image(
         image: Image::default(),
     };
     let image = &mut replacement.image;
-    if unsafe { (platform.create_image.unwrap())(user, width, height, format, &mut image.image) }
-        != 0
+    if unsafe {
+        (platform.create_image.unwrap())(user, width, height, format, usage, &mut image.image)
+    } != 0
         || image.image == 0
     {
         return 0;
@@ -92,6 +118,7 @@ extern "C" fn rsf_core_vkfg_ensure_image(
     image.width = width;
     image.height = height;
     image.format = format;
+    image.usage = usage;
     // The caller already retired the old resource. Publish the complete
     // replacement and retire the old image using the same cleanup path.
     std::mem::swap(current, image);
