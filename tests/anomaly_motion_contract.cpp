@@ -10,6 +10,7 @@
 #include "motion_profile.h"
 #include "motion_target.h"
 #include "shader_loader.h"
+#include "shader_loader_platform.h"
 #include "sr_pass.h"
 #include <windows.h>
 #include <cmath>
@@ -739,6 +740,14 @@ void caller_frame(const MotionProfile& profile, const MotionProfile& other)
     std::memcpy(frame.stack.data() + profile.frame.length_offset, &zero, 4);
     require(read_request(profile, frame.module.data(), frame.return_address(1), frame.stack.data(), direct, request) == FrameStatus::BadSource,
         "empty source");
+    const std::uint32_t too_long = 16 * 1024 * 1024 + 1;
+    std::memcpy(frame.stack.data() + profile.frame.length_offset, &too_long, sizeof(too_long));
+    require(read_request(profile, frame.module.data(), frame.return_address(1), frame.stack.data(), direct, request) == FrameStatus::BadSource,
+        "oversized source length refused before reading root bytes");
+    frame.entry.assign(512, 'x');
+    frame.build();
+    require(read_request(profile, frame.module.data(), frame.return_address(1), frame.stack.data(), direct, request) == FrameStatus::BadSource,
+        "entry point must terminate inside the guarded 512-byte window");
     // The other build's profile names other call sites: a return address of this build is an unknown caller there.
     require(read_request(other, frame.module.data(), frame.return_address(0), frame.stack.data(), direct, request) ==
         FrameStatus::UnknownCaller, "a call site of one build is refused under the other build's profile");
@@ -767,6 +776,28 @@ void manifest_rules()
     require(!Manifest::parse("rsf-anomaly-motion-manifest 1\nnamespace " + ns + "\n", error), "empty");
     require(!Manifest::parse("rsf-anomaly-motion-manifest 1\nnamespace " + ns + "\nroot vs core_static a.vs " + h1 + " XYZ\n", error),
         "bad hash");
+
+    const auto view = [](std::string_view value) -> rsf_anomaly_shader_bytes {
+        return {reinterpret_cast<const uint8_t*>(value.data()), value.size()};
+    };
+    const auto read = [](const void* user, uint32_t i, rsf_anomaly_shader_root* out) noexcept {
+        *out = static_cast<const rsf_anomaly_shader_root*>(user)[i];
+        return true;
+    };
+    rsf_anomaly_shader_root roots[]{
+        {view("dx11/tess.hs"), view(h1), view(h2), view("tess_hull"), 'h'},
+        {view("dx11/tess.ds"), view(h2), view(h1), view("tess_domain"), 'd'},
+    };
+    Manifest pack;
+    require(admit_runtime_manifest(pack, ns, 2, roots, read, error) && pack.by_original.size() == 2 &&
+        pack.by_original.at(h1).family == Family::TessHull && pack.by_original.at(h2).family == Family::TessDomain,
+        "Runtime root metadata admits the matching hull and domain families");
+    roots[1].stage = 'h';
+    require(!admit_runtime_manifest(pack, ns, 2, roots, read, error), "Runtime family/stage mismatch");
+    roots[1].stage = 'd';
+    roots[1].original = view(h1);
+    require(!admit_runtime_manifest(pack, ns, 2, roots, read, error) && error == "ambiguous root source" &&
+        pack.by_original.count(h2) == 1, "Runtime duplicate refuses the candidate without replacing the accepted manifest");
 }
 
 void loader_contract()
@@ -801,19 +832,15 @@ void loader_contract()
     request.bytecode = engine_code;
     {
         unsigned delegated = 0;
-        bool refuse = false;
+        int status = 0;
+        const auto runtime_variant = bytes_of("DXBC|motion|root|main|vs_5_0|8|");
         ShaderLoader runtime_loader(*manifest, compiler, reflector,
             [&](const ShaderRequest& input, const ManifestEntry& entry) {
                 ++delegated;
                 require(&input == &request && input.flags == 8 && input.entry == "main" &&
                     input.defines.size() == 1 && input.defines[0].value == "2048" &&
                     entry.family == Family::CoreStatic, "Runtime delegate receives exact engine inputs and eligibility");
-                Prepared result;
-                result.entry = &entry;
-                result.outcome = refuse ? Outcome::OriginalMismatch : Outcome::ReplacedFromCache;
-                result.detail = "Runtime proof result";
-                if (!refuse) result.variant = bytes_of("runtime variant");
-                return result;
+                return finish_runtime_shader(input, entry, reflector, status, true, runtime_variant, "Runtime proof result");
             });
         const auto accepted = runtime_loader.prepare(request);
         require(accepted.outcome == Outcome::ReplacedFromCache && !accepted.variant.empty() && compiler.calls == 0,
@@ -826,10 +853,16 @@ void loader_contract()
         wrong.source = bytes_of("unlisted Runtime root");
         require(runtime_loader.prepare(wrong).outcome == Outcome::NotAllowlisted && delegated == 1,
             "root eligibility applies before the Runtime delegate");
-        refuse = true;
+        status = -7;  // Runtime v1 RSF_PATCH_ORIGINAL
         const auto refused = runtime_loader.prepare(request);
         require(refused.outcome == Outcome::OriginalMismatch && refused.variant.empty() &&
             refused.detail == "Runtime proof result" && compiler.calls == 0, "Runtime refusals preserve stock fallback");
+        status = 0;
+        reflector.edit = [](char, bool variant, Reflection& r) { if (variant) r.buffers[0].size = 80; };
+        const auto incompatible = runtime_loader.prepare(request);
+        require(incompatible.outcome == Outcome::ReflectionMismatch && incompatible.compatibility == Compatibility::Buffer &&
+            incompatible.variant.empty() && compiler.calls == 0, "Runtime cache hit still requires adapter compatibility");
+        reflector.edit = nullptr;
     }
     auto prepared = loader.prepare(request);
     require(prepared.outcome == Outcome::Replaced && compiler.calls == 2 && prepared.entry->family == Family::CoreStatic,
@@ -837,7 +870,9 @@ void loader_contract()
     const std::string variant(reinterpret_cast<const char*>(prepared.variant.data()), prepared.variant.size());
     require(variant.find("|motion|" + vs_motion + "|main|vs_5_0|8|SMAP_size=2048;") != std::string::npos,
         "variant uses the motion root with the engine's exact inputs");
-    require(std::filesystem::exists(root / "cache" / (loader.cache_key(request, *prepared.entry) + ".dxbc")), "verified variant cached");
+    const auto key = loader.cache_key(request, *prepared.entry);
+    require(key == "9d93a1707dc4402f46d0e05821221752f0ed091580cbafe9d0945137ba6519e7", "fixture cache key stays byte-exact");
+    require(std::filesystem::exists(root / "cache" / (key + ".dxbc")), "verified variant cached");
     compiler.calls = 0;
     prepared = loader.prepare(request);
     require(prepared.outcome == Outcome::ReplacedFromCache && compiler.calls == 0, "cache hit skips compiles");
@@ -1358,6 +1393,8 @@ void tess_compatibility_rules()
         require(compatible(stage, stock, v) == Compatibility::PatchConstants, s + ": patch-constant signature must be identical");
         v = variant; v.inputs.pop_back();
         require(compatible(stage, stock, v) == Compatibility::Inputs, s + ": missing TEXCOORD15");
+        v = variant; v.inputs.back() = v.inputs.front(); v.inputs.back().reg = 6;
+        require(compatible(stage, stock, v) == Compatibility::Inputs, s + ": duplicate TEXCOORD12 cannot replace TEXCOORD15");
         v = variant; v.inputs.push_back(p("TEXCOORD", 16, 7, 0xf));
         require(compatible(stage, stock, v) == Compatibility::Inputs, s + ": unknown extra input");
         v = variant; v.inputs[0].mask = 0x7;
@@ -1382,9 +1419,15 @@ void tess_compatibility_rules()
     domain = tess_variant('d');
     domain.outputs.erase(domain.outputs.begin() + 1);
     require(compatible('d', tess_stock('d'), domain) == Compatibility::Outputs, "domain must write validity");
+    domain = tess_variant('d');
+    domain.outputs[1] = domain.outputs[0]; domain.outputs[1].reg = 1;
+    require(compatible('d', tess_stock('d'), domain) == Compatibility::Outputs, "duplicate previous clip cannot replace validity");
     hull = tess_variant('h');
     hull.outputs.erase(hull.outputs.begin());
     require(compatible('h', tess_stock('h'), hull) == Compatibility::Outputs, "hull must forward the previous clip");
+    hull = tess_variant('h');
+    hull.outputs[0] = hull.outputs[1]; hull.outputs[0].reg = 0;
+    require(compatible('h', tess_stock('h'), hull) == Compatibility::Outputs, "duplicate validity cannot replace previous clip");
     require(compatible('g', tess_stock('h'), tess_variant('h')) != Compatibility::Ok, "geometry shaders are never variants");
 }
 void tess_linkage_rules()

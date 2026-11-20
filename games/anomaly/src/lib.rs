@@ -14,6 +14,8 @@ mod motion_device;
 mod motion_device_abi;
 mod motion_target;
 mod motion_target_abi;
+#[cfg(windows)]
+mod shader_loader;
 mod sr_temporal;
 
 use rsf_game_sys::{
