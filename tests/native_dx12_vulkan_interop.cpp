@@ -12,7 +12,7 @@ extern "C" int VulkanStoryXessFgCreateSharedFence(rsf_xess_bridge*, HANDLE*) { r
 namespace {
 int failures = 0, images = 0, memories = 0, resources = 0, semaphores = 0;
 int bridge_failure = 0;
-bool import_failure = false, bind_failure = false;
+bool import_failure = false, bind_failure = false, missing_handle = false, missing_resource = false, wrong_memory_type = false;
 HANDLE last_handle{};
 #define CHECK(value) do { if (!(value)) { std::printf("line %d: %s\n", __LINE__, #value); ++failures; } } while (false)
 void VKAPI_PTR properties(VkPhysicalDevice, VkPhysicalDeviceProperties2* out) {
@@ -27,7 +27,8 @@ VkResult VKAPI_PTR image_properties(VkPhysicalDevice, const VkPhysicalDeviceImag
     return VK_SUCCESS;
 }
 void VKAPI_PTR memory_properties(VkPhysicalDevice, VkPhysicalDeviceMemoryProperties* out) {
-    out->memoryTypeCount = 1; out->memoryTypes[0].propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+    out->memoryTypeCount = 2;
+    out->memoryTypes[wrong_memory_type ? 1 : 0].propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
 }
 void VKAPI_PTR semaphore_properties(VkPhysicalDevice, const VkPhysicalDeviceExternalSemaphoreInfo* query, VkExternalSemaphoreProperties* out) {
     CHECK(query->handleType == VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_D3D12_FENCE_BIT);
@@ -75,10 +76,14 @@ rsf_vk_function proc(void*, const char* name) {
 int32_t shared_image(void*, uint32_t width, uint32_t height, uint32_t format, void** handle, void** resource) {
     CHECK(width == 32 && height == 24 && format == VK_FORMAT_R32_SFLOAT);
     *handle = last_handle = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-    *resource = new int(1); ++resources; return bridge_failure;
+    if (!missing_resource) { *resource = new int(1); ++resources; }
+    return bridge_failure;
 }
 void release_image(void* resource) { delete static_cast<int*>(resource); --resources; }
-int32_t shared_fence(void*, void** handle) { *handle = last_handle = CreateEventW(nullptr, FALSE, FALSE, nullptr); return bridge_failure; }
+int32_t shared_fence(void*, void** handle) {
+    *handle = last_handle = missing_handle ? nullptr : CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    return bridge_failure;
+}
 void closed() { DWORD flags = 0; CHECK(!GetHandleInformation(last_handle, &flags) && GetLastError() == ERROR_INVALID_HANDLE); }
 }
 int main() {
@@ -106,7 +111,9 @@ int main() {
     CHECK(rsf_dx12vk_interop_create(&setup, &callbacks, 0, &owner) == RSF_DX12VK_INTEROP_INVALID_ARGUMENT && !owner);
     bridge_failure = -77;
     CHECK(rsf_dx12vk_interop_create(&setup, &callbacks, 1, &owner) == -77 && !owner && !semaphores); closed();
-    bridge_failure = 0; import_failure = true;
+    bridge_failure = 0; missing_handle = true;
+    CHECK(rsf_dx12vk_interop_create(&setup, &callbacks, 1, &owner) == VK_ERROR_INVALID_EXTERNAL_HANDLE && !owner && !semaphores);
+    missing_handle = false; import_failure = true;
     CHECK(rsf_dx12vk_interop_create(&setup, &callbacks, 1, &owner) == VK_ERROR_INVALID_EXTERNAL_HANDLE && !owner && !semaphores); closed();
     import_failure = false;
     CHECK(rsf_dx12vk_interop_create(&setup, &callbacks, 1, &owner) == 0 && owner && semaphores == 1); closed();
@@ -114,7 +121,13 @@ int main() {
     rsf_dx12vk_shared_image image{};
     bridge_failure = -78;
     CHECK(rsf_dx12vk_interop_image(owner, VK_FORMAT_R32_SFLOAT, 32, 24, &image) == -78 && !image.image && !resources); closed();
-    bridge_failure = 0; bind_failure = true;
+    bridge_failure = 0; missing_resource = true;
+    CHECK(rsf_dx12vk_interop_image(owner, VK_FORMAT_R32_SFLOAT, 32, 24, &image) == VK_ERROR_INVALID_EXTERNAL_HANDLE && !image.image);
+    CHECK(!images && !memories && !resources); closed();
+    missing_resource = false; wrong_memory_type = true;
+    CHECK(rsf_dx12vk_interop_image(owner, VK_FORMAT_R32_SFLOAT, 32, 24, &image) == VK_ERROR_INCOMPATIBLE_DRIVER && !image.image);
+    CHECK(!images && !memories && !resources); closed();
+    wrong_memory_type = false; bind_failure = true;
     CHECK(rsf_dx12vk_interop_image(owner, VK_FORMAT_R32_SFLOAT, 32, 24, &image) == VK_ERROR_UNKNOWN && !image.image);
     CHECK(!images && !memories && !resources); closed();
     bind_failure = false;

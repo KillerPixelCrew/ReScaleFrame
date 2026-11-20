@@ -342,6 +342,19 @@ address reuse, layout invalidation and duplicate notification. All 161 Rust
 tests, formatting and Clippy passed. Vulkan device and game validation
 remain open.
 
+The shared D3D12/Vulkan importer now owns NT handles, Vulkan semaphore and
+image imports, device-local memory selection, and retained D3D12 image
+references in Rust. It checks adapter identity before import, publishes only
+bound resources, and keeps them live when destruction lacks proof that both
+queues drained. Vulkan descriptor and driver calls stay in the native leaves.
+
+Six focused Vulkan contracts passed in Debug and Release. The synthetic
+interop fixture covers partial failures, missing handles or resources, memory
+type refusal and retryable teardown. All 192 locked Rust tests, formatting,
+Clippy and binding regeneration passed. Runtime, carrier and Minecraft
+Release exports matched. Real D3D12/Vulkan import and game behavior await
+device validation.
+
 The shared frame-capture owner now keeps requests, exact capture identity,
 metadata, ticket publication and GPU completion bounds in Rust. It closes
 new reservations at the first matched Present and lets pending readbacks

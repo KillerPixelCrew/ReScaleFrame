@@ -52,6 +52,10 @@ generate("runtime/orchestrator/src/vulkan_latency_abi.rs", "runtime/orchestrator
          ["-include", "rescaleframe/native_streamline_vulkan.h", "-Iruntime/orchestrator/include",
           "-Iruntime/contract/include", "-Iruntime/graphics/include", "-Isdk/game/include"],
          ["--no-recursive-allowlist", "--raw-line", "type rsf_backend_result = i32;"])
+generate("runtime/orchestrator/src/dx12_vulkan_interop_abi.rs", "runtime/orchestrator/src/native_dx12_vulkan_platform.h",
+         "rsf_dx12vk_(platform|shared_image|interop_callbacks)", "RSF_DX12VK_INTEROP_.*",
+         ["-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Iruntime/graphics/include", "-Isdk/game/include"],
+         ["--no-recursive-allowlist", "--raw-line", "use crate::vulkan_sr_abi::rsf_srvk_setup;"])
 generate("runtime/orchestrator/src/cpu_abi.rs", "runtime/orchestrator/include/rescaleframe/native_cpu.h",
          "rsf_native_(cpu_(frame|counters|reservation|reservation_counters)|input_receipts)",
          "RSF_NATIVE_CPU_(RESERVATION_.*|DEPENDENCY_.*|PRESENT_.*)",

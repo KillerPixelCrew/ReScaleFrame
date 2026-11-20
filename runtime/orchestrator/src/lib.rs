@@ -29,6 +29,10 @@ mod dlss_pipeline_abi;
 #[cfg(windows)]
 mod dlss_vulkan_capture_ledger;
 #[cfg(windows)]
+mod dx12_vulkan_interop;
+#[cfg(windows)]
+mod dx12_vulkan_interop_abi;
+#[cfg(windows)]
 mod native_composition;
 #[cfg(windows)]
 mod native_cpu;
