@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 #include "native_dlss_vulkan_platform.h"
-#include "native_dlss_vulkan.h"
 #include <rescaleframe/native_streamline_vulkan.h>
 #include <cmath>
 #include <cstring>
@@ -215,7 +214,9 @@ void publish(void* native, void* commands, const rsf_srvk_frame* input, uint64_t
     transition(self, list, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL);
 }
 
-constexpr rsf_vkdlss_platform platform{
+}
+
+const rsf_vkdlss_platform rsf::dlss_vk::leaves{
     open,
     [](void* native) { delete static_cast<Native*>(native); },
     rsf_slvk_invoke,
@@ -266,51 +267,4 @@ constexpr rsf_vkdlss_platform platform{
         self.capture.retire_commands(static_cast<VkCommandBuffer>(commands));
     },
 };
-}
 #endif
-
-rsf_backend_result rsf_dlssvk_create(const rsf_srvk_setup* setup, rsf_dlssvk** out) {
-#if defined(RSF_HAVE_STREAMLINE_VK)
-    return rsf_core_vkdlss_create(&platform, setup, out);
-#else
-    if (!out) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    *out = nullptr;
-    (void)setup; return RSF_BACKEND_ERROR_NOT_COMPILED;
-#endif
-}
-rsf_backend_result rsf_dlssvk_plan(const rsf_dlssvk* self, uint32_t* width, uint32_t* height) {
-#if defined(RSF_HAVE_STREAMLINE_VK)
-    return rsf_core_vkdlss_plan(self, width, height);
-#else
-    (void)self; (void)width; (void)height; return RSF_BACKEND_ERROR_NOT_COMPILED;
-#endif
-}
-rsf_backend_result rsf_dlssvk_evaluate(rsf_dlssvk* self, void* commands, const rsf_srvk_frame* input) {
-#if defined(RSF_HAVE_STREAMLINE_VK)
-    return rsf_core_vkdlss_evaluate(self, commands, input);
-#else
-    (void)self; (void)commands; (void)input; return RSF_BACKEND_ERROR_NOT_COMPILED;
-#endif
-}
-rsf_backend_result rsf_dlssvk_preset(rsf_dlssvk* self, uint32_t preset) {
-    if (!(preset == 0 || preset == 5 || preset == 6 || (preset >= 10 && preset <= 13))) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-#if defined(RSF_HAVE_STREAMLINE_VK)
-    return rsf_core_vkdlss_preset(self, preset);
-#else
-    (void)self; return RSF_BACKEND_ERROR_NOT_COMPILED;
-#endif
-}
-rsf_backend_result rsf_dlssvk_destroy(rsf_dlssvk* self) {
-#if defined(RSF_HAVE_STREAMLINE_VK)
-    return rsf_core_vkdlss_destroy(self);
-#else
-    (void)self; return RSF_BACKEND_OK;
-#endif
-}
-void rsf_dlssvk_retire_commands(rsf_dlssvk* self, void* commands) {
-#if defined(RSF_HAVE_STREAMLINE_VK)
-    rsf_core_vkdlss_retire(self, commands);
-#else
-    (void)self; (void)commands;
-#endif
-}

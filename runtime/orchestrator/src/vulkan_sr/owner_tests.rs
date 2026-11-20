@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: MIT
 use super::*;
+use crate::vulkan_dlss_sr_abi::{rsf_vkdlss_images, rsf_vkdlss_platform};
+use crate::vulkan_fg_resources_abi::rsf_vkfg_image;
+use crate::vulkan_latency_abi::{RSF_SLVK_ABI_VERSION, rsf_slvk_call};
 
 const FAILED: i32 = -9;
 
@@ -15,6 +18,11 @@ enum Call {
     Sharpen,
     Log,
     Copy(u64, u64),
+    DlssConstants(u32),
+    DlssOptions(u32),
+    DlssStage,
+    DlssCapture,
+    DlssPublish,
     Retire(usize),
     Flush,
     Destroy,
@@ -82,26 +90,131 @@ macro_rules! leaf {
     }};
 }
 
+static DLSS: rsf_vkdlss_platform = rsf_vkdlss_platform {
+    open: Some(leaf!(|setup: *const Setup,
+                      native: *mut Handle,
+                      w: *mut u32,
+                      h: *mut u32|
+     -> i32 {
+        unsafe {
+            native.write((*setup).device);
+            w.write(64);
+            h.write(36);
+        }
+        0
+    })),
+    close: Some(leaf!(|native: Handle| -> () {
+        unsafe { fake(native).calls.push(Call::Close) }
+    })),
+    invoke: Some(leaf!(|call: *const rsf_slvk_call| -> i32 {
+        let call = unsafe { &*call };
+        assert_eq!(call.abi_version, RSF_SLVK_ABI_VERSION);
+        assert_eq!(call.session_id == 0, call.frame_id == 0);
+        unsafe { (call.callback.unwrap())(ptr::null_mut(), call.frame_id as usize, call.user) }
+    })),
+    allocate: Some(leaf!(|native: Handle,
+                          image: *mut rsf_vkfg_image,
+                          width: u32,
+                          height: u32,
+                          format: u32,
+                          usage: u32|
+     -> u32 {
+        let state = unsafe { fake(native) };
+        let id = state.calls.len() as u64 + 1;
+        state.calls.push(Call::Allocate(id, width, height, usage));
+        unsafe {
+            image.write(rsf_vkfg_image {
+                image: id,
+                width,
+                height,
+                format,
+                usage,
+                ..Default::default()
+            })
+        };
+        1
+    })),
+    free_image: Some(leaf!(|native: Handle, image: *mut rsf_vkfg_image| -> () {
+        unsafe { fake(native).calls.push(Call::Release((*image).image, 0)) };
+    })),
+    constants: Some(leaf!(|native: Handle,
+                           token: usize,
+                           input: *const Frame,
+                           reset: u32|
+     -> i32 {
+        assert_eq!(token as u64, unsafe { (*(*input).record).frame_id });
+        unsafe { fake(native).calls.push(Call::DlssConstants(reset)) };
+        0
+    })),
+    options: Some(leaf!(|native: Handle,
+                         _: *const Frame,
+                         preset: u32|
+     -> i32 {
+        unsafe { fake(native).calls.push(Call::DlssOptions(preset)) };
+        0
+    })),
+    stage: Some(leaf!(|native: Handle,
+                       _: Handle,
+                       _: *const Image,
+                       _: *mut rsf_vkfg_image,
+                       _: u32|
+     -> () {
+        unsafe { fake(native).calls.push(Call::DlssStage) };
+    })),
+    initialize_output: Some(leaf!(|_: Handle,
+                                   _: Handle,
+                                   _: *const rsf_vkfg_image|
+     -> () {})),
+    tag: Some(leaf!(|_: Handle,
+                     _: usize,
+                     _: Handle,
+                     _: *const Frame,
+                     images: *const rsf_vkdlss_images|
+     -> i32 {
+        let images = unsafe { &*images };
+        assert_eq!(images.color.initialized, 1);
+        assert_eq!(images.output.initialized, 1);
+        0
+    })),
+    evaluate: Some(leaf!(|native: Handle, _: usize, _: Handle| -> i32 {
+        unsafe { fake(native).dispatch_result }
+    })),
+    capture: Some(leaf!(|native: Handle,
+                         _: Handle,
+                         _: *const Frame,
+                         _: *const rsf_vkfg_image,
+                         _: u32|
+     -> () {
+        unsafe { fake(native).calls.push(Call::DlssCapture) };
+    })),
+    sharpen: Some(leaf!(|native: Handle,
+                         _: Handle,
+                         _: *const Frame,
+                         _: u64|
+     -> () {
+        unsafe { fake(native).calls.push(Call::Sharpen) };
+    })),
+    publish: Some(leaf!(|native: Handle,
+                         _: Handle,
+                         _: *const Frame,
+                         _: u64|
+     -> () {
+        unsafe { fake(native).calls.push(Call::DlssPublish) };
+    })),
+    release: Some(leaf!(|_: Handle, token: usize, native: Handle| -> i32 {
+        assert_eq!(token, 0);
+        unsafe { fake(native).destroy_result }
+    })),
+    flush: Some(leaf!(|native: Handle| -> () {
+        unsafe { fake(native).calls.push(Call::Flush) }
+    })),
+    retire: Some(leaf!(|native: Handle, commands: Handle| -> () {
+        unsafe { fake(native).calls.push(Call::Retire(commands as usize)) }
+    })),
+};
+
 pub(super) static PLATFORM: Platform = Platform {
-    dlss: LegacyOps {
-        create: leaf!(|setup: &Setup, out: &mut Handle| -> i32 {
-            *out = setup.device;
-            0
-        }),
-        plan: leaf!(|_: Handle, width: &mut u32, height: &mut u32| -> i32 {
-            *width = 64;
-            *height = 36;
-            0
-        }),
-        evaluate: leaf!(|_: Handle, _: Handle, _: &Frame| -> i32 { FAILED }),
-        destroy: leaf!(|handle: Handle| -> i32 { unsafe { fake(handle).destroy_result } }),
-        retire_commands: leaf!(|handle: Handle, commands: Handle| -> () {
-            unsafe { fake(handle).calls.push(Call::Retire(commands as usize)) }
-        }),
-        preset: Some(leaf!(|_: Handle, preset: u32| -> i32 {
-            if preset == 11 { 0 } else { INVALID }
-        })),
-    },
+    dlss: Some(&DLSS),
     xess: Some(&super::xess::tests::OPS),
     ffx: FfxOps {
         open: leaf!(|setup: &Setup, out: &mut Handle| -> i32 {
@@ -478,7 +591,7 @@ fn ffx_creation_refusal_unwinds_partial_resources_and_native_aa_skips_the_query(
 }
 
 #[test]
-fn legacy_owner_preserves_provider_failures_and_preset_routing() {
+fn dlss_owner_routing_preserves_history_and_checked_release() {
     let mut state = Fake::default();
     let setup = state.setup(RSF_SR_DLSS);
     let mut raw = ptr::null_mut();
@@ -491,21 +604,69 @@ fn legacy_owner_preserves_provider_failures_and_preset_routing() {
         0
     );
     let owner = raw.cast();
+    assert_eq!(
+        state.calls,
+        [
+            Call::Allocate(1, 64, 36, 6),
+            Call::Allocate(2, 64, 36, 6),
+            Call::Allocate(3, 64, 36, 6),
+            Call::Allocate(4, 64, 36, 6),
+            Call::Allocate(5, 128, 72, 15),
+        ]
+    );
+    let (mut width, mut height) = (0, 0);
+    assert_eq!(
+        unsafe { rsf_core_srvk_plan(owner, &mut width, &mut height) },
+        0
+    );
+    assert_eq!([width, height], [64, 36]);
     assert_eq!(unsafe { rsf_core_srvk_dlss_preset(owner, 11) }, 0);
     assert_eq!(unsafe { rsf_core_srvk_dlss_preset(owner, 99) }, INVALID);
     let commands = ptr::dangling_mut::<u8>().cast();
-    let record = frame_record();
-    let frame = frame_input(&setup, &record);
-    assert_eq!(
-        unsafe { rsf_core_srvk_evaluate(owner, commands, &frame, sharpen_valid) },
-        FAILED
-    );
+    let mut record = frame_record();
+    for (frame_id, result, reset) in [(1, 0, 1), (2, FAILED, 0), (3, 0, 1)] {
+        record.frame_id = frame_id;
+        state.dispatch_result = result;
+        state.calls.clear();
+        let mut frame = frame_input(&setup, &record);
+        frame.depth.format = R32_FLOAT;
+        frame.bias_current_color.image = 0;
+        assert_eq!(
+            unsafe { rsf_core_srvk_evaluate(owner, commands, &frame, sharpen_valid) },
+            result
+        );
+        let mut expected = vec![
+            Call::DlssConstants(reset),
+            Call::DlssOptions(11),
+            Call::DlssStage,
+            Call::DlssStage,
+            Call::DlssStage,
+        ];
+        if result == 0 {
+            expected.extend([Call::DlssCapture, Call::Sharpen, Call::DlssPublish]);
+        }
+        assert_eq!(state.calls, expected);
+    }
+    state.calls.clear();
     unsafe { rsf_core_srvk_retire_commands(owner, commands) };
     state.destroy_result = FAILED;
     assert_eq!(unsafe { rsf_core_srvk_destroy(owner) }, FAILED);
+    assert_eq!(state.calls, [Call::Retire(commands as usize)]);
     state.destroy_result = 0;
     assert_eq!(unsafe { rsf_core_srvk_destroy(owner) }, 0);
-    assert_eq!(state.calls, [Call::Retire(commands as usize)]);
+    assert_eq!(
+        state.calls,
+        [
+            Call::Retire(commands as usize),
+            Call::Flush,
+            Call::Release(1, 0),
+            Call::Release(2, 0),
+            Call::Release(3, 0),
+            Call::Release(5, 0),
+            Call::Release(4, 0),
+            Call::Close,
+        ]
+    );
 }
 
 #[test]

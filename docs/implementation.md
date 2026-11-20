@@ -472,6 +472,18 @@ carrier and Minecraft Release exports matched. The ordinary Runtime uses
 the optional Streamline stub in this build. Device and game validation
 remain open.
 
+The shared Vulkan SR owner now calls the Rust DLSS owner directly. The
+private C++ forwarding table and six forwarding functions were removed.
+The shared owner supplies the normalized frame and performs the public
+ABI admission once. The enabled native leaves still handle SDK calls
+and Vulkan commands. The Rust routing fixture checks image usage,
+preset routing, recovery after a refused evaluation, command retirement
+and retryable teardown.
+
+Seven focused Vulkan and Anomaly CPU contracts passed in MSVC Debug
+and Release. All 211 locked Rust tests, formatting, Clippy and binding
+regeneration passed. The four Release export inventories matched.
+
 The OpenGL pipeline now keeps its shared surface and SR lifecycle, frame
 identity, fallback and FG requests in Rust. Native callbacks handle OpenGL,
 DXGI and the presentation child window. A rejected SR rebuild remains

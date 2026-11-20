@@ -28,7 +28,7 @@ pub(super) const SHADER_READ: u32 = 5;
 pub(super) const TRANSFER_DST: u32 = 7;
 pub(super) const GENERAL: u32 = 1;
 pub(super) const TRANSFER_SRC_USAGE: u32 = 1;
-const TRANSFER_DST_USAGE: u32 = 2;
+pub(super) const TRANSFER_DST_USAGE: u32 = 2;
 pub(super) const SAMPLED_USAGE: u32 = 4;
 pub(super) const STORAGE_USAGE: u32 = 8;
 const LINEAR_BLIT: u32 = 0x400 | 0x800 | 0x1000;
@@ -325,7 +325,7 @@ type Capture = unsafe extern "C" fn(Handle, Handle, &Image, &rsf_frame_record, *
 // Private platform ABI. Rust owns the public handle and sequences these leaves.
 #[repr(C)]
 struct Platform {
-    dlss: LegacyOps,
+    dlss: Option<&'static crate::vulkan_dlss_sr_abi::rsf_vkdlss_platform>,
     xess: Option<&'static xess::XessOps>,
     ffx: FfxOps,
     fallback_probe: unsafe extern "C" fn(&rsf_srvk_fallback, &mut Blit) -> i32,
@@ -333,16 +333,6 @@ struct Platform {
     dump_begin: unsafe extern "C" fn(&rsf_frame_record, u32) -> i32,
     dump_wants: unsafe extern "C" fn(&rsf_frame_record) -> i32,
     dump_result: unsafe extern "C" fn(&rsf_frame_record, *const c_char, u32, i32),
-}
-
-#[repr(C)]
-struct LegacyOps {
-    create: unsafe extern "C" fn(&Setup, &mut Handle) -> i32,
-    plan: unsafe extern "C" fn(Handle, &mut u32, &mut u32) -> i32,
-    evaluate: unsafe extern "C" fn(Handle, Handle, &Frame) -> i32,
-    destroy: unsafe extern "C" fn(Handle) -> i32,
-    retire_commands: unsafe extern "C" fn(Handle, Handle),
-    preset: Option<unsafe extern "C" fn(Handle, u32) -> i32>,
 }
 
 #[repr(C)]
@@ -401,7 +391,7 @@ struct FfxDispatch<'a> {
 }
 
 const _: () = {
-    assert!(size_of::<Platform>() == 280);
+    assert!(size_of::<Platform>() == 240);
     assert!(size_of::<Blit>() == 24 && size_of::<Version>() == 24);
     assert!(size_of::<FfxDispatch>() == 144);
     assert!(std::mem::offset_of!(FfxDispatch, reset) == 136);
@@ -674,10 +664,7 @@ impl Drop for FidelityFx {
 }
 
 enum Backend {
-    Legacy {
-        ops: &'static LegacyOps,
-        handle: Handle,
-    },
+    Dlss(Box<crate::vulkan_dlss_sr::Owner>),
     Ffx(FidelityFx),
     Xess(Box<xess::XessOwner>),
 }
@@ -693,13 +680,10 @@ impl Owner {
     unsafe fn create(platform: &'static Platform, mut setup: Setup) -> Result<Self, i32> {
         let (backend, render) = match setup.backend {
             RSF_SR_DLSS => {
-                let ops = &platform.dlss;
-                let mut handle = ptr::null_mut();
-                check(unsafe { (ops.create)(&setup, &mut handle) })?;
-                let (mut width, mut height) = (0, 0);
-                // This provider sets the plan at successful construction.
-                let _ = unsafe { (ops.plan)(handle, &mut width, &mut height) };
-                (Backend::Legacy { ops, handle }, [width, height])
+                let ops = platform.dlss.ok_or(NOT_COMPILED)?;
+                let owner = crate::vulkan_dlss_sr::Owner::create(ops, &setup)?;
+                let plan = owner.plan();
+                (Backend::Dlss(owner), plan)
             }
             RSF_SR_XESS => {
                 let ops = platform.xess.ok_or(NOT_COMPILED)?;
@@ -792,7 +776,7 @@ unsafe extern "C" fn rsf_core_srvk_evaluate(
     let record = unsafe { &*frame.record };
     unsafe { (owner.platform.dump_begin)(record, owner.setup.backend) };
     let result = match &mut owner.backend {
-        Backend::Legacy { ops, handle } => unsafe { (ops.evaluate)(*handle, commands, &frame) },
+        Backend::Dlss(dlss) => dlss.evaluate(commands, &frame, record),
         Backend::Ffx(ffx) => ffx.evaluate(owner.platform, &owner.setup, commands, &frame, record),
         Backend::Xess(xess) => xess.evaluate(commands, &frame),
     };
@@ -807,7 +791,7 @@ unsafe extern "C" fn rsf_core_srvk_retire_commands(owner: *mut Owner, commands: 
     }
     if let Some(owner) = unsafe { owner.as_mut() } {
         match &mut owner.backend {
-            Backend::Legacy { ops, handle } => unsafe { (ops.retire_commands)(*handle, commands) },
+            Backend::Dlss(dlss) => dlss.retire_commands(commands),
             Backend::Ffx(ffx) => ffx.retire_commands(commands),
             Backend::Xess(xess) => xess.retire_commands(commands),
         }
@@ -820,7 +804,7 @@ unsafe extern "C" fn rsf_core_srvk_destroy(owner: *mut Owner) -> i32 {
         return 0;
     };
     let result = match &mut unsafe { &mut *owner }.backend {
-        Backend::Legacy { ops, handle } => unsafe { (ops.destroy)(*handle) },
+        Backend::Dlss(dlss) => dlss.destroy(),
         Backend::Ffx(ffx) => ffx.destroy(),
         Backend::Xess(xess) => xess.destroy(),
     };
@@ -835,10 +819,8 @@ unsafe extern "C" fn rsf_core_srvk_dlss_preset(owner: *mut Owner, preset: u32) -
     let Some(owner) = (unsafe { owner.as_mut() }) else {
         return INVALID;
     };
-    if let Backend::Legacy { ops, handle } = &mut owner.backend
-        && let Some(set_preset) = ops.preset
-    {
-        return unsafe { set_preset(*handle, preset) };
+    if let Backend::Dlss(dlss) = &mut owner.backend {
+        return dlss.set_preset(preset);
     }
     NOT_SUPPORTED
 }

@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: MIT
 use crate::allocate_handle;
-use crate::sr_session::has_capacity;
 use crate::vulkan_dlss_sr_abi::{rsf_vkdlss_images, rsf_vkdlss_platform as Platform};
 use crate::vulkan_latency_abi::{RSF_SLVK_ABI_VERSION, rsf_slvk_call};
-use crate::vulkan_sr::History;
+use crate::vulkan_sr::{
+    History, R32_FLOAT, RG16_FLOAT, RGBA16_FLOAT, SAMPLED_USAGE, STORAGE_USAGE, TRANSFER_DST_USAGE,
+    TRANSFER_SRC_USAGE,
+};
 use crate::vulkan_sr_abi::{rsf_srvk_frame, rsf_srvk_setup};
+use rsf_game_sys::rsf_frame_record;
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -12,12 +15,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 const INVALID: i32 = -1;
 const INIT_FAILED: i32 = -6;
 const NOT_READY: i32 = -8;
-const RGBA16: u32 = 97;
-const R32: u32 = 100;
-const RG16: u32 = 83;
 const R16: u32 = 76;
-const INPUT_USAGE: u32 = 0x6; // Sampled | transfer destination.
-const OUTPUT_USAGE: u32 = 0xf; // Storage | sampled | transfer source/destination.
+const INPUT_USAGE: u32 = SAMPLED_USAGE | TRANSFER_DST_USAGE;
+const OUTPUT_USAGE: u32 = INPUT_USAGE | STORAGE_USAGE | TRANSFER_SRC_USAGE;
 
 static OCCUPIED: AtomicBool = AtomicBool::new(false);
 
@@ -38,7 +38,7 @@ impl Drop for Claim {
     }
 }
 
-struct Owner {
+pub(super) struct Owner {
     _claim: Claim,
     platform: &'static Platform,
     native: *mut c_void,
@@ -73,9 +73,9 @@ impl Owner {
     fn allocate(&mut self, setup: &rsf_srvk_setup) -> bool {
         let allocate = self.platform.allocate.unwrap();
         for (image, format) in [
-            (&mut self.images.color, RGBA16),
-            (&mut self.images.depth, R32),
-            (&mut self.images.motion, RG16),
+            (&mut self.images.color, RGBA16_FLOAT),
+            (&mut self.images.depth, R32_FLOAT),
+            (&mut self.images.motion, RG16_FLOAT),
             (&mut self.images.bias, R16),
         ] {
             if unsafe {
@@ -98,7 +98,7 @@ impl Owner {
                 &mut self.images.output,
                 setup.output_width,
                 setup.output_height,
-                RGBA16,
+                RGBA16_FLOAT,
                 OUTPUT_USAGE,
             ) != 0
         }
@@ -198,154 +198,104 @@ unsafe extern "C" fn evaluate(_: *mut c_void, token: usize, user: *mut c_void) -
     0
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_vkdlss_create(
-    platform: &'static Platform,
-    setup: *const rsf_srvk_setup,
-    out: *mut *mut Owner,
-) -> i32 {
-    if out.is_null() {
-        return INVALID;
+impl Owner {
+    pub(super) fn create(
+        platform: &'static Platform,
+        setup: &rsf_srvk_setup,
+    ) -> Result<Box<Self>, i32> {
+        let claim = Claim::acquire().ok_or(NOT_READY)?;
+        let raw = allocate_handle(Self {
+            _claim: claim,
+            platform,
+            native: ptr::null_mut(),
+            width: 0,
+            height: 0,
+            images: rsf_vkdlss_images::default(),
+            history: History::default(),
+            preset: 0,
+            resources: false,
+        });
+        if raw.is_null() {
+            return Err(INIT_FAILED);
+        }
+        let mut owner = unsafe { Box::from_raw(raw) };
+        let result = unsafe {
+            (platform.open.unwrap())(
+                setup,
+                &mut owner.native,
+                &mut owner.width,
+                &mut owner.height,
+            )
+        };
+        if result != 0 {
+            return Err(result);
+        }
+        if owner.native.is_null() || owner.width == 0 || owner.height == 0 || !owner.allocate(setup)
+        {
+            return Err(INIT_FAILED);
+        }
+        Ok(owner)
     }
-    unsafe { out.write(ptr::null_mut()) };
-    if !unsafe { has_capacity(setup) } {
-        return INVALID;
-    }
-    let setup = unsafe { &*setup };
-    if setup.quality > 4 || setup.output_width == 0 || setup.output_height == 0 {
-        return INVALID;
-    }
-    let Some(claim) = Claim::acquire() else {
-        return NOT_READY;
-    };
-    let raw = allocate_handle(Owner {
-        _claim: claim,
-        platform,
-        native: ptr::null_mut(),
-        width: 0,
-        height: 0,
-        images: rsf_vkdlss_images::default(),
-        history: History::default(),
-        preset: 0,
-        resources: false,
-    });
-    if raw.is_null() {
-        return INIT_FAILED;
-    }
-    let mut owner = unsafe { Box::from_raw(raw) };
-    let result = unsafe {
-        (platform.open.unwrap())(
-            setup,
-            &mut owner.native,
-            &mut owner.width,
-            &mut owner.height,
-        )
-    };
-    if result != 0 {
-        return result;
-    }
-    if owner.native.is_null() || owner.width == 0 || owner.height == 0 || !owner.allocate(setup) {
-        return INIT_FAILED;
-    }
-    unsafe { out.write(Box::into_raw(owner)) };
-    0
-}
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_vkdlss_plan(
-    owner: *const Owner,
-    width: *mut u32,
-    height: *mut u32,
-) -> i32 {
-    let Some(owner) = (unsafe { owner.as_ref() }) else {
-        return INVALID;
-    };
-    if width.is_null() || height.is_null() {
-        return INVALID;
+    pub(super) fn plan(&self) -> [u32; 2] {
+        [self.width, self.height]
     }
-    unsafe {
-        width.write(owner.width);
-        height.write(owner.height);
-    }
-    0
-}
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_vkdlss_evaluate(
-    owner: *mut Owner,
-    commands: *mut c_void,
-    input: *const rsf_srvk_frame,
-) -> i32 {
-    let Some(owner) = (unsafe { owner.as_mut() }) else {
-        return INVALID;
-    };
-    if commands.is_null() || !unsafe { has_capacity(input) } {
-        return INVALID;
+    pub(super) fn evaluate(
+        &mut self,
+        commands: *mut c_void,
+        input: &rsf_srvk_frame,
+        record: &rsf_frame_record,
+    ) -> i32 {
+        if input.color.copy_source == 0
+            || input.depth.copy_source == 0
+            || input.motion.copy_source == 0
+            || input.depth.format != R32_FLOAT
+            || (input.bias_current_color.image != 0 && input.bias_current_color.copy_source == 0)
+        {
+            return INVALID;
+        }
+        let invoke = self.platform.invoke.unwrap();
+        let mut evaluation = Evaluation {
+            owner: self,
+            commands,
+            input,
+        };
+        let call = rsf_slvk_call {
+            struct_size: size_of::<rsf_slvk_call>() as u32,
+            abi_version: RSF_SLVK_ABI_VERSION,
+            session_id: record.session_id,
+            frame_id: record.frame_id,
+            callback: Some(evaluate),
+            user: ptr::from_mut(&mut evaluation).cast(),
+        };
+        unsafe { invoke(&call) }
     }
-    let input = unsafe { &*input };
-    if !unsafe { has_capacity(input.record) }
-        || input.color.copy_source == 0
-        || input.depth.copy_source == 0
-        || input.motion.copy_source == 0
-        || input.depth.format != R32
-        || (input.bias_current_color.image != 0 && input.bias_current_color.copy_source == 0)
-    {
-        return INVALID;
-    }
-    let record = unsafe { &*input.record };
-    // The outer SRVK owner normalizes and validates the leased render facts.
-    let invoke = owner.platform.invoke.unwrap();
-    let mut evaluation = Evaluation {
-        owner,
-        commands,
-        input,
-    };
-    let call = rsf_slvk_call {
-        struct_size: size_of::<rsf_slvk_call>() as u32,
-        abi_version: RSF_SLVK_ABI_VERSION,
-        session_id: record.session_id,
-        frame_id: record.frame_id,
-        callback: Some(evaluate),
-        user: ptr::from_mut(&mut evaluation).cast(),
-    };
-    unsafe { invoke(&call) }
-}
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_vkdlss_preset(owner: *mut Owner, preset: u32) -> i32 {
-    let Some(owner) = (unsafe { owner.as_mut() }) else {
-        return INVALID;
-    };
-    if owner.preset == preset {
-        return 0;
+    pub(super) fn set_preset(&mut self, preset: u32) -> i32 {
+        if !matches!(preset, 0 | 5 | 6 | 10..=13) {
+            return INVALID;
+        }
+        if self.preset == preset {
+            return 0;
+        }
+        let result = self.release_effect();
+        if result == 0 {
+            self.preset = preset;
+            self.history = History::default();
+        }
+        result
     }
-    let result = owner.release_effect();
-    if result == 0 {
-        owner.preset = preset;
-        owner.history = History::default();
-    }
-    result
-}
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_vkdlss_destroy(owner: *mut Owner) -> i32 {
-    let Some(active) = (unsafe { owner.as_mut() }) else {
-        return 0;
-    };
-    let result = active.release_effect();
-    if result != 0 {
-        return result;
+    pub(super) fn destroy(&mut self) -> i32 {
+        let result = self.release_effect();
+        if result == 0 {
+            unsafe { (self.platform.flush.unwrap())(self.native) };
+        }
+        result
     }
-    unsafe {
-        (active.platform.flush.unwrap())(active.native);
-        drop(Box::from_raw(owner));
-    }
-    0
-}
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_vkdlss_retire(owner: *mut Owner, commands: *mut c_void) {
-    if let Some(owner) = unsafe { owner.as_mut() } {
-        unsafe { (owner.platform.retire.unwrap())(owner.native, commands) };
+    pub(super) fn retire_commands(&self, commands: *mut c_void) {
+        unsafe { (self.platform.retire.unwrap())(self.native, commands) };
     }
 }

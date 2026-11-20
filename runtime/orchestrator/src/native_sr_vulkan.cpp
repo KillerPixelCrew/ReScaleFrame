@@ -20,7 +20,7 @@ int32_t rsf_core_srvk_spatial_fallback(const Platform*, const rsf_srvk_fallback*
 }
 
 #if defined(RSF_HAVE_FFX_VK)
-#include "native_dlss_vulkan.h"
+#include "native_dlss_vulkan_platform.h"
 #include "native_xess_vulkan.h"
 #include "../../backends/common/frame_capture_vk.h"
 #include "../../backends/common/sharpening.h"
@@ -50,14 +50,6 @@ struct FfxDispatch {
     float far_plane, sharpness;
     uint32_t reset;
 };
-struct LegacyOps {
-    int32_t (*create)(const rsf_srvk_setup*, void**);
-    int32_t (*plan)(void*, uint32_t*, uint32_t*);
-    int32_t (*evaluate)(void*, void*, const rsf_srvk_frame*);
-    int32_t (*destroy)(void*);
-    void (*retire_commands)(void*, void*);
-    int32_t (*preset)(void*, uint32_t);
-};
 struct FfxNative;
 struct FfxOps {
     int32_t (*open)(const rsf_srvk_setup*, FfxNative**);
@@ -85,7 +77,7 @@ struct FfxOps {
     void (*flush_capture)(FfxNative*);
 };
 struct Platform {
-    LegacyOps dlss;
+    const rsf_vkdlss_platform* dlss;
     const rsf::xess_vk::Ops* xess;
     FfxOps ffx;
     int32_t (*fallback_probe)(const rsf_srvk_fallback*, Blit*);
@@ -94,7 +86,7 @@ struct Platform {
     int32_t (*dump_wants)(const rsf_frame_record*);
     void (*dump_result)(const rsf_frame_record*, const char*, uint32_t, int32_t);
 };
-static_assert(sizeof(Platform) == 280 && sizeof(Blit) == 24 && sizeof(Version) == 24);
+static_assert(sizeof(Platform) == 240 && sizeof(Blit) == 24 && sizeof(Version) == 24);
 static_assert(sizeof(FfxDispatch) == 144 && offsetof(FfxDispatch, reset) == 136);
 static_assert(VK_FORMAT_R8_UNORM == 9 && VK_FORMAT_R16G16_SFLOAT == 83 &&
     VK_FORMAT_R16G16B16A16_SFLOAT == 97 && VK_FORMAT_R32_SFLOAT == 100 && VK_FORMAT_D32_SFLOAT == 126);
@@ -455,34 +447,8 @@ int32_t fallback_record(const rsf_srvk_fallback* call, const Blit* ops) noexcept
 }
 catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 
-template<class Owner, auto Call>
-int32_t legacy_create(const rsf_srvk_setup* setup, void** out) noexcept try
-{
-    Owner* value = nullptr;
-    const auto result = Call(setup, &value);
-    *out = value;
-    return result;
-}
-catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
-
-template<class Owner, auto Call, class... Args>
-int32_t legacy_call(void* owner, Args... args) noexcept try
-{
-    return Call(static_cast<Owner*>(owner), args...);
-}
-catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
-
-template<class Owner, auto Call>
-void legacy_retire(void* owner, void* commands) noexcept try
-{
-    Call(static_cast<Owner*>(owner), commands);
-}
-catch (...) {}
-
 constexpr Platform native{
-    {legacy_create<rsf_dlssvk, rsf_dlssvk_create>, legacy_call<rsf_dlssvk, rsf_dlssvk_plan>,
-        legacy_call<rsf_dlssvk, rsf_dlssvk_evaluate>, legacy_call<rsf_dlssvk, rsf_dlssvk_destroy>,
-        legacy_retire<rsf_dlssvk, rsf_dlssvk_retire_commands>, legacy_call<rsf_dlssvk, rsf_dlssvk_preset>},
+    rsf::dlss_vk::platform,
     rsf::xess_vk::platform,
     {open, [](FfxNative* owner) { delete owner; }, initialize_graphics, versions, create_effect,
         effective_version, destroy_effect, plan, allocate, release, initialize_mask, initialize_output, dispatch, copy_output,

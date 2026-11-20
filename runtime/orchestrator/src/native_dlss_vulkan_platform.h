@@ -4,8 +4,6 @@
 #include <rescaleframe/native_sr_vulkan.h>
 #include <rescaleframe/native_streamline_vulkan.h>
 
-struct rsf_dlssvk;
-
 typedef struct rsf_vkdlss_images {
     rsf_vkfg_image color, depth, motion, bias, output;
 } rsf_vkdlss_images;
@@ -31,14 +29,12 @@ typedef struct rsf_vkdlss_platform {
 } rsf_vkdlss_platform;
 
 #ifdef __cplusplus
-extern "C" {
+namespace rsf::dlss_vk {
+#if defined(RSF_HAVE_STREAMLINE_VK)
+extern const rsf_vkdlss_platform leaves;
+inline constexpr const rsf_vkdlss_platform* platform = &leaves;
+#else
+inline constexpr const rsf_vkdlss_platform* platform = nullptr;
 #endif
-int32_t rsf_core_vkdlss_create(const rsf_vkdlss_platform*, const rsf_srvk_setup*, struct rsf_dlssvk**);
-int32_t rsf_core_vkdlss_plan(const struct rsf_dlssvk*, uint32_t*, uint32_t*);
-int32_t rsf_core_vkdlss_evaluate(struct rsf_dlssvk*, void*, const rsf_srvk_frame*);
-int32_t rsf_core_vkdlss_preset(struct rsf_dlssvk*, uint32_t);
-int32_t rsf_core_vkdlss_destroy(struct rsf_dlssvk*);
-void rsf_core_vkdlss_retire(struct rsf_dlssvk*, void*);
-#ifdef __cplusplus
 }
 #endif
