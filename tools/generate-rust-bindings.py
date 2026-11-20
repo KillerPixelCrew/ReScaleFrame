@@ -134,9 +134,10 @@ generate("runtime/orchestrator/src/overlay_native12_abi.rs", "runtime/orchestrat
          ["--no-recursive-allowlist", "--raw-line",
           "use crate::overlay_abi::{rsf_overlay_intent, rsf_overlay_stats, rsf_overlay_texture_update};"])
 generate("runtime/orchestrator/src/vulkan_sr_abi.rs", "runtime/orchestrator/include/rescaleframe/native_sr_split_vulkan.h",
-         "rsf_(srvk_(setup|frame|image|fallback|fsr4_provider_info)|fsr4vk_handoff|vk_(function|get_proc))",
+         "rsf_(srvk_(setup|frame|image|fallback|fsr4_provider_info)|fsr4vk_handoff|vk_(function|get_proc)|input_dump_vk_setup)",
          "RSF_(SRVK_(ABI_VERSION|SPLIT_ABI_VERSION|SPLIT_TRACKED_ABI_VERSION|FSR4_INFO_ABI_VERSION)|SR_(DLSS|FSR2|FSR3|FSR4|XESS)|FSR4_BRIDGE_(INVALID_ARGUMENT|ABI_MISMATCH))",
-         ["-include", "runtime/vulkan/fsr4/bridge_api.h", "-Iruntime/orchestrator/include",
+         ["-include", "runtime/vulkan/fsr4/bridge_api.h", "-include", "rescaleframe/input_dump_vulkan.h",
+          "-Iruntime/orchestrator/include",
           "-Iruntime/contract/include", "-Iruntime/graphics/include", "-Isdk/game/include"],
          ["--no-recursive-allowlist", "--raw-line", "use crate::render_abi::rsf_sharpening_options;",
           "--raw-line", "use rsf_game_sys::rsf_frame_record;"])

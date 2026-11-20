@@ -475,6 +475,20 @@ matched. The isolated worker also built linked Godot and verified the
 FSR4-disabled Runtime. Device synchronization and game behavior remain open.
 See [the split Vulkan FSR4 cutover audit](research/rust-vulkan-fsr4-sr-cutover.md).
 
+Rust now owns standalone Vulkan snapshot admission and its pool, command
+buffer, fence and pending submission. Each recorded copy has an exact
+group and publishes only when its accepted submission completes. End or
+submit refusal discards that group's readback. A timeout retains the
+source lease. The shared Vulkan reader and encoders stay native.
+
+The pre-port DLL fixture published poison pixels for two refused copies.
+The merged branch passed nine focused CPU contracts in Debug and Release,
+including the linked and DLL regression fixtures. The four Release export
+inventories matched. The worker also compiled the C header and device
+fixture and verified the optional capture-disabled DLL. Real GPU and game
+capture remain unverified.
+See [the capture submission cutover audit](research/rust-vulkan-capture-submit-cutover.md).
+
 Vulkan XeSS SR now owns SDK and context lifetime, render-size admission,
 private input and output images, temporal reset, captures and teardown in
 Rust. It uses the Vulkan image allocator shared with DLSS SR and FG.

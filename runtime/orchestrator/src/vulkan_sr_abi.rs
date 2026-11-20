@@ -208,6 +208,45 @@ const _: () = {
 };
 #[repr(C)]
 #[derive(Copy, Clone)]
+pub struct rsf_input_dump_vk_setup {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    pub graphics: rsf_srvk_setup,
+    pub queue: *mut ::core::ffi::c_void,
+    pub queue_family: u32,
+    pub submit: ::core::option::Option<
+        unsafe extern "C" fn(
+            user: *mut ::core::ffi::c_void,
+            count: u32,
+            submits: *const ::core::ffi::c_void,
+            fence: u64,
+        ) -> i32,
+    >,
+    pub user: *mut ::core::ffi::c_void,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_input_dump_vk_setup"]
+        [::core::mem::size_of::<rsf_input_dump_vk_setup>() - 128usize];
+    ["Alignment of rsf_input_dump_vk_setup"]
+        [::core::mem::align_of::<rsf_input_dump_vk_setup>() - 8usize];
+    ["Offset of field: rsf_input_dump_vk_setup::struct_size"]
+        [::core::mem::offset_of!(rsf_input_dump_vk_setup, struct_size) - 0usize];
+    ["Offset of field: rsf_input_dump_vk_setup::abi_version"]
+        [::core::mem::offset_of!(rsf_input_dump_vk_setup, abi_version) - 4usize];
+    ["Offset of field: rsf_input_dump_vk_setup::graphics"]
+        [::core::mem::offset_of!(rsf_input_dump_vk_setup, graphics) - 8usize];
+    ["Offset of field: rsf_input_dump_vk_setup::queue"]
+        [::core::mem::offset_of!(rsf_input_dump_vk_setup, queue) - 96usize];
+    ["Offset of field: rsf_input_dump_vk_setup::queue_family"]
+        [::core::mem::offset_of!(rsf_input_dump_vk_setup, queue_family) - 104usize];
+    ["Offset of field: rsf_input_dump_vk_setup::submit"]
+        [::core::mem::offset_of!(rsf_input_dump_vk_setup, submit) - 112usize];
+    ["Offset of field: rsf_input_dump_vk_setup::user"]
+        [::core::mem::offset_of!(rsf_input_dump_vk_setup, user) - 120usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
 pub struct rsf_fsr4vk_handoff {
     pub struct_size: u32,
     pub abi_version: u32,
