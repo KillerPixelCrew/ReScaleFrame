@@ -83,6 +83,14 @@ the Standard and AVX geometry and SR hooks. Formatting, Clippy,
 locked Rust tests and Anomaly DLL export parity passed. This cut has
 no fresh device or game evidence.
 
+Anomaly's input admission, buffered receipt routing and overlay
+DirectInput gate now live in Rust. The native detour retains its guarded
+engine byte checks and reports the frame before entering the polling
+scope. The worker passed 12 focused CPU contracts in both build
+configurations. The merge added a Rust regression for routing and nested
+poll retirement. The actual detour still needs live adapter validation.
+See [the input cutover audit](research/rust-anomaly-input.md).
+
 The first source inspection found that the public frame sequencer opened a rendered
 frame and assigned its provenance under separate locks. Direct callers could read
 or retire the slot between those operations. The FG session adds its own outer

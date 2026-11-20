@@ -134,10 +134,7 @@ extern "C" __declspec(dllexport) uint32_t __stdcall rsf_anomaly_start(const wcha
     if (rsf::anomaly::fg::installed() && !observed) {
         const char* reason = nullptr;
         if (rsf::anomaly::overlay::install_input_hooks(rsf::anomaly::overlay::input_gate(), &reason)) {
-            rsf::anomaly::overlay::set_input_observer(+[](rsf::anomaly::overlay::DeviceKind kind) noexcept {
-                rsf::anomaly::input::received(kind == rsf::anomaly::overlay::DeviceKind::Keyboard ?
-                    RSF_GAME_INPUT_KEYBOARD : RSF_GAME_INPUT_MOUSE);
-            });
+            rsf::anomaly::overlay::set_input_observer(&rsf::anomaly::input::received);
             if (!rsf::anomaly::input::install(reinterpret_cast<std::byte*>(GetModuleHandleW(nullptr)), build->image_size(), *build, &reason))
                 log(nullptr, reason ? reason : "Anomaly input hook refused.");
             else log(nullptr, "Anomaly input facts: guarded CInput slot 0 installed; buffered keyboard/mouse reads observed.");

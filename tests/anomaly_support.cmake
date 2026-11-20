@@ -35,9 +35,9 @@ set_tests_properties(anomaly_geometry_contract anomaly_geometry_hooks_contract P
 # Shared-overlay wiring for Anomaly. The gate test uses a synthetic IDirectInputDevice8A; the API test uses fake
 # Runtime tables; the hooks test drives the production start() against a WARP swap chain and the system
 # DirectInput mouse/keyboard (skips with 77 where those do not exist). None of them loads the real Runtime,
-# the panel or the game, so they establish contracts, not an in-game acceptance.
+# the panel or the game, so they establish contracts, not an in-game acceptance. All three link the production
+# Rust gate (games/anomaly/src/input.rs).
 set(RSF_ANOMALY_OVERLAY_SOURCES
-    "${PROJECT_SOURCE_DIR}/games/anomaly/src/overlay_input_gate.cpp"
     "${PROJECT_SOURCE_DIR}/games/anomaly/src/overlay_hooks.cpp"
     "${PROJECT_SOURCE_DIR}/games/anomaly/src/overlay_service.cpp")
 foreach(overlay_test IN ITEMS input_gate api hooks)
@@ -46,7 +46,7 @@ foreach(overlay_test IN ITEMS input_gate api hooks)
     target_include_directories(rsf_anomaly_overlay_${overlay_test}_test PRIVATE
         "${PROJECT_SOURCE_DIR}/games/anomaly/src" "${PROJECT_SOURCE_DIR}/runtime/orchestrator/include")
     target_link_libraries(rsf_anomaly_overlay_${overlay_test}_test PRIVATE
-        ReScaleFrame::GameSDK ReScaleFrame::Contract minhook rsf_build_options)
+        rsf_anomaly_rust ReScaleFrame::GameSDK ReScaleFrame::Contract minhook rsf_build_options)
     add_test(NAME anomaly_overlay_${overlay_test}_contract COMMAND rsf_anomaly_overlay_${overlay_test}_test)
     set_tests_properties(anomaly_overlay_${overlay_test}_contract PROPERTIES TIMEOUT 60)
 endforeach()
@@ -258,10 +258,12 @@ add_test(NAME anomaly_sr_reconstruction_window_contract COMMAND rsf_anomaly_sr_s
 set_tests_properties(anomaly_sr_reconstruction_contract anomaly_sr_reconstruction_window_contract PROPERTIES TIMEOUT 30)
 
 target_sources(rsf_anomaly_sr_hooks_test PRIVATE "${RSF_ANOMALY_SR_SRC}/input_hooks.cpp")
+# input_hooks.cpp keeps the native leaves; admission and routing are the production Rust library.
+target_link_libraries(rsf_anomaly_sr_hooks_test PRIVATE rsf_anomaly_rust)
 
 add_executable(rsf_anomaly_input_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_input_hooks.cpp" "${RSF_ANOMALY_SR_SRC}/input_hooks.cpp")
 target_include_directories(rsf_anomaly_input_hooks_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
-target_link_libraries(rsf_anomaly_input_hooks_test PRIVATE ReScaleFrame::GameSDK rsf_build_options)
+target_link_libraries(rsf_anomaly_input_hooks_test PRIVATE rsf_anomaly_rust ReScaleFrame::GameSDK rsf_build_options)
 add_test(NAME anomaly_input_hooks_standard_contract COMMAND rsf_anomaly_input_hooks_test standard)
 add_test(NAME anomaly_input_hooks_avx_contract COMMAND rsf_anomaly_input_hooks_test avx)
 add_executable(rsf_latency_event_contract_test "${CMAKE_CURRENT_LIST_DIR}/latency_event_contract.cpp")
