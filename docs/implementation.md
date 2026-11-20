@@ -303,6 +303,19 @@ and ran there. The adapter DLL exports, dynamic Runtime lookup and
 rebuilt motion pack matched the baseline. The device fixtures built.
 The Rust driver still needs device and live Standard and AVX evidence.
 
+The Anomaly overlay now changes FG input capture enablement, the start
+frame, count and interval while the game runs. It saves the options
+before applying them. The Rust schedule keeps the accepted source ID
+and consumes a slot only for a successful dump. Re-enabling capture
+starts a fresh run. An older in-flight dump cannot spend that run's
+budget. The output directory is read at startup.
+
+The scheduler regression, nine focused MSVC contracts in both
+configurations, and all 269 locked Rust tests passed. Formatting,
+Clippy and the exact adapter export comparison passed. The FG device
+fixture built. Captured images and the live panel controls need game
+verification.
+
 The first source inspection found that the public frame sequencer opened a rendered
 frame and assigned its provenance under separate locks. Direct callers could read
 or retire the slot between those operations. The FG session adds its own outer

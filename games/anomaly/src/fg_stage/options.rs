@@ -3,6 +3,7 @@ use crate::fg_stage_abi::*;
 use std::ffi::{CString, OsString};
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::{ptr, slice};
 use windows_sys::Win32::Foundation::{MAX_PATH, SYSTEMTIME};
 use windows_sys::Win32::System::SystemInformation::GetLocalTime;
@@ -11,11 +12,95 @@ use windows_sys::Win32::System::WindowsProgramming::{
 };
 use windows_sys::core::{PCWSTR, w};
 
-pub(super) struct Capture {
-    pub directory: CString,
+const SECTION: PCWSTR = w!("Anomaly");
+
+#[derive(Clone, Copy)]
+pub(super) struct CaptureSettings {
+    pub enabled: bool,
     pub start: u32,
     pub count: u32,
     pub interval: u32,
+}
+
+impl CaptureSettings {
+    fn new(enabled: bool, start: u32, count: u32, interval: u32) -> Self {
+        Self {
+            enabled,
+            start,
+            count: count.min(16),
+            interval: interval.max(1),
+        }
+    }
+
+    pub(super) fn read(ini: PCWSTR) -> Self {
+        let get =
+            |key, fallback| unsafe { GetPrivateProfileIntW(SECTION, key, fallback, ini) as u32 };
+        Self::new(
+            get(w!("FGCapture"), 0) != 0,
+            get(w!("FGCaptureStart"), 600),
+            get(w!("FGCaptureCount"), 3),
+            get(w!("FGCaptureInterval"), 300),
+        )
+    }
+}
+
+pub(super) struct Capture {
+    pub directory: CString,
+    pub settings: CaptureSettings,
+    pub total: u64,
+    captured: u32,
+    last_frame: Option<u32>,
+    generation: u64,
+    in_flight: bool,
+}
+
+impl Capture {
+    pub(super) fn new(directory: CString, settings: CaptureSettings) -> Self {
+        Self {
+            directory,
+            settings,
+            total: 0,
+            captured: 0,
+            last_frame: None,
+            generation: 0,
+            in_flight: false,
+        }
+    }
+
+    pub(super) fn configure(&mut self, settings: CaptureSettings) {
+        if settings.enabled != self.settings.enabled {
+            self.captured = 0;
+            self.last_frame = None;
+            self.generation = self.generation.wrapping_add(1);
+        }
+        self.settings = settings;
+    }
+
+    pub(super) fn claim(&mut self, frame: u32) -> Option<(CString, u64)> {
+        if self.in_flight
+            || !self.settings.enabled
+            || self.captured >= self.settings.count
+            || frame < self.settings.start
+            || self
+                .last_frame
+                .is_some_and(|last| frame.wrapping_sub(last) < self.settings.interval)
+        {
+            return None;
+        }
+        self.in_flight = true;
+        Some((self.directory.clone(), self.generation))
+    }
+
+    pub(super) fn finish(&mut self, frame: u32, generation: u64, success: bool) {
+        self.in_flight = false;
+        if success {
+            self.total += 1;
+            if self.generation == generation {
+                self.captured += 1;
+                self.last_frame = Some(frame);
+            }
+        }
+    }
 }
 
 pub(super) struct Options {
@@ -23,7 +108,7 @@ pub(super) struct Options {
     pub debug: bool,
     pub development: bool,
     pub scope_hold: u32,
-    pub capture: Option<Capture>,
+    pub capture: Mutex<Capture>,
     pub streamline: CString,
     pub fidelityfx: CString,
     pub xess: CString,
@@ -32,10 +117,10 @@ pub(super) struct Options {
 
 impl Options {
     pub(super) fn read(ini: PCWSTR) -> Self {
-        const SECTION: PCWSTR = w!("Anomaly");
         let number =
             |key, fallback| unsafe { GetPrivateProfileIntW(SECTION, key, fallback, ini) as u32 };
         let enabled = number(w!("FG"), 0) != 0;
+        let capture = CaptureSettings::read(ini);
         let native = rsf_anomaly_fg_config {
             // The panel can enable generation live only with a bridge installed at startup.
             bridge: enabled || number(w!("FGBridge"), 1) != 0,
@@ -47,10 +132,10 @@ impl Options {
             scope_hold: number(w!("FGScopeHold"), 4),
             debug: number(w!("FGDebug"), 0) != 0,
             development: number(w!("FGDevelopment"), 0) != 0,
-            capture: number(w!("FGCapture"), 0) != 0,
-            capture_start: number(w!("FGCaptureStart"), 600),
-            capture_count: number(w!("FGCaptureCount"), 3),
-            capture_interval: number(w!("FGCaptureInterval"), 300),
+            capture: capture.enabled,
+            capture_start: capture.start,
+            capture_count: capture.count,
+            capture_interval: capture.interval,
             ..Default::default()
         };
         let ini_path = PathBuf::from(OsString::from_wide(unsafe { wide(ini) }));
@@ -106,13 +191,16 @@ impl Options {
             debug: native.debug,
             development: native.development,
             scope_hold: native.scope_hold.clamp(1, 64),
-            capture: native.capture.then(|| Capture {
+            capture: Mutex::new(Capture::new(
                 // Diagnostic output may use the original Win32 extended-length path.
-                directory: c_string(capture_dir),
-                start: native.capture_start,
-                count: native.capture_count.min(16),
-                interval: native.capture_interval.max(1),
-            }),
+                c_string(capture_dir),
+                CaptureSettings::new(
+                    native.capture,
+                    native.capture_start,
+                    native.capture_count,
+                    native.capture_interval,
+                ),
+            )),
             streamline: c_string(plain_directory(streamline)),
             fidelityfx: c_string(plain_directory(fidelityfx)),
             xess: c_string(plain_directory(xess)),

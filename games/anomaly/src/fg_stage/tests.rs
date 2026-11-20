@@ -101,9 +101,51 @@ fn fg_settings_keep_option_bounds_and_normalize_only_vendor_paths() {
         options.fidelityfx.as_c_str(),
         c"\\\\server\\share\\fidelityfx"
     );
-    let capture = options.capture.unwrap();
-    assert_eq!((capture.count, capture.interval), (16, 1));
+    let capture = options.capture.into_inner().unwrap();
+    assert_eq!((capture.settings.count, capture.settings.interval), (16, 1));
     assert_eq!(capture.directory.as_c_str(), c"\\\\?\\D:\\RSF\\capture");
+}
+
+#[test]
+fn live_capture_rearms_without_spending_budget_on_refused_or_old_jobs() {
+    use super::options::Capture;
+
+    let mut settings = CaptureSettings {
+        enabled: false,
+        start: 10,
+        count: 1,
+        interval: 4,
+    };
+    let mut capture = Capture::new(c"capture".to_owned(), settings);
+    assert!(capture.claim(10).is_none());
+    settings.enabled = true;
+    capture.configure(settings);
+    assert!(capture.claim(9).is_none());
+    let (_, first) = capture.claim(10).unwrap();
+    assert!(capture.claim(10).is_none());
+    capture.finish(10, first, false);
+    assert_eq!(capture.total, 0);
+    let (_, old_run) = capture.claim(11).unwrap();
+
+    settings.enabled = false;
+    capture.configure(settings);
+    settings.enabled = true;
+    capture.configure(settings);
+    assert!(capture.claim(12).is_none());
+    capture.finish(11, old_run, true);
+    let (_, rearmed) = capture.claim(12).unwrap();
+    capture.finish(12, rearmed, true);
+    assert!(capture.claim(20).is_none());
+
+    settings.count = 2;
+    capture.configure(settings);
+    assert!(capture.claim(13).is_none());
+    settings.interval = 1;
+    capture.configure(settings);
+    let (_, edited) = capture.claim(13).unwrap();
+    capture.finish(13, edited, true);
+    assert_eq!(capture.total, 3);
+    assert!(capture.claim(14).is_none());
 }
 
 #[test]

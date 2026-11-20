@@ -6,11 +6,20 @@
 #include "sr_stage.h"
 #include <d3d11.h>
 #include <wrl/client.h>
+#include <algorithm>
 #include <cstring>
 
 namespace rsf::anomaly::fg {
 namespace {
 using Microsoft::WRL::ComPtr;
+
+int32_t capture_number(const wchar_t* key, int32_t fallback, uint32_t low, uint32_t high) noexcept {
+    return static_cast<int32_t>(std::clamp(static_cast<uint32_t>(options::read_int(key, fallback)), low, high));
+}
+
+void save_capture_option(const wchar_t* key, int32_t value) noexcept {
+    if (options::write_int(key, value)) rsf_anomaly_fg_reload_capture(options::ini_path().c_str());
+}
 
 // The caller passes HW.pBaseZB from the exact executable profile the carrier selected.
 void* engine_depth_view(uint32_t rva) noexcept {
@@ -86,6 +95,18 @@ void register_options() noexcept {
     options::add({"Frame generation development runtime", true, 0, 1, 1, 1, true,
         []() noexcept { return options::read_int(L"FGDevelopment", 0) != 0 ? 1 : 0; },
         [](int32_t value) noexcept { options::write_int(L"FGDevelopment", value != 0 ? 1 : 0); }});
+    options::add({"Capture frame generation inputs", true, 0, 1, 1, 1, false,
+        []() noexcept { return options::read_int(L"FGCapture", 0) != 0 ? 1 : 0; },
+        [](int32_t value) noexcept { save_capture_option(L"FGCapture", value != 0 ? 1 : 0); }});
+    options::add({"FG capture start frame", false, 0, INT32_MAX, 1, 1, false,
+        []() noexcept { return capture_number(L"FGCaptureStart", 600, 0, INT32_MAX); },
+        [](int32_t value) noexcept { save_capture_option(L"FGCaptureStart", value); }});
+    options::add({"FG capture frame count", false, 0, 16, 1, 1, false,
+        []() noexcept { return capture_number(L"FGCaptureCount", 3, 0, 16); },
+        [](int32_t value) noexcept { save_capture_option(L"FGCaptureCount", value); }});
+    options::add({"FG capture interval (frames)", false, 1, INT32_MAX, 1, 1, false,
+        []() noexcept { return capture_number(L"FGCaptureInterval", 300, 1, INT32_MAX); },
+        [](int32_t value) noexcept { save_capture_option(L"FGCaptureInterval", value); }});
 }
 
 void configure(const Options& options, rsf_game_log_fn log, void* user) noexcept {

@@ -8,7 +8,7 @@ mod tests;
 mod window;
 
 use self::camera::Camera;
-use self::options::{Options, backend_name};
+use self::options::{CaptureSettings, Options, backend_name};
 use crate::fg_inputs::{Owner as InputPass, Result as InputResult};
 use crate::fg_inputs_abi::rsf_anomaly_input_frame;
 use crate::fg_policy::Policy;
@@ -225,8 +225,6 @@ struct Engine {
     previous_begin: i64,
     inputs: Option<InputPass>,
     input_result: InputResult,
-    capture_next: u32,
-    captured: u64,
     reported: Totals,
 }
 
@@ -274,8 +272,6 @@ impl Stage {
             previous_begin: 0,
             inputs: None,
             input_result: InputResult::Ok,
-            capture_next: options.capture.as_ref().map_or(0, |c| c.start),
-            captured: 0,
             reported: Totals::default(),
         };
         // The bridge may call back during installation, so publish the bound tables first.
@@ -507,36 +503,32 @@ impl Stage {
     }
 
     fn maybe_dump(&self, context: Raw, source: u64, native_frame: u32, decision: Decision) {
-        let Some(capture) = &self.options.capture else {
+        if decision.skip != RSF_ANOMALY_SKIP_NONE {
+            return;
+        }
+        let claim = self.options.capture.lock().unwrap().claim(native_frame);
+        let Some((directory, generation)) = claim else {
             return;
         };
-        {
-            let engine = self.engine.lock().unwrap();
-            if engine.captured >= u64::from(capture.count)
-                || native_frame < engine.capture_next
-                || decision.skip != RSF_ANOMALY_SKIP_NONE
-            {
-                return;
-            }
-        }
         let prefix = CString::new(format!("fg_f{native_frame}_s{source}")).unwrap();
         let written = unsafe {
             self.tables.fg.dump_inputs.unwrap()(
                 context,
                 source,
-                capture.directory.as_ptr(),
+                directory.as_ptr(),
                 prefix.as_ptr(),
             )
         };
+        self.options
+            .capture
+            .lock()
+            .unwrap()
+            .finish(native_frame, generation, written > 0);
         if written > 0 {
-            let mut engine = self.engine.lock().unwrap();
-            engine.captured += 1;
-            engine.capture_next = native_frame.wrapping_add(capture.interval);
-            drop(engine);
             self.log.say(format!(
                 "Anomaly FG capture {}: {written} inputs (HUD-less, depth, motion) -> {}",
                 prefix.to_string_lossy(),
-                capture.directory.to_string_lossy()
+                directory.to_string_lossy()
             ));
         }
     }
@@ -551,10 +543,8 @@ impl Stage {
 
     fn publish(&self) {
         let runtime = self.runtime_status();
-        let (counts, captures) = {
-            let engine = self.engine.lock().unwrap();
-            (engine.policy.counters(), engine.captured)
-        };
+        let counts = self.engine.lock().unwrap().policy.counters();
+        let captures = self.options.capture.lock().unwrap().total;
         let present = self.tables.present;
         let (owner, backend, choices) = unsafe {
             (
@@ -760,6 +750,14 @@ extern "C" fn rsf_anomaly_fg_set_scope_hold(frames: u32) {
             .unwrap()
             .policy
             .set_scope_hold(frames.clamp(1, 64));
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_fg_reload_capture(ini: *const u16) {
+    if let Some(stage) = installed().filter(|_| !ini.is_null()) {
+        let settings = CaptureSettings::read(ini);
+        stage.options.capture.lock().unwrap().configure(settings);
     }
 }
 
@@ -1033,13 +1031,14 @@ extern "C" fn rsf_anomaly_fg_stage_report(emit: rsf_game_log_fn, user: Raw) {
         return;
     };
     let runtime = stage.runtime_status().unwrap_or_default();
+    let captures = stage.options.capture.lock().unwrap().total;
     let (now, previous) = {
         let mut engine = stage.engine.lock().unwrap();
         let now = Totals {
             policy: engine.policy.counters(),
             runtime_tagged: runtime.tagged_frames,
             vendor_presented: runtime.vendor.total_presented,
-            captures: engine.captured,
+            captures,
         };
         let previous = mem::replace(&mut engine.reported, now);
         (now, previous)
