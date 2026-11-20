@@ -148,6 +148,19 @@ contracts passed per configuration. All 222 locked Rust tests and the
 Anomaly DLL export comparison passed. The three motion device fixtures
 built in both configurations for later GPU validation.
 
+Anomaly's native observer lifecycle, engine-fact routing and counters
+now live in Rust. The native trampoline and SEH guards retain the same
+Standard and AVX sites. Begin sends one guarded frame sample to both
+the public observation and FG. Quiesce now closes admission and checks
+the observer and input callbacks before retiring SR and motion state.
+See [the observer cutover audit](research/rust-anomaly-native-observer.md).
+
+The observer and motion cuts passed 13 combined MSVC contracts in
+Debug and Release and all 224 locked Rust tests. The merged Anomaly DLL
+matches the staged exports and Runtime lookup, and the motion pack hash
+is unchanged. Device fixtures built. Live callback retirement and the
+Standard and AVX game runs remain to be verified on the merged adapter.
+
 The first source inspection found that the public frame sequencer opened a rendered
 frame and assigned its provenance under separate locks. Direct callers could read
 or retire the slot between those operations. The FG session adds its own outer

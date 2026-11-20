@@ -1,0 +1,527 @@
+// SPDX-License-Identifier: MIT
+//! Lifecycle and facts from the guarded native renderer boundaries.
+
+#[cfg(test)]
+mod tests;
+
+use crate::native_observer_abi::{
+    RSF_ANOMALY_OBSERVATION_ABI, rsf_anomaly_native_observation as Observation,
+    rsf_anomaly_observer_camera as Camera, rsf_anomaly_observer_engine as Engine,
+    rsf_anomaly_observer_frame as Frame, rsf_anomaly_observer_platform as Platform,
+};
+use crate::{ABI_MISMATCH, INVALID_ARGUMENT};
+use rsf_game_sys::{
+    RSF_GAME_ABI_VERSION, rsf_game_control_args, rsf_game_host_services, rsf_game_log_fn,
+    rsf_game_prepare_args, rsf_game_renderer_status, rsf_game_start_args, rsf_result,
+};
+use std::ffi::{CStr, CString, c_void};
+use std::ptr;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Mutex, MutexGuard, PoisonError};
+use windows_sys::Win32::System::LibraryLoader::{
+    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN, GetModuleHandleExW,
+};
+
+const OK: rsf_result = 0;
+const NOT_READY: rsf_result = -3;
+const BUSY: rsf_result = -4;
+const NATIVE_REFUSED: rsf_result = -5;
+
+// One atomic records whether entry was admitted and registers that invocation.
+// Inactive invocations also count until they return from the native trampoline.
+const ACTIVE: u32 = 1 << 31;
+
+#[derive(Copy, Clone)]
+struct Session {
+    engine: Engine,
+    log: rsf_game_log_fn,
+    user: *mut c_void,
+}
+
+// SAFETY: engine and profile data retain process lifetime, and the GameSDK
+// log and user pointer are used only while a registered invocation holds
+// the session lease. The observer never dereferences the host's user pointer.
+unsafe impl Send for Session {}
+
+impl Session {
+    fn emit(&self, platform: &Platform, message: &CStr) {
+        unsafe { (platform.log.unwrap())(self.log, self.user, message.as_ptr()) };
+    }
+}
+
+struct Control {
+    reason: &'static CStr,
+    geometry_installed: bool,
+    draining: bool,
+}
+
+struct State {
+    session: Option<Session>,
+    observation: Observation,
+}
+
+struct Observer {
+    control: Mutex<Control>,
+    state: Mutex<State>,
+    activity: AtomicU32,
+}
+
+static OBSERVER: Observer = Observer::new();
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+impl Observer {
+    const fn new() -> Self {
+        Self {
+            control: Mutex::new(Control {
+                reason: c"Native rendering has not been prepared.",
+                geometry_installed: false,
+                draining: false,
+            }),
+            state: Mutex::new(State {
+                session: None,
+                observation: Observation {
+                    struct_size: size_of::<Observation>() as u32,
+                    abi_version: RSF_ANOMALY_OBSERVATION_ABI,
+                    // All remaining fields are integer counters or floating-point samples.
+                    ..unsafe { std::mem::zeroed() }
+                },
+            }),
+            activity: AtomicU32::new(0),
+        }
+    }
+
+    fn enter(&self) -> bool {
+        self.activity.fetch_add(1, Ordering::AcqRel) & ACTIVE != 0
+    }
+
+    fn leave(&self) {
+        self.activity.fetch_sub(1, Ordering::Release);
+    }
+
+    fn active(&self) -> bool {
+        self.activity.load(Ordering::Acquire) & ACTIVE != 0
+    }
+
+    fn session(&self) -> Option<Session> {
+        lock(&self.state).session
+    }
+
+    fn prepare(&self, host: &rsf_game_host_services, platform: &Platform) -> rsf_result {
+        let mut control = lock(&self.control);
+        if self.session().is_some()
+            || control.draining
+            || self.activity.load(Ordering::Acquire) != 0
+        {
+            return BUSY;
+        }
+        let mut engine = Engine::default();
+        let refusal = unsafe { (platform.identify.unwrap())(&mut engine) };
+        if !refusal.is_null() {
+            // The guard returns only static native string literals.
+            control.reason = unsafe { CStr::from_ptr(refusal) };
+            return NATIVE_REFUSED;
+        }
+        lock(&self.state).session = Some(Session {
+            engine,
+            log: host.log,
+            user: host.user,
+        });
+        control.reason = c"Exact native boundary sites prepared; temporal SR/FG is not validated.";
+        OK
+    }
+
+    fn start(&self, platform: &Platform) -> rsf_result {
+        let mut control = lock(&self.control);
+        let Some(session) = self.session() else {
+            return NOT_READY;
+        };
+        if self.active() {
+            return OK;
+        }
+        if control.draining {
+            let result = self.quiesce_locked(&mut control, platform);
+            if result != OK {
+                return result;
+            }
+        }
+        // MinHook trampolines can still be reached after disable. Pin the
+        // adapter before its first installation attempt.
+        let mut pinned = ptr::null_mut();
+        let flags = GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN;
+        if unsafe {
+            GetModuleHandleExW(
+                flags,
+                (rsf_anomaly_observer_start as *const ()).cast(),
+                &mut pinned,
+            )
+        } == 0
+        {
+            control.reason = c"Could not pin the native adapter.";
+            return NATIVE_REFUSED;
+        }
+        let engine = &session.engine;
+        if !unsafe { (platform.enable_hooks.unwrap())(engine) } {
+            control.reason = c"Guarded native detour installation refused.";
+            return NATIVE_REFUSED;
+        }
+        control.geometry_installed = unsafe { (platform.install_geometry.unwrap())(engine) };
+        let sr_refused =
+            unsafe { (platform.sr_selected.unwrap())() && !(platform.install_sr.unwrap())(engine) };
+        let motion_refused = !unsafe { (platform.install_motion.unwrap())(engine) };
+        let input_enabled = unsafe { (platform.enable_input.unwrap())() };
+        let geometry_installed = control.geometry_installed;
+        if input_enabled {
+            self.activity.fetch_or(ACTIVE, Ordering::Release);
+            control.reason = if geometry_installed {
+                c"Native boundaries and geometry identity hooks active; observation does not establish temporal SR/FG execution."
+            } else {
+                c"Native boundaries active; geometry identity hooks refused; observation does not establish temporal SR/FG execution."
+            };
+        } else {
+            let _ = self.quiesce_locked(&mut control, platform);
+            control.reason = c"Input fact hook enable refused.";
+        }
+
+        // Logging may call the host back. Hold the host lease without keeping
+        // the control mutex across the callback.
+        self.enter();
+        let _flight = Flight(self);
+        drop(control);
+        if sr_refused {
+            session.emit(
+                platform,
+                c"Anomaly SR stage not installed; rendering is stock.",
+            );
+        }
+        if motion_refused {
+            session.emit(
+                platform,
+                c"Anomaly motion stage not installed; shaders stay stock.",
+            );
+        }
+        if !input_enabled {
+            return NATIVE_REFUSED;
+        }
+        let label = unsafe { CStr::from_ptr(engine.label) }.to_string_lossy();
+        let executable = unsafe { CStr::from_ptr(engine.executable) }.to_string_lossy();
+        let geometry = if geometry_installed {
+            ", including geometry identity"
+        } else {
+            "; geometry identity hooks were refused"
+        };
+        if let Ok(message) = CString::new(format!(
+            "Anomaly guarded native hooks installed on the {label} build ({executable}){geometry}. No executable file was modified."
+        )) {
+            session.emit(platform, &message);
+        }
+        OK
+    }
+
+    fn quiesce_locked(&self, control: &mut Control, platform: &Platform) -> rsf_result {
+        self.activity.fetch_and(!ACTIVE, Ordering::AcqRel);
+        control.draining = true;
+        if !unsafe { (platform.disable_input.unwrap())() } {
+            return NATIVE_REFUSED;
+        }
+        // End and reset can still use stage resources after observation closes.
+        // The inactive detours continue to supply the native geometry scope
+        // until SR and motion have finished teardown.
+        if !self.idle(platform) {
+            return BUSY;
+        }
+        if !unsafe {
+            (platform.quiesce_sr.unwrap())()
+                && (platform.quiesce_motion.unwrap())()
+                && (platform.disable_hooks.unwrap())()
+        } {
+            return NATIVE_REFUSED;
+        }
+        if control.geometry_installed {
+            if !unsafe { (platform.disable_geometry.unwrap())() } {
+                return NATIVE_REFUSED;
+            }
+            control.geometry_installed = false;
+        }
+        if !self.idle(platform) {
+            return BUSY;
+        }
+        control.draining = false;
+        OK
+    }
+
+    fn idle(&self, platform: &Platform) -> bool {
+        self.activity.load(Ordering::Acquire) == 0 && unsafe { (platform.input_idle.unwrap())() }
+    }
+
+    fn control(&self, platform: &Platform, stop: bool) -> rsf_result {
+        let mut control = lock(&self.control);
+        let result = self.quiesce_locked(&mut control, platform);
+        if result == OK && stop {
+            if !self.idle(platform) {
+                control.draining = true;
+                return BUSY;
+            }
+            lock(&self.state).session = None;
+            control.reason =
+                c"Native callbacks inactive; process-lifetime trampolines remain owned by the pinned adapter.";
+        }
+        result
+    }
+
+    fn status(&self) -> rsf_game_renderer_status {
+        let control = lock(&self.control);
+        rsf_game_renderer_status {
+            struct_size: size_of::<rsf_game_renderer_status>() as u32,
+            abi_version: RSF_GAME_ABI_VERSION,
+            prepared: u32::from(self.session().is_some()),
+            active: u32::from(self.active()),
+            rendering_ready: 0,
+            reason: control.reason.as_ptr(),
+        }
+    }
+
+    fn observation(&self) -> Observation {
+        let state = lock(&self.state);
+        Observation {
+            active: u32::from(self.active()),
+            ..state.observation
+        }
+    }
+
+    fn render_begin(&self, platform: &Platform) {
+        let Some(session) = self.session() else {
+            return;
+        };
+        let mut frame = Frame::default();
+        let read = unsafe { (platform.read_frame.unwrap())(&session.engine, &mut frame) };
+        {
+            let mut state = lock(&self.state);
+            let o = &mut state.observation;
+            o.render_frames = o.render_frames.wrapping_add(1);
+            let sample = if read { frame } else { Frame::default() };
+            o.engine_frame = sample.id;
+            o.width = sample.width;
+            o.height = sample.height;
+        }
+        if read {
+            unsafe { (platform.render_begin.unwrap())(frame.id, frame.width, frame.height) };
+        }
+    }
+
+    fn end_after(&self, platform: &Platform) {
+        unsafe { (platform.end_after.unwrap())() };
+        let o = self.observation();
+        if o.render_frames != 1 && !o.render_frames.is_multiple_of(120) {
+            return;
+        }
+        let Some(session) = self.session() else {
+            return;
+        };
+        if let Ok(message) = CString::new(format!(
+            "Anomaly native boundaries engine_frame={} render_frames={} scene={} hud={} pda={} scope={} camera={} output={}x{} reset={}; SR/FG execution not established",
+            o.engine_frame,
+            o.render_frames,
+            o.scene_passes,
+            o.hud_passes,
+            o.pda_copies,
+            o.scope_copies,
+            o.camera_updates,
+            o.width,
+            o.height,
+            o.resets,
+        )) {
+            session.emit(platform, &message);
+        }
+        unsafe { (platform.report_stages.unwrap())(session.log, session.user) };
+    }
+
+    fn camera(&self, platform: &Platform, view: *const f32, projection: *const f32) {
+        if view.is_null() || projection.is_null() {
+            return;
+        }
+        let mut sample = Camera::default();
+        let read = unsafe { (platform.read_camera.unwrap())(view, projection, &mut sample) };
+        {
+            let mut state = lock(&self.state);
+            let o = &mut state.observation;
+            o.camera_finite = 0;
+            if read {
+                o.camera_updates = o.camera_updates.wrapping_add(1);
+                o.view = sample.view;
+                o.projection = sample.projection;
+                o.camera_finite = u32::from(
+                    sample
+                        .view
+                        .iter()
+                        .chain(&sample.projection)
+                        .all(|v| v.is_finite()),
+                );
+            }
+        }
+        if read {
+            unsafe { (platform.camera.unwrap())(sample.view.as_ptr(), sample.projection.as_ptr()) };
+        }
+    }
+
+    fn update(&self, f: impl FnOnce(&mut Observation)) {
+        f(&mut lock(&self.state).observation);
+    }
+}
+
+struct Flight<'a>(&'a Observer);
+
+impl Drop for Flight<'_> {
+    fn drop(&mut self) {
+        self.0.leave();
+    }
+}
+
+unsafe fn validate<T>(value: *const T, abi: u32) -> Result<(), rsf_result> {
+    let header = value.cast::<u32>();
+    if value.is_null() || unsafe { header.read() } < size_of::<T>() as u32 {
+        return Err(INVALID_ARGUMENT);
+    }
+    if unsafe { header.add(1).read() } != abi {
+        return Err(ABI_MISMATCH);
+    }
+    Ok(())
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_anomaly_observer_prepare(
+    args: *const rsf_game_prepare_args,
+    platform: &Platform,
+) -> rsf_result {
+    if let Err(error) = unsafe { validate(args, RSF_GAME_ABI_VERSION) } {
+        return error;
+    }
+    let host = unsafe { (*args).host };
+    if let Err(error) = unsafe { validate(host, RSF_GAME_ABI_VERSION) } {
+        return error;
+    }
+    OBSERVER.prepare(unsafe { &*host }, platform)
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_anomaly_observer_start(
+    args: *const rsf_game_start_args,
+    platform: &Platform,
+) -> rsf_result {
+    match unsafe { validate(args, RSF_GAME_ABI_VERSION) } {
+        Ok(()) => OBSERVER.start(platform),
+        Err(error) => error,
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_anomaly_observer_quiesce(
+    args: *const rsf_game_control_args,
+    platform: &Platform,
+) -> rsf_result {
+    match unsafe { validate(args, RSF_GAME_ABI_VERSION) } {
+        Ok(()) => OBSERVER.control(platform, false),
+        Err(error) => error,
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_anomaly_observer_stop(
+    args: *const rsf_game_control_args,
+    platform: &Platform,
+) -> rsf_result {
+    match unsafe { validate(args, RSF_GAME_ABI_VERSION) } {
+        Ok(()) => OBSERVER.control(platform, true),
+        Err(error) => error,
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_anomaly_observer_status(out: *mut rsf_game_renderer_status) -> rsf_result {
+    if let Err(error) = unsafe { validate(out, RSF_GAME_ABI_VERSION) } {
+        return error;
+    }
+    unsafe { out.write(OBSERVER.status()) };
+    OK
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_anomaly_observer_read(out: *mut Observation) -> rsf_result {
+    if let Err(error) = unsafe { validate(out, RSF_ANOMALY_OBSERVATION_ABI) } {
+        return error;
+    }
+    unsafe { out.write(OBSERVER.observation()) };
+    OK
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_observer_enter() -> bool {
+    OBSERVER.enter()
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_observer_leave() {
+    OBSERVER.leave();
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_observer_render_begin(platform: &Platform) {
+    OBSERVER.render_begin(platform);
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_observer_end_before(platform: &Platform) {
+    unsafe {
+        (platform.sr_frame_end.unwrap())();
+        (platform.end_before.unwrap())();
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_observer_end_after(platform: &Platform) {
+    OBSERVER.end_after(platform);
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_observer_camera_sample(
+    platform: &Platform,
+    view: *const f32,
+    projection: *const f32,
+) {
+    OBSERVER.camera(platform, view, projection);
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_observer_scene() {
+    OBSERVER.update(|o| o.scene_passes = o.scene_passes.wrapping_add(1));
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_observer_ui(platform: &Platform) {
+    OBSERVER.update(|o| o.hud_passes = o.hud_passes.wrapping_add(1));
+    unsafe { (platform.ui_boundary.unwrap())() };
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_observer_copy_target(platform: &Platform, target: u32) {
+    match target {
+        1 => OBSERVER.update(|o| o.pda_copies = o.pda_copies.wrapping_add(1)),
+        2 => {
+            OBSERVER.update(|o| o.scope_copies = o.scope_copies.wrapping_add(1));
+            unsafe { (platform.scope_frame.unwrap())() };
+        }
+        _ => (),
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_observer_reset(platform: &Platform) {
+    OBSERVER.update(|o| {
+        o.resets = o.resets.wrapping_add(1);
+        o.generation = o.generation.wrapping_add(1);
+        o.camera_finite = 0;
+    });
+    unsafe { (platform.device_reset.unwrap())() };
+}

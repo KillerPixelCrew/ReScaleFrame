@@ -74,7 +74,7 @@ add_test(NAME anomaly_sr_swap_unknown_selection COMMAND rsf_anomaly_sr_swap_test
 set_tests_properties(anomaly_sr_swap_unknown_selection PROPERTIES WILL_FAIL TRUE)
 add_executable(rsf_anomaly_sr_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_hooks.cpp"
     "${RSF_ANOMALY_SR_SRC}/sr_stage.cpp" "${RSF_ANOMALY_SR_SRC}/sr_swap.cpp" "${RSF_ANOMALY_SR_SRC}/sr_d3d11.cpp"
-    "${RSF_ANOMALY_SR_SRC}/native_observer.cpp" ${RSF_ANOMALY_GEOMETRY_SOURCES})
+    "${RSF_ANOMALY_SR_SRC}/native_observer_platform.cpp" ${RSF_ANOMALY_GEOMETRY_SOURCES})
 target_include_directories(rsf_anomaly_sr_hooks_test PRIVATE "${RSF_ANOMALY_SR_SRC}" "${PROJECT_SOURCE_DIR}/runtime/orchestrator/include")
 target_link_libraries(rsf_anomaly_sr_hooks_test PRIVATE ReScaleFrame::GameSDK ReScaleFrame::Contract ReScaleFrame::RuntimeCommon
     ReScaleFrame::Graphics rsf_anomaly_sr_shaders minhook d3d11 rsf_build_options)
@@ -150,7 +150,7 @@ target_link_libraries(rsf_anomaly_motion_far_device_test PRIVATE rsf_anomaly_mot
     bcrypt d3d11 d3dcompiler dxgi dxguid rsf_build_options)
 add_test(NAME anomaly_motion_far_device COMMAND rsf_anomaly_motion_far_device_test)
 set_tests_properties(anomaly_motion_far_device PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)
-# rsf_anomaly_sr_hooks_test links native_observer.cpp, which installs/reports/quiesces the motion stage.
+# rsf_anomaly_sr_hooks_test links the native observer, which installs/reports/quiesces the motion stage.
 target_sources(rsf_anomaly_sr_hooks_test PRIVATE ${RSF_ANOMALY_MOTION_SOURCES} "${RSF_ANOMALY_SR_SRC}/motion_d3d11.cpp"
     "${RSF_ANOMALY_SR_SRC}/motion_stage.cpp" "${RSF_ANOMALY_SR_SRC}/shader_d3d.cpp")
 target_link_libraries(rsf_anomaly_sr_hooks_test PRIVATE rsf_anomaly_motion_bridge bcrypt dxguid d3dcompiler)

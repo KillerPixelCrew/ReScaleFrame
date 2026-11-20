@@ -14,6 +14,10 @@ mod motion_device;
 mod motion_device_abi;
 mod motion_target;
 mod motion_target_abi;
+#[cfg(windows)]
+mod native_observer;
+#[cfg(windows)]
+mod native_observer_abi;
 mod sr_temporal;
 
 use rsf_game_sys::{
