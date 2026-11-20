@@ -70,6 +70,7 @@ if(MSVC)
 endif()
 target_link_libraries(rsf_orchestrator_core PUBLIC rsf_orchestrator_rust)
 target_link_libraries(rsf_native_cpu PRIVATE rsf_orchestrator_rust)
+target_link_libraries(rsf_frame_dump PRIVATE rsf_orchestrator_rust)
 target_compile_definitions(rsf_orchestrator_core PRIVATE RSF_STREAMLINE_HOST_BUILD)
 # Public because the orchestrator's own headers name a backend's frame structure and the decode
 # pass's parameters.
