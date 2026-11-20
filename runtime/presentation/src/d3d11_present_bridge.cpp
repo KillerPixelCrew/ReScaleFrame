@@ -1,109 +1,103 @@
 // SPDX-License-Identifier: MIT
+// IDXGISwapChain4 facade and native leaves of the shared presentation bridge. The Rust owner in
+// runtime/orchestrator/src/d3d11_present.rs decides admission, publication, provider switching,
+// frame and slot sequencing, Present, fallback, resize, retirement, status and latency routing.
+// Each leaf here is one DXGI, D3D12, D3D11, Win32, MinHook or SDK step on this object.
 #include <rescaleframe/d3d11_present_bridge.h>
 #include <rescaleframe/shared_surface.h>
 #include "../../backends/common/d3d12_helpers.h"
+#include "d3d11_present_platform.h"
 #include <d3d11_4.h>
 #include <d3d12.h>
 #include <d3d12sdklayers.h>
 #include <dxgi1_6.h>
 #include <wrl/client.h>
 #include <MinHook.h>
-#include <atomic>
-#include <mutex>
-#include <shared_mutex>
-#include "provider_status_snapshot.h"
-#include <string>
-#include <new>
-#include <cstdio>
 #include <array>
-#include <algorithm>
+#include <atomic>
+#include <cstddef>
+#include <cstdio>
 #include <memory>
+#include <mutex>
+#include <new>
+
+static_assert(sizeof(rsf_streamline_graphics) == 48);
+static_assert(sizeof(rsf_d3d11p_request) == 48 && offsetof(rsf_d3d11p_request, refresh_denominator) == 44);
+static_assert(sizeof(rsf_d3d11p_facts) == 104 && offsetof(rsf_d3d11p_facts, graphics) == 40 &&
+    offsetof(rsf_d3d11p_facts, direct_queue) == 88);
+static_assert(sizeof(rsf_d3d11p_adapter) == 16);
+static_assert(sizeof(rsf_d3d11p_platform) == 77 * sizeof(void*));
+static_assert(offsetof(rsf_d3d11p_platform, bridge_new) == 15 * sizeof(void*) &&
+    offsetof(rsf_d3d11p_platform, init_source) == 19 * sizeof(void*) &&
+    offsetof(rsf_d3d11p_platform, create_plain) == 33 * sizeof(void*) &&
+    offsetof(rsf_d3d11p_platform, has_provider_queue) == 42 * sizeof(void*) &&
+    offsetof(rsf_d3d11p_platform, drain_queues) == 61 * sizeof(void*) &&
+    offsetof(rsf_d3d11p_platform, verify_outer) == 76 * sizeof(void*));
+static_assert(sizeof(rsf_d3d11_present_status) == 280 && sizeof(rsf_observer_present_event) == 32);
+static_assert(DXGI_FORMAT_R8G8B8A8_UNORM == 28 && DXGI_FORMAT_B8G8R8A8_UNORM == 87 &&
+    DXGI_FORMAT_R10G10B10A2_UNORM == 24 && DXGI_FORMAT_R16G16B16A16_FLOAT == 10);
+static_assert(DXGI_PRESENT_TEST == 1 && DXGI_PRESENT_ALLOW_TEARING == 0x200 &&
+    DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT == 64);
+static_assert(RSF_FG_BACKEND_DLSS == 1 && RSF_FG_BACKEND_FSR3 == 3 && RSF_FG_BACKEND_FSR4 == 4 &&
+    RSF_FG_BACKEND_XESS == 5 && RSF_FG_BACKEND_AUTO == 7 && RSF_PACING_ANTILAG2 == 3 &&
+    RSF_LATENCY_INPUT_SAMPLE == 6 && RSF_UI_MODE_NONE == 1);
 
 namespace {
 using Microsoft::WRL::ComPtr;
-rsf_d3d11_present_setup settings{};
-std::string runtime_directory;
-std::string fsr3_directory, fsr4_directory, xess_directory;
-std::string streamline_directory;
-std::string engine_version, project_id;
-std::mutex creation_guard;
-std::shared_mutex provider_guard;
-rsf::presentation::ProviderStatusSnapshot provider_status;
-std::atomic<uint32_t> active_backend{RSF_FG_BACKEND_DLSS}, requested_backend{UINT32_MAX};
-std::atomic<uint32_t> backend_choices{(RSF_FG_BACKEND_ALL | 1u) & ~(1u << RSF_FG_BACKEND_FSR4)};
-std::atomic<int32_t> switch_result{0};
-std::atomic<uint64_t> chain_generation{1};
-std::atomic<rsf_streamline_host*> active_host{nullptr};
-std::atomic<void*> active_chain{nullptr};
-std::atomic<ID3D12CommandQueue*> active_interop{nullptr};
-std::atomic<void*> active_session{nullptr};
-// The active provider paces through the shared Streamline host (Reflex), so latency calls go to
-// the host once rather than to both. Changes only with active_session, under provider_guard.
-std::atomic<bool> host_paced{false};
-rsf_streamline_graphics active_graphics{};
-// Same mapping as the orchestrator's rsf_fg_get_provider, which this library cannot call: the
-// orchestrator links presentation, not the reverse. Unknown ids, and Off, have no provider.
-const rsf_generation_provider* backend_api(uint32_t backend) {
-    switch (backend) {
-    case RSF_FG_BACKEND_DLSS: return rsf_generation_dlss();
-    case RSF_FG_BACKEND_FSR3:
-    case RSF_FG_BACKEND_FSR4: return rsf_generation_fsr();
-    case RSF_FG_BACKEND_XESS: return rsf_generation_xess();
-    default: return nullptr;
-    }
-}
-const rsf_generation_provider* generation_api() { return backend_api(active_backend.load()); }
-const std::string& sdk_directory(uint32_t backend) {
-    switch (backend) {
-    case RSF_FG_BACKEND_DLSS: return streamline_directory;
-    case RSF_FG_BACKEND_FSR4: return fsr4_directory;
-    case RSF_FG_BACKEND_XESS: return xess_directory;
-    default: return fsr3_directory;
-    }
-}
-constexpr rsf_fg_options fg_off{sizeof(rsf_fg_options), RSF_FG_ABI_VERSION, RSF_FG_OFF, 1, 0, RSF_REFLEX_OFF, 0};
 using Create = HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory*, IUnknown*, DXGI_SWAP_CHAIN_DESC*, IDXGISwapChain**);
 using CreateHwnd = HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, HWND,
     const DXGI_SWAP_CHAIN_DESC1*, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*, IDXGIOutput*, IDXGISwapChain1**);
 Create original_create = nullptr;
 CreateHwnd original_hwnd = nullptr;
-thread_local bool creating = false;
-bool scoped_interception = false;
-std::atomic<uint64_t> creation_tokens{0};
-std::atomic<uint64_t> active_creation_token{0};
-std::atomic<void*> outer_alias{nullptr}; // Retained by the host after successful admission.
-std::atomic<bool> scoped_admitted{false};
-struct CreationScope {
-    uint64_t token = 0;
-    HWND window = nullptr;
-    ComPtr<IDXGISwapChain> captured;
-};
-thread_local CreationScope creation_scope;
+
+const rsf_d3d11_present_setup& settings() { return *rsf_core_d3d11p_settings(); }
+void log(const char* message) { if (settings().log) settings().log(settings().user, message); }
+bool switching() { return settings().runtime_switching != 0; }
 bool same_identity(IUnknown* left, IUnknown* right) {
     if (!left || !right) return false;
     ComPtr<IUnknown> a,b;
     return SUCCEEDED(left->QueryInterface(IID_PPV_ARGS(&a))) &&
         SUCCEEDED(right->QueryInterface(IID_PPV_ARGS(&b))) && a.Get() == b.Get();
 }
-bool capture_creation(HWND window) {
-    return !scoped_interception || (creation_scope.token && creation_scope.window == window && !creation_scope.captured);
-}
 
-void log(const char* message) { if (settings.log) settings.log(settings.user, message); }
-uint64_t clock_tick() { LARGE_INTEGER now{}; QueryPerformanceCounter(&now); return uint64_t(now.QuadPart); }
-
-class Bridge final : public IDXGISwapChain4 {
+struct Bridge final : public IDXGISwapChain4 {
     std::atomic<ULONG> references{1};
+    rsf_d3d11p_chain* chain;
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11DeviceContext4> context;
+    ComPtr<IDXGIAdapter> adapter;
     ComPtr<IDXGIFactory> parent;
     ComPtr<IDXGISwapChain4> physical;
-    std::atomic<bool> physical_pending{false};
-    uint32_t provider_backend{};
     std::mutex physical_guard;
-    std::atomic<UINT> application_presents{0};
+    // The queue the current physical chain (and its provider) was created on.
+    std::atomic<ID3D12CommandQueue*> provider_queue{nullptr};
+    bool tearing_supported = false;
+    rsf_streamline_host* host = nullptr;
+    rsf_streamline_graphics graphics{};
+    ComPtr<ID3D12CommandQueue> interop_queue;
+    ComPtr<ID3D12Device> direct_device;
+    ComPtr<ID3D12CommandQueue> direct_queue;
+    bool native12 = false;
+    std::array<ComPtr<ID3D12Resource>, 8> render_buffers;
+    std::array<rsf_shared_surface*, 8> surfaces{};
+    rsf_shared_fence* shared_fence = nullptr;
+    ComPtr<ID3D12Fence> complete;
+    // Signalled on the provider queue once vendor retirement has joined.
+    ComPtr<ID3D12Fence> retired;
+    struct Slot {
+        ComPtr<ID3D12CommandAllocator> allocator;
+        ComPtr<ID3D12GraphicsCommandList> list;
+    } slots[3];
+    ComPtr<ID3D12Resource> frame_buffer; // The physical backbuffer of the Present in progress.
+    DXGI_SWAP_CHAIN_DESC description{};
+    HANDLE completion_event = nullptr;
+    HANDLE application_ready = nullptr;
+
+    explicit Bridge(rsf_d3d11p_chain* owner) : chain(owner) {}
+    ~Bridge() { rsf_core_d3d11p_chain_destroy(chain); }
+
     template<class Call> HRESULT query_physical(Call call) {
-        const auto initialized = ensure_physical(); if (FAILED(initialized)) return initialized;
+        const auto initialized = rsf_core_d3d11p_ensure(chain); if (FAILED(initialized)) return initialized;
         std::lock_guard<std::mutex> lock(physical_guard);
         return physical ? call(physical.Get()) : DXGI_ERROR_WAS_STILL_DRAWING;
     }
@@ -118,133 +112,18 @@ class Bridge final : public IDXGISwapChain4 {
     void publish_physical(ComPtr<IDXGISwapChain4>& value, ID3D12CommandQueue* queue) {
         std::lock_guard<std::mutex> lock(physical_guard); physical = std::move(value); provider_queue.store(queue);
     }
-    // The queue the current physical chain (and its provider) was created on.
-    std::atomic<ID3D12CommandQueue*> provider_queue{nullptr};
-    bool tearing_supported = false;
-    rsf_streamline_host* host = nullptr;
-    rsf_streamline_graphics graphics{};
-    ComPtr<ID3D12CommandQueue> interop_queue;
-    ComPtr<ID3D12Device> direct_device;
-    ComPtr<ID3D12CommandQueue> direct_queue;
-    bool native12 = false;
-    std::array<ComPtr<ID3D12Resource>, 8> render_buffers;
-    uint32_t render_index = 0;
-    void* provider = nullptr;
-    std::array<rsf_shared_surface*, 8> surfaces{};
-    rsf_shared_fence* shared_fence = nullptr;
-    ComPtr<ID3D12Fence> complete;
-    // Signalled on the provider queue once vendor retirement has joined; see retire().
-    ComPtr<ID3D12Fence> retired;
-    uint64_t retired_serial = 0;
-    struct Slot {
-        ComPtr<ID3D12CommandAllocator> allocator;
-        ComPtr<ID3D12GraphicsCommandList> list;
-        uint64_t fence = 0;
-    } slots[3];
-    DXGI_SWAP_CHAIN_DESC description{};
-    HANDLE completion_event = nullptr;
-    HANDLE application_ready = nullptr;
-    std::atomic<UINT> application_latency{1};
-    std::array<uint64_t, 16> application_fences{};
-    uint64_t application_serial = 0;
-    uint64_t serial = 0;
-    uint32_t next_slot = 0;
-    bool faulted = false;
-    std::atomic<uint32_t> failed_buffer_reports{0};
-    uint32_t post_switch_frames = 0;
-    void switch_receipt(const char* stage, HRESULT result = S_OK) {
-        if (!post_switch_frames) return;
-        char text[256]{}; std::snprintf(text, sizeof(text),
-            "Bridge post-switch stage=%s backend=%u generation=%llu HRESULT=0x%08lx thread=%lu",
-            stage, active_backend.load(), static_cast<unsigned long long>(chain_generation.load()),
-            static_cast<unsigned long>(result), static_cast<unsigned long>(GetCurrentThreadId()));
-        log(text);
-    }
-    uint64_t timing_epoch = 0, previous_present = 0, timing_frames = 0, timing_sdk_start = 0;
-    double tick_ms = 0, interval_min = 0, interval_max = 0;
-    std::array<double, 5> timing_sum{}, timing_max{};
-    uint32_t timing_slots = 0;
-    void trace_pacing(const std::array<uint64_t, 6>& ticks, uint32_t index, UINT sync, UINT physical_flags) {
-        rsf_fg_status state{}; state.struct_size = sizeof(state);
-        if (!settings.debug_timing || !settings.log || !tick_ms || !provider || !backend_api(provider_backend) ||
-            backend_api(provider_backend)->status(provider, &state) != RSF_BACKEND_OK) return;
-        const auto end = ticks.back();
-        if (!timing_epoch) { timing_epoch = end; timing_sdk_start = state.total_presented; previous_present = ticks[0]; return; }
-        const double interval = double(ticks[0] - previous_present) * tick_ms; previous_present = ticks[0];
-        interval_min = timing_frames ? std::min(interval_min, interval) : interval;
-        interval_max = std::max(interval_max, interval); ++timing_frames; timing_slots |= 1u << index;
-        for (size_t i = 0; i < timing_sum.size(); ++i) {
-            const auto elapsed = double(ticks[i + 1] - ticks[i]) * tick_ms;
-            timing_sum[i] += elapsed; timing_max[i] = std::max(timing_max[i], elapsed);
-        }
-        const auto elapsed = double(end - timing_epoch) * tick_ms;
-        if (elapsed < 1000) return;
-        char text[640];
-        std::snprintf(text, sizeof(text),
-            "FG pacing frames=%llu rendered=%.1f presented=%.1f interval_ms=%.2f..%.2f callbacks_ms=%.2f/%.2f slot_wait_ms=%.2f/%.2f upload_ms=%.2f/%.2f present_ms=%.2f/%.2f sdk_ms=%.2f/%.2f slots=0x%x sync=%u active=%u physical_flags=0x%x",
-            static_cast<unsigned long long>(timing_frames), double(timing_frames) * 1000 / elapsed,
-            double(state.total_presented - timing_sdk_start) * 1000 / elapsed, interval_min, interval_max,
-            timing_sum[0] / double(timing_frames), timing_max[0], timing_sum[1] / double(timing_frames), timing_max[1],
-            timing_sum[2] / double(timing_frames), timing_max[2], timing_sum[3] / double(timing_frames), timing_max[3],
-            timing_sum[4] / double(timing_frames), timing_max[4], timing_slots, sync, state.active, physical_flags);
-        log(text);
-        timing_epoch = end; timing_sdk_start = state.total_presented; reset_timing();
-    }
-    // Clears one reporting window. A zero epoch also restarts the clock on the next frame.
-    void reset_timing() {
-        timing_frames = 0; timing_sum = {}; timing_max = {}; interval_min = interval_max = 0; timing_slots = 0;
-    }
     HRESULT wait(ID3D12Fence* fence, uint64_t value) { return rsf::wait_fence(fence, value, completion_event); }
-    HRESULT application_frame_complete(uint64_t value) {
-        if (!application_ready) return S_OK;
-        const auto frame = ++application_serial;
-        application_fences[frame % application_fences.size()] = value;
-        const auto latency = application_latency.load();
-        if (frame < latency) return SetEvent(application_ready) ? S_OK : E_FAIL;
-        const auto available = application_fences[(frame - latency + 1) % application_fences.size()];
-        return complete->SetEventOnCompletion(available, application_ready);
-    }
-    void report_device_failure(HRESULT result) {
-        char text[160]; std::snprintf(text, sizeof(text), "Unity presentation failed backend=%u HRESULT=%08lx device_reason=%08lx",
-            active_backend.load(), static_cast<unsigned long>(result), static_cast<unsigned long>(direct_device->GetDeviceRemovedReason())); log(text);
-        ComPtr<ID3D12InfoQueue> messages;
-        if (FAILED(direct_device.As(&messages))) return;
-        unsigned reported = 0;
-        const auto count = messages->GetNumStoredMessagesAllowedByRetrievalFilter();
-        for (UINT64 i = count; i && reported < 8;) {
-            --i;
-            SIZE_T bytes = 0; if (FAILED(messages->GetMessage(i, nullptr, &bytes))) continue;
-            auto storage = std::make_unique<unsigned char[]>(bytes);
-            auto* message = reinterpret_cast<D3D12_MESSAGE*>(storage.get());
-            if (SUCCEEDED(messages->GetMessage(i, message, &bytes)) && message->Severity <= D3D12_MESSAGE_SEVERITY_ERROR) {
-                log(message->pDescription); ++reported;
-            }
-        }
-    }
-    HRESULT drain() {
-        auto* queue = static_cast<ID3D12CommandQueue*>(graphics.queue);
-        if (!queue || !complete) return S_OK;
-        if (interop_queue && (FAILED(interop_queue->Signal(complete.Get(), ++serial)) ||
-            FAILED(wait(complete.Get(), serial)))) return E_FAIL;
-        if (FAILED(queue->Signal(complete.Get(), ++serial)) || FAILED(wait(complete.Get(), serial))) return E_FAIL;
-        if (provider) {
-            rsf_fg_retirement retirement{}; retirement.struct_size = sizeof(retirement);
-            if (backend_api(provider_backend)->retirement(provider, &retirement) != RSF_BACKEND_OK ||
-                FAILED(wait(static_cast<ID3D12Fence*>(retirement.fence), retirement.value))) return E_FAIL;
-        }
-        return S_OK;
-    }
     HRESULT make_surface(UINT width, UINT height, DXGI_FORMAT format) {
         if (!description.BufferCount || description.BufferCount > surfaces.size()) return E_INVALIDARG;
         rsf_shared_surface_setup setup{sizeof(setup), RSF_SHARED_SURFACE_ABI_VERSION,
-            width, height, uint32_t(format), 1, settings.log, settings.user,
+            width, height, uint32_t(format), 1, settings().log, settings().user,
             (description.BufferUsage & DXGI_USAGE_UNORDERED_ACCESS) != 0 ? 1u : 0u};
         for (UINT i = 0; i < description.BufferCount; ++i) {
             if (rsf_shared_surface_create(device.Get(), graphics.native_device, &setup, &surfaces[i]) != RSF_SHARED_OK) {
                 release_surfaces(); return E_FAIL;
             }
         }
-        render_index = 0; return S_OK;
+        return S_OK;
     }
     void release_surfaces() {
         for (auto& surface : surfaces) { rsf_shared_surface_destroy(surface); surface = nullptr; }
@@ -259,380 +138,21 @@ class Bridge final : public IDXGISwapChain4 {
         for (UINT i = 0; i < description.BufferCount; ++i)
             if (FAILED(direct_device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
                 D3D12_RESOURCE_STATE_PRESENT, nullptr, IID_PPV_ARGS(&render_buffers[i])))) return E_FAIL;
-        render_index = 0; application_serial = 0; application_fences = {};
-        if (application_ready) SetEvent(application_ready);
         return S_OK;
-    }
-    rsf_generation_setup generation_setup(uint32_t backend) {
-        rsf_generation_setup setup{}; setup.struct_size = sizeof(setup); setup.abi_version = RSF_FG_ABI_VERSION;
-        setup.feature_major = backend; setup.streamline_host = host;
-        setup.runtime_directory_utf8 = sdk_directory(backend).c_str();
-        setup.depth_inverted = settings.depth_inverted; setup.depth_infinite = settings.depth_infinite;
-        setup.view_space_to_meters = settings.units_to_meters;
-        auto& chain = setup.chain; chain.struct_size = sizeof(chain); chain.abi_version = RSF_BACKEND_ABI_VERSION;
-        chain.d3d12_device = graphics.device; chain.d3d12_queue = graphics.queue;
-        if (backend != RSF_FG_BACKEND_DLSS) {
-            chain.d3d12_device = graphics.native_device;
-            chain.d3d12_queue = native12 ? direct_queue.Get() : graphics.native_queue;
-        }
-        chain.hwnd = description.OutputWindow; chain.width = description.BufferDesc.Width; chain.height = description.BufferDesc.Height;
-        chain.format = description.BufferDesc.Format; chain.buffer_count = native12 ? description.BufferCount : 3u;
-        chain.max_generated_frames = settings.max_generated_frames ? settings.max_generated_frames : 3u;
-        chain.ui_mode = settings.ui_mode ? settings.ui_mode : RSF_UI_MODE_NONE; chain.allow_tearing = tearing_supported;
-        chain.log = settings.log; chain.log_user = settings.user; return setup;
-    }
-    rsf_backend_result create_physical(uint32_t backend) {
-        ComPtr<IDXGISwapChain4> replacement;
-        if (!backend) {
-            auto desc = description; desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD; desc.BufferCount = native12 ? description.BufferCount : 3u;
-            desc.Flags = tearing_supported ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
-            // D3D11 application bindings belong to the shared virtual buffers.
-            // This private D3D12 chain receives copies and presents them.
-            if (!native12) desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-            ComPtr<IDXGISwapChain> plain;
-            auto* owner_queue = native12 ? direct_queue.Get() : static_cast<ID3D12CommandQueue*>(graphics.native_queue);
-            const HRESULT created = original_create ? original_create(parent.Get(), owner_queue, &desc, &plain) :
-                parent->CreateSwapChain(owner_queue, &desc, &plain);
-            if (FAILED(created)) {
-                char text[512]{}; std::snprintf(text, sizeof(text),
-                    "Physical chain creation refused HRESULT=0x%08lx facade=%p factory=%p queue=%p window=%p size=%ux%u format=%u buffers=%u effect=%u flags=0x%x native12=%u usage=0x%x sample=%u/%u refresh=%u/%u scanline=%u scaling=%u windowed=%u",
-                    static_cast<unsigned long>(created), static_cast<void*>(this), static_cast<void*>(parent.Get()),
-                    static_cast<void*>(owner_queue), static_cast<void*>(desc.OutputWindow), desc.BufferDesc.Width, desc.BufferDesc.Height,
-                    uint32_t(desc.BufferDesc.Format), desc.BufferCount, uint32_t(desc.SwapEffect), desc.Flags, uint32_t(native12),
-                    desc.BufferUsage,desc.SampleDesc.Count,desc.SampleDesc.Quality,
-                    desc.BufferDesc.RefreshRate.Numerator,desc.BufferDesc.RefreshRate.Denominator,
-                    uint32_t(desc.BufferDesc.ScanlineOrdering),uint32_t(desc.BufferDesc.Scaling),uint32_t(desc.Windowed!=FALSE));
-                log(text); return RSF_BACKEND_ERROR_INIT_FAILED;
-            }
-            if (FAILED(plain.As(&replacement)))
-                return RSF_BACKEND_ERROR_INIT_FAILED;
-            publish_physical(replacement, owner_queue);
-            return RSF_BACKEND_OK;
-        }
-        const auto* api = backend_api(backend); auto setup = generation_setup(backend);
-        if (!api) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
-        void* chain = nullptr;
-        auto result = api->create(&setup, &provider, &chain);
-        if (result != RSF_BACKEND_OK) {
-            char text[256]{}; std::snprintf(text, sizeof(text),
-                "Generation provider create failed backend=%u result=%d allowed=0x%x size=%ux%u runtime=%s",
-                backend, result, settings.allowed_backend_choices, setup.chain.width, setup.chain.height,
-                setup.runtime_directory_utf8); log(text);
-        }
-        if (result == RSF_BACKEND_OK && (!chain || FAILED(static_cast<IUnknown*>(chain)->QueryInterface(IID_PPV_ARGS(&replacement)))))
-            result = RSF_BACKEND_ERROR_INIT_FAILED;
-        if (result == RSF_BACKEND_OK) result = api->configure(provider, &fg_off);
-        if (result != RSF_BACKEND_OK) { replacement.Reset(); if (provider) api->destroy(provider); provider = nullptr; }
-        else { provider_backend = backend; publish_physical(replacement, static_cast<ID3D12CommandQueue*>(setup.chain.d3d12_queue)); }
-        return result;
-    }
-    // Every current provider.status is a cached-only copy. SDK polling stays in
-    // the existing owner callbacks, outside the short snapshot publication lock.
-    void publish_status() {
-        const auto* api = backend_api(provider_backend);
-        rsf_fg_status status{sizeof(status)};
-        if (provider && api && api->status(provider, &status) == RSF_BACKEND_OK)
-            (void)provider_status.publish(provider_backend, chain_generation.load(), status);
-        else provider_status.clear();
-    }
-    HRESULT ensure_physical() {
-        // Never create the HWND owner from an outer wrapper's constructor query.
-        if (scoped_interception && creation_scope.token) return DXGI_ERROR_WAS_STILL_DRAWING;
-        if (!physical_pending.exchange(false)) return current_physical() ? S_OK : DXGI_ERROR_WAS_STILL_DRAWING;
-        // Overlay creation callbacks retain per-call device/queue state. A provider's
-        // nested native creation must happen after the engine's factory call returns.
-        const bool was_creating = creating; creating = true;
-        struct Restore { bool value; ~Restore() { creating = value; } } restore{was_creating};
-        if (host && active_backend.load() != RSF_FG_BACKEND_DLSS && rsf_streamline_host_generation_load(host, 0) != RSF_BACKEND_OK) return E_FAIL;
-        const auto result = create_physical(active_backend.load());
-        if (result != RSF_BACKEND_OK) {
-            switch_result.store(result); active_backend.store(0);
-            if (create_physical(0) != RSF_BACKEND_OK) { faulted = true; return E_FAIL; }
-        }
-        if (!description.Windowed && FAILED(physical->SetFullscreenState(TRUE, nullptr))) return E_FAIL;
-        active_session.store(provider, std::memory_order_release); host_paced.store(paced_by_host());
-        provider_status.activate(active_backend.load(), chain_generation.load()); publish_status();
-        return S_OK;
-    }
-    // The provider session is the latency owner only when it does not pace through the host.
-    bool paced_by_host() {
-        rsf_fg_status state{}; state.struct_size = sizeof(state);
-        return host && provider && backend_api(provider_backend) && backend_api(provider_backend)->status(provider, &state) == RSF_BACKEND_OK &&
-            state.pacing_owner == RSF_PACING_REFLEX;
     }
     // Streamline's proxy queue takes the proxy list; any other provider queue takes the native
     // list behind it. Null when the host cannot unwrap the list.
     void* provider_list(ID3D12GraphicsCommandList* list) {
         return host && provider_queue.load() != graphics.queue ? rsf_streamline_host_native(host, list) : list;
     }
-    void switch_provider(uint32_t backend) {
-        if (backend && settings.allowed_backend_choices && !(settings.allowed_backend_choices & (1u << backend))) {
-            switch_result.store(RSF_BACKEND_ERROR_NOT_SUPPORTED); return;
-        }
-        if (!settings.runtime_switching || (backend == RSF_FG_BACKEND_DLSS && !host)) { switch_result.store(RSF_BACKEND_ERROR_NOT_SUPPORTED); return; }
-        if (backend == active_backend.load()) { switch_result.store(0); return; }
-        std::unique_lock lock(provider_guard, std::try_to_lock);
-        if (!lock.owns_lock()) {
-            // A pacer may still need this Present thread to finish the older
-            // frame. Retry at another completed Present without displacing a newer request.
-            uint32_t empty = UINT32_MAX;
-            (void)requested_backend.compare_exchange_strong(empty, backend);
-            return;
-        }
-        const auto previous = active_backend.load();
-        auto result = FAILED(drain()) ? RSF_BACKEND_ERROR_NOT_READY : RSF_BACKEND_OK;
-        if (result == RSF_BACKEND_OK && backend && backend != RSF_FG_BACKEND_DLSS) {
-            auto setup = generation_setup(backend); setup.chain.hwnd = nullptr;
-            void* probe = nullptr; void* probe_chain = nullptr;
-            result = backend_api(backend)->create(&setup, &probe, &probe_chain);
-            if (probe) backend_api(backend)->destroy(probe);
-        }
-        if (result != RSF_BACKEND_OK) { switch_result.store(result); return; }
-        BOOL fullscreen = FALSE; physical->GetFullscreenState(&fullscreen, nullptr);
-        if (fullscreen) physical->SetFullscreenState(FALSE, nullptr);
-        char ownership[256]{}; std::snprintf(ownership, sizeof(ownership),
-            "Generation switch identity facade=%p old_physical=%p old_provider=%p requested=%u",
-            static_cast<void*>(this), static_cast<void*>(physical.Get()), provider, backend); log(ownership);
-        provider_status.invalidate();
-        clear_physical();
-        active_session.store(nullptr); host_paced.store(false);
-        if (provider) backend_api(provider_backend)->destroy(provider);
-        provider = nullptr; provider_backend = 0;
-        creating = true;
-        if (host) {
-            (void)rsf_streamline_host_reflex(host, RSF_REFLEX_OFF, 0);
-            result = rsf_streamline_host_generation_load(host, backend == RSF_FG_BACKEND_DLSS);
-        }
-        if (result == RSF_BACKEND_OK) result = create_physical(backend);
-        uint32_t effective = backend;
-        if (result != RSF_BACKEND_OK) {
-            effective = previous;
-            if (host) (void)rsf_streamline_host_generation_load(host, previous == RSF_FG_BACKEND_DLSS);
-            if (create_physical(previous) != RSF_BACKEND_OK) {
-                effective = 0;
-                if (create_physical(0) != RSF_BACKEND_OK) faulted = true;
-            }
-        }
-        creating = false;
-        if (fullscreen && physical) physical->SetFullscreenState(TRUE, nullptr);
-        active_backend.store(effective); active_session.store(provider); host_paced.store(paced_by_host()); ++chain_generation;
-        provider_status.activate(effective, chain_generation.load()); publish_status();
-        timing_epoch = 0; reset_timing();
-        post_switch_frames = 4;
-        switch_result.store(result);
-        char text[160]; std::snprintf(text, sizeof(text), "Generation runtime switch requested=%u effective=%u result=%d generation=%llu",
-            backend, effective, result, static_cast<unsigned long long>(chain_generation.load())); log(text);
-        std::snprintf(ownership, sizeof(ownership), "Generation switch identity facade=%p new_physical=%p new_provider=%p effective=%u",
-            static_cast<void*>(this), static_cast<void*>(physical.Get()), provider, effective); log(ownership);
-    }
-    ~Bridge() {
-        {
-            // Drain existing shared provider leases before unpublishing. Release
-            // this lock before GPU drain; new leases cannot obtain this session.
-            std::lock_guard<std::shared_mutex> lock(provider_guard);
-            if (active_chain.load() == this) {
-                provider_status.invalidate(); outer_alias.store(nullptr, std::memory_order_release);
-                active_chain.store(nullptr); active_interop.store(nullptr); active_session.store(nullptr); host_paced.store(false);
-            }
-        }
-        // On device failure retain GPU-reachable storage for the process rather than free it.
-        if (FAILED(drain())) {
-            log("presentation bridge: retirement failed; retaining provider and shared inputs");
-            for (auto& slot : slots) { slot.list.Detach(); slot.allocator.Detach(); }
-            complete.Detach(); retired.Detach(); physical.Detach(); context.Detach(); device.Detach(); parent.Detach();
-            interop_queue.Detach();
-            direct_device.Detach(); direct_queue.Detach();
-            for (auto& buffer : render_buffers) buffer.Detach();
-            return;
-        }
-        release_surfaces(); rsf_shared_fence_destroy(shared_fence);
-        physical.Reset();
-        if (provider) backend_api(provider_backend)->destroy(provider);
-        if (completion_event) CloseHandle(completion_event);
-        if (application_ready) CloseHandle(application_ready);
-        if (host && active_host.load() != host) {
-            interop_queue.Reset();
-            for (auto& slot : slots) { slot.list.Reset(); slot.allocator.Reset(); }
-            complete.Reset(); retired.Reset(); context.Reset(); device.Reset(); parent.Reset();
-            rsf_streamline_host_destroy(host);
-        } else if (host) interop_queue.Detach(); // Shared SR callbacks retain this process-owned queue.
-        // The host also serves SR/CPU callbacks and stays loaded until process exit.
-    }
     // Streamline needs the engine identity; without one there is no host and no DLSS-G.
-    static bool has_identity() { return !engine_version.empty() && !project_id.empty(); }
-    rsf_streamline_host_setup host_setup(void* adapter) const {
-        return {sizeof(rsf_streamline_host_setup), RSF_STREAMLINE_HOST_ABI_VERSION, streamline_directory.c_str(), adapter,
-            settings.engine_type, engine_version.c_str(), project_id.c_str(), 1, settings.development_runtime,
-            settings.log, settings.user, RSF_SL_PROFILE_DLSS_FG, 1};
+    rsf_streamline_host_setup host_setup(void* dxgi_adapter) const {
+        const auto& s = settings();
+        return {sizeof(rsf_streamline_host_setup), RSF_STREAMLINE_HOST_ABI_VERSION, s.streamline_directory_utf8, dxgi_adapter,
+            s.engine_type, s.engine_version_utf8, s.project_id_utf8, 1, s.development_runtime,
+            s.log, s.user, RSF_SL_PROFILE_DLSS_FG, 1};
     }
-public:
-    void refuse_creation() { faulted = true; scoped_admitted.store(false); outer_alias.store(nullptr); }
-    void* presentation_queue() { return provider_queue.load(); }
-    void* source_queue() {
-        auto* queue = interop_queue.Get();
-        if (!native12 && host && queue)
-            queue = static_cast<ID3D12CommandQueue*>(rsf_streamline_host_native(host, queue));
-        if (queue) queue->AddRef();
-        return queue;
-    }
-    void* command_list(void* list) { return provider_list(static_cast<ID3D12GraphicsCommandList*>(list)); }
-    // Joins vendor retirement on the provider queue, optionally runs a closed list there, and
-    // signals one private fence that covers both. Present thread, between Present and the next one.
-    rsf_backend_result retire(void* session, void* list, void** fence, uint64_t* value) {
-        auto* queue = provider_queue.load();
-        const auto* api = backend_api(provider_backend);
-        if (!queue || !api || !session || session != provider) return RSF_BACKEND_ERROR_NOT_READY;
-        // The fence exists before anything is queued, so a failure never leaves the list unsignalled.
-        if (!retired && FAILED(static_cast<ID3D12Device*>(graphics.native_device)->CreateFence(0, D3D12_FENCE_FLAG_NONE,
-                IID_PPV_ARGS(&retired)))) return RSF_BACKEND_ERROR_INIT_FAILED;
-        rsf_fg_retirement retirement{}; retirement.struct_size = sizeof(retirement);
-        const auto result = api->retirement(session, &retirement);
-        if (result != RSF_BACKEND_OK) return result;
-        if (retirement.fence && FAILED(queue->Wait(static_cast<ID3D12Fence*>(retirement.fence), retirement.value)))
-            return RSF_BACKEND_ERROR_FEATURE_FAILED;
-        if (list) {
-            auto* command = static_cast<ID3D12GraphicsCommandList*>(provider_list(static_cast<ID3D12GraphicsCommandList*>(list)));
-            if (!command) return RSF_BACKEND_ERROR_FEATURE_FAILED;
-            ID3D12CommandList* lists[]{command}; queue->ExecuteCommandLists(1, lists);
-        }
-        if (FAILED(queue->Signal(retired.Get(), retired_serial + 1))) return RSF_BACKEND_ERROR_FEATURE_FAILED;
-        *fence = retired.Get(); *value = ++retired_serial;
-        return RSF_BACKEND_OK;
-    }
-    HRESULT initialize(IDXGIFactory* factory, IUnknown* source, const DXGI_SWAP_CHAIN_DESC& desc) {
-        description = desc; parent = factory;
-        LARGE_INTEGER frequency{}; QueryPerformanceFrequency(&frequency); tick_ms = 1000.0 / double(frequency.QuadPart);
-        ComPtr<IDXGIDevice> dxgi; ComPtr<IDXGIAdapter> adapter;
-        native12 = SUCCEEDED(source->QueryInterface(IID_PPV_ARGS(&direct_queue)));
-        if (settings.backend == RSF_FG_BACKEND_AUTO) {
-            ComPtr<IDXGIFactory4> owning_factory;
-            ComPtr<IDXGIAdapter1> owning_adapter;
-            if (native12) {
-                if (FAILED(direct_queue->GetDevice(IID_PPV_ARGS(&direct_device))) ||
-                    FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&owning_factory))) ||
-                    FAILED(owning_factory->EnumAdapterByLuid(direct_device->GetAdapterLuid(), IID_PPV_ARGS(&owning_adapter)))) return E_FAIL;
-            } else {
-                if (FAILED(source->QueryInterface(IID_PPV_ARGS(&dxgi))) || FAILED(dxgi->GetAdapter(&adapter)) ||
-                    FAILED(adapter.As(&owning_adapter))) return E_FAIL;
-            }
-            DXGI_ADAPTER_DESC1 info{};
-            if (FAILED(owning_adapter->GetDesc1(&info))) return E_FAIL;
-            auto backend = rsf_fg_default_backend(info.VendorId, (info.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0);
-            if (settings.allowed_backend_choices && !(settings.allowed_backend_choices & (1u << backend))) {
-                backend = settings.allowed_backend_choices & (1u << RSF_FG_BACKEND_FSR3) ? RSF_FG_BACKEND_FSR3 : 0u;
-            }
-            active_backend.store(backend);
-            char text[160]; std::snprintf(text, sizeof(text), "Auto FG selected backend %u from owning adapter vendor=0x%x device=0x%x", backend, info.VendorId, info.DeviceId);
-            log(text);
-        }
-        graphics.struct_size = sizeof(graphics);
-        if (native12) {
-            // Unity and other native D3D12 plugins use the engine's device and queue.
-            if (settings.backend == RSF_FG_BACKEND_DLSS && !settings.runtime_switching) return DXGI_ERROR_UNSUPPORTED;
-            if (FAILED(direct_queue->GetDevice(IID_PPV_ARGS(&direct_device)))) return E_NOINTERFACE;
-            if (settings.runtime_switching && settings.streamline_directory_utf8 && !streamline_directory.empty()) {
-                ComPtr<IDXGIFactory4> native_factory; ComPtr<IDXGIAdapter1> native_adapter;
-                if (SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&native_factory))) &&
-                    SUCCEEDED(native_factory->EnumAdapterByLuid(direct_device->GetAdapterLuid(), IID_PPV_ARGS(&native_adapter)))) {
-                    const auto setup = host_setup(native_adapter.Get());
-                    const auto result = has_identity() ? rsf_streamline_host_adopt(&setup, direct_device.Get(), direct_queue.Get(), &host) :
-                        RSF_BACKEND_ERROR_NOT_SUPPORTED;
-                    // Only INIT_FAILED can follow slInit, slUpgradeInterface or slSetD3DDevice on the engine
-                    // device, which may then be half registered. Every other refusal (no identity, another
-                    // vendor, no SDK, missing or unsigned folder, foreign interposer) happens before the
-                    // device is touched and only leaves DLSS-G unavailable.
-                    if (result == RSF_BACKEND_ERROR_INIT_FAILED) { log("Unity shared Streamline registration refused"); return DXGI_ERROR_UNSUPPORTED; }
-                    if (result != RSF_BACKEND_OK) {
-                        char text[160]; std::snprintf(text, sizeof(text), "Unity shared Streamline host unavailable (%d); DLSS-G disabled", result);
-                        log(text);
-                    }
-                }
-            }
-        } else {
-            if (FAILED(source->QueryInterface(IID_PPV_ARGS(&device)))) return E_NOINTERFACE;
-            ComPtr<ID3D11DeviceContext> immediate; device->GetImmediateContext(&immediate);
-            if (FAILED(immediate.As(&context)) || FAILED(device.As(&dxgi)) || FAILED(dxgi->GetAdapter(&adapter))) return E_NOINTERFACE;
-        }
-        // The host decides which adapters Streamline serves. Only a strict DLSS request (no runtime
-        // switching) needs it; otherwise a refusal leaves FidelityFX, XeSS and Off available.
-        const bool dlss_required = !settings.runtime_switching && (!settings.backend || settings.backend == RSF_FG_BACKEND_DLSS);
-        if (!native12 && (dlss_required || settings.runtime_switching)) {
-            const auto setup = host_setup(adapter.Get());
-            const auto host_result = has_identity() ? rsf_streamline_host_create(&setup, &host) : RSF_BACKEND_ERROR_NOT_SUPPORTED;
-            if (host_result != RSF_BACKEND_OK) {
-                char text[160]; std::snprintf(text, sizeof(text), "Streamline FG host refused (%d); %s", host_result,
-                    dlss_required ? "retaining D3D11 presentation" : "DLSS-G unavailable, other generation backends remain");
-                log(text);
-                if (dlss_required) return DXGI_ERROR_UNSUPPORTED;
-            }
-        }
-        if (host) {
-            if (rsf_streamline_host_graphics(host, &graphics) != RSF_BACKEND_OK) return E_FAIL;
-        } else {
-            if (!native12 && FAILED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0,
-                    IID_PPV_ARGS(&direct_device)))) return DXGI_ERROR_UNSUPPORTED;
-            if (!direct_queue) {
-                D3D12_COMMAND_QUEUE_DESC queue{}; queue.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-                if (FAILED(direct_device->CreateCommandQueue(&queue, IID_PPV_ARGS(&direct_queue)))) return E_FAIL;
-            }
-            graphics.device = graphics.native_device = direct_device.Get();
-            graphics.queue = graphics.native_queue = direct_queue.Get();
-        }
-        ComPtr<IDXGIFactory5> capability_factory;
-        BOOL allow_tearing = FALSE;
-        tearing_supported = SUCCEEDED(factory->QueryInterface(IID_PPV_ARGS(&capability_factory))) &&
-            SUCCEEDED(capability_factory->CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING,
-                &allow_tearing, sizeof(allow_tearing))) && allow_tearing;
-        auto* gpu = static_cast<ID3D12Device*>(graphics.device);
-        uint32_t choices = RSF_FG_BACKEND_ALL | 1u;
-        if (!rsf_generation_fsr4_supported(graphics.native_device, fsr4_directory.c_str()))
-            choices &= ~(1u << RSF_FG_BACKEND_FSR4);
-        if (settings.allowed_backend_choices) choices &= settings.allowed_backend_choices | 1u;
-        backend_choices.store(choices);
-        D3D12_COMMAND_QUEUE_DESC interop_desc{}; interop_desc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-        if (native12) interop_queue = direct_queue;
-        else if (FAILED(gpu->CreateCommandQueue(&interop_desc, IID_PPV_ARGS(&interop_queue)))) return E_FAIL;
-        completion_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-        if (!completion_event || FAILED(gpu->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&complete)))) return E_FAIL;
-        if (native12 && settings.runtime_switching && (description.Flags & DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT)) {
-            application_ready = CreateEventW(nullptr, FALSE, TRUE, nullptr);
-            if (!application_ready) return E_FAIL;
-        }
-        if (!native12 && (rsf_shared_fence_create(device.Get(), graphics.native_device, settings.log, settings.user, &shared_fence) != RSF_SHARED_OK ||
-            FAILED(make_surface(desc.BufferDesc.Width, desc.BufferDesc.Height, desc.BufferDesc.Format)))) return E_FAIL;
-        for (auto& slot : slots)
-            if (!rsf::create_command_list(gpu, D3D12_COMMAND_LIST_TYPE_DIRECT, slot.allocator.ReleaseAndGetAddressOf(),
-                    slot.list.ReleaseAndGetAddressOf())) return E_FAIL;
-        if (settings.runtime_switching) {
-            if (native12 && FAILED(make_render_buffers())) return E_FAIL;
-            physical_pending.store(true);
-        } else {
-            const auto result = create_physical(active_backend.load());
-            if (result != RSF_BACKEND_OK) {
-                char text[128]; std::snprintf(text, sizeof(text), "Generation backend=%u create refused (%d); retaining engine presentation", active_backend.load(), result);
-                log(text); return E_FAIL;
-            }
-        }
-        if (physical && !desc.Windowed && FAILED(physical->SetFullscreenState(TRUE, nullptr))) return E_FAIL;
-        log(tearing_supported ? "presentation bridge: windowed flip chain supports immediate tearing presentation" :
-            "presentation bridge: DXGI tearing unavailable; using supported flip presentation");
-        active_host.store(host, std::memory_order_release);
-        active_graphics = graphics;
-        active_session.store(provider, std::memory_order_release);
-        host_paced.store(paced_by_host());
-        active_interop.store(interop_queue.Get(), std::memory_order_release);
-        active_chain.store(this, std::memory_order_release);
-        provider_status.activate(active_backend.load(), chain_generation.load()); publish_status();
-        rsf_fg_status status{}; status.struct_size = sizeof(status);
-        if (settings.log && provider && backend_api(provider_backend)->status(provider, &status) == RSF_BACKEND_OK) {
-            char text[240]; std::snprintf(text, sizeof(text), "Generation support=%u max generated=%u dynamic=%u VSync=%u minimum=%u latency available=%u version=%s",
-                status.supported, status.max_generated_frames, status.dynamic_supported, status.vsync_supported,
-                status.min_dimension, status.low_latency_available, status.version_name); log(text);
-        }
-        log(native12 ? "presentation bridge: native D3D12 engine queue, one vendor generation chain" :
-            "presentation bridge: D3D11 facade, one vendor D3D12 generation chain, separate interop queue");
-        return S_OK;
-    }
+
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** out) override {
         if (!out) return E_POINTER;
         *out = nullptr;
@@ -650,63 +170,11 @@ public:
     __declspec(noinline) ULONG release_owned() {
         const auto value = --references; if (!value) delete this; return value;
     }
-    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID key, UINT bytes, const void* data) override { return query_physical([&](IDXGISwapChain4* chain) { return chain->SetPrivateData(key, bytes, data); }); }
-    HRESULT STDMETHODCALLTYPE SetPrivateDataInterface(REFGUID key, const IUnknown* data) override { return query_physical([&](IDXGISwapChain4* chain) { return chain->SetPrivateDataInterface(key, data); }); }
-    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID key, UINT* bytes, void* data) override { return query_physical([&](IDXGISwapChain4* chain) { return chain->GetPrivateData(key, bytes, data); }); }
+    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID key, UINT bytes, const void* data) override { return query_physical([&](IDXGISwapChain4* c) { return c->SetPrivateData(key, bytes, data); }); }
+    HRESULT STDMETHODCALLTYPE SetPrivateDataInterface(REFGUID key, const IUnknown* data) override { return query_physical([&](IDXGISwapChain4* c) { return c->SetPrivateDataInterface(key, data); }); }
+    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID key, UINT* bytes, void* data) override { return query_physical([&](IDXGISwapChain4* c) { return c->GetPrivateData(key, bytes, data); }); }
     HRESULT STDMETHODCALLTYPE GetParent(REFIID iid, void** out) override { return parent->QueryInterface(iid, out); }
     HRESULT STDMETHODCALLTYPE GetDevice(REFIID iid, void** out) override { return native12 ? direct_device->QueryInterface(iid, out) : device->QueryInterface(iid, out); }
-    // Physical Present and the provider callbacks around it, after the frame's list was submitted.
-    HRESULT present_physical(rsf_observer_present_event& event, UINT sync, UINT physical_flags, std::array<uint64_t, 6>& ticks) {
-        switch_receipt("physical-enter");
-        // Multi-refresh intervals throttle generated output as well as real frames.
-        // XeLL requires interval 1 when VSync is enabled; DLSS-G also clamps it.
-        // Preserve the application's VSync choice while normalizing its cadence
-        // at the owned physical chain, after current-frame provider preparation.
-        if (sync > 1 && provider) {
-            rsf_fg_status state{}; state.struct_size = sizeof(state);
-            if (backend_api(provider_backend)->status(provider, &state) == RSF_BACKEND_OK &&
-                (state.effective_mode != RSF_FG_OFF ||
-                 (state.pacing_owner == RSF_PACING_XELL && state.effective_reflex != RSF_REFLEX_OFF))) {
-                if (last_normalized_sync != sync) {
-                    char message[160];
-                    std::snprintf(message, sizeof(message), "Physical Present interval normalized: requested=%u effective=1 backend=%u for FG/latency pacing", sync, provider_backend);
-                    log(message); last_normalized_sync = sync;
-                }
-                sync = 1;
-            }
-        }
-        const bool common = host && active_backend.load() != RSF_FG_BACKEND_DLSS;
-        if (common && rsf_streamline_host_present_common(host, physical.Get(), sync, physical_flags, 1) != RSF_BACKEND_OK) {
-            log("presentation bridge: shared Streamline common Present begin refused"); return E_FAIL;
-        }
-        if (settings.latency_event) settings.latency_event(settings.user, &event);
-        if (settings.debug_timing) ticks[3] = clock_tick();
-        switch_receipt("vendor-present-enter");
-        const auto result = physical->Present(sync, physical_flags);
-        switch_receipt("vendor-present-done", result);
-        if (common && rsf_streamline_host_present_common(host, physical.Get(), sync, physical_flags, 0) != RSF_BACKEND_OK)
-            log("presentation bridge: shared Streamline common Present end refused");
-        if (settings.debug_timing) ticks[4] = clock_tick();
-        event.completed = 1; event.result = result;
-        if (settings.latency_event) settings.latency_event(settings.user, &event);
-        if (provider) backend_api(provider_backend)->after_present(provider);
-        publish_status();
-        switch_receipt("retire-enter");
-        if (settings.retire) settings.retire(settings.user, provider);
-        switch_receipt("retire-done");
-        return result;
-    }
-    UINT last_normalized_sync = 0;
-    void notify_presented(rsf_observer_present_event& event, HRESULT result) {
-        event.completed = 1; event.result = result;
-        rsf_observer_notify_application_present(&event);
-        if (settings.present_event) settings.present_event(settings.user, &event);
-    }
-    // A requested provider change happens here, at a drained Present boundary.
-    void switch_if_requested() {
-        const auto selected = requested_backend.exchange(UINT32_MAX);
-        if (selected != UINT32_MAX) switch_provider(selected);
-    }
     HRESULT STDMETHODCALLTYPE Present(UINT sync, UINT flags) override {
         // Keep a real call/return boundary: external hook installers may follow
         // an entry tail jump and otherwise detour the private continuation too.
@@ -714,138 +182,7 @@ public:
         return result;
     }
     // A downstream wrapper continuation must not reenter the detoured virtual entry.
-    __declspec(noinline) HRESULT present_owned(UINT sync, UINT flags) {
-        if (faulted) return DXGI_ERROR_DEVICE_REMOVED;
-        if (flags & DXGI_PRESENT_TEST) return query_physical([&](IDXGISwapChain4* chain) { return chain->Present(sync, flags); });
-        switch_receipt("application-enter");
-        const auto initialized = ensure_physical(); if (FAILED(initialized)) return initialized;
-        // Legacy discard chains cannot request the flip-model tearing creation flag.
-        // Translate VSync Off to the supported DX12/windowed immediate-present contract.
-        BOOL fullscreen = FALSE;
-        UINT physical_flags = flags & ~DXGI_PRESENT_ALLOW_TEARING;
-        if (!sync && tearing_supported && SUCCEEDED(physical->GetFullscreenState(&fullscreen, nullptr)) && !fullscreen)
-            physical_flags |= DXGI_PRESENT_ALLOW_TEARING;
-        std::array<uint64_t, 6> ticks{};
-        if (settings.debug_timing) ticks[0] = clock_tick();
-        rsf_observer_present_event event{sizeof(event), 0, this, sync, flags, 0, 0};
-        rsf_observer_notify_application_present(&event);
-        if (settings.present_event) settings.present_event(settings.user, &event);
-        if (settings.before_present) settings.before_present(settings.user, this);
-        switch_receipt("application-callbacks-done");
-        if (settings.debug_timing) ticks[1] = clock_tick();
-        HRESULT result = E_FAIL;
-        // Fence serial advances three times per frame. It cannot also select the three-slot
-        // command ring: serial % 3 would reuse one slot and wait for the GPU every frame.
-        const auto index = next_slot; next_slot = (next_slot + 1) % 3;
-        auto& slot = slots[index];
-        if (native12) {
-            auto* present_queue = provider_queue.load();
-            // Streamline requires CreateCommandQueue through its upgraded device, so its queue is
-            // not the engine queue. Join the engine's source work into it, and the copy back out.
-            const bool joined = present_queue != direct_queue.Get();
-            if (joined) {
-                const auto source_ready = ++serial;
-                if (FAILED(direct_queue->Signal(complete.Get(), source_ready)) ||
-                    FAILED(present_queue->Wait(complete.Get(), source_ready))) return DXGI_ERROR_DEVICE_REMOVED;
-            }
-            // Each step before the physical Present keeps its own HRESULT for the failure report.
-            const char* step = "slot fence wait";
-            HRESULT stage = wait(complete.Get(), slot.fence);
-            if (SUCCEEDED(stage)) { step = "allocator reset"; stage = slot.allocator->Reset(); }
-            if (SUCCEEDED(stage)) { step = "command list reset"; stage = slot.list->Reset(slot.allocator.Get(), nullptr); }
-            if (SUCCEEDED(stage)) {
-                ComPtr<ID3D12Resource> buffer;
-                step = "physical GetBuffer";
-                stage = physical->GetBuffer(physical->GetCurrentBackBufferIndex(), IID_PPV_ARGS(&buffer));
-                if (SUCCEEDED(stage) && settings.runtime_switching && !render_buffers[render_index]) {
-                    step = "render buffer missing"; stage = E_UNEXPECTED;
-                }
-                if (SUCCEEDED(stage)) {
-                    if (settings.runtime_switching)
-                        rsf::copy_transitioned(slot.list.Get(), buffer.Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_PRESENT,
-                            render_buffers[render_index].Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_PRESENT);
-                    void* command = provider_list(slot.list.Get());
-                    if (settings.prepare) settings.prepare(settings.user, this, nullptr, command, buffer.Get(), host, provider, sync);
-                    publish_status();
-                    step = "command list Close"; stage = slot.list->Close();
-                    if (SUCCEEDED(stage)) { step = "physical Present";
-                        ID3D12CommandList* lists[]{static_cast<ID3D12GraphicsCommandList*>(command)}; present_queue->ExecuteCommandLists(1, lists);
-                        if (joined) {
-                            const auto copied = ++serial;
-                            if (FAILED(present_queue->Signal(complete.Get(), copied)) ||
-                                FAILED(direct_queue->Wait(complete.Get(), copied))) return DXGI_ERROR_DEVICE_REMOVED;
-                        }
-                        result = present_physical(event, sync, physical_flags, ticks);
-                        stage = result;
-                    }
-                }
-                slot.fence = ++serial;
-                if (FAILED(present_queue->Signal(complete.Get(), slot.fence))) result = DXGI_ERROR_DEVICE_REMOVED;
-            }
-            if (FAILED(result)) {
-                char text[192]; std::snprintf(text, sizeof(text), "Native D3D12 presentation step '%s' failed HRESULT=%08lx render_index=%u buffers=%u size=%ux%u",
-                    step, static_cast<unsigned long>(stage), render_index, description.BufferCount,
-                    description.BufferDesc.Width, description.BufferDesc.Height);
-                log(text);
-            }
-            notify_presented(event, result);
-            if (SUCCEEDED(result) && settings.runtime_switching) {
-                const auto available = application_frame_complete(slot.fence);
-                if (FAILED(available)) return available;
-                ++application_presents;
-                render_index = (render_index + 1) % description.BufferCount;
-                switch_if_requested();
-            }
-            if (FAILED(result)) { report_device_failure(result); faulted = true; }
-            return result;
-        }
-        switch_receipt("d3d11-slot-enter");
-        if (SUCCEEDED(wait(complete.Get(), slot.fence)) && SUCCEEDED(slot.allocator->Reset()) &&
-            SUCCEEDED(slot.list->Reset(slot.allocator.Get(), nullptr))) {
-            if (settings.debug_timing) ticks[2] = clock_tick();
-            // Real DXGI backbuffers (the Off path) must be written on their creation queue.
-            // Keep the separate interop queue for SR; final upload uses the present queue.
-            auto* queue = provider_queue.load();
-            if (!queue) return DXGI_ERROR_DEVICE_REMOVED;
-            auto* fence12 = static_cast<ID3D12Fence*>(rsf_shared_fence_d3d12(shared_fence));
-            auto* fence11 = static_cast<ID3D11Fence*>(rsf_shared_fence_d3d11(shared_fence));
-            // One facade render target is written by AC7. The shared copy is read only for the
-            // queued upload; generated-frame consumers use the physical backbuffer instead.
-            const uint64_t upload = ++serial;
-            const auto signaled = context->Signal(fence11, upload);
-            // Submit the signal with its preceding D3D11 work before D3D12 waits on it.
-            // Flushing before Signal leaves the dependency buffered until a later frame.
-            if (SUCCEEDED(signaled)) context->Flush();
-            if (SUCCEEDED(signaled) && SUCCEEDED(queue->Wait(fence12, upload))) {
-                ComPtr<ID3D12Resource> buffer;
-                if (SUCCEEDED(physical->GetBuffer(physical->GetCurrentBackBufferIndex(), IID_PPV_ARGS(&buffer)))) {
-                    rsf::copy_transitioned(slot.list.Get(), buffer.Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_PRESENT,
-                        static_cast<ID3D12Resource*>(rsf_shared_surface_d3d12(surfaces[0])), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON);
-                    void* command = provider_list(slot.list.Get());
-                    if (settings.prepare) settings.prepare(settings.user, this, context.Get(), command, buffer.Get(), host, provider, sync);
-                    publish_status();
-                    if (SUCCEEDED(slot.list->Close())) {
-                        ID3D12CommandList* lists[]{static_cast<ID3D12GraphicsCommandList*>(command)}; queue->ExecuteCommandLists(1, lists);
-                        const auto copied = ++serial;
-                        if (SUCCEEDED(queue->Signal(fence12, copied)) && SUCCEEDED(queue->Wait(fence12, copied)) &&
-                            SUCCEEDED(context->Wait(fence11, copied)))
-                            result = present_physical(event, sync, physical_flags, ticks);
-                    }
-                }
-            }
-            slot.fence = ++serial;
-            if (FAILED(queue->Signal(complete.Get(), slot.fence))) result = DXGI_ERROR_DEVICE_REMOVED;
-        }
-        switch_receipt("application-complete", result);
-        notify_presented(event, result);
-        if (post_switch_frames) --post_switch_frames;
-        if (settings.debug_timing && SUCCEEDED(result)) { ticks[5] = clock_tick(); trace_pacing(ticks, index, sync, physical_flags); }
-        if (SUCCEEDED(result)) {
-            if (settings.runtime_switching) switch_if_requested();
-        }
-        if (FAILED(result)) faulted = true;
-        return result;
-    }
+    __declspec(noinline) HRESULT present_owned(UINT sync, UINT flags) { return rsf_core_d3d11p_present(chain, sync, flags); }
     HRESULT STDMETHODCALLTYPE GetBuffer(UINT index, REFIID iid, void** out) override {
         if (!out) return E_POINTER;
         // Physical creation can fail before a resource is queried. Never leave a
@@ -857,123 +194,82 @@ public:
             if (index >= description.BufferCount || !surfaces[index]) return DXGI_ERROR_INVALID_CALL;
             return static_cast<IUnknown*>(rsf_shared_surface_d3d11(surfaces[index]))->QueryInterface(iid, out);
         }
-        if (settings.runtime_switching)
+        if (switching())
             return index < description.BufferCount && render_buffers[index] ? render_buffers[index]->QueryInterface(iid, out) : DXGI_ERROR_INVALID_CALL;
-        const auto initialized = ensure_physical();
+        const auto initialized = rsf_core_d3d11p_ensure(chain);
         if (FAILED(initialized)) {
-            if (failed_buffer_reports.fetch_add(1, std::memory_order_relaxed) < 4) {
+            if (rsf_core_d3d11p_report_buffer_refusal(chain)) {
                 char text[320]{}; std::snprintf(text, sizeof(text),
                     "GetBuffer refused HRESULT=0x%08lx facade=%p index=%u IID=%08lx-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x output=%p native12=%u physical_pending=%u",
                     static_cast<unsigned long>(initialized), static_cast<void*>(this), index, static_cast<unsigned long>(iid.Data1),
                     uint32_t(iid.Data2), uint32_t(iid.Data3), uint32_t(iid.Data4[0]), uint32_t(iid.Data4[1]),
                     uint32_t(iid.Data4[2]), uint32_t(iid.Data4[3]), uint32_t(iid.Data4[4]), uint32_t(iid.Data4[5]),
                     uint32_t(iid.Data4[6]), uint32_t(iid.Data4[7]),
-                    *out, uint32_t(native12), uint32_t(physical_pending.load()));
+                    *out, uint32_t(native12), rsf_core_d3d11p_physical_pending(chain));
                 log(text);
             }
             return initialized;
         }
-        return query_physical([&](IDXGISwapChain4* chain) { return chain->GetBuffer(index, iid, out); });
+        return query_physical([&](IDXGISwapChain4* c) { return c->GetBuffer(index, iid, out); });
     }
     HRESULT STDMETHODCALLTYPE SetFullscreenState(BOOL enabled, IDXGIOutput* target) override {
         const volatile HRESULT result = set_fullscreen_owned(enabled,target); return result;
     }
     __declspec(noinline) HRESULT set_fullscreen_owned(BOOL enabled, IDXGIOutput* target) {
-        const auto initialized = ensure_physical(); if (FAILED(initialized)) return initialized;
-        if (FAILED(drain())) return E_FAIL;
-        const auto chain = current_physical(); return chain ? chain->SetFullscreenState(enabled, target) : DXGI_ERROR_WAS_STILL_DRAWING;
+        return rsf_core_d3d11p_set_fullscreen(chain, enabled, target);
     }
     HRESULT STDMETHODCALLTYPE GetFullscreenState(BOOL* enabled, IDXGIOutput** target) override {
-        if (physical_pending.load()) {
+        if (rsf_core_d3d11p_physical_pending(chain)) {
             if (!enabled && !target) return E_INVALIDARG;
             if (enabled) *enabled = !description.Windowed;
             if (target) *target = nullptr;
             return S_OK;
         }
-        return query_physical([&](IDXGISwapChain4* chain) { return chain->GetFullscreenState(enabled, target); });
+        return query_physical([&](IDXGISwapChain4* c) { return c->GetFullscreenState(enabled, target); });
     }
-    HRESULT STDMETHODCALLTYPE GetDesc(DXGI_SWAP_CHAIN_DESC* out) override { if (!out) return E_POINTER; if (native12 && !settings.runtime_switching) return query_physical([&](IDXGISwapChain4* chain) { return chain->GetDesc(out); }); *out = description; return S_OK; }
+    HRESULT STDMETHODCALLTYPE GetDesc(DXGI_SWAP_CHAIN_DESC* out) override { if (!out) return E_POINTER; if (native12 && !switching()) return query_physical([&](IDXGISwapChain4* c) { return c->GetDesc(out); }); *out = description; return S_OK; }
     HRESULT STDMETHODCALLTYPE ResizeBuffers(UINT count, UINT width, UINT height, DXGI_FORMAT format, UINT flags) override {
         const volatile HRESULT result = resize_buffers_owned(count,width,height,format,flags); return result;
     }
     __declspec(noinline) HRESULT resize_buffers_owned(UINT count, UINT width, UINT height, DXGI_FORMAT format, UINT flags) {
-        const auto initialized = ensure_physical(); if (FAILED(initialized)) return initialized;
-        if (count > surfaces.size() || faulted) return DXGI_ERROR_INVALID_CALL;
-        if (!width || !height) { RECT rect{}; if (!GetClientRect(description.OutputWindow, &rect)) return E_FAIL; width = UINT(rect.right); height = UINT(rect.bottom); }
-        if (!width || !height) return DXGI_ERROR_INVALID_CALL;
-        if (format == DXGI_FORMAT_UNKNOWN) format = description.BufferDesc.Format;
-        if (FAILED(drain())) return E_FAIL;
-        if (!native12) {
-            for (auto* surface : surfaces) if (surface) {
-                auto* texture = static_cast<IUnknown*>(rsf_shared_surface_d3d11(surface));
-                texture->AddRef(); if (texture->Release() > 1) return DXGI_ERROR_INVALID_CALL;
-            }
-        }
-        if (provider && backend_api(provider_backend)->configure(provider, &fg_off) != RSF_BACKEND_OK) return E_FAIL;
-        publish_status();
-        if (native12 && settings.runtime_switching) {
-            for (const auto& buffer : render_buffers) if (buffer) {
-                buffer->AddRef(); if (buffer->Release() > 1) return DXGI_ERROR_INVALID_CALL;
-            }
-            if (count > render_buffers.size()) return DXGI_ERROR_INVALID_CALL;
-        }
-        // With runtime switching the application renders into render_buffers, never the physical
-        // chain, so the physical count stays as created (0 keeps it). Changing it under an FG
-        // provider's proxy chain broke its back-buffer index: after RDR2's VSync change (app
-        // count 2) XeSS FG's GetBuffer(GetCurrentBackBufferIndex()) failed with E_INVALIDARG.
-        const UINT physical_count = !native12 ? 3u : settings.runtime_switching ? 0u : count;
-        const auto result = physical->ResizeBuffers(physical_count, width, height, format,
-            tearing_supported ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0);
-        if (FAILED(result)) return result;
-        if (!native12) {
-            release_surfaces();
-            if (count) description.BufferCount = count;
-            if (FAILED(make_surface(width, height, format))) { faulted = true; return E_FAIL; }
-        }
-        description.BufferDesc.Width = width; description.BufferDesc.Height = height; description.BufferDesc.Format = format; description.Flags = flags;
-        if (native12 && settings.runtime_switching) {
-            if (count) description.BufferCount = count;
-            for (auto& buffer : render_buffers) buffer.Reset();
-            if (FAILED(make_render_buffers())) { faulted = true; return E_FAIL; }
-        }
-        return S_OK;
+        return rsf_core_d3d11p_resize(chain, count, width, height, uint32_t(format), flags);
     }
     HRESULT STDMETHODCALLTYPE ResizeTarget(const DXGI_MODE_DESC* desc) override {
         // The physical chain is created lazily; like every other window call, ResizeTarget creates it first instead of
         // failing with DXGI_ERROR_WAS_STILL_DRAWING when an engine resizes before its first Present.
-        const auto initialized = ensure_physical(); if (FAILED(initialized)) return initialized;
-        const auto chain = current_physical(); return chain ? chain->ResizeTarget(desc) : DXGI_ERROR_WAS_STILL_DRAWING;
+        const auto initialized = rsf_core_d3d11p_ensure(chain); if (FAILED(initialized)) return initialized;
+        const auto c = current_physical(); return c ? c->ResizeTarget(desc) : DXGI_ERROR_WAS_STILL_DRAWING;
     }
-    HRESULT STDMETHODCALLTYPE GetContainingOutput(IDXGIOutput** out) override { return query_physical([&](IDXGISwapChain4* chain) { return chain->GetContainingOutput(out); }); }
+    HRESULT STDMETHODCALLTYPE GetContainingOutput(IDXGIOutput** out) override { return query_physical([&](IDXGISwapChain4* c) { return c->GetContainingOutput(out); }); }
     HRESULT STDMETHODCALLTYPE GetFrameStatistics(DXGI_FRAME_STATISTICS* out) override {
-        const auto result = query_physical([&](IDXGISwapChain4* chain) { return chain->GetFrameStatistics(out); });
-        if (SUCCEEDED(result) && out && native12 && settings.runtime_switching) out->PresentCount = application_presents.load();
+        const auto result = query_physical([&](IDXGISwapChain4* c) { return c->GetFrameStatistics(out); });
+        if (SUCCEEDED(result) && out && native12 && switching()) out->PresentCount = rsf_core_d3d11p_application_presents(chain);
         return result;
     }
     HRESULT STDMETHODCALLTYPE GetLastPresentCount(UINT* out) override {
-        if ((native12 && settings.runtime_switching) || physical_pending.load()) {
-            if (!out) return E_POINTER; *out = application_presents.load(); return S_OK;
+        if ((native12 && switching()) || rsf_core_d3d11p_physical_pending(chain)) {
+            if (!out) return E_POINTER; *out = rsf_core_d3d11p_application_presents(chain); return S_OK;
         }
-        return query_physical([&](IDXGISwapChain4* chain) { return chain->GetLastPresentCount(out); });
+        return query_physical([&](IDXGISwapChain4* c) { return c->GetLastPresentCount(out); });
     }
     HRESULT STDMETHODCALLTYPE GetDesc1(DXGI_SWAP_CHAIN_DESC1* out) override {
         if (!out) return E_POINTER;
-        if (!native12 || settings.runtime_switching) {
+        if (!native12 || switching()) {
             *out = {description.BufferDesc.Width,description.BufferDesc.Height,description.BufferDesc.Format,FALSE,
                 description.SampleDesc,description.BufferUsage,description.BufferCount,DXGI_SCALING_STRETCH,
                 description.SwapEffect,DXGI_ALPHA_MODE_UNSPECIFIED,description.Flags};
             return S_OK;
         }
-        return query_physical([&](IDXGISwapChain4* chain) { return chain->GetDesc1(out); });
+        return query_physical([&](IDXGISwapChain4* c) { return c->GetDesc1(out); });
     }
     HRESULT STDMETHODCALLTYPE GetFullscreenDesc(DXGI_SWAP_CHAIN_FULLSCREEN_DESC* out) override {
         if (!out) return E_POINTER;
-        if (!native12 || settings.runtime_switching) {
+        if (!native12 || switching()) {
             *out = {description.BufferDesc.RefreshRate,description.BufferDesc.ScanlineOrdering,
                 description.BufferDesc.Scaling,description.Windowed};
             return S_OK;
         }
-        return query_physical([&](IDXGISwapChain4* chain) { return chain->GetFullscreenDesc(out); });
+        return query_physical([&](IDXGISwapChain4* c) { return c->GetFullscreenDesc(out); });
     }
     HRESULT STDMETHODCALLTYPE GetHwnd(HWND* out) override { if (!out) return E_POINTER; *out = description.OutputWindow; return S_OK; }
     HRESULT STDMETHODCALLTYPE GetCoreWindow(REFIID, void** out) override { if (out) *out = nullptr; return E_NOINTERFACE; }
@@ -987,31 +283,25 @@ public:
     BOOL STDMETHODCALLTYPE IsTemporaryMonoSupported() override {
         std::lock_guard<std::mutex> lock(physical_guard); return physical ? physical->IsTemporaryMonoSupported() : FALSE;
     }
-    HRESULT STDMETHODCALLTYPE GetRestrictToOutput(IDXGIOutput** out) override { return query_physical([&](IDXGISwapChain4* chain) { return chain->GetRestrictToOutput(out); }); }
-    HRESULT STDMETHODCALLTYPE SetBackgroundColor(const DXGI_RGBA* color) override { return query_physical([&](IDXGISwapChain4* chain) { return chain->SetBackgroundColor(color); }); }
-    HRESULT STDMETHODCALLTYPE GetBackgroundColor(DXGI_RGBA* color) override { return query_physical([&](IDXGISwapChain4* chain) { return chain->GetBackgroundColor(color); }); }
-    HRESULT STDMETHODCALLTYPE SetRotation(DXGI_MODE_ROTATION value) override { return query_physical([&](IDXGISwapChain4* chain) { return chain->SetRotation(value); }); }
-    HRESULT STDMETHODCALLTYPE GetRotation(DXGI_MODE_ROTATION* value) override { return query_physical([&](IDXGISwapChain4* chain) { return chain->GetRotation(value); }); }
-    HRESULT STDMETHODCALLTYPE SetSourceSize(UINT width, UINT height) override { return query_physical([&](IDXGISwapChain4* chain) { return chain->SetSourceSize(width, height); }); }
-    HRESULT STDMETHODCALLTYPE GetSourceSize(UINT* width, UINT* height) override { return query_physical([&](IDXGISwapChain4* chain) { return chain->GetSourceSize(width, height); }); }
+    HRESULT STDMETHODCALLTYPE GetRestrictToOutput(IDXGIOutput** out) override { return query_physical([&](IDXGISwapChain4* c) { return c->GetRestrictToOutput(out); }); }
+    HRESULT STDMETHODCALLTYPE SetBackgroundColor(const DXGI_RGBA* color) override { return query_physical([&](IDXGISwapChain4* c) { return c->SetBackgroundColor(color); }); }
+    HRESULT STDMETHODCALLTYPE GetBackgroundColor(DXGI_RGBA* color) override { return query_physical([&](IDXGISwapChain4* c) { return c->GetBackgroundColor(color); }); }
+    HRESULT STDMETHODCALLTYPE SetRotation(DXGI_MODE_ROTATION value) override { return query_physical([&](IDXGISwapChain4* c) { return c->SetRotation(value); }); }
+    HRESULT STDMETHODCALLTYPE GetRotation(DXGI_MODE_ROTATION* value) override { return query_physical([&](IDXGISwapChain4* c) { return c->GetRotation(value); }); }
+    HRESULT STDMETHODCALLTYPE SetSourceSize(UINT width, UINT height) override { return query_physical([&](IDXGISwapChain4* c) { return c->SetSourceSize(width, height); }); }
+    HRESULT STDMETHODCALLTYPE GetSourceSize(UINT* width, UINT* height) override { return query_physical([&](IDXGISwapChain4* c) { return c->GetSourceSize(width, height); }); }
     HRESULT STDMETHODCALLTYPE SetMaximumFrameLatency(UINT value) override {
-        if (native12 && settings.runtime_switching) {
-            if (!application_ready || !value || value > application_fences.size()) return DXGI_ERROR_INVALID_CALL;
-            application_latency.store(std::min(value, description.BufferCount)); return S_OK;
-        }
-        return native12 ? query_physical([&](IDXGISwapChain4* chain) { return chain->SetMaximumFrameLatency(value); }) : DXGI_ERROR_INVALID_CALL;
+        if (native12 && switching()) return rsf_core_d3d11p_set_max_latency(chain, value);
+        return native12 ? query_physical([&](IDXGISwapChain4* c) { return c->SetMaximumFrameLatency(value); }) : DXGI_ERROR_INVALID_CALL;
     }
     HRESULT STDMETHODCALLTYPE GetMaximumFrameLatency(UINT* out) override {
         if (!out) return E_POINTER;
-        if (native12 && settings.runtime_switching) {
-            if (!application_ready) return DXGI_ERROR_INVALID_CALL;
-            *out = application_latency.load(); return S_OK;
-        }
-        if (native12) return query_physical([&](IDXGISwapChain4* chain) { return chain->GetMaximumFrameLatency(out); });
+        if (native12 && switching()) return rsf_core_d3d11p_max_latency(chain, out);
+        if (native12) return query_physical([&](IDXGISwapChain4* c) { return c->GetMaximumFrameLatency(out); });
         *out = 1; return S_OK;
     }
     HANDLE STDMETHODCALLTYPE GetFrameLatencyWaitableObject() override {
-        if (native12 && settings.runtime_switching) {
+        if (native12 && switching()) {
             // The application owns this duplicate. Provider replacement must never close
             // the wait object retained by the engine for the facade's entire lifetime.
             HANDLE duplicate = nullptr;
@@ -1020,21 +310,21 @@ public:
         }
         std::lock_guard<std::mutex> lock(physical_guard); return native12 && physical ? physical->GetFrameLatencyWaitableObject() : nullptr;
     }
-    HRESULT STDMETHODCALLTYPE SetMatrixTransform(const DXGI_MATRIX_3X2_F* value) override { return query_physical([&](IDXGISwapChain4* chain) { return chain->SetMatrixTransform(value); }); }
-    HRESULT STDMETHODCALLTYPE GetMatrixTransform(DXGI_MATRIX_3X2_F* value) override { return query_physical([&](IDXGISwapChain4* chain) { return chain->GetMatrixTransform(value); }); }
+    HRESULT STDMETHODCALLTYPE SetMatrixTransform(const DXGI_MATRIX_3X2_F* value) override { return query_physical([&](IDXGISwapChain4* c) { return c->SetMatrixTransform(value); }); }
+    HRESULT STDMETHODCALLTYPE GetMatrixTransform(DXGI_MATRIX_3X2_F* value) override { return query_physical([&](IDXGISwapChain4* c) { return c->GetMatrixTransform(value); }); }
     UINT STDMETHODCALLTYPE GetCurrentBackBufferIndex() override {
         // DX11 retains a view of logical buffer zero across Present. Our shared textures
         // cannot perform DXGI's automatic backing-resource rotation, so keep that source.
         if (!native12) return 0;
-        if (settings.runtime_switching) return render_index;
+        if (switching()) return rsf_core_d3d11p_render_index(chain);
         std::lock_guard<std::mutex> lock(physical_guard); return physical ? physical->GetCurrentBackBufferIndex() : 0;
     }
-    HRESULT STDMETHODCALLTYPE CheckColorSpaceSupport(DXGI_COLOR_SPACE_TYPE value, UINT* out) override { return query_physical([&](IDXGISwapChain4* chain) { return chain->CheckColorSpaceSupport(value, out); }); }
+    HRESULT STDMETHODCALLTYPE CheckColorSpaceSupport(DXGI_COLOR_SPACE_TYPE value, UINT* out) override { return query_physical([&](IDXGISwapChain4* c) { return c->CheckColorSpaceSupport(value, out); }); }
     HRESULT STDMETHODCALLTYPE SetColorSpace1(DXGI_COLOR_SPACE_TYPE value) override {
         const volatile HRESULT result = set_color_space_owned(value); return result;
     }
     __declspec(noinline) HRESULT set_color_space_owned(DXGI_COLOR_SPACE_TYPE value) {
-        return query_physical([&](IDXGISwapChain4* chain) { return chain->SetColorSpace1(value); });
+        return query_physical([&](IDXGISwapChain4* c) { return c->SetColorSpace1(value); });
     }
     HRESULT STDMETHODCALLTYPE ResizeBuffers1(UINT count, UINT width, UINT height, DXGI_FORMAT format, UINT flags, const UINT* masks, IUnknown* const* queues) override {
         const volatile HRESULT result = resize_buffers1_owned(count,width,height,format,flags,masks,queues); return result;
@@ -1043,43 +333,486 @@ public:
         if (masks || queues) return DXGI_ERROR_INVALID_CALL;
         return resize_buffers_owned(count,width,height,format,flags);
     }
-    HRESULT STDMETHODCALLTYPE SetHDRMetaData(DXGI_HDR_METADATA_TYPE type, UINT bytes, void* data) override { return query_physical([&](IDXGISwapChain4* chain) { return chain->SetHDRMetaData(type, bytes, data); }); }
+    HRESULT STDMETHODCALLTYPE SetHDRMetaData(DXGI_HDR_METADATA_TYPE type, UINT bytes, void* data) override { return query_physical([&](IDXGISwapChain4* c) { return c->SetHDRMetaData(type, bytes, data); }); }
 };
 
-HRESULT create_bridge(IDXGIFactory* factory, IUnknown* unknown, const DXGI_SWAP_CHAIN_DESC& desc, IDXGISwapChain** out) {
-    if (!settings.accept_window || !settings.accept_window(settings.user, desc.OutputWindow)) return DXGI_ERROR_UNSUPPORTED;
-    if (creating || active_chain.load() || !out || desc.SampleDesc.Count != 1 ||
-        !desc.BufferDesc.Width || !desc.BufferDesc.Height || !IsWindow(desc.OutputWindow) ||
-        (desc.BufferDesc.Format != DXGI_FORMAT_R8G8B8A8_UNORM && desc.BufferDesc.Format != DXGI_FORMAT_B8G8R8A8_UNORM &&
-         desc.BufferDesc.Format != DXGI_FORMAT_R10G10B10A2_UNORM && desc.BufferDesc.Format != DXGI_FORMAT_R16G16B16A16_FLOAT)) return DXGI_ERROR_UNSUPPORTED;
-    if (!unknown) return DXGI_ERROR_UNSUPPORTED;
-    if (!desc.BufferCount || desc.BufferCount > 8) return DXGI_ERROR_UNSUPPORTED;
-    std::lock_guard<std::mutex> lock(creation_guard);
-    if (active_chain.load()) return DXGI_ERROR_UNSUPPORTED;
-    creating = true;
-    auto* bridge = new(std::nothrow) Bridge;
-    HRESULT result = bridge ? bridge->initialize(factory, unknown, desc) : E_OUTOFMEMORY;
-    if (SUCCEEDED(result)) {
-        char text[192]; std::snprintf(text, sizeof(text), "presentation bridge: application chain %ux%u refresh=%u/%u windowed=%d buffers=%u flags=0x%x effect=%u",
-            desc.BufferDesc.Width, desc.BufferDesc.Height, desc.BufferDesc.RefreshRate.Numerator, desc.BufferDesc.RefreshRate.Denominator,
-            desc.Windowed, desc.BufferCount, desc.Flags, uint32_t(desc.SwapEffect));
-        log(text);
+Bridge* as_bridge(void* value) { return static_cast<Bridge*>(static_cast<IDXGISwapChain4*>(value)); }
+void* as_object(Bridge* bridge) { return static_cast<IDXGISwapChain4*>(bridge); }
+
+// Leaves. Each one is a native step on one facade; none calls back into the Rust owner.
+namespace leaf {
+const rsf_generation_provider* provider_table(uint32_t family) {
+    switch (family) {
+    case RSF_D3D11P_FAMILY_DLSS: return rsf_generation_dlss();
+    case RSF_D3D11P_FAMILY_FIDELITYFX: return rsf_generation_fsr();
+    case RSF_D3D11P_FAMILY_XESS: return rsf_generation_xess();
+    default: return nullptr;
     }
-    if (SUCCEEDED(result)) *out = bridge;
-    else if (bridge) bridge->release_owned(); // Not published; never enter an external Release hook.
-    creating = false;
+}
+void observer_present(rsf_observer_present_event* event) { (void)rsf_observer_notify_application_present(event); }
+uint32_t window_valid(void* window) { return IsWindow(static_cast<HWND>(window)) ? 1u : 0u; }
+uint32_t client_size(void* window, uint32_t* width, uint32_t* height) {
+    RECT rect{}; if (!GetClientRect(static_cast<HWND>(window), &rect)) return 0;
+    *width = UINT(rect.right); *height = UINT(rect.bottom); return 1;
+}
+int32_t identity(void* left, void* right) { return same_identity(static_cast<IUnknown*>(left), static_cast<IUnknown*>(right)) ? 1 : 0; }
+void add_ref(void* object) { static_cast<IUnknown*>(object)->AddRef(); }
+void release(void* object) { static_cast<IUnknown*>(object)->Release(); }
+rsf_streamline_host* sl(void* host) { return static_cast<rsf_streamline_host*>(host); }
+int32_t host_sleep(void* host, uint64_t id) { return rsf_streamline_host_sleep(sl(host), id); }
+int32_t host_marker(void* host, uint64_t id, uint32_t marker, uint32_t controller) { return rsf_streamline_host_marker(sl(host), id, marker, controller); }
+int32_t host_acquire(void* host, uint64_t id) { return rsf_streamline_host_acquire(sl(host), id); }
+int32_t host_input(void* host, uint64_t id, uint32_t kinds, uint32_t message) { return rsf_streamline_host_input(sl(host), id, kinds, message); }
+int32_t host_abort(void* host, uint64_t id) { return rsf_streamline_host_abort(sl(host), id); }
+int32_t host_reflex_off(void* host) { return rsf_streamline_host_reflex(sl(host), RSF_REFLEX_OFF, 0); }
+int32_t host_generation_load(void* host, uint32_t enabled) { return rsf_streamline_host_generation_load(sl(host), enabled); }
+int32_t host_present_common(void* host, void* chain, uint32_t sync, uint32_t flags, uint32_t begin) {
+    return rsf_streamline_host_present_common(sl(host), chain, sync, flags, begin);
+}
+
+void* bridge_new(rsf_d3d11p_chain* chain) {
+    auto* bridge = new(std::nothrow) Bridge(chain);
+    return bridge ? as_object(bridge) : nullptr;
+}
+void bridge_release_owned(void* b) { as_bridge(b)->release_owned(); }
+rsf_d3d11p_chain* bridge_chain(void* b) { return as_bridge(b)->chain; }
+void facts(void* b, rsf_d3d11p_facts* out) {
+    const auto& self = *as_bridge(b); const auto& d = self.description;
+    *out = {d.OutputWindow, d.BufferDesc.Width, d.BufferDesc.Height, uint32_t(d.BufferDesc.Format), d.BufferCount,
+        d.Flags, d.Windowed ? 1u : 0u, self.native12 ? 1u : 0u, self.tearing_supported ? 1u : 0u, self.graphics,
+        self.direct_queue.Get(), self.interop_queue.Get()};
+}
+
+uint32_t init_source(void* b, void* factory, void* source, const void* desc) {
+    auto& self = *as_bridge(b);
+    self.description = *static_cast<const DXGI_SWAP_CHAIN_DESC*>(desc);
+    self.parent = static_cast<IDXGIFactory*>(factory);
+    self.graphics.struct_size = sizeof(self.graphics);
+    self.native12 = SUCCEEDED(static_cast<IUnknown*>(source)->QueryInterface(IID_PPV_ARGS(&self.direct_queue)));
+    return self.native12 ? 1u : 0u;
+}
+int32_t owning_adapter(void* b, void* source, rsf_d3d11p_adapter* out) {
+    auto& self = *as_bridge(b);
+    ComPtr<IDXGIFactory4> owning_factory;
+    ComPtr<IDXGIAdapter1> owning_adapter;
+    if (self.native12) {
+        if (FAILED(self.direct_queue->GetDevice(IID_PPV_ARGS(&self.direct_device))) ||
+            FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&owning_factory))) ||
+            FAILED(owning_factory->EnumAdapterByLuid(self.direct_device->GetAdapterLuid(), IID_PPV_ARGS(&owning_adapter)))) return E_FAIL;
+    } else {
+        ComPtr<IDXGIDevice> dxgi; ComPtr<IDXGIAdapter> adapter;
+        if (FAILED(static_cast<IUnknown*>(source)->QueryInterface(IID_PPV_ARGS(&dxgi))) || FAILED(dxgi->GetAdapter(&adapter)) ||
+            FAILED(adapter.As(&owning_adapter))) return E_FAIL;
+    }
+    DXGI_ADAPTER_DESC1 info{};
+    if (FAILED(owning_adapter->GetDesc1(&info))) return E_FAIL;
+    *out = {info.VendorId, info.DeviceId, rsf_fg_default_backend(info.VendorId, (info.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0), 0};
+    return S_OK;
+}
+int32_t native_device(void* b) {
+    auto& self = *as_bridge(b);
+    return FAILED(self.direct_queue->GetDevice(IID_PPV_ARGS(&self.direct_device))) ? E_NOINTERFACE : S_OK;
+}
+uint32_t adopt_host(void* b, uint32_t identity, int32_t* result) {
+    auto& self = *as_bridge(b);
+    ComPtr<IDXGIFactory4> native_factory; ComPtr<IDXGIAdapter1> native_adapter;
+    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&native_factory))) ||
+        FAILED(native_factory->EnumAdapterByLuid(self.direct_device->GetAdapterLuid(), IID_PPV_ARGS(&native_adapter)))) return 0;
+    const auto setup = self.host_setup(native_adapter.Get());
+    *result = identity ? rsf_streamline_host_adopt(&setup, self.direct_device.Get(), self.direct_queue.Get(), &self.host) :
+        RSF_BACKEND_ERROR_NOT_SUPPORTED;
+    return 1;
+}
+int32_t d3d11_device(void* b, void* source) {
+    auto& self = *as_bridge(b);
+    if (FAILED(static_cast<IUnknown*>(source)->QueryInterface(IID_PPV_ARGS(&self.device)))) return E_NOINTERFACE;
+    ComPtr<ID3D11DeviceContext> immediate; self.device->GetImmediateContext(&immediate);
+    ComPtr<IDXGIDevice> dxgi;
+    if (FAILED(immediate.As(&self.context)) || FAILED(self.device.As(&dxgi)) || FAILED(dxgi->GetAdapter(&self.adapter))) return E_NOINTERFACE;
+    return S_OK;
+}
+int32_t create_host(void* b) {
+    auto& self = *as_bridge(b);
+    const auto setup = self.host_setup(self.adapter.Get());
+    return rsf_streamline_host_create(&setup, &self.host);
+}
+void* host(void* b) { return as_bridge(b)->host; }
+// The adapter is the last initialization input; like the former local, it is not kept.
+int32_t resolve_graphics(void* b) {
+    auto& self = *as_bridge(b);
+    const auto adapter = std::move(self.adapter);
+    if (self.host) return rsf_streamline_host_graphics(self.host, &self.graphics) != RSF_BACKEND_OK ? E_FAIL : S_OK;
+    if (!self.native12 && FAILED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0,
+            IID_PPV_ARGS(&self.direct_device)))) return DXGI_ERROR_UNSUPPORTED;
+    if (!self.direct_queue) {
+        D3D12_COMMAND_QUEUE_DESC queue{}; queue.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+        if (FAILED(self.direct_device->CreateCommandQueue(&queue, IID_PPV_ARGS(&self.direct_queue)))) return E_FAIL;
+    }
+    self.graphics.device = self.graphics.native_device = self.direct_device.Get();
+    self.graphics.queue = self.graphics.native_queue = self.direct_queue.Get();
+    return S_OK;
+}
+uint32_t tearing_supported(void* b) {
+    auto& self = *as_bridge(b);
+    ComPtr<IDXGIFactory5> capability_factory;
+    BOOL allow_tearing = FALSE;
+    self.tearing_supported = SUCCEEDED(self.parent->QueryInterface(IID_PPV_ARGS(&capability_factory))) &&
+        SUCCEEDED(capability_factory->CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING,
+            &allow_tearing, sizeof(allow_tearing))) && allow_tearing;
+    return self.tearing_supported ? 1u : 0u;
+}
+uint32_t fsr4_supported(void* b, const char* directory) {
+    return rsf_generation_fsr4_supported(as_bridge(b)->graphics.native_device, directory);
+}
+int32_t create_queues(void* b, uint32_t application_ready) {
+    auto& self = *as_bridge(b);
+    auto* gpu = static_cast<ID3D12Device*>(self.graphics.device);
+    D3D12_COMMAND_QUEUE_DESC interop_desc{}; interop_desc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+    if (self.native12) self.interop_queue = self.direct_queue;
+    else if (FAILED(gpu->CreateCommandQueue(&interop_desc, IID_PPV_ARGS(&self.interop_queue)))) return E_FAIL;
+    self.completion_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (!self.completion_event || FAILED(gpu->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&self.complete)))) return E_FAIL;
+    if (application_ready) {
+        self.application_ready = CreateEventW(nullptr, FALSE, TRUE, nullptr);
+        if (!self.application_ready) return E_FAIL;
+    }
+    return S_OK;
+}
+int32_t create_shared_inputs(void* b) {
+    auto& self = *as_bridge(b); const auto& d = self.description;
+    if (rsf_shared_fence_create(self.device.Get(), self.graphics.native_device, settings().log, settings().user, &self.shared_fence) != RSF_SHARED_OK)
+        return E_FAIL;
+    return self.make_surface(d.BufferDesc.Width, d.BufferDesc.Height, d.BufferDesc.Format);
+}
+int32_t create_slots(void* b) {
+    auto& self = *as_bridge(b);
+    auto* gpu = static_cast<ID3D12Device*>(self.graphics.device);
+    for (auto& slot : self.slots)
+        if (!rsf::create_command_list(gpu, D3D12_COMMAND_LIST_TYPE_DIRECT, slot.allocator.ReleaseAndGetAddressOf(),
+                slot.list.ReleaseAndGetAddressOf())) return E_FAIL;
+    return S_OK;
+}
+int32_t make_render_buffers(void* b) { return as_bridge(b)->make_render_buffers(); }
+
+int32_t create_plain(void* b) {
+    auto& self = *as_bridge(b); const auto& description = self.description;
+    auto desc = description; desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD; desc.BufferCount = self.native12 ? description.BufferCount : 3u;
+    desc.Flags = self.tearing_supported ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
+    // D3D11 application bindings belong to the shared virtual buffers.
+    // This private D3D12 chain receives copies and presents them.
+    if (!self.native12) desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    ComPtr<IDXGISwapChain> plain;
+    auto* owner_queue = self.native12 ? self.direct_queue.Get() : static_cast<ID3D12CommandQueue*>(self.graphics.native_queue);
+    const HRESULT created = original_create ? original_create(self.parent.Get(), owner_queue, &desc, &plain) :
+        self.parent->CreateSwapChain(owner_queue, &desc, &plain);
+    if (FAILED(created)) {
+        char text[512]{}; std::snprintf(text, sizeof(text),
+            "Physical chain creation refused HRESULT=0x%08lx facade=%p factory=%p queue=%p window=%p size=%ux%u format=%u buffers=%u effect=%u flags=0x%x native12=%u usage=0x%x sample=%u/%u refresh=%u/%u scanline=%u scaling=%u windowed=%u",
+            static_cast<unsigned long>(created), b, static_cast<void*>(self.parent.Get()),
+            static_cast<void*>(owner_queue), static_cast<void*>(desc.OutputWindow), desc.BufferDesc.Width, desc.BufferDesc.Height,
+            uint32_t(desc.BufferDesc.Format), desc.BufferCount, uint32_t(desc.SwapEffect), desc.Flags, uint32_t(self.native12),
+            desc.BufferUsage,desc.SampleDesc.Count,desc.SampleDesc.Quality,
+            desc.BufferDesc.RefreshRate.Numerator,desc.BufferDesc.RefreshRate.Denominator,
+            uint32_t(desc.BufferDesc.ScanlineOrdering),uint32_t(desc.BufferDesc.Scaling),uint32_t(desc.Windowed!=FALSE));
+        log(text); return E_FAIL;
+    }
+    ComPtr<IDXGISwapChain4> replacement;
+    if (FAILED(plain.As(&replacement))) return E_FAIL;
+    self.publish_physical(replacement, owner_queue);
+    return S_OK;
+}
+int32_t adopt_chain(void* b, void* chain, void* queue) {
+    ComPtr<IDXGISwapChain4> replacement;
+    const auto result = static_cast<IUnknown*>(chain)->QueryInterface(IID_PPV_ARGS(&replacement));
+    if (SUCCEEDED(result)) as_bridge(b)->publish_physical(replacement, static_cast<ID3D12CommandQueue*>(queue));
     return result;
 }
+void* physical(void* b) { auto& self = *as_bridge(b); std::lock_guard<std::mutex> lock(self.physical_guard); return self.physical.Get(); }
+void clear_physical(void* b) { as_bridge(b)->clear_physical(); }
+int32_t get_fullscreen(void* b, int32_t* fullscreen) {
+    const auto chain = as_bridge(b)->current_physical(); if (!chain) return DXGI_ERROR_WAS_STILL_DRAWING;
+    BOOL value = FALSE; const auto result = chain->GetFullscreenState(&value, nullptr); *fullscreen = value; return result;
+}
+int32_t set_fullscreen(void* b, int32_t fullscreen, void* target) {
+    const auto chain = as_bridge(b)->current_physical();
+    return chain ? chain->SetFullscreenState(BOOL(fullscreen), static_cast<IDXGIOutput*>(target)) : DXGI_ERROR_WAS_STILL_DRAWING;
+}
+int32_t present_test(void* b, uint32_t sync, uint32_t flags) {
+    auto& self = *as_bridge(b); std::lock_guard<std::mutex> lock(self.physical_guard);
+    return self.physical ? self.physical->Present(sync, flags) : DXGI_ERROR_WAS_STILL_DRAWING;
+}
+int32_t physical_present(void* b, uint32_t sync, uint32_t flags) { return as_bridge(b)->physical->Present(sync, flags); }
+int32_t resize_physical(void* b, uint32_t count, uint32_t width, uint32_t height, uint32_t format) {
+    auto& self = *as_bridge(b);
+    return self.physical->ResizeBuffers(count, width, height, DXGI_FORMAT(format),
+        self.tearing_supported ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0);
+}
+
+uint32_t has_provider_queue(void* b) { return as_bridge(b)->provider_queue.load() ? 1u : 0u; }
+uint32_t queues_joined(void* b) { auto& self = *as_bridge(b); return self.provider_queue.load() != self.direct_queue.Get() ? 1u : 0u; }
+int32_t join(void* b, uint32_t direction, uint64_t value) {
+    auto& self = *as_bridge(b);
+    auto* present_queue = self.provider_queue.load();
+    auto* signaller = direction == RSF_D3D11P_JOIN_SOURCE_TO_PRESENT ? self.direct_queue.Get() : present_queue;
+    auto* waiter = direction == RSF_D3D11P_JOIN_SOURCE_TO_PRESENT ? present_queue : self.direct_queue.Get();
+    const auto signaled = signaller->Signal(self.complete.Get(), value);
+    return FAILED(signaled) ? signaled : waiter->Wait(self.complete.Get(), value);
+}
+int32_t slot_reset(void* b, uint32_t index, uint64_t fence, uint32_t* step) {
+    auto& self = *as_bridge(b); auto& slot = self.slots[index];
+    *step = 0; HRESULT result = self.wait(self.complete.Get(), fence); if (FAILED(result)) return result;
+    *step = 1; result = slot.allocator->Reset(); if (FAILED(result)) return result;
+    *step = 2; return slot.list->Reset(slot.allocator.Get(), nullptr);
+}
+// Signal with the preceding D3D11 work submitted before D3D12 waits on it.
+// Flushing before Signal leaves the dependency buffered until a later frame.
+int32_t upload_wait(void* b, uint64_t value) {
+    auto& self = *as_bridge(b);
+    auto* fence12 = static_cast<ID3D12Fence*>(rsf_shared_fence_d3d12(self.shared_fence));
+    auto* fence11 = static_cast<ID3D11Fence*>(rsf_shared_fence_d3d11(self.shared_fence));
+    const auto signaled = self.context->Signal(fence11, value);
+    if (FAILED(signaled)) return signaled;
+    self.context->Flush();
+    return self.provider_queue.load()->Wait(fence12, value);
+}
+int32_t acquire_backbuffer(void* b) {
+    auto& self = *as_bridge(b); self.frame_buffer.Reset();
+    return self.physical->GetBuffer(self.physical->GetCurrentBackBufferIndex(), IID_PPV_ARGS(&self.frame_buffer));
+}
+uint32_t has_render_buffer(void* b, uint32_t index) {
+    auto& self = *as_bridge(b); return index < self.render_buffers.size() && self.render_buffers[index] ? 1u : 0u;
+}
+void record_copy(void* b, uint32_t index, uint32_t render_index) {
+    auto& self = *as_bridge(b); auto* list = self.slots[index].list.Get();
+    if (self.native12)
+        rsf::copy_transitioned(list, self.frame_buffer.Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_PRESENT,
+            self.render_buffers[render_index].Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_PRESENT);
+    else
+        rsf::copy_transitioned(list, self.frame_buffer.Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_PRESENT,
+            static_cast<ID3D12Resource*>(rsf_shared_surface_d3d12(self.surfaces[0])), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON);
+}
+void* slot_command(void* b, uint32_t index) { auto& self = *as_bridge(b); return self.provider_list(self.slots[index].list.Get()); }
+void* backbuffer(void* b) { return as_bridge(b)->frame_buffer.Get(); }
+void* context11(void* b) { return as_bridge(b)->context.Get(); }
+int32_t close_execute(void* b, uint32_t index, void* command) {
+    auto& self = *as_bridge(b);
+    const auto closed = self.slots[index].list->Close();
+    if (SUCCEEDED(closed)) {
+        ID3D12CommandList* lists[]{static_cast<ID3D12GraphicsCommandList*>(command)};
+        self.provider_queue.load()->ExecuteCommandLists(1, lists);
+    }
+    return closed;
+}
+int32_t upload_return(void* b, uint64_t value) {
+    auto& self = *as_bridge(b); auto* queue = self.provider_queue.load();
+    auto* fence12 = static_cast<ID3D12Fence*>(rsf_shared_fence_d3d12(self.shared_fence));
+    auto* fence11 = static_cast<ID3D11Fence*>(rsf_shared_fence_d3d11(self.shared_fence));
+    HRESULT result = queue->Signal(fence12, value);
+    if (SUCCEEDED(result)) result = queue->Wait(fence12, value);
+    if (SUCCEEDED(result)) result = self.context->Wait(fence11, value);
+    return result;
+}
+int32_t signal_slot(void* b, uint64_t value) { auto& self = *as_bridge(b); return self.provider_queue.load()->Signal(self.complete.Get(), value); }
+void release_backbuffer(void* b) { as_bridge(b)->frame_buffer.Reset(); }
+uint32_t has_application_ready(void* b) { return as_bridge(b)->application_ready ? 1u : 0u; }
+int32_t application_ready(void* b, uint32_t on_completion, uint64_t value) {
+    auto& self = *as_bridge(b);
+    if (!self.application_ready) return S_OK;
+    if (on_completion) return self.complete->SetEventOnCompletion(value, self.application_ready);
+    return SetEvent(self.application_ready) ? S_OK : E_FAIL;
+}
+void report_device_failure(void* b, int32_t result, uint32_t backend) {
+    auto& self = *as_bridge(b);
+    char text[160]; std::snprintf(text, sizeof(text), "Unity presentation failed backend=%u HRESULT=%08lx device_reason=%08lx",
+        backend, static_cast<unsigned long>(result), static_cast<unsigned long>(self.direct_device->GetDeviceRemovedReason())); log(text);
+    ComPtr<ID3D12InfoQueue> messages;
+    if (FAILED(self.direct_device.As(&messages))) return;
+    unsigned reported = 0;
+    const auto count = messages->GetNumStoredMessagesAllowedByRetrievalFilter();
+    for (UINT64 i = count; i && reported < 8;) {
+        --i;
+        SIZE_T bytes = 0; if (FAILED(messages->GetMessage(i, nullptr, &bytes))) continue;
+        auto storage = std::make_unique<unsigned char[]>(bytes);
+        auto* message = reinterpret_cast<D3D12_MESSAGE*>(storage.get());
+        if (SUCCEEDED(messages->GetMessage(i, message, &bytes)) && message->Severity <= D3D12_MESSAGE_SEVERITY_ERROR) {
+            log(message->pDescription); ++reported;
+        }
+    }
+}
+void log_present_failure(void* b, const char* step, int32_t result, uint32_t render_index) {
+    const auto& d = as_bridge(b)->description;
+    char text[192]; std::snprintf(text, sizeof(text), "Native D3D12 presentation step '%s' failed HRESULT=%08lx render_index=%u buffers=%u size=%ux%u",
+        step, static_cast<unsigned long>(result), render_index, d.BufferCount, d.BufferDesc.Width, d.BufferDesc.Height);
+    log(text);
+}
+
+uint32_t drain_queues(void* b) {
+    auto& self = *as_bridge(b);
+    if (!self.graphics.queue || !self.complete) return 0;
+    return RSF_D3D11P_DRAIN_GRAPHICS | (self.interop_queue ? RSF_D3D11P_DRAIN_INTEROP : 0u);
+}
+int32_t signal_wait(void* b, uint32_t interop, uint64_t value) {
+    auto& self = *as_bridge(b);
+    auto* queue = interop ? self.interop_queue.Get() : static_cast<ID3D12CommandQueue*>(self.graphics.queue);
+    if (FAILED(queue->Signal(self.complete.Get(), value))) return E_FAIL;
+    return self.wait(self.complete.Get(), value);
+}
+int32_t wait_fence(void* b, void* fence, uint64_t value) { return as_bridge(b)->wait(static_cast<ID3D12Fence*>(fence), value); }
+uint32_t buffers_referenced(void* b, uint32_t kind) {
+    auto& self = *as_bridge(b);
+    if (kind == RSF_D3D11P_BUFFERS_SHARED) {
+        for (auto* surface : self.surfaces) if (surface) {
+            auto* texture = static_cast<IUnknown*>(rsf_shared_surface_d3d11(surface));
+            texture->AddRef(); if (texture->Release() > 1) return 1;
+        }
+        return 0;
+    }
+    for (const auto& buffer : self.render_buffers) if (buffer) {
+        buffer->AddRef(); if (buffer->Release() > 1) return 1;
+    }
+    return 0;
+}
+int32_t remake_surfaces(void* b, uint32_t count, uint32_t width, uint32_t height, uint32_t format) {
+    auto& self = *as_bridge(b);
+    self.release_surfaces();
+    if (count) self.description.BufferCount = count;
+    return self.make_surface(width, height, DXGI_FORMAT(format));
+}
+void set_description(void* b, uint32_t width, uint32_t height, uint32_t format, uint32_t flags) {
+    auto& d = as_bridge(b)->description;
+    d.BufferDesc.Width = width; d.BufferDesc.Height = height; d.BufferDesc.Format = DXGI_FORMAT(format); d.Flags = flags;
+}
+int32_t remake_render_buffers(void* b, uint32_t count) {
+    auto& self = *as_bridge(b);
+    if (count) self.description.BufferCount = count;
+    for (auto& buffer : self.render_buffers) buffer.Reset();
+    return self.make_render_buffers();
+}
+void* retire_fence(void* b) {
+    auto& self = *as_bridge(b);
+    if (!self.retired && FAILED(static_cast<ID3D12Device*>(self.graphics.native_device)->CreateFence(0, D3D12_FENCE_FLAG_NONE,
+            IID_PPV_ARGS(&self.retired)))) return nullptr;
+    return self.retired.Get();
+}
+int32_t retire_submit(void* b, void* vendor_fence, uint64_t vendor_value, void* list, uint64_t value) {
+    auto& self = *as_bridge(b); auto* queue = self.provider_queue.load();
+    if (!queue) return RSF_BACKEND_ERROR_NOT_READY;
+    if (vendor_fence && FAILED(queue->Wait(static_cast<ID3D12Fence*>(vendor_fence), vendor_value)))
+        return RSF_BACKEND_ERROR_FEATURE_FAILED;
+    if (list) {
+        auto* command = static_cast<ID3D12GraphicsCommandList*>(self.provider_list(static_cast<ID3D12GraphicsCommandList*>(list)));
+        if (!command) return RSF_BACKEND_ERROR_FEATURE_FAILED;
+        ID3D12CommandList* lists[]{command}; queue->ExecuteCommandLists(1, lists);
+    }
+    return FAILED(queue->Signal(self.retired.Get(), value)) ? RSF_BACKEND_ERROR_FEATURE_FAILED : RSF_BACKEND_OK;
+}
+// On device failure retain GPU-reachable storage for the process rather than free it.
+void retain_all(void* b) {
+    auto& self = *as_bridge(b);
+    for (auto& slot : self.slots) { slot.list.Detach(); slot.allocator.Detach(); }
+    self.complete.Detach(); self.retired.Detach(); self.physical.Detach(); self.context.Detach(); self.device.Detach();
+    self.parent.Detach(); self.interop_queue.Detach(); self.direct_device.Detach(); self.direct_queue.Detach();
+    self.frame_buffer.Detach();
+    for (auto& buffer : self.render_buffers) buffer.Detach();
+}
+void release_presentation(void* b) {
+    auto& self = *as_bridge(b);
+    self.release_surfaces(); rsf_shared_fence_destroy(self.shared_fence); self.shared_fence = nullptr;
+    self.clear_physical();
+}
+void release_device(void* b, uint32_t destroy_host) {
+    auto& self = *as_bridge(b);
+    if (self.completion_event) CloseHandle(self.completion_event);
+    if (self.application_ready) CloseHandle(self.application_ready);
+    self.completion_event = self.application_ready = nullptr;
+    if (destroy_host) {
+        self.interop_queue.Reset();
+        for (auto& slot : self.slots) { slot.list.Reset(); slot.allocator.Reset(); }
+        self.complete.Reset(); self.retired.Reset(); self.context.Reset(); self.device.Reset(); self.parent.Reset();
+        rsf_streamline_host_destroy(self.host);
+    } else if (self.host) self.interop_queue.Detach(); // Shared SR callbacks retain this process-owned queue.
+}
+void* presentation_queue(void* b) { return as_bridge(b)->provider_queue.load(); }
+void* source_queue(void* b) {
+    auto& self = *as_bridge(b);
+    auto* queue = self.interop_queue.Get();
+    if (!self.native12 && self.host && queue)
+        queue = static_cast<ID3D12CommandQueue*>(rsf_streamline_host_native(self.host, queue));
+    if (queue) queue->AddRef();
+    return queue;
+}
+void* command_list(void* b, void* list) { return as_bridge(b)->provider_list(static_cast<ID3D12GraphicsCommandList*>(list)); }
+int32_t verify_outer(void* inner, void* window, void* device, void* context, void* outer) {
+    auto* captured = static_cast<IDXGISwapChain*>(inner);
+    auto* chain = static_cast<IDXGISwapChain*>(outer);
+    ComPtr<ID3D11Device> captured_device, context_device, outer_device;
+    DXGI_SWAP_CHAIN_DESC desc{};
+    if (!same_identity(chain, captured) || FAILED(chain->GetDesc(&desc)) || desc.OutputWindow != window ||
+        FAILED(captured->GetDevice(IID_PPV_ARGS(&captured_device))) || FAILED(chain->GetDevice(IID_PPV_ARGS(&outer_device)))) return E_INVALIDARG;
+    auto* immediate = static_cast<ID3D11DeviceContext*>(context);
+    if (immediate->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) return E_INVALIDARG;
+    immediate->GetDevice(&context_device);
+    if (!same_identity(captured_device.Get(), static_cast<IUnknown*>(device)) ||
+        !same_identity(captured_device.Get(), outer_device.Get()) || !same_identity(captured_device.Get(), context_device.Get())) return E_INVALIDARG;
+    return S_OK;
+}
+} // namespace leaf
+
+const rsf_d3d11p_platform platform{
+    .provider_table = leaf::provider_table, .observer_present = leaf::observer_present,
+    .window_valid = leaf::window_valid, .client_size = leaf::client_size, .same_identity = leaf::identity,
+    .add_ref = leaf::add_ref, .release = leaf::release,
+    .host_sleep = leaf::host_sleep, .host_marker = leaf::host_marker, .host_acquire = leaf::host_acquire,
+    .host_input = leaf::host_input, .host_abort = leaf::host_abort, .host_reflex_off = leaf::host_reflex_off,
+    .host_generation_load = leaf::host_generation_load, .host_present_common = leaf::host_present_common,
+    .bridge_new = leaf::bridge_new, .bridge_release_owned = leaf::bridge_release_owned,
+    .bridge_chain = leaf::bridge_chain, .facts = leaf::facts,
+    .init_source = leaf::init_source, .owning_adapter = leaf::owning_adapter, .native_device = leaf::native_device,
+    .adopt_host = leaf::adopt_host, .d3d11_device = leaf::d3d11_device, .create_host = leaf::create_host,
+    .host = leaf::host, .resolve_graphics = leaf::resolve_graphics, .tearing_supported = leaf::tearing_supported,
+    .fsr4_supported = leaf::fsr4_supported, .create_queues = leaf::create_queues,
+    .create_shared_inputs = leaf::create_shared_inputs, .create_slots = leaf::create_slots,
+    .make_render_buffers = leaf::make_render_buffers,
+    .create_plain = leaf::create_plain, .adopt_chain = leaf::adopt_chain, .physical = leaf::physical,
+    .clear_physical = leaf::clear_physical, .get_fullscreen = leaf::get_fullscreen,
+    .set_fullscreen = leaf::set_fullscreen, .present_test = leaf::present_test,
+    .physical_present = leaf::physical_present, .resize_physical = leaf::resize_physical,
+    .has_provider_queue = leaf::has_provider_queue, .queues_joined = leaf::queues_joined, .join = leaf::join,
+    .slot_reset = leaf::slot_reset, .upload_wait = leaf::upload_wait, .acquire_backbuffer = leaf::acquire_backbuffer,
+    .has_render_buffer = leaf::has_render_buffer, .record_copy = leaf::record_copy,
+    .slot_command = leaf::slot_command, .backbuffer = leaf::backbuffer, .context11 = leaf::context11,
+    .close_execute = leaf::close_execute, .upload_return = leaf::upload_return, .signal_slot = leaf::signal_slot,
+    .release_backbuffer = leaf::release_backbuffer, .has_application_ready = leaf::has_application_ready,
+    .application_ready = leaf::application_ready, .report_device_failure = leaf::report_device_failure,
+    .log_present_failure = leaf::log_present_failure,
+    .drain_queues = leaf::drain_queues, .signal_wait = leaf::signal_wait, .wait_fence = leaf::wait_fence,
+    .buffers_referenced = leaf::buffers_referenced, .remake_surfaces = leaf::remake_surfaces,
+    .set_description = leaf::set_description, .remake_render_buffers = leaf::remake_render_buffers,
+    .retire_fence = leaf::retire_fence, .retire_submit = leaf::retire_submit, .retain_all = leaf::retain_all,
+    .release_presentation = leaf::release_presentation, .release_device = leaf::release_device,
+    .presentation_queue = leaf::presentation_queue, .source_queue = leaf::source_queue,
+    .command_list = leaf::command_list, .verify_outer = leaf::verify_outer,
+};
+
+rsf_d3d11p_request normalize(const DXGI_SWAP_CHAIN_DESC& desc) {
+    return {desc.OutputWindow, desc.BufferDesc.Width, desc.BufferDesc.Height, uint32_t(desc.BufferDesc.Format),
+        desc.SampleDesc.Count, desc.BufferCount, desc.Windowed ? 1u : 0u, desc.Flags, uint32_t(desc.SwapEffect),
+        desc.BufferDesc.RefreshRate.Numerator, desc.BufferDesc.RefreshRate.Denominator};
+}
+HRESULT create_bridge(IDXGIFactory* factory, IUnknown* unknown, const DXGI_SWAP_CHAIN_DESC& desc, IDXGISwapChain** out) {
+    const auto request = normalize(desc);
+    return rsf_core_d3d11p_create(&platform, factory, unknown, &request, &desc, reinterpret_cast<void**>(out));
+}
 HRESULT STDMETHODCALLTYPE create_hook(IDXGIFactory* factory, IUnknown* device, DXGI_SWAP_CHAIN_DESC* desc, IDXGISwapChain** out) {
-    if (desc && capture_creation(desc->OutputWindow) && SUCCEEDED(create_bridge(factory, device, *desc, out))) {
-        if (scoped_interception) creation_scope.captured = *out;
+    if (desc && rsf_core_d3d11p_capture(desc->OutputWindow) && SUCCEEDED(create_bridge(factory, device, *desc, out))) {
+        rsf_core_d3d11p_captured(&platform, *out);
         return S_OK;
     }
     return original_create(factory, device, desc, out);
 }
 HRESULT STDMETHODCALLTYPE hwnd_hook(IDXGIFactory2* factory, IUnknown* device, HWND hwnd,
     const DXGI_SWAP_CHAIN_DESC1* desc, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* fullscreen, IDXGIOutput* output, IDXGISwapChain1** out) {
-    if (desc && !output && !desc->Stereo && capture_creation(hwnd)) {
+    if (desc && !output && !desc->Stereo && rsf_core_d3d11p_capture(hwnd)) {
         // Keep the application's fullscreen mode. Dropping its refresh rate made GetDesc report
         // 0/0, which RDR2 matched to its lowest listed mode (30 Hz on a 30-120 Hz panel).
         DXGI_SWAP_CHAIN_DESC translated{}; translated.BufferDesc = {desc->Width, desc->Height,
@@ -1091,35 +824,18 @@ HRESULT STDMETHODCALLTYPE hwnd_hook(IDXGIFactory2* factory, IUnknown* device, HW
         ComPtr<IDXGISwapChain> bridge;
         if (SUCCEEDED(create_bridge(factory, device, translated, &bridge))) {
             const auto result = bridge->QueryInterface(IID_PPV_ARGS(out));
-            if (SUCCEEDED(result) && scoped_interception) creation_scope.captured = bridge;
+            if (SUCCEEDED(result)) rsf_core_d3d11p_captured(&platform, bridge.Get());
             return result;
         }
     }
     return original_hwnd(factory, device, hwnd, desc, fullscreen, output, out);
 }
 }
+extern "C" const rsf_generation_provider* rsf_d3d11p_provider_for(uint32_t backend) {
+    return leaf::provider_table(rsf_core_fg_provider_family(backend));
+}
 extern "C" int rsf_d3d11_present_prepare(const rsf_d3d11_present_setup* setup) {
-    if (!setup || setup->struct_size < sizeof(*setup) || !setup->runtime_directory_utf8 || !setup->accept_window || original_create) return 0;
-    // Depth units are the plugin's to state; the bridge no longer guesses them from the API.
-    if (!(setup->units_to_meters > 0)) {
-        if (setup->log) setup->log(setup->user, "presentation bridge: units_to_meters must be positive; interception refused");
-        return 0;
-    }
-    if (setup->backend && !rsf_fg_backend_known(setup->backend) &&
-        !(setup->backend == RSF_FG_BACKEND_AUTO && setup->runtime_switching)) return 0;
-    if (setup->allowed_backend_choices && (setup->allowed_backend_choices & ~RSF_FG_BACKEND_ALL)) return 0;
-    if (setup->allowed_backend_choices && setup->backend && setup->backend != RSF_FG_BACKEND_AUTO &&
-        !(setup->allowed_backend_choices & (1u << setup->backend))) return 0;
-    settings = *setup; runtime_directory = setup->runtime_directory_utf8;
-    engine_version = setup->engine_version_utf8 ? setup->engine_version_utf8 : "";
-    project_id = setup->project_id_utf8 ? setup->project_id_utf8 : "";
-    settings.engine_version_utf8 = settings.project_id_utf8 = nullptr;
-    fsr3_directory = setup->fsr3_directory_utf8 ? setup->fsr3_directory_utf8 : runtime_directory;
-    fsr4_directory = setup->fsr4_directory_utf8 ? setup->fsr4_directory_utf8 : runtime_directory;
-    xess_directory = setup->xess_directory_utf8 ? setup->xess_directory_utf8 : runtime_directory;
-    streamline_directory = setup->streamline_directory_utf8 ? setup->streamline_directory_utf8 : runtime_directory;
-    active_backend.store(setup->backend ? setup->backend : setup->runtime_switching ? 0u : RSF_FG_BACKEND_DLSS);
-    return 1;
+    return rsf_core_d3d11p_prepare(setup, original_create != nullptr);
 }
 extern "C" int32_t rsf_d3d11_present_create_for_hwnd(void* factory, void* queue, void* hwnd,
     const void* description, void** out) try {
@@ -1142,7 +858,7 @@ extern "C" int32_t rsf_d3d11_present_create_for_hwnd(void* factory, void* queue,
 extern "C" int32_t rsf_d3d11_present_wrap_native_chain(void* raw_device, void* raw_chain, void** out) try {
     if (!out) return E_INVALIDARG;
     *out = nullptr;
-    if (!raw_device || !raw_chain || !settings.accept_window || original_create || active_chain.load()) return E_INVALIDARG;
+    if (!raw_device || !raw_chain || !settings().accept_window || original_create || rsf_core_d3d11p_active_bridge()) return E_INVALIDARG;
     auto* device = static_cast<ID3D11Device*>(raw_device);
     auto* native_chain = static_cast<IDXGISwapChain*>(raw_chain);
     DXGI_SWAP_CHAIN_DESC description{};
@@ -1171,75 +887,21 @@ extern "C" int rsf_d3d11_present_install(const rsf_d3d11_present_setup* setup) {
     log("presentation bridge: cold-start D3D11 swapchain interception installed"); return 1;
 }
 extern "C" int rsf_d3d11_present_install_scoped(const rsf_d3d11_present_setup* setup) {
-    scoped_interception = true;
-    if (!rsf_d3d11_present_install(setup)) { scoped_interception = false; return 0; }
+    rsf_core_d3d11p_set_scoped(1);
+    if (!rsf_d3d11_present_install(setup)) { rsf_core_d3d11p_set_scoped(0); return 0; }
     return 1;
 }
 extern "C" int32_t rsf_d3d11_present_creation_begin(void* window, uint64_t* token) {
-    if (!token || *token || !window || !IsWindow(static_cast<HWND>(window))) return E_INVALIDARG;
-    if (!scoped_interception || !original_create || creation_scope.token || creating || active_chain.load()) return DXGI_ERROR_INVALID_CALL;
-    uint64_t idle = 0;
-    const auto selected = ++creation_tokens;
-    if (!active_creation_token.compare_exchange_strong(idle,selected)) return DXGI_ERROR_INVALID_CALL;
-    creation_scope.window = static_cast<HWND>(window);
-    creation_scope.token = selected;
-    *token = creation_scope.token;
-    return S_OK;
+    return rsf_core_d3d11p_creation_begin(&platform, window, token, original_create != nullptr);
 }
 extern "C" int32_t rsf_d3d11_present_creation_end(void* window, uint64_t token, void* device, void* context, void* outer) {
-    if (!token || token != creation_scope.token || window != creation_scope.window) return E_INVALIDARG;
-    auto captured = std::move(creation_scope.captured);
-    creation_scope = {}; // Close even when native creation failed or its outputs refuse.
-    active_creation_token.store(0);
-    struct Refusal {
-        Bridge* bridge;
-        bool accepted = false;
-        ~Refusal() { if (bridge && !accepted) bridge->refuse_creation(); }
-    } refusal{static_cast<Bridge*>(captured.Get())};
-    if (!captured || !device || !context || !outer) return DXGI_ERROR_UNSUPPORTED;
-    ComPtr<ID3D11Device> captured_device, context_device, outer_device;
-    DXGI_SWAP_CHAIN_DESC desc{};
-    auto* chain = static_cast<IDXGISwapChain*>(outer);
-    if (captured.Get() != active_chain.load() ||
-        !same_identity(chain,captured.Get()) || FAILED(chain->GetDesc(&desc)) || desc.OutputWindow != window ||
-        FAILED(captured->GetDevice(IID_PPV_ARGS(&captured_device))) || FAILED(chain->GetDevice(IID_PPV_ARGS(&outer_device)))) return E_INVALIDARG;
-    auto* immediate = static_cast<ID3D11DeviceContext*>(context);
-    if (immediate->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) return E_INVALIDARG;
-    immediate->GetDevice(&context_device);
-    if (!same_identity(captured_device.Get(),static_cast<IUnknown*>(device)) ||
-        !same_identity(captured_device.Get(),outer_device.Get()) || !same_identity(captured_device.Get(),context_device.Get())) return E_INVALIDARG;
-    outer_alias.store(outer, std::memory_order_release);
-    scoped_admitted.store(true, std::memory_order_release);
-    refusal.accepted = true;
-    log("presentation bridge: scoped inner owner and final outer chain canonical identity verified; outer Present retained");
-    return S_OK;
+    return rsf_core_d3d11p_creation_end(&platform, window, token, device, context, outer);
 }
-extern "C" rsf_streamline_host* rsf_d3d11_present_host() { return active_host.load(std::memory_order_acquire); }
-extern "C" int rsf_d3d11_present_graphics(rsf_streamline_graphics* graphics) {
-    auto* queue = active_interop.load(std::memory_order_acquire);
-    if (!graphics || graphics->struct_size < sizeof(*graphics) || !queue) return 0;
-    *graphics = active_graphics;
-    graphics->queue = queue; graphics->native_queue = nullptr; return 1;
-}
-extern "C" void* rsf_d3d11_present_queue() {
-    auto* bridge = static_cast<Bridge*>(active_chain.load(std::memory_order_acquire));
-    if (!bridge) return nullptr;
-    return bridge->presentation_queue();
-}
-extern "C" void* rsf_d3d11_present_source_queue() {
-    // The same lock fences owner unpublication. A transition must not block the producer.
-    std::shared_lock<std::shared_mutex> lock(provider_guard, std::try_to_lock);
-    if (!lock.owns_lock()) return nullptr;
-    auto* bridge = static_cast<Bridge*>(active_chain.load(std::memory_order_acquire));
-    return bridge ? bridge->source_queue() : nullptr;
-}
-extern "C" int rsf_d3d11_present_is_owner(void* swapchain) {
-    auto* active = static_cast<IDXGISwapChain*>(active_chain.load(std::memory_order_acquire));
-    if (!swapchain || !active || (scoped_interception && !scoped_admitted.load(std::memory_order_acquire))) return 0;
-    if (active == swapchain) return 1;
-    return outer_alias.load(std::memory_order_acquire) == swapchain &&
-        same_identity(static_cast<IDXGISwapChain*>(swapchain),active);
-}
+extern "C" rsf_streamline_host* rsf_d3d11_present_host() { return static_cast<rsf_streamline_host*>(rsf_core_d3d11p_host()); }
+extern "C" int rsf_d3d11_present_graphics(rsf_streamline_graphics* graphics) { return rsf_core_d3d11p_graphics(graphics); }
+extern "C" void* rsf_d3d11_present_queue() { return rsf_core_d3d11p_queue(&platform); }
+extern "C" void* rsf_d3d11_present_source_queue() { return rsf_core_d3d11p_source_queue(&platform); }
+extern "C" int rsf_d3d11_present_is_owner(void* swapchain) { return rsf_core_d3d11p_is_owner(&platform, swapchain); }
 extern "C" int rsf_d3d11_present_dispatch_owned(void* receiver, uint32_t sync, uint32_t flags, int32_t* result) {
     if (!result) return 0;
     rsf_d3d11_chain_dispatch request{}; request.receiver = receiver; request.method = RSF_D3D11_DISPATCH_PRESENT;
@@ -1249,8 +911,10 @@ extern "C" int rsf_d3d11_present_dispatch_owned(void* receiver, uint32_t sync, u
     return int(request.handled);
 }
 extern "C" void rsf_d3d11_chain_dispatch_owned(rsf_d3d11_chain_dispatch* request) {
-    auto* bridge = static_cast<Bridge*>(active_chain.load(std::memory_order_acquire));
-    if (!request || !bridge || request->receiver != bridge) return;
+    if (!request) return;
+    const auto admitted = rsf_core_d3d11p_dispatch_admit(request->receiver);
+    if (!admitted) return;
+    auto* bridge = as_bridge(request->receiver);
     request->handled = 1;
     if (request->method == RSF_D3D11_DISPATCH_RELEASE) {
         // Consumes exactly the caller's reference. The object may be gone on return.
@@ -1261,9 +925,7 @@ extern "C" void rsf_d3d11_chain_dispatch_owned(rsf_d3d11_chain_dispatch* request
     ComPtr<IDXGISwapChain4> lease = bridge;
     request->result.hresult = E_FAIL;
     try {
-        if (scoped_interception && !scoped_admitted.load(std::memory_order_acquire)) {
-            request->result.hresult = DXGI_ERROR_INVALID_CALL; return;
-        }
+        if (admitted == 2) { request->result.hresult = DXGI_ERROR_INVALID_CALL; return; }
         const auto& args = request->args;
         switch (request->method) {
         case RSF_D3D11_DISPATCH_PRESENT:
@@ -1287,100 +949,34 @@ extern "C" void rsf_d3d11_chain_dispatch_owned(rsf_d3d11_chain_dispatch* request
         }
     } catch (...) { /* A known facade must never fall through to a native receiver. */ }
 }
-extern "C" int rsf_d3d11_present_has_owner() {
-    return active_chain.load(std::memory_order_acquire) != nullptr && (!scoped_interception || scoped_admitted.load(std::memory_order_acquire));
-}
-extern "C" const rsf_generation_provider* rsf_d3d11_present_provider() { return generation_api(); }
-extern "C" int32_t rsf_d3d11_present_status_get(rsf_d3d11_present_status* status) { return provider_status.read(status); }
-extern "C" void* rsf_d3d11_present_session() { return active_session.load(std::memory_order_acquire); }
-extern "C" uint32_t rsf_d3d11_present_backend() { return active_backend.load(); }
-extern "C" uint32_t rsf_d3d11_present_backend_choices() { return backend_choices.load(); }
-extern "C" int32_t rsf_d3d11_present_request(uint32_t backend) {
-    if (!settings.runtime_switching || !active_chain.load()) return RSF_BACKEND_ERROR_NOT_READY;
-    if (backend != 0 && !rsf_fg_backend_known(backend)) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
-    if (!(backend_choices.load() & (1u << backend))) {
-        switch_result.store(RSF_BACKEND_ERROR_NOT_SUPPORTED);
-        return RSF_BACKEND_ERROR_NOT_SUPPORTED;
-    }
-    switch_result.store(0); requested_backend.store(backend); return RSF_BACKEND_OK;
-}
-extern "C" int32_t rsf_d3d11_present_switch_result() { return switch_result.load(); }
-extern "C" uint64_t rsf_d3d11_present_generation() { return chain_generation.load(); }
-namespace {
-// Main-thread latency calls share the provider lifetime; only replacement takes the exclusive lock,
-// so a caller arriving mid-switch is turned away instead of blocking window messages.
-template<class Call> int32_t with_provider(Call call) {
-    std::shared_lock<std::shared_mutex> lock(provider_guard, std::try_to_lock);
-    if (!lock.owns_lock()) return RSF_BACKEND_ERROR_NOT_READY;
-    return call(generation_api(), active_session.load(), active_host.load());
-}
-}
+extern "C" int rsf_d3d11_present_has_owner() { return rsf_core_d3d11p_has_owner(); }
+extern "C" const rsf_generation_provider* rsf_d3d11_present_provider() { return rsf_core_d3d11p_provider(&platform); }
+extern "C" int32_t rsf_d3d11_present_status_get(rsf_d3d11_present_status* status) { return rsf_core_d3d11p_status_get(status); }
+extern "C" void* rsf_d3d11_present_session() { return rsf_core_d3d11p_session(); }
+extern "C" uint32_t rsf_d3d11_present_backend() { return rsf_core_d3d11p_backend(); }
+extern "C" uint32_t rsf_d3d11_present_backend_choices() { return rsf_core_d3d11p_backend_choices(); }
+extern "C" int32_t rsf_d3d11_present_request(uint32_t backend) { return rsf_core_d3d11p_request(backend); }
+extern "C" int32_t rsf_d3d11_present_switch_result() { return rsf_core_d3d11p_switch_result(); }
+extern "C" uint64_t rsf_d3d11_present_generation() { return rsf_core_d3d11p_generation(); }
 extern "C" int32_t rsf_d3d11_present_retire(void* session, void* list, void** fence, uint64_t* value) {
-    if (!fence || !value) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    *fence = nullptr; *value = 0;
-    return with_provider([&](const rsf_generation_provider*, void*, rsf_streamline_host*) -> int32_t {
-        auto* bridge = static_cast<Bridge*>(active_chain.load(std::memory_order_acquire));
-        return bridge ? bridge->retire(session, list, fence, value) : RSF_BACKEND_ERROR_NOT_READY;
-    });
+    return rsf_core_d3d11p_retire(&platform, session, list, fence, value);
 }
-extern "C" void* rsf_d3d11_present_command_list(void* list) {
-    auto* bridge = static_cast<Bridge*>(active_chain.load(std::memory_order_acquire));
-    return bridge && list ? bridge->command_list(list) : nullptr;
-}
-// A provider that paces through the host is the host: it gets the host calls once. Any other
-// provider owns its own pacing, and the host only records markers for latency reporting.
-extern "C" int32_t rsf_d3d11_present_begin(uint64_t id, uint64_t* generation) {
-    return with_provider([&](const rsf_generation_provider* api, void* context, rsf_streamline_host* host) -> int32_t {
-        if (generation) *generation = chain_generation.load();
-        if (host_paced.load()) return rsf_streamline_host_sleep(host, id);
-        return api && context ? api->begin_frame(context, id) : RSF_BACKEND_OK;
-    });
-}
-static int32_t pace(uint64_t id, rsf_pacing_owner owner, const uint64_t* expected, uint64_t* generation) {
-    return with_provider([&](const rsf_generation_provider* api, void* context, rsf_streamline_host* host) -> int32_t {
-        const auto current = chain_generation.load();
-        if (generation) *generation = current;
-        if (expected && *expected != current) return RSF_BACKEND_ERROR_NOT_READY;
-        if (!id || owner>RSF_PACING_ANTILAG2) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-        if (owner==RSF_PACING_REFLEX) return host ? rsf_streamline_host_sleep(host,id) : RSF_BACKEND_ERROR_NOT_READY;
-        if (owner==RSF_PACING_XELL) return api && context ? api->begin_frame(context,id) : RSF_BACKEND_ERROR_NOT_READY;
-        return RSF_BACKEND_OK; // Anti-Lag update lives in the core; none has no sleeper.
-    });
-}
+extern "C" void* rsf_d3d11_present_command_list(void* list) { return rsf_core_d3d11p_command_list(&platform, list); }
+extern "C" int32_t rsf_d3d11_present_begin(uint64_t id, uint64_t* generation) { return rsf_core_d3d11p_begin(&platform, id, generation); }
 extern "C" int32_t rsf_d3d11_present_pace(uint64_t id, rsf_pacing_owner owner, uint64_t* generation) {
-    return pace(id, owner, nullptr, generation);
+    return rsf_core_d3d11p_pace(&platform, id, owner, nullptr, generation);
 }
 extern "C" int32_t rsf_d3d11_present_pace_for_generation(uint64_t id, rsf_pacing_owner owner, uint64_t generation) {
-    return pace(id, owner, &generation, nullptr);
+    return rsf_core_d3d11p_pace(&platform, id, owner, &generation, nullptr);
 }
 extern "C" int32_t rsf_d3d11_present_marker(uint64_t generation, uint64_t id, rsf_latency_marker marker, uint32_t controller) {
-    return with_provider([&](const rsf_generation_provider* api, void* context, rsf_streamline_host* host) -> int32_t {
-        if (generation != chain_generation.load()) return RSF_BACKEND_ERROR_NOT_READY;
-        const auto sl = host ? rsf_streamline_host_marker(host, id, marker, controller) : RSF_BACKEND_OK;
-        return sl != RSF_BACKEND_OK || host_paced.load() || !api || !context ? sl : api->marker(context, marker, id, controller);
-    });
+    return rsf_core_d3d11p_marker(&platform, generation, id, marker, controller);
 }
-extern "C" int32_t rsf_d3d11_present_acquire(uint64_t id) {
-    return with_provider([&](const rsf_generation_provider*, void*, rsf_streamline_host* host) -> int32_t {
-        return host ? rsf_streamline_host_acquire(host, id) : RSF_BACKEND_OK;
-    });
-}
+extern "C" int32_t rsf_d3d11_present_acquire(uint64_t id) { return rsf_core_d3d11p_acquire(&platform, id); }
 extern "C" int32_t rsf_d3d11_present_receipt(uint64_t generation,uint64_t id,uint32_t kinds,uint32_t message) {
-    return with_provider([&](const rsf_generation_provider*,void*,rsf_streamline_host* host) -> int32_t {
-        if (generation!=chain_generation.load() || !host) return RSF_BACKEND_ERROR_NOT_READY;
-        return rsf_streamline_host_input(host,id,kinds,message);
-    });
+    return rsf_core_d3d11p_receipt(&platform, generation, id, kinds, message);
 }
 extern "C" int32_t rsf_d3d11_present_input(uint64_t id, uint32_t kinds, uint32_t message) {
-    return with_provider([&](const rsf_generation_provider* api, void* context, rsf_streamline_host* host) -> int32_t {
-        const auto result = host ? rsf_streamline_host_input(host, id, kinds, message) : RSF_BACKEND_OK;
-        if (result != RSF_BACKEND_OK || host_paced.load() || !api || !context || !kinds) return result;
-        return api->marker(context, RSF_LATENCY_INPUT_SAMPLE, id, (kinds & 4u) ? 1u : 0u);
-    });
+    return rsf_core_d3d11p_input(&platform, id, kinds, message);
 }
-extern "C" int32_t rsf_d3d11_present_abort(uint64_t id) {
-    return with_provider([&](const rsf_generation_provider* api, void* context, rsf_streamline_host* host) -> int32_t {
-        const auto sl = host ? rsf_streamline_host_abort(host, id) : RSF_BACKEND_OK;
-        return host_paced.load() || !api || !context ? sl : api->abort_frame(context, id);
-    });
-}
+extern "C" int32_t rsf_d3d11_present_abort(uint64_t id) { return rsf_core_d3d11p_abort(&platform, id); }
