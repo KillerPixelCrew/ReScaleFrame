@@ -278,7 +278,33 @@ int main(int argc, char** argv) {
         !q.resets && !q.submits && !q.maps && !q.waits && !q.buffers, "Unrequested frames do no GPU work even with legacy output enabled.");
     rsf_input_dump_configure(root.string().c_str(), "Vulkan CPU fixture", "fixture", nullptr, nullptr);
     rsf_input_dump_request();
-    check(rsf_input_dump_begin_record(&frame, 2) != 0, "Arm the shared Rust capture owner.");
+    check(rsf_input_dump_begin_record(&frame, 0) != 0, "Arm the shared Rust capture owner before SR evaluation.");
+    std::filesystem::path bundle;
+    for (const auto& entry : std::filesystem::directory_iterator(root / "website")) bundle = entry.path();
+    const auto initial_metadata = read(bundle / "frame.json");
+    auto evaluated = frame;
+    evaluated.camera.struct_size = sizeof(evaluated.camera);
+    evaluated.camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
+    evaluated.camera.render_width = evaluated.camera.render_height = 1;
+    evaluated.camera.output_width = evaluated.camera.output_height = 1;
+    evaluated.camera.jitter_pixels[0] = 0.25f;
+    rsf_input_dump_result(&evaluated, "sr", 2, -1);
+    auto stale = evaluated;
+    ++stale.resource_generation;
+    rsf_input_dump_result(&stale, "sr", 2, 0);
+    stale = evaluated;
+    ++stale.output_width;
+    rsf_input_dump_result(&stale, "sr", 2, 0);
+    check(read(bundle / "frame.json") == initial_metadata, "Keep the selected header after a refusal or stale evaluation.");
+    rsf_input_dump_result(&evaluated, "sr", 2, 0);
+    const auto accepted_metadata = read(bundle / "frame.json");
+    check(accepted_metadata.find("\"camera_available\":true") != std::string::npos &&
+        accepted_metadata.find("\"backend\":2") != std::string::npos &&
+        accepted_metadata.find("\"jitter_pixels\":[0.25,0]") != std::string::npos,
+        "Publish accepted SR camera and backend with the selected frame.");
+    evaluated.camera.jitter_pixels[0] = -0.25f;
+    rsf_input_dump_result(&evaluated, "sr", 3, 0);
+    check(read(bundle / "frame.json") == accepted_metadata, "Keep the first camera and backend for that frame.");
     auto unsupported = image;
     unsupported.copy_source = 0;
     check(rsf_input_dump_vk_snapshot(owner, &frame, &unsupported, "unsupported") == RSF_BACKEND_ERROR_INVALID_ARGUMENT &&
@@ -339,8 +365,6 @@ int main(int argc, char** argv) {
     rsf_input_dump_failed(later_ticket, "later_engine", RSF_TEXTURE_ERROR_STAGING_FAILED);
     rsf_input_dump_complete(&frame, 0);
 
-    std::filesystem::path bundle;
-    for (const auto& entry : std::filesystem::directory_iterator(root / "website")) bundle = entry.path();
     const std::string pixel("\x40\x80\xff\0", 4);
     for (const char* accepted : {"successful", "final_color"}) {
         check(read(bundle / (std::string(accepted) + ".bin")) == pixel, "Publish exact pixels through the shared capture owner.");

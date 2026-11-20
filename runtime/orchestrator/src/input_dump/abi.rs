@@ -466,6 +466,9 @@ unsafe extern "C" fn rsf_core_dump_result(
         {
             if stage == "sr" {
                 capture.sr_result = result;
+                if result == 0 {
+                    capture.fill_sr_metadata(frame, backend);
+                }
             }
             let _ = metadata::result(&capture.bundle, frame, stage, backend, result);
         }

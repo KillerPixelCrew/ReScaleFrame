@@ -46,7 +46,8 @@ bool rsf_anomaly_sr_running(const TemporalState*) noexcept;
 void* rsf_anomaly_sr_output_texture(const TemporalState*) noexcept;
 bool rsf_anomaly_sr_plan(const TemporalState*, uint32_t, uint32_t, uint32_t*, uint32_t*) noexcept;
 void rsf_anomaly_sr_boundary(TemporalState*, void*, uint32_t, uint32_t) noexcept;
-bool rsf_anomaly_sr_evaluate(TemporalState*, void*, rsf_anomaly_sr_pass_inputs*, const rsf_anomaly_sr_reset_facts*) noexcept;
+bool rsf_anomaly_sr_evaluate(TemporalState*, void*, rsf_anomaly_sr_pass_inputs*, const rsf_anomaly_sr_reset_facts*,
+    rsf_camera_frame*, uint32_t*) noexcept;
 bool rsf_anomaly_sr_request_dump(const TemporalState*, const char*) noexcept;
 void rsf_anomaly_sr_count(TemporalState*, Refusal) noexcept;
 void rsf_anomaly_sr_count_bilinear(TemporalState*) noexcept;
@@ -129,9 +130,10 @@ bool TemporalDriver::evaluate(ID3D11DeviceContext* context, PassInputs& inputs, 
     inputs.reset = args.reset;
     return evaluated;
 }
-bool TemporalDriver::evaluate(ID3D11DeviceContext* context, rsf_anomaly_sr_pass_inputs& inputs, const ResetFacts& facts) noexcept {
+bool TemporalDriver::evaluate(ID3D11DeviceContext* context, rsf_anomaly_sr_pass_inputs& inputs, const ResetFacts& facts,
+    rsf_camera_frame* captured_camera, uint32_t* captured_backend) noexcept {
     const auto reset = reset_facts(facts);
-    return rsf_anomaly_sr_evaluate(state_, context, &inputs, &reset);
+    return rsf_anomaly_sr_evaluate(state_, context, &inputs, &reset, captured_camera, captured_backend);
 }
 bool TemporalDriver::request_dump(const std::string& prefix) noexcept {
     return rsf_anomaly_sr_request_dump(state_, prefix.c_str());

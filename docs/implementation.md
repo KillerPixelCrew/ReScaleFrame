@@ -417,8 +417,16 @@ DLSS resize refusals before the first evaluation. The pipeline now
 releases resources at resize only after a DLSS evaluation attempt.
 The foreground Standard retest completed that resize in one attempt
 while still drawing the fallback and exited normally. Gameplay
-keyboard consumption and explicit plugin unload remain open.
+keyboard consumption remains open. The thin carrier and guarded
+trampolines give the adapter process lifetime. The lifecycle fixture
+covers quiesce and stop, and the in-game runs cover normal engine exit.
 See [the game results](research/rust-anomaly-sr-pass.md#scripted-anomaly-153-runs).
+
+The Stage 5 capture reports the guarded engine frame ID in its leased
+pass. A successful evaluation can fill the selected capture header's
+camera and backend through the existing Runtime result call. Both C
+linkage forms passed the CPU checks for matching identity, extent and
+successful evaluation. See [capture identity at evaluation](research/rust-anomaly-sr-pass.md#capture-identity-at-evaluation).
 
 The merged Release sharpening fixtures passed on D3D11, D3D12 and
 Vulkan. The D3D11 fixture checks that Depth RCAS and Depth DAS preserve

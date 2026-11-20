@@ -2,7 +2,7 @@
 
 #![allow(non_camel_case_types)]
 #![allow(dead_code)]
-use rsf_game_sys::rsf_frame_record;
+use rsf_game_sys::{rsf_camera_frame, rsf_frame_record};
 
 pub const RSF_ANOMALY_SR_MIN_SCALE: f64 = 0.33;
 pub const RSF_ANOMALY_SR_MAX_SCALE: f64 = 1.0;
@@ -923,10 +923,18 @@ pub struct rsf_anomaly_sr_dump {
     pub complete:
         ::core::option::Option<unsafe extern "C" fn(arg1: *const rsf_frame_record, arg2: i32)>,
     pub cancel: ::core::option::Option<unsafe extern "C" fn(arg1: u64)>,
+    pub result: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: *const rsf_frame_record,
+            arg2: *const ::core::ffi::c_char,
+            arg3: u32,
+            arg4: i32,
+        ),
+    >,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of rsf_anomaly_sr_dump"][::core::mem::size_of::<rsf_anomaly_sr_dump>() - 64usize];
+    ["Size of rsf_anomaly_sr_dump"][::core::mem::size_of::<rsf_anomaly_sr_dump>() - 72usize];
     ["Alignment of rsf_anomaly_sr_dump"][::core::mem::align_of::<rsf_anomaly_sr_dump>() - 8usize];
     ["Offset of field: rsf_anomaly_sr_dump::configure"]
         [::core::mem::offset_of!(rsf_anomaly_sr_dump, configure) - 0usize];
@@ -944,6 +952,8 @@ const _: () = {
         [::core::mem::offset_of!(rsf_anomaly_sr_dump, complete) - 48usize];
     ["Offset of field: rsf_anomaly_sr_dump::cancel"]
         [::core::mem::offset_of!(rsf_anomaly_sr_dump, cancel) - 56usize];
+    ["Offset of field: rsf_anomaly_sr_dump::result"]
+        [::core::mem::offset_of!(rsf_anomaly_sr_dump, result) - 64usize];
 };
 #[repr(C)]
 #[derive(Default, Copy, Clone)]
@@ -1044,8 +1054,13 @@ pub struct rsf_anomaly_sr_stage_platform {
     >,
     pub driver_boundary:
         ::core::option::Option<unsafe extern "C" fn(output_width: u32, output_height: u32)>,
-    pub driver_evaluate:
-        ::core::option::Option<unsafe extern "C" fn(arg1: *const rsf_anomaly_sr_pass) -> bool>,
+    pub driver_evaluate: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: *const rsf_anomaly_sr_pass,
+            arg2: *mut rsf_camera_frame,
+            arg3: *mut u32,
+        ) -> bool,
+    >,
     pub driver_request_dump: ::core::option::Option<
         unsafe extern "C" fn(prefix_utf8: *const ::core::ffi::c_char) -> bool,
     >,

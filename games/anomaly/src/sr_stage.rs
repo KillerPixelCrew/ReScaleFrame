@@ -1689,7 +1689,7 @@ impl Stage {
             return bilinear();
         }
         let pass = rsf_anomaly_sr_pass {
-            native_frame: state.published.frame,
+            native_frame: u64::from(engine_frame),
             generation: self.controller().twin_generation as u32,
             render_width: rw,
             render_height: rh,
@@ -1724,8 +1724,33 @@ impl Stage {
                 );
             }
         }
-        if !leaf!(p, driver_evaluate(&pass)) {
+        let record = &mut state.capture.record;
+        let result = state.dump.and_then(|dump| dump.result).filter(|_| {
+            state.capture.active
+                && engine_frame != 0
+                && record.frame_id == pass.native_frame + 1
+                && record.resource_generation == pass.generation
+                && [
+                    record.render_width,
+                    record.render_height,
+                    record.output_width,
+                    record.output_height,
+                ] == [rw, rh, ow, oh]
+        });
+        let mut backend = 0;
+        let (camera_out, backend_out) = if result.is_some() {
+            (
+                std::ptr::addr_of_mut!(record.camera),
+                std::ptr::addr_of_mut!(backend),
+            )
+        } else {
+            (null_mut(), null_mut())
+        };
+        if !leaf!(p, driver_evaluate(&pass, camera_out, backend_out)) {
             return bilinear();
+        }
+        if let Some(result) = result {
+            unsafe { result(record, c"sr".as_ptr(), backend, 0) };
         }
         self.take(
             state,

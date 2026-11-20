@@ -45,6 +45,8 @@ RSF_FRAME_DUMP_API uint64_t rsf_input_dump_gpu_submission(const rsf_frame_record
 RSF_FRAME_DUMP_API void rsf_input_dump_gpu_completed(uint64_t submission, uint32_t api, void* device);
 RSF_FRAME_DUMP_API int rsf_input_dump_gpu_ready(uint64_t ticket, const char* name, uint32_t api, void* device);
 RSF_FRAME_DUMP_API void rsf_input_dump_pass_metadata(const rsf_game_render_pass*);
+/* A successful SR result can supply camera and backend fields missing from the armed record.
+   Supply the same session, frame, view, generation and extents before the matched Present. */
 RSF_FRAME_DUMP_API void rsf_input_dump_result(const rsf_frame_record*, const char* stage, uint32_t backend, int32_t result);
 RSF_FRAME_DUMP_API void rsf_input_dump_sr_frame(const rsf_sr_frame*, uint32_t backend, uint32_t input_sdr);
 /* Immediate-context convenience adapter for D3D11 integrations. Generic frame identity

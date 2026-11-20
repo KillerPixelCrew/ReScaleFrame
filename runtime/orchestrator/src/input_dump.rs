@@ -2,10 +2,10 @@
 use crate::com_ref::ComRef;
 use crate::render_abi::{rsf_backend_log_fn, rsf_dlss_frame, rsf_fg_frame, rsf_sr_frame};
 use rsf_game_sys::{
-    RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_GAME_FRAME_ABI_VERSION, RSF_GAME_RENDER_FINAL_SCENE,
-    RSF_GAME_RENDER_NO_FG, RSF_GAME_RENDER_PRIMARY, RSF_GAME_RENDER_SR,
-    RSF_GAME_RENDER_UI_COMPOSITE, rsf_camera_frame, rsf_frame_record, rsf_game_depth_domains,
-    rsf_game_render_pass,
+    RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION,
+    RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_NO_FG, RSF_GAME_RENDER_PRIMARY,
+    RSF_GAME_RENDER_SR, RSF_GAME_RENDER_UI_COMPOSITE, rsf_camera_frame, rsf_frame_record,
+    rsf_game_depth_domains, rsf_game_render_pass,
 };
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_char, c_void};
@@ -360,6 +360,53 @@ impl Capture {
                     && id.view == pass.view_key
                     && id.family == pass.family_key
             })
+        }
+    }
+
+    fn fill_sr_metadata(&mut self, frame: &rsf_frame_record, backend: u32) {
+        let Some(mut selected) = self.record else {
+            return;
+        };
+        let extent = |record: &rsf_frame_record| {
+            [
+                record.render_width,
+                record.render_height,
+                record.output_width,
+                record.output_height,
+            ]
+        };
+        let dimensions = extent(&selected);
+        if self.present_result.is_some() || extent(frame) != dimensions {
+            return;
+        }
+        let camera = frame.camera;
+        let has_camera = |camera: &rsf_camera_frame| {
+            camera.struct_size as usize >= size_of::<rsf_camera_frame>()
+                && camera.abi_version == RSF_GAME_CAMERA_ABI_VERSION
+        };
+        let fill_camera = !has_camera(&selected.camera)
+            && has_camera(&camera)
+            && [
+                camera.render_width,
+                camera.render_height,
+                camera.output_width,
+                camera.output_height,
+            ] == dimensions;
+        let backend = if self.backend == 0 {
+            backend
+        } else {
+            self.backend
+        };
+        if !fill_camera && backend == self.backend {
+            return;
+        }
+        if fill_camera {
+            selected.camera = camera;
+        }
+        if metadata::frame(&self.bundle, &selected, backend).is_ok() {
+            self.record = Some(selected);
+            self.backend = backend;
+            self.constants = true;
         }
     }
 

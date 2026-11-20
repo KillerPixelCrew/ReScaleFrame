@@ -11,6 +11,7 @@
 #include <stdint.h>
 
 struct rsf_frame_record;
+struct rsf_camera_frame;
 struct rsf_game_render_pass;
 
 typedef void (*rsf_anomaly_sr_log)(void*, const char*);
@@ -234,6 +235,7 @@ typedef struct rsf_anomaly_sr_dump {
     int (*texture_record)(void*, const struct rsf_frame_record*, const char*, const char*, void*, uint32_t, float);
     void (*complete)(const struct rsf_frame_record*, int32_t);
     void (*cancel)(uint64_t);
+    void (*result)(const struct rsf_frame_record*, const char*, uint32_t, int32_t);
 } rsf_anomaly_sr_dump;
 
 typedef struct rsf_anomaly_sr_stage_platform {
@@ -292,7 +294,7 @@ typedef struct rsf_anomaly_sr_stage_platform {
     uint32_t (*driver_output_format)(void);
     bool (*driver_planned)(uint32_t output_width, uint32_t output_height, uint32_t* render_width, uint32_t* render_height);
     void (*driver_boundary)(uint32_t output_width, uint32_t output_height);
-    bool (*driver_evaluate)(const rsf_anomaly_sr_pass*);
+    bool (*driver_evaluate)(const rsf_anomaly_sr_pass*, struct rsf_camera_frame*, uint32_t*);
     bool (*driver_request_dump)(const char* prefix_utf8);
     void (*driver_count)(uint8_t refusal);
     void (*driver_count_bilinear)(void);

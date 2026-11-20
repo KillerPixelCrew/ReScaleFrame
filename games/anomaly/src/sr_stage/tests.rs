@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::*;
+use rsf_game_sys::rsf_camera_frame;
 use std::cell::RefCell;
 
 // A fake leaf table: each test thread records the calls its stage makes, in order.
@@ -179,7 +180,11 @@ extern "C" fn driver_count_bilinear() {
 extern "C" fn driver_count_prepared(missing: bool) {
     record(format!("prepared missing={missing}"));
 }
-unsafe extern "C" fn driver_evaluate(pass: *const rsf_anomaly_sr_pass) -> bool {
+unsafe extern "C" fn driver_evaluate(
+    pass: *const rsf_anomaly_sr_pass,
+    _: *mut rsf_camera_frame,
+    _: *mut u32,
+) -> bool {
     let pass = unsafe { *pass };
     record("evaluate");
     fake(|f| {
@@ -608,6 +613,7 @@ fn temporal_seam_counts_each_refusal_once_and_always_draws_a_world_image() {
         ]
     );
     let pass = fake(|f| f.passes.pop()).unwrap();
+    assert_eq!(pass.native_frame, 9);
     assert!(!pass.motion_missing && pass.jitter.applied && pass.generation == 3);
     assert_eq!((pass.render_width, pass.output_width), (1280, 1920));
     // A motion target from another frame is not this frame's motion.

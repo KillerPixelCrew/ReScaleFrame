@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 use crate::sr_pass::{PassInputs, ResetFacts, ResetReason, build_pass, reset_reason};
 use crate::sr_stage::plan_for_render;
-use rsf_game_sys::rsf_game_log_fn;
 use rsf_game_sys::sr_abi::*;
+use rsf_game_sys::{rsf_camera_frame, rsf_game_log_fn};
 use std::cell::UnsafeCell;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr::{null, null_mut};
@@ -878,6 +878,8 @@ unsafe extern "C" fn rsf_anomaly_sr_evaluate(
     context: Raw,
     inputs: &mut PassInputs,
     facts: &ResetFacts,
+    captured_camera: *mut rsf_camera_frame,
+    captured_backend: *mut u32,
 ) -> bool {
     let render = unsafe { &mut *driver.render.get() };
     let Some(api) = render.api.filter(|_| !render.device.is_null()) else {
@@ -958,6 +960,12 @@ unsafe extern "C" fn rsf_anomaly_sr_evaluate(
     status.last_output_width = pass.camera.output_width;
     status.last_output_height = pass.camera.output_height;
     status.reason("");
+    if !captured_camera.is_null() && !captured_backend.is_null() {
+        unsafe {
+            captured_camera.write(pass.camera);
+            captured_backend.write(backend);
+        }
+    }
     true
 }
 

@@ -805,7 +805,7 @@ const rsf_anomaly_sr_stage_platform platform{
     .driver_output_format = [] { return driver.output_format(); },
     .driver_planned = [](uint32_t ow, uint32_t oh, uint32_t* rw, uint32_t* rh) { return driver.planned_render(ow, oh, *rw, *rh); },
     .driver_boundary = [](uint32_t width, uint32_t height) { driver.boundary(host.device(), width, height); },
-    .driver_evaluate = [](const rsf_anomaly_sr_pass* in) {
+    .driver_evaluate = [](const rsf_anomaly_sr_pass* in, rsf_camera_frame* camera, uint32_t* backend) {
         auto& t = host.temporal;
         rsf_anomaly_sr_pass_inputs pass{};
         pass.frame = *in;
@@ -814,7 +814,7 @@ const rsf_anomaly_sr_stage_platform platform{
         pass.depth = host.depth.texture.Get();
         pass.motion = t.motion.Get();
         pass.exposure = in->exposure_auto ? nullptr : t.exposure.Get();
-        return driver.evaluate(host.context(), pass, {.sequence = in->reset_sequence, .cut = in->cut});
+        return driver.evaluate(host.context(), pass, {.sequence = in->reset_sequence, .cut = in->cut}, camera, backend);
     },
     .driver_request_dump = [](const char* prefix) {
         try { return driver.request_dump(prefix); } catch (...) { return false; }
@@ -861,6 +861,7 @@ const rsf_anomaly_sr_stage_platform platform{
         out->texture_record = reinterpret_cast<decltype(out->texture_record)>(get("rsf_input_dump_texture_record"));
         out->complete = reinterpret_cast<decltype(out->complete)>(get("rsf_input_dump_complete"));
         out->cancel = reinterpret_cast<decltype(out->cancel)>(get("rsf_input_dump_cancel"));
+        out->result = reinterpret_cast<decltype(out->result)>(get("rsf_input_dump_result"));
         return out->configure && out->request && out->poll && out->requested && out->begin_record && out->texture_record &&
             out->complete && out->cancel;
     },

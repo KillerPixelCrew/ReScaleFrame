@@ -205,3 +205,28 @@ final-color captures were saved, and the game exited with code 0.
 The overlay jitter control was not changed in that run. Evidence is
 in `evidence/standard-cold-resize/`. The Runtime and embedded AC7,
 Loader and Minecraft DLLs retained their recorded export inventories.
+
+## Capture identity at evaluation
+
+The earlier live captures reserved their frame at main-view prepare.
+Their headers carried dimensions and resource generation, but lacked
+the camera and left the backend at zero. The provider sidecar carried
+the actual jitter and backend under the dump prefix. The Stage 5
+evaluation now supplies the camera and effective backend to the
+existing capture result call after a successful evaluation, for the
+same guarded engine frame, resource generation and dimensions. The
+leased pass now reports the guarded engine frame counter where it
+previously used the index of the jitter publication.
+
+The Runtime accepts this metadata only for the selected frame and
+before its matched Present. It fills fields missing from the header
+and retains any already recorded camera or backend. The linked and DLL
+CPU capture contracts reject a failure, stale generation and wrong
+dimensions, then verify the accepted camera and backend in the header.
+The Stage 5 fixture checks the engine frame passed to evaluation.
+
+The thin carrier retains its Runtime and adapter references for the
+process lifetime. Anomaly pins its adapter once native trampolines are
+installed. The lifecycle contract covers callback retirement through
+quiesce and stop, and the game runs cover normal engine exit. No
+live module-unload path is exposed by the thin carrier.
