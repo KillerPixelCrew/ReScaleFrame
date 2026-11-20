@@ -11,6 +11,7 @@ struct Fake {
     generation: u64,
     eye_x: f32,
     window_open: bool,
+    suppress_swap: bool,
     jittered: bool,
     refused: bool,
     driver_enabled: bool,
@@ -91,7 +92,7 @@ unsafe extern "C" fn prepare(facts: *const rsf_anomaly_sr_frame_facts) -> bool {
         "prepare stage={} jitter={} render={}x{}",
         facts.stage, facts.jitter, facts.render_width, facts.render_height
     ));
-    let open = !facts.scope && facts.stage == 2;
+    let open = !facts.scope && facts.stage == 2 && !fake(|f| f.suppress_swap);
     fake(|f| {
         f.window_open = open;
         f.jittered = open && facts.jitter;
@@ -362,6 +363,40 @@ fn installed(stage: u32, table: &Platform) -> Stage {
     assert!(driver.active());
     calls();
     driver
+}
+
+#[test]
+fn fg_borrows_stock_depth_only_after_the_matching_unswapped_sr_off_prepare() {
+    let table = platform();
+    let driver = installed(5, &table);
+    fake(|f| {
+        f.suppress_swap = true;
+        f.engine_frame = 7;
+        f.scope = true;
+    });
+    driver.prepare(null_mut());
+    assert!(driver.owns_depth(7));
+
+    fake(|f| f.scope = false);
+    driver.prepare(null_mut());
+    assert!(!driver.owns_depth(7));
+    assert!(driver.owns_depth(6));
+    assert!(driver.owns_depth(8));
+
+    // The next frame must prove its own eligibility even if the engine repeats the ID.
+    driver.frame_end();
+    assert!(driver.owns_depth(7));
+
+    fake(|f| f.driver_enabled = true);
+    driver.prepare(null_mut());
+    assert!(driver.owns_depth(7));
+
+    fake(|f| {
+        f.driver_enabled = false;
+        f.suppress_swap = false;
+    });
+    driver.prepare(null_mut());
+    assert!(driver.owns_depth(7));
 }
 
 fn wide_text(text: &str) -> Vec<u16> {

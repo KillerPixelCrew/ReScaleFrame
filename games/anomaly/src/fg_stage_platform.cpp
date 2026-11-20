@@ -9,6 +9,8 @@
 #include <algorithm>
 #include <cstring>
 
+extern "C" bool rsf_anomaly_sr_stage_owns_depth(uint32_t native_frame) noexcept;
+
 namespace rsf::anomaly::fg {
 namespace {
 using Microsoft::WRL::ComPtr;
@@ -63,7 +65,7 @@ const rsf_anomaly_fg_platform& platform() noexcept {
         &input_platform(), sr::engine_version, sr::project_id, sr::view_space_to_meters,
         [](const rsf_anomaly_fg_overlay_link* link) { overlay_link.store(link, std::memory_order_release); },
         &engine_depth_view,
-        [] { return sr::options().world_window(); },
+        rsf_anomaly_sr_stage_owns_depth,
         [] {
             const auto target = motion::frame_target();
             return rsf_anomaly_fg_motion_target{target.texture, target.width, target.height, target.frame, target.written, target.main};

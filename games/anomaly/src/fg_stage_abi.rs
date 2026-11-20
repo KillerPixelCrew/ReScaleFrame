@@ -961,7 +961,7 @@ pub struct rsf_anomaly_fg_platform {
         ::core::option::Option<unsafe extern "C" fn(link: *const rsf_anomaly_fg_overlay_link)>,
     pub engine_depth_view:
         ::core::option::Option<unsafe extern "C" fn(rva: u32) -> *mut ::core::ffi::c_void>,
-    pub sr_owns_depth: ::core::option::Option<unsafe extern "C" fn() -> bool>,
+    pub sr_owns_depth: ::core::option::Option<unsafe extern "C" fn(native_frame: u32) -> bool>,
     pub motion_target:
         ::core::option::Option<unsafe extern "C" fn() -> rsf_anomaly_fg_motion_target>,
     pub immediate_context: ::core::option::Option<

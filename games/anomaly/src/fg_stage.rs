@@ -426,8 +426,8 @@ impl Stage {
         render: Render,
         previous: Option<Camera>,
     ) {
-        // In Stage 2 through 5, only an SR evaluation owns the right depth for FG.
-        if unsafe { self.platform.sr_owns_depth.unwrap()() } {
+        // A reduced world frame needs the depth supplied by the SR stage.
+        if unsafe { self.platform.sr_owns_depth.unwrap()(render.native_frame) } {
             return;
         }
         let Some(camera) = render.camera else { return };

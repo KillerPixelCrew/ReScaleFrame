@@ -39,7 +39,7 @@ typedef struct rsf_anomaly_fg_platform {
     void (*publish_overlay)(const rsf_anomaly_fg_overlay_link* link);
     // Selected from the fingerprinted profile. Returns a borrowed depth view.
     void* (*engine_depth_view)(uint32_t rva);
-    bool (*sr_owns_depth)(void);
+    bool (*sr_owns_depth)(uint32_t native_frame);
     rsf_anomaly_fg_motion_target (*motion_target)(void);
     // Owned COM references; released with inputs->release_interface.
     void* (*immediate_context)(void* chain);

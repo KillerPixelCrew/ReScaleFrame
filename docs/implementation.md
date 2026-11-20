@@ -392,6 +392,28 @@ offscreen DLSS run logged the expected absence of a Present callback.
 The staged artifacts and fixture receipts are recorded separately
 from game results. See [the device acceptance results](research/rust-anomaly-sr-pass.md#offscreen-device-acceptance).
 
+The same build ran Anomaly 1.5.3 Standard and AVX from an isolated save.
+Both reported 569 DLSS evaluations with zero refusals at the last status
+sample. Both resized from 1280×720 to 1600×900, saved three SR and final
+color captures, and exited through the engine's quit path with code 0.
+The pipeline sidecars contain the evaluated jitter, backend and
+clip-to-previous matrix. The general capture headers lack that camera
+metadata. Both feeds reached the FG provider, which stayed inactive.
+The original C++ adapter also reported inactive FG with the merged
+Runtime in an isolated Standard comparison. A foreground Standard run
+then confirmed DLSS-G 2× before and after resizing and saved live
+sharpening changes through the overlay. Disabling SR restored native
+rendering and exposed an FG depth admission defect. Stage 5 now admits
+native depth for the exact main frame that prepared with SR off and
+never swapped its targets. Gameplay keyboard consumption, forced
+reduced-frame recovery, AVX foreground FG and explicit plugin unload
+remain open. See [the game results](research/rust-anomaly-sr-pass.md#scripted-anomaly-153-runs).
+
+The merged Release sharpening fixtures passed on D3D11, D3D12 and
+Vulkan. The D3D11 fixture checks that Depth RCAS and Depth DAS preserve
+source channel ratios and alpha in HDR and when output clamping applies.
+See [the sharpening results](research/sharpening.md#depth-mode-color-preservation).
+
 The first source inspection found that the public frame sequencer opened a rendered
 frame and assigned its provenance under separate locks. Direct callers could read
 or retire the slot between those operations. The FG session adds its own outer

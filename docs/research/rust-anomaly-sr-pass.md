@@ -91,3 +91,77 @@ The offscreen DLSS fixture reported that Streamline did not observe
 textures and vendor DLLs. In-game presentation, input, overlay interaction
 and plugin teardown still require game evidence. The fixture reads and
 removes its temporary comparison images as part of the run.
+
+## Scripted Anomaly 1.5.3 runs
+
+Standard and AVX used the same save, MSVC Release artifacts from
+`58fe95acdca6`, DLSS Quality with automatic exposure and DLSS-G 2×
+requested. Both used a disposable copy of the game. The first attempted
+Standard run retained `keypress_on_start on`. The actor never entered its
+update callback and the runner stopped that process at its time limit.
+The subsequent runs set `keypress_on_start off` in the test copy only.
+
+A test script registered an actor update callback and queued a display
+resize and a normal engine quit after the save loaded. This exercised the
+game's command and teardown paths. The script sent no keyboard or
+mouse events. [Anomaly callback reference](https://github.com/TheParaziT/anomaly-modding-book/blob/main/docs/tutorials/scripting/callbacks.md),
+[X-Ray console binding](https://raw.githubusercontent.com/themrdemonized/xray-monolith/028ccf5f5189b393396480076b11e40852ba3ecd/src/xrGame/console_registrator_script.cpp),
+[X-Ray quit command](https://raw.githubusercontent.com/themrdemonized/xray-monolith/028ccf5f5189b393396480076b11e40852ba3ecd/src/xrEngine/xr_ioc_cmd.cpp#L63-L74).
+
+Both profiles reported 569 DLSS evaluations and zero refusals in the
+last periodic SR status. The resize completed once on each profile.
+Native rendering changed from 1280×720 to 1600×900, and the DLSS
+input changed from 853×480 to 1067×600. Both logged level destruction
+and Direct3D shutdown, and exited with code 0. Streamline logged that
+the underlying swap chain still had one reference, as it had in the
+C++ baseline. Explicit plugin unload and GPU resource retirement were
+not measured.
+
+Each profile saved SR color, depth, motion and output with the final
+color. The bundle identified frame 151 as generation 1 and frames 392
+and 632 as generation 2, all on the main view. The capture arm was
+recorded before evaluation, so its `frame.json` had no camera and left
+the backend at 0. The synchronous pipeline sidecars, named by the
+matching frame IDs, recorded the actual backend, jitter, render and
+output extents, motion scales and clip-to-previous matrix. The bundle
+header and the vendor inputs remain separate records.
+
+Both profiles submitted HUD-less color, depth and motion to the FG path
+and presented through it. The vendor reported one display present per
+source present and `active=0`, so these runs did not demonstrate
+generated frames. The `standard` and `avx` evidence directories under
+`.local/anomaly/staging/live-58fe95a-stage5/evidence/` hold the two log
+sets, input settings, exit status and capture bundles.
+
+The Standard comparison used the original C++ adapter from
+`8322179a36c7` with the same merged Runtime and the same game executable,
+settings, script and autosave. The engine registered the script's actor
+callback but never reached it. SR evaluated and FG accepted level frames
+at the original resolution, with `active=0` throughout. The runner stopped
+the isolated process at its time limit. This comparison reproduces inactive
+FG with the C++ adapter on the merged Runtime. It does not isolate the
+cause or reproduce the successful resize and shutdown. The inputs and logs
+are in `evidence/standard-cpp-adapter/` beside the Rust runs.
+
+The foreground Standard run with the Rust adapter used the same build,
+save and resize. DLSS-G activated before the resize and resumed after it.
+In steady windows the Runtime recorded 240 vendor presents per 120
+source frames. The HUD showed about 60 rendered and 120 presented fps.
+Insert opened and closed the panel. Its first opening drew all 2,452
+visible frames, consumed pointer events, and applied and saved three
+sharpening mode changes. A brief Escape press after closing the panel did
+not open the game menu, so this run did not prove that gameplay consumed
+keyboard input after the overlay returned it.
+
+Switching SR off kept the native image visible and suspended FG. The
+next complete window reported 120 level frames, zero feeds, and 120
+missing-input skips. The engine then quit with code 0. Evidence is in
+`evidence/standard-foreground/` beside the scripted runs.
+
+The SR-off gate used the configured stage number, which assigned depth
+to the SR pass even when Stage 5 left the real world targets installed.
+The stage now records the native frame at main-view prepare if the swap
+stayed closed with SR disabled. FG may use its existing native depth
+and matching motion path only for that frame. The stage clears this
+eligibility at frame end and when stopped. A regression covers scope,
+stale frame IDs, frame end, enabled SR and an actual swap.

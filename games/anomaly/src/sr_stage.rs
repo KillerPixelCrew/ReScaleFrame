@@ -470,6 +470,7 @@ struct State {
     frames: u64,
     frames_without_world: u64,
     prepared_this_frame: bool,
+    native_depth_frame: Option<u32>,
     current_scale: f32,
     scale_generation: u64,
     last_plan: rsf_anomaly_sr_plan,
@@ -502,6 +503,7 @@ impl Default for State {
             frames: 0,
             frames_without_world: 0,
             prepared_this_frame: false,
+            native_depth_frame: None,
             current_scale: DEFAULT_SCALE,
             scale_generation: u64::MAX,
             last_plan: rsf_anomaly_sr_plan::default(),
@@ -795,6 +797,14 @@ impl Stage {
         self.active.load(Ordering::Acquire)
     }
 
+    fn owns_depth(&self, native_frame: u32) -> bool {
+        let stage = self.stage.load(Ordering::Acquire);
+        world_window(stage)
+            && (stage != 5
+                || !self.active()
+                || self.with(|state| state.native_depth_frame != Some(native_frame)))
+    }
+
     pub(crate) fn jitter(&self) -> JitterState {
         self.with(|state| state.published)
     }
@@ -874,6 +884,7 @@ impl Stage {
         let swap =
             (stage == 1 || world_window(stage)) && (stage != 5 || leaf!(p, driver_enabled()));
         leaf!(p, set_swap_enabled(swap));
+        state.native_depth_frame = None;
         state.current_scale = clamp_scale(state.config.scale);
         state.scale_generation = u64::MAX;
         // Stage 3: the main projection is jittered here, the first-person ones only through the shared rmNear slot.
@@ -1064,6 +1075,7 @@ impl Stage {
         let mut guard = self.lock();
         let state = guard.get_or_insert_with(Default::default);
         leaf!(p, shutdown());
+        state.native_depth_frame = None;
         leaf!(p, timer_reset());
         self.publish(state, default_jitter());
         state.main_state = default_jitter();
@@ -1395,7 +1407,16 @@ impl Stage {
         }
         let (sample, reset) = self.choose_jitter(state, &mut facts);
         state.prepared_this_frame = true;
-        leaf!(p, prepare(&facts));
+        let swapped = leaf!(p, prepare(&facts));
+        if state.config.stage == 5 && (swapped || !facts.scope) {
+            // Expose the stock depth only for the main frame that actually ran with SR off.
+            state.native_depth_frame = if !swapped && !facts.scope && !leaf!(p, driver_enabled()) {
+                let frame = leaf!(p, engine_frame());
+                (frame != 0).then_some(frame)
+            } else {
+                None
+            };
+        }
         self.publish_jitter(state, &facts, &sample, reset);
         if !facts.scope {
             state.world_frames += 1;
@@ -1767,6 +1788,7 @@ impl Stage {
         let mut guard = self.lock();
         let state = guard.get_or_insert_with(Default::default);
         leaf!(p, frame_end());
+        state.native_depth_frame = None;
         if state.config.stage == 5 {
             // The drained boundary: this frame's SR work is submitted and Present has not run. Start the pipeline,
             // follow a device or output change and apply the shared settings; the next H1 plans its render size.
@@ -2243,6 +2265,10 @@ extern "C" fn rsf_anomaly_sr_stage_quiesce() -> bool {
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_sr_stage_active() -> bool {
     STAGE.active()
+}
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_sr_stage_owns_depth(native_frame: u32) -> bool {
+    STAGE.owns_depth(native_frame)
 }
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_sr_stage_prepare(this: *mut c_void) {

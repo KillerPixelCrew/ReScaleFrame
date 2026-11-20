@@ -291,5 +291,18 @@ FXC compiled both depth shaders as `cs_5_0` with warnings treated as
 errors. DXC and `spirv-val` regenerated and validated the Vulkan variants.
 The D3D11 regression fixture adds a colored HDR ramp and a colored clamp
 case. All three device fixtures built in MSVC Debug and Release, and
-four CPU contracts passed per configuration. Device execution and the
-reported in-game image remain unverified on this revision.
+four CPU contracts passed per configuration.
+
+The merged MSVC Release build at `58fe95acdca6` passed all three offscreen
+device fixtures. D3D11 passed 16 dispatches, including the colored HDR ramp
+and clamp cases that check channel ratios and alpha for both depth modes.
+D3D12 passed 21 dispatches with zero debug messages. Vulkan passed 30
+dispatches on an RTX 4070 Laptop GPU. Fixture hashes and the CTest transcript
+are in `.local/anomaly/staging/58fe95acdca6/device-evidence/`.
+The [C++ adapter baseline](rust-anomaly-cpp-baseline.md) records a fixed-view
+comparison of the three modes in Anomaly. The merged Rust adapter also
+switched live among RCAS, Depth RCAS and Depth DAS in the same indoor
+view at sharpness 0.75, with Clamp Output enabled for the depth modes
+and Debug View off. The observed view showed no visible warm shift
+between modes. The panel saved all three changes while DLSS-G stayed
+active. The device ramp supplies the channel-ratio measurement.
