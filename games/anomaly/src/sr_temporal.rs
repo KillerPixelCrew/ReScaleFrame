@@ -1,0 +1,1241 @@
+// SPDX-License-Identifier: MIT
+use rsf_game_sys::sr_abi::*;
+use rsf_game_sys::{rsf_game_log_fn, rsf_game_render_pass};
+use std::cell::UnsafeCell;
+use std::ffi::{CStr, CString, c_char, c_void};
+use std::mem::MaybeUninit;
+use std::ptr::{null, null_mut};
+use std::sync::{Mutex, MutexGuard};
+use std::time::Instant;
+
+type Raw = *mut c_void;
+const OK: i32 = 0;
+const STREAMLINE_FAILED: i32 = -5;
+const NOT_SUPPORTED: i32 = -6;
+const DLSS: u32 = 1;
+const FSR3: u32 = 3;
+const FSR4: u32 = 4;
+const XESS: u32 = 5;
+
+fn backend_name(backend: u32) -> &'static str {
+    match backend {
+        DLSS => "DLSS",
+        2 => "FSR2",
+        FSR3 => "FSR3",
+        FSR4 => "FSR4",
+        XESS => "XeSS",
+        _ => "none",
+    }
+}
+
+fn result_name(result: i32) -> &'static str {
+    match result {
+        OK => "ok",
+        -1 => "invalid argument",
+        -2 => "ABI mismatch",
+        -3 => "already running",
+        -4 => "not running",
+        STREAMLINE_FAILED => "Streamline failed",
+        NOT_SUPPORTED => "not supported",
+        -7 => "resource failed",
+        -8 => "motion decode failed",
+        -9 => "frame refused",
+        -10 => "evaluate failed",
+        _ => "other",
+    }
+}
+
+fn start_refusal(result: i32) -> String {
+    match result {
+        NOT_SUPPORTED => "SR off: the SR pipeline needs DLSS support on this GPU".into(),
+        STREAMLINE_FAILED => {
+            "SR off (bilinear): Streamline failed to start; check SRStreamlineDir in the log".into()
+        }
+        _ => format!(
+            "SR off (bilinear): the SR pipeline did not start ({})",
+            result_name(result)
+        ),
+    }
+}
+
+fn copy_text(out: &mut [c_char], text: &str) {
+    if out.is_empty() {
+        return;
+    }
+    let mut count = text.len().min(out.len() - 1);
+    while !text.is_char_boundary(count) {
+        count -= 1;
+    }
+    for (out, byte) in out[..count].iter_mut().zip(text.bytes()) {
+        *out = byte as c_char;
+    }
+    out[count] = 0;
+}
+
+#[repr(u8)]
+enum ApiStatus {
+    Bound,
+    Missing,
+    Refused,
+}
+
+fn validate_api(table: rsf_d3d11_sr_api) -> Result<rsf_d3d11_sr_api, &'static CStr> {
+    if table.struct_size < size_of::<rsf_d3d11_sr_api>() as u32
+        || table.abi_version != RSF_D3D11_SR_API_VERSION
+    {
+        return Err(c"the Runtime's SR API table is short or of another version");
+    }
+    if table.pipeline_abi_version != RSF_DLSS_PIPELINE_ABI_VERSION {
+        return Err(c"the Runtime's SR pipeline structures are of another version");
+    }
+    if table.start.is_none()
+        || table.evaluate.is_none()
+        || table.reset.is_none()
+        || table.stop.is_none()
+        || table.status.is_none()
+        || table.select_backend.is_none()
+        || table.set_quality.is_none()
+        || table.set_preset.is_none()
+        || table.resize_output.is_none()
+        || table.output_texture.is_none()
+        || table.request_dump.is_none()
+        || table.set_sharpening.is_none()
+    {
+        return Err(c"the Runtime's SR API table has a missing entry");
+    }
+    Ok(table)
+}
+
+fn query_api(
+    query: rsf_get_d3d11_sr_api_fn,
+) -> Result<rsf_d3d11_sr_api, (ApiStatus, &'static CStr)> {
+    let Some(query) = query else {
+        return Err((
+            ApiStatus::Missing,
+            c"the Runtime does not export rsf_get_d3d11_sr_api",
+        ));
+    };
+    let mut table = rsf_d3d11_sr_api {
+        struct_size: size_of::<rsf_d3d11_sr_api>() as u32,
+        abi_version: RSF_D3D11_SR_API_VERSION,
+        ..Default::default()
+    };
+    // The resolver supplies the carrier-loaded Runtime's versioned query.
+    match unsafe { query(&mut table) } {
+        OK => validate_api(table).map_err(|reason| (ApiStatus::Refused, reason)),
+        -2 => Err((
+            ApiStatus::Refused,
+            c"the Runtime's SR API version does not match",
+        )),
+        _ => Err((ApiStatus::Refused, c"the Runtime refused the SR API query")),
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Settings {
+    enabled: bool,
+    backend: u32,
+    quality: u32,
+    preset: u32,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            backend: DLSS,
+            quality: 1,
+            preset: 0,
+        }
+    }
+}
+
+impl Settings {
+    fn admitted(self, current: Self, backends: u32, qualities: u32) -> Self {
+        let supports = |bits: u32, id| bits.checked_shr(id).unwrap_or(0) & 1 != 0;
+        Self {
+            backend: if supports(backends, self.backend) {
+                self.backend
+            } else {
+                current.backend
+            },
+            quality: if supports(qualities, self.quality) {
+                self.quality
+            } else {
+                current.quality
+            },
+            ..self
+        }
+    }
+}
+
+#[repr(C)]
+struct DriverOptions {
+    stage: u32,
+    exposure_auto: bool,
+    colour_transport: bool,
+    first_person_zero: bool,
+    backends: u32,
+    qualities: u32,
+    initial: Settings,
+    setup: rsf_dlss_pipeline_setup,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct ResetFacts {
+    first: bool,
+    device: bool,
+    settings: bool,
+    sequence: bool,
+    cut: bool,
+}
+
+#[derive(Clone, Copy)]
+#[repr(u8)]
+enum Refusal {
+    NotRunning,
+    Disabled,
+    Prepare,
+    Pass,
+    Pipeline,
+    Reinsert,
+}
+
+#[derive(Clone, Copy, Default)]
+#[repr(C)]
+struct Counters {
+    evaluated: [u64; 8],
+    refused: [u64; 6],
+    pass_errors: [u64; 6],
+    results: [u64; 12],
+    resets: [u64; 6],
+    starts: u64,
+    start_failures: u64,
+    stops: u64,
+    selects: u64,
+    select_failures: u64,
+    qualities: u64,
+    quality_failures: u64,
+    presets: u64,
+    resizes: u64,
+    resize_failures: u64,
+    bilinear: u64,
+    motion_missing: u64,
+    prepared: u64,
+    select_announced: u64,
+    longest_select_ms: u64,
+}
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct Status {
+    bound: bool,
+    running: bool,
+    pipeline: rsf_dlss_pipeline_status,
+    applied: Settings,
+    requested: Settings,
+    start_result: i32,
+    select_result: i32,
+    quality_result: i32,
+    last_evaluated: bool,
+    last_backend: u32,
+    last_render_width: u32,
+    last_render_height: u32,
+    last_output_width: u32,
+    last_output_height: u32,
+    jitter: [f32; 2],
+    motion_present: bool,
+    exposure_present: bool,
+    pending_backend: u32,
+    reason: [c_char; 96],
+}
+
+impl Default for Status {
+    fn default() -> Self {
+        Self {
+            bound: false,
+            running: false,
+            pipeline: fresh_pipeline_status(),
+            applied: Settings::default(),
+            requested: Settings::default(),
+            start_result: OK,
+            select_result: OK,
+            quality_result: OK,
+            last_evaluated: false,
+            last_backend: 0,
+            last_render_width: 0,
+            last_render_height: 0,
+            last_output_width: 0,
+            last_output_height: 0,
+            jitter: [0.0; 2],
+            motion_present: false,
+            exposure_present: false,
+            pending_backend: 0,
+            reason: [0; 96],
+        }
+    }
+}
+
+impl Status {
+    fn reason(&mut self, text: &str) {
+        copy_text(&mut self.reason, text);
+    }
+
+    fn reason_text(&self) -> &str {
+        // copy_text always leaves a NUL inside this array.
+        unsafe { CStr::from_ptr(self.reason.as_ptr()) }
+            .to_str()
+            .expect("SR status reason is UTF-8")
+    }
+}
+
+const _: () = {
+    assert!(size_of::<DriverOptions>() == 200);
+    assert!(std::mem::offset_of!(DriverOptions, setup) == 32);
+    assert!(size_of::<Settings>() == 16);
+    assert!(std::mem::offset_of!(Settings, backend) == 4);
+    assert!(size_of::<ResetFacts>() == 5);
+    assert!(size_of::<Counters>() == 424);
+    assert!(size_of::<Status>() == 288);
+    assert!(std::mem::offset_of!(Status, reason) == 188);
+};
+
+#[derive(Default)]
+struct Published {
+    stage: u32,
+    exposure_auto: bool,
+    first_person_zero: bool,
+    backends: u32,
+    qualities: u32,
+    status: Status,
+    counters: Counters,
+    last_quality: u32,
+    reported: Counters,
+}
+
+struct Setup {
+    template: rsf_dlss_pipeline_setup,
+    streamline: CString,
+    fidelityfx: CString,
+    xess: CString,
+}
+
+impl Setup {
+    // The facade builds the template from shared Anomaly constants. Its identity strings
+    // are static, and its log sink lives until the render driver is stopped.
+    fn new(mut template: rsf_dlss_pipeline_setup) -> Self {
+        // Config's directory arguments are borrowed only during configure.
+        let streamline = unsafe { CStr::from_ptr(template.streamline_directory_utf8) }.to_owned();
+        let fidelityfx = unsafe { CStr::from_ptr(template.fsr3_directory_utf8) }.to_owned();
+        let xess = unsafe { CStr::from_ptr(template.xess_directory_utf8) }.to_owned();
+        template.streamline_directory_utf8 = null();
+        template.fsr3_directory_utf8 = null();
+        template.fsr4_directory_utf8 = null();
+        template.xess_directory_utf8 = null();
+        Self {
+            template,
+            streamline,
+            fidelityfx,
+            xess,
+        }
+    }
+
+    fn for_output(&self, width: u32, height: u32, quality: u32) -> rsf_dlss_pipeline_setup {
+        rsf_dlss_pipeline_setup {
+            output_width: width,
+            output_height: height,
+            quality,
+            streamline_directory_utf8: self.streamline.as_ptr(),
+            fsr3_directory_utf8: self.fidelityfx.as_ptr(),
+            fsr4_directory_utf8: self.fidelityfx.as_ptr(),
+            xess_directory_utf8: self.xess.as_ptr(),
+            ..self.template
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct StartRequest {
+    device: Raw,
+    output: [u32; 2],
+    settings: Settings,
+}
+
+#[derive(Default)]
+struct RenderState {
+    setup: Option<Setup>,
+    colour_transport: bool,
+    api: Option<rsf_d3d11_sr_api>,
+    device: Raw, // identity only: the running Runtime owns its device reference
+    failed_start: Option<StartRequest>,
+    applied: Settings,
+    refused_request: Option<Settings>,
+    resets: ResetFacts,
+    pending_backend: Option<u32>,
+    prepared_backends: u32,
+    session: u64,
+}
+
+// Native Stage serializes render operations with its render guard and quiesces before
+// teardown. Overlay readers and request writers only use the mutex-protected snapshot.
+// The mutex is released before calling the Runtime or a log sink, which can publish UI.
+struct Driver {
+    render: UnsafeCell<RenderState>,
+    published: Mutex<Published>,
+}
+
+impl Default for ResetFacts {
+    fn default() -> Self {
+        Self {
+            first: true,
+            device: false,
+            settings: false,
+            sequence: false,
+            cut: false,
+        }
+    }
+}
+
+impl Driver {
+    fn published(&self) -> MutexGuard<'_, Published> {
+        self.published
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+    }
+
+    fn refresh(&self, render: &RenderState) {
+        let pipeline = render
+            .pipeline_status()
+            .unwrap_or_else(fresh_pipeline_status);
+        let mut published = self.published();
+        let status = &mut published.status;
+        status.pipeline = pipeline;
+        status.running = !render.device.is_null();
+        status.applied = render.applied;
+        status.pending_backend = render.pending_backend.unwrap_or(0);
+    }
+
+    fn bind(
+        &self,
+        render: &mut RenderState,
+        result: Result<rsf_d3d11_sr_api, &'static CStr>,
+        session: u64,
+    ) -> bool {
+        if !render.device.is_null() {
+            return false; // the bound table still owns a live device
+        }
+        render.api = result.ok();
+        render.session = session;
+        render.failed_start = None;
+        let mut published = self.published();
+        published.status.bound = result.is_ok();
+        published.status.reason(match result {
+            Ok(_) => "",
+            Err(reason) => reason.to_str().expect("static ABI reason"),
+        });
+        result.is_ok()
+    }
+
+    fn start(&self, render: &mut RenderState, api: rsf_d3d11_sr_api, request: StartRequest) {
+        if render.failed_start == Some(request) {
+            return;
+        }
+        let Some(config) = &render.setup else { return };
+        let [ow, oh] = request.output;
+        let wanted = request.settings;
+        let setup = config.for_output(ow, oh, wanted.quality);
+        let streamline = config.streamline.to_string_lossy();
+        let fidelityfx = config.fidelityfx.to_string_lossy();
+        let xess = config.xess.to_string_lossy();
+        render.say(&format!(
+            "Anomaly SR stage 5: starting the shared SR pipeline at {ow}x{oh} (backend {}, quality {}, preset {}; Streamline {streamline}).",
+            backend_name(wanted.backend), wanted.quality, wanted.preset
+        ));
+        // The device is borrowed from the engine, and the setup strings span the call.
+        let result = unsafe { api.start.expect("validated SR start")(request.device, &setup) };
+        let mut published = self.published();
+        published.status.start_result = result;
+        if result != OK {
+            published.counters.start_failures += 1;
+            published.status.reason(&start_refusal(result));
+            drop(published);
+            render.failed_start = Some(request);
+            let detail = if result == NOT_SUPPORTED {
+                ". The shared D3D11 pipeline starts only where DLSS is supported; FSR and XeSS are reached through it"
+            } else {
+                ""
+            };
+            render.say(&format!(
+                "Anomaly SR stage 5: the SR pipeline did not start ({result}, {}){detail}; the seam stays bilinear.",
+                result_name(result)
+            ));
+            render.say(&format!(
+                "Anomaly SR stage 5: SR is OFF (bilinear upscale) until the device, output or settings change. Vendor directories: Streamline '{streamline}', FidelityFX '{fidelityfx}', XeSS '{xess}' (SRStreamlineDir, SRFidelityFXDir, SRXeSSDir)."
+            ));
+            return;
+        }
+        published.counters.starts += 1;
+        drop(published);
+        render.device = request.device;
+        render.failed_start = None;
+        render.resets.first = true;
+        render.applied = Settings {
+            backend: DLSS,
+            preset: 0,
+            ..wanted
+        };
+        render.refused_request = None;
+        self.apply(render, api, wanted);
+    }
+
+    fn apply(&self, render: &mut RenderState, api: rsf_d3d11_sr_api, wanted: Settings) {
+        // The Runtime builds a newly selected backend using the quality already in force.
+        if wanted.quality != render.applied.quality {
+            let mut size = [0, 0];
+            let result = unsafe {
+                api.set_quality.expect("validated SR quality")(
+                    wanted.quality,
+                    &mut size[0],
+                    &mut size[1],
+                )
+            };
+            let mut published = self.published();
+            published.counters.qualities += 1;
+            published.status.quality_result = result;
+            if result == OK {
+                render.applied.quality = wanted.quality;
+                render.resets.settings = true;
+            } else {
+                published.counters.quality_failures += 1;
+                drop(published);
+                render.say(&format!(
+                    "Anomaly SR stage 5: quality {} refused ({result}, {}); keeping {}.",
+                    wanted.quality,
+                    result_name(result),
+                    render.applied.quality
+                ));
+            }
+        }
+        if render
+            .pending_backend
+            .is_some_and(|backend| backend != wanted.backend)
+        {
+            render.pending_backend = None;
+        }
+        if wanted.backend != render.applied.backend {
+            let bit = 1 << wanted.backend;
+            let name = backend_name(wanted.backend);
+            if wanted.backend != DLSS
+                && render.prepared_backends & bit == 0
+                && render.pending_backend.is_none()
+            {
+                // Let the current Present show the pending backend before blocking at the next boundary.
+                render.pending_backend = Some(wanted.backend);
+                self.published().counters.select_announced += 1;
+                render.say(&format!(
+                    "Anomaly SR stage 5: preparing {name}. The first use makes the vendor build its pipelines and the game pauses until it is done (tens of seconds for FSR4 on a cold driver cache); the select runs at the next boundary."
+                ));
+                render.refused_request = None;
+                return;
+            }
+            render.pending_backend = None;
+            let begun = Instant::now();
+            let result = unsafe {
+                api.select_backend.expect("validated SR select")(
+                    wanted.backend,
+                    null_mut(),
+                    null_mut(),
+                )
+            };
+            let took = begun.elapsed().as_millis() as u64;
+            let mut published = self.published();
+            published.counters.selects += 1;
+            published.counters.longest_select_ms = published.counters.longest_select_ms.max(took);
+            published.status.select_result = result;
+            if result == OK {
+                render.applied.backend = wanted.backend;
+                render.resets.settings = true;
+                render.prepared_backends |= bit;
+                drop(published);
+                render.say(&format!(
+                    "Anomaly SR stage 5: {name} selected, the boundary took {took} ms."
+                ));
+            } else {
+                published.counters.select_failures += 1;
+                drop(published);
+                render.say(&format!(
+                    "Anomaly SR stage 5: backend {name} refused ({result}, {}) after {took} ms; keeping {}.",
+                    result_name(result), backend_name(render.applied.backend)
+                ));
+            }
+        }
+        if wanted.preset != render.applied.preset
+            && unsafe { api.set_preset.expect("validated SR preset")(wanted.preset) } == OK
+        {
+            self.published().counters.presets += 1;
+            render.applied.preset = wanted.preset;
+            render.resets.settings = true;
+        }
+        if wanted.enabled != render.applied.enabled {
+            render.applied.enabled = wanted.enabled;
+            render.resets.settings = true;
+        }
+        render.refused_request = (wanted != render.applied).then_some(wanted);
+    }
+
+    fn stop(&self, render: &mut RenderState) {
+        if render.device.is_null() {
+            return;
+        }
+        if let Some(api) = render.api {
+            unsafe { api.stop.expect("validated SR stop")() };
+        }
+        render.device = null_mut();
+        render.pending_backend = None;
+        {
+            let mut published = self.published();
+            published.counters.stops += 1;
+            published.status.running = false;
+            published.status.last_evaluated = false;
+            published.status.pending_backend = 0;
+            published.status.reason("SR pipeline stopped");
+        }
+        self.refresh(render);
+    }
+
+    fn boundary(&self, render: &mut RenderState, device: Raw, output: [u32; 2]) {
+        let Some(api) = render.api else { return };
+        let (stage, wanted) = {
+            let published = self.published();
+            (published.stage, published.status.requested)
+        };
+        if stage != 5 {
+            return;
+        }
+        if !render.device.is_null() && device != render.device {
+            render.say("Anomaly SR stage 5: the engine device changed; restarting the SR pipeline on the new device.");
+            self.stop(render);
+            render.resets.device = true;
+        }
+        let [ow, oh] = output;
+        if render.device.is_null() {
+            let request = StartRequest {
+                device,
+                output,
+                settings: wanted,
+            };
+            if render.failed_start != Some(request) {
+                render.failed_start = None;
+            }
+            if !device.is_null() && ow != 0 && oh != 0 && wanted.enabled {
+                self.start(render, api, request);
+            }
+        } else {
+            if render.refused_request != Some(wanted) {
+                render.refused_request = None;
+            }
+            if render.pending_backend.is_some()
+                || (wanted != render.applied && render.refused_request != Some(wanted))
+            {
+                self.apply(render, api, wanted);
+            }
+        }
+        if !render.device.is_null()
+            && ow != 0
+            && oh != 0
+            && let Some(status) = render.pipeline_status()
+            && [status.output_width, status.output_height] != output
+        {
+            let result = unsafe {
+                api.resize_output.expect("validated SR resize")(ow, oh, null_mut(), null_mut())
+            };
+            let mut published = self.published();
+            published.counters.resizes += 1;
+            published.counters.resize_failures += u64::from(result != OK);
+        }
+        self.refresh(render);
+    }
+}
+
+fn fresh_pipeline_status() -> rsf_dlss_pipeline_status {
+    rsf_dlss_pipeline_status {
+        struct_size: size_of::<rsf_dlss_pipeline_status>() as u32,
+        ..Default::default()
+    }
+}
+
+fn emit(log: rsf_game_log_fn, user: Raw, text: &str) {
+    if let Some(log) = log
+        && let Ok(text) = CString::new(text)
+    {
+        // The native facade's sink catches C++ exceptions before returning into Rust.
+        unsafe { log(user, text.as_ptr()) };
+    }
+}
+
+impl RenderState {
+    fn say(&self, text: &str) {
+        if let Some(config) = &self.setup {
+            emit(config.template.log, config.template.log_user, text);
+        }
+    }
+
+    fn pipeline_status(&self) -> Option<rsf_dlss_pipeline_status> {
+        let api = self.api?;
+        let mut status = fresh_pipeline_status();
+        let result = unsafe { api.status.expect("validated SR status")(&mut status) };
+        (result == OK).then_some(status)
+    }
+}
+
+type SetTransport = Option<unsafe extern "C" fn(u32)>;
+type Plan = unsafe extern "C" fn(u32, u32, u32, u32) -> bool;
+type BuildPass =
+    unsafe extern "C" fn(Raw, *const ResetFacts, u64, *mut rsf_game_render_pass, *mut u8) -> u8;
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_sr_create() -> *mut Driver {
+    Box::into_raw(Box::new(Driver {
+        render: UnsafeCell::new(RenderState::default()),
+        published: Mutex::default(),
+    }))
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_anomaly_sr_destroy(driver: *mut Driver) {
+    // The facade destroys this handle after explicit, quiesced stop in the plugin lifecycle.
+    drop(unsafe { Box::from_raw(driver) });
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_anomaly_sr_query(
+    query: rsf_get_d3d11_sr_api_fn,
+    out: &mut rsf_d3d11_sr_api,
+    reason: *mut *const c_char,
+) -> ApiStatus {
+    match query_api(query) {
+        Ok(table) => {
+            *out = table;
+            ApiStatus::Bound
+        }
+        Err((status, text)) => {
+            if !reason.is_null() {
+                unsafe { reason.write(text.as_ptr()) };
+            }
+            status
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_anomaly_sr_configure(driver: &Driver, options: &DriverOptions) {
+    // The facade serializes configuration with the render side of the handle.
+    let render = unsafe { &mut *driver.render.get() };
+    render.setup = Some(Setup::new(options.setup));
+    render.colour_transport = options.colour_transport;
+
+    let mut published = driver.published();
+    published.stage = options.stage;
+    published.exposure_auto = options.exposure_auto;
+    published.first_person_zero = options.first_person_zero;
+    published.backends = options.backends;
+    published.qualities = options.qualities;
+    published.status.requested =
+        options
+            .initial
+            .admitted(Settings::default(), options.backends, options.qualities);
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_anomaly_sr_bind(
+    driver: &Driver,
+    query: rsf_get_d3d11_sr_api_fn,
+    set_transport: SetTransport,
+    session: u64,
+) -> bool {
+    // The borrow covers only the serialized render state. Logging may read the published state.
+    let render = unsafe { &mut *driver.render.get() };
+    let result = query_api(query).map_err(|(_, reason)| reason);
+    let bound = driver.bind(render, result, session);
+    if bound && let Some(set_transport) = set_transport {
+        unsafe { set_transport(u32::from(render.colour_transport)) };
+        render.say(if render.colour_transport {
+            "Anomaly SR: DLSS colour as display-range encoding, HDR off (SRColourTransport=1)."
+        } else {
+            "Anomaly SR: DLSS colour as exposed linear, HDR on (SRColourTransport=0)."
+        });
+    }
+    let stage = driver.published().stage;
+    match result {
+        Ok(table) if bound => render.say(&format!(
+            "Anomaly SR stage {stage}: Runtime SR API bound (API {}, pipeline ABI {}).",
+            table.abi_version, table.pipeline_abi_version
+        )),
+        Err(reason) => render.say(&format!(
+            "Anomaly SR stage {stage}: {}; SR stays on the bilinear seam pass.",
+            reason.to_string_lossy()
+        )),
+        _ => {}
+    }
+    bound
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_anomaly_sr_bind_table(
+    driver: &Driver,
+    table: &rsf_d3d11_sr_api,
+    session: u64,
+) -> bool {
+    let render = unsafe { &mut *driver.render.get() };
+    let result = validate_api(*table);
+    let bound = driver.bind(render, result, session);
+    if let Err(reason) = result {
+        render.say(&format!("Anomaly SR stage 5: {}", reason.to_string_lossy()));
+    }
+    bound
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_sr_request(driver: &Driver, wanted: &Settings) {
+    let mut published = driver.published();
+    published.status.requested = wanted.admitted(
+        published.status.requested,
+        published.backends,
+        published.qualities,
+    );
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_sr_enabled(driver: &Driver) -> bool {
+    driver.published().status.requested.enabled
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_sr_running(driver: &Driver) -> bool {
+    driver.published().status.running
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_anomaly_sr_output_texture(driver: &Driver) -> Raw {
+    // This borrowed texture is used under the Stage render guard before another table call.
+    let render = unsafe { &*driver.render.get() };
+    match render.api {
+        Some(api) if !render.device.is_null() => unsafe {
+            api.output_texture.expect("validated SR output texture")()
+        },
+        _ => null_mut(),
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_anomaly_sr_plan(
+    driver: &Driver,
+    ow: u32,
+    oh: u32,
+    rw: *mut u32,
+    rh: *mut u32,
+    valid_plan: Plan,
+) -> bool {
+    let status = driver.published().status;
+    let pipeline = status.pipeline;
+    if !status.running
+        || pipeline.running == 0
+        || [pipeline.output_width, pipeline.output_height] != [ow, oh]
+        || !unsafe { valid_plan(ow, oh, pipeline.render_width, pipeline.render_height) }
+    {
+        return false;
+    }
+    unsafe {
+        rw.write(pipeline.render_width);
+        rh.write(pipeline.render_height);
+    }
+    true
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_anomaly_sr_boundary(driver: &Driver, device: Raw, ow: u32, oh: u32) {
+    driver.boundary(unsafe { &mut *driver.render.get() }, device, [ow, oh]);
+}
+
+const REFUSALS: [Refusal; 6] = [
+    Refusal::NotRunning,
+    Refusal::Disabled,
+    Refusal::Prepare,
+    Refusal::Pass,
+    Refusal::Pipeline,
+    Refusal::Reinsert,
+];
+
+impl Published {
+    fn count(&mut self, reason: Refusal) {
+        self.counters.refused[reason as usize] += 1;
+        match reason {
+            Refusal::Pass | Refusal::Pipeline => {}
+            _ => {
+                self.status.last_evaluated = false;
+                match reason {
+                    Refusal::Reinsert => self
+                        .status
+                        .reason("SR output pass failed; bilinear fallback drawn"),
+                    Refusal::Prepare => self.status.reason("SR input preparation failed"),
+                    Refusal::Disabled => self.status.reason("SR disabled by setting"),
+                    Refusal::NotRunning if self.status.reason[0] == 0 => {
+                        self.status.reason("SR pipeline not running")
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_anomaly_sr_evaluate(
+    driver: &Driver,
+    context: Raw,
+    inputs: Raw,
+    facts: &ResetFacts,
+    motion_missing: bool,
+    build: BuildPass,
+) -> bool {
+    let render = unsafe { &mut *driver.render.get() };
+    let Some(api) = render.api.filter(|_| !render.device.is_null()) else {
+        driver.published().count(Refusal::NotRunning);
+        return false;
+    };
+    let facts = ResetFacts {
+        first: facts.first || render.resets.first,
+        device: facts.device || render.resets.device,
+        settings: facts.settings || render.resets.settings,
+        ..*facts
+    };
+    let mut pass = MaybeUninit::uninit();
+    let mut reset = 0;
+    // The existing engine pass builder copies camera and identity and borrows textures
+    // from this seam. A successful build initializes the full SDK structure.
+    let error = unsafe {
+        build(
+            inputs,
+            &facts,
+            render.session,
+            pass.as_mut_ptr(),
+            &mut reset,
+        )
+    };
+    if error != 0 {
+        let errors = [
+            "none",
+            "sizes",
+            "camera",
+            "projection",
+            "jitter",
+            "resources",
+        ];
+        let mut published = driver.published();
+        if let Some(count) = published.counters.pass_errors.get_mut(error as usize) {
+            *count += 1;
+        }
+        published.count(Refusal::Pass);
+        published.status.last_evaluated = false;
+        published.status.reason(&format!(
+            "SR input refused: {}",
+            errors.get(error as usize).unwrap_or(&"unknown")
+        ));
+        return false;
+    }
+    let pass = unsafe { pass.assume_init() };
+    // Runtime consumes this pass synchronously while the native caller still owns its leases.
+    let result = unsafe { api.evaluate.expect("validated SR evaluate")(context, &pass) };
+    let pipeline = render.pipeline_status();
+    let mut published = driver.published();
+    let Published {
+        status,
+        counters,
+        last_quality,
+        ..
+    } = &mut *published;
+    if let Some(pipeline) = pipeline {
+        status.pipeline = pipeline;
+    }
+    status.jitter = pass.camera.jitter_pixels;
+    status.motion_present = !pass.motion.is_null() && !motion_missing;
+    status.exposure_present = !pass.exposure.is_null();
+    if result != OK {
+        let index = if (-10..=-1).contains(&result) {
+            (-result) as usize
+        } else {
+            11
+        };
+        counters.results[index] += 1;
+        counters.refused[Refusal::Pipeline as usize] += 1;
+        status.last_evaluated = false;
+        status.reason(&format!(
+            "SR pipeline refused the frame ({result}, {})",
+            result_name(result)
+        ));
+        return false;
+    }
+    if reset != 0
+        && let Some(count) = counters.resets.get_mut(reset as usize)
+    {
+        *count += 1;
+    }
+    render.resets.first = false;
+    render.resets.device = false;
+    render.resets.settings = false;
+    let backend = pipeline.map_or(render.applied.backend, |status| status.backend);
+    let index = if (backend as usize) < counters.evaluated.len() {
+        backend as usize
+    } else {
+        0
+    };
+    counters.evaluated[index] += 1;
+    status.last_evaluated = true;
+    status.last_backend = backend;
+    *last_quality = render.applied.quality;
+    status.last_render_width = pass.camera.render_width;
+    status.last_render_height = pass.camera.render_height;
+    status.last_output_width = pass.camera.output_width;
+    status.last_output_height = pass.camera.output_height;
+    status.reason("");
+    true
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_anomaly_sr_request_dump(driver: &Driver, prefix: *const c_char) -> bool {
+    let render = unsafe { &*driver.render.get() };
+    let Some(api) = render.api.filter(|_| !render.device.is_null()) else {
+        return false;
+    };
+    unsafe { prefix.read() != 0 && api.request_dump.expect("validated SR dump")(prefix) == OK }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_sr_count(driver: &Driver, reason: u8) {
+    if let Some(reason) = REFUSALS.get(reason as usize) {
+        driver.published().count(*reason);
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_sr_count_bilinear(driver: &Driver) {
+    driver.published().counters.bilinear += 1;
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_sr_count_prepared(driver: &Driver, missing: bool) {
+    let mut published = driver.published();
+    published.counters.prepared += 1;
+    published.counters.motion_missing += u64::from(missing);
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_anomaly_sr_stop(driver: &Driver) {
+    driver.stop(unsafe { &mut *driver.render.get() });
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_sr_status(driver: &Driver, status: &mut Status) {
+    *status = driver.published().status;
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_sr_counters(driver: &Driver, counters: &mut Counters) {
+    *counters = driver.published().counters;
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_sr_overlay_report(driver: &Driver, out: &mut rsf_overlay_sr_report) {
+    let published = driver.published();
+    let status = &published.status;
+    let active = status.last_evaluated;
+    let mut report = rsf_overlay_sr_report {
+        struct_size: size_of::<rsf_overlay_sr_report>() as u32,
+        render_width: status.last_render_width,
+        render_height: status.last_render_height,
+        output_width: status.last_output_width,
+        output_height: status.last_output_height,
+        frames_evaluated: published.counters.evaluated.iter().sum::<u64>() as u32,
+        frames_refused: published.counters.refused.iter().sum::<u64>() as u32,
+        last_result: status.pipeline.last_result,
+        ..Default::default()
+    };
+    if active {
+        report.effective_backend = status.last_backend;
+        report.effective_quality = published.last_quality;
+        report.inputs =
+            RSF_OVERLAY_SR_INPUT_COLOR | RSF_OVERLAY_SR_INPUT_DEPTH | RSF_OVERLAY_SR_INPUT_JITTER;
+        if status.motion_present {
+            report.inputs |= RSF_OVERLAY_SR_INPUT_MOTION;
+        }
+        if status.exposure_present {
+            report.inputs |= RSF_OVERLAY_SR_INPUT_EXPOSURE;
+        }
+        report.jitter_pixels = status.jitter;
+    }
+    let detail;
+    let reason = if status.pending_backend != 0 {
+        detail = format!(
+            "Preparing {}: first use loads its model; the game pauses until it is ready",
+            backend_name(status.pending_backend)
+        );
+        &detail
+    } else if !active {
+        if status.reason[0] != 0 {
+            status.reason_text()
+        } else if status.requested.enabled {
+            "SR not evaluated yet"
+        } else {
+            "SR disabled by setting"
+        }
+    } else if status.requested.backend != status.applied.backend {
+        detail = format!(
+            "{} refused on this GPU",
+            backend_name(status.requested.backend)
+        );
+        &detail
+    } else if status.requested.quality != status.applied.quality {
+        "Requested quality refused"
+    } else {
+        ""
+    };
+    copy_text(&mut report.reason, reason);
+    *out = report;
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_anomaly_sr_start_refusal(result: i32, out: *mut c_char, size: usize) {
+    copy_text(
+        unsafe { std::slice::from_raw_parts_mut(out, size) },
+        &start_refusal(result),
+    );
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_sr_report(driver: &Driver, log: rsf_game_log_fn, user: Raw) {
+    let (stage, exposure_auto, first_person_zero, status, now, old) = {
+        let mut published = driver.published();
+        let now = published.counters;
+        let old = std::mem::replace(&mut published.reported, now);
+        (
+            published.stage,
+            published.exposure_auto,
+            published.first_person_zero,
+            published.status,
+            now,
+            old,
+        )
+    };
+    let delta = |current: u64, previous: u64| current.wrapping_sub(previous);
+    let evaluated = |backend: u32| {
+        delta(
+            now.evaluated[backend as usize],
+            old.evaluated[backend as usize],
+        )
+    };
+    let refused =
+        |reason: Refusal| delta(now.refused[reason as usize], old.refused[reason as usize]);
+    let pass_errors = |index| delta(now.pass_errors[index], old.pass_errors[index]);
+    let results = |index| delta(now.results[index], old.results[index]);
+    let resets = |index| delta(now.resets[index], old.resets[index]);
+    emit(
+        log,
+        user,
+        &format!(
+            "Anomaly SR stage {stage} evaluated dlss={} fsr3={} fsr4={} xess={} | refused not_running={} disabled={} prepare={} \
+         pass={} (sizes={} camera={} projection={} jitter={} resources={}) pipeline={} (invalid={} abi={} not_running={} \
+         streamline={} not_supported={} resource={} decode={} frame={} evaluate={} other={}) reinsert={} | resets first={} \
+         device={} settings={} sequence={} cut={} | prepared={} bilinear={} motion_missing={}",
+            evaluated(DLSS),
+            evaluated(FSR3),
+            evaluated(FSR4),
+            evaluated(XESS),
+            refused(Refusal::NotRunning),
+            refused(Refusal::Disabled),
+            refused(Refusal::Prepare),
+            refused(Refusal::Pass),
+            pass_errors(1),
+            pass_errors(2),
+            pass_errors(3),
+            pass_errors(4),
+            pass_errors(5),
+            refused(Refusal::Pipeline),
+            results(1),
+            results(2),
+            results(4),
+            results(5),
+            results(6),
+            results(7),
+            results(8),
+            results(9),
+            results(10),
+            results(11) + results(3),
+            refused(Refusal::Reinsert),
+            resets(1),
+            resets(5),
+            resets(4),
+            resets(2),
+            resets(3),
+            delta(now.prepared, old.prepared),
+            delta(now.bilinear, old.bilinear),
+            delta(now.motion_missing, old.motion_missing)
+        ),
+    );
+    if stage == 5 {
+        let pipeline = status.pipeline;
+        emit(
+            log,
+            user,
+            &format!(
+                "Anomaly SR stage 5 pipeline bound={} running={} backend={} requested={} switch={} quality={}/{} preset={} \
+             render={}x{} output={}x{} frames_evaluated={} frames_refused={} last={} ({}) | starts={} start_failed={} \
+             (last {}) stops={} selects={}/{} qualities={}/{} presets={} resizes={}/{} | announced={} longest_select_ms={} \
+             pending={} | SR={} exposure={} first_person_zero={} | {}",
+                u8::from(status.bound),
+                pipeline.running,
+                backend_name(pipeline.backend),
+                backend_name(status.requested.backend),
+                pipeline.last_switch_result,
+                status.applied.quality,
+                status.requested.quality,
+                status.applied.preset,
+                pipeline.render_width,
+                pipeline.render_height,
+                pipeline.output_width,
+                pipeline.output_height,
+                pipeline.frames_evaluated,
+                pipeline.frames_refused,
+                pipeline.last_result,
+                result_name(pipeline.last_result),
+                now.starts,
+                now.start_failures,
+                status.start_result,
+                now.stops,
+                now.selects - now.select_failures,
+                now.selects,
+                now.qualities - now.quality_failures,
+                now.qualities,
+                now.presets,
+                now.resizes - now.resize_failures,
+                now.resizes,
+                now.select_announced,
+                now.longest_select_ms,
+                backend_name(status.pending_backend),
+                u8::from(status.requested.enabled),
+                if exposure_auto {
+                    "auto"
+                } else {
+                    "constant(1.0)"
+                },
+                u8::from(first_person_zero),
+                if status.reason[0] == 0 {
+                    "ok"
+                } else {
+                    status.reason_text()
+                }
+            ),
+        );
+    }
+}

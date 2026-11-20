@@ -25,7 +25,18 @@ def generate(output, header, types, constants, clang_args, extra=(), *, use_core
 
 
 generate("sdk/game/src/lib.rs", "sdk/game/include/rescaleframe/game_api.h",
-         "rsf_(get_game_plugin_api_fn|frame_record|game_cpu_(source|receipt)_event)", "RSF_.*", ["-Isdk/game/include"])
+         "rsf_(get_game_plugin_api_fn|frame_record|game_cpu_(source|receipt)_event)", "RSF_.*",
+         ["-Isdk/game/include"], ["--raw-line", "pub mod sr_abi;"])
+generate("sdk/game/src/sr_abi.rs", "runtime/orchestrator/include/rescaleframe/d3d11_sr_api.h",
+         "rsf_(d3d11_sr_api|get_d3d11_sr_api_fn|dlss_(pipeline_(setup|status|result|log_fn)|quality|engine)|"
+         "motion_decode_params|overlay_sr_report)",
+         "RSF_(D3D11_SR_API_VERSION|DLSS_PIPELINE_ABI_VERSION|OVERLAY_SR_INPUT_.*)",
+         ["-include", "rescaleframe/overlay_api.h", "-Isdk/game/include", "-Iruntime/orchestrator/include",
+          "-Iruntime/contract/include", "-Iruntime/graphics/include", "-Iruntime/presentation/include",
+          "-Iruntime/backends/dlss/include", "-Iui/overlay/include"],
+         ["--no-recursive-allowlist", "--with-derive-default",
+          "--raw-line", "use crate::{rsf_game_render_pass, rsf_result};",
+          "--raw-line", "type rsf_sharpening_options = ::core::ffi::c_void;"])
 generate("games/anomaly/src/fg_inputs_abi.rs", "games/anomaly/src/fg_inputs_platform.h",
          "rsf_anomaly_input_(log|frame|desc|targets|constants|platform)", "NOTHING", [],
          ["--no-recursive-allowlist", "--with-derive-default"])
@@ -112,17 +123,18 @@ generate("runtime/orchestrator/src/auxiliary_sr_abi.rs", "runtime/orchestrator/s
          ["--blocklist-type", "rsf_game_log_fn",
           "--raw-line", "use rsf_game_sys::rsf_game_log_fn;", "--with-derive-default"])
 generate("runtime/orchestrator/src/native_sr_abi.rs", "runtime/orchestrator/include/rescaleframe/native_sr.h",
-         "rsf_(dlss_pipeline_frame|native_translucency_masks|motion_decode_params)", "RSF_DLSS_PIPELINE_ABI_VERSION",
+         "rsf_(dlss_pipeline_frame|native_translucency_masks)", "NOTHING",
          ["-include", "rescaleframe/native_translucency.h", "-Iruntime/orchestrator/include",
           "-Iruntime/backends/dlss/include", "-Iruntime/graphics/include", "-Iruntime/contract/include",
           "-Isdk/game/include"],
          ["--blocklist-type", "rsf_pipeline_camera_frame",
-          "--raw-line", "use crate::render_abi::rsf_pipeline_camera_frame;"])
+          "--raw-line", "use crate::render_abi::rsf_pipeline_camera_frame;",
+          "--raw-line", "pub use rsf_game_sys::sr_abi::{RSF_DLSS_PIPELINE_ABI_VERSION, rsf_motion_decode_params};"])
 # Match the overlay's existing std paths and import types that other modules already own.
 generate("runtime/orchestrator/src/overlay_abi.rs", "runtime/orchestrator/src/overlay_platform.h",
-         "wchar_t|rsf_overlay_(api|service_setup|service_option|capture|diagnostics|sr_report|stats|intent|"
+         "wchar_t|rsf_overlay_(api|service_setup|service_option|capture|diagnostics|stats|intent|"
          "host_option|input_counters|platform|quality|texture_update)|rsf_native_(latency_status|input_routes)|rsf_render_status",
-         "RSF_OVERLAY_(API_VERSION|CAPTURE_.*|NOTIFY_.*|SR_INPUT_.*|SERVICE_OPTION_(TOGGLE|NUMBER|LIMIT)|"
+         "RSF_OVERLAY_(API_VERSION|CAPTURE_.*|NOTIFY_.*|SERVICE_OPTION_(TOGGLE|NUMBER|LIMIT)|"
          "HOST_OPTION_(TOGGLE|NUMBER)|FG_RUNTIME_SWITCH)|RSF_NATIVE_FG_REASON_(RESET|SCENE_UNSUPPORTED|"
          "HUDLESS_MISSING)|RSF_(REFLEX_ON|SR_NONE|SR_DLSS|SR_FSR3|SR_FSR4|SR_SPATIAL)",
          ["-include", "rescaleframe/overlay_api.h", "-include", "rescaleframe/overlay.h",
@@ -137,7 +149,11 @@ generate("runtime/orchestrator/src/overlay_abi.rs", "runtime/orchestrator/src/ov
                         "    rsf_generation_provider, rsf_native_fg_options, rsf_native_fg_status, rsf_render_settings,\n"
                         "    rsf_sharpening_options,\n"
                         "};",
-          "--raw-line", "use rsf_game_sys::rsf_game_log_fn;"],
+          "--raw-line", "use rsf_game_sys::rsf_game_log_fn;",
+          "--raw-line", "pub use rsf_game_sys::sr_abi::{\n"
+                        "    RSF_OVERLAY_SR_INPUT_COLOR, RSF_OVERLAY_SR_INPUT_DEPTH, RSF_OVERLAY_SR_INPUT_EXPOSURE,\n"
+                        "    RSF_OVERLAY_SR_INPUT_JITTER, RSF_OVERLAY_SR_INPUT_MOTION, rsf_overlay_sr_report,\n"
+                        "};"],
          use_core=False)
 generate("runtime/orchestrator/src/overlay_native12_abi.rs", "runtime/orchestrator/src/overlay_wrapped12_platform.h",
          "rsf_overlay(12_(log|platform|texture)|11on12_(device|target|platform))", "RSF_OVERLAY12_TEXTURE_LIMIT",

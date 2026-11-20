@@ -7,17 +7,16 @@ use crate::render_abi::{
     rsf_sharpening_options,
 };
 use rsf_game_sys::rsf_game_log_fn;
+pub use rsf_game_sys::sr_abi::{
+    RSF_OVERLAY_SR_INPUT_COLOR, RSF_OVERLAY_SR_INPUT_DEPTH, RSF_OVERLAY_SR_INPUT_EXPOSURE,
+    RSF_OVERLAY_SR_INPUT_JITTER, RSF_OVERLAY_SR_INPUT_MOTION, rsf_overlay_sr_report,
+};
 
 pub const RSF_OVERLAY_API_VERSION: u32 = 4;
 pub const RSF_OVERLAY_CAPTURE_MOUSE: u32 = 1;
 pub const RSF_OVERLAY_CAPTURE_KEYBOARD: u32 = 2;
 pub const RSF_OVERLAY_NOTIFY_RESIZE: u32 = 1;
 pub const RSF_OVERLAY_NOTIFY_DEVICE_RESET: u32 = 2;
-pub const RSF_OVERLAY_SR_INPUT_COLOR: u32 = 1;
-pub const RSF_OVERLAY_SR_INPUT_DEPTH: u32 = 2;
-pub const RSF_OVERLAY_SR_INPUT_MOTION: u32 = 4;
-pub const RSF_OVERLAY_SR_INPUT_EXPOSURE: u32 = 8;
-pub const RSF_OVERLAY_SR_INPUT_JITTER: u32 = 16;
 pub const RSF_OVERLAY_SERVICE_OPTION_TOGGLE: u32 = 0;
 pub const RSF_OVERLAY_SERVICE_OPTION_NUMBER: u32 = 1;
 pub const RSF_OVERLAY_SERVICE_OPTION_LIMIT: u32 = 24;
@@ -152,67 +151,6 @@ const _: () = {
         [::std::mem::offset_of!(rsf_render_status, reason) - 160usize];
 };
 impl Default for rsf_render_status {
-    fn default() -> Self {
-        let mut s = ::std::mem::MaybeUninit::<Self>::uninit();
-        unsafe {
-            ::std::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
-            s.assume_init()
-        }
-    }
-}
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct rsf_overlay_sr_report {
-    pub struct_size: u32,
-    pub effective_backend: u32,
-    pub effective_quality: u32,
-    pub render_width: u32,
-    pub render_height: u32,
-    pub output_width: u32,
-    pub output_height: u32,
-    pub frames_evaluated: u32,
-    pub frames_refused: u32,
-    pub last_result: i32,
-    pub inputs: u32,
-    pub quality_locked: u32,
-    pub jitter_pixels: [f32; 2usize],
-    pub reason: [::std::os::raw::c_char; 96usize],
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_overlay_sr_report"][::std::mem::size_of::<rsf_overlay_sr_report>() - 152usize];
-    ["Alignment of rsf_overlay_sr_report"]
-        [::std::mem::align_of::<rsf_overlay_sr_report>() - 4usize];
-    ["Offset of field: rsf_overlay_sr_report::struct_size"]
-        [::std::mem::offset_of!(rsf_overlay_sr_report, struct_size) - 0usize];
-    ["Offset of field: rsf_overlay_sr_report::effective_backend"]
-        [::std::mem::offset_of!(rsf_overlay_sr_report, effective_backend) - 4usize];
-    ["Offset of field: rsf_overlay_sr_report::effective_quality"]
-        [::std::mem::offset_of!(rsf_overlay_sr_report, effective_quality) - 8usize];
-    ["Offset of field: rsf_overlay_sr_report::render_width"]
-        [::std::mem::offset_of!(rsf_overlay_sr_report, render_width) - 12usize];
-    ["Offset of field: rsf_overlay_sr_report::render_height"]
-        [::std::mem::offset_of!(rsf_overlay_sr_report, render_height) - 16usize];
-    ["Offset of field: rsf_overlay_sr_report::output_width"]
-        [::std::mem::offset_of!(rsf_overlay_sr_report, output_width) - 20usize];
-    ["Offset of field: rsf_overlay_sr_report::output_height"]
-        [::std::mem::offset_of!(rsf_overlay_sr_report, output_height) - 24usize];
-    ["Offset of field: rsf_overlay_sr_report::frames_evaluated"]
-        [::std::mem::offset_of!(rsf_overlay_sr_report, frames_evaluated) - 28usize];
-    ["Offset of field: rsf_overlay_sr_report::frames_refused"]
-        [::std::mem::offset_of!(rsf_overlay_sr_report, frames_refused) - 32usize];
-    ["Offset of field: rsf_overlay_sr_report::last_result"]
-        [::std::mem::offset_of!(rsf_overlay_sr_report, last_result) - 36usize];
-    ["Offset of field: rsf_overlay_sr_report::inputs"]
-        [::std::mem::offset_of!(rsf_overlay_sr_report, inputs) - 40usize];
-    ["Offset of field: rsf_overlay_sr_report::quality_locked"]
-        [::std::mem::offset_of!(rsf_overlay_sr_report, quality_locked) - 44usize];
-    ["Offset of field: rsf_overlay_sr_report::jitter_pixels"]
-        [::std::mem::offset_of!(rsf_overlay_sr_report, jitter_pixels) - 48usize];
-    ["Offset of field: rsf_overlay_sr_report::reason"]
-        [::std::mem::offset_of!(rsf_overlay_sr_report, reason) - 56usize];
-};
-impl Default for rsf_overlay_sr_report {
     fn default() -> Self {
         let mut s = ::std::mem::MaybeUninit::<Self>::uninit();
         unsafe {

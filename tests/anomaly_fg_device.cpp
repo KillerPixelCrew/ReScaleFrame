@@ -4,7 +4,7 @@
 //
 //   SetCacheXform        fg::camera
 //   Render Begin         fg::render_begin          (CPU simulation end, FRAME/SUBMISSION begin, SR source binding)
-//   SR seam (Stage 5)    TemporalDriver::evaluate  (sr_temporal.cpp; the Runtime SR pass feeds FG depth/motion)
+//   SR seam (Stage 5)    TemporalDriver::evaluate  (sr_temporal.rs; the Runtime SR pass feeds FG depth/motion)
 //   RenderToTarget(SVP)  fg::scope_frame           (scope frames, which do not Present)
 //   CHUDManager::RenderUI  fg::ui_boundary         (SR-off depth/motion pass, FINAL_SCENE, HUD-less copy, FG dump)
 //   End, before          fg::end_before            (submission end, WINDOW scope)

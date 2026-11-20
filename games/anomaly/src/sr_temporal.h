@@ -32,7 +32,6 @@ struct TemporalOptions {
     // game's 0..1 image into about half of the 8-bit range DLSS quantizes LDR input to.
     bool colour_transport{};
     bool first_person_zero{true};        // SRFirstPersonZero: unwritten first-person pixels get zero motion
-    CutRule cut{};                       // SRCutDistance (m), SRCutAngle (degrees)
     std::string streamline, fidelityfx, xess;   // UTF-8 vendor runtime directories
     bool require_signature{};            // SRRequireSignature: refuse an unsigned sl.interposer.dll
     SrSettings initial{};                // SR, SRBackend, SRQuality, DLSSPreset from the INI before the overlay starts
@@ -48,7 +47,6 @@ enum class Refusal : uint8_t {
     Reinsert,     // evaluated, but the output pass failed: the bilinear fallback was drawn
     Count
 };
-const char* refusal_name(Refusal) noexcept;
 // The overlay/status reason for a refused pipeline start (fits rsf_overlay_sr_report::reason, 96 bytes).
 std::string start_refusal_reason(int32_t result);
 
@@ -65,8 +63,8 @@ struct TemporalCounters {
     uint64_t select_announced{}, longest_select_ms{};
 };
 
-struct TemporalStatus {
-    bool bound{}, running{}, enabled{};
+struct TemporalStatusData {
+    bool bound{}, running{};
     rsf_dlss_pipeline_status pipeline{};
     SrSettings applied{}, requested{};
     int32_t start_result{}, select_result{}, quality_result{};
@@ -76,15 +74,22 @@ struct TemporalStatus {
     bool motion_present{}, exposure_present{};
     // A backend announced and about to be selected (0: none): the select blocks the render thread while the vendor loads it.
     uint32_t pending_backend{};
+    char reason_utf8[96]{};
+};
+
+struct TemporalStatus : TemporalStatusData {
     std::string reason;
 };
-// The overlay reason between the announcement of a backend and its select: "Preparing FSR4: first use loads its model; ...".
-std::string pending_reason(const TemporalStatus&);
+
+struct TemporalState; // owned by the Rust driver
 
 class TemporalDriver {
 public:
+    TemporalDriver() noexcept;
+    ~TemporalDriver();
+    TemporalDriver(const TemporalDriver&) = delete;
+    TemporalDriver& operator=(const TemporalDriver&) = delete;
     void configure(const TemporalOptions&, rsf_game_log_fn log, void* user) noexcept;
-    const TemporalOptions& options() const noexcept { return options_; }
     // Install time: query the Runtime's table. Stage 4 does not need it; Stage 5 refuses SR without it.
     bool bind(HMODULE runtime) noexcept;
     // Test seam: a table supplied directly (validated the same way).
@@ -101,7 +106,7 @@ public:
     // for this output (false when the pipeline is not running or plans for another output).
     bool enabled() const noexcept;
     bool planned_render(uint32_t output_width, uint32_t output_height, uint32_t& render_width, uint32_t& render_height) const noexcept;
-    bool running() const noexcept { return running_; }
+    bool running() const noexcept;
     // The output texture format the pipeline copies into PassInputs::color_output (DXGI_FORMAT), 0 when stopped.
     uint32_t output_format() const noexcept;
     // Render thread, at the seam: the reset decision, the pass and the evaluation. True when `in.color_output` holds
@@ -123,35 +128,12 @@ public:
     void report(void (*emit)(void*, const char*), void* user) noexcept;
 
 private:
-    void say(const char*) const noexcept;
-    void start(ID3D11Device*, uint32_t output_width, uint32_t output_height) noexcept;
-    void apply(const SrSettings& wanted) noexcept;
-    void refresh() noexcept;
-
-    TemporalOptions options_{};
-    rsf_game_log_fn log_{};
-    void* log_user_{};
-    rsf_d3d11_sr_api api_{};
-    bool bound_{};
-    // Render thread.
-    bool running_{};
-    ID3D11Device* device_{};             // compared only; the pipeline holds its own reference
-    ID3D11Device* failed_device_{};      // start refused on this device for these settings
-    SrSettings failed_settings_{};
-    SrSettings applied_{};
-    SrSettings refused_request_{};      // a request apply() could not fully satisfy: not retried until it changes
-    bool have_refused_{};
-    bool settings_changed_{}, device_changed_{}, first_{true};
-    // A backend announced and waiting for the next boundary's select; backends selected before (bit per RSF_SR_*).
-    bool pending_{};
-    uint32_t pending_backend_{};
-    uint32_t prepared_{};
-    uint64_t session_{};
-    // Shared with any thread.
-    mutable SRWLOCK lock_ = SRWLOCK_INIT;
-    SrSettings requested_{};
-    bool have_request_{};
-    TemporalStatus status_{};
-    TemporalCounters counters_{}, reported_{};
+    struct LogSink {
+        rsf_game_log_fn emit{};
+        void* user{};
+        static void call(void*, const char*) noexcept;
+    };
+    LogSink log_{};
+    TemporalState* state_;
 };
 }

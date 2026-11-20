@@ -8,59 +8,12 @@ use crate::native_sr_abi::rsf_motion_decode_params;
 use crate::render_abi::{
     rsf_dlss_frame, rsf_motion_resolve_params, rsf_pipeline_camera_frame, rsf_sharpening_options,
 };
+pub use rsf_game_sys::rsf_game_log_fn as rsf_dlss_pipeline_log_fn;
+pub use rsf_game_sys::sr_abi::{rsf_dlss_pipeline_setup, rsf_dlss_pipeline_status};
 use std::ffi::{c_char, c_void};
 
 pub type Raw = *mut c_void;
-pub type rsf_dlss_pipeline_log_fn = Option<unsafe extern "C" fn(Raw, *const c_char)>;
 pub type rsf_dlssp_log_fn = Option<unsafe extern "C" fn(Raw, *const c_char)>;
-
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct rsf_dlss_pipeline_setup {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub streamline_directory_utf8: *const c_char,
-    pub streamline_log_directory_utf8: *const c_char,
-    pub require_signature: u32,
-    pub output_width: u32,
-    pub output_height: u32,
-    pub quality: u32,
-    pub motion: rsf_motion_decode_params,
-    pub log: rsf_dlss_pipeline_log_fn,
-    pub log_user: Raw,
-    pub engine: u32,
-    pub engine_version_utf8: *const c_char,
-    pub project_id_utf8: *const c_char,
-    pub fsr2_directory_utf8: *const c_char,
-    pub fsr3_directory_utf8: *const c_char,
-    pub fsr4_directory_utf8: *const c_char,
-    pub xess_directory_utf8: *const c_char,
-    pub view_space_to_meters: f32,
-    pub standard_depth: u32,
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Default)]
-pub struct rsf_dlss_pipeline_status {
-    pub struct_size: u32,
-    pub running: u32,
-    pub dlss_supported: u32,
-    pub render_width: u32,
-    pub render_height: u32,
-    pub output_width: u32,
-    pub output_height: u32,
-    pub frames_evaluated: u64,
-    pub frames_refused: u64,
-    pub last_result: i32,
-    pub layer_frames_evaluated: u64,
-    pub layer_frames_refused: u64,
-    pub layer_width: u32,
-    pub layer_height: u32,
-    pub layer_last_result: i32,
-    pub backend: u32,
-    pub requested_backend: u32,
-    pub last_switch_result: i32,
-}
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -186,22 +139,6 @@ pub struct rsf_dlssp_platform {
 
 const _: () = {
     use std::mem::{offset_of, size_of};
-    assert!(size_of::<rsf_dlss_pipeline_setup>() == 168);
-    assert!(offset_of!(rsf_dlss_pipeline_setup, require_signature) == 24);
-    assert!(offset_of!(rsf_dlss_pipeline_setup, motion) == 40);
-    assert!(offset_of!(rsf_dlss_pipeline_setup, log) == 88);
-    assert!(offset_of!(rsf_dlss_pipeline_setup, engine) == 104);
-    assert!(offset_of!(rsf_dlss_pipeline_setup, engine_version_utf8) == 112);
-    assert!(offset_of!(rsf_dlss_pipeline_setup, xess_directory_utf8) == 152);
-    assert!(offset_of!(rsf_dlss_pipeline_setup, view_space_to_meters) == 160);
-    assert!(offset_of!(rsf_dlss_pipeline_setup, standard_depth) == 164);
-    assert!(size_of::<rsf_dlss_pipeline_status>() == 96);
-    assert!(offset_of!(rsf_dlss_pipeline_status, frames_evaluated) == 32);
-    assert!(offset_of!(rsf_dlss_pipeline_status, last_result) == 48);
-    assert!(offset_of!(rsf_dlss_pipeline_status, layer_frames_evaluated) == 56);
-    assert!(offset_of!(rsf_dlss_pipeline_status, layer_width) == 72);
-    assert!(offset_of!(rsf_dlss_pipeline_status, layer_last_result) == 80);
-    assert!(offset_of!(rsf_dlss_pipeline_status, last_switch_result) == 92);
     assert!(size_of::<rsf_dlss_pipeline_layer>() == 40);
     assert!(offset_of!(rsf_dlss_pipeline_layer, width) == 24);
     assert!(offset_of!(rsf_dlss_pipeline_layer, camera) == 32);

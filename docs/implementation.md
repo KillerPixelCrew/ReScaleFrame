@@ -108,6 +108,23 @@ with FXC, and its focused CPU contracts passed in Debug and Release.
 The shader pack hash matched the staged game baseline.
 See [the motion cutover audit](research/rust-anomaly-motion-history.md).
 
+Anomaly's Stage 5 temporal SR driver, retry state and published
+settings now live in Rust. The native Stage still supplies its engine
+frame and texture leases through the checked Runtime table. A refused
+request can be retried after settings return to the applied state, and
+the overlay reports the quality that produced the last accepted frame.
+The adapter and runtime share bindings generated from the D3D11 SR,
+pipeline and overlay C headers. See [the Stage 5 audit](research/rust-anomaly-sr-temporal.md).
+
+The combined input, cold entry, motion, geometry and Stage 5 cuts
+passed 22 focused tests in each MSVC configuration and 220 locked Rust
+tests. Four licensed-source cases inside the shader-tool suite skipped.
+The integrated FG and SR device fixtures built. The Anomaly DLL kept
+its three export names and ordinals and the carrier-loaded Runtime
+lookup. Runtime, AC7, Loader and Minecraft kept their Release export
+inventories. The Anomaly shader pack matched the staged baseline hash.
+Device execution and game acceptance remain open for the merged adapter.
+
 The first source inspection found that the public frame sequencer opened a rendered
 frame and assigned its provenance under separate locks. Direct callers could read
 or retire the slot between those operations. The FG session adds its own outer

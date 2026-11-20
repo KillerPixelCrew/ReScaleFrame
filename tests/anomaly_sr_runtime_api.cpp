@@ -3,7 +3,7 @@
 // imports ReScaleFrame.Runtime.dll the way a DLL-loaded adapter does (no OrchestratorCore, no RSF_RUNTIME_BUILD).
 // Checks the size/version refusals (nothing written on failure), the filled table, the idle pipeline's answers, the
 // argument refusals of every entry that can be called without a device, and the adapter's own table validation
-// (sr_temporal.cpp bind_sr_api) on the real table and on tampered copies. No GPU and no vendor runtime is needed.
+// (sr_temporal.rs through bind_sr_api) on the real table and on tampered copies. No GPU and no vendor runtime is needed.
 #include "sr_temporal.h"
 #include <rescaleframe/d3d11_sr_api.h>
 
@@ -45,7 +45,7 @@ void query() {
     CHECK(table->pipeline_abi_version == RSF_DLSS_PIPELINE_ABI_VERSION && RSF_DLSS_PIPELINE_ABI_VERSION == 5u);
     for (std::size_t i = sizeof(rsf_d3d11_sr_api); i < sizeof(buffer); ++i) CHECK(buffer[i] == 0xcd);
     CHECK(table->start && table->evaluate && table->reset && table->stop && table->status && table->select_backend &&
-        table->set_quality && table->set_preset && table->resize_output && table->output_texture && table->request_dump);
+        table->set_quality && table->set_preset && table->resize_output && table->output_texture && table->request_dump && table->set_sharpening);
     // The entry point is what a carrier-loaded adapter resolves by name.
     const HMODULE runtime = GetModuleHandleW(L"ReScaleFrame.Runtime.dll");
     CHECK(runtime != nullptr);
@@ -131,12 +131,13 @@ void adapter_binding() {
     check_refused([](rsf_d3d11_sr_api& t) { t.evaluate = nullptr; });
     check_refused([](rsf_d3d11_sr_api& t) { t.reset = nullptr; });
     check_refused([](rsf_d3d11_sr_api& t) { t.request_dump = nullptr; });
+    check_refused([](rsf_d3d11_sr_api& t) { t.set_sharpening = nullptr; });
     // The driver binds the real table and, unstarted, reports no SR output and refuses a pass as not running.
     TemporalDriver driver;
     TemporalOptions options{};
     options.stage = 5;
     driver.configure(options, nullptr, nullptr);
-    CHECK(driver.bind_table(real) && !driver.running());
+    CHECK(driver.bind(GetModuleHandleW(L"ReScaleFrame.Runtime.dll")) && !driver.running());
     rsf_overlay_sr_report report{};
     CHECK(driver.overlay_report(report) && report.effective_backend == 0 && report.struct_size == sizeof(report) && report.reason[0]);
     PassInputs in{};
@@ -222,6 +223,7 @@ rsf_d3d11_sr_api fake_table() {
     };
     t.output_texture = []() -> void* { return nullptr; };
     t.request_dump = [](const char*) -> rsf_dlss_pipeline_result { return RSF_DLSS_PIPELINE_OK; };
+    t.set_sharpening = [](const rsf_sharpening_options*) -> rsf_dlss_pipeline_result { return RSF_DLSS_PIPELINE_OK; };
     return t;
 }
 // A Stage 5 frame as the seam builds it: unjittered X-Ray projection, jitter applied at the planned size.
@@ -271,7 +273,7 @@ void driver_lifecycle() {
     CHECK(fake.starts == 1 && fake.selects == 0);    // nothing to apply
     // First pass: reset (first), consecutive frames: none, a jitter-sequence restart: sequence, a cut: cut.
     auto in = frame(1280, 720, 1, false);
-    CHECK(driver.evaluate(nullptr, in, {}) && (fake.last.flags & RSF_GAME_RENDER_RESET) && fake.last.native_frame == 1);
+    CHECK(driver.evaluate(nullptr, in, {}) && (fake.last.flags & RSF_GAME_RENDER_RESET) && fake.last.native_frame == 1 && fake.last.session_id != 0);
     in = frame(1280, 720, 2, false);
     CHECK(driver.evaluate(nullptr, in, {}) && !(fake.last.flags & RSF_GAME_RENDER_RESET));
     in = frame(1280, 720, 3, true);
@@ -293,6 +295,8 @@ void driver_lifecycle() {
     CHECK(fake.selects == 0);                        // nothing until the boundary
     driver.boundary(a, 1920, 1080);                  // the first use of XeSS is announced, quality follows at once
     CHECK(fake.selects == 0 && driver.status().pending_backend == backend_xess && fake.qualities == 1);
+    // Until the new quality evaluates, the report describes the last accepted frame.
+    CHECK(driver.overlay_report(report) && report.effective_quality == 1 && report.render_width == 1280);
     driver.boundary(a, 1920, 1080);                  // and selected at the next boundary
     CHECK(fake.selects == 1 && fake.backend == RSF_SR_XESS && fake.qualities == 1 && fake.quality == 2 && fake.presets == 1 && fake.preset == 4);
     CHECK(driver.planned_render(1920, 1080, rw, rh) && rw == 1129 && rh == 635);
@@ -397,6 +401,11 @@ void start_refused_loudly() {
     // Not retried every frame for the same device and settings.
     driver.boundary(reinterpret_cast<ID3D11Device*>(&device), 1920, 1080);
     CHECK(fake.starts == 1);
+    // The failed setup included the output size. A resize can make the next setup viable.
+    fake.start_result = RSF_DLSS_PIPELINE_OK;
+    driver.boundary(reinterpret_cast<ID3D11Device*>(&device), 2560, 1440);
+    CHECK(fake.starts == 2 && driver.running() && fake.setup.output_width == 2560);
+    driver.stop();
 }
 
 // The first request for a backend the vendor has not loaded in this process (FSR4's first dispatch builds pipelines for tens of seconds on a
@@ -475,7 +484,19 @@ void announce_before_select() {
     }
     CHECK(said_announce && said_took);
     (void)said_refused;
+    // Returning to the applied setting clears the refusal so the same backend can be tried again.
+    other.request({true, backend_dlss, 1, 0});
+    other.boundary(a, 1920, 1080);
+    fake.refuse_fsr4 = false;
+    other.request({true, backend_fsr4, 1, 0});
+    other.boundary(a, 1920, 1080);
+    other.boundary(a, 1920, 1080);
+    CHECK(fake.selects == asked + 1 && other.status().applied.backend == backend_fsr4);
+
     // Teardown while announced forgets it.
+    driver.request({true, backend_xess, 1, 0});
+    driver.boundary(a, 1920, 1080);
+    CHECK(driver.status().pending_backend == backend_xess);
     driver.stop();
     CHECK(!driver.running() && driver.status().pending_backend == 0);
     std::vector<std::string> report_lines;

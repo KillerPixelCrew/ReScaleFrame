@@ -190,16 +190,16 @@ add_test(NAME anomaly_sr_pass_unknown_selection COMMAND rsf_anomaly_sr_pass_test
 set_tests_properties(anomaly_sr_pass_unknown_selection PROPERTIES WILL_FAIL TRUE)
 foreach(rsf_sr5_client rsf_anomaly_sr_runtime_api_test rsf_anomaly_sr_temporal_device_test)
     if(rsf_sr5_client STREQUAL "rsf_anomaly_sr_runtime_api_test")
-        add_executable(${rsf_sr5_client} "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_runtime_api.cpp" "${RSF_ANOMALY_SR_SRC}/sr_temporal.cpp")
+        add_executable(${rsf_sr5_client} "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_runtime_api.cpp")
     else()
-        add_executable(${rsf_sr5_client} "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_temporal_device.cpp" "${RSF_ANOMALY_SR_SRC}/sr_temporal.cpp"
+        add_executable(${rsf_sr5_client} "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_temporal_device.cpp"
             "${RSF_ANOMALY_SR_SRC}/sr_d3d11.cpp")
         target_link_libraries(${rsf_sr5_client} PRIVATE ReScaleFrame::Graphics rsf_anomaly_sr_shaders d3d11 dxgi d3dcompiler)
     endif()
     target_include_directories(${rsf_sr5_client} PRIVATE "${RSF_ANOMALY_SR_SRC}"
         "${PROJECT_SOURCE_DIR}/runtime/backends/dlss/include"
         "$<TARGET_PROPERTY:rsf_orchestrator,INTERFACE_INCLUDE_DIRECTORIES>")
-    target_link_libraries(${rsf_sr5_client} PRIVATE "$<TARGET_LINKER_FILE:rsf_orchestrator>" ReScaleFrame::GameSDK ReScaleFrame::Contract
+    target_link_libraries(${rsf_sr5_client} PRIVATE rsf_anomaly_sr_temporal "$<TARGET_LINKER_FILE:rsf_orchestrator>" ReScaleFrame::GameSDK ReScaleFrame::Contract
         rsf_build_options)
     add_dependencies(${rsf_sr5_client} rsf_orchestrator)
 endforeach()
@@ -233,7 +233,7 @@ endif()
 set_tests_properties(anomaly_sr_pass_contract anomaly_sr_pass_unknown_selection anomaly_sr_runtime_api_contract
     anomaly_sr_temporal_device PROPERTIES TIMEOUT 120)
 # Stage 5 is part of sr_stage.cpp, which the hooks contract links.
-target_sources(rsf_anomaly_sr_hooks_test PRIVATE "${RSF_ANOMALY_SR_SRC}/sr_temporal.cpp")
+target_link_libraries(rsf_anomaly_sr_hooks_test PRIVATE rsf_anomaly_sr_temporal)
 target_include_directories(rsf_anomaly_sr_hooks_test PRIVATE "${PROJECT_SOURCE_DIR}/runtime/backends/dlss/include")
 
 # Profile-dependent fixtures once more against the AVX executable's tables (build_profile.h selects them by name and

@@ -1,11 +1,15 @@
 // SPDX-License-Identifier: MIT
+#[cfg(windows)]
+mod bootstrap;
 mod fg_inputs;
 mod fg_inputs_abi;
 mod fg_policy;
 mod fg_policy_abi;
 mod geometry_registry;
 mod geometry_registry_abi;
+mod input;
 mod motion;
+mod sr_temporal;
 
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, rsf_detect_game_fn, rsf_game_hooks_api, rsf_game_info,
@@ -14,17 +18,12 @@ use rsf_game_sys::{
 use std::ffi::{CStr, c_char};
 use std::slice;
 
-mod input;
-
 const UNKNOWN: u32 = 0;
 const RECOGNIZED: u32 = 1;
 const INVALID_ARGUMENT: i32 = -1;
 const ABI_MISMATCH: i32 = -2;
 const AMD64: u16 = 0x8664;
 const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "\0");
-
-#[cfg(windows)]
-mod bootstrap;
 
 #[repr(C)]
 struct BuildIdentity {
