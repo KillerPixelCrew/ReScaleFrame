@@ -234,6 +234,8 @@ struct Owned {
     device: Option<ComRef>,
     output: Option<ComRef>,
     streamline_loaded: bool,
+    // A cold viewport has no DLSS resources to release.
+    dlss_evaluation_attempted: bool,
     // The decode pass is built for one render size. A size that failed to build is not retried
     // per frame: an HLSL compile and two allocations fail for reasons the next frame cannot fix.
     decode: Raw,
@@ -281,6 +283,7 @@ impl Owned {
             device: None,
             output: None,
             streamline_loaded: false,
+            dlss_evaluation_attempted: false,
             decode: null_mut(),
             decode_extent: [0; 2],
             decode_failed: [0; 2],
@@ -661,6 +664,7 @@ impl Pipeline {
             owned.streamline_loaded = false;
         }
         owned.device = None;
+        owned.dlss_evaluation_attempted = false;
         // Dropped after the last line above, because the DLSS backend keeps forward_dlss as its
         // sink for the life of the process and a later vendor line must not reach a `log_user`
         // the caller stopped owning when it stopped the pipeline.
@@ -917,7 +921,9 @@ impl Pipeline {
             unsafe { (p.decode_destroy)(o.decode) };
             o.decode = null_mut();
             o.decode_extent = [0; 2];
-            unsafe { (p.release_resources)() };
+            if o.dlss_evaluation_attempted && unsafe { (p.release_resources)() } == 0 {
+                o.dlss_evaluation_attempted = false;
+            }
         }
         // The first frame a freshly built feature sees has no usable history; reusing it smears.
         // The caller cannot know this: it does not see the rebuild.
@@ -1135,6 +1141,7 @@ impl Pipeline {
             .sharpening
             .unwrap_or_else(|| unsafe { defaults(p) });
         let evaluated = if backend == SR_DLSS {
+            o.dlss_evaluation_attempted = true;
             unsafe { (p.fg_evaluate)(context, &dlss) }
         } else {
             // The legacy adapter takes canonical UV. The decode's own output, with no scale from
@@ -1982,8 +1989,11 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
             unsafe { rsf_sr_legacy_destroy(next_alternate) };
             return RESOURCE_FAILED;
         };
-        if backend == SR_DLSS && unsafe { (p.release_resources)() } != 0 {
-            return STREAMLINE_FAILED;
+        if backend == SR_DLSS && o.dlss_evaluation_attempted {
+            if unsafe { (p.release_resources)() } != 0 {
+                return STREAMLINE_FAILED;
+            }
+            o.dlss_evaluation_attempted = false;
         }
         unsafe { (p.clear_black)(o.device(), replacement.as_ptr()) };
         let previous_output = self.set_output(o, Some(replacement));

@@ -165,3 +165,34 @@ stayed closed with SR disabled. FG may use its existing native depth
 and matching motion path only for that frame. The stage clears this
 eligibility at frame end and when stopped. A regression covers scope,
 stale frame IDs, frame end, enabled SR and an actual swap.
+
+The fix at `4fb67e498606` passed a foreground AVX run. After resizing to
+1600×900 and turning SR off in the overlay, one transition frame lacked
+FG inputs. Subsequent windows each fed 120 of 120 native frames with
+240 vendor presents. Re-enabling SR resumed DLSS. The same run switched
+to FSR3, FSR4 and back to DLSS with zero reported SR evaluation refusals.
+The first FSR4 selection took 31,874 ms at the frame boundary, matching
+the cold pipeline compilation path announced in the log. XeSS switching
+was verified offscreen. The AVX game exited with code 0.
+The logs are in `evidence/avx-foreground-sroff/`.
+
+The forced-recovery Standard run used `SRJitter=0` on the same build.
+The pass rejected the unjittered camera, and the spatial seam drew
+bilinear output on each rejected frame. Audio, HUD, the scene and
+both output sizes remained active. The four final-color captures
+include one 1280×720 and three 1600×900 frames, with distinct generations
+before and after the resize. The game camera reacted to mouse movement.
+Dragging in the open overlay moved the pointer while the world view
+stayed still. The game then exited with code 0. The logs and images are
+under `evidence/standard-forced-fallback/`.
+
+That run also exposed 2,025 failed DLSS resize attempts in the last
+sample. The world continued at the new extent through spatial
+recovery, while the DLSS pipeline retained its original output size.
+The shared D3D11 pipeline tried to release the DLSS viewport even
+though no frame had reached its evaluation entry. The Rust owner
+now skips that release before the first attempted evaluation. It still
+requires a successful release after an attempt, since even a refused
+evaluation can leave SDK state. A focused regression injects a release
+error and checks that the first resize succeeds and a later resize
+keeps its prior output until release succeeds.

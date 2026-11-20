@@ -72,6 +72,7 @@ struct World {
     supported: u32,
     plan: rsf_dlssp_range,
     plan_result: i32,
+    release_result: i32,
     decode_create: i32,
     decode_run: i32,
     evaluate: i32,
@@ -106,6 +107,7 @@ impl World {
                 max_height: 360,
             },
             plan_result: 0,
+            release_result: 0,
             decode_create: 0,
             decode_run: 0,
             evaluate: 0,
@@ -196,7 +198,7 @@ unsafe extern "C" fn plan(width: u32, height: u32, quality: u32, out: *mut rsf_d
 }
 unsafe extern "C" fn release_resources() -> i32 {
     call("release_resources");
-    0
+    with(|world| world.release_result)
 }
 unsafe extern "C" fn release_viewport(viewport: u32) -> i32 {
     call(format!("release_viewport {viewport}"));
@@ -1008,6 +1010,32 @@ fn resize_prepares_before_commit_and_refusal_keeps_identity() {
         (submitted.reset, submitted.color_out, submitted.output_width),
         (1, resized, 1920)
     );
+}
+
+#[test]
+fn resize_leaves_a_cold_viewport_alone_until_dlss_has_seen_a_frame() {
+    let pipeline = Pipeline::new();
+    started(&pipeline);
+    with(|world| world.release_result = -9);
+
+    let mut width = 0;
+    let mut height = 0;
+    assert_eq!(
+        unsafe { pipeline.resize_output(&PLATFORM, 1600, 900, &mut width, &mut height) },
+        OK
+    );
+    assert_eq!(calls("release_resources"), 0);
+
+    let camera = camera();
+    assert_eq!(run(&pipeline, &frame(&camera, [width, height])), OK);
+    let output = pipeline.output_texture();
+    assert_eq!(
+        unsafe { pipeline.resize_output(&PLATFORM, 1920, 1080, &mut width, &mut height) },
+        STREAMLINE_FAILED
+    );
+    assert_eq!(calls("release_resources"), 1);
+    assert_eq!(pipeline.output_texture(), output);
+    assert_eq!(status(&pipeline).output_width, 1600);
 }
 
 #[test]
