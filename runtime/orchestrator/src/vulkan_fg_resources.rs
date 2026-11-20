@@ -7,7 +7,7 @@ use std::ffi::c_void;
 
 const INIT_FAILED: i32 = -6;
 const NOT_READY: i32 = -8;
-const SAMPLED_TRANSFER: u32 = 0x7;
+pub(super) const SAMPLED_TRANSFER: u32 = 0x7;
 
 struct Replacement<'a> {
     platform: &'a Platform,
@@ -22,7 +22,7 @@ impl Drop for Replacement<'_> {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_vkfg_release_image(
+pub(super) extern "C" fn rsf_core_vkfg_release_image(
     platform: &Platform,
     user: *mut c_void,
     image: &mut Image,
@@ -74,14 +74,39 @@ extern "C" fn rsf_core_vkfg_ensure_image_usage(
     usage: u32,
     with_view: u32,
 ) -> u32 {
+    u32::from(
+        ensure_image(
+            platform,
+            user,
+            current,
+            [width, height],
+            format,
+            usage,
+            with_view != 0,
+        )
+        .is_ok(),
+    )
+}
+
+pub(super) fn ensure_image(
+    platform: &Platform,
+    user: *mut c_void,
+    current: &mut Image,
+    [width, height]: [u32; 2],
+    format: u32,
+    usage: u32,
+    with_view: bool,
+) -> Result<(), i32> {
+    const OUT_OF_DEVICE_MEMORY: i32 = -2;
+    const INITIALIZATION_FAILED: i32 = -3;
     if current.image != 0
         && current.width == width
         && current.height == height
         && current.format == format
         && current.usage == usage
-        && (with_view == 0 || current.view != 0)
+        && (!with_view || current.view != 0)
     {
-        return 1;
+        return Ok(());
     }
     let mut replacement = Replacement {
         platform,
@@ -89,31 +114,46 @@ extern "C" fn rsf_core_vkfg_ensure_image_usage(
         image: Image::default(),
     };
     let image = &mut replacement.image;
-    if unsafe {
+    let result = unsafe {
         (platform.create_image.unwrap())(user, width, height, format, usage, &mut image.image)
-    } != 0
-        || image.image == 0
-    {
-        return 0;
+    };
+    if result != 0 || image.image == 0 {
+        return Err(if result != 0 {
+            result
+        } else {
+            INITIALIZATION_FAILED
+        });
     }
     let (mut size, mut types) = (0, 0);
     unsafe { (platform.requirements.unwrap())(user, image.image, &mut size, &mut types) };
     types &= unsafe { (platform.local_memory_types.unwrap())(user) };
-    if types == 0
-        || unsafe {
-            (platform.allocate.unwrap())(user, size, types.trailing_zeros(), &mut image.memory)
-        } != 0
-        || image.memory == 0
-        || unsafe { (platform.bind.unwrap())(user, image.image, image.memory) } != 0
-    {
-        return 0;
+    if types == 0 {
+        return Err(OUT_OF_DEVICE_MEMORY);
     }
-    if with_view != 0
-        && (unsafe { (platform.create_view.unwrap())(user, image.image, format, &mut image.view) }
-            != 0
-            || image.view == 0)
-    {
-        return 0;
+    let result = unsafe {
+        (platform.allocate.unwrap())(user, size, types.trailing_zeros(), &mut image.memory)
+    };
+    if result != 0 || image.memory == 0 {
+        return Err(if result != 0 {
+            result
+        } else {
+            INITIALIZATION_FAILED
+        });
+    }
+    let result = unsafe { (platform.bind.unwrap())(user, image.image, image.memory) };
+    if result != 0 {
+        return Err(result);
+    }
+    if with_view {
+        let result =
+            unsafe { (platform.create_view.unwrap())(user, image.image, format, &mut image.view) };
+        if result != 0 || image.view == 0 {
+            return Err(if result != 0 {
+                result
+            } else {
+                INITIALIZATION_FAILED
+            });
+        }
     }
     image.width = width;
     image.height = height;
@@ -122,7 +162,7 @@ extern "C" fn rsf_core_vkfg_ensure_image_usage(
     // The caller already retired the old resource. Publish the complete
     // replacement and retire the old image using the same cleanup path.
     std::mem::swap(current, image);
-    1
+    Ok(())
 }
 
 fn wait_pending(platform: &Platform, user: *mut c_void, fence: u64, pending: u32) -> bool {

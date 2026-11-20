@@ -392,6 +392,21 @@ Runtime, carrier and Minecraft exports matched. The worker also verified
 the feature-disabled build. Device and game execution remain pending.
 See [the FSR4 Vulkan FG audit](research/rust-vulkan-fsr4-fg-cutover.md).
 
+Vulkan XeSS FG now shares its swapchain, source leases, submission ledger,
+capture retirement and checked teardown with FSR4 FG in Rust. The shared
+allocator preserves the engine swapchain's usage flags and tracks them in
+its image cache. Each provider still uses its own DX12 bridge. The XeLL
+sleep gate lets an older real-frame Present and its markers proceed while
+a newer frame sleeps.
+
+Thirteen focused CPU contracts passed in MSVC Debug and Release, including
+the shared FSR4 and XeSS routes, the DX12 importer and sibling Vulkan SR
+providers. All 207 locked Rust tests, formatting and Clippy passed. Runtime,
+both carriers and Minecraft Release exports matched. The linked XeSS
+device fixture built. The worker verified SDK-disabled linkage in its
+isolated build. Device and game execution remain pending.
+See [the XeSS Vulkan FG cutover audit](research/rust-vulkan-xess-fg-cutover.md).
+
 The ordinary Vulkan SR owner now manages FidelityFX context selection,
 staging, dispatch, history, output publication and checked teardown in Rust.
 The existing provider boundaries and SRVK ABI remain intact. FSR2/3
