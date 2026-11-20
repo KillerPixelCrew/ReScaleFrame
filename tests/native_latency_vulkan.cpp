@@ -90,6 +90,8 @@ int VulkanStorySlVulkanWsiCall(rsf_vk_wsi_call callback, void* user) { return ca
 int VulkanStorySlWithoutDlssG(rsf_vk_wsi_call callback, void* user) { return callback(user); }
 }
 int main() {
+    alignas(rsf_game_cpu_event) uint32_t short_cpu=sizeof(short_cpu);
+    rsf_latencyvk_cpu(reinterpret_cast<const rsf_game_cpu_event*>(&short_cpu));
     require(rsf_slvk_without_dlssg(nullptr, nullptr) == -3, "missing foreign WSI callback refused");
     int foreign_wsi = 7;
     require(rsf_slvk_without_dlssg([](void* user) -> int32_t { return *static_cast<int*>(user); }, &foreign_wsi) == 7,
@@ -350,6 +352,9 @@ int main() {
     begin(12);
     require(PostThreadMessageW(GetCurrentThreadId(),0xc123,0,0)!=0,"own ping queued before shutdown");
     require(rsf_latencyvk_shutdown()==RSF_BACKEND_OK,"ping session shutdown");
+    rsf_latencyvk_status stopped{sizeof(stopped),RSF_LATENCYVK_ABI_VERSION};
+    require(rsf_latencyvk_get_status(&stopped)==RSF_BACKEND_ERROR_NOT_READY &&
+        !stopped.pcl_message && !stopped.report_available,"shutdown clears the previous PCL registration from status");
     const auto retired_binds=pcl_binds;
     require(rsf_latencyvk_initialize(&setup)==RSF_BACKEND_OK,"ping session reinitialized");begin(1);
     require(pcl_binds==retired_binds+1,"reinitialization cannot retain a registration thread");

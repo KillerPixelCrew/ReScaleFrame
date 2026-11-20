@@ -276,6 +276,21 @@ blocked input call and an older Present during that retirement. All
 120 Rust tests, formatting and Clippy passed. Runtime and both carrier
 Release exports matched. Device and game behavior remain unverified.
 
+Vulkan PCL registration, queue fencing and input fact collection now live in
+Rust. The owner binds the actual accepted input thread and keeps its old
+queue untouched while rebinding. It admits only the registered thread's
+exact ping ID after its queue fence, reports actual dequeue timestamps
+through the shared CPU dispatcher, and clears the published registration
+on shutdown. The CPU entry checks the declared size before reading its
+event version.
+
+Six focused Vulkan, Godot and CPU contracts passed in Debug and Release.
+The PCL fixture uses real Win32 queues and an SDK double to verify rebind
+failure, stale pings, queue limits and preservation of the engine's quit
+message. All 131 Rust workspace tests, formatting and Clippy passed.
+Release export names and ordinals matched the Runtime and both carriers.
+Device and in-game validation remains pending.
+
 The OpenGL pipeline now keeps its shared surface and SR lifecycle, frame
 identity, fallback and FG requests in Rust. Native callbacks handle OpenGL,
 DXGI and the presentation child window. A rejected SR rebuild remains
