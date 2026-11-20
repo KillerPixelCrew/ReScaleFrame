@@ -3,55 +3,66 @@
 #include "../temporal/history.h"
 #include <cstddef>
 #include <cstdint>
-#include <map>
-#include <mutex>
 #include <optional>
 #include <span>
 #include <string_view>
 #include <vector>
 #include "native_hooks.h"
 #include "build_profile.h"
+#include "geometry_registry_platform.h"
 
 namespace rsf::anomaly::geometry {
 using temporal::InstanceKey;
-enum class VisualLookup : std::uint8_t { Missing, Unique, Ambiguous };
+enum class VisualLookup : std::uint8_t {
+    Missing = RSF_ANOMALY_VISUAL_MISSING,
+    Unique = RSF_ANOMALY_VISUAL_UNIQUE,
+    Ambiguous = RSF_ANOMALY_VISUAL_AMBIGUOUS,
+};
 struct VisualProbe {
     VisualLookup lookup{VisualLookup::Missing};
     std::optional<InstanceKey> key; // Set only for Unique.
 };
 class IdentityRegistry {
 public:
+    IdentityRegistry();
+    ~IdentityRegistry();
+    IdentityRegistry(const IdentityRegistry&) = delete;
+    IdentityRegistry& operator=(const IdentityRegistry&) = delete;
     std::optional<InstanceKey> acquire(std::uint64_t owner, std::uint64_t visual);
     std::optional<InstanceKey> find(std::uint64_t owner, std::uint64_t visual) const;
     std::optional<InstanceKey> find_visual(std::uint64_t visual) const;
     // Like find_visual, but distinguishes an unknown visual from one live under several owners.
     VisualProbe probe_visual(std::uint64_t visual) const;
     std::optional<InstanceKey> retire(std::uint64_t owner, std::uint64_t visual);
-    std::vector<InstanceKey> retire_all();
+    std::size_t retire_all(void (*apply)(void*, InstanceKey), void* user);
 private:
-    mutable std::mutex mutex_;
-    std::map<std::pair<std::uint64_t, std::uint64_t>, InstanceKey> live_;
-    std::uint64_t generation_{};
+    rsf_anomaly_geometry_registry* state_;
 };
 
 enum class DrawKind : std::uint8_t { Rigid, HardwareSkinned, SingleBone, SoftwareSkinned, Tree };
 
 // Where the draw happens, read from CRender::phase at visual entry. Shadow-map and Z-fill passes write no motion.
-enum class DrawPass : std::uint8_t { Main, Shadow, Unknown, Count };
+enum class DrawPass : std::uint8_t {
+    Main = RSF_ANOMALY_PASS_MAIN, Shadow = RSF_ANOMALY_PASS_SHADOW,
+    Unknown = RSF_ANOMALY_PASS_UNKNOWN, Count = RSF_ANOMALY_PASS_COUNT,
+};
 // Which engine Render override the draw entered.
-enum class VisualType : std::uint8_t { Static, Progressive, SkeletonST, SkeletonPM, TreeST, TreePM, Count };
+enum class VisualType : std::uint8_t {
+    Static = RSF_ANOMALY_TYPE_STATIC, Progressive = RSF_ANOMALY_TYPE_PROGRESSIVE,
+    SkeletonST = RSF_ANOMALY_TYPE_SKELETON_ST, SkeletonPM = RSF_ANOMALY_TYPE_SKELETON_PM,
+    TreeST = RSF_ANOMALY_TYPE_TREE_ST, TreePM = RSF_ANOMALY_TYPE_TREE_PM, Count = RSF_ANOMALY_TYPE_COUNT,
+};
 enum class DrawVerdict : std::uint8_t {
-    Identified,             // A live registry identity names this visual.
-    IgnoredShadow,          // Shadow-map or Z-fill phase: no motion output, so no identity is needed.
-    IgnoredStaticWorld,     // Unregistered, rigid, world matrix exactly identity: level geometry, camera-only motion is exact.
-    UnidentifiedDynamic,    // Unregistered skinned visual or non-identity world: needs an identity and has none.
-    UnidentifiedDeformed,   // Unregistered tree: vertex-shader sway needs a deformation schema.
-    UnidentifiedAmbiguous,  // The visual address is live under more than one owner.
-    UnidentifiedUnreadable, // The world matrix could not be read to classify an unregistered draw.
-    UnidentifiedNoCapture,  // Capture latched off, or the draw ran inside a model factory.
-    IdentifiedFoliage,      // Unregistered tree visual named by its address (foliage identity enabled): the motion stage
-                            // reads the draw's constants and keeps the previous frame's by that address.
-    Count
+    Identified = RSF_ANOMALY_DRAW_IDENTIFIED,
+    IgnoredShadow = RSF_ANOMALY_DRAW_IGNORED_SHADOW,
+    IgnoredStaticWorld = RSF_ANOMALY_DRAW_IGNORED_STATIC_WORLD,
+    UnidentifiedDynamic = RSF_ANOMALY_DRAW_UNIDENTIFIED_DYNAMIC,
+    UnidentifiedDeformed = RSF_ANOMALY_DRAW_UNIDENTIFIED_DEFORMED,
+    UnidentifiedAmbiguous = RSF_ANOMALY_DRAW_UNIDENTIFIED_AMBIGUOUS,
+    UnidentifiedUnreadable = RSF_ANOMALY_DRAW_UNIDENTIFIED_UNREADABLE,
+    UnidentifiedNoCapture = RSF_ANOMALY_DRAW_UNIDENTIFIED_NO_CAPTURE,
+    IdentifiedFoliage = RSF_ANOMALY_DRAW_IDENTIFIED_FOLIAGE,
+    Count = RSF_ANOMALY_DRAW_COUNT,
 };
 struct DrawFacts {
     DrawPass pass{};

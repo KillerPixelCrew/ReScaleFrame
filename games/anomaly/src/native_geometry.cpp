@@ -1,67 +1,60 @@
 // SPDX-License-Identifier: MIT
 #include "native_geometry.h"
 #include "build_profile.h"
+#include "geometry_retirement.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <iterator>
-#include <limits>
+#include <mutex>
 #include <new>
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
 #include <windows.h>
 namespace rsf::anomaly::geometry {
+namespace {
+std::optional<InstanceKey> identity(std::uint64_t owner, std::uint64_t visual, std::uint64_t generation) noexcept
+{
+    if (!generation) return {};
+    return InstanceKey{owner, visual, generation};
+}
+}
+
+IdentityRegistry::IdentityRegistry() : state_(rsf_anomaly_geometry_registry_create()) {}
+IdentityRegistry::~IdentityRegistry() { rsf_anomaly_geometry_registry_destroy(state_); }
+
 std::optional<InstanceKey> IdentityRegistry::acquire(std::uint64_t owner, std::uint64_t visual)
 {
-    if (!owner || !visual) return {};
-    const std::lock_guard lock(mutex_);
-    if (generation_ == std::numeric_limits<std::uint64_t>::max() || live_.contains({visual, owner})) return {};
-    const InstanceKey key{owner, visual, ++generation_};
-    live_[{visual, owner}] = key;
-    return key;
+    return identity(owner, visual, rsf_anomaly_geometry_register(state_, owner, visual));
 }
 std::optional<InstanceKey> IdentityRegistry::find(std::uint64_t owner, std::uint64_t visual) const
 {
-    const std::lock_guard lock(mutex_);
-    const auto found = live_.find({visual, owner});
-    return found == live_.end() ? std::nullopt : std::optional{found->second};
+    return identity(owner, visual, rsf_anomaly_geometry_find(state_, owner, visual));
 }
 std::optional<InstanceKey> IdentityRegistry::find_visual(std::uint64_t visual) const
 {
-    const std::lock_guard lock(mutex_);
-    const auto found = live_.lower_bound({visual, 0});
-    if (found == live_.end() || found->first.first != visual) return {};
-    const auto next = std::next(found);
-    return next != live_.end() && next->first.first == visual ? std::nullopt : std::optional{found->second};
+    return probe_visual(visual).key;
 }
 VisualProbe IdentityRegistry::probe_visual(std::uint64_t visual) const
 {
-    const std::lock_guard lock(mutex_);
-    const auto found = live_.lower_bound({visual, 0});
-    if (found == live_.end() || found->first.first != visual) return {};
-    const auto next = std::next(found);
-    if (next != live_.end() && next->first.first == visual) return {VisualLookup::Ambiguous, std::nullopt};
-    return {VisualLookup::Unique, found->second};
+    rsf_anomaly_geometry_probe result{};
+    rsf_anomaly_geometry_probe_visual(state_, visual, &result);
+    return {static_cast<VisualLookup>(result.lookup),
+        identity(result.key.owner, result.key.visual, result.key.generation)};
 }
 std::optional<InstanceKey> IdentityRegistry::retire(std::uint64_t owner, std::uint64_t visual)
 {
-    const std::lock_guard lock(mutex_);
-    const auto found = live_.find({visual, owner});
-    if (found == live_.end()) return {};
-    const auto key = found->second;
-    live_.erase(found);
-    return key;
+    return identity(owner, visual, rsf_anomaly_geometry_retire(state_, owner, visual));
 }
-std::vector<InstanceKey> IdentityRegistry::retire_all()
+std::size_t IdentityRegistry::retire_all(void (*apply)(void*, InstanceKey), void* user)
 {
-    const std::lock_guard lock(mutex_);
-    std::vector<InstanceKey> result;
-    for (const auto& [slot, key] : live_) { (void)slot; result.push_back(key); }
-    live_.clear();
-    return result;
+    RetirementCall call{apply, user};
+    const auto count = rsf_anomaly_geometry_retire_all(state_, apply ? RetirementCall::visit : nullptr, &call);
+    if (call.exception) std::rethrow_exception(call.exception);
+    return count;
 }
 
 namespace {
@@ -158,18 +151,10 @@ std::optional<DrawCapture> capture_current_draw() noexcept
 
 DrawVerdict classify_draw(const DrawFacts& facts) noexcept
 {
-    if (facts.pass == DrawPass::Shadow) return DrawVerdict::IgnoredShadow;
-    if (!facts.capturing) return DrawVerdict::UnidentifiedNoCapture;
-    if (facts.lookup == VisualLookup::Unique) return DrawVerdict::Identified;
-    if (facts.lookup == VisualLookup::Ambiguous) return DrawVerdict::UnidentifiedAmbiguous;
-    // A level tree is never in the model registry. Its address names it and the motion stage keeps its constants.
-    if (facts.foliage_identity && (facts.type == VisualType::TreeST || facts.type == VisualType::TreePM))
-        return DrawVerdict::IdentifiedFoliage;
-    // From here the visual is unregistered. A skinned visual always needs its bone palette, so it is never static.
-    if (facts.type == VisualType::SkeletonST || facts.type == VisualType::SkeletonPM) return DrawVerdict::UnidentifiedDynamic;
-    if (!facts.world_readable) return DrawVerdict::UnidentifiedUnreadable;
-    if (facts.type == VisualType::TreeST || facts.type == VisualType::TreePM) return DrawVerdict::UnidentifiedDeformed;
-    return facts.world_identity ? DrawVerdict::IgnoredStaticWorld : DrawVerdict::UnidentifiedDynamic;
+    const rsf_anomaly_geometry_draw draw{static_cast<int32_t>(facts.pass), static_cast<int32_t>(facts.type),
+        static_cast<int32_t>(facts.lookup), facts.capturing, facts.world_readable, facts.world_identity,
+        facts.foliage_identity};
+    return static_cast<DrawVerdict>(rsf_anomaly_geometry_classify(&draw));
 }
 const char* pass_name(DrawPass pass) noexcept
 {
@@ -651,10 +636,10 @@ void geometry_retire_all() noexcept
 {
     try {
         const std::lock_guard lock(native_lifecycle);
-        for (const auto key : native_identities.retire_all()) {
+        native_identities.retire_all([](void*, InstanceKey key) {
             models_retired.fetch_add(1);
             if (sink.retired) sink.retired(sink.context, key);
-        }
+        }, nullptr);
     } catch (...) { fault(); }
 }
 GeometryStats geometry_stats() noexcept

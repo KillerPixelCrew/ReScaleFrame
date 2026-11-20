@@ -1,46 +1,37 @@
 // SPDX-License-Identifier: MIT
 #include "geometry_feed.h"
-#include <new>
-#include <utility>
+#include "geometry_retirement.h"
 
 namespace rsf::anomaly::geometry {
+
+RetirementQueue::RetirementQueue() : state_(rsf_anomaly_geometry_retirements_create()) {}
+RetirementQueue::~RetirementQueue() { rsf_anomaly_geometry_retirements_destroy(state_); }
 
 void RetirementQueue::sink(void* queue, temporal::InstanceKey key) noexcept
 {
     if (!queue) return;
-    auto& self = *static_cast<RetirementQueue*>(queue);
-    try {
-        const std::lock_guard lock(self.mutex_);
-        try { self.pending_.push_back(key); } catch (...) { ++self.dropped_; }
-    } catch (...) {}
+    const rsf_anomaly_geometry_key retired{key.owner, key.visual, key.generation};
+    rsf_anomaly_geometry_enqueue(static_cast<RetirementQueue*>(queue)->state_, &retired);
 }
 
 std::size_t RetirementQueue::drain(temporal::TemporalHistory& history)
 {
-    std::vector<temporal::InstanceKey> keys;
-    {
-        const std::lock_guard lock(mutex_);
-        keys.swap(pending_);
-    }
-    for (const auto key : keys) history.retire(key);
-    return keys.size();
+    return drain([](void* user, temporal::InstanceKey key) {
+        static_cast<temporal::TemporalHistory*>(user)->retire(key);
+    }, &history);
 }
 
 std::size_t RetirementQueue::drain(void (*apply)(void*, temporal::InstanceKey), void* user)
 {
-    std::vector<temporal::InstanceKey> keys;
-    {
-        const std::lock_guard lock(mutex_);
-        keys.swap(pending_);
-    }
-    if (apply) for (const auto key : keys) apply(user, key);
-    return keys.size();
+    RetirementCall call{apply, user};
+    const auto count = rsf_anomaly_geometry_drain(state_, apply ? RetirementCall::visit : nullptr, &call);
+    if (call.exception) std::rethrow_exception(call.exception);
+    return count;
 }
 
 std::uint64_t RetirementQueue::dropped() const noexcept
 {
-    const std::lock_guard lock(mutex_);
-    return dropped_;
+    return rsf_anomaly_geometry_dropped(state_);
 }
 
 std::optional<temporal::InstanceSnapshot> to_snapshot(const DrawCapture& draw, FeedStatus& why) noexcept

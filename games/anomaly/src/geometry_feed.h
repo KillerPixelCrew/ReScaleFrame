@@ -3,9 +3,7 @@
 #include "native_geometry.h"
 #include <cstddef>
 #include <cstdint>
-#include <mutex>
 #include <optional>
-#include <vector>
 
 namespace rsf::anomaly::geometry {
 
@@ -13,6 +11,10 @@ namespace rsf::anomaly::geometry {
 // TemporalHistory has a single owner, so the native sink must never call it directly.
 class RetirementQueue {
 public:
+    RetirementQueue();
+    ~RetirementQueue();
+    RetirementQueue(const RetirementQueue&) = delete;
+    RetirementQueue& operator=(const RetirementQueue&) = delete;
     // GeometrySink::retired target. Thread-safe, noexcept; an allocation failure is counted, not thrown.
     static void sink(void* queue, temporal::InstanceKey key) noexcept;
     // Render thread only. Applies every queued retirement to the history that owns the frame.
@@ -23,9 +25,7 @@ public:
     // never equals an old key and the registry refuses retired draws, but the count is evidence.
     std::uint64_t dropped() const noexcept;
 private:
-    mutable std::mutex mutex_;
-    std::vector<temporal::InstanceKey> pending_;
-    std::uint64_t dropped_{};
+    rsf_anomaly_geometry_retirements* state_;
 };
 
 enum class FeedStatus : std::uint8_t {

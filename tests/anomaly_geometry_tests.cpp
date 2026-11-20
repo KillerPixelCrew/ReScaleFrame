@@ -30,8 +30,14 @@ int main()
     CHECK(identities.find_visual(0x20) == recycled);
     CHECK(identities.acquire(0x30, 0x20));
     CHECK(!identities.find_visual(0x20)); // An ambiguous pool never supplies a draw identity.
-    const auto retired = identities.retire_all();
-    CHECK(retired.size() == 2 && !identities.find_visual(0x20));
+    struct DrainCheck { IdentityRegistry& registry; unsigned callbacks{}; } drain{identities};
+    const auto retired = identities.retire_all([](void* user, InstanceKey key) {
+        auto& check = *static_cast<DrainCheck*>(user);
+        CHECK(!check.registry.find(key.owner, key.visual));
+        CHECK(!check.registry.find(0x10, 0x20) && !check.registry.find(0x30, 0x20));
+        ++check.callbacks;
+    }, &drain);
+    CHECK(retired == 2 && drain.callbacks == 2 && !identities.find_visual(0x20));
     CHECK(identities.acquire(0x10, 0x20)->generation > recycled->generation);
     const auto live = identities.find(0x10, 0x20);
     float world[16]{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 7, 8, 9, 1};
@@ -205,6 +211,15 @@ int main()
     feed_identities.retire(rigid_key->owner, rigid_key->visual);
     CHECK(queue.dropped() == 0);
     CHECK(queue.drain(history) == 1 && queue.drain(history) == 0);
+    RetirementQueue::sink(&queue, *rigid_key);
+    unsigned requeued = 0;
+    struct Requeue { RetirementQueue& queue; unsigned& seen; } requeue{queue, requeued};
+    CHECK(queue.drain([](void* user, InstanceKey key) {
+        auto& state = *static_cast<Requeue*>(user);
+        ++state.seen;
+        RetirementQueue::sink(&state.queue, key);
+    }, &requeue) == 1);
+    CHECK(requeued == 1 && queue.drain(history) == 1);
     temporal::InstanceSnapshot retired_snapshot;
     retired_snapshot.world = temporal::Mat4::identity();
     CHECK(history.capture(*second.token, *rigid_key, retired_snapshot).status == temporal::CaptureStatus::Retired);

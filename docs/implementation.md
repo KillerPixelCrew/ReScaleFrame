@@ -69,6 +69,20 @@ executable profiles. Formatting, Clippy, locked Rust tests and the
 Anomaly export comparison passed. The FG fixture built in both
 configurations. Live SR-off validation remains pending for this port.
 
+The Anomaly geometry registry, retirement queue and draw classification
+now run in Rust. A reused visual still receives a new generation and two
+live owners still make its identity ambiguous. The Rust owner detaches
+each retirement batch before calling the native history consumer. The
+CPU fixtures verify that a batch is already invalidated when callbacks
+run and that a retirement enqueued during drain reaches the next batch.
+Native engine guards, draw scopes and copied geometry inputs keep their
+existing call sites.
+
+Eight focused native contracts passed in Debug and Release, including
+the Standard and AVX geometry and SR hooks. Formatting, Clippy,
+locked Rust tests and Anomaly DLL export parity passed. This cut has
+no fresh device or game evidence.
+
 The first source inspection found that the public frame sequencer opened a rendered
 frame and assigned its provenance under separate locks. Direct callers could read
 or retire the slot between those operations. The FG session adds its own outer

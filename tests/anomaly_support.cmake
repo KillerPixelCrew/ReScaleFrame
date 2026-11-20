@@ -23,12 +23,12 @@ set(RSF_ANOMALY_GEOMETRY_SOURCES
     "${PROJECT_SOURCE_DIR}/games/anomaly/src/native_hooks.cpp")
 add_executable(rsf_anomaly_geometry_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_geometry_tests.cpp" ${RSF_ANOMALY_GEOMETRY_SOURCES})
 target_include_directories(rsf_anomaly_geometry_test PRIVATE "${PROJECT_SOURCE_DIR}/games/anomaly/src")
-target_link_libraries(rsf_anomaly_geometry_test PRIVATE minhook rsf_build_options)
+target_link_libraries(rsf_anomaly_geometry_test PRIVATE rsf_anomaly_rust minhook rsf_build_options)
 add_test(NAME anomaly_geometry_contract COMMAND rsf_anomaly_geometry_test)
 add_executable(rsf_anomaly_geometry_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_geometry_hooks.cpp" ${RSF_ANOMALY_GEOMETRY_SOURCES})
 target_include_directories(rsf_anomaly_geometry_hooks_test PRIVATE "${PROJECT_SOURCE_DIR}/games/anomaly/src")
 target_compile_definitions(rsf_anomaly_geometry_hooks_test PRIVATE RSF_ANOMALY_GEOMETRY_TESTING)
-target_link_libraries(rsf_anomaly_geometry_hooks_test PRIVATE minhook rsf_build_options)
+target_link_libraries(rsf_anomaly_geometry_hooks_test PRIVATE rsf_anomaly_rust minhook rsf_build_options)
 add_test(NAME anomaly_geometry_hooks_contract COMMAND rsf_anomaly_geometry_hooks_test)
 set_tests_properties(anomaly_geometry_contract anomaly_geometry_hooks_contract PROPERTIES TIMEOUT 60)
 
@@ -121,7 +121,7 @@ set_tests_properties(anomaly_motion_contract anomaly_motion_unknown_selection an
 # The geometry flush detour (redirected onto a fixture) calls the motion stage's flush slot after the original.
 add_executable(rsf_anomaly_motion_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_motion_hooks.cpp" ${RSF_ANOMALY_GEOMETRY_SOURCES})
 target_include_directories(rsf_anomaly_motion_hooks_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
-target_link_libraries(rsf_anomaly_motion_hooks_test PRIVATE minhook rsf_build_options)
+target_link_libraries(rsf_anomaly_motion_hooks_test PRIVATE rsf_anomaly_rust minhook rsf_build_options)
 add_test(NAME anomaly_motion_hooks_contract COMMAND rsf_anomaly_motion_hooks_test)
 set_tests_properties(anomaly_motion_hooks_contract PROPERTIES TIMEOUT 60)
 # Why the motion variant pair is refused under a bound hull/domain shader (first-party HLSL probe; 77 without hardware).
