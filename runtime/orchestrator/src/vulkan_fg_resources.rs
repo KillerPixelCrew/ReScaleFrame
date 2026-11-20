@@ -22,7 +22,7 @@ impl Drop for Replacement<'_> {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_vkfg_release_image(
+pub(super) extern "C" fn rsf_core_vkfg_release_image(
     platform: &Platform,
     user: *mut c_void,
     image: &mut Image,
@@ -42,7 +42,7 @@ extern "C" fn rsf_core_vkfg_release_image(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_vkfg_ensure_image(
+pub(super) extern "C" fn rsf_core_vkfg_ensure_image(
     platform: &Platform,
     user: *mut c_void,
     current: &mut Image,
@@ -130,7 +130,7 @@ fn wait_pending(platform: &Platform, user: *mut c_void, fence: u64, pending: u32
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_vkfg_prepare_fences(
+pub(super) extern "C" fn rsf_core_vkfg_prepare_fences(
     platform: &Platform,
     user: *mut c_void,
     slot: &mut Slot,
@@ -161,7 +161,7 @@ extern "C" fn rsf_core_vkfg_prepare_fences(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_vkfg_fence_submission(
+pub(super) extern "C" fn rsf_core_vkfg_fence_submission(
     platform: &Platform,
     user: *mut c_void,
     slot: &mut Slot,
@@ -187,7 +187,7 @@ extern "C" fn rsf_core_vkfg_fence_submission(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_vkfg_release_fences(
+pub(super) extern "C" fn rsf_core_vkfg_release_fences(
     platform: &Platform,
     user: *mut c_void,
     fences: &mut Fences,

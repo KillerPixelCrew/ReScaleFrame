@@ -1,13 +1,9 @@
 // SPDX-License-Identifier: MIT
+// Native FidelityFX 3 Vulkan leaf. The owner state lives in vulkan_ffx_fg.rs.
 #include "native_fg_ffx_vulkan.h"
-#include "native_fg_source.h"
-#include "vulkan_fg_frames.h"
 #include <rescaleframe/native_latency_vulkan.h>
 #include <rescaleframe/native_streamline_vulkan.h>
 #include "native_vulkan_timing.h"
-#include <memory>
-#include <algorithm>
-#include <cmath>
 
 #if defined(RSF_HAVE_FFX_VK)
 #include <windows.h>
@@ -16,20 +12,25 @@
 #include "vulkan_fg_resources_native.h"
 #include "../../backends/common/frame_capture_vk.h"
 #include "../../vulkan/fsr3/wsi-dispatch.h"
-#include <array>
 #include <atomic>
 #include <cstring>
 #include <filesystem>
+#include <memory>
 #include <mutex>
 
+// The Rust owner relies on these Vulkan values and on the ops layout.
+static_assert(VK_FORMAT_R8G8B8A8_UNORM == 37 && VK_FORMAT_B8G8R8A8_UNORM == 44 && VK_FORMAT_R16G16_SFLOAT == 83 &&
+    VK_FORMAT_R32_SFLOAT == 100 && VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL == 5 && VK_COLOR_SPACE_SRGB_NONLINEAR_KHR == 0);
+static_assert(VK_SUCCESS == 0 && VK_INCOMPLETE == 5 && VK_SUBOPTIMAL_KHR == 1000001003 && VK_ERROR_INITIALIZATION_FAILED == -3);
+static_assert(FFX_API_RETURN_OK == 0);
+static_assert(sizeof(rsf_ffxgvk_swapchain) == 32 && sizeof(rsf_ffxgvk_ops) == 24 * sizeof(void*));
+
 namespace {
-std::atomic<rsf_ffxgvk*> owner{nullptr};
-struct Slot : rsf_fgvk_frame_slot {
-    rsf_vkfg_fences fences{};
-    rsf_vkfg_image color{};
-};
+// The WSI hooks carry no user pointer. This one process-wide route is also the
+// FFX admission: the corrected SDK keeps a single WSI dispatch table.
+std::atomic<rsf_ffxgvk_native*> owner{nullptr};
 }
-struct rsf_ffxgvk {
+struct rsf_ffxgvk_native {
     rsf_fgvk_setup setup{};
     HMODULE module = nullptr;
     ffxContext swapchain = nullptr, effect = nullptr;
@@ -53,25 +54,18 @@ struct rsf_ffxgvk {
     VkPhysicalDeviceMemoryProperties memory_properties{};
     VkAllocationCallbacks* allocator = nullptr;
     uint32_t width = 0, height = 0;
-    bool enabled = false, configured = false;
-    rsf_fgvk_timeline timeline{};
-    std::array<Slot, RSF_FGVK_FRAME_SLOTS> slots{};
+    // The source Rust admitted at the last successful configure. The SDK calls
+    // the generation callback synchronously inside queuePresent.
+    bool leased = false;
+    rsf_frame_record lease{};
     std::atomic<uint64_t> callbacks{0};
-    rsf_fgvk_status status{sizeof(status), RSF_FGVK_ABI_VERSION};
     rsf::FrameCaptureVk capture;
     std::mutex capture_guard;
-    ~rsf_ffxgvk() {
-        if (effect && destroy) (void)destroy(&effect, nullptr);
-        if (chain && functions.pOutDestroySwapchainFFXAPI) functions.pOutDestroySwapchainFFXAPI(
-            static_cast<VkDevice>(setup.graphics.device), chain, allocator, swapchain);
-        if (swapchain && destroy) (void)destroy(&swapchain, nullptr);
+    // Rust destroys the effect, the swapchain and the slot resources first.
+    ~rsf_ffxgvk_native() {
         if (wsi_registered && wsi_dispatch) {
             const rsf_ffx_wsi_dispatch clear{sizeof(clear), 2, static_cast<VkDevice>(setup.graphics.device), nullptr, nullptr, nullptr, nullptr, nullptr};
             (void)wsi_dispatch(&clear);
-        }
-        for (auto& slot : slots) {
-            rsf_core_vkfg_release_image(&rsf::vkfg::platform, &gpu, &slot.color);
-            rsf_core_vkfg_release_fences(&rsf::vkfg::platform, &gpu, &slot.fences);
         }
         if (owner.load() == this) owner = nullptr;
         if (module) FreeLibrary(module);
@@ -155,11 +149,13 @@ VkResult graphics_submit(uint32_t count, const VkSubmitInfo* submits, VkFence fe
     return self ? VkResult(self->setup.graphics_submit(self->setup.queue_user, count, submits, reinterpret_cast<uint64_t>(fence))) : VK_ERROR_DEVICE_LOST;
 }
 struct QueueLock {
-    rsf_ffxgvk& self;
-    explicit QueueLock(rsf_ffxgvk& value) : self(value) { self.setup.lock_queues(self.setup.queue_user); }
+    rsf_ffxgvk_native& self;
+    explicit QueueLock(rsf_ffxgvk_native& value) : self(value) { self.setup.lock_queues(self.setup.queue_user); }
     ~QueueLock() { self.setup.unlock_queues(self.setup.queue_user); }
 };
-void transition(rsf_ffxgvk& self, VkCommandBuffer commands, VkImage image, VkImageLayout from, VkImageLayout to) {
+template<class T> T handle(uint64_t value) { return reinterpret_cast<T>(static_cast<uintptr_t>(value)); }
+template<class T> uint64_t handle_value(T value) { return static_cast<uint64_t>(reinterpret_cast<uintptr_t>(value)); }
+void transition(rsf_ffxgvk_native& self, VkCommandBuffer commands, VkImage image, VkImageLayout from, VkImageLayout to) {
     VkImageMemoryBarrier data{}; data.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     data.oldLayout = from; data.newLayout = to;
     data.srcAccessMask = from == VK_IMAGE_LAYOUT_UNDEFINED ? 0 : VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
@@ -169,102 +165,44 @@ void transition(rsf_ffxgvk& self, VkCommandBuffer commands, VkImage image, VkIma
     self.barrier(commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 1, &data);
 }
 FfxApiResource resource(const rsf_srvk_image& image) {
-    FfxApiResource value{}; value.resource = reinterpret_cast<void*>(static_cast<uintptr_t>(image.image));
+    FfxApiResource value{}; value.resource = handle<void*>(image.image);
     value.description.type = FFX_API_RESOURCE_TYPE_TEXTURE2D;
     value.description.width = image.width; value.description.height = image.height; value.description.depth = value.description.mipCount = 1;
     value.description.format = ffxApiGetSurfaceFormatVK(VkFormat(image.format));
     value.description.usage = FFX_API_RESOURCE_USAGE_READ_ONLY; value.state = FFX_API_RESOURCE_STATE_COMPUTE_READ;
     return value;
 }
+void record_capture(rsf_ffxgvk_native& self, VkCommandBuffer commands, const rsf_srvk_image& image, const rsf_frame_record& record,
+    const char* role, uint32_t reset) noexcept try {
+    std::lock_guard lock(self.capture_guard);
+    (void)self.capture.record(commands, image, record, role, reset);
+} catch (...) {}
 ffxReturnCode_t generate(ffxDispatchDescFrameGeneration* data, void* userdata) {
-    auto& self = *static_cast<rsf_ffxgvk*>(userdata);
-    if (!data) return FFX_API_RETURN_ERROR_PARAMETER;
-    const auto& slot = self.slots[data->frameID % self.slots.size()];
-    if (slot.record.frame_id != data->frameID || !slot.submitted_prepare || !slot.submitted_hudless) return FFX_API_RETURN_ERROR_PARAMETER;
-    data->reset |= (slot.record.flags & RSF_FRAME_FLAG_RESET) != 0;
+    auto& self = *static_cast<rsf_ffxgvk_native*>(userdata);
+    if (!data || !self.leased || self.lease.frame_id != data->frameID) return FFX_API_RETURN_ERROR_PARAMETER;
+    data->reset |= (self.lease.flags & RSF_FRAME_FLAG_RESET) != 0;
     auto result = self.dispatch(&self.effect, &data->header);
     if (result == FFX_API_RETURN_OK) {
         ++self.callbacks;
-        std::lock_guard lock(self.capture_guard);
         if (self.capture.wants(data->frameID)) for (uint32_t i = 0; i < data->numGeneratedFrames && i < 4; ++i) {
             const auto& source = data->outputs[i];
-            rsf_srvk_image image{self.setup.graphics.device, reinterpret_cast<uint64_t>(source.resource),
+            rsf_srvk_image image{self.setup.graphics.device, handle_value(source.resource),
                 uint32_t(VK_FORMAT_R8G8B8A8_UNORM), source.description.width, source.description.height, VK_IMAGE_LAYOUT_GENERAL, 1};
             // The generated output uses the actual swapchain channel order.
             if (source.description.format == FFX_API_SURFACE_FORMAT_B8G8R8A8_UNORM) image.format = VK_FORMAT_B8G8R8A8_UNORM;
-            (void)self.capture.record(static_cast<VkCommandBuffer>(data->commandList), image, slot.record, "fg-generated-before-ui", data->reset, false);
+            std::lock_guard lock(self.capture_guard);
+            (void)self.capture.record(static_cast<VkCommandBuffer>(data->commandList), image, self.lease, "fg-generated-before-ui", data->reset, false);
         }
     }
     return result;
 }
-bool valid_record(const rsf_ffxgvk& self, const rsf_fgvk_frame* frame) {
-    if (!frame || frame->struct_size < sizeof(*frame) || frame->abi_version != RSF_FGVK_ABI_VERSION || !frame->record) return false;
-    const auto& record = *frame->record;
-    if (record.struct_size < sizeof(record) || record.abi_version != RSF_GAME_FRAME_ABI_VERSION ||
-        record.camera.struct_size < sizeof(record.camera) || record.camera.abi_version != RSF_GAME_CAMERA_ABI_VERSION) return false;
-    const auto& camera = record.camera;
-    bool finite = true;
-    for (const auto* matrix : {camera.view_to_clip, camera.clip_to_view, camera.view_to_world, camera.world_to_view, camera.clip_to_previous_clip})
-        for (uint32_t i = 0; i < 16; ++i) finite &= std::isfinite(matrix[i]);
-    return finite && record.struct_size >= sizeof(record) && record.abi_version == RSF_GAME_FRAME_ABI_VERSION &&
-        record.camera.struct_size >= sizeof(record.camera) && record.camera.abi_version == RSF_GAME_CAMERA_ABI_VERSION &&
-        record.session_id && record.frame_id && record.render_width && record.render_height &&
-        record.render_width <= self.width && record.render_height <= self.height && record.output_width == self.width && record.output_height == self.height &&
-        camera.render_width == record.render_width && camera.render_height == record.render_height && camera.output_width == self.width && camera.output_height == self.height &&
-        std::isfinite(record.frame_time_ms) && record.frame_time_ms > 0 && std::isfinite(camera.near_plane) && camera.near_plane > 0 &&
-        std::isfinite(camera.far_plane) && camera.far_plane >= 0 && (self.setup.graphics.depth_infinite || camera.far_plane > camera.near_plane) &&
-        std::isfinite(camera.vertical_fov_radians) && camera.vertical_fov_radians > 0 && camera.vertical_fov_radians < 3.141593f &&
-        std::isfinite(camera.jitter_pixels[0]) && std::isfinite(camera.jitter_pixels[1]);
-}
-rsf_backend_result configure_frame(rsf_ffxgvk& self, const Slot* slot) {
-    ffxConfigureDescFrameGeneration config{}; config.header.type = FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION;
-    config.swapChain = reinterpret_cast<void*>(self.chain);
-    config.frameGenerationEnabled = slot != nullptr;
-    config.allowAsyncWorkloads = false;
-    config.frameGenerationCallback = generate; config.frameGenerationCallbackUserContext = &self;
-    config.frameID = slot ? slot->record.frame_id : self.timeline.last_prepared.frame_id;
-    config.generationRect = {0, 0, int32_t(self.width), int32_t(self.height)};
-    if (slot) {
-        rsf_srvk_image color{self.setup.graphics.device, slot->color.image, VK_FORMAT_R8G8B8A8_UNORM,
-            self.width, self.height, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1};
-        config.HUDLessColor = resource(color);
-    }
-    const char* timing_stage = slot ? (self.configured ? "ffx_configure_update" : "ffx_configure_enable") :
-        (self.configured ? "ffx_configure_disable" : "ffx_configure_disabled");
-    const auto result = rsf::vk_timed_call(timing_stage, config.frameID, [&] { return self.configure(&self.effect, &config.header); });
-    if (result != FFX_API_RETURN_OK) return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    self.configured = slot != nullptr; return RSF_BACKEND_OK;
-}
-}
-#else
-struct rsf_ffxgvk {};
-#endif
 
-extern "C" rsf_backend_result rsf_ffxgvk_create(const rsf_fgvk_setup* setup, rsf_ffxgvk** out, uint64_t* chain) try {
-    if (!out || !chain) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    *out = nullptr; *chain = 0;
-    if (!setup || setup->struct_size < sizeof(*setup)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (setup->abi_version != RSF_FGVK_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
-    const auto& graphics = setup->graphics;
-    if (graphics.struct_size < sizeof(graphics)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (graphics.abi_version != RSF_SRVK_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
-    if (graphics.struct_size < sizeof(graphics) || !graphics.device || !graphics.physical_device || !graphics.instance || !graphics.device_proc ||
-        !graphics.instance_proc || !graphics.runtime_directory_utf8 || !setup->create_info || !setup->graphics_submit || !setup->lock_queues || !setup->unlock_queues ||
-        graphics.depth_inverted > 1 || graphics.depth_infinite > 1 || graphics.motion_jittered > 1)
-        return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    for (uint32_t i = 0; i < 4; ++i) {
-        if (!setup->queues[i]) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-        for (uint32_t j = 0; j < i; ++j) if (setup->queues[i] == setup->queues[j]) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    }
-#if defined(RSF_HAVE_FFX_VK)
-    const auto& info = *static_cast<const VkSwapchainCreateInfoKHR*>(setup->create_info);
-    if (info.oldSwapchain || info.sType != VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR || !info.imageExtent.width || !info.imageExtent.height ||
-        info.imageArrayLayers != 1 || info.imageColorSpace != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR ||
-        !(info.imageFormat == VK_FORMAT_R8G8B8A8_UNORM || info.imageFormat == VK_FORMAT_B8G8R8A8_UNORM)) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
-    auto self = std::make_unique<rsf_ffxgvk>(); self->setup = *setup;
-    rsf_ffxgvk* expected = nullptr;
+int32_t open(const rsf_fgvk_setup* setup, uint32_t width, uint32_t height, rsf_ffxgvk_native** out, void** resources) noexcept try {
+    auto self = std::make_unique<rsf_ffxgvk_native>(); self->setup = *setup;
+    rsf_ffxgvk_native* expected = nullptr;
     if (!owner.compare_exchange_strong(expected, self.get())) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
-    self->width = info.imageExtent.width; self->height = info.imageExtent.height;
+    const auto& graphics = setup->graphics;
+    self->width = width; self->height = height;
     self->allocator = const_cast<VkAllocationCallbacks*>(static_cast<const VkAllocationCallbacks*>(setup->allocator));
     std::u8string directory(std::strlen(graphics.runtime_directory_utf8), u8'\0');
     std::memcpy(directory.data(), graphics.runtime_directory_utf8, directory.size());
@@ -299,20 +237,42 @@ extern "C" rsf_backend_result rsf_ffxgvk_create(const rsf_fgvk_setup* setup, rsf
         serialized_create, serialized_destroy, serialized_present, serialized_acquire, serialized_images};
     if (!self->native_create || !self->native_destroy || !self->native_present || !self->native_acquire || !self->native_images || self->wsi_dispatch(&wsi) != 0) return RSF_BACKEND_ERROR_INIT_FAILED;
     self->wsi_registered = true;
+    *resources = &self->gpu;
+    *out = self.release();
+    return RSF_BACKEND_OK;
+} catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
+
+int32_t create_swapchain(rsf_ffxgvk_native* self, uint64_t* chain) noexcept {
+    const auto& info = *static_cast<const VkSwapchainCreateInfoKHR*>(self->setup.create_info);
+    const auto& setup = self->setup;
     ffxCreateContextDescFrameGenerationSwapChainVK create{}; create.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FGSWAPCHAIN_VK;
-    create.physicalDevice = static_cast<VkPhysicalDevice>(graphics.physical_device); create.device = static_cast<VkDevice>(graphics.device);
+    create.physicalDevice = static_cast<VkPhysicalDevice>(setup.graphics.physical_device); create.device = static_cast<VkDevice>(setup.graphics.device);
     create.swapchain = &self->chain; create.allocator = self->allocator; create.createInfo = info;
-    create.gameQueue = {static_cast<VkQueue>(setup->queues[0]), setup->queue_family, graphics_submit};
-    create.asyncComputeQueue = {static_cast<VkQueue>(setup->queues[1]), setup->queue_family, nullptr};
-    create.presentQueue = {static_cast<VkQueue>(setup->queues[2]), setup->queue_family, nullptr};
-    create.imageAcquireQueue = {static_cast<VkQueue>(setup->queues[3]), setup->queue_family, nullptr};
-    if (self->create(&self->swapchain, &create.header, nullptr) != FFX_API_RETURN_OK) return RSF_BACKEND_ERROR_INIT_FAILED;
+    create.gameQueue = {static_cast<VkQueue>(setup.queues[0]), setup.queue_family, graphics_submit};
+    create.asyncComputeQueue = {static_cast<VkQueue>(setup.queues[1]), setup.queue_family, nullptr};
+    create.presentQueue = {static_cast<VkQueue>(setup.queues[2]), setup.queue_family, nullptr};
+    create.imageAcquireQueue = {static_cast<VkQueue>(setup.queues[3]), setup.queue_family, nullptr};
+    if (self->create(&self->swapchain, &create.header, nullptr) != FFX_API_RETURN_OK) {
+        if (self->swapchain) (void)self->destroy(&self->swapchain, nullptr);
+        self->swapchain = nullptr; self->chain = VK_NULL_HANDLE;
+        return RSF_BACKEND_ERROR_INIT_FAILED;
+    }
+    *chain = handle_value(self->chain);
+    return RSF_BACKEND_OK;
+}
+int32_t query_swapchain(rsf_ffxgvk_native* self) noexcept {
     self->functions.header.type = FFX_API_QUERY_DESC_TYPE_FGSWAPCHAIN_FUNCTIONS_VK;
     if (self->query(&self->swapchain, &self->functions.header) != FFX_API_RETURN_OK || !self->functions.pOutGetSwapchainImagesKHR ||
         !self->functions.pOutAcquireNextImageKHR || !self->functions.pOutQueuePresentKHR || !self->functions.pOutDestroySwapchainFFXAPI)
         return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
+    return RSF_BACKEND_OK;
+}
+int32_t create_effect(rsf_ffxgvk_native* self) noexcept {
+    const auto& info = *static_cast<const VkSwapchainCreateInfoKHR*>(self->setup.create_info);
+    const auto& graphics = self->setup.graphics;
     ffxCreateBackendVKDesc backend{}; backend.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_VK;
-    backend.vkDevice = create.device; backend.vkPhysicalDevice = create.physicalDevice; backend.vkDeviceProcAddr = device_proc;
+    backend.vkDevice = static_cast<VkDevice>(graphics.device); backend.vkPhysicalDevice = static_cast<VkPhysicalDevice>(graphics.physical_device);
+    backend.vkDeviceProcAddr = device_proc;
     ffxCreateContextDescFrameGenerationHudless hudless{}; hudless.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION_HUDLESS;
     hudless.header.pNext = &backend.header; hudless.hudlessBackBufferFormat = FFX_API_SURFACE_FORMAT_R8G8B8A8_UNORM;
     ffxCreateContextDescFrameGeneration fg{}; fg.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION; fg.header.pNext = &hudless.header;
@@ -320,81 +280,46 @@ extern "C" rsf_backend_result rsf_ffxgvk_create(const rsf_fgvk_setup* setup, rsf
         (graphics.depth_infinite ? FFX_FRAMEGENERATION_ENABLE_DEPTH_INFINITE : 0u) |
         (graphics.motion_jittered ? FFX_FRAMEGENERATION_ENABLE_MOTION_VECTORS_JITTER_CANCELLATION : 0u);
     fg.displaySize = fg.maxRenderSize = {self->width, self->height}; fg.backBufferFormat = ffxApiGetSurfaceFormatVK(info.imageFormat);
-    if (self->create(&self->effect, &fg.header, nullptr) != FFX_API_RETURN_OK) return RSF_BACKEND_ERROR_INIT_FAILED;
+    if (self->create(&self->effect, &fg.header, nullptr) != FFX_API_RETURN_OK) {
+        if (self->effect) (void)self->destroy(&self->effect, nullptr);
+        self->effect = nullptr;
+        return RSF_BACKEND_ERROR_INIT_FAILED;
+    }
+    return RSF_BACKEND_OK;
+}
+int32_t query_provider(rsf_ffxgvk_native* self) noexcept {
     ffxQueryGetProviderVersion provider{}; provider.header.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
     if (self->query(&self->effect, &provider.header) != FFX_API_RETURN_OK || !provider.versionId) return RSF_BACKEND_ERROR_INIT_FAILED;
     self->capture.set_provider(provider.versionId, 3, true);
-    self->status.available = 1; self->status.result = RSF_BACKEND_OK;
-    *chain = reinterpret_cast<uint64_t>(self->chain); *out = self.release(); return RSF_BACKEND_OK;
-#else
-    return RSF_BACKEND_ERROR_NOT_COMPILED;
-#endif
-} catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
-
-extern "C" int32_t rsf_ffxgvk_images(rsf_ffxgvk* self, uint32_t* count, uint64_t* images) {
-#if defined(RSF_HAVE_FFX_VK)
-    if (!self || !count) return VK_ERROR_INITIALIZATION_FAILED;
-    const auto query = self->functions.pOutGetSwapchainImagesKHR;
-    const auto device = static_cast<VkDevice>(self->setup.graphics.device);
-    if (!images) return query(device, self->chain, count, nullptr);
-    // FidelityFX FrameInterpolationSwapChainVK::getSwapchainImages leaves an
-    // oversized capacity unchanged after filling its smaller image set. Query
-    // the real count first so callers never consume uninitialized tail handles.
-    const uint32_t capacity = *count;
-    uint32_t available = 0;
-    const auto result = query(device, self->chain, &available, nullptr);
-    if (result != VK_SUCCESS) { *count = 0; return result; }
-    *count = (std::min)(capacity, available);
-    const auto filled = query(device, self->chain, count, reinterpret_cast<VkImage*>(images));
-    if (*count > capacity || *count > available) { *count = 0; return VK_ERROR_INITIALIZATION_FAILED; }
-    return filled == VK_SUCCESS && capacity < available ? VK_INCOMPLETE : filled;
-#else
-    (void)self; (void)count; (void)images; return -3;
-#endif
+    return RSF_BACKEND_OK;
 }
-extern "C" int32_t rsf_ffxgvk_acquire(rsf_ffxgvk* self, uint64_t timeout, uint64_t semaphore, uint64_t fence, uint32_t* index) {
-#if defined(RSF_HAVE_FFX_VK)
-    if (!self || !index) return VK_ERROR_INITIALIZATION_FAILED;
-    return rsf::vk_timed_call("ffx_acquire", self->timeline.last_prepared.frame_id, [&] {
+int32_t destroy_effect(rsf_ffxgvk_native* self) noexcept {
+    if (self->effect && self->destroy(&self->effect, nullptr) != FFX_API_RETURN_OK) return RSF_BACKEND_ERROR_FEATURE_FAILED;
+    self->effect = nullptr; self->leased = false;
+    return RSF_BACKEND_OK;
+}
+void destroy_chain(rsf_ffxgvk_native* self) noexcept {
+    if (self->chain && self->functions.pOutDestroySwapchainFFXAPI)
+        self->functions.pOutDestroySwapchainFFXAPI(static_cast<VkDevice>(self->setup.graphics.device), self->chain, self->allocator, self->swapchain);
+    self->chain = VK_NULL_HANDLE;
+}
+int32_t destroy_swapchain(rsf_ffxgvk_native* self) noexcept {
+    if (self->swapchain && self->destroy(&self->swapchain, nullptr) != FFX_API_RETURN_OK) return RSF_BACKEND_ERROR_FEATURE_FAILED;
+    self->swapchain = nullptr;
+    return RSF_BACKEND_OK;
+}
+int32_t images(rsf_ffxgvk_native* self, uint32_t* count, uint64_t* output) noexcept {
+    return self->functions.pOutGetSwapchainImagesKHR(static_cast<VkDevice>(self->setup.graphics.device), self->chain, count,
+        reinterpret_cast<VkImage*>(output));
+}
+int32_t acquire(rsf_ffxgvk_native* self, uint64_t timeout, uint64_t semaphore, uint64_t fence, uint32_t* index, uint64_t frame) noexcept {
+    return rsf::vk_timed_call("ffx_acquire", frame, [&] {
         return self->functions.pOutAcquireNextImageKHR(static_cast<VkDevice>(self->setup.graphics.device), self->chain, timeout,
-            reinterpret_cast<VkSemaphore>(static_cast<uintptr_t>(semaphore)), reinterpret_cast<VkFence>(static_cast<uintptr_t>(fence)), index);
+            handle<VkSemaphore>(semaphore), handle<VkFence>(fence), index);
     });
-#else
-    (void)self; (void)timeout; (void)semaphore; (void)fence; (void)index; return -3;
-#endif
 }
-extern "C" rsf_backend_result rsf_ffxgvk_enable(rsf_ffxgvk* self, uint32_t enabled) {
-    if (!self || enabled > 1) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-#if defined(RSF_HAVE_FFX_VK)
-    self->enabled = enabled != 0; return RSF_BACKEND_OK;
-#else
-    return RSF_BACKEND_ERROR_NOT_COMPILED;
-#endif
-}
-extern "C" rsf_backend_result rsf_ffxgvk_prepare(rsf_ffxgvk* self, void* commands, const rsf_fgvk_frame* frame) try {
-    if (!self || !commands || !frame || frame->struct_size < sizeof(*frame)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (frame->abi_version != RSF_FGVK_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
-#if defined(RSF_HAVE_FFX_VK)
-    if (!valid_record(*self, frame)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    const rsf::VulkanTimingScope timing("ffx_prepare_total", frame->record->frame_id);
-    if (!self->enabled && !self->capture.wants(frame->record->frame_id)) return RSF_BACKEND_OK;
+int32_t prepare(rsf_ffxgvk_native* self, void* commands, const rsf_fgvk_frame* frame) noexcept {
     const auto& record = *frame->record;
-    if (frame->depth.device != self->setup.graphics.device || frame->motion.device != self->setup.graphics.device ||
-        !frame->depth.image || !frame->motion.image || frame->depth.format != VK_FORMAT_R32_SFLOAT || frame->motion.format != VK_FORMAT_R16G16_SFLOAT ||
-        frame->depth.width != record.render_width || frame->depth.height != record.render_height ||
-        frame->motion.width != record.render_width || frame->motion.height != record.render_height ||
-        frame->depth.layout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL || frame->motion.layout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL ||
-        !std::isfinite(frame->motion_scale_x) || !std::isfinite(frame->motion_scale_y) || !frame->motion_scale_x || !frame->motion_scale_y ||
-        !std::isfinite(record.frame_time_ms) || record.frame_time_ms <= 0 || record.camera.depth_inverted != self->setup.graphics.depth_inverted ||
-        record.camera.motion_jittered != self->setup.graphics.motion_jittered) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    auto& slot = self->slots[record.frame_id % self->slots.size()];
-    if (!rsf_core_fgvk_can_prepare(&slot)) return RSF_BACKEND_ERROR_NOT_READY;
-    self->gpu.wait_label = "ffx_slot_fence_wait";
-    self->gpu.wait_frame = record.frame_id;
-    const auto fences = rsf_core_vkfg_prepare_fences(&rsf::vkfg::platform, &self->gpu, &slot, &slot.fences);
-    self->gpu.wait_label = nullptr;
-    if (fences != RSF_BACKEND_OK) return fences;
-    rsf_core_fgvk_prepare_begin(&self->timeline, &slot, &record, commands);
     ffxDispatchDescFrameGenerationPrepare data{}; data.header.type = FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATION_PREPARE;
     ffxDispatchDescFrameGenerationPrepareCameraInfo camera{}; camera.header.type = FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATION_PREPARE_CAMERAINFO;
     const auto* world = record.camera.view_to_world;
@@ -407,149 +332,147 @@ extern "C" rsf_backend_result rsf_ffxgvk_prepare(rsf_ffxgvk* self, void* command
     data.cameraNear = record.camera.near_plane; data.cameraFar = record.camera.far_plane;
     data.cameraFovAngleVertical = record.camera.vertical_fov_radians; data.viewSpaceToMetersFactor = 1;
     data.depth = resource(frame->depth); data.motionVectors = resource(frame->motion);
-    // Dispatch can record GPU work before reporting an error. Submission still
-    // owns that recording even when it never becomes an accepted FG input.
-    slot.recorded_prepare = true;
-    if (self->enabled) {
-        if (rsf::vk_timed_call("ffx_prepare_sdk", record.frame_id, [&] {
-            return self->dispatch(&self->effect, &data.header);
-        }) != FFX_API_RETURN_OK) return RSF_BACKEND_ERROR_FEATURE_FAILED;
-        slot.prepared = true; ++self->status.prepared;
-    }
-    rsf_core_fgvk_prepare_accepted(&self->timeline, &slot);
-    { std::lock_guard lock(self->capture_guard);
-        (void)self->capture.record(static_cast<VkCommandBuffer>(commands), frame->depth, record, "fg-depth", record.flags & RSF_FRAME_FLAG_RESET);
-        (void)self->capture.record(static_cast<VkCommandBuffer>(commands), frame->motion, record, "fg-motion-uv", record.flags & RSF_FRAME_FLAG_RESET); }
-    return RSF_BACKEND_OK;
-#else
-    return RSF_BACKEND_ERROR_NOT_COMPILED;
-#endif
-} catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
-extern "C" rsf_backend_result rsf_ffxgvk_hudless(rsf_ffxgvk* self, void* commands, const rsf_fgvk_frame* frame) try {
-    if (!self || !commands || !frame || frame->struct_size < sizeof(*frame)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (frame->abi_version != RSF_FGVK_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
-#if defined(RSF_HAVE_FFX_VK)
-    if (!valid_record(*self, frame)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (!self->enabled && !self->capture.wants(frame->record->frame_id)) return RSF_BACKEND_OK;
-    const auto& record = *frame->record; auto& slot = self->slots[record.frame_id % self->slots.size()];
-    if (frame->hudless.device != self->setup.graphics.device || !frame->hudless.image || !frame->hudless.copy_source ||
-        frame->hudless.format != VK_FORMAT_R8G8B8A8_UNORM || frame->hudless.width != self->width ||
-        frame->hudless.height != self->height || frame->hudless.layout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL ||
-        !rsf_core_fgvk_hudless_begin(&slot, &record, commands))
-        return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (!rsf_core_vkfg_ensure_image(&rsf::vkfg::platform, &self->gpu, &slot.color, self->width, self->height,
-        VK_FORMAT_R8G8B8A8_UNORM, 0)) return RSF_BACKEND_ERROR_INIT_FAILED;
-    auto list = static_cast<VkCommandBuffer>(commands);
-    slot.recorded_hudless = true;
-    auto input = reinterpret_cast<VkImage>(static_cast<uintptr_t>(frame->hudless.image));
+    return rsf::vk_timed_call("ffx_prepare_sdk", record.frame_id, [&] { return int32_t(self->dispatch(&self->effect, &data.header)); });
+}
+void copy(rsf_ffxgvk_native* self, void* commands, const rsf_srvk_image* source, uint64_t target, uint32_t initialized) noexcept {
+    const auto list = static_cast<VkCommandBuffer>(commands);
+    const auto input = handle<VkImage>(source->image), output = handle<VkImage>(target);
     transition(*self, list, input, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-    transition(*self, list, rsf::vkfg::image_handle(slot.color), slot.color.initialized ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    transition(*self, list, output, initialized ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     VkImageCopy region{}; region.srcSubresource = region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}; region.extent = {self->width, self->height, 1};
-    self->copy(list, input, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, rsf::vkfg::image_handle(slot.color), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    self->copy(list, input, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, output, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
     transition(*self, list, input, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    transition(*self, list, rsf::vkfg::image_handle(slot.color), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL); slot.color.initialized = true;
-    slot.hudless = true; if (self->enabled) ++self->status.tagged;
-    rsf_srvk_image image{self->setup.graphics.device, slot.color.image, VK_FORMAT_R8G8B8A8_UNORM,
-        self->width, self->height, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1};
-    { std::lock_guard lock(self->capture_guard); (void)self->capture.record(list, image, record, "fg-hudless-color", record.flags & RSF_FRAME_FLAG_RESET); }
+    transition(*self, list, output, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+}
+int32_t configure(rsf_ffxgvk_native* self, const rsf_frame_record* lease, uint64_t color, uint64_t frame, const char* stage) noexcept {
+    ffxConfigureDescFrameGeneration config{}; config.header.type = FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION;
+    config.swapChain = self->chain;
+    config.frameGenerationEnabled = lease != nullptr;
+    config.allowAsyncWorkloads = false;
+    config.frameGenerationCallback = generate; config.frameGenerationCallbackUserContext = self;
+    config.frameID = frame;
+    config.generationRect = {0, 0, int32_t(self->width), int32_t(self->height)};
+    if (lease) config.HUDLessColor = resource({self->setup.graphics.device, color, VK_FORMAT_R8G8B8A8_UNORM,
+        self->width, self->height, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1});
+    const auto result = rsf::vk_timed_call(stage, frame, [&] { return self->configure(&self->effect, &config.header); });
+    if (result != FFX_API_RETURN_OK) return RSF_BACKEND_ERROR_FEATURE_FAILED;
+    self->leased = lease != nullptr;
+    self->lease = lease ? *lease : rsf_frame_record{};
     return RSF_BACKEND_OK;
-#else
-    return RSF_BACKEND_ERROR_NOT_COMPILED;
-#endif
-} catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
-extern "C" void rsf_ffxgvk_submitted(rsf_ffxgvk* self, void* const* commands, uint32_t count) {
-#if defined(RSF_HAVE_FFX_VK)
-    if (!self || !commands) return;
-    std::array<rsf_fgvk_frame_slot*, RSF_FGVK_FRAME_SLOTS> states{};
-    for (size_t i = 0; i < states.size(); ++i) states[i] = &self->slots[i];
-    rsf_fgvk_submit_plan plan{};
-    rsf_core_fgvk_submitted(states.data(), commands, count, &plan);
-    for (size_t i = 0; i < states.size(); ++i) {
-        auto& slot = self->slots[i];
-        const auto bit = 1u << i;
-        if (plan.discarded_hudless & bit) slot.color.initialized = false;
-        if (!(plan.fences & bit)) continue;
-        rsf_core_vkfg_fence_submission(&rsf::vkfg::platform, &self->gpu, &slot, &slot.fences, 0);
-    }
-#else
-    (void)self; (void)commands; (void)count;
-#endif
 }
-static int32_t ffx_present(rsf_ffxgvk* self, const void* present_info, const rsf_frame_record* source, bool explicit_source) try {
-    if (explicit_source && !rsf::fg_present_identity_valid(source)) return -3;
-#if defined(RSF_HAVE_FFX_VK)
-    if (!self || !present_info) return VK_ERROR_INITIALIZATION_FAILED;
-    const uint64_t source_frame = rsf::fg_present_frame(self->timeline.last_prepared.frame_id, source, explicit_source);
-    const rsf::VulkanTimingScope timing("ffx_present_total", source_frame);
-    const auto& info = *static_cast<const VkPresentInfoKHR*>(present_info);
-    if (info.swapchainCount != 1 || !info.pSwapchains || info.pSwapchains[0] != self->chain) return VK_ERROR_INITIALIZATION_FAILED;
-    auto& slot = self->slots[source_frame % self->slots.size()];
-    const bool identity = rsf::fg_present_identity_matches(slot.record, source, explicit_source);
-    // A camera reset discards dispatch history through generate(), rather than
-    // disabling the presenter and draining its queues and pacing threads. Keep
-    // activation stable while this frame's submitted input leases are valid.
-    const bool valid = rsf_core_fgvk_present_candidate(&self->timeline, &slot, source_frame, identity, self->enabled) != 0;
-    const auto configured = configure_frame(*self, valid ? &slot : nullptr);
-    if (configured != RSF_BACKEND_OK) { self->status.result = configured; return VK_ERROR_INITIALIZATION_FAILED; }
-    const auto result = rsf::vk_timed_call("ffx_queue_present", source_frame, [&] {
-        return self->functions.pOutQueuePresentKHR(static_cast<VkQueue>(self->setup.queues[0]), &info);
+int32_t present(rsf_ffxgvk_native* self, const void* info, uint64_t frame, uint64_t* count) noexcept {
+    const auto result = rsf::vk_timed_call("ffx_queue_present", frame, [&] {
+        return self->functions.pOutQueuePresentKHR(static_cast<VkQueue>(self->setup.queues[0]), static_cast<const VkPresentInfoKHR*>(info));
     });
-    if (valid && (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR)) {
-        rsf_core_vkfg_fence_submission(&rsf::vkfg::platform, &self->gpu, &slot, &slot.fences, 1);
-    }
-    rsf_core_fgvk_presented(&self->timeline, &slot, source_frame, identity);
-    self->status.source_frame = explicit_source && !valid ? 0 : source_frame;
-    self->status.enabled = valid ? 1u : 0u; self->status.result = result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
-    if (self->functions.pOutGetLastPresentCountFFXAPI) self->status.last_present_count = self->functions.pOutGetLastPresentCountFFXAPI(self->chain);
+    if (self->functions.pOutGetLastPresentCountFFXAPI) *count = self->functions.pOutGetLastPresentCountFFXAPI(self->chain);
     return result;
-#else
-    (void)self; (void)present_info; return -3;
-#endif
-} catch (...) { return -3; }
-extern "C" int32_t rsf_ffxgvk_present(rsf_ffxgvk* self, const void* info) { return ffx_present(self, info, nullptr, false); }
-extern "C" int32_t rsf_ffxgvk_present_source(rsf_ffxgvk* self, const void* info, const rsf_frame_record* source) {
-    return ffx_present(self, info, source, true);
 }
-extern "C" rsf_backend_result rsf_ffxgvk_get_status(rsf_ffxgvk* self, rsf_fgvk_status* status) {
-    if (!self || !status || status->struct_size < sizeof(*status)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (status->abi_version != RSF_FGVK_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
-#if defined(RSF_HAVE_FFX_VK)
-    *status = self->status; status->generated_callbacks = self->callbacks.load(); return RSF_BACKEND_OK;
-#else
-    return RSF_BACKEND_ERROR_NOT_COMPILED;
-#endif
-}
-extern "C" rsf_backend_result rsf_ffxgvk_drain(rsf_ffxgvk* self) try {
-    if (!self) return RSF_BACKEND_OK;
-#if defined(RSF_HAVE_FFX_VK)
-    // Device idle cannot cover commands the host has not submitted yet.
-    for (const auto& slot : self->slots)
-        if (rsf_core_fgvk_unsubmitted(&slot))
-            return RSF_BACKEND_ERROR_NOT_READY;
+int32_t drain(rsf_ffxgvk_native* self) noexcept {
     QueueLock lock(*self);
     ffxDispatchDescFrameGenerationSwapChainWaitForPresentsVK wait{}; wait.header.type = FFX_API_DISPATCH_DESC_TYPE_FGSWAPCHAIN_WAIT_FOR_PRESENTS_VK;
     if (self->dispatch(&self->swapchain, &wait.header) != FFX_API_RETURN_OK || self->idle(static_cast<VkDevice>(self->setup.graphics.device)) != VK_SUCCESS)
         return RSF_BACKEND_ERROR_NOT_READY;
-    { std::lock_guard capture_lock(self->capture_guard); (void)self->capture.flush(); }
     return RSF_BACKEND_OK;
+}
+void capture_flush(rsf_ffxgvk_native* self) noexcept try {
+    std::lock_guard lock(self->capture_guard); (void)self->capture.flush();
+} catch (...) {}
+int64_t timing_begin() noexcept {
+    auto& config = rsf::vk_timing_detail::config();
+    if (config.file == INVALID_HANDLE_VALUE || config.records.load(std::memory_order_relaxed) >= 2048) return 0;
+    LARGE_INTEGER now{}; QueryPerformanceCounter(&now);
+    return now.QuadPart;
+}
+void timing_end(const char* stage, uint64_t frame, int64_t start) noexcept {
+    if (!start || !stage) return;
+    LARGE_INTEGER end{}; QueryPerformanceCounter(&end);
+    rsf::vk_timing_detail::config().write(stage, frame, GetCurrentThreadId(), start, end.QuadPart);
+}
+
+constexpr rsf_ffxgvk_ops operations{
+    open, [](rsf_ffxgvk_native* self) { delete self; },
+    create_swapchain, query_swapchain, create_effect, query_provider, destroy_effect, destroy_chain, destroy_swapchain,
+    images, acquire, prepare, copy, configure, present, drain,
+    [](rsf_ffxgvk_native* self) -> uint64_t { return self->callbacks.load(); },
+    [](rsf_ffxgvk_native* self, uint64_t frame) -> uint32_t { return self->capture.wants(frame) ? 1u : 0u; },
+    [](rsf_ffxgvk_native* self, void* commands, const rsf_srvk_image* image, const rsf_frame_record* record, const char* role) {
+        record_capture(*self, static_cast<VkCommandBuffer>(commands), *image, *record, role, record->flags & RSF_FRAME_FLAG_RESET);
+    },
+    capture_flush,
+    [](rsf_ffxgvk_native* self, uint64_t frame) {
+        self->gpu.wait_label = frame ? "ffx_slot_fence_wait" : nullptr;
+        self->gpu.wait_frame = frame;
+    },
+    timing_begin, timing_end, &rsf::vkfg::platform,
+};
+int32_t ffx_present(rsf_ffxgvk* self, const void* info, const rsf_frame_record* source, uint32_t explicit_source) {
+    uint64_t chain = 0;
+    if (info) {
+        const auto& vk = *static_cast<const VkPresentInfoKHR*>(info);
+        if (vk.swapchainCount == 1 && vk.pSwapchains) chain = handle_value(vk.pSwapchains[0]);
+    }
+    return rsf_core_ffxgvk_present(self, info, chain, source, explicit_source);
+}
+}
+
+extern "C" rsf_backend_result rsf_ffxgvk_create(const rsf_fgvk_setup* setup, rsf_ffxgvk** out, uint64_t* chain) {
+    rsf_ffxgvk_swapchain swapchain{};
+    const rsf_ffxgvk_swapchain* description = nullptr;
+    if (setup && setup->struct_size >= sizeof(*setup) && setup->create_info) {
+        const auto& info = *static_cast<const VkSwapchainCreateInfoKHR*>(setup->create_info);
+        swapchain = {info.imageExtent.width, info.imageExtent.height, uint32_t(info.imageFormat), uint32_t(info.imageColorSpace),
+            info.imageArrayLayers, info.sType == VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR ? 1u : 0u, handle_value(info.oldSwapchain)};
+        description = &swapchain;
+    }
+    return rsf_core_ffxgvk_create(&operations, setup, description, out, chain);
+}
+extern "C" int32_t rsf_ffxgvk_images(rsf_ffxgvk* self, uint32_t* count, uint64_t* images) { return rsf_core_ffxgvk_images(self, count, images); }
+extern "C" int32_t rsf_ffxgvk_acquire(rsf_ffxgvk* self, uint64_t timeout, uint64_t semaphore, uint64_t fence, uint32_t* index) {
+    return rsf_core_ffxgvk_acquire(self, timeout, semaphore, fence, index);
+}
+extern "C" rsf_backend_result rsf_ffxgvk_enable(rsf_ffxgvk* self, uint32_t enabled) { return rsf_core_ffxgvk_enable(self, enabled); }
+extern "C" rsf_backend_result rsf_ffxgvk_prepare(rsf_ffxgvk* self, void* commands, const rsf_fgvk_frame* frame) {
+    return rsf_core_ffxgvk_prepare(self, commands, frame);
+}
+extern "C" rsf_backend_result rsf_ffxgvk_hudless(rsf_ffxgvk* self, void* commands, const rsf_fgvk_frame* frame) {
+    return rsf_core_ffxgvk_hudless(self, commands, frame);
+}
+extern "C" void rsf_ffxgvk_submitted(rsf_ffxgvk* self, void* const* commands, uint32_t count) { rsf_core_ffxgvk_submitted(self, commands, count); }
+extern "C" int32_t rsf_ffxgvk_present(rsf_ffxgvk* self, const void* info) { return ffx_present(self, info, nullptr, 0); }
+extern "C" int32_t rsf_ffxgvk_present_source(rsf_ffxgvk* self, const void* info, const rsf_frame_record* source) {
+    return ffx_present(self, info, source, 1);
+}
+extern "C" rsf_backend_result rsf_ffxgvk_get_status(rsf_ffxgvk* self, rsf_fgvk_status* status) { return rsf_core_ffxgvk_status(self, status); }
+extern "C" rsf_backend_result rsf_ffxgvk_drain(rsf_ffxgvk* self) { return rsf_core_ffxgvk_drain(self); }
+extern "C" rsf_backend_result rsf_ffxgvk_destroy(rsf_ffxgvk* self) { return rsf_core_ffxgvk_destroy(self); }
 #else
-    return RSF_BACKEND_ERROR_NOT_COMPILED;
+// Disabled build: the Rust owner validates creation arguments and reports
+// RSF_BACKEND_ERROR_NOT_COMPILED, so no owner can reach the other entries.
+extern "C" rsf_backend_result rsf_ffxgvk_create(const rsf_fgvk_setup* setup, rsf_ffxgvk** out, uint64_t* chain) {
+    return rsf_core_ffxgvk_create(nullptr, setup, nullptr, out, chain);
+}
+extern "C" int32_t rsf_ffxgvk_images(rsf_ffxgvk*, uint32_t*, uint64_t*) { return -3; }
+extern "C" int32_t rsf_ffxgvk_acquire(rsf_ffxgvk*, uint64_t, uint64_t, uint64_t, uint32_t*) { return -3; }
+extern "C" rsf_backend_result rsf_ffxgvk_enable(rsf_ffxgvk* self, uint32_t enabled) {
+    return !self || enabled > 1 ? RSF_BACKEND_ERROR_INVALID_ARGUMENT : RSF_BACKEND_ERROR_NOT_COMPILED;
+}
+static rsf_backend_result disabled_frame(rsf_ffxgvk* self, void* commands, const rsf_fgvk_frame* frame) {
+    if (!self || !commands || !frame || frame->struct_size < sizeof(*frame)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    return frame->abi_version != RSF_FGVK_ABI_VERSION ? RSF_BACKEND_ERROR_ABI_MISMATCH : RSF_BACKEND_ERROR_NOT_COMPILED;
+}
+extern "C" rsf_backend_result rsf_ffxgvk_prepare(rsf_ffxgvk* self, void* commands, const rsf_fgvk_frame* frame) {
+    return disabled_frame(self, commands, frame);
+}
+extern "C" rsf_backend_result rsf_ffxgvk_hudless(rsf_ffxgvk* self, void* commands, const rsf_fgvk_frame* frame) {
+    return disabled_frame(self, commands, frame);
+}
+extern "C" void rsf_ffxgvk_submitted(rsf_ffxgvk*, void* const*, uint32_t) {}
+extern "C" int32_t rsf_ffxgvk_present(rsf_ffxgvk*, const void*) { return -3; }
+extern "C" int32_t rsf_ffxgvk_present_source(rsf_ffxgvk*, const void*, const rsf_frame_record*) { return -3; }
+extern "C" rsf_backend_result rsf_ffxgvk_get_status(rsf_ffxgvk* self, rsf_fgvk_status* status) {
+    if (!self || !status || status->struct_size < sizeof(*status)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+    return status->abi_version != RSF_FGVK_ABI_VERSION ? RSF_BACKEND_ERROR_ABI_MISMATCH : RSF_BACKEND_ERROR_NOT_COMPILED;
+}
+extern "C" rsf_backend_result rsf_ffxgvk_drain(rsf_ffxgvk* self) { return self ? RSF_BACKEND_ERROR_NOT_COMPILED : RSF_BACKEND_OK; }
+extern "C" rsf_backend_result rsf_ffxgvk_destroy(rsf_ffxgvk*) { return RSF_BACKEND_OK; }
 #endif
-} catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
-extern "C" rsf_backend_result rsf_ffxgvk_destroy(rsf_ffxgvk* self) try {
-    if (!self) return RSF_BACKEND_OK;
-#if defined(RSF_HAVE_FFX_VK)
-    for (const auto& slot : self->slots)
-        if (rsf_core_fgvk_unsubmitted(&slot))
-            return RSF_BACKEND_ERROR_NOT_READY;
-    if (self->effect && configure_frame(*self, nullptr) != RSF_BACKEND_OK) return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    if (self->chain && rsf_ffxgvk_drain(self) != RSF_BACKEND_OK) return RSF_BACKEND_ERROR_NOT_READY;
-    if (self->effect && self->destroy(&self->effect, nullptr) != FFX_API_RETURN_OK) return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    self->effect = nullptr;
-    if (self->chain) self->functions.pOutDestroySwapchainFFXAPI(static_cast<VkDevice>(self->setup.graphics.device), self->chain, self->allocator, self->swapchain);
-    self->chain = VK_NULL_HANDLE;
-    if (self->swapchain && self->destroy(&self->swapchain, nullptr) != FFX_API_RETURN_OK) return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    self->swapchain = nullptr;
-#endif
-    delete self; return RSF_BACKEND_OK;
-} catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }

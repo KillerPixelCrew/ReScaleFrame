@@ -132,6 +132,8 @@ mod vulkan_dlss_sr;
 #[cfg(windows)]
 mod vulkan_dlss_sr_abi;
 #[cfg(windows)]
+mod vulkan_ffx_fg;
+#[cfg(windows)]
 mod vulkan_fg;
 #[cfg(windows)]
 mod vulkan_fg_abi;

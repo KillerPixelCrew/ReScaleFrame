@@ -1,190 +1,175 @@
 // SPDX-License-Identifier: MIT
-// Exercise the actual owner with synthetic recording/submission functions.
-#include "../runtime/orchestrator/src/native_fg_vulkan.cpp"
-#include <cstdio>
-#include <cstdlib>
+// Source recording, exact submission identity, completion evidence and teardown
+// through the retained rsf_ffxgvk entry points.
+#include "native_ffx_vulkan_harness.h"
 
-namespace {
-uint64_t handles = 100;
-uint32_t resets = 0, submits = 0, waits = 0, copies = 0, sdk_records = 0;
-bool reject_prepare = false, reject_wait = false, reject_bind = false;
-uint32_t destroyed_images = 0, freed_memories = 0;
-void require(bool value, const char* text) { if (!value) { std::fprintf(stderr, "%s\n", text); std::exit(1); } }
-template<class T> T handle() { return reinterpret_cast<T>(++handles); }
-VkResult VKAPI_PTR create_fence(VkDevice, const VkFenceCreateInfo*, const VkAllocationCallbacks*, VkFence* out) { *out = handle<VkFence>(); return VK_SUCCESS; }
-void VKAPI_PTR destroy_fence(VkDevice, VkFence, const VkAllocationCallbacks*) {}
-VkResult VKAPI_PTR reset_fences(VkDevice, uint32_t count, const VkFence* fence) { require(count == 1 && *fence, "reset has a real completion identity"); ++resets; return VK_SUCCESS; }
-VkResult VKAPI_PTR wait_fences(VkDevice, uint32_t count, const VkFence* fence, VkBool32, uint64_t timeout) {
-    require(count == 1 && *fence && timeout == 15000000000ull, "wait observes the earlier completion before reset");
-    ++waits; return reject_wait ? VK_TIMEOUT : VK_SUCCESS;
-}
-int32_t submit(void*, uint32_t count, const void* commands, uint64_t fence) {
-    require(!count && !commands && fence, "fences are queued after successful host submissions"); ++submits; return VK_SUCCESS;
-}
-VkResult VKAPI_PTR create_image(VkDevice, const VkImageCreateInfo*, const VkAllocationCallbacks*, VkImage* out) { *out = handle<VkImage>(); return VK_SUCCESS; }
-void VKAPI_PTR destroy_image(VkDevice, VkImage, const VkAllocationCallbacks*) { ++destroyed_images; }
-void VKAPI_PTR requirements(VkDevice, VkImage, VkMemoryRequirements* out) { out->size = 4096; out->memoryTypeBits = 1; }
-VkResult VKAPI_PTR allocate(VkDevice, const VkMemoryAllocateInfo*, const VkAllocationCallbacks*, VkDeviceMemory* out) { *out = handle<VkDeviceMemory>(); return VK_SUCCESS; }
-void VKAPI_PTR free_memory(VkDevice, VkDeviceMemory, const VkAllocationCallbacks*) { ++freed_memories; }
-VkResult VKAPI_PTR bind(VkDevice, VkImage, VkDeviceMemory, VkDeviceSize) { return reject_bind ? VK_ERROR_UNKNOWN : VK_SUCCESS; }
-void VKAPI_PTR barrier(VkCommandBuffer, VkPipelineStageFlags, VkPipelineStageFlags, VkDependencyFlags, uint32_t, const VkMemoryBarrier*,
-    uint32_t, const VkBufferMemoryBarrier*, uint32_t, const VkImageMemoryBarrier*) {}
-void VKAPI_PTR copy(VkCommandBuffer, VkImage, VkImageLayout, VkImage, VkImageLayout, uint32_t, const VkImageCopy*) { ++copies; }
-ffxReturnCode_t dispatch(ffxContext*, const ffxDispatchDescHeader* header) {
-    require(header->type == FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATION_PREPARE, "real prepare dispatch reached the fake SDK");
-    ++sdk_records; // A failing SDK call can already have recorded GPU work.
-    return reject_prepare ? FFX_API_RETURN_ERROR_PARAMETER : FFX_API_RETURN_OK;
-}
-ffxReturnCode_t configure(ffxContext*, const ffxConfigureDescHeader*) { return FFX_API_RETURN_OK; }
-VkResult VKAPI_PTR present(VkQueue, const VkPresentInfoKHR*) { return VK_SUCCESS; }
-VkResult VKAPI_PTR swapchain_images(VkDevice, VkSwapchainKHR, uint32_t* count, VkImage* images) {
-    // Match the pinned SDK bug: the fill call does not update an oversized count.
-    if (!images) *count = 3;
-    else for (uint32_t i = 0; i < *count && i < 3; ++i) images[i] = reinterpret_cast<VkImage>(uintptr_t(1000 + i));
-    return *count < 3 ? VK_INCOMPLETE : VK_SUCCESS;
-}
-rsf_frame_record record(uint64_t session, uint64_t frame, uint32_t view = 0, uint32_t generation = 1) {
-    rsf_frame_record result{}; result.struct_size = sizeof(result); result.abi_version = RSF_GAME_FRAME_ABI_VERSION;
-    result.session_id = session; result.frame_id = frame; result.view_id = view; result.resource_generation = generation;
-    result.render_width = result.output_width = 640; result.render_height = result.output_height = 360; result.frame_time_ms = 16.667f;
-    auto& camera = result.camera; camera.struct_size = sizeof(camera); camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
-    camera.render_width = camera.output_width = 640; camera.render_height = camera.output_height = 360;
-    camera.near_plane = 0.05f; camera.far_plane = 100; camera.vertical_fov_radians = 1; camera.depth_inverted = 1;
-    for (auto* matrix : {camera.view_to_clip, camera.clip_to_view, camera.view_to_world, camera.world_to_view, camera.clip_to_previous_clip})
-        for (uint32_t i = 0; i < 16; i += 5) matrix[i] = 1;
-    return result;
-}
-rsf_fgvk_frame frame(rsf_ffxgvk& self, const rsf_frame_record& source) {
-    rsf_fgvk_frame result{}; result.struct_size = sizeof(result); result.abi_version = RSF_FGVK_ABI_VERSION; result.record = &source;
-    auto image = [&](uint32_t format) { return rsf_srvk_image{self.setup.graphics.device, 12, format, 640, 360, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1}; };
-    result.depth = image(VK_FORMAT_R32_SFLOAT); result.motion = image(VK_FORMAT_R16G16_SFLOAT); result.hudless = image(VK_FORMAT_R8G8B8A8_UNORM);
-    result.motion_scale_x = 640; result.motion_scale_y = 360; return result;
-}
-void complete(rsf_ffxgvk& self, const rsf_frame_record& source, void* prepare, void* hudless) {
-    auto input = frame(self, source);
-    require(rsf_ffxgvk_prepare(&self, prepare, &input) == RSF_BACKEND_OK && rsf_ffxgvk_hudless(&self, hudless, &input) == RSF_BACKEND_OK,
-        "real prepare and HUD-less recording accepted the source");
-}
-}
-extern "C" int32_t rsf_slvk_without_dlssg(int32_t (*call)(void*), void* user) { return call(user); }
-extern "C" int32_t rsf_latencyvk_wsi_call(rsf_vk_wsi_call call, void* user) { return call(user); }
-extern "C" int32_t rsf_latencyvk_queue_present(rsf_vk_function call, void* queue, const void* info) {
-    return reinterpret_cast<PFN_vkQueuePresentKHR>(call)(static_cast<VkQueue>(queue), static_cast<const VkPresentInfoKHR*>(info));
-}
+using namespace fake;
+
 int main() {
-    SetEnvironmentVariableW(L"RSF_VULKAN_FRAME_CAPTURE_DIR", nullptr); SetEnvironmentVariableW(L"RSF_VULKAN_TIMING_FILE", nullptr);
-    rsf_ffxgvk self{}; self.setup.graphics.device = reinterpret_cast<void*>(1); self.setup.graphics.depth_inverted = 1;
-    self.setup.graphics_submit = submit; self.setup.queues[0] = reinterpret_cast<void*>(2); self.width = 640; self.height = 360; self.enabled = true;
-    self.gpu.device = static_cast<VkDevice>(self.setup.graphics.device);
-    self.gpu.graphics_submit = self.setup.graphics_submit;
-    self.gpu.create_fence = create_fence; self.gpu.destroy_fence = destroy_fence; self.gpu.reset_fences = reset_fences; self.gpu.wait_fences = wait_fences;
-    self.gpu.create_image = create_image; self.gpu.destroy_image = destroy_image; self.gpu.requirements = requirements; self.gpu.allocate = allocate;
-    self.gpu.free_memory = free_memory; self.gpu.bind = bind; self.barrier = barrier; self.copy = copy; self.dispatch = dispatch; self.configure = configure;
-    self.gpu.local_types = 1;
+    Setup setup;
+    auto table = ops();
+    auto* self = start(table, setup);
+    rsf_ffxgvk* second = nullptr; uint64_t second_chain = 0;
+    require(rsf_core_ffxgvk_create(&table, &setup.value, &setup.swapchain, &second, &second_chain) == RSF_BACKEND_ERROR_NOT_SUPPORTED &&
+        !second && !second_chain, "one FFX owner holds the process-wide WSI route");
+    require(rsf_ffxgvk_enable(self, 1) == RSF_BACKEND_OK, "FG enabled");
+
+    auto* gpu = &state.native->gpu;
     rsf_vkfg_image cached{};
-    require(rsf_core_vkfg_ensure_image(&rsf::vkfg::platform, &self.gpu, &cached, 640, 360, VK_FORMAT_R8G8B8A8_UNORM, 0),
+    require(rsf_core_vkfg_ensure_image(&rsf::vkfg::platform, gpu, &cached, 640, 360, VK_FORMAT_R8G8B8A8_UNORM, 0),
         "initial private image is fully bound");
     const auto initial = cached.image;
-    reject_bind = true;
-    require(!rsf_core_vkfg_ensure_image(&rsf::vkfg::platform, &self.gpu, &cached, 1280, 720, VK_FORMAT_R8G8B8A8_UNORM, 0) &&
-        cached.image == initial && cached.width == 640 && destroyed_images == 1 && freed_memories == 1,
+    state.reject_bind = true;
+    require(!rsf_core_vkfg_ensure_image(&rsf::vkfg::platform, gpu, &cached, 1280, 720, VK_FORMAT_R8G8B8A8_UNORM, 0) &&
+        cached.image == initial && cached.width == 640 && state.destroyed_images == 1 && state.freed_memories == 1,
         "failed private image replacement rolls back without touching the committed cache");
-    reject_bind = false;
-    rsf_core_vkfg_release_image(&rsf::vkfg::platform, &self.gpu, &cached);
-    self.chain = reinterpret_cast<VkSwapchainKHR>(3); self.functions.pOutQueuePresentKHR = present;
-    self.functions.pOutGetSwapchainImagesKHR = swapchain_images;
+    state.reject_bind = false;
+    rsf_core_vkfg_release_image(&rsf::vkfg::platform, gpu, &cached);
+    state.destroyed_images = state.freed_memories = 0;
+
     uint64_t image_handles[8] = {99, 99, 99, 99, 99, 99, 99, 99};
     uint32_t image_count = 8;
-    require(rsf_ffxgvk_images(&self, &image_count, image_handles) == VK_SUCCESS && image_count == 3 &&
+    require(rsf_ffxgvk_images(self, &image_count, image_handles) == VK_SUCCESS && image_count == 3 &&
         image_handles[0] == 1000 && image_handles[2] == 1002 && image_handles[3] == 99,
         "oversized image capacity reports only initialized SDK handles");
     image_count = 2;
-    require(rsf_ffxgvk_images(&self, &image_count, image_handles) == VK_INCOMPLETE && image_count == 2,
+    require(rsf_ffxgvk_images(self, &image_count, image_handles) == VK_INCOMPLETE && image_count == 2,
         "short image capacity preserves Vulkan incomplete semantics");
     image_count = 0;
-    require(rsf_ffxgvk_images(&self, &image_count, nullptr) == VK_SUCCESS && image_count == 3,
-        "count-only image enumeration preserved");
-    VkPresentInfoKHR info{}; info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR; info.swapchainCount = 1; info.pSwapchains = &self.chain;
-    void* a = reinterpret_cast<void*>(10); void* b = reinterpret_cast<void*>(11); void* c = reinterpret_cast<void*>(12);
+    require(rsf_ffxgvk_images(self, &image_count, nullptr) == VK_SUCCESS && image_count == 3, "count-only image enumeration preserved");
+
+    VkSwapchainKHR chain = state.native->chain, foreign_chain = id<VkSwapchainKHR>(77);
+    VkPresentInfoKHR info{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR}; info.swapchainCount = 1; info.pSwapchains = &chain;
+    VkPresentInfoKHR foreign = info; foreign.pSwapchains = &foreign_chain;
+    require(rsf_ffxgvk_present(self, &foreign) == VK_ERROR_INITIALIZATION_FAILED && !state.present_calls,
+        "a foreign chain never reaches the FFX presenter");
+
+    void* a = id<void*>(10); void* b = id<void*>(11); void* c = id<void*>(12);
     auto one = record(7, 1); complete(self, one, a, a);
-    void* duplicate[] = {a, a, nullptr}; rsf_ffxgvk_submitted(&self, duplicate, 3);
-    require(submits == 1 && resets == 1 && self.slots[1].submitted_prepare && self.slots[1].submitted_hudless,
-        "one command buffer with both roles gets exactly one completion fence");
-    self.slots[1].source_pending = false; // The prior fence was observed complete, without replacing that source.
-    rsf_ffxgvk_submitted(&self, duplicate, 3);
-    require(submits == 1 && resets == 1, "repeated notification never rearms an accepted old slot");
-    auto two = record(7, 2); auto input = frame(self, two);
-    require(rsf_ffxgvk_prepare(&self, a, &input) == RSF_BACKEND_OK, "reused command address records another source");
-    rsf_ffxgvk_submitted(&self, &a, 1);
-    require(submits == 2 && self.slots[2].source_pending && !self.slots[1].source_pending,
-        "prepare-only source is fenced without rearming the older accepted source");
+    void* duplicate[] = {a, a, nullptr}; rsf_ffxgvk_submitted(self, duplicate, 3);
+    require(state.submits == 1 && state.resets == 1, "one command buffer with both roles gets exactly one completion fence");
+    rsf_ffxgvk_submitted(self, duplicate, 3);
+    require(state.submits == 1 && state.resets == 1, "repeated notification never rearms an accepted old slot");
+    auto two = record(7, 2); auto input = frame(two);
+    require(rsf_ffxgvk_prepare(self, a, &input) == RSF_BACKEND_OK, "reused command address records another source");
+    rsf_ffxgvk_submitted(self, &a, 1);
+    require(state.submits == 2 && state.resets == 2, "prepare-only source is fenced without rearming the older accepted source");
     auto three = record(7, 3); complete(self, three, b, b);
     auto four = record(7, 4, 2); complete(self, four, b, b);
-    rsf_ffxgvk_submitted(&self, &b, 1);
-    require(submits == 3 && !self.slots[3].recorded_prepare && !self.slots[3].recorded_hudless && !self.slots[3].prepared &&
-        !self.slots[3].color.initialized && self.slots[4].submitted_prepare && self.slots[4].submitted_hudless,
-        "newest pending recording wins and abandoned source/first-use state is invalidated");
-    require(rsf_ffxgvk_present(&self, &info) == VK_SUCCESS && self.status.enabled, "newest submitted source is presentation eligible");
-    auto five = record(7, 5); input = frame(self, five); reject_prepare = true;
-    require(rsf_ffxgvk_prepare(&self, c, &input) == RSF_BACKEND_ERROR_FEATURE_FAILED && self.slots[5].recorded_prepare && !self.slots[5].prepared,
-        "SDK recording failure remains distinct from accepted FG preparation"); reject_prepare = false;
-    require(rsf_ffxgvk_drain(&self) == RSF_BACKEND_ERROR_NOT_READY &&
-        rsf_ffxgvk_destroy(&self) == RSF_BACKEND_ERROR_NOT_READY && self.chain && self.slots[5].recorded_prepare,
-        "failed SDK recording retains its owner until the host submits the partial work");
-    auto before = submits; rsf_ffxgvk_submitted(&self, &c, 1);
-    require(submits == before + 1 && self.slots[5].source_pending, "partially recorded SDK failure still gets submission completion");
-    require(rsf_ffxgvk_present(&self, &info) == VK_SUCCESS && !self.status.enabled, "failed prepare does not replay the previous source");
-    auto six = record(7, 6); input = frame(self, six);
-    require(rsf_ffxgvk_prepare(&self, a, &input) == RSF_BACKEND_OK, "split prepare accepted");
-    rsf_ffxgvk_submitted(&self, &a, 1); before = submits; const auto earlier_waits = waits;
-    require(rsf_ffxgvk_hudless(&self, b, &input) == RSF_BACKEND_OK, "split HUD-less accepted");
-    require(rsf_ffxgvk_drain(&self) == RSF_BACKEND_ERROR_NOT_READY && self.slots[0].recorded_hudless,
+    rsf_ffxgvk_submitted(self, &b, 1);
+    require(state.submits == 3, "only the newest recording on a reused command buffer is fenced");
+    require(rsf_ffxgvk_present_source(self, &info, &three) == VK_SUCCESS && !state.enabled,
+        "an abandoned recording cannot generate");
+    require(rsf_ffxgvk_present(self, &info) == VK_SUCCESS && state.enabled && state.generated == 1 && state.generated_frame == 4,
+        "newest submitted source is presentation eligible and leased to the SDK callback");
+    require(state.submits == 4, "the generated source receives a consumer fence");
+
+    auto five = record(7, 5); input = frame(five); state.reject_prepare = true;
+    require(rsf_ffxgvk_prepare(self, c, &input) == RSF_BACKEND_ERROR_FEATURE_FAILED,
+        "SDK recording failure remains distinct from accepted FG preparation");
+    state.reject_prepare = false;
+    require(rsf_ffxgvk_drain(self) == RSF_BACKEND_ERROR_NOT_READY && rsf_ffxgvk_destroy(self) == RSF_BACKEND_ERROR_NOT_READY &&
+        !state.drains && !state.effects_destroyed, "failed SDK recording retains its owner until the host submits the partial work");
+    auto before = state.submits; rsf_ffxgvk_submitted(self, &c, 1);
+    require(state.submits == before + 1, "partially recorded SDK failure still gets submission completion");
+    require(rsf_ffxgvk_present(self, &info) == VK_SUCCESS && !state.enabled, "failed prepare does not replay the previous source");
+
+    auto six = record(7, 6); input = frame(six);
+    require(rsf_ffxgvk_prepare(self, a, &input) == RSF_BACKEND_OK, "split prepare accepted");
+    rsf_ffxgvk_submitted(self, &a, 1); before = state.submits; const auto earlier_waits = state.waits;
+    require(rsf_ffxgvk_hudless(self, b, &input) == RSF_BACKEND_OK, "split HUD-less accepted");
+    require(rsf_ffxgvk_drain(self) == RSF_BACKEND_ERROR_NOT_READY,
         "submitted guides do not permit retirement of a later unsubmitted HUD-less copy");
-    rsf_ffxgvk_submitted(&self, &b, 1);
-    require(submits == before + 1 && waits == earlier_waits + 1, "later role waits prior fence before establishing a new completion point");
-    rsf_ffxgvk_submitted(&self, &b, 1); require(submits == before + 1, "split duplicate submission is idempotent");
-    require(rsf_ffxgvk_present(&self, &info) == VK_SUCCESS && self.status.enabled, "split submitted roles can generate");
-    auto seven = record(7, 7); input = frame(self, seven);
-    require(rsf_ffxgvk_prepare(&self, a, &input) == RSF_BACKEND_OK, "completed ring slot can be reused"); rsf_ffxgvk_submitted(&self, &a, 1);
-    require(rsf_ffxgvk_hudless(&self, b, &input) == RSF_BACKEND_OK, "later role recorded"); before = resets; reject_wait = true;
-    rsf_ffxgvk_submitted(&self, &b, 1); reject_wait = false;
-    require(self.slots[1].completion_unknown && resets == before, "positive fence timeout preserves unknown completion without reset");
-    require(rsf_ffxgvk_present(&self, &info) == VK_SUCCESS && !self.status.enabled, "unknown completion refuses FG");
-    auto new_session = record(99, 2, 8, 3); input = frame(self, new_session);
-    require(rsf_ffxgvk_prepare(&self, c, &input) == RSF_BACKEND_OK, "new session can restart original source IDs");
+    rsf_ffxgvk_submitted(self, &b, 1);
+    require(state.submits == before + 1 && state.waits == earlier_waits + 1, "later role waits prior fence before establishing a new completion point");
+    rsf_ffxgvk_submitted(self, &b, 1); require(state.submits == before + 1, "split duplicate submission is idempotent");
+    require(rsf_ffxgvk_present(self, &info) == VK_SUCCESS && state.enabled, "split submitted roles can generate");
+
+    auto seven = record(7, 7); input = frame(seven);
+    require(rsf_ffxgvk_prepare(self, a, &input) == RSF_BACKEND_OK, "completed ring slot can be reused"); rsf_ffxgvk_submitted(self, &a, 1);
+    require(rsf_ffxgvk_hudless(self, b, &input) == RSF_BACKEND_OK, "later role recorded"); before = state.resets; state.reject_wait = true;
+    rsf_ffxgvk_submitted(self, &b, 1); state.reject_wait = false;
+    require(state.resets == before, "positive fence timeout preserves unknown completion without reset");
+    require(rsf_ffxgvk_present(self, &info) == VK_SUCCESS && !state.enabled, "unknown completion refuses FG");
+
+    auto new_session = record(99, 2, 8, 3); input = frame(new_session);
+    require(rsf_ffxgvk_prepare(self, c, &input) == RSF_BACKEND_OK, "new session can restart original source IDs");
     for (uint32_t kind = 0; kind < 3; ++kind) {
-        auto foreign = new_session; if (kind == 0) ++foreign.session_id; if (kind == 1) ++foreign.view_id; if (kind == 2) ++foreign.resource_generation;
-        auto wrong = frame(self, foreign); const auto previous_copies = copies;
-        require(rsf_ffxgvk_hudless(&self, c, &wrong) == RSF_BACKEND_ERROR_INVALID_ARGUMENT && copies == previous_copies,
+        auto wrong_source = new_session;
+        if (kind == 0) ++wrong_source.session_id;
+        if (kind == 1) ++wrong_source.view_id;
+        if (kind == 2) ++wrong_source.resource_generation;
+        auto wrong = frame(wrong_source); const auto previous_copies = state.copies;
+        require(rsf_ffxgvk_hudless(self, c, &wrong) == RSF_BACKEND_ERROR_INVALID_ARGUMENT && state.copies == previous_copies,
             "same numeric frame never joins another session, view or resource generation");
     }
-    require(rsf_ffxgvk_hudless(&self, c, &input) == RSF_BACKEND_OK, "matching identity completes new session"); rsf_ffxgvk_submitted(&self, &c, 1);
-    require(rsf_ffxgvk_present(&self, &info) == VK_SUCCESS && self.status.enabled && self.status.source_frame == 2,
-        "presentation admission uses the local recording order, not old session frame IDs");
-    require(rsf_ffxgvk_present(&self, &info) == VK_SUCCESS && !self.status.enabled, "same recording cannot present twice");
+    require(rsf_ffxgvk_hudless(self, c, &input) == RSF_BACKEND_OK, "matching identity completes new session"); rsf_ffxgvk_submitted(self, &c, 1);
+    rsf_fgvk_status status{sizeof(status), RSF_FGVK_ABI_VERSION};
+    require(rsf_ffxgvk_present(self, &info) == VK_SUCCESS && state.enabled && rsf_ffxgvk_get_status(self, &status) == RSF_BACKEND_OK &&
+        status.enabled && status.source_frame == 2, "presentation admission uses the local recording order, not old session frame IDs");
+    require(rsf_ffxgvk_present(self, &info) == VK_SUCCESS && !state.enabled, "same recording cannot present twice");
+
     auto older = record(99, 3, 8, 3), newer = record(99, 4, 8, 3);
-    complete(self, older, a, a); rsf_ffxgvk_submitted(&self, &a, 1);
-    complete(self, newer, b, b); rsf_ffxgvk_submitted(&self, &b, 1);
-    require(rsf_ffxgvk_present_source(&self, &info, &older) == VK_SUCCESS && self.status.enabled &&
-        self.status.source_frame == 3 && self.timeline.last_prepared.frame_id == 4,
+    complete(self, older, a, a); rsf_ffxgvk_submitted(self, &a, 1);
+    complete(self, newer, b, b); rsf_ffxgvk_submitted(self, &b, 1);
+    require(rsf_ffxgvk_present_source(self, &info, &older) == VK_SUCCESS && state.enabled && state.generated_frame == 3 &&
+        rsf_ffxgvk_get_status(self, &status) == RSF_BACKEND_OK && status.source_frame == 3,
         "older output selects its own submitted guides without rewinding the producer");
-    require(rsf_ffxgvk_present_source(&self, &info, &newer) == VK_SUCCESS && self.status.enabled && self.status.source_frame == 4,
+    require(rsf_ffxgvk_present_source(self, &info, &newer) == VK_SUCCESS && state.enabled && state.generated_frame == 4,
         "newer prepared source remains available after the older Present");
     auto invalid_source = newer; invalid_source.struct_size = 4;
-    require(rsf_ffxgvk_present_source(&self, &info, &invalid_source) == VK_ERROR_INITIALIZATION_FAILED,"short Present identity refused");
+    require(rsf_ffxgvk_present_source(self, &info, &invalid_source) == VK_ERROR_INITIALIZATION_FAILED, "short Present identity refused");
     invalid_source = newer; ++invalid_source.abi_version;
-    require(rsf_ffxgvk_present_source(&self, &info, &invalid_source) == VK_ERROR_INITIALIZATION_FAILED,"foreign Present identity ABI refused");
-    auto foreign_source = record(99, 5, 8, 3); complete(self, foreign_source, a, a); rsf_ffxgvk_submitted(&self, &a, 1);
+    require(rsf_ffxgvk_present_source(self, &info, &invalid_source) == VK_ERROR_INITIALIZATION_FAILED, "foreign Present identity ABI refused");
+    auto foreign_source = record(99, 5, 8, 3); complete(self, foreign_source, a, a); rsf_ffxgvk_submitted(self, &a, 1);
     ++foreign_source.session_id;
-    require(rsf_ffxgvk_present_source(&self, &info, &foreign_source) == VK_SUCCESS && !self.status.enabled && !self.status.source_frame,
+    require(rsf_ffxgvk_present_source(self, &info, &foreign_source) == VK_SUCCESS && !state.enabled &&
+        rsf_ffxgvk_get_status(self, &status) == RSF_BACKEND_OK && !status.source_frame,
         "foreign identity retains ordinary output without selecting latest guides");
-    auto forbidden_source = record(99, 6, 8, 3); forbidden_source.flags = RSF_FRAME_FLAG_NO_FG;
-    complete(self, forbidden_source, b, b); rsf_ffxgvk_submitted(&self, &b, 1);
-    require(rsf_ffxgvk_present_source(&self, &info, &forbidden_source) == VK_SUCCESS && !self.status.enabled,
+    auto forbidden_source = record(99, 6, 8, 3, RSF_FRAME_FLAG_NO_FG);
+    complete(self, forbidden_source, b, b); rsf_ffxgvk_submitted(self, &b, 1);
+    require(rsf_ffxgvk_present_source(self, &info, &forbidden_source) == VK_SUCCESS && !state.enabled,
         "explicit source preserves NO_FG admission refusal");
-    require(rsf_ffxgvk_present_source(&self, &info, nullptr) == VK_SUCCESS && !self.status.enabled && !self.status.source_frame,
+    require(rsf_ffxgvk_present_source(self, &info, nullptr) == VK_SUCCESS && !state.enabled &&
+        rsf_ffxgvk_get_status(self, &status) == RSF_BACKEND_OK && !status.source_frame,
         "unassociated output never guesses a prepared source");
-    require(sdk_records >= 8, "the scenarios exercised real SDK prepare callsites");
-    self.chain = VK_NULL_HANDLE;
-    std::puts("PASS: FFX source recording, reused command identity and submission completion");
+
+    // presentInterpolated submits interpolation before it returns an earlier
+    // asynchronous present result. That source still needs its consumer fence.
+    auto late = record(99, 8, 8, 3); complete(self, late, c, c); rsf_ffxgvk_submitted(self, &c, 1);
+    before = state.submits; state.present_result = VK_ERROR_OUT_OF_DATE_KHR;
+    require(rsf_ffxgvk_present(self, &info) == VK_ERROR_OUT_OF_DATE_KHR && state.enabled && state.submits == before + 1 &&
+        rsf_ffxgvk_get_status(self, &status) == RSF_BACKEND_OK && status.result == RSF_BACKEND_ERROR_FEATURE_FAILED && status.enabled,
+        "an error result after interpolation keeps the HUD-less consumer fence");
+    state.present_result = VK_SUCCESS;
+    const auto waits_before_reuse = state.waits;
+    auto reuse = record(99, 14, 8, 3); input = frame(reuse);
+    require(rsf_ffxgvk_prepare(self, a, &input) == RSF_BACKEND_OK && state.waits == waits_before_reuse + 2,
+        "slot reuse waits for both the source and the consumer completion");
+    rsf_ffxgvk_submitted(self, &a, 1);
+    require(state.sdk_records >= 8, "the scenarios exercised real SDK prepare callsites");
+
+    // Teardown keeps every resource until each completion step succeeds.
+    state.reject_drain = true;
+    require(rsf_ffxgvk_destroy(self) == RSF_BACKEND_ERROR_NOT_READY && !state.effects_destroyed && !state.chains_destroyed,
+        "an unproven drain retains the owner and SDK contexts");
+    state.reject_drain = false; state.reject_effect_destroy = true;
+    const auto drains = state.drains;
+    require(rsf_ffxgvk_destroy(self) == RSF_BACKEND_ERROR_FEATURE_FAILED && state.drains == drains + 1 && !state.chains_destroyed,
+        "a refused effect destruction retains the chain and swapchain context");
+    image_count = 0;
+    auto later = record(99, 15, 8, 3); input = frame(later);
+    require(rsf_ffxgvk_present(self, &info) == VK_ERROR_INITIALIZATION_FAILED &&
+        rsf_ffxgvk_images(self, &image_count, nullptr) == VK_ERROR_INITIALIZATION_FAILED &&
+        rsf_ffxgvk_prepare(self, a, &input) == RSF_BACKEND_ERROR_INVALID_ARGUMENT,
+        "a partially retired owner refuses new recording and presentation");
+    state.reject_effect_destroy = false; state.reject_swapchain_destroy = true;
+    require(rsf_ffxgvk_destroy(self) == RSF_BACKEND_ERROR_FEATURE_FAILED && state.effects_destroyed == 1 && state.chains_destroyed == 1 &&
+        owner.load() == state.native, "the chain goes before a refused swapchain context, and the WSI route stays registered");
+    state.reject_swapchain_destroy = false;
+    const auto fences_before = state.destroyed_fences;
+    require(rsf_ffxgvk_destroy(self) == RSF_BACKEND_OK && state.effects_destroyed == 1 && state.chains_destroyed == 1 &&
+        state.swapchains_destroyed == 1 && state.destroyed_images == 6 && state.destroyed_fences == fences_before + 12 && !owner.load(),
+        "retry completes teardown without repeating released steps and releases the WSI route last");
+    std::puts("PASS: FFX source recording, reused command identity, submission completion and retained teardown");
 }

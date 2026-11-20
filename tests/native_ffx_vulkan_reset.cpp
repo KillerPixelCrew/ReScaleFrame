@@ -1,93 +1,71 @@
 // SPDX-License-Identifier: MIT
-// Synthetic FFX presenter lifecycle. No vendor DLL, Vulkan device or GPU work.
-#include "../runtime/orchestrator/src/native_fg_vulkan.cpp"
-#include <cstdio>
-#include <cstdlib>
+// Presenter activation, camera reset delivery and source identity through the
+// retained rsf_ffxgvk entry points. No vendor DLL, Vulkan device or GPU work.
+#include "native_ffx_vulkan_harness.h"
 
-namespace {
-void require(bool value, const char* message) {
-    if (!value) { std::fprintf(stderr, "%s\n", message); std::exit(1); }
-}
-rsf_ffxgvk* active = nullptr;
-bool configured_enabled = false;
-uint32_t configuration_calls = 0, activation_changes = 0, dispatch_calls = 0, source_fences = 0;
-bool expected_reset = false;
-ffxReturnCode_t configure(ffxContext*, const ffxConfigureDescHeader* header) {
-    const auto& request = *reinterpret_cast<const ffxConfigureDescFrameGeneration*>(header);
-    require(request.header.type == FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION && request.frameID == active->latest,
-        "each source updates the SDK frame identity");
-    const bool enabled = request.frameGenerationEnabled;
-    if (configured_enabled != enabled) ++activation_changes;
-    configured_enabled = enabled; ++configuration_calls;
-    if (enabled) {
-        require(request.frameGenerationCallback && request.frameGenerationCallbackUserContext == active && request.HUDLessColor.resource,
-            "enabled presenter receives its callback and leased HUD-less input");
-    }
-    return FFX_API_RETURN_OK;
-}
-ffxReturnCode_t dispatch(ffxContext*, const ffxDispatchDescHeader* header) {
-    const auto& request = *reinterpret_cast<const ffxDispatchDescFrameGeneration*>(header);
-    require(request.reset == expected_reset, "camera reset reaches SDK dispatch without changing activation");
-    ++dispatch_calls; return FFX_API_RETURN_OK;
-}
-VkResult VKAPI_PTR present(VkQueue, const VkPresentInfoKHR*) {
-    if (configured_enabled) {
-        ffxDispatchDescFrameGeneration request{}; request.header.type = FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATION;
-        request.frameID = active->latest;
-        require(generate(&request, active) == FFX_API_RETURN_OK, "SDK callback accepts the submitted source frame");
-    }
-    return VK_SUCCESS;
-}
-VkResult VKAPI_PTR reset_fences(VkDevice, uint32_t, const VkFence*) { return VK_SUCCESS; }
-int32_t submit(void*, uint32_t count, const void* commands, uint64_t fence) {
-    require(!count && !commands && fence, "completion fence follows presentation work"); ++source_fences; return VK_SUCCESS;
-}
-void record(rsf_ffxgvk& self, uint64_t frame, uint32_t flags) {
-    self.latest = frame;
-    auto& slot = self.slots[frame % self.slots.size()]; slot = {};
-    slot.recording_sequence = ++self.recording_sequence;
-    slot.record.frame_id = frame; slot.record.flags = flags;
-    slot.prepared = slot.hudless = slot.submitted_prepare = slot.submitted_hudless = true;
-    slot.consumer_completion = reinterpret_cast<VkFence>(uintptr_t(21));
-    slot.color.image = reinterpret_cast<VkImage>(uintptr_t(22));
-    expected_reset = (flags & RSF_FRAME_FLAG_RESET) != 0;
-}
-}
-extern "C" int32_t rsf_slvk_without_dlssg(int32_t (*callback)(void*), void* user) { return callback(user); }
-extern "C" int32_t rsf_latencyvk_wsi_call(rsf_vk_wsi_call callback, void* user) { return callback(user); }
-extern "C" int32_t rsf_latencyvk_queue_present(rsf_vk_function callback, void* queue, const void* info) {
-    return reinterpret_cast<PFN_vkQueuePresentKHR>(callback)(static_cast<VkQueue>(queue), static_cast<const VkPresentInfoKHR*>(info));
-}
+using namespace fake;
 
 int main() {
-    SetEnvironmentVariableW(L"RSF_VULKAN_FRAME_CAPTURE_DIR", nullptr);
-    SetEnvironmentVariableW(L"RSF_VULKAN_TIMING_FILE", nullptr);
-    rsf_ffxgvk self{}; active = &self;
-    self.setup.graphics.device = reinterpret_cast<void*>(uintptr_t(1));
-    self.setup.queues[0] = reinterpret_cast<void*>(uintptr_t(2)); self.setup.graphics_submit = submit;
-    self.chain = reinterpret_cast<VkSwapchainKHR>(uintptr_t(3)); self.width = 640; self.height = 360;
-    self.configure = configure; self.dispatch = dispatch; self.reset_fences = reset_fences;
-    self.functions.pOutQueuePresentKHR = present;
-    VkPresentInfoKHR info{}; info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR; info.swapchainCount = 1; info.pSwapchains = &self.chain;
-    require(rsf_ffxgvk_enable(&self, 1) == RSF_BACKEND_OK, "explicit FG enable is accepted");
+    Setup setup;
+    auto table = ops();
+    auto* self = start(table, setup);
+    VkSwapchainKHR chain = state.native->chain;
+    VkPresentInfoKHR info{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR}; info.swapchainCount = 1; info.pSwapchains = &chain;
+    void* a = id<void*>(10); void* b = id<void*>(11);
+    state.check_reset = true;
+
+    require(rsf_ffxgvk_enable(self, 1) == RSF_BACKEND_OK, "explicit FG enable is accepted");
     for (uint64_t frame = 1; frame <= 4; ++frame) {
-        record(self, frame, frame % 2 ? RSF_FRAME_FLAG_RESET : 0);
-        require(rsf_ffxgvk_present(&self, &info) == VK_SUCCESS && self.status.enabled && self.configured,
+        // Frame 1 starts a producer, frame 3 carries an engine camera reset.
+        const auto source = record(7, frame, 0, 1, frame == 3 ? RSF_FRAME_FLAG_RESET : 0);
+        complete(self, source, a, a); rsf_ffxgvk_submitted(self, &a, 1);
+        state.expected_reset = frame % 2 == 1;
+        require(rsf_ffxgvk_present(self, &info) == VK_SUCCESS && state.enabled && state.generated_frame == frame,
             "submitted reset and ordinary frames keep the presenter active");
     }
-    require(configuration_calls == 4 && activation_changes == 1 && dispatch_calls == 4 && source_fences == 4,
+    require(state.configurations == 4 && state.activations == 1 && state.generated == 4 && state.submits == 8,
         "camera resets update per-frame SDK inputs without presenter reconfiguration");
-    require(rsf_ffxgvk_enable(&self, 0) == RSF_BACKEND_OK, "explicit FG disable is accepted");
-    record(self, 5, 0);
-    require(rsf_ffxgvk_present(&self, &info) == VK_SUCCESS && !self.configured && !self.status.enabled &&
-        activation_changes == 2 && dispatch_calls == 4, "explicit disable still retires presenter activation");
-    require(rsf_ffxgvk_enable(&self, 1) == RSF_BACKEND_OK, "FG can resume");
-    record(self, 6, RSF_FRAME_FLAG_RESET);
-    auto& slot = self.slots[6 % self.slots.size()]; slot.completion_unknown = true;
-    require(rsf_ffxgvk_present(&self, &info) == VK_SUCCESS && !self.status.enabled && dispatch_calls == 4,
+
+    require(rsf_ffxgvk_enable(self, 0) == RSF_BACKEND_OK, "explicit FG disable is accepted");
+    const auto disabled = record(7, 5); complete(self, disabled, a, a); rsf_ffxgvk_submitted(self, &a, 1);
+    require(rsf_ffxgvk_present(self, &info) == VK_SUCCESS && !state.enabled && state.activations == 2 && state.generated == 4,
+        "explicit disable still retires presenter activation");
+    rsf_fgvk_status status{sizeof(status), RSF_FGVK_ABI_VERSION};
+    require(rsf_ffxgvk_get_status(self, &status) == RSF_BACKEND_OK && !status.enabled && status.generated_callbacks == 4 &&
+        status.prepared == 4 && status.tagged == 4, "status counts only enabled preparation and SDK generation");
+
+    require(rsf_ffxgvk_enable(self, 1) == RSF_BACKEND_OK, "FG can resume");
+    const auto unknown = record(7, 6, 0, 1, RSF_FRAME_FLAG_RESET);
+    auto input = frame(unknown);
+    require(rsf_ffxgvk_prepare(self, a, &input) == RSF_BACKEND_OK, "split prepare accepted"); rsf_ffxgvk_submitted(self, &a, 1);
+    require(rsf_ffxgvk_hudless(self, b, &input) == RSF_BACKEND_OK, "split HUD-less accepted");
+    state.reject_wait = true; rsf_ffxgvk_submitted(self, &b, 1); state.reject_wait = false;
+    require(rsf_ffxgvk_present(self, &info) == VK_SUCCESS && !state.enabled && state.generated == 4,
         "unknown GPU completion never admits an input lease");
-    self.chain = VK_NULL_HANDLE;
-    for (auto& value : self.slots) { value.color.image = VK_NULL_HANDLE; value.consumer_completion = VK_NULL_HANDLE; }
-    std::puts("PASS: FFX camera resets preserve presenter activation and SDK reset dispatch");
+
+    // The ledger marks a producer change as a reset; the callback sees the
+    // leased record's flags for the exact source each Present names.
+    const auto changed = record(7, 7, 2), steady = record(7, 8, 2);
+    complete(self, changed, a, a); rsf_ffxgvk_submitted(self, &a, 1);
+    complete(self, steady, b, b); rsf_ffxgvk_submitted(self, &b, 1);
+    state.expected_reset = true;
+    require(rsf_ffxgvk_present_source(self, &info, &changed) == VK_SUCCESS && state.enabled && state.generated_frame == 7,
+        "an older explicit source carries its view-change reset into generation");
+    state.expected_reset = false;
+    require(rsf_ffxgvk_present_source(self, &info, &steady) == VK_SUCCESS && state.enabled && state.generated_frame == 8,
+        "the next explicit source generates without a reset");
+    const auto next = record(7, 9, 2); complete(self, next, a, a); rsf_ffxgvk_submitted(self, &a, 1);
+    auto other_view = next; ++other_view.view_id;
+    const auto generated = state.generated;
+    require(rsf_ffxgvk_present_source(self, &info, &other_view) == VK_SUCCESS && !state.enabled && state.generated == generated &&
+        rsf_ffxgvk_get_status(self, &status) == RSF_BACKEND_OK && !status.source_frame,
+        "a mismatched view identity never leases the stored source");
+    require(rsf_ffxgvk_present_source(self, &info, &next) == VK_SUCCESS && state.enabled && state.generated_frame == 9 &&
+        rsf_ffxgvk_get_status(self, &status) == RSF_BACKEND_OK && status.source_frame == 9,
+        "the matching identity still generates after a refused one");
+
+    require(rsf_ffxgvk_destroy(self) == RSF_BACKEND_OK && !state.enabled && !owner.load(),
+        "teardown disables generation before releasing the presenter");
+    std::puts("PASS: FFX camera resets preserve presenter activation, SDK reset dispatch and exact source identity");
     return 0;
 }
