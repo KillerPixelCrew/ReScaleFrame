@@ -83,3 +83,128 @@ const _: () = {
     ["Offset of field: rsf_overlay12_platform::submit"]
         [::core::mem::offset_of!(rsf_overlay12_platform, submit) - 64usize];
 };
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_overlay11on12_device {
+    pub device: *mut ::core::ffi::c_void,
+    pub context: *mut ::core::ffi::c_void,
+    pub interop: *mut ::core::ffi::c_void,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_overlay11on12_device"]
+        [::core::mem::size_of::<rsf_overlay11on12_device>() - 24usize];
+    ["Alignment of rsf_overlay11on12_device"]
+        [::core::mem::align_of::<rsf_overlay11on12_device>() - 8usize];
+    ["Offset of field: rsf_overlay11on12_device::device"]
+        [::core::mem::offset_of!(rsf_overlay11on12_device, device) - 0usize];
+    ["Offset of field: rsf_overlay11on12_device::context"]
+        [::core::mem::offset_of!(rsf_overlay11on12_device, context) - 8usize];
+    ["Offset of field: rsf_overlay11on12_device::interop"]
+        [::core::mem::offset_of!(rsf_overlay11on12_device, interop) - 16usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_overlay11on12_target {
+    pub backbuffer: *mut ::core::ffi::c_void,
+    pub wrapped: *mut ::core::ffi::c_void,
+    pub view: *mut ::core::ffi::c_void,
+    pub width: u32,
+    pub height: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_overlay11on12_target"]
+        [::core::mem::size_of::<rsf_overlay11on12_target>() - 32usize];
+    ["Alignment of rsf_overlay11on12_target"]
+        [::core::mem::align_of::<rsf_overlay11on12_target>() - 8usize];
+    ["Offset of field: rsf_overlay11on12_target::backbuffer"]
+        [::core::mem::offset_of!(rsf_overlay11on12_target, backbuffer) - 0usize];
+    ["Offset of field: rsf_overlay11on12_target::wrapped"]
+        [::core::mem::offset_of!(rsf_overlay11on12_target, wrapped) - 8usize];
+    ["Offset of field: rsf_overlay11on12_target::view"]
+        [::core::mem::offset_of!(rsf_overlay11on12_target, view) - 16usize];
+    ["Offset of field: rsf_overlay11on12_target::width"]
+        [::core::mem::offset_of!(rsf_overlay11on12_target, width) - 24usize];
+    ["Offset of field: rsf_overlay11on12_target::height"]
+        [::core::mem::offset_of!(rsf_overlay11on12_target, height) - 28usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_overlay11on12_platform {
+    pub create: ::core::option::Option<
+        unsafe extern "C" fn(
+            device: *mut ::core::ffi::c_void,
+            queue: *mut ::core::ffi::c_void,
+            arg1: *mut rsf_overlay11on12_device,
+        ) -> i32,
+    >,
+    pub window: ::core::option::Option<
+        unsafe extern "C" fn(
+            chain: *mut ::core::ffi::c_void,
+            window: *mut *mut ::core::ffi::c_void,
+        ) -> u32,
+    >,
+    pub start: ::core::option::Option<
+        unsafe extern "C" fn(
+            device: *mut ::core::ffi::c_void,
+            window: *mut ::core::ffi::c_void,
+            arg1: rsf_overlay12_log,
+            user: *mut ::core::ffi::c_void,
+        ) -> ::core::ffi::c_int,
+    >,
+    pub visible: ::core::option::Option<unsafe extern "C" fn() -> u32>,
+    pub target: ::core::option::Option<
+        unsafe extern "C" fn(
+            device: *mut ::core::ffi::c_void,
+            interop: *mut ::core::ffi::c_void,
+            chain: *mut ::core::ffi::c_void,
+            arg1: *mut rsf_overlay11on12_target,
+        ) -> u32,
+    >,
+    pub acquire: ::core::option::Option<
+        unsafe extern "C" fn(interop: *mut ::core::ffi::c_void, wrapped: *mut ::core::ffi::c_void),
+    >,
+    pub draw: ::core::option::Option<
+        unsafe extern "C" fn(
+            context: *mut ::core::ffi::c_void,
+            view: *mut ::core::ffi::c_void,
+            width: u32,
+            height: u32,
+            arg1: *const rsf_overlay_stats,
+            arg2: *mut rsf_overlay_intent,
+        ) -> ::core::ffi::c_int,
+    >,
+    pub release: ::core::option::Option<
+        unsafe extern "C" fn(interop: *mut ::core::ffi::c_void, wrapped: *mut ::core::ffi::c_void),
+    >,
+    pub flush: ::core::option::Option<unsafe extern "C" fn(context: *mut ::core::ffi::c_void)>,
+    pub stop: ::core::option::Option<unsafe extern "C" fn()>,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_overlay11on12_platform"]
+        [::core::mem::size_of::<rsf_overlay11on12_platform>() - 80usize];
+    ["Alignment of rsf_overlay11on12_platform"]
+        [::core::mem::align_of::<rsf_overlay11on12_platform>() - 8usize];
+    ["Offset of field: rsf_overlay11on12_platform::create"]
+        [::core::mem::offset_of!(rsf_overlay11on12_platform, create) - 0usize];
+    ["Offset of field: rsf_overlay11on12_platform::window"]
+        [::core::mem::offset_of!(rsf_overlay11on12_platform, window) - 8usize];
+    ["Offset of field: rsf_overlay11on12_platform::start"]
+        [::core::mem::offset_of!(rsf_overlay11on12_platform, start) - 16usize];
+    ["Offset of field: rsf_overlay11on12_platform::visible"]
+        [::core::mem::offset_of!(rsf_overlay11on12_platform, visible) - 24usize];
+    ["Offset of field: rsf_overlay11on12_platform::target"]
+        [::core::mem::offset_of!(rsf_overlay11on12_platform, target) - 32usize];
+    ["Offset of field: rsf_overlay11on12_platform::acquire"]
+        [::core::mem::offset_of!(rsf_overlay11on12_platform, acquire) - 40usize];
+    ["Offset of field: rsf_overlay11on12_platform::draw"]
+        [::core::mem::offset_of!(rsf_overlay11on12_platform, draw) - 48usize];
+    ["Offset of field: rsf_overlay11on12_platform::release"]
+        [::core::mem::offset_of!(rsf_overlay11on12_platform, release) - 56usize];
+    ["Offset of field: rsf_overlay11on12_platform::flush"]
+        [::core::mem::offset_of!(rsf_overlay11on12_platform, flush) - 64usize];
+    ["Offset of field: rsf_overlay11on12_platform::stop"]
+        [::core::mem::offset_of!(rsf_overlay11on12_platform, stop) - 72usize];
+};

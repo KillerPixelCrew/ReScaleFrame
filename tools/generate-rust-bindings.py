@@ -103,8 +103,8 @@ generate("runtime/orchestrator/src/overlay_abi.rs", "runtime/orchestrator/src/ov
                         "};",
           "--raw-line", "use rsf_game_sys::rsf_game_log_fn;"],
          use_core=False)
-generate("runtime/orchestrator/src/overlay_native12_abi.rs", "runtime/orchestrator/src/overlay_native12_platform.h",
-         "rsf_overlay12_(log|platform)", "NOTHING",
+generate("runtime/orchestrator/src/overlay_native12_abi.rs", "runtime/orchestrator/src/overlay_wrapped12_platform.h",
+         "rsf_overlay(12_(log|platform)|11on12_(device|target|platform))", "NOTHING",
          ["-Iruntime/orchestrator/include", "-Iui/overlay/include", "-Isdk/game/include"],
          ["--no-recursive-allowlist", "--raw-line", "use crate::overlay_abi::{rsf_overlay_intent, rsf_overlay_stats};"])
 generate("runtime/orchestrator/src/vulkan_sr_abi.rs", "runtime/orchestrator/include/rescaleframe/native_sr_split_vulkan.h",

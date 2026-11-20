@@ -424,6 +424,19 @@ tests, formatting, Clippy and binding regeneration passed. Runtime,
 carrier and Minecraft Release exports matched. The backpressure device
 fixture built. Device execution and game validation remain pending.
 
+The D3D11-on-D3D12 overlay now owns attachment, startup visibility,
+wrapped-backbuffer leases and stop in Rust. Drawing is restricted to the
+device and queue used to create the interop object. A refused draw still
+releases the wrapped resource and flushes the immediate context. The native
+leaves retain the existing D3D12 render-target state on acquire and release.
+
+Seven focused frontend, overlay and ABI contracts passed in Debug and
+Release. The synthetic lease case covers refused draw cleanup and a second
+queue on the same device. All 177 Rust tests, formatting, Clippy and binding
+regeneration passed. Runtime, carrier and Minecraft Release exports
+matched. The relevant graphics fixtures built. Device and game validation
+remain pending.
+
 Rust owns native D3D11 FG transfer slots, leases, shared-host SR evaluation,
 HUD-less capture, Prepare, Present and retirement. Prepare now refuses a
 contended slot as `NOT_PREPARED`. It shares the existing Rust scene and

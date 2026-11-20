@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
-#include <rescaleframe/overlay_d3d12.h>
+#include "overlay_wrapped12_platform.h"
+#include <rescaleframe/backend.h>
 #include "../../../loader/proxy/src/overlay_host.h"
 #include <windows.h>
 #include <d3d11on12.h>
 #include <d3d12.h>
 #include <dxgi1_4.h>
 #include <wrl/client.h>
-#include <mutex>
 #include <string>
 namespace {
 using Microsoft::WRL::ComPtr;
@@ -30,80 +30,79 @@ CreateOn12 system_create_on12()
     }();
     return create;
 }
-ComPtr<ID3D11Device> device11;
-ComPtr<ID3D11DeviceContext> context11;
-ComPtr<ID3D11On12Device> interop;
-ComPtr<ID3D12Device> owner;
-std::mutex drawing;
-bool ready = false;
-// A refused start is final for this attach. overlay_host reloads the panel library on every
-// attempt, so retrying per frame would leak a module reference and log each frame.
-bool failed = false;
-ULONGLONG ready_tick = 0;
-// How long overlay_host shows its startup hint after the panel starts.
-constexpr ULONGLONG kStartupHintMs = 8000;
-int refuse(void (*log)(void*,const char*), void* user, const char* message)
-{
-    failed = true;
-    if (log) log(user, message);
-    return 0;
+int32_t create_wrapped_device(void* device, void* queue, rsf_overlay11on12_device* out) noexcept try {
+    const auto create_on12 = system_create_on12();
+    if (!create_on12) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
+    IUnknown* queues[] = {static_cast<ID3D12CommandQueue*>(queue)};
+    ComPtr<ID3D11Device> device11;
+    ComPtr<ID3D11DeviceContext> context11;
+    ComPtr<ID3D11On12Device> interop;
+    if (FAILED(create_on12(static_cast<ID3D12Device*>(device), D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+        nullptr, 0, queues, 1, 0, &device11, &context11, nullptr)) || FAILED(device11.As(&interop)))
+        return RSF_BACKEND_ERROR_INIT_FAILED;
+    *out = {device11.Detach(), context11.Detach(), interop.Detach()};
+    return RSF_BACKEND_OK;
+} catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
+
+uint32_t window(void* chain, void** out) {
+    DXGI_SWAP_CHAIN_DESC desc{};
+    if (FAILED(static_cast<IDXGISwapChain*>(chain)->GetDesc(&desc))) return 0;
+    *out = desc.OutputWindow;
+    return 1;
 }
-}
-static int draw(void* device, void* native_queue, void* native_chain, const rsf_overlay_stats* stats,
-    rsf_overlay_intent* intent, void (*log)(void*,const char*), void* user, D3D12_RESOURCE_STATES boundary)
-{
-    std::unique_lock<std::mutex> lock(drawing, std::try_to_lock);
-    if (!lock.owns_lock()) return 0;
-    if (failed || !device || !native_queue || !native_chain || !stats) return 0;
-    auto* chain = static_cast<IDXGISwapChain*>(native_chain);
-    if (!device11) {
-        const auto create_on12 = system_create_on12();
-        if (!create_on12)
-            return refuse(log, user, "Shared overlay unavailable: system D3D11-on-12 entry point not available.");
-        IUnknown* queues[] = {static_cast<ID3D12CommandQueue*>(native_queue)};
-        if (FAILED(create_on12(static_cast<ID3D12Device*>(device), D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-            nullptr, 0, queues, 1, 0, &device11, &context11, nullptr)) || FAILED(device11.As(&interop))) {
-            interop.Reset(); context11.Reset(); device11.Reset();
-            return refuse(log, user, "Shared overlay unavailable: the D3D11-on-12 device could not be created.");
-        }
-        owner = static_cast<ID3D12Device*>(device);
-    }
-    if (owner.Get() != device) return 0;
-    if (!ready) {
-        DXGI_SWAP_CHAIN_DESC desc{};
-        if (FAILED(chain->GetDesc(&desc))) return 0;
-        if (!rsf_overlay_host_start_device(device11.Get(), desc.OutputWindow, log, user))
-            return refuse(log, user, "Shared overlay did not start; it will not be retried.");
-        ready = true; ready_tick = GetTickCount64();
-        if (log) log(user, "Shared overlay attached to D3D12 queue and window; Insert opens presets.");
-    }
-    // Hidden, no HUD and past the startup hint: nothing will be drawn, so skip the wrap, view,
-    // acquire/release and flush.
-    if (!rsf_overlay_host_visible() && !stats->show_performance_hud && GetTickCount64() - ready_tick >= kStartupHintMs) return 0;
+
+uint32_t target(void* device, void* interop, void* chain, rsf_overlay11on12_target* out) {
     ComPtr<IDXGISwapChain3> chain3;
-    if (FAILED(chain->QueryInterface(IID_PPV_ARGS(&chain3)))) return 0;
+    if (FAILED(static_cast<IDXGISwapChain*>(chain)->QueryInterface(IID_PPV_ARGS(&chain3)))) return 0;
     ComPtr<ID3D12Resource> back;
     if (FAILED(chain3->GetBuffer(chain3->GetCurrentBackBufferIndex(), IID_PPV_ARGS(&back)))) return 0;
     D3D11_RESOURCE_FLAGS flags{}; flags.BindFlags = D3D11_BIND_RENDER_TARGET;
     ComPtr<ID3D11Resource> wrapped;
-    if (FAILED(interop->CreateWrappedResource(back.Get(), &flags, boundary,
-        boundary, IID_PPV_ARGS(&wrapped)))) return 0;
-    ComPtr<ID3D11RenderTargetView> target;
-    if (FAILED(device11->CreateRenderTargetView(wrapped.Get(), nullptr, &target))) return 0;
-    ID3D11Resource* acquired[] = {wrapped.Get()}; interop->AcquireWrappedResources(acquired, 1);
+    constexpr auto state = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    if (FAILED(static_cast<ID3D11On12Device*>(interop)->CreateWrappedResource(back.Get(), &flags,
+        state, state, IID_PPV_ARGS(&wrapped)))) return 0;
+    ComPtr<ID3D11RenderTargetView> view;
+    if (FAILED(static_cast<ID3D11Device*>(device)->CreateRenderTargetView(wrapped.Get(), nullptr, &view))) return 0;
     const auto desc = back->GetDesc();
-    const int drawn = rsf_overlay_host_draw_target(context11.Get(), target.Get(), static_cast<uint32_t>(desc.Width), desc.Height, stats, intent);
-    interop->ReleaseWrappedResources(acquired, 1); context11->Flush();
-    return drawn;
+    if (!desc.Width || desc.Width > UINT32_MAX || !desc.Height) return 0;
+    *out = {back.Detach(), wrapped.Detach(), view.Detach(), static_cast<uint32_t>(desc.Width), desc.Height};
+    return 1;
 }
+
+void acquire(void* interop, void* wrapped) {
+    ID3D11Resource* resources[] = {static_cast<ID3D11Resource*>(wrapped)};
+    static_cast<ID3D11On12Device*>(interop)->AcquireWrappedResources(resources, 1);
+}
+
+void release(void* interop, void* wrapped) {
+    ID3D11Resource* resources[] = {static_cast<ID3D11Resource*>(wrapped)};
+    static_cast<ID3D11On12Device*>(interop)->ReleaseWrappedResources(resources, 1);
+}
+
+int start(void* device, void* hwnd, rsf_overlay12_log log, void* user) noexcept try {
+    return rsf_overlay_host_start_device(device, hwnd, log, user);
+} catch (...) { return 0; }
+
+int draw(void* context, void* view, uint32_t width, uint32_t height,
+    const rsf_overlay_stats* stats, rsf_overlay_intent* intent) noexcept try {
+    return rsf_overlay_host_draw_target(context, view, width, height, stats, intent);
+} catch (...) { return 0; }
+
+constexpr rsf_overlay11on12_platform platform{
+    create_wrapped_device, window, start, rsf_overlay_host_visible, target, acquire, draw, release,
+    [](void* context) { static_cast<ID3D11DeviceContext*>(context)->Flush(); },
+    rsf_overlay_host_stop,
+};
+}
+
 int rsf_overlay_d3d12_frame(void* device, void* queue, void* chain, const rsf_overlay_stats* stats,
-    rsf_overlay_intent* intent, void (*log)(void*,const char*), void* user)
-{ return draw(device, queue, chain, stats, intent, log, user, D3D12_RESOURCE_STATE_RENDER_TARGET); }
+    rsf_overlay_intent* intent, void (*log)(void*,const char*), void* user) {
+    return rsf_core_overlay11on12_frame(&platform, device, queue, chain, stats, intent, log, user);
+}
 int rsf_overlay_d3d12_present(void* device, void* queue, void* chain, const rsf_overlay_stats* stats,
-    rsf_overlay_intent* intent, void (*log)(void*,const char*), void* user)
-{ return rsf_overlay_native12_present(device, queue, chain, stats, intent, log, user); }
-void rsf_overlay_d3d12_stop()
-{
-    std::lock_guard<std::mutex> lock(drawing);
-    rsf_overlay_host_stop(); interop.Reset(); context11.Reset(); device11.Reset(); owner.Reset(); ready = failed = false;
+    rsf_overlay_intent* intent, void (*log)(void*,const char*), void* user) {
+    return rsf_overlay_native12_present(device, queue, chain, stats, intent, log, user);
+}
+void rsf_overlay_d3d12_stop() {
+    rsf_core_overlay11on12_stop(&platform);
 }

@@ -93,6 +93,8 @@ mod overlay_native12_abi;
 #[cfg(windows)]
 mod overlay_service;
 #[cfg(windows)]
+mod overlay_wrapped12;
+#[cfg(windows)]
 mod plugin_session;
 #[cfg(windows)]
 mod render_abi;
