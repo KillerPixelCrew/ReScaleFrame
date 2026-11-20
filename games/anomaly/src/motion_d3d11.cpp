@@ -99,6 +99,8 @@ constexpr rsf_anomaly_motion_device_platform platform{
 };
 }
 
+const rsf_anomaly_motion_device_platform& motion_device_platform() noexcept { return platform; }
+
 void set_shader_runtime(const rsf_shader_patch_api& api) noexcept { runtime_api = api; }
 
 MotionDevice::~MotionDevice() { rsf_anomaly_motion_device_drop(owner_); }
@@ -143,8 +145,8 @@ bool MotionDevice::set_tess_domain(ID3D11DeviceContext* context, const TessDomai
     return rsf_anomaly_motion_device_upload(owner_, context, RSF_MOTION_TESS, bytes.data(), bytes.size()) != 0;
 }
 
-ReplayResult MotionDevice::begin_replay(ID3D11DeviceContext* context, Saved& s) noexcept try {
-    const auto resources = view();
+ReplayResult MotionDevice::begin_replay(const rsf_anomaly_motion_device_view& resources,
+    ID3D11DeviceContext* context, Saved& s) noexcept try {
     if (!context || !resources.rtv || !resources.zero_shader) return ReplayResult::Failed;
     context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, s.targets, &s.depth);
     context->OMGetDepthStencilState(&s.depth_state, &s.reference);

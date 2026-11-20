@@ -50,7 +50,7 @@ constexpr rsf_anomaly_bootstrap_leaves leaves{
         return options.selected();
     },
     [](const wchar_t* ini, rsf_game_log_fn log) noexcept {
-        motion::configure(motion::read_options(ini), log, nullptr);
+        motion::configure(ini, log, nullptr);
     },
     [](const wchar_t* ini, bool configure, HMODULE runtime, size_t build, rsf_game_log_fn log) noexcept {
         return fg::configure_ini(ini, configure, runtime, build_profiles[build], log);

@@ -53,7 +53,7 @@ struct ManifestEntry {
 //   root <vs|ps|hs|ds> <family> <name> <original sha256> <motion sha256>
 struct Manifest {
     std::string name_space;
-    std::map<std::string, ManifestEntry> by_original;   // keyed by the original root source SHA-256
+    std::map<std::string, ManifestEntry, std::less<>> by_original;   // keyed by the original root source SHA-256
     static std::optional<Manifest> parse(std::string_view text, std::string& error);
 };
 

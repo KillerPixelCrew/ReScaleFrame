@@ -62,7 +62,11 @@ bool RuntimeShaders::open(const std::filesystem::path& pack, const std::filesyst
         ? reinterpret_cast<rsf_get_shader_patch_api_fn>(GetProcAddress(runtime, "rsf_get_shader_patch_api")) : nullptr;
     api_.struct_size = sizeof(api_);
     api_.abi_version = RSF_SHADER_PATCH_VERSION;
-    if (!query || query(&api_) != RSF_PATCH_OK) {
+    if (!query || query(&api_) != RSF_PATCH_OK ||
+        api_.abi_version != RSF_SHADER_PATCH_VERSION || api_.struct_size < sizeof(api_) ||
+        !api_.open || !api_.hash || !api_.root_count || !api_.root || !api_.prepare || !api_.close ||
+        !api_.attach_d3d11 || !api_.create_d3d11 || !api_.constant_buffer || !api_.upload_constant ||
+        !api_.bind_constant || !api_.counters || !api_.dump) {
         error = "Runtime shader service unavailable";
         return false;
     }
@@ -72,7 +76,7 @@ bool RuntimeShaders::open(const std::filesystem::path& pack, const std::filesyst
     const auto fn = compiler ? GetProcAddress(compiler, "D3DCompile") : nullptr;
     rsf_patch_session* session{};
     const auto status = api_.open({data.data(), data.size()}, cache.c_str(), reinterpret_cast<void*>(fn), &session);
-    if (status != RSF_PATCH_OK) {
+    if (status != RSF_PATCH_OK || !session) {
         error = "Runtime pack refused: " + std::to_string(status);
         return false;
     }

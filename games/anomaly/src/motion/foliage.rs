@@ -10,18 +10,18 @@ use std::ptr;
 const POISON: f32 = f32::from_bits(0x7fc5_a5a5);
 // Preserve the previous table's 90% cap on 2^19 slots.
 const MAX_ITEMS: usize = ((1 << 19) * 9) / 10;
-type Rows = [[f32; 16]; FOLIAGE_MAX_GROUPS];
+pub(super) type Rows = [[f32; 16]; FOLIAGE_MAX_GROUPS];
 type Key = [u32; 5];
 
 #[repr(C)]
-struct DetailRemap {
-    live: u32,
-    matched: u32,
-    unmatched: u32,
-    conflicts: u32,
-    route_found: bool,
-    previous: FoliageConstants,
-    items: [FoliageItem; FOLIAGE_MAX_GROUPS],
+pub(super) struct DetailRemap {
+    pub(super) live: u32,
+    pub(super) matched: u32,
+    pub(super) unmatched: u32,
+    pub(super) conflicts: u32,
+    pub(super) route_found: bool,
+    pub(super) previous: FoliageConstants,
+    pub(super) items: [FoliageItem; FOLIAGE_MAX_GROUPS],
 }
 
 const _: () = {
@@ -33,7 +33,7 @@ const _: () = {
 };
 
 impl DetailRemap {
-    fn empty() -> Self {
+    pub(super) fn empty() -> Self {
         Self {
             live: 0,
             matched: 0,
@@ -119,7 +119,7 @@ impl View {
 }
 
 #[derive(Default)]
-struct History {
+pub(super) struct History {
     views: [View; 2],
     conflicts: u64,
     overflows: u64,
@@ -233,7 +233,7 @@ extern "C" fn rsf_anomaly_foliage_drop(history: *mut History) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_foliage_begin(
+pub(super) extern "C" fn rsf_anomaly_foliage_begin(
     history: &mut History,
     view: u8,
     source: u64,
@@ -250,19 +250,19 @@ extern "C" fn rsf_anomaly_foliage_begin(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_foliage_active(history: Option<&History>, view: u8) -> bool {
+pub(super) extern "C" fn rsf_anomaly_foliage_active(history: Option<&History>, view: u8) -> bool {
     history.is_some_and(|h| h.views[lane(view)].current.is_some())
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_foliage_reset(history: Option<&mut History>) {
+pub(super) extern "C" fn rsf_anomaly_foliage_reset(history: Option<&mut History>) {
     if let Some(history) = history {
         history.views = Default::default();
     }
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_foliage_tree(
+pub(super) extern "C" fn rsf_anomaly_foliage_tree(
     history: Option<&mut History>,
     view: u8,
     visual: u64,
@@ -274,7 +274,7 @@ extern "C" fn rsf_anomaly_foliage_tree(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_foliage_detail(
+pub(super) extern "C" fn rsf_anomaly_foliage_detail(
     history: Option<&mut History>,
     view: u8,
     route: u64,
@@ -294,7 +294,7 @@ extern "C" fn rsf_anomaly_foliage_conflicts(history: Option<&History>) -> u64 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_foliage_overflows(history: Option<&History>) -> u64 {
+pub(super) extern "C" fn rsf_anomaly_foliage_overflows(history: Option<&History>) -> u64 {
     history.map_or(0, |h| h.overflows)
 }
 
@@ -306,12 +306,12 @@ extern "C" fn rsf_anomaly_foliage_recorded(history: Option<&History>, view: u8) 
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_foliage_count(rows: &Rows) -> u32 {
+pub(super) extern "C" fn rsf_anomaly_foliage_count(rows: &Rows) -> u32 {
     live_groups(rows).len() as u32
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_foliage_poison(rows: &mut MaybeUninit<Rows>) {
+pub(super) extern "C" fn rsf_anomaly_foliage_poison(rows: &mut MaybeUninit<Rows>) {
     rows.write([[POISON; 16]; FOLIAGE_MAX_GROUPS]);
 }
 
