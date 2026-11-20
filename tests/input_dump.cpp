@@ -132,6 +132,7 @@ int main(int argc, char** argv)
     check(rsf_native_window_scope(&pass, 1) != 0, "Begin matched window.");
     rsf_input_dump_present(chain.Get(), context.Get(), &pass);
     rsf_frame_record record{}; record.struct_size = sizeof(record); record.session_id = 9; record.frame_id = 101;
+    record.view_id = uint32_t(pass.view_key);
     record.render_width = record.output_width = 4; record.render_height = record.output_height = 2; record.frame_time_ms = 16.67f;
     rsf_fg_frame fg{}; fg.struct_size = sizeof(fg); fg.record = &record; fg.interpolate = 1;
     fg.motion_scale_x = fg.motion_scale_y = 1;

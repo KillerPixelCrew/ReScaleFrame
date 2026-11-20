@@ -1,0 +1,496 @@
+// SPDX-License-Identifier: MIT
+use super::*;
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_dump_configure(
+    directory: *const c_char,
+    game: *const c_char,
+    hash: *const c_char,
+    log: rsf_backend_log_fn,
+    user: *mut c_void,
+) {
+    let directory = unsafe { string(directory) }.map(PathBuf::from);
+    let game = unsafe { string(game) }.unwrap_or_default().to_owned();
+    let hash = unsafe { string(hash) }.unwrap_or_default().to_owned();
+    owner(|owner| {
+        owner.configure(
+            directory,
+            game,
+            hash,
+            Log {
+                callback: log,
+                user: user as usize,
+            },
+        )
+    });
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_core_dump_request() {
+    let now = clock();
+    owner(|owner| {
+        if owner.directory.is_none() {
+            owner.poll(&now);
+        }
+        owner.request(&now);
+    });
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_core_dump_cancel(session: u64) {
+    owner(|owner| {
+        if owner.capture.as_ref().is_some_and(|capture| {
+            session == 0 || capture.session() == 0 || capture.session() == session
+        }) {
+            owner.finish("cancelled");
+        }
+    });
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_core_dump_poll() {
+    let now = clock();
+    owner(|owner| owner.poll(&now));
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_dump_begin_record(
+    input: *const rsf_frame_record,
+    backend: u32,
+) -> i32 {
+    let now = clock();
+    owner(|owner| {
+        owner.poll(&now);
+        let Some(capture) = &mut owner.capture else {
+            return 0;
+        };
+        let Some(frame) =
+            (unsafe { record(input) }).filter(|frame| frame.session_id != 0 && frame.frame_id != 0)
+        else {
+            return 0;
+        };
+        if capture.has_target() {
+            return i32::from(capture.wants(frame));
+        }
+        capture.record = Some(*frame);
+        capture.backend = backend;
+        capture.sr_result = 0;
+        capture.constants = metadata::frame(&capture.bundle, frame, backend).is_ok();
+        owner.publish("capturing");
+        1
+    })
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_dump_wants(input: *const rsf_frame_record) -> i32 {
+    i32::from(unsafe { record(input) }.is_some_and(|frame| {
+        owner(|owner| {
+            owner
+                .capture
+                .as_ref()
+                .is_some_and(|capture| capture.wants(frame))
+        })
+    }))
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_core_dump_wants_frame(frame: u64) -> i32 {
+    i32::from(owner(|owner| {
+        owner
+            .capture
+            .as_ref()
+            .and_then(|capture| capture.record)
+            .is_some_and(|record| record.frame_id == frame)
+    }))
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_dump_current(output: *mut rsf_frame_record) -> i32 {
+    let Some(selected) = owner(|owner| owner.capture.as_ref().and_then(|capture| capture.record))
+    else {
+        return 0;
+    };
+    if output.is_null()
+        || (unsafe { output.cast::<u32>().read() } as usize) < size_of::<rsf_frame_record>()
+    {
+        return 0;
+    }
+    unsafe { output.write(selected) };
+    1
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_core_dump_requested() -> i32 {
+    i32::from(owner(|owner| owner.capture.is_some()))
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_dump_reserve(
+    input: *const rsf_frame_record,
+    name: *const c_char,
+    description: *const c_char,
+    view: u32,
+    scale: f32,
+) -> u64 {
+    let (Some(frame), Some(name), Some(description)) =
+        (unsafe { record(input) }, unsafe { string(name) }, unsafe {
+            string(description)
+        })
+    else {
+        return 0;
+    };
+    if !valid_name(name) || view > DENSE_MOTION || !scale.is_finite() {
+        return 0;
+    }
+    owner(|owner| {
+        let capture = owner
+            .capture
+            .as_mut()
+            .filter(|capture| capture.wants(frame))?;
+        capture.add_image(Image::new(
+            name,
+            description,
+            view,
+            scale,
+            ImageState::Reserved,
+        ))?;
+        Some(capture.ticket)
+    })
+    .unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_dump_failed(ticket: u64, name: *const c_char, result: i32) {
+    let Some(name) = (unsafe { string(name) }) else {
+        return;
+    };
+    owner(|owner| {
+        let Some(capture) = &mut owner.capture else {
+            return;
+        };
+        let Some(index) = capture.index(ticket, name) else {
+            return;
+        };
+        let image = &mut capture.images[index];
+        if image.state == ImageState::Reserved {
+            let result = if result == 0 { INVALID } else { result };
+            image.state = ImageState::Finished;
+            image.encoding = Encoding {
+                raw: result,
+                preview: result,
+            };
+            owner.finish_ready();
+        }
+    });
+}
+
+fn packed_pitch(pixels: &Pixels, pixel_bytes: u32) -> Option<u32> {
+    let row = pixels.width.checked_mul(pixel_bytes)?;
+    if pixels.data.is_null() || pixels.height == 0 || row == 0 || pixels.row_pitch < row {
+        return None;
+    }
+    let source_bytes = u64::from(pixels.row_pitch) * u64::from(pixels.height - 1) + u64::from(row);
+    (source_bytes <= pixels.data_size
+        && u64::from(row) * u64::from(pixels.height) <= MAX_IMAGE_BYTES)
+        .then_some(row)
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_dump_pixels(
+    ticket: u64,
+    name: *const c_char,
+    input: *const Pixels,
+    api: u32,
+    native_format: u32,
+) -> i32 {
+    let (Some(name), Some(pixels)) = (unsafe { string(name) }, unsafe { checked(input) }) else {
+        return 0;
+    };
+    let Some(work) = owner(|owner| {
+        let capture = owner.capture.as_mut()?;
+        let index = capture.index(ticket, name)?;
+        let image = &mut capture.images[index];
+        if image.state != ImageState::Reserved {
+            return None;
+        }
+        image.state = ImageState::Encoding;
+        owner.work(index)
+    }) else {
+        return 0;
+    };
+    let view = preview_view(work.view, pixels.format, true);
+    let mut encoding = Encoding::INVALID;
+    if let Some(row) = packed_pitch(pixels, unsafe { (platform().pixel_bytes)(pixels.format) })
+        && let Ok(prefix) = prefix(&work.prefix)
+    {
+        unsafe {
+            (platform().encode_pixels)(
+                pixels,
+                row,
+                api,
+                native_format,
+                &work.options(&prefix, view),
+                &mut encoding,
+            )
+        };
+    }
+    let result = ImageResult {
+        surface: Surface {
+            width: pixels.width,
+            height: pixels.height,
+            format: pixels.format,
+        },
+        api,
+        native_format,
+        view,
+        encoding,
+    };
+    i32::from(owner(|owner| owner.finish_image(&work, result)))
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_dump_complete(input: *const rsf_frame_record, result: i32) {
+    if let Some(frame) = unsafe { record(input) } {
+        owner(|owner| {
+            if owner
+                .capture
+                .as_ref()
+                .is_some_and(|capture| capture.wants(frame))
+            {
+                owner.complete(result);
+            }
+        });
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_dump_gpu_submission(input: *const rsf_frame_record) -> u64 {
+    let Some(frame) = (unsafe { record(input) }) else {
+        return 0;
+    };
+    owner(|owner| {
+        owner
+            .capture
+            .as_ref()
+            .filter(|capture| capture.wants(frame))
+            .map_or(0, |capture| {
+                (capture.ticket << 8) | capture.images.len() as u64
+            })
+    })
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_core_dump_gpu_completed(submission: u64, api: u32, device: *mut c_void) {
+    let count = (submission & 255) as usize;
+    if count == 0 || device.is_null() {
+        return;
+    }
+    owner(|owner| {
+        if let Some(capture) = &mut owner.capture
+            && submission >> 8 == capture.ticket
+            && count <= capture.images.len()
+        {
+            let ready = capture
+                .gpu_completed
+                .entry((api, device as usize))
+                .or_default();
+            *ready = (*ready).max(count);
+        }
+    });
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_dump_gpu_ready(
+    ticket: u64,
+    name: *const c_char,
+    api: u32,
+    device: *mut c_void,
+) -> i32 {
+    let Some(name) = (unsafe { string(name) }) else {
+        return 0;
+    };
+    i32::from(owner(|owner| {
+        let Some(capture) = &owner.capture else {
+            return false;
+        };
+        let Some(index) = capture.index(ticket, name) else {
+            return false;
+        };
+        capture.images[index].state == ImageState::Reserved
+            && capture
+                .gpu_completed
+                .get(&(api, device as usize))
+                .is_some_and(|&count| index < count)
+    }))
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_dump_texture_record(
+    context: *mut c_void,
+    input: *const rsf_frame_record,
+    name: *const c_char,
+    description: *const c_char,
+    source: *mut c_void,
+    view: u32,
+    scale: f32,
+) -> i32 {
+    let (Some(frame), Some(name), Some(description)) =
+        (unsafe { record(input) }, unsafe { string(name) }, unsafe {
+            string(description)
+        })
+    else {
+        return 0;
+    };
+    i32::from(unsafe {
+        capture_texture(
+            context,
+            Texture::new(name, description, source, view, scale),
+            |capture| capture.wants(frame),
+            false,
+        )
+    })
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_dump_named_texture(
+    context: *mut c_void,
+    source: *mut c_void,
+    request: *const NamedRequest,
+    report: *mut NamedReport,
+) -> i32 {
+    let Some(request) = (unsafe { checked(request) }) else {
+        return INVALID;
+    };
+    let (Some(directory), Some(name)) = (unsafe { string(request.directory) }, unsafe {
+        string(request.name)
+    }) else {
+        return INVALID;
+    };
+    if context.is_null()
+        || source.is_null()
+        || directory.is_empty()
+        || name.is_empty()
+        || !request.scale.is_finite()
+    {
+        return INVALID;
+    }
+    if request.abi_version != 1 {
+        return ABI_MISMATCH;
+    }
+    if !valid_name(name) || request.view > DENSE_MOTION {
+        return INVALID;
+    }
+    let mut surface = Surface::default();
+    let Some(texture) =
+        (unsafe { ComRef::from_owned((platform().open_texture)(context, source, &mut surface)) })
+    else {
+        return INVALID;
+    };
+    let directory = Path::new(directory);
+    if fs::create_dir_all(directory).is_err() {
+        return WRITE_FAILED;
+    }
+    let Ok(prefix) = prefix(&directory.join(name)) else {
+        return WRITE_FAILED;
+    };
+    let options = TextureOptions {
+        struct_size: size_of::<TextureOptions>() as u32,
+        abi_version: 2,
+        prefix: prefix.as_ptr(),
+        view: preview_view(request.view, surface.format, false),
+        scale: request.scale,
+        log: request.log,
+        log_user: request.log_user,
+    };
+    let mut encoding = Encoding::INVALID;
+    unsafe { (platform().encode_texture)(context, texture.as_ptr(), &options, 0, &mut encoding) };
+    if encoding.preview == 0
+        && !report.is_null()
+        && unsafe { report.cast::<u32>().read() } as usize >= size_of::<NamedReport>()
+    {
+        unsafe {
+            std::ptr::addr_of_mut!((*report).width).write(surface.width);
+            std::ptr::addr_of_mut!((*report).height).write(surface.height);
+            std::ptr::addr_of_mut!((*report).dxgi_format).write(surface.format);
+        };
+    }
+    encoding.preview
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_dump_pass_metadata(input: *const rsf_game_render_pass) {
+    let Some(pass) = (unsafe { checked(input) }) else {
+        return;
+    };
+    owner(|owner| {
+        let Some(capture) = owner
+            .capture
+            .as_mut()
+            .filter(|capture| capture.record.is_some() && capture.matches_pass(pass))
+        else {
+            return;
+        };
+        if capture
+            .identity
+            .is_some_and(|id| id.family != pass.family_key || id.scope != pass.scope_id)
+        {
+            return;
+        }
+        capture.identity = Some(pass.into());
+        let depth_requested = unsafe { (platform().depth_domains_requested)(&pass.depth_domains) };
+        let _ = metadata::engine_pass(&capture.bundle, pass, depth_requested);
+    });
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_dump_result(
+    input: *const rsf_frame_record,
+    stage: *const c_char,
+    backend: u32,
+    result: i32,
+) {
+    let (Some(frame), Some(stage)) = (unsafe { record(input) }, unsafe { string(stage) }) else {
+        return;
+    };
+    if !matches!(
+        stage,
+        "sr" | "fg" | "sequence_capture" | "automatic_sr_failure" | "spatial_recovery"
+    ) {
+        return;
+    }
+    owner(|owner| {
+        if let Some(capture) = owner
+            .capture
+            .as_mut()
+            .filter(|capture| capture.wants(frame))
+        {
+            if stage == "sr" {
+                capture.sr_result = result;
+            }
+            let _ = metadata::result(&capture.bundle, frame, stage, backend, result);
+        }
+    });
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_dump_sr_frame(
+    input: *const rsf_sr_frame,
+    backend: u32,
+    input_sdr: u32,
+) {
+    let Some(frame) = (unsafe { checked(input) }) else {
+        return;
+    };
+    let Some(record) = (unsafe { record(frame.record) }) else {
+        return;
+    };
+    owner(|owner| {
+        if let Some(capture) = owner
+            .capture
+            .as_ref()
+            .filter(|capture| capture.wants(record))
+        {
+            let _ = metadata::sr_parameters(&capture.bundle, frame, record, backend, input_sdr);
+        }
+    });
+}

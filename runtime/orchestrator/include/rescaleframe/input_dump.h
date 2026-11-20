@@ -25,7 +25,8 @@ RSF_FRAME_DUMP_API void rsf_input_dump_request(void);
 RSF_FRAME_DUMP_API void rsf_input_dump_cancel(uint64_t session_id);
 /* Core API: hotkey polling or a programmatic request selects the next primary frame.
    Readback reservations keep the bundle open until their actual GPU completions.
-   A ticket is scoped to one request; retired requests reject stale completions. */
+   Present completion closes new reservations. A ticket is scoped to one request;
+   retired requests reject stale completions. */
 RSF_FRAME_DUMP_API void rsf_input_dump_poll(void);
 RSF_FRAME_DUMP_API int rsf_input_dump_begin_record(const rsf_frame_record*, uint32_t backend);
 RSF_FRAME_DUMP_API int rsf_input_dump_wants(const rsf_frame_record*);

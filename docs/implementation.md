@@ -342,6 +342,20 @@ address reuse, layout invalidation and duplicate notification. All 161 Rust
 tests, formatting and Clippy passed. Vulkan device and game validation
 remain open.
 
+The shared frame-capture owner now keeps requests, exact capture identity,
+metadata, ticket publication and GPU completion bounds in Rust. It closes
+new reservations at the first matched Present and lets pending readbacks
+retire by ticket. The existing graphics readback and encoder calls stay
+native. Metadata strings are escaped before writing the existing JSON
+schema.
+
+The integrated Release build passed ten focused contracts, including
+capture metadata, the C++ D3D11 host and the synthetic Vulkan DLSS fixture.
+All 15 JSON files from the capture fixture parsed. All 161 locked Rust
+tests, formatting and Clippy passed. Runtime, both carriers and Minecraft
+kept their export names and ordinals. The three graphics readback fixtures
+built. Device and game validation remain pending.
+
 The OpenGL pipeline now keeps its shared surface and SR lifecycle, frame
 identity, fallback and FG requests in Rust. Native callbacks handle OpenGL,
 DXGI and the presentation child window. A rejected SR rebuild remains
