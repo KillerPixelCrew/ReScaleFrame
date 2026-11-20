@@ -3,6 +3,8 @@ use crate::render_abi::{RSF_PACING_NONE, RSF_REFLEX_OFF};
 use std::ffi::c_void;
 use std::sync::{Mutex, RwLock};
 
+pub(super) const AMD_VENDOR_ID: u32 = 0x1002;
+
 pub(crate) fn fps_from_interval(limit_us: u32) -> u32 {
     1_000_000_u32
         .checked_div(limit_us)
@@ -75,7 +77,7 @@ impl Context {
         sources.last_end = 0;
         sources.status.available = 0;
         sources.status.enabled = 0;
-        if vendor == 0x1002 && !device.is_null() && matches!(api, 11 | 12) {
+        if vendor == AMD_VENDOR_ID && !device.is_null() && matches!(api, 11 | 12) {
             sources.status.available = unsafe { (self.calls.initialize)(self.driver, api, device) };
             if sources.status.available == 0 {
                 sources.status.refused = sources.status.refused.wrapping_add(1);

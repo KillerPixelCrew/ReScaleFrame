@@ -290,6 +290,17 @@ blocked input call and an older Present during that retirement. All
 120 Rust tests, formatting and Clippy passed. Runtime and both carrier
 Release exports matched. Device and game behavior remain unverified.
 
+Vulkan Anti-Lag also admits device queries and binds an AMD device in
+Rust. The driver leaves still inspect the Vulkan feature chain, preserve
+the caller's feature copy, resolve the actual created device's update
+entry point and marshal the SDK update. Unsupported hardware and missing
+entry points keep their established C ABI results.
+
+Seven focused CPU contracts passed in Debug and Release, including AMD
+device admission, Godot creation fallback and Anomaly SR and D3D11 host
+wiring. All 212 locked Rust tests, formatting, Clippy and binding
+regeneration passed. The four Release export inventories matched.
+
 Vulkan PCL registration, queue fencing and input fact collection now live in
 Rust. The owner binds the actual accepted input thread and keeps its old
 queue untouched while rebinding. It admits only the registered thread's

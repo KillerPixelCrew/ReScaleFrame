@@ -101,6 +101,11 @@ int main() {
     VkDeviceCreateInfo info{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};info.pNext=feature;
     info.enabledExtensionCount=required.extension_count;info.ppEnabledExtensionNames=required.extensions;
     rsf_latencyvk_created_device created{sizeof(created),1,instance,physical,device,instance_proc,&info};
+    auto short_created=created;
+    short_created.struct_size=sizeof(short_created.struct_size);
+    CHECK(rsf_latencyvk_device_created(&short_created)==RSF_BACKEND_ERROR_INVALID_ARGUMENT);
+    vendor=0x8086;CHECK(rsf_latencyvk_device_created(&created)==RSF_BACKEND_ERROR_NOT_SUPPORTED);
+    vendor=0x1002;
     info.enabledExtensionCount=0;CHECK(rsf_latencyvk_device_created(&created)==RSF_BACKEND_ERROR_NOT_SUPPORTED);
     info.enabledExtensionCount=1;feature->antiLag=false;CHECK(rsf_latencyvk_device_created(&created)==RSF_BACKEND_ERROR_NOT_SUPPORTED);
     feature->antiLag=true;function_available=false;CHECK(rsf_latencyvk_device_created(&created)==RSF_BACKEND_ERROR_NOT_SUPPORTED);

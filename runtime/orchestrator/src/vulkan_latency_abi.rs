@@ -2,10 +2,12 @@
 
 #![allow(non_camel_case_types)]
 type rsf_backend_result = i32;
+use crate::vulkan_sr_abi::{rsf_vk_function, rsf_vk_get_proc};
 
 pub const RSF_SLVK_ABI_VERSION: u32 = 1;
 pub const RSF_SLVK_DLSS_SR: u32 = 1;
 pub const RSF_SLVK_DLSS_FG: u32 = 2;
+pub const RSF_LATENCYVK_DEVICE_ABI_VERSION: u32 = 1;
 pub const RSF_LATENCYVK_ABI_VERSION: u32 = 2;
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -64,6 +66,134 @@ const _: () = {
         [::core::mem::offset_of!(rsf_slvk_call, callback) - 24usize];
     ["Offset of field: rsf_slvk_call::user"]
         [::core::mem::offset_of!(rsf_slvk_call, user) - 32usize];
+};
+#[repr(C)]
+pub struct rsf_latencyvk_device_query {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    pub instance: *mut ::core::ffi::c_void,
+    pub physical_device: *mut ::core::ffi::c_void,
+    pub instance_proc: rsf_vk_get_proc,
+    pub features: *mut ::core::ffi::c_void,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_latencyvk_device_query"]
+        [::core::mem::size_of::<rsf_latencyvk_device_query>() - 40usize];
+    ["Alignment of rsf_latencyvk_device_query"]
+        [::core::mem::align_of::<rsf_latencyvk_device_query>() - 8usize];
+    ["Offset of field: rsf_latencyvk_device_query::struct_size"]
+        [::core::mem::offset_of!(rsf_latencyvk_device_query, struct_size) - 0usize];
+    ["Offset of field: rsf_latencyvk_device_query::abi_version"]
+        [::core::mem::offset_of!(rsf_latencyvk_device_query, abi_version) - 4usize];
+    ["Offset of field: rsf_latencyvk_device_query::instance"]
+        [::core::mem::offset_of!(rsf_latencyvk_device_query, instance) - 8usize];
+    ["Offset of field: rsf_latencyvk_device_query::physical_device"]
+        [::core::mem::offset_of!(rsf_latencyvk_device_query, physical_device) - 16usize];
+    ["Offset of field: rsf_latencyvk_device_query::instance_proc"]
+        [::core::mem::offset_of!(rsf_latencyvk_device_query, instance_proc) - 24usize];
+    ["Offset of field: rsf_latencyvk_device_query::features"]
+        [::core::mem::offset_of!(rsf_latencyvk_device_query, features) - 32usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_latencyvk_device_requirements {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    pub extension_count: u32,
+    pub extensions: *const *const ::core::ffi::c_char,
+    pub features: *mut ::core::ffi::c_void,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_latencyvk_device_requirements"]
+        [::core::mem::size_of::<rsf_latencyvk_device_requirements>() - 32usize];
+    ["Alignment of rsf_latencyvk_device_requirements"]
+        [::core::mem::align_of::<rsf_latencyvk_device_requirements>() - 8usize];
+    ["Offset of field: rsf_latencyvk_device_requirements::struct_size"]
+        [::core::mem::offset_of!(rsf_latencyvk_device_requirements, struct_size) - 0usize];
+    ["Offset of field: rsf_latencyvk_device_requirements::abi_version"]
+        [::core::mem::offset_of!(rsf_latencyvk_device_requirements, abi_version) - 4usize];
+    ["Offset of field: rsf_latencyvk_device_requirements::extension_count"]
+        [::core::mem::offset_of!(rsf_latencyvk_device_requirements, extension_count) - 8usize];
+    ["Offset of field: rsf_latencyvk_device_requirements::extensions"]
+        [::core::mem::offset_of!(rsf_latencyvk_device_requirements, extensions) - 16usize];
+    ["Offset of field: rsf_latencyvk_device_requirements::features"]
+        [::core::mem::offset_of!(rsf_latencyvk_device_requirements, features) - 24usize];
+};
+#[repr(C)]
+pub struct rsf_latencyvk_created_device {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    pub instance: *mut ::core::ffi::c_void,
+    pub physical_device: *mut ::core::ffi::c_void,
+    pub device: *mut ::core::ffi::c_void,
+    pub instance_proc: rsf_vk_get_proc,
+    pub create_info: *const ::core::ffi::c_void,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_latencyvk_created_device"]
+        [::core::mem::size_of::<rsf_latencyvk_created_device>() - 48usize];
+    ["Alignment of rsf_latencyvk_created_device"]
+        [::core::mem::align_of::<rsf_latencyvk_created_device>() - 8usize];
+    ["Offset of field: rsf_latencyvk_created_device::struct_size"]
+        [::core::mem::offset_of!(rsf_latencyvk_created_device, struct_size) - 0usize];
+    ["Offset of field: rsf_latencyvk_created_device::abi_version"]
+        [::core::mem::offset_of!(rsf_latencyvk_created_device, abi_version) - 4usize];
+    ["Offset of field: rsf_latencyvk_created_device::instance"]
+        [::core::mem::offset_of!(rsf_latencyvk_created_device, instance) - 8usize];
+    ["Offset of field: rsf_latencyvk_created_device::physical_device"]
+        [::core::mem::offset_of!(rsf_latencyvk_created_device, physical_device) - 16usize];
+    ["Offset of field: rsf_latencyvk_created_device::device"]
+        [::core::mem::offset_of!(rsf_latencyvk_created_device, device) - 24usize];
+    ["Offset of field: rsf_latencyvk_created_device::instance_proc"]
+        [::core::mem::offset_of!(rsf_latencyvk_created_device, instance_proc) - 32usize];
+    ["Offset of field: rsf_latencyvk_created_device::create_info"]
+        [::core::mem::offset_of!(rsf_latencyvk_created_device, create_info) - 40usize];
+};
+pub type rsf_amd_vk_update = ::core::option::Option<
+    unsafe extern "C" fn(
+        arg1: *mut ::core::ffi::c_void,
+        arg2: rsf_vk_function,
+        arg3: u32,
+        arg4: u64,
+        arg5: u32,
+        arg6: u32,
+    ),
+>;
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_amd_vk_platform {
+    pub vendor: ::core::option::Option<
+        unsafe extern "C" fn(arg1: *const rsf_latencyvk_device_query, arg2: *mut u32) -> i32,
+    >,
+    pub enable: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: *const rsf_latencyvk_device_query,
+            arg2: *mut rsf_latencyvk_device_requirements,
+        ) -> i32,
+    >,
+    pub device_update: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: *const rsf_latencyvk_created_device,
+            arg2: *mut rsf_vk_function,
+        ) -> i32,
+    >,
+    pub invoke_update: rsf_amd_vk_update,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_amd_vk_platform"][::core::mem::size_of::<rsf_amd_vk_platform>() - 32usize];
+    ["Alignment of rsf_amd_vk_platform"][::core::mem::align_of::<rsf_amd_vk_platform>() - 8usize];
+    ["Offset of field: rsf_amd_vk_platform::vendor"]
+        [::core::mem::offset_of!(rsf_amd_vk_platform, vendor) - 0usize];
+    ["Offset of field: rsf_amd_vk_platform::enable"]
+        [::core::mem::offset_of!(rsf_amd_vk_platform, enable) - 8usize];
+    ["Offset of field: rsf_amd_vk_platform::device_update"]
+        [::core::mem::offset_of!(rsf_amd_vk_platform, device_update) - 16usize];
+    ["Offset of field: rsf_amd_vk_platform::invoke_update"]
+        [::core::mem::offset_of!(rsf_amd_vk_platform, invoke_update) - 24usize];
 };
 #[repr(C)]
 #[derive(Copy, Clone)]

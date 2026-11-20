@@ -1,11 +1,21 @@
 // SPDX-License-Identifier: MIT
-use crate::latency_antilag::fps_from_interval;
+use crate::latency_antilag::{AMD_VENDOR_ID, fps_from_interval};
 use crate::latency_lease::rsf_native_latency_release_claim;
+use crate::sr_session::has_capacity;
+use crate::vulkan_latency_abi::{
+    RSF_LATENCYVK_DEVICE_ABI_VERSION, rsf_amd_vk_platform as Platform,
+    rsf_latencyvk_created_device as Created, rsf_latencyvk_device_query as Query,
+    rsf_latencyvk_device_requirements as Requirements,
+};
 use crate::vulkan_sr_abi::rsf_vk_function;
 use std::ffi::c_void;
+use std::ptr;
 use std::sync::{Condvar, Mutex};
 
+const INVALID: i32 = -1;
+const ABI_MISMATCH: i32 = -2;
 const NOT_READY: i32 = -8;
+const NOT_SUPPORTED: i32 = -7;
 const INPUT: u32 = 0;
 const PRESENT: u32 = 1;
 const MODE_ONLY: u32 = u32::MAX;
@@ -176,11 +186,99 @@ impl Drop for Update {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_amd_vk_bind(
-    handle: *mut c_void,
-    update: rsf_vk_function,
-    invoke: Invoke,
+unsafe extern "C" fn rsf_core_amd_vk_require(
+    platform: Option<&Platform>,
+    query: *const Query,
+    out: *mut Requirements,
 ) -> i32 {
+    if !unsafe { has_capacity(query) && has_capacity(out) } {
+        return INVALID;
+    }
+    let query = unsafe { &*query };
+    if query.abi_version != RSF_LATENCYVK_DEVICE_ABI_VERSION
+        || unsafe { (*out).abi_version } != RSF_LATENCYVK_DEVICE_ABI_VERSION
+    {
+        return ABI_MISMATCH;
+    }
+    if query.instance.is_null() || query.physical_device.is_null() || query.instance_proc.is_none()
+    {
+        return INVALID;
+    }
+    unsafe {
+        out.write(Requirements {
+            struct_size: size_of::<Requirements>() as u32,
+            abi_version: RSF_LATENCYVK_DEVICE_ABI_VERSION,
+            extension_count: 0,
+            extensions: ptr::null(),
+            features: query.features,
+        });
+    }
+    if let Some(platform) = platform {
+        match amd_device(platform, query) {
+            Ok(true) => return unsafe { (platform.enable.unwrap())(query, out) },
+            Ok(false) => {}
+            Err(result) => return result,
+        }
+    }
+    0
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_amd_vk_device_created(
+    platform: Option<&Platform>,
+    facts: *const Created,
+) -> i32 {
+    if !unsafe { has_capacity(facts) } {
+        return INVALID;
+    }
+    let facts = unsafe { &*facts };
+    if facts.device.is_null() || facts.create_info.is_null() {
+        return INVALID;
+    }
+    if facts.abi_version != RSF_LATENCYVK_DEVICE_ABI_VERSION {
+        return ABI_MISMATCH;
+    }
+    let Some(platform) = platform else {
+        return NOT_SUPPORTED;
+    };
+    if facts.instance.is_null() || facts.physical_device.is_null() || facts.instance_proc.is_none()
+    {
+        return NOT_SUPPORTED;
+    }
+    let query = Query {
+        struct_size: size_of::<Query>() as u32,
+        abi_version: RSF_LATENCYVK_DEVICE_ABI_VERSION,
+        instance: facts.instance,
+        physical_device: facts.physical_device,
+        instance_proc: facts.instance_proc,
+        features: ptr::null_mut(),
+    };
+    match amd_device(platform, &query) {
+        Ok(true) => {}
+        Ok(false) => return NOT_SUPPORTED,
+        Err(result) => return result,
+    }
+    let mut update = None;
+    let result = unsafe { (platform.device_update.unwrap())(facts, &mut update) };
+    if result != 0 {
+        return result;
+    }
+    if update.is_none() {
+        return NOT_SUPPORTED;
+    }
+    bind(facts.device, update, platform.invoke_update.unwrap())
+}
+
+fn amd_device(platform: &Platform, query: &Query) -> Result<bool, i32> {
+    let mut vendor = 0;
+    let result = unsafe { (platform.vendor.unwrap())(query, &mut vendor) };
+    if result != 0 {
+        return Err(result);
+    }
+    Ok(vendor == AMD_VENDOR_ID)
+}
+
+fn bind(handle: *mut c_void, update: rsf_vk_function, invoke: Invoke) -> i32 {
     let mut state = STATE.lock().unwrap();
     if state.phase != Phase::Open || (state.device.is_some() && !state.for_device(handle)) {
         return NOT_READY;
