@@ -3,11 +3,80 @@ use crate::vulkan_fg_abi::{
     RSF_FGVK_FRAME_SLOTS, rsf_fgvk_frame_slot as Slot, rsf_fgvk_submit_plan as SubmitPlan,
     rsf_fgvk_timeline as Timeline,
 };
-use rsf_game_sys::{RSF_FRAME_FLAG_RESET, rsf_frame_record};
+use rsf_game_sys::{
+    RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_NO_FG, RSF_FRAME_FLAG_RESET,
+    RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record,
+};
 use std::ffi::c_void;
+use std::mem::offset_of;
 use std::{ptr, slice};
 
 const SLOTS: usize = RSF_FGVK_FRAME_SLOTS as usize;
+
+pub(super) struct PresentIdentity {
+    frame: u64,
+    session: u64,
+    view: u32,
+    generation: u32,
+}
+
+pub(super) enum PresentSource {
+    Implicit,
+    Explicit(Option<PresentIdentity>),
+}
+
+impl PresentSource {
+    pub(super) unsafe fn valid_prefix(source: *const rsf_frame_record) -> bool {
+        source.is_null()
+            || (source.is_aligned()
+                && (unsafe { source.cast::<u32>().read() } as usize)
+                    >= offset_of!(rsf_frame_record, phase)
+                && unsafe { (*source).abi_version } == RSF_GAME_FRAME_ABI_VERSION)
+    }
+
+    pub(super) unsafe fn read(source: *const rsf_frame_record, explicit: u32) -> Option<Self> {
+        if explicit == 0 {
+            return Some(Self::Implicit);
+        }
+        if source.is_null() {
+            return Some(Self::Explicit(None));
+        }
+        // The identity prefix may be the entire allocation.
+        if !unsafe { Self::valid_prefix(source) } {
+            return None;
+        }
+        Some(Self::Explicit(Some(unsafe {
+            PresentIdentity {
+                frame: (*source).frame_id,
+                session: (*source).session_id,
+                view: (*source).view_id,
+                generation: (*source).resource_generation,
+            }
+        })))
+    }
+
+    pub(super) fn frame(&self, latest: u64) -> u64 {
+        match self {
+            Self::Implicit => latest,
+            Self::Explicit(identity) => identity.as_ref().map_or(0, |identity| identity.frame),
+        }
+    }
+
+    pub(super) fn matches(&self, record: &rsf_frame_record) -> bool {
+        match self {
+            Self::Implicit => true,
+            Self::Explicit(identity) => identity.as_ref().is_some_and(|identity| {
+                identity.frame != 0
+                    && identity.session != 0
+                    && identity.frame == record.frame_id
+                    && identity.session == record.session_id
+                    && identity.view == record.view_id
+                    && identity.generation == record.resource_generation
+                    && record.flags & (RSF_FRAME_FLAG_NO_FG | RSF_FRAME_FLAG_AMBIGUOUS_ID) == 0
+            }),
+        }
+    }
+}
 
 fn same_producer(a: &rsf_frame_record, b: &rsf_frame_record) -> bool {
     a.session_id == b.session_id

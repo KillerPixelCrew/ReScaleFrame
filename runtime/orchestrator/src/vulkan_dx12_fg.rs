@@ -18,8 +18,7 @@ use rsf_game_sys::{
 };
 use std::cell::UnsafeCell;
 use std::ffi::{c_char, c_void};
-use std::mem::offset_of;
-use std::ptr::{self, addr_of};
+use std::ptr;
 use std::slice;
 
 pub(super) const INVALID: i32 = -13001;
@@ -701,7 +700,7 @@ impl Presentation {
         &mut self,
         vendor: &impl Vendor,
         info: &PresentInfo,
-        source: Source,
+        source: PresentSource,
     ) -> Result<(), i32> {
         if !self.open()
             || info.chain != self.chain
@@ -719,8 +718,8 @@ impl Presentation {
             return Err(INIT_FAILED);
         }
         let observed = match source {
-            Source::Implicit => vendor.implicit_present_source(),
-            Source::Explicit(_) => None,
+            PresentSource::Implicit => vendor.implicit_present_source(),
+            PresentSource::Explicit(_) => None,
         };
         let source_frame =
             observed.unwrap_or_else(|| source.frame(self.recording.last_prepared.frame_id));
@@ -839,7 +838,7 @@ impl Presentation {
             source_frame,
             u32::from(identity),
         );
-        self.status.source_frame = if matches!(source, Source::Implicit) || valid {
+        self.status.source_frame = if matches!(source, PresentSource::Implicit) || valid {
             source_frame
         } else {
             0
@@ -910,63 +909,6 @@ impl Presentation {
             unsafe { (ops.platform_destroy)(std::mem::replace(&mut self.vk, ptr::null_mut())) };
         }
         Ok(())
-    }
-}
-
-struct Identity {
-    frame: u64,
-    session: u64,
-    view: u32,
-    generation: u32,
-}
-
-enum Source {
-    Implicit,
-    Explicit(Option<Identity>),
-}
-
-impl Source {
-    unsafe fn read(record: *const Record, explicit: u32) -> Result<Self, i32> {
-        if explicit == 0 {
-            return Ok(Self::Implicit);
-        }
-        if record.is_null() {
-            return Ok(Self::Explicit(None));
-        }
-        // The identity can be a short prefix. Do not borrow a full Record.
-        if (unsafe { addr_of!((*record).struct_size).read() } as usize) < offset_of!(Record, phase)
-            || unsafe { addr_of!((*record).abi_version).read() } != RSF_GAME_FRAME_ABI_VERSION
-        {
-            return Err(INIT_FAILED);
-        }
-        Ok(Self::Explicit(Some(Identity {
-            frame: unsafe { addr_of!((*record).frame_id).read() },
-            session: unsafe { addr_of!((*record).session_id).read() },
-            view: unsafe { addr_of!((*record).view_id).read() },
-            generation: unsafe { addr_of!((*record).resource_generation).read() },
-        })))
-    }
-
-    fn frame(&self, latest: u64) -> u64 {
-        match self {
-            Self::Implicit => latest,
-            Self::Explicit(identity) => identity.as_ref().map_or(0, |identity| identity.frame),
-        }
-    }
-
-    fn matches(&self, record: &Record) -> bool {
-        match self {
-            Self::Implicit => true,
-            Self::Explicit(identity) => identity.as_ref().is_some_and(|identity| {
-                identity.frame != 0
-                    && identity.session != 0
-                    && identity.frame == record.frame_id
-                    && identity.session == record.session_id
-                    && identity.view == record.view_id
-                    && identity.generation == record.resource_generation
-                    && record.flags & (RSF_FRAME_FLAG_NO_FG | RSF_FRAME_FLAG_AMBIGUOUS_ID) == 0
-            }),
-        }
     }
 }
 
@@ -1129,9 +1071,8 @@ pub(super) unsafe fn present<V: Vendor>(
     let (Some(owner), Some(info)) = (unsafe { (owner.as_ref(), info.as_ref()) }) else {
         return INIT_FAILED;
     };
-    let source = match unsafe { Source::read(source, explicit) } {
-        Ok(source) => source,
-        Err(result) => return result,
+    let Some(source) = (unsafe { PresentSource::read(source, explicit) }) else {
+        return INIT_FAILED;
     };
     unsafe { &mut *owner.state.get() }
         .present(&owner.vendor, info, source)

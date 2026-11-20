@@ -2,6 +2,7 @@
 use crate::allocate_handle;
 use crate::sr_session::has_capacity;
 use crate::vulkan_fg_abi::*;
+use crate::vulkan_fg_frames::PresentSource;
 use crate::vulkan_presentation::ProviderOperation;
 use crate::vulkan_sr_abi::RSF_SRVK_ABI_VERSION;
 use rsf_game_sys::rsf_frame_record;
@@ -451,7 +452,7 @@ unsafe extern "C" fn rsf_fgvk_present_source(
     let Some(owner) = (unsafe { owner_ref(handle) }) else {
         return WSI_INITIALIZATION_FAILED;
     };
-    if info.is_null() {
+    if info.is_null() || !unsafe { PresentSource::valid_prefix(source) } {
         return WSI_INITIALIZATION_FAILED;
     }
     let call = owner

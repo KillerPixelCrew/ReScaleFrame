@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "native_fg_vulkan_platform.h"
 #include "native_fg_ffx_vulkan.h"
-#include "native_fg_source.h"
 #include "rust_export.h"
 #include <rescaleframe/native_fg_dlss_vulkan.h>
 #if defined(RSF_HAVE_FSR4_FG_VK)
@@ -55,12 +54,6 @@ struct Call<Function, Map, Failure> {
 template <auto Function>
 constexpr auto wsi_call = Call<Function, unchanged, wsi_initialization_failed>::invoke;
 
-template <auto Function>
-int32_t present_source(void* owner, const void* info, const rsf_frame_record* identity) {
-    if (!rsf::fg_present_identity_valid(identity)) return wsi_initialization_failed;
-    return wsi_call<Function>(owner, info, identity);
-}
-
 template <typename Owner, uint32_t (*Max)(const Owner*)>
 rsf_backend_result max_generated(void* owner, uint32_t* count) noexcept try {
     *count = Max(static_cast<Owner*>(owner));
@@ -100,7 +93,7 @@ constexpr rsf_fgvk_provider dlss_provider{
         return result;
     },
     Call<rsf_dlssgvk_prepare>::invoke, Call<rsf_dlssgvk_hudless>::invoke, Call<rsf_dlssgvk_submitted>::invoke,
-    wsi_call<rsf_dlssgvk_present>, present_source<rsf_dlssgvk_present_source>,
+    wsi_call<rsf_dlssgvk_present>, wsi_call<rsf_dlssgvk_present_source>,
     [](void* owner, rsf_fgvk_status* out) {
         rsf_dlssgvk_status status{};
         const auto result = dlss_status(static_cast<rsf_dlssgvk*>(owner), status);
@@ -119,7 +112,7 @@ constexpr rsf_fgvk_provider ffx_provider{
     wsi_call<rsf_ffxgvk_images>, wsi_call<rsf_ffxgvk_acquire>, shader_read,
     [](void*, uint32_t* count) { *count = 1; return RSF_BACKEND_OK; },
     Call<rsf_ffxgvk_prepare>::invoke, Call<rsf_ffxgvk_hudless>::invoke, Call<rsf_ffxgvk_submitted>::invoke,
-    wsi_call<rsf_ffxgvk_present>, present_source<rsf_ffxgvk_present_source>, Call<rsf_ffxgvk_get_status>::invoke,
+    wsi_call<rsf_ffxgvk_present>, wsi_call<rsf_ffxgvk_present_source>, Call<rsf_ffxgvk_get_status>::invoke,
     Call<rsf_ffxgvk_drain>::invoke, Call<rsf_ffxgvk_destroy>::invoke,
     nullptr, nullptr, nullptr, nullptr,
 };
@@ -142,7 +135,7 @@ constexpr rsf_fgvk_provider fsr4_provider{
     Call<rsf_fsr4gvk_enable_options, fsr4_result>::invoke, wsi_call<rsf_fsr4gvk_images>, wsi_call<rsf_fsr4gvk_acquire>, shader_read,
     max_generated<rsf_fsr4gvk, rsf_fsr4gvk_max_generated>,
     Call<rsf_fsr4gvk_prepare, fsr4_result>::invoke, Call<rsf_fsr4gvk_hudless, fsr4_result>::invoke, Call<rsf_fsr4gvk_submitted>::invoke,
-    wsi_call<rsf_fsr4gvk_present>, present_source<rsf_fsr4gvk_present_source>, Call<rsf_fsr4gvk_status, fsr4_result>::invoke,
+    wsi_call<rsf_fsr4gvk_present>, wsi_call<rsf_fsr4gvk_present_source>, Call<rsf_fsr4gvk_status, fsr4_result>::invoke,
     Call<rsf_fsr4gvk_drain, fsr4_result>::invoke, Call<rsf_fsr4gvk_destroy, fsr4_result>::invoke,
     nullptr, nullptr, nullptr, nullptr,
 };
@@ -165,7 +158,7 @@ constexpr rsf_fgvk_provider xess_provider{
     Call<rsf_xessgvk_enable_options, xess_result>::invoke, wsi_call<rsf_xessgvk_images>, wsi_call<rsf_xessgvk_acquire>, shader_read,
     max_generated<rsf_xessgvk, rsf_xessgvk_max_generated>,
     Call<rsf_xessgvk_prepare, xess_result>::invoke, Call<rsf_xessgvk_hudless, xess_result>::invoke, Call<rsf_xessgvk_submitted>::invoke,
-    wsi_call<rsf_xessgvk_present>, present_source<rsf_xessgvk_present_source>, Call<rsf_xessgvk_status, xess_result>::invoke,
+    wsi_call<rsf_xessgvk_present>, wsi_call<rsf_xessgvk_present_source>, Call<rsf_xessgvk_status, xess_result>::invoke,
     Call<rsf_xessgvk_drain, xess_result>::invoke, Call<rsf_xessgvk_destroy, xess_result>::invoke,
     Call<rsf_xessgvk_latency_options, xess_result>::invoke, Call<rsf_xessgvk_sleep, xess_result>::invoke,
     Call<rsf_xessgvk_latency, xess_result>::invoke, Call<rsf_xessgvk_latency_status, xess_result>::invoke,

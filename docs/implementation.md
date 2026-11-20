@@ -448,6 +448,21 @@ The corrected Streamline runtime receipt was unavailable. SDK execution,
 GPU completion, capture pixels and gameplay remain unverified.
 See [the Vulkan DLSS FG cutover audit](research/rust-vulkan-dlss-fg-cutover.md).
 
+Vulkan FidelityFX 3 FG now owns source admission, slot reuse and
+checked teardown in Rust. It fences GPU consumers even if Present
+returns an older asynchronous error. Refused creation cleanup retains
+the owner for retry, and partial retirement closes frame admission.
+FFX, DLSS, FSR4 and XeSS now share one Rust reader for the explicit
+Present identity prefix. The native SDK and Vulkan call boundaries
+remain in place.
+
+The merged branch passed 16 focused CPU contracts in MSVC Debug and
+Release, including the repaired FFX reset fixture, both capture linkage
+paths and the C++ Anomaly SR and D3D11 host. All 216 locked Rust tests,
+formatting and Clippy passed. The four Release export inventories
+matched. SDK initialization, device behavior and game testing remain
+open. See [the FidelityFX Vulkan FG cutover audit](research/rust-vulkan-ffx-fg-cutover.md).
+
 The ordinary Vulkan SR owner now manages FidelityFX context selection,
 staging, dispatch, history, output publication and checked teardown in Rust.
 The existing provider boundaries and SRVK ABI remain intact. FSR2/3

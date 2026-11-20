@@ -14,12 +14,10 @@ use crate::vulkan_fg_resources_abi::{
 use crate::vulkan_latency_abi::{RSF_SLVK_ABI_VERSION, rsf_slvk_call, rsf_slvk_callback};
 use crate::vulkan_sr_abi::{RSF_SRVK_ABI_VERSION, rsf_srvk_image as SourceImage};
 use rsf_game_sys::{
-    RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_NO_FG, RSF_GAME_CAMERA_ABI_VERSION,
-    RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record as Record,
+    RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record as Record,
 };
 use std::ffi::c_void;
-use std::mem::offset_of;
-use std::ptr::{self, addr_of};
+use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 const RSF_DLSSGVK_ABI_VERSION: u32 = 1;
@@ -498,18 +496,14 @@ impl Owner {
         }
     }
 
-    fn present(&mut self, info: *const c_void, source: Option<Identity>, explicit: bool) -> i32 {
+    fn present(&mut self, info: *const c_void, source: PresentSource) -> i32 {
         if info.is_null() || unsafe { (self.platform.valid_present)(self.native, info) } == 0 {
             return WSI_ERROR;
         }
-        let id = if explicit {
-            source.map_or(0, |s| s.frame)
-        } else {
-            self.timeline.last_prepared.frame_id
-        };
+        let id = source.frame(self.timeline.last_prepared.frame_id);
         let index = slot_index(id);
         let stored = self.slots[index].frame.record;
-        let identity = u32::from(!explicit || source.is_some_and(|s| s.matches(&stored)));
+        let identity = u32::from(source.matches(&stored));
         let candidate = rsf_core_fgvk_present_candidate(
             &self.timeline,
             &self.slots[index].frame,
@@ -640,26 +634,6 @@ fn finite_positive(value: f32) -> bool {
 
 fn slot_index(frame: u64) -> usize {
     (frame % SLOTS as u64) as usize
-}
-
-#[derive(Clone, Copy)]
-struct Identity {
-    frame: u64,
-    session: u64,
-    view: u32,
-    generation: u32,
-}
-
-impl Identity {
-    fn matches(self, record: &Record) -> bool {
-        self.frame != 0
-            && self.session != 0
-            && self.frame == record.frame_id
-            && self.session == record.session_id
-            && self.view == record.view_id
-            && self.generation == record.resource_generation
-            && record.flags & (RSF_FRAME_FLAG_NO_FG | RSF_FRAME_FLAG_AMBIGUOUS_ID) == 0
-    }
 }
 
 #[unsafe(no_mangle)]
@@ -890,25 +864,10 @@ unsafe extern "C" fn rsf_core_dlgvk_present(
     let Some(owner) = (unsafe { owner.as_mut() }) else {
         return WSI_ERROR;
     };
-    let source = if explicit == 0 || source.is_null() {
-        None
-    } else {
-        // The public API accepts just the identity prefix. Do not borrow a full Record.
-        if (unsafe { addr_of!((*source).struct_size).read() } as usize) < offset_of!(Record, phase)
-            || unsafe { addr_of!((*source).abi_version).read() } != RSF_GAME_FRAME_ABI_VERSION
-        {
-            return WSI_ERROR;
-        }
-        Some(unsafe {
-            Identity {
-                frame: addr_of!((*source).frame_id).read(),
-                session: addr_of!((*source).session_id).read(),
-                view: addr_of!((*source).view_id).read(),
-                generation: addr_of!((*source).resource_generation).read(),
-            }
-        })
+    let Some(source) = (unsafe { PresentSource::read(source, explicit) }) else {
+        return WSI_ERROR;
     };
-    owner.present(info, source, explicit != 0)
+    owner.present(info, source)
 }
 
 #[unsafe(no_mangle)]
