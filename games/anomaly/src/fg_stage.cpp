@@ -407,7 +407,7 @@ void configure(const Options& options, rsf_game_log_fn log, void* user) noexcept
     auto& s = state();
     if (s.install_attempted.load()) return;
     s.options = options; s.log = log; s.user = user;
-    s.policy = Policy(options.scope_hold);
+    s.policy.reset(options.scope_hold);
 }
 const Options& options() noexcept { return state().options; }
 
@@ -604,9 +604,9 @@ void ui_boundary() noexcept {
     if (!s.decision.tag) return;
     const auto immediate_context = immediate();
     auto* context = immediate_context.Get();
-    if (!context) { s.policy.inputs(false); return; }
+    if (!context) { s.decision = s.policy.inputs(false); return; }
     if (!s.api.inputs_ready(s.id)) adapter_inputs(context);
-    s.policy.inputs(s.api.inputs_ready(s.id) != 0);
+    s.decision = s.policy.inputs(s.api.inputs_ready(s.id) != 0);
     auto* chain = static_cast<IDXGISwapChain*>(s.facade.load(std::memory_order_acquire));
     ComPtr<ID3D11Texture2D> buffer;
     if (FAILED(chain->GetBuffer(0, IID_PPV_ARGS(&buffer)))) return;
@@ -617,7 +617,6 @@ void ui_boundary() noexcept {
     s.api.pass(context, &final_scene, 1);
     s.api.pass(context, &final_scene, 0);
     maybe_dump(context);
-    if (s.decision.skip == Skip::None && s.camera_frame.valid) s.camera_fed = s.camera_frame;
 }
 
 void end_before() noexcept {
@@ -648,7 +647,8 @@ void end_after() noexcept {
     frame.family_key = frame.view_key = 0;
     s.api.pass(nullptr, &frame, 0);
     cpu(RSF_GAME_CPU_FRAME_END);
-    s.policy.end();
+    s.decision = s.policy.end();
+    if (s.decision.skip == Skip::None && s.camera_frame.valid) s.camera_fed = s.camera_frame;
     publish();
     s.phase = State::Phase::Idle;
 }

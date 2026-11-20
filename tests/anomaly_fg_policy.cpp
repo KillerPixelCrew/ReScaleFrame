@@ -19,13 +19,13 @@ struct Frame {
 struct Run {
     Policy policy{4};
     uint32_t engine_frame{100};
-    Decision begin_decision{}, last{};
+    Decision begin_decision{}, input_decision{}, last{};
     Decision step(const Frame& f) {
         begin_decision = policy.begin(++engine_frame, f.width, f.height, f.cut);
         if (f.scope) policy.scope_frame();
         if (f.level) {
             const auto d = policy.ui_boundary();
-            if (d.tag) policy.inputs(f.inputs);
+            if (d.tag) input_decision = policy.inputs(f.inputs);
         }
         if (f.presented && !f.scope) policy.presented();
         last = policy.end();
@@ -107,6 +107,7 @@ void unpresented_and_missing_inputs() {
     CHECK(r.step({}).reset == Reset::Discontinuity);
     Frame missing{}; missing.inputs = false;
     CHECK(r.step(missing).skip == Skip::NoInputs);
+    CHECK(r.input_decision.skip == Skip::NoInputs);
     CHECK(r.step({}).reset == Reset::Discontinuity);
 }
 
@@ -115,11 +116,11 @@ void every_frame_counted_once() {
     const Frame pattern[] = {{}, {}, {false}, {}, {true, true}, {}, {}, {}, {}, {}, {true, false, false}, {}};
     for (int k = 0; k < 20; ++k) for (const auto& f : pattern) r.step(f);
     const auto& c = r.policy.counters();
-    const auto skipped = std::accumulate(c.skipped.begin(), c.skipped.end(), uint64_t{});
+    const auto skipped = std::accumulate(std::begin(c.skipped), std::end(c.skipped), uint64_t{});
     CHECK(skipped == c.source_frames);
     CHECK(c.skipped[size_t(Skip::None)] == c.fed);
     CHECK(c.presented + c.unpresented == c.source_frames);
-    const auto resets = std::accumulate(c.resets.begin(), c.resets.end(), uint64_t{});
+    const auto resets = std::accumulate(std::begin(c.resets), std::end(c.resets), uint64_t{});
     CHECK(resets == c.fed);
 }
 }

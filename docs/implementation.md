@@ -55,6 +55,20 @@ export names and ordinals matched the C++ baseline and the FG device
 fixture built. The migrated SR-off path still needs device and game
 execution.
 
+Anomaly's engine-frame classification, scope hold, history resets and
+counters now live in Rust. The native adapter reports the same render,
+HUD-less, input-availability and Present boundaries. The current input
+decision is available before the capture decision, and camera history
+advances only after the frame feeds FG history at End. This prevents
+an input refusal or unsuccessful Present from becoming the previous
+camera for a later frame.
+
+Eight focused contracts passed in Debug and Release. They cover scope
+and menu hold, no input, no Present, device and size changes, and both
+executable profiles. Formatting, Clippy, locked Rust tests and the
+Anomaly export comparison passed. The FG fixture built in both
+configurations. Live SR-off validation remains pending for this port.
+
 The first source inspection found that the public frame sequencer opened a rendered
 frame and assigned its provenance under separate locks. Direct callers could read
 or retire the slot between those operations. The FG session adds its own outer
