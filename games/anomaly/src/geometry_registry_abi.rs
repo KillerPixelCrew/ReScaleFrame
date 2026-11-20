@@ -64,7 +64,7 @@ const _: () = {
         [::core::mem::offset_of!(rsf_anomaly_geometry_draw, foliage_identity) - 24usize];
 };
 #[repr(C)]
-#[derive(Default, Copy, Clone)]
+#[derive(Default, Copy, Clone, Eq, Ord, PartialEq, PartialOrd)]
 pub struct rsf_anomaly_geometry_key {
     pub owner: u64,
     pub visual: u64,

@@ -35,7 +35,8 @@ generate("games/anomaly/src/fg_policy_abi.rs", "games/anomaly/src/fg_policy_plat
 generate("games/anomaly/src/geometry_registry_abi.rs", "games/anomaly/src/geometry_registry_platform.h",
          "rsf_anomaly_geometry_(draw|key|probe|retired)",
          "RSF_ANOMALY_(VISUAL_.*|PASS_SHADOW|TYPE_(SKELETON_.*|TREE_.*)|DRAW_(IDENTIFIED.*|IGNORED_.*|UNIDENTIFIED_.*))", [],
-         ["--no-recursive-allowlist", "--with-derive-default", "--raw-line", "#![allow(dead_code)]"])
+         ["--no-recursive-allowlist", "--with-derive-default", "--raw-line", "#![allow(dead_code)]",
+          "--with-derive-custom-struct", "rsf_anomaly_geometry_key=Eq,Ord,PartialEq,PartialOrd"])
 generate("runtime/orchestrator/src/render_abi.rs", "runtime/orchestrator/include/rescaleframe/frame_assembly.h",
          "rsf_(frame_resources|pipeline_camera_frame|dlss_frame|fg_choice|render_link|sr_session_setup|sr_session_status|sr_provider|fg_host|fg_session_status|generation_provider|native_fg_status|motion_resolve_params|render_settings|sharpening_options)",
          "RSF_(FRAME_ASSEMBLY_ABI_VERSION|DLSS_ABI_VERSION|FG_(BACKEND_(AUTO|ALL)|ABI_VERSION|OFF|FIXED|AUTO|DYNAMIC|STAT_(TOTAL_PRESENTED|GENERATED_PRESENTED|PRESENT_CALLBACKS|ACTIVITY))|NATIVE_FG_REASON_NONE|PACING_(NONE|REFLEX|XELL)|REFLEX_(OFF|BOOST)|RENDER_LINK_ABI_VERSION|SR_SESSION_ABI_VERSION|BACKEND_ABI_VERSION|API_D3D12|SR_(FSR2|XESS)|RENDER_FRONTEND_ABI_VERSION|SHARPENING_ABI_VERSION)",

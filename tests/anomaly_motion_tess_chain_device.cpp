@@ -564,13 +564,13 @@ Frame draw(const Case& c, Chain& chain, Targets& t, MotionDevice* motion, bool h
         in.kind = c.skin == 0 ? rsf::anomaly::geometry::DrawKind::SingleBone : rsf::anomaly::geometry::DrawKind::HardwareSkinned;
         in.context = true;
         in.previous_camera = &camera;
-        in.previous = &previous;
+        in.previous = draw_snapshot_view(previous);
         const auto decision = decide_core(in);
         require(decision.reason == HistoryReason::Valid, "policy accepts the skinned mover");
         CoreVertexBytes vbytes;
         TessDomainBytes dbytes;
         if (history) {
-            require(pack_core_vertex(decision.previous_wvp, decision.bones, decision.flags, vbytes), "pack VS b13");
+            require(pack_core_vertex(decision.previous_wvp, decision.bones.span(), decision.flags, vbytes), "pack VS b13");
             require(pack_tess_domain(decision.previous_wv, decision.previous_projection, true, dbytes), "pack DS b13");
         } else {
             pack_core_invalid(vbytes);

@@ -95,8 +95,8 @@ struct PixelInputs {
     float current_jitter_u{}, current_jitter_v{};    // current jitter, normalized viewport UV, Y down
     float previous_jitter_u{}, previous_jitter_v{};  // previous jitter; MUST be zero for foliage draws
 };
-// Returns false (and writes control.x = 0, which makes the shader write invalid motion) for a non-positive or
-// non-finite viewport extent.
+// Returns false and writes an invalid buffer when inputs or the positive viewport's reciprocals are non-finite,
+// or the viewport extent is non-positive.
 bool pack_pixel(const PixelInputs&, PixelBytes& out) noexcept;
 
 // Row-vector engine Fmatrix bytes (16 floats, _11 _12 ... _44) to the column-vector Mat4 used here.

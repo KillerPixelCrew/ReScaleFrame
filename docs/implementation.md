@@ -100,6 +100,14 @@ focused startup, plugin and input contracts in both configurations, and
 the startup retry regression passed on the merged branch.
 See [the cold-entry cutover audit](research/rust-anomaly-bootstrap.md).
 
+Anomaly's draw-time motion history, shader eligibility and b13 packing
+now live in Rust. Geometry and motion history share one instance-key
+binding. The packer refuses viewport extents whose reciprocals overflow
+and writes the invalid buffer. The worker verified all four b13 layouts
+with FXC, and its focused CPU contracts passed in Debug and Release.
+The shader pack hash matched the staged game baseline.
+See [the motion cutover audit](research/rust-anomaly-motion-history.md).
+
 The first source inspection found that the public frame sequencer opened a rendered
 frame and assigned its provenance under separate locks. Direct callers could read
 or retire the slot between those operations. The FG session adds its own outer

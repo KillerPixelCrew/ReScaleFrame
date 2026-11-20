@@ -10,7 +10,7 @@ RetirementQueue::~RetirementQueue() { rsf_anomaly_geometry_retirements_destroy(s
 void RetirementQueue::sink(void* queue, temporal::InstanceKey key) noexcept
 {
     if (!queue) return;
-    const rsf_anomaly_geometry_key retired{key.owner, key.visual, key.generation};
+    const auto retired = geometry_key(key);
     rsf_anomaly_geometry_enqueue(static_cast<RetirementQueue*>(queue)->state_, &retired);
 }
 

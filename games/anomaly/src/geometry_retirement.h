@@ -5,6 +5,10 @@
 #include <exception>
 
 namespace rsf::anomaly::geometry {
+inline rsf_anomaly_geometry_key geometry_key(temporal::InstanceKey key) noexcept {
+    return {key.owner, key.visual, key.generation};
+}
+
 // Keep any exception from the C++ history owner on this side of the C boundary.
 struct RetirementCall {
     void (*apply)(void*, temporal::InstanceKey);

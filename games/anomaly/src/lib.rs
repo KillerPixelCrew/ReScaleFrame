@@ -5,6 +5,7 @@ mod fg_policy;
 mod fg_policy_abi;
 mod geometry_registry;
 mod geometry_registry_abi;
+mod motion;
 
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, rsf_detect_game_fn, rsf_game_hooks_api, rsf_game_info,

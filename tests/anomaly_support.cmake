@@ -100,13 +100,13 @@ set_tests_properties(anomaly_sr_plan_contract PROPERTIES TIMEOUT 30)
 # manifest, original-bytecode proof, reflection rules, disk cache) with fakes. The device fixture draws the real
 # deployed core variants (tools/anomaly_motion_deploy.py output, local only; 77 when absent) through the production
 # loader, b13 packers and invalidation replay. Neither runs game code.
-set(RSF_ANOMALY_MOTION_SOURCES "${RSF_ANOMALY_SR_SRC}/motion_constants.cpp" "${RSF_ANOMALY_SR_SRC}/motion_history.cpp"
-    "${RSF_ANOMALY_SR_SRC}/motion_foliage.cpp"
-    "${RSF_ANOMALY_SR_SRC}/motion_policy.cpp" "${RSF_ANOMALY_SR_SRC}/motion_target.cpp" "${RSF_ANOMALY_SR_SRC}/shader_loader.cpp")
+set(RSF_ANOMALY_MOTION_SOURCES "${RSF_ANOMALY_SR_SRC}/motion_foliage.cpp"
+    "${RSF_ANOMALY_SR_SRC}/motion_target.cpp" "${RSF_ANOMALY_SR_SRC}/shader_loader.cpp")
 add_executable(rsf_anomaly_motion_contract_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_motion_contract.cpp" ${RSF_ANOMALY_MOTION_SOURCES})
 target_include_directories(rsf_anomaly_motion_contract_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
 target_compile_definitions(rsf_anomaly_motion_contract_test PRIVATE RSF_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
-target_link_libraries(rsf_anomaly_motion_contract_test PRIVATE bcrypt ReScaleFrame::GameSDK ReScaleFrame::Graphics rsf_build_options)
+target_link_libraries(rsf_anomaly_motion_contract_test PRIVATE rsf_anomaly_motion_bridge bcrypt ReScaleFrame::GameSDK
+    ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME anomaly_motion_contract COMMAND rsf_anomaly_motion_contract_test)
 add_test(NAME anomaly_motion_unknown_selection COMMAND rsf_anomaly_motion_contract_test unknown-case)
 set_tests_properties(anomaly_motion_unknown_selection PROPERTIES WILL_FAIL TRUE)
@@ -114,7 +114,8 @@ add_executable(rsf_anomaly_motion_device_test "${CMAKE_CURRENT_LIST_DIR}/anomaly
     "${RSF_ANOMALY_SR_SRC}/motion_d3d11.cpp" "${RSF_ANOMALY_SR_SRC}/shader_d3d.cpp")
 target_include_directories(rsf_anomaly_motion_device_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
 target_compile_definitions(rsf_anomaly_motion_device_test PRIVATE RSF_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
-target_link_libraries(rsf_anomaly_motion_device_test PRIVATE ReScaleFrame::Graphics bcrypt d3d11 d3dcompiler dxgi dxguid rsf_build_options)
+target_link_libraries(rsf_anomaly_motion_device_test PRIVATE rsf_anomaly_motion_bridge ReScaleFrame::Graphics
+    bcrypt d3d11 d3dcompiler dxgi dxguid rsf_build_options)
 add_test(NAME anomaly_motion_device COMMAND rsf_anomaly_motion_device_test)
 set_tests_properties(anomaly_motion_device PROPERTIES SKIP_RETURN_CODE 77)
 set_tests_properties(anomaly_motion_contract anomaly_motion_unknown_selection anomaly_motion_device PROPERTIES TIMEOUT 300)
@@ -135,8 +136,8 @@ add_executable(rsf_anomaly_motion_tess_chain_device_test "${CMAKE_CURRENT_LIST_D
     ${RSF_ANOMALY_MOTION_SOURCES} "${RSF_ANOMALY_SR_SRC}/motion_d3d11.cpp" "${RSF_ANOMALY_SR_SRC}/shader_d3d.cpp")
 target_include_directories(rsf_anomaly_motion_tess_chain_device_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
 target_compile_definitions(rsf_anomaly_motion_tess_chain_device_test PRIVATE RSF_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
-target_link_libraries(rsf_anomaly_motion_tess_chain_device_test PRIVATE ReScaleFrame::Graphics bcrypt d3d11 d3dcompiler dxgi dxguid
-    rsf_build_options)
+target_link_libraries(rsf_anomaly_motion_tess_chain_device_test PRIVATE rsf_anomaly_motion_bridge ReScaleFrame::Graphics
+    bcrypt d3d11 d3dcompiler dxgi dxguid rsf_build_options)
 add_test(NAME anomaly_motion_tess_chain_device COMMAND rsf_anomaly_motion_tess_chain_device_test)
 set_tests_properties(anomaly_motion_tess_chain_device PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)
 # The far (SE_R2_NORMAL_LQ, beyond r__dtex_range) and near (HQ) skinned VS/PS pairs against the CPU model, including a
@@ -145,14 +146,14 @@ add_executable(rsf_anomaly_motion_far_device_test "${CMAKE_CURRENT_LIST_DIR}/ano
     ${RSF_ANOMALY_MOTION_SOURCES} "${RSF_ANOMALY_SR_SRC}/motion_d3d11.cpp" "${RSF_ANOMALY_SR_SRC}/shader_d3d.cpp")
 target_include_directories(rsf_anomaly_motion_far_device_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
 target_compile_definitions(rsf_anomaly_motion_far_device_test PRIVATE RSF_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
-target_link_libraries(rsf_anomaly_motion_far_device_test PRIVATE ReScaleFrame::Graphics bcrypt d3d11 d3dcompiler dxgi dxguid
-    rsf_build_options)
+target_link_libraries(rsf_anomaly_motion_far_device_test PRIVATE rsf_anomaly_motion_bridge ReScaleFrame::Graphics
+    bcrypt d3d11 d3dcompiler dxgi dxguid rsf_build_options)
 add_test(NAME anomaly_motion_far_device COMMAND rsf_anomaly_motion_far_device_test)
 set_tests_properties(anomaly_motion_far_device PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)
 # rsf_anomaly_sr_hooks_test links native_observer.cpp, which installs/reports/quiesces the motion stage.
 target_sources(rsf_anomaly_sr_hooks_test PRIVATE ${RSF_ANOMALY_MOTION_SOURCES} "${RSF_ANOMALY_SR_SRC}/motion_d3d11.cpp"
     "${RSF_ANOMALY_SR_SRC}/motion_stage.cpp" "${RSF_ANOMALY_SR_SRC}/shader_d3d.cpp")
-target_link_libraries(rsf_anomaly_sr_hooks_test PRIVATE bcrypt dxguid d3dcompiler)
+target_link_libraries(rsf_anomaly_sr_hooks_test PRIVATE rsf_anomaly_motion_bridge bcrypt dxguid d3dcompiler)
 # SR Stage 3 (jitter and mip bias). The jitter test checks the Halton sequence, the row-vector NDC offset, the
 # first-person rule, the mip bias delta and the published motion/SR state on the CPU; the Stage 3 swap cases (projection
 # and bias restore on every exit path) live in anomaly_sr_swap_contract. The device fixture runs the unchanged core
@@ -163,11 +164,10 @@ target_link_libraries(rsf_anomaly_sr_jitter_test PRIVATE rsf_build_options)
 add_test(NAME anomaly_sr_jitter_contract COMMAND rsf_anomaly_sr_jitter_test)
 add_test(NAME anomaly_sr_jitter_unknown_selection COMMAND rsf_anomaly_sr_jitter_test unknown-case)
 set_tests_properties(anomaly_sr_jitter_unknown_selection PROPERTIES WILL_FAIL TRUE)
-add_executable(rsf_anomaly_sr_jitter_device_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_jitter_device.cpp"
-    "${RSF_ANOMALY_SR_SRC}/motion_constants.cpp")
+add_executable(rsf_anomaly_sr_jitter_device_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_jitter_device.cpp")
 target_include_directories(rsf_anomaly_sr_jitter_device_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
 target_compile_definitions(rsf_anomaly_sr_jitter_device_test PRIVATE RSF_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
-target_link_libraries(rsf_anomaly_sr_jitter_device_test PRIVATE d3d11 d3dcompiler dxgi dxguid rsf_build_options)
+target_link_libraries(rsf_anomaly_sr_jitter_device_test PRIVATE rsf_anomaly_motion_bridge d3d11 d3dcompiler dxgi dxguid rsf_build_options)
 add_test(NAME anomaly_sr_jitter_device COMMAND rsf_anomaly_sr_jitter_device_test)
 set_tests_properties(anomaly_sr_jitter_device PROPERTIES SKIP_RETURN_CODE 77)
 set_tests_properties(anomaly_sr_jitter_contract anomaly_sr_jitter_unknown_selection anomaly_sr_jitter_device PROPERTIES TIMEOUT 120)

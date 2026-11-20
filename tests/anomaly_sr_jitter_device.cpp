@@ -3,7 +3,7 @@
 // present, else WARP; 77 when neither exists). No game code and no engine shader runs.
 //
 // The pixel shader is games/anomaly/shaders/core/rsf_core_pixel.h's rsf_encode_motion, compiled unchanged; its PS b13 is
-// packed by the production motion_constants.cpp pack_pixel from the production jitter state (sr_jitter.h: Halton
+// packed by the production motion pack_pixel from the production jitter state (sr_jitter.h: Halton
 // sequence, row-vector projection jitter, published current/previous UV). A fixture VS writes SV_Position with this
 // frame's jittered projection and the previous clip with the previous frame's jittered projection, as the core VS does
 // with the history camera the motion stage records from RCache.
