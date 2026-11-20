@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: MIT
+// Public entry points of the shared translucency owner. native_translucency.rs owns its state,
+// pass order and resources; this file keeps the HLSL and the calls that need the CMake build:
+// the compile, the shared D3D11 state scope and the frame tap sampler bias.
 #include <rescaleframe/native_translucency.h>
 #include <rescaleframe/d3d11_state.h>
 #include <rescaleframe/frame_tap.h>
 #include <rescaleframe/shader_compile.h>
-#include <rescaleframe/srv_format.h>
 #include <d3d11.h>
 #include <wrl/client.h>
-#include <cmath>
-#include <cstring>
-#include <mutex>
-using Microsoft::WRL::ComPtr;
 namespace {
 // Mode 0 compares scene colour after a pass drawn into it with the opaque snapshot. Mode 1 adds
 // the offscreen layer exactly as the game composites it (scene * a + rgb) and merges the result.
@@ -52,257 +50,56 @@ float change(float3 a, float3 b) { float3 d = abs(tonemap(a) - tonemap(b)); retu
     Coverage[id.xy] = coverage;
     Bias[id.xy] = coverage >= 0.5 ? 1 : 0;
 })";
-struct Constants {
-    int32_t origin[2]; uint32_t size[2]; float scene_inv_size[2]; uint32_t mode; float coverage_scale;
-};
-using rsf::srv_format;
-// A shader view of a game texture, kept while the same texture comes back. Holding the texture
-// keeps its address from being taken by another one while the view is cached.
-struct SourceView {
-    ComPtr<ID3D11Texture2D> texture;
-    ComPtr<ID3D11ShaderResourceView> view;
-};
-struct Key {
-    uint64_t family = 0, view = 0, frame = 0;
-    int32_t rect[4]{};
-    bool operator==(const Key& other) const
-    { return family == other.family && view == other.view && frame == other.frame && !std::memcmp(rect, other.rect, sizeof(rect)); }
-};
-struct State {
-    std::mutex guard;
-    ComPtr<ID3D11Device> device;
-    ComPtr<ID3D11ComputeShader> shader;
-    ComPtr<ID3D11Buffer> constants;
-    ComPtr<ID3D11SamplerState> sampler;
-    bool shader_failed = false;
-    ComPtr<ID3D11Texture2D> opaque, layer, masks[3], clouds;
-    ComPtr<ID3D11ShaderResourceView> opaque_view;
-    ComPtr<ID3D11UnorderedAccessView> mask_views[3];
-    SourceView scene_view, layer_view;
-    uint32_t width = 0, height = 0;
-    DXGI_FORMAT opaque_format = DXGI_FORMAT_UNKNOWN, layer_format = DXGI_FORMAT_UNKNOWN;
-    Key key;
-    bool snapshot = false, masks_ready = false, layer_ready = false;
-    // Clouds composite before translucency without a view identity. The next scene-colour pass
-    // with the same rectangle adopts them; anything else discards them.
-    int32_t cloud_rect[4]{};
-    bool clouds_pending = false, clouds_ready = false;
-    void release()
-    {
-        device.Reset(); shader.Reset(); constants.Reset(); sampler.Reset(); shader_failed = false;
-        opaque.Reset(); opaque_view.Reset(); layer.Reset(); clouds.Reset();
-        scene_view = {}; layer_view = {};
-        clouds_pending = clouds_ready = false;
-        for (auto& mask : masks) mask.Reset();
-        for (auto& view : mask_views) view.Reset();
-        width = height = 0; opaque_format = layer_format = DXGI_FORMAT_UNKNOWN;
-        key = {}; snapshot = masks_ready = layer_ready = false;
-    }
-};
-State& state() { static State instance; return instance; }
 
-bool prepare_device(State& self, ID3D11Device* device)
+void* compile_masks(void* device) try
 {
-    if (self.device.Get() != device) { self.release(); self.device = device; }
-    if (self.shader) return true;
-    if (self.shader_failed) return false;
-    self.shader_failed = true;
+    Microsoft::WRL::ComPtr<ID3D11ComputeShader> shader;
     // Compiled without strictness, as it always has been.
-    if (!rsf::compile_compute(device, shader_source, "translucency_masks", "main", self.shader.ReleaseAndGetAddressOf(),
-            nullptr, nullptr, 0)) {
-        self.shader.Reset(); return false;
-    }
-    D3D11_BUFFER_DESC buffer{};
-    buffer.ByteWidth = sizeof(Constants); buffer.Usage = D3D11_USAGE_DEFAULT; buffer.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-    D3D11_SAMPLER_DESC sampler{};
-    sampler.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
-    sampler.AddressU = sampler.AddressV = sampler.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
-    sampler.MaxLOD = D3D11_FLOAT32_MAX;
-    if (FAILED(device->CreateBuffer(&buffer, nullptr, &self.constants)) ||
-        FAILED(device->CreateSamplerState(&sampler, &self.sampler))) { self.shader.Reset(); return false; }
-    self.shader_failed = false;
-    return true;
+    if (!rsf::compile_compute(static_cast<ID3D11Device*>(device), shader_source, "translucency_masks", "main",
+            shader.GetAddressOf(), nullptr, nullptr, 0)) return nullptr;
+    return shader.Detach();
 }
-bool texture(ID3D11Device* device, uint32_t width, uint32_t height, DXGI_FORMAT format, UINT bind,
-    ComPtr<ID3D11Texture2D>& out)
-{
-    D3D11_TEXTURE2D_DESC desc{};
-    desc.Width = width; desc.Height = height; desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
-    desc.Format = format; desc.BindFlags = bind;
-    out.Reset();
-    return SUCCEEDED(device->CreateTexture2D(&desc, nullptr, &out));
+catch (...) { return nullptr; }
+
+void material_bias(float bias) { (void)rsf_frame_tap_set_sampler_bias(bias); }
+
+struct Leaves {
+    decltype(&compile_masks) compile;
+    decltype(&rsf_d3d11_state_save) save;
+    decltype(&rsf_d3d11_state_restore) restore;
+    decltype(&material_bias) sampler_bias;
+};
+constexpr Leaves leaves{compile_masks, rsf_d3d11_state_save, rsf_d3d11_state_restore, material_bias};
+static_assert(sizeof(Leaves) == 32, "Rust translucency leaf layout");
+static_assert(sizeof(rsf_native_translucency_masks) == 56, "Rust translucency mask layout");
 }
-bool prepare_targets(State& self, uint32_t width, uint32_t height, DXGI_FORMAT opaque_format)
-{
-    if (self.width == width && self.height == height && self.opaque_format == opaque_format) return true;
-    self.width = self.height = 0;
-    if (!texture(self.device.Get(), width, height, opaque_format, D3D11_BIND_SHADER_RESOURCE, self.opaque) ||
-        FAILED(self.device->CreateShaderResourceView(self.opaque.Get(), nullptr, &self.opaque_view))) return false;
-    for (uint32_t i = 0; i < 3; ++i) {
-        if (!texture(self.device.Get(), width, height, DXGI_FORMAT_R32_FLOAT,
-                D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS, self.masks[i]) ||
-            FAILED(self.device->CreateUnorderedAccessView(self.masks[i].Get(), nullptr, &self.mask_views[i]))) return false;
-    }
-    self.layer.Reset(); self.layer_format = DXGI_FORMAT_UNKNOWN;
-    self.width = width; self.height = height; self.opaque_format = opaque_format;
-    return true;
+
+extern "C" {
+void rsf_core_native_translucency_pass(void* context, const rsf_game_render_pass* pass, uint32_t begin,
+    const Leaves* leaves);
+int rsf_core_native_translucency_take(const rsf_game_render_pass* sr_pass, rsf_native_translucency_masks* out);
+void rsf_core_native_translucency_release();
 }
-ID3D11ShaderResourceView* view(ID3D11Device* device, SourceView& cached, ID3D11Texture2D* texture)
-{
-    if (cached.texture.Get() == texture) return cached.view.Get();
-    cached = {};
-    D3D11_TEXTURE2D_DESC desc{}; texture->GetDesc(&desc);
-    if (desc.SampleDesc.Count != 1 || desc.ArraySize != 1) return nullptr;
-    D3D11_SHADER_RESOURCE_VIEW_DESC srv{};
-    srv.Format = srv_format(desc.Format); srv.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D; srv.Texture2D.MipLevels = 1;
-    if (FAILED(device->CreateShaderResourceView(texture, &srv, &cached.view))) return nullptr;
-    cached.texture = texture;
-    return cached.view.Get();
-}
-bool dispatch(State& self, ID3D11DeviceContext* context, ID3D11Texture2D* scene, ID3D11Texture2D* layer, uint32_t mode)
-{
-    D3D11_TEXTURE2D_DESC scene_desc{}; scene->GetDesc(&scene_desc);
-    ID3D11ShaderResourceView* bound[] = {view(self.device.Get(), self.scene_view, scene), self.opaque_view.Get(),
-        layer ? view(self.device.Get(), self.layer_view, layer) : nullptr};
-    if (!bound[0] || !bound[1] || (layer && !bound[2])) return false;
-    Constants constants{};
-    constants.origin[0] = self.key.rect[0]; constants.origin[1] = self.key.rect[1];
-    constants.size[0] = self.width; constants.size[1] = self.height;
-    constants.scene_inv_size[0] = 1.0f / float(scene_desc.Width); constants.scene_inv_size[1] = 1.0f / float(scene_desc.Height);
-    constants.mode = mode;
-    // A tonemapped change of a tenth already reads as fully covered.
-    constants.coverage_scale = 10.0f;
-    rsf_d3d11_state saved{};
-    if (!rsf_d3d11_state_save(context, &saved)) return false;
-    context->SetPredication(nullptr, FALSE);
-    context->OMSetRenderTargets(0, nullptr, nullptr);
-    context->UpdateSubresource(self.constants.Get(), 0, nullptr, &constants, 0, 0);
-    ID3D11UnorderedAccessView* targets[] = {self.mask_views[0].Get(), self.mask_views[1].Get(), self.mask_views[2].Get()};
-    ID3D11Buffer* buffers[] = {self.constants.Get()};
-    ID3D11SamplerState* samplers[] = {self.sampler.Get()};
-    context->CSSetShader(self.shader.Get(), nullptr, 0);
-    context->CSSetShaderResources(0, 3, bound);
-    context->CSSetUnorderedAccessViews(0, 3, targets, nullptr);
-    context->CSSetConstantBuffers(0, 1, buffers);
-    context->CSSetSamplers(0, 1, samplers);
-    context->Dispatch((self.width + 7) / 8, (self.height + 7) / 8, 1);
-    ID3D11UnorderedAccessView* empty[3]{}; context->CSSetUnorderedAccessViews(0, 3, empty, nullptr);
-    rsf_d3d11_state_restore(context, &saved);
-    return true;
-}
-void material_scope(const rsf_game_render_pass& pass, uint32_t begin)
-{
-    const auto bias = pass.material_texture_mip_bias;
-    rsf_frame_tap_set_sampler_bias(begin && std::isfinite(bias) ? bias : 0.0f);
-}
-bool inside(const D3D11_TEXTURE2D_DESC& desc, const int32_t rect[4])
-{ return rect[0] >= 0 && rect[1] >= 0 && rect[2] > rect[0] && rect[3] > rect[1] &&
-    uint32_t(rect[2]) <= desc.Width && uint32_t(rect[3]) <= desc.Height; }
+
+namespace {
+// The owner held COM references in a static before; release them at unload as it did.
+struct ReleaseAtUnload {
+    ~ReleaseAtUnload() { rsf_core_native_translucency_release(); }
+} release_at_unload;
 }
 
 extern "C" RSF_RUNTIME_API void rsf_native_translucency_pass(void* context_pointer, const rsf_game_render_pass* pass,
-    uint32_t begin) try
+    uint32_t begin)
 {
-    if (!context_pointer || !pass || pass->struct_size < sizeof(*pass)) return;
-    auto* context = static_cast<ID3D11DeviceContext*>(context_pointer);
-    if (pass->role == RSF_GAME_RENDER_CLOUD_DEPTH && begin && pass->depth) {
-        auto* clouds = static_cast<ID3D11Texture2D*>(pass->depth);
-        ComPtr<ID3D11Device> device; context->GetDevice(&device);
-        ComPtr<ID3D11Device> owner; clouds->GetDevice(&owner);
-        D3D11_TEXTURE2D_DESC desc{}; clouds->GetDesc(&desc);
-        const int32_t width = pass->render_rect[2] - pass->render_rect[0], height = pass->render_rect[3] - pass->render_rect[1];
-        auto& self = state();
-        std::lock_guard<std::mutex> lock(self.guard);
-        self.clouds_pending = false;
-        if (owner.Get() != device.Get() || desc.Format != DXGI_FORMAT_R32_FLOAT || width <= 0 || height <= 0 ||
-            desc.Width != uint32_t(width) || desc.Height != uint32_t(height)) return;
-        if (self.device.Get() != device.Get()) { self.release(); self.device = device; }
-        D3D11_TEXTURE2D_DESC owned{};
-        if (self.clouds) self.clouds->GetDesc(&owned);
-        if (!self.clouds || owned.Width != desc.Width || owned.Height != desc.Height) {
-            self.clouds.Reset();
-            if (!texture(device.Get(), desc.Width, desc.Height, DXGI_FORMAT_R32_FLOAT, D3D11_BIND_SHADER_RESOURCE, self.clouds)) return;
-        }
-        context->CopyResource(self.clouds.Get(), clouds);
-        std::memcpy(self.cloud_rect, pass->render_rect, sizeof(self.cloud_rect));
-        self.clouds_pending = true;
-        return;
-    }
-    if (pass->role == RSF_GAME_RENDER_MATERIALS) { material_scope(*pass, begin); return; }
-    if (pass->role != RSF_GAME_RENDER_TRANSLUCENCY || !(pass->flags & RSF_GAME_RENDER_PRIMARY) || !pass->color_input) return;
-    // Translucent materials take the same bias. Off before the end-of-pass masks run, on after
-    // the opening snapshot; both are compute work that the bias does not touch either way.
-    struct Bias {
-        const rsf_game_render_pass& pass; uint32_t begin;
-        ~Bias() { if (begin) material_scope(pass, 1); }
-    } bias{*pass, begin};
-    if (!begin) material_scope(*pass, 0);
-    auto* scene = static_cast<ID3D11Texture2D*>(pass->color_input);
-    ComPtr<ID3D11Device> device; context->GetDevice(&device);
-    ComPtr<ID3D11Device> owner; scene->GetDevice(&owner);
-    if (owner.Get() != device.Get() || context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) return;
-    auto& self = state();
-    std::lock_guard<std::mutex> lock(self.guard);
-    if (!prepare_device(self, device.Get())) return;
-    Key key{pass->family_key, pass->view_key, pass->native_frame,
-        {pass->render_rect[0], pass->render_rect[1], pass->render_rect[2], pass->render_rect[3]}};
-    D3D11_TEXTURE2D_DESC scene_desc{}; scene->GetDesc(&scene_desc);
-    if (scene_desc.SampleDesc.Count != 1 || scene_desc.ArraySize != 1 || !inside(scene_desc, key.rect)) return;
-    const bool layer_pass = (pass->flags & RSF_GAME_RENDER_TRANSLUCENCY_LAYER) != 0;
-    const D3D11_BOX box{UINT(key.rect[0]), UINT(key.rect[1]), 0, UINT(key.rect[2]), UINT(key.rect[3]), 1};
-    if (begin) {
-        if (layer_pass) return;
-        // The first scene-colour pass of a frame: everything drawn so far is opaque, sky or cloud.
-        self.key = key; self.snapshot = self.masks_ready = self.layer_ready = false;
-        self.clouds_ready = self.clouds_pending && !std::memcmp(self.cloud_rect, key.rect, sizeof(key.rect));
-        self.clouds_pending = false;
-        if (!prepare_targets(self, uint32_t(key.rect[2] - key.rect[0]), uint32_t(key.rect[3] - key.rect[1]),
-                srv_format(scene_desc.Format))) { self.width = 0; return; }
-        context->CopySubresourceRegion(self.opaque.Get(), 0, 0, 0, 0, scene, 0, &box);
-        self.snapshot = true;
-        return;
-    }
-    if (!(self.key == key) || !self.snapshot) return;
-    if (!layer_pass) {
-        if (self.masks_ready) return; // A second scene-colour pass would compare against a stale base.
-        self.masks_ready = dispatch(self, context, scene, nullptr, 0);
-        return;
-    }
-    auto* layer = static_cast<ID3D11Texture2D*>(pass->color_output);
-    if (!self.masks_ready || !layer) return;
-    ComPtr<ID3D11Device> layer_owner; layer->GetDevice(&layer_owner);
-    if (layer_owner.Get() != device.Get() || !dispatch(self, context, scene, layer, 1)) { self.masks_ready = false; return; }
-    D3D11_TEXTURE2D_DESC layer_desc{}; layer->GetDesc(&layer_desc);
-    // Only a layer at scene size shares the view rectangle; a scaled one is used for the masks only.
-    if (layer_desc.Width != scene_desc.Width || layer_desc.Height != scene_desc.Height ||
-        layer_desc.SampleDesc.Count != 1 || layer_desc.ArraySize != 1) return;
-    if (!self.layer || self.layer_format != srv_format(layer_desc.Format)) {
-        if (!texture(device.Get(), self.width, self.height, srv_format(layer_desc.Format), D3D11_BIND_SHADER_RESOURCE, self.layer)) return;
-        self.layer_format = srv_format(layer_desc.Format);
-    }
-    context->CopySubresourceRegion(self.layer.Get(), 0, 0, 0, 0, layer, 0, &box);
-    self.layer_ready = true;
+    rsf_core_native_translucency_pass(context_pointer, pass, begin, &leaves);
 }
-catch (...) { state().masks_ready = false; }
 
 extern "C" RSF_RUNTIME_API int rsf_native_translucency_take(const rsf_game_render_pass* sr_pass, rsf_native_translucency_masks* out)
 {
-    if (!sr_pass || !out || out->struct_size < sizeof(*out)) return 0;
-    auto& self = state();
-    std::lock_guard<std::mutex> lock(self.guard);
-    const Key key{sr_pass->family_key, sr_pass->view_key, sr_pass->native_frame,
-        {sr_pass->render_rect[0], sr_pass->render_rect[1], sr_pass->render_rect[2], sr_pass->render_rect[3]}};
-    if (!self.masks_ready || !(self.key == key)) return 0;
-    out->color_before_transparency = self.opaque.Get();
-    out->transparency_layer = self.layer_ready ? self.layer.Get() : nullptr;
-    out->reactive = self.masks[0].Get(); out->coverage = self.masks[1].Get(); out->bias = self.masks[2].Get();
-    out->motion_depth = self.clouds_ready ? self.clouds.Get() : nullptr;
-    return 1;
+    return rsf_core_native_translucency_take(sr_pass, out);
 }
 
 extern "C" RSF_RUNTIME_API void rsf_native_translucency_release(void)
 {
-    auto& self = state();
-    std::lock_guard<std::mutex> lock(self.guard);
-    self.release();
+    rsf_core_native_translucency_release();
 }

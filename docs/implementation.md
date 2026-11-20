@@ -552,6 +552,18 @@ Release exports matched the Runtime and both carriers. Real provider
 switching, device timing and game behavior await validation.
 See [the Direct3D CPU cutover audit](research/rust-native-fg-cpu-cutover.md).
 
+The D3D11 translucency owner now keeps its pass order, mask and cloud-depth
+leases, device identity and publication in Rust. Cloud association uses
+the reported session, rectangle and pass order. It refuses late composites
+and holds the current depth in a separate slot from a new copy.
+
+The integrated Release build passed seven focused contracts, including
+both translucency ABI linkage forms and the C++ Anomaly SR API. All 204
+locked Rust tests, formatting and Clippy passed. Runtime, carrier and
+Minecraft exports matched. The HLSL literal matched the original byte for
+byte, and both D3D11 device fixtures built. Device and game validation
+remain pending. See [the translucency cutover audit](research/rust-native-translucency-cutover.md).
+
 The native D3D11 exposure cache now lives in Rust and shares the fullscreen
 pass owner with output reinsertion. It borrows a valid 1×1 R32 scalar
 directly, converts supported float vectors with the existing copy shader,

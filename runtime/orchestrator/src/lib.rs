@@ -50,6 +50,8 @@ mod native_fg_cpu_abi;
 mod native_regions;
 #[cfg(windows)]
 mod native_reinsert;
+#[cfg(windows)]
+mod native_translucency;
 
 #[cfg(windows)]
 mod fg12;
