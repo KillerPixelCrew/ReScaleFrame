@@ -11,6 +11,12 @@ mod cpu_abi;
 #[cfg(windows)]
 mod cpu_reservations;
 #[cfg(windows)]
+mod d3d11_host;
+#[cfg(windows)]
+mod d3d11_host_abi;
+#[cfg(windows)]
+mod d3d11_host_reduced;
+#[cfg(windows)]
 mod d3d11_output;
 #[cfg(windows)]
 mod d3d11_output_abi;

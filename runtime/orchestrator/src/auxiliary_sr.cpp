@@ -179,6 +179,9 @@ constexpr rsf_aux_platform platform{
 };
 }
 
+// The D3D11 host owner in Rust creates its transactions from the same table.
+extern "C" const rsf_aux_platform* rsf_auxiliary_sr_platform(void) { return &platform; }
+
 AuxiliarySurfaces::AuxiliarySurfaces() : state_(rsf_auxiliary_sr_create(&platform)) {}
 AuxiliarySurfaces::~AuxiliarySurfaces() { rsf_auxiliary_sr_destroy(state_); }
 bool AuxiliarySurfaces::pending() const { return rsf_auxiliary_sr_pending(state_) != 0; }
