@@ -23,7 +23,7 @@ use crate::render_abi::{
     rsf_render_settings as Settings, rsf_sharpening_options as Sharpening,
 };
 use crate::settings_store::{
-    rsf_settings_store_read, rsf_settings_store_read_layout, rsf_settings_store_write,
+    read_settings_and_fg_mode, rsf_settings_store_read_layout, rsf_settings_store_write,
     rsf_settings_store_write_layout, set_sharpening, sharpening_of,
 };
 use rsf_game_sys::{
@@ -501,25 +501,25 @@ impl Host {
 
     // The saved section with the frontend defaults and sanitized post-pass values.
     fn read_settings(&self) -> Settings {
+        self.read_settings_and_fg_mode().0
+    }
+
+    // One section read: the public settings and the stored FG value FG12 takes as its mode.
+    fn read_settings_and_fg_mode(&self) -> (Settings, u32) {
         let defaults = self.sharpening_defaults();
-        let mut value = Settings {
-            struct_size: size_of::<Settings>() as u32,
-            abi_version: RSF_RENDER_FRONTEND_ABI_VERSION,
-            ..unsafe { std::mem::zeroed() }
-        };
-        unsafe {
-            rsf_settings_store_read(
+        let (mut value, fg_mode) = unsafe {
+            read_settings_and_fg_mode(
                 self.ini.as_ptr(),
                 self.section.as_ptr(),
                 &DEFAULTS,
                 &defaults,
-                &mut value,
             )
-        };
+        }
+        .unwrap_or((DEFAULTS, DEFAULTS.fg_enabled));
         let mut options = sharpening_of(&value, &defaults);
         unsafe { (self.p.sharpening_sanitize)(&mut options) };
         set_sharpening(&mut value, &options);
-        value
+        (value, fg_mode)
     }
 
     fn adapter(&self, s: &State) -> Option<Adapter> {
@@ -557,7 +557,7 @@ impl Host {
             return;
         }
         s.poll_tick = now + 1000;
-        let values = self.read_settings();
+        let (values, fg_mode) = self.read_settings_and_fg_mode();
         s.sharpening = sharpening_of(&values, &self.sharpening_defaults());
         if !s.context.is_null() {
             let _ = unsafe { (p.sr12_set_sharpening)(s.context, &s.sharpening) };
@@ -575,7 +575,8 @@ impl Host {
         }
         let options = FgOptions {
             struct_size: size_of::<FgOptions>() as u32,
-            mode: values.fg_enabled,
+            // The stored value, not fg_enabled: 2 and 3 are RSF_FG_AUTO and RSF_FG_DYNAMIC.
+            mode: fg_mode,
             generated_frames: values.generated_frames,
             reflex_mode: values.latency,
             frame_limit_us: values.frame_limit_us,

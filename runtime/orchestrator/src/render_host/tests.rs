@@ -861,6 +861,42 @@ fn settings_apply_validates_then_commits_one_section_write() {
 }
 
 #[test]
+fn polling_passes_the_stored_fg_mode_and_keeps_the_public_boolean() {
+    let ini = Temporary::new("fg-mode");
+    let host = host(&ini, 0);
+    with(|world| world.fg_status = Some(Host::empty_fg()));
+    for (stored, mode) in [("2", 2), ("3", 3), ("1", 1), ("0", 0)] {
+        ini.write("FG", stored);
+        events();
+        {
+            let mut s = host.lock();
+            s.poll_tick = 0;
+            host.poll(&mut s);
+        }
+        let expected = format!("fg options mode={mode} generated=1 reflex=1 limit=0");
+        assert!(events().contains(&expected), "FG={stored}");
+        // The public settings and status keep the boolean.
+        let enabled = u32::from(mode != 0);
+        assert_eq!(
+            host.settings_get().unwrap().fg_enabled,
+            enabled,
+            "FG={stored}"
+        );
+        assert_eq!(
+            host.status_get().unwrap().fg_requested,
+            enabled,
+            "FG={stored}"
+        );
+    }
+    // A section without FG keeps FG12 Off.
+    let fresh = Temporary::new("fg-mode-missing");
+    let host = self::host(&fresh, 0);
+    events();
+    host.poll(&mut host.lock());
+    assert!(events().contains(&"fg options mode=0 generated=1 reflex=1 limit=0".to_string()));
+}
+
+#[test]
 fn status_reports_renderer_refusals_and_rates() {
     let ini = Temporary::new("status");
     let host = host(&ini, 0);
