@@ -152,7 +152,8 @@ int main() {
     auto older = record(99, 3, 8, 3), newer = record(99, 4, 8, 3);
     complete(self, older, a, a); rsf_ffxgvk_submitted(&self, &a, 1);
     complete(self, newer, b, b); rsf_ffxgvk_submitted(&self, &b, 1);
-    require(rsf_ffxgvk_present_source(&self, &info, &older) == VK_SUCCESS && self.status.enabled && self.status.source_frame == 3 && self.latest == 4,
+    require(rsf_ffxgvk_present_source(&self, &info, &older) == VK_SUCCESS && self.status.enabled &&
+            self.status.source_frame == 3 && self.timeline.last_prepared.frame_id == 4,
         "older output selects its own submitted guides without rewinding the producer");
     require(rsf_ffxgvk_present_source(&self, &info, &newer) == VK_SUCCESS && self.status.enabled && self.status.source_frame == 4,
         "newer prepared source remains available after the older Present");

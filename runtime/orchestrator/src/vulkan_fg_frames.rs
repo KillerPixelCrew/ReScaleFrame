@@ -21,17 +21,17 @@ fn unsubmitted(slot: &Slot) -> bool {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_fgvk_unsubmitted(slot: &Slot) -> u32 {
+pub(super) extern "C" fn rsf_core_fgvk_unsubmitted(slot: &Slot) -> u32 {
     u32::from(unsubmitted(slot))
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_fgvk_can_prepare(slot: &Slot) -> u32 {
+pub(super) extern "C" fn rsf_core_fgvk_can_prepare(slot: &Slot) -> u32 {
     u32::from(slot.completion_unknown == 0 && !unsubmitted(slot))
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_fgvk_prepare_begin(
+pub(super) extern "C" fn rsf_core_fgvk_prepare_begin(
     timeline: &mut Timeline,
     slot: &mut Slot,
     record: &rsf_frame_record,
@@ -58,13 +58,13 @@ extern "C" fn rsf_core_fgvk_prepare_begin(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_fgvk_prepare_accepted(timeline: &mut Timeline, slot: &mut Slot) {
+pub(super) extern "C" fn rsf_core_fgvk_prepare_accepted(timeline: &mut Timeline, slot: &mut Slot) {
     slot.guides = 1;
     timeline.last_prepared = slot.record;
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_fgvk_hudless_begin(
+pub(super) extern "C" fn rsf_core_fgvk_hudless_begin(
     slot: &mut Slot,
     record: &rsf_frame_record,
     commands: *mut c_void,
@@ -88,7 +88,7 @@ fn recorded_for_submit(slot: &Slot, command: *mut c_void) -> bool {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fgvk_submitted(
+pub(super) unsafe extern "C" fn rsf_core_fgvk_submitted(
     slots: *const *mut Slot,
     commands: *const *mut c_void,
     count: u32,
@@ -161,7 +161,7 @@ fn matches_slot(slot: &Slot, source_frame: u64, identity_matches: u32) -> bool {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_fgvk_present_candidate(
+pub(super) extern "C" fn rsf_core_fgvk_present_candidate(
     timeline: &Timeline,
     slot: &Slot,
     source_frame: u64,
@@ -181,7 +181,7 @@ extern "C" fn rsf_core_fgvk_present_candidate(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_fgvk_presented(
+pub(super) extern "C" fn rsf_core_fgvk_presented(
     timeline: &mut Timeline,
     slot: &Slot,
     source_frame: u64,

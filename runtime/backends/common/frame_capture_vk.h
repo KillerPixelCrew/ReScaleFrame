@@ -29,6 +29,9 @@ class FrameCaptureVk {
         bool legacy = false;
         uint64_t core_ticket = 0;
         std::string core_name;
+        uint64_t submission_group = 0;
+        bool group_complete = false;
+        bool discarded = false;
     };
     std::filesystem::path directory;
     uint64_t first = 30, count = 4;
@@ -88,7 +91,8 @@ public:
         return true;
     }
     bool record(VkCommandBuffer commands, const rsf_srvk_image& source, const rsf_frame_record& identity,
-        const char* role, uint32_t reset, bool core_source = true, uint64_t* core_ticket = nullptr) noexcept try {
+        const char* role, uint32_t reset, bool core_source = true, uint64_t* core_ticket = nullptr,
+        uint64_t submission_group = 0) noexcept try {
         if (core_ticket) *core_ticket = 0;
         if (!wants(identity.frame_id)) return true;
         if (!device || !commands || source.device != device || !source.width || !source.height) return false;
@@ -111,6 +115,7 @@ public:
         }
         auto owned = std::make_unique<Readback>();
         owned->image = source; owned->identity = identity; owned->role = role; owned->reset = reset;
+        owned->submission_group = submission_group;
         owned->legacy = enabled() && identity.frame_id >= first && identity.frame_id - first < count;
         if (core_source && rsf_input_dump_wants(&identity)) {
             owned->core_name = capture_name(role);
@@ -163,15 +168,43 @@ public:
         value.recorded = true;
         return true;
     } catch (...) { failure(role, identity.frame_id); return false; }
-    // Caller has completed all command buffers containing these readbacks.
+    // An owner can attach exact queue-completion evidence to its recording
+    // group. Keep discarded allocations alive until the owner's full drain.
+    void complete_group(uint64_t group) {
+        if (!group) return;
+        std::lock_guard lock(guard);
+        for (auto& value : pending)
+            if (value->submission_group == group && !value->discarded) value->group_complete = true;
+    }
+    void discard_group(uint64_t group) {
+        if (!group) return;
+        std::lock_guard lock(guard);
+        for (auto& value : pending) {
+            if (value->submission_group != group || value->discarded) continue;
+            rsf_input_dump_failed(value->core_ticket, value->core_name.c_str(), RSF_TEXTURE_ERROR_STAGING_FAILED);
+            value->core_ticket = 0;
+            value->group_complete = false;
+            value->discarded = true;
+        }
+    }
+    // A full flush requires the owner to drain every referencing command buffer.
     bool flush(bool ready_only = false) noexcept try {
         std::lock_guard lock(guard);
         bool okay = true;
         for (auto it = pending.begin(); it != pending.end();) {
             auto& value = **it;
+            if (value.submission_group && !value.group_complete) {
+                if (ready_only) { ++it; continue; }
+                if (!value.discarded) {
+                    okay = false;
+                    rsf_input_dump_failed(value.core_ticket, value.core_name.c_str(), RSF_TEXTURE_ERROR_MAP_FAILED);
+                }
+                release(value); it = pending.erase(it); continue;
+            }
             if (ready_only && value.legacy && !value.core_ticket) { ++it; continue; }
             if (!value.recorded) { okay = false; rsf_input_dump_failed(value.core_ticket, value.core_name.c_str(), RSF_TEXTURE_ERROR_STAGING_FAILED); release(value); it = pending.erase(it); continue; }
-            if (value.core_ticket && !rsf_input_dump_gpu_ready(value.core_ticket, value.core_name.c_str(), 3, device)) {
+            if (value.core_ticket && !value.group_complete &&
+                !rsf_input_dump_gpu_ready(value.core_ticket, value.core_name.c_str(), 3, device)) {
                 if (ready_only) { ++it; continue; }
                 okay = false; rsf_input_dump_failed(value.core_ticket, value.core_name.c_str(), RSF_TEXTURE_ERROR_MAP_FAILED);
                 value.core_ticket = 0;
