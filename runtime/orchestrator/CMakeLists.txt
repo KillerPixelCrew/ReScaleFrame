@@ -29,7 +29,7 @@ add_library(rsf_orchestrator_core OBJECT
     src/native_reinsert_platform.cpp
     src/native_translucency.cpp
     src/native_sr_d3d12.cpp
-    src/gl_pipeline.cpp
+    src/gl_pipeline_platform.cpp
     src/rust_exports.c
     src/callback_render_host.cpp
     src/render_host.cpp

@@ -218,6 +218,20 @@ tests, formatting, Clippy and byte-for-byte binding regeneration passed.
 Release export names and ordinals matched for the Runtime and both carriers
 (381, 256 and 273). Device and in-game verification remain pending.
 
+The OpenGL pipeline now keeps its shared surface and SR lifecycle, frame
+identity, fallback and FG requests in Rust. Native callbacks handle OpenGL,
+DXGI and the presentation child window. A rejected SR rebuild remains
+retryable, and overlapping graphics calls return `NOT_READY`.
+Output calls read only the supplied size before writing. An interrupted
+close after retiring the chain refuses new graphics work and can retry cleanup.
+
+The integrated MSVC Release build produced the Runtime, both carriers,
+Minecraft DLL and the OpenGL shared surface fixture. Five focused native
+contracts and all 110 workspace Rust tests passed, including seven synthetic
+OpenGL cases. Formatting, Clippy and binding regeneration passed. Export
+names and ordinals matched for the Runtime, both carriers and Minecraft.
+The OpenGL device fixture and the game remain unrun.
+
 The native D3D11 exposure cache now lives in Rust and shares the fullscreen
 pass owner with output reinsertion. It borrows a valid 1×1 R32 scalar
 directly, converts supported float vectors with the existing copy shader,
