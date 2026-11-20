@@ -6,15 +6,13 @@
 // Why not temporal::TemporalHistory directly: its begin_frame() needs both the world and the first-person camera up
 // front, but the first-person projection only exists once r_dsgraph_render_hud has rebuilt it, after the G-buffer
 // pass began. Here each camera is the one the engine actually used for the draw (RCache.xforms view/projection),
-// recorded at the first draw of its domain. The invariants are the same: only the immediately preceding frame of the
-// same view contributes; a reset generation or a size change drops everything; kind, palette layout and bone count
+// recorded at the first draw of its domain. Only the last recorded frame of the same view contributes. A reset
+// generation or a size change drops the frame data. Kind, palette layout and bone count
 // must match; a same-frame conflict leaves no history; retirement forbids that generation and all older ones.
 // Single render-thread owner; retirements arrive through geometry::RetirementQueue.
 #include "../temporal/history.h"
-#include <array>
 #include <cstdint>
-#include <map>
-#include <optional>
+#include <span>
 
 namespace rsf::anomaly::motion {
 struct CameraSample {
@@ -24,35 +22,42 @@ struct CameraSample {
 };
 enum class CameraStatus : std::uint8_t { Recorded, Same, Conflict, NoFrame };
 
+struct PaletteView {
+    const temporal::Mat4* data{};
+    std::size_t count{};
+    std::span<const temporal::Mat4> span() const noexcept { return {data, count}; }
+};
+struct DrawSnapshotView {
+    const temporal::Mat4* world{};
+    PaletteView bones{};
+    explicit operator bool() const noexcept { return world != nullptr; }
+};
+inline DrawSnapshotView draw_snapshot_view(const temporal::InstanceSnapshot& snapshot) noexcept
+{
+    return {&snapshot.world, {snapshot.bones.data(), snapshot.bones.size()}};
+}
+
+struct MotionHistoryState;
 class MotionHistory {
 public:
+    MotionHistory() = default;
+    ~MotionHistory();
+    MotionHistory(const MotionHistory&) = delete;
+    MotionHistory& operator=(const MotionHistory&) = delete;
+
     // Starts `frame` of `view`. Returns true when the previous frame of this view stays usable.
     bool begin_frame(temporal::ViewId, std::uint64_t frame, std::uint64_t generation, std::uint32_t width,
         std::uint32_t height);
     bool active(temporal::ViewId) const noexcept;
     CameraStatus observe_camera(temporal::ViewId, temporal::ProjectionDomain, const CameraSample&);
-    // Null when the previous frame had no (or a conflicting) camera for that domain.
+    // Borrows the previous camera for this draw, until the next history mutation.
     const CameraSample* previous_camera(temporal::ViewId, temporal::ProjectionDomain) const noexcept;
-    // Records `snapshot` for the active frame and returns the matching previous snapshot, or null.
-    const temporal::InstanceSnapshot* record(temporal::ViewId, temporal::InstanceKey, const temporal::InstanceSnapshot&);
+    // The returned view borrows Rust-owned data for this draw. Consume before frame transition, retirement or reset.
+    DrawSnapshotView record(temporal::ViewId, temporal::InstanceKey, const temporal::InstanceSnapshot&);
     void retire(temporal::InstanceKey);
     void reset_all();
-    std::uint64_t conflicts() const noexcept { return conflicts_; }
+    std::uint64_t conflicts() const noexcept;
 private:
-    using Slot = std::pair<temporal::InstanceKey, temporal::ProjectionDomain>;
-    struct Frame {
-        std::uint64_t frame{}, generation{};
-        std::uint32_t width{}, height{};
-        std::array<std::optional<CameraSample>, 2> cameras{};
-        std::array<bool, 2> camera_conflict{};
-        std::map<Slot, std::optional<temporal::InstanceSnapshot>> instances; // nullopt = same-frame conflict
-    };
-    struct View {
-        std::optional<Frame> current, previous;
-    };
-    bool retired(temporal::InstanceKey) const;
-    std::array<View, 2> views_{};
-    std::map<std::pair<std::uint64_t, std::uint64_t>, std::uint64_t> retired_;
-    std::uint64_t conflicts_{};
+    MotionHistoryState* state_{};
 };
 }

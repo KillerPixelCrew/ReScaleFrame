@@ -879,7 +879,7 @@ void on_flush(const geometry::DrawTimeFacts& facts) noexcept try {
     window.cache_may_hold_motion = binder.motion_bound();
     // History for the next frame: every main-pass draw's camera, every identified draw's snapshot.
     CameraStatus camera = CameraStatus::NoFrame;
-    const temporal::InstanceSnapshot* previous{};
+    DrawSnapshotView previous;
     const bool context_known = facts.view && facts.domain;
     bool stale = false;
     if (main && context_known && history.active(*facts.view)) {
@@ -890,7 +890,7 @@ void on_flush(const geometry::DrawTimeFacts& facts) noexcept try {
             geometry::FeedStatus why{};
             if (const auto snapshot = geometry::to_snapshot(*facts.capture, why)) {
                 previous = history.record(*facts.view, facts.capture->key, *snapshot);
-                stale = previous && stale_palette(*previous, *snapshot);
+                stale = previous && stale_palette(previous, draw_snapshot_view(*snapshot));
                 ++stats.snapshots;
             }
         }
@@ -1012,7 +1012,7 @@ void on_flush(const geometry::DrawTimeFacts& facts) noexcept try {
         CoreVertexBytes bytes;
         bool valid = decision.reason == HistoryReason::Valid;
         if (valid) {
-            valid = pack_core_vertex(decision.previous_wvp, decision.bones, decision.flags, bytes);
+            valid = pack_core_vertex(decision.previous_wvp, decision.bones.span(), decision.flags, bytes);
             count_reason(valid ? HistoryReason::Valid : HistoryReason::TooManyBones);
         } else {
             pack_core_invalid(bytes);

@@ -18,6 +18,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <limits>
 #include <map>
 #include <regex>
 #include <sstream>
@@ -134,6 +135,8 @@ void pixel_packing()
     require(f32(bytes.data(), 32) == 1 && f32(bytes.data(), 36) == 0 && f32(bytes.data(), 44) == 0, "control ABI 1, reserved 0");
     require(!pack_pixel({0, 0, 0, 400}, bytes) && f32(bytes.data(), 32) == 0, "zero extent refused as control 0");
     require(!pack_pixel({0, 0, 1, 1, std::nanf("")}, bytes), "NaN jitter refused");
+    require(!pack_pixel({0, 0, std::numeric_limits<float>::denorm_min(), 400}, bytes), "overflowing viewport reciprocal refused");
+    require(bytes == PixelBytes{}, "unusable viewport leaves all pixel lanes invalid");
 }
 
 // Engine Fmatrix is row-vector (v * W * V * P); the b13 WVP is the column-vector P * V * W.
@@ -173,7 +176,7 @@ void core_policy()
     skinned.kind = temporal::InstanceKind::Skinned;
     skinned.palette_layout = 7;
     skinned.bones = {sample_matrix(4), sample_matrix(5)};
-    CoreDrawInput base{Family::CoreStatic, -2, true, DrawVerdict::IgnoredStaticWorld, DrawKind::Rigid, true, false, &camera, nullptr};
+    CoreDrawInput base{Family::CoreStatic, -2, true, DrawVerdict::IgnoredStaticWorld, DrawKind::Rigid, true, false, &camera, {}};
     auto d = decide_core(base);
     require(d.reason == HistoryReason::Valid && d.flags.draw && !d.flags.palette, "static world valid");
     const auto vp = compose(camera.projection, camera.view);
@@ -190,7 +193,7 @@ void core_policy()
     require(decide_core(in).reason == HistoryReason::NoContext, "no context invalid");
     in = base; in.verdict = DrawVerdict::Identified;
     require(decide_core(in).reason == HistoryReason::NoPreviousInstance, "identified without previous");
-    in.previous = &rigid;
+    in.previous = draw_snapshot_view(rigid);
     d = decide_core(in);
     require(d.reason == HistoryReason::Valid && d.previous_wvp == compose(vp, rigid.world), "rigid previous world");
     in.family = Family::CoreModel; in.skin = -1;
@@ -198,9 +201,9 @@ void core_policy()
     require(d.reason == HistoryReason::Valid && d.flags.rigid, "SKIN_NONE rigid flag");
     in.skin = 2;
     require(decide_core(in).reason == HistoryReason::KindMismatch, "rigid draw on skinned permutation");
-    in.kind = DrawKind::HardwareSkinned; in.previous = &skinned;
+    in.kind = DrawKind::HardwareSkinned; in.previous = draw_snapshot_view(skinned);
     d = decide_core(in);
-    require(d.reason == HistoryReason::Valid && d.flags.palette && d.bones.size() == 2 && !d.flags.rigid, "skinned palette");
+    require(d.reason == HistoryReason::Valid && d.flags.palette && d.bones.count == 2 && !d.flags.rigid, "skinned palette");
     in.skin = 0;
     require(decide_core(in).reason == HistoryReason::KindMismatch, "a palette draw on the SKIN_0 permutation");
     // CSkeletonX RM_SINGLE: the engine folds the bone into the draw's world before the draw, the snapshot holds that
@@ -208,9 +211,9 @@ void core_policy()
     in.kind = DrawKind::SingleBone;
     auto single = rigid;
     single.world = sample_matrix(6);
-    in.previous = &single;
+    in.previous = draw_snapshot_view(single);
     d = decide_core(in);
-    require(d.reason == HistoryReason::Valid && d.flags.draw && !d.flags.palette && !d.flags.rigid && d.bones.empty() &&
+    require(d.reason == HistoryReason::Valid && d.flags.draw && !d.flags.palette && !d.flags.rigid && d.bones.count == 0 &&
         d.previous_wvp == compose(vp, single.world), "single bone: previous bone-composed world, no palette");
     in.skin = 2;
     require(decide_core(in).reason == HistoryReason::KindMismatch, "single bone on a palette permutation");
@@ -218,7 +221,7 @@ void core_policy()
     require(decide_core(in).reason == HistoryReason::KindMismatch, "single bone on SKIN_NONE");
     in.family = Family::CoreStatic; in.skin = -2;
     require(decide_core(in).reason == HistoryReason::KindMismatch, "single bone on a static root");
-    in.family = Family::CoreModel; in.skin = 0; in.previous = nullptr;
+    in.family = Family::CoreModel; in.skin = 0; in.previous = {};
     require(decide_core(in).reason == HistoryReason::NoPreviousInstance, "single bone without previous");
     in.verdict = DrawVerdict::IgnoredStaticWorld;
     require(decide_core(in).reason == HistoryReason::KindMismatch, "single bone never takes the static-world shortcut");
@@ -228,7 +231,7 @@ void core_policy()
     in.kind = DrawKind::HardwareSkinned; in.skin = 1;
     auto large = skinned;
     large.bones.assign(core_max_bones + 1, sample_matrix(1));
-    in.previous = &large;
+    in.previous = draw_snapshot_view(large);
     require(decide_core(in).reason == HistoryReason::TooManyBones, "palette overflow");
 }
 
@@ -337,8 +340,8 @@ Result run(int skin)
     history.record(temporal::ViewId::Main, key, snapshot(a));
     require(history.begin_frame(temporal::ViewId::Main, 101, 0, unsigned(W), unsigned(H)), "mover: continuous frame");
     history.observe_camera(temporal::ViewId::Main, temporal::ProjectionDomain::World, camera(b));
-    const auto* previous = history.record(temporal::ViewId::Main, key, snapshot(b));
-    require(previous != nullptr, "mover: previous snapshot");
+    const auto previous = history.record(temporal::ViewId::Main, key, snapshot(b));
+    require(static_cast<bool>(previous), "mover: previous snapshot");
 
     CoreDrawInput in{Family::CoreModel, skin, true, geometry::DrawVerdict::Identified,
         skin == 0 ? geometry::DrawKind::SingleBone : geometry::DrawKind::HardwareSkinned, true, false,
@@ -346,7 +349,7 @@ Result run(int skin)
     const auto decision = decide_core(in);
     require(decision.reason == HistoryReason::Valid, std::string("mover: valid history, got ") + history_reason_name(decision.reason));
     CoreVertexBytes vbytes;
-    require(pack_core_vertex(decision.previous_wvp, decision.bones, decision.flags, vbytes), "mover: pack VS b13");
+    require(pack_core_vertex(decision.previous_wvp, decision.bones.span(), decision.flags, vbytes), "mover: pack VS b13");
     require(f32(vbytes.data(), core_history_offset) == 1 && f32(vbytes.data(), core_history_offset + 4) == (skin == 0 ? 0 : 1) &&
         f32(vbytes.data(), core_history_offset + 12) == 1, "mover: history flags");
 
@@ -419,7 +422,7 @@ void history_rules()
     require(!h.begin_frame(ViewId::Main, 10, 0, 640, 360), "no previous on first frame");
     require(h.observe_camera(ViewId::Main, ProjectionDomain::World, a) == CameraStatus::Recorded, "record camera");
     require(h.observe_camera(ViewId::Main, ProjectionDomain::World, a) == CameraStatus::Same, "same camera");
-    require(h.record(ViewId::Main, key, snap) == nullptr, "nothing previous yet");
+    require(!h.record(ViewId::Main, key, snap), "nothing previous yet");
     require(h.begin_frame(ViewId::Main, 10, 0, 640, 360) == false, "split scene re-open is the same frame");
     require(h.begin_frame(ViewId::Main, 11, 0, 640, 360), "continuous frame");
     require(h.previous_camera(ViewId::Main, ProjectionDomain::World) && *h.previous_camera(ViewId::Main, ProjectionDomain::World) == a, "previous camera");
@@ -427,35 +430,35 @@ void history_rules()
     require(!h.previous_camera(ViewId::Scope, ProjectionDomain::World), "scope view independent");
     auto moved = snap;
     moved.world.values[3] = 9;
-    const auto* previous = h.record(ViewId::Main, key, moved);
-    require(previous && previous->world == snap.world, "previous snapshot of the same key");
-    require(h.record(ViewId::Main, key, moved) == previous, "identical repeat");
+    const auto previous = h.record(ViewId::Main, key, moved);
+    require(previous && *previous.world == snap.world, "previous snapshot of the same key");
+    require(h.record(ViewId::Main, key, moved).world == previous.world, "identical repeat");
     auto conflicting = moved;
     conflicting.world.values[7] = 4;
-    require(h.record(ViewId::Main, key, conflicting) == nullptr && h.conflicts() == 1, "same-frame conflict");
+    require(!h.record(ViewId::Main, key, conflicting) && h.conflicts() == 1, "same-frame conflict");
     require(h.observe_camera(ViewId::Main, ProjectionDomain::World, a) == CameraStatus::Recorded, "camera frame 11");
     require(h.observe_camera(ViewId::Main, ProjectionDomain::World, b) == CameraStatus::Conflict, "camera conflict");
     h.begin_frame(ViewId::Main, 12, 0, 640, 360);
-    require(h.record(ViewId::Main, key, moved) == nullptr, "conflicted slot gives no history");
+    require(!h.record(ViewId::Main, key, moved), "conflicted slot gives no history");
     require(!h.previous_camera(ViewId::Main, ProjectionDomain::World), "conflicted camera gives no history");
     h.begin_frame(ViewId::Main, 13, 0, 640, 360);
-    require(h.record(ViewId::Main, key, moved) != nullptr, "history resumes");
+    require(static_cast<bool>(h.record(ViewId::Main, key, moved)), "history resumes");
     auto skinned = moved;
     skinned.kind = temporal::InstanceKind::Skinned; skinned.palette_layout = 1; skinned.bones = {sample_matrix(2)};
     h.begin_frame(ViewId::Main, 14, 0, 640, 360);
-    require(h.record(ViewId::Main, key, skinned) == nullptr, "kind change gives no history");
+    require(!h.record(ViewId::Main, key, skinned), "kind change gives no history");
     h.begin_frame(ViewId::Main, 15, 0, 1280, 720);
-    require(h.record(ViewId::Main, key, skinned) == nullptr, "resize drops history");
+    require(!h.record(ViewId::Main, key, skinned), "resize drops history");
     h.begin_frame(ViewId::Main, 16, 1, 1280, 720);
-    require(h.record(ViewId::Main, key, skinned) == nullptr, "reset generation drops history");
+    require(!h.record(ViewId::Main, key, skinned), "reset generation drops history");
     h.begin_frame(ViewId::Main, 17, 1, 1280, 720);
-    require(h.record(ViewId::Main, key, skinned) != nullptr, "steady again");
+    require(static_cast<bool>(h.record(ViewId::Main, key, skinned)), "steady again");
     h.retire(key);
     h.begin_frame(ViewId::Main, 18, 1, 1280, 720);
-    require(h.record(ViewId::Main, key, skinned) == nullptr, "retired generation refused");
-    require(h.record(ViewId::Main, {1, 2, 4}, skinned) == nullptr, "new generation has no inherited history");
+    require(!h.record(ViewId::Main, key, skinned), "retired generation refused");
+    require(!h.record(ViewId::Main, {1, 2, 4}, skinned), "new generation has no inherited history");
     h.begin_frame(ViewId::Main, 19, 1, 1280, 720);
-    require(h.record(ViewId::Main, {1, 2, 4}, skinned) != nullptr, "new generation builds history");
+    require(static_cast<bool>(h.record(ViewId::Main, {1, 2, 4}, skinned)), "new generation builds history");
     require(!h.begin_frame(ViewId::Main, 5, 1, 1280, 720), "older frame number restarts history");
 }
 
@@ -1260,7 +1263,8 @@ void tess_policy_split()
     temporal::InstanceSnapshot previous;
     previous.world = sample_matrix(0.7);
     previous.bones = {sample_matrix(1), sample_matrix(2)};
-    CoreDrawInput in{Family::CoreModel, 2, true, DrawVerdict::Identified, DrawKind::HardwareSkinned, true, false, &camera, &previous};
+    CoreDrawInput in{Family::CoreModel, 2, true, DrawVerdict::Identified, DrawKind::HardwareSkinned, true, false,
+        &camera, draw_snapshot_view(previous)};
     const auto d = decide_core(in);
     require(d.reason == HistoryReason::Valid, "skinned history valid");
     const auto product = compose(d.previous_projection, d.previous_wv);
@@ -1270,6 +1274,7 @@ void tess_policy_split()
     require(d.previous_projection == camera.projection && d.previous_wv == compose(camera.view, previous.world), "split factors");
     // SKIN_0: the bone-composed previous world is inside previous_wv.
     previous.bones.clear();
+    in.previous = draw_snapshot_view(previous);
     in.skin = 0;
     in.kind = DrawKind::SingleBone;
     const auto single = decide_core(in);
@@ -1440,19 +1445,20 @@ void far_character_diagnostics()
     previous.world = current.world = temporal::Mat4::identity();
     previous.bones.assign(4, temporal::Mat4::identity());
     current.bones = previous.bones;
-    require(!stale_palette(previous, current), "a character standing still is not stale");
+    const auto stale = [&] { return stale_palette(draw_snapshot_view(previous), draw_snapshot_view(current)); };
+    require(!stale(), "a character standing still is not stale");
     current.world.values[3] = 0.05;
-    require(stale_palette(previous, current), "unchanged palette while walking 5 cm");
+    require(stale(), "unchanged palette while walking 5 cm");
     current.world.values[3] = 0.0005;
-    require(!stale_palette(previous, current), "sub-millimetre movement is noise");
+    require(!stale(), "sub-millimetre movement is noise");
     current.world.values[3] = 0.05;
     current.bones[2].values[7] = 0.01;
-    require(!stale_palette(previous, current), "an animated palette is not stale");
+    require(!stale(), "an animated palette is not stale");
     current.bones.pop_back();
-    require(!stale_palette(previous, current), "different bone counts are never stale");
+    require(!stale(), "different bone counts are never stale");
     temporal::InstanceSnapshot rigid = current;
     rigid.bones.clear();
-    require(!stale_palette(previous, rigid), "a rigid snapshot has no palette");
+    require(!stale_palette(draw_snapshot_view(previous), draw_snapshot_view(rigid)), "a rigid snapshot has no palette");
 }
 
 const std::map<std::string, void (*)()> cases{

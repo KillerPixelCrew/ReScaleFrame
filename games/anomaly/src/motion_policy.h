@@ -41,7 +41,7 @@ struct CoreDrawInput {
     bool context{};                 // view and domain known
     bool camera_conflict{};
     const CameraSample* previous_camera{};
-    const temporal::InstanceSnapshot* previous{};   // from MotionHistory::record for an identified draw
+    DrawSnapshotView previous{};   // from MotionHistory::record for an identified draw
 };
 struct CoreDecision {
     HistoryReason reason{HistoryReason::NoVisual};
@@ -51,7 +51,7 @@ struct CoreDecision {
     // view, where the PN patch is built), previous_projection = prior P; previous_projection * previous_wv equals
     // previous_wvp up to rounding.
     temporal::Mat4 previous_wv{}, previous_projection{};
-    std::span<const temporal::Mat4> bones;   // borrowed from `previous`
+    PaletteView bones;   // borrowed from `previous`
 };
 CoreDecision decide_core(const CoreDrawInput&) noexcept;
 
@@ -73,7 +73,7 @@ ModelElement model_element(std::string_view vs_root) noexcept;
 // The palette did not change since the previous drawn frame while the object moved by more than `min_move` metres.
 // X-Ray recomputes the bones of every rendered skeleton every frame, so this should stay zero for walking characters;
 // when it is not, the engine drew an unchanged pose and the vectors still describe the rendered geometry exactly.
-bool stale_palette(const temporal::InstanceSnapshot& previous, const temporal::InstanceSnapshot& current,
+bool stale_palette(DrawSnapshotView previous, DrawSnapshotView current,
     double min_move = 0.001) noexcept;
 
 // Foliage. A tree draw is valid when the same visual was drawn with the same xform (and slide window) last frame.

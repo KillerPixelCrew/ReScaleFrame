@@ -501,11 +501,11 @@ Frame draw(const Pair& p, const Scene& scene, Shaders& s, const Mesh& mesh, Targ
         in.kind = p.skin == 0 ? rsf::anomaly::geometry::DrawKind::SingleBone : rsf::anomaly::geometry::DrawKind::HardwareSkinned;
         in.context = true;
         in.previous_camera = &scene.previous_camera;
-        in.previous = &previous;
+        in.previous = draw_snapshot_view(previous);
         const auto decision = decide_core(in);
         require(decision.reason == HistoryReason::Valid, "policy accepts the skinned mover");
         CoreVertexBytes vbytes;
-        if (history) require(pack_core_vertex(decision.previous_wvp, decision.bones, decision.flags, vbytes), "pack VS b13");
+        if (history) require(pack_core_vertex(decision.previous_wvp, decision.bones.span(), decision.flags, vbytes), "pack VS b13");
         else pack_core_invalid(vbytes);
         PixelBytes pbytes;
         require(pack_pixel({0, 0, float(size), float(size), 0, 0, 0, 0}, pbytes), "pack PS b13");
