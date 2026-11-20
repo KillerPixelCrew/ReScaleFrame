@@ -360,6 +360,20 @@ tests, formatting, Clippy and binding regeneration passed. Runtime, both
 carriers and Minecraft export names and ordinals matched. The device
 fixtures were built. GPU ordering and in-game behavior remain unverified.
 
+The generic D3D11 host now owns session admission, callback leases,
+presentation binding, SR lifecycle and reduced-frame recovery in Rust.
+A refused reservation leaves the previous ticket available for its exact
+retirement acknowledgement. The native exports retain the COM, DXGI,
+vendor and untranslated GPL capture calls. Public and private layouts
+have native and Rust layout assertions.
+
+The integrated Vulkan-enabled Release build produced the Runtime, both
+carriers, the C++ Anomaly adapter and both D3D11 host device fixtures.
+Ten focused contracts passed, including both Anomaly input profiles, and
+all 141 Rust workspace tests and Clippy passed. Release exports matched
+the Runtime and both carriers. Device and in-game validation remain open.
+See [the D3D11 host cutover audit](research/rust-d3d11-host-cutover.md).
+
 The native D3D11 exposure cache now lives in Rust and shares the fullscreen
 pass owner with output reinsertion. It borrows a valid 1×1 R32 scalar
 directly, converts supported float vectors with the existing copy shader,
