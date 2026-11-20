@@ -17,6 +17,14 @@ Anomaly 1.5.3 Standard and AVX executables. It checked 17 function guards,
 render-target slots per profile. This verifies the deployed build
 identities and guarded layouts before live testing.
 
+The staged C++ adapter now has a game baseline on revision `8322179a36c7`.
+Standard exercised live DLSS and FSR3, DLSS-G 2×, the overlay and
+restored game input, native rendering with SR off, and normal game exit.
+AVX evaluated DLSS and presented DLSS-G before and after a resize and
+exited normally. Release D3D11 and D3D12 sharpening device fixtures passed.
+The matched run, evidence paths and remaining acceptance gaps are in
+[the C++ adapter baseline](research/rust-anomaly-cpp-baseline.md).
+
 The first source inspection found that the public frame sequencer opened a rendered
 frame and assigned its provenance under separate locks. Direct callers could read
 or retire the slot between those operations. The FG session adds its own outer
