@@ -3,6 +3,12 @@ use crate::render_abi::{RSF_PACING_NONE, RSF_REFLEX_OFF};
 use std::ffi::c_void;
 use std::ptr;
 
+pub(crate) fn fps_from_interval(limit_us: u32) -> u32 {
+    1_000_000_u32
+        .checked_div(limit_us)
+        .map_or(0, |fps| fps.max(1))
+}
+
 #[repr(C)]
 struct Driver {
     initialize: unsafe extern "C" fn(*mut c_void, u32, *mut c_void) -> u32,
@@ -106,9 +112,7 @@ unsafe extern "C" fn rsf_core_antilag_pace(
     context.last_update = id;
     let enabled = mode != RSF_REFLEX_OFF && other_owner == RSF_PACING_NONE;
     let fps = if enabled {
-        1_000_000_u32
-            .checked_div(limit_us)
-            .map_or(0, |fps| fps.max(1))
+        fps_from_interval(limit_us)
     } else {
         0
     };

@@ -262,6 +262,20 @@ All 120 Rust tests, formatting and Clippy passed. Release export names and
 ordinals matched the Runtime and both carriers. Device and game validation
 remain pending.
 
+The Vulkan Anti-Lag device binding, options, frame keys, counters and
+retirement now live in Rust. Driver calls borrow the device outside the
+state lock. Checked shutdown refuses while a call is active. The device
+destroy notification drains those borrows while allowing already-owed
+Presents to proceed. Input and cancel use the reported session, and the
+limiter shares the Direct3D Anti-Lag interval conversion.
+
+Five focused Vulkan and Godot contracts passed in Debug and Release, with
+12 additional Release repetitions of the Anti-Lag fixture. The stubs
+exercise feature-chain reuse, shutdown refusal, retirement during a
+blocked input call and an older Present during that retirement. All
+120 Rust tests, formatting and Clippy passed. Runtime and both carrier
+Release exports matched. Device and game behavior remain unverified.
+
 The OpenGL pipeline now keeps its shared surface and SR lifecycle, frame
 identity, fallback and FG requests in Rust. Native callbacks handle OpenGL,
 DXGI and the presentation child window. A rejected SR rebuild remains

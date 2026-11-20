@@ -241,7 +241,10 @@ static void cpu_fact(void*,const rsf_game_cpu_event* event) {
         (void)input(event->session_id,id,event->input_kind,event->message_id);
         return;
     }
-    if (event->stage==RSF_GAME_CPU_FRAME_BEGIN) {facts_session.store(event->session_id);rsf::latency::amd_vk_begin(id);}
+    if (event->stage==RSF_GAME_CPU_FRAME_BEGIN) {
+        facts_session.store(event->session_id);
+        rsf::latency::rsf_core_amd_vk_begin(event->session_id,id);
+    }
     const bool keyed=event->event_version==RSF_GAME_CPU_EVENT_VERSION && (event->flags & RSF_GAME_CPU_INPUT_KEYED);
     const bool pacing=keyed ? event->stage==RSF_GAME_CPU_INPUT_SAMPLE && !(event->flags & RSF_GAME_CPU_INPUT_SUBSTITUTE) : event->stage==RSF_GAME_CPU_PACING;
     const auto owner=pacing ? choose_owner(presentation_lease) : active_owner.load();
@@ -249,8 +252,8 @@ static void cpu_fact(void*,const rsf_game_cpu_event* event) {
     {std::lock_guard lock(mutex);requested=mode;limit=interval;}
     // No presentation lock spans a driver sleep. Other frames can still report their real Present.
     if (pacing && rsf_native_latency_has_claim(2)) {
-        rsf::latency::amd_vk_options(owner==RSF_PACING_ANTILAG_VULKAN ? requested : 0,owner==RSF_PACING_ANTILAG_VULKAN ? limit : 0);
-        if (owner==RSF_PACING_ANTILAG_VULKAN) rsf::latency::amd_vk_input(id);
+        rsf::latency::rsf_core_amd_vk_options(owner==RSF_PACING_ANTILAG_VULKAN ? requested : 0,owner==RSF_PACING_ANTILAG_VULKAN ? limit : 0);
+        if (owner==RSF_PACING_ANTILAG_VULKAN) rsf::latency::amd_vk_input(event->session_id,id);
         if (owner==RSF_PACING_XELL && presentation_lease.get() &&
             rsf_fgvk_latency_options(presentation_lease.get(),1,limit)==RSF_BACKEND_OK)
             (void)rsf_fgvk_latency_sleep(presentation_lease.get(),id);
@@ -263,7 +266,7 @@ static void cpu_fact(void*,const rsf_game_cpu_event* event) {
         (void)rsf_fgvk_latency_marker(presentation_lease.get(),id,1);
     const bool skipped=event->stage==RSF_GAME_CPU_FRAME_END &&
         ((event->flags & RSF_GAME_CPU_RENDER_SKIPPED) || (!event->render_expected && !(event->flags & RSF_GAME_CPU_DERIVED_BOUNDARY)));
-    if (skipped) rsf::latency::amd_vk_cancel(id);
+    if (skipped) rsf::latency::rsf_core_amd_vk_cancel(event->session_id,id);
     const rsf::VulkanTimingScope timing(pacing ? "cpu_pacing_total" : nullptr,id);
     std::unique_lock lock(mutex);
     if (event->stage == RSF_GAME_CPU_FRAME_BEGIN || skipped)
@@ -349,7 +352,7 @@ extern "C" rsf_backend_result rsf_latencyvk_presentation(void* context) {
 extern "C" void rsf_latencyvk_submit_end(uint64_t frame) {
     rsf::latency::PresentationLease presentation_lease;
     if (active_owner.load()==RSF_PACING_XELL && presentation_lease.get()) (void)rsf_fgvk_latency_marker(presentation_lease.get(),frame,3);
-    if (active_owner.load()==RSF_PACING_ANTILAG_VULKAN) rsf::latency::amd_vk_present(frame);
+    if (active_owner.load()==RSF_PACING_ANTILAG_VULKAN) rsf::latency::amd_vk_present(0,frame);
 }
 extern "C" int rsf_latencyvk_ping(void* window) {
     std::lock_guard lock(mutex);
@@ -375,7 +378,7 @@ extern "C" void rsf_latencyvk_present(uint32_t begin) {
         if (begin) marker(frame,4); else marker(frame,5);
 #endif
     }
-    if (begin && frame && active_owner.load()==RSF_PACING_ANTILAG_VULKAN) rsf::latency::amd_vk_present(frame);
+    if (begin && frame && active_owner.load()==RSF_PACING_ANTILAG_VULKAN) rsf::latency::amd_vk_present(0,frame);
 }
 extern "C" rsf_backend_result rsf_latencyvk_execution(const rsf_game_render_pass* pass, uint32_t begin) try {
     rsf::latency::PresentationLease presentation_lease;
@@ -393,7 +396,7 @@ extern "C" rsf_backend_result rsf_latencyvk_execution(const rsf_game_render_pass
     if (owner == RSF_PACING_XELL && presentation_lease.get())
         (void)rsf_fgvk_latency_marker(presentation_lease.get(), pass->source_frame_id, kind);
     if (kind == 4 && owner == RSF_PACING_ANTILAG_VULKAN)
-        rsf::latency::amd_vk_present(pass->source_frame_id);
+        rsf::latency::amd_vk_present(pass->session_id,pass->source_frame_id);
     return RSF_BACKEND_OK;
 } catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 extern "C" rsf_backend_result rsf_latencyvk_get_status(rsf_latencyvk_status* output) {
@@ -414,7 +417,7 @@ extern "C" rsf_backend_result rsf_latencyvk_get_status(rsf_latencyvk_status* out
         }
     }
     if (active_owner.load()==RSF_PACING_ANTILAG_VULKAN) {
-        const auto amd=rsf::latency::amd_vk_status();output->owner=RSF_PACING_ANTILAG_VULKAN;
+        const auto amd=rsf::latency::rsf_core_amd_vk_status();output->owner=RSF_PACING_ANTILAG_VULKAN;
         output->mode=amd.enabled ? 1u : 0u;output->low_latency_available=amd.available;
         output->sleep_calls=amd.input_updates;output->marker_calls+=amd.input_updates+amd.present_updates;
     }
@@ -440,14 +443,15 @@ extern "C" int32_t rsf_latencyvk_wsi_call(rsf_vk_wsi_call callback, void* user) 
 extern "C" rsf_backend_result rsf_latencyvk_shutdown() {
     rsf::latency::PresentationShutdown presentation_shutdown;
     if(!presentation_shutdown) return RSF_BACKEND_ERROR_NOT_READY;
+    rsf::latency::AmdVulkanShutdown amd_shutdown;
+    if(!amd_shutdown) return RSF_BACKEND_ERROR_NOT_READY;
     std::lock_guard lock(mutex);
 #if defined(RSF_HAVE_STREAMLINE_VK)
     if (rsf_core_latencyvk_token_pacing()) return RSF_BACKEND_ERROR_NOT_READY;
     if (initialized && !accepted(VulkanStorySlShutdownChecked())) return RSF_BACKEND_ERROR_FEATURE_FAILED;
 #endif
     presentation_shutdown.commit();
-    rsf::latency::amd_vk_shutdown();active_owner=0;
-    rsf_native_latency_release_claim(2);
+    amd_shutdown.commit();active_owner=0;
     (void)rsf_native_cpu_release_session(facts_session.exchange(0));
 
     initialized = bound = false; pcl_thread = 0; pcl_epoch_ready=false;

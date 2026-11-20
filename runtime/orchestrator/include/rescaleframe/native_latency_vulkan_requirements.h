@@ -30,6 +30,8 @@ extern "C" {
 #endif
 RSF_RUNTIME_API rsf_backend_result rsf_latencyvk_require_device(const rsf_latencyvk_device_query*,rsf_latencyvk_device_requirements*);
 RSF_RUNTIME_API rsf_backend_result rsf_latencyvk_device_created(const rsf_latencyvk_created_device*);
+/* Call before vkDestroyDevice. Stops new pacing and drains outstanding CPU
+   borrows. Keep any threads that can finish owed Presents able to run. */
 RSF_RUNTIME_API void rsf_latencyvk_device_destroyed(void* device);
 #ifdef __cplusplus
 }

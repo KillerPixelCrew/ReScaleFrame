@@ -78,7 +78,7 @@ extern "C" fn rsf_native_latency_has_claim(client: u32) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_native_latency_release_claim(client: u32) {
+pub(crate) extern "C" fn rsf_native_latency_release_claim(client: u32) {
     let mut claim = CLAIM.lock().unwrap();
     if claim.as_ref().is_some_and(|claim| claim.client == client) {
         *claim = None;

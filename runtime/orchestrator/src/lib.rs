@@ -90,6 +90,8 @@ mod sr_legacy;
 #[cfg(windows)]
 mod sr_session;
 #[cfg(windows)]
+mod vulkan_antilag;
+#[cfg(windows)]
 mod vulkan_fg;
 #[cfg(windows)]
 mod vulkan_fg_abi;

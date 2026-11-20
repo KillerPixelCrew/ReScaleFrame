@@ -8,6 +8,7 @@
 #include <rescaleframe/native_fg_vulkan.h>
 #include <rescaleframe/frame_generation.h>
 #include <array>
+#include <atomic>
 #include <vector>
 #include <mutex>
 #include <condition_variable>
@@ -91,6 +92,12 @@ int main() {
     CHECK(std::strcmp(required.extensions[0],VK_AMD_ANTI_LAG_EXTENSION_NAME)==0);
     auto* feature=static_cast<VkPhysicalDeviceAntiLagFeaturesAMD*>(required.features);
     CHECK(feature && feature->antiLag && !feature->pNext);
+    VkPhysicalDeviceFeatures2 copied_root{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+    VkPhysicalDeviceVulkan11Features tail{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES};
+    copied_root.pNext=&tail;
+    query.features=&copied_root;
+    CHECK(rsf_latencyvk_require_device(&query,&required)==0 && copied_root.pNext==feature && feature->pNext==&tail);
+    CHECK(rsf_latencyvk_require_device(&query,&required)==0 && feature->pNext==&tail);
     VkDeviceCreateInfo info{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};info.pNext=feature;
     info.enabledExtensionCount=required.extension_count;info.ppEnabledExtensionNames=required.extensions;
     rsf_latencyvk_created_device created{sizeof(created),1,instance,physical,device,instance_proc,&info};
@@ -125,7 +132,30 @@ int main() {
     {std::lock_guard lock(records);CHECK(marks.back().mode==VK_ANTI_LAG_MODE_OFF_AMD && marks.back().fps==0 && marks.back().stage==UINT32_MAX);}
     rsf_latencyvk_status status{sizeof(status),RSF_LATENCYVK_ABI_VERSION};
     CHECK(rsf_latencyvk_get_status(&status)==0 && status.owner==RSF_PACING_ANTILAG_VULKAN && !status.mode && status.sleep_calls==2);
-    rsf_latencyvk_device_destroyed(device);CHECK(!rsf_native_latency_has_claim(2));
+
+    CHECK(rsf_latencyvk_options(1,10000)==0);
+    const auto older=next+2, retiring=next+3;
+    cpu(older,0);cpu(older,1);cpu(older,2);cpu(older,3);
+    cpu(retiring,0);
+    {std::lock_guard lock(records);blocking_frame=retiring;blocked=released=false;}
+    auto final_input=fact(retiring,1);
+    std::thread final_sleep([&]{rsf_latencyvk_cpu(&final_input);});
+    {std::unique_lock lock(records);CHECK(changed.wait_for(lock,std::chrono::seconds(2),[]{return blocked;}));}
+    CHECK(rsf_latencyvk_shutdown()==RSF_BACKEND_ERROR_NOT_READY);
+    std::atomic<bool> destroyed=false;
+    std::thread destroy([&]{rsf_latencyvk_device_destroyed(device);destroyed.store(true);});
+    const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(2);
+    rsf_backend_result rebind;
+    do {
+        rebind=rsf_latencyvk_device_created(&created);
+        if (rebind==RSF_BACKEND_OK) std::this_thread::yield();
+    } while (rebind==RSF_BACKEND_OK && std::chrono::steady_clock::now()<deadline);
+    CHECK(rebind==RSF_BACKEND_ERROR_NOT_READY && !destroyed.load());
+    rsf_latencyvk_render(older);rsf_latencyvk_present(1);rsf_latencyvk_present(0);
+    CHECK(count(VK_ANTI_LAG_STAGE_PRESENT_AMD,older)==1 && !destroyed.load());
+    {std::lock_guard lock(records);released=true;}changed.notify_all();
+    final_sleep.join();destroy.join();
+    CHECK(destroyed.load() && !rsf_native_latency_has_claim(2));
     CHECK(rsf_latencyvk_options(1,0)==RSF_BACKEND_ERROR_NOT_SUPPORTED);
     rsf_latencyvk_shutdown();rsf_native_cpu_release();
     std::printf("%d failures; AMD Vulkan requirements, same-index pairing, no duplicate sleep, skip/Off and unlocked Present verified with stubs\n",failures);
