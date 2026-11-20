@@ -414,9 +414,11 @@ before and after a resize. The scene and HUD rendered at both output
 sizes. The camera responded to game mouse input and stayed still
 during overlay mouse handling. The same test reproduced repeated
 DLSS resize refusals before the first evaluation. The pipeline now
-releases resources at resize only when a DLSS evaluation has reached
-the SDK path. Gameplay keyboard consumption and explicit plugin
-unload remain open. See [the game results](research/rust-anomaly-sr-pass.md#scripted-anomaly-153-runs).
+releases resources at resize only after a DLSS evaluation attempt.
+The foreground Standard retest completed that resize in one attempt
+while still drawing the fallback and exited normally. Gameplay
+keyboard consumption and explicit plugin unload remain open.
+See [the game results](research/rust-anomaly-sr-pass.md#scripted-anomaly-153-runs).
 
 The merged Release sharpening fixtures passed on D3D11, D3D12 and
 Vulkan. The D3D11 fixture checks that Depth RCAS and Depth DAS preserve

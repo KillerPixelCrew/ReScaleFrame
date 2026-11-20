@@ -178,8 +178,8 @@ The logs are in `evidence/avx-foreground-sroff/`.
 
 The forced-recovery Standard run used `SRJitter=0` on the same build.
 The pass rejected the unjittered camera, and the spatial seam drew
-bilinear output on each rejected frame. Audio, HUD, the scene and
-both output sizes remained active. The four final-color captures
+bilinear output on each rejected frame. The scene and HUD rendered
+at both output sizes. The four final-color captures
 include one 1280×720 and three 1600×900 frames, with distinct generations
 before and after the resize. The game camera reacted to mouse movement.
 Dragging in the open overlay moved the pointer while the world view
@@ -196,3 +196,12 @@ requires a successful release after an attempt, since even a refused
 evaluation can leave SDK state. A focused regression injects a release
 error and checks that the first resize succeeds and a later resize
 keeps its prior output until release succeeds.
+
+The Standard retest at `26e358b1222f` reproduced the jitter refusal
+and completed the same resize before any DLSS evaluation. The
+pipeline reported one attempt and one success, with a 1067×600
+render plan for 1600×900. Bilinear recovery drew throughout, four
+final-color captures were saved, and the game exited with code 0.
+The overlay jitter control was not changed in that run. Evidence is
+in `evidence/standard-cold-resize/`. The Runtime and embedded AC7,
+Loader and Minecraft DLLs retained their recorded export inventories.
