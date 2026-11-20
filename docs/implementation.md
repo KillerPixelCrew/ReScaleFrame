@@ -353,6 +353,24 @@ copied executables. The motion, SR and FG device fixtures built.
 Moving-game imagery, active providers and live scope transitions
 remain open.
 
+The shared D3D11 presentation bridge now owns admission, backend
+selection and switching, frame slots, Present sequencing, resize,
+status and retirement in Rust. The native facade retains the DXGI
+object and calls the graphics and SDK leaves. Lazy creation publishes
+the provider before a fullscreen refusal can leave the bridge without
+an owner. Early Present errors now complete the notification and fault
+the facade. The merged queue and command-list queries hold the read
+lease through the native lookup and refuse during retirement.
+See [the D3D11 presentation audit](research/rust-d3d11-present-cutover.md).
+
+The combined bridge build passed 15 focused CPU and ABI contracts in
+Debug and Release, and all 290 locked Rust tests, formatting and Clippy.
+Both configurations match the reference Runtime, AC7, Loader and
+Minecraft export pairs, and the Anomaly DLL retains its staged exports
+and dynamic Runtime lookup. The production-linked bridge and shared
+surface device fixtures built. Real queue joins, generated presentation,
+resize and teardown still need device and game evidence.
+
 The first source inspection found that the public frame sequencer opened a rendered
 frame and assigned its provenance under separate locks. Direct callers could read
 or retire the slot between those operations. The FG session adds its own outer

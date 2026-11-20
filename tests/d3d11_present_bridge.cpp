@@ -17,9 +17,6 @@
 #include <cwchar>
 #include <algorithm>
 #include <memory>
-#include <thread>
-#include <atomic>
-#include "../runtime/presentation/src/provider_status_snapshot.h"
 using Microsoft::WRL::ComPtr;
 struct NativeCommand {
     NativeCommand* next = nullptr;
@@ -251,6 +248,8 @@ bool marker_admission_regression(IDXGISwapChain* chain) {
     return ok;
 }
 
+// The copied-status cache contract (invalidation, generation, concurrent readers and retired
+// publishers) moved with its owner to d3d11_present_tests.rs. The public entry keeps its refusals.
 bool status_snapshot_contract() {
     rsf_d3d11_present_status cold{sizeof(cold),RSF_PRESENT_STATUS_VERSION};
     if (rsf_d3d11_present_status_get(&cold) != RSF_BACKEND_ERROR_NOT_READY || cold.valid) return false;
@@ -258,49 +257,7 @@ bool status_snapshot_contract() {
     if (rsf_d3d11_present_status_get(&short_header) != RSF_BACKEND_ERROR_INVALID_ARGUMENT) return false;
     auto bad_version = cold; ++bad_version.version;
     if (rsf_d3d11_present_status_get(&bad_version) != RSF_BACKEND_ERROR_ABI_MISMATCH) return false;
-    rsf::presentation::ProviderStatusSnapshot cache;
-    auto owner = std::make_unique<rsf_fg_status>(); owner->struct_size = sizeof(*owner);
-    owner->version_id = 7; owner->total_presented = 7001;
-    cache.activate(2,7);
-    if (!cache.publish(2,7,*owner) || cache.read(&cold) != RSF_BACKEND_OK) return false;
-    const auto held_copy = cold;
-    cache.invalidate();
-    if (cache.publish(2,7,*owner) || cache.read(&cold) != RSF_BACKEND_ERROR_NOT_READY || cold.valid || cold.state.total_presented) return false;
-    owner.reset(); // The copied receipt remains usable after its publisher's storage retires.
-    if (held_copy.generation != 7 || held_copy.state.total_presented != 7001) return false;
-    cache.activate(3,8);
-    rsf_fg_status current{sizeof(current)}; current.version_id = 8;
-    if (cache.publish(2,7,current) || cache.publish(2,8,current) || !cache.publish(3,8,current)) return false;
-    cache.clear();
-    if (cache.read(&cold) != RSF_BACKEND_ERROR_NOT_READY || !cache.publish(3,8,current)) return false;
-    std::atomic<bool> done{}, failed{};
-    std::atomic<uint32_t> ready{}, observed{};
-    auto reader = [&] {
-        ready.fetch_add(1);
-        do {
-            rsf_d3d11_present_status copy{sizeof(copy),RSF_PRESENT_STATUS_VERSION};
-            const auto result = cache.read(&copy);
-            if (result == RSF_BACKEND_OK) {
-                if (!copy.valid || copy.state.version_id != copy.generation ||
-                    (copy.generation >= 9 && (copy.backend != uint32_t(copy.generation % 3 + 1) ||
-                     copy.state.total_presented / 1000 != copy.generation))) failed.store(true);
-                observed.fetch_add(1);
-            } else if (result != RSF_BACKEND_ERROR_NOT_READY || copy.valid || copy.state.total_presented) failed.store(true);
-        } while (!done.load());
-    };
-    std::thread first(reader), second(reader);
-    while (ready.load() != 2 || !observed.load()) std::this_thread::yield();
-    for (uint64_t generation = 9; generation < 4096; ++generation) {
-        cache.invalidate();
-        const auto backend = uint32_t(generation % 3 + 1);
-        cache.activate(backend,generation);
-        rsf_fg_status status{sizeof(status)};
-        status.version_id = generation; status.total_presented = generation * 1000 + 17;
-        if (!cache.publish(backend,generation,status)) failed.store(true);
-    }
-    cache.invalidate(); done.store(true); first.join(); second.join();
-    if (cache.read(&cold) != RSF_BACKEND_ERROR_NOT_READY || cold.valid || failed.load()) return false;
-    std::puts("PASS: concurrent copied provider status, invalidation, generation and retired publisher lifetime");
+    std::puts("PASS: cold provider status refusals");
     return true;
 }
 
