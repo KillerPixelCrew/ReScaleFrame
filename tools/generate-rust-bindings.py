@@ -27,6 +27,10 @@ def generate(output, header, types, constants, clang_args, extra=(), *, use_core
 generate("sdk/game/src/lib.rs", "sdk/game/include/rescaleframe/game_api.h",
          "rsf_(get_game_plugin_api_fn|frame_record|game_cpu_(source|receipt)_event)", "RSF_.*",
          ["-Isdk/game/include"], ["--raw-line", "pub mod sr_abi;"])
+generate("ui/overlay/src/host_option_limit.rs", "runtime/orchestrator/include/rescaleframe/overlay_api.h",
+         "NOTHING", "RSF_OVERLAY_SERVICE_OPTION_LIMIT",
+         ["-Isdk/game/include", "-Iruntime/orchestrator/include", "-Iruntime/contract/include",
+          "-Iruntime/presentation/include", "-Iruntime/graphics/include", "-Iruntime/backends/dlss/include"])
 generate("sdk/game/src/sr_abi.rs", "runtime/orchestrator/include/rescaleframe/d3d11_sr_api.h",
          "rsf_(d3d11_sr_api|get_d3d11_sr_api_fn|dlss_(pipeline_(setup|status|result|log_fn)|quality|engine)|"
          "motion_decode_params|overlay_sr_report)",

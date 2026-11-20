@@ -270,7 +270,8 @@ impl UiPreferences {
 }
 
 /// How many host options the panel draws.
-pub const MAX_HOST_OPTIONS: usize = 24;
+pub const MAX_HOST_OPTIONS: usize =
+    crate::host_option_limit::RSF_OVERLAY_SERVICE_OPTION_LIMIT as usize;
 
 /// One host-defined option.
 #[derive(Debug, Clone, Copy, PartialEq)]

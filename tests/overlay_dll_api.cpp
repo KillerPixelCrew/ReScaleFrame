@@ -4,6 +4,7 @@
 #include <rescaleframe/overlay_api.h>
 #include <rescaleframe/native_fg.h>
 #include <windows.h>
+#include <array>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -139,6 +140,9 @@ int main()
     CallbackContext callback{api};
     setup.user = &callback;
     setup.settings_changed = on_changed;
+    std::array<rsf_overlay_service_option, RSF_OVERLAY_SERVICE_OPTION_LIMIT + 1> adapter_options{};
+    adapter_options.fill({"Adapter option", RSF_OVERLAY_SERVICE_OPTION_TOGGLE, 0, 0, 1, 1, 1, 0});
+    setup.options = adapter_options.data(); setup.option_count = 25;
 
     check(api.configure(nullptr) == RSF_ERROR_INVALID_ARGUMENT, "null setup");
     auto bad = setup; bad.struct_size = sizeof(bad) - 4;
@@ -163,9 +167,11 @@ int main()
     check(api.configure(&bad) == RSF_ERROR_INVALID_ARGUMENT, "defaults outside choices");
     bad = setup; bad.defaults.abi_version = 1;
     check(api.configure(&bad) == RSF_ERROR_ABI_MISMATCH, "defaults version");
+    bad = setup; bad.option_count = RSF_OVERLAY_SERVICE_OPTION_LIMIT + 1;
+    check(api.configure(&bad) == RSF_ERROR_INVALID_ARGUMENT, "too many adapter options");
     check(api.settings_get(&settings) == RSF_ERROR_NOT_READY, "refused setups did not configure");
 
-    check(api.configure(&setup) == RSF_OK, "configure");
+    check(api.configure(&setup) == RSF_OK, "configure with 25 adapter options");
     check(api.configure(&setup) == RSF_ERROR_BUSY, "second configure");
     check(api.settings_get(&settings) == RSF_OK, "settings after configure");
     check(settings.sr_backend == 1 && settings.sr_quality == 3 && settings.sr_enabled == 0 && settings.fg_backend == RSF_FG_BACKEND_AUTO,

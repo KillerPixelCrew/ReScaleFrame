@@ -568,6 +568,32 @@ mod tests {
     }
 
     #[test]
+    fn host_options_include_the_twenty_fifth_entry() {
+        let mut stats = stats();
+        let option = crate::abi::RsfOverlayHostOption {
+            label: c"Adapter option".as_ptr(),
+            kind: crate::abi::RSF_OVERLAY_HOST_OPTION_TOGGLE,
+            value: 0,
+            minimum: 0,
+            maximum: 1,
+            step: 1,
+            divisor: 1,
+            restart: 0,
+            reserved: 0,
+        };
+        let mut options = [option; 25];
+        options[24].label = c"Motion capture interval".as_ptr();
+        stats.host_option_count = options.len() as u32;
+        stats.host_options = options.as_ptr();
+        let imported = unsafe { borrow_host_options(&stats) };
+        assert_eq!(imported.iter().flatten().count(), options.len());
+        assert_eq!(
+            imported.iter().flatten().last().unwrap().label,
+            "Motion capture interval"
+        );
+    }
+
+    #[test]
     fn a_mismatched_abi_version_gets_no_handle() {
         assert!(rsf_overlay_create(RSF_OVERLAY_ABI_VERSION + 1).is_null());
         assert!(rsf_overlay_create(0).is_null());

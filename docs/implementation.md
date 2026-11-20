@@ -326,6 +326,15 @@ Thirteen focused MSVC contracts passed in both configurations, all
 The four native arithmetic fixtures also passed MSVC 19.44 syntax
 checking with warnings denied.
 
+The Runtime and panel now share capacity for 32 adapter-defined
+options. The incoming Anomaly motion port brings the combined setup
+to 25 options. The old Runtime rejected that count and the old panel
+imported only 24. The new contracts cover the 25th entry and the upper
+bound. Three overlay DLL contracts passed in each MSVC configuration,
+all 270 locked Rust tests passed, and the rebuilt panel and all four
+Release export inventories passed verification. Use the Runtime and
+panel from this build when exercising the full Anomaly option list.
+
 The first source inspection found that the public frame sequencer opened a rendered
 frame and assigned its provenance under separate locks. Direct callers could read
 or retire the slot between those operations. The FG session adds its own outer
