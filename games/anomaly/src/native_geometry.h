@@ -9,7 +9,7 @@
 #include <vector>
 #include "native_hooks.h"
 #include "build_profile.h"
-#include "geometry_registry_platform.h"
+#include "native_geometry_platform.h"
 
 namespace rsf::anomaly::geometry {
 using temporal::InstanceKey;
@@ -36,6 +36,7 @@ public:
     std::optional<InstanceKey> retire(std::uint64_t owner, std::uint64_t visual);
     std::size_t retire_all(void (*apply)(void*, InstanceKey), void* user);
 private:
+    friend class DrawScope;
     rsf_anomaly_geometry_registry* state_;
 };
 
@@ -114,28 +115,20 @@ public:
     DrawContextScope(const DrawContextScope&) = delete;
     DrawContextScope& operator=(const DrawContextScope&) = delete;
 private:
-    friend class DrawScope;
-    friend void observe_draw_facts(DrawTimeFacts&, std::optional<DrawCapture>&) noexcept;
-    std::optional<temporal::ViewId> view_;
-    std::optional<temporal::ProjectionDomain> domain_;
-    DrawContextScope* previous_{};
-    static thread_local DrawContextScope* current_;
+    mutable rsf_anomaly_geometry_context scope_{};
 };
 class DrawScope {
 public:
     DrawScope(const IdentityRegistry&, std::optional<InstanceKey>, DrawKind, const float*,
         const std::byte* skeleton = nullptr, DrawClassification = {}, std::uint64_t visual = 0) noexcept;
+    DrawScope(void* visual, DrawKind, VisualType, const std::byte* skeleton) noexcept;
     ~DrawScope();
     DrawScope(const DrawScope&) = delete;
     DrawScope& operator=(const DrawScope&) = delete;
 private:
-    friend const DrawIdentity* borrow_draw() noexcept;
-    friend void geometry_observe_draw() noexcept;
-    friend void observe_draw_facts(DrawTimeFacts&, std::optional<DrawCapture>&) noexcept;
-    const IdentityRegistry& registry_;
+    void enter() noexcept;
+    rsf_anomaly_geometry_visual scope_{};
     DrawIdentity identity_{};
-    DrawScope* previous_{};
-    static thread_local DrawScope* current_;
 };
 // Valid only until the matching visual returns, on this thread. No engine object/resource lease.
 const DrawIdentity* borrow_draw() noexcept;
@@ -196,27 +189,18 @@ public:
     RenderViewScope(const RenderViewScope&) = delete;
     RenderViewScope& operator=(const RenderViewScope&) = delete;
 private:
-    std::optional<DrawContextScope> scope_;
+    mutable rsf_anomaly_geometry_context scope_{};
+    bool entered_{};
 };
 // Monotonic process counters for live validation. They prove hook invocation, not temporal correctness.
-struct GeometryStats {
-    std::uint64_t models_registered{}, models_retired{}, draws_identified{}, draws_unidentified{}, capture_faults{};
-};
+using GeometryStats = rsf_anomaly_geometry_stats;
 GeometryStats geometry_stats() noexcept;
 
 // Per-category coverage for the periodic log. Counts describe hook invocations, not temporal correctness.
-struct GeometryCoverage {
+struct GeometryCoverage : rsf_anomaly_geometry_coverage {
     static constexpr std::size_t passes = static_cast<std::size_t>(DrawPass::Count);
     static constexpr std::size_t types = static_cast<std::size_t>(VisualType::Count);
     static constexpr std::size_t verdicts = static_cast<std::size_t>(DrawVerdict::Count);
-    std::uint64_t draws[passes][types][verdicts]{};   // Render-entry classification by pass, visual type and verdict.
-    // Draw-time call site (CBackend::constants.flush: every draw or dispatch, hooked visual or not).
-    std::uint64_t flush_total[passes]{}, flush_in_visual[passes]{};
-    std::uint64_t captured{}, capture_stale{}, capture_no_world{}, capture_no_palette{}, capture_no_context{}, sunk{};
-    // CDetailManager::Render windows and the draw-time flushes inside them, by pass.
-    std::uint64_t detail_renders[passes]{}, flush_in_detail[passes]{};
-    // Context producers.
-    std::uint64_t views_main{}, views_scope{}, hud_scopes{}, near_windows{};
 };
 GeometryCoverage geometry_coverage() noexcept;
 // Writes the coverage as log lines through `emit`. Rows with no draws are omitted.

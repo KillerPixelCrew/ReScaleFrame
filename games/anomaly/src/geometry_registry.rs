@@ -9,14 +9,23 @@ use std::ffi::c_void;
 use std::mem;
 use std::sync::Mutex;
 
-type IdentityRegistry = Mutex<Registry>;
+pub(crate) type IdentityRegistry = Mutex<Registry>;
 type RetirementQueue = Mutex<Queue>;
 
 #[derive(Default)]
-struct Registry {
+pub(crate) struct Registry {
     // Index by visual first so a draw with no pool can check all owners.
     live: BTreeMap<(u64, u64), u64>,
     generation: u64,
+}
+
+impl Registry {
+    pub(crate) const fn new() -> Self {
+        Self {
+            live: BTreeMap::new(),
+            generation: 0,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -50,7 +59,7 @@ unsafe extern "C" fn rsf_anomaly_geometry_registry_destroy(registry: *mut Identi
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_geometry_register(
+pub(crate) extern "C" fn rsf_anomaly_geometry_register(
     registry: &IdentityRegistry,
     owner: u64,
     visual: u64,
@@ -71,7 +80,7 @@ extern "C" fn rsf_anomaly_geometry_register(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_geometry_find(
+pub(crate) extern "C" fn rsf_anomaly_geometry_find(
     registry: &IdentityRegistry,
     owner: u64,
     visual: u64,
@@ -86,7 +95,7 @@ extern "C" fn rsf_anomaly_geometry_find(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_geometry_probe_visual(
+pub(crate) extern "C" fn rsf_anomaly_geometry_probe_visual(
     registry: &IdentityRegistry,
     visual: u64,
     out: &mut Probe,
@@ -114,7 +123,7 @@ extern "C" fn rsf_anomaly_geometry_probe_visual(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_geometry_retire(
+pub(crate) extern "C" fn rsf_anomaly_geometry_retire(
     registry: &IdentityRegistry,
     owner: u64,
     visual: u64,
@@ -128,7 +137,7 @@ extern "C" fn rsf_anomaly_geometry_retire(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_geometry_retire_all(
+pub(crate) unsafe extern "C" fn rsf_anomaly_geometry_retire_all(
     registry: &IdentityRegistry,
     retired: Retired,
     user: *mut c_void,
@@ -144,7 +153,7 @@ unsafe extern "C" fn rsf_anomaly_geometry_retire_all(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_geometry_classify(draw: &Draw) -> i32 {
+pub(crate) extern "C" fn rsf_anomaly_geometry_classify(draw: &Draw) -> i32 {
     if draw.pass == RSF_ANOMALY_PASS_SHADOW {
         return RSF_ANOMALY_DRAW_IGNORED_SHADOW;
     }
