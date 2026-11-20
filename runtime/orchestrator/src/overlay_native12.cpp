@@ -10,11 +10,8 @@
 #include <array>
 #include <cstring>
 #include <string>
-#include <unordered_map>
-#include <vector>
 namespace {
 using Microsoft::WRL::ComPtr;
-constexpr UINT kTextures = 64;
 constexpr char shader[] = R"(
 cbuffer View : register(b0) { float2 inverseSize; };
 struct V { float2 p:POSITION; float2 uv:TEXCOORD0; float4 c:COLOR0; };
@@ -28,10 +25,9 @@ struct Frame {
     ComPtr<ID3D12GraphicsCommandList> commands;
     ComPtr<ID3D12DescriptorHeap> srv, rtv;
     ComPtr<ID3D12Resource> vertices, indices;
-    std::vector<ComPtr<IUnknown>> keep;
+    ComPtr<ID3D12PipelineState> pipeline;
     rsf_overlay_draw_data draw{};
 };
-struct Texture { ComPtr<ID3D12Resource> resource; };
 struct Panel {
     HMODULE module{};
     rsf_overlay* ui{};
@@ -47,7 +43,6 @@ struct Panel {
     ComPtr<ID3DBlob> vertex_shader, pixel_shader;
     DXGI_FORMAT format{DXGI_FORMAT_UNKNOWN};
     std::array<Frame,3> frames;
-    std::unordered_map<uint64_t,Texture> textures;
     UINT stride{};
 };
 void transition(ID3D12GraphicsCommandList* commands, ID3D12Resource* resource,
@@ -111,7 +106,7 @@ bool initialize(Panel& p, ID3D12Device* device, ID3D12CommandQueue* queue, HWND 
             FAILED(device->CreateCommandList(0,D3D12_COMMAND_LIST_TYPE_DIRECT,frame.allocator.Get(),nullptr,IID_PPV_ARGS(&frame.commands))) ||
             FAILED(frame.commands->Close())) return false;
         D3D12_DESCRIPTOR_HEAP_DESC heap{};heap.Type=D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-        heap.NumDescriptors=kTextures;heap.Flags=D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+        heap.NumDescriptors=RSF_OVERLAY12_TEXTURE_LIMIT;heap.Flags=D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         if (FAILED(device->CreateDescriptorHeap(&heap,IID_PPV_ARGS(&frame.srv)))) return false;
         heap.Type=D3D12_DESCRIPTOR_HEAP_TYPE_RTV;heap.NumDescriptors=1;heap.Flags=D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
         if (FAILED(device->CreateDescriptorHeap(&heap,IID_PPV_ARGS(&frame.rtv)))) return false;
@@ -120,10 +115,9 @@ bool initialize(Panel& p, ID3D12Device* device, ID3D12CommandQueue* queue, HWND 
     if (rsf_overlay_input_install(window,&input)!=RSF_OVERLAY_INPUT_OK) return false;
     return true;
 }
-bool pipeline(Panel& p, Frame& frame, DXGI_FORMAT format)
+bool pipeline(Panel& p, DXGI_FORMAT format)
 {
     if (p.pipeline && p.format==format) return true;
-    if (p.pipeline) frame.keep.emplace_back(p.pipeline);
     D3D12_INPUT_ELEMENT_DESC layout[]{
         {"POSITION",0,DXGI_FORMAT_R32G32_FLOAT,0,0,D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,0},
         {"TEXCOORD",0,DXGI_FORMAT_R32G32_FLOAT,0,8,D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,0},
@@ -145,42 +139,43 @@ bool pipeline(Panel& p, Frame& frame, DXGI_FORMAT format)
     p.pipeline.Reset();p.format=format;
     return SUCCEEDED(p.device->CreateGraphicsPipelineState(&desc,IID_PPV_ARGS(&p.pipeline)));
 }
-bool texture(Panel& p, Frame& frame, const rsf_overlay_texture_update& update)
+void* create_texture(void* native, uint32_t width, uint32_t height)
 {
-    if (!update.pixels||!update.width||!update.height||update.width>16384||update.height>16384) return false;
-    auto found=p.textures.find(update.id);
-    bool fresh=update.is_whole_texture!=0;
-    if (fresh) {
-        if (found==p.textures.end()&&p.textures.size()>=kTextures) return false;
-        D3D12_RESOURCE_DESC desc{};desc.Dimension=D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        desc.Width=update.width;desc.Height=update.height;desc.DepthOrArraySize=1;desc.MipLevels=1;
-        desc.Format=DXGI_FORMAT_R8G8B8A8_UNORM;desc.SampleDesc.Count=1;
-        D3D12_HEAP_PROPERTIES heap{};heap.Type=D3D12_HEAP_TYPE_DEFAULT;
-        ComPtr<ID3D12Resource> created;
-        if (FAILED(p.device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&desc,D3D12_RESOURCE_STATE_COPY_DEST,nullptr,IID_PPV_ARGS(&created)))) return false;
-        auto& current=p.textures[update.id];if (current.resource) frame.keep.emplace_back(current.resource);
-        current.resource=created;found=p.textures.find(update.id);
-    }
-    if (found==p.textures.end()) return false;
-    auto* destination=found->second.resource.Get();auto desc=destination->GetDesc();
-    if (uint64_t(update.x)+update.width>desc.Width||uint64_t(update.y)+update.height>desc.Height) return false;
+    auto& p=*static_cast<Panel*>(native);
+    D3D12_RESOURCE_DESC desc{};desc.Dimension=D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    desc.Width=width;desc.Height=height;desc.DepthOrArraySize=1;desc.MipLevels=1;
+    desc.Format=DXGI_FORMAT_R8G8B8A8_UNORM;desc.SampleDesc.Count=1;
+    D3D12_HEAP_PROPERTIES heap{};heap.Type=D3D12_HEAP_TYPE_DEFAULT;
+    ComPtr<ID3D12Resource> created;
+    return SUCCEEDED(p.device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&desc,
+        D3D12_RESOURCE_STATE_COPY_DEST,nullptr,IID_PPV_ARGS(&created))) ? created.Detach() : nullptr;
+}
+void* upload_texture(void* native, uint32_t slot, void* resource, const rsf_overlay_texture_update* patch)
+{
+    auto& p=*static_cast<Panel*>(native);
+    auto& frame=p.frames[slot];
+    const auto& update=*patch;
+    auto* destination=static_cast<ID3D12Resource*>(resource);
+    auto desc=destination->GetDesc();
     desc.Width=update.width;desc.Height=update.height;
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};UINT64 bytes{};
     p.device->GetCopyableFootprints(&desc,0,1,0,&footprint,nullptr,nullptr,&bytes);
-    ComPtr<ID3D12Resource> upload;if (!upload_buffer(p,bytes,upload)) return false;
-    void* mapped{};const D3D12_RANGE empty{0,0};if (FAILED(upload->Map(0,&empty,&mapped))) return false;
+    ComPtr<ID3D12Resource> upload;if (!upload_buffer(p,bytes,upload)) return nullptr;
+    void* mapped{};const D3D12_RANGE empty{0,0};if (FAILED(upload->Map(0,&empty,&mapped))) return nullptr;
     for (UINT y=0;y<update.height;++y) std::memcpy(static_cast<unsigned char*>(mapped)+uint64_t(y)*footprint.Footprint.RowPitch,
         update.pixels+uint64_t(y)*update.width*4,uint64_t(update.width)*4);
     upload->Unmap(0,nullptr);
-    if (!fresh) transition(frame.commands.Get(),destination,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_COPY_DEST);
+    if (!update.is_whole_texture) transition(frame.commands.Get(),destination,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_COPY_DEST);
     D3D12_TEXTURE_COPY_LOCATION source{};source.pResource=upload.Get();source.Type=D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;source.PlacedFootprint=footprint;
     D3D12_TEXTURE_COPY_LOCATION target{};target.pResource=destination;target.Type=D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
     frame.commands->CopyTextureRegion(&target,update.x,update.y,0,&source,nullptr);
     transition(frame.commands.Get(),destination,D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    frame.keep.emplace_back(upload);return true;
+    return upload.Detach();
 }
-bool draw(Panel& p, Frame& frame, ID3D12Resource* target, const rsf_overlay_draw_data& data, UINT width, UINT height)
+bool draw(Panel& p, Frame& frame, ID3D12Resource* target, UINT width, UINT height,
+    const rsf_overlay12_texture* textures, UINT texture_count)
 {
+    const auto& data=frame.draw;
     if (!data.vertex_count||!data.index_count) return true;
     const uint64_t vertex_bytes=uint64_t(data.vertex_count)*sizeof(rsf_overlay_vertex), index_bytes=uint64_t(data.index_count)*4;
     if (vertex_bytes>UINT_MAX||index_bytes>UINT_MAX||!upload_buffer(p,vertex_bytes,frame.vertices)||!upload_buffer(p,index_bytes,frame.indices)) return false;
@@ -189,28 +184,29 @@ bool draw(Panel& p, Frame& frame, ID3D12Resource* target, const rsf_overlay_draw
     std::memcpy(mapped,data.vertices,static_cast<size_t>(vertex_bytes));frame.vertices->Unmap(0,nullptr);
     if (FAILED(frame.indices->Map(0,&empty,&mapped))) return false;
     std::memcpy(mapped,data.indices,static_cast<size_t>(index_bytes));frame.indices->Unmap(0,nullptr);
-    std::unordered_map<uint64_t,UINT> descriptors;UINT index{};
-    for (const auto& [id,entry]:p.textures) {
+    for (UINT index=0;index<texture_count;++index) {
         auto cpu=frame.srv->GetCPUDescriptorHandleForHeapStart();cpu.ptr+=uint64_t(index)*p.stride;
         D3D12_SHADER_RESOURCE_VIEW_DESC view{};view.Format=DXGI_FORMAT_R8G8B8A8_UNORM;
         view.ViewDimension=D3D12_SRV_DIMENSION_TEXTURE2D;view.Shader4ComponentMapping=D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;view.Texture2D.MipLevels=1;
-        p.device->CreateShaderResourceView(entry.resource.Get(),&view,cpu);descriptors[id]=index++;
+        p.device->CreateShaderResourceView(static_cast<ID3D12Resource*>(textures[index].resource),&view,cpu);
     }
     auto* commands=frame.commands.Get();transition(commands,target,D3D12_RESOURCE_STATE_PRESENT,D3D12_RESOURCE_STATE_RENDER_TARGET);
     const auto rtv=frame.rtv->GetCPUDescriptorHandleForHeapStart();p.device->CreateRenderTargetView(target,nullptr,rtv);
-    commands->OMSetRenderTargets(1,&rtv,FALSE,nullptr);commands->SetPipelineState(p.pipeline.Get());commands->SetGraphicsRootSignature(p.root.Get());
+    commands->OMSetRenderTargets(1,&rtv,FALSE,nullptr);commands->SetPipelineState(frame.pipeline.Get());commands->SetGraphicsRootSignature(p.root.Get());
     ID3D12DescriptorHeap* heaps[]{frame.srv.Get()};commands->SetDescriptorHeaps(1,heaps);
     const float scale[]{2.0f/static_cast<float>(width),2.0f/static_cast<float>(height)};commands->SetGraphicsRoot32BitConstants(0,2,scale,0);
     const D3D12_VIEWPORT viewport{0,0,static_cast<float>(width),static_cast<float>(height),0,1};commands->RSSetViewports(1,&viewport);
     D3D12_VERTEX_BUFFER_VIEW vertices{frame.vertices->GetGPUVirtualAddress(),static_cast<UINT>(vertex_bytes),sizeof(rsf_overlay_vertex)};
     D3D12_INDEX_BUFFER_VIEW indices{frame.indices->GetGPUVirtualAddress(),static_cast<UINT>(index_bytes),DXGI_FORMAT_R32_UINT};
     commands->IASetVertexBuffers(0,1,&vertices);commands->IASetIndexBuffer(&indices);commands->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    const auto end=textures+texture_count;
     for (UINT i=0;i<data.call_count;++i) {
-        const auto& call=data.calls[i];const auto descriptor=descriptors.find(call.texture_id);
-        if (descriptor==descriptors.end()||uint64_t(call.index_offset)+call.index_count>data.index_count||call.vertex_offset>data.vertex_count) return false;
+        const auto& call=data.calls[i];
+        const auto descriptor=std::find_if(textures,end,[&](const auto& texture){return texture.id==call.texture_id;});
+        if (descriptor==end||uint64_t(call.index_offset)+call.index_count>data.index_count||call.vertex_offset>data.vertex_count) return false;
         const D3D12_RECT clip{static_cast<LONG>(std::min(call.clip_x,width)),static_cast<LONG>(std::min(call.clip_y,height)),
             static_cast<LONG>(std::min(uint64_t(call.clip_x)+call.clip_width,uint64_t(width))),static_cast<LONG>(std::min(uint64_t(call.clip_y)+call.clip_height,uint64_t(height)))};
-        commands->RSSetScissorRects(1,&clip);auto gpu=frame.srv->GetGPUDescriptorHandleForHeapStart();gpu.ptr+=uint64_t(descriptor->second)*p.stride;
+        commands->RSSetScissorRects(1,&clip);auto gpu=frame.srv->GetGPUDescriptorHandleForHeapStart();gpu.ptr+=uint64_t(descriptor-textures)*p.stride;
         commands->SetGraphicsRootDescriptorTable(1,gpu);commands->DrawIndexedInstanced(call.index_count,1,call.index_offset,static_cast<INT>(call.vertex_offset),0);
     }
     transition(commands,target,D3D12_RESOURCE_STATE_RENDER_TARGET,D3D12_RESOURCE_STATE_PRESENT);return true;
@@ -240,13 +236,14 @@ uint32_t wait(void* panel, uint64_t value) {
 void* begin_frame(void* native, uint32_t slot, void* chain, uint32_t* width, uint32_t* height) noexcept try {
     auto& panel=*static_cast<Panel*>(native);
     auto& frame=panel.frames[slot];
-    frame.keep.clear();
+    frame.pipeline.Reset();
     if (FAILED(frame.allocator->Reset())||FAILED(frame.commands->Reset(frame.allocator.Get(),nullptr))) return nullptr;
     ComPtr<IDXGISwapChain3> swapchain;ComPtr<ID3D12Resource> target;
     if (FAILED(static_cast<IDXGISwapChain*>(chain)->QueryInterface(IID_PPV_ARGS(&swapchain)))||
         FAILED(swapchain->GetBuffer(swapchain->GetCurrentBackBufferIndex(),IID_PPV_ARGS(&target)))) return nullptr;
     const auto desc=target->GetDesc();
-    if (!desc.Width || desc.Width>UINT_MAX || !desc.Height || !pipeline(panel,frame,desc.Format)) return nullptr;
+    if (!desc.Width || desc.Width>UINT_MAX || !desc.Height || !pipeline(panel,desc.Format)) return nullptr;
+    frame.pipeline=panel.pipeline;
     *width=static_cast<uint32_t>(desc.Width);
     *height=desc.Height;
     return target.Detach();
@@ -263,24 +260,22 @@ uint32_t layout(void* native, uint32_t slot, uint32_t width, uint32_t height, fl
     return panel.layout(panel.ui,&input,stats,&data,decided)==RSF_OVERLAY_OK;
 } catch (...) { return 0; }
 
-uint32_t record(void* native, uint32_t slot, void* target, uint32_t width, uint32_t height) noexcept try {
+uint32_t updates(void* native, rsf_overlay_texture_update* output, uint32_t capacity) {
+    auto& panel=*static_cast<Panel*>(native);
+    return panel.updates(panel.ui,output,capacity);
+}
+
+uint32_t frees(void* native, uint64_t* output, uint32_t capacity) {
+    auto& panel=*static_cast<Panel*>(native);
+    return panel.frees(panel.ui,output,capacity);
+}
+
+uint32_t record(void* native, uint32_t slot, void* target, uint32_t width, uint32_t height,
+    const rsf_overlay12_texture* textures, uint32_t texture_count) noexcept try {
     auto& panel=*static_cast<Panel*>(native);
     auto& frame=panel.frames[slot];
-    rsf_overlay_texture_update updates[32]{};
-    for (UINT count;(count=panel.updates(panel.ui,updates,32))!=0;) {
-        if (count>32) return 0;
-        for (UINT i=0;i<count;++i) if (!texture(panel,frame,updates[i])) return 0;
-    }
-    if (!draw(panel,frame,static_cast<ID3D12Resource*>(target),frame.draw,width,height)) return 0;
-    uint64_t ids[32]{};
-    for (UINT count;(count=panel.frees(panel.ui,ids,32))!=0;) {
-        if (count>32) return 0;
-        for (UINT i=0;i<count;++i) {
-            const auto found=panel.textures.find(ids[i]);
-            if (found!=panel.textures.end()) {frame.keep.emplace_back(found->second.resource);panel.textures.erase(found);}
-        }
-    }
-    return SUCCEEDED(frame.commands->Close());
+    return draw(panel,frame,static_cast<ID3D12Resource*>(target),width,height,textures,texture_count) &&
+        SUCCEEDED(frame.commands->Close());
 } catch (...) { return 0; }
 
 uint32_t submit(void* native, uint32_t slot, uint64_t value) {
@@ -292,7 +287,7 @@ uint32_t submit(void* native, uint32_t slot, uint64_t value) {
 
 constexpr rsf_overlay12_platform platform{
     create_panel, rsf_overlay_input_visible, rsf_overlay_input_set_visible,
-    completed, wait, begin_frame, layout, record, submit,
+    completed, wait, begin_frame, layout, updates, frees, create_texture, upload_texture, record, submit,
 };
 }
 

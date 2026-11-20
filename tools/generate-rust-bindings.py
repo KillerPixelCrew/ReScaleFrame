@@ -99,7 +99,7 @@ generate("runtime/orchestrator/src/native_sr_abi.rs", "runtime/orchestrator/incl
 # Match the overlay's existing std paths and import types that other modules already own.
 generate("runtime/orchestrator/src/overlay_abi.rs", "runtime/orchestrator/src/overlay_platform.h",
          "wchar_t|rsf_overlay_(api|service_setup|service_option|capture|diagnostics|sr_report|stats|intent|"
-         "host_option|input_counters|platform|quality)|rsf_native_(latency_status|input_routes)|rsf_render_status",
+         "host_option|input_counters|platform|quality|texture_update)|rsf_native_(latency_status|input_routes)|rsf_render_status",
          "RSF_OVERLAY_(API_VERSION|CAPTURE_.*|NOTIFY_.*|SR_INPUT_.*|SERVICE_OPTION_(TOGGLE|NUMBER|LIMIT)|"
          "HOST_OPTION_(TOGGLE|NUMBER)|FG_RUNTIME_SWITCH)|RSF_NATIVE_FG_REASON_(RESET|SCENE_UNSUPPORTED|"
          "HUDLESS_MISSING)|RSF_(REFLEX_ON|SR_NONE|SR_DLSS|SR_FSR3|SR_FSR4|SR_SPATIAL)",
@@ -118,9 +118,10 @@ generate("runtime/orchestrator/src/overlay_abi.rs", "runtime/orchestrator/src/ov
           "--raw-line", "use rsf_game_sys::rsf_game_log_fn;"],
          use_core=False)
 generate("runtime/orchestrator/src/overlay_native12_abi.rs", "runtime/orchestrator/src/overlay_wrapped12_platform.h",
-         "rsf_overlay(12_(log|platform)|11on12_(device|target|platform))", "NOTHING",
+         "rsf_overlay(12_(log|platform|texture)|11on12_(device|target|platform))", "RSF_OVERLAY12_TEXTURE_LIMIT",
          ["-Iruntime/orchestrator/include", "-Iui/overlay/include", "-Isdk/game/include"],
-         ["--no-recursive-allowlist", "--raw-line", "use crate::overlay_abi::{rsf_overlay_intent, rsf_overlay_stats};"])
+         ["--no-recursive-allowlist", "--raw-line",
+          "use crate::overlay_abi::{rsf_overlay_intent, rsf_overlay_stats, rsf_overlay_texture_update};"])
 generate("runtime/orchestrator/src/vulkan_sr_abi.rs", "runtime/orchestrator/include/rescaleframe/native_sr_split_vulkan.h",
          "rsf_(srvk_(setup|frame|image|fallback|fsr4_provider_info)|fsr4vk_handoff|vk_(function|get_proc))",
          "RSF_(SRVK_(ABI_VERSION|SPLIT_ABI_VERSION|SPLIT_TRACKED_ABI_VERSION|FSR4_INFO_ABI_VERSION)|SR_(DLSS|FSR2|FSR3|FSR4|XESS)|FSR4_BRIDGE_(INVALID_ARGUMENT|ABI_MISMATCH))",

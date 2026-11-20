@@ -3,51 +3,10 @@
 // and fake auxiliary products. No device, window or SDK is touched.
 use super::*;
 use crate::auxiliary_sr_abi::rsf_aux_platform;
+use crate::com_ref::test::{Fake, add_ref, fake, raw};
 use crate::native_sr_abi::rsf_motion_decode_params;
 use rsf_game_sys::rsf_game_log_fn;
 use std::cell::Cell;
-
-#[repr(C)]
-struct Vtable {
-    query_interface: usize,
-    add_ref: unsafe extern "system" fn(*mut Fake) -> u32,
-    release: unsafe extern "system" fn(*mut Fake) -> u32,
-}
-
-#[repr(C)]
-struct Fake {
-    vtable: &'static Vtable,
-    refs: Cell<u32>,
-}
-
-unsafe extern "system" fn add_ref(object: *mut Fake) -> u32 {
-    let refs = unsafe { &(*object).refs };
-    refs.set(refs.get() + 1);
-    refs.get()
-}
-
-unsafe extern "system" fn release(object: *mut Fake) -> u32 {
-    let refs = unsafe { &(*object).refs };
-    refs.set(refs.get() - 1);
-    refs.get()
-}
-
-static VTABLE: Vtable = Vtable {
-    query_interface: 0,
-    add_ref,
-    release,
-};
-
-fn fake() -> Box<Fake> {
-    Box::new(Fake {
-        vtable: &VTABLE,
-        refs: Cell::new(1),
-    })
-}
-
-fn raw(object: &Fake) -> Raw {
-    ptr::from_ref(object).cast_mut().cast()
-}
 
 thread_local! {
     static DEVICE: Cell<Raw> = const { Cell::new(null_mut()) };

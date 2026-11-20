@@ -1012,6 +1012,47 @@ const _: () = {
         [::std::mem::offset_of!(rsf_overlay_intent, ui_preferences) - 196usize];
 };
 #[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_overlay_texture_update {
+    pub id: u64,
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    pub pixels: *const u8,
+    pub is_whole_texture: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_overlay_texture_update"]
+        [::std::mem::size_of::<rsf_overlay_texture_update>() - 40usize];
+    ["Alignment of rsf_overlay_texture_update"]
+        [::std::mem::align_of::<rsf_overlay_texture_update>() - 8usize];
+    ["Offset of field: rsf_overlay_texture_update::id"]
+        [::std::mem::offset_of!(rsf_overlay_texture_update, id) - 0usize];
+    ["Offset of field: rsf_overlay_texture_update::x"]
+        [::std::mem::offset_of!(rsf_overlay_texture_update, x) - 8usize];
+    ["Offset of field: rsf_overlay_texture_update::y"]
+        [::std::mem::offset_of!(rsf_overlay_texture_update, y) - 12usize];
+    ["Offset of field: rsf_overlay_texture_update::width"]
+        [::std::mem::offset_of!(rsf_overlay_texture_update, width) - 16usize];
+    ["Offset of field: rsf_overlay_texture_update::height"]
+        [::std::mem::offset_of!(rsf_overlay_texture_update, height) - 20usize];
+    ["Offset of field: rsf_overlay_texture_update::pixels"]
+        [::std::mem::offset_of!(rsf_overlay_texture_update, pixels) - 24usize];
+    ["Offset of field: rsf_overlay_texture_update::is_whole_texture"]
+        [::std::mem::offset_of!(rsf_overlay_texture_update, is_whole_texture) - 32usize];
+};
+impl Default for rsf_overlay_texture_update {
+    fn default() -> Self {
+        let mut s = ::std::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::std::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
 #[derive(Default, Copy, Clone)]
 pub struct rsf_overlay_input_counters {
     pub struct_size: u32,

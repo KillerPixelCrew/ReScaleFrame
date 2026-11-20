@@ -499,6 +499,21 @@ tests, formatting, Clippy and binding regeneration passed. Runtime,
 carrier and Minecraft Release exports matched. The backpressure device
 fixture built. Device execution and game validation remain pending.
 
+The native D3D12 overlay also owns atlas replacement, partial-update bounds
+and texture retirement in Rust. A texture becomes current only after its
+upload is recorded. Each slot holds the textures and upload buffers used by
+its commands until the slot's fence is complete. Replacing or freeing an
+atlas entry therefore leaves earlier in-flight draws with their own leases.
+Native code issues the existing D3D12 copies, barriers and draws. The shader
+is byte-identical.
+
+Two fake-COM atlas cases passed with all 206 locked Rust tests, formatting,
+Clippy and reproducible bindings. The six focused overlay, frontend and
+domain contracts passed in MSVC Debug and Release. Runtime, AC7, Loader and
+Minecraft Release export names and ordinals matched. The backpressure
+fixture built in both configurations. Device and game validation remain
+pending.
+
 The D3D11-on-D3D12 overlay now owns attachment, startup visibility,
 wrapped-backbuffer leases and stop in Rust. Drawing is restricted to the
 device and queue used to create the interop object. A refused draw still
