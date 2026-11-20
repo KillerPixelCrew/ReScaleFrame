@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 // Frame-generation policy for Anomaly: which engine frames are FG source frames, which of them may feed generation
-// history, and when history restarts. Rust owns the state; fg_stage.cpp reports the native
+// history, and when history restarts. Rust owns the state; fg_stage.rs reports the native
 // boundaries and tests/anomaly_fg_policy.cpp drives it directly. See docs/research/anomaly-fg.md.
 //
 // One engine frame (CRenderDevice::on_idle: Begin ... End) is one FG source frame. The decision is made at render

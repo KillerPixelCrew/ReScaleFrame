@@ -12,8 +12,8 @@ const R24G8_TYPELESS: u32 = 44;
 const D24_UNORM_S8_UINT: u32 = 45;
 const RGBA16_FLOAT: u32 = 10;
 
-#[repr(u32)]
-enum Result {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Result {
     Ok,
     Shader,
     Format,
@@ -28,7 +28,7 @@ struct SurfaceSet {
     motion: *mut c_void,
 }
 
-struct Owner {
+pub(crate) struct Owner {
     platform: &'static Platform,
     surfaces: Option<SurfaceSet>,
     pipeline: Option<Lease>,
@@ -38,6 +38,22 @@ struct Owner {
 }
 
 impl Owner {
+    pub(crate) fn new(platform: &'static Platform) -> Self {
+        Self {
+            platform,
+            surfaces: None,
+            pipeline: None,
+            device: None,
+            shader_failed: false,
+            ready: false,
+        }
+    }
+
+    pub(crate) fn outputs(&self) -> Option<[*mut c_void; 2]> {
+        let set = self.surfaces.as_ref().filter(|_| self.ready)?;
+        Some([set.depth, set.motion])
+    }
+
     fn describe(&self, texture: *mut c_void) -> Description {
         let mut desc = Description::default();
         unsafe { (self.platform.describe.unwrap())(texture, &mut desc) };
@@ -62,7 +78,13 @@ impl Owner {
         self.surfaces.as_ref()
     }
 
-    fn run(&mut self, context: *mut c_void, frame: &Frame, log: Log, user: *mut c_void) -> Result {
+    pub(crate) fn run(
+        &mut self,
+        context: *mut c_void,
+        frame: &Frame,
+        log: Log,
+        user: *mut c_void,
+    ) -> Result {
         let platform = self.platform;
         self.ready = false;
         if context.is_null() || frame.depth.is_null() || frame.width == 0 || frame.height == 0 {
@@ -168,45 +190,6 @@ impl Owner {
         } else {
             Result::Resources
         }
-    }
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_input_run(
-    owner: &mut *mut Owner,
-    platform: &'static Platform,
-    context: *mut c_void,
-    frame: &Frame,
-    log: Log,
-    user: *mut c_void,
-) -> u32 {
-    if owner.is_null() {
-        *owner = Box::into_raw(Box::new(Owner {
-            platform,
-            surfaces: None,
-            pipeline: None,
-            device: None,
-            shader_failed: false,
-            ready: false,
-        }));
-    }
-    unsafe { &mut **owner }.run(context, frame, log, user) as u32
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_input_output(owner: Option<&Owner>, motion: u32) -> *mut c_void {
-    owner
-        .filter(|owner| owner.ready)
-        .and_then(|owner| owner.surfaces.as_ref())
-        .map_or(ptr::null_mut(), |set| {
-            if motion != 0 { set.motion } else { set.depth }
-        })
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_input_release(owner: *mut Owner) {
-    if !owner.is_null() {
-        drop(unsafe { Box::from_raw(owner) });
     }
 }
 

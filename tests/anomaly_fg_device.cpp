@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Anomaly frame generation on a real D3D11 device and the real Runtime DLL, through the adapter's production stage
-// (games/anomaly/src/fg_stage.cpp) called exactly as native_observer.cpp calls it from the engine boundaries:
+// (games/anomaly/src/fg_stage.rs) called exactly as native_observer.cpp calls it from the engine boundaries:
 //
 //   SetCacheXform        fg::camera
 //   Render Begin         fg::render_begin          (CPU simulation end, FRAME/SUBMISSION begin, SR source binding)

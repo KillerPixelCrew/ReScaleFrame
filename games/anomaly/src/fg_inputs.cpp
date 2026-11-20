@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-#include "fg_inputs.h"
+#include "fg_inputs_platform.h"
 #include "sr_pass.h"
 #include "../../../runtime/graphics/src/device_owner.h"
 #include <rescaleframe/d3d11_state.h>
@@ -7,7 +7,6 @@
 #include <wrl/client.h>
 #include <cstring>
 #include <memory>
-#include <utility>
 
 namespace rsf::anomaly::fg {
 namespace {
@@ -61,11 +60,6 @@ struct Targets {
 static_assert(sizeof(rsf_anomaly_input_constants) == 96);
 static_assert(DXGI_FORMAT_D24_UNORM_S8_UINT == 45 && DXGI_FORMAT_R24G8_TYPELESS == 44 &&
     DXGI_FORMAT_R16G16B16A16_FLOAT == 10);
-static_assert(static_cast<uint32_t>(InputPass::Result::Ok) == 0 &&
-    static_cast<uint32_t>(InputPass::Result::Shader) == 1 &&
-    static_cast<uint32_t>(InputPass::Result::Format) == 2 &&
-    static_cast<uint32_t>(InputPass::Result::Size) == 3 &&
-    static_cast<uint32_t>(InputPass::Result::Resources) == 4);
 
 void* get_device(void* raw_context) noexcept {
     auto* context = static_cast<ID3D11DeviceContext*>(raw_context);
@@ -165,22 +159,5 @@ constexpr rsf_anomaly_input_platform platform{
 };
 }
 
-InputPass::Result InputPass::run(ID3D11DeviceContext* context, const InputFrame& frame,
-    void (*log)(void*, const char*), void* user) noexcept {
-    rsf_anomaly_input_frame input{frame.depth, frame.motion, {}, frame.width, frame.height};
-    std::memcpy(input.clip_to_previous_clip, frame.clip_to_previous_clip, sizeof(input.clip_to_previous_clip));
-    return static_cast<Result>(rsf_anomaly_input_run(&owner_, &platform, context, &input, log, user));
-}
-
-ID3D11Texture2D* InputPass::depth() const noexcept {
-    return static_cast<ID3D11Texture2D*>(rsf_anomaly_input_output(owner_, 0));
-}
-
-ID3D11Texture2D* InputPass::motion() const noexcept {
-    return static_cast<ID3D11Texture2D*>(rsf_anomaly_input_output(owner_, 1));
-}
-
-void InputPass::release() noexcept {
-    rsf_anomaly_input_release(std::exchange(owner_, nullptr));
-}
+const rsf_anomaly_input_platform& input_platform() noexcept { return platform; }
 }

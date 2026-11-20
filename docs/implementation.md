@@ -166,8 +166,8 @@ continuity rules with the rest of the motion history. The history keeps
 two reusable frame tables per view and the prior grass item cap. The
 old grass remap flagged a same-frame conflict yet still returned valid
 previous rows for that draw. The Rust owner records the whole batch
-first and refuses both conflicting groups in that batch. It also holds
-history for a route whose current constants conflict. An already drawn
+first and refuses both conflicting groups in that batch. It also withholds
+previous rows for a route whose current constants conflict. An already drawn
 batch cannot be changed by a later conflict. The producer bindings and
 b13 layout follow [the foliage evidence](research/anomaly-foliage-motion.md).
 
@@ -177,6 +177,20 @@ owner. Seven focused MSVC contracts passed in Debug and Release. All
 224 locked Rust tests, formatting, Clippy and adapter DLL export
 parity passed. The three motion device fixtures built. Current-device
 and foliage gameplay evidence remain open for the port.
+
+Anomaly's FG stage now runs in Rust. It reports the existing guarded
+input, render, HUD-less and Present facts by source ID, uses the shared
+resource lease and sends requests through the same Runtime tables.
+The source advances camera history only after both inputs and the
+paired HUD-less scene passes are accepted. A fake-table regression
+checks that ready SR inputs and a successful Present cannot advance
+history when there is no backbuffer to hand off. See [the FG stage audit](research/rust-anomaly-fg-stage.md).
+
+The FG merge passed 15 focused MSVC contracts in Debug and Release and
+227 locked Rust tests, formatting and Clippy. The FG and temporal SR
+device fixtures built, and the adapter DLL kept all three exports and
+the carrier-loaded Runtime lookup. Live FG and recovery checks on this
+merged adapter remain open.
 
 The first source inspection found that the public frame sequencer opened a rendered
 frame and assigned its provenance under separate locks. Direct callers could read
