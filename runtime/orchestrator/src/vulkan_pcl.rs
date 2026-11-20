@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 use crate::native_cpu::rsf_native_cpu_ping_message;
-use crate::sr_session::has_capacity;
 use rsf_game_sys::{
     RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_FRAME_BEGIN, RSF_GAME_CPU_INPUT_EVENT,
     RSF_GAME_CPU_INPUT_KEYED, RSF_GAME_CPU_INPUT_SAMPLE, RSF_GAME_CPU_INPUT_UNFRAMED,
@@ -35,10 +34,10 @@ fn epoch_tag() -> isize {
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
-struct Status {
-    message: u32,
-    available: u32,
-    reports: u32,
+pub(crate) struct Status {
+    pub(crate) message: u32,
+    pub(crate) available: u32,
+    pub(crate) reports: u32,
 }
 
 struct Registration {
@@ -58,7 +57,7 @@ static PCL: Mutex<Pcl> = Mutex::new(Pcl {
 });
 
 #[repr(C)]
-struct Sdk {
+pub(crate) struct Sdk {
     bind: unsafe extern "C" fn() -> i32,
     message: unsafe extern "C" fn() -> u32,
     reflex: unsafe extern "C" fn(*mut u32, *mut u32),
@@ -66,14 +65,14 @@ struct Sdk {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_latencyvk_pcl_reset() {
+pub(crate) extern "C" fn rsf_core_latencyvk_pcl_reset() {
     if PCL.lock().unwrap().registered.take().is_some() {
         rsf_native_cpu_ping_message(0);
     }
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_latencyvk_pcl_status() -> Status {
+pub(crate) extern "C" fn rsf_core_latencyvk_pcl_status() -> Status {
     PCL.lock()
         .unwrap()
         .registered
@@ -84,7 +83,7 @@ extern "C" fn rsf_core_latencyvk_pcl_status() -> Status {
 // The native caller serializes vendor registration against SDK initialization
 // and shutdown. The PCL lock is never held for a vendor call.
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_latencyvk_pcl_bind(use_input_thread: u32, sdk: &Sdk) -> i32 {
+pub(crate) extern "C" fn rsf_core_latencyvk_pcl_bind(use_input_thread: u32, sdk: &Sdk) -> i32 {
     let thread = unsafe { GetCurrentThreadId() };
     let previous = {
         let mut pcl = PCL.lock().unwrap();
@@ -140,7 +139,7 @@ extern "C" fn rsf_core_latencyvk_pcl_bind(use_input_thread: u32, sdk: &Sdk) -> i
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_latencyvk_pcl_ping(window: HWND) -> i32 {
+pub(crate) extern "C" fn rsf_core_latencyvk_pcl_ping(window: HWND) -> i32 {
     let id = rsf_core_latencyvk_pcl_status().message;
     i32::from(!window.is_null() && id != 0 && unsafe { PostMessageW(window, id, 0, 0) } != 0)
 }
@@ -208,15 +207,10 @@ fn collect(session: u64, delivered: &mut [MaybeUninit<rsf_game_cpu_event>; MAX_D
     count
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_latencyvk_pcl_pump(
-    boundary: *const rsf_game_cpu_event,
-    dispatch: unsafe extern "C" fn(*const rsf_game_cpu_event),
+pub(crate) fn pump(
+    boundary: &rsf_game_cpu_event,
+    mut dispatch: impl FnMut(*const rsf_game_cpu_event),
 ) {
-    if !unsafe { has_capacity(boundary) } {
-        return;
-    }
-    let boundary = unsafe { &*boundary };
     if boundary.session_id == 0
         || boundary.source_frame_id == 0
         || boundary.event_version != RSF_GAME_CPU_EVENT_VERSION
@@ -233,6 +227,6 @@ unsafe extern "C" fn rsf_core_latencyvk_pcl_pump(
     // Dispatch after the boundary and outside the queue lock. The sink may
     // reenter the SDK and the earlier boundary cannot consume a future ping.
     for fact in &delivered[..count] {
-        unsafe { dispatch(fact.as_ptr()) };
+        dispatch(fact.as_ptr());
     }
 }

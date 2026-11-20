@@ -7,7 +7,7 @@ use rsf_game_sys::{
 use std::mem::{offset_of, size_of, take};
 use std::sync::Mutex;
 
-mod streamline;
+pub(crate) mod streamline;
 use streamline::StreamlineFrames;
 
 const INVALID: i32 = -1;
@@ -126,12 +126,12 @@ impl Frames {
 static FRAMES: Mutex<Frames> = Mutex::new(Frames::new());
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_latencyvk_frames_reset() {
+pub(crate) extern "C" fn rsf_core_latencyvk_frames_reset() {
     *FRAMES.lock().unwrap() = Frames::new();
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_latencyvk_frame_boundary(session: u64, frame: u64, skipped: u32) {
+pub(crate) extern "C" fn rsf_core_latencyvk_frame_boundary(session: u64, frame: u64, skipped: u32) {
     FRAMES
         .lock()
         .unwrap()
@@ -141,7 +141,7 @@ extern "C" fn rsf_core_latencyvk_frame_boundary(session: u64, frame: u64, skippe
 // A positive result identifies one marker, zero is a duplicate and a
 // negative result is the public error. Only the prefix through source_frame_id is read.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_latencyvk_execution(
+pub(crate) unsafe extern "C" fn rsf_core_latencyvk_execution(
     pass: *const rsf_game_render_pass,
     begin: u32,
 ) -> i32 {
@@ -175,11 +175,11 @@ unsafe extern "C" fn rsf_core_latencyvk_execution(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_latencyvk_legacy_render(frame: u64) {
+pub(crate) extern "C" fn rsf_core_latencyvk_legacy_render(frame: u64) {
     FRAMES.lock().unwrap().legacy.rendered = frame;
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_latencyvk_legacy_present(begin: u32) -> u64 {
+pub(crate) extern "C" fn rsf_core_latencyvk_legacy_present(begin: u32) -> u64 {
     FRAMES.lock().unwrap().legacy.present(begin != 0)
 }

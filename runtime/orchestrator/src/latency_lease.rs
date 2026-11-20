@@ -15,7 +15,7 @@ struct Claim {
 static CLAIM: Mutex<Option<Claim>> = Mutex::new(None);
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_latency_pacing_owner(
+pub(crate) extern "C" fn rsf_core_latency_pacing_owner(
     required: u32,
     reflex: u32,
     amd: u32,
@@ -33,7 +33,7 @@ extern "C" fn rsf_core_latency_pacing_owner(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_native_latency_claim(client: u32) -> i32 {
+pub(crate) extern "C" fn rsf_native_latency_claim(client: u32) -> i32 {
     if !matches!(client, 1 | 2) {
         return 0;
     }
@@ -67,7 +67,7 @@ extern "C" fn rsf_native_latency_claim(client: u32) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_native_latency_has_claim(client: u32) -> i32 {
+pub(crate) extern "C" fn rsf_native_latency_has_claim(client: u32) -> i32 {
     i32::from(
         CLAIM
             .lock()

@@ -161,7 +161,7 @@ impl Drop for ProviderOperation {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_fgvk_presentation_attach(context: Context) -> i32 {
+pub(crate) extern "C" fn rsf_core_fgvk_presentation_attach(context: Context) -> i32 {
     let mut state = binding();
     if context.is_null() {
         return INVALID;
@@ -173,7 +173,7 @@ extern "C" fn rsf_core_fgvk_presentation_attach(context: Context) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_fgvk_presentation_unbind() -> i32 {
+pub(crate) extern "C" fn rsf_core_fgvk_presentation_unbind() -> i32 {
     let mut state = binding();
     if state.context.is_null() {
         return OK;
@@ -190,7 +190,7 @@ extern "C" fn rsf_core_fgvk_presentation_unbind() -> i32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_fgvk_presentation_borrow(closing: *mut u32) -> Context {
+pub(crate) unsafe extern "C" fn rsf_core_fgvk_presentation_borrow(closing: *mut u32) -> Context {
     let mut state = binding();
     let closed = state.closing();
     unsafe { closing.write(u32::from(closed)) };
@@ -202,12 +202,12 @@ unsafe extern "C" fn rsf_core_fgvk_presentation_borrow(closing: *mut u32) -> Con
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_fgvk_presentation_return() {
+pub(crate) extern "C" fn rsf_core_fgvk_presentation_return() {
     binding().borrowers -= 1;
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_fgvk_presentation_shutdown_begin() -> i32 {
+pub(crate) extern "C" fn rsf_core_fgvk_presentation_shutdown_begin() -> i32 {
     match binding().begin(Operation::Shutdown) {
         Ok(()) => OK,
         Err(result) => result,
@@ -215,7 +215,7 @@ extern "C" fn rsf_core_fgvk_presentation_shutdown_begin() -> i32 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_fgvk_presentation_shutdown_end(success: u32) {
+pub(crate) extern "C" fn rsf_core_fgvk_presentation_shutdown_end(success: u32) {
     binding().finish(Operation::Shutdown, success != 0);
 }
 

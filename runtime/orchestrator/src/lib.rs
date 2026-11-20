@@ -98,6 +98,10 @@ mod vulkan_fg;
 #[cfg(windows)]
 mod vulkan_fg_abi;
 #[cfg(windows)]
+mod vulkan_latency;
+#[cfg(windows)]
+mod vulkan_latency_abi;
+#[cfg(windows)]
 mod vulkan_latency_frames;
 #[cfg(windows)]
 mod vulkan_pcl;

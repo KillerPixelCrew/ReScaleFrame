@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
-#include "latency_amd_vulkan.h"
 #include <rescaleframe/native_latency_vulkan_requirements.h>
 #include <cstring>
 #include <vector>
+extern "C" rsf_backend_result rsf_core_amd_vk_bind(void*, rsf_vk_function,
+    void (*invoke)(void*, rsf_vk_function, uint32_t, uint64_t, uint32_t, uint32_t));
+extern "C" void rsf_core_amd_vk_device_destroyed(void*);
 #if defined(RSF_HAVE_ANTILAG_VK)
 #define VK_NO_PROTOTYPES
 #include <vulkan/vulkan.h>
@@ -89,11 +91,11 @@ extern "C" rsf_backend_result rsf_latencyvk_device_created(const rsf_latencyvk_c
     const auto get_device=function<PFN_vkGetDeviceProcAddr>(query,"vkGetDeviceProcAddr");
     const auto callback=get_device ? reinterpret_cast<PFN_vkAntiLagUpdateAMD>(get_device(static_cast<VkDevice>(facts->device),"vkAntiLagUpdateAMD")) : nullptr;
     if (!callback) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
-    return rsf::latency::rsf_core_amd_vk_bind(facts->device,reinterpret_cast<rsf_vk_function>(callback),update_device);
+    return rsf_core_amd_vk_bind(facts->device,reinterpret_cast<rsf_vk_function>(callback),update_device);
 #else
     return RSF_BACKEND_ERROR_NOT_SUPPORTED;
 #endif
 } catch (...) {return RSF_BACKEND_ERROR_FEATURE_FAILED;}
 extern "C" void rsf_latencyvk_device_destroyed(void* device) {
-    rsf::latency::rsf_core_amd_vk_device_destroyed(device);
+    rsf_core_amd_vk_device_destroyed(device);
 }

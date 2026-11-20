@@ -291,6 +291,19 @@ message. All 131 Rust workspace tests, formatting and Clippy passed.
 Release export names and ordinals matched the Runtime and both carriers.
 Device and in-game validation remains pending.
 
+Rust now owns Vulkan latency initialization state, ABI admission, options,
+pacer selection, CPU routing, SDK token leases, counters and checked shutdown.
+The native shim retains the C exports, Streamline and XeLL calls and the
+native WSI resolver and timing calls. Older Presents still advance during
+provider sleep. Status reports a single captured owner, and shutdown holds
+both presentation and AMD retirement reservations until cleanup completes.
+
+Five focused Vulkan and Godot contracts passed in Debug and Release, covering
+provider leases, Streamline token validation and AMD retirement with SDK
+doubles. The Runtime and both carriers retained their Release exports. All
+131 locked Rust tests, formatting and Clippy passed. The real optional
+Streamline package, device execution and games await validation.
+
 The OpenGL pipeline now keeps its shared surface and SR lifecycle, frame
 identity, fallback and FG requests in Rust. Native callbacks handle OpenGL,
 DXGI and the presentation child window. A rejected SR rebuild remains
