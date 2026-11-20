@@ -1101,7 +1101,9 @@ void foliage_identity_remap()
     DetailRows again = moved;
     require(h.record_detail(ViewId::Main, route, w1, again).conflicts == 0, "an identical repeat (second pass) is not a conflict");
     put_group(again, 0, detail_group(5, 0, 5, 0.5f, 0.3f, 0.7f));
-    require(h.record_detail(ViewId::Main, route, w1, again).conflicts == 1 && h.conflicts() == 1, "contradicting repeat is a conflict");
+    remap = h.record_detail(ViewId::Main, route, w1, again);
+    require(remap.conflicts == 1 && h.conflicts() == 1, "contradicting repeat is a conflict");
+    require(remap.matched == 0 && !remap.items[0].valid, "the conflicting current draw must not use previous rows");
     // That plant now has no usable history for the next frame; a route whose constants differ in one frame has none either.
     require(h.begin_frame(ViewId::Main, 13, 0, 640, 360), "frame 13");
     remap = h.record_detail(ViewId::Main, route, w1, moved);
@@ -1131,6 +1133,19 @@ void foliage_identity_remap()
         "scope has its own frames");
     h.reset_all();
     require(!h.active(ViewId::Main), "reset forgets everything");
+
+    h.begin_frame(ViewId::Main, 21, 1, 640, 360);
+    h.record_detail(ViewId::Main, route, w0, batch);
+    h.begin_frame(ViewId::Main, 22, 1, 640, 360);
+    auto duplicate = empty_batch();
+    put_group(duplicate, 0, detail_group(1, 0, 1, 0.5f, 0.1f, 0.5f));
+    put_group(duplicate, 1, detail_group(1, 0, 1, 0.6f, 0.1f, 0.5f));
+    remap = h.record_detail(ViewId::Main, route, w1, duplicate);
+    require(remap.conflicts == 1 && remap.matched == 0 && remap.unmatched == 2,
+        "both copies of a conflict in the same batch are invalid");
+    remap = h.record_detail(ViewId::Main, route, w0, batch);
+    require(!remap.route_found && remap.matched == 0 && remap.unmatched == 3,
+        "a route with conflicting current constants must not supply previous rows");
 
     // Trees: the visual's address, its xform bytes and its slide window.
     TreeRecord tree;

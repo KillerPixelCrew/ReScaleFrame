@@ -161,6 +161,23 @@ matches the staged exports and Runtime lookup, and the motion pack hash
 is unchanged. Device fixtures built. Live callback retirement and the
 Standard and AVX game runs remain to be verified on the merged adapter.
 
+Anomaly's tree and grass history now live in Rust and share frame
+continuity rules with the rest of the motion history. The history keeps
+two reusable frame tables per view and the prior grass item cap. The
+old grass remap flagged a same-frame conflict yet still returned valid
+previous rows for that draw. The Rust owner records the whole batch
+first and refuses both conflicting groups in that batch. It also holds
+history for a route whose current constants conflict. An already drawn
+batch cannot be changed by a later conflict. The producer bindings and
+b13 layout follow [the foliage evidence](research/anomaly-foliage-motion.md).
+
+The CPU fixture reproduced the conflicting-row bug on the C++ owner
+and passed its refusal, remap and view-history checks with the Rust
+owner. Seven focused MSVC contracts passed in Debug and Release. All
+224 locked Rust tests, formatting, Clippy and adapter DLL export
+parity passed. The three motion device fixtures built. Current-device
+and foliage gameplay evidence remain open for the port.
+
 The first source inspection found that the public frame sequencer opened a rendered
 frame and assigned its provenance under separate locks. Direct callers could read
 or retire the slot between those operations. The FG session adds its own outer

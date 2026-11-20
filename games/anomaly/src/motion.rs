@@ -5,6 +5,8 @@
 //! and call-scoped buffer storage. The private C ABI lends camera data and
 //! previous draw data to the native stage. Rust owns the history storage.
 
+mod foliage;
+
 use crate::geometry_registry_abi::rsf_anomaly_geometry_key as InstanceKey;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, btree_map::Entry};
@@ -167,12 +169,22 @@ impl Snapshot<'_> {
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Default, PartialEq)]
 struct FrameIdentity {
     source: u64,
     generation: u64,
     width: u32,
     height: u32,
+}
+
+impl FrameIdentity {
+    fn follows(self, previous: Self) -> bool {
+        // Source counters may skip between draws of a given view.
+        self.source > previous.source
+            && self.generation == previous.generation
+            && self.width == previous.width
+            && self.height == previous.height
+    }
 }
 
 #[derive(Default)]
@@ -208,12 +220,7 @@ impl MotionHistoryState {
             if id == current.id {
                 return state.previous.is_some();
             }
-            // Source counters may skip between draws of a given view.
-            state.previous = if id.source > current.id.source
-                && id.generation == current.id.generation
-                && id.width == current.id.width
-                && id.height == current.id.height
-            {
+            state.previous = if id.follows(current.id) {
                 state.current.take()
             } else {
                 None
@@ -516,6 +523,7 @@ extern "C" fn rsf_anomaly_motion_pack_tess(
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Default, PartialEq)]
 struct FoliageConstants {
     consts: [f32; 4],
     wave: [f32; 4],
@@ -523,6 +531,7 @@ struct FoliageConstants {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Default)]
 struct FoliageItem {
     valid: bool,
     scale: f32,
@@ -810,6 +819,7 @@ unsafe extern "C" fn rsf_anomaly_motion_decide_core(
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, PartialEq)]
 struct TreeRecord {
     xform: [f32; 12],
     constants: FoliageConstants,
