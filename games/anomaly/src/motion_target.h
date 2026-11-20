@@ -13,6 +13,7 @@
 // A non-null foreign pRT[2] is never replaced ("conflict").
 #include <cstddef>
 #include <cstdint>
+#include "motion_target_platform.h"
 
 namespace rsf::anomaly::motion {
 class BinderHost {
@@ -26,16 +27,14 @@ public:
     virtual void clear_targets() noexcept = 0;
 };
 enum class BindAction : std::uint8_t {
-    None,          // not a G-buffer draw and nothing of ours bound
-    Bound,         // pRT[2] was null: motion RTV written and bound (a rebind after an engine bind)
-    AlreadyBound,  // pRT[2] already the motion RTV
-    Unbound,       // the motion RTV was removed from a non-G-buffer draw
-    Conflict,      // a G-buffer draw with a foreign RTV in slot 2: left alone, no motion for this draw
-    Fault          // engine memory unreadable/unwritable: nothing changed
+    None = RSF_ANOMALY_MOTION_BIND_NONE,
+    Bound = RSF_ANOMALY_MOTION_BIND_BOUND,
+    AlreadyBound = RSF_ANOMALY_MOTION_BIND_ALREADY_BOUND,
+    Unbound = RSF_ANOMALY_MOTION_BIND_UNBOUND,
+    Conflict = RSF_ANOMALY_MOTION_BIND_CONFLICT,
+    Fault = RSF_ANOMALY_MOTION_BIND_FAULT,
 };
-struct BackendLayout {
-    std::uint32_t rt_offset{}, zb_offset{}, changed_offset{};
-};
+using BackendLayout = rsf_anomaly_motion_bind_layout;
 class MotionBinder {
 public:
     MotionBinder(BinderHost& host, BackendLayout layout) noexcept : host_(host), layout_(layout) {}
@@ -43,10 +42,11 @@ public:
     BindAction on_draw(std::byte* backend, bool motion_wanted, const void* position_rtv, void* motion_rtv) noexcept;
     // At window close, outside a draw: drop our RTV from the cache and mark it dirty like set_RT does.
     BindAction close(std::byte* backend, void* motion_rtv) noexcept;
-    bool motion_bound() const noexcept { return bound_; }
+    bool motion_bound() const noexcept { return state_.bound != 0; }
+    bool cache_may_hold_motion() const noexcept { return state_.cache_may_hold_motion != 0; }
 private:
     BinderHost& host_;
     BackendLayout layout_;
-    bool bound_{};
+    rsf_anomaly_motion_bind_state state_{};
 };
 }

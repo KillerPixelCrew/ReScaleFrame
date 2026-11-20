@@ -200,7 +200,6 @@ MotionBinder binder{binder_host, {sr::backend_rt_offset, sr::backend_zb_offset, 
 struct Window {
     bool open{};
     bool target_ok{};
-    bool cache_may_hold_motion{};
     bool have_frame{};
     uint32_t frame{};
     temporal::ViewId view{};
@@ -594,6 +593,12 @@ void window_open(void* target) noexcept try {
     if (!read_global(srp().hw_device_rva, device) || !read_global(srp().hw_context_rva, context) || !device || !context ||
         !read_global(srp().render_implementation_rva + sr::render_target_offset, engine_target) || engine_target != target) return;
     if (!install_draw_hooks(context)) return;
+    binder_host.context = context;
+    if (binder.cache_may_hold_motion() && device_state.rtv()) {
+        const auto action = binder.close(image + srp().backend_rva, device_state.rtv());
+        if (action == BindAction::Fault) { ++stats.binder_faults; return; }
+        if (action == BindAction::Unbound) ++stats.close_unbinds;
+    }
     if (device_state.device() != device) {
         device_state.reset();
         history.reset_all();
@@ -613,7 +618,6 @@ void window_open(void* target) noexcept try {
     const auto view = geometry::current_render_view(image, *build);
     if (!view) return;
     window.context = context;
-    binder_host.context = context;
     window.position_rtv = rtv;
     window.position_surface = surface;
     const bool new_frame = !window.have_frame || window.frame != frame || window.view != *view;
@@ -660,7 +664,6 @@ void window_close() noexcept {
         if (action == BindAction::Unbound) ++stats.close_unbinds;
         else if (action == BindAction::Fault) ++stats.binder_faults;
     }
-    window.cache_may_hold_motion = false;
     if (capture.active) capture_finish();
 }
 void __fastcall scene_begin_hook(void* self) {
@@ -853,10 +856,10 @@ void on_flush(const geometry::DrawTimeFacts& facts) noexcept try {
     if (!hooks_active.load(std::memory_order_relaxed) || !image) return;
     auto* backend = image + srp().backend_rva;
     if (!window.open) {
-        if (window.cache_may_hold_motion && device_state.rtv()) {
+        if (binder.cache_may_hold_motion() && device_state.rtv()) {
             const auto action = binder.on_draw(backend, false, nullptr, device_state.rtv());
             if (action == BindAction::Unbound) ++stats.unbinds;
-            window.cache_may_hold_motion = false;
+            else if (action == BindAction::Fault) ++stats.binder_faults;
         }
         if (facts.detail) {
             ID3D11DeviceContext* engine_context{};
@@ -876,7 +879,6 @@ void on_flush(const geometry::DrawTimeFacts& facts) noexcept try {
     case BindAction::Fault: ++stats.binder_faults; break;
     default: break;
     }
-    window.cache_may_hold_motion = binder.motion_bound();
     // History for the next frame: every main-pass draw's camera, every identified draw's snapshot.
     CameraStatus camera = CameraStatus::NoFrame;
     DrawSnapshotView previous;

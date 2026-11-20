@@ -125,6 +125,18 @@ lookup. Runtime, AC7, Loader and Minecraft kept their Release export
 inventories. The Anomaly shader pack matched the staged baseline hash.
 Device execution and game acceptance remain open for the merged adapter.
 
+Rust now owns Anomaly's motion-target binding and restore decisions. The
+native leaf supplies guarded engine-cache reads and writes and D3D11
+target calls. The old binder could leave a borrowed motion RTV in slot 2
+after the engine dirty-byte write refused. The new binder updates the
+dirty byte before publishing the target and retains the pending cleanup
+across a refused close. The new fixture reproduced the stale slot on the
+old binder and now checks refusal, retry and restoration. Nine focused
+MSVC contracts passed in Debug and Release, all 220 locked Rust tests
+passed, and the three Anomaly exports and Runtime lookup matched the
+staged baseline. The motion and FG device fixtures built in both
+configurations. Live motion-target behavior remains to be verified.
+
 The first source inspection found that the public frame sequencer opened a rendered
 frame and assigned its provenance under separate locks. Direct callers could read
 or retire the slot between those operations. The FG session adds its own outer

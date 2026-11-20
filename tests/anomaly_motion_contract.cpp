@@ -482,8 +482,13 @@ struct FakeHost final : BinderHost {
     void* last[4]{};
     void* last_depth{};
     bool fail_write{};
+    const void* refused_address{};
     bool read(const void* a, void* o, std::size_t s) noexcept override { std::memcpy(o, a, s); return true; }
-    bool write(void* a, const void* i, std::size_t s) noexcept override { if (fail_write) return false; std::memcpy(a, i, s); return true; }
+    bool write(void* a, const void* i, std::size_t s) noexcept override {
+        if (fail_write || a == refused_address) return false;
+        std::memcpy(a, i, s);
+        return true;
+    }
     void set_targets(void* const (&t)[4], void* d) noexcept override { ++binds; std::memcpy(last, t, sizeof(last)); last_depth = d; }
     void clear_targets() noexcept override { ++clears; }
 };
@@ -531,6 +536,26 @@ void binder_state_machine()
     engine.engine_bind(position, color, nullptr);
     host.fail_write = true;
     require(binder.on_draw(base, true, position, motion) == BindAction::Fault && engine.rt(2) == nullptr, "write fault changes nothing");
+    host.fail_write = false;
+    host.refused_address = base + FakeBackend::layout.changed_offset;
+    engine.set_changed(true);
+    const int binds = host.binds;
+    require(binder.on_draw(base, true, position, motion) == BindAction::Fault && engine.rt(2) == nullptr &&
+        engine.changed() && host.binds == binds, "a refused dirty-byte write leaves the target slot untouched");
+    host.refused_address = base + FakeBackend::layout.rt_offset + 2 * sizeof(void*);
+    require(binder.on_draw(base, true, position, motion) == BindAction::Fault && engine.rt(2) == nullptr &&
+        engine.changed() && host.binds == binds, "a refused slot restores the previous dirty byte");
+    host.refused_address = nullptr;
+    require(binder.on_draw(base, true, position, motion) == BindAction::Bound, "retry binds after the fault clears");
+    host.refused_address = base + FakeBackend::layout.changed_offset;
+    const int previous_clears = host.clears;
+    require(binder.close(base, motion) == BindAction::Fault && engine.rt(2) == motion &&
+        !engine.changed() && host.clears == previous_clears && binder.cache_may_hold_motion(),
+        "refused close keeps the old target visible to cleanup");
+    host.refused_address = nullptr;
+    require(binder.close(base, motion) == BindAction::Unbound && engine.rt(2) == nullptr &&
+        engine.changed() && !binder.cache_may_hold_motion() && host.clears == previous_clears + 1,
+        "close retry invalidates the cache and clears the old targets");
 }
 
 // ---- shader loader ---------------------------------------------------------------------------------------------
