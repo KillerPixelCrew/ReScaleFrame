@@ -830,6 +830,10 @@ pub extern "C" fn rsf_native_cpu_rendered_source_set(enabled: u32) {
     CPU.rendered.store(enabled != 0, Ordering::SeqCst);
 }
 
+pub(crate) fn read_frame(session: u64, source: u64) -> Option<rsf_native_cpu_frame> {
+    CPU.read(session, source)
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rsf_native_cpu_read(
     session: u64,
@@ -839,7 +843,7 @@ pub unsafe extern "C" fn rsf_native_cpu_read(
     if !unsafe { has_capacity(frame) } {
         return 0;
     }
-    match CPU.read(session, source) {
+    match read_frame(session, source) {
         Some(record) => {
             unsafe { frame.write(record) };
             1

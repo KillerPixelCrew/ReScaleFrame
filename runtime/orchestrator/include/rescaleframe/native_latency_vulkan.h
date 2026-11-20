@@ -39,8 +39,8 @@ RSF_RUNTIME_API void rsf_latencyvk_render(uint64_t frame);
 RSF_RUNTIME_API void rsf_latencyvk_present(uint32_t begin);
 /* Versioned game render facts at actual Vulkan submission/Present boundaries.
    Supports SUBMISSION and PRESENT roles with explicit session/source identity.
-   Many submissions may belong to one source; the core closes their render marker
-   at that source's Present begin. No latest-frame association is inferred. */
+   The core records one submission interval per source and requires its reported
+   end before Present begins. No latest-frame association is inferred. */
 RSF_RUNTIME_API rsf_backend_result rsf_latencyvk_execution(const rsf_game_render_pass*, uint32_t begin);
 /* Serialize the immediate WSI call with LL2 markers/sleep on the SDK's lock.
    The callback and borrowed queue/info remain valid through this call. */

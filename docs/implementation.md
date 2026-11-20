@@ -233,6 +233,19 @@ workspace Rust tests, formatting, Clippy and binding regeneration passed.
 Release export names and ordinals matched for the Runtime and both carriers
 (381, 256 and 273). Device and in-game verification remain pending.
 
+The Vulkan latency service now checks reported submission and Present
+boundaries in Rust against the shared CPU ledger and the exact session and
+source. A report emits one admitted marker or returns the existing duplicate
+or refusal result. A duplicate CPU begin cannot reopen a presented source.
+The legacy Present path retains a newer reported render when an older frame's
+Present ends, and a repeated begin leaves the active Present identity intact.
+The native SDK calls remain in their existing ordering scopes.
+
+Six focused Vulkan, native CPU and ABI contracts passed in Debug and Release.
+All 120 Rust workspace tests, formatting and Clippy passed. Release exports
+matched the Runtime and both carriers (381, 256 and 273). Device and in-game
+verification remain pending.
+
 The OpenGL pipeline now keeps its shared surface and SR lifecycle, frame
 identity, fallback and FG requests in Rust. Native callbacks handle OpenGL,
 DXGI and the presentation child window. A rejected SR rebuild remains

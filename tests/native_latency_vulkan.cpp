@@ -148,6 +148,16 @@ int main() {
     cpu(1, RSF_GAME_CPU_FRAME_BEGIN); cpu(1, RSF_GAME_CPU_PACING);
     require(slept == 3 && options == 3, "options reapplied after SDK reinitialization");
     require(rsf_latencyvk_get_status(&status) == RSF_BACKEND_OK && status.sleep_calls == 1 && status.marker_calls == 0, "fresh session counters");
+    const auto overlap = markers.size();
+    rsf_latencyvk_render(1); rsf_latencyvk_present(1);
+    cpu(2, RSF_GAME_CPU_FRAME_BEGIN);
+    rsf_latencyvk_render(2); rsf_latencyvk_present(1); rsf_latencyvk_present(0);
+    rsf_latencyvk_present(1); rsf_latencyvk_present(0);
+    require(markers.size() == overlap + 6 &&
+        markers[overlap + 3].frame == 1 && markers[overlap + 3].kind == 5 &&
+        markers[overlap + 4].frame == 2 && markers[overlap + 4].kind == 4 &&
+        markers[overlap + 5].frame == 2 && markers[overlap + 5].kind == 5,
+        "legacy Present end keeps a newer render queued and duplicate begin cannot replace its source");
     require(rsf_latencyvk_shutdown() == RSF_BACKEND_OK, "fresh session retired");
     low_latency = 0;
     require(rsf_latencyvk_initialize(&setup) == RSF_BACKEND_OK, "stats-only session initialized");
@@ -200,6 +210,9 @@ int main() {
         "shared accepted input facts reach XeLL once in order");
     rsf_game_render_pass execution{}; execution.struct_size=sizeof(execution);
     execution.session_id=77; execution.source_frame_id=100; execution.role=RSF_GAME_RENDER_PRESENT;
+    alignas(rsf_game_render_pass) uint32_t short_execution=sizeof(short_execution);
+    require(rsf_latencyvk_execution(reinterpret_cast<const rsf_game_render_pass*>(&short_execution),1)==
+        RSF_BACKEND_ERROR_INVALID_ARGUMENT,"size-only execution prefix is refused without reading its body");
     require(rsf_latencyvk_execution(nullptr,1)==RSF_BACKEND_ERROR_INVALID_ARGUMENT &&
         rsf_latencyvk_execution(&execution,1)==RSF_BACKEND_ERROR_NOT_READY,
         "explicit Present cannot invent a missing submission");
@@ -230,6 +243,10 @@ int main() {
         xell_markers.size()==n,"repeated explicit presentation is deduplicated");
     execution.role=RSF_GAME_RENDER_SUBMISSION;
     require(rsf_latencyvk_execution(&execution,1)==RSF_BACKEND_ERROR_NOT_READY,"late rendering cannot reopen a presented source");
+    rsf_game_cpu_event duplicate_begin{sizeof(duplicate_begin),RSF_GAME_CPU_FRAME_BEGIN,77,100,1000,1000,1,0,0,0,0};
+    rsf_latencyvk_cpu(&duplicate_begin);
+    require(rsf_latencyvk_execution(&execution,1)==RSF_BACKEND_ERROR_NOT_READY,
+        "a duplicate legacy CPU begin cannot reopen an already presented keyed source");
     require(rsf_latencyvk_presentation(nullptr)==RSF_BACKEND_OK && rsf_latencyvk_shutdown()==RSF_BACKEND_OK,"keyed owner retired");
     require(rsf_latencyvk_initialize(&setup)==RSF_BACKEND_OK,"new keyed session initialized");
     require(rsf_latencyvk_options(1,12345)==RSF_BACKEND_OK,"new session owns pacing");
