@@ -304,6 +304,20 @@ doubles. The Runtime and both carriers retained their Release exports. All
 131 locked Rust tests, formatting and Clippy passed. The real optional
 Streamline package, device execution and games await validation.
 
+Rust now owns the DLSS Vulkan Present capture ledger. It associates each SDK
+token with the copied session, source, view and resource generation, refuses
+ambiguous or out-of-range identities, and accepts dedicated fence completion
+only for the submitting queue family. A device drain proves submitted work
+complete. If a failed recording leaves an unsubmitted readback, the owner
+keeps it out of the legacy pixel flush and releases it on teardown. Native
+code still issues the Vulkan copies and consumes the original Present waits.
+
+Five focused Vulkan contracts passed in Debug and Release, including the
+synthetic DLSS SDK and WSI fixture. All 144 workspace Rust tests passed,
+including three capture ledger regressions. Formatting, Clippy, binding
+regeneration and Runtime and carrier export parity passed. Real captured
+pixels, GPU synchronization and in-game behavior remain unverified.
+
 The OpenGL pipeline now keeps its shared surface and SR lifecycle, frame
 identity, fallback and FG requests in Rust. Native callbacks handle OpenGL,
 DXGI and the presentation child window. A rejected SR rebuild remains

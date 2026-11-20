@@ -191,6 +191,71 @@ const _: () = {
 };
 #[repr(C)]
 #[derive(Copy, Clone)]
+pub struct rsf_dlssgvk_status {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    pub presentation: rsf_fgvk_status,
+    pub requested_generated_frames: u32,
+    pub max_generated_frames: u32,
+    pub sdk_status: u32,
+    pub min_dimension: u32,
+    pub vsync_supported: u32,
+    pub dynamic_mfg_supported: u32,
+    pub sdk_result: i32,
+    pub asynchronous_present_result: i32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_dlssgvk_status"][::core::mem::size_of::<rsf_dlssgvk_status>() - 104usize];
+    ["Alignment of rsf_dlssgvk_status"][::core::mem::align_of::<rsf_dlssgvk_status>() - 8usize];
+    ["Offset of field: rsf_dlssgvk_status::struct_size"]
+        [::core::mem::offset_of!(rsf_dlssgvk_status, struct_size) - 0usize];
+    ["Offset of field: rsf_dlssgvk_status::abi_version"]
+        [::core::mem::offset_of!(rsf_dlssgvk_status, abi_version) - 4usize];
+    ["Offset of field: rsf_dlssgvk_status::presentation"]
+        [::core::mem::offset_of!(rsf_dlssgvk_status, presentation) - 8usize];
+    ["Offset of field: rsf_dlssgvk_status::requested_generated_frames"]
+        [::core::mem::offset_of!(rsf_dlssgvk_status, requested_generated_frames) - 72usize];
+    ["Offset of field: rsf_dlssgvk_status::max_generated_frames"]
+        [::core::mem::offset_of!(rsf_dlssgvk_status, max_generated_frames) - 76usize];
+    ["Offset of field: rsf_dlssgvk_status::sdk_status"]
+        [::core::mem::offset_of!(rsf_dlssgvk_status, sdk_status) - 80usize];
+    ["Offset of field: rsf_dlssgvk_status::min_dimension"]
+        [::core::mem::offset_of!(rsf_dlssgvk_status, min_dimension) - 84usize];
+    ["Offset of field: rsf_dlssgvk_status::vsync_supported"]
+        [::core::mem::offset_of!(rsf_dlssgvk_status, vsync_supported) - 88usize];
+    ["Offset of field: rsf_dlssgvk_status::dynamic_mfg_supported"]
+        [::core::mem::offset_of!(rsf_dlssgvk_status, dynamic_mfg_supported) - 92usize];
+    ["Offset of field: rsf_dlssgvk_status::sdk_result"]
+        [::core::mem::offset_of!(rsf_dlssgvk_status, sdk_result) - 96usize];
+    ["Offset of field: rsf_dlssgvk_status::asynchronous_present_result"]
+        [::core::mem::offset_of!(rsf_dlssgvk_status, asynchronous_present_result) - 100usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_dlss_capture_source {
+    pub record: rsf_frame_record,
+    pub sdk: rsf_dlssgvk_status,
+    pub generated_count: u32,
+    pub configured: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_dlss_capture_source"]
+        [::core::mem::size_of::<rsf_dlss_capture_source>() - 592usize];
+    ["Alignment of rsf_dlss_capture_source"]
+        [::core::mem::align_of::<rsf_dlss_capture_source>() - 8usize];
+    ["Offset of field: rsf_dlss_capture_source::record"]
+        [::core::mem::offset_of!(rsf_dlss_capture_source, record) - 0usize];
+    ["Offset of field: rsf_dlss_capture_source::sdk"]
+        [::core::mem::offset_of!(rsf_dlss_capture_source, sdk) - 480usize];
+    ["Offset of field: rsf_dlss_capture_source::generated_count"]
+        [::core::mem::offset_of!(rsf_dlss_capture_source, generated_count) - 584usize];
+    ["Offset of field: rsf_dlss_capture_source::configured"]
+        [::core::mem::offset_of!(rsf_dlss_capture_source, configured) - 588usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
 pub struct rsf_fgvk_provider {
     pub create: ::core::option::Option<
         unsafe extern "C" fn(

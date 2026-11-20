@@ -21,6 +21,8 @@ mod d3d11_output;
 #[cfg(windows)]
 mod d3d11_output_abi;
 #[cfg(windows)]
+mod dlss_vulkan_capture_ledger;
+#[cfg(windows)]
 mod native_composition;
 #[cfg(windows)]
 mod native_cpu;
