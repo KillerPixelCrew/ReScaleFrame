@@ -102,7 +102,7 @@ generate("runtime/orchestrator/src/vulkan_sr_abi.rs", "runtime/orchestrator/incl
          ["--no-recursive-allowlist", "--raw-line", "use crate::render_abi::rsf_sharpening_options;",
           "--raw-line", "use rsf_game_sys::rsf_frame_record;"])
 generate("runtime/orchestrator/src/gl_pipeline_abi.rs", "runtime/orchestrator/include/rescaleframe/gl_pipeline.h",
-         "rsf_(gl_pipeline_(setup|options|surfaces|status)|gl_texture_info|sr12_setup|fg12_setup|dlss_setup)",
+         "rsf_(gl_pipeline_(setup|options|surfaces|status)|gl_texture_info|sr12_setup|dlss_setup)",
          "RSF_(GL_(RGBA16F|R32F|RG16F|RGBA8)|UI_MODE_BACKBUFFER_HUDLESS)",
          ["-include", "rescaleframe/native_sr_d3d12.h", "-include", "rescaleframe/native_fg_d3d12.h",
           "-Iruntime/orchestrator/include", "-Iruntime/backends/dlss/include", "-Iruntime/graphics/include",
@@ -113,4 +113,20 @@ generate("runtime/orchestrator/src/gl_pipeline_abi.rs", "runtime/orchestrator/in
           "--raw-line", "use crate::render_abi::rsf_native_fg_status;",
           "--raw-line", "use crate::render_abi::rsf_sharpening_options;",
           "--with-derive-default",
-          "--with-derive-custom-struct", "rsf_(gl_pipeline_(setup|options|status)|sr12_setup|fg12_setup)=Copy,Clone"])
+          "--with-derive-custom-struct", "rsf_(gl_pipeline_(setup|options|status)|sr12_setup)=Copy,Clone"])
+generate("runtime/orchestrator/src/fg12_abi.rs", "runtime/orchestrator/src/fg12_platform.h",
+         "rsf_(fg12_(setup|texture_desc|readback_layout|calls)|d3d11_present_setup|streamline_host|native_latency_frame|"
+         "observer_present(_event)?_fn)",
+         "RSF_(NATIVE_FG_REASON_(NOT_PREPARED|SCENE_UNSUPPORTED|RESET|HUDLESS_MISSING)|UI_MODE_NONE|GAME_LATENCY_(SLEEP|MODE))",
+         ["-include", "rescaleframe/fg_choice.h", "-Iruntime/orchestrator/include", "-Iruntime/contract/include",
+          "-Iruntime/backends/dlss/include", "-Iruntime/graphics/include", "-Iruntime/presentation/include",
+          "-Isdk/game/include"],
+         ["--no-recursive-allowlist",
+          "--raw-line", "use crate::render_abi::{\n"
+                        "    rsf_backend_log_fn, rsf_backend_result, rsf_fg_frame, rsf_generation_provider,\n"
+                        "    rsf_native_fg_options,\n"
+                        "};",
+          "--raw-line", "use crate::{overlay_abi::rsf_native_latency_status, scene_abi::rsf_observer_present_event};",
+          "--raw-line", "use rsf_game_sys::{\n"
+                        "    rsf_frame_record, rsf_game_cpu_event, rsf_game_cpu_event_fn, rsf_game_render_pass,\n"
+                        "};"])

@@ -34,20 +34,24 @@ unsafe fn same_device(first: *mut c_void, second: *mut c_void) -> bool {
     unsafe { device(second) }.is_some_and(|second| first.0 == second.0)
 }
 
-struct FencePoint {
-    fence: ComRef,
-    value: u64,
+#[derive(Clone)]
+pub(super) struct FencePoint {
+    pub(super) fence: ComRef,
+    pub(super) value: u64,
 }
 
+// D3D12 fences are free-threaded and all calls on the retained interface are safe across threads.
+unsafe impl Send for FencePoint {}
+
 #[derive(PartialEq, Eq)]
-enum FenceState {
+pub(super) enum FenceState {
     Pending,
     Complete,
     DeviceRemoved,
 }
 
 impl FencePoint {
-    fn state(&self) -> FenceState {
+    pub(super) fn state(&self) -> FenceState {
         let completed = unsafe { rsf_d3d12_fence_completed(self.fence.0.as_ptr()) };
         if completed == u64::MAX {
             FenceState::DeviceRemoved

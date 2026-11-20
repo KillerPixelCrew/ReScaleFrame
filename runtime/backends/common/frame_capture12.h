@@ -189,14 +189,21 @@ public:
     } catch (...) { return false; }
 
     // Fence only copies actually submitted on this queue. Polling later never waits the CPU.
-    bool submitted(ID3D12CommandQueue* queue, uint32_t slot = UINT32_MAX) noexcept try {
+    bool submitted(ID3D12CommandQueue* queue, uint32_t slot = UINT32_MAX,
+        const rsf_frame_record* identity = nullptr) noexcept try {
         std::lock_guard lock(guard);
-        if (images.empty() || !queue) return true;
+        auto matches = [slot, identity](const auto& image) {
+            return !image->completion && (slot == UINT32_MAX || image->slot == slot) &&
+                (!identity || (image->record.session_id == identity->session_id &&
+                    image->record.frame_id == identity->frame_id && image->record.view_id == identity->view_id &&
+                    image->record.resource_generation == identity->resource_generation));
+        };
+        if (!queue || std::none_of(images.begin(), images.end(), matches)) return true;
         Microsoft::WRL::ComPtr<ID3D12Device> device;
         Microsoft::WRL::ComPtr<ID3D12Fence> fence;
         if (FAILED(queue->GetDevice(IID_PPV_ARGS(&device))) ||
             FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence))) || FAILED(queue->Signal(fence.Get(), 1))) return false;
-        for (auto& image : images) if (!image->completion && (slot == UINT32_MAX || image->slot == slot)) {
+        for (auto& image : images) if (matches(image)) {
             image->completion = fence; image->completion_value = 1;
         }
         return true;

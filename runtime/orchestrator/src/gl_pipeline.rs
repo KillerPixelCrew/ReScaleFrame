@@ -6,6 +6,7 @@
 // per platform operation; graphics work stays on the caller's GL context and graphics thread.
 use crate::com_ref::ComRef;
 use crate::cpu_abi::rsf_native_cpu_frame;
+use crate::fg12_abi::rsf_fg12_setup;
 use crate::gl_pipeline_abi::*;
 use crate::render_abi::{
     RSF_DLSS_ABI_VERSION, RSF_FG_BACKEND_AUTO, RSF_FG_OFF, RSF_REFLEX_OFF, rsf_backend_log_fn,

@@ -24,7 +24,7 @@ add_library(rsf_orchestrator_core OBJECT
     src/native_window_platform.cpp
     src/native_fg.cpp
     src/native_fg_dispatch.cpp
-    src/native_fg_d3d12.cpp
+    src/fg12_platform.cpp
     src/native_sr.cpp
     src/native_reinsert_platform.cpp
     src/native_translucency.cpp

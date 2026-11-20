@@ -29,11 +29,16 @@ struct Commands {
     std::array<ComPtr<ID3D12Resource>, 4> leases;
     uint64_t complete = 0;
 };
+struct SourceSubmission {
+    uint64_t session = 0, source = 0, view = 0;
+};
 std::mutex guard;
 rsf_game_host_services services{};
 std::array<Pending, 32> pending;
 std::array<Commands, 3> commands;
+std::array<SourceSubmission, 8> recorded_sources;
 ComPtr<ID3D12Fence> fence;
+uint64_t inline_complete = 0;
 std::atomic<bool> active{false};
 std::atomic<uint32_t> callbacks{0};
 std::atomic<uint32_t> managed_stage{0};
@@ -113,6 +118,40 @@ bool in_flight(const std::array<Commands, 3>& slots)
     for (const auto& slot : slots) if (in_flight(slot)) return true;
     return false;
 }
+#if RSF_HAVE_UNITY_NATIVE
+void record_source(const rsf_game_render_pass& pass, uint64_t inline_fence = 0)
+{
+    std::lock_guard lock(guard);
+    recorded_sources[pass.source_frame_id % recorded_sources.size()] =
+        {pass.session_id, pass.source_frame_id, pass.view_key};
+    if (inline_complete < inline_fence) inline_complete = inline_fence;
+}
+
+void confirm_flushed_sources(ID3D12CommandQueue* queue, const rsf_game_render_pass& window)
+{
+    if (!queue) return;
+    std::array<SourceSubmission, 8> flushed{};
+    {
+        std::lock_guard lock(guard);
+        for (size_t i = 0; i < recorded_sources.size(); ++i) {
+            const auto& source = recorded_sources[i];
+            if (source.source && source.session == window.session_id && source.source <= window.source_frame_id) {
+                flushed[i] = source;
+                recorded_sources[i] = {};
+            }
+        }
+    }
+    for (const auto& source : flushed) if (source.source) {
+        rsf_game_render_pass submission{};
+        submission.struct_size = sizeof(submission);
+        submission.role = RSF_GAME_RENDER_SUBMISSION;
+        submission.session_id = source.session;
+        submission.source_frame_id = source.source;
+        submission.view_key = source.view;
+        services.render_pass(services.user, queue, &submission, 0);
+    }
+}
+#endif
 int config(uint32_t width, uint32_t height, rsf_unity_config* output)
 {
     if (!output || output->struct_size != sizeof(*output) || output->abi_version != RSF_UNITY_BRIDGE_ABI_VERSION) return 0;
@@ -173,6 +212,9 @@ void __stdcall render(int id, void* address) noexcept try
     ID3D12Device* device = unity->GetDevice();
     if (!device) return;
     if (id == event_id + 2 && (entry.packet.flags & RSF_UNITY_PACKET_HUDLESS)) {
+        if (!fence) fence = unity->GetFrameFence();
+        const auto completion = unity->GetNextFrameFenceValue();
+        if (!fence || !completion || completion == UINT64_MAX) return;
         UnityGraphicsD3D12RecordingState recording{};
         if (!unity->CommandRecordingState(&recording) || !recording.commandList) {
             if (++refusals <= 3) log("Unity pre-UI capture refused: no current recording list.");
@@ -188,7 +230,7 @@ void __stdcall render(int id, void* address) noexcept try
         rsf_game_render_pass pass{}; make_pass(entry.packet, pass);
         pass.role = RSF_GAME_RENDER_FINAL_SCENE;
         services.render_pass(services.user, recording.commandList, &pass, 1);
-        services.render_pass(services.user, recording.commandList, &pass, 0);
+        record_source(pass, completion);
         static uint32_t reports = 0;
         if (reports++ < 3) {
             const auto source = entry.resources[0]->GetDesc();
@@ -200,7 +242,11 @@ void __stdcall render(int id, void* address) noexcept try
     if (id == event_id + 1 && (entry.packet.flags & RSF_UNITY_PACKET_WINDOW)) {
         rsf_game_render_pass pass{}; make_pass(entry.packet, pass);
         pass.role = RSF_GAME_RENDER_WINDOW; pass.swapchain = unity->GetSwapChain();
-        services.render_pass(services.user, unity->GetCommandQueue(), &pass, 1);
+        auto* queue = unity->GetCommandQueue();
+        // This configured event synchronizes workers, flushes Unity's command lists,
+        // and grants exclusive queue access. Recording and worker tickets precede it.
+        confirm_flushed_sources(queue, pass);
+        services.render_pass(services.user, queue, &pass, 1);
         return;
     }
     if (!fence) fence = unity->GetFrameFence();
@@ -251,7 +297,7 @@ void __stdcall render(int id, void* address) noexcept try
     slot.complete = unity->ExecuteCommandList(slot.list.Get(), count, states.data());
     // A zero completion identity is an ownership failure, not permission to reuse the allocator.
     if (!slot.complete) { submission_unknown = true; active.store(false); log("Unity D3D12 submission returned no fence; adapter stopped and remains owned."); return; }
-    services.render_pass(services.user, slot.list.Get(), &pass, 0);
+    record_source(pass);
     next_commands = (next_commands + 1) % static_cast<uint32_t>(commands.size());
 #else
     (void)entry;
@@ -331,13 +377,18 @@ bool rsf_unity_bridge_drained() noexcept
     std::lock_guard<std::mutex> lock(guard);
     if (callbacks.load() || input_calls.load() || submission_unknown) return false;
     for (const auto& entry : pending) if (entry.used) return false;
+    if (inline_complete) {
+        const auto completed = fence ? fence->GetCompletedValue() : 0;
+        if (completed == UINT64_MAX || completed < inline_complete) return false;
+    }
     return !in_flight(commands);
 }
 void rsf_unity_bridge_release() noexcept
 {
     std::lock_guard<std::mutex> lock(guard);
     if (message_hook) {UnhookWindowsHookEx(message_hook);message_hook=nullptr;} input_source.store(0);
-    commands = {}; pending = {}; fence.Reset(); services = {}; next_commands = 0;
+    commands = {}; pending = {}; recorded_sources = {}; fence.Reset(); services = {}; next_commands = 0;
+    inline_complete = 0;
     output_width = output_height = 0;
     input_width = input_height = 0;
     submission_unknown = false;

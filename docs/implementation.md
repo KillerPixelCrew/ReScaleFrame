@@ -232,6 +232,20 @@ OpenGL cases. Formatting, Clippy and binding regeneration passed. Export
 names and ordinals matched for the Runtime, both carriers and Minecraft.
 The OpenGL device fixture and the game remain unrun.
 
+Rust now owns D3D12 FG source identity, copied resources and retirement.
+Unity confirms its recorded sources at the flush event before the DXGI
+presenter consumes them. The C ABI and existing command, SDK and DXGI calls
+stay available to shared and embedded consumers. OpenGL and D3D12 FG use the
+same generated Rust definition of the setup contract.
+
+The integrated Release build produced the Runtime, both carriers, Minecraft,
+Unity Mono and the C++ Anomaly adapter. Eight focused contracts passed,
+including linked and DLL FG12 ABI cases, lease faults and XeLL concurrency.
+The Runtime, both carriers and Minecraft matched their export baselines.
+All 112 workspace Rust tests, formatting, Clippy and binding regeneration
+passed. The worker also built the optional Godot target in Debug. Device
+and game validation remain pending. See [the D3D12 cutover audit](research/rust-d3d12-fg-cutover.md).
+
 The native D3D11 exposure cache now lives in Rust and shares the fullscreen
 pass owner with output reinsertion. It borrows a valid 1×1 R32 scalar
 directly, converts supported float vectors with the existing copy shader,

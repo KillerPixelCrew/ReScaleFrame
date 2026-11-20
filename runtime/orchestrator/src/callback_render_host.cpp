@@ -98,7 +98,8 @@ void render(void* owner, void* command_list, const rsf_game_render_pass* pass, u
     if (!command_list || !pass || pass->struct_size < sizeof(*pass)) return;
     if (rsf_game_depth_domains_requested(&pass->depth_domains)) return;
     if (!begin) {
-        if (pass->role == RSF_GAME_RENDER_SR || pass->role == RSF_GAME_RENDER_FG_INPUTS || pass->role == RSF_GAME_RENDER_FINAL_SCENE)
+        if (pass->role == RSF_GAME_RENDER_SR || pass->role == RSF_GAME_RENDER_FG_INPUTS ||
+            pass->role == RSF_GAME_RENDER_FINAL_SCENE || pass->role == RSF_GAME_RENDER_SUBMISSION)
             rsf_fg12_submitted(pass->session_id, pass->source_frame_id);
         return;
     }

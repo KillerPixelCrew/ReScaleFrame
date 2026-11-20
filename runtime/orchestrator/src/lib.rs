@@ -26,6 +26,10 @@ mod native_regions;
 mod native_reinsert;
 
 #[cfg(windows)]
+mod fg12;
+#[cfg(windows)]
+mod fg12_abi;
+#[cfg(windows)]
 mod fg_choice;
 #[cfg(windows)]
 mod fg_dispatch;
