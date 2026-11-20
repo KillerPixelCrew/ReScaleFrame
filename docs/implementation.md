@@ -304,6 +304,20 @@ All 112 workspace Rust tests, formatting, Clippy and binding regeneration
 passed. The worker also built the optional Godot target in Debug. Device
 and game validation remain pending. See [the D3D12 cutover audit](research/rust-d3d12-fg-cutover.md).
 
+The generic D3D12 SR owner now holds its vendor and COM resources, validation
+cache, history, capture, sharpening and reinsertion state in Rust. Accepted
+normalized depth and motion pass directly to the Rust FG12 owner on the same
+recording list. The normalization shader is byte-identical to the original.
+The motion diagnostic refuses extents whose sample boxes would exceed the
+texture, and a vendor success without a context fails initialization.
+
+The integrated Release build produced the Runtime, both carriers, Minecraft,
+Unity Mono and the C++ Anomaly adapter. Seven focused contracts passed,
+including DLL and embedded SR12 and FG12 clients. All 131 Rust workspace
+tests, formatting and Clippy passed. Release exports matched the Runtime,
+both carriers and Minecraft. Three D3D12 device fixtures built and await
+execution. See [the D3D12 SR cutover audit](research/rust-d3d12-sr-cutover.md).
+
 Rust owns native D3D11 FG transfer slots, leases, shared-host SR evaluation,
 HUD-less capture, Prepare, Present and retirement. Prepare now refuses a
 contended slot as `NOT_PREPARED`. It shares the existing Rust scene and

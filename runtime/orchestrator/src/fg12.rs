@@ -608,6 +608,19 @@ unsafe extern "C" fn rsf_core_fg12_capture(
     start_render(&mut owner.cpu[frame.index(CPU_SLOTS)], frame);
 }
 
+// The D3D12 SR owner hands its accepted normalized depth and motion over inside the core after
+// binding the platform table. An unbound table means no presentation owner can exist.
+pub(crate) unsafe fn handoff_inputs(
+    list: *mut c_void,
+    record: &rsf_frame_record,
+    depth: *mut c_void,
+    motion: *mut c_void,
+) {
+    if PLATFORM.get().is_some() {
+        unsafe { rsf_core_fg12_capture(list, record, depth, motion) };
+    }
+}
+
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_fg12_hudless(list: *mut c_void, pass: *const rsf_game_render_pass) {
     let Some(pass) = (unsafe { checked(pass) }) else {
