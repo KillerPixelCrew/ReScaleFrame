@@ -318,6 +318,18 @@ including three capture ledger regressions. Formatting, Clippy, binding
 regeneration and Runtime and carrier export parity passed. Real captured
 pixels, GPU synchronization and in-game behavior remain unverified.
 
+Rust now tracks Vulkan DLSS FG recording order, submitted command lists,
+HUD-less admission, and the last accepted source. A failed recording that
+reuses a slot keeps the last accepted history intact. An older Present
+cannot reopen a consumed source, and an unmatched Present leaves unrelated
+recordings eligible. The native path still records the GPU work and waits
+the actual queue and SDK fences.
+
+Five Vulkan and DLL ABI contracts passed in Debug and Release. The DLSS
+fixture covers ordered Present and duplicate refusal with SDK and WSI
+doubles. All 146 workspace Rust tests, formatting, Clippy and binding
+regeneration passed. Live driver and game behavior remain unverified.
+
 The OpenGL pipeline now keeps its shared surface and SR lifecycle, frame
 identity, fallback and FG requests in Rust. Native callbacks handle OpenGL,
 DXGI and the presentation child window. A rejected SR rebuild remains

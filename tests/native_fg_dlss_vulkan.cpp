@@ -62,13 +62,13 @@ int32_t submit(void*, uint32_t count, const void* commands, uint64_t fence) {
 }
 void submitted_slot(rsf_dlssgvk& self, uint64_t frame, void* prepare, void* hudless) {
     auto& slot = self.slots[frame % self.slots.size()]; slot = {};
-    slot.recording_sequence = ++self.recording_sequence;
+    slot.recording_sequence = ++self.timeline.recording_sequence;
     slot.record.frame_id = frame; slot.record.session_id = lease_session;
     slot.prepared = slot.hudless = true;
     slot.recorded_prepare = slot.recorded_hudless = true;
     slot.prepare_commands = prepare; slot.hudless_commands = hudless;
     slot.source_completion = reinterpret_cast<VkFence>(1); slot.consumer_completion = reinterpret_cast<VkFence>(2);
-    self.latest = frame;
+    rsf_core_dlss_vk_prepare_accepted(&self.timeline, &slot);
 }
 }
 extern "C" rsf_backend_result rsf_slvk_invoke(const rsf_slvk_call* call) {
@@ -164,13 +164,23 @@ int main() {
     rsf_frame_record selected{}; selected.struct_size = sizeof(selected); selected.abi_version = RSF_GAME_FRAME_ABI_VERSION;
     selected.session_id = lease_session; selected.frame_id = lease_frame = 2;
     require(rsf_dlssgvk_present_source(&self, &info, &selected) == VK_SUCCESS && self.status.presentation.enabled &&
-        self.status.presentation.source_frame == 2 && self.latest == 3,
+        self.status.presentation.source_frame == 2 && self.timeline.last_prepared.frame_id == 3,
         "explicit old output selects its original token while newer guides remain prepared");
     selected.frame_id = lease_frame = 3;
     require(rsf_dlssgvk_present_source(&self, &info, &selected) == VK_SUCCESS && self.status.presentation.enabled &&
         self.status.presentation.source_frame == 3,"later output consumes its own retained source");
+    selected.frame_id = 2;
+    require(rsf_dlssgvk_present_source(&self, &info, &selected) == VK_SUCCESS && !self.status.presentation.enabled,
+        "replaying an older output leaves frame generation off");
+    selected.frame_id = 3;
+    require(rsf_dlssgvk_present_source(&self, &info, &selected) == VK_SUCCESS && !self.status.presentation.enabled,
+        "an older Present cannot rewind the newest consumed source");
+    submitted_slot(self, 4, prepare, prepare); rsf_dlssgvk_submitted(&self, &prepare, 1);
     require(rsf_dlssgvk_present_source(&self, &info, nullptr) == VK_SUCCESS && !self.status.presentation.enabled &&
         !self.status.presentation.source_frame,"unknown output disables interpolation rather than using latest");
+    selected.frame_id = lease_frame = 4;
+    require(rsf_dlssgvk_present_source(&self, &info, &selected) == VK_SUCCESS && self.status.presentation.enabled &&
+        self.status.presentation.source_frame == 4,"unknown output cannot consume a newer unrelated recording");
     VkSwapchainKHR foreign = reinterpret_cast<VkSwapchainKHR>(99); info.pSwapchains = &foreign;
     const auto previous_presents = present_calls;
     require(rsf_dlssgvk_present(&self, &info) == VK_ERROR_INITIALIZATION_FAILED && present_calls == previous_presents,

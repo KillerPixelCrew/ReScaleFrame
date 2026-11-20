@@ -10,6 +10,7 @@
 #include <limits>
 #include <memory>
 #include "native_fg_dlss_vulkan_capture.h"
+#include "native_fg_dlss_vulkan_frames.h"
 #include "native_fg_source.h"
 
 #if defined(RSF_HAVE_STREAMLINE_VK)
@@ -31,14 +32,7 @@ struct Image {
     uint32_t width = 0, height = 0; VkFormat format = VK_FORMAT_UNDEFINED;
     bool initialized = false;
 };
-struct Slot {
-    rsf_frame_record record{};
-    uint64_t recording_sequence = 0;
-    void* prepare_commands = nullptr; void* hudless_commands = nullptr;
-    bool prepared = false, hudless = false, submitted_prepare = false, submitted_hudless = false;
-    bool recorded_prepare = false, recorded_hudless = false;
-    bool source_pending = false, consumer_pending = false, completion_unknown = false;
-    bool sdk_inputs_pending = false;
+struct Slot : rsf_dlss_vk_slot {
     VkSemaphore sdk_inputs_completion = VK_NULL_HANDLE;
     uint64_t sdk_inputs_value = 0;
     VkFence source_completion = VK_NULL_HANDLE, consumer_completion = VK_NULL_HANDLE;
@@ -59,8 +53,9 @@ struct rsf_dlssgvk {
     VkFormat format = VK_FORMAT_UNDEFINED;
     uint32_t width = 0, height = 0, backbuffers = 0, count = 1;
     bool claimed = false, requested = false, enabled = false, resources = false;
-    uint64_t latest = 0, presented = 0, actual_presents = 0, recording_sequence = 0, presented_sequence = 0;
-    std::array<Slot, 6> slots{};
+    uint64_t actual_presents = 0;
+    rsf_dlss_vk_timeline timeline{};
+    std::array<Slot, RSF_DLSS_VK_FRAME_SLOTS> slots{};
     VkPhysicalDeviceMemoryProperties memory{};
     PFN_vkCreateSwapchainKHR create_chain = nullptr; PFN_vkDestroySwapchainKHR destroy_chain = nullptr;
     PFN_vkGetSwapchainImagesKHR images = nullptr; PFN_vkAcquireNextImageKHR acquire = nullptr;
@@ -457,7 +452,7 @@ extern "C" rsf_backend_result rsf_dlssgvk_prepare(rsf_dlssgvk* self, void* comma
         !std::isfinite(input->motion_scale_x) || !std::isfinite(input->motion_scale_y) || !input->motion_scale_x || !input->motion_scale_y)
         return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     auto& slot = self->slots[record.frame_id % self->slots.size()];
-    if (slot.completion_unknown || (slot.recorded_prepare && !slot.submitted_prepare) || (slot.recorded_hudless && !slot.submitted_hudless)) return RSF_BACKEND_ERROR_NOT_READY;
+    if (!rsf_core_dlss_vk_can_prepare(&slot)) return RSF_BACKEND_ERROR_NOT_READY;
     if (wait_inputs(*self, slot) != RSF_BACKEND_OK) return RSF_BACKEND_ERROR_NOT_READY;
     const auto device = static_cast<VkDevice>(self->setup.graphics.device);
     for (auto fence : {slot.source_pending ? slot.source_completion : VK_NULL_HANDLE, slot.consumer_pending ? slot.consumer_completion : VK_NULL_HANDLE})
@@ -469,17 +464,13 @@ extern "C" rsf_backend_result rsf_dlssgvk_prepare(rsf_dlssgvk* self, void* comma
     if (!allocate(*self, slot.depth, record.render_width, record.render_height, VK_FORMAT_R32_SFLOAT) ||
         !allocate(*self, slot.motion, record.render_width, record.render_height, VK_FORMAT_R16G16_SFLOAT) ||
         !allocate(*self, slot.color, self->width, self->height, VK_FORMAT_R8G8B8A8_UNORM)) return RSF_BACKEND_ERROR_INIT_FAILED;
-    const auto& previous = self->slots[self->latest % self->slots.size()].record;
-    const bool reset = self->latest + 1 != record.frame_id || previous.session_id != record.session_id ||
-        previous.view_id != record.view_id || previous.resource_generation != record.resource_generation;
-    slot.record = record; slot.recording_sequence = ++self->recording_sequence;
-    if (reset) slot.record.flags |= RSF_FRAME_FLAG_RESET;
-    slot.prepared = slot.hudless = slot.submitted_prepare = slot.submitted_hudless = false;
-    slot.recorded_prepare = slot.recorded_hudless = false;
-    slot.prepare_commands = commands; slot.hudless_commands = nullptr;
+    rsf_core_dlss_vk_prepare_begin(&self->timeline, &slot, &record, commands);
     RecordCall call{*self, *input, static_cast<VkCommandBuffer>(commands), slot};
     const auto result = invoke(*self, prepare, record.session_id, record.frame_id, &call);
-    if (result == RSF_BACKEND_OK) { self->latest = record.frame_id; self->present_capture.remember(slot.record, self->count, self->status, self->enabled); }
+    if (result == RSF_BACKEND_OK) {
+        rsf_core_dlss_vk_prepare_accepted(&self->timeline, &slot);
+        self->present_capture.remember(slot.record, self->count, self->status, self->enabled);
+    }
     self->status.presentation.result = result; return result;
 #else
     return RSF_BACKEND_ERROR_NOT_COMPILED;
@@ -492,10 +483,8 @@ extern "C" rsf_backend_result rsf_dlssgvk_hudless(rsf_dlssgvk* self, void* comma
     if (!valid_record(*self, *input)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     if (!self->requested) return RSF_BACKEND_OK;
     const auto& record = *input->record; auto& slot = self->slots[record.frame_id % self->slots.size()];
-    if (!slot.prepared || slot.record.frame_id != record.frame_id || slot.record.session_id != record.session_id ||
-        slot.record.view_id != record.view_id || slot.record.resource_generation != record.resource_generation ||
-        !valid_image(*self, input->hudless, self->width, self->height, VK_FORMAT_R8G8B8A8_UNORM)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    slot.hudless_commands = commands;
+    if (!valid_image(*self, input->hudless, self->width, self->height, VK_FORMAT_R8G8B8A8_UNORM) ||
+        !rsf_core_dlss_vk_hudless_begin(&slot, &record, commands)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     RecordCall call{*self, *input, static_cast<VkCommandBuffer>(commands), slot};
     const auto result = invoke(*self, hudless, record.session_id, record.frame_id, &call);
     self->status.presentation.result = result; return result;
@@ -506,33 +495,18 @@ extern "C" rsf_backend_result rsf_dlssgvk_hudless(rsf_dlssgvk* self, void* comma
 extern "C" void rsf_dlssgvk_submitted(rsf_dlssgvk* self, void* const* commands, uint32_t count) {
 #if defined(RSF_HAVE_STREAMLINE_VK)
     if (!self || !commands) return;
-    // A reset/re-recorded command buffer can reuse an aborted frame's pointer.
-    // Its newest source owns that recording. Never promote abandoned records
-    // merely because their old command-buffer address appears in a later submit.
-    for (uint32_t i = 0; i < count; ++i) {
-        uint64_t newest = 0;
-        for (const auto& slot : self->slots) if ((slot.recorded_prepare && slot.prepare_commands == commands[i] && !slot.submitted_prepare) ||
-            (slot.recorded_hudless && slot.hudless_commands == commands[i] && !slot.submitted_hudless)) newest = (std::max)(newest, slot.recording_sequence);
-        for (auto& slot : self->slots) if (slot.recording_sequence < newest) {
-            if (slot.prepare_commands == commands[i] && !slot.submitted_prepare) { slot.prepared = slot.recorded_prepare = false; slot.prepare_commands = nullptr; }
-            if (slot.hudless_commands == commands[i] && !slot.submitted_hudless) { slot.hudless = slot.recorded_hudless = false; slot.hudless_commands = nullptr; }
-        }
-    }
-    for (auto& slot : self->slots) {
-        bool changed = false;
-        for (uint32_t i = 0; i < count; ++i) {
-            if (slot.recorded_prepare && slot.prepare_commands == commands[i] && !slot.submitted_prepare) { slot.submitted_prepare = true; changed = true; }
-            if (slot.recorded_hudless && slot.hudless_commands == commands[i] && !slot.submitted_hudless) { slot.submitted_hudless = true; changed = true; }
-        }
-        if (changed && !slot.completion_unknown) {
-            const auto device = static_cast<VkDevice>(self->setup.graphics.device);
-            // Prepare and HUD-less may submit separately, and an aborted frame
-            // can submit just one. Cover every accepted partial submission.
-            if ((slot.source_pending && self->wait_fences(device, 1, &slot.source_completion, VK_TRUE, 15000000000ull) != VK_SUCCESS) ||
-                self->reset_fences(device, 1, &slot.source_completion) != VK_SUCCESS || self->setup.graphics_submit(self->setup.queue_user,
-                0, nullptr, reinterpret_cast<uint64_t>(slot.source_completion)) != VK_SUCCESS) slot.completion_unknown = true;
-            else slot.source_pending = true;
-        }
+    std::array<rsf_dlss_vk_slot*, RSF_DLSS_VK_FRAME_SLOTS> states{};
+    for (size_t i = 0; i < states.size(); ++i) states[i] = &self->slots[i];
+    const auto fences = rsf_core_dlss_vk_submitted(states.data(), commands, count);
+    const auto device = static_cast<VkDevice>(self->setup.graphics.device);
+    for (size_t i = 0; i < states.size(); ++i) {
+        if (!(fences & (1u << i))) continue;
+        auto& slot = self->slots[i];
+        // Prepare and HUD-less may submit separately. Fence each actual handoff.
+        if ((slot.source_pending && self->wait_fences(device, 1, &slot.source_completion, VK_TRUE, 15000000000ull) != VK_SUCCESS) ||
+            self->reset_fences(device, 1, &slot.source_completion) != VK_SUCCESS || self->setup.graphics_submit(self->setup.queue_user,
+            0, nullptr, reinterpret_cast<uint64_t>(slot.source_completion)) != VK_SUCCESS) slot.completion_unknown = true;
+        else slot.source_pending = true;
     }
 #else
     (void)self; (void)commands; (void)count;
@@ -542,13 +516,12 @@ static int32_t dlss_present(rsf_dlssgvk* self, const void* present_info, const r
     if (explicit_source && !rsf::fg_present_identity_valid(source)) return -3;
 #if defined(RSF_HAVE_STREAMLINE_VK)
     if (!self || !present_info) return VK_ERROR_INITIALIZATION_FAILED;
-    const uint64_t source_frame = rsf::fg_present_frame(self->latest, source, explicit_source);
+    const uint64_t source_frame = rsf::fg_present_frame(self->timeline.last_prepared.frame_id, source, explicit_source);
     const auto& info = *static_cast<const VkPresentInfoKHR*>(present_info);
     if (info.swapchainCount != 1 || !info.pSwapchains || info.pSwapchains[0] != self->chain) return VK_ERROR_INITIALIZATION_FAILED;
     auto& slot = self->slots[source_frame % self->slots.size()];
     const bool identity = rsf::fg_present_identity_matches(slot.record, source, explicit_source);
-    const bool candidate = identity && source_frame && self->requested && slot.recording_sequence > self->presented_sequence && slot.record.frame_id == source_frame &&
-        slot.prepared && slot.hudless && slot.submitted_prepare && slot.submitted_hudless && !slot.completion_unknown;
+    const bool candidate = rsf_core_dlss_vk_present_candidate(&self->timeline, &slot, source_frame, identity, self->requested) != 0;
     struct Configure { rsf_dlssgvk& self; bool enabled; } call{*self, candidate};
     auto configured = invoke(*self, [](void*, uintptr_t, void* user) -> rsf_backend_result {
         auto& value = *static_cast<Configure*>(user); return configure(value.self, value.enabled);
@@ -581,8 +554,7 @@ static int32_t dlss_present(rsf_dlssgvk* self, const void* present_info, const r
     }
     if (configuration_result != RSF_BACKEND_OK) self->status.sdk_result = configuration_sdk_result;
     self->status.asynchronous_present_result = asynchronous_error.exchange(0);
-    self->presented = source_frame;
-    self->presented_sequence = explicit_source && !identity ? self->recording_sequence : slot.recording_sequence;
+    rsf_core_dlss_vk_presented(&self->timeline, &slot, source_frame, identity);
     self->status.presentation.source_frame = valid ? source_frame : 0;
     self->status.presentation.enabled = valid && !self->status.sdk_status && !self->status.asynchronous_present_result;
     self->status.presentation.result = result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR ?
@@ -612,7 +584,7 @@ extern "C" rsf_backend_result rsf_dlssgvk_drain(rsf_dlssgvk* self) try {
 #if defined(RSF_HAVE_STREAMLINE_VK)
     // A recorded copy can still reference SDK resources in an unsubmitted list.
     for (const auto& slot : self->slots)
-        if ((slot.recorded_prepare && !slot.submitted_prepare) || (slot.recorded_hudless && !slot.submitted_hudless))
+        if (rsf_core_dlss_vk_unsubmitted(&slot))
             return RSF_BACKEND_ERROR_NOT_READY;
     const auto timeout_epoch = VulkanStorySlWorkerTimeoutEpoch();
     const auto disabled = invoke(*self, disable); if (disabled != RSF_BACKEND_OK) return disabled;

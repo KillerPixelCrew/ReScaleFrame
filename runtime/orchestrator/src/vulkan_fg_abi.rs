@@ -8,6 +8,7 @@ type rsf_backend_result = i32;
 pub const RSF_FGVK_ABI_VERSION: u32 = 1;
 pub const RSF_FGVK_HOST_ABI_VERSION: u32 = 1;
 pub const RSF_FGVK_LATENCY_ABI_VERSION: u32 = 1;
+pub const RSF_DLSS_VK_FRAME_SLOTS: u32 = 6;
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct rsf_fgvk {
@@ -253,6 +254,73 @@ const _: () = {
         [::core::mem::offset_of!(rsf_dlss_capture_source, generated_count) - 584usize];
     ["Offset of field: rsf_dlss_capture_source::configured"]
         [::core::mem::offset_of!(rsf_dlss_capture_source, configured) - 588usize];
+};
+#[repr(C)]
+pub struct rsf_dlss_vk_slot {
+    pub record: rsf_frame_record,
+    pub recording_sequence: u64,
+    pub prepare_commands: *mut ::core::ffi::c_void,
+    pub hudless_commands: *mut ::core::ffi::c_void,
+    pub prepared: u32,
+    pub hudless: u32,
+    pub submitted_prepare: u32,
+    pub submitted_hudless: u32,
+    pub recorded_prepare: u32,
+    pub recorded_hudless: u32,
+    pub source_pending: u32,
+    pub consumer_pending: u32,
+    pub completion_unknown: u32,
+    pub sdk_inputs_pending: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_dlss_vk_slot"][::core::mem::size_of::<rsf_dlss_vk_slot>() - 544usize];
+    ["Alignment of rsf_dlss_vk_slot"][::core::mem::align_of::<rsf_dlss_vk_slot>() - 8usize];
+    ["Offset of field: rsf_dlss_vk_slot::record"]
+        [::core::mem::offset_of!(rsf_dlss_vk_slot, record) - 0usize];
+    ["Offset of field: rsf_dlss_vk_slot::recording_sequence"]
+        [::core::mem::offset_of!(rsf_dlss_vk_slot, recording_sequence) - 480usize];
+    ["Offset of field: rsf_dlss_vk_slot::prepare_commands"]
+        [::core::mem::offset_of!(rsf_dlss_vk_slot, prepare_commands) - 488usize];
+    ["Offset of field: rsf_dlss_vk_slot::hudless_commands"]
+        [::core::mem::offset_of!(rsf_dlss_vk_slot, hudless_commands) - 496usize];
+    ["Offset of field: rsf_dlss_vk_slot::prepared"]
+        [::core::mem::offset_of!(rsf_dlss_vk_slot, prepared) - 504usize];
+    ["Offset of field: rsf_dlss_vk_slot::hudless"]
+        [::core::mem::offset_of!(rsf_dlss_vk_slot, hudless) - 508usize];
+    ["Offset of field: rsf_dlss_vk_slot::submitted_prepare"]
+        [::core::mem::offset_of!(rsf_dlss_vk_slot, submitted_prepare) - 512usize];
+    ["Offset of field: rsf_dlss_vk_slot::submitted_hudless"]
+        [::core::mem::offset_of!(rsf_dlss_vk_slot, submitted_hudless) - 516usize];
+    ["Offset of field: rsf_dlss_vk_slot::recorded_prepare"]
+        [::core::mem::offset_of!(rsf_dlss_vk_slot, recorded_prepare) - 520usize];
+    ["Offset of field: rsf_dlss_vk_slot::recorded_hudless"]
+        [::core::mem::offset_of!(rsf_dlss_vk_slot, recorded_hudless) - 524usize];
+    ["Offset of field: rsf_dlss_vk_slot::source_pending"]
+        [::core::mem::offset_of!(rsf_dlss_vk_slot, source_pending) - 528usize];
+    ["Offset of field: rsf_dlss_vk_slot::consumer_pending"]
+        [::core::mem::offset_of!(rsf_dlss_vk_slot, consumer_pending) - 532usize];
+    ["Offset of field: rsf_dlss_vk_slot::completion_unknown"]
+        [::core::mem::offset_of!(rsf_dlss_vk_slot, completion_unknown) - 536usize];
+    ["Offset of field: rsf_dlss_vk_slot::sdk_inputs_pending"]
+        [::core::mem::offset_of!(rsf_dlss_vk_slot, sdk_inputs_pending) - 540usize];
+};
+#[repr(C)]
+pub struct rsf_dlss_vk_timeline {
+    pub last_prepared: rsf_frame_record,
+    pub recording_sequence: u64,
+    pub presented_sequence: u64,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_dlss_vk_timeline"][::core::mem::size_of::<rsf_dlss_vk_timeline>() - 496usize];
+    ["Alignment of rsf_dlss_vk_timeline"][::core::mem::align_of::<rsf_dlss_vk_timeline>() - 8usize];
+    ["Offset of field: rsf_dlss_vk_timeline::last_prepared"]
+        [::core::mem::offset_of!(rsf_dlss_vk_timeline, last_prepared) - 0usize];
+    ["Offset of field: rsf_dlss_vk_timeline::recording_sequence"]
+        [::core::mem::offset_of!(rsf_dlss_vk_timeline, recording_sequence) - 480usize];
+    ["Offset of field: rsf_dlss_vk_timeline::presented_sequence"]
+        [::core::mem::offset_of!(rsf_dlss_vk_timeline, presented_sequence) - 488usize];
 };
 #[repr(C)]
 #[derive(Copy, Clone)]
