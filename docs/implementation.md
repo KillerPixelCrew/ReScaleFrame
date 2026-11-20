@@ -283,6 +283,12 @@ Nine focused MSVC contracts passed in both configurations. All 257 locked
 Rust tests, Clippy, formatting and adapter export parity passed. Live
 overlay changes and generated presentation remain open.
 
+The refreshed Release build at `7a21a20` preserved the exact export
+names and ordinals for Runtime (381), AC7 (256), Loader (273) and
+Minecraft (267). Nine focused contracts passed, including the DLL and
+embedded SR policy and callback-host forms, the D3D11 Present C11 and
+C++ consumers, and the Vulkan and shared shim export checks.
+
 The first source inspection found that the public frame sequencer opened a rendered
 frame and assigned its provenance under separate locks. Direct callers could read
 or retire the slot between those operations. The FG session adds its own outer
