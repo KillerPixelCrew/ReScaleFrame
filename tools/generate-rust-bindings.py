@@ -130,3 +130,14 @@ generate("runtime/orchestrator/src/fg12_abi.rs", "runtime/orchestrator/src/fg12_
           "--raw-line", "use rsf_game_sys::{\n"
                         "    rsf_frame_record, rsf_game_cpu_event, rsf_game_cpu_event_fn, rsf_game_render_pass,\n"
                         "};"])
+generate("runtime/orchestrator/src/native_fg_abi.rs", "runtime/orchestrator/src/native_fg_platform.h",
+         "rsf_nfg_(platform|texture_info|cpu_owner)", "RSF_NFG_.*",
+         ["-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Iruntime/backends/dlss/include",
+          "-Iruntime/graphics/include", "-Iruntime/presentation/include", "-Isdk/game/include"],
+         ["--no-recursive-allowlist",
+          "--raw-line", "use crate::cpu_abi::rsf_native_cpu_frame;",
+          "--raw-line", "use crate::render_abi::{\n"
+                        "    rsf_backend_log_fn, rsf_dlss_frame, rsf_fg_frame, rsf_fg_status, rsf_generation_provider,\n"
+                        "};",
+          "--raw-line", "use crate::scene_abi::rsf_native_scene_identity;",
+          "--raw-line", "use rsf_game_sys::{rsf_frame_record, rsf_game_render_pass};"])

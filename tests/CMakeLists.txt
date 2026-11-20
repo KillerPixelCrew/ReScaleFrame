@@ -401,10 +401,6 @@ target_link_libraries(rsf_fg_session_test PRIVATE rsf_orchestrator rsf_build_opt
 add_test(NAME fg_session COMMAND rsf_fg_session_test)
 set_tests_properties(fg_session PROPERTIES TIMEOUT 30)
 
-add_executable(rsf_fg_status_snapshot_test fg_status_snapshot.cpp)
-target_link_libraries(rsf_fg_status_snapshot_test PRIVATE ReScaleFrame::OrchestratorCore rsf_build_options)
-add_test(NAME fg_status_snapshot COMMAND rsf_fg_status_snapshot_test)
-
 add_executable(rsf_fg12_abi_test fg12_abi.cpp)
 target_link_libraries(rsf_fg12_abi_test PRIVATE rsf_orchestrator rsf_build_options)
 add_test(NAME fg12_abi COMMAND rsf_fg12_abi_test)

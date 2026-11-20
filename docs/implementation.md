@@ -246,6 +246,20 @@ All 112 workspace Rust tests, formatting, Clippy and binding regeneration
 passed. The worker also built the optional Godot target in Debug. Device
 and game validation remain pending. See [the D3D12 cutover audit](research/rust-d3d12-fg-cutover.md).
 
+Rust owns native D3D11 FG transfer slots, leases, shared-host SR evaluation,
+HUD-less capture, Prepare, Present and retirement. Prepare now refuses a
+contended slot as `NOT_PREPARED`. It shares the existing Rust scene and
+status owners, including the former native snapshot contract. The native
+CPU pacing and marker path still supplies the same timing facts.
+
+The integrated Release build produced the Runtime, both carriers, Minecraft,
+the C++ Anomaly adapter and both D3D11 FG device fixtures. All 16 focused
+CPU and ABI cases passed, including Anomaly Standard and AVX input, D3D11
+Present and FG tables, and D3D12 embedded linkage. All 118 workspace Rust
+tests, formatting, Clippy and binding regeneration passed. Runtime, both
+carriers and Minecraft export names and ordinals matched. The device
+fixtures were built. GPU ordering and in-game behavior remain unverified.
+
 The native D3D11 exposure cache now lives in Rust and shares the fullscreen
 pass owner with output reinsertion. It borrows a valid 1×1 R32 scalar
 directly, converts supported float vectors with the existing copy shader,
