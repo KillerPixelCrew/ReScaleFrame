@@ -469,7 +469,7 @@ pub(crate) unsafe extern "C" fn rsf_settings_store_write_layout(
 /// # Safety
 /// `ini` and `section` are terminated UTF-16 strings; `options` is readable for `struct_size`.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_settings_store_write_sharpening(
+pub(crate) unsafe extern "C" fn rsf_settings_store_write_sharpening(
     ini: PCWSTR,
     section: PCWSTR,
     options: *const Sharpening,
@@ -483,6 +483,23 @@ unsafe extern "C" fn rsf_settings_store_write_sharpening(
     write_sharpening(&file, options, &mut |file, key, value| {
         file.write(key, value)
     })
+}
+
+/// Persists only the DLSS preset key for hosts that own their other SR settings. The caller has
+/// validated `preset`.
+///
+/// # Safety
+/// `ini` and `section` are terminated UTF-16 strings.
+pub(crate) unsafe fn write_dlss_preset(ini: PCWSTR, section: PCWSTR, preset: u32) -> i32 {
+    let Some(file) = File::new(ini, section) else {
+        return INVALID_ARGUMENT;
+    };
+    let value = wide(&preset.to_string());
+    if file.write(&wide(KEYS[2]), value.as_ptr()) {
+        OK
+    } else {
+        NOT_READY
+    }
 }
 
 #[cfg(test)]
@@ -657,6 +674,34 @@ mod tests {
             assert_eq!(fg_mode, mode);
             assert_eq!(settings.fg_enabled, u32::from(mode != 0));
         }
+    }
+
+    #[test]
+    fn preset_write_replaces_only_the_preset_key() {
+        let ini = Temporary::new("preset");
+        let section = wide("Rendering");
+        let file = File::new(ini.0.as_ptr(), section.as_ptr()).unwrap();
+        // Callback hosts saved the key as DlssPreset; profile keys match case-insensitively.
+        assert!(file.write(&wide("DlssPreset"), wide("2").as_ptr()));
+        assert!(file.write(&wide("Sharpness"), wide("0.25").as_ptr()));
+        assert_eq!(
+            unsafe { write_dlss_preset(ini.0.as_ptr(), section.as_ptr(), 11) },
+            OK
+        );
+        assert_eq!(file.integer("DlssPreset", 0), 11);
+        assert_eq!(file.integer("DLSSPreset", 0), 11);
+        assert_eq!(file.decimal("Sharpness", 0.0), 0.25);
+        assert_eq!(
+            ini.contents()
+                .to_ascii_lowercase()
+                .matches("dlsspreset")
+                .count(),
+            1
+        );
+        assert_eq!(
+            unsafe { write_dlss_preset(null(), section.as_ptr(), 1) },
+            INVALID_ARGUMENT
+        );
     }
 
     #[test]
