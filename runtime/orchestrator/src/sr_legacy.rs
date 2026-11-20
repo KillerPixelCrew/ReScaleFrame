@@ -83,7 +83,7 @@ impl Exposure {
     }
 }
 
-struct Adapter {
+pub(super) struct Adapter {
     services: &'static Services,
     bridge: *mut Bridge,
     resolve: *mut Resolve,
@@ -335,7 +335,7 @@ impl Adapter {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_sr_legacy_select(
+pub(super) unsafe extern "C" fn rsf_sr_legacy_select(
     adapter: *mut Adapter,
     backend: u32,
     quality: u32,
@@ -360,7 +360,7 @@ unsafe extern "C" fn rsf_sr_legacy_select(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_sr_legacy_evaluate(
+pub(super) unsafe extern "C" fn rsf_sr_legacy_evaluate(
     adapter: *mut Adapter,
     context: *mut c_void,
     input: *const Frame,
@@ -377,7 +377,7 @@ unsafe extern "C" fn rsf_sr_legacy_evaluate(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_sr_legacy_warm_up(
+pub(super) unsafe extern "C" fn rsf_sr_legacy_warm_up(
     adapter: *mut Adapter,
     render_width: u32,
     render_height: u32,
@@ -400,14 +400,14 @@ unsafe extern "C" fn rsf_sr_legacy_warm_up(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_sr_legacy_destroy(adapter: *mut Adapter) {
+pub(super) unsafe extern "C" fn rsf_sr_legacy_destroy(adapter: *mut Adapter) {
     if !adapter.is_null() {
         drop(unsafe { Box::from_raw(adapter) });
     }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_sr_legacy_fg_inputs(
+pub(super) unsafe extern "C" fn rsf_sr_legacy_fg_inputs(
     adapter: *const Adapter,
     depth: *mut *mut c_void,
     motion: *mut *mut c_void,
@@ -429,6 +429,115 @@ unsafe extern "C" fn rsf_sr_legacy_fg_inputs(
         motion.write(m);
     }
     i32::from(!d.is_null() && !m.is_null())
+}
+
+// A legacy adapter over a fake bridge, for the synthetic SR pipeline contracts.
+#[cfg(test)]
+pub(super) mod fake {
+    use super::*;
+    use std::cell::Cell;
+
+    thread_local! {
+        pub(in crate) static SELECT: Cell<i32> = const { Cell::new(0) };
+        pub(in crate) static RENDER: Cell<[u32; 2]> = const { Cell::new([320, 180]) };
+        pub(in crate) static EVALUATIONS: Cell<u32> = const { Cell::new(0) };
+        pub(in crate) static DESTROYED: Cell<u32> = const { Cell::new(0) };
+    }
+    const BRIDGE: *mut Bridge = ptr::without_provenance_mut(0x40);
+    const RESOLVE: *mut Resolve = ptr::without_provenance_mut(0x80);
+    pub(crate) const DEPTH: *mut c_void = ptr::without_provenance_mut(0x90);
+    pub(crate) const MOTION: *mut c_void = ptr::without_provenance_mut(0xa0);
+
+    unsafe extern "C" fn create(_: *const rsf_sr_session_setup, out: *mut *mut Bridge) -> i32 {
+        unsafe { out.write(BRIDGE) };
+        0
+    }
+    unsafe extern "C" fn select(_: *mut Bridge, _: u32, _: u32, _: u64) -> i32 {
+        SELECT.get()
+    }
+    unsafe extern "C" fn status(_: *const Bridge, out: *mut rsf_sr_session_status) -> i32 {
+        let [width, height] = RENDER.get();
+        unsafe {
+            (*out).render_width = width;
+            (*out).render_height = height;
+        }
+        0
+    }
+    unsafe extern "C" fn exposure(_: *mut Bridge, _: u32) -> i32 {
+        0
+    }
+    unsafe extern "C" fn evaluate(_: *mut Bridge, _: *mut c_void, _: *const rsf_sr_frame) -> i32 {
+        EVALUATIONS.set(EVALUATIONS.get() + 1);
+        0
+    }
+    unsafe extern "C" fn warm_up(_: *mut Bridge, _: u32, _: u32, _: u32, _: u32, _: u32) -> i32 {
+        0
+    }
+    unsafe extern "C" fn destroy(_: *mut Bridge) {
+        DESTROYED.set(DESTROYED.get() + 1);
+    }
+    unsafe extern "C" fn fit(
+        _: *mut c_void,
+        width: u32,
+        height: u32,
+        resolve: *mut *mut Resolve,
+        cached_width: *mut u32,
+        cached_height: *mut u32,
+        rebuilt: *mut u32,
+    ) -> i32 {
+        unsafe {
+            resolve.write(RESOLVE);
+            cached_width.write(width);
+            cached_height.write(height);
+            rebuilt.write(1);
+        }
+        1
+    }
+    unsafe extern "C" fn resolve(
+        _: *mut Resolve,
+        _: *mut c_void,
+        _: *mut c_void,
+        _: *mut c_void,
+        _: *const rsf_motion_resolve_params,
+    ) -> i32 {
+        1
+    }
+    unsafe extern "C" fn depth(_: *mut Resolve) -> *mut c_void {
+        DEPTH
+    }
+    unsafe extern "C" fn motion(_: *mut Resolve) -> *mut c_void {
+        MOTION
+    }
+    unsafe extern "C" fn destroy_resolve(_: *mut Resolve) {}
+    unsafe extern "C" fn dump_active() -> i32 {
+        0
+    }
+    unsafe extern "C" fn dump_frame(_: *mut c_void, _: *const Frame, _: u32) {}
+
+    static SERVICES: Services = Services {
+        create,
+        select,
+        status,
+        exposure,
+        evaluate,
+        warm_up,
+        destroy,
+        fit_resolve: fit,
+        resolve,
+        depth,
+        motion,
+        destroy_resolve,
+        dump_active,
+        dump_frame,
+    };
+
+    pub(crate) fn adapter() -> *mut Adapter {
+        let setup: rsf_sr_session_setup = unsafe { std::mem::zeroed() };
+        let mut out = ptr::null_mut();
+        let result = unsafe { rsf_core_sr_legacy_create(&setup, 1.0, 0, 1, &SERVICES, &mut out) };
+        assert_eq!(result, 0);
+        out
+    }
 }
 
 #[cfg(test)]

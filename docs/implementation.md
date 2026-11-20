@@ -452,6 +452,19 @@ all 141 Rust workspace tests and Clippy passed. Release exports matched
 the Runtime and both carriers. Device and in-game validation remain open.
 See [the D3D11 host cutover audit](research/rust-d3d11-host-cutover.md).
 
+Rust now owns the shared D3D11 SR pipeline, including provider sessions,
+dispatch, history, quality and backend switching, and output and layer
+lifetime. Resize clears a new target before publishing it. A refused
+resize keeps the previous target. The native calls retain the original
+shader passes and vendor operations.
+
+The integrated Release build passed 13 focused contracts, including the
+C++ Anomaly SR ABI and both input profiles. All 176 locked Rust tests,
+formatting and Clippy passed. Runtime, both carriers and Minecraft kept
+their export names and ordinals. The D3D11 SR device fixtures built.
+Device and in-game validation remain pending.
+See [the D3D11 SR pipeline cutover audit](research/rust-d3d11-sr-pipeline-cutover.md).
+
 Direct3D CPU frame timing, routed markers, receipt accounting and pacing now
 live in Rust. Each marker carries the provider generation that admitted its
 source. Reflex status remains readable during sleep, and Anti-Lag 2 render
