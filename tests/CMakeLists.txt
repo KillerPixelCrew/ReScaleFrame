@@ -661,7 +661,7 @@ if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_FFX_INCLUDE}
     target_include_directories(rsf_native_fsr4_fg_state_test PRIVATE ../runtime/orchestrator/include)
     target_include_directories(rsf_native_fsr4_fg_state_test SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}" "${RSF_FFX_INCLUDE}" "${RSF_FFX_INCLUDE}/../../framegeneration/include")
     target_compile_definitions(rsf_native_fsr4_fg_state_test PRIVATE RSF_RUNTIME_BUILD)
-    target_link_libraries(rsf_native_fsr4_fg_state_test PRIVATE ReScaleFrame::GameSDK ReScaleFrame::Contract ReScaleFrame::FrameDump rsf_build_options d3d12 dxgi)
+    target_link_libraries(rsf_native_fsr4_fg_state_test PRIVATE ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_orchestrator_rust rsf_build_options d3d12 dxgi)
     add_test(NAME native_fsr4_fg_state_contract COMMAND rsf_native_fsr4_fg_state_test)
 endif()
 add_test(NAME native_xess_vulkan_device COMMAND rsf_native_xess_vulkan_test --device)

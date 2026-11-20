@@ -380,6 +380,18 @@ tests, formatting and Clippy passed. Runtime, both carriers and Minecraft
 kept their export names and ordinals. The three graphics readback fixtures
 built. Device and game validation remain pending.
 
+The FSR4 Vulkan presentation owner now manages its bridge, imported
+resources, source recordings, Present, and checked retirement in Rust.
+Its source fences prove capture completion independently of the imported
+Vulkan/D3D12 timeline. Superseded recording groups cannot publish.
+
+The combined Release build passed nine focused Vulkan contracts, including
+FSR4 state, bridge, shared importer and ordinary FidelityFX and DLSS
+submission cases. All 192 locked Rust tests, formatting and Clippy passed.
+Runtime, carrier and Minecraft exports matched. The worker also verified
+the feature-disabled build. Device and game execution remain pending.
+See [the FSR4 Vulkan FG audit](research/rust-vulkan-fsr4-fg-cutover.md).
+
 The OpenGL pipeline now keeps its shared surface and SR lifecycle, frame
 identity, fallback and FG requests in Rust. Native callbacks handle OpenGL,
 DXGI and the presentation child window. A rejected SR rebuild remains
