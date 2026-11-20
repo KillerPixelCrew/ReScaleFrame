@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 // Anomaly's use of the Runtime's shared overlay (rsf_get_overlay_api). Everything the Runtime must
-// not know lives here: the engine window class, the Present and DirectInput boundaries, what this
-// adapter can and cannot apply. The service never loads a second Runtime; it queries the one the
-// carrier already loaded.
+// not know lives in this adapter: the engine window class, the Present and DirectInput boundaries,
+// what this adapter can and cannot apply. The service state and translation are in overlay.rs; these
+// declarations forward to it (overlay_service.cpp). The service never loads a second Runtime; it
+// queries the one the carrier already loaded.
 #pragma once
 #include "overlay_hooks.h"
 #include "overlay_input_gate.h"
@@ -17,7 +18,7 @@ enum class StartStatus {
     api_missing,         // the Runtime does not export rsf_get_overlay_api
     api_refused,         // version mismatch, short table, or a missing entry
     configure_refused,   // the Runtime rejected the adapter's setup
-    hooks_refused,       // the guarded Present/DirectInput hooks could not be installed
+    hooks_refused,       // the guarded Present/DirectInput hooks could not be installed, now or at an earlier start
 };
 
 struct StartOptions {
@@ -38,7 +39,8 @@ struct StartOptions {
 StartStatus bind_api(rsf_get_overlay_api_fn query, rsf_overlay_api* out, const char** reason) noexcept;
 
 // Cold start, outside DllMain, before the first Present. Refuses cleanly and installs no hook unless
-// the API binds and the Runtime accepts the configuration. One call per process.
+// the API binds and the Runtime accepts the configuration. The Runtime accepts one configuration, so
+// after a hook refusal every later start refuses as well.
 // INI keys: [Anomaly] Overlay=1 selects this (read by the caller); OverlayKeyPoll=0 disables the
 // adapter's own Insert fallback; OverlayCapture=1 writes PNGs of the presented backbuffer after the panel
 // drew, for the first OverlayCaptureFrames frames (default 3, spaced OverlayCaptureStride presents apart,

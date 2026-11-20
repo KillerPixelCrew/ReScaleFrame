@@ -2,16 +2,16 @@
 #pragma once
 // Every adapter option, as the shared overlay shows it (AGENTS.md Rule 2). Stages add the options they can change
 // while the game runs; register_restart_options() adds the ones read only at startup, so they can still be set and
-// saved from the panel. The overlay service (overlay_service.cpp) hands the list to the Runtime's overlay API.
+// saved from the panel. The list lives in the overlay service (overlay.rs), which hands it to the Runtime's overlay API.
 //
 // Threading: the list is built at cold start, before the overlay starts. get/set run on the Present-owner thread,
 // which is the engine's render thread, the same thread the stages read these values on.
+#include "overlay_platform.h"
 #include <windows.h>
 #include <cstdint>
 #include <cstdio>
 #include <cwchar>
 #include <string>
-#include <vector>
 
 namespace rsf::anomaly::options {
 struct Option {
@@ -23,9 +23,13 @@ struct Option {
     int32_t (*get)() noexcept {};
     void (*set)(int32_t) noexcept {};   // applies the value when live, and saves it
 };
-inline std::vector<Option>& registry() { static std::vector<Option> list; return list; }
 inline std::wstring& ini_path() { static std::wstring path; return path; }
-inline void add(const Option& option) noexcept try { registry().push_back(option); } catch (...) {}
+// An option without get or set is never shown.
+inline void add(const Option& option) noexcept {
+    const rsf_anomaly_overlay_option entry{option.label, option.toggle ? 1u : 0u, option.restart ? 1u : 0u,
+        option.minimum, option.maximum, option.step, option.divisor, option.get, option.set};
+    rsf_anomaly_overlay_option_add(&entry);
+}
 
 inline int32_t read_int(const wchar_t* key, int32_t fallback) noexcept {
     return ini_path().empty() ? fallback : static_cast<int32_t>(GetPrivateProfileIntW(L"Anomaly", key, fallback, ini_path().c_str()));
