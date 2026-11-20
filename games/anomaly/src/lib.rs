@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: MIT
+mod fg_inputs;
+mod fg_inputs_abi;
+
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, rsf_detect_game_fn, rsf_game_hooks_api, rsf_game_info,
     rsf_game_plugin_api, rsf_game_probe,

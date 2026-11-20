@@ -9,8 +9,8 @@
 //           pixels, previous minus current, the convention every FG provider reads (motion scale 1).
 // Without a motion target every pixel is camera motion (no object motion). Render thread only.
 #include <d3d11.h>
-#include <wrl/client.h>
 #include <cstdint>
+#include "fg_inputs_platform.h"
 
 namespace rsf::anomaly::fg {
 struct InputFrame {
@@ -22,22 +22,17 @@ struct InputFrame {
 class InputPass {
 public:
     enum class Result : uint8_t { Ok, Shader, Format, Size, Resources };
+    InputPass() noexcept = default;
+    ~InputPass() { release(); }
+    InputPass(const InputPass&) = delete;
+    InputPass& operator=(const InputPass&) = delete;
     // Builds lazily on the first run for this device. The outputs stay owned here until the next size change.
     Result run(ID3D11DeviceContext* context, const InputFrame& frame, void (*log)(void*, const char*), void* user) noexcept;
-    ID3D11Texture2D* depth() const noexcept { return depth_out_.Get(); }
-    ID3D11Texture2D* motion() const noexcept { return motion_out_.Get(); }
+    ID3D11Texture2D* depth() const noexcept;
+    ID3D11Texture2D* motion() const noexcept;
     void release() noexcept;
 
 private:
-    bool build(ID3D11Device*, void (*log)(void*, const char*), void* user) noexcept;
-    bool size(ID3D11Device*, uint32_t width, uint32_t height) noexcept;
-    Microsoft::WRL::ComPtr<ID3D11Device> device_;
-    Microsoft::WRL::ComPtr<ID3D11ComputeShader> shader_;
-    Microsoft::WRL::ComPtr<ID3D11Buffer> constants_;
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> depth_copy_, depth_out_, motion_out_;
-    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> depth_view_;
-    Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> depth_uav_, motion_uav_;
-    uint32_t width_{}, height_{};
-    bool failed_{};
+    rsf_anomaly_input_owner* owner_{};
 };
 }

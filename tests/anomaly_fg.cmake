@@ -17,7 +17,7 @@ add_executable(rsf_anomaly_fg_device_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_fg_
 target_include_directories(rsf_anomaly_fg_device_test PRIVATE "${RSF_ANOMALY_FG_SRC}"
     "${PROJECT_SOURCE_DIR}/runtime/backends/dlss/include"
     "$<TARGET_PROPERTY:rsf_orchestrator,INTERFACE_INCLUDE_DIRECTORIES>")
-target_link_libraries(rsf_anomaly_fg_device_test PRIVATE "$<TARGET_LINKER_FILE:rsf_orchestrator>" ReScaleFrame::GameSDK
+target_link_libraries(rsf_anomaly_fg_device_test PRIVATE rsf_anomaly_rust "$<TARGET_LINKER_FILE:rsf_orchestrator>" ReScaleFrame::GameSDK
     ReScaleFrame::Contract ReScaleFrame::Graphics d3d11 dxgi dxguid rsf_build_options)
 add_dependencies(rsf_anomaly_fg_device_test rsf_orchestrator)
 if(RSF_ANOMALY_SR_VENDOR_ROOT AND EXISTS "${RSF_ANOMALY_SR_VENDOR_ROOT}/streamline/sl.interposer.dll")
@@ -32,6 +32,7 @@ endif()
 
 # native_observer.cpp calls the FG stage from its boundaries.
 target_sources(rsf_anomaly_sr_hooks_test PRIVATE "${RSF_ANOMALY_FG_SRC}/fg_stage.cpp" "${RSF_ANOMALY_FG_SRC}/fg_inputs.cpp")
+target_link_libraries(rsf_anomaly_sr_hooks_test PRIVATE rsf_anomaly_rust)
 target_include_directories(rsf_anomaly_sr_hooks_test PRIVATE "$<TARGET_PROPERTY:rsf_orchestrator,INTERFACE_INCLUDE_DIRECTORIES>")
 
 add_test(NAME anomaly_input_events_standard_contract COMMAND rsf_anomaly_fg_device_test --input-contract standard)

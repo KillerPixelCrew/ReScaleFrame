@@ -38,6 +38,23 @@ All 216 locked Rust tests, formatting, Clippy, the four Runtime/carrier
 export inventories and the Anomaly export comparison passed. The live
 evidence above applies to the earlier C++ adapter revision.
 
+The Anomaly SR-off FG input pass now owns the accepted device, shader
+lease, output generations and dispatch constants in Rust. The native
+leaf retains the byte-identical HLSL and D3D11 calls. The pass refuses
+foreign-device depth and inputs whose subresource layout cannot be
+copied into the private depth texture. It keeps the earlier allocation
+on a refused resize and exposes outputs only after a successful pass.
+The device leaf saves bindings before the copy and disables inherited
+predication for the private dispatch.
+
+Seven focused native contracts passed per configuration, including
+the Standard and AVX engine hook and input-event contracts. Two Rust
+regressions cover the foreign-device check and allocation retry.
+Formatting, Clippy and locked workspace tests passed. The Anomaly
+export names and ordinals matched the C++ baseline and the FG device
+fixture built. The migrated SR-off path still needs device and game
+execution.
+
 The first source inspection found that the public frame sequencer opened a rendered
 frame and assigned its provenance under separate locks. Direct callers could read
 or retire the slot between those operations. The FG session adds its own outer
