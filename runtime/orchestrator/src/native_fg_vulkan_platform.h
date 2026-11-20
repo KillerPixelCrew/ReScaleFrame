@@ -27,11 +27,6 @@ typedef struct rsf_fgvk_provider {
 
 typedef struct rsf_fgvk_platform {
     const rsf_fgvk_provider* providers[6]; /* Indexed by the public FG backend ID. */
-    rsf_backend_result (*attach)(rsf_fgvk*);
-    rsf_backend_result (*drain_begin)(rsf_fgvk*);
-    void (*drain_end)(rsf_fgvk*);
-    rsf_backend_result (*retire)(rsf_fgvk*);
-    void (*release)(rsf_fgvk*);
 } rsf_fgvk_platform;
 
 #ifdef __cplusplus

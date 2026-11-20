@@ -2,6 +2,7 @@
 use crate::allocate_handle;
 use crate::sr_session::has_capacity;
 use crate::vulkan_fg_abi::*;
+use crate::vulkan_presentation::ProviderOperation;
 use crate::vulkan_sr_abi::RSF_SRVK_ABI_VERSION;
 use rsf_game_sys::rsf_frame_record;
 use std::ffi::c_void;
@@ -42,11 +43,10 @@ impl Drop for PrimaryClaim {
 }
 
 // The C ABI requires the host to serialize WSI calls and keep its callbacks
-// alive through retirement. The native presentation binding separately admits
+// alive through retirement. The presentation binding separately admits
 // CPU latency borrows, including sleep, and refuses destruction while borrowed.
 struct Owner {
     _claim: PrimaryClaim,
-    platform: &'static rsf_fgvk_platform,
     provider: &'static rsf_fgvk_provider,
     context: *mut c_void,
     backend: u32,
@@ -161,9 +161,12 @@ unsafe extern "C" fn rsf_core_fgvk_create(
     let Some(claim) = PrimaryClaim::acquire() else {
         return NOT_READY;
     };
+    let creation = match ProviderOperation::create() {
+        Ok(creation) => creation,
+        Err(error) => return error,
+    };
     let owner = allocate_handle(Owner {
         _claim: claim,
-        platform,
         provider,
         context: ptr::null_mut(),
         backend,
@@ -194,8 +197,7 @@ unsafe extern "C" fn rsf_core_fgvk_create(
         };
     }
     if result == OK {
-        let attach = platform.attach.expect("presentation attach callback");
-        result = unsafe { attach(handle) };
+        result = creation.attach_created(handle);
     }
     if result != OK {
         if context.is_null() {
@@ -482,22 +484,12 @@ unsafe extern "C" fn rsf_fgvk_drain(handle: *mut rsf_fgvk) -> i32 {
     let Some(owner) = (unsafe { owner_ref(handle) }) else {
         return OK;
     };
-    let begin = owner
-        .platform
-        .drain_begin
-        .expect("presentation drain begin callback");
-    let available = unsafe { begin(handle) };
-    if available != OK {
-        return available;
-    }
+    let _operation = match ProviderOperation::drain(handle) {
+        Ok(operation) => operation,
+        Err(error) => return error,
+    };
     let drain = owner.provider.drain.expect("provider drain callback");
-    let result = unsafe { drain(owner.context) };
-    let end = owner
-        .platform
-        .drain_end
-        .expect("presentation drain end callback");
-    unsafe { end(handle) };
-    result
+    unsafe { drain(owner.context) }
 }
 
 #[unsafe(no_mangle)]
@@ -505,22 +497,15 @@ unsafe extern "C" fn rsf_fgvk_destroy(handle: *mut rsf_fgvk) -> i32 {
     let Some(owner) = (unsafe { owner_ref(handle) }) else {
         return OK;
     };
-    let retire = owner.platform.retire.expect("presentation retire callback");
-    let closing = unsafe { retire(handle) };
-    if closing != OK {
-        return closing;
-    }
+    let mut operation = match ProviderOperation::destroy(handle) {
+        Ok(operation) => operation,
+        Err(error) => return error,
+    };
     let destroy = owner.provider.destroy.expect("provider destroy callback");
     let result = unsafe { destroy(owner.context) };
     if result == OK {
-        let release = owner
-            .platform
-            .release
-            .expect("presentation release callback");
-        unsafe {
-            release(handle);
-            drop(Box::from_raw(handle.cast::<Owner>()));
-        }
+        operation.destroyed();
+        unsafe { drop(Box::from_raw(handle.cast::<Owner>())) };
     }
     result
 }

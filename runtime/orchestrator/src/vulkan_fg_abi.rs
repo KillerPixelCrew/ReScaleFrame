@@ -341,29 +341,11 @@ const _: () = {
 #[derive(Copy, Clone)]
 pub struct rsf_fgvk_platform {
     pub providers: [*const rsf_fgvk_provider; 6usize],
-    pub attach:
-        ::core::option::Option<unsafe extern "C" fn(arg1: *mut rsf_fgvk) -> rsf_backend_result>,
-    pub drain_begin:
-        ::core::option::Option<unsafe extern "C" fn(arg1: *mut rsf_fgvk) -> rsf_backend_result>,
-    pub drain_end: ::core::option::Option<unsafe extern "C" fn(arg1: *mut rsf_fgvk)>,
-    pub retire:
-        ::core::option::Option<unsafe extern "C" fn(arg1: *mut rsf_fgvk) -> rsf_backend_result>,
-    pub release: ::core::option::Option<unsafe extern "C" fn(arg1: *mut rsf_fgvk)>,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of rsf_fgvk_platform"][::core::mem::size_of::<rsf_fgvk_platform>() - 88usize];
+    ["Size of rsf_fgvk_platform"][::core::mem::size_of::<rsf_fgvk_platform>() - 48usize];
     ["Alignment of rsf_fgvk_platform"][::core::mem::align_of::<rsf_fgvk_platform>() - 8usize];
     ["Offset of field: rsf_fgvk_platform::providers"]
         [::core::mem::offset_of!(rsf_fgvk_platform, providers) - 0usize];
-    ["Offset of field: rsf_fgvk_platform::attach"]
-        [::core::mem::offset_of!(rsf_fgvk_platform, attach) - 48usize];
-    ["Offset of field: rsf_fgvk_platform::drain_begin"]
-        [::core::mem::offset_of!(rsf_fgvk_platform, drain_begin) - 56usize];
-    ["Offset of field: rsf_fgvk_platform::drain_end"]
-        [::core::mem::offset_of!(rsf_fgvk_platform, drain_end) - 64usize];
-    ["Offset of field: rsf_fgvk_platform::retire"]
-        [::core::mem::offset_of!(rsf_fgvk_platform, retire) - 72usize];
-    ["Offset of field: rsf_fgvk_platform::release"]
-        [::core::mem::offset_of!(rsf_fgvk_platform, release) - 80usize];
 };

@@ -464,10 +464,18 @@ set_tests_properties(fg_switching PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
 add_executable(rsf_latency_host_test latency_host.cpp)
 
+# These latency fixtures supply fake FG endpoints while linking the production Rust lease.
+set(rsf_vulkan_latency_test_endpoints
+    rsf_fgvk_backend=rsf_test_fgvk_backend
+    rsf_fgvk_latency_options=rsf_test_fgvk_latency_options
+    rsf_fgvk_latency_sleep=rsf_test_fgvk_latency_sleep
+    rsf_fgvk_latency_marker=rsf_test_fgvk_latency_marker
+    rsf_fgvk_latency_get_status=rsf_test_fgvk_latency_get_status)
 add_executable(rsf_native_latency_vulkan_test native_latency_vulkan.cpp ../runtime/orchestrator/src/native_latency_vulkan.cpp)
 target_sources(rsf_native_latency_vulkan_test PRIVATE ../runtime/orchestrator/src/latency_amd_vulkan.cpp)
 target_include_directories(rsf_native_latency_vulkan_test PRIVATE ../runtime/orchestrator/include)
-target_compile_definitions(rsf_native_latency_vulkan_test PRIVATE RSF_RUNTIME_BUILD RSF_HAVE_STREAMLINE_VK=1)
+target_compile_definitions(rsf_native_latency_vulkan_test PRIVATE RSF_RUNTIME_BUILD RSF_HAVE_STREAMLINE_VK=1
+    ${rsf_vulkan_latency_test_endpoints})
 target_link_libraries(rsf_native_latency_vulkan_test PRIVATE ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_native_cpu rsf_build_options)
 add_test(NAME native_latency_vulkan_contract COMMAND rsf_native_latency_vulkan_test)
 find_program(RSF_DOTNET_EXECUTABLE NAMES dotnet)
@@ -652,7 +660,8 @@ if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h")
     add_test(NAME godot_vulkan_creation_contract COMMAND rsf_godot_vulkan_creation_test)
     add_executable(rsf_native_antilag_vulkan_test native_antilag_vulkan.cpp
         ../runtime/orchestrator/src/native_latency_vulkan.cpp ../runtime/orchestrator/src/latency_amd_vulkan.cpp)
-    target_compile_definitions(rsf_native_antilag_vulkan_test PRIVATE RSF_RUNTIME_BUILD RSF_HAVE_ANTILAG_VK=1)
+    target_compile_definitions(rsf_native_antilag_vulkan_test PRIVATE RSF_RUNTIME_BUILD RSF_HAVE_ANTILAG_VK=1
+        ${rsf_vulkan_latency_test_endpoints})
     target_include_directories(rsf_native_antilag_vulkan_test PRIVATE ../runtime/orchestrator/include)
     target_include_directories(rsf_native_antilag_vulkan_test SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}")
     target_link_libraries(rsf_native_antilag_vulkan_test PRIVATE ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_native_cpu rsf_build_options)

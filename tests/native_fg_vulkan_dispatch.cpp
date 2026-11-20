@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
 // Synthetic concrete providers test dispatch/admission only, without GPU/SDKs.
 #include "../runtime/orchestrator/src/native_fg_vulkan_dispatch.cpp"
+#include "../runtime/orchestrator/src/native_latency_vulkan_presentation.h"
 #include <cstdio>
 #include <cstdlib>
+#include <mutex>
 #include <thread>
 #include <condition_variable>
 #include <chrono>
@@ -70,7 +72,11 @@ rsf_backend_result rsf_dlssgvk_get_status(rsf_dlssgvk*, rsf_dlssgvk_status* stat
     status->max_generated_frames = 3; return RSF_BACKEND_OK;
 }
 rsf_backend_result rsf_ffxgvk_drain(rsf_ffxgvk*) {
-    if (fail_drain) return RSF_BACKEND_ERROR_FEATURE_FAILED;
+    if (fail_drain) {
+        const rsf::latency::PresentationShutdown shutdown;
+        require(!shutdown, "latency SDK shutdown cannot overlap a provider drain");
+        return RSF_BACKEND_ERROR_FEATURE_FAILED;
+    }
     return refuse_destroy ? RSF_BACKEND_ERROR_NOT_READY : RSF_BACKEND_OK;
 }
 rsf_backend_result rsf_dlssgvk_drain(rsf_dlssgvk*) { return refuse_destroy ? RSF_BACKEND_ERROR_NOT_READY : RSF_BACKEND_OK; }

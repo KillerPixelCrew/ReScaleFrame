@@ -2,7 +2,6 @@
 #include "native_fg_vulkan_platform.h"
 #include "native_fg_ffx_vulkan.h"
 #include "native_fg_source.h"
-#include "native_latency_vulkan_presentation.h"
 #include "rust_export.h"
 #include <rescaleframe/native_fg_dlss_vulkan.h>
 #if defined(RSF_HAVE_FSR4_FG_VK)
@@ -173,11 +172,6 @@ constexpr rsf_fgvk_provider xess_provider{
 };
 #endif
 
-template <rsf_backend_result (*Function)(rsf_fgvk*), rsf_backend_result Failure = RSF_BACKEND_ERROR_FEATURE_FAILED>
-rsf_backend_result presentation_call(rsf_fgvk* owner) noexcept try {
-    return Function(owner);
-} catch (...) { return Failure; }
-
 constexpr rsf_fgvk_platform platform{
     {nullptr, &dlss_provider, nullptr, &ffx_provider,
 #if defined(RSF_HAVE_FSR4_FG_VK)
@@ -191,11 +185,6 @@ constexpr rsf_fgvk_platform platform{
         nullptr,
 #endif
     },
-    presentation_call<rsf::latency::presentation_attach, RSF_BACKEND_ERROR_INIT_FAILED>,
-    presentation_call<rsf::latency::presentation_drain_begin>,
-    [](rsf_fgvk* owner) noexcept { rsf::latency::presentation_drain_end(owner); },
-    presentation_call<rsf::latency::presentation_retire>,
-    [](rsf_fgvk* owner) noexcept { rsf::latency::presentation_release(owner); },
 };
 }
 

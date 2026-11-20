@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdio>
 #include <cstdlib>
+#include <mutex>
 #include <vector>
 #include <windows.h>
 #include <thread>
@@ -342,15 +343,14 @@ int main() {
     require(xell_mode==1&&slept==reflex_before_attachment,"unchanged request selects/applies XeLL at actual input, without Reflex sleep");
     rsf_latencyvk_status during_sleep{sizeof(during_sleep),RSF_LATENCYVK_ABI_VERSION};
     require(rsf_latencyvk_get_status(&during_sleep)==RSF_BACKEND_OK&&during_sleep.owner==RSF_PACING_XELL,"SDK mutex is available while XeLL sleep blocks");
+    require(rsf_latencyvk_shutdown()==RSF_BACKEND_ERROR_NOT_READY,"shutdown refuses an outstanding sleep without waiting");
+    {rsf::latency::PresentationLease refused;require(!refused.get()&&refused.closing(),"shutdown admission prevents new CPU borrows");}
     require(rsf_latencyvk_presentation(nullptr)==RSF_BACKEND_ERROR_NOT_READY,"unbind refuses outstanding actual CPU sleep without waiting");
     {rsf::latency::PresentationLease refused;require(!refused.get()&&refused.closing(),"retirement prevents new context borrows");}
     require(rsf_latencyvk_presentation(next_context)==RSF_BACKEND_ERROR_NOT_READY&&rsf_latencyvk_shutdown()==RSF_BACKEND_ERROR_NOT_READY,"rebind/shutdown cannot lose a sleeping owner");
     {std::lock_guard lock(sleep_guard);release_xell=true;sleep_changed.notify_all();}sleeper.join();block_xell=false;
     require(rsf_latencyvk_presentation(nullptr)==RSF_BACKEND_OK,"unbind retry succeeds after CPU lease exits");
     require(rsf::latency::presentation_attach(next_context)==RSF_BACKEND_OK,"successor context can bind after retirement");
-    require(rsf::latency::presentation_retire(first_context)==RSF_BACKEND_OK,"late exact-owner retire of predecessor is harmless");
-    rsf::latency::presentation_release(first_context);
-    {rsf::latency::PresentationLease retained;require(retained.get()==next_context,"old owner release cannot clear successor");}
     shutdown_allowed=false;require(rsf_latencyvk_shutdown()==RSF_BACKEND_ERROR_FEATURE_FAILED,"checked shutdown failure is retained");
     {rsf::latency::PresentationLease retained;require(retained.get()==next_context,"failed SDK shutdown retains live context binding");}
     shutdown_allowed=true;require(rsf_latencyvk_shutdown()==RSF_BACKEND_OK,"checked shutdown retry releases binding");

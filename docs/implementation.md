@@ -218,6 +218,21 @@ tests, formatting, Clippy and byte-for-byte binding regeneration passed.
 Release export names and ordinals matched for the Runtime and both carriers
 (381, 256 and 273). Device and in-game verification remain pending.
 
+The Vulkan presentation binding and CPU borrow now live in Rust. The same
+owner arbitrates provider create, drain and destroy against checked SDK
+shutdown. The lock covers admission only. SDK calls and XeLL sleep run
+outside it. Busy teardown refuses immediately, failed provider destruction
+retains the exact binding, and a failed checked shutdown can reopen borrowing
+when no provider retirement is pending. The former private C++ lifecycle
+callbacks are gone.
+
+Synthetic coverage exercises refusal while XeLL sleep is in flight, shutdown
+attempted inside a provider drain, and exact-owner retirement. All seven
+focused Vulkan contracts passed in Debug and Release, and all 120
+workspace Rust tests, formatting, Clippy and binding regeneration passed.
+Release export names and ordinals matched for the Runtime and both carriers
+(381, 256 and 273). Device and in-game verification remain pending.
+
 The OpenGL pipeline now keeps its shared surface and SR lifecycle, frame
 identity, fallback and FG requests in Rust. Native callbacks handle OpenGL,
 DXGI and the presentation child window. A rejected SR rebuild remains

@@ -94,6 +94,8 @@ mod vulkan_fg;
 #[cfg(windows)]
 mod vulkan_fg_abi;
 #[cfg(windows)]
+mod vulkan_presentation;
+#[cfg(windows)]
 mod vulkan_sr;
 #[cfg(windows)]
 mod vulkan_sr_abi;
