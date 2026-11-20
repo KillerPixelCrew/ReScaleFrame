@@ -28,6 +28,8 @@ mod native_observer_abi;
 mod overlay;
 #[cfg(windows)]
 mod overlay_abi;
+#[cfg(windows)]
+mod shader_loader;
 mod sr_temporal;
 
 use rsf_game_sys::{

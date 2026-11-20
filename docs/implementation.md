@@ -223,6 +223,20 @@ Clippy. The adapter kept the same three export names and ordinals and
 dynamic Runtime lookup. The FG device fixture built. Live draw
 retirement and SR-off FG still need device and gameplay validation.
 
+Rust now owns Anomaly's shader caller-frame decoding, manifest admission,
+cache identity and variant compatibility. The engine still creates the
+stock shader first and the Runtime still proves the original bytecode
+before serving a production variant. The previous tessellation check
+accepted a duplicate interpolant in place of a distinct required field.
+The Rust check requires each field once. See [the shader loader audit](research/rust-anomaly-shader-loader.md).
+
+The shader loader merge passed 11 CPU contracts in Debug and Release,
+including the motion and shader-tool suites. All 236 locked Rust tests,
+formatting and Clippy passed. Export names and ordinals, dynamic Runtime
+lookup and the rebuilt motion pack matched the staged baseline. The
+motion and FG device fixtures built. Live and reload validation are
+tracked separately.
+
 The first source inspection found that the public frame sequencer opened a rendered
 frame and assigned its provenance under separate locks. Direct callers could read
 or retire the slot between those operations. The FG session adds its own outer
