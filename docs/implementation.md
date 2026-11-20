@@ -372,6 +372,19 @@ tests, formatting and Clippy passed. Release exports matched the Runtime,
 both carriers and Minecraft. Three D3D12 device fixtures built and await
 execution. See [the D3D12 SR cutover audit](research/rust-d3d12-sr-cutover.md).
 
+The generic D3D12 render host now owns its session, settings, SR lifecycle,
+submission slots, scene and Present matching, and status in Rust. The single
+settings read preserves existing Auto and Dynamic FG values for FG12 while
+the frontend and overlay continue to report the enabled flag. The native
+exports retain the vendor and platform calls.
+
+The integrated Release build passed eight focused contracts, including DLL
+and embedded frontend, SR12 and FG12 clients. All 160 locked workspace
+tests, formatting and Clippy passed. Runtime, both carriers and Minecraft
+retained their Release exports. The Unity D3D12 fixture built. Real device,
+observer, vendor and game behavior remain unverified.
+See [the D3D12 render-host cutover audit](research/rust-render-host-cutover.md).
+
 Rust owns native D3D11 FG transfer slots, leases, shared-host SR evaluation,
 HUD-less capture, Prepare, Present and retirement. Prepare now refuses a
 contended slot as `NOT_PREPARED`. It shares the existing Rust scene and

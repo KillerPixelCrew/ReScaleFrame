@@ -109,6 +109,40 @@ fn sharpening_values(o: &Sharpening) -> [Value; 12] {
     ]
 }
 
+/// The shared post-pass fields of `s` over `base`, which supplies the header and ABI.
+pub(crate) fn sharpening_of(s: &Settings, base: &Sharpening) -> Sharpening {
+    Sharpening {
+        mode: s.sharpening_mode,
+        sharpness: s.sharpening_sharpness,
+        mas: s.sharpening_mas,
+        motion_sharpness: s.sharpening_motion_sharpness,
+        motion_threshold: s.sharpening_motion_threshold,
+        motion_scale_limit: s.sharpening_motion_scale_limit,
+        contrast_enabled: s.sharpening_contrast_enabled,
+        contrast: s.sharpening_contrast,
+        depth_scale: s.sharpening_depth_scale,
+        depth_bias: s.sharpening_depth_bias,
+        clamp_output: s.sharpening_clamp_output,
+        debug: s.sharpening_debug,
+        ..*base
+    }
+}
+
+pub(crate) fn set_sharpening(s: &mut Settings, o: &Sharpening) {
+    s.sharpening_mode = o.mode;
+    s.sharpening_sharpness = o.sharpness;
+    s.sharpening_mas = o.mas;
+    s.sharpening_motion_sharpness = o.motion_sharpness;
+    s.sharpening_motion_threshold = o.motion_threshold;
+    s.sharpening_motion_scale_limit = o.motion_scale_limit;
+    s.sharpening_contrast_enabled = o.contrast_enabled;
+    s.sharpening_contrast = o.contrast;
+    s.sharpening_depth_scale = o.depth_scale;
+    s.sharpening_depth_bias = o.depth_bias;
+    s.sharpening_clamp_output = o.clamp_output;
+    s.sharpening_debug = o.debug;
+}
+
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
 }
@@ -219,15 +253,22 @@ impl File {
 // The shared post-pass keys fall back to `sharpening` (the facade passes rsf_sharpening_defaults),
 // not to the host defaults, because existing host aggregate initializers leave those fields zero.
 fn read(file: &File, defaults: &Settings, sharpening: &Sharpening) -> Settings {
+    read_with_fg_mode(file, defaults, sharpening).0
+}
+
+// Also returns the stored FG value before it is reduced to `fg_enabled`. Native FG owners take it
+// as their rsf_fg_mode, so a saved 2 (Auto) or 3 (Dynamic) still reaches them.
+fn read_with_fg_mode(file: &File, defaults: &Settings, sharpening: &Sharpening) -> (Settings, u32) {
     let value = |key, fallback| file.integer(key, fallback);
     let number = |key, fallback| file.decimal(key, fallback);
-    Settings {
+    let fg_mode = value("FG", defaults.fg_enabled);
+    let settings = Settings {
         struct_size: size_of::<Settings>() as u32,
         abi_version: RSF_RENDER_FRONTEND_ABI_VERSION,
         sr_enabled: u32::from(value("SR", defaults.sr_enabled) != 0),
         sr_backend: value("SRBackend", defaults.sr_backend),
         dlss_preset: value("DLSSPreset", defaults.dlss_preset),
-        fg_enabled: u32::from(value("FG", defaults.fg_enabled) != 0),
+        fg_enabled: u32::from(fg_mode != 0),
         fg_backend: value("FGBackend", defaults.fg_backend),
         generated_frames: value("FGGeneratedFrames", defaults.generated_frames),
         latency: value("Latency", defaults.latency),
@@ -246,7 +287,23 @@ fn read(file: &File, defaults: &Settings, sharpening: &Sharpening) -> Settings {
         sharpening_depth_bias: number("DADepthBias", sharpening.depth_bias),
         sharpening_clamp_output: value("DAClampOutput", sharpening.clamp_output),
         sharpening_debug: value("SharpeningDebug", sharpening.debug),
-    }
+    };
+    (settings, fg_mode)
+}
+
+/// One read of the owned keys, as `rsf_settings_store_read`, plus the stored FG value.
+///
+/// # Safety
+/// `ini` and `section` are terminated UTF-16 strings; `sharpening` is a full options structure.
+pub(crate) unsafe fn read_settings_and_fg_mode(
+    ini: PCWSTR,
+    section: PCWSTR,
+    defaults: &Settings,
+    sharpening: &Sharpening,
+) -> Option<(Settings, u32)> {
+    let file = File::new(ini, section)?;
+    let sharpening = unsafe { sharpening_options(sharpening) }?;
+    Some(read_with_fg_mode(&file, defaults, sharpening))
 }
 
 fn owned(entry: &[u16]) -> bool {
@@ -586,6 +643,20 @@ mod tests {
         assert_eq!(saved.generated_frames, 3);
         assert_eq!(saved.sharpening_contrast, 1.1);
         assert_eq!(file.integer(OVERLAY_LAYOUT, 0), 5);
+    }
+
+    #[test]
+    fn fg_mode_keeps_the_stored_value_beside_the_boolean() {
+        let ini = Temporary::new("fg-mode");
+        let section = wide("Adapter");
+        let file = File::new(ini.0.as_ptr(), section.as_ptr()).unwrap();
+        let defaults: Settings = unsafe { std::mem::zeroed() };
+        for (stored, mode) in [("3", 3), ("2", 2), ("1", 1), ("0", 0)] {
+            assert!(file.write(&wide("FG"), wide(stored).as_ptr()));
+            let (settings, fg_mode) = read_with_fg_mode(&file, &defaults, &sharpening());
+            assert_eq!(fg_mode, mode);
+            assert_eq!(settings.fg_enabled, u32::from(mode != 0));
+        }
     }
 
     #[test]

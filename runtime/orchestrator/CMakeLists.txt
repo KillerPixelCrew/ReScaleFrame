@@ -33,7 +33,7 @@ add_library(rsf_orchestrator_core OBJECT
     src/gl_pipeline_platform.cpp
     src/rust_exports.c
     src/callback_render_host.cpp
-    src/render_host.cpp
+    src/render_host_platform.cpp
     src/overlay_d3d12.cpp
     src/overlay_native12.cpp
     ../../loader/proxy/src/overlay_host.cpp
