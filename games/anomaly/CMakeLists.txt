@@ -17,7 +17,7 @@ file(CONFIGURE OUTPUT "${RSF_ANOMALY_SR_GENERATED}/sr_upscale_hlsl.h"
 add_library(rsf_anomaly_sr_shaders INTERFACE)
 target_include_directories(rsf_anomaly_sr_shaders INTERFACE "${RSF_ANOMALY_SR_GENERATED}")
 
-add_library(rsf_game_anomaly SHARED src/plugin.cpp src/bootstrap.cpp src/native_observer.cpp src/native_hooks.cpp
+add_library(rsf_game_anomaly SHARED src/plugin.cpp src/bootstrap.cpp src/native_observer_platform.cpp src/native_hooks.cpp
     src/native_geometry.cpp src/geometry_feed.cpp
     src/overlay_hooks.cpp src/overlay_service.cpp
     src/sr_swap.cpp src/sr_d3d11.cpp src/sr_stage.cpp)

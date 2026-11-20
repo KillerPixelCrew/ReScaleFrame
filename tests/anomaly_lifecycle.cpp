@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <rescaleframe/game_api.h>
+#include "../games/anomaly/src/native_observer_platform.h"
 #include <windows.h>
 #include <cstdio>
 
@@ -10,6 +11,9 @@ int wmain(int argc, wchar_t** argv) {
     if (!module) return 1;
     auto entry = reinterpret_cast<rsf_get_game_plugin_api_fn>(
         reinterpret_cast<void*>(GetProcAddress(module, RSF_GAME_ENTRY_POINT)));
+    using Observe = rsf_result(*)(rsf_anomaly_native_observation*) noexcept;
+    auto observe = reinterpret_cast<Observe>(
+        reinterpret_cast<void*>(GetProcAddress(module, "rsf_anomaly_observation")));
     rsf_game_plugin_api api{}; api.struct_size = sizeof(api);
     if (!entry || entry(RSF_GAME_ABI_VERSION, &api) != RSF_OK) return 1;
     const auto& h = api.hooks;
@@ -20,6 +24,18 @@ int wmain(int argc, wchar_t** argv) {
     auto expect = [&](bool ok, const char* message) {
         if (!ok) { ++failures; std::fprintf(stderr, "%s\n", message); }
     };
+    if (!observe) return 1;
+    static_assert(sizeof(rsf_anomaly_native_observation) == 216 &&
+        offsetof(rsf_anomaly_native_observation, view) == 88);
+    expect(observe(nullptr) == RSF_ERROR_INVALID_ARGUMENT, "Null observation must refuse");
+    rsf_anomaly_native_observation observation{sizeof(observation) - 1, RSF_ANOMALY_OBSERVATION_ABI};
+    expect(observe(&observation) == RSF_ERROR_INVALID_ARGUMENT, "Short observation must refuse");
+    observation.struct_size = sizeof(observation);
+    observation.abi_version = RSF_ANOMALY_OBSERVATION_ABI + 1;
+    expect(observe(&observation) == RSF_ERROR_ABI_MISMATCH, "Bad observation ABI must refuse");
+    observation.abi_version = RSF_ANOMALY_OBSERVATION_ABI;
+    expect(observe(&observation) == RSF_OK && !observation.active && !observation.render_frames &&
+        !observation.resets && !observation.camera_finite, "Initial observation must be inactive and empty");
     expect(h.prepare(nullptr) == RSF_ERROR_INVALID_ARGUMENT, "Null prepare must refuse");
     expect(h.start(nullptr) == RSF_ERROR_INVALID_ARGUMENT, "Null start must refuse");
     expect(h.status(nullptr) == RSF_ERROR_INVALID_ARGUMENT, "Null status must refuse");
