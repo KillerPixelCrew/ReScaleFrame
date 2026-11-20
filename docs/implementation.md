@@ -426,7 +426,10 @@ The Stage 5 capture reports the guarded engine frame ID in its leased
 pass. A successful evaluation can fill the selected capture header's
 camera and backend through the existing Runtime result call. Both C
 linkage forms passed the CPU checks for matching identity, extent and
-successful evaluation. See [capture identity at evaluation](research/rust-anomaly-sr-pass.md#capture-identity-at-evaluation).
+successful evaluation. Four live Standard captures also matched the
+DLSS sidecar across a resize. The same run confirmed mouse input after
+closing the overlay and recorded panel keyboard handling. Gameplay
+keyboard delivery remains unverified. See [capture identity at evaluation](research/rust-anomaly-sr-pass.md#capture-identity-at-evaluation).
 
 The merged Release sharpening fixtures passed on D3D11, D3D12 and
 Vulkan. The D3D11 fixture checks that Depth RCAS and Depth DAS preserve

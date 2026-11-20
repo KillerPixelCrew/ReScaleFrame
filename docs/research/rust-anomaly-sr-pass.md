@@ -230,3 +230,23 @@ process lifetime. Anomaly pins its adapter once native trampolines are
 installed. The lifecycle contract covers callback retirement through
 quiesce and stop, and the game runs cover normal engine exit. No
 live module-unload path is exposed by the thin carrier.
+
+The foreground Standard retest at `ff89e18f0362` captured frames
+151, 392, 632 and 872. Frame 151 used generation 1 at 853×480 to
+1280×720. The later frames used generation 2 at 1067×600 to 1600×900.
+All four headers report the camera and DLSS, match the corresponding
+pipeline sidecars for dimensions, backend and jitter, and have SR
+result records with matching session and frame IDs. The last status
+sample reported 4,169 successful evaluations, zero refusals and one
+successful resize. Steady windows reported 240 vendor presents per
+120 source frames. The game exited with code 0.
+
+Insert opened and closed the panel. The panel consumed two key events
+during the Use-key test and drew all 842 visible frames. After it
+closed, mouse movement turned the camera in the world. Short Use,
+Inventory and Escape presses did not produce their expected gameplay
+actions or a matching game key receipt. The game script observed
+input through the existing callback and submitted no engine events.
+The settings, logs, script and metadata comparison are in
+`evidence/standard-capture-keyboard/`.
+[Anomaly key callback reference](https://github.com/TheParaziT/anomaly-modding-book/blob/main/docs/tutorials/scripting/callbacks.md).
