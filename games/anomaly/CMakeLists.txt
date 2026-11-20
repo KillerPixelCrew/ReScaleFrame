@@ -19,7 +19,7 @@ target_include_directories(rsf_anomaly_sr_shaders INTERFACE "${RSF_ANOMALY_SR_GE
 
 add_library(rsf_game_anomaly SHARED src/plugin.cpp src/bootstrap.cpp src/native_observer.cpp src/native_hooks.cpp
     src/native_geometry.cpp src/geometry_feed.cpp
-    src/overlay_input_gate.cpp src/overlay_hooks.cpp src/overlay_service.cpp
+    src/overlay_hooks.cpp src/overlay_service.cpp
     src/sr_swap.cpp src/sr_d3d11.cpp src/sr_stage.cpp)
 rsf_add_rust_static(rsf_anomaly_rust rsf_rust_anomaly rsf-anomaly rsf_anomaly)
 target_include_directories(rsf_game_anomaly PRIVATE "${PROJECT_SOURCE_DIR}/runtime/orchestrator/include")

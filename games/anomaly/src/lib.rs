@@ -6,6 +6,8 @@ use rsf_game_sys::{
 use std::ffi::{CStr, c_char};
 use std::slice;
 
+mod input;
+
 const UNKNOWN: u32 = 0;
 const RECOGNIZED: u32 = 1;
 const INVALID_ARGUMENT: i32 = -1;

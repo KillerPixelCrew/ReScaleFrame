@@ -1,20 +1,26 @@
 // SPDX-License-Identifier: MIT
+// Native leaves of the CInput::OnFrame input-fact hook: the guarded vtable slot edit, the detour that reads the engine
+// frame and calls the original, and the FG sink calls. Admission, the in-flight and retiring state, the polling thread
+// and received-event routing are in the adapter's Rust library (input.rs).
 #include "input_hooks.h"
 // Engine-fact sinks implemented in fg_stage.cpp; no graphics or vendor SDK dependency here.
 namespace rsf::anomaly::fg { void input_begin(uint32_t) noexcept; void input_received(uint32_t,uint32_t) noexcept; }
 #include <windows.h>
-#include <atomic>
 #include <cstring>
+extern "C" {
+uint32_t rsf_anomaly_input_frame_enter() noexcept;
+void rsf_anomaly_input_frame_exit(uint32_t ticket) noexcept;
+void rsf_anomaly_input_activate(bool active) noexcept;
+bool rsf_anomaly_input_idle() noexcept;
+uint32_t rsf_anomaly_input_route(uint8_t kind) noexcept;
+}
 namespace rsf::anomaly::input {
 namespace {
 using Frame = void(__fastcall*)(void*);
+constexpr uint32_t admitted = 1;  // rsf_anomaly_input_frame_enter ticket bit
 Frame original{};
 void** slot{};
-std::byte* module{};
-const BuildProfile* selected{};
-std::atomic<bool> active{};
-std::atomic<uint32_t> in_flight{};
-thread_local bool polling{};
+const std::byte* frame_counter{};
 bool bytes(std::byte* p, const char* hex) noexcept {
     const auto digit = [](char c) { return c <= '9' ? c-'0' : c-'a'+10; };
     __try {
@@ -24,15 +30,12 @@ bool bytes(std::byte* p, const char* hex) noexcept {
     } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 void __fastcall on_frame(void* self) {
-    in_flight.fetch_add(1,std::memory_order_acq_rel);
-    struct Flight { ~Flight() { in_flight.fetch_sub(1,std::memory_order_acq_rel); } } flight;
-    if (!active.load(std::memory_order_acquire)) { original(self); return; }
-    uint32_t frame{};
-    std::memcpy(&frame, module + selected->native->device_frame_rva, sizeof(frame));
-    fg::input_begin(frame);
-    const bool previous = polling;
-    polling = true;
-    struct Exit { bool saved; ~Exit() { polling = saved; } } exit{previous};
+    struct Flight { uint32_t ticket; ~Flight() { rsf_anomaly_input_frame_exit(ticket); } } flight{rsf_anomaly_input_frame_enter()};
+    if (flight.ticket & admitted) {
+        uint32_t frame{};
+        std::memcpy(&frame, frame_counter, sizeof(frame));
+        fg::input_begin(frame);
+    }
     original(self);
 }
 bool exchange(void* expected, void* value) noexcept {
@@ -44,7 +47,9 @@ bool exchange(void* expected, void* value) noexcept {
     return replaced && protected_again;
 }
 }
-void received(uint32_t kinds) noexcept { if (polling && active.load(std::memory_order_acquire)) fg::input_received(kinds,0); }
+void received(overlay::DeviceKind kind) noexcept {
+    if (const auto kinds = rsf_anomaly_input_route(static_cast<uint8_t>(kind))) fg::input_received(kinds,0);
+}
 bool install(std::byte* image, uint32_t size, const BuildProfile& build, const char** reason) noexcept {
     if (slot) return enable();
     const auto& p = *build.input;
@@ -61,18 +66,18 @@ bool install(std::byte* image, uint32_t size, const BuildProfile& build, const c
     }
     auto** candidate = reinterpret_cast<void**>(image+p.frame_vtable_rva);
     if (*candidate != image+p.frame.rva) { *reason = "CInput primary slot 0"; return false; }
-    module=image; selected=&build; original=reinterpret_cast<Frame>(*candidate); slot=candidate;
+    frame_counter=image+build.native->device_frame_rva; original=reinterpret_cast<Frame>(*candidate); slot=candidate;
     if (!enable()) { *reason = "CInput vtable swap"; return false; }
     return true;
 }
-bool idle() noexcept { return in_flight.load(std::memory_order_acquire)==0; }
+bool idle() noexcept { return rsf_anomaly_input_idle(); }
 bool enable() noexcept {
     if (!slot) return true;
     if (*slot != reinterpret_cast<void*>(&on_frame) && !exchange(reinterpret_cast<void*>(original), reinterpret_cast<void*>(&on_frame))) return false;
-    active.store(true, std::memory_order_release); return true;
+    rsf_anomaly_input_activate(true); return true;
 }
 bool disable() noexcept {
-    active.store(false, std::memory_order_release);
+    rsf_anomaly_input_activate(false);
     return !slot || *slot == reinterpret_cast<void*>(original) || exchange(reinterpret_cast<void*>(&on_frame), reinterpret_cast<void*>(original));
 }
 }
