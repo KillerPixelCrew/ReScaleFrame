@@ -4,8 +4,9 @@ use crate::fg_inputs_abi::{
     rsf_anomaly_input_frame as Frame, rsf_anomaly_input_log as Log,
     rsf_anomaly_input_platform as Platform, rsf_anomaly_input_targets as Targets,
 };
+use crate::lease::Lease;
 use std::ffi::c_void;
-use std::ptr::{self, NonNull};
+use std::ptr;
 
 const R24G8_TYPELESS: u32 = 44;
 const D24_UNORM_S8_UINT: u32 = 45;
@@ -18,27 +19,6 @@ enum Result {
     Format,
     Size,
     Resources,
-}
-
-struct Lease {
-    handle: NonNull<c_void>,
-    release: unsafe extern "C" fn(*mut c_void),
-}
-
-impl Lease {
-    fn new(handle: *mut c_void, release: unsafe extern "C" fn(*mut c_void)) -> Option<Self> {
-        NonNull::new(handle).map(|handle| Self { handle, release })
-    }
-
-    fn as_ptr(&self) -> *mut c_void {
-        self.handle.as_ptr()
-    }
-}
-
-impl Drop for Lease {
-    fn drop(&mut self) {
-        unsafe { (self.release)(self.as_ptr()) };
-    }
 }
 
 struct SurfaceSet {

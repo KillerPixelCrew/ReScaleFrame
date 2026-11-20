@@ -412,15 +412,15 @@ unsafe extern "C" fn rsf_anomaly_motion_conflicts(state: *const MotionHistorySta
 const CORE_MAX_BONES: usize = 78;
 const CORE_BONES: usize = 64;
 const CORE_HISTORY: usize = CORE_BONES + CORE_MAX_BONES * 48;
-const CORE_BYTES: usize = CORE_HISTORY + 16;
+pub(crate) const CORE_BYTES: usize = CORE_HISTORY + 16;
 const TESS_HISTORY: usize = 128;
-const TESS_BYTES: usize = TESS_HISTORY + 16;
+pub(crate) const TESS_BYTES: usize = TESS_HISTORY + 16;
 const FOLIAGE_MAX_GROUPS: usize = 61;
 const FOLIAGE_HISTORY: usize = 160;
 const FOLIAGE_ROWS: usize = 176;
 const FOLIAGE_ITEM_STATE: usize = FOLIAGE_ROWS + FOLIAGE_MAX_GROUPS * 64;
-const FOLIAGE_BYTES: usize = FOLIAGE_ITEM_STATE + FOLIAGE_MAX_GROUPS * 16;
-const PIXEL_BYTES: usize = 48;
+pub(crate) const FOLIAGE_BYTES: usize = FOLIAGE_ITEM_STATE + FOLIAGE_MAX_GROUPS * 16;
+pub(crate) const PIXEL_BYTES: usize = 48;
 const SHADER_ABI: f32 = 1.;
 
 fn put(out: &mut [u8], offset: usize, word: [u8; 4]) {

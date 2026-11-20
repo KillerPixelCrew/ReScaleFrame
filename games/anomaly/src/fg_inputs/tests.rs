@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use std::cell::Cell;
+use std::ptr::NonNull;
 
 #[derive(Default)]
 struct Context {

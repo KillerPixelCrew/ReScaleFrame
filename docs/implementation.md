@@ -137,6 +137,17 @@ passed, and the three Anomaly exports and Runtime lookup matched the
 staged baseline. The motion and FG device fixtures built in both
 configurations. Live motion-target behavior remains to be verified.
 
+The Anomaly motion device now owns its texture and RTV, the four b13
+buffer leases and the upload cache in Rust. It shares the existing
+resource lease implementation with the FG input pass. Native D3D11
+calls retain the invalidation replay and unchanged pixel shader. A
+skipped replay now releases the state references without rebinding the
+output merger or pixel shader. Two CPU tests cover a refused RTV and
+retry, and cache invalidation when an upload fails. Six focused MSVC
+contracts passed per configuration. All 222 locked Rust tests and the
+Anomaly DLL export comparison passed. The three motion device fixtures
+built in both configurations for later GPU validation.
+
 The first source inspection found that the public frame sequencer opened a rendered
 frame and assigned its provenance under separate locks. Direct callers could read
 or retire the slot between those operations. The FG session adds its own outer

@@ -12,6 +12,7 @@
 // (decal-like: the visible surface is unchanged) is not replayed; one without a depth test invalidates everything it
 // covers. Output-merger state and the pixel shader are restored afterwards.
 #include "motion_constants.h"
+#include "motion_device_platform.h"
 #include <d3d11.h>
 #include <wrl/client.h>
 #include <cstdint>
@@ -22,19 +23,26 @@ using Microsoft::WRL::ComPtr;
 using LogFn = void (*)(void*, const char*);
 
 enum class ReplayResult : std::uint8_t { Done, SkippedNoDepthWrite, Failed };
-enum class TargetResult : std::uint8_t { Ready, Created, Multisampled, Failed };
+enum class TargetResult : std::uint8_t {
+    Ready = RSF_MOTION_READY, Created = RSF_MOTION_CREATED,
+    Multisampled = RSF_MOTION_MULTISAMPLED, Failed = RSF_MOTION_FAILED
+};
 
 class MotionDevice {
 public:
+    MotionDevice() = default;
+    ~MotionDevice();
+    MotionDevice(const MotionDevice&) = delete;
+    MotionDevice& operator=(const MotionDevice&) = delete;
     bool create(ID3D11Device*, LogFn log, void* user) noexcept;
     void reset() noexcept;
-    ID3D11Device* device() const noexcept { return device_.Get(); }
+    ID3D11Device* device() const noexcept { return static_cast<ID3D11Device*>(view().device); }
     // Matches the motion target to the G-buffer's RT0 texture: same size, one sample, R16G16B16A16_FLOAT.
     TargetResult ensure_target(const D3D11_TEXTURE2D_DESC& rt0) noexcept;
-    ID3D11RenderTargetView* rtv() const noexcept { return rtv_.Get(); }
-    ID3D11Texture2D* texture() const noexcept { return texture_.Get(); }
-    std::uint32_t width() const noexcept { return width_; }
-    std::uint32_t height() const noexcept { return height_; }
+    ID3D11RenderTargetView* rtv() const noexcept { return static_cast<ID3D11RenderTargetView*>(view().rtv); }
+    ID3D11Texture2D* texture() const noexcept { return static_cast<ID3D11Texture2D*>(view().texture); }
+    std::uint32_t width() const noexcept { return view().width; }
+    std::uint32_t height() const noexcept { return view().height; }
     void clear(ID3D11DeviceContext*) noexcept;
     // Map(WRITE_DISCARD) unless the bytes equal the previous upload; binds VS or PS slot 13. Returns false on failure.
     bool set_core_vertex(ID3D11DeviceContext*, const CoreVertexBytes&) noexcept;
@@ -52,8 +60,8 @@ public:
         end_replay(context, saved);
         return ReplayResult::Done;
     }
-    std::uint64_t uploads() const noexcept { return uploads_; }
-    std::uint64_t upload_skips() const noexcept { return upload_skips_; }
+    std::uint64_t uploads() const noexcept { return view().uploads; }
+    std::uint64_t upload_skips() const noexcept { return view().upload_skips; }
 private:
     struct Saved {
         ID3D11RenderTargetView* targets[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT]{};
@@ -66,25 +74,16 @@ private:
         ID3D11PixelShader* shader{};
         ID3D11ClassInstance* classes[D3D11_SHADER_MAX_INTERFACES]{};
         UINT class_count{};
-        bool taken{};
+        bool modified{};
     };
     ReplayResult begin_replay(ID3D11DeviceContext*, Saved&) noexcept;
     void end_replay(ID3D11DeviceContext*, Saved&) noexcept;
-    bool upload(ID3D11DeviceContext*, ID3D11Buffer*, const void*, std::size_t, std::byte* last, bool& have) noexcept;
-    ComPtr<ID3D11Device> device_;
-    ComPtr<ID3D11Texture2D> texture_;
-    ComPtr<ID3D11RenderTargetView> rtv_;
-    std::uint32_t width_{}, height_{};
-    ComPtr<ID3D11Buffer> core_vs_, foliage_vs_, pixel_, tess_ds_;
-    CoreVertexBytes last_core_{};
-    FoliageVertexBytes last_foliage_{};
-    PixelBytes last_pixel_{};
-    TessDomainBytes last_tess_{};
-    bool have_core_{}, have_foliage_{}, have_pixel_{}, have_tess_{};
-    ComPtr<ID3D11PixelShader> zero_ps_;
-    ComPtr<ID3D11DepthStencilState> no_depth_;
-    ComPtr<ID3D11DepthStencilState> equal_;
-    std::uint64_t uploads_{}, upload_skips_{};
+    rsf_anomaly_motion_device_view view() const noexcept {
+        rsf_anomaly_motion_device_view result;
+        rsf_anomaly_motion_device_get(owner_, &result);
+        return result;
+    }
+    void* owner_{};
 };
 // First-party HLSL of the invalidation writer (no inputs, so it links with any vertex shader).
 inline constexpr char zero_motion_hlsl[] = "float4 main() : SV_Target2 { return float4(0, 0, 0, 0); }";
