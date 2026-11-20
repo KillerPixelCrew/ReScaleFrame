@@ -235,6 +235,8 @@ void bind_platform()
 }
 }
 
+extern "C" void rsf_fg12_platform_bind() { bind_platform(); }
+
 extern "C" RSF_RUNTIME_API rsf_backend_result rsf_fg12_install(const rsf_fg12_setup* request)
 {
     bind_platform();

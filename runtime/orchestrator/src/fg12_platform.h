@@ -40,6 +40,10 @@ void rsf_fg12_platform_dump_flush(void);
 void rsf_fg12_platform_dump_submitted(void* queue, const rsf_frame_record*);
 void rsf_fg12_platform_dump_prepare(const rsf_fg_frame*, rsf_backend_result);
 
+/* Registers the table below once. Owners that hand inputs to FG12 inside the Rust core call it
+   first, exactly as the public FG12 entries do. */
+void rsf_fg12_platform_bind(void);
+
 /* Registered by the full presentation host. CPU-only binaries link the same Rust
    archive without pulling the DXGI facade or vendor backend objects. */
 typedef struct rsf_fg12_calls {

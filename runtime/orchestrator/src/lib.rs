@@ -83,6 +83,8 @@ mod scene_abi;
 #[cfg(windows)]
 mod settings_store;
 #[cfg(windows)]
+mod sr12;
+#[cfg(windows)]
 mod sr_bridge;
 mod sr_history;
 #[cfg(windows)]
