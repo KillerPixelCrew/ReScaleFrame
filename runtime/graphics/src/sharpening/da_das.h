@@ -4,53 +4,9 @@
 // See THIRD_PARTY.md for provenance and license terms.
 #pragma once
 namespace rsf::sharpening {
-inline constexpr char da_das[] = R"RSF(
-cbuffer Params : register(b0) {
-    float Sharpness; float Contrast; uint DynamicSharpenEnabled; uint DisplaySizeMV;
-    uint Debug; uint MotionWidth; uint MotionHeight; float MotionSharpness;
-    float2 MotionTextureScale; float MvScaleX; float MvScaleY;
-    float MotionThreshold; float MotionScaleLimit; uint DisplayWidth; uint DisplayHeight;
-    uint DepthIsLinear; uint DepthIsReversed; float DepthScale; float DepthBias;
-    float DepthLinearA; float DepthLinearB; float DepthLinearC; uint ClampOutput;
-    float2 DepthTextureScale; uint DepthWidth; uint DepthHeight;
-    uint EncodeHdr; uint HasExposure; uint KnownPlanes; float ExposureScale;
-};
-Texture2D<float4> Source : register(t0);
-Texture2D<float2> Motion : register(t1);
-Texture2D<float> DepthTex : register(t2);
-Texture2D<float> Exposure : register(t3);
-RWTexture2D<float4> Dest : register(u0);
-float exposureValue() {
-    return HasExposure != 0 ? max(Exposure.Load(int3(0,0,0)),1e-6) : max(ExposureScale,1e-6);
-}
-float3 encodeColor(float3 c) {
-    if (EncodeHdr == 0) return c;
-    float3 x = max(c,0) * exposureValue();
-    return pow(x / (x + 4),1.0/2.2);
-}
-float3 loadColor(int2 p) { return encodeColor(Source.Load(int3(p,0)).rgb); }
-float4 storeColor(int2 p, float3 c) {
-    float4 original = Source.Load(int3(p,0));
-    // A constant image returns its original bits, including negative/extended SDR values.
-    float3 center = encodeColor(original.rgb);
-    if (ClampOutput == 0 && all(c == center)) return original;
-    if (EncodeHdr != 0) {
-        // Clamp to the original local range before inverting the bounded curve. This
-        // prevents HDR halos and avoids evaluating the inverse at or above one.
-        float3 lo = center, hi = center;
-        [unroll] for (int y=-1;y<=1;++y) [unroll] for (int x=-1;x<=1;++x) {
-            int2 q = clamp(p+int2(x,y),int2(0,0),int2(DisplayWidth,DisplayHeight)-1);
-            float3 v = loadColor(q); lo = min(lo,v); hi = max(hi,v);
-        }
-        if (Debug == 0 && ClampOutput == 0 && all(lo == hi)) return original;
-        if (Debug == 0) c = clamp(c,lo,hi);
-        float3 t = pow(clamp(c,0,0.999999),2.2);
-        c = 4*t / max(1-t,1e-7) / exposureValue();
-    }
-    if (ClampOutput != 0) c = saturate(c);
-    return float4(c,original.a);
-}
-static const float3 kLumaCoeff = float3(0.2126, 0.7152, 0.0722);
+inline constexpr char da_das[] =
+#include "depth_color.inc"
+R"RSF(
 
 // 16x16 thread group + 1-pixel border on each side for 3x3 color taps.
 groupshared float4 s_color[18][18];
@@ -301,6 +257,8 @@ float SoftHaloPair(float a, float b)
 // Directional adaptive sharpen core
 // -----------------------------------------------------------------------------
 
+)RSF"
+R"RSF(
 float3 ApplyDirectionalSharpen(float3 centerColor, float3 upColor, float3 leftColor, float3 rightColor, float3 downColor,
                                float3 upLeftColor, float3 upRightColor, float3 downLeftColor, float3 downRightColor,
                                float finalSharpness, float edgeFactor,
@@ -504,6 +462,8 @@ float3 ApplyDirectionalSharpen(float3 centerColor, float3 upColor, float3 leftCo
 // Main
 // -----------------------------------------------------------------------------
 
+)RSF"
+R"RSF(
 [numthreads(16, 16, 1)]
 void CSMain(uint3 DTid : SV_DispatchThreadID,
             uint3 GTid : SV_GroupThreadID,
@@ -529,7 +489,7 @@ void CSMain(uint3 DTid : SV_DispatchThreadID,
 
     GroupMemoryBarrierWithGroupSync();
 
-    if (p.x >= DisplayWidth || p.y >= DisplayHeight)
+    if (DTid.x >= DisplayWidth || DTid.y >= DisplayHeight)
         return;
 
     float3 centerColor = s_color[lp.y + 1][lp.x + 1].rgb;
@@ -542,8 +502,6 @@ void CSMain(uint3 DTid : SV_DispatchThreadID,
         if (Debug > 0)
             outColor = ApplyDebugTint(outColor, Sharpness, adaptiveSharpness, adaptiveSharpness, adaptiveSharpness, 1.0, Debug);
 
-        if (ClampOutput > 0)
-            outColor = saturate(outColor);
 
         Dest[p] = storeColor(p, outColor);
         return;
@@ -706,8 +664,6 @@ void CSMain(uint3 DTid : SV_DispatchThreadID,
         output = ApplyDebugTint(output, Sharpness, adaptiveSharpness, edgeSharpness, finalSharpness, distanceBoost, Debug);
     }
 
-    if (ClampOutput > 0)
-        output = saturate(output);
 
     Dest[p] = storeColor(p, output);
 }

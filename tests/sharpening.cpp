@@ -105,6 +105,46 @@ int main() {
         check(pass.run(context.Get(),output.Get(),nullptr,nullptr,nullptr,o,f),"missing depth fallback");
         for (unsigned i=0;i<count;++i) image[i*4]=image[i*4+1]=image[i*4+2]=10;
     }
+    // Depth-aware HDR sharpening may change brightness, but a colored ramp
+    // must keep the source channel ratios and alpha after inverse transport.
+    for (unsigned y=0;y<height;++y) for (unsigned x=0;x<width;++x) {
+        const auto i=(y*width+x)*4;
+        const float ramp=x<width/2 ? 2.0f+float(x*x)*0.015f : 8.0f+float(x*x)*0.02f;
+        image[i]=ramp; image[i+1]=ramp*0.53f; image[i+2]=ramp*0.19f;
+    }
+    for (Mode mode:{Mode::depth_rcas,Mode::depth_das}) {
+        o=Options{}; o.mode=mode; o.sharpness=1;
+        auto output=texture(DXGI_FORMAT_R32G32B32A32_FLOAT,image.data(),16);
+        check(pass.run(context.Get(),output.Get(),nullptr,z.Get(),nullptr,o,f),"colored HDR dispatch");
+        const auto actual=read(output.Get());
+        bool chroma=true,changed=false;
+        for (unsigned i=0;i<count;i++) {
+            const auto p=i*4;
+            const float tolerance=std::max(1.0f,actual[p])*2e-5f;
+            chroma &= std::isfinite(actual[p]) && actual[p+3]==image[p+3] &&
+                std::fabs(actual[p+1]-actual[p]*0.53f)<tolerance &&
+                std::fabs(actual[p+2]-actual[p]*0.19f)<tolerance;
+            changed |= std::fabs(actual[p]-image[p])>1e-4f;
+        }
+        check(chroma && changed,"colored HDR retains chroma and alpha and changes brightness");
+    }
+    // Explicit clamping also preserves positive channel ratios.
+    f.hdr=0;
+    for (unsigned i=0;i<count;i++) {
+        image[i*4]=2.0f; image[i*4+1]=1.0f; image[i*4+2]=0.5f;
+    }
+    for (Mode mode:{Mode::depth_rcas,Mode::depth_das}) {
+        o=Options{}; o.mode=mode; o.clamp_output=1;
+        auto output=texture(DXGI_FORMAT_R32G32B32A32_FLOAT,image.data(),16);
+        check(pass.run(context.Get(),output.Get(),nullptr,z.Get(),nullptr,o,f),"colored clamp dispatch");
+        const auto actual=read(output.Get());
+        bool chroma=true;
+        for (unsigned i=0;i<count;i++) {
+            const auto p=i*4;
+            chroma &= actual[p]==1.0f && actual[p+1]==0.5f && actual[p+2]==0.25f && actual[p+3]==image[p+3];
+        }
+        check(chroma,"depth clamp keeps positive channel ratios and alpha");
+    }
     // A flat SDR value at one exposed an upstream zero denominator in hitMax.
     // Verify it stays finite and constant after the sign-correct epsilon guard.
     for (unsigned i=0;i<count;++i) image[i*4]=image[i*4+1]=image[i*4+2]=1;

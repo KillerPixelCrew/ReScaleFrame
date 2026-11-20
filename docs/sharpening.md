@@ -32,7 +32,9 @@ each backend's output copy, including FSR4's continuation command buffer.
 Minecraft's GL path forwards these controls to its D3D12 SDR reconstruction.
 HDR filtering uses exposure-aware perceptual encoding to preserve bright edges
 and bounds ordinary output to the original local color range. Strong depth
-breaks preserve the center pixel. Alpha is retained.
+breaks preserve the center pixel. With Debug View off, Depth RCAS and Depth DAS
+apply the resulting brightness change as a shared RGB gain to preserve the
+source color. Alpha is retained.
 
 Unity URP's engine-owned spatial FSR1 keeps its separate **FSR1 Sharpness**
 control because the engine owns that pass. The native temporal controls do not
