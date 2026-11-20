@@ -411,6 +411,19 @@ retained their Release exports. The Unity D3D12 fixture built. Real device,
 observer, vendor and game behavior remain unverified.
 See [the D3D12 render-host cutover audit](research/rust-render-host-cutover.md).
 
+Rust now owns the shared callback render host, including plugin start and
+stop, renderer configuration, SR contexts, callback leases, scene and
+submission routing, settings and overlay control. The adapter still supplies
+engine identity, spatial policy and its real leased render passes. The native
+leaves retain the same COM, SDK and observer operations.
+
+The integrated Release build passed 11 focused contracts, including the
+callback host, render frontend, SR12 and FG12 through both linkage forms.
+All 192 locked Rust tests, formatting and Clippy passed. Runtime, both
+carriers and Minecraft kept their export names and ordinals. The Unity
+D3D12 fixture built. Device and game execution remain pending.
+See [the callback-host cutover audit](research/rust-callback-host-cutover.md).
+
 The native D3D12 overlay now admits and retires its Present slots in Rust.
 It waits only on the oldest submitted overlay fence when its ring is full,
 checks the requested value after waking, and keeps the native completion
