@@ -81,7 +81,7 @@ target_link_libraries(rsf_anomaly_sr_hooks_test PRIVATE ReScaleFrame::GameSDK Re
 add_test(NAME anomaly_sr_hooks_contract COMMAND rsf_anomaly_sr_hooks_test)
 add_executable(rsf_anomaly_sr_roundtrip_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_roundtrip.cpp" "${RSF_ANOMALY_SR_SRC}/sr_d3d11.cpp")
 target_include_directories(rsf_anomaly_sr_roundtrip_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
-target_link_libraries(rsf_anomaly_sr_roundtrip_test PRIVATE ReScaleFrame::Graphics rsf_anomaly_sr_shaders d3d11 dxgi rsf_build_options)
+target_link_libraries(rsf_anomaly_sr_roundtrip_test PRIVATE rsf_anomaly_rust ReScaleFrame::Graphics rsf_anomaly_sr_shaders d3d11 dxgi rsf_build_options)
 add_test(NAME anomaly_sr_roundtrip_device COMMAND rsf_anomaly_sr_roundtrip_test)
 set_tests_properties(anomaly_sr_roundtrip_device PROPERTIES SKIP_RETURN_CODE 77)
 set_tests_properties(anomaly_sr_swap_contract anomaly_sr_swap_unknown_selection anomaly_sr_hooks_contract
@@ -194,7 +194,7 @@ foreach(rsf_sr5_client rsf_anomaly_sr_runtime_api_test rsf_anomaly_sr_temporal_d
     else()
         add_executable(${rsf_sr5_client} "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_temporal_device.cpp"
             "${RSF_ANOMALY_SR_SRC}/sr_d3d11.cpp")
-        target_link_libraries(${rsf_sr5_client} PRIVATE ReScaleFrame::Graphics rsf_anomaly_sr_shaders d3d11 dxgi d3dcompiler)
+        target_link_libraries(${rsf_sr5_client} PRIVATE rsf_anomaly_rust ReScaleFrame::Graphics rsf_anomaly_sr_shaders d3d11 dxgi d3dcompiler)
     endif()
     target_include_directories(${rsf_sr5_client} PRIVATE "${RSF_ANOMALY_SR_SRC}"
         "${PROJECT_SOURCE_DIR}/runtime/backends/dlss/include"

@@ -18,6 +18,7 @@ mod motion_target_abi;
 mod native_observer;
 #[cfg(windows)]
 mod native_observer_abi;
+mod sr_d3d11;
 mod sr_temporal;
 
 use rsf_game_sys::{
