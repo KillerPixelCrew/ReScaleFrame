@@ -28,7 +28,8 @@ static SETTINGS: Mutex<Settings> = Mutex::new(Settings {
     },
 });
 
-fn allowed(backend: u32, choices: u32) -> bool {
+// Auto needs every provider among `choices`; zero (Off) needs bit 0.
+pub(crate) fn allowed(backend: u32, choices: u32) -> bool {
     if backend == AUTO {
         return choices & PROVIDERS == PROVIDERS;
     }

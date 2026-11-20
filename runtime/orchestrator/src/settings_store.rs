@@ -109,6 +109,40 @@ fn sharpening_values(o: &Sharpening) -> [Value; 12] {
     ]
 }
 
+/// The shared post-pass fields of `s` over `base`, which supplies the header and ABI.
+pub(crate) fn sharpening_of(s: &Settings, base: &Sharpening) -> Sharpening {
+    Sharpening {
+        mode: s.sharpening_mode,
+        sharpness: s.sharpening_sharpness,
+        mas: s.sharpening_mas,
+        motion_sharpness: s.sharpening_motion_sharpness,
+        motion_threshold: s.sharpening_motion_threshold,
+        motion_scale_limit: s.sharpening_motion_scale_limit,
+        contrast_enabled: s.sharpening_contrast_enabled,
+        contrast: s.sharpening_contrast,
+        depth_scale: s.sharpening_depth_scale,
+        depth_bias: s.sharpening_depth_bias,
+        clamp_output: s.sharpening_clamp_output,
+        debug: s.sharpening_debug,
+        ..*base
+    }
+}
+
+pub(crate) fn set_sharpening(s: &mut Settings, o: &Sharpening) {
+    s.sharpening_mode = o.mode;
+    s.sharpening_sharpness = o.sharpness;
+    s.sharpening_mas = o.mas;
+    s.sharpening_motion_sharpness = o.motion_sharpness;
+    s.sharpening_motion_threshold = o.motion_threshold;
+    s.sharpening_motion_scale_limit = o.motion_scale_limit;
+    s.sharpening_contrast_enabled = o.contrast_enabled;
+    s.sharpening_contrast = o.contrast;
+    s.sharpening_depth_scale = o.depth_scale;
+    s.sharpening_depth_bias = o.depth_bias;
+    s.sharpening_clamp_output = o.clamp_output;
+    s.sharpening_debug = o.debug;
+}
+
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
 }

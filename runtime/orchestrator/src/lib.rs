@@ -75,6 +75,8 @@ mod plugin_session;
 #[cfg(windows)]
 mod render_abi;
 #[cfg(windows)]
+mod render_host;
+#[cfg(windows)]
 mod render_links;
 #[cfg(windows)]
 mod sampler_bias;
