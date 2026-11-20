@@ -80,7 +80,7 @@ void motion_decode() {
     CHECK(decode_reference(half_validity).unwritten);
     // Canonical UV and sparse coverage: the pipeline reconstructs camera motion for the sentinel pixels.
     CHECK(motion_to_uv[0] == 1.0f && motion_to_uv[1] == 1.0f && motion_camera_included == 0);
-    CHECK(first_person_depth_limit == 0.02f);
+    static_assert(first_person_depth_limit == 0.02f);
 }
 
 void planes() {

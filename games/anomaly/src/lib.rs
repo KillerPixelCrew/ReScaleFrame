@@ -31,6 +31,8 @@ mod overlay_abi;
 #[cfg(windows)]
 mod shader_loader;
 mod sr_d3d11;
+mod sr_stage;
+mod sr_stage_abi;
 mod sr_swap;
 mod sr_swap_abi;
 mod sr_temporal;

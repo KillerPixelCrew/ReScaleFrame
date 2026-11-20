@@ -19,7 +19,7 @@ void scales() {
     CHECK(clamp_scale(-1.0f) == default_scale && clamp_scale(0.0f) == default_scale);
     CHECK(clamp_scale(0.3f) == min_scale && clamp_scale(0.33f) == 0.33f && clamp_scale(0.5f) == 0.5f && clamp_scale(0.67f) == 0.67f);
     CHECK(clamp_scale(1.0f) == 1.0f && clamp_scale(1.5f) == max_scale && clamp_scale(100.0f) == max_scale);
-    CHECK(default_scale == 0.67f && min_scale == 0.33f && max_scale == 1.0f);
+    static_assert(default_scale == 0.67f && min_scale == 0.33f && max_scale == 1.0f);
 }
 
 void rounding() {

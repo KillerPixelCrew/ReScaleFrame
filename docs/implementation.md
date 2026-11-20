@@ -289,6 +289,20 @@ Minecraft (267). Nine focused contracts passed, including the DLL and
 embedded SR policy and callback-host forms, the D3D11 Present C11 and
 C++ consumers, and the Vulkan and shared shim export checks.
 
+Anomaly's SR stage driver now runs in Rust and uses the existing Rust
+swap, D3D11 and temporal owners. The driver owns stage lifecycle and
+admission, the H1 and seam order, capture and burst bookkeeping,
+published camera and jitter, options and status. Native leaves retain
+the guarded reads, trampolines and D3D11 and engine calls.
+See [the SR stage audit](research/rust-anomaly-sr-stage.md).
+
+The SR stage merge passed 26 focused MSVC 19.52 contracts in Debug and
+Release, 268 locked Rust tests, formatting and Clippy. The two SR fixture
+warnings reproduced on MSVC 19.44 are fixed, and both fixtures built
+and ran there. The adapter DLL exports, dynamic Runtime lookup and
+rebuilt motion pack matched the baseline. The device fixtures built.
+The Rust driver still needs device and live Standard and AVX evidence.
+
 The first source inspection found that the public frame sequencer opened a rendered
 frame and assigned its provenance under separate locks. Direct callers could read
 or retire the slot between those operations. The FG session adds its own outer
