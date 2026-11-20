@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #pragma once
 #include <rescaleframe/native_fg.h>
-#include <rescaleframe/native_cpu.h>
+#include "native_fg_cpu_platform.h"
 #include <rescaleframe/native_scene.h>
 
 #ifdef __cplusplus
@@ -36,31 +36,12 @@ extern "C" {
 #define RSF_NFG_RESULT_NOT_READY (-8)
 #define RSF_NFG_RESULT_FEATURE_FAILED (-9)
 
-/* SR failure stages, one diagnostic receipt each, owned by the CPU diagnostics in native_fg.cpp. */
-#define RSF_NFG_FAILURE_SR_PREREQUISITE 0u
-#define RSF_NFG_FAILURE_SR_TOKEN 1u
-#define RSF_NFG_FAILURE_SR_INITIALIZE 2u
-#define RSF_NFG_FAILURE_SR_SHARED_EVALUATE 3u
-
-/* CPU ledger counters the graphics owner advances. */
-#define RSF_NFG_COUNT_SR_CALL 0u
-#define RSF_NFG_COUNT_WINDOW 1u
-
 typedef struct rsf_nfg_texture_info {
     uint32_t width, height, format, samples;
 } rsf_nfg_texture_info;
 
-/* Copy of the CPU ledger entry at a source's ring index, which may hold another frame (check id). */
-typedef struct rsf_nfg_cpu_owner {
-    uint64_t id, session, provider_generation, ready_qpc, source_qpc, source_frequency;
-    uint64_t first_submission, first_view, join_ticks, reflex_ticks, submit_begin, submit_end;
-    uint32_t submitted, render_complete, paced, prospective, failed;
-    uint32_t rhi_begins, scene_begins, scene_ends;
-    float source_delta_ms;
-} rsf_nfg_cpu_owner;
-
 /* Private callback table with every entry present. native_fg.rs decides resources, ordering, leases,
-   admission, present sequencing and fallback; each entry performs one platform, vendor or CPU-ledger
+   admission, present sequencing and fallback; each entry performs one platform or vendor
    call. Successful COM outputs transfer one reference; other handles are borrowed unless named. */
 typedef struct rsf_nfg_platform {
     /* Presentation bridge and provider. */
@@ -117,43 +98,10 @@ typedef struct rsf_nfg_platform {
     void (*dump_fg_prepare)(const rsf_game_render_pass* pass, const rsf_fg_frame* frame, int32_t result);
     int32_t (*dump_named)(void* context, void* texture, const char* directory, const char* name, uint32_t view,
         float scale, rsf_backend_log_fn log, void* log_user);
-    /* CPU pacing and latency marker owner in native_fg.cpp. */
-    uint32_t (*cpu_rendered_source)(void);
-    void (*cpu_owner_read)(uint64_t source, rsf_nfg_cpu_owner* out);
-    void (*cpu_count)(uint64_t source, uint32_t counter);
-    void (*cpu_present_observed)(uint64_t presenting);
-    void (*cpu_progress)(uint64_t source, uint32_t* live, uint32_t* presented);
-    void (*cpu_fail)(uint64_t source);
-    void (*cpu_complete)(uint64_t source);
-    void (*cpu_latency_present)(uint64_t source, void* chain, uint32_t begin);
-    void (*cpu_anti_lag_status)(rsf_fg_status* status);
-    void (*cpu_stage)(const char* stage, uint64_t source, uint64_t native_frame, int32_t result,
-        const rsf_nfg_cpu_owner* owner, const rsf_game_render_pass* window);
-    void (*cpu_trace)(const char* stage, uint64_t source, int32_t result);
-    void (*cpu_failure)(uint32_t stage, uint64_t source, uint64_t session, int32_t result, uint32_t detail);
-    void (*cpu_report_timing)(const rsf_native_cpu_frame* cpu, const rsf_nfg_cpu_owner* owner, uint32_t screen,
-        uint64_t wait_ticks, uint64_t evaluate_ticks);
+    const rsf_nfg_cpu_platform* cpu;
 } rsf_nfg_platform;
 
-/* CPU pacing and latency marker owner (native_fg.cpp), in the order of the table's cpu_* entries. */
-uint32_t rsf_nfg_cpu_rendered_source(void);
-void rsf_nfg_cpu_owner_read(uint64_t source, rsf_nfg_cpu_owner* out);
-void rsf_nfg_cpu_count(uint64_t source, uint32_t counter);
-void rsf_nfg_cpu_present_observed(uint64_t presenting);
-void rsf_nfg_cpu_progress(uint64_t source, uint32_t* live, uint32_t* presented);
-void rsf_nfg_cpu_fail(uint64_t source);
-void rsf_nfg_cpu_complete(uint64_t source);
-void rsf_nfg_cpu_anti_lag_status(rsf_fg_status* status);
-void rsf_nfg_cpu_stage(const char* stage, uint64_t source, uint64_t native_frame, int32_t result,
-    const rsf_nfg_cpu_owner* owner, const rsf_game_render_pass* window);
-void rsf_nfg_cpu_trace(const char* stage, uint64_t source, int32_t result);
-void rsf_nfg_cpu_failure(uint32_t stage, uint64_t source, uint64_t session, int32_t result, uint32_t detail);
-void rsf_nfg_cpu_report_timing(const rsf_native_cpu_frame* cpu, const rsf_nfg_cpu_owner* owner, uint32_t screen,
-    uint64_t wait_ticks, uint64_t evaluate_ticks);
-
-/* Rust owner (native_fg.rs). Options and the log sink are read by the CPU owner too. */
-void rsf_core_native_fg_options(rsf_native_fg_options* out);
-void rsf_core_native_fg_logger(rsf_backend_log_fn* sink, void** user);
+/* Rust graphics owner. */
 void rsf_core_native_fg_options_set(const rsf_native_fg_options* options);
 void rsf_core_native_fg_set_log(rsf_backend_log_fn sink, void* user);
 int rsf_core_native_fg_status_get(rsf_native_fg_status* status, const rsf_nfg_platform* platform);

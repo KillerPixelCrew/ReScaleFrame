@@ -830,6 +830,22 @@ pub extern "C" fn rsf_native_cpu_rendered_source_set(enabled: u32) {
     CPU.rendered.store(enabled != 0, Ordering::SeqCst);
 }
 
+pub(crate) fn rendered_source() -> bool {
+    CPU.rendered.load(Ordering::SeqCst)
+}
+
+pub(crate) fn frame_facts(session: u64, source: u64) -> Option<rsf_native_cpu_frame> {
+    CPU.read(session, source)
+}
+
+pub(crate) fn reservation(session: u64, source: u64) -> Option<rsf_native_cpu_reservation> {
+    CPU.reservation(session, source)
+}
+
+pub(crate) fn counters() -> rsf_native_cpu_counters {
+    CPU.lock().totals
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rsf_native_cpu_read(
     session: u64,
@@ -839,7 +855,7 @@ pub unsafe extern "C" fn rsf_native_cpu_read(
     if !unsafe { has_capacity(frame) } {
         return 0;
     }
-    match CPU.read(session, source) {
+    match frame_facts(session, source) {
         Some(record) => {
             unsafe { frame.write(record) };
             1
@@ -875,7 +891,7 @@ pub unsafe extern "C" fn rsf_native_cpu_counters_get(out: *mut rsf_native_cpu_co
     if !unsafe { has_capacity(out) } {
         return 0;
     }
-    unsafe { out.write(CPU.lock().totals) };
+    unsafe { out.write(counters()) };
     1
 }
 
@@ -890,18 +906,36 @@ pub extern "C" fn rsf_native_cpu_ping_message(message: u32) {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn rsf_native_cpu_marker(source: u64, marker: u32) -> i32 {
+    mark_frame(None, source, marker)
+}
+
+pub(crate) fn marker_prerequisites(flags: u32, marker: u32) -> u32 {
+    if flags & KEYED != 0 {
+        (1 << marker) - 1
+    } else {
+        LEGACY_MARKER_REQUIRED[marker as usize]
+    }
+}
+
+pub(crate) fn mark_frame(session: Option<u64>, source: u64, marker: u32) -> i32 {
     if source == 0 || marker > 5 {
         return -1;
     }
     let mut guard = CPU.lock();
     let state = &mut *guard;
     let current_session = state.current_session;
+    if session.is_some_and(|session| session != current_session) {
+        return -1;
+    }
     let index = (source % FRAMES as u64) as usize;
     let CpuFrame {
         record: frame,
         derived_stages,
     } = &mut state.frames[index];
-    if frame.source_frame_id != source || frame.session_id != current_session {
+    if frame.source_frame_id != source
+        || frame.session_id != current_session
+        || (session.is_some() && frame.failed != 0)
+    {
         return -1;
     }
     // Normalized bookkeeping is never authority for a vendor timing marker.
@@ -928,11 +962,7 @@ pub extern "C" fn rsf_native_cpu_marker(source: u64, marker: u32) -> i32 {
         state.totals.duplicates = state.totals.duplicates.wrapping_add(1);
         return 0;
     }
-    let required = if frame.flags & KEYED != 0 {
-        (1 << marker) - 1
-    } else {
-        LEGACY_MARKER_REQUIRED[marker as usize]
-    };
+    let required = marker_prerequisites(frame.flags, marker);
     if frame.marker_mask & required != required {
         state.totals.order_violations = state.totals.order_violations.wrapping_add(1);
         return -1;
@@ -950,7 +980,7 @@ pub unsafe extern "C" fn rsf_native_cpu_reservation_read(
     if !unsafe { has_capacity(out) } {
         return 0;
     }
-    match CPU.reservation(session, source) {
+    match reservation(session, source) {
         Some(reservation) => {
             unsafe { out.write(reservation) };
             1
@@ -987,11 +1017,18 @@ pub extern "C" fn rsf_native_cpu_present_result(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn rsf_native_cpu_paced(source: u64, began: u64, ready: u64) {
+    record_pacing(None, source, began, ready);
+}
+
+pub(crate) fn record_pacing(session: Option<u64>, source: u64, began: u64, ready: u64) {
     if source == 0 || began == 0 || ready < began {
         return;
     }
     let mut guard = CPU.lock();
     let current_session = guard.current_session;
+    if session.is_some_and(|session| session != current_session) {
+        return;
+    }
     let frame = &mut guard.slot(source).record;
     if frame.source_frame_id != source || frame.session_id != current_session {
         return;

@@ -25,6 +25,10 @@ mod native_fg;
 #[cfg(windows)]
 mod native_fg_abi;
 #[cfg(windows)]
+mod native_fg_cpu;
+#[cfg(windows)]
+mod native_fg_cpu_abi;
+#[cfg(windows)]
 mod native_regions;
 #[cfg(windows)]
 mod native_reinsert;

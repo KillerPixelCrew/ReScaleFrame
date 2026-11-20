@@ -73,6 +73,7 @@ struct rsf_streamline_host {
     rsf_reflex_mode reflex_mode = RSF_REFLEX_OFF;
     uint32_t frame_limit_us = 0;
     uint32_t pcl_message = 0;
+    uint32_t low_latency_available = 0, latency_report_available = 0;
     uint64_t input_counts[4]{};
     std::chrono::steady_clock::time_point last_report{}, last_slow_log{};
     rsf_fg_status cached_capability{};
@@ -550,7 +551,11 @@ extern "C" rsf_backend_result rsf_streamline_host_retire_through(rsf_streamline_
 extern "C" rsf_backend_result rsf_streamline_host_reflex(rsf_streamline_host* host, rsf_reflex_mode mode, uint32_t limit)
 {
     if (!host || mode > RSF_REFLEX_BOOST) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    std::scoped_lock lock(host->reflex_guard, host->marker_guard);
+    // Present can request new options while the next CPU source sleeps.
+    // Keep this frame moving and let its caller retry the uncommitted options.
+    std::unique_lock reflex(host->reflex_guard, std::try_to_lock);
+    if (!reflex.owns_lock()) return RSF_BACKEND_ERROR_NOT_READY;
+    std::lock_guard markers(host->marker_guard);
     if (!host->reflex_options || host->profile == RSF_SL_PROFILE_PCL) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     sl::ReflexState state{};
     if (!host->reflex_state || host->reflex_state(state) != sl::Result::eOk) return RSF_BACKEND_ERROR_FEATURE_FAILED;
@@ -572,21 +577,28 @@ extern "C" rsf_backend_result rsf_streamline_host_reflex(rsf_streamline_host* ho
 extern "C" rsf_backend_result rsf_streamline_host_latency_status(rsf_streamline_host* host, rsf_streamline_latency_status* out)
 {
     if (!host || !out || out->struct_size < sizeof(*out)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    std::scoped_lock lock(host->reflex_guard, host->marker_guard);
+    // The Present-side overlay reads this while the next CPU frame may be
+    // sleeping. Read published capabilities and current counters in that case.
+    std::unique_lock reflex(host->reflex_guard, std::try_to_lock);
+    std::lock_guard markers(host->marker_guard);
     *out = {}; out->struct_size = sizeof(*out); out->profile = host->profile;
     out->pacing_owner = host->profile == RSF_SL_PROFILE_PCL ? RSF_PACING_NONE : RSF_PACING_REFLEX;
     out->reflex_mode = host->reflex_mode; out->frame_limit_us = host->frame_limit_us;
     out->sleep_calls = host->sleep_calls; out->marker_calls = host->marker_calls; out->last_begin_id = host->last_begin;
-    if (host->reflex_state) {
+    if (reflex.owns_lock() && host->reflex_state) {
         sl::ReflexState state{};
         if (host->reflex_state(state) != sl::Result::eOk) return RSF_BACKEND_ERROR_FEATURE_FAILED;
-        out->low_latency_available = state.lowLatencyAvailable; out->latency_report_available = state.latencyReportAvailable;
+        host->low_latency_available = state.lowLatencyAvailable;
+        host->latency_report_available = state.latencyReportAvailable;
     }
-    if (host->pcl_state) {
+    if (reflex.owns_lock() && host->pcl_state) {
         sl::PCLState state{};
         if (host->pcl_state(state) != sl::Result::eOk) return RSF_BACKEND_ERROR_FEATURE_FAILED;
-        out->pcl_message_id = state.statsWindowMessage; host->pcl_message=state.statsWindowMessage;
+        host->pcl_message = state.statsWindowMessage;
     }
+    out->low_latency_available = host->low_latency_available;
+    out->latency_report_available = host->latency_report_available;
+    out->pcl_message_id = host->pcl_message;
     return RSF_BACKEND_OK;
 }
 extern "C" rsf_backend_result rsf_streamline_host_upgrade_chain(rsf_streamline_host* host, void** chain)

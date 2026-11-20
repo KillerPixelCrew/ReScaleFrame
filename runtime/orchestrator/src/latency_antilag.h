@@ -36,7 +36,7 @@ void rsf_core_antilag_reset_sources(AntiLagContext*);
 class AntiLag {
     AntiLagContext* context_{};
 public:
-    explicit AntiLag(AntiLagDriver& driver) noexcept {
+    static AntiLagContext* create_context(AntiLagDriver& driver) noexcept {
         static constexpr AntiLagCallbacks callbacks{
             +[](void* context, uint32_t api, void* device) -> uint32_t {
                 return static_cast<AntiLagDriver*>(context)->initialize(api, device);
@@ -49,8 +49,9 @@ public:
             },
             +[](void* context) { static_cast<AntiLagDriver*>(context)->shutdown(); },
         };
-        context_ = rsf_core_antilag_create(&callbacks, &driver);
+        return rsf_core_antilag_create(&callbacks, &driver);
     }
+    explicit AntiLag(AntiLagDriver& driver) noexcept : context_(create_context(driver)) {}
     AntiLag(const AntiLag&) = delete;
     AntiLag& operator=(const AntiLag&) = delete;
     ~AntiLag() { rsf_core_antilag_destroy(context_); }
