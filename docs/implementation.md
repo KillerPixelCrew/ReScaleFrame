@@ -3,6 +3,15 @@
 ## Rust orchestrator and first Anomaly port
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
+
+The existing C++ Anomaly DLL builds against the merged runtime. Thirteen
+focused MSVC contracts passed in Debug and Release, covering plugin
+lifecycle, cold-start refusal, native hooks, the D3D11 host, SR and overlay
+API wiring, FG settings, and Standard and AVX input hooks and events.
+The SR API and D3D11 host fixtures load the Runtime DLL. The stubbed
+engine and overlay fixtures verify only the adapter contracts. Anomaly
+hardware and game validation remain pending before its Rust cutover.
+
 The first source inspection found that the public frame sequencer opened a rendered
 frame and assigned its provenance under separate locks. Direct callers could read
 or retire the slot between those operations. The FG session adds its own outer
