@@ -112,6 +112,7 @@ public:
     // Render thread, at the seam: the reset decision, the pass and the evaluation. True when `in.color_output` holds
     // this frame's reconstruction. Every false return is counted with its reason.
     bool evaluate(ID3D11DeviceContext*, PassInputs& in, const ResetFacts& facts) noexcept;
+    bool evaluate(ID3D11DeviceContext*, rsf_anomaly_sr_pass_inputs& in, const ResetFacts& facts) noexcept;
     // Render thread: the pipeline writes the next evaluated frame's backend inputs and output under `prefix_utf8`
     // (_input, _output, _motion, _motion_decoded, _motion_submitted, _depth, _exposure, _frame.json).
     bool request_dump(const std::string& prefix_utf8) noexcept;

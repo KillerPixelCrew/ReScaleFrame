@@ -6,10 +6,12 @@
 // and the TemporalDriver facade over the existing Rust temporal driver.
 mod math;
 
+pub(crate) use self::math::plan_for_render;
 use self::math::{
     BurstGate, DEFAULT_MIP_OFFSET, DEFAULT_SCALE, JitterSequence, clamp_mip_offset, clamp_scale,
-    jitter_to_uv, make_plan, mip_delta, next_jitter, plan_for_render,
+    jitter_to_uv, make_plan, mip_delta, next_jitter,
 };
+use crate::camera;
 use crate::lease::Lease;
 use crate::sr_stage_abi::*;
 use rsf_game_sys::{RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record};
@@ -1175,14 +1177,11 @@ impl Stage {
         let c = &state.config;
         state.frame_cut = camera.valid
             && state.previous_camera.valid
-            && leaf!(
-                p,
-                camera_cut(
-                    state.previous_camera.view.as_ptr(),
-                    camera.view.as_ptr(),
-                    c.cut_distance,
-                    c.cut_degrees
-                )
+            && camera::camera_cut(
+                camera::pose(&state.previous_camera.view),
+                camera::pose(&camera.view),
+                c.cut_distance,
+                c.cut_degrees,
             );
         let (mut now, mut frequency) = (0i64, 0i64);
         leaf!(p, now(&mut now, &mut frequency));

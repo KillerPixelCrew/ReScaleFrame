@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #[cfg(windows)]
 mod bootstrap;
+mod camera;
 #[cfg(any(windows, test))]
 mod fg_inputs;
 #[cfg(any(windows, test))]
@@ -33,6 +34,7 @@ mod overlay_abi;
 #[cfg(windows)]
 mod shader_loader;
 mod sr_d3d11;
+mod sr_pass;
 mod sr_stage;
 mod sr_stage_abi;
 mod sr_swap;

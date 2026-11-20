@@ -371,6 +371,19 @@ and dynamic Runtime lookup. The production-linked bridge and shared
 surface device fixtures built. Real queue joins, generated presentation,
 resize and teardown still need device and game evidence.
 
+Anomaly now builds its leased Stage 5 SR pass and selects its reset in
+Rust. SR and FG share the X-Ray camera and clip-mapping implementation.
+The native seam supplies the guarded engine facts and texture pointers
+for the synchronous Runtime evaluation. The native fixtures use the
+same Rust pass builder. See [the SR pass audit](research/rust-anomaly-sr-pass.md).
+
+The merged camera and pass port passed 27 focused MSVC contracts in
+Debug and Release and 291 locked Rust tests. Clippy, formatting and
+binding regeneration passed. The pass and reconstruction fixtures
+passed syntax checks under MSVC 19.44 with warnings denied. The
+adapter DLL exports, Runtime lookup and motion pack match the
+staged baseline.
+
 The first source inspection found that the public frame sequencer opened a rendered
 frame and assigned its provenance under separate locks. Direct callers could read
 or retire the slot between those operations. The FG session adds its own outer

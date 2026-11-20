@@ -11,6 +11,7 @@
 #include <stdint.h>
 
 struct rsf_frame_record;
+struct rsf_game_render_pass;
 
 typedef void (*rsf_anomaly_sr_log)(void*, const char*);
 
@@ -152,7 +153,7 @@ typedef struct rsf_anomaly_sr_camera {
     bool valid;
 } rsf_anomaly_sr_camera;
 
-// Stage 5: everything the native pass builder needs besides the textures the leaf owns.
+// Stage 5: frame facts to pair with the texture leases held by the native seam.
 typedef struct rsf_anomaly_sr_pass {
     uint64_t native_frame;
     uint32_t generation, render_width, render_height, output_width, output_height;
@@ -161,6 +162,41 @@ typedef struct rsf_anomaly_sr_pass {
     float frame_seconds;
     bool motion_missing, exposure_auto, reset_sequence, cut;
 } rsf_anomaly_sr_pass;
+
+typedef struct rsf_anomaly_sr_pass_inputs {
+    rsf_anomaly_sr_pass frame;
+    uint64_t session;
+    bool reset;
+    void *color, *color_output, *depth, *motion, *exposure;
+} rsf_anomaly_sr_pass_inputs;
+
+typedef struct rsf_anomaly_sr_planes {
+    float near_plane, far_plane, vertical_fov;
+    bool valid;
+} rsf_anomaly_sr_planes;
+typedef struct rsf_anomaly_sr_pose {
+    double position[3], forward[3];
+    bool valid;
+} rsf_anomaly_sr_pose;
+typedef struct rsf_anomaly_sr_reset_facts {
+    bool first, device, settings, sequence, cut;
+} rsf_anomaly_sr_reset_facts;
+
+#define RSF_ANOMALY_SR_MAIN_VIEW_KEY 1u
+#define RSF_ANOMALY_SR_MOTION_TO_UV 1.0f
+#define RSF_ANOMALY_SR_MOTION_CAMERA_INCLUDED 0u
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+uint8_t rsf_anomaly_sr_build_pass(const rsf_anomaly_sr_pass_inputs*, struct rsf_game_render_pass*);
+void rsf_anomaly_sr_projection_planes(const float (*projection)[16], rsf_anomaly_sr_planes*);
+void rsf_anomaly_sr_pose_of(const float (*view)[16], rsf_anomaly_sr_pose*);
+bool rsf_anomaly_sr_camera_cut(const rsf_anomaly_sr_pose*, const rsf_anomaly_sr_pose*, float distance, float degrees);
+uint8_t rsf_anomaly_sr_reset_reason(const rsf_anomaly_sr_reset_facts*);
+#ifdef __cplusplus
+}
+#endif
 
 // The S-B seam the controller is closing: the engine and twin generic0 surfaces and the window sizes.
 typedef struct rsf_anomaly_sr_seam {
@@ -229,8 +265,6 @@ typedef struct rsf_anomaly_sr_stage_platform {
     void (*set_swap_enabled)(bool);
     void (*controller)(rsf_anomaly_sr_controller*);
     void (*swap_counters)(rsf_anomaly_sr_swap_counters*);
-    // Camera pose in the engine's row-vector convention (sr_pass.h).
-    bool (*camera_cut)(const float* previous_view, const float* view, float distance, float degrees);
     // GPU timestamps of the world window and the seam pass.
     void (*timer_begin)(void);
     void (*timer_seam)(bool swapped);

@@ -409,13 +409,6 @@ JitterState to_native(const rsf_anomaly_sr_jitter_state& s) noexcept {
     out.scope = s.scope; out.applied = s.applied; out.previous_applied = s.previous_applied; out.reset = s.reset;
     return out;
 }
-ViewCamera to_native(const rsf_anomaly_sr_camera& c) noexcept {
-    ViewCamera out{};
-    std::copy_n(c.view, 16, out.view.begin());
-    std::copy_n(c.projection, 16, out.projection.begin());
-    out.valid = c.valid;
-    return out;
-}
 SrSettings to_native(const rsf_anomaly_sr_settings& s) noexcept { return {s.enabled, s.backend, s.quality, s.preset}; }
 rsf_anomaly_sr_settings to_c(const SrSettings& s) noexcept { return {s.enabled, s.backend, s.quality, s.preset}; }
 std::wstring widen(const char* text) {
@@ -735,12 +728,6 @@ const rsf_anomaly_sr_stage_platform platform{
         std::copy(std::begin(c.skipped), std::end(c.skipped), out->skipped);
         std::copy(std::begin(c.restores), std::end(c.restores), out->restores);
     },
-    .camera_cut = [](const float* previous, const float* current, float distance, float degrees) {
-        Matrix a{}, b{};
-        std::copy_n(previous, 16, a.begin());
-        std::copy_n(current, 16, b.begin());
-        return sr::camera_cut(pose_of(a), pose_of(b), CutRule{distance, degrees});
-    },
     .timer_begin = [] { gpu_timer.begin(host.device(), host.context()); },
     .timer_seam = [](bool swapped) { gpu_timer.seam(host.context(), swapped); },
     .timer_finish = [] { gpu_timer.finish(host.context()); },
@@ -820,25 +807,14 @@ const rsf_anomaly_sr_stage_platform platform{
     .driver_boundary = [](uint32_t width, uint32_t height) { driver.boundary(host.device(), width, height); },
     .driver_evaluate = [](const rsf_anomaly_sr_pass* in) {
         auto& t = host.temporal;
-        PassInputs pass{};
-        pass.native_frame = in->native_frame;
-        pass.generation = in->generation;
-        pass.render_width = in->render_width; pass.render_height = in->render_height;
-        pass.output_width = in->output_width; pass.output_height = in->output_height;
-        pass.current = to_native(in->current);
-        pass.previous = to_native(in->previous);
-        pass.jitter = to_native(in->jitter);
-        pass.frame_time_seconds = in->frame_seconds;
+        rsf_anomaly_sr_pass_inputs pass{};
+        pass.frame = *in;
         pass.color = t.colour.Get();
         pass.color_output = t.output.Get();
         pass.depth = host.depth.texture.Get();
         pass.motion = t.motion.Get();
-        pass.motion_missing = in->motion_missing;
         pass.exposure = in->exposure_auto ? nullptr : t.exposure.Get();
-        ResetFacts facts{};
-        facts.sequence = in->reset_sequence;
-        facts.cut = in->cut;
-        return driver.evaluate(host.context(), pass, facts);
+        return driver.evaluate(host.context(), pass, {.sequence = in->reset_sequence, .cut = in->cut});
     },
     .driver_request_dump = [](const char* prefix) {
         try { return driver.request_dump(prefix); } catch (...) { return false; }

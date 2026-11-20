@@ -148,7 +148,8 @@ void rects_and_flags() {
     rsf_game_render_pass pass;
     CHECK(build_pass(in, pass) == PassError::None);
     CHECK(pass.role == RSF_GAME_RENDER_SR && pass.session_id == 0x1234 && pass.native_frame == 7 && pass.resource_generation == 3);
-    CHECK(pass.history_key == main_view_key && pass.family_key == main_view_key && pass.view_key == main_view_key);
+    CHECK(pass.history_key == main_view_key && pass.family_key == main_view_key && pass.view_key == main_view_key &&
+        pass.pass_key == main_view_key);
     CHECK(pass.render_rect[0] == 0 && pass.render_rect[1] == 0 && pass.render_rect[2] == 1280 && pass.render_rect[3] == 720);
     CHECK(pass.output_rect[0] == 0 && pass.output_rect[1] == 0 && pass.output_rect[2] == 1920 && pass.output_rect[3] == 1080);
     CHECK(pass.flags == (RSF_GAME_RENDER_PRIMARY | RSF_GAME_RENDER_NO_FG));
@@ -188,10 +189,19 @@ void refusals() {
     CHECK(build_pass(in, pass) == PassError::Jitter);
     in = inputs(); in.current.projection[11] = 0;
     CHECK(build_pass(in, pass) == PassError::Projection);
-    in = inputs(); in.current.view = {};   // singular
+    in = inputs();
+    CHECK(build_pass(in, pass) == PassError::None && pass.color_input == in.color);
+    in.current.view = {};   // singular
     CHECK(build_pass(in, pass) == PassError::Camera);
     // A refusal leaves nothing a caller could submit.
-    CHECK(pass.struct_size == 0 && pass.role == 0);
+    CHECK(pass.struct_size == 0 && pass.role == 0 && pass.color_input == nullptr && pass.camera_valid == 0);
+    in = inputs(); in.previous.view = {};
+    CHECK(build_pass(in, pass) == PassError::Camera);
+    // A reset ignores a stale camera but still forwards the last applied sample in render pixels.
+    in.reset = true;
+    CHECK(build_pass(in, pass) == PassError::None && (pass.flags & RSF_GAME_RENDER_RESET) &&
+        pass.camera.previous_jitter_pixels[0] == in.jitter.previous_x &&
+        pass.camera.previous_jitter_pixels[1] == in.jitter.previous_y);
 }
 
 void resets() {
