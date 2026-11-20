@@ -68,7 +68,7 @@ void submitted_slot(rsf_dlssgvk& self, uint64_t frame, void* prepare, void* hudl
     slot.recorded_prepare = slot.recorded_hudless = true;
     slot.prepare_commands = prepare; slot.hudless_commands = hudless;
     slot.source_completion = reinterpret_cast<VkFence>(1); slot.consumer_completion = reinterpret_cast<VkFence>(2);
-    rsf_core_dlss_vk_prepare_accepted(&self.timeline, &slot);
+    rsf_core_fgvk_prepare_accepted(&self.timeline, &slot);
 }
 }
 extern "C" rsf_backend_result rsf_slvk_invoke(const rsf_slvk_call* call) {

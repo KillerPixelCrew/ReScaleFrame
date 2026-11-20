@@ -330,6 +330,18 @@ fixture covers ordered Present and duplicate refusal with SDK and WSI
 doubles. All 146 workspace Rust tests, formatting, Clippy and binding
 regeneration passed. Live driver and game behavior remain unverified.
 
+FidelityFX and DLSS Vulkan FG now use the same Rust recording and Present
+ledger. FidelityFX still tracks capture-only guides while interpolation is
+Off. Reused command addresses fence only the newest recording, and discarded
+copies no longer establish image layouts. Both providers retain independent
+native SDK calls and fence waits.
+
+Six focused Vulkan contracts passed in Debug and Release. The FidelityFX
+provider built with the pinned headers. The shared ledger regression covers
+address reuse, layout invalidation and duplicate notification. All 161 Rust
+tests, formatting and Clippy passed. Vulkan device and game validation
+remain open.
+
 The OpenGL pipeline now keeps its shared surface and SR lifecycle, frame
 identity, fallback and FG requests in Rust. Native callbacks handle OpenGL,
 DXGI and the presentation child window. A rejected SR rebuild remains

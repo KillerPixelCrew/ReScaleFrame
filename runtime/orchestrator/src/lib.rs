@@ -23,8 +23,6 @@ mod d3d11_output_abi;
 #[cfg(windows)]
 mod dlss_vulkan_capture_ledger;
 #[cfg(windows)]
-mod dlss_vulkan_frames;
-#[cfg(windows)]
 mod native_composition;
 #[cfg(windows)]
 mod native_cpu;
@@ -113,6 +111,8 @@ mod vulkan_antilag;
 mod vulkan_fg;
 #[cfg(windows)]
 mod vulkan_fg_abi;
+#[cfg(windows)]
+mod vulkan_fg_frames;
 #[cfg(windows)]
 mod vulkan_latency;
 #[cfg(windows)]

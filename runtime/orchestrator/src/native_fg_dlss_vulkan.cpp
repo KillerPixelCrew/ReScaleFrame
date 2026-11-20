@@ -10,7 +10,7 @@
 #include <limits>
 #include <memory>
 #include "native_fg_dlss_vulkan_capture.h"
-#include "native_fg_dlss_vulkan_frames.h"
+#include "vulkan_fg_frames.h"
 #include "native_fg_source.h"
 
 #if defined(RSF_HAVE_STREAMLINE_VK)
@@ -32,7 +32,8 @@ struct Image {
     uint32_t width = 0, height = 0; VkFormat format = VK_FORMAT_UNDEFINED;
     bool initialized = false;
 };
-struct Slot : rsf_dlss_vk_slot {
+struct Slot : rsf_fgvk_frame_slot {
+    bool sdk_inputs_pending = false;
     VkSemaphore sdk_inputs_completion = VK_NULL_HANDLE;
     uint64_t sdk_inputs_value = 0;
     VkFence source_completion = VK_NULL_HANDLE, consumer_completion = VK_NULL_HANDLE;
@@ -54,8 +55,8 @@ struct rsf_dlssgvk {
     uint32_t width = 0, height = 0, backbuffers = 0, count = 1;
     bool claimed = false, requested = false, enabled = false, resources = false;
     uint64_t actual_presents = 0;
-    rsf_dlss_vk_timeline timeline{};
-    std::array<Slot, RSF_DLSS_VK_FRAME_SLOTS> slots{};
+    rsf_fgvk_timeline timeline{};
+    std::array<Slot, RSF_FGVK_FRAME_SLOTS> slots{};
     VkPhysicalDeviceMemoryProperties memory{};
     PFN_vkCreateSwapchainKHR create_chain = nullptr; PFN_vkDestroySwapchainKHR destroy_chain = nullptr;
     PFN_vkGetSwapchainImagesKHR images = nullptr; PFN_vkAcquireNextImageKHR acquire = nullptr;
@@ -452,7 +453,7 @@ extern "C" rsf_backend_result rsf_dlssgvk_prepare(rsf_dlssgvk* self, void* comma
         !std::isfinite(input->motion_scale_x) || !std::isfinite(input->motion_scale_y) || !input->motion_scale_x || !input->motion_scale_y)
         return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     auto& slot = self->slots[record.frame_id % self->slots.size()];
-    if (!rsf_core_dlss_vk_can_prepare(&slot)) return RSF_BACKEND_ERROR_NOT_READY;
+    if (!rsf_core_fgvk_can_prepare(&slot)) return RSF_BACKEND_ERROR_NOT_READY;
     if (wait_inputs(*self, slot) != RSF_BACKEND_OK) return RSF_BACKEND_ERROR_NOT_READY;
     const auto device = static_cast<VkDevice>(self->setup.graphics.device);
     for (auto fence : {slot.source_pending ? slot.source_completion : VK_NULL_HANDLE, slot.consumer_pending ? slot.consumer_completion : VK_NULL_HANDLE})
@@ -464,11 +465,11 @@ extern "C" rsf_backend_result rsf_dlssgvk_prepare(rsf_dlssgvk* self, void* comma
     if (!allocate(*self, slot.depth, record.render_width, record.render_height, VK_FORMAT_R32_SFLOAT) ||
         !allocate(*self, slot.motion, record.render_width, record.render_height, VK_FORMAT_R16G16_SFLOAT) ||
         !allocate(*self, slot.color, self->width, self->height, VK_FORMAT_R8G8B8A8_UNORM)) return RSF_BACKEND_ERROR_INIT_FAILED;
-    rsf_core_dlss_vk_prepare_begin(&self->timeline, &slot, &record, commands);
+    rsf_core_fgvk_prepare_begin(&self->timeline, &slot, &record, commands);
     RecordCall call{*self, *input, static_cast<VkCommandBuffer>(commands), slot};
     const auto result = invoke(*self, prepare, record.session_id, record.frame_id, &call);
     if (result == RSF_BACKEND_OK) {
-        rsf_core_dlss_vk_prepare_accepted(&self->timeline, &slot);
+        rsf_core_fgvk_prepare_accepted(&self->timeline, &slot);
         self->present_capture.remember(slot.record, self->count, self->status, self->enabled);
     }
     self->status.presentation.result = result; return result;
@@ -484,7 +485,7 @@ extern "C" rsf_backend_result rsf_dlssgvk_hudless(rsf_dlssgvk* self, void* comma
     if (!self->requested) return RSF_BACKEND_OK;
     const auto& record = *input->record; auto& slot = self->slots[record.frame_id % self->slots.size()];
     if (!valid_image(*self, input->hudless, self->width, self->height, VK_FORMAT_R8G8B8A8_UNORM) ||
-        !rsf_core_dlss_vk_hudless_begin(&slot, &record, commands)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+        !rsf_core_fgvk_hudless_begin(&slot, &record, commands)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     RecordCall call{*self, *input, static_cast<VkCommandBuffer>(commands), slot};
     const auto result = invoke(*self, hudless, record.session_id, record.frame_id, &call);
     self->status.presentation.result = result; return result;
@@ -495,13 +496,17 @@ extern "C" rsf_backend_result rsf_dlssgvk_hudless(rsf_dlssgvk* self, void* comma
 extern "C" void rsf_dlssgvk_submitted(rsf_dlssgvk* self, void* const* commands, uint32_t count) {
 #if defined(RSF_HAVE_STREAMLINE_VK)
     if (!self || !commands) return;
-    std::array<rsf_dlss_vk_slot*, RSF_DLSS_VK_FRAME_SLOTS> states{};
+    std::array<rsf_fgvk_frame_slot*, RSF_FGVK_FRAME_SLOTS> states{};
     for (size_t i = 0; i < states.size(); ++i) states[i] = &self->slots[i];
-    const auto fences = rsf_core_dlss_vk_submitted(states.data(), commands, count);
+    rsf_fgvk_submit_plan plan{};
+    rsf_core_fgvk_submitted(states.data(), commands, count, &plan);
     const auto device = static_cast<VkDevice>(self->setup.graphics.device);
     for (size_t i = 0; i < states.size(); ++i) {
-        if (!(fences & (1u << i))) continue;
         auto& slot = self->slots[i];
+        const auto bit = 1u << i;
+        if (plan.discarded_prepare & bit) slot.depth.initialized = slot.motion.initialized = false;
+        if (plan.discarded_hudless & bit) slot.color.initialized = false;
+        if (!(plan.fences & bit)) continue;
         // Prepare and HUD-less may submit separately. Fence each actual handoff.
         if ((slot.source_pending && self->wait_fences(device, 1, &slot.source_completion, VK_TRUE, 15000000000ull) != VK_SUCCESS) ||
             self->reset_fences(device, 1, &slot.source_completion) != VK_SUCCESS || self->setup.graphics_submit(self->setup.queue_user,
@@ -521,7 +526,7 @@ static int32_t dlss_present(rsf_dlssgvk* self, const void* present_info, const r
     if (info.swapchainCount != 1 || !info.pSwapchains || info.pSwapchains[0] != self->chain) return VK_ERROR_INITIALIZATION_FAILED;
     auto& slot = self->slots[source_frame % self->slots.size()];
     const bool identity = rsf::fg_present_identity_matches(slot.record, source, explicit_source);
-    const bool candidate = rsf_core_dlss_vk_present_candidate(&self->timeline, &slot, source_frame, identity, self->requested) != 0;
+    const bool candidate = rsf_core_fgvk_present_candidate(&self->timeline, &slot, source_frame, identity, self->requested) != 0;
     struct Configure { rsf_dlssgvk& self; bool enabled; } call{*self, candidate};
     auto configured = invoke(*self, [](void*, uintptr_t, void* user) -> rsf_backend_result {
         auto& value = *static_cast<Configure*>(user); return configure(value.self, value.enabled);
@@ -554,7 +559,7 @@ static int32_t dlss_present(rsf_dlssgvk* self, const void* present_info, const r
     }
     if (configuration_result != RSF_BACKEND_OK) self->status.sdk_result = configuration_sdk_result;
     self->status.asynchronous_present_result = asynchronous_error.exchange(0);
-    rsf_core_dlss_vk_presented(&self->timeline, &slot, source_frame, identity);
+    rsf_core_fgvk_presented(&self->timeline, &slot, source_frame, identity);
     self->status.presentation.source_frame = valid ? source_frame : 0;
     self->status.presentation.enabled = valid && !self->status.sdk_status && !self->status.asynchronous_present_result;
     self->status.presentation.result = result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR ?
@@ -584,7 +589,7 @@ extern "C" rsf_backend_result rsf_dlssgvk_drain(rsf_dlssgvk* self) try {
 #if defined(RSF_HAVE_STREAMLINE_VK)
     // A recorded copy can still reference SDK resources in an unsubmitted list.
     for (const auto& slot : self->slots)
-        if (rsf_core_dlss_vk_unsubmitted(&slot))
+        if (rsf_core_fgvk_unsubmitted(&slot))
             return RSF_BACKEND_ERROR_NOT_READY;
     const auto timeout_epoch = VulkanStorySlWorkerTimeoutEpoch();
     const auto disabled = invoke(*self, disable); if (disabled != RSF_BACKEND_OK) return disabled;
