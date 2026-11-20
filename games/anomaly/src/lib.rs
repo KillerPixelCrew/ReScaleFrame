@@ -9,6 +9,10 @@ mod geometry_registry;
 mod geometry_registry_abi;
 mod input;
 mod motion;
+#[cfg(windows)]
+mod overlay;
+#[cfg(windows)]
+mod overlay_abi;
 mod sr_temporal;
 
 use rsf_game_sys::{
