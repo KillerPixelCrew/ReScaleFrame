@@ -11,6 +11,11 @@ API wiring, FG settings, and Standard and AVX input hooks and events.
 The SR API and D3D11 host fixtures load the Runtime DLL. The stubbed
 engine and overlay fixtures verify only the adapter contracts. Anomaly
 hardware and game validation remain pending before its Rust cutover.
+The read-only SR evidence verifier also passed against the installed
+Anomaly 1.5.3 Standard and AVX executables. It checked 17 function guards,
+6 call-site guards, 7 extended guards, 6 first-person sites and 26
+render-target slots per profile. This verifies the deployed build
+identities and guarded layouts before live testing.
 
 The first source inspection found that the public frame sequencer opened a rendered
 frame and assigned its provenance under separate locks. Direct callers could read
@@ -415,6 +420,22 @@ both carriers and Minecraft Release exports matched. The linked XeSS
 device fixture built. The worker verified SDK-disabled linkage in its
 isolated build. Device and game execution remain pending.
 See [the XeSS Vulkan FG cutover audit](research/rust-vulkan-xess-fg-cutover.md).
+
+Vulkan DLSS FG now owns proxy admission, exact source state, private GPU
+leases, capture groups and checked teardown in Rust. It shares the FG
+frame ledger and requires both the host queue proof and the Streamline
+input completion lease. An abandoned recording cannot publish capture
+pixels, and an unprovable SDK completion keeps its resources alive.
+Capture detaches before the SDK feature is freed.
+
+The merged branch passed 14 focused CPU contracts in Debug and Release,
+including enabled Streamline leaves driven by synthetic callbacks and the
+Anomaly SR and D3D11-host contracts. All 212 locked Rust tests, formatting
+and Clippy passed. The two stub Runtime DLLs passed ABI admission and
+null-teardown checks. All four Release export inventories matched.
+The corrected Streamline runtime receipt was unavailable. SDK execution,
+GPU completion, capture pixels and gameplay remain unverified.
+See [the Vulkan DLSS FG cutover audit](research/rust-vulkan-dlss-fg-cutover.md).
 
 The ordinary Vulkan SR owner now manages FidelityFX context selection,
 staging, dispatch, history, output publication and checked teardown in Rust.

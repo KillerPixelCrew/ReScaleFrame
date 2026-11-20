@@ -1,40 +1,24 @@
 // SPDX-License-Identifier: MIT
-#include <rescaleframe/native_fg_dlss_vulkan.h>
-#include <rescaleframe/native_streamline_vulkan.h>
-#include <rescaleframe/native_latency_vulkan.h>
-#include <algorithm>
-#include <array>
+#include "native_fg_dlss_vulkan_platform.h"
+
+#if defined(RSF_HAVE_STREAMLINE_VK)
+#define VK_NO_PROTOTYPES
+#include <windows.h>
+#include <vulkan/vulkan.h>
+#include <sl.h>
+#include <sl_dlss_g.h>
+#include <DirectXMath.h>
 #include <atomic>
 #include <cmath>
 #include <cstring>
 #include <limits>
 #include <memory>
 #include "native_fg_dlss_vulkan_capture.h"
-#include "vulkan_fg_frames.h"
-#include "native_fg_source.h"
-
-#if defined(RSF_HAVE_STREAMLINE_VK)
-#define VK_NO_PROTOTYPES
-#include <windows.h>
-#include <vulkan/vulkan.h>
 #include "vulkan_fg_resources_native.h"
-#include <sl.h>
-#include <sl_dlss_g.h>
-#include <DirectXMath.h>
 #include "../../backends/common/frame_capture_vk.h"
+
 extern "C" uint64_t VulkanStorySlWorkerTimeoutEpoch();
 namespace {
-std::atomic<bool> occupied{false};
-std::atomic<int32_t> asynchronous_error{0};
-const sl::ViewportHandle viewport(0);
-using Image = rsf_vkfg_image;
-struct Slot : rsf_fgvk_frame_slot {
-    bool sdk_inputs_pending = false;
-    VkSemaphore sdk_inputs_completion = VK_NULL_HANDLE;
-    uint64_t sdk_inputs_value = 0;
-    rsf_vkfg_fences fences{};
-    Image depth{}, motion{}, color{};
-};
 template<class T> T entry(void* module, const char* name) { return reinterpret_cast<T>(GetProcAddress(static_cast<HMODULE>(module), name)); }
 sl::float4x4 matrix(const float* values) {
     sl::float4x4 result{};
@@ -42,82 +26,52 @@ sl::float4x4 matrix(const float* values) {
         (&result[row].x)[column] = values[row * 4 + column];
     return result;
 }
+
+using Image = rsf_vkfg_image;
+std::atomic<int32_t> asynchronous_error{0};
+const sl::ViewportHandle viewport(0);
 void on_error(const sl::APIError& error) { asynchronous_error = static_cast<int32_t>(error.vkRes); }
-}
-struct rsf_dlssgvk {
+
+struct Native {
     rsf_fgvk_setup setup{};
-    VkSwapchainKHR chain = VK_NULL_HANDLE;
-    VkFormat format = VK_FORMAT_UNDEFINED;
-    uint32_t width = 0, height = 0, backbuffers = 0, count = 1;
-    bool claimed = false, requested = false, enabled = false, resources = false;
-    uint64_t actual_presents = 0;
-    rsf_fgvk_timeline timeline{};
-    std::array<Slot, RSF_FGVK_FRAME_SLOTS> slots{};
-    VkPhysicalDeviceMemoryProperties memory{};
-    PFN_vkCreateSwapchainKHR create_chain = nullptr; PFN_vkDestroySwapchainKHR destroy_chain = nullptr;
-    PFN_vkGetSwapchainImagesKHR images = nullptr; PFN_vkAcquireNextImageKHR acquire = nullptr;
+    VkSwapchainCreateInfoKHR info{};
+    VkSwapchainKHR chain{};
+    uint32_t backbuffers{};
+    PFN_vkCreateSwapchainKHR create_chain = nullptr;
+    PFN_vkDestroySwapchainKHR destroy_chain = nullptr;
+    PFN_vkGetSwapchainImagesKHR images = nullptr;
+    PFN_vkAcquireNextImageKHR acquire = nullptr;
     PFN_vkQueuePresentKHR present = nullptr;
     rsf::vkfg::Device gpu;
-    PFN_vkCmdPipelineBarrier barrier = nullptr; PFN_vkCmdCopyImage copy = nullptr;
+    PFN_vkCmdPipelineBarrier barrier = nullptr;
+    PFN_vkCmdCopyImage copy = nullptr;
     PFN_vkDeviceWaitIdle idle = nullptr;
     PFN_vkWaitSemaphores wait_semaphores = nullptr;
-    VkSemaphore last_inputs_completion = VK_NULL_HANDLE;
-    uint64_t last_inputs_value = 0;
-    PFun_slSetConstants* constants = nullptr; PFun_slSetTagForFrame* tags = nullptr;
+    PFun_slSetConstants* constants = nullptr;
+    PFun_slSetTagForFrame* tags = nullptr;
     PFun_slFreeResources* release = nullptr;
-    PFun_slDLSSGSetOptions* options = nullptr; PFun_slDLSSGGetState* state = nullptr;
-    rsf_dlssgvk_status status{sizeof(status), RSF_DLSSGVK_ABI_VERSION,
-        {sizeof(rsf_fgvk_status), RSF_FGVK_ABI_VERSION}};
+    PFun_slDLSSGSetOptions* options = nullptr;
+    PFun_slDLSSGGetState* state = nullptr;
     rsf::FrameCaptureVk capture;
     rsf::DlssPresentCapture present_capture;
-    ~rsf_dlssgvk() {
-        for (auto& slot : slots) {
-            for (auto* image : {&slot.depth, &slot.motion, &slot.color})
-                rsf_core_vkfg_release_image(&rsf::vkfg::platform, &gpu, image);
-            rsf_core_vkfg_release_fences(&rsf::vkfg::platform, &gpu, &slot.fences);
-        }
-        if (claimed) occupied = false;
+
+    VkDevice device() const { return static_cast<VkDevice>(setup.graphics.device); }
+    ~Native() {
+        if (chain) destroy_chain(device(), chain, static_cast<const VkAllocationCallbacks*>(setup.allocator));
     }
 };
-namespace {
-struct QueueLock {
-    rsf_dlssgvk& self;
-    explicit QueueLock(rsf_dlssgvk& value) : self(value) { self.setup.lock_queues(self.setup.queue_user); }
-    ~QueueLock() { self.setup.unlock_queues(self.setup.queue_user); }
-};
-rsf_backend_result sdk_result(rsf_dlssgvk& self, sl::Result result) {
-    self.status.sdk_result = static_cast<int32_t>(result);
+
+static_assert(sizeof(rsf_dlgvk_sample) == 40);
+static_assert(sizeof(rsf_dlgvk_sdk_call) == 88);
+static_assert(sizeof(rsf_dlgvk_platform) == 200);
+
+rsf_backend_result sdk_result(rsf_dlgvk_sdk_call& call, sl::Result result) {
+    call.result = static_cast<int32_t>(result);
     return result == sl::Result::eOk ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
 }
-rsf_backend_result query_state(rsf_dlssgvk& self) {
-    sl::DLSSGState state{};
-    const auto result = sdk_result(self, self.state(viewport, state, nullptr));
-    if (result != RSF_BACKEND_OK) return result;
-    self.actual_presents += state.numFramesActuallyPresented;
-    self.status.presentation.last_present_count = self.actual_presents;
-    self.status.max_generated_frames = state.numFramesToGenerateMax;
-    self.status.sdk_status = static_cast<uint32_t>(state.status);
-    self.status.min_dimension = state.minWidthOrHeight;
-    self.status.vsync_supported = state.bIsVsyncSupportAvailable == sl::Boolean::eTrue;
-    self.status.dynamic_mfg_supported = state.bIsDynamicMFGSupported == sl::Boolean::eTrue;
-    // Borrowed from the one live SDK owner. Capture on the presenting thread,
-    // retain per submitted source, and retire before freeing feature resources.
-    self.last_inputs_completion = static_cast<VkSemaphore>(state.inputsProcessingCompletionFence);
-    self.last_inputs_value = state.lastPresentInputsProcessingCompletionFenceValue;
-    return RSF_BACKEND_OK;
-}
-rsf_backend_result wait_inputs(rsf_dlssgvk& self, Slot& slot) {
-    if (!slot.sdk_inputs_pending) return RSF_BACKEND_OK;
-    if (!slot.sdk_inputs_completion || !self.wait_semaphores) return RSF_BACKEND_ERROR_NOT_READY;
-    VkSemaphoreWaitInfo info{}; info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO;
-    info.semaphoreCount = 1; info.pSemaphores = &slot.sdk_inputs_completion; info.pValues = &slot.sdk_inputs_value;
-    if (self.wait_semaphores(static_cast<VkDevice>(self.setup.graphics.device), &info, 15000000000ull) != VK_SUCCESS)
-        return RSF_BACKEND_ERROR_NOT_READY;
-    slot.sdk_inputs_pending = false;
-    return RSF_BACKEND_OK;
-}
 rsf_backend_result initialize(void* module, uintptr_t, void* user) {
-    auto& self = *static_cast<rsf_dlssgvk*>(user);
+    auto& call = *static_cast<rsf_dlgvk_sdk_call*>(user);
+    auto& self = *static_cast<Native*>(call.native);
     auto supported = entry<PFun_slIsFeatureSupported*>(module, "slIsFeatureSupported");
     auto feature = entry<PFun_slGetFeatureFunction*>(module, "slGetFeatureFunction");
     self.constants = entry<PFun_slSetConstants*>(module, "slSetConstants");
@@ -126,7 +80,7 @@ rsf_backend_result initialize(void* module, uintptr_t, void* user) {
     if (!supported || !feature || !self.constants || !self.tags || !self.release) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
     sl::AdapterInfo adapter{}; adapter.vkPhysicalDevice = self.setup.graphics.physical_device;
     const auto support = supported(sl::kFeatureDLSS_G, adapter);
-    self.status.sdk_result = static_cast<int32_t>(support);
+    call.result = static_cast<int32_t>(support);
     if (support != sl::Result::eOk) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     void* options = nullptr; void* state = nullptr;
     if (feature(sl::kFeatureDLSS_G, "slDLSSGSetOptions", options) != sl::Result::eOk ||
@@ -134,20 +88,19 @@ rsf_backend_result initialize(void* module, uintptr_t, void* user) {
         return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
     self.options = reinterpret_cast<PFun_slDLSSGSetOptions*>(options);
     self.state = reinterpret_cast<PFun_slDLSSGGetState*>(state);
-    const auto result = query_state(self);
-    if (result != RSF_BACKEND_OK) return result;
-    if (!self.status.max_generated_frames || self.width < self.status.min_dimension || self.height < self.status.min_dimension)
-        return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     return RSF_BACKEND_OK;
 }
-rsf_backend_result configure(rsf_dlssgvk& self, bool enabled) {
+rsf_backend_result configure(void*, uintptr_t, void* user) {
+    auto& call = *static_cast<rsf_dlgvk_sdk_call*>(user);
+    const auto& self = *static_cast<Native*>(call.native);
+    const bool enabled = call.count != 0;
     // Options apply to the next proxy Present. A new owner must publish Off
     // too, since its local state cannot describe the shared SDK viewport.
     sl::DLSSGOptions options{}; options.mode = enabled ? sl::DLSSGMode::eOn : sl::DLSSGMode::eOff;
     options.flags = sl::DLSSGFlags::eRetainResourcesWhenOff;
-    options.numFramesToGenerate = enabled ? self.count : 1;
-    options.colorWidth = self.width; options.colorHeight = self.height;
-    options.colorBufferFormat = self.format; options.numBackBuffers = self.backbuffers;
+    options.numFramesToGenerate = enabled ? call.count : 1;
+    options.colorWidth = self.info.imageExtent.width; options.colorHeight = self.info.imageExtent.height;
+    options.colorBufferFormat = self.info.imageFormat; options.numBackBuffers = self.backbuffers;
     options.depthBufferFormat = VK_FORMAT_R32_SFLOAT; options.mvecBufferFormat = VK_FORMAT_R16G16_SFLOAT;
     options.hudLessBufferFormat = VK_FORMAT_R8G8B8A8_UNORM;
     options.queueParallelismMode = sl::DLSSGQueueParallelismMode::eBlockNoClientQueues;
@@ -155,19 +108,23 @@ rsf_backend_result configure(rsf_dlssgvk& self, bool enabled) {
     // supports the SDK's ordinary UI detection, not separate UI recomposition.
     options.enableUserInterfaceRecomposition = sl::Boolean::eFalse;
     options.onErrorCallback = on_error;
-    const auto result = sdk_result(self, self.options(viewport, options));
+    return sdk_result(call, self.options(viewport, options));
+}
+
+rsf_backend_result sample(void*, uintptr_t, void* user) {
+    auto& call = *static_cast<rsf_dlgvk_sdk_call*>(user);
+    const auto& self = *static_cast<Native*>(call.native);
+    sl::DLSSGState state{};
+    const auto result = sdk_result(call, self.state(viewport, state, nullptr));
     if (result == RSF_BACKEND_OK) {
-        self.enabled = enabled;
-        self.resources |= enabled;
+        call.sample = {reinterpret_cast<uint64_t>(state.inputsProcessingCompletionFence),
+            state.lastPresentInputsProcessingCompletionFenceValue, state.numFramesActuallyPresented,
+            state.numFramesToGenerateMax, static_cast<uint32_t>(state.status), state.minWidthOrHeight,
+            state.bIsVsyncSupportAvailable == sl::Boolean::eTrue, state.bIsDynamicMFGSupported == sl::Boolean::eTrue};
     }
     return result;
 }
-rsf_backend_result disable(void*, uintptr_t, void* user) { return configure(*static_cast<rsf_dlssgvk*>(user), false); }
-rsf_backend_result invoke(rsf_dlssgvk& self, rsf_slvk_callback callback, uint64_t session = 0, uint64_t frame = 0, void* user = nullptr) {
-    const rsf_slvk_call call{sizeof(call), RSF_SLVK_ABI_VERSION, session, frame, callback, user ? user : &self};
-    return rsf_slvk_invoke(&call);
-}
-void transition(rsf_dlssgvk& self, VkCommandBuffer commands, VkImage image, VkImageLayout before, VkImageLayout after) {
+void transition(Native& self, VkCommandBuffer commands, VkImage image, VkImageLayout before, VkImageLayout after) {
     VkImageMemoryBarrier barrier{}; barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     barrier.image = image; barrier.oldLayout = before; barrier.newLayout = after;
     barrier.srcAccessMask = before == VK_IMAGE_LAYOUT_UNDEFINED ? 0 : VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
@@ -176,7 +133,7 @@ void transition(rsf_dlssgvk& self, VkCommandBuffer commands, VkImage image, VkIm
     barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     self.barrier(commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 }
-void stage(rsf_dlssgvk& self, VkCommandBuffer commands, const rsf_srvk_image& source, Image& destination) {
+void stage(Native& self, VkCommandBuffer commands, const rsf_srvk_image& source, const Image& destination) {
     const auto image = reinterpret_cast<VkImage>(source.image);
     transition(self, commands, image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
     transition(self, commands, rsf::vkfg::image_handle(destination), destination.initialized ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
@@ -184,7 +141,6 @@ void stage(rsf_dlssgvk& self, VkCommandBuffer commands, const rsf_srvk_image& so
     self.copy(commands, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, rsf::vkfg::image_handle(destination), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
     transition(self, commands, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     transition(self, commands, rsf::vkfg::image_handle(destination), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    destination.initialized = true;
 }
 sl::Resource resource(const Image& image) {
     sl::Resource result{sl::ResourceType::eTex2d, reinterpret_cast<void*>(image.image), nullptr,
@@ -194,30 +150,10 @@ sl::Resource resource(const Image& image) {
     result.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     return result;
 }
-bool valid_record(const rsf_dlssgvk& self, const rsf_fgvk_frame& frame) {
-    if (!frame.record) return false;
-    const auto& record = *frame.record; const auto& camera = record.camera;
-    if (record.struct_size < sizeof(record) || record.abi_version != RSF_GAME_FRAME_ABI_VERSION ||
-        camera.struct_size < sizeof(camera) || camera.abi_version != RSF_GAME_CAMERA_ABI_VERSION) return false;
-    for (const auto* values : {camera.view_to_clip, camera.clip_to_view, camera.clip_to_previous_clip, camera.view_to_world})
-        for (uint32_t i = 0; i < 16; ++i) if (!std::isfinite(values[i])) return false;
-    return record.session_id && record.frame_id && record.render_width && record.render_height &&
-        record.render_width <= self.width && record.render_height <= self.height && record.output_width == self.width && record.output_height == self.height &&
-        camera.render_width == record.render_width && camera.render_height == record.render_height && camera.output_width == self.width && camera.output_height == self.height &&
-        std::isfinite(record.frame_time_ms) && record.frame_time_ms > 0 && std::isfinite(camera.near_plane) && camera.near_plane > 0 &&
-        std::isfinite(camera.far_plane) && camera.far_plane >= 0 && (self.setup.graphics.depth_infinite || camera.far_plane > camera.near_plane) &&
-        std::isfinite(camera.vertical_fov_radians) && camera.vertical_fov_radians > 0 && camera.vertical_fov_radians < 3.141593f &&
-        std::isfinite(camera.jitter_pixels[0]) && std::isfinite(camera.jitter_pixels[1]) &&
-        camera.depth_inverted == self.setup.graphics.depth_inverted && camera.motion_jittered == self.setup.graphics.motion_jittered;
-}
-bool valid_image(const rsf_dlssgvk& self, const rsf_srvk_image& image, uint32_t width, uint32_t height, VkFormat format) {
-    return image.device == self.setup.graphics.device && image.image && image.copy_source && image.width == width && image.height == height &&
-        image.format == uint32_t(format) && image.layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-}
-struct RecordCall { rsf_dlssgvk& self; const rsf_fgvk_frame& input; VkCommandBuffer commands; Slot& slot; };
-rsf_backend_result prepare(void*, uintptr_t token, void* user) {
-    auto& call = *static_cast<RecordCall*>(user); auto& self = call.self; auto& slot = call.slot;
-    const auto& input = call.input; const auto& camera = input.record->camera;
+rsf_backend_result constants(void*, uintptr_t token, void* user) {
+    auto& call = *static_cast<rsf_dlgvk_sdk_call*>(user);
+    const auto& self = *static_cast<Native*>(call.native);
+    const auto& input = *call.input; const auto& record = *call.record; const auto& camera = record.camera;
     if (!token) return RSF_BACKEND_ERROR_NOT_READY;
     DirectX::XMFLOAT4X4 previous{}, inverse{}; std::memcpy(&previous, camera.clip_to_previous_clip, sizeof(previous));
     DirectX::XMVECTOR determinant{};
@@ -231,79 +167,62 @@ rsf_backend_result prepare(void*, uintptr_t token, void* user) {
     constants.cameraUp = {camera.view_to_world[4], camera.view_to_world[5], camera.view_to_world[6]};
     constants.cameraFwd = {-camera.view_to_world[8], -camera.view_to_world[9], -camera.view_to_world[10]};
     constants.cameraNear = camera.near_plane; constants.cameraFar = camera.far_plane > 0 ? camera.far_plane : std::numeric_limits<float>::max();
-    constants.cameraFOV = camera.vertical_fov_radians; constants.cameraAspectRatio = float(self.width) / self.height;
+    constants.cameraFOV = camera.vertical_fov_radians; constants.cameraAspectRatio = float(self.info.imageExtent.width) / self.info.imageExtent.height;
     constants.jitterOffset = {camera.jitter_pixels[0], camera.jitter_pixels[1]}; constants.cameraPinholeOffset = {0, 0};
     // The adapter's scale already accounts for the engine motion convention.
     // As in DLSS SR, convert its pixel scale to normalized texture coordinates.
-    constants.mvecScale = {input.motion_scale_x / slot.record.render_width, input.motion_scale_y / slot.record.render_height};
+    constants.mvecScale = {input.motion_scale_x / record.render_width, input.motion_scale_y / record.render_height};
     constants.depthInverted = camera.depth_inverted ? sl::Boolean::eTrue : sl::Boolean::eFalse;
     constants.cameraMotionIncluded = sl::Boolean::eTrue; constants.motionVectors3D = sl::Boolean::eFalse;
     constants.motionVectorsJittered = camera.motion_jittered ? sl::Boolean::eTrue : sl::Boolean::eFalse;
     constants.motionVectorsInvalidValue = std::numeric_limits<float>::max();
-    constants.reset = (slot.record.flags & RSF_FRAME_FLAG_RESET) ? sl::Boolean::eTrue : sl::Boolean::eFalse;
+    constants.reset = (record.flags & RSF_FRAME_FLAG_RESET) ? sl::Boolean::eTrue : sl::Boolean::eFalse;
     auto& frame = *reinterpret_cast<sl::FrameToken*>(token);
-    auto result = sdk_result(self, self.constants(constants, frame, viewport));
-    if (result != RSF_BACKEND_OK) return result;
-    stage(self, call.commands, input.depth, slot.depth); stage(self, call.commands, input.motion, slot.motion);
-    slot.recorded_prepare = true;
-    auto depth = resource(slot.depth); auto motion = resource(slot.motion);
-    const sl::Extent render{0, 0, slot.record.render_width, slot.record.render_height};
-    // Engine guides are overwritten before Present. The SDK copies on this
-    // recording list so the original CPU token owns the exact source frame.
-    sl::ResourceTag tags[] = {{&depth, sl::kBufferTypeDepth, sl::ResourceLifecycle::eOnlyValidNow, &render},
-        {&motion, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eOnlyValidNow, &render}};
-    result = sdk_result(self, self.tags(frame, viewport, tags, 2, reinterpret_cast<sl::CommandBuffer*>(call.commands)));
-    if (result != RSF_BACKEND_OK) return result;
-    slot.prepared = true; ++self.status.presentation.prepared;
-    (void)self.capture.record(call.commands, input.depth, slot.record, "fg-depth", slot.record.flags & RSF_FRAME_FLAG_RESET);
-    (void)self.capture.record(call.commands, input.motion, slot.record, "fg-motion-uv", slot.record.flags & RSF_FRAME_FLAG_RESET);
-    return RSF_BACKEND_OK;
+    return sdk_result(call, self.constants(constants, frame, viewport));
 }
-rsf_backend_result hudless(void*, uintptr_t token, void* user) {
-    auto& call = *static_cast<RecordCall*>(user); auto& self = call.self; auto& slot = call.slot;
-    if (!token) return RSF_BACKEND_ERROR_NOT_READY;
-    stage(self, call.commands, call.input.hudless, slot.color);
-    slot.recorded_hudless = true;
-    auto color = resource(slot.color); const sl::Extent extent{0, 0, self.width, self.height};
-    sl::ResourceTag tags[] = {{&color, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eOnlyValidNow, &extent},
+rsf_backend_result tag(void*, uintptr_t token, void* user) {
+    auto& call = *static_cast<rsf_dlgvk_sdk_call*>(user);
+    const auto& self = *static_cast<Native*>(call.native);
+    const auto& frame = *reinterpret_cast<sl::FrameToken*>(token);
+    auto* commands = reinterpret_cast<sl::CommandBuffer*>(call.commands);
+    auto first = resource(call.images[0]);
+    // Engine guides are overwritten before Present. Streamline copies the tags
+    // on this recording list while the original CPU token is leased.
+    if (call.count == 2) {
+        auto motion = resource(call.images[1]);
+        const sl::Extent render{0, 0, call.record->render_width, call.record->render_height};
+        sl::ResourceTag tags[] = {{&first, sl::kBufferTypeDepth, sl::ResourceLifecycle::eOnlyValidNow, &render},
+            {&motion, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eOnlyValidNow, &render}};
+        return sdk_result(call, self.tags(frame, viewport, tags, 2, commands));
+    }
+    const sl::Extent extent{0, 0, self.info.imageExtent.width, self.info.imageExtent.height};
+    sl::ResourceTag tags[] = {{&first, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eOnlyValidNow, &extent},
         {nullptr, sl::kBufferTypeUIColorAndAlpha, sl::ResourceLifecycle::eValidUntilPresent, nullptr}};
-    const auto result = sdk_result(self, self.tags(*reinterpret_cast<sl::FrameToken*>(token), viewport, tags, 2, reinterpret_cast<sl::CommandBuffer*>(call.commands)));
-    if (result != RSF_BACKEND_OK) return result;
-    slot.hudless = true; ++self.status.presentation.tagged;
-    (void)self.capture.record(call.commands, call.input.hudless, slot.record, "fg-hudless-color", slot.record.flags & RSF_FRAME_FLAG_RESET);
-    return RSF_BACKEND_OK;
+    return sdk_result(call, self.tags(frame, viewport, tags, 2, commands));
 }
-rsf_backend_result release_resources(void*, uintptr_t, void* user) {
-    auto& self = *static_cast<rsf_dlssgvk*>(user);
-    if (!self.resources) return RSF_BACKEND_OK;
-    const auto result = sdk_result(self, self.release(sl::kFeatureDLSS_G, viewport));
-    if (result == RSF_BACKEND_OK) self.resources = false;
-    return result;
+rsf_backend_result release(void*, uintptr_t, void* user) {
+    auto& call = *static_cast<rsf_dlgvk_sdk_call*>(user);
+    return sdk_result(call, static_cast<Native*>(call.native)->release(sl::kFeatureDLSS_G, viewport));
 }
-}
-#else
-struct rsf_dlssgvk {};
-#endif
 
-extern "C" rsf_backend_result rsf_dlssgvk_create(const rsf_fgvk_setup* setup, rsf_dlssgvk** out, uint64_t* chain) try {
-    if (out) *out = nullptr;
-    if (chain) *chain = 0;
-    if (!setup || !out || !chain || setup->struct_size < sizeof(*setup) || setup->graphics.struct_size < sizeof(setup->graphics)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (setup->abi_version != RSF_FGVK_ABI_VERSION || setup->graphics.abi_version != RSF_SRVK_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
+rsf_backend_result open(const rsf_fgvk_setup* setup, void** out) noexcept try {
     const auto& graphics = setup->graphics;
-    if (!graphics.instance || !graphics.physical_device || !graphics.device || !graphics.instance_proc || !graphics.device_proc ||
-        !setup->create_info || !setup->queues[0] || !setup->graphics_submit || !setup->lock_queues || !setup->unlock_queues || !graphics.output_width || !graphics.output_height)
-        return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-#if defined(RSF_HAVE_STREAMLINE_VK)
-    auto info = *static_cast<const VkSwapchainCreateInfoKHR*>(setup->create_info);
+    const auto& info = *static_cast<const VkSwapchainCreateInfoKHR*>(setup->create_info);
     if (info.sType != VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR || !info.surface ||
         info.imageExtent.width != graphics.output_width || info.imageExtent.height != graphics.output_height ||
         (info.imageFormat != VK_FORMAT_B8G8R8A8_UNORM && info.imageFormat != VK_FORMAT_R8G8B8A8_UNORM) || info.imageArrayLayers != 1)
         return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    auto self = std::make_unique<rsf_dlssgvk>(); self->setup = *setup;
-    if (occupied.exchange(true)) return RSF_BACKEND_ERROR_NOT_READY;
-    self->claimed = true; self->width = graphics.output_width; self->height = graphics.output_height; self->format = info.imageFormat;
-    auto result = invoke(*self, initialize); if (result != RSF_BACKEND_OK) return result;
+    auto self = std::make_unique<Native>();
+    self->setup = *setup;
+    self->info = info;
+    *out = self.release();
+    return RSF_BACKEND_OK;
+} catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
+
+rsf_backend_result create_chain(void* user, uint64_t* chain, void** gpu) noexcept try {
+    auto* self = static_cast<Native*>(user);
+    const auto& graphics = self->setup.graphics;
+    auto& info = self->info;
 #define RSF_LOAD(member, function) self->member = reinterpret_cast<PFN_##function>(graphics.device_proc(graphics.device, #function)); if (!self->member) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT
     RSF_LOAD(create_chain, vkCreateSwapchainKHR); RSF_LOAD(destroy_chain, vkDestroySwapchainKHR);
     RSF_LOAD(images, vkGetSwapchainImagesKHR); RSF_LOAD(acquire, vkAcquireNextImageKHR); RSF_LOAD(present, vkQueuePresentKHR);
@@ -312,11 +231,12 @@ extern "C" rsf_backend_result rsf_dlssgvk_create(const rsf_fgvk_setup* setup, rs
 #undef RSF_LOAD
     auto properties = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties>(graphics.instance_proc(graphics.instance, "vkGetPhysicalDeviceMemoryProperties"));
     if (!properties) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
-    properties(static_cast<VkPhysicalDevice>(graphics.physical_device), &self->memory);
-    if (!self->gpu.load(*setup, true)) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
-    self->gpu.memory_types(self->memory);
+    VkPhysicalDeviceMemoryProperties memory{};
+    properties(static_cast<VkPhysicalDevice>(graphics.physical_device), &memory);
+    if (!self->gpu.load(self->setup, true)) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
+    self->gpu.memory_types(memory);
     self->capture.set_provider(0, RSF_SR_DLSS, true);
-    if (!self->capture.initialize(static_cast<VkDevice>(graphics.device), graphics.device_proc, self->memory)) return RSF_BACKEND_ERROR_INIT_FAILED;
+    if (!self->capture.initialize(static_cast<VkDevice>(graphics.device), graphics.device_proc, memory)) return RSF_BACKEND_ERROR_INIT_FAILED;
     // DLSS copies completed/generated frames into the real WSI images. Their
     // creation usage must allow that destination even without diagnostics.
     const auto capabilities = reinterpret_cast<PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR>(graphics.instance_proc(graphics.instance, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR"));
@@ -329,237 +249,132 @@ extern "C" rsf_backend_result rsf_dlssgvk_create(const rsf_fgvk_setup* setup, rs
     if (supported.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) info.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     // Streamline's LL2 create/destroy hooks acquire their own swapchain mutex.
     // The outer WSI broker is only for image/acquire/present operations.
-    const auto created = self->create_chain(static_cast<VkDevice>(self->setup.graphics.device),
-        &info, static_cast<const VkAllocationCallbacks*>(self->setup.allocator), &self->chain);
-    if (created != VK_SUCCESS) return RSF_BACKEND_ERROR_INIT_FAILED;
-    // From this point failure must retire the checked proxy chain explicitly.
-    const auto images = rsf_dlssgvk_images(self.get(), &self->backbuffers, nullptr);
-    const auto capture_result = images == VK_SUCCESS ? self->present_capture.initialize(*setup) : RSF_BACKEND_ERROR_INIT_FAILED;
-    if (images != VK_SUCCESS || capture_result != RSF_BACKEND_OK) {
-        // No rendering or SDK feature exists yet, so synchronous destruction
-        // cannot race submitted frame work and no partial owner escapes.
-        self->destroy_chain(static_cast<VkDevice>(self->setup.graphics.device), self->chain,
-            static_cast<const VkAllocationCallbacks*>(self->setup.allocator));
-        self->chain = VK_NULL_HANDLE;
-        return capture_result;
-    }
-    self->status.presentation.available = 1; self->status.requested_generated_frames = 1;
-    asynchronous_error = 0; *chain = reinterpret_cast<uint64_t>(self->chain); *out = self.release(); return RSF_BACKEND_OK;
-#else
-    return RSF_BACKEND_ERROR_NOT_COMPILED;
-#endif
+    VkSwapchainKHR created_chain{};
+    const auto created = self->create_chain(self->device(), &info,
+        static_cast<const VkAllocationCallbacks*>(self->setup.allocator), &created_chain);
+    if (created != VK_SUCCESS || !created_chain) return RSF_BACKEND_ERROR_INIT_FAILED;
+    self->chain = created_chain;
+
+    // The owner remains unpublished until both enumeration and capture setup succeed.
+    // Native closes a partial chain before returning control to the host.
+    if (self->images(self->device(), self->chain, &self->backbuffers, nullptr) != VK_SUCCESS)
+        return RSF_BACKEND_ERROR_INIT_FAILED;
+    const auto capture = self->present_capture.initialize(self->setup);
+    if (capture != RSF_BACKEND_OK) return capture;
+    *chain = reinterpret_cast<uint64_t>(self->chain);
+    *gpu = &self->gpu;
+    return RSF_BACKEND_OK;
 } catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
 
-extern "C" int32_t rsf_dlssgvk_images(rsf_dlssgvk* self, uint32_t* count, uint64_t* images) {
+constexpr rsf_dlgvk_platform platform{
+    &rsf::vkfg::platform, open,
+    [](void* user) { delete static_cast<Native*>(user); },
+    create_chain,
+    [](void* user, uint32_t* count, uint64_t* images) -> int32_t {
+        auto& self = *static_cast<Native*>(user);
+        return self.images(self.device(), self.chain, count, reinterpret_cast<VkImage*>(images));
+    },
+    [](void* user, uint64_t timeout, uint64_t semaphore, uint64_t fence, uint32_t* index) -> int32_t {
+        auto& self = *static_cast<Native*>(user);
+        return self.acquire(self.device(), self.chain, timeout,
+            reinterpret_cast<VkSemaphore>(semaphore), reinterpret_cast<VkFence>(fence), index);
+    },
+    [](void* user, const void* value) -> uint32_t {
+        const auto& info = *static_cast<const VkPresentInfoKHR*>(value);
+        const auto& self = *static_cast<Native*>(user);
+        return info.swapchainCount == 1 && info.pSwapchains && info.pSwapchains[0] == self.chain;
+    },
+    [](void* user, const void* value) -> int32_t {
+        auto& self = *static_cast<Native*>(user);
+        return self.present(static_cast<VkQueue>(self.setup.queues[0]), static_cast<const VkPresentInfoKHR*>(value));
+    },
+    rsf_slvk_invoke, initialize, configure, sample, constants, tag, release,
+    [](void* user, void* commands, const rsf_srvk_image* image, const Image* destination) {
+        stage(*static_cast<Native*>(user), static_cast<VkCommandBuffer>(commands), *image, *destination);
+    },
+    [](void* user, void* commands, const rsf_srvk_image* image, const rsf_frame_record* record, uint32_t role, uint64_t group) {
+        static constexpr const char* roles[] = {"fg-depth", "fg-motion-uv", "fg-hudless-color"};
+        auto& self = *static_cast<Native*>(user);
+        (void)self.capture.record(static_cast<VkCommandBuffer>(commands), *image, *record, roles[role],
+            record->flags & RSF_FRAME_FLAG_RESET, true, nullptr, group);
+    },
+    [](void* user, const rsf_frame_record* record, const rsf_dlssgvk_status* status, uint32_t configured) noexcept {
+        try {
+            static_cast<Native*>(user)->present_capture.remember(*record, status->requested_generated_frames, *status, configured != 0);
+        } catch (...) {}
+    },
+    [](void* user, uint64_t group, uint32_t complete) noexcept {
+        try {
+            auto& capture = static_cast<Native*>(user)->capture;
+            if (complete) capture.complete_group(group); else capture.discard_group(group);
+        } catch (...) {}
+    },
+    [](void* user) noexcept {
+        auto& self = *static_cast<Native*>(user);
+        (void)self.capture.flush();
+        try { self.present_capture.flush(); } catch (...) {}
+    },
+    [](void* user) noexcept -> rsf_backend_result {
+        try { return static_cast<Native*>(user)->present_capture.detach(); }
+        catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
+    },
+    VulkanStorySlWorkerTimeoutEpoch,
+    [](void* user) -> int32_t {
+        auto& self = *static_cast<Native*>(user);
+        return self.idle(self.device());
+    },
+    [](void* user, uint64_t semaphore, uint64_t value) -> int32_t {
+        auto& self = *static_cast<Native*>(user);
+        const auto handle = reinterpret_cast<VkSemaphore>(semaphore);
+        VkSemaphoreWaitInfo info{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
+        info.semaphoreCount = 1; info.pSemaphores = &handle; info.pValues = &value;
+        return self.wait_semaphores(self.device(), &info, 15000000000ull);
+    },
+    [] { return asynchronous_error.exchange(0); },
+};
+}
+#endif
+
+extern "C" rsf_backend_result rsf_dlssgvk_create(const rsf_fgvk_setup* setup, rsf_dlssgvk** out, uint64_t* chain) {
 #if defined(RSF_HAVE_STREAMLINE_VK)
-    if (!self || !count) return VK_ERROR_INITIALIZATION_FAILED;
-    const auto device = static_cast<VkDevice>(self->setup.graphics.device);
-    if (!images) return self->images(device, self->chain, count, nullptr);
-    // The proxy can return INCOMPLETE for an oversized capacity instead of
-    // filling the available set. Use its queried count, preserving short buffers.
-    const uint32_t capacity = *count;
-    uint32_t available = 0;
-    const auto queried = self->images(device, self->chain, &available, nullptr);
-    if (queried != VK_SUCCESS) { *count = 0; return queried; }
-    *count = (std::min)(capacity, available);
-    const auto filled = self->images(device, self->chain, count, reinterpret_cast<VkImage*>(images));
-    if (*count > capacity || *count > available) { *count = 0; return VK_ERROR_INITIALIZATION_FAILED; }
-    return filled == VK_SUCCESS && capacity < available ? VK_INCOMPLETE : filled;
+    return rsf_core_dlgvk_create(&platform, setup, out, chain);
 #else
-    (void)self; (void)count; (void)images; return -3;
+    return rsf_core_dlgvk_create(nullptr, setup, out, chain);
 #endif
 }
-extern "C" int32_t rsf_dlssgvk_acquire(rsf_dlssgvk* self, uint64_t timeout, uint64_t semaphore, uint64_t fence, uint32_t* index) {
-#if defined(RSF_HAVE_STREAMLINE_VK)
-    if (!self || !index) return VK_ERROR_INITIALIZATION_FAILED;
-    return self->acquire(static_cast<VkDevice>(self->setup.graphics.device), self->chain, timeout,
-        reinterpret_cast<VkSemaphore>(semaphore), reinterpret_cast<VkFence>(fence), index);
-#else
-    (void)self; (void)timeout; (void)semaphore; (void)fence; (void)index; return -3;
-#endif
+extern "C" int32_t rsf_dlssgvk_images(rsf_dlssgvk* owner, uint32_t* count, uint64_t* images) {
+    return rsf_core_dlgvk_images(owner, count, images);
 }
-extern "C" rsf_backend_result rsf_dlssgvk_enable(rsf_dlssgvk* self, uint32_t enabled, uint32_t count) {
-    if (!self || enabled > 1 || !count) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-#if defined(RSF_HAVE_STREAMLINE_VK)
-    if (count > self->status.max_generated_frames) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
-    self->requested = enabled != 0; self->count = count; self->status.requested_generated_frames = count;
-    return RSF_BACKEND_OK;
-#else
-    return RSF_BACKEND_ERROR_NOT_COMPILED;
-#endif
+extern "C" int32_t rsf_dlssgvk_acquire(rsf_dlssgvk* owner, uint64_t timeout, uint64_t semaphore, uint64_t fence, uint32_t* index) {
+    return rsf_core_dlgvk_acquire(owner, timeout, semaphore, fence, index);
 }
-extern "C" rsf_backend_result rsf_dlssgvk_image_layout(const rsf_dlssgvk* self, uint32_t* layout) {
-    if (!self || !layout) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-#if defined(RSF_HAVE_STREAMLINE_VK)
-    // These are SDK-owned game-facing images. Its Vulkan copyResource reads
-    // them in TRANSFER_SRC even while FG is Off; real WSI images use Present.
-    *layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL; return RSF_BACKEND_OK;
-#else
-    return RSF_BACKEND_ERROR_NOT_COMPILED;
-#endif
+extern "C" rsf_backend_result rsf_dlssgvk_image_layout(const rsf_dlssgvk* owner, uint32_t* layout) {
+    return rsf_core_dlgvk_image_layout(owner, layout);
 }
-extern "C" rsf_backend_result rsf_dlssgvk_prepare(rsf_dlssgvk* self, void* commands, const rsf_fgvk_frame* input) try {
-    if (!self || !commands || !input || input->struct_size < sizeof(*input)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (input->abi_version != RSF_FGVK_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
-#if defined(RSF_HAVE_STREAMLINE_VK)
-    if (!valid_record(*self, *input)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (!self->requested) return RSF_BACKEND_OK;
-    const auto& record = *input->record;
-    if (!valid_image(*self, input->depth, record.render_width, record.render_height, VK_FORMAT_R32_SFLOAT) ||
-        !valid_image(*self, input->motion, record.render_width, record.render_height, VK_FORMAT_R16G16_SFLOAT) ||
-        !std::isfinite(input->motion_scale_x) || !std::isfinite(input->motion_scale_y) || !input->motion_scale_x || !input->motion_scale_y)
-        return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    auto& slot = self->slots[record.frame_id % self->slots.size()];
-    if (!rsf_core_fgvk_can_prepare(&slot)) return RSF_BACKEND_ERROR_NOT_READY;
-    if (wait_inputs(*self, slot) != RSF_BACKEND_OK) return RSF_BACKEND_ERROR_NOT_READY;
-    const auto fences = rsf_core_vkfg_prepare_fences(&rsf::vkfg::platform, &self->gpu, &slot, &slot.fences);
-    if (fences != RSF_BACKEND_OK) return fences;
-    if (!rsf_core_vkfg_ensure_image(&rsf::vkfg::platform, &self->gpu, &slot.depth, record.render_width, record.render_height, VK_FORMAT_R32_SFLOAT, 1) ||
-        !rsf_core_vkfg_ensure_image(&rsf::vkfg::platform, &self->gpu, &slot.motion, record.render_width, record.render_height, VK_FORMAT_R16G16_SFLOAT, 1) ||
-        !rsf_core_vkfg_ensure_image(&rsf::vkfg::platform, &self->gpu, &slot.color, self->width, self->height, VK_FORMAT_R8G8B8A8_UNORM, 1))
-        return RSF_BACKEND_ERROR_INIT_FAILED;
-    rsf_core_fgvk_prepare_begin(&self->timeline, &slot, &record, commands);
-    RecordCall call{*self, *input, static_cast<VkCommandBuffer>(commands), slot};
-    const auto result = invoke(*self, prepare, record.session_id, record.frame_id, &call);
-    if (result == RSF_BACKEND_OK) {
-        rsf_core_fgvk_prepare_accepted(&self->timeline, &slot);
-        self->present_capture.remember(slot.record, self->count, self->status, self->enabled);
-    }
-    self->status.presentation.result = result; return result;
-#else
-    return RSF_BACKEND_ERROR_NOT_COMPILED;
-#endif
-} catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
-extern "C" rsf_backend_result rsf_dlssgvk_hudless(rsf_dlssgvk* self, void* commands, const rsf_fgvk_frame* input) try {
-    if (!self || !commands || !input || input->struct_size < sizeof(*input)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (input->abi_version != RSF_FGVK_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
-#if defined(RSF_HAVE_STREAMLINE_VK)
-    if (!valid_record(*self, *input)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (!self->requested) return RSF_BACKEND_OK;
-    const auto& record = *input->record; auto& slot = self->slots[record.frame_id % self->slots.size()];
-    if (!valid_image(*self, input->hudless, self->width, self->height, VK_FORMAT_R8G8B8A8_UNORM) ||
-        !rsf_core_fgvk_hudless_begin(&slot, &record, commands)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    RecordCall call{*self, *input, static_cast<VkCommandBuffer>(commands), slot};
-    const auto result = invoke(*self, hudless, record.session_id, record.frame_id, &call);
-    self->status.presentation.result = result; return result;
-#else
-    return RSF_BACKEND_ERROR_NOT_COMPILED;
-#endif
-} catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
-extern "C" void rsf_dlssgvk_submitted(rsf_dlssgvk* self, void* const* commands, uint32_t count) {
-#if defined(RSF_HAVE_STREAMLINE_VK)
-    if (!self || !commands) return;
-    std::array<rsf_fgvk_frame_slot*, RSF_FGVK_FRAME_SLOTS> states{};
-    for (size_t i = 0; i < states.size(); ++i) states[i] = &self->slots[i];
-    rsf_fgvk_submit_plan plan{};
-    rsf_core_fgvk_submitted(states.data(), commands, count, &plan);
-    for (size_t i = 0; i < states.size(); ++i) {
-        auto& slot = self->slots[i];
-        const auto bit = 1u << i;
-        if (plan.discarded_prepare & bit) slot.depth.initialized = slot.motion.initialized = false;
-        if (plan.discarded_hudless & bit) slot.color.initialized = false;
-        if (!(plan.fences & bit)) continue;
-        rsf_core_vkfg_fence_submission(&rsf::vkfg::platform, &self->gpu, &slot, &slot.fences, 0);
-    }
-#else
-    (void)self; (void)commands; (void)count;
-#endif
+extern "C" rsf_backend_result rsf_dlssgvk_enable(rsf_dlssgvk* owner, uint32_t enabled, uint32_t count) {
+    return rsf_core_dlgvk_enable(owner, enabled, count);
 }
-static int32_t dlss_present(rsf_dlssgvk* self, const void* present_info, const rsf_frame_record* source, bool explicit_source) try {
-    if (explicit_source && !rsf::fg_present_identity_valid(source)) return -3;
-#if defined(RSF_HAVE_STREAMLINE_VK)
-    if (!self || !present_info) return VK_ERROR_INITIALIZATION_FAILED;
-    const uint64_t source_frame = rsf::fg_present_frame(self->timeline.last_prepared.frame_id, source, explicit_source);
-    const auto& info = *static_cast<const VkPresentInfoKHR*>(present_info);
-    if (info.swapchainCount != 1 || !info.pSwapchains || info.pSwapchains[0] != self->chain) return VK_ERROR_INITIALIZATION_FAILED;
-    auto& slot = self->slots[source_frame % self->slots.size()];
-    const bool identity = rsf::fg_present_identity_matches(slot.record, source, explicit_source);
-    const bool candidate = rsf_core_fgvk_present_candidate(&self->timeline, &slot, source_frame, identity, self->requested) != 0;
-    struct Configure { rsf_dlssgvk& self; bool enabled; } call{*self, candidate};
-    auto configured = invoke(*self, [](void*, uintptr_t, void* user) -> rsf_backend_result {
-        auto& value = *static_cast<Configure*>(user); return configure(value.self, value.enabled);
-    }, candidate ? slot.record.session_id : 0, candidate ? slot.record.frame_id : 0, &call);
-    const auto configuration_result = configured;
-    const auto configuration_sdk_result = self->status.sdk_result;
-    // Expired CPU tokens and incomplete/duplicate sources disable interpolation
-    // while retaining ordinary WSI presentation for the application's frame.
-    const bool valid = candidate && configured == RSF_BACKEND_OK;
-    if (configured != RSF_BACKEND_OK) {
-        self->status.presentation.result = configured;
-        configured = invoke(*self, disable);
-        if (configured != RSF_BACKEND_OK) return VK_ERROR_INITIALIZATION_FAILED;
-    }
-    // SDK proxy operations may wait for their CPU presenter. Its real WSI
-    // operations take the LL2 broker internally, not around this outer call.
-    if (valid) self->present_capture.remember(slot.record, self->count, self->status, self->enabled);
-    const auto result = self->present(static_cast<VkQueue>(self->setup.queues[0]), &info);
-    if (valid && (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR)) {
-        rsf_core_vkfg_fence_submission(&rsf::vkfg::platform, &self->gpu, &slot, &slot.fences, 1);
-    }
-    const auto state = invoke(*self, [](void*, uintptr_t, void* user) -> rsf_backend_result { return query_state(*static_cast<rsf_dlssgvk*>(user)); });
-    if (valid && (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR)) {
-        slot.sdk_inputs_pending = true;
-        slot.sdk_inputs_completion = state == RSF_BACKEND_OK ? self->last_inputs_completion : VK_NULL_HANDLE;
-        slot.sdk_inputs_value = state == RSF_BACKEND_OK ? self->last_inputs_value : 0;
-    }
-    if (configuration_result != RSF_BACKEND_OK) self->status.sdk_result = configuration_sdk_result;
-    self->status.asynchronous_present_result = asynchronous_error.exchange(0);
-    rsf_core_fgvk_presented(&self->timeline, &slot, source_frame, identity);
-    self->status.presentation.source_frame = valid ? source_frame : 0;
-    self->status.presentation.enabled = valid && !self->status.sdk_status && !self->status.asynchronous_present_result;
-    self->status.presentation.result = result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR ?
-        (configuration_result != RSF_BACKEND_OK ? configuration_result : state) : RSF_BACKEND_ERROR_FEATURE_FAILED;
-    if ((valid && self->status.sdk_status) || self->status.asynchronous_present_result)
-        self->status.presentation.result = RSF_BACKEND_ERROR_FEATURE_FAILED;
-    return result;
-#else
-    (void)self; (void)present_info; return -3;
-#endif
-} catch (...) { return -3; }
-extern "C" int32_t rsf_dlssgvk_present(rsf_dlssgvk* self, const void* info) { return dlss_present(self, info, nullptr, false); }
-extern "C" int32_t rsf_dlssgvk_present_source(rsf_dlssgvk* self, const void* info, const rsf_frame_record* source) {
-    return dlss_present(self, info, source, true);
+extern "C" rsf_backend_result rsf_dlssgvk_prepare(rsf_dlssgvk* owner, void* commands, const rsf_fgvk_frame* frame) {
+    return rsf_core_dlgvk_record(owner, commands, frame, 0);
 }
-extern "C" rsf_backend_result rsf_dlssgvk_get_status(rsf_dlssgvk* self, rsf_dlssgvk_status* status) {
-    if (!self || !status || status->struct_size < sizeof(*status)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (status->abi_version != RSF_DLSSGVK_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
-#if defined(RSF_HAVE_STREAMLINE_VK)
-    *status = self->status; return RSF_BACKEND_OK;
-#else
-    return RSF_BACKEND_ERROR_NOT_COMPILED;
-#endif
+extern "C" rsf_backend_result rsf_dlssgvk_hudless(rsf_dlssgvk* owner, void* commands, const rsf_fgvk_frame* frame) {
+    return rsf_core_dlgvk_record(owner, commands, frame, 1);
 }
-extern "C" rsf_backend_result rsf_dlssgvk_drain(rsf_dlssgvk* self) try {
-    if (!self) return RSF_BACKEND_OK;
-#if defined(RSF_HAVE_STREAMLINE_VK)
-    // A recorded copy can still reference SDK resources in an unsubmitted list.
-    for (const auto& slot : self->slots)
-        if (rsf_core_fgvk_unsubmitted(&slot))
-            return RSF_BACKEND_ERROR_NOT_READY;
-    const auto timeout_epoch = VulkanStorySlWorkerTimeoutEpoch();
-    const auto disabled = invoke(*self, disable); if (disabled != RSF_BACKEND_OK) return disabled;
-    QueueLock lock(*self);
-    if (self->idle(static_cast<VkDevice>(self->setup.graphics.device)) != VK_SUCCESS ||
-        timeout_epoch != VulkanStorySlWorkerTimeoutEpoch()) return RSF_BACKEND_ERROR_NOT_READY;
-    for (auto& slot : self->slots) if (wait_inputs(*self, slot) != RSF_BACKEND_OK) return RSF_BACKEND_ERROR_NOT_READY;
-    (void)self->capture.flush();
-    self->present_capture.flush();
-    return RSF_BACKEND_OK;
-#else
-    return RSF_BACKEND_ERROR_NOT_COMPILED;
-#endif
-} catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
-extern "C" rsf_backend_result rsf_dlssgvk_destroy(rsf_dlssgvk* self) try {
-    if (!self) return RSF_BACKEND_OK;
-#if defined(RSF_HAVE_STREAMLINE_VK)
-    auto result = rsf_dlssgvk_drain(self); if (result != RSF_BACKEND_OK) return result;
-    result = invoke(*self, release_resources); if (result != RSF_BACKEND_OK) return result;
-    result = self->present_capture.shutdown(); if (result != RSF_BACKEND_OK) return result;
-    if (self->chain) {
-        self->destroy_chain(static_cast<VkDevice>(self->setup.graphics.device), self->chain,
-            static_cast<const VkAllocationCallbacks*>(self->setup.allocator));
-        self->chain = VK_NULL_HANDLE;
-    }
-#endif
-    delete self; return RSF_BACKEND_OK;
-} catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
+extern "C" void rsf_dlssgvk_submitted(rsf_dlssgvk* owner, void* const* commands, uint32_t count) {
+    rsf_core_dlgvk_submitted(owner, commands, count);
+}
+extern "C" int32_t rsf_dlssgvk_present(rsf_dlssgvk* owner, const void* info) {
+    return rsf_core_dlgvk_present(owner, info, nullptr, 0);
+}
+extern "C" int32_t rsf_dlssgvk_present_source(rsf_dlssgvk* owner, const void* info, const rsf_frame_record* source) {
+    return rsf_core_dlgvk_present(owner, info, source, 1);
+}
+extern "C" rsf_backend_result rsf_dlssgvk_get_status(rsf_dlssgvk* owner, rsf_dlssgvk_status* status) {
+    return rsf_core_dlgvk_status(owner, status);
+}
+extern "C" rsf_backend_result rsf_dlssgvk_drain(rsf_dlssgvk* owner) {
+    return rsf_core_dlgvk_drain(owner);
+}
+extern "C" rsf_backend_result rsf_dlssgvk_destroy(rsf_dlssgvk* owner) {
+    return rsf_core_dlgvk_destroy(owner);
+}
