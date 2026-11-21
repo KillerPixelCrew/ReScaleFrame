@@ -1,12 +1,10 @@
 // SPDX-License-Identifier: MIT
 #include "native_fg_cpu_platform.h"
-#include "input_receipts.h"
 #include "latency_antilag.h"
 #include <rescaleframe/game_api.h>
 #include <d3d12.h>
 #include <dxgi1_6.h>
 #include <wrl/client.h>
-#include <array>
 
 extern "C" int32_t rsf_d3d11_present_pace_for_generation(uint64_t, rsf_pacing_owner, uint64_t);
 
@@ -34,17 +32,6 @@ uint32_t adapter_vendor(void* device) {
         return desc.VendorId;
     }
     return 0;
-}
-
-uint64_t receipt_owner(const rsf_nfg_receipt_candidate* owners, size_t count,
-    uint64_t session, uint64_t generation, uint64_t timestamp) {
-    std::array<rsf::latency::ReceiptOwner, RSF_NFG_CPU_CAPACITY> copied{};
-    if (count > copied.size()) return 0;
-    for (size_t i = 0; i < count; ++i) {
-        const auto& row = owners[i];
-        copied[i] = {row.source, row.session, row.generation, row.ready, row.simulation_begin, row.eligible != 0};
-    }
-    return rsf::latency::receipt_owner(std::span(copied.data(), count), session, generation, timestamp);
 }
 
 rsf_streamline_host* host(void* value) { return static_cast<rsf_streamline_host*>(value); }
@@ -75,7 +62,6 @@ extern "C" const rsf_nfg_cpu_platform rsf_native_fg_cpu_platform{
     rsf_d3d11_present_receipt,
     rsf_d3d11_present_abort,
     +[]() -> void* { return rsf::latency::create_native_antilag_context(); },
-    receipt_owner,
     rsf_core_nfg_owned_window_thread,
     rsf_core_nfg_post_ping,
     rsf_core_nfg_signal_completion,

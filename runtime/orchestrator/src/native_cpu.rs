@@ -4,6 +4,7 @@
 //! one lock. Sinks and recursive dispatch run only after it is released.
 use crate::cpu_abi::*;
 use crate::cpu_reservations::Book;
+use crate::input_receipts::Window as ReceiptWindow;
 use rsf_game_sys::*;
 use std::ffi::c_void;
 use std::mem::{offset_of, zeroed};
@@ -13,9 +14,6 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 type Event = rsf_game_cpu_event;
 type Sink = rsf_game_cpu_event_fn;
-/// Native receipt replay check over a two-word window owned by this state.
-/// It runs under the state lock, which serializes every access to the window.
-type Replay = unsafe extern "C" fn(window: *mut u64, receipt_id: u64) -> i32;
 
 const FRAMES: usize = 128;
 const PENDING: usize = 16;
@@ -67,7 +65,8 @@ struct State {
     consumer_user: *mut c_void,
     totals: rsf_native_cpu_counters,
     ping_message: u32,
-    receipt_window: [u64; 2],
+    /// Receipt replay window, serialized by the state lock.
+    receipt_window: ReceiptWindow,
     receipts: rsf_native_input_receipts,
     pending: [Event; PENDING],
     next_message: u32,
@@ -92,7 +91,7 @@ impl State {
                 ..unsafe { zeroed() }
             },
             ping_message: 0,
-            receipt_window: [0; 2],
+            receipt_window: ReceiptWindow::new(),
             receipts: rsf_native_input_receipts {
                 struct_size: size_of::<rsf_native_input_receipts>() as u32,
                 version: 1,
@@ -227,13 +226,7 @@ impl Dispatcher {
         )
     }
 
-    fn receipt(
-        &self,
-        incoming: *const Event,
-        sink: Sink,
-        user: *mut c_void,
-        replay: Replay,
-    ) -> i32 {
+    fn receipt(&self, incoming: *const Event, sink: Sink, user: *mut c_void) -> i32 {
         let mut receipt = unsafe { incoming.cast::<rsf_game_cpu_receipt_event>().read() };
         receipt.header.struct_size = size_of::<rsf_game_cpu_receipt_event>() as u32;
         let route = {
@@ -257,7 +250,7 @@ impl Dispatcher {
                 state.receipts.rejected = state.receipts.rejected.wrapping_add(1);
                 return 0;
             }
-            if unsafe { replay(state.receipt_window.as_mut_ptr(), receipt.receipt_id) } == 0 {
+            if !state.receipt_window.accept(receipt.receipt_id) {
                 state.receipts.duplicates = state.receipts.duplicates.wrapping_add(1);
                 return 0;
             }
@@ -281,14 +274,7 @@ impl Dispatcher {
         1
     }
 
-    fn source(
-        &self,
-        incoming: *const Event,
-        header: &Event,
-        sink: Sink,
-        user: *mut c_void,
-        replay: Replay,
-    ) -> i32 {
+    fn source(&self, incoming: *const Event, header: &Event, sink: Sink, user: *mut c_void) -> i32 {
         // Source facts are stored before the synchronous runtime callback. Rendered-only
         // hosts retain their observation-only behavior; input hosts may pace at RESERVE.
         let accepted = self.source_event(incoming, header);
@@ -329,19 +315,13 @@ impl Dispatcher {
             // The source sink may reenter or withdraw the reservation. Normal dispatch
             // validates it again; neither token acquisition nor pacing runs here.
             if derived.source_frame_id != 0 {
-                self.dispatch(&derived, sink, user, replay);
+                self.dispatch(&derived, sink, user);
             }
         }
         accepted as i32
     }
 
-    fn dispatch(
-        &self,
-        incoming: *const Event,
-        sink: Sink,
-        user: *mut c_void,
-        replay: Replay,
-    ) -> i32 {
+    fn dispatch(&self, incoming: *const Event, sink: Sink, user: *mut c_void) -> i32 {
         if !unsafe { has_capacity(incoming) } {
             return 0;
         }
@@ -350,10 +330,10 @@ impl Dispatcher {
             if (header.struct_size as usize) < size_of::<rsf_game_cpu_receipt_event>() {
                 return 0;
             }
-            return self.receipt(incoming, sink, user, replay);
+            return self.receipt(incoming, sink, user);
         }
         if (RSF_GAME_CPU_SOURCE_RESERVE..=RSF_GAME_CPU_SOURCE_ABORT).contains(&header.stage) {
-            return self.source(incoming, &header, sink, user, replay);
+            return self.source(incoming, &header, sink, user);
         }
         if header.event_version > RSF_GAME_CPU_EVENT_VERSION || header.flags & !KNOWN_FLAGS != 0 {
             return 0;
@@ -366,18 +346,11 @@ impl Dispatcher {
             struct_size: EVENT_SIZE,
             ..header
         };
-        self.fact(&mut copy, rendered, sink, user, replay)
+        self.fact(&mut copy, rendered, sink, user)
     }
 
     /// Version 0 and 1 CPU facts. `event` is the private copy delivered to the sink.
-    fn fact(
-        &self,
-        event: &mut Event,
-        rendered: bool,
-        sink: Sink,
-        user: *mut c_void,
-        replay: Replay,
-    ) -> i32 {
+    fn fact(&self, event: &mut Event, rendered: bool, sink: Sink, user: *mut c_void) -> i32 {
         let version_one = event.event_version == RSF_GAME_CPU_EVENT_VERSION;
         let window_message = version_one && event.flags & WINDOW_MESSAGE != 0;
         let unframed = version_one && event.flags & UNFRAMED != 0;
@@ -427,7 +400,7 @@ impl Dispatcher {
                     render_expected: 0,
                     ..*event
                 };
-                if self.dispatch(&end, sink, user, replay) == 0 {
+                if self.dispatch(&end, sink, user) == 0 {
                     return 0;
                 }
             }
@@ -446,7 +419,7 @@ impl Dispatcher {
             substitute.flags |= SUBSTITUTE;
             if !refused_binding && current.stage_mask & 1 != 0 && current.stage_mask & 2 == 0 {
                 substitute.stage = INPUT_SAMPLE;
-                if self.dispatch(&substitute, sink, user, replay) == 0 {
+                if self.dispatch(&substitute, sink, user) == 0 {
                     return 0;
                 }
             }
@@ -461,7 +434,7 @@ impl Dispatcher {
                     substitute.timestamp_qpc = reservation.bind_qpc;
                     substitute.flags = KEYED | DERIVED;
                 }
-                if self.dispatch(&substitute, sink, user, replay) == 0 {
+                if self.dispatch(&substitute, sink, user) == 0 {
                     return 0;
                 }
             }
@@ -495,7 +468,7 @@ impl Dispatcher {
         };
         deliver(route, event);
         if event.stage == FRAME_BEGIN && facts {
-            self.flush_pending(event, sink, user, replay);
+            self.flush_pending(event, sink, user);
         }
         1
     }
@@ -551,7 +524,7 @@ impl Dispatcher {
     }
 
     /// Window and unframed observations become this frame's input only within a quarter second.
-    fn flush_pending(&self, event: &Event, sink: Sink, user: *mut c_void, replay: Replay) {
+    fn flush_pending(&self, event: &Event, sink: Sink, user: *mut c_void) {
         let mut ready = [EMPTY_EVENT; PENDING];
         let mut count = 0;
         {
@@ -584,7 +557,7 @@ impl Dispatcher {
             }
         }
         for message in &ready[..count] {
-            self.dispatch(message, sink, user, replay);
+            self.dispatch(message, sink, user);
         }
     }
 }
@@ -814,15 +787,20 @@ fn record(
     Ok(state.route(sink, user))
 }
 
-/// Shared dispatch for the native forwarders, which supply the receipt replay check.
+/// Validates and records a CPU fact, then delivers it to the supplied sink, or to the
+/// configured consumer when none is supplied.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_cpu_dispatch(
+pub unsafe extern "C" fn rsf_native_cpu_dispatch(
     event: *const Event,
     sink: Sink,
     user: *mut c_void,
-    replay: Replay,
 ) -> i32 {
-    CPU.dispatch(event, sink, user, replay)
+    CPU.dispatch(event, sink, user)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rsf_native_cpu_event(event: *const Event) -> i32 {
+    CPU.dispatch(event, None, ptr::null_mut())
 }
 
 #[unsafe(no_mangle)]

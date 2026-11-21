@@ -4,6 +4,7 @@
 //! provider generation that consumed those facts.
 use crate::cpu_abi::*;
 use crate::fg12_abi::rsf_native_latency_frame as LatencyFrame;
+use crate::input_receipts::{self, Owner};
 use crate::latency_antilag::Context as AntiLag;
 use crate::latency_lease::{
     rsf_core_latency_pacing_owner, rsf_native_latency_claim, rsf_native_latency_release_claim,
@@ -32,7 +33,6 @@ use std::sync::{LazyLock, Mutex, MutexGuard, OnceLock, PoisonError};
 type Platform = rsf_nfg_cpu_platform;
 type Event = rsf_game_cpu_event;
 type Pass = rsf_game_render_pass;
-type Owner = rsf_nfg_receipt_candidate;
 type Reservation = rsf_native_cpu_reservation;
 type Facts = rsf_native_cpu_frame;
 type Window = rsf_native_latency_window;
@@ -876,7 +876,7 @@ fn route_receipt(p: &Platform, receipt: &rsf_game_cpu_receipt_event) {
             } else {
                 call!(p, thread_id) == binding.thread
             };
-        let mut candidates: [Owner; CAPACITY] = unsafe { zeroed() };
+        let mut candidates = [Owner::default(); CAPACITY];
         if target {
             for (candidate, frame) in candidates.iter_mut().zip(&ledger.frames) {
                 if frame.id == 0
@@ -904,18 +904,15 @@ fn route_receipt(p: &Platform, receipt: &rsf_game_cpu_receipt_event) {
                     generation: frame.provider_generation,
                     ready: frame.ready_qpc,
                     simulation_begin: facts.timestamps_qpc[RSF_GAME_CPU_SIMULATION_BEGIN as usize],
-                    eligible: 1,
+                    eligible: true,
                 };
             }
         }
-        let selected = call!(
-            p,
-            receipt_owner,
-            candidates.as_ptr(),
-            candidates.len(),
+        let selected = input_receipts::owner(
+            &candidates,
             event.session_id,
             generation,
-            event.timestamp_qpc
+            event.timestamp_qpc,
         );
         if selected == 0 {
             ledger.routes.unmatched += 1;

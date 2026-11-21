@@ -310,7 +310,7 @@ generate("runtime/orchestrator/src/native_fg_abi.rs", "runtime/orchestrator/src/
           "--raw-line", "use crate::scene_abi::rsf_native_scene_identity;",
           "--raw-line", "use rsf_game_sys::{rsf_frame_record, rsf_game_render_pass};"])
 generate("runtime/orchestrator/src/native_fg_cpu_abi.rs", "runtime/orchestrator/src/native_fg_cpu_platform.h",
-         "rsf_(nfg_(cpu_platform|receipt_candidate)|d3d11_present_status|streamline_latency_status|native_latency_window)",
+         "rsf_(nfg_cpu_platform|d3d11_present_status|streamline_latency_status|native_latency_window)",
          "RSF_(NFG_CPU_.*|PRESENT_STATUS_VERSION|SL_PROFILE_PCL|PACING_ANTILAG2)",
          ["-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Iruntime/backends/dlss/include",
           "-Iruntime/graphics/include", "-Iruntime/presentation/include", "-Isdk/game/include"],
