@@ -6,6 +6,7 @@
 mod coverage;
 mod scopes;
 
+use crate::engine_guards::Image;
 use crate::geometry_registry::{
     IdentityRegistry, Registry, rsf_anomaly_geometry_classify as classify,
     rsf_anomaly_geometry_find as find, rsf_anomaly_geometry_probe_visual as probe_visual,
@@ -19,7 +20,7 @@ use crate::geometry_registry_abi::{
 use crate::native_geometry_abi::*;
 use coverage::COUNTERS;
 use std::ffi::c_void;
-use std::ptr;
+use std::ptr::{self, with_exposed_provenance};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, RwLock};
 
@@ -85,10 +86,30 @@ extern "C" fn rsf_anomaly_geometry_binding() -> Engine {
     *ENGINE.read().unwrap()
 }
 
+/// Admits the selected build before any detour is written. The image size
+/// comes first, then every layout guard behind the native readers, then every
+/// detour entry. Each site also needs its unique prefix where one is profiled.
+fn guard(platform: &Platform, engine: Engine, size: u32) -> bool {
+    if engine.module == 0 {
+        return false;
+    }
+    let profile = unsafe { (platform.guard_profile)(engine) };
+    if size != profile.image_size {
+        return false;
+    }
+    let image = Image::new(with_exposed_provenance(engine.module), size, profile.read);
+    let unique = profile.unique();
+    // The native profile lends static NUL-terminated unique guards.
+    unsafe {
+        image.matches_sites(profile.layout_sites(), unique)
+            && image.matches_sites(profile.sites(), unique)
+    }
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_geometry_install(platform: &Platform, engine: Engine, size: u32) -> bool {
     let _control = CONTROL.lock().unwrap();
-    if HOOKS.load(Ordering::Acquire) || !unsafe { (platform.guard)(engine, size) } {
+    if HOOKS.load(Ordering::Acquire) || !guard(platform, engine, size) {
         return false;
     }
     let created = unsafe { (platform.created)() };

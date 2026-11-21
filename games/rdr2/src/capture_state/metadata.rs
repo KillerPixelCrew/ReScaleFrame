@@ -31,9 +31,9 @@ const SCALAR_KEYS: [&CStr; 18] = [
 ];
 const FLOAT_SCALARS: usize = 7;
 const OUTPUT: usize = 4;
-const RESOURCE_COUNT: usize = OUTPUT + 1;
-#[cfg(windows)]
-const RESOURCE_ROLES: [&str; RESOURCE_COUNT] = ["color", "depth", "motion", "exposure", "output"];
+pub(super) const RESOURCE_COUNT: usize = OUTPUT + 1;
+pub(super) const RESOURCE_ROLES: [&CStr; RESOURCE_COUNT] =
+    [c"color", c"depth", c"motion", c"exposure", c"output"];
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -144,7 +144,7 @@ impl Temporal {
             .zip(RESOURCE_ROLES)
             .filter_map(|(refusal, role)| {
                 Some((
-                    role,
+                    role.to_str().ok()?,
                     match refusal.as_ref()? {
                         ResourceRefusal::Missing => "_missing",
                         ResourceRefusal::CopyUnavailable => "_state_or_copy_unavailable",

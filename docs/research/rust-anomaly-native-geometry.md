@@ -82,3 +82,27 @@ pack byte-for-byte with SHA-256
 `d2aa077a561ee71c084f806edb2f7cdcb0bf4ccaa17907a788324043f8622bb2`.
 Device execution and moving-game acceptance remain open for this cutover,
 including scope transitions and active motion coverage under real draws.
+
+## Profile guard admission
+
+Rust now owns the geometry install guard sequence with the shared
+checked-image reader in `engine_guards.rs`. The native leaf lends the
+selected Standard or AVX profile's seven layout sites, 17 detour entries,
+nine unique prefixes, `SizeOfImage` and the guarded copy leaf. The tables
+stay in `geometry_profile.h` and `native_profile.h`. Rust refuses a null
+module before borrowing the profile, then a size mismatch. It then checks
+each layout site and its unique prefixes before any detour entry, and each
+detour entry the same way. The first mismatch refuses before HookSet writes
+anything. The typed trampolines, HookSet, guarded engine reads, hook site
+table and `install_native_geometry` are unchanged. `engine_guards` is now
+compiled on every target because the geometry owner is.
+
+Source comparison against the C++ guard at `4ad9c5e9` matched the C++ order: module, size,
+layout sites, then detour sites, with the 16 expected bytes before the
+unique guards at the same RVA and the guards in table order. Traced against
+`tests/anomaly_geometry_hooks.cpp`: the null module, other-build profile
+and blank image refusals, each flipped unique-prefix end, layout and entry
+byte, the untouched entries after a refused install, and the guarded
+install, restore and re-enable. Pinned Rust 1.94.1 formatting, locked
+offline Windows Cargo metadata and Git whitespace checks passed. Compile,
+link, Clippy, tests, fixtures and game verification remain user-owned.

@@ -13,6 +13,13 @@ See [the Rust migration record](rust-migration.md#native-policy-cutover).
 
 ## Remaining Rust integration ports
 
+RDR2's pending and ready readbacks and retained final draw live in Rust.
+The native submission and Map leaves keep the exact list, generation,
+queue, fence and value receipt. The pending owner caps simultaneous
+shots at the existing 84-copy budget. Interleaved submissions,
+descriptor-copy and object-retirement coverage and live capture
+remain open. [Shot ownership](research/rust-rdr2-asi.md#native-capture-shot-and-tail-ownership)
+
 Fallout 4's render hook lifecycle now verifies, installs, starts and
 retires the eight hooks in Rust. Typed detours still call their original
 functions on native frames. Pinned bindgen reproduced the changed private
@@ -808,6 +815,17 @@ and remains unrun. Build and live observer verification remain open.
 [Observer admission audit](research/rust-anomaly-native-observer.md#prepare-admission-from-3c73e3c4)
 
 ## Rust orchestrator and first Anomaly port
+
+The standalone FSR3 bridge now binds the SDK and owns the SR create,
+plan, evaluate and checked retirement paths in Rust. Native leaves
+still build the Vulkan and FidelityFX descriptors. All 21 export
+signatures matched in source. FG and WSI lifetime remain in C++.
+[Standalone FSR3 SR](research/rust-vulkan-fsr3-legacy-sr.md)
+
+Anomaly's Rust geometry owner now checks the selected profile's image
+size, layout sites, detour entries and unique prefixes. The native
+profile data, guarded read and typed trampolines retain the same
+Standard and AVX contracts. [Geometry admission](research/rust-anomaly-native-geometry.md)
 
 Anomaly's SR driver now chooses the order of the Standard and AVX
 stage guards in Rust. It uses the existing checked-image reader,

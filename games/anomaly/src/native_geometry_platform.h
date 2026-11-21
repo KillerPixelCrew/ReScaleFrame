@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 #include "geometry_registry_platform.h"
+#include "native_profile.h"
 
 // Private adapter ABI. Engine addresses are opaque to Rust. Only the platform
 // leaves access the engine's memory or trampoline tables.
@@ -55,8 +56,20 @@ struct rsf_anomaly_geometry_writer {
     void (*bone)(void*, uint32_t, const rsf_anomaly_geometry_matrix*) noexcept;
     const void* (*finish)(void*, uint64_t) noexcept;
 };
+// The selected build's immutable guard facts. Each pointer borrows a static profile table, and read is the guarded
+// engine-memory leaf behind Rust's checked-image reader.
+struct rsf_anomaly_geometry_guard_profile {
+    bool (*read)(void*, const void*, size_t) noexcept;
+    const rsf::anomaly::NativeSite* layout_sites;
+    size_t layout_count;
+    const rsf::anomaly::NativeSite* sites;
+    size_t site_count;
+    const rsf::anomaly::UniqueGuard* unique;
+    size_t unique_count;
+    uint32_t image_size;
+};
 struct rsf_anomaly_geometry_platform {
-    bool (*guard)(rsf_anomaly_geometry_engine, uint32_t) noexcept;
+    rsf_anomaly_geometry_guard_profile (*guard_profile)(rsf_anomaly_geometry_engine) noexcept;
     bool (*created)() noexcept;
     bool (*install)(rsf_anomaly_geometry_engine, uint32_t) noexcept;
     bool (*enable)() noexcept;

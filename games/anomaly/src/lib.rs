@@ -6,7 +6,6 @@ mod bootstrap;
 mod camera;
 #[cfg(windows)]
 mod digest;
-#[cfg(windows)]
 mod engine_guards;
 #[cfg(windows)]
 mod engine_slots;
