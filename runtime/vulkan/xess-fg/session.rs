@@ -105,6 +105,14 @@ struct PresentResult {
     fg_result: i32,
 }
 
+#[derive(Default, PartialEq, Eq)]
+#[repr(C)]
+struct PresentResourceDesc {
+    width: u64,
+    height: u32,
+    format: u32,
+}
+
 #[repr(C)]
 struct IntegratedStatus {
     struct_size: u32,
@@ -149,9 +157,14 @@ struct Platform {
     destroy_fg: Step,
     destroy_xell: Step,
     has_shared_queue: unsafe extern "C" fn(*const c_void) -> u32,
-    check_resources: unsafe extern "C" fn(*const Frame, u32, u32, u32) -> i32,
+    describe_present_resource: unsafe extern "C" fn(Handle, *mut PresentResourceDesc),
     reset_commands: unsafe extern "C" fn(Handle, u32) -> i32,
-    record_inputs: unsafe extern "C" fn(Handle, *const Frame) -> i32,
+    transition_present_resource: unsafe extern "C" fn(Handle, Handle, u32, u32),
+    // Transfers one DXGI backbuffer reference to the session on success.
+    acquire_backbuffer: unsafe extern "C" fn(Handle, *mut Handle) -> i32,
+    copy_present_color: unsafe extern "C" fn(Handle, Handle, Handle),
+    tag_present_resource: unsafe extern "C" fn(Handle, Handle, u32, u32) -> i32,
+    release_backbuffer: unsafe extern "C" fn(Handle),
     close_commands: Step,
     tag_constants: unsafe extern "C" fn(Handle, *const Frame) -> i32,
     wait_shared: unsafe extern "C" fn(Handle, u64) -> i32,
@@ -201,12 +214,15 @@ const _: () = {
     assert!(std::mem::offset_of!(IntegratedFrame, view) == 56);
     assert!(std::mem::offset_of!(IntegratedFrame, ready) == 200);
     assert!(size_of::<PresentResult>() == 12);
+    assert!(size_of::<PresentResourceDesc>() == 16 && align_of::<PresentResourceDesc>() == 8);
+    assert!(std::mem::offset_of!(PresentResourceDesc, height) == 8);
+    assert!(std::mem::offset_of!(PresentResourceDesc, format) == 12);
     assert!(size_of::<IntegratedStatus>() == 24);
     assert!(std::mem::offset_of!(IntegratedStatus, struct_size) == 0);
     assert!(std::mem::offset_of!(IntegratedStatus, abi_version) == 4);
     assert!(std::mem::offset_of!(IntegratedStatus, result) == 8);
     assert!(std::mem::offset_of!(IntegratedStatus, _reserved) == 20);
-    assert!(size_of::<Platform>() == 512 && align_of::<Platform>() == 8);
+    assert!(size_of::<Platform>() == 544 && align_of::<Platform>() == 8);
     assert!(std::mem::offset_of!(Platform, allocate) == 8);
     assert!(std::mem::offset_of!(Platform, init_swapchain) == 112);
     assert!(std::mem::offset_of!(Platform, find_diagnostics) == 168);
@@ -214,15 +230,20 @@ const _: () = {
     assert!(std::mem::offset_of!(Platform, unregister_diagnostics) == 216);
     assert!(std::mem::offset_of!(Platform, destroy_xell) == 240);
     assert!(std::mem::offset_of!(Platform, has_shared_queue) == 248);
-    assert!(std::mem::offset_of!(Platform, wait_shared) == 296);
-    assert!(std::mem::offset_of!(Platform, read_present_status) == 344);
-    assert!(std::mem::offset_of!(Platform, serialize_enabled) == 416);
-    assert!(std::mem::offset_of!(Platform, attach_capture) == 424);
-    assert!(std::mem::offset_of!(Platform, capture_footprint) == 472);
-    assert!(std::mem::offset_of!(Platform, capture_publish) == 504);
+    assert!(std::mem::offset_of!(Platform, describe_present_resource) == 256);
+    assert!(std::mem::offset_of!(Platform, transition_present_resource) == 272);
+    assert!(std::mem::offset_of!(Platform, acquire_backbuffer) == 280);
+    assert!(std::mem::offset_of!(Platform, tag_present_resource) == 296);
+    assert!(std::mem::offset_of!(Platform, release_backbuffer) == 304);
+    assert!(std::mem::offset_of!(Platform, wait_shared) == 328);
+    assert!(std::mem::offset_of!(Platform, read_present_status) == 376);
+    assert!(std::mem::offset_of!(Platform, serialize_enabled) == 448);
+    assert!(std::mem::offset_of!(Platform, attach_capture) == 456);
+    assert!(std::mem::offset_of!(Platform, capture_footprint) == 504);
+    assert!(std::mem::offset_of!(Platform, capture_publish) == 536);
 };
 
-const PLATFORM_ABI_VERSION: u32 = 4;
+const PLATFORM_ABI_VERSION: u32 = 5;
 const BRIDGE_ABI_VERSION: u32 = 1;
 const INVALID_ARGUMENT: i32 = -10001;
 const ABI_MISMATCH: i32 = -10002;
@@ -231,6 +252,24 @@ const WAIT_INCOMPLETE: i32 = -3;
 const ALLOCATOR_COUNT: u32 = 3;
 const CAPTURE_FLUSH_FAILED: i32 = -7010;
 const CAPTURE_START_FAILED: i32 = -7011;
+
+// Values are checked against the native headers in bridge.cpp.
+const DXGI_FORMAT_R16G16_FLOAT: u32 = 34;
+const DXGI_FORMAT_D32_FLOAT: u32 = 40;
+const DXGI_FORMAT_R32_FLOAT: u32 = 41;
+const DXGI_FORMAT_B8G8R8A8_UNORM: u32 = 87;
+const STATE_COMMON: u32 = 0;
+const STATE_PRESENT: u32 = 0;
+const STATE_COPY_DEST: u32 = 0x400;
+const STATE_COPY_SOURCE: u32 = 0x800;
+
+#[repr(u32)]
+enum InputRole {
+    Hudless = 0,
+    Depth = 1,
+    Motion = 2,
+    Ui = 3,
+}
 
 thread_local! {
     static CREATE_STAGE: Cell<&'static CStr> = const { Cell::new(c"not attempted") };
@@ -482,6 +521,99 @@ impl Session {
         Ok(())
     }
 
+    fn present_resources_match(&self, frame: &Frame) -> bool {
+        let describe = |resource: Handle| {
+            let mut desc = PresentResourceDesc::default();
+            unsafe { (self.platform.describe_present_resource)(resource, &mut desc) };
+            desc
+        };
+        let color = describe(frame.color);
+        let hudless = describe(frame.hudless);
+        let ui = (!frame.ui.is_null()).then(|| describe(frame.ui));
+        let motion = describe(frame.motion);
+        let depth = describe(frame.depth);
+        let output = PresentResourceDesc {
+            width: u64::from(self.width),
+            height: self.height,
+            format: DXGI_FORMAT_B8G8R8A8_UNORM,
+        };
+        let depth_format = if self.backbuffer_hudless {
+            DXGI_FORMAT_R32_FLOAT
+        } else {
+            DXGI_FORMAT_D32_FLOAT
+        };
+        color == output
+            && hudless == output
+            && (self.backbuffer_hudless || ui.as_ref() == Some(&output))
+            && motion.width == depth.width
+            && motion.height == depth.height
+            && motion.format == DXGI_FORMAT_R16G16_FLOAT
+            && depth.format == depth_format
+    }
+
+    fn record_present_inputs(&self, frame: &Frame) -> Result<(), i32> {
+        let ops = self.platform;
+        let native = self.native;
+        let transition = |resource, before, after| unsafe {
+            (ops.transition_present_resource)(native, resource, before, after);
+        };
+        // A fallback may use final color as HUD-less. Transition each distinct
+        // pointer in first-use order and keep every non-null SDK role below.
+        let mut inputs = [
+            frame.color,
+            frame.depth,
+            frame.motion,
+            frame.hudless,
+            frame.ui,
+        ];
+        for index in 1..inputs.len() {
+            if inputs[..index].contains(&inputs[index]) {
+                inputs[index] = ptr::null_mut();
+            }
+        }
+        let unique_inputs = inputs.into_iter().filter(|input| !input.is_null());
+        for input in unique_inputs.clone() {
+            transition(input, STATE_COMMON, STATE_COPY_SOURCE);
+        }
+
+        let mut backbuffer = ptr::null_mut();
+        let code = unsafe { (ops.acquire_backbuffer)(native, &mut backbuffer) };
+        if code < 0 {
+            unsafe { (ops.close_commands)(native) };
+            return Err(code);
+        }
+        transition(backbuffer, STATE_PRESENT, STATE_COPY_DEST);
+        unsafe { (ops.copy_present_color)(native, backbuffer, frame.color) };
+
+        for (resource, role) in [
+            (frame.depth, InputRole::Depth),
+            (frame.motion, InputRole::Motion),
+            (frame.hudless, InputRole::Hudless),
+            (frame.ui, InputRole::Ui),
+        ] {
+            if resource.is_null() {
+                continue;
+            }
+            let code = unsafe {
+                (ops.tag_present_resource)(native, resource, role as u32, frame.frame_id)
+            };
+            if code < 0 {
+                unsafe {
+                    (ops.close_commands)(native);
+                    (ops.release_backbuffer)(backbuffer);
+                }
+                return Err(code);
+            }
+        }
+
+        for input in unique_inputs {
+            transition(input, STATE_COPY_SOURCE, STATE_COMMON);
+        }
+        transition(backbuffer, STATE_COPY_DEST, STATE_PRESENT);
+        unsafe { (ops.release_backbuffer)(backbuffer) };
+        Ok(())
+    }
+
     fn present_frame(&mut self, frame: &Frame) -> Result<(PresentResult, Option<i64>), i32> {
         if frame.frame_id == 0
             || frame.ready == 0
@@ -491,16 +623,11 @@ impl Session {
         {
             return Err(-1);
         }
+        if !self.present_resources_match(frame) {
+            return Err(-2);
+        }
         let ops = self.platform;
         let native = self.native;
-        success(unsafe {
-            (ops.check_resources)(
-                frame,
-                self.width,
-                self.height,
-                u32::from(self.backbuffer_hudless),
-            )
-        })?;
         let timed = unsafe { (ops.timing_enabled)() } != 0;
         let phase_start = timed.then(|| unsafe { (ops.timing_now)() });
         let slot = self.next_allocator % ALLOCATOR_COUNT;
@@ -512,7 +639,7 @@ impl Session {
         if gpu_timed {
             unsafe { (ops.timestamp_copies)(native, slot, 0) };
         }
-        success(unsafe { (ops.record_inputs)(native, frame) })?;
+        self.record_present_inputs(frame)?;
         if gpu_timed {
             unsafe { (ops.timestamp_copies)(native, slot, 1) };
         }

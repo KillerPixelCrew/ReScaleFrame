@@ -3,7 +3,7 @@
 
 #include "bridge_api.h"
 
-inline constexpr uint32_t RSF_XESS_BRIDGE_PLATFORM_ABI_VERSION = 4;
+inline constexpr uint32_t RSF_XESS_BRIDGE_PLATFORM_ABI_VERSION = 5;
 inline constexpr uint32_t RSF_XESS_BRIDGE_ALLOCATOR_COUNT = 3;
 
 struct rsf_xess_bridge_session;
@@ -17,6 +17,11 @@ struct rsf_xess_capture_image;
 struct rsf_xess_bridge_present_result {
     uint32_t frames_presented, fg_enabled;
     int32_t fg_result;
+};
+
+struct rsf_xess_bridge_resource_desc {
+    uint64_t width;
+    uint32_t height, format;
 };
 
 struct rsf_xess_bridge_modules {
@@ -77,9 +82,14 @@ struct rsf_xess_bridge_platform {
     int32_t (*destroy_fg)(rsf_xess_bridge*);
     int32_t (*destroy_xell)(rsf_xess_bridge*);
     uint32_t (*has_shared_queue)(const rsf_xess_bridge*);
-    int32_t (*check_resources)(const VulkanStoryXessFrame*, uint32_t, uint32_t, uint32_t);
+    void (*describe_present_resource)(void* resource, rsf_xess_bridge_resource_desc*);
     int32_t (*reset_commands)(rsf_xess_bridge*, uint32_t);
-    int32_t (*record_inputs)(rsf_xess_bridge*, const VulkanStoryXessFrame*);
+    void (*transition_present_resource)(rsf_xess_bridge*, void* resource, uint32_t before, uint32_t after);
+    // Transfers one DXGI backbuffer reference to the session on success.
+    int32_t (*acquire_backbuffer)(rsf_xess_bridge*, void** backbuffer);
+    void (*copy_present_color)(rsf_xess_bridge*, void* backbuffer, void* color);
+    int32_t (*tag_present_resource)(rsf_xess_bridge*, void* resource, uint32_t role, uint32_t frame_id);
+    void (*release_backbuffer)(void* backbuffer);
     int32_t (*close_commands)(rsf_xess_bridge*);
     int32_t (*tag_constants)(rsf_xess_bridge*, const VulkanStoryXessFrame*);
     int32_t (*wait_shared)(rsf_xess_bridge*, uint64_t);
@@ -115,7 +125,10 @@ struct rsf_xess_bridge_platform {
 
 static_assert(sizeof(rsf_xess_bridge_modules) == 16);
 static_assert(sizeof(rsf_xess_bridge_present_result) == 12);
-static_assert(sizeof(rsf_xess_bridge_platform) == 512 && alignof(rsf_xess_bridge_platform) == 8);
+static_assert(sizeof(rsf_xess_bridge_resource_desc) == 16 && alignof(rsf_xess_bridge_resource_desc) == 8);
+static_assert(offsetof(rsf_xess_bridge_resource_desc, height) == 8);
+static_assert(offsetof(rsf_xess_bridge_resource_desc, format) == 12);
+static_assert(sizeof(rsf_xess_bridge_platform) == 544 && alignof(rsf_xess_bridge_platform) == 8);
 static_assert(offsetof(rsf_xess_bridge_platform, allocate) == 8);
 static_assert(offsetof(rsf_xess_bridge_platform, init_swapchain) == 112);
 static_assert(offsetof(rsf_xess_bridge_platform, find_diagnostics) == 168);
@@ -123,12 +136,17 @@ static_assert(offsetof(rsf_xess_bridge_platform, read_completion) == 184);
 static_assert(offsetof(rsf_xess_bridge_platform, unregister_diagnostics) == 216);
 static_assert(offsetof(rsf_xess_bridge_platform, destroy_xell) == 240);
 static_assert(offsetof(rsf_xess_bridge_platform, has_shared_queue) == 248);
-static_assert(offsetof(rsf_xess_bridge_platform, wait_shared) == 296);
-static_assert(offsetof(rsf_xess_bridge_platform, read_present_status) == 344);
-static_assert(offsetof(rsf_xess_bridge_platform, serialize_enabled) == 416);
-static_assert(offsetof(rsf_xess_bridge_platform, attach_capture) == 424);
-static_assert(offsetof(rsf_xess_bridge_platform, capture_footprint) == 472);
-static_assert(offsetof(rsf_xess_bridge_platform, capture_publish) == 504);
+static_assert(offsetof(rsf_xess_bridge_platform, describe_present_resource) == 256);
+static_assert(offsetof(rsf_xess_bridge_platform, transition_present_resource) == 272);
+static_assert(offsetof(rsf_xess_bridge_platform, acquire_backbuffer) == 280);
+static_assert(offsetof(rsf_xess_bridge_platform, tag_present_resource) == 296);
+static_assert(offsetof(rsf_xess_bridge_platform, release_backbuffer) == 304);
+static_assert(offsetof(rsf_xess_bridge_platform, wait_shared) == 328);
+static_assert(offsetof(rsf_xess_bridge_platform, read_present_status) == 376);
+static_assert(offsetof(rsf_xess_bridge_platform, serialize_enabled) == 448);
+static_assert(offsetof(rsf_xess_bridge_platform, attach_capture) == 456);
+static_assert(offsetof(rsf_xess_bridge_platform, capture_footprint) == 504);
+static_assert(offsetof(rsf_xess_bridge_platform, capture_publish) == 536);
 
 extern "C" {
 int32_t rsf_core_xess_bridge_create(const rsf_xess_bridge_platform*, uint64_t, const uint16_t*, rsf_xess_bridge**);
