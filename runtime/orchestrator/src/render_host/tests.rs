@@ -595,6 +595,28 @@ fn admission_refuses_short_and_mismatched_requests() {
 }
 
 #[test]
+fn creation_refuses_busy_before_installing_and_releases_admission_after_refusal() {
+    let ini = Temporary::new("creation-admission");
+    let setup = setup(&ini, ENGINE_PRESENTATION);
+    let mut services = services();
+    with(|world| world.observer_result = -1);
+    {
+        let _installation = CREATION.lock().unwrap();
+        assert_eq!(unsafe { create(&setup, &mut services, &PLATFORM) }, BUSY);
+        assert!(events().is_empty());
+        assert!(services.user.is_null() && services.process_upscale.is_none());
+    }
+    for _ in 0..2 {
+        assert_eq!(
+            unsafe { create(&setup, &mut services, &PLATFORM) },
+            NOT_READY
+        );
+        assert_eq!(events(), ["observer"]);
+        assert!(services.user.is_null() && services.process_upscale.is_none());
+    }
+}
+
+#[test]
 fn quality_follows_the_actual_input_ratio() {
     assert_eq!(infer_quality(1920, 1920), 0);
     assert_eq!(infer_quality(1280, 1920), 1);

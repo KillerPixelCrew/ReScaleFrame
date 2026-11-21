@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The Rust D3D11 and D3D12 hosts refuse overlapping creation before
+installing any hooks or callbacks. D3D12 publishes the frontend only
+after filling the service table, and a refused install allows a
+later retry. D3D11 returns busy if an installation callback tries
+to create the host again. An unrun D3D12 fixture covers contention
+and refusal. Source review traced both install paths. The native
+D3D12 render host remains process-lifetime under its existing ABI.
+
 The Rust D3D12 overlay owns the UI instance and panel DLL lease,
 calls the panel's frame and texture APIs directly, and publishes only
 after renderer and input startup succeed. A refused startup drops

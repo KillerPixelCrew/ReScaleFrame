@@ -2124,7 +2124,10 @@ unsafe fn create(
     if !validate_setup(setup, &upstream) {
         return INVALID;
     }
-    let _creation = CREATION.lock().unwrap_or_else(PoisonError::into_inner);
+    // Bridge installation can call back into the adapter before publishing the owner.
+    let Ok(_creation) = CREATION.try_lock() else {
+        return BUSY;
+    };
     if !OWNER.load(Ordering::Acquire).is_null() {
         return BUSY;
     }

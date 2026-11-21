@@ -332,6 +332,7 @@ pub(crate) struct Host {
 
 // The process-lifetime host behind the frontend entries. It is never freed.
 static FRONTEND: AtomicPtr<Host> = AtomicPtr::new(null_mut());
+static CREATION: Mutex<()> = Mutex::new(());
 
 fn retain(object: Handle) -> Option<ComRef> {
     (!object.is_null()).then(|| unsafe { ComRef::retain(object) })
@@ -1795,6 +1796,11 @@ unsafe fn create(setup: *const Setup, services: *mut Services, p: &'static Platf
     {
         return ABI_MISMATCH;
     }
+    // Install may invoke the plugin's logger before the frontend is published.
+    // A concurrent or reentrant create must stop before installing anything.
+    let Ok(_creation) = CREATION.try_lock() else {
+        return BUSY;
+    };
     if !FRONTEND.load(Ordering::Acquire).is_null() {
         return BUSY;
     }
@@ -1816,10 +1822,10 @@ unsafe fn create(setup: *const Setup, services: *mut Services, p: &'static Platf
     services.cpu_event = Some(cpu_event);
     services.process_latency = Some(process_latency);
     services.render_feedback = Some(render_feedback);
-    FRONTEND.store(host, Ordering::Release);
     services.user = host.cast();
     // The existing log callback keeps its original user argument through the runtime owner.
     services.log = Some(backend_log);
+    FRONTEND.store(host, Ordering::Release);
     OK
 }
 
