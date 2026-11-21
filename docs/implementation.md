@@ -893,11 +893,13 @@ binary export, fixture and runtime verification remain open.
 [NGX loader](research/rust-vulkanstory-ngx-loader.md) ·
 [Vulkan FG transfers](research/rust-vulkan-dx12-copy-plan.md)
 
-The standalone FSR3 bridge now binds the SDK and owns the SR create,
-plan, evaluate and checked retirement paths in Rust. Native leaves
-still build the Vulkan and FidelityFX descriptors. All 21 export
-signatures matched in source. FG and WSI lifetime remain in C++.
-[Standalone FSR3 SR](research/rust-vulkan-fsr3-legacy-sr.md)
+The standalone FSR3 bridge now binds the SDK and owns the SR, FG and
+swapchain transactions in Rust. It keeps the active FG and swapchain
+paired through disable, drain, UI clear and checked retirement.
+Native leaves still build the FidelityFX and Vulkan descriptors.
+All 21 export signatures matched in source. Link, binary exports,
+device and external host presentation remain unverified.
+[Standalone FSR3 ownership](research/rust-vulkan-fsr3-legacy-sr.md)
 
 Anomaly's Rust geometry owner now checks the selected profile's image
 size, layout sites, detour entries and unique prefixes. The native

@@ -204,11 +204,12 @@ reproduced the bindings. The public host declarations and native
 `auxiliary_sr_device` fixture remain unchanged. Pinned formatting,
 locked Windows Cargo metadata and whitespace checks passed.
 
-The retained standalone FSR3 Vulkan bridge now binds the SDK and owns
-SR contexts in Rust. The managed caller still resolves the same
-`VulkanStoryFsr3*` entry points by name. The FG and swapchain owners
-are native and share the published SDK table. The standalone Windows
-GNU linkage and binary exports remain unverified.
+The retained standalone FSR3 Vulkan bridge now owns SDK binding, SR
+contexts, FG contexts and swapchain lifetime in Rust. The same
+`VulkanStoryFsr3*` entry points forward through typed FidelityFX and
+Vulkan leaves. Source comparison matched all 21 export signatures.
+Windows GNU linkage, binary exports and external host presentation
+remain unverified.
 [FSR3 ownership and export comparison](research/rust-vulkan-fsr3-legacy-sr.md)
 
 The standalone VulkanStory NGX shim loads and publishes its SDK
