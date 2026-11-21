@@ -4,6 +4,7 @@
 #include "../../graphics/src/depth_scale_private.h"
 #include <rescaleframe/shader_compile.h>
 #include <wrl/client.h>
+#include <cstddef>
 
 extern "C" {
 rsf_auxiliary_sr* rsf_auxiliary_sr_create(const rsf_aux_platform*);
@@ -34,6 +35,10 @@ static_assert(RSF_AUX_FORMAT_R32_FLOAT == DXGI_FORMAT_R32_FLOAT);
 static_assert(RSF_AUX_FORMAT_R24G8_TYPELESS == DXGI_FORMAT_R24G8_TYPELESS);
 static_assert(RSF_AUX_FORMAT_R16_FLOAT == DXGI_FORMAT_R16_FLOAT);
 static_assert(RSF_AUX_FORMAT_R8_UNORM == DXGI_FORMAT_R8_UNORM);
+static_assert(RSF_AUX_USAGE_DEFAULT == D3D11_USAGE_DEFAULT);
+static_assert(RSF_AUX_PACKED_SUPPORT_MASK == (D3D11_FORMAT_SUPPORT_TEXTURE2D |
+    D3D11_FORMAT_SUPPORT_SHADER_LOAD | D3D11_FORMAT_SUPPORT_RENDER_TARGET));
+static_assert(sizeof(rsf_aux_texture_facts) == 40 && offsetof(rsf_aux_texture_facts, same_device) == 20);
 
 constexpr const char* colour_shader = R"(
 Texture2D<float4> Source : register(t0);
@@ -69,28 +74,26 @@ int32_t device_ready(void* device)
     return SUCCEEDED(static_cast<ID3D11Device*>(device)->GetDeviceRemovedReason());
 }
 
-int32_t texture_info(void* raw_texture, void* device, rsf_aux_texture_info* out)
+int32_t describe_texture(void* raw_texture, void* device, rsf_aux_texture_facts* out)
 {
     auto* texture = static_cast<ID3D11Texture2D*>(raw_texture);
     ComPtr<ID3D11Device> owner;
     D3D11_TEXTURE2D_DESC desc{};
     texture->GetDevice(&owner);
     texture->GetDesc(&desc);
-    if (owner.Get() != device || desc.ArraySize != 1 || desc.MipLevels != 1 ||
-        desc.SampleDesc.Count != 1 || desc.Usage != D3D11_USAGE_DEFAULT) return 0;
-    *out = {desc.Width, desc.Height, static_cast<uint32_t>(desc.Format), desc.SampleDesc.Quality,
-        (desc.BindFlags & D3D11_BIND_DEPTH_STENCIL) != 0};
+    *out = {{desc.Width, desc.Height, static_cast<uint32_t>(desc.Format), desc.SampleDesc.Quality,
+        (desc.BindFlags & D3D11_BIND_DEPTH_STENCIL) != 0},
+        owner.Get() == device, desc.ArraySize, desc.MipLevels, desc.SampleDesc.Count, static_cast<uint32_t>(desc.Usage)};
     return 1;
 }
 
-int32_t supports_packed_colour(void* device)
+int32_t packed_colour_support(void* device, uint32_t* flags)
 {
-    // Numeric nearest uses an SRV Load and draws into an RTV.
-    UINT flags{};
-    constexpr UINT required = D3D11_FORMAT_SUPPORT_TEXTURE2D | D3D11_FORMAT_SUPPORT_SHADER_LOAD |
-        D3D11_FORMAT_SUPPORT_RENDER_TARGET;
-    return SUCCEEDED(static_cast<ID3D11Device*>(device)->CheckFormatSupport(DXGI_FORMAT_R11G11B10_FLOAT, &flags)) &&
-        (flags & required) == required;
+    UINT support{};
+    const auto result = static_cast<ID3D11Device*>(device)->CheckFormatSupport(
+        DXGI_FORMAT_R11G11B10_FLOAT, &support);
+    *flags = support;
+    return SUCCEEDED(result);
 }
 
 int32_t create_pipeline(void* raw_device, rsf_game_log_fn log, void* user, rsf_aux_colour_pipeline* out) try
@@ -171,7 +174,7 @@ int32_t depth_reserve(rsf_depth_scale* depth, void* texture)
 }
 
 constexpr rsf_aux_platform platform{
-    immediate_device, device_ready, texture_info, supports_packed_colour, create_pipeline, create_texture,
+    immediate_device, device_ready, describe_texture, packed_colour_support, create_pipeline, create_texture,
     rsf_d3d11_create_shader_view, create_output_view, rsf_d3d11_state_save, rsf_d3d11_state_restore,
     clear, rsf_d3d11_copy_resource, draw, rsf_depth_scale_create, depth_reserve, rsf_depth_scale_prepare,
     rsf_depth_scale_redraw, rsf_depth_scale_commit, rsf_depth_scale_restore, rsf_depth_scale_discard,

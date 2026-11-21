@@ -195,6 +195,15 @@ the 12-byte fact record, the HLSL, command order and public entry points.
 Pinned formatting, locked Windows Cargo metadata and whitespace passed.
 The existing `fullscreen_pass` device fixture remains unrun.
 
+The auxiliary SR owner now decides texture admission and the three
+packed-colour format capability requirements using native descriptor
+facts. The original device, array, mip, sample and usage checks run
+in the same order. Source comparison against `119892c2` matched the
+21 private slots and 40-byte facts record, and targeted bindgen
+reproduced the bindings. The public host declarations and native
+`auxiliary_sr_device` fixture remain unchanged. Pinned formatting,
+locked Windows Cargo metadata and whitespace checks passed.
+
 The retained standalone FSR3 Vulkan bridge now binds the SDK and owns
 SR contexts in Rust. The managed caller still resolves the same
 `VulkanStoryFsr3*` entry points by name. The FG and swapchain owners

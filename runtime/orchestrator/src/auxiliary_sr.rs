@@ -312,20 +312,28 @@ impl AuxiliarySr {
     }
 
     fn texture_info(&self, device: *mut c_void, texture: Texture) -> Option<rsf_aux_texture_info> {
-        let mut desc = rsf_aux_texture_info::default();
+        let mut facts = rsf_aux_texture_facts::default();
         if texture.is_null()
-            || unsafe { self.platform.texture_info.unwrap()(texture, device, &mut desc) } == 0
+            || unsafe { self.platform.describe_texture.unwrap()(texture, device, &mut facts) } == 0
+            || facts.same_device == 0
+            || facts.array_size != 1
+            || facts.mip_levels != 1
+            || facts.sample_count != 1
+            || facts.usage != RSF_AUX_USAGE_DEFAULT
         {
             return None;
         }
-        Some(desc)
+        Some(facts.info)
     }
 
     fn colour_supported(&self, device: *mut c_void, format: u32) -> bool {
         match format {
-            RSF_AUX_FORMAT_R11G11B10_FLOAT => unsafe {
-                self.platform.supports_packed_colour.unwrap()(device) != 0
-            },
+            RSF_AUX_FORMAT_R11G11B10_FLOAT => {
+                // Numeric nearest loads through an SRV and draws into an RTV.
+                let mut flags = 0;
+                (unsafe { self.platform.packed_colour_support.unwrap()(device, &mut flags) } != 0)
+                    && flags & RSF_AUX_PACKED_SUPPORT_MASK == RSF_AUX_PACKED_SUPPORT_MASK
+            }
             RSF_AUX_FORMAT_RGBA32_FLOAT
             | RSF_AUX_FORMAT_RGBA16_FLOAT
             | RSF_AUX_FORMAT_RGBA8_UNORM
@@ -1056,18 +1064,25 @@ mod tests {
     unsafe extern "C" fn describe(
         raw: Texture,
         _: *mut c_void,
-        out: *mut rsf_aux_texture_info,
+        out: *mut rsf_aux_texture_facts,
     ) -> i32 {
         let texture = unsafe { &*raw.cast::<FakeCom>() };
         if texture.width == 0 {
             return 0;
         }
         unsafe {
-            out.write(rsf_aux_texture_info {
-                width: texture.width,
-                height: texture.width,
-                format: RSF_AUX_FORMAT_RGBA8_UNORM,
-                ..Default::default()
+            out.write(rsf_aux_texture_facts {
+                info: rsf_aux_texture_info {
+                    width: texture.width,
+                    height: texture.width,
+                    format: RSF_AUX_FORMAT_RGBA8_UNORM,
+                    ..Default::default()
+                },
+                same_device: 1,
+                array_size: 1,
+                mip_levels: 1,
+                sample_count: 1,
+                usage: RSF_AUX_USAGE_DEFAULT,
             })
         };
         1
@@ -1096,7 +1111,7 @@ mod tests {
         let platform = rsf_aux_platform {
             immediate_device: Some(retain),
             device_ready: Some(ready),
-            texture_info: Some(describe),
+            describe_texture: Some(describe),
             create_texture: Some(create_texture),
             create_source_view: Some(create_view),
             create_output_view: Some(create_view),

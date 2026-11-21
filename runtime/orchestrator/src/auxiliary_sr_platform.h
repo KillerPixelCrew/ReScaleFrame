@@ -23,9 +23,17 @@ extern "C" {
 #define RSF_AUX_TEXTURE_SOURCE 1u
 #define RSF_AUX_TEXTURE_OUTPUT 2u
 
+#define RSF_AUX_USAGE_DEFAULT 0u
+#define RSF_AUX_PACKED_SUPPORT_MASK 0x4120u
+
 typedef struct rsf_aux_texture_info {
     uint32_t width, height, format, sample_quality, depth_stencil;
 } rsf_aux_texture_info;
+
+typedef struct rsf_aux_texture_facts {
+    rsf_aux_texture_info info;
+    uint32_t same_device, array_size, mip_levels, sample_count, usage;
+} rsf_aux_texture_facts;
 
 typedef struct rsf_aux_draw_constants {
     float source[4], output[4], valid[4], jitter[2], padding[2];
@@ -40,8 +48,8 @@ typedef struct rsf_aux_colour_pipeline {
 typedef struct rsf_aux_platform {
     void* (*immediate_device)(void* context);
     int32_t (*device_ready)(void* device);
-    int32_t (*texture_info)(void* texture, void* device, rsf_aux_texture_info*);
-    int32_t (*supports_packed_colour)(void* device);
+    int32_t (*describe_texture)(void* texture, void* device, rsf_aux_texture_facts*);
+    int32_t (*packed_colour_support)(void* device, uint32_t* flags);
     int32_t (*create_pipeline)(void* device, rsf_game_log_fn, void* log_user, rsf_aux_colour_pipeline*);
     void* (*create_texture)(void* device, const rsf_aux_texture_info*, uint32_t usage);
     void* (*create_source_view)(void* device, void* texture);

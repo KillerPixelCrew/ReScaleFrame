@@ -1,5 +1,10 @@
 # Implementation tracker
 
+Auxiliary SR now admits D3D11 texture shapes and packed-colour
+capabilities in Rust. Typed descriptor and capability queries remain
+native. The public host ABI is unchanged in source, and the existing
+device fixture remains unrun. [Source comparison](rust-migration.md#native-policy-cutover)
+
 The fullscreen pass now admits the immediate context and views and
 calculates the render-target mip extent in Rust. The present blit uses
 the same owner. D3D11 facts, shader code and recording calls keep their

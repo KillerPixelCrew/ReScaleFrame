@@ -20,6 +20,8 @@ pub const RSF_AUX_FORMAT_R8_UNORM: u32 = 61;
 pub const RSF_AUX_TEXTURE_BACKUP: u32 = 0;
 pub const RSF_AUX_TEXTURE_SOURCE: u32 = 1;
 pub const RSF_AUX_TEXTURE_OUTPUT: u32 = 2;
+pub const RSF_AUX_USAGE_DEFAULT: u32 = 0;
+pub const RSF_AUX_PACKED_SUPPORT_MASK: u32 = 16672;
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct rsf_d3d11_auxiliary_surface {
@@ -189,6 +191,34 @@ const _: () = {
 };
 #[repr(C)]
 #[derive(Default, Copy, Clone)]
+pub struct rsf_aux_texture_facts {
+    pub info: rsf_aux_texture_info,
+    pub same_device: u32,
+    pub array_size: u32,
+    pub mip_levels: u32,
+    pub sample_count: u32,
+    pub usage: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_aux_texture_facts"][::core::mem::size_of::<rsf_aux_texture_facts>() - 40usize];
+    ["Alignment of rsf_aux_texture_facts"]
+        [::core::mem::align_of::<rsf_aux_texture_facts>() - 4usize];
+    ["Offset of field: rsf_aux_texture_facts::info"]
+        [::core::mem::offset_of!(rsf_aux_texture_facts, info) - 0usize];
+    ["Offset of field: rsf_aux_texture_facts::same_device"]
+        [::core::mem::offset_of!(rsf_aux_texture_facts, same_device) - 20usize];
+    ["Offset of field: rsf_aux_texture_facts::array_size"]
+        [::core::mem::offset_of!(rsf_aux_texture_facts, array_size) - 24usize];
+    ["Offset of field: rsf_aux_texture_facts::mip_levels"]
+        [::core::mem::offset_of!(rsf_aux_texture_facts, mip_levels) - 28usize];
+    ["Offset of field: rsf_aux_texture_facts::sample_count"]
+        [::core::mem::offset_of!(rsf_aux_texture_facts, sample_count) - 32usize];
+    ["Offset of field: rsf_aux_texture_facts::usage"]
+        [::core::mem::offset_of!(rsf_aux_texture_facts, usage) - 36usize];
+};
+#[repr(C)]
+#[derive(Default, Copy, Clone)]
 pub struct rsf_aux_draw_constants {
     pub source: [f32; 4usize],
     pub output: [f32; 4usize],
@@ -252,15 +282,16 @@ pub struct rsf_aux_platform {
     >,
     pub device_ready:
         ::core::option::Option<unsafe extern "C" fn(device: *mut ::core::ffi::c_void) -> i32>,
-    pub texture_info: ::core::option::Option<
+    pub describe_texture: ::core::option::Option<
         unsafe extern "C" fn(
             texture: *mut ::core::ffi::c_void,
             device: *mut ::core::ffi::c_void,
-            arg1: *mut rsf_aux_texture_info,
+            arg1: *mut rsf_aux_texture_facts,
         ) -> i32,
     >,
-    pub supports_packed_colour:
-        ::core::option::Option<unsafe extern "C" fn(device: *mut ::core::ffi::c_void) -> i32>,
+    pub packed_colour_support: ::core::option::Option<
+        unsafe extern "C" fn(device: *mut ::core::ffi::c_void, flags: *mut u32) -> i32,
+    >,
     pub create_pipeline: ::core::option::Option<
         unsafe extern "C" fn(
             device: *mut ::core::ffi::c_void,
@@ -344,10 +375,10 @@ const _: () = {
         [::core::mem::offset_of!(rsf_aux_platform, immediate_device) - 0usize];
     ["Offset of field: rsf_aux_platform::device_ready"]
         [::core::mem::offset_of!(rsf_aux_platform, device_ready) - 8usize];
-    ["Offset of field: rsf_aux_platform::texture_info"]
-        [::core::mem::offset_of!(rsf_aux_platform, texture_info) - 16usize];
-    ["Offset of field: rsf_aux_platform::supports_packed_colour"]
-        [::core::mem::offset_of!(rsf_aux_platform, supports_packed_colour) - 24usize];
+    ["Offset of field: rsf_aux_platform::describe_texture"]
+        [::core::mem::offset_of!(rsf_aux_platform, describe_texture) - 16usize];
+    ["Offset of field: rsf_aux_platform::packed_colour_support"]
+        [::core::mem::offset_of!(rsf_aux_platform, packed_colour_support) - 24usize];
     ["Offset of field: rsf_aux_platform::create_pipeline"]
         [::core::mem::offset_of!(rsf_aux_platform, create_pipeline) - 32usize];
     ["Offset of field: rsf_aux_platform::create_texture"]
