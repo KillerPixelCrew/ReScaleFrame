@@ -128,6 +128,19 @@ fn from_environment() -> (Legacy, bool) {
 }
 
 impl Owner {
+    pub(super) fn from_environment(ops: &'static Platform) -> Self {
+        let (legacy, reset) = from_environment();
+        Self::new(ops, legacy, reset)
+    }
+
+    pub(super) fn enabled(&self) -> bool {
+        self.lock().legacy.enabled()
+    }
+
+    pub(super) fn wants(&self, frame: u64) -> bool {
+        self.lock().legacy.wants(frame)
+    }
+
     fn new(ops: &'static Platform, legacy: Legacy, reset_sr: bool) -> Self {
         Self {
             ops,
@@ -201,7 +214,7 @@ impl Owner {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn record(
+    pub(super) fn record(
         &self,
         list: Handle,
         source: Handle,
@@ -396,9 +409,28 @@ impl Owner {
     // Snapshot the readbacks before asking the SDK to finish its submitted
     // Presents. Later recordings are outside that proof. Retained buffers
     // keep their identities unique if another call removes an entry.
-    fn flush_after_queue(&self, queue: Handle, wait_submissions: impl FnOnce() -> bool) -> bool {
+    pub(super) fn flush_after_queue(
+        &self,
+        queue: Handle,
+        wait_submissions: impl FnOnce() -> bool,
+    ) -> bool {
+        self.flush_queue_batch(queue, wait_submissions)
+            .unwrap_or(false)
+    }
+
+    // The provider already ended SDK recording. Once GPU retirement is
+    // proven, a file or map failure is safe to handle on Drop.
+    pub(super) fn retire_after_wait(&self, queue: Handle) -> bool {
+        self.flush_queue_batch(queue, || true).is_some()
+    }
+
+    fn flush_queue_batch(
+        &self,
+        queue: Handle,
+        wait_submissions: impl FnOnce() -> bool,
+    ) -> Option<bool> {
         if queue.is_null() {
-            return true;
+            return Some(true);
         }
         let batch: Vec<_> = self
             .lock()
@@ -407,23 +439,23 @@ impl Owner {
             .map(|value| value.buffer.clone())
             .collect();
         if batch.is_empty() {
-            return true;
+            return Some(true);
         }
         if !wait_submissions() {
-            return false;
+            return None;
         }
         let completed = unsafe { (self.ops.drain)(queue) };
         if completed < SUBMITTED || completed == u64::MAX {
-            return false;
+            return None;
         }
-        self.flush_matching(&mut self.lock(), false, |value| {
+        Some(self.flush_matching(&mut self.lock(), false, |value| {
             batch
                 .iter()
                 .any(|buffer| buffer.as_ptr() == value.buffer.as_ptr())
-        })
+        }))
     }
 
-    fn event(
+    pub(super) fn event(
         &self,
         identity: &Record,
         name: &CStr,
@@ -549,12 +581,12 @@ unsafe extern "C" fn rsf_core_capture12_create(
     environment: u32,
     ops: &'static Platform,
 ) -> *mut Owner {
-    let (legacy, reset) = if environment != 0 {
-        from_environment()
+    let owner = if environment != 0 {
+        Owner::from_environment(ops)
     } else {
-        (Legacy::default(), false)
+        Owner::new(ops, Legacy::default(), false)
     };
-    crate::allocate_handle(Owner::new(ops, legacy, reset))
+    crate::allocate_handle(owner)
 }
 
 #[unsafe(no_mangle)]
@@ -566,7 +598,7 @@ unsafe extern "C" fn rsf_core_capture12_destroy(owner: *mut Owner) {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_capture12_enabled(owner: *const Owner) -> i32 {
-    i32::from(unsafe { self::owner(owner) }.is_some_and(|owner| owner.lock().legacy.enabled()))
+    i32::from(unsafe { self::owner(owner) }.is_some_and(|owner| owner.enabled()))
 }
 
 #[unsafe(no_mangle)]
@@ -584,7 +616,7 @@ unsafe extern "C" fn rsf_core_capture12_configure(
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_capture12_wants(owner: *const Owner, frame: u64) -> i32 {
-    i32::from(unsafe { self::owner(owner) }.is_some_and(|owner| owner.lock().legacy.wants(frame)))
+    i32::from(unsafe { self::owner(owner) }.is_some_and(|owner| owner.wants(frame)))
 }
 
 #[unsafe(no_mangle)]

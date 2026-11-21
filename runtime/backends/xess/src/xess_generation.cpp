@@ -1,29 +1,23 @@
 // SPDX-License-Identifier: MIT
-#include "../../common/fg_helpers.h"
-#include "../../common/generation_state.h"
-#include "../../common/d3d12_helpers.h"
-#include <wrl/client.h>
-#include <new>
-#include <mutex>
-#include <cstring>
-#include <array>
+#include "../../common/generation12_checks.h"
 #if defined(RSF_HAVE_XESS_FG)
+#include "../../common/d3d12_helpers.h"
 #include <xess_fg/xefg_swapchain_d3d12.h>
 #include <xell/xell_d3d12.h>
+#include <wrl/client.h>
+#include <cstring>
+#include <memory>
+#include <new>
+
 using Microsoft::WRL::ComPtr;
 namespace {
-struct XegSession {
-    HMODULE module = nullptr, xell_module = nullptr;
-    xefg_swapchain_handle_t context = nullptr;
-    xell_context_handle_t xell = nullptr;
-    ComPtr<IDXGISwapChain4> chain;
-    ComPtr<ID3D12Device> device;
-    ComPtr<ID3D12CommandQueue> queue;
-    ComPtr<ID3D12Fence> settings_fence;
-    HANDLE settings_event = nullptr;
-    uint64_t settings_serial = 0;
-    std::mutex latency_guard;
-    std::mutex sleep_guard;
+static_assert(RSF_LATENCY_INPUT_SAMPLE == 6);
+static_assert(RSF_REFLEX_ON == 1);
+static_assert(XEFG_SWAPCHAIN_RESULT_SUCCESS == 0 && XELL_RESULT_SUCCESS == 0);
+
+struct Bindings {
+    HMODULE module{};
+    HMODULE xell_module{};
     decltype(&xefgSwapChainD3D12CreateContext) create{};
     decltype(&xefgSwapChainD3D12InitFromSwapChainDesc) init{};
     decltype(&xefgSwapChainD3D12GetSwapChainPtr) chain_ptr{};
@@ -43,291 +37,252 @@ struct XegSession {
     decltype(&xellSetSleepMode) xell_options{};
     decltype(&xellSleep) sleep{};
     decltype(&xellAddMarkerData) marker{};
-    rsf::GenerationState copied;
-    rsf_backend_log_fn log{};
-    void* log_user{};
-    uint32_t last_present_active = 0;
-    uint32_t prepared_reset = 0;
-    uint64_t prepared_gap = 0;
-    uint64_t last_begin = 0;
-    struct FrameId { uint64_t source = 0; uint32_t sdk = 0; bool input_sampled = false; };
-    std::array<FrameId, 128> frame_ids;
-    uint32_t sdk_frame = 0;
-    uint32_t reserved = 0;
-    rsf_ui_mode ui_mode = RSF_UI_MODE_NONE;
+
+    ~Bindings() {
+        if (module) FreeLibrary(module);
+        if (xell_module) FreeLibrary(xell_module);
+    }
 };
-void destroy(void* pointer)
+
+rsf_backend_result open(const rsf_generation_setup* setup, void** out)
 {
-    auto* self = static_cast<XegSession*>(pointer); if (!self) return;
-    self->chain.Reset();
-    if (self->context) self->destroy(self->context);
-    if (self->xell) self->xell_destroy(self->xell);
-    if (self->settings_event) CloseHandle(self->settings_event);
-    if (self->module) FreeLibrary(self->module);
-    if (self->xell_module) FreeLibrary(self->xell_module);
-    delete self;
+    auto api = std::unique_ptr<Bindings>(new (std::nothrow) Bindings{});
+    if (!api) return RSF_BACKEND_ERROR_INIT_FAILED;
+    api->module = rsf::fg_library(*setup, L"libxess_fg.dll");
+    api->xell_module = rsf::fg_library(*setup, L"libxell.dll");
+    if (!api->module || !api->xell_module) return RSF_BACKEND_ERROR_LOAD_FAILED;
+#define ENTRY(module, member, function) \
+    api->member = rsf::entry<decltype(&function)>(api->module, #function); \
+    if (!api->member) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT
+    ENTRY(module, create, xefgSwapChainD3D12CreateContext);
+    ENTRY(module, init, xefgSwapChainD3D12InitFromSwapChainDesc);
+    ENTRY(module, chain_ptr, xefgSwapChainD3D12GetSwapChainPtr);
+    ENTRY(module, tag, xefgSwapChainD3D12TagFrameResource);
+    ENTRY(module, properties, xefgSwapChainGetProperties);
+    ENTRY(module, enabled, xefgSwapChainSetEnabled);
+    ENTRY(module, present_id, xefgSwapChainSetPresentId);
+    ENTRY(module, constants, xefgSwapChainTagFrameConstants);
+    ENTRY(module, present_status, xefgSwapChainGetLastPresentStatus);
+    ENTRY(module, count, xefgSwapChainSetNumInterpolatedFrames);
+    ENTRY(module, set_xell, xefgSwapChainSetLatencyReduction);
+    ENTRY(module, destroy, xefgSwapChainDestroy);
+    ENTRY(module, version, xefgSwapChainGetVersion);
+    ENTRY(module, compose, xefgSwapChainSetUiCompositionState);
+    ENTRY(xell_module, xell_create, xellD3D12CreateContext);
+    ENTRY(xell_module, xell_destroy, xellDestroyContext);
+    ENTRY(xell_module, xell_options, xellSetSleepMode);
+    ENTRY(xell_module, sleep, xellSleep);
+    ENTRY(xell_module, marker, xellAddMarkerData);
+#undef ENTRY
+    *out = api.release();
+    return RSF_BACKEND_OK;
 }
+
+void close(void* bindings)
+{
+    delete static_cast<Bindings*>(bindings);
+}
+
+int32_t create_fg(void* bindings, void* device, void** out)
+{
+    xefg_swapchain_handle_t handle{};
+    const auto result = static_cast<Bindings*>(bindings)->create(static_cast<ID3D12Device*>(device), &handle);
+    *out = handle;
+    return result;
+}
+
+int32_t create_xell(void* bindings, void* device, void** out)
+{
+    xell_context_handle_t handle{};
+    const auto result = static_cast<Bindings*>(bindings)->xell_create(static_cast<ID3D12Device*>(device), &handle);
+    *out = handle;
+    return result;
+}
+
+int32_t destroy_fg(void* bindings, void* context)
+{
+    return static_cast<Bindings*>(bindings)->destroy(static_cast<xefg_swapchain_handle_t>(context));
+}
+
+int32_t destroy_xell(void* bindings, void* context)
+{
+    return static_cast<Bindings*>(bindings)->xell_destroy(static_cast<xell_context_handle_t>(context));
+}
+
+int32_t max_count(void* bindings, void* context, uint32_t* out)
+{
+    xefg_swapchain_properties_t properties{};
+    const auto result = static_cast<Bindings*>(bindings)->properties(static_cast<xefg_swapchain_handle_t>(context), &properties);
+    *out = properties.maxSupportedInterpolations;
+    return result;
+}
+
+int32_t bind_xell(void* bindings, void* context, void* xell)
+{
+    return static_cast<Bindings*>(bindings)->set_xell(static_cast<xefg_swapchain_handle_t>(context), xell);
+}
+
+void version(void* bindings, rsf_xeg12_version* out)
+{
+    xefg_swapchain_version_t value{};
+    static_cast<Bindings*>(bindings)->version(&value);
+    *out = {value.major, value.minor, value.patch};
+}
+
+rsf_backend_result create_chain(void* bindings, void* raw, const rsf_generation_setup* setup,
+    uint32_t reserved, void** out)
+{
+    const auto& api = *static_cast<Bindings*>(bindings);
+    const auto context = static_cast<xefg_swapchain_handle_t>(raw);
+    ComPtr<IDXGIFactory2> factory;
+    if (FAILED(CreateDXGIFactory2(0, IID_PPV_ARGS(&factory)))) return RSF_BACKEND_ERROR_INIT_FAILED;
+    auto desc = rsf::chain_description(setup->chain);
+    xefg_swapchain_d3d12_init_params_t init{};
+    init.maxInterpolatedFrames = reserved;
+    init.initFlags = (setup->depth_inverted ? XEFG_SWAPCHAIN_INIT_FLAG_INVERTED_DEPTH : 0u) |
+        (setup->motion_jittered ? XEFG_SWAPCHAIN_INIT_FLAG_JITTERED_MV : 0u);
+    init.uiMode = setup->chain.ui_mode == RSF_UI_MODE_BACKBUFFER_HUDLESS_UI ? XEFG_SWAPCHAIN_UI_MODE_BACKBUFFER_HUDLESS_UITEXTURE :
+        setup->chain.ui_mode == RSF_UI_MODE_BACKBUFFER_HUDLESS ? XEFG_SWAPCHAIN_UI_MODE_BACKBUFFER_HUDLESS : XEFG_SWAPCHAIN_UI_MODE_NONE;
+    if (api.init(context, static_cast<HWND>(setup->chain.hwnd), &desc, nullptr,
+        static_cast<ID3D12CommandQueue*>(setup->chain.d3d12_queue), factory.Get(), &init) != XEFG_SWAPCHAIN_RESULT_SUCCESS)
+        return RSF_BACKEND_ERROR_INIT_FAILED;
+    ComPtr<IDXGISwapChain4> chain;
+    if (api.chain_ptr(context, IID_PPV_ARGS(&chain)) != XEFG_SWAPCHAIN_RESULT_SUCCESS)
+        return RSF_BACKEND_ERROR_INIT_FAILED;
+    *out = chain.Detach();
+    return RSF_BACKEND_OK;
+}
+
+int32_t compose(void* bindings, void* context, uint32_t enabled)
+{
+    return static_cast<Bindings*>(bindings)->compose(static_cast<xefg_swapchain_handle_t>(context),
+        enabled ? XEFG_SWAPCHAIN_UI_COMPOSITION_STATE_ENABLED : XEFG_SWAPCHAIN_UI_COMPOSITION_STATE_DISABLED);
+}
+
+int32_t count(void* bindings, void* context, uint32_t value)
+{
+    return static_cast<Bindings*>(bindings)->count(static_cast<xefg_swapchain_handle_t>(context), value);
+}
+
+int32_t enabled(void* bindings, void* context, uint32_t value)
+{
+    return static_cast<Bindings*>(bindings)->enabled(static_cast<xefg_swapchain_handle_t>(context), value);
+}
+
+int32_t sleep_mode(void* bindings, void* context, uint32_t interval, uint32_t low_latency)
+{
+    xell_sleep_params_t options{};
+    options.minimumIntervalUs = interval;
+    options.bLowLatencyMode = low_latency != 0;
+    return static_cast<Bindings*>(bindings)->xell_options(static_cast<xell_context_handle_t>(context), &options);
+}
+
+int32_t sleep(void* bindings, void* context, uint32_t sdk_id)
+{
+    return static_cast<Bindings*>(bindings)->sleep(static_cast<xell_context_handle_t>(context), sdk_id);
+}
+
+int32_t marker(void* bindings, void* context, uint32_t sdk_id, rsf_latency_marker kind)
+{
+    return static_cast<Bindings*>(bindings)->marker(static_cast<xell_context_handle_t>(context),
+        sdk_id, static_cast<xell_latency_marker_type_t>(kind));
+}
+
+int32_t present_id(void* bindings, void* context, uint32_t sdk_id)
+{
+    return static_cast<Bindings*>(bindings)->present_id(static_cast<xefg_swapchain_handle_t>(context), sdk_id);
+}
+
+int32_t tag(void* bindings, void* context, void* list, uint32_t sdk_id, uint32_t kind,
+    const rsf_backend_resource* resource)
+{
+    constexpr xefg_swapchain_resource_type_t types[]{XEFG_SWAPCHAIN_RES_DEPTH, XEFG_SWAPCHAIN_RES_MOTION_VECTOR,
+        XEFG_SWAPCHAIN_RES_HUDLESS_COLOR, XEFG_SWAPCHAIN_RES_UI};
+    xefg_swapchain_d3d12_resource_data_t data{};
+    data.type = types[kind];
+    data.validity = XEFG_SWAPCHAIN_RV_ONLY_NOW;
+    data.resourceBase = {resource->x, resource->y};
+    data.resourceSize = {resource->width, resource->height};
+    data.pResource = static_cast<ID3D12Resource*>(resource->resource);
+    data.incomingState = static_cast<D3D12_RESOURCE_STATES>(resource->state);
+    return static_cast<Bindings*>(bindings)->tag(static_cast<xefg_swapchain_handle_t>(context),
+        static_cast<ID3D12CommandList*>(list), sdk_id, &data);
+}
+
+int32_t constants(void* bindings, void* context, uint32_t sdk_id, const rsf_fg_frame* frame, uint32_t reset)
+{
+    const auto& camera = frame->record->camera;
+    xefg_swapchain_frame_constant_data_t data{};
+    data.resetHistory = reset;
+    std::memcpy(data.viewMatrix, camera.world_to_view, sizeof(data.viewMatrix));
+    std::memcpy(data.projectionMatrix, camera.view_to_clip, sizeof(data.projectionMatrix));
+    data.jitterOffsetX = camera.jitter_pixels[0];
+    data.jitterOffsetY = camera.jitter_pixels[1];
+    data.motionVectorScaleX = frame->motion_scale_x;
+    data.motionVectorScaleY = frame->motion_scale_y;
+    // Simulation delta does not measure Present cadence. Zero is the SDK's
+    // unspecified value for this deprecated field.
+    data.frameRenderTime = 0;
+    return static_cast<Bindings*>(bindings)->constants(static_cast<xefg_swapchain_handle_t>(context), sdk_id, &data);
+}
+
+int32_t present_status(void* bindings, void* context, rsf_xeg12_present* out)
+{
+    xefg_swapchain_present_status_t status{};
+    const auto result = static_cast<Bindings*>(bindings)->present_status(static_cast<xefg_swapchain_handle_t>(context), &status);
+    *out = {status.frameGenResult, status.isFrameGenEnabled, status.framesPresented};
+    return result;
+}
+
+void* create_fence(void* device)
+{
+    ComPtr<ID3D12Fence> fence;
+    if (FAILED(static_cast<ID3D12Device*>(device)->CreateFence(0, D3D12_FENCE_FLAG_NONE,
+        IID_PPV_ARGS(&fence)))) return nullptr;
+    return fence.Detach();
+}
+
+void* create_event()
+{
+    return CreateEventW(nullptr, FALSE, FALSE, nullptr);
+}
+
+int32_t drain(void* queue, void* fence, void* event, uint64_t serial)
+{
+    auto* native_fence = static_cast<ID3D12Fence*>(fence);
+    const auto signal = static_cast<ID3D12CommandQueue*>(queue)->Signal(native_fence, serial);
+    if (FAILED(signal)) return signal;
+    const auto waited = rsf::wait_fence(native_fence, serial, static_cast<HANDLE>(event));
+    if (FAILED(waited)) return waited;
+    // A previous timed-out registration can still signal the reused event.
+    const auto completed = native_fence->GetCompletedValue();
+    if (completed == UINT64_MAX) return DXGI_ERROR_DEVICE_REMOVED;
+    return completed >= serial ? S_OK : DXGI_ERROR_DEVICE_HUNG;
+}
+
+const rsf_xeg12_ops& native_ops()
+{
+    static const rsf_xeg12_ops ops{&rsf::generation12_checks, open, close, create_fg, create_xell,
+        destroy_fg, destroy_xell, max_count, bind_xell, version, create_chain, compose, count, enabled,
+        sleep_mode, sleep, marker, present_id, tag, constants, present_status, create_fence, create_event, drain};
+    return ops;
+}
+
 rsf_backend_result create(const rsf_generation_setup* setup, void** out, void** chain)
 {
-    auto result = rsf::fg_setup(setup, out, chain); if (result != 0) return result;
-    if (setup->chain.ui_mode == RSF_UI_MODE_UI_LAYER) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
-    if (GetModuleHandleW(L"sl.dlss_g.dll") && !setup->streamline_host) return RSF_BACKEND_ERROR_NEEDS_RESTART;
-    auto* self = new (std::nothrow) XegSession; if (!self) return RSF_BACKEND_ERROR_INIT_FAILED;
-    rsf_fg_status initial{};
-    self->log = setup->chain.log; self->log_user = setup->chain.log_user;
-    self->device = static_cast<ID3D12Device*>(setup->chain.d3d12_device);
-    self->queue = static_cast<ID3D12CommandQueue*>(setup->chain.d3d12_queue);
-    self->ui_mode = setup->chain.ui_mode;
-    self->module = rsf::fg_library(*setup, L"libxess_fg.dll");
-    self->xell_module = rsf::fg_library(*setup, L"libxell.dll");
-    if (!self->module || !self->xell_module) { destroy(self); return RSF_BACKEND_ERROR_LOAD_FAILED; }
-#define XEG(member, function) self->member = rsf::entry<decltype(&function)>(self->module, #function); if (!self->member) { destroy(self); return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT; }
-    XEG(create, xefgSwapChainD3D12CreateContext); XEG(init, xefgSwapChainD3D12InitFromSwapChainDesc);
-    XEG(chain_ptr, xefgSwapChainD3D12GetSwapChainPtr); XEG(tag, xefgSwapChainD3D12TagFrameResource);
-    XEG(properties, xefgSwapChainGetProperties); XEG(enabled, xefgSwapChainSetEnabled);
-    XEG(present_id, xefgSwapChainSetPresentId); XEG(constants, xefgSwapChainTagFrameConstants);
-    XEG(present_status, xefgSwapChainGetLastPresentStatus); XEG(count, xefgSwapChainSetNumInterpolatedFrames);
-    XEG(set_xell, xefgSwapChainSetLatencyReduction); XEG(destroy, xefgSwapChainDestroy); XEG(version, xefgSwapChainGetVersion);
-    XEG(compose, xefgSwapChainSetUiCompositionState);
-#undef XEG
-#define XELL(member, function) self->member = rsf::entry<decltype(&function)>(self->xell_module, #function); if (!self->member) { destroy(self); return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT; }
-    XELL(xell_create, xellD3D12CreateContext); XELL(xell_destroy, xellDestroyContext);
-    XELL(xell_options, xellSetSleepMode); XELL(sleep, xellSleep); XELL(marker, xellAddMarkerData);
-#undef XELL
-    if (self->create(self->device.Get(), &self->context) != XEFG_SWAPCHAIN_RESULT_SUCCESS ||
-        self->xell_create(self->device.Get(), &self->xell) != XELL_RESULT_SUCCESS) {
-        destroy(self); return RSF_BACKEND_ERROR_NOT_SUPPORTED;
-    }
-    xefg_swapchain_properties_t properties{};
-    if (self->properties(self->context, &properties) != XEFG_SWAPCHAIN_RESULT_SUCCESS ||
-        !properties.maxSupportedInterpolations || self->set_xell(self->context, self->xell) != XEFG_SWAPCHAIN_RESULT_SUCCESS) {
-        destroy(self); return RSF_BACKEND_ERROR_NOT_SUPPORTED;
-    }
-    self->reserved = setup->chain.max_generated_frames < properties.maxSupportedInterpolations ?
-        setup->chain.max_generated_frames : properties.maxSupportedInterpolations;
-    initial.struct_size = sizeof(initial); initial.supported = 1;
-    initial.max_generated_frames = self->reserved; initial.vsync_supported = 1;
-    initial.pacing_owner = RSF_PACING_XELL;
-    // The XeLL context exists and is bound to the swap chain; its sleep owns frame pacing.
-    initial.low_latency_available = 1;
-    xefg_swapchain_version_t version{}; self->version(&version);
-    initial.version_id = (uint64_t(version.major) << 32) | (uint64_t(version.minor) << 16) | version.patch;
-    std::snprintf(initial.version_name, sizeof(initial.version_name), "XeFG %u.%u.%u", version.major, version.minor, version.patch);
-    if (setup->version_id && setup->version_id != initial.version_id) { destroy(self); return RSF_BACKEND_ERROR_NOT_SUPPORTED; }
-    if (setup->chain.hwnd) {
-        ComPtr<IDXGIFactory2> factory;
-        if (FAILED(CreateDXGIFactory2(0, IID_PPV_ARGS(&factory)))) { destroy(self); return RSF_BACKEND_ERROR_INIT_FAILED; }
-        auto desc = rsf::chain_description(setup->chain);
-        xefg_swapchain_d3d12_init_params_t init{}; init.maxInterpolatedFrames = self->reserved;
-        init.initFlags = (setup->depth_inverted ? XEFG_SWAPCHAIN_INIT_FLAG_INVERTED_DEPTH : 0u) |
-            (setup->motion_jittered ? XEFG_SWAPCHAIN_INIT_FLAG_JITTERED_MV : 0u);
-        init.uiMode = setup->chain.ui_mode == RSF_UI_MODE_BACKBUFFER_HUDLESS_UI ? XEFG_SWAPCHAIN_UI_MODE_BACKBUFFER_HUDLESS_UITEXTURE :
-            setup->chain.ui_mode == RSF_UI_MODE_BACKBUFFER_HUDLESS ? XEFG_SWAPCHAIN_UI_MODE_BACKBUFFER_HUDLESS : XEFG_SWAPCHAIN_UI_MODE_NONE;
-        if (self->init(self->context, static_cast<HWND>(setup->chain.hwnd), &desc, nullptr,
-            static_cast<ID3D12CommandQueue*>(setup->chain.d3d12_queue), factory.Get(), &init) != XEFG_SWAPCHAIN_RESULT_SUCCESS ||
-            self->chain_ptr(self->context, IID_PPV_ARGS(&self->chain)) != XEFG_SWAPCHAIN_RESULT_SUCCESS) {
-            destroy(self); return RSF_BACKEND_ERROR_INIT_FAILED;
-        }
-        if (self->compose(self->context, self->ui_mode == RSF_UI_MODE_NONE ? XEFG_SWAPCHAIN_UI_COMPOSITION_STATE_DISABLED :
-            XEFG_SWAPCHAIN_UI_COMPOSITION_STATE_ENABLED) != XEFG_SWAPCHAIN_RESULT_SUCCESS) {
-            destroy(self); return RSF_BACKEND_ERROR_FEATURE_FAILED;
-        }
-    }
-    self->copied.initialize(initial);
-    *out = self; *chain = self->chain.Get(); return RSF_BACKEND_OK;
+    return rsf_core_xeg12_create(&native_ops(), setup, out, chain);
 }
-rsf_backend_result configure(void* pointer, const rsf_fg_options* options)
+}
+
+extern "C" const rsf_generation_provider* rsf_generation_xess()
 {
-    if (!pointer) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    const auto validation = rsf::fg_options_result(options); if (validation != 0) return validation;
-    auto& self = *static_cast<XegSession*>(pointer);
-    const auto before=self.copied.read();
-    if (!self.chain) return RSF_BACKEND_ERROR_NOT_READY;
-    if (options->mode > RSF_FG_FIXED) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
-    const uint32_t count = options->generated_frames > self.reserved ? self.reserved : options->generated_frames;
-    if (options->mode != RSF_FG_OFF && !count) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (before.options.struct_size && before.options.mode == options->mode &&
-        before.options.generated_frames == options->generated_frames &&
-        before.options.frame_limit_us == options->frame_limit_us && before.options.reflex_mode == options->reflex_mode) return RSF_BACKEND_OK;
-    const bool reset_history = !before.options.struct_size || before.options.mode != options->mode ||
-        before.options.generated_frames != options->generated_frames;
-    xell_sleep_params_t sleep{}; sleep.minimumIntervalUs = options->frame_limit_us;
-    // The field's ABI name predates non-NVIDIA pacers. Boost maps to On; active XeFG requires low latency.
-    sleep.bLowLatencyMode = options->mode != RSF_FG_OFF || options->reflex_mode != RSF_REFLEX_OFF;
-    const bool previous_low_latency = before.options.mode != RSF_FG_OFF || before.options.reflex_mode != RSF_REFLEX_OFF;
-    const bool sleep_changed = !before.options.struct_size ||
-        before.options.frame_limit_us != sleep.minimumIntervalUs || previous_low_latency != bool(sleep.bLowLatencyMode);
-    // Configuration runs on the older frame's rendering path. Waiting here for
-    // next-frame sleep can prevent the very Present that releases that sleep.
-    std::unique_lock<std::mutex> sleeper(self.sleep_guard, std::defer_lock);
-    if (sleep_changed && !sleeper.try_lock()) return RSF_BACKEND_ERROR_NOT_READY;
-    if (sleep_changed) {
-        // XeLL requires completed GPU activity before changing its sleep mode.
-        // Only settings transitions drain; normal frame pacing never waits here.
-        if (!self.device || !self.queue) return RSF_BACKEND_ERROR_NOT_READY;
-        if (!self.settings_fence && FAILED(self.device->CreateFence(0, D3D12_FENCE_FLAG_NONE,
-            IID_PPV_ARGS(&self.settings_fence)))) return RSF_BACKEND_ERROR_INIT_FAILED;
-        if (!self.settings_event) self.settings_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-        if (!self.settings_event) return RSF_BACKEND_ERROR_INIT_FAILED;
-        const auto completed = ++self.settings_serial;
-        if (FAILED(self.queue->Signal(self.settings_fence.Get(), completed)) ||
-            FAILED(rsf::wait_fence(self.settings_fence.Get(), completed, self.settings_event)))
-            return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    }
-    if (count && self.count(self.context, count) != XEFG_SWAPCHAIN_RESULT_SUCCESS) return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    if (sleep_changed && self.xell_options(self.xell, &sleep) != XELL_RESULT_SUCCESS)
-        return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    if (self.enabled(self.context, options->mode != RSF_FG_OFF) != XEFG_SWAPCHAIN_RESULT_SUCCESS)
-        return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    self.copied.configured(*options,options->mode,options->mode == RSF_FG_OFF ? 0 : count,
-        sleep.bLowLatencyMode ? RSF_REFLEX_ON : RSF_REFLEX_OFF,reset_history);
-    return RSF_BACKEND_OK;
+    static const auto provider = [] {
+        auto value = *rsf_core_xeg12_provider();
+        value.create = create;
+        return value;
+    }();
+    return &provider;
 }
-rsf_backend_result begin(void* pointer, uint64_t id)
-{
-    if (!pointer || !id) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    auto& self = *static_cast<XegSession*>(pointer);
-    std::lock_guard<std::mutex> sleeper(self.sleep_guard);
-    std::unique_lock<std::mutex> lock(self.latency_guard);
-    if (id <= self.last_begin) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    // Engine identities include session epochs. XeLL and XeFG share a 32-bit local
-    // counter, so translate at the provider boundary instead of truncating epochs.
-    if (self.sdk_frame == UINT32_MAX) return RSF_BACKEND_ERROR_NEEDS_RESTART;
-    const uint32_t sdk = ++self.sdk_frame;
-    // Older frames must be able to submit markers while this frame sleeps.
-    // Publish this frame only after sleep returns, as required by XeLL.
-    lock.unlock();
-    const auto result = self.sleep(self.xell, sdk);
-    lock.lock();
-    if (result == XELL_RESULT_SUCCESS) {
-        self.last_begin = id; self.frame_ids[id % self.frame_ids.size()] = {id, sdk};
-        self.copied.paced();
-    }
-    return result == XELL_RESULT_SUCCESS ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
-}
-rsf_backend_result marker(void* pointer, rsf_latency_marker marker, uint64_t id, uint32_t)
-{
-    if (!pointer || !id || marker > RSF_LATENCY_INPUT_SAMPLE) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    auto& self = *static_cast<XegSession*>(pointer);
-    std::lock_guard<std::mutex> lock(self.latency_guard);
-    auto& frame = self.frame_ids[id % self.frame_ids.size()];
-    if (frame.source != id) return RSF_BACKEND_ERROR_NOT_READY;
-    if (marker == RSF_LATENCY_INPUT_SAMPLE && frame.input_sampled) return RSF_BACKEND_OK;
-    if (marker == RSF_LATENCY_INPUT_SAMPLE) frame.input_sampled = true;
-    return self.marker(self.xell, frame.sdk, static_cast<xell_latency_marker_type_t>(marker)) == XELL_RESULT_SUCCESS ?
-        RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
-}
-rsf_backend_result prepare(void* pointer, void* list, const rsf_fg_frame* frame)
-{
-    if (!pointer) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    auto& self = *static_cast<XegSession*>(pointer);
-    auto result = rsf::fg_frame(frame, self.device.Get()); if (result != 0) return result;
-    if (frame->record->source_provenance == RSF_FRAME_SOURCE_RENDERED) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
-    const auto before=self.copied.read();
-    const uint64_t id = frame->record->frame_id;
-    if (!self.chain || id <= before.last_prepare) return RSF_BACKEND_ERROR_NOT_READY;
-    uint32_t sdk = 0;
-    { std::lock_guard<std::mutex> lock(self.latency_guard);
-      const auto mapped = self.frame_ids[id % self.frame_ids.size()];
-      if (mapped.source != id) return RSF_BACKEND_ERROR_NOT_READY;
-      sdk = mapped.sdk; }
-    if (self.present_id(self.context, sdk) != XEFG_SWAPCHAIN_RESULT_SUCCESS)
-        return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    if (!frame->interpolate || before.options.mode == RSF_FG_OFF) {
-        const bool staged=self.copied.stage_prepare(before.revision,id,RSF_FG_OFF,0);
-        const bool completed=self.copied.complete_prepare(before.revision,id,false,RSF_FG_OFF,0);
-        const bool current=staged && completed;
-        // Disabling still reaches the SDK, with its original error taking precedence.
-        if (self.enabled(self.context,0)!=XEFG_SWAPCHAIN_RESULT_SUCCESS) return RSF_BACKEND_ERROR_FEATURE_FAILED;
-        return current ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_NOT_READY;
-    }
-    if (!list) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    result = rsf::fg_command(list, self.device.Get()); if (result != 0) return result;
-    if ((self.ui_mode != RSF_UI_MODE_NONE && !frame->hudless.resource) ||
-        (self.ui_mode == RSF_UI_MODE_BACKBUFFER_HUDLESS_UI && !frame->ui.resource))
-        return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (!self.copied.stage_prepare(before.revision,id,before.status.effective_mode,
-        before.status.effective_generated_frames)) return RSF_BACKEND_ERROR_NOT_READY;
-    xefg_swapchain_frame_constant_data_t constants{};
-    constants.resetHistory = (frame->record->flags & RSF_FRAME_FLAG_RESET) || !before.history_valid || id != before.last_prepare + 1;
-    std::memcpy(constants.viewMatrix, frame->record->camera.world_to_view, sizeof(constants.viewMatrix));
-    std::memcpy(constants.projectionMatrix, frame->record->camera.view_to_clip, sizeof(constants.projectionMatrix));
-    constants.jitterOffsetX = frame->record->camera.jitter_pixels[0]; constants.jitterOffsetY = frame->record->camera.jitter_pixels[1];
-    constants.motionVectorScaleX = frame->motion_scale_x; constants.motionVectorScaleY = frame->motion_scale_y;
-    // Engine simulation delta is not measured presentation cadence. XeFG uses this
-    // optional value for pacing checks on non-Intel GPUs; its guide specifies zero
-    // when presentation timing is unavailable, and deprecates the field.
-    constants.frameRenderTime = 0;
-    const rsf_backend_resource* resources[] = {&frame->depth, &frame->motion, &frame->hudless, &frame->ui};
-    const xefg_swapchain_resource_type_t types[] = {XEFG_SWAPCHAIN_RES_DEPTH, XEFG_SWAPCHAIN_RES_MOTION_VECTOR, XEFG_SWAPCHAIN_RES_HUDLESS_COLOR, XEFG_SWAPCHAIN_RES_UI};
-    for (uint32_t i = 0; i < 4; ++i) {
-        if (!resources[i]->resource) continue;
-        xefg_swapchain_d3d12_resource_data_t data{};
-        data.type = types[i]; data.validity = XEFG_SWAPCHAIN_RV_ONLY_NOW;
-        data.resourceBase = {resources[i]->x, resources[i]->y}; data.resourceSize = {resources[i]->width, resources[i]->height};
-        data.pResource = static_cast<ID3D12Resource*>(resources[i]->resource);
-        data.incomingState = static_cast<D3D12_RESOURCE_STATES>(resources[i]->state);
-        if (self.tag(self.context, static_cast<ID3D12CommandList*>(list), sdk, &data) != XEFG_SWAPCHAIN_RESULT_SUCCESS)
-            return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    }
-    if (self.constants(self.context, sdk, &constants) != XEFG_SWAPCHAIN_RESULT_SUCCESS ||
-        self.enabled(self.context, before.options.mode != RSF_FG_OFF) != XEFG_SWAPCHAIN_RESULT_SUCCESS)
-        return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    self.prepared_reset = constants.resetHistory;
-    self.prepared_gap = id - before.last_prepare;
-    return self.copied.complete_prepare(before.revision,id,true,before.options.mode,
-        before.options.generated_frames > self.reserved ? self.reserved : before.options.generated_frames) ?
-        RSF_BACKEND_OK : RSF_BACKEND_ERROR_NOT_READY;
-}
-rsf_backend_result after(void* pointer)
-{
-    if (!pointer) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    auto& self = *static_cast<XegSession*>(pointer);
-    const auto before=self.copied.read();
-    xefg_swapchain_present_status_t status{};
-    const auto result = self.present_status(self.context, &status);
-    const auto previous_active = self.last_present_active;
-    const auto previous_result=before.status.vendor_status;
-    rsf::GenerationState::Observation observation{};
-    observation.vendor_status=result == XEFG_SWAPCHAIN_RESULT_SUCCESS ? status.frameGenResult : result;
-    if (result == XEFG_SWAPCHAIN_RESULT_SUCCESS) {
-        observation.active=status.framesPresented > 1 && status.isFrameGenEnabled &&
-            status.frameGenResult == XEFG_SWAPCHAIN_RESULT_SUCCESS;
-        observation.total_presented_delta=status.framesPresented;
-        observation.valid_statistics=RSF_FG_STAT_TOTAL_PRESENTED|RSF_FG_STAT_ACTIVITY;
-    }
-    const auto published=self.copied.observed(before.revision,observation);
-    if (self.log && (previous_active != published.active || previous_result != published.vendor_status)) {
-        char message[256];
-        std::snprintf(message, sizeof(message), "XeSS FG present source=%llu query=%d interpolation=%d enabled=%u presented=%u active=%u reset=%u source_gap=%llu",
-            static_cast<unsigned long long>(before.last_prepare), static_cast<int>(result),
-            static_cast<int>(status.frameGenResult), status.isFrameGenEnabled, status.framesPresented, published.active,
-            self.prepared_reset, static_cast<unsigned long long>(self.prepared_gap));
-        self.log(self.log_user, message);
-    }
-    self.last_present_active = published.active;
-    if (result < XEFG_SWAPCHAIN_RESULT_SUCCESS) return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    if (result != XEFG_SWAPCHAIN_RESULT_SUCCESS) return RSF_BACKEND_OK;
-    return RSF_BACKEND_OK;
-}
-rsf_backend_result retirement(void* pointer, rsf_fg_retirement* out)
-{
-    if (!pointer || !out || out->struct_size < sizeof(*out)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    out->fence = nullptr; out->value = 0; return RSF_BACKEND_OK;
-}
-rsf_backend_result abort_frame(void* pointer, uint64_t id)
-{
-    if (!pointer || !id) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    auto& self = *static_cast<XegSession*>(pointer);
-    self.copied.abort(); return RSF_BACKEND_OK;
-}
-rsf_backend_result status(void* pointer, rsf_fg_status* out) {
-    if (!pointer || !out || out->struct_size<sizeof(*out)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    *out=static_cast<XegSession*>(pointer)->copied.read().status; return RSF_BACKEND_OK;
-}
-const rsf_generation_provider provider{sizeof(provider), create, configure, begin, marker, prepare, after, status, retirement, destroy, abort_frame};
-}
-extern "C" const rsf_generation_provider* rsf_generation_xess() { return &provider; }
 #else
 extern "C" const rsf_generation_provider* rsf_generation_xess() { return rsf::not_compiled_provider(); }
 #endif

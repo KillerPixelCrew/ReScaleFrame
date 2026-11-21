@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now owns the D3D12 FidelityFX and XeSS frame-generation sessions,
+including shared provider status, identity and capture retirement.
+FidelityFX retries a refused resize recreation and drains the final
+SDK readbacks. XeSS rolls back partial XeLL settings, checks the
+requested fence completion and retains contexts after refused teardown.
+Vendor calls and disabled stubs stay native. The public provider ABI
+is unchanged. Commit `4c661b3` records the source checks and open tests.
+
 Rust now selects Vulkan DLSS SR's capture resources and roles, retains
 the planned dimensions, and checks camera matrices before passing
 them to Streamline. Output capture still precedes sharpening and

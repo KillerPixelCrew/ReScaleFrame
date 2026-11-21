@@ -28,5 +28,6 @@ add_library(ReScaleFrame::FSR ALIAS rsf_fsr)
 
 if(EXISTS "${RSF_FFX_INCLUDE}/../../framegeneration/include/ffx_framegeneration.h")
     target_compile_definitions(rsf_fsr PRIVATE RSF_HAVE_FFX_FG=1)
+    target_link_libraries(rsf_fsr PRIVATE rsf_orchestrator_rust)
     target_include_directories(rsf_fsr SYSTEM PRIVATE "${RSF_FFX_INCLUDE}/../../framegeneration/include")
 endif()
