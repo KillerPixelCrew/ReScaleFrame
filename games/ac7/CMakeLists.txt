@@ -36,7 +36,7 @@ add_library(ReScaleFrame::AC7SceneColor ALIAS rsf_ac7_scene_color)
 
 add_library(rsf_ac7_motion_capture STATIC src/motion_capture.cpp)
 target_include_directories(rsf_ac7_motion_capture PUBLIC include)
-target_link_libraries(rsf_ac7_motion_capture PUBLIC ReScaleFrame::GameSDK PRIVATE ReScaleFrame::Graphics minhook rsf_build_options)
+target_link_libraries(rsf_ac7_motion_capture PUBLIC ReScaleFrame::GameSDK PRIVATE ReScaleFrame::Graphics rsf_ac7_rust minhook rsf_build_options)
 add_library(ReScaleFrame::AC7MotionCapture ALIAS rsf_ac7_motion_capture)
 
 add_library(rsf_ac7_render_scope STATIC src/render_scope.cpp src/native_renderer.cpp src/truesky_depth.cpp src/truesky_motion.cpp src/contact_shadow.cpp src/velocity_shader.cpp)
