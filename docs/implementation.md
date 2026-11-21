@@ -1133,6 +1133,17 @@ submission's interval intact. The native CPU contract checks the
 Windows sampling leaf on its own test thread.
 See [the render hitch diagnostic](research/rust-native-fg-cpu-cutover.md#render-hitch-diagnostic).
 
+The Vulkan DLSS present-capture owner now keeps queue-family command
+resources, exact submission waits and retirement in Rust. The native
+callback still packs the Vulkan calls and real WSI arguments. The
+synthetic WSI contract checks that the copy consumes the original waits
+and that the following Present carries none. The default and
+Streamline-enabled Release builds matched the Runtime and embedded
+export inventories. The enabled build accepted a freshly rebuilt
+receipt from the pinned SDK, loaded the Runtime DLL in the export
+fixture, and passed the focused synthetic Vulkan contracts.
+See [the present capture audit](research/rust-vulkan-dlss-present-capture.md).
+
 The D3D11 translucency owner now keeps its pass order, mask and cloud-depth
 leases, device identity and publication in Rust. Cloud association uses
 the reported session, rectangle and pass order. It refuses late composites

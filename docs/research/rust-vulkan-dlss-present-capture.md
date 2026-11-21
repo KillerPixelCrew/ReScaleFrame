@@ -83,6 +83,27 @@ collision reports.
   `cargo test --workspace --locked` passed. No `rustup` is installed, so the system Rust 1.100.0
   ran instead of the 1.94.1 pin in `rust-toolchain.toml`.
 
-Runtime loading with a corrected receipt, actual
-Streamline execution, GPU completion, captured pixels and game rendering remain unverified. No
-device, visible-window, game or full verification suite was run.
+Actual Streamline execution, GPU completion, captured pixels and game
+rendering were outside the worker validation.
+
+## Integrated Streamline build
+
+After the merge, the coordinator ran the repository's
+`runtime/vulkan/streamline/build-sdk.ps1` recipe on source
+`2122257e0fce486f91b385aa63b9a09b0a34b363`. The generated Production
+receipt matched the checked Present capture header and the rebuilt
+`sl.interposer.dll` and `sl.common.dll` hashes. The build log and
+receipt are under `.local/streamline-cutover/`. The separate
+`build/rust-migration-streamline` project enabled the production
+Vulkan Streamline leaves with that receipt.
+
+MSVC Release built the enabled Runtime DLL and its AC7, Loader and
+Minecraft consumers at merge `1be5c74`. The Runtime DLL loaded in
+`native_vulkan_dll_exports`. The synthetic
+`streamline_vulkan_dispatch_contract` and
+`native_fg_dlss_vulkan_contract` also passed. Export names and
+ordinals matched all 381, 256, 273 and 267 recorded pairs, respectively.
+The integrated branch passed 305 locked Rust tests, formatting and
+Clippy. The ABI inventories and CTest transcript are under
+`build/rust-migration-streamline/evidence/`. Actual Vulkan GPU
+execution and captured image validation remain open.
