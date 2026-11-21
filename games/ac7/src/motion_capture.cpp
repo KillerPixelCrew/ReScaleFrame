@@ -7,6 +7,7 @@
 #include <rescaleframe/ui_identify.h>
 #include <rescaleframe/texture_dump.h>
 #include <rescaleframe/d3d11_observer.h>
+#include "motion_capture_records.h"
 
 #include <windows.h>
 #include <d3d11.h>
@@ -31,31 +32,7 @@
 
 using Microsoft::WRL::ComPtr;
 
-extern "C" const char* rsf_ac7_velocity_reason(const rsf_ac7_velocity_facts* f)
-{
-    if (!f || !f->fields_valid) return "unreadable";
-    if (f->accepted) return "accepted";
-    if (!f->visible) return "visibility";
-    if (f->mobility < 1 || f->mobility > 2) return "mobility";
-    if ((f->relevance & 0x4001u) != 0x4001u) return "material_or_main_pass";
-    const float threshold = f->minimum_size * 0.02f;
-    if (!std::isfinite(f->radius) || !std::isfinite(f->distance_squared) ||
-        !std::isfinite(f->lod_factor) || !std::isfinite(threshold)) return "nonfinite";
-    if (f->radius * f->radius <= f->distance_squared * (f->lod_factor * f->lod_factor) *
-        (threshold * threshold)) return "size";
-    if (f->has_velocity_called && !f->has_velocity) {
-        if (f->camera_cut) return "camera_cut";
-        if (f->history_checked && !f->history_found) return "missing_history";
-        if (f->history_found && !f->always_velocity) return "unchanged_transform";
-        return "has_velocity_other";
-    }
-    return "routing_or_other";
-}
-
 namespace {
-constexpr uint32_t max_engine = 16384;
-constexpr uint32_t max_roots = 2048;
-constexpr uint32_t max_commands = 16384;
 constexpr uint32_t max_draws = 12000;
 constexpr uint32_t max_blobs = 4096;
 constexpr size_t shader_budget = 64u * 1024u * 1024u;
@@ -66,40 +43,15 @@ constexpr uint32_t cloud_composite_shader = 0x83524e47u;
 constexpr uint32_t contact_light_shader = 3619939816u;
 constexpr uint32_t contact_light_phased_shader = 4154163049u; // AC7 transform: noise phase and depth quantisation bias
 
-struct EngineRecord {
-    rsf_ac7_velocity_facts facts{};
-    uint64_t qpc = 0, primitive = 0, proxy = 0, view = 0;
-    uint32_t interval = 0, thread = 0, component = 0, index = 0;
-    float camera[3]{}, origin[3]{}, current[16]{}, previous[16]{};
-};
-struct RootRecord {
-    const char* kind = nullptr;
-    uint64_t id = 0, parent = 0, qpc = 0, owner = 0, command_list = 0, view = 0;
-    uint64_t velocity_reference = 0, velocity_rhi = 0, widget = 0, target = 0;
-    uint64_t context = 0, input_node = 0, output_node = 0, velocity_node = 0, vtable = 0;
-    uint64_t family = 0, pooled_target = 0, queue_begin = 0, queue_end = 0, process_fn = 0, desc_fn = 0;
-    uint64_t downsample = 0, blur_x = 0, blur_y = 0, glow = 0;
-    uint32_t session = 0, interval = 0, thread = 0, fields_valid = 0, view_blob = 0;
-    uint32_t node_blob = 0;
-    uint32_t native_frame = 0, queue_uid = 0, output_id = 0, width = 0, height = 0, format = 0;
-    uint32_t commands = 0, output_valid = 0, native_role = 0;
-    uint64_t execution_scope = 0, color_input = 0, color_output = 0, depth = 0, motion = 0;
-    char output_name[64]{};
-    int32_t draw_size[2]{};
-};
 struct Bytes { std::vector<unsigned char> data; uint64_t serial = 0; };
 struct Layout { uint32_t count = 0; std::vector<rsf_observer_layout_element> elements; };
 struct Shader {
     void* pointer = nullptr; uint32_t stage = 0, hash = 0, constant_mask = 0x3fffu;
     std::vector<unsigned char> data;
 };
-struct QueuedScope {
-    uint64_t scope = 0, view = 0, family = 0, command_list = 0, execute = 0;
-    uint32_t native_frame = 0, queue_uid = 0;
-};
-// Everything a new capture session starts from zero.
+// Counters for the native graphics capture session.
 struct SessionCounters {
-    uint32_t engine_dropped = 0, draw_dropped = 0, blob_dropped = 0, roots_dropped = 0, commands_dropped = 0;
+    uint32_t draw_dropped = 0, blob_dropped = 0;
     uint32_t readbacks = 0, readback_failed = 0;
     uint32_t readback_interval = UINT32_MAX, interval_readbacks = 0;
     uint32_t lighting_readbacks = 0, lighting_interval = UINT32_MAX;
@@ -111,7 +63,6 @@ struct Capture {
     bool configured = false, key_down = false;
     std::atomic<bool> installed{false};
     std::atomic<bool> roots_installed{false};
-    std::atomic<uint64_t> root_serial{0};
     std::atomic<bool> active{false};
     std::atomic<uint32_t> interval{0};
     std::atomic<uint32_t> session{0};
@@ -120,9 +71,6 @@ struct Capture {
     std::string directory, prefix;
     rsf_ac7_capture_log_fn log = nullptr;
     void* user = nullptr;
-    std::vector<EngineRecord> engine;
-    std::vector<RootRecord> roots;
-    std::unordered_map<uint64_t, QueuedScope> commands;
     std::vector<std::string> draws;
     std::vector<std::vector<unsigned char>> blobs;
     std::unordered_map<void*, Bytes> buffers;
@@ -138,7 +86,6 @@ struct Capture {
 };
 Capture& state() { static Capture s; return s; }
 std::atomic<bool> native_owner{false};
-thread_local rsf_game_render_pass execution_pass{};
 using ShouldFn = bool(*)(void*, void*, bool);
 using HasFn = bool(*)(void*, void*);
 using HistoryFn = bool(*)(void*, void*, float*);
@@ -159,9 +106,6 @@ TemporalFn original_temporal_process = nullptr;
 GraphProcessFn original_graph_process = nullptr;
 void* root_targets[6]{};
 void* current_rhi_command_address = nullptr;
-thread_local uint64_t current_root = 0;
-thread_local void* current_postprocess_view = nullptr;
-thread_local EngineRecord* current_event = nullptr;
 
 uint64_t tick()
 {
@@ -178,24 +122,40 @@ void capture_failed()
 using rsf::ac7::copy_memory;
 using rsf::ac7::read;
 
+// The typed originals stay native. Restore the Rust-owned observation scope during unwind too.
+class EngineObservation {
+public:
+    explicit EngineObservation(EngineRecord& event) : saved(rsf_ac7_capture_swap_engine(&event)) {}
+    ~EngineObservation() { rsf_ac7_capture_swap_engine(saved); }
+    EngineObservation(const EngineObservation&) = delete;
+    EngineObservation& operator=(const EngineObservation&) = delete;
+private:
+    EngineRecord* saved;
+};
+class RootObservation {
+public:
+    explicit RootObservation(const RootRecord& root) : saved(rsf_ac7_capture_enter_root(&root)) {}
+    ~RootObservation() { rsf_ac7_capture_restore_root(&saved); }
+    RootObservation(const RootObservation&) = delete;
+    RootObservation& operator=(const RootObservation&) = delete;
+private:
+    NativeRootScope saved;
+};
+
+bool copy_previous(float* destination, const float* source) noexcept
+{
+    return copy_memory(destination, source, sizeof(EngineRecord::previous));
+}
 bool hooked_history(void* cache, void* primitive, float* previous)
 {
     const bool result = original_history(cache, primitive, previous);
-    if (current_event && current_event->primitive == uint64_t(uintptr_t(primitive))) {
-        current_event->facts.history_checked = 1;
-        current_event->facts.history_found = result ? 1u : 0u;
-        if (result && !copy_memory(current_event->previous, previous, sizeof(current_event->previous)))
-            current_event->facts.fields_valid = 0;
-    }
+    rsf_ac7_capture_history(uint64_t(uintptr_t(primitive)), result, previous, copy_previous);
     return result;
 }
 bool hooked_has(void* view, void* primitive)
 {
     const bool result = original_has(view, primitive);
-    if (current_event && current_event->primitive == uint64_t(uintptr_t(primitive))) {
-        current_event->facts.has_velocity_called = 1;
-        current_event->facts.has_velocity = result ? 1u : 0u;
-    }
+    rsf_ac7_capture_has_velocity(uint64_t(uintptr_t(primitive)), result);
     return result;
 }
 bool hooked_should(void* primitive, void* view, bool check_visibility)
@@ -235,16 +195,21 @@ bool hooked_should(void* primitive, void* view, bool check_visibility)
         }
     } else valid = false;
     f.fields_valid = valid ? 1u : 0u;
-    EngineRecord* saved = current_event; current_event = &event;
-    f.accepted = original_should(primitive, view, check_visibility) ? 1u : 0u;
-    current_event = saved;
+    bool accepted;
+    {
+        const EngineObservation observation(event);
+        accepted = original_should(primitive, view, check_visibility);
+    }
     try {
-        std::lock_guard<std::mutex> lock(s.guard);
-        if (s.active.load() && session == s.session.load()) {
-            if (s.engine.size() < max_engine) s.engine.push_back(event); else ++s.counters.engine_dropped;
+        bool recorded = true;
+        {
+            std::lock_guard<std::mutex> lock(s.guard);
+            if (s.active.load() && session == s.session.load())
+                recorded = rsf_ac7_capture_record_engine(&event, accepted);
         }
+        if (!recorded) capture_failed();
     } catch (...) { capture_failed(); }
-    return f.accepted != 0;
+    return accepted;
 }
 
 template<size_t N> void floats(std::ostream& out, const float (&values)[N])
@@ -268,11 +233,11 @@ uint32_t save_blob(std::vector<unsigned char> bytes)
     s.blob_bytes += bytes.size(); s.blobs.push_back(std::move(bytes));
     return uint32_t(s.blobs.size());
 }
-RootRecord root_record(const char* kind, void* owner)
+RootRecord root_record(RootKind kind, void* owner)
 {
     auto& s = state();
-    RootRecord r{}; r.kind = kind; r.owner = uint64_t(uintptr_t(owner));
-    r.id = s.root_serial.fetch_add(1) + 1; r.parent = current_root;
+    RootRecord r{};
+    rsf_ac7_capture_init_root(&r, kind, uint64_t(uintptr_t(owner)));
     r.qpc = tick(); r.thread = GetCurrentThreadId();
     r.session = s.session.load(); r.interval = s.interval.load();
     return r;
@@ -280,10 +245,24 @@ RootRecord root_record(const char* kind, void* owner)
 void record_root(const RootRecord& r) noexcept
 {
     try {
-        auto& s = state(); std::lock_guard<std::mutex> lock(s.guard);
-        if (!s.active.load() || r.session != s.session.load()) return;
-        if (s.roots.size() < max_roots) s.roots.push_back(r); else ++s.counters.roots_dropped;
+        auto& s = state();
+        bool recorded;
+        {
+            std::lock_guard<std::mutex> lock(s.guard);
+            if (!s.active.load() || r.session != s.session.load()) return;
+            recorded = rsf_ac7_capture_record_root(&r);
+        }
+        if (!recorded) capture_failed();
     } catch (...) { capture_failed(); }
+}
+template<class Original> void observe_root(RootRecord& root, Original original)
+{
+    record_root(root);
+    {
+        const RootObservation observation(root);
+        original();
+    }
+    rsf_ac7_capture_end_root(&root, tick());
 }
 void widget_fields(RootRecord& r, void* converter) noexcept
 {
@@ -300,7 +279,7 @@ void hooked_postprocess(void* owner, void* command_list, void* view, void* veloc
     if (!s.active.load(std::memory_order_acquire)) {
         original_postprocess(owner, command_list, view, velocity_reference); return;
     }
-    auto r = root_record("postprocess_begin", owner);
+    auto r = root_record(postprocess_begin, owner);
     r.command_list = uint64_t(uintptr_t(command_list)); r.view = uint64_t(uintptr_t(view));
     r.velocity_reference = uint64_t(uintptr_t(velocity_reference));
     r.fields_valid = read(velocity_reference, 0, r.velocity_rhi);
@@ -312,40 +291,36 @@ void hooked_postprocess(void* owner, void* command_list, void* view, void* veloc
             if (copy_memory(bytes.data(), view, bytes.size())) r.view_blob = save_blob(std::move(bytes));
         }
     } catch (...) { capture_failed(); }
+    observe_root(r, [&] { original_postprocess(owner, command_list, view, velocity_reference); });
     record_root(r);
-    const auto saved_root = current_root; void* saved_view = current_postprocess_view;
-    current_root = r.id; current_postprocess_view = view;
-    original_postprocess(owner, command_list, view, velocity_reference);
-    current_root = saved_root; current_postprocess_view = saved_view;
-    r.kind = "postprocess_end"; r.qpc = tick(); record_root(r);
     if (sampled(r.interval)) checkpoint_native();
 }
 void hooked_widget_prepare(void* converter)
 {
     if (!state().active.load(std::memory_order_acquire)) { original_widget_prepare(converter); return; }
-    auto r = root_record("widget_prepare_before", converter); widget_fields(r, converter); record_root(r);
-    original_widget_prepare(converter);
-    r.kind = "widget_prepare_after"; r.qpc = tick(); widget_fields(r, converter); record_root(r);
+    auto r = root_record(widget_prepare_before, converter);
+    widget_fields(r, converter);
+    observe_root(r, [&] { original_widget_prepare(converter); });
+    widget_fields(r, converter);
+    record_root(r);
 }
 void hooked_widget_queue(void* converter, float delta)
 {
     if (!state().active.load(std::memory_order_acquire)) { original_widget_queue(converter, delta); return; }
-    auto r = root_record("widget_queue_before", converter); widget_fields(r, converter); record_root(r);
-    const auto saved = current_root; current_root = r.id;
-    original_widget_queue(converter, delta);
-    current_root = saved;
-    r.kind = "widget_queue_after"; r.qpc = tick(); widget_fields(r, converter); record_root(r);
+    auto r = root_record(widget_queue_before, converter);
+    widget_fields(r, converter);
+    observe_root(r, [&] { original_widget_queue(converter, delta); });
+    widget_fields(r, converter);
+    record_root(r);
 }
 void hooked_add_temporal(void* context, void* velocity)
 {
     if (!state().active.load(std::memory_order_acquire)) { original_add_temporal(context, velocity); return; }
-    auto r = root_record("main_temporal_build_before", context);
+    auto r = root_record(main_temporal_build_before, context);
     r.context = uint64_t(uintptr_t(context));
     r.fields_valid = read(context, 0x10, r.view) && read(context, 0x28, r.input_node) &&
                      read(velocity, 0, r.velocity_node);
-    record_root(r);
-    original_add_temporal(context, velocity);
-    r.kind = "main_temporal_build_after"; r.qpc = tick();
+    observe_root(r, [&] { original_add_temporal(context, velocity); });
     r.fields_valid = r.fields_valid && read(context, 0x28, r.output_node);
     if (r.output_node) r.fields_valid = r.fields_valid && read(r.output_node, 0, r.vtable);
     record_root(r);
@@ -353,7 +328,7 @@ void hooked_add_temporal(void* context, void* velocity)
 void hooked_temporal_process(void* node, void* context)
 {
     if (!state().active.load(std::memory_order_acquire)) { original_temporal_process(node, context); return; }
-    auto r = root_record("main_temporal_process_begin", node);
+    auto r = root_record(main_temporal_process_begin, node);
     r.context = uint64_t(uintptr_t(context)); r.output_node = r.owner;
     r.fields_valid = read(context, 0, r.view) && read(context, 0x28, r.command_list) && read(node, 0, r.vtable);
     try {
@@ -362,12 +337,8 @@ void hooked_temporal_process(void* node, void* context)
             if (copy_memory(bytes.data(), node, bytes.size())) r.node_blob = save_blob(std::move(bytes));
         }
     } catch (...) { capture_failed(); }
+    observe_root(r, [&] { original_temporal_process(node, context); });
     record_root(r);
-    const auto saved_root = current_root; void* saved_view = current_postprocess_view;
-    current_root = r.id; current_postprocess_view = reinterpret_cast<void*>(uintptr_t(r.view));
-    original_temporal_process(node, context);
-    current_root = saved_root; current_postprocess_view = saved_view;
-    r.kind = "main_temporal_process_end"; r.qpc = tick(); record_root(r);
 }
 void graph_output(RootRecord& r) noexcept
 {
@@ -398,34 +369,27 @@ void graph_output(RootRecord& r) noexcept
         r.output_name[i] = (c >= 32 && c < 127 && c != '"' && c != '\\') ? char(c) : '?';
     }
 }
-void associate_commands(RootRecord& r, uint64_t first_link) noexcept
+void associate_commands(RootRecord& r) noexcept
 {
     try {
         auto& s = state(); uint64_t link = 0, command = 0;
         uint32_t uid = 0;
         auto* list = reinterpret_cast<void*>(uintptr_t(r.command_list));
-        if (!read(list, 8, link) || !read(list, 0x18, uid) || uid != r.queue_uid ||
-            !first_link || first_link == link || !read(first_link, 0, command)) return;
+        if (!read(list, 8, link) || !read(list, 0x18, uid) ||
+            !rsf_ac7_capture_commands_changed(&r, link, uid) || !read(r.queue_begin, 0, command)) return;
         r.queue_end = link;
-        for (uint32_t i = 0; command && i < 4096; ++i) {
+        while (command) {
             uint64_t next = 0, execute = 0;
             auto* p = reinterpret_cast<void*>(uintptr_t(command));
             if (!read(p, 0, next) || !read(p, 8, execute)) break;
+            CommandAdvance advance;
             {
                 std::lock_guard<std::mutex> lock(s.guard);
                 if (!s.active.load() || r.session != s.session.load()) return;
-                const auto found = s.commands.find(command);
-                // Nested children finish first. Preserve their narrower owner within this same
-                // command-list generation; replace stale addresses after reset/reuse.
-                if (found == s.commands.end() || found->second.queue_uid != uid ||
-                    found->second.command_list != r.command_list || found->second.family != r.family) {
-                    if (found != s.commands.end() || s.commands.size() < max_commands) {
-                        s.commands[command] = {r.id, r.view, r.family, r.command_list, execute, r.native_frame, uid};
-                    } else ++s.counters.commands_dropped;
-                }
+                advance = rsf_ac7_capture_associate_command(&r, command, execute);
             }
-            ++r.commands;
-            if (command == link) break; // Next is the first field, so the final link names the tail.
+            if (advance == command_failed) { capture_failed(); return; }
+            if (advance == command_stop) break;
             command = next;
         }
     } catch (...) { capture_failed(); }
@@ -436,39 +400,27 @@ void hooked_graph_process(void* graph, void* output_reference, void* context)
     if (!s.active.load(std::memory_order_acquire) || !sampled(interval)) {
         original_graph_process(graph, output_reference, context); return;
     }
-    auto r = root_record("graph_pass_begin", graph); r.context = uint64_t(uintptr_t(context));
-    uint64_t first_link = 0;
+    auto r = root_record(graph_pass_begin, graph); r.context = uint64_t(uintptr_t(context));
     r.fields_valid = read(output_reference, 0, r.output_node) && read(output_reference, 8, r.output_id) &&
         read(context, 0, r.view) && read(context, 0x28, r.command_list) &&
         read(r.view, 0, r.family) &&
         read(r.family, 0x68, r.native_frame) &&
-        read(r.command_list, 8, first_link) &&
+        read(r.command_list, 8, r.queue_begin) &&
         read(r.command_list, 0x18, r.queue_uid);
-    r.queue_begin = first_link;
     if (r.fields_valid && r.output_node) graph_output(r);
-    record_root(r);
-    const auto saved_root = current_root; void* saved_view = current_postprocess_view;
-    current_root = r.id; current_postprocess_view = reinterpret_cast<void*>(uintptr_t(r.view));
-    original_graph_process(graph, output_reference, context);
-    current_root = saved_root; current_postprocess_view = saved_view;
-    r.kind = "graph_pass_end"; r.qpc = tick();
-    if (r.fields_valid && r.output_node) { graph_output(r); associate_commands(r, first_link); }
+    observe_root(r, [&] { original_graph_process(graph, output_reference, context); });
+    if (r.fields_valid && r.output_node) { graph_output(r); associate_commands(r); }
     record_root(r);
 }
 void queued_scope(std::ostream& out)
 {
     uint64_t command = 0, execute = 0;
-    QueuedScope scope{};
+    QueuedScope scope;
     if (state().roots_installed && copy_memory(&command, current_rhi_command_address, sizeof(command)) && command &&
         read(command, 8, execute)) {
         auto& s = state(); std::lock_guard<std::mutex> lock(s.guard);
-        const auto found = s.commands.find(command);
-        if (found != s.commands.end() && found->second.execute == execute) scope = found->second;
-    }
-    if (execution_pass.scope_id) {
-        scope.scope = execution_pass.scope_id; scope.view = execution_pass.view_key;
-        scope.family = execution_pass.family_key; scope.native_frame = uint32_t(execution_pass.native_frame);
-    }
+        scope = rsf_ac7_capture_queued_scope(command, execute, true);
+    } else scope = rsf_ac7_capture_queued_scope(command, execute, false);
     out << ",\"rhi_command\":" << command << ",\"rhi_execute\":" << execute
         << ",\"queued_native_scope\":" << scope.scope << ",\"queued_native_view\":" << scope.view
         << ",\"queued_native_family\":" << scope.family << ",\"queued_native_frame\":" << scope.native_frame
@@ -759,10 +711,11 @@ void draw_capture(void*, const rsf_frame_tap_target_draw* d) try
     ComPtr<ID3D11GeometryShader> gs; ComPtr<ID3D11HullShader> hs; ComPtr<ID3D11DomainShader> ds;
     c->GSGetShader(&gs, nullptr, nullptr); c->HSGetShader(&hs, nullptr, nullptr); c->DSGetShader(&ds, nullptr, nullptr);
     std::ostringstream out; out.precision(9);
+    const auto scope = rsf_ac7_capture_root_scope();
     out << "{\"kind\":\"draw\",\"qpc\":" << tick() << ",\"interval\":" << s.interval.load()
-        << ",\"thread\":" << GetCurrentThreadId() << ",\"native_scope\":" << current_root
+        << ",\"thread\":" << GetCurrentThreadId() << ",\"native_scope\":" << scope.id
         << ",\"draw_index\":" << d->draw_index
-        << ",\"native_view\":" << uint64_t(uintptr_t(current_postprocess_view))
+        << ",\"native_view\":" << scope.view
         << ",\"target\":" << uint64_t(uintptr_t(d->render_target)) << ",\"format\":" << d->target_format
         << ",\"extent\":[" << d->target_width << ',' << d->target_height << "],\"targets\":" << d->target_count
         << ",\"depth_bound\":" << d->depth_bound << ",\"indexed\":" << d->indexed << ",\"elements\":" << d->element_count
@@ -820,9 +773,10 @@ void compute_capture(void*, void* context, uint32_t x, uint32_t y, uint32_t z, v
     auto* c = static_cast<ID3D11DeviceContext*>(context);
     ComPtr<ID3D11ComputeShader> shader; c->CSGetShader(&shader, nullptr, nullptr);
     std::ostringstream out;
+    const auto scope = rsf_ac7_capture_root_scope();
     out << "{\"kind\":\"dispatch\",\"qpc\":" << tick() << ",\"interval\":" << s.interval.load()
-        << ",\"thread\":" << GetCurrentThreadId() << ",\"native_scope\":" << current_root
-        << ",\"native_view\":" << uint64_t(uintptr_t(current_postprocess_view))
+        << ",\"thread\":" << GetCurrentThreadId() << ",\"native_scope\":" << scope.id
+        << ",\"native_view\":" << scope.view
         << ",\"groups\":[" << x << ',' << y << ',' << z << "],\"indirect\":" << uint64_t(uintptr_t(indirect))
         << ",\"offset\":" << offset << ",\"cs_hash\":" << shader_hash(shader.Get(), 5) << ",\"inputs\":[";
     ID3D11ShaderResourceView* views[128]{}; c->CSGetShaderResources(0, 128, views);
@@ -854,11 +808,13 @@ bool write_blobs(const std::string& prefix, const std::vector<std::vector<unsign
         ok = write_file(prefix + "\\cb_" + std::to_string(i + 1) + ".bin", blobs[i].data(), blobs[i].size()) && ok;
     return ok;
 }
-std::string roots_json(const std::vector<RootRecord>& records)
+std::string roots_json(const RootRecord* records, size_t count)
 {
     std::ostringstream roots;
-    for (const auto& r : records) {
-        roots << "{\"kind\":\"" << r.kind << "\",\"id\":" << r.id << ",\"parent\":" << r.parent
+    for (size_t i = 0; i < count; ++i) {
+        const auto& r = records[i];
+        roots << "{\"kind\":\"" << rsf_ac7_capture_root_kind(r.kind)
+            << "\",\"id\":" << r.id << ",\"parent\":" << r.parent
             << ",\"qpc\":" << r.qpc << ",\"thread\":" << r.thread << ",\"interval\":" << r.interval
             << ",\"owner\":" << r.owner << ",\"command_list\":" << r.command_list
             << ",\"view\":" << r.view << ",\"view_blob\":" << r.view_blob
@@ -883,6 +839,13 @@ std::string roots_json(const std::vector<RootRecord>& records)
     }
     return roots.str();
 }
+bool copy_checkpoint_roots(void* user, const NativeRecordsView* records) noexcept try
+{
+    auto& roots = *static_cast<std::vector<RootRecord>*>(user);
+    if (records->counts.roots) roots.assign(records->roots, records->roots + records->counts.roots);
+    return true;
+}
+catch (...) { return false; }
 void checkpoint_native() noexcept
 {
     try {
@@ -890,25 +853,33 @@ void checkpoint_native() noexcept
         std::string prefix;
         std::vector<RootRecord> roots;
         std::vector<std::vector<unsigned char>> blobs;
+        bool copied;
         {
             std::lock_guard<std::mutex> lock(s.guard);
             if (!s.active.load()) return;
-            prefix = s.prefix; roots = s.roots; blobs = s.blobs;
+            prefix = s.prefix;
+            copied = rsf_ac7_capture_read_records(&roots, copy_checkpoint_roots);
+            if (copied) blobs = s.blobs;
         }
-        const auto text = roots_json(roots);
+        if (!copied) { capture_failed(); return; }
+        const auto text = roots_json(roots.data(), roots.size());
         bool ok = write_file(prefix + "\\native.partial.jsonl", text.data(), text.size());
         ok = write_blobs(prefix, blobs) && ok;
         if (!ok) say("motion capture: native checkpoint could not be fully written");
     } catch (...) { capture_failed(); }
 }
-void finish()
+struct FinishNative {
+    const std::string& prefix;
+    NativeRecordCounts counts{};
+    bool ok = true;
+};
+bool write_native_records(void* user, const NativeRecordsView* records) noexcept try
 {
-    auto& s = state();
-    s.active.store(false, std::memory_order_release);
-    rsf_frame_tap_set_research_callbacks(nullptr, nullptr, nullptr);
-    std::lock_guard<std::mutex> lock(s.guard);
+    auto& native = *static_cast<FinishNative*>(user);
+    native.counts = records->counts;
     std::ostringstream engine; engine.precision(9);
-    for (const auto& e : s.engine) {
+    for (size_t i = 0; i < native.counts.engine; ++i) {
+        const auto& e = records->engine[i];
         const auto& f = e.facts;
         engine << "{\"qpc\":" << e.qpc << ",\"interval\":" << e.interval << ",\"thread\":" << e.thread
             << ",\"primitive\":" << e.primitive << ",\"proxy\":" << e.proxy << ",\"view\":" << e.view
@@ -928,9 +899,25 @@ void finish()
             << ",\"previous\":"; floats(engine, e.previous); engine << "}\n";
     }
     const std::string engine_text = engine.str();
-    bool ok = write_file(s.prefix + "\\engine.jsonl", engine_text.data(), engine_text.size());
-    const std::string roots_text = roots_json(s.roots);
-    ok = write_file(s.prefix + "\\native.jsonl", roots_text.data(), roots_text.size()) && ok;
+    native.ok = write_file(native.prefix + "\\engine.jsonl", engine_text.data(), engine_text.size());
+    const std::string roots_text = roots_json(records->roots, native.counts.roots);
+    native.ok = write_file(native.prefix + "\\native.jsonl", roots_text.data(), roots_text.size()) && native.ok;
+    return true;
+}
+catch (...) { return false; }
+void finish()
+{
+    auto& s = state();
+    s.active.store(false, std::memory_order_release);
+    rsf_frame_tap_set_research_callbacks(nullptr, nullptr, nullptr);
+    std::unique_lock<std::mutex> lock(s.guard);
+    FinishNative native{s.prefix};
+    if (!rsf_ac7_capture_read_records(&native, write_native_records)) {
+        lock.unlock();
+        capture_failed();
+        return;
+    }
+    bool ok = native.ok;
     std::string draw_text; for (const auto& line : s.draws) { draw_text += line; draw_text += '\n'; }
     ok = write_file(s.prefix + "\\draws.jsonl", draw_text.data(), draw_text.size()) && ok;
     ok = write_blobs(s.prefix, s.blobs) && ok;
@@ -943,11 +930,11 @@ void finish()
     LARGE_INTEGER frequency{}; QueryPerformanceFrequency(&frequency);
     std::ostringstream summary;
     summary << "{\"schema\":1,\"qpc_frequency\":" << frequency.QuadPart << ",\"engine_hooks\":" << s.installed.load()
-        << ",\"renderer_root_hooks\":" << s.roots_installed.load() << ",\"root_records\":" << s.roots.size()
-        << ",\"root_dropped\":" << s.counters.roots_dropped
-        << ",\"command_associations\":" << s.commands.size() << ",\"command_associations_dropped\":" << s.counters.commands_dropped
-        << ",\"intervals\":60,\"engine_records\":" << s.engine.size() << ",\"draw_records\":" << s.draws.size()
-        << ",\"engine_dropped\":" << s.counters.engine_dropped << ",\"draw_dropped\":" << s.counters.draw_dropped
+        << ",\"renderer_root_hooks\":" << s.roots_installed.load() << ",\"root_records\":" << native.counts.roots
+        << ",\"root_dropped\":" << native.counts.roots_dropped
+        << ",\"command_associations\":" << native.counts.commands << ",\"command_associations_dropped\":" << native.counts.commands_dropped
+        << ",\"intervals\":60,\"engine_records\":" << native.counts.engine << ",\"draw_records\":" << s.draws.size()
+        << ",\"engine_dropped\":" << native.counts.engine_dropped << ",\"draw_dropped\":" << s.counters.draw_dropped
         << ",\"blob_dropped\":" << s.counters.blob_dropped << ",\"shader_creation_dropped\":" << s.shaders_dropped
         << ",\"readbacks\":" << s.counters.readbacks << ",\"readback_failures\":" << s.counters.readback_failed
         << ",\"colour_readbacks\":" << s.counters.colour_readbacks << ",\"colour_readback_failures\":" << s.counters.colour_readback_failed
@@ -1061,8 +1048,10 @@ extern "C" void rsf_ac7_motion_capture_geometry(const rsf_frame_tap_geometry* dr
     auto& s = state();
     if (!draw || !s.active.load() || !sampled(s.interval.load())) return;
     const bool native_velocity=draw->format==DXGI_FORMAT_R16G16_UNORM && draw->depth_view;
-    if (!native_velocity && execution_pass.role!=RSF_GAME_RENDER_TRANSLUCENCY &&
-        execution_pass.role!=RSF_GAME_RENDER_TRANSLUCENT_MESH) return;
+    if (!native_velocity) {
+        const auto role = rsf_ac7_capture_geometry_scope().role;
+        if (role != RSF_GAME_RENDER_TRANSLUCENCY && role != RSF_GAME_RENDER_TRANSLUCENT_MESH) return;
+    }
     const auto interval = s.interval.load();
     if (s.geometry_interval != interval) {
         s.geometry_interval=interval;s.geometry_reads.fill(0);
@@ -1095,11 +1084,12 @@ extern "C" void rsf_ac7_motion_capture_geometry(const rsf_frame_tap_geometry* dr
     if (!context || context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) return;
     ComPtr<ID3D11Device> device; context->GetDevice(&device);
     std::ostringstream out;
+    const auto execution_pass = rsf_ac7_capture_geometry_scope();
     out << "{\"kind\":\"geometry\",\"interval\":" << interval
         << ",\"qpc\":" << tick() << ",\"layout\":" << uint64_t(uintptr_t(draw->input_layout))
         << ",\"vs_hash\":" << hash << ",\"geometry_bucket\":" << bucket
         << ",\"native_role\":" << execution_pass.role << ",\"native_frame\":" << execution_pass.native_frame
-        << ",\"primitive\":" << execution_pass.primitive_key << ",\"material\":" << execution_pass.material_key
+        << ",\"primitive\":" << execution_pass.primitive << ",\"material\":" << execution_pass.material
         << ",\"geometry_capacity\":" << execution_pass.geometry_capacity
         << ",\"draw_kind\":" << draw->kind << ",\"count\":" << draw->count
         << ",\"start\":" << draw->start << ",\"base_vertex\":" << draw->base_vertex
@@ -1183,16 +1173,11 @@ extern "C" void rsf_ac7_motion_capture_native_owner(uint32_t enabled)
 { native_owner.store(enabled != 0); }
 extern "C" void rsf_ac7_motion_capture_native_pass(const rsf_game_render_pass* pass, uint32_t begin) try
 {
-    if (!pass || pass->struct_size < sizeof(*pass)) { execution_pass = {}; return; }
-    execution_pass = *pass;
+    if (!rsf_ac7_capture_execution_pass(pass)) return;
     auto& s = state(); if (!s.active.load()) return;
     const auto interval = s.interval.load(); if (!sampled(interval)) return;
-    auto r = root_record(begin ? "rhi_scope_begin" : "rhi_scope_restore", nullptr);
-    r.owner = pass->pass_key; r.view = pass->view_key; r.family = pass->family_key;
-    r.native_frame = uint32_t(pass->native_frame); r.execution_scope = pass->scope_id; r.native_role = pass->role;
-    r.color_input = uint64_t(uintptr_t(pass->color_input)); r.color_output = uint64_t(uintptr_t(pass->color_output));
-    r.depth = uint64_t(uintptr_t(pass->depth)); r.motion = uint64_t(uintptr_t(pass->motion));
-    r.width = uint32_t(pass->output_rect[2]); r.height = uint32_t(pass->output_rect[3]); r.fields_valid = pass->scope_id != 0;
+    auto r = root_record(begin ? rhi_scope_begin : rhi_scope_restore, nullptr);
+    rsf_ac7_capture_execution_root(&r);
     record_root(r);
 }
 catch (...) { capture_failed(); }
@@ -1216,7 +1201,7 @@ extern "C" int rsf_ac7_motion_capture_present(void* swapchain, char* prefix, uin
         s.prefix = s.directory + name;
         if (CreateDirectoryA(s.prefix.c_str(), nullptr)) {
             std::lock_guard<std::mutex> lock(s.guard);
-            s.engine.clear(); s.roots.clear(); s.commands.clear();
+            rsf_ac7_capture_reset_records();
             s.draws.clear(); s.blobs.clear(); s.blob_bytes = 0;
             s.buffers.clear(); // uploads are only recorded while active, so older snapshots may be stale
             s.counters = {};

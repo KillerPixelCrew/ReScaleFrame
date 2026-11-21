@@ -24,6 +24,7 @@ mod contact_shadow;
 mod dxbc_chunks;
 mod guards;
 mod lifecycle;
+mod motion_capture_records;
 mod patches;
 mod platform_abi;
 mod render_scope;
