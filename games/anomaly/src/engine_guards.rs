@@ -1,19 +1,60 @@
 // SPDX-License-Identifier: MIT
 use std::ffi::{CStr, c_char, c_void};
 
+pub(super) type Read = unsafe extern "C" fn(*mut c_void, *const c_void, usize) -> bool;
+
 #[repr(C)]
 pub(super) struct Image {
     base: *const u8,
     size: u32,
-    pub(super) read: unsafe extern "C" fn(*mut c_void, *const c_void, usize) -> bool,
+    pub(super) read: Read,
+}
+
+#[repr(C)]
+pub(super) struct NativeSite {
+    _name: *const c_char,
+    rva: u32,
+    expected: [u8; 16],
+}
+
+#[repr(C)]
+pub(super) struct UniqueGuard {
+    _name: *const c_char,
+    rva: u32,
+    expected_hex: *const c_char,
 }
 
 const _: () = {
     assert!(size_of::<Image>() == 24);
     assert!(std::mem::offset_of!(Image, read) == 16);
+    assert!(size_of::<NativeSite>() == 32);
+    assert!(std::mem::offset_of!(NativeSite, rva) == 8);
+    assert!(std::mem::offset_of!(NativeSite, expected) == 12);
+    assert!(size_of::<UniqueGuard>() == 24);
+    assert!(std::mem::offset_of!(UniqueGuard, rva) == 8);
+    assert!(std::mem::offset_of!(UniqueGuard, expected_hex) == 16);
 };
 
 impl Image {
+    pub(super) fn new(base: *const u8, size: u32, read: Read) -> Self {
+        Self { base, size, read }
+    }
+
+    pub(super) unsafe fn matches_sites(
+        &self,
+        sites: &[NativeSite],
+        guards: &[UniqueGuard],
+    ) -> bool {
+        sites.iter().all(|site| {
+            self.matches_site(site.rva, &site.expected)
+                && guards
+                    .iter()
+                    .filter(|guard| guard.rva == site.rva)
+                    // The native profile lends static NUL-terminated guard strings.
+                    .all(|guard| unsafe { self.matches_hex_guard(guard.rva, guard.expected_hex) })
+        })
+    }
+
     pub(super) fn address(&self, rva: u32, length: usize) -> Option<*const u8> {
         if self.base.is_null() || length == 0 {
             return None;
@@ -42,6 +83,14 @@ impl Image {
             })
     }
 
+    fn matches_site(&self, rva: u32, expected: &[u8; 16]) -> bool {
+        self.copy(rva).as_ref() == Some(expected)
+    }
+
+    unsafe fn matches_hex_guard(&self, rva: u32, hex: *const c_char) -> bool {
+        !hex.is_null() && self.matches_hex(rva, unsafe { CStr::from_ptr(hex) }.to_bytes())
+    }
+
     fn matches_hex(&self, rva: u32, hex: &[u8]) -> bool {
         let pairs = hex.chunks_exact(2);
         if !pairs.remainder().is_empty() || self.address(rva, pairs.len()).is_none() {
@@ -66,13 +115,13 @@ fn digit(value: u8) -> Option<u8> {
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_guard_site(image: &Image, rva: u32, expected: &[u8; 16]) -> bool {
-    image.copy(rva).as_ref() == Some(expected)
+    image.matches_site(rva, expected)
 }
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_anomaly_guard_hex(image: &Image, rva: u32, hex: *const c_char) -> bool {
     // The native profile supplies a static NUL-terminated guard.
-    !hex.is_null() && image.matches_hex(rva, unsafe { CStr::from_ptr(hex) }.to_bytes())
+    unsafe { image.matches_hex_guard(rva, hex) }
 }
 
 #[unsafe(no_mangle)]
@@ -91,4 +140,37 @@ extern "C" fn rsf_anomaly_guard_first_person(
         && image.relative_call(set_p_call, set_p)
         && (image.copy(rm_near_call) == Some(RM_NEAR_SLOT)
             || image.relative_call(rm_near_call, rm_near))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    unsafe extern "C" fn copy(out: *mut c_void, input: *const c_void, size: usize) -> bool {
+        unsafe { std::ptr::copy_nonoverlapping(input.cast::<u8>(), out.cast(), size) };
+        true
+    }
+
+    #[test]
+    fn site_admission_requires_the_unique_suffix() {
+        let name = c"fixture".as_ptr();
+        let sites = [NativeSite {
+            _name: name,
+            rva: 0,
+            expected: [0x90; 16],
+        }];
+        let guards = [UniqueGuard {
+            _name: name,
+            rva: 0,
+            expected_hex: c"9090909090909090909090909090909091".as_ptr(),
+        }];
+        let mut bytes = [0x90; 17];
+        let matches = |bytes: &[u8; 17]| {
+            let image = Image::new(bytes.as_ptr(), bytes.len() as u32, copy);
+            unsafe { image.matches_sites(&sites, &guards) }
+        };
+        assert!(!matches(&bytes));
+        bytes[16] = 0x91;
+        assert!(matches(&bytes));
+    }
 }

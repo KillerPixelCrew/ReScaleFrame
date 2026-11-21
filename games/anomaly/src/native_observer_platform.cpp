@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "native_observer.h"
 #include "build_profile.h"
-#include "engine_guards.h"
 #include "fg_stage.h"
 #include "input_hooks.h"
 #include "motion_stage.h"
@@ -9,11 +8,24 @@
 #include "native_hooks.h"
 #include "native_memory.h"
 #include "sr_stage.h"
-#include <windows.h>
 #include <cstdio>
 
+// Borrow the source profile tables without copying their instruction guards.
+struct rsf_anomaly_observer_profile {
+    const char* label;
+    uint32_t image_size;
+    const rsf::anomaly::NativeSite* sites;
+    size_t site_count;
+    const rsf::anomaly::UniqueGuard* unique_guards;
+    size_t unique_guard_count;
+};
+static_assert(sizeof(rsf_anomaly_observer_profile) == 48 && offsetof(rsf_anomaly_observer_profile, image_size) == 8 &&
+    offsetof(rsf_anomaly_observer_profile, sites) == 16 && offsetof(rsf_anomaly_observer_profile, unique_guards) == 32);
+
 extern "C" {
-const char* rsf_anomaly_running_build(const rsf_anomaly_build_identity*, size_t, size_t*) noexcept;
+const char* rsf_anomaly_observer_identify(rsf_anomaly_observer_engine*, const rsf_anomaly_build_identity*,
+    const rsf_anomaly_observer_profile*, size_t, const rsf::anomaly::ImageHeaders*,
+    decltype(&rsf::anomaly::guarded_copy)) noexcept;
 rsf_result rsf_anomaly_observer_prepare(const rsf_game_prepare_args*, const rsf_anomaly_observer_platform*) noexcept;
 rsf_result rsf_anomaly_observer_start(const rsf_game_start_args*, const rsf_anomaly_observer_platform*) noexcept;
 rsf_result rsf_anomaly_observer_quiesce(const rsf_game_control_args*, const rsf_anomaly_observer_platform*) noexcept;
@@ -37,6 +49,19 @@ namespace {
 extern const rsf_anomaly_observer_platform platform;
 HookSet hooks;
 std::array<void*, native_site_count> originals{};
+
+static_assert(sizeof(NativeSite) == 32 && offsetof(NativeSite, rva) == 8 && offsetof(NativeSite, expected) == 12);
+static_assert(sizeof(UniqueGuard) == 24 && offsetof(UniqueGuard, rva) == 8 && offsetof(UniqueGuard, expected_hex) == 16);
+constexpr auto observer_profiles = [] {
+    std::array<rsf_anomaly_observer_profile, build_profiles.size()> profiles{};
+    for (size_t i = 0; i < profiles.size(); ++i) {
+        const auto& build = build_profiles[i];
+        const auto& native = *build.native;
+        profiles[i] = {build.label, build.image_size(), native.native_sites.data(), native.native_sites.size(),
+            native.native_unique_guards.data(), native.native_unique_guards.size()};
+    }
+    return profiles;
+}();
 
 // Native invocations and their trampolines stay on the C++ side. The scope also
 // retires the Rust invocation when the native function unwinds through C++.
@@ -89,39 +114,9 @@ void reset_end(void* self) {
     reinterpret_cast<Unary>(originals[7])(self);
 }
 
-uint32_t image_size(const std::byte* image) noexcept {
-    if (!image) return 0;
-#ifdef _MSC_VER
-    __try {
-#endif
-        const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(image);
-        if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew < 0) return 0;
-        const auto* pe = reinterpret_cast<const IMAGE_NT_HEADERS64*>(image + dos->e_lfanew);
-        if (pe->Signature != IMAGE_NT_SIGNATURE || pe->FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64 ||
-            pe->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC) return 0;
-        return pe->OptionalHeader.SizeOfImage;
-#ifdef _MSC_VER
-    } __except(EXCEPTION_EXECUTE_HANDLER) { return 0; }
-#endif
-}
-bool guarded_sites(const std::byte* image, const BuildProfile& build) noexcept {
-    const auto checked = guard_image(image, build.image_size());
-    for (const auto& site : build.native->native_sites)
-        if (!matches(checked, site) || !unique_guards_match(checked, build.native->native_unique_guards, site.rva))
-            return false;
-    return true;
-}
 const char* identify(rsf_anomaly_observer_engine* out) noexcept {
-    size_t index = 0;
-    if (const auto* reason = rsf_anomaly_running_build(build_identities.data(), build_identities.size(), &index))
-        return reason;
-    const auto& build = build_profiles[index];
-    auto* image = reinterpret_cast<std::byte*>(GetModuleHandleW(nullptr));
-    if (image_size(image) != build.image_size()) return "Running image size differs from the verified build.";
-    if (!guarded_sites(image, build))
-        return "A native hook's expected instructions do not match; no hook was written.";
-    *out = {image, index, build.label, build.executable};
-    return nullptr;
+    return rsf_anomaly_observer_identify(out, build_identities.data(), observer_profiles.data(),
+        observer_profiles.size(), &guarded_image_headers, guarded_copy);
 }
 
 bool enable_hooks(const rsf_anomaly_observer_engine* engine) noexcept {

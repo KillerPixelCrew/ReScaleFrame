@@ -5,20 +5,11 @@
 
 namespace rsf::anomaly {
 namespace {
-struct DosFacts {
-    int32_t nt_offset;
-    uint16_t signature;
-};
-struct PeFacts {
-    uint32_t signature;
-    uint32_t image_size;
-    uint16_t machine;
-    uint16_t optional_magic;
-};
 static_assert(sizeof(IMAGE_NT_HEADERS64) == 264 && IMAGE_DOS_SIGNATURE == 0x5a4d &&
     IMAGE_NT_SIGNATURE == 0x4550 && IMAGE_FILE_MACHINE_AMD64 == 0x8664 &&
     IMAGE_NT_OPTIONAL_HDR64_MAGIC == 0x20b);
 static_assert(sizeof(DosFacts) == 8 && sizeof(PeFacts) == 12);
+static_assert(sizeof(ImageHeaders) == 16 && offsetof(ImageHeaders, pe) == 8);
 static_assert(sizeof(HookSite) == 48 && sizeof(ResolvedHookSite) == 24);
 
 bool read_mapped(const void* owner, const void* address, void* out, size_t size, bool executable) noexcept {
@@ -38,26 +29,36 @@ bool read_mapped(const void* owner, const void* address, void* out, size_t size,
     return (exec_read || (!executable && data_read)) && guarded_copy(out, address, size);
 }
 
-struct Platform {
-    bool (*dos)(const void*, DosFacts*) noexcept;
-    bool (*pe)(const void*, const void*, PeFacts*) noexcept;
-    bool (*read)(const void*, const void*, void*, size_t, bool) noexcept;
-    HookOps hooks;
-};
-static_assert(sizeof(Platform) == 64 && offsetof(Platform, hooks) == 24);
-constexpr Platform platform{
+using Read = bool (*)(const void*, const void*, void*, size_t, bool) noexcept;
+
+template<Read read>
+constexpr ImageHeaders image_headers{
     [](const void* module, DosFacts* out) noexcept {
         IMAGE_DOS_HEADER dos{};
-        if (!read_mapped(module, module, &dos, sizeof(dos), false)) return false;
+        if (!read(module, module, &dos, sizeof(dos), false)) return false;
         *out = {dos.e_lfanew, dos.e_magic};
         return true;
     },
     [](const void* module, const void* address, PeFacts* out) noexcept {
         IMAGE_NT_HEADERS64 pe{};
-        if (!read_mapped(module, address, &pe, sizeof(pe), false)) return false;
+        if (!read(module, address, &pe, sizeof(pe), false)) return false;
         *out = {pe.Signature, pe.OptionalHeader.SizeOfImage, pe.FileHeader.Machine, pe.OptionalHeader.Magic};
         return true;
     },
+};
+
+bool read_guarded(const void*, const void* address, void* out, size_t size, bool) noexcept {
+    return guarded_copy(out, address, size);
+}
+
+struct Platform {
+    ImageHeaders headers;
+    Read read;
+    HookOps hooks;
+};
+static_assert(sizeof(Platform) == 64 && offsetof(Platform, hooks) == 24);
+constexpr Platform platform{
+    image_headers<read_mapped>,
     read_mapped,
     hook_ops,
 };
@@ -68,6 +69,8 @@ extern "C" bool rsf_anomaly_hook_set_install_resolved(void**, const Platform*, c
 extern "C" bool rsf_anomaly_hook_set_set_enabled(void**, const Platform*, bool) noexcept;
 extern "C" bool rsf_anomaly_hook_set_created(void* const*) noexcept;
 }
+
+const ImageHeaders guarded_image_headers = image_headers<read_guarded>;
 
 bool HookSet::install(std::byte* module, uint32_t image_size, std::span<const HookSite> sites) noexcept {
     return rsf_anomaly_hook_set_install(&batch_, &platform, module, image_size, sites.data(), sites.size());

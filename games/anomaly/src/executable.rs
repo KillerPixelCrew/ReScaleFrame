@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 use crate::{BuildIdentity, digest::sha256_file, match_build};
-use std::ffi::{CStr, OsString, c_char};
+use std::ffi::{CStr, OsString};
 use std::os::windows::ffi::OsStringExt;
 use std::path::Path;
-use std::{ptr, slice};
+use std::ptr;
 use windows_sys::Win32::Foundation::HMODULE;
 use windows_sys::Win32::System::LibraryLoader::GetModuleFileNameW;
 
@@ -45,21 +45,4 @@ pub(crate) fn running_build(builds: &[BuildIdentity]) -> Result<usize, &'static 
     sha256_file(path)
         .and_then(|hash| match_build(builds, name.as_bytes(), &hash))
         .ok_or(c"Running executable SHA-256 does not match a guarded native profile.")
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_running_build(
-    builds: *const BuildIdentity,
-    count: usize,
-    index: &mut usize,
-) -> *const c_char {
-    // The native observer lends the same immutable table as the cold entry.
-    let builds = unsafe { slice::from_raw_parts(builds, count) };
-    match running_build(builds) {
-        Ok(build) => {
-            *index = build;
-            ptr::null()
-        }
-        Err(reason) => reason.as_ptr(),
-    }
 }

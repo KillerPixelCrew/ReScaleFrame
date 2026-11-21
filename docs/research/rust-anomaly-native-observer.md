@@ -17,9 +17,10 @@ uses the existing MinHook preflight and process-lifetime trampolines.
 | After RenderToTarget | Count target 1 as a physical PDA copy and target 2 as a scope copy. Only target 2 reports the secondary viewport to FG. |
 | Before reset_begin and through reset_end | Increment the reset count and generation and clear camera validity before reporting the reset to FG. SR and motion continue to read the same observation reset counter. Track reset_end through the original trampoline. |
 
-Rust owns the GameSDK lifecycle, the active and in-flight state, the host log
-lease and the ABI 1 observation. The native leaves handle engine reads,
-profile verification, trampolines, the geometry scope and stage calls.
+The initial port moved the GameSDK lifecycle, the active and in-flight state,
+the host log lease and the ABI 1 observation into Rust. It used native leaves
+for engine reads, profile verification, trampolines, the geometry scope and
+stage calls.
 The observer counts native invocations. Frame reconstruction, texture
 leases, readback, presentation and vendor policy remain with their current
 owners. This port changes no shader or buffer producer.
@@ -63,3 +64,34 @@ Cargo formatting, workspace Clippy with warnings denied, and all 222 locked
 workspace Rust tests passed. Device execution, live callback retirement and
 Standard/AVX gameplay acceptance remain open for this revision. The
 prior game baseline applies to the C++ observer. [Game baseline](rust-anomaly-cpp-baseline.md)
+
+## Prepare admission from `3c73e3c4`
+
+The observer now calls the same Rust `running_build` used by cold start. It
+checks the running filename before hashing the executable, then requires the
+exact Standard or AVX SHA-256. The matching build index selects a borrowed
+view of the existing C++ profile with its label, image size, eight sites and
+two longer guards. The same index still selects the native detour and stage
+tables. The verified identities, RVAs and guards stay in their source tables.
+
+Rust checks the DOS signature and NT offset, PE signature, AMD64 machine,
+PE32+ magic and exact profiled `SizeOfImage`. Native callbacks copy the typed
+PE headers under the existing C++ SEH guard. Rust then uses the checked image
+reader to compare each 16-byte prologue and any longer guard attached to its
+RVA. The longer bytes are the recorded unique prefix at that RVA. The
+uniqueness evidence remains in the Standard and AVX research. Prepare
+publishes the session only after both checks pass, with the existing refusal
+texts for build identity, image size and instructions.
+
+Start still pins the adapter before the first HookSet installation. That
+installation retains its mapped-region, executable-protection and NT-header
+extent checks, and re-reads the 16-byte prologues before any MinHook
+registration. Re-enabling an existing set uses retained trampolines. The
+native functions still own SEH, the typed detours, the original calls and the
+return-address capture in the motion path. [HookSet evidence](rust-anomaly-native-hook-set.md)
+
+This follow-up was checked by source comparison, pinned Rust formatting,
+locked offline Cargo metadata and whitespace review. A Rust regression case
+covers a changed unique suffix with all 16 prologue bytes intact. Compilation,
+linking, Clippy, tests and live device and game behavior for this follow-up
+await verification.
