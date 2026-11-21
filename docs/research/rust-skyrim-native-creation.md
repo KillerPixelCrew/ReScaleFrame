@@ -114,9 +114,9 @@ Still C++ in `rsf_game_skyrim_se`, in suggested order:
 3. `cpu_events.cpp` with `input_ownership.h` and `screen_classification.h`: CPU frame, input
    ownership, prospective source and screen classification (one hook, about forty RVAs). Its
    fixture `tests/skyrim_input.cpp` compiles the source directly.
-4. `presentation_inputs.cpp` (hook `+116ac80`), `resolution.cpp`, `render_inputs.cpp`,
-   `auxiliary.cpp`: pre-HDR inputs, reduced-resolution ownership, SR reconstruction and
-   auxiliary views. `sampling.rs` now owns the sampler hook at `+1010de0`.
+4. `presentation_inputs.cpp`, `resolution.cpp`, `render_inputs.cpp`, `auxiliary.cpp`:
+   pre-HDR inputs, reduced-resolution ownership, SR reconstruction and auxiliary views.
+   Rust now owns the sampler hook at `+1010de0` and interface hook at `+116ac80`.
 5. `camera.rs` owns the native camera conversion for both SR and presentation. It
    uses the shared GameSDK inverse with the old float output and double accumulation
    rules. The adapter still supplies the same copied row-vector cache. Refusals clear
@@ -133,6 +133,21 @@ The guards now refuse overflowing cache addresses and timing differences.
 The native consumers still lease their textures and submit their original
 passes. Source comparison matched both baseline blocks, including the cache
 offsets and bitwise origin check. No build or live test was run.
+
+## Interface and window handoff
+
+The Rust owner keeps the interface hook, capture provenance and the
+thread-local pre-HDR receipt. The receipt copies the same scalars and
+camera fields and stores the swapchain only as identity. Native callbacks
+lease the actual D3D11 backbuffer, context and swapchain for the operation.
+Final-scene begin and end precede window begin. The retained window owns
+references until renderer-end and keeps retirement busy while a callback is
+opening or closing it. A reentrant end waits for the begin attempt to return.
+An exception in final-scene delivery skips window publication, and capture
+uses the identity matched at entry. The pre-HDR texture producer still
+checks its descriptors and hands off through the same GameSDK calls.
+Source review matched the hook bytes, copied fields, pre-HDR producer
+block and capture names. Builds and live callback ordering are unverified.
 
 ## Sampler hook
 

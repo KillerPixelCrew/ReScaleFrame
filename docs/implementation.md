@@ -243,6 +243,15 @@ existing Runtime sampler service on the renderer thread. Stop checks
 for entries again after disabling the hook. Live restoration and
 shutdown remain unverified.
 
+Skyrim SE's interface observer, final-scene handoff and window pass
+retirement are now owned by Rust. The owner copies the existing scene
+fields, matches the native frame, swapchain and CPU scope, and carries
+later screen refusals through to the window pass. The window keeps its
+own context and swapchain references until the matching end callback.
+Rust defers an end that reenters during begin. Pre-HDR texture discovery
+and submission still use the native producer. Source checks passed.
+Live callback and device validation remain open.
+
 Unity package D3D12 SR contexts and their recording slots are Rust-owned.
 The existing Unity bridge still provides recording and completion facts.
 The view owner preserves reconfiguration, spatial fallback and retirement
