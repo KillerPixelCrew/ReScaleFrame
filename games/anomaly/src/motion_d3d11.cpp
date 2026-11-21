@@ -6,22 +6,16 @@
 
 namespace rsf::anomaly::motion {
 namespace {
-rsf_shader_patch_api runtime_api{};
-
 void* dynamic_buffer(void* raw_device, UINT size) noexcept
 {
     auto* device = static_cast<ID3D11Device*>(raw_device);
     ComPtr<ID3D11Buffer> buffer;
-    if (runtime_api.constant_buffer) {
-        if (runtime_api.constant_buffer(device, size, reinterpret_cast<void**>(buffer.GetAddressOf())) != 0) return nullptr;
-    } else {
-        D3D11_BUFFER_DESC desc{};
-        desc.ByteWidth = size;
-        desc.Usage = D3D11_USAGE_DYNAMIC;
-        desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-        desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-        if (FAILED(device->CreateBuffer(&desc, nullptr, &buffer))) return nullptr;
-    }
+    D3D11_BUFFER_DESC desc{};
+    desc.ByteWidth = size;
+    desc.Usage = D3D11_USAGE_DYNAMIC;
+    desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    if (FAILED(device->CreateBuffer(&desc, nullptr, &buffer))) return nullptr;
     return buffer.Detach();
 }
 
@@ -71,7 +65,6 @@ uint32_t upload(void* raw_context, void* raw_buffer, const void* data, std::size
 {
     auto* context = static_cast<ID3D11DeviceContext*>(raw_context);
     auto* buffer = static_cast<ID3D11Buffer*>(raw_buffer);
-    if (runtime_api.upload_constant) return runtime_api.upload_constant(context, buffer, {data, size}) == 0;
     D3D11_MAPPED_SUBRESOURCE mapped{};
     if (FAILED(context->Map(buffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) return 0;
     if (mapped.pData) std::memcpy(mapped.pData, data, size);
@@ -83,7 +76,6 @@ uint32_t bind(void* raw_context, void* raw_buffer, char stage) noexcept
 {
     auto* context = static_cast<ID3D11DeviceContext*>(raw_context);
     auto* buffer = static_cast<ID3D11Buffer*>(raw_buffer);
-    if (runtime_api.bind_constant) return runtime_api.bind_constant(context, stage, 13, buffer) == 0;
     switch (stage) {
     case 'v': context->VSSetConstantBuffers(13, 1, &buffer); return 1;
     case 'p': context->PSSetConstantBuffers(13, 1, &buffer); return 1;
@@ -100,8 +92,6 @@ constexpr rsf_anomaly_motion_device_platform platform{
 }
 
 const rsf_anomaly_motion_device_platform& motion_device_platform() noexcept { return platform; }
-
-void set_shader_runtime(const rsf_shader_patch_api& api) noexcept { runtime_api = api; }
 
 MotionDevice::~MotionDevice() { rsf_anomaly_motion_device_drop(owner_); }
 

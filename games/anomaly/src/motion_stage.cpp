@@ -320,7 +320,6 @@ const MotionPlatform platform{
             {jitter.current_u, jitter.current_v, jitter.previous_u, jitter.previous_v}};
     },
     open_pack, rsf_anomaly_runtime_pack_close,
-    [](void* pack) { set_shader_runtime(runtime_pack_api(pack)); },
     [](void* pack, void* device) { runtime_pack_api(pack).attach_d3d11(device); },
     [](void* pack, const wchar_t* path) { return runtime_pack_api(pack).dump(path); },
     [](void* pack, PatchCounters* out) {
@@ -351,8 +350,8 @@ const MotionPlatform platform{
 static_assert(sizeof(WindowFacts) == 56 && sizeof(DrawFacts) == 32);
 static_assert(sizeof(ShaderObjects) == 40 && sizeof(ShaderResult) == 32 && sizeof(PackInfo) == 8);
 static_assert(sizeof(FoliageLayout) == 108 && offsetof(FoliageLayout, xform) == 4 && offsetof(FoliageLayout, usable) == 104);
-static_assert(sizeof(MotionPlatform) == 320 && offsetof(MotionPlatform, guards) == 40 &&
-    offsetof(MotionPlatform, frame_layout) == 264 && offsetof(MotionPlatform, create_shader) == 312);
+static_assert(sizeof(MotionPlatform) == 312 && offsetof(MotionPlatform, guards) == 40 &&
+    offsetof(MotionPlatform, frame_layout) == 256 && offsetof(MotionPlatform, create_shader) == 304);
 static_assert(sizeof(FrameTarget) == 24 && offsetof(FrameTarget, main) == 20);
 static_assert(static_cast<uint8_t>(ReplayResult::Done) == 0 && static_cast<uint8_t>(ReplayResult::SkippedNoDepthWrite) == 1);
 static_assert(RSF_PHASE_RENDER_SUBMIT == 2 && RSF_DUMP_VIEW_DENSE_MOTION == 7);

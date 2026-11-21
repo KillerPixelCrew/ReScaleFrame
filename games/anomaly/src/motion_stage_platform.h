@@ -73,7 +73,6 @@ struct MotionPlatform {
     void (*draw_state)(void*, MotionDrawState*);
     void* (*open_pack)(void*, const void*, const wchar_t*, const wchar_t*, PackInfo*, char*, size_t);
     void (*close_pack)(void*);
-    void (*activate_pack)(void*);
     void (*attach_device)(void*, void*);
     int32_t (*dump_shaders)(void*, const wchar_t*);
     void (*patch_counters)(void*, PatchCounters*);
@@ -85,7 +84,7 @@ struct MotionPlatform {
     bool (*link_shaders)(const void*, const void*, const void*, const void*);
     void* (*create_shader)(void*, const char*, void*, void*, bool, bool*);
 };
-inline constexpr uint32_t motion_platform_abi = 6;
+inline constexpr uint32_t motion_platform_abi = 7;
 
 extern "C" {
 void rsf_anomaly_motion_stage_configure(const MotionPlatform*, const wchar_t*, rsf_dump_log_fn, void*) noexcept;

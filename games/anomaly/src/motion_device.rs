@@ -7,6 +7,9 @@ use crate::motion_device_abi::{
     rsf_anomaly_motion_device_platform as Platform, rsf_anomaly_motion_device_view as View,
     rsf_anomaly_motion_log as Log,
 };
+#[cfg(windows)]
+use rsf_game_sys::shader_patch_abi::rsf_shader_patch_api;
+use rsf_game_sys::shader_patch_abi::{RSF_PATCH_OK, rsf_patch_bytes};
 use std::ffi::{c_char, c_void};
 use std::mem::MaybeUninit;
 use std::slice;
@@ -24,6 +27,27 @@ struct Target {
     extent: [u32; 2],
 }
 
+type Raw = *mut c_void;
+
+#[derive(Clone, Copy)]
+pub(crate) struct ConstantOps {
+    buffer: unsafe extern "C" fn(Raw, u32, *mut Raw) -> i32,
+    upload: unsafe extern "C" fn(Raw, Raw, rsf_patch_bytes) -> i32,
+    bind: unsafe extern "C" fn(Raw, u32, u32, Raw) -> i32,
+}
+
+#[cfg(windows)]
+impl ConstantOps {
+    pub(crate) fn from_api(api: &rsf_shader_patch_api) -> Self {
+        // The Runtime pack checked these operations when it opened.
+        Self {
+            buffer: api.constant_buffer.unwrap(),
+            upload: api.upload_constant.unwrap(),
+            bind: api.bind_constant.unwrap(),
+        }
+    }
+}
+
 struct Device {
     target: Option<Target>,
     buffers: [Buffer; 4],
@@ -31,17 +55,35 @@ struct Device {
     no_depth: Lease,
     equal_depth: Lease,
     device: Lease,
+    runtime: Option<ConstantOps>,
 }
 
 impl Device {
-    fn new(platform: &Platform, pointer: *mut c_void, log: Log, user: *mut c_void) -> Option<Self> {
+    fn new(
+        platform: &Platform,
+        pointer: Raw,
+        runtime: Option<ConstantOps>,
+        log: Log,
+        user: Raw,
+    ) -> Option<Self> {
         let release = platform.release.unwrap();
         let device = Lease::new(pointer, release)?;
         unsafe { (platform.retain.unwrap())(pointer) };
         let buffer = |size: usize, stage: u8| {
-            let handle = unsafe { (platform.buffer.unwrap())(pointer, size as u32) };
+            let resource = if let Some(runtime) = runtime {
+                let mut handle = std::ptr::null_mut();
+                let result = unsafe { (runtime.buffer)(pointer, size as u32, &mut handle) };
+                let lease = Lease::new(handle, release);
+                if result != RSF_PATCH_OK {
+                    return None;
+                }
+                lease?
+            } else {
+                let handle = unsafe { (platform.buffer.unwrap())(pointer, size as u32) };
+                Lease::new(handle, release)?
+            };
             Some(Buffer {
-                resource: Lease::new(handle, release)?,
+                resource,
                 last: vec![0; size].into_boxed_slice(),
                 stage: stage as c_char,
                 uploaded: false,
@@ -66,6 +108,7 @@ impl Device {
             no_depth: depth(0)?,
             equal_depth: depth(1)?,
             device,
+            runtime,
         })
     }
 
@@ -104,6 +147,18 @@ impl Owner {
             upload_skips: 0,
         }
     }
+
+    pub(crate) fn create(
+        &mut self,
+        device: Raw,
+        runtime: Option<ConstantOps>,
+        log: Log,
+        user: Raw,
+    ) -> bool {
+        self.device = None;
+        self.device = Device::new(self.platform, device, runtime, log, user);
+        self.device.is_some()
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -126,15 +181,13 @@ extern "C" fn rsf_anomaly_motion_device_reset(owner: Option<&mut Owner>) {
 }
 
 #[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_anomaly_motion_device_create(
+extern "C" fn rsf_anomaly_motion_device_create(
     owner: &mut Owner,
     device: *mut c_void,
     log: Log,
     user: *mut c_void,
 ) -> u32 {
-    owner.device = None;
-    owner.device = Device::new(owner.platform, device, log, user);
-    u32::from(owner.device.is_some())
+    u32::from(owner.create(device, None, log, user))
 }
 
 #[unsafe(no_mangle)]
@@ -211,15 +264,28 @@ pub(crate) extern "C" fn rsf_anomaly_motion_device_upload(
     if buffer.uploaded && *buffer.last == *bytes {
         owner.upload_skips += 1;
     } else {
-        let upload = owner.platform.upload.unwrap();
-        buffer.uploaded = unsafe { upload(context, resource, data.cast(), size) } != 0;
+        buffer.uploaded = if let Some(runtime) = device.runtime {
+            let input = rsf_patch_bytes {
+                data: data.cast(),
+                size,
+            };
+            unsafe { (runtime.upload)(context, resource, input) == RSF_PATCH_OK }
+        } else {
+            unsafe { (owner.platform.upload.unwrap())(context, resource, data.cast(), size) != 0 }
+        };
         if !buffer.uploaded {
             return 0;
         }
         buffer.last.copy_from_slice(bytes);
         owner.uploads += 1;
     }
-    unsafe { (owner.platform.bind.unwrap())(context, resource, buffer.stage) }
+    if let Some(runtime) = device.runtime {
+        u32::from(
+            unsafe { (runtime.bind)(context, buffer.stage as u32, 13, resource) } == RSF_PATCH_OK,
+        )
+    } else {
+        unsafe { (owner.platform.bind.unwrap())(context, resource, buffer.stage) }
+    }
 }
 
 #[cfg(test)]

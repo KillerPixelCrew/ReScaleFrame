@@ -13,7 +13,7 @@ use std::ffi::c_char;
 
 pub(super) type Raw = *mut std::ffi::c_void;
 pub(super) type Redraw = unsafe extern "C" fn(Raw, Raw);
-pub(super) const PLATFORM_ABI: u32 = 6;
+pub(super) const PLATFORM_ABI: u32 = 7;
 
 #[repr(C)]
 pub(super) struct WindowFacts {
@@ -140,7 +140,6 @@ pub(super) struct Platform {
         usize,
     ) -> Raw,
     pub close_pack: unsafe extern "C" fn(Raw),
-    pub activate_pack: unsafe extern "C" fn(Raw),
     pub attach_device: unsafe extern "C" fn(Raw, Raw),
     pub dump_shaders: unsafe extern "C" fn(Raw, *const u16) -> i32,
     pub patch_counters: unsafe extern "C" fn(Raw, &mut PatchCounters),
@@ -195,8 +194,8 @@ const _: () = {
     assert!(size_of::<FoliageLayout>() == 108);
     assert!(std::mem::offset_of!(FoliageLayout, usable) == 104);
     assert!(size_of::<FrameTarget>() == 24);
-    assert!(size_of::<Platform>() == 320);
+    assert!(size_of::<Platform>() == 312);
     assert!(std::mem::offset_of!(Platform, guards) == 40);
-    assert!(std::mem::offset_of!(Platform, frame_layout) == 264);
-    assert!(std::mem::offset_of!(Platform, create_shader) == 312);
+    assert!(std::mem::offset_of!(Platform, frame_layout) == 256);
+    assert!(std::mem::offset_of!(Platform, create_shader) == 304);
 };

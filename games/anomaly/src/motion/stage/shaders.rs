@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::digest::sha256;
-use crate::shader_loader::{DecodedFrame, Entry, FrameLayout, Manifest, decode_frame};
+use crate::shader_loader::{DecodedFrame, Entry, FrameLayout, Manifest, RuntimePack, decode_frame};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -293,6 +293,11 @@ impl Pack {
         self.lease.as_ptr()
     }
 
+    pub fn constant_ops(&self) -> ConstantOps {
+        // open_pack returns a RuntimePack that this lease keeps alive.
+        unsafe { &*self.ptr().cast::<RuntimePack>() }.constant_ops()
+    }
+
     fn manifest(&self) -> &Manifest {
         // The native pack keeps the manifest alive while `self.lease` is open.
         unsafe { self.manifest.as_ref() }
@@ -449,8 +454,6 @@ impl Stage {
                 return false;
             }
         };
-        let p = self.platform;
-        unsafe { (p.activate_pack)(pack.ptr()) };
         self.log().say(format!(
             "Anomaly runtime shader pack: {} allowlisted roots, namespace {}",
             pack.manifest().entries().len(),

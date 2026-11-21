@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Anomaly's Rust motion device now holds the constant-buffer operations
+from its admitted Runtime shader pack. The native global API copy is
+gone. Standalone fixtures still use the typed D3D11 leaves. Source
+review checked that Runtime refusals still propagate and release any
+returned allocation, and that uploads still bind the correct shader
+stage at b13. Device recreation and shader reload remain unverified for
+this revision.
+
 Anomaly geometry retirements now go straight to the Rust motion
 stage's queue. The stage drains its own queue before updating draw
 history. Stopping motion closes admission, discards pending keys, and

@@ -13,7 +13,7 @@ use self::abi::*;
 use self::capture::Capture;
 use self::options::Settings;
 use self::report::Counters;
-use self::shaders::{Creation, Loader, Registry};
+use self::shaders::{Creation, Loader, Pack, Registry};
 use super::{foliage, window, *};
 use crate::geometry_registry::RetirementQueue;
 use crate::lease::Lease;
@@ -389,11 +389,10 @@ impl Stage {
             window::reset(&mut render.window);
             render.reset_history();
             lock(&self.registry).clear_links();
+            let runtime = lock(&self.loader).pack.as_ref().map(Pack::constant_ops);
             let owner = render.device.get_or_insert_with(|| Owner::new(p.device));
             let log = self.log();
-            if rsf_anomaly_motion_device_create(owner, facts.device, log.callback, log.user as Raw)
-                == 0
-            {
+            if !owner.create(facts.device, runtime, log.callback, log.user as Raw) {
                 log.text(c"Anomaly motion: device resources could not be created.");
                 return;
             }

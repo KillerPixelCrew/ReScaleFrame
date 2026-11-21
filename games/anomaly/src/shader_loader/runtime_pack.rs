@@ -2,6 +2,7 @@
 use super::d3d::Modules;
 use super::manifest::{Manifest, Root, admit_pack};
 use super::{Bytes, Request};
+use crate::motion_device::ConstantOps;
 use crate::runtime_module::{export, rsf_anomaly_runtime_module};
 use rsf_game_sys::shader_patch_abi::{
     RSF_PATCH_ARGUMENT, RSF_PATCH_OK, RSF_PATCH_SOURCE, RSF_SHADER_PATCH_VERSION,
@@ -24,12 +25,18 @@ impl Drop for Session {
     }
 }
 
-struct RuntimePack {
+pub(crate) struct RuntimePack {
     session: Session,
     manifest: Manifest,
     includes: Includes,
     // The Runtime's session borrows the compiler. Drop the session before releasing the DLLs.
     modules: Modules,
+}
+
+impl RuntimePack {
+    pub(crate) fn constant_ops(&self) -> ConstantOps {
+        ConstantOps::from_api(&self.session.api)
+    }
 }
 
 #[derive(Clone, Copy)]

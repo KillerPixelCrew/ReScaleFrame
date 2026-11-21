@@ -9,6 +9,7 @@ use crate::digest::sha256;
 pub(crate) use frame::{DecodedFrame, FrameLayout, Read, decode_frame};
 pub(crate) use manifest::{Entry, Manifest};
 use reflection::{Compatibility, Reflection, rsf_anomaly_shader_compatible};
+pub(crate) use runtime_pack::RuntimePack;
 use std::ffi::{OsString, c_void};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
