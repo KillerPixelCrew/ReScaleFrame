@@ -1,51 +1,191 @@
 // SPDX-License-Identifier: MIT
-#include "../../common/fg_helpers.h"
-#include "../../common/generation_state.h"
-#include "../../common/d3d12_helpers.h"
+#include "../../common/generation12_checks.h"
 #include "../../common/frame_capture12.h"
 #include "ffx_version.h"
-#include <wrl/client.h>
-#include <atomic>
-#include <new>
-#include <cstring>
 #if defined(RSF_HAVE_FFX_FG)
 #include <ffx_framegeneration.h>
 #include <dx12/ffx_api_framegeneration_dx12.h>
+#include <memory>
+#include <new>
+
 using Microsoft::WRL::ComPtr;
 namespace {
-struct FfxSession {
-    HMODULE module = nullptr;
-    ffxContext generation = nullptr, swapchain = nullptr;
+static_assert(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE == 0x40);
+static_assert(FFX_API_RETURN_ERROR_PARAMETER == 6);
+
+// The SDK requires pointers passed in create descriptors to remain live
+// until context destruction. Rust owns both contexts and this backing storage.
+struct Bindings {
+    HMODULE module{};
     PfnFfxCreateContext create{};
     PfnFfxDestroyContext destroy{};
     PfnFfxConfigure configure{};
     PfnFfxDispatch dispatch{};
     PfnFfxQuery query{};
-    ComPtr<ID3D12Device> device;
-    ComPtr<IDXGISwapChain4> chain;
-    ComPtr<ID3D12CommandQueue> queue;
-    rsf::FrameCapture12 capture;
-    struct CaptureIdentity { uint64_t sequence = 0; rsf_frame_record record{}; };
-    std::array<CaptureIdentity, 64> capture_identities;
-    std::mutex capture_guard;
-    ffxCreateContextDescFrameGeneration description{};
-    ffxCreateContextDescFrameGenerationVersion api_version{};
+    rsf_backend_log_fn log{};
+    void* log_user{};
+    uint32_t feature_major{};
+    ffxCreateContextDescFrameGeneration generation{};
+    ffxCreateContextDescFrameGenerationVersion generation_version{};
     ffxCreateBackendDX12Desc backend{};
     ffxOverrideVersion override_version{};
-    rsf::GenerationState copied;
-    rsf_ui_mode ui_mode = RSF_UI_MODE_NONE;
-    std::atomic<uint64_t> generated{0}, presented{0};
-    std::atomic<uint64_t> dispatched{0};
-    std::atomic<int32_t> dispatch_result{0};
-    std::atomic<uint32_t> dispatch_logs{0};
-    rsf_backend_log_fn log = nullptr;
-    void* log_user = nullptr;
-    uint64_t sequence = 0;
-    uint64_t observed_generated = 0;
-    uint32_t counter_reports = 0;
-    UINT last_dxgi_present = 0;
-    float view_space_to_meters = 1;
+    DXGI_SWAP_CHAIN_DESC1 chain_desc{};
+    ComPtr<IDXGIFactory2> factory;
+    IDXGISwapChain4* chain{};
+    ffxCreateContextDescFrameGenerationSwapChainVersionDX12 chain_version{};
+    ffxCreateContextDescFrameGenerationSwapChainForHwndDX12 swapchain{};
+
+    ~Bindings() {
+        if (module) FreeLibrary(module);
+    }
 };
+
+rsf_backend_result open(const rsf_generation_setup* setup, void** out)
+{
+    auto api = std::unique_ptr<Bindings>(new (std::nothrow) Bindings{});
+    if (!api) return RSF_BACKEND_ERROR_INIT_FAILED;
+    api->module = rsf::fg_library(*setup, L"amd_fidelityfx_framegeneration_dx12.dll");
+    if (!api->module) return RSF_BACKEND_ERROR_LOAD_FAILED;
+    api->create = rsf::entry<PfnFfxCreateContext>(api->module, "ffxCreateContext");
+    api->destroy = rsf::entry<PfnFfxDestroyContext>(api->module, "ffxDestroyContext");
+    api->configure = rsf::entry<PfnFfxConfigure>(api->module, "ffxConfigure");
+    api->dispatch = rsf::entry<PfnFfxDispatch>(api->module, "ffxDispatch");
+    api->query = rsf::entry<PfnFfxQuery>(api->module, "ffxQuery");
+    if (!api->create || !api->destroy || !api->configure || !api->dispatch || !api->query)
+        return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
+    api->log = setup->chain.log;
+    api->log_user = setup->chain.log_user;
+    api->feature_major = setup->feature_major;
+    api->backend.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_DX12;
+    api->backend.device = static_cast<ID3D12Device*>(setup->chain.d3d12_device);
+    api->backend.header.pNext = &api->override_version.header;
+    api->override_version.header.type = FFX_API_DESC_TYPE_OVERRIDE_VERSION;
+    api->generation_version.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION_VERSION;
+    api->generation_version.version = FFX_FRAMEGENERATION_VERSION;
+    api->generation_version.header.pNext = &api->backend.header;
+    api->generation.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION;
+    api->generation.header.pNext = &api->generation_version.header;
+    api->generation.flags = (setup->depth_inverted ? FFX_FRAMEGENERATION_ENABLE_DEPTH_INVERTED : 0u) |
+        (setup->depth_infinite ? FFX_FRAMEGENERATION_ENABLE_DEPTH_INFINITE : 0u) |
+        (setup->motion_jittered ? FFX_FRAMEGENERATION_ENABLE_MOTION_VECTORS_JITTER_CANCELLATION : 0u) |
+        (setup->motion_at_display_resolution ? FFX_FRAMEGENERATION_ENABLE_DISPLAY_RESOLUTION_MOTION_VECTORS : 0u) |
+        (setup->hdr ? FFX_FRAMEGENERATION_ENABLE_HIGH_DYNAMIC_RANGE : 0u);
+    *out = api.release();
+    return RSF_BACKEND_OK;
+}
+
+void close(void* bindings)
+{
+    delete static_cast<Bindings*>(bindings);
+}
+
+uint64_t select_version(PfnFfxQuery query, const rsf_generation_setup& setup, char* name, uint32_t capacity)
+{
+    uint64_t count = 32, ids[32]{}, id = 0;
+    const char* names[32]{};
+    ffxQueryDescGetVersions versions{};
+    versions.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
+    versions.createDescType = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION;
+    versions.device = setup.chain.d3d12_device;
+    versions.outputCount = &count;
+    versions.versionIds = ids;
+    versions.versionNames = names;
+    if (!query || query(nullptr, &versions.header) != FFX_API_RETURN_OK || count > 32)
+        return 0;
+    rsf::select_ffx_version(ids, names, count, setup.feature_major, setup.version_id, id, name, capacity);
+    return id;
+}
+
+uint64_t select_version(void* bindings, const rsf_generation_setup* setup, char* name, uint32_t capacity)
+{
+    return select_version(static_cast<Bindings*>(bindings)->query, *setup, name, capacity);
+}
+
+uint32_t surface_format(uint32_t dxgi)
+{
+    return ffxApiGetSurfaceFormatDX12(static_cast<DXGI_FORMAT>(dxgi));
+}
+
+rsf_backend_result create_generation(void* bindings, const rsf_gen12_extent* extent,
+    const rsf_fg_status* status, const char* directory, void** out)
+{
+    auto& api = *static_cast<Bindings*>(bindings);
+    api.override_version.versionId = status->version_id;
+    auto& desc = api.generation;
+    desc.displaySize = {extent->width, extent->height};
+    desc.maxRenderSize = desc.displaySize;
+    desc.backBufferFormat = extent->format;
+    const auto result = api.create(out, &desc.header, nullptr);
+    if (directory) rsf::say(api.log, api.log_user,
+        "FSR FG create generation: FFX result=%u requested_major=%u selected=%s id=%llu API=%u.%u.%u root=%s",
+        result, api.feature_major, status->version_name, static_cast<unsigned long long>(status->version_id),
+        uint32_t(FFX_FRAMEGENERATION_VERSION_MAJOR), uint32_t(FFX_FRAMEGENERATION_VERSION_MINOR),
+        uint32_t(FFX_FRAMEGENERATION_VERSION_PATCH), directory);
+    return result == FFX_API_RETURN_OK ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_INIT_FAILED;
+}
+
+rsf_backend_result provider_matches(void* bindings, void* context, uint64_t version)
+{
+    ffxQueryGetProviderVersion actual{};
+    actual.header.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
+    return static_cast<Bindings*>(bindings)->query(&context, &actual.header) == FFX_API_RETURN_OK &&
+        actual.versionId == version ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_NOT_SUPPORTED;
+}
+
+rsf_backend_result create_chain(void* bindings, const rsf_generation_setup* setup, void** context, void** chain)
+{
+    auto& api = *static_cast<Bindings*>(bindings);
+    const auto created_factory = CreateDXGIFactory2(0, IID_PPV_ARGS(&api.factory));
+    if (FAILED(created_factory)) {
+        rsf::say(api.log, api.log_user, "FSR FG create DXGI factory failed HRESULT=0x%08lx",
+            static_cast<unsigned long>(created_factory));
+        return RSF_BACKEND_ERROR_INIT_FAILED;
+    }
+    api.chain_desc = rsf::chain_description(setup->chain);
+    api.chain_version.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_VERSION_DX12;
+    api.chain_version.version = FFX_FRAMEGENERATION_SWAPCHAIN_DX12_VERSION;
+    auto& desc = api.swapchain;
+    desc.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_FOR_HWND_DX12;
+    desc.header.pNext = &api.chain_version.header;
+    desc.swapchain = &api.chain;
+    desc.hwnd = static_cast<HWND>(setup->chain.hwnd);
+    desc.desc = &api.chain_desc;
+    desc.dxgiFactory = api.factory.Get();
+    desc.gameQueue = static_cast<ID3D12CommandQueue*>(setup->chain.d3d12_queue);
+    const auto result = api.create(context, &desc.header, nullptr);
+    rsf::say(api.log, api.log_user, "FSR FG create swapchain: FFX result=%u chain=%u API=%u.%u.%u size=%ux%u buffers=%u format=%u",
+        result, uint32_t(api.chain != nullptr), uint32_t(FFX_FRAMEGENERATION_SWAPCHAIN_DX12_VERSION_MAJOR),
+        uint32_t(FFX_FRAMEGENERATION_SWAPCHAIN_DX12_VERSION_MINOR), uint32_t(FFX_FRAMEGENERATION_SWAPCHAIN_DX12_VERSION_PATCH),
+        api.chain_desc.Width, api.chain_desc.Height, api.chain_desc.BufferCount, uint32_t(api.chain_desc.Format));
+    *chain = result == FFX_API_RETURN_OK ? api.chain : nullptr;
+    return result == FFX_API_RETURN_OK && *chain ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_INIT_FAILED;
+}
+
+uint32_t destroy_context(void* bindings, void** context)
+{
+    return static_cast<Bindings*>(bindings)->destroy(context, nullptr);
+}
+
+uint32_t wait(void* bindings, void* context)
+{
+    ffxDispatchDescFrameGenerationSwapChainWaitForPresentsDX12 desc{};
+    desc.header.type = FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_WAIT_FOR_PRESENTS_DX12;
+    return static_cast<Bindings*>(bindings)->dispatch(&context, &desc.header);
+}
+
+int32_t chain_extent(void* chain, rsf_gen12_extent* out)
+{
+    DXGI_SWAP_CHAIN_DESC1 desc{};
+    const auto result = static_cast<IDXGISwapChain4*>(chain)->GetDesc1(&desc);
+    if (SUCCEEDED(result)) *out = {desc.Width, desc.Height, ffxApiGetSurfaceFormatDX12(desc.Format)};
+    return result;
+}
+
+uint32_t whole_texture(const rsf_backend_resource* resource)
+{
+    const auto desc = static_cast<ID3D12Resource*>(resource->resource)->GetDesc();
+    return !resource->x && !resource->y && resource->width == desc.Width && resource->height == desc.Height;
+}
 bool native_state(uint32_t state, D3D12_RESOURCE_STATES& out)
 {
     out = D3D12_RESOURCE_STATE_COMMON;
@@ -65,382 +205,138 @@ bool native_state(uint32_t state, D3D12_RESOURCE_STATES& out)
     if (state & FFX_API_RESOURCE_STATE_DEPTH_ATTACHMENT) out |= D3D12_RESOURCE_STATE_DEPTH_WRITE;
     return true;
 }
-ffxReturnCode_t generate(ffxDispatchDescFrameGeneration* desc, void* pointer)
+ffxReturnCode_t generate_callback(ffxDispatchDescFrameGeneration* desc, void* user)
 {
-    auto* self = static_cast<FfxSession*>(pointer);
-    const auto result = self->dispatch(&self->generation, &desc->header);
-    if (result == FFX_API_RETURN_OK && self->capture.enabled()) {
-        rsf_frame_record record{};
-        {
-            std::lock_guard lock(self->capture_guard);
-            const auto& identity = self->capture_identities[desc->frameID % self->capture_identities.size()];
-            if (identity.sequence == desc->frameID) record = identity.record;
-        }
-        if (self->capture.wants(record.frame_id)) {
-            auto* list = static_cast<ID3D12GraphicsCommandList*>(desc->commandList);
-            D3D12_RESOURCE_STATES state{};
-            if (native_state(desc->presentColor.state, state))
-                self->capture.record(list, static_cast<ID3D12Resource*>(desc->presentColor.resource), state, record, "fg-generation-input");
-            for (uint32_t i = 0; i < desc->numGeneratedFrames && i < 4; ++i)
-                if (native_state(desc->outputs[i].state, state))
-                    self->capture.record(list, static_cast<ID3D12Resource*>(desc->outputs[i].resource), state, record, "fg-generated-before-ui", 0, i, desc->reset ? 1u : 0u);
-        }
+    return rsf_core_fsr12_generate(user, desc);
+}
+
+ffxReturnCode_t present_callback(ffxCallbackDescFrameGenerationPresent* desc, void* user)
+{
+    return rsf_core_fsr12_present(user, desc, uint32_t(desc->isGeneratedFrame));
+}
+
+uint32_t configure(void* bindings, void* context, const rsf_fsr12_config* config)
+{
+    ffxConfigureDescFrameGeneration desc{};
+    desc.header.type = FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION;
+    desc.swapChain = config->chain;
+    desc.frameID = config->sequence;
+    desc.frameGenerationEnabled = config->enabled != 0;
+    if (config->user) {
+        desc.frameGenerationCallback = generate_callback;
+        desc.frameGenerationCallbackUserContext = config->user;
     }
-    self->dispatch_result = static_cast<int32_t>(result);
-    if (result == FFX_API_RETURN_OK) self->dispatched += desc->numGeneratedFrames;
-    const auto report = self->dispatch_logs.fetch_add(1);
-    if (self->log && (report < 3 || (result != FFX_API_RETURN_OK && report < 12))) {
-        char text[176]; std::snprintf(text, sizeof(text), "FSR FG dispatch frame=%llu requested_outputs=%u result=%d reset=%u",
-            static_cast<unsigned long long>(desc->frameID), desc->numGeneratedFrames, static_cast<int32_t>(result), desc->reset);
-        self->log(self->log_user, text);
+    if (config->copy_present) {
+        desc.presentCallback = present_callback;
+        desc.presentCallbackUserContext = config->user;
     }
-    return result;
+    desc.generationRect = {0, 0, static_cast<int32_t>(config->width), static_cast<int32_t>(config->height)};
+    if (config->hudless) desc.HUDLessColor = ffxApiGetResourceDX12(static_cast<ID3D12Resource*>(config->hudless));
+    return static_cast<Bindings*>(bindings)->configure(&context, &desc.header);
 }
-ffxReturnCode_t present(ffxCallbackDescFrameGenerationPresent* desc, void* pointer)
+
+uint32_t prepare(void* bindings, void* context, void* command, const rsf_fg_frame* frame,
+    uint64_t sequence, uint32_t reset, float meters, float forward_sign)
 {
-    auto* self = static_cast<FfxSession*>(pointer);
-    auto* list = static_cast<ID3D12GraphicsCommandList*>(desc->commandList);
-    auto* source = static_cast<ID3D12Resource*>(desc->currentBackBuffer.resource);
-    auto* output = static_cast<ID3D12Resource*>(desc->outputSwapChainBuffer.resource);
-    if (!source || !output || !list) return FFX_API_RETURN_ERROR_PARAMETER;
-    D3D12_RESOURCE_STATES source_state{}, output_state{};
-    if (!native_state(desc->currentBackBuffer.state, source_state) ||
-        !native_state(desc->outputSwapChainBuffer.state, output_state)) return FFX_API_RETURN_ERROR_PARAMETER;
-    if (source != output) rsf::copy_transitioned(list, output, output_state, output_state, source, source_state, source_state);
-    ++self->presented;
-    if (desc->isGeneratedFrame) ++self->generated;
-    return FFX_API_RETURN_OK;
-}
-rsf_backend_result wait(FfxSession& self)
-{
-    if (!self.swapchain) return RSF_BACKEND_OK;
-    ffxDispatchDescFrameGenerationSwapChainWaitForPresentsDX12 desc{};
-    desc.header.type = FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_WAIT_FOR_PRESENTS_DX12;
-    return self.dispatch(&self.swapchain, &desc.header) == FFX_API_RETURN_OK ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
-}
-void destroy(void* pointer)
-{
-    auto* self = static_cast<FfxSession*>(pointer); if (!self) return;
-    if (self->generation && self->chain) {
-        // Detach callbacks and HUD-less resources before releasing either context.
-        // Disabling composition drains the SDK's in-flight work.
-        ffxConfigureDescFrameGeneration off{};
-        off.header.type = FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION;
-        off.swapChain = self->chain.Get(); off.frameID = ++self->sequence;
-        if (self->configure(&self->generation, &off.header) != FFX_API_RETURN_OK) return;
-    }
-    if (wait(*self) != 0) return; // Pending SDK callbacks still own this context.
-    if (self->generation && self->destroy(&self->generation, nullptr) != FFX_API_RETURN_OK) return;
-    self->chain.Reset();
-    if (self->swapchain && self->destroy(&self->swapchain, nullptr) != FFX_API_RETURN_OK) return;
-    if (self->module) FreeLibrary(self->module);
-    delete self;
-}
-rsf_backend_result create(const rsf_generation_setup* setup, void** out, void** chain)
-{
-    auto result = rsf::fg_setup(setup, out, chain); if (result != 0) return result;
-    // A Streamline SR-only registration can coexist on the native engine device. An
-    // actual DLSS-G presentation owner still forbids a second vendor proxy.
-    if (GetModuleHandleW(L"sl.dlss_g.dll") && !setup->streamline_host) return RSF_BACKEND_ERROR_NEEDS_RESTART;
-    if (setup->feature_major != 3 && setup->feature_major != 4) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
-    if (setup->chain.ui_mode != RSF_UI_MODE_NONE && setup->chain.ui_mode != RSF_UI_MODE_BACKBUFFER_HUDLESS)
-        return RSF_BACKEND_ERROR_NOT_SUPPORTED;
-    auto* self = new (std::nothrow) FfxSession; if (!self) return RSF_BACKEND_ERROR_INIT_FAILED;
-    rsf_fg_status initial{};
-    self->device = static_cast<ID3D12Device*>(setup->chain.d3d12_device); self->ui_mode = setup->chain.ui_mode;
-    self->queue = static_cast<ID3D12CommandQueue*>(setup->chain.d3d12_queue);
-    self->log = setup->chain.log; self->log_user = setup->chain.log_user;
-    self->view_space_to_meters = setup->view_space_to_meters;
-    self->module = rsf::fg_library(*setup, L"amd_fidelityfx_framegeneration_dx12.dll");
-    if (!self->module) { destroy(self); return RSF_BACKEND_ERROR_LOAD_FAILED; }
-    self->create = rsf::entry<PfnFfxCreateContext>(self->module, "ffxCreateContext");
-    self->destroy = rsf::entry<PfnFfxDestroyContext>(self->module, "ffxDestroyContext");
-    self->configure = rsf::entry<PfnFfxConfigure>(self->module, "ffxConfigure");
-    self->dispatch = rsf::entry<PfnFfxDispatch>(self->module, "ffxDispatch");
-    self->query = rsf::entry<PfnFfxQuery>(self->module, "ffxQuery");
-    if (!self->create || !self->destroy || !self->configure || !self->dispatch || !self->query) {
-        destroy(self); return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
-    }
-    uint64_t count = 32, ids[32]{}; const char* names[32]{};
-    ffxQueryDescGetVersions versions{}; versions.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
-    versions.createDescType = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION;
-    versions.device = self->device.Get(); versions.outputCount = &count; versions.versionIds = ids; versions.versionNames = names;
-    if (self->query(nullptr, &versions.header) != FFX_API_RETURN_OK || count > 32) { destroy(self); return RSF_BACKEND_ERROR_NOT_SUPPORTED; }
-    rsf::select_ffx_version(ids, names, count, setup->feature_major, setup->version_id, initial.version_id,
-        initial.version_name, sizeof(initial.version_name));
-    if (!initial.version_id) { destroy(self); return RSF_BACKEND_ERROR_NOT_SUPPORTED; }
-    self->backend.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_DX12; self->backend.device = self->device.Get();
-    self->override_version.header.type = FFX_API_DESC_TYPE_OVERRIDE_VERSION; self->override_version.versionId = initial.version_id;
-    self->backend.header.pNext = &self->override_version.header;
-    self->api_version.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION_VERSION;
-    self->api_version.version = FFX_FRAMEGENERATION_VERSION; self->api_version.header.pNext = &self->backend.header;
-    auto& desc = self->description;
-    desc.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION; desc.header.pNext = &self->api_version.header;
-    desc.displaySize = {setup->chain.width, setup->chain.height}; desc.maxRenderSize = desc.displaySize;
-    desc.backBufferFormat = ffxApiGetSurfaceFormatDX12(static_cast<DXGI_FORMAT>(setup->chain.format));
-    desc.flags = (setup->depth_inverted ? FFX_FRAMEGENERATION_ENABLE_DEPTH_INVERTED : 0u) |
-        (setup->depth_infinite ? FFX_FRAMEGENERATION_ENABLE_DEPTH_INFINITE : 0u) |
-        (setup->motion_jittered ? FFX_FRAMEGENERATION_ENABLE_MOTION_VECTORS_JITTER_CANCELLATION : 0u) |
-        (setup->motion_at_display_resolution ? FFX_FRAMEGENERATION_ENABLE_DISPLAY_RESOLUTION_MOTION_VECTORS : 0u) |
-        (setup->hdr ? FFX_FRAMEGENERATION_ENABLE_HIGH_DYNAMIC_RANGE : 0u);
-    const auto created_generation = self->create(&self->generation, &desc.header, nullptr);
-    if (self->log) {
-        char text[1024]{};
-        std::snprintf(text, sizeof(text),
-            "FSR FG create generation: FFX result=%u requested_major=%u selected=%s id=%llu API=%u.%u.%u root=%s",
-            created_generation, setup->feature_major, initial.version_name,
-            static_cast<unsigned long long>(initial.version_id), uint32_t(FFX_FRAMEGENERATION_VERSION_MAJOR),
-            uint32_t(FFX_FRAMEGENERATION_VERSION_MINOR), uint32_t(FFX_FRAMEGENERATION_VERSION_PATCH), setup->runtime_directory_utf8);
-        self->log(self->log_user, text);
-    }
-    if (created_generation != FFX_API_RETURN_OK) { destroy(self); return RSF_BACKEND_ERROR_INIT_FAILED; }
-    ffxQueryGetProviderVersion actual{}; actual.header.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
-    if (self->query(&self->generation, &actual.header) != FFX_API_RETURN_OK || actual.versionId != initial.version_id) {
-        destroy(self); return RSF_BACKEND_ERROR_NOT_SUPPORTED;
-    }
-    initial.struct_size = sizeof(initial); initial.supported = 1; initial.max_generated_frames = 1;
-    initial.vsync_supported = 1;
-    if (setup->chain.hwnd) {
-        ComPtr<IDXGIFactory2> factory;
-        const auto created_factory = CreateDXGIFactory2(0, IID_PPV_ARGS(&factory));
-        if (FAILED(created_factory)) {
-            if (self->log) {
-                char text[128]{}; std::snprintf(text, sizeof(text), "FSR FG create DXGI factory failed HRESULT=0x%08lx",
-                    static_cast<unsigned long>(created_factory)); self->log(self->log_user, text);
-            }
-            destroy(self); return RSF_BACKEND_ERROR_INIT_FAILED;
-        }
-        auto chain_desc = rsf::chain_description(setup->chain);
-        IDXGISwapChain4* raw = nullptr;
-        ffxCreateContextDescFrameGenerationSwapChainVersionDX12 version{};
-        version.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_VERSION_DX12;
-        version.version = FFX_FRAMEGENERATION_SWAPCHAIN_DX12_VERSION;
-        ffxCreateContextDescFrameGenerationSwapChainForHwndDX12 swap{};
-        swap.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_FOR_HWND_DX12;
-        swap.header.pNext = &version.header; swap.swapchain = &raw; swap.hwnd = static_cast<HWND>(setup->chain.hwnd);
-        swap.desc = &chain_desc; swap.dxgiFactory = factory.Get(); swap.gameQueue = static_cast<ID3D12CommandQueue*>(setup->chain.d3d12_queue);
-        const auto created_swapchain = self->create(&self->swapchain, &swap.header, nullptr);
-        if (self->log) {
-            char text[256]{};
-            std::snprintf(text, sizeof(text),
-                "FSR FG create swapchain: FFX result=%u chain=%u API=%u.%u.%u size=%ux%u buffers=%u format=%u",
-                created_swapchain, uint32_t(raw != nullptr), uint32_t(FFX_FRAMEGENERATION_SWAPCHAIN_DX12_VERSION_MAJOR),
-                uint32_t(FFX_FRAMEGENERATION_SWAPCHAIN_DX12_VERSION_MINOR), uint32_t(FFX_FRAMEGENERATION_SWAPCHAIN_DX12_VERSION_PATCH),
-                chain_desc.Width, chain_desc.Height, chain_desc.BufferCount, uint32_t(chain_desc.Format));
-            self->log(self->log_user, text);
-        }
-        if (created_swapchain != FFX_API_RETURN_OK || !raw) { destroy(self); return RSF_BACKEND_ERROR_INIT_FAILED; }
-        self->chain.Attach(raw);
-    }
-    self->copied.initialize(initial);
-    *out = self; *chain = self->chain.Get(); return RSF_BACKEND_OK;
-}
-rsf_backend_result configure(void* pointer, const rsf_fg_options* options)
-{
-    if (!pointer) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    const auto validation = rsf::fg_options_result(options); if (validation != 0) return validation;
-    if (options->mode > RSF_FG_FIXED) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
-    if (options->reflex_mode != RSF_REFLEX_OFF || options->frame_limit_us)
-        return RSF_BACKEND_ERROR_NOT_SUPPORTED;
-    auto& self = *static_cast<FfxSession*>(pointer);
-    const auto before=self.copied.read();
-    if (!self.chain) return RSF_BACKEND_ERROR_NOT_READY;
-    if (options->mode != RSF_FG_OFF && !options->generated_frames) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    // Called at every application Present. Repeating the request must not disable generation
-    // or reset temporal history between two consecutive source frames.
-    if (before.options.struct_size && before.options.mode == options->mode &&
-        before.options.generated_frames == options->generated_frames) return RSF_BACKEND_OK;
-    ffxConfigureDescFrameGeneration config{};
-    config.header.type = FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION;
-    config.swapChain = self.chain.Get(); config.frameGenerationEnabled = false;
-    config.frameGenerationCallback = generate; config.frameGenerationCallbackUserContext = &self;
-    config.frameID = ++self.sequence;
-    if (self.configure(&self.generation, &config.header) != FFX_API_RETURN_OK)
-        return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    self.copied.configured(*options,RSF_FG_OFF,0,RSF_REFLEX_OFF,true);
-    return RSF_BACKEND_OK;
-}
-rsf_backend_result begin(void* pointer, uint64_t id)
-{
-    return pointer && id ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-}
-rsf_backend_result marker(void* pointer, rsf_latency_marker, uint64_t id, uint32_t)
-{
-    return pointer && id ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-}
-rsf_backend_result prepare(void* pointer, void* command, const rsf_fg_frame* frame)
-{
-    if (!pointer) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    auto& self = *static_cast<FfxSession*>(pointer);
-    auto result = rsf::fg_frame(frame, self.device.Get()); if (result != 0) return result;
-    if (!self.chain) return RSF_BACKEND_ERROR_NOT_READY;
-    auto before=self.copied.read();
     const auto& record = *frame->record;
-    if (record.frame_id <= before.last_prepare) return RSF_BACKEND_ERROR_NOT_READY;
-    const bool enabled = frame->interpolate && before.options.mode != RSF_FG_OFF;
-    if (enabled) {
-        result = rsf::fg_command(command, self.device.Get()); if (result != 0) return result;
-        DXGI_SWAP_CHAIN_DESC1 current{};
-        if (FAILED(self.chain->GetDesc1(&current))) return RSF_BACKEND_ERROR_FEATURE_FAILED;
-        if (current.Width != self.description.displaySize.width || current.Height != self.description.displaySize.height ||
-            ffxApiGetSurfaceFormatDX12(current.Format) != self.description.backBufferFormat) {
-            // ResizeBuffers was drained by the presentation owner. The generation context's
-            // display extent is fixed at creation, independently of the proxy swapchain.
-            if (wait(self) != RSF_BACKEND_OK) return RSF_BACKEND_ERROR_NOT_READY;
-            if (self.destroy(&self.generation, nullptr) != FFX_API_RETURN_OK) return RSF_BACKEND_ERROR_FEATURE_FAILED;
-            self.generation = nullptr;
-            self.description.displaySize = {current.Width, current.Height};
-            self.description.maxRenderSize = self.description.displaySize;
-            self.description.backBufferFormat = ffxApiGetSurfaceFormatDX12(current.Format);
-            if (self.create(&self.generation, &self.description.header, nullptr) != FFX_API_RETURN_OK)
-                return RSF_BACKEND_ERROR_INIT_FAILED;
-            if (!self.copied.reset_history(before.revision)) return RSF_BACKEND_ERROR_NOT_READY;
-            before.history_valid = false;
-        }
-        if (record.output_width != self.description.displaySize.width || record.output_height != self.description.displaySize.height ||
-            record.render_width > self.description.maxRenderSize.width || record.render_height > self.description.maxRenderSize.height)
-            return RSF_BACKEND_ERROR_STALE_RESOURCES;
-        if (bool(record.camera.depth_inverted) != bool(self.description.flags & FFX_FRAMEGENERATION_ENABLE_DEPTH_INVERTED) ||
-            bool(record.camera.motion_jittered) != bool(self.description.flags & FFX_FRAMEGENERATION_ENABLE_MOTION_VECTORS_JITTER_CANCELLATION))
-            return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-        const rsf_backend_resource* inputs[] = {&frame->depth, &frame->motion, &frame->hudless};
-        for (const auto* input : inputs) {
-            if (!input->resource) continue;
-            const auto desc = static_cast<ID3D12Resource*>(input->resource)->GetDesc();
-            if (input->x || input->y || input->width != desc.Width || input->height != desc.Height)
-                return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-        }
-    }
-    if (enabled && (frame->depth.state != D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE ||
-        frame->motion.state != D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE ||
-        (frame->hudless.resource && frame->hudless.state != D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE)))
-        return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    ffxConfigureDescFrameGeneration config{};
-    config.header.type = FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION;
-    config.swapChain = self.chain.Get(); config.frameGenerationEnabled = enabled;
-    config.frameGenerationCallback = generate; config.frameGenerationCallbackUserContext = &self;
-    // The SDK's default callback performs HUDless UI extraction and composition.
-    // A copy callback is sufficient only when the caller explicitly declares no UI.
-    if (self.ui_mode == RSF_UI_MODE_NONE) {
-        config.presentCallback = present; config.presentCallbackUserContext = &self;
-    }
-    config.generationRect = {0, 0, static_cast<int32_t>(record.output_width), static_cast<int32_t>(record.output_height)};
-    config.frameID = ++self.sequence;
-    if (self.capture.enabled()) {
-        std::lock_guard lock(self.capture_guard);
-        self.capture_identities[config.frameID % self.capture_identities.size()] = {config.frameID, record};
-    }
-    if (enabled && self.ui_mode == RSF_UI_MODE_BACKBUFFER_HUDLESS) {
-        if (!frame->hudless.resource) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-        config.HUDLessColor = ffxApiGetResourceDX12(static_cast<ID3D12Resource*>(frame->hudless.resource));
-    }
-    if (self.configure(&self.generation, &config.header) != FFX_API_RETURN_OK) return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    const bool staged=self.copied.stage_prepare(before.revision,record.frame_id,enabled ? before.options.mode : RSF_FG_OFF,
-        enabled ? 1u : 0u);
-    if (!enabled) {
-        const bool completed=self.copied.complete_prepare(before.revision,record.frame_id,false,RSF_FG_OFF,0);
-        return staged && completed ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_NOT_READY;
-    }
-    if (!staged) return RSF_BACKEND_ERROR_NOT_READY;
     ffxDispatchDescFrameGenerationPrepareV2 data{};
     data.header.type = FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATION_PREPARE_V2;
-    data.frameID = self.sequence; data.commandList = command;
+    data.frameID = sequence;
+    data.commandList = command;
     data.renderSize = {record.render_width, record.render_height};
     data.jitterOffset = {record.camera.jitter_pixels[0], record.camera.jitter_pixels[1]};
     data.motionVectorScale = {frame->motion_scale_x, frame->motion_scale_y};
-    data.frameTimeDelta = record.frame_time_ms; data.cameraNear = record.camera.near_plane;
-    data.cameraFar = record.camera.far_plane; data.cameraFovAngleVertical = record.camera.vertical_fov_radians;
-    data.viewSpaceToMetersFactor = self.view_space_to_meters;
-    data.reset = (record.flags & RSF_FRAME_FLAG_RESET) || !before.history_valid || record.frame_id != before.last_prepare + 1;
+    data.frameTimeDelta = record.frame_time_ms;
+    data.cameraNear = record.camera.near_plane;
+    data.cameraFar = record.camera.far_plane;
+    data.cameraFovAngleVertical = record.camera.vertical_fov_radians;
+    data.viewSpaceToMetersFactor = meters;
+    data.reset = reset != 0;
     data.depth = ffxApiGetResourceDX12(static_cast<ID3D12Resource*>(frame->depth.resource));
     data.motionVectors = ffxApiGetResourceDX12(static_cast<ID3D12Resource*>(frame->motion.resource));
-    // Perspective W follows view Z. Unity's right-handed projection looks down
-    // negative Z; UE's positive-Z view basis remains positive.
-    const float forward_sign = record.camera.view_to_clip[11] < 0 ? -1.0f : 1.0f;
     for (uint32_t i = 0; i < 3; ++i) {
         data.cameraPosition[i] = record.camera.view_to_world[12 + i];
         data.cameraRight[i] = record.camera.view_to_world[i];
         data.cameraUp[i] = record.camera.view_to_world[4 + i];
         data.cameraForward[i] = forward_sign * record.camera.view_to_world[8 + i];
     }
-    const auto dispatched = self.dispatch(&self.generation, &data.header);
-    (void)self.capture.event(record, "fsr-prepare", data.frameID, data.reset, static_cast<int32_t>(dispatched));
-    if (dispatched != FFX_API_RETURN_OK) {
-        (void)self.copied.reset_history(before.revision); return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    }
-    return self.copied.complete_prepare(before.revision,record.frame_id,true,before.options.mode,1) ?
-        RSF_BACKEND_OK : RSF_BACKEND_ERROR_NOT_READY;
+    return static_cast<Bindings*>(bindings)->dispatch(&context, &data.header);
 }
-rsf_backend_result after(void* pointer)
+
+rsf_fsr12_capture_resource capture_resource(const FfxApiResource& resource)
 {
-    if (!pointer) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    auto& self = *static_cast<FfxSession*>(pointer);
-    const auto before=self.copied.read();
-    (void)self.capture.flush_after_queue(self.queue.Get(), [](void* user) noexcept -> int32_t {
-        try { return wait(*static_cast<FfxSession*>(user)) == RSF_BACKEND_OK; }
-        catch (...) { return 0; }
-    }, &self);
-    rsf::GenerationState::Observation observation{};
-    observation.replace_statistics=observation.replace_callbacks=true;
-    observation.generated_callbacks = self.ui_mode == RSF_UI_MODE_NONE ? self.generated.load() : self.dispatched.load();
-    observation.present_callbacks = self.presented.load(); observation.vendor_status = self.dispatch_result.load();
-    observation.valid_statistics = RSF_FG_STAT_ACTIVITY | (self.ui_mode == RSF_UI_MODE_NONE ? RSF_FG_STAT_PRESENT_CALLBACKS : 0u);
-    const auto observed = self.ui_mode == RSF_UI_MODE_NONE ? observation.generated_callbacks : self.dispatched.load();
-    observation.active = observed > self.observed_generated;
-    self.observed_generated = observed;
-    UINT count = 0;
-    const auto counter_result = self.chain->GetLastPresentCount(&count);
-    if (SUCCEEDED(counter_result)) {
-        const UINT delta = count >= self.last_dxgi_present || self.last_dxgi_present > 0xf0000000u ?
-            count - self.last_dxgi_present : count;
-        observation.total_presented_delta = delta; self.last_dxgi_present = count;
-        observation.valid_statistics |= RSF_FG_STAT_TOTAL_PRESENTED;
-    }
-    (void)self.copied.observed(before.revision,observation);
-    if (self.log && self.counter_reports++ < 6) {
-        char text[176]; std::snprintf(text, sizeof(text), "FSR FG counters source=%llu generated=%llu DXGI_present_count=%u query=%08lx",
-            static_cast<unsigned long long>(before.last_prepare), static_cast<unsigned long long>(self.dispatched.load()),
-            count, static_cast<unsigned long>(counter_result)); self.log(self.log_user, text);
-    }
-    return RSF_BACKEND_OK;
+    D3D12_RESOURCE_STATES state{};
+    if (!native_state(resource.state, state)) return {};
+    return {resource.resource, uint32_t(state)};
 }
-rsf_backend_result retirement(void* pointer, rsf_fg_retirement* out)
+
+uint32_t generate(void* bindings, void* context, void* raw, rsf_fsr12_generated* out)
 {
-    if (!pointer || !out || out->struct_size < sizeof(*out)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    // This integration does not enable async compute. Interpolation and HUD-less
-    // reads run on the game queue, whose completion fence the caller already owns.
-    // Waiting for every display Present here serializes subsequent rendering.
-    out->fence = nullptr; out->value = 0; return RSF_BACKEND_OK;
+    auto* desc = static_cast<ffxDispatchDescFrameGeneration*>(raw);
+    const auto result = static_cast<Bindings*>(bindings)->dispatch(&context, &desc->header);
+    out->command = desc->commandList;
+    out->sequence = desc->frameID;
+    out->count = desc->numGeneratedFrames;
+    out->reset = desc->reset;
+    if (result == FFX_API_RETURN_OK) {
+        out->input = capture_resource(desc->presentColor);
+        for (uint32_t i = 0; i < desc->numGeneratedFrames && i < 4; ++i)
+            out->outputs[i] = capture_resource(desc->outputs[i]);
+    }
+    return result;
 }
-rsf_backend_result abort_frame(void* pointer, uint64_t id)
+
+uint32_t copy_present(void* raw)
 {
-    if (!pointer || !id) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    auto& self = *static_cast<FfxSession*>(pointer);
-    self.copied.abort();
-    return RSF_BACKEND_OK;
+    const auto* desc = static_cast<const ffxCallbackDescFrameGenerationPresent*>(raw);
+    auto* list = static_cast<ID3D12GraphicsCommandList*>(desc->commandList);
+    auto* source = static_cast<ID3D12Resource*>(desc->currentBackBuffer.resource);
+    auto* output = static_cast<ID3D12Resource*>(desc->outputSwapChainBuffer.resource);
+    D3D12_RESOURCE_STATES source_state{}, output_state{};
+    if (!source || !output || !list || !native_state(desc->currentBackBuffer.state, source_state) ||
+        !native_state(desc->outputSwapChainBuffer.state, output_state)) return FFX_API_RETURN_ERROR_PARAMETER;
+    if (source != output) rsf::copy_transitioned(list, output, output_state, output_state, source, source_state, source_state);
+    return FFX_API_RETURN_OK;
 }
-rsf_backend_result status(void* pointer, rsf_fg_status* out) {
-    if (!pointer || !out || out->struct_size<sizeof(*out)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    *out=static_cast<FfxSession*>(pointer)->copied.read().status; return RSF_BACKEND_OK;
+
+int32_t present_count(void* chain, uint32_t* count)
+{
+    return static_cast<IDXGISwapChain4*>(chain)->GetLastPresentCount(count);
 }
-const rsf_generation_provider provider{sizeof(provider), create, configure, begin, marker, prepare, after, status, retirement, destroy, abort_frame};
+
+rsf_backend_result create(const rsf_generation_setup* setup, void** out, void** chain)
+{
+    static const rsf_fsr12_ops ops{&rsf::generation12_checks, rsf::FrameCapture12::native_platform(),
+        open, close, select_version, surface_format, create_generation, provider_matches, create_chain,
+        destroy_context, wait, chain_extent, whole_texture, configure, prepare, generate, copy_present, present_count};
+    return rsf_core_fsr12_create(&ops, setup, out, chain);
 }
-extern "C" const rsf_generation_provider* rsf_generation_fsr() { return &provider; }
+}
+
+extern "C" const rsf_generation_provider* rsf_generation_fsr()
+{
+    static const auto provider = [] {
+        auto value = *rsf_core_fsr12_provider();
+        value.create = create;
+        return value;
+    }();
+    return &provider;
+}
+
 extern "C" uint32_t rsf_generation_fsr4_supported(void* device, const char* directory)
 {
     if (!device || !directory || !*directory) return 0;
-    rsf_generation_setup setup{}; setup.runtime_directory_utf8 = directory;
+    rsf_generation_setup setup{};
+    setup.runtime_directory_utf8 = directory;
+    setup.chain.d3d12_device = device;
+    setup.feature_major = 4;
     HMODULE module = rsf::fg_library(setup, L"amd_fidelityfx_framegeneration_dx12.dll");
     if (!module) return 0;
     const auto query = rsf::entry<PfnFfxQuery>(module, "ffxQuery");
-    uint64_t count = 32, ids[32]{}, id = 0; const char* names[32]{}; char name[64]{};
-    ffxQueryDescGetVersions versions{}; versions.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
-    versions.createDescType = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION;
-    versions.device = device; versions.outputCount = &count; versions.versionIds = ids; versions.versionNames = names;
-    const bool supported = query && query(nullptr, &versions.header) == FFX_API_RETURN_OK && count <= 32 &&
-        rsf::select_ffx_version(ids, names, count, 4, 0, id, name, sizeof(name));
+    char name[64]{};
+    const bool supported = select_version(query, setup, name, sizeof(name)) != 0;
     FreeLibrary(module);
-    return supported ? 1u : 0u;
+    return uint32_t(supported);
 }
 #else
 extern "C" const rsf_generation_provider* rsf_generation_fsr() { return rsf::not_compiled_provider(); }
