@@ -2,6 +2,7 @@
 #include "rsf_godot_engine.h"
 #include "api.h"
 #include "graph.h"
+#include "viewport.h"
 #include "servers/rendering/renderer_rd/storage_rd/render_data_rd.h"
 #include "core/config/project_settings.h"
 #include "core/config/engine.h"
@@ -120,8 +121,10 @@ void set_render_frame(uint64_t frame, bool gameplay, double seconds) {
     render_delta = seconds;
     native_render_begin(frame);
     rsf_godot_status status{sizeof(status), RSF_GODOT_ABI_VERSION};
-    if (requested_sr.load() != 0 && requested_sr.load() != 6 && primary_viewport.is_valid() && native_status(&status) &&
-        status.requested_sr == requested_sr.load() && status.render_width && status.output_width) {
+    const uint32_t requested = requested_sr.load();
+    if (rsf_godot_viewport_mode(requested) == RSF_GODOT_VIEWPORT_TEMPORAL &&
+        primary_viewport.is_valid() && native_status(&status) && status.requested_sr == requested &&
+        requested_sr.load() == requested && status.render_width && status.output_width) {
         RSG::viewport->viewport_set_scaling_3d_scale(primary_viewport,
             double(status.render_width) / status.output_width);
     }
@@ -228,10 +231,10 @@ bool ReScaleFrameBridge::configure(const Dictionary &options, RID viewport) {
     requested_sr.store(value.sr_backend);
     RenderingServer *rs = RenderingServer::get_singleton();
     rs->call_on_render_thread(callable_mp_static(set_primary).bind(viewport));
-    rs->viewport_set_scaling_3d_mode(viewport, value.sr_backend == 0 ? RSE::VIEWPORT_SCALING_3D_MODE_BILINEAR :
-        value.sr_backend == 6 ? RSE::VIEWPORT_SCALING_3D_MODE_FSR : RSE::VIEWPORT_SCALING_3D_MODE_FSR2);
-    const double scales[] = {1.0, 2.0 / 3.0, 1.0 / 1.7, 0.5, 1.0 / 3.0, 0.77};
-    rs->viewport_set_scaling_3d_scale(viewport, value.sr_backend == 0 ? 1.0 : scales[value.quality]);
+    const uint32_t mode = rsf_godot_viewport_mode(value.sr_backend);
+    rs->viewport_set_scaling_3d_mode(viewport, mode == RSF_GODOT_VIEWPORT_NATIVE ? RSE::VIEWPORT_SCALING_3D_MODE_BILINEAR :
+        mode == RSF_GODOT_VIEWPORT_SPATIAL ? RSE::VIEWPORT_SCALING_3D_MODE_FSR : RSE::VIEWPORT_SCALING_3D_MODE_FSR2);
+    rs->viewport_set_scaling_3d_scale(viewport, rsf_godot_viewport_initial_scale(mode, value.quality));
     enabled.store(true);
     return true;
 }
@@ -362,10 +365,12 @@ void input_event(uint32_t kind) {
 }
 void render_size(RID target, const Vector2i &output, Vector2i &internal) {
     if (!ready || !enabled.load() || target != primary_target) return;
-    if (requested_sr.load() == 0) { internal = output; return; }
-    if (requested_sr.load() == 6) return;
+    const uint32_t requested = requested_sr.load();
+    const uint32_t mode = rsf_godot_viewport_mode(requested);
+    if (mode == RSF_GODOT_VIEWPORT_NATIVE) { internal = output; return; }
+    if (mode == RSF_GODOT_VIEWPORT_SPATIAL) return;
     rsf_godot_status status{sizeof(status), RSF_GODOT_ABI_VERSION};
-    if (native_status(&status) && status.requested_sr == requested_sr.load() &&
+    if (native_status(&status) && status.requested_sr == requested && requested_sr.load() == requested &&
         status.output_width == uint32_t(output.x) && status.output_height == uint32_t(output.y) && status.render_width && status.render_height)
         internal = Vector2i(status.render_width, status.render_height);
 }

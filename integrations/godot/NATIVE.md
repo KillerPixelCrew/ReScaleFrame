@@ -532,12 +532,9 @@ exported players, NVIDIA, Intel, AMD and software-device runs, and the visual ha
 2. `effect.cpp` keeps no owner state after the seventh slice. Its class registration, callback
    contract, typed scene reads, readback compute pass and Dictionary keys are godot-cpp leaves.
    Residual: the readback's extent check against a velocity override (see that slice).
-3. The engine module `modules/rescaleframe` (bridge, graph, motion, D3D12 and Vulkan drivers) is
-   compiled into the Godot engine by SCons against engine headers and cannot link this archive. It
-   still holds CPU frame identity and markers, the primary viewport, render-scale policy (the
-   per-quality scale table and scaling mode), history reset heuristics, camera matrices, motion
-   resolve and a second Dictionary option parser in `ReScaleFrameBridge::configure`. Sharing the
-   option schema there needs a new native export, which is an ABI change. Its input sources stay
+3. The SCons engine module still holds CPU frame identity and markers, the primary viewport,
+   status-based extent updates, history reset heuristics, camera matrices, motion resolve and the
+   direct Dictionary option parser in `ReScaleFrameBridge::configure`. Its input sources stay
    there and reach `window.rs` only through `rsfg_cpu`: the frame begin, input sample, simulation
    and frame end events (`cpu_begin`, `cpu_simulation_begin`, `queue_frame`, `cpu_end`), and the
    keyboard, mouse/touch and joypad kinds `Input::_parse_input_event_impl` reports through
@@ -552,6 +549,51 @@ exported players, NVIDIA, Intel, AMD and software-device runs, and the visual ha
    records.
 
 `extension.cpp` (the GDExtension entry) and the godot-cpp class bindings stay C++.
+
+## Engine module viewport policy
+
+At RSF `31a06a94`, `eng/build-godot-engine.ps1` passed `custom_modules` to Godot `4.7.2`
+(`ed1daf0bf001b61586d9930840f2f1394092c079`). Godot's `modules/SCsub` collected the external
+module's C++ objects into `module_rescaleframe`. At runtime the module loaded
+`ReScaleFrame.Godot.Native.dll`, resolved existing `rsfg_*` functions and registered
+`rsf_godot_engine_services`. The controller calls the GDExtension's `configure`, which uses
+`native/extension.rs` to compose settings and hands them back through that service table.
+`configure_from_extension` reconstitutes the Dictionary for the native bridge. The direct
+`ReScaleFrame.configure` singleton call still uses Godot's Variant conversions, which differ
+from the GDExtension's integer type and range checks. Sharing that parser would require a
+separate compatibility review.
+
+`modules/rescaleframe/SCsub` now invokes `rustc --emit=obj` from the repository root, where
+rustup reads `rust-toolchain.toml`. The command uses the SCons Windows target architecture and
+compiler ABI. Godot archives the resulting `no_std` object with the native module objects for
+standalone editors and export templates, including .NET builds. The
+module uses two private C linkage functions in `viewport.h` and `viewport.rs` and continues
+to load the native DLL through its existing ABI. This path has no Cargo or godot-cpp dependency.
+
+Rust owns the requested engine scaling class and the initial scale. Off selects native-size
+bilinear, Spatial selects Godot's FSR spatial path, and the remaining requests, including Auto,
+select Godot's FSR2 temporal path. Godot's native temporal pass still runs before the RSF hook
+at tonemapping. The initial per-axis scales retain the old ratios (`1`, `2/3`, `1/1.7`, `1/2`,
+`1/3`, `0.77`) and their double-to-float conversion. `rsf-upscaler::Quality::scale` evaluates
+Balanced in single precision and has no Ultra Quality entry. Its rounded extent helper also
+differs from the native viewport's size calculation. The DLL keeps request validation and
+provider selection.
+
+The bridge still checks the root `RID`, queues the primary render target, and applies the typed
+Godot mode and scale. On each temporal frame it uses a matching reported width ratio. At the
+guarded viewport sizing hook it uses exact reported dimensions when both output axes match and
+the render extent is nonzero.
+Each status-driven update also requires the classified request to still be current. Off restores
+the exact output size, and Spatial keeps Godot's dimensions. Allocation, jitter, graph execution
+and recovery stay on their existing paths.
+
+Source comparison covered the pinned Godot module/archive wiring and `RendererViewport`'s float
+setter and sizing hook. Pinned Rust formatting, locked offline Cargo metadata and whitespace
+checks passed. Open verification includes SCons object compilation and final linkage, symbol and
+DLL export checks, and standard/.NET editor and template runs covering Off, Spatial, Auto,
+temporal quality switches, resize and fallback. The documented build targets Windows x64 MSVC.
+Other Windows toolchains and target architectures are unverified. This path requires a Rust
+target that matches the Godot build, which is unavailable for ARM32 MinGW.
 
 ## Build requirements
 
