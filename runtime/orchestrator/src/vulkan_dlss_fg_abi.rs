@@ -34,17 +34,39 @@ pub(super) struct SdkCall {
     pub input: *const Frame,
     pub record: *const Record,
     pub images: *const Image,
+    pub backbuffers: u32,
+}
+
+#[repr(C)]
+#[derive(Default)]
+pub(super) struct Swapchain {
+    pub width: u32,
+    pub height: u32,
+    pub format: u32,
+    pub layers: u32,
+    pub has_surface: u32,
+}
+
+#[repr(C)]
+#[derive(Default)]
+pub(super) struct ChainSupport {
+    pub usage: u32,
+    pub capture_enabled: u32,
 }
 
 #[repr(C)]
 pub(super) struct Platform {
     pub gpu: *const Gpu,
+    pub describe: unsafe extern "C" fn(*const c_void, *mut Swapchain),
     pub open: unsafe extern "C" fn(*const Setup, *mut Handle) -> i32,
     pub close: unsafe extern "C" fn(Handle),
-    pub create_chain: unsafe extern "C" fn(Handle, *mut u64, *mut Handle) -> i32,
-    pub images: unsafe extern "C" fn(Handle, *mut u32, *mut u64) -> i32,
-    pub acquire: unsafe extern "C" fn(Handle, u64, u64, u64, *mut u32) -> i32,
-    pub valid_present: unsafe extern "C" fn(Handle, *const c_void) -> u32,
+    pub prepare_chain: unsafe extern "C" fn(Handle, *mut ChainSupport, *mut Handle) -> i32,
+    pub create_chain: unsafe extern "C" fn(Handle, u32, *mut u64) -> i32,
+    pub destroy_chain: unsafe extern "C" fn(Handle, u64),
+    pub start_capture: unsafe extern "C" fn(Handle) -> i32,
+    pub images: unsafe extern "C" fn(Handle, u64, *mut u32, *mut u64) -> i32,
+    pub acquire: unsafe extern "C" fn(Handle, u64, u64, u64, u64, *mut u32) -> i32,
+    pub valid_present: unsafe extern "C" fn(u64, *const c_void) -> u32,
     pub present: unsafe extern "C" fn(Handle, *const c_void) -> i32,
     pub invoke: unsafe extern "C" fn(*const rsf_slvk_call) -> i32,
     pub initialize: rsf_slvk_callback,
@@ -66,6 +88,8 @@ pub(super) struct Platform {
 
 const _: () = {
     assert!(size_of::<Sample>() == 40);
-    assert!(size_of::<SdkCall>() == 88);
-    assert!(size_of::<Platform>() == 192);
+    assert!(size_of::<SdkCall>() == 96);
+    assert!(size_of::<Swapchain>() == 20);
+    assert!(size_of::<ChainSupport>() == 8);
+    assert!(size_of::<Platform>() == 224);
 };

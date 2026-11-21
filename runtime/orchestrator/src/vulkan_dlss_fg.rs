@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::sr_session::has_capacity;
-use crate::vulkan_dlss_fg_abi::{Handle, Platform, Sample, SdkCall};
+use crate::vulkan_dlss_fg_abi::{ChainSupport, Handle, Platform, Sample, SdkCall, Swapchain};
 use crate::vulkan_fg_abi::{
     RSF_FGVK_ABI_VERSION, RSF_FGVK_FRAME_SLOTS, rsf_dlssgvk_status as Status,
     rsf_fgvk_frame as Frame, rsf_fgvk_frame_slot as Recording, rsf_fgvk_setup as Setup,
@@ -35,11 +35,14 @@ const INCOMPLETE: i32 = 5;
 const SUBOPTIMAL: i32 = 1000001003;
 const TRANSFER_SRC: u32 = 6;
 const SHADER_READ: u32 = 5;
+const USAGE_TRANSFER_SRC: u32 = 1;
+const USAGE_TRANSFER_DST: u32 = 2;
 const R32F: u32 = 100;
 // Preserve the C++ admission threshold (3.141593f).
 const MAX_FOV: f32 = f32::from_bits(0x4049_0fdc);
 const RG16F: u32 = 83;
 const RGBA8: u32 = 37;
+const BGRA8: u32 = 44;
 const SLOTS: usize = RSF_FGVK_FRAME_SLOTS as usize;
 
 unsafe extern "C" {
@@ -166,6 +169,8 @@ struct Owner {
     platform: &'static Platform,
     native: Handle,
     gpu: Handle,
+    chain: u64,
+    backbuffers: u32,
     setup: Setup,
     timeline: Timeline,
     slots: [Slot; SLOTS],
@@ -186,6 +191,9 @@ impl Drop for Owner {
                     rsf_core_vkfg_release_fences(self.platform.gpu, self.gpu, &mut slot.fences)
                 };
             }
+        }
+        if self.chain != 0 {
+            unsafe { (self.platform.destroy_chain)(self.native, self.chain) };
         }
         unsafe { (self.platform.close)(self.native) };
     }
@@ -258,6 +266,44 @@ unsafe extern "C" fn record_inputs(module: Handle, token: usize, user: Handle) -
 }
 
 impl Owner {
+    fn create_chain(&mut self) -> i32 {
+        let mut support = ChainSupport::default();
+        let prepared =
+            unsafe { (self.platform.prepare_chain)(self.native, &mut support, &mut self.gpu) };
+        if prepared != OK {
+            return prepared;
+        }
+        if self.gpu.is_null() {
+            return INIT_FAILED;
+        }
+        // Generated frames need a WSI copy destination. Capture also needs a
+        // copy source. Keep source usage when available for capture tooling.
+        let required = USAGE_TRANSFER_DST
+            | if support.capture_enabled != 0 {
+                USAGE_TRANSFER_SRC
+            } else {
+                0
+            };
+        if support.usage & required != required {
+            return NOT_SUPPORTED;
+        }
+        let usage = required | (support.usage & USAGE_TRANSFER_SRC);
+        let mut chain = 0;
+        let result = unsafe { (self.platform.create_chain)(self.native, usage, &mut chain) };
+        if result != OK || chain == 0 {
+            return INIT_FAILED;
+        }
+        // From here on a refused enumeration or capture registration rolls back the chain.
+        self.chain = chain;
+        let enumerated = unsafe {
+            (self.platform.images)(self.native, chain, &mut self.backbuffers, ptr::null_mut())
+        };
+        if enumerated != OK || self.backbuffers == 0 {
+            return INIT_FAILED;
+        }
+        unsafe { (self.platform.start_capture)(self.native) }
+    }
+
     fn sdk(
         &mut self,
         callback: rsf_slvk_callback,
@@ -268,6 +314,7 @@ impl Owner {
             native: self.native,
             result: self.status.sdk_result,
             count,
+            backbuffers: self.backbuffers,
             ..Default::default()
         };
         let result = invoke(
@@ -509,7 +556,7 @@ impl Owner {
     }
 
     fn present(&mut self, info: *const c_void, source: PresentSource) -> i32 {
-        if info.is_null() || unsafe { (self.platform.valid_present)(self.native, info) } == 0 {
+        if info.is_null() || unsafe { (self.platform.valid_present)(self.chain, info) } == 0 {
             return WSI_ERROR;
         }
         let id = source.frame(self.timeline.last_prepared.frame_id);
@@ -691,20 +738,34 @@ unsafe extern "C" fn rsf_core_dlgvk_create(
     let Some(platform) = (unsafe { platform.as_ref() }) else {
         return NOT_COMPILED;
     };
+    let mut description = Swapchain::default();
+    unsafe { (platform.describe)(setup.create_info, &mut description) };
+    if description.has_surface == 0
+        || [description.width, description.height]
+            != [graphics.output_width, graphics.output_height]
+        || !matches!(description.format, RGBA8 | BGRA8)
+        || description.layers != 1
+    {
+        return INVALID;
+    }
+    let Some(claim) = Claim::take() else {
+        return NOT_READY;
+    };
     let mut native = ptr::null_mut();
     let opened = unsafe { (platform.open)(setup, &mut native) };
     if opened != OK {
         return opened;
     }
-    let Some(claim) = Claim::take() else {
-        unsafe { (platform.close)(native) };
-        return NOT_READY;
-    };
+    if native.is_null() {
+        return INIT_FAILED;
+    }
     let mut owner = Box::new(Owner {
         _claim: claim,
         platform,
         native,
         gpu: ptr::null_mut(),
+        chain: 0,
+        backbuffers: 0,
         // The C host keeps the allocator and callback contexts alive for this owner.
         setup: unsafe { ptr::read(setup) },
         timeline: unsafe { std::mem::zeroed() },
@@ -738,15 +799,14 @@ unsafe extern "C" fn rsf_core_dlgvk_create(
     {
         return NOT_SUPPORTED;
     }
-    let mut native_chain = 0;
-    let result = unsafe { (platform.create_chain)(native, &mut native_chain, &mut owner.gpu) };
+    let result = owner.create_chain();
     if result != OK {
         return result;
     }
     owner.status.presentation.available = 1;
     take_api_error();
     unsafe {
-        chain.write(native_chain);
+        chain.write(owner.chain);
         out.write(Box::into_raw(owner));
     }
     OK
@@ -763,18 +823,18 @@ unsafe extern "C" fn rsf_core_dlgvk_images(
     };
     let enumerate = owner.platform.images;
     if images.is_null() {
-        return unsafe { enumerate(owner.native, count, images) };
+        return unsafe { enumerate(owner.native, owner.chain, count, images) };
     }
     // The SDK's proxy can refuse an oversized capacity without filling images.
     let capacity = *count;
     let mut available = 0;
-    let queried = unsafe { enumerate(owner.native, &mut available, ptr::null_mut()) };
+    let queried = unsafe { enumerate(owner.native, owner.chain, &mut available, ptr::null_mut()) };
     if queried != OK {
         *count = 0;
         return queried;
     }
     *count = capacity.min(available);
-    let filled = unsafe { enumerate(owner.native, count, images) };
+    let filled = unsafe { enumerate(owner.native, owner.chain, count, images) };
     if *count > capacity || *count > available {
         *count = 0;
         return WSI_ERROR;
@@ -800,7 +860,7 @@ unsafe extern "C" fn rsf_core_dlgvk_acquire(
     if index.is_null() {
         return WSI_ERROR;
     }
-    unsafe { (owner.platform.acquire)(owner.native, timeout, semaphore, fence, index) }
+    unsafe { (owner.platform.acquire)(owner.native, owner.chain, timeout, semaphore, fence, index) }
 }
 
 #[unsafe(no_mangle)]

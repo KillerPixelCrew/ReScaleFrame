@@ -33,8 +33,6 @@ void on_error(const sl::APIError& error) { rsf_core_dlgvk_report_api_error(stati
 struct Native {
     rsf_fgvk_setup setup{};
     VkSwapchainCreateInfoKHR info{};
-    VkSwapchainKHR chain{};
-    uint32_t backbuffers{};
     PFN_vkCreateSwapchainKHR create_chain = nullptr;
     PFN_vkDestroySwapchainKHR destroy_chain = nullptr;
     PFN_vkGetSwapchainImagesKHR images = nullptr;
@@ -54,14 +52,14 @@ struct Native {
     rsf::DlssPresentCapture present_capture;
 
     VkDevice device() const { return static_cast<VkDevice>(setup.graphics.device); }
-    ~Native() {
-        if (chain) destroy_chain(device(), chain, static_cast<const VkAllocationCallbacks*>(setup.allocator));
-    }
 };
 
 static_assert(sizeof(rsf_dlgvk_sample) == 40);
-static_assert(sizeof(rsf_dlgvk_sdk_call) == 88);
-static_assert(sizeof(rsf_dlgvk_platform) == 192);
+static_assert(sizeof(rsf_dlgvk_sdk_call) == 96);
+static_assert(sizeof(rsf_dlgvk_swapchain) == 20 && sizeof(rsf_dlgvk_chain_support) == 8);
+static_assert(sizeof(rsf_dlgvk_platform) == 224);
+static_assert(VK_IMAGE_USAGE_TRANSFER_SRC_BIT == 1 && VK_IMAGE_USAGE_TRANSFER_DST_BIT == 2 &&
+    VK_FORMAT_R8G8B8A8_UNORM == 37 && VK_FORMAT_B8G8R8A8_UNORM == 44);
 
 rsf_backend_result sdk_result(rsf_dlgvk_sdk_call& call, sl::Result result) {
     call.result = static_cast<int32_t>(result);
@@ -98,7 +96,7 @@ rsf_backend_result configure(void*, uintptr_t, void* user) {
     options.flags = sl::DLSSGFlags::eRetainResourcesWhenOff;
     options.numFramesToGenerate = enabled ? call.count : 1;
     options.colorWidth = self.info.imageExtent.width; options.colorHeight = self.info.imageExtent.height;
-    options.colorBufferFormat = self.info.imageFormat; options.numBackBuffers = self.backbuffers;
+    options.colorBufferFormat = self.info.imageFormat; options.numBackBuffers = call.backbuffers;
     options.depthBufferFormat = VK_FORMAT_R32_SFLOAT; options.mvecBufferFormat = VK_FORMAT_R16G16_SFLOAT;
     options.hudLessBufferFormat = VK_FORMAT_R8G8B8A8_UNORM;
     options.queueParallelismMode = sl::DLSSGQueueParallelismMode::eBlockNoClientQueues;
@@ -203,24 +201,27 @@ rsf_backend_result release(void*, uintptr_t, void* user) {
     return sdk_result(call, static_cast<Native*>(call.native)->release(sl::kFeatureDLSS_G, viewport));
 }
 
+void describe(const void* create_info, rsf_dlgvk_swapchain* out) noexcept {
+    if (*static_cast<const VkStructureType*>(create_info) != VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR) {
+        *out = {};
+        return;
+    }
+    const auto& info = *static_cast<const VkSwapchainCreateInfoKHR*>(create_info);
+    *out = {info.imageExtent.width, info.imageExtent.height, static_cast<uint32_t>(info.imageFormat),
+        info.imageArrayLayers, info.surface ? 1u : 0u};
+}
+
 rsf_backend_result open(const rsf_fgvk_setup* setup, void** out) noexcept try {
-    const auto& graphics = setup->graphics;
-    const auto& info = *static_cast<const VkSwapchainCreateInfoKHR*>(setup->create_info);
-    if (info.sType != VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR || !info.surface ||
-        info.imageExtent.width != graphics.output_width || info.imageExtent.height != graphics.output_height ||
-        (info.imageFormat != VK_FORMAT_B8G8R8A8_UNORM && info.imageFormat != VK_FORMAT_R8G8B8A8_UNORM) || info.imageArrayLayers != 1)
-        return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     auto self = std::make_unique<Native>();
     self->setup = *setup;
-    self->info = info;
+    self->info = *static_cast<const VkSwapchainCreateInfoKHR*>(setup->create_info);
     *out = self.release();
     return RSF_BACKEND_OK;
 } catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
 
-rsf_backend_result create_chain(void* user, uint64_t* chain, void** gpu) noexcept try {
+rsf_backend_result prepare_chain(void* user, rsf_dlgvk_chain_support* support, void** gpu) noexcept try {
     auto* self = static_cast<Native*>(user);
     const auto& graphics = self->setup.graphics;
-    auto& info = self->info;
 #define RSF_LOAD(member, function) self->member = reinterpret_cast<PFN_##function>(graphics.device_proc(graphics.device, #function)); if (!self->member) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT
     RSF_LOAD(create_chain, vkCreateSwapchainKHR); RSF_LOAD(destroy_chain, vkDestroySwapchainKHR);
     RSF_LOAD(images, vkGetSwapchainImagesKHR); RSF_LOAD(acquire, vkAcquireNextImageKHR); RSF_LOAD(present, vkQueuePresentKHR);
@@ -235,52 +236,56 @@ rsf_backend_result create_chain(void* user, uint64_t* chain, void** gpu) noexcep
     self->gpu.memory_types(memory);
     self->capture.set_provider(0, RSF_SR_DLSS, true);
     if (!self->capture.initialize(static_cast<VkDevice>(graphics.device), graphics.device_proc, memory)) return RSF_BACKEND_ERROR_INIT_FAILED;
-    // DLSS copies completed/generated frames into the real WSI images. Their
-    // creation usage must allow that destination even without diagnostics.
     const auto capabilities = reinterpret_cast<PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR>(graphics.instance_proc(graphics.instance, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR"));
     VkSurfaceCapabilitiesKHR supported{};
-    const VkImageUsageFlags required_usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-        (self->capture.enabled() ? VK_IMAGE_USAGE_TRANSFER_SRC_BIT : 0);
-    if (!capabilities || capabilities(static_cast<VkPhysicalDevice>(graphics.physical_device), info.surface, &supported) != VK_SUCCESS ||
-        (supported.supportedUsageFlags & required_usage) != required_usage) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
-    info.imageUsage |= required_usage;
-    if (supported.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) info.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-    // Streamline's LL2 create/destroy hooks acquire their own swapchain mutex.
-    // The outer WSI broker is only for image/acquire/present operations.
-    VkSwapchainKHR created_chain{};
-    const auto created = self->create_chain(self->device(), &info,
-        static_cast<const VkAllocationCallbacks*>(self->setup.allocator), &created_chain);
-    if (created != VK_SUCCESS || !created_chain) return RSF_BACKEND_ERROR_INIT_FAILED;
-    self->chain = created_chain;
-
-    // The owner remains unpublished until both enumeration and capture setup succeed.
-    // Native closes a partial chain before returning control to the host.
-    if (self->images(self->device(), self->chain, &self->backbuffers, nullptr) != VK_SUCCESS)
-        return RSF_BACKEND_ERROR_INIT_FAILED;
-    const auto capture = self->present_capture.initialize(self->setup);
-    if (capture != RSF_BACKEND_OK) return capture;
-    *chain = reinterpret_cast<uint64_t>(self->chain);
+    if (!capabilities || capabilities(static_cast<VkPhysicalDevice>(graphics.physical_device), self->info.surface, &supported) != VK_SUCCESS)
+        return RSF_BACKEND_ERROR_NOT_SUPPORTED;
+    *support = {supported.supportedUsageFlags, self->capture.enabled() ? 1u : 0u};
     *gpu = &self->gpu;
     return RSF_BACKEND_OK;
 } catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
 
+int32_t create_chain(void* user, uint32_t usage, uint64_t* chain) noexcept {
+    auto& self = *static_cast<Native*>(user);
+    auto info = self.info;
+    info.imageUsage |= usage;
+    // Streamline's LL2 create/destroy hooks acquire their own swapchain mutex.
+    // The outer WSI broker is only for image/acquire/present operations.
+    VkSwapchainKHR created_chain{};
+    const auto result = self.create_chain(self.device(), &info,
+        static_cast<const VkAllocationCallbacks*>(self.setup.allocator), &created_chain);
+    if (result == VK_SUCCESS) *chain = reinterpret_cast<uint64_t>(created_chain);
+    return result;
+}
+
 constexpr rsf_dlgvk_platform platform{
-    &rsf::vkfg::platform, open,
+    &rsf::vkfg::platform, describe, open,
     [](void* user) { delete static_cast<Native*>(user); },
+    prepare_chain,
     create_chain,
-    [](void* user, uint32_t* count, uint64_t* images) -> int32_t {
+    [](void* user, uint64_t chain) {
         auto& self = *static_cast<Native*>(user);
-        return self.images(self.device(), self.chain, count, reinterpret_cast<VkImage*>(images));
+        self.destroy_chain(self.device(), reinterpret_cast<VkSwapchainKHR>(chain),
+            static_cast<const VkAllocationCallbacks*>(self.setup.allocator));
     },
-    [](void* user, uint64_t timeout, uint64_t semaphore, uint64_t fence, uint32_t* index) -> int32_t {
+    [](void* user) noexcept -> rsf_backend_result {
+        try {
+            auto& self = *static_cast<Native*>(user);
+            return self.present_capture.initialize(self.setup);
+        } catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
+    },
+    [](void* user, uint64_t chain, uint32_t* count, uint64_t* images) -> int32_t {
         auto& self = *static_cast<Native*>(user);
-        return self.acquire(self.device(), self.chain, timeout,
+        return self.images(self.device(), reinterpret_cast<VkSwapchainKHR>(chain), count, reinterpret_cast<VkImage*>(images));
+    },
+    [](void* user, uint64_t chain, uint64_t timeout, uint64_t semaphore, uint64_t fence, uint32_t* index) -> int32_t {
+        auto& self = *static_cast<Native*>(user);
+        return self.acquire(self.device(), reinterpret_cast<VkSwapchainKHR>(chain), timeout,
             reinterpret_cast<VkSemaphore>(semaphore), reinterpret_cast<VkFence>(fence), index);
     },
-    [](void* user, const void* value) -> uint32_t {
+    [](uint64_t chain, const void* value) -> uint32_t {
         const auto& info = *static_cast<const VkPresentInfoKHR*>(value);
-        const auto& self = *static_cast<Native*>(user);
-        return info.swapchainCount == 1 && info.pSwapchains && info.pSwapchains[0] == self.chain;
+        return info.swapchainCount == 1 && info.pSwapchains && info.pSwapchains[0] == reinterpret_cast<VkSwapchainKHR>(chain);
     },
     [](void* user, const void* value) -> int32_t {
         auto& self = *static_cast<Native*>(user);

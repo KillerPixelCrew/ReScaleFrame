@@ -10,6 +10,10 @@ uint64_t lease_session = 7, lease_frame = 42;
 uint32_t sdk_token = 42;
 uint32_t on_calls = 0, off_calls = 0, present_calls = 0, fence_submits = 0, destroyed_chains = 0;
 uint32_t sdk_presented = 0, copies = 0, release_calls = 0, max_generated = 3;
+uint32_t backbuffer_count = 3;
+VkImageUsageFlags surface_usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+VkImageUsageFlags expected_chain_usage = surface_usage;
+uint32_t chain_creates = 0;
 bool refuse_create = false, refuse_enumeration = false;
 bool refuse_options = false, refuse_submit = false, refuse_tags = false, refuse_release = false;
 uint64_t worker_timeout_epoch = 0;
@@ -83,8 +87,9 @@ rsf_backend_result fake_initialize(void*, uintptr_t, void* user) {
 }
 
 VkResult VKAPI_PTR create_images(VkDevice value, const VkSwapchainCreateInfoKHR* info, const VkAllocationCallbacks* used, VkSwapchainKHR* out) {
-    require(value == device && used == allocator && !locked && (info->imageUsage & VK_IMAGE_USAGE_TRANSFER_DST_BIT),
-        "native proxy creation retains the allocator and adds WSI destination usage outside the broker");
+    require(value == device && used == allocator && !locked && info->imageUsage == expected_chain_usage,
+        "native proxy creation retains the allocator and exact WSI usage outside the broker");
+    ++chain_creates;
     *out = chain; return refuse_create ? VK_ERROR_INITIALIZATION_FAILED : VK_SUCCESS;
 }
 void VKAPI_PTR destroy_images(VkDevice value, VkSwapchainKHR actual, const VkAllocationCallbacks* used) {
@@ -94,7 +99,7 @@ void VKAPI_PTR destroy_images(VkDevice value, VkSwapchainKHR actual, const VkAll
 VkResult VKAPI_PTR enumerate_images(VkDevice value, VkSwapchainKHR actual, uint32_t* count, VkImage* images) {
     require(value == device && actual == chain, "enumeration uses the owned proxy");
     if (refuse_enumeration) return VK_ERROR_INITIALIZATION_FAILED;
-    if (!images) { *count = 3; return VK_SUCCESS; }
+    if (!images) { *count = backbuffer_count; return VK_SUCCESS; }
     if (*count > 3) { *count = 3; return VK_INCOMPLETE; }
     for (uint32_t i = 0; i < *count; ++i) images[i] = reinterpret_cast<VkImage>(uintptr_t(100 + i));
     return *count < 3 ? VK_INCOMPLETE : VK_SUCCESS;
@@ -159,7 +164,7 @@ void VKAPI_PTR memory_properties(VkPhysicalDevice, VkPhysicalDeviceMemoryPropert
     *info = {}; info->memoryTypeCount = 1; info->memoryTypes[0].propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
 }
 VkResult VKAPI_PTR surface_capabilities(VkPhysicalDevice, VkSurfaceKHR, VkSurfaceCapabilitiesKHR* info) {
-    *info = {}; info->supportedUsageFlags = VK_IMAGE_USAGE_TRANSFER_DST_BIT; return VK_SUCCESS;
+    *info = {}; info->supportedUsageFlags = surface_usage; return VK_SUCCESS;
 }
 // Dedicated present capture leaves. The packet functions bypass the SDK proxy.
 const auto capture_pool = reinterpret_cast<VkCommandPool>(0x500);
@@ -383,6 +388,7 @@ int main() {
     VkSwapchainCreateInfoKHR create{VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
     create.surface = reinterpret_cast<VkSurfaceKHR>(5); create.imageExtent = {1280, 720};
     create.imageFormat = VK_FORMAT_B8G8R8A8_UNORM; create.imageArrayLayers = 1;
+    create.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     rsf_fgvk_setup setup{sizeof(setup), RSF_FGVK_ABI_VERSION};
     setup.graphics = {sizeof(setup.graphics), RSF_SRVK_ABI_VERSION};
     setup.graphics.instance = reinterpret_cast<void*>(6); setup.graphics.physical_device = reinterpret_cast<void*>(7);
@@ -391,6 +397,15 @@ int main() {
     setup.queues[0] = queue; setup.queue_user = queue; setup.create_info = &create; setup.allocator = allocator;
     setup.graphics_submit = submit; setup.lock_queues = lock; setup.unlock_queues = unlock;
     rsf_dlssgvk* owner{}; uint64_t chain_out{};
+    const VkStructureType bad_type = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    setup.create_info = &bad_type;
+    require(rsf_core_dlgvk_create(&synthetic, &setup, &owner, &chain_out) == RSF_BACKEND_ERROR_INVALID_ARGUMENT &&
+        !owner && !chain_out && !chain_creates, "foreign Vulkan struct prefix refused before proxy creation");
+    setup.create_info = &create;
+    create.imageArrayLayers = 2;
+    require(rsf_core_dlgvk_create(&synthetic, &setup, &owner, &chain_out) == RSF_BACKEND_ERROR_INVALID_ARGUMENT &&
+        !owner && !chain_out && !chain_creates, "invalid swapchain descriptor refused before proxy creation");
+    create.imageArrayLayers = 1;
     require(rsf_core_dlgvk_create(&synthetic, &setup, &owner, &chain_out) == RSF_BACKEND_OK && owner &&
         chain_out == reinterpret_cast<uint64_t>(chain), "Rust publishes only the complete proxy owner");
     rsf_dlssgvk* second{}; uint64_t second_chain{};
@@ -526,6 +541,32 @@ int main() {
     require(rsf_core_dlgvk_create(&synthetic, &setup, &owner, &chain_out) == RSF_BACKEND_ERROR_INIT_FAILED &&
         !owner && !chain_out && destroyed_chains == 3, "enumeration refusal closes the unpublished proxy");
     refuse_enumeration = false;
+    backbuffer_count = 0;
+    require(rsf_core_dlgvk_create(&synthetic, &setup, &owner, &chain_out) == RSF_BACKEND_ERROR_INIT_FAILED &&
+        !owner && !chain_out && destroyed_chains == 4, "zero-image proxy is refused and destroyed before publication");
+    backbuffer_count = 3;
+    auto capture_required = synthetic;
+    capture_required.prepare_chain = [](void* native, rsf_dlgvk_chain_support* support, void** gpu) {
+        const auto result = platform.prepare_chain(native, support, gpu);
+        if (result == RSF_BACKEND_OK) support->capture_enabled = 1;
+        return result;
+    };
+    const auto before_usage = chain_creates;
+    require(rsf_core_dlgvk_create(&capture_required, &setup, &owner, &chain_out) == RSF_BACKEND_ERROR_NOT_SUPPORTED &&
+        !owner && !chain_out && chain_creates == before_usage, "capture requires transfer source support before proxy creation");
+    surface_usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    require(rsf_core_dlgvk_create(&synthetic, &setup, &owner, &chain_out) == RSF_BACKEND_ERROR_NOT_SUPPORTED &&
+        !owner && !chain_out && chain_creates == before_usage, "missing transfer destination refuses before proxy creation");
+    surface_usage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    expected_chain_usage = surface_usage;
+    auto capture_refused = synthetic;
+    capture_refused.start_capture = [](void*) { return RSF_BACKEND_ERROR_FEATURE_FAILED; };
+    require(rsf_core_dlgvk_create(&capture_refused, &setup, &owner, &chain_out) == RSF_BACKEND_ERROR_FEATURE_FAILED &&
+        !owner && !chain_out && destroyed_chains == 5, "capture refusal rolls back the unpublished proxy");
+    require(rsf_core_dlgvk_create(&synthetic, &setup, &owner, &chain_out) == RSF_BACKEND_OK && chain_out &&
+        create.imageUsage == VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT &&
+        rsf_dlssgvk_destroy(owner) == RSF_BACKEND_OK && destroyed_chains == 6,
+        "retry preserves caller usage and adds supported transfer source even with capture off");
     check_present_capture(setup);
     std::puts("Synthetic DLSS Vulkan FG identity, MFG and WSI checks passed");
 }

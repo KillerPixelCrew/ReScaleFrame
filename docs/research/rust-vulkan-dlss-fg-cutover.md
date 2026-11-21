@@ -91,3 +91,36 @@ Logs and the stub/export comparison script are in the worker's ignored
 NVIDIA SDK execution, GPU completion, captured pixels and game rendering remain
 unverified for this build. No device, visible-window, game or full verification
 suite was run.
+
+## Proxy creation ownership
+
+The first Rust port still left the Vulkan proxy handle, image count,
+transfer-usage selection and creation sequence in the native wrapper.
+The Rust owner now validates the marshalled swapchain description, holds
+the only proxy handle and gives its enumerated image count to Streamline.
+It preserves caller usage, requires transfer destination support and
+requires transfer source support when capture is enabled. It also adds
+transfer source usage when supported with capture off. The typed native
+calls still use the host's device, allocator, queue and Streamline dispatch.
+Proxy create and destroy stay outside the host's WSI broker because
+Streamline takes its own swapchain lock there. Frame tagging, callback
+leases and retirement checks follow the existing path above.
+
+The synthetic fixture reproduced a zero-image proxy on the previous
+implementation. When enumeration returned success with a zero count,
+the public creation call accepted the chain. The Rust owner now refuses
+that count and destroys the unpublished proxy once. The enabled fixture
+also verified a foreign Vulkan struct tag, transfer capability refusal,
+capture registration failure and rollback, and successful creation and
+teardown on retry.
+
+The MSVC Release tree built the Runtime with the corrected Streamline
+receipt for `2122257e0fce486f91b385aa63b9a09b0a34b363` and passed nine
+Vulkan CPU and ABI contracts. Runtime, AC7, Loader and Minecraft matched
+all baseline export names and ordinals. The Streamline-disabled Release
+DLL passed the export contract and the direct stub probe, which verified
+that create clears both outputs and invokes no host callbacks.
+All 413 locked Rust tests, formatting and Clippy passed on Rust 1.94.1.
+The enabled fixture uses synthetic Vulkan and SDK entry points. Hardware
+activation, real-scene tagging, visual quality and pacing remain open
+for this change.

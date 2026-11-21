@@ -49,6 +49,18 @@ static GPU: Gpu = Gpu {
     submit_fence: Some(submit_fence),
 };
 
+unsafe extern "C" fn describe(_: *const c_void, out: *mut Swapchain) {
+    unsafe {
+        out.write(Swapchain {
+            width: 1280,
+            height: 720,
+            format: BGRA8,
+            layers: 1,
+            has_surface: 1,
+        })
+    };
+}
+
 unsafe extern "C" fn open(setup: *const Setup, out: *mut Handle) -> i32 {
     unsafe { out.write((*setup).queue_user) };
     OK
@@ -58,24 +70,45 @@ unsafe extern "C" fn close(user: Handle) {
     unsafe { harness(user) }.events.push("close");
 }
 
-unsafe extern "C" fn create_chain(user: Handle, chain: *mut u64, gpu: *mut Handle) -> i32 {
+unsafe extern "C" fn prepare_chain(
+    user: Handle,
+    support: *mut ChainSupport,
+    gpu: *mut Handle,
+) -> i32 {
     unsafe {
-        chain.write(3);
+        support.write(ChainSupport {
+            usage: USAGE_TRANSFER_DST,
+            capture_enabled: 0,
+        });
         gpu.write(user);
     }
     OK
 }
 
-unsafe extern "C" fn images(_: Handle, _: *mut u32, _: *mut u64) -> i32 {
+unsafe extern "C" fn create_chain(_: Handle, _: u32, chain: *mut u64) -> i32 {
+    unsafe { chain.write(3) };
+    OK
+}
+
+unsafe extern "C" fn destroy_chain(user: Handle, _: u64) {
+    unsafe { harness(user) }.events.push("destroy chain");
+}
+
+unsafe extern "C" fn start_capture(_: Handle) -> i32 {
+    OK
+}
+
+unsafe extern "C" fn images(_: Handle, _: u64, count: *mut u32, _: *mut u64) -> i32 {
+    unsafe { count.write(3) };
+    OK
+}
+
+unsafe extern "C" fn acquire(_: Handle, _: u64, _: u64, _: u64, _: u64, _: *mut u32) -> i32 {
     WSI_ERROR
 }
 
-unsafe extern "C" fn acquire(_: Handle, _: u64, _: u64, _: u64, _: *mut u32) -> i32 {
-    WSI_ERROR
-}
-
-unsafe extern "C" fn valid_present(_: Handle, _: *const c_void) -> u32 {
-    1
+unsafe extern "C" fn valid_present(chain: u64, _: *const c_void) -> u32 {
+    u32::from(chain == 3)
 }
 
 unsafe extern "C" fn present(user: Handle, _: *const c_void) -> i32 {
@@ -165,9 +198,13 @@ unsafe extern "C" fn queue_submit(_: Handle, _: u32, _: *const c_void, _: u64) -
 
 const PLATFORM: Platform = Platform {
     gpu: &GPU,
+    describe,
     open,
     close,
+    prepare_chain,
     create_chain,
+    destroy_chain,
+    start_capture,
     images,
     acquire,
     valid_present,
@@ -281,7 +318,7 @@ fn submission_proof_and_refused_teardown_keep_the_owner_live() {
 
     test.release_result = OK;
     assert_eq!(unsafe { rsf_core_dlgvk_destroy(owner) }, OK);
-    assert_eq!(test.events.last(), Some(&"close"));
+    assert!(test.events.ends_with(&["destroy chain", "close"]));
 
     let mut test = Harness {
         present_result: -1000001004,

@@ -4,6 +4,18 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now owns the Vulkan DLSS-G proxy handle from creation through
+retirement, including descriptor admission, transfer-usage selection,
+image count and rollback after capture registration refusal. The
+previous synthetic path accepted a successful enumeration with zero
+images. The new fixture verifies refusal and exactly one proxy destroy.
+MSVC Release passed nine Vulkan CPU and ABI contracts, and the four
+rebuilt DLL and embedded consumers kept their baseline exports. The
+Streamline-disabled DLL passed the export contract and direct stub
+probe. All 413 locked Rust tests, formatting and Clippy passed.
+Live Vulkan DLSS-G activation and rendering remain open.
+[Proxy creation evidence](research/rust-vulkan-dlss-fg-cutover.md#proxy-creation-ownership)
+
 The shared capture owner now writes packed CPU readback rows and their raw
 JSON sidecars in Rust. The native leaf still encodes the PNG preview.
 The C ABI fixture reproduced a stray sidecar on the previous writer by
