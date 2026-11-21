@@ -4,6 +4,13 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The D3D12 and standalone Vulkan FSR4 paths now share one Rust INT8
+compatibility owner. The device lease, exact SDK fingerprints and
+entry-byte checks retain their existing scope. The standalone bridge
+now links the Rust library for the Windows GNU target. Native calls
+still perform COM checks and install the guarded hook. Source checks
+and open verification are recorded in commit `2618f9f`.
+
 Rust now owns the D3D12 Streamline host and DLSS-G provider, including
 host admission, frame tokens, Reflex/PCL state, generation options
 and retirement. Native leaves keep the typed SDK and COM calls.

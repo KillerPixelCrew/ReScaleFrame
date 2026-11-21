@@ -24,6 +24,8 @@ def generate(output, header, types, constants, clang_args, extra=(), *, use_core
         Path(temporary.name).replace(output)
 
 
+generate("runtime/backends/fsr/compat/src/abi.rs", "runtime/backends/fsr/src/fsr4_compat_platform.h",
+         "rsf_fsr4_compat_.*", "RSF_FSR4_COMPAT_PLATFORM_ABI_VERSION", [])
 generate("sdk/game/src/lib.rs", "sdk/game/include/rescaleframe/game_api.h",
          "rsf_(get_game_plugin_api_fn|frame_record|game_cpu_(source|receipt)_event)", "RSF_.*",
          ["-Isdk/game/include"], ["--raw-line", "pub mod sr_abi;", "--raw-line", "pub mod shader_patch_abi;"])

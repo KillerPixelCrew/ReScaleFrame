@@ -411,6 +411,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsf-fsr4-compat"
+version = "0.1.2"
+
+[[package]]
 name = "rsf-game-sys"
 version = "0.1.2"
 
