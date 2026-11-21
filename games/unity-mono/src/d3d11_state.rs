@@ -18,6 +18,10 @@
 //! takes the packet and releases them when that event ends or the store's release cancels it.
 //! These references exist before the record is created and do not depend on it.
 //!
+//! The route, pass and surface plan of each render event, the shared surface format, the policy
+//! change gate and the submission's retirement verdict are `d3d11_pass.rs`. Its change gate
+//! waits through this record's wait leaf (`wait_completion`).
+//!
 //! bridge.cpp keeps Unity interface access and the typed COM calls as leaves, which run outside
 //! the state mutex. Its frame callbacks (`bridge_state.rs`) are the admission that keeps a
 //! borrowed view alive: the package closes callback admission before it closes this owner. Inside
@@ -35,6 +39,7 @@ use crate::bridge_interop::{
     rsf_unity_interop_submitted,
 };
 use crate::bridge_state::{LeaseOps, admit_leased_packet};
+use crate::d3d11_pass::shared_format;
 use rsf_game_sys::rsf_game_host_services;
 use std::ffi::c_void;
 use std::ptr;
@@ -288,6 +293,16 @@ impl State {
         self.device.as_ref().map(|device| device.handles)
     }
 
+    /// The published view and its leaves for a frame callback's completion wait.
+    fn waiter(&self) -> Option<Proof> {
+        if self.closed {
+            return None;
+        }
+        self.device
+            .as_ref()
+            .map(|device| (device.handles, device.ops))
+    }
+
     fn slot(&self, index: usize) -> Option<CommandSlot> {
         if self.closed {
             return None;
@@ -538,6 +553,7 @@ fn prepare_surface(
     }
 }
 
+/// The shared format is chosen from the slot and the source format (`d3d11_pass::shared_format`).
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_unity_d3d11_prepare_surface(
     index: u32,
@@ -545,7 +561,6 @@ unsafe extern "C" fn rsf_unity_d3d11_prepare_surface(
     width: u32,
     height: u32,
     source_format: u32,
-    shared_format: u32,
     view: *mut *mut c_void,
 ) -> bool {
     if view.is_null() {
@@ -556,12 +571,21 @@ unsafe extern "C" fn rsf_unity_d3d11_prepare_surface(
         height,
         format: source_format,
     };
-    let Some(surface) = prepare_surface(&STATE, index as usize, services, key, shared_format)
-    else {
+    let shared = shared_format(index, source_format);
+    let Some(surface) = prepare_surface(&STATE, index as usize, services, key, shared) else {
         return false;
     };
     unsafe { view.write(surface) };
     true
+}
+
+/// A frame callback's wait for the completion fence to reach `value`, through the record's wait
+/// leaf outside the state mutex. The callback keeps the record published. False without one.
+pub(crate) fn wait_completion(value: u64) -> bool {
+    let Some((handles, ops)) = lock().waiter() else {
+        return false;
+    };
+    unsafe { (ops.wait)(&handles, value) }
 }
 
 /// Fence reads run outside the state mutex. The closed callback admission and this close keep
@@ -835,9 +859,11 @@ mod tests {
         assert_eq!(state.view(), Some(handles));
         assert!(state.slot(SLOTS - 1).unwrap().complete());
         assert!(state.slot(SLOTS).is_none());
+        assert_eq!(state.waiter().map(|(view, _)| view), Some(handles));
         let (proof, _) = state.close().unwrap().unwrap();
         assert_eq!(proof, handles);
         assert!(state.view().is_none());
+        assert!(state.waiter().is_none());
         assert!(state.slot(0).is_none());
         assert_eq!(state.claim(), Claim::Refused(DEVICE_BUSY));
         calls();
@@ -985,7 +1011,7 @@ mod tests {
         assert!(!unsafe { rsf_unity_d3d11_device_view(ptr::null_mut()) });
         assert!(!unsafe { rsf_unity_d3d11_command_slot(0, ptr::null_mut()) });
         assert!(!unsafe {
-            rsf_unity_d3d11_prepare_surface(0, ptr::null(), 1, 1, 10, 10, ptr::null_mut())
+            rsf_unity_d3d11_prepare_surface(0, ptr::null(), 1, 1, 10, ptr::null_mut())
         });
         // No record, so no surface lease.
         assert!(!rsf_unity_d3d11_surfaces_begin());

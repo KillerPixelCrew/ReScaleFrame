@@ -465,7 +465,7 @@ impl State {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_unity_frames_activate(enabled: u32) {
+pub(crate) extern "C" fn rsf_unity_frames_activate(enabled: u32) {
     let mut state = lock();
     if enabled != 0 {
         state.closed = false;
@@ -626,7 +626,7 @@ extern "C" fn rsf_unity_frames_set_policy(engine_spatial: u32, quality: u32) -> 
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_frames_pending_change(generation: *mut u32) -> u32 {
+pub(crate) unsafe extern "C" fn rsf_unity_frames_pending_change(generation: *mut u32) -> u32 {
     if generation.is_null() {
         return 0;
     }
@@ -638,7 +638,7 @@ unsafe extern "C" fn rsf_unity_frames_pending_change(generation: *mut u32) -> u3
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_unity_frames_settle_change(generation: u32) -> u32 {
+pub(crate) extern "C" fn rsf_unity_frames_settle_change(generation: u32) -> u32 {
     u32::from(lock().settle_change(generation))
 }
 
