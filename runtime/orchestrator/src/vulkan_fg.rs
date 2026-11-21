@@ -8,7 +8,7 @@ use crate::vulkan_sr_abi::RSF_SRVK_ABI_VERSION;
 use rsf_game_sys::rsf_frame_record;
 use std::ffi::c_void;
 use std::ptr::{self, addr_of, addr_of_mut};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
 
 const OK: i32 = 0;
 const INVALID: i32 = -1;
@@ -25,6 +25,8 @@ const FSR4: u32 = 4;
 const XESS: u32 = 5;
 
 static OCCUPIED: AtomicBool = AtomicBool::new(false);
+// Primary admission allows at most one retained, partially created owner.
+static CLEANUP_ONLY: AtomicPtr<rsf_fgvk> = AtomicPtr::new(ptr::null_mut());
 
 struct PrimaryClaim;
 
@@ -77,6 +79,17 @@ fn supported_count(backend: u32, count: u32) -> bool {
 
 unsafe fn owner_ref<'a>(owner: *const rsf_fgvk) -> Option<&'a Owner> {
     unsafe { owner.cast::<Owner>().as_ref() }
+}
+
+pub(super) fn is_cleanup_only(owner: *const rsf_fgvk) -> bool {
+    !owner.is_null() && CLEANUP_ONLY.load(Ordering::Acquire).cast_const() == owner
+}
+
+unsafe fn work_owner<'a>(handle: *const rsf_fgvk) -> Result<&'a Owner, i32> {
+    if is_cleanup_only(handle) {
+        return Err(NOT_READY);
+    }
+    unsafe { owner_ref(handle) }.ok_or(INVALID)
 }
 
 unsafe fn admit(
@@ -213,6 +226,7 @@ unsafe extern "C" fn rsf_core_fgvk_create(
             return result;
         }
         // Preserve the claim and partially created provider for a destroy retry.
+        CLEANUP_ONLY.store(handle, Ordering::Release);
         result = cleanup;
     }
     unsafe {
@@ -228,7 +242,7 @@ unsafe extern "C" fn rsf_fgvk_images(
     count: *mut u32,
     images: *mut u64,
 ) -> i32 {
-    let Some(owner) = (unsafe { owner_ref(handle) }) else {
+    let Ok(owner) = (unsafe { work_owner(handle) }) else {
         return WSI_INITIALIZATION_FAILED;
     };
     if count.is_null() {
@@ -246,7 +260,7 @@ unsafe extern "C" fn rsf_fgvk_acquire(
     fence: u64,
     index: *mut u32,
 ) -> i32 {
-    let Some(owner) = (unsafe { owner_ref(handle) }) else {
+    let Ok(owner) = (unsafe { work_owner(handle) }) else {
         return WSI_INITIALIZATION_FAILED;
     };
     if index.is_null() {
@@ -258,10 +272,10 @@ unsafe extern "C" fn rsf_fgvk_acquire(
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fgvk_enable(handle: *mut rsf_fgvk, enabled: u32) -> i32 {
-    let Some(owner) = (unsafe { owner_ref(handle) }) else {
-        return INVALID;
-    };
-    owner.set_options(enabled, owner.generated_count.load(Ordering::Relaxed))
+    match unsafe { work_owner(handle) } {
+        Ok(owner) => owner.set_options(enabled, owner.generated_count.load(Ordering::Relaxed)),
+        Err(result) => result,
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -270,8 +284,10 @@ unsafe extern "C" fn rsf_fgvk_enable_options(
     enabled: u32,
     generated_count: u32,
 ) -> i32 {
-    unsafe { owner_ref(handle) }
-        .map_or(INVALID, |owner| owner.set_options(enabled, generated_count))
+    match unsafe { work_owner(handle) } {
+        Ok(owner) => owner.set_options(enabled, generated_count),
+        Err(result) => result,
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -288,8 +304,9 @@ unsafe extern "C" fn rsf_fgvk_backend(handle: *const rsf_fgvk, backend: *mut u32
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fgvk_image_layout(handle: *const rsf_fgvk, layout: *mut u32) -> i32 {
-    let Some(owner) = (unsafe { owner_ref(handle) }) else {
-        return INVALID;
+    let owner = match unsafe { work_owner(handle) } {
+        Ok(owner) => owner,
+        Err(result) => return result,
     };
     if layout.is_null() {
         return INVALID;
@@ -303,8 +320,9 @@ unsafe extern "C" fn rsf_fgvk_image_layout(handle: *const rsf_fgvk, layout: *mut
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fgvk_max_generated(handle: *mut rsf_fgvk, count: *mut u32) -> i32 {
-    let Some(owner) = (unsafe { owner_ref(handle) }) else {
-        return INVALID;
+    let owner = match unsafe { work_owner(handle) } {
+        Ok(owner) => owner,
+        Err(result) => return result,
     };
     if count.is_null() {
         return INVALID;
@@ -322,8 +340,9 @@ unsafe extern "C" fn rsf_fgvk_latency_options(
     mode: u32,
     minimum_interval_us: u32,
 ) -> i32 {
-    let Some(owner) = (unsafe { owner_ref(handle) }) else {
-        return INVALID;
+    let owner = match unsafe { work_owner(handle) } {
+        Ok(owner) => owner,
+        Err(result) => return result,
     };
     if mode > 1 {
         return NOT_SUPPORTED;
@@ -338,7 +357,11 @@ unsafe extern "C" fn rsf_fgvk_latency_options(
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fgvk_latency_sleep(handle: *mut rsf_fgvk, frame: u64) -> i32 {
-    let (Some(owner), Ok(frame)) = (unsafe { owner_ref(handle) }, u32::try_from(frame)) else {
+    let owner = match unsafe { work_owner(handle) } {
+        Ok(owner) => owner,
+        Err(result) => return result,
+    };
+    let Ok(frame) = u32::try_from(frame) else {
         return INVALID;
     };
     if frame == 0 {
@@ -356,7 +379,11 @@ unsafe extern "C" fn rsf_fgvk_latency_marker(
     frame: u64,
     marker: u32,
 ) -> i32 {
-    let (Some(owner), Ok(frame)) = (unsafe { owner_ref(handle) }, u32::try_from(frame)) else {
+    let owner = match unsafe { work_owner(handle) } {
+        Ok(owner) => owner,
+        Err(result) => return result,
+    };
+    let Ok(frame) = u32::try_from(frame) else {
         return INVALID;
     };
     if frame == 0 || marker > 6 {
@@ -375,8 +402,9 @@ unsafe extern "C" fn rsf_fgvk_latency_get_status(
     handle: *mut rsf_fgvk,
     status: *mut rsf_fgvk_latency_status,
 ) -> i32 {
-    let Some(owner) = (unsafe { owner_ref(handle) }) else {
-        return INVALID;
+    let owner = match unsafe { work_owner(handle) } {
+        Ok(owner) => owner,
+        Err(result) => return result,
     };
     if !unsafe { has_capacity(status) } {
         return INVALID;
@@ -396,8 +424,9 @@ unsafe extern "C" fn rsf_fgvk_prepare(
     commands: *mut c_void,
     frame: *const rsf_fgvk_frame,
 ) -> i32 {
-    let Some(owner) = (unsafe { owner_ref(handle) }) else {
-        return INVALID;
+    let owner = match unsafe { work_owner(handle) } {
+        Ok(owner) => owner,
+        Err(result) => return result,
     };
     let call = owner.provider.prepare.expect("provider prepare callback");
     unsafe { call(owner.context, commands, frame) }
@@ -409,8 +438,9 @@ unsafe extern "C" fn rsf_fgvk_hudless(
     commands: *mut c_void,
     frame: *const rsf_fgvk_frame,
 ) -> i32 {
-    let Some(owner) = (unsafe { owner_ref(handle) }) else {
-        return INVALID;
+    let owner = match unsafe { work_owner(handle) } {
+        Ok(owner) => owner,
+        Err(result) => return result,
     };
     let call = owner.provider.hudless.expect("provider HUD-less callback");
     unsafe { call(owner.context, commands, frame) }
@@ -422,7 +452,7 @@ unsafe extern "C" fn rsf_fgvk_submitted(
     commands: *const *mut c_void,
     count: u32,
 ) {
-    if let Some(owner) = unsafe { owner_ref(handle) } {
+    if let Ok(owner) = unsafe { work_owner(handle) } {
         let call = owner
             .provider
             .submitted
@@ -433,7 +463,7 @@ unsafe extern "C" fn rsf_fgvk_submitted(
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fgvk_present(handle: *mut rsf_fgvk, info: *const c_void) -> i32 {
-    let Some(owner) = (unsafe { owner_ref(handle) }) else {
+    let Ok(owner) = (unsafe { work_owner(handle) }) else {
         return WSI_INITIALIZATION_FAILED;
     };
     if info.is_null() {
@@ -449,7 +479,7 @@ unsafe extern "C" fn rsf_fgvk_present_source(
     info: *const c_void,
     source: *const rsf_frame_record,
 ) -> i32 {
-    let Some(owner) = (unsafe { owner_ref(handle) }) else {
+    let Ok(owner) = (unsafe { work_owner(handle) }) else {
         return WSI_INITIALIZATION_FAILED;
     };
     if info.is_null() || !unsafe { PresentSource::valid_prefix(source) } {
@@ -467,8 +497,9 @@ unsafe extern "C" fn rsf_fgvk_get_status(
     handle: *mut rsf_fgvk,
     status: *mut rsf_fgvk_status,
 ) -> i32 {
-    let Some(owner) = (unsafe { owner_ref(handle) }) else {
-        return INVALID;
+    let owner = match unsafe { work_owner(handle) } {
+        Ok(owner) => owner,
+        Err(result) => return result,
     };
     if !unsafe { has_capacity(status) } {
         return INVALID;
@@ -506,6 +537,9 @@ unsafe extern "C" fn rsf_fgvk_destroy(handle: *mut rsf_fgvk) -> i32 {
     let result = unsafe { destroy(owner.context) };
     if result == OK {
         operation.destroyed();
+        if is_cleanup_only(handle) {
+            CLEANUP_ONLY.store(ptr::null_mut(), Ordering::Release);
+        }
         unsafe { drop(Box::from_raw(handle.cast::<Owner>())) };
     }
     result

@@ -245,6 +245,12 @@ int main() {
         "failed unsupported-count cleanup returns retained owner for retry");
     require(rsf_fgvk_create(&setup, &second, &second_chain) == RSF_BACKEND_ERROR_NOT_READY && !second,
         "partial failed creation retains global admission");
+    calls = 0;
+    require(rsf::latency::presentation_attach(owner) == RSF_BACKEND_ERROR_NOT_READY,
+        "partial owner refuses latency attachment");
+    require(rsf_fgvk_prepare(owner, command, &frame) == RSF_BACKEND_ERROR_NOT_READY &&
+        rsf_fgvk_enable(owner, 1) == RSF_BACKEND_ERROR_NOT_READY && rsf_fgvk_present(owner, &frame) == -3 && calls == 0,
+        "partial owner refuses new provider work");
     refuse_destroy = false; require(rsf_fgvk_destroy(owner) == RSF_BACKEND_OK, "partial create cleanup retry succeeds");
     refuse_create = true; require(rsf_fgvk_create(&setup, &owner, &chain) == RSF_BACKEND_ERROR_INIT_FAILED && !owner && !chain,
         "concrete create error releases clean generic admission"); refuse_create = false;

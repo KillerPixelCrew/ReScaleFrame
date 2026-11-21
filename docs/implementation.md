@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The Rust Vulkan FG dispatch retains a partially created provider
+for cleanup without admitting new rendering or latency work. The
+provider and chain outputs still carry the existing destroy-retry
+contract. The Godot consumer keeps those outputs and reports FG
+available only after successful creation. An unrun dispatch fixture
+covers a retained owner refusing frame work and latency attachment.
+Source review checked the retry path and public ABI headers.
+
 The Rust D3D11 and D3D12 hosts refuse overlapping creation before
 installing any hooks or callbacks. D3D12 publishes the frontend only
 after filling the service table, and a refused install allows a

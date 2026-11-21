@@ -328,11 +328,12 @@ extern "C" int32_t rsfg_vk_create(const rsf_fgvk_setup* setup, void** result, ui
         rsf::godot_vk::interop_device_ready() ? 1u : 0u, reinterpret_cast<const uint16_t*>(intel_directory.c_str())};
     auto code = rsf_fgvk_create_with_host(&value, selected, requested.generated_frames, &host, &presentation, chain);
     *result = presentation;
-    current.fg_available = presentation ? 1u : 0u;
-    current.fg_backend = presentation ? selected : 0u;
+    const bool ready = code == RSF_BACKEND_OK && presentation;
+    current.fg_available = ready ? 1u : 0u;
+    current.fg_backend = ready ? selected : 0u;
     current.max_generated_frames = 0;
-    if (presentation) (void)rsf_fgvk_max_generated(presentation, &current.max_generated_frames);
-    if (presentation) {
+    if (ready) {
+        (void)rsf_fgvk_max_generated(presentation, &current.max_generated_frames);
         presentation_generation = generation;
         presentation_guides_recorded = false;
         presentation_graphics = setup->graphics;

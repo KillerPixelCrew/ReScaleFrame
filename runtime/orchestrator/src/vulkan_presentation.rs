@@ -49,7 +49,9 @@ impl Binding {
         if context.is_null() {
             return INVALID;
         }
-        if self.admission != Admission::Open || (!self.context.is_null() && self.context != context)
+        if crate::vulkan_fg::is_cleanup_only(context)
+            || self.admission != Admission::Open
+            || (!self.context.is_null() && self.context != context)
         {
             return NOT_READY;
         }
