@@ -12,12 +12,14 @@ use std::mem::offset_of;
 use std::{ptr, slice};
 
 const SLOTS: usize = RSF_FGVK_FRAME_SLOTS as usize;
+const FG_VETO: u32 = RSF_FRAME_FLAG_NO_FG | RSF_FRAME_FLAG_AMBIGUOUS_ID;
 
 pub(super) struct PresentIdentity {
     frame: u64,
     session: u64,
     view: u32,
     generation: u32,
+    veto: bool,
 }
 
 pub(super) enum PresentSource {
@@ -45,14 +47,27 @@ impl PresentSource {
         if !unsafe { Self::valid_prefix(source) } {
             return None;
         }
+        let size = unsafe { source.cast::<u32>().read() } as usize;
+        // Flags can veto FG after prepare. The shorter identity prefix
+        // remains valid and has no flags to read.
+        let flags_end = offset_of!(rsf_frame_record, flags) + size_of::<u32>();
+        let veto = size >= flags_end && unsafe { (*source).flags } & FG_VETO != 0;
         Some(Self::Explicit(Some(unsafe {
             PresentIdentity {
                 frame: (*source).frame_id,
                 session: (*source).session_id,
                 view: (*source).view_id,
                 generation: (*source).resource_generation,
+                veto,
             }
         })))
+    }
+
+    pub(super) fn allows_fg(&self) -> bool {
+        match self {
+            Self::Implicit => true,
+            Self::Explicit(identity) => identity.as_ref().is_some_and(|identity| !identity.veto),
+        }
     }
 
     pub(super) fn frame(&self, latest: u64) -> u64 {
@@ -72,7 +87,7 @@ impl PresentSource {
                     && identity.session == record.session_id
                     && identity.view == record.view_id
                     && identity.generation == record.resource_generation
-                    && record.flags & (RSF_FRAME_FLAG_NO_FG | RSF_FRAME_FLAG_AMBIGUOUS_ID) == 0
+                    && record.flags & FG_VETO == 0
             }),
         }
     }
@@ -264,6 +279,46 @@ pub(super) extern "C" fn rsf_core_fgvk_presented(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_present_uses_optional_flags_without_requiring_a_full_record() {
+        #[repr(C)]
+        struct Prefix {
+            size: u32,
+            version: u32,
+            frame: u64,
+            session: u64,
+            view: u32,
+            generation: u32,
+        }
+        assert_eq!(size_of::<Prefix>(), offset_of!(rsf_frame_record, phase));
+        let prefix = Prefix {
+            size: size_of::<Prefix>() as u32,
+            version: RSF_GAME_FRAME_ABI_VERSION,
+            frame: 1,
+            session: 2,
+            view: 3,
+            generation: 4,
+        };
+        let mut record: rsf_frame_record = unsafe { std::mem::zeroed() };
+        record.struct_size = size_of::<rsf_frame_record>() as u32;
+        record.abi_version = prefix.version;
+        record.frame_id = prefix.frame;
+        record.session_id = prefix.session;
+        record.view_id = prefix.view;
+        record.resource_generation = prefix.generation;
+        let identity = unsafe { PresentSource::read(ptr::from_ref(&prefix).cast(), 1) }.unwrap();
+        assert!(identity.matches(&record) && identity.allows_fg());
+
+        for flag in [RSF_FRAME_FLAG_NO_FG, RSF_FRAME_FLAG_AMBIGUOUS_ID] {
+            let late = rsf_frame_record {
+                flags: flag,
+                ..record
+            };
+            let source = unsafe { PresentSource::read(&late, 1) }.unwrap();
+            assert!(source.matches(&record) && !source.allows_fg());
+        }
+    }
 
     #[test]
     fn rejected_recording_in_the_same_slot_cannot_reset_accepted_history() {

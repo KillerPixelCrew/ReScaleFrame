@@ -568,7 +568,7 @@ impl Owner {
             &self.slots[index].frame,
             id,
             identity,
-            u32::from(self.requested),
+            u32::from(self.requested && source.allows_fg()),
         ) != 0;
         let configuration = self.configure(candidate, candidate.then_some(&stored));
         let configuration_sdk = self.status.sdk_result;

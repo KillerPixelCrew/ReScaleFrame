@@ -733,7 +733,7 @@ impl Presentation {
                 &slot.state,
                 source_frame,
                 u32::from(identity),
-                u32::from(self.requested),
+                u32::from(self.requested && source.allows_fg()),
             ) != 0;
 
         let matched_source =

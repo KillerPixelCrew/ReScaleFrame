@@ -680,7 +680,7 @@ impl Owner {
             &self.slots[index].state,
             source_frame,
             u32::from(identity),
-            u32::from(self.enabled),
+            u32::from(self.enabled && source.allows_fg()),
         ) != 0;
         let configured = self.configure(valid.then_some(index));
         if configured != OK {

@@ -4,6 +4,13 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Vulkan presentation now honors `NO_FG` and `AMBIGUOUS_ID` when the
+explicit output record supplies those flags after prepare. A matching
+source is still consumed by the ordinary Present. The identity-only
+prefix remains accepted. Source review traced the shared gate into
+FidelityFX, DLSS and XeSS. The updated prefix and submission fixtures
+remain unrun.
+
 Shared overlay input collection now validates the caller's record and
 builds the idle or active input snapshot in Rust. The native callback
 supplies the Win32 cursor sample. Non-finite frame deltas become zero

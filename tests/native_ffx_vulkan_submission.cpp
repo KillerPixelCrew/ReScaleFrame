@@ -130,6 +130,13 @@ int main() {
     complete(self, forbidden_source, b, b); rsf_ffxgvk_submitted(self, &b, 1);
     require(rsf_ffxgvk_present_source(self, &info, &forbidden_source) == VK_SUCCESS && !state.enabled,
         "explicit source preserves NO_FG admission refusal");
+    auto late_veto = record(99, 7, 8, 3);
+    complete(self, late_veto, a, a); rsf_ffxgvk_submitted(self, &a, 1);
+    late_veto.flags |= RSF_FRAME_FLAG_NO_FG;
+    require(rsf_ffxgvk_present_source(self, &info, &late_veto) == VK_SUCCESS && !state.enabled,
+        "a matching output can veto interpolation after valid prepare");
+    require(rsf_ffxgvk_present(self, &info) == VK_SUCCESS && !state.enabled,
+        "ordinary presentation consumes the matched source even after a late veto");
     require(rsf_ffxgvk_present_source(self, &info, nullptr) == VK_SUCCESS && !state.enabled &&
         rsf_ffxgvk_get_status(self, &status) == RSF_BACKEND_OK && !status.source_frame,
         "unassociated output never guesses a prepared source");
