@@ -39,6 +39,10 @@ mod d3d11_present_abi;
 #[cfg(windows)]
 mod d3d12_observer;
 #[cfg(windows)]
+mod depth_replay;
+#[cfg(windows)]
+mod depth_scale;
+#[cfg(windows)]
 mod dlss_pipeline;
 #[cfg(windows)]
 mod dlss_pipeline_abi;

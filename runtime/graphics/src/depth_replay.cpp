@@ -1,97 +1,16 @@
 // SPDX-License-Identifier: MIT
 #include <rescaleframe/depth_replay.h>
+#include "depth_platform.h"
 #include <rescaleframe/d3d11_state.h>
 #include <d3d11.h>
-#include <new>
+#include <wrl/client.h>
 
-struct rsf_depth_replay {
-    ID3D11Texture2D* texture = nullptr;
-    ID3D11DepthStencilView* view = nullptr;
-    ID3D11DepthStencilState* write = nullptr;
-    ID3D11Texture2D* source = nullptr;
-    IUnknown* layer = nullptr;
-    void* context = nullptr;
-    uint32_t width = 0, height = 0, draws = 0;
-    bool refused = false;
-    /* Why the last draw was not replayed. Reported rather than inferred: this refused three
-       hundred and forty thousand candidates in a run without saying which test did it, and five
-       tests can each do it. See `rsf_depth_replay_last_reject`. */
-    uint32_t last_reject = 0;
-    /* What the last candidate's depth view and its resource actually were. Recorded so a refusal
-       can be read rather than guessed at: every one of these has been a wrong assumption at some
-       point, and each wrong guess costs a run of the game. */
-    rsf_depth_replay_detail detail{};
-};
+namespace {
+using Microsoft::WRL::ComPtr;
 
-extern "C" uint32_t rsf_depth_replay_last_reject(const rsf_depth_replay* r)
+int32_t make(void* raw, uint32_t width, uint32_t height, rsf_depth_replay_resources* out)
 {
-    return r ? r->last_reject : 0u;
-}
-
-extern "C" void rsf_depth_replay_get_detail(const rsf_depth_replay* r,
-                                            rsf_depth_replay_detail* out)
-{
-    if (!out) {
-        return;
-    }
-    if (!r) {
-        *out = rsf_depth_replay_detail{};
-        return;
-    }
-    *out = r->detail;
-    out->layer = r->layer;
-    out->source = r->source;
-    out->context = r->context;
-    out->draws = r->draws;
-    out->refused = r->refused ? 1u : 0u;
-}
-
-extern "C" void rsf_depth_replay_end_frame(rsf_depth_replay* r)
-{
-    if (!r) {
-        return;
-    }
-    if (r->source) {
-        r->source->Release();
-    }
-    if (r->layer) {
-        r->layer->Release();
-    }
-    r->source = nullptr;
-    r->layer = nullptr;
-    r->context = nullptr;
-    r->draws = 0;
-    r->refused = false;
-}
-extern "C" void rsf_depth_replay_destroy(rsf_depth_replay* r)
-{
-    if (!r) {
-        return;
-    }
-    rsf_depth_replay_end_frame(r);
-    if (r->write) {
-        r->write->Release();
-    }
-    if (r->view) {
-        r->view->Release();
-    }
-    if (r->texture) {
-        r->texture->Release();
-    }
-    delete r;
-}
-extern "C" rsf_depth_replay* rsf_depth_replay_create(void* pointer, uint32_t width, uint32_t height)
-{
-    if (!pointer || !width || !height) {
-        return nullptr;
-    }
-    auto* device = static_cast<ID3D11Device*>(pointer);
-    auto* r = new (std::nothrow) rsf_depth_replay{};
-    if (!r) {
-        return nullptr;
-    }
-    r->width = width;
-    r->height = height;
+    auto* device = static_cast<ID3D11Device*>(raw);
     D3D11_TEXTURE2D_DESC desc{};
     desc.Width = width;
     desc.Height = height;
@@ -108,170 +27,91 @@ extern "C" rsf_depth_replay* rsf_depth_replay_create(void* pointer, uint32_t wid
     state.DepthEnable = TRUE;
     state.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
     state.DepthFunc = D3D11_COMPARISON_GREATER_EQUAL;
-    if (FAILED(device->CreateTexture2D(&desc, nullptr, &r->texture)) ||
-        FAILED(device->CreateDepthStencilView(r->texture, &view, &r->view)) ||
-        FAILED(device->CreateDepthStencilState(&state, &r->write))) {
-        rsf_depth_replay_destroy(r);
-        return nullptr;
-    }
-    return r;
+    return SUCCEEDED(device->CreateTexture2D(&desc, nullptr, &out->texture)) &&
+        SUCCEEDED(device->CreateDepthStencilView(out->texture, &view, &out->view)) &&
+        SUCCEEDED(device->CreateDepthStencilState(&state, &out->write));
 }
 
-namespace {
-// Leave all programmable geometry state live. Reject stages with possible side effects or a
-// different geometry contract, instead of disabling them and claiming equivalent coverage.
-bool supported_pipeline(ID3D11DeviceContext* c)
+void view_info(void* raw, rsf_depth_view_info* out)
 {
-    ID3D11HullShader* hs = nullptr;
-    ID3D11DomainShader* ds = nullptr;
-    ID3D11GeometryShader* gs = nullptr;
+    D3D11_DEPTH_STENCIL_VIEW_DESC desc{};
+    static_cast<ID3D11DepthStencilView*>(raw)->GetDesc(&desc);
+    *out = {uint32_t(desc.Format), uint32_t(desc.ViewDimension), uint32_t(desc.Flags), desc.Texture2D.MipSlice};
+}
+
+void* view_texture(void* raw, rsf_depth_texture_info* out)
+{
+    ComPtr<ID3D11Resource> resource;
+    static_cast<ID3D11DepthStencilView*>(raw)->GetResource(&resource);
+    ComPtr<ID3D11Texture2D> texture;
+    if (!resource || FAILED(resource.As(&texture)) || !texture) return nullptr;
+    D3D11_TEXTURE2D_DESC desc{};
+    texture->GetDesc(&desc);
+    *out = {desc.Width, desc.Height, uint32_t(desc.Format), desc.SampleDesc.Count, desc.SampleDesc.Quality,
+        desc.MipLevels, desc.ArraySize};
+    return texture.Detach();
+}
+
+// Reports the live programmable geometry and output state without changing it.
+void pipeline(void* raw, rsf_depth_pipeline_info* out)
+{
+    auto* c = static_cast<ID3D11DeviceContext*>(raw);
+    *out = {};
+    ComPtr<ID3D11HullShader> hs;
+    ComPtr<ID3D11DomainShader> ds;
+    ComPtr<ID3D11GeometryShader> gs;
     c->HSGetShader(&hs, nullptr, nullptr);
     c->DSGetShader(&ds, nullptr, nullptr);
     c->GSGetShader(&gs, nullptr, nullptr);
-    bool ok = !hs && !ds && !gs;
-    if (hs) {
-        hs->Release();
-    }
-    if (ds) {
-        ds->Release();
-    }
-    if (gs) {
-        gs->Release();
-    }
+    out->stages = hs || ds || gs;
     ID3D11Buffer* so[D3D11_SO_BUFFER_SLOT_COUNT]{};
     c->SOGetTargets(D3D11_SO_BUFFER_SLOT_COUNT, so);
     for (auto* b : so) {
         if (b) {
-            ok = false;
+            out->stream_out = 1;
             b->Release();
         }
     }
     ID3D11UnorderedAccessView* uavs[D3D11_PS_CS_UAV_REGISTER_COUNT]{};
-    c->OMGetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0,
-                                                 D3D11_PS_CS_UAV_REGISTER_COUNT, uavs);
+    c->OMGetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, D3D11_PS_CS_UAV_REGISTER_COUNT, uavs);
     for (auto* uav : uavs) {
         if (uav) {
-            ok = false;
+            out->uavs = 1;
             uav->Release();
         }
     }
-    ID3D11DepthStencilState* depth = nullptr;
+    ComPtr<ID3D11DepthStencilState> depth;
     UINT reference = 0;
     c->OMGetDepthStencilState(&depth, &reference);
-    if (!depth) {
-        return false;
-    }
-    D3D11_DEPTH_STENCIL_DESC desc{};
-    depth->GetDesc(&desc);
-    depth->Release();
-    // Stencil writes used for the translucency pass are omitted. Actual stencil tests would
-    // change coverage and are refused. No new state objects are built for a material's state.
-    return ok && desc.DepthEnable && desc.DepthWriteMask == D3D11_DEPTH_WRITE_MASK_ZERO &&
-           (desc.DepthFunc == D3D11_COMPARISON_GREATER_EQUAL ||
-            desc.DepthFunc == D3D11_COMPARISON_GREATER) &&
-           (!desc.StencilEnable || (desc.FrontFace.StencilFunc == D3D11_COMPARISON_ALWAYS &&
-                                    desc.BackFace.StencilFunc == D3D11_COMPARISON_ALWAYS));
-}
-} // namespace
-
-extern "C" uint32_t rsf_depth_replay_draw(rsf_depth_replay* r, const rsf_frame_tap_geometry* g)
-{
-    if (!r || !g || !g->context || !g->depth_view || !g->target) {
-        if (r) {
-            r->last_reject = 1; /* nothing to work with */
-        }
-        return 0;
-    }
-    if (g->width != r->width || g->height != r->height || g->samples != 1) {
-        r->last_reject = 2; /* a different size than this replay was built for */
-        return 0;
-    }
-    if (r->refused) {
-        return 0;
-    }
-    /* Sticky, and only for what cannot change: a depth view this cannot write through is a
-       property of the device and the frame, so retrying it every draw forever buys nothing. */
-    auto refuse = [r](uint32_t why) {
-        r->refused = true;
-        r->last_reject = why;
-        return 0u;
-    };
-    /* Not sticky, because these are properties of one draw and the next draw is a different one.
-       This used to refuse for good on the first line or point primitive it saw, which in a frame
-       with a few hundred thousand candidate draws means the first one, and every translucent draw
-       after it was silently skipped for the life of the process. */
-    if (g->kind > 3 || !g->vertex_shader || !g->count || !g->instances ||
-        (g->topology != D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST &&
-         g->topology != D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP)) {
-        r->last_reject = 3; /* this draw's shape */
-        return 0;
-    }
-    auto* c = static_cast<ID3D11DeviceContext*>(g->context);
-    auto* dsv = static_cast<ID3D11DepthStencilView*>(g->depth_view);
-    D3D11_DEPTH_STENCIL_VIEW_DESC vd{};
-    dsv->GetDesc(&vd);
-    r->detail.dsv_format = uint32_t(vd.Format);
-    r->detail.dsv_dimension = uint32_t(vd.ViewDimension);
-    r->detail.dsv_flags = uint32_t(vd.Flags);
-    r->detail.draw_width = g->width;
-    r->detail.draw_height = g->height;
-    r->detail.draw_samples = g->samples;
-    if (vd.Format != DXGI_FORMAT_D32_FLOAT_S8X24_UINT ||
-        vd.ViewDimension != D3D11_DSV_DIMENSION_TEXTURE2D || vd.Texture2D.MipSlice != 0 ||
-        !(vd.Flags & D3D11_DSV_READ_ONLY_DEPTH)) {
-        return refuse(4);
-    }
-    ID3D11Resource* resource = nullptr;
-    dsv->GetResource(&resource);
-    ID3D11Texture2D* source = nullptr;
-    resource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&source));
-    resource->Release();
-    if (!source) {
-        return refuse(5);
-    }
-    D3D11_TEXTURE2D_DESC desc{};
-    source->GetDesc(&desc);
-    r->detail.source_width = desc.Width;
-    r->detail.source_height = desc.Height;
-    r->detail.source_format = uint32_t(desc.Format);
-    r->detail.source_samples = desc.SampleDesc.Count;
-    const bool valid = desc.Width == r->width && desc.Height == r->height &&
-                       desc.Format == DXGI_FORMAT_R32G8X24_TYPELESS && desc.SampleDesc.Count == 1 &&
-                       desc.SampleDesc.Quality == 0 && desc.MipLevels == 1 && desc.ArraySize == 1;
-    if (!valid) {
-        source->Release();
-        return refuse(6);
-    }
-    if (!r->source) {
-        r->source = source;
-        r->layer = static_cast<IUnknown*>(g->target);
-        r->layer->AddRef();
-        r->context = c;
-    } else {
-        const bool same = r->source == source && r->layer == g->target && r->context == c;
-        source->Release();
-        if (!same) {
-            return refuse(7);
-        }
-    }
-    if (!supported_pipeline(c)) {
-        return refuse(8);
+    if (depth) {
+        D3D11_DEPTH_STENCIL_DESC desc{};
+        depth->GetDesc(&desc);
+        out->depth_state = 1;
+        out->depth_enable = desc.DepthEnable != FALSE;
+        out->depth_write_mask = uint32_t(desc.DepthWriteMask);
+        out->depth_func = uint32_t(desc.DepthFunc);
+        out->stencil_enable = desc.StencilEnable != FALSE;
+        out->front_func = uint32_t(desc.FrontFace.StencilFunc);
+        out->back_func = uint32_t(desc.BackFace.StencilFunc);
     }
     D3D11_VIEWPORT viewport{};
     UINT count = 1;
     c->RSGetViewports(&count, &viewport);
-    if (count != 1 || viewport.TopLeftX != 0 || viewport.TopLeftY != 0 ||
-        viewport.Width != float(r->width) || viewport.Height != float(r->height) ||
-        viewport.MinDepth != 0 || viewport.MaxDepth != 1) {
-        return refuse(9);
-    }
+    out->viewport_count = count;
+    const float values[]{viewport.TopLeftX, viewport.TopLeftY, viewport.Width, viewport.Height,
+        viewport.MinDepth, viewport.MaxDepth};
+    for (int i = 0; i < 6; ++i) out->viewport[i] = values[i];
+}
 
-    rsf_d3d11_state saved;
-    rsf_d3d11_depth_state_save(c, &saved);
-    c->OMSetRenderTargets(0, nullptr, nullptr);
-    if (!r->draws) {
-        c->CopyResource(r->texture, r->source);
-    }
+void unbind(void* context)
+{
+    static_cast<ID3D11DeviceContext*>(context)->OMSetRenderTargets(0, nullptr, nullptr);
+}
+
+// Leave all programmable geometry state live; only depth output and the pixel shader change.
+void draw(void* raw, const rsf_depth_replay_resources* r, const rsf_frame_tap_geometry* g)
+{
+    auto* c = static_cast<ID3D11DeviceContext*>(raw);
     c->OMSetRenderTargets(0, nullptr, r->view);
     c->OMSetDepthStencilState(r->write, 0);
     c->PSSetShader(nullptr, nullptr, 0);
@@ -286,20 +126,62 @@ extern "C" uint32_t rsf_depth_replay_draw(rsf_depth_replay* r, const rsf_frame_t
         c->DrawInstanced(g->count, g->instances, g->start, g->start_instance);
         break;
     case 3:
-        c->DrawIndexedInstanced(g->count, g->instances, g->start, g->base_vertex,
-                                g->start_instance);
+        c->DrawIndexedInstanced(g->count, g->instances, g->start, g->base_vertex, g->start_instance);
         break;
     }
-    rsf_d3d11_depth_state_restore(c, &saved);
-    ++r->draws;
-    return 1;
 }
 
-extern "C" void* rsf_depth_replay_selected(rsf_depth_replay* r, void* context, void* depth,
-                                           void* layer)
+constexpr rsf_depth_replay_platform platform{
+    make, view_info, view_texture, pipeline, rsf_d3d11_depth_state_save, rsf_d3d11_depth_state_restore, unbind,
+    rsf_d3d11_copy_resource, draw,
+};
+static_assert(sizeof(rsf_depth_replay_platform) == 9 * sizeof(void*));
+static_assert(sizeof(rsf_depth_replay_resources) == 3 * sizeof(void*));
+static_assert(sizeof(rsf_depth_replay_candidate) == 64 && sizeof(rsf_depth_replay_detail) == 72);
+static_assert(sizeof(rsf_depth_view_info) == 16 && sizeof(rsf_depth_texture_info) == 28 &&
+    sizeof(rsf_depth_pipeline_info) == 68);
+// Values the Rust acceptance compares against.
+static_assert(DXGI_FORMAT_R32G8X24_TYPELESS == 19 && DXGI_FORMAT_D32_FLOAT_S8X24_UINT == 20);
+static_assert(D3D11_DSV_DIMENSION_TEXTURE2D == 3 && D3D11_DSV_READ_ONLY_DEPTH == 1);
+static_assert(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST == 4 && D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP == 5);
+static_assert(D3D11_DEPTH_WRITE_MASK_ZERO == 0 && D3D11_COMPARISON_GREATER == 5 &&
+    D3D11_COMPARISON_GREATER_EQUAL == 7 && D3D11_COMPARISON_ALWAYS == 8);
+} // namespace
+
+extern "C" rsf_depth_replay* rsf_depth_replay_create(void* device, uint32_t width, uint32_t height)
 {
-    return r && !r->refused && r->draws && layer && r->layer == layer && r->source == depth &&
-                   r->context == context
-               ? r->texture
-               : depth;
+    return rsf_core_depth_replay_create(device, width, height, &platform);
+}
+
+extern "C" uint32_t rsf_depth_replay_last_reject(const rsf_depth_replay* r)
+{
+    return rsf_core_depth_replay_last_reject(r);
+}
+
+extern "C" void rsf_depth_replay_get_detail(const rsf_depth_replay* r, rsf_depth_replay_detail* out)
+{
+    rsf_core_depth_replay_get_detail(r, out);
+}
+
+extern "C" void rsf_depth_replay_end_frame(rsf_depth_replay* r)
+{
+    rsf_core_depth_replay_end_frame(r);
+}
+
+extern "C" void rsf_depth_replay_destroy(rsf_depth_replay* r)
+{
+    rsf_core_depth_replay_destroy(r);
+}
+
+extern "C" uint32_t rsf_depth_replay_draw(rsf_depth_replay* r, const rsf_frame_tap_geometry* g)
+{
+    if (!g) return rsf_core_depth_replay_draw(r, nullptr);
+    const rsf_depth_replay_candidate candidate{g->context, g->target, g->depth_view, g->width, g->height,
+        g->samples, g->kind, g->count, g->instances, g->topology, g->vertex_shader != nullptr, g};
+    return rsf_core_depth_replay_draw(r, &candidate);
+}
+
+extern "C" void* rsf_depth_replay_selected(rsf_depth_replay* r, void* context, void* depth, void* layer)
+{
+    return rsf_core_depth_replay_selected(r, context, depth, layer);
 }
