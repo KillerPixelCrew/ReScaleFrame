@@ -3,12 +3,13 @@ use crate::latency_antilag::{AMD_VENDOR_ID, fps_from_interval};
 use crate::latency_lease::rsf_native_latency_release_claim;
 use crate::sr_session::has_capacity;
 use crate::vulkan_latency_abi::{
-    RSF_LATENCYVK_DEVICE_ABI_VERSION, rsf_amd_vk_platform as Platform,
-    rsf_latencyvk_created_device as Created, rsf_latencyvk_device_query as Query,
-    rsf_latencyvk_device_requirements as Requirements,
+    RSF_LATENCYVK_DEVICE_ABI_VERSION, rsf_amd_vk_device_info as DeviceInfo,
+    rsf_amd_vk_platform as Platform, rsf_latencyvk_created_device as Created,
+    rsf_latencyvk_device_query as Query, rsf_latencyvk_device_requirements as Requirements,
 };
 use crate::vulkan_sr_abi::rsf_vk_function;
-use std::ffi::c_void;
+use std::cell::UnsafeCell;
+use std::ffi::{CStr, c_char, c_void};
 use std::ptr;
 use std::sync::{Condvar, Mutex};
 
@@ -20,6 +21,108 @@ const INPUT: u32 = 0;
 const PRESENT: u32 = 1;
 const MODE_ONLY: u32 = u32::MAX;
 const FRAME_SLOTS: usize = 128;
+const FEATURES_2: u32 = 1_000_059_000;
+const ANTI_LAG_FEATURE: u32 = 1_000_476_000;
+const ANTI_LAG_EXTENSION: &CStr = c"VK_AMD_anti_lag";
+
+#[repr(C)]
+struct FeatureHeader {
+    kind: u32,
+    next: *mut FeatureHeader,
+}
+
+#[repr(C)]
+struct AntiLagFeature {
+    header: FeatureHeader,
+    enabled: u32,
+}
+
+const _: () = {
+    assert!(size_of::<FeatureHeader>() == 16);
+    assert!(std::mem::offset_of!(FeatureHeader, next) == 8);
+    assert!(size_of::<AntiLagFeature>() == 24);
+    assert!(std::mem::offset_of!(AntiLagFeature, enabled) == 16);
+};
+
+thread_local! {
+    // The caller uses the node in its synchronous device create on this thread.
+    static FEATURE: UnsafeCell<AntiLagFeature> = const {
+        UnsafeCell::new(AntiLagFeature {
+            header: FeatureHeader { kind: ANTI_LAG_FEATURE, next: ptr::null_mut() },
+            enabled: 1,
+        })
+    };
+}
+
+struct ExtensionNames([*const c_char; 1]);
+
+// The only pointed-to data is the immutable static extension string.
+unsafe impl Sync for ExtensionNames {}
+
+static EXTENSIONS: ExtensionNames = ExtensionNames([ANTI_LAG_EXTENSION.as_ptr()]);
+
+unsafe fn feature_chain(
+    mut node: *mut FeatureHeader,
+) -> Option<(*mut FeatureHeader, *mut AntiLagFeature)> {
+    let mut root = ptr::null_mut::<FeatureHeader>();
+    let mut feature = ptr::null_mut::<AntiLagFeature>();
+    for _ in 0..64 {
+        if node.is_null() {
+            break;
+        }
+        match unsafe { (*node).kind } {
+            FEATURES_2 if root.is_null() => root = node,
+            ANTI_LAG_FEATURE if feature.is_null() => feature = node.cast(),
+            _ => {}
+        }
+        node = unsafe { (*node).next };
+    }
+    node.is_null().then_some((root, feature))
+}
+
+unsafe fn enable_feature(out: *mut Requirements) -> i32 {
+    let features = unsafe { (*out).features };
+    let Some((root, existing)) = (unsafe { feature_chain(features.cast()) }) else {
+        return INVALID;
+    };
+    if existing.is_null() {
+        FEATURE.with(|feature| unsafe {
+            let node = feature.get();
+            (*node).enabled = 1;
+            if root.is_null() {
+                (*node).header.next = features.cast();
+                (*out).features = node.cast();
+            } else {
+                (*node).header.next = (*root).next;
+                (*root).next = node.cast();
+            }
+        });
+    } else {
+        unsafe { (*existing).enabled = 1 };
+    }
+    unsafe {
+        (*out).extensions = EXTENSIONS.0.as_ptr();
+        (*out).extension_count = 1;
+    }
+    0
+}
+
+unsafe fn anti_lag_enabled(info: &DeviceInfo) -> bool {
+    if info.extension_count == 0 || info.extension_count > 4096 || info.extensions.is_null() {
+        return false;
+    }
+    let Some((_, feature)) =
+        (unsafe { feature_chain(info.features.cast_mut().cast::<FeatureHeader>()) })
+    else {
+        return false;
+    };
+    if feature.is_null() || unsafe { (*feature).enabled } == 0 {
+        return false;
+    }
+    unsafe { std::slice::from_raw_parts(info.extensions, info.extension_count as usize) }
+        .iter()
+        .any(|&name| !name.is_null() && unsafe { CStr::from_ptr(name) } == ANTI_LAG_EXTENSION)
+}
 
 type Invoke = unsafe extern "C" fn(*mut c_void, rsf_vk_function, u32, u64, u32, u32);
 
@@ -215,7 +318,16 @@ unsafe extern "C" fn rsf_core_amd_vk_require(
     }
     if let Some(platform) = platform {
         match amd_device(platform, query) {
-            Ok(true) => return unsafe { (platform.enable.unwrap())(query, out) },
+            Ok(true) => {
+                let mut supported = 0;
+                let result = unsafe { (platform.supported.unwrap())(query, &mut supported) };
+                if result != 0 {
+                    return result;
+                }
+                if supported != 0 {
+                    return unsafe { enable_feature(out) };
+                }
+            }
             Ok(false) => {}
             Err(result) => return result,
         }
@@ -257,6 +369,15 @@ unsafe extern "C" fn rsf_core_amd_vk_device_created(
         Ok(true) => {}
         Ok(false) => return NOT_SUPPORTED,
         Err(result) => return result,
+    }
+    let mut info = DeviceInfo {
+        features: ptr::null(),
+        extension_count: 0,
+        extensions: ptr::null(),
+    };
+    unsafe { (platform.device_info.unwrap())(facts, &mut info) };
+    if !unsafe { anti_lag_enabled(&info) } {
+        return NOT_SUPPORTED;
     }
     let mut update = None;
     let result = unsafe { (platform.device_update.unwrap())(facts, &mut update) };

@@ -128,7 +128,7 @@ generate("runtime/orchestrator/src/vulkan_fg_abi.rs", "runtime/orchestrator/src/
           "--raw-line", "use rsf_game_sys::rsf_frame_record;", "--raw-line", "type rsf_backend_result = i32;",
           "--with-derive-custom-struct", "rsf_dlss_capture_source=Copy,Clone"])
 generate("runtime/orchestrator/src/vulkan_latency_abi.rs", "runtime/orchestrator/include/rescaleframe/native_latency_vulkan.h",
-         "rsf_(latencyvk_(setup|status|device_query|device_requirements|created_device)|slvk_(setup|call|callback)|amd_vk_(update|platform))",
+         "rsf_(latencyvk_(setup|status|device_query|device_requirements|created_device)|slvk_(setup|call|callback)|amd_vk_(update|device_info|platform))",
          "RSF_(LATENCYVK_(ABI_VERSION|DEVICE_ABI_VERSION)|SLVK_(ABI_VERSION|DLSS_SR|DLSS_FG))",
          ["-include", "rescaleframe/native_streamline_vulkan.h",
           "-include", "runtime/orchestrator/src/latency_amd_vulkan_platform.h", "-Iruntime/orchestrator/include",

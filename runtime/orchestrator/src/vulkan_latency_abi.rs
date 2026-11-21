@@ -164,15 +164,37 @@ pub type rsf_amd_vk_update = ::core::option::Option<
 >;
 #[repr(C)]
 #[derive(Copy, Clone)]
+pub struct rsf_amd_vk_device_info {
+    pub features: *const ::core::ffi::c_void,
+    pub extension_count: u32,
+    pub extensions: *const *const ::core::ffi::c_char,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_amd_vk_device_info"][::core::mem::size_of::<rsf_amd_vk_device_info>() - 24usize];
+    ["Alignment of rsf_amd_vk_device_info"]
+        [::core::mem::align_of::<rsf_amd_vk_device_info>() - 8usize];
+    ["Offset of field: rsf_amd_vk_device_info::features"]
+        [::core::mem::offset_of!(rsf_amd_vk_device_info, features) - 0usize];
+    ["Offset of field: rsf_amd_vk_device_info::extension_count"]
+        [::core::mem::offset_of!(rsf_amd_vk_device_info, extension_count) - 8usize];
+    ["Offset of field: rsf_amd_vk_device_info::extensions"]
+        [::core::mem::offset_of!(rsf_amd_vk_device_info, extensions) - 16usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
 pub struct rsf_amd_vk_platform {
     pub vendor: ::core::option::Option<
         unsafe extern "C" fn(arg1: *const rsf_latencyvk_device_query, arg2: *mut u32) -> i32,
     >,
-    pub enable: ::core::option::Option<
+    pub supported: ::core::option::Option<
+        unsafe extern "C" fn(arg1: *const rsf_latencyvk_device_query, arg2: *mut u32) -> i32,
+    >,
+    pub device_info: ::core::option::Option<
         unsafe extern "C" fn(
-            arg1: *const rsf_latencyvk_device_query,
-            arg2: *mut rsf_latencyvk_device_requirements,
-        ) -> i32,
+            arg1: *const rsf_latencyvk_created_device,
+            arg2: *mut rsf_amd_vk_device_info,
+        ),
     >,
     pub device_update: ::core::option::Option<
         unsafe extern "C" fn(
@@ -184,16 +206,18 @@ pub struct rsf_amd_vk_platform {
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of rsf_amd_vk_platform"][::core::mem::size_of::<rsf_amd_vk_platform>() - 32usize];
+    ["Size of rsf_amd_vk_platform"][::core::mem::size_of::<rsf_amd_vk_platform>() - 40usize];
     ["Alignment of rsf_amd_vk_platform"][::core::mem::align_of::<rsf_amd_vk_platform>() - 8usize];
     ["Offset of field: rsf_amd_vk_platform::vendor"]
         [::core::mem::offset_of!(rsf_amd_vk_platform, vendor) - 0usize];
-    ["Offset of field: rsf_amd_vk_platform::enable"]
-        [::core::mem::offset_of!(rsf_amd_vk_platform, enable) - 8usize];
+    ["Offset of field: rsf_amd_vk_platform::supported"]
+        [::core::mem::offset_of!(rsf_amd_vk_platform, supported) - 8usize];
+    ["Offset of field: rsf_amd_vk_platform::device_info"]
+        [::core::mem::offset_of!(rsf_amd_vk_platform, device_info) - 16usize];
     ["Offset of field: rsf_amd_vk_platform::device_update"]
-        [::core::mem::offset_of!(rsf_amd_vk_platform, device_update) - 16usize];
+        [::core::mem::offset_of!(rsf_amd_vk_platform, device_update) - 24usize];
     ["Offset of field: rsf_amd_vk_platform::invoke_update"]
-        [::core::mem::offset_of!(rsf_amd_vk_platform, invoke_update) - 24usize];
+        [::core::mem::offset_of!(rsf_amd_vk_platform, invoke_update) - 32usize];
 };
 #[repr(C)]
 #[derive(Copy, Clone)]

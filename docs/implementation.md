@@ -850,6 +850,17 @@ device admission, Godot creation fallback and Anomaly SR and D3D11 host
 wiring. All 212 locked Rust tests, formatting, Clippy and binding
 regeneration passed. The four Release export inventories matched.
 
+Rust now owns the Anti-Lag feature-chain edit and checks the actual
+created device's extension and feature before binding its update entry
+point. The Vulkan leaves report driver support and typed create facts.
+The chain scan checks termination before changing a caller node. The
+CPU fixture rejects a cyclic chain with the input links intact and
+still reuses an existing feature node. [Vulkan structure chains](https://docs.vulkan.org/refpages/latest/refpages/source/VkBaseOutStructure.html)
+
+All 377 locked Rust tests, formatting and Clippy passed with Rust
+1.94.1. The MSVC Release Anti-Lag, native latency and Godot creation
+contracts passed, and binding regeneration was byte-for-byte stable.
+
 Vulkan PCL registration, queue fencing and input fact collection now live in
 Rust. The owner binds the actual accepted input thread and keeps its old
 queue untouched while rebinding. It admits only the registered thread's

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "latency_amd_vulkan_platform.h"
+#include <cstddef>
 #include <cstring>
 #include <vector>
 
@@ -10,20 +11,13 @@ static_assert(RSF_BACKEND_ERROR_INVALID_ARGUMENT == -1 && RSF_BACKEND_ERROR_ABI_
 #define VK_NO_PROTOTYPES
 #include <vulkan/vulkan.h>
 namespace {
-thread_local VkPhysicalDeviceAntiLagFeaturesAMD feature{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ANTI_LAG_FEATURES_AMD};
-bool extension(uint32_t count,const char* const* names,const char* wanted) {
-    if (count>4096 || (count && !names)) return false;
-    for (uint32_t i=0;i<count;++i) if (names[i] && std::strcmp(names[i],wanted)==0) return true;
-    return false;
-}
+static_assert(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 == 1000059000 &&
+    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ANTI_LAG_FEATURES_AMD == 1000476000 &&
+    sizeof(VkBaseOutStructure) == 16 && offsetof(VkBaseOutStructure, pNext) == 8 &&
+    sizeof(VkPhysicalDeviceAntiLagFeaturesAMD) == 24 &&
+    offsetof(VkPhysicalDeviceAntiLagFeaturesAMD, antiLag) == 16 && VK_TRUE == 1);
 template<class T> T function(const rsf_latencyvk_device_query& q,const char* name) {
     return reinterpret_cast<T>(q.instance_proc(q.instance,name));
-}
-VkBaseOutStructure* find(void* chain,VkStructureType type) {
-    uint32_t count=0;
-    for (auto* node=static_cast<VkBaseOutStructure*>(chain);node && ++count<=64;node=node->pNext)
-        if (node->sType==type) return node;
-    return nullptr;
 }
 int32_t vendor(const rsf_latencyvk_device_query* query, uint32_t* out) noexcept try {
     const auto properties = function<PFN_vkGetPhysicalDeviceProperties>(*query, "vkGetPhysicalDeviceProperties");
@@ -46,7 +40,8 @@ void update_device(void* device, rsf_vk_function proc, uint32_t stage, uint64_t 
     data.pPresentationInfo=stage==UINT32_MAX ? nullptr : &present;
     reinterpret_cast<PFN_vkAntiLagUpdateAMD>(proc)(static_cast<VkDevice>(device),&data);
 }
-int32_t enable(const rsf_latencyvk_device_query* query, rsf_latencyvk_device_requirements* out) noexcept try {
+int32_t supported(const rsf_latencyvk_device_query* query, uint32_t* out) noexcept try {
+    *out = 0;
     const auto enumerate=function<PFN_vkEnumerateDeviceExtensionProperties>(*query,"vkEnumerateDeviceExtensionProperties");
     auto get_features=function<PFN_vkGetPhysicalDeviceFeatures2>(*query,"vkGetPhysicalDeviceFeatures2");
     if (!get_features) get_features=function<PFN_vkGetPhysicalDeviceFeatures2>(*query,"vkGetPhysicalDeviceFeatures2KHR");
@@ -61,25 +56,16 @@ int32_t enable(const rsf_latencyvk_device_query* query, rsf_latencyvk_device_req
     VkPhysicalDeviceAntiLagFeaturesAMD supported_feature{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ANTI_LAG_FEATURES_AMD};
     VkPhysicalDeviceFeatures2 root{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};root.pNext=&supported_feature;
     get_features(physical,&root);
-    if (!supported_feature.antiLag) return RSF_BACKEND_OK;
-    if (auto* existing=find(query->features,supported_feature.sType)) {
-        reinterpret_cast<VkPhysicalDeviceAntiLagFeaturesAMD*>(existing)->antiLag=VK_TRUE;
-    } else {
-        feature=supported_feature;
-        if (auto* root_node=find(query->features,VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2)) {
-            feature.pNext=root_node->pNext;root_node->pNext=reinterpret_cast<VkBaseOutStructure*>(&feature);
-        } else {feature.pNext=query->features;out->features=&feature;}
-    }
-    static const char* names[]{VK_AMD_ANTI_LAG_EXTENSION_NAME};out->extensions=names;out->extension_count=1;
+    *out = supported_feature.antiLag;
     return RSF_BACKEND_OK;
 } catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 
-int32_t device_update(const rsf_latencyvk_created_device* facts, rsf_vk_function* out) noexcept try {
+void device_info(const rsf_latencyvk_created_device* facts, rsf_amd_vk_device_info* out) noexcept {
     const auto& info = *static_cast<const VkDeviceCreateInfo*>(facts->create_info);
-    const auto* enabled = reinterpret_cast<const VkPhysicalDeviceAntiLagFeaturesAMD*>(
-        find(const_cast<void*>(info.pNext), VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ANTI_LAG_FEATURES_AMD));
-    if (!extension(info.enabledExtensionCount, info.ppEnabledExtensionNames, VK_AMD_ANTI_LAG_EXTENSION_NAME) ||
-        !enabled || !enabled->antiLag) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
+    *out = {info.pNext, info.enabledExtensionCount, info.ppEnabledExtensionNames};
+}
+
+int32_t device_update(const rsf_latencyvk_created_device* facts, rsf_vk_function* out) noexcept try {
     const auto get_device = reinterpret_cast<PFN_vkGetDeviceProcAddr>(
         facts->instance_proc(facts->instance, "vkGetDeviceProcAddr"));
     *out = get_device ? reinterpret_cast<rsf_vk_function>(
@@ -87,7 +73,7 @@ int32_t device_update(const rsf_latencyvk_created_device* facts, rsf_vk_function
     return RSF_BACKEND_OK;
 } catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 
-constexpr rsf_amd_vk_platform leaves{vendor, enable, device_update, update_device};
+constexpr rsf_amd_vk_platform leaves{vendor, supported, device_info, device_update, update_device};
 constexpr const rsf_amd_vk_platform* platform = &leaves;
 }
 #else

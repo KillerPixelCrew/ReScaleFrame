@@ -98,6 +98,13 @@ int main() {
     query.features=&copied_root;
     CHECK(rsf_latencyvk_require_device(&query,&required)==0 && copied_root.pNext==feature && feature->pNext==&tail);
     CHECK(rsf_latencyvk_require_device(&query,&required)==0 && feature->pNext==&tail);
+    VkPhysicalDeviceFeatures2 cyclic{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+    cyclic.pNext = &cyclic;
+    query.features = &cyclic;
+    CHECK(rsf_latencyvk_require_device(&query, &required) == RSF_BACKEND_ERROR_INVALID_ARGUMENT);
+    CHECK(!required.extension_count && required.features == &cyclic && cyclic.pNext == &cyclic);
+    query.features = &copied_root;
+    CHECK(rsf_latencyvk_require_device(&query, &required) == RSF_BACKEND_OK);
     VkDeviceCreateInfo info{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};info.pNext=feature;
     info.enabledExtensionCount=required.extension_count;info.ppEnabledExtensionNames=required.extensions;
     rsf_latencyvk_created_device created{sizeof(created),1,instance,physical,device,instance_proc,&info};
