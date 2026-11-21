@@ -2,7 +2,7 @@
 //! F9 trigger admission and the Present-relative capture session. Native leaves poll Win32,
 //! prepare the directory and graphics storage, change the tap, and lend artifacts to the writer.
 
-use crate::motion_capture_observations::reset_constant_buffers;
+use crate::motion_capture_observations::reset_session_observations;
 use crate::motion_capture_records::reset_records;
 use std::ffi::{c_char, c_void};
 use std::mem::{offset_of, size_of};
@@ -184,7 +184,7 @@ unsafe extern "C" fn rsf_ac7_capture_present(
         }
         let session = current.session.wrapping_add(1);
         if unsafe { (effects.prepare)(session) } {
-            reset_constant_buffers();
+            reset_session_observations();
             reset_records();
             clock.start = clock.presents;
             let started = CaptureInterval {

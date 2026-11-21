@@ -71,6 +71,37 @@ struct MotionDispatch {
     MotionBoundView inputs[128], outputs[8];
     MotionBoundConstant constants[14];
 };
+struct MotionDrawInput {
+    uint64_t resource;
+    uint32_t slot, width, height, format;
+};
+struct MotionColourSnapshot {
+    char name[96];
+    int32_t result;
+};
+struct MotionDrawTarget {
+    MotionBoundView view;
+    MotionColourSnapshot snapshot;
+};
+struct MotionDrawConstants {
+    MotionBoundConstant entries[14];
+    uint32_t count;
+};
+struct MotionDraw {
+    NativeRootScope root;
+    MotionQueuedDraw queued;
+    uint64_t qpc, target, layout;
+    uint32_t thread, draw_index, format, width, height, target_count, depth_bound, indexed, elements;
+    uint32_t shader_hashes[5], topology, stride;
+    float viewport_x, viewport_y;
+    uint32_t viewport_width, viewport_height;
+    uint32_t input_count, ps_resource_count, vs_resource_count, render_target_count;
+    MotionDrawInput inputs[16];
+    MotionBoundView ps_resources[128], vs_resources[128];
+    MotionDrawTarget render_targets[8];
+    MotionResource depth;
+    MotionDrawConstants constants[5];
+};
 struct MotionArtifact {
     const unsigned char* data;
     std::size_t size;
@@ -83,7 +114,7 @@ struct MotionArtifactList {
 struct MotionArtifactStats {
     int64_t qpc_frequency;
     uint32_t engine_hooks, renderer_root_hooks, blob_dropped;
-    uint32_t colour_readbacks, colour_readback_failures, capture_failures;
+    uint32_t capture_failures;
 };
 struct MotionFinalArtifacts {
     MotionArtifactList blobs;
@@ -122,8 +153,9 @@ GeometryScope rsf_ac7_capture_geometry_scope();
 // Draws and dispatches preflight before querying D3D. All row types share the final
 // admission check. A false commit result reports a serialization or allocation failure.
 bool rsf_ac7_capture_can_record_draw(MotionCaptureInterval capture);
-bool rsf_ac7_capture_record_draw(MotionCaptureInterval capture, const char* text, std::size_t size);
+bool rsf_ac7_capture_record_draw(MotionCaptureInterval capture, const MotionDraw* draw);
 bool rsf_ac7_capture_record_dispatch(MotionCaptureInterval capture, const MotionDispatch* dispatch);
+bool rsf_ac7_capture_record_draw_text(MotionCaptureInterval capture, const char* text, std::size_t size);
 
 // Record and copy share the native storage guard with the companion blob snapshots.
 bool rsf_ac7_capture_copy_roots(void* user, MotionCopyRoots copy);
@@ -146,6 +178,15 @@ static_assert(sizeof(MotionBoundConstant) == 32 && offsetof(MotionBoundConstant,
 static_assert(sizeof(MotionDispatch) == 6016 && offsetof(MotionDispatch, qpc) == 72);
 static_assert(offsetof(MotionDispatch, inputs) == 128 && offsetof(MotionDispatch, outputs) == 5248 &&
     offsetof(MotionDispatch, constants) == 5568);
+static_assert(sizeof(MotionDrawInput) == 24 && offsetof(MotionDrawInput, slot) == 8);
+static_assert(sizeof(MotionColourSnapshot) == 100 && offsetof(MotionColourSnapshot, result) == 96);
+static_assert(sizeof(MotionDrawTarget) == 144 && offsetof(MotionDrawTarget, snapshot) == 40);
+static_assert(sizeof(MotionDrawConstants) == 456 && offsetof(MotionDrawConstants, count) == 448);
+static_assert(sizeof(MotionDraw) == 14280 && offsetof(MotionDraw, qpc) == 72);
+static_assert(offsetof(MotionDraw, shader_hashes) == 132 && offsetof(MotionDraw, viewport_x) == 160);
+static_assert(offsetof(MotionDraw, inputs) == 192 && offsetof(MotionDraw, ps_resources) == 576);
+static_assert(offsetof(MotionDraw, vs_resources) == 5696 && offsetof(MotionDraw, render_targets) == 10816);
+static_assert(offsetof(MotionDraw, depth) == 11968 && offsetof(MotionDraw, constants) == 12000);
 static_assert(sizeof(MotionArtifact) == 16 && sizeof(MotionArtifactList) == 24);
-static_assert(sizeof(MotionArtifactStats) == 32 && offsetof(MotionArtifactStats, capture_failures) == 28);
+static_assert(sizeof(MotionArtifactStats) == 24 && offsetof(MotionArtifactStats, capture_failures) == 20);
 static_assert(sizeof(MotionFinalArtifacts) == 40 && offsetof(MotionFinalArtifacts, stats) == 32);

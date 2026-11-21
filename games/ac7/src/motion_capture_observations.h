@@ -39,6 +39,13 @@ MotionConstantSource rsf_ac7_capture_constant_source(MotionCaptureInterval captu
     bool lighting, MotionConstantRecord* record, void* user, MotionCopyUpload copy);
 MotionConstantRead rsf_ac7_capture_reserve_constant_read(MotionCaptureInterval capture, uint32_t width, bool lighting);
 void rsf_ac7_capture_constant_read_failed(MotionCaptureInterval capture);
+
+bool rsf_ac7_capture_begin_lighting_pair(MotionCaptureInterval capture);
+bool rsf_ac7_capture_take_lighting_after(MotionCaptureInterval capture);
+bool rsf_ac7_capture_colour_snapshot_available(MotionCaptureInterval capture, bool lighting);
+// Returns the capture-wide read ordinal or UINT32_MAX if the sample or budget expired.
+uint32_t rsf_ac7_capture_reserve_colour_snapshot(MotionCaptureInterval capture, bool lighting);
+void rsf_ac7_capture_colour_snapshot_failed(MotionCaptureInterval capture);
 }
 
 static_assert(sizeof(MotionShaderFacts) == 8 && offsetof(MotionShaderFacts, constant_mask) == 4);

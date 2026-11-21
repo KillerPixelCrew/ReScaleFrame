@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
-//! Shared draw-stream admission and dispatch serialization over copied D3D11 facts.
+//! Shared draw-stream admission and serialization over copied D3D11 facts.
+
+mod ordinary;
 
 use super::{NativeRootScope, QueuedScope, Records, artifacts::Bytes, records};
 use crate::motion_capture_session::{CaptureInterval, rsf_ac7_capture_current};
@@ -103,7 +105,7 @@ fn commit(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_capture_record_draw(
+unsafe extern "C" fn rsf_ac7_capture_record_draw_text(
     capture: CaptureInterval,
     text: *const c_char,
     size: usize,
@@ -119,26 +121,66 @@ unsafe extern "C" fn rsf_ac7_capture_record_draw(
     .is_ok()
 }
 
+fn write_resource(out: &mut Bytes, r: &Resource) -> fmt::Result {
+    write!(
+        out,
+        "{{\"resource\":{},\"dimension\":{}",
+        r.resource, r.dimension
+    )?;
+    if matches!(r.dimension, TEXTURE_2D | TEXTURE_3D) {
+        write!(out, ",\"width\":{},\"height\":{}", r.width, r.height)?;
+        if r.dimension == TEXTURE_3D {
+            write!(out, ",\"depth\":{}", r.depth)?;
+        }
+        write!(out, ",\"format\":{}", r.format)?;
+    }
+    out.write_char('}')
+}
+
 fn write_views(out: &mut Bytes, views: &[BoundView]) -> fmt::Result {
-    for (index, BoundView { slot, resource: r }) in views.iter().enumerate() {
+    for (index, view) in views.iter().enumerate() {
+        if index != 0 {
+            out.write_char(',')?;
+        }
+        write!(out, "{{\"slot\":{},\"view\":", view.slot)?;
+        write_resource(out, &view.resource)?;
+        out.write_char('}')?;
+    }
+    Ok(())
+}
+
+fn write_constants(out: &mut Bytes, constants: &[BoundConstant]) -> fmt::Result {
+    for (index, cb) in constants.iter().enumerate() {
         if index != 0 {
             out.write_char(',')?;
         }
         write!(
             out,
-            "{{\"slot\":{slot},\"view\":{{\"resource\":{},\"dimension\":{}",
-            r.resource, r.dimension
+            "{{\"slot\":{},\"buffer\":{},\"blob\":{},\"upload_serial\":{},\"readback\":{}}}",
+            cb.slot, cb.buffer, cb.blob, cb.upload_serial, cb.readback
         )?;
-        if matches!(r.dimension, TEXTURE_2D | TEXTURE_3D) {
-            write!(out, ",\"width\":{},\"height\":{}", r.width, r.height)?;
-            if r.dimension == TEXTURE_3D {
-                write!(out, ",\"depth\":{}", r.depth)?;
-            }
-            write!(out, ",\"format\":{}", r.format)?;
-        }
-        out.write_str("}}")?;
     }
     Ok(())
+}
+
+fn write_queued(out: &mut Bytes, queued: &QueuedDraw) -> fmt::Result {
+    let scope = &queued.scope;
+    write!(
+        out,
+        concat!(
+            ",\"rhi_command\":{},\"rhi_execute\":{},\"queued_native_scope\":{},",
+            "\"queued_native_view\":{},\"queued_native_family\":{},\"queued_native_frame\":{},",
+            "\"queued_list\":{},\"queued_uid\":{}"
+        ),
+        queued.command,
+        queued.execute,
+        scope.scope,
+        scope.view,
+        scope.family,
+        scope.native_frame,
+        scope.command_list,
+        scope.queue_uid,
+    )
 }
 
 fn write_dispatch(out: &mut Bytes, interval: u32, d: &Dispatch) -> fmt::Result {
@@ -171,34 +213,10 @@ fn write_dispatch(out: &mut Bytes, interval: u32, d: &Dispatch) -> fmt::Result {
     out.write_str("],\"outputs\":[")?;
     write_views(out, outputs)?;
     out.write_str("],\"cs_cb\":[")?;
-    for (index, cb) in constants.iter().enumerate() {
-        if index != 0 {
-            out.write_char(',')?;
-        }
-        write!(
-            out,
-            "{{\"slot\":{},\"buffer\":{},\"blob\":{},\"upload_serial\":{},\"readback\":{}}}",
-            cb.slot, cb.buffer, cb.blob, cb.upload_serial, cb.readback
-        )?;
-    }
-    let queued = &d.queued;
-    let scope = &queued.scope;
-    write!(
-        out,
-        concat!(
-            "],\"rhi_command\":{},\"rhi_execute\":{},\"queued_native_scope\":{},",
-            "\"queued_native_view\":{},\"queued_native_family\":{},\"queued_native_frame\":{},",
-            "\"queued_list\":{},\"queued_uid\":{}}}"
-        ),
-        queued.command,
-        queued.execute,
-        scope.scope,
-        scope.view,
-        scope.family,
-        scope.native_frame,
-        scope.command_list,
-        scope.queue_uid,
-    )
+    write_constants(out, constants)?;
+    out.write_char(']')?;
+    write_queued(out, &d.queued)?;
+    out.write_char('}')
 }
 
 #[unsafe(no_mangle)]
