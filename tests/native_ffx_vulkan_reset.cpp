@@ -64,7 +64,7 @@ int main() {
         rsf_ffxgvk_get_status(self, &status) == RSF_BACKEND_OK && status.source_frame == 9,
         "the matching identity still generates after a refused one");
 
-    require(rsf_ffxgvk_destroy(self) == RSF_BACKEND_OK && !state.enabled && !owner.load(),
+    require(rsf_ffxgvk_destroy(self) == RSF_BACKEND_OK && !state.enabled && !routed(),
         "teardown disables generation before releasing the presenter");
     std::puts("PASS: FFX camera resets preserve presenter activation, SDK reset dispatch and exact source identity");
     return 0;

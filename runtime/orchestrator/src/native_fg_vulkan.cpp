@@ -24,11 +24,6 @@ static_assert(VK_SUCCESS == 0 && VK_INCOMPLETE == 5 && VK_SUBOPTIMAL_KHR == 1000
 static_assert(FFX_API_RETURN_OK == 0);
 static_assert(sizeof(rsf_ffxgvk_swapchain) == 32 && sizeof(rsf_ffxgvk_ops) == 24 * sizeof(void*));
 
-namespace {
-// The WSI hooks carry no user pointer. This one process-wide route is also the
-// FFX admission: the corrected SDK keeps a single WSI dispatch table.
-std::atomic<rsf_ffxgvk_native*> owner{nullptr};
-}
 struct rsf_ffxgvk_native {
     rsf_fgvk_setup setup{};
     HMODULE module = nullptr;
@@ -59,20 +54,33 @@ struct rsf_ffxgvk_native {
     rsf_frame_record lease{};
     std::atomic<uint64_t> callbacks{0};
     rsf::FrameCaptureVk capture;
-    // Rust destroys the effect, the swapchain and the slot resources first.
+    // Rust destroys the effect, the swapchain and the slot resources first and
+    // has closed its WSI route, so no hook borrows this storage. Rust holds
+    // the process-wide admission until this returns. A refused unregister
+    // (-3, another device's table) means these hooks are not registered.
     ~rsf_ffxgvk_native() {
         if (wsi_registered && wsi_dispatch) {
             const rsf_ffx_wsi_dispatch clear{sizeof(clear), 2, static_cast<VkDevice>(setup.graphics.device), nullptr, nullptr, nullptr, nullptr, nullptr};
             (void)wsi_dispatch(&clear);
         }
-        if (owner.load() == this) owner = nullptr;
         if (module) FreeLibrary(module);
     }
 };
 namespace {
+// The WSI hooks carry no user pointer. Each borrows the leaf from the Rust
+// route for the whole callback, including the forwarded Vulkan call; the
+// route keeps the leaf alive meanwhile and holds no lock.
+struct Borrow {
+    rsf_ffxgvk_native* self;
+    explicit Borrow(const void* device, uint32_t match_device = 1) : self(rsf_core_ffxgvk_wsi_borrow(device, match_device)) {}
+    ~Borrow() { if (self) rsf_core_ffxgvk_wsi_return(); }
+    Borrow(const Borrow&) = delete;
+    Borrow& operator=(const Borrow&) = delete;
+};
 VkResult VKAPI_PTR serialized_create(VkDevice device, const VkSwapchainCreateInfoKHR* info, const VkAllocationCallbacks* allocator, VkSwapchainKHR* chain) {
-    auto* self = owner.load();
-    if (!self || self->setup.graphics.device != device || !self->native_create) return VK_ERROR_INITIALIZATION_FAILED;
+    const Borrow borrow(device);
+    auto* self = borrow.self;
+    if (!self || !self->native_create) return VK_ERROR_INITIALIZATION_FAILED;
     struct Lease { PFN_vkCreateSwapchainKHR call; VkDevice device; const VkSwapchainCreateInfoKHR* info; const VkAllocationCallbacks* allocator; VkSwapchainKHR* chain; };
     Lease lease{self->native_create, device, info, allocator, chain};
     // Create/destroy hooks take their own LL2 mutex. Suppress only DLSS-G;
@@ -82,8 +90,9 @@ VkResult VKAPI_PTR serialized_create(VkDevice device, const VkSwapchainCreateInf
     }, &lease));
 }
 void VKAPI_PTR serialized_destroy(VkDevice device, VkSwapchainKHR chain, const VkAllocationCallbacks* allocator) {
-    auto* self = owner.load();
-    if (!self || self->setup.graphics.device != device || !self->native_destroy) return;
+    const Borrow borrow(device);
+    auto* self = borrow.self;
+    if (!self || !self->native_destroy) return;
     struct Lease { PFN_vkDestroySwapchainKHR call; VkDevice device; VkSwapchainKHR chain; const VkAllocationCallbacks* allocator; };
     Lease lease{self->native_destroy, device, chain, allocator};
     (void)rsf_slvk_without_dlssg([](void* user) -> int32_t {
@@ -92,8 +101,9 @@ void VKAPI_PTR serialized_destroy(VkDevice device, VkSwapchainKHR chain, const V
 }
 VkResult VKAPI_PTR serialized_acquire(VkDevice device, VkSwapchainKHR chain, uint64_t timeout, VkSemaphore semaphore, VkFence fence, uint32_t* index) {
     const rsf::VulkanTimingScope timing("native_acquire_total", 0);
-    auto* self = owner.load();
-    if (!self || self->setup.graphics.device != device || !self->native_acquire) return VK_ERROR_INITIALIZATION_FAILED;
+    const Borrow borrow(device);
+    auto* self = borrow.self;
+    if (!self || !self->native_acquire) return VK_ERROR_INITIALIZATION_FAILED;
     struct Lease { PFN_vkAcquireNextImageKHR call; VkDevice device; VkSwapchainKHR chain; uint64_t timeout; VkSemaphore semaphore; VkFence fence; uint32_t* index; };
     Lease lease{self->native_acquire, device, chain, timeout, semaphore, fence, index};
     return VkResult(rsf_slvk_without_dlssg([](void* user) -> int32_t {
@@ -106,8 +116,9 @@ VkResult VKAPI_PTR serialized_acquire(VkDevice device, VkSwapchainKHR chain, uin
     }, &lease));
 }
 VkResult VKAPI_PTR serialized_images(VkDevice device, VkSwapchainKHR chain, uint32_t* count, VkImage* images) {
-    auto* self = owner.load();
-    if (!self || self->setup.graphics.device != device || !self->native_images) return VK_ERROR_INITIALIZATION_FAILED;
+    const Borrow borrow(device);
+    auto* self = borrow.self;
+    if (!self || !self->native_images) return VK_ERROR_INITIALIZATION_FAILED;
     struct Lease { PFN_vkGetSwapchainImagesKHR call; VkDevice device; VkSwapchainKHR chain; uint32_t* count; VkImage* images; };
     Lease lease{self->native_images, device, chain, count, images};
     return VkResult(rsf_slvk_without_dlssg([](void* user) -> int32_t {
@@ -118,7 +129,8 @@ VkResult VKAPI_PTR serialized_images(VkDevice device, VkSwapchainKHR chain, uint
 }
 VkResult VKAPI_PTR serialized_present(VkQueue queue, const VkPresentInfoKHR* info) {
     const rsf::VulkanTimingScope timing("native_present_total", 0);
-    auto* self = owner.load();
+    const Borrow borrow(nullptr, 0);
+    auto* self = borrow.self;
     if (!self || !self->native_present) return VK_ERROR_INITIALIZATION_FAILED;
     struct Lease { PFN_vkQueuePresentKHR call; VkQueue queue; const VkPresentInfoKHR* info; } lease{self->native_present, queue, info};
     return VkResult(rsf_slvk_without_dlssg([](void* user) -> int32_t {
@@ -128,10 +140,10 @@ VkResult VKAPI_PTR serialized_present(VkQueue queue, const VkPresentInfoKHR* inf
         });
     }, &lease));
 }
-PFN_vkVoidFunction VKAPI_PTR device_proc(VkDevice device, const char* name) {
-    auto* self = owner.load();
-    if (!self || self->setup.graphics.device != device) return nullptr;
-    auto proc = self->setup.graphics.device_proc;
+// Typed leaf: resolves through the host loader, falling back from the KHR
+// names the SDK backend asks for to their core aliases.
+PFN_vkVoidFunction device_proc_for(const rsf_ffxgvk_native& self, VkDevice device, const char* name) {
+    auto proc = self.setup.graphics.device_proc;
     auto value = proc(device, name);
     if (!value) {
         struct Alias { const char* extension; const char* core; };
@@ -142,8 +154,15 @@ PFN_vkVoidFunction VKAPI_PTR device_proc(VkDevice device, const char* name) {
     }
     return reinterpret_cast<PFN_vkVoidFunction>(value);
 }
+// SDK backend vkDeviceProcAddr, also without a user pointer.
+PFN_vkVoidFunction VKAPI_PTR device_proc(VkDevice device, const char* name) {
+    const Borrow borrow(device);
+    return borrow.self ? device_proc_for(*borrow.self, device, name) : nullptr;
+}
+// SDK game-queue submit function, also without a user pointer.
 VkResult graphics_submit(uint32_t count, const VkSubmitInfo* submits, VkFence fence) {
-    auto* self = owner.load();
+    const Borrow borrow(nullptr, 0);
+    auto* self = borrow.self;
     return self ? VkResult(self->setup.graphics_submit(self->setup.queue_user, count, submits, reinterpret_cast<uint64_t>(fence))) : VK_ERROR_DEVICE_LOST;
 }
 struct QueueLock {
@@ -194,9 +213,10 @@ ffxReturnCode_t generate(ffxDispatchDescFrameGeneration* data, void* userdata) {
 }
 
 int32_t open(const rsf_fgvk_setup* setup, uint32_t width, uint32_t height, rsf_ffxgvk_native** out, void** resources) noexcept try {
+    // Rust admitted this owner to the WSI route and publishes the leaf only
+    // after open succeeds. Registration is the last fallible step, so a failed
+    // open registers nothing; the destructor unloads what it loaded.
     auto self = std::make_unique<rsf_ffxgvk_native>(); self->setup = *setup;
-    rsf_ffxgvk_native* expected = nullptr;
-    if (!owner.compare_exchange_strong(expected, self.get())) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     const auto& graphics = setup->graphics;
     self->width = width; self->height = height;
     self->allocator = const_cast<VkAllocationCallbacks*>(static_cast<const VkAllocationCallbacks*>(setup->allocator));
@@ -213,7 +233,7 @@ int32_t open(const rsf_fgvk_setup* setup, uint32_t width, uint32_t height, rsf_f
     self->dispatch = reinterpret_cast<PfnFfxDispatch>(GetProcAddress(self->module, "ffxDispatch"));
     self->configure = reinterpret_cast<PfnFfxConfigure>(GetProcAddress(self->module, "ffxConfigure"));
     if (!self->create || !self->destroy || !self->query || !self->dispatch || !self->configure) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
-#define RSF_VK_LOAD(member, name) self->member = reinterpret_cast<PFN_##name>(device_proc(static_cast<VkDevice>(graphics.device), #name)); if (!self->member) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT
+#define RSF_VK_LOAD(member, name) self->member = reinterpret_cast<PFN_##name>(device_proc_for(*self, static_cast<VkDevice>(graphics.device), #name)); if (!self->member) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT
     RSF_VK_LOAD(barrier, vkCmdPipelineBarrier); RSF_VK_LOAD(copy, vkCmdCopyImage); RSF_VK_LOAD(idle, vkDeviceWaitIdle);
 #undef RSF_VK_LOAD
     auto memory = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties>(graphics.instance_proc(graphics.instance, "vkGetPhysicalDeviceMemoryProperties"));

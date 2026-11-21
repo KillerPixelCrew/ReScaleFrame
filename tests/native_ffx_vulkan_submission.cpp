@@ -165,11 +165,11 @@ int main() {
         "a partially retired owner refuses new recording and presentation");
     state.reject_effect_destroy = false; state.reject_swapchain_destroy = true;
     require(rsf_ffxgvk_destroy(self) == RSF_BACKEND_ERROR_FEATURE_FAILED && state.effects_destroyed == 1 && state.chains_destroyed == 1 &&
-        owner.load() == state.native, "the chain goes before a refused swapchain context, and the WSI route stays registered");
+        routed() == state.native, "the chain goes before a refused swapchain context, and the WSI route stays registered");
     state.reject_swapchain_destroy = false;
     const auto fences_before = state.destroyed_fences;
     require(rsf_ffxgvk_destroy(self) == RSF_BACKEND_OK && state.effects_destroyed == 1 && state.chains_destroyed == 1 &&
-        state.swapchains_destroyed == 1 && state.destroyed_images == 6 && state.destroyed_fences == fences_before + 12 && !owner.load(),
+        state.swapchains_destroyed == 1 && state.destroyed_images == 6 && state.destroyed_fences == fences_before + 12 && !routed(),
         "retry completes teardown without repeating released steps and releases the WSI route last");
     std::puts("PASS: FFX source recording, reused command identity, submission completion and retained teardown");
 }

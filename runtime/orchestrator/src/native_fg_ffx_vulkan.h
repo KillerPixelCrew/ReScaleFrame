@@ -19,12 +19,16 @@ rsf_backend_result rsf_ffxgvk_destroy(rsf_ffxgvk*);
 }
 
 /* Private native leaf for the Rust owner in vulkan_ffx_fg.rs. The leaf keeps
-   the FidelityFX module, SDK contexts, WSI hook routing and its process-wide
-   admission, command recording, capture and timing. Rust decides setup and
-   swapchain admission, slot reuse, completion evidence, presentation admission
-   and retirement order. Status-returning steps report rsf_backend_result; WSI
-   steps return the VkResult unchanged. Creation-only steps read the borrowed
-   create_info and run only inside rsf_ffxgvk_create. */
+   the FidelityFX module, SDK contexts, the WSI hook bodies and their
+   registration, command recording, capture and timing. Rust decides setup and
+   swapchain admission, the process-wide WSI route, slot reuse, completion
+   evidence, presentation admission and retirement order. Status-returning
+   steps report rsf_backend_result; WSI steps return the VkResult unchanged.
+   Creation-only steps read the borrowed create_info and run only inside
+   rsf_ffxgvk_create. Rust admits the route before open, publishes the leaf
+   after it, and calls close only once no hook borrows the leaf; close
+   unregisters the hooks, frees the leaf and unloads the module before Rust
+   releases admission. */
 struct rsf_ffxgvk_native;
 struct rsf_vkfg_platform;
 struct rsf_ffxgvk_swapchain {
@@ -74,4 +78,9 @@ int32_t rsf_core_ffxgvk_present(rsf_ffxgvk*, const void* info, uint64_t chain, c
 rsf_backend_result rsf_core_ffxgvk_status(rsf_ffxgvk*, rsf_fgvk_status*);
 rsf_backend_result rsf_core_ffxgvk_drain(rsf_ffxgvk*);
 rsf_backend_result rsf_core_ffxgvk_destroy(rsf_ffxgvk*);
+/* Scoped WSI borrow. Returns the published leaf, or null before publication,
+   once retirement has closed the route, or, with match_device, for another
+   device. Pair each non-null result with one rsf_core_ffxgvk_wsi_return. */
+rsf_ffxgvk_native* rsf_core_ffxgvk_wsi_borrow(const void* device, uint32_t match_device);
+void rsf_core_ffxgvk_wsi_return();
 }

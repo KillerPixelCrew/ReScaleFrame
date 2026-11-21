@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 // FidelityFX 3 Vulkan frame-generation owner. The native leaf in
-// native_fg_vulkan.cpp keeps the SDK module, its contexts, WSI hook routing,
-// command recording, capture and timing. This owner decides admission, slot
-// reuse, completion evidence, presentation admission and retirement order.
+// native_fg_vulkan.cpp keeps the SDK module, its contexts, the WSI hook bodies
+// and their registration, command recording, capture and timing. This owner
+// decides admission, including the process-wide WSI route, slot reuse,
+// completion evidence, presentation admission and retirement order.
 use crate::allocate_handle;
 use crate::sr_session::has_capacity;
 use crate::vulkan_fg_abi::{
@@ -24,6 +25,7 @@ use rsf_game_sys::{
 };
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 const OK: i32 = 0;
 const INVALID: i32 = -1;
@@ -106,6 +108,80 @@ const _: () = {
     assert!(size_of::<Ops>() == 24 * size_of::<Handle>());
 };
 
+/// The process-wide WSI route. The corrected SDK keeps one WSI dispatch table
+/// whose hooks carry no user pointer, so one owner holds the route from
+/// admission until its native leaf is closed. A hook borrows the published
+/// leaf for one callback. The lock covers only these fields and is never held
+/// across a native, Vulkan, Streamline or SDK call.
+struct Route {
+    owner: usize,
+    device: usize,
+    native: usize,
+    borrows: usize,
+    closing: bool,
+}
+
+impl Route {
+    const FREE: Self = Self {
+        owner: 0,
+        device: 0,
+        native: 0,
+        borrows: 0,
+        closing: false,
+    };
+
+    fn admit(&mut self, owner: usize, device: usize) -> bool {
+        if self.owner != 0 {
+            return false;
+        }
+        *self = Self {
+            owner,
+            device,
+            ..Self::FREE
+        };
+        true
+    }
+
+    fn publish(&mut self, owner: usize, native: usize) {
+        if self.owner == owner {
+            self.native = native;
+        }
+    }
+
+    fn borrow(&mut self, device: usize, match_device: bool) -> usize {
+        if self.native == 0 || self.closing || (match_device && device != self.device) {
+            return 0;
+        }
+        self.borrows += 1;
+        self.native
+    }
+
+    fn give_back(&mut self) {
+        self.borrows = self.borrows.saturating_sub(1);
+    }
+
+    /// Refuses new borrows and reports whether none is still active.
+    fn close(&mut self, owner: usize) -> bool {
+        if self.owner != owner {
+            return true;
+        }
+        self.closing = true;
+        self.borrows == 0
+    }
+
+    fn release(&mut self, owner: usize) {
+        if self.owner == owner {
+            *self = Self::FREE;
+        }
+    }
+}
+
+static ROUTE: Mutex<Route> = Mutex::new(Route::FREE);
+
+fn route() -> MutexGuard<'static, Route> {
+    ROUTE.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 fn presented(result: i32) -> bool {
     matches!(result, VK_SUCCESS | VK_SUBOPTIMAL)
 }
@@ -175,6 +251,7 @@ struct Owner {
     enabled: bool,
     configured: bool,
     retiring: bool,
+    admitted: bool,
     timeline: RecordingTimeline,
     slots: [Slot; SLOT_COUNT],
     status: Status,
@@ -198,6 +275,7 @@ impl Owner {
             enabled: false,
             configured: false,
             retiring: false,
+            admitted: false,
             timeline: unsafe { std::mem::zeroed() },
             slots: std::array::from_fn(|_| Slot::default()),
             status: Status {
@@ -215,8 +293,18 @@ impl Owner {
         }
     }
 
+    fn id(&self) -> usize {
+        ptr::from_ref(self).addr()
+    }
+
     fn initialize(&mut self, setup: &Setup) -> i32 {
         let ops = self.ops;
+        // One owner holds the WSI route before the module is loaded, as the
+        // former native compare-exchange did at the start of open.
+        if !route().admit(self.id(), self.device.addr()) {
+            return NOT_SUPPORTED;
+        }
+        self.admitted = true;
         let opened = unsafe {
             (ops.open)(
                 setup,
@@ -229,6 +317,9 @@ impl Owner {
         if opened != OK {
             return opened;
         }
+        // The SDK calls the create, image and destroy hooks synchronously
+        // inside swapchain-context creation and failure cleanup.
+        route().publish(self.id(), self.native.expose_provenance());
         let mut chain = 0;
         let created = unsafe { (ops.create_swapchain)(self.native, &mut chain) };
         if created != OK {
@@ -602,6 +693,8 @@ impl Owner {
     // retried without repeating a release that already succeeded.
     fn retire(&mut self) -> i32 {
         if self.native.is_null() {
+            // A failed open freed its own partial leaf and registered no hooks.
+            self.withdraw();
             return OK;
         }
         if self.unsubmitted() {
@@ -635,16 +728,48 @@ impl Owner {
             }
             self.context = false;
         }
+        // Destroying the chain joined the SDK interpolation and presenter
+        // threads (FrameInterpolationSwapchainVK.cpp destroySwapchain), so no
+        // SDK thread of this owner can enter a hook. Unregistering alone would
+        // not prove that: the bridge copies its table entry under its lock and
+        // calls the hook after releasing it. Refuse new borrows here and keep
+        // the leaf while a callback still holds one.
+        if !route().close(self.id()) {
+            return NOT_READY;
+        }
         for slot in &mut self.slots {
             rsf_core_vkfg_release_image(ops.resources, self.resources, &mut slot.color);
             rsf_core_vkfg_release_fences(ops.resources, self.resources, &mut slot.fences);
         }
-        // The native leaf unregisters the WSI hooks after swapchain destruction,
-        // releases the process-wide admission and then unloads the SDK module.
+        // The native leaf unregisters the WSI hooks, frees its storage and
+        // unloads the SDK module. Admission ends only afterwards, so a
+        // successor cannot register before this unregistration.
         unsafe { (ops.close)(native) };
         self.native = ptr::null_mut();
+        self.withdraw();
         OK
     }
+
+    fn withdraw(&mut self) {
+        if self.admitted {
+            route().release(self.id());
+            self.admitted = false;
+        }
+    }
+}
+
+/// Scoped borrow for a native WSI hook. `match_device` is zero for the queue
+/// hooks, which receive no device. Returns null without a published leaf,
+/// once retirement has closed the route, or for another device. Each non-null
+/// result is paired with one `rsf_core_ffxgvk_wsi_return`.
+#[unsafe(no_mangle)]
+extern "C" fn rsf_core_ffxgvk_wsi_borrow(device: Handle, match_device: u32) -> Handle {
+    ptr::with_exposed_provenance_mut(route().borrow(device.addr(), match_device != 0))
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_core_ffxgvk_wsi_return() {
+    route().give_back();
 }
 
 unsafe fn live<'a>(owner: *mut Owner) -> Option<&'a mut Owner> {
@@ -908,10 +1033,23 @@ mod tests {
         fail_drain: bool,
         fail_effect_destroy: bool,
         fail_swapchain_destroy: bool,
+        fail_open: bool,
         present_result: i32,
     }
 
     thread_local! { static CALLS: RefCell<Calls> = RefCell::default(); }
+    // Owners share the process-wide WSI route, so these tests run one at a time.
+    static SERIAL: Mutex<()> = Mutex::new(());
+    fn serial() -> MutexGuard<'static, ()> {
+        SERIAL.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+    fn routed(device: usize) -> Handle {
+        let native = rsf_core_ffxgvk_wsi_borrow(ptr::without_provenance_mut(device), 1);
+        if !native.is_null() {
+            rsf_core_ffxgvk_wsi_return();
+        }
+        native
+    }
     fn calls<R>(f: impl FnOnce(&mut Calls) -> R) -> R {
         CALLS.with(|calls| f(&mut calls.borrow_mut()))
     }
@@ -926,7 +1064,14 @@ mod tests {
         out: *mut Handle,
         user: *mut Handle,
     ) -> i32 {
-        calls(|c| c.opens += 1);
+        // Admission precedes the native leaf, and nothing is routed yet.
+        assert!(route().owner != 0 && route().native == 0);
+        if calls(|c| {
+            c.opens += 1;
+            c.fail_open
+        }) {
+            return INIT_FAILED;
+        }
         unsafe {
             out.write(ptr::without_provenance_mut(NATIVE));
             user.write(ptr::without_provenance_mut(NATIVE + 1));
@@ -935,6 +1080,9 @@ mod tests {
     }
     unsafe extern "C" fn close(native: Handle) {
         assert_eq!(native.addr(), NATIVE);
+        // The hooks are already refused, and admission outlives the native
+        // close so no successor can register before it unregisters.
+        assert!(routed(DEVICE).is_null() && route().owner != 0 && route().closing);
         calls(|c| c.closes += 1);
     }
     unsafe extern "C" fn create_swapchain(_: Handle, chain: *mut u64) -> i32 {
@@ -1239,6 +1387,7 @@ mod tests {
 
     #[test]
     fn refused_cleanup_after_failed_creation_retains_the_owner() {
+        let _serial = serial();
         calls(|c| (c.fail_provider, c.fail_swapchain_destroy) = (true, true));
         let (result, owner, chain) = create(&setup(), &SWAPCHAIN);
         assert_eq!((result, chain), (INIT_FAILED, 0));
@@ -1264,6 +1413,7 @@ mod tests {
 
     #[test]
     fn configured_source_keeps_its_consumer_fence_when_present_reports_an_error() {
+        let _serial = serial();
         let (result, owner, chain) = create(&setup(), &SWAPCHAIN);
         assert_eq!((result, chain), (OK, 3));
         let record = source(1);
@@ -1312,6 +1462,7 @@ mod tests {
 
     #[test]
     fn teardown_requires_submission_and_drain_and_retries_without_repeating() {
+        let _serial = serial();
         let (_, owner, _) = create(&setup(), &SWAPCHAIN);
         let record = source(2);
         let input = frame(&record);
@@ -1352,5 +1503,67 @@ mod tests {
             )),
             (3, 1, 1, 1, 1)
         );
+    }
+
+    #[test]
+    fn one_owner_holds_the_wsi_route_and_a_borrow_retains_its_leaf() {
+        let _serial = serial();
+        let (result, first, _) = create(&setup(), &SWAPCHAIN);
+        assert_eq!(result, OK);
+        assert_eq!(routed(DEVICE).addr(), NATIVE);
+        assert!(
+            routed(DEVICE + 1).is_null(),
+            "a foreign device is not routed"
+        );
+        // A second owner is refused before its native leaf opens.
+        let (second, owner, chain) = create(&setup(), &SWAPCHAIN);
+        assert_eq!((second, owner.is_null(), chain), (NOT_SUPPORTED, true, 0));
+        assert_eq!(calls(|c| c.opens), 1);
+
+        // A queue hook (no device) is inside its callback while the host
+        // destroys the owner: every SDK context goes, but the leaf stays.
+        let hook = rsf_core_ffxgvk_wsi_borrow(ptr::null_mut(), 0);
+        assert_eq!(hook.addr(), NATIVE);
+        assert_eq!(unsafe { rsf_core_ffxgvk_destroy(first) }, NOT_READY);
+        assert_eq!(
+            calls(|c| (c.effects_destroyed, c.swapchains_destroyed, c.closes)),
+            (1, 1, 0)
+        );
+        assert!(routed(DEVICE).is_null(), "a closing route lends no leaf");
+        assert!(rsf_core_ffxgvk_wsi_borrow(ptr::null_mut(), 0).is_null());
+        assert_eq!(create(&setup(), &SWAPCHAIN).0, NOT_SUPPORTED);
+        rsf_core_ffxgvk_wsi_return();
+
+        // The retry repeats no SDK release and closes the leaf once.
+        assert_eq!(unsafe { rsf_core_ffxgvk_destroy(first) }, OK);
+        assert_eq!(
+            calls(|c| (
+                c.effects_destroyed,
+                c.chains_destroyed,
+                c.swapchains_destroyed,
+                c.closes
+            )),
+            (1, 1, 1, 1)
+        );
+        assert!(routed(DEVICE).is_null());
+        let (next, successor, _) = create(&setup(), &SWAPCHAIN);
+        assert_eq!(next, OK);
+        assert_eq!(routed(DEVICE).addr(), NATIVE);
+        assert_eq!(unsafe { rsf_core_ffxgvk_destroy(successor) }, OK);
+    }
+
+    #[test]
+    fn failed_open_releases_the_wsi_route() {
+        let _serial = serial();
+        calls(|c| c.fail_open = true);
+        let (result, owner, _) = create(&setup(), &SWAPCHAIN);
+        assert_eq!((result, owner.is_null()), (INIT_FAILED, true));
+        assert_eq!(calls(|c| (c.opens, c.closes)), (1, 0));
+        assert_eq!(route().owner, 0);
+        calls(|c| c.fail_open = false);
+        let (result, owner, _) = create(&setup(), &SWAPCHAIN);
+        assert_eq!(result, OK);
+        assert_eq!(unsafe { rsf_core_ffxgvk_destroy(owner) }, OK);
+        assert_eq!(route().owner, 0);
     }
 }
