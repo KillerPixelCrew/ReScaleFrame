@@ -22,6 +22,8 @@ static_assert(VK_SUCCESS == 0 && VK_INCOMPLETE == 5 && VK_SUBOPTIMAL_KHR == 1000
 static_assert(FFX_API_RETURN_OK == 0);
 static_assert(sizeof(rsf_ffxgvk_swapchain) == 32 && sizeof(rsf_ffxgvk_ops) == 26 * sizeof(void*));
 
+extern "C" const char* rsf_core_vk_promoted_device_proc_alias(const char* name);
+
 struct rsf_ffxgvk_native {
     rsf_fgvk_setup setup{};
     rsf_vkffx_exports sdk;
@@ -119,17 +121,12 @@ VkResult VKAPI_PTR serialized_present(VkQueue queue, const VkPresentInfoKHR* inf
         });
     }, &lease));
 }
-// Typed leaf: resolves through the host loader, falling back from the KHR
-// names the SDK backend asks for to their core aliases.
+// Keep both host loader calls in this native leaf. Rust selects the alias after a miss.
 PFN_vkVoidFunction device_proc_for(const rsf_ffxgvk_native& self, VkDevice device, const char* name) {
     auto proc = self.setup.graphics.device_proc;
     auto value = proc(device, name);
     if (!value) {
-        struct Alias { const char* extension; const char* core; };
-        constexpr Alias aliases[] = {{"vkGetBufferMemoryRequirements2KHR", "vkGetBufferMemoryRequirements2"},
-            {"vkGetImageMemoryRequirements2KHR", "vkGetImageMemoryRequirements2"},
-            {"vkBindBufferMemory2KHR", "vkBindBufferMemory2"}, {"vkBindImageMemory2KHR", "vkBindImageMemory2"}};
-        for (const auto& alias : aliases) if (std::strcmp(name, alias.extension) == 0) value = proc(device, alias.core);
+        if (const auto* alias = rsf_core_vk_promoted_device_proc_alias(name)) value = proc(device, alias);
     }
     return reinterpret_cast<PFN_vkVoidFunction>(value);
 }

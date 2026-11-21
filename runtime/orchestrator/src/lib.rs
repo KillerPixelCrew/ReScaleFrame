@@ -270,6 +270,8 @@ mod ui_layer_abi;
 #[cfg(windows)]
 mod vulkan_antilag;
 #[cfg(windows)]
+mod vulkan_dispatch;
+#[cfg(windows)]
 mod vulkan_dlss_fg;
 #[cfg(windows)]
 mod vulkan_dlss_fg_abi;
