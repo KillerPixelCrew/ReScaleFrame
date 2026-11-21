@@ -6,13 +6,15 @@
 //! and instruction guards, Runtime export negotiation, the live flag and the verify, prepare,
 //! start, quiesce, stop and busy decisions, the reduced-render recovery transaction
 //! (recovery.rs), SR and HUDless publication (publication.rs), the FRAME, SUBMISSION and WINDOW
-//! scope (scope.rs) and the imagespace, Effects and TAA seams (imagespace.rs). render_hooks.cpp
-//! keeps each typed detour and its typed MinHook trampoline, which it calls on its own C++
-//! frame, the callback scope counters, the remaining producer bodies and the recovery,
-//! publication, scope and imagespace leaves (render_hooks_platform.h). Every value belongs to
-//! the exact recognized build; see docs/research/rust-fallout4-render-hooks.md.
+//! scope (scope.rs), the imagespace, Effects and TAA seams (imagespace.rs) and the viewport, DR
+//! and prepass seams (producer.rs). render_hooks.cpp keeps each typed detour and its typed
+//! MinHook trampoline, which it calls on its own C++ frame, the callback scope counters, the
+//! nested prepass counter and the recovery, publication, scope, imagespace and producer leaves
+//! (render_hooks_platform.h). Every value belongs to the exact recognized build; see
+//! docs/research/rust-fallout4-render-hooks.md.
 
 mod imagespace;
+mod producer;
 mod publication;
 mod recovery;
 mod scope;

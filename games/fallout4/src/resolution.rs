@@ -19,7 +19,7 @@ use windows_sys::Win32::System::{
 };
 
 const STATE: usize = 0x3d871a0;
-const TARGETS: usize = 0x2f4d750;
+pub(crate) const TARGETS: usize = 0x2f4d750;
 const RATIOS: usize = TARGETS + 0xfb8;
 const VIEWPORT: usize = TARGETS + 0xfe4;
 const ACTIVE: usize = TARGETS + 0xfe5;
@@ -915,7 +915,7 @@ extern "C" fn rsf_fallout4_resolution_native_dr(leaves: &Leaves) -> bool {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_resolution_native_viewport(enabled: bool) -> bool {
+pub(crate) extern "C" fn rsf_fallout4_resolution_native_viewport(enabled: bool) -> bool {
     let mut scope = SCOPE.get();
     if !scope.output {
         return true;
@@ -950,7 +950,7 @@ pub(crate) extern "C" fn rsf_fallout4_resolution_output_busy() -> bool {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_resolution_refused() -> bool {
+pub(crate) extern "C" fn rsf_fallout4_resolution_refused() -> bool {
     SCOPE.get().changed
 }
 

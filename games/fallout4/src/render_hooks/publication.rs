@@ -2,7 +2,8 @@
 //! SR and HUDless publication for Fallout 4 AE 1.11.240.
 //!
 //! Rust owns the admission and ordering of the SR seam inside the imagespace Effects call
-//! (selected and sequenced by imagespace.rs) and of the HUDless viewport seam: the recovery SEAL before any temporal reader and its FINISH at the
+//! (selected and sequenced by imagespace.rs) and of the HUDless viewport seam (selected by
+//! producer.rs): the recovery SEAL before any temporal reader and its FINISH at the
 //! end of the SR step, every refusal and its World refusal, the FRAME/SUBMISSION lease and
 //! producer comparisons, the pass identity and role, the SR-off decision, the screen verdict, the
 //! FG_INPUTS, FINAL_SCENE and WINDOW callback order, the scalar identity kept after FG input
@@ -476,8 +477,8 @@ fn pointer(value: usize) -> String {
     format!("{value:016X}")
 }
 
-/// The HUDless seam after the native HUDless viewport selection.
-fn emit_hudless(leaves: &Leaves, recovery: &RecoveryLeaves) {
+/// The HUDless seam after the native HUDless viewport selection (producer.rs).
+pub(super) fn emit_hudless(leaves: &Leaves, recovery: &RecoveryLeaves) {
     let world = leaves.world();
     if !world.in_imagespace || !world.inputs || world.window_open || !recovery.same_source() {
         return;
@@ -559,11 +560,6 @@ fn emit_hudless(leaves: &Leaves, recovery: &RecoveryLeaves) {
     let world = leaves.world();
     // SAFETY: the World names its pass, now the open WINDOW.
     leaves.notify(unsafe { &*world.pass }, world.context, 1);
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_render_emit_hudless(leaves: &Leaves, recovery: &RecoveryLeaves) {
-    emit_hudless(leaves, recovery)
 }
 
 /// The screen verdict on a World pass, used again before the outer Present.

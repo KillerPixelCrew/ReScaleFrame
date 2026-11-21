@@ -33,18 +33,19 @@ const FRAME_PASS: usize = 0x21f_0ac0;
 const SOURCE_RETIRED: u32 = 7;
 
 /// NativeRenderOwner: the native renderer, device, Context, chain, window, scene graph view and
-/// frame counter, read whole by the typed owner reader.
+/// frame counter, read whole by the typed owner reader. The DR seam (producer.rs) compares it with
+/// the leased FRAME.
 #[repr(C)]
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct Owner {
-    renderer: usize,
-    device: usize,
-    context: usize,
-    chain: usize,
-    window: usize,
-    graph: usize,
-    view: usize,
-    frame: u32,
+    pub(super) renderer: usize,
+    pub(super) device: usize,
+    pub(super) context: usize,
+    pub(super) chain: usize,
+    pub(super) window: usize,
+    pub(super) graph: usize,
+    pub(super) view: usize,
+    pub(super) frame: u32,
 }
 
 /// NativeScopeWorld: the World values a step reads at the moment it runs. The pass pointers name

@@ -7,8 +7,8 @@ add_library(rsf_game_fallout4 SHARED src/plugin.cpp src/native_creation.cpp
 # trampolines and guarded host callback through src/cpu_events_platform.h. Rust also owns
 # depth-domain admission and composition, producer resolution, the render hook lifecycle with
 # World/Present admission, reduced-render recovery, SR/HUDless publication, the FRAME,
-# SUBMISSION and WINDOW scope and the imagespace, Effects and TAA seams, and render-input
-# admission with its camera history and leased passes.
+# SUBMISSION and WINDOW scope, the imagespace, Effects and TAA seams and the viewport, DR and
+# prepass seams, and render-input admission with its camera history and leased passes.
 # Their C++ leaves provide typed native calls through the matching private platform headers.
 rsf_add_rust_static(rsf_fallout4_rust rsf_rust_fallout4 rsf-fallout4 rsf_fallout4)
 target_include_directories(rsf_game_fallout4 PRIVATE
