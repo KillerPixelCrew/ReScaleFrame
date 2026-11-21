@@ -2,7 +2,7 @@
 .SYNOPSIS
 Compiles the retained FSR4 Vulkan/DX12 bridge DLL.
 .DESCRIPTION
-Checks FidelityFX DX12/Vulkan/MinHook headers, compiles the MinHook C sources with gcc into a temporary object directory, and links them with the C++20 bridge sources through g++ with static compiler runtime and d3d12/dxgi/bcrypt linkage. Builds a sibling temporary DLL, replacing Output only after success; compilation failure removes the temporary outputs and throws.
+Builds the shared Rust compatibility owner for Windows GNU, compiles MinHook with gcc, and links both with the C++20 bridge through g++. Builds a sibling temporary DLL, replacing Output only after success.
 .PARAMETER SdkRoot
 FidelityFX SDK root containing Kits/FidelityFX/api/include/dx12/ffx_api_dx12.h.
 .PARAMETER Output
@@ -24,6 +24,7 @@ if (-not $VulkanSdkRoot) { throw 'Specify -VulkanSdkRoot or set VULKAN_SDK.' }
 $vulkan = Join-Path (Resolve-Path -LiteralPath $VulkanSdkRoot).Path 'Include'
 $compiler = (Get-Command g++.exe -ErrorAction Stop).Source
 $cCompiler = (Get-Command gcc.exe -ErrorAction Stop).Source
+$cargo = (Get-Command cargo.exe -ErrorAction Stop).Source
 if (-not (Test-Path -LiteralPath (Join-Path $sdk 'Kits/FidelityFX/api/include/dx12/ffx_api_dx12.h'))) {
     throw 'FidelityFX SDK DX12 API headers are required'
 }
@@ -45,6 +46,18 @@ $temporary = [IO.Path]::ChangeExtension($target, '.tmp.dll')
 $objects = Join-Path ([IO.Path]::GetTempPath()) ('VulkanStoryFsr4-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $objects | Out-Null
 try {
+    $rustTarget = 'x86_64-pc-windows-gnu'
+    $rustOutput = Join-Path $objects 'cargo'
+    Push-Location -LiteralPath (Join-Path $PSScriptRoot '../../..')
+    try {
+        & $cargo build --locked --release -p rsf-fsr4-compat --target $rustTarget --target-dir $rustOutput
+        if ($LASTEXITCODE -ne 0) { throw "FSR 4 Rust compatibility compilation failed: $LASTEXITCODE" }
+    }
+    finally {
+        Pop-Location
+    }
+    $rustArchive = Join-Path $rustOutput "$rustTarget/release/librsf_fsr4_compat.a"
+
     # hde32.c compiles to an empty object on x64; MinHook stays C, not C++.
     $minHookObjects = @($minHookSources | ForEach-Object {
         Join-Path $objects ([IO.Path]::GetFileNameWithoutExtension($_) + '.o')
@@ -56,7 +69,7 @@ try {
     & $compiler -std=c++20 -O2 -shared -static -Wall -Wextra -I (Join-Path $sdk 'Kits/FidelityFX') -I $vulkan `
         -I (Join-Path $minHook 'include') -I (Join-Path $PSScriptRoot '../../backends/fsr/src') -I (Join-Path $PSScriptRoot '../../common/include') `
         (Join-Path $PSScriptRoot 'bridge.cpp') (Join-Path $PSScriptRoot '../../backends/fsr/src/fsr4_compat_core.cpp') $minHookObjects `
-        -o $temporary -ld3d12 -ldxgi -lbcrypt
+        $rustArchive -o $temporary -ld3d12 -ldxgi -lbcrypt -lntdll -luserenv -lws2_32 -ldbghelp
     if ($LASTEXITCODE -ne 0) { throw "FSR 4 bridge compilation failed: $LASTEXITCODE" }
     Move-Item -LiteralPath $temporary -Destination $target -Force
 }
