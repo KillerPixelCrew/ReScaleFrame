@@ -15,8 +15,9 @@
 //! checks and shaders, relay memory, pass leases, SEH reads and protected code writes. plugin.cpp
 //! lends its entry points through the
 //! exception-guarded leaf table in ac7_platform.h and keeps the exported
-//! rsf_get_game_plugin_api. The DirectInput carriers, their decryption wait, carrier engine
-//! patches, window acceptance and D3D11 bridge are not part of this crate yet.
+//! rsf_get_game_plugin_api. The combined carriers call `carrier.rs` for their executable and
+//! window identifiers, GameSDK probe and decrypted patch policy through ac7_carrier.h.
+mod carrier;
 mod cloud_depth;
 mod cloud_depth_abi;
 mod contact_shadow;

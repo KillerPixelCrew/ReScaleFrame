@@ -73,22 +73,18 @@ static void on_native_scope(void* user, void* list, const rsf_game_render_pass* 
 static void on_native_cpu(void* user, const rsf_game_cpu_event* event)
 { (void)user; (void)rsf_native_fg_dispatch_cpu(event); }
 
-int rsf_bridge_prepare_game(const wchar_t* plugin_path, const char* executable_sha256,
+int rsf_bridge_prepare_game(const wchar_t* plugin_path, const rsf_game_probe* probe,
                             rsf_bridge_log_fn log, void* log_user)
 {
     rsf_plugin_session_options options;
-    rsf_game_probe probe;
     rsf_result result;
     AcquireSRWLockExclusive(&game_prepare_guard);
     if (game_session) {
         const int ready = game_prepared;
         ReleaseSRWLockExclusive(&game_prepare_guard); return ready;
     }
-    memset(&probe, 0, sizeof(probe)); probe.struct_size = sizeof(probe);
-    probe.pe_machine = 0x8664; probe.executable_name_utf8 = "Ace7Game.exe";
-    probe.sha256_hex = executable_sha256;
     memset(&options, 0, sizeof(options)); options.struct_size = sizeof(options);
-    options.abi_version = RSF_PLUGIN_SESSION_ABI_VERSION; options.plugin_path = plugin_path; options.probe = &probe;
+    options.abi_version = RSF_PLUGIN_SESSION_ABI_VERSION; options.plugin_path = plugin_path; options.probe = probe;
     options.services.struct_size = sizeof(options.services); options.services.abi_version = RSF_GAME_ABI_VERSION;
     options.services.session_id = ((uint64_t)GetCurrentProcessId() << 32) | GetTickCount();
     options.services.render_pass = on_native_pass;

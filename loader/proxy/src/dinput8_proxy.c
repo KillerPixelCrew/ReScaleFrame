@@ -11,6 +11,7 @@
 #include <rescaleframe/d3d11_observer.h>
 #include <rescaleframe/overlay_input.h>
 #include <rescaleframe/texture_dump.h>
+#include <rescaleframe/ac7_carrier.h>
 #include <rescaleframe/ac7_scene_color.h>
 #include <rescaleframe/ac7_motion_capture.h>
 #include <rescaleframe/native_fg.h>
@@ -279,6 +280,11 @@ static DWORD read_number(const char* name, DWORD fallback)
     return (DWORD)value;
 }
 
+static uint32_t carrier_read_number(const char* name, uint32_t fallback)
+{
+    return (uint32_t)read_number(name, (DWORD)fallback);
+}
+
 /* A text setting, with the same precedence. Returns zero when nothing sets it. */
 static int read_text(const char* name, char* out, size_t count)
 {
@@ -348,11 +354,15 @@ static void register_overlay_actions(void);
 /* Defined next to the other console variable work, and called from the render scale paths above
    it, which run whenever the scale is applied or restored. */
 static void set_separate_translucency_scale(void);
-static void apply_separate_translucency_patch(void);
-static int apply_translucency_depth_patches(void);
+static void register_translucency_scale(uint32_t rva, uint32_t immediate_offset);
 /* Whether the engine will build a depth for a layer larger than the scene, which is what a scale
    above 1.0 depends on. Settled at patch time, read whenever the scale is chosen. */
 static int translucency_depth_conformed;
+
+static void set_translucency_depth_conformed(int conformed)
+{
+    translucency_depth_conformed = conformed;
+}
 
 static void start_observer(void)
 {
@@ -649,25 +659,17 @@ static void set_jitter_enabled(int enabled)
     if (jitter_patch.enabled == (enabled != 0)) {
         return;
     }
-    /* jne rel32, the stock gate. */
-    static const uint8_t gate[6] = {0x0F, 0x85, 0xDD, 0x03, 0x00, 0x00};
-    /* The six byte canonical nop, so the fall-through path is reached for every view. */
-    static const uint8_t open_all[6] = {0x66, 0x0F, 0x1F, 0x44, 0x00, 0x00};
-    /* Or a jump to the main-view stub, and a nop. */
-    uint8_t open_main[6] = {0xE9, 0, 0, 0, 0, 0x90};
-    const uint8_t* open = open_all;
+    int32_t displacement;
+    const int32_t* stub_rel32 = NULL;
     if (jitter_patch.stub) {
         unsigned char* gate_address = (unsigned char*)GetModuleHandleW(NULL) + jitter_patch.rva;
-        const int32_t displacement = (int32_t)(jitter_patch.stub - (gate_address + 5));
-        memcpy(open_main + 1, &displacement, 4);
-        open = open_main;
+        displacement = (int32_t)(jitter_patch.stub - (gate_address + 5));
+        stub_rel32 = &displacement;
     }
-    const uint8_t* write = enabled ? open : gate;
-    const uint8_t* expect = enabled ? gate : open;
     uint8_t previous[6] = {0};
 
     const rsf_dump_result result =
-        rsf_patch_code(jitter_patch.rva, write, sizeof(gate), expect, sizeof(gate), previous);
+        rsf_ac7_carrier_patch_jitter(rsf_patch_code, jitter_patch.rva, enabled, stub_rel32, previous);
     if (result == RSF_DUMP_OK) {
         jitter_patch.enabled = (enabled != 0);
         note("jitter %s at rva 0x%lx", enabled ? "on" : "off", (unsigned long)jitter_patch.rva);
@@ -702,17 +704,16 @@ static unsigned long action_jitter_available(void)
    every result taken before this. Mode 1 follows the reconstruction. Both verify the expected
    bytes here, by opening the gate and closing it again, so a game update is reported at startup
    rather than at the first transition, when whoever is looking is looking at something else. */
-static void apply_jitter_patch(void)
+static void install_jitter(int32_t mode, uint32_t rva, int main_view_only)
 {
-    jitter_patch.mode = (int)read_number("RSF_ENABLE_JITTER", 1);
+    jitter_patch.mode = mode;
     if (jitter_patch.mode == 0) {
         return;
     }
-    jitter_patch.rva = read_number("RSF_JITTER_RVA", 0x112b1f3);
+    jitter_patch.rva = rva;
     jitter_patch.site_verified = 1;
     jitter_patch.enabled = 0;
-    /* The stub knows this site's registers and its jump target, so it is used there only. */
-    if (jitter_patch.rva == 0x112b1f3 && read_number("RSF_JITTER_ALL_VIEWS", 0) == 0) {
+    if (main_view_only) {
         if (build_jitter_stub(jitter_patch.rva)) {
             note("jitter: main view only, through a stub at %p", (void*)jitter_patch.stub);
         } else {
@@ -733,62 +734,6 @@ static void apply_jitter_patch(void)
         note("jitter follows the reconstruction (RSF_ENABLE_JITTER=1); F4 forces it on or off");
     } else {
         note("jitter on for the whole run (RSF_ENABLE_JITTER=2); F4 toggles it");
-    }
-}
-
-/* Let translucent geometry into the velocity pass, so a reconstruction has vectors for it.
-
-   Separate translucency carries no motion vectors in stock 4.18, which is why the briefing map's
-   relief and the vehicle symbols in mission replay have none. The layer is drawn with scene depth
-   bound read only, so it writes no depth either, and depth based camera motion cannot serve it.
-   Velocity excludes it by blend mode in FVelocityDrawingPolicyFactory::DrawDynamicMesh:
-
-       call qword ptr [rax+0x198]          ; Material->GetBlendMode()
-       cmp  eax, 1                         ; BLEND_Opaque or BLEND_Masked
-       ja   <return false>                 ; the six bytes replaced below
-       call qword ptr [rax+0x20]           ; GetMaterialDomain, left alone
-
-   Only the blend mode rejection is removed. The material domain check just after it stays, because
-   excluding UI domain materials is wanted, and so do the movable test and SupportsVelocity further
-   in. A material whose cook produced no usable velocity permutation therefore still refuses rather
-   than drawing wrongly, which is what makes this safe to try.
-
-   4.18 compiles velocity shaders for the special engine material, and both draw paths substitute
-   that default proxy for a material that writes every pixel, is not two sided and does not move its
-   mesh. Sprite like icons should fall into that; two sided sheets should not, and are expected to
-   go on refusing. The engine supplies PreviousLocalToWorld itself once a draw reaches the pass,
-   which is the whole reason to do this here rather than reconstructing motion outside the game.
-
-   This is the dynamic mesh path. The static equivalent in AddVelocityStaticMesh has not been
-   located, so a primitive that renders from the static draw list is unaffected.
-
-   Untested against the game. See docs/research/ue418-hook-map.md. */
-static void apply_translucent_velocity_patch(void)
-{
-    if (read_number("RSF_TRANSLUCENT_VELOCITY", 0) == 0) {
-        return;
-    }
-    const DWORD rva = read_number("RSF_TRANSLUCENT_VELOCITY_RVA", 0x11823de);
-    /* ja rel32 */
-    const uint8_t expected[6] = {0x0F, 0x87, 0x68, 0x03, 0x00, 0x00};
-    /* The six byte canonical nop, so every blend mode falls through to the domain check. */
-    const uint8_t replacement[6] = {0x66, 0x0F, 0x1F, 0x44, 0x00, 0x00};
-    uint8_t previous[6] = {0};
-
-    const rsf_dump_result result =
-        rsf_patch_code(rva, replacement, sizeof(replacement),
-                       rva == 0x11823de ? expected : NULL, rva == 0x11823de ? sizeof(expected) : 0,
-                       previous);
-    if (result == RSF_DUMP_OK) {
-        note("translucent velocity gate patched at rva 0x%lx, was %02x %02x %02x %02x %02x %02x. "
-             "Translucent draws can now reach the velocity pass; whether any does is a question "
-             "for the velocity target, not for this line",
-             (unsigned long)rva, previous[0], previous[1], previous[2], previous[3], previous[4],
-             previous[5]);
-    } else {
-        note("translucent velocity gate NOT patched at rva 0x%lx, result %d (expected bytes did "
-             "not match?)",
-             (unsigned long)rva, (int)result);
     }
 }
 
@@ -856,17 +801,22 @@ static int prepare_native_game(void)
     wchar_t path[MAX_PATH]; char sha256[65];
     const DWORD length = GetModuleFileNameW((HMODULE)&__ImageBase, path, MAX_PATH);
     wchar_t* separator = length && length < MAX_PATH ? wcsrchr(path, L'\\') : NULL;
+    const wchar_t* game_dll = rsf_ac7_carrier_game_dll();
     if (!separator || !executable_sha256(sha256) ||
-        (size_t)(separator - path) + 1 + wcslen(L"ReScaleFrame.Game.AC7.dll") >= MAX_PATH) return 0;
-    wcscpy(separator + 1, L"ReScaleFrame.Game.AC7.dll");
-    return rsf_bridge_prepare_game(path, sha256, observer_note, NULL);
+        (size_t)(separator - path) + 1 + wcslen(game_dll) >= MAX_PATH) return 0;
+    wcscpy(separator + 1, game_dll);
+    rsf_game_probe probe = {0};
+    probe.struct_size = sizeof(probe);
+    if (!rsf_ac7_carrier_probe(&probe, sha256)) return 0;
+    return rsf_bridge_prepare_game(path, &probe, observer_note, NULL);
 }
 static int accept_ac7_window(void* user, void* window)
 {
     wchar_t name[64]; DWORD process = 0;
     (void)user;
     GetWindowThreadProcessId((HWND)window, &process);
-    if (process != GetCurrentProcessId() || !GetClassNameW((HWND)window, name, 64) || wcscmp(name, L"UnrealWindow") != 0) return 0;
+    if (process != GetCurrentProcessId() || !GetClassNameW((HWND)window, name, 64) ||
+        wcscmp(name, rsf_ac7_carrier_window_class()) != 0) return 0;
     // Native preparation checks decrypted hook bytes and the executable fingerprint before
     // the cold presentation host creates any D3D12 objects. A refusal keeps the original chain.
     return prepare_native_game();
@@ -932,6 +882,23 @@ static void start_generation(void)
         (unsigned long)options.frame_limit_us);
     note("Latency pacing, input markers and Present ordering are owned by the core orchestrator.");
 }
+
+_Static_assert(sizeof(wchar_t) == sizeof(uint16_t), "AC7 carrier UTF-16 ABI");
+_Static_assert(sizeof(rsf_ac7_carrier_leaves) == 64, "AC7 carrier ABI");
+_Static_assert(offsetof(rsf_ac7_carrier_leaves, read_number) == 8, "AC7 carrier ABI");
+_Static_assert(offsetof(rsf_ac7_carrier_leaves, prepare_native_game) == 56, "AC7 carrier ABI");
+static const rsf_ac7_carrier_leaves carrier_leaves = {
+    .struct_size = sizeof(rsf_ac7_carrier_leaves),
+    .abi_version = RSF_AC7_CARRIER_ABI_VERSION,
+    .read_number = carrier_read_number,
+    .patch = rsf_patch_code,
+    .log = observer_note,
+    .install_jitter = install_jitter,
+    .set_depth_conformed = set_translucency_depth_conformed,
+    .register_translucency_scale = register_translucency_scale,
+    .prepare_native_game = prepare_native_game,
+};
+
 static DWORD WINAPI dump_worker(LPVOID parameter)
 {
     (void)parameter;
@@ -1010,12 +977,7 @@ static DWORD WINAPI dump_worker(LPVOID parameter)
     }
     /* Only now: the code was ciphertext until the dump succeeded, so patching earlier would
        write into bytes about to be overwritten. */
-    apply_jitter_patch();
-    apply_translucent_velocity_patch();
-    /* Before the scale patch, because the scale it settles on depends on whether these applied. */
-    translucency_depth_conformed = apply_translucency_depth_patches();
-    apply_separate_translucency_patch();
-    note("native AC7 plugin preparation: %s", prepare_native_game() ? "ready" : "refused");
+    rsf_ac7_carrier_install_decrypted(&carrier_leaves);
     if (read_number("RSF_MOTION_CAPTURE", 0) != 0) {
         rsf_ac7_motion_capture_install();
     }
@@ -1321,7 +1283,7 @@ static void set_separate_translucency_scale(void)
        Stock 4.18 borrows the scene's depth for any scale at or above 1.0, which pairs a large
        colour target with a small depth. Game-tested on 7 September: at 2.0 the briefing relief
        disappeared, and the log said why in one line, `last candidate 2048x1152 ... depth view ...
-       its texture 1024x576`. `apply_translucency_depth_patches` narrows that borrow to exactly 1.0,
+         its texture 1024x576`. The depth gates in rsf-ac7 narrow that borrow to exactly 1.0,
        after which the engine allocates, fills, view-transforms and resolves the layer's own depth
        at whatever size it is.
 
@@ -1359,89 +1321,11 @@ static void set_separate_translucency_scale(void)
          (int)(scale.value * (float)render_percent));
 }
 
-/* Render separate translucency at the scene's resolution, by taking the halving out.
-
-   The briefing map's relief is separate translucency and arrives at 512x288 while the scene is
-   1024x576. Nothing downstream recovers that: by the time anything sees the composite the layer is
-   already a doubling of a quarter resolution image. It was never a motion problem.
-
-   `FSceneRenderTargets::SetSeparateTranslucencyBufferSize` computes one scale and uses it three
-   times, for the width, the height and the stored scale:
-
-     movss  xmm1, [0.5]                  ; the halving, at 1410be330
-     ...
-     mulss  xmm0, xmm1                   ; scaled width
-     mulss  xmm0, xmm1                   ; scaled height
-     movss  [rbx+0x220], xmm1            ; SeparateTranslucencyScale
-
-   The scale arrives at 0.5 two ways: the console variable can say 50, or it can say 100 and the
-   automatic downsampling takes over, which is the branch pair just above that load. Setting the
-   variable only addresses the second, and this game's value is evidently not the 100 that a write
-   guarded on the expected value would accept, because that write never happened.
-
-   So the branch pair and the load are replaced together. Fifteen bytes:
-
-     73 0D                     jnc  +0x0D          ; skip when the scale is not ~1.0
-     40 84 FF                  test dil, dil       ; and when nothing asked to downsample
-     74 08                     jz   +8
-     F3 0F 10 0D 58 61 4B 01   movss xmm1, [0.5]
-
-   The first version of this loaded the 1.0 that sits four bytes after the 0.5 in the same pool,
-   which fixed the briefing relief and the cannon tracers at once but fixed the scale at exactly the
-   scene's resolution. That is not enough, because the right scale depends on the render scale and
-   the render scale moves with the quality level. The pool has no 1.5 and no 2.0 next to the 0.5,
-   and hunting one elsewhere would only trade one constant for another.
-
-   Carrying the value in the instruction instead answers both. The disassembly settles the one
-   question that needs settling, which is whether a register is free:
-
-     1410be338  movd  xmm0, dword ptr [rbx+0x208]     ; does not read eax
-     1410be346  mov   rax, qword ptr [rbx+0x208]      ; overwrites rax outright
-
-   Every path out of the patched window reaches those, so eax is dead across it and can carry the
-   float. Fifteen bytes become:
-
-     66 0F 1F 44 00 00         nop  word ptr [rax+rax*1]
-     B8 xx xx xx xx            mov  eax, <scale bits>
-     66 0F 6E C8               movd xmm1, eax
-
-   The six byte nop leads so the immediate lands at rva+7, which is 0x10be330 and four byte
-   aligned. That alignment is the point: `set_separate_translucency_scale` above changes the scale
-   by storing one aligned word into it while the game runs, and an aligned store cannot be seen
-   half done. Everything after still reads xmm1, so the width, the height and the stored
-   SeparateTranslucencyScale all follow it.
-
-   The expected bytes are checked before writing. If the game updates and this moves, it refuses
-   rather than corrupting an instruction. An overridden RVA that would leave the immediate
-   unaligned is patched but not registered, so it keeps its startup scale and never changes. */
-static void apply_separate_translucency_patch(void)
+/* Publish the aligned immediate of the verified scale instruction to the live scale writer. */
+static void register_translucency_scale(uint32_t rva, uint32_t immediate_offset)
 {
-    if (read_number("RSF_FULL_TRANSLUCENCY", 1) == 0) {
-        return;
-    }
-    const DWORD rva = read_number("RSF_FULL_TRANSLUCENCY_RVA", 0x10be329);
-    const uint8_t expected[15] = {0x73, 0x0D, 0x40, 0x84, 0xFF, 0x74, 0x08, 0xF3,
-                                  0x0F, 0x10, 0x0D, 0x58, 0x61, 0x4B, 0x01};
-    const uint8_t replacement[15] = {0x66, 0x0F, 0x1F, 0x44, 0x00, 0x00, /* nop word */
-                                     0xB8, 0x00, 0x00, 0x80, 0x3F,       /* mov eax, 1.0f */
-                                     0x66, 0x0F, 0x6E, 0xC8};            /* movd xmm1, eax */
-    uint8_t previous[15] = {0};
-    unsigned char* base;
-    unsigned char* immediate;
-
-    const rsf_dump_result result =
-        rsf_patch_code(rva, replacement, sizeof(replacement),
-                       rva == 0x10be329 ? expected : NULL, rva == 0x10be329 ? sizeof(expected) : 0,
-                       previous);
-    if (result != RSF_DUMP_OK) {
-        note("separate translucency halving NOT removed at rva 0x%lx, result %d (expected bytes "
-             "did not match?)",
-             (unsigned long)rva, (int)result);
-        return;
-    }
-
-    base = (unsigned char*)GetModuleHandleW(NULL);
-    immediate = base ? base + rva + 7 : NULL;
+    unsigned char* base = (unsigned char*)GetModuleHandleW(NULL);
+    unsigned char* immediate = base ? base + rva + immediate_offset : NULL;
     if (!immediate || ((uintptr_t)immediate & 3u) != 0) {
         note("separate translucency halving removed at rva 0x%lx, but its scale sits at an "
              "unaligned address and stays at 100%% of the scene for this run",
@@ -1454,110 +1338,6 @@ static void apply_separate_translucency_patch(void)
          "adjustable while the game runs",
          (unsigned long)rva, (void*)immediate);
     set_separate_translucency_scale();
-}
-
-/* Let the engine allocate, bind and sample depth and the matching view for a separate
-   translucency layer larger than the scene.
-
-   4.18 decides four times whether the layer has its own depth or borrows the scene's, and every one
-   of them asks `Scale < 1.f`. Below 1.0 that is the downsampling case and the engine allocates a
-   depth at the layer's size, fills it, builds a view uniform buffer for the scaled rect and
-   resolves it. At exactly 1.0 the layer is the scene's size and the scene's depth fits. Above 1.0
-   all four take the borrow branch, which pairs a large colour target with a small depth. D3D11 does
-   not allow that pair, and game-testing it on 7 September made the briefing relief disappear
-   entirely while its HUD stayed.
-
-   Asking `Scale == 1.f` instead is the whole fix, because the borrow is correct only at exactly
-   1.0. Everything else the engine already does correctly at any scale: `DownsampleDepthSurface`
-   takes the factor as a parameter and sets its viewport and rectangle from it, so at 2.0 it simply
-   upsamples, and `SetupDownsampledTranslucencyViewUniformBuffer` rebuilds the view from
-   `ScaledSize` and `ViewRect * scale`. Nothing here adds a shader, a hook or a resource.
-
-   The four sites, against 4.18.3 source:
-
-     TranslucentRendering.cpp:1258   0x1168f6f  76 0E  jbe   skips the depth allocation and fill
-     SceneRenderTargets.cpp:1373     0x1097a0c  76 17  jbe   binds scene depth instead
-     SceneRenderTargets.cpp:1400     0x109d03a  cmova        picks scene depth to resolve
-     SceneRenderTargets.cpp:1405     0x109d061  76 17  jbe   the same, on the other branch
-
-   `jbe` becomes `je` and `cmova` becomes `cmovne`, one byte each. With `comiss 1.0, scale` the two
-   are the same instruction for every scale the engine can produce on its own: at 1.0 both act on
-   ZF, and below 1.0 neither fires. They differ only above 1.0, which is a state only our own scale
-   patch can reach. So this changes nothing about stock rendering, and it is what the scale above
-   1.0 is allowed to depend on.
-
-   The 29 September capture exposed the remaining consumers: DrawMesh still chose the main view
-   at Scale > 1, and six FSceneTextureShaderParameters::Set specializations still sampled scene
-   depth. The layer drew at 1600x904 with 800x452 VS/PS view constants. Those seven gates must use
-   Scale != 1 as well. See docs/research/ac7-consumer-session.md for source and byte evidence.
-
-   Preflight every expected window before changing any gate. If a write fails, roll back the gates
-   already changed; any failure keeps the scale at or below the scene's resolution. */
-static int apply_translucency_depth_patches(void)
-{
-    static const struct {
-        DWORD rva;
-        uint8_t count;
-        uint8_t expected[9];
-        uint8_t replacement[9];
-        const char* what;
-    } sites[] = {
-        {0x1168f6f, 2, {0x76, 0x0E}, {0x74, 0x0E}, "the depth allocation and fill"},
-        {0x1097a0c, 2, {0x76, 0x17}, {0x74, 0x17}, "the depth bind"},
-        {0x109d03a, 4, {0x44, 0x0F, 0x47, 0xF9}, {0x44, 0x0F, 0x45, 0xF9}, "the snapshot resolve"},
-        {0x109d061, 2, {0x76, 0x17}, {0x74, 0x17}, "the resolve"},
-        {0x11583a6, 9, {0x0F, 0x2F, 0x80, 0x20, 0x02, 0x00, 0x00, 0x76, 0x0E},
-                        {0x0F, 0x2F, 0x80, 0x20, 0x02, 0x00, 0x00, 0x74, 0x0E}, "the layer view selection"},
-        {0x1025b12, 9, {0x0F, 0x2F, 0x86, 0x20, 0x02, 0x00, 0x00, 0x76, 0x04},
-                        {0x0F, 0x2F, 0x86, 0x20, 0x02, 0x00, 0x00, 0x74, 0x04}, "shader depth selection 1"},
-        {0x10294d2, 9, {0x0F, 0x2F, 0x86, 0x20, 0x02, 0x00, 0x00, 0x76, 0x04},
-                        {0x0F, 0x2F, 0x86, 0x20, 0x02, 0x00, 0x00, 0x74, 0x04}, "shader depth selection 2"},
-        {0x102ada2, 9, {0x0F, 0x2F, 0x86, 0x20, 0x02, 0x00, 0x00, 0x76, 0x04},
-                        {0x0F, 0x2F, 0x86, 0x20, 0x02, 0x00, 0x00, 0x74, 0x04}, "shader depth selection 3"},
-        {0x102c672, 9, {0x0F, 0x2F, 0x86, 0x20, 0x02, 0x00, 0x00, 0x76, 0x04},
-                        {0x0F, 0x2F, 0x86, 0x20, 0x02, 0x00, 0x00, 0x74, 0x04}, "shader depth selection 4"},
-        {0x102e792, 9, {0x0F, 0x2F, 0x86, 0x20, 0x02, 0x00, 0x00, 0x76, 0x04},
-                        {0x0F, 0x2F, 0x86, 0x20, 0x02, 0x00, 0x00, 0x74, 0x04}, "shader depth selection 5"},
-        {0x1031902, 9, {0x0F, 0x2F, 0x86, 0x20, 0x02, 0x00, 0x00, 0x76, 0x04},
-                        {0x0F, 0x2F, 0x86, 0x20, 0x02, 0x00, 0x00, 0x74, 0x04}, "shader depth selection 6"},
-    };
-    uint8_t previous[9] = {0};
-    unsigned int i;
-
-    /* Writing the identical bytes performs the patch helper's validated range/expected-byte
-       check without changing behaviour. No gate is changed until every site passes. */
-    for (i = 0; i < sizeof(sites) / sizeof(sites[0]); ++i) {
-        const rsf_dump_result result = rsf_patch_code(sites[i].rva, sites[i].expected, sites[i].count,
-                                                     sites[i].expected, sites[i].count, previous);
-        if (result != RSF_DUMP_OK) {
-            note("translucency preflight: %s at rva 0x%lx refused, result %d; no gates changed",
-                 sites[i].what, (unsigned long)sites[i].rva, (int)result);
-            return 0;
-        }
-    }
-    for (i = 0; i < sizeof(sites) / sizeof(sites[0]); ++i) {
-        const rsf_dump_result result =
-            rsf_patch_code(sites[i].rva, sites[i].replacement, sites[i].count, sites[i].expected,
-                           sites[i].count, previous);
-        if (result != RSF_DUMP_OK) {
-            unsigned int undo = i;
-            while (undo > 0) {
-                --undo;
-                const rsf_dump_result restored = rsf_patch_code(sites[undo].rva, sites[undo].expected,
-                    sites[undo].count, sites[undo].replacement, sites[undo].count, previous);
-                if (restored != RSF_DUMP_OK) {
-                    note("translucency rollback: %s failed, result %d", sites[undo].what, (int)restored);
-                }
-            }
-            note("translucency depth: %s at rva 0x%lx did NOT match, result %d. The layer stays at "
-                 "the scene's resolution",
-                 sites[i].what, (unsigned long)sites[i].rva, (int)result);
-            return 0;
-        }
-        note("translucency depth: %s at rva 0x%lx now asks for exactly 1.0 rather than less",
-             sites[i].what, (unsigned long)sites[i].rva);
-    }
-    return 1;
 }
 
 static int action_set_render_scale(unsigned long percent)
