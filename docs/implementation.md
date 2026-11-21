@@ -4,6 +4,15 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now decides when Anomaly's invalidation replay can run, keeps
+the original OM and pixel shader bindings alive, and restores them
+after the draw. The D3D11 leaves and the existing device fixture use
+the same replay transaction. A missing depth state now refuses the
+replay before it can bind the default depth-writing state. Source
+review matched the COM reference and restore order, including its
+shader class instances. The device fixture and live replay remain
+unverified for this revision.
+
 Anomaly's Rust motion device now holds the constant-buffer operations
 from its admitted Runtime shader pack. The native global API copy is
 gone. Standalone fixtures still use the typed D3D11 leaves. Source

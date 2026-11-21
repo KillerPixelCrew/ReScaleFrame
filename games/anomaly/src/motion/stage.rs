@@ -547,7 +547,7 @@ impl Stage {
                     return;
                 }
                 let (view, _leases) = {
-                    // The native replay calls the real draw. Hold just the COM
+                    // Replay calls the real draw. Hold just the COM
                     // leases it needs across that call, with no owner lock.
                     let render = lock(&self.render);
                     let view = render.device_view();
@@ -563,7 +563,7 @@ impl Stage {
                 if !self.active.load(Acquire) {
                     return;
                 }
-                let result = unsafe { (p.replay)(&view, context, call, user) };
+                let result = replay(p.replay, &view, context, call, user);
                 let mut render = lock(&self.render);
                 match result {
                     0 => render.counters.replays += 1,

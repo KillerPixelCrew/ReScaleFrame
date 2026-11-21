@@ -89,9 +89,52 @@ constexpr rsf_anomaly_motion_device_platform platform{
     [](void* resource) { static_cast<IUnknown*>(resource)->Release(); },
     dynamic_buffer, zero_shader, depth_state, texture, target_view, upload, bind
 };
+
+static_assert(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT == 8 && D3D11_SHADER_MAX_INTERFACES == 253);
+static_assert(sizeof(rsf_anomaly_motion_replay_depth) == 88 && sizeof(rsf_anomaly_motion_replay_pixel) == 2072 &&
+    offsetof(rsf_anomaly_motion_replay_pixel, classes) == 40 && sizeof(rsf_anomaly_motion_replay_platform) == 56);
+constexpr rsf_anomaly_motion_replay_platform replay_platform{
+    platform.release,
+    [](void* raw, rsf_anomaly_motion_replay_depth* out) noexcept {
+        auto* context = static_cast<ID3D11DeviceContext*>(raw);
+        context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT,
+            reinterpret_cast<ID3D11RenderTargetView**>(out->targets),
+            reinterpret_cast<ID3D11DepthStencilView**>(&out->view));
+        ID3D11DepthStencilState* state{};
+        context->OMGetDepthStencilState(&state, &out->reference);
+        out->state = state;
+        D3D11_DEPTH_STENCIL_DESC desc{};
+        if (state) state->GetDesc(&desc);
+        else { desc.DepthEnable = TRUE; desc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL; }
+        out->enabled = desc.DepthEnable != FALSE;
+        out->writable = desc.DepthWriteMask != D3D11_DEPTH_WRITE_MASK_ZERO;
+    },
+    [](void* raw, rsf_anomaly_motion_replay_pixel* out) noexcept {
+        auto* context = static_cast<ID3D11DeviceContext*>(raw);
+        context->OMGetBlendState(reinterpret_cast<ID3D11BlendState**>(&out->blend), out->factor, &out->mask);
+        out->count = D3D11_SHADER_MAX_INTERFACES;
+        context->PSGetShader(reinterpret_cast<ID3D11PixelShader**>(&out->shader),
+            reinterpret_cast<ID3D11ClassInstance**>(out->classes), &out->count);
+    },
+    [](void* raw, uint32_t count, void* const* targets, void* depth) noexcept {
+        static_cast<ID3D11DeviceContext*>(raw)->OMSetRenderTargets(count,
+            reinterpret_cast<ID3D11RenderTargetView* const*>(targets), static_cast<ID3D11DepthStencilView*>(depth));
+    },
+    [](void* raw, void* depth, uint32_t reference) noexcept {
+        static_cast<ID3D11DeviceContext*>(raw)->OMSetDepthStencilState(static_cast<ID3D11DepthStencilState*>(depth), reference);
+    },
+    [](void* raw, void* blend, const float* factor, uint32_t mask) noexcept {
+        static_cast<ID3D11DeviceContext*>(raw)->OMSetBlendState(static_cast<ID3D11BlendState*>(blend), factor, mask);
+    },
+    [](void* raw, void* shader, void* const* classes, uint32_t count) noexcept {
+        static_cast<ID3D11DeviceContext*>(raw)->PSSetShader(static_cast<ID3D11PixelShader*>(shader),
+            reinterpret_cast<ID3D11ClassInstance* const*>(classes), count);
+    },
+};
 }
 
 const rsf_anomaly_motion_device_platform& motion_device_platform() noexcept { return platform; }
+const rsf_anomaly_motion_replay_platform& motion_replay_platform() noexcept { return replay_platform; }
 
 MotionDevice::~MotionDevice() { rsf_anomaly_motion_device_drop(owner_); }
 
@@ -135,45 +178,4 @@ bool MotionDevice::set_tess_domain(ID3D11DeviceContext* context, const TessDomai
     return rsf_anomaly_motion_device_upload(owner_, context, RSF_MOTION_TESS, bytes.data(), bytes.size()) != 0;
 }
 
-ReplayResult MotionDevice::begin_replay(const rsf_anomaly_motion_device_view& resources,
-    ID3D11DeviceContext* context, Saved& s) noexcept try {
-    if (!context || !resources.rtv || !resources.zero_shader) return ReplayResult::Failed;
-    context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, s.targets, &s.depth);
-    context->OMGetDepthStencilState(&s.depth_state, &s.reference);
-    auto* state = static_cast<ID3D11DepthStencilState*>(resources.no_depth);
-    D3D11_DEPTH_STENCIL_DESC desc{};
-    if (s.depth_state) s.depth_state->GetDesc(&desc);
-    else { desc.DepthEnable = TRUE; desc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL; desc.DepthFunc = D3D11_COMPARISON_LESS; }
-    if (s.depth && desc.DepthEnable) {
-        if (desc.DepthWriteMask == D3D11_DEPTH_WRITE_MASK_ZERO) return ReplayResult::SkippedNoDepthWrite;
-        state = static_cast<ID3D11DepthStencilState*>(resources.equal_depth);
-    }
-    context->OMGetBlendState(&s.blend, s.factor, &s.mask);
-    s.class_count = D3D11_SHADER_MAX_INTERFACES;
-    context->PSGetShader(&s.shader, s.classes, &s.class_count);
-    s.modified = true;
-    ID3D11RenderTargetView* targets[3]{nullptr, nullptr, static_cast<ID3D11RenderTargetView*>(resources.rtv)};
-    context->OMSetRenderTargets(3, targets, s.depth);
-    context->OMSetDepthStencilState(state, 0);
-    context->OMSetBlendState(nullptr, nullptr, 0xffffffffu);
-    context->PSSetShader(static_cast<ID3D11PixelShader*>(resources.zero_shader), nullptr, 0);
-    return ReplayResult::Done;
-} catch (...) { return ReplayResult::Failed; }
-
-void MotionDevice::end_replay(ID3D11DeviceContext* context, Saved& s) noexcept
-{
-    if (!context) return;
-    if (s.modified) {
-        context->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, s.targets, s.depth);
-        context->OMSetDepthStencilState(s.depth_state, s.reference);
-        context->OMSetBlendState(s.blend, s.factor, s.mask);
-        context->PSSetShader(s.shader, s.classes, s.class_count);
-    }
-    for (auto* target : s.targets) if (target) target->Release();
-    for (UINT i = 0; i < s.class_count; ++i) if (s.classes[i]) s.classes[i]->Release();
-    if (s.depth) s.depth->Release();
-    if (s.depth_state) s.depth_state->Release();
-    if (s.blend) s.blend->Release();
-    if (s.shader) s.shader->Release();
-}
 }

@@ -305,10 +305,7 @@ const MotionPlatform platform{
         static_cast<ID3D11DeviceContext*>(c)->ClearRenderTargetView(static_cast<ID3D11RenderTargetView*>(rtv), zero);
     },
     bound_shaders, set_shaders,
-    [](const rsf_anomaly_motion_device_view* view, void* c, Redraw draw, void* user) {
-        return static_cast<uint8_t>(MotionDevice::invalidate(*view, static_cast<ID3D11DeviceContext*>(c),
-            [&](ID3D11DeviceContext* context) { draw(user, context); }));
-    },
+    &motion_replay_platform(),
     camera, [](float (*world)[16]) { return geometry::read_world_matrix(*world); },
     geometry::read_vertex_constants, geometry::write_vertex_constants,
     [](void* raw, MotionDrawState* out) {

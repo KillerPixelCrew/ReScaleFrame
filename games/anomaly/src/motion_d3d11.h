@@ -15,9 +15,12 @@
 #include <d3d11.h>
 #include <wrl/client.h>
 #include <cstdint>
+#include <memory>
+#include <type_traits>
 
 namespace rsf::anomaly::motion {
 const rsf_anomaly_motion_device_platform& motion_device_platform() noexcept;
+const rsf_anomaly_motion_replay_platform& motion_replay_platform() noexcept;
 using Microsoft::WRL::ComPtr;
 using LogFn = void (*)(void*, const char*);
 
@@ -52,36 +55,16 @@ public:
     // Re-issues the draw (`redraw(context)`) as the invalidation pass described above.
     template<class Redraw> ReplayResult invalidate(ID3D11DeviceContext* context, Redraw&& redraw) noexcept
     {
-        return invalidate(view(), context, static_cast<Redraw&&>(redraw));
-    }
-    template<class Redraw> static ReplayResult invalidate(const rsf_anomaly_motion_device_view& resources,
-        ID3D11DeviceContext* context, Redraw&& redraw) noexcept
-    {
-        Saved saved;
-        const auto prepared = begin_replay(resources, context, saved);
-        if (prepared != ReplayResult::Done) { end_replay(context, saved); return prepared; }
-        redraw(context);
-        end_replay(context, saved);
-        return ReplayResult::Done;
+        using Call = std::remove_reference_t<Redraw>;
+        const auto resources = view();
+        return static_cast<ReplayResult>(rsf_anomaly_motion_replay(&motion_replay_platform(), &resources, context,
+            [](void* user, void* raw) noexcept {
+                (*static_cast<Call*>(user))(static_cast<ID3D11DeviceContext*>(raw));
+            }, const_cast<void*>(static_cast<const void*>(std::addressof(redraw)))));
     }
     std::uint64_t uploads() const noexcept { return view().uploads; }
     std::uint64_t upload_skips() const noexcept { return view().upload_skips; }
 private:
-    struct Saved {
-        ID3D11RenderTargetView* targets[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT]{};
-        ID3D11DepthStencilView* depth{};
-        ID3D11DepthStencilState* depth_state{};
-        UINT reference{};
-        ID3D11BlendState* blend{};
-        FLOAT factor[4]{};
-        UINT mask{};
-        ID3D11PixelShader* shader{};
-        ID3D11ClassInstance* classes[D3D11_SHADER_MAX_INTERFACES]{};
-        UINT class_count{};
-        bool modified{};
-    };
-    static ReplayResult begin_replay(const rsf_anomaly_motion_device_view&, ID3D11DeviceContext*, Saved&) noexcept;
-    static void end_replay(ID3D11DeviceContext*, Saved&) noexcept;
     rsf_anomaly_motion_device_view view() const noexcept {
         rsf_anomaly_motion_device_view result;
         rsf_anomaly_motion_device_get(owner_, &result);

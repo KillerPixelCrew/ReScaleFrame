@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Private call-scoped ABI with motion_stage_platform.h.
 use super::*;
+use crate::motion_device::ReplayPlatform;
 use crate::motion_device_abi::{
     rsf_anomaly_motion_device_platform as DevicePlatform,
     rsf_anomaly_motion_device_view as DeviceView,
@@ -13,7 +14,7 @@ use std::ffi::c_char;
 
 pub(super) type Raw = *mut std::ffi::c_void;
 pub(super) type Redraw = unsafe extern "C" fn(Raw, Raw);
-pub(super) const PLATFORM_ABI: u32 = 7;
+pub(super) const PLATFORM_ABI: u32 = 8;
 
 #[repr(C)]
 pub(super) struct WindowFacts {
@@ -124,7 +125,7 @@ pub(super) struct Platform {
     pub clear_target: unsafe extern "C" fn(Raw, Raw),
     pub bound_shaders: unsafe extern "C" fn(Raw, &mut ShaderObjects, bool),
     pub set_shaders: unsafe extern "C" fn(Raw, &ShaderObjects, bool),
-    pub replay: unsafe extern "C" fn(&DeviceView, Raw, Redraw, Raw) -> u8,
+    pub replay: &'static ReplayPlatform,
     pub camera: unsafe extern "C" fn(&mut [f32; 16], &mut [f32; 16]) -> bool,
     pub world: unsafe extern "C" fn(&mut [f32; 16]) -> bool,
     pub read_constant: unsafe extern "C" fn(u32, u32, u32, Raw, u32) -> bool,

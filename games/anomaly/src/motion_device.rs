@@ -14,6 +14,10 @@ use std::ffi::{c_char, c_void};
 use std::mem::MaybeUninit;
 use std::slice;
 
+mod replay;
+#[cfg(windows)]
+pub(crate) use replay::{Platform as ReplayPlatform, replay};
+
 struct Buffer {
     resource: Lease,
     last: Box<[u8]>,

@@ -65,7 +65,7 @@ struct MotionPlatform {
     void (*clear_target)(void*, void*);
     void (*bound_shaders)(void*, ShaderObjects*, bool);
     void (*set_shaders)(void*, const ShaderObjects*, bool);
-    uint8_t (*replay)(const rsf_anomaly_motion_device_view*, void*, Redraw, void*);
+    const rsf_anomaly_motion_replay_platform* replay;
     bool (*camera)(float (*)[16], float (*)[16]);
     bool (*world)(float (*)[16]);
     bool (*read_constant)(uint32_t, uint32_t, uint32_t, void*, uint32_t);
@@ -84,7 +84,7 @@ struct MotionPlatform {
     bool (*link_shaders)(const void*, const void*, const void*, const void*);
     void* (*create_shader)(void*, const char*, void*, void*, bool, bool*);
 };
-inline constexpr uint32_t motion_platform_abi = 7;
+inline constexpr uint32_t motion_platform_abi = 8;
 
 extern "C" {
 void rsf_anomaly_motion_stage_configure(const MotionPlatform*, const wchar_t*, rsf_dump_log_fn, void*) noexcept;
