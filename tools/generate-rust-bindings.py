@@ -62,6 +62,13 @@ generate("integrations/steam/src/chain_abi.rs", "integrations/steam/src/d3d11_ch
           "-Iruntime/presentation/include"],
          ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]", "--raw-line", "type wchar_t = u16;",
           "--raw-line", "use rsf_game_sys::rsf_game_host_services;"])
+generate("games/fallout4/src/platform_abi.rs", "games/fallout4/src/fallout4_platform.h",
+         "rsf_(fallout4_.*|d3d11_(host_setup|creation_scope|native_chain|presentation_binding)|motion_decode_params)",
+         "RSF_(FALLOUT4_.*|D3D11_HOST_(ABI_VERSION|CAP_.*))",
+         ["-Isdk/game/include", "-Iruntime/orchestrator/include", "-Iruntime/graphics/include",
+          "-Iruntime/presentation/include"],
+         ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]", "--raw-line", "type wchar_t = u16;",
+          "--raw-line", "use rsf_game_sys::{rsf_game_host_services, rsf_game_log_fn};"])
 generate("games/anomaly/src/fg_inputs_abi.rs", "games/anomaly/src/fg_inputs_platform.h",
          "rsf_anomaly_input_(log|frame|desc|targets|constants|platform)", "NOTHING", [],
          ["--no-recursive-allowlist", "--with-derive-default"])

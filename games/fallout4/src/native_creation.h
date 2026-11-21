@@ -1,16 +1,14 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-#include <rescaleframe/game_api.h>
+#include "fallout4_platform.h"
 
 namespace rsf::fallout4 {
-inline constexpr char executable_sha256[] =
-    "fdcef37ac1230af6d0b0050eb2142b139ef3a867b37b9211fb6edfcc646072f8";
-bool verify_executable();
-bool preflight_creation();
-bool prepare_creation(const rsf_game_host_services&);
-bool start_creation();
-void quiesce_creation();
-bool stop_creation();
-bool creation_busy();
-int accept_window(void*, void*);
+// Exact build identity and the renderer owner's window. The Rust owner (lib.rs) implements both;
+// the render and CPU guards keep calling them by these names.
+inline bool verify_executable() noexcept { return rsf_fallout4_verify_executable(); }
+inline int accept_window(void* user, void* window) noexcept { return rsf_fallout4_accept_window(user, window); }
+// Native leaves of the Rust creation owner (creation.rs): the hook on the creation import thunk,
+// whose detour forwards its arguments and return address, and the call through its trampoline.
+bool create_creation_hook(void* target) noexcept;
+int32_t call_creation(const rsf_fallout4_create_call*) noexcept;
 }
