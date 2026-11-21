@@ -7,9 +7,8 @@
 //! single creator, the permanent fault, the render events queued to Unity and their packets, the
 //! present interceptions and surface updates in progress, the player window frame the present
 //! renders under, whether the bridge's DXGI swap chain exists, and the checked close and release.
-//! The command slot rotation and the shared D3D12 fence values are the package bridge's submission
-//! ring (`bridge_interop.rs`), whose contract matches: one slot per recording, a completion value
-//! per signal, the ring advanced after a signalled submission, drained against the shared fence.
+//! It owns shared images and the command pool and slots. Slot rotation and the shared D3D12 fence
+//! values follow the package bridge's submission ring (`bridge_interop.rs`).
 //!
 //! The presentation state outlives a release, because Unity owns the swapchains and the window
 //! stays: Unity's intercepted swapchains (their images and the present-ready semaphores the bridge
@@ -19,16 +18,17 @@
 //! the forwarded vkQueuePresentKHR, and retirement keeps it through vkDeviceWaitIdle and the
 //! semaphore destruction, which need host access to the device's queues.
 //!
-//! vulkan_bridge.cpp keeps the Unity interfaces, Vulkan, D3D12 and DXGI objects and calls, images,
-//! command buffers, slot fences, waits, copies, barriers, the swapchain and semaphore creation and
-//! destruction, the window and its swap chain. The orchestrator's Vulkan frame-generation
-//! swapchain owners present their own images through their own ops tables and this crate does
-//! not link them, so the registry here is the bridge's own.
+//! vulkan_bridge.cpp keeps the Unity interfaces, Vulkan, D3D12 and DXGI calls, the shared device,
+//! queue and synchronization objects, the window and its DXGI swap chain. Native callbacks
+//! allocate and free the command resources and read the fences. The orchestrator's Vulkan
+//! frame-generation swapchain owners present their own images through their own ops tables
+//! and this crate does not link them, so the registry here is the bridge's own.
 //!
 //! The C++ kept this as unguarded globals. Its release counted only queued render events, so it
 //! could destroy the slots, images and swap chain a present interception was recording into on the
 //! render thread, and it cleared the window frame identity while that thread copied it.
-use crate::bridge_abi::{RSF_UNITY_FRAMES_PACKETS, rsf_unity_packet};
+use crate::bridge_abi::{RSF_UNITY_FRAMES_PACKETS, RSF_UNITY_FRAMES_SLOTS, rsf_unity_packet};
+use crate::bridge_interop::rsf_unity_interop_drained;
 use rsf_game_sys::rsf_game_host_services;
 use std::ffi::c_void;
 use std::ptr;
@@ -36,6 +36,7 @@ use std::slice;
 use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 
 const EVENTS: usize = RSF_UNITY_FRAMES_PACKETS as usize;
+const SLOTS: usize = RSF_UNITY_FRAMES_SLOTS as usize;
 // Event kinds and device claims, as vulkan_state.h defines them.
 const EVENT_HUDLESS: u32 = 2;
 const DEVICE_BUSY: u32 = 0;
@@ -128,6 +129,65 @@ impl ImageHandles {
     }
 }
 
+/// The pool owns the two Vulkan buffers. This record also carries one Vulkan fence and two
+/// transferred COM references. A copied record is a borrowed view under the presentation lease.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct CommandSlot {
+    allocator: *mut c_void,
+    commands: *mut c_void,
+    vk: [u64; 2],
+    complete: u64,
+}
+
+const _: () = assert!(
+    size_of::<CommandSlot>() == 40
+        && std::mem::offset_of!(CommandSlot, commands) == 8
+        && std::mem::offset_of!(CommandSlot, vk) == 16
+        && std::mem::offset_of!(CommandSlot, complete) == 32
+);
+
+impl CommandSlot {
+    const EMPTY: Self = Self {
+        allocator: ptr::null_mut(),
+        commands: ptr::null_mut(),
+        vk: [0; 2],
+        complete: 0,
+    };
+
+    fn complete(self) -> bool {
+        !self.allocator.is_null()
+            && !self.commands.is_null()
+            && self.vk.iter().all(|&buffer| buffer != 0)
+            && self.complete != 0
+    }
+}
+
+type CreatePool = unsafe extern "C" fn() -> u64;
+type DestroyPool = unsafe extern "C" fn(u64);
+type CreateSlot = unsafe extern "C" fn(u64, *mut CommandSlot) -> bool;
+type DestroySlot = unsafe extern "C" fn(*const CommandSlot);
+type FenceReady = unsafe extern "C" fn(u64) -> bool;
+type SharedCompleted = unsafe extern "C" fn() -> u64;
+
+struct CommandResources {
+    pool: u64,
+    slots: [CommandSlot; SLOTS],
+    destroy_slot: DestroySlot,
+    destroy_pool: DestroyPool,
+}
+
+impl Drop for CommandResources {
+    fn drop(&mut self) {
+        for slot in &self.slots {
+            unsafe { (self.destroy_slot)(slot) };
+        }
+        if self.pool != 0 {
+            unsafe { (self.destroy_pool)(self.pool) };
+        }
+    }
+}
+
 struct State {
     device: Device,
     /// A failed step stopped the bridge until release.
@@ -141,6 +201,7 @@ struct State {
     window: Option<Frame>,
     /// The bridge's DXGI swap chain exists. It goes with the other objects at release.
     surface: bool,
+    commands: Option<CommandResources>,
     images: [Option<Image>; SHARED_IMAGES],
     /// Images whose barriers are recorded in the current command buffer.
     recorded_images: u32,
@@ -149,7 +210,8 @@ struct State {
 }
 
 // Packets hold resource addresses as identity only. Host code and user data are process-lived.
-// Owned shared-image handles are passed to native code under presentation or retirement leases.
+// Owned image and command handles are used under presentation and retirement leases. Creation
+// callbacks have the exclusive device claim until the whole command set is published.
 unsafe impl Send for State {}
 
 static STATE: Mutex<State> = Mutex::new(State::new());
@@ -168,6 +230,7 @@ impl State {
             entries: 0,
             window: None,
             surface: false,
+            commands: None,
             images: [None; SHARED_IMAGES],
             recorded_images: 0,
             partial_submission: false,
@@ -270,6 +333,10 @@ impl State {
                 Device::Absent
             };
         }
+    }
+
+    fn can_prepare_commands(&self) -> bool {
+        self.device == Device::Creating && self.commands.is_none()
     }
 
     /// Stops the bridge; true for the first fault.
@@ -426,6 +493,84 @@ extern "C" fn rsf_unity_vulkan_ready() -> u32 {
     u32::from(lock().device == Device::Ready)
 }
 
+/// The caller owns the device creation claim. Each native leaf transfers only successful handles,
+/// including the handles produced before a later step fails.
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_vulkan_prepare_commands(
+    create_pool: CreatePool,
+    create_slot: CreateSlot,
+    destroy_slot: DestroySlot,
+    destroy_pool: DestroyPool,
+) -> bool {
+    if !lock().can_prepare_commands() {
+        return false;
+    }
+    let pool = unsafe { create_pool() };
+    if pool == 0 {
+        return false;
+    }
+    let mut commands = CommandResources {
+        pool,
+        slots: [CommandSlot::EMPTY; SLOTS],
+        destroy_slot,
+        destroy_pool,
+    };
+    for slot in &mut commands.slots {
+        if !unsafe { create_slot(pool, slot) } || !slot.complete() {
+            return false;
+        }
+    }
+    let mut state = lock();
+    if !state.can_prepare_commands() {
+        return false;
+    }
+    state.commands = Some(commands);
+    true
+}
+
+/// The caller holds the presentation lease through recording and submission.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_unity_vulkan_command_slot(index: u32, view: *mut CommandSlot) -> bool {
+    let state = lock();
+    if view.is_null() || state.device != Device::Ready || !state.open() || state.partial_submission
+    {
+        return false;
+    }
+    let Some(slot) = state
+        .commands
+        .as_ref()
+        .and_then(|commands| commands.slots.get(index as usize))
+    else {
+        return false;
+    };
+    unsafe { view.write(*slot) };
+    true
+}
+
+/// Fence reads run outside the state mutex, under the caller's presentation lease and idle
+/// admission or close. Those holds keep the native device and the copied fences alive.
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_vulkan_commands_retired(
+    fence_ready: FenceReady,
+    shared_completed: SharedCompleted,
+) -> bool {
+    let fences = {
+        let state = lock();
+        if state.partial_submission || (!state.closed && state.entries == 0) {
+            return false;
+        }
+        match (state.device, state.commands.as_ref()) {
+            (Device::Ready, Some(commands)) => commands.slots.map(|slot| slot.complete),
+            (Device::Absent, None) => [0; SLOTS],
+            _ => return false,
+        }
+    };
+    fences
+        .into_iter()
+        .all(|fence| fence == 0 || unsafe { fence_ready(fence) })
+        && rsf_unity_interop_drained(unsafe { shared_completed() }) != 0
+}
+
 type CreateImage = unsafe extern "C" fn(u32, u32, u32, u32, *mut ImageHandles) -> bool;
 type DestroyImage = unsafe extern "C" fn(*const ImageHandles);
 
@@ -482,15 +627,25 @@ unsafe extern "C" fn rsf_unity_vulkan_prepare_image(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_unity_vulkan_clear_images(destroy: DestroyImage) {
-    let images = {
+extern "C" fn rsf_unity_vulkan_retire_resources(
+    fence_ready: FenceReady,
+    shared_completed: SharedCompleted,
+    destroy_image: DestroyImage,
+) -> bool {
+    let closed = lock().closed;
+    if !closed || !rsf_unity_vulkan_commands_retired(fence_ready, shared_completed) {
+        return false;
+    }
+    let (images, commands) = {
         let mut state = lock();
         state.recorded_images = 0;
-        std::mem::take(&mut state.images)
+        (std::mem::take(&mut state.images), state.commands.take())
     };
     for image in images.into_iter().flatten() {
-        unsafe { destroy(&image.handles) };
+        unsafe { destroy_image(&image.handles) };
     }
+    drop(commands);
+    true
 }
 
 #[unsafe(no_mangle)]
@@ -544,7 +699,10 @@ extern "C" fn rsf_unity_vulkan_reopen() {
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_unity_vulkan_release() {
-    lock().release();
+    let mut state = lock();
+    if state.commands.is_none() && state.images.iter().all(Option::is_none) {
+        state.release();
+    }
 }
 
 #[unsafe(no_mangle)]
