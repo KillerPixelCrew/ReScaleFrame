@@ -24,7 +24,7 @@ buffer coverage audit in the seam research therefore still applies.
 | H1 and seam order | close_stale, GPU timer, facts, camera, jitter, prepare, publication, world count, capture and burst arm; then the seam, restore and seam pass | `SwapController` and its `SwapHost`, which still sequence the field exchange and restore |
 | Stages 1 to 5 at the seam | Capture images, the burst copy, Stage 4/5 refusal order, motion admission, the evaluate or bilinear decision, the pass facts and reinsertion refusal | The round trip, bilinear, prepare and reinsert passes, temporal targets, the motion SRV and the `TemporalDriver` facade over the Rust temporal driver |
 | Camera and jitter | `Device.mView`/`mProject` finiteness, the cut test input and frame time, the published `JitterState` and the lock-free UV for the motion stage | The camera copy, `JitterSequence`, `next_state`, `jitter_uv`, `camera_cut` and `BurstGate` from `sr_jitter.h`, `sr_pass.h` and `sr_plan.h` |
-| Frame and capture bookkeeping | Frame counts, frames without H1, capture schedule and record, burst frames and JSON | Runtime dump export lookup, staging copies and raw writes |
+| Frame and capture bookkeeping | Frame counts, frames without H1, capture schedule and record, burst frames and JSON, burst staging admission, descriptor, subresource choice and map admission | Runtime dump export lookup, the typed context calls of the burst readback (below) |
 | Options and status | INI parsing, the six live options and their saved values, the overlay choices, report text and deltas | INI and file-system calls, adapter option registration and persistence, the Runtime colour-transport setter |
 
 The leaf objects run only inside Rust calls that hold the stage lock, as they
@@ -119,6 +119,80 @@ No device, visible window or game ran. The Rust driver's live behaviour on
 Standard and AVX, live option changes, the Stage 3 burst files, the Stage 5
 capture guides and quiesce with an in-flight frame still need game runs.
 The prior game baseline applies to the C++ driver.
+
+## Stage 3 burst readback staging
+
+The port starts from `8f5d0b49`. The native `staging_copy` and `map_staging`
+leaves ran the whole readback transaction. `sr_stage/staging.rs` now owns it.
+Rust checks for a null or deferred context and a null source. It queries the
+source as a 2D texture and refuses a multisampled one. It writes the staging
+descriptor and compares the source's device with the context's. It then creates
+the copy and names subresource 0 for the copy, the map and the unmap. The map
+side checks for a known pixel size, an immediate context and the same device. It
+reports the size and format even when it refuses. The D3D11 facts come from the
+existing `rsf_sr_d3d11` table: `as_texture`, `describe_texture`, `texture_device`,
+`texture` and `release`. Every returned reference is a `Lease`. The stage table
+keeps the typed context calls as leaves: `immediate_context` (GetType),
+`context_device` (GetDevice), `copy_subresource`, `map_read`, `unmap` and
+`pixel_bytes`. `copy_subresource` saves the predicate, clears it, runs
+`CopySubresourceRegion` and restores it, all in native code.
+
+No public ABI changes. The `sr_stage.h` API, the DLL exports, `game_api.h` and
+the other capture paths (`take`, the frame dump and F10) are unchanged. The
+private table grows from 600 to 624 bytes. The old staging slot becomes
+`immediate_context`, `context_device` and `copy_subresource`, and the map slot
+becomes `map_read`. `unmap` gains a subresource argument and `pixel_bytes` is
+new. Every later slot moves by 24 bytes. `rsf_anomaly_sr_mapped_texture` is gone.
+`sr_stage.cpp` asserts the new size, the first and last new offsets, the
+`bilinear` offset and the three D3D11 constants. bindgen is not installed, so
+`sr_stage_abi.rs` was edited by hand in bindgen 0.72.1 form. The generator's
+allowlist dropped `mapped_texture`.
+
+Source comparison against `8f5d0b49`:
+
+| Path | Before (native) | After |
+| --- | --- | --- |
+| Copy order | GetType, QueryInterface, GetDesc, sample check, context GetDevice, texture GetDevice and Release, CreateTexture2D, GetPredication, SetPredication(null), CopySubresourceRegion, SetPredication(restore), Release of predicate, device and source | The same calls in the same order. The QueryInterface, GetDesc, texture GetDevice and CreateTexture2D go through the `rsf_sr_d3d11` table; the device lease drops before the source lease |
+| Descriptor | Source width, height, format and `SampleDesc`; MipLevels and ArraySize 1, `USAGE_STAGING`, BindFlags 0, `CPU_ACCESS_READ`, MiscFlags 0, no initial data | Identical, written by `readback()` over the bit-cast `D3D11_TEXTURE2D_DESC`; `CreateTexture2D` gets no initial data |
+| Copy region | `(copy, 0, 0, 0, 0, source, 0, null)` | `(copy, SUBRESOURCE, 0, 0, 0, source, SUBRESOURCE, null)`, with `SUBRESOURCE = 0` |
+| Copy refusals | Null context or source, deferred context, failed QueryInterface, multisampled, null or foreign device, failed create; each returns null before any copy | The same set, each returning `None` before any copy |
+| Map order | GetDesc, pixel size, context GetDevice; then pixel size, GetType, texture GetDevice, each short-circuiting; then Map(0, READ, 0); device Release after Map | The same order. Refusal keeps width, height and format, with a null data pointer and pitch 0 |
+| Cleanup | `Mapping` drop calls Unmap(0) after the rows are written or refused; refused or failed maps never unmap; `burst_write` then drops both frame copies | Unchanged. `Mapping` now borrows the held `GpuLease`, so the texture outlives its mapping |
+| Held identity | World copy from the seam's `twin_surface` while the frame is armed and has no world image; presented copy from `back_buffer`, then the back buffer reference drops | Unchanged |
+| Burst output | `world_NN.bin`, `final_NN.bin`, `burst.json` fields and result text | Unchanged; `burst_file::staging` returns the same tuple |
+
+There are two intended differences. A copy is now released through the
+`rsf_sr_d3d11` `release` leaf instead of the stage `release` leaf. Both call
+`IUnknown::Release`. A missing table leaf now refuses the copy. Before, a
+missing stage `release` leaf leaked the copy. Neither happens with the shipped
+tables.
+
+Four new Rust tests drive `copy` and `map` against the `sr_d3d11` fixture. They
+check the descriptor, the stage leaf order, the subresource indices, every copy
+and map refusal and reference balance. They have not been run.
+
+Pinned Rust 1.94.1 formatting, locked offline Windows Cargo metadata and Git
+whitespace checks passed. No compile, link, Clippy, test, device or game run
+was performed.
+
+Remaining verification, all user-owned:
+
+- Build both Anomaly configurations with MSVC. The new `static_assert`s check
+  the private table layout and the D3D11 constants. Run Clippy and
+  `cargo test -p rsf-anomaly --locked`, including the four `sr_stage::staging`
+  tests and the `sr_d3d11` and `sr_stage` suites.
+- Regenerate `sr_stage_abi.rs` with `tools/generate-rust-bindings.py` once
+  bindgen is available, and confirm it matches the hand edit byte for byte.
+- Play a Stage 3 burst (`SRStage=3` with the burst enabled) on Standard and
+  AVX with the D3D11 debug layer on. Check that `burst.json` reports every
+  world and final frame as written, with the render and output sizes and
+  DXGI formats 10 and the back-buffer format. Compare the `world_NN.bin` and
+  `final_NN.bin` bytes or the 0.05 px jitter estimate with a burst from the
+  `8f5d0b49` build. Check that the debug layer reports no Map, Unmap,
+  CopySubresourceRegion or predication errors, and no live staging textures
+  after the drain.
+- Interrupt a burst with a loading screen and quiesce while frames are held.
+  Confirm that the copies are released and no map is left open.
 
 ## SR guard admission
 

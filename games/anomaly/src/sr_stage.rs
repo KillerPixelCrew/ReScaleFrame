@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 // SR stage driver (docs/research/anomaly-sr-seam.md sections 9 to 12, docs/research/rust-anomaly-sr-stage.md).
 // Rust owns the lifecycle, source identity and view admission, the H1 preparation and S-B seam ordering, the
-// published jitter and main-view camera, the frame dump and burst bookkeeping, the configuration (the [Anomaly] keys,
+// published jitter and main-view camera, the frame dump, burst bookkeeping and the burst readback staging transaction
+// (staging.rs), the configuration (the [Anomaly] keys,
 // the INI path, the vendor directories and their availability, the live panel options), GPU query retirement and the
 // status text.
 // sr_stage.cpp keeps guarded engine reads, trampolines, the SwapController and its D3D11 host, typed INI and file
@@ -98,6 +99,7 @@ macro_rules! leaf {
 
 mod burst_file;
 mod gpu_timer;
+mod staging;
 
 fn default_jitter() -> JitterState {
     JitterState {
@@ -1752,9 +1754,9 @@ impl Stage {
         }
         if state.burst.armed && state.burst.frames.last().is_some_and(|f| f.world.is_none()) {
             let context = leaf!(p, context());
-            let copy = leaf!(p, staging_copy(context, seam.twin_surface));
+            let copy = staging::copy(p, context, seam.twin_surface);
             if let Some(frame) = state.burst.frames.last_mut() {
-                frame.world = self.own(copy);
+                frame.world = copy;
             }
         }
         let ok = if sr_inputs(stage) {
@@ -2161,7 +2163,7 @@ impl Stage {
                 let context = leaf!(p, context());
                 let presented = back
                     .as_ref()
-                    .and_then(|back| self.own(leaf!(p, staging_copy(context, back.0.as_ptr()))));
+                    .and_then(|back| staging::copy(p, context, back.0.as_ptr()));
                 drop(back);
                 if let Some(frame) = state.burst.frames.last_mut() {
                     frame.fp_jittered = fp;

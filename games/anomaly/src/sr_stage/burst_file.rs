@@ -1,23 +1,10 @@
 // SPDX-License-Identifier: MIT
+use super::staging::{Mapping, map as map_staging};
 use super::{GpuLease, Platform};
-use crate::sr_stage_abi::rsf_anomaly_sr_mapped_texture as Texture;
 use std::ffi::c_void;
 use std::fs::{File, remove_file};
 use std::io::{self, BufWriter, Write};
 use std::path::Path;
-
-struct Mapping {
-    context: *mut c_void,
-    texture: *mut c_void,
-    unmap: unsafe extern "C" fn(*mut c_void, *mut c_void),
-    layout: Texture,
-}
-
-impl Drop for Mapping {
-    fn drop(&mut self) {
-        unsafe { (self.unmap)(self.context, self.texture) };
-    }
-}
 
 pub(super) fn write_new(
     path: &Path,
@@ -32,7 +19,7 @@ pub(super) fn write_new(
     result
 }
 
-fn write_rows(path: &Path, mapping: &Mapping) -> bool {
+fn write_rows(path: &Path, mapping: &Mapping<'_>) -> bool {
     let texture = &mapping.layout;
     let Some(row) = texture.width.checked_mul(texture.pixel_bytes) else {
         return false;
@@ -58,31 +45,17 @@ fn write_rows(path: &Path, mapping: &Mapping) -> bool {
     .is_ok()
 }
 
+// Maps one held staging copy, writes its packed rows and unmaps it, even when the write fails.
 pub(super) fn staging(
     platform: &Platform,
     context: *mut c_void,
     texture: &Option<GpuLease>,
     path: &Path,
 ) -> (bool, u32, u32, u32) {
-    let (Some(texture), Some(map), Some(unmap)) =
-        (texture, platform.map_staging, platform.unmap_staging)
-    else {
+    let Some(texture) = texture else {
         return (false, 0, 0, 0);
     };
-    let texture = texture.0.as_ptr();
-    let mut mapped = Texture::default();
-    let is_mapped = unsafe { map(context, texture, &mut mapped) };
-    let (width, height, format) = (mapped.width, mapped.height, mapped.format);
-    let written = if is_mapped {
-        let mapping = Mapping {
-            context,
-            texture,
-            unmap,
-            layout: mapped,
-        };
-        write_rows(path, &mapping)
-    } else {
-        false
-    };
-    (written, width, height, format)
+    let (layout, mapping) = map_staging(platform, context, texture);
+    let written = mapping.is_some_and(|mapping| write_rows(path, &mapping));
+    (written, layout.width, layout.height, layout.format)
 }
