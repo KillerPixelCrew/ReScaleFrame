@@ -7,6 +7,8 @@ mod auxiliary_sr_abi;
 #[cfg(windows)]
 mod callback_host;
 #[cfg(windows)]
+mod colour_d3d11;
+#[cfg(windows)]
 mod com_ref;
 #[cfg(windows)]
 mod constant_twins;
