@@ -7,6 +7,8 @@
 //! ownership (`asi`, `engine_settings`); `asi_entry.cpp` lends that module its own leaf table.
 mod asi;
 mod camera;
+#[cfg(windows)]
+mod camera_probe;
 mod engine_settings;
 mod host;
 mod layout;

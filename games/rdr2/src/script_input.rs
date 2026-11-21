@@ -21,11 +21,17 @@ const RIGHT_STICK: u64 = 0x7da4_8d2a;
 type Register = unsafe extern "C" fn(HMODULE, extern "C" fn());
 type GetSettings = unsafe extern "C" fn(*mut rsf_render_settings) -> i32;
 
-struct Input {
+#[derive(Clone, Copy)]
+pub(crate) struct ScriptHook {
+    register: Register,
     native_init: unsafe extern "C" fn(u64),
     native_push: unsafe extern "C" fn(u64),
     native_call: unsafe extern "C" fn() -> *const u64,
     wait: unsafe extern "C" fn(u32),
+}
+
+struct Input {
+    script_hook: ScriptHook,
     visible: unsafe extern "C" fn() -> u32,
     toggle: unsafe extern "C" fn(),
     settings_get: Option<GetSettings>,
@@ -33,16 +39,46 @@ struct Input {
 
 static INPUT: OnceLock<Input> = OnceLock::new();
 
-impl Input {
-    fn invoke(&self, hash: u64, arguments: &[u64]) -> u64 {
-        // ScriptHook's native argument buffer belongs to the current script fiber.
+impl ScriptHook {
+    pub(crate) fn resolve(library: HMODULE) -> Option<Self> {
+        // The names and types match the native ScriptHook exports used by both adapters.
+        unsafe {
+            Some(Self {
+                register: export(library, s!("?scriptRegister@@YAXPEAUHINSTANCE__@@P6AXXZ@Z"))?,
+                native_init: export(library, s!("?nativeInit@@YAX_K@Z"))?,
+                native_push: export(library, s!("?nativePush64@@YAX_K@Z"))?,
+                native_call: export(library, s!("?nativeCall@@YAPEA_KXZ"))?,
+                wait: export(library, s!("?scriptWait@@YAXK@Z"))?,
+            })
+        }
+    }
+
+    /// Publishes a process-lived callback from the ASI.
+    pub(crate) unsafe fn register(&self, instance: HMODULE, script: extern "C" fn()) {
+        unsafe { (self.register)(instance, script) };
+    }
+
+    /// The return buffer belongs to the fiber and is valid until its next native call.
+    pub(crate) unsafe fn native(&self, hash: u64, arguments: &[u64]) -> *const u64 {
         unsafe {
             (self.native_init)(hash);
             for &argument in arguments {
                 (self.native_push)(argument);
             }
-            (self.native_call)().as_ref().copied().unwrap_or(0)
+            (self.native_call)()
         }
+    }
+
+    pub(crate) unsafe fn wait_frame(&self) {
+        unsafe { (self.wait)(0) };
+    }
+}
+
+impl Input {
+    fn invoke(&self, hash: u64, arguments: &[u64]) -> u64 {
+        unsafe { self.script_hook.native(hash, arguments).as_ref() }
+            .copied()
+            .unwrap_or(0)
     }
 }
 
@@ -87,25 +123,18 @@ extern "C" fn script() {
             previous_key = false;
             previous_chord = false;
         }
-        unsafe { (input.wait)(0) };
+        unsafe { input.script_hook.wait_frame() };
     }
 }
 
-fn bindings(library: HMODULE, runtime: HMODULE) -> Option<(Register, Input)> {
-    // These names and signatures are the same ScriptHook and Runtime exports the native adapter used.
+fn bindings(library: HMODULE, runtime: HMODULE) -> Option<Input> {
     unsafe {
-        let register =
-            export::<Register>(library, s!("?scriptRegister@@YAXPEAUHINSTANCE__@@P6AXXZ@Z"))?;
-        let input = Input {
-            native_init: export(library, s!("?nativeInit@@YAX_K@Z"))?,
-            native_push: export(library, s!("?nativePush64@@YAX_K@Z"))?,
-            native_call: export(library, s!("?nativeCall@@YAPEA_KXZ"))?,
-            wait: export(library, s!("?scriptWait@@YAXK@Z"))?,
+        Some(Input {
+            script_hook: ScriptHook::resolve(library)?,
             visible: export(runtime, s!("rsf_render_overlay_visible"))?,
             toggle: export(runtime, s!("rsf_render_overlay_toggle"))?,
             settings_get: export(runtime, s!("rsf_render_settings_get")),
-        };
-        Some((register, input))
+        })
     }
 }
 
@@ -125,14 +154,15 @@ pub(crate) fn start(instance: HMODULE, runtime: HMODULE, configuration: &[u16]) 
     if library.is_null() {
         return false;
     }
-    let Some((register, input)) = bindings(library, runtime) else {
+    let Some(input) = bindings(library, runtime) else {
         return false;
     };
     // The callback can run as soon as the script is registered. Publish its complete table first.
+    let script_hook = input.script_hook;
     if INPUT.set(input).is_err() {
         return false;
     }
-    unsafe { register(instance, script) };
+    unsafe { script_hook.register(instance, script) };
     log(
         "RDR2 shared overlay input guard registered; Insert / F7 / both sticks opens the RSF panel.",
     );

@@ -91,6 +91,29 @@ pub(crate) const FRAME_COUNTER: usize = 0x542_904c;
 pub(crate) const FRAME_COUNTER_POINTER: usize = 0x542_9058;
 pub(crate) const FRAME_TIME: usize = 0x59b_393c;
 
+/// Camera probe entry bytes and the native worker fields copied by its Version 2 record.
+#[cfg(windows)]
+pub(crate) mod camera_probe {
+    use super::Site;
+
+    pub(crate) const FSR: Site = Site {
+        rva: 0x7b_a10c,
+        expected: [
+            0x48, 0x83, 0x3a, 0x00, 0x4c, 0x8b, 0xca, 0x74, 0x27, 0x48, 0x83, 0x7a, 0x18, 0x00,
+            0x74, 0x20,
+        ],
+    };
+    pub(crate) const DLSS: Site = Site {
+        rva: 0x7b_b60c,
+        expected: [
+            0x8b, 0x81, 0xa8, 0x00, 0x00, 0x00, 0x4c, 0x8d, 0x0c, 0x80, 0x4a, 0x8d, 0x0c, 0xc9,
+            0x48, 0x83,
+        ],
+    };
+    pub(crate) const JOB: usize = 0x1ce8;
+    pub(crate) const COLOUR_EXTENT: usize = 0x18;
+}
+
 /// Read-only settings row and value diagnostics for the same executable.
 #[cfg(windows)]
 pub(crate) mod settings_probe {

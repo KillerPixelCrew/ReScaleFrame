@@ -4,6 +4,12 @@
 #include <cstdint>
 
 namespace rsf::rdr2 {
+struct DiagnosticHook {
+    const void* detour;
+    void** original;
+};
+static_assert(sizeof(DiagnosticHook) == 2 * sizeof(void*));
+
 // Typed native leaves of ReScaleFrame.RDR2.asi lent to the Rust crate rsf-rdr2 (games/rdr2/src/asi.rs,
 // same order and size). The crate owns process admission, the [RDR2] configuration gates, the
 // ForceD3D12 write, every RDR2 address and expected byte, and engine-settings ownership. These are

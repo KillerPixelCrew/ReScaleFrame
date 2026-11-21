@@ -21,6 +21,66 @@ const LONG_PATH: u32 = 32768;
 pub(crate) const MH_OK: i32 = 0;
 pub(crate) const MH_ERROR_ALREADY_INITIALIZED: i32 = 1;
 
+#[repr(C)]
+pub(crate) struct DiagnosticHook {
+    detour: *const c_void,
+    original: *mut *mut c_void,
+}
+
+const _: () = assert!(size_of::<DiagnosticHook>() == 2 * size_of::<usize>());
+
+pub(crate) enum DiagnosticInstall {
+    Installed,
+    Refused,
+    Retained,
+}
+
+/// Shared startup transaction for the ASI's two-site diagnostic probes.
+pub(crate) fn install_diagnostic_hooks(
+    platform: &AsiPlatform,
+    image: usize,
+    sites: [layout::Site; 2],
+    hooks: &[DiagnosticHook; 2],
+    enable: unsafe extern "C" fn(usize) -> i32,
+) -> DiagnosticInstall {
+    if image == 0
+        || !sites.iter().all(|site| {
+            platform.read_value::<[u8; 16]>(image.wrapping_add(site.rva)) == Some(site.expected)
+        })
+    {
+        return DiagnosticInstall::Refused;
+    }
+    let initialized = unsafe { (platform.hook_initialize)() };
+    if initialized != MH_OK && initialized != MH_ERROR_ALREADY_INITIALIZED {
+        return DiagnosticInstall::Refused;
+    }
+    let targets = sites.map(|site| image + site.rva);
+    for (index, (&target, hook)) in targets.iter().zip(hooks).enumerate() {
+        if unsafe { (platform.hook_create)(target, hook.detour, hook.original) } != MH_OK {
+            let removed = targets[..index]
+                .iter()
+                .all(|&created| unsafe { (platform.hook_remove)(created) } == MH_OK);
+            return if removed {
+                DiagnosticInstall::Refused
+            } else {
+                DiagnosticInstall::Retained
+            };
+        }
+    }
+    if targets
+        .iter()
+        .all(|&target| unsafe { enable(target) } == MH_OK)
+    {
+        return DiagnosticInstall::Installed;
+    }
+    // A partially enabled set can leave a callback on the stack. Disable both sites and keep
+    // their trampolines until process exit.
+    for target in targets {
+        unsafe { (platform.hook_disable)(target) };
+    }
+    DiagnosticInstall::Retained
+}
+
 /// Typed native leaves of the ASI, in `asi_platform.h` order and size.
 #[repr(C)]
 pub(crate) struct AsiPlatform {
@@ -271,28 +331,30 @@ enum Force {
     Refused(String),
 }
 
+pub(crate) fn pe_header(platform: &AsiPlatform, base: usize) -> Option<(usize, u32, u32, u32)> {
+    const DOS_SIGNATURE: u16 = 0x5a4d;
+    if base == 0 || platform.read_value::<u16>(base) != Some(DOS_SIGNATURE) {
+        return None;
+    }
+    let nt = platform
+        .read_value::<i32>(base + 0x3c)
+        .and_then(|offset| base.checked_add_signed(offset as isize))?;
+    Some((
+        nt,
+        platform.read_value(nt)?,
+        platform.read_value(nt + 8)?,
+        platform.read_value(nt + 0x50)?,
+    ))
+}
+
+pub(crate) const PE_SIGNATURE: u32 = 0x4550;
+
 /// Writes "d3d12" to the engine's API parameter when the image, the parameter's section and every
 /// read site match the supported build and nothing else has set it.
 fn force_d3d12(platform: &AsiPlatform) -> Force {
-    const DOS_SIGNATURE: u16 = 0x5a4d;
-    const PE_SIGNATURE: u32 = 0x4550;
     let base = unsafe { (platform.main_module)() };
-    let no_image = || Force::Refused("ForceD3D12 refused: no main image.".into());
-    if base == 0 || platform.read_value::<u16>(base) != Some(DOS_SIGNATURE) {
-        return no_image();
-    }
-    let Some(nt) = platform
-        .read_value::<i32>(base + 0x3c)
-        .and_then(|offset| base.checked_add_signed(offset as isize))
-    else {
-        return no_image();
-    };
-    let (Some(signature), Some(timestamp), Some(image_size)) = (
-        platform.read_value::<u32>(nt),
-        platform.read_value::<u32>(nt + 8),
-        platform.read_value::<u32>(nt + 0x50),
-    ) else {
-        return no_image();
+    let Some((nt, signature, timestamp, image_size)) = pe_header(platform, base) else {
+        return Force::Refused("ForceD3D12 refused: no main image.".into());
     };
     if signature != PE_SIGNATURE
         || timestamp != layout::IMAGE_TIMESTAMP

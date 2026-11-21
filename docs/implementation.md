@@ -94,6 +94,13 @@ callback already in flight. The typed detours preserve the original
 call order. Source checks cover the bytes, keys and bounds. Builds and
 live probe verification remain open.
 
+RDR2's Rust camera probe owns the 64-frame capture window, request-file
+polling, worker-local snapshot and ScriptHook reference records. The native
+detours retain their original call order and the binary record remains
+2568 bytes. A missing or non-finite ScriptHook result skips its reference
+record. The two read-only probes share the hook transaction. Build and
+live capture verification remain open.
+
 Fallout 4 now owns exact-build identity, GameSDK lifecycle, Runtime
 session setup and cold D3D11 creation in Rust. The creation owner
 checks the final outer swapchain slot before binding presentation, and

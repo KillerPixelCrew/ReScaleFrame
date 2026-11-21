@@ -1,14 +1,10 @@
 // SPDX-License-Identifier: MIT
 #include "native_settings.h"
+#include "asi_platform.h"
 #include <MinHook.h>
 
-struct NativeSettingsHook {
-    const void* detour;
-    void** original;
-};
-
 extern "C" {
-bool rsf_rdr2_settings_install(const wchar_t* path, const NativeSettingsHook* hooks,
+bool rsf_rdr2_settings_install(const wchar_t* path, const rsf::rdr2::DiagnosticHook* hooks,
     int32_t (*enable)(uintptr_t)) noexcept;
 void rsf_rdr2_settings_row(const void* destination, const void* context, const void* metadata) noexcept;
 void rsf_rdr2_settings_value(const void* path, const void* source, const void* type,
@@ -36,7 +32,7 @@ void read(const void* path, void* source, const void* type, void* destination, i
 
 bool rsf_rdr2_native_settings_probe(const wchar_t* path) noexcept
 {
-    const NativeSettingsHook hooks[] = {
+    const rsf::rdr2::DiagnosticHook hooks[] = {
         {reinterpret_cast<const void*>(&bind), reinterpret_cast<void**>(&bind_original)},
         {reinterpret_cast<const void*>(&read), reinterpret_cast<void**>(&read_original)},
     };

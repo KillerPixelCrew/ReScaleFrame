@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Opt-in, bounded settings evidence collection. The detours never change native data.
-use crate::asi::{self, AsiPlatform, MH_ERROR_ALREADY_INITIALIZED, MH_OK};
+use crate::asi::{self, AsiPlatform, DiagnosticHook, DiagnosticInstall, install_diagnostic_hooks};
 use crate::layout::settings_probe::{BIND, GETTER_SLOT, KEYS, METADATA_KEY, READ};
 use crate::platform::lock;
 use crate::runtime_worker::log;
@@ -11,12 +11,6 @@ use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
-
-#[repr(C)]
-struct Hook {
-    detour: *const c_void,
-    original: *mut *mut c_void,
-}
 
 struct Probe {
     output: PathBuf,
@@ -32,7 +26,7 @@ static ARMED: AtomicBool = AtomicBool::new(false);
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_rdr2_settings_install(
     path: *const u16,
-    hooks: *const [Hook; 2],
+    hooks: *const [DiagnosticHook; 2],
     enable: unsafe extern "C" fn(usize) -> i32,
 ) -> bool {
     let (Some(platform), Some(hooks)) = (asi::platform(), unsafe { hooks.as_ref() }) else {
@@ -49,59 +43,27 @@ unsafe extern "C" fn rsf_rdr2_settings_install(
         return false;
     }
     let image = unsafe { (platform.main_module)() };
-    if image == 0 {
-        return false;
-    }
-    let sites = [BIND, READ];
-    if !sites.iter().all(|site| {
-        platform.read_value::<[u8; 16]>(image.wrapping_add(site.rva)) == Some(site.expected)
-    }) {
-        return false;
-    }
-    let initialized = unsafe { (platform.hook_initialize)() };
-    if initialized != MH_OK && initialized != MH_ERROR_ALREADY_INITIALIZED {
-        return false;
-    }
-    let targets = sites.map(|site| image + site.rva);
-    let options = || Probe {
+    let installed = match install_diagnostic_hooks(platform, image, [BIND, READ], hooks, enable) {
+        DiagnosticInstall::Installed => true,
+        DiagnosticInstall::Refused => return false,
+        DiagnosticInstall::Retained => false,
+    };
+    *probe = Some(Probe {
         output: PathBuf::from(OsString::from_wide(unsafe {
             std::slice::from_raw_parts(path, length)
         })),
         image,
         rows: 0,
         values: 0,
-        installed: false,
-    };
-    for (index, (&target, hook)) in targets.iter().zip(hooks).enumerate() {
-        if unsafe { (platform.hook_create)(target, hook.detour, hook.original) } != MH_OK {
-            for &created in &targets[..index] {
-                if unsafe { (platform.hook_remove)(created) } != MH_OK {
-                    // Retain a refused owner if an unpublished hook could not be removed.
-                    *probe = Some(options());
-                }
-            }
-            return false;
-        }
-    }
-    if !targets
-        .iter()
-        .all(|&target| unsafe { enable(target) } == MH_OK)
-    {
-        // Partial enable can leave a callback on the stack. Disable both sites and retain their
-        // trampolines for the ASI's process lifetime. The refused owner cannot be armed.
-        for target in targets {
-            unsafe { (platform.hook_disable)(target) };
-        }
-        *probe = Some(options());
-        return false;
-    }
-    *probe = Some(Probe {
-        installed: true,
-        ..options()
+        installed,
     });
     drop(probe);
-    log("RDR2 native settings read-only probe installed: max16 rows /32 values; no menu mutation.");
-    true
+    if installed {
+        log(
+            "RDR2 native settings read-only probe installed: max16 rows /32 values; no menu mutation.",
+        );
+    }
+    installed
 }
 
 #[unsafe(no_mangle)]
