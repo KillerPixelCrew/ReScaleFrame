@@ -4,7 +4,8 @@ param(
     [switch]$Prepare,
     [switch]$StageRuntime,
     [switch]$StageOnly,
-    [string]$Fsr3RuntimeDirectory = ''
+    [string]$Fsr3RuntimeDirectory = '',
+    [string]$NativeBuildDirectory = ''
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -20,20 +21,27 @@ if ($LASTEXITCODE -or $taskRevision -ne $taskLock.bindings.revision) { throw 'go
 $taskDirty = & git -C $taskBindings status --porcelain
 if ($LASTEXITCODE -or $taskDirty) { throw 'The godot-cpp reference must be clean.' }
 $taskSuffix = if ($VS2026) { '-vs18' } else { '' }
+$taskBuild = if ($NativeBuildDirectory) {
+    $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($NativeBuildDirectory)
+} else {
+    Join-Path $taskRoot 'build/windows-x64'
+}
 if (!$StageOnly) {
     Push-Location -LiteralPath $taskRoot
     try {
-        & cmake --preset "windows-x64$taskSuffix" "-DRSF_GODOT_CPP_DIR=$taskBindings" "-DPython3_EXECUTABLE=$taskRoot/.local/godot/build-env/Scripts/python.exe" "-DRSF_STREAMLINE_VK_RUNTIME=$taskRoot/.local/godot/vulkan/host/artifacts/streamline-production-selected-device-reflex/runtime"
+        & cmake --preset "windows-x64$taskSuffix" -B $taskBuild "-DRSF_GODOT_CPP_DIR=$taskBindings" "-DPython3_EXECUTABLE=$taskRoot/.local/godot/build-env/Scripts/python.exe" "-DRSF_STREAMLINE_VK_RUNTIME=$taskRoot/.local/godot/vulkan/host/artifacts/streamline-production-selected-device-reflex/runtime"
         if ($LASTEXITCODE) { throw 'Godot configuration failed.' }
-        & cmake --build --preset "windows-$($Configuration.ToLowerInvariant())$taskSuffix" --target rsf_godot
+        & cmake --build $taskBuild --config $Configuration --target rsf_godot
         if ($LASTEXITCODE) { throw 'Godot native build failed.' }
     } finally { Pop-Location }
 }
+$taskNative = Join-Path $taskBuild "bin/$Configuration/ReScaleFrame.Godot.Native.dll"
+if (!(Test-Path -LiteralPath $taskNative -PathType Leaf)) { throw "Godot native binary missing: $taskNative" }
 $taskPackage = Join-Path $taskRoot '.local/godot/package/addons/rescaleframe'
 New-Item -ItemType Directory -Force -Path $taskPackage | Out-Null
 Copy-RsfGodotAddon (Join-Path $taskSource 'addons/rescaleframe') $taskPackage
 New-Item -ItemType Directory -Force -Path (Join-Path $taskPackage 'bin') | Out-Null
-Copy-RsfGodotArtifact (Join-Path $taskRoot "build/windows-x64/bin/$Configuration/ReScaleFrame.Godot.Native.dll") (Join-Path $taskPackage 'bin/ReScaleFrame.Godot.Native.dll')
+Copy-RsfGodotArtifact $taskNative (Join-Path $taskPackage 'bin/ReScaleFrame.Godot.Native.dll')
 Copy-Item -LiteralPath (Join-Path $taskRoot 'LICENSE') -Destination (Join-Path $taskPackage 'LICENSE.txt') -Force
 Copy-Item -LiteralPath (Join-Path $taskBindings 'LICENSE.md') -Destination (Join-Path $taskPackage 'godot-cpp-LICENSE.md') -Force
 Copy-RsfGodotArtifact (Join-Path $taskRoot 'references/godot/engine/LICENSE.txt') (Join-Path $taskPackage 'Godot-LICENSE.txt')

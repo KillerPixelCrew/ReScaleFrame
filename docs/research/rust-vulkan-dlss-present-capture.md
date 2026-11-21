@@ -107,3 +107,23 @@ The integrated branch passed 305 locked Rust tests, formatting and
 Clippy. The ABI inventories and CTest transcript are under
 `build/rust-migration-streamline/evidence/`. Actual Vulkan GPU
 execution and captured image validation remain open.
+
+## Godot capture preflight
+
+`eng/build-godot.ps1 -StageOnly -StageRuntime -NativeBuildDirectory
+build/rust-migration-streamline` stages the tested extension from the
+same build used for the ABI checks. The staged DLL matched that build,
+and all 37 runtime files matched the package manifest. The NVIDIA
+archive matched the pinned SHA-512. The corrected Vulkan runtime
+matched its separate build receipt.
+
+The staged extension registered `ReScaleFrameEffect` in the pinned
+Godot 4.7.2 engine in a headless script run. The earlier local editor
+binary crashed during headless import with both the staged extension
+and an earlier native DLL. Its no-addon control exited normally. The
+exact fixture also reproduced the import crash without the optional
+editor plugin and without a fixed iteration limit. A debugger run
+exceeded the inspection interval without yielding a stack. The engine
+and DLL identities, package and differential logs are under
+`.local/godot/preflight/`. These checks cover staging and native class
+registration. Real Vulkan WSI output still requires the windowed run.
