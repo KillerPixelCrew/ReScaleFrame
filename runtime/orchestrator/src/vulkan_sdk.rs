@@ -6,12 +6,14 @@ use std::ptr::{NonNull, null_mut};
 use windows_sys::Win32::{
     Foundation::FreeLibrary,
     System::LibraryLoader::{
+        GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN, GetModuleHandleExW,
         LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
     },
 };
 
 const INVALID_ARGUMENT: i32 = -1;
 const LOAD_FAILED: i32 = -4;
+pub(super) const FIDELITYFX_DLL: &str = "amd_fidelityfx_vk.dll";
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -29,7 +31,11 @@ pub(super) struct SdkModule {
 
 impl SdkModule {
     // The setup lends a NUL-terminated UTF-8 runtime directory for this call.
-    pub(super) unsafe fn open(loader: Loader, directory: *const c_char) -> Result<Self, i32> {
+    pub(super) unsafe fn open(
+        loader: Loader,
+        directory: *const c_char,
+        filename: &'static str,
+    ) -> Result<Self, i32> {
         if directory.is_null() {
             return Err(INVALID_ARGUMENT);
         }
@@ -40,7 +46,7 @@ impl SdkModule {
         if !directory.is_absolute() {
             return Err(INVALID_ARGUMENT);
         }
-        let path = directory.join("amd_fidelityfx_vk.dll");
+        let path = directory.join(filename);
         let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
         let handle = NonNull::new(unsafe { (loader.load)(wide.as_ptr()) }).ok_or(LOAD_FAILED)?;
         Ok(Self {
@@ -61,7 +67,7 @@ impl Drop for SdkModule {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_vkffx_load(path: *const u16) -> *mut c_void {
+unsafe extern "C" fn rsf_core_vk_sdk_load(path: *const u16) -> *mut c_void {
     unsafe {
         LoadLibraryExW(
             path,
@@ -72,6 +78,20 @@ unsafe extern "C" fn rsf_core_vkffx_load(path: *const u16) -> *mut c_void {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_vkffx_unload(module: *mut c_void) {
+unsafe extern "C" fn rsf_core_vk_sdk_unload(module: *mut c_void) {
     unsafe { FreeLibrary(module) };
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_vk_sdk_pin(module: *mut c_void) -> u32 {
+    let mut pinned = null_mut();
+    u32::from(
+        unsafe {
+            GetModuleHandleExW(
+                GET_MODULE_HANDLE_EX_FLAG_PIN | GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                module.cast(),
+                &mut pinned,
+            )
+        } != 0,
+    )
 }

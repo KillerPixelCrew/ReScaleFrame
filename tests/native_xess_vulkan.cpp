@@ -48,8 +48,8 @@ xess_result_t destroy(xess_context_handle_t context) {
 }
 xess_result_t version(xess_version_t* value) { *value = {2, 1, 3, 4}; return XESS_RESULT_SUCCESS; }
 rsf::xess_vk::Library sdk;
-int32_t load(const char*, rsf::xess_vk::Library** out) { *out = &sdk; return RSF_BACKEND_OK; }
-void unload(rsf::xess_vk::Library*) {}
+int32_t resolve(void*, rsf::xess_vk::Library** out) { *out = &sdk; return RSF_BACKEND_OK; }
+void drop_table(rsf::xess_vk::Library*) {}
 VKAPI_ATTR VkResult VKAPI_CALL create_image(VkDevice, const VkImageCreateInfo* info, const VkAllocationCallbacks*, VkImage* out) {
     CHECK((info->extent.width == 1280 && info->extent.height == 720 && info->usage == 6) ||
         (info->extent.width == 1920 && info->extent.height == 1080 && info->usage == 15));
@@ -93,7 +93,11 @@ rsf_vk_function instance_proc(void*, const char* name) {
 int main() {
     sdk.create = create; sdk.initialize = initialize; sdk.resolution = resolution; sdk.velocity = velocity;
     sdk.execute = execute; sdk.destroy = destroy; sdk.version = version;
-    auto ops = rsf::xess_vk::native_ops; ops.load = load; ops.unload = unload;
+    auto ops = rsf::xess_vk::native_ops;
+    ops.loader = {[](const uint16_t*) -> void* { return &sdk; }, [](void*) {}};
+    ops.resolve = resolve;
+    ops.pin = [](void*) -> uint32_t { return 1; };
+    ops.drop_table = drop_table;
     const rsf_xessvk_setup session{sizeof(session), RSF_XESSVK_REQUIREMENTS_ABI_VERSION, "C:\\fake"};
     CHECK(rsf_core_xessvk_initialize(&ops, &session) == RSF_BACKEND_OK);
     void* const device = reinterpret_cast<void*>(1);

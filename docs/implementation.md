@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+XeSS Vulkan SR now uses the Rust SDK module owner shared with
+FidelityFX. Rust resolves the absolute payload path, owns the loaded
+module and pins it after the native entry table is validated. The pin
+preserves SDK-owned parts of the Vulkan device creation chain if the
+host retires the session before destroying the device. The native
+bridge only resolves typed entries and makes SDK calls. The public C
+headers have no changes. Build and runtime validation remain open.
+
 FidelityFX Vulkan super resolution and frame generation now share one
 Rust SDK loader. It takes an absolute UTF-8 runtime directory and keeps
 the module alive through context retirement and native leaf release.

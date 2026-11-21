@@ -19,7 +19,7 @@ use crate::vulkan_fg_resources::{
 use crate::vulkan_fg_resources_abi::{
     rsf_vkfg_fences as Fences, rsf_vkfg_image as PrivateImage, rsf_vkfg_platform as Resources,
 };
-use crate::vulkan_fidelityfx::{Loader, SdkModule};
+use crate::vulkan_sdk::{FIDELITYFX_DLL, Loader, SdkModule};
 use crate::vulkan_sr_abi::{RSF_SRVK_ABI_VERSION, rsf_srvk_image as Image};
 use rsf_game_sys::{
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record as Record,
@@ -322,11 +322,16 @@ impl Owner {
             return NOT_SUPPORTED;
         }
         self.admitted = true;
-        let module =
-            match unsafe { SdkModule::open(ops.loader, setup.graphics.runtime_directory_utf8) } {
-                Ok(module) => module,
-                Err(result) => return result,
-            };
+        let module = match unsafe {
+            SdkModule::open(
+                ops.loader,
+                setup.graphics.runtime_directory_utf8,
+                FIDELITYFX_DLL,
+            )
+        } {
+            Ok(module) => module,
+            Err(result) => return result,
+        };
         let library = module.as_ptr();
         self.module = Some(module);
         let opened = unsafe {

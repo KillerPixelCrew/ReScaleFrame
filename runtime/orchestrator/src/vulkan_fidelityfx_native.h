@@ -1,16 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-#include <stdint.h>
-
-struct rsf_vkffx_loader {
-    void* (*load)(const uint16_t*);
-    void (*unload)(void*);
-};
-static_assert(sizeof(rsf_vkffx_loader) == 2 * sizeof(void*));
-
-extern "C" void* rsf_core_vkffx_load(const uint16_t*);
-extern "C" void rsf_core_vkffx_unload(void*);
-inline constexpr rsf_vkffx_loader rsf_vkffx_system_loader{rsf_core_vkffx_load, rsf_core_vkffx_unload};
+#include "vulkan_sdk_native.h"
 
 #if defined(RSF_HAVE_FFX_VK)
 #include <windows.h>

@@ -173,8 +173,6 @@ mod vulkan_fg_resources;
 #[cfg(windows)]
 mod vulkan_fg_resources_abi;
 #[cfg(windows)]
-mod vulkan_fidelityfx;
-#[cfg(windows)]
 mod vulkan_fsr4_fg;
 #[cfg(windows)]
 mod vulkan_fsr4_sr;
@@ -190,6 +188,8 @@ mod vulkan_latency_frames;
 mod vulkan_pcl;
 #[cfg(windows)]
 mod vulkan_presentation;
+#[cfg(windows)]
+mod vulkan_sdk;
 #[cfg(windows)]
 mod vulkan_sharpening;
 #[cfg(windows)]

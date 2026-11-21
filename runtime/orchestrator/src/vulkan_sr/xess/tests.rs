@@ -152,15 +152,19 @@ static IMAGES: ImageOps = ImageOps {
 };
 
 pub(in crate::vulkan_sr) static OPS: XessOps = XessOps {
-    load: leaf!(|directory: *const c_char, out: &mut Handle| -> i32 {
-        push(Call::Load);
-        if unsafe { CStr::from_ptr(directory) } == c"relative" {
-            return INVALID;
-        }
+    loader: Loader {
+        load: leaf!(|_: *const u16| -> Handle {
+            push(Call::Load);
+            handle()
+        }),
+        unload: leaf!(|_: Handle| -> () { push(Call::Unload) }),
+    },
+    resolve: leaf!(|_: Handle, out: &mut Handle| -> i32 {
         *out = handle();
         0
     }),
-    unload: leaf!(|_: Handle| -> () { push(Call::Unload) }),
+    pin: leaf!(|_: Handle| -> u32 { 1 }),
+    drop_table: leaf!(|_: Handle| -> () {}),
     instance_requirements: leaf!(|_: Handle,
                                   count: *mut u32,
                                   _: Names,
@@ -488,7 +492,6 @@ fn session_admits_one_sdk_and_maps_requirement_results() {
         assert_eq!(
             fake.calls,
             [
-                Call::Load,
                 Call::Load,
                 Call::Requirements,
                 Call::Requirements,

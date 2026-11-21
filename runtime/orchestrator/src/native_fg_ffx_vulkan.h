@@ -36,7 +36,7 @@ struct rsf_ffxgvk_swapchain {
     uint64_t old_chain;
 };
 struct rsf_ffxgvk_ops {
-    rsf_vkffx_loader loader;
+    rsf_vk_sdk_loader loader;
     int32_t (*open)(const rsf_fgvk_setup*, void* module, uint32_t width, uint32_t height, rsf_ffxgvk_native**, void** resources);
     void (*close)(rsf_ffxgvk_native*);
     /* Returns the corrected SDK's dispatch registration result. */

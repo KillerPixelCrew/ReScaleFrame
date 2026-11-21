@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::render_abi::rsf_sharpening_options;
 use crate::sr_session::has_capacity;
-use crate::vulkan_fidelityfx::{Loader, SdkModule};
+use crate::vulkan_sdk::{FIDELITYFX_DLL, Loader, SdkModule};
 use crate::vulkan_sr_abi::*;
 use crate::vulkan_sr_split::normalize_frame;
 use rsf_game_sys::{
@@ -462,7 +462,8 @@ impl FidelityFx {
     unsafe fn create(ops: &'static FfxOps, setup: &Setup) -> Result<(Self, [u32; 2]), i32> {
         let output = [setup.output_width, setup.output_height];
         let mut handle = ptr::null_mut();
-        let module = unsafe { SdkModule::open(ops.loader, setup.runtime_directory_utf8) }?;
+        let module =
+            unsafe { SdkModule::open(ops.loader, setup.runtime_directory_utf8, FIDELITYFX_DLL) }?;
         check(unsafe { (ops.open)(setup, module.as_ptr(), &mut handle) })?;
         if handle.is_null() {
             return Err(INIT_FAILED);

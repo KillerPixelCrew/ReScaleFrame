@@ -52,7 +52,7 @@ struct FfxDispatch {
 };
 struct FfxNative;
 struct FfxOps {
-    rsf_vkffx_loader loader;
+    rsf_vk_sdk_loader loader;
     int32_t (*open)(const rsf_srvk_setup*, void* module, FfxNative**);
     void (*close)(FfxNative*);
     int32_t (*initialize_graphics)(FfxNative*, const rsf_srvk_setup*);
@@ -435,7 +435,7 @@ catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 constexpr Platform native{
     rsf::dlss_vk::platform,
     rsf::xess_vk::platform,
-    {rsf_vkffx_system_loader, open, [](FfxNative* owner) { delete owner; }, initialize_graphics, versions, create_effect,
+    {rsf_vk_sdk_system_loader, open, [](FfxNative* owner) { delete owner; }, initialize_graphics, versions, create_effect,
         effective_version, destroy_effect, plan, allocate, release, initialize_mask, initialize_output, dispatch, copy_output,
         [](FfxNative* owner, const rsf_srvk_setup* setup, void* commands, const rsf_srvk_frame* frame, uint64_t output) -> int32_t {
             return owner->sharpen.execute(*setup, commands, *frame, reinterpret_cast<VkImage>(output));

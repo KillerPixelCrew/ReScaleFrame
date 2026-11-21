@@ -361,7 +361,7 @@ void capture_flush(rsf_ffxgvk_native* self) noexcept try {
     (void)self->capture.flush();
 } catch (...) {}
 constexpr rsf_ffxgvk_ops operations{
-    rsf_vkffx_system_loader, open, [](rsf_ffxgvk_native* self) { delete self; }, set_wsi,
+    rsf_vk_sdk_system_loader, open, [](rsf_ffxgvk_native* self) { delete self; }, set_wsi,
     create_swapchain, query_swapchain, create_effect, query_provider, destroy_effect, destroy_chain, destroy_swapchain,
     images, acquire, prepare, copy, configure, present, drain,
     [](rsf_ffxgvk_native* self, uint64_t frame) -> uint32_t { return self->capture.wants(frame) ? 1u : 0u; },

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 // XeSS Vulkan SR leaves. Rust (vulkan_sr/xess.rs) owns the SDK session, context
 // lifetime, admission, sizing, history, capture order and teardown. These
-// functions only load the SDK, call it and record Vulkan commands.
+// functions resolve typed SDK exports, call them and record Vulkan commands.
 #include "native_xess_vulkan.h"
+#include "vulkan_sdk_native.h"
 #include <rescaleframe/native_xess_vulkan_requirements.h>
 
 extern "C" {
@@ -18,7 +19,6 @@ int32_t rsf_core_xessvk_shutdown(const rsf::xess_vk::Ops*);
 #include <xess/xess_vk.h>
 #include <cstddef>
 #include <cstring>
-#include <filesystem>
 #include <memory>
 #include "../../backends/common/frame_capture_vk.h"
 #include "sharpening_vulkan.h"
@@ -39,7 +39,6 @@ struct Execute {
     uint32_t input_width, input_height, reset;
 };
 struct Library {
-    HMODULE module = nullptr;
     decltype(&xessVKGetRequiredInstanceExtensions) instance = nullptr;
     decltype(&xessVKGetRequiredDeviceExtensions) device = nullptr;
     decltype(&xessVKGetRequiredDeviceFeatures) features = nullptr;
@@ -50,7 +49,6 @@ struct Library {
     decltype(&xessGetOptimalInputResolution) resolution = nullptr;
     decltype(&xessSetVelocityScale) velocity = nullptr;
     decltype(&xessGetVersion) version = nullptr;
-    ~Library() { if (module) FreeLibrary(module); }
 };
 struct Native {
     const Library* sdk = nullptr;
@@ -64,8 +62,10 @@ struct Native {
     rsf::sharpening::Vulkan sharpen;
 };
 struct Ops {
-    int32_t (*load)(const char*, Library**);
-    void (*unload)(Library*);
+    rsf_vk_sdk_loader loader;
+    int32_t (*resolve)(void*, Library**);
+    uint32_t (*pin)(void*);
+    void (*drop_table)(Library*);
     int32_t (*instance_requirements)(Library*, uint32_t*, const char* const**, uint32_t*);
     int32_t (*device_extensions)(Library*, void*, void*, uint32_t*, const char* const**);
     int32_t (*device_features)(Library*, void*, void*, void**);
@@ -93,7 +93,7 @@ struct Ops {
     void (*retire_commands)(Native*, void*);
     void (*flush_capture)(Native*);
 };
-static_assert(sizeof(Ops) == 28 * sizeof(void*) && sizeof(rsf_xessvk_setup) == 16 && sizeof(Init) == 16);
+static_assert(sizeof(Ops) == 31 * sizeof(void*) && sizeof(rsf_xessvk_setup) == 16 && sizeof(Init) == 16);
 static_assert(sizeof(Texture) == 32);
 static_assert(sizeof(Execute) == 152 && offsetof(Execute, reset) == 148);
 // Values mirrored by the Rust owner.
@@ -110,16 +110,10 @@ static_assert(VK_IMAGE_LAYOUT_GENERAL == 1 && VK_IMAGE_USAGE_TRANSFER_SRC_BIT ==
     VK_IMAGE_USAGE_SAMPLED_BIT == 4 && VK_IMAGE_USAGE_STORAGE_BIT == 8);
 
 namespace {
-int32_t load(const char* directory_utf8, Library** out) noexcept try {
-    std::u8string directory(std::strlen(directory_utf8), u8'\0');
-    std::memcpy(directory.data(), directory_utf8, directory.size());
-    const auto path = std::filesystem::path(directory) / L"libxess.dll";
-    if (!path.is_absolute()) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
+int32_t resolve(void* module, Library** out) noexcept try {
     auto sdk = std::make_unique<Library>();
-    sdk->module = LoadLibraryExW(path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
-    if (!sdk->module) return RSF_BACKEND_ERROR_LOAD_FAILED;
 #define RSF_XESS_LOAD(member, name) \
-    sdk->member = reinterpret_cast<decltype(sdk->member)>(GetProcAddress(sdk->module, #name)); \
+    sdk->member = reinterpret_cast<decltype(sdk->member)>(GetProcAddress(static_cast<HMODULE>(module), #name)); \
     if (!sdk->member) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT
     RSF_XESS_LOAD(instance, xessVKGetRequiredInstanceExtensions);
     RSF_XESS_LOAD(device, xessVKGetRequiredDeviceExtensions);
@@ -132,11 +126,6 @@ int32_t load(const char* directory_utf8, Library** out) noexcept try {
     RSF_XESS_LOAD(velocity, xessSetVelocityScale);
     RSF_XESS_LOAD(version, xessGetVersion);
 #undef RSF_XESS_LOAD
-    // Godot retires host services before its Vulkan device. Keep SDK-owned
-    // creation-chain storage mapped through that later teardown and process exit.
-    HMODULE pinned = nullptr;
-    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN | GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
-        reinterpret_cast<LPCWSTR>(sdk->module), &pinned)) return RSF_BACKEND_ERROR_LOAD_FAILED;
     *out = sdk.release();
     return RSF_BACKEND_OK;
 } catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
@@ -317,7 +306,8 @@ void retire_commands(Native* native, void* commands) noexcept {
 }
 
 extern const Ops native_ops{
-    load, [](Library* sdk) noexcept { delete sdk; }, instance_requirements, device_extensions, device_features, version,
+    rsf_vk_sdk_system_loader, resolve, rsf_core_vk_sdk_pin, [](Library* sdk) noexcept { delete sdk; },
+    instance_requirements, device_extensions, device_features, version,
     open, [](Native* native) noexcept { delete native; }, create_context, initialize, resolution, destroy_context,
     bind_device, [](Native* native) -> void* { return &native->gpu; }, &rsf::vkfg::platform,
     velocity, stage, prepare_output, execute, copy_output, sharpen,

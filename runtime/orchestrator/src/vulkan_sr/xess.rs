@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
 //! XeSS Vulkan super resolution. Rust owns the SDK session, context lifetime,
 //! admission, sizing, the private image cache, history, capture order and
-//! teardown. The native table only loads the SDK and records Vulkan work.
+//! teardown. The native table resolves typed SDK entry points and records Vulkan work.
 use super::*;
 use crate::vulkan_fg_resources::{ensure_image, rsf_core_vkfg_release_image};
 use crate::vulkan_fg_resources_abi::{rsf_vkfg_image as OwnedImage, rsf_vkfg_platform as ImageOps};
+use crate::vulkan_sdk::{Loader, SdkModule};
 use std::ffi::CString;
 use std::sync::{Arc, PoisonError};
 
@@ -40,8 +41,10 @@ type Names = *mut *const *const c_char;
 // Private platform ABI with native_xess_vulkan.cpp.
 #[repr(C)]
 pub(super) struct XessOps {
-    load: unsafe extern "C" fn(*const c_char, &mut Handle) -> i32,
-    unload: unsafe extern "C" fn(Handle),
+    loader: Loader,
+    resolve: unsafe extern "C" fn(Handle, &mut Handle) -> i32,
+    pin: unsafe extern "C" fn(Handle) -> u32,
+    drop_table: unsafe extern "C" fn(Handle),
     instance_requirements: unsafe extern "C" fn(Handle, *mut u32, Names, *mut u32) -> i32,
     device_extensions: unsafe extern "C" fn(Handle, Handle, Handle, *mut u32, Names) -> i32,
     device_features: unsafe extern "C" fn(Handle, Handle, Handle, *mut Handle) -> i32,
@@ -101,7 +104,7 @@ pub(super) struct XessExecute {
 }
 
 const _: () = {
-    assert!(size_of::<XessOps>() == 28 * 8);
+    assert!(size_of::<XessOps>() == 31 * 8);
     assert!(size_of::<XessSetup>() == 16 && size_of::<XessInit>() == 16);
     assert!(size_of::<XessTexture>() == 32);
     assert!(size_of::<XessExecute>() == 152);
@@ -128,6 +131,7 @@ fn status(result: Result<(), i32>) -> i32 {
 struct Library {
     ops: &'static XessOps,
     handle: Handle,
+    module: SdkModule,
 }
 
 // The native handle is immutable SDK entry-point storage.
@@ -136,7 +140,7 @@ unsafe impl Sync for Library {}
 
 impl Drop for Library {
     fn drop(&mut self) {
-        unsafe { (self.ops.unload)(self.handle) };
+        unsafe { (self.ops.drop_table)(self.handle) };
     }
 }
 
@@ -168,15 +172,30 @@ unsafe extern "C" fn rsf_core_xessvk_initialize(
     if session.is_some() {
         return NOT_READY;
     }
+    let module =
+        match unsafe { SdkModule::open(ops.loader, setup.runtime_directory_utf8, "libxess.dll") } {
+            Ok(module) => module,
+            Err(result) => return result,
+        };
     let mut handle = ptr::null_mut();
-    let result = unsafe { (ops.load)(setup.runtime_directory_utf8, &mut handle) };
+    let result = unsafe { (ops.resolve)(module.as_ptr(), &mut handle) };
     if result != 0 {
         return result;
     }
     if handle.is_null() {
         return LOAD_FAILED;
     }
-    *session = Some(Arc::new(Library { ops, handle }));
+    let library = Library {
+        ops,
+        handle,
+        module,
+    };
+    // The host can destroy its Vulkan device after retiring the session. The
+    // SDK owns storage in the device creation chain that must stay mapped.
+    if unsafe { (ops.pin)(library.module.as_ptr()) } == 0 {
+        return LOAD_FAILED;
+    }
+    *session = Some(Arc::new(library));
     0
 }
 
