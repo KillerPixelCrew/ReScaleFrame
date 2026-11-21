@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now owns shared D3D11 texture dump readback, preview encoding,
+statistics and publication. The native bridge retains WIC, file and
+D3D11 calls. Input capture and Anomaly staging use the same pixel-stride
+table. The four dump C signatures and the header are unchanged, and
+the finite ranges for the two preview channels are tracked separately.
+Source checks and the remaining verification are recorded in commit
+`1f3bb2e`.
+
 Rust now owns the legacy Streamline SR session, including its owned and
 borrowed host routes, device leases, viewport option cache and the
 token, constants, options, tags and evaluate order. The native bridge

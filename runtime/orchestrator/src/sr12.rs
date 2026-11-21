@@ -7,7 +7,7 @@
 use crate::com_ref::ComRef;
 use crate::dxgi_format::{
     D24_UNORM_S8_UINT, D32_FLOAT, D32_FLOAT_S8X24_UINT, R24_UNORM_X8_TYPELESS, R24G8_TYPELESS,
-    R32_TYPELESS, R32G8X24_TYPELESS,
+    R32_TYPELESS, R32G8X24_TYPELESS, half_to_f32,
 };
 use crate::gl_pipeline_abi::{rsf_dlss_setup, rsf_sr12_setup as Setup};
 use crate::render_abi::*;
@@ -252,20 +252,6 @@ fn tile_origin(tile: u32, width: u32, height: u32) -> (u32, u32) {
         quarter(width, tile % 2 == 1),
         quarter(height, tile / 2 == 1),
     )
-}
-
-fn half_to_f32(half: u16) -> f32 {
-    let sign = u32::from(half & 0x8000) << 16;
-    let exponent = u32::from((half >> 10) & 0x1f);
-    let mantissa = u32::from(half & 0x3ff);
-    match exponent {
-        0 => {
-            let magnitude = mantissa as f32 / 16_777_216.0;
-            if sign != 0 { -magnitude } else { magnitude }
-        }
-        0x1f => f32::from_bits(sign | 0x7f80_0000 | (mantissa << 13)),
-        _ => f32::from_bits(sign | ((exponent + 112) << 23) | (mantissa << 13)),
-    }
 }
 
 // Mean and maximum pixel-vector magnitude and the count of non-finite samples.
