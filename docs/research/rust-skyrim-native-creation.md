@@ -105,8 +105,9 @@ Still C++ in `rsf_game_skyrim_se`, in suggested order:
    its hook record so a later stop or prepare can retry. A Rust regression covers a failed
    start with a refused disable. The regression remains unrun.
    `session.rs` now owns the lifecycle; see "Session lifecycle" below. Still C++ in
-   `plugin.cpp`: the five typed observer detours, their engine facts (TAA bypass bytes,
-   presentation binding read, bounded diagnostics) and the window-class policy.
+   `plugin.cpp`: the five typed observer detours, presentation binding read, native
+   diagnostics and the window-class policy. The Rust post-process owner controls
+   reconstruction admission and the scoped TAA override.
 2. `compatibility.rs` and `compatibility/initializer.rs` own the Community Shaders
    1.9.1 profile, cold-device and feature checks, resolver capture, initializer
    transaction and HDR caller scope. The typed native detours stay in `compatibility.cpp`.
@@ -221,6 +222,18 @@ and an exception from the native profile leaf is now an unreadable
 profile result. The original initializer can still fall back before
 device creation. Source and layout checks passed. Builds and live
 loader and rollback verification remain open.
+
+## Pre-HDR post-process observer
+
+The native detour captures the same return address and calls the original
+on its own frame with all five arguments. `postprocess.rs` checks the live
+session, compatibility gate, exact input and output and caller scope. It
+reports the native FG inputs before SR mutates them. A successful SR call
+requests a clear of main TAA history using the observed mask and lends one
+temporary enable-byte receipt to the detour. The native scope restores it
+only while the same TAA owner remains readable, and the session's in-flight
+count covers restoration. The write leaf preserves Win32 last error.
+Source and layout comparisons passed. Build and live fallback remain open.
 
 ## Sampler hook
 

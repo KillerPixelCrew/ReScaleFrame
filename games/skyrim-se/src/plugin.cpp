@@ -18,6 +18,7 @@
 #include "sampling.h"
 #include "presentation_inputs.h"
 #include "compatibility.h"
+#include "postprocess_platform.h"
 #include "session_platform.h"
 #include <rescaleframe/d3d11_host.h>
 #if defined(_MSC_VER)
@@ -49,7 +50,6 @@ UploadFrame original_upload = nullptr;
 void* upload_target = nullptr;
 std::atomic<uint32_t> calls{0};
 std::atomic<uint64_t> observations{0};
-std::atomic<uint64_t> pass_observations{0};
 using CreateHost = int32_t (*)(const rsf_d3d11_host_setup*, rsf_game_host_services*);
 using SetHostActive = int32_t (*)(void*, uint32_t);
 using BindPresentation = int32_t (*)(void*, const rsf_d3d11_presentation_binding*);
@@ -138,6 +138,45 @@ void describe_native_inputs(char* message, size_t capacity) noexcept
         unsigned(desc.Format), desc.SampleDesc.Count);
 }
 
+void report_postprocess(const rsf_skyrim_cs_hdr_call* call, const rsf_game_host_services* host, uint64_t number, bool detail) noexcept
+{
+    char colour[160]{}, motion[160]{}, message[512]{};
+    describe_target(call->input, colour, sizeof(colour));
+    describe_target(7, motion, sizeof(motion));
+    std::snprintf(message, sizeof(message),
+        "Skyrim native post-process observation=%llu source=%llu thread=%lu manager=%p input=%u output=%u; %s; motion candidate %s",
+        static_cast<unsigned long long>(number), static_cast<unsigned long long>(rsf::skyrim::cpu_source()),
+        GetCurrentThreadId(), reinterpret_cast<void*>(call->manager), call->input, call->output, colour, motion);
+    try { host->log(host->user, message); } catch (...) {}
+    if (detail) {
+        char inputs[1024]{};
+        describe_native_inputs(inputs, sizeof(inputs));
+        try { host->log(host->user, inputs); } catch (...) {}
+    }
+}
+
+constexpr rsf_skyrim_postprocess_leaves postprocess_leaves{
+    rsf::skyrim::compatibility_render_allowed,
+    [](const rsf_skyrim_cs_hdr_call* call) noexcept {
+        return rsf::skyrim::compatibility_postprocess_call(call->caller, reinterpret_cast<void*>(call->manager),
+            call->input, call->output, call->argument4, call->argument5);
+    },
+    [](void* manager, const rsf_game_host_services* host) noexcept {
+        try { (void)rsf::skyrim::prepare_presentation_inputs(manager, *host); } catch (...) {}
+    },
+    [](void* manager, const rsf_game_host_services* host) noexcept {
+        try { return rsf::skyrim::reconstruct(manager, *host); } catch (...) { return false; }
+    },
+    report_postprocess,
+    [](uintptr_t address, const void* data, size_t bytes) noexcept {
+        const auto error = GetLastError();
+        SIZE_T copied{};
+        const bool written = WriteProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(address), data, bytes, &copied) && copied == bytes;
+        SetLastError(error);
+        return written;
+    },
+};
+
 uintptr_t observe_process(void* manager, uint32_t input, uint32_t output, uintptr_t argument4, uint8_t argument5) noexcept
 {
 #if defined(_MSC_VER)
@@ -146,50 +185,16 @@ uintptr_t observe_process(void* manager, uint32_t input, uint32_t output, uintpt
     const auto caller = uintptr_t(__builtin_return_address(0));
 #endif
     calls.fetch_add(1, std::memory_order_acq_rel);
-    bool reconstructed = false;
-    if (accepting() && rsf::skyrim::compatibility_render_allowed() && input == 1 && output == 0 &&
-        rsf::skyrim::compatibility_postprocess_call(caller, manager, input, output, argument4, argument5)) {
-        rsf_game_host_services host{};
-        (void)rsf_skyrim_session_lease(true, &host);
-        try { (void)rsf::skyrim::prepare_presentation_inputs(manager, host); } catch (...) {}
-        try { reconstructed = rsf::skyrim::reconstruct(manager, host); } catch (...) {}
-    }
-    if (accepting()) {
-        const auto number = pass_observations.fetch_add(1, std::memory_order_relaxed);
-        if (number < 16) {
-            char colour[160]{}, motion[160]{}, message[512]{};
-            describe_target(input, colour, sizeof(colour));
-            describe_target(7, motion, sizeof(motion));
-            std::snprintf(message, sizeof(message),
-                "Skyrim native post-process observation=%llu source=%llu thread=%lu manager=%p input=%u output=%u; %s; motion candidate %s",
-                static_cast<unsigned long long>(number), static_cast<unsigned long long>(rsf::skyrim::cpu_source()),
-                GetCurrentThreadId(), manager, input, output, colour, motion);
-            rsf_game_host_services host{};
-            (void)rsf_skyrim_session_lease(true, &host);
-            if (host.log) { try { host.log(host.user, message); } catch (...) {} }
-            if (host.log && number < 4) {
-                char inputs[1024]{};
-                describe_native_inputs(inputs, sizeof(inputs));
-                try { host.log(host.user, inputs); } catch (...) {}
-            }
-        }
-    }
-    // Retain native bloom, exposure and HDR. Only its temporal evaluation is redundant
-    // after a complete replacement. This byte is consumed on this native render owner.
-    uintptr_t taa = 0; unsigned char temporal_enabled = 0; uint32_t clear_mask = 0;
-    const bool bypass = reconstructed && copy(&taa, static_cast<unsigned char*>(manager) + 0x1f0, sizeof(taa)) && taa &&
-        copy(&temporal_enabled, reinterpret_cast<void*>(taa + 0x18), sizeof(temporal_enabled)) &&
-        copy(&clear_mask, reinterpret_cast<void*>(taa + 0x30), sizeof(clear_mask));
-    if (bypass) {
-        // Native 0x1544DF4 consumes this mask before evaluating TAA. Bit 0 clears
-        // main history targets 81/82, preventing stale history on an SR fallback.
-        *reinterpret_cast<uint32_t*>(taa + 0x30) = clear_mask | 1u;
-        *reinterpret_cast<unsigned char*>(taa + 0x18) = 0;
-    }
-    const auto result = original_process(manager, input, output, argument4, argument5);
-    if (bypass) *reinterpret_cast<unsigned char*>(taa + 0x18) = temporal_enabled;
-    calls.fetch_sub(1, std::memory_order_acq_rel);
-    return result;
+    struct Call {
+        ~Call() { calls.fetch_sub(1, std::memory_order_acq_rel); }
+    } activity;
+    struct Restore {
+        rsf_skyrim_taa_receipt receipt{};
+        ~Restore() { rsf_skyrim_postprocess_restore(rsf::skyrim::creation_platform(), &postprocess_leaves, &receipt); }
+    } restore;
+    const rsf_skyrim_cs_hdr_call call{caller, uintptr_t(manager), argument4, input, output, argument5};
+    rsf_skyrim_postprocess_prepare(rsf::skyrim::creation_platform(), &postprocess_leaves, &call, &restore.receipt);
+    return original_process(manager, input, output, argument4, argument5);
 }
 
 void observe_jitter(void* state) noexcept

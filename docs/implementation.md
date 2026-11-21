@@ -308,6 +308,13 @@ GameSDK. Native job-generation proof and hook teardown remain in
 C++. The expanded input fixture remains unrun.
 [Skyrim CPU ownership audit](research/rust-skyrim-cpu-ownership.md)
 
+Skyrim's pre-HDR observer now admits the exact post-process call,
+publishes FG inputs before SR, and owns the temporary TAA override
+in Rust. It clears the main history bit only after reconstruction
+succeeds and restores the enable byte when the same owner survives
+the native call. The trampoline keeps its original five arguments.
+Source and layout checks passed. Build and live fallback remain open.
+
 Unity package D3D12 SR contexts and their recording slots are Rust-owned.
 The existing Unity bridge still provides recording and completion facts.
 The view owner preserves reconfiguration, spatial fallback and retirement

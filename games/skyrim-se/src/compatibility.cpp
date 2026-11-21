@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "compatibility.h"
 #include "observer_platform.h"
+#include "postprocess_platform.h"
 #include <rescaleframe/sha256_file.h>
 #include <MinHook.h>
 #include <windows.h>
@@ -13,11 +14,6 @@
 extern "C" {
 using ProfileRead = bool (*)(uintptr_t, void*, size_t);
 using Withdraw = void (*)() noexcept;
-struct rsf_skyrim_cs_hdr_call {
-    uintptr_t caller, manager, argument4;
-    uint32_t input, output;
-    uint8_t argument5;
-};
 struct rsf_skyrim_cs_hdr_scope {
     rsf_skyrim_cs_hdr_call call;
     bool primary, active;
@@ -54,7 +50,6 @@ bool rsf_skyrim_cs_postprocess_allowed(uintptr_t game, const rsf_skyrim_cs_hdr_c
 }
 
 static_assert(sizeof(wchar_t) == 2 && sizeof(rsf_skyrim_cs_leaves) == 112);
-static_assert(sizeof(rsf_skyrim_cs_hdr_call) == 40 && offsetof(rsf_skyrim_cs_hdr_call, argument5) == 32);
 static_assert(sizeof(rsf_skyrim_cs_hdr_scope) == 48);
 static_assert(sizeof(IMAGE_DOS_HEADER) == 64 && offsetof(IMAGE_DOS_HEADER, e_lfanew) == 0x3c);
 static_assert(sizeof(IMAGE_NT_HEADERS64) == 264 && sizeof(IMAGE_OPTIONAL_HEADER64) == 240);

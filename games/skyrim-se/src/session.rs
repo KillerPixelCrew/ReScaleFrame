@@ -798,7 +798,7 @@ pub(crate) unsafe extern "C" fn status(output: *mut rsf_game_renderer_status) ->
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_session_accepting() -> bool {
+pub(crate) extern "C" fn rsf_skyrim_session_accepting() -> bool {
     ACCEPTING.load(Ordering::Acquire)
 }
 
@@ -808,7 +808,7 @@ extern "C" fn rsf_skyrim_session_accepting() -> bool {
 /// # Safety
 /// `out` is null or writable for one services table.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_session_lease(
+pub(crate) unsafe extern "C" fn rsf_skyrim_session_lease(
     live: bool,
     out: *mut rsf_game_host_services,
 ) -> usize {

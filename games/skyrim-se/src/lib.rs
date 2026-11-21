@@ -16,6 +16,7 @@ mod layout;
 mod observers;
 mod platform;
 mod plugin;
+mod postprocess;
 mod presentation;
 mod render_inputs;
 mod resolution;

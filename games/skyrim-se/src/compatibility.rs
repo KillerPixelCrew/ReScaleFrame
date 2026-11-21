@@ -206,12 +206,12 @@ fn excluded_byte(base: usize, feature: usize) -> usize {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct HdrCall {
+pub(crate) struct HdrCall {
     caller: usize,
-    manager: usize,
+    pub(crate) manager: usize,
     argument4: usize,
-    input: u32,
-    output: u32,
+    pub(crate) input: u32,
+    pub(crate) output: u32,
     argument5: u8,
 }
 
