@@ -22,3 +22,11 @@ Branch `rust/orchestrator-anomaly` starts at `2db07f4`. The first cutover replac
 5. Port Anomaly behind its existing game DLL entry and package it with the same runtime. Repeat the fixture, device and game checks on the Rust adapter. Record known pre-existing gaps separately from regressions. Other games retain their current adapters.
 
 The [Anomaly release record](releases/v0.1.2-anomaly.md) distinguishes the shipped payload from later shader-provider work. It supplies historical acceptance only. Record validation of this branch in the [implementation tracker](implementation.md).
+
+## C ABI comparison
+
+The GameSDK and runtime contract headers match `2db07f4` byte for byte. GameSDK ABI 24 is unchanged. After removing comments, the orchestrator and presentation header comparison found only four additional linked-runtime declarations and an increase in overlay option capacity from 24 to 32. The existing function signatures and public record layouts match the baseline.
+
+A case-sensitive MSVC Release export comparison matched all names and ordinals for Runtime (381), AC7 (256), Loader (273), and Minecraft (267) in the Streamline-enabled build tree. The Anomaly DLL matched all three entry points in the staged C++ adapter and has no static Runtime DLL dependency.
+
+Callers still need to account for documented behavior changes. Frame assembly requires the output record to advertise its capacity and refuses a zero or short capacity before writing. Overlay settings callbacks can read the committed values, and a second write returns `BUSY` while the first is active. Vulkan capture and SR recording require completion proof before readbacks can be published or reused. The [implementation tracker](implementation.md) records the fixture coverage for those changes.
