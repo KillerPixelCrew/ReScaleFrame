@@ -443,6 +443,8 @@ The foreground Standard run verified live XeSS SR with DLSS-G, FSR3
 and XeSS frame generation, FG Off, and the return to DLSS-G. Provider
 switches exposed a wrapped diagnostic delta. The Anomaly report
 now compares valid totals within one bridge generation.
+The foreground retest confirmed both transition reports and stable
+present counts after each switch.
 See [the live provider switches](research/rust-anomaly-sr-pass.md#live-provider-switches).
 
 The merged Release sharpening fixtures passed on D3D11, D3D12 and
@@ -1176,7 +1178,10 @@ reuse the existing SPIR-V and constant packing. The CPU fixture
 reproduced a zero-height dispatch on the old owner and passed with
 the Rust refusal. The integrated SDK-enabled Vulkan CPU contracts
 and export inventories passed, including the 398 exports of the
-statically linked Godot extension. See [the sharpening cutover audit](research/rust-vulkan-sharpening-cutover.md).
+statically linked Godot extension. Offscreen device checks verified
+the exact readback bytes and all 30 sharpening dispatches.
+See [the readback device results](research/rust-vulkan-readback-owner.md#offscreen-device-acceptance) and
+[the sharpening device results](research/rust-vulkan-sharpening-cutover.md#offscreen-device-acceptance).
 
 The D3D11 translucency owner now keeps its pass order, mask and cloud-depth
 leases, device identity and publication in Rust. Cloud association uses

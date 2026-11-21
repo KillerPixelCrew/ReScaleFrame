@@ -133,3 +133,13 @@ godot-cpp revision `8070599885b6df675fcad033dd032ce44be2b850`.
 Its 398 export names and ordinals matched the archived XeSS SR
 inventory, and its import table showed static Runtime linkage.
 The Godot graph handoff and Vulkan creation CPU contracts passed.
+
+## Offscreen device acceptance
+
+The Release `sharpening_vulkan` fixture passed at `9367f1306570`
+on an RTX 4070 Laptop GPU. It ran 30 dispatches with explicit
+command-buffer retirement, covered three concurrent uniform and
+descriptor slots, and checked the RCAS, Depth RCAS and Depth DAS
+output. It also verified that the depth modes kept the sharpening
+response off the opposite side of a depth edge. The CTest log and
+hashes are in `build/rust-migration-streamline/evidence/9367f1306570/`.

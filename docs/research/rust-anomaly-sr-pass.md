@@ -300,3 +300,10 @@ A switch, a missing total or a decrease reports `unavailable`.
 The regression verifies same-generation counts, a decrease and
 switches in either direction. The Runtime counters and public ABI
 retain their existing meaning.
+
+The Standard retest at `9367f1306570` repeated DLSS-G to FSR3 to
+XeSS with XeSS SR running. Each provider change reported
+`unavailable` for its first window. Steady windows returned to
+roughly 240 presents per 120 source frames. The process exited with
+code 0 and restored the isolated settings and script. The logs and
+paired window checks are in `evidence/standard-provider-counter-retest/`.

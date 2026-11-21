@@ -108,9 +108,19 @@ linkage forms of the Vulkan readback test. All 322 locked Rust tests,
 formatting and Clippy passed. See
 `build/rust-migration-streamline/evidence/57c66151ff65/` and
 `build/rust-migration/worker-evidence/rust-vulkan-readback/` for
-the integrated and worker logs. Hardware Vulkan readback remains open.
+the integrated and worker logs.
 
 After the sharpening merge, the Streamline-enabled Godot extension
 also built with the native Vulkan services linked statically. Its 398
 name and ordinal pairs matched the recorded inventory. The graph handoff
 and Vulkan creation CPU contracts passed.
+
+## Offscreen device acceptance
+
+The Streamline-enabled Release `input_dump_vulkan` fixture passed
+at `9367f1306570`. It submitted the source image on the Vulkan queue,
+read it after the capture fence, and retired the reader. All eight
+pixels matched RGBA (64, 128, 255, 0), including the original alpha.
+The native-format metadata, PNG and completed manifest are in
+`build/rust-migration-streamline/evidence/9367f1306570/Vulkan-readback/`.
+Streamline's real WSI generated-present capture remains unverified.
