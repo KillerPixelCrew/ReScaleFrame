@@ -52,7 +52,9 @@ The synthetic admission case remains unrun.
 The Streamline Vulkan bridge tracks FG options, swapchain changes and
 resource release in Rust. The interposer lifecycle guard serializes
 these SDK calls with shutdown. A swapchain change during an SDK call
-invalidates the previously applied cache revision. Rust also leases
+invalidates the previously applied cache revision. Reflex and PCL bind,
+options and state queries use the same guard. Rust normalizes the legacy
+Reflex mode and interval before the typed SDK call. Rust also leases
 the bridge's current SDK token against shutdown. Reflex sleep leaves
 older Present markers free to run, and the latency ledger owns the
 indexed frame associations. SDK callback diagnostics use Rust atomics

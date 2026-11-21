@@ -48,6 +48,9 @@ struct RsfSlFgPlatform {
 static_assert(sizeof(RsfSlFgPlatform) == 3 * sizeof(void*));
 static_assert(static_cast<int32_t>(sl::Result::eOk) == 0);
 static_assert(static_cast<int32_t>(sl::Result::eWarnOutOfVRAM) == 39);
+static_assert(static_cast<uint32_t>(sl::ReflexMode::eOff) == 0 &&
+    static_cast<uint32_t>(sl::ReflexMode::eLowLatency) == 1 &&
+    static_cast<uint32_t>(sl::ReflexMode::eLowLatencyWithBoost) == 2);
 
 extern "C" {
 int32_t rsf_slvk_life_initialize(const RsfSlLifecyclePlatform*, const wchar_t*, const char*,
@@ -70,7 +73,8 @@ void rsf_slvk_fg_swapchain_destroyed(uint64_t);
 int32_t rsf_slvk_fg_set(const RsfSlFgPlatform*, int32_t, const RsfSlFgOptions*);
 int32_t rsf_slvk_fg_disable(const RsfSlFgPlatform*);
 int32_t rsf_slvk_fg_free(const RsfSlFgPlatform*);
-int32_t rsf_slvk_fg_sdk_call(int32_t (*)(void*), void*, int32_t inactive);
+int32_t rsf_slvk_sdk_call(int32_t (*)(void*), void*, int32_t inactive);
+int32_t rsf_slvk_reflex_options(int32_t (*)(uint32_t, uint32_t), int32_t mode, uint32_t limit, uint32_t limitIsFps);
 int32_t rsf_slvk_token_begin(int32_t (*)(uint32_t, uintptr_t*), uint32_t);
 uintptr_t rsf_slvk_token_current();
 int32_t rsf_slvk_token_call(uintptr_t, int32_t (*)(uintptr_t, void*), void*, int32_t inactive);
@@ -279,14 +283,25 @@ int32_t releaseFgResources() noexcept try {
 constexpr RsfSlFgPlatform fgPlatform{fgOptionsBound, applyFgOptions, releaseFgResources};
 
 // The Rust call is synchronous. It pins the SDK session for the borrowed callback.
-template<class Call> int32_t callFgSdk(Call call, int32_t inactive = -1) {
-    return rsf_slvk_fg_sdk_call([](void* user) noexcept -> int32_t {
+template<class Call> int32_t callSdk(Call call, int32_t inactive = -1) {
+    return rsf_slvk_sdk_call([](void* user) noexcept -> int32_t {
         try {
             return (*static_cast<Call*>(user))();
         } catch (...) {
             return static_cast<int32_t>(sl::Result::eErrorExceptionHandler);
         }
     }, &call, inactive);
+}
+
+int32_t applyReflexOptions(uint32_t mode, uint32_t intervalUs) noexcept try {
+    if (!reflexOptions) return -1;
+    sl::ReflexOptions options{};
+    options.mode = static_cast<sl::ReflexMode>(mode);
+    options.frameLimitUs = intervalUs;
+    options.idThread = GetCurrentThreadId();
+    return static_cast<int32_t>(reflexOptions(options));
+} catch (...) {
+    return static_cast<int32_t>(sl::Result::eErrorExceptionHandler);
 }
 
 int32_t acquireFrameToken(uint32_t index, uintptr_t* token) noexcept try {
@@ -558,7 +573,7 @@ RSF_SL_VK_EXPORT VkResult VulkanStorySlDeviceWaitIdle(VkDevice device) {
 /// @return Native Streamline support result, or -1 when unavailable.
 RSF_SL_VK_EXPORT int VulkanStorySlIsFrameGenerationSupported(VkPhysicalDevice physical) {
     if (!physical) return -1;
-    return callFgSdk([&] {
+    return callSdk([&] {
         if (!isFeatureSupported) return -1;
         sl::AdapterInfo adapter{};
         adapter.vkPhysicalDevice = physical;
@@ -568,19 +583,21 @@ RSF_SL_VK_EXPORT int VulkanStorySlIsFrameGenerationSupported(VkPhysicalDevice ph
 /// @brief Resolves Reflex options, sleep and state entry points for the initialized device.
 /// @return Zero when all required functions resolve, otherwise a negative local code.
 RSF_SL_VK_EXPORT int VulkanStorySlBindReflex() {
-    void* function{};
-    if (!loadFeature(sl::kFeatureReflex, "slReflexSetOptions", function)) return -1;
-    reflexOptions = reinterpret_cast<PFun_slReflexSetOptions*>(function);
-    if (!loadFeature(sl::kFeatureReflex, "slReflexSleep", function)) return -2;
-    reflexSleep = reinterpret_cast<PFun_slReflexSleep*>(function);
-    if (!loadFeature(sl::kFeatureReflex, "slReflexGetState", function)) return -3;
-    reflexState = reinterpret_cast<PFun_slReflexGetState*>(function);
-    return 0;
+    return callSdk([] {
+        void* function{};
+        if (!loadFeature(sl::kFeatureReflex, "slReflexSetOptions", function)) return -1;
+        reflexOptions = reinterpret_cast<PFun_slReflexSetOptions*>(function);
+        if (!loadFeature(sl::kFeatureReflex, "slReflexSleep", function)) return -2;
+        reflexSleep = reinterpret_cast<PFun_slReflexSleep*>(function);
+        if (!loadFeature(sl::kFeatureReflex, "slReflexGetState", function)) return -3;
+        reflexState = reinterpret_cast<PFun_slReflexGetState*>(function);
+        return 0;
+    });
 }
 /// @brief Resolves DLSS-G option and state entry points for the initialized device.
 /// @return Zero on success, otherwise a negative local code.
 RSF_SL_VK_EXPORT int VulkanStorySlBindFrameGeneration() {
-    return callFgSdk([] {
+    return callSdk([] {
         void* function{};
         if (!loadFeature(sl::kFeatureDLSS_G, "slDLSSGSetOptions", function)) return -4;
         fgOptions = reinterpret_cast<PFun_slDLSSGSetOptions*>(function);
@@ -593,34 +610,45 @@ RSF_SL_VK_EXPORT int VulkanStorySlBindFrameGeneration() {
 /// @details Outputs are written only after a successful SDK query.
 /// @return Zero on success, -1 for unavailable functions/null outputs, or the SDK result.
 RSF_SL_VK_EXPORT int VulkanStorySlGetReflexState(uint32_t* available, uint32_t* reports) {
-    if (!reflexState || !available || !reports) return -1;
-    sl::ReflexState state{};
-    auto result = reflexState(state);
-    if (result != sl::Result::eOk) return static_cast<int>(result);
-    *available = state.lowLatencyAvailable ? 1u : 0u;
-    *reports = state.latencyReportAvailable ? 1u : 0u;
-    return 0;
+    if (!available || !reports) return -1;
+    return callSdk([&] {
+        if (!reflexState) return -1;
+        sl::ReflexState state{};
+        const auto result = reflexState(state);
+        if (result != sl::Result::eOk) return static_cast<int>(result);
+        *available = state.lowLatencyAvailable ? 1u : 0u;
+        *reports = state.latencyReportAvailable ? 1u : 0u;
+        return 0;
+    });
 }
 /// @brief Resolves PCL entry points and assigns the current host thread as the SDK marker thread.
 /// @return Zero on success, a negative local bind failure or the SDK option result.
 RSF_SL_VK_EXPORT int VulkanStorySlBindPcl() {
-    void* function{};
-    if (!loadFeature(sl::kFeaturePCL, "slPCLSetMarker", function)) return -1;
-    pclMarker = reinterpret_cast<PFun_slPCLSetMarker*>(function);
-    if (!loadFeature(sl::kFeaturePCL, "slPCLGetState", function)) return -2;
-    pclState = reinterpret_cast<PFun_slPCLGetState*>(function);
-    if (!loadFeature(sl::kFeaturePCL, "slPCLSetOptions", function)) return -3;
-    pclOptions = reinterpret_cast<PFun_slPCLSetOptions*>(function);
-    sl::PCLOptions options{};
-    options.idThread = GetCurrentThreadId();
-    return static_cast<int>(pclOptions(options));
+    return callSdk([] {
+        void* function{};
+        if (!loadFeature(sl::kFeaturePCL, "slPCLSetMarker", function)) return -1;
+        pclMarker = reinterpret_cast<PFun_slPCLSetMarker*>(function);
+        if (!loadFeature(sl::kFeaturePCL, "slPCLGetState", function)) return -2;
+        pclState = reinterpret_cast<PFun_slPCLGetState*>(function);
+        if (!loadFeature(sl::kFeaturePCL, "slPCLSetOptions", function)) return -3;
+        pclOptions = reinterpret_cast<PFun_slPCLSetOptions*>(function);
+        sl::PCLOptions options{};
+        options.idThread = GetCurrentThreadId();
+        return static_cast<int>(pclOptions(options));
+    });
 }
 /// @brief Queries the PCL statistics latency-ping window message.
 /// @return Message ID on success, otherwise zero.
 RSF_SL_VK_EXPORT uint32_t VulkanStorySlPclWindowMessage() {
-    if (!pclState) return 0;
-    sl::PCLState state{};
-    return pclState(state) == sl::Result::eOk ? state.statsWindowMessage : 0;
+    uint32_t message = 0;
+    const auto result = callSdk([&] {
+        if (!pclState) return -1;
+        sl::PCLState state{};
+        const auto code = pclState(state);
+        if (code == sl::Result::eOk) message = state.statsWindowMessage;
+        return static_cast<int>(code);
+    });
+    return result == 0 ? message : 0;
 }
 /// @brief Applies Off/On/Boost mode and a minimum interval in microseconds.
 /// @details The caller selects a single pacing authority; this bridge does not arbitrate competing provider limiters.
@@ -628,16 +656,10 @@ RSF_SL_VK_EXPORT uint32_t VulkanStorySlPclWindowMessage() {
 /// @param intervalUs Minimum interval in microseconds, or zero for no cap.
 /// @return SDK result, or -1 without the option function.
 RSF_SL_VK_EXPORT int VulkanStorySlSetReflexInterval(int mode, uint32_t intervalUs) {
-    if (!reflexOptions) return -1;
-    sl::ReflexOptions options{};
-    options.mode = mode == 2 ? sl::ReflexMode::eLowLatencyWithBoost :
-        mode == 1 ? sl::ReflexMode::eLowLatency : sl::ReflexMode::eOff;
-    options.frameLimitUs = intervalUs;
-    options.idThread = GetCurrentThreadId();
-    return static_cast<int>(reflexOptions(options));
+    return rsf_slvk_reflex_options(applyReflexOptions, mode, intervalUs, 0);
 }
 RSF_SL_VK_EXPORT int VulkanStorySlSetReflex(int mode, uint32_t maxFps) {
-    return VulkanStorySlSetReflexInterval(mode, maxFps ? 1000000u / maxFps : 0);
+    return rsf_slvk_reflex_options(applyReflexOptions, mode, maxFps, 1);
 }
 /// @brief Obtains the current Streamline frame token for the supplied 32-bit renderer frame identity.
 /// @details Successful acquisition replaces the Rust lifecycle's borrowed pointer.
@@ -790,7 +812,7 @@ RSF_SL_VK_EXPORT int VulkanStorySlTakePresentError() {
 RSF_SL_VK_EXPORT int VulkanStorySlGetFrameGenerationState(uint32_t* status,
     uint32_t* presented, uint32_t* maxGenerated) {
     if (!status || !presented || !maxGenerated) return -1;
-    return callFgSdk([&] {
+    return callSdk([&] {
         if (!fgState) return -1;
         sl::DLSSGState state{};
         const auto result = fgState(viewport, state, nullptr);
@@ -809,7 +831,7 @@ RSF_SL_VK_EXPORT int VulkanStorySlGetFrameGenerationState(uint32_t* status,
 /// @return SDK result, or -1 for unavailable state/invalid output storage.
 RSF_SL_VK_EXPORT int VulkanStorySlGetFrameGenerationStateDetails(uint32_t* values, uint32_t count) {
     if (!values || count != 6) return -1;
-    return callFgSdk([&] {
+    return callSdk([&] {
         if (!fgState) return -1;
         sl::DLSSGState state{};
         const auto result = fgState(viewport, state, nullptr);

@@ -169,12 +169,32 @@ unsafe extern "C" fn rsf_slvk_fg_free(platform: &FgPlatform) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_slvk_fg_sdk_call(
+unsafe extern "C" fn rsf_slvk_sdk_call(
     call: unsafe extern "C" fn(*mut c_void) -> i32,
     user: *mut c_void,
     inactive: i32,
 ) -> i32 {
-    LIFECYCLE.with_frame_generation(inactive, |_, _| unsafe { call(user) })
+    LIFECYCLE.with_sdk(inactive, || unsafe { call(user) })
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_slvk_reflex_options(
+    apply: unsafe extern "C" fn(u32, u32) -> i32,
+    mode: i32,
+    limit: u32,
+    limit_is_fps: u32,
+) -> i32 {
+    let mode = match mode {
+        1 => 1,
+        2 => 2,
+        _ => 0,
+    };
+    let interval = if limit_is_fps == 0 {
+        limit
+    } else {
+        1_000_000u32.checked_div(limit).unwrap_or(0)
+    };
+    LIFECYCLE.with_sdk(-1, || unsafe { apply(mode, interval) })
 }
 
 #[unsafe(no_mangle)]

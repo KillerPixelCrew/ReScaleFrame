@@ -195,6 +195,20 @@ impl Lifecycle {
         }
     }
 
+    fn with_initialized(&self, inactive: i32, call: impl FnOnce(&mut Session) -> i32) -> i32 {
+        let Some(mut session) = self.session() else {
+            return BUSY;
+        };
+        if !session.initialized {
+            return inactive;
+        }
+        call(&mut session)
+    }
+
+    pub(crate) fn with_sdk(&self, inactive: i32, call: impl FnOnce() -> i32) -> i32 {
+        self.with_initialized(inactive, |_| call())
+    }
+
     #[cfg(windows)]
     pub(crate) fn swapchain(&self) -> MutexGuard<'_, Swapchain> {
         self.swapchain
@@ -208,15 +222,11 @@ impl Lifecycle {
         inactive: i32,
         call: impl FnOnce(&mut FrameGeneration, u64) -> i32,
     ) -> i32 {
-        let Some(mut session) = self.session() else {
-            return BUSY;
-        };
-        if !session.initialized {
-            return inactive;
-        }
-        // Release the WSI guard before the SDK can call back on any thread.
-        let revision = self.swapchain().revision;
-        call(&mut session.frame_generation, revision)
+        self.with_initialized(inactive, |session| {
+            // Release the WSI guard before the SDK can call back on any thread.
+            let revision = self.swapchain().revision;
+            call(&mut session.frame_generation, revision)
+        })
     }
 
     #[cfg(windows)]

@@ -180,12 +180,19 @@ fn unverified_or_overlong_interposer_is_never_loaded() {
 #[test]
 fn shutdown_keeps_vulkan_dispatch_until_explicit_unload() {
     let lifecycle = Lifecycle::new();
+    assert_eq!(lifecycle.with_sdk(-1, || 7), -1);
     assert_eq!(start(&lifecycle, "C:\\sl"), 0);
     take_events();
+    assert_eq!(
+        lifecycle.with_sdk(-1, || unsafe { lifecycle.shutdown(&PLATFORM) }),
+        BUSY
+    );
+    assert!(take_events().is_empty());
     lifecycle.diagnostics.present_error(-3);
     assert_eq!(unsafe { lifecycle.shutdown(&PLATFORM) }, 0);
     assert_eq!(take_events(), ["shutdown", "clear"]);
     assert_eq!(lifecycle.diagnostics.take_present_error(), 0);
+    assert_eq!(lifecycle.with_sdk(-1, || 7), -1);
     assert!(lifecycle.module().is_null());
     assert_eq!(lifecycle.instance_proc().addr(), PROC);
     assert_eq!(lifecycle.device_proc().addr(), PROC);
