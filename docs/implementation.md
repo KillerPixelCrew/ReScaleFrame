@@ -804,6 +804,10 @@ Eight matched game captures checked the actual SR color, depth,
 motion and reconstructed output on both Anomaly profiles. The AVX
 set includes the FSR3 evaluation after switching from DLSS.
 [Matched evaluation captures](research/rust-overlay-host.md#matched-sr-evaluation-captures)
+Two later AVX capture runs matched 32 evaluation and Present records.
+The consecutive burst captured two camera cuts with history reset on
+each cut, followed by successful evaluations and HUD-composited output.
+[Camera cut evidence](research/rust-overlay-host.md#matched-camera-cuts-on-avx)
 D3D11-on-12 wrapping, fullscreen and held-key gameplay remain open.
 [Shared overlay host evidence](research/rust-overlay-host.md#integrated-runtime-and-standard-game-run)
 

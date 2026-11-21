@@ -150,12 +150,41 @@ and reconstructed output across the adapter and Runtime captures.
 The packed row sizes and the core capture's reinsertion and final
 color extents matched metadata. The Runtime recorded RG32F decoded
 motion in all eight samples, RG16F motion submitted to DLSS and RG32F
-submitted to FSR3. The checks cover the sampled indoor scene. Moving-camera
-quality still needs a matched evaluation and Present capture during motion.
+submitted to FSR3. The checks cover the sampled indoor scene.
 
 The verifier, transcript and 96 raw file hashes are under
 `.local/rust-1.94.1-verification/merged-overlay-capture-audit-9e2cd87/`.
 The source captures stay outside Git in the logged Anomaly dump directory.
+
+## Matched camera cuts on AVX
+
+Two isolated AVX runs at `bf12517` captured the same indoor area while
+the camera responded to gameplay mouse input. The first requested 16
+samples eight frames apart. Matrices changed between samples 688 and
+696 and between 744 and 752. The capture burst missed the turn frames.
+The second run recorded 16 consecutive frames, 1082 through 1097, with
+mouse input timed from the first capture request.
+
+The render path captured both cuts in the consecutive run. The camera
+orientation changed by about 91.6° on frame 1083 and 170.1° on frame
+1088. The Runtime's submitted DLSS constants set reset on both
+evaluations and cleared it on the next frames. Each cut produced a
+1600×900 final image of the new view with the game HUD intact. The
+matched Present records reported success.
+
+All 32 evaluations from the two runs shared exact frame, session, view
+and provider identity with their matched Present records. Packed row
+sizes and the raw input color, depth, game motion and reconstructed
+output matched across the adapter and Runtime dumps. Both runs shut
+down Direct3D and exited with code 0. The isolated settings and payload
+were restored. Continuous camera pans and moving-object quality remain
+open.
+
+The verifier, transcript and 384 raw hashes are under
+`.local/rust-1.94.1-verification/avx-camera-turn-audit-bf12517/`.
+The raw captures and game logs are in `moving-sr-capture-avx-bf12517`
+and `moving-sr-consecutive-avx-bf12517` under the isolated clone's
+`evidence/` directory.
 
 ## Vulkan Streamline-disabled verification
 
