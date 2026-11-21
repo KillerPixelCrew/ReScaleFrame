@@ -7,12 +7,14 @@
    was not available); both sides assert sizes and offsets.
 
    Rust owns the requested settings and their generation, the extension option schema, renderer
-   admission, engine-service routing, the D3D12 session identity and paths, and the status record.
-   The leaves hold godot-cpp, D3D12, DXGI, Win32 and Runtime calls and decide nothing. */
+   admission, engine-service routing, the D3D12 session identity and paths, the status record,
+   and the Vulkan session (boot state, settings, generation, status, configure admission and the
+   presenter, FG and SR accounting). The leaves hold godot-cpp, D3D12, DXGI, Win32, Vulkan and
+   Runtime calls and decide nothing. */
 #include "api.h"
 #include <stdint.h>
 
-#define RSF_GODOT_PLATFORM_VERSION 1u
+#define RSF_GODOT_PLATFORM_VERSION 2u
 
 /* Mirror of rsf_native_fg_options without its header. */
 typedef struct rsf_godot_fg_options {
@@ -79,6 +81,65 @@ typedef struct rsf_godot_sr_frame {
     uint32_t render_width, render_height, output_width, output_height;
 } rsf_godot_sr_frame;
 
+/* Vulkan owner facts, read under its guard. The compiled flags are build facts. */
+typedef struct rsf_godot_vk_facts {
+    uint32_t xess_device_ready, interop_device_ready, graph_handoff;
+    uint32_t fsr4_sr_compiled, fsr4_fg_compiled, xess_fg_compiled;
+    uint32_t presenter, primary_window;
+    /* rsf_fgvk_backend of the live presenter; zero without one or when the query fails. */
+    uint32_t presenter_backend;
+    uint32_t sdk_shutdown_pending;
+} rsf_godot_vk_facts;
+
+/* rsf_latencyvk_status, as read. */
+typedef struct rsf_godot_vk_latency_facts {
+    uint32_t low_latency_available, report_available, pcl_message, mode, owner, reserved;
+    uint64_t sleep_calls, marker_calls;
+} rsf_godot_vk_latency_facts;
+
+/* The Vulkan session as the render, presentation and capture leaves read it under the guard. */
+typedef struct rsf_godot_vk_view {
+    rsf_godot_settings settings;
+    uint32_t sr_backend; /* the requested SR provider, Auto resolved */
+    uint64_t generation, session_id;
+    uint32_t fg_backend; /* the requested FG provider, Auto resolved */
+    uint32_t output_width, output_height; /* the last SR pass's output */
+    int32_t fg_result;
+} rsf_godot_vk_view;
+
+/* One FG pass through the presenter in rsfg_render_vulkan. */
+typedef struct rsf_godot_vk_fg_pass {
+    uint32_t role, screen;
+    uint64_t session_id;
+    uint32_t view_id, render_width, render_height;
+    /* Filled by rsf_godot_vk_fg_begin: the enable rule and the requested count. */
+    uint32_t enabled, generated_frames;
+    /* Filled by the leaf after rsf_fgvk_enable_options and rsf_fgvk_backend. */
+    int32_t options_result;
+    uint32_t backend_valid, backend;
+} rsf_godot_vk_fg_pass;
+
+/* rsf_fgvk_get_status after a presenter Present. */
+typedef struct rsf_godot_vk_present_facts {
+    uint32_t enabled;
+    int32_t result;
+    uint64_t generated_callbacks, presented, tagged;
+} rsf_godot_vk_present_facts;
+
+/* How an SR pass of rsfg_render_vulkan ended. A refused pass took the spatial fallback; an
+   uncounted one could not record it. identity is zero when context retirement refused the pass
+   before its identity was taken. */
+#define RSF_GODOT_VK_SR_UNCOUNTED 0u
+#define RSF_GODOT_VK_SR_EVALUATED 1u
+#define RSF_GODOT_VK_SR_REFUSED 2u
+typedef struct rsf_godot_vk_sr_frame {
+    uint32_t identity, outcome;
+    int32_t result;
+    uint32_t backend; /* the provider that produced the output, read when evaluated */
+    uint32_t render_width, render_height, output_width, output_height;
+    uint64_t source_frame_id;
+} rsf_godot_vk_sr_frame;
+
 /* Process-lived table from runtime.cpp. Every entry is present and catches its own exceptions. */
 typedef struct rsf_godot_platform {
     uint32_t struct_size, version;
@@ -92,11 +153,25 @@ typedef struct rsf_godot_platform {
     uint32_t (*sharpening_valid)(const rsf_sharpening_options* options);
     void (*sharpening_defaults)(rsf_sharpening_options* options);
     uint32_t (*fg_backend_known)(uint32_t backend);
-    /* The Vulkan owner in vulkan.cpp. */
-    uint32_t (*vulkan_booted)(void);
-    int32_t (*vulkan_configure)(const rsf_godot_settings* settings);
-    int32_t (*vulkan_settings)(rsf_godot_settings* settings);
-    int32_t (*vulkan_status)(rsf_godot_status* status);
+    /* The Vulkan owner in vulkan.cpp. vulkan_supported and vulkan_latency_facts need no guard.
+       vulkan_locked runs body with the owner's guard held and returns its result, or zero when it
+       could not; the guard is not reentrant. Every entry after it is called only inside such a
+       body and does not take the guard itself. */
+    uint32_t (*vulkan_supported)(void);
+    uint32_t (*vulkan_latency_facts)(rsf_godot_vk_latency_facts* facts);
+    int32_t (*vulkan_locked)(int32_t (*body)(void* user), void* user);
+    /* Directories, Streamline and XeSS initialization, creation resolver and the ready log. */
+    int32_t (*vulkan_start)(const rsf_godot_setup* setup);
+    /* Presenter disable and drain, SR context and capture retirement, XeSS shutdown and the SDK
+       shutdown or its deferral to presenter retirement. Zero keeps the session. */
+    int32_t (*vulkan_stop)(void);
+    /* Frame dump cancel and device borrow release after the session ended. */
+    void (*vulkan_release)(uint64_t session_id);
+    void (*vulkan_facts)(rsf_godot_vk_facts* facts);
+    int32_t (*vulkan_presenter_max)(uint32_t* count);
+    /* FSR4 FG capacity on the presenter's device; zero refuses. */
+    uint32_t (*vulkan_fsr4_fg_probe)(void);
+    int32_t (*vulkan_latency_options)(uint32_t mode, uint32_t frame_limit_us);
     /* Status facts. latency_facts returns zero when the Runtime has no latency status. */
     void (*cpu_counters)(rsf_godot_input_facts* facts);
     void (*window_facts)(rsf_godot_window_facts* facts);
@@ -153,6 +228,25 @@ void rsf_godot_settings_snapshot(rsf_godot_settings* settings, uint64_t* generat
 void rsf_godot_sr_frame_report(const rsf_godot_sr_frame* frame);
 /* Present without an SR pass for the current render frame. */
 void rsf_godot_sr_missed(void);
+
+/* Vulkan session (vulkan.rs). Boot and shutdown take the guard through vulkan_locked; the
+   remaining calls are made by vulkan.cpp while it holds the guard. */
+int rsf_godot_vk_booted(void);
+int rsf_godot_boot_vulkan(const rsf_godot_platform* platform, const rsf_godot_setup* setup);
+/* The caller found the session booted. */
+int rsf_godot_shutdown_vulkan(const rsf_godot_platform* platform);
+/* Fills view and returns whether the session is booted. */
+int rsf_godot_vk_view_get(rsf_godot_vk_view* view);
+void rsf_godot_vk_presenter_created(uint32_t ready, uint32_t backend, uint32_t max_generated);
+/* Zero: the engine must drain and recreate its WSI owner. */
+int rsf_godot_vk_presenter_current(uint32_t presenter_backend);
+void rsf_godot_vk_presented(const rsf_godot_vk_present_facts* facts);
+void rsf_godot_vk_presenter_retired(void);
+void rsf_godot_vk_fg_begin(rsf_godot_vk_fg_pass* pass);
+/* Nonzero: record the pass. Zero stored the refusal as the FG result. */
+int rsf_godot_vk_fg_admit(const rsf_godot_vk_fg_pass* pass);
+void rsf_godot_vk_fg_recorded(const rsf_godot_vk_fg_pass* pass, int32_t result);
+void rsf_godot_vk_sr_frame_report(const rsf_godot_vk_sr_frame* frame);
 
 /* Extension control (runtime_control.cpp). */
 const rsf_godot_option_field* rsf_godot_option_fields(uint32_t* count);

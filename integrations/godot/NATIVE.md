@@ -23,8 +23,9 @@ The leaves stay C++ and decide nothing. `runtime.cpp` keeps every `rsfg_*` expor
 its name and signature as a forwarder, and lends through `godot_platform.h` (mirrored by hand in
 `platform.rs`, sizes and offsets asserted on both sides): the D3D12 frame capture owner, the
 `rsf_fg12_install_explicit` call with its window admission and log trampolines, `rsf_fg12_options`,
-the header-inline DLSS preset, sharpening and FG backend validators, the Vulkan owner in
-`vulkan.cpp`, and the FG, presentation provider, latency, CPU counter and window facts.
+the header-inline DLSS preset, sharpening and FG backend validators, the Vulkan leaves in
+`vulkan.cpp` (second slice below), and the FG, presentation provider, latency, CPU counter and
+window facts.
 `runtime_control.cpp` keeps the typed godot-cpp `Dictionary`, `RID` and `RenderingServer` calls and
 the status Dictionary keys. The D3D12 SR context, its fences, slots and pending submissions, DXGI
 vendor lookup and the Win32 input window stay in `runtime.cpp` and report each evaluated SR pass
@@ -37,7 +38,7 @@ Preserved behaviour, including quirks:
 - The D3D12 status record carries ABI 1 and `rsfg_status` copies it to the caller, as before.
 - A booted D3D12 session stays booted after `rsfg_shutdown`; a later `rsfg_boot` returns 1.
 - D3D12 configuration is accepted and stored before boot, as before. Vulkan configuration,
-  settings and status route to `vulkan.cpp` only after the shared refusal rules pass.
+  settings and status route to the Vulkan session only after the shared refusal rules pass.
 - `rsfg_create_swapchain`, `rsfg_cpu`, `rsfg_render`, `rsfg_render_begin`, `rsfg_present` and
   `rsfg_shutdown` keep their order, refusals and return values.
 
@@ -54,21 +55,69 @@ bindgen-cli 0.72.1 is not installed, so `platform.rs` is hand-mirrored and
 tests (`native/control/tests.rs`, `native/extension/tests.rs`), Clippy, CTest, the Godot editor,
 exported players, device fixtures and visual harness.
 
+## Rust Vulkan session, second slice
+
+`native/vulkan.rs` now owns the Vulkan session state that `vulkan.cpp` held, so no C++ settings or
+status owner remains in the native DLL:
+
+- the boot state and session identity (`rsfg_boot_vulkan` and the Vulkan branch of
+  `rsfg_shutdown` forward to it), the requested settings and their generation, which keeps
+  counting across sessions as before, and the status record with ABI 3 and its Streamline Vulkan
+  latency overlay (`pcl_available` when the PCL message is a registered window message);
+- the Vulkan configure admission, kept distinct from D3D12 and applied after the shared refusal
+  rules in `control.rs`: XeSS SR device readiness, FSR4 SR build, graph handoff and interop, the
+  FG provider set with Auto resolved to FSR3, FSR4 FG build, presenter, interop, primary window
+  and a single generated frame before the FSR4 FG probe (still asked before the engine retires its
+  working WSI owner), XeSS FG build, interop and window, FG mode needing a presenter and FSR3 a
+  single frame, the live presenter's capacity for its own provider, and the latency options. A
+  refusal at any step keeps the previous request; a refused latency option does too;
+- the presenter currency rule in `rsfg_vk_acquire` (provider switch, or a new SR plan for an FSR4
+  or XeSS FG owner whose guides are fixed), the presenter creation, Present and retirement
+  accounting, the FG enable rule (FG mode, gameplay and flight screen), the fixed-guide retirement
+  when a settled plan changes size, and the SR outcome accounting (evaluated, refused through the
+  spatial fallback, or uncounted when the fallback could not record), with Auto SR resolved to FSR3.
+
+`vulkan.cpp` keeps its guard and every Vulkan, Streamline, XeSS, FidelityFX, presenter, capture
+and SR context call, and decides nothing. Boot, shutdown and configure run inside the
+`vulkan_locked` leaf, so the admission facts, the FSR4 FG probe, the presenter capacity, the
+latency options and the commit see one guarded presenter state as before. The render, acquire,
+create, Present and destroy paths read the session through `rsf_godot_vk_view_get` and report each
+transition while they hold the guard. The lock order is the guard, then the Rust state; no leaf
+runs while the Rust state is held. The `rsf_godot_platform` table is version 2 (184 bytes) and
+drops the four Vulkan forwarders for ten Vulkan leaves. `api.h`, the engine module interface, every
+`rsfg_*` export and the Runtime calls are unchanged.
+
+Preserved behaviour: the refusal order, the lazily asked FSR4 FG probe and presenter capacity,
+the settings and status read while not booted, a refused stop keeping the session booted, the SDK
+shutdown deferred to presenter retirement, `RSF_BACKEND_ERROR_NOT_SUPPORTED` as the first FG
+result, and the FINAL_SCENE return from the stored FG result. Intentional differences: configure
+rechecks the boot state under the guard, and the "Godot Vulkan host ready" log is written by the
+start leaf just before the session is marked booted rather than just after.
+
+This is a behaviour-preserving port from source review, with no new experiment. Checks: rustfmt
+`--edition 2024 --check` (see the commit for the toolchain), `cargo metadata --locked --offline`
+and `git diff --check`; `platform.rs` stays hand-mirrored with size and offset assertions on both
+sides. Not run: native build and link, Cargo tests (`native/vulkan/tests.rs` and the updated
+`native/control/tests.rs`), Clippy, CTest, editor, exported players, device fixtures and visual
+harness.
+
 ## Remaining Godot ownership slices
 
-1. Vulkan session state in `vulkan.cpp`: its own requested settings, generation and status record
-   (`requested`, `generation`, `current`), configure admission (XeSS device readiness, FSR4 graph
-   handoff and interop, the FSR4 FG probe before retiring the WSI owner, XeSS FG, presenter
-   capacity), boot (directories, Streamline and XeSS initialization, resolver choice), the FG
-   enable rule (FG mode, gameplay and flight screen), fixed-guide retirement and SR fallback
-   accounting. Folding its requested settings, generation and status into `control.rs` removes the
-   last second settings owner; this is the next slice.
-2. The D3D12 SR context owner in `rsfg_render`: SR context retirement and recreation rules, the
+1. The D3D12 SR context owner in `rsfg_render`: SR context retirement and recreation rules, the
    FG provider switch request, spatial-to-native mapping and the fallback to backend 0, screen
    gating, sharpening defaults, the three-slot fence ledger in `rsfg_submitted`, the Present pass
-   identity in `rsfg_present`, capture and diagnostics.
-3. Input window ownership: the `Engine` window-class admission, the WNDPROC subclass and its
-   restore, the input session and PCL ping routing.
+   identity in `rsfg_present`, capture and diagnostics. The D3D12 FG presenter itself stays in the
+   Runtime (`rsf_fg12_*`, `rsf_d3d11_present_*`).
+2. The Vulkan SR context owner in `rsfg_render_vulkan`: context retirement and recreation (SR
+   generation, device and output size), FSR4 graph handoff and continuation, the spatial fallback
+   call, DLSS preset application, sharpening defaults, frame dump capture and diagnostics. Its
+   decisions read the Rust session view; the contexts and the presenter owner stay C++ leaves.
+   The Vulkan Auto SR and FG resolution to FSR3, ported unchanged into `vulkan.rs`, is backend
+   choice the Runtime should own (Rule 3), unlike D3D12, which asks `rsf_gpu_default_sr_backend`
+   and `rsf_fg_default_backend`.
+3. Window ownership: the `Engine` window-class admission, the WNDPROC subclass and its restore,
+   the input session and PCL ping routing in `runtime.cpp`, and the Vulkan primary window and
+   present-marker admission (`rsfg_vk_window`, `rsfg_vk_present_marker`).
 4. `vulkan_creation.cpp`: the creation resolver, device feature and extension requirements, and
    XeSS/interop readiness.
 5. `effect.cpp`: the compositor probe snapshot and the motion capture classification

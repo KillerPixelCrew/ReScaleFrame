@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
 //! Test leaves. Recorded calls are thread-local, so parallel tests do not share them.
 use super::{
-    FgFacts, FgInstall, FgOptions, InputFacts, LatencyFacts, PLATFORM_VERSION, Platform, Settings,
-    Sharpening, Status, WindowFacts,
+    FgFacts, FgInstall, FgOptions, InputFacts, LatencyFacts, LockedBody, PLATFORM_VERSION,
+    Platform, Setup, Sharpening, VkFacts, VkLatencyFacts, WindowFacts,
 };
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::ffi::c_void;
 
 thread_local! {
     pub(crate) static INSTALL_RESULT: Cell<i32> = const { Cell::new(0) };
@@ -12,6 +13,19 @@ thread_local! {
     pub(crate) static FG_OPTIONS: Cell<Option<FgOptions>> = const { Cell::new(None) };
     pub(crate) static FG: Cell<FgFacts> = Cell::new(FgFacts::default());
     pub(crate) static LATENCY: Cell<Option<LatencyFacts>> = const { Cell::new(None) };
+    pub(crate) static VK_SUPPORTED: Cell<bool> = const { Cell::new(true) };
+    pub(crate) static VK_LATENCY: Cell<Option<VkLatencyFacts>> = const { Cell::new(None) };
+    static VK_LOCKED: Cell<bool> = const { Cell::new(false) };
+    /// The guarded Vulkan leaves in call order.
+    static VK_CALLS: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
+    pub(crate) static VK_START: Cell<i32> = const { Cell::new(1) };
+    pub(crate) static VK_STOP: Cell<i32> = const { Cell::new(1) };
+    pub(crate) static VK_RELEASED: Cell<Option<u64>> = const { Cell::new(None) };
+    pub(crate) static VK_FACTS: Cell<VkFacts> = Cell::new(VkFacts::default());
+    pub(crate) static VK_PRESENTER_MAX: Cell<Option<u32>> = const { Cell::new(None) };
+    pub(crate) static VK_PROBE: Cell<u32> = const { Cell::new(0) };
+    pub(crate) static VK_LATENCY_OPTIONS: Cell<Option<(u32, u32)>> = const { Cell::new(None) };
+    pub(crate) static VK_LATENCY_RESULT: Cell<i32> = const { Cell::new(0) };
 }
 
 /// `rsf_sharpening_defaults()` as `sharpening_settings.h` defines it.
@@ -70,30 +84,90 @@ unsafe extern "C" fn fg_backend_known(backend: u32) -> u32 {
     u32::from(matches!(backend, 1 | 3 | 4 | 5))
 }
 
-unsafe extern "C" fn vulkan_off() -> u32 {
-    0
+unsafe extern "C" fn vulkan_supported() -> u32 {
+    u32::from(VK_SUPPORTED.get())
 }
 
-unsafe extern "C" fn vulkan_on() -> u32 {
-    1
+unsafe extern "C" fn vulkan_latency_facts(facts: *mut VkLatencyFacts) -> u32 {
+    match VK_LATENCY.get() {
+        Some(value) => {
+            // SAFETY: the owner passes a writable record.
+            unsafe { facts.write(value) };
+            1
+        }
+        None => 0,
+    }
 }
 
-pub(crate) const VULKAN_CONFIGURED: i32 = 7;
-
-unsafe extern "C" fn vulkan_configure(_: *const Settings) -> i32 {
-    VULKAN_CONFIGURED
+// A panic cannot leave these extern "C" leaves, so guard misuse is recorded as a call instead.
+unsafe extern "C" fn vulkan_locked(body: LockedBody, user: *mut c_void) -> i32 {
+    if VK_LOCKED.get() {
+        VK_CALLS.with_borrow_mut(|calls| calls.push("reentered"));
+        return 0;
+    }
+    VK_LOCKED.set(true);
+    // SAFETY: the owner passes its body and closure.
+    let result = unsafe { body(user) };
+    VK_LOCKED.set(false);
+    result
 }
 
-unsafe extern "C" fn vulkan_settings(_: *mut Settings) -> i32 {
-    1
+fn record(call: &'static str) {
+    VK_CALLS.with_borrow_mut(|calls| {
+        if !VK_LOCKED.get() {
+            calls.push("unguarded");
+        }
+        calls.push(call);
+    });
 }
 
-pub(crate) const VULKAN_SESSION: u64 = 99;
+/// The guarded leaf calls since the last take.
+pub(crate) fn take_calls() -> Vec<&'static str> {
+    VK_CALLS.take()
+}
 
-unsafe extern "C" fn vulkan_status(status: *mut Status) -> i32 {
-    // SAFETY: the owner passes a checked record.
-    unsafe { (*status).session_id = VULKAN_SESSION };
-    1
+unsafe extern "C" fn vulkan_start(_: *const Setup) -> i32 {
+    record("start");
+    VK_START.get()
+}
+
+unsafe extern "C" fn vulkan_stop() -> i32 {
+    record("stop");
+    VK_STOP.get()
+}
+
+unsafe extern "C" fn vulkan_release(session: u64) {
+    record("release");
+    VK_RELEASED.set(Some(session));
+}
+
+unsafe extern "C" fn vulkan_facts(facts: *mut VkFacts) {
+    record("facts");
+    // SAFETY: the owner passes a writable record.
+    unsafe { facts.write(VK_FACTS.get()) };
+}
+
+unsafe extern "C" fn vulkan_presenter_max(count: *mut u32) -> i32 {
+    record("presenter_max");
+    match VK_PRESENTER_MAX.get() {
+        Some(value) => {
+            // SAFETY: the owner passes a writable count.
+            unsafe { count.write(value) };
+            0
+        }
+        None => -8,
+    }
+}
+
+unsafe extern "C" fn vulkan_fsr4_fg_probe() -> u32 {
+    record("fsr4_fg_probe");
+    VK_PROBE.get()
+}
+
+unsafe extern "C" fn vulkan_latency_options(mode: u32, frame_limit_us: u32) -> i32 {
+    record("latency_options");
+    VK_LATENCY_OPTIONS.set(Some((mode, frame_limit_us)));
+    VK_LATENCY_RESULT.get()
 }
 
 pub(crate) const INPUTS: InputFacts = InputFacts {
@@ -139,29 +213,29 @@ unsafe extern "C" fn latency_facts(facts: *mut LatencyFacts) -> u32 {
     }
 }
 
-const fn table(vulkan: bool) -> Platform {
-    let vulkan_booted: unsafe extern "C" fn() -> u32 = if vulkan { vulkan_on } else { vulkan_off };
-    Platform {
-        struct_size: size_of::<Platform>() as u32,
-        version: PLATFORM_VERSION,
-        tick_count,
-        prepare_capture,
-        fg_install,
-        fg_options,
-        dlss_preset_valid,
-        sharpening_valid,
-        sharpening_defaults: write_sharpening_defaults,
-        fg_backend_known,
-        vulkan_booted,
-        vulkan_configure,
-        vulkan_settings,
-        vulkan_status,
-        cpu_counters,
-        window_facts,
-        fg_facts,
-        latency_facts,
-    }
-}
-
-pub(crate) static D3D12: Platform = table(false);
-pub(crate) static VULKAN: Platform = table(true);
+pub(crate) static LEAVES: Platform = Platform {
+    struct_size: size_of::<Platform>() as u32,
+    version: PLATFORM_VERSION,
+    tick_count,
+    prepare_capture,
+    fg_install,
+    fg_options,
+    dlss_preset_valid,
+    sharpening_valid,
+    sharpening_defaults: write_sharpening_defaults,
+    fg_backend_known,
+    vulkan_supported,
+    vulkan_latency_facts,
+    vulkan_locked,
+    vulkan_start,
+    vulkan_stop,
+    vulkan_release,
+    vulkan_facts,
+    vulkan_presenter_max,
+    vulkan_fsr4_fg_probe,
+    vulkan_latency_options,
+    cpu_counters,
+    window_facts,
+    fg_facts,
+    latency_facts,
+};

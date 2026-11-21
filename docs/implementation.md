@@ -147,8 +147,14 @@ remain open.
 
 Godot's native control and settings owner is Rust. It preserves the
 GDExtension entry points and linked Runtime, and refuses overlapping or
-reentrant D3D12 boot attempts. The Vulkan path still owns its own session
-and frame state. Build and Godot player verification remain open.
+reentrant D3D12 boot attempts. Build and Godot player verification remain
+open.
+
+Godot's Rust Vulkan session owns boot, requested settings, status,
+provider admission, and SR and FG accounting. Vulkan calls remain in the
+typed native leaves. Shutdown rechecks the live session under the guard
+so an overlapping caller cannot release it twice. Build, device and
+Godot player verification remain open.
 
 RDR2's native graphics capture uses Rust for requests, draw and input
 limits, timeout, drain admission and bundle status. It uses the existing

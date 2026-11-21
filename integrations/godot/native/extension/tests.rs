@@ -27,7 +27,7 @@ fn index(name: &CStr) -> usize {
 
 #[test]
 fn absent_options_keep_the_defaults() {
-    let settings = compose(&fake::D3D12, &values()).expect("defaults");
+    let settings = compose(&fake::LEAVES, &values()).expect("defaults");
     let mut expected = default_settings();
     expected.sharpening = fake::sharpening_defaults();
     assert_eq!(settings, expected);
@@ -44,7 +44,7 @@ fn checked_fields_accept_int_and_bool_in_range() {
         integer: 0,
         real: 0.0,
     };
-    let settings = compose(&fake::D3D12, &input).expect("accepted");
+    let settings = compose(&fake::LEAVES, &input).expect("accepted");
     assert_eq!(settings.sr_backend, 3);
     assert_eq!(settings.frame_limit_us, u32::MAX);
     assert_eq!(settings.gameplay, 0);
@@ -67,7 +67,7 @@ fn checked_fields_refuse_other_types_and_ranges() {
     ] {
         let mut input = values();
         input[index(name)] = value;
-        assert!(compose(&fake::D3D12, &input).is_none());
+        assert!(compose(&fake::LEAVES, &input).is_none());
     }
 }
 
@@ -86,7 +86,7 @@ fn sharpening_fields_convert_without_checks() {
         integer: 0,
         real: 0.75,
     };
-    let settings = compose(&fake::D3D12, &input).expect("accepted");
+    let settings = compose(&fake::LEAVES, &input).expect("accepted");
     assert_eq!(settings.sharpening.mode, 3);
     assert_eq!(settings.sharpening.sharpness, 0.75);
     assert_eq!(settings.sharpening.depth_scale, 35.0);

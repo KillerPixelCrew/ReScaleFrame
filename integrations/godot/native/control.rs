@@ -4,14 +4,15 @@
 //! service routing, the D3D12 session (identity, paths, log, FG presenter install values and
 //! boot state) and the status record with its assembly from Runtime facts.
 //!
-//! The Vulkan owner in `vulkan.cpp` keeps its own requested settings, generation and status
-//! record for now; while it is booted, configuration, settings and status route to it after the
+//! The Vulkan session (`vulkan.rs`) holds its own settings, generation and status record, as
+//! `vulkan.cpp` did; while it is booted, configuration, settings and status route to it after the
 //! same refusal rules. The D3D12 SR context, fences and capture stay C++ leaves in `runtime.cpp`
 //! and report each evaluated pass here.
 use crate::platform::{
     EngineServices, FgFacts, FgInstall, FgOptions, InputFacts, LatencyFacts, Paths, Platform,
     SETTINGS_ABI_VERSION, Settings, Setup, Sharpening, SrFrame, Status, WindowFacts,
 };
+use crate::vulkan::Vulkan;
 use rsf_game_sys::rsf_game_log_fn;
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -166,11 +167,13 @@ pub(crate) struct Control {
     booted: AtomicBool,
     boot_gate: Mutex<()>,
     session: Mutex<Session>,
+    pub(crate) vulkan: Vulkan,
 }
 
 impl Control {
     pub(crate) fn new() -> Self {
         Self {
+            vulkan: Vulkan::new(),
             booted: AtomicBool::new(false),
             boot_gate: Mutex::new(()),
             session: Mutex::new(Session {
@@ -200,8 +203,8 @@ impl Control {
     }
 
     /// Any backend that accepts engine control.
-    fn active(&self, platform: &Platform) -> bool {
-        self.booted() || platform.vulkan_booted()
+    fn active(&self) -> bool {
+        self.booted() || self.vulkan.booted()
     }
 
     /// `services` passed the size and ABI checks.
@@ -215,30 +218,25 @@ impl Control {
 
     /// Forwards to the engine module, which applies the request to its primary viewport and
     /// returns to `rsfg_configure`. `settings` passes through unchecked; the module checks it.
-    pub(crate) fn configure_engine(
-        &self,
-        platform: &Platform,
-        settings: *const Settings,
-        viewport: u64,
-    ) -> c_int {
+    pub(crate) fn configure_engine(&self, settings: *const Settings, viewport: u64) -> c_int {
         let configure = self
             .session()
             .services
             .and_then(|services| services.configure);
         match configure {
             // SAFETY: the engine module's service lives while its library is loaded.
-            Some(configure) if self.active(platform) => unsafe { configure(settings, viewport) },
+            Some(configure) if self.active() => unsafe { configure(settings, viewport) },
             _ => 0,
         }
     }
 
-    pub(crate) fn reset_history(&self, platform: &Platform) {
+    pub(crate) fn reset_history(&self) {
         let reset = self
             .session()
             .services
             .and_then(|services| services.reset_history);
         if let Some(reset) = reset
-            && self.active(platform)
+            && self.active()
         {
             // SAFETY: as in configure_engine.
             unsafe { reset() };
@@ -299,8 +297,8 @@ impl Control {
         if !settings_valid(platform, settings) {
             return 0;
         }
-        if platform.vulkan_booted() {
-            return platform.vulkan_configure(settings);
+        if self.vulkan.booted() {
+            return self.vulkan.configure(platform, settings);
         }
         {
             let mut session = self.session();
@@ -325,15 +323,15 @@ impl Control {
 
     /// # Safety
     /// `output` passed the size and ABI checks and is writable for `rsf_godot_settings`.
-    pub(crate) unsafe fn settings(&self, platform: &Platform, output: *mut Settings) -> c_int {
-        if platform.vulkan_booted() {
-            // SAFETY: forwarded under the caller's guarantee.
-            return unsafe { platform.vulkan_settings(output) };
-        }
-        let settings = self.session().settings;
+    pub(crate) unsafe fn settings(&self, output: *mut Settings) -> c_int {
+        let (settings, result) = if self.vulkan.booted() {
+            self.vulkan.settings()
+        } else {
+            (self.session().settings, 1)
+        };
         // SAFETY: the caller's guarantee.
         unsafe { output.write(settings) };
-        1
+        result
     }
 
     pub(crate) fn snapshot(&self) -> (Settings, u64) {
@@ -344,16 +342,15 @@ impl Control {
     /// # Safety
     /// `output` passed the size and ABI checks and is writable for `rsf_godot_status`.
     pub(crate) unsafe fn status(&self, platform: &Platform, output: *mut Status) -> c_int {
-        if platform.vulkan_booted() {
-            // SAFETY: forwarded under the caller's guarantee.
-            if unsafe { platform.vulkan_status(output) } == 0 {
-                return 0;
+        if self.vulkan.booted() {
+            let (mut value, result) = self.vulkan.status(platform);
+            if result != 0 {
+                apply_inputs(&mut value, &platform.cpu_counters());
+                apply_window(&mut value, &platform.window_facts());
             }
-            // SAFETY: the Vulkan owner filled the caller's record.
-            let output = unsafe { &mut *output };
-            apply_inputs(output, &platform.cpu_counters());
-            apply_window(output, &platform.window_facts());
-            return 1;
+            // SAFETY: the caller's guarantee.
+            unsafe { output.write(value) };
+            return result;
         }
         if !self.booted() {
             return 0;

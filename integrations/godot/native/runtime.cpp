@@ -24,9 +24,10 @@
 #include "../../../runtime/backends/common/frame_capture12.h"
 
 // Settings, their generation, the D3D12 session identity and paths, the status record and the
-// engine-service routing are owned by the Rust control owner (native/control.rs). This file keeps
-// the rsfg_* exports as forwarders and the leaves: the D3D12 SR context, fences, pending
-// submissions and capture, DXGI, Win32 window calls and the linked Runtime.
+// engine-service routing are owned by the Rust control owner (native/control.rs), the Vulkan
+// session by native/vulkan.rs. This file keeps the rsfg_* exports as forwarders and the leaves:
+// the D3D12 SR context, fences, pending submissions and capture, DXGI, Win32 window calls and the
+// linked Runtime. The Vulkan leaves in the table below live in vulkan.cpp.
 static_assert(sizeof(rsf_sharpening_options) == 56);
 static_assert(sizeof(rsf_godot_settings) == 100 && offsetof(rsf_godot_settings, sharpening) == 44);
 static_assert(sizeof(rsf_godot_status) == 256 && offsetof(rsf_godot_status, sr_result) == 40 &&
@@ -40,7 +41,8 @@ static_assert(sizeof(rsf_godot_paths) == 56 && sizeof(rsf_godot_input_facts) == 
 static_assert(sizeof(rsf_godot_fg_facts) == 96 && offsetof(rsf_godot_fg_facts, tagged_frames) == 48);
 static_assert(sizeof(rsf_godot_latency_facts) == 88 && sizeof(rsf_godot_sr_frame) == 32);
 static_assert(sizeof(rsf_godot_option_field) == 16 && sizeof(rsf_godot_option_value) == 24);
-static_assert(sizeof(rsf_godot_platform) == 136 && offsetof(rsf_godot_platform, latency_facts) == 128);
+static_assert(sizeof(rsf_godot_platform) == 184 && offsetof(rsf_godot_platform, vulkan_locked) == 88 &&
+    offsetof(rsf_godot_platform, latency_facts) == 176);
 static_assert(RSF_SR_AUTO == 7 && RSF_SR_SPATIAL == 6 && RSF_SR_DLSS == 1 && RSF_FG_BACKEND_AUTO == 7 &&
     RSF_FG_OFF == 0 && RSF_FG_FIXED == 1 && RSF_REFLEX_OFF == 0 && RSF_UI_MODE_BACKBUFFER_HUDLESS == 4 &&
     RSF_DLSS_ENGINE_CUSTOM == 0 && RSF_FG_STAT_TOTAL_PRESENTED == 1 && RSF_BACKEND_OK == 0,
@@ -144,10 +146,6 @@ uint32_t leaf_dlss_preset_valid(uint32_t preset) { return rsf_dlss_preset_valid(
 uint32_t leaf_sharpening_valid(const rsf_sharpening_options* options) { return rsf::sharpening_settings::valid(*options) ? 1u : 0u; }
 void leaf_sharpening_defaults(rsf_sharpening_options* options) { *options = rsf_sharpening_defaults(); }
 uint32_t leaf_fg_backend_known(uint32_t backend) { return rsf_fg_backend_known(backend) ? 1u : 0u; }
-uint32_t leaf_vulkan_booted() { return rsf::godot_vk::booted() ? 1u : 0u; }
-int32_t leaf_vulkan_configure(const rsf_godot_settings* value) try { return rsf::godot_vk::configure(value); } catch (...) { return 0; }
-int32_t leaf_vulkan_settings(rsf_godot_settings* value) try { return rsf::godot_vk::settings(value); } catch (...) { return 0; }
-int32_t leaf_vulkan_status(rsf_godot_status* value) try { return rsf::godot_vk::status(value); } catch (...) { return 0; }
 void leaf_cpu_counters(rsf_godot_input_facts* facts)
 {
     rsf_native_cpu_counters inputs{}; inputs.struct_size = sizeof(inputs); rsf_native_cpu_counters_get(&inputs);
@@ -191,9 +189,11 @@ uint32_t leaf_latency_facts(rsf_godot_latency_facts* facts)
     facts->owner = latency.owner;
     return 1;
 }
+namespace vk = rsf::godot_vk;
 const rsf_godot_platform platform{sizeof(platform), RSF_GODOT_PLATFORM_VERSION, leaf_tick_count, leaf_prepare_capture,
     leaf_fg_install, leaf_fg_options, leaf_dlss_preset_valid, leaf_sharpening_valid, leaf_sharpening_defaults,
-    leaf_fg_backend_known, leaf_vulkan_booted, leaf_vulkan_configure, leaf_vulkan_settings, leaf_vulkan_status,
+    leaf_fg_backend_known, vk::leaf_supported, vk::leaf_latency_facts, vk::leaf_locked, vk::leaf_start, vk::leaf_stop,
+    vk::leaf_release, vk::leaf_facts, vk::leaf_presenter_max, vk::leaf_fsr4_fg_probe, vk::leaf_latency_options,
     leaf_cpu_counters, leaf_window_facts, leaf_fg_facts, leaf_latency_facts};
 bool booted() { return rsf_godot_booted() != 0; }
 }
@@ -451,7 +451,7 @@ extern "C" int rsfg_shutdown(void) try
         previous_proc = nullptr;
     }
     input_window.store(nullptr); input_session.store(0);
-    if (rsf::godot_vk::booted()) return rsf::godot_vk::shutdown();
+    if (rsf::godot_vk::booted()) return rsf_godot_shutdown_vulkan(&platform);
     const uint64_t session = rsf_godot_session_id();
     if (!wait(submitted) || !rsf_fg12_end_session(session)) return 0;
     if (capture) (void)capture->flush();
