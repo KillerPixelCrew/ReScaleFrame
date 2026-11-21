@@ -356,6 +356,14 @@ The public retirement entry and both linked callers keep the borrowed
 fence contract. The extended reentry fixture and device checks remain
 unrun. [Provider retirement](research/rust-d3d11-present-sync.md#provider-retirement-receipt)
 
+The Vulkan FSR4 FG bridge plans DXGI adapter selection, D3D12
+command setup, and HWND swapchain creation in Rust. Its native capsule
+retains the typed SDK descriptors, including DXGI fields preserved on
+a retry. Source comparison matched the 36 private operations and
+the shipped declarations. Enabled and disabled linkage, the bridge
+contract, and device and game checks remain open.
+[FSR4 FG graphics setup](research/rust-vulkan-fsr4-fg-cutover.md#dxgi-and-d3d12-setup-ownership)
+
 ## Verification coverage
 
 | Requirement | Recorded evidence | Still open |

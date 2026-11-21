@@ -96,3 +96,30 @@ ordering, resets, error propagation, terminal retention and partial retirement.
 This change was reviewed at source level and checked with pinned Rust
 formatting and Git whitespace checks. Compiled contracts, export checks,
 disabled-build linkage, device and moving-frame behavior await verification.
+
+## DXGI and D3D12 setup ownership
+
+The graphics setup comparison used RSF `59783098`, Windows SDK `10.0.26100.0`
+and FidelityFX headers at `7539ae8b6568ad29ed78a753404351daf3b5cca7`. The
+Rust bridge now orders the setup steps and supplies their scalar settings.
+The native capsule keeps the COM references, Win32 handle and typed SDK
+descriptors at their existing addresses. The frame lease tracker covers
+submitted resources with queue and vendor retirement points. This setup has
+partial owners before either point exists, so it keeps the capsule's checked
+cleanup path.
+
+| Path | Source comparison |
+| --- | --- |
+| Probe and create | Create the DXGI factory with flags zero, enumerate by the exact 64-bit LUID, read `VendorId` from `GetDesc1`, and create a D3D12 feature-level 12.0 device on that adapter. The native leaf copies the LUID bits into `LUID` and reports the same failing HRESULT. Provider path construction, DLL loading and version enumeration follow device setup. Probe publishes the LUID, vendor and selected version only on success and releases its temporary capsule. |
+| Command setup | Create and verify the selected FG context before creating the normal-priority direct queue, direct allocator and node-zero direct list. Close the fresh list through the same leaf used during frame recording, create a non-shared fence at value zero, then create the unnamed auto-reset event in the unsignaled state. The event completes the native local-fence predicate. A failed stage skips all later stages. |
+| Partial create | The original error is returned. Checked cleanup can return the bridge for retry if it cannot destroy the generation context or otherwise retire the owner. Failed command setup without an event leaves the local-fence predicate false, so cleanup skips signaling and waiting on the unsubmitted queue. Native final release still disposes of partial COM owners in the same order. |
+| HWND start | Use the admitted output extent in pixels, BGRA8 UNORM, one sample, three render-target-output buffers and flip discard. The initial quality, stereo and flags are zero, with stretch scaling and unspecified alpha. Rust supplies borrowed setup values, which native copies into the retained `DXGI_SWAP_CHAIN_DESC1`. The retained typed FidelityFX version and HWND descriptors still point to that storage and the same factory, queue and chain output. |
+| Failed HWND start | The pinned FidelityFX header exposes a mutable DXGI description. An admissible retry refreshes the seven fields that the baseline assigned on every attempt, preserving the other five fields in native storage. The raw SDK result is returned, with the existing `E_UNEXPECTED` when it reports success without a chain. A returned chain or swapchain context prevents another start and remains available for checked teardown. |
+
+The source check compared the private 36-slot operations table, both setup
+records and the existing fixture initializer. It traced failure returns through
+probe, create, start and teardown. The exported bridge types and entry points,
+optional-build wiring, provider and shader paths stay at the baseline. Pinned
+Rust formatting, locked offline metadata and Git whitespace checks cover this
+change. Compile and link, Clippy, the existing contracts, export verification,
+device and game behavior remain open.

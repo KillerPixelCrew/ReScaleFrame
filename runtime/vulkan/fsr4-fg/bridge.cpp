@@ -47,6 +47,11 @@ using Native = rsf_fsr4fg_native;
 
 static_assert(D3D12_RESOURCE_DIMENSION_TEXTURE2D == 3 && DXGI_FORMAT_B8G8R8A8_UNORM == 87 &&
     DXGI_FORMAT_R32_FLOAT == 41 && DXGI_FORMAT_R16G16_FLOAT == 34);
+static_assert(sizeof(LUID) == sizeof(uint64_t));
+static_assert(D3D_FEATURE_LEVEL_12_0 == 0xc000 && D3D12_COMMAND_LIST_TYPE_DIRECT == 0 &&
+    D3D12_COMMAND_QUEUE_PRIORITY_NORMAL == 0 && D3D12_COMMAND_QUEUE_FLAG_NONE == 0 && D3D12_FENCE_FLAG_NONE == 0);
+static_assert(DXGI_USAGE_RENDER_TARGET_OUTPUT == 0x20 && DXGI_SCALING_STRETCH == 0 &&
+    DXGI_SWAP_EFFECT_FLIP_DISCARD == 4 && DXGI_ALPHA_MODE_UNSPECIFIED == 0);
 
 int32_t result(HRESULT hr) { return FAILED(hr) ? hr : 0; }
 
@@ -80,18 +85,26 @@ void release_native(Native* self) {
     delete self;
 }
 
-int32_t open_device(Native* self, uint64_t adapter_luid, uint32_t* vendor) {
-    HRESULT hr = CreateDXGIFactory2(0, IID_PPV_ARGS(&self->factory));
-    if (FAILED(hr)) return hr;
+int32_t create_factory(Native* self, uint32_t flags) {
+    return result(CreateDXGIFactory2(flags, IID_PPV_ARGS(&self->factory)));
+}
+
+int32_t find_adapter(Native* self, uint64_t adapter_luid) {
     LUID luid{};
     std::memcpy(&luid, &adapter_luid, sizeof(luid));
-    hr = self->factory->EnumAdapterByLuid(luid, IID_PPV_ARGS(&self->adapter));
-    if (FAILED(hr)) return hr;
+    return result(self->factory->EnumAdapterByLuid(luid, IID_PPV_ARGS(&self->adapter)));
+}
+
+int32_t get_adapter_vendor(Native* self, uint32_t* vendor) {
     DXGI_ADAPTER_DESC1 desc{};
-    hr = self->adapter->GetDesc1(&desc);
-    if (FAILED(hr)) return hr;
-    *vendor = desc.VendorId;
-    return result(D3D12CreateDevice(self->adapter, D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&self->device)));
+    const HRESULT hr = self->adapter->GetDesc1(&desc);
+    if (SUCCEEDED(hr)) *vendor = desc.VendorId;
+    return result(hr);
+}
+
+int32_t create_device(Native* self, uint32_t feature_level) {
+    return result(D3D12CreateDevice(self->adapter, static_cast<D3D_FEATURE_LEVEL>(feature_level),
+        IID_PPV_ARGS(&self->device)));
 }
 
 int32_t load(Native* self, const uint16_t* path) {
@@ -133,20 +146,32 @@ int32_t get_provider(Native* self, uint64_t* actual) {
     return rsf::fsr4fg::provider_version(self->query, &self->generation, *actual);
 }
 
-int32_t create_commands(Native* self) {
+int32_t create_queue(Native* self, const rsf_fsr4fg_queue_desc* setup) {
     D3D12_COMMAND_QUEUE_DESC queue{};
-    queue.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-    HRESULT hr = self->device->CreateCommandQueue(&queue, IID_PPV_ARGS(&self->queue));
-    if (FAILED(hr)) return hr;
-    hr = self->device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&self->allocator));
-    if (FAILED(hr)) return hr;
-    hr = self->device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, self->allocator, nullptr, IID_PPV_ARGS(&self->commands));
-    if (FAILED(hr)) return hr;
-    hr = self->commands->Close();
-    if (FAILED(hr)) return hr;
-    hr = self->device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&self->completion));
-    if (FAILED(hr)) return hr;
-    self->event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    queue.Type = static_cast<D3D12_COMMAND_LIST_TYPE>(setup->list_type);
+    queue.Priority = setup->priority;
+    queue.Flags = static_cast<D3D12_COMMAND_QUEUE_FLAGS>(setup->flags);
+    queue.NodeMask = setup->node_mask;
+    return result(self->device->CreateCommandQueue(&queue, IID_PPV_ARGS(&self->queue)));
+}
+
+int32_t create_allocator(Native* self, uint32_t list_type) {
+    return result(self->device->CreateCommandAllocator(static_cast<D3D12_COMMAND_LIST_TYPE>(list_type),
+        IID_PPV_ARGS(&self->allocator)));
+}
+
+int32_t create_command_list(Native* self, uint32_t node_mask, uint32_t list_type) {
+    return result(self->device->CreateCommandList(node_mask, static_cast<D3D12_COMMAND_LIST_TYPE>(list_type),
+        self->allocator, nullptr, IID_PPV_ARGS(&self->commands)));
+}
+
+int32_t create_completion_fence(Native* self, uint64_t initial_value, uint32_t flags) {
+    return result(self->device->CreateFence(initial_value, static_cast<D3D12_FENCE_FLAGS>(flags),
+        IID_PPV_ARGS(&self->completion)));
+}
+
+int32_t create_event(Native* self, uint32_t manual_reset, uint32_t initial_state) {
+    self->event = CreateEventW(nullptr, manual_reset != 0, initial_state != 0, nullptr);
     return self->event ? 0 : HRESULT_FROM_WIN32(GetLastError());
 }
 
@@ -161,15 +186,22 @@ uint32_t objects(Native* self) {
     return found;
 }
 
-int32_t start(Native* self, void* window, uint32_t width, uint32_t height) {
+int32_t create_swapchain(Native* self, void* window, const rsf_fsr4fg_swapchain_desc* setup, uint32_t first_attempt) {
     auto& desc = self->dxgi_description;
-    desc.Width = width;
-    desc.Height = height;
-    desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-    desc.SampleDesc.Count = 1;
-    desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-    desc.BufferCount = 3;
-    desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+    if (first_attempt) {
+        desc.Stereo = setup->stereo != 0;
+        desc.SampleDesc.Quality = setup->sample_quality;
+        desc.Scaling = static_cast<DXGI_SCALING>(setup->scaling);
+        desc.AlphaMode = static_cast<DXGI_ALPHA_MODE>(setup->alpha_mode);
+        desc.Flags = setup->flags;
+    }
+    desc.Width = setup->width;
+    desc.Height = setup->height;
+    desc.Format = static_cast<DXGI_FORMAT>(setup->format);
+    desc.SampleDesc.Count = setup->sample_count;
+    desc.BufferUsage = setup->buffer_usage;
+    desc.BufferCount = setup->buffer_count;
+    desc.SwapEffect = static_cast<DXGI_SWAP_EFFECT>(setup->swap_effect);
     self->chain_version.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATIONSWAPCHAIN_VERSION_DX12;
     self->chain_version.version = FFX_FRAMEGENERATION_SWAPCHAIN_DX12_VERSION;
     auto& create = self->chain_description;
@@ -317,8 +349,10 @@ void release_chain(Native* self) { release(self->chain); }
 int32_t destroy_swapchain(Native* self) { return destroy_context(self, self->swapchain); }
 
 const rsf_fsr4fg_platform platform{
-    allocate, release_native, open_device, load, versions, create_generation, get_provider,
-    create_commands, objects, start, create_image, create_fence, describe_texture, reset_commands,
+    allocate, release_native, create_factory, find_adapter, get_adapter_vendor, create_device,
+    load, versions, create_generation, get_provider, create_queue, create_allocator,
+    create_command_list, create_completion_fence, create_event, objects, create_swapchain,
+    create_image, create_fence, describe_texture, reset_commands,
     close_commands, configure, shader_read, prepare, copy_to_backbuffer, wait_shared, execute, present,
     wait_presents, signal, wait_local, get_present_count, destroy_generation, release_chain, destroy_swapchain,
 };

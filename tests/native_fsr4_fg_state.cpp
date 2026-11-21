@@ -35,9 +35,17 @@ const rsf_fsr4fg_platform bridge_platform{
         return fake<rsf_fsr4fg_native>(1);
     },
     [](auto*) { ++bridge_calls.releases; },
-    [](auto*, uint64_t luid, uint32_t* vendor) -> int32_t {
+    [](auto*, uint32_t flags) -> int32_t { CHECK(flags == 0); return 0; },
+    [](auto*, uint64_t luid) -> int32_t {
         CHECK(luid == bridge_luid);
+        return 0;
+    },
+    [](auto*, uint32_t* vendor) -> int32_t {
         *vendor = 0x1002;
+        return 0;
+    },
+    [](auto*, uint32_t level) -> int32_t {
+        CHECK(level == 0xc000);
         bridge_calls.objects |= RSF_FSR4FG_DEVICE;
         return 0;
     },
@@ -54,10 +62,24 @@ const rsf_fsr4fg_platform bridge_platform{
         return 0;
     },
     [](auto*, uint64_t* provider) -> int32_t { *provider = bridge_calls.reported_provider; return 0; },
-    [](auto*) -> int32_t { bridge_calls.objects |= RSF_FSR4FG_LOCAL_FENCE; return 0; },
+    [](auto*, const rsf_fsr4fg_queue_desc* desc) -> int32_t {
+        CHECK(!desc->list_type && !desc->priority && !desc->flags && !desc->node_mask);
+        return 0;
+    },
+    [](auto*, uint32_t list_type) -> int32_t { CHECK(list_type == 0); return 0; },
+    [](auto*, uint32_t node_mask, uint32_t list_type) -> int32_t { CHECK(!node_mask && !list_type); return 0; },
+    [](auto*, uint64_t initial_value, uint32_t flags) -> int32_t { CHECK(!initial_value && !flags); return 0; },
+    [](auto*, uint32_t manual_reset, uint32_t initial_state) -> int32_t {
+        CHECK(!manual_reset && !initial_state);
+        bridge_calls.objects |= RSF_FSR4FG_LOCAL_FENCE;
+        return 0;
+    },
     [](auto*) { return bridge_calls.objects; },
-    [](auto*, void*, uint32_t width, uint32_t height) -> int32_t {
-        CHECK(width == 640 && height == 360);
+    [](auto*, void*, const rsf_fsr4fg_swapchain_desc* desc, uint32_t first_attempt) -> int32_t {
+        CHECK(desc->width == 640 && desc->height == 360 && desc->format == 87);
+        CHECK(desc->buffer_count == 3 && desc->buffer_usage == 0x20 && desc->swap_effect == 4);
+        CHECK(desc->sample_count == 1 && !desc->sample_quality && !desc->stereo);
+        CHECK(!desc->scaling && !desc->alpha_mode && !desc->flags && first_attempt == 1);
         bridge_calls.objects |= RSF_FSR4FG_CHAIN | RSF_FSR4FG_SWAPCHAIN;
         return 0;
     },
@@ -160,6 +182,7 @@ void terminal_bridge() {
     void* fence{};
     CHECK(rsf_core_fsr4fg_create_fence(bridge, &fence) == 0 && fence);
     CHECK(rsf_core_fsr4fg_start(bridge, fake(3)) == 0);
+    bridge_calls.steps.clear();
 
     rsf_frame_record source{sizeof(source), RSF_GAME_FRAME_ABI_VERSION};
     source.frame_id = source.session_id = 1;

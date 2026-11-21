@@ -17,24 +17,42 @@ struct rsf_fsr4fg_texture {
     uint32_t height, format, dimension, layers, samples;
 };
 
+struct rsf_fsr4fg_queue_desc {
+    uint32_t list_type;
+    int32_t priority;
+    uint32_t flags, node_mask;
+};
+
+struct rsf_fsr4fg_swapchain_desc {
+    uint32_t width, height, format, stereo, sample_count, sample_quality;
+    uint32_t buffer_usage, buffer_count, scaling, swap_effect, alpha_mode, flags;
+};
+
 struct rsf_fsr4fg_native;
 
 extern "C" {
 typedef void (*rsf_fsr4fg_generated_fn)(void*, int32_t result, uint32_t count);
 
-// Native owners and retained SDK descriptors stay behind the void* handle.
-// The operations table and callback are valid until release.
+// Native owners and retained SDK descriptors stay behind the opaque handle.
+// The setup descriptions are borrowed for the call. The table and callback are valid until release.
 struct rsf_fsr4fg_platform {
     rsf_fsr4fg_native* (*allocate)(void* telemetry, rsf_fsr4fg_generated_fn);
     void (*release)(rsf_fsr4fg_native*);
-    int32_t (*open_device)(rsf_fsr4fg_native*, uint64_t luid, uint32_t* vendor);
+    int32_t (*create_factory)(rsf_fsr4fg_native*, uint32_t flags);
+    int32_t (*find_adapter)(rsf_fsr4fg_native*, uint64_t luid);
+    int32_t (*get_adapter_vendor)(rsf_fsr4fg_native*, uint32_t* vendor);
+    int32_t (*create_device)(rsf_fsr4fg_native*, uint32_t feature_level);
     int32_t (*load)(rsf_fsr4fg_native*, const uint16_t* path);
     int32_t (*versions)(rsf_fsr4fg_native*, rsf_ffx_version*, uint64_t* count);
     int32_t (*create_generation)(rsf_fsr4fg_native*, const rsf_fsr4fg_create*, uint64_t provider);
     int32_t (*get_provider)(rsf_fsr4fg_native*, uint64_t*);
-    int32_t (*create_commands)(rsf_fsr4fg_native*);
+    int32_t (*create_queue)(rsf_fsr4fg_native*, const rsf_fsr4fg_queue_desc*);
+    int32_t (*create_allocator)(rsf_fsr4fg_native*, uint32_t list_type);
+    int32_t (*create_command_list)(rsf_fsr4fg_native*, uint32_t node_mask, uint32_t list_type);
+    int32_t (*create_completion_fence)(rsf_fsr4fg_native*, uint64_t initial_value, uint32_t flags);
+    int32_t (*create_event)(rsf_fsr4fg_native*, uint32_t manual_reset, uint32_t initial_state);
     uint32_t (*objects)(rsf_fsr4fg_native*);
-    int32_t (*start)(rsf_fsr4fg_native*, void* window, uint32_t width, uint32_t height);
+    int32_t (*create_swapchain)(rsf_fsr4fg_native*, void* window, const rsf_fsr4fg_swapchain_desc*, uint32_t first_attempt);
     int32_t (*create_image)(rsf_fsr4fg_native*, uint32_t width, uint32_t height, uint32_t format, void** handle, void** resource);
     int32_t (*create_fence)(rsf_fsr4fg_native*, void** handle);
     void (*describe_texture)(void* resource, rsf_fsr4fg_texture*);
@@ -69,5 +87,15 @@ int32_t rsf_core_fsr4fg_prepare_destroy(rsf_fsr4fg_bridge*);
 int32_t rsf_core_fsr4fg_destroy(rsf_fsr4fg_bridge*);
 }
 
-static_assert(sizeof(rsf_fsr4fg_platform) == 29 * sizeof(void*));
+static_assert(sizeof(rsf_fsr4fg_platform) == 36 * sizeof(void*));
+static_assert(offsetof(rsf_fsr4fg_platform, create_factory) == 2 * sizeof(void*));
+static_assert(offsetof(rsf_fsr4fg_platform, load) == 6 * sizeof(void*));
+static_assert(offsetof(rsf_fsr4fg_platform, create_queue) == 10 * sizeof(void*));
+static_assert(offsetof(rsf_fsr4fg_platform, create_swapchain) == 16 * sizeof(void*));
+static_assert(offsetof(rsf_fsr4fg_platform, close_commands) == 21 * sizeof(void*));
 static_assert(sizeof(rsf_fsr4fg_texture) == 32 && offsetof(rsf_fsr4fg_texture, dimension) == 16);
+static_assert(sizeof(rsf_fsr4fg_queue_desc) == 16 && alignof(rsf_fsr4fg_queue_desc) == 4);
+static_assert(offsetof(rsf_fsr4fg_queue_desc, priority) == 4 && offsetof(rsf_fsr4fg_queue_desc, node_mask) == 12);
+static_assert(sizeof(rsf_fsr4fg_swapchain_desc) == 48 && alignof(rsf_fsr4fg_swapchain_desc) == 4);
+static_assert(offsetof(rsf_fsr4fg_swapchain_desc, sample_count) == 16 &&
+    offsetof(rsf_fsr4fg_swapchain_desc, buffer_count) == 28 && offsetof(rsf_fsr4fg_swapchain_desc, flags) == 44);

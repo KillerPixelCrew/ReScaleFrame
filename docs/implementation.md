@@ -3227,6 +3227,13 @@ Runtime, carrier and Minecraft exports matched. The worker also verified
 the feature-disabled build. Device and game execution remain pending.
 See [the FSR4 Vulkan FG audit](research/rust-vulkan-fsr4-fg-cutover.md).
 
+The later FSR4 FG setup port moves adapter selection by LUID, D3D12
+command setup, and the HWND swapchain plan into Rust. The native capsule
+keeps its COM references and the typed descriptors borrowed by
+FidelityFX. Source comparison matched setup, refusal, and retry order.
+The build, contract, and device checks for this port remain open.
+[Graphics setup](research/rust-vulkan-fsr4-fg-cutover.md#dxgi-and-d3d12-setup-ownership)
+
 Vulkan XeSS FG now shares its swapchain, source leases, submission ledger,
 capture retirement and checked teardown with FSR4 FG in Rust. The shared
 allocator preserves the engine swapchain's usage flags and tracks them in
