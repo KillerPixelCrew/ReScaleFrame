@@ -1,15 +1,9 @@
 /*
  * VulkanStory's NGX shim. See vulkanstory_ngx.h for why it exists and what it promises.
  *
- * Plain C99, no C++ runtime, no NGX headers, no link-time dependency on the
- * NVIDIA driver: the runtime is dlopen()ed and every entry point dlsym()ed at
- * first use, so this object builds and loads on any machine.
- *
- *   cc -std=c99 -O2 -fPIC -shared -fvisibility=hidden -fno-optimize-sibling-calls \
- *      native/ngx/vulkanstory_ngx.c -o libVulkanStoryNgx.so -ldl
- *
- * Use native/ngx/build.sh on Linux or scripts/build-provider-bridges.ps1 on
- * Windows. The renderer project does not build or copy this shim implicitly.
+ * The native wrappers call NGX from this shared object. Rust owns the lazy
+ * load result and symbol table. There is no link-time dependency on NGX.
+ * Build the shim with the adjacent build.sh or build.ps1.
  */
 #include "vulkanstory_ngx.h"
 
@@ -33,73 +27,58 @@
 
 /* ------------------------------------------------------------------ loading */
 
-/*
- * The entry points the managed side needs, by exported name. Everything is
- * resolved once; a symbol the runtime does not export stays null and its
- * wrapper answers VULKANSTORY_NGX_RESULT_ENTRY_POINT_MISSING instead of crashing.
- */
-#define VULKANSTORY_NGX_ENTRY_POINTS(X)                                                    \
-    X(init_project_id,      "NVSDK_NGX_VULKAN_Init_ProjectID")                         \
-    X(shutdown1,            "NVSDK_NGX_VULKAN_Shutdown1")                              \
-    X(get_capability_params,"NVSDK_NGX_VULKAN_GetCapabilityParameters")                \
-    X(allocate_params,      "NVSDK_NGX_VULKAN_AllocateParameters")                     \
-    X(destroy_params,       "NVSDK_NGX_VULKAN_DestroyParameters")                      \
-    X(feature_requirements, "NVSDK_NGX_VULKAN_GetFeatureRequirements")                 \
-    X(instance_extensions,  "NVSDK_NGX_VULKAN_GetFeatureInstanceExtensionRequirements")\
-    X(device_extensions,    "NVSDK_NGX_VULKAN_GetFeatureDeviceExtensionRequirements")  \
-    X(create_feature,       "NVSDK_NGX_VULKAN_CreateFeature")                          \
-    X(create_feature1,      "NVSDK_NGX_VULKAN_CreateFeature1")                         \
-    X(evaluate_feature,     "NVSDK_NGX_VULKAN_EvaluateFeature")                        \
-    X(release_feature,      "NVSDK_NGX_VULKAN_ReleaseFeature")
-
-/// @brief Process-retained addresses for the NGX runtime exports used by this shim.
-/// @details A missing symbol remains null and its wrapper returns the shim entry-point-missing result.
+/* Private ABI, matching NgxEntries in src/lib.rs. Missing symbols stay null. */
 struct vulkanstory_ngx_entries
 {
-#define VULKANSTORY_NGX_DECLARE(field, name) void *field;
-    VULKANSTORY_NGX_ENTRY_POINTS(VULKANSTORY_NGX_DECLARE)
-#undef VULKANSTORY_NGX_DECLARE
+    void *init_project_id;
+    void *shutdown1;
+    void *get_capability_params;
+    void *allocate_params;
+    void *destroy_params;
+    void *feature_requirements;
+    void *instance_extensions;
+    void *device_extensions;
+    void *create_feature;
+    void *create_feature1;
+    void *evaluate_feature;
+    void *release_feature;
 };
 
-enum { LOAD_UNTRIED = 0, LOAD_RUNNING = 1, LOAD_READY = 2, LOAD_FAILED = 3 };
-
-static int g_load_state = LOAD_UNTRIED;
-static vulkanstory_module g_runtime = NULL;
-static struct vulkanstory_ngx_entries g_ngx;
-static char g_load_error[512] = { 0 };
+extern const struct vulkanstory_ngx_entries *rsf_vulkanstory_ngx_get_entries(void);
+extern const char *rsf_vulkanstory_ngx_load_error(void);
 
 /// @brief Resolves an exported function in the borrowed native runtime module.
-static void *vulkanstory_symbol(vulkanstory_module module, const char *name)
+void *rsf_vulkanstory_ngx_symbol(void *module, const char *name)
 {
 #if defined(_WIN32)
-    return (void *)GetProcAddress(module, name);
+    return (void *)GetProcAddress((vulkanstory_module)module, name);
 #else
     return dlsym(module, name);
 #endif
 }
 
-/// @brief Copies the native loader failure into bounded process-retained diagnostic storage.
-static void vulkanstory_record_load_error(void)
+/// @brief Copies the native loader failure into the caller's diagnostic buffer.
+static void vulkanstory_record_load_error(char *error, size_t capacity)
 {
 #if defined(_WIN32)
     unsigned long code = GetLastError();
     /* No FormatMessage: a number is enough to tell "not found" from "bad image". */
     const char prefix[] = "LoadLibrary failed, GetLastError=";
     size_t at = sizeof prefix - 1;
-    memcpy(g_load_error, prefix, at);
-    if (at + 12 < sizeof g_load_error)
+    memcpy(error, prefix, at);
+    if (at + 12 < capacity)
     {
         char digits[12];
         int n = 0;
         do { digits[n++] = (char)('0' + (code % 10u)); code /= 10u; } while (code != 0 && n < 11);
-        while (n > 0) g_load_error[at++] = digits[--n];
+        while (n > 0) error[at++] = digits[--n];
     }
-    g_load_error[at] = '\0';
+    error[at] = '\0';
 #else
     const char *message = dlerror();
     if (message == NULL) message = "the runtime could not be loaded";
-    strncpy(g_load_error, message, sizeof g_load_error - 1);
-    g_load_error[sizeof g_load_error - 1] = '\0';
+    strncpy(error, message, capacity - 1);
+    error[capacity - 1] = '\0';
 #endif
 }
 
@@ -145,56 +124,24 @@ static vulkanstory_module vulkanstory_load_windows_runtime(void)
 }
 #endif
 
-/*
- * Loads once. A second thread arriving mid-load spins on the state word rather
- * than taking a lock, which keeps this file free of pthread and of any
- * platform-specific synchronisation; the load happens once at renderer start.
- */
-/// @brief Serializes the one-time NGX module load and publishes success/failure through the atomic load-state word.
-/// @details Concurrent callers spin while loading is in progress. A published failure is terminal for this shim instance.
-static int vulkanstory_ensure_runtime(void)
+/* Rust supplies a writable 512-byte buffer for any native loader error. */
+void *rsf_vulkanstory_ngx_open(char *error, size_t capacity)
 {
-    int state = __atomic_load_n(&g_load_state, __ATOMIC_ACQUIRE);
-    while (state == LOAD_RUNNING)
-    {
-        state = __atomic_load_n(&g_load_state, __ATOMIC_ACQUIRE);
-    }
-    if (state == LOAD_READY) return 1;
-    if (state == LOAD_FAILED) return 0;
-
-    int expected = LOAD_UNTRIED;
-    if (!__atomic_compare_exchange_n(&g_load_state, &expected, LOAD_RUNNING, 0,
-                                     __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
-    {
-        /* Someone else got there first; re-enter and observe their result. */
-        return vulkanstory_ensure_runtime();
-    }
-
 #if defined(_WIN32)
-    g_runtime = vulkanstory_load_windows_runtime();
+    vulkanstory_module runtime = vulkanstory_load_windows_runtime();
 #else
     dlerror();
-    g_runtime = dlopen(VULKANSTORY_NGX_RUNTIME, RTLD_NOW | RTLD_LOCAL);
+    vulkanstory_module runtime = dlopen(VULKANSTORY_NGX_RUNTIME, RTLD_NOW | RTLD_LOCAL);
 #endif
-    if (g_runtime == NULL)
-    {
-        vulkanstory_record_load_error();
-        __atomic_store_n(&g_load_state, LOAD_FAILED, __ATOMIC_RELEASE);
-        return 0;
-    }
-
-#define VULKANSTORY_NGX_RESOLVE(field, name) g_ngx.field = vulkanstory_symbol(g_runtime, name);
-    VULKANSTORY_NGX_ENTRY_POINTS(VULKANSTORY_NGX_RESOLVE)
-#undef VULKANSTORY_NGX_RESOLVE
-
-    __atomic_store_n(&g_load_state, LOAD_READY, __ATOMIC_RELEASE);
-    return 1;
+    if (runtime == NULL) vulkanstory_record_load_error(error, capacity);
+    return runtime;
 }
 
 /* Every wrapper starts with this: no runtime, no symbol, no call. */
-#define VULKANSTORY_NGX_REQUIRE(field)                                       \
-    if (!vulkanstory_ensure_runtime()) return VULKANSTORY_NGX_RESULT_RUNTIME_MISSING; \
-    if (g_ngx.field == NULL) return VULKANSTORY_NGX_RESULT_ENTRY_POINT_MISSING;
+#define VULKANSTORY_NGX_REQUIRE(field)                                                      \
+    const struct vulkanstory_ngx_entries *ngx = rsf_vulkanstory_ngx_get_entries();             \
+    if (ngx == NULL) return VULKANSTORY_NGX_RESULT_RUNTIME_MISSING;                          \
+    if (ngx->field == NULL) return VULKANSTORY_NGX_RESULT_ENTRY_POINT_MISSING;
 
 /*
  * ...and every wrapper *ends* with this, which is the whole point of the file.
@@ -221,11 +168,11 @@ uint32_t VulkanStoryNgx_Version(void) { return VULKANSTORY_NGX_SHIM_VERSION; }
 
 const char *VulkanStoryNgx_RuntimeName(void) { return VULKANSTORY_NGX_RUNTIME; }
 
-const char *VulkanStoryNgx_LastLoadError(void) { return g_load_error; }
+const char *VulkanStoryNgx_LastLoadError(void) { return rsf_vulkanstory_ngx_load_error(); }
 
 VulkanStoryNgxResult VulkanStoryNgx_LoadRuntime(void)
 {
-    return vulkanstory_ensure_runtime() ? NGX_SUCCESS : VULKANSTORY_NGX_RESULT_RUNTIME_MISSING;
+    return rsf_vulkanstory_ngx_get_entries() != NULL ? NGX_SUCCESS : VULKANSTORY_NGX_RESULT_RUNTIME_MISSING;
 }
 
 /* ----------------------------------------------------------------- lifetime */
@@ -270,7 +217,7 @@ VulkanStoryNgxResult VulkanStoryNgx_VulkanInitProjectId(
 {
     VULKANSTORY_NGX_REQUIRE(init_project_id)
     if (projectId == NULL || device == NULL) return VULKANSTORY_NGX_RESULT_INVALID_ARGUMENT;
-    VULKANSTORY_NGX_RETURN(((pfn_init_project_id)g_ngx.init_project_id)(
+    VULKANSTORY_NGX_RETURN(((pfn_init_project_id)ngx->init_project_id)(
         projectId, engineType, engineVersion, applicationDataPath,
         instance, physicalDevice, device, sdkVersion, featureCommonInfo));
 }
@@ -280,7 +227,7 @@ VulkanStoryNgxResult VulkanStoryNgx_VulkanShutdown(void *device)
     /* Written by NGX with the SDK's remaining reference count; see pfn_shutdown1. */
     int remainingReferences = 0;
     VULKANSTORY_NGX_REQUIRE(shutdown1)
-    VULKANSTORY_NGX_RETURN(((pfn_shutdown1)g_ngx.shutdown1)(device, &remainingReferences));
+    VULKANSTORY_NGX_RETURN(((pfn_shutdown1)ngx->shutdown1)(device, &remainingReferences));
 }
 
 /* --------------------------------------------------------- parameter blocks */
@@ -290,7 +237,7 @@ VulkanStoryNgxResult VulkanStoryNgx_GetCapabilityParameters(void **outParameters
     VULKANSTORY_NGX_REQUIRE(get_capability_params)
     if (outParameters == NULL) return VULKANSTORY_NGX_RESULT_INVALID_ARGUMENT;
     *outParameters = NULL;
-    VULKANSTORY_NGX_RETURN(((pfn_out_pointer)g_ngx.get_capability_params)(outParameters));
+    VULKANSTORY_NGX_RETURN(((pfn_out_pointer)ngx->get_capability_params)(outParameters));
 }
 
 VulkanStoryNgxResult VulkanStoryNgx_AllocateParameters(void **outParameters)
@@ -298,14 +245,14 @@ VulkanStoryNgxResult VulkanStoryNgx_AllocateParameters(void **outParameters)
     VULKANSTORY_NGX_REQUIRE(allocate_params)
     if (outParameters == NULL) return VULKANSTORY_NGX_RESULT_INVALID_ARGUMENT;
     *outParameters = NULL;
-    VULKANSTORY_NGX_RETURN(((pfn_out_pointer)g_ngx.allocate_params)(outParameters));
+    VULKANSTORY_NGX_RETURN(((pfn_out_pointer)ngx->allocate_params)(outParameters));
 }
 
 VulkanStoryNgxResult VulkanStoryNgx_DestroyParameters(void *parameters)
 {
     VULKANSTORY_NGX_REQUIRE(destroy_params)
     if (parameters == NULL) return VULKANSTORY_NGX_RESULT_INVALID_ARGUMENT;
-    VULKANSTORY_NGX_RETURN(((pfn_handle)g_ngx.destroy_params)(parameters));
+    VULKANSTORY_NGX_RETURN(((pfn_handle)ngx->destroy_params)(parameters));
 }
 
 /* ---------------------------------------------------------------- discovery */
@@ -319,7 +266,7 @@ VulkanStoryNgxResult VulkanStoryNgx_GetFeatureRequirements(
 {
     VULKANSTORY_NGX_REQUIRE(feature_requirements)
     if (discovery == NULL || outRequirement == NULL) return VULKANSTORY_NGX_RESULT_INVALID_ARGUMENT;
-    VULKANSTORY_NGX_RETURN(((pfn_feature_requirements)g_ngx.feature_requirements)(
+    VULKANSTORY_NGX_RETURN(((pfn_feature_requirements)ngx->feature_requirements)(
         instance, physicalDevice, discovery, outRequirement));
 }
 
@@ -331,7 +278,7 @@ VulkanStoryNgxResult VulkanStoryNgx_GetFeatureInstanceExtensionRequirements(
         return VULKANSTORY_NGX_RESULT_INVALID_ARGUMENT;
     *outCount = 0;
     *outExtensionProperties = NULL;
-    VULKANSTORY_NGX_RETURN(((pfn_instance_extensions)g_ngx.instance_extensions)(
+    VULKANSTORY_NGX_RETURN(((pfn_instance_extensions)ngx->instance_extensions)(
         discovery, outCount, outExtensionProperties));
 }
 
@@ -344,7 +291,7 @@ VulkanStoryNgxResult VulkanStoryNgx_GetFeatureDeviceExtensionRequirements(
         return VULKANSTORY_NGX_RESULT_INVALID_ARGUMENT;
     *outCount = 0;
     *outExtensionProperties = NULL;
-    VULKANSTORY_NGX_RETURN(((pfn_device_extensions)g_ngx.device_extensions)(
+    VULKANSTORY_NGX_RETURN(((pfn_device_extensions)ngx->device_extensions)(
         instance, physicalDevice, discovery, outCount, outExtensionProperties));
 }
 
@@ -453,7 +400,7 @@ VulkanStoryNgxResult VulkanStoryNgx_CreateFeature(
     VULKANSTORY_NGX_REQUIRE(create_feature)
     if (parameters == NULL || outHandle == NULL) return VULKANSTORY_NGX_RESULT_INVALID_ARGUMENT;
     *outHandle = NULL;
-    VULKANSTORY_NGX_RETURN(((pfn_create_feature)g_ngx.create_feature)(
+    VULKANSTORY_NGX_RETURN(((pfn_create_feature)ngx->create_feature)(
         commandBuffer, featureId, parameters, outHandle));
 }
 
@@ -463,7 +410,7 @@ VulkanStoryNgxResult VulkanStoryNgx_CreateFeature1(
     VULKANSTORY_NGX_REQUIRE(create_feature1)
     if (parameters == NULL || outHandle == NULL) return VULKANSTORY_NGX_RESULT_INVALID_ARGUMENT;
     *outHandle = NULL;
-    VULKANSTORY_NGX_RETURN(((pfn_create_feature1)g_ngx.create_feature1)(
+    VULKANSTORY_NGX_RETURN(((pfn_create_feature1)ngx->create_feature1)(
         device, commandBuffer, featureId, parameters, outHandle));
 }
 
@@ -472,7 +419,7 @@ VulkanStoryNgxResult VulkanStoryNgx_EvaluateFeature(
 {
     VULKANSTORY_NGX_REQUIRE(evaluate_feature)
     if (handle == NULL || parameters == NULL) return VULKANSTORY_NGX_RESULT_INVALID_ARGUMENT;
-    VULKANSTORY_NGX_RETURN(((pfn_evaluate_feature)g_ngx.evaluate_feature)(
+    VULKANSTORY_NGX_RETURN(((pfn_evaluate_feature)ngx->evaluate_feature)(
         commandBuffer, handle, parameters, progressCallback));
 }
 
@@ -480,7 +427,7 @@ VulkanStoryNgxResult VulkanStoryNgx_ReleaseFeature(void *handle)
 {
     VULKANSTORY_NGX_REQUIRE(release_feature)
     if (handle == NULL) return VULKANSTORY_NGX_RESULT_INVALID_ARGUMENT;
-    VULKANSTORY_NGX_RETURN(((pfn_handle)g_ngx.release_feature)(handle));
+    VULKANSTORY_NGX_RETURN(((pfn_handle)ngx->release_feature)(handle));
 }
 
 /* --------------------------------------------------- DLSS optimal settings */
