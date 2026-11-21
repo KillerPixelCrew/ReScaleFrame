@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
+use crate::diagnostic_output::Output;
 use crate::render_abi::rsf_backend_log_fn as Log;
-use std::cell::Cell;
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -88,32 +88,6 @@ static AUDIT: Mutex<Audit> = Mutex::new(Audit {
 
 fn audit() -> MutexGuard<'static, Audit> {
     AUDIT.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-// A listener's context is borrowed until stop completes. Serialize output and
-// detach with a separate lock, so the callback never holds the state lock.
-static OUTPUT: Mutex<()> = Mutex::new(());
-thread_local! { static IN_OUTPUT: Cell<bool> = const { Cell::new(false) }; }
-
-struct Output {
-    _guard: MutexGuard<'static, ()>,
-}
-
-impl Output {
-    fn enter() -> Option<Self> {
-        if IN_OUTPUT.get() {
-            return None;
-        }
-        let guard = OUTPUT.lock().unwrap_or_else(PoisonError::into_inner);
-        IN_OUTPUT.set(true);
-        Some(Self { _guard: guard })
-    }
-}
-
-impl Drop for Output {
-    fn drop(&mut self) {
-        IN_OUTPUT.set(false);
-    }
 }
 
 #[unsafe(no_mangle)]

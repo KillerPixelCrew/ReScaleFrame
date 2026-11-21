@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
+use crate::diagnostic_output::Output;
 use crate::dlss_streamline_abi::{rsf_dlss_plan as Plan, rsf_dlss_support as Support};
 use crate::gl_pipeline_abi::{rsf_dlss_log_fn as Log, rsf_dlss_setup as Setup};
 use crate::render_abi::{RSF_DLSS_ABI_VERSION, rsf_dlss_frame as Frame};
@@ -372,6 +373,9 @@ unsafe extern "C" fn rsf_core_dlss_streamline_release(viewport: u32, platform: &
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_dlss_streamline_shutdown(platform: &Platform) -> i32 {
+    if Output::active_here() {
+        return NOT_READY;
+    }
     let Ok(mut state) = SESSION.try_lock() else {
         return NOT_READY;
     };

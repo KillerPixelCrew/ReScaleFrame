@@ -4,6 +4,12 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now owns the Streamline SDK log registrations used by legacy SR
+and the D3D12 host. The D3D12 callback no longer dereferences the
+native host. Teardown drains the listener before unloading the
+interposer. SDK logs skip a busy listener, and a lifecycle request
+from a diagnostic callback can retry after the callback returns.
+
 Rust now owns D3D12 sharpening admission, pipeline leases, scratch
 replacement and the three descriptor slots. The caller still retires
 each slot before reuse. Native leaves preserve the descriptor layout,

@@ -62,6 +62,8 @@ mod depth_replay;
 #[cfg(windows)]
 mod depth_scale;
 #[cfg(windows)]
+mod diagnostic_output;
+#[cfg(windows)]
 mod dlss_native12;
 #[cfg(windows)]
 mod dlss_pipeline;
@@ -235,6 +237,8 @@ mod sr_legacy;
 mod sr_session;
 #[cfg(windows)]
 mod streamline_host;
+#[cfg(windows)]
+mod streamline_log;
 #[cfg(windows)]
 mod texture_dump;
 #[cfg(windows)]

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <rescaleframe/streamline_host.h>
+#include "streamline_diagnostics.h"
 #include "streamline_frame.h"
 #include "reflex_audit.h"
 #include "streamline_load.h"
@@ -8,7 +9,6 @@
 #include "../../common/d3d12_helpers.h"
 #include <wrl/client.h>
 #include <dxgi1_6.h>
-#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
@@ -166,7 +166,6 @@ struct Native {
     HRESULT (*common_after_present)(UINT){};
     rsf::MfgUnlock mfg;
 };
-std::atomic<Native*> logging_host{nullptr};
 // One driver ring snapshot. The Rust owner serializes its capture and write.
 sl::ReflexState ring;
 
@@ -206,9 +205,9 @@ void report_driver_sleep(Native& host)
 }
 void message(sl::LogType type, const char* text)
 {
-    const auto* host = logging_host.load();
-    if (host && !host->development_runtime && type != sl::LogType::eError && type != sl::LogType::eWarn) return;
-    if (host && host->log) host->log(host->log_user, text);
+    rsf_core_streamline_log_emit(RSF_STREAMLINE_LOG_D3D12_HOST,
+        uint32_t(type == sl::LogType::eError || type == sl::LogType::eWarn),
+        text, rsf::emit_streamline_log);
 }
 template<class T> bool feature(Native& host, sl::Feature id, const char* name, T*& out)
 {
@@ -223,7 +222,7 @@ void dispose(Native* host)
     host->device.Reset(); host->native_device.Reset();
     if (host->initialized) host->shutdown();
     host->mfg.release();
-    if (logging_host.load() == host) logging_host = nullptr;
+    rsf_core_streamline_log_clear(RSF_STREAMLINE_LOG_D3D12_HOST, uintptr_t(host));
     if (host->module) FreeLibrary(host->module);
     delete host;
 }
@@ -284,7 +283,9 @@ int32_t open(const rsf_streamline_host_setup* setup, void* existing_device, void
     if (!host->development_runtime) preferences.flags |= sl::PreferenceFlags::eDisableDebugText;
     preferences.renderAPI = sl::RenderAPI::eD3D12; preferences.showConsole = host->development_runtime;
     preferences.logLevel = host->development_runtime ? sl::LogLevel::eVerbose : sl::LogLevel::eDefault;
-    logging_host = host; preferences.logMessageCallback = message;
+    rsf_core_streamline_log_set(RSF_STREAMLINE_LOG_D3D12_HOST, uintptr_t(host),
+        host->log, host->log_user, uint32_t(host->development_runtime));
+    preferences.logMessageCallback = message;
     uint32_t feature_count = 0;
     if (features & feature_dlss) host->features[feature_count++] = sl::kFeatureDLSS;
     if (features & feature_pcl) host->features[feature_count++] = sl::kFeaturePCL;

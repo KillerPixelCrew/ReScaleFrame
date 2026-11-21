@@ -2,6 +2,7 @@
 // The first-party D3D12 Streamline host behind rescaleframe/streamline_host.h. Rust owns its
 // lifetime, interposer admission, feature routing, frame tokens, marker ordering and Reflex/PCL
 // pacing state. The native table holds every typed SDK, COM and Win32 call.
+use crate::diagnostic_output::Output;
 use crate::native_fg_cpu_abi::rsf_streamline_latency_status as LatencyStatus;
 use crate::render_abi::{
     RSF_PACING_NONE, RSF_PACING_REFLEX, RSF_REFLEX_BOOST, RSF_REFLEX_OFF,
@@ -307,6 +308,9 @@ unsafe extern "C" fn rsf_core_slhost_create(
         return INVALID;
     }
     unsafe { out.write(null_mut()) };
+    if Output::active_here() {
+        return NOT_READY;
+    }
     let setup = unsafe { &*setup };
     if setup.abi_version != ABI_VERSION {
         return ABI_MISMATCH;
@@ -380,6 +384,9 @@ unsafe extern "C" fn rsf_core_slhost_create(
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_slhost_destroy(host: *mut Host, platform: &Platform) -> i32 {
+    if Output::active_here() {
+        return NOT_READY;
+    }
     let Some(owner) = (unsafe { host.as_ref() }) else {
         return INVALID;
     };

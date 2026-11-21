@@ -2,6 +2,7 @@
 
 #include <rescaleframe/dlss.h>
 #include <rescaleframe/streamline_host.h>
+#include "streamline_diagnostics.h"
 #include "streamline_frame.h"
 #include "streamline_load.h"
 
@@ -28,8 +29,8 @@
 #define RSF_HAVE_SIGNATURE_CHECK 0
 #endif
 
+#include <cstdio>
 #include <memory>
-#include <mutex>
 #include <string>
 
 struct rsf_streamline_sr_options {
@@ -86,7 +87,11 @@ struct Entries {
 };
 
 struct Native {
-    ~Native() { if (interposer) FreeLibrary(interposer); }
+    ~Native()
+    {
+        rsf_core_streamline_log_clear(RSF_STREAMLINE_LOG_LEGACY_SR, 0);
+        if (interposer) FreeLibrary(interposer);
+    }
     HMODULE interposer = nullptr;
     Entries sl{};
     PFun_slDLSSGetOptimalSettings* get_optimal_settings = nullptr;
@@ -100,32 +105,25 @@ struct Native {
     const wchar_t* plugin_paths[1]{};
 };
 
-struct LogSink {
-    rsf_dlss_log_fn callback{};
-    void* user{};
-};
-std::mutex log_mutex;
-LogSink sink;
-
-void set_log(rsf_dlss_log_fn callback, void* user) noexcept try
+void set_log(rsf_dlss_log_fn callback, void* user)
 {
-    std::lock_guard<std::mutex> lock(log_mutex);
-    sink = {callback, user};
-} catch (...) {}
+    if (callback) {
+        rsf_core_streamline_log_set(RSF_STREAMLINE_LOG_LEGACY_SR, 0, callback, user, 0);
+    } else {
+        rsf_core_streamline_log_clear(RSF_STREAMLINE_LOG_LEGACY_SR, 0);
+    }
+}
 
 template <typename... Arguments>
 void say(const char* format, Arguments... arguments) noexcept try
 {
-    LogSink log{};
-    {
-        std::lock_guard<std::mutex> lock(log_mutex);
-        log = sink;
-    }
+    char text[512]{};
     if constexpr (sizeof...(arguments) == 0) {
-        rsf::say(log.callback, log.user, "%s", format);
+        std::snprintf(text, sizeof(text), "%s", format);
     } else {
-        rsf::say(log.callback, log.user, format, arguments...);
+        std::snprintf(text, sizeof(text), format, arguments...);
     }
+    rsf_core_streamline_log_emit(RSF_STREAMLINE_LOG_LEGACY_SR, 1, text, rsf::emit_streamline_log);
 } catch (...) {}
 
 // Streamline's own log messages, forwarded to the same sink rather than to a console nobody sees.
@@ -578,9 +576,8 @@ int32_t shutdown(void* native) noexcept try
 
 void destroy(void* native) noexcept
 {
-    delete static_cast<Native*>(native);
     say("streamline shut down");
-    set_log(nullptr, nullptr);
+    delete static_cast<Native*>(native);
 }
 
 constexpr rsf_streamline_sr_platform platform{start_owned, borrow_host, set_device, query_support,
