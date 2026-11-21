@@ -29,7 +29,8 @@ window facts.
 `runtime_control.cpp` keeps the typed godot-cpp `Dictionary`, `RID` and `RenderingServer` calls and
 the status Dictionary keys. The D3D12 SR context, its fences, slots and pending submissions, DXGI
 vendor lookup and the Win32 input window stay in `runtime.cpp` and report each evaluated SR pass
-to the owner (the context and submission state moved to `d3d12.rs` in the third slice). No second Runtime is loaded, and no vendor, pacing or presentation policy moved into
+to the owner (the context and submission state moved to `d3d12.rs` in the third slice, the input
+window to `window.rs` in the fifth). No second Runtime is loaded, and no vendor, pacing or presentation policy moved into
 the integration; FG backend Auto resolution and SR Auto resolution still call the Runtime's
 `rsf_fg_default_backend` and `rsf_gpu_default_sr_backend`.
 
@@ -215,6 +216,67 @@ the new records and table. Not run: native build and link, Cargo tests (`native/
 `native/vulkan/tests.rs`), Clippy, CTest, editor, exported players, device fixtures and visual
 harness.
 
+## Rust window and input owner, fifth slice
+
+`native/window.rs` now owns the window and input state `runtime.cpp` held in globals, and
+`vulkan.rs` the Vulkan primary window `vulkan.cpp` held:
+
+- the input window admission: the first window of this process whose class is `Engine` (the class
+  Godot's Windows display server registers), asked by the Runtime's `accept_window` trampoline
+  (installed with the D3D12 FG presenter, which asks it for a swapchain's window) and by
+  `rsfg_vk_window`, kept until `rsfg_shutdown`;
+- the input session from the engine module's CPU events, stamped on window messages;
+- the window procedure: attached at the first `FRAME_BEGIN` after admission and retried at the next
+  one when `SetWindowLongPtrW` fails, reporting each received message as an `INPUT_EVENT` with
+  `INPUT_KEYED | WINDOW_MESSAGE`, the QPC time and the message ID, then forwarding to the replaced
+  procedure (`DefWindowProcW` before one is known). The procedure itself is the Rust
+  `extern "system"` function, so the checked restore compares the window's procedure with it;
+- the checked restoration in `rsfg_shutdown` (only while it is still the window's procedure; the
+  admission and session end either way), the CPU event and PCL ping routing (the Vulkan latency
+  owner while the Vulkan session is booted, otherwise the D3D12 FG owner and native latency ping),
+  the window the status facts describe, and the Vulkan present-marker admission (booted Vulkan
+  session, nonzero window equal to the admitted one);
+- in `vulkan.rs`: the primary window `rsfg_vk_window` reports while booted (admitted or not),
+  cleared just before each start leaf, read by the FSR4 and XeSS FG admission and, through
+  `rsf_godot_vk_primary_window`, by the presenter host options in `rsfg_vk_create`.
+
+`runtime.cpp` keeps every `rsfg_*` export with its name and signature as a forwarder and lends ten
+typed leaves appended to `rsf_godot_platform` (version 5, 520 bytes, asserted on both sides):
+`GetWindowThreadProcessId`/`GetClassNameW` into `rsf_godot_window_identity` (144 bytes),
+`GetWindowLongPtrW`/`SetWindowLongPtrW` of `GWLP_WNDPROC`, `CallWindowProcW`/`DefWindowProcW`,
+the QPC pair, `rsf_fg12_cpu`, `rsf_latencyvk_cpu`, `rsf_native_latency_ping`, `rsf_latencyvk_ping`
+and `rsf_latencyvk_present`. `window_facts` now takes the admitted window. `rsfg_vk_native_present`
+keeps its thread-local capture flag, set from an admitted marker as before. The Vulkan facts field
+`primary_window` is now `reserved` and zero; `rsf::godot_vk::window` and `cpu` are gone. `api.h`,
+the engine module interface, every `rsfg_*` export, the Runtime calls and their order are
+unchanged; the window message events are built from the generated `rsf_game_cpu_event` binding.
+
+Preserved behaviour, including quirks: a window the admission refused still becomes the Vulkan
+primary window; a refused restore keeps the procedure attached and forwarding (a later subclass
+forwards to it), keeps reporting messages with session zero, and nothing is attached again;
+window messages route by the Vulkan boot state at delivery, not by a D3D12 boot; the D3D12
+ping is asked even without a booted session. Intentional differences: a null window is refused
+before the identity leaf (Win32 refused it as an invalid window before), and the identity leaf
+always reads the class name, where the C++ skipped it for another process's window.
+
+Lifetime review from source: no concrete local defect found. The attach and the procedure share
+one thread: `rsfg_cpu` `FRAME_BEGIN` comes from `RSFGodot::cpu_begin`, which the engine patch
+calls from the main loop and from the Windows display server's event processing
+(`eng/patch-godot.py`), the thread that owns the window, and `SetWindowLongPtrW` dispatches no
+message, so the procedure never runs between the swap and the stored previous procedure. The
+module boots once per process (`bridge.cpp`), so the stale attached state after a refused restore
+is not reachable again. Unverified: whether `RSFGodot::shutdown` runs before the display server
+destroys the window (if after, `GetWindowLongPtrW` fails and the restore is skipped, which is
+harmless for a destroyed window), and whether the shared overlay's own subclass sits above this
+one in a Godot D3D12 session, which is the case the refused restore covers.
+
+This is a behaviour-preserving port from source review, with no new experiment. Checks: rustfmt
+1.11.0 `--edition 2024 --check` (the pinned 1.94.1 toolchain is not installed), `git diff
+--check`, and size and offset assertions for the new record and table in `platform.rs` and
+`runtime.cpp`. Not run: native build and link, Cargo tests (`native/window/tests.rs`, the updated
+`native/vulkan/tests.rs`), Clippy, CTest, editor, exported players, device fixtures and visual
+harness.
+
 ## Remaining Godot ownership slices
 
 1. Vulkan Auto SR and FG resolution (Rule 3). `vulkan.rs` still resolves `Auto` to FSR3 for both,
@@ -224,22 +286,25 @@ harness.
    time; `rsf_fg_default_backend` picks by vendor and would change behaviour. Moving this needs a
    Runtime policy that takes the Vulkan host's servable providers and an adapter fact from the
    packet, which is a behaviour decision outside this behaviour-preserving slice.
-2. Window ownership: the `Engine` window-class admission, the WNDPROC subclass and its restore,
-   the input session and PCL ping routing in `runtime.cpp`, and the Vulkan primary window and
-   present-marker admission (`rsfg_vk_window`, `rsfg_vk_present_marker`).
-3. `vulkan_creation.cpp`: the creation resolver, device feature and extension requirements, and
+2. `vulkan_creation.cpp`: the creation resolver, device feature and extension requirements, and
    XeSS/interop readiness.
-4. `effect.cpp`: the compositor probe snapshot and the motion capture classification
+3. `effect.cpp`: the compositor probe snapshot and the motion capture classification
    (unwritten, moving and non-finite pixels). The GPU readback stays a godot-cpp leaf.
-5. The engine module `modules/rescaleframe` (bridge, graph, motion, D3D12 and Vulkan drivers) is
+4. The engine module `modules/rescaleframe` (bridge, graph, motion, D3D12 and Vulkan drivers) is
    compiled into the Godot engine by SCons against engine headers and cannot link this archive. It
    still holds CPU frame identity and markers, the primary viewport, render-scale policy (the
    per-quality scale table and scaling mode), history reset heuristics, camera matrices, motion
    resolve and a second Dictionary option parser in `ReScaleFrameBridge::configure`. Sharing the
-   option schema there needs a new native export, which is an ABI change.
-6. The addon (`settings.gd`, `controller.gd`, `csharp/ReScaleFrame.cs`) keeps its own option
+   option schema there needs a new native export, which is an ABI change. Its input sources stay
+   there and reach `window.rs` only through `rsfg_cpu`: the frame begin, input sample, simulation
+   and frame end events (`cpu_begin`, `cpu_simulation_begin`, `queue_frame`, `cpu_end`), and the
+   keyboard, mouse/touch and joypad kinds `Input::_parse_input_event_impl` reports through
+   `RSFGodot::input_event` with `INPUT_UNFRAMED` outside a frame. The window handle passed to
+   `rsfg_vk_window` and each Vulkan surface's `rescaleframe_window` for the present marker are
+   engine module facts too.
+5. The addon (`settings.gd`, `controller.gd`, `csharp/ReScaleFrame.cs`) keeps its own option
    defaults for the Inspector resource.
-7. D3D12 residue in the `runtime.cpp` leaves: the fixed SR context inputs (setup ABI 1 planning,
+6. D3D12 residue in the `runtime.cpp` leaves: the fixed SR context inputs (setup ABI 1 planning,
    inverted depth, the custom DLSS engine identity and its flag) and the capture record mapping
    from the pass (view, reset flag, extents, frame time) could move into the owner's request
    records.

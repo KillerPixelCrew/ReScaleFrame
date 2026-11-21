@@ -8,14 +8,16 @@
 
    Rust owns the requested settings and their generation, the extension option schema, renderer
    admission, engine-service routing, the D3D12 session identity and paths, the status record,
-   the D3D12 SR context plan and submission ledger (d3d12.rs), and the Vulkan session (boot state,
-   settings, generation, status, configure admission, the presenter, FG and SR accounting, and the
-   SR context owner in vulkan/sr.rs). The leaves hold godot-cpp, D3D12, DXGI, Win32, Vulkan and
-   Runtime calls and decide nothing. */
+   the D3D12 SR context plan and submission ledger (d3d12.rs), the Vulkan session (boot state,
+   settings, generation, status, configure admission, the presenter, FG and SR accounting, the
+   primary window, and the SR context owner in vulkan/sr.rs), and the input window owner
+   (window.rs: admission, window procedure, input session, CPU event and ping routing, and the
+   present-marker admission). The leaves hold godot-cpp, D3D12, DXGI, Win32, Vulkan and Runtime
+   calls and decide nothing. */
 #include "api.h"
 #include <stdint.h>
 
-#define RSF_GODOT_PLATFORM_VERSION 4u
+#define RSF_GODOT_PLATFORM_VERSION 5u
 
 /* Mirror of rsf_native_fg_options without its header. */
 typedef struct rsf_godot_fg_options {
@@ -57,6 +59,14 @@ typedef struct rsf_godot_window_facts {
     uint32_t foreground_process_id, current_process_id;
     uint32_t input_window_visible, reserved;
 } rsf_godot_window_facts;
+
+/* The owner process and class of a candidate input window, as read. process_id is zero for an
+   invalid window; class_length is GetClassNameW's count into class_name, zero on failure. */
+typedef struct rsf_godot_window_identity {
+    uint32_t process_id, current_process_id;
+    uint32_t class_length, reserved;
+    uint16_t class_name[64];
+} rsf_godot_window_identity;
 
 /* rsf_fg12_status plus the shared presentation provider, typed as the status fields. */
 typedef struct rsf_godot_fg_facts {
@@ -103,7 +113,9 @@ typedef struct rsf_godot_sr_evaluate {
 typedef struct rsf_godot_vk_facts {
     uint32_t xess_device_ready, interop_device_ready, graph_handoff;
     uint32_t fsr4_sr_compiled, fsr4_fg_compiled, xess_fg_compiled;
-    uint32_t presenter, primary_window;
+    uint32_t presenter;
+    /* Formerly primary_window; the Vulkan session owns that window now. Zero. */
+    uint32_t reserved;
     /* rsf_fgvk_backend of the live presenter; zero without one or when the query fails. */
     uint32_t presenter_backend;
     uint32_t sdk_shutdown_pending;
@@ -215,7 +227,8 @@ typedef struct rsf_godot_platform {
     int32_t (*vulkan_latency_options)(uint32_t mode, uint32_t frame_limit_us);
     /* Status facts. latency_facts returns zero when the Runtime has no latency status. */
     void (*cpu_counters)(rsf_godot_input_facts* facts);
-    void (*window_facts)(rsf_godot_window_facts* facts);
+    /* The foreground process and whether window, the admitted input window or null, is visible. */
+    void (*window_facts)(void* window, rsf_godot_window_facts* facts);
     void (*fg_facts)(rsf_godot_fg_facts* facts);
     uint32_t (*latency_facts)(rsf_godot_latency_facts* facts);
     /* The D3D12 SR context and submission leaves (d3d12.rs), called on Godot's render thread.
@@ -283,6 +296,28 @@ typedef struct rsf_godot_platform {
     uint32_t (*vulkan_sr_log)(void* call, uint32_t kind, int32_t provider_result, int32_t fallback_result);
     /* rsf_input_dump_result of the call's record for the "sr" stage. */
     uint32_t (*vulkan_sr_dump_result)(void* call, uint32_t backend, int32_t result);
+    /* The window and input leaves (window.rs). Windows are handles passed through; a procedure is
+       a WNDPROC as GWLP_WNDPROC stores it. window_forward runs on the window's thread inside the
+       owner's procedure and may re-enter it. */
+    /* GetWindowThreadProcessId, GetCurrentProcessId and GetClassNameW into 64 characters. */
+    void (*window_identity)(void* window, rsf_godot_window_identity* identity);
+    /* GetWindowLongPtrW(GWLP_WNDPROC); zero on failure. */
+    intptr_t (*window_procedure_get)(void* window);
+    /* SetWindowLongPtrW(GWLP_WNDPROC): the replaced procedure, zero on failure. */
+    intptr_t (*window_procedure_set)(void* window, intptr_t procedure);
+    /* CallWindowProcW of previous, or DefWindowProcW when previous is zero. */
+    intptr_t (*window_forward)(intptr_t previous, void* window, uint32_t message, uintptr_t wparam,
+        intptr_t lparam);
+    /* QueryPerformanceCounter and QueryPerformanceFrequency. */
+    void (*query_counter)(uint64_t* counter, uint64_t* frequency);
+    /* rsf_fg12_cpu and rsf_latencyvk_cpu. */
+    void (*cpu_event)(const rsf_game_cpu_event* event);
+    void (*vulkan_cpu_event)(const rsf_game_cpu_event* event);
+    /* rsf_native_latency_ping and rsf_latencyvk_ping of window. */
+    int32_t (*latency_ping)(void* window);
+    int32_t (*vulkan_latency_ping)(void* window);
+    /* rsf_latencyvk_present. */
+    void (*vulkan_present_marker)(uint32_t begin);
 } rsf_godot_platform;
 
 /* Extension option schema. The leaf reads each named Dictionary entry once, with the conversion
@@ -362,6 +397,24 @@ void rsf_godot_vk_fg_recorded(const rsf_godot_vk_fg_pass* pass, int32_t result);
 int rsf_godot_vk_sr_render(const rsf_godot_platform* platform, const rsf_godot_vk_sr_pass* pass);
 /* The live SR context handles, null when none, for rsfg_vk_recording_begin. */
 void rsf_godot_vk_sr_contexts(void** context, void** fsr4_context);
+/* The primary window rsfg_vk_window last reported since the session's start, or null. */
+void* rsf_godot_vk_primary_window(void);
+
+/* Input window owner (window.rs). */
+/* The Runtime's accept_window question: nonzero for the admitted window, the first window of this
+   process with the Engine class. */
+int rsf_godot_accept_window(const rsf_godot_platform* platform, void* window);
+/* rsfg_cpu with its boot and record checks: keeps the input session, attaches the window procedure
+   at a frame begin, and reports the event to the booted backend. */
+void rsf_godot_cpu(const rsf_godot_platform* platform, const rsf_game_cpu_event* event);
+/* The window part of rsfg_shutdown: the checked procedure restore and the end of the admission
+   and input session. */
+void rsf_godot_window_release(const rsf_godot_platform* platform);
+int rsf_godot_latency_ping(const rsf_godot_platform* platform);
+/* rsfg_vk_window: while the Vulkan session is booted, the admission and the primary window. */
+void rsf_godot_vk_window(const rsf_godot_platform* platform, void* window);
+/* rsfg_vk_present_marker: nonzero when the admitted window's marker was reported. */
+int rsf_godot_vk_present_marker(const rsf_godot_platform* platform, uint64_t window, uint32_t begin);
 
 /* Extension control (runtime_control.cpp). */
 const rsf_godot_option_field* rsf_godot_option_fields(uint32_t* count);

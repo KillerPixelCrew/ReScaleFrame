@@ -2,8 +2,8 @@
 //! Godot 4.7.2 native integration owner linked into `ReScaleFrame.Godot.Native.dll`. It owns the
 //! Runtime control, settings and D3D12 session state (`control.rs`), the D3D12 SR context and
 //! submission owner (`d3d12.rs`), the Vulkan session state (`vulkan.rs`) with its SR context
-//! owner (`vulkan/sr.rs`) and the `ReScaleFrameRuntime` option schema and renderer admission
-//! (`extension.rs`).
+//! owner (`vulkan/sr.rs`), the input window, its procedure and the input session (`window.rs`)
+//! and the `ReScaleFrameRuntime` option schema and renderer admission (`extension.rs`).
 //!
 //! The `rsfg_*` exports in `api.h`, the GDExtension entry and the godot-cpp classes stay C++.
 //! `runtime.cpp` and `vulkan.cpp` forward to these entry points and lend their leaves through
@@ -16,13 +16,14 @@ mod d3d12;
 mod extension;
 mod platform;
 mod vulkan;
+mod window;
 
 use control::Control;
 use platform::{
     ABI_VERSION, EngineServices, OptionField, OptionValue, Platform, SETTINGS_ABI_VERSION,
     Settings, Setup, Status, VkFgPass, VkPresentFacts, VkSrPass, VkView,
 };
-use rsf_game_sys::rsf_game_render_pass;
+use rsf_game_sys::{rsf_game_cpu_event, rsf_game_render_pass};
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::sync::LazyLock;
 
@@ -386,6 +387,112 @@ unsafe extern "C" fn rsf_godot_vk_sr_contexts(
             fsr4_context.write(fsr4);
         }
     }
+}
+
+// The input window owner (window.rs), called by the rsfg_* forwarders and the accept_window
+// trampoline in runtime.cpp.
+
+/// The Runtime's `accept_window` question and the admission `rsfg_vk_window` asks.
+///
+/// # Safety
+/// `table` is null or the leaf table; `window` is a window handle, compared and passed through.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_godot_accept_window(table: *const Platform, window: *mut c_void) -> c_int {
+    // SAFETY: the caller's guarantee.
+    unsafe { leaves(table) }
+        .is_some_and(|platform| CONTROL.window.accept(platform, window))
+        .into()
+}
+
+/// `rsfg_cpu`.
+///
+/// # Safety
+/// `table` is null or the leaf table; `event` is null or a readable `rsf_game_cpu_event` of its
+/// stated size.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_godot_cpu(table: *const Platform, event: *const rsf_game_cpu_event) {
+    let vulkan = CONTROL.vulkan.booted();
+    if !CONTROL.booted() && !vulkan {
+        return;
+    }
+    // SAFETY: the caller's guarantee; the record is read only when its size covers it.
+    let event = match unsafe { event.cast::<u32>().as_ref() } {
+        Some(&size) if size as usize >= size_of::<rsf_game_cpu_event>() => unsafe { &*event },
+        _ => return,
+    };
+    // SAFETY: the caller's guarantee.
+    if let Some(platform) = unsafe { leaves(table) } {
+        CONTROL.window.cpu(platform, vulkan, event);
+    }
+}
+
+/// The window part of `rsfg_shutdown`, before either backend stops.
+///
+/// # Safety
+/// `table` is null or the leaf table.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_godot_window_release(table: *const Platform) {
+    // SAFETY: the caller's guarantee.
+    if let Some(platform) = unsafe { leaves(table) } {
+        CONTROL.window.release(platform);
+    }
+}
+
+/// `rsfg_request_latency_ping`.
+///
+/// # Safety
+/// `table` is null or the leaf table.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_godot_latency_ping(table: *const Platform) -> c_int {
+    // SAFETY: the caller's guarantee.
+    unsafe { leaves(table) }.map_or(0, |platform| {
+        CONTROL
+            .window
+            .latency_ping(platform, CONTROL.vulkan.booted())
+    })
+}
+
+/// `rsfg_vk_window`: while the Vulkan session is booted, asks the input window admission and
+/// keeps the window as the session's primary window either way.
+///
+/// # Safety
+/// `table` is null or the leaf table; `window` is a window handle, compared and passed through.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_godot_vk_window(table: *const Platform, window: *mut c_void) {
+    // SAFETY: the caller's guarantee.
+    if let Some(platform) = unsafe { leaves(table) }
+        && CONTROL.vulkan.booted()
+    {
+        CONTROL.window.accept(platform, window);
+        CONTROL.vulkan.report_window(window);
+    }
+}
+
+/// The Vulkan session's primary window, null when none was reported since its start. Read by
+/// `rsfg_vk_create` under the guard.
+#[unsafe(no_mangle)]
+extern "C" fn rsf_godot_vk_primary_window() -> *mut c_void {
+    CONTROL.vulkan.primary_window()
+}
+
+/// `rsfg_vk_present_marker`: nonzero when the marker was reported for the admitted window.
+///
+/// # Safety
+/// `table` is null or the leaf table.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_godot_vk_present_marker(
+    table: *const Platform,
+    window: u64,
+    begin: u32,
+) -> c_int {
+    // SAFETY: the caller's guarantee.
+    unsafe { leaves(table) }
+        .is_some_and(|platform| {
+            CONTROL
+                .window
+                .present_marker(platform, CONTROL.vulkan.booted(), window, begin)
+        })
+        .into()
 }
 
 /// # Safety

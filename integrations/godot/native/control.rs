@@ -7,13 +7,15 @@
 //! The Vulkan session (`vulkan.rs`) holds its own settings, generation and status record, as
 //! `vulkan.cpp` did; while it is booted, configuration, settings and status route to it after the
 //! same refusal rules. The D3D12 SR context and submission owner (`d3d12.rs`) reads the request,
-//! its generation and the paths here and reports each evaluated pass here.
+//! its generation and the paths here and reports each evaluated pass here. The input window
+//! owner (`window.rs`) supplies the window the status facts describe.
 use crate::d3d12::D3d12;
 use crate::platform::{
     EngineServices, FgFacts, FgInstall, FgOptions, InputFacts, LatencyFacts, Paths, Platform,
     SETTINGS_ABI_VERSION, Settings, Setup, Sharpening, SrFrame, Status, WindowFacts,
 };
 use crate::vulkan::Vulkan;
+use crate::window::Window;
 use rsf_game_sys::rsf_game_log_fn;
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -170,6 +172,8 @@ pub(crate) struct Control {
     session: Mutex<Session>,
     pub(crate) vulkan: Vulkan,
     pub(crate) d3d12: D3d12,
+    /// The input window, its procedure and the input session, shared by both backends.
+    pub(crate) window: Window,
 }
 
 impl Control {
@@ -177,6 +181,7 @@ impl Control {
         Self {
             vulkan: Vulkan::new(),
             d3d12: D3d12::new(),
+            window: Window::new(),
             booted: AtomicBool::new(false),
             boot_gate: Mutex::new(()),
             session: Mutex::new(Session {
@@ -349,7 +354,7 @@ impl Control {
             let (mut value, result) = self.vulkan.status(platform);
             if result != 0 {
                 apply_inputs(&mut value, &platform.cpu_counters());
-                apply_window(&mut value, &platform.window_facts());
+                apply_window(&mut value, &platform.window_facts(self.window.input()));
             }
             // SAFETY: the caller's guarantee.
             unsafe { output.write(value) };
@@ -360,7 +365,7 @@ impl Control {
         }
         let mut value = self.session().status;
         apply_fg(&mut value, &platform.fg_facts());
-        apply_window(&mut value, &platform.window_facts());
+        apply_window(&mut value, &platform.window_facts(self.window.input()));
         if let Some(latency) = platform.latency_facts() {
             apply_latency(&mut value, &latency);
         }

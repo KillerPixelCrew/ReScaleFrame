@@ -16,9 +16,13 @@ fn setup(runtime: &CStr) -> Setup {
     }
 }
 
+const WINDOW: usize = 0x1234;
+
+/// A booted session whose engine reported its primary window.
 fn booted() -> Vulkan {
     let vulkan = Vulkan::new();
     assert_eq!(vulkan.boot(&fake::LEAVES, &setup(c"C:/game/runtime")), 1);
+    vulkan.report_window(ptr::without_provenance_mut(WINDOW));
     fake::take_calls();
     vulkan
 }
@@ -33,7 +37,7 @@ fn ready() -> VkFacts {
         fsr4_fg_compiled: 1,
         xess_fg_compiled: 1,
         presenter: 1,
-        primary_window: 1,
+        reserved: 0,
         presenter_backend: FG_FSR3,
         sdk_shutdown_pending: 0,
     }
@@ -148,7 +152,7 @@ fn an_unbooted_session_refuses_configuration() {
 #[test]
 fn device_and_provider_refusals_keep_the_request() {
     let vulkan = booted();
-    let refusals: [(VkFacts, Settings); 12] = [
+    let refusals: [(VkFacts, Settings); 11] = [
         (
             VkFacts {
                 xess_device_ready: 0,
@@ -187,13 +191,6 @@ fn device_and_provider_refusals_keep_the_request() {
         (
             VkFacts {
                 presenter: 0,
-                ..ready()
-            },
-            settings(|s| s.fg_backend = FG_FSR4),
-        ),
-        (
-            VkFacts {
-                primary_window: 0,
                 ..ready()
             },
             settings(|s| s.fg_backend = FG_FSR4),
@@ -241,6 +238,35 @@ fn device_and_provider_refusals_keep_the_request() {
         assert!(!fake::take_calls().contains(&"latency_options"));
     }
     assert_eq!(vulkan.view().0.generation, 1);
+}
+
+#[test]
+fn interop_fg_needs_the_primary_window_reported_since_the_start() {
+    let vulkan = Vulkan::new();
+    assert_eq!(vulkan.boot(&fake::LEAVES, &setup(c"C:/game/runtime")), 1);
+    fake::VK_FACTS.set(ready());
+    fake::VK_PROBE.set(1);
+    let fsr4 = settings(|s| s.fg_backend = FG_FSR4);
+    let xess = settings(|s| s.fg_backend = FG_XESS);
+    fake::take_calls();
+    // Refused before the probe without a reported window.
+    assert_eq!(vulkan.configure(&fake::LEAVES, &fsr4), 0);
+    assert_eq!(vulkan.configure(&fake::LEAVES, &xess), 0);
+    assert_eq!(fake::take_calls(), ["facts", "facts"]);
+    vulkan.report_window(ptr::without_provenance_mut(WINDOW));
+    assert_eq!(vulkan.primary_window().addr(), WINDOW);
+    assert_eq!(vulkan.configure(&fake::LEAVES, &fsr4), 1);
+    assert_eq!(vulkan.configure(&fake::LEAVES, &xess), 1);
+    // A refused boot keeps it; the next start clears it, also when the start refuses.
+    assert_eq!(vulkan.boot(&fake::LEAVES, &setup(c"C:/game/runtime")), 0);
+    assert_eq!(vulkan.primary_window().addr(), WINDOW);
+    assert_eq!(vulkan.shutdown(&fake::LEAVES), 1);
+    fake::VK_FACTS.set(VkFacts::default());
+    fake::VK_START.set(0);
+    assert_eq!(vulkan.boot(&fake::LEAVES, &setup(c"C:/game/runtime")), 0);
+    assert!(vulkan.primary_window().is_null());
+    fake::VK_START.set(1);
+    fake::VK_PROBE.set(0);
 }
 
 #[test]

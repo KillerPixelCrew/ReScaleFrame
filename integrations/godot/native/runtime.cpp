@@ -24,9 +24,11 @@
 // engine-service routing are owned by the Rust control owner (native/control.rs), the D3D12 SR
 // context plan, its retirement and recreation, the fence and slot ledger, the pending
 // submissions and the Present pass identity by native/d3d12.rs, the Vulkan session by
-// native/vulkan.rs. This file keeps the rsfg_* exports as forwarders and the leaves: the device,
-// queue and fence references, the Runtime SR, FG and presentation calls, capture, DXGI, Win32
-// window calls and the linked Runtime. The Vulkan leaves in the table below live in vulkan.cpp.
+// native/vulkan.rs, and the input window admission, its window procedure, the input session, the
+// CPU event and ping routing and the present-marker admission by native/window.rs. This file
+// keeps the rsfg_* exports as forwarders and the leaves: the device, queue and fence references,
+// the Runtime SR, FG, presentation, CPU event and latency calls, capture, DXGI, Win32 window
+// calls and the linked Runtime. The Vulkan leaves in the table below live in vulkan.cpp.
 static_assert(sizeof(rsf_sharpening_options) == 56);
 static_assert(sizeof(rsf_godot_settings) == 100 && offsetof(rsf_godot_settings, sharpening) == 44);
 static_assert(sizeof(rsf_godot_status) == 256 && offsetof(rsf_godot_status, sr_result) == 40 &&
@@ -43,11 +45,19 @@ static_assert(sizeof(rsf_godot_sr_create) == 88 && offsetof(rsf_godot_sr_create,
     sizeof(rsf_godot_sr_context) == 24 && offsetof(rsf_godot_sr_context, desired_width) == 12 &&
     sizeof(rsf_godot_sr_evaluate) == 64);
 static_assert(sizeof(rsf_godot_option_field) == 16 && sizeof(rsf_godot_option_value) == 24);
-static_assert(sizeof(rsf_godot_platform) == 440 && offsetof(rsf_godot_platform, vulkan_locked) == 88 &&
+static_assert(sizeof(rsf_godot_platform) == 520 && offsetof(rsf_godot_platform, vulkan_locked) == 88 &&
     offsetof(rsf_godot_platform, latency_facts) == 176 && offsetof(rsf_godot_platform, d3d12_bind) == 184 &&
     offsetof(rsf_godot_platform, sr_evaluate) == 256 && offsetof(rsf_godot_platform, d3d12_release) == 320 &&
     offsetof(rsf_godot_platform, vulkan_presenter_drain) == 328 && offsetof(rsf_godot_platform, vulkan_sr_create) == 360 &&
-    offsetof(rsf_godot_platform, vulkan_sr_evaluate) == 400 && offsetof(rsf_godot_platform, vulkan_sr_dump_result) == 432);
+    offsetof(rsf_godot_platform, vulkan_sr_evaluate) == 400 && offsetof(rsf_godot_platform, vulkan_sr_dump_result) == 432 &&
+    offsetof(rsf_godot_platform, window_identity) == 440 && offsetof(rsf_godot_platform, cpu_event) == 480 &&
+    offsetof(rsf_godot_platform, vulkan_present_marker) == 512);
+static_assert(sizeof(rsf_godot_window_identity) == 144 && offsetof(rsf_godot_window_identity, class_name) == 16);
+static_assert(sizeof(rsf_game_cpu_event) == 64 && RSF_GAME_CPU_FRAME_BEGIN == 0 && RSF_GAME_CPU_INPUT_EVENT == 5 &&
+    RSF_GAME_CPU_EVENT_VERSION == 1 && RSF_GAME_CPU_INPUT_KEYED == 1 && RSF_GAME_CPU_WINDOW_MESSAGE == 4,
+    "native/window.rs builds window message events from rsf-game-sys");
+static_assert(sizeof(WNDPROC) == sizeof(intptr_t) && sizeof(LRESULT) == sizeof(intptr_t) &&
+    sizeof(WPARAM) == sizeof(uintptr_t) && sizeof(LPARAM) == sizeof(intptr_t) && sizeof(wchar_t) == sizeof(uint16_t));
 static_assert(RSF_SR_AUTO == 7 && RSF_SR_SPATIAL == 6 && RSF_SR_DLSS == 1 && RSF_FG_BACKEND_AUTO == 7 &&
     RSF_FG_OFF == 0 && RSF_FG_FIXED == 1 && RSF_REFLEX_OFF == 0 && RSF_UI_MODE_BACKBUFFER_HUDLESS == 4 &&
     RSF_DLSS_ENGINE_CUSTOM == 0 && RSF_FG_STAT_TOTAL_PRESENTED == 1 && RSF_BACKEND_OK == 0,
@@ -61,19 +71,10 @@ using Microsoft::WRL::ComPtr;
 ComPtr<ID3D12Device> device;
 ComPtr<ID3D12CommandQueue> queue;
 ComPtr<ID3D12Fence> fence;
+// Set by an admitted Vulkan Present begin marker on the presenting thread; the native Present on
+// that thread then captures its image.
 thread_local bool capture_native_primary_present = false;
-std::atomic<HWND> input_window{nullptr};
-WNDPROC previous_proc = nullptr;
-std::atomic<uint64_t> input_session{0};
 std::unique_ptr<rsf::FrameCapture12> capture;
-LRESULT CALLBACK input_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
-{
-    LARGE_INTEGER now{},frequency{}; QueryPerformanceCounter(&now); QueryPerformanceFrequency(&frequency);
-    rsf_game_cpu_event fact{sizeof(fact),RSF_GAME_CPU_INPUT_EVENT,input_session.load(),0,uint64_t(now.QuadPart),
-        uint64_t(frequency.QuadPart),0,0,message,RSF_GAME_CPU_EVENT_VERSION,RSF_GAME_CPU_INPUT_KEYED | RSF_GAME_CPU_WINDOW_MESSAGE};
-    if (rsf::godot_vk::booted()) rsf::godot_vk::cpu(&fact); else rsf_fg12_cpu(&fact);
-    return previous_proc ? CallWindowProcW(previous_proc, window, message, wparam, lparam) : DefWindowProcW(window, message, wparam, lparam);
-}
 
 void log(void*, const char* message)
 {
@@ -88,15 +89,10 @@ bool wait(uint64_t value)
     CloseHandle(event);
     return okay;
 }
+// The Runtime's accept_window trampoline; native/window.rs admits the window.
 int accept(void*, void* window)
 {
-    DWORD process = 0;
-    GetWindowThreadProcessId(static_cast<HWND>(window), &process);
-    wchar_t name[64]{};
-    if (process != GetCurrentProcessId() || !GetClassNameW(static_cast<HWND>(window), name, 64) || std::wcscmp(name, L"Engine") != 0) return 0;
-    HWND expected = nullptr;
-    input_window.compare_exchange_strong(expected, static_cast<HWND>(window));
-    return input_window.load() == window;
+    return rsf_godot_accept_window(rsf_godot_platform_leaves(), window);
 }
 uint32_t vendor_id()
 {
@@ -146,14 +142,49 @@ void leaf_cpu_counters(rsf_godot_input_facts* facts)
     facts->substitutes = inputs.substitutes; facts->order_violations = inputs.order_violations;
     facts->derived_boundaries = inputs.derived_frame_ends;
 }
-void leaf_window_facts(rsf_godot_window_facts* facts)
+void leaf_window_facts(void* window, rsf_godot_window_facts* facts)
 {
     DWORD foreground = 0;
     GetWindowThreadProcessId(GetForegroundWindow(), &foreground);
     facts->foreground_process_id = foreground;
     facts->current_process_id = GetCurrentProcessId();
-    facts->input_window_visible = IsWindowVisible(input_window.load()) ? 1u : 0u;
+    facts->input_window_visible = IsWindowVisible(static_cast<HWND>(window)) ? 1u : 0u;
 }
+// Window and input leaves for native/window.rs.
+void leaf_window_identity(void* window, rsf_godot_window_identity* identity)
+{
+    DWORD process = 0;
+    GetWindowThreadProcessId(static_cast<HWND>(window), &process);
+    identity->process_id = process;
+    identity->current_process_id = GetCurrentProcessId();
+    const int length = GetClassNameW(static_cast<HWND>(window), reinterpret_cast<wchar_t*>(identity->class_name), 64);
+    identity->class_length = length > 0 ? static_cast<uint32_t>(length) : 0u;
+}
+intptr_t leaf_window_procedure_get(void* window)
+{
+    return GetWindowLongPtrW(static_cast<HWND>(window), GWLP_WNDPROC);
+}
+intptr_t leaf_window_procedure_set(void* window, intptr_t procedure)
+{
+    return SetWindowLongPtrW(static_cast<HWND>(window), GWLP_WNDPROC, procedure);
+}
+intptr_t leaf_window_forward(intptr_t previous, void* window, uint32_t message, uintptr_t wparam, intptr_t lparam)
+{
+    const HWND target = static_cast<HWND>(window);
+    return previous ? CallWindowProcW(reinterpret_cast<WNDPROC>(previous), target, message, wparam, lparam) :
+        DefWindowProcW(target, message, wparam, lparam);
+}
+void leaf_query_counter(uint64_t* counter, uint64_t* frequency)
+{
+    LARGE_INTEGER now{}, rate{};
+    QueryPerformanceCounter(&now); QueryPerformanceFrequency(&rate);
+    *counter = static_cast<uint64_t>(now.QuadPart); *frequency = static_cast<uint64_t>(rate.QuadPart);
+}
+void leaf_cpu_event(const rsf_game_cpu_event* event) { rsf_fg12_cpu(event); }
+void leaf_vulkan_cpu_event(const rsf_game_cpu_event* event) { rsf_latencyvk_cpu(event); }
+int32_t leaf_latency_ping(void* window) { return rsf_native_latency_ping(window); }
+int32_t leaf_vulkan_latency_ping(void* window) { return rsf_latencyvk_ping(window); }
+void leaf_vulkan_present_marker(uint32_t begin) { rsf_latencyvk_present(begin); }
 void leaf_fg_facts(rsf_godot_fg_facts* facts)
 {
     rsf_native_fg_status fg{}; fg.struct_size = sizeof(fg); rsf_fg12_status(&fg);
@@ -308,7 +339,9 @@ const rsf_godot_platform platform{sizeof(platform), RSF_GODOT_PLATFORM_VERSION, 
     leaf_fg_end_session, leaf_d3d12_release, vk::leaf_presenter_drain, vk::leaf_device_idle, vk::leaf_sr_destroy,
     vk::leaf_fsr4_destroy, vk::leaf_sr_create, vk::leaf_fsr4_create, vk::leaf_dlss_preset, vk::leaf_sr_plan,
     vk::leaf_fsr4_plan, vk::leaf_sr_evaluate, vk::leaf_fsr4_evaluate, vk::leaf_sr_fallback, vk::leaf_sr_log,
-    vk::leaf_sr_dump_result};
+    vk::leaf_sr_dump_result, leaf_window_identity, leaf_window_procedure_get, leaf_window_procedure_set,
+    leaf_window_forward, leaf_query_counter, leaf_cpu_event, leaf_vulkan_cpu_event, leaf_latency_ping,
+    leaf_vulkan_latency_ping, leaf_vulkan_present_marker};
 bool booted() { return rsf_godot_booted() != 0; }
 }
 
@@ -344,14 +377,7 @@ extern "C" int rsfg_configure(const rsf_godot_settings* input) try
 
 extern "C" void rsfg_cpu(const rsf_game_cpu_event* event)
 {
-    const bool vulkan = rsf::godot_vk::booted();
-    if ((!booted() && !vulkan) || !event || event->struct_size < sizeof(*event)) return;
-    input_session.store(event->session_id);
-    if (event->stage==RSF_GAME_CPU_FRAME_BEGIN) {
-        const HWND window=input_window.load();
-        if (window && !previous_proc) previous_proc=reinterpret_cast<WNDPROC>(SetWindowLongPtrW(window,GWLP_WNDPROC,reinterpret_cast<LONG_PTR>(input_proc)));
-    }
-    if (vulkan) rsf::godot_vk::cpu(event); else rsf_fg12_cpu(event);
+    rsf_godot_cpu(&platform, event);
 }
 
 extern "C" int rsfg_render(void* owning_device, void* owning_queue, void* commands, const rsf_game_render_pass* pass) try
@@ -390,14 +416,13 @@ extern "C" int rsfg_settings(rsf_godot_settings* output) try
 } catch (...) { return 0; }
 extern "C" int rsfg_request_latency_ping(void)
 {
-    return rsf::godot_vk::booted() ? rsf_latencyvk_ping(input_window.load()) : rsf_native_latency_ping(input_window.load());
+    return rsf_godot_latency_ping(&platform);
 }
 extern "C" void rsfg_vk_window(void* window) {
-    if (rsf::godot_vk::booted()) { accept(nullptr, window); rsf::godot_vk::window(window); }
+    rsf_godot_vk_window(&platform, window);
 }
 extern "C" int rsfg_vk_present_marker(uint64_t window, uint32_t begin) {
-    if (!rsf::godot_vk::booted() || !window || reinterpret_cast<uint64_t>(input_window.load()) != window) return 0;
-    rsf_latencyvk_present(begin);
+    if (!rsf_godot_vk_present_marker(&platform, window, begin)) return 0;
     capture_native_primary_present = begin != 0;
     return 1;
 }
@@ -421,12 +446,7 @@ extern "C" int32_t rsfg_vk_foreign_call(rsf_vk_wsi_call callback, void* user) { 
 
 extern "C" int rsfg_shutdown(void) try
 {
-    const HWND window = input_window.load();
-    if (window && previous_proc && reinterpret_cast<WNDPROC>(GetWindowLongPtrW(window, GWLP_WNDPROC)) == input_proc) {
-        SetWindowLongPtrW(window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(previous_proc));
-        previous_proc = nullptr;
-    }
-    input_window.store(nullptr); input_session.store(0);
+    rsf_godot_window_release(&platform);
     if (rsf::godot_vk::booted()) return rsf_godot_shutdown_vulkan(&platform);
     return rsf_godot_d3d12_shutdown(&platform);
 } catch (...) { return 0; }
