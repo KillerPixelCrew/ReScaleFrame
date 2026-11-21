@@ -17,11 +17,14 @@ set_property(TARGET godot-cpp PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CO
 # explicitly, so drop the leaked entry; the root CMakeLists clears stale copies before targets exist.
 unset(CMAKE_MSVC_RUNTIME_LIBRARY CACHE)
 
+# Runtime control, settings, session and status state are Rust (native/lib.rs, crate rsf-godot).
+# runtime.cpp keeps the rsfg_* exports and lends the linked Runtime through native/godot_platform.h.
+rsf_add_rust_static(rsf_godot_rust rsf_rust_godot rsf-godot rsf_godot)
 add_library(rsf_godot SHARED native/extension.cpp native/effect.cpp native/runtime.cpp native/runtime_control.cpp native/vulkan.cpp native/vulkan_creation.cpp)
 if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h")
     target_include_directories(rsf_godot SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}")
 endif()
 target_compile_definitions(rsf_godot PRIVATE RSF_GODOT_NATIVE_BUILD RSF_STREAMLINE_HOST_BUILD)
-target_link_libraries(rsf_godot PRIVATE godot::cpp rsf_orchestrator_core ReScaleFrame::NativeVulkan rsf_build_options)
+target_link_libraries(rsf_godot PRIVATE godot::cpp rsf_godot_rust rsf_orchestrator_core ReScaleFrame::NativeVulkan rsf_build_options)
 set_target_properties(rsf_godot PROPERTIES OUTPUT_NAME "ReScaleFrame.Godot.Native"
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
