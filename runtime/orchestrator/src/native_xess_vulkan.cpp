@@ -22,6 +22,7 @@ int32_t rsf_core_xessvk_shutdown(const rsf::xess_vk::Ops*);
 #include <memory>
 #include "../../backends/common/frame_capture_vk.h"
 #include "sharpening_vulkan.h"
+#include "vulkan_fg_copy.h"
 #include "vulkan_fg_resources_native.h"
 
 namespace rsf::xess_vk {
@@ -80,10 +81,9 @@ struct Ops {
     void* (*image_user)(Native*);
     const rsf_vkfg_platform* images;
     int32_t (*velocity)(Native*, float, float);
-    void (*stage)(Native*, void*, const rsf_srvk_image*, uint64_t, uint32_t);
-    void (*prepare_output)(Native*, void*, uint64_t, uint32_t);
+    void (*barrier)(Native*, void*, const rsf_vkfg_barrier*);
+    void (*copy)(Native*, void*, const rsf_vkfg_image_copy*);
     int32_t (*execute)(Native*, void*, const Execute*);
-    void (*copy_output)(Native*, void*, const rsf_srvk_image*, const rsf_srvk_image*);
     int32_t (*sharpen)(Native*, const rsf_srvk_setup*, void*, const rsf_srvk_frame*, uint64_t);
     void (*clear_sharpen)(Native*);
     void (*log)(const rsf_srvk_frame*, const char*);
@@ -93,7 +93,9 @@ struct Ops {
     void (*retire_commands)(Native*, void*);
     void (*flush_capture)(Native*);
 };
-static_assert(sizeof(Ops) == 31 * sizeof(void*) && sizeof(rsf_xessvk_setup) == 16 && sizeof(Init) == 16);
+static_assert(sizeof(Ops) == 30 * sizeof(void*) && sizeof(rsf_xessvk_setup) == 16 && sizeof(Init) == 16);
+static_assert(offsetof(Ops, barrier) == 19 * sizeof(void*) && offsetof(Ops, copy) == 20 * sizeof(void*) &&
+    offsetof(Ops, execute) == 21 * sizeof(void*) && offsetof(Ops, sharpen) == 22 * sizeof(void*));
 static_assert(sizeof(Texture) == 32);
 static_assert(sizeof(Execute) == 152 && offsetof(Execute, reset) == 148);
 // Values mirrored by the Rust owner.
@@ -205,46 +207,16 @@ int32_t bind_device(Native* native, const rsf_srvk_setup* setup) noexcept try {
         ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_INIT_FAILED;
 } catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
 
-void transition(const Native* native, VkCommandBuffer commands, VkImage image, VkImageLayout before, VkImageLayout after) noexcept {
-    VkImageMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier.image = image;
-    barrier.oldLayout = before;
-    barrier.newLayout = after;
-    barrier.srcAccessMask = before == VK_IMAGE_LAYOUT_UNDEFINED ? 0 : VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-    barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-    barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    native->barrier(commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-        0, 0, nullptr, 0, nullptr, 1, &barrier);
+void record_barrier(Native* native, void* commands, const rsf_vkfg_barrier* plan) noexcept {
+    rsf::vkfg::record_barrier(native->barrier, static_cast<VkCommandBuffer>(commands), *plan);
 }
 
-void copy_region(const Native* native, VkCommandBuffer commands, VkImage source, VkImage target, uint32_t width, uint32_t height) noexcept {
-    VkImageCopy region{};
-    region.srcSubresource = region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    region.extent = {width, height, 1};
-    native->copy(commands, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+void record_copy(Native* native, void* commands, const rsf_vkfg_image_copy* plan) noexcept {
+    rsf::vkfg::record_copy(native->copy, static_cast<VkCommandBuffer>(commands), *plan);
 }
 
 int32_t velocity(Native* native, float x, float y) noexcept {
     return native->sdk->velocity(native->context, x, y);
-}
-
-void stage(Native* native, void* commands, const rsf_srvk_image* source, uint64_t destination, uint32_t initialized) noexcept {
-    const auto list = static_cast<VkCommandBuffer>(commands);
-    const auto image = reinterpret_cast<VkImage>(source->image);
-    const auto target = reinterpret_cast<VkImage>(destination);
-    transition(native, list, image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-    transition(native, list, target, initialized ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,
-        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-    copy_region(native, list, image, target, source->width, source->height);
-    transition(native, list, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    transition(native, list, target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-}
-
-void prepare_output(Native* native, void* commands, uint64_t image, uint32_t initialized) noexcept {
-    transition(native, static_cast<VkCommandBuffer>(commands), reinterpret_cast<VkImage>(image),
-        initialized ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
 }
 
 xess_vk_image_view_info texture_view(const Texture& texture) noexcept {
@@ -271,14 +243,6 @@ int32_t execute(Native* native, void* commands, const Execute* call) noexcept {
     data.inputHeight = call->input_height;
     data.resetHistory = call->reset;
     return native->sdk->execute(native->context, static_cast<VkCommandBuffer>(commands), &data);
-}
-
-void copy_output(Native* native, void* commands, const rsf_srvk_image* output, const rsf_srvk_image* target) noexcept {
-    const auto list = static_cast<VkCommandBuffer>(commands);
-    const auto image = reinterpret_cast<VkImage>(output->image);
-    transition(native, list, image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-    copy_region(native, list, image, reinterpret_cast<VkImage>(target->image), output->width, output->height);
-    transition(native, list, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL);
 }
 
 int32_t sharpen(Native* native, const rsf_srvk_setup* setup, void* commands, const rsf_srvk_frame* frame, uint64_t output) noexcept try {
@@ -310,7 +274,7 @@ extern const Ops native_ops{
     instance_requirements, device_extensions, device_features, version,
     open, [](Native* native) noexcept { delete native; }, create_context, initialize, resolution, destroy_context,
     bind_device, [](Native* native) -> void* { return &native->gpu; }, &rsf::vkfg::platform,
-    velocity, stage, prepare_output, execute, copy_output, sharpen,
+    velocity, record_barrier, record_copy, execute, sharpen,
     [](Native* native) noexcept { native->sharpen.clear(); }, log,
     [](Native* native, uint64_t provider, uint32_t backend) noexcept { native->capture.set_provider(provider, backend); },
     capture_record, capture_parameters, retire_commands,

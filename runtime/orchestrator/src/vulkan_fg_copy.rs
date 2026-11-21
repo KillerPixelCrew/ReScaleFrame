@@ -2,7 +2,7 @@
 use crate::vulkan_fg_resources_abi::rsf_vkfg_image as Image;
 use std::ffi::c_void;
 
-const UNDEFINED: u32 = 0;
+pub(super) const UNDEFINED: u32 = 0;
 pub(super) const SHADER_READ: u32 = 5;
 pub(super) const TRANSFER_SRC: u32 = 6;
 const TRANSFER_DST: u32 = 7;
@@ -16,6 +16,7 @@ pub(super) type BarrierFn = unsafe extern "C" fn(Handle, Handle, *const Barrier)
 pub(super) type CopyFn = unsafe extern "C" fn(Handle, Handle, *const ImageCopy);
 
 #[repr(C)]
+#[cfg_attr(test, derive(Clone, Copy, Debug, PartialEq))]
 pub(super) struct Barrier {
     image: u64,
     old_layout: u32,
@@ -29,7 +30,7 @@ pub(super) struct Barrier {
 }
 
 impl Barrier {
-    fn new(image: u64, old_layout: u32, new_layout: u32) -> Self {
+    pub(super) fn new(image: u64, old_layout: u32, new_layout: u32) -> Self {
         Self {
             image,
             old_layout,
@@ -49,6 +50,7 @@ impl Barrier {
 }
 
 #[repr(C)]
+#[cfg_attr(test, derive(Clone, Copy, Debug, PartialEq))]
 pub(super) struct ImageCopy {
     source: u64,
     target: u64,
@@ -56,6 +58,19 @@ pub(super) struct ImageCopy {
     target_layout: u32,
     width: u32,
     height: u32,
+}
+
+impl ImageCopy {
+    pub(super) fn transfer(source: u64, target: u64, [width, height]: [u32; 2]) -> Self {
+        Self {
+            source,
+            target,
+            source_layout: TRANSFER_SRC,
+            target_layout: TRANSFER_DST,
+            width,
+            height,
+        }
+    }
 }
 
 const _: () = {
@@ -72,16 +87,9 @@ pub(super) unsafe fn record_shader_read_copy(
     commands: Handle,
     source: u64,
     target: &Image,
-    [width, height]: [u32; 2],
+    extent: [u32; 2],
 ) {
-    let copy = ImageCopy {
-        source,
-        target: target.image,
-        source_layout: TRANSFER_SRC,
-        target_layout: TRANSFER_DST,
-        width,
-        height,
-    };
+    let copy = ImageCopy::transfer(source, target.image, extent);
     let target_initial_layout = if target.initialized != 0 {
         SHADER_READ
     } else {
