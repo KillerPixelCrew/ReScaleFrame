@@ -24,6 +24,13 @@ callers. The Unity package still builds the shared bridge. The bridge's
 frame policy and native Runtime setup remain open for porting. Build,
 fixture and Unity player checks remain unrun on this revision.
 
+The RDR2 game DLL uses Rust for exact-build admission, SR input routing,
+camera decode, scene facts and its lifecycle. The engine entry export and
+typed native leaves remain available. Stop returns `BUSY` on refused hook
+retirement and retains its services until a later stop succeeds. The ASI
+and attach helper still need ports. The RDR2 plugin and camera builds and
+game verification remain unrun on this revision.
+
 ## Rust orchestrator and first Anomaly port
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.

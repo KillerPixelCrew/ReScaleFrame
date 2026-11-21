@@ -29,6 +29,25 @@ Detection requires the executable basename, x64 PE machine and exact hash, with 
 insensitivity for the name and hex digest. A different build is unknown. Recognition establishes
 identity only.
 
+## Source ownership
+
+`rsf_game_rdr2` links the Rust crate `rsf-rdr2` (`Cargo.toml`, `src/*.rs`) as a static library.
+The crate owns the plugin policy: recognition and lifecycle validation (`lib.rs`), fingerprints,
+RVAs, expected entry bytes and native layouts (`layout.rs`), the worker-view camera decode
+(`camera.rs`), DLSS/FSR2 SR routing, refusals, queue/Present observers and hook lifecycle
+(`renderer.rs`), and the completed-scene producer with its native marker, sleep, mode and input
+facts (`scene.rs`). `src/native_platform.cpp` keeps only typed leaves the crate calls through a
+table: MinHook, D3D12/DXGI COM calls, ReadProcessMemory, TLS, QPC, window-message and XInput
+observation, and return-address capture. `src/plugin.cpp` exports `rsf_get_game_plugin_api`.
+`src/render_camera.h` declares the crate's camera C ABI for `tests/rdr2_camera.cpp`.
+[The port note](../../docs/research/rust-rdr2-plugin.md) records what moved, the deliberate
+differences and the remaining work.
+
+The ASI (`rsf_asi_rdr2`) and attach helper (`rsf_rdr2_attach`) remain C++ and share no source
+with the plugin; their shared inputs are `runtime_setup.h` (also used by
+`tests/unity_sr_d3d12.cpp`), `native_capture.cpp` (also built into `tests/rdr2_capture.cpp`) and
+`engine_settings_policy.h` (used by `tests/rdr2_engine_settings.cpp`).
+
 ## Deployment
 
 RDR2 modding already ships an ASI loader (ScriptHookRDR2's `dinput8.dll` or Ultimate ASI

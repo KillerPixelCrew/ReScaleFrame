@@ -778,8 +778,9 @@ if(TARGET rsf_vendor_census)
     set_tests_properties(vendor_census vendor_census_budget vendor_census_vulkan_streamline vendor_census_fidelityfx_api vendor_census_dllmain PROPERTIES TIMEOUT 120)
 
     if(TARGET rsf_asi_rdr2)
-        add_executable(rsf_rdr2_camera rdr2_camera.cpp ../games/rdr2/src/render_camera.cpp)
-        target_link_libraries(rsf_rdr2_camera PRIVATE ReScaleFrame::GameSDK rsf_build_options)
+        # The camera decode is owned by the Rust crate rsf-rdr2; the fixture calls its C ABI.
+        add_executable(rsf_rdr2_camera rdr2_camera.cpp)
+        target_link_libraries(rsf_rdr2_camera PRIVATE rsf_rdr2_rust ReScaleFrame::GameSDK rsf_build_options)
         add_test(NAME rdr2_camera COMMAND rsf_rdr2_camera)
         add_executable(rsf_rdr2_capture rdr2_capture.cpp ../games/rdr2/src/native_capture.cpp)
         target_compile_definitions(rsf_rdr2_capture PRIVATE RSF_RDR2_CAPTURE_TEST _CRT_SECURE_NO_WARNINGS)
