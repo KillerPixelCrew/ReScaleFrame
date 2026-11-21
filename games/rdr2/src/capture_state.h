@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 typedef struct rsf_rdr2_capture_state rsf_rdr2_capture_state;
@@ -10,6 +11,14 @@ typedef struct rsf_rdr2_capture_progress {
     uint32_t draw_overflow, timed_out, write_failed, reuse_tail;
     uint32_t requested_input_frames;
 } rsf_rdr2_capture_progress;
+
+typedef struct rsf_rdr2_capture_image {
+    uint64_t list, generation, submission, queue, fence_value, tick, resource, caller;
+    uint32_t sequence, ordinal, width, height, pitch, format, input_index, footprint_format;
+    uint32_t state_before, subresource, frame, vertices, instances, ps, vs;
+    int32_t blend;
+    uint32_t src, dst, op, src_alpha, dst_alpha, op_alpha, write_mask;
+} rsf_rdr2_capture_image;
 
 #define RSF_RDR2_CAPTURE_SAVE_DRAW 1u
 #define RSF_RDR2_CAPTURE_KEEP_TAIL 2u
@@ -23,6 +32,9 @@ rsf_rdr2_capture_state* rsf_rdr2_capture_create(void);
 void rsf_rdr2_capture_request(rsf_rdr2_capture_state*);
 bool rsf_rdr2_capture_active(const rsf_rdr2_capture_state*);
 bool rsf_rdr2_capture_has_inputs(const rsf_rdr2_capture_state*);
+/* The caller lends UTF-16 directory units, the role and the current mapping. */
+bool rsf_rdr2_capture_write_image(const rsf_rdr2_capture_image*, const uint16_t* directory,
+    size_t directory_len, uint32_t pid, const char* role, const uint8_t* data, size_t bytes);
 
 /* All operations below run under the native capture mutex, which also orders the graphics
    objects against the capture's admission, drain and publication. */
@@ -61,4 +73,5 @@ void rsf_rdr2_capture_discard_submission(rsf_rdr2_capture_submission*);
 #ifdef __cplusplus
 }
 static_assert(sizeof(rsf_rdr2_capture_progress) == 32);
+static_assert(sizeof(rsf_rdr2_capture_image) == 160);
 #endif

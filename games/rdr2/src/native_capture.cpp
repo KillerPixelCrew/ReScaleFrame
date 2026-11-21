@@ -709,39 +709,30 @@ void before_present(void* pointer) noexcept try
 catch (...) { log("present observation failed"); }
 bool write_shot(const Shot& s) noexcept
 {
-    void* data{}; const SIZE_T bytes = static_cast<SIZE_T>(s.pitch) * s.height;
-    D3D12_RANGE range{0, bytes};
+    const auto& b = s.pipeline.blend;
+    const rsf_rdr2_capture_image image{
+        reinterpret_cast<uint64_t>(s.list), s.generation, s.submission, s.queue, s.fence_value,
+        s.tick, s.resource, s.caller, s.sequence, s.ordinal, s.width, s.height, s.pitch, s.format,
+        s.input_index, s.footprint_format, s.state_before, s.subresource, s.frame,
+        s.vertices, s.instances, s.pipeline.ps, s.pipeline.vs, b.BlendEnable,
+        static_cast<uint32_t>(b.SrcBlend), static_cast<uint32_t>(b.DestBlend),
+        static_cast<uint32_t>(b.BlendOp), static_cast<uint32_t>(b.SrcBlendAlpha),
+        static_cast<uint32_t>(b.DestBlendAlpha), static_cast<uint32_t>(b.BlendOpAlpha),
+        b.RenderTargetWriteMask,
+    };
+    void* data{};
+    const SIZE_T bytes = static_cast<SIZE_T>(s.pitch) * s.height;
+    const D3D12_RANGE range{0, bytes};
     const auto mapped = s.readback->Map(0, &range, &data);
-    if (FAILED(mapped)) { log("readback Map failed hr=%08lx role=%s",static_cast<unsigned long>(mapped),s.role.c_str()); return false; }
-    wchar_t path[MAX_PATH]{};
-    wchar_t stem[MAX_PATH]{};
-    if (s.role == "draw") swprintf_s(stem, L"%s\\native-%lu-%03u-%03u", g->directory, GetCurrentProcessId(), s.sequence, s.ordinal);
-    else swprintf_s(stem, L"%s\\input-%lu-%03u-%03u-%hs", g->directory, GetCurrentProcessId(), s.sequence, s.input_index, s.role.c_str());
-    swprintf_s(path, L"%s.bin", stem);
-    FILE* f = _wfopen(path, L"wb");
-    bool ok = false;
-    if (f) { ok = fwrite(data, 1, bytes, f) == bytes; ok = fclose(f) == 0 && ok; }
-    D3D12_RANGE empty{0,0}; s.readback->Unmap(0, &empty);
-    swprintf_s(path, L"%s.json", stem);
-    f = _wfopen(path, L"wb");
-    if (f) {
-        fprintf(f, "{\"sequence\":%u,\"draw\":%u,\"width\":%u,\"height\":%u,\"row_pitch\":%u,\"format\":%u,"
-            "\"role\":\"%s\",\"input_index\":%u,\"footprint_format\":%u,\"state_before\":%u,\"subresource\":%u,"
-            "\"command_list\":\"0x%llx\",\"generation\":%llu,\"submission\":%llu,\"queue\":\"0x%llx\",\"fence_value\":%llu,"
-            "\"frame_counter_observation\":%u,\"tick\":%llu,\"resource\":\"0x%llx\",\"caller\":\"0x%llx\","
-            "\"vertices\":%u,\"instances\":%u,\"ps_crc32\":\"%08x\",\"vs_crc32\":\"%08x\","
-            "\"blend\":%d,\"src\":%u,\"dst\":%u,\"op\":%u,\"src_alpha\":%u,\"dst_alpha\":%u,\"op_alpha\":%u,\"write_mask\":%u}\n",
-            s.sequence,s.ordinal,s.width,s.height,s.pitch,s.format,
-            s.role.c_str(),s.input_index,s.footprint_format,s.state_before,s.subresource,
-            static_cast<unsigned long long>(reinterpret_cast<uint64_t>(s.list)),static_cast<unsigned long long>(s.generation),
-            static_cast<unsigned long long>(s.submission),static_cast<unsigned long long>(s.queue),static_cast<unsigned long long>(s.fence_value),
-            s.frame,static_cast<unsigned long long>(s.tick),static_cast<unsigned long long>(s.resource),
-            static_cast<unsigned long long>(s.caller),s.vertices,s.instances,s.pipeline.ps,s.pipeline.vs,
-            s.pipeline.blend.BlendEnable,s.pipeline.blend.SrcBlend,s.pipeline.blend.DestBlend,s.pipeline.blend.BlendOp,
-            s.pipeline.blend.SrcBlendAlpha,s.pipeline.blend.DestBlendAlpha,s.pipeline.blend.BlendOpAlpha,
-            s.pipeline.blend.RenderTargetWriteMask);
-        ok = !ferror(f) && ok; ok = fclose(f) == 0 && ok;
-    } else ok = false;
+    if (FAILED(mapped)) {
+        log("readback Map failed hr=%08lx role=%s", static_cast<unsigned long>(mapped), s.role.c_str());
+        return false;
+    }
+    const bool ok = rsf_rdr2_capture_write_image(&image,
+        reinterpret_cast<const uint16_t*>(g->directory), wcslen(g->directory), GetCurrentProcessId(),
+        s.role.c_str(), static_cast<const uint8_t*>(data), bytes);
+    const D3D12_RANGE empty{0, 0};
+    s.readback->Unmap(0, &empty);
     return ok;
 }
 bool write_bundle() noexcept

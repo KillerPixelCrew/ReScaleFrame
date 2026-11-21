@@ -6,6 +6,8 @@ use std::alloc::{Layout, alloc};
 use std::cell::UnsafeCell;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
+#[cfg(windows)]
+mod artifacts;
 mod recordings;
 use recordings::Recordings;
 
