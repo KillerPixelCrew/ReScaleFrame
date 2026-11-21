@@ -159,9 +159,11 @@ Godot player verification remain open.
 RDR2's native graphics capture uses Rust for requests, draw and input
 limits, timeout, drain admission and bundle status. It uses the existing
 native mutex to order those decisions with the retained D3D12 resources.
-An interrupted NGX exit releases its input reservation. GPU copies,
-fences and output file encoding remain native. Builds and the two native
-capture fixtures remain unrun.
+An interrupted NGX exit releases its input reservation. Rust tracks
+resource transitions and snapshots the submitted command-list generation
+before the queue call. The native code retains only readbacks matching
+that snapshot. GPU copies, fences and file encoding remain native.
+Builds and the two native capture fixtures remain unrun.
 
 ## Rust orchestrator and first Anomaly port
 

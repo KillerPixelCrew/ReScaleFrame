@@ -27,13 +27,10 @@
 namespace {
 using Microsoft::WRL::ComPtr;
 struct Pipeline { uint32_t ps{}, vs{}; D3D12_RENDER_TARGET_BLEND_DESC blend{}; };
-using ResourceStates = std::unordered_map<ID3D12Resource*, D3D12_RESOURCE_STATES>;
 constexpr auto unknown_state = static_cast<D3D12_RESOURCE_STATES>(~0u);
 struct List {
     ID3D12Resource* target{};
     ID3D12PipelineState* pso{};
-    ResourceStates states;
-    uint64_t generation{};
 };
 struct Shot {
     ComPtr<ID3D12Resource> readback;
@@ -53,8 +50,8 @@ struct Presentation {
 };
 struct Submission {
     ID3D12CommandQueue* queue{};
-    uint64_t serial{};
-    ResourceStates states;
+    std::unique_ptr<rsf_rdr2_capture_submission, decltype(&rsf_rdr2_capture_discard_submission)>
+        facts{nullptr, rsf_rdr2_capture_discard_submission};
     std::vector<std::pair<std::shared_ptr<Shot>, uint64_t>> shots;
 };
 struct Temporal {
@@ -91,7 +88,6 @@ struct State {
     wchar_t directory[MAX_PATH]{}, request[MAX_PATH]{}, log[MAX_PATH]{};
     uintptr_t base{};
     rsf_rdr2_capture_state* capture{};
-    uint64_t submission_serial{}, write_serial{};
     ID3D12Resource* selected{};
     std::array<ComPtr<ID3D12Resource>, 4> buffers;
     std::unordered_map<SIZE_T, ID3D12Resource*> rtvs;
@@ -100,7 +96,6 @@ struct State {
     std::unordered_map<ID3D12CommandQueue*, Queue> queues;
     std::vector<std::shared_ptr<Shot>> shots;
     std::shared_ptr<Shot> tail;
-    ResourceStates submitted_states;
     std::unordered_map<void*, uint32_t> sr_features;
     std::vector<DrawEvent> draws;
     std::vector<std::shared_ptr<Temporal>> temporal;
@@ -301,7 +296,7 @@ HRESULT STDMETHODCALLTYPE create_committed(ID3D12Device* d, const D3D12_HEAP_PRO
     const auto hr = original_create_committed(d, heap, flags, desc, state, clear, iid, out);
     if (!recording_copy && SUCCEEDED(hr) && out && *out) {
         std::lock_guard<std::mutex> lock(g->mutex);
-        g->submitted_states[static_cast<ID3D12Resource*>(*out)] = state;
+        rsf_rdr2_capture_initial_state(g->capture, *out, static_cast<uint32_t>(state));
     }
     return hr;
 }
@@ -312,7 +307,7 @@ HRESULT STDMETHODCALLTYPE create_placed(ID3D12Device* d, ID3D12Heap* heap, UINT6
     const auto hr = original_create_placed(d, heap, offset, desc, state, clear, iid, out);
     if (!recording_copy && SUCCEEDED(hr) && out && *out) {
         std::lock_guard<std::mutex> lock(g->mutex);
-        g->submitted_states[static_cast<ID3D12Resource*>(*out)] = state;
+        rsf_rdr2_capture_initial_state(g->capture, *out, static_cast<uint32_t>(state));
     }
     return hr;
 }
@@ -321,17 +316,14 @@ void STDMETHODCALLTYPE barriers(ID3D12GraphicsCommandList* list, UINT count, con
     original_barrier(list, count, items);
     if (recording_copy) return;
     std::lock_guard<std::mutex> lock(g->mutex);
-    auto& states = g->lists[list].states;
     for (UINT i = 0; i < count; ++i) {
         const auto& b = items[i];
         if (b.Type == D3D12_RESOURCE_BARRIER_TYPE_TRANSITION) {
             const auto& t = b.Transition;
-            // Inputs below copy subresource zero. A transition of another plane/mip does not
-            // establish its state. Split begins are unusable until their matching end.
-            if (t.Subresource == 0 || t.Subresource == D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES)
-                states[t.pResource] = b.Flags == D3D12_RESOURCE_BARRIER_FLAG_BEGIN_ONLY ? unknown_state : t.StateAfter;
+            rsf_rdr2_capture_transition(g->capture, list, t.pResource, t.Subresource,
+                static_cast<uint32_t>(t.StateAfter), b.Flags == D3D12_RESOURCE_BARRIER_FLAG_BEGIN_ONLY);
         } else if (b.Type == D3D12_RESOURCE_BARRIER_TYPE_ALIASING) {
-            if (b.Aliasing.pResourceAfter) states[b.Aliasing.pResourceAfter] = unknown_state;
+            rsf_rdr2_capture_alias(g->capture, list, b.Aliasing.pResourceAfter);
         }
     }
 }
@@ -341,7 +333,8 @@ HRESULT STDMETHODCALLTYPE reset(ID3D12GraphicsCommandList* list, ID3D12CommandAl
     if (SUCCEEDED(hr)) {
         std::lock_guard<std::mutex> lock(g->mutex);
         auto& state = g->lists[list];
-        ++state.generation; state.target = nullptr; state.pso = pso; state.states.clear();
+        state.target = nullptr; state.pso = pso;
+        rsf_rdr2_capture_reset_list(g->capture, list);
     }
     return hr;
 }
@@ -400,8 +393,7 @@ bool copy_resource(ID3D12GraphicsCommandList* list, ID3D12Resource* target,
     shot->list = list; shot->width = static_cast<UINT>(desc.Width); shot->height = desc.Height;
     shot->format = desc.Format; shot->pitch = footprint.Footprint.RowPitch;
     shot->footprint_format = footprint.Footprint.Format; shot->state_before = before;
-    shot->generation = g->lists[list].generation;
-    shot->write_serial = ++g->write_serial;
+    rsf_rdr2_capture_stamp_copy(g->capture, list, &shot->generation, &shot->write_serial);
     shot->resource = reinterpret_cast<uint64_t>(target); shot->tick = GetTickCount64();
     read_local(g->base + 0x542904c, &shot->frame, sizeof(shot->frame));
     return true;
@@ -441,14 +433,7 @@ void input_resource(ID3D12GraphicsCommandList* list, const void* parameters,
         if (required) t.refusals.emplace_back(std::string(role) + "_missing");
         return;
     }
-    auto before = unknown_state;
-    const auto& local = g->lists[list].states;
-    auto state = local.find(resource);
-    if (state != local.end()) before = state->second;
-    else {
-        const auto submitted = g->submitted_states.find(resource);
-        if (submitted != g->submitted_states.end()) before = submitted->second;
-    }
+    const auto before = static_cast<D3D12_RESOURCE_STATES>(rsf_rdr2_capture_resource_state(g->capture, list, resource));
     auto shot = std::make_shared<Shot>();
     shot->role = role; shot->sequence = t.sequence; shot->input_index = t.index;
     if (!copy_resource(list, resource, before, shot)) {
@@ -496,7 +481,8 @@ void ngx_evaluate(void* pointer, void* handle, const void* parameters, uint32_t 
     auto t = std::make_shared<Temporal>();
     t->sequence = capture_progress().sequence;
     t->index = rsf_rdr2_capture_reserve_input(g->capture); t->feature_flags = feature->second;
-    t->list = reinterpret_cast<uint64_t>(list); t->generation = g->lists[list].generation;
+    t->list = reinterpret_cast<uint64_t>(list);
+    t->generation = rsf_rdr2_capture_list_generation(g->capture, list);
     input_camera(*t);
     static const char* const floats[]{"Jitter.Offset.X", "Jitter.Offset.Y", "MV.Scale.X", "MV.Scale.Y",
         "DLSS.Pre.Exposure", "DLSS.Exposure.Scale", "FrameTimeDeltaInMsec"};
@@ -580,7 +566,8 @@ HRESULT STDMETHODCALLTYPE create_list(ID3D12Device* d, UINT node, D3D12_COMMAND_
         bind(*out, 46, reinterpret_cast<void*>(&set_rtv), original_set_rtv);
         std::lock_guard<std::mutex> lock(g->mutex);
         auto& state = g->lists[static_cast<ID3D12GraphicsCommandList*>(*out)];
-        state.target = nullptr; state.pso = pso; ++state.generation; state.states.clear();
+        state.target = nullptr; state.pso = pso;
+        rsf_rdr2_capture_reset_list(g->capture, list);
     }
     return hr;
 }
@@ -644,18 +631,15 @@ catch (...) { log("swapchain observation failed"); }
 void before_submit(void* pointer, uint32_t count, void* const* lists) noexcept try
 {
     std::lock_guard<std::mutex> lock(g->mutex);
-    Submission submission;
+    auto& submission = submissions.emplace_back();
     submission.queue = static_cast<ID3D12CommandQueue*>(pointer);
-    submission.serial = ++g->submission_serial;
-    for (uint32_t i = 0; i < count; ++i) {
-        const auto state = g->lists.find(static_cast<ID3D12GraphicsCommandList*>(lists[i]));
-        if (state == g->lists.end()) continue;
-        for (const auto& entry : state->second.states) submission.states[entry.first] = entry.second;
-        for (const auto& shot : g->shots)
-            if (!shot->fence && shot->list == lists[i] && shot->generation == state->second.generation)
+    submission.facts.reset(rsf_rdr2_capture_before_submit(g->capture, count, lists));
+    if (submission.facts) {
+        for (const auto& shot : g->shots) {
+            if (!shot->fence && rsf_rdr2_capture_submission_has_list(submission.facts.get(), shot->list, shot->generation))
                 submission.shots.emplace_back(shot, shot->write_serial);
+        }
     }
-    submissions.push_back(std::move(submission));
 }
 catch (...) { log("submission snapshot failed"); }
 void after_submit(void* pointer, uint32_t, void* const*) noexcept try
@@ -666,7 +650,7 @@ void after_submit(void* pointer, uint32_t, void* const*) noexcept try
     auto submitted = std::move(submissions.back()); submissions.pop_back();
     auto* queue = submitted.queue;
     std::lock_guard<std::mutex> lock(g->mutex);
-    for (const auto& entry : submitted.states) g->submitted_states[entry.first] = entry.second;
+    const auto serial = rsf_rdr2_capture_after_submit(g->capture, submitted.facts.get());
     if (submitted.shots.empty()) return;
     auto& state = g->queues[queue];
     if (!state.fence) {
@@ -682,7 +666,7 @@ void after_submit(void* pointer, uint32_t, void* const*) noexcept try
         auto& shot = entry.first;
         if (shot->write_serial != entry.second) continue;
         shot->fence = state.fence; shot->fence_value = value;
-        shot->submission = submitted.serial; shot->queue = reinterpret_cast<uint64_t>(queue);
+        shot->submission = serial; shot->queue = reinterpret_cast<uint64_t>(queue);
     }
 }
 catch (...) { log("submission observation failed"); }

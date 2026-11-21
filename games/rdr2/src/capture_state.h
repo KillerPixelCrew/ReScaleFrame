@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 typedef struct rsf_rdr2_capture_state rsf_rdr2_capture_state;
+typedef struct rsf_rdr2_capture_submission rsf_rdr2_capture_submission;
 typedef struct rsf_rdr2_capture_progress {
     uint32_t sequence, draws, written;
     uint32_t draw_overflow, timed_out, write_failed, reuse_tail;
@@ -38,6 +39,25 @@ void rsf_rdr2_capture_readback_written(rsf_rdr2_capture_state*, bool success);
 void rsf_rdr2_capture_write_failed(rsf_rdr2_capture_state*);
 bool rsf_rdr2_capture_can_publish(const rsf_rdr2_capture_state*, bool readbacks_empty);
 void rsf_rdr2_capture_published(rsf_rdr2_capture_state*);
+
+/* Commands, generations, and state transitions. These calls also use the native capture mutex.
+   UINT32_MAX represents a state the probe cannot prove. */
+void rsf_rdr2_capture_initial_state(rsf_rdr2_capture_state*, void* resource, uint32_t state);
+void rsf_rdr2_capture_transition(rsf_rdr2_capture_state*, void* list, void* resource,
+    uint32_t subresource, uint32_t after, bool begin_only);
+void rsf_rdr2_capture_alias(rsf_rdr2_capture_state*, void* list, void* resource);
+void rsf_rdr2_capture_reset_list(rsf_rdr2_capture_state*, void* list);
+uint32_t rsf_rdr2_capture_resource_state(const rsf_rdr2_capture_state*, void* list, void* resource);
+uint64_t rsf_rdr2_capture_list_generation(const rsf_rdr2_capture_state*, void* list);
+void rsf_rdr2_capture_stamp_copy(rsf_rdr2_capture_state*, void* list, uint64_t* generation, uint64_t* serial);
+
+/* A receipt snapshots the lists and their final recorded states before submission. Native code
+   retains only the readback objects named by the receipt, until the original queue call returns.
+   The caller frees the receipt after publishing or abandoning it. */
+rsf_rdr2_capture_submission* rsf_rdr2_capture_before_submit(rsf_rdr2_capture_state*, uint32_t count, void* const* lists);
+bool rsf_rdr2_capture_submission_has_list(const rsf_rdr2_capture_submission*, void* list, uint64_t generation);
+uint64_t rsf_rdr2_capture_after_submit(rsf_rdr2_capture_state*, rsf_rdr2_capture_submission*);
+void rsf_rdr2_capture_discard_submission(rsf_rdr2_capture_submission*);
 #ifdef __cplusplus
 }
 static_assert(sizeof(rsf_rdr2_capture_progress) == 32);

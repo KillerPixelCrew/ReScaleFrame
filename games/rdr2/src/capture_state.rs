@@ -6,6 +6,9 @@ use std::alloc::{Layout, alloc};
 use std::cell::UnsafeCell;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
+mod recordings;
+use recordings::Recordings;
+
 const MAX_DRAW_COPIES: u32 = 64;
 const MAX_DRAW_METADATA: u32 = 4096;
 const INPUT_FRAMES: u32 = 4;
@@ -46,6 +49,7 @@ struct Capture {
     active: AtomicBool,
     inputs_remaining: AtomicU32,
     ledger: UnsafeCell<Ledger>,
+    recordings: UnsafeCell<Recordings>,
 }
 
 // The ASI passes its process-lived owner. The native mutex guards the non-atomic ledger.
@@ -58,6 +62,7 @@ impl Capture {
             active: AtomicBool::new(false),
             inputs_remaining: AtomicU32::new(0),
             ledger: UnsafeCell::new(Ledger::default()),
+            recordings: UnsafeCell::new(Recordings::default()),
         }
     }
 }
@@ -65,9 +70,13 @@ impl Capture {
 #[unsafe(no_mangle)]
 extern "C" fn rsf_rdr2_capture_create() -> *mut Capture {
     // Return null on allocation refusal so the optional probe can decline installation.
-    let owner = unsafe { alloc(Layout::new::<Capture>()) }.cast::<Capture>();
+    allocate(Capture::new())
+}
+
+fn allocate<T>(value: T) -> *mut T {
+    let owner = unsafe { alloc(Layout::new::<T>()) }.cast::<T>();
     if !owner.is_null() {
-        unsafe { owner.write(Capture::new()) };
+        unsafe { owner.write(value) };
     }
     owner
 }

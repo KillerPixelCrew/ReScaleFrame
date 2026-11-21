@@ -14,7 +14,7 @@ Runtime. Preserve the supported paths, feature refusals and package names.
 | Integration | Native ownership and entry points to trace |
 | --- | --- |
 | Project Wingman | The game DLL and its dedicated XInput startup owner are in Rust. Both XInput carriers share the native forwarding leaf. Current binary and live verification remain open. |
-| RDR2 | The game DLL renderer, ASI and attach workers, input guard, probes, Social Club backbuffer owner, and native capture admission and status are in Rust. Continue GPU readback and submission ownership and remaining diagnostics. |
+| RDR2 | The game DLL renderer, ASI and attach workers, input guard, probes, Social Club backbuffer owner, and native capture admission and recording ledger are in Rust. Continue readback ownership, file publication and remaining diagnostics. |
 | Unity Mono and Unity package | Mono loader, plugin lifecycle, shared D3D12 state, Runtime setup, and package settings and session state are in Rust. Continue CPU fact routing, package frame and preview ownership, and Vulkan. |
 | Steam, Fallout 4 and Skyrim SE | The shared Steam chain and both games' cold creation paths are in Rust. Fallout 4 identity and lifecycle are also ported. Continue Skyrim SE lifecycle, and both games' rendering, CPU facts, compatibility and recovery. |
 | AC7 | The game DLL's GameSDK, lifecycle, native site admission and scene and velocity patch policy are in Rust. Continue TrueSky, hook retirement and the game-side owners in the combined DirectInput carriers. |
