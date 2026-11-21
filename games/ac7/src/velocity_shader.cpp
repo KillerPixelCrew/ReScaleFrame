@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: MIT
 #include "velocity_shader.h"
-#include "contact_shadow.h"
+#include "shader_bytes.h"
+#include "velocity_container.h"
 #include <rescaleframe/shader_compile.h>
 #include <algorithm>
 #include <array>
 #include <cstring>
 #include <string>
 #include <map>
+#include <new>
 #include <sstream>
 #include <bit>
 #include <atomic>
@@ -15,94 +17,64 @@ namespace {
 std::atomic<uint32_t> geometry_compiles{0};
 uint32_t word(const uint8_t* bytes, size_t offset)
 { uint32_t value = 0; std::memcpy(&value, bytes + offset, 4); return value; }
-void put(std::vector<uint8_t>& bytes, uint32_t value)
-{
-    const size_t offset = bytes.size(); bytes.resize(offset + 4);
-    std::memcpy(bytes.data() + offset, &value, 4);
-}
 struct Chunk { std::array<uint8_t,4> tag{}; std::vector<uint8_t> bytes; };
 struct Container {
     std::vector<Chunk> chunks;
     bool read(const void* pointer, size_t size) {
-        const auto* bytes = static_cast<const uint8_t*>(pointer);
-        if (!bytes || size < 32 || size > 8 * 1024 * 1024 || std::memcmp(bytes,"DXBC",4)) return false;
-        const uint32_t total = word(bytes,24), count = word(bytes,28);
-        if (total > size || total < 32 || count > 32 || size_t(count) * 4 > total - 32) return false;
-        for (uint32_t i=0; i<count; ++i) {
-            const uint32_t offset = word(bytes,32 + size_t(i)*4);
-            if (offset < 32 + count*4 || offset > total || total-offset < 8) return false;
-            const uint32_t length = word(bytes,offset+4);
-            if (length > total-offset-8) return false;
-            Chunk chunk; std::memcpy(chunk.tag.data(),bytes+offset,4);
-            chunk.bytes.assign(bytes+offset+8,bytes+offset+8+length);
-            chunks.push_back(std::move(chunk));
-        }
-        return true;
+        return rsf_core_ac7_velocity_read_container(pointer, size, &chunks,
+            [](void* user, const rsf_ac7_velocity_chunk_view* view) noexcept {
+                try {
+                    auto& stored = *static_cast<std::vector<Chunk>*>(user);
+                    Chunk chunk{{view->tag[0], view->tag[1], view->tag[2], view->tag[3]}, {}};
+                    chunk.bytes.assign(view->bytes, view->bytes + view->size);
+                    stored.push_back(std::move(chunk));
+                    return true;
+                } catch (...) { return false; }
+            });
     }
     Chunk* find(const char* tag) {
         for (auto& chunk:chunks) if (!std::memcmp(chunk.tag.data(),tag,4)) return &chunk;
         return nullptr;
     }
     void write(std::vector<uint8_t>& output) {
-        output.assign(32+chunks.size()*4,0); std::memcpy(output.data(),"DXBC",4);
-        uint32_t value=1; std::memcpy(output.data()+20,&value,4);
-        value=uint32_t(chunks.size()); std::memcpy(output.data()+28,&value,4);
-        for (size_t i=0;i<chunks.size();++i) {
-            value=uint32_t(output.size()); std::memcpy(output.data()+32+i*4,&value,4);
-            output.insert(output.end(),chunks[i].tag.begin(),chunks[i].tag.end());
-            put(output,uint32_t(chunks[i].bytes.size()));
-            output.insert(output.end(),chunks[i].bytes.begin(),chunks[i].bytes.end());
-        }
-        value=uint32_t(output.size()); std::memcpy(output.data()+24,&value,4);
-        rsf_ac7_dxbc_rehash(output.data(),output.size());
+        std::vector<rsf_ac7_velocity_chunk_view> views;
+        views.reserve(chunks.size());
+        for (const auto& chunk : chunks)
+            views.push_back({{chunk.tag[0], chunk.tag[1], chunk.tag[2], chunk.tag[3]},
+                chunk.bytes.data(), chunk.bytes.size()});
+        if (!rsf_core_ac7_velocity_write_container(views.data(), views.size(), &output, rsf::ac7::resize_shader_bytes))
+            throw std::bad_alloc{};
     }
 };
+
 using Semantic=rsf_ac7_velocity_semantic;
 bool read_signature(const Chunk& chunk, std::vector<Semantic>& result)
 {
-    const auto& bytes=chunk.bytes;
-    if (bytes.size()<8) return false;
-    const auto count=word(bytes.data(),0);
-    const bool streams=!std::memcmp(chunk.tag.data(),"OSG5",4);
-    const uint32_t stride=streams ? 28u : 24u;
-    if (count>64 || size_t(count)*stride>bytes.size()-8) return false;
-    for (uint32_t i=0;i<count;++i) {
-        const size_t record=8+size_t(i)*stride;
-        if (streams && word(bytes.data(),record)!=0) return false;
-        const size_t offset=record+(streams ? 4u : 0u); const auto name=word(bytes.data(),offset);
-        if (name>=bytes.size()) return false;
-        const auto end=std::find(bytes.begin()+name,bytes.end(),uint8_t(0));
-        if (end==bytes.end()) return false;
-        Semantic semantic;
-        semantic.name.assign(reinterpret_cast<const char*>(bytes.data()+name),size_t(end-(bytes.begin()+name)));
-        semantic.index=word(bytes.data(),offset+4); semantic.system=word(bytes.data(),offset+8);
-        semantic.type=word(bytes.data(),offset+12); semantic.reg=word(bytes.data(),offset+16);
-        semantic.mask=bytes[offset+20]; semantic.used=bytes[offset+21];
-        result.push_back(std::move(semantic));
-    }
-    return true;
+    const bool streams = std::memcmp(chunk.tag.data(), "OSG5", 4) == 0;
+    return rsf_core_ac7_velocity_read_signature(chunk.bytes.data(), chunk.bytes.size(), streams, &result,
+        [](void* user, const rsf_ac7_velocity_semantic_view* view) noexcept {
+            try {
+                auto& semantics = *static_cast<std::vector<Semantic>*>(user);
+                semantics.push_back({std::string(view->name, view->name_size),
+                    view->index, view->system, view->type, view->reg, view->mask, view->used});
+                return true;
+            } catch (...) { return false; }
+        });
 }
+
 void write_signature(Chunk& chunk, const std::vector<Semantic>& semantics)
 {
-    const bool streams=!std::memcmp(chunk.tag.data(),"OSG5",4);
-    const uint32_t stride=streams ? 28u : 24u;
-    auto ordered=semantics;
-    std::stable_sort(ordered.begin(),ordered.end(),[](const auto& a,const auto& b) {
-        return std::tie(a.reg,a.mask)<std::tie(b.reg,b.mask);
-    });
-    auto& bytes=chunk.bytes; bytes.assign(8+ordered.size()*stride,0);
-    const uint32_t count=uint32_t(ordered.size()), header=8;
-    std::memcpy(bytes.data(),&count,4); std::memcpy(bytes.data()+4,&header,4);
-    for (size_t i=0;i<ordered.size();++i) {
-        const size_t offset=8+i*stride+(streams ? 4u : 0u); const auto& s=ordered[i];
-        const uint32_t name=uint32_t(bytes.size());
-        const uint32_t fields[]{name,s.index,s.system,s.type,s.reg};
-        std::memcpy(bytes.data()+offset,fields,sizeof(fields));
-        bytes[offset+20]=s.mask; bytes[offset+21]=s.used;
-        bytes.insert(bytes.end(),s.name.begin(),s.name.end()); bytes.push_back(0);
-    }
-    while (bytes.size()%4) bytes.push_back(0);
+    const bool streams = std::memcmp(chunk.tag.data(), "OSG5", 4) == 0;
+    std::vector<rsf_ac7_velocity_semantic_view> views;
+    views.reserve(semantics.size());
+    for (const auto& semantic : semantics)
+        views.push_back({semantic.name.data(), semantic.name.size(), semantic.index,
+            semantic.system, semantic.type, semantic.reg, semantic.mask, semantic.used});
+    if (!rsf_core_ac7_velocity_write_signature(views.data(), views.size(), streams, &chunk.bytes,
+            rsf::ac7::resize_shader_bytes))
+        throw std::bad_alloc{};
 }
+
 struct Operand { size_t token=0,index=0,end=0; uint32_t type=0,reg=0; };
 bool operand(const std::vector<uint32_t>& code,size_t& cursor,Operand& out,std::vector<Operand>* descendants=nullptr)
 {

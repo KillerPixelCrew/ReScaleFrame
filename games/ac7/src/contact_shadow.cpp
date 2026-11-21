@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "contact_shadow.h"
+#include "shader_bytes.h"
 #include <windows.h>
 #include <wincrypt.h>
 
@@ -16,14 +17,6 @@ bool sha256(const uint8_t* bytes, uint32_t size, uint8_t* digest) noexcept
     return ok;
 }
 
-uint8_t* resize(void* user, size_t size) noexcept try
-{
-    auto& output = *static_cast<std::vector<uint8_t>*>(user);
-    output.resize(size);
-    return output.data();
-}
-catch (...) { return nullptr; }
-
 static_assert(static_cast<int32_t>(rsf_ac7_contact_shadow_result::unmatched) == 0);
 static_assert(static_cast<int32_t>(rsf_ac7_contact_shadow_result::patched) == 1);
 static_assert(static_cast<int32_t>(rsf_ac7_contact_shadow_result::refused) == 2);
@@ -31,7 +24,6 @@ static_assert(static_cast<int32_t>(rsf_ac7_contact_shadow_result::refused) == 2)
 
 extern "C" int32_t rsf_core_ac7_contact_shadow_correct(const uint8_t*, size_t,
     bool (*sha256)(const uint8_t*, uint32_t, uint8_t*), uint8_t* (*resize)(void*, size_t), void* user) noexcept;
-extern "C" void rsf_core_ac7_dxbc_rehash(uint8_t*, size_t) noexcept;
 extern "C" uint32_t rsf_core_ac7_contact_shadow_crc(const uint8_t*, size_t) noexcept;
 
 rsf_ac7_contact_shadow_result rsf_ac7_contact_shadow_correct(
@@ -39,14 +31,10 @@ rsf_ac7_contact_shadow_result rsf_ac7_contact_shadow_correct(
 {
     output.clear();
     const auto result = static_cast<rsf_ac7_contact_shadow_result>(
-        rsf_core_ac7_contact_shadow_correct(static_cast<const uint8_t*>(bytes), size, sha256, resize, &output));
+        rsf_core_ac7_contact_shadow_correct(static_cast<const uint8_t*>(bytes), size, sha256,
+            rsf::ac7::resize_shader_bytes, &output));
     if (result != rsf_ac7_contact_shadow_result::patched) output.clear();
     return result;
-}
-
-void rsf_ac7_dxbc_rehash(uint8_t* bytes, size_t size) noexcept
-{
-    rsf_core_ac7_dxbc_rehash(bytes, size);
 }
 
 uint32_t rsf_ac7_contact_shadow_crc(const void* bytes, size_t size) noexcept

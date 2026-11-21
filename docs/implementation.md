@@ -303,6 +303,12 @@ SHA-256 and output storage. Shader replay and device verification
 remain open.
 [Contact-shadow evidence](research/ac7-lighting-shadow-20261004.md)
 
+AC7's velocity shader container and signature readers and writers are
+Rust-owned. The Runtime patch service shares the same DXBC chunk bounds
+check. The typed compiler calls, shader instruction transforms, HLSL,
+and C++ caller vectors remain in place. Shader replay, linkage and GPU
+verification remain open.
+
 ## Rust orchestrator and first Anomaly port
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.

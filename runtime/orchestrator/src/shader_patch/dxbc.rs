@@ -2,6 +2,7 @@
 //! Synthetic-only DXBC operation: one exact, same-length instruction replacement.
 
 use super::{ANCHOR, ARGUMENT, FORMAT, HASH, Outcome, check, refuse, sha256};
+use crate::dxbc_chunks;
 use crate::shader_hash::{dxbc_checksum, dxbc_digest_bytes};
 
 #[cfg(test)]
@@ -9,9 +10,7 @@ pub(super) use crate::shader_hash::MD5_K as K;
 const CUSTOM_DATA: u32 = 53;
 
 fn word(s: &[u8], at: usize) -> Outcome<u32> {
-    let bytes = s.get(at..at.saturating_add(4)).filter(|b| b.len() == 4);
-    let bytes = bytes.ok_or_else(|| refuse(FORMAT, "DXBC word"))?;
-    Ok(u32::from_le_bytes(bytes.try_into().unwrap_or_default()))
+    dxbc_chunks::word(s, at).ok_or_else(|| refuse(FORMAT, "DXBC word"))
 }
 
 pub(super) fn checksum(payload: &[u8]) -> Outcome<[u32; 4]> {
@@ -52,11 +51,10 @@ pub(super) fn rewrite(
     let mut count = 0;
     for i in 0..chunks {
         let at = word(input, 32 + i * 4)? as usize;
-        let size = word(input, at + 4)? as usize;
-        let bounded =
-            at >= 32 + chunks * 4 && at + 8 <= input.len() && size <= input.len() - at - 8;
-        check(bounded, FORMAT, "DXBC chunk size")?;
-        let kind = &input[at..at + 4];
+        let chunk = dxbc_chunks::chunk_at(input, 32 + chunks * 4, at)
+            .ok_or_else(|| refuse(FORMAT, "DXBC chunk size"))?;
+        let size = chunk.data.len();
+        let kind = chunk.tag;
         if kind != b"SHDR" && kind != b"SHEX" {
             continue;
         }

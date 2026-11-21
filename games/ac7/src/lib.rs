@@ -20,6 +20,8 @@
 mod cloud_depth;
 mod cloud_depth_abi;
 mod contact_shadow;
+#[path = "../../../runtime/graphics/src/dxbc_chunks.rs"]
+mod dxbc_chunks;
 mod guards;
 mod lifecycle;
 mod patches;
@@ -36,6 +38,7 @@ mod sites_abi;
 mod truesky;
 mod ui;
 mod ui_abi;
+mod velocity_container;
 mod view;
 mod view_abi;
 

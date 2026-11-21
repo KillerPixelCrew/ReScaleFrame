@@ -184,18 +184,6 @@ unsafe extern "C" fn rsf_core_ac7_contact_shadow_correct(
     }
 }
 
-/// The internal velocity shader caller lends one complete, writable container.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_ac7_dxbc_rehash(bytes: *mut u8, size: usize) {
-    if bytes.is_null() || size < 32 || size > isize::MAX as usize {
-        return;
-    }
-    let output = unsafe { slice::from_raw_parts_mut(bytes, size) };
-    if let Some(checksum) = dxbc_checksum(&output[20..]) {
-        output[4..20].copy_from_slice(&dxbc_digest_bytes(checksum));
-    }
-}
-
 /// The caller lends the shader bytes, including any engine trailer.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_ac7_contact_shadow_crc(bytes: *const u8, size: usize) -> u32 {

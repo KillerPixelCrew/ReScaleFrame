@@ -3,9 +3,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <vector>
-// First-party DXBC container checksum, shared by AC7's independently authored transforms.
-void rsf_ac7_dxbc_rehash(uint8_t* bytes, size_t size) noexcept;
-
 enum class rsf_ac7_contact_shadow_result { unmatched, patched, refused };
 
 // Internal plugin helper for AC7's directional light shader (SHA-256 60a2ca61...): adds the
