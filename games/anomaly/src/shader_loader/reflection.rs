@@ -58,7 +58,7 @@ struct Binding {
 
 // The native reflection and its borrowed descriptors remain live for the entire check.
 #[repr(C)]
-pub(super) struct Reflection {
+pub(crate) struct Reflection {
     version: u32,
     inputs: Span<Parameter>,
     outputs: Span<Parameter>,
@@ -67,7 +67,31 @@ pub(super) struct Reflection {
     buffers: Span<Buffer>,
 }
 
+// One constant-buffer variable. `buffer` is its buffer's index in reflection order.
+pub(crate) struct Constant {
+    pub buffer: u32,
+    pub buffer_size: u32,
+    pub offset: u32,
+    pub size: u32,
+}
+
 impl Reflection {
+    // The first variable named `name`, searching buffers and then their variables in reflection order.
+    pub(crate) fn constant(&self, name: &[u8]) -> Option<Constant> {
+        let buffers = unsafe { self.buffers.as_slice() };
+        buffers.iter().zip(0u32..).find_map(|(buffer, index)| {
+            unsafe { buffer.variables.as_slice() }
+                .iter()
+                .find(|variable| unsafe { variable.name.as_slice() } == name)
+                .map(|variable| Constant {
+                    buffer: index,
+                    buffer_size: buffer.size,
+                    offset: variable.offset,
+                    size: variable.size,
+                })
+        })
+    }
+
     fn inputs(&self) -> &[Parameter] {
         unsafe { self.inputs.as_slice() }
     }

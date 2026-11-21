@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::digest::sha256;
-use crate::shader_loader::{DecodedFrame, Entry, FrameLayout, Manifest, RuntimePack, decode_frame};
+use crate::shader_loader::{
+    DecodedFrame, Entry, FrameLayout, Manifest, Reflection, RuntimePack, decode_frame,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -326,6 +328,80 @@ pub(super) struct Loader {
     pub stats: ShaderCounters,
     refused_logs: u32,
     replacement_logs: u32,
+}
+
+// The staged tree transform (TreeRecord::xform) and the detail batch rows.
+const TREE_XFORM_BYTES: u32 = size_of::<[f32; 12]>() as u32;
+const DETAIL_ARRAY_BYTES: u32 = size_of::<foliage::Rows>() as u32;
+// consts, wave and wind are each one float4 register.
+const REGISTER_BYTES: u32 = size_of::<[f32; 4]>() as u32;
+
+impl ConstantRef {
+    fn find(stock: &Reflection, name: &[u8]) -> Self {
+        stock.constant(name).map_or_else(Self::default, |c| Self {
+            present: true,
+            buffer: c.buffer,
+            buffer_size: c.buffer_size,
+            offset: c.offset,
+            size: c.size,
+        })
+    }
+
+    fn inside(&self) -> bool {
+        !self.present
+            || (self.size != 0
+                && self.offset <= self.buffer_size
+                && self.size <= self.buffer_size - self.offset)
+    }
+}
+
+impl FoliageLayout {
+    // Locates the engine's staged VS constants in the stock reflection, whose buffer indices are
+    // the engine's CBackend::m_aVertexConstants indices. Names are the stock shader source's: tree
+    // m_xform consts wave wind, detail consts wave dir2D array. The compiler may remove consts, wave
+    // and wind (USE_TREEWAVE zeroes the sway, the still detail route has no wave set); a removed one
+    // is absent and its history words stay zero.
+    fn from_stock(family: u8, stock: &Reflection) -> Self {
+        let find = |name: &[u8]| ConstantRef::find(stock, name);
+        let mut layout = Self {
+            family,
+            ..Self::default()
+        };
+        let (required, sized) = match family {
+            FOLIAGE_TREE => {
+                layout.xform = find(b"m_xform");
+                layout.wind = find(b"wind");
+                (layout.xform, layout.xform.size >= TREE_XFORM_BYTES)
+            }
+            FOLIAGE_DETAIL => {
+                layout.wind = find(b"dir2D");
+                layout.array = find(b"array");
+                (layout.array, layout.array.size == DETAIL_ARRAY_BYTES)
+            }
+            _ => return layout,
+        };
+        layout.consts = find(b"consts");
+        layout.wave = find(b"wave");
+        let registers = [layout.consts, layout.wave, layout.wind];
+        layout.usable = required.present
+            && sized
+            && registers.iter().all(|r| r.size <= REGISTER_BYTES)
+            && required.inside()
+            && registers.iter().all(ConstantRef::inside);
+        layout
+    }
+}
+
+// The native platform borrows the prepared stock reflection for this call; the contract fixtures
+// call it through make_foliage_layout.
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_motion_foliage_layout(
+    stock: &Reflection,
+    family: u8,
+    out: &mut FoliageLayout,
+) -> bool {
+    *out = FoliageLayout::from_stock(family, stock);
+    out.usable
 }
 
 struct Replacement {
