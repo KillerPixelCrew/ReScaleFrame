@@ -11,6 +11,9 @@
 #include <cwchar>
 #include <mutex>
 
+extern "C" bool rsf_wingman_matches_executable(const wchar_t*) noexcept;
+extern "C" bool rsf_wingman_matches_sha256(const char*) noexcept;
+
 namespace rsf::wingman {
 namespace {
 struct Rect { int32_t min_x, min_y, max_x, max_y; };
@@ -119,9 +122,9 @@ bool match_target() try
     const auto length = GetModuleFileNameW(nullptr, executable, 32768);
     if (!length || length >= 32768) return false;
     const auto* leaf = wcsrchr(executable, L'\\');
-    if (_wcsicmp(leaf ? leaf + 1 : executable, L"ProjectWingman-Win64-Shipping.exe")) return false;
+    if (!rsf_wingman_matches_executable(leaf ? leaf + 1 : executable)) return false;
     std::string digest;
-    if (!rsf::sha256_file(executable, digest) || digest != known_sha256) return false;
+    if (!rsf::sha256_file(executable, digest) || !rsf_wingman_matches_sha256(digest.c_str())) return false;
     const auto* base = reinterpret_cast<const unsigned char*>(GetModuleHandleW(nullptr));
     constexpr unsigned char expected[] = {
         0x48,0x89,0x5c,0x24,0x08,0x48,0x89,0x74,0x24,0x10,0x57,0x48,0x83,0xec,0x40,

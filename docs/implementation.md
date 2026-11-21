@@ -1,5 +1,15 @@
 # Implementation tracker
 
+## Remaining Rust integration ports
+
+The [integration migration scope](rust-migration.md#remaining-integration-ports)
+covers the existing game and engine adapters beyond Anomaly. Project Wingman
+now publishes its GameSDK table and exact build identity from Rust. The
+existing DLL export forwards to that entry, and native pre-hook verification
+uses the same fingerprint. Its observation, camera and execution ports are
+still open. Source checks cover the entry path; the plugin and carrier
+contracts remain unrun.
+
 ## Rust orchestrator and first Anomaly port
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.

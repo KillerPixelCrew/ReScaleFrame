@@ -1,6 +1,31 @@
-# Rust orchestrator and Anomaly migration
+# Rust orchestrator and integration migration
 
 Branch `rust/orchestrator-anomaly` starts at `2db07f4`. The first cutover replaces the orchestrator behind its existing C interfaces. The second replaces the Anomaly adapter. Each production path has one implementation during the move.
+
+## Remaining integration ports
+
+Carry the same Rust ownership and public C ABI through every in-tree game
+and engine integration. Retain the engine-required managed entry points,
+JNI and Godot binding surfaces, and the native calls that require SDK types
+or fault guards. Adapter code continues to supply engine facts through
+the existing GameSDK interfaces, with backend and pacing policy in the
+Runtime. Preserve the supported paths, feature refusals and package names.
+
+| Integration | Native ownership and entry points to trace |
+| --- | --- |
+| Project Wingman | The XInput carrier and game DLL. The game DLL's exact-build detection and API publication now run in Rust. Port its guarded observation, render execution, camera records and retirement next. |
+| RDR2 | The game DLL's renderer and scene bridges, then ASI startup, settings, input and capture. Account for shared ABI with the explicit research attach target. |
+| Unity Mono and Unity package | Mono bootstrap, native Runtime setup and render event bridge, then package settings, preview and Vulkan paths. The native package also builds the Mono bridge. Preserve both users of that source and the managed engine callbacks. |
+| Steam, Fallout 4 and Skyrim SE | Port the shared Steam D3D11 chain cooperation before changing its two adapters' creation and Present routes. Port adapter-specific scene inputs, CPU facts, compatibility and recovery separately. |
+| AC7 | Trace the combined DirectInput carriers and their game-side libraries for hook admission, view, scene colour, UI, visibility and motion. Keep engine-specific policy in the adapter as the carriers transition. |
+| Godot | Preserve the GDExtension and compositor contracts while moving Runtime control, frame and presentation ownership behind the native engine bindings. |
+| Minecraft | Preserve the Java mod and JNI contracts. Move first-party native frame and presentation ownership behind those entry points and keep the linked Runtime. |
+
+Merge coherent ownership changes to the migration branch and remove their
+worker worktrees. The user runs builds and verification. Record each
+candidate's revision and feature set, and record binary ABI, focused
+fixture, device, and game or engine evidence separately. The earlier
+orchestrator and Anomaly verification gaps remain open.
 
 ## What the current build and callers require
 
