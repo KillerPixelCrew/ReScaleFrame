@@ -800,6 +800,10 @@ Streamline-disabled build passed 13 focused Release contracts and
 preserved the four checked export inventories and stub results.
 The enabled integrated Debug build passed 11 focused contracts and
 matched the Runtime, AC7, Loader, Minecraft and Anomaly exports.
+Eight matched game captures checked the actual SR color, depth,
+motion and reconstructed output on both Anomaly profiles. The AVX
+set includes the FSR3 evaluation after switching from DLSS.
+[Matched evaluation captures](research/rust-overlay-host.md#matched-sr-evaluation-captures)
 D3D11-on-12 wrapping, fullscreen and held-key gameplay remain open.
 [Shared overlay host evidence](research/rust-overlay-host.md#integrated-runtime-and-standard-game-run)
 

@@ -129,6 +129,34 @@ Logs, hashes and the intermediate FSR3 INI are under
 `.local/anomaly/staging/live-58fe95a-stage5/evidence/merged-overlay-host-avx-9e2cd87/`.
 Held-key gameplay, D3D11-on-12 wrapping and fullscreen remain open.
 
+## Matched SR evaluation captures
+
+The AVX and Standard game logs from `9e2cd87` each named four Runtime
+pipeline dump prefixes. The capture audit paired each prefix with its
+core capture manifest, frame record and SR result. All eight matched by
+session, source frame, view and effective backend. The manifests showed
+successful SR and matched Present calls. The recorded resource generation
+advanced on resize and on the AVX SR backend switch.
+
+| Profile and source frame | Resource generation | Effective SR | Render to output |
+| --- | --- | --- | --- |
+| Standard and AVX 151 | 1 | DLSS | 853×480 to 1280×720 |
+| Standard and AVX 392 and 632 | 2 | DLSS | 1067×600 to 1600×900 |
+| Standard 872 | 2 | DLSS | 1067×600 to 1600×900 |
+| AVX 872 | 3 | FSR3 | 1066×600 to 1600×900 |
+
+Every pair had byte-identical raw SR input color, depth, game motion
+and reconstructed output across the adapter and Runtime captures.
+The packed row sizes and the core capture's reinsertion and final
+color extents matched metadata. The Runtime recorded RG32F decoded
+motion in all eight samples, RG16F motion submitted to DLSS and RG32F
+submitted to FSR3. The checks cover the sampled indoor scene. Moving-camera
+quality still needs a matched evaluation and Present capture during motion.
+
+The verifier, transcript and 96 raw file hashes are under
+`.local/rust-1.94.1-verification/merged-overlay-capture-audit-9e2cd87/`.
+The source captures stay outside Git in the logged Anomaly dump directory.
+
 ## Vulkan Streamline-disabled verification
 
 The merged core also built without the corrected Vulkan Streamline SDK.
