@@ -15,7 +15,7 @@ Runtime. Preserve the supported paths, feature refusals and package names.
 | --- | --- |
 | Project Wingman | The game DLL and its dedicated XInput startup owner are in Rust. Both XInput carriers share the native forwarding leaf. Current binary and live verification remain open. |
 | RDR2 | The game DLL renderer, scene owner, ASI and attach Runtime session workers, and engine settings are in Rust. Port input, capture and diagnostic ownership next. |
-| Unity Mono and Unity package | The Mono loader, plugin lifecycle and shared D3D12 frame state are in Rust. Port native Runtime setup, the bridge's CPU fact routing and package settings, preview and Vulkan paths. The native package builds the same bridge source. Preserve both users and the managed engine callbacks. |
+| Unity Mono and Unity package | The Mono loader, plugin lifecycle, shared D3D12 frame state and Runtime setup are in Rust. Continue the bridge's CPU fact routing and package settings, preview and Vulkan owners. Both native consumers share the `[UnitySR]` path and bridge code. |
 | Steam, Fallout 4 and Skyrim SE | The shared Steam chain and both games' cold creation paths are in Rust. Fallout 4 identity and lifecycle are also ported. Continue Skyrim SE lifecycle, and both games' rendering, CPU facts, compatibility and recovery. |
 | AC7 | The game DLL's GameSDK entry and lifecycle are in Rust. Continue the native renderer and the combined DirectInput carriers' game-side owners for hook admission, view, scene colour, UI, visibility and motion. |
 | Godot | Preserve the GDExtension and compositor contracts while moving Runtime control, frame and presentation ownership behind the native engine bindings. |

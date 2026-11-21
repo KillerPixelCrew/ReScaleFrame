@@ -44,9 +44,8 @@ device verification remain unrun on this revision.
 Unity Mono's Rust adapter selects the researched build, owns the plugin
 lifecycle and starts and stops the managed helper on attached Mono threads.
 The existing game DLL export and native render bridge are used by the same
-callers. The Unity package still builds the shared bridge. The bridge's
-frame policy and native Runtime setup remain open for porting. Build,
-fixture and Unity player checks remain unrun on this revision.
+callers. The Unity package still builds the shared bridge. Build, fixture
+and Unity player checks remain unrun on this revision.
 
 Both Unity native DLLs link the same Rust D3D12 frame owner. It handles
 packet, policy generation, command-ring and submission lifetimes. A
@@ -54,6 +53,12 @@ device-removed fence value cannot admit a frame or retire in-flight slots.
 The existing Unity graphics calls and CPU fact callbacks remain native.
 The generated private binding was checked. Build, export and player
 verification remain open.
+
+Unity Mono starts the already-loaded Runtime through Rust using the
+existing `[UnitySR]` settings. Mono and package callers share path
+resolution. The four Unity exports still use the typed native facade.
+The private setup tables were regenerated against their headers. Builds,
+fixtures and Unity player verification remain open.
 
 The RDR2 game DLL uses Rust for exact-build admission, SR input routing,
 camera decode, scene facts and its lifecycle. The engine entry export and

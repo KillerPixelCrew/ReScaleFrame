@@ -13,8 +13,17 @@ linked as a staticlib). `plugin.cpp` keeps the stable `rsf_get_game_plugin_api` 
 the native D3D12 bridge through `rsf_unity_plugin_platform`. The bridge's frame state is Rust
 too (`bridge_state.rs`): packet validation and storage, the policy generation, admission into
 the command ring, source-submission bookkeeping and retirement. `bridge.cpp` keeps the Unity
-graphics interfaces, D3D12 commands, resource leases, CPU input events and the `rsf_unity_*`
-exports. The Unity package compiles the same `bridge.cpp` and links the same archive.
+graphics interfaces, D3D12 commands, resource leases, CPU input events and the bridge exports.
+The Unity package compiles the same `bridge.cpp` and links the same archive.
+
+The Runtime setup behind the loader entry `rsf_unity_start` and `rsf_unity_fg_start`,
+`rsf_unity_sr_start` and `rsf_unity_sr_stop` is Rust as well (`runtime_setup.rs`): the
+`[UnitySR]` keys and defaults, the start gates and result codes, the wait for Unity's Mono
+runtime and the `rsf_fg12_setup` and `rsf_callback_host_setup` descriptors. `runtime_host.cpp`
+keeps those exports and lends the typed calls into the already loaded Runtime, the SDK header
+tables and the D3D12 debug layer through `rsf_unity_runtime_platform`. Path resolution for
+`[UnitySR]` lives in `runtime_config.rs`; the Unity package reads it through
+`unity_runtime_config.h` from the same archive.
 
 Detection currently requires the exact x64 Drag'n Wash executable name and SHA256. A different
 build remains unknown, including other Unity Mono games. Recognition only establishes identity.
