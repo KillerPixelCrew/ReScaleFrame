@@ -4,6 +4,13 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now owns D3D12 FidelityFX and XeSS super-resolution provider
+sessions, including SDK module lifetime, quality planning and frame
+dispatch. The typed bridges keep SDK calls, validation and the pinned
+FSR4 compatibility behavior. A successful SDK result without a usable
+context or XeSS fallback mask now refuses initialization. The public
+provider entries and disabled behavior are unchanged.
+
 Rust now owns D3D11 frame-tap hook state, substitutions, draw
 classification and retained references. Plan replacement and uninstall
 drain admitted hooks before releasing their state. Control requests

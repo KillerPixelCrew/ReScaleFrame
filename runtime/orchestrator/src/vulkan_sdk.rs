@@ -30,6 +30,14 @@ pub(super) struct SdkModule {
 }
 
 impl SdkModule {
+    // Adopt a system loader reference from a native leaf that uses its own path policy.
+    pub(super) fn adopt_system(handle: *mut c_void) -> Option<Self> {
+        Some(Self {
+            handle: NonNull::new(handle)?,
+            unload: rsf_core_vk_sdk_unload,
+        })
+    }
+
     // The setup lends a NUL-terminated UTF-8 runtime directory for this call.
     pub(super) unsafe fn open(
         loader: Loader,
