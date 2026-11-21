@@ -2,8 +2,8 @@
 //! Fallout 4 AE 1.11.240 adapter policy: the exact recognized build, the GameSDK table, the plugin
 //! lifecycle with its process-lived Runtime session, DPI startup, the cold native D3D11
 //! creation and presentation binding sequence, the CPU event owner (poll and worker source
-//! handoff, input receipts and their GameSDK facts), and native depth-domain admission and
-//! composition.
+//! handoff, input receipts and their GameSDK facts), native depth-domain admission and
+//! composition, and native input/output resolution scopes.
 //!
 //! Native leaves stay in C++ and reach this crate through rsf_fallout4_platform
 //! (fallout4_platform.h), rsf_fallout4_cpu_platform (cpu_events_platform.h) and the per-call
@@ -20,6 +20,7 @@ mod creation;
 mod depth_domains;
 mod dpi;
 mod platform_abi;
+mod resolution;
 mod screen;
 mod session;
 

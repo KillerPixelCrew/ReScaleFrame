@@ -1501,6 +1501,27 @@ fn raster_current(leaves: &Leaves, snapshot: &Snapshot) -> bool {
         && same_raster_owner(snapshot, &current)
 }
 
+// Output can borrow either the raster-only recovery producer or the temporal producer.
+// The three keys are usable only during the current synchronous render callback.
+pub(crate) fn resolution_owner(
+    leaves: &Leaves,
+    snapshot: &Snapshot,
+) -> Option<(usize, usize, usize)> {
+    if !leaves.complete() {
+        return None;
+    }
+    let current = if snapshot.raster_valid {
+        raster_current(leaves, snapshot)
+    } else {
+        snapshot_current(leaves, snapshot, None)
+    };
+    current.then_some((
+        snapshot.context_key as usize,
+        snapshot.device_context_key as usize,
+        snapshot.chain_key as usize,
+    ))
+}
+
 fn snapshot_current(leaves: &Leaves, snapshot: &Snapshot, report: Report) -> bool {
     let mut stage = Stage::Source;
     let mut current = EMPTY;
