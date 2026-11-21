@@ -24,6 +24,12 @@ See [the Rust migration record](rust-migration.md#native-policy-cutover).
 
 ## Remaining Rust integration ports
 
+Fallout 4 now admits and closes FRAME, SUBMISSION and WINDOW scopes
+in Rust, including the balanced post-Swap close and recovery retry.
+The native COM lease probe still catches exceptions at the C++
+boundary. The scope fixtures and game checks remain unrun.
+[Fallout 4 frame scopes](research/rust-fallout4-render-hooks.md#frame-submission-and-window-scope-in-rust)
+
 Fallout 4 now admits and publishes its SR inputs and HUD-less scene
 in Rust. Source comparison matched the FRAME and SUBMISSION owner
 checks, SR-off path, and FINAL_SCENE and WINDOW order. The typed

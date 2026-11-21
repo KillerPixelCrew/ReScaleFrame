@@ -60,6 +60,10 @@ struct World {
     // when its step returns, as the former stack leases ended.
     NativeInputs sr_inputs{};
     NativeFramebuffer hudless{};
+    // Candidate owner Context and chain lease. Rust (render_hooks/scope.rs) adopts it into the
+    // World or discards it when the begin step returns.
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext> owner_context;
+    Microsoft::WRL::ComPtr<IDXGISwapChain> owner_chain;
     bool full_output_resolved{};
     rsf_d3d11_auxiliary_scope auxiliary_scope{};
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
@@ -93,16 +97,7 @@ bool same_source() {
 void notify(const rsf_game_render_pass& pass, void* context, uint32_t begin) noexcept {
     if (host.render_pass) try { host.render_pass(host.user, context, &pass, begin); } catch (...) {}
 }
-// Rust owns the pass identity (render_hooks/publication.rs).
-void identify(rsf_game_render_pass& pass) noexcept {
-    const auto cpu=cpu_identity_abi(world.cpu);
-    rsf_fallout4_render_identify(&pass,&cpu);
-}
-struct Owner {
-    uintptr_t renderer{}, device{}, context{}, chain{}, window{}, graph{}, view{};
-    uint32_t frame{};
-    bool operator==(const Owner&) const = default;
-};
+using Owner = NativeRenderOwner;
 bool owner(Owner& value) {
     const auto base=image();
     const auto get=[](uintptr_t address, auto& output) { return read(address,&output,sizeof(output)); };
@@ -116,42 +111,6 @@ bool same_object(IUnknown* a, IUnknown* b) {
     Microsoft::WRL::ComPtr<IUnknown> left,right;
     return a && b && SUCCEEDED(a->QueryInterface(IID_PPV_ARGS(&left))) &&
         SUCCEEDED(b->QueryInterface(IID_PPV_ARGS(&right))) && left.Get()==right.Get();
-}
-bool begin_render_scope() {
-    Owner before{},after{};
-    if (!owner(before)) return false;
-    Microsoft::WRL::ComPtr<ID3D11DeviceContext> context=reinterpret_cast<ID3D11DeviceContext*>(before.context);
-    Microsoft::WRL::ComPtr<IDXGISwapChain> chain=reinterpret_cast<IDXGISwapChain*>(before.chain);
-    Microsoft::WRL::ComPtr<ID3D11Device> device,chain_device;
-    context->GetDevice(&device);
-    DXGI_SWAP_CHAIN_DESC description{};
-    if (context->GetType()!=D3D11_DEVICE_CONTEXT_IMMEDIATE ||
-        !same_object(device.Get(),reinterpret_cast<ID3D11Device*>(before.device)) ||
-        FAILED(chain->GetDevice(IID_PPV_ARGS(&chain_device))) || !same_object(device.Get(),chain_device.Get()) ||
-        FAILED(chain->GetDesc(&description)) || description.OutputWindow!=reinterpret_cast<HWND>(before.window) ||
-        !owner(after) || before!=after || !same_source()) return false;
-    world.context=context; world.chain=chain;
-    auto& frame=world.frame_pass;
-    frame.struct_size=sizeof(frame); identify(frame);
-    frame.role=RSF_GAME_RENDER_FRAME; frame.native_frame=before.frame;
-    frame.family_key=frame.view_key=frame.history_key=before.view;
-    frame.viewport_key=frame.window_key=frame.rhi_viewport_key=before.window;
-    frame.pass_key=image()+0x21f0ac0; frame.swapchain=chain.Get();
-    world.submission_pass=frame; world.submission_pass.role=RSF_GAME_RENDER_SUBMISSION;
-    world.frame_open=true; frames.fetch_add(1,std::memory_order_acq_rel);
-    notify(frame,context.Get(),1);
-    world.submission_open=true;
-    notify(world.submission_pass,context.Get(),1);
-    static std::atomic_flag announced = ATOMIC_FLAG_INIT;
-    if (!announced.test_and_set(std::memory_order_relaxed))
-        report("Fallout4 native FRAME/SUBMISSION begin before ordinary WorldBegin; screen/input eligibility not inferred.");
-    return true;
-}
-void close_submission() {
-    if (!world.submission_open) return;
-    if (world.refused) world.submission_pass.flags|=RSF_GAME_RENDER_NO_FG;
-    notify(world.submission_pass,world.context.Get(),0);
-    world.submission_open=false;
 }
 bool drain_auxiliaries() noexcept {
     if (!world.auxiliary_open) return true;
@@ -368,6 +327,41 @@ constexpr NativePublicationLeaves publication_leaves{publication_world, diagnost
     publication_notify, publication_publish_inputs, publication_begin_output, publication_report_state,
     publication_reconstruct, end_output_resolution, publication_read_framebuffer, publication_framebuffer,
     publication_framebuffer_extent, publication_release_framebuffer, publication_publish_window};
+// FRAME, SUBMISSION and WINDOW scope leaves (render_hooks_platform.h). Rust (render_hooks/scope.rs)
+// decides the owner lease verdict, the FRAME identity and the begin and close order; these read
+// the native owner, compare COM identity, hold the Context and chain leases and keep the counters.
+static_assert(int(ResolutionStage::source_retired)==7);
+void scope_world(NativeScopeWorld* out) noexcept {
+    *out={cpu_identity_abi(world.cpu),&world.pass,&world.frame_pass,&world.submission_pass,world.context.Get(),
+        world.inputs,world.published,world.window_open,world.frame_open,world.submission_open,world.refused,
+        world.auxiliary_open};
+}
+bool scope_read_owner(NativeRenderOwner* value) noexcept { return owner(*value); }
+bool scope_lease_owner(const NativeRenderOwner* before) noexcept try {
+    world.owner_context=reinterpret_cast<ID3D11DeviceContext*>(before->context);
+    world.owner_chain=reinterpret_cast<IDXGISwapChain*>(before->chain);
+    Microsoft::WRL::ComPtr<ID3D11Device> device,chain_device;
+    world.owner_context->GetDevice(&device);
+    DXGI_SWAP_CHAIN_DESC description{};
+    return world.owner_context->GetType()==D3D11_DEVICE_CONTEXT_IMMEDIATE &&
+        same_object(device.Get(),reinterpret_cast<ID3D11Device*>(before->device)) &&
+        SUCCEEDED(world.owner_chain->GetDevice(IID_PPV_ARGS(&chain_device))) && same_object(device.Get(),chain_device.Get()) &&
+        SUCCEEDED(world.owner_chain->GetDesc(&description)) && description.OutputWindow==reinterpret_cast<HWND>(before->window);
+} catch (...) { return false; }
+void scope_adopt_owner() noexcept {
+    world.context=std::move(world.owner_context); world.chain=std::move(world.owner_chain);
+}
+void scope_discard_owner() noexcept { world.owner_context.Reset(); world.owner_chain.Reset(); }
+void scope_open_frame() noexcept { world.frame_open=true; frames.fetch_add(1,std::memory_order_acq_rel); }
+void scope_open_submission() noexcept { world.submission_open=true; }
+void scope_close_submission() noexcept { world.submission_open=false; }
+void scope_close_window() noexcept { world.window_open=false; windows.fetch_sub(1,std::memory_order_acq_rel); }
+void scope_close_frame() noexcept { world.frame_open=false; frames.fetch_sub(1,std::memory_order_acq_rel); }
+void scope_reset() noexcept { world={}; }
+constexpr NativeScopeLeaves scope_leaves{scope_world, scope_read_owner, scope_lease_owner, scope_adopt_owner,
+    scope_discard_owner, scope_open_frame, scope_open_submission, scope_close_submission, scope_close_window,
+    scope_close_frame, drain_auxiliaries, finish_resolution_source, scope_reset, publication_notify, diagnostic,
+    publication_report_state};
 void observe_viewport(void* manager, bool enabled) {
     Entry entry;
 #if defined(_MSC_VER)
@@ -408,12 +402,7 @@ void observe_world_begin() {
     if (rsf_fallout4_render_admit_world(&candidate, &cpu)) {
         ordinary_world=true;
         world={}; rsf_fallout4_recovery_reset(); world.cpu=current_cpu_identity();
-        try {
-            if (!begin_render_scope()) {
-                world.refused=true;
-                diagnostic("Fallout4 pre-world FRAME/SUBMISSION owner/view/frame lease refused.");
-            }
-        } catch (...) { world.refused=true; }
+        rsf_fallout4_render_begin_scope(&scope_leaves,&recovery_leaves);
     }
     SetLastError(error);
     world_begin();
@@ -621,7 +610,7 @@ void observe_native_present(void* renderer) {
         const auto cpu=cpu_identity_abi(world.cpu);
         switch (rsf_fallout4_render_admit_present(matched,host.session_id,&cpu,revalidate_present_screen)) {
         case NativePresentAdmission::complete: {
-            close_submission();
+            rsf_fallout4_render_close_submission(&scope_leaves);
             // Close the same CPU phase after the original, even if it reenters.
             phase_owner=world.cpu;
             cpu_phase=begin_cpu_present_phase(phase_owner,world.frame_pass.native_frame,world.frame_pass.window_key);
@@ -686,34 +675,8 @@ constexpr NativeRenderHookLeaves leaves{create_hook, remove_hook, queue_enable_h
     apply_queued, scopes_busy, bind_exports, bind_host};
 }
 const NativeRenderHookLeaves* render_hook_leaves() noexcept { return &leaves; }
-void finish_render_scope() noexcept try {
-    if (!world.cpu.source) return;
-    if (!same_source()) world.refused=true;
-    // Refused/unpresented sources drain here; only the guarded pre-Present path
-    // can provide completion in time for that source's generation prepare.
-    if (world.submission_open) {
-        world.refused=true;
-        diagnostic("Fallout4 refused/unpresented SUBMISSION balanced after Swap, before FRAME end.");
-        close_submission();
-    }
-    if (world.refused) world.pass.flags|=RSF_GAME_RENDER_NO_FG;
-    if (world.window_open) {
-        notify(world.pass, world.context.Get(), 0);
-        world.window_open = false;
-        windows.fetch_sub(1, std::memory_order_acq_rel);
-    }
-    if (world.frame_open) {
-        if (world.refused) world.frame_pass.flags|=RSF_GAME_RENDER_NO_FG;
-        notify(world.frame_pass,world.context.Get(),0);
-        world.frame_open=false;
-        frames.fetch_sub(1,std::memory_order_acq_rel);
-    }
-    (void)retire_recovery();
-    (void)drain_auxiliaries();
-    const bool resolution_finished=finish_resolution_source();
-    if (!resolution_finished) world.refused=true;
-    report_resolution_state(ResolutionStage::source_retired,world.inputs ? world.pass : world.frame_pass,
-        world.context.Get(),world.published,resolution_finished ? RSF_OK : RSF_ERROR_NOT_READY,report);
-    if (!resolution_busy() && !world.auxiliary_open && !recovery_owned()) { world = {}; rsf_fallout4_recovery_reset(); }
-} catch (...) {}
+// Rust (render_hooks/scope.rs) sequences the post-Swap scope end.
+void finish_render_scope() noexcept {
+    rsf_fallout4_render_finish_scope(&scope_leaves,&recovery_leaves);
+}
 }
