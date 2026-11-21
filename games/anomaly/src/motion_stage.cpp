@@ -260,15 +260,10 @@ struct RequestStorage {
     ShaderRequest request;
     std::vector<std::byte> copied;
 };
-D3DShaderApi& reflector() {
-    static D3DShaderApi api(engine_compiler_module);
-    return api;
-}
 void* open_pack(void* module, const void* profile, const wchar_t* pack, const wchar_t* cache,
     PackInfo* info, char* message, size_t size) noexcept try {
     std::string error;
-    if (!reflector().ready()) error = "engine D3DCompiler unavailable";
-    else if (auto* result = open_runtime_pack(pack, cache, static_cast<std::byte*>(module),
+    if (auto* result = open_runtime_pack(pack, cache, static_cast<std::byte*>(module),
             *static_cast<const BuildProfile*>(profile)->motion, error)) {
         *info = {rsf_anomaly_runtime_pack_manifest(result)};
         return result;
@@ -300,7 +295,8 @@ bool copy_bytecode(void* raw) noexcept try {
 } catch (...) { return false; }
 void prepare_shader(void* pack, void* raw, const rsf_anomaly_shader_entry* root, ShaderResult* out) noexcept try {
     const auto& request = static_cast<RequestStorage*>(raw)->request;
-    auto storage = std::make_unique<Prepared>(prepare_runtime_pack(pack, request, manifest_entry(*root), reflector()));
+    D3DShaderReflector reflector(rsf_anomaly_runtime_pack_reflector(pack));
+    auto storage = std::make_unique<Prepared>(prepare_runtime_pack(pack, request, manifest_entry(*root), reflector));
     *out = {storage.get(), bytes(storage->detail), storage->skin, static_cast<uint8_t>(storage->outcome)};
     storage.release();
 } catch (...) {}

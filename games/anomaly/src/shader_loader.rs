@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+mod d3d;
 mod frame;
 mod manifest;
 mod reflection;

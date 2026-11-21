@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use super::d3d::Modules;
 use super::manifest::{Manifest, Root, admit_pack};
 use super::{Bytes, Request};
 use crate::runtime_module::{export, rsf_anomaly_runtime_module};
@@ -10,6 +11,7 @@ use rsf_game_sys::shader_patch_abi::{
 use std::ffi::{CStr, CString, OsString, c_char, c_void};
 use std::os::windows::ffi::OsStringExt;
 use std::ptr::{NonNull, null_mut};
+use windows_sys::Win32::Foundation::FARPROC;
 
 struct Session {
     api: rsf_shader_patch_api,
@@ -26,6 +28,8 @@ struct RuntimePack {
     session: Session,
     manifest: Manifest,
     includes: Includes,
+    // The Runtime's session borrows the compiler. Drop the session before releasing the DLLs.
+    modules: Modules,
 }
 
 #[derive(Clone, Copy)]
@@ -181,9 +185,14 @@ impl RuntimePack {
     unsafe fn open(
         pack: *const u16,
         cache: *const u16,
-        compiler: *mut c_void,
+        compiler_name: *const u16,
         includer: Includer,
     ) -> Result<Self, String> {
+        // Live recompiles use the loaded engine compiler, including its identity in Runtime's cache key.
+        let modules = unsafe { Modules::load(compiler_name, false) };
+        let Some(compiler) = modules.compile().filter(|_| modules.reflect().is_some()) else {
+            return Err(String::from("engine D3DCompiler unavailable"));
+        };
         let api = query_api().ok_or_else(|| String::from("Runtime shader service unavailable"))?;
         let path =
             unsafe { wide_path(pack) }.ok_or_else(|| String::from("invalid motion pack path"))?;
@@ -197,7 +206,7 @@ impl RuntimePack {
                     size: data.len(),
                 },
                 cache,
-                compiler,
+                compiler as *mut c_void,
                 &mut handle,
             )
         };
@@ -224,6 +233,7 @@ impl RuntimePack {
                 reader: includer,
                 bytes: Vec::new(),
             },
+            modules,
         })
     }
 }
@@ -232,12 +242,12 @@ impl RuntimePack {
 unsafe extern "C" fn rsf_anomaly_runtime_pack_open(
     pack: *const u16,
     cache: *const u16,
-    compiler: *mut c_void,
+    compiler_name: *const u16,
     includer: &Includer,
     error: *mut c_char,
     capacity: usize,
 ) -> *mut RuntimePack {
-    match unsafe { RuntimePack::open(pack, cache, compiler, *includer) } {
+    match unsafe { RuntimePack::open(pack, cache, compiler_name, *includer) } {
         Ok(pack) => Box::into_raw(Box::new(pack)),
         Err(message) => {
             if !error.is_null() && capacity != 0 {
@@ -270,6 +280,11 @@ extern "C" fn rsf_anomaly_runtime_pack_manifest(pack: &RuntimePack) -> *const Ma
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_runtime_pack_api(pack: &RuntimePack) -> *const rsf_shader_patch_api {
     &pack.session.api
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_runtime_pack_reflector(pack: &RuntimePack) -> FARPROC {
+    pack.modules.reflect()
 }
 
 #[unsafe(no_mangle)]

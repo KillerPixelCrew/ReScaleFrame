@@ -13,7 +13,7 @@ struct Includer {
 };
 static_assert(sizeof(Includer) == 32);
 
-extern "C" void* rsf_anomaly_runtime_pack_open(const uint16_t*, const uint16_t*, void*, const Includer*,
+extern "C" void* rsf_anomaly_runtime_pack_open(const uint16_t*, const uint16_t*, const uint16_t*, const Includer*,
     char*, size_t) noexcept;
 
 namespace {
@@ -52,12 +52,12 @@ void* open_runtime_pack(const wchar_t* pack, const wchar_t* cache,
         error = "engine includer entries";
         return nullptr;
     }
-    const auto compiler = GetModuleHandleW(engine_compiler_module);
-    const auto fn = compiler ? GetProcAddress(compiler, "D3DCompile") : nullptr;
     const Includer includer{table, include_open, guarded_copy, include_close};
     char message[512]{};
+    static_assert(sizeof(wchar_t) == sizeof(uint16_t));
     auto* result = rsf_anomaly_runtime_pack_open(reinterpret_cast<const uint16_t*>(pack),
-        reinterpret_cast<const uint16_t*>(cache), reinterpret_cast<void*>(fn), &includer, message, sizeof(message));
+        reinterpret_cast<const uint16_t*>(cache), reinterpret_cast<const uint16_t*>(engine_compiler_module),
+        &includer, message, sizeof(message));
     if (!result) error = message;
     return result;
 }

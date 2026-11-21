@@ -4,6 +4,13 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now owns Anomaly's fixture shader include search and buffers,
+plus the live compiler and reflector module leases. Includes still
+try `r3` first, preserve Windows path construction and refuse sizes that
+do not fit the compiler's count. Live recompiles still use the loaded
+engine compiler, with the System32 reflector kept alive until pack
+retirement. Native D3D and engine include calls keep their signatures.
+
 Rust now owns the D3D11 observer's on-disk module image and PE64 byte
 lookup. Truncated section tables and virtual section tails are refused.
 Only successfully parsed files are cached. Native hook setup uses
