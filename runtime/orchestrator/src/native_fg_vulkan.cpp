@@ -13,7 +13,6 @@
 #include "../../backends/common/frame_capture_vk.h"
 #include "../../vulkan/fsr3/wsi-dispatch.h"
 #include <cstring>
-#include <filesystem>
 #include <memory>
 
 // The Rust owner relies on these Vulkan values and on the ops layout.
@@ -21,17 +20,13 @@ static_assert(VK_FORMAT_R8G8B8A8_UNORM == 37 && VK_FORMAT_B8G8R8A8_UNORM == 44 &
     VK_FORMAT_R32_SFLOAT == 100 && VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL == 5 && VK_COLOR_SPACE_SRGB_NONLINEAR_KHR == 0);
 static_assert(VK_SUCCESS == 0 && VK_INCOMPLETE == 5 && VK_SUBOPTIMAL_KHR == 1000001003 && VK_ERROR_INITIALIZATION_FAILED == -3);
 static_assert(FFX_API_RETURN_OK == 0);
-static_assert(sizeof(rsf_ffxgvk_swapchain) == 32 && sizeof(rsf_ffxgvk_ops) == 24 * sizeof(void*));
+static_assert(sizeof(rsf_ffxgvk_swapchain) == 32 && sizeof(rsf_ffxgvk_ops) == 26 * sizeof(void*));
 
 struct rsf_ffxgvk_native {
     rsf_fgvk_setup setup{};
-    HMODULE module = nullptr;
+    rsf_vkffx_exports sdk;
     ffxContext swapchain = nullptr, effect = nullptr;
     VkSwapchainKHR chain = VK_NULL_HANDLE;
-    PfnFfxCreateContext create = nullptr;
-    PfnFfxDestroyContext destroy = nullptr;
-    PfnFfxQuery query = nullptr;
-    PfnFfxDispatch dispatch = nullptr;
     PfnFfxConfigure configure = nullptr;
     rsf_ffx_set_wsi_dispatch wsi_dispatch = nullptr;
     PFN_vkQueuePresentKHR native_present = nullptr;
@@ -49,10 +44,6 @@ struct rsf_ffxgvk_native {
     // The source Rust admitted at the last successful configure. The SDK calls
     // the generation callback synchronously inside queuePresent.
     rsf::FrameCaptureVk capture;
-    // On successful open, Rust holds admission through unregistration and module unload.
-    ~rsf_ffxgvk_native() {
-        if (module) FreeLibrary(module);
-    }
 };
 namespace {
 // The WSI hooks carry no user pointer. Each borrows the leaf from the Rust
@@ -187,7 +178,7 @@ ffxReturnCode_t generate(ffxDispatchDescFrameGeneration* data, void* userdata) {
     if (!data || !rsf_core_ffxgvk_generation_record(native, data->frameID, &record)) return FFX_API_RETURN_ERROR_PARAMETER;
     auto& self = *native;
     data->reset |= (record.flags & RSF_FRAME_FLAG_RESET) != 0;
-    auto result = self.dispatch(&self.effect, &data->header);
+    auto result = self.sdk.dispatch(&self.effect, &data->header);
     if (result == FFX_API_RETURN_OK) {
         rsf_core_ffxgvk_note_generated(native);
         if (self.capture.wants(data->frameID)) for (uint32_t i = 0; i < data->numGeneratedFrames && i < 4; ++i) {
@@ -202,25 +193,16 @@ ffxReturnCode_t generate(ffxDispatchDescFrameGeneration* data, void* userdata) {
     return result;
 }
 
-int32_t open(const rsf_fgvk_setup* setup, uint32_t width, uint32_t height, rsf_ffxgvk_native** out, void** resources) noexcept try {
+int32_t open(const rsf_fgvk_setup* setup, void* module, uint32_t width, uint32_t height,
+    rsf_ffxgvk_native** out, void** resources) noexcept try {
     // Open resolves the leaves. Rust registers the WSI callbacks after this succeeds.
     auto self = std::make_unique<rsf_ffxgvk_native>(); self->setup = *setup;
     const auto& graphics = setup->graphics;
     self->width = width; self->height = height;
     self->allocator = const_cast<VkAllocationCallbacks*>(static_cast<const VkAllocationCallbacks*>(setup->allocator));
-    std::u8string directory(std::strlen(graphics.runtime_directory_utf8), u8'\0');
-    std::memcpy(directory.data(), graphics.runtime_directory_utf8, directory.size());
-    const auto path = std::filesystem::path(directory) / L"amd_fidelityfx_vk.dll";
-    if (!path.is_absolute()) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    self->module = LoadLibraryExW(path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
-    if (!self->module) return RSF_BACKEND_ERROR_LOAD_FAILED;
-    // The SDK exports lower-case names; typed resolution stays private to this DLL.
-    self->create = reinterpret_cast<PfnFfxCreateContext>(GetProcAddress(self->module, "ffxCreateContext"));
-    self->destroy = reinterpret_cast<PfnFfxDestroyContext>(GetProcAddress(self->module, "ffxDestroyContext"));
-    self->query = reinterpret_cast<PfnFfxQuery>(GetProcAddress(self->module, "ffxQuery"));
-    self->dispatch = reinterpret_cast<PfnFfxDispatch>(GetProcAddress(self->module, "ffxDispatch"));
-    self->configure = reinterpret_cast<PfnFfxConfigure>(GetProcAddress(self->module, "ffxConfigure"));
-    if (!self->create || !self->destroy || !self->query || !self->dispatch || !self->configure) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
+    const auto library = static_cast<HMODULE>(module);
+    self->configure = reinterpret_cast<PfnFfxConfigure>(GetProcAddress(library, "ffxConfigure"));
+    if (!self->sdk.resolve(library) || !self->configure) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
 #define RSF_VK_LOAD(member, name) self->member = reinterpret_cast<PFN_##name>(device_proc_for(*self, static_cast<VkDevice>(graphics.device), #name)); if (!self->member) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT
     RSF_VK_LOAD(barrier, vkCmdPipelineBarrier); RSF_VK_LOAD(copy, vkCmdCopyImage); RSF_VK_LOAD(idle, vkDeviceWaitIdle);
 #undef RSF_VK_LOAD
@@ -230,7 +212,7 @@ int32_t open(const rsf_fgvk_setup* setup, uint32_t width, uint32_t height, rsf_f
     if (!self->gpu.load(*setup, false)) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
     self->gpu.memory_types(self->memory_properties);
     if (!self->capture.initialize(static_cast<VkDevice>(graphics.device), graphics.device_proc, self->memory_properties)) return RSF_BACKEND_ERROR_INIT_FAILED;
-    self->wsi_dispatch = reinterpret_cast<rsf_ffx_set_wsi_dispatch>(GetProcAddress(self->module, "rsfFfxSetVulkanWsiDispatch"));
+    self->wsi_dispatch = reinterpret_cast<rsf_ffx_set_wsi_dispatch>(GetProcAddress(library, "rsfFfxSetVulkanWsiDispatch"));
     if (!self->wsi_dispatch) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
     self->native_present = reinterpret_cast<PFN_vkQueuePresentKHR>(graphics.device_proc(graphics.device, "vkQueuePresentKHR"));
     self->native_acquire = reinterpret_cast<PFN_vkAcquireNextImageKHR>(graphics.device_proc(graphics.device, "vkAcquireNextImageKHR"));
@@ -262,14 +244,14 @@ int32_t create_swapchain(rsf_ffxgvk_native* self, uint64_t* chain, uint32_t* has
     create.asyncComputeQueue = {static_cast<VkQueue>(setup.queues[1]), setup.queue_family, nullptr};
     create.presentQueue = {static_cast<VkQueue>(setup.queues[2]), setup.queue_family, nullptr};
     create.imageAcquireQueue = {static_cast<VkQueue>(setup.queues[3]), setup.queue_family, nullptr};
-    const auto created = self->create(&self->swapchain, &create.header, nullptr);
+    const auto created = self->sdk.create(&self->swapchain, &create.header, nullptr);
     *chain = handle_value(self->chain);
     *has_context = self->swapchain ? 1u : 0u;
     return created == FFX_API_RETURN_OK ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_INIT_FAILED;
 }
 int32_t query_swapchain(rsf_ffxgvk_native* self) noexcept {
     self->functions.header.type = FFX_API_QUERY_DESC_TYPE_FGSWAPCHAIN_FUNCTIONS_VK;
-    if (self->query(&self->swapchain, &self->functions.header) != FFX_API_RETURN_OK || !self->functions.pOutGetSwapchainImagesKHR ||
+    if (self->sdk.query(&self->swapchain, &self->functions.header) != FFX_API_RETURN_OK || !self->functions.pOutGetSwapchainImagesKHR ||
         !self->functions.pOutAcquireNextImageKHR || !self->functions.pOutQueuePresentKHR || !self->functions.pOutDestroySwapchainFFXAPI)
         return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
     return RSF_BACKEND_OK;
@@ -287,18 +269,18 @@ int32_t create_effect(rsf_ffxgvk_native* self, uint32_t* has_context) noexcept {
         (graphics.depth_infinite ? FFX_FRAMEGENERATION_ENABLE_DEPTH_INFINITE : 0u) |
         (graphics.motion_jittered ? FFX_FRAMEGENERATION_ENABLE_MOTION_VECTORS_JITTER_CANCELLATION : 0u);
     fg.displaySize = fg.maxRenderSize = {self->width, self->height}; fg.backBufferFormat = ffxApiGetSurfaceFormatVK(info.imageFormat);
-    const auto created = self->create(&self->effect, &fg.header, nullptr);
+    const auto created = self->sdk.create(&self->effect, &fg.header, nullptr);
     *has_context = self->effect ? 1u : 0u;
     return created == FFX_API_RETURN_OK ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_INIT_FAILED;
 }
 int32_t query_provider(rsf_ffxgvk_native* self) noexcept {
     ffxQueryGetProviderVersion provider{}; provider.header.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
-    if (self->query(&self->effect, &provider.header) != FFX_API_RETURN_OK || !provider.versionId) return RSF_BACKEND_ERROR_INIT_FAILED;
+    if (self->sdk.query(&self->effect, &provider.header) != FFX_API_RETURN_OK || !provider.versionId) return RSF_BACKEND_ERROR_INIT_FAILED;
     self->capture.set_provider(provider.versionId, 3, true);
     return RSF_BACKEND_OK;
 }
 int32_t destroy_effect(rsf_ffxgvk_native* self) noexcept {
-    if (self->effect && self->destroy(&self->effect, nullptr) != FFX_API_RETURN_OK) return RSF_BACKEND_ERROR_FEATURE_FAILED;
+    if (self->effect && self->sdk.destroy(&self->effect, nullptr) != FFX_API_RETURN_OK) return RSF_BACKEND_ERROR_FEATURE_FAILED;
     self->effect = nullptr;
     return RSF_BACKEND_OK;
 }
@@ -308,7 +290,7 @@ void destroy_chain(rsf_ffxgvk_native* self) noexcept {
     self->chain = VK_NULL_HANDLE;
 }
 int32_t destroy_swapchain(rsf_ffxgvk_native* self) noexcept {
-    if (self->swapchain && self->destroy(&self->swapchain, nullptr) != FFX_API_RETURN_OK) return RSF_BACKEND_ERROR_FEATURE_FAILED;
+    if (self->swapchain && self->sdk.destroy(&self->swapchain, nullptr) != FFX_API_RETURN_OK) return RSF_BACKEND_ERROR_FEATURE_FAILED;
     self->swapchain = nullptr;
     return RSF_BACKEND_OK;
 }
@@ -336,7 +318,7 @@ int32_t prepare(rsf_ffxgvk_native* self, void* commands, const rsf_fgvk_frame* f
     data.cameraNear = record.camera.near_plane; data.cameraFar = record.camera.far_plane;
     data.cameraFovAngleVertical = record.camera.vertical_fov_radians; data.viewSpaceToMetersFactor = 1;
     data.depth = resource(frame->depth); data.motionVectors = resource(frame->motion);
-    return rsf::vk_timed_call("ffx_prepare_sdk", record.frame_id, [&] { return int32_t(self->dispatch(&self->effect, &data.header)); });
+    return rsf::vk_timed_call("ffx_prepare_sdk", record.frame_id, [&] { return int32_t(self->sdk.dispatch(&self->effect, &data.header)); });
 }
 void copy(rsf_ffxgvk_native* self, void* commands, const rsf_srvk_image* source, uint64_t target, uint32_t initialized) noexcept {
     const auto list = static_cast<VkCommandBuffer>(commands);
@@ -371,7 +353,7 @@ int32_t present(rsf_ffxgvk_native* self, const void* info, uint64_t frame, uint6
 int32_t drain(rsf_ffxgvk_native* self) noexcept {
     QueueLock lock(*self);
     ffxDispatchDescFrameGenerationSwapChainWaitForPresentsVK wait{}; wait.header.type = FFX_API_DISPATCH_DESC_TYPE_FGSWAPCHAIN_WAIT_FOR_PRESENTS_VK;
-    if (self->dispatch(&self->swapchain, &wait.header) != FFX_API_RETURN_OK || self->idle(static_cast<VkDevice>(self->setup.graphics.device)) != VK_SUCCESS)
+    if (self->sdk.dispatch(&self->swapchain, &wait.header) != FFX_API_RETURN_OK || self->idle(static_cast<VkDevice>(self->setup.graphics.device)) != VK_SUCCESS)
         return RSF_BACKEND_ERROR_NOT_READY;
     return RSF_BACKEND_OK;
 }
@@ -379,7 +361,7 @@ void capture_flush(rsf_ffxgvk_native* self) noexcept try {
     (void)self->capture.flush();
 } catch (...) {}
 constexpr rsf_ffxgvk_ops operations{
-    open, [](rsf_ffxgvk_native* self) { delete self; }, set_wsi,
+    rsf_vkffx_system_loader, open, [](rsf_ffxgvk_native* self) { delete self; }, set_wsi,
     create_swapchain, query_swapchain, create_effect, query_provider, destroy_effect, destroy_chain, destroy_swapchain,
     images, acquire, prepare, copy, configure, present, drain,
     [](rsf_ffxgvk_native* self, uint64_t frame) -> uint32_t { return self->capture.wants(frame) ? 1u : 0u; },

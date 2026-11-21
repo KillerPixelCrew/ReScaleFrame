@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::render_abi::rsf_sharpening_options;
 use crate::sr_session::has_capacity;
+use crate::vulkan_fidelityfx::{Loader, SdkModule};
 use crate::vulkan_sr_abi::*;
 use crate::vulkan_sr_split::normalize_frame;
 use rsf_game_sys::{
@@ -337,7 +338,8 @@ struct Platform {
 
 #[repr(C)]
 struct FfxOps {
-    open: unsafe extern "C" fn(&Setup, &mut Handle) -> i32,
+    loader: Loader,
+    open: unsafe extern "C" fn(&Setup, Handle, &mut Handle) -> i32,
     close: unsafe extern "C" fn(Handle),
     initialize_graphics: unsafe extern "C" fn(Handle, &Setup) -> i32,
     versions: unsafe extern "C" fn(Handle, &mut [Version; MAX_VERSIONS], &mut u64) -> i32,
@@ -391,7 +393,7 @@ struct FfxDispatch<'a> {
 }
 
 const _: () = {
-    assert!(size_of::<Platform>() == 240);
+    assert!(size_of::<Platform>() == 256);
     assert!(size_of::<Blit>() == 24 && size_of::<Version>() == 24);
     assert!(size_of::<FfxDispatch>() == 144);
     assert!(std::mem::offset_of!(FfxDispatch, reset) == 136);
@@ -431,6 +433,7 @@ struct FidelityFx {
     ops: &'static FfxOps,
     handle: Handle,
     dispatch_lease: Option<DispatchLease>,
+    module: Option<SdkModule>,
     effect_live: bool,
     initialized: bool,
     output: StagingImage,
@@ -459,11 +462,16 @@ impl FidelityFx {
     unsafe fn create(ops: &'static FfxOps, setup: &Setup) -> Result<(Self, [u32; 2]), i32> {
         let output = [setup.output_width, setup.output_height];
         let mut handle = ptr::null_mut();
-        check(unsafe { (ops.open)(setup, &mut handle) })?;
+        let module = unsafe { SdkModule::open(ops.loader, setup.runtime_directory_utf8) }?;
+        check(unsafe { (ops.open)(setup, module.as_ptr(), &mut handle) })?;
+        if handle.is_null() {
+            return Err(INIT_FAILED);
+        }
         let mut owner = Self {
             ops,
             handle,
             dispatch_lease: None,
+            module: Some(module),
             effect_live: false,
             initialized: false,
             output: StagingImage::new(setup.device, output, RGBA16_FLOAT, GENERAL),
@@ -648,13 +656,16 @@ impl FidelityFx {
 
 impl Drop for FidelityFx {
     fn drop(&mut self) {
-        // Public destruction only drops the owner after the SDK accepts it.
-        // The remaining best-effort SDK cleanup is for failed construction.
+        // Public destruction drops this owner after the SDK accepts it. A failed constructor
+        // has no public handle to return, so if rollback refuses, keep the native leaf,
+        // module and device dispatch alive instead of unloading live SDK code.
         unsafe {
-            (self.ops.clear_sharpen)(self.handle);
-            if self.effect_live {
-                (self.ops.destroy_effect)(self.handle);
+            if self.effect_live && (self.ops.destroy_effect)(self.handle) != 0 {
+                std::mem::forget(self.dispatch_lease.take());
+                std::mem::forget(self.module.take());
+                return;
             }
+            (self.ops.clear_sharpen)(self.handle);
             for image in [&self.output, &self.zero_mask] {
                 (self.ops.release)(self.handle, image.description.image, image.memory);
             }

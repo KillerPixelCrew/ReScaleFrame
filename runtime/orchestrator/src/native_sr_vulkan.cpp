@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <rescaleframe/native_sr_vulkan.h>
+#include "vulkan_fidelityfx_native.h"
 
 namespace {
 struct Platform;
@@ -30,7 +31,6 @@ int32_t rsf_core_srvk_spatial_fallback(const Platform*, const rsf_srvk_fallback*
 #include <ffx_api/vk/ffx_api_vk.h>
 #include <cstdio>
 #include <cstring>
-#include <filesystem>
 #include <memory>
 
 namespace {
@@ -52,7 +52,8 @@ struct FfxDispatch {
 };
 struct FfxNative;
 struct FfxOps {
-    int32_t (*open)(const rsf_srvk_setup*, FfxNative**);
+    rsf_vkffx_loader loader;
+    int32_t (*open)(const rsf_srvk_setup*, void* module, FfxNative**);
     void (*close)(FfxNative*);
     int32_t (*initialize_graphics)(FfxNative*, const rsf_srvk_setup*);
     int32_t (*versions)(FfxNative*, Version*, uint64_t*);
@@ -86,7 +87,7 @@ struct Platform {
     int32_t (*dump_wants)(const rsf_frame_record*);
     void (*dump_result)(const rsf_frame_record*, const char*, uint32_t, int32_t);
 };
-static_assert(sizeof(Platform) == 240 && sizeof(Blit) == 24 && sizeof(Version) == 24);
+static_assert(sizeof(Platform) == 256 && sizeof(Blit) == 24 && sizeof(Version) == 24);
 static_assert(sizeof(FfxDispatch) == 144 && offsetof(FfxDispatch, reset) == 136);
 static_assert(VK_FORMAT_R8_UNORM == 9 && VK_FORMAT_R16G16_SFLOAT == 83 &&
     VK_FORMAT_R16G16B16A16_SFLOAT == 97 && VK_FORMAT_R32_SFLOAT == 100 && VK_FORMAT_D32_SFLOAT == 126);
@@ -117,12 +118,8 @@ PFN_vkVoidFunction VKAPI_PTR sdk_device_proc(VkDevice device, const char* name) 
 
 struct FfxNative {
     VkDevice device = VK_NULL_HANDLE;
-    HMODULE module = nullptr;
+    rsf_vkffx_exports sdk;
     ffxContext effect = nullptr;
-    PfnFfxCreateContext create = nullptr;
-    PfnFfxDestroyContext destroy = nullptr;
-    PfnFfxQuery query = nullptr;
-    PfnFfxDispatch dispatch = nullptr;
     PFN_vkCreateImage create_image = nullptr;
     PFN_vkDestroyImage destroy_image = nullptr;
     PFN_vkGetImageMemoryRequirements requirements = nullptr;
@@ -136,24 +133,12 @@ struct FfxNative {
     rsf::FrameCaptureVk capture{rsf::FrameCaptureVk::Completion::command_retirement};
     rsf::sharpening::Vulkan sharpen;
 
-    ~FfxNative() { if (module) FreeLibrary(module); }
 };
 
-int32_t open(const rsf_srvk_setup* setup, FfxNative** out) noexcept try
+int32_t open(const rsf_srvk_setup*, void* module, FfxNative** out) noexcept try
 {
     auto native = std::make_unique<FfxNative>();
-    std::u8string directory(std::strlen(setup->runtime_directory_utf8), u8'\0');
-    std::memcpy(directory.data(), setup->runtime_directory_utf8, directory.size());
-    const auto path = std::filesystem::path(directory) / L"amd_fidelityfx_vk.dll";
-    if (!path.is_absolute()) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    native->module = LoadLibraryExW(path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
-    if (!native->module) return RSF_BACKEND_ERROR_LOAD_FAILED;
-    native->create = reinterpret_cast<PfnFfxCreateContext>(GetProcAddress(native->module, "ffxCreateContext"));
-    native->destroy = reinterpret_cast<PfnFfxDestroyContext>(GetProcAddress(native->module, "ffxDestroyContext"));
-    native->query = reinterpret_cast<PfnFfxQuery>(GetProcAddress(native->module, "ffxQuery"));
-    native->dispatch = reinterpret_cast<PfnFfxDispatch>(GetProcAddress(native->module, "ffxDispatch"));
-    if (!native->create || !native->destroy || !native->query || !native->dispatch)
-        return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
+    if (!native->sdk.resolve(static_cast<HMODULE>(module))) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
     *out = native.release();
     return RSF_BACKEND_OK;
 }
@@ -195,7 +180,7 @@ int32_t versions(FfxNative* native, Version* out, uint64_t* count) noexcept try
     query.outputCount = count;
     query.versionIds = ids;
     query.versionNames = names;
-    if (native->query(nullptr, &query.header) != FFX_API_RETURN_OK || *count > max_versions)
+    if (native->sdk.query(nullptr, &query.header) != FFX_API_RETURN_OK || *count > max_versions)
         return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     for (uint64_t index = 0; index < *count; ++index) {
         Version value{ids[index], 0, 0, 0};
@@ -222,7 +207,7 @@ int32_t create_effect(FfxNative* native, const rsf_srvk_setup* setup, uint64_t i
     create.header.pNext = &backend.header;
     create.maxRenderSize = create.maxUpscaleSize = {setup->output_width, setup->output_height};
     create.flags = flags;
-    return native->create(&native->effect, &create.header, nullptr) == FFX_API_RETURN_OK
+    return native->sdk.create(&native->effect, &create.header, nullptr) == FFX_API_RETURN_OK
         ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_INIT_FAILED;
 }
 catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
@@ -231,7 +216,7 @@ int32_t effective_version(FfxNative* native, uint64_t* out) noexcept try
 {
     ffxQueryGetProviderVersion query{};
     query.header.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
-    if (native->query(&native->effect, &query.header) != FFX_API_RETURN_OK) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
+    if (native->sdk.query(&native->effect, &query.header) != FFX_API_RETURN_OK) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     *out = query.versionId;
     return RSF_BACKEND_OK;
 }
@@ -240,7 +225,7 @@ catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
 int32_t destroy_effect(FfxNative* native) noexcept try
 {
     if (!native->effect) return RSF_BACKEND_OK;
-    if (native->destroy(&native->effect, nullptr) != FFX_API_RETURN_OK) return RSF_BACKEND_ERROR_FEATURE_FAILED;
+    if (native->sdk.destroy(&native->effect, nullptr) != FFX_API_RETURN_OK) return RSF_BACKEND_ERROR_FEATURE_FAILED;
     native->effect = nullptr;
     return RSF_BACKEND_OK;
 }
@@ -255,7 +240,7 @@ int32_t plan(FfxNative* native, const rsf_srvk_setup* setup, uint32_t* width, ui
     query.qualityMode = setup->quality;
     query.pOutRenderWidth = width;
     query.pOutRenderHeight = height;
-    return native->query(&native->effect, &query.header) == FFX_API_RETURN_OK
+    return native->sdk.query(&native->effect, &query.header) == FFX_API_RETURN_OK
         ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_NOT_SUPPORTED;
 }
 catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
@@ -387,7 +372,7 @@ int32_t dispatch(FfxNative* native, void* commands, const FfxDispatch* call) noe
     data.viewSpaceToMetersFactor = 1;
     rsf::ffx_sharpening(data, call->sharpness);
     data.reset = call->reset != 0;
-    return native->dispatch(&native->effect, &data.header) == FFX_API_RETURN_OK
+    return native->sdk.dispatch(&native->effect, &data.header) == FFX_API_RETURN_OK
         ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
 }
 catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
@@ -450,7 +435,7 @@ catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 constexpr Platform native{
     rsf::dlss_vk::platform,
     rsf::xess_vk::platform,
-    {open, [](FfxNative* owner) { delete owner; }, initialize_graphics, versions, create_effect,
+    {rsf_vkffx_system_loader, open, [](FfxNative* owner) { delete owner; }, initialize_graphics, versions, create_effect,
         effective_version, destroy_effect, plan, allocate, release, initialize_mask, initialize_output, dispatch, copy_output,
         [](FfxNative* owner, const rsf_srvk_setup* setup, void* commands, const rsf_srvk_frame* frame, uint64_t output) -> int32_t {
             return owner->sharpen.execute(*setup, commands, *frame, reinterpret_cast<VkImage>(output));

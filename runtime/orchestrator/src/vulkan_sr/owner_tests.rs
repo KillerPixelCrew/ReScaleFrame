@@ -77,7 +77,7 @@ impl Fake {
             depth_inverted: 1,
             depth_infinite: 1,
             motion_jittered: 1,
-            runtime_directory_utf8: c"unused".as_ptr(),
+            runtime_directory_utf8: c"C:\\payload".as_ptr(),
         }
     }
 }
@@ -217,7 +217,11 @@ pub(super) static PLATFORM: Platform = Platform {
     dlss: Some(&DLSS),
     xess: Some(&super::xess::tests::OPS),
     ffx: FfxOps {
-        open: leaf!(|setup: &Setup, out: &mut Handle| -> i32 {
+        loader: Loader {
+            load: leaf!(|_: *const u16| -> Handle { ptr::without_provenance_mut(1) }),
+            unload: leaf!(|_: Handle| -> () {}),
+        },
+        open: leaf!(|setup: &Setup, _: Handle, out: &mut Handle| -> i32 {
             *out = setup.device;
             0
         }),

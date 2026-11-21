@@ -65,8 +65,8 @@ int32_t wsi(const rsf_ffx_wsi_dispatch* setup) {
     ++unregistered; return 0;
 }
 
-int32_t open(const rsf_fgvk_setup* setup, uint32_t width, uint32_t height, rsf_ffxgvk_native** out, void** resources) {
-    const auto result = fake::open(setup, width, height, out, resources);
+int32_t open(const rsf_fgvk_setup* setup, void* module, uint32_t width, uint32_t height, rsf_ffxgvk_native** out, void** resources) {
+    const auto result = fake::open(setup, module, width, height, out, resources);
     if (result != RSF_BACKEND_OK) return result;
     auto* native = *out;
     native->native_present = present; native->native_create = create; native->native_destroy = destroy;

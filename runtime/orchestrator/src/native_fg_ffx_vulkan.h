@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 #include <rescaleframe/native_fg_vulkan.h>
+#include "vulkan_fidelityfx_native.h"
 
 struct rsf_ffxgvk;
 extern "C" {
@@ -35,7 +36,8 @@ struct rsf_ffxgvk_swapchain {
     uint64_t old_chain;
 };
 struct rsf_ffxgvk_ops {
-    int32_t (*open)(const rsf_fgvk_setup*, uint32_t width, uint32_t height, rsf_ffxgvk_native**, void** resources);
+    rsf_vkffx_loader loader;
+    int32_t (*open)(const rsf_fgvk_setup*, void* module, uint32_t width, uint32_t height, rsf_ffxgvk_native**, void** resources);
     void (*close)(rsf_ffxgvk_native*);
     /* Returns the corrected SDK's dispatch registration result. */
     int32_t (*set_wsi)(rsf_ffxgvk_native*, uint32_t enabled);

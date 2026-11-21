@@ -19,6 +19,7 @@ use crate::vulkan_fg_resources::{
 use crate::vulkan_fg_resources_abi::{
     rsf_vkfg_fences as Fences, rsf_vkfg_image as PrivateImage, rsf_vkfg_platform as Resources,
 };
+use crate::vulkan_fidelityfx::{Loader, SdkModule};
 use crate::vulkan_sr_abi::{RSF_SRVK_ABI_VERSION, rsf_srvk_image as Image};
 use rsf_game_sys::{
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record as Record,
@@ -78,7 +79,8 @@ impl Swapchain {
 
 #[repr(C)]
 struct Ops {
-    open: unsafe extern "C" fn(*const Setup, u32, u32, *mut Handle, *mut Handle) -> i32,
+    loader: Loader,
+    open: unsafe extern "C" fn(*const Setup, Handle, u32, u32, *mut Handle, *mut Handle) -> i32,
     close: unsafe extern "C" fn(Handle),
     set_wsi: unsafe extern "C" fn(Handle, u32) -> i32,
     create_swapchain: unsafe extern "C" fn(Handle, *mut u64, *mut u32) -> i32,
@@ -107,7 +109,7 @@ struct Ops {
 
 const _: () = {
     assert!(size_of::<Swapchain>() == 32);
-    assert!(size_of::<Ops>() == 24 * size_of::<Handle>());
+    assert!(size_of::<Ops>() == 26 * size_of::<Handle>());
 };
 
 /// The process-wide WSI route. The corrected SDK keeps one WSI dispatch table
@@ -249,6 +251,7 @@ impl Default for Slot {
 struct Owner {
     ops: &'static Ops,
     native: Handle,
+    module: Option<SdkModule>,
     resources: Handle,
     device: Handle,
     width: u32,
@@ -274,6 +277,7 @@ impl Owner {
         Self {
             ops,
             native: ptr::null_mut(),
+            module: None,
             resources: ptr::null_mut(),
             device: setup.graphics.device,
             width: swapchain.width,
@@ -318,9 +322,17 @@ impl Owner {
             return NOT_SUPPORTED;
         }
         self.admitted = true;
+        let module =
+            match unsafe { SdkModule::open(ops.loader, setup.graphics.runtime_directory_utf8) } {
+                Ok(module) => module,
+                Err(result) => return result,
+            };
+        let library = module.as_ptr();
+        self.module = Some(module);
         let opened = unsafe {
             (ops.open)(
                 setup,
+                library,
                 self.width,
                 self.height,
                 &mut self.native,
@@ -735,6 +747,7 @@ impl Owner {
     fn retire(&mut self) -> i32 {
         if self.native.is_null() {
             // A failed open freed its own partial leaf and registered no hooks.
+            self.module = None;
             self.withdraw();
             return OK;
         }
@@ -801,6 +814,7 @@ impl Owner {
         // Keep admission through module unload, after the WSI table no longer points at the host.
         unsafe { (ops.close)(native) };
         self.native = ptr::null_mut();
+        self.module = None;
         self.withdraw();
         OK
     }
@@ -1143,6 +1157,7 @@ mod tests {
 
     unsafe extern "C" fn open(
         _: *const Setup,
+        _: Handle,
         _: u32,
         _: u32,
         out: *mut Handle,
@@ -1162,6 +1177,10 @@ mod tests {
         }
         OK
     }
+    unsafe extern "C" fn load(_: *const u16) -> Handle {
+        ptr::without_provenance_mut(NATIVE + 2)
+    }
+    unsafe extern "C" fn unload(_: Handle) {}
     unsafe extern "C" fn close(native: Handle) {
         assert_eq!(native.addr(), NATIVE);
         // The hooks are already refused, and admission outlives the native
@@ -1320,6 +1339,7 @@ mod tests {
         submit_fence: Some(submit_fence),
     };
     static OPS: Ops = Ops {
+        loader: Loader { load, unload },
         open,
         close,
         set_wsi,

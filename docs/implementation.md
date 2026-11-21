@@ -4,6 +4,15 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+FidelityFX Vulkan super resolution and frame generation now share one
+Rust SDK loader. It takes an absolute UTF-8 runtime directory and keeps
+the module alive through context retirement and native leaf release.
+The native bridge uses one typed definition of the common SDK exports.
+If SR creation rollback fails, the current ABI has no owner to return.
+That path retains the native leaf, device dispatch and module for the
+process lifetime rather than unloading live SDK code. Build and runtime
+validation remain open.
+
 The FidelityFX Vulkan owner now registers and unregisters WSI in Rust
 through a typed native call. It publishes the route after registration
 and keeps the SDK module and admission if unregistration fails. The

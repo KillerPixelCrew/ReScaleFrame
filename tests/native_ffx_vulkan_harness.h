@@ -143,11 +143,11 @@ inline rsf_ffxgvk_native* routed() {
 
 // Fake open replaces module loading and Vulkan entry resolution. Admission
 // and the order of WSI registration and teardown belong to the real Rust route.
-int32_t open(const rsf_fgvk_setup* setup, uint32_t width, uint32_t height, rsf_ffxgvk_native** out, void** resources) {
+int32_t open(const rsf_fgvk_setup* setup, void*, uint32_t width, uint32_t height, rsf_ffxgvk_native** out, void** resources) {
     require(!routed(), "Rust publishes the leaf only after open");
     auto* self = new rsf_ffxgvk_native{};
     self->setup = *setup; self->width = width; self->height = height;
-    self->create = nullptr; self->destroy = destroy_context; self->dispatch = dispatch; self->configure = configure;
+    self->sdk.destroy = destroy_context; self->sdk.dispatch = dispatch; self->configure = configure;
     self->barrier = barrier; self->copy = copy; self->idle = idle;
     auto& gpu = self->gpu;
     gpu.device = static_cast<VkDevice>(setup->graphics.device); gpu.graphics_submit = setup->graphics_submit; gpu.queue_user = setup->queue_user;
@@ -176,6 +176,7 @@ int32_t query_provider(rsf_ffxgvk_native*) { return RSF_BACKEND_OK; }
 
 inline rsf_ffxgvk_ops ops() {
     auto value = operations;
+    value.loader = {[](const uint16_t*) -> void* { return id<void*>(9); }, [](void*) {}};
     value.open = open; value.create_swapchain = create_swapchain; value.query_swapchain = query_swapchain;
     value.create_effect = create_effect; value.query_provider = query_provider;
     value.set_wsi = [](rsf_ffxgvk_native*, uint32_t) -> int32_t { return RSF_BACKEND_OK; };
