@@ -18,3 +18,9 @@ before preparing retirement. Preparation drains DX12, flushes capture, and
 destroys the SDK consumers before the host releases the imported resources.
 Checked destruction then releases the native objects and SDK libraries. A
 failed drain or teardown keeps the session and its remaining leases alive.
+
+The session also owns the opt-in diagnostic capture (`capture.rs`): source
+records, admission, budgets, duplicate refusal, the generated-callback counter
+and the pending readbacks, published only after the drained DX12 fence.
+`diagnostic-capture.h` keeps the fingerprint check, the private SDK callback
+table, the DX12 readback, copy and map calls and the file formats.

@@ -103,7 +103,10 @@ PresentTiming timing;
 // handle may remain live after failed retirement; only the session frees it.
 struct VulkanStoryXessFg {
     rsf_xess_bridge_session* session = nullptr;
-    rsf_xess_capture::Capture capture;
+    // Borrowed from the session; the SDK diagnostic callback user.
+    rsf_xess_capture_owner* capture = nullptr;
+    rsf_xess_capture::SetDiagnostics setDiagnostics = nullptr;
+    xefg_swapchain_handle_t diagnosticContext = nullptr;
     IDXGIFactory4* factory = nullptr;
     IDXGIAdapter1* adapter = nullptr;
     ID3D12Device* device = nullptr;
@@ -475,10 +478,29 @@ static int32_t CreateRecorders(VulkanStoryXessFg* value) {
     return static_cast<int>(value->commandList->Close());
 }
 
-static int32_t StartCapture(VulkanStoryXessFg* value, void* module) noexcept try {
-    return value->capture.initialize(static_cast<HMODULE>(module), value->fg) ? 0 : -7011;
-} catch (...) {
-    return -7011;
+// The session admits the exact SDK binary before looking up its private setter.
+static int32_t FindDiagnostics(VulkanStoryXessFg* value, void* module) {
+    value->setDiagnostics = reinterpret_cast<rsf_xess_capture::SetDiagnostics>(
+        GetProcAddress(static_cast<HMODULE>(module), "xefgSwapChainD3D12SetDiagnosticCallbacks"));
+    return value->setDiagnostics ? 0 : -1;
+}
+
+static int32_t RegisterDiagnostics(VulkanStoryXessFg* value) {
+    rsf_xess_capture::DiagnosticsV2 diagnostics;
+    diagnostics.user = value->capture;
+    diagnostics.input = rsf_xess_capture::Input;
+    diagnostics.before_outputs = rsf_xess_capture::BeforeOutputs;
+    diagnostics.output = rsf_xess_capture::Output;
+    const int result = value->setDiagnostics(value->fg, &diagnostics);
+    if (result >= 0) value->diagnosticContext = value->fg;
+    return result;
+}
+
+static int32_t UnregisterDiagnostics(VulkanStoryXessFg* value) {
+    if (!value->diagnosticContext || !value->setDiagnostics) return 0;
+    const int result = value->setDiagnostics(value->diagnosticContext, nullptr);
+    if (result >= 0) value->diagnosticContext = nullptr;
+    return result;
 }
 
 static int32_t SetGenerated(VulkanStoryXessFg* value, uint32_t count) {
@@ -493,11 +515,12 @@ extern "C" __declspec(dllexport) int32_t RsfXessBridgeCaptureSource(rsf_xess_bri
         !record->frame_id || record->frame_id > UINT32_MAX || !record->session_id) return RSF_XESS_BRIDGE_INVALID_ARGUMENT;
     if (record->abi_version != RSF_GAME_FRAME_ABI_VERSION || record->camera.abi_version != RSF_GAME_CAMERA_ABI_VERSION)
         return RSF_XESS_BRIDGE_ABI_MISMATCH;
-    return value->capture.source(*record, value->activeInterpolations) ? 0 : -7012;
+    rsf_core_xess_capture_source(value->capture, record, value->activeInterpolations);
+    return 0;
 }
 
 extern "C" __declspec(dllexport) uint64_t RsfXessBridgeCapturedCallbacks(const rsf_xess_bridge* value) {
-    return value ? value->capture.observed() : 0;
+    return value ? rsf_core_xess_capture_callbacks(value->capture) : 0;
 }
 
 extern "C" __declspec(dllexport) int VulkanStoryXessFgStart(VulkanStoryXessFg* value,
@@ -916,7 +939,7 @@ static constexpr rsf_xess_bridge_platform Platform{
     },
     .open_event = []() -> void* { return CreateEventW(nullptr, FALSE, FALSE, nullptr); },
     .create_recorders = CreateRecorders,
-    .start_capture = StartCapture,
+    .find_diagnostics = FindDiagnostics,
     .set_generated = SetGenerated,
     .read_completion = ReadCompletion,
     .arm_completion = [](VulkanStoryXessFg* value, uint64_t target, void* event) -> int32_t {
@@ -928,7 +951,7 @@ static constexpr rsf_xess_bridge_platform Platform{
     .disable_fg = [](VulkanStoryXessFg* value) -> int32_t {
         return value->fg && value->setEnabled ? static_cast<int>(value->setEnabled(value->fg, 0)) : -1;
     },
-    .flush_capture = [](VulkanStoryXessFg* value) -> int32_t { return value->capture.flush() ? 0 : -7010; },
+    .unregister_diagnostics = UnregisterDiagnostics,
     .release_swapchain = [](VulkanStoryXessFg* value) { Release(value->swapchain); },
     .destroy_fg = DestroyFg,
     .destroy_xell = DestroyXell,
@@ -967,6 +990,17 @@ static constexpr rsf_xess_bridge_platform Platform{
         static const bool enabled = std::getenv("VULKANSTORY_XESS_FG_SERIALIZE") != nullptr;
         return enabled;
     },
+    .attach_capture = [](VulkanStoryXessFg* value, rsf_xess_capture_owner* capture) { value->capture = capture; },
+    .register_diagnostics = RegisterDiagnostics,
+    .capture_fingerprint = rsf_xess_capture::Fingerprint,
+    .capture_failure = rsf_xess_capture::Failure,
+    .capture_describe = rsf_xess_capture::Describe,
+    .capture_event = rsf_xess_capture::WriteEvent,
+    .capture_footprint = rsf_xess_capture::QueryFootprint,
+    .capture_readback = rsf_xess_capture::CreateReadback,
+    .capture_release = rsf_xess_capture::ReleaseObject,
+    .capture_copy = rsf_xess_capture::RecordCopy,
+    .capture_publish = rsf_xess_capture::Publish,
 };
 
 static int CreateContext(uint64_t adapterLuid, const wchar_t* directory, VulkanStoryXessFg** output) {
