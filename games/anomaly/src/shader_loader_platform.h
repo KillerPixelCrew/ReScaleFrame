@@ -152,5 +152,8 @@ bool admit_runtime_manifest(Manifest&, std::string_view name_space, uint32_t cou
     rsf_anomaly_shader_read_root, std::string& error);
 Prepared finish_runtime_shader(const ShaderRequest&, const ManifestEntry&, Reflector&, int32_t status, bool cache_hit,
     std::span<const std::byte>, std::string_view detail);
+// Passes `reflection` to `use` as the private view, borrowed for that call only. `use` is not called when the view
+// cannot be built.
+void borrow_reflection(const Reflection&, void* user, void (*use)(void*, const rsf_anomaly_shader_reflection*)) noexcept;
 }
 #endif

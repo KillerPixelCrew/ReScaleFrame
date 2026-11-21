@@ -289,6 +289,14 @@ bool tess_chain_linkable(const Reflection& vertex, const Reflection& hull, const
     return rsf_anomaly_shader_tess_linkable(&vs, &hs, &ds, &ps);
 } catch (...) { return false; }
 
+void borrow_reflection(const Reflection& reflection, void* user,
+    void (*use)(void*, const rsf_anomaly_shader_reflection*)) noexcept try
+{
+    ReflectionView view;
+    const auto borrowed = view.borrow(reflection);
+    use(user, &borrowed);
+} catch (...) {}
+
 int skin_mode(const std::vector<Define>& defines) noexcept try
 {
     const auto views = define_views(defines);

@@ -166,7 +166,7 @@ pub(super) struct ConstantRef {
 #[repr(C)]
 #[derive(Default)]
 pub(super) struct FoliageLayout {
-    family: u8,
+    pub family: u8,
     pub xform: ConstantRef,
     pub consts: ConstantRef,
     pub wave: ConstantRef,

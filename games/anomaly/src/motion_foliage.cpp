@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
 #include "motion_foliage.h"
+#include "shader_loader_platform.h"
 
 namespace rsf::anomaly::motion {
 static_assert(sizeof(TreeRecord) == 104 && offsetof(TreeRecord, lod) == 96);
 static_assert(sizeof(DetailRemap) == 4704 && offsetof(DetailRemap, previous) == 20 && offsetof(DetailRemap, items) == 68);
 static_assert(sizeof(DetailRows) == 3904);
+static_assert(sizeof(FoliageLayout) == 108 && offsetof(FoliageLayout, xform) == 4 && offsetof(FoliageLayout, usable) == 104);
 
 extern "C" {
 FoliageHistoryState* rsf_anomaly_foliage_new() noexcept;
@@ -20,43 +22,18 @@ std::size_t rsf_anomaly_foliage_recorded(const FoliageHistoryState*, temporal::V
 std::uint32_t rsf_anomaly_foliage_count(const DetailRows*) noexcept;
 void rsf_anomaly_foliage_poison(DetailRows*) noexcept;
 float rsf_anomaly_foliage_scale(const float*) noexcept;
+bool rsf_anomaly_motion_foliage_layout(const rsf_anomaly_shader_reflection*, std::uint8_t, FoliageLayout*) noexcept;
 }
 
 FoliageLayout make_foliage_layout(Family family, const Reflection& stock) noexcept
 {
-    FoliageLayout layout;
-    layout.family = family;
-    const auto find = [&](const char* name) {
-        ConstantRef ref;
-        for (std::size_t b = 0; b < stock.buffers.size(); ++b)
-            for (const auto& variable : stock.buffers[b].variables)
-                if (variable.name == name) {
-                    ref = {true, static_cast<std::uint32_t>(b), stock.buffers[b].size, variable.offset, variable.size};
-                    return ref;
-                }
-        return ref;
-    };
-    const auto inside = [](const ConstantRef& ref) {
-        return !ref.present || (ref.size && ref.offset <= ref.buffer_size && ref.size <= ref.buffer_size - ref.offset);
-    };
-    if (family == Family::FoliageTree) {
-        layout.xform = find("m_xform");
-        layout.consts = find("consts");
-        layout.wave = find("wave");
-        layout.wind = find("wind");
-        layout.usable = layout.xform.present && layout.xform.size >= tree_xform_floats * sizeof(float) &&
-            layout.consts.size <= 16 && layout.wave.size <= 16 && layout.wind.size <= 16 &&
-            inside(layout.xform) && inside(layout.consts) && inside(layout.wave) && inside(layout.wind);
-    } else if (family == Family::FoliageDetail) {
-        layout.consts = find("consts");
-        layout.wave = find("wave");
-        layout.wind = find("dir2D");
-        layout.array = find("array");
-        layout.usable = layout.array.present && layout.array.size == foliage_detail_floats * sizeof(float) &&
-            layout.consts.size <= 16 && layout.wave.size <= 16 && layout.wind.size <= 16 &&
-            inside(layout.array) && inside(layout.consts) && inside(layout.wave) && inside(layout.wind);
-    }
-    return layout;
+    struct Call { Family family; FoliageLayout layout; } call{family, {}};
+    call.layout.family = family;
+    borrow_reflection(stock, &call, [](void* user, const rsf_anomaly_shader_reflection* view) {
+        auto& c = *static_cast<Call*>(user);
+        rsf_anomaly_motion_foliage_layout(view, static_cast<std::uint8_t>(c.family), &c.layout);
+    });
+    return call.layout;
 }
 
 std::uint32_t count_live_groups(const DetailRows& rows) noexcept { return rsf_anomaly_foliage_count(&rows); }

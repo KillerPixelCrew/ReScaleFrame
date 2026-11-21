@@ -29,13 +29,14 @@ struct ConstantRef {
     bool present{};
     std::uint32_t buffer{}, buffer_size{}, offset{}, size{};
 };
+// The C++ spelling of the Rust motion stage's FoliageLayout (motion/stage/abi.rs).
 struct FoliageLayout {
     Family family{};
     ConstantRef xform, consts, wave, wind, array;
     bool usable{};   // everything this family's history needs is there
 };
-// Variable names are the shader source's: tree m_xform consts wave wind; detail consts wave dir2D array. A variable the
-// compiler removed (USE_TREEWAVE zeroes the sway, so wave/wind/consts can vanish) is simply not present.
+// Rust owns the variable names and admission (motion/stage/shaders.rs FoliageLayout::from_stock); this borrows `stock`
+// for that call.
 FoliageLayout make_foliage_layout(Family, const Reflection& stock) noexcept;
 
 inline constexpr std::size_t tree_xform_floats = 12;
