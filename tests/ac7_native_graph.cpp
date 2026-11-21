@@ -294,23 +294,28 @@ int main() {
         MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
     check(patch_image != nullptr, "allocate temporal velocity code fixture");
     if (!patch_image) return 1;
+    // The table and transaction are the Rust owner's (patches.rs); the writes are the native leaves.
+    rsf_ac7_code_patch velocity_patches[RSF_AC7_VELOCITY_PATCHES]{};
+    for (uint32_t i = 0; i < RSF_AC7_VELOCITY_PATCHES; ++i)
+        check(rsf_ac7_velocity_patch(i, &velocity_patches[i]), "temporal velocity patch table");
     for (const auto& patch : velocity_patches)
         std::memcpy(patch_image + patch.rva, patch.native, patch.size);
     rsf_ac7_native_renderer patch_owner;
+    const auto patch_leaves = code_leaves(nullptr, nullptr);
     patch_image[velocity_patches[2].rva] = 0xcc;
-    check(!apply_velocity_patches(patch_owner, patch_image), "reject mismatched history gate");
-    check(patch_owner.velocity_patches == 0 && bytes_match(patch_image + velocity_patches[0].rva,
+    check(!rsf_ac7_velocity_apply(&patch_owner.patches, patch_image, &patch_leaves), "reject mismatched history gate");
+    check(patch_owner.patches.velocity_applied == 0 && bytes_match(patch_image + velocity_patches[0].rva,
         velocity_patches[0].native, 2), "preflight cannot leave earlier gates patched");
     patch_image[velocity_patches[2].rva] = 0x77;
-    check(apply_velocity_patches(patch_owner, patch_image), "install complete temporal velocity group");
-    check(apply_velocity_patches(patch_owner, patch_image), "owned patch installation is idempotent");
+    check(rsf_ac7_velocity_apply(&patch_owner.patches, patch_image, &patch_leaves), "install complete temporal velocity group");
+    check(rsf_ac7_velocity_apply(&patch_owner.patches, patch_image, &patch_leaves), "owned patch installation is idempotent");
     for (const auto& patch : velocity_patches)
-        check(bytes_match(patch_image + patch.rva, patch.temporal, patch.size), "temporal gate bytes installed");
+        check(bytes_match(patch_image + patch.rva, patch.replacement, patch.size), "temporal gate bytes installed");
     patch_image[velocity_patches[2].rva] = 0xcc;
-    check(!restore_velocity_patches(patch_owner) && patch_owner.velocity_patches == 3,
+    check(!rsf_ac7_velocity_restore(&patch_owner.patches, &patch_leaves) && patch_owner.patches.velocity_applied == 3,
         "teardown refuses foreign bytes and retains ownership");
     patch_image[velocity_patches[2].rva] = 0xeb;
-    check(restore_velocity_patches(patch_owner), "restore owned temporal gates");
+    check(rsf_ac7_velocity_restore(&patch_owner.patches, &patch_leaves), "restore owned temporal gates");
     for (const auto& patch : velocity_patches)
         check(bytes_match(patch_image + patch.rva, patch.native, patch.size), "native gates restored");
     VirtualFree(patch_image, 0, MEM_RELEASE);
@@ -426,12 +431,13 @@ int main() {
     check(restored_mode == 1, "native AA graph choice restored after jitter producer");
     configured_output = 4; configured_width = configured_height = 2;
     // The hook enum names table entries; the diagnostic gate covers only the evidence hooks.
-    check(sites[hook_engine_tick].rva == 0x3a3f70 && sites[hook_base_pass].rva == 0xebf050 &&
-        sites[hook_process_output].role == RSF_AC7_ROLE_OUTPUT && sites[hook_descriptor_output].rva == 0x10991e0 &&
-        sites[hook_pixel_enqueue_d].rva == 0xf4c620 && sites[hook_create_pixel_shader].rva == 0xe31e90,
-        "hook enum indexes the site table by name");
-    check(evidence_hook(hook_rhi_pixel_uniform) && evidence_hook(hook_pixel_enqueue_d) &&
-        !evidence_hook(hook_pixel_view_uniform) && !evidence_hook(hook_sky_projection),
+    check(rsf_ac7_hook_rva(hook_engine_tick) == 0x3a3f70 && rsf_ac7_hook_rva(hook_base_pass) == 0xebf050 &&
+        rsf_ac7_hook_role(hook_process_output) == RSF_AC7_ROLE_OUTPUT && rsf_ac7_hook_rva(hook_descriptor_output) == 0x10991e0 &&
+        rsf_ac7_hook_rva(hook_pixel_enqueue_d) == 0xf4c620 && rsf_ac7_hook_rva(hook_create_pixel_shader) == 0xe31e90,
+        "hook enum indexes the Rust site table by name");
+    const auto evidence = [](uint32_t hook) { return !rsf_ac7_hook_wanted(hook, false) && rsf_ac7_hook_wanted(hook, true); };
+    check(evidence(hook_rhi_pixel_uniform) && evidence(hook_pixel_enqueue_d) &&
+        !evidence(hook_pixel_view_uniform) && !evidence(hook_sky_projection),
         "only the pixel bind evidence hooks wait for the diagnostic");
     // Hook guards count per thread and sum for the stop path.
     check(guards_held(true) == 0, "no hook body is running");

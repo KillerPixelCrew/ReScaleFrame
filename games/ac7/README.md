@@ -104,6 +104,12 @@ and the exception-guarded native renderer leaves; the renderer, hooks and both D
 carriers remain C++. See [the migration note](../../docs/research/rust-ac7-entry.md) for the
 moved behaviour and the remaining AC7 owners.
 
+The same crate owns the native renderer's exact-build code sites and their admission
+(`src/sites.rs`), the scene-precision and temporal velocity patch transactions (`src/patches.rs`)
+and the hook body guards (`src/guards.rs`). `src/native_renderer.cpp` reaches them through
+`src/ac7_sites.h` and keeps MinHook, the detours, engine relays, SEH reads, protected code writes
+and the TrueSky plugin patches. See [the site migration note](../../docs/research/rust-ac7-native-sites.md).
+
 The view reader handles the game's 4096-byte uniform buffer. Scene motion needs UE encoding
 removal, and the engine's camera transform supplies camera motion. The native integration sizes the
 game's own UI targets through engine owners, preserving grading and glow; texture promotion

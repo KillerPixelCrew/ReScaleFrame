@@ -5,6 +5,11 @@ The 14 October beam/trail producer hooks are `0x190e740`, `0x1904d40`, `0x190798
 complete expected bytes, matched layouts, lifetime and proof limits are in
 [the current velocity research](ac7-velocity-20261013.md#beam-ribbon-and-animated-trail-producers-14-october).
 
+Code location, 21 November: the hooked entry sites, helper sites, enlarged UI depth/view gates,
+scene-precision site and temporal velocity group listed here are now tables in the Rust crate
+`rsf-ac7` (`games/ac7/src/sites.rs`, `patches.rs`), unchanged; TrueSky plugin sites stay in
+`native_renderer.cpp`. See [the migration note](rust-ac7-native-sites.md).
+
 Research history: findings, hook addresses and pending statuses below apply to their recorded
 experiments. Later increments can supersede earlier conclusions. See
 [current implementation and validation](../current-status.md) before using this as a feature list.
