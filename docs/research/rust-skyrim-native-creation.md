@@ -1,0 +1,110 @@
+# Skyrim SE native creation in Rust
+
+This note covers the first Skyrim SE Rust slice: the cold native creation root and its Steam
+Present cooperation moved from `games/skyrim-se/src/native_creation.cpp` and
+`games/skyrim-se/src/steam_present.cpp` into the new `rsf-skyrim-se` static library, linked into
+`ReScaleFrame.Game.SkyrimSE.dll`. It is a behaviour-preserving source port without a new
+experiment. Nothing was compiled, linked, Cargo-tested, Clippy-checked or CTest-run for it, and no
+game, window, device or deployment run was made. The user owns that verification.
+
+## Why this owner first
+
+`plugin.cpp` (GameSDK identity and lifecycle) orchestrates nine C++ sub-owners and five MinHook
+observers whose trampolines it owns. Porting it first would leave every observer and its
+trampoline in C++ behind a table of lifecycle callbacks. The creation root is self-contained: one
+guarded hook, two route profiles, one Runtime transaction, the Steam facade and the Community
+Shaders gate. Its C++ entry points (`native_creation_prepare/start/quiesce/stop/busy`) stay, so
+`plugin.cpp` and its lifecycle order are untouched.
+
+## What moved
+
+| Former C++ | Rust | Owns |
+| --- | --- | --- |
+| `native_creation.cpp` | `layout.rs` | thunk `+15b9412` and its bytes `ff 25 c8 fe 20 00` (IAT `+17c92e0`), the game call `+1012320` (`e8 ed 70 5a 00`) and return `+1012325`, renderer owner `+3330188` with device `+56`, context `+64`, window `+72`, swapchain `+96`; Display Tweaks 0.5.25 module name and SHA-256 `df7f352a...ba9f4`, relay `jmp [rip+0]`, entry `+27250` and its 20-byte prologue, invoke `+272e9` and its 77 bytes, retained slot `+5e168` and return `+27334` |
+| `native_creation.cpp` | `creation.rs` | thunk guard, both route checks with module pinning and fingerprint caching, `VirtualQuery` mapping rules, cold-owner rule, prepare/start/quiesce/stop/busy state, Runtime export lookup, trampoline publication, call lease, refused-route reports (at most four), owner/output/window admission, Display route receipt, mode-3 `begin`, post-call output verification, `end`, the scoped-end receipt and last-error restoration |
+| `steam_present.cpp` | `creation.rs` | the cold-owner callback handed to `rsf::steam::prepare_d3d11_chain` |
+
+`native_creation.cpp` now holds only native leaves, lent through `native_creation_platform.h` as a
+size- and version-checked table: the SEH-guarded copy (VirtualQuery-checked under mingw),
+`VirtualQuery`, module handle, export, module file SHA-256 through `rsf::sha256_file`, module pin,
+`GetLastError`/`SetLastError`, MinHook create/enable/disable, exception guards around the host log
+and the Runtime's `rsf_d3d11_host_creation_begin/end`, the Community Shaders gate
+(`compatibility_render_allowed`) and the shared Steam facade. The detour itself also stays native.
+It fills a call record with the native return address, the description and the three output
+pointers, calls `rsf_skyrim_creation_enter`, calls the original on its own frame, and a destructor
+calls `rsf_skyrim_creation_leave` on return or unwind. No Rust frame sits between the game and the
+original creation call, so a foreign exception or SEH unwind cannot cross Rust, and the Runtime
+scope is still closed on unwind as the former `Scope` destructor did. The record and table layouts
+are hand-mirrored in `platform.rs` because bindgen-cli 0.72.1 is not installed here; both sides
+assert sizes and offsets, and `RSF_D3D11_HOST_ABI_VERSION` reaches Rust through the table.
+
+The Steam overlay owner is not duplicated. Rust calls the existing facade through the table, and
+that facade calls the `rsf-steam` archive with its own platform. The DLL therefore links two Rust
+static archives, as `rsf_native_vulkan` already does inside the Runtime.
+
+## Preserved behaviour
+
+- DLL name `ReScaleFrame.Game.SkyrimSE`, the `rsf_get_game_plugin_api` export, ABI 24 info,
+  detection and every lifecycle call in `plugin.cpp` are unchanged.
+- Both supported creation routes: the game's own call returning to `+1012325`, and the exact
+  Display Tweaks 0.5.25 relay returning to its `+27334`, with the same fingerprint, pin,
+  mapping and byte checks in the same order. Any other caller or byte difference refuses.
+- Prepare still refuses while a call is in flight or live, logs thunk/route refusals, requires a
+  cold owner, prepares the Steam chain before resolving the Runtime services, creates the hook once
+  for the process and logs the same prepared text. Start still re-runs the guard and accepts an
+  already enabled hook; stop still accepts an already disabled hook and reports busy while a call
+  holds its lease.
+- Admission order inside the call is unchanged: live, verified caller, owner, the three output
+  pointers, description, `OutputWindow` equal to the owner window, the Community Shaders gate, then
+  the Steam facade. Only then does `begin` run. The original receives the current IAT and every
+  argument; its HRESULT and outputs return unchanged.
+- After the call, outputs are lent to `end` only if the call returned success, the owner is still
+  live and allowed, and owner, window, device, context and outer chain all match. Otherwise `end`
+  cancels. The entry last error is restored before the original and the native last error after
+  `end`.
+- Refusal and receipt texts are byte-identical. The scoped-end receipt prints the outer chain as
+  sixteen upper-case hex digits, matching MSVC `%p`.
+
+## Deliberate differences
+
+- Every host log call is exception-guarded. The former prepare, start and detour logs were not, so
+  a throwing log could reach `plugin.cpp`'s catch (prepare returned `NOT_READY`) or unwind into the
+  game. The log is now swallowed and the call continues.
+- The cold-owner check for the Steam facade reads through the SEH-guarded copy instead of
+  `ReadProcessMemory`. Both are non-faulting reads of the same two pointers.
+- The per-thread `refusal` string became the route check's return value. The logged text for each
+  failure is the same.
+- A null trampoline in the detour returns `E_FAIL` instead of calling null. MinHook enables the
+  detour only after the trampoline is published, so this is unreachable.
+
+## Checks performed
+
+Source review against the removed C++; the RVA arithmetic is restated as Rust tests (the game call
+reaches the thunk, the thunk reads the IAT, the Display invoke reads the retained slot and returns
+at the profile return). `rustfmt --edition 2024 --check` with rustfmt 1.11.0 (the pinned 1.94.1
+toolchain is not installed), `cargo metadata --locked --offline`, `engine.json` parse and
+`git diff --check`. Binding regeneration was not possible without bindgen. Not built or tested.
+
+## Remaining Skyrim owners
+
+Still C++ in `rsf_game_skyrim_se`, in suggested order:
+
+1. `plugin.cpp`: GameSDK identity (`SkyrimSE.exe`, SHA-256 `846efccf...1402f`, AMD64, info
+   strings) and lifecycle (prepare/start/quiesce/stop/status, process-lived D3D11 host session and
+   its `rsf_d3d11_host_setup` identity, units, motion, capability bits, presentation bridge 3 and
+   window class policy, per-monitor-v2 DPI request), plus five observers and their guards: jitter
+   `+101e360`, ProcessMain `+14edbf0` with caller `+153ade7` and TAA bypass bytes `+18`/`+30`,
+   reset `+1544df4`, resolution `+101e130`, renderer end `+1009f70` with presentation binding from
+   `+3330198`, viewport guard `+1009960`, frame upload `+100ae80`, and the bounded native
+   diagnostics. The next slice should move identity and lifecycle together with these observers.
+2. `compatibility.cpp`: Community Shaders 1.9.1 handover (DLL SHA-256 `10ba95e6...097827`, PE image
+   validation, six guard sites, `GetProcAddress` interception of `SKSEPlugin_Load`, Feature
+   configure `+3a4b30` and HDR `+45cbd0` hooks, state machine, pre-device retention and the
+   post-process call scope).
+3. `cpu_events.cpp` with `input_ownership.h` and `screen_classification.h`: CPU frame, input
+   ownership, prospective source and screen classification (one hook, about forty RVAs). Its
+   fixture `tests/skyrim_input.cpp` compiles the source directly.
+4. `presentation_inputs.cpp` (hook `+116ac80`), `sampling.cpp` (sampler `+1010de0`),
+   `resolution.cpp`, `render_inputs.cpp`, `auxiliary.cpp`: pre-HDR inputs, sampler binding,
+   reduced-resolution ownership, SR reconstruction and auxiliary views.
+5. `camera.cpp`: native camera decode, with its fixture `tests/skyrim_camera.cpp`.

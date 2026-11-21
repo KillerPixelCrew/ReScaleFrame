@@ -75,6 +75,12 @@ translation. Existing JNI exports still marshal Java arguments and call the
 same linked Runtime. The log directory is opened through the Windows wide
 path API. Builds, the native and Gradle fixtures, and gameplay remain open.
 
+Skyrim SE's Rust creation owner guards the original game thunk and the
+verified Display Tweaks route. It preserves the existing Steam facade,
+scoped Runtime calls and native creation outputs. The GameSDK lifecycle
+and rendering producers still need ports. Build and both-route gameplay
+verification remain open.
+
 ## Rust orchestrator and first Anomaly port
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
