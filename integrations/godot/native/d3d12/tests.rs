@@ -1,0 +1,440 @@
+// SPDX-License-Identifier: MIT
+use super::*;
+use crate::control::default_settings;
+use crate::platform::{ABI_VERSION, Setup, Status, fake};
+use std::ptr;
+
+const DEVICE: usize = 0x10;
+const QUEUE: usize = 0x20;
+const HUDLESS_LIST: usize = 0x900;
+const CHAIN: usize = 0x77;
+const SR_DLSS: u32 = 1;
+
+fn booted() -> Control {
+    let control = Control::new();
+    fake::INSTALL_RESULT.set(BACKEND_OK);
+    let setup = Setup {
+        struct_size: size_of::<Setup>() as u32,
+        abi_version: ABI_VERSION,
+        runtime_directory: c"C:/game/runtime".as_ptr(),
+        engine_version: c"4.7.2".as_ptr(),
+        project_id: c"125d2115-7176-46e1-8806-95b790f01717".as_ptr(),
+        log: None,
+        log_user: ptr::null_mut(),
+    };
+    assert_eq!(control.boot(&fake::LEAVES, &setup), 1);
+    control
+}
+
+fn configure(control: &Control, change: impl FnOnce(&mut Settings)) {
+    let mut settings = default_settings();
+    change(&mut settings);
+    assert_eq!(control.configure(&fake::LEAVES, &settings), 1);
+}
+
+fn pass(role: u32, frame: u64) -> rsf_game_render_pass {
+    let mut pass = empty_pass();
+    pass.struct_size = size_of::<rsf_game_render_pass>() as u32;
+    pass.role = role;
+    pass.session_id = 42;
+    pass.source_frame_id = frame;
+    pass.native_frame = frame;
+    pass.screen = SCREEN_FLIGHT;
+    pass.color_input = ptr::without_provenance_mut(0x40);
+    pass.camera.render_width = 1280;
+    pass.camera.render_height = 720;
+    pass.camera.output_width = 1920;
+    pass.camera.output_height = 1080;
+    pass
+}
+
+fn sr(frame: u64) -> rsf_game_render_pass {
+    pass(RSF_GAME_RENDER_SR, frame)
+}
+
+/// The SR command list of a frame.
+fn list(frame: u64) -> usize {
+    0x100 + frame as usize
+}
+
+fn render_on(control: &Control, pass: &rsf_game_render_pass, commands: usize) -> c_int {
+    control.d3d12.render(
+        control,
+        &fake::LEAVES,
+        ptr::without_provenance_mut(DEVICE),
+        ptr::without_provenance_mut(QUEUE),
+        ptr::without_provenance_mut(commands),
+        pass,
+    )
+}
+
+fn render(control: &Control, pass: &rsf_game_render_pass) -> c_int {
+    render_on(control, pass, list(pass.source_frame_id))
+}
+
+fn submit(control: &Control, lists: &[usize]) {
+    control
+        .d3d12
+        .submitted(&fake::LEAVES, ptr::without_provenance_mut(QUEUE), lists);
+}
+
+fn status(control: &Control) -> Status {
+    let mut value = Status {
+        struct_size: size_of::<Status>() as u32,
+        abi_version: ABI_VERSION,
+        ..Status::default()
+    };
+    // SAFETY: a complete local record.
+    assert_eq!(unsafe { control.status(&fake::LEAVES, &mut value) }, 1);
+    value
+}
+
+#[test]
+fn the_first_pass_binds_creates_the_auto_provider_and_evaluates_slot_zero() {
+    let control = booted();
+    assert_eq!(render(&control, &sr(1)), 1);
+    assert_eq!(
+        fake::take_d3d12_calls(),
+        [("bind", 0), ("create", 1), ("wait", 0), ("evaluate", 0)]
+    );
+    let request = fake::EVALUATE.get().expect("evaluated");
+    assert_eq!(request.screen, SCREEN_FLIGHT);
+    assert_eq!(request.sharpening, fake::sharpening_defaults());
+    let value = status(&control);
+    assert_eq!(
+        (value.requested_sr, value.active_sr, value.sr_result),
+        (SR_AUTO, 1, BACKEND_OK)
+    );
+    assert_eq!(
+        (
+            value.render_width,
+            value.render_height,
+            value.output_width,
+            value.output_height
+        ),
+        (1280, 720, 1920, 1080)
+    );
+    assert_eq!(value.evaluated_frames, 1);
+}
+
+#[test]
+fn another_device_is_refused_and_a_failed_fence_keeps_the_binding() {
+    let control = booted();
+    fake::BIND.set(0);
+    assert_eq!(render(&control, &sr(1)), 0);
+    assert_eq!(fake::take_d3d12_calls(), [("bind", 0)]);
+    assert_eq!(render(&control, &sr(2)), 1);
+    assert_eq!(
+        fake::take_d3d12_calls(),
+        [("create", 1), ("wait", 0), ("evaluate", 0)]
+    );
+    let other = control.d3d12.render(
+        &control,
+        &fake::LEAVES,
+        ptr::without_provenance_mut(DEVICE + 1),
+        ptr::without_provenance_mut(QUEUE),
+        ptr::without_provenance_mut(list(3)),
+        &sr(3),
+    );
+    assert_eq!(other, 0);
+    assert!(fake::take_d3d12_calls().is_empty());
+}
+
+#[test]
+fn a_generation_change_drains_submitted_work_and_recreates() {
+    let control = booted();
+    assert_eq!(render(&control, &sr(1)), 1);
+    submit(&control, &[list(1)]);
+    fake::take_d3d12_calls();
+    // FG options do not change the SR generation.
+    configure(&control, |s| s.fg_mode = 1);
+    assert_eq!(render(&control, &sr(2)), 1);
+    assert_eq!(fake::take_d3d12_calls(), [("wait", 0), ("evaluate", 1)]);
+    configure(&control, |s| s.quality = 2);
+    assert_eq!(render(&control, &sr(3)), 0);
+    assert!(fake::take_d3d12_calls().is_empty());
+    submit(&control, &[list(2)]);
+    assert_eq!(fake::take_d3d12_calls(), [("signal", 2)]);
+    assert_eq!(render(&control, &sr(3)), 1);
+    assert_eq!(
+        fake::take_d3d12_calls(),
+        [
+            ("wait", 2),
+            ("destroy", fake::context_handle(1)),
+            ("create", 1),
+            ("wait", 0),
+            ("evaluate", 2)
+        ]
+    );
+}
+
+#[test]
+fn a_provider_context_follows_its_output_but_not_its_input_extent() {
+    let control = booted();
+    let mut frame = sr(1);
+    assert_eq!(render(&control, &frame), 1);
+    fake::take_d3d12_calls();
+    frame.source_frame_id = 2;
+    frame.camera.render_width = 960;
+    assert_eq!(render(&control, &frame), 1);
+    assert_eq!(fake::take_d3d12_calls(), [("wait", 0), ("evaluate", 1)]);
+    submit(&control, &[list(1), list(2)]);
+    assert_eq!(fake::take_d3d12_calls(), [("signal", 1)]);
+    frame.source_frame_id = 3;
+    frame.camera.output_width = 2560;
+    assert_eq!(render(&control, &frame), 1);
+    assert_eq!(
+        fake::take_d3d12_calls(),
+        [
+            ("wait", 1),
+            ("destroy", fake::context_handle(1)),
+            ("create", 1),
+            ("wait", 0),
+            ("evaluate", 2)
+        ]
+    );
+    assert_eq!(status(&control).output_width, 2560);
+}
+
+#[test]
+fn spatial_uses_the_normalising_context_and_its_plan() {
+    let control = booted();
+    configure(&control, |s| s.sr_backend = SR_SPATIAL);
+    let mut frame = sr(1);
+    assert_eq!(render(&control, &frame), 1);
+    assert_eq!(
+        fake::take_d3d12_calls(),
+        [("bind", 0), ("create", 0), ("wait", 0), ("evaluate", 0)]
+    );
+    assert_eq!(status(&control).active_sr, SR_SPATIAL);
+    submit(&control, &[list(1)]);
+    assert_eq!(fake::take_d3d12_calls(), [("signal", 1)]);
+    frame.source_frame_id = 2;
+    frame.camera.render_width = 960;
+    fake::PLAN.set((960, 720));
+    assert_eq!(render(&control, &frame), 1);
+    assert_eq!(
+        fake::take_d3d12_calls(),
+        [
+            ("wait", 1),
+            ("destroy", fake::context_handle(1)),
+            ("create", 0),
+            ("wait", 0),
+            ("evaluate", 1)
+        ]
+    );
+    assert_eq!(status(&control).render_width, 960);
+}
+
+#[test]
+fn a_refused_provider_falls_back_and_reports_its_first_result() {
+    let control = booted();
+    configure(&control, |s| s.sr_backend = SR_DLSS);
+    fake::REFUSED.set(Some((SR_DLSS, -7)));
+    assert_eq!(render(&control, &sr(1)), 1);
+    assert_eq!(
+        fake::take_d3d12_calls(),
+        [
+            ("bind", 0),
+            ("create", u64::from(SR_DLSS)),
+            ("create", 0),
+            ("wait", 0),
+            ("evaluate", 0)
+        ]
+    );
+    let value = status(&control);
+    assert_eq!(
+        (value.requested_sr, value.active_sr, value.sr_result),
+        (SR_DLSS, 0, -7)
+    );
+}
+
+#[test]
+fn no_context_refuses_the_pass_before_a_slot_is_taken() {
+    let control = booted();
+    configure(&control, |s| s.sr_backend = SR_SPATIAL);
+    fake::REFUSED.set(Some((SR_NONE, -3)));
+    assert_eq!(render(&control, &sr(1)), 0);
+    assert_eq!(fake::take_d3d12_calls(), [("bind", 0), ("create", 0)]);
+    fake::REFUSED.set(None);
+    assert_eq!(render(&control, &sr(2)), 1);
+    assert_eq!(
+        fake::take_d3d12_calls(),
+        [("create", 0), ("wait", 0), ("evaluate", 0)]
+    );
+}
+
+#[test]
+fn each_slot_waits_for_its_own_last_submission() {
+    let control = booted();
+    for frame in 1..=3 {
+        assert_eq!(render(&control, &sr(frame)), 1);
+        submit(&control, &[list(frame)]);
+    }
+    fake::take_d3d12_calls();
+    assert_eq!(render(&control, &sr(4)), 1);
+    assert_eq!(fake::take_d3d12_calls(), [("wait", 1), ("evaluate", 0)]);
+    // An unmatched list or another queue signals nothing.
+    submit(&control, &[list(9)]);
+    control.d3d12.submitted(
+        &fake::LEAVES,
+        ptr::without_provenance_mut(QUEUE + 1),
+        &[list(4)],
+    );
+    assert!(fake::take_d3d12_calls().is_empty());
+    submit(&control, &[list(4)]);
+    assert_eq!(fake::take_d3d12_calls(), [("signal", 4)]);
+    assert_eq!(render(&control, &sr(5)), 1);
+    assert_eq!(fake::take_d3d12_calls(), [("wait", 2), ("evaluate", 1)]);
+}
+
+#[test]
+fn a_slot_stays_owned_until_its_recording_is_fenced() {
+    let control = booted();
+    for frame in 1..=3 {
+        assert_eq!(render(&control, &sr(frame)), 1);
+    }
+    fake::take_d3d12_calls();
+    assert_eq!(render(&control, &sr(4)), 0);
+    assert_eq!(render(&control, &pass(RSF_GAME_RENDER_FINAL_SCENE, 4)), 0);
+    assert_eq!(control.d3d12.shutdown(&control, &fake::LEAVES), 0);
+    assert!(fake::take_d3d12_calls().is_empty());
+    submit(&control, &[list(1)]);
+    assert_eq!(fake::take_d3d12_calls(), [("signal", 1)]);
+    assert_eq!(render(&control, &sr(4)), 1);
+    assert_eq!(fake::take_d3d12_calls(), [("wait", 1), ("evaluate", 0)]);
+}
+
+#[test]
+fn the_final_scene_rides_the_last_slot_and_reports_its_submission() {
+    assert_eq!(
+        [last_slot(0), last_slot(1), last_slot(3), last_slot(4)],
+        [0, 0, 2, 0]
+    );
+    let control = booted();
+    assert_eq!(render(&control, &sr(1)), 1);
+    assert_eq!(render(&control, &sr(2)), 1);
+    fake::take_d3d12_calls();
+    let scene = pass(RSF_GAME_RENDER_FINAL_SCENE, 2);
+    assert_eq!(render_on(&control, &scene, HUDLESS_LIST), 1);
+    assert_eq!(fake::take_d3d12_calls(), [("final_scene", 1)]);
+    // One signal covers both lists; only the HUD-less record reaches FG.
+    submit(&control, &[list(2), HUDLESS_LIST]);
+    assert_eq!(
+        fake::take_d3d12_calls(),
+        [("signal", 1), ("fg_submitted", 2)]
+    );
+    // A refused signal keeps the frame 1 list pending.
+    fake::SIGNAL.set(0);
+    submit(&control, &[list(1)]);
+    assert_eq!(fake::take_d3d12_calls(), [("signal", 2)]);
+    fake::SIGNAL.set(1);
+    // The next signal on this queue covers the previously submitted list.
+    submit(&control, &[list(9)]);
+    assert_eq!(fake::take_d3d12_calls(), [("signal", 2)]);
+}
+
+#[test]
+fn the_fg_provider_is_requested_only_from_an_owner_on_another_backend() {
+    let control = booted();
+    fake::PRESENT_OWNER.set(Some(1));
+    assert_eq!(render(&control, &sr(1)), 1);
+    assert_eq!(
+        fake::take_d3d12_calls(),
+        [
+            ("bind", 0),
+            ("present_request", 3),
+            ("create", 1),
+            ("wait", 0),
+            ("evaluate", 0)
+        ]
+    );
+    fake::PRESENT_OWNER.set(Some(3));
+    assert_eq!(render(&control, &sr(2)), 1);
+    assert_eq!(fake::take_d3d12_calls(), [("wait", 0), ("evaluate", 1)]);
+}
+
+#[test]
+fn only_gameplay_flight_passes_keep_the_flight_screen() {
+    let mut settings = default_settings();
+    assert_eq!(screen(&settings, SCREEN_FLIGHT), SCREEN_FLIGHT);
+    assert_eq!(screen(&settings, SCREEN_UNKNOWN), SCREEN_MENU);
+    settings.gameplay = 0;
+    assert_eq!(screen(&settings, SCREEN_FLIGHT), SCREEN_MENU);
+}
+
+#[test]
+fn input_refusals_are_logged_four_times_and_each_is_counted() {
+    let control = booted();
+    fake::EVALUATED.set(BACKEND_ERROR_INVALID_ARGUMENT);
+    for frame in 1..=5 {
+        assert_eq!(render(&control, &sr(frame)), 0);
+        submit(&control, &[list(frame)]);
+    }
+    let logs = fake::take_d3d12_calls()
+        .into_iter()
+        .filter(|call| *call == ("refusal_log", 1280))
+        .count();
+    assert_eq!(logs, 4);
+    let value = status(&control);
+    assert_eq!(
+        (value.refused_frames, value.active_sr, value.sr_result),
+        (5, 0, BACKEND_ERROR_INVALID_ARGUMENT)
+    );
+}
+
+#[test]
+fn present_reuses_the_rendered_identity_or_reports_a_miss() {
+    let control = booted();
+    let chain = ptr::without_provenance_mut(CHAIN);
+    control.d3d12.present(&control, &fake::LEAVES, chain);
+    assert_eq!(fake::WINDOW.get(), None);
+    control.d3d12.render_begin(&control, &fake::LEAVES, 1);
+    assert_eq!(render(&control, &sr(1)), 1);
+    control.d3d12.present(&control, &fake::LEAVES, chain);
+    assert_eq!(
+        fake::WINDOW.get(),
+        Some((1, 42, RSF_GAME_RENDER_WINDOW, SCREEN_FLIGHT, CHAIN, 0))
+    );
+    assert_eq!(status(&control).active_sr, 1);
+    control.d3d12.render_begin(&control, &fake::LEAVES, 2);
+    control.d3d12.present(&control, &fake::LEAVES, chain);
+    assert_eq!(
+        fake::WINDOW.get(),
+        Some((2, 42, RSF_GAME_RENDER_WINDOW, SCREEN_UNKNOWN, CHAIN, 0))
+    );
+    assert_eq!(status(&control).active_sr, 0);
+    // A render-begin leaf exception clears the frame, so Present has nothing to show.
+    fake::WINDOW.set(None);
+    fake::RENDER_BEGIN.set(0);
+    control.d3d12.render_begin(&control, &fake::LEAVES, 3);
+    control.d3d12.present(&control, &fake::LEAVES, chain);
+    assert_eq!(fake::WINDOW.get(), None);
+}
+
+#[test]
+fn shutdown_drains_ends_the_fg_session_and_releases_the_context() {
+    let control = booted();
+    assert_eq!(render(&control, &sr(1)), 1);
+    submit(&control, &[list(1)]);
+    fake::take_d3d12_calls();
+    fake::END_SESSION.set(0);
+    assert_eq!(control.d3d12.shutdown(&control, &fake::LEAVES), 0);
+    assert_eq!(fake::take_d3d12_calls(), [("wait", 1), ("end_session", 42)]);
+    fake::END_SESSION.set(1);
+    assert_eq!(control.d3d12.shutdown(&control, &fake::LEAVES), 1);
+    assert_eq!(
+        fake::take_d3d12_calls(),
+        [
+            ("wait", 1),
+            ("end_session", 42),
+            ("release", fake::context_handle(1))
+        ]
+    );
+    // The next pass recreates the context on the next slot.
+    assert_eq!(render(&control, &sr(2)), 1);
+    assert_eq!(
+        fake::take_d3d12_calls(),
+        [("create", 1), ("wait", 0), ("evaluate", 1)]
+    );
+}

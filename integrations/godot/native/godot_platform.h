@@ -8,13 +8,13 @@
 
    Rust owns the requested settings and their generation, the extension option schema, renderer
    admission, engine-service routing, the D3D12 session identity and paths, the status record,
-   and the Vulkan session (boot state, settings, generation, status, configure admission and the
-   presenter, FG and SR accounting). The leaves hold godot-cpp, D3D12, DXGI, Win32, Vulkan and
-   Runtime calls and decide nothing. */
+   the D3D12 SR context plan and submission ledger (d3d12.rs), and the Vulkan session (boot state,
+   settings, generation, status, configure admission and the presenter, FG and SR accounting).
+   The leaves hold godot-cpp, D3D12, DXGI, Win32, Vulkan and Runtime calls and decide nothing. */
 #include "api.h"
 #include <stdint.h>
 
-#define RSF_GODOT_PLATFORM_VERSION 2u
+#define RSF_GODOT_PLATFORM_VERSION 3u
 
 /* Mirror of rsf_native_fg_options without its header. */
 typedef struct rsf_godot_fg_options {
@@ -74,12 +74,29 @@ typedef struct rsf_godot_latency_facts {
     rsf_godot_input_facts inputs;
 } rsf_godot_latency_facts;
 
-/* One evaluated D3D12 SR pass, reported after rsf_sr12_evaluate. */
-typedef struct rsf_godot_sr_frame {
-    uint32_t requested_sr, context_backend;
-    int32_t context_result, evaluated;
-    uint32_t render_width, render_height, output_width, output_height;
-} rsf_godot_sr_frame;
+/* One D3D12 SR context the owner planned: the provider (Auto already resolved by the Runtime,
+   spatial mapped to the normalising context), quality, preset and extents. The leaf adds the
+   bound device, the presentation host and the log. */
+typedef struct rsf_godot_sr_create {
+    uint32_t backend, quality, dlss_preset;
+    uint32_t output_width, output_height, render_width, render_height;
+    uint32_t reserved;
+    rsf_godot_paths paths;
+} rsf_godot_sr_create;
+
+/* rsf_sr12_create's result and handle, and rsf_sr12_plan's extent when a context exists. The
+   owner holds the handle; desired_* arrive holding the previous plan and stay when none is made. */
+typedef struct rsf_godot_sr_context {
+    void* handle;
+    int32_t result;
+    uint32_t desired_width, desired_height, reserved;
+} rsf_godot_sr_context;
+
+/* One rsf_sr12_evaluate: the command slot, the gated screen and the sharpening snapshot. */
+typedef struct rsf_godot_sr_evaluate {
+    uint32_t slot, screen;
+    rsf_sharpening_options sharpening;
+} rsf_godot_sr_evaluate;
 
 /* Vulkan owner facts, read under its guard. The compiled flags are build facts. */
 typedef struct rsf_godot_vk_facts {
@@ -177,6 +194,40 @@ typedef struct rsf_godot_platform {
     void (*window_facts)(rsf_godot_window_facts* facts);
     void (*fg_facts)(rsf_godot_fg_facts* facts);
     uint32_t (*latency_facts)(rsf_godot_latency_facts* facts);
+    /* The D3D12 SR context and submission leaves (d3d12.rs), called on Godot's render thread.
+       A uint32_t completion of zero means an exception ended the leaf; the owner then refuses
+       the call as the export's catch did. */
+    /* Keeps the engine's first device and queue and creates the fence; zero when the fence
+       failed, which keeps the borrow as before. */
+    uint32_t (*d3d12_bind)(void* device, void* queue);
+    /* Nonzero when the fence reached value within 15 s, or value is zero, or no fence exists. */
+    uint32_t (*d3d12_wait)(uint64_t value);
+    /* Queue Signal of value; zero without a fence or on failure. */
+    uint32_t (*d3d12_signal)(uint64_t value);
+    /* The Runtime's Auto SR and FG provider for the bound adapter. */
+    uint32_t (*sr_default_backend)(void);
+    uint32_t (*fg_default_backend)(void);
+    /* Nonzero when the presentation provider has an owner; writes its backend. */
+    uint32_t (*present_owner)(uint32_t* backend);
+    void (*present_request)(uint32_t backend);
+    uint32_t (*sr_create)(const rsf_godot_sr_create* request, rsf_godot_sr_context* context);
+    void (*sr_destroy)(void* context);
+    /* Sharpening snapshot, then rsf_sr12_evaluate of a copy of pass with request->screen. */
+    uint32_t (*sr_evaluate)(void* context, void* commands, const rsf_game_render_pass* pass,
+        const rsf_godot_sr_evaluate* request, int32_t* result);
+    /* Logs the refused pass, its resources and the planned extent. */
+    void (*sr_refusal_log)(const rsf_game_render_pass* pass, uint32_t desired_width, uint32_t desired_height);
+    /* The "native-sr-begin" capture event when the capture wants the frame. */
+    uint32_t (*capture_sr_begin)(const rsf_game_render_pass* pass);
+    /* Capture flush of slot, the HUD-less colour record and rsf_fg12_hudless. */
+    uint32_t (*final_scene)(void* commands, const rsf_game_render_pass* pass, uint32_t slot);
+    void (*fg_submitted)(uint64_t session_id, uint64_t frame_id);
+    /* rsf_fg12_render_begin and its "render-submit-begin" capture event. */
+    uint32_t (*render_begin)(uint64_t session_id, uint64_t frame_id);
+    void (*present_window)(const rsf_game_render_pass* pass);
+    uint32_t (*fg_end_session)(uint64_t session_id);
+    /* Capture flush, context destroy (null accepted) and the session's frame dump cancel. */
+    uint32_t (*d3d12_release)(void* context, uint64_t session_id);
 } rsf_godot_platform;
 
 /* Extension option schema. The leaf reads each named Dictionary entry once, with the conversion
@@ -220,14 +271,19 @@ int rsf_godot_status_get(const rsf_godot_platform* platform, rsf_godot_status* s
 int rsf_godot_status_ready(const rsf_godot_platform* platform, rsf_godot_status* status);
 void rsf_godot_log(const char* message);
 
-/* D3D12 session state read and reported by the SR and presentation leaves in runtime.cpp. */
+/* D3D12 session state read by the rsfg_* forwarders in runtime.cpp. */
 int rsf_godot_booted(void);
-uint64_t rsf_godot_session_id(void);
-int rsf_godot_paths_get(rsf_godot_paths* paths);
-void rsf_godot_settings_snapshot(rsf_godot_settings* settings, uint64_t* generation);
-void rsf_godot_sr_frame_report(const rsf_godot_sr_frame* frame);
-/* Present without an SR pass for the current render frame. */
-void rsf_godot_sr_missed(void);
+
+/* D3D12 SR context and submission owner (d3d12.rs). runtime.cpp forwards rsfg_render after its
+   booted, argument, size and depth-domain checks, and rsfg_render_begin, rsfg_submitted,
+   rsfg_present and the D3D12 branch of rsfg_shutdown after their own. */
+int rsf_godot_d3d12_render(const rsf_godot_platform* platform, void* device, void* queue, void* commands,
+    const rsf_game_render_pass* pass);
+void rsf_godot_d3d12_render_begin(const rsf_godot_platform* platform, uint64_t source_frame_id);
+void rsf_godot_d3d12_submitted(const rsf_godot_platform* platform, void* queue, void* const* command_lists,
+    uint32_t count);
+void rsf_godot_d3d12_present(const rsf_godot_platform* platform, void* swapchain);
+int rsf_godot_d3d12_shutdown(const rsf_godot_platform* platform);
 
 /* Vulkan session (vulkan.rs). Boot and shutdown take the guard through vulkan_locked; the
    remaining calls are made by vulkan.cpp while it holds the guard. */

@@ -3,15 +3,16 @@
 //! `godot_platform.h` (bindgen-cli 0.72.1 was not available). Both sides assert sizes and offsets.
 //! The leaves carry the D3D12 capture owner, the FG presenter install, header-inline Runtime
 //! validators, the Vulkan owner's guard and its device, provider, presenter and SDK calls in
-//! `vulkan.cpp`, and the status facts; every decision stays in this crate. The archive imports
-//! no native symbol.
+//! `vulkan.cpp`, the status facts, and the D3D12 device, fence, SR context, FG, presentation and
+//! capture calls the `d3d12.rs` owner drives; every decision stays in this crate. The render pass
+//! is the generated `rsf_game_render_pass` binding. The archive imports no native symbol.
 // Mirrored C layouts: the leaves and the engine module read fields this crate only writes.
 #![allow(dead_code)]
-use rsf_game_sys::rsf_game_log_fn;
+use rsf_game_sys::{rsf_game_log_fn, rsf_game_render_pass};
 use std::ffi::{c_char, c_int, c_void};
 use std::sync::OnceLock;
 
-pub(crate) const PLATFORM_VERSION: u32 = 2;
+pub(crate) const PLATFORM_VERSION: u32 = 3;
 /// `RSF_GODOT_ABI_VERSION`: setup, status, engine services and the Vulkan packet.
 pub(crate) const ABI_VERSION: u32 = 3;
 /// `RSF_GODOT_SETTINGS_ABI_VERSION`.
@@ -234,8 +235,8 @@ pub(crate) struct LatencyFacts {
     pub(crate) inputs: InputFacts,
 }
 
-/// `rsf_godot_sr_frame`.
-#[repr(C)]
+/// One evaluated D3D12 SR pass as `d3d12.rs` reports it to the status record. Formerly the
+/// `rsf_godot_sr_frame` record; no leaf reads it any more.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct SrFrame {
     pub(crate) requested_sr: u32,
@@ -246,6 +247,41 @@ pub(crate) struct SrFrame {
     pub(crate) render_height: u32,
     pub(crate) output_width: u32,
     pub(crate) output_height: u32,
+}
+
+/// `rsf_godot_sr_create`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(crate) struct SrCreate {
+    pub(crate) backend: u32,
+    pub(crate) quality: u32,
+    pub(crate) dlss_preset: u32,
+    pub(crate) output_width: u32,
+    pub(crate) output_height: u32,
+    pub(crate) render_width: u32,
+    pub(crate) render_height: u32,
+    pub(crate) reserved: u32,
+    pub(crate) paths: Paths,
+}
+
+/// `rsf_godot_sr_context`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SrContext {
+    pub(crate) handle: *mut c_void,
+    pub(crate) result: i32,
+    pub(crate) desired_width: u32,
+    pub(crate) desired_height: u32,
+    pub(crate) reserved: u32,
+}
+
+/// `rsf_godot_sr_evaluate`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct SrEvaluate {
+    pub(crate) slot: u32,
+    pub(crate) screen: u32,
+    pub(crate) sharpening: Sharpening,
 }
 
 /// `rsf_godot_vk_facts`, read under the Vulkan owner's guard.
@@ -383,6 +419,31 @@ pub(crate) struct Platform {
     pub(crate) window_facts: unsafe extern "C" fn(*mut WindowFacts),
     pub(crate) fg_facts: unsafe extern "C" fn(*mut FgFacts),
     pub(crate) latency_facts: unsafe extern "C" fn(*mut LatencyFacts) -> u32,
+    pub(crate) d3d12_bind: unsafe extern "C" fn(*mut c_void, *mut c_void) -> u32,
+    pub(crate) d3d12_wait: unsafe extern "C" fn(u64) -> u32,
+    pub(crate) d3d12_signal: unsafe extern "C" fn(u64) -> u32,
+    pub(crate) sr_default_backend: unsafe extern "C" fn() -> u32,
+    pub(crate) fg_default_backend: unsafe extern "C" fn() -> u32,
+    pub(crate) present_owner: unsafe extern "C" fn(*mut u32) -> u32,
+    pub(crate) present_request: unsafe extern "C" fn(u32),
+    pub(crate) sr_create: unsafe extern "C" fn(*const SrCreate, *mut SrContext) -> u32,
+    pub(crate) sr_destroy: unsafe extern "C" fn(*mut c_void),
+    pub(crate) sr_evaluate: unsafe extern "C" fn(
+        *mut c_void,
+        *mut c_void,
+        *const rsf_game_render_pass,
+        *const SrEvaluate,
+        *mut i32,
+    ) -> u32,
+    pub(crate) sr_refusal_log: unsafe extern "C" fn(*const rsf_game_render_pass, u32, u32),
+    pub(crate) capture_sr_begin: unsafe extern "C" fn(*const rsf_game_render_pass) -> u32,
+    pub(crate) final_scene:
+        unsafe extern "C" fn(*mut c_void, *const rsf_game_render_pass, u32) -> u32,
+    pub(crate) fg_submitted: unsafe extern "C" fn(u64, u64),
+    pub(crate) render_begin: unsafe extern "C" fn(u64, u64) -> u32,
+    pub(crate) present_window: unsafe extern "C" fn(*const rsf_game_render_pass),
+    pub(crate) fg_end_session: unsafe extern "C" fn(u64) -> u32,
+    pub(crate) d3d12_release: unsafe extern "C" fn(*mut c_void, u64) -> u32,
 }
 
 const _: () = {
@@ -409,7 +470,11 @@ const _: () = {
     assert!(size_of::<FgFacts>() == 96);
     assert!(offset_of!(FgFacts, tagged_frames) == 48);
     assert!(size_of::<LatencyFacts>() == 88);
-    assert!(size_of::<SrFrame>() == 32);
+    assert!(size_of::<SrCreate>() == 88);
+    assert!(offset_of!(SrCreate, paths) == 32);
+    assert!(size_of::<SrContext>() == 24);
+    assert!(offset_of!(SrContext, desired_width) == 12);
+    assert!(size_of::<SrEvaluate>() == 64);
     assert!(size_of::<OptionField>() == 16);
     assert!(size_of::<OptionValue>() == 24);
     assert!(size_of::<VkFacts>() == 40);
@@ -423,9 +488,12 @@ const _: () = {
     assert!(size_of::<VkPresentFacts>() == 32);
     assert!(size_of::<VkSrFrame>() == 40);
     assert!(offset_of!(VkSrFrame, source_frame_id) == 32);
-    assert!(size_of::<Platform>() == 184);
+    assert!(size_of::<Platform>() == 328);
     assert!(offset_of!(Platform, vulkan_locked) == 88);
     assert!(offset_of!(Platform, latency_facts) == 176);
+    assert!(offset_of!(Platform, d3d12_bind) == 184);
+    assert!(offset_of!(Platform, sr_evaluate) == 256);
+    assert!(offset_of!(Platform, d3d12_release) == 320);
 };
 
 #[cfg(test)]
@@ -566,5 +634,109 @@ impl Platform {
     pub(crate) fn latency_facts(&self) -> Option<LatencyFacts> {
         let mut facts = LatencyFacts::default();
         (unsafe { (self.latency_facts)(&mut facts) } != 0).then_some(facts)
+    }
+
+    // The D3D12 SR context and submission leaves. Device, queue, command list and context
+    // pointers are the engine's or the Runtime's live objects for the call; this crate only
+    // compares and passes them. A `false` or `None` completion means the leaf caught an exception.
+
+    /// Keeps the engine's device and queue and creates the fence; false when the fence failed.
+    pub(crate) fn d3d12_bind(&self, device: *mut c_void, queue: *mut c_void) -> bool {
+        unsafe { (self.d3d12_bind)(device, queue) != 0 }
+    }
+
+    /// The fence reached `value`, or there is nothing to wait for. False after 15 s.
+    pub(crate) fn d3d12_wait(&self, value: u64) -> bool {
+        unsafe { (self.d3d12_wait)(value) != 0 }
+    }
+
+    pub(crate) fn d3d12_signal(&self, value: u64) -> bool {
+        unsafe { (self.d3d12_signal)(value) != 0 }
+    }
+
+    /// `rsf_gpu_default_sr_backend` for the bound adapter.
+    pub(crate) fn sr_default_backend(&self) -> u32 {
+        unsafe { (self.sr_default_backend)() }
+    }
+
+    /// `rsf_fg_default_backend` for the bound adapter.
+    pub(crate) fn fg_default_backend(&self) -> u32 {
+        unsafe { (self.fg_default_backend)() }
+    }
+
+    /// The presentation provider's backend while it has an owner.
+    pub(crate) fn present_owner(&self) -> Option<u32> {
+        let mut backend = 0;
+        (unsafe { (self.present_owner)(&mut backend) } != 0).then_some(backend)
+    }
+
+    pub(crate) fn present_request(&self, backend: u32) {
+        unsafe { (self.present_request)(backend) }
+    }
+
+    /// `desired` is the previous plan, which stays when no context is made.
+    pub(crate) fn sr_create(&self, request: &SrCreate, desired: (u32, u32)) -> Option<SrContext> {
+        let mut context = SrContext {
+            handle: std::ptr::null_mut(),
+            result: 0,
+            desired_width: desired.0,
+            desired_height: desired.1,
+            reserved: 0,
+        };
+        (unsafe { (self.sr_create)(request, &mut context) } != 0).then_some(context)
+    }
+
+    pub(crate) fn sr_destroy(&self, context: *mut c_void) {
+        unsafe { (self.sr_destroy)(context) }
+    }
+
+    pub(crate) fn sr_evaluate(
+        &self,
+        context: *mut c_void,
+        commands: *mut c_void,
+        pass: &rsf_game_render_pass,
+        request: &SrEvaluate,
+    ) -> Option<i32> {
+        let mut result = 0;
+        (unsafe { (self.sr_evaluate)(context, commands, pass, request, &mut result) } != 0)
+            .then_some(result)
+    }
+
+    pub(crate) fn sr_refusal_log(&self, pass: &rsf_game_render_pass, desired: (u32, u32)) {
+        unsafe { (self.sr_refusal_log)(pass, desired.0, desired.1) }
+    }
+
+    pub(crate) fn capture_sr_begin(&self, pass: &rsf_game_render_pass) -> bool {
+        unsafe { (self.capture_sr_begin)(pass) != 0 }
+    }
+
+    pub(crate) fn final_scene(
+        &self,
+        commands: *mut c_void,
+        pass: &rsf_game_render_pass,
+        slot: u32,
+    ) -> bool {
+        unsafe { (self.final_scene)(commands, pass, slot) != 0 }
+    }
+
+    pub(crate) fn fg_submitted(&self, session_id: u64, frame_id: u64) {
+        unsafe { (self.fg_submitted)(session_id, frame_id) }
+    }
+
+    pub(crate) fn render_begin(&self, session_id: u64, frame_id: u64) -> bool {
+        unsafe { (self.render_begin)(session_id, frame_id) != 0 }
+    }
+
+    pub(crate) fn present_window(&self, pass: &rsf_game_render_pass) {
+        unsafe { (self.present_window)(pass) }
+    }
+
+    pub(crate) fn fg_end_session(&self, session_id: u64) -> bool {
+        unsafe { (self.fg_end_session)(session_id) != 0 }
+    }
+
+    /// Capture flush, context destroy (null accepted) and the session's frame dump cancel.
+    pub(crate) fn d3d12_release(&self, context: *mut c_void, session_id: u64) -> bool {
+        unsafe { (self.d3d12_release)(context, session_id) != 0 }
     }
 }

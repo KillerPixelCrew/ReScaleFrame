@@ -156,6 +156,12 @@ typed native leaves. Shutdown rechecks the live session under the guard
 so an overlapping caller cannot release it twice. Build, device and
 Godot player verification remain open.
 
+Godot's D3D12 SR context, recording slots and submission ledger are Rust-owned.
+Pending recordings keep their slot and context until the engine reports a
+submission and the queue accepts a fence. A later submission on that queue
+can recover a failed signal. The public C header and engine module are
+unchanged. Builds, fixtures and player verification remain open.
+
 RDR2's native graphics capture uses Rust for requests, draw and input
 limits, timeout, drain admission and bundle status. It uses the existing
 native mutex to order those decisions with the retained D3D12 resources.

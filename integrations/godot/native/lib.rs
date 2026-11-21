@@ -1,26 +1,28 @@
 // SPDX-License-Identifier: MIT
 //! Godot 4.7.2 native integration owner linked into `ReScaleFrame.Godot.Native.dll`. It owns the
-//! Runtime control, settings and D3D12 session state (`control.rs`), the Vulkan session state
-//! (`vulkan.rs`) and the `ReScaleFrameRuntime` option schema and renderer admission
-//! (`extension.rs`).
+//! Runtime control, settings and D3D12 session state (`control.rs`), the D3D12 SR context and
+//! submission owner (`d3d12.rs`), the Vulkan session state (`vulkan.rs`) and the
+//! `ReScaleFrameRuntime` option schema and renderer admission (`extension.rs`).
 //!
 //! The `rsfg_*` exports in `api.h`, the GDExtension entry and the godot-cpp classes stay C++.
 //! `runtime.cpp` and `vulkan.cpp` forward to these entry points and lend their leaves through
-//! `rsf_godot_platform` (`godot_platform.h`, mirrored in `platform.rs`): the D3D12 SR context,
-//! fences and capture, DXGI, Win32 window calls, the linked Runtime and the Vulkan owner's guard,
-//! device, provider, presenter and SDK calls. No second Runtime is loaded and no vendor, pacing
-//! or presentation policy is added here.
+//! `rsf_godot_platform` (`godot_platform.h`, mirrored in `platform.rs`): the D3D12 device, fence,
+//! SR context, FG, presentation and capture calls, DXGI, Win32 window calls, the linked Runtime
+//! and the Vulkan owner's guard, device, provider, presenter and SDK calls. No second Runtime is
+//! loaded and no vendor, pacing or presentation policy is added here.
 mod control;
+mod d3d12;
 mod extension;
 mod platform;
 mod vulkan;
 
 use control::Control;
 use platform::{
-    ABI_VERSION, EngineServices, OptionField, OptionValue, Paths, Platform, SETTINGS_ABI_VERSION,
-    Settings, Setup, SrFrame, Status, VkFgPass, VkPresentFacts, VkSrFrame, VkView,
+    ABI_VERSION, EngineServices, OptionField, OptionValue, Platform, SETTINGS_ABI_VERSION,
+    Settings, Setup, Status, VkFgPass, VkPresentFacts, VkSrFrame, VkView,
 };
-use std::ffi::{CStr, c_char, c_int};
+use rsf_game_sys::rsf_game_render_pass;
+use std::ffi::{CStr, c_char, c_int, c_void};
 use std::sync::LazyLock;
 
 static CONTROL: LazyLock<Control> = LazyLock::new(Control::new);
@@ -168,54 +170,88 @@ extern "C" fn rsf_godot_booted() -> c_int {
     CONTROL.booted().into()
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_godot_session_id() -> u64 {
-    CONTROL.session_id()
-}
+// The D3D12 SR context and submission owner (d3d12.rs), called by the rsfg_* forwarders in
+// runtime.cpp on Godot's render thread.
 
 /// # Safety
-/// `paths` is null or writable.
+/// `table` is null or the leaf table; `pass` is null or a readable `rsf_game_render_pass` of its
+/// stated size; `device`, `queue` and `commands` are the engine's live D3D12 objects for the call.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_paths_get(paths: *mut Paths) -> c_int {
-    match (CONTROL.paths(), paths.is_null()) {
-        (Some(value), false) => {
-            // SAFETY: the caller's guarantee.
-            unsafe { paths.write(value) };
-            1
-        }
-        _ => 0,
-    }
-}
-
-/// # Safety
-/// Each output is null or writable.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_settings_snapshot(settings: *mut Settings, generation: *mut u64) {
-    let (value, current) = CONTROL.snapshot();
+unsafe extern "C" fn rsf_godot_d3d12_render(
+    table: *const Platform,
+    device: *mut c_void,
+    queue: *mut c_void,
+    commands: *mut c_void,
+    pass: *const rsf_game_render_pass,
+) -> c_int {
     // SAFETY: the caller's guarantee.
-    unsafe {
-        if !settings.is_null() {
-            settings.write(value);
-        }
-        if !generation.is_null() {
-            generation.write(current);
-        }
+    let (Some(platform), Some(pass)) = (unsafe { leaves(table) }, unsafe { pass.as_ref() }) else {
+        return 0;
+    };
+    if !CONTROL.booted()
+        || device.is_null()
+        || queue.is_null()
+        || commands.is_null()
+        || (pass.struct_size as usize) < size_of::<rsf_game_render_pass>()
+    {
+        return 0;
+    }
+    CONTROL
+        .d3d12
+        .render(&CONTROL, platform, device, queue, commands, pass)
+}
+
+/// # Safety
+/// `table` is null or the leaf table.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_godot_d3d12_render_begin(table: *const Platform, frame: u64) {
+    // SAFETY: the caller's guarantee.
+    if let Some(platform) = unsafe { leaves(table) }
+        && CONTROL.booted()
+    {
+        CONTROL.d3d12.render_begin(&CONTROL, platform, frame);
     }
 }
 
 /// # Safety
-/// `frame` is null or readable.
+/// `table` is null or the leaf table; `lists` is null or readable for `count` entries.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_sr_frame_report(frame: *const SrFrame) {
+unsafe extern "C" fn rsf_godot_d3d12_submitted(
+    table: *const Platform,
+    queue: *mut c_void,
+    lists: *const *mut c_void,
+    count: u32,
+) {
     // SAFETY: the caller's guarantee.
-    if let Some(frame) = unsafe { frame.as_ref() } {
-        CONTROL.sr_frame(frame);
+    let Some(platform) = (unsafe { leaves(table) }) else {
+        return;
+    };
+    if queue.is_null() || lists.is_null() || count == 0 {
+        return;
+    }
+    // SAFETY: `count` readable command list pointers, compared by address only.
+    let lists = unsafe { std::slice::from_raw_parts(lists.cast::<usize>(), count as usize) };
+    CONTROL.d3d12.submitted(platform, queue, lists);
+}
+
+/// # Safety
+/// `table` is null or the leaf table; `chain` is the engine's swapchain for the call.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_godot_d3d12_present(table: *const Platform, chain: *mut c_void) {
+    // SAFETY: the caller's guarantee.
+    if let Some(platform) = unsafe { leaves(table) }
+        && CONTROL.booted()
+    {
+        CONTROL.d3d12.present(&CONTROL, platform, chain);
     }
 }
 
+/// # Safety
+/// `table` is null or the leaf table.
 #[unsafe(no_mangle)]
-extern "C" fn rsf_godot_sr_missed() {
-    CONTROL.sr_missed();
+unsafe extern "C" fn rsf_godot_d3d12_shutdown(table: *const Platform) -> c_int {
+    // SAFETY: the caller's guarantee.
+    unsafe { leaves(table) }.map_or(0, |platform| CONTROL.d3d12.shutdown(&CONTROL, platform))
 }
 
 // The Vulkan session (vulkan.rs). The exports below other than boot and shutdown are called by

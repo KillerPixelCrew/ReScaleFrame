@@ -1,0 +1,513 @@
+// SPDX-License-Identifier: MIT
+//! Godot D3D12 SR context and submission owner formerly held by `runtime.cpp`: the engine's
+//! device and queue identity, the SR context plan (requested provider, Auto resolved by the
+//! Runtime, spatial mapped to the normalising context, the fallback to backend 0, the planned
+//! input extent and the creation result) with its retirement and recreation rules, the three
+//! command slots and their fence values, the pending submissions `rsfg_submitted` matches, the
+//! FG provider switch request, screen gating, sharpening defaults, the refusal diagnostics budget,
+//! the current render frame and the pass identity Present reuses.
+//!
+//! `runtime.cpp` keeps the leaves and decides nothing: the device, queue and fence references,
+//! the fence wait and signal, the DXGI vendor lookup behind the Runtime's Auto provider policy
+//! (`rsf_gpu_default_sr_backend`, `rsf_fg_default_backend`), `rsf_sr12_*`, `rsf_fg12_*`, the
+//! `rsf_d3d11_present_*` provider calls, frame capture and the diagnostics text. The context
+//! handle is held here and lent to each leaf.
+//!
+//! These paths run on Godot's render thread, as before. The ledger lock is never held across a
+//! leaf except the fence signal, which calls no owner and keeps fence values in submission order.
+use crate::control::Control;
+use crate::platform::{Platform, Settings, Sharpening, SrCreate, SrEvaluate, SrFrame};
+use rsf_game_sys::{
+    RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_SR, RSF_GAME_RENDER_WINDOW, rsf_game_render_pass,
+};
+use std::ffi::{c_int, c_void};
+use std::sync::{Mutex, MutexGuard, PoisonError};
+
+const BACKEND_OK: i32 = 0;
+const BACKEND_ERROR_INVALID_ARGUMENT: i32 = -1;
+const SR_NONE: u32 = 0;
+const SR_SPATIAL: u32 = 6;
+const SR_AUTO: u32 = 7;
+const FG_BACKEND_AUTO: u32 = 7;
+const SCREEN_UNKNOWN: u32 = 0;
+const SCREEN_MENU: u32 = 1;
+const SCREEN_FLIGHT: u32 = 4;
+/// `rsf_sr12_evaluate` command slots 0..2.
+const SLOTS: u32 = 3;
+/// Refused passes whose inputs are logged.
+const DIAGNOSTIC_LIMIT: u32 = 4;
+
+/// A zeroed render pass: integers, floats and null pointers.
+pub(crate) fn empty_pass() -> rsf_game_render_pass {
+    // SAFETY: every field of the generated record is an integer, a float, an array of them, a
+    // raw pointer or a record of the same, all valid when zero.
+    unsafe { std::mem::zeroed() }
+}
+
+/// The pass identity Present reuses. The engine's borrowed texture handles are cleared.
+#[derive(Clone, Copy)]
+struct Rendered(rsf_game_render_pass);
+
+// SAFETY: the texture handles are cleared before the copy is stored. The remaining pointer
+// fields are identity values copied from the engine's pass; this crate never dereferences them
+// and hands the record only to the Present leaf, as `runtime.cpp` did with its global copy.
+unsafe impl Send for Rendered {}
+
+impl Rendered {
+    fn of(pass: &rsf_game_render_pass) -> Self {
+        let mut copy = *pass;
+        for handle in [
+            &mut copy.color_input,
+            &mut copy.color_output,
+            &mut copy.depth,
+            &mut copy.motion,
+            &mut copy.exposure,
+            &mut copy.color_output_readable,
+            &mut copy.ui_input,
+            &mut copy.swapchain,
+            &mut copy.scene_surface,
+            &mut copy.sampled_texture,
+        ] {
+            *handle = std::ptr::null_mut();
+        }
+        Self(copy)
+    }
+}
+
+/// A live `rsf_sr12` context and the request it was created for.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Context {
+    /// The Runtime handle, kept as an address.
+    handle: usize,
+    /// The provider that was created; zero normalises inputs only.
+    backend: u32,
+    generation: u64,
+    output: (u32, u32),
+}
+
+impl Context {
+    /// A settings generation change, a new output extent, or, for the normalising context, an
+    /// input extent other than its plan drains and recreates the context.
+    fn stale(
+        &self,
+        generation: u64,
+        output: (u32, u32),
+        render: (u32, u32),
+        plan: (u32, u32),
+    ) -> bool {
+        self.generation != generation
+            || self.output != output
+            || (self.backend == SR_NONE && render != plan)
+    }
+}
+
+/// A command list recorded for one slot, waiting for its submission.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Pending {
+    commands: usize,
+    slot: u32,
+    session: u64,
+    frame: u64,
+    /// The HUD-less colour record; its submission is reported to FG.
+    hudless: bool,
+    /// The engine reported the list on the bound queue, even if the signal refused.
+    submitted: bool,
+}
+
+struct Ledger {
+    /// The engine's first device and queue, as addresses.
+    bound: Option<(usize, usize)>,
+    context: Option<Context>,
+    /// `rsf_sr12_plan` of the last context made; kept after retirement, as before.
+    plan: (u32, u32),
+    /// The first creation result of the last context request, before any fallback.
+    context_result: i32,
+    /// The last fence value signalled.
+    submitted: u64,
+    /// The fence value each slot's last submission signalled.
+    slots: [u64; SLOTS as usize],
+    next_slot: u32,
+    pending: Vec<Pending>,
+    current_frame: u64,
+    rendered: Rendered,
+    diagnostics: u32,
+}
+
+pub(crate) struct D3d12 {
+    ledger: Mutex<Ledger>,
+}
+
+/// FG runs only in requested gameplay on the flight screen; every other pass is a menu pass.
+fn screen(settings: &Settings, screen: u32) -> u32 {
+    if settings.gameplay != 0 && screen == SCREEN_FLIGHT {
+        SCREEN_FLIGHT
+    } else {
+        SCREEN_MENU
+    }
+}
+
+/// The last slot an SR pass took; the first when none has.
+fn last_slot(next: u32) -> u32 {
+    next.checked_sub(1).map_or(0, |last| last % SLOTS)
+}
+
+impl D3d12 {
+    pub(crate) fn new() -> Self {
+        Self {
+            ledger: Mutex::new(Ledger {
+                bound: None,
+                context: None,
+                plan: (0, 0),
+                context_result: BACKEND_OK,
+                submitted: 0,
+                slots: [0; SLOTS as usize],
+                next_slot: 0,
+                pending: Vec::new(),
+                current_frame: 0,
+                rendered: Rendered(empty_pass()),
+                diagnostics: 0,
+            }),
+        }
+    }
+
+    fn ledger(&self) -> MutexGuard<'_, Ledger> {
+        self.ledger.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// One `rsfg_render` pass. The caller checked the session, the arguments, the pass size and
+    /// its depth domains.
+    pub(crate) fn render(
+        &self,
+        control: &Control,
+        platform: &Platform,
+        device: *mut c_void,
+        queue: *mut c_void,
+        commands: *mut c_void,
+        pass: &rsf_game_render_pass,
+    ) -> c_int {
+        let identity = (device as usize, queue as usize);
+        let first = {
+            let mut ledger = self.ledger();
+            match ledger.bound {
+                None => {
+                    ledger.bound = Some(identity);
+                    true
+                }
+                Some(bound) if bound == identity => false,
+                Some(_) => return 0,
+            }
+        };
+        // The first device and queue stay bound when the fence failed, as before.
+        if first && !platform.d3d12_bind(device, queue) {
+            return 0;
+        }
+        self.ledger().rendered = Rendered::of(pass);
+        if pass.role == RSF_GAME_RENDER_SR && !platform.capture_sr_begin(pass) {
+            return 0;
+        }
+        if pass.role == RSF_GAME_RENDER_FINAL_SCENE {
+            return self.final_scene(platform, commands, pass);
+        }
+        let (settings, generation) = control.snapshot();
+        let fg = match settings.fg_backend {
+            FG_BACKEND_AUTO => platform.fg_default_backend(),
+            backend => backend,
+        };
+        if let Some(current) = platform.present_owner()
+            && fg != current
+        {
+            platform.present_request(fg);
+        }
+        let camera = &pass.camera;
+        let output = (camera.output_width, camera.output_height);
+        let render = (camera.render_width, camera.render_height);
+        let retire = {
+            let ledger = self.ledger();
+            let stale = ledger
+                .context
+                .filter(|context| context.stale(generation, output, render, ledger.plan));
+            if stale.is_some() && !ledger.pending.is_empty() {
+                return 0;
+            }
+            stale.map(|context| (context.handle, ledger.submitted))
+        };
+        if let Some((handle, submitted)) = retire {
+            // All submitted work drains before the context is destroyed.
+            if !platform.d3d12_wait(submitted) {
+                return 0;
+            }
+            platform.sr_destroy(handle as *mut c_void);
+            self.ledger().context = None;
+        }
+        let existing = self.ledger().context;
+        let Some(context) = existing
+            .or_else(|| self.create(control, platform, &settings, generation, output, render))
+        else {
+            return 0;
+        };
+        let (slot, fence) = {
+            let mut ledger = self.ledger();
+            let slot = ledger.next_slot % SLOTS;
+            if ledger.pending.iter().any(|item| item.slot == slot) {
+                return 0;
+            }
+            ledger.next_slot = ledger.next_slot.wrapping_add(1);
+            (slot, ledger.slots[slot as usize])
+        };
+        // The slot's descriptors are reused only after its last submission completed.
+        if !platform.d3d12_wait(fence) {
+            return 0;
+        }
+        let request = SrEvaluate {
+            slot,
+            screen: screen(&settings, pass.screen),
+            sharpening: sharpening(platform, &settings),
+        };
+        let Some(evaluated) =
+            platform.sr_evaluate(context.handle as *mut c_void, commands, pass, &request)
+        else {
+            return 0;
+        };
+        let (plan, diagnose) = {
+            let mut ledger = self.ledger();
+            let diagnose = evaluated == BACKEND_ERROR_INVALID_ARGUMENT
+                && ledger.diagnostics < DIAGNOSTIC_LIMIT;
+            if diagnose {
+                ledger.diagnostics += 1;
+            }
+            (ledger.plan, diagnose)
+        };
+        if diagnose {
+            platform.sr_refusal_log(pass, plan);
+        }
+        // The driver submission callback signals this pending slot after recording is submitted.
+        let context_result = {
+            let mut ledger = self.ledger();
+            ledger.pending.push(Pending {
+                commands: commands as usize,
+                slot,
+                session: pass.session_id,
+                frame: pass.source_frame_id,
+                hudless: false,
+                submitted: false,
+            });
+            ledger.context_result
+        };
+        control.sr_frame(&SrFrame {
+            requested_sr: settings.sr_backend,
+            context_backend: context.backend,
+            context_result,
+            evaluated,
+            render_width: plan.0,
+            render_height: plan.1,
+            output_width: context.output.0,
+            output_height: context.output.1,
+        });
+        c_int::from(evaluated == BACKEND_OK)
+    }
+
+    /// The HUD-less colour record of the final scene, captured and pending on the last SR slot.
+    fn final_scene(
+        &self,
+        platform: &Platform,
+        commands: *mut c_void,
+        pass: &rsf_game_render_pass,
+    ) -> c_int {
+        let slot = {
+            let ledger = self.ledger();
+            let slot = last_slot(ledger.next_slot);
+            if ledger.pending.iter().any(|item| {
+                item.slot == slot
+                    && (item.session != pass.session_id || item.frame != pass.source_frame_id)
+            }) {
+                return 0;
+            }
+            slot
+        };
+        if !platform.final_scene(commands, pass, slot) {
+            return 0;
+        }
+        self.ledger().pending.push(Pending {
+            commands: commands as usize,
+            slot,
+            session: pass.session_id,
+            frame: pass.source_frame_id,
+            hudless: true,
+            submitted: false,
+        });
+        1
+    }
+
+    /// A new context for the current request. A provider that cannot be created falls back to
+    /// the normalising context; the first result is the one reported.
+    fn create(
+        &self,
+        control: &Control,
+        platform: &Platform,
+        settings: &Settings,
+        generation: u64,
+        output: (u32, u32),
+        render: (u32, u32),
+    ) -> Option<Context> {
+        let paths = control.paths()?;
+        let mut backend = settings.sr_backend;
+        if backend == SR_AUTO {
+            backend = platform.sr_default_backend();
+        }
+        // Godot evaluates FSR1 before the callback; the context only normalises its inputs.
+        if backend == SR_SPATIAL {
+            backend = SR_NONE;
+        }
+        let mut request = SrCreate {
+            backend,
+            quality: settings.quality,
+            dlss_preset: settings.dlss_preset,
+            output_width: output.0,
+            output_height: output.1,
+            render_width: render.0,
+            render_height: render.1,
+            reserved: 0,
+            paths,
+        };
+        let plan = self.ledger().plan;
+        let mut created = platform.sr_create(&request, plan)?;
+        self.ledger().context_result = created.result;
+        if created.handle.is_null() && backend != SR_NONE {
+            request.backend = SR_NONE;
+            created =
+                platform.sr_create(&request, (created.desired_width, created.desired_height))?;
+            backend = SR_NONE;
+        }
+        if created.handle.is_null() {
+            return None;
+        }
+        let context = Context {
+            handle: created.handle as usize,
+            backend,
+            generation,
+            output,
+        };
+        let mut ledger = self.ledger();
+        ledger.plan = (created.desired_width, created.desired_height);
+        ledger.context = Some(context);
+        Some(context)
+    }
+
+    /// `rsfg_submitted`: one engine submission on `queue`. When it carries pending command
+    /// lists, the fence is signalled once for all of them and each slot takes that value.
+    pub(crate) fn submitted(&self, platform: &Platform, queue: *mut c_void, lists: &[usize]) {
+        let hudless = {
+            let mut ledger = self.ledger();
+            if ledger
+                .bound
+                .is_none_or(|(_, bound)| bound != queue as usize)
+            {
+                return;
+            }
+            for item in &mut ledger.pending {
+                item.submitted |= lists.contains(&item.commands);
+            }
+            if !ledger.pending.iter().any(|item| item.submitted) {
+                return;
+            }
+            // A later signal on this queue also covers previously reported lists.
+            let value = ledger.submitted.wrapping_add(1);
+            if !platform.d3d12_signal(value) {
+                return;
+            }
+            ledger.submitted = value;
+            let Ledger { pending, slots, .. } = &mut *ledger;
+            let mut hudless = Vec::new();
+            pending.retain(|item| {
+                if !item.submitted {
+                    return true;
+                }
+                if let Some(fence) = slots.get_mut(item.slot as usize) {
+                    *fence = value;
+                }
+                // HUD-less colour depends on the SR output in the engine graph. Its actual
+                // submission establishes both captures; recording completion establishes neither.
+                if item.hudless {
+                    hudless.push((item.session, item.frame));
+                }
+                false
+            });
+            hudless
+        };
+        for (session, frame) in hudless {
+            platform.fg_submitted(session, frame);
+        }
+    }
+
+    /// `rsfg_render_begin` on a booted session. A leaf exception clears the frame, as before.
+    pub(crate) fn render_begin(&self, control: &Control, platform: &Platform, frame: u64) {
+        self.ledger().current_frame = frame;
+        if frame != 0 && !platform.render_begin(control.session_id(), frame) {
+            self.ledger().current_frame = 0;
+        }
+    }
+
+    /// `rsfg_present` on a booted session: the current frame's rendered identity, or a bare
+    /// identity and a missed SR report when no pass rendered it.
+    pub(crate) fn present(&self, control: &Control, platform: &Platform, chain: *mut c_void) {
+        let (current, rendered) = {
+            let ledger = self.ledger();
+            (ledger.current_frame, ledger.rendered)
+        };
+        if chain.is_null() || current == 0 {
+            return;
+        }
+        let mut pass = if rendered.0.source_frame_id == current {
+            rendered.0
+        } else {
+            control.sr_missed();
+            let mut pass = empty_pass();
+            pass.struct_size = size_of::<rsf_game_render_pass>() as u32;
+            pass.session_id = control.session_id();
+            pass.source_frame_id = current;
+            pass.native_frame = current;
+            pass.screen = SCREEN_UNKNOWN;
+            pass
+        };
+        pass.role = RSF_GAME_RENDER_WINDOW;
+        pass.swapchain = chain;
+        platform.present_window(&pass);
+    }
+
+    /// The D3D12 branch of `rsfg_shutdown`: drain every submission, end the FG session, then
+    /// flush capture, destroy the context and cancel the session's frame dump. A refusal at any
+    /// step keeps the context.
+    pub(crate) fn shutdown(&self, control: &Control, platform: &Platform) -> c_int {
+        let session = control.session_id();
+        let (submitted, handle) = {
+            let ledger = self.ledger();
+            if !ledger.pending.is_empty() {
+                return 0;
+            }
+            (
+                ledger.submitted,
+                ledger.context.map_or(0, |context| context.handle),
+            )
+        };
+        if !platform.d3d12_wait(submitted) || !platform.fg_end_session(session) {
+            return 0;
+        }
+        if !platform.d3d12_release(handle as *mut c_void, session) {
+            return 0;
+        }
+        self.ledger().context = None;
+        1
+    }
+}
+
+/// The requested sharpening, or the Runtime defaults when none was requested.
+fn sharpening(platform: &Platform, settings: &Settings) -> Sharpening {
+    if settings.sharpening.struct_size != 0 {
+        settings.sharpening
+    } else {
+        platform.sharpening_defaults()
+    }
+}
+
+#[cfg(test)]
+mod tests;
