@@ -4,6 +4,16 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Native D3D12 overlay startup now rolls back a partially created
+renderer and releases its UI instance and unpublished module. Rust
+owns the renderer after successful startup. A fault disables drawing.
+The owner releases resources once the submitted work has retired,
+any armed wait has signalled and the input hook can be removed. If
+execution succeeded and the first fence signal failed, a later Present
+on the same device and queue can retry the signal. It never resubmits
+the command list. The private bindings were regenerated. Build and
+device validation remain open.
+
 The native D3D12 overlay now keeps its completion fence and wait event
 in Rust. Rust orders command execution, signalling and slot publication.
 The slot becomes reusable only after the fence proves completion. If a

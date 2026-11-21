@@ -10,8 +10,10 @@ typedef struct rsf_overlay12_texture {
 } rsf_overlay12_texture;
 
 typedef struct rsf_overlay12_platform {
-    /* On success, transfers one fence reference to the Rust owner. */
+    /* On success, transfers the renderer and one fence reference to the Rust owner. */
     void* (*initialize)(void* device, void* queue, void* chain, rsf_overlay12_log, void* user, void** fence);
+    uint32_t (*stop_input)(void);
+    void (*destroy)(void* panel);
     uint32_t (*visible)(void);
     void (*set_visible)(uint32_t);
     uint64_t (*completed)(void* fence);

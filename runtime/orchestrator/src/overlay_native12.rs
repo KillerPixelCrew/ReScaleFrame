@@ -63,6 +63,7 @@ impl Ring {
 struct Fence {
     reference: ComRef,
     event: Option<OwnedHandle>,
+    armed: bool,
 }
 
 // D3D12 fences and Win32 event handles can be moved between threads. PANEL serializes waits and signals.
@@ -82,11 +83,19 @@ impl Fence {
             return false;
         };
         let event = event.as_raw_handle();
-        let armed = unsafe { (platform.arm.unwrap())(self.reference.as_ptr(), event, value) } != 0;
+        self.armed = unsafe { (platform.arm.unwrap())(self.reference.as_ptr(), event, value) } != 0;
         // Keep the event with its fence after a timeout. A later GPU signal may still reach it.
-        armed
-            && unsafe { WaitForSingleObject(event, FENCE_WAIT_MS) } == WAIT_OBJECT_0
+        self.armed
+            && self.finish_event(FENCE_WAIT_MS)
             && Ring::slot_ready(self.completed(platform), value)
+    }
+
+    fn finish_event(&mut self, timeout: u32) -> bool {
+        if self.armed {
+            let event = self.event.as_ref().unwrap().as_raw_handle();
+            self.armed = unsafe { WaitForSingleObject(event, timeout) } != WAIT_OBJECT_0;
+        }
+        !self.armed
     }
 }
 
@@ -247,12 +256,27 @@ impl Atlas {
     }
 }
 
+struct Renderer {
+    handle: std::ptr::NonNull<c_void>,
+    destroy: unsafe extern "C" fn(*mut c_void),
+}
+
+// Only the locked panel uses or releases the native renderer.
+unsafe impl Send for Renderer {}
+
+impl Drop for Renderer {
+    fn drop(&mut self) {
+        unsafe { (self.destroy)(self.handle.as_ptr()) };
+    }
+}
+
 struct Panel {
-    native: usize,
+    native: Option<Renderer>,
     device: usize,
     queue: usize,
     failed: bool,
     fence: Option<Fence>,
+    unsignalled: Option<u64>,
     ring: Ring,
     atlas: Atlas,
     started: u64,
@@ -265,11 +289,12 @@ struct Panel {
 
 static READY: AtomicBool = AtomicBool::new(false);
 static PANEL: Mutex<Panel> = Mutex::new(Panel {
-    native: 0,
+    native: None,
     device: 0,
     queue: 0,
     failed: false,
     fence: None,
+    unsignalled: None,
     ring: Ring {
         completions: [0; SLOTS],
         cursor: 0,
@@ -294,9 +319,51 @@ impl Panel {
     fn fail(&mut self, platform: &Platform) -> i32 {
         self.failed = true;
         READY.store(false, Ordering::Release);
-        unsafe { (platform.set_visible.unwrap())(0) };
+        if self.native.is_some() {
+            unsafe { (platform.set_visible.unwrap())(0) };
+        }
         self.log(c"Native D3D12 overlay refused graphics work; see validation evidence.");
+        if self.unsignalled.is_none() {
+            self.retire_failed(platform);
+        }
         0
+    }
+
+    fn retire_failed(&mut self, platform: &Platform) {
+        let Some(native) = &self.native else { return };
+        if let Some(fence) = &mut self.fence {
+            let completed = fence.completed(platform);
+            if completed != u64::MAX {
+                if let Some(value) = self.unsignalled {
+                    // Nothing else enters the renderer after a fault. Signal on its original queue,
+                    // behind the already executed list, without executing the list again.
+                    if unsafe {
+                        (platform.signal.unwrap())(
+                            native.handle.as_ptr(),
+                            fence.reference.as_ptr(),
+                            value,
+                        )
+                    } != 0
+                    {
+                        self.ring.serial = value;
+                        self.unsignalled = None;
+                    }
+                    return;
+                }
+                if completed < self.ring.serial {
+                    return;
+                }
+            }
+            if !fence.finish_event(0) {
+                return;
+            }
+        }
+        if unsafe { (platform.stop_input.unwrap())() } == 0 {
+            return;
+        }
+        self.atlas = Atlas::new();
+        self.native = None;
+        self.fence = None;
     }
 }
 
@@ -311,7 +378,9 @@ extern "C" fn rsf_core_overlay12_visible(platform: &Platform) -> u32 {
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_core_overlay12_toggle(platform: &Platform) {
-    if READY.load(Ordering::Acquire) {
+    if let Ok(_panel) = PANEL.try_lock()
+        && READY.load(Ordering::Acquire)
+    {
         let visible = unsafe { (platform.visible.unwrap())() };
         unsafe { (platform.set_visible.unwrap())(u32::from(visible == 0)) };
     }
@@ -340,28 +409,35 @@ unsafe extern "C" fn rsf_core_overlay12_present(
         return 0;
     };
     if panel.failed {
+        if panel.device == device as usize && panel.queue == queue as usize {
+            panel.retire_failed(platform);
+        }
         return 0;
     }
-    if panel.native == 0 {
+    if panel.native.is_none() {
         panel.logger = logger;
         panel.log_user = user as usize;
         let mut fence = std::ptr::null_mut();
         let native = unsafe {
             (platform.initialize.unwrap())(device, queue, chain, logger, user, &mut fence)
         };
-        if native.is_null() {
+        let Some(handle) = std::ptr::NonNull::new(native) else {
             return panel.fail(platform);
-        }
+        };
+        panel.native = Some(Renderer {
+            handle,
+            destroy: platform.destroy.unwrap(),
+        });
+        panel.device = device as usize;
+        panel.queue = queue as usize;
         let Some(reference) = (unsafe { ComRef::from_owned(fence) }) else {
             return panel.fail(platform);
         };
         panel.fence = Some(Fence {
             reference,
             event: None,
+            armed: false,
         });
-        panel.native = native as usize;
-        panel.device = device as usize;
-        panel.queue = queue as usize;
         panel.started = unsafe { GetTickCount64() };
         panel.previous = panel.started;
         READY.store(true, Ordering::Release);
@@ -378,7 +454,7 @@ unsafe extern "C" fn rsf_core_overlay12_present(
     if !visible && unsafe { (*stats).show_performance_hud } == 0 && active_for >= STARTUP_MS {
         return 0;
     }
-    let native = panel.native as *mut c_void;
+    let native = panel.native.as_ref().unwrap().handle.as_ptr();
     let completed = panel.fence.as_ref().unwrap().completed(platform);
     if completed == u64::MAX {
         return panel.fail(platform);
@@ -468,8 +544,8 @@ unsafe extern "C" fn rsf_core_overlay12_present(
     let fence = panel.fence.as_ref().unwrap().reference.as_ptr();
     unsafe { (platform.execute.unwrap())(native, slot_index) };
     if unsafe { (platform.signal.unwrap())(native, fence, value) } == 0 {
-        // Execute may already have succeeded. Keep the whole native owner
-        // alive and refuse future reuse because the retirement is unknown.
+        // Execute already happened. The failed owner stays alive until a signal proves retirement.
+        panel.unsignalled = Some(value);
         return panel.fail(platform);
     }
     panel.ring.submitted(slot, value);
@@ -577,6 +653,8 @@ mod tests {
 
     const PLATFORM: Platform = Platform {
         initialize: None,
+        stop_input: None,
+        destroy: None,
         visible: None,
         set_visible: None,
         completed: None,
