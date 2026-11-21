@@ -4,6 +4,13 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The FSR3 D3D12 capture drain now snapshots pending readbacks in Rust
+before waiting for the SDK's submitted Presents and the recording queue.
+Only that batch can publish when the wait completes. A late recording
+stays pending, and a device-removed fence cannot authorize a readback.
+The synthetic contract was extended for both cases. The public capture
+ABI is unchanged. Build and test execution remain open.
+
 The public D3D12 frame dump API now returns the Rust readback owner
 directly. Rust checks the frame ABI, admits requests, polls completion,
 and refuses destruction while copies remain. Creation now reports

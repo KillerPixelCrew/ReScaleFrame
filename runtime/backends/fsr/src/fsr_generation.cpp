@@ -376,8 +376,10 @@ rsf_backend_result after(void* pointer)
     if (!pointer) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     auto& self = *static_cast<FfxSession*>(pointer);
     const auto before=self.copied.read();
-    if (self.capture.pending() && wait(self) == RSF_BACKEND_OK)
-        (void)self.capture.flush_after_queue(self.queue.Get());
+    (void)self.capture.flush_after_queue(self.queue.Get(), [](void* user) noexcept -> int32_t {
+        try { return wait(*static_cast<FfxSession*>(user)) == RSF_BACKEND_OK; }
+        catch (...) { return 0; }
+    }, &self);
     rsf::GenerationState::Observation observation{};
     observation.replace_statistics=observation.replace_callbacks=true;
     observation.generated_callbacks = self.ui_mode == RSF_UI_MODE_NONE ? self.generated.load() : self.dispatched.load();

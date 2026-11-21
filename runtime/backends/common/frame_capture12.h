@@ -29,7 +29,7 @@ struct rsf_core_capture12_platform {
     void (*unmap)(void* buffer);
     void* (*signal)(void* queue);
     uint64_t (*completed)(void* fence);
-    int32_t (*drain)(void* queue);
+    uint64_t (*drain)(void* queue);
     uint32_t (*name)(const char* role, uint32_t ordinal, char* name, uint32_t capacity, uint32_t* view, float* scale);
     int (*wants)(const rsf_frame_record*);
     uint64_t (*reserve)(const rsf_frame_record*, const char*, const char*, rsf_dump_view, float);
@@ -44,7 +44,6 @@ int32_t rsf_core_capture12_enabled(const rsf_core_capture12*);
 int32_t rsf_core_capture12_configure(const rsf_core_capture12*, const char* path, uint64_t first, uint32_t frames);
 int32_t rsf_core_capture12_wants(const rsf_core_capture12*, uint64_t frame);
 int32_t rsf_core_capture12_force_reset(const rsf_core_capture12*, uint64_t frame);
-uint64_t rsf_core_capture12_pending(const rsf_core_capture12*);
 int32_t rsf_core_capture12_event(const rsf_core_capture12*, const rsf_frame_record*, const char* name,
     uint64_t sequence, uint32_t reset, int32_t result);
 int32_t rsf_core_capture12_record(const rsf_core_capture12*, void* list, void* source, uint32_t state,
@@ -53,7 +52,8 @@ int32_t rsf_core_capture12_record(const rsf_core_capture12*, void* list, void* s
 int32_t rsf_core_capture12_flush(const rsf_core_capture12*, uint32_t slot, uint32_t ready_only);
 int32_t rsf_core_capture12_submitted(const rsf_core_capture12*, void* queue, uint32_t slot, const rsf_frame_record*);
 void rsf_core_capture12_abandon(const rsf_core_capture12*, uint32_t slot);
-int32_t rsf_core_capture12_flush_after_queue(const rsf_core_capture12*, void* queue);
+int32_t rsf_core_capture12_flush_after_queue(const rsf_core_capture12*, void* queue,
+    int32_t (*wait_submissions)(void*), void* user);
 }
 
 namespace rsf {
@@ -111,7 +111,7 @@ class FrameCapture12 {
         return fence.Detach();
     }
     static uint64_t completed_leaf(void* fence) noexcept { return static_cast<ID3D12Fence*>(fence)->GetCompletedValue(); }
-    static int32_t drain_leaf(void* raw) noexcept {
+    static uint64_t drain_leaf(void* raw) noexcept {
         auto* queue = static_cast<ID3D12CommandQueue*>(raw);
         Microsoft::WRL::ComPtr<ID3D12Device> device;
         Microsoft::WRL::ComPtr<ID3D12Fence> fence;
@@ -120,7 +120,7 @@ class FrameCapture12 {
         if (!event) return 0;
         const bool complete = SUCCEEDED(queue->Signal(fence.Get(), 1)) && SUCCEEDED(fence->SetEventOnCompletion(1, event)) && WaitForSingleObject(event, 15000) == WAIT_OBJECT_0;
         CloseHandle(event);
-        return complete;
+        return complete ? fence->GetCompletedValue() : 0;
     }
     static uint32_t name_leaf(const char* role, uint32_t ordinal, char* out, uint32_t capacity, uint32_t* view, float* scale) noexcept try {
         const auto name = capture_name(role, ordinal);
@@ -153,7 +153,6 @@ public:
     }
     bool wants(uint64_t frame) const noexcept { return rsf_core_capture12_wants(owner, frame) != 0; }
     bool force_sr_history_reset(uint64_t frame) const noexcept { return rsf_core_capture12_force_reset(owner, frame) != 0; }
-    bool pending() const { return rsf_core_capture12_pending(owner) != 0; }
 
     bool event(const rsf_frame_record& identity, const char* name, uint64_t sequence, bool reset, int32_t result) noexcept {
         return rsf_core_capture12_event(owner, &identity, name, sequence, reset, result) != 0;
@@ -179,9 +178,9 @@ public:
     bool flush_ready() noexcept { return flush(UINT32_MAX, true); }
     void abandon(uint32_t slot) noexcept { rsf_core_capture12_abandon(owner, slot); }
 
-    // Diagnostic caller only, after the SDK has submitted its callback lists on this queue.
-    bool flush_after_queue(ID3D12CommandQueue* queue) noexcept {
-        return rsf_core_capture12_flush_after_queue(owner, queue) != 0;
+    // Diagnostic callers confirm SDK submission for the captured batch before the queue drain.
+    bool flush_after_queue(ID3D12CommandQueue* queue, int32_t (*wait_submissions)(void*), void* user) noexcept {
+        return rsf_core_capture12_flush_after_queue(owner, queue, wait_submissions, user) != 0;
     }
 };
 }

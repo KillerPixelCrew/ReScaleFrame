@@ -28,7 +28,7 @@ struct World {
     fences: HashMap<usize, u64>,
     refuse_signal: bool,
     drains: u32,
-    drain_result: i32,
+    drain_result: u64,
     refuse_map: bool,
     mapped: Vec<usize>,
     unmapped: u32,
@@ -131,7 +131,7 @@ unsafe extern "C" fn completed(fence: Handle) -> u64 {
     world(|w| w.fences[&(fence as usize)])
 }
 
-unsafe extern "C" fn drain(queue: Handle) -> i32 {
+unsafe extern "C" fn drain(queue: Handle) -> u64 {
     assert_eq!(queue as usize, QUEUE);
     world(|w| {
         w.drains += 1;
@@ -665,19 +665,28 @@ fn events_are_written_only_inside_the_window() {
 }
 
 #[test]
-fn queue_drain_publishes_every_pending_copy() {
+fn queue_drain_publishes_only_copies_recorded_before_wait() {
     core();
     let owner = owner();
-    assert!(owner.flush_after_queue(QUEUE as Handle));
+    assert!(owner.flush_after_queue(QUEUE as Handle, || panic!("empty batch")));
     world(|w| assert_eq!(w.drains, 0));
     assert!(record(&owner, object(), c"a", 0));
     assert!(record(&owner, object(), c"b", 1));
+    assert!(!owner.flush_after_queue(QUEUE as Handle, || false));
+    world(|w| assert_eq!(w.drains, 0));
     world(|w| w.drain_result = 0);
-    assert!(!owner.flush_after_queue(QUEUE as Handle));
+    assert!(!owner.flush_after_queue(QUEUE as Handle, || true));
     assert_eq!(pending(&owner), 2);
+    world(|w| w.drain_result = u64::MAX);
+    assert!(!owner.flush_after_queue(QUEUE as Handle, || true));
+    assert_eq!(pending(&owner), 2);
+    world(|w| assert!(w.mapped.is_empty()));
     world(|w| w.drain_result = 1);
-    assert!(owner.flush_after_queue(QUEUE as Handle));
-    world(|w| assert_eq!((w.drains, w.published.len()), (2, 2)));
+    assert!(owner.flush_after_queue(QUEUE as Handle, || { record(&owner, object(), c"late", 2) }));
+    world(|w| assert_eq!((w.drains, w.published.len()), (3, 2)));
+    assert_eq!(pending(&owner), 1);
+    assert!(owner.flush_after_queue(QUEUE as Handle, || true));
+    world(|w| assert_eq!((w.drains, w.published.len()), (4, 3)));
     assert_eq!(pending(&owner), 0);
 }
 
@@ -701,7 +710,6 @@ fn destroy_fails_pending_tickets_and_releases_leases() {
 fn null_arguments_are_refused_at_the_boundary() {
     unsafe {
         assert_eq!(rsf_core_capture12_enabled(std::ptr::null()), 0);
-        assert_eq!(rsf_core_capture12_pending(std::ptr::null()), 0);
         let owner = owner();
         assert_eq!(
             rsf_core_capture12_configure(&owner, std::ptr::null(), 1, 1),

@@ -59,8 +59,9 @@ pub struct Platform {
     /// A new fence signalled to 1 on the queue, with one reference.
     pub signal: unsafe extern "C" fn(Handle) -> Handle,
     pub completed: unsafe extern "C" fn(Handle) -> u64,
-    /// Signals the queue and waits at most 15 seconds for it.
-    pub drain: unsafe extern "C" fn(Handle) -> i32,
+    /// Signals the queue and waits at most 15 seconds. Returns the fence
+    /// value on a completed wait, or zero if the wait was refused.
+    pub drain: unsafe extern "C" fn(Handle) -> u64,
     /// Shared capture naming. Returns the name's size with its terminator,
     /// writing it, its view and scale only when it fits; zero on failure.
     pub name: unsafe extern "C" fn(*const c_char, u32, *mut c_char, u32, *mut u32, *mut f32) -> u32,
@@ -277,11 +278,22 @@ impl Owner {
     // A slot flush trusts its caller's proof that the slot's submission
     // completed. A ready-only poll publishes only copies whose fence passed.
     fn flush(&self, state: &mut State, slot: u32, ready_only: bool) -> bool {
+        self.flush_matching(state, ready_only, |value| {
+            slot == ALL_SLOTS || value.slot == slot
+        })
+    }
+
+    fn flush_matching(
+        &self,
+        state: &mut State,
+        ready_only: bool,
+        matches: impl Fn(&Readback) -> bool,
+    ) -> bool {
         let mut okay = true;
         let mut index = 0;
         while index < state.pending.len() {
             let value = &state.pending[index];
-            if slot != ALL_SLOTS && value.slot != slot {
+            if !matches(value) {
                 index += 1;
                 continue;
             }
@@ -381,16 +393,34 @@ impl Owner {
         }
     }
 
-    // Diagnostic owners whose SDK submitted the copies on this queue.
-    fn flush_after_queue(&self, queue: Handle) -> bool {
-        if queue.is_null() || self.lock().pending.is_empty() {
+    // Snapshot the readbacks before asking the SDK to finish its submitted
+    // Presents. Later recordings are outside that proof. Retained buffers
+    // keep their identities unique if another call removes an entry.
+    fn flush_after_queue(&self, queue: Handle, wait_submissions: impl FnOnce() -> bool) -> bool {
+        if queue.is_null() {
             return true;
         }
-        if unsafe { (self.ops.drain)(queue) } == 0 {
+        let batch: Vec<_> = self
+            .lock()
+            .pending
+            .iter()
+            .map(|value| value.buffer.clone())
+            .collect();
+        if batch.is_empty() {
+            return true;
+        }
+        if !wait_submissions() {
             return false;
         }
-        let mut state = self.lock();
-        self.flush(&mut state, ALL_SLOTS, false)
+        let completed = unsafe { (self.ops.drain)(queue) };
+        if completed < SUBMITTED || completed == u64::MAX {
+            return false;
+        }
+        self.flush_matching(&mut self.lock(), false, |value| {
+            batch
+                .iter()
+                .any(|buffer| buffer.as_ptr() == value.buffer.as_ptr())
+        })
     }
 
     fn event(
@@ -566,11 +596,6 @@ unsafe extern "C" fn rsf_core_capture12_force_reset(owner: *const Owner, frame: 
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_capture12_pending(owner: *const Owner) -> u64 {
-    unsafe { self::owner(owner) }.map_or(0, |owner| owner.lock().pending.len() as u64)
-}
-
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_capture12_event(
     owner: *const Owner,
     identity: *const Record,
@@ -662,8 +687,12 @@ unsafe extern "C" fn rsf_core_capture12_abandon(owner: *const Owner, slot: u32) 
 unsafe extern "C" fn rsf_core_capture12_flush_after_queue(
     owner: *const Owner,
     queue: Handle,
+    wait_submissions: unsafe extern "C" fn(Handle) -> i32,
+    user: Handle,
 ) -> i32 {
-    unsafe { self::owner(owner) }.map_or(0, |owner| i32::from(owner.flush_after_queue(queue)))
+    unsafe { self::owner(owner) }.map_or(0, |owner| {
+        i32::from(owner.flush_after_queue(queue, || unsafe { wait_submissions(user) } != 0))
+    })
 }
 
 // Public capture readers use the same owner as the embedded backends without
