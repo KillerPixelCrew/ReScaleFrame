@@ -971,6 +971,14 @@ private callback tables. The device and game paths remain unrun.
 [Outer-chain adoption](research/rust-d3d11-native-chain-adoption.md) ·
 [Presentation command slots](research/rust-d3d11-present-slots.md)
 
+The shared presentation owner now holds the interop queue, completion
+fence, and both event handles. The D3D11 path keeps a separate interop
+queue, and native D3D12 retains the engine queue. The application still
+receives its own duplicate of the ready event. Source review matched
+the drain and release order for shared and private hosts, including
+retention after failed drain. The new fixtures and device checks remain
+unrun. [Presentation synchronization](research/rust-d3d11-present-sync.md)
+
 Native FidelityFX Vulkan FG now plans the HUD-less copy and its
 image-layout barriers in Rust. The SDK, capture and WSI borrow still
 use the same order. Source checks covered the private table and the

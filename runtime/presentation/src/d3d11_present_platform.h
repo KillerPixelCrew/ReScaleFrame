@@ -32,8 +32,7 @@ typedef struct rsf_d3d11p_facts {
     uint32_t width, height, format, buffer_count;
     uint32_t flags, windowed, native12, tearing;
     rsf_streamline_graphics graphics;
-    void* direct_queue; /* engine queue on the native D3D12 path, otherwise null */
-    void* interop_queue;
+    void* direct_queue; /* engine queue on the native D3D12 path */
     void* device11;
     uint32_t buffer_usage;
 } rsf_d3d11p_facts;
@@ -52,12 +51,6 @@ typedef struct rsf_d3d11p_adapter {
 #define RSF_D3D11P_FAMILY_DLSS 1u
 #define RSF_D3D11P_FAMILY_FIDELITYFX 2u
 #define RSF_D3D11P_FAMILY_XESS 3u
-
-#define RSF_D3D11P_JOIN_SOURCE_TO_PRESENT 0u
-#define RSF_D3D11P_JOIN_PRESENT_TO_SOURCE 1u
-
-#define RSF_D3D11P_DRAIN_GRAPHICS 1u /* graphics queue and completion fence exist */
-#define RSF_D3D11P_DRAIN_INTEROP 2u
 
 typedef struct rsf_shared_surface_platform rsf_shared_surface_platform;
 const rsf_shared_surface_platform* rsf_shared_surface_native_platform(void);
@@ -100,7 +93,13 @@ typedef struct rsf_d3d11p_platform {
     int32_t (*resolve_graphics)(void* bridge);
     uint32_t (*tearing_supported)(void* bridge);
     uint32_t (*fsr4_supported)(void* bridge, const char* directory);
-    int32_t (*create_queues)(void* bridge, uint32_t application_ready);
+    /* One owned COM reference, if the API wrote an output. */
+    int32_t (*create_interop_queue)(void* device, void** queue);
+    int32_t (*create_completion_fence)(void* device, void** fence);
+    /* One owned, unnamed auto-reset event, or null. The duplicate belongs to the caller. */
+    void* (*create_event)(uint32_t initially_signaled);
+    void* (*duplicate_event)(void* event);
+    void (*close_event)(void* event);
     int32_t (*create_upload_fence)(void* bridge);
     /* One allocator and closed list on the graphics device, as two owned COM references.
        On failure the leaf has released both and the outputs are null. */
@@ -121,11 +120,10 @@ typedef struct rsf_d3d11p_platform {
         uint32_t count, uint32_t width, uint32_t height, uint32_t format);
 
     /* Frame and slot GPU work. */
-    uint32_t (*queues_joined)(void* bridge, void* queue);
-    int32_t (*join)(void* bridge, void* queue, uint32_t direction, uint64_t value);
-    /* Slot allocators and lists are borrowed from the Rust owner's slot lease. */
-    /* Waits for the slot fence, resets allocator and list. *step is 0, 1 or 2. */
-    int32_t (*slot_reset)(void* bridge, void* allocator, void* list, uint64_t fence, uint32_t* step);
+    /* Synchronization resources and slot pairs are borrowed from the Rust owner. */
+    int32_t (*join)(void* signaller, void* waiter, void* fence, uint64_t value);
+    /* Waits for the slot value, resets allocator and list. *step is 0, 1 or 2. */
+    int32_t (*slot_reset)(void* fence, void* event, void* allocator, void* list, uint64_t value, uint32_t* step);
     int32_t (*upload_wait)(void* bridge, void* queue, uint64_t value);
     int32_t (*acquire_backbuffer)(void* physical, void** out); /* owned COM reference */
     void (*record_copy)(void* bridge, void* list, void* backbuffer, void* source);
@@ -133,9 +131,9 @@ typedef struct rsf_d3d11p_platform {
     /* Closes the slot list and executes command, the list the queue takes (command_list). */
     int32_t (*close_execute)(void* queue, void* list, void* command);
     int32_t (*upload_return)(void* bridge, void* queue, uint64_t value);
-    int32_t (*signal_slot)(void* bridge, void* queue, uint64_t value);
-    uint32_t (*has_application_ready)(void* bridge);
-    int32_t (*application_ready)(void* bridge, uint32_t on_completion, uint64_t value);
+    int32_t (*signal_slot)(void* queue, void* fence, uint64_t value);
+    /* A null fence signals the event immediately. */
+    int32_t (*application_ready)(void* event, void* fence, uint64_t value);
     void (*report_device_failure)(void* bridge, int32_t result, uint32_t backend);
     void (*log_present_failure)(void* bridge, const char* step, int32_t result, uint32_t render_index);
 
@@ -146,23 +144,22 @@ typedef struct rsf_d3d11p_platform {
         uint32_t physical_pending);
 
     /* Drain, resize, retirement and destruction. */
-    uint32_t (*drain_queues)(void* bridge);
-    int32_t (*signal_wait)(void* bridge, uint32_t interop, uint64_t value);
-    int32_t (*wait_fence)(void* bridge, void* fence, uint64_t value);
+    int32_t (*signal_wait)(void* queue, void* fence, void* event, uint64_t value);
+    int32_t (*wait_fence)(void* fence, void* event, uint64_t value);
     uint32_t (*buffer_referenced)(void* resource);
     void (*set_description)(void* bridge, uint32_t count, uint32_t width, uint32_t height,
         uint32_t format, uint32_t flags);
     void* (*retire_fence)(void* bridge);
     int32_t (*retire_submit)(void* bridge, void* queue, void* vendor_fence,
         uint64_t vendor_value, void* list, uint64_t value);
-    /* Retains the facade's queues, fences, device and context. Rust retains its slots. */
+    /* Retains the facade's GPU references. Rust retains its synchronization resources and slots. */
     void (*retain_all)(void* bridge);
     void (*release_presentation)(void* bridge);
-    /* Closes the events. A private host's interop queue is released; a shared host keeps it.
-       Rust releases its slots next, then release_host ends a private host. */
-    void (*release_device)(void* bridge, uint32_t private_host);
+    /* Preserve the old member release order around the Rust-owned synchronization references. */
+    void (*release_retire_fence)(void* bridge);
+    void (*release_direct_graphics)(void* bridge);
     void (*release_host)(void* bridge);
-    void* (*source_queue)(void* bridge);
+    void* (*source_queue)(void* bridge, void* interop_queue); /* returns one owned COM reference */
     /* Queue may be null while the active facade awaits physical creation. */
     void* (*command_list)(void* bridge, void* queue, void* list);
     /* Scoped creation: canonical identity of the captured inner owner and outer chain. */
@@ -206,6 +203,7 @@ uint32_t rsf_core_d3d11p_render_index(rsf_d3d11p_chain* chain);
 uint32_t rsf_core_d3d11p_application_presents(rsf_d3d11p_chain* chain);
 int32_t rsf_core_d3d11p_set_max_latency(rsf_d3d11p_chain* chain, uint32_t value);
 int32_t rsf_core_d3d11p_max_latency(rsf_d3d11p_chain* chain, uint32_t* value);
+void* rsf_core_d3d11p_duplicate_application_ready(rsf_d3d11p_chain* chain);
 
 /* Public bridge exports. */
 void* rsf_core_d3d11p_host(void);

@@ -21,23 +21,26 @@
 
 static_assert(sizeof(rsf_streamline_graphics) == 48);
 static_assert(sizeof(rsf_d3d11p_request) == 48 && offsetof(rsf_d3d11p_request, refresh_denominator) == 44);
-static_assert(sizeof(rsf_d3d11p_facts) == 120 && offsetof(rsf_d3d11p_facts, graphics) == 40 &&
-    offsetof(rsf_d3d11p_facts, direct_queue) == 88 && offsetof(rsf_d3d11p_facts, device11) == 104 &&
-    offsetof(rsf_d3d11p_facts, buffer_usage) == 112);
+static_assert(sizeof(rsf_d3d11p_facts) == 112 && offsetof(rsf_d3d11p_facts, graphics) == 40 &&
+    offsetof(rsf_d3d11p_facts, direct_queue) == 88 && offsetof(rsf_d3d11p_facts, device11) == 96 &&
+    offsetof(rsf_d3d11p_facts, buffer_usage) == 104);
 static_assert(sizeof(rsf_d3d11p_plain_plan) == 24 && offsetof(rsf_d3d11p_plain_plan, swap_effect) == 8);
 static_assert(sizeof(rsf_d3d11p_adapter) == 16);
-static_assert(sizeof(rsf_d3d11p_platform) == 71 * sizeof(void*));
+static_assert(sizeof(rsf_d3d11p_platform) == 73 * sizeof(void*));
 static_assert(offsetof(rsf_d3d11p_platform, bridge_new) == 15 * sizeof(void*) &&
     offsetof(rsf_d3d11p_platform, init_source) == 19 * sizeof(void*) &&
-    offsetof(rsf_d3d11p_platform, shared_surface_platform) == 32 * sizeof(void*) &&
-    offsetof(rsf_d3d11p_platform, create_plain) == 34 * sizeof(void*) &&
-    offsetof(rsf_d3d11p_platform, join) == 41 * sizeof(void*) &&
-    offsetof(rsf_d3d11p_platform, acquire_backbuffer) == 44 * sizeof(void*) &&
-    offsetof(rsf_d3d11p_platform, query_buffer_interface) == 54 * sizeof(void*) &&
-    offsetof(rsf_d3d11p_platform, drain_queues) == 57 * sizeof(void*) &&
-    offsetof(rsf_d3d11p_platform, set_description) == 61 * sizeof(void*) &&
-    offsetof(rsf_d3d11p_platform, release_host) == 67 * sizeof(void*) &&
-    offsetof(rsf_d3d11p_platform, verify_outer) == 70 * sizeof(void*));
+    offsetof(rsf_d3d11p_platform, create_interop_queue) == 29 * sizeof(void*) &&
+    offsetof(rsf_d3d11p_platform, close_event) == 33 * sizeof(void*) &&
+    offsetof(rsf_d3d11p_platform, shared_surface_platform) == 36 * sizeof(void*) &&
+    offsetof(rsf_d3d11p_platform, create_plain) == 38 * sizeof(void*) &&
+    offsetof(rsf_d3d11p_platform, join) == 44 * sizeof(void*) &&
+    offsetof(rsf_d3d11p_platform, acquire_backbuffer) == 47 * sizeof(void*) &&
+    offsetof(rsf_d3d11p_platform, query_buffer_interface) == 56 * sizeof(void*) &&
+    offsetof(rsf_d3d11p_platform, signal_wait) == 59 * sizeof(void*) &&
+    offsetof(rsf_d3d11p_platform, set_description) == 62 * sizeof(void*) &&
+    offsetof(rsf_d3d11p_platform, release_retire_fence) == 67 * sizeof(void*) &&
+    offsetof(rsf_d3d11p_platform, release_host) == 69 * sizeof(void*) &&
+    offsetof(rsf_d3d11p_platform, verify_outer) == 72 * sizeof(void*));
 static_assert(sizeof(rsf_d3d11_present_status) == 280 && sizeof(rsf_observer_present_event) == 32);
 static_assert(DXGI_FORMAT_R8G8B8A8_UNORM == 28 && DXGI_FORMAT_B8G8R8A8_UNORM == 87 &&
     DXGI_FORMAT_R10G10B10A2_UNORM == 24 && DXGI_FORMAT_R16G16B16A16_FLOAT == 10);
@@ -91,19 +94,15 @@ struct Bridge final : public IDXGISwapChain4 {
     bool tearing_supported = false;
     rsf_streamline_host* host = nullptr;
     rsf_streamline_graphics graphics{};
-    ComPtr<ID3D12CommandQueue> interop_queue;
     ComPtr<ID3D12Device> direct_device;
     ComPtr<ID3D12CommandQueue> direct_queue;
     bool native12 = false;
     rsf_shared_fence* shared_fence = nullptr;
-    ComPtr<ID3D12Fence> complete;
     // Signalled on the provider queue once vendor retirement has joined.
     ComPtr<ID3D12Fence> retired;
     // The three slot allocator/list pairs are leased by the Rust owner, which releases them
     // where these members were destroyed.
     DXGI_SWAP_CHAIN_DESC description{};
-    HANDLE completion_event = nullptr;
-    HANDLE application_ready = nullptr;
 
     explicit Bridge(rsf_d3d11p_chain* owner) : chain(owner) {}
     ~Bridge() { rsf_core_d3d11p_chain_destroy(chain); }
@@ -112,7 +111,6 @@ struct Bridge final : public IDXGISwapChain4 {
         const PhysicalLease lease(chain, true);
         return lease.get() ? call(lease.get()) : lease.status();
     }
-    HRESULT wait(ID3D12Fence* fence, uint64_t value) { return rsf::wait_fence(fence, value, completion_event); }
     // Streamline's proxy queue takes the proxy list; any other provider queue takes the native
     // list behind it. Null when the host cannot unwrap the list.
     void* provider_list(void* queue, ID3D12GraphicsCommandList* list) {
@@ -251,9 +249,7 @@ struct Bridge final : public IDXGISwapChain4 {
         if (native12 && switching()) {
             // The application owns this duplicate. Provider replacement must never close
             // the wait object retained by the engine for the facade's entire lifetime.
-            HANDLE duplicate = nullptr;
-            if (application_ready) DuplicateHandle(GetCurrentProcess(), application_ready, GetCurrentProcess(), &duplicate, 0, FALSE, DUPLICATE_SAME_ACCESS);
-            return duplicate;
+            return rsf_core_d3d11p_duplicate_application_ready(chain);
         }
         if (!native12) return nullptr;
         const PhysicalLease lease(chain);
@@ -334,7 +330,7 @@ void facts(void* b, rsf_d3d11p_facts* out) {
     const auto& self = *as_bridge(b); const auto& d = self.description;
     *out = {d.OutputWindow, d.BufferDesc.Width, d.BufferDesc.Height, uint32_t(d.BufferDesc.Format), d.BufferCount,
         d.Flags, d.Windowed ? 1u : 0u, self.native12 ? 1u : 0u, self.tearing_supported ? 1u : 0u, self.graphics,
-        self.direct_queue.Get(), self.interop_queue.Get(), self.device.Get(), d.BufferUsage};
+        self.direct_queue.Get(), self.device.Get(), d.BufferUsage};
 }
 
 uint32_t init_source(void* b, void* factory, void* source, const void* desc) {
@@ -418,20 +414,28 @@ uint32_t tearing_supported(void* b) {
 uint32_t fsr4_supported(void* b, const char* directory) {
     return rsf_generation_fsr4_supported(as_bridge(b)->graphics.native_device, directory);
 }
-int32_t create_queues(void* b, uint32_t application_ready) {
-    auto& self = *as_bridge(b);
-    auto* gpu = static_cast<ID3D12Device*>(self.graphics.device);
+int32_t create_interop_queue(void* device, void** out) {
     D3D12_COMMAND_QUEUE_DESC interop_desc{}; interop_desc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-    if (self.native12) self.interop_queue = self.direct_queue;
-    else if (FAILED(gpu->CreateCommandQueue(&interop_desc, IID_PPV_ARGS(&self.interop_queue)))) return E_FAIL;
-    self.completion_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-    if (!self.completion_event || FAILED(gpu->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&self.complete)))) return E_FAIL;
-    if (application_ready) {
-        self.application_ready = CreateEventW(nullptr, FALSE, TRUE, nullptr);
-        if (!self.application_ready) return E_FAIL;
-    }
-    return S_OK;
+    ID3D12CommandQueue* queue = nullptr;
+    const auto result = static_cast<ID3D12Device*>(device)->CreateCommandQueue(&interop_desc, IID_PPV_ARGS(&queue));
+    *out = queue;
+    return result;
 }
+int32_t create_completion_fence(void* device, void** out) {
+    ID3D12Fence* fence = nullptr;
+    const auto result = static_cast<ID3D12Device*>(device)->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence));
+    *out = fence;
+    return result;
+}
+void* create_event(uint32_t initially_signaled) {
+    return CreateEventW(nullptr, FALSE, initially_signaled != 0, nullptr);
+}
+void* duplicate_event(void* event) {
+    HANDLE duplicate = nullptr;
+    DuplicateHandle(GetCurrentProcess(), event, GetCurrentProcess(), &duplicate, 0, FALSE, DUPLICATE_SAME_ACCESS);
+    return duplicate;
+}
+void close_event(void* event) { CloseHandle(event); }
 int32_t create_upload_fence(void* b) {
     auto& self = *as_bridge(b);
     return rsf_shared_fence_create(self.device.Get(), self.graphics.native_device, settings().log,
@@ -511,20 +515,18 @@ int32_t resize_physical(void* b, void* physical, uint32_t count, uint32_t width,
         self.tearing_supported ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0);
 }
 
-uint32_t queues_joined(void* b, void* queue) { return queue != as_bridge(b)->direct_queue.Get() ? 1u : 0u; }
-int32_t join(void* b, void* queue, uint32_t direction, uint64_t value) {
-    auto& self = *as_bridge(b);
-    auto* present_queue = static_cast<ID3D12CommandQueue*>(queue);
-    auto* signaller = direction == RSF_D3D11P_JOIN_SOURCE_TO_PRESENT ? self.direct_queue.Get() : present_queue;
-    auto* waiter = direction == RSF_D3D11P_JOIN_SOURCE_TO_PRESENT ? present_queue : self.direct_queue.Get();
-    const auto signaled = signaller->Signal(self.complete.Get(), value);
-    return FAILED(signaled) ? signaled : waiter->Wait(self.complete.Get(), value);
+int32_t join(void* signaller, void* waiter, void* fence, uint64_t value) {
+    auto* complete = static_cast<ID3D12Fence*>(fence);
+    const auto signaled = static_cast<ID3D12CommandQueue*>(signaller)->Signal(complete, value);
+    return FAILED(signaled) ? signaled : static_cast<ID3D12CommandQueue*>(waiter)->Wait(complete, value);
 }
-int32_t slot_reset(void* b, void* raw_allocator, void* raw_list, uint64_t fence, uint32_t* step) {
-    auto& self = *as_bridge(b);
+int32_t wait_fence(void* fence, void* event, uint64_t value) {
+    return rsf::wait_fence(static_cast<ID3D12Fence*>(fence), value, event);
+}
+int32_t slot_reset(void* fence, void* event, void* raw_allocator, void* raw_list, uint64_t value, uint32_t* step) {
     auto* allocator = static_cast<ID3D12CommandAllocator*>(raw_allocator);
     auto* list = static_cast<ID3D12GraphicsCommandList*>(raw_list);
-    *step = 0; HRESULT result = self.wait(self.complete.Get(), fence); if (FAILED(result)) return result;
+    *step = 0; HRESULT result = wait_fence(fence, event, value); if (FAILED(result)) return result;
     *step = 1; result = allocator->Reset(); if (FAILED(result)) return result;
     *step = 2; return list->Reset(allocator, nullptr);
 }
@@ -571,15 +573,12 @@ int32_t upload_return(void* b, void* raw_queue, uint64_t value) {
     if (SUCCEEDED(result)) result = self.context->Wait(fence11, value);
     return result;
 }
-int32_t signal_slot(void* b, void* queue, uint64_t value) {
-    return static_cast<ID3D12CommandQueue*>(queue)->Signal(as_bridge(b)->complete.Get(), value);
+int32_t signal_slot(void* queue, void* fence, uint64_t value) {
+    return static_cast<ID3D12CommandQueue*>(queue)->Signal(static_cast<ID3D12Fence*>(fence), value);
 }
-uint32_t has_application_ready(void* b) { return as_bridge(b)->application_ready ? 1u : 0u; }
-int32_t application_ready(void* b, uint32_t on_completion, uint64_t value) {
-    auto& self = *as_bridge(b);
-    if (!self.application_ready) return S_OK;
-    if (on_completion) return self.complete->SetEventOnCompletion(value, self.application_ready);
-    return SetEvent(self.application_ready) ? S_OK : E_FAIL;
+int32_t application_ready(void* event, void* fence, uint64_t value) {
+    if (fence) return static_cast<ID3D12Fence*>(fence)->SetEventOnCompletion(value, event);
+    return SetEvent(event) ? S_OK : E_FAIL;
 }
 void report_device_failure(void* b, int32_t result, uint32_t backend) {
     auto& self = *as_bridge(b);
@@ -624,18 +623,10 @@ void log_buffer_refusal(void* b, uint32_t index, const void* requested, int32_t 
     log(text);
 }
 
-uint32_t drain_queues(void* b) {
-    auto& self = *as_bridge(b);
-    if (!self.graphics.queue || !self.complete) return 0;
-    return RSF_D3D11P_DRAIN_GRAPHICS | (self.interop_queue ? RSF_D3D11P_DRAIN_INTEROP : 0u);
+int32_t signal_wait(void* queue, void* fence, void* event, uint64_t value) {
+    if (FAILED(signal_slot(queue, fence, value))) return E_FAIL;
+    return wait_fence(fence, event, value);
 }
-int32_t signal_wait(void* b, uint32_t interop, uint64_t value) {
-    auto& self = *as_bridge(b);
-    auto* queue = interop ? self.interop_queue.Get() : static_cast<ID3D12CommandQueue*>(self.graphics.queue);
-    if (FAILED(queue->Signal(self.complete.Get(), value))) return E_FAIL;
-    return self.wait(self.complete.Get(), value);
-}
-int32_t wait_fence(void* b, void* fence, uint64_t value) { return as_bridge(b)->wait(static_cast<ID3D12Fence*>(fence), value); }
 uint32_t buffer_referenced(void* resource) {
     auto* buffer = static_cast<IUnknown*>(resource);
     buffer->AddRef();
@@ -664,33 +655,30 @@ int32_t retire_submit(void* b, void* raw_queue, void* vendor_fence, uint64_t ven
     return FAILED(queue->Signal(self.retired.Get(), value)) ? RSF_BACKEND_ERROR_FEATURE_FAILED : RSF_BACKEND_OK;
 }
 // On device failure retain GPU-reachable storage for the process rather than free it.
-// The Rust owner has already retained its slot allocators and lists.
+// The Rust owner has already retained its synchronization resources and slots.
 void retain_all(void* b) {
     auto& self = *as_bridge(b);
-    self.complete.Detach(); self.retired.Detach(); self.context.Detach(); self.device.Detach();
-    self.parent.Detach(); self.interop_queue.Detach(); self.direct_device.Detach(); self.direct_queue.Detach();
+    self.retired.Detach(); self.context.Detach(); self.device.Detach(); self.parent.Detach();
+    self.direct_device.Detach(); self.direct_queue.Detach();
 }
 void release_presentation(void* b) {
     auto& self = *as_bridge(b);
     rsf_shared_fence_destroy(self.shared_fence); self.shared_fence = nullptr;
 }
-void release_device(void* b, uint32_t private_host) {
+void release_retire_fence(void* b) { as_bridge(b)->retired.Reset(); }
+void release_direct_graphics(void* b) {
     auto& self = *as_bridge(b);
-    if (self.completion_event) CloseHandle(self.completion_event);
-    if (self.application_ready) CloseHandle(self.application_ready);
-    self.completion_event = self.application_ready = nullptr;
-    if (private_host) self.interop_queue.Reset();
-    else if (self.host) self.interop_queue.Detach(); // Shared SR callbacks retain this process-owned queue.
+    self.direct_queue.Reset(); self.direct_device.Reset();
 }
 // A private host ends after the Rust owner has released the slot lists on its device.
 void release_host(void* b) {
     auto& self = *as_bridge(b);
-    self.complete.Reset(); self.retired.Reset(); self.context.Reset(); self.device.Reset(); self.parent.Reset();
+    self.retired.Reset(); self.context.Reset(); self.device.Reset(); self.parent.Reset();
     rsf_streamline_host_destroy(self.host);
 }
-void* source_queue(void* b) {
+void* source_queue(void* b, void* interop_queue) {
     auto& self = *as_bridge(b);
-    auto* queue = self.interop_queue.Get();
+    auto* queue = static_cast<ID3D12CommandQueue*>(interop_queue);
     if (!self.native12 && self.host && queue)
         queue = static_cast<ID3D12CommandQueue*>(rsf_streamline_host_native(self.host, queue));
     if (queue) queue->AddRef();
@@ -727,25 +715,27 @@ const rsf_d3d11p_platform platform{
     .init_source = leaf::init_source, .owning_adapter = leaf::owning_adapter, .native_device = leaf::native_device,
     .adopt_host = leaf::adopt_host, .d3d11_device = leaf::d3d11_device, .create_host = leaf::create_host,
     .host = leaf::host, .resolve_graphics = leaf::resolve_graphics, .tearing_supported = leaf::tearing_supported,
-    .fsr4_supported = leaf::fsr4_supported, .create_queues = leaf::create_queues,
+    .fsr4_supported = leaf::fsr4_supported, .create_interop_queue = leaf::create_interop_queue,
+    .create_completion_fence = leaf::create_completion_fence, .create_event = leaf::create_event,
+    .duplicate_event = leaf::duplicate_event, .close_event = leaf::close_event,
     .create_upload_fence = leaf::create_upload_fence, .create_slot = leaf::create_slot,
     .shared_surface_platform = rsf_shared_surface_native_platform, .create_render_buffer = leaf::create_render_buffer,
     .create_plain = leaf::create_plain, .query_chain4 = leaf::query_chain4, .get_fullscreen = leaf::get_fullscreen,
     .set_fullscreen = leaf::set_fullscreen,
     .physical_present = leaf::physical_present, .resize_physical = leaf::resize_physical,
-    .queues_joined = leaf::queues_joined, .join = leaf::join,
+    .join = leaf::join,
     .slot_reset = leaf::slot_reset, .upload_wait = leaf::upload_wait, .acquire_backbuffer = leaf::acquire_backbuffer,
     .record_copy = leaf::record_copy, .context11 = leaf::context11,
     .close_execute = leaf::close_execute, .upload_return = leaf::upload_return, .signal_slot = leaf::signal_slot,
-    .has_application_ready = leaf::has_application_ready,
     .application_ready = leaf::application_ready, .report_device_failure = leaf::report_device_failure,
     .log_present_failure = leaf::log_present_failure,
     .query_buffer_interface = leaf::query_buffer_interface, .get_physical_buffer = leaf::get_physical_buffer,
     .log_buffer_refusal = leaf::log_buffer_refusal,
-    .drain_queues = leaf::drain_queues, .signal_wait = leaf::signal_wait, .wait_fence = leaf::wait_fence,
+    .signal_wait = leaf::signal_wait, .wait_fence = leaf::wait_fence,
     .buffer_referenced = leaf::buffer_referenced, .set_description = leaf::set_description,
     .retire_fence = leaf::retire_fence, .retire_submit = leaf::retire_submit, .retain_all = leaf::retain_all,
-    .release_presentation = leaf::release_presentation, .release_device = leaf::release_device,
+    .release_presentation = leaf::release_presentation, .release_retire_fence = leaf::release_retire_fence,
+    .release_direct_graphics = leaf::release_direct_graphics,
     .release_host = leaf::release_host,
     .source_queue = leaf::source_queue,
     .command_list = leaf::command_list, .verify_outer = leaf::verify_outer,

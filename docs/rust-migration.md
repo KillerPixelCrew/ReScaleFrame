@@ -343,6 +343,13 @@ source. The private 24-byte record, pinned formatting, locked
 Windows metadata and whitespace checks passed. Device fixtures
 remain unrun.
 
+The same presentation owner now acquires and retires the interop
+queue, completion fence, completion event and optional application
+ready event. Source comparison matched all 73 private platform slots
+and 33 public facade signatures. Binary linkage, partial-initialization
+fixtures and D3D11 and D3D12 device retirement remain open.
+[Synchronization ownership](research/rust-d3d11-present-sync.md)
+
 ## Verification coverage
 
 | Requirement | Recorded evidence | Still open |

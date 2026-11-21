@@ -29,6 +29,14 @@ struct FakePhysical {
     queue: Raw,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SyncFailure {
+    Queue,
+    CompletionEvent,
+    Fence,
+    ReadyEvent,
+}
+
 struct Fake {
     calls: Vec<String>,
     logs: Vec<String>,
@@ -40,6 +48,10 @@ struct Fake {
     proxy_queue: Box<FakeCom>,
     native_queue: Box<FakeCom>,
     direct_queue: Box<FakeCom>,
+    interop_queue: Box<FakeCom>,
+    completion_fence: Box<FakeCom>,
+    sync_failure: Option<SyncFailure>,
+    sync_calls: Vec<&'static str>,
     query_chain_result: i32,
     reenter_physical: bool,
     width: u32,
@@ -54,7 +66,6 @@ struct Fake {
     fullscreen_result: i32,
     join_result: i32,
     queue_missing: bool,
-    joined: bool,
     host_available: bool,
     host: usize,
     adapter_default: u32,
@@ -82,9 +93,8 @@ struct Fake {
     close_result: i32,
     commands: Vec<FakeCommands>,
     slot_failure: Option<usize>,
-    // Pairs the owner still held at each release_device and release_host call.
+    // Pairs the owner still held at completion-event close and host release.
     held_at_release: Vec<usize>,
-    application_ready: bool,
     sessions: usize,
     refs: i64,
 }
@@ -104,6 +114,10 @@ impl Fake {
             proxy_queue: fake_com(),
             native_queue: fake_com(),
             direct_queue: fake_com(),
+            interop_queue: fake_com(),
+            completion_fence: fake_com(),
+            sync_failure: None,
+            sync_calls: Vec::new(),
             query_chain_result: S_OK,
             reenter_physical: false,
             width: 640,
@@ -118,7 +132,6 @@ impl Fake {
             fullscreen_result: S_OK,
             join_result: S_OK,
             queue_missing: false,
-            joined: false,
             host_available: false,
             host: 0,
             adapter_default: XESS,
@@ -147,10 +160,22 @@ impl Fake {
             commands: Vec::new(),
             slot_failure: None,
             held_at_release: Vec::new(),
-            application_ready: false,
             sessions: 0,
             refs: 0,
         }
+    }
+
+    fn interop(&self) -> &FakeCom {
+        if self.native12 {
+            &self.direct_queue
+        } else {
+            &self.interop_queue
+        }
+    }
+
+    fn assert_completion(&self, fence: Raw) {
+        assert_eq!(fence, com_raw(&self.completion_fence));
+        assert_eq!(self.completion_fence.refs.get(), 2);
     }
 }
 
@@ -374,7 +399,6 @@ unsafe extern "C" fn facts(_: Raw, out: *mut rsf_d3d11p_facts) {
         } else {
             null_mut()
         },
-        interop_queue: raw(0x60),
         device11: raw(0x44),
         buffer_usage: fake.buffer_usage,
     });
@@ -428,9 +452,70 @@ unsafe extern "C" fn tearing_supported(_: Raw) -> u32 {
 unsafe extern "C" fn fsr4_supported(_: Raw, _: *const c_char) -> u32 {
     u32::from(with(|fake| fake.fsr4))
 }
-unsafe extern "C" fn create_queues(_: Raw, ready: u32) -> i32 {
-    with(|fake| fake.application_ready = ready != 0);
-    S_OK
+unsafe extern "C" fn create_interop_queue(device: Raw, out: *mut Raw) -> i32 {
+    assert_eq!(device, raw(0x40));
+    with(|fake| {
+        assert!(!fake.native12);
+        fake.sync_calls.push("create interop queue");
+        if fake.sync_failure == Some(SyncFailure::Queue) {
+            return E_FAIL;
+        }
+        unsafe { give_ref(com_raw(&fake.interop_queue), out) };
+        S_OK
+    })
+}
+unsafe extern "C" fn create_completion_fence(device: Raw, out: *mut Raw) -> i32 {
+    assert_eq!(device, raw(0x40));
+    with(|fake| {
+        assert_eq!(fake.interop().refs.get(), 2);
+        fake.sync_calls.push("create completion fence");
+        if fake.sync_failure == Some(SyncFailure::Fence) {
+            return E_FAIL;
+        }
+        unsafe { give_ref(com_raw(&fake.completion_fence), out) };
+        S_OK
+    })
+}
+const COMPLETION_EVENT: usize = 0x61;
+const READY_EVENT: usize = 0x62;
+unsafe extern "C" fn create_event(initially_signaled: u32) -> Raw {
+    with(|fake| {
+        assert_eq!(fake.interop().refs.get(), 2);
+        let (operation, failure, event) = if initially_signaled == 0 {
+            (
+                "create completion event",
+                SyncFailure::CompletionEvent,
+                COMPLETION_EVENT,
+            )
+        } else {
+            assert!(fake.native12);
+            fake.assert_completion(com_raw(&fake.completion_fence));
+            ("create ready event", SyncFailure::ReadyEvent, READY_EVENT)
+        };
+        fake.sync_calls.push(operation);
+        if fake.sync_failure == Some(failure) {
+            null_mut()
+        } else {
+            raw(event)
+        }
+    })
+}
+unsafe extern "C" fn duplicate_event(event: Raw) -> Raw {
+    assert_eq!(event, raw(READY_EVENT));
+    raw(0x63)
+}
+unsafe extern "C" fn close_event(event: Raw) {
+    if event == raw(COMPLETION_EVENT) {
+        call("close completion event");
+        with(|fake| {
+            let held = held_slot_pairs(fake);
+            fake.held_at_release.push(held);
+            fake.sync_calls.push("close completion event");
+        });
+    } else {
+        assert_eq!(event, raw(READY_EVENT));
+        with(|fake| fake.sync_calls.push("close ready event"));
+    }
 }
 fn allocate_buffer(shared: bool) -> (Raw, i32) {
     with(|fake| {
@@ -546,7 +631,11 @@ fn assert_chain(chain: Raw) {
 fn assert_queue(queue: Raw) {
     with(|fake| {
         assert_eq!(queue, fake.physical.last().unwrap().queue);
-        assert_eq!(unsafe { &*queue.cast::<FakeCom>() }.refs.get(), 2);
+        let interop = queue == com_raw(fake.interop());
+        assert_eq!(
+            unsafe { &*queue.cast::<FakeCom>() }.refs.get(),
+            2 + u32::from(interop)
+        );
     });
 }
 
@@ -665,12 +754,21 @@ unsafe extern "C" fn resize_physical(
         fake.resize_result
     })
 }
-unsafe extern "C" fn queues_joined(_: Raw, queue: Raw) -> u32 {
-    assert_queue(queue);
-    u32::from(with(|fake| fake.joined))
-}
-unsafe extern "C" fn join(_: Raw, queue: Raw, direction: u32, value: u64) -> i32 {
-    assert_queue(queue);
+unsafe extern "C" fn join(signaller: Raw, waiter: Raw, fence: Raw, value: u64) -> i32 {
+    let source = with(|fake| {
+        fake.assert_completion(fence);
+        assert!(fake.native12);
+        com_raw(fake.interop())
+    });
+    let direction = if signaller == source {
+        assert_queue(waiter);
+        0
+    } else {
+        assert_eq!(waiter, source);
+        assert_queue(signaller);
+        1
+    };
+    assert_ne!(signaller, waiter);
     call(format!("join {direction} {value}"));
     with(|fake| fake.join_result)
 }
@@ -718,12 +816,15 @@ fn held_slot_pairs(fake: &Fake) -> usize {
         .count()
 }
 unsafe extern "C" fn slot_reset(
-    _: Raw,
+    completion: Raw,
+    event: Raw,
     allocator: Raw,
     list: Raw,
     fence: u64,
     step: *mut u32,
 ) -> i32 {
+    with(|fake| fake.assert_completion(completion));
+    assert_eq!(event, raw(COMPLETION_EVENT));
     unsafe { *step = 0 };
     let slot = slot_of(list, Some(allocator)) as u32;
     with(|fake| fake.slots.push((slot, fence)));
@@ -775,19 +876,22 @@ unsafe extern "C" fn upload_return(_: Raw, queue: Raw, value: u64) -> i32 {
     call(format!("return {value}"));
     S_OK
 }
-unsafe extern "C" fn signal_slot(_: Raw, queue: Raw, value: u64) -> i32 {
+unsafe extern "C" fn signal_slot(queue: Raw, fence: Raw, value: u64) -> i32 {
     assert_queue(queue);
     with(|fake| {
+        fake.assert_completion(fence);
         let held = fake.native12 && !failed(fake.backbuffer_result) && !fake.backbuffer_null;
         assert_eq!(fake.backbuffer.refs.get(), 1 + u32::from(held));
     });
     call(format!("slot_signal {value}"));
     S_OK
 }
-unsafe extern "C" fn has_application_ready(_: Raw) -> u32 {
-    u32::from(with(|fake| fake.application_ready))
-}
-unsafe extern "C" fn application_ready(_: Raw, on_completion: u32, value: u64) -> i32 {
+unsafe extern "C" fn application_ready(event: Raw, fence: Raw, value: u64) -> i32 {
+    assert_eq!(event, raw(READY_EVENT));
+    if !fence.is_null() {
+        with(|fake| fake.assert_completion(fence));
+    }
+    let on_completion = u32::from(!fence.is_null());
     call(format!("app_ready {on_completion} {value}"));
     S_OK
 }
@@ -800,14 +904,20 @@ unsafe extern "C" fn log_present_failure(_: Raw, step: *const c_char, _: i32, _:
         unsafe { CStr::from_ptr(step) }.to_string_lossy()
     ));
 }
-unsafe extern "C" fn drain_queues(_: Raw) -> u32 {
-    DRAIN_GRAPHICS | DRAIN_INTEROP
-}
-unsafe extern "C" fn signal_wait(_: Raw, interop: u32, value: u64) -> i32 {
+unsafe extern "C" fn signal_wait(queue: Raw, fence: Raw, event: Raw, value: u64) -> i32 {
+    assert_eq!(event, raw(COMPLETION_EVENT));
+    let interop = with(|fake| {
+        fake.assert_completion(fence);
+        let interop = queue == com_raw(fake.interop());
+        assert!(interop || queue == com_raw(&fake.proxy_queue));
+        u32::from(interop)
+    });
     call(format!("signal_wait {interop} {value}"));
     with(|fake| fake.drain_result)
 }
-unsafe extern "C" fn wait_fence(_: Raw, _: Raw, value: u64) -> i32 {
+unsafe extern "C" fn wait_fence(fence: Raw, event: Raw, value: u64) -> i32 {
+    assert_eq!(fence, raw(0xF0));
+    assert_eq!(event, raw(COMPLETION_EVENT));
     call(format!("wait_fence {value}"));
     S_OK
 }
@@ -864,22 +974,28 @@ unsafe extern "C" fn retain_all(_: Raw) {
 unsafe extern "C" fn release_presentation(_: Raw) {
     call("release_presentation");
 }
-unsafe extern "C" fn release_device(_: Raw, private_host: u32) {
-    call(format!("release_device {private_host}"));
+unsafe extern "C" fn release_retire_fence(_: Raw) {
+    with(|fake| fake.sync_calls.push("release retire fence"));
+}
+unsafe extern "C" fn release_direct_graphics(_: Raw) {
     with(|fake| {
-        let held = held_slot_pairs(fake);
-        fake.held_at_release.push(held);
+        assert_eq!(fake.completion_fence.refs.get(), 1);
+        fake.sync_calls.push("release direct graphics");
     });
 }
 unsafe extern "C" fn release_host(_: Raw) {
     call("release_host");
     with(|fake| {
+        assert_eq!(fake.interop().refs.get(), 1);
+        assert_eq!(fake.completion_fence.refs.get(), 1);
         let held = held_slot_pairs(fake);
         fake.held_at_release.push(held);
     });
 }
-unsafe extern "C" fn source_queue(_: Raw) -> Raw {
-    raw(0x81)
+unsafe extern "C" fn source_queue(_: Raw, queue: Raw) -> Raw {
+    with(|fake| assert_eq!(queue, com_raw(fake.interop())));
+    unsafe { com_add_ref(queue.cast()) };
+    queue
 }
 unsafe extern "C" fn command_list(_: Raw, queue: Raw, list: Raw) -> Raw {
     if !queue.is_null() {
@@ -925,7 +1041,11 @@ static PLATFORM: Platform = Platform {
     resolve_graphics: ok_bridge,
     tearing_supported,
     fsr4_supported,
-    create_queues,
+    create_interop_queue,
+    create_completion_fence,
+    create_event,
+    duplicate_event,
+    close_event,
     create_upload_fence: ok_bridge,
     create_slot,
     shared_surface_platform,
@@ -936,7 +1056,6 @@ static PLATFORM: Platform = Platform {
     set_fullscreen,
     physical_present,
     resize_physical,
-    queues_joined,
     join,
     slot_reset,
     upload_wait,
@@ -946,14 +1065,12 @@ static PLATFORM: Platform = Platform {
     close_execute,
     upload_return,
     signal_slot,
-    has_application_ready,
     application_ready,
     report_device_failure,
     log_present_failure,
     query_buffer_interface,
     get_physical_buffer,
     log_buffer_refusal,
-    drain_queues,
     signal_wait,
     wait_fence,
     buffer_referenced,
@@ -962,7 +1079,8 @@ static PLATFORM: Platform = Platform {
     retire_submit,
     retain_all,
     release_presentation,
-    release_device,
+    release_retire_fence,
+    release_direct_graphics,
     release_host,
     source_queue,
     command_list,
@@ -1055,16 +1173,11 @@ fn setup(backend: u32, switching: u32) -> Setup {
 
 fn reset() -> MutexGuard<'static, ()> {
     let guard = lock(&TEST_LOCK);
-    for value in [
-        &ACTIVE_HOST,
-        &ACTIVE_BRIDGE,
-        &ACTIVE_INTEROP,
-        &ACTIVE_SESSION,
-        &OUTER_ALIAS,
-    ] {
+    for value in [&ACTIVE_HOST, &ACTIVE_BRIDGE, &ACTIVE_SESSION, &OUTER_ALIAS] {
         value.store(null_mut(), Ordering::SeqCst);
     }
     ACTIVE_CHAIN.store(null_mut(), Ordering::SeqCst);
+    lock(&ACTIVE_GRAPHICS).0 = Graphics::EMPTY;
     ACTIVE_BACKEND.store(DLSS, Ordering::SeqCst);
     REQUESTED_BACKEND.store(NO_REQUEST, Ordering::SeqCst);
     BACKEND_CHOICES.store((RSF_FG_BACKEND_ALL | 1) & !(1 << FSR4), Ordering::SeqCst);
@@ -1346,11 +1459,17 @@ fn creation_admission_publication_and_retirement() {
     let mut graphics = Graphics::EMPTY;
     graphics.struct_size = 48;
     assert_eq!(unsafe { rsf_core_d3d11p_graphics(&mut graphics) }, 1);
+    let interop = with(|fake| com_raw(fake.interop()));
     assert!(
-        graphics.queue == raw(0x60)
+        graphics.queue == interop
             && graphics.native_queue.is_null()
             && graphics.device == raw(0x40)
     );
+    let source_queue = unsafe { rsf_core_d3d11p_source_queue(&PLATFORM) };
+    assert_eq!(source_queue, interop);
+    assert_eq!(with(|fake| fake.interop().refs.get()), 3);
+    drop(unsafe { ComRef::from_owned(source_queue) });
+    assert!(unsafe { rsf_core_d3d11p_duplicate_application_ready(chain_of(bridge)) }.is_null());
 
     unsafe { bridge_release_owned(bridge) };
     assert_eq!(
@@ -1361,10 +1480,10 @@ fn creation_admission_publication_and_retirement() {
             "wait_fence 7",
             "release_presentation",
             "destroy 1001",
-            "release_device 0"
+            "close completion event"
         ]
     );
-    // Without a private host the pairs outlive release_device, as the facade members did.
+    // Without a private host the pairs outlive event closure, as the facade members did.
     with(|fake| {
         assert_eq!(fake.held_at_release, [SLOTS]);
         assert_eq!(fake.commands.len(), SLOTS);
@@ -1390,7 +1509,7 @@ fn failed_initialization_releases_unpublished_facade() {
     assert!(!RETIREMENT_PENDING.load(Ordering::Acquire));
     let calls = take_calls();
     assert_eq!(calls[0], "create 3");
-    assert!(calls.contains(&"release_device 0".to_owned()));
+    assert!(calls.contains(&"close completion event".to_owned()));
     assert!(with(|fake| fake
         .logs
         .iter()
@@ -1402,9 +1521,69 @@ fn failed_initialization_releases_unpublished_facade() {
     assert_eq!(create_with(&request(0)).0, DXGI_ERROR_UNSUPPORTED);
 }
 
+#[test]
+fn partial_sync_initialization_retires_acquired_resources() {
+    use SyncFailure::{CompletionEvent, Fence, Queue, ReadyEvent};
+    for (failure, acquired, drained) in [
+        (Queue, &[][..], true),
+        (CompletionEvent, &["create interop queue"][..], true),
+        (
+            Fence,
+            &["create interop queue", "create completion event"][..],
+            true,
+        ),
+        (
+            ReadyEvent,
+            &["create completion event", "create completion fence"][..],
+            true,
+        ),
+        (
+            ReadyEvent,
+            &["create completion event", "create completion fence"][..],
+            false,
+        ),
+    ] {
+        let _guard = reset();
+        assert_eq!(prepare(&setup(FSR3, 1)), 1);
+        with(|fake| {
+            fake.native12 = failure == ReadyEvent;
+            fake.sync_failure = Some(failure);
+            fake.drain_result = if drained { S_OK } else { E_FAIL };
+        });
+        let flags = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
+        assert_eq!(create_with(&request(flags)), (E_FAIL, null_mut()));
+        let mut sequence = acquired.to_vec();
+        sequence.push(match failure {
+            Queue => "create interop queue",
+            CompletionEvent => "create completion event",
+            Fence => "create completion fence",
+            ReadyEvent => "create ready event",
+        });
+        if drained {
+            if matches!(failure, Fence | ReadyEvent) {
+                sequence.push("close completion event");
+            }
+            sequence.extend(["release retire fence", "release direct graphics"]);
+        }
+        let calls = take_calls();
+        if failure == ReadyEvent {
+            assert_eq!(calls[0], "signal_wait 1 1");
+            assert_eq!(calls[1], if drained { "signal_wait 0 2" } else { "retain" });
+        } else {
+            assert!(!calls.iter().any(|call| call.starts_with("signal_wait")));
+        }
+        with(|fake| {
+            assert_eq!(fake.sync_calls, sequence);
+            let refs = if drained { 1 } else { 2 };
+            assert_eq!(fake.interop().refs.get(), refs);
+            assert_eq!(fake.completion_fence.refs.get(), refs);
+        });
+    }
+}
+
 // A refused third pair leaves the first two with the unpublished facade. A private host's
 // interop queue goes first, then the pairs, then the host. Without one the pairs end after
-// release_device. A failed drain retains them.
+// the events close. A failed drain retains them.
 #[test]
 fn partial_slot_creation_releases_or_retains_created_pairs() {
     for (private, drained) in [(false, true), (true, true), (true, false)] {
@@ -1422,9 +1601,17 @@ fn partial_slot_creation_releases_or_retains_created_pairs() {
         let calls = take_calls();
         let (tail, held_at_release, held) = match (private, drained) {
             (_, false) => (vec!["signal_wait 1 1", "retain"], vec![], 2),
-            (false, true) => (vec!["release_presentation", "release_device 0"], vec![2], 0),
+            (false, true) => (
+                vec!["release_presentation", "close completion event"],
+                vec![2],
+                0,
+            ),
             (true, true) => (
-                vec!["release_presentation", "release_device 1", "release_host"],
+                vec![
+                    "release_presentation",
+                    "close completion event",
+                    "release_host",
+                ],
                 vec![2, 0],
                 0,
             ),
@@ -1563,6 +1750,10 @@ fn native12_switching_sequences_frames_and_providers() {
     assert_eq!(result, S_OK);
     let chain = chain_of(bridge);
     assert_eq!(
+        unsafe { rsf_core_d3d11p_duplicate_application_ready(chain) },
+        raw(0x63)
+    );
+    assert_eq!(
         take_calls(),
         [
             "make_render 640x480 28",
@@ -1649,6 +1840,12 @@ fn native12_switching_sequences_frames_and_providers() {
     assert_eq!(present(bridge, 1, 0), S_OK);
     assert_eq!(rsf_core_d3d11p_backend(), XESS);
     unsafe { bridge_release_owned(bridge) };
+    assert!(with(|fake| fake.sync_calls.ends_with(&[
+        "close completion event",
+        "close ready event",
+        "release retire fence",
+        "release direct graphics",
+    ])));
 }
 
 #[test]
@@ -1771,7 +1968,10 @@ fn physical_lease_defers_switch_and_keeps_callbacks_on_the_creation_queue() {
         assert_ne!(new_chain, old_chain);
         let new_queue = with(|fake| {
             assert_eq!(fake.physical[0].chain.refs.get(), 1);
-            assert_eq!(unsafe { &*old_queue.cast::<FakeCom>() }.refs.get(), 1);
+            assert_eq!(
+                unsafe { &*old_queue.cast::<FakeCom>() }.refs.get(),
+                1 + u32::from(native12)
+            );
             com_raw(&fake.proxy_queue)
         });
         assert_eq!(unsafe { rsf_core_d3d11p_queue(&PLATFORM) }, new_queue);
@@ -1782,6 +1982,7 @@ fn physical_lease_defers_switch_and_keeps_callbacks_on_the_creation_queue() {
         with(|fake| {
             assert_eq!(fake.physical[1].chain.refs.get(), 1);
             assert_eq!(fake.proxy_queue.refs.get(), 1);
+            assert_eq!(fake.interop().refs.get(), 2, "shared host keeps the queue");
         });
     }
 }
@@ -2296,7 +2497,9 @@ fn failed_retirement_retains_provider_and_inputs() {
         let _guard = reset();
         assert_eq!(prepare(&setup(FSR3, u32::from(native12))), 1);
         with(|fake| fake.native12 = native12);
-        let bridge = create();
+        let (result, bridge) =
+            create_with(&request(DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT));
+        assert_eq!(result, S_OK);
         assert_eq!(present(bridge, 1, DXGI_PRESENT_TEST), S_OK);
         take_calls();
         with(|fake| fake.drain_result = E_FAIL);
@@ -2315,7 +2518,14 @@ fn failed_retirement_retains_provider_and_inputs() {
             assert!(fake.held_at_release.is_empty());
             let physical = fake.physical.last().unwrap();
             assert_eq!(physical.chain.refs.get(), 2);
-            assert_eq!(unsafe { &*physical.queue.cast::<FakeCom>() }.refs.get(), 2);
+            assert_eq!(
+                unsafe { &*physical.queue.cast::<FakeCom>() }.refs.get(),
+                2 + u32::from(native12)
+            );
+            assert_eq!(fake.completion_fence.refs.get(), 2);
+            assert!(!fake.sync_calls.contains(&"close completion event"));
+            assert!(!fake.sync_calls.contains(&"close ready event"));
+            assert_eq!(fake.sync_calls.contains(&"create ready event"), native12);
             for buffer in &fake.buffers {
                 assert_eq!(buffer.application.refs.get(), 2);
                 if let Some(peer) = &buffer.peer {
@@ -2376,10 +2586,12 @@ fn lazy_creation_publishes_before_fullscreen_entry() {
 #[test]
 fn early_present_failures_complete_the_notification_and_fault() {
     let _guard = reset();
-    assert_eq!(prepare(&setup(AUTO, 1)), 1);
+    let mut value = setup(DLSS, 1);
+    value.streamline_directory_utf8 = c"streamline".as_ptr();
+    assert_eq!(prepare(&value), 1);
     with(|fake| {
         fake.native12 = true;
-        fake.joined = true;
+        fake.host_available = true;
     });
     let bridge = create();
     assert_eq!(present(bridge, 1, 0), S_OK);
@@ -2395,7 +2607,8 @@ fn early_present_failures_complete_the_notification_and_fault() {
     assert_eq!(prepare(&setup(FSR3, 0)), 1);
     with(|fake| {
         fake.native12 = false;
-        fake.joined = false;
+        fake.host_available = false;
+        fake.host = 0;
         fake.join_result = S_OK;
     });
     let bridge = create();
