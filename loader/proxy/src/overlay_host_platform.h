@@ -3,14 +3,14 @@
 
    The Rust owner in runtime/orchestrator/src/overlay_host.rs decides everything: lifecycle,
    ownership of the panel, renderer and device, the startup hint, visibility, texture sequencing,
-   draw admission, failure handling and frame timing. Each entry here is one loader, COM, input,
+   draw admission, failure handling and frame timing. Each entry here is one COM, input,
    renderer or Win32 call with no policy of its own. Private to overlay_host.cpp and its Rust
    owner; the public entry points stay in overlay_host.h. */
 
 #ifndef RSF_PROXY_OVERLAY_HOST_PLATFORM_H
 #define RSF_PROXY_OVERLAY_HOST_PLATFORM_H
 
-#include <rescaleframe/overlay.h>
+#include "../../../runtime/orchestrator/src/overlay_panel.h"
 
 #include <stdint.h>
 
@@ -19,26 +19,6 @@ extern "C" {
 #endif
 
 typedef void (*rsf_overlay_host_log)(void* user, const char* message);
-
-/* The five entry points of rescaleframe_overlay.dll. The module stays loaded for the process. */
-typedef struct rsf_overlay_host_panel {
-    rsf_overlay* (*create)(uint32_t abi_version);
-    void (*destroy)(rsf_overlay* overlay);
-    rsf_overlay_result (*frame)(rsf_overlay* overlay, const rsf_overlay_input* input,
-                                const rsf_overlay_stats* stats, rsf_overlay_draw_data* draw_data,
-                                rsf_overlay_intent* intent);
-    uint32_t (*texture_updates)(rsf_overlay* overlay, rsf_overlay_texture_update* updates,
-                                uint32_t max_updates);
-    uint32_t (*textures_to_free)(rsf_overlay* overlay, uint64_t* ids, uint32_t max_ids);
-} rsf_overlay_host_panel;
-
-/* Why the panel DLL is not available. `error` is GetLastError for a failed load. */
-enum {
-    RSF_OVERLAY_HOST_PANEL_LOADED = 0,
-    RSF_OVERLAY_HOST_PANEL_NO_PATH = 1,
-    RSF_OVERLAY_HOST_PANEL_NOT_LOADED = 2,
-    RSF_OVERLAY_HOST_PANEL_MISSING_EXPORTS = 3
-};
 
 typedef struct rsf_overlay_host_texture_desc {
     uint32_t width;

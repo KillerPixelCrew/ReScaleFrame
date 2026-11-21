@@ -189,13 +189,8 @@ impl Host {
             let mut api = rsf_overlay_host_panel::default();
             let mut error = 0;
             let status = unsafe { leaf(p.load_panel)(&mut api, &mut error) } as i32;
-            let complete = api.create.is_some()
-                && api.destroy.is_some()
-                && api.frame.is_some()
-                && api.texture_updates.is_some()
-                && api.textures_to_free.is_some();
             match status {
-                RSF_OVERLAY_HOST_PANEL_LOADED if complete => self.api = Some(api),
+                RSF_OVERLAY_HOST_PANEL_LOADED if api.complete() => self.api = Some(api),
                 RSF_OVERLAY_HOST_PANEL_NO_PATH => {
                     say("overlay: cannot work out where the panel DLL is");
                 }

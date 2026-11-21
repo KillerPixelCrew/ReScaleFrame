@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The D3D11 and native D3D12 overlay hosts share one Rust panel loader.
+It resolves the override or adjacent DLL, binds the five exports, and
+keeps one process-lifetime reference per published module. An aborted
+D3D12 setup releases its temporary reference after destroying the panel.
+Both hosts now accept the same path lengths and refuse an oversized
+override. The public overlay ABI is unchanged. Build and runtime
+validation remain open.
+
 Rust now owns Anomaly's startup and FG overlay controls and the INI path
 used by their setters and the SR panel. The ten controls keep their
 order, ranges, defaults and restart behavior. FG still reloads capture

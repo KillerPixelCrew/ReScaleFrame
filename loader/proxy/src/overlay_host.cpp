@@ -3,9 +3,8 @@
 
    The host's decisions belong to its Rust owner, runtime/orchestrator/src/overlay_host.rs. This
    file keeps the public entry points and the native leaves the owner calls through
-   overlay_host_platform.h: the panel DLL loader, the swap chain, device and output-merger COM
-   calls, the D3D11 overlay renderer, the window input subclass and the Win32 clocks. None of them
-   decides anything. */
+   overlay_host_platform.h: the swap chain, device and output-merger COM calls, the D3D11 overlay
+   renderer, the window input subclass and the Win32 clocks. */
 
 #include <windows.h>
 
@@ -16,9 +15,6 @@
 #include <rescaleframe/overlay_input.h>
 #include <rescaleframe/overlay_renderer.h>
 
-#include <cstring>
-#include <cwchar>
-
 #include "overlay_host.h"
 #include "overlay_host_platform.h"
 
@@ -28,76 +24,9 @@ static_assert(VK_INSERT == 0x2D, "the Rust owner names the toggle key by value")
 
 namespace {
 
-using create_fn = decltype(rsf_overlay_host_panel::create);
-using destroy_fn = decltype(rsf_overlay_host_panel::destroy);
-using frame_fn = decltype(rsf_overlay_host_panel::frame);
-using texture_updates_fn = decltype(rsf_overlay_host_panel::texture_updates);
-using textures_to_free_fn = decltype(rsf_overlay_host_panel::textures_to_free);
-
-template <typename T> T entry(HMODULE module, const char* name)
-{
-    return reinterpret_cast<T>(reinterpret_cast<void*>(GetProcAddress(module, name)));
-}
-
-/* Where the panel DLL is. An explicit path wins, because a research build is often assembled by
-   hand; otherwise it is looked for beside this module, which is where a packaged one would sit. */
-bool panel_path(wchar_t* out, size_t count)
-{
-    const DWORD explicit_length = GetEnvironmentVariableW(L"RSF_OVERLAY_DLL", out,
-                                                          static_cast<DWORD>(count));
-    if (explicit_length > 0 && explicit_length < count) {
-        return true;
-    }
-
-    HMODULE self = nullptr;
-    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-                                GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                            reinterpret_cast<LPCWSTR>(&panel_path), &self)) {
-        return false;
-    }
-    const DWORD length = GetModuleFileNameW(self, out, static_cast<DWORD>(count));
-    if (length == 0 || length >= count) {
-        return false;
-    }
-    wchar_t* separator = std::wcsrchr(out, L'\\');
-    if (!separator) {
-        return false;
-    }
-    separator[1] = L'\0';
-    if (std::wcslen(out) + std::wcslen(L"rescaleframe_overlay.dll") >= count) {
-        return false;
-    }
-    std::wcscat(out, L"rescaleframe_overlay.dll");
-    return true;
-}
-
-/* A module whose exports resolved stays loaded for the process: freeing it would unload Rust code
-   that a window message already inside the input hook can still be on its way into. */
 uint32_t load_panel(rsf_overlay_host_panel* out, uint32_t* error)
 {
-    wchar_t path[MAX_PATH * 2];
-    if (!panel_path(path, sizeof(path) / sizeof(path[0]))) {
-        return RSF_OVERLAY_HOST_PANEL_NO_PATH;
-    }
-    const HMODULE module = LoadLibraryW(path);
-    if (!module) {
-        *error = GetLastError();
-        return RSF_OVERLAY_HOST_PANEL_NOT_LOADED;
-    }
-    const rsf_overlay_host_panel panel{
-        entry<create_fn>(module, "rsf_overlay_create"),
-        entry<destroy_fn>(module, "rsf_overlay_destroy"),
-        entry<frame_fn>(module, "rsf_overlay_frame"),
-        entry<texture_updates_fn>(module, "rsf_overlay_texture_updates"),
-        entry<textures_to_free_fn>(module, "rsf_overlay_textures_to_free"),
-    };
-    if (!panel.create || !panel.destroy || !panel.frame || !panel.texture_updates ||
-        !panel.textures_to_free) {
-        FreeLibrary(module);
-        return RSF_OVERLAY_HOST_PANEL_MISSING_EXPORTS;
-    }
-    *out = panel;
-    return RSF_OVERLAY_HOST_PANEL_LOADED;
+    return rsf_core_overlay_panel_open(out, error, nullptr);
 }
 
 int32_t chain_device(void* chain, void** device)

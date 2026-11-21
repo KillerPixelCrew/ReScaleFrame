@@ -116,6 +116,8 @@ mod overlay_native12;
 #[cfg(windows)]
 mod overlay_native12_abi;
 #[cfg(windows)]
+mod overlay_panel;
+#[cfg(windows)]
 mod overlay_service;
 #[cfg(windows)]
 mod overlay_wrapped12;

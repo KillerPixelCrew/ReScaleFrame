@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "overlay_native12_platform.h"
+#include "overlay_panel.h"
 #include <rescaleframe/overlay_input.h>
 #include <windows.h>
 #include <d3d12.h>
@@ -9,7 +10,7 @@
 #include <array>
 #include <cstring>
 #include <memory>
-#include <string>
+#include <utility>
 namespace {
 using Microsoft::WRL::ComPtr;
 constexpr char shader[] = R"(
@@ -26,13 +27,9 @@ struct Frame {
     ComPtr<ID3D12DescriptorHeap> srv, rtv;
 };
 struct Panel {
-    HMODULE module{};
+    void* module{};
+    rsf_overlay_host_panel api{};
     rsf_overlay* ui{};
-    decltype(&rsf_overlay_destroy) destroy{};
-    bool module_published{};
-    decltype(&rsf_overlay_frame) layout{};
-    decltype(&rsf_overlay_texture_updates) updates{};
-    decltype(&rsf_overlay_textures_to_free) frees{};
     ComPtr<ID3D12Device> device;
     ComPtr<ID3D12CommandQueue> queue;
     ComPtr<ID3D12RootSignature> root;
@@ -41,9 +38,8 @@ struct Panel {
     UINT stride{};
 
     ~Panel() {
-        if (ui) destroy(ui);
-        // A successfully published panel module stays mapped, as in the shared overlay host.
-        if (module && !module_published) FreeLibrary(module);
+        if (ui) api.destroy(ui);
+        if (module) rsf_core_overlay_panel_release(module);
     }
 };
 void transition(ID3D12GraphicsCommandList* commands, ID3D12Resource* resource,
@@ -70,28 +66,8 @@ void* create_upload(void* native, uint64_t size, uint64_t* capacity)
 bool initialize(Panel& p, ID3D12Device* device, ID3D12CommandQueue* queue, HWND window, rsf_overlay12_log logger, void* user,
     void** completion)
 {
-    wchar_t path[32768]{};
-    const auto configured=GetEnvironmentVariableW(L"RSF_OVERLAY_DLL",path,32768);
-    if (configured>=32768) return false;
-    if (!configured) {
-        HMODULE own{};
-        if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-            reinterpret_cast<LPCWSTR>(&initialize),&own)) return false;
-        const auto length=GetModuleFileNameW(own,path,32768);
-        if (!length || length>=32768) return false;
-        std::wstring file=path;const auto slash=file.find_last_of(L"/\\");
-        if (slash==std::wstring::npos) return false;
-        file.resize(slash+1);file+=L"rescaleframe_overlay.dll";
-        if (file.size()>=32768) return false;
-        std::memcpy(path,file.c_str(),(file.size()+1)*sizeof(wchar_t));
-    }
-    p.module=LoadLibraryW(path);if (!p.module) return false;
-    const auto create=reinterpret_cast<decltype(&rsf_overlay_create)>(GetProcAddress(p.module,"rsf_overlay_create"));
-    p.destroy=reinterpret_cast<decltype(p.destroy)>(GetProcAddress(p.module,"rsf_overlay_destroy"));
-    p.layout=reinterpret_cast<decltype(p.layout)>(GetProcAddress(p.module,"rsf_overlay_frame"));
-    p.updates=reinterpret_cast<decltype(p.updates)>(GetProcAddress(p.module,"rsf_overlay_texture_updates"));
-    p.frees=reinterpret_cast<decltype(p.frees)>(GetProcAddress(p.module,"rsf_overlay_textures_to_free"));
-    if (!create||!p.destroy||!p.layout||!p.updates||!p.frees || !(p.ui=create(RSF_OVERLAY_ABI_VERSION))) return false;
+    if (rsf_core_overlay_panel_open(&p.api, nullptr, &p.module)!=RSF_OVERLAY_HOST_PANEL_LOADED) return false;
+    if (!(p.ui=p.api.create(RSF_OVERLAY_ABI_VERSION))) return false;
     p.device=device;p.queue=queue;p.stride=device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     ComPtr<ID3D12Fence> fence;
     if (FAILED(device->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&fence)))) return false;
@@ -124,7 +100,7 @@ bool initialize(Panel& p, ID3D12Device* device, ID3D12CommandQueue* queue, HWND 
     }
     const rsf_overlay_input_options input{sizeof(input),RSF_OVERLAY_INPUT_ABI_VERSION,0,logger,user};
     if (rsf_overlay_input_install(window,&input)!=RSF_OVERLAY_INPUT_OK) return false;
-    p.module_published=true;
+    rsf_core_overlay_panel_retain(std::exchange(p.module, nullptr));
     *completion=fence.Detach();
     return true;
 }
@@ -267,17 +243,17 @@ uint32_t layout(void* native, uint32_t width, uint32_t height, float elapsed,
     rsf_overlay_input input{};input.struct_size=sizeof(input);
     if (rsf_overlay_input_collect(&input,width,height,elapsed)!=RSF_OVERLAY_INPUT_OK) return 0;
     input.startup_hint_alpha=hint_alpha;
-    return panel.layout(panel.ui,&input,stats,data,decided)==RSF_OVERLAY_OK;
+    return panel.api.frame(panel.ui,&input,stats,data,decided)==RSF_OVERLAY_OK;
 } catch (...) { return 0; }
 
 uint32_t updates(void* native, rsf_overlay_texture_update* output, uint32_t capacity) {
     auto& panel=*static_cast<Panel*>(native);
-    return panel.updates(panel.ui,output,capacity);
+    return panel.api.texture_updates(panel.ui,output,capacity);
 }
 
 uint32_t frees(void* native, uint64_t* output, uint32_t capacity) {
     auto& panel=*static_cast<Panel*>(native);
-    return panel.frees(panel.ui,output,capacity);
+    return panel.api.textures_to_free(panel.ui,output,capacity);
 }
 
 uint32_t record(void* native, uint32_t slot, const rsf_overlay12_draw* binding,

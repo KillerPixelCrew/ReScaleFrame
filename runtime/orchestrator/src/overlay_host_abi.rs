@@ -147,9 +147,6 @@ impl Default for rsf_overlay_draw_data {
 pub struct rsf_overlay {
     _unused: [u8; 0],
 }
-pub type rsf_overlay_host_log = ::core::option::Option<
-    unsafe extern "C" fn(user: *mut ::core::ffi::c_void, message: *const ::core::ffi::c_char),
->;
 #[repr(C)]
 #[derive(Default, Copy, Clone)]
 pub struct rsf_overlay_host_panel {
@@ -196,6 +193,9 @@ pub const RSF_OVERLAY_HOST_PANEL_NO_PATH: _bindgen_ty_1 = 1;
 pub const RSF_OVERLAY_HOST_PANEL_NOT_LOADED: _bindgen_ty_1 = 2;
 pub const RSF_OVERLAY_HOST_PANEL_MISSING_EXPORTS: _bindgen_ty_1 = 3;
 pub type _bindgen_ty_1 = ::core::ffi::c_int;
+pub type rsf_overlay_host_log = ::core::option::Option<
+    unsafe extern "C" fn(user: *mut ::core::ffi::c_void, message: *const ::core::ffi::c_char),
+>;
 #[repr(C)]
 #[derive(Default, Copy, Clone)]
 pub struct rsf_overlay_host_texture_desc {
