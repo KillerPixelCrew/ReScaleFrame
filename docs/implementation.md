@@ -183,6 +183,12 @@ Rust also checks fence completion before recycling the tail across
 recordings. Native code retains the COM leases and executes the GPU
 calls. Missing submissions still keep the readback pending.
 
+RDR2's Rust diagnostic workers preserve the module sampling marks,
+dump policy, census summary and optional RenderDoc request loop. Native
+leaves retain the existing diagnostics ABI. The RenderDoc trigger still
+requests a camera record before queuing the frame capture. Builds and
+live diagnostic verification remain open.
+
 Unity package D3D12 SR contexts and their recording slots are Rust-owned.
 The existing Unity bridge still provides recording and completion facts.
 The view owner preserves reconfiguration, spatial fallback and retirement

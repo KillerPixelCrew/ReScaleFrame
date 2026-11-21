@@ -197,7 +197,7 @@ unsafe extern "C" fn rsf_rdr2_camera_install(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_rdr2_camera_request() {
+pub(crate) extern "C" fn rsf_rdr2_camera_request() {
     if let Some(probe) = lock(&PROBE).as_mut() {
         probe.request();
     }

@@ -12,6 +12,7 @@
 #include <rescaleframe/frame_capture.h>
 #endif
 #include <rescaleframe/vendor_census.h>
+#include "diagnostics.h"
 #include "runtime_worker_native.h"
 #include <windows.h>
 #include <dxgi1_4.h>
@@ -23,7 +24,6 @@
 #include <cstring>
 #include <cwchar>
 #include <mutex>
-#include <string>
 #include "asi_platform.h"
 #include "social_club.h"
 #include "camera_probe.h"
@@ -32,42 +32,13 @@
 
 namespace {
 HMODULE self = nullptr;
-constexpr auto log = rsf_rdr2_runtime_log;
 std::mutex trace_guard;
-std::string dump_directory;
-std::string modules_path;
 char census_directory[MAX_PATH * 3]{};
 #ifdef RSF_HAVE_FRAME_CAPTURE
-wchar_t frame_request[MAX_PATH]{};
-DWORD WINAPI frame_requests(void*) noexcept
-{
-    bool previous_key{};
-    for (;;) {
-        Sleep(250);
-        DWORD foreground_process{};
-        GetWindowThreadProcessId(GetForegroundWindow(), &foreground_process);
-        const bool key = foreground_process == GetCurrentProcessId() && (GetAsyncKeyState(VK_F10) & 0x8000) != 0;
-        const bool requested = GetFileAttributesW(frame_request) != INVALID_FILE_ATTRIBUTES && DeleteFileW(frame_request);
-        if (requested || (key && !previous_key)) {
-            rsf_rdr2_request_camera_capture();
-            rsf_capture_trigger(1);
-        }
-        previous_key = key;
-    }
-}
-
+static_assert(RSF_CAPTURE_OK == 0);
 int32_t install_frame_probe(const wchar_t* library, const wchar_t* prefix) noexcept
 {
-    char library_utf8[MAX_PATH * 3]{}, prefix_utf8[MAX_PATH * 3]{};
-    WideCharToMultiByte(CP_UTF8, 0, library, -1, library_utf8, sizeof(library_utf8), nullptr, nullptr);
-    WideCharToMultiByte(CP_UTF8, 0, prefix, -1, prefix_utf8, sizeof(prefix_utf8), nullptr, nullptr);
-    const auto result = rsf_capture_initialise(library_utf8, prefix_utf8);
-    if (result == RSF_CAPTURE_OK) {
-        swprintf_s(frame_request, L"%s.request", prefix);
-        HANDLE poller = CreateThread(nullptr, 0, frame_requests, nullptr, 0, nullptr);
-        if (poller) CloseHandle(poller);
-    }
-    return static_cast<int32_t>(result);
+    return rsf_rdr2_start_frame_probe(library, prefix, rsf_capture_initialise, rsf_capture_trigger);
 }
 #endif
 
@@ -132,80 +103,46 @@ int32_t install_census(const wchar_t* directory, uint32_t flags) noexcept
     return static_cast<int32_t>(rsf_census_install(&options));
 }
 
-std::string utf8(const std::wstring& value)
-{
-    const int size = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    if (size <= 1) return {};
-    std::string result(static_cast<size_t>(size), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, result.data(), size, nullptr, nullptr);
-    result.resize(static_cast<size_t>(size - 1));
-    return result;
-}
-
-// Diagnostics only: the shipped code section is ciphertext (entropy 7.998), so offline analysis
-// needs the decrypted image. Which graphics runtime the game selected is only visible after it
-// initialises one, so the module list is sampled on a schedule.
-DWORD WINAPI diagnostics(void*) noexcept try
-{
-    double entropy = 0.0;
-    rsf_measure_module_code(nullptr, &entropy);
-    char message[256]{};
-    std::snprintf(message, sizeof(message), "Code entropy at entry %.3f.", entropy);
-    log(nullptr, message);
-    if (!dump_directory.empty()) {
-        CreateDirectoryA(dump_directory.c_str(), nullptr);
+constexpr rsf_rdr2_diagnostics_leaves diagnostic_leaves{
+    []() noexcept {
+        double entropy = 0.0;
+        rsf_measure_module_code(nullptr, &entropy);
+        return entropy;
+    },
+    [](const char* directory, double threshold, uint32_t require_decrypted,
+        uint32_t poll_ms, uint32_t timeout_ms, uint32_t stable_samples, rsf_rdr2_dump_result* out) noexcept {
+        CreateDirectoryA(directory, nullptr);
         rsf_dump_options options{};
         options.struct_size = sizeof(options);
         options.abi_version = RSF_MODULE_DUMP_ABI_VERSION;
-        options.output_directory_utf8 = dump_directory.c_str();
-        options.entropy_threshold = 7.0;
-        options.require_decrypted = 1;
+        options.output_directory_utf8 = directory;
+        options.entropy_threshold = threshold;
+        options.require_decrypted = require_decrypted;
         rsf_dump_report report{};
         report.struct_size = sizeof(report);
-        const auto result = rsf_dump_when_decrypted(&options, 250, 180000, 2, &report);
-        std::snprintf(message, sizeof(message),
-            "Module dump result=%d entropy=%.3f sections=%u imports=%u iat_refs=%u base=0x%llx bytes=%llu",
-            int(result), report.code_entropy, report.sections_written, report.imports_described,
-            report.iat_references, static_cast<unsigned long long>(report.load_base),
-            static_cast<unsigned long long>(report.bytes_written));
-        log(nullptr, message);
-    }
-    static const DWORD marks[] = {5000, 15000, 30000, 60000, 120000};
-    const auto begin = GetTickCount64();
-    for (const auto mark : marks) {
-        const auto elapsed = GetTickCount64() - begin;
-        if (elapsed < mark) Sleep(static_cast<DWORD>(mark - elapsed));
-        char label[32]{};
-        std::snprintf(label, sizeof(label), "t+%lus", static_cast<unsigned long>(mark / 1000));
-        rsf_write_module_list(modules_path.c_str(), label);
-    }
-    log(nullptr, "Module sampling finished.");
-    rsf_census_counters counters{};
-    counters.struct_size = sizeof(counters);
-    counters.abi_version = RSF_CENSUS_ABI_VERSION;
-    if (census_directory[0] && rsf_census_flush() == RSF_CENSUS_OK &&
-        rsf_census_get_counters(&counters) == RSF_CENSUS_OK) {
-        std::snprintf(message, sizeof(message),
-            "Census at 120 s: calls=%llu written=%llu sites=%u hooks=%u conflicts=%u presents=%llu dropped=%llu",
-            static_cast<unsigned long long>(counters.calls_seen),
-            static_cast<unsigned long long>(counters.records_written), counters.sites,
-            counters.hooks_installed, counters.hook_conflicts,
-            static_cast<unsigned long long>(counters.present_index),
-            static_cast<unsigned long long>(counters.records_dropped_queue + counters.records_dropped_budget +
-                                            counters.records_dropped_size));
-        log(nullptr, message);
-    }
-    return 0;
-}
-catch (...) { return 1; }
+        const auto result = rsf_dump_when_decrypted(&options, poll_ms, timeout_ms, stable_samples, &report);
+        *out = {result, report.sections_written, report.imports_described, report.iat_references,
+            report.code_entropy, report.load_base, report.bytes_written};
+    },
+    [](const char* path, const char* label) noexcept { rsf_write_module_list(path, label); },
+    [](rsf_rdr2_census_result* out) noexcept {
+        rsf_census_counters counters{};
+        counters.struct_size = sizeof(counters);
+        counters.abi_version = RSF_CENSUS_ABI_VERSION;
+        if (!census_directory[0] || rsf_census_flush() != RSF_CENSUS_OK ||
+            rsf_census_get_counters(&counters) != RSF_CENSUS_OK)
+            return false;
+        *out = {counters.calls_seen, counters.records_written, counters.present_index,
+            counters.records_dropped_queue + counters.records_dropped_budget + counters.records_dropped_size,
+            counters.sites, counters.hooks_installed, counters.hook_conflicts};
+        return true;
+    },
+};
 
-void start_diagnostics(const wchar_t* modules, const wchar_t* dumps) noexcept try
+void start_diagnostics(const wchar_t* modules, const wchar_t* dumps) noexcept
 {
-    modules_path = utf8(modules);
-    if (dumps) dump_directory = utf8(dumps);
-    if (HANDLE worker = CreateThread(nullptr, 0, diagnostics, nullptr, 0, nullptr)) CloseHandle(worker);
+    rsf_rdr2_start_diagnostics(modules, dumps, &diagnostic_leaves);
 }
-catch (...) {}
 
 constexpr rsf_rdr2_runtime_leaves runtime_leaves{
     rsf_rdr2_fingerprint,

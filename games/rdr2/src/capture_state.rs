@@ -98,21 +98,13 @@ extern "C" fn rsf_rdr2_capture_request(owner: &Capture) {
 #[cfg(windows)]
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_rdr2_capture_poll_request(owner: &Capture, request: *const u16) {
+    use crate::diagnostics::{capture_key_down, foreground};
     use windows_sys::Win32::Storage::FileSystem::DeleteFileW;
-    use windows_sys::Win32::System::Threading::GetCurrentProcessId;
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_F10};
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetWindowThreadProcessId,
-    };
 
-    let down = unsafe { GetAsyncKeyState(i32::from(VK_F10)) } < 0;
+    let down = capture_key_down();
     let was_down = owner.key_down.swap(down, Ordering::Relaxed);
-    if down && !was_down {
-        let mut foreground = 0;
-        unsafe { GetWindowThreadProcessId(GetForegroundWindow(), &mut foreground) };
-        if foreground == unsafe { GetCurrentProcessId() } {
-            rsf_rdr2_capture_request(owner);
-        }
+    if down && !was_down && foreground() {
+        rsf_rdr2_capture_request(owner);
     }
     if unsafe { DeleteFileW(request) } != 0 {
         rsf_rdr2_capture_request(owner);

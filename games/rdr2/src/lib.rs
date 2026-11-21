@@ -10,6 +10,8 @@ mod camera;
 #[cfg(windows)]
 mod camera_probe;
 mod capture_state;
+#[cfg(windows)]
+mod diagnostics;
 mod engine_settings;
 mod host;
 mod layout;
