@@ -333,7 +333,7 @@ void rsf_unity_bridge_release() noexcept
     if (renderer == kUnityGfxRendererD3D12) { rsf_unity_d3d12_release(); return; }
     std::lock_guard<std::mutex> lock(guard);
     if (!drained_locked()) return;
-    if (renderer == kUnityGfxRendererVulkan) rsf_uvk_release();
+    if (renderer == kUnityGfxRendererVulkan && !rsf_uvk_release()) return;
     for (auto& surface : surfaces) { rsf_shared_surface_destroy(surface.surface); surface.surface = nullptr; }
     rsf_shared_fence_destroy(sharing_fence); sharing_fence = nullptr;
     commands = {}; completion.Reset(); queue12.Reset(); device12.Reset(); context11.Reset(); device11.Reset();
@@ -380,14 +380,16 @@ extern "C" void UNITY_INTERFACE_API rsf_unity_package_bridge_unload()
     if (renderer == kUnityGfxRendererD3D12) rsf_unity_d3d12_unload();
     rsf_unity_frames_activate(0); unity11 = nullptr; unity12 = nullptr;
 }
-bool rsf_unity_package_graphics(void** owning_device, void** owning_queue) noexcept
+bool rsf_unity_package_graphics(Microsoft::WRL::ComPtr<ID3D12Device>& owning_device,
+    Microsoft::WRL::ComPtr<ID3D12CommandQueue>& owning_queue) noexcept
 {
-    if (!owning_device || !owning_queue) return false;
     if (renderer == kUnityGfxRendererD3D12 && unity12) {
-        *owning_device = unity12->GetDevice(); *owning_queue = unity12->GetCommandQueue(); return *owning_device && *owning_queue;
+        owning_device = unity12->GetDevice(); owning_queue = unity12->GetCommandQueue();
+        return owning_device && owning_queue;
     }
     if (renderer == kUnityGfxRendererD3D11 && initialized11) {
-        *owning_device = device12.Get(); *owning_queue = queue12.Get(); return true;
+        owning_device = device12; owning_queue = queue12;
+        return true;
     }
     return renderer == kUnityGfxRendererVulkan && rsf_uvk_graphics(owning_device, owning_queue);
 }
