@@ -35,7 +35,6 @@ template<class T> T entry(void* module, const char* name) { return reinterpret_c
 struct Native {
     rsf::sharpening::Vulkan sharpen;
     rsf_srvk_setup setup{};
-    uint32_t width = 0, height = 0;
     rsf::vkfg::Device gpu;
     PFN_vkCmdPipelineBarrier barrier = nullptr; PFN_vkCmdCopyImage copy = nullptr;
     PFN_vkCmdBlitImage blit = nullptr;
@@ -83,8 +82,15 @@ sl::Resource resource(const Image& image, bool output = false) {
     result.flags = 0; result.usage = image.usage;
     return result;
 }
+struct Init {
+    Native& native;
+    uint32_t& width;
+    uint32_t& height;
+};
+
 rsf_backend_result initialize(void* module, uintptr_t, void* user) {
-    auto& self = *static_cast<Native*>(user);
+    auto& init = *static_cast<Init*>(user);
+    auto& self = init.native;
     auto supported = entry<PFun_slIsFeatureSupported*>(module, "slIsFeatureSupported");
     auto feature = entry<PFun_slGetFeatureFunction*>(module, "slGetFeatureFunction");
     self.constants = entry<PFun_slSetConstants*>(module, "slSetConstants"); self.tags = entry<PFun_slSetTagForFrame*>(module, "slSetTagForFrame");
@@ -100,14 +106,12 @@ rsf_backend_result initialize(void* module, uintptr_t, void* user) {
     request.outputWidth = self.setup.output_width; request.outputHeight = self.setup.output_height;
     sl::DLSSOptimalSettings plan{};
     if (self.optimal(request, plan) != sl::Result::eOk || !plan.optimalRenderWidth || !plan.optimalRenderHeight) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
-    self.width = plan.optimalRenderWidth; self.height = plan.optimalRenderHeight;
+    init.width = plan.optimalRenderWidth; init.height = plan.optimalRenderHeight;
     return RSF_BACKEND_OK;
 }
 int32_t set_constants(void* native, uintptr_t token, const rsf_srvk_frame* input, uint32_t reset) {
     auto& self = *static_cast<Native*>(native);
     const auto& record = *input->record; const auto& camera = record.camera;
-    for (const auto* values : {camera.view_to_clip, camera.clip_to_view, camera.clip_to_previous_clip, camera.view_to_world})
-        for (uint32_t i = 0; i < 16; ++i) if (!std::isfinite(values[i])) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
     DirectX::XMFLOAT4X4 previous{}, inverse{}; std::memcpy(&previous, camera.clip_to_previous_clip, sizeof(previous));
     DirectX::XMVECTOR determinant{};
     DirectX::XMStoreFloat4x4(&inverse, DirectX::XMMatrixInverse(&determinant, DirectX::XMLoadFloat4x4(&previous)));
@@ -150,7 +154,8 @@ int32_t tag(void* native, uintptr_t token, void* commands, const rsf_srvk_frame*
     sl::Resource output = resource(images->output, true);
     sl::Resource bias{};
     if (input->bias_current_color.image) bias = resource(images->bias);
-    const sl::Extent render{0, 0, self.width, self.height}, presented{0, 0, record.output_width, record.output_height};
+    const sl::Extent render{0, 0, images->color.width, images->color.height},
+        presented{0, 0, record.output_width, record.output_height};
     sl::ResourceTag tags[] = {{&color, sl::kBufferTypeScalingInputColor, sl::ResourceLifecycle::eValidUntilEvaluate, &render},
         {&depth, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilEvaluate, &render},
         {&motion, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilEvaluate, &render},
@@ -161,24 +166,21 @@ int32_t tag(void* native, uintptr_t token, void* commands, const rsf_srvk_frame*
         reinterpret_cast<sl::CommandBuffer*>(commands)) == sl::Result::eOk ?
         RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
 }
-void capture(void* native, void* commands, const rsf_srvk_frame* input, const Image* image, uint32_t reset) {
-    auto& self = *static_cast<Native*>(native);
-    const auto list = static_cast<VkCommandBuffer>(commands);
-    const auto& record = *input->record;
-    const rsf_srvk_image out{self.setup.device, image->image, VK_FORMAT_R16G16B16A16_SFLOAT,
-        record.output_width, record.output_height, VK_IMAGE_LAYOUT_GENERAL, 1};
-    rsf::capture_sr_parameters(record, RSF_SR_DLSS, input->motion_scale_x, input->motion_scale_y, input->pre_exposure, reset);
-    (void)self.capture.record(list, input->color, record, "sr-source-jittered", reset);
-    (void)self.capture.record(list, input->color, record, "sr-linear-color", reset);
-    (void)self.capture.record(list, input->depth, record, "sr-depth", reset);
-    (void)self.capture.record(list, input->motion, record, "sr-motion-uv", reset);
-    if (input->bias_current_color.image) (void)self.capture.record(list, input->bias_current_color, record, "sr-bias-mask", reset);
-    (void)self.capture.record(list, out, record, "sr-output-linear", reset);
+void capture_parameters(void*, const rsf_srvk_frame* input, uint32_t reset) {
+    rsf::capture_sr_parameters(*input->record, RSF_SR_DLSS, input->motion_scale_x,
+        input->motion_scale_y, input->pre_exposure, reset);
+}
+
+void capture_record(void* native, void* commands, const rsf_srvk_image* image,
+    const rsf_frame_record* record, const char* role, uint32_t reset) {
+    (void)static_cast<Native*>(native)->capture.record(
+        static_cast<VkCommandBuffer>(commands), *image, *record, role, reset);
 }
 int32_t open(const rsf_srvk_setup* setup, void** out, uint32_t* width, uint32_t* height) noexcept try {
     auto self = std::make_unique<Native>();
     self->setup = *setup;
-    const rsf_slvk_call call{sizeof(call), RSF_SLVK_ABI_VERSION, 0, 0, initialize, self.get()};
+    Init init{*self, *width, *height};
+    const rsf_slvk_call call{sizeof(call), RSF_SLVK_ABI_VERSION, 0, 0, initialize, &init};
     const auto result = rsf_slvk_invoke(&call);
     if (result != RSF_BACKEND_OK) return result;
     if (!self->gpu.load_images(*setup, true)) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
@@ -196,7 +198,7 @@ int32_t open(const rsf_srvk_setup* setup, void** out, uint32_t* width, uint32_t*
     self->capture.set_provider(0, RSF_SR_DLSS);
     if (!self->capture.initialize(static_cast<VkDevice>(setup->device), setup->device_proc, memory))
         return RSF_BACKEND_ERROR_INIT_FAILED;
-    *width = self->width; *height = self->height; *out = self.release();
+    *out = self.release();
     return RSF_BACKEND_OK;
 } catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
 
@@ -246,7 +248,7 @@ const rsf_vkdlss_platform rsf::dlss_vk::leaves{
             reinterpret_cast<sl::CommandBuffer*>(commands)) == sl::Result::eOk ?
             RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
     },
-    capture,
+    capture_parameters, capture_record,
     [](void* native, void* commands, const rsf_srvk_frame* input, uint64_t output) {
         auto& self = *static_cast<Native*>(native);
         (void)self.sharpen.run(self.setup, static_cast<VkCommandBuffer>(commands), *input, reinterpret_cast<VkImage>(output));
@@ -267,4 +269,5 @@ const rsf_vkdlss_platform rsf::dlss_vk::leaves{
         self.capture.retire_commands(static_cast<VkCommandBuffer>(commands));
     },
 };
+static_assert(sizeof(rsf_vkdlss_platform) == 18 * sizeof(void*));
 #endif

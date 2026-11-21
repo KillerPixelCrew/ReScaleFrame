@@ -4,6 +4,7 @@
 use crate::vulkan_fg_resources_abi::rsf_vkfg_image;
 use crate::vulkan_latency_abi::rsf_slvk_call;
 use crate::vulkan_sr_abi::{rsf_srvk_frame, rsf_srvk_image, rsf_srvk_setup};
+use rsf_game_sys::rsf_frame_record;
 
 #[repr(C)]
 pub struct rsf_vkdlss_images {
@@ -110,12 +111,20 @@ pub struct rsf_vkdlss_platform {
             commands: *mut ::core::ffi::c_void,
         ) -> i32,
     >,
-    pub capture: ::core::option::Option<
+    pub capture_parameters: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: *mut ::core::ffi::c_void,
+            arg2: *const rsf_srvk_frame,
+            reset: u32,
+        ),
+    >,
+    pub capture_record: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: *mut ::core::ffi::c_void,
             commands: *mut ::core::ffi::c_void,
-            arg2: *const rsf_srvk_frame,
-            arg3: *const rsf_vkfg_image,
+            arg2: *const rsf_srvk_image,
+            arg3: *const rsf_frame_record,
+            role: *const ::core::ffi::c_char,
             reset: u32,
         ),
     >,
@@ -149,7 +158,7 @@ pub struct rsf_vkdlss_platform {
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of rsf_vkdlss_platform"][::core::mem::size_of::<rsf_vkdlss_platform>() - 136usize];
+    ["Size of rsf_vkdlss_platform"][::core::mem::size_of::<rsf_vkdlss_platform>() - 144usize];
     ["Alignment of rsf_vkdlss_platform"][::core::mem::align_of::<rsf_vkdlss_platform>() - 8usize];
     ["Offset of field: rsf_vkdlss_platform::open"]
         [::core::mem::offset_of!(rsf_vkdlss_platform, open) - 0usize];
@@ -173,16 +182,18 @@ const _: () = {
         [::core::mem::offset_of!(rsf_vkdlss_platform, tag) - 72usize];
     ["Offset of field: rsf_vkdlss_platform::evaluate"]
         [::core::mem::offset_of!(rsf_vkdlss_platform, evaluate) - 80usize];
-    ["Offset of field: rsf_vkdlss_platform::capture"]
-        [::core::mem::offset_of!(rsf_vkdlss_platform, capture) - 88usize];
+    ["Offset of field: rsf_vkdlss_platform::capture_parameters"]
+        [::core::mem::offset_of!(rsf_vkdlss_platform, capture_parameters) - 88usize];
+    ["Offset of field: rsf_vkdlss_platform::capture_record"]
+        [::core::mem::offset_of!(rsf_vkdlss_platform, capture_record) - 96usize];
     ["Offset of field: rsf_vkdlss_platform::sharpen"]
-        [::core::mem::offset_of!(rsf_vkdlss_platform, sharpen) - 96usize];
+        [::core::mem::offset_of!(rsf_vkdlss_platform, sharpen) - 104usize];
     ["Offset of field: rsf_vkdlss_platform::publish"]
-        [::core::mem::offset_of!(rsf_vkdlss_platform, publish) - 104usize];
+        [::core::mem::offset_of!(rsf_vkdlss_platform, publish) - 112usize];
     ["Offset of field: rsf_vkdlss_platform::release"]
-        [::core::mem::offset_of!(rsf_vkdlss_platform, release) - 112usize];
+        [::core::mem::offset_of!(rsf_vkdlss_platform, release) - 120usize];
     ["Offset of field: rsf_vkdlss_platform::flush"]
-        [::core::mem::offset_of!(rsf_vkdlss_platform, flush) - 120usize];
+        [::core::mem::offset_of!(rsf_vkdlss_platform, flush) - 128usize];
     ["Offset of field: rsf_vkdlss_platform::retire"]
-        [::core::mem::offset_of!(rsf_vkdlss_platform, retire) - 128usize];
+        [::core::mem::offset_of!(rsf_vkdlss_platform, retire) - 136usize];
 };

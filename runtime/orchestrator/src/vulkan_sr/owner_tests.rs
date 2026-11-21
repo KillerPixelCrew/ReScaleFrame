@@ -21,7 +21,7 @@ enum Call {
     DlssConstants(u32),
     DlssOptions(u32),
     DlssStage,
-    DlssCapture,
+    DlssParameters(u32),
     DlssPublish,
     Retire(usize),
     Flush,
@@ -179,13 +179,23 @@ static DLSS: rsf_vkdlss_platform = rsf_vkdlss_platform {
     evaluate: Some(leaf!(|native: Handle, _: usize, _: Handle| -> i32 {
         unsafe { fake(native).dispatch_result }
     })),
-    capture: Some(leaf!(|native: Handle,
-                         _: Handle,
-                         _: *const Frame,
-                         _: *const rsf_vkfg_image,
-                         _: u32|
+    capture_parameters: Some(leaf!(|native: Handle, _: *const Frame, reset: u32| -> () {
+        unsafe { fake(native).calls.push(Call::DlssParameters(reset)) };
+    })),
+    capture_record: Some(leaf!(|native: Handle,
+                                _: Handle,
+                                _: *const Image,
+                                _: *const rsf_frame_record,
+                                role: *const c_char,
+                                _: u32|
      -> () {
-        unsafe { fake(native).calls.push(Call::DlssCapture) };
+        unsafe {
+            fake(native).calls.push(Call::Capture(
+                std::ffi::CStr::from_ptr(role)
+                    .to_string_lossy()
+                    .into_owned(),
+            ))
+        };
     })),
     sharpen: Some(leaf!(|native: Handle,
                          _: Handle,
@@ -647,7 +657,18 @@ fn dlss_owner_routing_preserves_history_and_checked_release() {
             Call::DlssStage,
         ];
         if result == 0 {
-            expected.extend([Call::DlssCapture, Call::Sharpen, Call::DlssPublish]);
+            expected.push(Call::DlssParameters(reset));
+            expected.extend(
+                [
+                    "sr-source-jittered",
+                    "sr-linear-color",
+                    "sr-depth",
+                    "sr-motion-uv",
+                    "sr-output-linear",
+                ]
+                .map(|role| Call::Capture(role.to_owned())),
+            );
+            expected.extend([Call::Sharpen, Call::DlssPublish]);
         }
         assert_eq!(state.calls, expected);
     }

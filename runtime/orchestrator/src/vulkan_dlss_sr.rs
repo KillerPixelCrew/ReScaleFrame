@@ -3,10 +3,10 @@ use crate::allocate_handle;
 use crate::vulkan_dlss_sr_abi::{rsf_vkdlss_images, rsf_vkdlss_platform as Platform};
 use crate::vulkan_latency_abi::{RSF_SLVK_ABI_VERSION, rsf_slvk_call};
 use crate::vulkan_sr::{
-    History, R32_FLOAT, RG16_FLOAT, RGBA16_FLOAT, SAMPLED_USAGE, STORAGE_USAGE, TRANSFER_DST_USAGE,
-    TRANSFER_SRC_USAGE,
+    GENERAL, History, R32_FLOAT, RG16_FLOAT, RGBA16_FLOAT, SAMPLED_USAGE, STORAGE_USAGE,
+    TRANSFER_DST_USAGE, TRANSFER_SRC_USAGE,
 };
-use crate::vulkan_sr_abi::{rsf_srvk_frame, rsf_srvk_setup};
+use crate::vulkan_sr_abi::{rsf_srvk_frame, rsf_srvk_image, rsf_srvk_setup};
 use rsf_game_sys::rsf_frame_record;
 use std::ffi::c_void;
 use std::ptr;
@@ -141,6 +141,19 @@ unsafe extern "C" fn evaluate(_: *mut c_void, token: usize, user: *mut c_void) -
         return INVALID;
     }
     let record = unsafe { &*input.record };
+    let camera = &record.camera;
+    if [
+        &camera.view_to_clip,
+        &camera.clip_to_view,
+        &camera.clip_to_previous_clip,
+        &camera.view_to_world,
+    ]
+    .into_iter()
+    .flatten()
+    .any(|value| !value.is_finite())
+    {
+        return INVALID;
+    }
     let platform = owner.platform;
     let native = owner.native;
     let reset = u32::from(owner.history.needs_reset(record));
@@ -189,8 +202,38 @@ unsafe extern "C" fn evaluate(_: *mut c_void, token: usize, user: *mut c_void) -
         owner.history = History::default();
         return result;
     }
+    unsafe { (platform.capture_parameters.unwrap())(native, *input, reset) };
+    let capture = platform.capture_record.unwrap();
+    for (image, role) in [
+        (&input.color, c"sr-source-jittered"),
+        (&input.color, c"sr-linear-color"),
+        (&input.depth, c"sr-depth"),
+        (&input.motion, c"sr-motion-uv"),
+        (&input.bias_current_color, c"sr-bias-mask"),
+    ] {
+        if image.image != 0 {
+            unsafe { capture(native, *commands, image, record, role.as_ptr(), reset) };
+        }
+    }
+    let output = rsf_srvk_image {
+        device: input.output.device,
+        image: images.output.image,
+        format: RGBA16_FLOAT,
+        width: record.output_width,
+        height: record.output_height,
+        layout: GENERAL,
+        copy_source: 1,
+    };
     unsafe {
-        (platform.capture.unwrap())(native, *commands, *input, &images.output, reset);
+        // Preserve the pre-sharpening SDK output in the capture.
+        capture(
+            native,
+            *commands,
+            &output,
+            record,
+            c"sr-output-linear".as_ptr(),
+            reset,
+        );
         (platform.sharpen.unwrap())(native, *commands, *input, images.output.image);
         (platform.publish.unwrap())(native, *commands, *input, images.output.image);
     }

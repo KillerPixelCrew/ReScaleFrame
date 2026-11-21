@@ -4,6 +4,12 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now selects Vulkan DLSS SR's capture resources and roles, retains
+the planned dimensions, and checks camera matrices before passing
+them to Streamline. Output capture still precedes sharpening and
+publication. The native bridge keeps Vulkan recording and the SDK
+matrix conversion. The public SR ABI is unchanged.
+
 Rust now owns D3D11 state snapshots, their COM leases and the full,
 independent, depth and draw restore paths. The native bridge keeps the
 typed context calls. The public and private save/restore signatures

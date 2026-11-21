@@ -20,7 +20,9 @@ typedef struct rsf_vkdlss_platform {
     void (*initialize_output)(void*, void* commands, const rsf_vkfg_image*);
     int32_t (*tag)(void*, uintptr_t token, void* commands, const rsf_srvk_frame*, const rsf_vkdlss_images*);
     int32_t (*evaluate)(void*, uintptr_t token, void* commands);
-    void (*capture)(void*, void* commands, const rsf_srvk_frame*, const rsf_vkfg_image*, uint32_t reset);
+    void (*capture_parameters)(void*, const rsf_srvk_frame*, uint32_t reset);
+    void (*capture_record)(void*, void* commands, const rsf_srvk_image*, const rsf_frame_record*,
+                           const char* role, uint32_t reset);
     void (*sharpen)(void*, void* commands, const rsf_srvk_frame*, uint64_t output);
     void (*publish)(void*, void* commands, const rsf_srvk_frame*, uint64_t output);
     int32_t (*release)(void*, uintptr_t, void*);
