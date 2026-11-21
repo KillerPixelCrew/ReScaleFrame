@@ -28,10 +28,13 @@ using Microsoft::WRL::ComPtr;
 // owns host and session lifetime, admission, feature routing, frame tokens, marker ordering,
 // option/status handoff and Reflex/PCL pacing. Every function below is a typed SDK, COM or Win32
 // leaf it calls under its own locks.
-struct rsf_slhost_opened {
-    void* native;
-    uint32_t entries;
-    uint32_t pcl_message;
+struct rsf_slhost_init_preferences {
+    const wchar_t* directory;
+    const char* engine_version;
+    const char* project_id;
+    const uint32_t* features;
+    uint64_t flags;
+    uint32_t feature_count, engine_type, render_api, show_console, log_level;
 };
 struct rsf_slhost_reflex {
     uint32_t low_latency_available, latency_report_available;
@@ -48,13 +51,36 @@ struct rsf_slhost_observed {
     void* fence;
     uint64_t fence_value;
 };
-struct rsf_slhost_platform {
+using rsf_slhost_required_entries = void*[12];
+struct rsf_slhost_startup {
+    uint32_t engine_count;
     uint32_t (*interposer_loaded)();
-    int32_t (*admit)(const rsf_streamline_host_setup*);
+    uint32_t (*adapter_vendor)(void*, uint32_t*, void**);
+    void (*report_vendor)(rsf_backend_log_fn, void*, uint32_t);
     void* (*load)(const wchar_t*, const rsf_streamline_host_setup*);
     void (*unload)(void*);
-    int32_t (*open)(const rsf_streamline_host_setup*, void*, void*, void*, const wchar_t*, uint32_t,
-        const char*, const char*, rsf_slhost_opened*);
+    void* (*allocate)(rsf_backend_log_fn, void*);
+    void (*bind_required)(void*, const rsf_slhost_required_entries*);
+    uint32_t (*init)(void*, const rsf_slhost_init_preferences*);
+    void (*borrow_device)(void*, void*);
+    uint32_t (*create_device)(void*, void*);
+    void (*prime_mfg)(void*, uint32_t);
+    uint32_t (*upgrade_device)(void*);
+    uint32_t (*native_device)(void*);
+    void (*start_audit)(void*);
+    uint32_t (*register_device)(void*);
+    uint32_t (*create_factory)(void*);
+    uint32_t (*upgrade_factory)(void*);
+    uint32_t (*queue_type)(void*);
+    uint32_t (*queue_matches_device)(void*, void*, void**);
+    uint32_t (*create_queue)(void*);
+    uint32_t (*native_queue)(void*);
+    uint32_t (*resolve_feature)(void*, uint32_t, const char*, uint32_t);
+    void (*prepare_mfg)(void*);
+    void (*pcl_defaults)(void*);
+};
+struct rsf_slhost_platform {
+    const rsf_slhost_startup* startup;
     void (*dispose)(void*);
     int32_t (*token)(void*, uint32_t, void**);
     int32_t (*sleep)(void*, void*);
@@ -79,8 +105,11 @@ struct rsf_slhost_platform {
     int32_t (*constants)(void*, void*, const rsf_fg_frame*, uint32_t, uint32_t);
     int32_t (*tags)(void*, void*, void*, const rsf_fg_frame*);
 };
-static_assert(sizeof(rsf_slhost_platform) == 28 * sizeof(void*));
-static_assert(sizeof(rsf_slhost_opened) == 16 && sizeof(rsf_slhost_reflex) == 8 &&
+static_assert(sizeof(rsf_slhost_platform) == 24 * sizeof(void*) &&
+    sizeof(rsf_slhost_startup) == 25 * sizeof(void*) && offsetof(rsf_slhost_startup, interposer_loaded) == sizeof(void*));
+static_assert(sizeof(rsf_slhost_init_preferences) == 64 && offsetof(rsf_slhost_init_preferences, flags) == 32 &&
+    offsetof(rsf_slhost_init_preferences, log_level) == 56);
+static_assert(sizeof(rsf_slhost_reflex) == 8 &&
     sizeof(rsf_slhost_request) == 16 && sizeof(rsf_slhost_observed) == 56 &&
     offsetof(rsf_slhost_observed, presented) == 32);
 static_assert(sizeof(rsf_streamline_host_setup) == 80 && offsetof(rsf_streamline_host_setup, engine_type) == 24 &&
@@ -88,6 +117,12 @@ static_assert(sizeof(rsf_streamline_host_setup) == 80 && offsetof(rsf_streamline
     offsetof(rsf_streamline_host_setup, profile) == 72 && RSF_STREAMLINE_HOST_ABI_VERSION == 2 &&
     RSF_SL_PROFILE_DLSS_FG == 0 && RSF_SL_PROFILE_PCL == 2);
 static_assert(sl::MAX_FRAMES_IN_FLIGHT == 6);
+static_assert(sl::kFeatureDLSS == 0 && sl::kFeatureReflex == 3 && sl::kFeaturePCL == 4 && sl::kFeatureDLSS_G == 1000 &&
+    uint64_t(sl::PreferenceFlags::eDisableDebugText) == (1u << 1) &&
+    uint64_t(sl::PreferenceFlags::eUseManualHooking) == (1u << 2) &&
+    uint64_t(sl::PreferenceFlags::eUseFrameBasedResourceTagging) == (1u << 7) &&
+    uint32_t(sl::RenderAPI::eD3D12) == 1 && uint32_t(sl::LogLevel::eDefault) == 1 &&
+    uint32_t(sl::LogLevel::eVerbose) == 2 && D3D12_COMMAND_LIST_TYPE_DIRECT == 0);
 static_assert(uint32_t(sl::PCLMarker::eSimulationStart) == RSF_LATENCY_SIMULATION_START &&
     uint32_t(sl::PCLMarker::ePresentEnd) == RSF_LATENCY_PRESENT_END && RSF_LATENCY_INPUT_SAMPLE == 6 &&
     uint32_t(sl::PCLMarker::ePCLatencyPing) == 8 && uint32_t(sl::PCLMarker::eControllerInputSample) == 13);
@@ -131,13 +166,12 @@ int32_t rsf_core_slhost_session_abort(void*, uint64_t);
 }
 
 namespace {
-constexpr uint32_t feature_dlss = 1, feature_pcl = 2, feature_reflex = 4, feature_generation = 8;
 constexpr uint32_t entry_get_state = 1, entry_set_options = 2, entry_reflex_options = 4, entry_reflex_state = 8,
-    entry_sleep = 16, entry_pcl_marker = 32, entry_pcl_state = 64;
+    entry_sleep = 16, entry_pcl_marker = 32, entry_pcl_state = 64, entry_pcl_options = 128;
 
 // The typed SDK, COM and Win32 state of one host.
 struct Native {
-    bool initialized = false, development_runtime = false;
+    bool initialized = false;
     rsf_backend_log_fn log = nullptr;
     void* log_user = nullptr;
     ComPtr<ID3D12Device> device, native_device;
@@ -145,7 +179,6 @@ struct Native {
     ComPtr<IDXGIFactory2> factory;
     const wchar_t* directory{};
     const wchar_t* paths[1]{};
-    sl::Feature features[4]{};
     PFun_slInit* init{};
     PFun_slShutdown* shutdown{};
     PFun_slUpgradeInterface* upgrade{};
@@ -246,20 +279,19 @@ rsf_backend_result upgrade_chain(Native& host, void** chain)
 
 uint32_t interposer_loaded() noexcept { return GetModuleHandleW(L"sl.interposer.dll") != nullptr; }
 
-int32_t admit(const rsf_streamline_host_setup* setup) noexcept
+uint32_t adapter_vendor(void* candidate, uint32_t* vendor, void** retained) noexcept
 {
-    if (setup->engine_type >= uint32_t(sl::EngineType::eCount)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    // Streamline here means NVIDIA. Any other adapter is not an error in the caller, it is simply
-    // not a host this backend can be, so the caller may carry on with another vendor.
     ComPtr<IDXGIAdapter> adapter; DXGI_ADAPTER_DESC adapter_description{};
-    if (FAILED(static_cast<IUnknown*>(setup->dxgi_adapter)->QueryInterface(IID_PPV_ARGS(&adapter))) ||
-        FAILED(adapter->GetDesc(&adapter_description))) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (adapter_description.VendorId != 0x10de) {
-        rsf::say(setup->log, setup->log_user, "Streamline host refused: adapter vendor 0x%04x is not NVIDIA",
-            unsigned(adapter_description.VendorId));
-        return RSF_BACKEND_ERROR_NOT_SUPPORTED;
-    }
-    return RSF_BACKEND_OK;
+    if (FAILED(static_cast<IUnknown*>(candidate)->QueryInterface(IID_PPV_ARGS(&adapter))) ||
+        FAILED(adapter->GetDesc(&adapter_description))) return 0;
+    *vendor = adapter_description.VendorId;
+    *retained = static_cast<IUnknown*>(adapter.Detach());
+    return 1;
+}
+
+void report_vendor(rsf_backend_log_fn log, void* user, uint32_t vendor) noexcept
+{
+    rsf::say(log, user, "Streamline host refused: adapter vendor 0x%04x is not NVIDIA", unsigned(vendor));
 }
 
 void* load(const wchar_t* path, const rsf_streamline_host_setup* setup) noexcept
@@ -267,95 +299,183 @@ void* load(const wchar_t* path, const rsf_streamline_host_setup* setup) noexcept
     return rsf::load_interposer(path, setup->require_signature != 0, setup->log, setup->log_user);
 }
 
-int32_t open(const rsf_streamline_host_setup* setup, void* module, void* existing_device, void* existing_queue,
-    const wchar_t* directory, uint32_t features, const char* engine_version, const char* project_id,
-    rsf_slhost_opened* opened) noexcept
+void* allocate(rsf_backend_log_fn log, void* user) noexcept
 {
-    *opened = {};
-    auto* host = new (std::nothrow) Native; if (!host) return RSF_BACKEND_ERROR_INIT_FAILED;
-    host->log = setup->log; host->log_user = setup->log_user;
-    host->development_runtime = setup->development_runtime != 0;
-    host->directory = directory;
-#define CORE(member, function) host->member = rsf::entry<PFun_##function*>(static_cast<HMODULE>(module), #function); if (!host->member) { dispose(host); return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT; }
-    CORE(init, slInit); CORE(shutdown, slShutdown); CORE(upgrade, slUpgradeInterface); CORE(native, slGetNativeInterface);
-    CORE(set_device, slSetD3DDevice); CORE(supported, slIsFeatureSupported); CORE(function, slGetFeatureFunction);
-    CORE(version, slGetFeatureVersion); CORE(loaded, slSetFeatureLoaded);
-    CORE(new_token, slGetNewFrameToken); CORE(constants, slSetConstants); CORE(tags, slSetTagForFrame);
-#undef CORE
+    auto* host = new (std::nothrow) Native;
+    if (host) { host->log = log; host->log_user = user; }
+    return host;
+}
+
+void bind_required(void* native, const rsf_slhost_required_entries* addresses) noexcept
+{
+    auto& host = as_native(native);
+    const auto& [init, shutdown, upgrade, native_interface, set_device, supported, function, version, loaded,
+        new_token, constants, tags] = *addresses;
+    host.init = reinterpret_cast<PFun_slInit*>(init);
+    host.shutdown = reinterpret_cast<PFun_slShutdown*>(shutdown);
+    host.upgrade = reinterpret_cast<PFun_slUpgradeInterface*>(upgrade);
+    host.native = reinterpret_cast<PFun_slGetNativeInterface*>(native_interface);
+    host.set_device = reinterpret_cast<PFun_slSetD3DDevice*>(set_device);
+    host.supported = reinterpret_cast<PFun_slIsFeatureSupported*>(supported);
+    host.function = reinterpret_cast<PFun_slGetFeatureFunction*>(function);
+    host.version = reinterpret_cast<PFun_slGetFeatureVersion*>(version);
+    host.loaded = reinterpret_cast<PFun_slSetFeatureLoaded*>(loaded);
+    host.new_token = reinterpret_cast<PFun_slGetNewFrameToken*>(new_token);
+    host.constants = reinterpret_cast<PFun_slSetConstants*>(constants);
+    host.tags = reinterpret_cast<PFun_slSetTagForFrame*>(tags);
+}
+
+uint32_t init(void* native, const rsf_slhost_init_preferences* request) noexcept
+{
+    auto& host = as_native(native);
+    host.directory = request->directory;
+    host.paths[0] = host.directory;
     sl::Preferences preferences{};
-    preferences.flags = sl::PreferenceFlags::eUseManualHooking | sl::PreferenceFlags::eUseFrameBasedResourceTagging;
-    if (!host->development_runtime) preferences.flags |= sl::PreferenceFlags::eDisableDebugText;
-    preferences.renderAPI = sl::RenderAPI::eD3D12; preferences.showConsole = host->development_runtime;
-    preferences.logLevel = host->development_runtime ? sl::LogLevel::eVerbose : sl::LogLevel::eDefault;
-    rsf_core_streamline_log_set(RSF_STREAMLINE_LOG_D3D12_HOST, uintptr_t(host),
-        host->log, host->log_user, uint32_t(host->development_runtime));
+    preferences.flags = static_cast<sl::PreferenceFlags>(request->flags);
+    preferences.renderAPI = static_cast<sl::RenderAPI>(request->render_api);
+    preferences.showConsole = request->show_console != 0;
+    preferences.logLevel = static_cast<sl::LogLevel>(request->log_level);
+    rsf_core_streamline_log_set(RSF_STREAMLINE_LOG_D3D12_HOST, uintptr_t(native),
+        host.log, host.log_user, uint32_t(preferences.showConsole));
     preferences.logMessageCallback = message;
-    uint32_t feature_count = 0;
-    if (features & feature_dlss) host->features[feature_count++] = sl::kFeatureDLSS;
-    if (features & feature_pcl) host->features[feature_count++] = sl::kFeaturePCL;
-    if (features & feature_reflex) host->features[feature_count++] = sl::kFeatureReflex;
-    if (features & feature_generation) host->features[feature_count++] = sl::kFeatureDLSS_G;
-    preferences.featuresToLoad = host->features; preferences.numFeaturesToLoad = feature_count;
-    host->paths[0] = host->directory; preferences.pathsToPlugins = host->paths; preferences.numPathsToPlugins = 1;
-    preferences.engine = static_cast<sl::EngineType>(setup->engine_type);
-    preferences.engineVersion = engine_version; preferences.projectId = project_id;
-    if (host->init(preferences, sl::kSDKVersion) != sl::Result::eOk) { dispose(host); return RSF_BACKEND_ERROR_INIT_FAILED; }
-    host->initialized = true;
+    preferences.featuresToLoad = request->features; preferences.numFeaturesToLoad = request->feature_count;
+    preferences.pathsToPlugins = host.paths; preferences.numPathsToPlugins = 1;
+    preferences.engine = static_cast<sl::EngineType>(request->engine_type);
+    preferences.engineVersion = request->engine_version; preferences.projectId = request->project_id;
+    host.initialized = host.init(preferences, sl::kSDKVersion) == sl::Result::eOk;
+    return host.initialized;
+}
+
+void borrow_device(void* native, void* borrowed) noexcept
+{
+    auto* device = static_cast<ID3D12Device*>(borrowed);
+    device->AddRef();
+    as_native(native).device.Attach(device);
+}
+
+uint32_t create_device(void* native, void* adapter) noexcept
+{
     ID3D12Device* device = nullptr;
-    if (existing_device && existing_queue) {
-        device = static_cast<ID3D12Device*>(existing_device); device->AddRef();
-    } else if (FAILED(D3D12CreateDevice(static_cast<IUnknown*>(setup->dxgi_adapter), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device)))) {
-        dispose(host); return RSF_BACKEND_ERROR_INIT_FAILED;
-    }
-    if (features & feature_generation)
-        host->mfg.prime(device, host->directory, setup->require_signature != 0, host->log, host->log_user);
-    void* upgraded = device;
-    if (host->upgrade(&upgraded) != sl::Result::eOk) { device->Release(); dispose(host); return RSF_BACKEND_ERROR_INIT_FAILED; }
-    host->device.Attach(static_cast<ID3D12Device*>(upgraded));
+    if (FAILED(D3D12CreateDevice(static_cast<IUnknown*>(adapter), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device))))
+        return 0;
+    as_native(native).device.Attach(device);
+    return 1;
+}
+
+void prime_mfg(void* native, uint32_t require_signature) noexcept
+{
+    auto& host = as_native(native);
+    host.mfg.prime(host.device.Get(), host.directory, require_signature != 0, host.log, host.log_user);
+}
+
+template<class T> uint32_t upgrade_owned(Native& host, ComPtr<T>& object)
+{
+    auto* original = object.Detach();
+    void* upgraded = original;
+    if (host.upgrade(&upgraded) != sl::Result::eOk) { original->Release(); return 0; }
+    object.Attach(static_cast<T*>(upgraded));
+    return 1;
+}
+
+uint32_t upgrade_device(void* native) noexcept
+{
+    auto& host = as_native(native);
+    return upgrade_owned(host, host.device);
+}
+
+template<class T> uint32_t retain_native(Native& host, T* proxy, ComPtr<T>& object)
+{
     void* native = nullptr;
-    if (host->native(host->device.Get(), &native) != sl::Result::eOk || !native) { dispose(host); return RSF_BACKEND_ERROR_INIT_FAILED; }
-    host->native_device.Attach(static_cast<ID3D12Device*>(native));
-    rsf_reflex_audit_start(host->log, host->log_user);
-    if (host->set_device(host->device.Get()) != sl::Result::eOk) { dispose(host); return RSF_BACKEND_ERROR_INIT_FAILED; }
+    if (host.native(proxy, &native) != sl::Result::eOk || !native) return 0;
+    object.Attach(static_cast<T*>(native));
+    return 1;
+}
+
+uint32_t native_device(void* native) noexcept
+{
+    auto& host = as_native(native);
+    return retain_native(host, host.device.Get(), host.native_device);
+}
+
+void start_audit(void* native) noexcept
+{
+    auto& host = as_native(native);
+    rsf_reflex_audit_start(host.log, host.log_user);
+}
+
+uint32_t register_device(void* native) noexcept
+{
+    auto& host = as_native(native);
+    return host.set_device(host.device.Get()) == sl::Result::eOk;
+}
+
+uint32_t create_factory(void* native) noexcept
+{
     IDXGIFactory2* factory = nullptr;
-    if (FAILED(CreateDXGIFactory2(0, IID_PPV_ARGS(&factory)))) { dispose(host); return RSF_BACKEND_ERROR_INIT_FAILED; }
-    upgraded = factory;
-    if (host->upgrade(&upgraded) != sl::Result::eOk) { factory->Release(); dispose(host); return RSF_BACKEND_ERROR_INIT_FAILED; }
-    host->factory.Attach(static_cast<IDXGIFactory2*>(upgraded));
+    if (FAILED(CreateDXGIFactory2(0, IID_PPV_ARGS(&factory)))) return 0;
+    as_native(native).factory.Attach(factory);
+    return 1;
+}
+
+uint32_t upgrade_factory(void* native) noexcept
+{
+    auto& host = as_native(native);
+    return upgrade_owned(host, host.factory);
+}
+
+uint32_t queue_type(void* queue) noexcept
+{
+    return uint32_t(static_cast<ID3D12CommandQueue*>(queue)->GetDesc().Type);
+}
+
+uint32_t queue_matches_device(void* native, void* queue, void** retained) noexcept
+{
+    ComPtr<ID3D12Device> queue_device;
+    const bool matches = SUCCEEDED(static_cast<ID3D12CommandQueue*>(queue)->GetDevice(IID_PPV_ARGS(&queue_device))) &&
+        queue_device.Get() == as_native(native).native_device.Get();
+    *retained = static_cast<IUnknown*>(queue_device.Detach());
+    return matches;
+}
+
+uint32_t create_queue(void* native) noexcept
+{
+    auto& host = as_native(native);
     D3D12_COMMAND_QUEUE_DESC description{}; description.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-    if (existing_queue) {
-        auto* queue = static_cast<ID3D12CommandQueue*>(existing_queue);
-        ComPtr<ID3D12Device> queue_device;
-        if (queue->GetDesc().Type != D3D12_COMMAND_LIST_TYPE_DIRECT || FAILED(queue->GetDevice(IID_PPV_ARGS(&queue_device))) ||
-            queue_device.Get() != host->native_device.Get()) { dispose(host); return RSF_BACKEND_ERROR_WRONG_API; }
+    return SUCCEEDED(host.device->CreateCommandQueue(&description, IID_PPV_ARGS(&host.queue)));
+}
+
+uint32_t native_queue(void* native) noexcept
+{
+    auto& host = as_native(native);
+    return retain_native(host, host.queue.Get(), host.native_queue);
+}
+
+uint32_t resolve_feature(void* native, uint32_t id, const char* name, uint32_t entry) noexcept
+{
+    auto& host = as_native(native);
+    switch (entry) {
+    case entry_get_state: return feature(host, id, name, host.get_state);
+    case entry_set_options: return feature(host, id, name, host.set_options);
+    case entry_reflex_options: return feature(host, id, name, host.reflex_options);
+    case entry_reflex_state: return feature(host, id, name, host.reflex_state);
+    case entry_sleep: return feature(host, id, name, host.sleep);
+    case entry_pcl_marker: return feature(host, id, name, host.pcl_marker);
+    case entry_pcl_state: return feature(host, id, name, host.pcl_state);
+    case entry_pcl_options: return feature(host, id, name, host.pcl_options);
+    default: return 0;
     }
-    // Streamline's device creates proxy command lists. Its queue must unwrap them and
-    // register the DLSS-G queue hooks; a native engine queue cannot consume those lists.
-    // The presentation bridge retains the adopted engine queue and joins the two queues.
-    if (FAILED(host->device->CreateCommandQueue(&description, IID_PPV_ARGS(&host->queue)))) { dispose(host); return RSF_BACKEND_ERROR_INIT_FAILED; }
-    native = nullptr;
-    if (host->native(host->queue.Get(), &native) != sl::Result::eOk || !native) { dispose(host); return RSF_BACKEND_ERROR_INIT_FAILED; }
-    host->native_queue.Attach(static_cast<ID3D12CommandQueue*>(native));
-    if (features & feature_generation) {
-        feature(*host, sl::kFeatureDLSS_G, "slDLSSGGetState", host->get_state);
-        feature(*host, sl::kFeatureDLSS_G, "slDLSSGSetOptions", host->set_options);
-        host->mfg.prepare(host->native_device.Get(), reinterpret_cast<void*>(host->get_state), host->log, host->log_user);
-    }
-    if (features & feature_reflex) {
-        feature(*host, sl::kFeatureReflex, "slReflexSetOptions", host->reflex_options);
-        feature(*host, sl::kFeatureReflex, "slReflexGetState", host->reflex_state);
-        feature(*host, sl::kFeatureReflex, "slReflexSleep", host->sleep);
-    }
-    feature(*host, sl::kFeaturePCL, "slPCLSetMarker", host->pcl_marker);
-    feature(*host, sl::kFeaturePCL, "slPCLGetState", host->pcl_state);
-    if (feature(*host, sl::kFeaturePCL, "slPCLSetOptions", host->pcl_options)) {
-        sl::PCLOptions pcl{}; host->pcl_options(pcl);
-        // slPCLGetState can be missing while slPCLSetOptions resolves.
-        sl::PCLState pcl_state{};
-        if (host->pcl_state && host->pcl_state(pcl_state) == sl::Result::eOk) opened->pcl_message = pcl_state.statsWindowMessage;
-    }
-    opened->native = host; opened->entries = resolved(*host);
-    return RSF_BACKEND_OK;
+}
+
+void prepare_mfg(void* native) noexcept
+{
+    auto& host = as_native(native);
+    host.mfg.prepare(host.native_device.Get(), reinterpret_cast<void*>(host.get_state), host.log, host.log_user);
+}
+
+void pcl_defaults(void* native) noexcept
+{
+    sl::PCLOptions options{};
+    as_native(native).pcl_options(options);
 }
 
 void dispose_native(void* native) noexcept { dispose(static_cast<Native*>(native)); }
@@ -642,7 +762,34 @@ int32_t tags(void* native, void* token, void* command, const rsf_fg_frame* frame
         static_cast<sl::CommandBuffer*>(command)) == sl::Result::eOk ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
 }
 
-constexpr rsf_slhost_platform platform{interposer_loaded, admit, load, rsf_core_vk_sdk_unload, open,
+constexpr rsf_slhost_startup startup{
+    .engine_count = uint32_t(sl::EngineType::eCount),
+    .interposer_loaded = interposer_loaded,
+    .adapter_vendor = adapter_vendor,
+    .report_vendor = report_vendor,
+    .load = load,
+    .unload = rsf_core_vk_sdk_unload,
+    .allocate = allocate,
+    .bind_required = bind_required,
+    .init = init,
+    .borrow_device = borrow_device,
+    .create_device = create_device,
+    .prime_mfg = prime_mfg,
+    .upgrade_device = upgrade_device,
+    .native_device = native_device,
+    .start_audit = start_audit,
+    .register_device = register_device,
+    .create_factory = create_factory,
+    .upgrade_factory = upgrade_factory,
+    .queue_type = queue_type,
+    .queue_matches_device = queue_matches_device,
+    .create_queue = create_queue,
+    .native_queue = native_queue,
+    .resolve_feature = resolve_feature,
+    .prepare_mfg = prepare_mfg,
+    .pcl_defaults = pcl_defaults,
+};
+constexpr rsf_slhost_platform platform{&startup,
     dispose_native, token, sleep, marker, common,
     reflex_state, reflex_options, pcl_message, driver_sleep, ring_capture, ring_write, generation_load, same_graphics,
     support, version, chain, options, off, observe, frame, command, constants, tags};

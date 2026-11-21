@@ -17,12 +17,15 @@ use std::ptr::{NonNull, null_mut};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
+use windows_sys::Win32::Foundation::FARPROC;
 
 mod generation;
+mod startup;
 #[cfg(test)]
 mod tests;
 
 use generation::{Observed, Request};
+use startup::FeatureList;
 
 type Handle = *mut c_void;
 
@@ -30,6 +33,7 @@ const OK: i32 = 0;
 const INVALID: i32 = -1;
 const ABI_MISMATCH: i32 = -2;
 const LOAD_FAILED: i32 = -4;
+const MISSING_ENTRY: i32 = -5;
 const INIT_FAILED: i32 = -6;
 const NOT_SUPPORTED: i32 = -7;
 const NOT_READY: i32 = -8;
@@ -54,11 +58,6 @@ const INPUT_KINDS: u32 = 7;
 // sl::MAX_FRAMES_IN_FLIGHT of the pinned SDK, asserted natively.
 const TOKEN_SLOTS: usize = 6;
 
-// Features requested from slInit. The native table keeps Streamline's load order.
-const FEATURE_DLSS: u32 = 1;
-const FEATURE_PCL: u32 = 2;
-const FEATURE_REFLEX: u32 = 4;
-const FEATURE_GENERATION: u32 = 8;
 const BACKSLASH: u16 = b'\\' as u16;
 const SLASH: u16 = b'/' as u16;
 const COLON: u16 = b':' as u16;
@@ -93,10 +92,17 @@ struct Setup {
 }
 
 #[repr(C)]
-struct Opened {
-    native: Handle,
-    entries: u32,
-    pcl_message: u32,
+struct InitPreferences {
+    directory: *const u16,
+    engine_version: *const c_char,
+    project_id: *const c_char,
+    features: *const u32,
+    flags: u64,
+    feature_count: u32,
+    engine_type: u32,
+    render_api: u32,
+    show_console: u32,
+    log_level: u32,
 }
 
 #[repr(C)]
@@ -107,22 +113,37 @@ struct Reflex {
 }
 
 #[repr(C)]
-struct Platform {
+struct Startup {
+    engine_count: u32,
     interposer_loaded: unsafe extern "C" fn() -> u32,
-    admit: unsafe extern "C" fn(&Setup) -> i32,
+    adapter_vendor: unsafe extern "C" fn(Handle, &mut u32, &mut Handle) -> u32,
+    report_vendor: unsafe extern "C" fn(Log, Handle, u32),
     load: unsafe extern "C" fn(*const u16, &Setup) -> Handle,
     unload: unsafe extern "C" fn(Handle),
-    open: unsafe extern "C" fn(
-        &Setup,
-        Handle,
-        Handle,
-        Handle,
-        *const u16,
-        u32,
-        *const c_char,
-        *const c_char,
-        &mut Opened,
-    ) -> i32,
+    allocate: unsafe extern "C" fn(Log, Handle) -> Handle,
+    bind_required: unsafe extern "C" fn(Handle, &[Handle; startup::ENTRY_NAMES.len()]),
+    init: unsafe extern "C" fn(Handle, &InitPreferences) -> u32,
+    borrow_device: unsafe extern "C" fn(Handle, Handle),
+    create_device: unsafe extern "C" fn(Handle, Handle) -> u32,
+    prime_mfg: unsafe extern "C" fn(Handle, u32),
+    upgrade_device: unsafe extern "C" fn(Handle) -> u32,
+    native_device: unsafe extern "C" fn(Handle) -> u32,
+    start_audit: unsafe extern "C" fn(Handle),
+    register_device: unsafe extern "C" fn(Handle) -> u32,
+    create_factory: unsafe extern "C" fn(Handle) -> u32,
+    upgrade_factory: unsafe extern "C" fn(Handle) -> u32,
+    queue_type: unsafe extern "C" fn(Handle) -> u32,
+    queue_matches_device: unsafe extern "C" fn(Handle, Handle, &mut Handle) -> u32,
+    create_queue: unsafe extern "C" fn(Handle) -> u32,
+    native_queue: unsafe extern "C" fn(Handle) -> u32,
+    resolve_feature: unsafe extern "C" fn(Handle, u32, *const c_char, u32) -> u32,
+    prepare_mfg: unsafe extern "C" fn(Handle),
+    pcl_defaults: unsafe extern "C" fn(Handle),
+}
+
+#[repr(C)]
+struct Platform {
+    startup: &'static Startup,
     dispose: unsafe extern "C" fn(Handle),
     token: unsafe extern "C" fn(Handle, u32, &mut Handle) -> i32,
     sleep: unsafe extern "C" fn(Handle, Handle) -> i32,
@@ -154,9 +175,13 @@ const _: () = {
     assert!(offset_of!(Setup, engine_version_utf8) == 32);
     assert!(offset_of!(Setup, log) == 56);
     assert!(offset_of!(Setup, profile) == 72);
-    assert!(size_of::<Opened>() == 16);
+    assert!(size_of::<InitPreferences>() == 64);
+    assert!(offset_of!(InitPreferences, flags) == 32);
+    assert!(offset_of!(InitPreferences, log_level) == 56);
+    assert!(offset_of!(Startup, interposer_loaded) == size_of::<Handle>());
+    assert!(size_of::<Startup>() == 25 * size_of::<Handle>());
     assert!(size_of::<Reflex>() == 8);
-    assert!(size_of::<Platform>() == 28 * size_of::<Handle>());
+    assert!(size_of::<Platform>() == 24 * size_of::<Handle>());
 };
 
 #[derive(Clone, Copy, Default)]
@@ -240,6 +265,7 @@ pub(crate) struct Host {
     // Borrowed by the SDK from slInit until shutdown.
     engine_version: [c_char; 128],
     project_id: [c_char; 256],
+    features: FeatureList,
     signature_verified: bool,
     development_runtime: bool,
     log: Log,
@@ -262,6 +288,7 @@ impl Host {
             engine_type: setup.engine_type,
             engine_version: [0; 128],
             project_id: [0; 256],
+            features: FeatureList::new(setup.profile, setup.load_dlss_sr != 0),
             signature_verified: setup.require_signature != 0,
             development_runtime: setup.development_runtime != 0,
             log: setup.log,
@@ -327,41 +354,43 @@ unsafe extern "C" fn rsf_core_slhost_create(
     if setup.abi_version != ABI_VERSION {
         return ABI_MISMATCH;
     }
+    unsafe { create_host(setup, [device, queue], out, platform, SdkModule::symbol) }
+        .map_or_else(|result| result, |()| OK)
+}
+
+unsafe fn create_host(
+    setup: &Setup,
+    graphics: [Handle; 2],
+    out: *mut *mut Host,
+    platform: &Platform,
+    symbol: impl FnMut(&SdkModule, &CStr) -> FARPROC,
+) -> Result<(), i32> {
     if setup.dxgi_adapter.is_null()
         || setup.runtime_directory_utf8.is_null()
         || setup.profile > PROFILE_PCL
     {
-        return INVALID;
+        return Err(INVALID);
     }
     // Admission and SDK startup may log into the caller before publishing a host.
-    let Ok(_owner) = OWNER.try_lock() else {
-        return NOT_READY;
-    };
-    // Engine identity range, then an NVIDIA adapter. Another vendor is a clean refusal.
-    let admitted = unsafe { (platform.admit)(setup) };
-    if admitted != OK {
-        return admitted;
-    }
-    // Never start a second SDK or device registration over an existing interposer.
-    if unsafe { (platform.interposer_loaded)() } != 0 {
-        return NEEDS_RESTART;
-    }
+    let _owner = OWNER.try_lock().map_err(|_| NOT_READY)?;
+    let startup = platform.startup;
+    unsafe { startup.admit(setup) }?;
     let raw = crate::allocate_handle(Host::new(setup));
     if raw.is_null() {
-        return INIT_FAILED;
+        return Err(INIT_FAILED);
     }
     let mut host = unsafe { Box::from_raw(raw) };
     if !unsafe { copy_text(&mut host.engine_version, setup.engine_version_utf8) }
         || !unsafe { copy_text(&mut host.project_id, setup.project_id_utf8) }
     {
-        return INVALID;
+        return Err(INVALID);
     }
     let Some(directory) = (unsafe { wide_path(setup.runtime_directory_utf8) }).filter(|path| {
         path.len() <= 1024
             && (path.starts_with(&[BACKSLASH, BACKSLASH])
                 || matches!(path.get(1..3), Some([COLON, SLASH | BACKSLASH])))
     }) else {
-        return INVALID;
+        return Err(INVALID);
     };
     let path: Vec<u16> = directory[..directory.len() - 1]
         .iter()
@@ -369,56 +398,16 @@ unsafe extern "C" fn rsf_core_slhost_create(
         .chain("\\sl.interposer.dll".encode_utf16())
         .chain([0])
         .collect();
-    let module = unsafe { (platform.load)(path.as_ptr(), setup) };
-    let Some(lease) = SdkModule::adopt(module, platform.unload) else {
-        return LOAD_FAILED;
-    };
-    host.module = Some(lease);
+    let module = unsafe { (startup.load)(path.as_ptr(), setup) };
+    let module = SdkModule::adopt(module, startup.unload).ok_or(LOAD_FAILED)?;
     host.directory = directory;
-    // PCL excludes Reflex and DLSS-G, so telemetry has no sleeper, and requests no NGX
-    // feature unless shared DLSS SR asks for one.
-    let mut features = FEATURE_PCL;
-    if setup.profile != PROFILE_PCL || setup.load_dlss_sr != 0 {
-        features |= FEATURE_DLSS;
-    }
-    if setup.profile != PROFILE_PCL {
-        features |= FEATURE_REFLEX;
-    }
-    if setup.profile == PROFILE_DLSS_FG {
-        features |= FEATURE_GENERATION;
-    }
-    let mut opened = Opened {
-        native: null_mut(),
-        entries: 0,
-        pcl_message: 0,
-    };
-    let result = unsafe {
-        (platform.open)(
-            setup,
-            module,
-            device,
-            queue,
-            host.directory.as_ptr(),
-            features,
-            host.engine_version.as_ptr(),
-            host.project_id.as_ptr(),
-            &mut opened,
-        )
-    };
-    if result != OK {
-        if !opened.native.is_null() {
-            unsafe { (platform.dispose)(opened.native) };
-        }
-        return result;
-    }
-    if opened.native.is_null() {
-        return INIT_FAILED;
-    }
+    let opened = unsafe { platform.open(&host, setup.dxgi_adapter, graphics, &module, symbol) }?;
     host.native = opened.native;
+    host.module = Some(module);
     host.entries = AtomicU32::new(opened.entries);
     host.frames = Mutex::new(Frames::new(opened.pcl_message));
     unsafe { out.write(Box::into_raw(host)) };
-    OK
+    Ok(())
 }
 
 #[unsafe(no_mangle)]
