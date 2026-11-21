@@ -738,16 +738,17 @@ bool write_shot(const Shot& s) noexcept
 bool write_bundle() noexcept
 {
     wchar_t path[MAX_PATH]{};
+    const auto* directory = reinterpret_cast<const uint16_t*>(g->directory);
+    const auto directory_len = wcslen(g->directory);
+    const auto pid = GetCurrentProcessId();
     for (const auto& t : g->temporal) {
         if (!t->camera_valid) continue;
-        swprintf_s(path, L"%s\\input-%lu-%03u-%03u-camera.bin", g->directory, GetCurrentProcessId(), t->sequence, t->index);
-        FILE* camera = _wfopen(path, L"wb");
-        if (!camera) { rsf_rdr2_capture_write_failed(g->capture); continue; }
-        if (fwrite(t->camera.data(), 1, t->camera.size(), camera) != t->camera.size()) rsf_rdr2_capture_write_failed(g->capture);
-        if (fclose(camera)) rsf_rdr2_capture_write_failed(g->capture);
+        if (!rsf_rdr2_capture_write_camera(directory, directory_len, pid, t->sequence, t->index,
+                t->camera.data(), t->camera.size()))
+            rsf_rdr2_capture_write_failed(g->capture);
     }
     const auto progress = capture_progress();
-    swprintf_s(path, L"%s\\bundle-%lu-%03u.json", g->directory, GetCurrentProcessId(), progress.sequence);
+    swprintf_s(path, L"%s\\bundle-%lu-%03u.json", g->directory, pid, progress.sequence);
     FILE* f = _wfopen(path, L"wb");
     if (!f) return false;
     const auto& presentation = g->captured_presentation;
@@ -800,20 +801,12 @@ bool write_bundle() noexcept
 }
 DWORD WINAPI poll(void*) noexcept
 {
-    bool was_down = false;
     for (;;) {
         Sleep(100);
 #ifdef RSF_RDR2_CAPTURE_TEST
         if (g->fixture_stop) return 0;
 #endif
-        const bool down = (GetAsyncKeyState(VK_F10) & 0x8000) != 0;
-        if (down && !was_down) {
-            DWORD foreground{};
-            GetWindowThreadProcessId(GetForegroundWindow(), &foreground);
-            if (foreground == GetCurrentProcessId()) rsf_rdr2_capture_request(g->capture);
-        }
-        was_down = down;
-        if (GetFileAttributesW(g->request) != INVALID_FILE_ATTRIBUTES && DeleteFileW(g->request)) rsf_rdr2_capture_request(g->capture);
+        rsf_rdr2_capture_poll_request(g->capture, reinterpret_cast<const uint16_t*>(g->request));
         std::vector<std::shared_ptr<Shot>> ready;
         {
             std::lock_guard<std::mutex> lock(g->mutex);

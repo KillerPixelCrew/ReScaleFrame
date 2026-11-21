@@ -32,9 +32,13 @@ rsf_rdr2_capture_state* rsf_rdr2_capture_create(void);
 void rsf_rdr2_capture_request(rsf_rdr2_capture_state*);
 bool rsf_rdr2_capture_active(const rsf_rdr2_capture_state*);
 bool rsf_rdr2_capture_has_inputs(const rsf_rdr2_capture_state*);
+/* Only the diagnostic poll thread samples the key and consumes the request file. */
+void rsf_rdr2_capture_poll_request(rsf_rdr2_capture_state*, const uint16_t* request);
 /* The caller lends UTF-16 directory units, the role and the current mapping. */
 bool rsf_rdr2_capture_write_image(const rsf_rdr2_capture_image*, const uint16_t* directory,
     size_t directory_len, uint32_t pid, const char* role, const uint8_t* data, size_t bytes);
+bool rsf_rdr2_capture_write_camera(const uint16_t* directory, size_t directory_len,
+    uint32_t pid, uint32_t sequence, uint32_t index, const uint8_t* data, size_t bytes);
 
 /* All operations below run under the native capture mutex, which also orders the graphics
    objects against the capture's admission, drain and publication. */

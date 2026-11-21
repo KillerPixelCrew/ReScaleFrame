@@ -48,6 +48,8 @@ struct Ledger {
 
 struct Capture {
     pending: AtomicBool,
+    #[cfg(windows)]
+    key_down: AtomicBool,
     active: AtomicBool,
     inputs_remaining: AtomicU32,
     ledger: UnsafeCell<Ledger>,
@@ -61,6 +63,8 @@ impl Capture {
     fn new() -> Self {
         Self {
             pending: AtomicBool::new(false),
+            #[cfg(windows)]
+            key_down: AtomicBool::new(false),
             active: AtomicBool::new(false),
             inputs_remaining: AtomicU32::new(0),
             ledger: UnsafeCell::new(Ledger::default()),
@@ -86,6 +90,31 @@ fn allocate<T>(value: T) -> *mut T {
 #[unsafe(no_mangle)]
 extern "C" fn rsf_rdr2_capture_request(owner: &Capture) {
     owner.pending.store(true, Ordering::Release);
+}
+
+/// The poll thread lends the NUL-terminated request filename for the duration of the call.
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_rdr2_capture_poll_request(owner: &Capture, request: *const u16) {
+    use windows_sys::Win32::Storage::FileSystem::DeleteFileW;
+    use windows_sys::Win32::System::Threading::GetCurrentProcessId;
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_F10};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, GetWindowThreadProcessId,
+    };
+
+    let down = unsafe { GetAsyncKeyState(i32::from(VK_F10)) } < 0;
+    let was_down = owner.key_down.swap(down, Ordering::Relaxed);
+    if down && !was_down {
+        let mut foreground = 0;
+        unsafe { GetWindowThreadProcessId(GetForegroundWindow(), &mut foreground) };
+        if foreground == unsafe { GetCurrentProcessId() } {
+            rsf_rdr2_capture_request(owner);
+        }
+    }
+    if unsafe { DeleteFileW(request) } != 0 {
+        rsf_rdr2_capture_request(owner);
+    }
 }
 
 #[unsafe(no_mangle)]

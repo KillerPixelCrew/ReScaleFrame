@@ -1,10 +1,18 @@
 // SPDX-License-Identifier: MIT
-//! Names and writes completed readbacks. The native caller holds the mapping for this call.
+//! Names and writes completed image readbacks and copied camera records.
 use std::ffi::{CStr, OsString, c_char};
 use std::fs;
 use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 use std::slice;
+
+fn output_directory(directory: &[u16]) -> PathBuf {
+    PathBuf::from(OsString::from_wide(directory))
+}
+
+fn input_stem(pid: u32, sequence: u32, index: u32, role: &str) -> String {
+    format!("input-{pid}-{sequence:03}-{index:03}-{role}")
+}
 
 #[repr(C)]
 struct Readback {
@@ -48,10 +56,7 @@ impl Readback {
         if role == "draw" {
             format!("native-{pid}-{:03}-{:03}", self.sequence, self.ordinal)
         } else {
-            format!(
-                "input-{pid}-{:03}-{:03}-{role}",
-                self.sequence, self.input_index
-            )
+            input_stem(pid, self.sequence, self.input_index, role)
         }
     }
 
@@ -127,7 +132,7 @@ unsafe extern "C" fn rsf_rdr2_capture_write_image(
         return false;
     }
     let directory = unsafe { slice::from_raw_parts(directory, directory_len) };
-    let mut path = PathBuf::from(OsString::from_wide(directory)).join(image.file_stem(pid, role));
+    let mut path = output_directory(directory).join(image.file_stem(pid, role));
     let pixels = unsafe { slice::from_raw_parts(data, bytes) };
     path.set_extension("bin");
     if fs::write(&path, pixels).is_err() {
@@ -135,4 +140,22 @@ unsafe extern "C" fn rsf_rdr2_capture_write_image(
     }
     path.set_extension("json");
     fs::write(path, image.metadata(role)).is_ok()
+}
+
+/// The caller lends the directory units and copied camera bytes for this call.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_rdr2_capture_write_camera(
+    directory: *const u16,
+    directory_len: usize,
+    pid: u32,
+    sequence: u32,
+    index: u32,
+    data: *const u8,
+    bytes: usize,
+) -> bool {
+    let directory = unsafe { slice::from_raw_parts(directory, directory_len) };
+    let mut path = output_directory(directory).join(input_stem(pid, sequence, index, "camera"));
+    path.set_extension("bin");
+    let camera = unsafe { slice::from_raw_parts(data, bytes) };
+    fs::write(path, camera).is_ok()
 }
