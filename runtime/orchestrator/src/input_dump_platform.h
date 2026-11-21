@@ -23,7 +23,6 @@ struct rsf_dump_platform {
     void* (*open_texture)(void*, void*, rsf_dump_surface*);
     void* (*backbuffer)(void*);
     void (*encode_texture)(void*, void*, const rsf_texture_dump_options*, uint32_t, rsf_dump_encoding*);
-    uint32_t (*pixel_bytes)(uint32_t);
     int32_t (*preview_pixels)(const rsf_dump_pixels*, const rsf_texture_dump_options*);
     uint32_t (*depth_domains_requested)(const rsf_game_depth_domains*);
 };

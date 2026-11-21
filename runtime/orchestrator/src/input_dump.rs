@@ -30,7 +30,7 @@ const ALPHA: u32 = 6;
 const DENSE_MOTION: u32 = 7;
 const D3D11: u32 = 1;
 const MAX_IMAGES: usize = 96;
-const MAX_IMAGE_BYTES: u64 = 256 * 1024 * 1024;
+pub(super) const MAX_IMAGE_BYTES: u64 = 256 * 1024 * 1024;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -74,32 +74,34 @@ impl Encoding {
 }
 
 #[repr(C)]
-struct Pixels {
-    struct_size: u32,
-    width: u32,
-    height: u32,
-    format: u32,
-    row_pitch: u32,
-    data_size: u64,
-    data: *const c_void,
+pub(super) struct Pixels {
+    pub(super) struct_size: u32,
+    pub(super) width: u32,
+    pub(super) height: u32,
+    pub(super) format: u32,
+    pub(super) row_pitch: u32,
+    pub(super) data_size: u64,
+    pub(super) data: *const c_void,
 }
 
 #[repr(C)]
 pub(super) struct TextureOptions {
     struct_size: u32,
-    abi_version: u32,
-    prefix: *const c_char,
-    view: u32,
-    scale: f32,
-    log: rsf_backend_log_fn,
-    log_user: *mut c_void,
+    pub(super) abi_version: u32,
+    pub(super) prefix: *const c_char,
+    pub(super) view: u32,
+    pub(super) scale: f32,
+    pub(super) log: rsf_backend_log_fn,
+    pub(super) log_user: *mut c_void,
 }
 
 impl TextureOptions {
+    pub(super) const ABI_VERSION: u32 = 2;
+
     pub(super) fn new(prefix: &CStr, view: u32, scale: f32, log: Log) -> Self {
         Self {
             struct_size: size_of::<Self>() as u32,
-            abi_version: 2,
+            abi_version: Self::ABI_VERSION,
             prefix: prefix.as_ptr(),
             view,
             scale,
@@ -139,7 +141,6 @@ struct Platform {
     backbuffer: unsafe extern "C" fn(*mut c_void) -> *mut c_void,
     encode_texture:
         unsafe extern "C" fn(*mut c_void, *mut c_void, *const TextureOptions, u32, *mut Encoding),
-    pixel_bytes: unsafe extern "C" fn(u32) -> u32,
     preview_pixels: unsafe extern "C" fn(*const Pixels, *const TextureOptions) -> i32,
     depth_domains_requested: unsafe extern "C" fn(*const rsf_game_depth_domains) -> u32,
 }
@@ -747,7 +748,7 @@ fn valid_name(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-'))
 }
 
-unsafe fn checked<'a, T>(input: *const T) -> Option<&'a T> {
+pub(super) unsafe fn checked<'a, T>(input: *const T) -> Option<&'a T> {
     (!input.is_null() && unsafe { input.cast::<u32>().read() } as usize >= size_of::<T>())
         .then(|| unsafe { &*input })
 }

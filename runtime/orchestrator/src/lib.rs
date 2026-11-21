@@ -205,6 +205,8 @@ mod sr_legacy;
 #[cfg(windows)]
 mod sr_session;
 #[cfg(windows)]
+mod texture_dump;
+#[cfg(windows)]
 mod ui_identify;
 #[cfg(windows)]
 mod ui_identify_abi;

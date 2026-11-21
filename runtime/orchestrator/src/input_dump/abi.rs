@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::*;
+use crate::texture_dump::{PackedRows, pixel_bytes};
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_dump_configure(
@@ -184,18 +185,6 @@ unsafe extern "C" fn rsf_core_dump_failed(ticket: u64, name: *const c_char, resu
     });
 }
 
-fn packed_pitch(pixels: &Pixels, pixel_bytes: u32) -> Option<u32> {
-    let row = pixels.width.checked_mul(pixel_bytes)?;
-    if pixels.data.is_null() || pixels.height == 0 || row == 0 || pixels.row_pitch < row {
-        return None;
-    }
-    let source_bytes = u64::from(pixels.row_pitch) * u64::from(pixels.height - 1) + u64::from(row);
-    (source_bytes <= pixels.data_size
-        && source_bytes <= isize::MAX as u64
-        && u64::from(row) * u64::from(pixels.height) <= MAX_IMAGE_BYTES)
-        .then_some(row)
-}
-
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_dump_pixels(
     ticket: u64,
@@ -222,21 +211,21 @@ unsafe extern "C" fn rsf_core_dump_pixels(
     let view = preview_view(work.view, pixels.format, true);
     let mut encoding = Encoding::INVALID;
     let platform = platform();
-    if let Some(row) = packed_pitch(pixels, unsafe { (platform.pixel_bytes)(pixels.format) })
+    if let Some(rows) = unsafe { PackedRows::new(pixels, pixel_bytes(pixels.format)) }
+        .filter(|rows| rows.packed_size() <= MAX_IMAGE_BYTES)
         && let Ok(prefix) = prefix(&work.prefix)
     {
-        let rows = (0..pixels.height).map(|y| {
-            let offset = y as usize * pixels.row_pitch as usize;
-            // Read only each row's payload. Padding can be uninitialized.
-            unsafe {
-                std::slice::from_raw_parts(pixels.data.cast::<u8>().add(offset), row as usize)
-            }
-        });
-        encoding.raw =
-            match metadata::raw_pixels(&work.prefix, pixels, rows, row, api, native_format) {
-                Ok(()) => 0,
-                Err(_) => WRITE_FAILED,
-            };
+        encoding.raw = match metadata::raw_pixels(
+            &work.prefix,
+            pixels,
+            rows.iter(),
+            rows.pitch(),
+            api,
+            native_format,
+        ) {
+            Ok(()) => 0,
+            Err(_) => WRITE_FAILED,
+        };
         encoding.preview =
             unsafe { (platform.preview_pixels)(pixels, &work.options(&prefix, view)) };
     }

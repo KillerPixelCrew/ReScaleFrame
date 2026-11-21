@@ -8,8 +8,6 @@
 #include <wrl/client.h>
 #include <cstring>
 
-namespace rsf { uint32_t texture_pixel_bytes(DXGI_FORMAT format); }
-
 namespace {
 using Microsoft::WRL::ComPtr;
 
@@ -89,8 +87,6 @@ void encode_texture(void* context, void* source, const rsf_texture_dump_options*
     result->preview = rsf_dump_texture_png(device.Get(), immediate, source, options, nullptr);
 } catch (...) { *result = {RSF_TEXTURE_ERROR_WRITE_FAILED, RSF_TEXTURE_ERROR_WRITE_FAILED}; }
 
-uint32_t pixel_bytes(uint32_t format) { return rsf::texture_pixel_bytes(DXGI_FORMAT(format)); }
-
 int32_t preview_pixels(const rsf_dump_pixels* pixels, const rsf_texture_dump_options* options)
 {
     return rsf_dump_pixels_png(pixels, options, nullptr);
@@ -99,7 +95,7 @@ int32_t preview_pixels(const rsf_dump_pixels* pixels, const rsf_texture_dump_opt
 void bind_platform()
 {
     static const rsf_dump_platform platform{sizeof(platform), read_clock, read_local_time, executable_sha256,
-        open_texture, backbuffer, encode_texture, pixel_bytes, preview_pixels, rsf_game_depth_domains_requested};
+        open_texture, backbuffer, encode_texture, preview_pixels, rsf_game_depth_domains_requested};
     static const bool bound = (rsf_core_dump_bind_platform(&platform), true);
     (void)bound;
 }
