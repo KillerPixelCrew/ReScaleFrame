@@ -254,6 +254,13 @@ semaphore retirement. Registration allocates fallibly, so native
 rollback still owns partial setup if allocation refuses. The Vulkan
 queue drain, native builds and player verification remain open.
 
+Unity's Editor preview window selection, graphics admission and
+submission ring now live in Rust. Fence failure leaves device
+setup retryable, and the backbuffer is acquired before resetting
+a command list. A refused post-submit signal stops slot reuse.
+Win32, DXGI, D3D12 and source leases remain in typed native calls.
+Build and Editor playback verification remain open.
+
 AC7's Rust renderer transaction owns prepare, start, quiesce and stop.
 Failed activation keeps any renderer with reachable callbacks, and a
 refused hook disable or removal keeps the renderer available for retry.

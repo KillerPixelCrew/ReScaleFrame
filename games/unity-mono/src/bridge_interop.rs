@@ -20,7 +20,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 const SLOTS: usize = RSF_UNITY_FRAMES_SLOTS as usize;
 
 #[derive(Debug, PartialEq, Eq)]
-struct Interop {
+pub(crate) struct Interop {
     /// The ring slot the next reconstruction records into.
     next: usize,
     /// Completion value of each slot's last submission; 0 for none.
@@ -38,7 +38,7 @@ fn lock() -> MutexGuard<'static, Interop> {
 }
 
 impl Interop {
-    const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             next: 0,
             complete: [0; SLOTS],
@@ -48,7 +48,7 @@ impl Interop {
     }
 
     /// The slot the next reconstruction records into and the completion it waits for first.
-    fn slot(&self) -> (usize, u64) {
+    pub(crate) fn slot(&self) -> (usize, u64) {
         (self.next, self.complete[self.next])
     }
 
@@ -64,7 +64,7 @@ impl Interop {
     }
 
     /// Assigns the slot its submission's completion value; the slot is reused only after it.
-    fn submit(&mut self, slot: usize) -> Option<u64> {
+    pub(crate) fn submit(&mut self, slot: usize) -> Option<u64> {
         if slot >= SLOTS {
             return None;
         }
@@ -74,10 +74,14 @@ impl Interop {
     }
 
     /// Moves the ring past a slot whose completion was signalled.
-    fn advance(&mut self, slot: usize) {
+    pub(crate) fn advance(&mut self, slot: usize) {
         if slot < SLOTS {
             self.next = (slot + 1) % SLOTS;
         }
+    }
+
+    pub(crate) fn submitted(&self) -> u64 {
+        self.submitted
     }
 
     /// No submission, or the completion fence reached the last one. A fence value of 0 stands
@@ -98,7 +102,7 @@ unsafe extern "C" fn rsf_unity_interop_slot(complete: *mut u64) -> u32 {
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_unity_interop_submitted() -> u64 {
-    lock().submitted
+    lock().submitted()
 }
 
 #[unsafe(no_mangle)]

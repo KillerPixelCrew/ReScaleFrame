@@ -43,6 +43,12 @@ presentation window and its swap chain. An admitted Present holds its entry thro
 forwarding. Swapchain setup publishes only a complete chain and rolls back earlier semaphores if a
 later step or the publication refuses.
 
+The Editor preview uses the same Rust submission-ring logic with its own fence and slots
+(`preview.rs`). Rust selects the containing editor window, tracks visibility and admits
+graphics preparation and Present. Native leaves keep window messages, resource copies and
+DXGI calls. Failed fence creation can be retried, and a failed backbuffer lookup leaves
+the existing command slot closed. The port preserves the source pass identity.
+
 The Runtime setup behind the loader entry `rsf_unity_start` and `rsf_unity_fg_start`,
 `rsf_unity_sr_start` and `rsf_unity_sr_stop` is Rust as well (`runtime_setup.rs`): the
 `[UnitySR]` keys and defaults, the start gates and result codes, the wait for Unity's Mono
