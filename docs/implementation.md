@@ -273,6 +273,15 @@ extension is unavailable and records interop readiness for the device
 that was actually created. Native leaves still resolve typed functions
 and create the device. Build and runtime verification remain open.
 
+Unity Vulkan image plans and first-use layout publication are
+Rust-owned. The queue callback and Present share a lease so they
+cannot replace the same native image or reuse a slot concurrently.
+Lifecycle release checks the bridge's Vulkan and D3D12 fences without
+calling `vkQueueWaitIdle`. An accepted upload without a hand-back fence
+keeps the bridge retained. Swapchain destruction and render-thread
+resize still use native queue waits. Live device and teardown
+verification remain open.
+
 AC7's Rust renderer transaction owns prepare, start, quiesce and stop.
 Failed activation keeps any renderer with reachable callbacks, and a
 refused hook disable or removal keeps the renderer available for retry.

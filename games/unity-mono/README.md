@@ -49,6 +49,10 @@ The Vulkan loader's original-function slots and the Win32 interop extension
 request are Rust-owned (`vulkan_resolver.rs`). Native code still invokes the typed
 Vulkan functions. The extension request falls back unchanged when preflight
 cannot supply both names, and readiness is attached to the created device.
+Rust also tracks the shared Vulkan image plans, publishes first-use layout
+only after queue acceptance and refuses retirement for a partially submitted
+round trip. Lifecycle release checks the bridge fences. Native resize and
+swapchain retirement keep their existing wait calls.
 
 The Editor preview uses the same Rust submission-ring logic with its own fence and slots
 (`preview.rs`). Rust selects the containing editor window, tracks visibility and admits

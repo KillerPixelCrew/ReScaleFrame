@@ -66,6 +66,19 @@ uint32_t rsf_unity_vulkan_claim_device(void);
 void rsf_unity_vulkan_device_created(uint32_t created);
 uint32_t rsf_unity_vulkan_ready(void);
 
+/* Shared-image plans and per-recording ownership. The native replace callback drains and builds
+   a complete replacement before it commits the graphics handles. */
+typedef bool (*rsf_unity_vulkan_replace_image)(uint32_t index, uint32_t width, uint32_t height,
+    uint32_t format, uint32_t dx_format);
+bool rsf_unity_vulkan_prepare_image(uint32_t index, uint32_t width, uint32_t height,
+    uint32_t format, uint32_t dx_format, rsf_unity_vulkan_replace_image replace);
+/* Returns whether the recorded transition can start in GENERAL. */
+bool rsf_unity_vulkan_record_image(uint32_t index);
+void rsf_unity_vulkan_begin_recording(void);
+/* Called only after the native queue accepted the upload or the fenced hand-back. */
+void rsf_unity_vulkan_upload_submitted(void);
+void rsf_unity_vulkan_handback_fenced(void);
+
 /* Stops the bridge until release. Non-zero for the first fault, which the caller reports. */
 uint32_t rsf_unity_vulkan_fault(void);
 uint32_t rsf_unity_vulkan_faulted(void);
@@ -114,8 +127,8 @@ typedef struct rsf_unity_vulkan_present_source {
    rsf_unity_vulkan_presentation_end. Non-zero, with source filled, when chain is published and
    index names one of its images. */
 uint32_t rsf_unity_vulkan_present_begin(uint64_t chain, uint32_t index, rsf_unity_vulkan_present_source* source);
-/* Takes the lease without waiting; zero while it is held. */
-uint32_t rsf_unity_vulkan_surface_begin(void);
+/* Takes the lease without waiting for a surface update or queue callback. */
+uint32_t rsf_unity_vulkan_presentation_try_begin(void);
 void rsf_unity_vulkan_presentation_end(void);
 #ifdef __cplusplus
 }

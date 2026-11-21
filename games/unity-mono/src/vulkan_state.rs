@@ -41,6 +41,7 @@ const EVENT_HUDLESS: u32 = 2;
 const DEVICE_BUSY: u32 = 0;
 const DEVICE_CLAIMED: u32 = 1;
 const DEVICE_READY: u32 = 2;
+const SHARED_IMAGES: usize = 6;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -90,6 +91,20 @@ const FREE: Event = Event {
 /// One started event: its slot, frame with services, kind and whether it applies a policy change.
 type Started = (usize, Frame, u32, bool);
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct ImageKey {
+    width: u32,
+    height: u32,
+    format: u32,
+    dx_format: u32,
+}
+
+#[derive(Clone, Copy)]
+struct Image {
+    key: ImageKey,
+    initialized: bool,
+}
+
 struct State {
     device: Device,
     /// A failed step stopped the bridge until release.
@@ -103,6 +118,11 @@ struct State {
     window: Option<Frame>,
     /// The bridge's DXGI swap chain exists. It goes with the other objects at release.
     surface: bool,
+    images: [Option<Image>; SHARED_IMAGES],
+    /// Images whose barriers are recorded in the current command buffer.
+    recorded_images: u32,
+    /// Vulkan accepted an upload, but no Vulkan slot fence covers it yet.
+    partial_submission: bool,
 }
 
 // Packets hold resource addresses as identity only. Host code and user data are process-lived.
@@ -124,6 +144,9 @@ impl State {
             entries: 0,
             window: None,
             surface: false,
+            images: [None; SHARED_IMAGES],
+            recorded_images: 0,
+            partial_submission: false,
         }
     }
 
@@ -235,7 +258,37 @@ impl State {
     fn idle(&self) -> bool {
         self.entries == 0
             && self.device != Device::Creating
+            && !self.partial_submission
             && self.events.iter().all(|event| event.stage == Stage::Free)
+    }
+
+    fn record_image(&mut self, index: usize) -> bool {
+        let Some(image) = self.images.get(index).copied().flatten() else {
+            return false;
+        };
+        self.recorded_images |= 1 << index;
+        image.initialized
+    }
+
+    fn accept_recorded_images(&mut self) {
+        let mask = std::mem::take(&mut self.recorded_images);
+        for (index, image) in self.images.iter_mut().enumerate() {
+            if mask & (1 << index) != 0
+                && let Some(image) = image
+            {
+                image.initialized = true;
+            }
+        }
+    }
+
+    fn upload_submitted(&mut self) {
+        self.accept_recorded_images();
+        self.partial_submission = true;
+    }
+
+    fn handback_fenced(&mut self) {
+        self.accept_recorded_images();
+        self.partial_submission = false;
     }
 
     fn close(&mut self) -> bool {
@@ -347,6 +400,67 @@ extern "C" fn rsf_unity_vulkan_device_created(created: u32) {
 #[unsafe(no_mangle)]
 extern "C" fn rsf_unity_vulkan_ready() -> u32 {
     u32::from(lock().device == Device::Ready)
+}
+
+type ReplaceImage = unsafe extern "C" fn(u32, u32, u32, u32, u32) -> bool;
+
+/// The caller holds the presentation lease throughout native replacement.
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_vulkan_prepare_image(
+    index: u32,
+    width: u32,
+    height: u32,
+    format: u32,
+    dx_format: u32,
+    replace: ReplaceImage,
+) -> bool {
+    let key = ImageKey {
+        width,
+        height,
+        format,
+        dx_format,
+    };
+    let index_usize = index as usize;
+    {
+        let state = lock();
+        if state.device != Device::Ready || !state.open() || state.partial_submission {
+            return false;
+        }
+        let Some(current) = state.images.get(index_usize) else {
+            return false;
+        };
+        if current.is_some_and(|image| image.key == key) {
+            return true;
+        }
+    }
+    if !unsafe { replace(index, width, height, format, dx_format) } {
+        return false;
+    }
+    lock().images[index_usize] = Some(Image {
+        key,
+        initialized: false,
+    });
+    true
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_vulkan_record_image(index: u32) -> bool {
+    lock().record_image(index as usize)
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_vulkan_begin_recording() {
+    lock().recorded_images = 0;
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_vulkan_upload_submitted() {
+    lock().upload_submitted();
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_vulkan_handback_fenced() {
+    lock().handback_fenced();
 }
 
 #[unsafe(no_mangle)]
@@ -595,7 +709,7 @@ unsafe extern "C" fn rsf_unity_vulkan_present_begin(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_unity_vulkan_surface_begin() -> u32 {
+extern "C" fn rsf_unity_vulkan_presentation_try_begin() -> u32 {
     let mut presentation = presentation();
     if presentation.leased {
         return 0;
@@ -620,6 +734,28 @@ mod tests {
         frame.packet.frame_id = frame_id;
         frame.services.session_id = frame_id + 100;
         frame
+    }
+
+    #[test]
+    fn an_accepted_upload_publishes_image_layout_and_blocks_release_until_fenced() {
+        let mut state = State::new();
+        state.images[0] = Some(Image {
+            key: ImageKey {
+                width: 400,
+                height: 300,
+                format: 97,
+                dx_format: 10,
+            },
+            initialized: false,
+        });
+        assert!(!state.record_image(0));
+        assert!(!state.images[0].unwrap().initialized);
+        state.upload_submitted();
+        assert!(state.images[0].unwrap().initialized);
+        assert!(!state.idle());
+        assert!(!state.close());
+        state.handback_fenced();
+        assert!(state.close());
     }
 
     #[test]
@@ -844,7 +980,7 @@ mod tests {
     unsafe extern "C" fn retire(_: *mut c_void, present_ready: *const u64, count: u32) {
         let handles = unsafe { slice::from_raw_parts(present_ready, count as usize) }.to_vec();
         // The lease is held while the semaphores are destroyed.
-        let leased = rsf_unity_vulkan_surface_begin() == 0;
+        let leased = rsf_unity_vulkan_presentation_try_begin() == 0;
         *RETIRED.lock().unwrap() = (handles, leased);
     }
 
@@ -868,16 +1004,16 @@ mod tests {
             1
         );
         assert_eq!((source.image, source.present_ready), (72, 82));
-        assert_eq!(rsf_unity_vulkan_surface_begin(), 0);
+        assert_eq!(rsf_unity_vulkan_presentation_try_begin(), 0);
         rsf_unity_vulkan_presentation_end();
         // A miss still holds the lease: the C++ forwards the present under it.
         assert_eq!(
             unsafe { rsf_unity_vulkan_present_begin(7, 2, &mut source) },
             0
         );
-        assert_eq!(rsf_unity_vulkan_surface_begin(), 0);
+        assert_eq!(rsf_unity_vulkan_presentation_try_begin(), 0);
         rsf_unity_vulkan_presentation_end();
-        assert_eq!(rsf_unity_vulkan_surface_begin(), 1);
+        assert_eq!(rsf_unity_vulkan_presentation_try_begin(), 1);
         rsf_unity_vulkan_presentation_end();
         assert_eq!(
             unsafe { rsf_unity_vulkan_swapchain_retire(7, None, ptr::null_mut()) },
@@ -892,7 +1028,7 @@ mod tests {
             unsafe { rsf_unity_vulkan_swapchain_retire(7, Some(retire), ptr::null_mut()) },
             0
         );
-        assert_eq!(rsf_unity_vulkan_surface_begin(), 1);
+        assert_eq!(rsf_unity_vulkan_presentation_try_begin(), 1);
         rsf_unity_vulkan_presentation_end();
     }
 }

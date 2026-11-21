@@ -29,6 +29,8 @@ uint64_t rsf_unity_interop_submitted(void);
 uint32_t rsf_unity_interop_shared_pair(uint64_t* first, uint64_t* second);
 /* The next completion value for a submission outside the ring (the Editor preview window). */
 uint64_t rsf_unity_interop_completion(void);
+/* Vulkan's queue owner peeks at the signal value and commits it only after submit succeeds. */
+uint64_t rsf_unity_interop_next_completion(void);
 /* The next completion value, recorded as slot's last submission. Zero for an invalid slot. */
 uint64_t rsf_unity_interop_submit(uint32_t slot);
 /* Moves the ring past slot once its completion was signalled. */

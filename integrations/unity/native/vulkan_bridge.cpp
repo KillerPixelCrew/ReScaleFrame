@@ -51,9 +51,6 @@ struct Image {
     ComPtr<ID3D12Resource> resource;
     VkImage image = VK_NULL_HANDLE;
     VkDeviceMemory memory = VK_NULL_HANDLE;
-    uint32_t width = 0, height = 0;
-    VkFormat format = VK_FORMAT_UNDEFINED;
-    bool initialized = false;
 };
 std::array<Image, 6> images;
 struct Slot {
@@ -134,10 +131,12 @@ void destroy_objects()
     command_pool = VK_NULL_HANDLE; semaphore = VK_NULL_HANDLE; chain.Reset(); shared_fence.Reset(); queue.Reset(); device.Reset();
     instance = {};
 }
-bool create_image(uint32_t index, uint32_t width, uint32_t height, VkFormat format, DXGI_FORMAT dx_format)
+bool replace_image(uint32_t index, uint32_t width, uint32_t height,
+    uint32_t format_value, uint32_t dx_format_value) noexcept
 {
     auto& image = images[index];
-    if (image.image && image.width == width && image.height == height && image.format == format) return true;
+    const auto format = static_cast<VkFormat>(format_value);
+    const auto dx_format = static_cast<DXGI_FORMAT>(dx_format_value);
     if (!drain()) return false;
     Image next;
     D3D12_HEAP_PROPERTIES heap{}; heap.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -166,10 +165,21 @@ bool create_image(uint32_t index, uint32_t width, uint32_t height, VkFormat form
     import.pNext = &dedicated; import.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT; import.handle = handle;
     VkMemoryAllocateInfo allocation{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO}; allocation.pNext = &import;
     allocation.allocationSize = requirements.size; allocation.memoryTypeIndex = memory_type;
-    const auto allocated = vkAllocateMemory(instance.device, &allocation, nullptr, &next.memory); CloseHandle(handle);
-    if (allocated != VK_SUCCESS || vkBindImageMemory(instance.device, next.image, next.memory, 0) != VK_SUCCESS) { destroy_image(next); return false; }
-    next.width = width; next.height = height; next.format = format;
+    VkDeviceMemory allocated_memory = VK_NULL_HANDLE;
+    const auto allocated = vkAllocateMemory(instance.device, &allocation, nullptr, &allocated_memory);
+    CloseHandle(handle);
+    if (allocated != VK_SUCCESS) { destroy_image(next); return false; }
+    next.memory = allocated_memory;
+    if (vkBindImageMemory(instance.device, next.image, next.memory, 0) != VK_SUCCESS) {
+        destroy_image(next); return false;
+    }
     destroy_image(image); image = std::move(next); return true;
+}
+
+bool create_image(uint32_t index, uint32_t width, uint32_t height, VkFormat format, DXGI_FORMAT dx_format)
+{
+    return rsf_unity_vulkan_prepare_image(index, width, height,
+        static_cast<uint32_t>(format), static_cast<uint32_t>(dx_format), replace_image);
 }
 // Creates the shared D3D12 device, queue, fence, imported semaphore and command slots. A failure
 // may leave some of them; the caller destroys them.
@@ -243,7 +253,10 @@ bool begin(Slot& slot)
         VkCommandBufferBeginInfo info{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO}; info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         if (vkBeginCommandBuffer(command, &info) != VK_SUCCESS) return false;
     }
-    return SUCCEEDED(slot.allocator->Reset()) && SUCCEEDED(slot.commands->Reset(slot.allocator.Get(), nullptr));
+    if (FAILED(slot.allocator->Reset()) || FAILED(slot.commands->Reset(slot.allocator.Get(), nullptr)))
+        return false;
+    rsf_unity_vulkan_begin_recording();
+    return true;
 }
 void image_barrier(VkCommandBuffer commands, VkImage image, VkImageLayout before, VkImageLayout after,
     uint32_t from, uint32_t to, VkAccessFlags source, VkAccessFlags target)
@@ -253,12 +266,13 @@ void image_barrier(VkCommandBuffer commands, VkImage image, VkImageLayout before
     barrier.image = image; barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 }
-void acquire_image(VkCommandBuffer commands, Image& image, bool output)
+void acquire_image(VkCommandBuffer commands, uint32_t index, bool output)
 {
-    image_barrier(commands, image.image, image.initialized ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED,
+    const auto old_layout = rsf_unity_vulkan_record_image(index) ?
+        VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED;
+    image_barrier(commands, images[index].image, old_layout,
         output ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
         VK_QUEUE_FAMILY_EXTERNAL, instance.queueFamilyIndex, 0, output ? VK_ACCESS_TRANSFER_READ_BIT : VK_ACCESS_TRANSFER_WRITE_BIT);
-    image.initialized = true;
 }
 void release_image(VkCommandBuffer commands, Image& image, bool output)
 {
@@ -272,14 +286,18 @@ bool upload(Slot& slot, const VkSemaphore* waits = nullptr, uint32_t wait_count 
     if (vkEndCommandBuffer(slot.vk[0]) != VK_SUCCESS) return false;
     std::vector<VkPipelineStageFlags> stages(wait_count, VK_PIPELINE_STAGE_TRANSFER_BIT);
     std::vector<uint64_t> values(wait_count, 0);
-    const uint64_t value = rsf_unity_interop_completion();
+    const uint64_t value = rsf_unity_interop_next_completion();
+    if (!value) return false;
     VkD3D12FenceSubmitInfoKHR fence{VK_STRUCTURE_TYPE_D3D12_FENCE_SUBMIT_INFO_KHR};
     fence.waitSemaphoreValuesCount = wait_count; fence.pWaitSemaphoreValues = values.data();
     fence.signalSemaphoreValuesCount = 1; fence.pSignalSemaphoreValues = &value;
     VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO}; submit.pNext = &fence;
     submit.waitSemaphoreCount = wait_count; submit.pWaitSemaphores = waits; submit.pWaitDstStageMask = stages.data();
     submit.commandBufferCount = 1; submit.pCommandBuffers = &slot.vk[0]; submit.signalSemaphoreCount = 1; submit.pSignalSemaphores = &semaphore;
-    return vkQueueSubmit(instance.graphicsQueue, 1, &submit, VK_NULL_HANDLE) == VK_SUCCESS && SUCCEEDED(queue->Wait(shared_fence.Get(), value));
+    if (vkQueueSubmit(instance.graphicsQueue, 1, &submit, VK_NULL_HANDLE) != VK_SUCCESS) return false;
+    rsf_unity_vulkan_upload_submitted();
+    if (rsf_unity_interop_completion() != value) return false;
+    return SUCCEEDED(queue->Wait(shared_fence.Get(), value));
 }
 // The D3D12 queue signals the ring slot's shared fence value; Vulkan waits for it before the
 // hand-back copies and signals the slot's fence.
@@ -298,7 +316,9 @@ bool submit(Slot& slot, uint32_t ring, VkSemaphore ready = VK_NULL_HANDLE)
     submit_info.commandBufferCount = 1; submit_info.pCommandBuffers = &slot.vk[1];
     submit_info.signalSemaphoreCount = ready ? 1u : 0u; submit_info.pSignalSemaphores = &ready;
     if (vkResetFences(instance.device, 1, &slot.complete) != VK_SUCCESS) return false;
-    return vkQueueSubmit(instance.graphicsQueue, 1, &submit_info, slot.complete) == VK_SUCCESS;
+    if (vkQueueSubmit(instance.graphicsQueue, 1, &submit_info, slot.complete) != VK_SUCCESS) return false;
+    rsf_unity_vulkan_handback_fenced();
+    return true;
 }
 void copy(VkCommandBuffer commands, VkImage source, VkImageLayout source_layout, VkImageAspectFlags aspect,
     VkImage target, VkImageLayout target_layout, uint32_t width, uint32_t height)
@@ -325,6 +345,8 @@ void UNITY_INTERFACE_API execute_queue(int, void* data) noexcept try
     // A faulted bridge discards the event here.
     if (!rsf_unity_vulkan_start_event(data, &frame, &kind, &reconfigure, &index)) return;
     struct Finish { uint32_t index; ~Finish() { rsf_unity_vulkan_finish_event(index); } } finish{index};
+    PresentationLease lease{rsf_unity_vulkan_presentation_try_begin() != 0};
+    if (!lease.held) return;
     if (index >= event_images.size() || !frame.services.render_pass) return;
     const auto& host = frame.services;
     const auto& packet = frame.packet;
@@ -347,15 +369,15 @@ void UNITY_INTERFACE_API execute_queue(int, void* data) noexcept try
         const auto& texture = textures[0];
         const uint32_t target = present ? 5u : 4u;
         if (!create_image(target, packet.camera.output_width, packet.camera.output_height, VK_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM)) { stop("Unity Vulkan shared image creation failed; the bridge stopped."); return; }
-        acquire_image(slot.vk[0], images[target], false);
-        copy(slot.vk[0], texture.image, texture.layout, texture.aspect, images[target].image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, images[target].width, images[target].height);
+        acquire_image(slot.vk[0], target, false);
+        copy(slot.vk[0], texture.image, texture.layout, texture.aspect, images[target].image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, packet.camera.output_width, packet.camera.output_height);
         release_image(slot.vk[0], images[target], false);
     } else for (uint32_t i = 0; i < 4; ++i) {
         if (probe && (i == 1 || i == 2)) continue;
         uint32_t width = i == 3 ? packet.camera.output_width : packet.camera.render_width;
         uint32_t height = i == 3 ? packet.camera.output_height : packet.camera.render_height;
         if (!create_image(i, width, height, formats[i], dx_formats[i])) { stop("Unity Vulkan shared image creation failed; the bridge stopped."); return; }
-        acquire_image(slot.vk[0], images[i], false);
+        acquire_image(slot.vk[0], i, false);
         copy(slot.vk[0], textures[i].image, textures[i].layout, textures[i].aspect,
             images[i].image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, width, height);
         release_image(slot.vk[0], images[i], false);
@@ -382,9 +404,9 @@ void UNITY_INTERFACE_API execute_queue(int, void* data) noexcept try
         for (uint32_t i = 0; i < 4; ++i) if (!(probe && (i == 1 || i == 2)))
             dx_barrier(slot.commands.Get(), images[i].resource.Get(), i == 3 ? D3D12_RESOURCE_STATE_COPY_DEST : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON);
         if (!probe && !reconfigure) {
-            acquire_image(slot.vk[1], images[3], true);
+            acquire_image(slot.vk[1], 3, true);
             copy(slot.vk[1], images[3].image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT,
-                textures[3].image, textures[3].layout, images[3].width, images[3].height);
+                textures[3].image, textures[3].layout, packet.camera.output_width, packet.camera.output_height);
             release_image(slot.vk[1], images[3], true);
         }
     }
@@ -449,7 +471,7 @@ VKAPI_ATTR VkResult VKAPI_CALL intercept_present(VkQueue vk_queue, const VkPrese
     const uint32_t ring = rsf_unity_interop_slot(nullptr);
     if (ring >= slots.size()) return unchanged();
     auto& slot = slots[ring]; if (!begin(slot)) return unchanged();
-    acquire_image(slot.vk[0], images[5], false);
+    acquire_image(slot.vk[0], 5, false);
     image_barrier(slot.vk[0], presented, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
         VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, 0, VK_ACCESS_TRANSFER_READ_BIT);
     VkImageBlit blit{}; blit.srcSubresource = blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
@@ -632,10 +654,11 @@ PFN_vkGetInstanceProcAddr UNITY_INTERFACE_API initialize_intercept(PFN_vkGetInst
 }
 // Every slot fence signalled. Slot fences exist only while the shared device is ready, and only
 // release replaces them.
-bool slots_retired()
+bool bridge_fences_retired()
 {
-    for (auto& slot : slots) if (slot.complete && vkGetFenceStatus(instance.device, slot.complete) != VK_SUCCESS) return false;
-    return true;
+    for (const auto& slot : slots)
+        if (slot.complete && vkGetFenceStatus(instance.device, slot.complete) != VK_SUCCESS) return false;
+    return rsf_unity_interop_drained(shared_fence ? shared_fence->GetCompletedValue() : 0) != 0;
 }
 }
 
@@ -698,7 +721,7 @@ bool rsf_uvk_update_window(uint32_t width, uint32_t height)
     if (rsf_unity_vulkan_surface_ready()) return true;
     // The swap chain is created under the presentation lease. The window thread does not wait for
     // a present interception holding it; that Present creates the swap chain itself.
-    PresentationLease lease{rsf_unity_vulkan_surface_begin() != 0};
+    PresentationLease lease{rsf_unity_vulkan_presentation_try_begin() != 0};
     return lease.held && (chain || (initialize() == SharedDevice::ready && configure_chain(window, width, height)));
 }
 bool rsf_uvk_render(int event_id, const rsf_unity_packet& packet, const rsf_game_host_services& services, bool reconfigure)
@@ -733,14 +756,19 @@ bool rsf_uvk_drained()
     uint32_t ready = 0;
     BridgeEntry entry{rsf_unity_vulkan_probe_idle(&ready) != 0};
     if (!entry.admitted) return false;
-    return !ready || slots_retired();
+    if (!ready) return true;
+    PresentationLease lease{rsf_unity_vulkan_presentation_try_begin() != 0};
+    return lease.held && bridge_fences_retired();
 }
 void rsf_uvk_release()
 {
     // Closing refuses new events, present interceptions, surface updates and device creation until
     // the objects are gone or the GPU work is found outstanding.
     if (!rsf_unity_vulkan_close()) return;
-    if (!slots_retired() || !drain()) { rsf_unity_vulkan_reopen(); return; }
+    PresentationLease lease{rsf_unity_vulkan_presentation_try_begin() != 0};
+    // Lifecycle release never calls Vulkan queue operations. Rust refused close while
+    // an upload was missing its hand-back fence, so both bridge fence sets can prove retirement.
+    if (!lease.held || !bridge_fences_retired()) { rsf_unity_vulkan_reopen(); return; }
     destroy_objects();
     // The slot ring and shared fence values go with the objects that used them.
     rsf_unity_interop_release();

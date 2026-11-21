@@ -124,6 +124,11 @@ extern "C" fn rsf_unity_interop_completion() -> u64 {
 }
 
 #[unsafe(no_mangle)]
+extern "C" fn rsf_unity_interop_next_completion() -> u64 {
+    lock().submitted().checked_add(1).unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
 extern "C" fn rsf_unity_interop_submit(slot: u32) -> u64 {
     lock().submit(slot as usize).unwrap_or(0)
 }
