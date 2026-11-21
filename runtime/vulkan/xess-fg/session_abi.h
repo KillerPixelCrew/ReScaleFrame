@@ -3,9 +3,16 @@
 
 #include "bridge_api.h"
 
-inline constexpr uint32_t RSF_XESS_BRIDGE_PLATFORM_ABI_VERSION = 1;
+inline constexpr uint32_t RSF_XESS_BRIDGE_PLATFORM_ABI_VERSION = 2;
+inline constexpr uint32_t RSF_XESS_BRIDGE_ALLOCATOR_COUNT = 3;
 
 struct rsf_xess_bridge_session;
+struct VulkanStoryXessFrame;
+
+struct rsf_xess_bridge_present_result {
+    uint32_t frames_presented, fg_enabled;
+    int32_t fg_result;
+};
 
 struct rsf_xess_bridge_modules {
     void* fg;
@@ -47,14 +54,41 @@ struct rsf_xess_bridge_platform {
     void (*release_swapchain)(rsf_xess_bridge*);
     int32_t (*destroy_fg)(rsf_xess_bridge*);
     int32_t (*destroy_xell)(rsf_xess_bridge*);
+    uint32_t (*has_shared_queue)(const rsf_xess_bridge*);
+    int32_t (*check_resources)(const VulkanStoryXessFrame*, uint32_t, uint32_t, uint32_t);
+    int32_t (*reset_commands)(rsf_xess_bridge*, uint32_t);
+    int32_t (*record_inputs)(rsf_xess_bridge*, const VulkanStoryXessFrame*);
+    int32_t (*close_commands)(rsf_xess_bridge*);
+    int32_t (*tag_constants)(rsf_xess_bridge*, const VulkanStoryXessFrame*);
+    int32_t (*wait_shared)(rsf_xess_bridge*, uint64_t);
+    void (*execute)(rsf_xess_bridge*);
+    int32_t (*set_present_id)(rsf_xess_bridge*, uint32_t);
+    int32_t (*present)(rsf_xess_bridge*, uint32_t);
+    int32_t (*signal_done)(rsf_xess_bridge*, uint64_t);
+    int32_t (*signal_completion)(rsf_xess_bridge*, uint64_t);
+    int32_t (*read_present_status)(rsf_xess_bridge*, rsf_xess_bridge_present_result*);
+    uint32_t (*timing_enabled)();
+    int64_t (*timing_now)();
+    void (*timing_add)(uint32_t, int64_t, int64_t);
+    void (*timing_end_present)();
+    uint32_t (*begin_gpu_timing)(rsf_xess_bridge*, uint32_t);
+    void (*timestamp_copies)(rsf_xess_bridge*, uint32_t, uint32_t);
+    void (*mark_present_enter)(rsf_xess_bridge*, uint32_t);
+    void (*finish_gpu_timing)(rsf_xess_bridge*, uint32_t);
+    uint32_t (*serialize_enabled)();
 };
 
 static_assert(sizeof(rsf_xess_bridge_modules) == 16);
-static_assert(sizeof(rsf_xess_bridge_platform) == 248 && alignof(rsf_xess_bridge_platform) == 8);
+static_assert(sizeof(rsf_xess_bridge_present_result) == 12);
+static_assert(sizeof(rsf_xess_bridge_platform) == 424 && alignof(rsf_xess_bridge_platform) == 8);
 static_assert(offsetof(rsf_xess_bridge_platform, allocate) == 8);
 static_assert(offsetof(rsf_xess_bridge_platform, init_swapchain) == 112);
 static_assert(offsetof(rsf_xess_bridge_platform, read_completion) == 184);
 static_assert(offsetof(rsf_xess_bridge_platform, destroy_xell) == 240);
+static_assert(offsetof(rsf_xess_bridge_platform, has_shared_queue) == 248);
+static_assert(offsetof(rsf_xess_bridge_platform, wait_shared) == 296);
+static_assert(offsetof(rsf_xess_bridge_platform, read_present_status) == 344);
+static_assert(offsetof(rsf_xess_bridge_platform, serialize_enabled) == 416);
 
 extern "C" {
 int32_t rsf_core_xess_bridge_create(const rsf_xess_bridge_platform*, uint64_t, const uint16_t*, rsf_xess_bridge**);
@@ -63,9 +97,9 @@ void rsf_core_xess_bridge_note_vulkan_lookup();
 int32_t rsf_core_xess_bridge_start(rsf_xess_bridge_session*, void*, uint32_t, uint32_t, uint32_t, uint32_t, int32_t);
 uint32_t rsf_core_xess_bridge_started(const rsf_xess_bridge_session*);
 uint32_t rsf_core_xess_bridge_max_generated(const rsf_xess_bridge_session*);
-void* rsf_core_xess_bridge_event(const rsf_xess_bridge_session*);
-int32_t rsf_core_xess_bridge_wait(const rsf_xess_bridge_session*, uint64_t);
-void rsf_core_xess_bridge_retain_failure(const rsf_xess_bridge_session*, int32_t);
-int32_t rsf_core_xess_bridge_prepare_destroy(rsf_xess_bridge_session*, uint64_t);
-int32_t rsf_core_xess_bridge_destroy(rsf_xess_bridge_session*, uint64_t);
+int32_t rsf_core_xess_bridge_wait_idle(const rsf_xess_bridge_session*);
+int32_t rsf_core_xess_bridge_present(rsf_xess_bridge_session*, const VulkanStoryXessFrame*, uint32_t*, int32_t*, uint32_t*);
+int32_t rsf_core_xess_bridge_present_integrated(rsf_xess_bridge_session*, const rsf_xess_bridge_frame*, rsf_xess_bridge_present_status*);
+int32_t rsf_core_xess_bridge_prepare_destroy(rsf_xess_bridge_session*);
+int32_t rsf_core_xess_bridge_destroy(rsf_xess_bridge_session*);
 }
