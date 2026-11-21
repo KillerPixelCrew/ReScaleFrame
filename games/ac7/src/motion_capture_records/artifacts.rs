@@ -2,10 +2,11 @@
 //! F9 checkpoint and completion artifacts over the native capture's copied observations.
 
 use super::{EngineRecord, NativeRecordCounts, ROOT_NAMES, RootRecord, observe_velocity, records};
+use crate::motion_capture_observations::observations;
 use std::ffi::{CStr, c_char, c_void};
 use std::fmt::{self, Write as _};
 use std::io::Write as _;
-use std::mem::{size_of, take};
+use std::mem::{offset_of, size_of, take};
 use std::slice;
 
 #[derive(Default)]
@@ -242,8 +243,6 @@ impl Drop for Snapshot {
 struct Artifact {
     data: *const u8,
     size: usize,
-    stage: u32,
-    hash: u32,
 }
 
 #[repr(C)]
@@ -254,18 +253,17 @@ struct ArtifactList {
 }
 
 impl ArtifactList {
-    fn entries(&self) -> impl Iterator<Item = (Artifact, &[u8])> {
-        (0..self.count).map(move |index| {
+    fn entries(&self) -> impl Iterator<Item = &[u8]> {
+        (0..self.count).map(move |index| -> &[u8] {
             // SAFETY: Native supplies its live list, callback and exact size. At finish the
             // session guard prevents mutation, and the checkpoint list is a local copy.
             let entry = unsafe { (self.at)(self.user, index) };
-            let bytes = if entry.size == 0 {
+            if entry.size == 0 {
                 &[]
             } else {
                 // SAFETY: The returned data is valid and unchanged for the list borrow.
                 unsafe { slice::from_raw_parts(entry.data, entry.size) }
-            };
-            (entry, bytes)
+            }
         })
     }
 }
@@ -277,7 +275,6 @@ struct Stats {
     renderer_root_hooks: u32,
     draw_dropped: u32,
     blob_dropped: u32,
-    shader_creation_dropped: u32,
     readbacks: u32,
     readback_failures: u32,
     colour_readbacks: u32,
@@ -289,14 +286,14 @@ struct Stats {
 struct FinalArtifacts {
     draws: ArtifactList,
     blobs: ArtifactList,
-    shaders: ArtifactList,
     user: *const c_void,
     stats: unsafe extern "C" fn(*const c_void) -> Stats,
 }
 
 const _: () = {
-    assert!(size_of::<Artifact>() == 24 && size_of::<ArtifactList>() == 24);
-    assert!(size_of::<Stats>() == 48 && size_of::<FinalArtifacts>() == 88);
+    assert!(size_of::<Artifact>() == 16 && size_of::<ArtifactList>() == 24);
+    assert!(size_of::<Stats>() == 48 && offset_of!(Stats, capture_failures) == 40);
+    assert!(size_of::<FinalArtifacts>() == 64 && offset_of!(FinalArtifacts, stats) == 56);
 };
 
 fn write_summary(
@@ -304,6 +301,7 @@ fn write_summary(
     counts: &NativeRecordCounts,
     stats: &Stats,
     draws: usize,
+    shader_creation_dropped: u32,
     files_written: bool,
 ) -> fmt::Result {
     writeln!(
@@ -334,7 +332,7 @@ fn write_summary(
         counts.engine_dropped,
         stats.draw_dropped,
         stats.blob_dropped,
-        stats.shader_creation_dropped,
+        shader_creation_dropped,
         stats.readbacks,
         stats.readback_failures,
         stats.colour_readbacks,
@@ -392,7 +390,7 @@ impl<'a> Publisher<'a> {
     }
 
     fn blobs(&mut self, blobs: &ArtifactList) -> fmt::Result {
-        for (index, (_, bytes)) in blobs.entries().enumerate() {
+        for (index, bytes) in blobs.entries().enumerate() {
             self.file(format_args!("\\cb_{}.bin", index + 1), bytes)?;
         }
         Ok(())
@@ -411,6 +409,9 @@ impl<'a> Publisher<'a> {
     }
 
     fn finish(mut self, sources: &FinalArtifacts) -> Result<bool, fmt::Error> {
+        // Freeze creation observations through publication so the shader ordinals and drop
+        // counter describe the same cache. Disassembly happens before taking this lock.
+        let observations = observations();
         let snapshot = Snapshot::finish();
         let mut text = Bytes::default();
         write_engine(&mut text, &snapshot.engine)?;
@@ -420,21 +421,21 @@ impl<'a> Publisher<'a> {
         self.file(format_args!("\\native.jsonl"), &text.0)?;
         drop(text);
         let mut text = Bytes::default();
-        for (_, draw) in sources.draws.entries() {
+        for draw in sources.draws.entries() {
             text.extend(draw)?;
             text.write_char('\n')?;
         }
         self.file(format_args!("\\draws.jsonl"), &text.0)?;
         self.blobs(&sources.blobs)?;
-        for (index, (shader, bytes)) in sources.shaders.entries().enumerate() {
+        for (index, shader) in observations.shaders.iter().enumerate() {
             self.file(
                 format_args!(
                     "\\shader_{}_{}_{}.dxbc",
                     shader.stage,
                     index + 1,
-                    shader.hash
+                    shader.hash()
                 ),
-                bytes,
+                &shader.data,
             )?;
         }
         // SAFETY: The native callback samples completion counters while the guard and
@@ -446,6 +447,7 @@ impl<'a> Publisher<'a> {
             &snapshot.counts,
             &stats,
             sources.draws.count,
+            observations.shaders_dropped,
             self.ok,
         )?;
         self.file(format_args!("\\session.json"), &text.0)?;
