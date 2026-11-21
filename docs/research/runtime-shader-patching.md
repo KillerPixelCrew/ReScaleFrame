@@ -5,6 +5,23 @@ shader processing; adapters supply game rules, source acquisition and draw data.
 No game source or reconstructed shader bodies are distributed. This is a packaging
 rule, not a security subsystem. No game launch, deployment or commit is authorized.
 
+## Public DLL baseline for the Rust port
+
+The existing C++ service passed a CPU-only probe through
+`rsf_get_shader_patch_api`. The probe generated a small synthetic
+RSFPATCH pack with the existing pack builder and loaded System32
+D3DCompiler 47. It checked short and mismatched API tables, borrowed
+pack and root metadata, same-pack overlap, conflicting claims and
+last-close release, source and original bytecode proof, cache reuse,
+and truncated-pack refusal. The 676-byte variant matched the
+independently compiled patched source byte for byte.
+
+The probe retained the exact Runtime hash, pack, input sources,
+cache filename and DXBC hash under
+`.local/rust-1.94.1-verification/shader-patch-public-api-probe/`.
+The documented Anomaly source corpus was absent from this checkout.
+This run used synthetic source and no D3D device.
+
 ## Scope
 
 Implement Anomaly's X-Ray source path. DXBC rewriting is synthetic-tested only;

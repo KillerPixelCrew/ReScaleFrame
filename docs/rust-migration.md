@@ -48,7 +48,9 @@ carrier-loaded Runtime. The Anomaly manifest port owns the adapter's
 admitted rows and lookup, while the Runtime service still owns the
 shared pack rules, claims registry, compilation cache and interception
 inventory in C++. Those service owners are part of the remaining
-core port. [Runtime shader patching](research/runtime-shader-patching.md)
+core port. Its public DLL baseline now covers a synthetic compile,
+claim lifetime, exact output bytes and cache behavior without a device.
+[Runtime shader patching](research/runtime-shader-patching.md#public-dll-baseline-for-the-rust-port)
 
 Anomaly's Rust SR stage also has a second configuration record in the
 native stage facade. The facade mirrors live settings and keeps the
