@@ -36,7 +36,7 @@ use std::os::windows::ffi::OsStringExt;
 use std::os::windows::fs::OpenOptionsExt;
 use std::ptr::{self, null, null_mut};
 use std::sync::atomic::{AtomicPtr, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
 use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows_sys::core::{PCWSTR, w};
 
@@ -260,6 +260,15 @@ unsafe impl Send for Published {}
 // The one started host. Start and stop serialize on this lock.
 static LIFECYCLE: Mutex<Published> = Mutex::new(Published(null_mut()));
 
+fn try_lifecycle() -> Option<MutexGuard<'static, Published>> {
+    // Adapter callbacks may reenter either public lifecycle entry.
+    match LIFECYCLE.try_lock() {
+        Ok(guard) => Some(guard),
+        Err(TryLockError::Poisoned(error)) => Some(error.into_inner()),
+        Err(TryLockError::WouldBlock) => None,
+    }
+}
+
 fn sr_name(backend: u32) -> &'static CStr {
     match backend {
         1 => c"DLSS",
@@ -358,6 +367,15 @@ impl Host {
             unsafe { (self.p.sr12_destroy)(*context) };
             *context = null_mut();
         }
+    }
+
+    fn release_rendering(&self, stop_overlay: bool) {
+        if stop_overlay {
+            unsafe { (self.p.overlay_stop)() };
+        }
+        let mut state = self.lock();
+        self.destroy(&mut state.sr);
+        self.destroy(&mut state.inputs);
     }
 
     fn render(&self, commands: Handle, pass: &Pass, begin: bool) {
@@ -987,10 +1005,18 @@ unsafe fn describe(setup: *const Setup, p: &'static Platform) -> Result<Host, u3
     Ok(host)
 }
 
+fn retire_plugin(platform: &Platform, plugin: Handle) -> bool {
+    plugin.is_null()
+        || (unsafe { (platform.session_quiesce)(plugin) } == OK
+            && unsafe { (platform.session_stop)(plugin) } == OK)
+}
+
 // Refusal codes beyond describe: 9 a refused plugin could not be stopped and the host stays
 // published to retry, 10 the plugin refused preparation or activation, 11 no host allocation.
 unsafe fn start(setup: *const Setup, p: &'static Platform) -> u32 {
-    let mut published = LIFECYCLE.lock().unwrap_or_else(PoisonError::into_inner);
+    let Some(mut published) = try_lifecycle() else {
+        return 1;
+    };
     if !published.0.is_null() {
         return 1;
     }
@@ -1030,13 +1056,14 @@ unsafe fn start(setup: *const Setup, p: &'static Platform) -> u32 {
     host.plugin.store(plugin, Ordering::Release);
     if result != OK {
         host.log("Native renderer plugin preparation/activation refused.");
-        if !plugin.is_null() {
-            let _ = unsafe { (p.session_quiesce)(plugin) };
-            if unsafe { (p.session_stop)(plugin) } != OK {
-                published.0 = raw;
-                return 9;
-            }
+        if !retire_plugin(p, plugin) {
+            published.0 = raw;
+            return 9;
         }
+        // Callbacks can have created contexts or given the panel our log
+        // address before start refused. Keep that address until cleanup ends.
+        let used_overlay = host.lock().overlay_frames != 0;
+        host.release_rendering(used_overlay);
         drop(unsafe { Box::from_raw(raw) });
         return 10;
     }
@@ -1047,7 +1074,9 @@ unsafe fn start(setup: *const Setup, p: &'static Platform) -> u32 {
 
 // 1 while the plugin refuses quiesce or stop; the host stays published to retry.
 fn stop() -> u32 {
-    let mut published = LIFECYCLE.lock().unwrap_or_else(PoisonError::into_inner);
+    let Some(mut published) = try_lifecycle() else {
+        return 1;
+    };
     let raw = published.0;
     if raw.is_null() {
         return 0;
@@ -1055,19 +1084,11 @@ fn stop() -> u32 {
     let host = unsafe { &*raw };
     let p = host.p;
     let plugin = host.plugin.load(Ordering::Acquire);
-    if !plugin.is_null()
-        && (unsafe { (p.session_quiesce)(plugin) } != OK
-            || unsafe { (p.session_stop)(plugin) } != OK)
-    {
+    if !retire_plugin(p, plugin) {
         return 1;
     }
     host.plugin.store(null_mut(), Ordering::Release);
-    unsafe { (p.overlay_stop)() };
-    {
-        let mut state = host.lock();
-        host.destroy(&mut state.sr);
-        host.destroy(&mut state.inputs);
-    }
+    host.release_rendering(true);
     unsafe { (p.input_dump_cancel)(0) };
     host.log("Native renderer SR stopped after managed/native/GPU retirement.");
     published.0 = null_mut();

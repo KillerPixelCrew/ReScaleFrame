@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The callback render host refuses overlapping lifecycle calls, including
+stop reentered from an adapter policy callback. A refused start keeps the
+host if quiesce or stop refuses. After both succeed it releases any SR
+contexts and overlay used by startup callbacks before freeing their log
+context. The updated callback and module lifetime fixtures cover both
+DLL and embedded entry points. Source and formatting checks passed.
+The fixtures and device paths remain unrun for this revision.
+
 The Runtime admits one GameSDK session per loaded plugin module. A duplicate
 prepare refuses before entering the plugin's callbacks. The module reservation
 follows the DLL lease through failed prepare, quiesce and stop. Source review

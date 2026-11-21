@@ -78,6 +78,7 @@ struct World {
     prepare_result: i32,
     prepare_handle: Handle,
     start_result: i32,
+    start_commands: Handle,
     quiesce_result: i32,
     stop_result: i32,
     services: Option<Services>,
@@ -106,6 +107,7 @@ impl Default for World {
             prepare_result: OK,
             prepare_handle: 0x9000 as Handle,
             start_result: OK,
+            start_commands: null_mut(),
             quiesce_result: OK,
             stop_result: OK,
             services: None,
@@ -357,7 +359,14 @@ unsafe extern "C" fn session_prepare(options: *const SessionOptions, out: *mut H
 }
 unsafe extern "C" fn session_start(_: Handle) -> i32 {
     event("start".into());
-    with(|world| world.start_result)
+    let (result, commands, services) =
+        with(|world| (world.start_result, world.start_commands, world.services));
+    if !commands.is_null()
+        && let Some(services) = services
+    {
+        unsafe { (services.render_pass.unwrap())(services.user, commands, &sr((1920, 1080)), 1) };
+    }
+    result
 }
 unsafe extern "C" fn session_quiesce(_: Handle) -> i32 {
     event("quiesce".into());
@@ -725,16 +734,19 @@ fn refused_plugins_are_stopped_or_kept_for_retry() {
             .contains("Native renderer plugin preparation/activation refused.")
     );
 
+    let device = fake(null_mut());
+    let commands = fake(device);
     with(|world| {
         world.prepare_result = OK;
         world.prepare_handle = 0x9000 as Handle;
         world.start_result = -5;
+        world.start_commands = commands;
     });
     assert_eq!(unsafe { start(&setup, &PLATFORM) }, 10);
-    assert_eq!(
-        events(),
-        ["policy 0 1", "prepare", "start", "quiesce", "stop"]
-    );
+    let trace = events();
+    let names: Vec<_> = trace.iter().map(String::as_str).collect();
+    assert!(names.starts_with(&["policy 0 1", "prepare", "start"]));
+    assert!(names.ends_with(&["quiesce", "stop", "destroy 1"]));
 
     // A busy prepare returns a live session; while it cannot stop, the host stays published.
     with(|world| {

@@ -14,9 +14,11 @@ namespace {
 int policy_calls = 0;
 uint32_t policy_spatial = 99, policy_quality = 99;
 int policy_result = 1;
+uint32_t reentrant_stop = 99;
 int policy(uint32_t spatial, uint32_t quality)
 {
     ++policy_calls; policy_spatial = spatial; policy_quality = quality;
+    reentrant_stop = rsf_callback_host_stop();
     return policy_result;
 }
 bool ok = true;
@@ -81,6 +83,7 @@ int main()
     policy_result = 0;
     check(rsf_callback_host_start(&valid) == 8, "adapter policy refusal");
     check(policy_calls == 1 && policy_spatial == 0 && policy_quality == 2, "Auto asks for native rendering");
+    check(reentrant_stop == 1, "adapter policy callback cannot retire the host under construction");
     policy_result = 1;
     setup = valid; setup.backend = RSF_SR_SPATIAL; setup.quality = 5;
     check(rsf_callback_host_start(&setup) == 10, "missing plugin refused");
