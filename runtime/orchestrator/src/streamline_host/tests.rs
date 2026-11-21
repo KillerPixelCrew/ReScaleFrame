@@ -13,9 +13,11 @@ thread_local! {
 unsafe extern "C" fn interposer_loaded() -> u32 {
     0
 }
-unsafe extern "C" fn admit(_: &Setup) -> i32 {
-    OK
+unsafe extern "C" fn adapter_vendor(_: Handle, vendor: &mut u32, _: &mut Handle) -> u32 {
+    *vendor = 0x10de;
+    1
 }
+unsafe extern "C" fn report_vendor(_: Log, _: Handle, _: u32) {}
 unsafe extern "C" fn load(_: *const u16, _: &Setup) -> Handle {
     STARTUP.with_borrow_mut(|calls| calls.push("load"));
     std::ptr::without_provenance_mut(0x1000)
@@ -24,21 +26,36 @@ unsafe extern "C" fn unload(module: Handle) {
     assert_eq!(module.addr(), 0x1000);
     STARTUP.with_borrow_mut(|calls| calls.push("unload"));
 }
-unsafe extern "C" fn open(
-    _: &Setup,
-    module: Handle,
-    _: Handle,
-    _: Handle,
-    _: *const u16,
-    _: u32,
-    _: *const c_char,
-    _: *const c_char,
-    out: &mut Opened,
-) -> i32 {
-    assert_eq!(module.addr(), 0x1000);
-    STARTUP.with_borrow_mut(|calls| calls.push("open"));
-    out.native = std::ptr::without_provenance_mut(0x2000);
-    INIT_FAILED
+unsafe extern "C" fn allocate(_: Log, _: Handle) -> Handle {
+    STARTUP.with_borrow_mut(|calls| calls.push("allocate"));
+    std::ptr::without_provenance_mut(0x2000)
+}
+unsafe extern "C" fn bind_required(native: Handle, _: &[Handle; startup::ENTRY_NAMES.len()]) {
+    assert_eq!(native.addr(), 0x2000);
+    STARTUP.with_borrow_mut(|calls| calls.push("bind"));
+}
+unsafe extern "C" fn fail_init(native: Handle, _: &InitPreferences) -> u32 {
+    assert_eq!(native.addr(), 0x2000);
+    STARTUP.with_borrow_mut(|calls| calls.push("init"));
+    0
+}
+unsafe extern "C" fn borrow_device(_: Handle, _: Handle) {
+    unreachable!()
+}
+unsafe extern "C" fn create_device(_: Handle, _: Handle) -> u32 {
+    unreachable!()
+}
+unsafe extern "C" fn prime_mfg(_: Handle, _: u32) {
+    unreachable!()
+}
+unsafe extern "C" fn unexpected_stage(_: Handle) -> u32 {
+    unreachable!()
+}
+unsafe extern "C" fn queue_matches_device(_: Handle, _: Handle, _: &mut Handle) -> u32 {
+    unreachable!()
+}
+unsafe extern "C" fn resolve_feature(_: Handle, _: u32, _: *const c_char, _: u32) -> u32 {
+    unreachable!()
 }
 unsafe extern "C" fn dispose(native: Handle) {
     assert_eq!(native.addr(), 0x2000);
@@ -108,12 +125,36 @@ unsafe extern "C" fn tags(_: Handle, _: Handle, _: Handle, _: &Frame) -> i32 {
     OK
 }
 
-const PLATFORM: Platform = Platform {
+const STARTUP_PLATFORM: Startup = Startup {
+    engine_count: 3,
     interposer_loaded,
-    admit,
+    adapter_vendor,
+    report_vendor,
     load,
     unload,
-    open,
+    allocate,
+    bind_required,
+    init: fail_init,
+    borrow_device,
+    create_device,
+    prime_mfg,
+    upgrade_device: unexpected_stage,
+    native_device: unexpected_stage,
+    start_audit: quiet,
+    register_device: unexpected_stage,
+    create_factory: unexpected_stage,
+    upgrade_factory: unexpected_stage,
+    queue_type: unexpected_stage,
+    queue_matches_device,
+    create_queue: unexpected_stage,
+    native_queue: unexpected_stage,
+    resolve_feature,
+    prepare_mfg: quiet,
+    pcl_defaults: quiet,
+};
+
+const PLATFORM: Platform = Platform {
+    startup: &STARTUP_PLATFORM,
     dispose,
     token,
     sleep: sleep_leaf,
@@ -159,7 +200,7 @@ fn markers() -> Vec<u32> {
 }
 
 #[test]
-fn refused_open_disposes_native_state_before_unloading_the_module() {
+fn failed_init_disposes_native_state_before_unloading_the_module() {
     let mut setup: Setup = unsafe { zeroed() };
     setup.struct_size = size_of::<Setup>() as u32;
     setup.abi_version = ABI_VERSION;
@@ -168,13 +209,34 @@ fn refused_open_disposes_native_state_before_unloading_the_module() {
     setup.engine_version_utf8 = c"fixture".as_ptr();
     setup.project_id_utf8 = c"fixture".as_ptr();
     let mut host = null_mut();
-    let result =
-        unsafe { rsf_core_slhost_create(&setup, null_mut(), null_mut(), &mut host, &PLATFORM) };
-    assert_eq!(result, INIT_FAILED);
+    let mut looked_up = Vec::new();
+    unsafe extern "system" fn stub_address() -> isize {
+        0
+    }
+    let result = unsafe {
+        create_host(
+            &setup,
+            [null_mut(); 2],
+            &mut host,
+            &PLATFORM,
+            |module, name| {
+                assert_eq!(module.as_ptr().addr(), 0x1000);
+                looked_up.push(name.to_owned());
+                Some(stub_address)
+            },
+        )
+    };
+    assert_eq!(result, Err(INIT_FAILED));
     assert!(host.is_null());
+    assert!(
+        looked_up
+            .iter()
+            .map(CString::as_c_str)
+            .eq(startup::ENTRY_NAMES)
+    );
     assert_eq!(
         STARTUP.with_borrow_mut(std::mem::take),
-        ["load", "open", "dispose", "unload"]
+        ["load", "allocate", "bind", "init", "dispose", "unload"]
     );
 }
 

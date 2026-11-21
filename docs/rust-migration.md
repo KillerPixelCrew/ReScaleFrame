@@ -308,6 +308,13 @@ existing D3D11 leaves still perform the single-subresource copy and
 the predication and map effects. Source comparison and targeted
 binding regeneration passed. [Anomaly SR staging](research/rust-anomaly-sr-stage.md)
 
+The D3D12 Streamline host now chooses startup admission and SDK
+preferences, stages graphics objects and rolls back initialization
+in Rust. Source comparison matched the lookup order, signature
+gate, enabled and disabled wrappers and linked consumers. Build,
+binary export and device checks remain open.
+[Streamline startup](research/rust-d3d12-streamline-host-startup.md)
+
 ## Verification coverage
 
 | Requirement | Recorded evidence | Still open |

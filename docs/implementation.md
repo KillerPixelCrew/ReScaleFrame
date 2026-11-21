@@ -851,6 +851,13 @@ and remains unrun. Build and live observer verification remain open.
 
 ## Rust orchestrator and first Anomaly port
 
+The D3D12 Streamline host now owns startup admission, SDK preferences,
+device, factory and queue staging, and rollback in Rust. Source
+comparison matched the signature gate, required and optional lookup
+order, and enabled and disabled public entry points. The typed COM
+and SDK operations remain native. Build and device checks remain open.
+[Streamline startup](research/rust-d3d12-streamline-host-startup.md)
+
 Anomaly now owns Stage 3 burst staging and mapping in Rust. The
 leased texture and device facts admit the same single-sample copy,
 and map refusal retains size and format for the burst summary.
