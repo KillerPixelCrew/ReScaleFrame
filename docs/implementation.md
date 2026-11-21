@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The Rust Anomaly observer now records completed teardown steps.
+After a refusal it resumes with the first unfinished owner and
+keeps the session available until callbacks drain. A stop after
+successful quiesce leaves the retired stages alone. An unrun fixture
+covers busy input and native callbacks, a motion refusal after SR
+retires, and a successful retry without repeating SR teardown.
+Source review checked the callback order. Live validation remains open.
+
 Anomaly's Rust SR stage now closes render admission when hook removal
 is refused. It restores an open reduced-resolution window and keeps
 the renderer resources for a removal retry. Late callbacks recheck

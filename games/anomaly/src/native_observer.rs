@@ -52,7 +52,19 @@ impl Session {
 struct Control {
     reason: &'static CStr,
     geometry_installed: bool,
-    draining: bool,
+    retirement: Retirement,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Retirement {
+    Inactive,
+    Live,
+    Input,
+    Sr,
+    Motion,
+    ObserverHooks,
+    Geometry,
+    Callbacks,
 }
 
 struct State {
@@ -78,7 +90,7 @@ impl Observer {
             control: Mutex::new(Control {
                 reason: c"Native rendering has not been prepared.",
                 geometry_installed: false,
-                draining: false,
+                retirement: Retirement::Inactive,
             }),
             state: Mutex::new(State {
                 session: None,
@@ -112,7 +124,7 @@ impl Observer {
     fn prepare(&self, host: &rsf_game_host_services, platform: &Platform) -> rsf_result {
         let mut control = lock(&self.control);
         if self.session().is_some()
-            || control.draining
+            || control.retirement != Retirement::Inactive
             || self.activity.load(Ordering::Acquire) != 0
         {
             return BUSY;
@@ -141,7 +153,7 @@ impl Observer {
         if self.active() {
             return OK;
         }
-        if control.draining {
+        if !matches!(control.retirement, Retirement::Inactive | Retirement::Live) {
             let result = self.quiesce_locked(&mut control, platform);
             if result != OK {
                 return result;
@@ -163,6 +175,7 @@ impl Observer {
             return NATIVE_REFUSED;
         }
         let engine = &session.engine;
+        control.retirement = Retirement::Live;
         if !unsafe { (platform.enable_hooks.unwrap())(engine) } {
             control.reason = c"Guarded native detour installation refused.";
             return NATIVE_REFUSED;
@@ -221,10 +234,18 @@ impl Observer {
     }
 
     fn quiesce_locked(&self, control: &mut Control, platform: &Platform) -> rsf_result {
-        self.activity.fetch_and(!ACTIVE, Ordering::AcqRel);
-        control.draining = true;
-        if !unsafe { (platform.disable_input.unwrap())() } {
-            return NATIVE_REFUSED;
+        if control.retirement == Retirement::Inactive {
+            return OK;
+        }
+        if control.retirement == Retirement::Live {
+            self.activity.fetch_and(!ACTIVE, Ordering::AcqRel);
+            control.retirement = Retirement::Input;
+        }
+        if control.retirement == Retirement::Input {
+            if !unsafe { (platform.disable_input.unwrap())() } {
+                return NATIVE_REFUSED;
+            }
+            control.retirement = Retirement::Sr;
         }
         // End and reset can still use stage resources after observation closes.
         // The inactive detours continue to supply the native geometry scope
@@ -232,23 +253,35 @@ impl Observer {
         if !self.idle(platform) {
             return BUSY;
         }
-        if !unsafe {
-            (platform.quiesce_sr.unwrap())()
-                && (platform.quiesce_motion.unwrap())()
-                && (platform.disable_hooks.unwrap())()
-        } {
-            return NATIVE_REFUSED;
+        if control.retirement == Retirement::Sr {
+            if !unsafe { (platform.quiesce_sr.unwrap())() } {
+                return NATIVE_REFUSED;
+            }
+            control.retirement = Retirement::Motion;
         }
-        if control.geometry_installed {
-            if !unsafe { (platform.disable_geometry.unwrap())() } {
+        if control.retirement == Retirement::Motion {
+            if !unsafe { (platform.quiesce_motion.unwrap())() } {
+                return NATIVE_REFUSED;
+            }
+            control.retirement = Retirement::ObserverHooks;
+        }
+        if control.retirement == Retirement::ObserverHooks {
+            if !unsafe { (platform.disable_hooks.unwrap())() } {
+                return NATIVE_REFUSED;
+            }
+            control.retirement = Retirement::Geometry;
+        }
+        if control.retirement == Retirement::Geometry {
+            if control.geometry_installed && !unsafe { (platform.disable_geometry.unwrap())() } {
                 return NATIVE_REFUSED;
             }
             control.geometry_installed = false;
+            control.retirement = Retirement::Callbacks;
         }
         if !self.idle(platform) {
             return BUSY;
         }
-        control.draining = false;
+        control.retirement = Retirement::Inactive;
         OK
     }
 
@@ -261,7 +294,7 @@ impl Observer {
         let result = self.quiesce_locked(&mut control, platform);
         if result == OK && stop {
             if !self.idle(platform) {
-                control.draining = true;
+                control.retirement = Retirement::Callbacks;
                 return BUSY;
             }
             lock(&self.state).session = None;

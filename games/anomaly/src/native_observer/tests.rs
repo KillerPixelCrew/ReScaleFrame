@@ -3,6 +3,7 @@ use super::*;
 use std::sync::atomic::AtomicBool;
 
 static INPUT_IDLE: AtomicBool = AtomicBool::new(false);
+static MOTION_REFUSED: AtomicBool = AtomicBool::new(false);
 static TEARDOWN: Mutex<Vec<&str>> = Mutex::new(Vec::new());
 
 unsafe extern "C" fn disable_input() -> bool {
@@ -22,7 +23,7 @@ unsafe extern "C" fn quiesce_sr() -> bool {
 }
 unsafe extern "C" fn quiesce_motion() -> bool {
     lock(&TEARDOWN).push("motion");
-    true
+    !MOTION_REFUSED.load(Ordering::Relaxed)
 }
 unsafe extern "C" fn disable_geometry() -> bool {
     lock(&TEARDOWN).push("geometry");
@@ -37,7 +38,11 @@ fn stop_drains_native_and_input_invocations_before_retiring_the_stages() {
         log: None,
         user: ptr::null_mut(),
     });
-    lock(&observer.control).geometry_installed = true;
+    {
+        let mut control = lock(&observer.control);
+        control.geometry_installed = true;
+        control.retirement = Retirement::Live;
+    }
     observer.activity.store(ACTIVE, Ordering::Relaxed);
     let platform = Platform {
         disable_input: Some(disable_input),
@@ -57,16 +62,20 @@ fn stop_drains_native_and_input_invocations_before_retiring_the_stages() {
     observer.leave(); // A stock-only trampoline is still tracked.
     observer.leave();
     assert_eq!(observer.control(&platform, true), BUSY);
-    assert_eq!(*lock(&TEARDOWN), ["input", "input"]);
+    assert_eq!(*lock(&TEARDOWN), ["input"]);
 
     INPUT_IDLE.store(true, Ordering::Relaxed);
+    MOTION_REFUSED.store(true, Ordering::Relaxed);
+    assert_eq!(observer.control(&platform, true), NATIVE_REFUSED);
+    assert_eq!(observer.status().prepared, 1);
+    assert_eq!(*lock(&TEARDOWN), ["input", "SR", "motion"]);
+    MOTION_REFUSED.store(false, Ordering::Relaxed);
+    assert_eq!(observer.control(&platform, true), OK);
     assert_eq!(observer.control(&platform, true), OK);
     assert_eq!(observer.status().prepared, 0);
     assert_eq!(
         *lock(&TEARDOWN),
-        [
-            "input", "input", "input", "SR", "motion", "hooks", "geometry"
-        ]
+        ["input", "SR", "motion", "motion", "hooks", "geometry"]
     );
 }
 
