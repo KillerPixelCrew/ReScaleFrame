@@ -107,19 +107,18 @@ extern "C" fn rsf_core_overlay_visible() -> u32 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay_toggle_key() -> u32 {
+pub(super) extern "C" fn rsf_core_overlay_toggle_key() -> u32 {
     TOGGLE_KEY.load(Ordering::Relaxed)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay_visibility_reset(toggle_key: u32, down: u32) -> u32 {
+pub(super) fn reset(toggle_key: u32, down: bool) -> bool {
     let mut state = lock();
     *state = Visibility {
         applying: state.applying,
-        ..Visibility::new(down != 0)
+        ..Visibility::new(down)
     };
     TOGGLE_KEY.store(toggle_key, Ordering::Relaxed);
-    VISIBLE.swap(false, Ordering::AcqRel).into()
+    VISIBLE.swap(false, Ordering::AcqRel)
 }
 
 #[unsafe(no_mangle)]

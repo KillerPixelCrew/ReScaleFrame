@@ -11,7 +11,6 @@ enum {
 };
 
 extern "C" {
-void rsf_core_overlay_pointer_reset(void);
 void rsf_core_overlay_pointer_clear(void);
 void rsf_core_overlay_pointer_focus_lost(void);
 void rsf_core_overlay_pointer_raw(const rsf_overlay_client_point*);

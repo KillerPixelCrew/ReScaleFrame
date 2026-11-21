@@ -4,6 +4,15 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now owns shared overlay window attachment, the original window
+procedure, the attachment logger and the game's held input state.
+Attach publishes the forwarder before the subclass can receive messages
+and restores the previous bookkeeping if the swap fails. Detach keeps
+the original available to an in-flight message and clears the logger
+after cursor cleanup. C++ supplies the window procedure and cursor
+adapters. Public overlay input headers are unchanged. Build and runtime
+validation remain open.
+
 Rust now accumulates overlay pointer positions, mouse buttons, wheel
 deltas and touch gestures. It scales client coordinates to the
 presented image, preserves short taps through the next render sample,

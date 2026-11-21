@@ -293,8 +293,7 @@ fn lock() -> MutexGuard<'static, PointerState> {
     STATE.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay_pointer_reset() {
+pub(super) fn reset() {
     *lock() = PointerState::new();
 }
 
