@@ -825,11 +825,12 @@ impl Host {
         }
         let camera = &pass.camera;
         let quality = infer_quality(camera.render_width, camera.output_width);
+        let has_exposure = !pass.exposure.is_null();
         if s.context.is_null()
             || s.context_backend != s.backend
             || s.quality != quality
             || s.context_preset != s.preset
-            || s.context_exposure != !pass.exposure.is_null()
+            || s.context_exposure != has_exposure
             || s.width != camera.render_width
             || s.height != camera.render_height
             || s.output_width != camera.output_width

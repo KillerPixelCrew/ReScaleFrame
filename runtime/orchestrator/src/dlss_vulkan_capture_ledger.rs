@@ -41,9 +41,9 @@ impl Ledger {
                 record.resource_generation,
             )
         };
-        if !slot
+        if slot
             .as_ref()
-            .is_some_and(|stored| key(stored) == key(source))
+            .is_none_or(|stored| key(stored) != key(source))
         {
             *slot = None;
             return AMBIGUOUS;

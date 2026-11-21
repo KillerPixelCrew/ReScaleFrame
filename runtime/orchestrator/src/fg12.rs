@@ -728,9 +728,9 @@ extern "C" fn rsf_core_fg12_submitted(session: u64, id: u64) {
     slot.submitted = true;
     slot.pending_copy = false;
     let queue = &slot.source_queue;
-    if !source_fence
+    if source_fence
         .as_ref()
-        .is_some_and(|fence| queue.as_ptr() == fence.queue.as_ptr())
+        .is_none_or(|fence| queue.as_ptr() != fence.queue.as_ptr())
     {
         let fence = unsafe { ComRef::from_owned(native!(fence(queue.as_ptr()))) };
         *source_fence = fence.map(|fence| SourceFence {

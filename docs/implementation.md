@@ -4,6 +4,16 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The integrated workspace passed all 332 locked tests, formatting, Clippy
+with warnings denied and the optimized Cargo build on the pinned Rust
+1.94.1 toolchain. MSVC 19.52 Release built Runtime and Anomaly with
+the same Rust pin and passed nine focused CPU contracts covering C and
+C++ overlay clients, frame assembly, D3D11 host, the Anomaly SR API,
+Vulkan DLL exports and linked and DLL Vulkan capture. Runtime matched all
+381 baseline export names and ordinals, and Anomaly matched all three
+with its existing Runtime lookup. No device or game fixtures ran in
+this pinned pass. Logs are in `.local/rust-1.94.1-verification/`.
+
 The existing C++ Anomaly DLL builds against the merged runtime. Thirteen
 focused MSVC contracts passed in Debug and Release, covering plugin
 lifecycle, cold-start refusal, native hooks, the D3D11 host, SR and overlay
