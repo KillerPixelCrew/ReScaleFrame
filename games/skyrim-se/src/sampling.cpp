@@ -22,7 +22,6 @@ bool rsf_skyrim_sampling_busy() noexcept;
 bool rsf_skyrim_sampling_stop(const rsf_skyrim_creation_platform*) noexcept;
 void* rsf_skyrim_sampling_enter() noexcept;
 void rsf_skyrim_sampling_leave(bool returned) noexcept;
-void rsf_skyrim_sampling_finish() noexcept;
 }
 
 static_assert(sizeof(rsf_skyrim_sampling_leaves) == 32);
@@ -75,5 +74,4 @@ bool sampling_start(const rsf_game_host_services& services)
 void sampling_quiesce() { rsf_skyrim_sampling_quiesce(); }
 bool sampling_busy() { return rsf_skyrim_sampling_busy(); }
 bool sampling_stop() { return rsf_skyrim_sampling_stop(creation_platform()); }
-void finish_sampling() { rsf_skyrim_sampling_finish(); }
 }

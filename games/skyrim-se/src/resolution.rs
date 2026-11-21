@@ -326,8 +326,7 @@ extern "C" fn rsf_skyrim_resolution_extent(
     true
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_resolution_record_flags(flags: u8) {
+pub(crate) fn record_per_frame_flags(flags: u8) {
     FRAME_FLAGS.set(Some(flags));
 }
 

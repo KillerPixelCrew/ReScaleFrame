@@ -36,7 +36,6 @@ void rsf_skyrim_resolution_configure(const rsf_skyrim_creation_platform*, const 
 bool rsf_skyrim_resolution_owned() noexcept;
 bool rsf_skyrim_resolution_controls(uintptr_t) noexcept;
 bool rsf_skyrim_resolution_extent(uint32_t, uint32_t, uint32_t*, uint32_t*) noexcept;
-void rsf_skyrim_resolution_record_flags(uint8_t) noexcept;
 bool rsf_skyrim_resolution_output_ready() noexcept;
 bool rsf_skyrim_resolution_enter(const rsf_skyrim_creation_platform*, const rsf_skyrim_resolution_leaves*) noexcept;
 bool rsf_skyrim_resolution_leave(const rsf_skyrim_resolution_leaves*) noexcept;
@@ -98,7 +97,6 @@ bool resolution_extent(uint32_t width, uint32_t height, uint32_t& rw, uint32_t& 
 {
     return rsf_skyrim_resolution_extent(width, height, &rw, &rh);
 }
-void record_per_frame_flags(uint8_t flags) { rsf_skyrim_resolution_record_flags(flags); }
 bool output_resolution_ready() { return rsf_skyrim_resolution_output_ready(); }
 bool enter_output_resolution() { return rsf_skyrim_resolution_enter(creation_platform(), &leaves); }
 bool leave_output_resolution() { return rsf_skyrim_resolution_leave(&leaves); }

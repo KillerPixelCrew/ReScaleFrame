@@ -322,6 +322,14 @@ succeeds and restores the enable byte when the same owner survives
 the native call. The trampoline keeps its original five arguments.
 Source and layout checks passed. Build and live fallback remain open.
 
+Skyrim's renderer-end, upload and jitter observations now sequence
+their work in Rust. Presentation binding and sampler restoration
+precede the native end call, and window and auxiliary retirement
+follow it with the retained session. The upload path verifies the
+native dirty byte before the original call and records its flags
+afterward. The adapter keeps the exact window-class rule. Source
+and layout checks passed. Build and live observer behavior remain open.
+
 Skyrim's native job ticket, poll epochs and consumer proof now live in
 Rust. The typed submit, join and PollDevices detours retain their exact
 native observations and GameSDK ordering. Hook effects and guarded engine

@@ -2,15 +2,14 @@
 // GameSDK export, native detours and leaves of the Rust Skyrim SE owner (src/session.rs). Rust owns
 // the lifecycle order, results and reasons, the Runtime host setup and its original-session reuse,
 // DPI startup, the observer hook record and the borrowed services, which the detours lease under
-// the session lock. This file keeps the five typed observers and their native facts, MinHook,
-// exception guards and the C++ CPU, sampling, presentation-input and compatibility subsystems.
+// the session lock. This file keeps the typed observer detours, MinHook, and the native Win32,
+// Runtime and graphics calls used by their Rust owners.
 #include <rescaleframe/game_api.h>
 #include <MinHook.h>
 #include <d3d11.h>
 #include <atomic>
 #include <cstdio>
 #include <cstring>
-#include <cwchar>
 #include "cpu_events.h"
 #include "render_inputs.h"
 #include "resolution.h"
@@ -19,6 +18,7 @@
 #include "presentation_inputs.h"
 #include "compatibility.h"
 #include "postprocess_platform.h"
+#include "render_observer_platform.h"
 #include "session_platform.h"
 #include <rescaleframe/d3d11_host.h>
 #if defined(_MSC_VER)
@@ -26,12 +26,6 @@
 #endif
 
 namespace {
-// Window class policy lent to the Runtime presentation bridge through the host setup.
-int accept_presentation_window(void*, void* window) {
-    wchar_t name[128]{};
-    return window && GetClassNameW(static_cast<HWND>(window), name, 128) &&
-        std::wcscmp(name, L"Skyrim Special Edition") == 0;
-}
 using UpdateJitter = void (*)(void*);
 UpdateJitter original = nullptr;
 void* target = nullptr;
@@ -49,10 +43,38 @@ using UploadFrame = void (*)(void*, uint8_t);
 UploadFrame original_upload = nullptr;
 void* upload_target = nullptr;
 std::atomic<uint32_t> calls{0};
-std::atomic<uint64_t> observations{0};
 using CreateHost = int32_t (*)(const rsf_d3d11_host_setup*, rsf_game_host_services*);
 using SetHostActive = int32_t (*)(void*, uint32_t);
 using BindPresentation = int32_t (*)(void*, const rsf_d3d11_presentation_binding*);
+constexpr rsf_skyrim_render_observer_leaves render_observer_leaves{
+    rsf::skyrim::compatibility_render_allowed,
+    [](uintptr_t binding, void* user, const rsf_d3d11_presentation_binding* request) noexcept {
+        try { (void)reinterpret_cast<BindPresentation>(binding)(user, request); } catch (...) {}
+    },
+    [](void* state, const rsf_game_host_services* host) noexcept {
+        try { rsf::skyrim::configure_resolution(state, *host); } catch (...) {}
+    },
+    [](const rsf_game_host_services* host) noexcept {
+        try { rsf::skyrim::finish_auxiliaries(*host); } catch (...) {}
+    },
+    [](const rsf_game_host_services* host, const rsf_skyrim_jitter_report* report) noexcept {
+        char message[256]{};
+        std::snprintf(message, sizeof(message),
+            "Skyrim native jitter observation=%llu state=%p readable=%u size=%ux%u projection=%g,%g",
+            static_cast<unsigned long long>(report->number), reinterpret_cast<void*>(report->state), report->readable ? 1u : 0u,
+            report->dimensions[0], report->dimensions[1], double(report->projection[0]), double(report->projection[1]));
+        try { host->log(host->user, message); } catch (...) {}
+    },
+    [](void* window, wchar_t* name, uint32_t capacity) noexcept {
+        return uint32_t(GetClassNameW(static_cast<HWND>(window), name, static_cast<int>(capacity)));
+    },
+};
+
+int accept_presentation_window(void*, void* window) noexcept
+{
+    return rsf_skyrim_render_accept_window(&render_observer_leaves, window) ? 1 : 0;
+}
+
 bool accepting() noexcept { return rsf_skyrim_session_accepting(); }
 
 bool copy(void* output, const void* input, size_t size) noexcept
@@ -200,32 +222,8 @@ uintptr_t observe_process(void* manager, uint32_t input, uint32_t output, uintpt
 void observe_jitter(void* state) noexcept
 {
     calls.fetch_add(1, std::memory_order_acq_rel);
-    // The trampoline is process-lived. The session lease never spans native execution.
     original(state);
-    rsf_game_host_services resolution_host{};
-    (void)rsf_skyrim_session_lease(true, &resolution_host);
-    if (!rsf::skyrim::compatibility_render_allowed()) resolution_host = {};
-    try { rsf::skyrim::configure_resolution(state, resolution_host); } catch (...) {}
-    if (accepting()) {
-        const auto number = observations.fetch_add(1, std::memory_order_relaxed);
-        if (number < 16) {
-            struct Dimensions { uint32_t width, height; } dimensions{};
-            struct Projection { float x, y; } projection{};
-            const auto* bytes = static_cast<const unsigned char*>(state);
-            const bool readable = state && copy(&dimensions, bytes + 0x24, sizeof(dimensions)) &&
-                copy(&projection, bytes + 0x44, sizeof(projection));
-            rsf_game_host_services host{};
-            (void)rsf_skyrim_session_lease(true, &host);
-            if (host.log) {
-                char message[256]{};
-                std::snprintf(message, sizeof(message),
-                    "Skyrim native jitter observation=%llu state=%p readable=%u size=%ux%u projection=%g,%g",
-                    static_cast<unsigned long long>(number), state, readable ? 1u : 0u,
-                    dimensions.width, dimensions.height, double(projection.x), double(projection.y));
-                try { host.log(host.user, message); } catch (...) {}
-            }
-        }
-    }
+    rsf_skyrim_render_jitter_observed(rsf::skyrim::creation_platform(), &render_observer_leaves, uintptr_t(state));
     calls.fetch_sub(1, std::memory_order_acq_rel);
 }
 
@@ -235,34 +233,23 @@ void observe_resolution(void* state) noexcept {
     calls.fetch_sub(1, std::memory_order_acq_rel);
 }
 
-uintptr_t observe_end() noexcept {
+uintptr_t observe_end() noexcept
+{
     calls.fetch_add(1, std::memory_order_acq_rel);
-    // The retained services, also between quiesce and stop, let pending auxiliaries finish.
     rsf_game_host_services host{};
-    const auto bind_presentation = reinterpret_cast<BindPresentation>(rsf_skyrim_session_lease(false, &host));
-    if (accepting() && rsf::skyrim::compatibility_render_allowed() && bind_presentation) {
-        uintptr_t window{}; void* chain{};
-        const auto base = reinterpret_cast<const unsigned char*>(GetModuleHandleW(nullptr));
-        if (copy(&window, base + 0x3330198, sizeof(window)) && window &&
-            copy(&chain, reinterpret_cast<const void*>(window + 0x18), sizeof(chain)) && chain) {
-            const rsf_d3d11_presentation_binding binding{sizeof(binding), RSF_D3D11_HOST_ABI_VERSION, chain};
-            try { (void)bind_presentation(host.user, &binding); } catch (...) {}
-        }
-    }
-    rsf::skyrim::finish_sampling();
+    rsf_skyrim_render_end_enter(rsf::skyrim::creation_platform(), &render_observer_leaves, &host);
     const auto result = original_end();
-    rsf::skyrim::finish_presentation_inputs();
-    rsf::skyrim::finish_auxiliaries(host);
+    rsf_skyrim_render_end_leave(&render_observer_leaves, &host);
     calls.fetch_sub(1, std::memory_order_acq_rel);
     return result;
 }
 
-void observe_upload(void* renderer, uint8_t flags) noexcept {
+void observe_upload(void* renderer, uint8_t flags) noexcept
+{
     calls.fetch_add(1, std::memory_order_acq_rel);
-    const auto base = uintptr_t(GetModuleHandleW(nullptr));
-    const bool uploading = uintptr_t(renderer) == base + 0x3331f40 && *reinterpret_cast<const unsigned char*>(base + 0x3336400) != 0;
+    const bool uploading = rsf_skyrim_render_upload_enter(rsf::skyrim::creation_platform(), uintptr_t(renderer));
     original_upload(renderer, flags);
-    if (uploading) rsf::skyrim::record_per_frame_flags(flags);
+    rsf_skyrim_render_upload_leave(uploading, flags);
     calls.fetch_sub(1, std::memory_order_acq_rel);
 }
 

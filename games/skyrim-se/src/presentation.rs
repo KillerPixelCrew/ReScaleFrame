@@ -420,8 +420,7 @@ fn retire_window(window: Window) {
     clear_window();
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_presentation_finish() {
+pub(crate) fn finish() {
     if let Some(window) = FRAME.with_borrow_mut(Frame::finish) {
         retire_window(window);
     }

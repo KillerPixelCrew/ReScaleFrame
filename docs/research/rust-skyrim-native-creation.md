@@ -105,9 +105,9 @@ Still C++ in `rsf_game_skyrim_se`, in suggested order:
    its hook record so a later stop or prepare can retry. A Rust regression covers a failed
    start with a refused disable. The regression remains unrun.
    `session.rs` now owns the lifecycle; see "Session lifecycle" below. Still C++ in
-   `plugin.cpp`: the five typed observer detours, presentation binding read, native
-   diagnostics and the window-class policy. The Rust post-process owner controls
-   reconstruction admission and the scoped TAA override.
+   `plugin.cpp` keeps the five typed observer detours and their native diagnostics.
+   Rust owns the presentation binding read, window-class rule, reconstruction
+   admission and scoped TAA override.
 2. `compatibility.rs` and `compatibility/initializer.rs` own the Community Shaders
    1.9.1 profile, cold-device and feature checks, resolver capture, initializer
    transaction and HDR caller scope. The typed native detours stay in `compatibility.cpp`.
@@ -234,6 +234,19 @@ temporary enable-byte receipt to the detour. The native scope restores it
 only while the same TAA owner remains readable, and the session's in-flight
 count covers restoration. The write leaf preserves Win32 last error.
 Source and layout comparisons passed. Build and live fallback remain open.
+
+## Renderer-end and upload observers
+
+Rust borrows retained session services at renderer-end, including during
+quiesce. When live and compatible it binds the observed swapchain, then
+restores sampler state before the native renderer-end call. The window
+and auxiliary scopes retire afterward. The upload detour checks its
+renderer and dirty byte before calling the original, and publishes that
+callback's flags afterward. Jitter still runs the original before checking
+resolution ownership and the bounded diagnostics. The exact window-class
+predicate now lives with these engine facts. The originals remain typed
+C++ calls. Source comparison and layout checks passed, and build and live
+renderer verification remain open.
 
 ## Sampler hook
 

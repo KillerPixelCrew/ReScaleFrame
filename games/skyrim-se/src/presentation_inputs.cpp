@@ -31,7 +31,6 @@ bool rsf_skyrim_presentation_start(const rsf_game_host_services*, const rsf_skyr
 void rsf_skyrim_presentation_quiesce() noexcept;
 bool rsf_skyrim_presentation_busy() noexcept;
 bool rsf_skyrim_presentation_stop(const rsf_skyrim_creation_platform*) noexcept;
-void rsf_skyrim_presentation_finish() noexcept;
 void* rsf_skyrim_presentation_enter(uintptr_t ui, bool* primary) noexcept;
 void rsf_skyrim_presentation_leave(bool primary) noexcept;
 }
@@ -100,5 +99,4 @@ bool presentation_inputs_start(const rsf_game_host_services& services)
 void presentation_inputs_quiesce() { rsf_skyrim_presentation_quiesce(); }
 bool presentation_inputs_busy() { return rsf_skyrim_presentation_busy(); }
 bool presentation_inputs_stop() { return rsf_skyrim_presentation_stop(creation_platform()); }
-void finish_presentation_inputs() { rsf_skyrim_presentation_finish(); }
 }

@@ -307,8 +307,7 @@ extern "C" fn rsf_skyrim_sampling_leave(returned: bool) {
     CALLS.fetch_sub(1, Ordering::AcqRel);
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_sampling_finish() {
+pub(crate) fn finish() {
     if PENDING.load(Ordering::Acquire) {
         CALLS.fetch_add(1, Ordering::AcqRel);
         apply(true);

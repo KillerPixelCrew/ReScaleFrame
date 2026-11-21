@@ -7,5 +7,4 @@ bool sampling_start(const rsf_game_host_services&);
 void sampling_quiesce();
 bool sampling_busy();
 bool sampling_stop();
-void finish_sampling();
 }
