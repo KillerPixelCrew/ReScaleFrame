@@ -98,7 +98,7 @@ fn try_entry<V: Default>(map: &mut HashMap<usize, V>, key: usize) -> Option<&mut
 }
 
 impl Recordings {
-    fn generation(&self, list: usize) -> u64 {
+    pub(super) fn generation(&self, list: usize) -> u64 {
         self.lists
             .get(&list)
             .map_or(0, |recording| recording.generation)
@@ -284,18 +284,6 @@ unsafe extern "C" fn rsf_rdr2_capture_record_draw(owner: &Capture, draw: &Draw) 
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_draws(owner: &Capture, count: &mut usize) -> *const Draw {
-    let recordings = unsafe { &*owner.recordings.get() };
-    let draws = &recordings.draws;
-    *count = draws.len();
-    if draws.is_empty() {
-        std::ptr::null()
-    } else {
-        draws.as_ptr()
-    }
-}
-
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_rdr2_capture_initial_state(
     owner: &Capture,
     resource: *mut c_void,
@@ -359,11 +347,6 @@ unsafe extern "C" fn rsf_rdr2_capture_resource_state(
     resource: *mut c_void,
 ) -> u32 {
     unsafe { &*owner.recordings.get() }.state(list as usize, resource as usize)
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_list_generation(owner: &Capture, list: *mut c_void) -> u64 {
-    unsafe { &*owner.recordings.get() }.generation(list as usize)
 }
 
 #[unsafe(no_mangle)]

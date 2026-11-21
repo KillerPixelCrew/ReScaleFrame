@@ -11,7 +11,6 @@
 #include <MinHook.h>
 #include <intrin.h>
 #include <algorithm>
-#include <array>
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -22,10 +21,8 @@
 #include <iterator>
 #include <mutex>
 #include <optional>
-#include <unordered_map>
 #include <vector>
 #include <string>
-#include <cmath>
 
 namespace {
 using Microsoft::WRL::ComPtr;
@@ -72,29 +69,16 @@ struct Shot : rsf_rdr2_capture_readback {
     ID3D12Resource* buffer() const noexcept { return static_cast<ID3D12Resource*>(gpu.buffer); }
     uint64_t completed() const noexcept { return gpu.fence ? static_cast<ID3D12Fence*>(gpu.fence)->GetCompletedValue() : 0; }
 };
-struct Presentation {
-    UINT format{}, width{}, height{}, color_space{}, metadata_type{};
-    bool color_space_set{};
-    std::vector<unsigned char> metadata;
-};
 struct Submission {
     ID3D12CommandQueue* queue{};
     std::unique_ptr<rsf_rdr2_capture_submission, decltype(&rsf_rdr2_capture_discard_submission)>
         facts{nullptr, rsf_rdr2_capture_discard_submission};
     std::vector<std::shared_ptr<Shot>> shots;
 };
-struct Temporal : rsf_rdr2_capture_temporal {
-    std::array<unsigned char, 0x800> camera{};
-    std::vector<rsf_rdr2_capture_scalar> scalars;
-    std::vector<std::string> refusals;
-
-    Temporal() : rsf_rdr2_capture_temporal{} {}
-};
 using DrawEvent = rsf_rdr2_capture_draw;
 thread_local std::vector<Submission> submissions;
 thread_local bool recording_copy{};
 thread_local bool drawing{};
-thread_local std::shared_ptr<Temporal> evaluating;
 struct CopyScope {
     bool previous{recording_copy};
     CopyScope() { recording_copy = true; }
@@ -112,10 +96,6 @@ struct State {
     rsf_rdr2_capture_state* capture{};
     std::vector<std::shared_ptr<Shot>> shots;
     std::shared_ptr<Shot> tail;
-    std::unordered_map<void*, uint32_t> sr_features;
-    std::vector<std::shared_ptr<Temporal>> temporal;
-    std::unordered_map<void*, Presentation> presentation;
-    Presentation captured_presentation;
 #ifdef RSF_RDR2_CAPTURE_TEST
     void* fixture_swapchain{};
     std::atomic<bool> fixture_stop{};
@@ -427,102 +407,107 @@ bool read_local(uint64_t address, void* out, size_t bytes)
     SIZE_T copied{};
     return address && ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(address), out, bytes, &copied) && copied == bytes;
 }
-void input_camera(Temporal& t)
+void input_camera(const rsf_rdr2_capture_input_id& id)
 {
+    rsf_rdr2_capture_camera_facts facts{};
+    uint8_t camera[RSF_RDR2_CAPTURE_CAMERA_BYTES]{};
+    bool valid{};
     uint32_t index{}; uint64_t block{};
-    read_local(g->base + 0x542904c, &t.frame, sizeof(t.frame));
-    LARGE_INTEGER qpc{}; QueryPerformanceCounter(&qpc); t.qpc = qpc.QuadPart;
-    t.tick = GetTickCount64(); t.thread = GetCurrentThreadId();
+    read_local(g->base + 0x542904c, &facts.frame, sizeof(facts.frame));
+    LARGE_INTEGER qpc{}; QueryPerformanceCounter(&qpc); facts.qpc = qpc.QuadPart;
+    facts.tick = GetTickCount64(); facts.thread = GetCurrentThreadId();
     if (read_local(g->base + 0x5b403e0, &index, sizeof(index)) && index < 4096 &&
         read_local(__readgsqword(0x58) + index * 8, &block, sizeof(block))) {
-        read_local(block + 0x14d8, &t.view, sizeof(t.view));
-        read_local(block + 0x14f0, &t.draw_context, sizeof(t.draw_context));
-        read_local(block + 0x1ce8, &t.job, sizeof(t.job));
-        t.camera_valid = read_local(t.view, t.camera.data(), t.camera.size());
+        read_local(block + 0x14d8, &facts.view, sizeof(facts.view));
+        read_local(block + 0x14f0, &facts.draw_context, sizeof(facts.draw_context));
+        read_local(block + 0x1ce8, &facts.job, sizeof(facts.job));
+        valid = read_local(facts.view, camera, sizeof(camera));
     }
-    if (!t.camera_valid) t.refusals.emplace_back("camera_unreadable");
+    rsf_rdr2_capture_input_camera(g->capture, &id, &facts, valid ? camera : nullptr);
 }
 void input_resource(ID3D12GraphicsCommandList* list, const void* parameters,
-    const char* key, const char* role, Temporal& t, bool required)
+    const rsf_rdr2_capture_input_id& id, rsf_rdr2_capture_input_role input_role,
+    const char* key, const char* role, bool required = true)
 {
     ID3D12Resource* resource{};
     if ((!ngx_get(parameters, 9, key, resource) && !ngx_get(parameters, 8, key, resource)) || !resource) {
-        if (required) t.refusals.emplace_back(std::string(role) + "_missing");
+        if (required) rsf_rdr2_capture_input_resource_refused(g->capture, &id, input_role, true);
         return;
     }
     const auto before = static_cast<D3D12_RESOURCE_STATES>(rsf_rdr2_capture_resource_state(g->capture, list, resource));
     auto shot = std::make_shared<Shot>();
-    shot->role = role; shot->sequence = t.sequence; shot->input_index = t.index;
+    shot->role = role; shot->sequence = id.sequence; shot->input_index = id.index;
     g->shots.push_back(shot);
     if (!copy_resource(list, resource, before, shot)) {
         g->shots.pop_back();
-        t.refusals.emplace_back(std::string(role) + "_state_or_copy_unavailable");
+        rsf_rdr2_capture_input_resource_refused(g->capture, &id, input_role, false);
     }
 }
 void ngx_created(void* handle, const void* parameters, uint32_t feature) noexcept try
 {
-    if (feature != 1) return;
-    int32_t flags{};
-    if (!ngx_get(parameters, 11, "DLSS.Feature.Create.Flags", flags)) {
-        uint32_t alternate{};
-        if (!ngx_get(parameters, 12, "DLSS.Feature.Create.Flags", alternate)) return;
-        flags = static_cast<int32_t>(alternate);
+    uint32_t flags{};
+    bool observed{};
+    if (feature == 1) {
+        int32_t signed_flags{};
+        if (ngx_get(parameters, 11, "DLSS.Feature.Create.Flags", signed_flags)) {
+            flags = static_cast<uint32_t>(signed_flags);
+            observed = true;
+        } else {
+            observed = ngx_get(parameters, 12, "DLSS.Feature.Create.Flags", flags);
+        }
     }
     std::lock_guard<std::mutex> lock(g->mutex);
-    g->sr_features[handle] = static_cast<uint32_t>(flags);
+    rsf_rdr2_capture_record_feature(g->capture, handle, observed ? &flags : nullptr);
 }
 catch (...) { log("NGX feature observation failed"); }
 void ngx_released(void* handle) noexcept
 {
-    std::lock_guard<std::mutex> lock(g->mutex); g->sr_features.erase(handle);
+    std::lock_guard<std::mutex> lock(g->mutex);
+    rsf_rdr2_capture_record_feature(g->capture, handle, nullptr);
 }
+struct FinishInput {
+    bool pending{true};
+    ~FinishInput() { if (pending) rsf_rdr2_capture_finish_input(g->capture); }
+};
 void ngx_evaluate(void* pointer, void* handle, const void* parameters, uint32_t phase, uint64_t result) noexcept try
 {
-    if (!pointer || (!phase && !rsf_rdr2_capture_has_inputs(g->capture))) return;
+    if (!rsf_rdr2_capture_track_evaluation(phase != 0)) return;
+    if (!phase && (!pointer || !rsf_rdr2_capture_has_inputs(g->capture))) return;
     auto* list = static_cast<ID3D12GraphicsCommandList*>(pointer);
     std::lock_guard<std::mutex> lock(g->mutex);
+    rsf_rdr2_capture_input_id id{};
     if (phase) {
-        if (!evaluating || evaluating->list != reinterpret_cast<uint64_t>(list)) return;
-        auto record = std::move(evaluating);
-        struct FinishInput {
-            ~FinishInput() { rsf_rdr2_capture_end_input(g->capture); }
-        } finish;
-        record->result = result;
-        if (static_cast<uint32_t>(result) == 1) input_resource(list, parameters, "Output", "output", *record, true);
-        else record->refusals.emplace_back("native_evaluation_failed");
+        FinishInput finish;
+        if (rsf_rdr2_capture_input_result(g->capture, list, result, &id))
+            input_resource(list, parameters, id, RSF_RDR2_CAPTURE_OUTPUT, "Output", "output");
         return;
     }
-    if (evaluating || !rsf_rdr2_capture_has_inputs(g->capture)) return;
-    const auto feature = g->sr_features.find(handle);
-    if (feature == g->sr_features.end()) return;
-    auto t = std::make_shared<Temporal>();
-    t->sequence = capture_progress().sequence;
-    t->index = rsf_rdr2_capture_reserve_input(g->capture); t->feature_flags = feature->second;
-    t->list = reinterpret_cast<uint64_t>(list);
-    t->generation = rsf_rdr2_capture_list_generation(g->capture, list);
-    input_camera(*t);
-    static const char* const floats[]{"Jitter.Offset.X", "Jitter.Offset.Y", "MV.Scale.X", "MV.Scale.Y",
-        "DLSS.Pre.Exposure", "DLSS.Exposure.Scale", "FrameTimeDeltaInMsec"};
-    for (const auto* key : floats) {
-        float value{};
-        if (ngx_get(parameters, 14, key, value) && std::isfinite(value)) t->scalars.emplace_back(key, value);
-        else t->refusals.emplace_back(std::string("scalar_unavailable:") + key);
+    if (!rsf_rdr2_capture_begin_input(g->capture, list, handle, &id)) return;
+    FinishInput finish;
+    input_camera(id);
+    for (uint32_t index = 0;; ++index) {
+        bool floating{};
+        const auto* key = rsf_rdr2_capture_input_scalar_key(index, &floating);
+        if (!key) break;
+        if (floating) {
+            float value{};
+            const bool available = ngx_get(parameters, 14, key, value);
+            rsf_rdr2_capture_input_scalar(g->capture, &id, index, value, available);
+        } else {
+            uint32_t value{}; int32_t alternate{};
+            if (ngx_get(parameters, 12, key, value))
+                rsf_rdr2_capture_input_scalar(g->capture, &id, index, value, true);
+            else {
+                const bool available = ngx_get(parameters, 11, key, alternate);
+                rsf_rdr2_capture_input_scalar(g->capture, &id, index, alternate, available);
+            }
+        }
     }
-    static const char* const integers[]{"Reset", "DLSS.Render.Subrect.Dimensions.Width", "DLSS.Render.Subrect.Dimensions.Height",
-        "DLSS.Input.Color.Subrect.Base.X", "DLSS.Input.Color.Subrect.Base.Y", "DLSS.Input.Depth.Subrect.Base.X",
-        "DLSS.Input.Depth.Subrect.Base.Y", "DLSS.Input.MV.Subrect.Base.X", "DLSS.Input.MV.Subrect.Base.Y",
-        "DLSS.Output.Subrect.Base.X", "DLSS.Output.Subrect.Base.Y"};
-    for (const auto* key : integers) {
-        uint32_t value{}; int32_t alternate{};
-        if (ngx_get(parameters, 12, key, value)) t->scalars.emplace_back(key, value);
-        else if (ngx_get(parameters, 11, key, alternate)) t->scalars.emplace_back(key, alternate);
-        else t->refusals.emplace_back(std::string("scalar_unavailable:") + key);
-    }
-    input_resource(list, parameters, "Color", "color", *t, true);
-    input_resource(list, parameters, "Depth", "depth", *t, true);
-    input_resource(list, parameters, "MotionVectors", "motion", *t, true);
-    input_resource(list, parameters, "ExposureTexture", "exposure", *t, false);
-    g->temporal.push_back(t); evaluating = std::move(t); rsf_rdr2_capture_begin_input(g->capture);
+    input_resource(list, parameters, id, RSF_RDR2_CAPTURE_COLOR, "Color", "color");
+    input_resource(list, parameters, id, RSF_RDR2_CAPTURE_DEPTH, "Depth", "depth");
+    input_resource(list, parameters, id, RSF_RDR2_CAPTURE_MOTION, "MotionVectors", "motion");
+    input_resource(list, parameters, id, RSF_RDR2_CAPTURE_EXPOSURE, "ExposureTexture", "exposure", false);
+    finish.pending = !rsf_rdr2_capture_commit_input(g->capture);
 }
 catch (...) { log("NGX input observation failed"); }
 void snapshot(ID3D12GraphicsCommandList* list, UINT vertices, UINT instances, void* caller) noexcept try
@@ -616,7 +601,7 @@ void color_space_set(void* pointer, uint32_t space) noexcept try
 {
     auto* key = identity(pointer);
     std::lock_guard<std::mutex> lock(g->mutex);
-    auto& state = g->presentation[key]; state.color_space = space; state.color_space_set = true;
+    rsf_rdr2_capture_record_color_space(g->capture, key, space);
 }
 catch (...) { log("color space observation failed"); }
 HRESULT STDMETHODCALLTYPE set_hdr(IDXGISwapChain4* swapchain, DXGI_HDR_METADATA_TYPE type, UINT size, void* metadata)
@@ -625,11 +610,8 @@ HRESULT STDMETHODCALLTYPE set_hdr(IDXGISwapChain4* swapchain, DXGI_HDR_METADATA_
     if (SUCCEEDED(result)) {
         auto* key = identity(swapchain);
         std::lock_guard<std::mutex> lock(g->mutex);
-        auto& state = g->presentation[key]; state.metadata_type = type; state.metadata.clear();
-        if (metadata && size <= 1024) {
-            const auto* bytes = static_cast<const unsigned char*>(metadata);
-            state.metadata.assign(bytes, bytes + size);
-        }
+        rsf_rdr2_capture_record_hdr(g->capture, key, static_cast<uint32_t>(type),
+            static_cast<const uint8_t*>(metadata), size);
     }
     return result;
 }
@@ -643,8 +625,7 @@ void swapchain_created(void* pointer) noexcept try
     if (SUCCEEDED(swapchain->GetDesc(&desc))) {
         auto* key = identity(swapchain);
         std::lock_guard<std::mutex> lock(g->mutex);
-        auto& state = g->presentation[key]; state = {};
-        state.format = desc.BufferDesc.Format; state.width = desc.BufferDesc.Width; state.height = desc.BufferDesc.Height;
+        rsf_rdr2_capture_reset_presentation(g->capture, key);
     }
 }
 catch (...) { log("swapchain observation failed"); }
@@ -716,13 +697,13 @@ void before_present(void* pointer) noexcept try
     if (rsf_rdr2_capture_can_arm(g->capture, g->shots.empty())) {
         DXGI_SWAP_CHAIN_DESC desc{};
         if (FAILED(swapchain->GetDesc(&desc))) return;
-        auto presentation = g->presentation[identity(swapchain)];
+        auto* key = identity(swapchain);
         if (!rsf_rdr2_capture_gpu_arm_backbuffers(g->capture, swapchain, desc.BufferCount, &gpu_ops)) return;
-        rsf_rdr2_capture_arm(g->capture, GetTickCount64());
-        g->tail.reset(); g->temporal.clear();
-        g->captured_presentation = std::move(presentation);
-        g->captured_presentation.format = desc.BufferDesc.Format;
-        g->captured_presentation.width = desc.BufferDesc.Width; g->captured_presentation.height = desc.BufferDesc.Height;
+        const rsf_rdr2_capture_presentation_desc descriptor{
+            static_cast<uint32_t>(desc.BufferDesc.Format), desc.BufferDesc.Width, desc.BufferDesc.Height,
+        };
+        rsf_rdr2_capture_arm(g->capture, GetTickCount64(), key, &descriptor);
+        g->tail.reset();
         rsf_rdr2_request_camera_capture();
         log("capture %u armed", capture_progress().sequence);
     }
@@ -751,37 +732,6 @@ bool write_shot(const Shot& s) noexcept
     const D3D12_RANGE empty{0, 0};
     s.buffer()->Unmap(0, &empty);
     return ok;
-}
-bool write_bundle(const DrawEvent* draws, size_t draw_count) noexcept
-{
-    const auto* directory = reinterpret_cast<const uint16_t*>(g->directory);
-    const auto directory_len = wcslen(g->directory);
-    const auto pid = GetCurrentProcessId();
-    for (const auto& t : g->temporal) {
-        if (!t->camera_valid) continue;
-        if (!rsf_rdr2_capture_write_camera(directory, directory_len, pid, t->sequence, t->index,
-                t->camera.data(), t->camera.size()))
-            rsf_rdr2_capture_write_failed(g->capture);
-    }
-    const auto& presentation = g->captured_presentation;
-    const rsf_rdr2_capture_bundle bundle{
-        directory, directory_len, g->base, capture_progress(),
-        {presentation.format, presentation.width, presentation.height, presentation.color_space,
-            presentation.color_space_set, presentation.metadata_type,
-            presentation.metadata.data(), presentation.metadata.size()},
-        draws, draw_count, g->temporal.size(), pid,
-    };
-    return rsf_rdr2_capture_write_bundle(&bundle,
-        [](size_t index, rsf_rdr2_capture_temporal_view* out) noexcept {
-            const auto& t = *g->temporal[index];
-            *out = {&t, t.scalars.data(), t.scalars.size(), t.refusals.size()};
-        },
-        [](size_t index, size_t item) noexcept {
-            return g->temporal[index]->refusals[item].c_str();
-        },
-        [](double value, char* buffer, size_t size) noexcept {
-            return std::snprintf(buffer, size, "%.12g", value);
-        });
 }
 DWORD WINAPI poll(void*) noexcept
 {
@@ -819,11 +769,16 @@ DWORD WINAPI poll(void*) noexcept
         {
             std::lock_guard<std::mutex> lock(g->mutex);
             if (rsf_rdr2_capture_can_publish(g->capture, g->shots.empty())) {
-                size_t draw_count{};
-                const auto* draws = rsf_rdr2_capture_draws(g->capture, &draw_count);
-                const bool ok = write_bundle(draws, draw_count);
+                const rsf_rdr2_capture_bundle bundle{
+                    reinterpret_cast<const uint16_t*>(g->directory), wcslen(g->directory), g->base, GetCurrentProcessId(),
+                };
+                size_t draw_count{}, temporal_count{};
+                const bool ok = rsf_rdr2_capture_write_bundle(g->capture, &bundle,
+                    [](double value, char* buffer, size_t size) noexcept {
+                        return std::snprintf(buffer, size, "%.12g", value);
+                    }, &draw_count, &temporal_count);
                 const auto progress = capture_progress();
-                log("capture %u bundle saved=%d input_frames=%zu draws=%zu readbacks=%u",progress.sequence,ok,g->temporal.size(),draw_count,progress.written);
+                log("capture %u bundle saved=%d input_frames=%zu draws=%zu readbacks=%u",progress.sequence,ok,temporal_count,draw_count,progress.written);
                 rsf_rdr2_capture_published(g->capture);
                 g->tail.reset();
             }
