@@ -219,6 +219,8 @@ mod shader_patch_abi;
 #[cfg(windows)]
 mod shared_surface;
 #[cfg(windows)]
+mod sharpening_policy;
+#[cfg(windows)]
 mod sr12;
 #[cfg(windows)]
 mod sr_bridge;

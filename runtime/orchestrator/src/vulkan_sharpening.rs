@@ -7,6 +7,7 @@
 //! `sharpening_vulkan.h` resolve Vulkan functions, create and record Vulkan
 //! objects, select the SPIR-V for a mode and pack the shader constants.
 use crate::render_abi::rsf_sharpening_options as Options;
+use crate::sharpening_policy::{FILTERS, effective_mode};
 use crate::vulkan_fg_resources::{ensure_image, rsf_core_vkfg_release_image};
 use crate::vulkan_fg_resources_abi::rsf_vkfg_image as OwnedImage;
 use crate::vulkan_sharpening_abi::{
@@ -21,9 +22,6 @@ use std::ffi::{CStr, c_void};
 use std::ptr;
 
 const R16_FLOAT: u32 = 76;
-const RCAS: u32 = 1;
-const DEPTH_RCAS: u32 = 2;
-const DEPTH_DAS: u32 = 3;
 // Recordings in flight. A host that never retires its command buffers
 // exhausts the slots and keeps the vendor output.
 const MAX_SLOTS: usize = 64;
@@ -74,16 +72,6 @@ fn admit_inputs(setup: &Setup, frame: &Frame) -> bool {
                 && matches!(exposure.format, R32_FLOAT | R16_FLOAT)))
 }
 
-// Depth modes fall back to RCAS when the frame has no depth.
-fn effective_mode(mode: u32, depth: bool) -> Option<u32> {
-    match mode {
-        RCAS => Some(RCAS),
-        DEPTH_RCAS | DEPTH_DAS if depth => Some(mode),
-        DEPTH_RCAS | DEPTH_DAS => Some(RCAS),
-        _ => None,
-    }
-}
-
 fn exposure_scale(pre_exposure: f32) -> f32 {
     // Same as 1/std::max(pre, 1e-6f): NaN stays NaN and the constant
     // leaf replaces it with 1.
@@ -129,11 +117,7 @@ impl Owner {
         if !opened || unsafe { (platform.create_layouts)(leaf, &mut device.layouts) } != 0 {
             return false;
         }
-        for (pipeline, mode) in device
-            .pipelines
-            .iter_mut()
-            .zip([RCAS, DEPTH_RCAS, DEPTH_DAS])
-        {
+        for (pipeline, mode) in device.pipelines.iter_mut().zip(FILTERS) {
             if unsafe { (platform.create_pipeline)(leaf, device.layouts.pipeline, mode, pipeline) }
                 != 0
             {
