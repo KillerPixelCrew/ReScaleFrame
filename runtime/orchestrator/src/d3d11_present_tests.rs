@@ -54,6 +54,7 @@ struct Fake {
     adapter_default: u32,
     present_result: i32,
     resize_result: i32,
+    configuration_calls: usize,
     create_results: HashMap<u32, i32>,
     real_results: HashMap<u32, i32>,
     plain_result: i32,
@@ -113,6 +114,7 @@ impl Fake {
             adapter_default: XESS,
             present_result: S_OK,
             resize_result: S_OK,
+            configuration_calls: 0,
             create_results: HashMap::new(),
             real_results: HashMap::new(),
             plain_result: S_OK,
@@ -198,6 +200,7 @@ unsafe extern "C" fn p_create(
     result
 }
 unsafe extern "C" fn p_configure(_: Raw, _: *const rsf_fg_options) -> i32 {
+    with(|fake| fake.configuration_calls += 1);
     OK
 }
 unsafe extern "C" fn p_begin(_: Raw, id: u64) -> i32 {
@@ -1797,7 +1800,9 @@ fn native_resize_publishes_new_bounds_only_after_physical_success() {
     assert_eq!(result, S_OK);
     let held = unsafe { ComRef::from_owned(old) };
     let resize = || unsafe { rsf_core_d3d11p_resize(chain, 3, 320, 200, 24, 0) };
+    let configuration_calls = with(|fake| fake.configuration_calls);
     assert_eq!(resize(), DXGI_ERROR_INVALID_CALL);
+    assert_eq!(with(|fake| fake.configuration_calls), configuration_calls);
     drop(held);
     with(|fake| fake.resize_result = E_FAIL);
     assert_eq!(resize(), E_FAIL);
@@ -1840,6 +1845,10 @@ fn application_buffers_are_queryable_before_physical_creation() {
         let bridge = create();
         let chain = chain_of(bridge);
         assert_eq!(
+            unsafe { rsf_core_d3d11p_resize(chain, MAX_BUFFERS + 1, 320, 200, 0, 0) },
+            DXGI_ERROR_INVALID_CALL
+        );
+        assert_eq!(
             get_buffer(chain, MAX_BUFFERS),
             (DXGI_ERROR_INVALID_CALL, null_mut())
         );
@@ -1877,6 +1886,12 @@ fn strict_native_buffer_queries_use_dxgi_and_clear_refused_output() {
     assert_eq!(pointer, with(|fake| com_raw(&fake.backbuffer)));
     assert!(take_calls().contains(&"physical GetBuffer 2".to_owned()));
     drop(unsafe { ComRef::from_owned(pointer) });
+    assert_eq!(
+        unsafe { rsf_core_d3d11p_resize(chain, 4, 320, 200, 28, 0) },
+        S_OK
+    );
+    assert!(take_calls().contains(&"resize 4 320x200".to_owned()));
+    assert_eq!(with(|fake| fake.buffer_count), 4);
     drop(unsafe { owner(chain) }.unwrap().take_physical());
     for _ in 0..5 {
         assert_eq!(

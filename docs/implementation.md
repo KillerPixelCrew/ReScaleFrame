@@ -4,6 +4,12 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The Direct3D bridge checks resize admission before configuring the
+provider and publishes the accepted count for strict native D3D12.
+Refused oversized requests leave lazy creation pending, and an
+outstanding application-buffer lease prevents changes to FG options.
+The updated resize fixtures remain unrun.
+
 The Direct3D presentation bridge keeps replacement admission closed
 while an unpublished owner drains. It advances the provider generation
 after successful retirement. A failed drain keeps the owner retained

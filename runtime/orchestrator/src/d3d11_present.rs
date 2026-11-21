@@ -1754,13 +1754,13 @@ impl Owner {
     ) -> i32 {
         let p = self.p();
         let b = self.b();
+        if count > MAX_BUFFERS || self.faulted.load(Ordering::Acquire) {
+            return DXGI_ERROR_INVALID_CALL;
+        }
         let physical = match self.ensure_physical() {
             Ok(physical) => physical,
             Err(error) => return error,
         };
-        if count > MAX_BUFFERS || self.faulted.load(Ordering::Acquire) {
-            return DXGI_ERROR_INVALID_CALL;
-        }
         let mut facts = self.facts();
         if (width == 0 || height == 0)
             && unsafe { (p.client_size)(facts.window, &mut width, &mut height) } == 0
@@ -1778,7 +1778,7 @@ impl Owner {
         }
         let native12 = self.native12();
         let switching = switching();
-        if !native12 && self.buffers_referenced() {
+        if (!native12 || switching) && self.buffers_referenced() {
             return DXGI_ERROR_INVALID_CALL;
         }
         let provider = self.provider();
@@ -1794,9 +1794,6 @@ impl Owner {
             }
         }
         self.publish_status();
-        if native12 && switching && self.buffers_referenced() {
-            return DXGI_ERROR_INVALID_CALL;
-        }
         // With runtime switching the application renders into its own buffers, never the physical
         // chain, so the physical count stays as created (0 keeps it). Changing it under an FG
         // provider's proxy chain broke its back-buffer index after an application count change.
@@ -1818,13 +1815,13 @@ impl Owner {
         if failed(result) {
             return result;
         }
+        if count != 0 {
+            facts.buffer_count = count;
+        }
         if !native12 || switching {
             // The physical resize succeeded and the old application buffers can be retired.
             // Release them before allocating their replacements to keep the same memory budget.
             drop(self.take_application_buffers());
-            if count != 0 {
-                facts.buffer_count = count;
-            }
             facts.width = width;
             facts.height = height;
             facts.format = format;
