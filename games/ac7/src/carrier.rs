@@ -41,6 +41,7 @@ static GAME_DLL: [u16; b"ReScaleFrame.Game.AC7.dll\0".len()] =
     widen(b"ReScaleFrame.Game.AC7.dll\0");
 static WINDOW_CLASS: [u16; b"UnrealWindow\0".len()] = widen(b"UnrealWindow\0");
 static STARTUP_READY: AtomicBool = AtomicBool::new(false);
+static STARTUP_ATTEMPTED: AtomicBool = AtomicBool::new(false);
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_ac7_carrier_executable() -> *const u16 {
@@ -320,4 +321,61 @@ unsafe extern "C" fn rsf_ac7_carrier_install_decrypted(leaves: *const CarrierLea
 #[unsafe(no_mangle)]
 extern "C" fn rsf_ac7_carrier_startup_ready() -> c_ulong {
     c_ulong::from(STARTUP_READY.load(Ordering::SeqCst))
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_ac7_carrier_startup_attempted() -> c_int {
+    c_int::from(STARTUP_ATTEMPTED.load(Ordering::Relaxed))
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_ac7_carrier_set_startup_attempted(attempted: c_int) {
+    STARTUP_ATTEMPTED.store(attempted != 0, Ordering::Relaxed);
+}
+
+/// The Present owner lends the worker readiness action, synchronous observer extent query,
+/// and backend start action. The query only borrows the two output pointers for the call.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_ac7_carrier_try_auto_start(
+    enabled: c_int,
+    started: c_int,
+    ready: Option<unsafe extern "C" fn() -> c_ulong>,
+    present_extent: Option<unsafe extern "C" fn(*mut u32, *mut u32) -> c_int>,
+    start: Option<unsafe extern "C" fn()>,
+) {
+    if enabled == 0 || started != 0 || STARTUP_ATTEMPTED.load(Ordering::Relaxed) {
+        return;
+    }
+    if ready.is_none_or(|ready| unsafe { ready() } == 0) {
+        return;
+    }
+    let (Some(present_extent), Some(start)) = (present_extent, start) else {
+        return;
+    };
+    let (mut width, mut height) = (0, 0);
+    if unsafe { present_extent(&mut width, &mut height) } != 0
+        && !STARTUP_ATTEMPTED.swap(true, Ordering::Relaxed)
+    {
+        // A refusal inside start still spends the automatic attempt. Manual start is separate.
+        unsafe { start() };
+    }
+}
+
+/// Width and height point to writable dimensions from the observer. The native reader borrows
+/// the setting names for the call and keeps its existing parsing and fallback behavior.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_ac7_carrier_override_start_extent(
+    read: Option<ReadNumber>,
+    width: *mut u32,
+    height: *mut u32,
+) {
+    if let Some(read) = read
+        && !width.is_null()
+        && !height.is_null()
+    {
+        unsafe {
+            width.write(read(c"RSF_DLSS_OUTPUT_WIDTH".as_ptr(), width.read()));
+            height.write(read(c"RSF_DLSS_OUTPUT_HEIGHT".as_ptr(), height.read()));
+        }
+    }
 }

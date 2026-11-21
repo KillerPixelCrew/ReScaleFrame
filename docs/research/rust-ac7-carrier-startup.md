@@ -106,3 +106,47 @@ private table and both carriers' link and export definitions. Rust 1.94.1 format
 offline Windows Cargo metadata and whitespace checks passed. The native thread, wait, window and
 device calls, preparation bridge and compatibility activation still reside in native code.
 Compile, link, Clippy, tests and device and in-game behavior remain unverified for this cutover.
+
+## Automatic SR admission cutover from `3856821`
+
+Both carriers register the Rust readiness getter and the native `start_dlss` action. The
+D3D11 observer updates the extent from the swap chain before calling the bridge's Present hook.
+The D3D11 presentation facade also updates the observer before invoking the same hook. After
+shutdown handling, queued actions and the capture tick, the bridge calls the Rust admission
+owner with the current enable request and backend state. Rust checks readiness and the startup
+action before querying the observer. A successful query with nonzero width allows an atomic
+claim of the attempt before the native action runs. An unavailable extent leaves the attempt
+open. A refused start spends the attempt. The queued manual start calls the same action
+directly and bypasses automatic admission.
+
+The bridge uses the attempt flag for the existing waiting and refusal text. Enabling clears it
+before any quality reapply. Disabling first restores 100% render scale on the running
+compatibility path and aborts on a refused restore. A successful disable clears reinsertion,
+display and jitter before publishing and saving the setting. Completed shutdown marks the
+attempt spent after retiring the session and pipeline. The carrier's private callback table
+and the public GameSDK ABI retain their existing versions and layouts.
+
+The start action resolves the Streamline path before asking the observer for the extent again.
+Both queries use the same native status helper and the width-only availability check. Rust
+applies `RSF_DLSS_OUTPUT_WIDTH` then `RSF_DLSS_OUTPUT_HEIGHT` through the existing settings reader.
+Dimensions are pixels and the fallback for each is its freshly observed value. The same
+Streamline override and sibling fallback, shared FidelityFX directory and per-SDK overrides,
+XeSS resolution and sibling game DLL path still reach their existing native callers. The
+startup overrides do not apply to extraction or live native output resize.
+
+The bridge acquires the game's D3D11 device and starts the pipeline before asking Runtime to
+start a prepared native session. Preparation wires the render pass, CPU event, scope, render
+config and log services. Successful activation publishes native ownership and leaves the
+geometry callback active without the compatibility pass, target, input and candidate callbacks.
+An absent or refused native session takes the compatibility callback path when no native owner
+has been published. The compatibility path still waits for the discovered tail and a fresh
+evaluation before automatic reinsertion. Tap or quality refusal still follows the existing
+native cleanup sequence. Vendor selection, pacing and GPU resource handling remain in their
+existing owners.
+
+Source comparison against `3856821` covered enablement and retry, extent availability and
+override order, both Present entry points, native activation and fallback, the SDK paths, and
+the two carrier link and export definitions. Rust 1.94.1 formatting, locked offline Windows
+Cargo metadata and whitespace checks passed. Native session activation, tap installation and
+compatibility rendering remain in the bridge. Compile, link, Clippy, tests, device and game
+verification remain pending.

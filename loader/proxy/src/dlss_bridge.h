@@ -57,6 +57,8 @@ void rsf_bridge_toggle_reinsert(void);
 /* The Present callback the observer should be given, so the display above has a place to draw. */
 rsf_observer_present_fn rsf_bridge_present_hook(void);
 rsf_observer_present_event_fn rsf_bridge_present_event_hook(void);
+/* Last presenting extent reported by the observer. Width zero means no presenting size yet. */
+int rsf_bridge_present_extent(uint32_t* width, uint32_t* height);
 
 /* Streamline identity of the game this proxy is built for (Ace Combat 7, Unreal Engine 4.18.3).
    One value for the SR pipeline and the frame generation bridge, so the two never register

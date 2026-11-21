@@ -9,6 +9,7 @@
 #include <dxgi.h>
 #include <d3d11.h>
 
+#include <rescaleframe/ac7_carrier.h>
 #include <rescaleframe/ac7_view.h>
 #include <rescaleframe/ac7_motion_capture.h>
 #include <rescaleframe/ac7_velocity_pass.h>
@@ -219,7 +220,6 @@ static struct {
     int layer_unjitter;
     int ui_unjitter;
     int enabled_requested;
-    int startup_attempted;
     unsigned long enable_retry_after;
     unsigned long enable_after_evaluations;
     const char* setting_error;
@@ -2713,7 +2713,8 @@ static void fill_overlay_stats(rsf_overlay_stats* stats)
        and evaluating nothing is the normal outcome of an unjittered projection, and saying so is
        the entire reason this field exists. */
     if (!bridge.started) {
-        stats->refusal_reason = bridge.startup_attempted ? "DLSS could not start; see the log" : "Waiting for the renderer";
+        stats->refusal_reason = rsf_ac7_carrier_startup_attempted() ?
+            "DLSS could not start; see the log" : "Waiting for the renderer";
     } else if (!stats->backend_supported) {
         stats->refusal_reason = "the driver did not accept DLSS";
     } else if (pipeline.requested_backend == RSF_SR_FSR4 &&
@@ -2918,7 +2919,7 @@ void rsf_bridge_set_enabled(int enabled)
         }
     } else {
         bridge.enabled_requested = 1;
-        bridge.startup_attempted = 0;
+        rsf_ac7_carrier_set_startup_attempted(0);
         if (bridge.started && !rsf_bridge_select_quality(bridge.quality)) {
             bridge.enabled_requested = 0;
             return;
@@ -3119,11 +3120,9 @@ void rsf_bridge_request(unsigned long requests)
     InterlockedOr(&pending_requests, (LONG)requests);
 }
 
-/* The swap chain's current size, for arming extraction without the worker's view of the observer. */
-static int swapchain_extent(void* swapchain, unsigned long* width, unsigned long* height)
+int rsf_bridge_present_extent(uint32_t* width, uint32_t* height)
 {
     rsf_observer_status status;
-    (void)swapchain;
     memset(&status, 0, sizeof(status));
     status.struct_size = sizeof(status);
     if (rsf_observer_get_status(&status) != RSF_OBSERVER_OK || status.present_width == 0) {
@@ -3134,7 +3133,7 @@ static int swapchain_extent(void* swapchain, unsigned long* width, unsigned long
     return 1;
 }
 
-static void run_pending_requests(void* swapchain)
+static void run_pending_requests(void)
 {
     const LONG requests = InterlockedExchange(&pending_requests, 0);
     if (requests == 0) {
@@ -3152,9 +3151,8 @@ static void run_pending_requests(void* swapchain)
         rsf_bridge_toggle_reinsert();
     }
     if (requests & RSF_BRIDGE_REQUEST_EXTRACT) {
-        unsigned long width = 0;
-        unsigned long height = 0;
-        if (swapchain_extent(swapchain, &width, &height)) {
+        uint32_t width = 0, height = 0;
+        if (rsf_bridge_present_extent(&width, &height)) {
             rsf_bridge_extract_ui(width, height);
         } else {
             say("ui extract: the presented size is not known yet");
@@ -3181,7 +3179,8 @@ static int drain_shutdown(void)
     rsf_dlss_pipeline_stop(); bridge.started = 0;
     rsf_input_dump_cancel(0);
     InterlockedExchange(&native_owner, 0); rsf_ac7_motion_capture_native_owner(0);
-    bridge.startup_attempted = 1; bridge.show = 0;
+    rsf_ac7_carrier_set_startup_attempted(1);
+    bridge.show = 0;
     InterlockedExchange(&shutdown_requested, 0);
     say("renderer shutdown completed after native command and resource retirement");
     return 1;
@@ -3204,31 +3203,24 @@ static void on_present(void* user, void* swapchain)
     }
 
     /* First, so a key pressed since the last frame acts on this one, on this thread. */
-    run_pending_requests(swapchain);
+    run_pending_requests();
     {
         char motion_prefix[640];
         if (rsf_ac7_motion_capture_present(swapchain, motion_prefix, sizeof(motion_prefix))) {
             rsf_bridge_request_dump(motion_prefix);
         }
     }
-    if (bridge.enabled_requested && !bridge.started && !bridge.startup_attempted &&
-        bridge.actions.startup_ready && bridge.actions.startup_ready() &&
-        bridge.actions.start_backend) {
-        unsigned long width = 0, height = 0;
-        if (swapchain_extent(swapchain, &width, &height)) {
-            bridge.startup_attempted = 1;
-            bridge.actions.start_backend();
-        }
-    }
+    rsf_ac7_carrier_try_auto_start(bridge.enabled_requested, bridge.started,
+        bridge.actions.startup_ready, rsf_bridge_present_extent, bridge.actions.start_backend);
     if (bridge.started && rsf_bridge_native_owned()) {
-        unsigned long width = 0, height = 0;
-        if (swapchain_extent(swapchain, &width, &height) &&
+        uint32_t width = 0, height = 0;
+        if (rsf_bridge_present_extent(&width, &height) &&
             (width != bridge.output_width || height != bridge.output_height)) {
-            const rsf_dlss_pipeline_result resized = rsf_dlss_pipeline_resize_output((uint32_t)width, (uint32_t)height, NULL, NULL);
+            const rsf_dlss_pipeline_result resized = rsf_dlss_pipeline_resize_output(width, height, NULL, NULL);
             if (resized == RSF_DLSS_PIPELINE_OK) {
                 bridge.output_width = width; bridge.output_height = height;
                 bridge.setting_error = NULL;
-                rsf_native_sr_set_surface((uint32_t)width, (uint32_t)height); publish_native_settings();
+                rsf_native_sr_set_surface(width, height); publish_native_settings();
             } else bridge.setting_error = "The backend refused the new output resolution";
         }
     }
