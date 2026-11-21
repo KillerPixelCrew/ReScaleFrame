@@ -51,15 +51,10 @@ struct Pipeline {
     ComPtr<ID3D11Buffer> constants;
 };
 
-struct Targets {
-    ComPtr<ID3D11Texture2D> depth_copy, depth, motion;
-    ComPtr<ID3D11ShaderResourceView> depth_view;
-    ComPtr<ID3D11UnorderedAccessView> depth_uav, motion_uav;
-};
-
 static_assert(sizeof(rsf_anomaly_input_constants) == 96);
 static_assert(DXGI_FORMAT_D24_UNORM_S8_UINT == 45 && DXGI_FORMAT_R24G8_TYPELESS == 44 &&
-    DXGI_FORMAT_R16G16B16A16_FLOAT == 10);
+    DXGI_FORMAT_R16G16B16A16_FLOAT == 10 && DXGI_FORMAT_R32_FLOAT == 41 && DXGI_FORMAT_R16G16_FLOAT == 34);
+static_assert(D3D11_BIND_SHADER_RESOURCE == 0x8 && D3D11_BIND_UNORDERED_ACCESS == 0x80);
 
 void* get_device(void* raw_context) noexcept {
     auto* context = static_cast<ID3D11DeviceContext*>(raw_context);
@@ -87,34 +82,38 @@ void* build(void* raw_device, rsf_anomaly_input_log log, void* user) noexcept tr
     return pipeline.release();
 } catch (...) { return nullptr; }
 
-void make_targets(void* raw_device, uint32_t width, uint32_t height, rsf_anomaly_input_targets* out) noexcept try {
-    auto* device = static_cast<ID3D11Device*>(raw_device);
-    auto targets = std::make_unique<Targets>();
-    const auto make = [&](DXGI_FORMAT format, UINT bind, ComPtr<ID3D11Texture2D>& texture) {
-        D3D11_TEXTURE2D_DESC desc{width, height, 1, 1, format, {1, 0}, D3D11_USAGE_DEFAULT, bind, 0, 0};
-        return SUCCEEDED(device->CreateTexture2D(&desc, nullptr, &texture));
-    };
-    constexpr UINT output_bind = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-    if (!make(DXGI_FORMAT_R24G8_TYPELESS, D3D11_BIND_SHADER_RESOURCE, targets->depth_copy) ||
-        !make(DXGI_FORMAT_R32_FLOAT, output_bind, targets->depth) ||
-        !make(DXGI_FORMAT_R16G16_FLOAT, output_bind, targets->motion)) return;
-    D3D11_SHADER_RESOURCE_VIEW_DESC view{};
-    view.Format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
-    view.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-    view.Texture2D.MipLevels = 1;
-    if (FAILED(device->CreateShaderResourceView(targets->depth_copy.Get(), &view, &targets->depth_view)) ||
-        FAILED(device->CreateUnorderedAccessView(targets->depth.Get(), nullptr, &targets->depth_uav)) ||
-        FAILED(device->CreateUnorderedAccessView(targets->motion.Get(), nullptr, &targets->motion_uav))) return;
-    const auto depth = targets->depth.Get();
-    const auto motion = targets->motion.Get();
-    *out = {targets.release(), depth, motion};
-} catch (...) {}
+// The Rust owner chooses each format and bind mask; these leaves keep the D3D11 descriptors.
+void* create_texture(void* raw_device, uint32_t width, uint32_t height, uint32_t format, uint32_t bind) noexcept {
+    D3D11_TEXTURE2D_DESC desc{width, height, 1, 1, static_cast<DXGI_FORMAT>(format), {1, 0},
+        D3D11_USAGE_DEFAULT, bind, 0, 0};
+    ComPtr<ID3D11Texture2D> texture;
+    if (FAILED(static_cast<ID3D11Device*>(raw_device)->CreateTexture2D(&desc, nullptr, &texture))) return nullptr;
+    return texture.Detach();
+}
 
-uint32_t dispatch(void* raw_context, void* raw_pipeline, void* raw_targets, void* depth,
+void* create_depth_view(void* raw_device, void* depth_copy) noexcept {
+    D3D11_SHADER_RESOURCE_VIEW_DESC desc{};
+    desc.Format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+    desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+    desc.Texture2D.MipLevels = 1;
+    ComPtr<ID3D11ShaderResourceView> view;
+    if (FAILED(static_cast<ID3D11Device*>(raw_device)->CreateShaderResourceView(
+        static_cast<ID3D11Texture2D*>(depth_copy), &desc, &view))) return nullptr;
+    return view.Detach();
+}
+
+void* create_unordered_view(void* raw_device, void* texture) noexcept {
+    ComPtr<ID3D11UnorderedAccessView> view;
+    if (FAILED(static_cast<ID3D11Device*>(raw_device)->CreateUnorderedAccessView(
+        static_cast<ID3D11Texture2D*>(texture), nullptr, &view))) return nullptr;
+    return view.Detach();
+}
+
+uint32_t dispatch(void* raw_context, void* raw_pipeline, const rsf_anomaly_input_targets* raw_targets, void* depth,
     void* motion_view, const rsf_anomaly_input_constants* values, uint32_t groups_x, uint32_t groups_y) noexcept {
     auto* context = static_cast<ID3D11DeviceContext*>(raw_context);
     const auto& pipeline = *static_cast<const Pipeline*>(raw_pipeline);
-    const auto& targets = *static_cast<const Targets*>(raw_targets);
+    const auto& targets = *raw_targets;
     rsf_d3d11_state state{};
     if (!rsf_d3d11_state_save(context, &state)) return 0;
     D3D11_MAPPED_SUBRESOURCE mapped{};
@@ -125,9 +124,11 @@ uint32_t dispatch(void* raw_context, void* raw_pipeline, void* raw_targets, void
     std::memcpy(mapped.pData, values, sizeof(*values));
     context->Unmap(pipeline.constants.Get(), 0);
     context->SetPredication(nullptr, FALSE);
-    context->CopyResource(targets.depth_copy.Get(), static_cast<ID3D11Texture2D*>(depth));
-    ID3D11ShaderResourceView* views[]{targets.depth_view.Get(), static_cast<ID3D11ShaderResourceView*>(motion_view)};
-    ID3D11UnorderedAccessView* uavs[]{targets.depth_uav.Get(), targets.motion_uav.Get()};
+    context->CopyResource(static_cast<ID3D11Texture2D*>(targets.depth_copy), static_cast<ID3D11Texture2D*>(depth));
+    ID3D11ShaderResourceView* views[]{static_cast<ID3D11ShaderResourceView*>(targets.depth_view),
+        static_cast<ID3D11ShaderResourceView*>(motion_view)};
+    ID3D11UnorderedAccessView* uavs[]{static_cast<ID3D11UnorderedAccessView*>(targets.depth_uav),
+        static_cast<ID3D11UnorderedAccessView*>(targets.motion_uav)};
     ID3D11Buffer* buffers[]{pipeline.constants.Get()};
     context->CSSetShader(pipeline.shader.Get(), nullptr, 0);
     context->CSSetShaderResources(0, 2, views);
@@ -150,8 +151,9 @@ constexpr rsf_anomaly_input_platform platform{
         static_cast<ID3D11Texture2D*>(texture), static_cast<ID3D11Device*>(device))); },
     build,
     [](void* pipeline) { delete static_cast<Pipeline*>(pipeline); },
-    make_targets,
-    [](void* targets) { delete static_cast<Targets*>(targets); },
+    create_texture,
+    create_depth_view,
+    create_unordered_view,
     rsf_d3d11_create_shader_view,
     dispatch,
     sr::first_person_depth_limit,

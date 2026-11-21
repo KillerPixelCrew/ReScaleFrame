@@ -60,12 +60,18 @@ static_assert(sizeof(rsf_d3d11_reduced_frame) == 56 && offsetof(rsf_d3d11_reduce
     offsetof(rsf_d3d11_reduced_frame, temporal_result) == 48);
 static_assert(sizeof(rsf_d3d11_sampler_bias) == 160 && offsetof(rsf_d3d11_sampler_bias, slot_mask) == 144 &&
     offsetof(rsf_d3d11_sampler_bias, applied_mask) == 152);
-static_assert(sizeof(rsf_d3d11h_strings) == 64 && sizeof(rsf_d3d11h_bridge) == 64 &&
+static_assert(sizeof(rsf_d3d11h_strings) == 64 &&
     sizeof(rsf_d3d11h_pipeline_start) == 48 && sizeof(rsf_d3d11h_pipeline_status) == 20);
-static_assert(sizeof(rsf_d3d11h_platform) == 60 * sizeof(void*) &&
-    offsetof(rsf_d3d11h_platform, wrap_native) == 15 * sizeof(void*) &&
-    offsetof(rsf_d3d11h_platform, com_release) == 18 * sizeof(void*) &&
-    offsetof(rsf_d3d11h_platform, auxiliary) == 59 * sizeof(void*));
+static_assert(sizeof(rsf_d3d11h_platform) == 68 * sizeof(void*) &&
+    offsetof(rsf_d3d11h_platform, present_install) == 9 * sizeof(void*) &&
+    offsetof(rsf_d3d11h_platform, fg_options_set) == 17 * sizeof(void*) &&
+    offsetof(rsf_d3d11h_platform, wrap_native) == 23 * sizeof(void*) &&
+    offsetof(rsf_d3d11h_platform, com_release) == 26 * sizeof(void*) &&
+    offsetof(rsf_d3d11h_platform, auxiliary) == 67 * sizeof(void*));
+// Existing Rust layouts in fg12_abi.rs and render_abi.rs.
+static_assert(sizeof(rsf_d3d11_present_setup) == 184 && alignof(rsf_d3d11_present_setup) == 8 &&
+    sizeof(rsf_native_fg_options) == 24 && alignof(rsf_native_fg_options) == 4);
+static_assert(RSF_UI_MODE_BACKBUFFER_HUDLESS == 4);
 static_assert(RSF_DUMP_VIEW_RAW == 0 && RSF_DUMP_VIEW_HDR == 3 && RSF_DUMP_VIEW_DEPTH == 4 &&
     RSF_DUMP_VIEW_DENSE_MOTION == 7 && DXGI_PRESENT_TEST == 1 && RSF_SCREEN_GAMEPLAY == 8);
 static_assert(RSF_NATIVE_SCENE_PRESENT_NONE == 0 && RSF_SR_DLSS == 1 && RSF_DLSS_OK == 0 && RSF_DLSS_PIPELINE_OK == 0);
@@ -123,33 +129,25 @@ void* chain_buffer(void* chain) noexcept
     return chain && SUCCEEDED(static_cast<IDXGISwapChain*>(chain)->GetBuffer(0, IID_PPV_ARGS(&buffer))) ? buffer : nullptr;
 }
 
-int32_t install_bridge(const rsf_d3d11h_bridge* request) noexcept try
+int present_install(const rsf_d3d11_present_setup* setup) noexcept try
 {
-    const auto& setup = *request->setup; const auto& text = *request->strings;
-    rsf_d3d11_present_setup bridge{}; bridge.struct_size = sizeof(bridge);
-    bridge.runtime_directory_utf8 = text.streamline; bridge.log = request->log; bridge.user = request->user;
-    bridge.accept_window = request->accept_window; bridge.present_event = request->present_event;
-    bridge.prepare = rsf_native_fg_prepare; bridge.retire = rsf_native_fg_retire;
-    bridge.latency_event = [](void*, const rsf_observer_present_event* event) { rsf_native_fg_present(event); };
-    rsf_native_fg_rendered_source_set(request->rendered);
-    bridge.allowed_backend_choices = request->allowed_backend_choices;
-    bridge.backend = 0; bridge.runtime_switching = 1; bridge.max_generated_frames = request->max_generated_frames;
-    bridge.depth_inverted = bridge.depth_infinite = setup.depth_inverted;
-    bridge.units_to_meters = setup.units_to_meters; bridge.ui_mode = RSF_UI_MODE_BACKBUFFER_HUDLESS;
-    bridge.fsr3_directory_utf8 = bridge.fsr4_directory_utf8 = text.fidelityfx;
-    bridge.xess_directory_utf8 = text.xess; bridge.streamline_directory_utf8 = text.streamline;
-    bridge.engine_type = setup.engine_type; bridge.engine_version_utf8 = text.engine_version;
-    bridge.project_id_utf8 = text.project;
-    const bool installed = (request->mode == 2 ? rsf_d3d11_present_prepare(&bridge) :
-        request->mode == 3 ? rsf_d3d11_present_install_scoped(&bridge) : rsf_d3d11_present_install(&bridge)) != 0;
-    if (installed) {
-        rsf_native_fg_set_log(request->log, request->user);
-        // Runtime switching starts with plain presentation and FG Off.
-        const rsf_native_fg_options off{sizeof(off), RSF_FG_OFF, 1, RSF_REFLEX_OFF, 0, 0};
-        rsf_native_fg_options_set(&off);
-    }
-    return installed;
+    return rsf_d3d11_present_install(setup);
 } catch (...) { return 0; }
+
+int present_prepare(const rsf_d3d11_present_setup* setup) noexcept try
+{
+    return rsf_d3d11_present_prepare(setup);
+} catch (...) { return 0; }
+
+int present_install_scoped(const rsf_d3d11_present_setup* setup) noexcept try
+{
+    return rsf_d3d11_present_install_scoped(setup);
+} catch (...) { return 0; }
+
+void fg_latency_event(void*, const rsf_observer_present_event* event) noexcept
+{
+    rsf_native_fg_present(event);
+}
 
 int32_t observer_install(rsf_game_log_fn log, void* user, rsf_d3d11h_present_fn present) noexcept try
 {
@@ -347,7 +345,15 @@ const rsf_d3d11h_platform& platform()
         .chain_device = chain_device,
         .chain_window = chain_window,
         .chain_buffer = chain_buffer,
-        .install_bridge = install_bridge,
+        .present_install = present_install,
+        .present_prepare = present_prepare,
+        .present_install_scoped = present_install_scoped,
+        .fg_prepare = rsf_native_fg_prepare,
+        .fg_retire = rsf_native_fg_retire,
+        .fg_latency_event = fg_latency_event,
+        .fg_rendered_source_set = rsf_native_fg_rendered_source_set,
+        .fg_set_log = rsf_native_fg_set_log,
+        .fg_options_set = rsf_native_fg_options_set,
         .observer_install = observer_install,
         .present_is_owner = present_is_owner,
         .chain_dispatch = chain_dispatch,

@@ -5,9 +5,10 @@
 #![allow(non_camel_case_types)]
 
 use crate::auxiliary_sr_abi::{rsf_aux_platform, rsf_d3d11_auxiliary_surface};
+use crate::fg12_abi::{rsf_d3d11_present_setup, rsf_streamline_host};
 use crate::native_sr_abi::rsf_motion_decode_params;
 use crate::overlay_abi::rsf_overlay_service_setup;
-use crate::render_abi::rsf_render_settings;
+use crate::render_abi::{rsf_backend_log_fn, rsf_native_fg_options, rsf_render_settings};
 use crate::scene_abi::{rsf_native_present_record, rsf_observer_present_event};
 use rsf_game_sys::{rsf_frame_record, rsf_game_cpu_event, rsf_game_log_fn, rsf_game_render_pass};
 use std::ffi::{c_char, c_int, c_void};
@@ -208,20 +209,6 @@ pub(crate) struct rsf_d3d11h_strings {
 }
 
 #[repr(C)]
-pub(crate) struct rsf_d3d11h_bridge {
-    pub mode: u32,
-    pub rendered: u32,
-    pub allowed_backend_choices: u32,
-    pub max_generated_frames: u32,
-    pub setup: *const rsf_d3d11_host_setup,
-    pub strings: *const rsf_d3d11h_strings,
-    pub log: rsf_game_log_fn,
-    pub user: *mut c_void,
-    pub accept_window: AcceptWindow,
-    pub present_event: PresentEvent,
-}
-
-#[repr(C)]
 pub(crate) struct rsf_d3d11h_pipeline_start {
     pub output_width: u32,
     pub output_height: u32,
@@ -257,7 +244,16 @@ pub(crate) struct rsf_d3d11h_platform {
     pub chain_device: unsafe extern "C" fn(Raw) -> Raw,
     pub chain_window: unsafe extern "C" fn(Raw) -> Raw,
     pub chain_buffer: unsafe extern "C" fn(Raw) -> Raw,
-    pub install_bridge: unsafe extern "C" fn(*const rsf_d3d11h_bridge) -> i32,
+    pub present_install: unsafe extern "C" fn(*const rsf_d3d11_present_setup) -> c_int,
+    pub present_prepare: unsafe extern "C" fn(*const rsf_d3d11_present_setup) -> c_int,
+    pub present_install_scoped: unsafe extern "C" fn(*const rsf_d3d11_present_setup) -> c_int,
+    pub fg_prepare:
+        unsafe extern "C" fn(Raw, Raw, Raw, Raw, Raw, *mut rsf_streamline_host, Raw, u32),
+    pub fg_retire: unsafe extern "C" fn(Raw, Raw),
+    pub fg_latency_event: unsafe extern "C" fn(Raw, *const rsf_observer_present_event),
+    pub fg_rendered_source_set: unsafe extern "C" fn(u32),
+    pub fg_set_log: unsafe extern "C" fn(rsf_backend_log_fn, Raw),
+    pub fg_options_set: unsafe extern "C" fn(*const rsf_native_fg_options),
     pub observer_install: unsafe extern "C" fn(rsf_game_log_fn, Raw, PresentEvent) -> i32,
     pub present_is_owner: unsafe extern "C" fn(Raw) -> i32,
     pub chain_dispatch: unsafe extern "C" fn(*mut rsf_d3d11_chain_dispatch),
@@ -351,11 +347,12 @@ const _: () = {
     assert!(offset_of!(rsf_d3d11_sampler_bias, slot_mask) == 144);
     assert!(offset_of!(rsf_d3d11_sampler_bias, applied_mask) == 152);
     assert!(size_of::<rsf_d3d11h_strings>() == 64);
-    assert!(size_of::<rsf_d3d11h_bridge>() == 64);
     assert!(size_of::<rsf_d3d11h_pipeline_start>() == 48);
     assert!(size_of::<rsf_d3d11h_pipeline_status>() == 20);
-    assert!(size_of::<rsf_d3d11h_platform>() == 60 * 8);
-    assert!(offset_of!(rsf_d3d11h_platform, wrap_native) == 15 * 8);
-    assert!(offset_of!(rsf_d3d11h_platform, com_release) == 18 * 8);
-    assert!(offset_of!(rsf_d3d11h_platform, auxiliary) == 59 * 8);
+    assert!(size_of::<rsf_d3d11h_platform>() == 68 * 8);
+    assert!(offset_of!(rsf_d3d11h_platform, present_install) == 9 * 8);
+    assert!(offset_of!(rsf_d3d11h_platform, fg_options_set) == 17 * 8);
+    assert!(offset_of!(rsf_d3d11h_platform, wrap_native) == 23 * 8);
+    assert!(offset_of!(rsf_d3d11h_platform, com_release) == 26 * 8);
+    assert!(offset_of!(rsf_d3d11h_platform, auxiliary) == 67 * 8);
 };

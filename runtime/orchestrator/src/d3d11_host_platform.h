@@ -4,6 +4,7 @@
 #include <wchar.h>
 #include <rescaleframe/d3d11_host.h>
 #include <rescaleframe/d3d11_observer.h>
+#include <rescaleframe/native_fg.h>
 #include <rescaleframe/native_window.h>
 #include <rescaleframe/overlay_api.h>
 #include <rescaleframe/render_frontend.h>
@@ -22,16 +23,6 @@ typedef struct rsf_d3d11h_strings {
     const char *streamline, *fidelityfx, *xess, *captures;
     const char *identity, *fingerprint, *engine_version, *project;
 } rsf_d3d11h_strings;
-
-typedef struct rsf_d3d11h_bridge {
-    uint32_t mode, rendered, allowed_backend_choices, max_generated_frames;
-    const rsf_d3d11_host_setup* setup; /* numeric metadata; strings come from below */
-    const rsf_d3d11h_strings* strings;
-    rsf_game_log_fn log;
-    void* user;
-    int (*accept_window)(void* user, void* window);
-    void (*present_event)(void* user, const rsf_observer_present_event*);
-} rsf_d3d11h_bridge;
 
 typedef struct rsf_d3d11h_pipeline_start {
     uint32_t output_width, output_height, quality, reserved;
@@ -58,8 +49,18 @@ typedef struct rsf_d3d11h_platform {
     void* (*chain_device)(void* chain);
     void* (*chain_window)(void* chain);
     void* (*chain_buffer)(void* chain);
-    /* Presentation bridge, Present observation and owned-chain continuation. */
-    int32_t (*install_bridge)(const rsf_d3d11h_bridge*);
+    /* Presentation bridge effects and callbacks. */
+    int (*present_install)(const rsf_d3d11_present_setup*);
+    int (*present_prepare)(const rsf_d3d11_present_setup*);
+    int (*present_install_scoped)(const rsf_d3d11_present_setup*);
+    void (*fg_prepare)(void* user, void* chain11, void* context11, void* list12, void* backbuffer12,
+        rsf_streamline_host*, void* provider, uint32_t sync_interval);
+    void (*fg_retire)(void* user, void* provider);
+    rsf_d3d11h_present_fn fg_latency_event;
+    void (*fg_rendered_source_set)(uint32_t enabled);
+    void (*fg_set_log)(rsf_backend_log_fn, void* user);
+    void (*fg_options_set)(const rsf_native_fg_options*);
+    /* Present observation and owned-chain continuation. */
     int32_t (*observer_install)(rsf_game_log_fn, void* user, rsf_d3d11h_present_fn);
     int32_t (*present_is_owner)(void* chain);
     void (*chain_dispatch)(rsf_d3d11_chain_dispatch*);

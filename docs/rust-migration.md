@@ -265,6 +265,12 @@ allocation. Pinned formatting, locked Windows metadata and
 whitespace checks passed. The linked and DLL SR12 fixtures remain
 unrun.
 
+The D3D11 host now owns bridge setup and installation ordering through
+the existing presentation C ABI. Anomaly's FG input owner holds all
+six staging resources and releases partial allocations in reverse
+order. The FG private binding regenerated identically. [D3D11 bridge installation](research/rust-d3d11-host-bridge-install.md) ·
+[Anomaly FG resources](research/rust-anomaly-fg-stage.md)
+
 The legacy D3D11 Streamline SR owner now selects the required
 interposer and DLSS feature lookups in Rust. It shares the seven
 common lookups and adds the five owner-only lookups for a session

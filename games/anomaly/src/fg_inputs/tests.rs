@@ -1,15 +1,18 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use std::cell::Cell;
-use std::ptr::NonNull;
+use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
+
+type Entry = (&'static str, u32);
 
 #[derive(Default)]
 struct Context {
     builds: Cell<u32>,
-    allocations: Cell<u32>,
-    released_targets: Cell<u32>,
+    generation: Cell<u32>,
+    created: RefCell<Vec<Entry>>,
+    released: RefCell<Vec<Entry>>,
+    fail_at: Cell<Option<&'static str>>,
     submissions: Cell<u32>,
-    fail_resize: Cell<bool>,
     last_motion: Cell<f32>,
 }
 
@@ -18,11 +21,60 @@ struct Texture {
     desc: Description,
 }
 
+/// A fake staging texture or view. Only these are counted when released.
+struct Resource {
+    context: *const Context,
+    label: &'static str,
+    generation: u32,
+}
+
+thread_local! {
+    static LIVE: RefCell<HashSet<usize>> = RefCell::default();
+}
+
+fn context(device: *mut c_void) -> &'static Context {
+    unsafe { &*device.cast::<Context>() }
+}
+
+fn label(object: *mut c_void) -> &'static str {
+    if LIVE.with_borrow(|live| live.contains(&(object as usize))) {
+        unsafe { (*object.cast::<Resource>()).label }
+    } else {
+        ""
+    }
+}
+
+fn lease_resource(device: *mut c_void, label: &'static str) -> *mut c_void {
+    let state = context(device);
+    if state.fail_at.get() == Some(label) {
+        return ptr::null_mut();
+    }
+    let generation = state.generation.get();
+    state.created.borrow_mut().push((label, generation));
+    let resource = Box::into_raw(Box::new(Resource {
+        context: state,
+        label,
+        generation,
+    }))
+    .cast::<c_void>();
+    LIVE.with_borrow_mut(|live| live.insert(resource as usize));
+    resource
+}
+
 unsafe extern "C" fn device(context: *mut c_void) -> *mut c_void {
     context
 }
 
-unsafe extern "C" fn release(_: *mut c_void) {}
+unsafe extern "C" fn release(object: *mut c_void) {
+    if LIVE.with_borrow_mut(|live| live.remove(&(object as usize))) {
+        let resource = unsafe { Box::from_raw(object.cast::<Resource>()) };
+        let state = unsafe { &*resource.context };
+        state
+            .released
+            .borrow_mut()
+            .push((resource.label, resource.generation));
+    }
+}
 
 unsafe extern "C" fn describe(texture: *mut c_void, out: *mut Description) {
     unsafe { out.write((*texture.cast::<Texture>()).desc) };
@@ -33,28 +85,48 @@ unsafe extern "C" fn same_device(texture: *mut c_void, device: *mut c_void) -> u
 }
 
 unsafe extern "C" fn build(device: *mut c_void, _: Log, _: *mut c_void) -> *mut c_void {
-    let state = unsafe { &*device.cast::<Context>() };
+    let state = context(device);
     state.builds.set(state.builds.get() + 1);
     device
 }
 
-unsafe extern "C" fn surfaces(device: *mut c_void, _: u32, _: u32, out: *mut Targets) {
-    let state = unsafe { &*device.cast::<Context>() };
-    state.allocations.set(state.allocations.get() + 1);
-    if !state.fail_resize.get() {
-        unsafe {
-            out.write(Targets {
-                resources: device,
-                depth: NonNull::<u8>::dangling().as_ptr().cast(),
-                motion: NonNull::<u16>::dangling().as_ptr().cast(),
-            })
-        };
+unsafe extern "C" fn texture(
+    device: *mut c_void,
+    width: u32,
+    height: u32,
+    format: u32,
+    bind: u32,
+) -> *mut c_void {
+    let state = context(device);
+    let output = BIND_SHADER_RESOURCE | BIND_UNORDERED_ACCESS;
+    let (label, expected) = match format {
+        R24G8_TYPELESS => {
+            state.generation.set(state.generation.get() + 1);
+            ("depth_copy", BIND_SHADER_RESOURCE)
+        }
+        R32_FLOAT => ("depth", output),
+        RG16_FLOAT => ("motion", output),
+        _ => return ptr::null_mut(),
+    };
+    if bind != expected || width == 0 || height == 0 {
+        return ptr::null_mut();
     }
+    lease_resource(device, label)
 }
 
-unsafe extern "C" fn release_surfaces(resources: *mut c_void) {
-    let state = unsafe { &*resources.cast::<Context>() };
-    state.released_targets.set(state.released_targets.get() + 1);
+unsafe extern "C" fn depth_view(device: *mut c_void, depth_copy: *mut c_void) -> *mut c_void {
+    if label(depth_copy) != "depth_copy" {
+        return ptr::null_mut();
+    }
+    lease_resource(device, "depth_view")
+}
+
+unsafe extern "C" fn unordered_view(device: *mut c_void, texture: *mut c_void) -> *mut c_void {
+    match label(texture) {
+        "depth" => lease_resource(device, "depth_uav"),
+        "motion" => lease_resource(device, "motion_uav"),
+        _ => ptr::null_mut(),
+    }
 }
 
 unsafe extern "C" fn motion_view(_: *mut c_void, texture: *mut c_void) -> *mut c_void {
@@ -64,23 +136,43 @@ unsafe extern "C" fn motion_view(_: *mut c_void, texture: *mut c_void) -> *mut c
 unsafe extern "C" fn dispatch(
     context: *mut c_void,
     _: *mut c_void,
-    _: *mut c_void,
+    targets: *const Targets,
     _: *mut c_void,
     motion: *mut c_void,
     values: *const Constants,
     groups_x: u32,
     groups_y: u32,
 ) -> u32 {
-    let state = unsafe { &*context.cast::<Context>() };
+    let state = self::context(context);
     let values = unsafe { &*values };
+    let targets = unsafe { &*targets };
+    let bound = [
+        targets.depth_copy,
+        targets.depth,
+        targets.motion,
+        targets.depth_view,
+        targets.depth_uav,
+        targets.motion_uav,
+    ]
+    .map(label);
     state.submissions.set(state.submissions.get() + 1);
     state.last_motion.set(values.has_motion);
     u32::from(
-        (values.has_motion == 0.0) == motion.is_null()
+        bound == SET
+            && (values.has_motion == 0.0) == motion.is_null()
             && groups_x == (values.size[0] as u32).div_ceil(8)
             && groups_y == (values.size[1] as u32).div_ceil(8),
     )
 }
+
+const SET: [&str; 6] = [
+    "depth_copy",
+    "depth",
+    "motion",
+    "depth_view",
+    "depth_uav",
+    "motion_uav",
+];
 
 const PLATFORM: Platform = Platform {
     device: Some(device),
@@ -89,13 +181,27 @@ const PLATFORM: Platform = Platform {
     same_device: Some(same_device),
     build: Some(build),
     release_pipeline: Some(release),
-    targets: Some(surfaces),
-    release_targets: Some(release_surfaces),
+    texture: Some(texture),
+    depth_view: Some(depth_view),
+    unordered_view: Some(unordered_view),
     motion_view: Some(motion_view),
     dispatch: Some(dispatch),
     first_person_limit: 0.02,
     validity_threshold: 0.5,
 };
+
+fn created(generation: u32, count: usize) -> Vec<Entry> {
+    SET[..count]
+        .iter()
+        .map(|&label| (label, generation))
+        .collect()
+}
+
+fn released(generation: u32, count: usize) -> Vec<Entry> {
+    let mut entries = created(generation, count);
+    entries.reverse();
+    entries
+}
 
 fn make_depth(device: *mut c_void) -> Texture {
     Texture {
@@ -131,6 +237,7 @@ fn foreign_depth_refuses_the_copy_and_foreign_motion_falls_back_to_camera_motion
         Result::Resources
     );
     assert_eq!(state.submissions.get(), 0);
+    assert!(state.created.borrow().is_empty());
     depth.owner = context;
     // Refresh the pointer after modifying the borrowed texture.
     let mut frame = frame;
@@ -141,11 +248,14 @@ fn foreign_depth_refuses_the_copy_and_foreign_motion_falls_back_to_camera_motion
     );
     assert_eq!(state.submissions.get(), 1);
     assert_eq!(state.last_motion.get(), 0.0);
-    assert!(owner.outputs().is_some());
+    let outputs = owner.outputs().expect("published outputs");
+    assert_eq!(outputs.map(label), ["depth", "motion"]);
+    drop(owner);
+    assert_eq!(*state.released.borrow(), released(1, 6));
 }
 
 #[test]
-fn failed_resize_keeps_the_previous_generation_for_retry_without_publishing_it() {
+fn failed_resize_releases_the_partial_set_and_keeps_the_previous_one_for_retry() {
     let state = Context::default();
     let context = ptr::from_ref(&state).cast_mut().cast();
     let mut depth = make_depth(context);
@@ -161,29 +271,36 @@ fn failed_resize_keeps_the_previous_generation_for_retry_without_publishing_it()
         owner.run(context, &frame, None, ptr::null_mut()),
         Result::Ok
     );
+    assert_eq!(*state.created.borrow(), created(1, 6));
     frame.width = 12;
     depth.desc.width = frame.width;
     frame.depth = ptr::from_mut(&mut depth).cast();
-    state.fail_resize.set(true);
+    state.fail_at.set(Some("motion_uav"));
     assert_eq!(
         owner.run(context, &frame, None, ptr::null_mut()),
         Result::Resources
     );
     assert!(owner.outputs().is_none());
-    assert_eq!(state.released_targets.get(), 0);
-    state.fail_resize.set(false);
+    // Only the partial set drops, newest first; the older complete set stays leased.
+    assert_eq!(*state.released.borrow(), released(2, 5));
+    state.fail_at.set(None);
     assert_eq!(
         owner.run(context, &frame, None, ptr::null_mut()),
         Result::Ok
     );
+    assert_eq!(state.builds.get(), 1);
+    let mut expected_created = created(1, 6);
+    expected_created.extend(created(2, 5));
+    expected_created.extend(created(3, 6));
+    assert_eq!(*state.created.borrow(), expected_created);
+    let mut expected_released = released(2, 5);
+    expected_released.extend(released(1, 6));
+    assert_eq!(*state.released.borrow(), expected_released);
     assert_eq!(
-        (
-            state.builds.get(),
-            state.allocations.get(),
-            state.released_targets.get()
-        ),
-        (1, 3, 1)
+        owner.outputs().expect("published outputs").map(label),
+        ["depth", "motion"]
     );
     drop(owner);
-    assert_eq!(state.released_targets.get(), 2);
+    expected_released.extend(released(3, 6));
+    assert_eq!(*state.released.borrow(), expected_released);
 }

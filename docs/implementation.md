@@ -843,6 +843,14 @@ and remains unrun. Build and live observer verification remain open.
 
 ## Rust orchestrator and first Anomaly port
 
+The D3D11 host now constructs the bridge setup, chooses the install
+mode and publishes startup FG Off in Rust. Anomaly's Rust FG input
+owner keeps all six staging textures and views and retains the
+previous complete set when a resize allocation fails. The private
+FG binding regenerated identically. Both device and game paths
+remain unrun. [Bridge installation](research/rust-d3d11-host-bridge-install.md) ·
+[Anomaly FG stage](research/rust-anomaly-fg-stage.md)
+
 D3D12 SR now owns the constant SDR exposure texture and upload row
 through allocation, initialization and rollback in Rust. A null
 mapped address is refused without publishing either reference. The

@@ -71,22 +71,31 @@ const _: () = {
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct rsf_anomaly_input_targets {
-    pub resources: *mut ::core::ffi::c_void,
+    pub depth_copy: *mut ::core::ffi::c_void,
     pub depth: *mut ::core::ffi::c_void,
     pub motion: *mut ::core::ffi::c_void,
+    pub depth_view: *mut ::core::ffi::c_void,
+    pub depth_uav: *mut ::core::ffi::c_void,
+    pub motion_uav: *mut ::core::ffi::c_void,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
     ["Size of rsf_anomaly_input_targets"]
-        [::core::mem::size_of::<rsf_anomaly_input_targets>() - 24usize];
+        [::core::mem::size_of::<rsf_anomaly_input_targets>() - 48usize];
     ["Alignment of rsf_anomaly_input_targets"]
         [::core::mem::align_of::<rsf_anomaly_input_targets>() - 8usize];
-    ["Offset of field: rsf_anomaly_input_targets::resources"]
-        [::core::mem::offset_of!(rsf_anomaly_input_targets, resources) - 0usize];
+    ["Offset of field: rsf_anomaly_input_targets::depth_copy"]
+        [::core::mem::offset_of!(rsf_anomaly_input_targets, depth_copy) - 0usize];
     ["Offset of field: rsf_anomaly_input_targets::depth"]
         [::core::mem::offset_of!(rsf_anomaly_input_targets, depth) - 8usize];
     ["Offset of field: rsf_anomaly_input_targets::motion"]
         [::core::mem::offset_of!(rsf_anomaly_input_targets, motion) - 16usize];
+    ["Offset of field: rsf_anomaly_input_targets::depth_view"]
+        [::core::mem::offset_of!(rsf_anomaly_input_targets, depth_view) - 24usize];
+    ["Offset of field: rsf_anomaly_input_targets::depth_uav"]
+        [::core::mem::offset_of!(rsf_anomaly_input_targets, depth_uav) - 32usize];
+    ["Offset of field: rsf_anomaly_input_targets::motion_uav"]
+        [::core::mem::offset_of!(rsf_anomaly_input_targets, motion_uav) - 40usize];
 };
 impl Default for rsf_anomaly_input_targets {
     fn default() -> Self {
@@ -152,16 +161,27 @@ pub struct rsf_anomaly_input_platform {
     >,
     pub release_pipeline:
         ::core::option::Option<unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void)>,
-    pub targets: ::core::option::Option<
+    pub texture: ::core::option::Option<
         unsafe extern "C" fn(
             device: *mut ::core::ffi::c_void,
             width: u32,
             height: u32,
-            arg1: *mut rsf_anomaly_input_targets,
-        ),
+            format: u32,
+            bind: u32,
+        ) -> *mut ::core::ffi::c_void,
     >,
-    pub release_targets:
-        ::core::option::Option<unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void)>,
+    pub depth_view: ::core::option::Option<
+        unsafe extern "C" fn(
+            device: *mut ::core::ffi::c_void,
+            depth_copy: *mut ::core::ffi::c_void,
+        ) -> *mut ::core::ffi::c_void,
+    >,
+    pub unordered_view: ::core::option::Option<
+        unsafe extern "C" fn(
+            device: *mut ::core::ffi::c_void,
+            texture: *mut ::core::ffi::c_void,
+        ) -> *mut ::core::ffi::c_void,
+    >,
     pub motion_view: ::core::option::Option<
         unsafe extern "C" fn(
             device: *mut ::core::ffi::c_void,
@@ -172,7 +192,7 @@ pub struct rsf_anomaly_input_platform {
         unsafe extern "C" fn(
             context: *mut ::core::ffi::c_void,
             pipeline: *mut ::core::ffi::c_void,
-            resources: *mut ::core::ffi::c_void,
+            targets: *const rsf_anomaly_input_targets,
             depth: *mut ::core::ffi::c_void,
             motion_view: *mut ::core::ffi::c_void,
             arg1: *const rsf_anomaly_input_constants,
@@ -186,7 +206,7 @@ pub struct rsf_anomaly_input_platform {
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
     ["Size of rsf_anomaly_input_platform"]
-        [::core::mem::size_of::<rsf_anomaly_input_platform>() - 88usize];
+        [::core::mem::size_of::<rsf_anomaly_input_platform>() - 96usize];
     ["Alignment of rsf_anomaly_input_platform"]
         [::core::mem::align_of::<rsf_anomaly_input_platform>() - 8usize];
     ["Offset of field: rsf_anomaly_input_platform::device"]
@@ -201,16 +221,18 @@ const _: () = {
         [::core::mem::offset_of!(rsf_anomaly_input_platform, build) - 32usize];
     ["Offset of field: rsf_anomaly_input_platform::release_pipeline"]
         [::core::mem::offset_of!(rsf_anomaly_input_platform, release_pipeline) - 40usize];
-    ["Offset of field: rsf_anomaly_input_platform::targets"]
-        [::core::mem::offset_of!(rsf_anomaly_input_platform, targets) - 48usize];
-    ["Offset of field: rsf_anomaly_input_platform::release_targets"]
-        [::core::mem::offset_of!(rsf_anomaly_input_platform, release_targets) - 56usize];
+    ["Offset of field: rsf_anomaly_input_platform::texture"]
+        [::core::mem::offset_of!(rsf_anomaly_input_platform, texture) - 48usize];
+    ["Offset of field: rsf_anomaly_input_platform::depth_view"]
+        [::core::mem::offset_of!(rsf_anomaly_input_platform, depth_view) - 56usize];
+    ["Offset of field: rsf_anomaly_input_platform::unordered_view"]
+        [::core::mem::offset_of!(rsf_anomaly_input_platform, unordered_view) - 64usize];
     ["Offset of field: rsf_anomaly_input_platform::motion_view"]
-        [::core::mem::offset_of!(rsf_anomaly_input_platform, motion_view) - 64usize];
+        [::core::mem::offset_of!(rsf_anomaly_input_platform, motion_view) - 72usize];
     ["Offset of field: rsf_anomaly_input_platform::dispatch"]
-        [::core::mem::offset_of!(rsf_anomaly_input_platform, dispatch) - 72usize];
+        [::core::mem::offset_of!(rsf_anomaly_input_platform, dispatch) - 80usize];
     ["Offset of field: rsf_anomaly_input_platform::first_person_limit"]
-        [::core::mem::offset_of!(rsf_anomaly_input_platform, first_person_limit) - 80usize];
+        [::core::mem::offset_of!(rsf_anomaly_input_platform, first_person_limit) - 88usize];
     ["Offset of field: rsf_anomaly_input_platform::validity_threshold"]
-        [::core::mem::offset_of!(rsf_anomaly_input_platform, validity_threshold) - 84usize];
+        [::core::mem::offset_of!(rsf_anomaly_input_platform, validity_threshold) - 92usize];
 };

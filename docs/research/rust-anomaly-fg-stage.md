@@ -36,6 +36,40 @@ despite ready SR inputs and a successful Present. The next accepted
 source still carries RESET. The same test checks the exact pass order,
 source and submission IDs, and buffer and context release order.
 
+## Input staging target ownership
+
+The SR-off input pass kept its six staging objects in a native `Targets`
+bundle that Rust held as one opaque lease. `fg_inputs.rs` now holds each
+object as its own `Lease`. This is a source move with no new experiment.
+It started from `aa66153c`.
+
+| Item | Before (`fg_inputs.cpp`) | After |
+| --- | --- | --- |
+| Creation order | `make_targets`: R24G8_TYPELESS copy (SRV bind), R32_FLOAT depth and R16G16_FLOAT motion (SRV and UAV bind), then the R24_UNORM_X8_TYPELESS depth SRV and both default UAVs | `SurfaceSet::create` makes the same six calls in the same order. Rust passes the DXGI format and bind mask; the native leaves keep the typed D3D11 descriptors |
+| Partial failure | `unique_ptr<Targets>` destroyed the created `ComPtr` members in reverse declaration order | Each `?` drops the leases created so far, newest first |
+| Complete set | `release_targets` deleted the bundle: `motion_uav`, `depth_uav`, `depth_view`, `motion`, `depth`, `depth_copy` | `SurfaceSet` declares its fields in that order |
+| Resize failure | The old bundle stayed leased but unpublished | Unchanged. The new set is assigned only once complete, and the older set drops after that |
+| Publication | Bundle returned raw depth and motion pointers | `outputs()` borrows from the depth and motion leases and still requires a dispatch accepted this frame |
+| Dispatch | Cast the opaque bundle | Receives a borrowed `rsf_anomaly_input_targets` with all six handles. The shader text, binding slots, predication clear and state restore are unchanged |
+
+The private platform table replaces `targets` and `release_targets` with
+`texture`, `depth_view` and `unordered_view`. Each returns one reference
+released through the existing `release_interface`. The table grows from
+88 to 96 bytes and the borrowed targets struct is 48 bytes. Both headers
+and the Rust layout checks assert these sizes. The pipeline, motion SRV,
+device admission, shader-failure latch and every refusal result are
+unchanged. The FG stage still carries the table by pointer. The public
+GameSDK and the Runtime boundary do not change.
+
+The merge reproduced the binding byte for byte with the focused
+bindgen 0.72.1 recipe. The fake platform in `fg_inputs/tests.rs` now
+records creation and release by object and generation. It covers a full
+set, a failed `motion_uav` create that releases only the five partial
+objects, the older set staying live through that failure, and the release
+order on replacement and owner drop. The checks were pinned `rustfmt`,
+locked offline `cargo metadata` and `git diff --check`. Native builds,
+Clippy, the Rust tests, device fixtures and game runs were not run.
+
 ## Validation
 
 MSVC 19.52 x64 Debug and Release built the adapter, the FG and Stage 5 SR

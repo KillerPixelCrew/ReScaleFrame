@@ -1,19 +1,22 @@
 // SPDX-License-Identifier: MIT
 // Generic D3D11 callback host: session admission, callback leases, presentation
-// binding, SR lifecycle, reduced-frame recovery and status. Every D3D11, DXGI,
-// SDK, overlay and capture call stays behind the private platform table that
-// d3d11_host.cpp supplies with the stable exports.
+// installation and binding, SR lifecycle, reduced-frame recovery and status.
+// Every D3D11, DXGI, SDK, overlay and capture call stays behind the private
+// platform table that d3d11_host.cpp supplies with the stable exports.
 use crate::com_ref::ComRef;
 use crate::d3d11_host_abi::*;
 use crate::d3d11_host_reduced::{
     MAX_RESERVED, Products, ProductsFactory, Raw, Ticket, auxiliary_products, zeroed_pass,
 };
+use crate::fg12_abi::rsf_d3d11_present_setup;
 use crate::overlay_abi::{
     RSF_OVERLAY_API_VERSION, RSF_OVERLAY_SERVICE_OPTION_TOGGLE, RSF_OVERLAY_SR_INPUT_COLOR,
     RSF_OVERLAY_SR_INPUT_DEPTH, RSF_OVERLAY_SR_INPUT_JITTER, RSF_OVERLAY_SR_INPUT_MOTION,
     rsf_overlay_service_option, rsf_overlay_service_setup, rsf_overlay_sr_report,
 };
-use crate::render_abi::{RSF_RENDER_FRONTEND_ABI_VERSION, rsf_render_settings};
+use crate::render_abi::{
+    RSF_FG_OFF, RSF_RENDER_FRONTEND_ABI_VERSION, rsf_native_fg_options, rsf_render_settings,
+};
 use crate::scene_abi::{rsf_native_present_record, rsf_observer_present_event};
 use rsf_game_sys::{
     RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_NO_FG, RSF_GAME_ABI_VERSION,
@@ -47,6 +50,7 @@ const REFLEX_OFF: u32 = 0;
 const REFLEX_ON: u32 = 1;
 const REFLEX_BOOST: u32 = 2;
 const MAX_GENERATED_FRAMES: u32 = 15;
+const UI_MODE_BACKBUFFER_HUDLESS: u32 = 4;
 const SCREEN_GAMEPLAY: u32 = 8;
 const DXGI_PRESENT_TEST: u32 = 1;
 const SCENE_PRESENT_NONE: u32 = 0;
@@ -559,24 +563,66 @@ impl Host {
         if mode == 0 {
             return;
         }
+        let p = &self.platform;
         let rendered = self.setup.capabilities & RSF_D3D11_HOST_CAP_RENDERED_SOURCE != 0;
-        let request = rsf_d3d11h_bridge {
-            mode,
-            rendered: rendered as u32,
+        let bridge = rsf_d3d11_present_setup {
+            struct_size: size_of::<rsf_d3d11_present_setup>() as u32,
+            runtime_directory_utf8: self.strings.streamline,
+            development_runtime: 0,
+            log: Some(host_log),
+            user: self.user(),
+            accept_window: Some(host_accept_window),
+            before_present: None,
+            present_event: Some(host_present),
+            latency_event: Some(p.fg_latency_event),
+            retire: Some(p.fg_retire),
+            prepare: Some(p.fg_prepare),
+            debug_timing: 0,
+            backend: 0,
+            max_generated_frames: MAX_GENERATED_FRAMES,
+            depth_inverted: self.setup.depth_inverted,
+            depth_infinite: self.setup.depth_inverted,
+            units_to_meters: self.setup.units_to_meters,
+            runtime_switching: 1,
+            ui_mode: UI_MODE_BACKBUFFER_HUDLESS,
+            fsr3_directory_utf8: self.strings.fidelityfx,
+            fsr4_directory_utf8: self.strings.fidelityfx,
+            xess_directory_utf8: self.strings.xess,
+            streamline_directory_utf8: self.strings.streamline,
+            engine_type: self.setup.engine_type,
+            engine_version_utf8: self.strings.engine_version,
+            project_id_utf8: self.strings.project,
             allowed_backend_choices: if rendered {
                 (1 << FG_BACKEND_FSR3) | (1 << FG_BACKEND_FSR4)
             } else {
                 0
             },
-            max_generated_frames: MAX_GENERATED_FRAMES,
-            setup: &self.setup,
-            strings: &self.strings,
-            log: Some(host_log),
-            user: self.user(),
-            accept_window: Some(host_accept_window),
-            present_event: Some(host_present),
         };
-        let installed = unsafe { (self.platform.install_bridge)(&request) } != 0;
+        let install = match mode {
+            2 => p.present_prepare,
+            3 => p.present_install_scoped,
+            _ => p.present_install,
+        };
+        let installed = unsafe {
+            // The source mode is published even when the bridge refuses installation.
+            (p.fg_rendered_source_set)(u32::from(rendered));
+            install(&bridge) != 0
+        };
+        if installed {
+            // Runtime switching starts with plain presentation and FG Off.
+            let off = rsf_native_fg_options {
+                struct_size: size_of::<rsf_native_fg_options>() as u32,
+                mode: RSF_FG_OFF,
+                generated_frames: 1,
+                reflex_mode: REFLEX_OFF,
+                frame_limit_us: 0,
+                debug: 0,
+            };
+            unsafe {
+                (p.fg_set_log)(bridge.log, bridge.user);
+                (p.fg_options_set)(&off);
+            }
+        }
         self.bridge_installed.store(installed, Ordering::Release);
         self.log(match (installed, mode) {
             (false, _) => {

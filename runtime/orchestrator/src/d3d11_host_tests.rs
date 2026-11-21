@@ -4,7 +4,9 @@
 use super::*;
 use crate::auxiliary_sr_abi::rsf_aux_platform;
 use crate::com_ref::test::{Fake, add_ref, fake, raw};
+use crate::fg12_abi::rsf_streamline_host;
 use crate::native_sr_abi::rsf_motion_decode_params;
+use crate::render_abi::rsf_backend_log_fn;
 use rsf_game_sys::rsf_game_log_fn;
 use std::cell::Cell;
 
@@ -80,9 +82,25 @@ unsafe extern "C" fn window(_: Raw) -> Raw {
 unsafe extern "C" fn none(_: Raw) -> Raw {
     null_mut()
 }
-unsafe extern "C" fn refuse_bridge(_: *const rsf_d3d11h_bridge) -> i32 {
+unsafe extern "C" fn refuse_bridge(_: *const rsf_d3d11_present_setup) -> c_int {
     0
 }
+unsafe extern "C" fn fg_prepare(
+    _: Raw,
+    _: Raw,
+    _: Raw,
+    _: Raw,
+    _: Raw,
+    _: *mut rsf_streamline_host,
+    _: Raw,
+    _: u32,
+) {
+}
+unsafe extern "C" fn fg_retire(_: Raw, _: Raw) {}
+unsafe extern "C" fn fg_latency_event(_: Raw, _: *const rsf_observer_present_event) {}
+unsafe extern "C" fn fg_rendered_source_set(_: u32) {}
+unsafe extern "C" fn fg_set_log(_: rsf_backend_log_fn, _: Raw) {}
+unsafe extern "C" fn fg_options_set(_: *const rsf_native_fg_options) {}
 unsafe extern "C" fn observe(_: rsf_game_log_fn, _: Raw, _: PresentEvent) -> i32 {
     1
 }
@@ -221,7 +239,15 @@ const PLATFORM: rsf_d3d11h_platform = rsf_d3d11h_platform {
     chain_device: device_of,
     chain_window: window,
     chain_buffer: none,
-    install_bridge: refuse_bridge,
+    present_install: refuse_bridge,
+    present_prepare: refuse_bridge,
+    present_install_scoped: refuse_bridge,
+    fg_prepare,
+    fg_retire,
+    fg_latency_event,
+    fg_rendered_source_set,
+    fg_set_log,
+    fg_options_set,
     observer_install: observe,
     present_is_owner: facade,
     chain_dispatch: dispatch,
