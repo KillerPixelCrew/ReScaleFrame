@@ -8,12 +8,12 @@ use crate::motion_device_abi::{
 use crate::motion_target_abi::{
     rsf_anomaly_motion_bind_layout as BindLayout, rsf_anomaly_motion_bind_platform as BindPlatform,
 };
-use crate::shader_loader::Bytes;
+use crate::shader_loader::{Bytes, Entry, Manifest};
 use std::ffi::c_char;
 
 pub(super) type Raw = *mut std::ffi::c_void;
 pub(super) type Redraw = unsafe extern "C" fn(Raw, Raw);
-pub(super) const PLATFORM_ABI: u32 = 2;
+pub(super) const PLATFORM_ABI: u32 = 3;
 type Retire = unsafe extern "C" fn(Raw, &InstanceKey);
 
 #[repr(C)]
@@ -68,14 +68,6 @@ pub(super) struct DrawState {
 }
 
 #[repr(C)]
-pub(super) struct ShaderEntry {
-    pub entry: Raw,
-    pub name: Bytes,
-    pub stage: u8,
-    pub family: u8,
-}
-
-#[repr(C)]
 pub(super) struct ShaderResult {
     pub reflection: Raw,
     pub detail: Bytes,
@@ -96,8 +88,8 @@ impl Default for ShaderResult {
 
 #[repr(C)]
 pub(super) struct PackInfo {
-    pub namespace: Bytes,
-    pub roots: usize,
+    // Owned by the native pack and immutable until its close leaf runs.
+    pub manifest: *const Manifest,
 }
 
 #[repr(C)]
@@ -158,8 +150,7 @@ pub(super) struct Platform {
         unsafe extern "C" fn(*const c_char, Raw, u32, Raw, Raw, &mut u8, &mut Bytes) -> Raw,
     pub drop_request: unsafe extern "C" fn(Raw),
     pub copy_bytecode: unsafe extern "C" fn(Raw) -> bool,
-    pub find_entry: unsafe extern "C" fn(Raw, &[u8; 64], *mut ShaderEntry) -> bool,
-    pub prepare_shader: unsafe extern "C" fn(Raw, Raw, Raw, &mut ShaderResult),
+    pub prepare_shader: unsafe extern "C" fn(Raw, Raw, &Entry, &mut ShaderResult),
     pub drop_reflection: unsafe extern "C" fn(Raw),
     pub foliage_layout: unsafe extern "C" fn(Raw, u8, &mut FoliageLayout) -> bool,
     pub link_shaders: unsafe extern "C" fn(Raw, Raw, Raw, Raw) -> bool,
@@ -204,11 +195,11 @@ const _: () = {
     assert!(size_of::<WindowFacts>() == 56);
     assert!(size_of::<DrawFacts>() == 32);
     assert!(size_of::<ShaderObjects>() == 40);
-    assert!(size_of::<ShaderEntry>() == 32);
     assert!(size_of::<ShaderResult>() == 32);
+    assert!(size_of::<PackInfo>() == 8);
     assert!(size_of::<FoliageLayout>() == 108);
     assert!(std::mem::offset_of!(FoliageLayout, usable) == 104);
     assert!(size_of::<FrameTarget>() == 24);
-    assert!(size_of::<Platform>() == 352);
+    assert!(size_of::<Platform>() == 344);
     assert!(std::mem::offset_of!(Platform, guards) == 40);
 };

@@ -24,12 +24,14 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
-#include <map>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 #include <vector>
+
+struct rsf_anomaly_shader_admitted;
 
 namespace rsf::anomaly::motion {
 // TessHull/TessDomain: DX11\tess.hs and DX11\tess.ds of X-Ray's G-buffer tessellation pass (uber_deffer.cpp r_TessPass,
@@ -41,20 +43,41 @@ bool family_is_vertex(Family) noexcept;
 // 'v', 'p', 'h' or 'd' (the first letter of the engine's compile target); 0 for None.
 char family_stage(Family) noexcept;
 
+// Borrowed manifest text, not NUL-terminated.
+struct ManifestText {
+    const char* data;
+    std::size_t size;
+    operator std::string_view() const noexcept { return {data, size}; }
+};
+// One admitted root (rsf_anomaly_shader_entry). Rows are owned by the Rust manifest and stay valid while a Manifest
+// sharing it lives.
 struct ManifestEntry {
-    char stage{};            // 'v', 'p', 'h' or 'd'
-    Family family{};
-    std::string name;        // root file name, relative to r3 (one subdirectory allowed: dx11/tess.hs)
-    std::string original_sha256, motion_sha256;
+    ManifestText name;       // root file name, relative to r3 (one subdirectory allowed: dx11/tess.hs)
+    ManifestText original_sha256, motion_sha256;
+    char stage;              // 'v', 'p', 'h' or 'd'
+    Family family;
 };
 // Line format (tools/anomaly_motion_deploy.py):
 //   rsf-anomaly-motion-manifest 1
 //   namespace <64 hex>
 //   root <vs|ps|hs|ds> <family> <name> <original sha256> <motion sha256>
-struct Manifest {
-    std::string name_space;
-    std::map<std::string, ManifestEntry, std::less<>> by_original;   // keyed by the original root source SHA-256
+// Rust validates either form and owns the rows and their original-SHA-256 index. Copies share that immutable manifest;
+// a default Manifest is empty.
+class Manifest {
+public:
+    Manifest() noexcept = default;
+    // Takes ownership of an admitted manifest (shader_loader_platform.h).
+    explicit Manifest(rsf_anomaly_shader_admitted* owned) noexcept;
     static std::optional<Manifest> parse(std::string_view text, std::string& error);
+    std::string_view name_space() const noexcept { return name_space_; }
+    // Ordered by the original root source SHA-256.
+    std::span<const ManifestEntry> entries() const noexcept { return entries_; }
+    const ManifestEntry* find(std::string_view original_sha256) const noexcept;
+    const rsf_anomaly_shader_admitted* admitted() const noexcept { return owner_.get(); }
+private:
+    std::shared_ptr<const rsf_anomaly_shader_admitted> owner_;
+    std::string_view name_space_;
+    std::span<const ManifestEntry> entries_;
 };
 
 std::string sha256_hex(std::span<const std::byte>);

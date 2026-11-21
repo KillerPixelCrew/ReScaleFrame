@@ -3,6 +3,7 @@ mod frame;
 mod manifest;
 mod reflection;
 
+pub(crate) use manifest::{Entry, Manifest};
 use reflection::{Compatibility, Reflection, rsf_anomaly_shader_compatible};
 use std::ffi::{OsString, c_void};
 use std::fs::{self, OpenOptions};

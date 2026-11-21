@@ -45,33 +45,19 @@ struct RequestView {
 };
 rsf_anomaly_shader_identity identity(const Manifest& manifest, const ManifestEntry& entry) noexcept
 {
-    return {bytes(manifest.name_space), bytes(entry.original_sha256), bytes(entry.motion_sha256), bytes(entry.name),
+    return {bytes(manifest.name_space()), bytes(entry.original_sha256), bytes(entry.motion_sha256), bytes(entry.name),
         static_cast<uint8_t>(entry.stage)};
 }
 
-struct ManifestBuilder {
-    Manifest value;
+// Receives the single refusal reason of a manifest candidate.
+struct Refusal {
     std::string& error;
 
-    rsf_anomaly_shader_manifest_sink sink() noexcept
+    rsf_anomaly_shader_refusal sink() noexcept { return {this, report}; }
+    static void report(void* user, Bytes message) noexcept try
     {
-        return {this, add, finish};
-    }
-    static bool add(void* user, const rsf_anomaly_shader_root* root, uint8_t family) noexcept try
-    {
-        auto& manifest = static_cast<ManifestBuilder*>(user)->value;
-        ManifestEntry entry{static_cast<char>(root->stage), static_cast<Family>(family), std::string(text(root->name)),
-            std::string(text(root->original)), std::string(text(root->motion))};
-        const auto hash = entry.original_sha256;
-        return manifest.by_original.emplace(hash, std::move(entry)).second;
-    } catch (...) { return false; }
-
-    static bool finish(void* user, Bytes message, bool accepted) noexcept try
-    {
-        auto& self = *static_cast<ManifestBuilder*>(user);
-        (accepted ? self.value.name_space : self.error) = text(message);
-        return true;
-    } catch (...) { return false; }
+        static_cast<Refusal*>(user)->error = text(message);
+    } catch (...) {}
 };
 
 template<class T, class U, class Project>
@@ -217,20 +203,52 @@ const char* outcome_name(Outcome value) noexcept
     return i < std::size(names) ? names[i] : "unknown";
 }
 
+Manifest::Manifest(rsf_anomaly_shader_admitted* owned) noexcept
+{
+    if (!owned) return;
+    try {
+        owner_.reset(owned, rsf_anomaly_shader_admitted_free);
+    } catch (...) {
+        // shared_ptr frees the object itself when its control block cannot be allocated.
+        return;
+    }
+    rsf_anomaly_shader_manifest_view view{};
+    rsf_anomaly_shader_admitted_view(owned, &view);
+    name_space_ = text(view.name_space);
+    if (view.count) entries_ = {&manifest_entry(view.entries[0]), view.count};
+}
+const ManifestEntry* Manifest::find(std::string_view original_sha256) const noexcept
+{
+    const auto* row = owner_ ? rsf_anomaly_shader_admitted_find(owner_.get(), bytes(original_sha256)) : nullptr;
+    return row ? &manifest_entry(*row) : nullptr;
+}
 std::optional<Manifest> Manifest::parse(std::string_view input, std::string& error)
 {
-    ManifestBuilder builder{{}, error};
-    const auto sink = builder.sink();
-    if (!rsf_anomaly_shader_manifest(bytes(input), &sink)) return std::nullopt;
-    return std::move(builder.value);
+    Refusal refusal{error};
+    const auto sink = refusal.sink();
+    auto* admitted = rsf_anomaly_shader_manifest(bytes(input), &sink);
+    if (!admitted) return std::nullopt;
+    Manifest manifest(admitted);
+    if (!manifest.admitted()) {
+        error = "manifest storage failed";
+        return std::nullopt;
+    }
+    return manifest;
 }
 bool admit_runtime_manifest(Manifest& manifest, std::string_view name_space, uint32_t count,
     const void* session, rsf_anomaly_shader_read_root read, std::string& error)
 {
-    ManifestBuilder builder{{}, error};
-    const auto sink = builder.sink();
-    if (!rsf_anomaly_shader_pack_manifest(bytes(name_space), count, session, read, &sink)) return false;
-    manifest = std::move(builder.value);
+    Refusal refusal{error};
+    const auto sink = refusal.sink();
+    auto* admitted = rsf_anomaly_shader_pack_manifest(bytes(name_space), count, session, read, &sink);
+    if (!admitted) return false;
+    // A refused candidate leaves the previously admitted manifest in place.
+    Manifest next(admitted);
+    if (!next.admitted()) {
+        error = "manifest storage failed";
+        return false;
+    }
+    manifest = std::move(next);
     return true;
 }
 std::string sha256_hex(std::span<const std::byte> data)
@@ -289,8 +307,7 @@ ShaderLoader::ShaderLoader(Manifest manifest, Compiler& compiler, Reflector& ref
 
 const ManifestEntry* ShaderLoader::lookup(std::span<const std::byte> source) const
 {
-    const auto found = manifest_.by_original.find(sha256_hex(source));
-    return found == manifest_.by_original.end() ? nullptr : &found->second;
+    return manifest_.find(sha256_hex(source));
 }
 std::string ShaderLoader::cache_key(const ShaderRequest& request, const ManifestEntry& entry) const
 {

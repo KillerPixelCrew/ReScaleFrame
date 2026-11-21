@@ -30,7 +30,9 @@ stock shader first, with the original DXBC and VS input signature.
 - Rust admits manifest metadata, hashes the original root's exact bytes, checks
   the target stage and derives the skin mode from the ordered defines. The
   native map, request and reflected data retain their existing owners. The private
-  C calls borrow byte spans and reflected descriptors synchronously.
+  C calls borrow byte spans and reflected descriptors synchronously. (Superseded for
+  the map: Rust now owns the admitted rows and their index, see
+  [the manifest owner](rust-anomaly-shader-manifest.md).)
 - The production path still borrows the loaded Runtime shader-patch service.
   The guarded engine includer and `d3dcompiler_43` entry remain native. Runtime
   transforms the same pack, recompiles the original with the supplied source,

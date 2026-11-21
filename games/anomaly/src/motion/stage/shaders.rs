@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::shader_loader::{Bytes, sha256};
+use crate::shader_loader::{Bytes, Entry, Manifest, sha256};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -208,12 +208,14 @@ impl Registry {
 
 pub(super) struct Pack {
     lease: Lease,
-    namespace: String,
-    roots: usize,
+    // Admitted by Rust and owned by the native pack, which frees it only after
+    // `lease` closes the Runtime session. Rows are immutable until then.
+    manifest: ptr::NonNull<Manifest>,
 }
 
 // The native pack and its compiler/include scratch storage are serialized by
-// the stage's loader lock. Its Runtime service remains borrowed.
+// the stage's loader lock. Its Runtime service remains borrowed. The manifest
+// has no interior mutability.
 unsafe impl Send for Pack {}
 
 impl Pack {
@@ -239,22 +241,22 @@ impl Pack {
                 .into_owned()
         })?;
         let info = unsafe { info.assume_init() };
-        Ok(Self {
-            lease,
-            namespace: String::from_utf8_lossy(unsafe { info.namespace.as_slice() }).into_owned(),
-            roots: info.roots,
-        })
+        let manifest = ptr::NonNull::new(info.manifest.cast_mut())
+            .ok_or_else(|| String::from("pack manifest unavailable"))?;
+        Ok(Self { lease, manifest })
     }
 
     pub fn ptr(&self) -> Raw {
         self.lease.as_ptr()
     }
 
-    fn entry(&self, platform: &Platform, hash: &[u8; 64]) -> Option<ShaderEntry> {
-        let mut entry = MaybeUninit::uninit();
-        unsafe {
-            (platform.find_entry)(self.ptr(), hash, entry.as_mut_ptr()).then(|| entry.assume_init())
-        }
+    fn manifest(&self) -> &Manifest {
+        // The native pack keeps the manifest alive while `self.lease` is open.
+        unsafe { self.manifest.as_ref() }
+    }
+
+    fn entry(&self, hash: &[u8; 64]) -> Option<&Entry> {
+        self.manifest().find(hash)
     }
 
     pub fn counters(&self, platform: &Platform) -> PatchCounters {
@@ -291,14 +293,12 @@ impl Replacement {
         platform: &Platform,
         pack: &Pack,
         request: &Request,
-        entry: &ShaderEntry,
+        entry: &Entry,
         device: Raw,
         attach: bool,
     ) -> Result<Self, (u8, String)> {
         let mut result = ShaderResult::default();
-        unsafe {
-            (platform.prepare_shader)(pack.ptr(), request.data.as_ptr(), entry.entry, &mut result)
-        };
+        unsafe { (platform.prepare_shader)(pack.ptr(), request.data.as_ptr(), entry, &mut result) };
         let reflection = Lease::new(result.reflection, platform.drop_reflection);
         if !matches!(result.outcome, 1 | 2) {
             return Err((
@@ -352,7 +352,7 @@ impl Replacement {
         platform: &Platform,
         stock: Raw,
         request: Arc<Request>,
-        entry: &ShaderEntry,
+        entry: &Entry,
         device: Raw,
     ) -> Arc<Variant> {
         let release = platform.device.release.unwrap();
@@ -406,8 +406,8 @@ impl Stage {
         unsafe { (p.activate_pack)(pack.ptr()) };
         self.log().say(format!(
             "Anomaly runtime shader pack: {} allowlisted roots, namespace {}",
-            pack.roots,
-            &pack.namespace[..pack.namespace.len().min(16)]
+            pack.manifest().entries().len(),
+            String::from_utf8_lossy(&pack.manifest().namespace()[..16])
         ));
         loader.pack = Some(pack);
         self.pack_status.store(1, Relaxed);
@@ -469,21 +469,21 @@ impl Stage {
         let previous: Vec<_> = lock(&self.registry).shaders.values().cloned().collect();
         let mut next = HashMap::new();
         for old in previous {
-            let Some(entry) = pack.entry(p, &old.request.hash) else {
+            let Some(entry) = pack.entry(&old.request.hash) else {
                 continue;
             };
             if entry.stage != old.stage {
                 return Err("stage changed for a registered root".into());
             }
             let device = old.device.as_ptr();
-            let replacement = Replacement::build(p, &pack, &old.request, &entry, device, false)
+            let replacement = Replacement::build(p, &pack, &old.request, entry, device, false)
                 .map_err(|(outcome, detail)| {
                     format!("{}: {detail}", OUTCOME_NAMES[outcome as usize])
                 })?;
             let key = old.stock.as_ptr();
             next.insert(
                 key as usize,
-                replacement.publish(p, key, old.request.clone(), &entry, device),
+                replacement.publish(p, key, old.request.clone(), entry, device),
             );
         }
         Ok((pack, next))
@@ -492,7 +492,9 @@ impl Stage {
     pub(super) fn shader_created(&self, call: Creation<'_>) {
         let p = self.platform;
         lock(&self.registry).remember(call.stock, call.file);
-        let mut loader = lock(&self.loader);
+        let mut guard = lock(&self.loader);
+        // Split the guard so a borrowed manifest row can outlive counter updates.
+        let loader = &mut *guard;
         let Some(pack) = &loader.pack else { return };
         let mut status = 0;
         let mut source = Bytes::from(&[][..]);
@@ -524,17 +526,16 @@ impl Stage {
         let Some(hash) = sha256(unsafe { source.as_slice() }) else {
             return;
         };
-        let Some(entry) = pack.entry(p, &hash) else {
+        let Some(entry) = pack.entry(&hash) else {
             loader.stats.outcomes[0][NOT_ALLOWLISTED as usize] += 1;
             return;
         };
         let family = entry.family as usize;
-        let name = String::from_utf8_lossy(unsafe { entry.name.as_slice() });
-        let name = name.into_owned();
+        let name = String::from_utf8_lossy(entry.name()).into_owned();
         let request = Request { data, hash };
         let device = unsafe { (p.shader_device)() };
         let result = if entry.stage == call.stage {
-            Replacement::build(p, pack, &request, &entry, device, true)
+            Replacement::build(p, pack, &request, entry, device, true)
         } else {
             Err((NOT_ALLOWLISTED, String::new()))
         };
@@ -565,7 +566,7 @@ impl Stage {
                         FAMILY_NAMES[family], replacement.skin, OUTCOME_NAMES[outcome as usize]
                     ));
                 }
-                let variant = replacement.publish(p, call.stock, Arc::new(request), &entry, device);
+                let variant = replacement.publish(p, call.stock, Arc::new(request), entry, device);
                 let previous = lock(&self.registry).put(variant);
                 drop(previous);
                 outcome
