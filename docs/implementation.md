@@ -459,6 +459,13 @@ contract unpublishes the alias during lookup and verifies refusal.
 All 371 pinned Rust tests and eight focused MSVC Release contracts
 passed. The linked bridge fixture built and its device run is pending.
 
+Rust now owns the application buffer batches and the physical backbuffer
+lease through Present. It publishes a complete batch and releases a
+failed D3D12 resize's partial allocation. Failed GPU drain preserves
+the outstanding resources. The worker passed 377 pinned Rust tests
+and 21 MSVC Release contracts. Its eight PE export inventories matched.
+[Presentation buffer audit](research/rust-d3d11-present-buffers.md)
+
 The combined bridge build passed 15 focused CPU and ABI contracts in
 Debug and Release, and all 290 locked Rust tests, formatting and Clippy.
 Both configurations match the reference Runtime, AC7, Loader and

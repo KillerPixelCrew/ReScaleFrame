@@ -19,32 +19,32 @@ const ABI_MISMATCH: i32 = -2;
 const CREATE_FAILED: i32 = -3;
 const NO_HANDLE: i32 = -4;
 const OPEN_FAILED: i32 = -5;
-const ABI_VERSION: u32 = 2;
+pub(super) const ABI_VERSION: u32 = 2;
 
 #[repr(C)]
-struct SurfaceSetup {
-    struct_size: u32,
-    abi_version: u32,
-    width: u32,
-    height: u32,
-    format: u32,
-    render_target: u32,
-    log: Log,
-    log_user: Handle,
-    unordered_access: u32,
+pub(super) struct SurfaceSetup {
+    pub(super) struct_size: u32,
+    pub(super) abi_version: u32,
+    pub(super) width: u32,
+    pub(super) height: u32,
+    pub(super) format: u32,
+    pub(super) render_target: u32,
+    pub(super) log: Log,
+    pub(super) log_user: Handle,
+    pub(super) unordered_access: u32,
 }
 
 #[repr(C)]
-struct Platform {
-    texture: unsafe extern "C" fn(Handle, &SurfaceSetup, *mut Handle) -> i32,
-    target: Open,
-    query_resource: Create,
-    resource_handle: Create,
-    open_resource: Open,
-    query_device5: Create,
-    fence: Create,
-    fence_handle: Create,
-    open_fence: Open,
+pub(super) struct Platform {
+    pub(super) texture: unsafe extern "C" fn(Handle, &SurfaceSetup, *mut Handle) -> i32,
+    pub(super) target: Open,
+    pub(super) query_resource: Create,
+    pub(super) resource_handle: Create,
+    pub(super) open_resource: Open,
+    pub(super) query_device5: Create,
+    pub(super) fence: Create,
+    pub(super) fence_handle: Create,
+    pub(super) open_fence: Open,
 }
 
 const _: () = {
@@ -55,10 +55,10 @@ const _: () = {
 };
 
 // Rust drops fields in declaration order. Close the NT handle after the COM interfaces.
-struct Surface {
-    texture12: Option<ComRef>,
+pub(super) struct Surface {
+    pub(super) texture12: Option<ComRef>,
     target: Option<ComRef>,
-    texture11: ComRef,
+    pub(super) texture11: ComRef,
     handle: OwnedHandle,
 }
 
@@ -126,7 +126,16 @@ fn say(log: Log, user: Handle, message: fmt::Arguments<'_>) {
     }
 }
 
-fn create_surface(
+pub(super) fn valid_surface(device11: Handle, setup: &SurfaceSetup) -> bool {
+    !device11.is_null()
+        && setup.width != 0
+        && setup.height != 0
+        && setup.format != 0
+        && !typeless(setup.format)
+}
+
+// The caller validates the setup and keeps the devices alive across the native leaves.
+pub(super) unsafe fn create_surface(
     p: &Platform,
     device11: Handle,
     device12: Handle,
@@ -269,11 +278,11 @@ unsafe extern "C" fn rsf_core_shared_surface_create(
     if setup.abi_version != ABI_VERSION {
         return ABI_MISMATCH;
     }
-    if setup.width == 0 || setup.height == 0 || setup.format == 0 || typeless(setup.format) {
+    if !valid_surface(device11, setup) {
         return INVALID;
     }
     unsafe { out.write(null_mut()) };
-    match create_surface(platform, device11, device12, setup) {
+    match unsafe { create_surface(platform, device11, device12, setup) } {
         Ok(surface) => {
             let surface = allocate_handle(surface);
             unsafe { out.write(surface) };

@@ -33,6 +33,8 @@ typedef struct rsf_d3d11p_facts {
     rsf_streamline_graphics graphics;
     void* direct_queue; /* engine queue on the native D3D12 path, otherwise null */
     void* interop_queue;
+    void* device11;
+    uint32_t buffer_usage;
 } rsf_d3d11p_facts;
 
 typedef struct rsf_d3d11p_adapter {
@@ -49,8 +51,8 @@ typedef struct rsf_d3d11p_adapter {
 #define RSF_D3D11P_DRAIN_GRAPHICS 1u /* graphics queue and completion fence exist */
 #define RSF_D3D11P_DRAIN_INTEROP 2u
 
-#define RSF_D3D11P_BUFFERS_SHARED 0u /* D3D11 facade surfaces */
-#define RSF_D3D11P_BUFFERS_RENDER 1u /* native D3D12 application render buffers */
+typedef struct rsf_shared_surface_platform rsf_shared_surface_platform;
+const rsf_shared_surface_platform* rsf_shared_surface_native_platform(void);
 
 typedef struct rsf_d3d11p_platform {
     /* Process services. */
@@ -91,9 +93,11 @@ typedef struct rsf_d3d11p_platform {
     uint32_t (*tearing_supported)(void* bridge);
     uint32_t (*fsr4_supported)(void* bridge, const char* directory);
     int32_t (*create_queues)(void* bridge, uint32_t application_ready);
-    int32_t (*create_shared_inputs)(void* bridge);
+    int32_t (*create_upload_fence)(void* bridge);
     int32_t (*create_slots)(void* bridge);
-    int32_t (*make_render_buffers)(void* bridge);
+    const rsf_shared_surface_platform* (*shared_surface_platform)(void);
+    int32_t (*create_render_buffer)(void* bridge, uint32_t width, uint32_t height,
+        uint32_t format, void** out); /* owned COM reference */
 
     /* Physical chain. */
     int32_t (*create_plain)(void* bridge);
@@ -113,29 +117,31 @@ typedef struct rsf_d3d11p_platform {
     /* Waits for the slot fence, resets allocator and list. *step is 0, 1 or 2. */
     int32_t (*slot_reset)(void* bridge, uint32_t slot, uint64_t fence, uint32_t* step);
     int32_t (*upload_wait)(void* bridge, uint64_t value);
-    int32_t (*acquire_backbuffer)(void* bridge);
-    uint32_t (*has_render_buffer)(void* bridge, uint32_t index);
-    void (*record_copy)(void* bridge, uint32_t slot, uint32_t render_index);
+    int32_t (*acquire_backbuffer)(void* bridge, void** out); /* owned COM reference */
+    void (*record_copy)(void* bridge, uint32_t slot, void* backbuffer, void* source);
     void* (*slot_command)(void* bridge, uint32_t slot);
-    void* (*backbuffer)(void* bridge);
     void* (*context11)(void* bridge);
     int32_t (*close_execute)(void* bridge, uint32_t slot, void* command);
     int32_t (*upload_return)(void* bridge, uint64_t value);
     int32_t (*signal_slot)(void* bridge, uint64_t value);
-    void (*release_backbuffer)(void* bridge);
     uint32_t (*has_application_ready)(void* bridge);
     int32_t (*application_ready)(void* bridge, uint32_t on_completion, uint64_t value);
     void (*report_device_failure)(void* bridge, int32_t result, uint32_t backend);
     void (*log_present_failure)(void* bridge, const char* step, int32_t result, uint32_t render_index);
 
+    /* Application GetBuffer. */
+    int32_t (*query_buffer_interface)(void* resource, const void* iid, void** out);
+    int32_t (*get_physical_buffer)(void* bridge, uint32_t index, const void* iid, void** out);
+    void (*log_buffer_refusal)(void* bridge, uint32_t index, const void* iid, int32_t result,
+        uint32_t physical_pending);
+
     /* Drain, resize, retirement and destruction. */
     uint32_t (*drain_queues)(void* bridge);
     int32_t (*signal_wait)(void* bridge, uint32_t interop, uint64_t value);
     int32_t (*wait_fence)(void* bridge, void* fence, uint64_t value);
-    uint32_t (*buffers_referenced)(void* bridge, uint32_t kind);
-    int32_t (*remake_surfaces)(void* bridge, uint32_t count, uint32_t width, uint32_t height, uint32_t format);
-    void (*set_description)(void* bridge, uint32_t width, uint32_t height, uint32_t format, uint32_t flags);
-    int32_t (*remake_render_buffers)(void* bridge, uint32_t count);
+    uint32_t (*buffer_referenced)(void* resource);
+    void (*set_description)(void* bridge, uint32_t count, uint32_t width, uint32_t height,
+        uint32_t format, uint32_t flags);
     void* (*retire_fence)(void* bridge);
     int32_t (*retire_submit)(void* bridge, void* vendor_fence, uint64_t vendor_value, void* list, uint64_t value);
     void (*retain_all)(void* bridge);
@@ -170,6 +176,7 @@ int32_t rsf_core_d3d11p_creation_end(const rsf_d3d11p_platform* platform, void* 
 /* Facade methods. */
 void rsf_core_d3d11p_chain_destroy(rsf_d3d11p_chain* chain);
 int32_t rsf_core_d3d11p_ensure(rsf_d3d11p_chain* chain);
+int32_t rsf_core_d3d11p_get_buffer(rsf_d3d11p_chain* chain, uint32_t index, const void* iid, void** out);
 int32_t rsf_core_d3d11p_present(rsf_d3d11p_chain* chain, uint32_t sync, uint32_t flags);
 int32_t rsf_core_d3d11p_set_fullscreen(rsf_d3d11p_chain* chain, int32_t fullscreen, void* target);
 int32_t rsf_core_d3d11p_resize(rsf_d3d11p_chain* chain, uint32_t count, uint32_t width, uint32_t height,
@@ -180,7 +187,6 @@ uint32_t rsf_core_d3d11p_render_index(rsf_d3d11p_chain* chain);
 uint32_t rsf_core_d3d11p_application_presents(rsf_d3d11p_chain* chain);
 int32_t rsf_core_d3d11p_set_max_latency(rsf_d3d11p_chain* chain, uint32_t value);
 int32_t rsf_core_d3d11p_max_latency(rsf_d3d11p_chain* chain, uint32_t* value);
-uint32_t rsf_core_d3d11p_report_buffer_refusal(rsf_d3d11p_chain* chain);
 
 /* Public bridge exports. */
 void* rsf_core_d3d11p_host(void);
