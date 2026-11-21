@@ -74,10 +74,7 @@ extern "C" const rsf_nfg_cpu_platform rsf_native_fg_cpu_platform{
     rsf_d3d11_present_input,
     rsf_d3d11_present_receipt,
     rsf_d3d11_present_abort,
-    +[]() -> void* {
-        static auto* driver = rsf::latency::make_antilag_driver().release();
-        return rsf::latency::AntiLag::create_context(*driver);
-    },
+    +[]() -> void* { return rsf::latency::create_native_antilag_context(); },
     receipt_owner,
     rsf_core_nfg_owned_window_thread,
     rsf_core_nfg_post_ping,

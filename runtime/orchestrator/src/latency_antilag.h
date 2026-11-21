@@ -2,14 +2,13 @@
 #pragma once
 #include <rescaleframe/frame_generation.h>
 #include <cstdint>
-#include <memory>
 namespace rsf::latency {
 // Driver seam is internal to the Runtime. Engine adapters never receive these SDK operations.
 struct AntiLagDriver {
     virtual ~AntiLagDriver() = default;
     virtual bool initialize(uint32_t api, void* device) noexcept = 0;
-    virtual bool update(bool enabled, uint32_t max_fps) noexcept = 0;
-    virtual bool end_render(void* chain, bool enabled, bool generated) noexcept = 0;
+    virtual bool update(uint32_t api, bool enabled, uint32_t max_fps) noexcept = 0;
+    virtual bool end_render(void* chain, bool attach) noexcept = 0;
     virtual void shutdown() noexcept = 0;
 };
 struct AntiLagState {
@@ -18,10 +17,11 @@ struct AntiLagState {
 };
 struct AntiLagCallbacks {
     uint32_t (*initialize)(void*, uint32_t api, void* device);
-    uint32_t (*update)(void*, uint32_t enabled, uint32_t max_fps);
-    uint32_t (*end_render)(void*, void* chain, uint32_t enabled, uint32_t generated);
+    uint32_t (*update)(void*, uint32_t api, uint32_t enabled, uint32_t max_fps);
+    uint32_t (*end_render)(void*, void* chain, uint32_t attach);
     void (*shutdown)(void*);
 };
+static_assert(sizeof(AntiLagCallbacks) == 32);
 struct AntiLagContext;
 extern "C" {
 AntiLagContext* rsf_core_antilag_create(const AntiLagCallbacks*, void* driver);
@@ -41,11 +41,11 @@ public:
             +[](void* context, uint32_t api, void* device) -> uint32_t {
                 return static_cast<AntiLagDriver*>(context)->initialize(api, device);
             },
-            +[](void* context, uint32_t enabled, uint32_t fps) -> uint32_t {
-                return static_cast<AntiLagDriver*>(context)->update(enabled != 0, fps);
+            +[](void* context, uint32_t api, uint32_t enabled, uint32_t fps) -> uint32_t {
+                return static_cast<AntiLagDriver*>(context)->update(api, enabled != 0, fps);
             },
-            +[](void* context, void* chain, uint32_t enabled, uint32_t generated) -> uint32_t {
-                return static_cast<AntiLagDriver*>(context)->end_render(chain, enabled != 0, generated != 0);
+            +[](void* context, void* chain, uint32_t attach) -> uint32_t {
+                return static_cast<AntiLagDriver*>(context)->end_render(chain, attach != 0);
             },
             +[](void* context) { static_cast<AntiLagDriver*>(context)->shutdown(); },
         };
@@ -71,5 +71,5 @@ public:
     }
     void reset_sources() noexcept { rsf_core_antilag_reset_sources(context_); }
 };
-std::unique_ptr<AntiLagDriver> make_antilag_driver();
+AntiLagContext* create_native_antilag_context() noexcept;
 }

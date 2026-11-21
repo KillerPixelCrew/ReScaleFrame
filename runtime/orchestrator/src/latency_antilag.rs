@@ -14,10 +14,12 @@ pub(crate) fn fps_from_interval(limit_us: u32) -> u32 {
 #[repr(C)]
 struct Driver {
     initialize: unsafe extern "C" fn(*mut c_void, u32, *mut c_void) -> u32,
-    update: unsafe extern "C" fn(*mut c_void, u32, u32) -> u32,
-    end_render: unsafe extern "C" fn(*mut c_void, *mut c_void, u32, u32) -> u32,
+    update: unsafe extern "C" fn(*mut c_void, u32, u32, u32) -> u32,
+    end_render: unsafe extern "C" fn(*mut c_void, *mut c_void, u32) -> u32,
     shutdown: unsafe extern "C" fn(*mut c_void),
 }
+
+const _: () = assert!(size_of::<Driver>() == 32);
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -89,20 +91,22 @@ impl Context {
     pub(crate) fn pace(&self, id: u64, mode: u32, limit_us: u32, other_owner: u32) -> u32 {
         let _update = self.updater.lock().unwrap();
         let driver = self.lifetime.read().unwrap();
-        {
+        let api = {
             let mut sources = self.sources.lock().unwrap();
             if sources.status.available == 0 || id == 0 || id <= sources.last_update {
                 return 0;
             }
             sources.last_update = id;
-        }
+            sources.api
+        };
         let enabled = mode != RSF_REFLEX_OFF && other_owner == RSF_PACING_NONE;
         let fps = if enabled {
             fps_from_interval(limit_us)
         } else {
             0
         };
-        let accepted = unsafe { (self.calls.update)(self.driver, u32::from(enabled), fps) } != 0;
+        let accepted =
+            unsafe { (self.calls.update)(self.driver, api, u32::from(enabled), fps) } != 0;
         let mut sources = self.sources.lock().unwrap();
         if accepted {
             sources.status.enabled = u32::from(enabled);
@@ -121,7 +125,7 @@ impl Context {
 
     pub(crate) fn end_render(&self, id: u64, chain: *mut c_void, generated: u32) -> u32 {
         let _driver = self.lifetime.read().unwrap();
-        let enabled = {
+        let attach = {
             let mut sources = self.sources.lock().unwrap();
             if sources.status.available == 0
                 || sources.api != 12
@@ -132,9 +136,9 @@ impl Context {
                 return 0;
             }
             sources.last_end = id;
-            sources.status.enabled
+            u32::from(sources.status.enabled != 0 && generated != 0)
         };
-        let accepted = unsafe { (self.calls.end_render)(self.driver, chain, enabled, generated) };
+        let accepted = unsafe { (self.calls.end_render)(self.driver, chain, attach) };
         let mut sources = self.sources.lock().unwrap();
         if accepted == 0 {
             sources.status.refused = sources.status.refused.wrapping_add(1);
@@ -155,10 +159,11 @@ impl Context {
         let mut sources = self.sources.lock().unwrap();
         if sources.status.available != 0
             && sources.status.enabled != 0
-            && unsafe { (self.calls.update)(self.driver, 0, 0) } == 0
+            && unsafe { (self.calls.update)(self.driver, sources.api, 0, 0) } == 0
         {
             sources.status.refused = sources.status.refused.wrapping_add(1);
             sources.status.available = 0;
+            unsafe { (self.calls.shutdown)(self.driver) };
         }
         sources.status.enabled = 0;
         sources.last_update = 0;

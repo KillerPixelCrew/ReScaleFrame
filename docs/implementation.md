@@ -4,6 +4,16 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The Rust Anti-Lag owner supplies the active Direct3D API and the
+generated-frame attachment decision to the AMD leaves. The native
+driver no longer keeps a second API value. If a session reset cannot
+disable pacing, Rust retires the SDK context under its exclusive
+lease. The SDK storage keeps a stable address for DXGI private data.
+The existing CPU fixture covers API routing, generated-frame
+attachment, and the refused-disable path. Source checks covered the
+SDK and stub paths. The updated fixture and device behavior remain
+unverified.
+
 Rust now preflights and applies Anomaly's jitter correction to the
 position reconstruction constant. The native hook supplies the verified
 engine layout and guarded reads, writes and buffer lookup. Stages
