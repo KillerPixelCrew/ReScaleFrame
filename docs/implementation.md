@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now owns native D3D12 DLSS SR device registration, context
+lifetime and frame ordering for owned, shared and engine-borrowed
+Streamline handles. Rust frees viewport resources only for a context
+that reached SDK option setup. The typed bridge keeps the camera,
+exposure and tag values. Context and registration handle allocation
+failures return the existing initialization error. The public and
+Streamline host declarations are unchanged.
+
 Rust now owns the Reflex diagnostic listener, source history, log
 budget and sync snapshot. Native NVAPI detours still forward each
 original call before recording it and keep the existing log format
