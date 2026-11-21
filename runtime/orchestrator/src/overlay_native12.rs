@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
+use crate::d3d12_fence::FenceState;
 use crate::overlay_abi::{rsf_overlay_intent, rsf_overlay_stats, rsf_overlay_texture_update};
 use crate::overlay_geometry::{borrowed_draw_slice, patch_fits, valid_indices, valid_texture};
 use crate::overlay_host_abi::{
@@ -103,7 +104,7 @@ impl Ring {
     }
 
     fn slot_ready(completed: u64, wait_for: u64) -> bool {
-        completed != u64::MAX && completed >= wait_for
+        FenceState::check(completed, wait_for) == FenceState::Complete
     }
 
     fn submitted(&mut self, slot: usize, value: u64) {
@@ -116,7 +117,16 @@ impl Ring {
 struct Fence {
     reference: ComRef,
     event: Option<OwnedHandle>,
-    armed: bool,
+    armed: Option<u64>,
+}
+
+fn retire_fence_event(armed: &mut Option<u64>, signaled: bool, completed: u64) -> bool {
+    let Some(value) = *armed else { return true };
+    let state = FenceState::check(completed, value);
+    if state == FenceState::DeviceRemoved || (signaled && state == FenceState::Complete) {
+        *armed = None;
+    }
+    armed.is_none()
 }
 
 // D3D12 fences and Win32 event handles can be moved between threads. PANEL serializes waits and signals.
@@ -128,6 +138,9 @@ impl Fence {
     }
 
     fn wait_for_slot(&mut self, platform: &Platform, value: u64) -> bool {
+        if self.armed.is_some() {
+            return false;
+        }
         if self.event.is_none() {
             let event = unsafe { CreateEventW(std::ptr::null(), 0, 0, std::ptr::null()) };
             self.event = unsafe { owned_win32_handle(event) };
@@ -136,19 +149,23 @@ impl Fence {
             return false;
         };
         let event = event.as_raw_handle();
-        self.armed = unsafe { (platform.arm.unwrap())(self.reference.as_ptr(), event, value) } != 0;
+        if unsafe { (platform.arm.unwrap())(self.reference.as_ptr(), event, value) } == 0 {
+            return false;
+        }
+        self.armed = Some(value);
         // Keep the event with its fence after a timeout. A later GPU signal may still reach it.
-        self.armed
-            && self.finish_event(FENCE_WAIT_MS)
+        self.finish_event(platform, FENCE_WAIT_MS)
             && Ring::slot_ready(self.completed(platform), value)
     }
 
-    fn finish_event(&mut self, timeout: u32) -> bool {
-        if self.armed {
-            let event = self.event.as_ref().unwrap().as_raw_handle();
-            self.armed = unsafe { WaitForSingleObject(event, timeout) } != WAIT_OBJECT_0;
+    fn finish_event(&mut self, platform: &Platform, timeout: u32) -> bool {
+        if self.armed.is_none() {
+            return true;
         }
-        !self.armed
+        let event = self.event.as_ref().unwrap().as_raw_handle();
+        let signaled = unsafe { WaitForSingleObject(event, timeout) } == WAIT_OBJECT_0;
+        let completed = self.completed(platform);
+        retire_fence_event(&mut self.armed, signaled, completed)
     }
 }
 
@@ -536,7 +553,7 @@ impl Panel {
         self.fence = Some(Fence {
             reference,
             event: None,
-            armed: false,
+            armed: None,
         });
         self.device = device as usize;
         self.queue = queue as usize;
@@ -589,7 +606,7 @@ impl Panel {
                     return;
                 }
             }
-            if !fence.finish_event(0) {
+            if !fence.finish_event(platform, 0) {
                 return;
             }
         }
@@ -1055,5 +1072,19 @@ mod tests {
         assert_eq!(ring.select(1), (0, 0));
         ring.submitted(0, 4);
         assert_eq!(ring.select(1), (1, 2));
+    }
+
+    #[test]
+    fn event_retirement_requires_the_armed_value_or_device_removal() {
+        let mut armed = Some(7);
+        assert!(!retire_fence_event(&mut armed, true, 3));
+        assert!(!retire_fence_event(&mut armed, false, 7));
+        assert_eq!(armed, Some(7));
+        assert!(retire_fence_event(&mut armed, true, 7));
+        assert_eq!(armed, None);
+
+        armed = Some(9);
+        assert!(retire_fence_event(&mut armed, false, u64::MAX));
+        assert_eq!(armed, None);
     }
 }

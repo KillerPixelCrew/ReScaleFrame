@@ -4,6 +4,11 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The native D3D12 overlay retains the value for its outstanding fence
+event. A wake before that value keeps the event armed. Device removal
+allows failed-path retirement without waiting for a wake and still
+refuses slot reuse. The updated retirement fixture remains unrun.
+
 The FidelityFX 4 Vulkan SR bridge now owns provider admission, frame
 validation, submission and checked retirement in Rust. The Runtime
 and standalone bridge use the same compatibility archive. Rust checks
