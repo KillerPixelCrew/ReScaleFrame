@@ -6,7 +6,7 @@ The [integration migration scope](rust-migration.md#remaining-integration-ports)
 covers the existing game and engine adapters beyond Anomaly. Project Wingman
 now publishes its GameSDK table and exact build identity from Rust. The
 existing DLL export forwards to that entry, and native pre-hook verification
-uses the same fingerprint. Its queued execution port is still open.
+uses the same fingerprint.
 Source checks cover the entry path; the plugin and carrier
 contracts remain unrun.
 
@@ -20,8 +20,14 @@ Wingman's Rust graph observer validates the same AddPasses site, records
 borrowed graph facts and rate-limits diagnostics. The native detour still
 calls the original first and keeps its pinned trampoline. Stop retains the
 host services while a callback remains. This port pins the observer DLL
-before installing the hook, and the existing execution callbacks still
-use the native implementation. The plugin and live observer remain unrun.
+before installing the hook. The plugin and live observer remain unrun.
+
+Wingman's Rust execution owner tracks queued graph packets, nested TAA
+metadata, hook lifetime and RHI callback retirement. The native leaves
+still call the original passes in order and acquire and release the D3D11
+leases. Reservation respects the original 256-command cap across threads,
+and retirement keeps the borrowed services until calls and commands finish.
+Build, fixture and live execution checks remain open.
 
 The Steam D3D11 chain uses one Rust owner for the exact overlay profile,
 guarded forwarding and Present hook lifetime. Fallout 4 and Skyrim SE

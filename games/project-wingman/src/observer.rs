@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
 //! Guarded temporal graph observation and its GameSDK lifecycle.
 use crate::camera::{CopyMemory, JITTER, read};
+use crate::execution;
 use crate::{ABI_MISMATCH, INVALID_ARGUMENT};
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, rsf_game_control_args, rsf_game_host_services, rsf_game_log_fn,
-    rsf_game_prepare_args, rsf_game_renderer_status, rsf_game_start_args, rsf_result,
+    rsf_game_prepare_args, rsf_game_render_pass, rsf_game_renderer_status, rsf_game_start_args,
+    rsf_result,
 };
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -20,27 +22,29 @@ const ADD_PASSES_BYTES: [u8; 32] = [
     0x8b, 0x05, 0xda, 0x50, 0x8d, 0x03, 0x49, 0x8b, 0xf9, 0x49, 0x8b, 0xd8, 0x48, 0x8b, 0xf2, 0x83,
 ];
 const INPUT_RECT: usize = 0x1670;
-const HISTORY: usize = 0x1680;
-const CAMERA_CUT: usize = 0xd90;
+pub(crate) const HISTORY: usize = 0x1680;
+pub(crate) const CAMERA_CUT: usize = 0xd90;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub(crate) struct Platform {
     verify_executable: unsafe extern "C" fn() -> bool,
-    image_base: unsafe extern "C" fn() -> usize,
-    copy: CopyMemory,
+    pub(crate) image_base: unsafe extern "C" fn() -> usize,
+    pub(crate) copy: CopyMemory,
     tick_count: unsafe extern "C" fn() -> u64,
     create_hook: unsafe extern "C" fn(usize) -> bool,
-    enable_hook: unsafe extern "C" fn(usize) -> bool,
-    disable_hook: unsafe extern "C" fn(usize) -> bool,
-    prepare_execution: unsafe extern "C" fn(*const rsf_game_host_services) -> bool,
-    start_execution: unsafe extern "C" fn() -> bool,
-    quiesce_execution: unsafe extern "C" fn(),
-    stop_execution: unsafe extern "C" fn() -> bool,
+    pub(crate) enable_hook: unsafe extern "C" fn(usize) -> bool,
+    pub(crate) disable_hook: unsafe extern "C" fn(usize) -> bool,
+    pub(crate) create_execution_hook: unsafe extern "C" fn(u32, usize) -> bool,
+    pub(crate) report_execution: unsafe extern "C" fn(
+        *const rsf_game_host_services,
+        *mut c_void,
+        *const rsf_game_render_pass,
+    ),
     log: unsafe extern "C" fn(rsf_game_log_fn, *mut c_void, *const c_char),
 }
 
-const _: () = assert!(size_of::<Platform>() == 12 * size_of::<usize>());
+const _: () = assert!(size_of::<Platform>() == 10 * size_of::<usize>());
 
 static PLATFORM: OnceLock<Platform> = OnceLock::new();
 static ACCEPTING: AtomicBool = AtomicBool::new(false);
@@ -56,6 +60,10 @@ static STATE: Mutex<State> = Mutex::new(State {
 
 pub(crate) fn bind(platform: &Platform) {
     let _ = PLATFORM.get_or_init(|| *platform);
+}
+
+pub(crate) fn platform() -> Option<&'static Platform> {
+    PLATFORM.get()
 }
 
 type Rect = [i32; 4];
@@ -140,7 +148,7 @@ pub(crate) unsafe extern "C" fn prepare(args: *const rsf_game_prepare_args) -> r
     if !unsafe { (platform.create_hook)(target) } {
         return NATIVE_REFUSED;
     }
-    if !unsafe { (platform.prepare_execution)(host) } {
+    if !execution::prepare(host, platform) {
         state.reason = c"Native temporal execution refused: queued-pass entry bytes differ or hooks could not be created.";
         return NATIVE_REFUSED;
     }
@@ -163,11 +171,11 @@ pub(crate) unsafe extern "C" fn start(args: *const rsf_game_start_args) -> rsf_r
     if state.host.is_none() {
         return NOT_READY;
     }
-    if !unsafe { (platform.start_execution)() } {
+    if !execution::start(platform) {
         return NATIVE_REFUSED;
     }
     if !state.installed && !unsafe { (platform.enable_hook)(state.target) } {
-        unsafe { (platform.stop_execution)() };
+        execution::stop(platform);
         return NATIVE_REFUSED;
     }
     state.installed = true;
@@ -181,9 +189,7 @@ pub(crate) unsafe extern "C" fn quiesce(args: *const rsf_game_control_args) -> r
         return result;
     }
     ACCEPTING.store(false, Ordering::Release);
-    if let Some(platform) = PLATFORM.get() {
-        unsafe { (platform.quiesce_execution)() };
-    }
+    execution::quiesce();
     OK
 }
 
@@ -196,7 +202,7 @@ pub(crate) unsafe extern "C" fn stop(args: *const rsf_game_control_args) -> rsf_
     };
     let mut state = state();
     ACCEPTING.store(false, Ordering::Release);
-    if !unsafe { (platform.stop_execution)() } {
+    if !execution::stop(platform) {
         return BUSY;
     }
     if state.installed && !unsafe { (platform.disable_hook)(state.target) } {

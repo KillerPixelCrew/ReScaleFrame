@@ -144,14 +144,18 @@ fn decode(view: usize, pass: &mut rsf_game_render_pass, copy: CopyMemory) -> Opt
         .then_some(())
 }
 
+pub(crate) fn read_camera(view: usize, pass: &mut rsf_game_render_pass, copy: CopyMemory) -> bool {
+    pass.camera_valid = 0;
+    let valid = decode(view, pass, copy).is_some();
+    pass.camera_valid = u32::from(valid);
+    valid
+}
+
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_wingman_read_camera(
     view: *const c_void,
     pass: &mut rsf_game_render_pass,
     copy: CopyMemory,
 ) -> bool {
-    pass.camera_valid = 0;
-    let valid = decode(view as usize, pass, copy).is_some();
-    pass.camera_valid = u32::from(valid);
-    valid
+    read_camera(view as usize, pass, copy)
 }

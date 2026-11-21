@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Project Wingman game SDK entry and exact-build identity.
 mod camera;
+mod execution;
 mod observer;
 
 use rsf_game_sys::{

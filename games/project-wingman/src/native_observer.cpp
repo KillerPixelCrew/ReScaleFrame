@@ -68,15 +68,13 @@ constexpr ObserverPlatform platform{
         const auto result = MH_DisableHook(reinterpret_cast<void*>(target));
         return result == MH_OK || result == MH_ERROR_DISABLED;
     },
-    [](const rsf_game_host_services* host) noexcept { return execution_prepare(*host); },
-    execution_start,
-    execution_quiesce,
-    execution_stop,
+    create_execution_hook,
+    report_execution,
     [](rsf_game_log_fn log, void* user, const char* message) noexcept {
         try { if (log) log(user, message); } catch (...) {}
     },
 };
-static_assert(sizeof(ObserverPlatform) == 12 * sizeof(void*));
+static_assert(sizeof(ObserverPlatform) == 10 * sizeof(void*));
 }
 
 const ObserverPlatform& observer_platform() noexcept { return platform; }
