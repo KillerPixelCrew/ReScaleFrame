@@ -13,6 +13,13 @@
 #include <limits>
 #include <memory>
 
+using CoreEntries = void*[10];
+using FeatureEntries = void*[4];
+using FeatureLookup = int32_t (*)(void*, uint32_t, const char*, void**);
+extern "C" rsf_backend_result rsf_core_dlss_native12_core_entries(void*, CoreEntries*);
+extern "C" rsf_backend_result rsf_core_dlss_native12_feature_entries(
+    void*, uint32_t, FeatureLookup, FeatureEntries*);
+
 namespace {
 // Typed SDK entry points and preferences. The Rust registration leases the module
 // and keeps the borrowed plugin directory alive.
@@ -57,23 +64,23 @@ rsf_backend_result native_shared_module(void* device, void* shared_host, void** 
 
 rsf_backend_result native_resolve(void* handle, const wchar_t* directory, void** out) noexcept try
 {
-    const auto module = static_cast<HMODULE>(handle);
     auto native = std::make_unique<Native>();
     native->plugin_paths[0] = directory;
-    native->init = rsf::entry<PFun_slInit*>(module, "slInit");
-    native->set_device = rsf::entry<PFun_slSetD3DDevice*>(module, "slSetD3DDevice");
-    native->support = rsf::entry<PFun_slIsFeatureSupported*>(module, "slIsFeatureSupported");
-    native->feature = rsf::entry<PFun_slGetFeatureFunction*>(module, "slGetFeatureFunction");
-    native->shutdown = rsf::entry<PFun_slShutdown*>(module, "slShutdown");
-    native->token = rsf::entry<PFun_slGetNewFrameToken*>(module, "slGetNewFrameToken");
-    native->constants = rsf::entry<PFun_slSetConstants*>(module, "slSetConstants");
-    native->tags = rsf::entry<PFun_slSetTagForFrame*>(module, "slSetTagForFrame");
-    native->evaluate = rsf::entry<PFun_slEvaluateFeature*>(module, "slEvaluateFeature");
-    native->free_resources = rsf::entry<PFun_slFreeResources*>(module, "slFreeResources");
-    if (!native->init || !native->set_device || !native->support || !native->feature ||
-        !native->shutdown || !native->token || !native->constants || !native->tags ||
-        !native->evaluate || !native->free_resources)
-        return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
+    CoreEntries entries{};
+    const auto result = rsf_core_dlss_native12_core_entries(handle, &entries);
+    if (result != RSF_BACKEND_OK) return result;
+    const auto& [init, set_device, support, feature, shutdown, token, constants, tags, evaluate,
+        free_resources] = entries;
+    native->init = reinterpret_cast<PFun_slInit*>(init);
+    native->set_device = reinterpret_cast<PFun_slSetD3DDevice*>(set_device);
+    native->support = reinterpret_cast<PFun_slIsFeatureSupported*>(support);
+    native->feature = reinterpret_cast<PFun_slGetFeatureFunction*>(feature);
+    native->shutdown = reinterpret_cast<PFun_slShutdown*>(shutdown);
+    native->token = reinterpret_cast<PFun_slGetNewFrameToken*>(token);
+    native->constants = reinterpret_cast<PFun_slSetConstants*>(constants);
+    native->tags = reinterpret_cast<PFun_slSetTagForFrame*>(tags);
+    native->evaluate = reinterpret_cast<PFun_slEvaluateFeature*>(evaluate);
+    native->free_resources = reinterpret_cast<PFun_slFreeResources*>(free_resources);
     *out = native.release();
     return RSF_BACKEND_OK;
 } catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
@@ -103,6 +110,13 @@ rsf_backend_result native_set_device(void* handle, void* device) noexcept try
         RSF_BACKEND_OK : RSF_BACKEND_ERROR_INIT_FAILED;
 } catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
 
+int32_t lookup_feature(void* handle, uint32_t group, const char* name, void** out) noexcept try
+{
+    const auto feature = group == 0 ? sl::kFeatureDLSS : sl::kFeatureCommon;
+    return static_cast<Native*>(handle)->feature(feature, name, *out) == sl::Result::eOk
+        ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
+} catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
+
 rsf_backend_result native_configure(void* handle, void* device, const rsf_dlss_setup* setup,
     uint32_t owns_present) noexcept try
 {
@@ -121,19 +135,13 @@ rsf_backend_result native_configure(void* handle, void* device, const rsf_dlss_s
         }
         return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     }
-    void* optimal = nullptr;
-    void* options = nullptr;
-    if (native.feature(sl::kFeatureDLSS, "slDLSSGetOptimalSettings", optimal) != sl::Result::eOk ||
-        native.feature(sl::kFeatureDLSS, "slDLSSSetOptions", options) != sl::Result::eOk || !optimal || !options)
-        return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
+    FeatureEntries entries{};
+    const auto resolved = rsf_core_dlss_native12_feature_entries(handle, owns_present, lookup_feature, &entries);
+    if (resolved != RSF_BACKEND_OK) return resolved;
+    const auto& [optimal, options, before, after] = entries;
     native.optimal = reinterpret_cast<PFun_slDLSSGetOptimalSettings*>(optimal);
     native.options = reinterpret_cast<PFun_slDLSSSetOptions*>(options);
     if (owns_present) {
-        void* before = nullptr;
-        void* after = nullptr;
-        if (native.feature(sl::kFeatureCommon, "slHookPresent", before) != sl::Result::eOk ||
-            native.feature(sl::kFeatureCommon, "slHookAfterPresent", after) != sl::Result::eOk || !before || !after)
-            return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
         native.present = reinterpret_cast<decltype(native.present)>(before);
         native.after_present = reinterpret_cast<decltype(native.after_present)>(after);
     }

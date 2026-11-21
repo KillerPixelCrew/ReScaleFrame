@@ -293,6 +293,15 @@ common lookups and adds the five owner-only lookups for a session
 it initializes. The typed SDK calls and borrowed-host behavior
 stay at their existing boundaries. [Streamline resolver source comparison](research/rust-d3d11-streamline-resolution.md)
 
+Native D3D12 DLSS now selects its ten interposer addresses and two
+DLSS feature functions in Rust. Routes that own Present still require
+the two common Present callbacks. Source comparison against `bef5a2d2`
+matched lookup order, support and initialization calls, public
+declarations and disabled stubs. Typed pointers now bind after all
+selected feature lookups succeed. Pinned formatting, locked Windows
+Cargo metadata and whitespace checks passed. Build and runtime
+verification remain open.
+
 ## Verification coverage
 
 | Requirement | Recorded evidence | Still open |

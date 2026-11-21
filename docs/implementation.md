@@ -843,6 +843,12 @@ and remains unrun. Build and live observer verification remain open.
 
 ## Rust orchestrator and first Anomaly port
 
+Native D3D12 DLSS now resolves the required interposer and feature
+addresses in Rust. The native capsule binds the typed pointers
+after admission. Source comparison matched the ordered lookups and
+the extra Present callbacks required by the owned route.
+[Source comparison](rust-migration.md#native-policy-cutover)
+
 XeSS Vulkan SR now plans its guide staging, private output barrier
 and copy-back in Rust. It shares the typed Vulkan recorder with
 the FG sequence and preserves the SR output layouts and extent.

@@ -3,13 +3,13 @@ use crate::com_ref::ComRef;
 use crate::gl_pipeline_abi::rsf_dlss_setup as Setup;
 use crate::render_abi::{RSF_DLSS_ABI_VERSION, rsf_sr_frame as Frame};
 use crate::sdk_module::{SdkModule, wide_path};
-use std::ffi::c_void;
+use std::ffi::{CStr, c_char, c_void};
 use std::ptr::{NonNull, null_mut};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use windows_sys::Win32::System::LibraryLoader::{
     GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GetModuleFileNameW, GetModuleHandleExW,
-    GetModuleHandleW,
+    GetModuleHandleW, GetProcAddress,
 };
 use windows_sys::core::w;
 
@@ -18,10 +18,83 @@ const OK: i32 = 0;
 const INVALID: i32 = -1;
 const ABI_MISMATCH: i32 = -2;
 const LOAD_FAILED: i32 = -4;
+const MISSING_ENTRY: i32 = -5;
 const INIT_FAILED: i32 = -6;
 const NOT_READY: i32 = -8;
 const FEATURE_FAILED: i32 = -9;
 const QUALITY: u32 = 1;
+const DLSS_FEATURE: u32 = 0;
+const COMMON_FEATURE: u32 = 1;
+
+const CORE_NAMES: [&CStr; 10] = [
+    c"slInit",
+    c"slSetD3DDevice",
+    c"slIsFeatureSupported",
+    c"slGetFeatureFunction",
+    c"slShutdown",
+    c"slGetNewFrameToken",
+    c"slSetConstants",
+    c"slSetTagForFrame",
+    c"slEvaluateFeature",
+    c"slFreeResources",
+];
+type CoreEntries = [Handle; CORE_NAMES.len()];
+type FeatureEntries = [Handle; 4];
+type FeatureLookup = unsafe extern "C" fn(Handle, u32, *const c_char, &mut Handle) -> i32;
+
+/// Resolve against the interposer held by the registration. The native leaf binds typed entries
+/// only after every required address is present.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_dlss_native12_core_entries(
+    module: Handle,
+    entries: &mut CoreEntries,
+) -> i32 {
+    for (entry, name) in entries.iter_mut().zip(CORE_NAMES) {
+        *entry = unsafe { GetProcAddress(module, name.as_ptr().cast()) }
+            .map_or(null_mut(), |function| function as *const () as Handle);
+    }
+    if entries.iter().any(|entry| entry.is_null()) {
+        MISSING_ENTRY
+    } else {
+        OK
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_dlss_native12_feature_entries(
+    native: Handle,
+    owns_present: u32,
+    lookup: FeatureLookup,
+    entries: &mut FeatureEntries,
+) -> i32 {
+    let resolve_pair = |group, names: [&CStr; 2], slots: &mut [Handle]| {
+        for (name, address) in names.into_iter().zip(slots.iter_mut()) {
+            let result = unsafe { lookup(native, group, name.as_ptr(), address) };
+            if result != OK {
+                return result;
+            }
+        }
+        if slots.iter().any(|entry| entry.is_null()) {
+            MISSING_ENTRY
+        } else {
+            OK
+        }
+    };
+    let (dlss, present) = entries.split_at_mut(2);
+    let result = resolve_pair(
+        DLSS_FEATURE,
+        [c"slDLSSGetOptimalSettings", c"slDLSSSetOptions"],
+        dlss,
+    );
+    if result != OK || owns_present == 0 {
+        return result;
+    }
+    resolve_pair(
+        COMMON_FEATURE,
+        [c"slHookPresent", c"slHookAfterPresent"],
+        present,
+    )
+}
 
 // C++ owns the Streamline types and SDK calls. The table is static in each consumer.
 #[repr(C)]
