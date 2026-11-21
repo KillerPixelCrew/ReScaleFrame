@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now owns the D3D11 overlay renderer, including pipeline leases,
+atlas replacement, geometry buffers and draw admission. D3D11 and D3D12
+share atlas bounds and actual index checks. The D3D11 bridge rejects
+foreign and deferred contexts, preserves the game's predication and
+leaves render targets bound. Source review confirmed the HLSL is
+unchanged. Public C headers are unchanged. Build, regression and device
+validation remain open.
+
 Rust now decides which overlay key and button events reach the game
 and owns the input counters. System keys and releases the game is owed
 still forward. Focus loss also clears the toggle latch, so a release

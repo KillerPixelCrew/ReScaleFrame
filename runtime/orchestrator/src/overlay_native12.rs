@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
 use crate::overlay_abi::{rsf_overlay_intent, rsf_overlay_stats, rsf_overlay_texture_update};
+use crate::overlay_geometry::{borrowed_draw_slice, patch_fits, valid_indices, valid_texture};
 use crate::overlay_host_abi::{rsf_overlay_draw_data as DrawData, rsf_overlay_vertex};
 use crate::overlay_native12_abi::{
     RSF_OVERLAY12_TEXTURE_LIMIT, rsf_overlay12_draw as Draw, rsf_overlay12_draw_call as DrawCall,
@@ -22,7 +23,6 @@ use windows_sys::Win32::{
 
 const SLOTS: usize = 3;
 const TEXTURES: usize = RSF_OVERLAY12_TEXTURE_LIMIT as usize;
-const TEXTURE_EDGE: u32 = 16384;
 const ATLAS_BATCH: usize = 32;
 const STARTUP_MS: u64 = 8000;
 const STARTUP_FADE_MS: u64 = 1000;
@@ -214,20 +214,6 @@ struct Texture {
     resource: ComRef,
 }
 
-// The overlay lends these arrays until its next layout. The caller serializes that layout.
-unsafe fn borrowed_draw_slice<'a, T>(data: *const T, count: u32) -> Option<&'a [T]> {
-    if count == 0 {
-        return Some(&[]);
-    }
-    let count = count as usize;
-    let bytes = count.checked_mul(size_of::<T>())?;
-    if data.is_null() || !data.is_aligned() || bytes > isize::MAX as usize {
-        return None;
-    }
-    data.addr().checked_add(bytes)?;
-    Some(unsafe { std::slice::from_raw_parts(data, count) })
-}
-
 struct Atlas {
     textures: Vec<Texture>,
     retained: [Vec<ComRef>; SLOTS],
@@ -256,10 +242,7 @@ impl Atlas {
         slot: usize,
         update: &rsf_overlay_texture_update,
     ) -> Option<()> {
-        if update.pixels.is_null()
-            || !(1..=TEXTURE_EDGE).contains(&update.width)
-            || !(1..=TEXTURE_EDGE).contains(&update.height)
-        {
+        if !valid_texture(update) {
             return None;
         }
         let position = self.position(update.id);
@@ -290,9 +273,7 @@ impl Atlas {
             Some(texture) => texture,
             None => &self.textures[position?],
         };
-        if update.x.checked_add(update.width)? > texture.width
-            || update.y.checked_add(update.height)? > texture.height
-        {
+        if !patch_fits(update, texture.width, texture.height) {
             return None;
         }
         let upload = unsafe {
@@ -327,14 +308,7 @@ impl Atlas {
         };
         for call in calls {
             let descriptor = self.position(call.texture_id)? as u32;
-            let end = call.index_offset.checked_add(call.index_count)? as usize;
-            let first = call.index_offset as usize;
-            let available_vertices = data.vertex_count.checked_sub(call.vertex_offset)?;
-            if indices
-                .get(first..end)?
-                .iter()
-                .any(|&index| index >= available_vertices)
-            {
+            if !valid_indices(call, indices, data.vertex_count) {
                 return None;
             }
             planned.push(DrawCall {

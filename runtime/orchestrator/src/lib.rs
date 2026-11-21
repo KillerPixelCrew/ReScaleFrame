@@ -124,6 +124,8 @@ mod overlay_cursor_capture;
 #[cfg(windows)]
 mod overlay_cursor_hooks;
 #[cfg(windows)]
+mod overlay_geometry;
+#[cfg(windows)]
 mod overlay_host;
 #[cfg(windows)]
 mod overlay_host_abi;
@@ -137,6 +139,8 @@ mod overlay_native12_abi;
 mod overlay_panel;
 #[cfg(windows)]
 mod overlay_pointer;
+#[cfg(windows)]
+mod overlay_renderer11;
 #[cfg(windows)]
 mod overlay_service;
 #[cfg(windows)]
