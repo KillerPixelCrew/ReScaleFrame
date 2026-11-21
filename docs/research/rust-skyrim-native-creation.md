@@ -100,6 +100,11 @@ Still C++ in `rsf_game_skyrim_se`, in suggested order:
    path's guarded reads and file hash. Rust checks the platform size before its version and
    publishes the five hook targets only after every guard passes. Source comparison matched
    the profile and guard data. Build, ABI and in-game verification remain open.
+   `observers.rs` owns the five observer hooks' creation, activation and disable.
+   The start path reuses the same admission as prepare. Failed disable or removal retains
+   its hook record so a later stop or prepare can retry. The native session still owns the
+   host and subsystem order. A Rust regression covers a failed start with a refused disable.
+   The regression remains unrun.
 2. `compatibility.cpp`: Community Shaders 1.9.1 handover (DLL SHA-256 `10ba95e6...097827`, PE image
    validation, six guard sites, `GetProcAddress` interception of `SKSEPlugin_Load`, Feature
    configure `+3a4b30` and HDR `+45cbd0` hooks, state machine, pre-device retention and the

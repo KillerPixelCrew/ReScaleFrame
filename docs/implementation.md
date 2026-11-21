@@ -198,8 +198,10 @@ live diagnostic verification remain open.
 Skyrim SE's Rust adapter publishes the GameSDK table and owns executable
 and observer admission. It reuses the cold-creation platform for SHA-256
 and guarded byte reads, and publishes the hook targets after all checks.
-The native lifecycle and detours still consume the same targets. Build,
-binary ABI and game verification remain open.
+Rust also owns the five observer hooks' install, start and disable
+transactions. A failed start retains any hook whose disable was refused
+so stop can retry. The native session lifecycle and detours still consume
+the same targets. Build, binary ABI and game verification remain open.
 
 Unity package D3D12 SR contexts and their recording slots are Rust-owned.
 The existing Unity bridge still provides recording and completion facts.

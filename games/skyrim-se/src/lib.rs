@@ -5,6 +5,7 @@
 //! Native code lends the typed callbacks and still owns the renderer lifecycle.
 mod creation;
 mod layout;
+mod observers;
 mod platform;
 mod plugin;
 

@@ -305,6 +305,58 @@ int32_t admit_observers()
     return result;
 }
 
+struct ObserverHook {
+    void* const* address;
+    void* detour;
+    void** trampoline;
+};
+const ObserverHook& observer_hook(uint32_t index) noexcept
+{
+    static const ObserverHook hooks[]{
+        {&target, reinterpret_cast<void*>(&observe_jitter), reinterpret_cast<void**>(&original)},
+        {&process_target, reinterpret_cast<void*>(&observe_process), reinterpret_cast<void**>(&original_process)},
+        {&resolution_target, reinterpret_cast<void*>(&observe_resolution), reinterpret_cast<void**>(&original_resolution)},
+        {&end_target, reinterpret_cast<void*>(&observe_end), reinterpret_cast<void**>(&original_end)},
+        {&upload_target, reinterpret_cast<void*>(&observe_upload), reinterpret_cast<void**>(&original_upload)},
+    };
+    return hooks[index];
+}
+
+rsf_skyrim_observer_control observer_control{};
+constexpr rsf_skyrim_observer_leaves observer_leaves{
+    []() noexcept {
+        const auto result = MH_Initialize();
+        return result == MH_OK || result == MH_ERROR_ALREADY_INITIALIZED;
+    },
+    [](uint32_t index) noexcept {
+        const auto& hook = observer_hook(index);
+        return MH_CreateHook(*hook.address, hook.detour, hook.trampoline) == MH_OK;
+    },
+    [](uint32_t index) noexcept {
+        const auto& hook = observer_hook(index);
+        const auto result = MH_RemoveHook(*hook.address);
+        if (result != MH_OK && result != MH_ERROR_NOT_CREATED) return false;
+        *hook.trampoline = nullptr;
+        return true;
+    },
+    [](uint32_t index) noexcept -> int32_t {
+        return static_cast<int32_t>(MH_EnableHook(*observer_hook(index).address));
+    },
+    [](uint32_t index) noexcept {
+        const auto result = MH_DisableHook(*observer_hook(index).address);
+        return result == MH_OK || result == MH_ERROR_DISABLED;
+    },
+    []() noexcept {
+        HMODULE pinned = nullptr;
+        return GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+            reinterpret_cast<LPCWSTR>(&observe_jitter), &pinned) != FALSE;
+    },
+    [](const rsf_game_host_services* host, const char* message) noexcept {
+        if (host->log) try { host->log(host->user, message); } catch (...) {}
+    },
+};
+static_assert(MH_OK == 0);
+
 rsf_result prepare(const rsf_game_prepare_args* args) noexcept try
 {
     auto valid = rsf_game::validate(args); if (valid != RSF_OK) return valid;
@@ -337,44 +389,8 @@ rsf_result prepare(const rsf_game_prepare_args* args) noexcept try
             args->host->log(args->host->user, message);
         }
     }
-    if (!original) {
-        const auto initialized = MH_Initialize();
-        if (initialized != MH_OK && initialized != MH_ERROR_ALREADY_INITIALIZED) return RSF_ERROR_NATIVE_REFUSED;
-        if (MH_CreateHook(target, reinterpret_cast<void*>(&observe_jitter), reinterpret_cast<void**>(&original)) != MH_OK)
-            return RSF_ERROR_NATIVE_REFUSED;
-        if (MH_CreateHook(process_target, reinterpret_cast<void*>(&observe_process), reinterpret_cast<void**>(&original_process)) != MH_OK) {
-            MH_RemoveHook(target); original = nullptr;
-            return RSF_ERROR_NATIVE_REFUSED;
-        }
-        if (MH_CreateHook(resolution_target, reinterpret_cast<void*>(&observe_resolution), reinterpret_cast<void**>(&original_resolution)) != MH_OK) {
-            MH_RemoveHook(process_target); original_process = nullptr;
-            MH_RemoveHook(target); original = nullptr;
-            return RSF_ERROR_NATIVE_REFUSED;
-        }
-        if (MH_CreateHook(end_target, reinterpret_cast<void*>(&observe_end), reinterpret_cast<void**>(&original_end)) != MH_OK) {
-            MH_RemoveHook(resolution_target); original_resolution = nullptr;
-            MH_RemoveHook(process_target); original_process = nullptr;
-            MH_RemoveHook(target); original = nullptr;
-            return RSF_ERROR_NATIVE_REFUSED;
-        }
-        if (MH_CreateHook(upload_target, reinterpret_cast<void*>(&observe_upload), reinterpret_cast<void**>(&original_upload)) != MH_OK) {
-            MH_RemoveHook(end_target); original_end = nullptr;
-            MH_RemoveHook(resolution_target); original_resolution = nullptr;
-            MH_RemoveHook(process_target); original_process = nullptr;
-            MH_RemoveHook(target); original = nullptr;
-            return RSF_ERROR_NATIVE_REFUSED;
-        }
-        HMODULE pinned = nullptr;
-        if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
-                              reinterpret_cast<LPCWSTR>(&observe_jitter), &pinned)) {
-            MH_RemoveHook(upload_target); original_upload = nullptr;
-            MH_RemoveHook(end_target); original_end = nullptr;
-            MH_RemoveHook(resolution_target); original_resolution = nullptr;
-            MH_RemoveHook(process_target); original_process = nullptr;
-            MH_RemoveHook(target); original = nullptr;
-            return RSF_ERROR_NATIVE_REFUSED;
-        }
-    }
+    if (!rsf_skyrim_observers_prepare(&observer_control, &observer_leaves))
+        return RSF_ERROR_NATIVE_REFUSED;
     if (!rsf::skyrim::cpu_prepare(*args->host)) {
         reason = "Skyrim CPU event hooks refused: expected bytes, hook ownership or clock unavailable.";
         return RSF_ERROR_NATIVE_REFUSED;
@@ -444,67 +460,37 @@ rsf_result start(const rsf_game_start_args* args) noexcept try
         if (services.log) services.log(services.user, stage);
         return RSF_ERROR_NATIVE_REFUSED;
     };
-    const auto enable = [](void* address, const char* stage) {
-        const auto status = MH_EnableHook(address);
-        if (status != MH_OK && services.log) {
-            char message[180]{};
-            std::snprintf(message, sizeof(message), "Skyrim start refused at %s: MinHook status=%d", stage, int(status));
-            services.log(services.user, message);
-        }
-        return status == MH_OK;
-    };
     if (!rsf::skyrim::compatibility_checkpoint(reason)) {
         if (services.log) services.log(services.user, reason);
         return RSF_ERROR_NATIVE_REFUSED;
     }
     if (enabled) return RSF_OK;
     reason = "Skyrim start refused: executable identity or jitter101E360 guard changed before enable.";
-    if (!match_target()) { if (services.log) services.log(services.user, reason); return RSF_ERROR_NATIVE_REFUSED; }
-    if (!enable(target, "jitter")) return RSF_ERROR_NATIVE_REFUSED;
-    if (!enable(process_target, "process-main")) {
-        MH_DisableHook(target);
+    const auto admitted = admit_observers();
+    if (admitted < 0) return RSF_ERROR_NOT_READY;
+    if (!admitted) { if (services.log) services.log(services.user, reason); return RSF_ERROR_NATIVE_REFUSED; }
+    if (!rsf_skyrim_observers_start(&observer_control, &observer_leaves, &services))
         return RSF_ERROR_NATIVE_REFUSED;
-    }
-    if (!enable(resolution_target, "resolution")) {
-        MH_DisableHook(process_target); MH_DisableHook(target);
-        return RSF_ERROR_NATIVE_REFUSED;
-    }
-    if (!enable(end_target, "renderer-end")) {
-        MH_DisableHook(resolution_target);
-        MH_DisableHook(process_target); MH_DisableHook(target);
-        return RSF_ERROR_NATIVE_REFUSED;
-    }
-    if (!enable(upload_target, "frame-upload")) {
-        MH_DisableHook(end_target); MH_DisableHook(resolution_target);
-        MH_DisableHook(process_target); MH_DisableHook(target);
-        return RSF_ERROR_NATIVE_REFUSED;
-    }
     if (!rsf::skyrim::sampling_start(services)) {
-        MH_DisableHook(upload_target); MH_DisableHook(end_target); MH_DisableHook(resolution_target);
-        MH_DisableHook(process_target); MH_DisableHook(target);
+        (void)rsf_skyrim_observers_disable(&observer_control, &observer_leaves, true);
         return refused("Skyrim start refused: sampler guard, binding service or hook enable failed.");
     }
     if (!rsf::skyrim::presentation_inputs_start(services)) {
         (void)rsf::skyrim::sampling_stop();
-        MH_DisableHook(upload_target); MH_DisableHook(end_target); MH_DisableHook(resolution_target);
-        MH_DisableHook(process_target); MH_DisableHook(target);
+        (void)rsf_skyrim_observers_disable(&observer_control, &observer_leaves, true);
         return refused("Skyrim start refused: presentation-input guard or hook enable failed.");
     }
     if (!rsf::skyrim::cpu_start()) {
         (void)rsf::skyrim::presentation_inputs_stop();
         (void)rsf::skyrim::sampling_stop();
-        MH_DisableHook(upload_target);
-        MH_DisableHook(end_target);
-        MH_DisableHook(resolution_target);
-        MH_DisableHook(process_target); MH_DisableHook(target);
+        (void)rsf_skyrim_observers_disable(&observer_control, &observer_leaves, true);
         return refused("Skyrim start refused: CPU guard or hook enable failed.");
     }
     if (!rsf::skyrim::native_creation_start()) {
         (void)rsf::skyrim::cpu_disable();
         (void)rsf::skyrim::presentation_inputs_stop();
         (void)rsf::skyrim::sampling_stop();
-        MH_DisableHook(upload_target); MH_DisableHook(end_target); MH_DisableHook(resolution_target);
-        MH_DisableHook(process_target); MH_DisableHook(target);
+        (void)rsf_skyrim_observers_disable(&observer_control, &observer_leaves, true);
         return refused("Skyrim start refused: native creation guard or hook enable failed; native presentation retained.");
     }
     enabled = true;
@@ -547,19 +533,9 @@ rsf_result stop(const rsf_game_control_args* args) noexcept try
     if (!rsf::skyrim::presentation_inputs_stop()) return RSF_ERROR_BUSY;
     if (!rsf::skyrim::sampling_stop()) return RSF_ERROR_BUSY;
     const bool cpu_stopped = rsf::skyrim::cpu_disable();
-    if (enabled) {
-        const auto jitter_result = MH_DisableHook(target);
-        const auto process_result = MH_DisableHook(process_target);
-        const auto resolution_result = MH_DisableHook(resolution_target);
-        const auto end_result = MH_DisableHook(end_target);
-        const auto upload_result = MH_DisableHook(upload_target);
-        if ((jitter_result != MH_OK && jitter_result != MH_ERROR_DISABLED) ||
-            (process_result != MH_OK && process_result != MH_ERROR_DISABLED) ||
-            (resolution_result != MH_OK && resolution_result != MH_ERROR_DISABLED) ||
-            (end_result != MH_OK && end_result != MH_ERROR_DISABLED) ||
-            (upload_result != MH_OK && upload_result != MH_ERROR_DISABLED)) return RSF_ERROR_BUSY;
-        enabled = false;
-    }
+    if (!rsf_skyrim_observers_disable(&observer_control, &observer_leaves, false))
+        return RSF_ERROR_BUSY;
+    enabled = false;
     if (!cpu_stopped || calls.load(std::memory_order_acquire)) return RSF_ERROR_BUSY;
     if (!rsf::skyrim::cpu_stop()) return RSF_ERROR_BUSY;
     services = {}; prepared = false;
