@@ -51,6 +51,8 @@ int main(int argc, char** argv) {
     probe.pe_machine = 0;
     CHECK(rsf_plugin_session_prepare(&options, &session) == RSF_OK && session);
     options.services.log = nullptr; // Plugin must retain the runtime's copy.
+    auto* duplicate = session;
+    CHECK(rsf_plugin_session_prepare(&options, &duplicate) == RSF_ERROR_BUSY && !duplicate);
     CHECK(rsf_plugin_session_start(session) == RSF_OK);
     CHECK(rsf_plugin_session_start(session) == RSF_OK);
     rsf_game_renderer_status status{sizeof(status), RSF_GAME_ABI_VERSION};
@@ -64,6 +66,7 @@ int main(int argc, char** argv) {
     options.services.log = log;
     CHECK(rsf_plugin_session_prepare(&options, &session) == RSF_ERROR_BUSY && session);
     CHECK(GetModuleHandleW(name.c_str()) != nullptr);
+    CHECK(rsf_plugin_session_prepare(&options, &duplicate) == RSF_ERROR_BUSY && !duplicate);
     CHECK(rsf_plugin_session_start(session) == RSF_ERROR_NOT_READY);
     CHECK(rsf_plugin_session_quiesce(session) == RSF_OK);
     CHECK(rsf_plugin_session_stop(session) == RSF_ERROR_BUSY);

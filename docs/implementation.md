@@ -4,6 +4,13 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The Runtime admits one GameSDK session per loaded plugin module. A duplicate
+prepare refuses before entering the plugin's callbacks. The module reservation
+follows the DLL lease through failed prepare, quiesce and stop. Source review
+traced the lease transitions. The extended lifetime fixture covers duplicate
+prepare with a prepared session and with a retained cleanup handle and remains
+unrun.
+
 The presentation bridge publishes the graphics device and upload queue as
 one snapshot and clears it during retirement. The graphics query checks
 the caller's size field before writing the full record. Source review
@@ -24,10 +31,11 @@ x64 layout, shader bytes and public entry points. Build and device
 validation remain open for this revision.
 
 Anomaly retries a refused Observe start with the session that successfully
-prepared. It leaves the previous stage configuration in place. A session
-retained after refused prepare remains ineligible for start. The updated
-synthetic fixture covers both results and remains unrun. Source review
-matched the retry to the Runtime's prepared session phase.
+prepared. If Runtime returns a cleanup handle after refused prepare, Anomaly
+retries quiesce and stop before preparing again. It preserves stage setup
+and keeps the handle if either cleanup step refuses. The updated synthetic
+fixture covers startup and cleanup retry and remains unrun. Source review
+matched these calls to the Runtime session phases and existing exports.
 
 The Rust plugin session constructs the versioned lifecycle arguments and
 checks the detection result. The C++ bridge catches native plugin

@@ -11,9 +11,13 @@ static OVERLAY: AtomicU32 = AtomicU32::new(0);
 static SINK: AtomicU32 = AtomicU32::new(0);
 static PREPARED: AtomicU32 = AtomicU32::new(0);
 static STARTED: AtomicU32 = AtomicU32::new(0);
+static QUIESCED: AtomicU32 = AtomicU32::new(0);
+static STOPPED: AtomicU32 = AtomicU32::new(0);
 static OVERLAY_ACCEPTS: AtomicBool = AtomicBool::new(false);
 static PREPARE_RESULT: AtomicI32 = AtomicI32::new(RSF_OK);
 static START_RESULT: AtomicI32 = AtomicI32::new(RSF_OK);
+static QUIESCE_RESULT: AtomicI32 = AtomicI32::new(-4);
+static STOP_RESULT: AtomicI32 = AtomicI32::new(-4);
 static OPTIONS_VALID: AtomicBool = AtomicBool::new(true);
 static SESSION: u8 = 0;
 
@@ -77,12 +81,25 @@ unsafe extern "C" fn prepare(options: *const SessionOptions, session: *mut *mut 
     unsafe { *session = ptr::addr_of!(SESSION).cast_mut().cast() };
     PREPARE_RESULT.load(SeqCst)
 }
-unsafe extern "C" fn start(session: *mut c_void) -> i32 {
+fn validate_session(session: *mut c_void) {
     if session != ptr::addr_of!(SESSION).cast_mut().cast() {
         OPTIONS_VALID.store(false, SeqCst);
     }
+}
+unsafe extern "C" fn start(session: *mut c_void) -> i32 {
+    validate_session(session);
     STARTED.fetch_add(1, SeqCst);
     START_RESULT.load(SeqCst)
+}
+unsafe extern "C" fn quiesce(session: *mut c_void) -> i32 {
+    validate_session(session);
+    QUIESCED.fetch_add(1, SeqCst);
+    QUIESCE_RESULT.load(SeqCst)
+}
+unsafe extern "C" fn stop(session: *mut c_void) -> i32 {
+    validate_session(session);
+    STOPPED.fetch_add(1, SeqCst);
+    STOP_RESULT.load(SeqCst)
 }
 
 fn counts() -> [u32; 9] {
@@ -132,6 +149,8 @@ fn retry_repeats_only_unfinished_steps() {
         module: ptr::null_mut(),
         prepare: Some(prepare),
         start: Some(start),
+        quiesce: Some(quiesce),
+        stop: Some(stop),
     };
 
     let mut entry = Entry::new();
@@ -162,8 +181,30 @@ fn retry_repeats_only_unfinished_steps() {
         PREPARE_REFUSED
     );
     assert_eq!(counts(), [2, 2, 2, 2, 2, 2, 1, 2, 1]);
+    assert_eq!(QUIESCED.load(SeqCst), 1);
+    assert_eq!(STOPPED.load(SeqCst), 0);
+    let retained = entry.session;
+
+    QUIESCE_RESULT.store(RSF_OK, SeqCst);
+    assert_eq!(
+        orchestrate(&mut entry, &leaves, &request, &runtime, register_options),
+        PREPARE_REFUSED
+    );
+    assert_eq!(entry.session, retained);
+    assert_eq!(counts(), [2, 2, 2, 2, 2, 2, 1, 2, 1]);
+    assert_eq!(STOPPED.load(SeqCst), 1);
 
     PREPARE_RESULT.store(RSF_OK, SeqCst);
+    STOP_RESULT.store(RSF_OK, SeqCst);
+    assert_eq!(
+        orchestrate(&mut entry, &leaves, &request, &runtime, register_options),
+        READY
+    );
+    assert_eq!(counts(), [2, 2, 2, 2, 2, 3, 2, 3, 2]);
+    assert!(entry.started && entry.observation == Observation::Active);
+    assert_eq!(QUIESCED.load(SeqCst), 3);
+    assert_eq!(STOPPED.load(SeqCst), 2);
+
     START_RESULT.store(-4, SeqCst);
     let mut entry = Entry::new();
     assert_eq!(
@@ -171,13 +212,15 @@ fn retry_repeats_only_unfinished_steps() {
         START_REFUSED
     );
     assert!(!entry.session.is_null() && entry.observation == Observation::Prepared);
-    assert_eq!(counts(), [3, 3, 3, 3, 3, 3, 2, 2, 1]);
+    assert_eq!(counts(), [3, 3, 3, 3, 3, 4, 3, 3, 2]);
     START_RESULT.store(RSF_OK, SeqCst);
     assert_eq!(
         orchestrate(&mut entry, &leaves, &request, &runtime, register_options),
         READY
     );
-    assert_eq!(counts(), [3, 3, 3, 3, 3, 3, 3, 3, 2]);
+    assert_eq!(counts(), [3, 3, 3, 3, 3, 4, 4, 4, 3]);
     assert!(entry.started && entry.observation == Observation::Active);
+    assert_eq!(QUIESCED.load(SeqCst), 3);
+    assert_eq!(STOPPED.load(SeqCst), 2);
     assert!(OPTIONS_VALID.load(SeqCst));
 }

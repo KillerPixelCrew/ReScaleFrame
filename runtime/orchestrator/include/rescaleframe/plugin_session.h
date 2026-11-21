@@ -18,6 +18,7 @@ typedef struct rsf_plugin_session_options {
 #define RSF_PLUGIN_SESSION_ABI_VERSION 1u
 /* Select and prepare the game module before starting a graphics pipeline. The runtime owns the
    module and copied services, and never unloads it while plugin-owned queued work remains.
+   A loaded module with an admitted session refuses another prepare with BUSY and a null output.
    Failed prepare may return BUSY with a non-null inactive session: retain that owner and retry
    quiesce/stop. Callers serialize the final successful stop against new operations on its handle. */
 RSF_RUNTIME_API rsf_result rsf_plugin_session_prepare(const rsf_plugin_session_options*, rsf_plugin_session** out);

@@ -74,13 +74,15 @@ struct SessionOptions {
 const _: () = assert!(size_of::<SessionOptions>() == 128);
 
 type PrepareFn = unsafe extern "C" fn(*const SessionOptions, *mut *mut c_void) -> i32;
-type StartFn = unsafe extern "C" fn(*mut c_void) -> i32;
+type ControlFn = unsafe extern "C" fn(*mut c_void) -> i32;
 
 /// The carrier-loaded Runtime, borrowed without a reference.
 struct Runtime {
     module: HMODULE,
     prepare: Option<PrepareFn>,
-    start: Option<StartFn>,
+    start: Option<ControlFn>,
+    quiesce: Option<ControlFn>,
+    stop: Option<ControlFn>,
 }
 
 impl Runtime {
@@ -90,13 +92,17 @@ impl Runtime {
         if module.is_null() {
             return None;
         }
-        // Both exports have the C signatures declared in plugin_session.h.
+        // These exports have the C signatures declared in plugin_session.h.
         let prepare = unsafe { export(module, c"rsf_plugin_session_prepare".to_bytes_with_nul()) };
         let start = unsafe { export(module, c"rsf_plugin_session_start".to_bytes_with_nul()) };
+        let quiesce = unsafe { export(module, c"rsf_plugin_session_quiesce".to_bytes_with_nul()) };
+        let stop = unsafe { export(module, c"rsf_plugin_session_stop".to_bytes_with_nul()) };
         Some(Self {
             module,
             prepare,
             start,
+            quiesce,
+            stop,
         })
     }
 }
@@ -254,10 +260,10 @@ fn orchestrate(
     register_options: fn(&[u16]),
 ) -> u32 {
     let ini = request.ini.as_ptr();
-    // A refused prepare can retain a cleanup-only handle. A successful
-    // prepare leaves the same session available for another start attempt.
-    if request.observe && entry.observation == Observation::RetainedAfterRefusal {
-        write_log(b"Anomaly refused: an earlier partial session is still owned.");
+    if request.observe
+        && entry.observation == Observation::RetainedAfterRefusal
+        && !retire_partial_observation(entry, runtime)
+    {
         return PREPARE_REFUSED;
     }
     if !entry.options_registered {
@@ -320,6 +326,26 @@ fn install_input(leaves: &Leaves, build: usize) {
     } else {
         write_log(fallback);
     }
+}
+
+fn retire_partial_observation(entry: &mut Entry, runtime: &Runtime) -> bool {
+    let (Some(quiesce), Some(stop)) = (runtime.quiesce, runtime.stop) else {
+        write_log(b"Anomaly refused: Runtime plugin-session cleanup exports missing.");
+        return false;
+    };
+    let result = unsafe { quiesce(entry.session) };
+    log_result("partial session quiesce", result);
+    if result != RSF_OK {
+        return false;
+    }
+    let result = unsafe { stop(entry.session) };
+    log_result("partial session stop", result);
+    if result != RSF_OK {
+        return false;
+    }
+    entry.session = ptr::null_mut();
+    entry.observation = Observation::Unprepared;
+    true
 }
 
 fn start_observation(entry: &mut Entry, request: &Request, runtime: &Runtime) -> u32 {

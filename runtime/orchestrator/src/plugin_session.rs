@@ -3,7 +3,7 @@ use crate::sdk_module::SdkModule;
 use rsf_game_sys::*;
 use std::ffi::CStr;
 use std::ptr;
-use std::sync::RwLock;
+use std::sync::{Mutex, PoisonError, RwLock};
 use windows_sys::Win32::{
     Foundation::FARPROC,
     System::LibraryLoader::{
@@ -68,8 +68,39 @@ enum Phase {
     Quiesced,
 }
 
+// GameSDK lifecycle callbacks have no instance handle. Reserve the loaded
+// module before any plugin calls and keep that reservation through final stop.
+static ADMITTED_MODULES: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+
+struct PluginModule(SdkModule);
+
+impl PluginModule {
+    fn admit(module: SdkModule) -> Result<Self, i32> {
+        let identity = module.as_ptr() as usize;
+        let mut modules = ADMITTED_MODULES
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if modules.contains(&identity) {
+            return Err(BUSY);
+        }
+        modules.try_reserve(1).map_err(|_| NOT_READY)?;
+        modules.push(identity);
+        Ok(Self(module))
+    }
+}
+
+impl Drop for PluginModule {
+    fn drop(&mut self) {
+        let identity = self.0.as_ptr() as usize;
+        let mut modules = ADMITTED_MODULES
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        modules.retain(|&admitted| admitted != identity);
+    }
+}
+
 struct Session {
-    _module: SdkModule,
+    _module: PluginModule,
     hooks: rsf_game_hooks_api,
     services: rsf_game_host_services,
     phase: RwLock<Phase>,
@@ -122,10 +153,15 @@ unsafe extern "C" fn rsf_plugin_session_prepare(
     let Some(module) = SdkModule::adopt_system(handle) else {
         return NOT_READY;
     };
+    let module = match PluginModule::admit(module) {
+        Ok(module) => module,
+        Err(result) => return result,
+    };
     let name = CStr::from_bytes_with_nul(RSF_GAME_ENTRY_POINT).expect("GameSDK entry point");
     // This export uses the checked GameSDK signature on Windows x64.
-    let entry =
-        unsafe { std::mem::transmute::<FARPROC, rsf_get_game_plugin_api_fn>(module.symbol(name)) };
+    let entry = unsafe {
+        std::mem::transmute::<FARPROC, rsf_get_game_plugin_api_fn>(module.0.symbol(name))
+    };
     if entry.is_none() {
         return ABI_MISMATCH;
     }
