@@ -95,7 +95,9 @@ typedef struct rsf_d3d11p_platform {
     uint32_t (*fsr4_supported)(void* bridge, const char* directory);
     int32_t (*create_queues)(void* bridge, uint32_t application_ready);
     int32_t (*create_upload_fence)(void* bridge);
-    int32_t (*create_slots)(void* bridge);
+    /* One allocator and closed list on the graphics device, as two owned COM references.
+       On failure the leaf has released both and the outputs are null. */
+    int32_t (*create_slot)(void* bridge, void** allocator, void** list);
     const rsf_shared_surface_platform* (*shared_surface_platform)(void);
     int32_t (*create_render_buffer)(void* bridge, uint32_t width, uint32_t height,
         uint32_t format, void** out); /* owned COM reference */
@@ -114,14 +116,15 @@ typedef struct rsf_d3d11p_platform {
     /* Frame and slot GPU work. */
     uint32_t (*queues_joined)(void* bridge, void* queue);
     int32_t (*join)(void* bridge, void* queue, uint32_t direction, uint64_t value);
+    /* Slot allocators and lists are borrowed from the Rust owner's slot lease. */
     /* Waits for the slot fence, resets allocator and list. *step is 0, 1 or 2. */
-    int32_t (*slot_reset)(void* bridge, uint32_t slot, uint64_t fence, uint32_t* step);
+    int32_t (*slot_reset)(void* bridge, void* allocator, void* list, uint64_t fence, uint32_t* step);
     int32_t (*upload_wait)(void* bridge, void* queue, uint64_t value);
     int32_t (*acquire_backbuffer)(void* physical, void** out); /* owned COM reference */
-    void (*record_copy)(void* bridge, uint32_t slot, void* backbuffer, void* source);
-    void* (*slot_command)(void* bridge, void* queue, uint32_t slot);
+    void (*record_copy)(void* bridge, void* list, void* backbuffer, void* source);
     void* (*context11)(void* bridge);
-    int32_t (*close_execute)(void* bridge, void* queue, uint32_t slot, void* command);
+    /* Closes the slot list and executes command, the list the queue takes (command_list). */
+    int32_t (*close_execute)(void* queue, void* list, void* command);
     int32_t (*upload_return)(void* bridge, void* queue, uint64_t value);
     int32_t (*signal_slot)(void* bridge, void* queue, uint64_t value);
     uint32_t (*has_application_ready)(void* bridge);
@@ -145,9 +148,13 @@ typedef struct rsf_d3d11p_platform {
     void* (*retire_fence)(void* bridge);
     int32_t (*retire_submit)(void* bridge, void* queue, void* vendor_fence,
         uint64_t vendor_value, void* list, uint64_t value);
+    /* Retains the facade's queues, fences, device and context. Rust retains its slots. */
     void (*retain_all)(void* bridge);
     void (*release_presentation)(void* bridge);
-    void (*release_device)(void* bridge, uint32_t destroy_host);
+    /* Closes the events. A private host's interop queue is released; a shared host keeps it.
+       Rust releases its slots next, then release_host ends a private host. */
+    void (*release_device)(void* bridge, uint32_t private_host);
+    void (*release_host)(void* bridge);
     void* (*source_queue)(void* bridge);
     /* Queue may be null while the active facade awaits physical creation. */
     void* (*command_list)(void* bridge, void* queue, void* list);

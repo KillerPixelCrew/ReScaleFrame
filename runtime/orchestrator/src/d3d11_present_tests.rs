@@ -18,6 +18,12 @@ struct FakeBuffer {
     handle: Raw,
 }
 
+// One slot pair leased to the owner. The fake keeps one reference; the owner holds the other.
+struct FakeCommands {
+    allocator: Box<FakeCom>,
+    list: Box<FakeCom>,
+}
+
 struct FakePhysical {
     chain: Box<FakeCom>,
     queue: Raw,
@@ -74,6 +80,10 @@ struct Fake {
     backbuffer_null: bool,
     unwrap_failure: bool,
     close_result: i32,
+    commands: Vec<FakeCommands>,
+    slot_failure: Option<usize>,
+    // Pairs the owner still held at each release_device and release_host call.
+    held_at_release: Vec<usize>,
     application_ready: bool,
     sessions: usize,
     refs: i64,
@@ -134,6 +144,9 @@ impl Fake {
             backbuffer_null: false,
             unwrap_failure: false,
             close_result: S_OK,
+            commands: Vec::new(),
+            slot_failure: None,
+            held_at_release: Vec::new(),
             application_ready: false,
             sessions: 0,
             refs: 0,
@@ -641,8 +654,58 @@ unsafe extern "C" fn join(_: Raw, queue: Raw, direction: u32, value: u64) -> i32
     call(format!("join {direction} {value}"));
     with(|fake| fake.join_result)
 }
-unsafe extern "C" fn slot_reset(_: Raw, slot: u32, fence: u64, step: *mut u32) -> i32 {
+unsafe extern "C" fn create_slot(_: Raw, allocator: *mut Raw, list: *mut Raw) -> i32 {
+    unsafe {
+        allocator.write(null_mut());
+        list.write(null_mut());
+    }
+    with(|fake| {
+        if fake.slot_failure == Some(fake.commands.len()) {
+            return E_FAIL;
+        }
+        let pair = FakeCommands {
+            allocator: fake_com(),
+            list: fake_com(),
+        };
+        unsafe {
+            give_ref(com_raw(&pair.allocator), allocator);
+            give_ref(com_raw(&pair.list), list);
+        }
+        fake.commands.push(pair);
+        S_OK
+    })
+}
+// The slot whose leased list, and allocator when given, the owner passed.
+fn slot_of(list: Raw, allocator: Option<Raw>) -> usize {
+    with(|fake| {
+        let slot = fake
+            .commands
+            .iter()
+            .rposition(|pair| {
+                com_raw(&pair.list) == list
+                    && allocator.is_none_or(|value| com_raw(&pair.allocator) == value)
+            })
+            .expect("a leased slot pair");
+        let pair = &fake.commands[slot];
+        assert_eq!((pair.list.refs.get(), pair.allocator.refs.get()), (2, 2));
+        slot % SLOTS
+    })
+}
+fn held_slot_pairs(fake: &Fake) -> usize {
+    fake.commands
+        .iter()
+        .filter(|pair| pair.list.refs.get() > 1 || pair.allocator.refs.get() > 1)
+        .count()
+}
+unsafe extern "C" fn slot_reset(
+    _: Raw,
+    allocator: Raw,
+    list: Raw,
+    fence: u64,
+    step: *mut u32,
+) -> i32 {
     unsafe { *step = 0 };
+    let slot = slot_of(list, Some(allocator)) as u32;
     with(|fake| fake.slots.push((slot, fence)));
     S_OK
 }
@@ -665,7 +728,8 @@ unsafe extern "C" fn acquire_backbuffer(chain: Raw, out: *mut Raw) -> i32 {
     }
     result
 }
-unsafe extern "C" fn record_copy(_: Raw, slot: u32, destination: Raw, source: Raw) {
+unsafe extern "C" fn record_copy(_: Raw, list: Raw, destination: Raw, source: Raw) {
+    let slot = slot_of(list, None);
     let render_index = with(|fake| {
         assert_eq!(destination, com_raw(&fake.backbuffer));
         fake.buffers
@@ -676,20 +740,14 @@ unsafe extern "C" fn record_copy(_: Raw, slot: u32, destination: Raw, source: Ra
     });
     call(format!("copy {slot} {render_index}"));
 }
-unsafe extern "C" fn slot_command(_: Raw, queue: Raw, slot: u32) -> Raw {
-    assert_queue(queue);
-    if with(|fake| fake.unwrap_failure) {
-        null_mut()
-    } else {
-        raw(0xC0 + slot as usize)
-    }
-}
 unsafe extern "C" fn context11(_: Raw) -> Raw {
     raw(0xD0)
 }
-unsafe extern "C" fn close_execute(_: Raw, queue: Raw, _: u32, command: Raw) -> i32 {
+unsafe extern "C" fn close_execute(queue: Raw, list: Raw, command: Raw) -> i32 {
     assert_queue(queue);
-    assert!(!command.is_null());
+    slot_of(list, None);
+    // The fake queue takes the slot list itself.
+    assert_eq!(command, list);
     with(|fake| fake.close_result)
 }
 unsafe extern "C" fn upload_return(_: Raw, queue: Raw, value: u64) -> i32 {
@@ -786,8 +844,19 @@ unsafe extern "C" fn retain_all(_: Raw) {
 unsafe extern "C" fn release_presentation(_: Raw) {
     call("release_presentation");
 }
-unsafe extern "C" fn release_device(_: Raw, destroy_host: u32) {
-    call(format!("release_device {destroy_host}"));
+unsafe extern "C" fn release_device(_: Raw, private_host: u32) {
+    call(format!("release_device {private_host}"));
+    with(|fake| {
+        let held = held_slot_pairs(fake);
+        fake.held_at_release.push(held);
+    });
+}
+unsafe extern "C" fn release_host(_: Raw) {
+    call("release_host");
+    with(|fake| {
+        let held = held_slot_pairs(fake);
+        fake.held_at_release.push(held);
+    });
 }
 unsafe extern "C" fn source_queue(_: Raw) -> Raw {
     raw(0x81)
@@ -796,7 +865,11 @@ unsafe extern "C" fn command_list(_: Raw, queue: Raw, list: Raw) -> Raw {
     if !queue.is_null() {
         assert_queue(queue);
     }
-    list
+    if with(|fake| fake.unwrap_failure) {
+        null_mut()
+    } else {
+        list
+    }
 }
 unsafe extern "C" fn verify_outer(_: Raw, _: Raw, _: Raw, _: Raw, _: Raw) -> i32 {
     with(|fake| fake.verify_result)
@@ -834,7 +907,7 @@ static PLATFORM: Platform = Platform {
     fsr4_supported,
     create_queues,
     create_upload_fence: ok_bridge,
-    create_slots: ok_bridge,
+    create_slot,
     shared_surface_platform,
     create_render_buffer,
     create_plain,
@@ -849,7 +922,6 @@ static PLATFORM: Platform = Platform {
     upload_wait,
     acquire_backbuffer,
     record_copy,
-    slot_command,
     context11,
     close_execute,
     upload_return,
@@ -871,6 +943,7 @@ static PLATFORM: Platform = Platform {
     retain_all,
     release_presentation,
     release_device,
+    release_host,
     source_queue,
     command_list,
     verify_outer,
@@ -1271,6 +1344,12 @@ fn creation_admission_publication_and_retirement() {
             "release_device 0"
         ]
     );
+    // Without a private host the pairs outlive release_device, as the facade members did.
+    with(|fake| {
+        assert_eq!(fake.held_at_release, [SLOTS]);
+        assert_eq!(fake.commands.len(), SLOTS);
+        assert_eq!(held_slot_pairs(fake), 0);
+    });
     assert!(rsf_core_d3d11p_active_bridge().is_null() && rsf_core_d3d11p_session().is_null());
     assert_eq!(generation(), 2);
     assert!(!RETIREMENT_PENDING.load(Ordering::Acquire));
@@ -1301,6 +1380,42 @@ fn failed_initialization_releases_unpublished_facade() {
     strict.project_id_utf8 = null();
     assert_eq!(prepare(&strict), 1);
     assert_eq!(create_with(&request(0)).0, DXGI_ERROR_UNSUPPORTED);
+}
+
+// A refused third pair leaves the first two with the unpublished facade. A private host's
+// interop queue goes first, then the pairs, then the host. Without one the pairs end after
+// release_device. A failed drain retains them.
+#[test]
+fn partial_slot_creation_releases_or_retains_created_pairs() {
+    for (private, drained) in [(false, true), (true, true), (true, false)] {
+        let _guard = reset();
+        assert_eq!(prepare(&setup(FSR3, 1)), 1);
+        with(|fake| {
+            fake.slot_failure = Some(2);
+            fake.host_available = private;
+            if !drained {
+                fake.drain_result = E_FAIL;
+            }
+        });
+        assert_eq!(create_with(&request(0)).0, E_FAIL);
+        assert!(rsf_core_d3d11p_active_bridge().is_null());
+        let calls = take_calls();
+        let (tail, held_at_release, held) = match (private, drained) {
+            (_, false) => (vec!["signal_wait 1 1", "retain"], vec![], 2),
+            (false, true) => (vec!["release_presentation", "release_device 0"], vec![2], 0),
+            (true, true) => (
+                vec!["release_presentation", "release_device 1", "release_host"],
+                vec![2, 0],
+                0,
+            ),
+        };
+        assert_eq!(calls[calls.len() - tail.len()..], tail[..]);
+        with(|fake| {
+            assert_eq!(fake.commands.len(), 2);
+            assert_eq!(fake.held_at_release, held_at_release);
+            assert_eq!(held_slot_pairs(fake), held);
+        });
+    }
 }
 
 #[test]
@@ -2172,6 +2287,12 @@ fn failed_retirement_retains_provider_and_inputs() {
         assert_eq!(create_with(&request(0)).0, DXGI_ERROR_UNSUPPORTED);
         assert!(take_calls().is_empty());
         with(|fake| {
+            assert_eq!(
+                held_slot_pairs(fake),
+                SLOTS,
+                "slot pairs stay GPU-reachable"
+            );
+            assert!(fake.held_at_release.is_empty());
             let physical = fake.physical.last().unwrap();
             assert_eq!(physical.chain.refs.get(), 2);
             assert_eq!(unsafe { &*physical.queue.cast::<FakeCom>() }.refs.get(), 2);

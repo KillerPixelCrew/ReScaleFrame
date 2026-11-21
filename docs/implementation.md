@@ -843,6 +843,20 @@ and remains unrun. Build and live observer verification remain open.
 
 ## Rust orchestrator and first Anomaly port
 
+The D3D11 host now adopts the outer creation facade in Rust. It
+checks the context and facade identity before transferring the caller's
+reference, and releases any facade returned with a failed wrap. The
+presentation owner now also owns the three command allocator and list
+pairs and retains them if GPU drain fails. Source checks matched both
+private callback tables. The device and game paths remain unrun.
+[Outer-chain adoption](research/rust-d3d11-native-chain-adoption.md) ·
+[Presentation command slots](research/rust-d3d11-present-slots.md)
+
+Native FidelityFX Vulkan FG now plans the HUD-less copy and its
+image-layout barriers in Rust. The SDK, capture and WSI borrow still
+use the same order. Source checks covered the private table and the
+disabled feature path. [Copy sequence](research/rust-vulkan-ffx-fg-copy-plan.md)
+
 The XeSS Vulkan bridge now admits Present inputs and sequences
 resource transitions, copies and SDK tags in Rust. Aliased inputs
 transition once and still receive each required tag. Source comparison

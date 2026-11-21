@@ -3,7 +3,7 @@
 // native_fg_vulkan.cpp keeps the SDK module, its contexts, the WSI hook bodies
 // and their marshalling, command recording, capture and timing. This owner
 // decides admission, including WSI registration and the process-wide route, slot reuse,
-// completion evidence, presentation admission and retirement order.
+// copy transitions, completion evidence, presentation admission and retirement order.
 use crate::allocate_handle;
 use crate::sdk_module::{FIDELITYFX_DLL, Loader, SdkModule};
 use crate::sr_session::has_capacity;
@@ -47,6 +47,13 @@ const BGRA8: u32 = 44;
 const RG16F: u32 = 83;
 const R32F: u32 = 100;
 const SHADER_READ: u32 = 5;
+const UNDEFINED_LAYOUT: u32 = 0;
+const TRANSFER_SRC_LAYOUT: u32 = 6;
+const TRANSFER_DST_LAYOUT: u32 = 7;
+const FAMILY_IGNORED: u32 = !0;
+// VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT.
+const MEMORY_ACCESS: u32 = 0x8000 | 0x1_0000;
+const ALL_COMMANDS: u32 = 0x1_0000;
 const SRGB_NONLINEAR: u32 = 0;
 const SLOT_COUNT: usize = RSF_FGVK_FRAME_SLOTS as usize;
 
@@ -78,6 +85,49 @@ impl Swapchain {
 }
 
 #[repr(C)]
+struct Barrier {
+    image: u64,
+    old_layout: u32,
+    new_layout: u32,
+    source_family: u32,
+    target_family: u32,
+    source_access: u32,
+    target_access: u32,
+    source_stages: u32,
+    target_stages: u32,
+}
+
+impl Barrier {
+    fn new(image: u64, old_layout: u32, new_layout: u32) -> Self {
+        Self {
+            image,
+            old_layout,
+            new_layout,
+            source_family: FAMILY_IGNORED,
+            target_family: FAMILY_IGNORED,
+            source_access: if old_layout == UNDEFINED_LAYOUT {
+                0
+            } else {
+                MEMORY_ACCESS
+            },
+            target_access: MEMORY_ACCESS,
+            source_stages: ALL_COMMANDS,
+            target_stages: ALL_COMMANDS,
+        }
+    }
+}
+
+#[repr(C)]
+struct ImageCopy {
+    source: u64,
+    target: u64,
+    source_layout: u32,
+    target_layout: u32,
+    width: u32,
+    height: u32,
+}
+
+#[repr(C)]
 struct Ops {
     loader: Loader,
     open: unsafe extern "C" fn(*const Setup, Handle, u32, u32, *mut Handle, *mut Handle) -> i32,
@@ -93,7 +143,8 @@ struct Ops {
     images: unsafe extern "C" fn(Handle, *mut u32, *mut u64) -> i32,
     acquire: unsafe extern "C" fn(Handle, u64, u64, u64, *mut u32, u64) -> i32,
     prepare: unsafe extern "C" fn(Handle, Handle, *const Frame) -> i32,
-    copy: unsafe extern "C" fn(Handle, Handle, *const Image, u64, u32),
+    barrier: unsafe extern "C" fn(Handle, Handle, *const Barrier),
+    copy: unsafe extern "C" fn(Handle, Handle, *const ImageCopy),
     configure: unsafe extern "C" fn(Handle, u32, u64, u64, *const c_char) -> i32,
     present: unsafe extern "C" fn(Handle, *const c_void, u64, *mut u64) -> i32,
     drain: unsafe extern "C" fn(Handle) -> i32,
@@ -109,8 +160,45 @@ struct Ops {
 
 const _: () = {
     assert!(size_of::<Swapchain>() == 32);
-    assert!(size_of::<Ops>() == 26 * size_of::<Handle>());
+    assert!(size_of::<Barrier>() == 40);
+    assert!(size_of::<ImageCopy>() == 32);
+    assert!(size_of::<Ops>() == 27 * size_of::<Handle>());
 };
+
+impl Ops {
+    fn record_hudless_copy(
+        &self,
+        native: Handle,
+        commands: Handle,
+        source: u64,
+        target: &PrivateImage,
+        [width, height]: [u32; 2],
+    ) {
+        let copy = ImageCopy {
+            source,
+            target: target.image,
+            source_layout: TRANSFER_SRC_LAYOUT,
+            target_layout: TRANSFER_DST_LAYOUT,
+            width,
+            height,
+        };
+        let target_initial_layout = if target.initialized != 0 {
+            SHADER_READ
+        } else {
+            UNDEFINED_LAYOUT
+        };
+        let barrier = |plan: Barrier| unsafe { (self.barrier)(native, commands, &plan) };
+        barrier(Barrier::new(copy.source, SHADER_READ, copy.source_layout));
+        barrier(Barrier::new(
+            copy.target,
+            target_initial_layout,
+            copy.target_layout,
+        ));
+        unsafe { (self.copy)(native, commands, &copy) };
+        barrier(Barrier::new(copy.source, copy.source_layout, SHADER_READ));
+        barrier(Barrier::new(copy.target, copy.target_layout, SHADER_READ));
+    }
+}
 
 /// The process-wide WSI route. The corrected SDK keeps one WSI dispatch table
 /// whose hooks carry no user pointer, so one owner holds the route from
@@ -570,15 +658,13 @@ impl Owner {
             return INIT_FAILED;
         }
         slot.state.recorded_hudless = 1;
-        unsafe {
-            (ops.copy)(
-                self.native,
-                commands,
-                input,
-                slot.color.image,
-                slot.color.initialized,
-            )
-        };
+        ops.record_hudless_copy(
+            self.native,
+            commands,
+            input.image,
+            &slot.color,
+            [width, height],
+        );
         slot.color.initialized = 1;
         slot.state.hudless = 1;
         let image = Image {
@@ -1250,7 +1336,8 @@ mod tests {
     unsafe extern "C" fn prepare(_: Handle, _: Handle, _: *const Frame) -> i32 {
         OK
     }
-    unsafe extern "C" fn copy(_: Handle, _: Handle, _: *const Image, _: u64, _: u32) {}
+    unsafe extern "C" fn barrier(_: Handle, _: Handle, _: *const Barrier) {}
+    unsafe extern "C" fn copy(_: Handle, _: Handle, _: *const ImageCopy) {}
     unsafe extern "C" fn configure(
         _: Handle,
         enabled: u32,
@@ -1366,6 +1453,7 @@ mod tests {
         images,
         acquire,
         prepare,
+        barrier,
         copy,
         configure,
         present,

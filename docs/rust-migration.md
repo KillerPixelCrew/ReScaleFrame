@@ -237,6 +237,14 @@ native leaves retain typed D3D12 and SDK calls. The source comparison
 includes both HUD-less modes, distinct tags for aliased inputs and
 the original failure cleanup. [XeSS input ownership](research/rust-vulkan-xess-present-inputs.md)
 
+The D3D11 host now adopts the native creation facade in Rust, and
+its presentation owner holds the three D3D12 command allocator and
+list pairs through checked retirement. Native FidelityFX FG also
+plans the Vulkan HUD-less copy and its barriers in Rust. The
+device and game paths remain open. [D3D11 adoption](research/rust-d3d11-native-chain-adoption.md) ·
+[Command-slot ownership](research/rust-d3d11-present-slots.md) ·
+[FidelityFX FG copy sequence](research/rust-vulkan-ffx-fg-copy-plan.md)
+
 The legacy D3D11 Streamline SR owner now selects the required
 interposer and DLSS feature lookups in Rust. It shares the seven
 common lookups and adds the five owner-only lookups for a session

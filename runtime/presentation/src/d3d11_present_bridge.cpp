@@ -32,9 +32,10 @@ static_assert(offsetof(rsf_d3d11p_platform, bridge_new) == 15 * sizeof(void*) &&
     offsetof(rsf_d3d11p_platform, create_plain) == 34 * sizeof(void*) &&
     offsetof(rsf_d3d11p_platform, join) == 41 * sizeof(void*) &&
     offsetof(rsf_d3d11p_platform, acquire_backbuffer) == 44 * sizeof(void*) &&
-    offsetof(rsf_d3d11p_platform, query_buffer_interface) == 55 * sizeof(void*) &&
-    offsetof(rsf_d3d11p_platform, drain_queues) == 58 * sizeof(void*) &&
-    offsetof(rsf_d3d11p_platform, set_description) == 62 * sizeof(void*) &&
+    offsetof(rsf_d3d11p_platform, query_buffer_interface) == 54 * sizeof(void*) &&
+    offsetof(rsf_d3d11p_platform, drain_queues) == 57 * sizeof(void*) &&
+    offsetof(rsf_d3d11p_platform, set_description) == 61 * sizeof(void*) &&
+    offsetof(rsf_d3d11p_platform, release_host) == 67 * sizeof(void*) &&
     offsetof(rsf_d3d11p_platform, verify_outer) == 70 * sizeof(void*));
 static_assert(sizeof(rsf_d3d11_present_status) == 280 && sizeof(rsf_observer_present_event) == 32);
 static_assert(DXGI_FORMAT_R8G8B8A8_UNORM == 28 && DXGI_FORMAT_B8G8R8A8_UNORM == 87 &&
@@ -95,10 +96,8 @@ struct Bridge final : public IDXGISwapChain4 {
     ComPtr<ID3D12Fence> complete;
     // Signalled on the provider queue once vendor retirement has joined.
     ComPtr<ID3D12Fence> retired;
-    struct Slot {
-        ComPtr<ID3D12CommandAllocator> allocator;
-        ComPtr<ID3D12GraphicsCommandList> list;
-    } slots[3];
+    // The three slot allocator/list pairs are leased by the Rust owner, which releases them
+    // where these members were destroyed.
     DXGI_SWAP_CHAIN_DESC description{};
     HANDLE completion_event = nullptr;
     HANDLE application_ready = nullptr;
@@ -435,12 +434,15 @@ int32_t create_upload_fence(void* b) {
     return rsf_shared_fence_create(self.device.Get(), self.graphics.native_device, settings().log,
         settings().user, &self.shared_fence) == RSF_SHARED_OK ? S_OK : E_FAIL;
 }
-int32_t create_slots(void* b) {
-    auto& self = *as_bridge(b);
-    auto* gpu = static_cast<ID3D12Device*>(self.graphics.device);
-    for (auto& slot : self.slots)
-        if (!rsf::create_command_list(gpu, D3D12_COMMAND_LIST_TYPE_DIRECT, slot.allocator.ReleaseAndGetAddressOf(),
-                slot.list.ReleaseAndGetAddressOf())) return E_FAIL;
+// Slot lists record on the graphics device: Streamline's proxy device when a host exists.
+int32_t create_slot(void* b, void** allocator, void** list) {
+    auto* gpu = static_cast<ID3D12Device*>(as_bridge(b)->graphics.device);
+    ID3D12CommandAllocator* created_allocator = nullptr;
+    ID3D12GraphicsCommandList* created_list = nullptr;
+    *allocator = *list = nullptr;
+    if (!rsf::create_command_list(gpu, D3D12_COMMAND_LIST_TYPE_DIRECT, &created_allocator, &created_list))
+        return E_FAIL;
+    *allocator = created_allocator; *list = created_list;
     return S_OK;
 }
 int32_t create_render_buffer(void* b, uint32_t width, uint32_t height, uint32_t format, void** out) {
@@ -515,11 +517,13 @@ int32_t join(void* b, void* queue, uint32_t direction, uint64_t value) {
     const auto signaled = signaller->Signal(self.complete.Get(), value);
     return FAILED(signaled) ? signaled : waiter->Wait(self.complete.Get(), value);
 }
-int32_t slot_reset(void* b, uint32_t index, uint64_t fence, uint32_t* step) {
-    auto& self = *as_bridge(b); auto& slot = self.slots[index];
+int32_t slot_reset(void* b, void* raw_allocator, void* raw_list, uint64_t fence, uint32_t* step) {
+    auto& self = *as_bridge(b);
+    auto* allocator = static_cast<ID3D12CommandAllocator*>(raw_allocator);
+    auto* list = static_cast<ID3D12GraphicsCommandList*>(raw_list);
     *step = 0; HRESULT result = self.wait(self.complete.Get(), fence); if (FAILED(result)) return result;
-    *step = 1; result = slot.allocator->Reset(); if (FAILED(result)) return result;
-    *step = 2; return slot.list->Reset(slot.allocator.Get(), nullptr);
+    *step = 1; result = allocator->Reset(); if (FAILED(result)) return result;
+    *step = 2; return list->Reset(allocator, nullptr);
 }
 // Signal with the preceding D3D11 work submitted before D3D12 waits on it.
 // Flushing before Signal leaves the dependency buffered until a later frame.
@@ -539,20 +543,16 @@ int32_t acquire_backbuffer(void* chain, void** out) {
     *out = value;
     return hr;
 }
-void record_copy(void* b, uint32_t index, void* backbuffer, void* source) {
-    auto& self = *as_bridge(b); auto* list = self.slots[index].list.Get();
+void record_copy(void* b, void* raw_list, void* backbuffer, void* source) {
+    auto& self = *as_bridge(b); auto* list = static_cast<ID3D12GraphicsCommandList*>(raw_list);
     const auto source_state = self.native12 ? D3D12_RESOURCE_STATE_PRESENT : D3D12_RESOURCE_STATE_COMMON;
     rsf::copy_transitioned(list, static_cast<ID3D12Resource*>(backbuffer),
         D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_PRESENT,
         static_cast<ID3D12Resource*>(source), source_state, source_state);
 }
-void* slot_command(void* b, void* queue, uint32_t index) {
-    auto& self = *as_bridge(b); return self.provider_list(queue, self.slots[index].list.Get());
-}
 void* context11(void* b) { return as_bridge(b)->context.Get(); }
-int32_t close_execute(void* b, void* queue, uint32_t index, void* command) {
-    auto& self = *as_bridge(b);
-    const auto closed = self.slots[index].list->Close();
+int32_t close_execute(void* queue, void* list, void* command) {
+    const auto closed = static_cast<ID3D12GraphicsCommandList*>(list)->Close();
     if (SUCCEEDED(closed)) {
         ID3D12CommandList* lists[]{static_cast<ID3D12GraphicsCommandList*>(command)};
         static_cast<ID3D12CommandQueue*>(queue)->ExecuteCommandLists(1, lists);
@@ -661,9 +661,9 @@ int32_t retire_submit(void* b, void* raw_queue, void* vendor_fence, uint64_t ven
     return FAILED(queue->Signal(self.retired.Get(), value)) ? RSF_BACKEND_ERROR_FEATURE_FAILED : RSF_BACKEND_OK;
 }
 // On device failure retain GPU-reachable storage for the process rather than free it.
+// The Rust owner has already retained its slot allocators and lists.
 void retain_all(void* b) {
     auto& self = *as_bridge(b);
-    for (auto& slot : self.slots) { slot.list.Detach(); slot.allocator.Detach(); }
     self.complete.Detach(); self.retired.Detach(); self.context.Detach(); self.device.Detach();
     self.parent.Detach(); self.interop_queue.Detach(); self.direct_device.Detach(); self.direct_queue.Detach();
 }
@@ -671,17 +671,19 @@ void release_presentation(void* b) {
     auto& self = *as_bridge(b);
     rsf_shared_fence_destroy(self.shared_fence); self.shared_fence = nullptr;
 }
-void release_device(void* b, uint32_t destroy_host) {
+void release_device(void* b, uint32_t private_host) {
     auto& self = *as_bridge(b);
     if (self.completion_event) CloseHandle(self.completion_event);
     if (self.application_ready) CloseHandle(self.application_ready);
     self.completion_event = self.application_ready = nullptr;
-    if (destroy_host) {
-        self.interop_queue.Reset();
-        for (auto& slot : self.slots) { slot.list.Reset(); slot.allocator.Reset(); }
-        self.complete.Reset(); self.retired.Reset(); self.context.Reset(); self.device.Reset(); self.parent.Reset();
-        rsf_streamline_host_destroy(self.host);
-    } else if (self.host) self.interop_queue.Detach(); // Shared SR callbacks retain this process-owned queue.
+    if (private_host) self.interop_queue.Reset();
+    else if (self.host) self.interop_queue.Detach(); // Shared SR callbacks retain this process-owned queue.
+}
+// A private host ends after the Rust owner has released the slot lists on its device.
+void release_host(void* b) {
+    auto& self = *as_bridge(b);
+    self.complete.Reset(); self.retired.Reset(); self.context.Reset(); self.device.Reset(); self.parent.Reset();
+    rsf_streamline_host_destroy(self.host);
 }
 void* source_queue(void* b) {
     auto& self = *as_bridge(b);
@@ -723,14 +725,14 @@ const rsf_d3d11p_platform platform{
     .adopt_host = leaf::adopt_host, .d3d11_device = leaf::d3d11_device, .create_host = leaf::create_host,
     .host = leaf::host, .resolve_graphics = leaf::resolve_graphics, .tearing_supported = leaf::tearing_supported,
     .fsr4_supported = leaf::fsr4_supported, .create_queues = leaf::create_queues,
-    .create_upload_fence = leaf::create_upload_fence, .create_slots = leaf::create_slots,
+    .create_upload_fence = leaf::create_upload_fence, .create_slot = leaf::create_slot,
     .shared_surface_platform = rsf_shared_surface_native_platform, .create_render_buffer = leaf::create_render_buffer,
     .create_plain = leaf::create_plain, .query_chain4 = leaf::query_chain4, .get_fullscreen = leaf::get_fullscreen,
     .set_fullscreen = leaf::set_fullscreen,
     .physical_present = leaf::physical_present, .resize_physical = leaf::resize_physical,
     .queues_joined = leaf::queues_joined, .join = leaf::join,
     .slot_reset = leaf::slot_reset, .upload_wait = leaf::upload_wait, .acquire_backbuffer = leaf::acquire_backbuffer,
-    .record_copy = leaf::record_copy, .slot_command = leaf::slot_command, .context11 = leaf::context11,
+    .record_copy = leaf::record_copy, .context11 = leaf::context11,
     .close_execute = leaf::close_execute, .upload_return = leaf::upload_return, .signal_slot = leaf::signal_slot,
     .has_application_ready = leaf::has_application_ready,
     .application_ready = leaf::application_ready, .report_device_failure = leaf::report_device_failure,
@@ -741,6 +743,7 @@ const rsf_d3d11p_platform platform{
     .buffer_referenced = leaf::buffer_referenced, .set_description = leaf::set_description,
     .retire_fence = leaf::retire_fence, .retire_submit = leaf::retire_submit, .retain_all = leaf::retain_all,
     .release_presentation = leaf::release_presentation, .release_device = leaf::release_device,
+    .release_host = leaf::release_host,
     .source_queue = leaf::source_queue,
     .command_list = leaf::command_list, .verify_outer = leaf::verify_outer,
 };

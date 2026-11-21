@@ -122,7 +122,7 @@ pub(crate) struct rsf_d3d11p_platform {
     pub fsr4_supported: unsafe extern "C" fn(Raw, *const c_char) -> u32,
     pub create_queues: unsafe extern "C" fn(Raw, u32) -> i32,
     pub create_upload_fence: unsafe extern "C" fn(Raw) -> i32,
-    pub create_slots: unsafe extern "C" fn(Raw) -> i32,
+    pub create_slot: unsafe extern "C" fn(Raw, *mut Raw, *mut Raw) -> i32,
     pub shared_surface_platform: unsafe extern "C" fn() -> *const shared_surface::Platform,
     pub create_render_buffer: unsafe extern "C" fn(Raw, u32, u32, u32, *mut Raw) -> i32,
 
@@ -135,13 +135,12 @@ pub(crate) struct rsf_d3d11p_platform {
 
     pub queues_joined: unsafe extern "C" fn(Raw, Raw) -> u32,
     pub join: unsafe extern "C" fn(Raw, Raw, u32, u64) -> i32,
-    pub slot_reset: unsafe extern "C" fn(Raw, u32, u64, *mut u32) -> i32,
+    pub slot_reset: unsafe extern "C" fn(Raw, Raw, Raw, u64, *mut u32) -> i32,
     pub upload_wait: unsafe extern "C" fn(Raw, Raw, u64) -> i32,
     pub acquire_backbuffer: unsafe extern "C" fn(Raw, *mut Raw) -> i32,
-    pub record_copy: unsafe extern "C" fn(Raw, u32, Raw, Raw),
-    pub slot_command: unsafe extern "C" fn(Raw, Raw, u32) -> Raw,
+    pub record_copy: unsafe extern "C" fn(Raw, Raw, Raw, Raw),
     pub context11: unsafe extern "C" fn(Raw) -> Raw,
-    pub close_execute: unsafe extern "C" fn(Raw, Raw, u32, Raw) -> i32,
+    pub close_execute: unsafe extern "C" fn(Raw, Raw, Raw) -> i32,
     pub upload_return: unsafe extern "C" fn(Raw, Raw, u64) -> i32,
     pub signal_slot: unsafe extern "C" fn(Raw, Raw, u64) -> i32,
     pub has_application_ready: unsafe extern "C" fn(Raw) -> u32,
@@ -163,6 +162,7 @@ pub(crate) struct rsf_d3d11p_platform {
     pub retain_all: unsafe extern "C" fn(Raw),
     pub release_presentation: unsafe extern "C" fn(Raw),
     pub release_device: unsafe extern "C" fn(Raw, u32),
+    pub release_host: unsafe extern "C" fn(Raw),
     pub source_queue: unsafe extern "C" fn(Raw) -> Raw,
     pub command_list: unsafe extern "C" fn(Raw, Raw, Raw) -> Raw,
     pub verify_outer: unsafe extern "C" fn(Raw, Raw, Raw, Raw, Raw) -> i32,
@@ -185,8 +185,9 @@ const _: () = {
     assert!(offset_of!(rsf_d3d11p_platform, create_plain) == 34 * 8);
     assert!(offset_of!(rsf_d3d11p_platform, join) == 41 * 8);
     assert!(offset_of!(rsf_d3d11p_platform, acquire_backbuffer) == 44 * 8);
-    assert!(offset_of!(rsf_d3d11p_platform, query_buffer_interface) == 55 * 8);
-    assert!(offset_of!(rsf_d3d11p_platform, drain_queues) == 58 * 8);
-    assert!(offset_of!(rsf_d3d11p_platform, set_description) == 62 * 8);
+    assert!(offset_of!(rsf_d3d11p_platform, query_buffer_interface) == 54 * 8);
+    assert!(offset_of!(rsf_d3d11p_platform, drain_queues) == 57 * 8);
+    assert!(offset_of!(rsf_d3d11p_platform, set_description) == 61 * 8);
+    assert!(offset_of!(rsf_d3d11p_platform, release_host) == 67 * 8);
     assert!(offset_of!(rsf_d3d11p_platform, verify_outer) == 70 * 8);
 };

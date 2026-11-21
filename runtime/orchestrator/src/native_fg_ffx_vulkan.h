@@ -22,8 +22,8 @@ rsf_backend_result rsf_ffxgvk_destroy(rsf_ffxgvk*);
 /* Private native leaf for the Rust owner in vulkan_ffx_fg.rs. The leaf keeps
    the FidelityFX module, SDK contexts, the WSI hook bodies and their
    marshalling, command recording, capture and timing. Rust decides setup and
-   swapchain admission, the process-wide WSI route, slot reuse, completion
-   evidence, presentation admission and retirement order. Status-returning
+   swapchain admission, the process-wide WSI route, slot reuse, copy transitions,
+   completion evidence, presentation admission and retirement order. Status-returning
    steps report rsf_backend_result; WSI steps return the VkResult unchanged.
    Creation-only steps read the borrowed create_info and run only inside
    rsf_ffxgvk_create. Rust admits the route before open and publishes the leaf
@@ -34,6 +34,15 @@ struct rsf_vkfg_platform;
 struct rsf_ffxgvk_swapchain {
     uint32_t width, height, format, color_space, layers, structure_valid;
     uint64_t old_chain;
+};
+struct rsf_ffxgvk_barrier {
+    uint64_t image;
+    uint32_t old_layout, new_layout, source_family, target_family;
+    uint32_t source_access, target_access, source_stages, target_stages;
+};
+struct rsf_ffxgvk_image_copy {
+    uint64_t source, target;
+    uint32_t source_layout, target_layout, width, height;
 };
 struct rsf_ffxgvk_ops {
     rsf_vk_sdk_loader loader;
@@ -52,7 +61,8 @@ struct rsf_ffxgvk_ops {
     int32_t (*images)(rsf_ffxgvk_native*, uint32_t*, uint64_t*);
     int32_t (*acquire)(rsf_ffxgvk_native*, uint64_t timeout, uint64_t semaphore, uint64_t fence, uint32_t*, uint64_t frame);
     int32_t (*prepare)(rsf_ffxgvk_native*, void* commands, const rsf_fgvk_frame*);
-    void (*copy)(rsf_ffxgvk_native*, void* commands, const rsf_srvk_image* source, uint64_t target, uint32_t initialized);
+    void (*barrier)(rsf_ffxgvk_native*, void* commands, const rsf_ffxgvk_barrier*);
+    void (*copy)(rsf_ffxgvk_native*, void* commands, const rsf_ffxgvk_image_copy*);
     int32_t (*configure)(rsf_ffxgvk_native*, uint32_t enabled, uint64_t color, uint64_t frame, const char* stage);
     int32_t (*present)(rsf_ffxgvk_native*, const void* info, uint64_t frame, uint64_t* present_count);
     int32_t (*drain)(rsf_ffxgvk_native*);
