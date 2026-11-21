@@ -141,6 +141,17 @@ pinned Rust checks. Its Release and Debug DLLs retained the original
 exports and dynamic Runtime lookup.
 [Hook transaction audit](research/rust-anomaly-native-hook-set.md)
 
+The integrated hook and palette build ran the same save on Standard and
+AVX. Both resized from 1280×720 to 1600×900, opened and closed the
+overlay, and turned the camera with mouse input. The moving-frame logs
+record valid hardware-skinned draws and 240 DLSS-G vendor presents per
+120 source frames. Final DLSS counts were 1,769 on Standard and 1,889
+on AVX, with zero refusals. Both scripted quits shut down Direct3D and
+returned code 0. The test restored the five staged inputs. Runtime and
+adapter hashes and separate logs are in the `merged-hook-set-standard`
+and `merged-hook-set-avx` directories under
+`.local/anomaly/staging/live-58fe95a-stage5/evidence/`.
+
 Anomaly's cold entry and startup retry state now live in Rust. The
 entry borrows the Runtime already loaded by the thin carrier. A partial
 session refuses before changing stage setup, and retrying an unfinished
