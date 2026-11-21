@@ -124,3 +124,14 @@ pixels matched RGBA (64, 128, 255, 0), including the original alpha.
 The native-format metadata, PNG and completed manifest are in
 `build/rust-migration-streamline/evidence/9367f1306570/Vulkan-readback/`.
 Streamline's real WSI generated-present capture remains unverified.
+
+## Shared readback locking
+
+The FidelityFX Vulkan wrapper now uses the readback owner's lock for
+recording and flushing. Its outer mutex guarded only those same calls.
+The SDK callback and drain rules retain their existing scope.
+The enabled Release build passed the two FidelityFX contracts, both
+linkage forms of the readback CPU contract and the Runtime DLL export
+contract. Runtime and the linked Godot extension matched their 381
+and 398 recorded export names and ordinals. The logs are under
+`build/rust-migration-streamline/evidence/ffx-capture-lock/`.

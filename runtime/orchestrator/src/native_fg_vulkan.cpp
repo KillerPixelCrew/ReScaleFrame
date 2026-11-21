@@ -16,7 +16,6 @@
 #include <cstring>
 #include <filesystem>
 #include <memory>
-#include <mutex>
 
 // The Rust owner relies on these Vulkan values and on the ops layout.
 static_assert(VK_FORMAT_R8G8B8A8_UNORM == 37 && VK_FORMAT_B8G8R8A8_UNORM == 44 && VK_FORMAT_R16G16_SFLOAT == 83 &&
@@ -60,7 +59,6 @@ struct rsf_ffxgvk_native {
     rsf_frame_record lease{};
     std::atomic<uint64_t> callbacks{0};
     rsf::FrameCaptureVk capture;
-    std::mutex capture_guard;
     // Rust destroys the effect, the swapchain and the slot resources first.
     ~rsf_ffxgvk_native() {
         if (wsi_registered && wsi_dispatch) {
@@ -174,7 +172,6 @@ FfxApiResource resource(const rsf_srvk_image& image) {
 }
 void record_capture(rsf_ffxgvk_native& self, VkCommandBuffer commands, const rsf_srvk_image& image, const rsf_frame_record& record,
     const char* role, uint32_t reset) noexcept try {
-    std::lock_guard lock(self.capture_guard);
     (void)self.capture.record(commands, image, record, role, reset);
 } catch (...) {}
 ffxReturnCode_t generate(ffxDispatchDescFrameGeneration* data, void* userdata) {
@@ -190,7 +187,6 @@ ffxReturnCode_t generate(ffxDispatchDescFrameGeneration* data, void* userdata) {
                 uint32_t(VK_FORMAT_R8G8B8A8_UNORM), source.description.width, source.description.height, VK_IMAGE_LAYOUT_GENERAL, 1};
             // The generated output uses the actual swapchain channel order.
             if (source.description.format == FFX_API_SURFACE_FORMAT_B8G8R8A8_UNORM) image.format = VK_FORMAT_B8G8R8A8_UNORM;
-            std::lock_guard lock(self.capture_guard);
             (void)self.capture.record(static_cast<VkCommandBuffer>(data->commandList), image, self.lease, "fg-generated-before-ui", data->reset, false);
         }
     }
@@ -375,7 +371,7 @@ int32_t drain(rsf_ffxgvk_native* self) noexcept {
     return RSF_BACKEND_OK;
 }
 void capture_flush(rsf_ffxgvk_native* self) noexcept try {
-    std::lock_guard lock(self->capture_guard); (void)self->capture.flush();
+    (void)self->capture.flush();
 } catch (...) {}
 int64_t timing_begin() noexcept {
     auto& config = rsf::vk_timing_detail::config();
