@@ -13,6 +13,7 @@
 #include <limits>
 #include <memory>
 #include "native_fg_dlss_vulkan_capture.h"
+#include "vulkan_fg_copy.h"
 #include "vulkan_fg_resources_native.h"
 #include "../../backends/common/frame_capture_vk.h"
 
@@ -57,7 +58,7 @@ struct Native {
 static_assert(sizeof(rsf_dlgvk_sample) == 40);
 static_assert(sizeof(rsf_dlgvk_sdk_call) == 96);
 static_assert(sizeof(rsf_dlgvk_swapchain) == 20 && sizeof(rsf_dlgvk_chain_support) == 8);
-static_assert(sizeof(rsf_dlgvk_platform) == 224);
+static_assert(sizeof(rsf_dlgvk_platform) == 232);
 static_assert(VK_IMAGE_USAGE_TRANSFER_SRC_BIT == 1 && VK_IMAGE_USAGE_TRANSFER_DST_BIT == 2 &&
     VK_FORMAT_R8G8B8A8_UNORM == 37 && VK_FORMAT_B8G8R8A8_UNORM == 44);
 
@@ -119,24 +120,6 @@ rsf_backend_result sample(void*, uintptr_t, void* user) {
             state.bIsVsyncSupportAvailable == sl::Boolean::eTrue, state.bIsDynamicMFGSupported == sl::Boolean::eTrue};
     }
     return result;
-}
-void transition(Native& self, VkCommandBuffer commands, VkImage image, VkImageLayout before, VkImageLayout after) {
-    VkImageMemoryBarrier barrier{}; barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    barrier.image = image; barrier.oldLayout = before; barrier.newLayout = after;
-    barrier.srcAccessMask = before == VK_IMAGE_LAYOUT_UNDEFINED ? 0 : VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-    barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-    barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    self.barrier(commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
-}
-void stage(Native& self, VkCommandBuffer commands, const rsf_srvk_image& source, const Image& destination) {
-    const auto image = reinterpret_cast<VkImage>(source.image);
-    transition(self, commands, image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-    transition(self, commands, rsf::vkfg::image_handle(destination), destination.initialized ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-    VkImageCopy region{}; region.srcSubresource = region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}; region.extent = {source.width, source.height, 1};
-    self.copy(commands, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, rsf::vkfg::image_handle(destination), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-    transition(self, commands, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    transition(self, commands, rsf::vkfg::image_handle(destination), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 }
 sl::Resource resource(const Image& image) {
     sl::Resource result{sl::ResourceType::eTex2d, reinterpret_cast<void*>(image.image), nullptr,
@@ -292,8 +275,11 @@ constexpr rsf_dlgvk_platform platform{
         return self.present(static_cast<VkQueue>(self.setup.queues[0]), static_cast<const VkPresentInfoKHR*>(value));
     },
     rsf_slvk_invoke, initialize, configure, sample, constants, tag, release,
-    [](void* user, void* commands, const rsf_srvk_image* image, const Image* destination) {
-        stage(*static_cast<Native*>(user), static_cast<VkCommandBuffer>(commands), *image, *destination);
+    [](void* user, void* commands, const rsf_vkfg_barrier* plan) {
+        rsf::vkfg::record_barrier(static_cast<Native*>(user)->barrier, static_cast<VkCommandBuffer>(commands), *plan);
+    },
+    [](void* user, void* commands, const rsf_vkfg_image_copy* plan) {
+        rsf::vkfg::record_copy(static_cast<Native*>(user)->copy, static_cast<VkCommandBuffer>(commands), *plan);
     },
     [](void* user, void* commands, const rsf_srvk_image* image, const rsf_frame_record* record, uint32_t role, uint64_t group) {
         static constexpr const char* roles[] = {"fg-depth", "fg-motion-uv", "fg-hudless-color"};

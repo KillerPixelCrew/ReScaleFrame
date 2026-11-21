@@ -31,18 +31,11 @@ rsf_backend_result rsf_ffxgvk_destroy(rsf_ffxgvk*);
    unregisters the WSI table before closing the leaf and releasing admission. */
 struct rsf_ffxgvk_native;
 struct rsf_vkfg_platform;
+struct rsf_vkfg_barrier;
+struct rsf_vkfg_image_copy;
 struct rsf_ffxgvk_swapchain {
     uint32_t width, height, format, color_space, layers, structure_valid;
     uint64_t old_chain;
-};
-struct rsf_ffxgvk_barrier {
-    uint64_t image;
-    uint32_t old_layout, new_layout, source_family, target_family;
-    uint32_t source_access, target_access, source_stages, target_stages;
-};
-struct rsf_ffxgvk_image_copy {
-    uint64_t source, target;
-    uint32_t source_layout, target_layout, width, height;
 };
 struct rsf_ffxgvk_ops {
     rsf_vk_sdk_loader loader;
@@ -61,8 +54,8 @@ struct rsf_ffxgvk_ops {
     int32_t (*images)(rsf_ffxgvk_native*, uint32_t*, uint64_t*);
     int32_t (*acquire)(rsf_ffxgvk_native*, uint64_t timeout, uint64_t semaphore, uint64_t fence, uint32_t*, uint64_t frame);
     int32_t (*prepare)(rsf_ffxgvk_native*, void* commands, const rsf_fgvk_frame*);
-    void (*barrier)(rsf_ffxgvk_native*, void* commands, const rsf_ffxgvk_barrier*);
-    void (*copy)(rsf_ffxgvk_native*, void* commands, const rsf_ffxgvk_image_copy*);
+    void (*barrier)(rsf_ffxgvk_native*, void* commands, const rsf_vkfg_barrier*);
+    void (*copy)(rsf_ffxgvk_native*, void* commands, const rsf_vkfg_image_copy*);
     int32_t (*configure)(rsf_ffxgvk_native*, uint32_t enabled, uint64_t color, uint64_t frame, const char* stage);
     int32_t (*present)(rsf_ffxgvk_native*, const void* info, uint64_t frame, uint64_t* present_count);
     int32_t (*drain)(rsf_ffxgvk_native*);

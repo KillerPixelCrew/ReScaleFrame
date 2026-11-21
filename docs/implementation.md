@@ -843,6 +843,15 @@ and remains unrun. Build and live observer verification remain open.
 
 ## Rust orchestrator and first Anomaly port
 
+Anomaly's overlay owner now orders the DirectInput and DXGI probe
+calls and admits their methods in Rust. Typed COM and Win32 calls,
+native detours and the existing rollback remain in place. DLSS and
+FidelityFX Vulkan FG now share the Rust staging copy sequence while
+preserving their respective copy extents, capture inputs and fence
+order. Device and game checks remain open.
+[Anomaly probes](research/rust-anomaly-overlay-probes.md) ·
+[Vulkan FG staging](research/rust-vulkan-dlss-fg-cutover.md#guide-and-hud-less-staging-commands)
+
 The native D3D12 overlay now owns its three command and descriptor
 slots in Rust. The fixed slot array keeps partial references until
 initialization releases the fence and tears down the renderer.

@@ -3,22 +3,43 @@
 #include "native_hook_ops.h"
 #include <d3d11.h>
 #include <dxgi1_2.h>
-#include <initializer_list>
-#include <cstring>
 
 using HookAddress = uintptr_t;
 using HookReason = const char*;
-using AddHook = bool (*)(void*, HookAddress, HookAddress, uint32_t, HookReason*) noexcept;
-using ProbeHooks = bool (*)(void*, AddHook, HookReason*, void**) noexcept;
 using InputObserver = void (*)(rsf::anomaly::overlay::DeviceKind) noexcept;
 using PresentCallback = void (*)(void*, IDXGISwapChain*) noexcept;
+
+struct ComProbeOps {
+    HookAddress (*slot)(void*, size_t) noexcept;
+    void (*release)(void*) noexcept;
+};
+
+struct InputProbeOps {
+    ComProbeOps com;
+    void* (*create_input)(FARPROC, const GUID*, uint32_t) noexcept;
+    void* (*create_device)(void*, const GUID*) noexcept;
+    HookAddress create_device_detour, acquire, unacquire, get_state, get_data, cooperative;
+};
+
+struct ChainObjects {
+    IDXGISwapChain* chain;
+    ID3D11DeviceContext* context;
+    ID3D11Device* device;
+};
+
+struct PresentProbeOps {
+    ComProbeOps com;
+    HRESULT (*create_warp_chain)(FARPROC, HWND, uint32_t, ChainObjects*) noexcept;
+    void* (*query_chain1)(IDXGISwapChain*) noexcept;
+    HookAddress present, present1, resize_buffers, resize_target;
+};
 
 using rsf::anomaly::HookOps;
 
 extern "C" {
-bool rsf_anomaly_overlay_install_input(HookAddress, const HookOps*, ProbeHooks, HookReason*) noexcept;
+bool rsf_anomaly_overlay_install_input(HookAddress, const HookOps*, const InputProbeOps*, HookReason*) noexcept;
 bool rsf_anomaly_overlay_install_present(PresentCallback, PresentCallback, HookAddress,
-    const HookOps*, ProbeHooks, HookReason*) noexcept;
+    const HookOps*, const PresentProbeOps*, HookReason*) noexcept;
 HookAddress rsf_anomaly_overlay_original(HookAddress) noexcept;
 HookAddress rsf_anomaly_overlay_present_original(uint32_t) noexcept;
 HookAddress rsf_anomaly_overlay_input_gate() noexcept;
@@ -30,6 +51,10 @@ void rsf_anomaly_overlay_before_resize(IDXGISwapChain*) noexcept;
 
 static_assert(DXGI_PRESENT_TEST == 1);
 static_assert(sizeof(HookAddress) == sizeof(void*));
+static_assert(sizeof(GUID) == 16 && offsetof(GUID, Data4) == 8);
+static_assert(sizeof(ComProbeOps) == 16 && sizeof(ChainObjects) == 24);
+static_assert(sizeof(InputProbeOps) == 80 && offsetof(InputProbeOps, create_device_detour) == 32);
+static_assert(sizeof(PresentProbeOps) == 64 && offsetof(PresentProbeOps, present) == 32);
 
 namespace rsf::anomaly::overlay {
 namespace {
@@ -41,41 +66,31 @@ constexpr size_t slot_unacquire = 8;
 constexpr size_t slot_get_device_state = 9;
 constexpr size_t slot_get_device_data = 10;
 constexpr size_t slot_set_cooperative_level = 13;
-constexpr size_t slot_present = 8;              // IDXGISwapChain
-constexpr size_t slot_resize_buffers = 13;
-constexpr size_t slot_resize_target = 14;
-constexpr size_t slot_present1 = 22;            // IDXGISwapChain1
 
-// DirectInput GUIDs and IIDs spelled out so the adapter links neither dinput8.lib nor dxguid.lib.
+// GUIDs accepted by the live CreateDevice detour. The probe only requests the system pair.
 constexpr GUID guid_sys_mouse{0x6F1D2B60, 0xD5A0, 0x11CF, {0xBF, 0xC7, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00}};
 constexpr GUID guid_sys_keyboard{0x6F1D2B61, 0xD5A0, 0x11CF, {0xBF, 0xC7, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00}};
 constexpr GUID guid_sys_mouse_em{0x6F1D2B80, 0xD5A0, 0x11CF, {0xBF, 0xC7, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00}};
 constexpr GUID guid_sys_mouse_em2{0x6F1D2B81, 0xD5A0, 0x11CF, {0xBF, 0xC7, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00}};
 constexpr GUID guid_sys_keyboard_em{0x6F1D2B82, 0xD5A0, 0x11CF, {0xBF, 0xC7, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00}};
 constexpr GUID guid_sys_keyboard_em2{0x6F1D2B83, 0xD5A0, 0x11CF, {0xBF, 0xC7, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00}};
-constexpr GUID iid_direct_input8_a{0xBF798030, 0x483A, 0x4DA2, {0xAA, 0x99, 0x5D, 0x64, 0xED, 0x36, 0x97, 0x00}};
-constexpr GUID iid_direct_input8_w{0xBF798031, 0x483A, 0x4DA2, {0xAA, 0x99, 0x5D, 0x64, 0xED, 0x36, 0x97, 0x00}};
 
-enum class Method : uint32_t { create_device, acquire, unacquire, get_state, get_data, cooperative, present,
-    present1, resize_buffers, resize_target };
-
-struct Collector {
-    void* registry;
-    AddHook add;
-    bool operator()(void* target, void* detour, Method method, HookReason* reason) const noexcept {
-        return add(registry, reinterpret_cast<HookAddress>(target), reinterpret_cast<HookAddress>(detour),
-            static_cast<uint32_t>(method), reason);
-    }
-};
+// IDs in overlay_hooks.rs used to retrieve the DXGI trampolines.
+enum class Method : uint32_t { present = 6, present1, resize_buffers, resize_target };
 
 InputGate* active_gate() noexcept {
     return reinterpret_cast<InputGate*>(rsf_anomaly_overlay_input_gate());
 }
 
 void** vtable(void* object) noexcept { return object ? *reinterpret_cast<void***>(object) : nullptr; }
+HookAddress probe_slot(void* object, size_t slot) noexcept {
+    return reinterpret_cast<HookAddress>(vtable(object)[slot]);
+}
 void release(void* object) noexcept {
     if (object) reinterpret_cast<ULONG (STDMETHODCALLTYPE*)(void*)>(vtable(object)[slot_release])(object);
 }
+
+constexpr ComProbeOps com_probe_ops{probe_slot, release};
 
 // ---- DirectInput ---------------------------------------------------------------------------------
 // The trampoline of the method the engine called, found from the object's own vtable so Unicode and
@@ -147,49 +162,31 @@ HRESULT STDMETHODCALLTYPE hook_set_cooperative_level(void* self, HWND window, DW
     return result;
 }
 
-bool probe_input(void* registry, AddHook add, HookReason* reason, void** owned_module) noexcept {
-    const Collector collect{registry, add};
-    wchar_t path[MAX_PATH]{};
-    const UINT length = GetSystemDirectoryW(path, MAX_PATH);
-    constexpr wchar_t suffix[] = L"\\dinput8.dll";
-    if (!length || length + _countof(suffix) > MAX_PATH) { *reason = "System32 directory unavailable"; return false; }
-    std::memcpy(path + length, suffix, sizeof(suffix));
-    // The same absolute path the carrier forwards to, so these are the engine's DirectInput classes.
-    HMODULE module = LoadLibraryExW(path, nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
-    if (!module) { *reason = "system dinput8.dll could not be loaded"; return false; }
-    *owned_module = module;
+void* create_input(FARPROC address, const GUID* iid, uint32_t version) noexcept {
     using Create = HRESULT (WINAPI*)(HINSTANCE, DWORD, REFIID, LPVOID*, LPUNKNOWN);
-    const auto create = reinterpret_cast<Create>(reinterpret_cast<void*>(GetProcAddress(module, "DirectInput8Create")));
-    if (!create) { *reason = "system DirectInput8Create missing"; return false; }
-    size_t devices = 0;
-    for (const GUID* iid : {&iid_direct_input8_a, &iid_direct_input8_w}) {
-        void* input = nullptr;
-        if (FAILED(create(GetModuleHandleW(nullptr), 0x0800, *iid, &input, nullptr)) || !input) continue;
-        const bool created = collect(vtable(input)[slot_create_device], reinterpret_cast<void*>(&hook_create_device),
-            Method::create_device, reason);
-        for (const GUID* guid : {&guid_sys_mouse, &guid_sys_keyboard}) {
-            if (!created) break;
-            void* device = nullptr;
-            const auto create_device = reinterpret_cast<HRESULT (STDMETHODCALLTYPE*)(void*, REFGUID, void**, void*)>(
-                vtable(input)[slot_create_device]);
-            if (FAILED(create_device(input, *guid, &device, nullptr)) || !device) continue;
-            void** table = vtable(device);
-            const bool ok =
-                collect(table[slot_acquire], reinterpret_cast<void*>(&hook_acquire), Method::acquire, reason) &&
-                collect(table[slot_unacquire], reinterpret_cast<void*>(&hook_unacquire), Method::unacquire, reason) &&
-                collect(table[slot_get_device_state], reinterpret_cast<void*>(&hook_get_device_state), Method::get_state, reason) &&
-                collect(table[slot_get_device_data], reinterpret_cast<void*>(&hook_get_device_data), Method::get_data, reason) &&
-                collect(table[slot_set_cooperative_level], reinterpret_cast<void*>(&hook_set_cooperative_level), Method::cooperative, reason);
-            release(device);
-            if (!ok) { release(input); return false; }
-            ++devices;
-        }
-        release(input);
-        if (!created) return false;
-    }
-    if (!devices) { *reason = "no DirectInput mouse or keyboard device could be probed"; return false; }
-    return true;
+    const auto create = reinterpret_cast<Create>(reinterpret_cast<void*>(address));
+    void* input = nullptr;
+    return SUCCEEDED(create(GetModuleHandleW(nullptr), version, *iid, &input, nullptr)) ? input : nullptr;
 }
+
+void* create_probe_device(void* input, const GUID* guid) noexcept {
+    using Create = HRESULT (STDMETHODCALLTYPE*)(void*, REFGUID, void**, void*);
+    const auto create = reinterpret_cast<Create>(vtable(input)[slot_create_device]);
+    void* device = nullptr;
+    return SUCCEEDED(create(input, *guid, &device, nullptr)) ? device : nullptr;
+}
+
+const InputProbeOps input_probe_ops{
+    .com = com_probe_ops,
+    .create_input = create_input,
+    .create_device = create_probe_device,
+    .create_device_detour = reinterpret_cast<HookAddress>(&hook_create_device),
+    .acquire = reinterpret_cast<HookAddress>(&hook_acquire),
+    .unacquire = reinterpret_cast<HookAddress>(&hook_unacquire),
+    .get_state = reinterpret_cast<HookAddress>(&hook_get_device_state),
+    .get_data = reinterpret_cast<HookAddress>(&hook_get_device_data),
+    .cooperative = reinterpret_cast<HookAddress>(&hook_set_cooperative_level),
+};
 
 // ---- DXGI ----------------------------------------------------------------------------------------
 using PresentFn = HRESULT (STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT);
@@ -219,51 +216,37 @@ HRESULT STDMETHODCALLTYPE hook_resize_target(IDXGISwapChain* self, const DXGI_MO
     return present_original<ResizeTargetFn>(Method::resize_target)(self, mode);
 }
 
-struct DummyChain {
-    HWND window{};
-    ID3D11Device* device{};
-    ID3D11DeviceContext* context{};
-    IDXGISwapChain* chain{};
-    ~DummyChain() {
-        if (chain) chain->Release();
-        if (context) context->Release();
-        if (device) device->Release();
-        if (window) DestroyWindow(window);
-    }
-};
-
-bool probe_present(void* registry, AddHook add, HookReason* reason, void** owned_module) noexcept {
-    const Collector collect{registry, add};
-    HMODULE d3d11 = LoadLibraryExW(L"d3d11.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
-    *owned_module = d3d11;
-    const auto create = d3d11 ? reinterpret_cast<PFN_D3D11_CREATE_DEVICE_AND_SWAP_CHAIN>(
-        reinterpret_cast<void*>(GetProcAddress(d3d11, "D3D11CreateDeviceAndSwapChain"))) : nullptr;
-    if (!create) { *reason = "d3d11.dll unavailable"; return false; }
-    DummyChain dummy;
-    dummy.window = CreateWindowExW(0, L"STATIC", L"", WS_POPUP, 0, 0, 8, 8, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
-    if (!dummy.window) { *reason = "dummy window creation failed"; return false; }
+HRESULT create_warp_chain(FARPROC address, HWND window, uint32_t extent, ChainObjects* objects) noexcept {
+    const auto create = reinterpret_cast<PFN_D3D11_CREATE_DEVICE_AND_SWAP_CHAIN>(reinterpret_cast<void*>(address));
     DXGI_SWAP_CHAIN_DESC desc{};
-    desc.BufferCount = 1; desc.BufferDesc.Width = 8; desc.BufferDesc.Height = 8;
-    desc.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM; desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-    desc.OutputWindow = dummy.window; desc.SampleDesc.Count = 1; desc.Windowed = TRUE; desc.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+    desc.BufferCount = 1;
+    desc.BufferDesc.Width = extent;
+    desc.BufferDesc.Height = extent;
+    desc.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    desc.OutputWindow = window;
+    desc.SampleDesc.Count = 1;
+    desc.Windowed = TRUE;
+    desc.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
     // WARP only touches the shared DXGI swap-chain class; the engine's adapter is not initialized here.
-    if (FAILED(create(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &desc,
-        &dummy.chain, &dummy.device, nullptr, &dummy.context)) || !dummy.chain) {
-        *reason = "dummy swap chain creation failed"; return false;
-    }
-    void** table = vtable(dummy.chain);
-    IDXGISwapChain1* chain1 = nullptr;
-    void* present1_target = nullptr;
-    if (SUCCEEDED(dummy.chain->QueryInterface(__uuidof(IDXGISwapChain1), reinterpret_cast<void**>(&chain1))) && chain1) {
-        present1_target = vtable(chain1)[slot_present1];
-        chain1->Release();
-    }
-    bool ok = collect(table[slot_present], reinterpret_cast<void*>(&hook_present), Method::present, reason) &&
-        collect(table[slot_resize_buffers], reinterpret_cast<void*>(&hook_resize_buffers), Method::resize_buffers, reason) &&
-        collect(table[slot_resize_target], reinterpret_cast<void*>(&hook_resize_target), Method::resize_target, reason);
-    if (ok && present1_target) ok = collect(present1_target, reinterpret_cast<void*>(&hook_present1), Method::present1, reason);
-    return ok;
+    return create(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &desc,
+        &objects->chain, &objects->device, nullptr, &objects->context);
 }
+
+void* query_chain1(IDXGISwapChain* chain) noexcept {
+    IDXGISwapChain1* chain1 = nullptr;
+    return SUCCEEDED(chain->QueryInterface(__uuidof(IDXGISwapChain1), reinterpret_cast<void**>(&chain1))) ? chain1 : nullptr;
+}
+
+const PresentProbeOps present_probe_ops{
+    .com = com_probe_ops,
+    .create_warp_chain = create_warp_chain,
+    .query_chain1 = query_chain1,
+    .present = reinterpret_cast<HookAddress>(&hook_present),
+    .present1 = reinterpret_cast<HookAddress>(&hook_present1),
+    .resize_buffers = reinterpret_cast<HookAddress>(&hook_resize_buffers),
+    .resize_target = reinterpret_cast<HookAddress>(&hook_resize_target),
+};
 }
 
 void set_input_observer(void (*observer)(DeviceKind) noexcept) noexcept {
@@ -272,13 +255,13 @@ void set_input_observer(void (*observer)(DeviceKind) noexcept) noexcept {
 
 bool install_input_hooks(InputGate& input, HookReason* reason) noexcept {
     HookReason unused = nullptr;
-    return rsf_anomaly_overlay_install_input(reinterpret_cast<HookAddress>(&input), &hook_ops, probe_input,
+    return rsf_anomaly_overlay_install_input(reinterpret_cast<HookAddress>(&input), &hook_ops, &input_probe_ops,
         reason ? reason : &unused);
 }
 
 bool install_present_hooks(const PresentSink& sink, HookReason* reason) noexcept {
     HookReason unused = nullptr;
     return rsf_anomaly_overlay_install_present(sink.before_present, sink.resize,
-        reinterpret_cast<HookAddress>(sink.user), &hook_ops, probe_present, reason ? reason : &unused);
+        reinterpret_cast<HookAddress>(sink.user), &hook_ops, &present_probe_ops, reason ? reason : &unused);
 }
 }

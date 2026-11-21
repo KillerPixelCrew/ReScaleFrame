@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::*;
+use crate::vulkan_fg_copy::{Barrier, ImageCopy};
 
 #[derive(Default)]
 struct Harness {
@@ -153,7 +154,8 @@ unsafe extern "C" fn sdk_release(_: Handle, _: usize, user: Handle) -> i32 {
     test.release_result
 }
 
-unsafe extern "C" fn stage(_: Handle, _: Handle, _: *const SourceImage, _: *const Image) {}
+unsafe extern "C" fn barrier(_: Handle, _: Handle, _: *const Barrier) {}
+unsafe extern "C" fn copy(_: Handle, _: Handle, _: *const ImageCopy) {}
 unsafe extern "C" fn capture(
     _: Handle,
     _: Handle,
@@ -216,7 +218,8 @@ const PLATFORM: Platform = Platform {
     constants: None,
     tag: None,
     release: Some(sdk_release),
-    stage,
+    barrier,
+    copy,
     capture,
     remember,
     capture_group: group,

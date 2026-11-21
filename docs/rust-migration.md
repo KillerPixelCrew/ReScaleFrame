@@ -271,6 +271,16 @@ six staging resources and releases partial allocations in reverse
 order. The FG private binding regenerated identically. [D3D11 bridge installation](research/rust-d3d11-host-bridge-install.md) ·
 [Anomaly FG resources](research/rust-anomaly-fg-stage.md)
 
+The native D3D12 overlay owns its three allocator, command list and
+descriptor slots in Rust, preserving fence admission and partial
+teardown order. Anomaly's overlay owner also orders and admits the
+DirectInput and DXGI probes in Rust. DLSS and FidelityFX Vulkan FG
+share a Rust staging sequence with their original source and output
+extents. Build, device and game checks remain open.
+[Overlay slots](research/rust-d3d12-overlay-slots.md) ·
+[Anomaly probes](research/rust-anomaly-overlay-probes.md) ·
+[Vulkan FG staging](research/rust-vulkan-dlss-fg-cutover.md#guide-and-hud-less-staging-commands)
+
 The legacy D3D11 Streamline SR owner now selects the required
 interposer and DLSS feature lookups in Rust. It shares the seven
 common lookups and adds the five owner-only lookups for a session
