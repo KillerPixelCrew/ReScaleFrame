@@ -170,6 +170,10 @@ mod sampler_bias;
 #[cfg(windows)]
 mod scene_abi;
 #[cfg(windows)]
+mod scene_promote;
+#[cfg(windows)]
+mod scene_promote_abi;
+#[cfg(windows)]
 mod settings_store;
 #[cfg(windows)]
 mod shader_patch;

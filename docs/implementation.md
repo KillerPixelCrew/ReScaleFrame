@@ -4,6 +4,15 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now owns D3D11 scene promotion, including stand-in texture leases,
+rebuild admission, substitution order, gate selection and fallback.
+The same fullscreen pass seeds scene colour on the recombine route.
+The native bridge creates typed views and issues the direct copy when
+the stand-ins have the same format. Promotion refuses foreign source
+textures during allocation, and the direct copy requires an immediate
+context on the promotion device. The public C headers are unchanged.
+Source checks covered the ABI bindings and both substitution routes.
+
 Rust now owns the shared D3D11 fullscreen pass and Present blit through
 one handle. Foreign and deferred contexts are refused, and automatic
 viewport sizing uses the RTV's mip. The native draw takes an independent
