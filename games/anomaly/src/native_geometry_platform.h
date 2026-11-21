@@ -16,6 +16,11 @@ enum {
 
 struct rsf_anomaly_geometry_engine { uintptr_t module, profile; };
 struct rsf_anomaly_geometry_child_range { uintptr_t first, end, capacity; };
+struct rsf_anomaly_geometry_hierarchy {
+    uint32_t vtable_rvas[4];
+    uint32_t children_offset;
+    bool (*read)(void*, const void*, size_t) noexcept;
+};
 struct rsf_anomaly_geometry_view_sample { uint32_t frame; uint8_t active, delay; };
 struct rsf_anomaly_geometry_palette { uintptr_t instances; uint64_t layout; uint32_t count; uint16_t mode; };
 struct rsf_anomaly_geometry_matrix { double values[16]; };
@@ -74,7 +79,7 @@ struct rsf_anomaly_geometry_platform {
     bool (*install)(rsf_anomaly_geometry_engine, uint32_t) noexcept;
     bool (*enable)() noexcept;
     bool (*disable)() noexcept;
-    bool (*children)(rsf_anomaly_geometry_engine, uintptr_t, rsf_anomaly_geometry_child_range*) noexcept;
+    rsf_anomaly_geometry_hierarchy (*hierarchy)(rsf_anomaly_geometry_engine) noexcept;
     bool (*pointer)(uintptr_t, uintptr_t*) noexcept;
     uint8_t (*pass)(rsf_anomaly_geometry_engine) noexcept;
     bool (*view)(rsf_anomaly_geometry_engine, rsf_anomaly_geometry_view_sample*) noexcept;

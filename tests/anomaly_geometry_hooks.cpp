@@ -669,9 +669,19 @@ int main(int argc, char** argv)
         has("draw-time flush main=") && has("captured=") && has("hud_scopes="));
     for (const auto& line : lines) CHECK(line.size() < 600);
 
-    // A hierarchy that cannot be walked latches capture off instead of publishing a partial lifetime.
-    const auto before_fault = geometry_stats();
+    // A borrowed child range does not belong to this owner, even when it cannot be traversed.
     child_list[0] = nullptr;
+    const auto borrowed_offset = hierarchy_children_offset + 3 * sizeof(void*);
+    const std::int32_t borrowed = 1;
+    std::memcpy(visual.data() + borrowed_offset, &borrowed, sizeof(borrowed));
+    const auto before_borrowed = geometry_stats();
+    CHECK(create(&owner, expected_name, expected_reader) == visual.data());
+    CHECK(geometry_stats().capture_faults == before_borrowed.capture_faults && geometry_hooks_active());
+
+    // An owned hierarchy that cannot be walked latches capture off rather than publishing a partial lifetime.
+    const std::int32_t owned = 0;
+    std::memcpy(visual.data() + borrowed_offset, &owned, sizeof(owned));
+    const auto before_fault = geometry_stats();
     CHECK(create(&owner, expected_name, expected_reader) == visual.data());
     CHECK(geometry_stats().capture_faults == before_fault.capture_faults + 1 && !geometry_hooks_active());
     CHECK(create(&owner, expected_name, expected_reader) == visual.data());

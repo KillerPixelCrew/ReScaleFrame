@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::engine_guards::Read;
-use std::ptr;
+use super::{Read, read_bytes};
 
 #[repr(C)]
 struct VertexConstantTable {
@@ -15,20 +14,6 @@ const _: () = {
     assert!(size_of::<VertexConstantTable>() == 24);
     assert!(std::mem::offset_of!(VertexConstantTable, table_rva) == 8);
 };
-
-fn read_bytes<const N: usize>(read: Read, address: usize) -> Option<[u8; N]> {
-    address.checked_add(N)?;
-    let mut bytes = [0; N];
-    // The native leaf guards the read and reports whether the complete span was copied.
-    unsafe {
-        read(
-            bytes.as_mut_ptr().cast(),
-            ptr::with_exposed_provenance(address),
-            N,
-        )
-    }
-    .then_some(bytes)
-}
 
 impl VertexConstantTable {
     fn data(

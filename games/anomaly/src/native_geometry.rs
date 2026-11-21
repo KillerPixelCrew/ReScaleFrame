@@ -7,7 +7,7 @@ mod coverage;
 mod scopes;
 mod vertex_constants;
 
-use crate::engine_guards::Image;
+use crate::engine_guards::{Image, Read};
 use crate::geometry_registry::{
     IdentityRegistry, Registry, rsf_anomaly_geometry_classify as classify,
     rsf_anomaly_geometry_find as find, rsf_anomaly_geometry_probe_visual as probe_visual,
@@ -232,6 +232,53 @@ fn read_pointer(platform: &Platform, address: usize) -> Option<usize> {
     unsafe { (platform.pointer)(address, &mut pointer) }.then_some(pointer)
 }
 
+fn read_bytes<const N: usize>(read: Read, address: usize) -> Option<[u8; N]> {
+    address.checked_add(N)?;
+    let mut bytes = [0; N];
+    // The native leaf guards the read and reports whether the complete span was copied.
+    unsafe {
+        read(
+            bytes.as_mut_ptr().cast(),
+            with_exposed_provenance(address),
+            N,
+        )
+    }
+    .then_some(bytes)
+}
+
+fn read_children(
+    platform: &Platform,
+    hierarchy: &Hierarchy,
+    module: usize,
+    visual: usize,
+) -> Option<ChildRange> {
+    let vtable = read_pointer(platform, visual)?;
+    let mut range = ChildRange::default();
+    if !hierarchy
+        .vtable_rvas
+        .iter()
+        .any(|rva| module.checked_add(*rva as usize) == Some(vtable))
+    {
+        return Some(range);
+    }
+    let address = visual.checked_add(hierarchy.children_offset as usize)?;
+    let size = size_of::<ChildRange>();
+    let borrowed = i32::from_ne_bytes(read_bytes(hierarchy.read, address.checked_add(size)?)?);
+    if borrowed != 0 {
+        return Some(range);
+    }
+    // The native vector is three pointer-sized addresses. The profiled layout is asserted
+    // on both sides, and the copy is guarded even when an engine object has gone away.
+    unsafe {
+        (hierarchy.read)(
+            ptr::from_mut(&mut range).cast(),
+            with_exposed_provenance(address),
+            size,
+        )
+    }
+    .then_some(range)
+}
+
 fn visual_tree(platform: &Platform, root: usize) -> Option<Vec<usize>> {
     let mut tree = Vec::new();
     if root == 0 {
@@ -243,13 +290,11 @@ fn visual_tree(platform: &Platform, root: usize) -> Option<Vec<usize>> {
     if engine.module == 0 {
         return Some(tree);
     }
+    let hierarchy = unsafe { (platform.hierarchy)(engine) };
     let mut index = 0;
     while let Some(&visual) = tree.get(index) {
         index += 1;
-        let mut range = ChildRange::default();
-        if !unsafe { (platform.children)(engine, visual, &mut range) } {
-            return None;
-        }
+        let range = read_children(platform, &hierarchy, engine.module, visual)?;
         let bytes = range.end.checked_sub(range.first)?;
         let pointer_size = size_of::<usize>();
         if range.capacity < range.end

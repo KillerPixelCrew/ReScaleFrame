@@ -123,3 +123,20 @@ arithmetic refuses a wrapping span before a guarded copy. Pinned
 formatting, locked Windows Cargo metadata and whitespace checks
 passed. The existing geometry hook fixture and game checks remain
 unrun.
+
+## Child-range admission
+
+Compared with `ef38645b`, the Rust geometry owner now selects the
+owned child ranges that it walks before model reuse and retirement.
+The native leaf lends the selected build's four hierarchy vtable
+RVAs, child-vector offset and guarded reader. Rust reads the object's
+vtable, checks the borrowed flag for a recognized hierarchy, and
+reads the three-pointer range only for an owned vector. The existing
+range validation, walk bound and capture-fault behavior remain in
+the same owner.
+
+Source comparison matched the four RVAs, guarded read order, 32-byte
+profile layout and all 16 private slots. The geometry fixture now
+distinguishes an unreadable borrowed hierarchy from a malformed owned
+one. Pinned formatting, locked Windows Cargo metadata and whitespace
+passed. The fixture and game checks remain unrun.

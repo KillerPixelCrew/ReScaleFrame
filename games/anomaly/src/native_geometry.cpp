@@ -76,6 +76,7 @@ static_assert(sizeof(rsf_anomaly_geometry_facts) == 32 && sizeof(rsf_anomaly_geo
 static_assert(sizeof(GeometryStats) == 40 && sizeof(GeometryCoverage) == 1472);
 static_assert(sizeof(rsf_anomaly_geometry_palette) == 24 && sizeof(rsf_anomaly_geometry_view_sample) == 8);
 static_assert(sizeof(rsf_anomaly_geometry_child_range) == 24 && sizeof(rsf_anomaly_geometry_callback) == 24);
+static_assert(sizeof(rsf_anomaly_geometry_hierarchy) == 32 && offsetof(rsf_anomaly_geometry_hierarchy, read) == 24);
 static_assert(sizeof(rsf_anomaly_geometry_writer) == 24 && sizeof(Matrix) == 128);
 static_assert(sizeof(NativeSite) == 32 && offsetof(NativeSite, rva) == 8 && offsetof(NativeSite, expected) == 12);
 static_assert(sizeof(UniqueGuard) == 24 && offsetof(UniqueGuard, rva) == 8 && offsetof(UniqueGuard, expected_hex) == 16);
@@ -148,16 +149,10 @@ bool hook_install(Engine engine, std::uint32_t size) noexcept
     return native_hooks.install(module, size, native_geometry_hook_sites(build_of(engine)));
 }
 
-bool children(Engine engine, std::uintptr_t visual, rsf_anomaly_geometry_child_range* range) noexcept
+rsf_anomaly_geometry_hierarchy hierarchy(Engine engine) noexcept
 {
-    std::uintptr_t vtable{};
-    if (!read(visual, vtable)) return false;
     const auto& tables = build_of(engine).geometry->hierarchy_vtables;
-    if (std::none_of(tables.begin(), tables.end(), [&](auto rva) { return vtable == engine.module + rva; }))
-        return true;
-    std::int32_t borrowed{};
-    return read(visual + hierarchy_children_offset + sizeof(*range), borrowed) &&
-        (borrowed || read(visual + hierarchy_children_offset, *range));
+    return {{tables[0], tables[1], tables[2], tables[3]}, hierarchy_children_offset, guarded_copy};
 }
 
 std::uint8_t pass(Engine engine) noexcept
@@ -222,7 +217,7 @@ constexpr rsf_anomaly_geometry_platform platform{
     hook_install,
     []() noexcept { return native_hooks.enable(); },
     []() noexcept { return native_hooks.disable(); },
-    children,
+    hierarchy,
     [](std::uintptr_t address, std::uintptr_t* result) noexcept { return read(address, *result); },
     pass, view, world, matrix, skin_mode, palette, bone_instances, bone, tree_lod,
 };

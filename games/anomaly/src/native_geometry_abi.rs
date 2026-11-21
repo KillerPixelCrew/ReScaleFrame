@@ -40,6 +40,18 @@ pub(crate) struct ChildRange {
 }
 
 #[repr(C)]
+pub(crate) struct Hierarchy {
+    pub vtable_rvas: [u32; 4],
+    pub children_offset: u32,
+    pub read: Read,
+}
+
+const _: () = {
+    assert!(size_of::<Hierarchy>() == 32);
+    assert!(std::mem::offset_of!(Hierarchy, read) == 24);
+};
+
+#[repr(C)]
 #[derive(Default)]
 pub(crate) struct ViewSample {
     pub frame: u32,
@@ -167,7 +179,7 @@ pub(crate) struct Platform {
     pub install: unsafe extern "C" fn(Engine, u32) -> bool,
     pub enable: unsafe extern "C" fn() -> bool,
     pub disable: unsafe extern "C" fn() -> bool,
-    pub children: unsafe extern "C" fn(Engine, usize, *mut ChildRange) -> bool,
+    pub hierarchy: unsafe extern "C" fn(Engine) -> Hierarchy,
     pub pointer: unsafe extern "C" fn(usize, *mut usize) -> bool,
     pub pass: unsafe extern "C" fn(Engine) -> u8,
     pub view: unsafe extern "C" fn(Engine, *mut ViewSample) -> bool,

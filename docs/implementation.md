@@ -857,6 +857,12 @@ and remains unrun. Build and live observer verification remain open.
 
 ## Rust orchestrator and first Anomaly port
 
+Anomaly's Rust geometry owner now distinguishes owned and borrowed
+child ranges before model reuse and retirement. The selected profile
+and guarded memory reads remain native. The expanded geometry fixture
+remains unrun.
+[Child-range admission](research/rust-anomaly-native-geometry.md#child-range-admission)
+
 Anomaly's vertex constant-buffer reads and writes now share Rust
 admission for reflected size, slot and span. Native code still
 supplies the selected profile and performs the guarded copy.
