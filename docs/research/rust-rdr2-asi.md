@@ -87,3 +87,19 @@ from Rust 1.100 (the pinned 1.94.1 toolchain is not installed here); `git diff -
 `cargo metadata --locked --offline` with `Cargo.lock` unchanged; a Python source comparison of the
 C and Rust ASI table order. MSVC, Cargo build, Rust tests, Clippy, CTest and the RDR2 fixtures are
 user-owned verification for this change.
+
+## Capture readback leases
+
+`capture_state/gpu_leases.rs` holds the readback buffer, its submitted
+queue until a successful covering signal, and the exact completion fence.
+The Rust queue table retains its queue and fence through pending reads,
+so a refused fence or a recycled queue address cannot tag another object's
+work as complete. A failed signal consumes that fence value and leaves the
+receipt eligible for a later signal on the same queue. The value range
+excludes the device-removal sentinel. When the pending list empties, native
+code detaches the idle owners under its capture mutex and drops them outside
+it. Ready readbacks keep their own buffer and fence for mapping. A later
+capture may start a new fence at value one. Artifact fields and the original
+submission identity remain unchanged. Typed D3D12 effects and backbuffer
+selection stay native. Source and layout comparison passed, with build and
+both GPU fixture runs still open.

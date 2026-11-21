@@ -6,6 +6,26 @@
 
 typedef struct rsf_rdr2_capture_state rsf_rdr2_capture_state;
 typedef struct rsf_rdr2_capture_submission rsf_rdr2_capture_submission;
+typedef struct rsf_rdr2_capture_gpu_queues rsf_rdr2_capture_gpu_queues;
+typedef struct rsf_rdr2_capture_gpu_ops {
+    void (*retain)(void*);
+    void (*release)(void*);
+    void* (*create_fence)(void* queue);
+    bool (*signal)(void* queue, void* fence, uint64_t value);
+} rsf_rdr2_capture_gpu_ops;
+typedef struct rsf_rdr2_capture_gpu_leases {
+    void* buffer;
+    void* fence;
+    void* queue;
+    const rsf_rdr2_capture_gpu_ops* ops;
+} rsf_rdr2_capture_gpu_leases;
+typedef struct rsf_rdr2_capture_gpu_proof { void* fence; uint64_t value; } rsf_rdr2_capture_gpu_proof;
+enum {
+    RSF_RDR2_GPU_SIGNAL_ACCEPTED = 0,
+    RSF_RDR2_GPU_CREATE_REFUSED = 1,
+    RSF_RDR2_GPU_SIGNAL_REFUSED = 2,
+    RSF_RDR2_GPU_NO_SLOT = 3
+};
 typedef struct rsf_rdr2_capture_readback {
     uint64_t generation, submission, fence_value;
     void* list;
@@ -136,10 +156,21 @@ bool rsf_rdr2_capture_readback_awaits_fence(const rsf_rdr2_capture_readback*, vo
 bool rsf_rdr2_capture_fence_readback(rsf_rdr2_capture_readback*, void* queue, uint64_t value);
 uint64_t rsf_rdr2_capture_after_submit(rsf_rdr2_capture_state*, rsf_rdr2_capture_submission*);
 void rsf_rdr2_capture_discard_submission(rsf_rdr2_capture_submission*);
+bool rsf_rdr2_capture_gpu_adopt(rsf_rdr2_capture_gpu_leases*, void* buffer, const rsf_rdr2_capture_gpu_ops*);
+void rsf_rdr2_capture_gpu_bind_queue(rsf_rdr2_capture_gpu_leases*, void* queue);
+void rsf_rdr2_capture_gpu_bind_fence(rsf_rdr2_capture_gpu_leases*, void* fence);
+void rsf_rdr2_capture_gpu_drop(rsf_rdr2_capture_gpu_leases*);
+uint32_t rsf_rdr2_capture_gpu_signal(rsf_rdr2_capture_state*, void* queue,
+    const rsf_rdr2_capture_gpu_ops*, rsf_rdr2_capture_gpu_proof*);
+rsf_rdr2_capture_gpu_queues* rsf_rdr2_capture_gpu_take_queues(rsf_rdr2_capture_state*);
+/* Drop detached queue owners outside the capture mutex. */
+void rsf_rdr2_capture_gpu_drop_queues(rsf_rdr2_capture_gpu_queues*);
 #ifdef __cplusplus
 }
 static_assert(sizeof(rsf_rdr2_capture_progress) == 32);
 static_assert(sizeof(rsf_rdr2_capture_readback) == 48 && offsetof(rsf_rdr2_capture_readback, list) == 24);
+static_assert(sizeof(rsf_rdr2_capture_gpu_ops) == 32 && sizeof(rsf_rdr2_capture_gpu_leases) == 32);
+static_assert(sizeof(rsf_rdr2_capture_gpu_proof) == 16);
 static_assert(sizeof(rsf_rdr2_capture_pipeline) == 40);
 static_assert(sizeof(rsf_rdr2_capture_image) == 160);
 static_assert(sizeof(rsf_rdr2_capture_draw) == 192 && offsetof(rsf_rdr2_capture_draw, stack) == 88);

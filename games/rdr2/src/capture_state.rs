@@ -10,7 +10,9 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 mod artifacts;
 #[cfg(windows)]
 mod bundle;
+mod gpu_leases;
 mod recordings;
+use gpu_leases::Queues;
 use recordings::Recordings;
 
 const MAX_DRAW_COPIES: u32 = 64;
@@ -56,6 +58,7 @@ struct Capture {
     inputs_remaining: AtomicU32,
     ledger: UnsafeCell<Ledger>,
     recordings: UnsafeCell<Recordings>,
+    queues: UnsafeCell<Queues>,
 }
 
 // The ASI passes its process-lived owner. The native mutex guards the non-atomic ledger.
@@ -71,6 +74,7 @@ impl Capture {
             inputs_remaining: AtomicU32::new(0),
             ledger: UnsafeCell::new(Ledger::default()),
             recordings: UnsafeCell::new(Recordings::default()),
+            queues: UnsafeCell::new(Queues::default()),
         }
     }
 }

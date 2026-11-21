@@ -29,6 +29,21 @@
 namespace {
 using Microsoft::WRL::ComPtr;
 using Pipeline = rsf_rdr2_capture_pipeline;
+constexpr rsf_rdr2_capture_gpu_ops gpu_ops{
+    [](void* object) noexcept { static_cast<IUnknown*>(object)->AddRef(); },
+    [](void* object) noexcept { static_cast<IUnknown*>(object)->Release(); },
+    [](void* pointer) noexcept -> void* {
+        auto* queue = static_cast<ID3D12CommandQueue*>(pointer);
+        ComPtr<ID3D12Device> device;
+        ComPtr<ID3D12Fence> fence;
+        if (FAILED(queue->GetDevice(IID_PPV_ARGS(&device))) ||
+            FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)))) return nullptr;
+        return fence.Detach();
+    },
+    [](void* queue, void* fence, uint64_t value) noexcept {
+        return SUCCEEDED(static_cast<ID3D12CommandQueue*>(queue)->Signal(static_cast<ID3D12Fence*>(fence), value));
+    },
+};
 Pipeline pipeline_facts(uint32_t ps, uint32_t vs, const D3D12_RENDER_TARGET_BLEND_DESC& b) noexcept
 {
     return {ps, vs, b.BlendEnable, static_cast<uint32_t>(b.SrcBlend), static_cast<uint32_t>(b.DestBlend),
@@ -41,8 +56,7 @@ struct List {
     ID3D12PipelineState* pso{};
 };
 struct Shot : rsf_rdr2_capture_readback {
-    ComPtr<ID3D12Resource> readback;
-    ComPtr<ID3D12Fence> fence;
+    rsf_rdr2_capture_gpu_leases gpu{};
     uint64_t resource{}, tick{}, caller{};
     UINT width{}, height{}, pitch{}, format{}, vertices{}, instances{}, frame{}, sequence{}, ordinal{};
     Pipeline pipeline{};
@@ -50,9 +64,12 @@ struct Shot : rsf_rdr2_capture_readback {
     UINT footprint_format{}, subresource{}, state_before{}, input_index{};
 
     Shot() : rsf_rdr2_capture_readback{} {}
-    uint64_t completed() const noexcept { return fence ? fence->GetCompletedValue() : 0; }
+    Shot(const Shot&) = delete;
+    Shot& operator=(const Shot&) = delete;
+    ~Shot() { rsf_rdr2_capture_gpu_drop(&gpu); }
+    ID3D12Resource* buffer() const noexcept { return static_cast<ID3D12Resource*>(gpu.buffer); }
+    uint64_t completed() const noexcept { return gpu.fence ? static_cast<ID3D12Fence*>(gpu.fence)->GetCompletedValue() : 0; }
 };
-struct Queue { ComPtr<ID3D12Fence> fence; uint64_t next{1}; };
 struct Presentation {
     UINT format{}, width{}, height{}, color_space{}, metadata_type{};
     bool color_space_set{};
@@ -96,7 +113,6 @@ struct State {
     std::unordered_map<SIZE_T, ID3D12Resource*> rtvs;
     std::unordered_map<ID3D12GraphicsCommandList*, List> lists;
     std::unordered_map<ID3D12PipelineState*, Pipeline> pipelines;
-    std::unordered_map<ID3D12CommandQueue*, Queue> queues;
     std::vector<std::shared_ptr<Shot>> shots;
     std::shared_ptr<Shot> tail;
     std::unordered_map<void*, uint32_t> sr_features;
@@ -374,12 +390,14 @@ bool copy_resource(ID3D12GraphicsCommandList* list, ID3D12Resource* target,
     destination.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER; destination.Width = bytes;
     destination.Height = 1; destination.DepthOrArraySize = 1; destination.MipLevels = 1;
     destination.SampleDesc.Count = 1; destination.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-    if (!shot->readback) {
+    if (!shot->buffer()) {
+        ComPtr<ID3D12Resource> buffer;
         const auto hr = device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &destination,
-            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&shot->readback));
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&buffer));
         if (FAILED(hr)) { log("readback allocation failed hr=%08lx", static_cast<unsigned long>(hr)); return false; }
+        if (!rsf_rdr2_capture_gpu_adopt(&shot->gpu, buffer.Detach(), &gpu_ops)) return false;
     }
-    shot->fence.Reset();
+    rsf_rdr2_capture_gpu_bind_fence(&shot->gpu, nullptr);
     // Preserve the observed input state; copying does not alter the producer/consumer contract.
     D3D12_RESOURCE_BARRIER barrier{};
     barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -387,7 +405,7 @@ bool copy_resource(ID3D12GraphicsCommandList* list, ID3D12Resource* target,
     if (before != D3D12_RESOURCE_STATE_COPY_SOURCE) list->ResourceBarrier(1, &barrier);
     D3D12_TEXTURE_COPY_LOCATION source{}; source.pResource = target;
     source.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-    D3D12_TEXTURE_COPY_LOCATION dest{}; dest.pResource = shot->readback.Get();
+    D3D12_TEXTURE_COPY_LOCATION dest{}; dest.pResource = shot->buffer();
     dest.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT; dest.PlacedFootprint = footprint;
     list->CopyTextureRegion(&dest, 0, 0, 0, &source, nullptr);
     barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
@@ -661,24 +679,24 @@ void after_submit(void* pointer, uint32_t, void* const*) noexcept try
     auto* queue = submitted.queue;
     std::lock_guard<std::mutex> lock(g->mutex);
     const auto serial = rsf_rdr2_capture_after_submit(g->capture, submitted.facts.get());
-    for (const auto& shot : submitted.shots)
+    for (const auto& shot : submitted.shots) {
         rsf_rdr2_capture_submit_readback(shot.get(), queue, serial);
+        rsf_rdr2_capture_gpu_bind_queue(&shot->gpu, queue);
+    }
     const auto awaits_fence = [queue](const std::shared_ptr<Shot>& shot) {
         return rsf_rdr2_capture_readback_awaits_fence(shot.get(), queue);
     };
     if (std::none_of(g->shots.begin(), g->shots.end(), awaits_fence)) return;
-    auto& state = g->queues[queue];
-    if (!state.fence) {
-        ComPtr<ID3D12Device> device;
-        if (FAILED(queue->GetDevice(IID_PPV_ARGS(&device))) ||
-            FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&state.fence)))) {
-            log("cannot create readback fence; retaining submitted readbacks"); return;
-        }
+    rsf_rdr2_capture_gpu_proof proof{};
+    switch (rsf_rdr2_capture_gpu_signal(g->capture, queue, &gpu_ops, &proof)) {
+    case RSF_RDR2_GPU_SIGNAL_ACCEPTED: break;
+    case RSF_RDR2_GPU_CREATE_REFUSED: log("cannot create readback fence; retaining submitted readbacks"); return;
+    case RSF_RDR2_GPU_SIGNAL_REFUSED: log("readback fence Signal failed"); return;
+    default: log("readback fence owner unavailable; retaining submitted readbacks"); return;
     }
-    const auto value = state.next++;
-    if (FAILED(queue->Signal(state.fence.Get(), value))) { log("readback fence Signal failed"); return; }
     for (const auto& shot : g->shots)
-        if (rsf_rdr2_capture_fence_readback(shot.get(), queue, value)) shot->fence = state.fence;
+        if (rsf_rdr2_capture_fence_readback(shot.get(), queue, proof.value))
+            rsf_rdr2_capture_gpu_bind_fence(&shot->gpu, proof.fence);
 }
 catch (...) { log("submission observation failed"); }
 void before_present(void* pointer) noexcept try
@@ -729,7 +747,8 @@ bool write_shot(const Shot& s) noexcept
     void* data{};
     const SIZE_T bytes = static_cast<SIZE_T>(s.pitch) * s.height;
     const D3D12_RANGE range{0, bytes};
-    const auto mapped = s.readback->Map(0, &range, &data);
+    if (!s.buffer()) return false;
+    const auto mapped = s.buffer()->Map(0, &range, &data);
     if (FAILED(mapped)) {
         log("readback Map failed hr=%08lx role=%s", static_cast<unsigned long>(mapped), s.role.c_str());
         return false;
@@ -738,7 +757,7 @@ bool write_shot(const Shot& s) noexcept
         reinterpret_cast<const uint16_t*>(g->directory), wcslen(g->directory), GetCurrentProcessId(),
         s.role.c_str(), static_cast<const uint8_t*>(data), bytes);
     const D3D12_RANGE empty{0, 0};
-    s.readback->Unmap(0, &empty);
+    s.buffer()->Unmap(0, &empty);
     return ok;
 }
 bool write_bundle() noexcept
@@ -781,6 +800,7 @@ DWORD WINAPI poll(void*) noexcept
 #endif
         rsf_rdr2_capture_poll_request(g->capture, reinterpret_cast<const uint16_t*>(g->request));
         std::vector<std::shared_ptr<Shot>> ready;
+        rsf_rdr2_capture_gpu_queues* retired_queues{};
         {
             std::lock_guard<std::mutex> lock(g->mutex);
             if (rsf_rdr2_capture_timeout(g->capture, GetTickCount64())) {
@@ -796,11 +816,13 @@ DWORD WINAPI poll(void*) noexcept
                 }
                 // ResizeBuffers must not be blocked by diagnostic references after retirement.
                 if (g->shots.empty()) {
+                    retired_queues = rsf_rdr2_capture_gpu_take_queues(g->capture);
                     for (auto& buffer : g->buffers) buffer.Reset();
                     g->selected = nullptr;
                 }
             }
         }
+        rsf_rdr2_capture_gpu_drop_queues(retired_queues);
         for (const auto& shot : ready) {
             const bool ok = write_shot(*shot);
             std::lock_guard<std::mutex> lock(g->mutex);

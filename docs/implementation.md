@@ -198,8 +198,11 @@ The RDR2 readback ledger claims the exact list generation before submit.
 If the post-submit fence fails, a later signal on the same queue can
 complete the original readback with its original submission identity.
 Rust also checks fence completion before recycling the tail across
-recordings. Native code retains the COM leases and executes the GPU
-calls. Missing submissions still keep the readback pending.
+recordings. Rust now owns the readback buffers and completion fences.
+It retains the exact submitted queue across refused signals, and drops
+idle queue owners outside the capture mutex once no readbacks are
+pending. Native code executes the GPU calls. Missing submissions
+still keep the readback pending. Source and layout checks passed.
 
 RDR2's Rust diagnostic workers preserve the module sampling marks,
 dump policy, census summary and optional RenderDoc request loop. Native
