@@ -6,7 +6,7 @@
 //! This module owns the bridge's admission and lifecycle: the shared device's readiness and its
 //! single creator, the permanent fault, the render events queued to Unity and their packets, the
 //! present interceptions and surface updates in progress, the player window frame the present
-//! renders under, whether the bridge's DXGI swap chain exists, and the checked close and release.
+//! renders under, the bridge's DXGI swap chain and resize, and the checked close and release.
 //! One record owns the D3D12 device, queue and fence, the imported semaphore and commands, and
 //! retains the Unity Vulkan device facts that shared images and commands need. Slot rotation and
 //! shared fence values follow the package bridge's submission ring (`bridge_interop.rs`).
@@ -19,8 +19,8 @@
 //! the forwarded vkQueuePresentKHR, and retirement keeps it through vkDeviceWaitIdle and the
 //! semaphore destruction, which need host access to the device's queues.
 //!
-//! vulkan_bridge.cpp keeps Unity interface access, typed graphics calls, the window and its DXGI
-//! swap chain. Native callbacks use explicit device handles and run outside the state mutex.
+//! vulkan_bridge.cpp keeps Unity interface access and typed graphics and Win32 calls. Native
+//! callbacks use explicit handles and run outside the state mutex.
 //! The orchestrator's Vulkan frame-generation swapchain owners have their own presentation
 //! tables and this crate does not link them, so the registry here is the bridge's own.
 //!
@@ -265,6 +265,30 @@ impl Drop for SharedDevice {
     }
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct SurfaceOps {
+    create: unsafe extern "C" fn(*const DeviceHandles, *mut c_void, u32, u32) -> *mut c_void,
+    extent: unsafe extern "C" fn(*mut c_void, *mut u32, *mut u32),
+    drain: unsafe extern "C" fn(*const DeviceHandles) -> bool,
+    resize: unsafe extern "C" fn(*mut c_void, u32, u32) -> bool,
+    destroy: unsafe extern "C" fn(*mut c_void),
+}
+
+const _: () = assert!(size_of::<SurfaceOps>() == 5 * size_of::<usize>());
+
+struct Surface {
+    chain: *mut c_void,
+    ops: SurfaceOps,
+}
+
+impl Drop for Surface {
+    fn drop(&mut self) {
+        // SAFETY: Creation transferred one IDXGISwapChain3 reference to this owner.
+        unsafe { (self.ops.destroy)(self.chain) };
+    }
+}
+
 struct State {
     /// Set before invoking the first creation leaf and cleared after publication or rollback.
     creating: bool,
@@ -278,8 +302,7 @@ struct State {
     entries: u32,
     /// The last player window frame, whose identity the present interception renders under.
     window: Option<Frame>,
-    /// The bridge's DXGI swap chain exists. It goes with the other objects at release.
-    surface: bool,
+    surface: Option<Surface>,
     images: [Option<Image>; SHARED_IMAGES],
     /// Images whose barriers are recorded in the current command buffer.
     recorded_images: u32,
@@ -308,7 +331,7 @@ impl State {
             events: [FREE; EVENTS],
             entries: 0,
             window: None,
-            surface: false,
+            surface: None,
             images: [None; SHARED_IMAGES],
             recorded_images: 0,
             partial_submission: false,
@@ -462,7 +485,11 @@ impl State {
     }
 
     fn release(&mut self) {
-        if self.closed && self.device.is_none() && self.images.iter().all(Option::is_none) {
+        if self.closed
+            && self.device.is_none()
+            && self.surface.is_none()
+            && self.images.iter().all(Option::is_none)
+        {
             *self = Self::new();
         }
     }
@@ -771,27 +798,36 @@ unsafe extern "C" fn rsf_unity_vulkan_probe_idle(ready: *mut u32) -> u32 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_unity_vulkan_close() -> u32 {
-    u32::from(lock().close())
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_vulkan_reopen() {
-    lock().reopen();
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_vulkan_release(retire_surface: unsafe extern "C" fn()) -> bool {
-    let closed = lock().closed;
-    if !closed || !rsf_unity_vulkan_commands_retired() {
+extern "C" fn rsf_unity_vulkan_release() -> bool {
+    if !lock().close() {
         return false;
     }
-    let (images, mut device) = {
+    if rsf_unity_vulkan_presentation_try_begin() == 0 {
+        lock().reopen();
+        return false;
+    }
+    let released = release_closed();
+    if !released {
+        lock().reopen();
+    }
+    end_lease();
+    released
+}
+
+fn release_closed() -> bool {
+    if !rsf_unity_vulkan_commands_retired() {
+        return false;
+    }
+    let (images, surface, mut device) = {
         let mut state = lock();
         if state.device.is_none() && state.images.iter().any(Option::is_some) {
             return false;
         }
-        (std::mem::take(&mut state.images), state.device.take())
+        (
+            std::mem::take(&mut state.images),
+            state.surface.take(),
+            state.device.take(),
+        )
     };
     if let Some(device) = &mut device {
         for image in images.into_iter().flatten() {
@@ -799,9 +835,8 @@ extern "C" fn rsf_unity_vulkan_release(retire_surface: unsafe extern "C" fn()) -
         }
         device.retire_commands();
     }
-    // Native DXGI retains its own swap chain. Reset it before dropping the shared queue and
-    // device, while close and the presentation lease still block new work.
-    unsafe { retire_surface() };
+    // Drop the chain before the shared queue and device it was created on.
+    drop(surface);
     drop(device);
     rsf_unity_interop_release();
     lock().release();
@@ -809,13 +844,59 @@ extern "C" fn rsf_unity_vulkan_release(retire_surface: unsafe extern "C" fn()) -
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_unity_vulkan_surface_created() {
-    lock().surface = true;
+extern "C" fn rsf_unity_vulkan_surface_ready() -> u32 {
+    u32::from(lock().surface.is_some())
 }
 
+/// An entry keeps the shared device alive and the presentation lease serializes creation,
+/// resize and every use of the borrowed chain. No native operation runs under a state lock.
 #[unsafe(no_mangle)]
-extern "C" fn rsf_unity_vulkan_surface_ready() -> u32 {
-    u32::from(lock().surface)
+unsafe extern "C" fn rsf_unity_vulkan_configure_surface(
+    width: u32,
+    height: u32,
+    ops: *const SurfaceOps,
+) -> *mut c_void {
+    let Some(ops) = (unsafe { ops.as_ref() }) else {
+        return ptr::null_mut();
+    };
+    let window = presentation().window;
+    if window.is_null() {
+        return ptr::null_mut();
+    }
+    let (device, current) = {
+        let state = lock();
+        if !state.can_borrow_device() {
+            return ptr::null_mut();
+        }
+        let Some(device) = &state.device else {
+            return ptr::null_mut();
+        };
+        (
+            device.handles,
+            state
+                .surface
+                .as_ref()
+                .map(|surface| (surface.chain, surface.ops)),
+        )
+    };
+    if let Some((chain, ops)) = current {
+        let (mut current_width, mut current_height) = (0, 0);
+        unsafe { (ops.extent)(chain, &mut current_width, &mut current_height) };
+        if (width, height) == (current_width, current_height)
+            || (unsafe { (ops.drain)(&device) } && unsafe { (ops.resize)(chain, width, height) })
+        {
+            return chain;
+        }
+        // A refused drain or resize keeps the owned chain for the next Present to retry.
+        return ptr::null_mut();
+    }
+    let chain = unsafe { (ops.create)(&device, window, width, height) };
+    if !chain.is_null() {
+        // Only the holder of the presentation lease can publish a surface.
+        let mut pending = Some(Surface { chain, ops: *ops });
+        std::mem::swap(&mut lock().surface, &mut pending);
+    }
+    chain
 }
 
 /// One intercepted Unity swapchain: its extent, its images and the present-ready semaphore the
@@ -1218,21 +1299,12 @@ mod tests {
         assert_eq!(ready, 0);
         rsf_unity_vulkan_finish_event(index);
         assert_eq!(unsafe { rsf_unity_vulkan_probe_idle(ptr::null_mut()) }, 1);
-        assert_eq!(rsf_unity_vulkan_close(), 0);
+        assert!(!lock().close());
         rsf_unity_vulkan_leave();
         assert_eq!(unsafe { rsf_unity_vulkan_window(ptr::null_mut()) }, 0);
         assert_eq!(unsafe { rsf_unity_vulkan_set_window(ptr::null()) }, 0);
-        assert_eq!(rsf_unity_vulkan_close(), 1);
+        assert!(lock().close());
         lock().release();
-    }
-
-    #[test]
-    fn release_forgets_the_surface() {
-        let mut state = State::new();
-        state.surface = true;
-        assert!(state.close());
-        state.release();
-        assert!(!state.surface);
     }
 
     fn swapchain(chain: u64, count: u64) -> Swapchain {

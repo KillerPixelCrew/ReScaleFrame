@@ -2,13 +2,12 @@
 // The Unity package's Vulkan bridge: Unity's Vulkan images are copied into same-adapter D3D12
 // resources for the render pass, and Unity's present is replaced by this bridge's DXGI swap chain.
 // Shared device readiness, the fault, queued render events and their packets, present and surface
-// entries, the window frame identity, whether the DXGI swap chain exists and the checked release
+// entries, the window frame identity, the DXGI swap chain and its resize, and the checked release
 // are Rust (vulkan_state.rs), as are the intercepted swapchains with their images and present-ready
 // semaphores, the presentation window's identity and the presentation lease. The command slot
 // rotation and shared fence values are the package bridge's submission ring (bridge_interop.rs).
 // Rust owns the shared device, queue, fence and imported semaphore, as well as the pool, slots
-// and shared images. This file keeps Unity interface access, typed graphics calls, the window
-// and its DXGI swap chain.
+// and shared images. This file keeps Unity interface access and typed graphics and Win32 calls.
 #include "vulkan_bridge.h"
 #include "vulkan_state.h"
 #include "bridge_interop.h"
@@ -34,6 +33,7 @@ static_assert(sizeof(rsf_unity_vulkan_device_handles) == 64);
 static_assert(offsetof(rsf_unity_vulkan_device_handles, vk_device) == 24);
 static_assert(offsetof(rsf_unity_vulkan_device_handles, vk_queue_family) == 56);
 static_assert(sizeof(rsf_unity_vulkan_device_ops) == 11 * sizeof(void*));
+static_assert(sizeof(rsf_unity_vulkan_surface_ops) == 5 * sizeof(void*));
 static_assert(sizeof(rsf_unity_vulkan_command_handles) == 40);
 static_assert(offsetof(rsf_unity_vulkan_command_handles, commands) == 8);
 static_assert(offsetof(rsf_unity_vulkan_command_handles, vk) == 16);
@@ -49,7 +49,6 @@ template <class Function> Function saved_proc(uint32_t slot)
 {
     return reinterpret_cast<Function>(rsf_unity_vk_resolver_original(slot));
 }
-ComPtr<IDXGISwapChain3> chain;
 // Vulkan handles cross to vulkan_state.rs as 64-bit identity.
 template <class Handle> uint64_t handle_id(Handle handle) { return reinterpret_cast<uint64_t>(handle); }
 template <class Handle> Handle from_id(uint64_t id) { return reinterpret_cast<Handle>(id); }
@@ -512,25 +511,32 @@ BOOL CALLBACK find_window(HWND candidate, LPARAM result)
     }
     return TRUE;
 }
-// Creates or resizes the bridge's swap chain, with the presentation lease and an entry held.
-bool configure_chain(const DeviceView& graphics, HWND window, uint32_t width, uint32_t height)
+void* create_chain(const rsf_unity_vulkan_device_handles* shared, void* window, uint32_t width, uint32_t height) noexcept
 {
-    if (!window) return false;
-    if (!chain) {
-        ComPtr<IDXGIFactory2> factory; ComPtr<IDXGISwapChain1> created;
-        DXGI_SWAP_CHAIN_DESC1 desc{}; desc.Width = width; desc.Height = height; desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-        desc.SampleDesc.Count = 1; desc.BufferCount = 3; desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-        desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD; desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
-        if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))) || FAILED(factory->CreateSwapChainForHwnd(graphics.queue(), window, &desc, nullptr, nullptr, &created)) ||
-            FAILED(created.As(&chain))) return false;
-        rsf_unity_vulkan_surface_created();
-    } else {
-        DXGI_SWAP_CHAIN_DESC1 desc{}; chain->GetDesc1(&desc);
-        if ((desc.Width != width || desc.Height != height) &&
-            (!drain(graphics) || FAILED(chain->ResizeBuffers(3, width, height, DXGI_FORMAT_R8G8B8A8_UNORM, 0)))) return false;
-    }
-    return true;
+    ComPtr<IDXGIFactory2> factory;
+    ComPtr<IDXGISwapChain1> created;
+    ComPtr<IDXGISwapChain3> chain;
+    DXGI_SWAP_CHAIN_DESC1 desc{}; desc.Width = width; desc.Height = height; desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.SampleDesc.Count = 1; desc.BufferCount = 3; desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD; desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))) ||
+        FAILED(factory->CreateSwapChainForHwnd(DeviceView{*shared}.queue(), static_cast<HWND>(window), &desc, nullptr, nullptr, &created)) ||
+        FAILED(created.As(&chain))) return nullptr;
+    return chain.Detach();
 }
+constexpr rsf_unity_vulkan_surface_ops surface_ops{
+    create_chain,
+    [](void* chain, uint32_t* width, uint32_t* height) noexcept {
+        DXGI_SWAP_CHAIN_DESC1 desc{};
+        static_cast<IDXGISwapChain3*>(chain)->GetDesc1(&desc);
+        *width = desc.Width; *height = desc.Height;
+    },
+    [](const rsf_unity_vulkan_device_handles* shared) noexcept { return drain(DeviceView{*shared}); },
+    [](void* chain, uint32_t width, uint32_t height) noexcept {
+        return SUCCEEDED(static_cast<IDXGISwapChain3*>(chain)->ResizeBuffers(3, width, height, DXGI_FORMAT_R8G8B8A8_UNORM, 0));
+    },
+    [](void* chain) noexcept { static_cast<IDXGISwapChain3*>(chain)->Release(); },
+};
 VKAPI_ATTR VkResult VKAPI_CALL intercept_present(VkQueue vk_queue, const VkPresentInfoKHR* info) noexcept try
 {
     const auto original_present = saved_proc<PFN_vkQueuePresentKHR>(RSF_UNITY_VK_PRESENT);
@@ -546,11 +552,13 @@ VKAPI_ATTR VkResult VKAPI_CALL intercept_present(VkQueue vk_queue, const VkPrese
     rsf_unity_vulkan_present_source source{};
     const bool found = rsf_unity_vulkan_present_begin(handle_id(info->pSwapchains[0]), info->pImageIndices[0], &source) != 0;
     PresentationLease lease;
+    if (!found) return unchanged();
+    auto* chain = static_cast<IDXGISwapChain3*>(rsf_unity_vulkan_configure_surface(source.width, source.height, &surface_ops));
+    if (!chain) return unchanged();
     const VkImage presented = from_id<VkImage>(source.image);
     const VkSemaphore present_ready = from_id<VkSemaphore>(source.present_ready);
     ImageView image;
-    if (!found || !configure_chain(graphics, window, source.width, source.height) ||
-        !create_image(5, source.width, source.height, VK_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM, image)) return unchanged();
+    if (!create_image(5, source.width, source.height, VK_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM, image)) return unchanged();
     // Preflight before the upload consumes Unity's present waits.
     ComPtr<ID3D12Resource> buffer;
     if (FAILED(chain->GetBuffer(chain->GetCurrentBackBufferIndex(), IID_PPV_ARGS(&buffer)))) {
@@ -578,7 +586,7 @@ VKAPI_ATTR VkResult VKAPI_CALL intercept_present(VkQueue vk_queue, const VkPrese
     slot.commands()->CopyResource(buffer.Get(), image.resource());
     dx_barrier(slot.commands(), buffer.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT);
     dx_barrier(slot.commands(), image.resource(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
-    rsf_game_render_pass pass{}; make_pass(frame.packet, pass); pass.role = RSF_GAME_RENDER_WINDOW; pass.swapchain = chain.Get();
+    rsf_game_render_pass pass{}; make_pass(frame.packet, pass); pass.role = RSF_GAME_RENDER_WINDOW; pass.swapchain = chain;
     frame.services.render_pass(frame.services.user, graphics.queue(), &pass, 1);
     if (!submit(graphics, slot, ring, present_ready)) { stop("Unity Vulkan present submission failed; the bridge stopped."); return VK_ERROR_DEVICE_LOST; }
     if (SUCCEEDED(chain->Present(0, 0))) ShowWindowAsync(window, SW_SHOWNOACTIVATE);
@@ -808,8 +816,9 @@ bool rsf_uvk_update_window(uint32_t width, uint32_t height)
     // a present interception holding it; that Present creates the swap chain itself.
     PresentationLease lease{rsf_unity_vulkan_presentation_try_begin() != 0};
     DeviceView graphics;
-    return lease.held && (chain ||
-        (initialize(graphics) == RSF_UNITY_VULKAN_DEVICE_READY && configure_chain(graphics, window, width, height)));
+    return lease.held && (rsf_unity_vulkan_surface_ready() ||
+        (initialize(graphics) == RSF_UNITY_VULKAN_DEVICE_READY &&
+            rsf_unity_vulkan_configure_surface(width, height, &surface_ops) != nullptr));
 }
 bool rsf_uvk_render(int event_id, const rsf_unity_packet& packet, const rsf_game_host_services& services, bool reconfigure)
 {
@@ -849,15 +858,5 @@ bool rsf_uvk_drained()
 }
 bool rsf_uvk_release()
 {
-    // Closing refuses new events, present interceptions, surface updates and device creation until
-    // the objects are gone or the GPU work is found outstanding.
-    if (!rsf_unity_vulkan_close()) return false;
-    PresentationLease lease{rsf_unity_vulkan_presentation_try_begin() != 0};
-    // Lifecycle release never calls Vulkan queue operations. Rust refused close while
-    // an upload was missing its hand-back fence, so both bridge fence sets can prove retirement.
-    if (!lease.held || !rsf_unity_vulkan_release([]() noexcept { chain.Reset(); })) {
-        rsf_unity_vulkan_reopen();
-        return false;
-    }
-    return true;
+    return rsf_unity_vulkan_release();
 }

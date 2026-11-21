@@ -7,14 +7,14 @@
 
    Rust owns the shared device's readiness and its single creator, the bridge's permanent fault,
    the render events queued to Unity and their packets, the present interceptions and surface
-   updates in progress, the player window frame the present renders under, whether the DXGI swap
-   chain exists, the checked close and release, and the presentation: Unity's intercepted
+   updates in progress, the player window frame the present renders under, the DXGI swap chain
+   and its resize, the checked close and release, and the presentation: Unity's intercepted
    swapchains with their images and present-ready semaphores, the presentation window's identity
    and the presentation lease. The command slot rotation and the shared D3D12 fence values are the
    package bridge's submission ring (bridge_interop.h); a process has one Unity renderer, so the
    D3D11 and Vulkan bridges never use it at once. Rust owns the shared graphics device record,
    command pool, per-slot handles and imported images. vulkan_bridge.cpp keeps Unity interface
-   access, typed graphics calls, window and DXGI swap chain.
+   access and typed graphics and Win32 calls.
 
    Event slots number RSF_UNITY_FRAMES_PACKETS: each event carries one packet taken from the
    shared store. vulkan_bridge.cpp sizes its image arrays to match. */
@@ -125,17 +125,24 @@ uint32_t rsf_unity_vulkan_faulted(void);
 /* Enters an idle bridge to inspect the native fences. Non-zero must be paired with leave.
    *ready, when non-null, receives whether the shared device exists. */
 uint32_t rsf_unity_vulkan_probe_idle(uint32_t* ready);
-/* Closes an idle bridge: events, entries and device claims are refused until release or reopen.
-   Zero when work is outstanding or it is already closed. */
-uint32_t rsf_unity_vulkan_close(void);
-/* Reopens a closed bridge whose GPU work did not drain. */
-void rsf_unity_vulkan_reopen(void);
-/* Under close and the presentation lease, check both fence sets. On success destroy the images
-   and commands, reset the native DXGI swap chain through retire_surface, then drop shared graphics
-   and reset the ring and state. A failed proof leaves ownership with the bridge. */
-bool rsf_unity_vulkan_release(void (*retire_surface)(void));
-/* The bridge's DXGI swap chain was created; release forgets it with the other objects. */
-void rsf_unity_vulkan_surface_created(void);
+/* Closes idle admission, tries the presentation lease and checks both fence sets without queue
+   waits. On success destroys the images, commands and DXGI swap chain, then drops shared graphics
+   and resets the ring and state. On refusal retains the resources and reopens any close it took. */
+bool rsf_unity_vulkan_release(void);
+
+/* Create transfers one IDXGISwapChain3 reference on success. The other DXGI leaves borrow it
+   until destroy releases it. Drain uses the published shared device and the submission ring. */
+typedef struct rsf_unity_vulkan_surface_ops {
+    void* (*create)(const rsf_unity_vulkan_device_handles*, void* window, uint32_t width, uint32_t height);
+    void (*extent)(void* chain, uint32_t* width, uint32_t* height);
+    bool (*drain)(const rsf_unity_vulkan_device_handles*);
+    bool (*resize)(void* chain, uint32_t width, uint32_t height);
+    void (*destroy)(void* chain);
+} rsf_unity_vulkan_surface_ops;
+/* Borrows the owned chain after successful creation or resize (or when its extent already
+   matches). Keep both admission and the presentation lease through all uses. Null leaves the
+   existing owner, if any, in place. */
+void* rsf_unity_vulkan_configure_surface(uint32_t width, uint32_t height, const rsf_unity_vulkan_surface_ops*);
 uint32_t rsf_unity_vulkan_surface_ready(void);
 
 /* Presentation: Unity's intercepted swapchains, the presentation window and the presentation lease

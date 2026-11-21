@@ -343,10 +343,16 @@ imported semaphore and command slots as one Rust-owned record. Both
 submission paths borrow it under the existing admission, and package
 callers hold COM references through adapter lookup and Editor preview
 setup. Retirement refuses the D3D12 device-removal sentinel and keeps
-bridge bookkeeping on a refused release. The DXGI swapchain still has
-a native owner. Build, queue synchronization and player verification
-remain open.
+bridge bookkeeping on a refused release. Build, queue synchronization
+and player verification remain open.
 [Shared device audit](research/rust-unity-vulkan-shared-device.md)
+
+Unity Vulkan's DXGI swapchain and resize transaction now use the Rust
+presentation lease. A failed drain or resize retains the chain, and
+checked release drops it before the shared device. Package shutdown
+can still report success after the bridge refuses release, because
+the outer callback has no result. Build and live teardown remain open.
+[DXGI ownership audit](research/rust-unity-vulkan-dxgi.md)
 
 AC7's Rust renderer transaction owns prepare, start, quiesce and stop.
 Failed activation keeps any renderer with reachable callbacks, and a
