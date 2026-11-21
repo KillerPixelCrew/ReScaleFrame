@@ -334,6 +334,13 @@ and refusal rules. The fixture uses the same adapter archive. Bit-level
 parity and builds remain unverified.
 [Camera source comparison](research/rust-fallout4-camera.md)
 
+Fallout 4's CPU event owner now tracks poll and worker sources, scoped
+GameSDK facts and hook retirement in Rust. The typed C++ shells keep
+the original engine calls on their native frames and pass stack receipts
+to Rust before and after them. The private binding was regenerated.
+The previous handoff fixture moved to Rust. Build, event parity and
+game teardown remain open.
+
 Unity package D3D12 SR contexts and their recording slots are Rust-owned.
 The existing Unity bridge still provides recording and completion facts.
 The view owner preserves reconfiguration, spatial fallback and retirement

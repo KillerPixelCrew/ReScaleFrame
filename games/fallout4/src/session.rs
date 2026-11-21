@@ -8,16 +8,15 @@
 use crate::creation::{self, rsf_fallout4_accept_window};
 use crate::platform_abi::{
     RSF_D3D11_HOST_ABI_VERSION, RSF_D3D11_HOST_CAP_FG_INPUTS, RSF_D3D11_HOST_CAP_INPUT_TIMELINE,
-    RSF_FALLOUT4_CPU_BUSY, RSF_FALLOUT4_PREPARE_CPU, RSF_FALLOUT4_PREPARE_RENDER,
-    RSF_FALLOUT4_QUIESCE_CPU, RSF_FALLOUT4_QUIESCE_RENDER, RSF_FALLOUT4_RENDER_BUSY,
-    RSF_FALLOUT4_START_CPU, RSF_FALLOUT4_START_RENDER, RSF_FALLOUT4_STOP_CPU,
-    RSF_FALLOUT4_STOP_RENDER, RSF_FALLOUT4_VERIFY_RENDER, rsf_d3d11_host_setup,
-    rsf_fallout4_host_active_fn, rsf_fallout4_host_create_fn, rsf_motion_decode_params,
+    RSF_FALLOUT4_PREPARE_RENDER, RSF_FALLOUT4_QUIESCE_RENDER, RSF_FALLOUT4_RENDER_BUSY,
+    RSF_FALLOUT4_START_RENDER, RSF_FALLOUT4_STOP_RENDER, RSF_FALLOUT4_VERIFY_RENDER,
+    rsf_d3d11_host_setup, rsf_fallout4_host_active_fn, rsf_fallout4_host_create_fn,
+    rsf_motion_decode_params,
 };
 use crate::{
     EXECUTABLE_SHA256, Ops, PENDING, RSF_ERROR_ABI_MISMATCH, RSF_ERROR_BUSY,
-    RSF_ERROR_INVALID_ARGUMENT, RSF_ERROR_NATIVE_REFUSED, RSF_ERROR_NOT_READY, RSF_OK, Threw, dpi,
-    ops, pin,
+    RSF_ERROR_INVALID_ARGUMENT, RSF_ERROR_NATIVE_REFUSED, RSF_ERROR_NOT_READY, RSF_OK, Threw,
+    cpu_events, dpi, ops, pin,
 };
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, rsf_game_control_args, rsf_game_host_services, rsf_game_prepare_args,
@@ -117,9 +116,11 @@ fn wide(units: &[u16], suffix: &str) -> Vec<u16> {
 
 impl Session {
     fn busy(&self, ops: &Ops) -> Result<bool, Threw> {
-        Ok(creation::busy()
-            || ops.subsystem(RSF_FALLOUT4_RENDER_BUSY, None)?
-            || ops.subsystem(RSF_FALLOUT4_CPU_BUSY, None)?)
+        Ok(
+            creation::busy()
+                || ops.subsystem(RSF_FALLOUT4_RENDER_BUSY, None)?
+                || cpu_events::busy(),
+        )
     }
 
     fn refuse(&mut self, ops: &Ops, message: &'static CStr) -> Result<rsf_result, Threw> {
@@ -131,7 +132,7 @@ impl Session {
     fn suspend(&mut self, ops: &Ops) -> Result<(), Threw> {
         creation::quiesce();
         ops.subsystem(RSF_FALLOUT4_QUIESCE_RENDER, None)?;
-        ops.subsystem(RSF_FALLOUT4_QUIESCE_CPU, None)?;
+        cpu_events::quiesce();
         if let Some(activate) = self.activate
             && !self.services.user.is_null()
         {
@@ -148,7 +149,7 @@ impl Session {
         if !rendering || !created || self.busy(ops)? {
             return Ok(false);
         }
-        ops.subsystem(RSF_FALLOUT4_STOP_CPU, None)
+        Ok(cpu_events::stop(ops))
     }
 
     // The Runtime's scoped D3D11 host for this process, with this adapter's facts.
@@ -287,7 +288,7 @@ impl Session {
                 c"Fallout4 render preparation refused: native guards, synchronous services or hook creation unavailable.",
             );
         }
-        if !ops.subsystem(RSF_FALLOUT4_PREPARE_CPU, Some(&services))? {
+        if !cpu_events::prepare(ops, &services) {
             return self.refuse(
                 ops,
                 c"Fallout4 CPU preparation refused: guarded Swap/input callbacks or source services unavailable.",
@@ -305,7 +306,7 @@ impl Session {
         if self.active {
             return Ok(RSF_OK);
         }
-        let failed = if !ops.subsystem(RSF_FALLOUT4_START_CPU, None)? {
+        let failed = if !cpu_events::start(ops) {
             Some(c"Fallout4 start refused: CPU source/input guards or hooks.")
         } else if !ops.subsystem(RSF_FALLOUT4_START_RENDER, None)? {
             Some(c"Fallout4 start refused: render/TAA guards or hooks.")

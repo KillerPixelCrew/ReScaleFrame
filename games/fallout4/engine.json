@@ -843,6 +843,12 @@
       },
       "live": "not yet deployed"
     },
+    "worker_handoff_contract_relocation": {
+      "commit": "644547f",
+      "change": "The worker successor contract moved from tests/fallout4_worker_handoff.cpp (ctest fallout4_worker_handoff_contract) and games/fallout4/src/worker_handoff.h to Rust unit tests in games/fallout4/src/cpu_events/handoff/tests.rs (cargo test -p rsf-fallout4); the ticket lives in games/fallout4/src/cpu_events/handoff.rs and the CPU owner in games/fallout4/src/cpu_events.rs.",
+      "historical_references": "worker_handoff_contract, worker_handoff_contract_seconds, worker_handoff_seconds and the prepoll_intention_gate source_hashes record the retired C++ files as built and tested at those gates; they are not current paths.",
+      "status": "Source review only; the Rust tests are not yet run."
+    },
     "reduced_recovery_built": {
       "authority": ".local/fallout4-research/reduced-recovery-built-20261116.json",
       "source_head": "e4f283df078e357e695f60970196f612c8f2e8a9",

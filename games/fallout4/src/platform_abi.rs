@@ -11,15 +11,10 @@ pub const RSF_D3D11_HOST_CAP_INPUT_TIMELINE: u32 = 2;
 pub const RSF_D3D11_HOST_CAP_RENDERED_SOURCE: u32 = 4;
 pub const RSF_FALLOUT4_VERIFY_RENDER: u32 = 0;
 pub const RSF_FALLOUT4_PREPARE_RENDER: u32 = 1;
-pub const RSF_FALLOUT4_PREPARE_CPU: u32 = 2;
 pub const RSF_FALLOUT4_START_RENDER: u32 = 3;
-pub const RSF_FALLOUT4_START_CPU: u32 = 4;
 pub const RSF_FALLOUT4_QUIESCE_RENDER: u32 = 5;
-pub const RSF_FALLOUT4_QUIESCE_CPU: u32 = 6;
 pub const RSF_FALLOUT4_STOP_RENDER: u32 = 7;
-pub const RSF_FALLOUT4_STOP_CPU: u32 = 8;
 pub const RSF_FALLOUT4_RENDER_BUSY: u32 = 9;
-pub const RSF_FALLOUT4_CPU_BUSY: u32 = 10;
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct rsf_motion_decode_params {
