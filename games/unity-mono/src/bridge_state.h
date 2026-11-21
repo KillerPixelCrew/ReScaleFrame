@@ -1,0 +1,78 @@
+/* SPDX-License-Identifier: MIT */
+#pragma once
+/* Internal boundary between the shared Unity D3D12 bridge (bridge.cpp) and its Rust frame-state
+   owner (bridge_state.rs). Not a DLL ABI: the game plugin and the Unity package each link
+   bridge.cpp with the rsf-unity-mono archive. tools/generate-rust-bindings.py generates
+   bridge_abi.rs from this header.
+
+   Rust owns packet admission and storage, the policy generation, frame admission into the
+   command ring, source-submission bookkeeping and retirement. bridge.cpp keeps the Unity
+   interfaces, D3D12 objects, resource leases, render-pass calls and CPU input events.
+   Fence values are Unity frame-fence completions read by bridge.cpp; 0 means no fence. */
+#include <rescaleframe/unity_bridge.h>
+
+/* Packet storage and source-submission ring sizes. bridge.cpp sizes its lease arrays to match. */
+#define RSF_UNITY_FRAMES_PACKETS 32u
+#define RSF_UNITY_FRAMES_SLOTS 3u
+#define RSF_UNITY_FRAMES_SOURCES 8u
+
+/* A reconstruction frame admitted into command ring slot `slot`. reconfigure is non-zero when
+   this frame applies a pending policy change. */
+typedef struct rsf_unity_frame_admission {
+    uint32_t slot, reconfigure;
+} rsf_unity_frame_admission;
+
+/* A recorded source frame whose engine submission is not yet confirmed to the host. */
+typedef struct rsf_unity_source_submission {
+    uint64_t session_id, source_frame_id, view_key;
+} rsf_unity_source_submission;
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+/* Producer state. Inactive bridges refuse packets, frames and CPU events. */
+void rsf_unity_frames_activate(uint32_t enabled);
+uint32_t rsf_unity_frames_active(void);
+/* Managed helper stage, stored for the lifecycle; the managed API's managed_state entry. */
+void rsf_unity_frames_report_managed(uint32_t stage);
+uint32_t rsf_unity_frames_managed_stage(void);
+
+/* Validates the packet for session_id and copies it into a free slot. Returns the copy's address,
+   which Unity hands back to the render event as identity only, and its slot for the caller's
+   leases; NULL when inactive, invalid or full. */
+void* rsf_unity_frames_admit_packet(const rsf_unity_packet* packet, uint64_t session_id, uint32_t* slot);
+/* Copies out and frees the packet stored at address. Zero when address names no stored packet. */
+uint32_t rsf_unity_frames_take_packet(const void* address, rsf_unity_packet* packet, uint32_t* slot);
+
+/* Fills output from the host render configuration and the current policy. Zero when output is
+   not this ABI's structure or the host refuses. services is borrowed for the call. */
+int rsf_unity_frames_config(const rsf_game_host_services* services, uint32_t output_width,
+    uint32_t output_height, rsf_unity_config* output);
+/* Validates and stores the engine policy, advancing the generation. Zero when out of range. */
+int rsf_unity_frames_set_policy(uint32_t engine_spatial, uint32_t quality);
+
+/* Admits a reconstruction packet against the policy generation, extents and ring completion. */
+uint32_t rsf_unity_frames_admit_frame(const rsf_unity_packet* packet, uint64_t completed,
+    rsf_unity_frame_admission* admission);
+/* Records the slot's Unity completion and its source. Zero or the device-removed sentinel stops
+   the bridge with ownership unknown and returns zero. */
+uint32_t rsf_unity_frames_submitted(const rsf_unity_frame_admission* admission, uint64_t complete,
+    const rsf_unity_source_submission* source);
+/* Records a source copied on Unity's own recording list, completing at inline_fence. */
+void rsf_unity_frames_record_source(const rsf_unity_source_submission* source, uint64_t inline_fence);
+/* Removes this session's sources up to source_frame_id into output, RSF_UNITY_FRAMES_SOURCES
+   entries, in ring order. Returns the count. */
+uint32_t rsf_unity_frames_take_flushed(uint64_t session_id, uint64_t source_frame_id,
+    rsf_unity_source_submission* output);
+
+/* Render-event callbacks in progress, for retirement. */
+void rsf_unity_frames_callback_enter(void);
+void rsf_unity_frames_callback_leave(void);
+/* Non-zero when no callback, packet or submission is outstanding at this completion. */
+uint32_t rsf_unity_frames_drained(uint64_t completed);
+/* Forgets packets, ring completions, sources, extents and the managed stage. The activity flag
+   and the policy, including its generation, persist. */
+void rsf_unity_frames_release(void);
+#ifdef __cplusplus
+}
+#endif

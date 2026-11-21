@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Detection, the renderer lifecycle and the Mono helper bootstrap are Rust (lib.rs, lifecycle.rs,
-// mono.rs). The D3D12 bridge stays native because the Unity package compiles bridge.cpp too, so
-// this file lends its entry points to the Rust owner and keeps the stable plugin export.
+// mono.rs). bridge.cpp, which the Unity package compiles too, keeps the Unity and D3D12 leaves
+// over its Rust frame state (bridge_state.rs), so this file lends its entry points to the Rust
+// lifecycle owner and keeps the stable plugin export.
 #include "bridge.h"
 #include "plugin_platform.h"
 

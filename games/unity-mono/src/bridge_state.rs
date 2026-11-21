@@ -1,0 +1,794 @@
+// SPDX-License-Identifier: MIT
+//! Frame state of the shared Unity D3D12 render bridge. bridge.cpp is linked into the game plugin
+//! and the Unity package, and both link this archive. This module owns packet admission and
+//! storage, the engine policy and its generation, frame admission into the command ring, source
+//! submission bookkeeping and retirement. bridge.cpp keeps the Unity interfaces, D3D12 objects,
+//! resource leases, render-pass calls and CPU input events, and reads the Unity frame fence.
+//!
+//! A fence completion of 0 stands for "no fence": every recorded submission is then in flight,
+//! as the C++ check `complete && (!fence || completed < complete)` had it.
+use crate::bridge_abi::{
+    RSF_UNITY_BRIDGE_ABI_VERSION, RSF_UNITY_FRAMES_PACKETS, RSF_UNITY_FRAMES_SLOTS,
+    RSF_UNITY_FRAMES_SOURCES, RSF_UNITY_PACKET_HUDLESS, RSF_UNITY_PACKET_INPUTS_ONLY,
+    RSF_UNITY_PACKET_PROBE, RSF_UNITY_PACKET_WINDOW, rsf_unity_config, rsf_unity_frame_admission,
+    rsf_unity_packet, rsf_unity_source_submission,
+};
+use rsf_game_sys::{
+    RSF_GAME_CAMERA_ABI_VERSION, rsf_camera_frame, rsf_game_host_services, rsf_game_render_config,
+};
+use std::ffi::{c_int, c_void};
+use std::ptr;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Mutex, MutexGuard, PoisonError};
+
+const PACKETS: usize = RSF_UNITY_FRAMES_PACKETS as usize;
+const SLOTS: usize = RSF_UNITY_FRAMES_SLOTS as usize;
+const SOURCES: usize = RSF_UNITY_FRAMES_SOURCES as usize;
+const MAX_EXTENT: u32 = 16384;
+
+// SAFETY: all-zero is a valid packet: integers, floats and null pointers.
+const EMPTY_PACKET: rsf_unity_packet = unsafe { std::mem::zeroed() };
+const NO_SOURCE: rsf_unity_source_submission = rsf_unity_source_submission {
+    session_id: 0,
+    source_frame_id: 0,
+    view_key: 0,
+};
+
+#[derive(Clone, Copy)]
+struct Pending {
+    packet: rsf_unity_packet,
+    used: bool,
+}
+
+/// The engine policy the managed adapter reads through config and stamps into packets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Policy {
+    engine_spatial: u32,
+    quality: u32,
+    generation: u32,
+    /// A change the next admitted frame applies as a reconfiguration once the ring is idle.
+    pending: bool,
+}
+
+struct State {
+    pending: [Pending; PACKETS],
+    /// Unity completion value of each command ring slot's last submission; 0 for none.
+    complete: [u64; SLOTS],
+    next: usize,
+    sources: [rsf_unity_source_submission; SOURCES],
+    /// Latest completion of a copy recorded on Unity's own list.
+    inline_complete: u64,
+    input: (u32, u32),
+    output: (u32, u32),
+    /// A submission returned no completion: its resources may still be in use.
+    submission_unknown: bool,
+    policy: Policy,
+}
+
+// The packets hold Unity resource addresses as identity. This module never dereferences them;
+// bridge.cpp holds the leases.
+unsafe impl Send for State {}
+
+static STATE: Mutex<State> = Mutex::new(State::new());
+static ACTIVE: AtomicBool = AtomicBool::new(false);
+static CALLBACKS: AtomicU32 = AtomicU32::new(0);
+static MANAGED_STAGE: AtomicU32 = AtomicU32::new(0);
+
+fn lock() -> MutexGuard<'static, State> {
+    STATE.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn in_flight(complete: u64, completed: u64) -> bool {
+    complete != 0 && (completed == u64::MAX || completed < complete)
+}
+
+fn finite(values: &[f32]) -> bool {
+    values.iter().all(|value| value.is_finite())
+}
+
+fn valid_camera(camera: &rsf_camera_frame) -> bool {
+    let extents = [
+        camera.render_width,
+        camera.render_height,
+        camera.output_width,
+        camera.output_height,
+    ];
+    camera.struct_size == size_of::<rsf_camera_frame>() as u32
+        && camera.abi_version == RSF_GAME_CAMERA_ABI_VERSION
+        && extents
+            .iter()
+            .all(|&extent| extent != 0 && extent <= MAX_EXTENT)
+        && camera.near_plane.is_finite()
+        && camera.far_plane.is_finite()
+        && camera.near_plane > 0.0
+        && camera.far_plane > camera.near_plane
+        && finite(&camera.view_to_clip)
+        && finite(&camera.clip_to_view)
+        && finite(&camera.clip_to_previous_clip)
+        && finite(&camera.jitter_pixels)
+}
+
+/// The packet admission rules: this ABI and session, a frame and view, the resources each event
+/// kind reads, and a finite camera with bounded extents.
+fn valid(packet: &rsf_unity_packet, session_id: u64) -> bool {
+    let flags = packet.flags;
+    let has = |resource: *mut c_void| !resource.is_null();
+    if packet.struct_size != size_of::<rsf_unity_packet>() as u32
+        || packet.abi_version != RSF_UNITY_BRIDGE_ABI_VERSION
+        || packet.session_id != session_id
+        || packet.frame_id == 0
+        || packet.view_key == 0
+        || (flags & (RSF_UNITY_PACKET_WINDOW | RSF_UNITY_PACKET_HUDLESS) == 0 && !has(packet.color))
+    {
+        return false;
+    }
+    if flags & (RSF_UNITY_PACKET_PROBE | RSF_UNITY_PACKET_WINDOW) == 0
+        && !(has(packet.depth) && has(packet.motion) && has(packet.output))
+    {
+        return false;
+    }
+    if flags & RSF_UNITY_PACKET_INPUTS_ONLY != 0 && !(has(packet.depth) && has(packet.motion)) {
+        return false;
+    }
+    valid_camera(&packet.camera)
+}
+
+impl State {
+    const fn new() -> Self {
+        Self {
+            pending: [Pending {
+                packet: EMPTY_PACKET,
+                used: false,
+            }; PACKETS],
+            complete: [0; SLOTS],
+            next: 0,
+            sources: [NO_SOURCE; SOURCES],
+            inline_complete: 0,
+            input: (0, 0),
+            output: (0, 0),
+            submission_unknown: false,
+            policy: Policy {
+                engine_spatial: 0,
+                quality: 1,
+                generation: 1,
+                pending: false,
+            },
+        }
+    }
+
+    fn admit_packet(&mut self, packet: &rsf_unity_packet, session_id: u64) -> Option<usize> {
+        if !valid(packet, session_id) {
+            return None;
+        }
+        let slot = self.pending.iter().position(|entry| !entry.used)?;
+        self.pending[slot] = Pending {
+            packet: *packet,
+            used: true,
+        };
+        Some(slot)
+    }
+
+    fn packet_address(&self, slot: usize) -> *mut c_void {
+        ptr::from_ref(&self.pending[slot].packet).cast_mut().cast()
+    }
+
+    fn take_packet(&mut self, address: *const c_void) -> Option<(usize, rsf_unity_packet)> {
+        let slot = (0..PACKETS).find(|&slot| {
+            self.pending[slot].used && ptr::eq(self.packet_address(slot).cast_const(), address)
+        })?;
+        let packet = self.pending[slot].packet;
+        self.pending[slot] = Pending {
+            packet: EMPTY_PACKET,
+            used: false,
+        };
+        Some((slot, packet))
+    }
+
+    fn any_in_flight(&self, completed: u64) -> bool {
+        self.complete
+            .iter()
+            .any(|&complete| in_flight(complete, completed))
+    }
+
+    fn set_policy(&mut self, engine_spatial: u32, quality: u32, active: bool) -> bool {
+        if engine_spatial > 1 || quality > 5 {
+            return false;
+        }
+        let policy = &mut self.policy;
+        policy.engine_spatial = engine_spatial;
+        policy.quality = quality;
+        policy.generation = policy.generation.wrapping_add(1);
+        if active {
+            policy.pending = true;
+        }
+        true
+    }
+
+    /// Render extents, a policy change and output extents change only with the ring idle; a
+    /// packet from an older generation is refused unless it carries the pending change. The
+    /// state accepted by an earlier step is kept when a later one refuses.
+    fn admit_frame(
+        &mut self,
+        packet: &rsf_unity_packet,
+        completed: u64,
+    ) -> Option<rsf_unity_frame_admission> {
+        if completed == u64::MAX {
+            return None;
+        }
+        let busy = self.any_in_flight(completed);
+        let camera = &packet.camera;
+        let hudless = packet.flags & RSF_UNITY_PACKET_HUDLESS != 0;
+        let input = (camera.render_width, camera.render_height);
+        if !hudless && self.input != input {
+            if busy {
+                return None;
+            }
+            self.input = input;
+        }
+        let reconfigure = self.policy.pending;
+        if reconfigure {
+            if busy {
+                return None;
+            }
+            self.policy.pending = false;
+        } else if packet.generation != self.policy.generation {
+            return None;
+        }
+        let output = (camera.output_width, camera.output_height);
+        if self.output != output {
+            if busy {
+                return None;
+            }
+            self.output = output;
+        }
+        // Reuse only after Unity's completion fence.
+        if in_flight(self.complete[self.next], completed) {
+            return None;
+        }
+        Some(rsf_unity_frame_admission {
+            slot: self.next as u32,
+            reconfigure: u32::from(reconfigure),
+        })
+    }
+
+    fn submitted(
+        &mut self,
+        admission: &rsf_unity_frame_admission,
+        complete: u64,
+        source: &rsf_unity_source_submission,
+    ) -> bool {
+        let slot = admission.slot as usize;
+        if slot >= SLOTS {
+            return false;
+        }
+        self.complete[slot] = complete;
+        // An unavailable or device-removed completion leaves the slot owned.
+        if matches!(complete, 0 | u64::MAX) {
+            self.submission_unknown = true;
+            return false;
+        }
+        self.record_source(source, 0);
+        self.next = (slot + 1) % SLOTS;
+        true
+    }
+
+    fn record_source(&mut self, source: &rsf_unity_source_submission, inline_fence: u64) {
+        self.sources[(source.source_frame_id % SOURCES as u64) as usize] = *source;
+        self.inline_complete = self.inline_complete.max(inline_fence);
+    }
+
+    fn take_flushed(
+        &mut self,
+        session_id: u64,
+        source_frame_id: u64,
+    ) -> ([rsf_unity_source_submission; SOURCES], usize) {
+        let mut flushed = [NO_SOURCE; SOURCES];
+        let mut count = 0;
+        for source in &mut self.sources {
+            if source.source_frame_id != 0
+                && source.session_id == session_id
+                && source.source_frame_id <= source_frame_id
+            {
+                flushed[count] = *source;
+                count += 1;
+                *source = NO_SOURCE;
+            }
+        }
+        (flushed, count)
+    }
+
+    fn drained(&self, completed: u64) -> bool {
+        if self.submission_unknown || self.pending.iter().any(|entry| entry.used) {
+            return false;
+        }
+        !in_flight(self.inline_complete, completed) && !self.any_in_flight(completed)
+    }
+
+    fn release(&mut self) {
+        let policy = self.policy;
+        *self = Self::new();
+        self.policy = policy;
+    }
+
+    fn config(
+        &self,
+        active: bool,
+        host: &rsf_game_render_config,
+        output_width: u32,
+        output_height: u32,
+    ) -> rsf_unity_config {
+        let policy = self.policy;
+        let matches = host.output_width == output_width && host.output_height == output_height;
+        rsf_unity_config {
+            struct_size: size_of::<rsf_unity_config>() as u32,
+            abi_version: RSF_UNITY_BRIDGE_ABI_VERSION,
+            enabled: if active && !policy.pending && matches {
+                host.enabled
+            } else {
+                0
+            },
+            engine_spatial: policy.engine_spatial,
+            quality: policy.quality,
+            generation: policy.generation,
+            render_width: host.render_width,
+            render_height: host.render_height,
+            output_width,
+            output_height,
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_frames_activate(enabled: u32) {
+    ACTIVE.store(enabled != 0, Ordering::SeqCst);
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_frames_active() -> u32 {
+    u32::from(ACTIVE.load(Ordering::SeqCst))
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_frames_report_managed(stage: u32) {
+    MANAGED_STAGE.store(stage, Ordering::SeqCst);
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_frames_managed_stage() -> u32 {
+    MANAGED_STAGE.load(Ordering::SeqCst)
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_unity_frames_admit_packet(
+    packet: *const rsf_unity_packet,
+    session_id: u64,
+    slot: *mut u32,
+) -> *mut c_void {
+    if !ACTIVE.load(Ordering::SeqCst) || packet.is_null() || slot.is_null() {
+        return ptr::null_mut();
+    }
+    // Only the size field is readable from a short packet.
+    if unsafe { packet.cast::<u32>().read_unaligned() } != size_of::<rsf_unity_packet>() as u32 {
+        return ptr::null_mut();
+    }
+    let packet = unsafe { packet.read_unaligned() };
+    let mut state = lock();
+    let Some(index) = state.admit_packet(&packet, session_id) else {
+        return ptr::null_mut();
+    };
+    unsafe { slot.write(index as u32) };
+    state.packet_address(index)
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_unity_frames_take_packet(
+    address: *const c_void,
+    packet: *mut rsf_unity_packet,
+    slot: *mut u32,
+) -> u32 {
+    if packet.is_null() || slot.is_null() {
+        return 0;
+    }
+    let Some((index, stored)) = lock().take_packet(address) else {
+        return 0;
+    };
+    unsafe {
+        packet.write(stored);
+        slot.write(index as u32);
+    }
+    1
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_unity_frames_config(
+    services: *const rsf_game_host_services,
+    output_width: u32,
+    output_height: u32,
+    output: *mut rsf_unity_config,
+) -> c_int {
+    if output.is_null() {
+        return 0;
+    }
+    let header = output.cast::<u32>();
+    if unsafe { header.read() } != size_of::<rsf_unity_config>() as u32
+        || unsafe { header.add(1).read() } != RSF_UNITY_BRIDGE_ABI_VERSION
+    {
+        return 0;
+    }
+    let Some(services) = (unsafe { services.as_ref() }) else {
+        return 0;
+    };
+    let Some(render_config) = services.render_config else {
+        return 0;
+    };
+    let mut host = rsf_game_render_config {
+        struct_size: size_of::<rsf_game_render_config>() as u32,
+        enabled: 0,
+        output_width: 0,
+        output_height: 0,
+        render_width: 0,
+        render_height: 0,
+    };
+    // The host call runs without the state lock.
+    if unsafe { render_config(services.user, &mut host) } == 0 {
+        return 0;
+    }
+    let config = lock().config(
+        ACTIVE.load(Ordering::SeqCst),
+        &host,
+        output_width,
+        output_height,
+    );
+    unsafe { output.write(config) };
+    1
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_frames_set_policy(engine_spatial: u32, quality: u32) -> c_int {
+    let mut state = lock();
+    c_int::from(state.set_policy(engine_spatial, quality, ACTIVE.load(Ordering::SeqCst)))
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_unity_frames_admit_frame(
+    packet: *const rsf_unity_packet,
+    completed: u64,
+    admission: *mut rsf_unity_frame_admission,
+) -> u32 {
+    let Some(packet) = (unsafe { packet.as_ref() }) else {
+        return 0;
+    };
+    if admission.is_null() {
+        return 0;
+    }
+    let Some(admitted) = lock().admit_frame(packet, completed) else {
+        return 0;
+    };
+    unsafe { admission.write(admitted) };
+    1
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_unity_frames_submitted(
+    admission: *const rsf_unity_frame_admission,
+    complete: u64,
+    source: *const rsf_unity_source_submission,
+) -> u32 {
+    let Some(admission) = (unsafe { admission.as_ref() }) else {
+        return 0;
+    };
+    let Some(source) = (unsafe { source.as_ref() }) else {
+        return 0;
+    };
+    if lock().submitted(admission, complete, source) {
+        return 1;
+    }
+    if matches!(complete, 0 | u64::MAX) {
+        ACTIVE.store(false, Ordering::SeqCst);
+    }
+    0
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_unity_frames_record_source(
+    source: *const rsf_unity_source_submission,
+    inline_fence: u64,
+) {
+    if let Some(source) = unsafe { source.as_ref() } {
+        lock().record_source(source, inline_fence);
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_unity_frames_take_flushed(
+    session_id: u64,
+    source_frame_id: u64,
+    output: *mut rsf_unity_source_submission,
+) -> u32 {
+    if output.is_null() {
+        return 0;
+    }
+    let (flushed, count) = lock().take_flushed(session_id, source_frame_id);
+    unsafe { ptr::copy_nonoverlapping(flushed.as_ptr(), output, count) };
+    count as u32
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_frames_callback_enter() {
+    CALLBACKS.fetch_add(1, Ordering::SeqCst);
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_frames_callback_leave() {
+    CALLBACKS.fetch_sub(1, Ordering::SeqCst);
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_frames_drained(completed: u64) -> u32 {
+    let state = lock();
+    u32::from(CALLBACKS.load(Ordering::SeqCst) == 0 && state.drained(completed))
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_frames_release() {
+    lock().release();
+    MANAGED_STAGE.store(0, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bridge_abi::{RSF_UNITY_PACKET_NO_INPUTS, RSF_UNITY_PACKET_RESET};
+
+    const SESSION: u64 = 7;
+
+    fn resource(value: usize) -> *mut c_void {
+        ptr::without_provenance_mut(value)
+    }
+
+    fn camera() -> rsf_camera_frame {
+        let mut camera: rsf_camera_frame = unsafe { std::mem::zeroed() };
+        camera.struct_size = size_of::<rsf_camera_frame>() as u32;
+        camera.abi_version = RSF_GAME_CAMERA_ABI_VERSION;
+        camera.render_width = 1280;
+        camera.render_height = 720;
+        camera.output_width = 2560;
+        camera.output_height = 1440;
+        camera.near_plane = 0.1;
+        camera.far_plane = 1000.0;
+        camera
+    }
+
+    fn packet(frame_id: u64) -> rsf_unity_packet {
+        rsf_unity_packet {
+            struct_size: size_of::<rsf_unity_packet>() as u32,
+            abi_version: RSF_UNITY_BRIDGE_ABI_VERSION,
+            session_id: SESSION,
+            frame_id,
+            view_key: 3,
+            generation: 1,
+            flags: RSF_UNITY_PACKET_RESET,
+            color: resource(0x10),
+            depth: resource(0x20),
+            motion: resource(0x30),
+            output: resource(0x40),
+            camera: camera(),
+            previous_clip_to_clip: [0.0; 16],
+        }
+    }
+
+    fn source(frame_id: u64) -> rsf_unity_source_submission {
+        rsf_unity_source_submission {
+            session_id: SESSION,
+            source_frame_id: frame_id,
+            view_key: 3,
+        }
+    }
+
+    #[test]
+    fn packets_need_their_event_resources_and_a_finite_camera() {
+        assert!(valid(&packet(1), SESSION));
+        assert!(!valid(&packet(1), SESSION + 1));
+        assert!(!valid(&packet(0), SESSION));
+
+        let mut window = packet(1);
+        window.flags = RSF_UNITY_PACKET_WINDOW;
+        window.color = ptr::null_mut();
+        window.depth = ptr::null_mut();
+        assert!(valid(&window, SESSION));
+
+        let mut probe = packet(1);
+        probe.flags = RSF_UNITY_PACKET_PROBE;
+        probe.output = ptr::null_mut();
+        assert!(valid(&probe, SESSION));
+        probe.flags |= RSF_UNITY_PACKET_INPUTS_ONLY;
+        probe.motion = ptr::null_mut();
+        assert!(!valid(&probe, SESSION));
+
+        let mut reconstruction = packet(1);
+        reconstruction.flags = RSF_UNITY_PACKET_NO_INPUTS;
+        reconstruction.output = ptr::null_mut();
+        assert!(!valid(&reconstruction, SESSION));
+
+        let mut hudless = packet(1);
+        hudless.flags = RSF_UNITY_PACKET_HUDLESS;
+        hudless.color = ptr::null_mut();
+        assert!(valid(&hudless, SESSION));
+
+        let mut bad = packet(1);
+        bad.camera.jitter_pixels[1] = f32::NAN;
+        assert!(!valid(&bad, SESSION));
+        bad = packet(1);
+        bad.camera.output_width = MAX_EXTENT + 1;
+        assert!(!valid(&bad, SESSION));
+        bad = packet(1);
+        bad.camera.far_plane = bad.camera.near_plane;
+        assert!(!valid(&bad, SESSION));
+        bad = packet(1);
+        bad.camera.abi_version += 1;
+        assert!(!valid(&bad, SESSION));
+    }
+
+    #[test]
+    fn packets_are_stored_until_their_event_takes_them() {
+        let mut state = State::new();
+        let mut addresses = Vec::new();
+        for frame in 1..=PACKETS as u64 {
+            let slot = state.admit_packet(&packet(frame), SESSION).unwrap();
+            addresses.push(state.packet_address(slot).cast_const());
+        }
+        assert_eq!(state.admit_packet(&packet(99), SESSION), None);
+        assert!(!state.drained(0));
+
+        let (slot, taken) = state.take_packet(addresses[4]).unwrap();
+        assert_eq!((slot, taken.frame_id), (4, 5));
+        assert!(state.take_packet(addresses[4]).is_none());
+        assert!(state.take_packet(ptr::null()).is_none());
+        assert_eq!(state.admit_packet(&packet(100), SESSION), Some(4));
+    }
+
+    #[test]
+    fn frames_wait_for_the_ring_before_changing_extents_or_policy() {
+        let mut state = State::new();
+        let first = state.admit_frame(&packet(1), 0).unwrap();
+        assert_eq!((first.slot, first.reconfigure), (0, 0));
+        assert!(state.submitted(&first, 10, &source(1)));
+
+        // Same extents and generation: the next slot is free.
+        let second = state.admit_frame(&packet(2), 0).unwrap();
+        assert_eq!(second.slot, 1);
+        assert!(state.submitted(&second, 11, &source(2)));
+
+        // A size change waits for both submissions.
+        let mut resized = packet(3);
+        resized.camera.render_width = 960;
+        assert!(state.admit_frame(&resized, 10).is_none());
+        assert_eq!(state.input, (1280, 720));
+        assert_eq!(state.admit_frame(&resized, 11).unwrap().slot, 2);
+        assert_eq!(state.input, (960, 720));
+
+        // A policy change advances the generation; stale packets wait for it.
+        assert!(!state.set_policy(2, 1, true));
+        assert!(state.set_policy(1, 3, true));
+        assert_eq!(state.policy.generation, 2);
+        let mut admitted = state.admit_frame(&resized, 11).unwrap();
+        assert_eq!(admitted.reconfigure, 1);
+        assert!(state.submitted(&admitted, 12, &source(3)));
+        assert!(state.admit_frame(&resized, 12).is_none());
+        resized.generation = 2;
+        admitted = state.admit_frame(&resized, 12).unwrap();
+        assert_eq!((admitted.slot, admitted.reconfigure), (0, 0));
+
+        // An inactive bridge records the change without a pending reconfiguration.
+        assert!(state.set_policy(0, 1, false));
+        assert!(!state.policy.pending);
+    }
+
+    #[test]
+    fn a_busy_slot_is_not_reused() {
+        let mut state = State::new();
+        for (frame, complete) in [(1, 5), (2, 6), (3, 7)] {
+            let admitted = state.admit_frame(&packet(frame), 0).unwrap();
+            assert!(state.submitted(&admitted, complete, &source(frame)));
+        }
+        assert!(state.admit_frame(&packet(4), 4).is_none());
+        assert_eq!(state.admit_frame(&packet(4), 5).unwrap().slot, 0);
+        // Without a fence every recorded submission is in flight.
+        assert!(state.admit_frame(&packet(4), 0).is_none());
+        // Device removal gives no completion proof for the recorded slots.
+        assert!(state.admit_frame(&packet(4), u64::MAX).is_none());
+        assert!(!state.drained(u64::MAX));
+    }
+
+    #[test]
+    fn a_missing_completion_blocks_retirement() {
+        let mut state = State::new();
+        let admitted = state.admit_frame(&packet(1), 0).unwrap();
+        assert!(!state.submitted(&admitted, 0, &source(1)));
+        assert_eq!(state.next, 0);
+        assert!(!state.drained(u64::MAX));
+        state.release();
+        assert!(state.drained(0));
+    }
+
+    #[test]
+    fn sources_flush_by_session_and_frame_in_ring_order() {
+        let mut state = State::new();
+        state.record_source(&source(9), 0);
+        state.record_source(&source(3), 0);
+        state.record_source(&source(12), 0);
+        state.record_source(
+            &rsf_unity_source_submission {
+                session_id: SESSION + 1,
+                ..source(5)
+            },
+            0,
+        );
+        let (flushed, count) = state.take_flushed(SESSION, 10);
+        let frames: Vec<u64> = flushed[..count].iter().map(|s| s.source_frame_id).collect();
+        assert_eq!(frames, [9, 3]);
+        let (flushed, count) = state.take_flushed(SESSION, 20);
+        assert_eq!((count, flushed[0].source_frame_id), (1, 12));
+        assert_eq!(state.take_flushed(SESSION, 20).1, 0);
+        assert_eq!(state.take_flushed(SESSION + 1, 5).1, 1);
+    }
+
+    #[test]
+    fn inline_copies_retire_at_their_fence() {
+        let mut state = State::new();
+        state.record_source(&source(1), 40);
+        state.record_source(&source(2), 30);
+        assert_eq!(state.inline_complete, 40);
+        assert!(!state.drained(0));
+        assert!(!state.drained(39));
+        assert!(!state.drained(u64::MAX));
+        assert!(state.drained(40));
+    }
+
+    #[test]
+    fn release_keeps_the_policy() {
+        let mut state = State::new();
+        assert!(state.set_policy(1, 4, true));
+        let admitted = state.admit_frame(&packet(1), 0).unwrap();
+        assert!(state.submitted(&admitted, 3, &source(1)));
+        state.release();
+        assert_eq!(
+            state.policy,
+            Policy {
+                engine_spatial: 1,
+                quality: 4,
+                generation: 2,
+                pending: false,
+            }
+        );
+        assert_eq!(
+            (state.next, state.complete, state.input),
+            (0, [0; SLOTS], (0, 0))
+        );
+    }
+
+    #[test]
+    fn config_reports_the_policy_and_gates_enablement() {
+        let mut state = State::new();
+        let host = rsf_game_render_config {
+            struct_size: size_of::<rsf_game_render_config>() as u32,
+            enabled: 1,
+            output_width: 2560,
+            output_height: 1440,
+            render_width: 1280,
+            render_height: 720,
+        };
+        let config = state.config(true, &host, 2560, 1440);
+        assert_eq!(config.enabled, 1);
+        assert_eq!((config.quality, config.generation), (1, 1));
+        assert_eq!((config.render_width, config.output_width), (1280, 2560));
+        assert_eq!(state.config(false, &host, 2560, 1440).enabled, 0);
+        assert_eq!(state.config(true, &host, 1920, 1080).enabled, 0);
+        assert!(state.set_policy(0, 2, true));
+        let config = state.config(true, &host, 2560, 1440);
+        assert_eq!(
+            (config.enabled, config.quality, config.generation),
+            (0, 2, 2)
+        );
+    }
+}

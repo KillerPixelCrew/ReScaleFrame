@@ -24,6 +24,13 @@ callers. The Unity package still builds the shared bridge. The bridge's
 frame policy and native Runtime setup remain open for porting. Build,
 fixture and Unity player checks remain unrun on this revision.
 
+Both Unity native DLLs link the same Rust D3D12 frame owner. It handles
+packet, policy generation, command-ring and submission lifetimes. A
+device-removed fence value cannot admit a frame or retire in-flight slots.
+The existing Unity graphics calls and CPU fact callbacks remain native.
+The generated private binding was checked. Build, export and player
+verification remain open.
+
 The RDR2 game DLL uses Rust for exact-build admission, SR input routing,
 camera decode, scene facts and its lifecycle. The engine entry export and
 typed native leaves remain available. Stop returns `BUSY` on refused hook

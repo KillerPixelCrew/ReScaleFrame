@@ -22,6 +22,8 @@ if(EXISTS "${RSF_UNITY_NATIVE_INCLUDE}/IUnityGraphicsD3D12.h")
     endif()
     target_include_directories(rsf_unity_package PRIVATE native ../../games/unity-mono/include ../../games/unity-mono/src)
     target_include_directories(rsf_unity_package SYSTEM PRIVATE "${RSF_UNITY_NATIVE_INCLUDE}")
-    target_link_libraries(rsf_unity_package PRIVATE rsf_orchestrator_core rsf_build_options d3d12 d3d11)
+    # The shared D3D12 bridge keeps its frame state in the rsf-unity-mono archive (bridge_state.rs),
+    # the same archive the game plugin links. Only the bridge state symbols are referenced here.
+    target_link_libraries(rsf_unity_package PRIVATE rsf_orchestrator_core rsf_unity_mono_rust rsf_build_options d3d12 d3d11)
     set_target_properties(rsf_unity_package PROPERTIES OUTPUT_NAME "ReScaleFrame.Unity.Native")
 endif()
