@@ -2986,7 +2986,7 @@ unsafe extern "C" fn rsf_fallout4_cpu_source_is_current(
 /// # Safety
 /// `identity` is null or readable.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fallout4_cpu_render_source_is_current(
+pub(crate) unsafe extern "C" fn rsf_fallout4_cpu_render_source_is_current(
     identity: *const rsf_fallout4_cpu_identity,
 ) -> bool {
     identity_from(identity).is_some_and(|identity| render_source_is_current(&identity))

@@ -349,6 +349,14 @@ to Rust before and after them. The private binding was regenerated.
 The previous handoff fixture moved to Rust. Build, event parity and
 game teardown remain open.
 
+Fallout 4's screen owner now verifies the menu entry points and
+classifies before-and-after screen and world-lease facts in Rust.
+The C++ observer runs the menu, freeze and camera queries on its
+native frame and preserves last error. The source comparison matched
+all six menu profiles and guarded engine addresses. Build and live
+screen transitions remain open.
+[Input and screen evidence](research/fallout4-input-ownership-20261116.md)
+
 Unity package D3D12 SR contexts and their recording slots are Rust-owned.
 The existing Unity bridge still provides recording and completion facts.
 The view owner preserves reconfiguration, spatial fallback and retirement

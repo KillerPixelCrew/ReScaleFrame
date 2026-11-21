@@ -17,6 +17,7 @@ mod cpu_events;
 mod creation;
 mod dpi;
 mod platform_abi;
+mod screen;
 mod session;
 
 use platform_abi::{
