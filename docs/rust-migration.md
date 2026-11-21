@@ -293,6 +293,12 @@ Its output retains the XeSS-specific GENERAL layout and copy extent.
 Source checks matched the private table and disabled routes. GPU and
 game verification remain open. [XeSS SR transfers](research/rust-xess-vulkan-sr-cutover.md#transfer-recording-in-the-rust-owner)
 
+The XeSS Vulkan SR owner also resolves all ten required SDK exports in
+Rust. It retains first-miss refusal, cleanup and module pinning. The
+native leaf binds the same typed table. Enabled and disabled builds
+and binary and device checks remain open.
+[XeSS SR resolver](research/rust-xess-vulkan-sr-cutover.md#required-sdk-exports-in-the-rust-owner)
+
 The legacy D3D11 Streamline SR owner now selects the required
 interposer and DLSS feature lookups in Rust. It shares the seven
 common lookups and adds the five owner-only lookups for a session

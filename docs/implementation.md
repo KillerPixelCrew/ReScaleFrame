@@ -851,6 +851,12 @@ and remains unrun. Build and live observer verification remain open.
 
 ## Rust orchestrator and first Anomaly port
 
+XeSS Vulkan SR now admits its ten required SDK exports in Rust.
+The native leaf binds the complete typed table and still publishes
+the session only after pinning the module. The source comparison
+matched the lookup order, first-miss refusal and disabled routes.
+[XeSS resolver](research/rust-xess-vulkan-sr-cutover.md#required-sdk-exports-in-the-rust-owner)
+
 The D3D12 Streamline host now owns startup admission, SDK preferences,
 device, factory and queue staging, and rollback in Rust. Source
 comparison matched the signature gate, required and optional lookup

@@ -158,7 +158,7 @@ pub(in crate::vulkan_sr) static OPS: XessOps = XessOps {
         }),
         unload: leaf!(|_: Handle| -> () { push(Call::Unload) }),
     },
-    resolve: leaf!(|_: Handle, out: &mut Handle| -> i32 {
+    allocate_table: leaf!(|out: &mut Handle| -> i32 {
         *out = handle();
         0
     }),
@@ -284,6 +284,8 @@ pub(in crate::vulkan_sr) static OPS: XessOps = XessOps {
         push(Call::Retire(commands as usize))
     }),
     flush_capture: leaf!(|_: Handle| -> () { push(Call::Flush) }),
+    bind_entries: leaf!(|_: Handle, _: &Entries| -> () {}),
+    lookup: Some(leaf!(|_: Handle, _: *const c_char| -> Handle { handle() })),
 };
 
 unsafe extern "C" fn proc(_: Handle, _: *const c_char) -> rsf_vk_function {

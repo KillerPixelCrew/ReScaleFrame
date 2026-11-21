@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
-//! XeSS Vulkan super resolution. Rust owns the SDK session, context lifetime,
-//! admission, sizing, the private image cache, history, capture order and
-//! teardown. Rust plans transfers and the native table performs the typed Vulkan and SDK calls.
+//! XeSS Vulkan super resolution. Rust owns SDK export resolution, the SDK session,
+//! context lifetime, admission, sizing, the private image cache, history, capture
+//! order and teardown. Rust plans transfers and the native table performs the
+//! typed Vulkan and SDK calls.
 use super::*;
 use crate::sdk_module::{Loader, SdkModule};
 use crate::vulkan_fg_copy::{
@@ -13,6 +14,7 @@ use std::ffi::CString;
 use std::sync::{Arc, PoisonError};
 
 const LOAD_FAILED: i32 = -4;
+const MISSING_ENTRY: i32 = -5;
 const NOT_READY: i32 = -8;
 const FEATURE_FAILED: i32 = -9;
 
@@ -41,11 +43,26 @@ pub(super) struct XessSetup {
 
 type Names = *mut *const *const c_char;
 
+const REQUIRED_EXPORTS: [&CStr; 10] = [
+    c"xessVKGetRequiredInstanceExtensions",
+    c"xessVKGetRequiredDeviceExtensions",
+    c"xessVKGetRequiredDeviceFeatures",
+    c"xessVKCreateContext",
+    c"xessVKInit",
+    c"xessVKExecute",
+    c"xessDestroyContext",
+    c"xessGetOptimalInputResolution",
+    c"xessSetVelocityScale",
+    c"xessGetVersion",
+];
+type Entries = [Handle; REQUIRED_EXPORTS.len()];
+type ExportLookup = unsafe extern "C" fn(Handle, *const c_char) -> Handle;
+
 // Private platform ABI with native_xess_vulkan.cpp.
 #[repr(C)]
 pub(super) struct XessOps {
     loader: Loader,
-    resolve: unsafe extern "C" fn(Handle, &mut Handle) -> i32,
+    allocate_table: unsafe extern "C" fn(&mut Handle) -> i32,
     pin: unsafe extern "C" fn(Handle) -> u32,
     drop_table: unsafe extern "C" fn(Handle),
     instance_requirements: unsafe extern "C" fn(Handle, *mut u32, Names, *mut u32) -> i32,
@@ -73,6 +90,9 @@ pub(super) struct XessOps {
     capture_parameters: unsafe extern "C" fn(&Frame, u32, u32),
     retire_commands: unsafe extern "C" fn(Handle, Handle),
     flush_capture: unsafe extern "C" fn(Handle),
+    bind_entries: unsafe extern "C" fn(Handle, &Entries),
+    // Fixtures supply inert addresses. Production uses the loaded SDK module.
+    lookup: Option<ExportLookup>,
 }
 
 #[repr(C)]
@@ -106,11 +126,14 @@ pub(super) struct XessExecute {
 }
 
 const _: () = {
-    assert!(size_of::<XessOps>() == 30 * 8);
+    assert!(size_of::<XessOps>() == 32 * 8);
     assert!(std::mem::offset_of!(XessOps, barrier) == 19 * 8);
     assert!(std::mem::offset_of!(XessOps, copy) == 20 * 8);
     assert!(std::mem::offset_of!(XessOps, execute) == 21 * 8);
     assert!(std::mem::offset_of!(XessOps, sharpen) == 22 * 8);
+    assert!(std::mem::offset_of!(XessOps, bind_entries) == 30 * 8);
+    assert!(std::mem::offset_of!(XessOps, lookup) == 31 * 8);
+    assert!(size_of::<Entries>() == 10 * 8);
     assert!(size_of::<XessSetup>() == 16 && size_of::<XessInit>() == 16);
     assert!(size_of::<XessTexture>() == 32);
     assert!(size_of::<XessExecute>() == 152);
@@ -143,6 +166,36 @@ struct Library {
 // The native handle is immutable SDK entry-point storage.
 unsafe impl Send for Library {}
 unsafe impl Sync for Library {}
+
+impl Library {
+    fn resolve(ops: &'static XessOps, module: SdkModule) -> Result<Self, i32> {
+        let mut handle = ptr::null_mut();
+        check(unsafe { (ops.allocate_table)(&mut handle) })?;
+        if handle.is_null() {
+            return Err(LOAD_FAILED);
+        }
+        let library = Self {
+            ops,
+            handle,
+            module,
+        };
+        let mut entries = [ptr::null_mut(); REQUIRED_EXPORTS.len()];
+        for (entry, name) in entries.iter_mut().zip(REQUIRED_EXPORTS) {
+            *entry = match ops.lookup {
+                Some(lookup) => unsafe { lookup(library.module.as_ptr(), name.as_ptr()) },
+                None => library
+                    .module
+                    .symbol(name)
+                    .map_or(ptr::null_mut(), |function| function as *const () as Handle),
+            };
+            if entry.is_null() {
+                return Err(MISSING_ENTRY);
+            }
+        }
+        unsafe { (ops.bind_entries)(handle, &entries) };
+        Ok(library)
+    }
+}
 
 impl Drop for Library {
     fn drop(&mut self) {
@@ -183,18 +236,9 @@ unsafe extern "C" fn rsf_core_xessvk_initialize(
             Ok(module) => module,
             Err(result) => return result,
         };
-    let mut handle = ptr::null_mut();
-    let result = unsafe { (ops.resolve)(module.as_ptr(), &mut handle) };
-    if result != 0 {
-        return result;
-    }
-    if handle.is_null() {
-        return LOAD_FAILED;
-    }
-    let library = Library {
-        ops,
-        handle,
-        module,
+    let library = match Library::resolve(ops, module) {
+        Ok(library) => library,
+        Err(result) => return result,
     };
     // The host can destroy its Vulkan device after retiring the session. The
     // SDK owns storage in the device creation chain that must stay mapped.
