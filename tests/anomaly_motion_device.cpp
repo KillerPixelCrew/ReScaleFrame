@@ -1000,7 +1000,7 @@ int main()
         ShaderLoader shader_loader(*manifest, deployment, {}, shader_api, shader_api);
         loader = &shader_loader;
         const auto list = roots(deployment / "manifest.txt");
-        require(list.size() == manifest->by_original.size(), "manifest roots");
+        require(list.size() == manifest->entries().size(), "manifest roots");
         every_root(list);
         foliage_layouts(list);
         draw_scene();

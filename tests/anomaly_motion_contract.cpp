@@ -765,7 +765,16 @@ void manifest_rules()
     std::string error;
     auto ok = Manifest::parse("rsf-anomaly-motion-manifest 1\r\nnamespace " + ns + "\nroot vs core_static deffer_base_flat.vs " + h1 +
         " " + h2 + "\n", error);
-    require(ok && ok->by_original.size() == 1 && ok->by_original.at(h1).family == Family::CoreStatic && ok->name_space == ns, "parse");
+    require(ok && ok->entries().size() == 1 && ok->find(h1) == &ok->entries()[0] && ok->find(h1)->family == Family::CoreStatic &&
+        ok->name_space() == ns && std::string_view(ok->find(h1)->motion_sha256) == h2 && !ok->find(h2) && !ok->find(h1.substr(1)),
+        "parse");
+    {
+        const auto shared = *ok;
+        const auto* row = ok->find(h1);
+        ok.reset();
+        require(shared.find(h1) == row && std::string_view(row->name) == "deffer_base_flat.vs",
+            "a copy keeps the admitted rows alive after the parsed owner is gone");
+    }
     require(!Manifest::parse("rsf-anomaly-motion-manifest 2\n", error), "version");
     require(!Manifest::parse("rsf-anomaly-motion-manifest 1\nnamespace " + ns + "\nroot ps core_static x.ps " + h1 + " " + h2 + "\n", error),
         "family/stage mismatch");
@@ -789,15 +798,17 @@ void manifest_rules()
         {view("dx11/tess.ds"), view(h2), view(h1), view("tess_domain"), 'd'},
     };
     Manifest pack;
-    require(admit_runtime_manifest(pack, ns, 2, roots, read, error) && pack.by_original.size() == 2 &&
-        pack.by_original.at(h1).family == Family::TessHull && pack.by_original.at(h2).family == Family::TessDomain,
+    require(admit_runtime_manifest(pack, ns, 2, roots, read, error) && pack.entries().size() == 2 &&
+        pack.find(h1)->family == Family::TessHull && pack.find(h2)->family == Family::TessDomain &&
+        std::string_view(pack.entries()[0].name) == "dx11/tess.hs" && std::string_view(pack.entries()[1].name) == "dx11/tess.ds",
         "Runtime root metadata admits the matching hull and domain families");
     roots[1].stage = 'h';
     require(!admit_runtime_manifest(pack, ns, 2, roots, read, error), "Runtime family/stage mismatch");
     roots[1].stage = 'd';
     roots[1].original = view(h1);
     require(!admit_runtime_manifest(pack, ns, 2, roots, read, error) && error == "ambiguous root source" &&
-        pack.by_original.count(h2) == 1, "Runtime duplicate refuses the candidate without replacing the accepted manifest");
+        pack.find(h2) && pack.find(h2)->stage == 'd' && pack.entries().size() == 2,
+        "Runtime duplicate refuses the candidate without replacing the accepted manifest");
 }
 
 void loader_contract()
@@ -1481,8 +1492,8 @@ void tess_manifest_rules()
     std::string error;
     auto ok = Manifest::parse(head + "root hs tess_hull dx11/tess.hs " + h1 + " " + h2 + "\nroot ds tess_domain dx11/tess.ds " + h3 + " " +
         h4 + "\n", error);
-    require(ok && ok->by_original.at(h1).family == Family::TessHull && ok->by_original.at(h1).stage == 'h' &&
-        ok->by_original.at(h3).stage == 'd' && ok->by_original.at(h3).name == "dx11/tess.ds", "hull/domain roots parse: " + error);
+    require(ok && ok->find(h1)->family == Family::TessHull && ok->find(h1)->stage == 'h' &&
+        ok->find(h3)->stage == 'd' && std::string_view(ok->find(h3)->name) == "dx11/tess.ds", "hull/domain roots parse: " + error);
     for (const std::string bad : {"root vs tess_hull dx11/tess.hs ", "root ds tess_hull dx11/tess.hs ", "root gs tess_hull dx11/tess.hs ",
              "root hs tess_hull /tess.hs ", "root hs tess_hull dx11/ ", "root hs tess_hull a/b/tess.hs ", "root hs tess_hull dx11\\tess.hs ",
              "root hs tess_hull dx11/../tess.hs "})

@@ -291,7 +291,7 @@ void* open_pack(void* module, const void* profile, const wchar_t* pack, const wc
     std::string error;
     if (!reflector().ready()) error = "engine D3DCompiler unavailable";
     else if (result->open(pack, cache, static_cast<std::byte*>(module), *static_cast<const BuildProfile*>(profile)->motion, error)) {
-        *info = {bytes(result->manifest.name_space), result->manifest.by_original.size()};
+        *info = {result->manifest.admitted()};
         return result.release();
     }
     std::snprintf(message, size, "%s", error.c_str());
@@ -319,20 +319,10 @@ bool copy_bytecode(void* raw) noexcept try {
     storage.request.bytecode = storage.copied;
     return true;
 } catch (...) { return false; }
-bool find_entry(void* handle, const uint8_t (*hash)[64], ShaderEntry* out) noexcept {
-    const auto& roots = static_cast<RuntimeShaders*>(handle)->manifest.by_original;
-    const auto key = std::string_view(reinterpret_cast<const char*>(*hash), 64);
-    // Transparent lookup avoids copying the digest at each create_shader.
-    const auto entry = roots.find(key);
-    if (entry == roots.end()) return false;
-    const auto& root = entry->second;
-    *out = {&root, bytes(root.name), static_cast<uint8_t>(root.stage), static_cast<uint8_t>(root.family)};
-    return true;
-}
-void prepare_shader(void* pack, void* raw, const void* root, ShaderResult* out) noexcept try {
+void prepare_shader(void* pack, void* raw, const rsf_anomaly_shader_entry* root, ShaderResult* out) noexcept try {
     const auto& request = static_cast<RequestStorage*>(raw)->request;
     auto storage = std::make_unique<Prepared>(
-        static_cast<RuntimeShaders*>(pack)->prepare(request, *static_cast<const ManifestEntry*>(root), reflector()));
+        static_cast<RuntimeShaders*>(pack)->prepare(request, manifest_entry(*root), reflector()));
     *out = {storage.get(), bytes(storage->detail), storage->skin, static_cast<uint8_t>(storage->outcome)};
     storage.release();
 } catch (...) {}
@@ -407,7 +397,7 @@ const MotionPlatform platform{
     },
     decode_request, [](void* request) { delete static_cast<RequestStorage*>(request); },
     copy_bytecode,
-    find_entry, prepare_shader, [](void* reflection) { delete static_cast<Prepared*>(reflection); },
+    prepare_shader, [](void* reflection) { delete static_cast<Prepared*>(reflection); },
     [](void* raw, uint8_t family, FoliageLayout* out) {
         *out = make_foliage_layout(static_cast<Family>(family), static_cast<Prepared*>(raw)->stock);
         return out->usable;
@@ -423,9 +413,9 @@ const MotionPlatform platform{
 };
 
 static_assert(sizeof(WindowFacts) == 56 && sizeof(DrawFacts) == 32);
-static_assert(sizeof(ShaderObjects) == 40 && sizeof(ShaderEntry) == 32 && sizeof(ShaderResult) == 32);
+static_assert(sizeof(ShaderObjects) == 40 && sizeof(ShaderResult) == 32 && sizeof(PackInfo) == 8);
 static_assert(sizeof(FoliageLayout) == 108 && offsetof(FoliageLayout, xform) == 4 && offsetof(FoliageLayout, usable) == 104);
-static_assert(sizeof(MotionPlatform) == 352 && offsetof(MotionPlatform, guards) == 40);
+static_assert(sizeof(MotionPlatform) == 344 && offsetof(MotionPlatform, guards) == 40);
 static_assert(sizeof(FrameTarget) == 24 && offsetof(FrameTarget, main) == 20);
 static_assert(static_cast<uint8_t>(ReplayResult::Done) == 0 && static_cast<uint8_t>(ReplayResult::SkippedNoDepthWrite) == 1);
 static_assert(RSF_PHASE_RENDER_SUBMIT == 2 && RSF_DUMP_VIEW_DENSE_MOTION == 7);

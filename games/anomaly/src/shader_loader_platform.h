@@ -38,11 +38,22 @@ typedef struct {
     uint32_t stage;
 } rsf_anomaly_shader_root;
 typedef bool (*rsf_anomaly_shader_read_root)(const void*, uint32_t, rsf_anomaly_shader_root*);
+// The admitted manifest is Rust-owned and immutable; free it with rsf_anomaly_shader_admitted_free.
+// Its namespace and rows borrow its storage until then.
+typedef struct rsf_anomaly_shader_admitted rsf_anomaly_shader_admitted;  // opaque
+typedef struct {
+    rsf_anomaly_shader_bytes name, original, motion;
+    uint8_t stage, family;
+} rsf_anomaly_shader_entry;
+typedef struct {
+    rsf_anomaly_shader_bytes name_space;
+    const rsf_anomaly_shader_entry* entries;  // ordered by original SHA-256
+    size_t count;
+} rsf_anomaly_shader_manifest_view;
 typedef struct {
     void* user;
-    bool (*root)(void*, const rsf_anomaly_shader_root*, uint8_t family);
-    bool (*finish)(void*, rsf_anomaly_shader_bytes message, bool accepted);
-} rsf_anomaly_shader_manifest_sink;
+    void (*report)(void*, rsf_anomaly_shader_bytes message);
+} rsf_anomaly_shader_refusal;
 
 typedef struct {
     rsf_anomaly_shader_bytes name;
@@ -84,9 +95,14 @@ extern "C" {
 const char* rsf_anomaly_shader_family_name(uint8_t);
 uint8_t rsf_anomaly_shader_family_stage(uint8_t);
 const char* rsf_anomaly_shader_compatibility_name(uint8_t);
-bool rsf_anomaly_shader_manifest(rsf_anomaly_shader_bytes, const rsf_anomaly_shader_manifest_sink*);
-bool rsf_anomaly_shader_pack_manifest(rsf_anomaly_shader_bytes, uint32_t count, const void* session,
-    rsf_anomaly_shader_read_root, const rsf_anomaly_shader_manifest_sink*);
+// Null on refusal, after reporting the reason once.
+rsf_anomaly_shader_admitted* rsf_anomaly_shader_manifest(rsf_anomaly_shader_bytes, const rsf_anomaly_shader_refusal*);
+rsf_anomaly_shader_admitted* rsf_anomaly_shader_pack_manifest(rsf_anomaly_shader_bytes, uint32_t count,
+    const void* session, rsf_anomaly_shader_read_root, const rsf_anomaly_shader_refusal*);
+void rsf_anomaly_shader_admitted_free(rsf_anomaly_shader_admitted*);
+void rsf_anomaly_shader_admitted_view(const rsf_anomaly_shader_admitted*, rsf_anomaly_shader_manifest_view*);
+const rsf_anomaly_shader_entry* rsf_anomaly_shader_admitted_find(const rsf_anomaly_shader_admitted*,
+    rsf_anomaly_shader_bytes original);
 bool rsf_anomaly_shader_sha256(rsf_anomaly_shader_bytes, uint8_t (*out)[64]);
 bool rsf_anomaly_shader_stage_matches(rsf_anomaly_shader_bytes, uint8_t);
 uint8_t rsf_anomaly_shader_frame(const rsf_anomaly_shader_frame_layout*, uintptr_t module, uintptr_t return_address,
@@ -106,7 +122,20 @@ void rsf_anomaly_shader_finish_runtime(const rsf_anomaly_shader_request*, uint8_
 }
 
 #include "shader_loader.h"
+#include <cstddef>
 namespace rsf::anomaly::motion {
+static_assert(sizeof(ManifestEntry) == sizeof(rsf_anomaly_shader_entry) && sizeof(ManifestEntry) == 56 &&
+    offsetof(ManifestEntry, name) == offsetof(rsf_anomaly_shader_entry, name) &&
+    offsetof(ManifestEntry, original_sha256) == offsetof(rsf_anomaly_shader_entry, original) &&
+    offsetof(ManifestEntry, motion_sha256) == offsetof(rsf_anomaly_shader_entry, motion) &&
+    offsetof(ManifestEntry, stage) == offsetof(rsf_anomaly_shader_entry, stage) &&
+    offsetof(ManifestEntry, family) == offsetof(rsf_anomaly_shader_entry, family) &&
+    sizeof(ManifestText) == sizeof(rsf_anomaly_shader_bytes) && sizeof(Family) == 1);
+// ManifestEntry is the C++ spelling of one Rust-owned row.
+inline const ManifestEntry& manifest_entry(const rsf_anomaly_shader_entry& row) noexcept
+{
+    return *reinterpret_cast<const ManifestEntry*>(&row);
+}
 bool admit_runtime_manifest(Manifest&, std::string_view name_space, uint32_t count, const void* session,
     rsf_anomaly_shader_read_root, std::string& error);
 Prepared finish_runtime_shader(const ShaderRequest&, const ManifestEntry&, Reflector&, int32_t status, bool cache_hit,

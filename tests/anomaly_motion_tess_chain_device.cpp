@@ -706,7 +706,7 @@ bool create_device()
 bool has_tess_roots(const Manifest& manifest)
 {
     bool hull = false, domain = false;
-    for (const auto& [hash, entry] : manifest.by_original) {
+    for (const auto& entry : manifest.entries()) {
         hull |= entry.family == Family::TessHull;
         domain |= entry.family == Family::TessDomain;
     }

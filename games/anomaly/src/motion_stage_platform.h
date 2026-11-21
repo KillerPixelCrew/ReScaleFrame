@@ -35,14 +35,14 @@ struct DrawFacts {
 };
 struct ShaderObjects { void* vs; void* hs; void* ds; void* ps; void* gs; };
 struct MotionDrawState { float viewport[4], jitter[4]; };
-struct ShaderEntry { const void* entry; rsf_anomaly_shader_bytes name; uint8_t stage, family; };
 struct ShaderResult {
     void* reflection;
     rsf_anomaly_shader_bytes detail;
     int32_t skin;
     uint8_t outcome;
 };
-struct PackInfo { rsf_anomaly_shader_bytes name_space; size_t roots; };
+// The pack's Rust-admitted manifest, owned by the pack until close_pack.
+struct PackInfo { const rsf_anomaly_shader_admitted* manifest; };
 struct PatchCounters { uint64_t intercepted, built, cache_hits, refused, refusals[11]; };
 using Redraw = void (*)(void*, void*);
 using Retire = void (*)(void*, const rsf_anomaly_geometry_key*);
@@ -83,15 +83,14 @@ struct MotionPlatform {
     void* (*decode_request)(const char*, const void*, uint32_t, const void*, const void*, uint8_t*, rsf_anomaly_shader_bytes*);
     void (*drop_request)(void*);
     bool (*copy_bytecode)(void*);
-    bool (*find_entry)(void*, const uint8_t (*)[64], ShaderEntry*);
-    void (*prepare_shader)(void*, void*, const void*, ShaderResult*);
+    void (*prepare_shader)(void*, void*, const rsf_anomaly_shader_entry*, ShaderResult*);
     void (*drop_reflection)(void*);
     bool (*foliage_layout)(void*, uint8_t, FoliageLayout*);
     bool (*link_shaders)(const void*, const void*, const void*, const void*);
     void* (*create_shader)(void*, void*, void*, void*, bool, bool*);
     bool (*sr_capture)();
 };
-inline constexpr uint32_t motion_platform_abi = 2;
+inline constexpr uint32_t motion_platform_abi = 3;
 
 extern "C" {
 void rsf_anomaly_motion_stage_configure(const MotionPlatform*, const wchar_t*, rsf_dump_log_fn, void*) noexcept;
