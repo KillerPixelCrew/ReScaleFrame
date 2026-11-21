@@ -101,14 +101,13 @@ FidelityFX 4, Streamline and XeSS Vulkan bridges use the Windows GNU
 target.
 
 Build and fixture results below apply to their recorded candidates.
-The newest Runtime and Anomaly binaries found under `build/` at
-`2ceec77` still date to the November 21 morning builds recorded above.
-They predate the latest bridge, overlay, input and retirement cutovers.
+The Runtime and Anomaly binaries found under `build/` at `afe5eee`
+predate the merged policy cutover.
 
 | Check | Evidence still needed for the merged source |
 | --- | --- |
 | Build and ABI | Windows builds of the Runtime DLL, thin and combined carriers, Minecraft, Unity Native, Godot Native and Anomaly. Compare each PE export inventory against its matching SDK configuration, including ordinals and carrier forwarders. Check that Anomaly still resolves the already-loaded Runtime by name. The `native_vulkan_dll_exports` fixture checks a subset of named entry points through `GetProcAddress`. The standalone Windows GNU Vulkan bridges also need link verification. |
-| Focused contracts | Run `plugin_session_lifetime` and `plugin_session_lifetime_embedded`, `callback_host_abi` and `callback_host_abi_embedded`, the Anomaly lifecycle and both profiles' input and SR hook contracts, and the enabled Vulkan provider contracts. Record the build commit and feature set with the results. |
+| Focused contracts | Run `input_receipts_contract`, `native_cpu_reservation_contract`, `native_fg_cpu_contract`, `d3d11_host_contract`, `sharpening_settings`, and the Rust input receipt and D3D11 capture budget cases. Check `plugin_session_lifetime` and `plugin_session_lifetime_embedded`, `callback_host_abi` and `callback_host_abi_embedded`, the Anomaly lifecycle and both profiles' input and SR hook contracts, and the enabled Vulkan provider contracts. Record the build commit and feature set with the results. |
 | Device | Check provider switches, fullscreen and resize, GPU retirement, D3D11 state restoration, OpenGL sharing, capture completion and overlay drawing on the affected APIs. |
 | Game | Use the same candidate on Standard and AVX. Record movement and held input, SR and FG switching, overlay capture and release, resize and fallback, and the observed shutdown sequence. Record an engine quit and explicit plugin retirement separately. |
 
@@ -123,6 +122,15 @@ The Rust CPU dispatcher owns receipt replay, and FG frame routing uses
 the Rust unique-owner selector. Their former native implementations and
 private callbacks are removed. The CPU event and dispatch C signatures
 are unchanged. Build and export verification of this cutover remain open.
+The archived Release inventories in `build/rust-migration/baseline-exports`
+give the following expected ordinals for builds with matching options.
+
+| Binary | `rsf_native_cpu_dispatch` | `rsf_native_cpu_event` |
+| --- | ---: | ---: |
+| Runtime DLL | 227 | 228 |
+| AC7 carrier | 123 | 124 |
+| Loader carrier | 140 | 141 |
+| Minecraft DLL | 134 | 135 |
 
 `rsf_negotiate` in `runtime/contract` has a native fixture and no
 production caller. The running Runtime and adapter use the Rust backend
