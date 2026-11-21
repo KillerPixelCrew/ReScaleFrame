@@ -112,10 +112,6 @@ typedef struct rsf_d3d11h_platform {
     /* Adapter INI keys. */
     int32_t (*ini_read)(const wchar_t* path, const wchar_t* section, const wchar_t* key, int32_t fallback);
     int32_t (*ini_write)(const wchar_t* path, const wchar_t* section, const wchar_t* key, const wchar_t* value);
-    /* Capture budgets kept under their original license in failure_capture_policy.h. */
-    int32_t (*failure_claim)(uint32_t enabled, uint32_t request_pending, int32_t result);
-    void (*sequence_request)(void);
-    int32_t (*sequence_claim)(uint64_t session_id, uint64_t source_frame_id, uint32_t ready, uint32_t request_pending);
     /* Existing auxiliary SR owner. */
     const rsf_aux_platform* auxiliary;
 } rsf_d3d11h_platform;

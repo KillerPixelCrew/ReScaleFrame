@@ -314,9 +314,6 @@ pub(crate) struct rsf_d3d11h_platform {
     pub overlay_poll_toggle: unsafe extern "C" fn(),
     pub ini_read: unsafe extern "C" fn(*const u16, *const u16, *const u16, i32) -> i32,
     pub ini_write: unsafe extern "C" fn(*const u16, *const u16, *const u16, *const u16) -> i32,
-    pub failure_claim: unsafe extern "C" fn(u32, u32, i32) -> i32,
-    pub sequence_request: unsafe extern "C" fn(),
-    pub sequence_claim: unsafe extern "C" fn(u64, u64, u32, u32) -> i32,
     pub auxiliary: *const rsf_aux_platform,
 }
 
@@ -355,5 +352,6 @@ const _: () = {
     assert!(size_of::<rsf_d3d11h_bridge>() == 64);
     assert!(size_of::<rsf_d3d11h_pipeline_start>() == 48);
     assert!(size_of::<rsf_d3d11h_pipeline_status>() == 20);
-    assert!(size_of::<rsf_d3d11h_platform>() == 60 * 8);
+    assert!(size_of::<rsf_d3d11h_platform>() == 57 * 8);
+    assert!(offset_of!(rsf_d3d11h_platform, auxiliary) == 56 * 8);
 };

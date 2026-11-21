@@ -8,6 +8,38 @@ use crate::native_sr_abi::rsf_motion_decode_params;
 use rsf_game_sys::rsf_game_log_fn;
 use std::cell::Cell;
 
+#[test]
+fn failure_captures_count_only_failed_frames_with_no_pending_dump() {
+    let mut budget = CaptureBudget::default();
+    for result in [NOT_READY, NATIVE_REFUSED, INVALID] {
+        assert!(!budget.claim_failure(false, false, result));
+        assert!(!budget.claim_failure(true, true, result));
+        assert!(!budget.claim_failure(true, false, OK));
+        assert!(budget.claim_failure(true, false, result));
+    }
+    budget.request_sequence();
+    assert!(!budget.claim_failure(true, false, NOT_READY));
+}
+
+#[test]
+fn capture_sequence_waits_for_ready_identified_frames_and_can_restart() {
+    let mut budget = CaptureBudget::default();
+    assert!(!budget.claim_source(7, 1, true, false));
+    budget.request_sequence();
+    for source in 1..=4 {
+        assert!(!budget.claim_source(7, source, false, false));
+        assert!(!budget.claim_source(7, source, true, true));
+        assert!(!budget.claim_source(0, source, true, false));
+        assert!(!budget.claim_source(7, 0, true, false));
+        assert!(budget.claim_source(7, source, true, false));
+        assert!(!budget.claim_source(7, source, true, false));
+    }
+    assert!(!budget.claim_source(7, 5, true, false));
+    budget.request_sequence();
+    assert!(budget.claim_source(7, 4, true, false));
+    assert!(budget.claim_source(8, 4, true, false));
+}
+
 thread_local! {
     static DEVICE: Cell<Raw> = const { Cell::new(null_mut()) };
     static CONTEXT: Cell<Raw> = const { Cell::new(null_mut()) };
@@ -175,12 +207,6 @@ unsafe extern "C" fn ini_read(_: *const u16, _: *const u16, _: *const u16, fallb
 unsafe extern "C" fn ini_write(_: *const u16, _: *const u16, _: *const u16, _: *const u16) -> i32 {
     1
 }
-unsafe extern "C" fn failure_claim(_: u32, _: u32, _: i32) -> i32 {
-    0
-}
-unsafe extern "C" fn sequence_claim(_: u64, _: u64, _: u32, _: u32) -> i32 {
-    0
-}
 
 const PLATFORM: rsf_d3d11h_platform = rsf_d3d11h_platform {
     same_object: same,
@@ -239,9 +265,6 @@ const PLATFORM: rsf_d3d11h_platform = rsf_d3d11h_platform {
     overlay_poll_toggle: nothing,
     ini_read,
     ini_write,
-    failure_claim,
-    sequence_request: nothing,
-    sequence_claim,
     auxiliary: ptr::null(),
 };
 

@@ -159,6 +159,44 @@ struct Shared {
     report: rsf_overlay_sr_report,
 }
 
+#[derive(Default)]
+struct CaptureBudget {
+    failures: u8,
+    sequence_remaining: u8,
+    last_source: Option<(u64, u64)>,
+}
+
+impl CaptureBudget {
+    fn claim_failure(&mut self, enabled: bool, pending: bool, result: i32) -> bool {
+        if !enabled || pending || result == OK || self.failures >= 3 {
+            return false;
+        }
+        self.failures += 1;
+        true
+    }
+
+    fn request_sequence(&mut self) {
+        self.sequence_remaining = 4;
+        self.last_source = None;
+    }
+
+    fn claim_source(&mut self, session: u64, source: u64, ready: bool, pending: bool) -> bool {
+        let identity = Some((session, source));
+        if self.sequence_remaining == 0
+            || !ready
+            || pending
+            || session == 0
+            || source == 0
+            || self.last_source == identity
+        {
+            return false;
+        }
+        self.last_source = identity;
+        self.sequence_remaining -= 1;
+        true
+    }
+}
+
 /// State owned by the admitted graphics callback. Every field is reached only
 /// under the callback lease; a contended lease refuses rather than waits.
 struct Graphics {
@@ -173,6 +211,7 @@ struct Graphics {
     capture_view: u64,
     capture_native_frame: u64,
     capture_pending: bool,
+    capture_budget: CaptureBudget,
     execution_thread: u32,
     backend: u32,
     quality: u32,
@@ -210,6 +249,7 @@ impl Graphics {
             capture_view: 0,
             capture_native_frame: 0,
             capture_pending: false,
+            capture_budget: CaptureBudget::default(),
             execution_thread: 0,
             backend: 0,
             quality: 0,
@@ -728,11 +768,11 @@ impl Host {
         g.observer
     }
 
-    fn arm_failure_capture(&self, result: i32) -> bool {
+    fn arm_failure_capture(&self, budget: &mut CaptureBudget, result: i32) -> bool {
         let p = &self.platform;
         let enabled = self.capture_failures.load(Ordering::Acquire);
         let pending = unsafe { (p.dump_requested)() } != 0;
-        if unsafe { (p.failure_claim)(enabled as u32, pending as u32, result) } == 0 {
+        if !budget.claim_failure(enabled, pending, result) {
             return false;
         }
         unsafe { (p.dump_request)() };
@@ -960,7 +1000,7 @@ impl Host {
         let mut record = zeroed_record();
         // A sequence waits for ready gameplay rather than consuming size plans.
         if self.capture_sequence.swap(false, Ordering::AcqRel) {
-            unsafe { (p.sequence_request)() };
+            g.capture_budget.request_sequence();
         }
         let sequence_frame = !configure_only && {
             let ready = unchanged_configuration
@@ -969,15 +1009,8 @@ impl Host {
                 && pass.screen == SCREEN_GAMEPLAY;
             let pending =
                 self.capture.load(Ordering::Acquire) || unsafe { (p.dump_requested)() } != 0;
-            let claimed = unsafe {
-                (p.sequence_claim)(
-                    pass.session_id,
-                    pass.source_frame_id,
-                    ready as u32,
-                    pending as u32,
-                )
-            };
-            claimed != 0
+            g.capture_budget
+                .claim_source(pass.session_id, pass.source_frame_id, ready, pending)
         };
         if sequence_frame {
             unsafe { (p.dump_request)() };
@@ -1095,7 +1128,10 @@ impl Host {
         } else {
             g.reset = true;
         }
-        if !configure_only && settings.sr_enabled != 0 && self.arm_failure_capture(result) {
+        if !configure_only
+            && settings.sr_enabled != 0
+            && self.arm_failure_capture(&mut g.capture_budget, result)
+        {
             self.capture_inputs(g.backend, context, pass, &mut record, null_mut());
             self.dump_result(&record, c"automatic_sr_failure", g.backend, result);
         }
@@ -1497,7 +1533,7 @@ impl Host {
                     ),
                 );
             }
-            self.arm_failure_capture(ticket.temporal_result);
+            self.arm_failure_capture(&mut g.capture_budget, ticket.temporal_result);
             let mut record = zeroed_record();
             if g.capture_pending
                 && g.capture_native_frame == pass.native_frame

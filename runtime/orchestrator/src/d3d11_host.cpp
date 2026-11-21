@@ -3,7 +3,6 @@
 // callback leases, lifecycle, recovery and status live in d3d11_host.rs.
 #include "d3d11_host_platform.h"
 #include "d3d11_output_platform.h"
-#include "failure_capture_policy.h"
 #include <rescaleframe/native_sr.h>
 #include <rescaleframe/native_cpu.h>
 #include <rescaleframe/native_scene.h>
@@ -64,7 +63,8 @@ static_assert(sizeof(rsf_d3d11_sampler_bias) == 160 && offsetof(rsf_d3d11_sample
     offsetof(rsf_d3d11_sampler_bias, applied_mask) == 152);
 static_assert(sizeof(rsf_d3d11h_strings) == 64 && sizeof(rsf_d3d11h_bridge) == 64 &&
     sizeof(rsf_d3d11h_pipeline_start) == 48 && sizeof(rsf_d3d11h_pipeline_status) == 20);
-static_assert(sizeof(rsf_d3d11h_platform) == 60 * sizeof(void*));
+static_assert(sizeof(rsf_d3d11h_platform) == 57 * sizeof(void*) &&
+    offsetof(rsf_d3d11h_platform, auxiliary) == 56 * sizeof(void*));
 static_assert(RSF_DUMP_VIEW_RAW == 0 && RSF_DUMP_VIEW_HDR == 3 && RSF_DUMP_VIEW_DEPTH == 4 &&
     RSF_DUMP_VIEW_DENSE_MOTION == 7 && DXGI_PRESENT_TEST == 1 && RSF_SCREEN_GAMEPLAY == 8);
 static_assert(RSF_NATIVE_SCENE_PRESENT_NONE == 0 && RSF_SR_DLSS == 1 && RSF_DLSS_OK == 0 && RSF_DLSS_PIPELINE_OK == 0);
@@ -72,8 +72,6 @@ static_assert(RSF_FG_BACKEND_DLSS == 1 && RSF_FG_BACKEND_FSR3 == 3 && RSF_FG_BAC
     RSF_FG_BACKEND_XESS == 5 && RSF_FG_BACKEND_AUTO == 7 && RSF_REFLEX_OFF == 0 && RSF_REFLEX_ON == 1 &&
     RSF_REFLEX_BOOST == 2);
 
-rsf::diagnostics::FailureCapturePolicy failure_captures;
-rsf::diagnostics::SequenceCapturePolicy sequence_captures;
 rsf_overlay_api overlay{sizeof(rsf_overlay_api), RSF_OVERLAY_API_VERSION};
 
 int32_t same_object(void* left, void* right) noexcept
@@ -358,16 +356,6 @@ int32_t ini_write(const wchar_t* path, const wchar_t* section, const wchar_t* ke
     return WritePrivateProfileStringW(section, key, value, path) != 0;
 }
 
-int32_t failure_claim(uint32_t enabled, uint32_t pending, int32_t result) noexcept
-{
-    return failure_captures.claim(enabled != 0, pending != 0, result);
-}
-void sequence_request() noexcept { sequence_captures.request(); }
-int32_t sequence_claim(uint64_t session_id, uint64_t source, uint32_t ready, uint32_t pending) noexcept
-{
-    return sequence_captures.claim(session_id, source, ready != 0, pending != 0);
-}
-
 const rsf_d3d11h_platform& platform()
 {
     static const rsf_d3d11h_platform table{
@@ -427,9 +415,6 @@ const rsf_d3d11h_platform& platform()
         .overlay_poll_toggle = overlay_poll_toggle,
         .ini_read = ini_read,
         .ini_write = ini_write,
-        .failure_claim = failure_claim,
-        .sequence_request = sequence_request,
-        .sequence_claim = sequence_claim,
         .auxiliary = rsf_auxiliary_sr_platform(),
     };
     return table;

@@ -4,6 +4,13 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The D3D11 host owns failure and sequence capture budgets under its Rust
+graphics lease. The former C++ policy leaves and their private callbacks
+are gone. The three-failure cap and four-frame sequence still defer to
+active capture requests. Independent Rust cases cover those rules in place
+of the retired C++ fixture. Source review checked the two failure call paths
+and the private platform table. The Rust cases and native builds remain unrun.
+
 The combined AC7 and Loader carriers read and write the twelve shared
 sharpening keys through the Rust settings store. Reads use the same float
 parser and range checks as the Runtime. Failed writes attempt to restore

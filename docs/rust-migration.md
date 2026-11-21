@@ -114,14 +114,12 @@ They predate the latest bridge, overlay, input and retirement cutovers.
 
 ## Remaining native policy
 
-The source audit of the Runtime and combined carriers found two native
-policy helpers after the shared settings cutover. `input_receipts.h`
-deduplicates input receipts and selects their owning frame through the
-CPU dispatcher and FG callbacks. `failure_capture_policy.h` governs the
-D3D11 host's failure capture budget and diagnostic sequences. Both files
-carry `GPL-3.0-only` identifiers from `ff9df39`. Their identifiers differ
-from the license inventory in [Dependencies](dependencies.md). Resolve
-their provenance and license before translating them.
+The source audit of the Runtime and combined carriers identified input
+receipt routing and D3D11 capture budgets as the last native policy
+helpers in the production core. The rights holder confirmed both helpers
+were written for ReScaleFrame and authorized MIT in `b2b1c5a`. The D3D11
+host now owns the capture budgets in Rust. The input receipt port covers
+both the CPU dispatcher and FG frame ownership paths.
 
 `rsf_negotiate` in `runtime/contract` has a native fixture and no
 production caller. The running Runtime and adapter use the Rust backend

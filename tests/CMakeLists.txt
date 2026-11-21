@@ -864,9 +864,6 @@ if(TARGET rsf_godot AND TARGET rsf_unity_package)
     add_test(NAME engine_sharpening_settings COMMAND rsf_engine_sharpening_test "$<TARGET_FILE:rsf_godot>" "$<TARGET_FILE:rsf_unity_package>")
 endif()
 
-add_executable(rsf_failure_capture_policy failure_capture_policy.cpp)
-target_link_libraries(rsf_failure_capture_policy PRIVATE rsf_build_options)
-add_test(NAME failure_capture_policy_contract COMMAND rsf_failure_capture_policy)
 
 add_executable(rsf_capture_metadata capture_metadata.cpp)
 target_link_libraries(rsf_capture_metadata PRIVATE ReScaleFrame::OrchestratorCore rsf_build_options windowscodecs ole32)
