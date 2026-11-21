@@ -2,7 +2,7 @@
 .SYNOPSIS
 Compiles the retained FSR3 Vulkan bridge DLL with a static compiler runtime.
 .DESCRIPTION
-Builds the Rust SR owner (owner.rs) for x86_64-pc-windows-gnu with rustc, then links it with the C++17 bridge through g++ into a sibling temporary DLL. Output is replaced only after both steps succeed. Any failure removes the temporary archive and DLL and throws; the existing target remains.
+Builds the Rust binding, SR, frame-generation and swapchain owner (owner.rs) for x86_64-pc-windows-gnu with rustc, then links it with the C++17 bridge through g++ into a sibling temporary DLL. Output is replaced only after both steps succeed. Any failure removes the temporary archive and DLL and throws; the existing target remains.
 .PARAMETER SdkRoot
 FidelityFX SDK v1.1.4 root containing ffx-api/include/ffx_api/ffx_api.h.
 .PARAMETER Output

@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: MIT
-//! Rust owner for the standalone VulkanStoryFsr3.dll runtime binding and SR context.
+//! Rust owner for the standalone VulkanStoryFsr3.dll runtime binding and its
+//! SR, frame-generation and swapchain owners.
 //!
 //! The managed `Fsr3Native` caller loads the signed FidelityFX SDK 1.1.4 Vulkan
 //! runtime and this bridge, then opens the bridge with the SDK module. Rust
-//! retains that binding for the process, admits SR creation, planning and
-//! evaluation, and owns checked SR retirement. Typed FidelityFX descriptors,
-//! the Vulkan loader lookup and the resource mapping stay native behind the
-//! private table in `bridge_platform.h`. Frame generation and WSI stay native
-//! and read the same bound SDK table through `rsf_core_fsr3_sdk`.
+//! retains that binding for the process, admits every SR, interpolation and
+//! swapchain call, owns the interpolation/swapchain pairing with its checked
+//! disable, drain and UI release ordering, and owns checked retirement of all
+//! three owners. Typed FidelityFX effects and descriptors, the replacement
+//! swapchain function table, the Vulkan loader lookup, the resource mapping and
+//! the presentation callback shell stay native behind the private tables in
+//! `bridge_platform.h`. The callback reads the bound table through
+//! `rsf_core_fsr3_sdk`.
 
 use std::alloc::{Layout, alloc, dealloc};
 use std::ffi::{CStr, c_char, c_void};
@@ -22,8 +26,19 @@ const VULKAN_LOADER: u32 = 1 << 0;
 const VULKAN_BUFFER_REQUIREMENTS: u32 = 1 << 1;
 const VULKAN_READY: u32 = VULKAN_LOADER | VULKAN_BUFFER_REQUIREMENTS;
 
-// VkFormat values the SR path accepts.
+const FG_PLATFORM_ABI_VERSION: u32 = 1;
+
+/// `VK_ERROR_INITIALIZATION_FAILED`, the swapchain pass-through refusal.
+const VK_ERROR_INITIALIZATION_FAILED: i32 = -3;
+/// Byte offset of `VkSwapchainCreateInfoKHR::oldSwapchain`, asserted natively.
+const OLD_SWAPCHAIN_OFFSET: usize = 96;
+
+/// Non-dispatchable Vulkan handle (`VkSwapchainKHR`, `VkSemaphore`, `VkFence`).
+type Vk = u64;
+
+// VkFormat values the SR and frame-generation paths accept.
 const R8_UNORM: i32 = 9;
+const R8G8B8A8_UNORM: i32 = 37;
 const R16G16_SFLOAT: i32 = 83;
 const R16G16B16A16_SFLOAT: i32 = 97;
 const D32_SFLOAT: i32 = 126;
@@ -39,9 +54,8 @@ const EXPORTS: [&CStr; 5] = [
     c"ffxConfigure",
 ];
 
-/// Matches `rsf_fsr3_sdk`. Entries are opaque here; only native leaves call them.
-// Native frame generation reads `configure`; Rust never does.
-#[allow(dead_code)]
+/// Matches `rsf_fsr3_sdk`. Entries are opaque here; only native leaves and the
+/// presentation callback call them.
 #[derive(Clone, Copy)]
 #[repr(C)]
 struct Sdk {
@@ -74,8 +88,6 @@ fn sdk() -> &'static Sdk {
 }
 
 /// Matches `VulkanStoryFsr3Image`.
-// Layout mirror: the native resource mapping reads the handle and extent.
-#[allow(dead_code)]
 #[repr(C)]
 struct Image {
     image: u64,
@@ -116,13 +128,93 @@ impl Frame {
     }
 
     fn frame_time_ms(&self) -> f32 {
-        // NaN and non-positive deltas take the default, as `x > 0 ? x : d` did.
-        if self.delta_ms > 0.0 {
-            self.delta_ms
-        } else {
-            DEFAULT_FRAME_TIME_MS
-        }
+        frame_time_ms(self.delta_ms)
     }
+}
+
+// NaN and non-positive deltas take the default, as `x > 0 ? x : d` did.
+fn frame_time_ms(delta_ms: f32) -> f32 {
+    if delta_ms > 0.0 {
+        delta_ms
+    } else {
+        DEFAULT_FRAME_TIME_MS
+    }
+}
+
+/// Matches `VulkanStoryFsr3FgFrame` and the managed `Fsr3FgFrame`.
+// Layout mirror: the native configure, prepare, generate and UI leaves read
+// the resources, constants and camera vectors.
+#[allow(dead_code)]
+#[repr(C)]
+struct FgFrame {
+    commands: Handle,
+    color: Image,
+    depth: Image,
+    motion: Image,
+    output: Image,
+    hudless: Image,
+    jitter_x: f32,
+    jitter_y: f32,
+    delta_ms: f32,
+    near_plane: f32,
+    far_plane: f32,
+    fov_radians: f32,
+    frame_id: u64,
+    reset: u32,
+    camera: [f32; 12],
+    ui: Image,
+    swapchain_context: Handle,
+}
+
+impl FgFrame {
+    fn formats_supported(&self) -> bool {
+        self.color.format == R8G8B8A8_UNORM
+            && self.ui.format == R8G8B8A8_UNORM
+            && self.depth.format == D32_SFLOAT
+            && self.motion.format == R16G16_SFLOAT
+    }
+}
+
+/// Matches `rsf_fsr3wsi_create`.
+// The native create leaf reads the queue family.
+#[allow(dead_code)]
+#[repr(C)]
+struct WsiRequest {
+    physical: Handle,
+    device: Handle,
+    game: Handle,
+    async_compute: Handle,
+    present: Handle,
+    acquire: Handle,
+    info: *const u8,
+    queue_family: u32,
+}
+
+impl WsiRequest {
+    /// # Safety
+    /// A non-null `info` addresses a readable `VkSwapchainCreateInfoKHR`.
+    unsafe fn admitted(&self) -> bool {
+        !self.physical.is_null()
+            && !self.device.is_null()
+            && !self.game.is_null()
+            && !self.async_compute.is_null()
+            && !self.present.is_null()
+            && !self.acquire.is_null()
+            && !self.info.is_null()
+            && unsafe { self.info.add(OLD_SWAPCHAIN_OFFSET).cast::<Vk>().read() } == 0
+    }
+}
+
+/// Matches `rsf_fsr3fg_create`.
+// The native create leaf maps the back-buffer format.
+#[allow(dead_code)]
+#[repr(C)]
+struct FgRequest {
+    device: Handle,
+    physical: Handle,
+    width: u32,
+    height: u32,
+    back_buffer_format: i32,
 }
 
 /// Matches `rsf_fsr3sr_create`.
@@ -169,7 +261,85 @@ const _: () = {
     assert!(offset_of!(Platform, resolve) == 8);
     assert!(offset_of!(Platform, create) == 40);
     assert!(offset_of!(Platform, destroy) == 72);
+    assert!(size_of::<FgFrame>() == 248);
+    assert!(offset_of!(FgFrame, delta_ms) == 136 && offset_of!(FgFrame, frame_id) == 152);
+    assert!(offset_of!(FgFrame, ui) == 216 && offset_of!(FgFrame, swapchain_context) == 240);
+    assert!(size_of::<WsiRequest>() == 64 && offset_of!(WsiRequest, info) == 48);
+    assert!(offset_of!(WsiRequest, queue_family) == 56);
+    assert!(size_of::<FgRequest>() == 32 && offset_of!(FgRequest, back_buffer_format) == 24);
+    assert!(size_of::<FgPlatform>() == 8 + 25 * size_of::<usize>());
+    assert!(offset_of!(FgPlatform, wsi_allocate) == 8);
+    assert!(offset_of!(FgPlatform, wsi_recreate) == 80);
+    assert!(offset_of!(FgPlatform, fg_allocate) == 128);
+    assert!(offset_of!(FgPlatform, fg_generate) == 200);
 };
+
+/// Opaque `rsf_fsr3wsi_native` capsule.
+#[repr(C)]
+struct WsiNative {
+    _private: [u8; 0],
+}
+
+/// Opaque `rsf_fsr3fg_native` capsule.
+#[repr(C)]
+struct FgNative {
+    _private: [u8; 0],
+}
+
+/// Matches `rsf_fsr3fg_platform`.
+#[repr(C)]
+struct FgPlatform {
+    struct_size: u32,
+    abi_version: u32,
+    wsi_allocate: unsafe extern "C" fn() -> *mut WsiNative,
+    wsi_release: unsafe extern "C" fn(*mut WsiNative),
+    wsi_create: unsafe extern "C" fn(*mut WsiNative, Handle, *const WsiRequest, *mut Vk) -> i32,
+    wsi_query: unsafe extern "C" fn(*mut WsiNative, Handle) -> i32,
+    wsi_complete: unsafe extern "C" fn(*const WsiNative) -> u32,
+    wsi_has_context: unsafe extern "C" fn(*const WsiNative) -> u32,
+    wsi_destroy: unsafe extern "C" fn(*mut WsiNative, Handle) -> i32,
+    wsi_wait: unsafe extern "C" fn(*mut WsiNative, Handle) -> i32,
+    wsi_register_ui: unsafe extern "C" fn(*mut WsiNative, Handle, *const FgFrame) -> i32,
+    wsi_recreate: unsafe extern "C" fn(*mut WsiNative, Handle, *const u8, *mut Vk) -> i32,
+    wsi_get_images: unsafe extern "C" fn(*mut WsiNative, Handle, Vk, *mut u32, *mut Vk) -> i32,
+    wsi_acquire: unsafe extern "C" fn(*mut WsiNative, Handle, Vk, u64, Vk, Vk, *mut u32) -> i32,
+    wsi_present: unsafe extern "C" fn(*mut WsiNative, Handle, *const c_void) -> i32,
+    wsi_destroy_chain: unsafe extern "C" fn(*mut WsiNative, Handle, Vk) -> i32,
+    wsi_last_present_count: unsafe extern "C" fn(*mut WsiNative, Vk) -> u64,
+    fg_allocate: unsafe extern "C" fn() -> *mut FgNative,
+    fg_release: unsafe extern "C" fn(*mut FgNative),
+    fg_bind_vulkan: unsafe extern "C" fn() -> u32,
+    fg_create: unsafe extern "C" fn(*mut FgNative, Handle, *const FgRequest) -> i32,
+    fg_has_effect: unsafe extern "C" fn(*const FgNative) -> u32,
+    fg_destroy: unsafe extern "C" fn(*mut FgNative, Handle) -> i32,
+    fg_disable: unsafe extern "C" fn(*mut FgNative, Handle, Vk) -> i32,
+    fg_configure: unsafe extern "C" fn(*mut FgNative, Handle, *const FgFrame, Vk) -> i32,
+    fg_prepare: unsafe extern "C" fn(*mut FgNative, Handle, *const FgFrame, f32) -> i32,
+    fg_generate: unsafe extern "C" fn(*mut FgNative, Handle, *const FgFrame) -> i32,
+}
+
+/// # Safety
+/// A non-null table must stay valid for the process lifetime.
+unsafe fn fg_platform(ops: *const FgPlatform) -> Option<&'static FgPlatform> {
+    let ops = unsafe { ops.as_ref() }?;
+    (ops.struct_size as usize >= size_of::<FgPlatform>()
+        && ops.abi_version == FG_PLATFORM_ABI_VERSION)
+        .then_some(ops)
+}
+
+/// Allocates without aborting, so exhaustion maps to the bridge's -2.
+fn try_box<T>(value: T) -> Option<NonNull<T>> {
+    const { assert!(size_of::<T>() != 0) };
+    let owner = NonNull::new(unsafe { alloc(Layout::new::<T>()) }.cast::<T>())?;
+    unsafe { owner.as_ptr().write(value) };
+    Some(owner)
+}
+
+/// # Safety
+/// `owner` came from `try_box` and is not used afterwards.
+unsafe fn release_box<T>(owner: NonNull<T>) {
+    drop(unsafe { Box::from_raw(owner.as_ptr()) });
+}
 
 /// # Safety
 /// A non-null table must stay valid for the process lifetime.
@@ -395,9 +565,613 @@ unsafe extern "C" fn rsf_core_fsr3_destroy(context: *mut Context) -> i32 {
     0
 }
 
+/// The exported `VulkanStoryFsr3Swapchain`: one SDK presentation context, its
+/// replacement function table (in the capsule), the device it was created on
+/// and the current chain.
+///
+/// `active_fg` borrows the interpolation owner registered on this chain until
+/// its checked disable, drain and UI release succeed. The host serializes
+/// calls on linked owners; all access goes through raw pointers because the
+/// two owners point at each other.
+struct Swapchain {
+    ops: &'static FgPlatform,
+    native: NonNull<WsiNative>,
+    device: Handle,
+    chain: Vk,
+    active_fg: *mut FgContext,
+}
+
+/// The exported `VulkanStoryFsr3FgContext`: one interpolation effect (in the
+/// capsule), its display extent and its borrowed swapchain association.
+///
+/// `chain` and `swapchain` are set together after a successful proxy
+/// configure and cleared together only after a successful disable.
+struct FgContext {
+    ops: &'static FgPlatform,
+    native: NonNull<FgNative>,
+    width: u32,
+    height: u32,
+    chain: Vk,
+    swapchain: *mut Swapchain,
+}
+
+/// # Safety
+/// `swapchain` is a live owner.
+unsafe fn has_context(swapchain: *mut Swapchain) -> bool {
+    unsafe { ((*swapchain).ops.wsi_has_context)((*swapchain).native.as_ptr()) != 0 }
+}
+
+/// Creates the SDK presentation context and queries its replacement table.
+///
+/// Returns -1 for any missing prerequisite or a non-null `oldSwapchain` without
+/// touching `result`; otherwise clears `result` first. Then -2 for allocation
+/// failure, the SDK creation result, or after releasing the context, the
+/// query result or -3 for an incomplete table. The release result on that
+/// path is not reported, as before.
+///
+/// # Safety
+/// `ops` is the static platform table; `request` is valid with a null or
+/// readable `info`; `result` is null or writable.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr3_swapchain_create(
+    ops: *const FgPlatform,
+    request: *const WsiRequest,
+    result: *mut *mut Swapchain,
+) -> i32 {
+    let sdk = sdk();
+    let Some(request) = (unsafe { request.as_ref() }) else {
+        return -1;
+    };
+    if sdk.create.is_null()
+        || sdk.query.is_null()
+        || sdk.destroy.is_null()
+        || result.is_null()
+        || !unsafe { request.admitted() }
+    {
+        return -1;
+    }
+    let Some(ops) = (unsafe { fg_platform(ops) }) else {
+        return -1;
+    };
+    unsafe { result.write(ptr::null_mut()) };
+    let Some(native) = NonNull::new(unsafe { (ops.wsi_allocate)() }) else {
+        return -2;
+    };
+    let Some(owner) = try_box(Swapchain {
+        ops,
+        native,
+        device: request.device,
+        chain: 0,
+        active_fg: ptr::null_mut(),
+    }) else {
+        unsafe { (ops.wsi_release)(native.as_ptr()) };
+        return -2;
+    };
+    let failed = |code: i32| {
+        unsafe {
+            (ops.wsi_release)(native.as_ptr());
+            release_box(owner);
+        }
+        code
+    };
+    let owner = owner.as_ptr();
+    // The SDK writes the created chain through the owner's slot.
+    let code = unsafe {
+        (ops.wsi_create)(
+            native.as_ptr(),
+            sdk.create,
+            request,
+            &raw mut (*owner).chain,
+        )
+    };
+    if code != 0 {
+        return failed(code);
+    }
+    let code = unsafe { (ops.wsi_query)(native.as_ptr(), sdk.query) };
+    if code != 0 || unsafe { (ops.wsi_complete)(native.as_ptr()) } == 0 {
+        unsafe { (ops.wsi_destroy)(native.as_ptr(), sdk.destroy) };
+        return failed(if code != 0 { code } else { -3 });
+    }
+    unsafe { result.write(owner) };
+    0
+}
+
+/// Returns the owner's current chain, or `VK_NULL_HANDLE` for null.
+///
+/// # Safety
+/// `value` is null or a live swapchain owner.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr3_swapchain_handle(value: *mut Swapchain) -> Vk {
+    if value.is_null() {
+        0
+    } else {
+        unsafe { (*value).chain }
+    }
+}
+
+/// Creates a replacement chain through the same context; the owner's chain
+/// updates only on `VK_SUCCESS`.
+///
+/// # Safety
+/// `value` is null or a live owner; non-null `info` and `chain` are valid.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr3_swapchain_recreate(
+    value: *mut Swapchain,
+    info: *const u8,
+    chain: *mut Vk,
+) -> i32 {
+    if value.is_null() || info.is_null() || chain.is_null() {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
+    unsafe {
+        let code =
+            ((*value).ops.wsi_recreate)((*value).native.as_ptr(), (*value).device, info, chain);
+        if code == 0 {
+            (*value).chain = chain.read();
+        }
+        code
+    }
+}
+
+/// Enumerates proxy images with Vulkan count/query semantics.
+///
+/// # Safety
+/// `value` is null or a live owner; the pointers follow the Vulkan contract.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr3_swapchain_get_images(
+    value: *mut Swapchain,
+    chain: Vk,
+    count: *mut u32,
+    images: *mut Vk,
+) -> i32 {
+    if value.is_null() || count.is_null() {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
+    unsafe {
+        ((*value).ops.wsi_get_images)(
+            (*value).native.as_ptr(),
+            (*value).device,
+            chain,
+            count,
+            images,
+        )
+    }
+}
+
+/// Acquires a proxy image.
+///
+/// # Safety
+/// `value` is null or a live owner; the handles follow the Vulkan contract.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr3_swapchain_acquire(
+    value: *mut Swapchain,
+    chain: Vk,
+    timeout: u64,
+    semaphore: Vk,
+    fence: Vk,
+    index: *mut u32,
+) -> i32 {
+    if value.is_null() || index.is_null() {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
+    unsafe {
+        ((*value).ops.wsi_acquire)(
+            (*value).native.as_ptr(),
+            (*value).device,
+            chain,
+            timeout,
+            semaphore,
+            fence,
+            index,
+        )
+    }
+}
+
+/// Queues presentation through the proxy.
+///
+/// # Safety
+/// `value` is null or a live owner; `info` is null or a valid present info.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr3_swapchain_present(
+    value: *mut Swapchain,
+    queue: Handle,
+    info: *const c_void,
+) -> i32 {
+    if value.is_null() || info.is_null() {
+        return VK_ERROR_INITIALIZATION_FAILED;
+    }
+    unsafe { ((*value).ops.wsi_present)((*value).native.as_ptr(), queue, info) }
+}
+
+/// Disables interpolation linked to `chain`, then waits for proxy presents.
+///
+/// Returns 0 for a null chain, -1 for a missing owner, context or dispatch,
+/// the disable result, or the wait result. A failure keeps every link.
+///
+/// # Safety
+/// `value` is null or a live owner whose `active_fg` is null or live.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr3_swapchain_prepare_destroy(
+    value: *mut Swapchain,
+    chain: Vk,
+) -> i32 {
+    if chain == 0 {
+        return 0;
+    }
+    let dispatch = sdk().dispatch;
+    if value.is_null() || !unsafe { has_context(value) } || dispatch.is_null() {
+        return -1;
+    }
+    unsafe {
+        let fg = (*value).active_fg;
+        if !fg.is_null() && (*fg).chain == chain {
+            let disabled = fg_disable(fg);
+            if disabled != 0 {
+                return disabled;
+            }
+        }
+        ((*value).ops.wsi_wait)((*value).native.as_ptr(), dispatch)
+    }
+}
+
+/// Prepares and destroys `chain` through its owner, clearing the current
+/// chain only when it matches.
+///
+/// Returns 0 for success or a null chain, the preparation error, or -1 when
+/// the replacement destroy entry is absent.
+///
+/// # Safety
+/// As `rsf_core_fsr3_swapchain_prepare_destroy`.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr3_swapchain_destroy_chain(
+    value: *mut Swapchain,
+    chain: Vk,
+) -> i32 {
+    let prepared = unsafe { rsf_core_fsr3_swapchain_prepare_destroy(value, chain) };
+    if prepared != 0 {
+        return prepared;
+    }
+    if chain == 0 {
+        return 0;
+    }
+    // Preparation succeeded for a nonzero chain, so the owner is live.
+    unsafe {
+        let code =
+            ((*value).ops.wsi_destroy_chain)((*value).native.as_ptr(), (*value).device, chain);
+        if code != 0 {
+            return code;
+        }
+        if (*value).chain == chain {
+            (*value).chain = 0;
+        }
+    }
+    0
+}
+
+/// Returns the SDK's present count, or zero without an owner, chain or entry.
+///
+/// # Safety
+/// `value` is null or a live owner.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr3_swapchain_last_present_count(
+    value: *mut Swapchain,
+    chain: Vk,
+) -> u64 {
+    if value.is_null() || chain == 0 {
+        return 0;
+    }
+    unsafe { ((*value).ops.wsi_last_present_count)((*value).native.as_ptr(), chain) }
+}
+
+/// Disables the linked interpolation, drains the current chain and releases
+/// the SDK context, then the owner.
+///
+/// Returns 0 for null or success, the disable or preparation error, -1 when
+/// a live context has no destroy export, or the SDK release result. Every
+/// failure keeps the owner attached.
+///
+/// # Safety
+/// `value` is null or a live owner whose `active_fg` is null or live.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr3_swapchain_destroy(value: *mut Swapchain) -> i32 {
+    if value.is_null() {
+        return 0;
+    }
+    unsafe {
+        let fg = (*value).active_fg;
+        if !fg.is_null() {
+            let disabled = fg_disable(fg);
+            if disabled != 0 {
+                return disabled;
+            }
+        }
+        let prepared = rsf_core_fsr3_swapchain_prepare_destroy(value, (*value).chain);
+        if prepared != 0 {
+            return prepared;
+        }
+        let destroy = sdk().destroy;
+        let live = has_context(value);
+        if live && destroy.is_null() {
+            return -1;
+        }
+        let native = (*value).native.as_ptr();
+        let code = if live {
+            ((*value).ops.wsi_destroy)(native, destroy)
+        } else {
+            0
+        };
+        if code != 0 {
+            return code;
+        }
+        ((*value).ops.wsi_release)(native);
+        release_box(NonNull::new_unchecked(value));
+    }
+    0
+}
+
+/// Creates an interpolation effect with display extent and HUD-less RGBA
+/// format metadata.
+///
+/// Returns 0 and writes `result` on success. Failures leave `result`
+/// unwritten: -1 for missing prerequisites, -2 for allocation failure, -3
+/// without the Vulkan loader, or the SDK result.
+///
+/// # Safety
+/// `ops` is the static platform table; `request` and `result` are null or valid.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr3_fg_create(
+    ops: *const FgPlatform,
+    request: *const FgRequest,
+    result: *mut *mut FgContext,
+) -> i32 {
+    let create = sdk().create;
+    let Some(request) = (unsafe { request.as_ref() }) else {
+        return -1;
+    };
+    if create.is_null()
+        || result.is_null()
+        || request.device.is_null()
+        || request.physical.is_null()
+        || request.width == 0
+        || request.height == 0
+    {
+        return -1;
+    }
+    let Some(ops) = (unsafe { fg_platform(ops) }) else {
+        return -1;
+    };
+    let Some(native) = NonNull::new(unsafe { (ops.fg_allocate)() }) else {
+        return -2;
+    };
+    let Some(owner) = try_box(FgContext {
+        ops,
+        native,
+        width: request.width,
+        height: request.height,
+        chain: 0,
+        swapchain: ptr::null_mut(),
+    }) else {
+        unsafe { (ops.fg_release)(native.as_ptr()) };
+        return -2;
+    };
+    let failed = |code: i32| {
+        unsafe {
+            (ops.fg_release)(native.as_ptr());
+            release_box(owner);
+        }
+        code
+    };
+    if unsafe { (ops.fg_bind_vulkan)() } == 0 {
+        return failed(-3);
+    }
+    let code = unsafe { (ops.fg_create)(native.as_ptr(), create, request) };
+    if code != 0 {
+        return failed(code);
+    }
+    unsafe { result.write(owner.as_ptr()) };
+    0
+}
+
+/// Disables proxy interpolation, drains the linked chain's presents and
+/// clears its UI registration, then unlinks both owners.
+///
+/// The stored association is authoritative, so the swapchain argument is not
+/// read, as before. Returns 0 for null or an unlinked context, -1 for missing
+/// prerequisites or a stale pairing, or the first SDK failure; every failure
+/// keeps the links so tagged inputs and the effect stay live.
+///
+/// # Safety
+/// `context` is null or a live owner whose linked swapchain is live.
+unsafe fn fg_disable(context: *mut FgContext) -> i32 {
+    if context.is_null() {
+        return 0;
+    }
+    let sdk = sdk();
+    unsafe {
+        let chain = (*context).chain;
+        if chain == 0 {
+            return 0;
+        }
+        let native = (*context).native.as_ptr();
+        if ((*context).ops.fg_has_effect)(native) == 0 || sdk.configure.is_null() {
+            return -1;
+        }
+        let swapchain = (*context).swapchain;
+        if swapchain.is_null() || !has_context(swapchain) || (*swapchain).chain != chain {
+            return -1;
+        }
+        let code = ((*context).ops.fg_disable)(native, sdk.configure, chain);
+        if code != 0 {
+            return code;
+        }
+        // The native owner re-checked the pairing before draining; configure
+        // cannot change it, and the check is kept.
+        if has_context(swapchain) && (*swapchain).chain == chain {
+            let presenter = (*swapchain).native.as_ptr();
+            let waited = if sdk.dispatch.is_null() {
+                -1
+            } else {
+                ((*swapchain).ops.wsi_wait)(presenter, sdk.dispatch)
+            };
+            if waited != 0 {
+                return waited;
+            }
+            let cleared = ((*swapchain).ops.wsi_register_ui)(presenter, sdk.configure, ptr::null());
+            if cleared != 0 {
+                return cleared;
+            }
+        }
+        if (*swapchain).active_fg == context {
+            (*swapchain).active_fg = ptr::null_mut();
+        }
+        (*context).swapchain = ptr::null_mut();
+        (*context).chain = 0;
+        code
+    }
+}
+
+/// Exported disable. See `fg_disable`.
+///
+/// # Safety
+/// As `fg_disable`.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr3_fg_disable(
+    context: *mut FgContext,
+    _swapchain: *mut Swapchain,
+) -> i32 {
+    unsafe { fg_disable(context) }
+}
+
+/// Configures interpolation and records preparation for the frame's path.
+///
+/// A null `swapchain_context` records one direct generated output on the host
+/// command buffer. Otherwise a context linked elsewhere is disabled first,
+/// the proxy callback is configured, the pair is linked and the frame's UI is
+/// registered. Returns -1 for missing prerequisites, -2 for unsupported
+/// resources or path metadata, or the first SDK failure.
+///
+/// # Safety
+/// `context` is null or a live owner; `frame` is null or a readable 248-byte
+/// record whose `swapchain_context` is null or a live swapchain owner.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr3_fg_evaluate(
+    context: *mut FgContext,
+    frame: *const FgFrame,
+) -> i32 {
+    let sdk = sdk();
+    let Some(record) = (unsafe { frame.as_ref() }) else {
+        return -1;
+    };
+    if context.is_null() || sdk.dispatch.is_null() || sdk.configure.is_null() {
+        return -1;
+    }
+    let swapchain = record.swapchain_context.cast::<Swapchain>();
+    let direct = swapchain.is_null();
+    unsafe {
+        // Short-circuit order matches the native check: the swapchain owner
+        // is read only after every format and the command buffer pass.
+        let admitted = record.formats_supported()
+            && !record.commands.is_null()
+            && if direct {
+                record.output.image != 0
+                    && record.output.format == R8G8B8A8_UNORM
+                    && record.output.width == (*context).width
+                    && record.output.height == (*context).height
+            } else {
+                has_context(swapchain) && (*swapchain).chain != 0
+            };
+        if !admitted {
+            return -2;
+        }
+        let linked = (*context).swapchain;
+        if !linked.is_null() && linked != swapchain {
+            let disabled = fg_disable(context);
+            if disabled != 0 {
+                return disabled;
+            }
+        }
+        let ops = (*context).ops;
+        let native = (*context).native.as_ptr();
+        let chain = if direct { 0 } else { (*swapchain).chain };
+        let code = (ops.fg_configure)(native, sdk.configure, frame, chain);
+        if code != 0 {
+            return code;
+        }
+        if !direct {
+            (*context).chain = chain;
+            (*context).swapchain = swapchain;
+            (*swapchain).active_fg = context;
+        }
+        let code = (ops.fg_prepare)(native, sdk.dispatch, frame, frame_time_ms(record.delta_ms));
+        if code != 0 {
+            return code;
+        }
+        if direct {
+            return (ops.fg_generate)(native, sdk.dispatch, frame);
+        }
+        ((*swapchain).ops.wsi_register_ui)((*swapchain).native.as_ptr(), sdk.configure, frame)
+    }
+}
+
+/// Requires a direct frame, then evaluates it.
+///
+/// Returns -1 for a null frame or a non-null `swapchain_context`.
+///
+/// # Safety
+/// As `rsf_core_fsr3_fg_evaluate`.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr3_fg_evaluate_direct(
+    context: *mut FgContext,
+    frame: *const FgFrame,
+) -> i32 {
+    match unsafe { frame.as_ref() } {
+        Some(record) if record.swapchain_context.is_null() => unsafe {
+            rsf_core_fsr3_fg_evaluate(context, frame)
+        },
+        _ => -1,
+    }
+}
+
+/// Disables any linked proxy, releases the effect, then the owner.
+///
+/// Returns 0 for null or success, otherwise the disable or SDK release
+/// result, which keeps the owner. As before, an effect with no destroy export
+/// is not released and the owner is still freed; a successful open binds that
+/// export, so the path is unreachable.
+///
+/// # Safety
+/// `context` is null or a live owner; the host has retired direct-mode work.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_fsr3_fg_destroy(context: *mut FgContext) -> i32 {
+    if context.is_null() {
+        return 0;
+    }
+    unsafe {
+        let disabled = fg_disable(context);
+        if disabled != 0 {
+            return disabled;
+        }
+        let ops = (*context).ops;
+        let native = (*context).native.as_ptr();
+        let destroy = sdk().destroy;
+        let code = if (ops.fg_has_effect)(native) != 0 && !destroy.is_null() {
+            (ops.fg_destroy)(native, destroy)
+        } else {
+            0
+        };
+        if code != 0 {
+            return code;
+        }
+        (ops.fg_release)(native);
+        release_box(NonNull::new_unchecked(context));
+    }
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 
     struct Fake {
@@ -553,9 +1327,646 @@ mod tests {
         }
     }
 
+    // Frame generation and WSI fakes. Every SDK-facing leaf appends its name
+    // to LOG, and FAIL makes the next matching leaf return a code once.
+    struct FakeWsi {
+        context: bool,
+        complete: bool,
+    }
+
+    struct FakeFg {
+        effect: bool,
+    }
+
+    static LOG: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+    static FAIL: Mutex<Option<(&'static str, i32)>> = Mutex::new(None);
+    static LIVE_WSI: AtomicI32 = AtomicI32::new(0);
+    static LIVE_FG: AtomicI32 = AtomicI32::new(0);
+    static INCOMPLETE: AtomicBool = AtomicBool::new(false);
+
+    const CHAIN_A: Vk = 0xA0;
+    const CHAIN_B: Vk = 0xB0;
+    const VK_ERROR_OUT_OF_DATE: i32 = -1_000_001_004;
+
+    fn step(name: &'static str) -> i32 {
+        LOG.lock().unwrap().push(name);
+        let mut fail = FAIL.lock().unwrap();
+        match *fail {
+            Some((failing, code)) if failing == name => {
+                *fail = None;
+                code
+            }
+            _ => 0,
+        }
+    }
+
+    fn fail_next(name: &'static str, code: i32) {
+        *FAIL.lock().unwrap() = Some((name, code));
+    }
+
+    fn take_log() -> Vec<&'static str> {
+        std::mem::take(&mut *LOG.lock().unwrap())
+    }
+
+    fn wsi(native: *const WsiNative) -> &'static mut FakeWsi {
+        unsafe { &mut *native.cast_mut().cast::<FakeWsi>() }
+    }
+
+    fn fg(native: *const FgNative) -> &'static mut FakeFg {
+        unsafe { &mut *native.cast_mut().cast::<FakeFg>() }
+    }
+
+    unsafe extern "C" fn wsi_allocate() -> *mut WsiNative {
+        LIVE_WSI.fetch_add(1, Ordering::SeqCst);
+        Box::into_raw(Box::new(FakeWsi {
+            context: false,
+            complete: false,
+        }))
+        .cast()
+    }
+
+    unsafe extern "C" fn wsi_release(native: *mut WsiNative) {
+        LIVE_WSI.fetch_sub(1, Ordering::SeqCst);
+        drop(unsafe { Box::from_raw(native.cast::<FakeWsi>()) });
+    }
+
+    unsafe extern "C" fn wsi_create(
+        native: *mut WsiNative,
+        create: Handle,
+        request: *const WsiRequest,
+        chain: *mut Vk,
+    ) -> i32 {
+        assert_eq!(create, mark(1));
+        assert_eq!(unsafe { &*request }.queue_family, 2);
+        let code = step("wsi_create");
+        if code == 0 {
+            wsi(native).context = true;
+            unsafe { chain.write(CHAIN_A) };
+        }
+        code
+    }
+
+    unsafe extern "C" fn wsi_query(native: *mut WsiNative, query: Handle) -> i32 {
+        assert_eq!(query, mark(3));
+        let code = step("wsi_query");
+        if code == 0 {
+            wsi(native).complete = !INCOMPLETE.load(Ordering::SeqCst);
+        }
+        code
+    }
+
+    unsafe extern "C" fn wsi_complete(native: *const WsiNative) -> u32 {
+        u32::from(wsi(native).complete)
+    }
+
+    unsafe extern "C" fn wsi_has_context(native: *const WsiNative) -> u32 {
+        u32::from(wsi(native).context)
+    }
+
+    unsafe extern "C" fn wsi_destroy(native: *mut WsiNative, destroy: Handle) -> i32 {
+        assert_eq!(destroy, mark(2));
+        let code = step("wsi_destroy");
+        if code == 0 {
+            wsi(native).context = false;
+        }
+        code
+    }
+
+    unsafe extern "C" fn wsi_wait(_: *mut WsiNative, dispatch: Handle) -> i32 {
+        assert_eq!(dispatch, mark(4));
+        step("wsi_wait")
+    }
+
+    unsafe extern "C" fn wsi_register_ui(
+        _: *mut WsiNative,
+        configure: Handle,
+        frame: *const FgFrame,
+    ) -> i32 {
+        assert_eq!(configure, mark(5));
+        step(if frame.is_null() {
+            "wsi_clear_ui"
+        } else {
+            "wsi_register_ui"
+        })
+    }
+
+    unsafe extern "C" fn wsi_recreate(
+        _: *mut WsiNative,
+        device: Handle,
+        _: *const u8,
+        chain: *mut Vk,
+    ) -> i32 {
+        assert_eq!(device as usize, 0x20);
+        let code = step("wsi_recreate");
+        unsafe { chain.write(if code == 0 { CHAIN_B } else { 0 }) };
+        code
+    }
+
+    unsafe extern "C" fn wsi_get_images(
+        _: *mut WsiNative,
+        _: Handle,
+        _: Vk,
+        count: *mut u32,
+        _: *mut Vk,
+    ) -> i32 {
+        unsafe { count.write(3) };
+        step("wsi_get_images")
+    }
+
+    unsafe extern "C" fn wsi_acquire(
+        _: *mut WsiNative,
+        _: Handle,
+        _: Vk,
+        _: u64,
+        _: Vk,
+        _: Vk,
+        index: *mut u32,
+    ) -> i32 {
+        unsafe { index.write(1) };
+        step("wsi_acquire")
+    }
+
+    unsafe extern "C" fn wsi_present(_: *mut WsiNative, _: Handle, _: *const c_void) -> i32 {
+        step("wsi_present")
+    }
+
+    unsafe extern "C" fn wsi_destroy_chain(_: *mut WsiNative, _: Handle, _: Vk) -> i32 {
+        step("wsi_destroy_chain")
+    }
+
+    unsafe extern "C" fn wsi_last_present_count(_: *mut WsiNative, chain: Vk) -> u64 {
+        chain + 1
+    }
+
+    unsafe extern "C" fn fg_allocate() -> *mut FgNative {
+        LIVE_FG.fetch_add(1, Ordering::SeqCst);
+        Box::into_raw(Box::new(FakeFg { effect: false })).cast()
+    }
+
+    unsafe extern "C" fn fg_release(native: *mut FgNative) {
+        LIVE_FG.fetch_sub(1, Ordering::SeqCst);
+        drop(unsafe { Box::from_raw(native.cast::<FakeFg>()) });
+    }
+
+    unsafe extern "C" fn fg_bind_vulkan() -> u32 {
+        u32::from(step("fg_bind_vulkan") == 0)
+    }
+
+    unsafe extern "C" fn fg_create(
+        native: *mut FgNative,
+        create: Handle,
+        _: *const FgRequest,
+    ) -> i32 {
+        assert_eq!(create, mark(1));
+        let code = step("fg_create");
+        if code == 0 {
+            fg(native).effect = true;
+        }
+        code
+    }
+
+    unsafe extern "C" fn fg_has_effect(native: *const FgNative) -> u32 {
+        u32::from(fg(native).effect)
+    }
+
+    unsafe extern "C" fn fg_destroy(native: *mut FgNative, destroy: Handle) -> i32 {
+        assert_eq!(destroy, mark(2));
+        let code = step("fg_destroy");
+        if code == 0 {
+            fg(native).effect = false;
+        }
+        code
+    }
+
+    unsafe extern "C" fn fg_disable(_: *mut FgNative, configure: Handle, chain: Vk) -> i32 {
+        assert_eq!(configure, mark(5));
+        assert_ne!(chain, 0);
+        step("fg_disable")
+    }
+
+    unsafe extern "C" fn fg_configure(
+        _: *mut FgNative,
+        configure: Handle,
+        _: *const FgFrame,
+        chain: Vk,
+    ) -> i32 {
+        assert_eq!(configure, mark(5));
+        step(if chain == 0 {
+            "fg_configure_direct"
+        } else {
+            "fg_configure_proxy"
+        })
+    }
+
+    unsafe extern "C" fn fg_prepare(
+        _: *mut FgNative,
+        dispatch: Handle,
+        _: *const FgFrame,
+        frame_time: f32,
+    ) -> i32 {
+        assert_eq!(dispatch, mark(4));
+        FRAME_TIME_BITS.store(frame_time.to_bits(), Ordering::SeqCst);
+        step("fg_prepare")
+    }
+
+    unsafe extern "C" fn fg_generate(_: *mut FgNative, dispatch: Handle, _: *const FgFrame) -> i32 {
+        assert_eq!(dispatch, mark(4));
+        step("fg_generate")
+    }
+
+    static FG_PLATFORM: FgPlatform = FgPlatform {
+        struct_size: size_of::<FgPlatform>() as u32,
+        abi_version: FG_PLATFORM_ABI_VERSION,
+        wsi_allocate,
+        wsi_release,
+        wsi_create,
+        wsi_query,
+        wsi_complete,
+        wsi_has_context,
+        wsi_destroy,
+        wsi_wait,
+        wsi_register_ui,
+        wsi_recreate,
+        wsi_get_images,
+        wsi_acquire,
+        wsi_present,
+        wsi_destroy_chain,
+        wsi_last_present_count,
+        fg_allocate,
+        fg_release,
+        fg_bind_vulkan,
+        fg_create,
+        fg_has_effect,
+        fg_destroy,
+        fg_disable,
+        fg_configure,
+        fg_prepare,
+        fg_generate,
+    };
+
+    /// A `VkSwapchainCreateInfoKHR`-sized buffer; index 12 is `oldSwapchain`.
+    type Info = [u64; 13];
+
+    fn wsi_request(info: &Info, game: usize) -> WsiRequest {
+        WsiRequest {
+            physical: 0x10 as Handle,
+            device: 0x20 as Handle,
+            game: game as Handle,
+            async_compute: 0x31 as Handle,
+            present: 0x32 as Handle,
+            acquire: 0x33 as Handle,
+            info: info.as_ptr().cast(),
+            queue_family: 2,
+        }
+    }
+
+    fn fg_request(width: u32) -> FgRequest {
+        FgRequest {
+            device: 0x20 as Handle,
+            physical: 0x10 as Handle,
+            width,
+            height: 8,
+            back_buffer_format: R8G8B8A8_UNORM,
+        }
+    }
+
+    fn fg_frame(swapchain: *mut Swapchain, delta_ms: f32, color: i32) -> FgFrame {
+        FgFrame {
+            commands: mark(0),
+            color: image(color),
+            depth: image(D32_SFLOAT),
+            motion: image(R16G16_SFLOAT),
+            output: image(R8G8B8A8_UNORM),
+            hudless: image(R8G8B8A8_UNORM),
+            jitter_x: 0.0,
+            jitter_y: 0.0,
+            delta_ms,
+            near_plane: 0.1,
+            far_plane: 100.0,
+            fov_radians: 1.0,
+            frame_id: 1,
+            reset: 0,
+            camera: [0.0; 12],
+            ui: image(R8G8B8A8_UNORM),
+            swapchain_context: swapchain.cast(),
+        }
+    }
+
+    /// Before Open every SDK-dependent FG/WSI entry refuses and null owners
+    /// take their documented results, with no leaf call.
+    fn fg_wsi_unbound() {
+        let ops = &raw const FG_PLATFORM;
+        let info: Info = [0; 13];
+        let (mut swapchain, mut context) = (ptr::null_mut(), ptr::null_mut());
+        let (mut chain, mut count) = (0, 0);
+        let none = ptr::null_mut::<Swapchain>();
+        unsafe {
+            assert_eq!(
+                rsf_core_fsr3_swapchain_create(ops, &wsi_request(&info, 0x30), &mut swapchain),
+                -1
+            );
+            assert_eq!(
+                rsf_core_fsr3_fg_create(ops, &fg_request(8), &mut context),
+                -1
+            );
+            assert_eq!(
+                rsf_core_fsr3_fg_evaluate(context, &fg_frame(none, 1.0, R8G8B8A8_UNORM)),
+                -1
+            );
+            assert_eq!(rsf_core_fsr3_fg_evaluate_direct(context, ptr::null()), -1);
+            assert_eq!(rsf_core_fsr3_swapchain_handle(none), 0);
+            assert_eq!(
+                rsf_core_fsr3_swapchain_recreate(none, info.as_ptr().cast(), &mut chain),
+                VK_ERROR_INITIALIZATION_FAILED
+            );
+            assert_eq!(
+                rsf_core_fsr3_swapchain_get_images(none, CHAIN_A, &mut count, ptr::null_mut()),
+                VK_ERROR_INITIALIZATION_FAILED
+            );
+            assert_eq!(
+                rsf_core_fsr3_swapchain_acquire(none, CHAIN_A, u64::MAX, 0, 0, &mut count),
+                VK_ERROR_INITIALIZATION_FAILED
+            );
+            assert_eq!(
+                rsf_core_fsr3_swapchain_present(none, mark(0), info.as_ptr().cast()),
+                VK_ERROR_INITIALIZATION_FAILED
+            );
+            assert_eq!(rsf_core_fsr3_swapchain_prepare_destroy(none, 0), 0);
+            assert_eq!(rsf_core_fsr3_swapchain_prepare_destroy(none, CHAIN_A), -1);
+            assert_eq!(rsf_core_fsr3_swapchain_destroy_chain(none, 0), 0);
+            assert_eq!(rsf_core_fsr3_swapchain_destroy_chain(none, CHAIN_A), -1);
+            assert_eq!(rsf_core_fsr3_swapchain_last_present_count(none, CHAIN_A), 0);
+            assert_eq!(rsf_core_fsr3_swapchain_destroy(none), 0);
+            assert_eq!(rsf_core_fsr3_fg_disable(ptr::null_mut(), none), 0);
+            assert_eq!(rsf_core_fsr3_fg_destroy(ptr::null_mut()), 0);
+        }
+        assert!(swapchain.is_null() && context.is_null());
+        assert!(take_log().is_empty());
+    }
+
+    /// The bound FG/WSI sequence: creation refusals and partial-owner release,
+    /// pass-throughs, direct and proxy evaluation, the pairing and its checked
+    /// disable/drain/UI-release order, and retention on every failure.
+    fn fg_wsi_bound() {
+        let ops = &raw const FG_PLATFORM;
+        let mut info: Info = [0; 13];
+        let sentinel = NonNull::<Swapchain>::dangling().as_ptr();
+        let mut swapchain = sentinel;
+        let mut context = ptr::null_mut();
+        let (mut chain, mut count, mut index) = (0, 0, 0);
+        unsafe {
+            // Refusals before `result` is cleared.
+            info[12] = 0x99;
+            assert_eq!(
+                rsf_core_fsr3_swapchain_create(ops, &wsi_request(&info, 0x30), &mut swapchain),
+                -1
+            );
+            info[12] = 0;
+            assert_eq!(
+                rsf_core_fsr3_swapchain_create(ops, &wsi_request(&info, 0), &mut swapchain),
+                -1
+            );
+            assert_eq!(
+                rsf_core_fsr3_swapchain_create(
+                    ptr::null(),
+                    &wsi_request(&info, 0x30),
+                    &mut swapchain
+                ),
+                -1
+            );
+            assert_eq!(swapchain, sentinel);
+
+            // SDK failures clear `result`, release partial owners, and release
+            // the context after a failed or incomplete query.
+            fail_next("wsi_create", 9);
+            assert_eq!(
+                rsf_core_fsr3_swapchain_create(ops, &wsi_request(&info, 0x30), &mut swapchain),
+                9
+            );
+            assert!(swapchain.is_null());
+            assert_eq!(take_log(), ["wsi_create"]);
+            fail_next("wsi_query", 4);
+            assert_eq!(
+                rsf_core_fsr3_swapchain_create(ops, &wsi_request(&info, 0x30), &mut swapchain),
+                4
+            );
+            assert_eq!(take_log(), ["wsi_create", "wsi_query", "wsi_destroy"]);
+            INCOMPLETE.store(true, Ordering::SeqCst);
+            assert_eq!(
+                rsf_core_fsr3_swapchain_create(ops, &wsi_request(&info, 0x30), &mut swapchain),
+                -3
+            );
+            INCOMPLETE.store(false, Ordering::SeqCst);
+            assert_eq!(take_log(), ["wsi_create", "wsi_query", "wsi_destroy"]);
+            assert_eq!(LIVE_WSI.load(Ordering::SeqCst), 0);
+
+            assert_eq!(
+                rsf_core_fsr3_swapchain_create(ops, &wsi_request(&info, 0x30), &mut swapchain),
+                0
+            );
+            assert_eq!(take_log(), ["wsi_create", "wsi_query"]);
+            let sw = swapchain;
+            assert_eq!(rsf_core_fsr3_swapchain_handle(sw), CHAIN_A);
+
+            // Pass-throughs; a failed recreate keeps the current chain.
+            fail_next("wsi_recreate", VK_ERROR_OUT_OF_DATE);
+            assert_eq!(
+                rsf_core_fsr3_swapchain_recreate(sw, info.as_ptr().cast(), &mut chain),
+                VK_ERROR_OUT_OF_DATE
+            );
+            assert_eq!(rsf_core_fsr3_swapchain_handle(sw), CHAIN_A);
+            assert_eq!(
+                rsf_core_fsr3_swapchain_get_images(sw, CHAIN_A, &mut count, ptr::null_mut()),
+                0
+            );
+            assert_eq!(count, 3);
+            assert_eq!(
+                rsf_core_fsr3_swapchain_get_images(sw, CHAIN_A, ptr::null_mut(), ptr::null_mut()),
+                VK_ERROR_INITIALIZATION_FAILED
+            );
+            assert_eq!(
+                rsf_core_fsr3_swapchain_acquire(sw, CHAIN_A, u64::MAX, 0, 0, &mut index),
+                0
+            );
+            assert_eq!(index, 1);
+            assert_eq!(
+                rsf_core_fsr3_swapchain_present(sw, mark(0), ptr::null()),
+                VK_ERROR_INITIALIZATION_FAILED
+            );
+            assert_eq!(
+                rsf_core_fsr3_swapchain_present(sw, mark(0), info.as_ptr().cast()),
+                0
+            );
+            assert_eq!(
+                rsf_core_fsr3_swapchain_last_present_count(sw, CHAIN_A),
+                CHAIN_A + 1
+            );
+            assert_eq!(rsf_core_fsr3_swapchain_last_present_count(sw, 0), 0);
+            assert_eq!(
+                take_log(),
+                [
+                    "wsi_recreate",
+                    "wsi_get_images",
+                    "wsi_acquire",
+                    "wsi_present"
+                ]
+            );
+
+            // Interpolation creation refusals leave `result` unwritten.
+            assert_eq!(
+                rsf_core_fsr3_fg_create(ops, &fg_request(0), &mut context),
+                -1
+            );
+            assert_eq!(
+                rsf_core_fsr3_fg_create(ptr::null(), &fg_request(8), &mut context),
+                -1
+            );
+            fail_next("fg_bind_vulkan", 1);
+            assert_eq!(
+                rsf_core_fsr3_fg_create(ops, &fg_request(8), &mut context),
+                -3
+            );
+            fail_next("fg_create", 7);
+            assert_eq!(
+                rsf_core_fsr3_fg_create(ops, &fg_request(8), &mut context),
+                7
+            );
+            assert!(context.is_null());
+            assert_eq!(LIVE_FG.load(Ordering::SeqCst), 0);
+            assert_eq!(
+                rsf_core_fsr3_fg_create(ops, &fg_request(8), &mut context),
+                0
+            );
+            let fg = context;
+            assert_eq!(
+                take_log(),
+                [
+                    "fg_bind_vulkan",
+                    "fg_bind_vulkan",
+                    "fg_create",
+                    "fg_bind_vulkan",
+                    "fg_create"
+                ]
+            );
+
+            // Direct admission and evaluation.
+            let none = ptr::null_mut();
+            assert_eq!(rsf_core_fsr3_fg_evaluate(fg, &fg_frame(none, 1.0, 97)), -2);
+            let mut narrow = fg_frame(none, 1.0, R8G8B8A8_UNORM);
+            narrow.output.width = 4;
+            assert_eq!(rsf_core_fsr3_fg_evaluate(fg, &narrow), -2);
+            assert_eq!(
+                rsf_core_fsr3_fg_evaluate_direct(fg, &fg_frame(sw, 1.0, R8G8B8A8_UNORM)),
+                -1
+            );
+            assert!(take_log().is_empty());
+            assert_eq!(
+                rsf_core_fsr3_fg_evaluate_direct(fg, &fg_frame(none, 0.0, R8G8B8A8_UNORM)),
+                0
+            );
+            assert_eq!(
+                f32::from_bits(FRAME_TIME_BITS.load(Ordering::SeqCst)),
+                DEFAULT_FRAME_TIME_MS
+            );
+            assert_eq!(
+                take_log(),
+                ["fg_configure_direct", "fg_prepare", "fg_generate"]
+            );
+
+            // Proxy evaluation links the pair and registers UI.
+            let proxy = fg_frame(sw, 2.5, R8G8B8A8_UNORM);
+            assert_eq!(rsf_core_fsr3_fg_evaluate(fg, &proxy), 0);
+            assert_eq!(
+                take_log(),
+                ["fg_configure_proxy", "fg_prepare", "wsi_register_ui"]
+            );
+            // Another chain drains without disabling.
+            assert_eq!(rsf_core_fsr3_swapchain_prepare_destroy(sw, 0x77), 0);
+            assert_eq!(take_log(), ["wsi_wait"]);
+            // Failed drain or UI release keeps the link.
+            fail_next("wsi_wait", 6);
+            assert_eq!(rsf_core_fsr3_swapchain_prepare_destroy(sw, CHAIN_A), 6);
+            assert_eq!(take_log(), ["fg_disable", "wsi_wait"]);
+            fail_next("wsi_clear_ui", 8);
+            assert_eq!(rsf_core_fsr3_swapchain_prepare_destroy(sw, CHAIN_A), 8);
+            assert_eq!(take_log(), ["fg_disable", "wsi_wait", "wsi_clear_ui"]);
+            // A direct frame first disables the linked proxy.
+            assert_eq!(
+                rsf_core_fsr3_fg_evaluate(fg, &fg_frame(none, 1.0, R8G8B8A8_UNORM)),
+                0
+            );
+            assert_eq!(
+                take_log(),
+                [
+                    "fg_disable",
+                    "wsi_wait",
+                    "wsi_clear_ui",
+                    "fg_configure_direct",
+                    "fg_prepare",
+                    "fg_generate"
+                ]
+            );
+            assert_eq!(rsf_core_fsr3_swapchain_prepare_destroy(sw, CHAIN_A), 0);
+            assert_eq!(take_log(), ["wsi_wait"]);
+
+            // A recreated chain makes the stored pairing stale: disable and
+            // destroy refuse and keep the owner until evaluation relinks it.
+            assert_eq!(rsf_core_fsr3_fg_evaluate(fg, &proxy), 0);
+            assert_eq!(
+                rsf_core_fsr3_swapchain_recreate(sw, info.as_ptr().cast(), &mut chain),
+                0
+            );
+            assert_eq!(
+                (chain, rsf_core_fsr3_swapchain_handle(sw)),
+                (CHAIN_B, CHAIN_B)
+            );
+            assert_eq!(rsf_core_fsr3_fg_disable(fg, none), -1);
+            assert_eq!(rsf_core_fsr3_fg_destroy(fg), -1);
+            assert_eq!(LIVE_FG.load(Ordering::SeqCst), 1);
+            assert_eq!(rsf_core_fsr3_fg_evaluate(fg, &proxy), 0);
+            take_log();
+
+            // Destroying the old chain neither disables nor clears the current one.
+            assert_eq!(rsf_core_fsr3_swapchain_destroy_chain(sw, CHAIN_A), 0);
+            assert_eq!(take_log(), ["wsi_wait", "wsi_destroy_chain"]);
+            assert_eq!(rsf_core_fsr3_swapchain_handle(sw), CHAIN_B);
+
+            // A failed context release keeps the swapchain owner after the
+            // linked interpolation was disabled and the chain drained.
+            fail_next("wsi_destroy", 11);
+            assert_eq!(rsf_core_fsr3_swapchain_destroy(sw), 11);
+            assert_eq!(
+                take_log(),
+                [
+                    "fg_disable",
+                    "wsi_wait",
+                    "wsi_clear_ui",
+                    "wsi_wait",
+                    "wsi_destroy"
+                ]
+            );
+            assert_eq!(LIVE_WSI.load(Ordering::SeqCst), 1);
+            assert_eq!(rsf_core_fsr3_swapchain_destroy_chain(sw, CHAIN_B), 0);
+            assert_eq!(rsf_core_fsr3_swapchain_handle(sw), 0);
+            assert_eq!(rsf_core_fsr3_fg_evaluate(fg, &proxy), -2);
+            take_log();
+            // With no chain left, retirement skips the drain.
+            assert_eq!(rsf_core_fsr3_swapchain_destroy(sw), 0);
+            assert_eq!(take_log(), ["wsi_destroy"]);
+            assert_eq!(LIVE_WSI.load(Ordering::SeqCst), 0);
+
+            fail_next("fg_destroy", 12);
+            assert_eq!(rsf_core_fsr3_fg_destroy(fg), 12);
+            assert_eq!(LIVE_FG.load(Ordering::SeqCst), 1);
+            assert_eq!(rsf_core_fsr3_fg_destroy(fg), 0);
+            assert_eq!(take_log(), ["fg_destroy", "fg_destroy"]);
+            assert_eq!(LIVE_FG.load(Ordering::SeqCst), 0);
+        }
+    }
+
     // One sequence: the SDK binding is process-wide.
     #[test]
-    fn binds_once_then_owns_sr_admission_and_checked_retirement() {
+    fn binds_once_then_owns_sr_fg_and_wsi() {
         let ops = &raw const PLATFORM;
         let (mut width, mut height) = (0, 0);
         let mut context = ptr::null_mut();
@@ -572,6 +1983,7 @@ mod tests {
                 -1
             );
             assert_eq!(rsf_core_fsr3_destroy(ptr::null_mut()), 0);
+            fg_wsi_unbound();
 
             assert_eq!(rsf_core_fsr3_open(ops, ptr::null_mut()), -1);
             assert_eq!(rsf_core_fsr3_open(ops, MISSING_CONFIGURE as Handle), -2);
@@ -643,5 +2055,6 @@ mod tests {
             assert_eq!(rsf_core_fsr3_destroy(context), 0);
             assert_eq!(LIVE.load(Ordering::SeqCst), 0);
         }
+        fg_wsi_bound();
     }
 }
