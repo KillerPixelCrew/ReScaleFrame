@@ -6,8 +6,8 @@ The [integration migration scope](rust-migration.md#remaining-integration-ports)
 covers the existing game and engine adapters beyond Anomaly. Project Wingman
 now publishes its GameSDK table and exact build identity from Rust. The
 existing DLL export forwards to that entry, and native pre-hook verification
-uses the same fingerprint. Its observation and execution ports are still
-open. Source checks cover the entry path; the plugin and carrier
+uses the same fingerprint. Its queued execution port is still open.
+Source checks cover the entry path; the plugin and carrier
 contracts remain unrun.
 
 Wingman's Rust camera decoder uses the same guarded field offsets and
@@ -15,6 +15,13 @@ reprojection order. It shares matrix inversion with RDR2 and refuses
 inverted or overflowing view rectangles. The engine hooks and native
 fixture use the same guarded copy. The expanded camera fixture remains
 unrun.
+
+Wingman's Rust graph observer validates the same AddPasses site, records
+borrowed graph facts and rate-limits diagnostics. The native detour still
+calls the original first and keeps its pinned trampoline. Stop retains the
+host services while a callback remains. This port pins the observer DLL
+before installing the hook, and the existing execution callbacks still
+use the native implementation. The plugin and live observer remain unrun.
 
 The Steam D3D11 chain uses one Rust owner for the exact overlay profile,
 guarded forwarding and Present hook lifetime. Fallout 4 and Skyrim SE

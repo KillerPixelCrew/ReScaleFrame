@@ -1,11 +1,22 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 #include <rescaleframe/game_api.h>
+#include <stddef.h>
 
 namespace rsf::wingman {
-rsf_result prepare(const rsf_game_prepare_args*) noexcept;
-rsf_result start(const rsf_game_start_args*) noexcept;
-rsf_result quiesce(const rsf_game_control_args*) noexcept;
-rsf_result stop(const rsf_game_control_args*) noexcept;
-rsf_result status(rsf_game_renderer_status*) noexcept;
+struct ObserverPlatform {
+    bool (*verify_executable)() noexcept;
+    uintptr_t (*image_base)() noexcept;
+    bool (*copy)(void*, const void*, size_t) noexcept;
+    uint64_t (*tick_count)() noexcept;
+    bool (*create_hook)(uintptr_t) noexcept;
+    bool (*enable_hook)(uintptr_t) noexcept;
+    bool (*disable_hook)(uintptr_t) noexcept;
+    bool (*prepare_execution)(const rsf_game_host_services*) noexcept;
+    bool (*start_execution)() noexcept;
+    void (*quiesce_execution)() noexcept;
+    bool (*stop_execution)() noexcept;
+    void (*log)(rsf_game_log_fn, void*, const char*) noexcept;
+};
+const ObserverPlatform& observer_platform() noexcept;
 }

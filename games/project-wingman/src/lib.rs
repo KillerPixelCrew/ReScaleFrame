@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Project Wingman game SDK entry and exact-build identity.
 mod camera;
+mod observer;
 
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, rsf_detection, rsf_game_hooks_api, rsf_game_info, rsf_game_plugin_api,
@@ -67,7 +68,7 @@ unsafe extern "C" fn rsf_wingman_matches_sha256(digest: *const c_char) -> bool {
 unsafe extern "C" fn rsf_wingman_publish_api(
     requested_abi: u32,
     out: *mut rsf_game_plugin_api,
-    hooks: &rsf_game_hooks_api,
+    platform: *const observer::Platform,
 ) -> rsf_result {
     if out.is_null()
         || unsafe { out.cast::<u32>().read() } < size_of::<rsf_game_plugin_api>() as u32
@@ -77,6 +78,10 @@ unsafe extern "C" fn rsf_wingman_publish_api(
     if requested_abi != RSF_GAME_ABI_VERSION {
         return ABI_MISMATCH;
     }
+    let Some(platform) = (unsafe { platform.as_ref() }) else {
+        return INVALID_ARGUMENT;
+    };
+    observer::bind(platform);
     let api = rsf_game_plugin_api {
         struct_size: size_of::<rsf_game_plugin_api>() as u32,
         abi_version: RSF_GAME_ABI_VERSION,
@@ -89,7 +94,13 @@ unsafe extern "C" fn rsf_wingman_publish_api(
                 .as_ptr(),
         },
         detect: Some(detect),
-        hooks: *hooks,
+        hooks: rsf_game_hooks_api {
+            prepare: Some(observer::prepare),
+            start: Some(observer::start),
+            quiesce: Some(observer::quiesce),
+            stop: Some(observer::stop),
+            status: Some(observer::status),
+        },
     };
     unsafe { out.write(api) };
     0

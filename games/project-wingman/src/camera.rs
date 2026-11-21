@@ -5,7 +5,7 @@ use rsf_game_sys::{RSF_GAME_CAMERA_ABI_VERSION, rsf_game_render_pass};
 use std::ffi::c_void;
 use std::mem::MaybeUninit;
 
-type CopyMemory = unsafe extern "C" fn(*mut c_void, *const c_void, usize) -> bool;
+pub(crate) type CopyMemory = unsafe extern "C" fn(*mut c_void, *const c_void, usize) -> bool;
 type Matrix = [f32; 16];
 
 const FAMILY: usize = 0;
@@ -16,13 +16,13 @@ const WORLD_TO_VIEW: usize = 0x340;
 const VIEW_TO_WORLD: usize = 0x380;
 const CURRENT_TRANSLATED: usize = 0x480;
 const CURRENT_TRANSLATION: usize = 0x600;
-const JITTER: usize = 0x4fa4;
+pub(crate) const JITTER: usize = 0x4fa4;
 const PREVIOUS_PROJECTION: usize = 0x5010;
 const PREVIOUS_TRANSLATED: usize = 0x51d0;
 const PREVIOUS_TRANSLATION: usize = 0x5350;
 
 // SAFETY: every bit pattern of T must be valid. The caller uses native numeric fields and arrays.
-unsafe fn read<T: Copy>(copy: CopyMemory, base: usize, offset: usize) -> Option<T> {
+pub(crate) unsafe fn read<T: Copy>(copy: CopyMemory, base: usize, offset: usize) -> Option<T> {
     let address = base.checked_add(offset).filter(|_| base != 0)?;
     let mut value = MaybeUninit::<T>::uninit();
     if unsafe {
