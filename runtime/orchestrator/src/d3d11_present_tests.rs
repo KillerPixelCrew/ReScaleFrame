@@ -1285,6 +1285,7 @@ fn failed_initialization_releases_unpublished_facade() {
     });
     assert_eq!(create_with(&request(0)).0, E_FAIL);
     assert!(rsf_core_d3d11p_active_bridge().is_null());
+    assert!(!RETIREMENT_PENDING.load(Ordering::Acquire));
     let calls = take_calls();
     assert_eq!(calls[0], "create 3");
     assert!(calls.contains(&"release_device 0".to_owned()));
@@ -1297,6 +1298,27 @@ fn failed_initialization_releases_unpublished_facade() {
     strict.project_id_utf8 = null();
     assert_eq!(prepare(&strict), 1);
     assert_eq!(create_with(&request(0)).0, DXGI_ERROR_UNSUPPORTED);
+}
+
+#[test]
+fn unpublished_provider_with_failed_drain_blocks_replacement() {
+    let _guard = reset();
+    assert_eq!(prepare(&setup(FSR3, 0)), 1);
+    let mut fullscreen = request(0);
+    fullscreen.windowed = 0;
+    with(|fake| {
+        fake.fullscreen_result = DXGI_ERROR_UNSUPPORTED;
+        fake.drain_result = E_FAIL;
+    });
+    assert_eq!(create_with(&fullscreen).0, E_FAIL);
+    assert!(rsf_core_d3d11p_active_bridge().is_null());
+    assert_eq!(generation(), 1);
+    let calls = take_calls();
+    assert!(calls.iter().any(|call| call == "create 3"));
+    assert!(calls.iter().any(|call| call == "retain"));
+
+    assert_eq!(create_with(&request(0)).0, DXGI_ERROR_UNSUPPORTED);
+    assert!(take_calls().is_empty());
 }
 
 #[test]

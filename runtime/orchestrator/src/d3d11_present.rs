@@ -1916,6 +1916,8 @@ impl Owner {
         };
         // On device failure retain GPU-reachable storage for the process rather than free it.
         if failed(self.drain()) {
+            // Initializing owners can fail after creating a provider but before publication.
+            RETIREMENT_PENDING.store(true, Ordering::Release);
             log("presentation bridge: retirement failed; retaining provider and shared inputs");
             std::mem::forget(self.take_application_buffers());
             std::mem::forget(self.take_physical());
