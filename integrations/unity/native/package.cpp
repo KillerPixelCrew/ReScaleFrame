@@ -1,12 +1,13 @@
 #include <rescaleframe/native_cpu.h>
 // SPDX-License-Identifier: MIT
 // The settings, status snapshot, render plan, temporal readiness, pending reconfiguration,
-// session lifecycle and the D3D12 SR views with their recording slots are Rust
-// (games/unity-mono/src/package_state.rs and package_views.rs, through package_state.h). This
-// file keeps the Unity, DXGI, Vulkan and preview work, the render callback's routing, the input
-// window and the log, and lends the typed SDK and Runtime calls through
-// rsf_unity_package_platform. Its mutex still serializes the exports and the render path where
-// it did.
+// session lifecycle, the D3D12 SR views with their recording slots, and the presentation (the
+// package identity, the generation install and the window pass's provider request) are Rust
+// (games/unity-mono/src/package_state.rs, package_views.rs and package_state/presentation.rs,
+// through package_state.h). This file keeps the Unity, DXGI, Vulkan and preview work, the render
+// callback's routing, the window guard, the input window and the log, and lends the typed SDK
+// and Runtime calls through rsf_unity_package_platform. Its mutex still serializes the exports
+// and the SR pass where it did.
 #include "package.h"
 #include "bridge.h"
 #include "vulkan_bridge.h"
@@ -34,21 +35,20 @@ extern "C" int rsf_unity_set_engine_spatial(uint32_t, uint32_t) noexcept;
 
 // package_abi.rs mirrors these layouts and constants.
 static_assert(sizeof(rsf_unity_package_settings) == 100 && sizeof(rsf_unity_package_status) == 184);
-static_assert(sizeof(rsf_unity_frame_counters) == 40 && sizeof(rsf_unity_package_platform) == 176);
+static_assert(sizeof(rsf_unity_frame_counters) == 40 && sizeof(rsf_unity_package_platform) == 224);
 static_assert(sizeof(rsf_native_fg_status) == 352 && sizeof(rsf_native_latency_status) == 152);
 static_assert(sizeof(rsf_native_fg_options) == 24 && RSF_BACKEND_OK == 0);
 static_assert(RSF_FG_STAT_TOTAL_PRESENTED == 1 && RSF_SR_NONE == 0);
-static_assert(sizeof(rsf_unity_package_view_setup) == 32 && RSF_SCREEN_MENU == 1 && RSF_SCREEN_FLIGHT == 4);
+static_assert(sizeof(rsf_unity_package_view_setup) == 88 && RSF_SCREEN_MENU == 1 && RSF_SCREEN_FLIGHT == 4);
+// generation.rs builds the install; runtime_abi.rs mirrors rsf_fg12_setup.
+static_assert(sizeof(rsf_fg12_setup) == 152 && RSF_DLSS_ENGINE_UNITY == 2);
 
 namespace {
 using Microsoft::WRL::ComPtr;
 std::mutex guard;
 rsf_unity_native_api api{};
-std::string root, streamline, fsr, xess, version, project;
 std::wstring ini;
 bool editor = false;
-bool presentation_installed = false;
-uint32_t default_fg_backend = 0;
 IUnityInterfaces* registry = nullptr;
 IUnityGraphics* graphics = nullptr;
 HANDLE log_file = INVALID_HANDLE_VALUE;
@@ -93,10 +93,7 @@ void log(void*, const char* text)
         WriteFile(log_file, "\r\n", 2, &written, nullptr);
     }
 }
-void paths(const std::string& path)
-{
-    root = path; streamline = root + "/streamline"; fsr = root + "/fidelityfx"; xess = root + "/xess";
-}
+// rsf_unity_package_platform::accept_window, generation's window guard.
 int accept(void*, void* hwnd)
 {
     if (editor) return rsf_unity_preview_owns(hwnd) ? 1 : 0;
@@ -132,39 +129,29 @@ uint32_t sr_create(void* commands, const rsf_unity_package_view_setup* view, int
     setup.render_width = view->render_width; setup.render_height = view->render_height;
     setup.inverted_depth = view->inverted_depth;
     setup.streamline_host = rsf_d3d11_present_host();
-    setup.fsr2_directory_utf8 = setup.fsr3_directory_utf8 = setup.fsr4_directory_utf8 = fsr.c_str();
-    setup.xess_directory_utf8 = xess.c_str(); setup.log = log;
-    const std::string interposer = streamline + "/sl.interposer.dll";
-    setup.dlss = {sizeof(setup.dlss), RSF_DLSS_ABI_VERSION, interposer.c_str(), streamline.c_str(), root.c_str(),
-        0, RSF_DLSS_ENGINE_UNITY, version.c_str(), project.c_str(), 1, log, nullptr, view->dlss_preset};
+    setup.fsr2_directory_utf8 = setup.fsr3_directory_utf8 = setup.fsr4_directory_utf8 = view->fsr_utf8;
+    setup.xess_directory_utf8 = view->xess_utf8; setup.log = log;
+    setup.dlss = {sizeof(setup.dlss), RSF_DLSS_ABI_VERSION, view->interposer_utf8, view->streamline_utf8, view->root_utf8,
+        0, RSF_DLSS_ENGINE_UNITY, view->engine_version_utf8, view->project_id_utf8, 1, log, nullptr, view->dlss_preset};
     *output = nullptr; *result = rsf_sr12_create(&setup, output);
     return 1;
 } catch (...) { return 0; }
-void render_sr(void* commands, const rsf_game_render_pass* pass);
-void request_generation()
+// rsf_unity_package_platform::fg_default_backend: Auto's generation provider for the adapter of
+// Unity's D3D12 device.
+uint32_t fg_default_backend(uint32_t* backend) noexcept
 {
-    if (!rsf_d3d11_present_has_owner()) return;
-    uint32_t requested = 0;
-    {
-        std::lock_guard<std::mutex> lock(guard);
-        rsf_unity_package_settings current{}; rsf_unity_package_current(&current); requested = current.fg_backend;
-    }
-    if (requested == RSF_FG_BACKEND_AUTO) {
-        if (!default_fg_backend) {
-            void* owning_device = nullptr; void* owning_queue = nullptr;
-            ComPtr<IDXGIFactory4> factory; ComPtr<IDXGIAdapter1> adapter; DXGI_ADAPTER_DESC1 desc{};
-            if (!rsf_unity_package_graphics(&owning_device, &owning_queue) ||
-                FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))) ||
-                FAILED(factory->EnumAdapterByLuid(static_cast<ID3D12Device*>(owning_device)->GetAdapterLuid(), IID_PPV_ARGS(&adapter))) ||
-                FAILED(adapter->GetDesc1(&desc))) return;
-            default_fg_backend = rsf_fg_default_backend(desc.VendorId, (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0);
-        }
-        requested = default_fg_backend;
-    }
-    if (requested == rsf_d3d11_present_backend()) return;
-    const auto result = rsf_d3d11_present_request(requested);
-    std::lock_guard<std::mutex> lock(guard); rsf_unity_package_fg_result(result);
+    void* owning_device = nullptr; void* owning_queue = nullptr;
+    ComPtr<IDXGIFactory4> factory; ComPtr<IDXGIAdapter1> adapter; DXGI_ADAPTER_DESC1 desc{};
+    if (!rsf_unity_package_graphics(&owning_device, &owning_queue) ||
+        FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))) ||
+        FAILED(factory->EnumAdapterByLuid(static_cast<ID3D12Device*>(owning_device)->GetAdapterLuid(), IID_PPV_ARGS(&adapter))) ||
+        FAILED(adapter->GetDesc1(&desc))) return 0;
+    *backend = rsf_fg_default_backend(desc.VendorId, (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0);
+    return 1;
 }
+void render_sr(void* commands, const rsf_game_render_pass* pass);
+void request_generation();
+void install_presentation();
 void render(void*, void* commands, const rsf_game_render_pass* original, uint32_t begin)
 {
     if (!commands || !original) return;
@@ -201,26 +188,10 @@ void cpu_event(void*, const rsf_game_cpu_event* event) {
     rsf_fg12_cpu(event);
     if (event->stage==RSF_GAME_CPU_FRAME_END) input_frame.store(0);
 }
-void install_presentation()
+// rsf_unity_package_platform::open: everything rsfu_initialize set up between storing the
+// session's identity and activating the bridge.
+uint32_t open_session() noexcept try
 {
-    if (presentation_installed || root.empty() || version.empty() || project.empty()) return;
-    rsf_fg12_setup setup{}; setup.struct_size = sizeof(setup); setup.backend = RSF_FG_BACKEND_AUTO;
-    setup.max_generated_frames = UINT32_MAX; setup.runtime_switching = 1; setup.ui_mode = RSF_UI_MODE_BACKBUFFER_HUDLESS;
-    setup.options = {sizeof(setup.options), RSF_FG_OFF, 1, RSF_REFLEX_OFF, 0, 0};
-    setup.depth_inverted = 1; setup.units_to_meters = 1; setup.accept_window = accept; setup.log = log;
-    setup.runtime_directory_utf8 = setup.fsr3_directory_utf8 = setup.fsr4_directory_utf8 = fsr.c_str();
-    setup.xess_directory_utf8 = xess.c_str(); setup.streamline_directory_utf8 = streamline.c_str();
-    setup.engine_type = RSF_DLSS_ENGINE_UNITY; setup.engine_version_utf8 = version.c_str(); setup.project_id_utf8 = project.c_str();
-    const auto result = rsf_fg12_install(&setup);
-    rsf_unity_package_fg_result(result); presentation_installed = result == RSF_BACKEND_OK;
-}
-struct Opening { const char* runtime; const char* engine; const char* id; };
-// rsf_unity_package_platform::open: everything rsfu_initialize set up between forgetting the
-// previous session's state and activating the bridge.
-uint32_t open_session(void* user) noexcept try
-{
-    const auto& opening = *static_cast<const Opening*>(user);
-    paths(opening.runtime); version = opening.engine; project = opening.id;
     if (log_file == INVALID_HANDLE_VALUE) {
         wchar_t local[32768]{};
         if (GetEnvironmentVariableW(L"LOCALAPPDATA", local, 32768)) {
@@ -265,11 +236,21 @@ constexpr rsf_unity_package_platform platform{
     [](rsf_sr12* sr) noexcept { rsf_sr12_destroy(sr); },
     [](const char* text) noexcept { log(nullptr, text); },
     []() noexcept { rsf_unity_bridge_release(); },
+    accept,
+    log,
+    [](const rsf_fg12_setup* setup) noexcept -> int32_t { return rsf_fg12_install(setup); },
+    []() noexcept -> uint32_t { return rsf_d3d11_present_has_owner() ? 1u : 0u; },
+    [](uint32_t backend) noexcept -> int32_t { return rsf_d3d11_present_request(backend); },
+    fg_default_backend,
 };
 void render_sr(void* commands, const rsf_game_render_pass* pass)
 {
     std::lock_guard<std::mutex> lock(guard); rsf_unity_package_render(commands, pass, &platform);
 }
+// The window pass's request stays outside the mutex, which only wrapped its settings read and
+// result store; Rust's state lock covers both now. The Editor's install runs under it from open.
+void request_generation() { rsf_unity_package_request_generation(&platform); }
+void install_presentation() { rsf_unity_package_install(&platform); }
 void UNITY_INTERFACE_API device_event(UnityGfxDeviceEventType type)
 {
     if (type == kUnityGfxDeviceEventInitialize) rsf_unity_package_bridge_load(registry);
@@ -288,10 +269,7 @@ void preload()
     wchar_t executable[32768]{}; GetModuleFileNameW(nullptr, executable, 32768);
     const auto* leaf = std::wcsrchr(executable, L'\\');
     editor = leaf && _wcsicmp(leaf + 1, L"Unity.exe") == 0;
-    paths(rsf::unity_config::utf8(rsf::unity_config::path_setting(ini.c_str(), L"Runtime")));
-    wchar_t text[256]{};
-    GetPrivateProfileStringW(L"UnitySR", L"EngineVersion", L"", text, 256, ini.c_str()); version = rsf::unity_config::utf8(text);
-    GetPrivateProfileStringW(L"UnitySR", L"ProjectId", L"", text, 256, ini.c_str()); project = rsf::unity_config::utf8(text);
+    rsf_unity_package_load(ini.c_str());
     const auto log_path = rsf::unity_config::path_setting(ini.c_str(), L"Log");
     if (!log_path.empty()) log_file = CreateFileW(log_path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
         nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -310,8 +288,7 @@ extern "C" __declspec(dllexport) int rsfu_initialize(const char* runtime, const 
 {
     if (!runtime || !engine || !id || !output) return 0;
     std::lock_guard<std::mutex> lock(guard);
-    Opening opening{runtime, engine, id};
-    const int result = rsf_unity_package_initialize(&platform, &opening);
+    const int result = rsf_unity_package_initialize(runtime, engine, id, &platform);
     if (result == 1) *output = api;
     return result;
 } catch (...) { return 0; }

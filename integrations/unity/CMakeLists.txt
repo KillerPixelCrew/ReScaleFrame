@@ -25,10 +25,10 @@ if(EXISTS "${RSF_UNITY_NATIVE_INCLUDE}/IUnityGraphicsD3D12.h")
     # The shared D3D12 bridge keeps its frame state in the rsf-unity-mono archive (bridge_state.rs),
     # the same archive the game plugin links, and package.cpp reads the [UnitySR] path settings
     # through it (runtime_config.rs, via unity_runtime_config.h) and keeps its settings, status,
-    # session state and SR views there (package_state.rs, package_views.rs, via
-    # native/package_state.h). Only those symbols
-    # are referenced here; the game plugin's Runtime setup reaches the Runtime through its own
-    # native leaves.
+    # session state, SR views and presentation there (package_state.rs, package_views.rs,
+    # package_state/presentation.rs, via native/package_state.h). Only those symbols are
+    # referenced here; the game plugin's Runtime setup reaches the Runtime through its own native
+    # leaves.
     target_link_libraries(rsf_unity_package PRIVATE rsf_orchestrator_core rsf_unity_mono_rust rsf_build_options d3d12 d3d11)
     set_target_properties(rsf_unity_package PROPERTIES OUTPUT_NAME "ReScaleFrame.Unity.Native")
 endif()

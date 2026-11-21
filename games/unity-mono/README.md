@@ -19,9 +19,10 @@ The Unity package compiles the same `bridge.cpp` and links the same archive.
 The Runtime setup behind the loader entry `rsf_unity_start` and `rsf_unity_fg_start`,
 `rsf_unity_sr_start` and `rsf_unity_sr_stop` is Rust as well (`runtime_setup.rs`): the
 `[UnitySR]` keys and defaults, the start gates and result codes, the wait for Unity's Mono
-runtime and the `rsf_fg12_setup` and `rsf_callback_host_setup` descriptors. `runtime_host.cpp`
-keeps those exports and lends the typed calls into the already loaded Runtime, the SDK header
-tables and the D3D12 debug layer through `rsf_unity_runtime_platform`. Path resolution for
+runtime and the `rsf_fg12_setup` (built by `generation.rs`, which the Unity package shares) and
+`rsf_callback_host_setup` descriptors. `runtime_host.cpp` keeps those exports and lends the typed
+calls into the already loaded Runtime, the SDK header tables and the D3D12 debug layer through
+`rsf_unity_runtime_platform`. Path resolution for
 `[UnitySR]` lives in `runtime_config.rs`; the Unity package reads it through
 `unity_runtime_config.h` from the same archive.
 
@@ -31,10 +32,12 @@ The Unity package's own state is in the archive too (`package_state.rs`, through
 pending reconfiguration, the session lifecycle with its `rsfu_initialize` result codes, and the
 D3D12 SR views of the render callback (`package_views.rs`): one Runtime SR context per Unity view
 key, Auto resolution, the backend-zero fallback, replacement on new extents or reconfiguration,
-and the recording slots bound to the bridge's command lists. `package.cpp` keeps the `rsfu_*`
-exports, the render callback's routing, the Unity, DXGI, Vulkan and preview work and the input
-window, and lends the typed SDK and Runtime calls, including the `rsf_sr12_*` context calls,
-through `rsf_unity_package_platform`.
+and the recording slots bound to the bridge's command lists. Its presentation is there as well
+(`package_state/presentation.rs`): the package identity from `[UnitySR]` or `rsfu_initialize`,
+the one generation install and the window pass's provider request. `package.cpp` keeps the
+`rsfu_*` exports, the render callback's routing, the Unity, DXGI, Vulkan and preview work, the
+window guard and the input window, and lends the typed SDK and Runtime calls, including the
+`rsf_sr12_*` context calls and `rsf_fg12_install`, through `rsf_unity_package_platform`.
 
 Detection currently requires the exact x64 Drag'n Wash executable name and SHA256. A different
 build remains unknown, including other Unity Mono games. Recognition only establishes identity.
