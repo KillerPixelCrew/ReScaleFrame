@@ -55,7 +55,10 @@ claim lifetime, exact output bytes and cache behavior without a device.
 Anomaly's Rust SR stage also has a second configuration record in the
 native stage facade. The facade mirrors live settings and keeps the
 INI and vendor paths for resets and availability checks. The remaining
-stage port moves that retained configuration to the Rust owner.
+stage port moves that retained configuration to the Rust owner. Its
+Release candidate passed a Standard run with package-relative DLSS
+and XeSS directories and clean teardown.
+[Configuration candidate game evidence](research/rust-anomaly-sr-pass.md#package-relative-sr-paths-on-the-configuration-candidate)
 
 The shared presentation and overlay diagnostics now name the graphics
 path. Native D3D12 Streamline registration follows the adapter's backend

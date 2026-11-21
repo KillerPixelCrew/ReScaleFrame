@@ -307,3 +307,22 @@ XeSS with XeSS SR running. Each provider change reported
 roughly 240 presents per 120 source frames. The process exited with
 code 0 and restored the isolated settings and script. The logs and
 paired window checks are in `evidence/standard-provider-counter-retest/`.
+
+## Package-relative SR paths on the configuration candidate
+
+The isolated Standard run used the configuration worker's Release
+Anomaly DLL with SHA-256 beginning `346191e9` and the merged Runtime
+with SHA-256 beginning `424952a9`. The three SR vendor-directory
+overrides were removed from the clone's test INI. The overlay advertised
+the packaged backend choices, DLSS SR started, and the engine resized
+from 1280×720 to 1600×900. The overlay then saved `SRBackend=5` and
+XeSS ran at 942×530 with 1600×900 output. The last full SR report
+showed 3,929 evaluations with zero refusals. DLSS-G remained active.
+
+The post-switch window capture timed out. The provider result is from
+the Runtime log, counters and saved INI. The engine exited with code 0
+and the runner restored the isolated DLLs, pack, settings and lifecycle
+script. This result covers the staged Release candidate and the DLSS
+and XeSS package-relative paths. Logs and complete hashes are under
+`.local/anomaly/staging/live-58fe95a-stage5/evidence/` in
+`rust-sr-configuration-candidate-standard-346191e9`.
