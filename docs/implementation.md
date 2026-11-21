@@ -101,6 +101,26 @@ configurations. The merge added a Rust regression for routing and nested
 poll retirement. The actual detour still needs live adapter validation.
 See [the input cutover audit](research/rust-anomaly-input.md).
 
+Anomaly's overlay hook installation, trampoline registry, and callback
+publication now run in Rust. DirectInput and DXGI discovery and MinHook
+calls stay in the native bridge. Installation is serialized, and detours
+copy their original or callback under the registry lock before calling it.
+A refused enable unpublishes only its binding and disables its own batch.
+Originals stay available to already-entered detours.
+
+The pinned toolchain passed all 333 locked Rust tests, formatting and
+Clippy. MSVC Release passed five focused contracts including both input
+profiles, and Anomaly kept all three DLL exports and its by-name Runtime
+lookup. The WARP hook fixture built. An isolated Standard game run with
+the rebuilt DLL opened and closed the overlay with Insert, navigated the
+panel with the mouse and turned the camera after closing it. The last SR
+status recorded 5,489 evaluations with no refusals. Steady FG windows
+recorded 240 vendor presents per 120 source frames. The engine destroyed
+the level, shut down Direct3D and exited with code 0. The test restored the
+staged inputs. Gameplay keyboard consumption and this cut's live AVX
+path remain unverified. Logs and hashes are in
+`.local/anomaly/staging/live-58fe95a-stage5/evidence/rust-overlay-hook-registry/`.
+
 Anomaly's cold entry and startup retry state now live in Rust. The
 entry borrows the Runtime already loaded by the thin carrier. A partial
 session refuses before changing stage setup, and retrying an unfinished
