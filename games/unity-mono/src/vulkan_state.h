@@ -12,9 +12,9 @@
    swapchains with their images and present-ready semaphores, the presentation window's identity
    and the presentation lease. The command slot rotation and the shared D3D12 fence values are the
    package bridge's submission ring (bridge_interop.h); a process has one Unity renderer, so the
-   D3D11 and Vulkan bridges never use it at once. vulkan_bridge.cpp keeps the Unity interfaces, the
-   Vulkan, D3D12 and DXGI objects and calls, images, command buffers, slot fences, waits, copies,
-   barriers, swapchain and semaphore creation and destruction, the window and its swap chain.
+   D3D11 and Vulkan bridges never use it at once. Rust owns the command pool, per-slot handles and
+   imported images. vulkan_bridge.cpp keeps the Unity interfaces, typed graphics calls, the shared
+   device, queue, imported semaphore, shared fence, window and DXGI swap chain.
 
    Event slots number RSF_UNITY_FRAMES_PACKETS: each event carries one packet taken from the
    shared store. vulkan_bridge.cpp sizes its image arrays to match. */
@@ -66,6 +66,31 @@ uint32_t rsf_unity_vulkan_claim_device(void);
 void rsf_unity_vulkan_device_created(uint32_t created);
 uint32_t rsf_unity_vulkan_ready(void);
 
+/* A view borrowed under the presentation lease. The pool owns both VkCommandBuffers. */
+typedef struct rsf_unity_vulkan_command_handles {
+    void* allocator;
+    void* commands;
+    uint64_t vk[2];
+    uint64_t complete;
+} rsf_unity_vulkan_command_handles;
+typedef uint64_t (*rsf_unity_vulkan_create_pool)(void);
+typedef void (*rsf_unity_vulkan_destroy_pool)(uint64_t pool);
+typedef bool (*rsf_unity_vulkan_create_slot)(uint64_t pool, rsf_unity_vulkan_command_handles* slot);
+typedef void (*rsf_unity_vulkan_destroy_slot)(const rsf_unity_vulkan_command_handles* slot);
+/* The caller holds the device creation claim. Each leaf transfers only handles it successfully
+   created, even on a partial slot failure. Rust rolls back the set before returning false. */
+bool rsf_unity_vulkan_prepare_commands(rsf_unity_vulkan_create_pool create_pool,
+    rsf_unity_vulkan_create_slot create_slot, rsf_unity_vulkan_destroy_slot destroy_slot,
+    rsf_unity_vulkan_destroy_pool destroy_pool);
+bool rsf_unity_vulkan_command_slot(uint32_t index, rsf_unity_vulkan_command_handles* view);
+
+typedef bool (*rsf_unity_vulkan_fence_ready)(uint64_t fence);
+typedef uint64_t (*rsf_unity_vulkan_shared_completed)(void);
+/* Polls Vulkan slot fences and the shared D3D12 fence under the presentation lease and idle
+   admission. No queue waits. */
+bool rsf_unity_vulkan_commands_retired(rsf_unity_vulkan_fence_ready fence_ready,
+    rsf_unity_vulkan_shared_completed shared_completed);
+
 /* Rust owns these handles. A successful prepare lends a view under the caller's presentation
    lease. The native create leaf drains and transfers a complete image on success. */
 typedef struct rsf_unity_vulkan_image_handles {
@@ -78,8 +103,10 @@ typedef void (*rsf_unity_vulkan_destroy_image)(const rsf_unity_vulkan_image_hand
 bool rsf_unity_vulkan_prepare_image(uint32_t index, uint32_t width, uint32_t height,
     uint32_t format, uint32_t dx_format, rsf_unity_vulkan_image_handles* view,
     rsf_unity_vulkan_create_image create, rsf_unity_vulkan_destroy_image destroy);
-/* Only failed initialization or closed retirement can remove all images. */
-void rsf_unity_vulkan_clear_images(rsf_unity_vulkan_destroy_image destroy);
+/* Once closed, poll the fences under the presentation lease. If retired, remove the images and
+   command resources and destroy them in that order, while the shared device is still live. */
+bool rsf_unity_vulkan_retire_resources(rsf_unity_vulkan_fence_ready fence_ready,
+    rsf_unity_vulkan_shared_completed shared_completed, rsf_unity_vulkan_destroy_image destroy_image);
 /* Returns whether the recorded transition can start in GENERAL. */
 bool rsf_unity_vulkan_record_image(uint32_t index);
 void rsf_unity_vulkan_begin_recording(void);

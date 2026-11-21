@@ -139,7 +139,7 @@ extern "C" fn rsf_unity_interop_advance(slot: u32) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_unity_interop_drained(completed: u64) -> u32 {
+pub(crate) extern "C" fn rsf_unity_interop_drained(completed: u64) -> u32 {
     u32::from(lock().drained(completed))
 }
 

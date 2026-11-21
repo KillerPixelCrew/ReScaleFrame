@@ -298,6 +298,14 @@ the presentation lease. Resize installs a complete replacement before
 destroying the old handles, and teardown removes the Rust records
 before releasing the device. The device and replay checks remain open.
 
+Unity Vulkan's command pool and three recording slots now share the
+Rust interop ring and presentation lease. The owner publishes a complete
+set, rolls back partial creation and retires the pool after the slot and
+shared fences prove completion. Present checks the DXGI buffer before
+consuming Unity's waits. Native leaves still issue the graphics calls.
+Build, linkage and player verification remain open.
+[Command resource audit](research/rust-unity-vulkan-command-resources.md)
+
 AC7's Rust renderer transaction owns prepare, start, quiesce and stop.
 Failed activation keeps any renderer with reachable callbacks, and a
 refused hook disable or removal keeps the renderer available for retry.
