@@ -85,3 +85,25 @@ has 13. Source comparison matched the pinned result codes, mode
 values, public declarations and disabled stubs. Pinned formatting,
 locked offline metadata and whitespace passed. Builds, fixtures and
 Standard and AVX live capability and plan verification remain open.
+
+## SR frame resource tags
+
+Compared with `01fb95be`, Rust selects and orders the Streamline
+tags for the existing D3D11 and shared D3D12 routes. It keeps colour
+input, colour output, depth and motion first, then exposure and the
+supplied optional hints in their original order. Render inputs and
+hints still use the render extent. Output uses its own extent and
+exposure is 1×1. The shared route uses the same D3D12 read and write
+states. The D3D11 route supplies zero for the state.
+
+The lifetime remains `eOnlyValidNow` because the engine can reuse
+these scene resources within the frame. The native leaf creates
+the typed Streamline records and submits the batch synchronously
+with the same token, viewport and command context. Constants,
+options, tags and evaluation run in their existing order.
+
+Source comparison matched the pinned tags, the 224-byte private
+batch, and the public declarations and disabled stubs. The new
+fixture checks optional ordering, shared states and extents.
+Pinned formatting, locked offline metadata and whitespace passed.
+Builds, fixtures, and Standard and AVX live checks remain open.

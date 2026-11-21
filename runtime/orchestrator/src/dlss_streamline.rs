@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 mod planning;
+mod tags;
 
 use crate::com_ref::ComRef;
 use crate::diagnostic_output::Output;
@@ -315,7 +316,7 @@ struct Platform {
     token: unsafe extern "C" fn(Handle, Handle, u64, u32) -> Handle,
     constants: unsafe extern "C" fn(Handle, Handle, Handle, u64, u32, &Frame) -> i32,
     options: unsafe extern "C" fn(Handle, u32, &Options) -> i32,
-    tags: unsafe extern "C" fn(Handle, Handle, Handle, u32, u32, &Frame) -> i32,
+    tags: unsafe extern "C" fn(Handle, Handle, Handle, u32, &tags::TagBatch) -> i32,
     evaluate: unsafe extern "C" fn(Handle, Handle, Handle, u32) -> i32,
     drain: unsafe extern "C" fn(Handle) -> u32,
     release_viewport: unsafe extern "C" fn(Handle, u32) -> i32,
@@ -654,7 +655,8 @@ unsafe extern "C" fn rsf_core_dlss_streamline_evaluate(
         }
         *applied = Some(options);
     }
-    let tagged = unsafe { (platform.tags)(native, context, token, slot, shared.into(), frame) };
+    let tags = tags::TagBatch::new(frame, shared);
+    let tagged = unsafe { (platform.tags)(native, context, token, slot, &tags) };
     if tagged != OK {
         return tagged;
     }

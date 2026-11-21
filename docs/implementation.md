@@ -1065,6 +1065,12 @@ support query and uses the same quality mapping for plans and
 frame options. Builds and live checks remain open.
 [Support and render planning](research/rust-d3d11-streamline-resolution.md#support-and-render-planning)
 
+D3D11 Streamline SR resource tag selection, extents and shared
+D3D12 states now come from Rust. The typed native call keeps the
+existing immediate-use lifetime. Builds, fixtures and live checks
+remain open.
+[SR frame resource tags](research/rust-d3d11-streamline-resolution.md#sr-frame-resource-tags)
+
 Anomaly's Rust motion owner now checks the existing Standard and AVX
 profile guards in the same order. The native leaf supplies the profile
 and the guarded reader. FidelityFX Vulkan SR and FG also share one

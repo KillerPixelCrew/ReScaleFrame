@@ -463,6 +463,12 @@ matched adapter identity, result mapping and quality modes. Builds,
 fixtures and live checks remain open.
 [Support and render planning](research/rust-d3d11-streamline-resolution.md#support-and-render-planning)
 
+D3D11 Streamline SR now plans its required and optional tags in
+Rust. Source comparison matched the existing extents, states,
+lifetime and submission order. Builds, fixtures and live checks
+remain open.
+[SR frame resource tags](research/rust-d3d11-streamline-resolution.md#sr-frame-resource-tags)
+
 ## D3D11 observer startup probe
 
 Compared with `fe267be4`, the Rust observer owns the temporary

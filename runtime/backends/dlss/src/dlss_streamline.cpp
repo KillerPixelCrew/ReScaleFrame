@@ -79,6 +79,16 @@ struct rsf_streamline_sr_planning {
     int32_t (*optimal)(void*, uint32_t, uint32_t, uint32_t, rsf_streamline_sr_sizes*);
 };
 
+inline constexpr uint32_t sr_max_tags = 9;
+struct rsf_streamline_sr_tag {
+    void* texture;
+    uint32_t kind, state, size[2];
+};
+struct rsf_streamline_sr_tags {
+    uint32_t count, lifecycle;
+    rsf_streamline_sr_tag entries[sr_max_tags];
+};
+
 struct rsf_streamline_sr_platform {
     void* (*load)(const wchar_t*, const rsf_dlss_setup*);
     const rsf_streamline_sr_startup* startup;
@@ -87,7 +97,7 @@ struct rsf_streamline_sr_platform {
     void* (*token)(void*, void*, uint64_t, uint32_t);
     int32_t (*constants)(void*, void*, void*, uint64_t, uint32_t, const rsf_dlss_frame*);
     int32_t (*options)(void*, uint32_t, const rsf_streamline_sr_options*);
-    int32_t (*tags)(void*, void*, void*, uint32_t, uint32_t, const rsf_dlss_frame*);
+    int32_t (*tags)(void*, void*, void*, uint32_t, const rsf_streamline_sr_tags*);
     int32_t (*evaluate)(void*, void*, void*, uint32_t);
     uint32_t (*drain)(void*);
     int32_t (*release_viewport)(void*, uint32_t);
@@ -438,63 +448,24 @@ int32_t set_options(void* native, uint32_t slot, const rsf_streamline_sr_options
     return RSF_DLSS_OK;
 } catch (...) { return RSF_DLSS_ERROR_FEATURE_FAILED; }
 
-int32_t set_tags(void* native, void* context, void* token, uint32_t slot, uint32_t shared,
-    const rsf_dlss_frame* frame) noexcept try
+int32_t set_tags(void* native, void* context, void* token, uint32_t slot,
+    const rsf_streamline_sr_tags* input) noexcept try
 {
     auto& self = *static_cast<Native*>(native);
-    const sl::Extent render_extent{0, 0, frame->render_width, frame->render_height};
-    const sl::Extent output_extent{0, 0, frame->output_width, frame->output_height};
-    const sl::Extent exposure_extent{0, 0, 1, 1};
-
-    sl::Resource color_in{sl::ResourceType::eTex2d, frame->color_in, nullptr, nullptr, 0};
-    sl::Resource color_out{sl::ResourceType::eTex2d, frame->color_out, nullptr, nullptr, 0};
-    sl::Resource depth{sl::ResourceType::eTex2d, frame->depth, nullptr, nullptr, 0};
-    sl::Resource motion{sl::ResourceType::eTex2d, frame->motion, nullptr, nullptr, 0};
-    sl::Resource exposure{sl::ResourceType::eTex2d, frame->exposure, nullptr, nullptr, 0};
-    // Optional translucency hints, in the order Streamline names them. DLSS SR reads the
-    // transparency and bias hints; the other two are Ray Reconstruction inputs.
-    struct { void* texture; sl::BufferType type; } const hint_inputs[] = {
-        {frame->transparency_hint, sl::kBufferTypeTransparencyHint},
-        {frame->bias_current_color, sl::kBufferTypeBiasCurrentColorHint},
-        {frame->color_before_transparency, sl::kBufferTypeColorBeforeTransparency},
-        {frame->transparency_layer, sl::kBufferTypeTransparencyLayer},
-    };
-    sl::Resource hints[4]{};
-    for (uint32_t i = 0; i < 4; ++i) {
-        hints[i] = sl::Resource{sl::ResourceType::eTex2d, hint_inputs[i].texture, nullptr, nullptr, 0};
-        if (shared) hints[i].state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    sl::Resource resources[sr_max_tags]{};
+    sl::ResourceTag tags[sr_max_tags]{};
+    for (uint32_t i = 0; i < input->count; ++i) {
+        const auto& entry = input->entries[i];
+        const sl::Extent extent{0, 0, entry.size[0], entry.size[1]};
+        resources[i] = sl::Resource{sl::ResourceType::eTex2d, entry.texture, nullptr, nullptr, entry.state};
+        tags[i] = sl::ResourceTag{&resources[i], static_cast<sl::BufferType>(entry.kind),
+            static_cast<sl::ResourceLifecycle>(input->lifecycle), &extent};
     }
-    if (shared) {
-        color_in.state = depth.state = motion.state = exposure.state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-        color_out.state = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-    }
-
-    // Everything is tagged as valid only now. These are engine scene targets that the game reuses
-    // later in the same frame, and claiming otherwise would hand DLSS a buffer holding something
-    // else by the time it reads it.
-    sl::ResourceTag tags[9] = {
-        sl::ResourceTag{&color_in, sl::kBufferTypeScalingInputColor,
-                        sl::ResourceLifecycle::eOnlyValidNow, &render_extent},
-        sl::ResourceTag{&color_out, sl::kBufferTypeScalingOutputColor,
-                        sl::ResourceLifecycle::eOnlyValidNow, &output_extent},
-        sl::ResourceTag{&depth, sl::kBufferTypeDepth, sl::ResourceLifecycle::eOnlyValidNow,
-                        &render_extent},
-        sl::ResourceTag{&motion, sl::kBufferTypeMotionVectors,
-                        sl::ResourceLifecycle::eOnlyValidNow, &render_extent},
-    };
-    uint32_t tag_count = 4u;
-    if (frame->exposure) tags[tag_count++] = sl::ResourceTag{&exposure, sl::kBufferTypeExposure,
-        sl::ResourceLifecycle::eOnlyValidNow, &exposure_extent};
-    for (uint32_t i = 0; i < 4; ++i) if (hint_inputs[i].texture)
-        tags[tag_count++] = sl::ResourceTag{&hints[i], hint_inputs[i].type, sl::ResourceLifecycle::eOnlyValidNow, &render_extent};
-
     if (self.sl.set_tag_for_frame(*static_cast<sl::FrameToken*>(token), viewport_handle(slot),
-        tags, tag_count, static_cast<sl::CommandBuffer*>(context)) !=
-        sl::Result::eOk) {
+        tags, input->count, static_cast<sl::CommandBuffer*>(context)) != sl::Result::eOk) {
         say("slSetTagForFrame failed");
         return RSF_DLSS_ERROR_FEATURE_FAILED;
     }
-
     return RSF_DLSS_OK;
 } catch (...) { return RSF_DLSS_ERROR_FEATURE_FAILED; }
 
@@ -562,6 +533,14 @@ constexpr rsf_streamline_sr_platform platform{load_owned, &startup, &planning,
 static_assert(sizeof(rsf_streamline_sr_platform) == 13 * sizeof(void*));
 static_assert(RSF_DLSS_ERROR_LOAD_FAILED == -4);
 static_assert(sizeof(rsf_streamline_sr_options) == 28);
+static_assert(sizeof(rsf_streamline_sr_tag) == 24 && sizeof(rsf_streamline_sr_tags) == 224 &&
+    offsetof(rsf_streamline_sr_tags, entries) == 8);
+static_assert(sl::kBufferTypeScalingInputColor == 3 && sl::kBufferTypeScalingOutputColor == 4 &&
+    sl::kBufferTypeDepth == 0 && sl::kBufferTypeMotionVectors == 1 && sl::kBufferTypeExposure == 13 &&
+    sl::kBufferTypeTransparencyHint == 27 && sl::kBufferTypeBiasCurrentColorHint == 29 &&
+    sl::kBufferTypeColorBeforeTransparency == 40 && sl::kBufferTypeTransparencyLayer == 51);
+static_assert(sl::ResourceLifecycle::eOnlyValidNow == 0 && D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE == 0x40 &&
+    D3D12_RESOURCE_STATE_UNORDERED_ACCESS == 8);
 static_assert(sizeof(rsf_dlss_setup) == 88 && sizeof(rsf_dlss_support) == 36 &&
     sizeof(rsf_dlss_plan) == 40 && sizeof(rsf_dlss_frame) == 488);
 static_assert(RSF_DLSS_OK == 0 && RSF_DLSS_ERROR_INVALID_ARGUMENT == -1 &&
