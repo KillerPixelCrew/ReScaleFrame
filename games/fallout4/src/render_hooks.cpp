@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "render_hooks.h"
+#include "render_hooks_platform.h"
 #include "cpu_events.h"
 #include "render_inputs.h"
 #include "resolution.h"
@@ -516,14 +517,15 @@ void observe_world_begin() {
 #else
     const auto caller = uintptr_t(__builtin_return_address(0));
 #endif
-    const auto cpu = current_cpu_identity();
-    const bool selected = live.load(std::memory_order_acquire) && caller == image() + 0xc382a5 &&
-        cpu.session == host.session_id && cpu.source && !cpu.submission && !ordinary_world;
+    const auto cpu = cpu_identity_abi(current_cpu_identity());
     struct Restore {
         bool previous;
         ~Restore() { ordinary_world = previous; }
     } restore{ordinary_world};
-    if (selected && !world.frame_open && !world.auxiliary_open && !world.recovery_token && !resolution_busy() && begin_cpu_render()) {
+    const bool active=live.load(std::memory_order_acquire);
+    const NativeWorldAdmission candidate{caller, active ? host.session_id : 0, active,
+        ordinary_world, world.frame_open, world.auxiliary_open, world.recovery_token != 0};
+    if (rsf_fallout4_render_admit_world(&candidate, &cpu)) {
         ordinary_world=true;
         world={}; world.cpu=current_cpu_identity();
         try {
@@ -686,6 +688,39 @@ bool observe_taa(void* effect) {
     SetLastError(error);
     return result && !excluded;
 }
+bool read_present_owner(NativeRenderScopeKey* key, uintptr_t* outer_chain) noexcept {
+    Owner current{};
+    uintptr_t current_window{};
+    if (!owner(current) ||
+        !read(image()+0x38e13b0,&current_window,sizeof(current_window)) || current_window!=current.renderer+0x58 ||
+        !read(current_window+0x18,outer_chain,sizeof(*outer_chain))) return false;
+    *key={current.frame,current.view,current.window,current.context,current.chain};
+    return true;
+}
+void capture_recovery_output() {
+    // Preserve failed reduced-frame output for diagnostics independently of
+    // temporal/FG admission. The runtime rechecks the exact capture identity.
+    if (world.recovery_committed && capture_texture && capture_requested &&
+        capture_requested() && native_raster_snapshot_current(world.raster_snapshot)) {
+        NativeFramebuffer observed;
+        if (read_native_framebuffer(observed,report) && observed.native_frame==world.frame_pass.native_frame &&
+            observed.window_key==world.frame_pass.window_key && observed.context.Get()==world.context.Get() &&
+            same_object(observed.chain.Get(),world.chain.Get())) {
+            rsf_d3d11_host_capture capture{};
+            capture.struct_size=sizeof(capture); capture.abi_version=RSF_D3D11_HOST_ABI_VERSION;
+            capture.session_id=world.cpu.session; capture.native_frame=world.frame_pass.native_frame;
+            capture.view_key=world.frame_pass.view_key; capture.texture=observed.texture.Get();
+            capture.name="recovery_native_output";
+            capture.description="Native framebuffer before Present after reduced rendering; no temporal or FG admission implied";
+            capture.view=0; capture.scale=1;
+            (void)capture_texture(host.user,observed.context.Get(),&capture);
+        }
+    }
+}
+bool revalidate_present_screen() noexcept {
+    if (world.inputs) screen_facts(world.pass,false);
+    return world.refused;
+}
 void observe_native_present(void* renderer) {
     Entry entry;
     const auto error=GetLastError();
@@ -694,56 +729,40 @@ void observe_native_present(void* renderer) {
 #else
     const auto caller=uintptr_t(__builtin_return_address(0));
 #endif
+    CpuIdentity phase_owner{};
     bool cpu_phase=false;
-    if (caller==image()+0xc335ec && renderer==reinterpret_cast<void*>(image()+0x3a25d00) && world.submission_open) {
-        Owner current{};
-        uintptr_t current_window{},current_chain{};
-        const bool matched=owner(current) &&
-            read(image()+0x38e13b0,&current_window,sizeof(current_window)) && current_window==current.renderer+0x58 &&
-            read(current_window+0x18,&current_chain,sizeof(current_chain)) && current_chain==uintptr_t(world.chain.Get()) &&
-            current.frame==world.frame_pass.native_frame &&
-            current.view==world.frame_pass.view_key && current.window==world.frame_pass.window_key &&
-            current.context==uintptr_t(world.context.Get()) && current.chain==uintptr_t(world.chain.Get());
-        // Preserve failed reduced-frame output for diagnostics independently of
-        // temporal/FG admission. The runtime rechecks the exact capture identity.
-        if (matched && world.recovery_committed && capture_texture && capture_requested &&
-            capture_requested() && native_raster_snapshot_current(world.raster_snapshot)) {
-            NativeFramebuffer observed;
-            if (read_native_framebuffer(observed,report) && observed.native_frame==world.frame_pass.native_frame &&
-                observed.window_key==world.frame_pass.window_key && observed.context.Get()==world.context.Get() &&
-                same_object(observed.chain.Get(),world.chain.Get())) {
-                rsf_d3d11_host_capture capture{};
-                capture.struct_size=sizeof(capture); capture.abi_version=RSF_D3D11_HOST_ABI_VERSION;
-                capture.session_id=world.cpu.session; capture.native_frame=world.frame_pass.native_frame;
-                capture.view_key=world.frame_pass.view_key; capture.texture=observed.texture.Get();
-                capture.name="recovery_native_output";
-                capture.description="Native framebuffer before Present after reduced rendering; no temporal or FG admission implied";
-                capture.view=0; capture.scale=1;
-                (void)capture_texture(host.user,observed.context.Get(),&capture);
-            }
+    const NativeRenderScopeKey leased{world.frame_pass.native_frame,world.frame_pass.view_key,
+        world.frame_pass.window_key,uintptr_t(world.context.Get()),uintptr_t(world.chain.Get())};
+    const auto matched=rsf_fallout4_render_match_present(caller,uintptr_t(renderer),world.submission_open,
+        &leased,read_present_owner);
+    if (matched!=NativePresentMatch::unrelated) {
+        if (matched==NativePresentMatch::matched) capture_recovery_output();
+        const auto cpu=cpu_identity_abi(world.cpu);
+        switch (rsf_fallout4_render_admit_present(matched,host.session_id,&cpu,revalidate_present_screen)) {
+        case NativePresentAdmission::complete: {
+            close_submission();
+            // Close the same CPU phase after the original, even if it reenters.
+            phase_owner=world.cpu;
+            cpu_phase=begin_cpu_present_phase(phase_owner,world.frame_pass.native_frame,world.frame_pass.window_key);
+            static std::atomic_flag announced = ATOMIC_FLAG_INIT;
+            if (!announced.test_and_set(std::memory_order_relaxed))
+                report("Fallout4 native SUBMISSION end before original outer Present; FRAME/WINDOW remain open.");
+            break;
         }
-        if (matched && same_source()) {
-            // Earlier refusal stays sticky. No additional source is minted for retries.
-            if (world.inputs) screen_facts(world.pass,false);
-            if (!world.refused) {
-                close_submission();
-                cpu_phase=begin_cpu_present_phase(world.cpu,world.frame_pass.native_frame,world.frame_pass.window_key);
-                static std::atomic_flag announced = ATOMIC_FLAG_INIT;
-                if (!announced.test_and_set(std::memory_order_relaxed))
-                    report("Fallout4 native SUBMISSION end before original outer Present; FRAME/WINDOW remain open.");
-            } else {
-                diagnostic("Fallout4 pre-Present screen/refusal changed; submission completion withheld from FG.");
-            }
-        } else {
+        case NativePresentAdmission::refused:
+            diagnostic("Fallout4 pre-Present screen/refusal changed; submission completion withheld from FG.");
+            break;
+        case NativePresentAdmission::source_changed:
             // Missing completion refuses prepare; the old scope drains after Swap.
             world.refused=true;
             diagnostic("Fallout4 pre-Present source/owner changed; submission completion withheld from FG.");
+            break;
         }
     }
     SetLastError(error);
     native_present(renderer);
     const auto native_error=GetLastError();
-    if (cpu_phase) end_cpu_present_phase(world.cpu);
+    if (cpu_phase) end_cpu_present_phase(phase_owner);
     SetLastError(native_error);
 }
 struct Hook {

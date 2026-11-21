@@ -2972,7 +2972,7 @@ pub(crate) unsafe extern "C" fn rsf_fallout4_cpu_current_identity(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_cpu_begin_render() -> bool {
+pub(crate) extern "C" fn rsf_fallout4_cpu_begin_render() -> bool {
     begin_render()
 }
 

@@ -940,7 +940,7 @@ extern "C" fn rsf_fallout4_resolution_finish_source(leaves: &Leaves) -> bool {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_resolution_busy() -> bool {
+pub(crate) extern "C" fn rsf_fallout4_resolution_busy() -> bool {
     OWNERS.load(Ordering::Acquire) != 0
 }
 
