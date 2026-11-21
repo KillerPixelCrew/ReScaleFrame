@@ -1,7 +1,10 @@
 # Runtime shader patch service
 
 The generic C API is `include/rescaleframe/shader_patch.h`. The Runtime exports
-`rsf_get_shader_patch_api`; callers borrow returned metadata/bytes until the stated
+`rsf_get_shader_patch_api`. Its owner is Rust, in
+`runtime/orchestrator/src/shader_patch.rs`; `src/platform.cpp` holds only the yyjson,
+D3DCompiler, D3D11 and MinHook calls. See [the port notes](../../docs/research/rust-shader-patch.md).
+Callers borrow returned metadata/bytes until the stated
 session lifetime and release returned D3D11 COM objects themselves. Devices,
 contexts and compiler entry points are borrowed. Calls use the graphics owner
 thread; prepare serializes one session. Root tags and intended bindings are pack
@@ -18,6 +21,8 @@ Synthetic checks (includes real WARP readback):
 cmake --build --preset windows-release-vs18 --target rsf_shader_patch_device_test
 ctest --preset windows-release-vs18 -R shader_patch_synthetic_device
 ```
+
+`rsf_shader_patch_device_test.exe --cpu` stops before creating the WARP device.
 
 Corpus parity is opt-in and reads only an ignored local corpus. Choose a fresh
 oracle destination, because the development tool refuses to overwrite evidence:

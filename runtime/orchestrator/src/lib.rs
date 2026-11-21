@@ -134,6 +134,10 @@ mod scene_abi;
 #[cfg(windows)]
 mod settings_store;
 #[cfg(windows)]
+mod shader_patch;
+#[cfg(windows)]
+mod shader_patch_abi;
+#[cfg(windows)]
 mod shared_surface;
 #[cfg(windows)]
 mod sr12;

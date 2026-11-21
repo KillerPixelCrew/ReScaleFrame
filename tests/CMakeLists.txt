@@ -13,7 +13,7 @@ target_include_directories(rsf_shader_patch_test PRIVATE ../runtime/shader_patch
 target_link_libraries(rsf_shader_patch_test PRIVATE rsf_shader_patch rsf_build_options)
 add_executable(rsf_shader_patch_device_test shader_patch_device.cpp)
 target_include_directories(rsf_shader_patch_device_test PRIVATE ../runtime/shader_patch/src)
-target_link_libraries(rsf_shader_patch_device_test PRIVATE rsf_shader_patch rsf_build_options d3d11 d3dcompiler dxgi)
+target_link_libraries(rsf_shader_patch_device_test PRIVATE rsf_shader_patch rsf_build_options bcrypt d3d11 d3dcompiler dxgi)
 add_test(NAME shader_patch_synthetic_device COMMAND rsf_shader_patch_device_test)
 include("${CMAKE_CURRENT_SOURCE_DIR}/d3d11_present_api.cmake")
 add_executable(rsf_native_window_test native_window.cpp)

@@ -8,5 +8,5 @@ licence are staged under vendor/shader-patch/yyjson; packages include its MIT no
 Zstandard (BSD option, f8745da6ff1ad1e7bab384bd1f9d742439278e99) were downloaded
 under vendor/shader-patch for evaluation and retain their upstream licences.
 Neither is linked or copied into the runtime. The synthetic DXBC checksum uses
-a first-party MD5 compression implementation with DXBC's documented padding;
+a first-party Rust MD5 compression implementation with DXBC's documented padding;
 3Dmigoto Assembler.cpp was an algorithm reference, not imported source.
