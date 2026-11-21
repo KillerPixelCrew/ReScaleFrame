@@ -125,3 +125,45 @@ pointer was already non-null. It now allows a retry for the same target
 and detour only. Source comparison matched every role, vtable slot,
 callback and forwarded argument. The new refusal case and GPU fixtures
 remain unrun. Native resource observations still supply capture metadata.
+
+## Capture command-list observations
+
+Compared the callbacks in `native_capture.cpp` at `9260a14` with the Rust
+recordings owner. Successful direct-list creation supplies the returned list
+and initial PSO after hook registration. Successful Reset advances that
+same list's generation, clears its resource states and RTV, and records
+the new initial PSO. SetPipelineState records its supplied PSO after the
+original call. CreateRenderTargetView records the CPU descriptor handle
+and resource. OMSetRenderTargets resolves the first supplied handle after
+the original call. Later writes to that descriptor only affect later
+binds. Empty and unidentified binds clear the recorded target.
+
+Graphics PSO creation and library load, including both stream variants,
+observe successful results. The native parser keeps D3D12's typed stream
+layout, alignment, tag coverage and length checks. It lends the VS and PS
+byte spans to Rust before taking the capture mutex. Rust calculates the
+same reflected CRC-32 over the entire spans with polynomial
+`0xedb88320`, an all-ones initial value and a final complement. The
+blend fields still come from render target zero. A successful result
+with an unsupported descriptor or unusable shader span now discards any
+prior facts at the returned address. A failed D3D12 call leaves the
+observations alone.
+
+The outer draw callbacks still supply their return address and capture
+the stack at the native observation site. The draw selects the same
+leased backbuffer and records the same GPU copy. Its copied PSO facts
+travel with the readback sidecar and the draw record, which also retains
+the PSO address and the recorded list generation. Rust keeps at most
+4,096 draw records, clears them on arm and lends them to the existing
+bundle writer under the native mutex. A refused metadata allocation
+logs the snapshot failure and leaves the already-recorded copy and its
+receipt intact. The process-lived address maps reserve fallibly and hold
+no COM references.
+
+Source comparison covered the stream tag list, fixed-width record layouts,
+CRC parameters, post-original callback guards, and unchanged copy and
+submission functions. Formatting used the Rust 1.94.1 formatter. Locked
+offline workspace metadata and Git whitespace checks passed. The existing
+descriptor-copy and object-retirement coverage gaps remain. Native
+compilation and linking, tests, Clippy, device fixtures and live capture
+remain user-owned.

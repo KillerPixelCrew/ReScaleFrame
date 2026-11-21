@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Names and writes completed image readbacks and copied camera records.
+use super::recordings::Pipeline;
 use std::ffi::{CStr, OsString, c_char};
 use std::fmt;
 use std::fs;
@@ -14,22 +15,6 @@ pub(super) fn output_directory(directory: &[u16]) -> PathBuf {
 fn input_stem(pid: u32, sequence: u32, index: u32, role: &str) -> String {
     format!("input-{pid}-{sequence:03}-{index:03}-{role}")
 }
-
-#[repr(C)]
-pub(super) struct Pipeline {
-    ps: u32,
-    vs: u32,
-    blend: i32,
-    src: u32,
-    dst: u32,
-    op: u32,
-    src_alpha: u32,
-    dst_alpha: u32,
-    op_alpha: u32,
-    write_mask: u32,
-}
-
-const _: () = assert!(size_of::<Pipeline>() == 40);
 
 impl fmt::Display for Pipeline {
     fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {

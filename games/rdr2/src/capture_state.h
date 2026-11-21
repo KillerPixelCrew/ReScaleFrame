@@ -59,6 +59,12 @@ typedef struct rsf_rdr2_capture_pipeline {
     uint32_t src, dst, op, src_alpha, dst_alpha, op_alpha, write_mask;
 } rsf_rdr2_capture_pipeline;
 
+typedef struct rsf_rdr2_capture_draw_binding {
+    void* target;
+    uint64_t pso;
+    rsf_rdr2_capture_pipeline pipeline;
+} rsf_rdr2_capture_draw_binding;
+
 typedef struct rsf_rdr2_capture_image {
     uint64_t list, generation, submission, queue, fence_value, tick, resource, caller;
     uint32_t sequence, ordinal, width, height, pitch, format, input_index, footprint_format;
@@ -119,6 +125,8 @@ rsf_rdr2_capture_state* rsf_rdr2_capture_create(void);
 void rsf_rdr2_capture_request(rsf_rdr2_capture_state*);
 bool rsf_rdr2_capture_active(const rsf_rdr2_capture_state*);
 bool rsf_rdr2_capture_has_inputs(const rsf_rdr2_capture_state*);
+/* The native parser lends shader bytes through the hash call, before taking the capture mutex. */
+bool rsf_rdr2_capture_hash_shader(const uint8_t* bytes, size_t length, uint32_t* out);
 /* Only the diagnostic poll thread samples the key and consumes the request file. */
 void rsf_rdr2_capture_poll_request(rsf_rdr2_capture_state*, const uint16_t* request);
 /* The caller lends UTF-16 directory units, the role and the current mapping. */
@@ -138,7 +146,7 @@ void rsf_rdr2_capture_arm(rsf_rdr2_capture_state*, uint64_t tick);
 void rsf_rdr2_capture_end_draws(rsf_rdr2_capture_state*);
 bool rsf_rdr2_capture_timeout(rsf_rdr2_capture_state*, uint64_t tick);
 void rsf_rdr2_capture_progress_get(const rsf_rdr2_capture_state*, rsf_rdr2_capture_progress*);
-uint32_t rsf_rdr2_capture_commit_draw(rsf_rdr2_capture_state*, uint32_t metadata_count);
+uint32_t rsf_rdr2_capture_commit_draw(rsf_rdr2_capture_state*);
 uint32_t rsf_rdr2_capture_reserve_input(rsf_rdr2_capture_state*);
 void rsf_rdr2_capture_begin_input(rsf_rdr2_capture_state*);
 void rsf_rdr2_capture_end_input(rsf_rdr2_capture_state*);
@@ -147,13 +155,24 @@ void rsf_rdr2_capture_write_failed(rsf_rdr2_capture_state*);
 bool rsf_rdr2_capture_can_publish(const rsf_rdr2_capture_state*, bool readbacks_empty);
 void rsf_rdr2_capture_published(rsf_rdr2_capture_state*);
 
+/* Observation identities are borrowed from the native callbacks and hold no COM reference.
+   Null pipeline facts discard an older record. A null handle clears the bound target. */
+void rsf_rdr2_capture_record_pipeline(rsf_rdr2_capture_state*, void* pso, const rsf_rdr2_capture_pipeline*);
+void rsf_rdr2_capture_record_rtv(rsf_rdr2_capture_state*, uintptr_t handle, void* resource);
+void rsf_rdr2_capture_bind_rtv(rsf_rdr2_capture_state*, void* list, const uintptr_t* first_handle);
+void rsf_rdr2_capture_bind_pipeline(rsf_rdr2_capture_state*, void* list, void* pso);
+bool rsf_rdr2_capture_get_draw_binding(const rsf_rdr2_capture_state*, void* list, rsf_rdr2_capture_draw_binding*);
+bool rsf_rdr2_capture_record_draw(rsf_rdr2_capture_state*, const rsf_rdr2_capture_draw*);
+/* The draw array is borrowed through the bundle call while the same mutex is held. */
+const rsf_rdr2_capture_draw* rsf_rdr2_capture_draws(const rsf_rdr2_capture_state*, size_t* count);
+
 /* Commands, generations, and state transitions. These calls also use the native capture mutex.
    UINT32_MAX represents a state the probe cannot prove. */
 void rsf_rdr2_capture_initial_state(rsf_rdr2_capture_state*, void* resource, uint32_t state);
 void rsf_rdr2_capture_transition(rsf_rdr2_capture_state*, void* list, void* resource,
     uint32_t subresource, uint32_t after, bool begin_only);
 void rsf_rdr2_capture_alias(rsf_rdr2_capture_state*, void* list, void* resource);
-void rsf_rdr2_capture_reset_list(rsf_rdr2_capture_state*, void* list);
+void rsf_rdr2_capture_reset_list(rsf_rdr2_capture_state*, void* list, void* pso);
 uint32_t rsf_rdr2_capture_resource_state(const rsf_rdr2_capture_state*, void* list, void* resource);
 uint64_t rsf_rdr2_capture_list_generation(const rsf_rdr2_capture_state*, void* list);
 void rsf_rdr2_capture_stamp_copy(rsf_rdr2_capture_state*, void* list, rsf_rdr2_capture_readback*);
@@ -195,6 +214,7 @@ static_assert(sizeof(rsf_rdr2_capture_gpu_ops) == 40 && sizeof(rsf_rdr2_capture_
 static_assert(sizeof(rsf_rdr2_capture_gpu_proof) == 16);
 static_assert(RSF_RDR2_CAPTURE_HOOK_COUNT == 16 && sizeof(rsf_rdr2_capture_hook_ops) == 32);
 static_assert(sizeof(rsf_rdr2_capture_pipeline) == 40);
+static_assert(sizeof(rsf_rdr2_capture_draw_binding) == 56 && offsetof(rsf_rdr2_capture_draw_binding, pipeline) == 16);
 static_assert(sizeof(rsf_rdr2_capture_image) == 160);
 static_assert(sizeof(rsf_rdr2_capture_draw) == 192 && offsetof(rsf_rdr2_capture_draw, stack) == 88);
 static_assert(sizeof(rsf_rdr2_capture_temporal) == 88);

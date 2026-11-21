@@ -21,6 +21,7 @@
 #include <memory>
 #include <iterator>
 #include <mutex>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 #include <string>
@@ -49,17 +50,13 @@ constexpr rsf_rdr2_capture_gpu_ops gpu_ops{
         return buffer.Detach();
     },
 };
-Pipeline pipeline_facts(uint32_t ps, uint32_t vs, const D3D12_RENDER_TARGET_BLEND_DESC& b) noexcept
+Pipeline blend_facts(const D3D12_RENDER_TARGET_BLEND_DESC& b) noexcept
 {
-    return {ps, vs, b.BlendEnable, static_cast<uint32_t>(b.SrcBlend), static_cast<uint32_t>(b.DestBlend),
+    return {0, 0, b.BlendEnable, static_cast<uint32_t>(b.SrcBlend), static_cast<uint32_t>(b.DestBlend),
         static_cast<uint32_t>(b.BlendOp), static_cast<uint32_t>(b.SrcBlendAlpha),
         static_cast<uint32_t>(b.DestBlendAlpha), static_cast<uint32_t>(b.BlendOpAlpha), b.RenderTargetWriteMask};
 }
 constexpr auto unknown_state = static_cast<D3D12_RESOURCE_STATES>(~0u);
-struct List {
-    ID3D12Resource* target{};
-    ID3D12PipelineState* pso{};
-};
 struct Shot : rsf_rdr2_capture_readback {
     rsf_rdr2_capture_gpu_leases gpu{};
     uint64_t resource{}, tick{}, caller{};
@@ -113,13 +110,9 @@ struct State {
     wchar_t directory[MAX_PATH]{}, request[MAX_PATH]{}, log[MAX_PATH]{};
     uintptr_t base{};
     rsf_rdr2_capture_state* capture{};
-    std::unordered_map<SIZE_T, ID3D12Resource*> rtvs;
-    std::unordered_map<ID3D12GraphicsCommandList*, List> lists;
-    std::unordered_map<ID3D12PipelineState*, Pipeline> pipelines;
     std::vector<std::shared_ptr<Shot>> shots;
     std::shared_ptr<Shot> tail;
     std::unordered_map<void*, uint32_t> sr_features;
-    std::vector<DrawEvent> draws;
     std::vector<std::shared_ptr<Temporal>> temporal;
     std::unordered_map<void*, Presentation> presentation;
     Presentation captured_presentation;
@@ -145,15 +138,18 @@ void log(const char* format, ...) noexcept
     va_list args; va_start(args, format); vfprintf(f, format, args); va_end(args);
     fputc('\n', f); fclose(f);
 }
-uint32_t crc(const D3D12_SHADER_BYTECODE& code) noexcept
+std::optional<Pipeline> hash_pipeline(const D3D12_SHADER_BYTECODE& ps, const D3D12_SHADER_BYTECODE& vs,
+    Pipeline pipeline) noexcept
 {
-    uint32_t value = ~0u;
-    const auto* bytes = static_cast<const unsigned char*>(code.pShaderBytecode);
-    for (SIZE_T i = 0; i < code.BytecodeLength; ++i) {
-        value ^= bytes[i];
-        for (unsigned bit = 0; bit < 8; ++bit) value = (value >> 1) ^ (0xedb88320u & (0u - (value & 1)));
-    }
-    return ~value;
+    if (!rsf_rdr2_capture_hash_shader(static_cast<const uint8_t*>(ps.pShaderBytecode), ps.BytecodeLength, &pipeline.ps) ||
+        !rsf_rdr2_capture_hash_shader(static_cast<const uint8_t*>(vs.pShaderBytecode), vs.BytecodeLength, &pipeline.vs))
+        return std::nullopt;
+    return pipeline;
+}
+void remember_pipeline(void* result, const std::optional<Pipeline>& facts)
+{
+    std::lock_guard<std::mutex> lock(g->mutex);
+    rsf_rdr2_capture_record_pipeline(g->capture, result, facts ? &*facts : nullptr);
 }
 static_assert(MH_OK == 0 && MH_ERROR_ENABLED == 5 && MH_UNKNOWN == -1);
 constexpr rsf_rdr2_capture_hook_ops hook_ops{
@@ -205,30 +201,29 @@ template<class T> bool stream_value(const unsigned char* data, size_t remaining,
     std::memcpy(&value, data + offsetof(StreamPayload<T>, value), sizeof(T));
     return true;
 }
-void remember_stream(const D3D12_PIPELINE_STATE_STREAM_DESC* desc, void* result)
+std::optional<Pipeline> stream_facts(const D3D12_PIPELINE_STATE_STREAM_DESC* desc) noexcept
 {
-    if (!desc || !result || !desc->pPipelineStateSubobjectStream) return;
+    if (!desc || !desc->pPipelineStateSubobjectStream) return std::nullopt;
+    D3D12_SHADER_BYTECODE ps{}, vs{};
     Pipeline pipeline{};
     const auto* data = static_cast<const unsigned char*>(desc->pPipelineStateSubobjectStream);
     for (size_t offset = 0; offset < desc->SizeInBytes;) {
         const auto remaining = desc->SizeInBytes - offset;
-        if (remaining < sizeof(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE)) return;
+        if (remaining < sizeof(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE)) return std::nullopt;
         D3D12_PIPELINE_STATE_SUBOBJECT_TYPE type{};
         std::memcpy(&type, data + offset, sizeof(type));
         size_t size{};
         switch (type) {
         case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_VS:
         case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PS: {
-            D3D12_SHADER_BYTECODE shader{};
-            if (!stream_value(data + offset, remaining, shader, size)) return;
-            if (type == D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_VS) pipeline.vs = crc(shader);
-            else pipeline.ps = crc(shader);
+            auto& shader = type == D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_VS ? vs : ps;
+            if (!stream_value(data + offset, remaining, shader, size)) return std::nullopt;
             break;
         }
         case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_BLEND: {
             D3D12_BLEND_DESC blend{};
-            if (!stream_value(data + offset, remaining, blend, size)) return;
-            pipeline = pipeline_facts(pipeline.ps, pipeline.vs, blend.RenderTarget[0]);
+            if (!stream_value(data + offset, remaining, blend, size)) return std::nullopt;
+            pipeline = blend_facts(blend.RenderTarget[0]);
             break;
         }
         case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DS:
@@ -253,47 +248,44 @@ void remember_stream(const D3D12_PIPELINE_STATE_STREAM_DESC* desc, void* result)
         case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL_FORMAT:
         case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_NODE_MASK:
         case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_FLAGS: size = sizeof(StreamItem<UINT>); break;
-        default: return; // Unknown stream layouts remain explicitly unidentified.
+        default: return std::nullopt; // Unknown stream layouts remain explicitly unidentified.
         }
-        if (size > remaining) return;
+        if (size > remaining) return std::nullopt;
         offset += size;
     }
-    std::lock_guard<std::mutex> lock(g->mutex);
-    g->pipelines[static_cast<ID3D12PipelineState*>(result)] = pipeline;
+    return hash_pipeline(ps, vs, pipeline);
 }
 HRESULT STDMETHODCALLTYPE create_stream_pso(ID3D12Device2* device,
     const D3D12_PIPELINE_STATE_STREAM_DESC* desc, REFIID iid, void** out)
 {
     const auto hr = original<CreateStreamPso>(RSF_RDR2_CAPTURE_CREATE_STREAM_PSO)(device, desc, iid, out);
-    if (SUCCEEDED(hr) && out) remember_stream(desc, *out);
+    if (SUCCEEDED(hr) && out && *out) remember_pipeline(*out, stream_facts(desc));
     return hr;
 }
 HRESULT STDMETHODCALLTYPE load_stream_pso(ID3D12PipelineLibrary1* library, LPCWSTR name,
     const D3D12_PIPELINE_STATE_STREAM_DESC* desc, REFIID iid, void** out)
 {
     const auto hr = original<LoadStreamPso>(RSF_RDR2_CAPTURE_LOAD_STREAM_PSO)(library, name, desc, iid, out);
-    if (SUCCEEDED(hr) && out) remember_stream(desc, *out);
+    if (SUCCEEDED(hr) && out && *out) remember_pipeline(*out, stream_facts(desc));
     return hr;
 }
 
-void remember_pso(const D3D12_GRAPHICS_PIPELINE_STATE_DESC* desc, void* result)
+std::optional<Pipeline> graphics_pipeline_facts(const D3D12_GRAPHICS_PIPELINE_STATE_DESC* desc) noexcept
 {
-    if (!desc || !result) return;
-    const auto pipeline = pipeline_facts(crc(desc->PS), crc(desc->VS), desc->BlendState.RenderTarget[0]);
-    std::lock_guard<std::mutex> lock(g->mutex);
-    g->pipelines[static_cast<ID3D12PipelineState*>(result)] = pipeline;
+    if (!desc) return std::nullopt;
+    return hash_pipeline(desc->PS, desc->VS, blend_facts(desc->BlendState.RenderTarget[0]));
 }
 HRESULT STDMETHODCALLTYPE create_pso(ID3D12Device* d, const D3D12_GRAPHICS_PIPELINE_STATE_DESC* desc, REFIID iid, void** out)
 {
     const auto hr = original<CreatePso>(RSF_RDR2_CAPTURE_CREATE_PSO)(d, desc, iid, out);
-    if (SUCCEEDED(hr) && out) remember_pso(desc, *out);
+    if (SUCCEEDED(hr) && out && *out) remember_pipeline(*out, graphics_pipeline_facts(desc));
     return hr;
 }
 HRESULT STDMETHODCALLTYPE load_pso(ID3D12PipelineLibrary* library, LPCWSTR name,
     const D3D12_GRAPHICS_PIPELINE_STATE_DESC* desc, REFIID iid, void** out)
 {
     const auto hr = original<LoadPso>(RSF_RDR2_CAPTURE_LOAD_PSO)(library, name, desc, iid, out);
-    if (SUCCEEDED(hr) && out) remember_pso(desc, *out);
+    if (SUCCEEDED(hr) && out && *out) remember_pipeline(*out, graphics_pipeline_facts(desc));
     return hr;
 }
 HRESULT STDMETHODCALLTYPE create_library(ID3D12Device1* d, const void* blob, SIZE_T size, REFIID iid, void** out)
@@ -312,7 +304,7 @@ void STDMETHODCALLTYPE create_rtv(ID3D12Device* d, ID3D12Resource* resource,
 {
     original<CreateRtv>(RSF_RDR2_CAPTURE_CREATE_RTV)(d, resource, desc, handle);
     std::lock_guard<std::mutex> lock(g->mutex);
-    g->rtvs[handle.ptr] = resource;
+    rsf_rdr2_capture_record_rtv(g->capture, handle.ptr, resource);
 }
 HRESULT STDMETHODCALLTYPE create_committed(ID3D12Device* d, const D3D12_HEAP_PROPERTIES* heap,
     D3D12_HEAP_FLAGS flags, const D3D12_RESOURCE_DESC* desc, D3D12_RESOURCE_STATES state,
@@ -357,24 +349,22 @@ HRESULT STDMETHODCALLTYPE reset(ID3D12GraphicsCommandList* list, ID3D12CommandAl
     const auto hr = original<Reset>(RSF_RDR2_CAPTURE_RESET)(list, allocator, pso);
     if (SUCCEEDED(hr)) {
         std::lock_guard<std::mutex> lock(g->mutex);
-        auto& state = g->lists[list];
-        state.target = nullptr; state.pso = pso;
-        rsf_rdr2_capture_reset_list(g->capture, list);
+        rsf_rdr2_capture_reset_list(g->capture, list, pso);
     }
     return hr;
 }
 void STDMETHODCALLTYPE set_pso(ID3D12GraphicsCommandList* list, ID3D12PipelineState* pso)
 {
     original<SetPso>(RSF_RDR2_CAPTURE_SET_PSO)(list, pso);
-    std::lock_guard<std::mutex> lock(g->mutex); g->lists[list].pso = pso;
+    std::lock_guard<std::mutex> lock(g->mutex);
+    rsf_rdr2_capture_bind_pipeline(g->capture, list, pso);
 }
 void STDMETHODCALLTYPE set_rtv(ID3D12GraphicsCommandList* list, UINT count,
     const D3D12_CPU_DESCRIPTOR_HANDLE* handles, BOOL contiguous, const D3D12_CPU_DESCRIPTOR_HANDLE* depth)
 {
     original<SetRtv>(RSF_RDR2_CAPTURE_SET_RTV)(list, count, handles, contiguous, depth);
     std::lock_guard<std::mutex> lock(g->mutex);
-    auto found = count && handles ? g->rtvs.find(handles[0].ptr) : g->rtvs.end();
-    g->lists[list].target = found != g->rtvs.end() ? found->second : nullptr;
+    rsf_rdr2_capture_bind_rtv(g->capture, list, count && handles ? &handles[0].ptr : nullptr);
 }
 bool copy_resource(ID3D12GraphicsCommandList* list, ID3D12Resource* target,
     D3D12_RESOURCE_STATES before, const std::shared_ptr<Shot>& shot)
@@ -538,11 +528,11 @@ catch (...) { log("NGX input observation failed"); }
 void snapshot(ID3D12GraphicsCommandList* list, UINT vertices, UINT instances, void* caller) noexcept try
 {
     if (!rsf_rdr2_capture_active(g->capture)) return;
-    std::lock_guard<std::mutex> lock(g->mutex);
+    std::unique_lock<std::mutex> lock(g->mutex);
     if (!rsf_rdr2_capture_active(g->capture)) return;
-    const auto state = g->lists.find(list);
-    if (state == g->lists.end() || !state->second.target) return;
-    auto* target = state->second.target;
+    rsf_rdr2_capture_draw_binding binding{};
+    if (!rsf_rdr2_capture_get_draw_binding(g->capture, list, &binding)) return;
+    auto* target = static_cast<ID3D12Resource*>(binding.target);
     if (!rsf_rdr2_capture_gpu_accepts_target(g->capture, target)) return;
     const auto progress = capture_progress();
     const bool reuse_tail = progress.reuse_tail != 0;
@@ -558,17 +548,18 @@ void snapshot(ID3D12GraphicsCommandList* list, UINT vertices, UINT instances, vo
     shot->sequence = progress.sequence; shot->ordinal = progress.draws;
     shot->vertices = vertices; shot->instances = instances;
     shot->caller = reinterpret_cast<uint64_t>(caller);
-    const auto pipeline = g->pipelines.find(state->second.pso);
-    shot->pipeline = {};
-    if (pipeline != g->pipelines.end()) shot->pipeline = pipeline->second;
+    shot->pipeline = binding.pipeline;
     rsf_rdr2_capture_gpu_select_target(g->capture, target);
-    const auto action = rsf_rdr2_capture_commit_draw(g->capture, static_cast<uint32_t>(g->draws.size()));
+    const auto action = rsf_rdr2_capture_commit_draw(g->capture);
     if (action & RSF_RDR2_CAPTURE_KEEP_TAIL) g->tail = shot;
     if (action & RSF_RDR2_CAPTURE_SAVE_DRAW) {
         DrawEvent event{shot->ordinal, shot->frame, vertices, instances, reinterpret_cast<uint64_t>(list),
-            shot->generation, shot->caller, reinterpret_cast<uint64_t>(state->second.pso), shot->pipeline, {}, 0};
+            shot->generation, shot->caller, binding.pso, shot->pipeline, {}, 0};
         event.stack_size = CaptureStackBackTrace(1, static_cast<DWORD>(std::size(event.stack)), event.stack, nullptr);
-        g->draws.push_back(event);
+        if (!rsf_rdr2_capture_record_draw(g->capture, &event)) {
+            lock.unlock();
+            log("snapshot failed");
+        }
     }
 }
 catch (...) { log("snapshot failed"); }
@@ -596,10 +587,7 @@ HRESULT STDMETHODCALLTYPE create_list(ID3D12Device* d, UINT node, D3D12_COMMAND_
         bind(RSF_RDR2_CAPTURE_BARRIER, *out, &barriers);
         bind(RSF_RDR2_CAPTURE_SET_RTV, *out, &set_rtv);
         std::lock_guard<std::mutex> lock(g->mutex);
-        auto* list = static_cast<ID3D12GraphicsCommandList*>(*out);
-        auto& state = g->lists[list];
-        state.target = nullptr; state.pso = pso;
-        rsf_rdr2_capture_reset_list(g->capture, list);
+        rsf_rdr2_capture_reset_list(g->capture, *out, pso);
     }
     return hr;
 }
@@ -731,7 +719,7 @@ void before_present(void* pointer) noexcept try
         auto presentation = g->presentation[identity(swapchain)];
         if (!rsf_rdr2_capture_gpu_arm_backbuffers(g->capture, swapchain, desc.BufferCount, &gpu_ops)) return;
         rsf_rdr2_capture_arm(g->capture, GetTickCount64());
-        g->tail.reset(); g->draws.clear(); g->temporal.clear();
+        g->tail.reset(); g->temporal.clear();
         g->captured_presentation = std::move(presentation);
         g->captured_presentation.format = desc.BufferDesc.Format;
         g->captured_presentation.width = desc.BufferDesc.Width; g->captured_presentation.height = desc.BufferDesc.Height;
@@ -764,7 +752,7 @@ bool write_shot(const Shot& s) noexcept
     s.buffer()->Unmap(0, &empty);
     return ok;
 }
-bool write_bundle() noexcept
+bool write_bundle(const DrawEvent* draws, size_t draw_count) noexcept
 {
     const auto* directory = reinterpret_cast<const uint16_t*>(g->directory);
     const auto directory_len = wcslen(g->directory);
@@ -781,7 +769,7 @@ bool write_bundle() noexcept
         {presentation.format, presentation.width, presentation.height, presentation.color_space,
             presentation.color_space_set, presentation.metadata_type,
             presentation.metadata.data(), presentation.metadata.size()},
-        g->draws.data(), g->draws.size(), g->temporal.size(), pid,
+        draws, draw_count, g->temporal.size(), pid,
     };
     return rsf_rdr2_capture_write_bundle(&bundle,
         [](size_t index, rsf_rdr2_capture_temporal_view* out) noexcept {
@@ -831,9 +819,11 @@ DWORD WINAPI poll(void*) noexcept
         {
             std::lock_guard<std::mutex> lock(g->mutex);
             if (rsf_rdr2_capture_can_publish(g->capture, g->shots.empty())) {
-                const bool ok = write_bundle();
+                size_t draw_count{};
+                const auto* draws = rsf_rdr2_capture_draws(g->capture, &draw_count);
+                const bool ok = write_bundle(draws, draw_count);
                 const auto progress = capture_progress();
-                log("capture %u bundle saved=%d input_frames=%zu draws=%zu readbacks=%u",progress.sequence,ok,g->temporal.size(),g->draws.size(),progress.written);
+                log("capture %u bundle saved=%d input_frames=%zu draws=%zu readbacks=%u",progress.sequence,ok,g->temporal.size(),draw_count,progress.written);
                 rsf_rdr2_capture_published(g->capture);
                 g->tail.reset();
             }

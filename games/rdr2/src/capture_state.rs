@@ -17,7 +17,7 @@ use gpu_leases::Gpu;
 use recordings::Recordings;
 
 const MAX_DRAW_COPIES: u32 = 64;
-const MAX_DRAW_METADATA: u32 = 4096;
+const MAX_DRAW_METADATA: usize = 4096;
 const INPUT_FRAMES: u32 = 4;
 const CAPTURE_TIMEOUT_MS: u64 = 5000;
 const SAVE_DRAW: u32 = 1;
@@ -150,6 +150,7 @@ unsafe extern "C" fn rsf_rdr2_capture_arm(owner: &Capture, tick: u64) {
         dirty: true,
         ..Ledger::default()
     };
+    unsafe { &mut *owner.recordings.get() }.draws.clear();
     owner.pending.store(false, Ordering::Release);
     owner
         .inputs_remaining
@@ -193,13 +194,14 @@ unsafe extern "C" fn rsf_rdr2_capture_progress_get(owner: &Capture, out: &mut Pr
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_commit_draw(owner: &Capture, metadata_count: u32) -> u32 {
+unsafe extern "C" fn rsf_rdr2_capture_commit_draw(owner: &Capture) -> u32 {
     let ledger = unsafe { &mut *owner.ledger.get() };
+    let draw_count = unsafe { &*owner.recordings.get() }.draws.len();
     let mut action = 0;
     if ledger.draws == MAX_DRAW_COPIES - 1 {
         action |= KEEP_TAIL;
     }
-    if metadata_count < MAX_DRAW_METADATA {
+    if draw_count < MAX_DRAW_METADATA {
         action |= SAVE_DRAW;
     } else {
         ledger.draw_overflow = true;
@@ -288,14 +290,14 @@ mod tests {
         let owner = Capture::new();
         unsafe {
             rsf_rdr2_capture_arm(&owner, 0);
-            for count in 0..MAX_DRAW_COPIES - 1 {
-                assert_eq!(rsf_rdr2_capture_commit_draw(&owner, count), SAVE_DRAW);
+            for _ in 0..MAX_DRAW_COPIES - 1 {
+                assert_eq!(rsf_rdr2_capture_commit_draw(&owner), SAVE_DRAW);
             }
-            assert_eq!(
-                rsf_rdr2_capture_commit_draw(&owner, MAX_DRAW_COPIES - 1),
-                SAVE_DRAW | KEEP_TAIL
-            );
-            assert_eq!(rsf_rdr2_capture_commit_draw(&owner, MAX_DRAW_METADATA), 0);
+            assert_eq!(rsf_rdr2_capture_commit_draw(&owner), SAVE_DRAW | KEEP_TAIL);
+            (&mut *owner.recordings.get())
+                .draws
+                .resize(MAX_DRAW_METADATA, recordings::Draw::default());
+            assert_eq!(rsf_rdr2_capture_commit_draw(&owner), 0);
         }
     }
 }

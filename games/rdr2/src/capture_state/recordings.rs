@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-//! Resource and generation facts for the native capture mutex. No map holds a COM reference.
-use super::{Capture, allocate};
+//! Command-list observations and copied draw facts ordered by the native capture mutex.
+use super::{Capture, MAX_DRAW_METADATA, allocate};
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::ptr::null_mut;
@@ -8,17 +8,67 @@ use std::ptr::null_mut;
 const UNKNOWN: u32 = u32::MAX;
 type States = HashMap<usize, u32>;
 
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub(super) struct Pipeline {
+    pub(super) ps: u32,
+    pub(super) vs: u32,
+    pub(super) blend: i32,
+    pub(super) src: u32,
+    pub(super) dst: u32,
+    pub(super) op: u32,
+    pub(super) src_alpha: u32,
+    pub(super) dst_alpha: u32,
+    pub(super) op_alpha: u32,
+    pub(super) write_mask: u32,
+}
+
+#[repr(C)]
+struct DrawBinding {
+    target: *mut c_void,
+    pso: u64,
+    pipeline: Pipeline,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+#[cfg_attr(test, derive(Default))]
+pub(super) struct Draw {
+    pub(super) ordinal: u32,
+    pub(super) frame: u32,
+    pub(super) vertices: u32,
+    pub(super) instances: u32,
+    pub(super) list: u64,
+    pub(super) generation: u64,
+    pub(super) caller: u64,
+    pub(super) pso: u64,
+    pub(super) pipeline: Pipeline,
+    pub(super) stack: [*mut c_void; 12],
+    pub(super) stack_size: u32,
+}
+
+const _: () = {
+    assert!(size_of::<Pipeline>() == 40);
+    assert!(size_of::<DrawBinding>() == 56 && std::mem::offset_of!(DrawBinding, pipeline) == 16);
+    assert!(size_of::<Draw>() == 192 && std::mem::offset_of!(Draw, stack) == 88);
+};
+
 #[derive(Default)]
 struct Recording {
     generation: u64,
     states: States,
+    target: *mut c_void,
+    pso: usize,
 }
 
 #[derive(Default)]
 pub(super) struct Recordings {
     lists: HashMap<usize, Recording>,
+    rtvs: HashMap<usize, *mut c_void>,
+    pipelines: HashMap<usize, Pipeline>,
     submitted: States,
     submission_serial: u64,
+    pub(super) draws: Vec<Draw>,
 }
 
 struct Submission {
@@ -107,7 +157,144 @@ impl Recordings {
     }
 }
 
+// The native descriptor parser lends the exact shader bytes for this call. Hashing does
+// not access the owner and runs before the native graphics mutex is taken.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_rdr2_capture_hash_shader(
+    bytes: *const u8,
+    length: usize,
+    out: &mut u32,
+) -> bool {
+    if length == 0 {
+        *out = 0;
+        return true;
+    }
+    if bytes.is_null() || length > isize::MAX as usize {
+        return false;
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(bytes, length) };
+    let mut value = u32::MAX;
+    for &byte in bytes {
+        value ^= u32::from(byte);
+        for _ in 0..8 {
+            value = (value >> 1) ^ (0xedb8_8320 & 0_u32.wrapping_sub(value & 1));
+        }
+    }
+    *out = !value;
+    true
+}
+
 // All of these calls run under g->mutex. Resource and command-list addresses are identities.
+// The observation maps do not own COM references.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_rdr2_capture_record_pipeline(
+    owner: &Capture,
+    pso: *mut c_void,
+    facts: *const Pipeline,
+) {
+    let recordings = unsafe { &mut *owner.recordings.get() };
+    let key = pso as usize;
+    let Some(facts) = (unsafe { facts.as_ref() }) else {
+        // A successful callback with an unrecognized descriptor supersedes an old address.
+        recordings.pipelines.remove(&key);
+        return;
+    };
+    if let Some(pipeline) = try_entry(&mut recordings.pipelines, key) {
+        *pipeline = *facts;
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_rdr2_capture_record_rtv(
+    owner: &Capture,
+    handle: usize,
+    resource: *mut c_void,
+) {
+    let recordings = unsafe { &mut *owner.recordings.get() };
+    if resource.is_null() {
+        recordings.rtvs.remove(&handle);
+    } else if let Some(target) = try_entry(&mut recordings.rtvs, handle) {
+        *target = resource;
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_rdr2_capture_bind_rtv(
+    owner: &Capture,
+    list: *mut c_void,
+    handle: *const usize,
+) {
+    let recordings = unsafe { &mut *owner.recordings.get() };
+    // Resolve the first view at bind time. A later descriptor write does not retarget the list.
+    let target = unsafe { handle.as_ref() }
+        .and_then(|handle| recordings.rtvs.get(handle))
+        .copied()
+        .unwrap_or(null_mut());
+    if let Some(recording) = try_entry(&mut recordings.lists, list as usize) {
+        recording.target = target;
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_rdr2_capture_bind_pipeline(
+    owner: &Capture,
+    list: *mut c_void,
+    pso: *mut c_void,
+) {
+    let recordings = unsafe { &mut *owner.recordings.get() };
+    if let Some(recording) = try_entry(&mut recordings.lists, list as usize) {
+        recording.pso = pso as usize;
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_rdr2_capture_get_draw_binding(
+    owner: &Capture,
+    list: *mut c_void,
+    out: &mut DrawBinding,
+) -> bool {
+    let recordings = unsafe { &*owner.recordings.get() };
+    let Some(recording) = recordings.lists.get(&(list as usize)) else {
+        return false;
+    };
+    if recording.target.is_null() {
+        return false;
+    }
+    *out = DrawBinding {
+        target: recording.target,
+        pso: recording.pso as u64,
+        pipeline: recordings
+            .pipelines
+            .get(&recording.pso)
+            .copied()
+            .unwrap_or_default(),
+    };
+    true
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_rdr2_capture_record_draw(owner: &Capture, draw: &Draw) -> bool {
+    let recordings = unsafe { &mut *owner.recordings.get() };
+    let draws = &mut recordings.draws;
+    if draws.len() >= MAX_DRAW_METADATA || draws.try_reserve(1).is_err() {
+        return false;
+    }
+    draws.push(*draw);
+    true
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_rdr2_capture_draws(owner: &Capture, count: &mut usize) -> *const Draw {
+    let recordings = unsafe { &*owner.recordings.get() };
+    let draws = &recordings.draws;
+    *count = draws.len();
+    if draws.is_empty() {
+        std::ptr::null()
+    } else {
+        draws.as_ptr()
+    }
+}
+
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_rdr2_capture_initial_state(
     owner: &Capture,
@@ -151,11 +338,17 @@ unsafe extern "C" fn rsf_rdr2_capture_alias(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_reset_list(owner: &Capture, list: *mut c_void) {
+unsafe extern "C" fn rsf_rdr2_capture_reset_list(
+    owner: &Capture,
+    list: *mut c_void,
+    pso: *mut c_void,
+) {
     let recordings = unsafe { &mut *owner.recordings.get() };
     if let Some(recording) = try_entry(&mut recordings.lists, list as usize) {
         recording.generation = recording.generation.wrapping_add(1);
         recording.states.clear();
+        recording.target = null_mut();
+        recording.pso = pso as usize;
     }
 }
 
@@ -332,14 +525,14 @@ mod tests {
         let resource = without_provenance_mut(2);
         let other_list = without_provenance_mut(3);
         unsafe {
-            rsf_rdr2_capture_reset_list(&owner, list);
+            rsf_rdr2_capture_reset_list(&owner, list, null_mut());
             rsf_rdr2_capture_transition(&owner, list, resource, 0, 8, false);
             let mut readback = Readback::default();
             rsf_rdr2_capture_stamp_copy(&owner, list, &mut readback);
             let batch = [list];
             let receipt = rsf_rdr2_capture_before_submit(&owner, 1, batch.as_ptr());
             assert!(!receipt.is_null());
-            rsf_rdr2_capture_reset_list(&owner, list);
+            rsf_rdr2_capture_reset_list(&owner, list, null_mut());
             rsf_rdr2_capture_transition(&owner, list, resource, 0, 16, false);
             let mut later = Readback::default();
             rsf_rdr2_capture_stamp_copy(&owner, list, &mut later);
