@@ -107,9 +107,9 @@ Still C++ in `rsf_game_skyrim_se`, in suggested order:
    `session.rs` now owns the lifecycle; see "Session lifecycle" below. Still C++ in
    `plugin.cpp`: the five typed observer detours, their engine facts (TAA bypass bytes,
    presentation binding read, bounded diagnostics) and the window-class policy.
-2. `compatibility.cpp` still owns the `GetProcAddress` interception of `SKSEPlugin_Load`
-   and initializer transaction. `compatibility.rs` owns the Community Shaders 1.9.1
-   profile, guarded feature state, cold-device check and HDR caller scope.
+2. `compatibility.rs` and `compatibility/initializer.rs` own the Community Shaders
+   1.9.1 profile, cold-device and feature checks, resolver capture, initializer
+   transaction and HDR caller scope. The typed native detours stay in `compatibility.cpp`.
 3. `cpu_events.cpp` with `input_ownership.h` and `screen_classification.h`: CPU frame, input
    ownership, prospective source and screen classification (one hook, about forty RVAs). Its
    fixture `tests/skyrim_input.cpp` compiles the source directly.
@@ -199,12 +199,28 @@ section table and checks address arithmetic. Feature and device checks use
 the same guard reads. The typed HDR detour still captures the native return
 address and calls the original with all arguments intact. A Rust thread-local
 scope preserves the caller and five arguments through nested callbacks.
-The initializer state, path discovery and MinHook operations remain native.
+The initializer state and path rules are Rust-owned. MinHook and file effects
+use typed native calls.
 [Guard and initialization evidence](skyrim-cs-handover-20261115.md)
 
 The source comparison matched the fingerprint, six byte sequences, all
 HDR call bytes and offsets, file effects and private layouts. Builds and
 live handover verification remain open.
+
+## Community Shaders initializer transaction
+
+The Rust owner serializes path and profile admission, publishes the
+original initializer for the exact `SKSEPlugin_Load` lookup, and keeps
+the loader-callout refusal ahead of file inspection or hook changes.
+The resolver restores the last error from the original. No file I/O,
+original routine, hook operation or withdrawal callback runs under the
+Rust state lock. Rollback disables any created feature hooks and keeps
+their pinned trampolines valid. A refused feature hook that remains
+reachable forwards with no feature exclusion. Concurrent arming refuses,
+and an exception from the native profile leaf is now an unreadable
+profile result. The original initializer can still fall back before
+device creation. Source and layout checks passed. Builds and live
+loader and rollback verification remain open.
 
 ## Sampler hook
 

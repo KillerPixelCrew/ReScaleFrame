@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! Exact Community Shaders 1.9.1 profile and Skyrim HDR caller provenance.
 
+mod initializer;
+
 use std::cell::Cell;
 use std::ffi::{c_char, c_void};
 use std::slice;
@@ -171,22 +173,6 @@ unsafe extern "C" fn rsf_skyrim_cs_profile(
         })
 }
 
-#[repr(C)]
-struct Sites {
-    configure: usize,
-    initialize: usize,
-    hdr_process: usize,
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cs_sites() -> Sites {
-    Sites {
-        configure: CONFIGURE,
-        initialize: INITIALIZE,
-        hdr_process: HDR_PROCESS,
-    }
-}
-
 fn before_device(game: usize, read: Read) -> Option<bool> {
     if game == 0 {
         return None;
@@ -197,11 +183,6 @@ fn before_device(game: usize, read: Read) -> Option<bool> {
     }
     let device = usize::from_le_bytes(read_native(read, owner.checked_add(OWNER_DEVICE)?)?);
     Some(device == 0)
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cs_before_device(game: usize, read: Read) -> bool {
-    before_device(game, read) == Some(true)
 }
 
 fn features_inactive(base: usize, check_hdr: bool, read: Read) -> Option<bool> {
@@ -215,13 +196,7 @@ fn features_inactive(base: usize, check_hdr: bool, read: Read) -> Option<bool> {
     Some(!check_hdr || read_native::<1>(read, base.checked_add(HDR_DISPLAY + LOADED)?)? == [0])
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cs_features_inactive(base: usize, check_hdr: bool, read: Read) -> bool {
-    features_inactive(base, check_hdr, read) == Some(true)
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cs_excluded_byte(base: usize, feature: usize) -> usize {
+fn excluded_byte(base: usize, feature: usize) -> usize {
     if base != 0 && base.checked_add(UPSCALING) == Some(feature) {
         feature.checked_add(LOADED).unwrap_or(0)
     } else {
@@ -249,7 +224,6 @@ struct Scope {
 }
 
 const _: () = {
-    assert!(size_of::<Sites>() == 24);
     assert!(size_of::<HdrCall>() == 40 && std::mem::offset_of!(HdrCall, argument5) == 32);
     assert!(size_of::<Scope>() == 48);
 };
@@ -304,15 +278,4 @@ fn allowed(game: usize, module: usize, excluded: bool, call: &HdrCall, read: Rea
     }
     let original = usize::from_le_bytes(read_native(read, module.checked_add(HDR_CALLEE)?)?);
     (game.checked_add(PROCESS_MAIN) == Some(original)).then_some(())
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_cs_postprocess_allowed(
-    game: usize,
-    module: usize,
-    excluded: bool,
-    call: &HdrCall,
-    read: Read,
-) -> bool {
-    allowed(game, module, excluded, call, read).is_some()
 }
