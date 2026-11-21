@@ -60,6 +60,7 @@ struct World {
     wait_fails: bool,
     warm_up_wait_fails: bool,
     queue_wait_fails: bool,
+    bridge_signal_failure: u64,
     warm_signal_fails: bool,
     device_ready: bool,
 }
@@ -77,6 +78,7 @@ thread_local! {
         wait_fails: false,
         warm_up_wait_fails: false,
         queue_wait_fails: false,
+        bridge_signal_failure: 0,
         warm_signal_fails: false,
         device_ready: true,
     });
@@ -271,7 +273,7 @@ unsafe extern "C" fn copy_resource(_: Handle, to: Handle, from: Handle) {
 unsafe extern "C" fn context_signal(_: Handle, fence: Handle, value: u64) -> i32 {
     assert_eq!(name(fence), "fence11");
     event(format!("d3d11 signal {value}"));
-    1
+    i32::from(world(|world| world.bridge_signal_failure != value))
 }
 unsafe extern "C" fn context_wait(_: Handle, fence: Handle, value: u64) -> i32 {
     assert_eq!(name(fence), "fence11");
@@ -313,7 +315,7 @@ unsafe extern "C" fn queue_signal(_: Handle, fence: Handle, value: u64) -> i32 {
         return i32::from(!world(|world| world.warm_signal_fails));
     }
     event(format!("d3d12 signal {value}"));
-    1
+    i32::from(world(|world| world.bridge_signal_failure != value))
 }
 unsafe extern "C" fn device_ready(_: Handle) -> i32 {
     i32::from(world(|world| world.device_ready))
@@ -635,6 +637,51 @@ fn refused_inputs_issue_no_copy_and_unusable_masks_are_dropped() {
     scene.textures.extend([wide_motion, reactive, transparency]);
     scene.destroy();
     assert_eq!(refs(foreign), 1);
+}
+
+fn check_signal_retirement(value: u64, signal: &str, flush: bool) {
+    let mut scene = Scene::new();
+    world(|world| world.bridge_signal_failure = value);
+    assert_eq!(scene.evaluate(), FEATURE_FAILED);
+    assert_eq!(take_events().last().unwrap(), signal);
+    assert_eq!(scene.evaluate(), NOT_READY);
+
+    let select_none = || unsafe { rsf_sr_bridge_select(scene.bridge, SR_NONE, 0, 0) };
+    assert_eq!(select_none(), FEATURE_FAILED);
+    assert_eq!(take_events(), [signal]);
+
+    world(|world| {
+        world.bridge_signal_failure = 0;
+        world.wait_fails = true;
+    });
+    assert_eq!(select_none(), FEATURE_FAILED);
+    let wait = format!("wait fence12 {value}");
+    let mut expected = vec![signal];
+    if flush {
+        expected.push("flush");
+    }
+    expected.push(wait.as_str());
+    assert_eq!(take_events(), expected);
+
+    world(|world| world.wait_fails = false);
+    assert_eq!(select_none(), OK);
+    assert_eq!(take_events(), [wait.as_str(), "select 0"]);
+    scene.destroy();
+}
+
+#[test]
+fn refused_input_copy_signal_is_retried_before_retirement() {
+    check_signal_retirement(1, "d3d11 signal 1", true);
+}
+
+#[test]
+fn refused_submission_signal_is_retried_before_retirement() {
+    check_signal_retirement(2, "d3d12 signal 2", false);
+}
+
+#[test]
+fn refused_output_copy_signal_is_retried_before_retirement() {
+    check_signal_retirement(3, "d3d11 signal 3", true);
 }
 
 #[test]

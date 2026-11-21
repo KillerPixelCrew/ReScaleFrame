@@ -187,6 +187,12 @@ struct PendingWarmUp {
     signaled: bool,
 }
 
+#[derive(Clone, Copy)]
+enum SignalSource {
+    Context,
+    Queue,
+}
+
 // Fields drop in declaration order: any pending warm-up and the SDK session first, then shared
 // resources, the fence and event, and the devices last.
 pub(crate) struct Bridge {
@@ -212,6 +218,8 @@ pub(crate) struct Bridge {
     log_user: Handle,
     tick: u64,
     faulted: bool,
+    // A refused signal must be retried on the stream that issued the work for this tick.
+    pending_signal: Option<SignalSource>,
     // A D3D11 signal of `tick` that has not been flushed yet. CPU waits flush it first.
     signal_unflushed: bool,
     auto_exposure: u32,
@@ -313,6 +321,7 @@ impl Bridge {
             log_user,
             tick: 0,
             faulted: false,
+            pending_signal: None,
             signal_unflushed: false,
             auto_exposure: setup.open.auto_exposure,
             hdr: setup.open.hdr != 0,
@@ -333,14 +342,47 @@ impl Bridge {
         unsafe { (p.wait_fence)(self.fence.d3d12, value, self.event.get(), FENCE_TIMEOUT_MS) != 0 }
     }
 
-    // Waits for all submitted work. The last tick may be the D3D11 signal after the output copy,
-    // which reaches the GPU only with the context's next flush. Waiting on it unflushed would sit
-    // out the whole timeout.
-    fn wait(&mut self) -> bool {
+    fn arm_signal(&mut self, source: SignalSource) -> bool {
+        let p = self.platform;
+        let armed = unsafe {
+            match source {
+                SignalSource::Context => {
+                    (p.context_signal)(com(&self.context), self.fence.d3d11, self.tick)
+                }
+                SignalSource::Queue => {
+                    (p.queue_signal)(com(&self.queue), self.fence.d3d12, self.tick)
+                }
+            }
+        } != 0;
+        if armed {
+            self.pending_signal = None;
+            self.signal_unflushed = matches!(source, SignalSource::Context);
+        }
+        armed
+    }
+
+    fn signal(&mut self, source: SignalSource) -> bool {
+        self.tick += 1;
+        self.pending_signal = Some(source);
+        self.arm_signal(source)
+    }
+
+    fn flush_signal(&mut self) {
         if self.signal_unflushed {
             unsafe { (self.platform.flush)(com(&self.context)) };
             self.signal_unflushed = false;
         }
+    }
+
+    fn wait(&mut self) -> bool {
+        // A signal refusal faults the bridge, so no later frame can advance the shared fence.
+        // Append the signal behind the original work and require that exact value to complete.
+        if let Some(source) = self.pending_signal
+            && !self.arm_signal(source)
+        {
+            return false;
+        }
+        self.flush_signal();
         self.wait_value(self.tick)
     }
 
@@ -611,15 +653,12 @@ impl Bridge {
                 unsafe { (p.copy_region)(context, shared11[MASKS + index], mask, width, height) };
             }
         }
-        self.tick += 1;
-        let ready = self.tick;
-        if unsafe { (p.context_signal)(context, fence11, ready) } == 0 {
+        if !self.signal(SignalSource::Context) {
             return self.gpu_failure();
         }
         // Required: the D3D12 queue waits on this signal, which has to reach the GPU first.
-        unsafe { (p.flush)(context) };
-        self.signal_unflushed = false;
-        if unsafe { (p.queue_wait)(queue, fence12, ready) } == 0 {
+        self.flush_signal();
+        if unsafe { (p.queue_wait)(queue, fence12, self.tick) } == 0 {
             return self.gpu_failure();
         }
 
@@ -681,11 +720,10 @@ impl Bridge {
         if unsafe { (p.submit)(queue, list) } == 0 {
             return self.gpu_failure();
         }
-        self.tick += 1;
-        let complete = self.tick;
-        if unsafe { (p.queue_signal)(queue, fence12, complete) } == 0 {
+        if !self.signal(SignalSource::Queue) {
             return self.gpu_failure();
         }
+        let complete = self.tick;
         self.commands[slot].complete = complete;
         self.next_commands = (slot + 1) % COMMAND_SLOTS;
         // Even a refused evaluation may have recorded commands that reference shared inputs.
@@ -694,13 +732,11 @@ impl Bridge {
         }
         if result == OK {
             unsafe { (p.copy_resource)(context, frame.output.resource, shared11[OUTPUT]) };
-            self.tick += 1;
-            if unsafe { (p.context_signal)(context, fence11, self.tick) } == 0 {
+            if !self.signal(SignalSource::Context) {
                 return self.gpu_failure();
             }
             // Not flushed here: the game's Present submits it, and only a CPU wait needs it
             // sooner, which wait() covers.
-            self.signal_unflushed = true;
         }
         if unsafe { (p.dump_wants)(frame.record) } != 0 {
             let backend = self.effective_backend();

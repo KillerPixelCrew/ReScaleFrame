@@ -4,6 +4,12 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The D3D11 to D3D12 SR bridge retries a refused frame fence signal on
+the stream that issued the work. It flushes a D3D11 retry before the wait
+and keeps the session and resources alive until retirement is proved.
+The regression covers both D3D11 signal points and the D3D12 submission
+signal. It remains unrun.
+
 Rust now owns the optional NVAPI Reflex audit hook transaction. It pins
 the native modules before enabling the hooks. A partial enable disables
 the batch and retains its trampolines, so an already-entered call keeps
