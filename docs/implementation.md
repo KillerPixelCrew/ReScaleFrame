@@ -838,6 +838,10 @@ The merged AVX pan run captured two smaller turns with DLSS history
 retained. Both matched Presents carried a complete image and finite
 submitted motion across the active extent. The engine quit cleanly.
 [Camera pan evidence](research/rust-overlay-host.md#camera-pans-without-history-reset)
+Four later AVX frames with an unchanged camera carried small
+nonzero motion in a window region through the producer, SR handoff
+and actual DLSS submission. All 16 evaluations matched their Presents.
+[Unchanged-view motion evidence](research/rust-overlay-host.md#motion-at-an-unchanged-camera-view)
 D3D11-on-12 wrapping, fullscreen and held-key gameplay remain open.
 [Shared overlay host evidence](research/rust-overlay-host.md#integrated-runtime-and-standard-game-run)
 

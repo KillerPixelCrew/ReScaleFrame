@@ -209,7 +209,27 @@ The verifier, transcript and 192 raw hashes are under
 `.local/rust-1.94.1-verification/avx-continuous-pan-audit-d0cc7ad/`.
 Logs and captured images are in `avx-continuous-pan-d0cc7ad` under
 the clone's `evidence/` directory. This run covers the sampled room
-and camera motion. Independently moving object quality remains open.
+and camera motion.
+
+## Motion at an unchanged camera view
+
+The foreground AVX window-view run captured 16 consecutive evaluations
+and matched Presents. Frames 1086, 1087, 1088 and 1091 used the
+same world-to-view matrix as their preceding frames and retained DLSS
+history. The raw motion producer had 15, 15, 16 and 20 valid
+nonzero vectors above 0.0001 UV in those frames. They fell within
+x619–675 and y295–312 at 1067×600, over a window where vegetation
+was visible. The same pixel positions had valid motion at the SR
+handoff and finite nonzero RG16F motion in the actual DLSS submission.
+
+The captured output and Present result matched each evaluation. The
+game shut down Direct3D and exited with code 0. The runner restored the
+isolated settings and payload. The verifier, transcript and 196 raw
+hashes are under `.local/rust-1.94.1-verification/avx-stationary-view-audit-d0cc7ad/`.
+The game log and captures are in `avx-stationary-view-motion-d0cc7ad`
+under the isolated clone's `evidence/` directory. A matched draw
+capture is still needed to identify the exact mesh and shader in
+that region. Animated character and larger moving-object quality remain open.
 
 ## Vulkan Streamline-disabled verification
 
