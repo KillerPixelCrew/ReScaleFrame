@@ -17,6 +17,17 @@ struct rsf_dx12gvk_present_info {
     const uint64_t* waits;
     int32_t* result;
 };
+struct rsf_dx12gvk_present_input {
+    const void* native;
+    uint32_t swapchain_count, wait_count, has_extension, has_image, has_waits, has_result;
+};
+inline constexpr uint32_t rsf_dx12gvk_submit_wait_capacity = 17;
+struct rsf_dx12gvk_present_submit {
+    uint32_t wait_count;
+    uint64_t waits[rsf_dx12gvk_submit_wait_capacity], values[rsf_dx12gvk_submit_wait_capacity];
+    uint32_t stages[rsf_dx12gvk_submit_wait_capacity];
+    uint64_t signal, ready;
+};
 // One single-subresource colour image barrier planned by vulkan_dx12_fg.rs.
 struct rsf_dx12gvk_barrier {
     uint64_t image;
@@ -47,7 +58,7 @@ struct rsf_dx12gvk_ops {
     void (*blit)(rsf_dx12gvk_platform*, void*, const rsf_dx12gvk_transfer*);
     void (*clear)(rsf_dx12gvk_platform*, void*, uint64_t);
     int32_t (*acquire_submit)(rsf_dx12gvk_platform*, uint64_t, uint64_t);
-    int32_t (*present_submit)(rsf_dx12gvk_platform*, void*, const rsf_dx12gvk_present_info*, uint64_t, uint64_t, uint64_t);
+    int32_t (*present_submit)(rsf_dx12gvk_platform*, void*, const rsf_dx12gvk_present_submit*);
     int32_t (*wait_timeline)(rsf_dx12gvk_platform*, uint64_t, uint64_t, uint64_t);
     int32_t (*create_fence)(rsf_dx12gvk_platform*, uint64_t*);
     int32_t (*mark_submit)(rsf_dx12gvk_platform*, uint64_t);
@@ -73,4 +84,8 @@ extern const rsf_dx12gvk_ops rsf_dx12gvk_graphics;
 
 rsf_dx12gvk_swapchain rsf_dx12gvk_describe(const void* create_info);
 using rsf_dx12gvk_present_fn = int32_t (*)(void*, const rsf_dx12gvk_present_info*, const rsf_frame_record*, uint32_t);
+// Receives the admitted wait count. The caller lends output storage for that many handles.
+using rsf_dx12gvk_read_present_fn = void (*)(const void*, uint32_t, uint64_t*, uint32_t*, uint64_t*);
+extern "C" int32_t rsf_core_dx12gvk_present_marshaled(rsf_dx12gvk_present_fn, void*,
+    const rsf_dx12gvk_present_input*, rsf_dx12gvk_read_present_fn, const rsf_frame_record*, uint32_t, int32_t*);
 int32_t rsf_dx12gvk_present_marshaled(rsf_dx12gvk_present_fn, void*, const void*, const rsf_frame_record*, uint32_t);

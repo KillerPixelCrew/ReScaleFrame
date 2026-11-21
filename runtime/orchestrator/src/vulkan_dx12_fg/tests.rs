@@ -3,7 +3,7 @@
 // module's names for them, so a wrong constant cannot agree with itself.
 use super::*;
 use crate::vulkan_sr_abi::rsf_vk_get_proc;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 const FAMILY: u32 = 3;
 const IGNORED: u32 = 0xffff_ffff;
@@ -193,4 +193,122 @@ fn required_dispatch_stops_at_device_miss_and_queries_both_instance_entries() {
             .collect();
         LOOKUPS.with_borrow(|lookups| assert_eq!(lookups.calls, expected));
     }
+}
+
+struct PresentTrace {
+    reads: Cell<u32>,
+    calls: Cell<u32>,
+}
+
+unsafe extern "C" fn read_present(
+    native: *const c_void,
+    count: u32,
+    chain: &mut u64,
+    index: &mut u32,
+    waits: *mut u64,
+) {
+    let trace = unsafe { &*native.cast::<PresentTrace>() };
+    trace.reads.set(trace.reads.get() + 1);
+    *chain = 7;
+    *index = 2;
+    for i in 0..count {
+        unsafe { waits.add(i as usize).write(10 + u64::from(i)) };
+    }
+}
+
+unsafe extern "C" fn present_callback(
+    owner: Handle,
+    info: &PresentInfo,
+    source: *const Record,
+    explicit: u32,
+) -> i32 {
+    let trace = unsafe { &*owner.cast::<PresentTrace>() };
+    trace.calls.set(trace.calls.get() + 1);
+    assert_eq!(trace.calls.get(), trace.reads.get());
+    assert_eq!((info.chain, info.index, explicit), (7, 2, 1));
+    assert_eq!(source.addr(), 8);
+    let waits = unsafe { slice::from_raw_parts(info.waits, info.wait_count as usize) };
+    assert!(
+        waits
+            .iter()
+            .copied()
+            .eq(10..10 + u64::from(info.wait_count))
+    );
+    if !info.result.is_null() {
+        unsafe { info.result.write(OUT_OF_DATE) };
+    }
+    NOT_READY
+}
+
+#[test]
+fn present_marshaling_checks_shape_before_reading_borrowed_arrays() {
+    let trace = PresentTrace {
+        reads: Cell::new(0),
+        calls: Cell::new(0),
+    };
+    let owner = ptr::from_ref(&trace).cast_mut().cast();
+    let mut input = PresentInput {
+        native: owner,
+        swapchain_count: 1,
+        wait_count: 17,
+        has_extension: 0,
+        has_image: 1,
+        has_waits: 1,
+        has_result: 1,
+    };
+    let submit = |input: &PresentInput, result: &mut i32| unsafe {
+        rsf_core_dx12gvk_present_marshaled(
+            present_callback,
+            owner,
+            input,
+            read_present,
+            ptr::without_provenance(8),
+            1,
+            result,
+        )
+    };
+    let mut result = 0;
+    assert_eq!(submit(&input, &mut result), INIT_FAILED);
+    input.wait_count = 1;
+    input.has_waits = 0;
+    assert_eq!(submit(&input, &mut result), INIT_FAILED);
+    assert_eq!(
+        (trace.reads.get(), trace.calls.get(), result),
+        (0, 0, INCOMPLETE)
+    );
+
+    input.wait_count = 16;
+    input.has_waits = 1;
+    assert_eq!(submit(&input, &mut result), NOT_READY);
+    assert_eq!(
+        (trace.reads.get(), trace.calls.get(), result),
+        (1, 1, OUT_OF_DATE)
+    );
+
+    input.wait_count = 0;
+    input.has_waits = 0;
+    input.has_result = 0;
+    assert_eq!(submit(&input, &mut result), NOT_READY);
+    assert_eq!(
+        (trace.reads.get(), trace.calls.get(), result),
+        (2, 2, INCOMPLETE)
+    );
+}
+
+#[test]
+fn present_waits_preserve_binary_order_and_append_only_a_prior_timeline_value() {
+    let first = PresentSubmit::new(&[8, 7], 6, 0, 1);
+    assert_eq!((first.wait_count, first.signal, first.ready), (2, 6, 1));
+    assert_eq!(&first.waits[..3], &[8, 7, 0]);
+    assert_eq!(&first.values[..3], &[0, 0, 0]);
+    assert_eq!(&first.stages[..3], &[ALL, ALL, 0]);
+
+    let binary: [u64; 16] = std::array::from_fn(|i| 20 + i as u64);
+    let next = PresentSubmit::new(&binary, 6, 2, 3);
+    assert_eq!((next.wait_count, next.signal, next.ready), (17, 6, 3));
+    assert_eq!(&next.waits[..16], &binary);
+    assert_eq!(next.waits[16], 6);
+    assert_eq!(&next.values[..16], &[0; 16]);
+    assert_eq!(next.values[16], 2);
+    assert_eq!(next.stages, [ALL; 17]);
 }

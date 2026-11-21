@@ -53,6 +53,8 @@ const SRGB_NONLINEAR: u32 = 0;
 const EXCLUSIVE: u32 = 0;
 const WAIT_NS: u64 = 10_000_000_000;
 const BUFFER_COUNT: usize = 3;
+const PRESENT_WAIT_LIMIT: usize = 16;
+const SUBMIT_WAIT_CAPACITY: usize = PRESENT_WAIT_LIMIT + 1;
 pub(super) const SLOT_COUNT: usize = RSF_FGVK_FRAME_SLOTS as usize;
 
 const DEVICE_PROCS: [&CStr; 22] = [
@@ -142,6 +144,98 @@ pub(super) struct PresentInfo {
 }
 
 #[repr(C)]
+struct PresentInput {
+    native: *const c_void,
+    swapchain_count: u32,
+    wait_count: u32,
+    has_extension: u32,
+    has_image: u32,
+    has_waits: u32,
+    has_result: u32,
+}
+
+type ReadPresent = unsafe extern "C" fn(*const c_void, u32, &mut u64, &mut u32, *mut u64);
+type PresentCallback = unsafe extern "C" fn(Handle, &PresentInfo, *const Record, u32) -> i32;
+
+// Rust admits the borrowed VkPresentInfoKHR shape before the native reader touches its arrays.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_dx12gvk_present_marshaled(
+    call: PresentCallback,
+    owner: Handle,
+    input: &PresentInput,
+    read: ReadPresent,
+    source: *const Record,
+    explicit: u32,
+    result: &mut i32,
+) -> i32 {
+    *result = INCOMPLETE;
+    if input.has_extension != 0
+        || input.swapchain_count != 1
+        || input.has_image == 0
+        || input.wait_count as usize > PRESENT_WAIT_LIMIT
+        || (input.wait_count != 0 && input.has_waits == 0)
+    {
+        return INIT_FAILED;
+    }
+    let mut waits = [0; PRESENT_WAIT_LIMIT];
+    let (mut chain, mut index) = (0, 0);
+    unsafe {
+        read(
+            input.native,
+            input.wait_count,
+            &mut chain,
+            &mut index,
+            waits.as_mut_ptr(),
+        )
+    };
+    let info = PresentInfo {
+        chain,
+        index,
+        wait_count: input.wait_count,
+        waits: waits.as_ptr(),
+        result: if input.has_result != 0 {
+            ptr::from_mut(result)
+        } else {
+            ptr::null_mut()
+        },
+    };
+    unsafe { call(owner, &info, source, explicit) }
+}
+
+#[repr(C)]
+struct PresentSubmit {
+    wait_count: u32,
+    waits: [u64; SUBMIT_WAIT_CAPACITY],
+    values: [u64; SUBMIT_WAIT_CAPACITY],
+    stages: [u32; SUBMIT_WAIT_CAPACITY],
+    signal: u64,
+    ready: u64,
+}
+
+impl PresentSubmit {
+    fn new(binary_waits: &[u64], timeline: u64, previous: u64, ready: u64) -> Self {
+        let count = binary_waits.len();
+        let mut submit = Self {
+            wait_count: count as u32,
+            waits: [0; SUBMIT_WAIT_CAPACITY],
+            values: [0; SUBMIT_WAIT_CAPACITY],
+            stages: [0; SUBMIT_WAIT_CAPACITY],
+            signal: timeline,
+            ready,
+        };
+        submit.waits[..count].copy_from_slice(binary_waits);
+        submit.stages[..count].fill(ALL_COMMANDS);
+        if previous != 0 {
+            submit.waits[count] = timeline;
+            submit.values[count] = previous;
+            submit.stages[count] = ALL_COMMANDS;
+            submit.wait_count += 1;
+        }
+        submit
+    }
+}
+
+#[repr(C)]
 pub(super) struct GraphicsOps {
     pub(super) adapter_luid: unsafe extern "C" fn(*const Graphics, *mut u64) -> i32,
     platform_allocate: unsafe extern "C" fn(*const Setup) -> Handle,
@@ -161,7 +255,7 @@ pub(super) struct GraphicsOps {
     blit: unsafe extern "C" fn(Handle, Handle, *const Transfer),
     clear: unsafe extern "C" fn(Handle, Handle, u64),
     acquire_submit: unsafe extern "C" fn(Handle, u64, u64) -> i32,
-    present_submit: unsafe extern "C" fn(Handle, Handle, *const PresentInfo, u64, u64, u64) -> i32,
+    present_submit: unsafe extern "C" fn(Handle, Handle, &PresentSubmit) -> i32,
     wait_timeline: unsafe extern "C" fn(Handle, u64, u64, u64) -> i32,
     create_fence: unsafe extern "C" fn(Handle, *mut u64) -> i32,
     mark_submit: unsafe extern "C" fn(Handle, u64) -> i32,
@@ -182,6 +276,11 @@ const _: () = {
     assert!(size_of::<DispatchEntries>() == 24 * size_of::<Handle>());
     assert!(size_of::<Swapchain>() == 56);
     assert!(size_of::<PresentInfo>() == 32);
+    assert!(size_of::<PresentInput>() == 32);
+    assert!(std::mem::offset_of!(PresentInput, wait_count) == 12);
+    assert!(size_of::<PresentSubmit>() == 368);
+    assert!(std::mem::offset_of!(PresentSubmit, values) == 144);
+    assert!(std::mem::offset_of!(PresentSubmit, signal) == 352);
     assert!(size_of::<Barrier>() == 40);
     assert!(size_of::<Transfer>() == 32);
 };
@@ -961,7 +1060,7 @@ impl Presentation {
     ) -> Result<(), i32> {
         if !self.open()
             || info.chain != self.chain
-            || info.wait_count > 16
+            || info.wait_count as usize > PRESENT_WAIT_LIMIT
             || (info.wait_count != 0 && info.waits.is_null())
         {
             return Err(INIT_FAILED);
@@ -1035,16 +1134,14 @@ impl Presentation {
         // A later ready signal must never bypass the prior done, across slots.
         let done = self.last_done.checked_add(2).ok_or(UNKNOWN)?;
         let ready = done - 1;
-        let result = unsafe {
-            (ops.present_submit)(
-                self.vk,
-                buffer.commands,
-                info,
-                self.timeline,
-                self.last_done,
-                ready,
-            )
+        let waits = if info.wait_count == 0 {
+            &[]
+        } else {
+            // The marshaler owns this bounded array through the callback.
+            unsafe { slice::from_raw_parts(info.waits, info.wait_count as usize) }
         };
+        let plan = PresentSubmit::new(waits, self.timeline, self.last_done, ready);
+        let result = unsafe { (ops.present_submit)(self.vk, buffer.commands, &plan) };
         if result != 0 {
             self.terminal = true;
             return Err(result);

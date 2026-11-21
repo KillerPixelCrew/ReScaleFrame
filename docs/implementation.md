@@ -1049,6 +1049,12 @@ matched the native bind and query order. Builds and fixtures for
 this port remain open.
 [Graphics admission](research/rust-vulkan-dx12-copy-plan.md#graphics-admission-and-dispatch-setup)
 
+XeSS and FSR4 now share Rust admission for Vulkan Present input and
+the binary and timeline wait plan. The native calls keep the typed
+Vulkan result and submit records. The new fixture checks the refusal
+and maximum-wait paths. Builds, fixtures and live checks remain open.
+[Present admission and waits](research/rust-vulkan-dx12-copy-plan.md#present-admission-and-waits)
+
 The standalone FSR3 bridge now binds the SDK and owns the SR, FG and
 swapchain transactions in Rust. It keeps the active FG and swapchain
 paired through disable, drain, UI clear and checked retirement.

@@ -28,6 +28,9 @@ static_assert(sizeof(rsf_dx12gvk_swapchain) == 56 && sizeof(rsf_dx12gvk_present_
 static_assert(offsetof(rsf_dx12gvk_ops, platform_bind) == 4 * sizeof(void*) &&
     offsetof(rsf_dx12gvk_ops, images) == 9 * sizeof(void*) &&
     sizeof(rsf_dx12gvk_dispatch_entries) == 24 * sizeof(void*));
+static_assert(sizeof(rsf_dx12gvk_present_input) == 32 && offsetof(rsf_dx12gvk_present_input, wait_count) == 12);
+static_assert(sizeof(rsf_dx12gvk_present_submit) == 368 && offsetof(rsf_dx12gvk_present_submit, values) == 144 &&
+    offsetof(rsf_dx12gvk_present_submit, signal) == 352);
 
 struct rsf_dx12gvk_platform {
     VkDevice device{};
@@ -215,26 +218,17 @@ int32_t acquire_submit(rsf_dx12gvk_platform* self, uint64_t semaphore, uint64_t 
     submit.signalSemaphoreCount = semaphore ? 1 : 0; submit.pSignalSemaphores = &signal;
     return self->submit(self->queue_user, 1, &submit, fence);
 }
-int32_t present_submit(rsf_dx12gvk_platform* self, void* list, const rsf_dx12gvk_present_info* info,
-    uint64_t semaphore, uint64_t previous, uint64_t ready) {
-    std::array<VkSemaphore, 17> waits{};
-    std::array<VkPipelineStageFlags, 17> stages{};
-    std::array<uint64_t, 17> values{};
-    auto count = info->wait_count;
-    for (uint32_t i = 0; i < count; ++i) {
-        waits[i] = reinterpret_cast<VkSemaphore>(info->waits[i]); stages[i] = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-    }
-    const auto signal = reinterpret_cast<VkSemaphore>(semaphore);
-    if (previous) {
-        waits[count] = signal; values[count] = previous;
-        stages[count++] = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-    }
+int32_t present_submit(rsf_dx12gvk_platform* self, void* list, const rsf_dx12gvk_present_submit* plan) {
+    std::array<VkSemaphore, rsf_dx12gvk_submit_wait_capacity> waits{};
+    for (uint32_t i = 0; i < plan->wait_count; ++i)
+        waits[i] = reinterpret_cast<VkSemaphore>(plan->waits[i]);
+    const auto signal = reinterpret_cast<VkSemaphore>(plan->signal);
     VkTimelineSemaphoreSubmitInfo timeline{VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO};
-    timeline.waitSemaphoreValueCount = count; timeline.pWaitSemaphoreValues = values.data();
-    timeline.signalSemaphoreValueCount = 1; timeline.pSignalSemaphoreValues = &ready;
+    timeline.waitSemaphoreValueCount = plan->wait_count; timeline.pWaitSemaphoreValues = plan->values;
+    timeline.signalSemaphoreValueCount = 1; timeline.pSignalSemaphoreValues = &plan->ready;
     const auto commands = static_cast<VkCommandBuffer>(list);
     VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO}; submit.pNext = &timeline;
-    submit.waitSemaphoreCount = count; submit.pWaitSemaphores = waits.data(); submit.pWaitDstStageMask = stages.data();
+    submit.waitSemaphoreCount = plan->wait_count; submit.pWaitSemaphores = waits.data(); submit.pWaitDstStageMask = plan->stages;
     submit.commandBufferCount = 1; submit.pCommandBuffers = &commands;
     submit.signalSemaphoreCount = 1; submit.pSignalSemaphores = &signal;
     return self->submit(self->queue_user, 1, &submit, 0);
@@ -308,22 +302,19 @@ rsf_dx12gvk_swapchain rsf_dx12gvk_describe(const void* create_info) {
 }
 
 int32_t rsf_dx12gvk_present_marshaled(rsf_dx12gvk_present_fn call, void* owner, const void* info, const rsf_frame_record* source, uint32_t explicit_source) {
-    rsf_dx12gvk_present_info description{};
-    std::array<uint64_t, 16> waits{};
-    if (info) {
-        const auto& vk = *static_cast<const VkPresentInfoKHR*>(info);
-        if (!vk.pNext && vk.swapchainCount == 1 && vk.pSwapchains && vk.pImageIndices &&
-            vk.waitSemaphoreCount <= waits.size() && (!vk.waitSemaphoreCount || vk.pWaitSemaphores)) {
-            for (uint32_t i = 0; i < vk.waitSemaphoreCount; ++i) waits[i] = reinterpret_cast<uint64_t>(vk.pWaitSemaphores[i]);
-            description = {reinterpret_cast<uint64_t>(vk.pSwapchains[0]), vk.pImageIndices[0], vk.waitSemaphoreCount,
-                waits.data(), nullptr};
-            // Marshal pResults separately rather than writing VkResult through an int32_t lvalue.
-            int32_t result = VK_INCOMPLETE;
-            if (vk.pResults) description.result = &result;
-            const int32_t code = call(owner, &description, source, explicit_source);
-            if (vk.pResults && result != VK_INCOMPLETE) vk.pResults[0] = static_cast<VkResult>(result);
-            return code;
-        }
-    }
-    return VK_ERROR_INITIALIZATION_FAILED;
+    if (!info) return VK_ERROR_INITIALIZATION_FAILED;
+    const auto& vk = *static_cast<const VkPresentInfoKHR*>(info);
+    const rsf_dx12gvk_present_input input{info, vk.swapchainCount, vk.waitSemaphoreCount, vk.pNext != nullptr,
+        vk.pSwapchains && vk.pImageIndices, vk.pWaitSemaphores != nullptr, vk.pResults != nullptr};
+    // Keep the write to pResults typed as VkResult.
+    int32_t result = VK_INCOMPLETE;
+    const int32_t code = rsf_core_dx12gvk_present_marshaled(call, owner, &input,
+        [](const void* native, uint32_t count, uint64_t* chain, uint32_t* index, uint64_t* waits) {
+            const auto& present = *static_cast<const VkPresentInfoKHR*>(native);
+            *chain = reinterpret_cast<uint64_t>(present.pSwapchains[0]);
+            *index = present.pImageIndices[0];
+            for (uint32_t i = 0; i < count; ++i) waits[i] = reinterpret_cast<uint64_t>(present.pWaitSemaphores[i]);
+        }, source, explicit_source, &result);
+    if (vk.pResults && result != VK_INCOMPLETE) vk.pResults[0] = static_cast<VkResult>(result);
+    return code;
 }

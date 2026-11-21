@@ -115,3 +115,29 @@ public declarations. The extended Rust fixture covers device
 short-circuit and the paired instance queries. Pinned formatting,
 locked offline metadata and whitespace passed. Native linkage,
 fixtures and live provider verification remain open.
+
+## Present admission and waits
+
+Compared with `a551200b`, Rust admits the shared XeSS and FSR4 Present
+shape before native code reads the Vulkan arrays. The request must
+have one swapchain, its image index, no extension chain, and at most
+16 binary waits. The native reader copies only the admitted wait
+count into the Rust array and retains the exact source record and
+explicit-source flag. The typed result write still happens only when
+the caller supplied `pResults` and the provider changes the incomplete
+sentinel.
+
+The Rust submission plan keeps the binary wait order and initializes
+each value to zero. When a prior submission must complete, it appends
+the shared timeline semaphore and the prior done value in slot 17 or
+earlier. Every wait uses `ALL_COMMANDS`. The native submit still
+signals the same ready value through the host's graphics queue call.
+Command recording, the ready and done calculation, and the failure
+path stay in their existing order.
+
+The private records are 32 and 368 bytes on x64. The extended fixture
+covers refusal before borrowed-array reads, the result sentinel,
+the first submit without a timeline wait, and the full binary wait
+list with the prior timeline wait. Source, formatting, locked offline
+metadata and whitespace checks passed. Builds, fixture execution,
+and live provider checks remain open.

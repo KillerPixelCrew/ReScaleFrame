@@ -396,6 +396,12 @@ capsule in Rust. Native callbacks retain the typed Vulkan queries.
 Build and live graphics verification remain open.
 [Graphics admission](research/rust-vulkan-dx12-copy-plan.md#graphics-admission-and-dispatch-setup)
 
+The shared XeSS and FSR4 Present path now admits the borrowed shape
+and plans binary and timeline waits in Rust. The native Vulkan arrays,
+result write and graphics queue call retain their typed boundaries.
+Build and live graphics verification remain open.
+[Present admission and waits](research/rust-vulkan-dx12-copy-plan.md#present-admission-and-waits)
+
 ## Verification coverage
 
 | Requirement | Recorded evidence | Still open |
