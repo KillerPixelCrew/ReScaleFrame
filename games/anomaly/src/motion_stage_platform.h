@@ -14,7 +14,7 @@ struct FrameTarget;
 struct FoliageLayout;
 
 // Private static-library ABI. Engine objects borrow their native lifetime.
-// Pack, request and reflection handles use the corresponding destroy leaf.
+// Pack and reflection handles use the corresponding destroy leaf.
 struct WindowFacts {
     void* device;
     void* context;
@@ -80,16 +80,15 @@ struct MotionPlatform {
     void (*attach_device)(void*, void*);
     int32_t (*dump_shaders)(void*, const wchar_t*);
     void (*patch_counters)(void*, PatchCounters*);
-    void* (*decode_request)(const char*, const void*, uint32_t, const void*, const void*, uint8_t*, rsf_anomaly_shader_bytes*);
-    void (*drop_request)(void*);
-    bool (*copy_bytecode)(void*);
-    void (*prepare_shader)(void*, void*, const rsf_anomaly_shader_entry*, ShaderResult*);
+    void* (*frame_layout)(rsf_anomaly_shader_frame_layout*);
+    rsf_anomaly_shader_read read_engine;
+    void (*prepare_shader)(void*, const rsf_anomaly_shader_request*, const rsf_anomaly_shader_entry*, ShaderResult*);
     void (*drop_reflection)(void*);
     bool (*foliage_layout)(void*, uint8_t, FoliageLayout*);
     bool (*link_shaders)(const void*, const void*, const void*, const void*);
-    void* (*create_shader)(void*, void*, void*, void*, bool, bool*);
+    void* (*create_shader)(void*, const char*, void*, void*, bool, bool*);
 };
-inline constexpr uint32_t motion_platform_abi = 4;
+inline constexpr uint32_t motion_platform_abi = 5;
 
 extern "C" {
 void rsf_anomaly_motion_stage_configure(const MotionPlatform*, const wchar_t*, rsf_dump_log_fn, void*) noexcept;

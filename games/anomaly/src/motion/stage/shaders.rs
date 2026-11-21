@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::digest::sha256;
-use crate::shader_loader::{Bytes, Entry, Manifest};
+use crate::shader_loader::{DecodedFrame, Entry, FrameLayout, Manifest, decode_frame};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -45,14 +45,56 @@ pub(in crate::motion) struct Variant {
 }
 
 // Requests own a sealed copy of original DXBC and the guarded compiler frame.
-// Their storage is immutable once published. D3D11 shader references and
-// plain reflection data can be released after the draw on any caller thread.
+// Their storage is immutable once published.
 struct Request {
-    data: Lease,
     hash: [u8; 64],
+    target: [u8; 17],
+    frame: DecodedFrame,
+    bytecode: Vec<u8>,
 }
-unsafe impl Send for Request {}
-unsafe impl Sync for Request {}
+
+impl Request {
+    fn copy_stock(
+        call: &Creation<'_>,
+        frame: DecodedFrame,
+        hash: [u8; 64],
+        read: impl Fn(usize, &mut [u8]) -> bool,
+    ) -> Option<Self> {
+        let mut target = [0; 17];
+        // Leave the final byte zero for the Runtime's C-string input.
+        for (i, slot) in target[..16].iter_mut().enumerate() {
+            let mut byte = [0];
+            let Some(address) = (call.target as usize).checked_add(i) else {
+                break;
+            };
+            if !read(address, &mut byte) || byte[0] == 0 {
+                break;
+            }
+            *slot = byte[0];
+        }
+        let size = call.size as usize;
+        let address = call.bytecode as usize;
+        if size == 0 || address == 0 || address.checked_add(size - 1).is_none() {
+            return None;
+        }
+        let mut bytecode = Vec::new();
+        bytecode.try_reserve_exact(size).ok()?;
+        bytecode.resize(size, 0);
+        read(address, &mut bytecode).then_some(Self {
+            hash,
+            target,
+            frame,
+            bytecode,
+        })
+    }
+
+    fn target(&self) -> &CStr {
+        CStr::from_bytes_until_nul(&self.target).expect("target has a reserved terminator")
+    }
+}
+
+// D3D11 shader references and plain reflection data can be released after
+// the draw on any caller thread.
 unsafe impl Send for Variant {}
 unsafe impl Sync for Variant {}
 
@@ -299,7 +341,11 @@ impl Replacement {
         attach: bool,
     ) -> Result<Self, (u8, String)> {
         let mut result = ShaderResult::default();
-        unsafe { (platform.prepare_shader)(pack.ptr(), request.data.as_ptr(), entry, &mut result) };
+        request
+            .frame
+            .with_request(request.target().to_bytes(), &request.bytecode, |view| {
+                unsafe { (platform.prepare_shader)(pack.ptr(), view, entry, &mut result) };
+            });
         let reflection = Lease::new(result.reflection, platform.drop_reflection);
         if !matches!(result.outcome, 1 | 2) {
             return Err((
@@ -321,7 +367,7 @@ impl Replacement {
         let shader = unsafe {
             (platform.create_shader)(
                 pack.ptr(),
-                request.data.as_ptr(),
+                request.target().as_ptr(),
                 device,
                 reflection.as_ptr(),
                 attach,
@@ -497,34 +543,34 @@ impl Stage {
         // Split the guard so a borrowed manifest row can outlive counter updates.
         let loader = &mut *guard;
         let Some(pack) = &loader.pack else { return };
-        let mut status = 0;
-        let mut source = Bytes::from(&[][..]);
-        let request = unsafe {
-            (p.decode_request)(
-                call.target,
-                call.bytecode,
-                call.size,
-                call.return_address,
-                call.stack,
-                &mut status,
-                &mut source,
-            )
-        };
-        let Some(data) = Lease::new(request, p.drop_request) else {
-            return;
+        let mut layout = MaybeUninit::<FrameLayout>::uninit();
+        let module = unsafe { (p.frame_layout)(layout.as_mut_ptr()) };
+        let layout = unsafe { layout.assume_init() };
+        let read = |address: usize, bytes: &mut [u8]| unsafe {
+            (p.read_engine)(ptr::null(), address, bytes.as_mut_ptr(), bytes.len())
         };
         let file = String::from_utf8_lossy(call.file);
-        if status != 0 {
-            loader.stats.frame_refusals += 1;
-            if loader.refused_logs < 32 {
-                loader.refused_logs += 1;
-                self.log().say(format!(
-                    "Anomaly motion shader frame refused (status {status}): {file}"
-                ));
+        let frame = match decode_frame(
+            &layout,
+            module as usize,
+            call.return_address as usize,
+            call.stack as usize,
+            read,
+        ) {
+            Ok(frame) => frame,
+            Err(status) => {
+                loader.stats.frame_refusals += 1;
+                if loader.refused_logs < 32 {
+                    loader.refused_logs += 1;
+                    self.log().say(format!(
+                        "Anomaly motion shader frame refused (status {}): {file}",
+                        status as u8
+                    ));
+                }
+                return;
             }
-            return;
-        }
-        let Some(hash) = sha256(unsafe { source.as_slice() }) else {
+        };
+        let Some(hash) = sha256(&frame.source) else {
             return;
         };
         let Some(entry) = pack.entry(&hash) else {
@@ -533,25 +579,24 @@ impl Stage {
         };
         let family = entry.family as usize;
         let name = String::from_utf8_lossy(entry.name()).into_owned();
-        let request = Request { data, hash };
-        let device = unsafe { (p.shader_device)() };
         let result = if entry.stage == call.stage {
-            Replacement::build(p, pack, &request, entry, device, true)
+            Request::copy_stock(&call, frame, hash, read)
+                .ok_or_else(|| {
+                    (
+                        CREATE_FAILED,
+                        "original bytecode could not be retained".into(),
+                    )
+                })
+                .and_then(|request| {
+                    let device = unsafe { (p.shader_device)() };
+                    Replacement::build(p, pack, &request, entry, device, true)
+                        .map(|replacement| (replacement, request, device))
+                })
         } else {
             Err((NOT_ALLOWLISTED, String::new()))
         };
-        let result = result.and_then(|replacement| {
-            if unsafe { (p.copy_bytecode)(request.data.as_ptr()) } {
-                Ok(replacement)
-            } else {
-                Err((
-                    CREATE_FAILED,
-                    "original bytecode could not be retained".into(),
-                ))
-            }
-        });
         let outcome = match result {
-            Ok(replacement) => {
+            Ok((replacement, request, device)) => {
                 if matches!(entry.family, FOLIAGE_TREE | FOLIAGE_DETAIL)
                     && !replacement.foliage.usable
                     && loader.refused_logs < 32
@@ -611,8 +656,10 @@ mod tests {
             shader: lease(replacement),
             reflection: lease(replacement),
             request: Arc::new(Request {
-                data: lease(stock),
                 hash: [0; 64],
+                target: [0; 17],
+                frame: DecodedFrame::default(),
+                bytecode: Vec::new(),
             }),
             device: lease(device),
             stage,

@@ -6,6 +6,7 @@ mod reflection;
 mod runtime_pack;
 
 use crate::digest::sha256;
+pub(crate) use frame::{DecodedFrame, FrameLayout, Read, decode_frame};
 pub(crate) use manifest::{Entry, Manifest};
 use reflection::{Compatibility, Reflection, rsf_anomaly_shader_compatible};
 use std::ffi::{OsString, c_void};
@@ -52,7 +53,7 @@ struct Define {
 }
 
 #[repr(C)]
-struct Request {
+pub(crate) struct Request {
     target: Bytes,
     entry: Bytes,
     flags: u32,
@@ -69,6 +70,12 @@ struct Identity {
     name: Bytes,
     stage: u8,
 }
+
+const _: () = {
+    assert!(size_of::<Request>() == 88);
+    assert!(std::mem::offset_of!(Request, defines) == 40);
+    assert!(std::mem::offset_of!(Request, bytecode) == 72);
+};
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_anomaly_shader_sha256(bytes: Bytes, out: &mut [u8; 64]) -> bool {

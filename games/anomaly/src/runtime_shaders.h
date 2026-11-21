@@ -18,5 +18,5 @@ inline const rsf_shader_patch_api& runtime_pack_api(const void* pack) noexcept {
 
 void* open_runtime_pack(const wchar_t* pack, const wchar_t* cache, std::byte* image, const MotionProfile&,
     std::string& error);
-Prepared prepare_runtime_pack(void* pack, const ShaderRequest&, const ManifestEntry&, Reflector&);
+Prepared prepare_runtime_pack(void* pack, const rsf_anomaly_shader_request&, const ManifestEntry&, Reflector&);
 }

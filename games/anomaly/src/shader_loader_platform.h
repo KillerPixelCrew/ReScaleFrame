@@ -124,6 +124,18 @@ void rsf_anomaly_shader_finish_runtime(const rsf_anomaly_shader_request*, uint8_
 #include "shader_loader.h"
 #include <cstddef>
 namespace rsf::anomaly::motion {
+static_assert(sizeof(rsf_anomaly_shader_frame_layout) == 36);
+static_assert(sizeof(rsf_anomaly_shader_request) == 88 && offsetof(rsf_anomaly_shader_request, defines) == 40 &&
+    offsetof(rsf_anomaly_shader_request, bytecode) == 72);
+
+inline rsf_anomaly_shader_frame_layout shader_frame_layout(const MotionProfile& profile) noexcept
+{
+    const auto& frame = profile.frame;
+    return {{profile.create_shader_calls[0].rva, profile.create_shader_calls[1].rva}, call_length,
+        frame.source_offset, frame.length_offset, frame.entry_offset, frame.flags_offset, frame.defines_offset,
+        frame_defines_capacity};
+}
+
 static_assert(sizeof(ManifestEntry) == sizeof(rsf_anomaly_shader_entry) && sizeof(ManifestEntry) == 56 &&
     offsetof(ManifestEntry, name) == offsetof(rsf_anomaly_shader_entry, name) &&
     offsetof(ManifestEntry, original_sha256) == offsetof(rsf_anomaly_shader_entry, original) &&

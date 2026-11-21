@@ -4,6 +4,16 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now retains the guarded Anomaly motion shader frame and original DXBC
+through variant preparation and reload. Both paths borrow the same owned
+bytes. An unreadable DXBC range is refused before Runtime preparation can
+compile, update its cache or create a replacement. The fixture facade uses
+the same frame decoder. Native code supplies the exact profile layout,
+guarded reads, and typed reflection and shader calls. Source review matched
+the new private table to the Rust layout and confirmed the public shader
+service and game ABI headers are unchanged. Build and live shader reload
+coverage remain open for this revision.
+
 Rust now owns the DLSS-G compatibility wrapper lease, capacity
 and status. Native code keeps the existing compatibility checks and
 effects. Release shares the transition guard, status reads use one

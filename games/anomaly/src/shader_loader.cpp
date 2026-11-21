@@ -262,10 +262,7 @@ FrameStatus read_request(const MotionProfile& profile, const std::byte* module, 
     const std::byte* caller_rsp, const FrameReader& reader, ShaderRequest& request)
 {
     if (!reader) return FrameStatus::UnknownCaller;
-    const auto& frame = profile.frame;
-    const rsf_anomaly_shader_frame_layout layout{{profile.create_shader_calls[0].rva, profile.create_shader_calls[1].rva},
-        call_length, frame.source_offset, frame.length_offset, frame.entry_offset, frame.flags_offset, frame.defines_offset,
-        frame_defines_capacity};
+    const auto layout = shader_frame_layout(profile);
     return static_cast<FrameStatus>(rsf_anomaly_shader_frame(&layout, reinterpret_cast<uintptr_t>(module),
         reinterpret_cast<uintptr_t>(return_address), reinterpret_cast<uintptr_t>(caller_rsp),
         &reader, read_frame, &request, publish_frame));
@@ -345,12 +342,12 @@ Prepared finish_runtime_shader(const ShaderRequest& request, const ManifestEntry
     const RequestView input(request);
     return finish_runtime_view(input.value, entry, reflector, status, cache_hit, code, detail);
 }
-Prepared prepare_runtime_pack(void* pack, const ShaderRequest& request, const ManifestEntry& entry, Reflector& reflector)
+Prepared prepare_runtime_pack(void* pack, const rsf_anomaly_shader_request& request, const ManifestEntry& entry,
+    Reflector& reflector)
 {
-    const RequestView input(request);
     rsf_patch_output output{};
-    const auto status = rsf_anomaly_runtime_pack_prepare(pack, &input.value, &output);
-    return finish_runtime_view(input.value, entry, reflector, status, output.cache_hit != 0,
+    const auto status = rsf_anomaly_runtime_pack_prepare(pack, &request, &output);
+    return finish_runtime_view(request, entry, reflector, status, output.cache_hit != 0,
         {static_cast<const std::byte*>(output.bytecode.data), output.bytecode.size}, output.reason);
 }
 }
