@@ -132,6 +132,15 @@ consumption is still unverified. Two opening captures at 1280×720 and
 two closing captures at 1600×900 are beside the logs and hashes in
 `.local/anomaly/staging/live-58fe95a-stage5/evidence/rust-overlay-hook-registry-avx/`.
 
+Anomaly's guarded native hook batches now use Rust admission, rollback,
+and trampoline lifetime management. Engine hooks and the four D3D11
+motion detours serialize operations on the MinHook queue. The existing
+Standard and AVX byte guards and pinned adapter lifetime still apply.
+The worker passed 18 CPU contracts per MSVC configuration and the
+pinned Rust checks. Its Release and Debug DLLs retained the original
+exports and dynamic Runtime lookup.
+[Hook transaction audit](research/rust-anomaly-native-hook-set.md)
+
 Anomaly's cold entry and startup retry state now live in Rust. The
 entry borrows the Runtime already loaded by the thin carrier. A partial
 session refuses before changing stage setup, and retrying an unfinished

@@ -10,7 +10,6 @@
 #include "runtime_shaders.h"
 #include "sr_profile.h"
 #include "sr_stage.h"
-#include <MinHook.h>
 #include <intrin.h>
 #include <algorithm>
 #include <array>
@@ -59,11 +58,8 @@ using DrawIndexedFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT,
 using DrawFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT);
 using DrawIndexedInstancedFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT, UINT, INT, UINT);
 using DrawInstancedFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT, UINT, UINT);
-DrawIndexedFn original_draw_indexed{};
-DrawFn original_draw{};
-DrawIndexedInstancedFn original_draw_indexed_instanced{};
-DrawInstancedFn original_draw_instanced{};
-std::array<void*, 4> draw_targets{};
+HookSet draw_hooks;
+std::array<void*, 4> draw_originals{};
 
 template<class Call> void around_draw(ID3D11DeviceContext* context, Call&& call) {
     rsf_anomaly_motion_stage_draw(context, [](void* user, void* immediate) {
@@ -71,16 +67,20 @@ template<class Call> void around_draw(ID3D11DeviceContext* context, Call&& call)
     }, &call);
 }
 void STDMETHODCALLTYPE draw_indexed_hook(ID3D11DeviceContext* c, UINT count, UINT start, INT base) {
-    around_draw(c, [&](ID3D11DeviceContext* x) { original_draw_indexed(x, count, start, base); });
+    around_draw(c, [&](ID3D11DeviceContext* x) { reinterpret_cast<DrawIndexedFn>(draw_originals[0])(x, count, start, base); });
 }
 void STDMETHODCALLTYPE draw_hook(ID3D11DeviceContext* c, UINT count, UINT start) {
-    around_draw(c, [&](ID3D11DeviceContext* x) { original_draw(x, count, start); });
+    around_draw(c, [&](ID3D11DeviceContext* x) { reinterpret_cast<DrawFn>(draw_originals[1])(x, count, start); });
 }
 void STDMETHODCALLTYPE draw_indexed_instanced_hook(ID3D11DeviceContext* c, UINT count, UINT instances, UINT start, INT base, UINT first) {
-    around_draw(c, [&](ID3D11DeviceContext* x) { original_draw_indexed_instanced(x, count, instances, start, base, first); });
+    around_draw(c, [&](ID3D11DeviceContext* x) {
+        reinterpret_cast<DrawIndexedInstancedFn>(draw_originals[2])(x, count, instances, start, base, first);
+    });
 }
 void STDMETHODCALLTYPE draw_instanced_hook(ID3D11DeviceContext* c, UINT count, UINT instances, UINT start, UINT first) {
-    around_draw(c, [&](ID3D11DeviceContext* x) { original_draw_instanced(x, count, instances, start, first); });
+    around_draw(c, [&](ID3D11DeviceContext* x) {
+        reinterpret_cast<DrawInstancedFn>(draw_originals[3])(x, count, instances, start, first);
+    });
 }
 // ID3D11DeviceContext vtable slots (d3d11.h declaration order): DrawIndexed 12, Draw 13, DrawIndexedInstanced 20,
 // DrawInstanced 21.
@@ -91,26 +91,13 @@ bool install_draw_hooks(void* context) noexcept {
     const std::array<std::size_t, 4> slots{12, 13, 20, 21};
     const std::array<void*, 4> replacements{reinterpret_cast<void*>(&draw_indexed_hook), reinterpret_cast<void*>(&draw_hook),
         reinterpret_cast<void*>(&draw_indexed_instanced_hook), reinterpret_cast<void*>(&draw_instanced_hook)};
-    std::array<void**, 4> trampolines{reinterpret_cast<void**>(&original_draw_indexed), reinterpret_cast<void**>(&original_draw),
-        reinterpret_cast<void**>(&original_draw_indexed_instanced), reinterpret_cast<void**>(&original_draw_instanced)};
-    const auto initialized = MH_Initialize();
-    if (initialized != MH_OK && initialized != MH_ERROR_ALREADY_INITIALIZED) return false;
-    std::size_t created = 0;
+    std::array<ResolvedHookSite, 4> sites{};
     for (std::size_t i = 0; i < slots.size(); ++i) {
         void* target{};
-        if (!guarded_copy(&target, vtable + slots[i], sizeof(target)) || !target ||
-            std::find(draw_targets.begin(), draw_targets.begin() + created, target) != draw_targets.begin() + created ||
-            MH_CreateHook(target, replacements[i], trampolines[i]) != MH_OK) break;
-        draw_targets[created++] = target;
+        if (!guarded_copy(&target, vtable + slots[i], sizeof(target))) return false;
+        sites[i] = {target, replacements[i], &draw_originals[i]};
     }
-    if (created != slots.size()) {
-        for (std::size_t i = 0; i < created; ++i) (void)MH_RemoveHook(draw_targets[i]);
-        return false;
-    }
-    for (const auto target : draw_targets)
-        if (MH_QueueEnableHook(target) != MH_OK) return false;
-    if (MH_ApplyQueued() != MH_OK) return false;
-    return true;
+    return draw_hooks.install_resolved(sites);
 }
 
 bool guards_match(std::byte* module, uint32_t image_size, const MotionProfile& profile, const char** failed) noexcept {

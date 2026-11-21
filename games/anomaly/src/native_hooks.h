@@ -13,17 +13,27 @@ struct HookSite {
     void* replacement{};
     void** original{};
 };
+
+struct ResolvedHookSite {
+    void* target{};
+    void* replacement{};
+    void** original{};
+};
+
 // Keep trampolines alive for the process. Disabling detours is not a proof that
 // another thread has retired from a callback or its original trampoline.
 class HookSet {
 public:
+    HookSet() noexcept = default;
+    HookSet(const HookSet&) = delete;
+    HookSet& operator=(const HookSet&) = delete;
     bool install(std::byte* module, uint32_t image_size, std::span<const HookSite>) noexcept;
+    // Only for the immediate-context D3D11 methods resolved through their COM vtable.
+    bool install_resolved(std::span<const ResolvedHookSite>) noexcept;
     bool enable() noexcept;
     bool disable() noexcept;
-    bool created() const noexcept { return count_ != 0; }
+    bool created() const noexcept;
 private:
-    std::array<void*, 24> targets_{};
-    size_t count_{};
-    bool enabled_{};
+    void* batch_{};
 };
 }
