@@ -2,15 +2,16 @@
 //! `api.h` records and the leaves lent by `runtime.cpp`, mirrored by hand from `api.h` and
 //! `godot_platform.h` (bindgen-cli 0.72.1 was not available). Both sides assert sizes and offsets.
 //! The leaves carry the D3D12 capture owner, the FG presenter install, header-inline Runtime
-//! validators, the Vulkan owner in `vulkan.cpp` and the status facts; every decision stays in
-//! this crate. The archive imports no native symbol.
+//! validators, the Vulkan owner's guard and its device, provider, presenter and SDK calls in
+//! `vulkan.cpp`, and the status facts; every decision stays in this crate. The archive imports
+//! no native symbol.
 // Mirrored C layouts: the leaves and the engine module read fields this crate only writes.
 #![allow(dead_code)]
 use rsf_game_sys::rsf_game_log_fn;
 use std::ffi::{c_char, c_int, c_void};
 use std::sync::OnceLock;
 
-pub(crate) const PLATFORM_VERSION: u32 = 1;
+pub(crate) const PLATFORM_VERSION: u32 = 2;
 /// `RSF_GODOT_ABI_VERSION`: setup, status, engine services and the Vulkan packet.
 pub(crate) const ABI_VERSION: u32 = 3;
 /// `RSF_GODOT_SETTINGS_ABI_VERSION`.
@@ -247,6 +248,96 @@ pub(crate) struct SrFrame {
     pub(crate) output_height: u32,
 }
 
+/// `rsf_godot_vk_facts`, read under the Vulkan owner's guard.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct VkFacts {
+    pub(crate) xess_device_ready: u32,
+    pub(crate) interop_device_ready: u32,
+    pub(crate) graph_handoff: u32,
+    pub(crate) fsr4_sr_compiled: u32,
+    pub(crate) fsr4_fg_compiled: u32,
+    pub(crate) xess_fg_compiled: u32,
+    pub(crate) presenter: u32,
+    pub(crate) primary_window: u32,
+    pub(crate) presenter_backend: u32,
+    pub(crate) sdk_shutdown_pending: u32,
+}
+
+/// `rsf_godot_vk_latency_facts`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct VkLatencyFacts {
+    pub(crate) low_latency_available: u32,
+    pub(crate) report_available: u32,
+    pub(crate) pcl_message: u32,
+    pub(crate) mode: u32,
+    pub(crate) owner: u32,
+    pub(crate) reserved: u32,
+    pub(crate) sleep_calls: u64,
+    pub(crate) marker_calls: u64,
+}
+
+/// `rsf_godot_vk_view`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct VkView {
+    pub(crate) settings: Settings,
+    pub(crate) sr_backend: u32,
+    pub(crate) generation: u64,
+    pub(crate) session_id: u64,
+    pub(crate) fg_backend: u32,
+    pub(crate) output_width: u32,
+    pub(crate) output_height: u32,
+    pub(crate) fg_result: i32,
+}
+
+/// `rsf_godot_vk_fg_pass`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct VkFgPass {
+    pub(crate) role: u32,
+    pub(crate) screen: u32,
+    pub(crate) session_id: u64,
+    pub(crate) view_id: u32,
+    pub(crate) render_width: u32,
+    pub(crate) render_height: u32,
+    pub(crate) enabled: u32,
+    pub(crate) generated_frames: u32,
+    pub(crate) options_result: i32,
+    pub(crate) backend_valid: u32,
+    pub(crate) backend: u32,
+}
+
+/// `rsf_godot_vk_present_facts`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct VkPresentFacts {
+    pub(crate) enabled: u32,
+    pub(crate) result: i32,
+    pub(crate) generated_callbacks: u64,
+    pub(crate) presented: u64,
+    pub(crate) tagged: u64,
+}
+
+/// `rsf_godot_vk_sr_frame`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct VkSrFrame {
+    pub(crate) identity: u32,
+    pub(crate) outcome: u32,
+    pub(crate) result: i32,
+    pub(crate) backend: u32,
+    pub(crate) render_width: u32,
+    pub(crate) render_height: u32,
+    pub(crate) output_width: u32,
+    pub(crate) output_height: u32,
+    pub(crate) source_frame_id: u64,
+}
+
+/// The body `vulkan_locked` runs under the Vulkan owner's guard.
+pub(crate) type LockedBody = unsafe extern "C" fn(*mut c_void) -> i32;
+
 /// `rsf_godot_option_field`.
 #[repr(C)]
 pub(crate) struct OptionField {
@@ -278,10 +369,16 @@ pub(crate) struct Platform {
     pub(crate) sharpening_valid: unsafe extern "C" fn(*const Sharpening) -> u32,
     pub(crate) sharpening_defaults: unsafe extern "C" fn(*mut Sharpening),
     pub(crate) fg_backend_known: unsafe extern "C" fn(u32) -> u32,
-    pub(crate) vulkan_booted: unsafe extern "C" fn() -> u32,
-    pub(crate) vulkan_configure: unsafe extern "C" fn(*const Settings) -> i32,
-    pub(crate) vulkan_settings: unsafe extern "C" fn(*mut Settings) -> i32,
-    pub(crate) vulkan_status: unsafe extern "C" fn(*mut Status) -> i32,
+    pub(crate) vulkan_supported: unsafe extern "C" fn() -> u32,
+    pub(crate) vulkan_latency_facts: unsafe extern "C" fn(*mut VkLatencyFacts) -> u32,
+    pub(crate) vulkan_locked: unsafe extern "C" fn(LockedBody, *mut c_void) -> i32,
+    pub(crate) vulkan_start: unsafe extern "C" fn(*const Setup) -> i32,
+    pub(crate) vulkan_stop: unsafe extern "C" fn() -> i32,
+    pub(crate) vulkan_release: unsafe extern "C" fn(u64),
+    pub(crate) vulkan_facts: unsafe extern "C" fn(*mut VkFacts),
+    pub(crate) vulkan_presenter_max: unsafe extern "C" fn(*mut u32) -> i32,
+    pub(crate) vulkan_fsr4_fg_probe: unsafe extern "C" fn() -> u32,
+    pub(crate) vulkan_latency_options: unsafe extern "C" fn(u32, u32) -> i32,
     pub(crate) cpu_counters: unsafe extern "C" fn(*mut InputFacts),
     pub(crate) window_facts: unsafe extern "C" fn(*mut WindowFacts),
     pub(crate) fg_facts: unsafe extern "C" fn(*mut FgFacts),
@@ -315,8 +412,20 @@ const _: () = {
     assert!(size_of::<SrFrame>() == 32);
     assert!(size_of::<OptionField>() == 16);
     assert!(size_of::<OptionValue>() == 24);
-    assert!(size_of::<Platform>() == 136);
-    assert!(offset_of!(Platform, latency_facts) == 128);
+    assert!(size_of::<VkFacts>() == 40);
+    assert!(size_of::<VkLatencyFacts>() == 40);
+    assert!(offset_of!(VkLatencyFacts, sleep_calls) == 24);
+    assert!(size_of::<VkView>() == 136);
+    assert!(offset_of!(VkView, generation) == 104);
+    assert!(offset_of!(VkView, fg_result) == 132);
+    assert!(size_of::<VkFgPass>() == 48);
+    assert!(offset_of!(VkFgPass, options_result) == 36);
+    assert!(size_of::<VkPresentFacts>() == 32);
+    assert!(size_of::<VkSrFrame>() == 40);
+    assert!(offset_of!(VkSrFrame, source_frame_id) == 32);
+    assert!(size_of::<Platform>() == 184);
+    assert!(offset_of!(Platform, vulkan_locked) == 88);
+    assert!(offset_of!(Platform, latency_facts) == 176);
 };
 
 #[cfg(test)]
@@ -376,24 +485,64 @@ impl Platform {
         unsafe { (self.fg_backend_known)(backend) != 0 }
     }
 
-    pub(crate) fn vulkan_booted(&self) -> bool {
-        unsafe { (self.vulkan_booted)() != 0 }
+    pub(crate) fn vulkan_supported(&self) -> bool {
+        unsafe { (self.vulkan_supported)() != 0 }
     }
 
-    pub(crate) fn vulkan_configure(&self, settings: &Settings) -> c_int {
-        unsafe { (self.vulkan_configure)(settings) }
+    /// The Streamline Vulkan latency status; none when the Runtime has none.
+    pub(crate) fn vulkan_latency_facts(&self) -> Option<VkLatencyFacts> {
+        let mut facts = VkLatencyFacts::default();
+        (unsafe { (self.vulkan_latency_facts)(&mut facts) } != 0).then_some(facts)
     }
 
-    /// # Safety
-    /// `settings` holds a header-checked `rsf_godot_settings` of the caller's size.
-    pub(crate) unsafe fn vulkan_settings(&self, settings: *mut Settings) -> c_int {
-        unsafe { (self.vulkan_settings)(settings) }
+    /// Runs `body` with the Vulkan owner's guard held and returns its result, or zero when the
+    /// leaf could not take the guard. The `vulkan_*` calls below are made only inside `body`.
+    /// The guard is not reentrant: `body` never calls back into a guarded `rsfg_vk_*` path.
+    pub(crate) fn vulkan_locked<F: FnMut() -> c_int>(&self, mut body: F) -> c_int {
+        unsafe extern "C" fn run<F: FnMut() -> c_int>(user: *mut c_void) -> i32 {
+            // SAFETY: `user` is the closure below, live and exclusively borrowed for the call.
+            let body = unsafe { &mut *user.cast::<F>() };
+            body()
+        }
+        unsafe { (self.vulkan_locked)(run::<F>, (&raw mut body).cast()) }
     }
 
-    /// # Safety
-    /// `status` holds a header-checked `rsf_godot_status` of the caller's size.
-    pub(crate) unsafe fn vulkan_status(&self, status: *mut Status) -> c_int {
-        unsafe { (self.vulkan_status)(status) }
+    /// Directories, Streamline and XeSS initialization and the creation resolver. Zero refuses.
+    pub(crate) fn vulkan_start(&self, setup: &Setup) -> c_int {
+        unsafe { (self.vulkan_start)(setup) }
+    }
+
+    /// Presenter disable and drain, SR context and capture retirement, XeSS shutdown and the SDK
+    /// shutdown or its deferral to presenter retirement. Zero refuses and keeps the session.
+    pub(crate) fn vulkan_stop(&self) -> c_int {
+        unsafe { (self.vulkan_stop)() }
+    }
+
+    /// Cancels the session's frame dump and drops the device borrow.
+    pub(crate) fn vulkan_release(&self, session_id: u64) {
+        unsafe { (self.vulkan_release)(session_id) }
+    }
+
+    pub(crate) fn vulkan_facts(&self) -> VkFacts {
+        let mut facts = VkFacts::default();
+        unsafe { (self.vulkan_facts)(&mut facts) };
+        facts
+    }
+
+    /// The live presenter's generated-frame capacity, when it answers.
+    pub(crate) fn vulkan_presenter_max(&self) -> Option<u32> {
+        let mut count = 0;
+        (unsafe { (self.vulkan_presenter_max)(&mut count) } == 0).then_some(count)
+    }
+
+    /// The FSR4 FG generated-frame capacity on the presenter's device; zero when the probe
+    /// refuses.
+    pub(crate) fn vulkan_fsr4_fg_probe(&self) -> u32 {
+        unsafe { (self.vulkan_fsr4_fg_probe)() }
+    }
+
+    pub(crate) fn vulkan_latency_options(&self, mode: u32, frame_limit_us: u32) -> i32 {
+        unsafe { (self.vulkan_latency_options)(mode, frame_limit_us) }
     }
 
     pub(crate) fn cpu_counters(&self) -> InputFacts {

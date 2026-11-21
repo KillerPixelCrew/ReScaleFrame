@@ -1,21 +1,24 @@
 // SPDX-License-Identifier: MIT
-//! Godot 4.7.2 native integration owner linked into `ReScaleFrame.Godot.Native.dll`. This first
-//! slice owns the Runtime control, settings and session state (`control.rs`) and the
-//! `ReScaleFrameRuntime` option schema and renderer admission (`extension.rs`).
+//! Godot 4.7.2 native integration owner linked into `ReScaleFrame.Godot.Native.dll`. It owns the
+//! Runtime control, settings and D3D12 session state (`control.rs`), the Vulkan session state
+//! (`vulkan.rs`) and the `ReScaleFrameRuntime` option schema and renderer admission
+//! (`extension.rs`).
 //!
 //! The `rsfg_*` exports in `api.h`, the GDExtension entry and the godot-cpp classes stay C++.
-//! `runtime.cpp` forwards to these entry points and lends its leaves through
+//! `runtime.cpp` and `vulkan.cpp` forward to these entry points and lend their leaves through
 //! `rsf_godot_platform` (`godot_platform.h`, mirrored in `platform.rs`): the D3D12 SR context,
-//! fences and capture, DXGI, Win32 window calls, the linked Runtime and the Vulkan owner. No
-//! second Runtime is loaded and no vendor, pacing or presentation policy is added here.
+//! fences and capture, DXGI, Win32 window calls, the linked Runtime and the Vulkan owner's guard,
+//! device, provider, presenter and SDK calls. No second Runtime is loaded and no vendor, pacing
+//! or presentation policy is added here.
 mod control;
 mod extension;
 mod platform;
+mod vulkan;
 
 use control::Control;
 use platform::{
     ABI_VERSION, EngineServices, OptionField, OptionValue, Paths, Platform, SETTINGS_ABI_VERSION,
-    Settings, Setup, SrFrame, Status,
+    Settings, Setup, SrFrame, Status, VkFgPass, VkPresentFacts, VkSrFrame, VkView,
 };
 use std::ffi::{CStr, c_char, c_int};
 use std::sync::LazyLock;
@@ -68,9 +71,7 @@ unsafe extern "C" fn rsf_godot_configure_engine(
     viewport_id: u64,
 ) -> c_int {
     // SAFETY: the caller's guarantee.
-    unsafe { leaves(table) }.map_or(0, |platform| {
-        CONTROL.configure_engine(platform, settings, viewport_id)
-    })
+    unsafe { leaves(table) }.map_or(0, |_| CONTROL.configure_engine(settings, viewport_id))
 }
 
 /// # Safety
@@ -78,8 +79,8 @@ unsafe extern "C" fn rsf_godot_configure_engine(
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_godot_reset_history(table: *const Platform) {
     // SAFETY: the caller's guarantee.
-    if let Some(platform) = unsafe { leaves(table) } {
-        CONTROL.reset_history(platform);
+    if unsafe { leaves(table) }.is_some() {
+        CONTROL.reset_history();
     }
 }
 
@@ -126,7 +127,7 @@ unsafe extern "C" fn rsf_godot_settings_get(
         )
     } {
         // SAFETY: checked_output established the record.
-        (Some(platform), Some(settings)) => unsafe { CONTROL.settings(platform, settings) },
+        (Some(_), Some(settings)) => unsafe { CONTROL.settings(settings) },
         _ => 0,
     }
 }
@@ -215,6 +216,113 @@ unsafe extern "C" fn rsf_godot_sr_frame_report(frame: *const SrFrame) {
 #[unsafe(no_mangle)]
 extern "C" fn rsf_godot_sr_missed() {
     CONTROL.sr_missed();
+}
+
+// The Vulkan session (vulkan.rs). The exports below other than boot and shutdown are called by
+// the leaves in vulkan.cpp while they hold its guard.
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_godot_vk_booted() -> c_int {
+    CONTROL.vulkan.booted().into()
+}
+
+/// # Safety
+/// `table` is null or the leaf table; `setup` is null or a readable `rsf_godot_setup` of its
+/// stated size whose strings are null or NUL-terminated for the call.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_godot_boot_vulkan(table: *const Platform, setup: *const Setup) -> c_int {
+    // SAFETY: the caller's guarantee.
+    match unsafe { (leaves(table), checked(setup, ABI_VERSION)) } {
+        (Some(platform), Some(setup)) => CONTROL.vulkan.boot(platform, setup),
+        _ => 0,
+    }
+}
+
+/// # Safety
+/// `table` is null or the leaf table.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_godot_shutdown_vulkan(table: *const Platform) -> c_int {
+    // SAFETY: the caller's guarantee.
+    unsafe { leaves(table) }.map_or(0, |platform| CONTROL.vulkan.shutdown(platform))
+}
+
+/// # Safety
+/// `view` is null or writable.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_godot_vk_view_get(view: *mut VkView) -> c_int {
+    let (value, active) = CONTROL.vulkan.view();
+    if !view.is_null() {
+        // SAFETY: the caller's guarantee.
+        unsafe { view.write(value) };
+    }
+    active
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_godot_vk_presenter_created(ready: u32, backend: u32, max_generated: u32) {
+    CONTROL
+        .vulkan
+        .presenter_created(ready != 0, backend, max_generated);
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_godot_vk_presenter_current(backend: u32) -> c_int {
+    CONTROL.vulkan.presenter_current(backend).into()
+}
+
+/// # Safety
+/// `facts` is null or readable.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_godot_vk_presented(facts: *const VkPresentFacts) {
+    // SAFETY: the caller's guarantee.
+    if let Some(facts) = unsafe { facts.as_ref() } {
+        CONTROL.vulkan.presented(facts);
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_godot_vk_presenter_retired() {
+    CONTROL.vulkan.presenter_retired();
+}
+
+/// # Safety
+/// `pass` is null or readable and writable.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_godot_vk_fg_begin(pass: *mut VkFgPass) {
+    // SAFETY: the caller's guarantee.
+    if let Some(pass) = unsafe { pass.as_mut() } {
+        CONTROL.vulkan.fg_begin(pass);
+    }
+}
+
+/// # Safety
+/// `pass` is null or readable.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_godot_vk_fg_admit(pass: *const VkFgPass) -> c_int {
+    // SAFETY: the caller's guarantee.
+    unsafe { pass.as_ref() }
+        .is_some_and(|pass| CONTROL.vulkan.fg_admit(pass))
+        .into()
+}
+
+/// # Safety
+/// `pass` is null or readable.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_godot_vk_fg_recorded(pass: *const VkFgPass, result: i32) {
+    // SAFETY: the caller's guarantee.
+    if let Some(pass) = unsafe { pass.as_ref() } {
+        CONTROL.vulkan.fg_recorded(pass, result);
+    }
+}
+
+/// # Safety
+/// `frame` is null or readable.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_godot_vk_sr_frame_report(frame: *const VkSrFrame) {
+    // SAFETY: the caller's guarantee.
+    if let Some(frame) = unsafe { frame.as_ref() } {
+        CONTROL.vulkan.sr_frame(frame);
+    }
 }
 
 /// # Safety
