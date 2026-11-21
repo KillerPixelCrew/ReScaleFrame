@@ -124,3 +124,69 @@ metadata, and Git whitespace checks passed. The remaining native layer contains 
 callbacks, guarded reads, native admission, QPC and host delivery, and hook effects. The existing
 proof coverage boundaries still apply. Build, link, tests, Clippy, deployment and device/game
 validation remain with the user.
+
+## CPU hook lifetime continuation
+
+This slice starts at `1eda132`. It uses the same Steam 1.7.104.0 executable
+fingerprint and the recorded [native input ownership](skyrim-input-ownership-20261115.md),
+[prospective poll](skyrim-prospective-source-20261115.md) and
+[CPU lifecycle review](skyrim-cpu-review-fixes-20261115.md). The source comparison asks whether
+Rust can own admission and retirement while each producer still calls its typed trampoline from
+the original C++ detour frame and reports the same facts.
+
+The table in [cpu_hooks.rs](../../games/skyrim-se/src/cpu_hooks.rs) carries the 19 expected bytes
+for each image-relative target. Its order matches the native detour and continuation slots.
+
+| RVA | Native producer | Observed scope |
+| --- | --- | --- |
+| `0x658870` | Main tick | Owns the stack frame, source adoption and begin/end events for one outer tick. The inactive and nested paths forward. |
+| `0xcf95f0` | PollDevices | Lends its native poll and dispatch scope. A verified late poll may reserve and sample a future source. Other polls keep their native behavior and can withdraw a reservation. The original takes a float timestep and returns a pointer-width value. |
+| `0x6565b0` | RenderEntry | Reports the first observed simulation end and scopes render identity to the call, restoring any enclosing scope. |
+| `0xcfa650` | Input dispatch | Observes the input-manager singleton's borrowed list before calling the original. Keyboard, mouse and controller delivery is unframed and reports the pre-dispatch QPC after the original returns. |
+| `0x656e60` | World | Caller `0x656e32`, output 0 and the existing render identity gate primary World begin/end and screen evidence. |
+| `0x7ad900` | PlayerControls sink | Opens a write epoch around the original, including its event-source argument, and credits only the matching dispatch list and singleton. |
+| `0x8fd590` | Camera state update | Records the existing camera consumption envelope using the native disabled byte and unchanged input stamp. |
+| `0x60eaf0` | Mode1 job submit | Caller `0x658b14` and matching idle manager gate simulation begin, any BIND or ABORT, and the pre-wake job ticket. |
+| `0x60eb80` | Mode1 job join | Caller `0x659334`, the same Main and manager, the native wait result and idle post-state gate retirement of that ticket. |
+| `0x6e6030` | Named poll callback | Caller `0xebc248` and the matching running job lend a ticket to PollDevices on that thread. |
+| `0x776290` | Movement | Forwards all four arguments on the native frame and records the player envelope with the same input stamp. |
+| `0x745200` | Player update | Preserves the float timestep and records the same verified player envelope. |
+| `0x558e70` | TESCamera update | Forwards the void single-argument call and observes the PlayerCamera singleton while a tick is scoped. |
+
+Prepare and start use the existing fault-guarded platform read for the named scheduler slot
+`0x20b5130`, both menu-query prologues (`0x1169530` and `0x1169590`), and all 13 target
+prologues. Unreadable memory or different bytes refuse admission. Start checks that every owned
+hook is disabled before examining its bytes. As with the earlier guard, a foreign patch between
+the read and enable can race admission.
+
+The session still initializes MinHook through the root observers before CPU prepare. Rust tracks
+which CPU hooks were created and enabled and shares the observers' state bookkeeping. CPU
+creation and cleanup keep their original forward order. On first prepare, create, clock or pin
+failure rolls back disabled hooks, retaining any whose removal refuses. Retry attempts those
+removals again. A successful prepare pins the adapter through the native table address and keeps
+the 13 continuations resident. Native code publishes each typed continuation before enable.
+The second prepare refreshes the clock and substitutes the Runtime services after the upstream
+prepare, using the same disabled trampolines.
+
+Start resets the existing Rust proof only after admission, publishes active after all enables
+succeed, and retains prepared services on rollback. A hook whose disable refuses stays tracked
+for a later stop. Quiesce closes admission and invalidates jobs, input epochs, source reservations
+and worker proof in the existing order. Disable stays retryable until MinHook reports all owned
+hooks disabled and entered detours drain. Final stop releases the Rust services snapshot after
+the session's other refusal checks pass. Tick, dispatch and poll borrow a copy under their
+native leases, without holding the services lock across engine or host code. An inactive
+tick can still call its resident trampoline without borrowing services.
+
+QPC remains in the native callbacks. RESERVE delivery completes before the QPC read directly
+before PollDevices. SAMPLED is delivered after the original using that poll timestamp and before
+the pending reservation becomes adoptable. The frame, render and input builders and their ABI
+stay in use, including the active window lookup for scoped render identity. Shared window input
+handling follows its existing Runtime path. The root observer's policy and the separate render
+and presentation sources were outside this port.
+
+Source-only comparison against `1eda132` matched all 13 indices, all 247 guarded bytes, each
+original signature and argument list, and every detour body after accounting for the new service
+and trampoline access. The native fixture interface and build wiring are the same. Pinned
+Rust 1.94.1 formatting, locked offline Windows x64 Cargo metadata and Git whitespace checks
+passed. Compile/link, Clippy, tests, device and game validation, deployment and push remain with
+the user.

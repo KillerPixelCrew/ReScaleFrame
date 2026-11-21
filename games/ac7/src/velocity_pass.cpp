@@ -6,13 +6,13 @@
 #include <rescaleframe/d3d11_observer.h>
 #include "velocity_shader.h"
 #include "velocity_pass_cache.h"
+#include "velocity_history.h"
 #include <d3d11.h>
 #include <wrl/client.h>
 #include <algorithm>
 #include <array>
 #include <map>
 #include <span>
-#include <tuple>
 #include <memory>
 #include <cstring>
 #include <cstdio>
@@ -129,18 +129,16 @@ struct Variant {
     bool particle=false;
     uint32_t maximum_vertices=1,history_slot=0,geometry_hash=0,input_points=0;
 };
-using ModelKey=std::tuple<uint64_t,uint64_t,uint64_t,uint64_t,uint32_t,uint64_t,uint32_t,int32_t,uint32_t>;
-using ViewKey=std::tuple<uint64_t,uint64_t>;
+// Identity, frame, validity, records, written state and epochs are velocity_history.rs; these
+// hold the native resources at its slots.
 struct Model {
-    Buffer previous,now;uint32_t frame=UINT32_MAX,records=0;uint64_t epoch=0;bool usable=false;
+    Buffer previous,now;
 };
 struct View {
-    uint32_t frame=UINT32_MAX,width=0,height=0;uint64_t family=0,view=0,epoch=0;
     ComPtr<ID3D11Texture2D> native_depth,depth,motion,merged;
     ComPtr<ID3D11DepthStencilView> depth_target;
     ComPtr<ID3D11RenderTargetView> motion_target,merged_target;
     ComPtr<ID3D11ShaderResourceView> motion_view;
-    bool written=false;
 };
 struct Renderer {
     ComPtr<ID3D11Device> device;
@@ -162,9 +160,8 @@ struct Renderer {
     std::map<std::vector<uint8_t>,ComPtr<ID3D11HullShader>> hull_shaders;
     std::map<std::vector<uint8_t>,ComPtr<ID3D11DomainShader>> domain_shaders;
     std::map<std::vector<uint8_t>,ComPtr<ID3D11GeometryShader>> geometry_shaders,capture_shaders;
-    std::map<ModelKey,Model> models;
-    std::map<ViewKey,View> views;
-    uint64_t epoch=1;
+    std::vector<Model> models;
+    std::vector<View> views;
     double cpu_ms=0,shader_cpu_ms=0,resource_cpu_ms=0,peak_cpu_ms=0;
     uint32_t profile_frame=0,profile_callbacks=0,largest_records=0;
     uint32_t shader_objects=0;
@@ -316,51 +313,62 @@ struct Renderer {
         c->SetPredication(nullptr,FALSE);
         bound_sources[0]=bound_sources[1]=nullptr;uav=nullptr;c->CSSetShaderResources(0,2,bound_sources);c->CSSetUnorderedAccessViews(0,1,&uav,nullptr);
     }
-    bool model(ID3D11DeviceContext* c,Model& model,uint32_t count) {
-        const uint32_t frame=uint32_t(current.native_frame);
-        if (model.frame!=frame) {
-            model.usable=model.frame!=UINT32_MAX && uint32_t(model.frame+1)==frame && !(current.flags&RSF_GAME_RENDER_RESET);
-            std::swap(model.previous,model.now);model.frame=frame;model.records=0;
+    // velocity_history.rs rotates before it refuses records, so the swap and clear run either way.
+    Model* model(ID3D11DeviceContext* c,const VelocityModelDraw& draw,bool& usable) {
+        VelocityModelDecision decision{VELOCITY_NO_SLOT,0,0,0};
+        const bool admitted=rsf_ac7_velocity_model_begin(&draw,&decision)!=0;
+        if (decision.slot==VELOCITY_NO_SLOT) return nullptr;
+        if (decision.slot>=models.size()) models.resize(size_t(decision.slot)+1);
+        Model& model=models[decision.slot];
+        if (decision.rotate) {
+            std::swap(model.previous,model.now);
             if (model.now.write) {const UINT zero[4]{};c->ClearUnorderedAccessViewUint(model.now.write.Get(),zero);}
         }
-        model.epoch=epoch;
-        if (count>UINT32_MAX-model.records || model.records+count>UINT32_MAX/128) return false;
-        model.records+=count;uint32_t capacity=1024;
-        while (capacity<model.records*2) {if (capacity>UINT32_MAX/2) return false;capacity*=2;}
-        if (model.now.count<capacity) {
-            Buffer larger;if (!raw_buffer(device.Get(),capacity,false,larger)) return false;
+        if (!admitted) return nullptr;
+        if (model.now.count<decision.capacity) {
+            Buffer larger;if (!raw_buffer(device.Get(),decision.capacity,false,larger)) return nullptr;
             const UINT zero[4]{};c->ClearUnorderedAccessViewUint(larger.write.Get(),zero);
             if (model.now.buffer) build(c,model.now,larger,model.now.count,1);
             model.now=std::move(larger);
         }
-        return true;
+        usable=decision.usable!=0;return &model;
     }
-    bool view(ID3D11DeviceContext* c,const rsf_frame_tap_geometry& g,View& v) {
+    // The view's slot once its targets hold this frame's native depth, or VELOCITY_NO_SLOT.
+    uint32_t view(ID3D11DeviceContext* c,const rsf_frame_tap_geometry& g) {
         auto* dsv=static_cast<ID3D11DepthStencilView*>(g.depth_view);
         ComPtr<ID3D11Resource> source;dsv->GetResource(&source);ComPtr<ID3D11Texture2D> depth;
-        if (FAILED(source.As(&depth))) return false;
+        if (FAILED(source.As(&depth))) return VELOCITY_NO_SLOT;
         D3D11_TEXTURE2D_DESC desc{};depth->GetDesc(&desc);
-        if (desc.Width!=g.width || desc.Height!=g.height || desc.ArraySize!=1 || desc.MipLevels!=1 || desc.SampleDesc.Count!=1) return false;
-        const uint32_t frame=uint32_t(current.native_frame);
-        if (v.frame==frame) return v.native_depth.Get()==depth.Get();
-        if (!v.depth || !v.depth_target || !v.motion || !v.motion_target || !v.motion_view || !v.merged ||
-            !v.merged_target || v.width!=desc.Width || v.height!=desc.Height) {
-            v={};v.width=desc.Width;v.height=desc.Height;
+        if (desc.Width!=g.width || desc.Height!=g.height || desc.ArraySize!=1 || desc.MipLevels!=1 || desc.SampleDesc.Count!=1) return VELOCITY_NO_SLOT;
+        const VelocityViewDraw draw{current.session_id,current.history_key,current.view_key,current.family_key,
+            uint32_t(current.native_frame),desc.Width,desc.Height,0};
+        VelocityViewDecision decision{VELOCITY_NO_SLOT,VELOCITY_VIEW_UNAVAILABLE,0,0};rsf_ac7_velocity_view_begin(&draw,&decision);
+        if (decision.action==VELOCITY_VIEW_UNAVAILABLE || decision.slot==VELOCITY_NO_SLOT) return VELOCITY_NO_SLOT;
+        if (decision.slot>=views.size()) views.resize(size_t(decision.slot)+1);
+        View& v=views[decision.slot];
+        if (decision.action==VELOCITY_VIEW_SAME_FRAME) return v.native_depth.Get()==depth.Get() ? decision.slot : VELOCITY_NO_SLOT;
+        if (decision.action==VELOCITY_VIEW_ALLOCATE) {
+            v={};
             D3D11_TEXTURE2D_DESC owned=desc;owned.Usage=D3D11_USAGE_DEFAULT;owned.CPUAccessFlags=owned.MiscFlags=0;
             owned.BindFlags=D3D11_BIND_DEPTH_STENCIL|D3D11_BIND_SHADER_RESOURCE;
             D3D11_DEPTH_STENCIL_VIEW_DESC depth_view{};dsv->GetDesc(&depth_view);depth_view.Flags=0;
             if (FAILED(device->CreateTexture2D(&owned,nullptr,&v.depth)) ||
-                FAILED(device->CreateDepthStencilView(v.depth.Get(),&depth_view,&v.depth_target))) return false;
+                FAILED(device->CreateDepthStencilView(v.depth.Get(),&depth_view,&v.depth_target))) return VELOCITY_NO_SLOT;
             owned.Format=DXGI_FORMAT_R16G16_UNORM;owned.BindFlags=D3D11_BIND_RENDER_TARGET|D3D11_BIND_SHADER_RESOURCE;
             if (FAILED(device->CreateTexture2D(&owned,nullptr,&v.motion)) ||
                 FAILED(device->CreateRenderTargetView(v.motion.Get(),nullptr,&v.motion_target)) ||
                 FAILED(device->CreateShaderResourceView(v.motion.Get(),nullptr,&v.motion_view)) ||
                 FAILED(device->CreateTexture2D(&owned,nullptr,&v.merged)) ||
-                FAILED(device->CreateRenderTargetView(v.merged.Get(),nullptr,&v.merged_target))) return false;
+                FAILED(device->CreateRenderTargetView(v.merged.Get(),nullptr,&v.merged_target))) return VELOCITY_NO_SLOT;
         }
-        v.frame=frame;v.family=current.family_key;v.view=current.view_key;v.epoch=epoch;v.native_depth=depth;v.written=false;
+        rsf_ac7_velocity_view_ready(decision.slot,&draw);v.native_depth=depth;
         c->CopyResource(v.depth.Get(),depth.Get());const float zero[4]{};c->ClearRenderTargetView(v.motion_target.Get(),zero);
-        return true;
+        return decision.slot;
+    }
+    static void retire(void* user,uint32_t kind,uint32_t slot) noexcept {
+        auto& owner=*static_cast<Renderer*>(user);
+        if (kind==VELOCITY_RETIRE_MODEL && slot<owner.models.size()) owner.models[slot]={};
+        else if (kind==VELOCITY_RETIRE_VIEW && slot<owner.views.size()) owner.views[slot]={};
     }
 };
 std::unique_ptr<Renderer> renderer;
@@ -390,7 +398,6 @@ void draw(ID3D11DeviceContext* c,const rsf_frame_tap_geometry& g,ID3D11Buffer* a
     default:break;
     }
 }
-ViewKey view_key(const rsf_game_render_pass& p) {return {p.session_id,p.history_key ? p.history_key : p.view_key};}
 }
 // Creation callbacks on any thread. velocity_pass_cache.rs keeps up to 64 MiB of 1 MiB or smaller
 // shader sources and 4096 layouts of at most 16 descriptors.
@@ -417,7 +424,7 @@ extern "C" void rsf_ac7_velocity_geometry(const rsf_frame_tap_geometry* pointer)
     ComPtr<ID3D11Device> device;c->GetDevice(&device);
     if (!renderer || renderer->device.Get()!=device.Get()) {
         auto made=std::make_unique<Renderer>(device.Get());if (!made->initialize()) {refused("device-side pass initialization failed");return;}
-        renderer=std::move(made);rsf_ac7_velocity_reset_variants();
+        renderer=std::move(made);rsf_ac7_velocity_reset_variants();rsf_ac7_velocity_history_reset();
     }
     CpuSample timing(*renderer,entered_ms);
     ComPtr<ID3D11PixelShader> native_pixel;c->PSGetShader(&native_pixel,nullptr,nullptr);
@@ -440,11 +447,14 @@ extern "C" void rsf_ac7_velocity_geometry(const rsf_frame_tap_geometry* pointer)
     if (g.kind>=5 && !renderer->prepare_indirect(c,g,uint32_t(count64),count,packing,variant->input_points)) {
         refused("indirect argument buffer or native mesh capacity is invalid");return;
     }
-    auto& view=renderer->views[view_key(current)];if (!renderer->view(c,g,view)) {refused("native scene depth allocation/identity differs from the draw");return;}
-    const ModelKey key{current.session_id,current.history_key ? current.history_key : current.view_key,
-        current.primitive_key,current.material_key,vertex_hash,variant->particle ? uint64_t(0) : current.vertex_factory_key,
-        variant->particle ? 0u : g.start,variant->particle ? 0 : g.base_vertex,variant->geometry_hash};
-    auto& model=renderer->models[key];if (!renderer->model(c,model,count)) {refused("geometry-history allocation failed");return;}
+    const uint32_t view_slot=renderer->view(c,g);
+    if (view_slot==VELOCITY_NO_SLOT) {refused("native scene depth allocation/identity differs from the draw");return;}
+    auto& view=renderer->views[view_slot];
+    const VelocityModelDraw model_draw{current.session_id,current.history_key,current.view_key,current.primitive_key,
+        current.material_key,current.vertex_factory_key,vertex_hash,variant->geometry_hash,g.start,g.base_vertex,
+        variant->particle ? 1u : 0u,uint32_t(current.native_frame),(current.flags&RSF_GAME_RENDER_RESET) ? 1u : 0u,count};
+    bool usable=false;Model* model=renderer->model(c,model_draw,usable);
+    if (!model) {refused("geometry-history allocation failed");return;}
     if (!renderer->captured.buffer || renderer->captured.count<count) {
         // SO cannot share the raw UAV contract, but it can expose a raw read-only SRV.
         // Keep a separate zero source for variable emissions and read completed SO directly.
@@ -499,12 +509,12 @@ extern "C" void rsf_ac7_velocity_geometry(const rsf_frame_tap_geometry* pointer)
     // UE4.27 clips translucent/additive/modulate opacity, while AlphaComposite has no
     // opacity discard in GetMaterialClippingVelocity. Its native opacity is saturated.
     parameters.cutoff=current.material_blend==5 ? -1.f : current.material_opacity_clip+1.f/255.f;
-    parameters.history=model.usable && model.previous.buffer ? 1u : 0u;
-    parameters.mask=model.previous.count ? model.previous.count-1 : 0;
+    parameters.history=usable && model->previous.buffer ? 1u : 0u;
+    parameters.mask=model->previous.count ? model->previous.count-1 : 0;
     std::memcpy(parameters.matrix,current.camera.clip_to_previous_clip,sizeof(parameters.matrix));
     c->UpdateSubresource(renderer->parameters.Get(),0,nullptr,&parameters,0,0);
     ID3D11Buffer* cb=renderer->parameters.Get();c->GSSetConstantBuffers(13,1,&cb);c->PSSetConstantBuffers(13,1,&cb);
-    ID3D11ShaderResourceView* previous=model.previous.view.Get();c->GSSetShaderResources(variant->history_slot,1,&previous);
+    ID3D11ShaderResourceView* previous=model->previous.view.Get();c->GSSetShaderResources(variant->history_slot,1,&previous);
     if (hull) {
         c->HSSetShader(variant->hull.Get(),nullptr,0);c->DSSetShader(variant->domain.Get(),nullptr,0);
         c->DSSetConstantBuffers(13,1,&cb);c->DSSetShaderResources(127,1,&previous);
@@ -512,7 +522,7 @@ extern "C" void rsf_ac7_velocity_geometry(const rsf_frame_tap_geometry* pointer)
     c->GSSetShader(variant->geometry.Get(),nullptr,0);c->PSSetShader(variant->pixel.Get(),nullptr,0);
     ID3D11RenderTargetView* rt=view.motion_target.Get();c->OMSetRenderTargets(1,&rt,view.depth_target.Get());
     c->OMSetDepthStencilState(renderer->depth_state.Get(),0);c->OMSetBlendState(renderer->blend.Get(),nullptr,UINT32_MAX);
-    c->SetPredication(predicate.Get(),predicate_value);draw(c,g,renderer->indirect.buffer.Get());c->SetPredication(nullptr,FALSE);view.written=true;
+    c->SetPredication(predicate.Get(),predicate_value);draw(c,g,renderer->indirect.buffer.Get());c->SetPredication(nullptr,FALSE);rsf_ac7_velocity_view_written(view_slot);
     previous=nullptr;c->GSSetShaderResources(variant->history_slot,1,&previous);c->OMSetRenderTargets(0,nullptr,nullptr);
     if (hull) c->DSSetShaderResources(127,1,&previous);
     uint32_t records=count;
@@ -521,25 +531,27 @@ extern "C" void rsf_ac7_velocity_geometry(const rsf_frame_tap_geometry* pointer)
         records=hull ? (g.count/variant->input_points)*3*instances :
             g.topology==D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP ? (std::max(g.count,2u)-2)*3*instances : uint32_t(count64);
     }
-    renderer->build(c,renderer->captured,model.now,records,0,g.kind>=5,predicate.Get(),predicate_value);
+    renderer->build(c,renderer->captured,model->now,records,0,g.kind>=5,predicate.Get(),predicate_value);
 } catch (...) {}
 extern "C" int rsf_ac7_velocity_commit(void* context,const rsf_game_render_pass* pass) try
 {
     if (!renderer || !context || !pass || pass->struct_size<sizeof(*pass) || !pass->motion || !pass->depth) return 0;
-    const auto found=renderer->views.find(view_key(*pass));if (found==renderer->views.end()) return 0;
-    auto& view=found->second;
-    if (!view.written || view.frame!=uint32_t(pass->native_frame) || view.view!=pass->view_key || view.family!=pass->family_key ||
-        view.native_depth.Get()!=pass->depth) return 0;
+    const VelocityViewDraw identity{pass->session_id,pass->history_key,pass->view_key,pass->family_key,
+        uint32_t(pass->native_frame),0,0,0};
+    VelocityViewDecision found{VELOCITY_NO_SLOT,VELOCITY_VIEW_UNAVAILABLE,0,0};rsf_ac7_velocity_view_commit(&identity,&found);
+    if (found.action!=VELOCITY_VIEW_COMMIT || found.slot>=renderer->views.size()) return 0;
+    auto& view=renderer->views[found.slot];
+    if (view.native_depth.Get()!=pass->depth) return 0;
     auto* c=static_cast<ID3D11DeviceContext*>(context);auto* native=static_cast<ID3D11Texture2D*>(pass->motion);
     D3D11_TEXTURE2D_DESC desc{};native->GetDesc(&desc);
-    if (desc.Width!=view.width || desc.Height!=view.height || desc.SampleDesc.Count!=1 || desc.ArraySize!=1 ||
+    if (desc.Width!=found.width || desc.Height!=found.height || desc.SampleDesc.Count!=1 || desc.ArraySize!=1 ||
         (desc.Format!=DXGI_FORMAT_R16G16_UNORM && desc.Format!=DXGI_FORMAT_R16G16_TYPELESS)) return 0;
     ComPtr<ID3D11Device> device;c->GetDevice(&device);if (device.Get()!=renderer->device.Get()) return 0;
     State saved(c);if (!saved.context) return 0;c->SetPredication(nullptr,FALSE);
     c->SOSetTargets(0,nullptr,nullptr);c->GSSetShader(nullptr,nullptr,0);c->HSSetShader(nullptr,nullptr,0);c->DSSetShader(nullptr,nullptr,0);
     c->VSSetShader(renderer->fullscreen.Get(),nullptr,0);c->PSSetShader(renderer->merge.Get(),nullptr,0);
     c->OMSetDepthStencilState(nullptr,0);c->OMSetBlendState(renderer->blend.Get(),nullptr,UINT32_MAX);
-    c->RSSetState(renderer->raster.Get());D3D11_VIEWPORT viewport{0,0,float(view.width),float(view.height),0,1};c->RSSetViewports(1,&viewport);
+    c->RSSetState(renderer->raster.Get());D3D11_VIEWPORT viewport{0,0,float(found.width),float(found.height),0,1};c->RSSetViewports(1,&viewport);
     c->IASetInputLayout(nullptr);c->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     D3D11_SHADER_RESOURCE_VIEW_DESC srv{};srv.Format=DXGI_FORMAT_R16G16_UNORM;srv.ViewDimension=D3D11_SRV_DIMENSION_TEXTURE2D;srv.Texture2D.MipLevels=1;
     ComPtr<ID3D11ShaderResourceView> native_view;if (FAILED(device->CreateShaderResourceView(native,&srv,&native_view))) return 0;
@@ -550,7 +562,7 @@ extern "C" int rsf_ac7_velocity_commit(void* context,const rsf_game_render_pass*
     c->VSSetShaderResources(0,128,empty);c->PSSetShaderResources(0,128,empty);c->GSSetShaderResources(0,128,empty);
     c->HSSetShaderResources(0,128,empty);c->DSSetShaderResources(0,128,empty);c->CSSetShaderResources(0,128,empty);
     c->CopyResource(native,view.merged.Get());c->CopyResource(view.native_depth.Get(),view.depth.Get());
-    view.written=false;
+    rsf_ac7_velocity_view_committed(found.slot);
     if (log_line && commit_reports++<3) log_line(log_user,"AC7 translucent velocity: opacity-clipped generated-geometry motion and depth committed before native post-processing");
     return 1;
 } catch (...) {return 0;}
@@ -561,15 +573,14 @@ extern "C" void rsf_ac7_velocity_frame_end(void)
         char message[320]{};std::snprintf(message,sizeof(message),
             "AC7 velocity CPU frame=%u callbacks=%u total_ms=%.2f shader_ms=%.2f resource_ms=%.2f peak_ms=%.2f largest_records=%u models=%zu variants=%zu shader_objects=%u",
             renderer->profile_frame,renderer->profile_callbacks,renderer->cpu_ms,renderer->shader_cpu_ms,
-            renderer->resource_cpu_ms,renderer->peak_cpu_ms,renderer->largest_records,renderer->models.size(),rsf_ac7_velocity_variant_count(),renderer->shader_objects);
+            renderer->resource_cpu_ms,renderer->peak_cpu_ms,renderer->largest_records,rsf_ac7_velocity_model_count(),rsf_ac7_velocity_variant_count(),renderer->shader_objects);
         log_line(log_user,message);
     }
     renderer->cpu_ms=renderer->shader_cpu_ms=renderer->resource_cpu_ms=renderer->peak_cpu_ms=0;
-    renderer->profile_callbacks=renderer->largest_records=0;++renderer->epoch;
-    std::erase_if(renderer->models,[&](const auto& entry) {return entry.second.epoch+2<renderer->epoch;});
-    std::erase_if(renderer->views,[&](const auto& entry) {return entry.second.epoch+2<renderer->epoch;});
+    renderer->profile_callbacks=renderer->largest_records=0;
+    rsf_ac7_velocity_history_frame_end(renderer.get(),Renderer::retire);
 }
 extern "C" void rsf_ac7_velocity_release(void)
-{renderer.reset();current={};rsf_ac7_velocity_cache_release();}
+{renderer.reset();current={};rsf_ac7_velocity_cache_release();rsf_ac7_velocity_history_reset();}
 uint32_t rsf_ac7_velocity_device_shader_creation_count() noexcept
 {return renderer ? renderer->shader_objects : 0;}

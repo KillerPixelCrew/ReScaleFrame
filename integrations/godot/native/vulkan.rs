@@ -2,7 +2,10 @@
 //! Godot Vulkan session state formerly held by `vulkan.cpp`: the boot state and session identity,
 //! the requested settings and their generation, the status record (ABI 3) with its latency
 //! overlay, the configure admission, the presenter currency rule for acquire, the FG enable rule,
-//! the fixed-guide retirement, the SR and FG accounting and the engine's primary window. The SR
+//! the fixed-guide retirement, the SR and FG accounting and the engine's primary window. Auto SR
+//! and FG are resolved by the Runtime's adapter policy through the `sr_select_backend` and
+//! `fg_select_backend` leaves, for the creation owner's adapter facts and the providers this
+//! session can serve (`Vulkan::providers`); the session decides no vendor preference. The SR
 //! context owner of `rsfg_render_vulkan` is the `sr` child module. The primary window is an
 //! atomic the guarded paths read; it was a guarded global, written only by `rsfg_vk_window`. The
 //! device creation owner (resolver routes, XeSS and interop requirements and their readiness) is
@@ -30,6 +33,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 const BACKEND_OK: i32 = 0;
 const BACKEND_ERROR_NOT_SUPPORTED: i32 = -7;
 const BACKEND_ERROR_NOT_READY: i32 = -8;
+const SR_DLSS: u32 = 1;
 const SR_FSR3: u32 = 3;
 const SR_FSR4: u32 = 4;
 const SR_XESS: u32 = 5;
@@ -47,22 +51,16 @@ const REGISTERED_MESSAGE: u32 = 0xc000;
 pub(crate) const SR_EVALUATED: u32 = 1;
 pub(crate) const SR_REFUSED: u32 = 2;
 
-/// Vulkan resolves an Auto SR request to FSR3.
-fn sr_backend(settings: &Settings) -> u32 {
-    if settings.sr_backend == SR_AUTO {
-        SR_FSR3
-    } else {
-        settings.sr_backend
-    }
+/// Bit `id` of a Runtime choices mask when `servable`.
+fn choice(servable: bool, id: u32) -> u32 {
+    if servable { 1 << id } else { 0 }
 }
 
-/// Vulkan resolves an Auto FG provider to FSR3.
-fn fg_backend(settings: &Settings) -> u32 {
-    if settings.fg_backend == FG_BACKEND_AUTO {
-        FG_FSR3
-    } else {
-        settings.fg_backend
-    }
+/// The requested SR and FG providers with Auto resolved.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Providers {
+    sr: u32,
+    fg: u32,
 }
 
 /// FSR4 and XeSS FG presenters allocate their guides for one SR plan.
@@ -131,6 +129,62 @@ impl Vulkan {
 
     fn state(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// `settings`' providers with Auto resolved by the Runtime's adapter policy
+    /// (`rsf_gpu_select_sr_backend`; `rsf_fg_select_auto_backend` of `rsf_fg_default_backend`) for
+    /// the physical device the engine's last device was created on, among the providers this
+    /// session can serve now.
+    /// Explicit requests pass unchanged and read no facts. `facts` are the guarded owner facts
+    /// when the caller already read them. Runs under the guard; the state lock is not held.
+    ///
+    /// The choices are the admission's own facts, so Auto never selects a provider `admit` would
+    /// refuse: DLSS SR needs the Streamline session started with DLSS SR and FG; XeSS SR the device
+    /// created with the XeSS requirements; FSR4 SR its build, the engine's graph lease capability
+    /// and the Win32 interop device; XeSS FG its build, the interop device and the primary window.
+    /// FSR3 is always served. Two FG providers are not offered to Auto. DLSS-G: its presenter's
+    /// retirement after native secondary window use still ends in an access violation (NATIVE.md,
+    /// eighth slice), so it stays an explicit opt-in until that path is proven safe. FSR4 FG: its
+    /// admission asks a provider probe, which Auto does not trigger, and the Runtime never prefers
+    /// it. Without adapter facts (no device yet, or the properties read failed) vendor and software
+    /// are zero, the Runtime's unknown adapter.
+    fn providers(
+        &self,
+        platform: &Platform,
+        settings: &Settings,
+        facts: Option<VkFacts>,
+    ) -> Providers {
+        let auto_sr = settings.sr_backend == SR_AUTO;
+        let auto_fg = settings.fg_backend == FG_BACKEND_AUTO;
+        let mut providers = Providers {
+            sr: settings.sr_backend,
+            fg: settings.fg_backend,
+        };
+        if !auto_sr && !auto_fg {
+            return providers;
+        }
+        let facts = facts.unwrap_or_else(|| platform.vulkan_facts());
+        let on = |flag: u32| flag != 0;
+        let streamline = on(facts.streamline_ready);
+        let interop = self.creation.interop_ready();
+        let adapter = self.creation.adapter().unwrap_or_default();
+        if auto_sr {
+            let choices = choice(true, SR_FSR3)
+                | choice(streamline, SR_DLSS)
+                | choice(self.creation.xess_ready(), SR_XESS)
+                | choice(
+                    on(facts.fsr4_sr_compiled) && on(facts.graph_handoff) && interop,
+                    SR_FSR4,
+                );
+            providers.sr = platform.sr_select_backend(adapter.vendor, adapter.software, choices);
+        }
+        if auto_fg {
+            let primary = !self.primary_window().is_null();
+            let choices = choice(true, FG_FSR3)
+                | choice(on(facts.xess_fg_compiled) && interop && primary, FG_XESS);
+            providers.fg = platform.fg_select_backend(adapter.vendor, adapter.software, choices);
+        }
+        providers
     }
 
     pub(crate) fn booted(&self) -> bool {
@@ -242,13 +296,14 @@ impl Vulkan {
             return false;
         }
         // These paths are added independently. Do not accept unavailable FG or silently
-        // substitute an FSR3 provider for a requested DLSS, XeSS or FSR4 path.
+        // substitute an FSR3 provider for an explicitly requested DLSS, XeSS or FSR4 path.
         if value.sr_backend == SR_FSR4
             && !(on(facts.fsr4_sr_compiled) && on(facts.graph_handoff) && interop)
         {
             return false;
         }
-        let selected = fg_backend(value);
+        // Auto resolves among the providers this session can serve; none is refused below.
+        let selected = self.providers(platform, value, Some(facts)).fg;
         if !matches!(selected, FG_DLSS | FG_FSR3 | FG_FSR4 | FG_XESS) {
             return false;
         }
@@ -297,19 +352,25 @@ impl Vulkan {
         (value, c_int::from(self.booted()))
     }
 
-    /// Under the guard: what the render, presentation and capture leaves read.
-    pub(crate) fn view(&self) -> (VkView, c_int) {
-        let state = self.state();
-        let view = VkView {
-            settings: state.settings,
-            sr_backend: sr_backend(&state.settings),
-            generation: state.generation,
-            session_id: state.status.session_id,
-            fg_backend: fg_backend(&state.settings),
-            output_width: state.status.output_width,
-            output_height: state.status.output_height,
-            fg_result: state.status.fg_result,
+    /// Under the guard: what the render, presentation and capture leaves read. Auto is resolved
+    /// from one settings snapshot after the state lock is released.
+    pub(crate) fn view(&self, platform: &Platform) -> (VkView, c_int) {
+        let mut view = {
+            let state = self.state();
+            VkView {
+                settings: state.settings,
+                sr_backend: state.settings.sr_backend,
+                generation: state.generation,
+                session_id: state.status.session_id,
+                fg_backend: state.settings.fg_backend,
+                output_width: state.status.output_width,
+                output_height: state.status.output_height,
+                fg_result: state.status.fg_result,
+            }
         };
+        let providers = self.providers(platform, &view.settings, None);
+        view.sr_backend = providers.sr;
+        view.fg_backend = providers.fg;
         (view, c_int::from(self.booted()))
     }
 
@@ -326,12 +387,19 @@ impl Vulkan {
         }
     }
 
-    /// Whether a presenter owning `backend` may keep acquiring. A provider switch, or a new SR
-    /// plan under a fixed-guide presenter, makes the engine drain and recreate its WSI owner.
-    pub(crate) fn presenter_current(&self, backend: u32) -> bool {
-        let state = self.state();
-        backend == fg_backend(&state.settings)
-            && !(fixed_guides(backend) && state.presenter_generation != state.generation)
+    /// Whether a presenter owning `backend` may keep acquiring. A provider switch, including Auto
+    /// resolving to another provider, or a new SR plan under a fixed-guide presenter, makes the
+    /// engine drain and recreate its WSI owner.
+    pub(crate) fn presenter_current(&self, platform: &Platform, backend: u32) -> bool {
+        let (settings, planned) = {
+            let state = self.state();
+            (
+                state.settings,
+                state.presenter_generation == state.generation,
+            )
+        };
+        backend == self.providers(platform, &settings, None).fg
+            && !(fixed_guides(backend) && !planned)
     }
 
     pub(crate) fn presented(&self, facts: &VkPresentFacts) {

@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
 //! Names and writes completed image readbacks and copied camera records.
+use super::metadata::InputId;
 use super::recordings::Pipeline;
 use std::ffi::{CStr, OsString, c_char};
 use std::fmt;
 use std::fs;
 use std::os::windows::ffi::OsStringExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::slice;
 
 pub(super) fn output_directory(directory: &[u16]) -> PathBuf {
@@ -147,20 +148,8 @@ unsafe extern "C" fn rsf_rdr2_capture_write_image(
     fs::write(path, image.metadata(role)).is_ok()
 }
 
-/// The caller lends the directory units and copied camera bytes for this call.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_write_camera(
-    directory: *const u16,
-    directory_len: usize,
-    pid: u32,
-    sequence: u32,
-    index: u32,
-    data: *const u8,
-    bytes: usize,
-) -> bool {
-    let directory = unsafe { slice::from_raw_parts(directory, directory_len) };
-    let mut path = output_directory(directory).join(input_stem(pid, sequence, index, "camera"));
+pub(super) fn write_camera(directory: &Path, pid: u32, id: InputId, camera: &[u8]) -> bool {
+    let mut path = directory.join(input_stem(pid, id.sequence, id.index, "camera"));
     path.set_extension("bin");
-    let camera = unsafe { slice::from_raw_parts(data, bytes) };
     fs::write(path, camera).is_ok()
 }

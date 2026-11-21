@@ -96,7 +96,8 @@ deployment and game runs are user-owned and not done.
 
 ## Remaining in C++
 
-Model and view history state with their epoch retirement, capture and stream buffer sizing,
+Model and view history moved later; see [rust-ac7-velocity-history.md](rust-ac7-velocity-history.md).
+At this base the remainder was model and view history state with their epoch retirement, capture and stream buffer sizing,
 indirect argument validation, record counts and packing, per-draw parameter packing (rect, jitter,
 opacity cutoff, history mask), the commit identity checks and merge, CPU profiling, the device
 renderer lifecycle and every D3D11 call and HLSL source.

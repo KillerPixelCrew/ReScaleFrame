@@ -10,10 +10,10 @@ use std::mem::{offset_of, size_of, take};
 use std::slice;
 
 #[derive(Default)]
-struct Bytes(Vec<u8>);
+pub(super) struct Bytes(pub(super) Vec<u8>);
 
 impl Bytes {
-    fn extend(&mut self, bytes: &[u8]) -> fmt::Result {
+    pub(super) fn extend(&mut self, bytes: &[u8]) -> fmt::Result {
         self.0.try_reserve(bytes.len()).map_err(|_| fmt::Error)?;
         self.0.extend_from_slice(bytes);
         Ok(())
@@ -206,13 +206,14 @@ fn write_engine(out: &mut Bytes, engine: &[EngineRecord]) -> fmt::Result {
 struct Snapshot {
     engine: Vec<EngineRecord>,
     roots: Vec<RootRecord>,
+    draws: Vec<Vec<u8>>,
     counts: NativeRecordCounts,
 }
 
 impl Snapshot {
     fn finish() -> Self {
-        // The scheduler disarmed the session and excludes reset until finish returns. Native
-        // holds its storage guard against record writers while finish borrows the arrays.
+        // The scheduler disarmed the session and excludes reset until finish returns.
+        // Taking the record lock also waits for any in-flight draw commit.
         let mut records = records();
         Self {
             counts: NativeRecordCounts {
@@ -222,9 +223,11 @@ impl Snapshot {
                 engine_dropped: records.engine_dropped,
                 roots_dropped: records.roots_dropped,
                 commands_dropped: records.commands_dropped,
+                draw_dropped: records.draw_dropped,
             },
             engine: take(&mut records.engine),
             roots: take(&mut records.roots),
+            draws: take(&mut records.draws),
         }
     }
 }
@@ -235,6 +238,7 @@ impl Drop for Snapshot {
         let mut records = records();
         records.engine = take(&mut self.engine);
         records.roots = take(&mut self.roots);
+        records.draws = take(&mut self.draws);
     }
 }
 
@@ -273,7 +277,6 @@ struct Stats {
     qpc_frequency: i64,
     engine_hooks: u32,
     renderer_root_hooks: u32,
-    draw_dropped: u32,
     blob_dropped: u32,
     colour_readbacks: u32,
     colour_readback_failures: u32,
@@ -282,7 +285,6 @@ struct Stats {
 
 #[repr(C)]
 struct FinalArtifacts {
-    draws: ArtifactList,
     blobs: ArtifactList,
     user: *const c_void,
     stats: unsafe extern "C" fn(*const c_void) -> Stats,
@@ -290,8 +292,8 @@ struct FinalArtifacts {
 
 const _: () = {
     assert!(size_of::<Artifact>() == 16 && size_of::<ArtifactList>() == 24);
-    assert!(size_of::<Stats>() == 40 && offset_of!(Stats, capture_failures) == 32);
-    assert!(size_of::<FinalArtifacts>() == 64 && offset_of!(FinalArtifacts, stats) == 56);
+    assert!(size_of::<Stats>() == 32 && offset_of!(Stats, capture_failures) == 28);
+    assert!(size_of::<FinalArtifacts>() == 40 && offset_of!(FinalArtifacts, stats) == 32);
 };
 
 fn write_summary(
@@ -329,7 +331,7 @@ fn write_summary(
         counts.engine,
         draws,
         counts.engine_dropped,
-        stats.draw_dropped,
+        counts.draw_dropped,
         stats.blob_dropped,
         observations.shaders_dropped,
         readbacks,
@@ -420,7 +422,7 @@ impl<'a> Publisher<'a> {
         self.file(format_args!("\\native.jsonl"), &text.0)?;
         drop(text);
         let mut text = Bytes::default();
-        for draw in sources.draws.entries() {
+        for draw in &snapshot.draws {
             text.extend(draw)?;
             text.write_char('\n')?;
         }
@@ -445,7 +447,7 @@ impl<'a> Publisher<'a> {
             &mut text,
             &snapshot.counts,
             &stats,
-            sources.draws.count,
+            snapshot.draws.len(),
             &observations,
             self.ok,
         )?;

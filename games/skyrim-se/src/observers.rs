@@ -4,6 +4,8 @@
 use rsf_game_sys::rsf_game_host_services;
 use std::ffi::{CString, c_char};
 
+use crate::hook_set::HookSet;
+
 const HOOKS: [&str; 5] = [
     "jitter",
     "process-main",
@@ -11,13 +13,10 @@ const HOOKS: [&str; 5] = [
     "renderer-end",
     "frame-upload",
 ];
-const ALL: u32 = (1 << HOOKS.len()) - 1;
-
 #[derive(Default)]
 pub(crate) struct Control {
-    created: u32,
-    active: u32,
-    pinned: u32,
+    hooks: HookSet<{ HOOKS.len() }>,
+    pinned: bool,
 }
 
 /// `rsf_skyrim_observer_leaves`, lent by `plugin.cpp` for the process.
@@ -37,77 +36,70 @@ const _: () = assert!(size_of::<Leaves>() == 56);
 impl Control {
     pub(crate) const fn new() -> Self {
         Self {
-            created: 0,
-            active: 0,
-            pinned: 0,
+            hooks: HookSet::new(),
+            pinned: false,
         }
     }
 
     /// Roll back only disabled hooks, retaining any whose removal refused.
     fn remove_created(&mut self, leaves: &Leaves) {
-        for index in (0..HOOKS.len() as u32).rev() {
-            let bit = 1 << index;
-            if self.created & bit != 0 && unsafe { (leaves.remove)(index) } {
-                self.created &= !bit;
-            }
-        }
+        self.hooks.remove((0..HOOKS.len()).rev(), |index| unsafe {
+            (leaves.remove)(index as u32)
+        });
     }
 
     pub(crate) fn prepare(&mut self, leaves: &Leaves) -> bool {
-        if self.pinned != 0 {
-            return self.created == ALL && self.active == 0;
+        if self.pinned {
+            return self.hooks.first_unavailable().is_none();
         }
         self.remove_created(leaves);
-        if self.created != 0 || !unsafe { (leaves.initialize)() } {
+        if !self.hooks.is_empty() || !unsafe { (leaves.initialize)() } {
             return false;
         }
-        for index in 0..HOOKS.len() as u32 {
-            if !unsafe { (leaves.create)(index) } {
-                self.remove_created(leaves);
-                return false;
-            }
-            self.created |= 1 << index;
+        if !self
+            .hooks
+            .create(|index| unsafe { (leaves.create)(index as u32) })
+        {
+            self.remove_created(leaves);
+            return false;
         }
         if !unsafe { (leaves.pin)() } {
             self.remove_created(leaves);
             return false;
         }
-        self.pinned = 1;
+        self.pinned = true;
         true
     }
 
     pub(crate) fn disable(&mut self, leaves: &Leaves, rollback: bool) -> bool {
-        let count = HOOKS.len() as u32;
-        for ordinal in 0..count {
-            let index = if rollback {
+        let count = HOOKS.len();
+        let order = (0..count).map(|ordinal| {
+            if rollback {
                 count - 1 - ordinal
             } else {
                 ordinal
-            };
-            let bit = 1 << index;
-            if self.active & bit != 0 && unsafe { (leaves.disable)(index) } {
-                self.active &= !bit;
             }
-        }
-        self.active == 0
+        });
+        self.hooks
+            .disable(order, |index| unsafe { (leaves.disable)(index as u32) })
     }
 
     pub(crate) fn start(&mut self, leaves: &Leaves, host: &rsf_game_host_services) -> bool {
-        if self.pinned == 0 || self.created != ALL || !self.disable(leaves, true) {
+        if !self.pinned || !self.hooks.is_complete() || !self.disable(leaves, true) {
             return false;
         }
-        for (index, stage) in HOOKS.into_iter().enumerate() {
-            let status = unsafe { (leaves.enable)(index as u32) };
-            if status != 0 {
-                if let Ok(message) = CString::new(format!(
-                    "Skyrim start refused at {stage}: MinHook status={status}"
-                )) {
-                    unsafe { (leaves.log)(host, message.as_ptr()) };
-                }
-                self.disable(leaves, true);
-                return false;
+        if let Err((index, status)) = self
+            .hooks
+            .enable(|index| unsafe { (leaves.enable)(index as u32) })
+        {
+            let stage = HOOKS[index];
+            if let Ok(message) = CString::new(format!(
+                "Skyrim start refused at {stage}: MinHook status={status}"
+            )) {
+                unsafe { (leaves.log)(host, message.as_ptr()) };
             }
-            self.active |= 1 << index;
+            self.disable(leaves, true);
+            return false;
         }
         true
     }
@@ -156,10 +148,10 @@ mod tests {
         let host = unsafe { std::mem::zeroed() };
         assert!(control.prepare(&leaves));
         assert!(!control.start(&leaves, &host));
-        assert_eq!(control.active, 1);
+        assert_eq!(control.hooks.first_unavailable(), Some(0));
         assert!(!control.disable(&leaves, false));
         DISABLE_REFUSES.set(false);
         assert!(control.disable(&leaves, false));
-        assert_eq!(control.active, 0);
+        assert!(control.hooks.is_disabled());
     }
 }

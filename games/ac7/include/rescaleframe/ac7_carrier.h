@@ -41,6 +41,16 @@ void rsf_ac7_carrier_install_decrypted(const rsf_ac7_carrier_leaves* leaves);
 /* Used by the Present callback to gate automatic SR startup. */
 unsigned long rsf_ac7_carrier_startup_ready(void);
 
+/* A valid presenting extent spends one automatic attempt before start is called. Re-enabling
+   clears the attempt flag and shutdown marks it spent. Manual start takes its own path. */
+int rsf_ac7_carrier_startup_attempted(void);
+void rsf_ac7_carrier_set_startup_attempted(int attempted);
+void rsf_ac7_carrier_try_auto_start(int enabled, int started, unsigned long (*ready)(void),
+    int (*present_extent)(uint32_t* width, uint32_t* height), void (*start)(void));
+/* Apply the carrier's startup overrides to an available presenting extent. */
+void rsf_ac7_carrier_override_start_extent(uint32_t (*read_number)(const char* name, uint32_t fallback),
+    uint32_t* width, uint32_t* height);
+
 /* Opens or closes the verified gate. stub_rel32 is null for the all-views instruction.
    previous must have room for six bytes. Returns the native patch result. */
 int32_t rsf_ac7_carrier_patch_jitter(rsf_ac7_carrier_patch_fn patch, uint32_t rva, int enabled,

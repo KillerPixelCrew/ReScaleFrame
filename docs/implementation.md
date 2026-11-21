@@ -225,6 +225,12 @@ successful pipeline result discards stale metadata at that address.
 Descriptor-copy and object-retirement coverage, build and live capture
 remain open.
 
+RDR2's capture also owns presentation and NGX evaluation metadata
+in Rust. Native reads supply the fresh Present descriptor, timing
+and camera facts. Evaluation output is admitted for the same wrapper
+and recording generation. Source comparison matched the artifact
+fields and all 18 scalar keys. Build and live verification remain open.
+
 RDR2's Rust diagnostic workers preserve the module sampling marks,
 dump policy, census summary and optional RenderDoc request loop. Native
 leaves retain the existing diagnostics ABI. The RenderDoc trigger still
@@ -329,6 +335,13 @@ follow it with the retained session. The upload path verifies the
 native dirty byte before the original call and records its flags
 afterward. The adapter keeps the exact window-class rule. Source
 and layout checks passed. Build and live observer behavior remain open.
+
+Skyrim's 13 CPU hooks now use Rust admission, registration, rollback
+and service retirement. Typed originals stay on native frames, and
+entered detours drain before services are released. Source checks
+matched all targets and 247 guard bytes. Build and live CPU validation
+remain open.
+[CPU ownership audit](research/rust-skyrim-cpu-ownership.md)
 
 Skyrim's native job ticket, poll epochs and consumer proof now live in
 Rust. The typed submit, join and PollDevices detours retain their exact
@@ -461,6 +474,13 @@ proof covers both completion fences. The six-surface table and typed
 graphics calls stay native. Build and live verification remain open.
 [D3D11 ownership audit](research/rust-unity-d3d11-shared-device.md)
 
+Unity's six D3D11 shared surfaces now belong to the Rust graphics
+record. Replacement checks the fence and the current frame lease.
+Refused retirement retains the surface and its device. Native callbacks
+still lend the queued packet textures. Build and live resize verification
+remain open.
+[Surface ownership audit](research/rust-unity-d3d11-surfaces.md)
+
 AC7's Rust renderer transaction owns prepare, start, quiesce and stop.
 Failed activation keeps any renderer with reachable callbacks, and a
 refused hook disable or removal keeps the renderer available for retry.
@@ -591,11 +611,19 @@ buffer reads and draw serialization remain native. Build and captured
 byte comparison remain open.
 [Upload observation audit](research/rust-ac7-motion-uploads.md)
 
+Rust now formats the AC7 F9 dispatch rows and admits the shared
+12,000-row stream. The native callbacks supply the observed bindings,
+dispatch arguments and blob IDs. Build and captured artifact parity
+remain open.
+[Dispatch record audit](research/rust-ac7-motion-dispatch.md)
+
 The AC7 adapter now owns the carrier's executable and window identity,
 GameSDK probe, guarded patch bytes and post-decryption install order.
 Both carriers keep their native forwarding, the guarded patch leaf
 and existing exports. Rust now also schedules the optional F9 installation
-and publishes carrier readiness after native preparation returns.
+and publishes carrier readiness after native preparation returns. The
+automatic start attempt and startup extent admission now use that
+Rust owner before native activation and compatibility fallback.
 Build and game startup verification remain open.
 [Carrier startup audit](research/rust-ac7-carrier-startup.md)
 
@@ -606,12 +634,26 @@ capture keeps its own observation rules. Build, replay and moving-game
 verification remain open.
 [Velocity pass audit](research/rust-ac7-velocity-pass-cache.md)
 
+The AC7 velocity pass's model and view history, epoch retirement,
+record capacity and commit state now belong to Rust. Native D3D11
+effects consume those decisions during the same observed draws.
+Build, replay and moving-game validation remain open.
+[Velocity history audit](research/rust-ac7-velocity-history.md)
+
 The Godot compositor probe now keeps requests, snapshots and motion
 classification per effect instance in Rust. The typed godot-cpp
 callbacks retain scene reads, the GPU readback pass and the same status
 keys. The existing callback destruction and XR velocity extent limits
 remain open, along with build and live renderer verification.
 [Compositor owner notes](../integrations/godot/NATIVE.md#rust-compositor-effect-owner-seventh-slice)
+
+Godot Vulkan Auto now asks Runtime policy using the observed physical
+device and eligible providers. DLSS-G is excluded from FG Auto while
+the recorded secondary-window shutdown failure remains open. The FG
+selector is private to linked consumers, and the public Runtime export
+declarations match the baseline. Binary exports, build and device
+behavior remain unverified.
+[Vulkan Auto ownership notes](../integrations/godot/NATIVE.md#vulkan-auto-through-the-runtime-provider-policy-eighth-slice)
 
 ## Rust orchestrator and first Anomaly port
 

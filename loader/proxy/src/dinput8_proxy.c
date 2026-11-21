@@ -1116,7 +1116,7 @@ static void start_dlss(void)
     char fsr_directories[3][MAX_PATH * 2] = {{0}};
     char xess_directory[MAX_PATH * 2] = {0};
     char sdk_override[MAX_PATH * 2] = {0};
-    DWORD width, height;
+    uint32_t width = 0, height = 0;
 
     if (rsf_bridge_running()) {
         rsf_bridge_report();
@@ -1132,17 +1132,11 @@ static void start_dlss(void)
     /* The presented size, from the observer, so this does not have to be told what the game is
        rendering at. Falling back to 1920x1080 would produce a plausible wrong answer, so a missing
        size is a refusal instead. */
-    {
-        rsf_observer_status status;
-        memset(&status, 0, sizeof(status));
-        status.struct_size = sizeof(status);
-        if (rsf_observer_get_status(&status) != RSF_OBSERVER_OK || status.present_width == 0) {
-            note("no presented size yet, so DLSS cannot be told what to output");
-            return;
-        }
-        width = read_number("RSF_DLSS_OUTPUT_WIDTH", status.present_width);
-        height = read_number("RSF_DLSS_OUTPUT_HEIGHT", status.present_height);
+    if (!rsf_bridge_present_extent(&width, &height)) {
+        note("no presented size yet, so DLSS cannot be told what to output");
+        return;
     }
+    rsf_ac7_carrier_override_start_extent(carrier_read_number, &width, &height);
 
     note("starting DLSS for %lux%lu output at quality %lu", (unsigned long)width,
          (unsigned long)height, (unsigned long)preferred_quality);
@@ -1208,11 +1202,6 @@ static void keep_render_scale(void)
    The scale one remembers what was asked so the panel can show what is in effect. Without it the
    only answer available is the environment default, which stops being true the moment anything
    changes it. */
-
-static void action_start_backend(void)
-{
-    start_dlss();
-}
 
 /* The separate translucency scale, as the patch below leaves it: a four byte immediate inside the
    instruction stream, which is why it can be changed while the game runs.
@@ -1444,7 +1433,7 @@ static void register_overlay_actions(void)
 {
     rsf_bridge_actions actions;
     memset(&actions, 0, sizeof(actions));
-    actions.start_backend = action_start_backend;
+    actions.start_backend = start_dlss;
     actions.reinsert_depth_policy = action_reinsert_depth_policy;
     actions.set_render_scale = action_set_render_scale;
     actions.trigger_dump = action_trigger_dump;

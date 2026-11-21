@@ -9,7 +9,8 @@
    Rust owns the requested settings and their generation, the extension option schema, renderer
    admission, engine-service routing, the D3D12 session identity and paths, the status record,
    the D3D12 SR context plan and submission ledger (d3d12.rs), the Vulkan session (boot state,
-   settings, generation, status, configure admission, the presenter, FG and SR accounting, the
+   settings, generation, status, configure admission, the providers Auto may choose from and their
+   resolution through the Runtime's policy, the presenter, FG and SR accounting, the
    primary window, the SR context owner in vulkan/sr.rs and the device creation owner in
    vulkan/creation.rs), and the input window owner (window.rs: admission, window procedure, input
    session, CPU event and ping routing, and the present-marker admission). The leaves hold
@@ -20,7 +21,7 @@
 #include "api.h"
 #include <stdint.h>
 
-#define RSF_GODOT_PLATFORM_VERSION 5u
+#define RSF_GODOT_PLATFORM_VERSION 6u
 
 /* Mirror of rsf_native_fg_options without its header. */
 typedef struct rsf_godot_fg_options {
@@ -120,8 +121,9 @@ typedef struct rsf_godot_vk_facts {
     uint32_t graph_handoff;
     uint32_t fsr4_sr_compiled, fsr4_fg_compiled, xess_fg_compiled;
     uint32_t presenter;
-    /* Formerly primary_window; the Vulkan session owns that window now. Zero. */
-    uint32_t reserved;
+    /* rsf_slvk_initialize with DLSS SR and FG succeeded at this session's start: the SDK
+       availability Auto requires before it may choose DLSS. Formerly reserved. */
+    uint32_t streamline_ready;
     /* rsf_fgvk_backend of the live presenter; zero without one or when the query fails. */
     uint32_t presenter_backend;
     uint32_t sdk_shutdown_pending;
@@ -195,12 +197,13 @@ typedef struct rsf_godot_vk_sr_context {
 
 /* The Vulkan creation boundary. The creation owner (vulkan/creation.rs) keeps the resolver routes,
    the stage order XeSS, Win32 interop, core latency, the extension lists, the feature structures
-   XeSS needs added, the retries and the XeSS and interop readiness. The leaves in
+   XeSS needs added, the retries, the XeSS and interop readiness and the adapter facts of the
+   physical device the last created device runs on, which the session's Auto policy reads. The leaves in
    vulkan_creation.cpp keep every Vulkan structure: a request is a VkInstanceCreateInfo or
    VkDeviceCreateInfo, the engine's or one a leaf derived into the call record, and call is the
    entry point's private record for one creation call. These are not vulkan.cpp's guarded leaves
    and none takes its guard. */
-#define RSF_GODOT_VK_CREATION_VERSION 1u
+#define RSF_GODOT_VK_CREATION_VERSION 2u
 
 /* rsf_godot_vk_creation_resolve scopes and routes. FORWARD returns the resolved function. */
 #define RSF_GODOT_VK_SCOPE_INSTANCE 0u /* the resolver rsfg_vk_resolver returns */
@@ -247,6 +250,12 @@ typedef struct rsf_godot_vk_device_derive {
     void* next;
     uint32_t clear_enabled_features, reserved;
 } rsf_godot_vk_device_derive;
+
+/* vkGetPhysicalDeviceProperties of the physical device a created device runs on, as read:
+   vendorID, deviceID, and software when deviceType is VK_PHYSICAL_DEVICE_TYPE_CPU. */
+typedef struct rsf_godot_vk_adapter {
+    uint32_t vendor, device, software, reserved;
+} rsf_godot_vk_adapter;
 
 /* rsf_latencyvk_require_device's result and requirements. */
 typedef struct rsf_godot_vk_latency_requirements {
@@ -320,6 +329,8 @@ typedef struct rsf_godot_vk_creation_leaves {
     void (*latency_destroyed)(void* device);
     /* destroy is the device's vkDestroyDevice. */
     void (*destroy_device)(rsf_godot_vk_function destroy, void* device, const void* allocator);
+    /* properties is vkGetPhysicalDeviceProperties. Version 2. */
+    uint32_t (*adapter)(rsf_godot_vk_function properties, void* physical_device, rsf_godot_vk_adapter* adapter);
 } rsf_godot_vk_creation_leaves;
 
 /* The compositor effect boundary. The effect owner (effect.rs) keeps each ReScaleFrameEffect's
@@ -522,6 +533,11 @@ typedef struct rsf_godot_platform {
     int32_t (*vulkan_latency_ping)(void* window);
     /* rsf_latencyvk_present. */
     void (*vulkan_present_marker)(uint32_t begin);
+    /* Version 6. The Runtime's Auto policy for an adapter and the providers a host can serve (bit n
+       = provider n): rsf_gpu_select_sr_backend, and for FG rsf_fg_default_backend's preference
+       through the Runtime's private rsf_fg_select_auto_backend (fg_auto_choice.h). */
+    uint32_t (*sr_select_backend)(uint32_t vendor, uint32_t software, uint32_t choices);
+    uint32_t (*fg_select_backend)(uint32_t vendor, uint32_t software, uint32_t choices);
 } rsf_godot_platform;
 
 /* Extension option schema. The leaf reads each named Dictionary entry once, with the conversion
@@ -585,10 +601,12 @@ int rsf_godot_vk_booted(void);
 int rsf_godot_boot_vulkan(const rsf_godot_platform* platform, const rsf_godot_setup* setup);
 /* The caller found the session booted. */
 int rsf_godot_shutdown_vulkan(const rsf_godot_platform* platform);
-/* Fills view and returns whether the session is booted. */
+/* Fills view and returns whether the session is booted. Auto is resolved through the Runtime's
+   policy leaves of the table the boot registered; before any boot nothing is written. */
 int rsf_godot_vk_view_get(rsf_godot_vk_view* view);
 void rsf_godot_vk_presenter_created(uint32_t ready, uint32_t backend, uint32_t max_generated);
-/* Zero: the engine must drain and recreate its WSI owner. */
+/* Zero: the engine must drain and recreate its WSI owner, also when Auto now resolves to
+   another provider. */
 int rsf_godot_vk_presenter_current(uint32_t presenter_backend);
 void rsf_godot_vk_presented(const rsf_godot_vk_present_facts* facts);
 void rsf_godot_vk_presenter_retired(void);
@@ -607,7 +625,8 @@ void* rsf_godot_vk_primary_window(void);
 /* Vulkan creation owner (vulkan/creation.rs), reached from vulkan_creation.cpp without the guard:
    from the start and stop leaves and from the resolver's entry points on the engine's thread. */
 /* Keeps underlying (Streamline's or the loader's resolver), whether XeSS requirements are
-   prepared and the session log, and clears both readiness facts. Nonzero when underlying is set. */
+   prepared and the session log, and clears both readiness facts. The adapter facts, like the
+   owner instance, describe the live device and survive. Nonzero when underlying is set. */
 int rsf_godot_vk_creation_begin(rsf_godot_vk_proc underlying, uint32_t xess, rsf_game_log_fn log, void* log_user);
 /* Ends XeSS preparation and clears both readiness facts. The resolver keeps forwarding. */
 void rsf_godot_vk_creation_stop(void);

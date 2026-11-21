@@ -80,36 +80,30 @@ typedef struct rsf_rdr2_capture_draw {
     uint32_t stack_size;
 } rsf_rdr2_capture_draw;
 
-typedef struct rsf_rdr2_capture_temporal {
-    uint32_t sequence, index, frame, thread, feature_flags, camera_valid;
-    uint64_t tick, qpc, list, generation, view, draw_context, job, result;
-} rsf_rdr2_capture_temporal;
+typedef struct rsf_rdr2_capture_presentation_desc {
+    uint32_t format, width, height;
+} rsf_rdr2_capture_presentation_desc;
 
-typedef struct rsf_rdr2_capture_scalar {
-    const char* key;
-    double value;
-} rsf_rdr2_capture_scalar;
+typedef struct rsf_rdr2_capture_input_id {
+    uint32_t sequence, index;
+} rsf_rdr2_capture_input_id;
 
-typedef struct rsf_rdr2_capture_temporal_view {
-    const rsf_rdr2_capture_temporal* facts;
-    const rsf_rdr2_capture_scalar* scalars;
-    size_t scalar_count, refusal_count;
-} rsf_rdr2_capture_temporal_view;
+typedef struct rsf_rdr2_capture_camera_facts {
+    uint32_t frame, thread;
+    uint64_t tick, qpc, view, draw_context, job;
+} rsf_rdr2_capture_camera_facts;
 
-typedef struct rsf_rdr2_capture_presentation {
-    uint32_t format, width, height, color_space, color_space_set, metadata_type;
-    const uint8_t* metadata;
-    size_t metadata_size;
-} rsf_rdr2_capture_presentation;
+typedef enum rsf_rdr2_capture_input_role {
+    RSF_RDR2_CAPTURE_COLOR, RSF_RDR2_CAPTURE_DEPTH, RSF_RDR2_CAPTURE_MOTION,
+    RSF_RDR2_CAPTURE_EXPOSURE, RSF_RDR2_CAPTURE_OUTPUT
+} rsf_rdr2_capture_input_role;
+
+#define RSF_RDR2_CAPTURE_CAMERA_BYTES 0x800u
 
 typedef struct rsf_rdr2_capture_bundle {
     const uint16_t* directory;
     size_t directory_len;
     uint64_t base;
-    rsf_rdr2_capture_progress progress;
-    rsf_rdr2_capture_presentation presentation;
-    const rsf_rdr2_capture_draw* draws;
-    size_t draw_count, temporal_count;
     uint32_t pid;
 } rsf_rdr2_capture_bundle;
 
@@ -132,28 +126,42 @@ void rsf_rdr2_capture_poll_request(rsf_rdr2_capture_state*, const uint16_t* requ
 /* The caller lends UTF-16 directory units, the role and the current mapping. */
 bool rsf_rdr2_capture_write_image(const rsf_rdr2_capture_image*, const uint16_t* directory,
     size_t directory_len, uint32_t pid, const char* role, const uint8_t* data, size_t bytes);
-bool rsf_rdr2_capture_write_camera(const uint16_t* directory, size_t directory_len,
-    uint32_t pid, uint32_t sequence, uint32_t index, const uint8_t* data, size_t bytes);
-/* Called under the capture mutex. All borrowed records and callback results live for the call. */
-bool rsf_rdr2_capture_write_bundle(const rsf_rdr2_capture_bundle*,
-    void (*read_temporal)(size_t, rsf_rdr2_capture_temporal_view*),
-    const char* (*read_refusal)(size_t, size_t), int32_t (*format_scalar)(double, char*, size_t));
+/* Every NGX invocation reports both phases on the calling thread, including skipped ones. */
+bool rsf_rdr2_capture_track_evaluation(bool ending);
+const char* rsf_rdr2_capture_input_scalar_key(uint32_t index, bool* floating);
 
 /* All operations below run under the native capture mutex, which also orders the graphics
    objects against the capture's admission, drain and publication. */
 bool rsf_rdr2_capture_can_arm(const rsf_rdr2_capture_state*, bool readbacks_empty);
-void rsf_rdr2_capture_arm(rsf_rdr2_capture_state*, uint64_t tick);
+void rsf_rdr2_capture_arm(rsf_rdr2_capture_state*, uint64_t tick, void* swapchain_identity,
+    const rsf_rdr2_capture_presentation_desc*);
 void rsf_rdr2_capture_end_draws(rsf_rdr2_capture_state*);
 bool rsf_rdr2_capture_timeout(rsf_rdr2_capture_state*, uint64_t tick);
 void rsf_rdr2_capture_progress_get(const rsf_rdr2_capture_state*, rsf_rdr2_capture_progress*);
 uint32_t rsf_rdr2_capture_commit_draw(rsf_rdr2_capture_state*);
-uint32_t rsf_rdr2_capture_reserve_input(rsf_rdr2_capture_state*);
-void rsf_rdr2_capture_begin_input(rsf_rdr2_capture_state*);
-void rsf_rdr2_capture_end_input(rsf_rdr2_capture_state*);
 void rsf_rdr2_capture_readback_written(rsf_rdr2_capture_state*, bool success);
-void rsf_rdr2_capture_write_failed(rsf_rdr2_capture_state*);
 bool rsf_rdr2_capture_can_publish(const rsf_rdr2_capture_state*, bool readbacks_empty);
 void rsf_rdr2_capture_published(rsf_rdr2_capture_state*);
+bool rsf_rdr2_capture_write_bundle(rsf_rdr2_capture_state*, const rsf_rdr2_capture_bundle*,
+    int32_t (*format_scalar)(double, char*, size_t), size_t* draw_count, size_t* temporal_count);
+
+/* Swapchain observations use canonical IUnknown identity. Any lent bytes are copied. */
+void rsf_rdr2_capture_reset_presentation(rsf_rdr2_capture_state*, void* identity);
+void rsf_rdr2_capture_record_color_space(rsf_rdr2_capture_state*, void* identity, uint32_t color_space);
+void rsf_rdr2_capture_record_hdr(rsf_rdr2_capture_state*, void* identity, uint32_t type,
+    const uint8_t* metadata, size_t size);
+/* Valid flags are copied, including zero. Null clears any previous feature at this handle. */
+void rsf_rdr2_capture_record_feature(rsf_rdr2_capture_state*, void* handle, const uint32_t* flags);
+bool rsf_rdr2_capture_begin_input(rsf_rdr2_capture_state*, void* list, void* handle, rsf_rdr2_capture_input_id*);
+bool rsf_rdr2_capture_commit_input(rsf_rdr2_capture_state*);
+bool rsf_rdr2_capture_input_result(rsf_rdr2_capture_state*, void* list, uint64_t result, rsf_rdr2_capture_input_id*);
+void rsf_rdr2_capture_finish_input(rsf_rdr2_capture_state*);
+void rsf_rdr2_capture_input_camera(rsf_rdr2_capture_state*, const rsf_rdr2_capture_input_id*,
+    const rsf_rdr2_capture_camera_facts*, const uint8_t* camera_or_null);
+void rsf_rdr2_capture_input_scalar(rsf_rdr2_capture_state*, const rsf_rdr2_capture_input_id*,
+    uint32_t index, double value, bool available);
+void rsf_rdr2_capture_input_resource_refused(rsf_rdr2_capture_state*, const rsf_rdr2_capture_input_id*,
+    uint32_t role, bool missing);
 
 /* Observation identities are borrowed from the native callbacks and hold no COM reference.
    Null pipeline facts discard an older record. A null handle clears the bound target. */
@@ -163,8 +171,6 @@ void rsf_rdr2_capture_bind_rtv(rsf_rdr2_capture_state*, void* list, const uintpt
 void rsf_rdr2_capture_bind_pipeline(rsf_rdr2_capture_state*, void* list, void* pso);
 bool rsf_rdr2_capture_get_draw_binding(const rsf_rdr2_capture_state*, void* list, rsf_rdr2_capture_draw_binding*);
 bool rsf_rdr2_capture_record_draw(rsf_rdr2_capture_state*, const rsf_rdr2_capture_draw*);
-/* The draw array is borrowed through the bundle call while the same mutex is held. */
-const rsf_rdr2_capture_draw* rsf_rdr2_capture_draws(const rsf_rdr2_capture_state*, size_t* count);
 
 /* Commands, generations, and state transitions. These calls also use the native capture mutex.
    UINT32_MAX represents a state the probe cannot prove. */
@@ -174,7 +180,6 @@ void rsf_rdr2_capture_transition(rsf_rdr2_capture_state*, void* list, void* reso
 void rsf_rdr2_capture_alias(rsf_rdr2_capture_state*, void* list, void* resource);
 void rsf_rdr2_capture_reset_list(rsf_rdr2_capture_state*, void* list, void* pso);
 uint32_t rsf_rdr2_capture_resource_state(const rsf_rdr2_capture_state*, void* list, void* resource);
-uint64_t rsf_rdr2_capture_list_generation(const rsf_rdr2_capture_state*, void* list);
 void rsf_rdr2_capture_stamp_copy(rsf_rdr2_capture_state*, void* list, rsf_rdr2_capture_readback*);
 bool rsf_rdr2_capture_reuse_readback(const rsf_rdr2_capture_state*, const rsf_rdr2_capture_readback*,
     void* list, uint64_t completed);
@@ -217,9 +222,8 @@ static_assert(sizeof(rsf_rdr2_capture_pipeline) == 40);
 static_assert(sizeof(rsf_rdr2_capture_draw_binding) == 56 && offsetof(rsf_rdr2_capture_draw_binding, pipeline) == 16);
 static_assert(sizeof(rsf_rdr2_capture_image) == 160);
 static_assert(sizeof(rsf_rdr2_capture_draw) == 192 && offsetof(rsf_rdr2_capture_draw, stack) == 88);
-static_assert(sizeof(rsf_rdr2_capture_temporal) == 88);
-static_assert(sizeof(rsf_rdr2_capture_scalar) == 16);
-static_assert(sizeof(rsf_rdr2_capture_temporal_view) == 32);
-static_assert(sizeof(rsf_rdr2_capture_presentation) == 40);
-static_assert(sizeof(rsf_rdr2_capture_bundle) == 128 && offsetof(rsf_rdr2_capture_bundle, draws) == 96);
+static_assert(sizeof(rsf_rdr2_capture_presentation_desc) == 12);
+static_assert(sizeof(rsf_rdr2_capture_input_id) == 8 && RSF_RDR2_CAPTURE_OUTPUT == 4);
+static_assert(sizeof(rsf_rdr2_capture_camera_facts) == 48 && offsetof(rsf_rdr2_capture_camera_facts, tick) == 8);
+static_assert(sizeof(rsf_rdr2_capture_bundle) == 32 && offsetof(rsf_rdr2_capture_bundle, pid) == 24);
 #endif

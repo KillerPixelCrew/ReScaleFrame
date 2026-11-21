@@ -417,15 +417,118 @@ and offset assertions written for the new records and table in `platform.rs` and
 run: native build and link, Cargo tests (`native/effect/tests.rs`), Clippy, CTest, editor, exported
 players, the renderer probe demo (`demo/main.gd`), device fixtures and visual harness.
 
+## Vulkan Auto through the Runtime provider policy, eighth slice
+
+Question: the Vulkan session resolved `Auto` to FSR3 for SR and FG in the integration
+(`sr_backend` and `fg_backend` in `vulkan.rs`), a vendor policy outside the orchestrator (Rule 3).
+The D3D12 path already asks the Runtime. This slice makes the Vulkan session ask the same Runtime
+policy with the facts it actually has, and changes no explicit request.
+
+Runtime policy:
+
+- SR uses the existing `rsf_gpu_select_sr_backend(vendor, software, choices)`
+  (`runtime/orchestrator/src/lib.rs`): no provider on a software adapter, otherwise NVIDIA DLSS,
+  Intel XeSS, anything else FSR3, then FSR3, then XeSS among the choices. FSR4 is never chosen.
+- FG takes the existing vendor preference `rsf_fg_default_backend(vendor, software)`
+  (`frame_generation.h`) and passes it to `rsf_fg_select_auto_backend(preferred, choices)`, a new
+  Runtime function in `fg_choice.rs` built on that module's existing `allowed` provider check. It
+  returns the preference when served, otherwise FSR3 when served, otherwise none, the fallback both
+  generic D3D12 hosts already apply (`render_host.rs` `poll` after `fg_default_backend(vendor, 0)`,
+  and `d3d11_present.rs` Auto with the owning adapter's `default_backend` when the setup restricts
+  its choices). It is declared only in the private `runtime/orchestrator/src/fg_auto_choice.h` and
+  is not listed in `rust_exports.c`, so the Runtime DLL's exported names are unchanged; the Godot
+  DLL links OrchestratorCore statically and calls it from `runtime.cpp`. No vendor ID is repeated
+  outside `frame_generation.h`. Its cases are a Rust unit test in `fg_choice.rs`. The D3D12 hosts
+  are not switched to it in this slice.
+
+Facts the session passes, each read where it is proven:
+
+- Adapter: the creation owner (`vulkan/creation.rs`) reads `vkGetPhysicalDeviceProperties` of the
+  physical device after each successful `vkCreateDevice`, through the owner instance's resolver
+  and a new creation leaf (`rsf_godot_vk_creation_leaves` version 2, 120 bytes, `adapter`):
+  `vendorID`, `deviceID`, and software when `deviceType` is `VK_PHYSICAL_DEVICE_TYPE_CPU`. A failed
+  read keeps no facts rather than a previous device's. The facts describe the live device and,
+  like the owner instance, survive a new start. Without facts (no device yet) vendor and software
+  are zero, the Runtime's unknown adapter, which yields FSR3 for both as before. The creation log
+  records the facts.
+- SDK availability: `rsf_slvk_initialize` with DLSS SR and FG succeeding in the start leaf, reported
+  as `rsf_godot_vk_facts.streamline_ready` (the former `reserved` field, cleared at each start and
+  after a completed stop). DLSS SR is offered only then; `native_sr_vulkan.h` requires that session.
+- Servable providers, the admission's own facts so Auto never picks a provider `admit` refuses:
+  SR FSR3 always, DLSS with Streamline, XeSS with the device created with the XeSS requirements,
+  FSR4 with its build, the engine's graph handoff capability and the interop device; FG FSR3
+  always, XeSS with its build, the interop device and the primary window.
+- DLSS-G is not offered to FG Auto. Its presenter's retirement after native secondary window use
+  still ends in an access violation (see the notes below), so it stays an explicit opt-in until
+  that path is proven safe. An NVIDIA adapter's DLSS preference therefore falls back to FSR3 for
+  FG, as before this slice. An explicit DLSS-G request keeps its admission and refusals unchanged.
+- FSR4 FG is not offered: its admission asks a provider probe, and Auto must not trigger it. The
+  per-pass FSR4 graph lease (`handoff`, `split_record`, `continuation`) stays the render-time
+  admission of an explicit FSR4 request; the policy never prefers FSR4, so Auto never reaches it.
+
+The resolution runs wherever Auto was read: the configure admission (with the facts it already
+read), the view the render, presenter creation and capture leaves read, and the presenter currency
+rule in `rsfg_vk_acquire`. The two exports without a table argument (`rsf_godot_vk_view_get`,
+`rsf_godot_vk_presenter_current`) use the table the boot registered. The state lock is released
+before the leaves run. The two Runtime calls are leaves appended to `rsf_godot_platform`
+(`sr_select_backend`, `fg_select_backend`; version 6, 536 bytes, asserted on both sides). A
+resolution that changes later (device creation, the primary window reported by `configure`) is
+followed: an SR context made for another provider is stale and retired like a new request, and a
+presenter owning another provider is no longer current, so the engine recreates its WSI owner.
+
+Preserved: every explicit SR and FG request, its admission and refusal order, the FSR4 lease
+admission and fallback, the spatial fallback on any provider failure, FG mode off still creating
+the presenter for the resolved provider, the D3D12 path, and AMD, unknown and fact-less adapters
+(FSR3 for both). `api.h`, the engine module, the addon and every `rsfg_*` export are unchanged.
+
+Intentional Auto differences from the former FSR3 default, with their source:
+
+| Adapter and facts | SR Auto | FG Auto | Source of the choice |
+| --- | --- | --- | --- |
+| NVIDIA, Streamline session started | DLSS (was FSR3) | FSR3 (unchanged): DLSS-G is not offered | `rsf_gpu_default_sr_backend`: `0x10de` prefers DLSS |
+| Intel, XeSS device | XeSS (was FSR3) | FSR3, then XeSS once interop and the primary window exist (was FSR3) | `rsf_gpu_default_sr_backend` and `rsf_fg_default_backend`: `0x8086` prefers XeSS |
+| CPU device type | none: spatial fallback (was an FSR3 attempt) | FSR3 (unchanged) | `rsf_gpu_default_sr_backend` returns none for a software adapter; the FG rule falls back to FSR3 |
+
+Notes on these differences:
+
+- Godot Vulkan DLSS SR on NVIDIA passed standard switching and resize with four raw frames
+  (`docs/implementation.md`, "Godot developer integration in progress, 25 October 2026"). DLSS
+  FG passes the strict eleven-phase lifecycle fixture but still ends with `0xc0000005` in driver
+  queue destruction after native secondary window use
+  ([DLSS lifecycle investigation](../../docs/research/godot-vulkan-dlss-fg.md), wrap-up section).
+  Because the presenter for the resolved FG provider is created at swapchain creation, also with
+  FG mode off, offering DLSS-G to Auto would have made that fault reachable from default settings.
+  The first version of this slice did so; it was corrected before integration by leaving DLSS-G
+  out of the FG Auto choices. Offer it again only after secondary-window retirement is proven safe.
+- Intel FG: `bridge.cpp` reports the primary window in `configure` just before `native_configure`
+  (`modules/rescaleframe/bridge.cpp` line 226), after the startup swapchain already created an
+  FSR3 owner. The first configure then makes Auto resolve to XeSS, and the next acquire recreates
+  the WSI owner as a fixed-guide XeSS owner. This slice reviewed no Intel FG run; the XeSS FG
+  count evidence it found is from an NVIDIA device limited to one generated frame
+  ([audit](../../docs/research/godot-xess-mfg-capability-audit-20261025.md)).
+- Software adapter: `bridge.cpp` keeps Godot's temporal scaling mode and quality scale for Auto
+  (lines 231 to 234), so the engine still renders at the reduced extent. Passing that through as an
+  explicit Off does would leave the upscaled output unwritten. The pass instead records
+  `rsf_srvk_spatial_fallback`, reports `RSF_BACKEND_ERROR_NOT_SUPPORTED` and counts a refused frame,
+  as an FSR3 creation failure did before.
+
+This is a source change from review, with no new experiment. Checks: rustfmt 1.11.0
+`--edition 2024 --check` (the pinned 1.94.1 toolchain is not installed),
+`cargo metadata --locked --offline`, `git diff --check`, and size and offset assertions for the
+new leaves, record and table version in `platform.rs`, `runtime.cpp` and `vulkan_creation.cpp`.
+The Runtime DLL export list (`rust_exports.c`), `gpu_policy.h` and `tests/gpu_policy.cpp` are
+unchanged from before this slice. Not run: native build and link (including the static link of
+`rsf_fg_select_auto_backend` into the Godot DLL and the export table of the Runtime DLL), Cargo
+tests (`fg_choice.rs`, the updated `native/vulkan/tests.rs`, `native/vulkan/sr/tests.rs`,
+`native/vulkan/creation/tests.rs`), Clippy, CTest (`godot_vulkan_creation_contract`), editor,
+exported players, NVIDIA, Intel, AMD and software-device runs, and the visual harness.
+
 ## Remaining Godot ownership slices
 
-1. Vulkan Auto SR and FG resolution (Rule 3). `vulkan.rs` still resolves `Auto` to FSR3 for both,
-   unchanged from the C++. The Runtime's `rsf_gpu_select_sr_backend(vendor, software, 1 << FSR3)`
-   would return FSR3 only on a hardware adapter (NONE on a software one) and needs the Vulkan
-   vendor id, which the session does not have when it resolves `Auto` at configure and status
-   time; `rsf_fg_default_backend` picks by vendor and would change behaviour. Moving this needs a
-   Runtime policy that takes the Vulkan host's servable providers and an adapter fact from the
-   packet, which is a behaviour decision outside this behaviour-preserving slice.
+1. Vulkan Auto SR and FG resolution moved to the Runtime policy in the eighth slice. Residual:
+   DLSS-G stays out of Vulkan FG Auto until its secondary-window retirement is proven safe; the
+   D3D12 hosts still carry their own copies of the FSR3 fallback `rsf_fg_select_auto_backend`
+   now provides; and the Godot D3D12 leaves still pass software as false.
 2. `effect.cpp` keeps no owner state after the seventh slice. Its class registration, callback
    contract, typed scene reads, readback compute pass and Dictionary keys are godot-cpp leaves.
    Residual: the readback's extent check against a velocity override (see that slice).

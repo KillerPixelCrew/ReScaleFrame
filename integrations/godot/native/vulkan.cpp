@@ -72,6 +72,8 @@ rsf_srvk_setup presentation_graphics{};
 rsf_godot_vk_proc resolver = nullptr;
 bool sdk_shutdown_pending = false;
 bool graph_handoff_available = false;
+// rsf_slvk_initialize with DLSS SR and FG succeeded at this session's start.
+bool streamline_ready = false;
 #if defined(RSF_FRAME_DUMP_VULKAN)
 rsf_input_dump_vk* dump_owner = nullptr;
 rsf::FrameCaptureVk dump_stages;
@@ -226,6 +228,7 @@ int32_t leaf_locked(int32_t (*body)(void*), void* user) try {
 int32_t leaf_start(const rsf_godot_setup* setup) try {
     // The session cleared its primary window just before this leaf.
     render_source_frame = 0;
+    streamline_ready = false;
     directory = std::string(setup->runtime_directory) + "/fidelityfx-vulkan";
     fsr4_directory = std::string(setup->runtime_directory) + "/fidelityfx";
     logger = setup->log; logger_user = setup->log_user;
@@ -248,6 +251,7 @@ int32_t leaf_start(const rsf_godot_setup* setup) try {
         if (vulkan) base = reinterpret_cast<rsf_godot_vk_proc>(GetProcAddress(vulkan, "vkGetInstanceProcAddr"));
     }
     resolver = creation_resolver(base, xess_result == RSF_BACKEND_OK, setup->log, setup->log_user);
+    streamline_ready = latency_result == RSF_BACKEND_OK;
     if (setup->log) setup->log(setup->log_user, latency_result == RSF_BACKEND_OK ?
         "Godot Vulkan host ready with Streamline Vulkan dispatch and PCL startup." : "Godot Vulkan host ready. Streamline Vulkan initialization failed; platform latency capabilities are queried at device creation.");
     return 1;
@@ -263,6 +267,7 @@ int32_t leaf_stop() try {
     // still needs the live SDK to unregister captures and release its feature.
     sdk_shutdown_pending = presentation != nullptr;
     if (!sdk_shutdown_pending && rsf_latencyvk_shutdown() != RSF_BACKEND_OK) return 0;
+    streamline_ready = false;
     return 1;
 } catch (...) { return 0; }
 void leaf_release(uint64_t session_id) try {
@@ -282,6 +287,7 @@ void leaf_facts(rsf_godot_vk_facts* facts) try {
     facts->xess_fg_compiled = 1;
 #endif
     facts->presenter = presentation ? 1u : 0u;
+    facts->streamline_ready = streamline_ready ? 1u : 0u;
     uint32_t owned_backend = 0;
     if (presentation) (void)rsf_fgvk_backend(presentation, &owned_backend);
     facts->presenter_backend = owned_backend;

@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 //! Capture admission, limits, and publication. Native capture holds its existing mutex for
-//! every ledger operation, ordering state with its graphics objects. The request and two fast
-//! admission queries are atomic and can run without that mutex.
+//! ledger operations, ordering state with its graphics objects. Request and fast admission
+//! queries are atomic. The NGX wrapper nesting is tracked on the calling thread.
 use std::alloc::{Layout, alloc};
 use std::cell::UnsafeCell;
+use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 #[cfg(windows)]
@@ -12,8 +13,10 @@ mod artifacts;
 mod bundle;
 mod gpu_leases;
 mod hooks;
+mod metadata;
 mod recordings;
 use gpu_leases::Gpu;
+use metadata::{Metadata, PresentationDesc};
 use recordings::Recordings;
 
 const MAX_DRAW_COPIES: u32 = 64;
@@ -51,6 +54,21 @@ struct Ledger {
     write_failed: bool,
 }
 
+impl Ledger {
+    fn progress(&self) -> Progress {
+        Progress {
+            sequence: self.sequence,
+            draws: self.draws,
+            written: self.written,
+            draw_overflow: u32::from(self.draw_overflow),
+            timed_out: u32::from(self.timed_out),
+            write_failed: u32::from(self.write_failed),
+            reuse_tail: u32::from(self.draws >= MAX_DRAW_COPIES),
+            requested_input_frames: INPUT_FRAMES,
+        }
+    }
+}
+
 struct Capture {
     pending: AtomicBool,
     #[cfg(windows)]
@@ -58,6 +76,7 @@ struct Capture {
     active: AtomicBool,
     inputs_remaining: AtomicU32,
     ledger: UnsafeCell<Ledger>,
+    metadata: UnsafeCell<Metadata>,
     recordings: UnsafeCell<Recordings>,
     gpu: UnsafeCell<Gpu>,
 }
@@ -74,6 +93,7 @@ impl Capture {
             active: AtomicBool::new(false),
             inputs_remaining: AtomicU32::new(0),
             ledger: UnsafeCell::new(Ledger::default()),
+            metadata: UnsafeCell::new(Metadata::default()),
             recordings: UnsafeCell::new(Recordings::default()),
             gpu: UnsafeCell::new(Gpu::default()),
         }
@@ -142,7 +162,12 @@ unsafe extern "C" fn rsf_rdr2_capture_can_arm(owner: &Capture, readbacks_empty: 
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_arm(owner: &Capture, tick: u64) {
+unsafe extern "C" fn rsf_rdr2_capture_arm(
+    owner: &Capture,
+    tick: u64,
+    swapchain_identity: *mut c_void,
+    descriptor: &PresentationDesc,
+) {
     let ledger = unsafe { &mut *owner.ledger.get() };
     *ledger = Ledger {
         sequence: ledger.sequence.wrapping_add(1),
@@ -150,6 +175,7 @@ unsafe extern "C" fn rsf_rdr2_capture_arm(owner: &Capture, tick: u64) {
         dirty: true,
         ..Ledger::default()
     };
+    unsafe { &mut *owner.metadata.get() }.arm(swapchain_identity.addr(), *descriptor);
     unsafe { &mut *owner.recordings.get() }.draws.clear();
     owner.pending.store(false, Ordering::Release);
     owner
@@ -180,17 +206,7 @@ unsafe extern "C" fn rsf_rdr2_capture_timeout(owner: &Capture, tick: u64) -> boo
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_rdr2_capture_progress_get(owner: &Capture, out: &mut Progress) {
-    let ledger = unsafe { &*owner.ledger.get() };
-    *out = Progress {
-        sequence: ledger.sequence,
-        draws: ledger.draws,
-        written: ledger.written,
-        draw_overflow: u32::from(ledger.draw_overflow),
-        timed_out: u32::from(ledger.timed_out),
-        write_failed: u32::from(ledger.write_failed),
-        reuse_tail: u32::from(ledger.draws >= MAX_DRAW_COPIES),
-        requested_input_frames: INPUT_FRAMES,
-    };
+    *out = unsafe { &*owner.ledger.get() }.progress();
 }
 
 #[unsafe(no_mangle)]
@@ -211,30 +227,6 @@ unsafe extern "C" fn rsf_rdr2_capture_commit_draw(owner: &Capture) -> u32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_reserve_input(owner: &Capture) -> u32 {
-    let ledger = unsafe { &mut *owner.ledger.get() };
-    let index = ledger.input_index;
-    ledger.input_index = index.wrapping_add(1);
-    index
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_begin_input(owner: &Capture) {
-    let ledger = unsafe { &mut *owner.ledger.get() };
-    let remaining = owner.inputs_remaining.load(Ordering::Acquire);
-    owner
-        .inputs_remaining
-        .store(remaining.saturating_sub(1), Ordering::Release);
-    ledger.inputs_in_flight += 1;
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_end_input(owner: &Capture) {
-    let ledger = unsafe { &mut *owner.ledger.get() };
-    ledger.inputs_in_flight = ledger.inputs_in_flight.saturating_sub(1);
-}
-
-#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_rdr2_capture_readback_written(owner: &Capture, success: bool) {
     let ledger = unsafe { &mut *owner.ledger.get() };
     if success {
@@ -242,11 +234,6 @@ unsafe extern "C" fn rsf_rdr2_capture_readback_written(owner: &Capture, success:
     } else {
         ledger.write_failed = true;
     }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_write_failed(owner: &Capture) {
-    unsafe { (*owner.ledger.get()).write_failed = true };
 }
 
 #[unsafe(no_mangle)]
@@ -263,20 +250,34 @@ unsafe extern "C" fn rsf_rdr2_capture_published(owner: &Capture) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ptr::{null_mut, without_provenance_mut};
 
     #[test]
     fn timeout_preserves_the_pending_request_and_waits_for_input_and_readbacks() {
         let owner = Capture::new();
+        let list = without_provenance_mut(1);
+        let feature = without_provenance_mut(2);
         rsf_rdr2_capture_request(&owner);
         unsafe {
             assert!(rsf_rdr2_capture_can_arm(&owner, true));
-            rsf_rdr2_capture_arm(&owner, 100);
-            rsf_rdr2_capture_begin_input(&owner);
+            rsf_rdr2_capture_arm(&owner, 100, null_mut(), &PresentationDesc::default());
+            metadata::rsf_rdr2_capture_record_feature(&owner, feature, &0);
+            assert!(metadata::rsf_rdr2_capture_track_evaluation(false));
+            let mut input = metadata::InputId::default();
+            assert!(metadata::rsf_rdr2_capture_begin_input(
+                &owner, list, feature, &mut input
+            ));
+            assert!(metadata::rsf_rdr2_capture_commit_input(&owner));
+            assert!(!metadata::rsf_rdr2_capture_track_evaluation(false));
+            assert!(!metadata::rsf_rdr2_capture_track_evaluation(true));
             rsf_rdr2_capture_request(&owner);
             assert!(!rsf_rdr2_capture_timeout(&owner, 5100));
             assert!(rsf_rdr2_capture_timeout(&owner, 5101));
             assert!(!rsf_rdr2_capture_can_publish(&owner, true));
-            rsf_rdr2_capture_end_input(&owner);
+            assert!(metadata::rsf_rdr2_capture_track_evaluation(true));
+            assert!(!metadata::rsf_rdr2_capture_track_evaluation(false));
+            assert!(!metadata::rsf_rdr2_capture_track_evaluation(true));
+            metadata::rsf_rdr2_capture_finish_input(&owner);
             assert!(!rsf_rdr2_capture_can_publish(&owner, false));
             assert!(rsf_rdr2_capture_can_publish(&owner, true));
             assert!(!rsf_rdr2_capture_can_arm(&owner, true));
@@ -289,7 +290,7 @@ mod tests {
     fn last_allocated_draw_is_retained_and_metadata_is_bounded() {
         let owner = Capture::new();
         unsafe {
-            rsf_rdr2_capture_arm(&owner, 0);
+            rsf_rdr2_capture_arm(&owner, 0, null_mut(), &PresentationDesc::default());
             for _ in 0..MAX_DRAW_COPIES - 1 {
                 assert_eq!(rsf_rdr2_capture_commit_draw(&owner), SAVE_DRAW);
             }

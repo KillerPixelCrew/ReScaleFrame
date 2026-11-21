@@ -3,6 +3,7 @@
 
 #include <rescaleframe/ac7_motion_capture.h>
 #include <cstddef>
+#include "motion_capture_session.h"
 
 // Private C ABI. Records contain copied observations and numeric native identities.
 struct EngineRecord {
@@ -45,6 +46,31 @@ struct GeometryScope {
     uint64_t native_frame, primitive, material;
     uint32_t geometry_capacity, role;
 };
+struct MotionQueuedDraw {
+    uint64_t command, execute;
+    QueuedScope scope;
+};
+struct MotionResource {
+    uint64_t resource;
+    uint32_t dimension, width, height, depth, format;
+};
+struct MotionBoundView {
+    MotionResource resource;
+    uint32_t slot;
+};
+struct MotionBoundConstant {
+    uint64_t buffer, upload_serial;
+    uint32_t slot, blob, readback;
+};
+struct MotionDispatch {
+    NativeRootScope root;
+    MotionQueuedDraw queued;
+    uint64_t qpc, indirect;
+    uint32_t thread, groups[3], offset, cs_hash;
+    uint32_t input_count, output_count, constant_count;
+    MotionBoundView inputs[128], outputs[8];
+    MotionBoundConstant constants[14];
+};
 struct MotionArtifact {
     const unsigned char* data;
     std::size_t size;
@@ -56,11 +82,11 @@ struct MotionArtifactList {
 };
 struct MotionArtifactStats {
     int64_t qpc_frequency;
-    uint32_t engine_hooks, renderer_root_hooks, draw_dropped, blob_dropped;
+    uint32_t engine_hooks, renderer_root_hooks, blob_dropped;
     uint32_t colour_readbacks, colour_readback_failures, capture_failures;
 };
 struct MotionFinalArtifacts {
-    MotionArtifactList draws, blobs;
+    MotionArtifactList blobs;
     const void* user;
     MotionArtifactStats(*stats)(const void* user);
 };
@@ -93,10 +119,16 @@ bool rsf_ac7_capture_execution_pass(const rsf_game_render_pass* pass);
 void rsf_ac7_capture_execution_root(RootRecord* root);
 GeometryScope rsf_ac7_capture_geometry_scope();
 
+// Draws and dispatches preflight before querying D3D. All row types share the final
+// admission check. A false commit result reports a serialization or allocation failure.
+bool rsf_ac7_capture_can_record_draw(MotionCaptureInterval capture);
+bool rsf_ac7_capture_record_draw(MotionCaptureInterval capture, const char* text, std::size_t size);
+bool rsf_ac7_capture_record_dispatch(MotionCaptureInterval capture, const MotionDispatch* dispatch);
+
 // Record and copy share the native storage guard with the companion blob snapshots.
 bool rsf_ac7_capture_copy_roots(void* user, MotionCopyRoots copy);
 
-// The checkpoint uses copied roots and blobs. Finish uses guarded native lists for the
+// The checkpoint uses copied roots and blobs. Finish uses the guarded native blob list for the
 // duration of the call. File effects run after the Rust record lock has been released.
 MotionPublication rsf_ac7_capture_publish_checkpoint(const char* prefix, MotionWriteFile write,
     const RootRecord* roots, std::size_t count, const MotionArtifactList* blobs);
@@ -108,6 +140,12 @@ static_assert(sizeof(rsf_ac7_velocity_facts) == 60);
 static_assert(sizeof(EngineRecord) == 264 && offsetof(EngineRecord, previous) == 200);
 static_assert(sizeof(RootRecord) == 376 && offsetof(RootRecord, output_name) == 304);
 static_assert(sizeof(NativeRootScope) == 16 && sizeof(QueuedScope) == 40 && sizeof(GeometryScope) == 32);
+static_assert(sizeof(MotionQueuedDraw) == 56 && sizeof(MotionResource) == 32);
+static_assert(sizeof(MotionBoundView) == 40 && offsetof(MotionBoundView, slot) == 32);
+static_assert(sizeof(MotionBoundConstant) == 32 && offsetof(MotionBoundConstant, readback) == 24);
+static_assert(sizeof(MotionDispatch) == 6016 && offsetof(MotionDispatch, qpc) == 72);
+static_assert(offsetof(MotionDispatch, inputs) == 128 && offsetof(MotionDispatch, outputs) == 5248 &&
+    offsetof(MotionDispatch, constants) == 5568);
 static_assert(sizeof(MotionArtifact) == 16 && sizeof(MotionArtifactList) == 24);
-static_assert(sizeof(MotionArtifactStats) == 40 && offsetof(MotionArtifactStats, capture_failures) == 32);
-static_assert(sizeof(MotionFinalArtifacts) == 64 && offsetof(MotionFinalArtifacts, stats) == 56);
+static_assert(sizeof(MotionArtifactStats) == 32 && offsetof(MotionArtifactStats, capture_failures) == 28);
+static_assert(sizeof(MotionFinalArtifacts) == 40 && offsetof(MotionFinalArtifacts, stats) == 32);

@@ -12,6 +12,8 @@ const SECTION: PCWSTR = w!("Rendering");
 const KEY: PCWSTR = w!("FrameGeneration");
 const NOT_SUPPORTED: i32 = -7;
 const FEATURE_FAILED: i32 = -9;
+/// `RSF_FG_BACKEND_FSR3`.
+const FSR3: u32 = 3;
 
 struct Settings {
     // Empty when settings are memory-only, otherwise terminated UTF-16.
@@ -35,6 +37,19 @@ pub(crate) fn allowed(backend: u32, choices: u32) -> bool {
     }
     let bit = 1u32.checked_shl(backend).unwrap_or(0);
     bit & choices & (PROVIDERS | 1) != 0
+}
+
+/// FG Auto among the providers a host can serve (`choices`, bit n = provider n): the adapter's
+/// `preferred` provider (`rsf_fg_default_backend`, zero for none) when served, otherwise FSR3 when
+/// served, otherwise zero. The generic D3D12 hosts apply the same fallback (`render_host.rs` poll,
+/// `d3d11_present.rs` Auto). Declared in the private `fg_auto_choice.h` for statically linked
+/// consumers and deliberately not a Runtime DLL export (`rust_exports.c`).
+#[unsafe(no_mangle)]
+extern "C" fn rsf_fg_select_auto_backend(preferred: u32, choices: u32) -> u32 {
+    [preferred, FSR3]
+        .into_iter()
+        .find(|&backend| backend != 0 && backend != AUTO && allowed(backend, choices))
+        .unwrap_or(0)
 }
 
 #[unsafe(no_mangle)]
@@ -107,5 +122,35 @@ extern "C" fn rsf_fg_choice_resolve_auto(backend: u32) {
     let mut settings = SETTINGS.lock().unwrap();
     if settings.choice.backend == AUTO && allowed(backend, settings.choice.choices) {
         settings.choice.backend = backend;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const DLSS: u32 = 1;
+    const FSR4: u32 = 4;
+    const XESS: u32 = 5;
+
+    fn bits(ids: &[u32]) -> u32 {
+        ids.iter().map(|&id| 1u32 << id).sum()
+    }
+
+    #[test]
+    fn auto_takes_the_served_preference_then_fsr3() {
+        let all = bits(&[DLSS, FSR3, FSR4, XESS]);
+        for preferred in [DLSS, FSR3, XESS] {
+            assert_eq!(rsf_fg_select_auto_backend(preferred, all), preferred);
+        }
+        // No preference (software or unknown adapter), or one the host cannot serve.
+        assert_eq!(rsf_fg_select_auto_backend(0, all), FSR3);
+        assert_eq!(rsf_fg_select_auto_backend(DLSS, bits(&[FSR3, XESS])), FSR3);
+        assert_eq!(rsf_fg_select_auto_backend(XESS, bits(&[DLSS])), 0);
+        // Off, Auto and unknown IDs are never chosen.
+        assert_eq!(rsf_fg_select_auto_backend(0, 1), 0);
+        assert_eq!(rsf_fg_select_auto_backend(AUTO, all), FSR3);
+        assert_eq!(rsf_fg_select_auto_backend(2, all | 4), FSR3);
+        assert_eq!(rsf_fg_select_auto_backend(DLSS, 0), 0);
     }
 }

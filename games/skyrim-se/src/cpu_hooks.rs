@@ -1,0 +1,410 @@
+// SPDX-License-Identifier: MIT
+//! Admission and lifetime of the 13 CPU producer hooks for Skyrim SE 1.7.104.0.
+//! Native detours keep the engine ABI, caller addresses and original calls on their own frames.
+
+use crate::cpu_policy::rsf_skyrim_cpu_bad_screen_query;
+use crate::cpu_sources::rsf_skyrim_cpu_clear_proof;
+use crate::hook_set::HookSet;
+use crate::platform::{self, Platform};
+use rsf_game_sys::rsf_game_host_services;
+use std::ffi::{CStr, c_char};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Mutex, PoisonError};
+
+const NAMED_CALLBACK_SLOT: u32 = 0x20b5130;
+const NAMED_POLL: u32 = 0x6e6030;
+
+// Indexed by the native detour table in cpu_events.cpp.
+const HOOKS: [(u32, [u8; 19]); 13] = [
+    (
+        0x658870,
+        [
+            0x48, 0x8b, 0xc4, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x81,
+            0xec, 0x30, 0x01, 0x00, 0x00,
+        ],
+    ), // tick
+    (
+        0xcf95f0,
+        [
+            0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48, 0x83, 0xec,
+            0x30, 0x0f, 0x29, 0x74, 0x24,
+        ],
+    ), // poll
+    (
+        0x6565b0,
+        [
+            0x40, 0x53, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x56, 0x41, 0x57, 0x48, 0x81, 0xec,
+            0x60, 0x01, 0x00, 0x00, 0x48,
+        ],
+    ), // render
+    (
+        0xcfa650,
+        [
+            0x48, 0x8b, 0xc4, 0x48, 0x89, 0x50, 0x10, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55,
+            0x41, 0x56, 0x41, 0x57, 0x48,
+        ],
+    ), // dispatch
+    (
+        0x656e60,
+        [
+            0x48, 0x8b, 0xc4, 0x89, 0x50, 0x10, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41,
+            0x56, 0x41, 0x57, 0x48, 0x8d,
+        ],
+    ), // world
+    (
+        0x7ad900,
+        [
+            0x48, 0x8b, 0xc4, 0x56, 0x57, 0x41, 0x54, 0x41, 0x56, 0x41, 0x57, 0x48, 0x81, 0xec,
+            0x80, 0x00, 0x00, 0x00, 0x48,
+        ],
+    ), // controls
+    (
+        0x8fd590,
+        [
+            0x40, 0x57, 0x48, 0x83, 0xec, 0x70, 0x48, 0xc7, 0x44, 0x24, 0x20, 0xfe, 0xff, 0xff,
+            0xff, 0x48, 0x89, 0x9c, 0x24,
+        ],
+    ), // camera_update
+    (
+        0x60eaf0,
+        [
+            0x48, 0x83, 0xec, 0x28, 0x48, 0x83, 0x3d, 0x94, 0x1f, 0xc1, 0x02, 0x00, 0x74, 0x69,
+            0x48, 0x89, 0x5c, 0x24, 0x30,
+        ],
+    ), // jobs_submit
+    (
+        0x60eb80,
+        [
+            0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0x1d, 0x03, 0x1f, 0xc1, 0x02, 0x48,
+            0x85, 0xdb, 0x74, 0x26, 0x83,
+        ],
+    ), // jobs_join
+    (
+        NAMED_POLL,
+        [
+            0x48, 0x8b, 0x0d, 0xf9, 0xa4, 0xb4, 0x02, 0xe9, 0xb4, 0x3d, 0xf7, 0xff, 0xcc, 0xcc,
+            0xcc, 0xcc, 0xcc, 0xcc, 0xcc,
+        ],
+    ), // named_poll
+    (
+        0x776290,
+        [
+            0x48, 0x8b, 0xc4, 0x41, 0x56, 0x48, 0x81, 0xec, 0xe0, 0x00, 0x00, 0x00, 0x48, 0xc7,
+            0x44, 0x24, 0x30, 0xfe, 0xff,
+        ],
+    ), // movement
+    (
+        0x745200,
+        [
+            0x48, 0x8b, 0xc4, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
+            0x48, 0x8d, 0xa8, 0x98, 0xfe,
+        ],
+    ), // player_update
+    (
+        0x558e70,
+        [
+            0x40, 0x57, 0x48, 0x83, 0xec, 0x30, 0x48, 0xc7, 0x44, 0x24, 0x20, 0xfe, 0xff, 0xff,
+            0xff, 0x48, 0x89, 0x5c, 0x24,
+        ],
+    ), // player_camera_update
+];
+
+const INDICES: std::ops::Range<usize> = 0..HOOKS.len();
+
+/// Private `CpuHookLeaves` from cpu_events.cpp.
+#[repr(C)]
+struct Leaves {
+    struct_size: u32,
+    version: u32,
+    create: unsafe extern "C" fn(u32, usize) -> bool,
+    remove: unsafe extern "C" fn(u32, usize) -> bool,
+    enable: unsafe extern "C" fn(usize) -> i32,
+    disable: unsafe extern "C" fn(usize) -> bool,
+    qpc_frequency: unsafe extern "C" fn() -> u64,
+}
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct Services {
+    host: rsf_game_host_services,
+    frequency: u64,
+}
+
+// The SDK table borrows process services used by native CPU producer threads. Detours
+// copy it under the lock within their entry lease. Start may copy it to log a refusal.
+unsafe impl Send for Services {}
+
+#[repr(C)]
+struct StartRefusal {
+    stage: *const c_char,
+    rva: u32,
+    status: i32,
+}
+
+const _: () = {
+    assert!(size_of::<Leaves>() == 48);
+    assert!(size_of::<Services>() == size_of::<rsf_game_host_services>() + 8);
+    assert!(std::mem::offset_of!(Services, frequency) == size_of::<rsf_game_host_services>());
+    assert!(size_of::<StartRefusal>() == 16);
+};
+
+struct Control {
+    hooks: HookSet<{ HOOKS.len() }>,
+    base: usize,
+    pinned: bool,
+}
+
+static CONTROL: Mutex<Control> = Mutex::new(Control {
+    hooks: HookSet::new(),
+    base: 0,
+    pinned: false,
+});
+// Separate short lock: enabling or disabling hooks can suspend native threads, and calls
+// into the engine or host may nest other CPU detours. They never hold this lock.
+static SERVICES: Mutex<Option<Services>> = Mutex::new(None);
+// Close admission and count detours in the same atomic order. A late entry after
+// disable's drain check cannot observe the old active session.
+const ACTIVE: u32 = 1 << 31;
+const ENTERED: u32 = ACTIVE - 1;
+static PRODUCERS: AtomicU32 = AtomicU32::new(0);
+
+fn target(base: usize, index: usize) -> usize {
+    base + HOOKS[index].0 as usize
+}
+
+fn admission(table: *const Platform, platform: &Platform, base: usize) -> Result<(), StartRefusal> {
+    let named_slot = base.checked_add(NAMED_CALLBACK_SLOT as usize);
+    let named_poll = base.checked_add(NAMED_POLL as usize);
+    if base == 0
+        || named_poll.is_none()
+        || named_slot.and_then(|address| platform.read_usize(address)) != named_poll
+    {
+        return Err(StartRefusal::new(c"named callback", NAMED_CALLBACK_SLOT, 0));
+    }
+    // SAFETY: the caller checked the table. The named slot is above both screen query RVAs.
+    let screen_rva = unsafe { rsf_skyrim_cpu_bad_screen_query(table, base) };
+    if screen_rva != 0 {
+        return Err(StartRefusal::new(c"screen query bytes", screen_rva, 0));
+    }
+    for (rva, bytes) in &HOOKS {
+        // Every hook RVA is below the checked named slot.
+        if !platform.matches(base + *rva as usize, bytes) {
+            return Err(StartRefusal::new(c"hook bytes", *rva, 0));
+        }
+    }
+    Ok(())
+}
+
+impl StartRefusal {
+    fn new(stage: &'static CStr, rva: u32, status: i32) -> Self {
+        Self {
+            stage: stage.as_ptr(),
+            rva,
+            status,
+        }
+    }
+}
+
+impl Control {
+    fn remove_unpinned(&mut self, leaves: &Leaves) {
+        let base = self.base;
+        self.hooks.remove(INDICES, |index| unsafe {
+            (leaves.remove)(index as u32, target(base, index))
+        });
+    }
+
+    fn prepare(
+        &mut self,
+        table: *const Platform,
+        platform: &Platform,
+        leaves: &Leaves,
+        host: rsf_game_host_services,
+    ) -> bool {
+        if rsf_skyrim_cpu_active() || rsf_skyrim_cpu_rust_busy() || !self.hooks.is_disabled() {
+            return false;
+        }
+        let base = platform.main_module();
+        if admission(table, platform, base).is_err() {
+            return false;
+        }
+
+        if !self.pinned {
+            self.remove_unpinned(leaves);
+            if !self.hooks.is_empty() {
+                return false;
+            }
+            self.base = base;
+            if !self
+                .hooks
+                .create(|index| unsafe { (leaves.create)(index as u32, target(base, index)) })
+            {
+                self.remove_unpinned(leaves);
+                return false;
+            }
+        } else if self.base != base || !self.hooks.is_complete() {
+            return false;
+        }
+
+        let frequency = unsafe { (leaves.qpc_frequency)() };
+        if frequency == 0
+            || (!self.pinned && platform.pin_module(std::ptr::from_ref(leaves) as usize) == 0)
+        {
+            if !self.pinned {
+                self.remove_unpinned(leaves);
+            }
+            return false;
+        }
+        self.pinned = true;
+        *SERVICES.lock().unwrap_or_else(PoisonError::into_inner) =
+            Some(Services { host, frequency });
+        true
+    }
+
+    fn start(
+        &mut self,
+        table: *const Platform,
+        platform: &Platform,
+        leaves: &Leaves,
+    ) -> Result<(), StartRefusal> {
+        if rsf_skyrim_cpu_active() || rsf_skyrim_cpu_rust_busy() {
+            return Err(StartRefusal::new(c"active or entered", 0, 0));
+        }
+        // Disabled targets are the only ones whose live prologues can be checked.
+        if let Some(index) = self.hooks.first_unavailable() {
+            return Err(StartRefusal::new(c"hook state", HOOKS[index].0, 0));
+        }
+        let base = platform.main_module();
+        if !self.pinned
+            || base != self.base
+            || SERVICES
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .is_none()
+        {
+            return Err(StartRefusal::new(c"hook state", 0, 0));
+        }
+        admission(table, platform, base)?;
+
+        rsf_skyrim_cpu_clear_proof(true);
+        if let Err((index, status)) = self
+            .hooks
+            .enable(|index| unsafe { (leaves.enable)(target(base, index)) })
+        {
+            // Keep preparation and any hook whose disable refused so stop can retry.
+            self.disable_hooks(leaves);
+            return Err(StartRefusal::new(c"hook enable", HOOKS[index].0, status));
+        }
+        PRODUCERS.fetch_or(ACTIVE, Ordering::Release);
+        Ok(())
+    }
+
+    fn disable_hooks(&mut self, leaves: &Leaves) -> bool {
+        let base = self.base;
+        self.hooks.disable(INDICES, |index| unsafe {
+            (leaves.disable)(target(base, index))
+        })
+    }
+
+    fn disable(&mut self, leaves: &Leaves) -> bool {
+        rsf_skyrim_cpu_rust_quiesce();
+        self.disable_hooks(leaves) && !rsf_skyrim_cpu_rust_busy()
+    }
+}
+
+// The native wrappers lend their static, versioned tables and stack out parameters.
+fn valid(leaves: &Leaves) -> bool {
+    leaves.struct_size as usize == size_of::<Leaves>() && leaves.version == 1
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_skyrim_cpu_rust_prepare(
+    host: &rsf_game_host_services,
+    table: *const Platform,
+    leaves: &Leaves,
+) -> bool {
+    let Some(platform) = (unsafe { platform::inspect(table) }).filter(|_| valid(leaves)) else {
+        return false;
+    };
+    CONTROL
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .prepare(table, platform, leaves, *host)
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_skyrim_cpu_rust_start(
+    table: *const Platform,
+    leaves: &Leaves,
+    refusal: &mut StartRefusal,
+) -> bool {
+    let Some(platform) = (unsafe { platform::inspect(table) }).filter(|_| valid(leaves)) else {
+        *refusal = StartRefusal::new(c"hook state", 0, 0);
+        return false;
+    };
+    match CONTROL
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .start(table, platform, leaves)
+    {
+        Ok(()) => true,
+        Err(reason) => {
+            *refusal = reason;
+            false
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_skyrim_cpu_rust_quiesce() {
+    PRODUCERS.fetch_and(ENTERED, Ordering::AcqRel);
+    // Runtime closes reservations at session release. There is no engine event at quiesce.
+    rsf_skyrim_cpu_clear_proof(false);
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_skyrim_cpu_rust_disable(leaves: &Leaves) -> bool {
+    valid(leaves)
+        && CONTROL
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .disable(leaves)
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_skyrim_cpu_rust_stop(leaves: &Leaves) -> bool {
+    let mut control = CONTROL.lock().unwrap_or_else(PoisonError::into_inner);
+    if !valid(leaves) || !control.disable(leaves) {
+        return false;
+    }
+    // The caller handles the other subsystem refusals before calling stop. No further
+    // native entries may borrow these services, but resident trampolines can still forward.
+    *SERVICES.lock().unwrap_or_else(PoisonError::into_inner) = None;
+    true
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_skyrim_cpu_services(out: &mut Services) {
+    if let Some(services) = *SERVICES.lock().unwrap_or_else(PoisonError::into_inner) {
+        *out = services;
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_skyrim_cpu_active() -> bool {
+    PRODUCERS.load(Ordering::Acquire) & ACTIVE != 0
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_skyrim_cpu_rust_busy() -> bool {
+    PRODUCERS.load(Ordering::Acquire) & ENTERED != 0
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_skyrim_cpu_enter() {
+    PRODUCERS.fetch_add(1, Ordering::AcqRel);
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_skyrim_cpu_leave() {
+    PRODUCERS.fetch_sub(1, Ordering::AcqRel);
+}

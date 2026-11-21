@@ -16,7 +16,8 @@ state after a failed creation (the C++ `failed11`), the checked close and releas
 `integrations/unity/native/bridge.cpp` keeps Unity interface access and the typed COM calls as
 leaves (`create_shared`, `destroy_shared`, `create_command_slot`, `destroy_command_slot` and two
 non-waiting fence reads), the six shared surfaces, the D3D11 texture leases, recording and
-submission. The ring's slot rotation and fence values stay in `bridge_interop.rs`.
+submission. The ring's slot rotation and fence values stay in `bridge_interop.rs`. The shared
+surfaces later joined the record; see [shared surface ownership](rust-unity-d3d11-surfaces.md).
 
 ## Creation and use
 
@@ -77,4 +78,5 @@ Layouts are asserted on both sides. The formatting check used rustfmt 1.11.0 (Ru
 the pinned 1.94.1 toolchain is not installed here. Unchanged neighbouring files also passed.
 Locked offline Cargo metadata and staged whitespace checks also passed. Native and Rust
 compilation and linking, Clippy, the new unit tests, the D3D11 fixtures, Unity Editor and player
-runs, device removal and teardown timing need user verification. The surface table remains native.
+runs, device removal and teardown timing need user verification. The surface table remained native
+in this step and moved in the [shared surface step](rust-unity-d3d11-surfaces.md).
