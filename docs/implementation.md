@@ -4,6 +4,15 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The native D3D12 DLSS registration now acquires and retains the
+Streamline module in Rust. It checks the retained engine module's
+path before using its exports and keeps the plugin search path alive
+through SDK shutdown. Shared-host registrations still borrow the
+host's module. Native leaves keep the existing signature checks,
+typed exports and SDK calls. Source review matched the private table
+and checked the owned, engine and shared paths. Build and SDK
+validation remain open for this revision.
+
 The Rust FidelityFX Vulkan owner now records successful disable and
 drain before it starts releasing SDK objects. A teardown retry skips
 that work and resumes release. Public drain no longer dispatches to

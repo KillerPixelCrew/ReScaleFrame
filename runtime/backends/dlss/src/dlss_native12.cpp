@@ -14,13 +14,10 @@
 #include <memory>
 
 namespace {
-// Typed entry points and the Windows module lease. Rust owns the SDK registration,
-// including the decision to initialize and shut it down.
+// Typed SDK entry points and preferences. The Rust registration leases the module
+// and keeps the borrowed plugin directory alive.
 struct Native {
-    ~Native() { if (retained_module) FreeLibrary(retained_module); }
-
-    HMODULE retained_module = nullptr;
-    std::wstring directory;
+    const wchar_t* plugin_paths[1]{};
     PFun_slInit* init = nullptr;
     PFun_slSetD3DDevice* set_device = nullptr;
     PFun_slIsFeatureSupported* support = nullptr;
@@ -37,42 +34,32 @@ struct Native {
     HRESULT (*after_present)(UINT){};
 };
 
-rsf_backend_result native_open(void* device, const rsf_dlss_setup* setup, void* shared_host, void* engine_module,
-    void** out) noexcept try
+void* native_load(const wchar_t* path, const rsf_dlss_setup* setup) noexcept try
 {
-    if (!shared_host && !engine_module && GetModuleHandleW(L"sl.interposer.dll"))
-        return RSF_BACKEND_ERROR_NOT_READY;
+    return rsf::load_interposer(path, setup->require_signature != 0, setup->log, setup->log_user);
+} catch (...) { return nullptr; }
+
+bool native_verify(const wchar_t* path) noexcept try
+{
+    return rsf_dlss_verify_runtime_signature(path);
+} catch (...) { return false; }
+
+rsf_backend_result native_shared_module(void* device, void* shared_host, void** out) noexcept try
+{
+    auto* host = static_cast<rsf_streamline_host*>(shared_host);
+    rsf_streamline_graphics graphics{};
+    graphics.struct_size = sizeof(graphics);
+    if (rsf_streamline_host_graphics(host, &graphics) != RSF_BACKEND_OK || graphics.native_device != device)
+        return RSF_BACKEND_ERROR_WRONG_API;
+    *out = rsf_streamline_host_module(host);
+    return RSF_BACKEND_OK;
+} catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
+
+rsf_backend_result native_resolve(void* handle, const wchar_t* directory, void** out) noexcept try
+{
+    const auto module = static_cast<HMODULE>(handle);
     auto native = std::make_unique<Native>();
-    std::wstring path;
-    if (!rsf::widen_utf8(setup->interposer_path_utf8, path) ||
-        !rsf::widen_utf8(setup->plugin_directory_utf8, native->directory))
-        return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    HMODULE module{};
-    if (shared_host) {
-        auto* host = static_cast<rsf_streamline_host*>(shared_host);
-        if (setup->require_signature && !rsf_dlss_verify_runtime_signature(path.c_str()))
-            return RSF_BACKEND_ERROR_LOAD_FAILED;
-        rsf_streamline_graphics graphics{};
-        graphics.struct_size = sizeof(graphics);
-        if (rsf_streamline_host_graphics(host, &graphics) != RSF_BACKEND_OK || graphics.native_device != device)
-            return RSF_BACKEND_ERROR_WRONG_API;
-        module = static_cast<HMODULE>(rsf_streamline_host_module(host));
-    } else if (engine_module) {
-        module = static_cast<HMODULE>(engine_module);
-        wchar_t existing_path[32768]{};
-        const auto length = GetModuleFileNameW(module, existing_path, 32768);
-        if (!length || length >= 32768 ||
-            (setup->require_signature && !rsf_dlss_verify_runtime_signature(existing_path)))
-            return RSF_BACKEND_ERROR_LOAD_FAILED;
-        if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
-                reinterpret_cast<const wchar_t*>(module), &native->retained_module) ||
-            native->retained_module != module)
-            return RSF_BACKEND_ERROR_LOAD_FAILED;
-    } else {
-        module = rsf::load_interposer(path.c_str(), setup->require_signature != 0, setup->log, setup->log_user);
-        native->retained_module = module;
-    }
-    if (!module) return RSF_BACKEND_ERROR_LOAD_FAILED;
+    native->plugin_paths[0] = directory;
     native->init = rsf::entry<PFun_slInit*>(module, "slInit");
     native->set_device = rsf::entry<PFun_slSetD3DDevice*>(module, "slSetD3DDevice");
     native->support = rsf::entry<PFun_slIsFeatureSupported*>(module, "slIsFeatureSupported");
@@ -93,15 +80,14 @@ rsf_backend_result native_open(void* device, const rsf_dlss_setup* setup, void* 
 
 rsf_backend_result native_init(void* handle, const rsf_dlss_setup* setup) noexcept try
 {
-    const auto& native = *static_cast<Native*>(handle);
-    const wchar_t* paths[] = {native.directory.c_str()};
-    sl::Feature features[] = {sl::kFeatureDLSS};
+    auto& native = *static_cast<Native*>(handle);
+    static constexpr sl::Feature features[] = {sl::kFeatureDLSS};
     sl::Preferences preferences{};
     preferences.renderAPI = sl::RenderAPI::eD3D12;
     preferences.flags = sl::PreferenceFlags::eUseManualHooking | sl::PreferenceFlags::eUseFrameBasedResourceTagging;
     preferences.featuresToLoad = features;
     preferences.numFeaturesToLoad = 1;
-    preferences.pathsToPlugins = paths;
+    preferences.pathsToPlugins = native.plugin_paths;
     preferences.numPathsToPlugins = 1;
     preferences.engine = setup->engine == RSF_DLSS_ENGINE_UNITY ? sl::EngineType::eUnity : sl::EngineType::eCustom;
     preferences.applicationId = setup->application_id;
@@ -298,7 +284,10 @@ void native_free_viewport(void* handle, uint32_t viewport) noexcept try
 } catch (...) {}
 
 struct Platform {
-    decltype(&native_open) open;
+    decltype(&native_load) load;
+    decltype(&native_verify) verify;
+    decltype(&native_shared_module) shared_module;
+    decltype(&native_resolve) resolve;
     decltype(&native_init) init;
     decltype(&native_set_device) set_device;
     decltype(&native_configure) configure;
@@ -314,14 +303,15 @@ struct Platform {
     decltype(&native_dispatch) dispatch;
     decltype(&native_free_viewport) free_viewport;
 };
-static_assert(sizeof(Platform) == 15 * sizeof(void*));
+static_assert(sizeof(Platform) == 18 * sizeof(void*));
 static_assert(RSF_BACKEND_OK == 0 && RSF_BACKEND_ERROR_INVALID_ARGUMENT == -1 &&
-    RSF_BACKEND_ERROR_ABI_MISMATCH == -2 && RSF_BACKEND_ERROR_INIT_FAILED == -6 &&
+    RSF_BACKEND_ERROR_ABI_MISMATCH == -2 && RSF_BACKEND_ERROR_LOAD_FAILED == -4 && RSF_BACKEND_ERROR_INIT_FAILED == -6 &&
     RSF_BACKEND_ERROR_NOT_READY == -8 && RSF_BACKEND_ERROR_FEATURE_FAILED == -9 &&
     RSF_QUALITY_QUALITY == 1);
 
 const Platform platform{
-    native_open, native_init, native_set_device, native_configure, native_shutdown, native_close, native_present,
+    native_load, native_verify, native_shared_module, native_resolve,
+    native_init, native_set_device, native_configure, native_shutdown, native_close, native_present,
     native_plan, native_validate, native_token, native_shared_token, native_constants, native_options,
     native_dispatch, native_free_viewport,
 };

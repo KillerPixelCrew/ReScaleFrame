@@ -2,15 +2,22 @@
 use crate::com_ref::ComRef;
 use crate::gl_pipeline_abi::rsf_dlss_setup as Setup;
 use crate::render_abi::{RSF_DLSS_ABI_VERSION, rsf_sr_frame as Frame};
-use std::ffi::c_void;
+use crate::vulkan_sdk::SdkModule;
+use std::ffi::{CStr, c_char, c_void};
 use std::ptr::{NonNull, null_mut};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use windows_sys::Win32::System::LibraryLoader::{
+    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GetModuleFileNameW, GetModuleHandleExW,
+    GetModuleHandleW,
+};
+use windows_sys::core::w;
 
 type Handle = *mut c_void;
 const OK: i32 = 0;
 const INVALID: i32 = -1;
 const ABI_MISMATCH: i32 = -2;
+const LOAD_FAILED: i32 = -4;
 const INIT_FAILED: i32 = -6;
 const NOT_READY: i32 = -8;
 const FEATURE_FAILED: i32 = -9;
@@ -19,7 +26,10 @@ const QUALITY: u32 = 1;
 // C++ owns the Streamline types and SDK calls. The table is static in each consumer.
 #[repr(C)]
 struct Platform {
-    open: unsafe extern "C" fn(Handle, &Setup, Handle, Handle, &mut Handle) -> i32,
+    load: unsafe extern "C" fn(*const u16, &Setup) -> Handle,
+    verify: unsafe extern "C" fn(*const u16) -> bool,
+    shared_module: unsafe extern "C" fn(Handle, Handle, &mut Handle) -> i32,
+    resolve: unsafe extern "C" fn(Handle, *const u16, &mut Handle) -> i32,
     init: unsafe extern "C" fn(Handle, &Setup) -> i32,
     set_device: unsafe extern "C" fn(Handle, Handle) -> i32,
     configure: unsafe extern "C" fn(Handle, Handle, &Setup, u32) -> i32,
@@ -36,7 +46,7 @@ struct Platform {
     free_viewport: unsafe extern "C" fn(Handle, u32),
 }
 
-const _: () = assert!(size_of::<Platform>() == 15 * size_of::<Handle>());
+const _: () = assert!(size_of::<Platform>() == 18 * size_of::<Handle>());
 
 enum Route {
     Owned,
@@ -49,6 +59,76 @@ impl Route {
         // The shared presentation host reserves zero for completed-frame generation.
         u32::from(!matches!(self, Self::Owned))
     }
+
+    fn module(
+        &self,
+        platform: &Platform,
+        device: Handle,
+        setup: &Setup,
+        interposer: &[u16],
+        engine_module: Handle,
+    ) -> Result<(Handle, Option<SdkModule>), i32> {
+        match *self {
+            Self::Owned => {
+                let handle = unsafe { (platform.load)(interposer.as_ptr(), setup) };
+                let lease = SdkModule::adopt_system(handle).ok_or(LOAD_FAILED)?;
+                Ok((handle, Some(lease)))
+            }
+            Self::Shared(host) => {
+                if setup.require_signature != 0
+                    && !unsafe { (platform.verify)(interposer.as_ptr()) }
+                {
+                    return Err(LOAD_FAILED);
+                }
+                let mut module = null_mut();
+                let result =
+                    unsafe { (platform.shared_module)(device, host.as_ptr(), &mut module) };
+                if result != OK {
+                    return Err(result);
+                }
+                if module.is_null() {
+                    return Err(LOAD_FAILED);
+                }
+                Ok((module, None))
+            }
+            Self::BorrowedEngine => {
+                let mut held = null_mut();
+                if unsafe {
+                    GetModuleHandleExW(
+                        GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                        engine_module.cast(),
+                        &mut held,
+                    )
+                } == 0
+                {
+                    return Err(LOAD_FAILED);
+                }
+                let lease = SdkModule::adopt_system(held).ok_or(LOAD_FAILED)?;
+                if held != engine_module {
+                    return Err(LOAD_FAILED);
+                }
+                let mut path = vec![0; 32768];
+                let length =
+                    unsafe { GetModuleFileNameW(held, path.as_mut_ptr(), path.len() as u32) };
+                if length == 0
+                    || length as usize >= path.len()
+                    || (setup.require_signature != 0
+                        && !unsafe { (platform.verify)(path.as_ptr()) })
+                {
+                    return Err(LOAD_FAILED);
+                }
+                Ok((held, Some(lease)))
+            }
+        }
+    }
+}
+
+unsafe fn wide_path(path: *const c_char) -> Option<Vec<u16>> {
+    if path.is_null() {
+        return None;
+    }
+    let path = unsafe { CStr::from_ptr(path) }.to_str().ok()?;
+    (!path.is_empty()).then(|| path.encode_utf16().chain([0]).collect())
 }
 
 struct DeviceRegistration {
@@ -57,6 +137,9 @@ struct DeviceRegistration {
     device: ComRef,
     route: Route,
     initialized: bool,
+    _module: Option<SdkModule>,
+    // The typed Streamline preferences borrow the directory through SDK shutdown.
+    _directory: Vec<u16>,
 }
 
 // The registration is immutable once published, with a retained D3D12 device and module lease
@@ -79,9 +162,20 @@ impl DeviceRegistration {
         } else {
             Route::BorrowedEngine
         };
+        if matches!(route, Route::Owned)
+            && !unsafe { GetModuleHandleW(w!("sl.interposer.dll")) }.is_null()
+        {
+            return Err(NOT_READY);
+        }
+        let interposer = unsafe { wide_path(setup.interposer_path_utf8) }.ok_or(INVALID)?;
+        let directory = unsafe { wide_path(setup.plugin_directory_utf8) }.ok_or(INVALID)?;
+        let (resolved, lease) = route.module(platform, device, setup, &interposer, module)?;
         let mut native = null_mut();
-        let result = unsafe { (platform.open)(device, setup, host, module, &mut native) };
+        let result = unsafe { (platform.resolve)(resolved, directory.as_ptr(), &mut native) };
         if result != OK {
+            if !native.is_null() {
+                unsafe { (platform.close)(native) };
+            }
             return Err(result);
         }
         let native = NonNull::new(native).ok_or(INIT_FAILED)?;
@@ -91,6 +185,8 @@ impl DeviceRegistration {
             device: unsafe { ComRef::retain(device) },
             route,
             initialized: false,
+            _module: lease,
+            _directory: directory,
         };
         let owned = matches!(registration.route, Route::Owned);
         if owned {
