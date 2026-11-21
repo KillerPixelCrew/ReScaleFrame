@@ -108,8 +108,8 @@ RID resolve_motion(const Ref<RenderSceneBuffersRD> &buffers, RID depth, RID moti
 void release_motion() {
     RD *rd = RD::get_singleton();
     if (rd) {
-        if (shader.is_valid()) rd->free(shader);
-        if (sampler.is_valid()) rd->free(sampler);
+        if (shader.is_valid()) rd->free_rid(shader);
+        if (sampler.is_valid()) rd->free_rid(sampler);
     }
     shader = RID(); pipeline = RID(); sampler = RID();
 }

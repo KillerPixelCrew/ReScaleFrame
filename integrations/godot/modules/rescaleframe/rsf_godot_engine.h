@@ -19,7 +19,7 @@ public:
 };
 
 namespace RSFGodot {
-void boot();
+void boot(bool headless);
 bool create_swapchain(void *factory, void *queue, void *window, const void *description, void **out);
 void shutdown();
 void cpu_begin();

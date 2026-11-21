@@ -146,3 +146,14 @@ variant and windowed Vulkan output are still open. Receipts are in
 `.local/godot/preflight/fresh-engine-exact/`,
 `.local/godot/preflight/seeded-extension-list/` and
 `.local/godot/visual/rust-cutover-headless-combined/`.
+
+The pinned engine consumes `--headless` while selecting its display
+driver, before the bridge can inspect user-visible arguments. An enabled
+project therefore started Streamline in the baseline headless probe.
+The bridge now receives the selected display mode before Godot creates
+the display server. A rebuilt editor loaded the pinned Rust 1.94.1
+add-on with both `--headless` and `--display-driver headless`. Both runs
+registered the native classes and left the graphics bridge inactive.
+The rebuilt add-on retained all 398 export names and ordinals and its
+embedded Runtime. The startup probe and logs are in
+`.local/godot/visual/rust-pinned-display-mode-combined/`.

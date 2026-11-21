@@ -7,7 +7,6 @@
 static ReScaleFrameBridge *bridge = nullptr;
 
 void initialize_rescaleframe_module(ModuleInitializationLevel level) {
-    if (level == MODULE_INITIALIZATION_LEVEL_SERVERS) RSFGodot::boot();
     if (level == MODULE_INITIALIZATION_LEVEL_SCENE) {
         const ClassDB::APIType previous_api = ClassDB::get_current_api();
         ClassDB::set_current_api(ClassDB::API_NONE);

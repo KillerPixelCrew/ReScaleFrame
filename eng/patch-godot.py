@@ -416,6 +416,16 @@ previous_pool_retirement_plan = planned.copy()
 replace(path, '\t// The frame fence has retired every previous use of this pooled buffer.\n\tRSFGodot::vk_recording_begin(command_buffer->vk_command_buffer);',
         '\t// The frame fence has retired every previous use of this pooled buffer.')
 
+previous_startup_plan = planned.copy()
+replace("main/main.cpp",
+        '\t\tinitialize_modules(MODULE_INITIALIZATION_LEVEL_SERVERS);\n'
+        '\t\tGDExtensionManager::get_singleton()->initialize_extensions(GDExtension::INITIALIZATION_LEVEL_SERVERS);',
+        '\t\tinitialize_modules(MODULE_INITIALIZATION_LEVEL_SERVERS);\n'
+        '#ifdef MODULE_RESCALEFRAME_ENABLED\n'
+        '\t\tRSFGodot::boot(display_driver == NULL_DISPLAY_DRIVER);\n'
+        '#endif\n'
+        '\t\tGDExtensionManager::get_singleton()->initialize_extensions(GDExtension::INITIALIZATION_LEVEL_SERVERS);')
+
 
 changed = set(subprocess.check_output(["git", "-C", str(ENGINE), "diff", "--name-only"], text=True).splitlines())
 if changed - set(FILES):
@@ -423,7 +433,7 @@ if changed - set(FILES):
 for path in FILES:
     current = (ENGINE / path).read_text(encoding="utf-8")
     validated[path] = current
-    if current not in (original[path], previous_plan[path], previous_camera_plan[path], previous_queue_plan[path], previous_pacing_plan[path], previous_vulkan_plan[path], previous_copy_usage_plan[path], previous_validation_plan[path], previous_capture_plan[path], previous_wsi_plan[path], previous_timeline_plan[path], previous_proxy_layout_plan[path], previous_multi_present_plan[path], previous_latency_plan[path], previous_latency_wsi_plan[path], previous_latency_owner_plan[path], previous_dlssg_wsi_plan[path], previous_optical_queue_plan[path], previous_graph_split_plan[path], previous_fsr1_formats_plan[path], previous_sharpening_plan[path], previous_unsharpened_plan[path], previous_pool_retirement_plan[path], planned[path]):
+    if current not in (original[path], previous_plan[path], previous_camera_plan[path], previous_queue_plan[path], previous_pacing_plan[path], previous_vulkan_plan[path], previous_copy_usage_plan[path], previous_validation_plan[path], previous_capture_plan[path], previous_wsi_plan[path], previous_timeline_plan[path], previous_proxy_layout_plan[path], previous_multi_present_plan[path], previous_latency_plan[path], previous_latency_wsi_plan[path], previous_latency_owner_plan[path], previous_dlssg_wsi_plan[path], previous_optical_queue_plan[path], previous_graph_split_plan[path], previous_fsr1_formats_plan[path], previous_sharpening_plan[path], previous_unsharpened_plan[path], previous_pool_retirement_plan[path], previous_startup_plan[path], planned[path]):
         raise SystemExit("Reference has unrelated changes: " + path)
     if "--check" in sys.argv and current != planned[path]:
         raise SystemExit("Bridge patch is missing: " + path)

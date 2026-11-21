@@ -257,14 +257,9 @@ Dictionary ReScaleFrameBridge::get_status() const {
 }
 
 namespace RSFGodot {
-void boot() {
+void boot(bool headless) {
     if (!GLOBAL_DEF("rescaleframe/enabled", false)) return;
-    if (Engine::get_singleton()->is_editor_hint()) return;
-    // Import and other headless tools have no presentation surface. In particular,
-    // do not install presentation interception before an editor import scans DLLs.
-    for (const String &argument : OS::get_singleton()->get_cmdline_args()) {
-        if (argument == "--headless") return;
-    }
+    if (headless || Engine::get_singleton()->is_editor_hint()) return;
     const String library = disk_path(GLOBAL_DEF("rescaleframe/native_library", "res://addons/rescaleframe/bin/ReScaleFrame.Godot.Native.dll"));
     const String runtime = disk_path(GLOBAL_DEF("rescaleframe/runtime_directory", "res://addons/rescaleframe/runtime"));
     const String id = GLOBAL_DEF("rescaleframe/project_id", "125d2115-7176-46e1-8806-95b790f01717");
