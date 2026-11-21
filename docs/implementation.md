@@ -296,6 +296,16 @@ lookup match the staged baseline. The foreground overlay and game
 checks remain open for this change.
 [Direct stage links](research/rust-anomaly-overlay-service.md#direct-stage-links)
 
+Rust also owns the admitted Anomaly motion manifest, shared by the
+text and Runtime pack paths. The native map and per-shader lookup
+callback were removed. The merged build passed 385 pinned Rust tests
+and 14 focused MSVC contracts. The adapter's three exports, dynamic
+Runtime lookup and the pack SHA-256 matched staging. The isolated
+AVX run opened 73 allowlisted roots, reported 79 cached replacements,
+resized with DLSS SR and shut down cleanly. Foreground rendering,
+input and pack reload still need checks on the final build.
+[Manifest and AVX evidence](research/rust-anomaly-shader-manifest.md#merged-adapter-verification)
+
 The overlay and FG merge passed 17 focused MSVC contracts in Debug
 and Release, including the hidden-window overlay API contract and the
 input gate. All 233 locked Rust tests, formatting and Clippy passed.

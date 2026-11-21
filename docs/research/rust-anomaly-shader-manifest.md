@@ -142,3 +142,26 @@ PE parity (`dumpbin` lists in `build/shader-manifest/pe/`), against staging
 
 Open: live pack open, permutation replacement and reload on Standard and AVX are
 unverified on this build.
+
+## Merged adapter verification
+
+The integrated Release build at `7d8b4df` passed 385 pinned Rust tests,
+formatting, Clippy and 14 focused MSVC contracts for the manifest, motion
+hooks, overlay, input, SR and plugin lifecycle. The Anomaly DLL's three
+export name and ordinal pairs matched staging and its Runtime lookup
+stayed dynamic. The rebuilt pack matched the SHA-256 recorded above.
+
+The isolated AVX clone selected its exact-build profile, opened the
+73-root pack and reported 79 cached replacements across static and model
+geometry, pixel shaders, foliage, and both tessellation stages. Motion
+draws continued after the scripted windowed resize from 1280×720 to
+1600×900. The last full SR report showed 689 DLSS evaluations and zero
+refusals. The actor callback queued an engine quit, Direct3D shut down,
+and the process exited with code 0. The staged DLLs, pack and settings
+were restored and checked against their backup hashes.
+
+The background run verifies live AVX pack admission and cached
+replacement. It provides no foreground input, overlay or generated-frame
+evidence and did not exercise pack reload. Standard remains open for this
+manifest build. Logs, script and payload hashes are under
+`.local/anomaly/staging/live-58fe95a-stage5/evidence/merged-shader-manifest-avx-7d8b4df/`.
