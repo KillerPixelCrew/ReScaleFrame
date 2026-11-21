@@ -3,43 +3,56 @@
 #include <d3d11shader.h>
 #include <d3dcompiler.h>
 #include <algorithm>
-#include <cstring>
 #include <new>
-#include <fstream>
-#include <iterator>
 
 namespace rsf::anomaly::motion {
+struct ShaderIncludes;
+using OpenFile = HRESULT (*)(const void* tree, const char* prefix, const char* name, HANDLE*);
+extern "C" {
+ShaderD3DModules* rsf_anomaly_shader_d3d_load(const uint16_t*, FARPROC*, FARPROC*) noexcept;
+void rsf_anomaly_shader_d3d_unload(ShaderD3DModules*) noexcept;
+ShaderIncludes* rsf_anomaly_shader_includes_new() noexcept;
+void rsf_anomaly_shader_includes_free(ShaderIncludes*) noexcept;
+HRESULT rsf_anomaly_shader_include_open(ShaderIncludes*, const void*, const char*, OpenFile, const void**, UINT*) noexcept;
+HRESULT rsf_anomaly_shader_include_close(ShaderIncludes*, const void*) noexcept;
+}
+
 namespace {
-// Same lookup order as the engine includer (r4.cpp:1170): shader path ("r3\") + name, then the name directly.
+HRESULT open_file(const void* tree, const char* prefix, const char* name, HANDLE* out) noexcept try {
+    // Keep the STL's narrow filename conversion and Windows root/drive/UNC append rules.
+    // make_preferred also converts slashes in include names for extended-length trees.
+    auto path = *static_cast<const std::filesystem::path*>(tree);
+    if (prefix) path /= prefix;
+    path /= std::filesystem::path(name).make_preferred();
+    // Match the previous binary stream's read access and sharing on this native path.
+    const HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return S_FALSE;
+    *out = file;
+    return S_OK;
+} catch (const std::bad_alloc&) {
+    return E_OUTOFMEMORY;
+} catch (...) {
+    return E_FAIL;
+}
+
 class Includer final : public ID3DInclude {
 public:
-    explicit Includer(std::filesystem::path tree) : tree_(std::move(tree)) {}
-    HRESULT __stdcall Open(D3D_INCLUDE_TYPE, LPCSTR name, LPCVOID, LPCVOID* data, UINT* bytes) override
+    explicit Includer(const std::filesystem::path& tree) noexcept : tree_(tree) {}
+    ~Includer() { rsf_anomaly_shader_includes_free(includes_); }
+    Includer(const Includer&) = delete;
+    Includer& operator=(const Includer&) = delete;
+    HRESULT __stdcall Open(D3D_INCLUDE_TYPE, LPCSTR name, LPCVOID, LPCVOID* data, UINT* bytes) noexcept override
     {
-        if (!name || !data || !bytes) return E_INVALIDARG;
-        // Include names may use '/'; "\\?\" trees do not normalise separators.
-        const auto relative = std::filesystem::path(name).make_preferred();
-        for (const auto& path : {tree_ / "r3" / relative, tree_ / relative}) {
-            std::ifstream file(path, std::ios::binary);
-            if (!file) continue;
-            std::vector<char> content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-            auto* copy = new (std::nothrow) char[content.size() + 1];
-            if (!copy) return E_OUTOFMEMORY;
-            if (!content.empty()) std::memcpy(copy, content.data(), content.size());
-            copy[content.size()] = 0;
-            *data = copy;
-            *bytes = static_cast<UINT>(content.size());
-            return S_OK;
-        }
-        return E_FAIL;
+        return rsf_anomaly_shader_include_open(includes_, &tree_, name, open_file, data, bytes);
     }
-    HRESULT __stdcall Close(LPCVOID data) override
+    HRESULT __stdcall Close(LPCVOID data) noexcept override
     {
-        delete[] static_cast<const char*>(data);
-        return S_OK;
+        return rsf_anomaly_shader_include_close(includes_, data);
     }
 private:
-    std::filesystem::path tree_;
+    const std::filesystem::path& tree_;
+    ShaderIncludes* includes_ = rsf_anomaly_shader_includes_new();
 };
 template<class T> struct Releaser {
     T* p{};
@@ -60,17 +73,15 @@ void parameters(ID3D11ShaderReflection* reflection, UINT count, Signature which,
 }
 }
 
-D3DShaderApi::D3DShaderApi(const wchar_t* name) noexcept
+D3DShaderApi::D3DShaderApi(const wchar_t* name) noexcept : D3DShaderReflector(nullptr)
 {
-    if (!name) return;
-    HMODULE module = GetModuleHandleW(name);
-    if (!module) module = LoadLibraryExW(name, nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
-    if (module) compile_ = GetProcAddress(module, "D3DCompile");
-    // Reflection only reads the DXBC container, which every compiler version writes the same way. d3dcompiler_43's
-    // D3DReflect answers only the June 2010 IID_ID3D11ShaderReflection, so reflect with System32's _47 (the interface
-    // this file is compiled against) regardless of which compiler produced the bytecode.
-    if (HMODULE reflector = LoadLibraryExW(L"d3dcompiler_47.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32))
-        reflect_ = GetProcAddress(reflector, "D3DReflect");
+    static_assert(sizeof(wchar_t) == sizeof(uint16_t));
+    modules_ = rsf_anomaly_shader_d3d_load(reinterpret_cast<const uint16_t*>(name), &compile_, &reflect_);
+}
+
+D3DShaderApi::~D3DShaderApi()
+{
+    rsf_anomaly_shader_d3d_unload(modules_);
 }
 
 bool D3DShaderApi::compile(const std::filesystem::path& tree, std::span<const std::byte> root, const ShaderRequest& request,
@@ -98,7 +109,7 @@ bool D3DShaderApi::compile(const std::filesystem::path& tree, std::span<const st
     return true;
 }
 
-bool D3DShaderApi::reflect(std::span<const std::byte> bytecode, Reflection& out)
+bool D3DShaderReflector::reflect(std::span<const std::byte> bytecode, Reflection& out)
 {
     out = {};
     if (!reflect_ || bytecode.empty()) return false;

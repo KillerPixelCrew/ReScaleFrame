@@ -1,22 +1,34 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// d3dcompiler implementations of shader_loader.h's Compiler and Reflector. Use the compiler the engine itself
-// imports (motion_profile.h engine_compiler_module, d3dcompiler_43.dll for 1.5.3): the loader proves its inputs by
-// reproducing the engine's bytecode, which only that compiler does. The game has it loaded, so GetModuleHandle finds
-// it; a host without it (tests) loads System32's copy. Reflection always uses System32's d3dcompiler_47.
 #include "shader_loader.h"
 #include <windows.h>
 
 namespace rsf::anomaly::motion {
-class D3DShaderApi final : public Compiler, public Reflector {
+// The live pack lends its reflector for the duration of shader preparation.
+extern "C" FARPROC rsf_anomaly_runtime_pack_reflector(const void*) noexcept;
+
+class D3DShaderReflector : public Reflector {
+public:
+    explicit D3DShaderReflector(FARPROC entry) noexcept : reflect_(entry) {}
+    bool reflect(std::span<const std::byte> bytecode, Reflection&) override;
+protected:
+    FARPROC reflect_{};
+};
+
+struct ShaderD3DModules;
+// Deployed-tree fixture facade. Rust owns the selected compiler and reflector references.
+class D3DShaderApi final : public Compiler, public D3DShaderReflector {
 public:
     explicit D3DShaderApi(const wchar_t* module) noexcept;
+    ~D3DShaderApi() override;
+    D3DShaderApi(const D3DShaderApi&) = delete;
+    D3DShaderApi& operator=(const D3DShaderApi&) = delete;
     bool ready() const noexcept { return compile_ && reflect_; }
     // Compiles with pSourceName "" like the engine (motion_profile.h source_name_rva).
     bool compile(const std::filesystem::path& tree, std::span<const std::byte> root, const ShaderRequest&,
         std::vector<std::byte>& bytecode, std::string& error) override;
-    bool reflect(std::span<const std::byte> bytecode, Reflection&) override;
 private:
-    FARPROC compile_{}, reflect_{};
+    ShaderD3DModules* modules_{};
+    FARPROC compile_{};
 };
 }
