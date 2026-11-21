@@ -51,9 +51,12 @@ unsafe extern "C" fn fg(
 unsafe extern "C" fn fg_installed() -> bool {
     FG.load(SeqCst) != 0
 }
-unsafe extern "C" fn input(_: usize, _: *mut *const c_char) -> u32 {
+unsafe extern "C" fn input_observation(_: *mut *const c_char) -> bool {
+    true
+}
+unsafe extern "C" fn input_hook(_: usize, _: *mut *const c_char) -> bool {
     INPUT.fetch_add(1, SeqCst);
-    0
+    true
 }
 unsafe extern "C" fn overlay(_: HMODULE, _: *const u16, _: rsf_game_log_fn) -> bool {
     OVERLAY.fetch_add(1, SeqCst);
@@ -133,7 +136,8 @@ fn retry_repeats_only_unfinished_steps() {
         motion,
         fg,
         fg_installed,
-        input,
+        input_observation,
+        input_hook,
         overlay,
         overlay_sink,
     };
