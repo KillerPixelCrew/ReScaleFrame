@@ -3,6 +3,10 @@
 // this module, so no system DLL is impersonated and nothing is forwarded. The directory holding
 // the .asi is the deployment root: ReScaleFrame.ini beside it, the runtime and plugin in a
 // ReScaleFrame subdirectory.
+//
+// Startup admission, the [RDR2] configuration gates, the ForceD3D12 write and engine-settings
+// ownership are owned by the Rust crate rsf-rdr2 (games/rdr2/src/asi.rs, engine_settings.rs).
+// This file lends it the typed leaves below and keeps the runtime session worker.
 #include <rescaleframe/module_dump.h>
 #ifdef RSF_HAVE_FRAME_CAPTURE
 #include <rescaleframe/frame_capture.h>
@@ -13,6 +17,8 @@
 #include "runtime_setup.h"
 #include <rescaleframe/sha256_file.h>
 #include <windows.h>
+#include <dxgi1_4.h>
+#include <wrl/client.h>
 #include <MinHook.h>
 #include <intrin.h>
 #include <cstdint>
@@ -21,6 +27,7 @@
 #include <cwchar>
 #include <mutex>
 #include <string>
+#include "asi_platform.h"
 #include "social_club.h"
 #include "camera_probe.h"
 #include "native_capture.h"
@@ -35,28 +42,7 @@ std::mutex log_guard;
 rsf_plugin_session* session = nullptr;
 std::string dump_directory;
 std::string modules_path;
-
-// RDR2.exe 1.0.1491.50 (PE timestamp 0x65eec92e, SizeOfImage 0x7397600). The engine reads a string
-// parameter before the saved API setting: "d3d12" selects D3D12 in settings load, adapter
-// enumeration and device resolution. See docs/research/rdr2-renderer.md.
-constexpr DWORD expected_timestamp = 0x65eec92e;
-constexpr DWORD expected_image_size = 0x7397600;
-constexpr DWORD api_override_rva = 0x57abf10;
-struct ReadSite { DWORD rva; unsigned char opcode[3]; };
-// Every engine read of the parameter: mov r64, [rip + disp32] resolving to api_override_rva.
-constexpr ReadSite api_override_reads[] = {
-    {0x2c65575, {0x48, 0x8b, 0x1d}},  // settings load
-    {0x26b8ebb, {0x48, 0x8b, 0x05}},  // adapter manager API selection
-    {0x22a5f8, {0x48, 0x8b, 0x0d}},   // device settings adapter resolution
-    {0x2c662f6, {0x48, 0x8b, 0x05}},  // saved API level application
-};
-const char d3d12_api[] = "d3d12";
-char force_result[192] = "ForceD3D12 disabled.";
-char census_result[192] = "Vendor census disabled.";
 char census_directory[MAX_PATH * 3]{};
-char social_club_result[128] = "Social Club backbuffer fix disabled.";
-char camera_probe_result[128] = "Camera probe disabled.";
-char frame_probe_result[128] = "Frame probe disabled.";
 #ifdef RSF_HAVE_FRAME_CAPTURE
 wchar_t frame_request[MAX_PATH]{};
 DWORD WINAPI frame_requests(void*) noexcept
@@ -75,15 +61,30 @@ DWORD WINAPI frame_requests(void*) noexcept
         previous_key = key;
     }
 }
+
+int32_t install_frame_probe(const wchar_t* library, const wchar_t* prefix) noexcept
+{
+    char library_utf8[MAX_PATH * 3]{}, prefix_utf8[MAX_PATH * 3]{};
+    WideCharToMultiByte(CP_UTF8, 0, library, -1, library_utf8, sizeof(library_utf8), nullptr, nullptr);
+    WideCharToMultiByte(CP_UTF8, 0, prefix, -1, prefix_utf8, sizeof(prefix_utf8), nullptr, nullptr);
+    const auto result = rsf_capture_initialise(library_utf8, prefix_utf8);
+    if (result == RSF_CAPTURE_OK) {
+        swprintf_s(frame_request, L"%s.request", prefix);
+        HANDLE poller = CreateThread(nullptr, 0, frame_requests, nullptr, 0, nullptr);
+        if (poller) CloseHandle(poller);
+    }
+    return static_cast<int32_t>(result);
+}
 #endif
 
 // Opt-in, game-owned HRESULT observation. This catches the first error before RAGE converts a
 // failed command-list Reset into ERR_GFX_D3D_DEFERRED_MEM. It does not alter the HRESULT or touch
-// any cache, device, command list or allocator. See the matching-build sites in rdr2-renderer.md.
+// any cache, device, command list or allocator. The crate verified the build and helper bytes; see
+// the matching-build sites in rdr2-renderer.md.
 using CheckD3D12Result = HRESULT (*)(HRESULT);
 CheckD3D12Result original_check_d3d12_result = nullptr;
 wchar_t d3d12_error_path[32768]{};
-char d3d12_trace_result[192] = "D3D12 result trace disabled.";
+uint32_t traced_image_size{};
 
 HRESULT trace_d3d12_result(HRESULT result) noexcept
 {
@@ -99,7 +100,7 @@ HRESULT trace_d3d12_result(HRESULT result) noexcept
                 static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(_ReturnAddress()) - base));
             for (USHORT i = 0; i < count; ++i) {
                 const auto address = reinterpret_cast<uintptr_t>(stack[i]);
-                if (address >= base && address - base < expected_image_size) {
+                if (address >= base && address - base < traced_image_size) {
                     std::fprintf(stream, " RDR2+0x%llx", static_cast<unsigned long long>(address - base));
                 } else {
                     std::fprintf(stream, " %p", stack[i]);
@@ -112,79 +113,29 @@ HRESULT trace_d3d12_result(HRESULT result) noexcept
     return original_check_d3d12_result(result);
 }
 
-void install_d3d12_result_trace() noexcept
+int32_t install_d3d12_result_trace(uintptr_t target, uint32_t image_size, const wchar_t* path) noexcept
 {
-    const auto base = reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr));
-    // ForceD3D12 already validated this exact image and the decrypted read sites.
-    if (std::strncmp(force_result, "ForceD3D12 applied", 17) != 0) {
-        std::snprintf(d3d12_trace_result, sizeof(d3d12_trace_result), "D3D12 result trace refused: build not validated.");
-        return;
-    }
-    constexpr unsigned char expected[] = {0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x8d, 0x81,
-        0xfb, 0xff, 0x85, 0x77, 0x8b, 0xd9, 0x83, 0xf8};
-    auto* target = base + 0x268b5c0;
-    if (std::memcmp(target, expected, sizeof(expected)) != 0) {
-        std::snprintf(d3d12_trace_result, sizeof(d3d12_trace_result), "D3D12 result trace refused: unexpected helper bytes.");
-        return;
-    }
+    wcsncpy_s(d3d12_error_path, path, _TRUNCATE);
+    traced_image_size = image_size;
     auto status = MH_Initialize();
     if (status == MH_OK || status == MH_ERROR_ALREADY_INITIALIZED) {
-        status = MH_CreateHook(target, reinterpret_cast<void*>(&trace_d3d12_result),
+        status = MH_CreateHook(reinterpret_cast<void*>(target), reinterpret_cast<void*>(&trace_d3d12_result),
             reinterpret_cast<void**>(&original_check_d3d12_result));
-        if (status == MH_OK) status = MH_EnableHook(target);
+        if (status == MH_OK) status = MH_EnableHook(reinterpret_cast<void*>(target));
     }
-    std::snprintf(d3d12_trace_result, sizeof(d3d12_trace_result),
-        "D3D12 result trace at RVA 0x268b5c0: %s", MH_StatusToString(status));
+    return static_cast<int32_t>(status);
 }
-// Runs in DllMain: the ASI loader loads modules during CRT startup, after decryption and before the
-// engine reads its settings. Writes only when every expected byte and the null value match.
-void force_d3d12() noexcept
+
+int32_t install_census(const wchar_t* directory, uint32_t flags) noexcept
 {
-    const auto base = reinterpret_cast<const unsigned char*>(GetModuleHandleW(nullptr));
-    const auto dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
-    if (!base || dos->e_magic != IMAGE_DOS_SIGNATURE) {
-        std::snprintf(force_result, sizeof(force_result), "ForceD3D12 refused: no main image.");
-        return;
-    }
-    const auto nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
-    if (nt->Signature != IMAGE_NT_SIGNATURE || nt->FileHeader.TimeDateStamp != expected_timestamp ||
-        nt->OptionalHeader.SizeOfImage != expected_image_size) {
-        std::snprintf(force_result, sizeof(force_result),
-            "ForceD3D12 refused: build differs (timestamp 0x%lx, image 0x%lx).",
-            nt->FileHeader.TimeDateStamp, nt->OptionalHeader.SizeOfImage);
-        return;
-    }
-    const auto* section = IMAGE_FIRST_SECTION(nt);
-    bool in_data = false;
-    for (WORD i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++section) {
-        if (!std::memcmp(section->Name, ".data\0\0\0", 8) && api_override_rva >= section->VirtualAddress &&
-            api_override_rva + sizeof(void*) <= section->VirtualAddress + section->Misc.VirtualSize) {
-            in_data = true;
-        }
-    }
-    if (!in_data) {
-        std::snprintf(force_result, sizeof(force_result), "ForceD3D12 refused: parameter outside .data.");
-        return;
-    }
-    for (const auto& site : api_override_reads) {
-        const auto* code = base + site.rva;
-        std::int32_t displacement = 0;
-        std::memcpy(&displacement, code + 3, sizeof(displacement));
-        if (std::memcmp(code, site.opcode, 3) || site.rva + 7 + displacement != api_override_rva) {
-            std::snprintf(force_result, sizeof(force_result),
-                "ForceD3D12 refused: unexpected bytes at RVA 0x%lx.", site.rva);
-            return;
-        }
-    }
-    auto* slot = reinterpret_cast<void* volatile*>(const_cast<unsigned char*>(base) + api_override_rva);
-    void* const previous = InterlockedCompareExchangePointer(slot, const_cast<char*>(d3d12_api), nullptr);
-    if (previous) {
-        std::snprintf(force_result, sizeof(force_result),
-            "ForceD3D12 refused: parameter already set by another component.");
-        return;
-    }
-    std::snprintf(force_result, sizeof(force_result),
-        "ForceD3D12 applied: API parameter at RVA 0x%lx set to \"d3d12\".", api_override_rva);
+    WideCharToMultiByte(CP_UTF8, 0, directory, -1, census_directory,
+        static_cast<int>(sizeof(census_directory)), nullptr, nullptr);
+    rsf_census_options options{};
+    options.struct_size = sizeof(options);
+    options.abi_version = RSF_CENSUS_ABI_VERSION;
+    options.output_dir_utf8 = census_directory;
+    options.flags = flags;
+    return static_cast<int32_t>(rsf_census_install(&options));
 }
 
 void log(void*, const char* message) noexcept try
@@ -277,12 +228,7 @@ DWORD WINAPI startup(void*) noexcept try
     const auto mod = root + L"ReScaleFrame\\";
     log_path = mod + L"rdr2.log";
     log(nullptr, "RDR2 ASI entry started.");
-    log(nullptr, force_result);
-    log(nullptr, d3d12_trace_result);
-    log(nullptr, social_club_result);
-    log(nullptr, camera_probe_result);
-    log(nullptr, frame_probe_result);
-    log(nullptr, census_result);
+    rsf_rdr2_asi_report_startup(log, nullptr);
     modules_path = utf8(mod + L"rdr2-modules.log");
     if (GetPrivateProfileIntW(L"RDR2", L"DumpModule", 0, config.c_str())) {
         wchar_t directory[MAX_PATH]{};
@@ -338,105 +284,82 @@ DWORD WINAPI startup(void*) noexcept try
     return unsigned(started);
 }
 catch (...) { return 1; }
+
+bool read_memory(uintptr_t address, void* out, size_t size) noexcept
+{
+    SIZE_T count{};
+    return address && out &&
+        ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(address), out, size, &count) &&
+        count == size;
+}
+
+struct SettingsPath { const uint32_t* ids; uint64_t count; };
+
+constexpr rsf::rdr2::AsiPlatform native{
+    sizeof(rsf::rdr2::AsiPlatform),
+    rsf::rdr2::asi_platform_version,
+    []() noexcept { return reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr)); },
+    read_memory,
+    [](wchar_t* out, uint32_t capacity) noexcept -> uint32_t { return GetModuleFileNameW(nullptr, out, capacity); },
+    [](wchar_t* out, uint32_t capacity) noexcept -> uint32_t { return GetModuleFileNameW(self, out, capacity); },
+    []() noexcept -> uint32_t { return GetCurrentThreadId(); },
+    [](const wchar_t* path, const wchar_t* section, const wchar_t* key, int32_t fallback) noexcept -> uint32_t {
+        return GetPrivateProfileIntW(section, key, fallback, path);
+    },
+    [](const wchar_t* path, const wchar_t* section, const wchar_t* key, wchar_t* out, uint32_t capacity) noexcept
+        -> uint32_t { return GetPrivateProfileStringW(section, key, L"", out, capacity, path); },
+    []() noexcept -> int32_t { return MH_Initialize(); },
+    [](uintptr_t target, const void* detour, void** original) noexcept -> int32_t {
+        return MH_CreateHook(reinterpret_cast<void*>(target), const_cast<void*>(detour), original);
+    },
+    [](uintptr_t target) noexcept -> int32_t { return MH_QueueEnableHook(reinterpret_cast<void*>(target)); },
+    []() noexcept -> int32_t { return MH_ApplyQueued(); },
+    [](uintptr_t target) noexcept -> int32_t { return MH_DisableHook(reinterpret_cast<void*>(target)); },
+    [](uintptr_t target) noexcept -> int32_t { return MH_RemoveHook(reinterpret_cast<void*>(target)); },
+    [](int32_t status) noexcept { return MH_StatusToString(static_cast<MH_STATUS>(status)); },
+    [](uint32_t index) noexcept -> uint32_t {
+        Microsoft::WRL::ComPtr<IDXGIFactory1> factory;
+        Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;
+        DXGI_ADAPTER_DESC1 description{};
+        return SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))) &&
+            SUCCEEDED(factory->EnumAdapters1(index, &adapter)) && SUCCEEDED(adapter->GetDesc1(&description)) ?
+            description.VendorId : 0;
+    },
+    []() noexcept -> uint32_t {
+        DEVMODEW desktop{};
+        desktop.dmSize = sizeof(desktop);
+        return EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &desktop) ? desktop.dmDisplayFrequency : 0;
+    },
+    [](uintptr_t function) noexcept { return reinterpret_cast<void* (*)()>(function)(); },
+    [](uintptr_t function, void* manager) noexcept { return reinterpret_cast<void* (*)(void*)>(function)(manager); },
+    [](uintptr_t function, void* manager, const uint32_t* ids, uint64_t count, void* scratch) noexcept {
+        const SettingsPath path{ids, count};
+        return reinterpret_cast<void* (*)(void*, const SettingsPath*, void*)>(function)(manager, &path, scratch);
+    },
+    install_d3d12_result_trace,
+    [](const wchar_t* directory) noexcept { return rsf_rdr2_install_native_capture(directory); },
+#ifdef RSF_HAVE_FRAME_CAPTURE
+    install_frame_probe,
+#else
+    nullptr,
+#endif
+    install_census,
+    [](const wchar_t* directory) noexcept { return rsf_rdr2_install_camera_probe(directory); },
+    [](const wchar_t* library) noexcept { return rsf_rdr2_install_camera_reference(self, library); },
+    [](bool trace) noexcept { return rsf_rdr2_install_social_club_fix(log, trace); },
+    []() noexcept {
+        if (HANDLE worker = CreateThread(nullptr, 0, startup, nullptr, 0, nullptr)) CloseHandle(worker);
+    },
+};
 }
 
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void*)
 {
     if (reason == DLL_PROCESS_ATTACH) {
         self = instance; DisableThreadLibraryCalls(instance);
-        static wchar_t executable[32768]{};
-        if (GetModuleFileNameW(nullptr, executable, 32768)) {
-            const auto* leaf = wcsrchr(executable, L'\\');
-            if (!_wcsicmp(leaf ? leaf + 1 : executable, L"RDR2.exe")) {
-                static wchar_t config[32768]{};
-                const auto length = GetModuleFileNameW(instance, config, 32768);
-                auto* separator = length && length < 32768 ? wcsrchr(config, L'\\') : nullptr;
-                const bool enabled = separator &&
-                    wcscpy_s(separator + 1, 32768 - (separator + 1 - config), L"ReScaleFrame.ini") == 0 &&
-                    GetPrivateProfileIntW(L"RDR2", L"Enable", 1, config);
-                if (enabled && GetPrivateProfileIntW(L"RDR2", L"ForceD3D12", 1, config)) {
-                    force_d3d12();
-                    if (std::strncmp(force_result, "ForceD3D12 applied", 17) == 0)
-                        rsf_rdr2_own_engine_settings(config);
-                }
-                if (enabled && std::strncmp(force_result, "ForceD3D12 applied", 17) == 0 &&
-                    GetPrivateProfileIntW(L"RDR2", L"NativeCapture", 0, config)) {
-                    wchar_t directory[MAX_PATH]{};
-                    GetPrivateProfileStringW(L"RDR2", L"CameraProbeDirectory", L"", directory, MAX_PATH, config);
-                    if (directory[0]) rsf_rdr2_install_native_capture(directory);
-                }
-#ifdef RSF_HAVE_FRAME_CAPTURE
-                if (enabled && GetPrivateProfileIntW(L"RDR2", L"FrameProbe", 0, config)) {
-                    wchar_t library[MAX_PATH]{}, prefix[MAX_PATH]{};
-                    char library_utf8[MAX_PATH * 3]{}, prefix_utf8[MAX_PATH * 3]{};
-                    GetPrivateProfileStringW(L"RDR2", L"FrameProbeLibrary", L"", library, MAX_PATH, config);
-                    GetPrivateProfileStringW(L"RDR2", L"FrameProbePrefix", L"", prefix, MAX_PATH, config);
-                    if (library[0] && prefix[0] && wcslen(prefix) < MAX_PATH - 16) {
-                        WideCharToMultiByte(CP_UTF8, 0, library, -1, library_utf8, sizeof(library_utf8), nullptr, nullptr);
-                        WideCharToMultiByte(CP_UTF8, 0, prefix, -1, prefix_utf8, sizeof(prefix_utf8), nullptr, nullptr);
-                        const auto result = rsf_capture_initialise(library_utf8, prefix_utf8);
-                        std::snprintf(frame_probe_result, sizeof(frame_probe_result), "Frame probe result=%d", int(result));
-                        if (result == RSF_CAPTURE_OK) {
-                            swprintf_s(frame_request, L"%s.request", prefix);
-                            HANDLE poller = CreateThread(nullptr, 0, frame_requests, nullptr, 0, nullptr);
-                            if (poller) CloseHandle(poller);
-                        }
-                    }
-                }
-#endif
-                // The engine resolves D3D12, DXGI, NGX and NVAPI entry points after CRT startup, so
-                // the census must be bound here rather than on the worker thread.
-                if (enabled && GetPrivateProfileIntW(L"RDR2", L"Census", 0, config)) {
-                    static wchar_t directory[MAX_PATH]{};
-                    GetPrivateProfileStringW(L"RDR2", L"CensusDirectory", L"", directory, MAX_PATH, config);
-                    if (!directory[0]) {
-                        wcsncpy_s(directory, config, separator + 1 - config);
-                        wcscat_s(directory, L"ReScaleFrame\\census");
-                    }
-                    WideCharToMultiByte(CP_UTF8, 0, directory, -1, census_directory,
-                        static_cast<int>(sizeof(census_directory)), nullptr, nullptr);
-                    rsf_census_options options{};
-                    options.struct_size = sizeof(options);
-                    options.abi_version = RSF_CENSUS_ABI_VERSION;
-                    options.output_dir_utf8 = census_directory;
-                    // RSF_CENSUS_FLAG_* bits, for isolating a hook family during a failing run.
-                    options.flags = GetPrivateProfileIntW(L"RDR2", L"CensusFlags", 0, config);
-                    const auto result = rsf_census_install(&options);
-                    std::snprintf(census_result, sizeof(census_result),
-                        "Vendor census install result=%d flags=0x%x output=%s", int(result), options.flags,
-                        census_directory);
-                }
-                // Census initializes this ASI's MinHook instance; the optional game trace reuses it.
-                if (enabled && GetPrivateProfileIntW(L"RDR2", L"TraceD3D12", 0, config)) {
-                    wcsncpy_s(d3d12_error_path, config, separator + 1 - config);
-                    wcscat_s(d3d12_error_path, L"ReScaleFrame\\rdr2-d3d12-errors.log");
-                    install_d3d12_result_trace();
-                }
-                if (enabled && std::strncmp(force_result, "ForceD3D12 applied", 17) == 0) {
-                    if (GetPrivateProfileIntW(L"RDR2", L"CameraProbe", 0, config)) {
-                        wchar_t directory[MAX_PATH]{};
-                        GetPrivateProfileStringW(L"RDR2", L"CameraProbeDirectory", L"", directory, MAX_PATH, config);
-                        const bool armed = directory[0] && rsf_rdr2_install_camera_probe(directory);
-                        std::snprintf(camera_probe_result, sizeof(camera_probe_result),
-                            "Camera probe: %s", armed ? "armed" : "refused");
-                        if (armed && GetPrivateProfileIntW(L"RDR2", L"CameraReference", 0, config)) {
-                            wchar_t library[MAX_PATH]{};
-                            GetPrivateProfileStringW(L"RDR2", L"CameraReferenceLibrary", L"", library, MAX_PATH, config);
-                            const bool reference = library[0] && rsf_rdr2_install_camera_reference(instance, library);
-                            std::snprintf(camera_probe_result, sizeof(camera_probe_result),
-                                "Camera probe: armed; ScriptHook reference: %s", reference ? "registered" : "unavailable");
-                        }
-                    }
-                    const bool installed = rsf_rdr2_install_social_club_fix(log,
-                        GetPrivateProfileIntW(L"RDR2", L"TraceD3D12", 0, config) != 0);
-                    std::snprintf(social_club_result, sizeof(social_club_result),
-                        "Social Club backbuffer dispatcher at RVA 0x27f09e8: %s",
-                        installed ? "armed" : "refused");
-                }
-                HANDLE worker = CreateThread(nullptr, 0, startup, nullptr, 0, nullptr);
-                if (worker) CloseHandle(worker);
-            }
-        }
+        // Runs under the loader lock: the ASI loader loads modules during CRT startup, after
+        // decryption and before the engine reads its settings.
+        rsf_rdr2_asi_attach(&native);
     }
     return TRUE;
 }

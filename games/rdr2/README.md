@@ -43,10 +43,17 @@ observation, and return-address capture. `src/plugin.cpp` exports `rsf_get_game_
 [The port note](../../docs/research/rust-rdr2-plugin.md) records what moved, the deliberate
 differences and the remaining work.
 
-The ASI (`rsf_asi_rdr2`) and attach helper (`rsf_rdr2_attach`) remain C++ and share no source
-with the plugin; their shared inputs are `runtime_setup.h` (also used by
-`tests/unity_sr_d3d12.cpp`), `native_capture.cpp` (also built into `tests/rdr2_capture.cpp`) and
-`engine_settings_policy.h` (used by `tests/rdr2_engine_settings.cpp`).
+The ASI (`rsf_asi_rdr2`) links the same crate for its startup slice: `asi.rs` owns process
+admission, the `[RDR2]` configuration gates read under the loader lock, the ForceD3D12 parameter
+write, the D3D12 trace guard and the order in which the startup owners are armed, and
+`engine_settings.rs` owns the settings-collection carrier, refresh-rate storage and the
+ScriptHook quality request. `src/asi_entry.cpp` lends it a separate leaf table (`asi_platform.h`)
+and keeps the runtime session worker. The Social Club fix, camera probe, native capture, script
+input and native settings probe remain C++. The attach helper (`rsf_rdr2_attach`) remains C++
+and links no Rust. Shared inputs: `runtime_setup.h` (ASI, attach and `tests/unity_sr_d3d12.cpp`),
+`native_capture.cpp` (also built into `tests/rdr2_capture.cpp`) and `engine_settings_policy.h`,
+which declares the crate's policy C ABI for `tests/rdr2_engine_settings.cpp`.
+[The ASI note](../../docs/research/rust-rdr2-asi.md) records that slice.
 
 ## Deployment
 

@@ -35,7 +35,7 @@ The host chooses its backend quality from actual consumed dimensions, so it does
 a new vendor mode against old inputs while a change is pending. Brief native fallback while
 old submitted slots retire was observed, followed by accepted resized RSF output.
 
-New guarded entries (all exact1491.50; complete guard arrays remain in engine_settings.cpp):
+New guarded entries (all exact1491.50; complete guard arrays are in `games/rdr2/src/layout.rs`, module `asi`):
 
 | RVA | Purpose | Expected entry bytes |
 | --- | --- | --- |

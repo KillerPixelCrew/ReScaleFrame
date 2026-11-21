@@ -71,7 +71,8 @@ intact, are `runtime_setup.h` (also `tests/unity_sr_d3d12.cpp`), `native_capture
 into `tests/rdr2_capture.cpp`), `engine_settings_policy.h` (`tests/rdr2_engine_settings.cpp`), and
 the ASI's build-order dependency on `rsf_game_rdr2`. Remaining RDR2 adapter work: `asi_entry.cpp`,
 `social_club.cpp`, `camera_probe.cpp`, `native_capture.cpp`, `script_input.cpp`,
-`native_settings.cpp`, `engine_settings.cpp` and `attach_entry.cpp`.
+`native_settings.cpp`, `engine_settings.cpp` and `attach_entry.cpp`. The ASI startup and
+engine-settings slice has since moved; see [rust-rdr2-asi.md](rust-rdr2-asi.md).
 
 ## Known limitations
 

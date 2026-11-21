@@ -2,7 +2,12 @@
 //! Red Dead Redemption 2 (Steam 1.0.1491.50) game plugin policy for `ReScaleFrame.Game.RDR2.dll`.
 //! Recognition, lifecycle validation, native SR routing and the completed-scene producer live here.
 //! `native_platform.cpp` keeps the MinHook, D3D12/DXGI, Win32 and caller-capture leaves.
+//!
+//! `ReScaleFrame.RDR2.asi` links the same archive for its startup admission and engine-settings
+//! ownership (`asi`, `engine_settings`); `asi_entry.cpp` lends that module its own leaf table.
+mod asi;
 mod camera;
+mod engine_settings;
 mod host;
 mod layout;
 mod platform;
