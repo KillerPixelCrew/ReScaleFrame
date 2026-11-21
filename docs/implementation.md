@@ -252,6 +252,14 @@ Rust defers an end that reenters during begin. Pre-HDR texture discovery
 and submission still use the native producer. Source checks passed.
 Live callback and device validation remain open.
 
+Skyrim SE's auxiliary reconstruction and diagnostic selection are now
+Rust-owned. The four surfaces keep their original formats, rectangles,
+jitter and restoration flags. A refused restore retains the exact
+session, frame, view and renderer-thread receipt. The owner leaves
+output resolution only if that scope entered it. Native leaves still
+make the COM and Runtime calls. Source and layout checks passed.
+Build and live auxiliary restoration remain unverified.
+
 Unity package D3D12 SR contexts and their recording slots are Rust-owned.
 The existing Unity bridge still provides recording and completion facts.
 The view owner preserves reconfiguration, spatial fallback and retirement

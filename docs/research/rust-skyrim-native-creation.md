@@ -114,9 +114,9 @@ Still C++ in `rsf_game_skyrim_se`, in suggested order:
 3. `cpu_events.cpp` with `input_ownership.h` and `screen_classification.h`: CPU frame, input
    ownership, prospective source and screen classification (one hook, about forty RVAs). Its
    fixture `tests/skyrim_input.cpp` compiles the source directly.
-4. `presentation_inputs.cpp`, `resolution.cpp`, `render_inputs.cpp`, `auxiliary.cpp`:
-   pre-HDR inputs, reduced-resolution ownership, SR reconstruction and auxiliary views.
-   Rust now owns the sampler hook at `+1010de0` and interface hook at `+116ac80`.
+4. `presentation_inputs.cpp`, `resolution.cpp`, `render_inputs.cpp`: pre-HDR inputs,
+   reduced-resolution ownership and SR reconstruction. Rust now owns the sampler hook
+   at `+1010de0`, interface hook at `+116ac80` and auxiliary reconstruction and diagnostics.
 5. `camera.rs` owns the native camera conversion for both SR and presentation. It
    uses the shared GameSDK inverse with the old float output and double accumulation
    rules. The adapter still supplies the same copied row-vector cache. Refusals clear
@@ -148,6 +148,20 @@ uses the identity matched at entry. The pre-HDR texture producer still
 checks its descriptors and hands off through the same GameSDK calls.
 Source review matched the hook bytes, copied fields, pre-HDR producer
 block and capture names. Builds and live callback ordering are unverified.
+
+## Auxiliary surfaces
+
+`auxiliary.rs` selects and leases the four existing auxiliary surfaces,
+builds the same Runtime request and records an accepted scope. The surface
+and consumer evidence is in [the integration report](skyrim-se-integration.md#reduced-sr-auxiliary-handoff-and-zoom-correction-15-november-2026).
+The underwater mask retains the native clear. The restore ticket requires
+the opener's session, host and renderer thread and stays pending after a
+Runtime refusal. Opening and closing hold admission across the native
+calls, with a matching reentrant finish deferred until opening returns.
+Output resolution is restored only for a successful entry. Guarded reads
+now cover the diagnostic selector and target records. The selected DOF
+alias remains descriptor-only, because capture reads subresource zero.
+Source and layout comparisons passed. Builds and GPU validation remain open.
 
 ## Sampler hook
 
