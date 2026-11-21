@@ -1,17 +1,56 @@
 // SPDX-License-Identifier: MIT
 //! Names and writes completed image readbacks and copied camera records.
 use std::ffi::{CStr, OsString, c_char};
+use std::fmt;
 use std::fs;
 use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 use std::slice;
 
-fn output_directory(directory: &[u16]) -> PathBuf {
+pub(super) fn output_directory(directory: &[u16]) -> PathBuf {
     PathBuf::from(OsString::from_wide(directory))
 }
 
 fn input_stem(pid: u32, sequence: u32, index: u32, role: &str) -> String {
     format!("input-{pid}-{sequence:03}-{index:03}-{role}")
+}
+
+#[repr(C)]
+pub(super) struct Pipeline {
+    ps: u32,
+    vs: u32,
+    blend: i32,
+    src: u32,
+    dst: u32,
+    op: u32,
+    src_alpha: u32,
+    dst_alpha: u32,
+    op_alpha: u32,
+    write_mask: u32,
+}
+
+const _: () = assert!(size_of::<Pipeline>() == 40);
+
+impl fmt::Display for Pipeline {
+    fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            out,
+            concat!(
+                "\"ps_crc32\":\"{:08x}\",\"vs_crc32\":\"{:08x}\",\"blend\":{},",
+                "\"src\":{},\"dst\":{},\"op\":{},\"src_alpha\":{},\"dst_alpha\":{},\"op_alpha\":{},\"write_mask\":{}"
+            ),
+            self.ps,
+            self.vs,
+            self.blend,
+            self.src,
+            self.dst,
+            self.op,
+            self.src_alpha,
+            self.dst_alpha,
+            self.op_alpha,
+            self.write_mask,
+        )
+    }
 }
 
 #[repr(C)]
@@ -37,16 +76,7 @@ struct Readback {
     frame: u32,
     vertices: u32,
     instances: u32,
-    ps: u32,
-    vs: u32,
-    blend: i32,
-    src: u32,
-    dst: u32,
-    op: u32,
-    src_alpha: u32,
-    dst_alpha: u32,
-    op_alpha: u32,
-    write_mask: u32,
+    pipeline: Pipeline,
 }
 
 const _: () = assert!(size_of::<Readback>() == 160);
@@ -67,8 +97,7 @@ impl Readback {
                 "\"role\":\"{}\",\"input_index\":{},\"footprint_format\":{},\"state_before\":{},\"subresource\":{},",
                 "\"command_list\":\"0x{:x}\",\"generation\":{},\"submission\":{},\"queue\":\"0x{:x}\",\"fence_value\":{},",
                 "\"frame_counter_observation\":{},\"tick\":{},\"resource\":\"0x{:x}\",\"caller\":\"0x{:x}\",",
-                "\"vertices\":{},\"instances\":{},\"ps_crc32\":\"{:08x}\",\"vs_crc32\":\"{:08x}\",",
-                "\"blend\":{},\"src\":{},\"dst\":{},\"op\":{},\"src_alpha\":{},\"dst_alpha\":{},\"op_alpha\":{},\"write_mask\":{}}}\n"
+                "\"vertices\":{},\"instances\":{},{}}}\n"
             ),
             self.sequence,
             self.ordinal,
@@ -92,16 +121,7 @@ impl Readback {
             self.caller,
             self.vertices,
             self.instances,
-            self.ps,
-            self.vs,
-            self.blend,
-            self.src,
-            self.dst,
-            self.op,
-            self.src_alpha,
-            self.dst_alpha,
-            self.op_alpha,
-            self.write_mask,
+            self.pipeline,
         )
     }
 }

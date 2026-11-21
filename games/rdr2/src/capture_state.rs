@@ -8,6 +8,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 #[cfg(windows)]
 mod artifacts;
+#[cfg(windows)]
+mod bundle;
 mod recordings;
 use recordings::Recordings;
 

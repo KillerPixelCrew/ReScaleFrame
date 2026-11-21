@@ -170,9 +170,10 @@ resource transitions and snapshots the submitted command-list generation
 before the queue call. The native code retains only readbacks matching
 that snapshot. Rust detects the diagnostic F10 edge, consumes the request
 file, and writes the camera records. It writes each mapped pixel file
-before its JSON sidecar. The source comparison matched the existing
-artifact names and sidecar fields. GPU copies, fence completion, mapping
-and the bundle manifest remain native.
+before its JSON sidecar and publishes the bundle manifest after its
+temporary file is complete. The source comparison matched the existing
+artifact names and JSON fields. GPU copies, fence completion and mapping
+remain native.
 Builds and the two native capture fixtures remain unrun.
 
 Unity package D3D12 SR contexts and their recording slots are Rust-owned.

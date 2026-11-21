@@ -18,6 +18,7 @@
 #include <cstring>
 #include <cstddef>
 #include <memory>
+#include <iterator>
 #include <mutex>
 #include <unordered_map>
 #include <vector>
@@ -26,7 +27,13 @@
 
 namespace {
 using Microsoft::WRL::ComPtr;
-struct Pipeline { uint32_t ps{}, vs{}; D3D12_RENDER_TARGET_BLEND_DESC blend{}; };
+using Pipeline = rsf_rdr2_capture_pipeline;
+Pipeline pipeline_facts(uint32_t ps, uint32_t vs, const D3D12_RENDER_TARGET_BLEND_DESC& b) noexcept
+{
+    return {ps, vs, b.BlendEnable, static_cast<uint32_t>(b.SrcBlend), static_cast<uint32_t>(b.DestBlend),
+        static_cast<uint32_t>(b.BlendOp), static_cast<uint32_t>(b.SrcBlendAlpha),
+        static_cast<uint32_t>(b.DestBlendAlpha), static_cast<uint32_t>(b.BlendOpAlpha), b.RenderTargetWriteMask};
+}
 constexpr auto unknown_state = static_cast<D3D12_RESOURCE_STATES>(~0u);
 struct List {
     ID3D12Resource* target{};
@@ -54,21 +61,14 @@ struct Submission {
         facts{nullptr, rsf_rdr2_capture_discard_submission};
     std::vector<std::pair<std::shared_ptr<Shot>, uint64_t>> shots;
 };
-struct Temporal {
-    UINT sequence{}, index{}, frame{}, thread{}, feature_flags{};
-    uint64_t tick{}, qpc{}, list{}, generation{}, view{}, draw_context{}, job{}, result{};
-    bool camera_valid{};
+struct Temporal : rsf_rdr2_capture_temporal {
     std::array<unsigned char, 0x800> camera{};
-    std::vector<std::pair<std::string, double>> scalars;
+    std::vector<rsf_rdr2_capture_scalar> scalars;
     std::vector<std::string> refusals;
+
+    Temporal() : rsf_rdr2_capture_temporal{} {}
 };
-struct DrawEvent {
-    UINT ordinal{}, frame{}, vertices{}, instances{};
-    uint64_t list{}, generation{}, caller{}, pso{};
-    Pipeline pipeline{};
-    std::array<void*, 12> stack{};
-    USHORT stack_size{};
-};
+using DrawEvent = rsf_rdr2_capture_draw;
 thread_local std::vector<Submission> submissions;
 thread_local bool recording_copy{};
 thread_local bool drawing{};
@@ -203,7 +203,7 @@ void remember_stream(const D3D12_PIPELINE_STATE_STREAM_DESC* desc, void* result)
         case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_BLEND: {
             D3D12_BLEND_DESC blend{};
             if (!stream_value(data + offset, remaining, blend, size)) return;
-            pipeline.blend = blend.RenderTarget[0];
+            pipeline = pipeline_facts(pipeline.ps, pipeline.vs, blend.RenderTarget[0]);
             break;
         }
         case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DS:
@@ -254,7 +254,7 @@ HRESULT STDMETHODCALLTYPE load_stream_pso(ID3D12PipelineLibrary1* library, LPCWS
 void remember_pso(const D3D12_GRAPHICS_PIPELINE_STATE_DESC* desc, void* result)
 {
     if (!desc || !result) return;
-    const Pipeline pipeline{crc(desc->PS), crc(desc->VS), desc->BlendState.RenderTarget[0]};
+    const auto pipeline = pipeline_facts(crc(desc->PS), crc(desc->VS), desc->BlendState.RenderTarget[0]);
     std::lock_guard<std::mutex> lock(g->mutex);
     g->pipelines[static_cast<ID3D12PipelineState*>(result)] = pipeline;
 }
@@ -533,8 +533,8 @@ void snapshot(ID3D12GraphicsCommandList* list, UINT vertices, UINT instances, vo
     const auto action = rsf_rdr2_capture_commit_draw(g->capture, static_cast<uint32_t>(g->draws.size()));
     if (action & RSF_RDR2_CAPTURE_SAVE_DRAW) {
         DrawEvent event{shot->ordinal, shot->frame, vertices, instances, reinterpret_cast<uint64_t>(list),
-            shot->generation, shot->caller, reinterpret_cast<uint64_t>(state->second.pso), shot->pipeline};
-        event.stack_size = CaptureStackBackTrace(1, static_cast<DWORD>(event.stack.size()), event.stack.data(), nullptr);
+            shot->generation, shot->caller, reinterpret_cast<uint64_t>(state->second.pso), shot->pipeline, {}, 0};
+        event.stack_size = CaptureStackBackTrace(1, static_cast<DWORD>(std::size(event.stack)), event.stack, nullptr);
         g->draws.push_back(event);
     }
     if (action & RSF_RDR2_CAPTURE_KEEP_TAIL) g->tail = shot;
@@ -709,16 +709,11 @@ void before_present(void* pointer) noexcept try
 catch (...) { log("present observation failed"); }
 bool write_shot(const Shot& s) noexcept
 {
-    const auto& b = s.pipeline.blend;
     const rsf_rdr2_capture_image image{
         reinterpret_cast<uint64_t>(s.list), s.generation, s.submission, s.queue, s.fence_value,
         s.tick, s.resource, s.caller, s.sequence, s.ordinal, s.width, s.height, s.pitch, s.format,
         s.input_index, s.footprint_format, s.state_before, s.subresource, s.frame,
-        s.vertices, s.instances, s.pipeline.ps, s.pipeline.vs, b.BlendEnable,
-        static_cast<uint32_t>(b.SrcBlend), static_cast<uint32_t>(b.DestBlend),
-        static_cast<uint32_t>(b.BlendOp), static_cast<uint32_t>(b.SrcBlendAlpha),
-        static_cast<uint32_t>(b.DestBlendAlpha), static_cast<uint32_t>(b.BlendOpAlpha),
-        b.RenderTargetWriteMask,
+        s.vertices, s.instances, s.pipeline,
     };
     void* data{};
     const SIZE_T bytes = static_cast<SIZE_T>(s.pitch) * s.height;
@@ -737,7 +732,6 @@ bool write_shot(const Shot& s) noexcept
 }
 bool write_bundle() noexcept
 {
-    wchar_t path[MAX_PATH]{};
     const auto* directory = reinterpret_cast<const uint16_t*>(g->directory);
     const auto directory_len = wcslen(g->directory);
     const auto pid = GetCurrentProcessId();
@@ -747,57 +741,25 @@ bool write_bundle() noexcept
                 t->camera.data(), t->camera.size()))
             rsf_rdr2_capture_write_failed(g->capture);
     }
-    const auto progress = capture_progress();
-    swprintf_s(path, L"%s\\bundle-%lu-%03u.json", g->directory, pid, progress.sequence);
-    FILE* f = _wfopen(path, L"wb");
-    if (!f) return false;
     const auto& presentation = g->captured_presentation;
-    fprintf(f, "{\"version\":1,\"sequence\":%u,\"module_base\":\"0x%llx\",\"draw_count\":%u,"
-        "\"draw_overflow\":%s,\"capture_timeout\":%s,\"write_failed\":%s,\"readbacks_written\":%u,"
-        "\"presentation\":{\"format\":%u,\"width\":%u,\"height\":%u,\"color_space\":%u,\"color_space_set\":%s,"
-        "\"hdr_metadata_type\":%u,\"hdr_metadata_hex\":\"", progress.sequence,static_cast<unsigned long long>(g->base),progress.draws,
-        progress.draw_overflow?"true":"false",progress.timed_out?"true":"false",progress.write_failed?"true":"false",progress.written,
-        presentation.format,presentation.width,presentation.height,presentation.color_space,presentation.color_space_set?"true":"false",
-        presentation.metadata_type);
-    for (auto byte : presentation.metadata) fprintf(f, "%02x", byte);
-    fprintf(f, "\"},\"requested_input_frames\":%u,\"temporal\":[", progress.requested_input_frames);
-    bool comma = false;
-    for (const auto& t : g->temporal) {
-        fprintf(f, "%s{\"index\":%u,\"frame_counter_observation\":%u,\"thread\":%u,\"feature_flags\":%u,"
-            "\"tick\":%llu,\"qpc\":%llu,\"command_list\":\"0x%llx\",\"generation\":%llu,\"view\":\"0x%llx\","
-            "\"draw_context\":\"0x%llx\",\"job\":\"0x%llx\",\"camera_valid\":%s,\"evaluation_result\":%llu,\"scalars\":{",
-            comma?",":"",t->index,t->frame,t->thread,t->feature_flags,static_cast<unsigned long long>(t->tick),
-            static_cast<unsigned long long>(t->qpc),static_cast<unsigned long long>(t->list),static_cast<unsigned long long>(t->generation),
-            static_cast<unsigned long long>(t->view),static_cast<unsigned long long>(t->draw_context),static_cast<unsigned long long>(t->job),
-            t->camera_valid?"true":"false",static_cast<unsigned long long>(t->result));
-        bool scalar_comma = false;
-        for (const auto& scalar : t->scalars) {
-            fprintf(f, "%s\"%s\":%.12g",scalar_comma?",":"",scalar.first.c_str(),scalar.second); scalar_comma = true;
-        }
-        fputs("},\"refusals\":[", f);
-        bool refusal_comma = false;
-        for (const auto& refusal : t->refusals) {
-            fprintf(f, "%s\"%s\"",refusal_comma?",":"",refusal.c_str()); refusal_comma = true;
-        }
-        fputs("]}", f); comma = true;
-    }
-    fputs("],\"draws\":[", f); comma = false;
-    for (const auto& d : g->draws) {
-        const auto& b = d.pipeline.blend;
-        fprintf(f, "%s{\"draw\":%u,\"frame_counter_observation\":%u,\"vertices\":%u,\"instances\":%u,"
-            "\"command_list\":\"0x%llx\",\"generation\":%llu,\"caller\":\"0x%llx\",\"pso\":\"0x%llx\","
-            "\"ps_crc32\":\"%08x\",\"vs_crc32\":\"%08x\",\"blend\":%d,\"src\":%u,\"dst\":%u,\"op\":%u,"
-            "\"src_alpha\":%u,\"dst_alpha\":%u,\"op_alpha\":%u,\"write_mask\":%u,\"stack\":[",comma?",":"",
-            d.ordinal,d.frame,d.vertices,d.instances,static_cast<unsigned long long>(d.list),static_cast<unsigned long long>(d.generation),
-            static_cast<unsigned long long>(d.caller),static_cast<unsigned long long>(d.pso),d.pipeline.ps,d.pipeline.vs,
-            b.BlendEnable,b.SrcBlend,b.DestBlend,b.BlendOp,b.SrcBlendAlpha,b.DestBlendAlpha,b.BlendOpAlpha,b.RenderTargetWriteMask);
-        for (USHORT i=0;i<d.stack_size;++i)
-            fprintf(f, "%s\"0x%llx\"",i?",":"",static_cast<unsigned long long>(reinterpret_cast<uint64_t>(d.stack[i])));
-        fputs("]}", f); comma = true;
-    }
-    fputs("]}\n", f);
-    bool ok = !ferror(f); ok = fclose(f) == 0 && ok;
-    return ok;
+    const rsf_rdr2_capture_bundle bundle{
+        directory, directory_len, g->base, capture_progress(),
+        {presentation.format, presentation.width, presentation.height, presentation.color_space,
+            presentation.color_space_set, presentation.metadata_type,
+            presentation.metadata.data(), presentation.metadata.size()},
+        g->draws.data(), g->draws.size(), g->temporal.size(), pid,
+    };
+    return rsf_rdr2_capture_write_bundle(&bundle,
+        [](size_t index, rsf_rdr2_capture_temporal_view* out) noexcept {
+            const auto& t = *g->temporal[index];
+            *out = {&t, t.scalars.data(), t.scalars.size(), t.refusals.size()};
+        },
+        [](size_t index, size_t item) noexcept {
+            return g->temporal[index]->refusals[item].c_str();
+        },
+        [](double value, char* buffer, size_t size) noexcept {
+            return std::snprintf(buffer, size, "%.12g", value);
+        });
 }
 DWORD WINAPI poll(void*) noexcept
 {
