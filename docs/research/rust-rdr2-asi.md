@@ -200,3 +200,51 @@ bodies and the leaf layout. Pinned Rust 1.94.1 formatting, locked offline Window
 and Git whitespace passed. Native compilation and linking, Clippy, tests, both D3D12 fixture
 runs and live RDR2 verification remain with the user. The existing native observation coverage
 gaps remain open.
+
+## Native capture readback drain
+
+Compared the poller, draw and NGX producers, and submission callbacks at `1a87cbca`.
+The Rust capture owner already recorded submission and completion facts. Moving the
+pending scan and publication decision there lets the same owner apply those facts while
+the native capture mutex still orders the C++ shot and tail references. The fixture and
+the admitted Steam 1.0.1491.50 path still call the same worker.
+
+Native draw and NGX callbacks put a shot in the pending vector before recording the
+copy and remove it if the copy is refused. The draw phase can also reuse its retained
+tail. Before the original queue call, the submission snapshot claims the exact command
+list and generation and keeps a shared reference to each claimed shot. After the original
+returns, the capture records the submission serial and queue. A successful signal on
+that queue supplies its exact fence and value. A refused signal keeps the queue and
+submission identity for a later successful signal on the same queue. A shot without
+that receipt stays pending. Rust admits a shot only after draw recording ends and its
+retained fence reports a value at least as large as its nonzero receipt value. The
+device-removal value `UINT64_MAX` is excluded, as it is for reuse of the tail.
+
+The native poller still sleeps 100 ms before checking fixture stop and sampling the key
+and request file. Under the existing mutex it checks the timeout using `GetTickCount64`
+and then lends each pending slot and its typed `GetCompletedValue` sample to Rust.
+Rust selects completed slots in pending order. The native transfer takes a ready
+reference before erasing each slot. If the ready vector cannot grow, the pending shot
+stays owned for the next scan. When pending is empty, Rust detaches the queue and
+backbuffer owners for release after unlock. Ready references survive the unlocked
+Map, artifact write and Unmap. The retained tail is detached after the bundle attempt
+and its final release also runs outside the mutex, including when an earlier poll
+wrote the tail.
+
+Each image still uses its original command list, recording generation, submission
+serial, queue address and fence value, with the copy's resource address, tick and frame
+counter observation. The draw or input identity, caller, dimensions, row pitch, resource
+and footprint formats, prior state, subresource, draw counts and pipeline fields are
+read from the same shot. The native Map range still uses row pitch times height in bytes.
+Rust writes the pixel file before its sidecar and the poller accounts for each write
+under the mutex. It then rechecks the current pending list, draw phase, remaining and
+in-flight inputs, and dirty state before publishing. Camera files still precede the
+manifest, whose temporary-file rename is the publication point. Rust reports the
+attempt through the same native log and clears dirty after the attempt, including
+on a write failure, so a later request can arm.
+
+Source comparison matched the native producer, Map and fixture paths, the completion
+predicate, poll order and artifact serializer. Pinned Rust 1.94.1 formatting and locked
+offline Windows Cargo metadata passed. Native compilation and linking, Clippy, tests,
+the BGRA and RGB10 GPU fixtures, and live capture remain user-owned. Descriptor-copy
+and object-retirement observation coverage remain open.

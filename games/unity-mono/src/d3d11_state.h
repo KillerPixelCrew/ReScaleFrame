@@ -19,9 +19,12 @@
    (bridge_state.h) owns each queued packet's texture references from admission until the render
    event that takes it ends (rsf_unity_frames_end_packet) or rsf_unity_frames_release cancels it.
 
-   bridge.cpp keeps Unity interface access, the typed D3D11, D3D12 and DXGI calls (the shared
-   format choice, the rsf_shared_surface calls and the texture AddRef and Release among them), the
-   render-pass calls and the frame callbacks. Its render callbacks are the bridge's
+   Each render event's route, pass, surface and state plan, the shared format choice, the policy
+   change gate and the retirement verdict are d3d11_pass.h.
+
+   bridge.cpp keeps Unity interface access, the typed D3D11, D3D12 and DXGI calls (the
+   rsf_shared_surface calls and the texture AddRef and Release among them), the render-pass calls
+   and the frame callbacks. Its render callbacks are the bridge's
    admission: a caller borrows the published record only while it holds an rsf_unity_frame_callback,
    and the package closes callback admission (rsf_unity_frames_try_close) before it closes this
    owner. Inside a callback, a surface view is borrowed only under the surface lease. */
@@ -98,11 +101,12 @@ void rsf_unity_d3d11_surfaces_end(void);
 /* The caller holds the surface lease. Writes surface index (0 to 5) as an rsf_shared_surface view
    valid until the lease ends. A surface whose key (the source texture's width, height and DXGI
    format) matches is borrowed as it is. Otherwise Rust waits for the last completion value handed
-   out when a surface is being replaced, creates one of shared_format, publishes it and only then
-   destroys the old one. A refused wait or creation keeps the old surface. A slot this lease already
-   borrowed is never replaced within it. services is borrowed for the creation leaf. */
+   out when a surface is being replaced, creates one in the shared format it chooses for the slot
+   and source format (d3d11_pass.h), publishes it and only then destroys the old one. A refused
+   wait or creation keeps the old surface. A slot this lease already borrowed is never replaced
+   within it. services is borrowed for the creation leaf. */
 bool rsf_unity_d3d11_prepare_surface(uint32_t index, const rsf_game_host_services* services,
-    uint32_t width, uint32_t height, uint32_t source_format, uint32_t shared_format, void** view);
+    uint32_t width, uint32_t height, uint32_t source_format, void** view);
 
 /* Serialized by the package lifecycle, after rsf_unity_frames_try_close succeeded. Closes this
    owner (no new view, claim, creation or surface lease) and polls, without waiting, the completion

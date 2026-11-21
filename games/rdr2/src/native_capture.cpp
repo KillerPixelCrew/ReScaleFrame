@@ -730,54 +730,67 @@ bool write_shot(const Shot& s) noexcept
     s.buffer()->Unmap(0, &empty);
     return ok;
 }
+struct ReadbackDrain {
+    std::vector<std::shared_ptr<Shot>>& pending;
+    std::vector<std::shared_ptr<Shot>> ready;
+};
+constexpr rsf_rdr2_capture_drain_ops drain_ops{
+    sizeof(rsf_rdr2_capture_drain_ops), 1,
+    [](void* context, size_t index, uint64_t* completed) noexcept -> const rsf_rdr2_capture_readback* {
+        const auto& shot = static_cast<ReadbackDrain*>(context)->pending[index];
+        *completed = shot->completed();
+        return shot.get();
+    },
+    [](void* context, size_t index) noexcept {
+        auto& drain = *static_cast<ReadbackDrain*>(context);
+        // Keep a ready reference before erasing the pending slot under the mutex.
+        try {
+            drain.ready.push_back(drain.pending[index]);
+        } catch (...) {
+            return false;
+        }
+        drain.pending.erase(drain.pending.begin() + static_cast<std::ptrdiff_t>(index));
+        return true;
+    },
+};
 DWORD WINAPI poll(void*) noexcept
 {
+    const rsf_rdr2_capture_bundle bundle{
+        reinterpret_cast<const uint16_t*>(g->paths.directory), wcslen(g->paths.directory), g->base, GetCurrentProcessId(),
+    };
     for (;;) {
         Sleep(100);
 #ifdef RSF_RDR2_CAPTURE_TEST
         if (rsf_rdr2_capture_fixture_stopping()) return 0;
 #endif
         rsf_rdr2_capture_poll_request(g->capture, reinterpret_cast<const uint16_t*>(g->paths.request));
-        std::vector<std::shared_ptr<Shot>> ready;
+        ReadbackDrain drain{g->shots, {}};
         rsf_rdr2_capture_gpu_retired* retired{};
         {
             std::lock_guard<std::mutex> lock(g->mutex);
             if (rsf_rdr2_capture_timeout(g->capture, GetTickCount64())) {
                 log("capture %u timed out waiting for scene or DLSS input; retaining explicit incomplete result",capture_progress().sequence);
             }
-            if (!rsf_rdr2_capture_active(g->capture)) {
-                auto it = g->shots.begin();
-                while (it != g->shots.end()) {
-                    const auto& shot = *it;
-                    if (rsf_rdr2_capture_readback_complete(shot.get(), shot->completed())) {
-                        ready.push_back(shot); it = g->shots.erase(it);
-                    } else ++it;
-                }
-                // ResizeBuffers must not be blocked by diagnostic references after retirement.
-                if (g->shots.empty()) retired = rsf_rdr2_capture_gpu_take_idle(g->capture);
-            }
+            retired = rsf_rdr2_capture_collect_ready(g->capture, &drain, g->shots.size(), &drain_ops);
         }
         rsf_rdr2_capture_gpu_drop_idle(retired);
-        for (const auto& shot : ready) {
+        for (const auto& shot : drain.ready) {
             const bool ok = write_shot(*shot);
             std::lock_guard<std::mutex> lock(g->mutex);
             rsf_rdr2_capture_readback_written(g->capture, ok);
         }
+        std::shared_ptr<Shot> retired_tail;
         {
             std::lock_guard<std::mutex> lock(g->mutex);
-            if (rsf_rdr2_capture_can_publish(g->capture, g->shots.empty())) {
-                const rsf_rdr2_capture_bundle bundle{
-                    reinterpret_cast<const uint16_t*>(g->paths.directory), wcslen(g->paths.directory), g->base, GetCurrentProcessId(),
-                };
-                size_t draw_count{}, temporal_count{};
-                const bool ok = rsf_rdr2_capture_write_bundle(g->capture, &bundle,
-                    [](double value, char* buffer, size_t size) noexcept {
-                        return std::snprintf(buffer, size, "%.12g", value);
-                    }, &draw_count, &temporal_count);
-                const auto progress = capture_progress();
-                log("capture %u bundle saved=%d input_frames=%zu draws=%zu readbacks=%u",progress.sequence,ok,temporal_count,draw_count,progress.written);
-                rsf_rdr2_capture_published(g->capture);
-                g->tail.reset();
+            if (rsf_rdr2_capture_publish_bundle(g->capture, g->shots.empty(), &bundle,
+                [](double value, char* buffer, size_t size) noexcept {
+                    return std::snprintf(buffer, size, "%.12g", value);
+                },
+                [](uint32_t sequence, bool saved, size_t inputs, size_t draws, uint32_t written) noexcept {
+                    log("capture %u bundle saved=%d input_frames=%zu draws=%zu readbacks=%u", sequence, saved, inputs, draws, written);
+                })) {
+                // The tail may have been written in an earlier poll.
+                retired_tail = std::move(g->tail);
             }
         }
     }

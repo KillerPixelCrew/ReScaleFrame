@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 mod artifacts;
 #[cfg(windows)]
 mod bundle;
+mod drain;
 mod gpu_leases;
 mod hooks;
 #[cfg(windows)]
@@ -238,14 +239,14 @@ unsafe extern "C" fn rsf_rdr2_capture_readback_written(owner: &Capture, success:
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_can_publish(owner: &Capture, readbacks_empty: bool) -> bool {
+#[cfg(any(windows, test))]
+unsafe fn can_publish(owner: &Capture, readbacks_empty: bool) -> bool {
     let ledger = unsafe { &*owner.ledger.get() };
     ledger.dirty && drained(owner, ledger, readbacks_empty)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_published(owner: &Capture) {
+#[cfg(any(windows, test))]
+unsafe fn mark_published(owner: &Capture) {
     unsafe { (*owner.ledger.get()).dirty = false };
 }
 
@@ -275,15 +276,15 @@ mod tests {
             rsf_rdr2_capture_request(&owner);
             assert!(!rsf_rdr2_capture_timeout(&owner, 5100));
             assert!(rsf_rdr2_capture_timeout(&owner, 5101));
-            assert!(!rsf_rdr2_capture_can_publish(&owner, true));
+            assert!(!can_publish(&owner, true));
             assert!(metadata::rsf_rdr2_capture_track_evaluation(true));
             assert!(!metadata::rsf_rdr2_capture_track_evaluation(false));
             assert!(!metadata::rsf_rdr2_capture_track_evaluation(true));
             metadata::rsf_rdr2_capture_finish_input(&owner);
-            assert!(!rsf_rdr2_capture_can_publish(&owner, false));
-            assert!(rsf_rdr2_capture_can_publish(&owner, true));
+            assert!(!can_publish(&owner, false));
+            assert!(can_publish(&owner, true));
             assert!(!rsf_rdr2_capture_can_arm(&owner, true));
-            rsf_rdr2_capture_published(&owner);
+            mark_published(&owner);
             assert!(rsf_rdr2_capture_can_arm(&owner, true));
         }
     }

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Shared draw-stream admission and serialization over copied D3D11 facts.
 
+mod geometry;
 mod ordinary;
 
 use super::{NativeRootScope, QueuedScope, Records, artifacts::Bytes, records};

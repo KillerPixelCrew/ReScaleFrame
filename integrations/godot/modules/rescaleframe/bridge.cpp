@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "rsf_godot_engine.h"
 #include "api.h"
+#include "cpu_facts.h"
 #include "graph.h"
 #include "viewport.h"
 #include "servers/rendering/renderer_rd/storage_rd/render_data_rd.h"
@@ -102,13 +103,20 @@ int configure_from_extension(const rsf_godot_settings *value, uint64_t viewport_
 void reset_from_extension() { reset_requested.store(true); }
 
 void log(void *, const char *message) { print_line(String("ReScaleFrame: ") + String::utf8(message)); }
-void cpu(uint32_t stage, uint32_t expected = 0) {
-    if (!ready || !enabled.load() || !cpu_frame) return;
+void report_cpu(uint32_t stage, uint32_t expected, uint32_t kind) {
     LARGE_INTEGER now, frequency;
     QueryPerformanceCounter(&now); QueryPerformanceFrequency(&frequency);
-    const rsf_game_cpu_event event{sizeof(event), stage, session, cpu_frame,
-        uint64_t(now.QuadPart), uint64_t(frequency.QuadPart), expected, 0, 0, RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_INPUT_KEYED};
+    const uint64_t session_id = session;
+    const bool unframed_input = stage == RSF_GAME_CPU_INPUT_EVENT && !cpu_open;
+    const uint64_t source_frame_id = unframed_input ? 0 : cpu_frame;
+    rsf_game_cpu_event event;
+    rsf_godot_build_cpu_event(&event, stage, session_id, source_frame_id, uint64_t(now.QuadPart),
+        uint64_t(frequency.QuadPart), expected, kind, unframed_input);
     native_cpu(&event);
+}
+void cpu(uint32_t stage, uint32_t expected = 0) {
+    if (!ready || !enabled.load() || !cpu_frame) return;
+    report_cpu(stage, expected, 0);
 }
 void set_primary(RID viewport) {
     primary_viewport = viewport;
@@ -358,10 +366,7 @@ void cpu_end() {
 }
 void input_event(uint32_t kind) {
     if (!ready || !enabled.load() || !kind || (kind & ~7u)) return;
-    LARGE_INTEGER now, frequency; QueryPerformanceCounter(&now); QueryPerformanceFrequency(&frequency);
-    const rsf_game_cpu_event event{sizeof(event), RSF_GAME_CPU_INPUT_EVENT, session, cpu_open ? cpu_frame : 0,
-        uint64_t(now.QuadPart), uint64_t(frequency.QuadPart), 0, kind, 0, RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_INPUT_KEYED | (!cpu_open ? RSF_GAME_CPU_INPUT_UNFRAMED : 0u)};
-    native_cpu(&event);
+    report_cpu(RSF_GAME_CPU_INPUT_EVENT, 0, kind);
 }
 void render_size(RID target, const Vector2i &output, Vector2i &internal) {
     if (!ready || !enabled.load() || target != primary_target) return;

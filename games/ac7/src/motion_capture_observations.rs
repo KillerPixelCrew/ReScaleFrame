@@ -3,12 +3,14 @@
 
 mod buffers;
 mod colour;
+pub(super) mod geometry;
 
 use crate::motion_capture_session::rsf_ac7_capture_enabled;
 use crate::shader_hash::crc32c;
 use crate::velocity_container::borrowed;
 use buffers::ConstantBuffers;
 use colour::ColourReadbacks;
+use geometry::GeometryReads;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::mem::offset_of;
@@ -56,10 +58,10 @@ pub(crate) struct LayoutElement {
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
-struct LayoutSnapshot {
-    count: u32,
-    copied: u32,
-    elements: [LayoutElement; MAX_LAYOUT_ELEMENTS],
+pub(super) struct LayoutSnapshot {
+    pub(super) count: u32,
+    pub(super) copied: u32,
+    pub(super) elements: [LayoutElement; MAX_LAYOUT_ELEMENTS],
 }
 
 const _: () = {
@@ -76,6 +78,7 @@ pub(super) struct Observations {
     layouts: HashMap<usize, LayoutSnapshot>,
     constants: ConstantBuffers,
     colour: ColourReadbacks,
+    geometry: GeometryReads,
 }
 
 static OBSERVATIONS: LazyLock<Mutex<Observations>> = LazyLock::new(Mutex::default);
@@ -90,9 +93,23 @@ pub(super) fn reset_session_observations() {
     let mut observations = observations();
     observations.constants.reset();
     observations.colour = ColourReadbacks::default();
+    observations.geometry = GeometryReads::default();
 }
 
 impl Observations {
+    fn shader_facts(&self, identity: usize, stage: u32) -> ShaderFacts {
+        self.shaders
+            .iter()
+            .find(|item| item.identity == identity && item.stage == stage)
+            .map_or(
+                ShaderFacts {
+                    hash: 0,
+                    constant_mask: ALL_CONSTANTS,
+                },
+                |item| item.facts,
+            )
+    }
+
     pub(super) fn constant_readback_counts(&self) -> (u32, u32) {
         self.constants.readback_counts()
     }
@@ -166,18 +183,7 @@ unsafe extern "C" fn rsf_ac7_capture_observe_shader(
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_ac7_capture_shader_facts(shader: *mut c_void, stage: u32) -> ShaderFacts {
-    let identity = shader.addr();
-    observations()
-        .shaders
-        .iter()
-        .find(|item| item.identity == identity && item.stage == stage)
-        .map_or(
-            ShaderFacts {
-                hash: 0,
-                constant_mask: ALL_CONSTANTS,
-            },
-            |item| item.facts,
-        )
+    observations().shader_facts(shader.addr(), stage)
 }
 
 // Match the old base-ten Windows strtoul scan, including its zero result without digits
@@ -255,18 +261,5 @@ unsafe extern "C" fn rsf_ac7_capture_observe_layout(
     };
     snapshot.elements[..len].copy_from_slice(elements);
     cache.layouts.insert(identity, snapshot);
-    true
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_capture_find_layout(
-    layout: *mut c_void,
-    out: *mut LayoutSnapshot,
-) -> bool {
-    let Some(&snapshot) = observations().layouts.get(&layout.addr()) else {
-        return false;
-    };
-    // SAFETY: The native caller supplies its own writable snapshot storage.
-    unsafe { out.write(snapshot) };
     true
 }

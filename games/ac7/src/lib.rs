@@ -11,8 +11,9 @@
 //! The translucent velocity pass's shader and layout observations and its variant admission are
 //! `velocity_pass_cache.rs`, and its model and view history identity, validity, commit state and
 //! epoch retirement are `velocity_history.rs`, and its draw admission, record bounds, buffer
-//! sizing, indirect range and cbuffer packing are `velocity_stream.rs`; velocity_pass.cpp keeps
-//! its D3D11 work and the resources at those history slots, and lends the variant builder.
+//! sizing, indirect range and cbuffer packing are `velocity_stream.rs`, and its commit admission,
+//! motion target check, log budgets and CPU profile are `velocity_commit.rs`; velocity_pass.cpp
+//! keeps its D3D11 work and the resources at those history slots, and lends the variant builder.
 //!
 //! The rest of the native renderer stays C++ (native_renderer.cpp and the render-scope library):
 //! the five exported renderer calls as wrappers, the renderer object and its fields, MinHook
@@ -47,6 +48,7 @@ mod sites_abi;
 mod truesky;
 mod ui;
 mod ui_abi;
+mod velocity_commit;
 mod velocity_container;
 mod velocity_geometry;
 mod velocity_history;

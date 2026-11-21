@@ -3,7 +3,9 @@
 #include <d3d11shader.h>
 #include <d3dcompiler.h>
 #include <algorithm>
+#include <exception>
 #include <new>
+#include <utility>
 
 namespace rsf::anomaly::motion {
 struct ShaderIncludes;
@@ -60,20 +62,104 @@ template<class T> struct Releaser {
     T* p{};
     ~Releaser() { if (p) p->Release(); }
 };
-enum class Signature { Input, Output, Patch };
-void parameters(ID3D11ShaderReflection* reflection, UINT count, Signature which, std::vector<Parameter>& out)
-{
-    for (UINT i = 0; i < count; ++i) {
-        D3D11_SIGNATURE_PARAMETER_DESC desc{};
-        const HRESULT hr = which == Signature::Input ? reflection->GetInputParameterDesc(i, &desc)
-                         : which == Signature::Output ? reflection->GetOutputParameterDesc(i, &desc)
-                         : reflection->GetPatchConstantParameterDesc(i, &desc);
-        if (FAILED(hr)) continue;
-        out.push_back({desc.SemanticName ? desc.SemanticName : "", desc.SemanticIndex, desc.Register,
-            static_cast<std::uint32_t>(desc.SystemValueType), static_cast<std::uint32_t>(desc.ComponentType), desc.Mask});
+// Private synchronous ABI for shader_loader/reflection.rs.
+enum class Signature : uint8_t { Input = 0, Output = 1, Patch = 2 };
+enum class ReflectionStep : uint8_t { Copied = 0, Unavailable = 1, CopyFailed = 2 };
+
+struct ReflectionCounts {
+    uint32_t inputs, outputs, patch, bindings, buffers;
+};
+struct ReflectionOperations {
+    ReflectionStep (*parameter)(void*, Signature, uint32_t) noexcept;
+    ReflectionStep (*binding)(void*, uint32_t) noexcept;
+    ReflectionStep (*begin_buffer)(void*, uint32_t, uint32_t*) noexcept;
+    ReflectionStep (*variable)(void*, uint32_t) noexcept;
+    ReflectionStep (*finish_buffer)(void*) noexcept;
+};
+static_assert(sizeof(ReflectionCounts) == 20 && sizeof(ReflectionOperations) == 40);
+
+// COM owns the descriptor strings and child interfaces. Copy each row while the parent is alive.
+struct ReflectionCopy {
+    ID3D11ShaderReflection& reflection;
+    Reflection& output;
+    ID3D11ShaderReflectionConstantBuffer* buffer{};
+    Buffer pending{};
+    std::exception_ptr exception{};
+
+    static ReflectionStep copy_failed(void* user) noexcept
+    {
+        // Rethrow on the native side so allocation failures never unwind through Rust.
+        static_cast<ReflectionCopy*>(user)->exception = std::current_exception();
+        return ReflectionStep::CopyFailed;
     }
+
+    static ReflectionStep parameter(void* user, Signature which, uint32_t index) noexcept try
+    {
+        auto& self = *static_cast<ReflectionCopy*>(user);
+        D3D11_SIGNATURE_PARAMETER_DESC desc{};
+        const auto append = [&](HRESULT hr, std::vector<Parameter>& out) {
+            if (FAILED(hr)) return ReflectionStep::Unavailable;
+            out.push_back({desc.SemanticName ? desc.SemanticName : "", desc.SemanticIndex, desc.Register,
+                static_cast<uint32_t>(desc.SystemValueType), static_cast<uint32_t>(desc.ComponentType), desc.Mask});
+            return ReflectionStep::Copied;
+        };
+        switch (which) {
+        case Signature::Input:
+            return append(self.reflection.GetInputParameterDesc(index, &desc), self.output.inputs);
+        case Signature::Output:
+            return append(self.reflection.GetOutputParameterDesc(index, &desc), self.output.outputs);
+        case Signature::Patch:
+            return append(self.reflection.GetPatchConstantParameterDesc(index, &desc), self.output.patch);
+        }
+        return ReflectionStep::CopyFailed;
+    } catch (...) { return copy_failed(user); }
+
+    static ReflectionStep binding(void* user, uint32_t index) noexcept try
+    {
+        auto& self = *static_cast<ReflectionCopy*>(user);
+        D3D11_SHADER_INPUT_BIND_DESC bind{};
+        if (FAILED(self.reflection.GetResourceBindingDesc(index, &bind))) return ReflectionStep::Unavailable;
+        self.output.bindings.push_back({bind.Name ? bind.Name : "", static_cast<uint32_t>(bind.Type), bind.BindPoint,
+            bind.BindCount, static_cast<uint32_t>(bind.ReturnType), static_cast<uint32_t>(bind.Dimension)});
+        return ReflectionStep::Copied;
+    } catch (...) { return copy_failed(user); }
+
+    static ReflectionStep begin_buffer(void* user, uint32_t index, uint32_t* variables) noexcept try
+    {
+        auto& self = *static_cast<ReflectionCopy*>(user);
+        self.buffer = self.reflection.GetConstantBufferByIndex(index);
+        D3D11_SHADER_BUFFER_DESC desc{};
+        if (!self.buffer || FAILED(self.buffer->GetDesc(&desc))) return ReflectionStep::Unavailable;
+        self.pending = {desc.Name ? desc.Name : "", desc.Size, {}};
+        *variables = desc.Variables;
+        return ReflectionStep::Copied;
+    } catch (...) { return copy_failed(user); }
+
+    static ReflectionStep variable(void* user, uint32_t index) noexcept try
+    {
+        auto& self = *static_cast<ReflectionCopy*>(user);
+        auto* shader_variable = self.buffer->GetVariableByIndex(index);
+        D3D11_SHADER_VARIABLE_DESC desc{};
+        if (!shader_variable || FAILED(shader_variable->GetDesc(&desc))) return ReflectionStep::Unavailable;
+        self.pending.variables.push_back({desc.Name ? desc.Name : "", desc.StartOffset, desc.Size});
+        return ReflectionStep::Copied;
+    } catch (...) { return copy_failed(user); }
+
+    static ReflectionStep finish_buffer(void* user) noexcept try
+    {
+        auto& self = *static_cast<ReflectionCopy*>(user);
+        self.output.buffers.push_back(std::move(self.pending));
+        return ReflectionStep::Copied;
+    } catch (...) { return copy_failed(user); }
+};
+
+constexpr ReflectionOperations reflection_operations{
+    ReflectionCopy::parameter, ReflectionCopy::binding, ReflectionCopy::begin_buffer,
+    ReflectionCopy::variable, ReflectionCopy::finish_buffer,
+};
 }
-}
+extern "C" bool rsf_anomaly_shader_enumerate_reflection(
+    void*, const ReflectionCounts*, const ReflectionOperations*) noexcept;
 
 D3DShaderApi::D3DShaderApi(const wchar_t* name) noexcept : D3DShaderReflector(nullptr)
 {
@@ -122,28 +208,11 @@ bool D3DShaderReflector::reflect(std::span<const std::byte> bytecode, Reflection
     D3D11_SHADER_DESC desc{};
     if (FAILED(reflection.p->GetDesc(&desc))) return false;
     out.version = desc.Version;
-    parameters(reflection.p, desc.InputParameters, Signature::Input, out.inputs);
-    parameters(reflection.p, desc.OutputParameters, Signature::Output, out.outputs);
-    parameters(reflection.p, desc.PatchConstantParameters, Signature::Patch, out.patch);
-    for (UINT i = 0; i < desc.BoundResources; ++i) {
-        D3D11_SHADER_INPUT_BIND_DESC bind{};
-        if (FAILED(reflection.p->GetResourceBindingDesc(i, &bind))) return false;
-        out.bindings.push_back({bind.Name ? bind.Name : "", static_cast<std::uint32_t>(bind.Type), bind.BindPoint,
-            bind.BindCount, static_cast<std::uint32_t>(bind.ReturnType), static_cast<std::uint32_t>(bind.Dimension)});
-    }
-    for (UINT i = 0; i < desc.ConstantBuffers; ++i) {
-        auto* buffer = reflection.p->GetConstantBufferByIndex(i);
-        D3D11_SHADER_BUFFER_DESC bdesc{};
-        if (!buffer || FAILED(buffer->GetDesc(&bdesc))) return false;
-        Buffer item{bdesc.Name ? bdesc.Name : "", bdesc.Size, {}};
-        for (UINT v = 0; v < bdesc.Variables; ++v) {
-            auto* variable = buffer->GetVariableByIndex(v);
-            D3D11_SHADER_VARIABLE_DESC vdesc{};
-            if (!variable || FAILED(variable->GetDesc(&vdesc))) return false;
-            item.variables.push_back({vdesc.Name ? vdesc.Name : "", vdesc.StartOffset, vdesc.Size});
-        }
-        out.buffers.push_back(std::move(item));
-    }
-    return true;
+    const ReflectionCounts counts{desc.InputParameters, desc.OutputParameters, desc.PatchConstantParameters,
+        desc.BoundResources, desc.ConstantBuffers};
+    ReflectionCopy copy{*reflection.p, out};
+    const bool ok = rsf_anomaly_shader_enumerate_reflection(&copy, &counts, &reflection_operations);
+    if (copy.exception) std::rethrow_exception(copy.exception);
+    return ok;
 }
 }

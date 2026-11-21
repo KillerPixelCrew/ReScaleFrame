@@ -17,7 +17,8 @@ owns the surface lease described below.
 
 `integrations/unity/native/bridge.cpp` keeps the typed work as leaves of the record's ops: reading
 `D3D11_TEXTURE2D_DESC`, choosing the shared format (`R32_FLOAT` for depth, `R16G16_FLOAT` for
-motion, typeless and sRGB colour formats mapped to their `FLOAT` or `UNORM` forms), the completion
+motion, typeless and sRGB colour formats mapped to their `FLOAT` or `UNORM` forms; the
+[pass plan](rust-unity-d3d11-pass-plan.md) later moved this choice into Rust), the completion
 fence wait, `rsf_shared_surface_create` with the same render-target setup and `services` log
 routing, and `rsf_shared_surface_destroy`. The copies, barriers and render-pass calls still use
 `rsf_shared_surface_d3d11` and `rsf_shared_surface_d3d12` on the view Rust lends. The D3D11 texture

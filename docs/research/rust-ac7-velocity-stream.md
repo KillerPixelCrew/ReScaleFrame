@@ -75,3 +75,5 @@ done.
 
 The commit's native depth, format and device checks and its merge, CPU profiling and its log,
 the device renderer lifecycle and variant construction, and every D3D11 call and HLSL source.
+[The commit and profile port](rust-ac7-velocity-commit.md) later moved the commit admission and
+target check, the log budgets and the profile thresholds.

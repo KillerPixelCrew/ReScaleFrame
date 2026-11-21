@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! Bundle publication consumes the capture's snapshots under the native capture mutex.
-use super::Capture;
 use super::artifacts::{output_directory, write_camera};
 use super::metadata::Temporal;
 use super::recordings::Draw;
+use super::{Capture, can_publish, mark_published};
 use std::ffi::c_char;
 use std::fmt::Write as _;
 use std::{fs, slice, str};
@@ -19,6 +19,7 @@ struct Bundle {
 const _: () = assert!(size_of::<Bundle>() == 32 && std::mem::offset_of!(Bundle, pid) == 24);
 
 type FormatScalar = unsafe extern "C" fn(f64, *mut c_char, usize) -> i32;
+type Report = unsafe extern "C" fn(u32, bool, usize, usize, u32);
 
 fn separator(out: &mut String, index: usize) {
     if index != 0 {
@@ -92,22 +93,42 @@ fn write_temporal(out: &mut String, input: &Temporal, format_scalar: FormatScala
     Some(())
 }
 
-/// The native caller lends the directory and scalar formatter while holding the capture mutex.
+/// The poller has finished writing its ready batch and holds the capture mutex.
+/// Return true once publication was attempted, even if the file write failed.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_write_bundle(
+unsafe extern "C" fn rsf_rdr2_capture_publish_bundle(
     owner: &Capture,
+    readbacks_empty: bool,
     bundle: &Bundle,
     format_scalar: FormatScalar,
-    draw_count: &mut usize,
-    temporal_count: &mut usize,
+    report: Report,
 ) -> bool {
+    if !unsafe { can_publish(owner, readbacks_empty) } {
+        return false;
+    }
+    let saved = unsafe { write_bundle(owner, bundle, format_scalar) };
+    let progress = unsafe { &*owner.ledger.get() }.progress();
+    let temporal_count = unsafe { &*owner.metadata.get() }.temporal.len();
+    let draw_count = unsafe { &*owner.recordings.get() }.draws.len();
+    unsafe {
+        report(
+            progress.sequence,
+            saved,
+            temporal_count,
+            draw_count,
+            progress.written,
+        );
+        mark_published(owner);
+    }
+    true
+}
+
+unsafe fn write_bundle(owner: &Capture, bundle: &Bundle, format_scalar: FormatScalar) -> bool {
     let directory =
         output_directory(unsafe { slice::from_raw_parts(bundle.directory, bundle.directory_len) });
     let metadata = unsafe { &*owner.metadata.get() };
     let draws = &unsafe { &*owner.recordings.get() }.draws;
     let ledger = unsafe { &mut *owner.ledger.get() };
-    *draw_count = draws.len();
-    *temporal_count = metadata.temporal.len();
     for input in &metadata.temporal {
         if let Some(camera) = &input.camera
             && !write_camera(&directory, bundle.pid, input.id, camera)

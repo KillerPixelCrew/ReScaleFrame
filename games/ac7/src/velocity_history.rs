@@ -27,7 +27,7 @@ const VIEW_UNAVAILABLE: u32 = 0;
 const VIEW_SAME_FRAME: u32 = 1;
 const VIEW_REUSE: u32 = 2;
 const VIEW_ALLOCATE: u32 = 3;
-const VIEW_COMMIT: u32 = 4;
+pub(crate) const VIEW_COMMIT: u32 = 4;
 
 // Retirement kinds.
 const RETIRE_MODEL: u32 = 0;
@@ -69,25 +69,25 @@ struct ModelDecision {
 /// A view's identity at a draw (its native depth extent) or at a commit (the motion target's
 /// pass, extent unused).
 #[repr(C)]
-#[allow(dead_code)] // constructed by velocity_pass.cpp
-struct ViewDraw {
-    session_id: u64,
-    history_key: u64,
-    view_key: u64,
-    family_key: u64,
-    frame: u32,
-    width: u32,
-    height: u32,
-    padding: u32,
+#[allow(dead_code)] // constructed by velocity_pass.cpp and velocity_commit.rs
+pub(crate) struct ViewDraw {
+    pub(crate) session_id: u64,
+    pub(crate) history_key: u64,
+    pub(crate) view_key: u64,
+    pub(crate) family_key: u64,
+    pub(crate) frame: u32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) padding: u32,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct ViewDecision {
-    slot: u32,
-    action: u32,
-    width: u32,
-    height: u32,
+pub(crate) struct ViewDecision {
+    pub(crate) slot: u32,
+    pub(crate) action: u32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
 }
 
 const _: () = {
@@ -105,7 +105,7 @@ const UNAVAILABLE_MODEL: ModelDecision = ModelDecision {
     capacity: 0,
 };
 
-const UNAVAILABLE_VIEW: ViewDecision = ViewDecision {
+pub(crate) const UNAVAILABLE_VIEW: ViewDecision = ViewDecision {
     slot: NO_SLOT,
     action: VIEW_UNAVAILABLE,
     width: 0,
@@ -468,17 +468,9 @@ extern "C" fn rsf_ac7_velocity_view_written(slot: u32) {
     lock().mark_written(slot, true);
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_velocity_view_commit(
-    pass: *const ViewDraw,
-    decision: *mut ViewDecision,
-) {
-    // SAFETY: The commit lends both for this call.
-    let (Some(pass), Some(decision)) = (unsafe { pass.as_ref() }, unsafe { decision.as_mut() })
-    else {
-        return;
-    };
-    *decision = lock().commit_view(pass);
+/// The commit's view lookup; velocity_commit.rs admits the pass and builds its identity.
+pub(crate) fn commit(pass: &ViewDraw) -> ViewDecision {
+    lock().commit_view(pass)
 }
 
 #[unsafe(no_mangle)]

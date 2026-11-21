@@ -8,6 +8,7 @@
 #include "velocity_pass_cache.h"
 #include "velocity_history.h"
 #include "velocity_stream.h"
+#include "velocity_commit.h"
 #include <d3d11.h>
 #include <wrl/client.h>
 #include <algorithm>
@@ -20,9 +21,9 @@ using Microsoft::WRL::ComPtr;
 namespace {
 thread_local rsf_game_render_pass current{};
 void (*log_line)(void*,const char*)=nullptr;void* log_user=nullptr;
-uint32_t refusal_reports=0,commit_reports=0;
+// The refusal and commit log budgets are velocity_commit.rs.
 void refused(const char* reason) {
-    if (log_line && refusal_reports++<12) {
+    if (log_line && rsf_ac7_velocity_report(VELOCITY_REPORT_REFUSAL)) {
         char message[224]{};std::snprintf(message,sizeof(message),"AC7 translucent velocity refused: %s",reason);
         log_line(log_user,message);
     }
@@ -159,8 +160,7 @@ struct Renderer {
     std::map<std::vector<uint8_t>,ComPtr<ID3D11GeometryShader>> geometry_shaders,capture_shaders;
     std::vector<Model> models;
     std::vector<View> views;
-    double cpu_ms=0,shader_cpu_ms=0,resource_cpu_ms=0,peak_cpu_ms=0;
-    uint32_t profile_frame=0,profile_callbacks=0,largest_records=0;
+    // The frame's CPU profile is velocity_commit.rs; this counts the device's shader objects.
     uint32_t shader_objects=0;
     explicit Renderer(ID3D11Device* d):device(d) {}
     bool initialize() {
@@ -372,13 +372,11 @@ double cpu_clock_ms() {
     LARGE_INTEGER ticks{};QueryPerformanceCounter(&ticks);return double(ticks.QuadPart)*scale;
 }
 struct CpuSample {
-    Renderer& owner;double entered,phase,shader_ms=0,resource_ms=0;uint32_t records=0;
-    CpuSample(Renderer& r,double start):owner(r),entered(start),phase(start) {owner.profile_frame=uint32_t(current.native_frame);}
+    double entered,phase,shader_ms=0,resource_ms=0;uint32_t frame,records=0;
+    explicit CpuSample(double start):entered(start),phase(start),frame(uint32_t(current.native_frame)) {}
     ~CpuSample() {
-        const double elapsed=cpu_clock_ms()-entered;
-        owner.cpu_ms+=elapsed;owner.shader_cpu_ms+=shader_ms;owner.resource_cpu_ms+=resource_ms;
-        owner.peak_cpu_ms=std::max(owner.peak_cpu_ms,elapsed);++owner.profile_callbacks;
-        owner.largest_records=std::max(owner.largest_records,records);
+        const VelocityProfileSample sample{cpu_clock_ms()-entered,shader_ms,resource_ms,frame,records};
+        rsf_ac7_velocity_profile_sample(&sample);
     }
 };
 void draw(ID3D11DeviceContext* c,const rsf_frame_tap_geometry& g,ID3D11Buffer* arguments=nullptr) {
@@ -399,7 +397,7 @@ void draw(ID3D11DeviceContext* c,const rsf_frame_tap_geometry& g,ID3D11Buffer* a
 extern "C" void rsf_ac7_velocity_shader_seen(void* shader,uint32_t stage,const void* bytes,uint32_t size)
 {rsf_ac7_velocity_cache_shader(shader,stage,bytes,size);}
 extern "C" void rsf_ac7_velocity_set_log(void (*log)(void*,const char*),void* user)
-{log_line=log;log_user=user;refusal_reports=commit_reports=0;}
+{log_line=log;log_user=user;rsf_ac7_velocity_reports_reset();}
 extern "C" void rsf_ac7_velocity_layout_seen(void* layout,const rsf_observer_layout_element* elements,uint32_t copied,uint32_t count)
 {rsf_ac7_velocity_cache_layout(layout,elements,copied,count);}
 extern "C" void rsf_ac7_velocity_scope(const rsf_game_render_pass* scope)
@@ -419,9 +417,9 @@ extern "C" void rsf_ac7_velocity_geometry(const rsf_frame_tap_geometry* pointer)
     ComPtr<ID3D11Device> device;c->GetDevice(&device);
     if (!renderer || renderer->device.Get()!=device.Get()) {
         auto made=std::make_unique<Renderer>(device.Get());if (!made->initialize()) {refused("device-side pass initialization failed");return;}
-        renderer=std::move(made);rsf_ac7_velocity_reset_variants();rsf_ac7_velocity_history_reset();
+        renderer=std::move(made);rsf_ac7_velocity_reset_variants();rsf_ac7_velocity_history_reset();rsf_ac7_velocity_profile_reset();
     }
-    CpuSample timing(*renderer,entered_ms);
+    CpuSample timing(entered_ms);
     ComPtr<ID3D11PixelShader> native_pixel;c->PSGetShader(&native_pixel,nullptr,nullptr);
     uint32_t vertex_hash=0;auto* variant=renderer->variant(g,native_pixel.Get(),existing.Get(),hull.Get(),domain.Get(),vertex_hash);
     timing.phase=cpu_clock_ms();timing.shader_ms=timing.phase-entered_ms;
@@ -505,17 +503,16 @@ extern "C" void rsf_ac7_velocity_geometry(const rsf_frame_tap_geometry* pointer)
 } catch (...) {}
 extern "C" int rsf_ac7_velocity_commit(void* context,const rsf_game_render_pass* pass) try
 {
-    if (!renderer || !context || !pass || pass->struct_size<sizeof(*pass) || !pass->motion || !pass->depth) return 0;
-    const VelocityViewDraw identity{pass->session_id,pass->history_key,pass->view_key,pass->family_key,
-        uint32_t(pass->native_frame),0,0,0};
-    VelocityViewDecision found{VELOCITY_NO_SLOT,VELOCITY_VIEW_UNAVAILABLE,0,0};rsf_ac7_velocity_view_commit(&identity,&found);
-    if (found.action!=VELOCITY_VIEW_COMMIT || found.slot>=renderer->views.size()) return 0;
+    // Pass admission, its view identity and the target check are velocity_commit.rs.
+    if (!renderer || !context) return 0;
+    VelocityViewDecision found{VELOCITY_NO_SLOT,VELOCITY_VIEW_UNAVAILABLE,0,0};
+    if (!rsf_ac7_velocity_commit_view(pass,&found) || found.slot>=renderer->views.size()) return 0;
     auto& view=renderer->views[found.slot];
     if (view.native_depth.Get()!=pass->depth) return 0;
     auto* c=static_cast<ID3D11DeviceContext*>(context);auto* native=static_cast<ID3D11Texture2D*>(pass->motion);
     D3D11_TEXTURE2D_DESC desc{};native->GetDesc(&desc);
-    if (desc.Width!=found.width || desc.Height!=found.height || desc.SampleDesc.Count!=1 || desc.ArraySize!=1 ||
-        (desc.Format!=DXGI_FORMAT_R16G16_UNORM && desc.Format!=DXGI_FORMAT_R16G16_TYPELESS)) return 0;
+    const VelocityCommitTarget target{desc.Width,desc.Height,desc.SampleDesc.Count,desc.ArraySize,uint32_t(desc.Format)};
+    if (!rsf_ac7_velocity_commit_target(&found,&target)) return 0;
     ComPtr<ID3D11Device> device;c->GetDevice(&device);if (device.Get()!=renderer->device.Get()) return 0;
     State saved(c);if (!saved.context) return 0;c->SetPredication(nullptr,FALSE);
     c->SOSetTargets(0,nullptr,nullptr);c->GSSetShader(nullptr,nullptr,0);c->HSSetShader(nullptr,nullptr,0);c->DSSetShader(nullptr,nullptr,0);
@@ -533,24 +530,24 @@ extern "C" int rsf_ac7_velocity_commit(void* context,const rsf_game_render_pass*
     c->HSSetShaderResources(0,128,empty);c->DSSetShaderResources(0,128,empty);c->CSSetShaderResources(0,128,empty);
     c->CopyResource(native,view.merged.Get());c->CopyResource(view.native_depth.Get(),view.depth.Get());
     rsf_ac7_velocity_view_committed(found.slot);
-    if (log_line && commit_reports++<3) log_line(log_user,"AC7 translucent velocity: opacity-clipped generated-geometry motion and depth committed before native post-processing");
+    if (log_line && rsf_ac7_velocity_report(VELOCITY_REPORT_COMMIT)) log_line(log_user,"AC7 translucent velocity: opacity-clipped generated-geometry motion and depth committed before native post-processing");
     return 1;
 } catch (...) {return 0;}
 extern "C" void rsf_ac7_velocity_frame_end(void)
 {
     if (!renderer) return;
-    if (log_line && (renderer->cpu_ms>=8 || renderer->peak_cpu_ms>=4)) {
+    // velocity_commit.rs restarts the totals whether or not the frame is reported.
+    VelocityProfileReport report{};
+    if (rsf_ac7_velocity_profile_frame_end(&report) && log_line) {
         char message[320]{};std::snprintf(message,sizeof(message),
             "AC7 velocity CPU frame=%u callbacks=%u total_ms=%.2f shader_ms=%.2f resource_ms=%.2f peak_ms=%.2f largest_records=%u models=%zu variants=%zu shader_objects=%u",
-            renderer->profile_frame,renderer->profile_callbacks,renderer->cpu_ms,renderer->shader_cpu_ms,
-            renderer->resource_cpu_ms,renderer->peak_cpu_ms,renderer->largest_records,rsf_ac7_velocity_model_count(),rsf_ac7_velocity_variant_count(),renderer->shader_objects);
+            report.frame,report.callbacks,report.total_ms,report.shader_ms,
+            report.resource_ms,report.peak_ms,report.largest_records,rsf_ac7_velocity_model_count(),rsf_ac7_velocity_variant_count(),renderer->shader_objects);
         log_line(log_user,message);
     }
-    renderer->cpu_ms=renderer->shader_cpu_ms=renderer->resource_cpu_ms=renderer->peak_cpu_ms=0;
-    renderer->profile_callbacks=renderer->largest_records=0;
     rsf_ac7_velocity_history_frame_end(renderer.get(),Renderer::retire);
 }
 extern "C" void rsf_ac7_velocity_release(void)
-{renderer.reset();current={};rsf_ac7_velocity_cache_release();rsf_ac7_velocity_history_reset();}
+{renderer.reset();current={};rsf_ac7_velocity_cache_release();rsf_ac7_velocity_history_reset();rsf_ac7_velocity_profile_reset();}
 uint32_t rsf_ac7_velocity_device_shader_creation_count() noexcept
 {return renderer ? renderer->shader_objects : 0;}

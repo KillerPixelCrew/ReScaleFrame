@@ -79,7 +79,7 @@ struct Submission {
 
 #[repr(C)]
 #[derive(Default)]
-struct Readback {
+pub(super) struct Readback {
     generation: u64,
     submission: u64,
     fence_value: u64,
@@ -89,6 +89,12 @@ struct Readback {
 }
 
 const _: () = assert!(size_of::<Readback>() == 48 && std::mem::offset_of!(Readback, list) == 24);
+
+impl Readback {
+    pub(super) fn is_complete(&self, completed: u64) -> bool {
+        self.fence_value != 0 && completed != u64::MAX && completed >= self.fence_value
+    }
+}
 
 fn try_entry<V: Default>(map: &mut HashMap<usize, V>, key: usize) -> Option<&mut V> {
     if !map.contains_key(&key) && map.try_reserve(1).is_err() {
@@ -373,16 +379,11 @@ unsafe extern "C" fn rsf_rdr2_capture_reuse_readback(
     completed: u64,
 ) -> bool {
     // Writes in one recording execute in order. A different recording may run on another queue.
-    rsf_rdr2_capture_readback_complete(readback, completed)
+    readback.is_complete(completed)
         || (readback.claimed == 0
             && readback.queue.is_null()
             && readback.list == list
             && readback.generation == unsafe { &*owner.recordings.get() }.generation(list as usize))
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_rdr2_capture_readback_complete(readback: &Readback, completed: u64) -> bool {
-    readback.fence_value != 0 && completed != u64::MAX && completed >= readback.fence_value
 }
 
 #[unsafe(no_mangle)]
@@ -555,13 +556,13 @@ mod tests {
             other_queue,
             1
         ));
-        assert!(!rsf_rdr2_capture_readback_complete(&readback, 1));
+        assert!(!readback.is_complete(1));
         // A future signal on the same queue covers the submitted copy, with or without its list.
         assert!(rsf_rdr2_capture_fence_readback(&mut readback, queue, 2));
         assert_eq!(readback.submission, 1);
-        assert!(!rsf_rdr2_capture_readback_complete(&readback, u64::MAX));
-        assert!(!rsf_rdr2_capture_readback_complete(&readback, 1));
-        assert!(rsf_rdr2_capture_readback_complete(&readback, 2));
+        assert!(!readback.is_complete(u64::MAX));
+        assert!(!readback.is_complete(1));
+        assert!(readback.is_complete(2));
         assert!(unsafe { rsf_rdr2_capture_reuse_readback(&owner, &readback, list, 2) });
     }
 }

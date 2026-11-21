@@ -108,7 +108,7 @@ unsafe extern "C" fn rsf_unity_interop_slot(complete: *mut u64) -> u32 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_unity_interop_submitted() -> u64 {
+pub(crate) extern "C" fn rsf_unity_interop_submitted() -> u64 {
     lock().submitted()
 }
 

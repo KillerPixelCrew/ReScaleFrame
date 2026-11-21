@@ -102,6 +102,25 @@ struct MotionDraw {
     MotionResource depth;
     MotionDrawConstants constants[5];
 };
+struct MotionGeometryPlan;
+struct MotionGeometryStream {
+    uint64_t buffer;
+    uint32_t slot, stride, offset, source_bytes, sample_bytes, blob;
+};
+struct MotionGeometryVsBuffer {
+    uint64_t resource;
+    uint32_t slot, format, offset, source_bytes, sample_bytes, blob;
+};
+struct MotionGeometry {
+    MotionQueuedDraw queued;
+    GeometryScope scope;
+    uint64_t qpc, layout;
+    uint32_t kind, count, start;
+    int32_t base_vertex;
+    uint32_t instances, start_instance, stream_count, vs_buffer_count;
+    MotionGeometryStream streams[32];
+    MotionGeometryVsBuffer vs_buffers[3];
+};
 struct MotionArtifact {
     const unsigned char* data;
     std::size_t size;
@@ -155,6 +174,8 @@ GeometryScope rsf_ac7_capture_geometry_scope();
 bool rsf_ac7_capture_can_record_draw(MotionCaptureInterval capture);
 bool rsf_ac7_capture_record_draw(MotionCaptureInterval capture, const MotionDraw* draw);
 bool rsf_ac7_capture_record_dispatch(MotionCaptureInterval capture, const MotionDispatch* dispatch);
+bool rsf_ac7_capture_record_geometry(MotionCaptureInterval capture, const MotionGeometryPlan* plan,
+    const MotionGeometry* draw);
 bool rsf_ac7_capture_record_draw_text(MotionCaptureInterval capture, const char* text, std::size_t size);
 
 // Record and copy share the native storage guard with the companion blob snapshots.
@@ -187,6 +208,11 @@ static_assert(offsetof(MotionDraw, shader_hashes) == 132 && offsetof(MotionDraw,
 static_assert(offsetof(MotionDraw, inputs) == 192 && offsetof(MotionDraw, ps_resources) == 576);
 static_assert(offsetof(MotionDraw, vs_resources) == 5696 && offsetof(MotionDraw, render_targets) == 10816);
 static_assert(offsetof(MotionDraw, depth) == 11968 && offsetof(MotionDraw, constants) == 12000);
+static_assert(sizeof(MotionGeometryStream) == 32 && offsetof(MotionGeometryStream, blob) == 28);
+static_assert(sizeof(MotionGeometryVsBuffer) == 32 && offsetof(MotionGeometryVsBuffer, blob) == 28);
+static_assert(sizeof(MotionGeometry) == 1256 && offsetof(MotionGeometry, qpc) == 88);
+static_assert(offsetof(MotionGeometry, base_vertex) == 116 && offsetof(MotionGeometry, streams) == 136 &&
+    offsetof(MotionGeometry, vs_buffers) == 1160);
 static_assert(sizeof(MotionArtifact) == 16 && sizeof(MotionArtifactList) == 24);
 static_assert(sizeof(MotionArtifactStats) == 24 && offsetof(MotionArtifactStats, capture_failures) == 20);
 static_assert(sizeof(MotionFinalArtifacts) == 40 && offsetof(MotionFinalArtifacts, stats) == 32);
