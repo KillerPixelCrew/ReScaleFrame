@@ -2956,7 +2956,9 @@ fn identity_from(value: *const rsf_fallout4_cpu_identity) -> Option<CpuIdentity>
 /// # Safety
 /// `out` is null or writable.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fallout4_cpu_current_identity(out: *mut rsf_fallout4_cpu_identity) {
+pub(crate) unsafe extern "C" fn rsf_fallout4_cpu_current_identity(
+    out: *mut rsf_fallout4_cpu_identity,
+) {
     let identity = current_identity();
     if let Some(out) = unsafe { out.as_mut() } {
         *out = rsf_fallout4_cpu_identity {
@@ -2986,7 +2988,7 @@ unsafe extern "C" fn rsf_fallout4_cpu_source_is_current(
 /// # Safety
 /// `identity` is null or readable.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fallout4_cpu_render_source_is_current(
+pub(crate) unsafe extern "C" fn rsf_fallout4_cpu_render_source_is_current(
     identity: *const rsf_fallout4_cpu_identity,
 ) -> bool {
     identity_from(identity).is_some_and(|identity| render_source_is_current(&identity))

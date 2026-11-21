@@ -10,9 +10,9 @@
 //! The bodies below follow `XMMatrixMultiply`, `XMMatrixInverse` and `XMVector4Dot` line by line;
 //! `shuffle` takes its indices in `_MM_SHUFFLE(fp3, fp2, fp1, fp0)` order.
 
-pub(super) type Vector = [f32; 4];
+pub(crate) type Vector = [f32; 4];
 /// Four rows, the `XMMATRIX` layout. Points are row vectors.
-pub(super) type Matrix = [Vector; 4];
+pub(crate) type Matrix = [Vector; 4];
 
 /// `_mm_shuffle_ps(a, b, _MM_SHUFFLE(fp3, fp2, fp1, fp0))`.
 fn shuffle(a: Vector, b: Vector, [fp3, fp2, fp1, fp0]: [usize; 4]) -> Vector {
@@ -46,7 +46,7 @@ fn fnmadd(a: Vector, b: Vector, c: Vector) -> Vector {
 }
 
 /// `XMLoadFloat4x4`.
-pub(super) fn load(values: &[f32; 16]) -> Matrix {
+pub(crate) fn load(values: &[f32; 16]) -> Matrix {
     std::array::from_fn(|row| std::array::from_fn(|column| values[row * 4 + column]))
 }
 
@@ -63,12 +63,12 @@ pub(super) const IDENTITY: Matrix = [
 ];
 
 /// `XMMatrixTranslation`.
-pub(super) fn translation(x: f32, y: f32, z: f32) -> Matrix {
+pub(crate) fn translation(x: f32, y: f32, z: f32) -> Matrix {
     [IDENTITY[0], IDENTITY[1], IDENTITY[2], [x, y, z, 1.0]]
 }
 
 /// `XMMatrixMultiply(a, b)`, the SSE path: `(x*b0 + z*b2) + (y*b1 + w*b3)` per row.
-pub(super) fn multiply(a: &Matrix, b: &Matrix) -> Matrix {
+pub(crate) fn multiply(a: &Matrix, b: &Matrix) -> Matrix {
     a.map(|row| {
         let x = mul(permute(row, [0, 0, 0, 0]), b[0]);
         let y = mul(permute(row, [1, 1, 1, 1]), b[1]);

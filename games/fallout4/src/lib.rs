@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: MIT
 //! Fallout 4 AE 1.11.240 adapter policy: the exact recognized build, the GameSDK table, the plugin
 //! lifecycle with its process-lived Runtime session, DPI startup, the cold native D3D11
-//! creation and presentation binding sequence, and the CPU event owner (poll and worker source
-//! handoff, input receipts and their GameSDK facts).
+//! creation and presentation binding sequence, the CPU event owner (poll and worker source
+//! handoff, input receipts and their GameSDK facts), and native depth-domain admission and
+//! composition.
 //!
 //! Native leaves stay in C++ and reach this crate through rsf_fallout4_platform
-//! (fallout4_platform.h) and rsf_fallout4_cpu_platform (cpu_events_platform.h): MinHook, the
-//! typed detour shells with their return addresses and trampoline calls, exception guards, the
-//! shared file hash, the Steam chain facade and the render subsystem.
+//! (fallout4_platform.h), rsf_fallout4_cpu_platform (cpu_events_platform.h) and the per-call
+//! depth-domain leaves (depth_domains_platform.h): MinHook, the typed detour shells with their
+//! return addresses and trampoline calls, exception guards, the shared file hash, the Steam chain
+//! facade, the render subsystem, and the D3D11 and COM facts.
 //! The Runtime decides vendors, presentation and pacing; this crate reports native facts only.
 #![cfg(windows)]
 
@@ -15,6 +17,7 @@ mod camera;
 mod cpu_abi;
 mod cpu_events;
 mod creation;
+mod depth_domains;
 mod dpi;
 mod platform_abi;
 mod session;
@@ -242,7 +245,9 @@ unsafe impl Plain for i32 {}
 unsafe impl Plain for u32 {}
 unsafe impl Plain for u64 {}
 unsafe impl Plain for usize {}
+unsafe impl Plain for f32 {}
 unsafe impl<const N: usize> Plain for [u8; N] {}
+unsafe impl<const N: usize> Plain for [f32; N] {}
 
 /// A guarded engine read: the whole value or nothing, never a fault.
 pub(crate) fn read<T: Plain>(address: usize) -> Option<T> {
