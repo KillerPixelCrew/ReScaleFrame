@@ -85,10 +85,12 @@ Rust also owns diagnostic capture admission, source IDs and readbacks.
 Retirement publishes only after the bridge's queue proof. It closes
 capture admission before unregistering SDK callbacks without the lock.
 Native leaves retain typed SDK and graphics effects, fingerprint
-checks, file output and timing. The integrated Present checks record
-sizes before ABI versions. Source comparison matched all 27 C exports
-and checked the private call table. The guard-page fixture, both build
-paths and device behavior remain unverified.
+checks and file output. Rust aggregates the optional XeSS CPU and GPU
+timing samples and uses the original native stderr format. The
+integrated Present checks record sizes before ABI versions. Source
+comparison matched all 27 C exports and checked the private call table.
+The timing and guard-page fixtures, both build paths and device
+behavior remain unverified.
 
 The FidelityFX 4 FG bridge used by Vulkan now owns admission, frame
 validation, queue and fence sequencing, telemetry and checked retirement

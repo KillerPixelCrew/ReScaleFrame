@@ -11,8 +11,11 @@ use std::sync::atomic::{AtomicI32, Ordering};
 
 #[path = "capture.rs"]
 mod capture;
+#[path = "timing.rs"]
+mod timing;
 
 use capture::{Capture, Desc, Event, Footprint, Image};
+use timing::{Phase as TimingPhase, Report as TimingReport};
 
 type Handle = *mut c_void;
 type Step = unsafe extern "C" fn(Handle) -> i32;
@@ -160,8 +163,8 @@ struct Platform {
     read_present_status: unsafe extern "C" fn(Handle, *mut PresentResult) -> i32,
     timing_enabled: unsafe extern "C" fn() -> u32,
     timing_now: unsafe extern "C" fn() -> i64,
-    timing_add: unsafe extern "C" fn(u32, i64, i64),
-    timing_end_present: unsafe extern "C" fn(),
+    timing_frequency: unsafe extern "C" fn() -> i64,
+    timing_report: unsafe extern "C" fn(&TimingReport),
     begin_gpu_timing: unsafe extern "C" fn(Handle, u32) -> u32,
     timestamp_copies: unsafe extern "C" fn(Handle, u32, u32),
     mark_present_enter: unsafe extern "C" fn(Handle, u32),
@@ -219,7 +222,7 @@ const _: () = {
     assert!(std::mem::offset_of!(Platform, capture_publish) == 504);
 };
 
-const PLATFORM_ABI_VERSION: u32 = 3;
+const PLATFORM_ABI_VERSION: u32 = 4;
 const BRIDGE_ABI_VERSION: u32 = 1;
 const INVALID_ARGUMENT: i32 = -10001;
 const ABI_MISMATCH: i32 = -10002;
@@ -244,15 +247,6 @@ enum Phase {
     Prepared,
 }
 
-#[repr(u32)]
-enum TimingPhase {
-    AllocatorWait = 0,
-    Record = 1,
-    Submit = 2,
-    Present = 3,
-    Retire = 4,
-}
-
 // The caller guarantees the size word. The version is readable only after the
 // declared size covers the whole record.
 unsafe fn check_present_abi<T>(record: *const T) -> Result<(), i32> {
@@ -273,7 +267,9 @@ fn success(code: i32) -> Result<(), i32> {
 fn advance_timing(ops: &Platform, phase: TimingPhase, start: Option<i64>) -> Option<i64> {
     start.map(|previous| {
         let now = unsafe { (ops.timing_now)() };
-        unsafe { (ops.timing_add)(phase as u32, previous, now) };
+        timing::rsf_core_xess_timing_cpu(phase as u32, previous, now, unsafe {
+            (ops.timing_frequency)()
+        });
         now
     })
 }
@@ -600,8 +596,10 @@ impl Session {
     }
 
     fn finish_present(&self, phase_start: Option<i64>) {
-        if advance_timing(self.platform, TimingPhase::Retire, phase_start).is_some() {
-            unsafe { (self.platform.timing_end_present)() };
+        if advance_timing(self.platform, TimingPhase::Retire, phase_start).is_some()
+            && let Some(report) = timing::end_present()
+        {
+            unsafe { (self.platform.timing_report)(&report) };
         }
     }
 

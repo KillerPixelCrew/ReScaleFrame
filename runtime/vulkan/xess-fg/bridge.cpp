@@ -8,6 +8,7 @@
 #include <cstring>
 #include <cstddef>
 #include <array>
+#include <iterator>
 #include <new>
 #include <string>
 #include <cstdio>
@@ -23,80 +24,39 @@ template<typename T> static void Release(T*& value) {
     if (value) { value->Release(); value = nullptr; }
 }
 
-// Opt-in present-phase timing (VULKANSTORY_XESS_FG_TIMING=1): mean and max milliseconds
-// per phase, written to stderr every 120 presents. Diagnostics only.
+// Native clock and stderr leaves for the Rust timing owner. The diagnostic
+// setting is sampled at bridge load, and does not affect pacing or Present.
 namespace {
-/// @brief CPU presentation-phase indices used only by opt-in XeSS diagnostics.
-enum TimingPhase { kAllocatorWait, kRecord, kSubmit, kPresent, kRetire, kSleep, kPhaseCount };
-static_assert(kAllocatorWait == 0 && kRecord == 1 && kSubmit == 2 && kPresent == 3 && kRetire == 4);
-const char* const kPhaseNames[kPhaseCount] = {
-    "allocator_wait", "record", "submit", "dxgi_present", "retire", "xell_sleep" };
-/// @brief Guards the diagnostic accumulators: the render thread records XeLL sleep while the present thread records present phases.
-SRWLOCK timingLock = SRWLOCK_INIT;
-/// @brief Holds timingLock exclusively for one scope.
-struct TimingGuard {
-    TimingGuard() { AcquireSRWLockExclusive(&timingLock); }
-    ~TimingGuard() { ReleaseSRWLockExclusive(&timingLock); }
-    TimingGuard(const TimingGuard&) = delete;
-    TimingGuard& operator=(const TimingGuard&) = delete;
-};
-/// @brief Bounded opt-in CPU phase and calibrated GPU timing accumulators.
-/// @details enabled and frequency are fixed at load. The accumulators are written from the render thread (XeLL sleep) and the present thread, so every access holds timingLock. Every 120 presents the formatted record is written and the accumulators reset.
-struct PresentTiming {
-    const bool enabled = std::getenv("VULKANSTORY_XESS_FG_TIMING") != nullptr;
-    const double frequency = [] { LARGE_INTEGER f; QueryPerformanceFrequency(&f); return static_cast<double>(f.QuadPart); }();
-    double sum[kPhaseCount]{};
-    double max[kPhaseCount]{};
-    uint32_t presents = 0;
-    // DX12 queue work of one present (our copy list through the list submitted
-    // after Present, so it includes the SDK's interpolation on this queue),
-    // placed on the CPU clock through the queue's clock calibration.
-    double gpuSum = 0, gpuMax = 0;
-    double copiesSum = 0;
-    double startAfterEnterSum = 0;
-    double exitAfterGpuEndSum = 0;
-    uint32_t gpuSamples = 0;
-    double sequence[24]{};
-    uint32_t sequenceCount = 0;
-    int64_t Now() const { LARGE_INTEGER t; QueryPerformanceCounter(&t); return t.QuadPart; }
-    void Add(TimingPhase phase, int64_t start, int64_t end) {
-        double ms = (end - start) * 1000.0 / frequency;
-        TimingGuard guard;
-        sum[phase] += ms;
-        if (ms > max[phase]) max[phase] = ms;
-        if (phase == kPresent && sequenceCount < 24) sequence[sequenceCount++] = ms;
-    }
-    void EndPresent() {
-        TimingGuard guard;
-        if (++presents < 120) return;
-        std::fprintf(stderr, "[xess-fg timing] presents=%u", presents);
-        for (int i = 0; i < kPhaseCount; i++)
-            std::fprintf(stderr, " %s_mean_ms=%.3f %s_max_ms=%.3f", kPhaseNames[i], sum[i] / presents,
-                kPhaseNames[i], max[i]);
-        if (gpuSamples)
-            std::fprintf(stderr, " dx12_gpu_mean_ms=%.3f dx12_gpu_max_ms=%.3f gpu_start_after_present_enter_ms=%.3f"
-                " present_exit_after_gpu_end_ms=%.3f dx12_our_copies_ms=%.3f", gpuSum / gpuSamples, gpuMax,
-                startAfterEnterSum / gpuSamples, exitAfterGpuEndSum / gpuSamples, copiesSum / gpuSamples);
-        std::fprintf(stderr, " sequence_ms=");
-        for (uint32_t i = 0; i < sequenceCount; i++) std::fprintf(stderr, i ? ",%.1f" : "%.1f", sequence[i]);
-        std::fputc('\n', stderr);
-        std::fflush(stderr);
-        ResetAccumulators();
-    }
-    /// @brief Clears every accumulator; the caller holds timingLock.
-    void ResetAccumulators() {
-        for (int i = 0; i < kPhaseCount; i++) { sum[i] = 0; max[i] = 0; }
-        presents = 0;
-        gpuSum = gpuMax = 0;
-        copiesSum = 0;
-        startAfterEnterSum = 0;
-        exitAfterGpuEndSum = 0;
-        gpuSamples = 0;
-        for (double& value : sequence) value = 0;
-        sequenceCount = 0;
-    }
-};
-PresentTiming timing;
+constexpr uint32_t kSleep = 5;
+const int64_t timing_frequency = [] {
+    LARGE_INTEGER frequency{};
+    return QueryPerformanceFrequency(&frequency) ? frequency.QuadPart : 0;
+}();
+const bool timing_enabled = timing_frequency > 0 && std::getenv("VULKANSTORY_XESS_FG_TIMING") != nullptr;
+
+int64_t TimingNow() {
+    LARGE_INTEGER ticks{};
+    return QueryPerformanceCounter(&ticks) ? ticks.QuadPart : 0;
+}
+
+void WriteTimingReport(const rsf_xess_timing_report* report) {
+    constexpr const char* names[] = {
+        "allocator_wait", "record", "submit", "dxgi_present", "retire", "xell_sleep"
+    };
+    std::fprintf(stderr, "[xess-fg timing] presents=%u", report->presents);
+    for (size_t i = 0; i < std::size(names); ++i)
+        std::fprintf(stderr, " %s_mean_ms=%.3f %s_max_ms=%.3f", names[i], report->phase_mean[i],
+            names[i], report->phase_max[i]);
+    if (report->gpu_samples)
+        std::fprintf(stderr, " dx12_gpu_mean_ms=%.3f dx12_gpu_max_ms=%.3f gpu_start_after_present_enter_ms=%.3f"
+            " present_exit_after_gpu_end_ms=%.3f dx12_our_copies_ms=%.3f", report->gpu_mean, report->gpu_max,
+            report->gpu_start_after_present_enter, report->present_exit_after_gpu_end, report->copies_mean);
+    std::fprintf(stderr, " sequence_ms=");
+    for (uint32_t i = 0; i < report->sequence_count; ++i)
+        std::fprintf(stderr, i ? ",%.1f" : "%.1f", report->sequence[i]);
+    std::fputc('\n', stderr);
+    std::fflush(stderr);
+}
 }
 
 // Typed storage for the Rust session and its presentation leaves. The public
@@ -731,7 +691,7 @@ bool EnsureGpuTiming(VulkanStoryXessFg* value) {
 
 // The slot's previous present has completed on the DX12 queue: its two
 // timestamps are final and go on the CPU clock through a fresh calibration.
-/// @brief Reads completed slot timestamps and calibrates them to the CPU performance-counter clock.
+/// @brief Reads the completed slot timestamps and the queue's clock calibration.
 /// @details The caller first waits for the slot's previous DX12 completion before reusing query/allocator storage.
 void HarvestGpuTiming(VulkanStoryXessFg* value, uint32_t slot) {
     if (!value->slotTimed[slot]) return;
@@ -744,20 +704,9 @@ void HarvestGpuTiming(VulkanStoryXessFg* value, uint32_t slot) {
     value->queryReadback->Unmap(0, &none);
     uint64_t gpuCalibration = 0, cpuCalibration = 0;
     if (gpuEnd <= gpuStart || FAILED(value->queue->GetClockCalibration(&gpuCalibration, &cpuCalibration))) return;
-    auto toCpu = [&](uint64_t gpu) {
-        return static_cast<double>(cpuCalibration) -
-            (static_cast<double>(gpuCalibration) - static_cast<double>(gpu)) * timing.frequency / value->gpuFrequency;
-    };
-    double msPerTick = 1000.0 / timing.frequency;
-    double duration = (gpuEnd - gpuStart) * 1000.0 / value->gpuFrequency;
-    TimingGuard guard;
-    timing.gpuSum += duration;
-    if (gpuCopiesEnd >= gpuStart && gpuCopiesEnd <= gpuEnd)
-        timing.copiesSum += (gpuCopiesEnd - gpuStart) * 1000.0 / value->gpuFrequency;
-    if (duration > timing.gpuMax) timing.gpuMax = duration;
-    timing.startAfterEnterSum += (toCpu(gpuStart) - value->presentEnter[slot]) * msPerTick;
-    timing.exitAfterGpuEndSum += (value->presentExit[slot] - toCpu(gpuEnd)) * msPerTick;
-    timing.gpuSamples++;
+    const rsf_xess_timing_gpu_sample sample{gpuStart, gpuCopiesEnd, gpuEnd, value->gpuFrequency,
+        gpuCalibration, cpuCalibration, value->presentEnter[slot], value->presentExit[slot]};
+    rsf_core_xess_timing_gpu(&sample, timing_frequency);
 }
 }
 
@@ -891,7 +840,7 @@ static void TimestampCopies(VulkanStoryXessFg* value, uint32_t slot, uint32_t in
 }
 
 static void FinishGpuTiming(VulkanStoryXessFg* value, uint32_t slot) {
-    value->presentExit[slot] = timing.Now();
+    value->presentExit[slot] = TimingNow();
     if (SUCCEEDED(value->postAllocators[slot]->Reset()) &&
         SUCCEEDED(value->postList->Reset(value->postAllocators[slot], nullptr))) {
         value->postList->EndQuery(value->queryHeap, D3D12_QUERY_TYPE_TIMESTAMP, slot * 3 + 2);
@@ -973,16 +922,14 @@ static constexpr rsf_xess_bridge_platform Platform{
         return value->queue->Signal(value->completionFence, target);
     },
     .read_present_status = ReadPresentStatus,
-    .timing_enabled = []() -> uint32_t { return timing.enabled; },
-    .timing_now = []() -> int64_t { return timing.Now(); },
-    .timing_add = [](uint32_t phase, int64_t start, int64_t end) {
-        timing.Add(static_cast<TimingPhase>(phase), start, end);
-    },
-    .timing_end_present = []() { timing.EndPresent(); },
+    .timing_enabled = []() -> uint32_t { return timing_enabled; },
+    .timing_now = TimingNow,
+    .timing_frequency = []() -> int64_t { return timing_frequency; },
+    .timing_report = WriteTimingReport,
     .begin_gpu_timing = BeginGpuTiming,
     .timestamp_copies = TimestampCopies,
     .mark_present_enter = [](VulkanStoryXessFg* value, uint32_t slot) {
-        value->presentEnter[slot] = timing.Now();
+        value->presentEnter[slot] = TimingNow();
     },
     .finish_gpu_timing = FinishGpuTiming,
     .serialize_enabled = []() -> uint32_t {
@@ -1048,9 +995,9 @@ extern "C" __declspec(dllexport) int VulkanStoryXessFgSetLatencyMode(VulkanStory
 extern "C" __declspec(dllexport) int VulkanStoryXessFgSleep(VulkanStoryXessFg* value,
     uint32_t frameId) {
     if (!value || !value->xell) return -1;
-    int64_t start = timing.enabled ? timing.Now() : 0;
+    const int64_t start = timing_enabled ? TimingNow() : 0;
     int result = static_cast<int>(value->sleep(value->xell, frameId));
-    if (timing.enabled) timing.Add(kSleep, start, timing.Now());
+    if (timing_enabled) rsf_core_xess_timing_cpu(kSleep, start, TimingNow(), timing_frequency);
     return result;
 }
 

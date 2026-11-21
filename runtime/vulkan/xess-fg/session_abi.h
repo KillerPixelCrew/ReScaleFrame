@@ -3,7 +3,7 @@
 
 #include "bridge_api.h"
 
-inline constexpr uint32_t RSF_XESS_BRIDGE_PLATFORM_ABI_VERSION = 3;
+inline constexpr uint32_t RSF_XESS_BRIDGE_PLATFORM_ABI_VERSION = 4;
 inline constexpr uint32_t RSF_XESS_BRIDGE_ALLOCATOR_COUNT = 3;
 
 struct rsf_xess_bridge_session;
@@ -23,6 +23,23 @@ struct rsf_xess_bridge_modules {
     void* fg;
     void* xell;
 };
+
+struct rsf_xess_timing_gpu_sample {
+    uint64_t start, copies_end, end, frequency, calibration_gpu, calibration_cpu;
+    int64_t present_enter, present_exit;
+};
+
+struct rsf_xess_timing_report {
+    uint32_t presents, gpu_samples, sequence_count, reserved;
+    double phase_mean[6], phase_max[6];
+    double gpu_mean, gpu_max, gpu_start_after_present_enter, present_exit_after_gpu_end, copies_mean;
+    double sequence[24];
+};
+
+static_assert(sizeof(rsf_xess_timing_gpu_sample) == 64);
+static_assert(sizeof(rsf_xess_timing_report) == 344 && offsetof(rsf_xess_timing_report, sequence) == 152);
+extern "C" void rsf_core_xess_timing_cpu(uint32_t phase, int64_t start, int64_t end, int64_t frequency);
+extern "C" void rsf_core_xess_timing_gpu(const rsf_xess_timing_gpu_sample*, int64_t cpu_frequency);
 
 // Private Windows x64 C ABI. The native capsule stores typed COM and SDK objects.
 // Only the Rust session may retire the capsule and its Win32 leases. The host
@@ -74,8 +91,8 @@ struct rsf_xess_bridge_platform {
     int32_t (*read_present_status)(rsf_xess_bridge*, rsf_xess_bridge_present_result*);
     uint32_t (*timing_enabled)();
     int64_t (*timing_now)();
-    void (*timing_add)(uint32_t, int64_t, int64_t);
-    void (*timing_end_present)();
+    int64_t (*timing_frequency)();
+    void (*timing_report)(const rsf_xess_timing_report*);
     uint32_t (*begin_gpu_timing)(rsf_xess_bridge*, uint32_t);
     void (*timestamp_copies)(rsf_xess_bridge*, uint32_t, uint32_t);
     void (*mark_present_enter)(rsf_xess_bridge*, uint32_t);
