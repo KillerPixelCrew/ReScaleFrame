@@ -16,8 +16,8 @@ using PresentCallback = void (*)(void*, IDXGISwapChain*) noexcept;
 struct HookPlatform {
     bool (*initialize)() noexcept;
     bool (*create)(HookAddress, HookAddress, HookAddress*) noexcept;
-    HookReason (*enable)(HookAddress) noexcept;
-    void (*disable)(HookAddress) noexcept;
+    bool (*queue)(void*, bool) noexcept;
+    bool (*apply)() noexcept;
 };
 
 extern "C" {
@@ -76,11 +76,10 @@ constexpr HookPlatform platform{
         *out = reinterpret_cast<HookAddress>(original);
         return true;
     },
-    [](HookAddress target) noexcept -> HookReason {
-        const auto status = MH_EnableHook(reinterpret_cast<void*>(target));
-        return status == MH_OK || status == MH_ERROR_ENABLED ? nullptr : MH_StatusToString(status);
+    [](void* target, bool enable) noexcept {
+        return (enable ? MH_QueueEnableHook(target) : MH_QueueDisableHook(target)) == MH_OK;
     },
-    [](HookAddress target) noexcept { (void)MH_DisableHook(reinterpret_cast<void*>(target)); },
+    []() noexcept { return MH_ApplyQueued() == MH_OK; },
 };
 
 struct Collector {

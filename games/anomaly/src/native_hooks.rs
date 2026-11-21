@@ -14,6 +14,8 @@ const AMD64: u16 = 0x8664;
 const PE32_PLUS: u16 = 0x20b;
 
 type Address = *mut c_void;
+type Queue = unsafe extern "C" fn(Address, bool) -> bool;
+type Apply = unsafe extern "C" fn() -> bool;
 
 #[repr(C)]
 struct Site {
@@ -56,8 +58,8 @@ struct Platform {
     initialize: unsafe extern "C" fn() -> bool,
     create: unsafe extern "C" fn(Address, Address, *mut Address) -> bool,
     remove_unqueued: unsafe extern "C" fn(Address),
-    queue: unsafe extern "C" fn(Address, bool) -> bool,
-    apply: unsafe extern "C" fn() -> bool,
+    queue: Queue,
+    apply: Apply,
 }
 
 fn matching_image(platform: &Platform, module: Address, image_size: u32) -> bool {
@@ -168,38 +170,54 @@ impl Batch {
         if self.enabled {
             return true;
         }
-        let queued = self.targets[..self.count]
-            .iter()
-            .all(|&target| unsafe { (platform.queue)(target, true) });
-        if queued && unsafe { (platform.apply)() } {
-            self.enabled = true;
-            return true;
-        }
-        // Cancel any enables queued before the error and undo any patch applied
-        // before MinHook stopped. Apply can also redirect a suspended thread into
-        // an original even if its patch fails. Keep every published trampoline.
-        self.disable(platform);
-        false
+        self.enabled = enable_batch(
+            &self.targets[..self.count],
+            platform.queue,
+            platform.apply,
+            || {},
+        );
+        self.enabled
     }
 
     fn disable(&mut self, platform: &Platform) -> bool {
         self.enabled = false;
-        let mut queued_all = true;
-        for &target in &self.targets[..self.count] {
-            // MinHook can refuse to queue only when the target has no entry.
-            // Still reset and apply the queue for the rest of the batch.
-            queued_all &= unsafe { (platform.queue)(target, false) };
-        }
-        let applied = unsafe { (platform.apply)() };
-        queued_all && applied
+        disable_batch(&self.targets[..self.count], platform.queue, platform.apply)
     }
+}
+
+// The caller holds the MinHook transaction through activation and rollback.
+pub(super) fn enable_batch(
+    targets: &[Address],
+    queue: Queue,
+    apply: Apply,
+    before_rollback: impl FnOnce(),
+) -> bool {
+    let queued = targets.iter().all(|&target| unsafe { queue(target, true) });
+    if queued && unsafe { apply() } {
+        return true;
+    }
+    before_rollback();
+    // Apply may have redirected a suspended thread into a trampoline even when
+    // patching failed. Cancel and undo the batch without removing its originals.
+    disable_batch(targets, queue, apply);
+    false
+}
+
+fn disable_batch(targets: &[Address], queue: Queue, apply: Apply) -> bool {
+    let mut queued_all = true;
+    for &target in targets {
+        // Reset the rest of the queue even if one target has no entry.
+        queued_all &= unsafe { queue(target, false) };
+    }
+    let applied = unsafe { apply() };
+    queued_all && applied
 }
 
 // MH_ApplyQueued drains the MinHook instance's entire queue. Hold this lock
 // from the first queue operation through apply and its rollback, across all sets.
 static TRANSACTION: Mutex<()> = Mutex::new(());
 
-fn transaction() -> MutexGuard<'static, ()> {
+pub(super) fn transaction() -> MutexGuard<'static, ()> {
     TRANSACTION.lock().unwrap_or_else(PoisonError::into_inner)
 }
 

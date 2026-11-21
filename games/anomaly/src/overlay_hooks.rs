@@ -3,6 +3,10 @@ use std::cell::Cell;
 use std::ffi::{c_char, c_void};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
+use crate::native_hooks::{enable_batch, transaction};
+
+const MAX_HOOKS: usize = 32;
+
 type Reason = *const c_char;
 type Address = usize;
 type SinkCallback = unsafe extern "C" fn(*mut c_void, *mut c_void);
@@ -14,8 +18,8 @@ type Probe = unsafe extern "C" fn(*mut c_void, Add, *mut Reason) -> bool;
 struct Platform {
     initialize: unsafe extern "C" fn() -> bool,
     create: unsafe extern "C" fn(Address, Address, *mut Address) -> bool,
-    enable: unsafe extern "C" fn(Address) -> Reason,
-    disable: unsafe extern "C" fn(Address),
+    queue: unsafe extern "C" fn(*mut c_void, bool) -> bool,
+    apply: unsafe extern "C" fn() -> bool,
 }
 
 #[derive(Clone, Copy)]
@@ -113,23 +117,21 @@ impl Hooks {
         }
 
         // Publish the complete table and binding before the first enabled detour can run.
-        let end = {
+        let _transaction = transaction();
+        let mut targets = [std::ptr::null_mut(); MAX_HOOKS];
+        let count = {
             let mut state = self.state();
             state.publish(binding, true);
-            state.hooks.len()
-        };
-        for index in first..end {
-            let target = self.state().hooks[index].target;
-            let refusal = unsafe { (platform.enable)(target) };
-            if !refusal.is_null() {
-                self.state().publish(binding, false);
-                for index in first..end {
-                    let target = self.state().hooks[index].target;
-                    unsafe { (platform.disable)(target) };
-                }
-                // An already-entered detour can still read its original after DisableHook.
-                return Err(refusal);
+            let batch = &state.hooks[first..];
+            for (out, hook) in targets.iter_mut().zip(batch) {
+                *out = std::ptr::with_exposed_provenance_mut(hook.target);
             }
+            batch.len()
+        };
+        if !enable_batch(&targets[..count], platform.queue, platform.apply, || {
+            self.state().publish(binding, false);
+        }) {
+            return Err(c"MinHook refused to enable the overlay hook batch".as_ptr());
         }
         Ok(())
     }
@@ -166,7 +168,7 @@ unsafe extern "C" fn add(
                 return true;
             }
             Err(c"two different methods share one code address")
-        } else if state.hooks.len() == 32 {
+        } else if state.hooks.len() == MAX_HOOKS {
             Err(c"hook table is full")
         } else {
             Ok(())
@@ -301,7 +303,7 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::ffi::CStr;
-    use std::ptr::{null, null_mut};
+    use std::ptr::null_mut;
 
     thread_local! {
         static CALLS: RefCell<Vec<(char, Address)>> = const { RefCell::new(Vec::new()) };
@@ -317,17 +319,20 @@ mod tests {
         true
     }
 
-    unsafe extern "C" fn enable(target: Address) -> Reason {
-        CALLS.with_borrow_mut(|calls| calls.push(('e', target)));
-        if target == 22 {
-            c"enable refused".as_ptr()
-        } else {
-            null()
-        }
+    unsafe extern "C" fn queue(target: *mut c_void, enable: bool) -> bool {
+        CALLS.with_borrow_mut(|calls| calls.push((if enable { 'e' } else { 'd' }, target.addr())));
+        true
     }
 
-    unsafe extern "C" fn disable(target: Address) {
-        CALLS.with_borrow_mut(|calls| calls.push(('d', target)));
+    unsafe extern "C" fn apply() -> bool {
+        CALLS.with_borrow_mut(|calls| {
+            calls.push(('a', 0));
+            calls
+                .iter()
+                .filter(|(operation, _)| *operation == 'a')
+                .count()
+                != 2
+        })
     }
 
     unsafe extern "C" fn input(registration: *mut c_void, add: Add, reason: *mut Reason) -> bool {
@@ -349,8 +354,8 @@ mod tests {
         let platform = Platform {
             initialize,
             create,
-            enable,
-            disable,
+            queue,
+            apply,
         };
         assert!(HOOKS.install(Binding::Input(9), &platform, input).is_ok());
         assert!(HOOKS.install(Binding::Input(9), &platform, input).is_ok());
@@ -360,7 +365,10 @@ mod tests {
             user: 0,
         });
         let refusal = HOOKS.install(binding, &platform, present).unwrap_err();
-        assert_eq!(unsafe { CStr::from_ptr(refusal) }, c"enable refused");
+        assert_eq!(
+            unsafe { CStr::from_ptr(refusal) },
+            c"MinHook refused to enable the overlay hook batch"
+        );
         assert!(HOOKS.state().sink.is_none());
         assert_eq!(rsf_anomaly_overlay_input_gate(), 9);
         assert_eq!(rsf_anomaly_overlay_original(11), 111);
@@ -371,12 +379,15 @@ mod tests {
             [
                 ('c', 11),
                 ('e', 11),
+                ('a', 0),
                 ('c', 21),
                 ('c', 22),
                 ('e', 21),
                 ('e', 22),
+                ('a', 0),
                 ('d', 21),
-                ('d', 22)
+                ('d', 22),
+                ('a', 0)
             ]
         );
         HOOKS.state().publish(binding, true);
@@ -384,6 +395,6 @@ mod tests {
             rsf_anomaly_overlay_before_present(null_mut(), 1);
             rsf_anomaly_overlay_before_present(null_mut(), 0);
         }
-        assert_eq!(CALLS.with_borrow(|calls| calls.len()), 9);
+        assert_eq!(CALLS.with_borrow(|calls| calls.len()), 12);
     }
 }

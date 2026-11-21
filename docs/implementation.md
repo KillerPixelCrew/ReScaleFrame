@@ -152,6 +152,25 @@ adapter hashes and separate logs are in the `merged-hook-set-standard`
 and `merged-hook-set-avx` directories under
 `.local/anomaly/staging/live-58fe95a-stage5/evidence/`.
 
+The overlay now activates and rolls back its hooks through the same
+serialized MinHook batch as the engine hooks. The registry still owns
+its trampoline lookup and callback routing. A refused apply clears
+only the overlay binding for that batch and keeps its originals. The
+synthetic fixture checks rollback and the retained input batch. All
+371 pinned Rust tests and nine MSVC Release contracts passed. The
+adapter exports and dynamic Runtime lookup match the baseline.
+
+The first Standard run remained on the loading screen after an input
+attempt and timed out. A retry with the same binaries and no input
+during loading resized and exited normally, with 1,769 DLSS
+evaluations and zero refusals. The AVX run opened and closed the
+overlay after gameplay began, turned the camera with the mouse, and
+drew all 360 visible overlay frames. It resized to 1600×900, recorded
+240 vendor presents per 120 source frames, and exited normally after
+2,489 DLSS evaluations with zero refusals. The failed run and both
+successful run receipts are under
+`.local/anomaly/staging/live-58fe95a-stage5/evidence/shared-hook-batch-*`.
+
 Anomaly's cold entry and startup retry state now live in Rust. The
 entry borrows the Runtime already loaded by the thin carrier. A partial
 session refuses before changing stage setup, and retrying an unfinished
