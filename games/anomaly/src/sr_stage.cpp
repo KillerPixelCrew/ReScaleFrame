@@ -70,14 +70,6 @@ static_assert(static_cast<uint8_t>(Refusal::Prepare) == 2 && static_cast<uint8_t
 static_assert(DXGI_FORMAT_R16G16B16A16_FLOAT == 10 && RSF_DUMP_VIEW_HDR == 3 && RSF_DUMP_VIEW_DEPTH == 4 &&
     RSF_DUMP_VIEW_DENSE_MOTION == 7 && RSF_PHASE_RENDER_SUBMIT == 2 && RSF_SCREEN_UNKNOWN == 0);
 namespace {
-// ---- log --------------------------------------------------------------------------------------------------------
-// The log of the accepted configuration (the configured leaf), for the D3D11 host's messages.
-rsf_game_log_fn log_fn{};
-void* log_user{};
-void say(const char* message) noexcept {
-    if (log_fn) try { log_fn(log_user, message); } catch (...) {}
-}
-
 // ---- engine memory ------------------------------------------------------------------------------------------
 std::byte* image{};
 // The exact build install() was given (build_profile.h). Set together with `image`; until then every read fails on the
@@ -160,8 +152,17 @@ uint32_t twin_refs(void* raw) {
 }
 
 // ---- the D3D11/engine host behind the swap controller --------------------------------------------------------
+struct TwinLog {
+    rsf_anomaly_sr_log callback{};
+    void* user{};
+    void say(const char* message) const noexcept {
+        if (callback) try { callback(user, message); } catch (...) {}
+    }
+};
+
 struct Host final : SwapHost {
     rsf_sr_stage_resources* resources{};
+    const TwinLog* twin_log{}; // borrowed only while controller.prepare() runs
     // While controller.seam() runs: the Rust scope lent by the seam call, and the seam being closed.
     void* cookie{};
     const UpscaleViews* seam_views{};
@@ -177,13 +178,14 @@ struct Host final : SwapHost {
     ID3D11Device* device() noexcept { ID3D11Device* value{}; return read_global(srp().hw_device_rva, value) ? value : nullptr; }
     ID3D11DeviceContext* context() noexcept { ID3D11DeviceContext* value{}; return read_global(srp().hw_context_rva, value) ? value : nullptr; }
     MakeResult make_twins(const TwinRequest& request, TwinSet& out) noexcept override {
+        const auto log = twin_log ? *twin_log : TwinLog{};
         auto* d3d = device();
-        if (!d3d) { say("Anomaly SR stage: HW.pDevice is null; twins not created."); return MakeResult::Failed; }
+        if (!d3d) { log.say("Anomaly SR stage: HW.pDevice is null; twins not created."); return MakeResult::Failed; }
         rsf_sr_twin_batch_info info{};
         const auto result = static_cast<MakeResult>(
-            rsf_anomaly_sr_stage_make_twins(&resources, &d3d11_platform(), d3d, &request, &out, &info, log_fn, log_user));
+            rsf_anomaly_sr_stage_make_twins(&resources, &d3d11_platform(), d3d, &request, &out, &info, log.callback, log.user));
         if (info.pass_refused) {
-            say(request.stage == 1 ? "Anomaly SR stage: round-trip shader could not be created."
+            log.say(request.stage == 1 ? "Anomaly SR stage: round-trip shader could not be created."
                 : "Anomaly SR stage: upscale shader could not be created.");
             return result;
         }
@@ -202,7 +204,7 @@ struct Host final : SwapHost {
                 std::snprintf(text, sizeof(text), "Anomaly SR stage: HW.pBaseRT stand-in refused (%s) at %ux%u.",
                     error, request.render_width, request.render_height);
             }
-            say(text);
+            log.say(text);
             return result;
         }
         if (request.stage == 1)
@@ -213,7 +215,7 @@ struct Host final : SwapHost {
                 "Anomaly SR stage 2: %u world twins, a depth twin and a HW.pBaseRT stand-in created at render %ux%u for output %ux%u (%.1f MiB).",
                 info.made, request.render_width, request.render_height, request.output_width, request.output_height,
                 double(info.bytes) / (1024.0 * 1024.0));
-        say(text);
+        log.say(text);
         return MakeResult::Created;
     }
     void drop_twins() noexcept override {
@@ -466,7 +468,7 @@ const rsf_anomaly_sr_stage_platform platform{
     .geometry_active = [] { return geometry::geometry_hooks_active(); },
     .build_sha256 = []() -> const char* { return build ? build->sha256 : ""; },
     .close_stale = [] { controller.close_stale(); },
-    .prepare = [](const rsf_anomaly_sr_frame_facts* in) {
+    .prepare = [](const rsf_anomaly_sr_frame_facts* in, rsf_anomaly_sr_log log, void* user) {
         FrameFacts facts{};
         facts.render_target = static_cast<std::byte*>(in->render_target);
         facts.backend = static_cast<std::byte*>(in->backend);
@@ -493,7 +495,12 @@ const rsf_anomaly_sr_stage_platform platform{
         facts.mip_bias = in->mip_bias;
         facts.mip_bias_delta = in->mip_bias_delta;
         facts.sampler_bias = static_cast<std::byte*>(in->sampler_bias);
-        return controller.prepare(facts);
+        const TwinLog call_log{log, user};
+        const auto* previous = host.twin_log;
+        host.twin_log = &call_log;
+        const bool prepared = controller.prepare(facts);
+        host.twin_log = previous;
+        return prepared;
     },
     .prepared = [] { controller.prepared(); },
     .seam = [](void* cookie) {
@@ -646,8 +653,6 @@ const rsf_anomaly_sr_stage_platform platform{
         return attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_DIRECTORY);
     },
     .configured = [](rsf_anomaly_sr_log log, void* user, const rsf_anomaly_sr_driver_config* config) {
-        log_fn = log;
-        log_user = user;
         if (config) driver.configure(*config, log, user);
     },
 };

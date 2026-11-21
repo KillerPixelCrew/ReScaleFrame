@@ -258,7 +258,7 @@ typedef struct rsf_anomaly_sr_stage_platform {
     const char* (*build_sha256)(void);
     // SwapController (sr_swap.h).
     void (*close_stale)(void);
-    bool (*prepare)(const rsf_anomaly_sr_frame_facts*);
+    bool (*prepare)(const rsf_anomaly_sr_frame_facts*, rsf_anomaly_sr_log, void* log_user);
     void (*prepared)(void);
     bool (*seam)(void* cookie);
     void (*combine_end)(void);

@@ -1611,7 +1611,7 @@ impl Stage {
         }
         let (sample, reset) = self.choose_jitter(state, &mut facts);
         state.prepared_this_frame = true;
-        let swapped = leaf!(p, prepare(&facts));
+        let swapped = leaf!(p, prepare(&facts, state.log, state.log_user.0));
         if sr_inputs(state.config.stage) {
             let twin_drops = self.counters().twin_drops;
             if state.twin_drops != twin_drops {

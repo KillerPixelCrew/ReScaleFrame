@@ -4,6 +4,12 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Anomaly's SR stage lends its logger through the private prepare call.
+The native twin-allocation host uses it for that synchronous operation
+and the Rust configuration keeps the stored callback. The private
+binding was regenerated. Source review and formatting checks passed.
+Native validation remains open.
+
 The FidelityFX version parser feeds the Rust selector. The unused
 native selection loop was removed. The shared HLSL compiler helper
 now releases compiler blobs before unloading the module even if

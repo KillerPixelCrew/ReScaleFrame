@@ -981,7 +981,11 @@ pub struct rsf_anomaly_sr_stage_platform {
     pub build_sha256: ::core::option::Option<unsafe extern "C" fn() -> *const ::core::ffi::c_char>,
     pub close_stale: ::core::option::Option<unsafe extern "C" fn()>,
     pub prepare: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *const rsf_anomaly_sr_frame_facts) -> bool,
+        unsafe extern "C" fn(
+            arg1: *const rsf_anomaly_sr_frame_facts,
+            arg2: rsf_anomaly_sr_log,
+            log_user: *mut ::core::ffi::c_void,
+        ) -> bool,
     >,
     pub prepared: ::core::option::Option<unsafe extern "C" fn()>,
     pub seam:

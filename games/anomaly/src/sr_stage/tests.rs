@@ -89,7 +89,11 @@ unsafe extern "C" fn controller(out: *mut rsf_anomaly_sr_controller) {
         })
     };
 }
-unsafe extern "C" fn prepare(facts: *const rsf_anomaly_sr_frame_facts) -> bool {
+unsafe extern "C" fn prepare(
+    facts: *const rsf_anomaly_sr_frame_facts,
+    _: rsf_anomaly_sr_log,
+    _: *mut c_void,
+) -> bool {
     let facts = unsafe { &*facts };
     record(format!(
         "prepare stage={} jitter={} render={}x{}",
