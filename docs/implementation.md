@@ -275,6 +275,13 @@ its source, submission and scope again before the synchronous handoff.
 Native leaves retain the exact typed D3D11 and Runtime calls. Source
 comparison passed. Build and live producer verification remain open.
 
+Rust now verifies Skyrim's Community Shaders 1.9.1 fingerprint, PE
+section bounds and six guarded entry sites. It also checks the cold
+device and feature state and carries the exact HDR caller and arguments
+through nested callbacks. The native code keeps the file mapping,
+initializer transaction and typed detours. Source comparison matched
+all bytes and profile fields. Build and live coexistence remain open.
+
 Unity package D3D12 SR contexts and their recording slots are Rust-owned.
 The existing Unity bridge still provides recording and completion facts.
 The view owner preserves reconfiguration, spatial fallback and retirement

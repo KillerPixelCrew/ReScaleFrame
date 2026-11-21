@@ -7,6 +7,7 @@
 //! exception guards and the C++ render, CPU and compatibility subsystems.
 mod auxiliary;
 mod camera;
+mod compatibility;
 mod creation;
 mod layout;
 mod observers;

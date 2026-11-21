@@ -3,7 +3,7 @@
 #include <rescaleframe/sha256_file.h>
 #include <MinHook.h>
 #include <windows.h>
-#include <array>
+#include <cstddef>
 #include <atomic>
 #include <cstdint>
 #include <cstring>
@@ -14,10 +14,42 @@
 #include <intrin.h>
 #endif
 
+extern "C" {
+using ProfileRead = bool (*)(uintptr_t, void*, size_t);
+struct rsf_skyrim_cs_detour_sites { uintptr_t configure, initialize, hdr_process; };
+struct rsf_skyrim_cs_hdr_call {
+    uintptr_t caller, manager, argument4;
+    uint32_t input, output;
+    uint8_t argument5;
+};
+struct rsf_skyrim_cs_hdr_scope {
+    rsf_skyrim_cs_hdr_call call;
+    bool primary, active;
+};
+
+bool rsf_skyrim_cs_hash_matches(const char*, size_t) noexcept;
+bool rsf_skyrim_cs_profile(const unsigned char*, size_t, uintptr_t, ProfileRead) noexcept;
+rsf_skyrim_cs_detour_sites rsf_skyrim_cs_sites() noexcept;
+bool rsf_skyrim_cs_before_device(uintptr_t game, ProfileRead) noexcept;
+bool rsf_skyrim_cs_features_inactive(uintptr_t module, bool check_hdr, ProfileRead) noexcept;
+uintptr_t rsf_skyrim_cs_excluded_byte(uintptr_t module, uintptr_t feature) noexcept;
+void rsf_skyrim_cs_hdr_enter(uintptr_t game, const rsf_skyrim_cs_hdr_call*, rsf_skyrim_cs_hdr_scope*) noexcept;
+void rsf_skyrim_cs_hdr_leave(const rsf_skyrim_cs_hdr_scope*) noexcept;
+bool rsf_skyrim_cs_postprocess_allowed(uintptr_t game, uintptr_t module, bool excluded,
+    const rsf_skyrim_cs_hdr_call*, ProfileRead) noexcept;
+}
+
+static_assert(sizeof(rsf_skyrim_cs_detour_sites) == 24);
+static_assert(sizeof(rsf_skyrim_cs_hdr_call) == 40 && offsetof(rsf_skyrim_cs_hdr_call, argument5) == 32);
+static_assert(sizeof(rsf_skyrim_cs_hdr_scope) == 48);
+static_assert(sizeof(IMAGE_DOS_HEADER) == 64 && offsetof(IMAGE_DOS_HEADER, e_lfanew) == 0x3c);
+static_assert(sizeof(IMAGE_NT_HEADERS64) == 264 && sizeof(IMAGE_OPTIONAL_HEADER64) == 240);
+static_assert(offsetof(IMAGE_NT_HEADERS64, OptionalHeader) == 24 &&
+    offsetof(IMAGE_OPTIONAL_HEADER64, SizeOfImage) == 56);
+static_assert(sizeof(IMAGE_SECTION_HEADER) == 40 && offsetof(IMAGE_SECTION_HEADER, Characteristics) == 36);
+
 namespace rsf::skyrim {
 namespace {
-constexpr char release_hash[] = "10ba95e6b1cd6b675ce74d1d681fae41e667bdd8b7b5ba8c362e657511097827";
-constexpr DWORD image_size = 0x144b000;
 using Resolve = decltype(&GetProcAddress);
 using Initialize = bool (*)(const void*);
 using Configure = void (*)(void*, void*);
@@ -34,17 +66,6 @@ std::atomic<Initialize> initialize_original{};
 enum class State { unarmed, armed, captured, initializing, excluded, refused };
 std::atomic<State> state{State::unarmed};
 std::atomic<const char*> detail{};
-constexpr uintptr_t upscaling = 0x13dcf40;
-constexpr uintptr_t hdr_display = 0x13dcda0;
-constexpr uintptr_t streamline = 0xfd9160;
-struct HdrScope {
-    void* manager;
-    uint32_t input, output;
-    uintptr_t argument4;
-    uint8_t argument5;
-    bool primary;
-};
-thread_local HdrScope* hdr_scope{};
 bool initialize(const void*);
 FARPROC WINAPI resolve(HMODULE, LPCSTR);
 void hdr_process(void*, uint32_t, uint32_t, uintptr_t, uint8_t);
@@ -52,32 +73,16 @@ bool read(uintptr_t address, void* output, size_t size) noexcept {
     SIZE_T count{};
     return ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(address), output, size, &count) && count == size;
 }
-bool dormant(uintptr_t base) noexcept {
-    unsigned char flags[3]{};
-    return read(base + streamline, flags, sizeof(flags)) && !flags[0] && !flags[1] && !flags[2];
-}
 bool fail(const char* reason) noexcept {
     detail.store(reason, std::memory_order_release);
     state.store(State::refused, std::memory_order_release); return false;
 }
-struct Guard { DWORD rva; std::array<unsigned char, 19> bytes; };
-constexpr std::array<Guard, 6> guards{{
-    {0x3a4b30, {0x48,0x89,0x54,0x24,0x10,0x48,0x89,0x4c,0x24,0x08,0x53,0x56,0x57,0x41,0x54,0x41,0x55,0x41,0x56}},
-    {0x4f9380, {0x48,0x83,0xec,0x48,0x48,0x8d,0x05,0xad,0x61,0x21,0x00,0x48,0xc7,0x44,0x24,0x28,0x1d,0x00,0x00}},
-    {0x4f8ed0, {0x40,0x55,0x53,0x56,0x57,0x41,0x56,0x48,0x8b,0xec,0x48,0x81,0xec,0x80,0x00,0x00,0x00,0x48,0x8d}},
-    {0x4f7030, {0x48,0x89,0x6c,0x24,0x10,0x48,0x89,0x74,0x24,0x18,0x57,0x48,0x83,0xec,0x60,0x80,0x3d,0x1d,0x21}},
-    {0x631800, {0x48,0x89,0x5c,0x24,0x08,0x55,0x56,0x57,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57,0x48,0x8d,0xac}},
-    {0x45cbd0, {0x40,0x53,0x55,0x56,0x57,0x48,0x83,0xec,0x38,0x48,0x8b,0xe9,0x49,0x8b,0xd9,0x48,0x8d,0x0d,0xba}}
-}};
 struct Module { HMODULE value{}; ~Module() { if (value) FreeLibrary(value); } };
 struct File { HANDLE value{INVALID_HANDLE_VALUE}; ~File() { if (value != INVALID_HANDLE_VALUE) CloseHandle(value); } };
 struct Mapping { HANDLE value{}; ~Mapping() { if (value) CloseHandle(value); } };
 struct View { const void* value{}; ~View() { if (value) UnmapViewOfFile(value); } };
 bool before_device() noexcept {
-    uintptr_t owner{}, device{};
-    const auto game = uintptr_t(GetModuleHandleW(nullptr));
-    return read(game + 0x3330188, &owner, sizeof(owner)) &&
-        (!owner || (read(owner + 56, &device, sizeof(device)) && !device));
+    return rsf_skyrim_cs_before_device(uintptr_t(GetModuleHandleW(nullptr)), read);
 }
 bool retain_cs(const char* reason, Initialize original, const void* argument) {
     fail(reason);
@@ -86,59 +91,20 @@ bool retain_cs(const char* reason, Initialize original, const void* argument) {
     // owner. Late loading remains refused; never start a second live owner.
     return original && before_device() ? original(argument) : false;
 }
-struct Image {
-    const unsigned char* bytes{};
-    size_t size{};
-    bool read(size_t offset, void* output, size_t count) const noexcept {
-        if (offset > size || count > size - offset) return false;
-        std::memcpy(output, bytes + offset, count); return true;
-    }
-    bool validate() const noexcept {
-        IMAGE_DOS_HEADER dos{}; IMAGE_NT_HEADERS64 nt{};
-        if (!read(0, &dos, sizeof(dos)) || dos.e_magic != IMAGE_DOS_SIGNATURE || dos.e_lfanew < 0 ||
-            !read(size_t(dos.e_lfanew), &nt, sizeof(nt)) || nt.Signature != IMAGE_NT_SIGNATURE ||
-            nt.FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64 || nt.FileHeader.TimeDateStamp != 0x6ab51a9f ||
-            nt.FileHeader.SizeOfOptionalHeader != sizeof(IMAGE_OPTIONAL_HEADER64) ||
-            nt.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC || nt.OptionalHeader.SizeOfImage != image_size ||
-            !nt.FileHeader.NumberOfSections || nt.FileHeader.NumberOfSections > 96) return false;
-        const auto sections = size_t(dos.e_lfanew) + sizeof(nt);
-        for (const auto& guard : guards) {
-            bool matched = false;
-            for (unsigned i = 0; i < nt.FileHeader.NumberOfSections; ++i) {
-                IMAGE_SECTION_HEADER section{};
-                if (!read(sections + i * sizeof(section), &section, sizeof(section))) return false;
-                if (guard.rva < section.VirtualAddress) continue;
-                const auto delta = size_t(guard.rva - section.VirtualAddress);
-                if (delta > section.SizeOfRawData || guard.bytes.size() > section.SizeOfRawData - delta) continue;
-                std::array<unsigned char, 19> actual{};
-                if (!read(size_t(section.PointerToRawData) + delta, actual.data(), actual.size()) ||
-                    actual != guard.bytes || !(section.Characteristics & IMAGE_SCN_MEM_EXECUTE)) return false;
-                matched = true; break;
-            }
-            if (!matched) return false;
-        }
-        return true;
-    }
-};
 bool profile(const wchar_t* path, HMODULE module) {
     // Keep a read-only shared handle across hashing/mapping to refuse replacement
     // or a writer during inspection. This never maps the DLL as executable code.
     File file{CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)};
     if (file.value == INVALID_HANDLE_VALUE) return false;
     std::string hash;
-    if (!rsf::sha256_file(path, hash) || hash != release_hash) return false;
+    if (!rsf::sha256_file(path, hash) || !rsf_skyrim_cs_hash_matches(hash.data(), hash.size())) return false;
     LARGE_INTEGER size{};
     if (!GetFileSizeEx(file.value, &size) || size.QuadPart <= 0 || size.QuadPart > 128 * 1024 * 1024) return false;
     Mapping mapping{CreateFileMappingW(file.value, nullptr, PAGE_READONLY, 0, 0, nullptr)};
     if (!mapping.value) return false;
     View view{MapViewOfFile(mapping.value, FILE_MAP_READ, 0, 0, 0)};
-    if (!view.value || !Image{static_cast<const unsigned char*>(view.value), size_t(size.QuadPart)}.validate()) return false;
-    if (module) for (const auto& guard : guards) {
-        std::array<unsigned char, 19> actual{}; SIZE_T count{};
-        if (!ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const unsigned char*>(module) + guard.rva,
-                actual.data(), actual.size(), &count) || count != actual.size() || actual != guard.bytes) return false;
-    }
-    return true;
+    return view.value && rsf_skyrim_cs_profile(static_cast<const unsigned char*>(view.value),
+        size_t(size.QuadPart), uintptr_t(module), read);
 }
 void configure(void* feature, void* json) {
     // Original loads desired settings, including CS's normal validation. Only
@@ -146,8 +112,7 @@ void configure(void* feature, void* json) {
     struct Exclude {
         unsigned char* loaded;
         ~Exclude() { if (loaded) *loaded = 0; }
-    } exclusion{uintptr_t(feature) == uintptr_t(cs_module.load()) + upscaling ?
-        static_cast<unsigned char*>(feature) + 8 : nullptr};
+    } exclusion{reinterpret_cast<unsigned char*>(rsf_skyrim_cs_excluded_byte(uintptr_t(cs_module.load()), uintptr_t(feature)))};
     configure_original(feature, json);
 }
 void hdr_process(void* manager, uint32_t input, uint32_t output, uintptr_t argument4, uint8_t argument5) {
@@ -156,13 +121,12 @@ void hdr_process(void* manager, uint32_t input, uint32_t output, uintptr_t argum
 #else
     const auto caller = uintptr_t(__builtin_return_address(0));
 #endif
-    HdrScope scope{manager, input, output, argument4, argument5,
-        !hdr_scope && caller == uintptr_t(GetModuleHandleW(nullptr)) + 0x153adec};
+    const rsf_skyrim_cs_hdr_call call{caller, uintptr_t(manager), argument4, input, output, argument5};
     struct Restore {
-        HdrScope* previous;
-        ~Restore() { hdr_scope = previous; }
-    } restore{hdr_scope};
-    hdr_scope = &scope;
+        rsf_skyrim_cs_hdr_scope saved{};
+        ~Restore() { rsf_skyrim_cs_hdr_leave(&saved); }
+    } restore;
+    rsf_skyrim_cs_hdr_enter(uintptr_t(GetModuleHandleW(nullptr)), &call, &restore.saved);
     // CS owns RedirectFramebuffer -> original ProcessMain -> RestoreFramebuffer.
     // Keep its fifth stack byte unchanged; do not implement either side ourselves.
     hdr_original(manager, input, output, argument4, argument5);
@@ -186,21 +150,21 @@ bool initialize(const void* skse) try {
     }
     wchar_t path[32768]{};
     const auto length = GetModuleFileNameW(module, path, DWORD(std::size(path)));
-    unsigned char loaded{};
     // Refuse late takeover after the game already created its renderer/device.
-    if (original != reinterpret_cast<Initialize>(base + 0x631800) ||
+    const auto sites = rsf_skyrim_cs_sites();
+    if (original != reinterpret_cast<Initialize>(base + sites.initialize) ||
         !length || length >= std::size(path) || !profile(path, module) ||
-        !read(base + upscaling + 8, &loaded, sizeof(loaded)) || loaded || !dormant(base) ||
+        !rsf_skyrim_cs_features_inactive(base, false, read) ||
         !before_device())
         return retain_cs("CS profile/dormancy/startup guard failed; RSF withdrawn, original CS retained only before device creation.", original, skse);
     HMODULE pinned{};
     if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
             reinterpret_cast<LPCWSTR>(module), &pinned))
         return retain_cs("CS handover module lifetime unavailable; RSF withdrawn.", original, skse);
-    auto* target = reinterpret_cast<void*>(base + 0x3a4b30);
+    auto* target = reinterpret_cast<void*>(base + sites.configure);
     if (MH_CreateHook(target, reinterpret_cast<void*>(&configure), reinterpret_cast<void**>(&configure_original)) != MH_OK)
         return retain_cs("CS Feature configuration hook unavailable; RSF withdrawn.", original, skse);
-    auto* hdr_target = reinterpret_cast<void*>(base + 0x45cbd0);
+    auto* hdr_target = reinterpret_cast<void*>(base + sites.hdr_process);
     const bool hdr_created = MH_CreateHook(hdr_target, reinterpret_cast<void*>(&hdr_process), reinterpret_cast<void**>(&hdr_original)) == MH_OK;
     if (!hdr_created ||
         MH_EnableHook(target) != MH_OK || MH_EnableHook(hdr_target) != MH_OK) {
@@ -212,7 +176,7 @@ bool initialize(const void* skse) try {
     // No adapter lock is held across the original initializer. Its other features
     // and core D3D fallback execute normally; no CS SDK entry is called by RSF.
     const bool result = original && original(skse);
-    if (!result || !read(base + upscaling + 8, &loaded, sizeof(loaded)) || loaded || !dormant(base)) {
+    if (!result || !rsf_skyrim_cs_features_inactive(base, false, read)) {
         fail("CS handover refused: original initialization failed or Upscaling exclusion was lost.");
         if (const auto withdraw = withdraw_source.load(std::memory_order_acquire)) withdraw();
         return result; // Never make SKSE discard a CS initializer that already installed core hooks.
@@ -317,11 +281,8 @@ bool compatibility_checkpoint(const char*& refusal, void (*withdraw)() noexcept)
 bool compatibility_render_allowed() noexcept {
     const auto module = GetModuleHandleW(L"CommunityShaders.dll");
     if (!module) return state.load(std::memory_order_acquire) != State::refused;
-    unsigned char loaded{}, hdr{};
-    const auto base = uintptr_t(module);
     return state.load(std::memory_order_acquire) == State::excluded && module == cs_module.load() &&
-        read(base + upscaling + 8, &loaded, sizeof(loaded)) && !loaded && dormant(base) &&
-        read(base + hdr_display + 8, &hdr, sizeof(hdr)) && !hdr;
+        rsf_skyrim_cs_features_inactive(uintptr_t(module), true, read);
 }
 const char* compatibility_status() noexcept {
     if (state.load(std::memory_order_acquire) == State::excluded && !compatibility_render_allowed())
@@ -332,17 +293,8 @@ const char* compatibility_status() noexcept {
 }
 bool compatibility_postprocess_call(uintptr_t caller, void* manager, uint32_t input, uint32_t output,
     uintptr_t argument4, uint8_t argument5) noexcept {
-    const auto game = uintptr_t(GetModuleHandleW(nullptr));
-    if (!hdr_scope) return caller == game + 0x153adec;
-    const auto base = uintptr_t(cs_module.load());
-    uintptr_t original{};
-    constexpr unsigned char expected_call[]{0xff,0x15,0x33,0x20,0xfa,0x00};
-    unsigned char actual_call[sizeof(expected_call)]{};
-    return state.load(std::memory_order_acquire) == State::excluded && hdr_scope->primary &&
-        caller == base + 0x45cc0d && manager == hdr_scope->manager && input == hdr_scope->input &&
-        output == hdr_scope->output && argument4 == hdr_scope->argument4 && argument5 == hdr_scope->argument5 &&
-        read(base + 0x45cc07, actual_call, sizeof(actual_call)) &&
-        !std::memcmp(actual_call, expected_call, sizeof(actual_call)) &&
-        read(base + 0x13fec40, &original, sizeof(original)) && original == game + 0x14edbf0;
+    const rsf_skyrim_cs_hdr_call call{caller, uintptr_t(manager), argument4, input, output, argument5};
+    return rsf_skyrim_cs_postprocess_allowed(uintptr_t(GetModuleHandleW(nullptr)), uintptr_t(cs_module.load()),
+        state.load(std::memory_order_acquire) == State::excluded, &call, read);
 }
 }

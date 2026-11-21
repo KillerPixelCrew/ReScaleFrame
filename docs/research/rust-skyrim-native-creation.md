@@ -107,10 +107,9 @@ Still C++ in `rsf_game_skyrim_se`, in suggested order:
    `session.rs` now owns the lifecycle; see "Session lifecycle" below. Still C++ in
    `plugin.cpp`: the five typed observer detours, their engine facts (TAA bypass bytes,
    presentation binding read, bounded diagnostics) and the window-class policy.
-2. `compatibility.cpp`: Community Shaders 1.9.1 handover (DLL SHA-256 `10ba95e6...097827`, PE image
-   validation, six guard sites, `GetProcAddress` interception of `SKSEPlugin_Load`, Feature
-   configure `+3a4b30` and HDR `+45cbd0` hooks, state machine, pre-device retention and the
-   post-process call scope).
+2. `compatibility.cpp` still owns the `GetProcAddress` interception of `SKSEPlugin_Load`
+   and initializer transaction. `compatibility.rs` owns the Community Shaders 1.9.1
+   profile, guarded feature state, cold-device check and HDR caller scope.
 3. `cpu_events.cpp` with `input_ownership.h` and `screen_classification.h`: CPU frame, input
    ownership, prospective source and screen classification (one hook, about forty RVAs). Its
    fixture `tests/skyrim_input.cpp` compiles the source directly.
@@ -189,6 +188,23 @@ frame and source/submission/scope recheck, before the engine mutates
 the inputs. Null devices now refuse, and guarded reads cover the
 viewport diagnostic. Source comparison matched the existing pass fields,
 mask formats and native addresses. Build and live replay remain open.
+
+## Community Shaders profile and HDR caller
+
+Rust checks the release SHA-256, PE machine, timestamp, image size and
+six executable section probes, followed by their corresponding loaded
+bytes when a module is present. The native read-only mapping and share
+mode span the hash and copy as before. The parser now requires a complete
+section table and checks address arithmetic. Feature and device checks use
+the same guard reads. The typed HDR detour still captures the native return
+address and calls the original with all arguments intact. A Rust thread-local
+scope preserves the caller and five arguments through nested callbacks.
+The initializer state, path discovery and MinHook operations remain native.
+[Guard and initialization evidence](skyrim-cs-handover-20261115.md)
+
+The source comparison matched the fingerprint, six byte sequences, all
+HDR call bytes and offsets, file effects and private layouts. Builds and
+live handover verification remain open.
 
 ## Sampler hook
 
