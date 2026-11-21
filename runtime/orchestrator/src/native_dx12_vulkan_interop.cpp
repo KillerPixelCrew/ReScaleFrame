@@ -10,6 +10,7 @@
 namespace dx12vk_platform {
 static_assert(VK_FORMAT_B8G8R8A8_UNORM == 44 && VK_FORMAT_R16G16_SFLOAT == 83 && VK_FORMAT_R32_SFLOAT == 100);
 static_assert(VK_ERROR_OUT_OF_HOST_MEMORY == -1 && VK_ERROR_INITIALIZATION_FAILED == -3 &&
+    VK_ERROR_EXTENSION_NOT_PRESENT == -7 &&
     VK_ERROR_INCOMPATIBLE_DRIVER == -9 && VK_ERROR_TOO_MANY_OBJECTS == -10 &&
     VK_ERROR_FORMAT_NOT_SUPPORTED == -11 && VK_ERROR_INVALID_EXTERNAL_HANDLE == -1000072003);
 
@@ -31,6 +32,15 @@ struct Dispatch {
     PFN_vkImportSemaphoreWin32HandleKHR import_semaphore{};
 };
 
+using DispatchEntries = rsf_vk_function[13];
+using Lookup = int32_t (*)(rsf_vk_get_proc, void*, const char*, rsf_vk_function*);
+extern "C" int32_t rsf_core_dx12vk_resolve_procs(const rsf_srvk_setup*, Lookup, DispatchEntries*);
+
+int32_t lookup_proc(rsf_vk_get_proc proc, void* object, const char* name, rsf_vk_function* out) noexcept try {
+    *out = proc(object, name);
+    return VK_SUCCESS;
+} catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
+
 int32_t adapter_luid(const rsf_srvk_setup* setup, uint64_t* luid) noexcept try {
     const auto get = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
         setup->instance_proc(setup->instance, "vkGetPhysicalDeviceProperties2"));
@@ -49,30 +59,25 @@ int32_t open(const rsf_srvk_setup* setup, void** out) noexcept try {
     if (!native) return VK_ERROR_OUT_OF_HOST_MEMORY;
     native->physical = static_cast<VkPhysicalDevice>(setup->physical_device);
     native->device = static_cast<VkDevice>(setup->device);
-#define INSTANCE(field, name) native->field = reinterpret_cast<PFN_##name>(setup->instance_proc(setup->instance, #name))
-#define DEVICE(field, name) native->field = reinterpret_cast<PFN_##name>(setup->device_proc(setup->device, #name))
-    INSTANCE(image_properties, vkGetPhysicalDeviceImageFormatProperties2);
-    INSTANCE(memory_properties, vkGetPhysicalDeviceMemoryProperties);
-    INSTANCE(semaphore_properties, vkGetPhysicalDeviceExternalSemaphoreProperties);
-    DEVICE(create_image, vkCreateImage);
-    DEVICE(destroy_image, vkDestroyImage);
-    DEVICE(image_requirements, vkGetImageMemoryRequirements);
-    DEVICE(handle_properties, vkGetMemoryWin32HandlePropertiesKHR);
-    DEVICE(allocate_memory, vkAllocateMemory);
-    DEVICE(free_memory, vkFreeMemory);
-    DEVICE(bind_image, vkBindImageMemory);
-    DEVICE(create_semaphore, vkCreateSemaphore);
-    DEVICE(destroy_semaphore, vkDestroySemaphore);
-    DEVICE(import_semaphore, vkImportSemaphoreWin32HandleKHR);
-#undef INSTANCE
-#undef DEVICE
-    if (!native->image_properties || !native->memory_properties || !native->semaphore_properties ||
-        !native->create_image || !native->destroy_image || !native->image_requirements ||
-        !native->handle_properties || !native->allocate_memory || !native->free_memory ||
-        !native->bind_image || !native->create_semaphore || !native->destroy_semaphore ||
-        !native->import_semaphore) {
-        return VK_ERROR_EXTENSION_NOT_PRESENT;
-    }
+    DispatchEntries entries{};
+    const auto result = rsf_core_dx12vk_resolve_procs(setup, lookup_proc, &entries);
+    if (result != VK_SUCCESS) return result;
+    const auto& [image_properties, memory_properties, semaphore_properties, create_image, destroy_image,
+        image_requirements, handle_properties, allocate_memory, free_memory, bind_image, create_semaphore,
+        destroy_semaphore, import_semaphore] = entries;
+    native->image_properties = reinterpret_cast<PFN_vkGetPhysicalDeviceImageFormatProperties2>(image_properties);
+    native->memory_properties = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties>(memory_properties);
+    native->semaphore_properties = reinterpret_cast<PFN_vkGetPhysicalDeviceExternalSemaphoreProperties>(semaphore_properties);
+    native->create_image = reinterpret_cast<PFN_vkCreateImage>(create_image);
+    native->destroy_image = reinterpret_cast<PFN_vkDestroyImage>(destroy_image);
+    native->image_requirements = reinterpret_cast<PFN_vkGetImageMemoryRequirements>(image_requirements);
+    native->handle_properties = reinterpret_cast<PFN_vkGetMemoryWin32HandlePropertiesKHR>(handle_properties);
+    native->allocate_memory = reinterpret_cast<PFN_vkAllocateMemory>(allocate_memory);
+    native->free_memory = reinterpret_cast<PFN_vkFreeMemory>(free_memory);
+    native->bind_image = reinterpret_cast<PFN_vkBindImageMemory>(bind_image);
+    native->create_semaphore = reinterpret_cast<PFN_vkCreateSemaphore>(create_semaphore);
+    native->destroy_semaphore = reinterpret_cast<PFN_vkDestroySemaphore>(destroy_semaphore);
+    native->import_semaphore = reinterpret_cast<PFN_vkImportSemaphoreWin32HandleKHR>(import_semaphore);
     *out = native.release();
     return VK_SUCCESS;
 } catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }

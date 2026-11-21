@@ -843,6 +843,12 @@ and remains unrun. Build and live observer verification remain open.
 
 ## Rust orchestrator and first Anomaly port
 
+Vulkan-to-D3D12 interop now admits its required dispatch table in
+Rust. The native capsule binds the same 13 entries after successful
+resolution, with the original lookup order and error status.
+The device fixture remains unrun.
+[Source comparison](rust-migration.md#native-policy-cutover)
+
 The D3D11 host now adopts the outer creation facade in Rust. It
 checks the context and facade identity before transferring the caller's
 reference, and releases any facade returned with a failed wrap. The

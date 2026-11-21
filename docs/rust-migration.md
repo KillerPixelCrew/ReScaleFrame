@@ -246,6 +246,15 @@ device and game paths remain open. [D3D11 adoption](research/rust-d3d11-native-c
 [Command-slot ownership](research/rust-d3d11-present-slots.md) ·
 [FidelityFX FG copy sequence](research/rust-vulkan-ffx-fg-copy-plan.md)
 
+The Vulkan-to-D3D12 interop owner now chooses all 13 required
+instance and device functions in Rust. It preserves lookup order,
+including later lookups after a missing address, and leaves
+the native capsule unpublished on refusal. Typed lookups still
+report exceptions through the original status. Source comparison
+against `aa66153c` matched the names, scopes and slots and left
+the public ABI, image and semaphore calls and device fixture
+unchanged. Pinned formatting and locked Windows metadata passed.
+
 The legacy D3D11 Streamline SR owner now selects the required
 interposer and DLSS feature lookups in Rust. It shares the seven
 common lookups and adds the five owner-only lookups for a session
