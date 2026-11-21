@@ -112,15 +112,15 @@ impl Compiler<'_> {
     }
 }
 
-struct Pass {
+pub(super) struct Pass {
     platform: &'static Platform,
-    kind: u32,
+    pub(super) kind: u32,
     vertex: Lease,
     pixel: Lease,
     constants: Lease,
     states: States,
     temporal: Option<TemporalPass>,
-    device: Lease,
+    pub(super) device: Lease,
 }
 
 // The draw is synchronous. The COM context is borrowed from the calling render
@@ -165,7 +165,7 @@ impl Drop for SavedState<'_> {
 }
 
 impl Pass {
-    fn new(
+    pub(super) fn new(
         platform: &'static Platform,
         device: Ptr,
         kind: u32,
@@ -338,33 +338,6 @@ extern "C" fn rsf_anomaly_sr_create_pass(
 ) -> *mut Pass {
     Pass::new(platform, device, kind, log, user)
         .map_or(null_mut(), |pass| Box::into_raw(Box::new(pass)))
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_ensure_pass(
-    owner: &mut *mut Pass,
-    platform: &'static Platform,
-    device: Ptr,
-    stage: u32,
-    log: Log,
-    user: Ptr,
-) -> u32 {
-    let kind = match stage {
-        1 => ROUND_TRIP,
-        2 => UPSCALE,
-        _ => return 0,
-    };
-    if unsafe { owner.as_ref() }
-        .is_some_and(|pass| pass.device.as_ptr() == device && pass.kind == kind)
-    {
-        return 1;
-    }
-    let replacement = rsf_anomaly_sr_create_pass(platform, device, kind, log, user);
-    if replacement.is_null() {
-        return 0;
-    }
-    rsf_anomaly_sr_drop_pass(std::mem::replace(owner, replacement));
-    1
 }
 
 #[unsafe(no_mangle)]

@@ -30,7 +30,6 @@
 #include <cstring>
 #include <cwchar>
 #include <string_view>
-#include <utility>
 
 namespace rsf { uint32_t texture_pixel_bytes(DXGI_FORMAT format); }
 
@@ -154,10 +153,6 @@ void* staging_copy(void* context, void* source) noexcept {
     return copy.Detach();
 }
 
-void drop_twin_batch(rsf_sr_twin_batch* batch) noexcept {
-    (void)rsf_anomaly_sr_drop_twin_batch(batch, nullptr);
-}
-
 uint32_t twin_refs(void* raw) {
     auto* texture = static_cast<ID3D11Texture2D*>(raw);
     texture->AddRef();
@@ -166,17 +161,17 @@ uint32_t twin_refs(void* raw) {
 
 // ---- the D3D11/engine host behind the swap controller --------------------------------------------------------
 struct Host final : SwapHost {
-    RustOwner<rsf_sr_twin_batch, drop_twin_batch> twins;
-    void* depth_texture{};
-    rsf_sr_pass* pass{};
-    uint64_t last_drop_refs{};
-    uint64_t twin_bytes{};
+    rsf_sr_stage_resources* resources{};
     // While controller.seam() runs: the Rust scope lent by the seam call, and the seam being closed.
     void* cookie{};
     const UpscaleViews* seam_views{};
     const rsf_sr_draw_views* trip_views{};
-    ~Host() { reset_pass(); }
-    void reset_pass() noexcept { rsf_anomaly_sr_drop_pass(std::exchange(pass, nullptr)); }
+    Host() = default;
+    Host(const Host&) = delete;
+    Host& operator=(const Host&) = delete;
+    ~Host() { rsf_anomaly_sr_stage_drop_resources(resources); }
+    const rsf_sr_pass* pass() const noexcept { return rsf_anomaly_sr_stage_pass(resources); }
+    void* depth_texture() const noexcept { return rsf_anomaly_sr_stage_depth(resources); }
     bool read(const void* address, void* output, std::size_t size) noexcept override { return guarded_copy(output, address, size); }
     bool write(void* address, const void* input, std::size_t size) noexcept override { return guarded_copy(address, input, size); }
     ID3D11Device* device() noexcept { ID3D11Device* value{}; return read_global(srp().hw_device_rva, value) ? value : nullptr; }
@@ -184,15 +179,14 @@ struct Host final : SwapHost {
     MakeResult make_twins(const TwinRequest& request, TwinSet& out) noexcept override {
         auto* d3d = device();
         if (!d3d) { say("Anomaly SR stage: HW.pDevice is null; twins not created."); return MakeResult::Failed; }
-        if (!rsf_anomaly_sr_ensure_pass(&pass, &d3d11_platform(), d3d, request.stage, log_fn, log_user)) {
-            say(request.stage == 1 ? "Anomaly SR stage: round-trip shader could not be created."
-                : "Anomaly SR stage: upscale shader could not be created.");
-            return MakeResult::Refused;
-        }
         rsf_sr_twin_batch_info info{};
         const auto result = static_cast<MakeResult>(
-            rsf_anomaly_sr_allocate_twin_batch(&d3d11_platform(), d3d, &request, &out, &info));
-        twin_bytes = info.bytes;
+            rsf_anomaly_sr_stage_make_twins(&resources, &d3d11_platform(), d3d, &request, &out, &info, log_fn, log_user));
+        if (info.pass_refused) {
+            say(request.stage == 1 ? "Anomaly SR stage: round-trip shader could not be created."
+                : "Anomaly SR stage: upscale shader could not be created.");
+            return result;
+        }
         char text[260];
         if (result != MakeResult::Created) {
             const auto error = twin_error_name(static_cast<TwinError>(info.cause));
@@ -211,8 +205,6 @@ struct Host final : SwapHost {
             say(text);
             return result;
         }
-        twins.reset(info.owner);
-        depth_texture = info.depth_texture;
         if (request.stage == 1)
             std::snprintf(text, sizeof(text), "Anomaly SR stage: FP16 twins created for generic0/generic_temp at %ux%u (uav=%d/%d).",
                 out.targets[0].width, out.targets[0].height, out.targets[0].uav ? 1 : 0, out.targets[1].uav ? 1 : 0);
@@ -220,15 +212,14 @@ struct Host final : SwapHost {
             std::snprintf(text, sizeof(text),
                 "Anomaly SR stage 2: %u world twins, a depth twin and a HW.pBaseRT stand-in created at render %ux%u for output %ux%u (%.1f MiB).",
                 info.made, request.render_width, request.render_height, request.output_width, request.output_height,
-                double(twin_bytes) / (1024.0 * 1024.0));
+                double(info.bytes) / (1024.0 * 1024.0));
         say(text);
         return MakeResult::Created;
     }
     void drop_twins() noexcept override {
         // Reference counts after our own views are gone. The engine's surface_get() before its generic_temp copy
         // takes references it never releases (stock leaks them on its own targets too), so this is diagnostic only.
-        depth_texture = nullptr;
-        last_drop_refs = rsf_anomaly_sr_drop_twin_batch(twins.release(), twin_refs);
+        rsf_anomaly_sr_stage_retire_twins(resources, twin_refs);
     }
     // Stage 2 and later: the Rust seam pass decides inputs, captures and fallback; the leaves below act on these views.
     bool upscale(const UpscaleInputs& in) noexcept override {
@@ -560,8 +551,8 @@ const rsf_anomaly_sr_stage_platform platform{
         return static_cast<ID3D11DeviceContext*>(context)->GetData(static_cast<ID3D11Query*>(query),
             ticks, sizeof(*ticks), D3D11_ASYNC_GETDATA_DONOTFLUSH) == S_OK;
     },
-    .host_stats = [](uint64_t* bytes, uint64_t* refs) { *bytes = host.twin_bytes; *refs = host.last_drop_refs; },
-    .host_reset = [] { host.reset_pass(); },
+    .host_stats = [](uint64_t* bytes, uint64_t* refs) { rsf_anomaly_sr_stage_resource_stats(host.resources, bytes, refs); },
+    .host_reset = [] { rsf_anomaly_sr_stage_reset_pass(host.resources); },
     .staging_copy = [](void* context, void* source) { return staging_copy(context, source); },
     .release = [](void* object) { if (object) static_cast<IUnknown*>(object)->Release(); },
     .map_staging = map_staging,
@@ -571,12 +562,12 @@ const rsf_anomaly_sr_stage_platform platform{
     .bilinear = [] {
         if (!host.seam_views) return false;
         const auto views = upscale_views(*host.seam_views);
-        return rsf_anomaly_sr_run_pass(host.pass, host.context(), RSF_SR_UPSCALE, &views) != 0;
+        return rsf_anomaly_sr_run_pass(host.pass(), host.context(), RSF_SR_UPSCALE, &views) != 0;
     },
     .round_trip = [] {
-        return host.trip_views && rsf_anomaly_sr_run_pass(host.pass, host.context(), RSF_SR_ROUND_TRIP, host.trip_views) != 0;
+        return host.trip_views && rsf_anomaly_sr_run_pass(host.pass(), host.context(), RSF_SR_ROUND_TRIP, host.trip_views) != 0;
     },
-    .temporal_ready = [] { return host.seam_views && rsf_anomaly_sr_temporal_ready(host.pass) && host.depth_texture; },
+    .temporal_ready = [] { return host.seam_views && rsf_anomaly_sr_temporal_ready(host.pass()) && host.depth_texture(); },
     .temporal_platform = []() -> const void* { return &d3d11_platform(); },
     .motion_target = [](rsf_anomaly_sr_motion_target* out) {
         const auto target = motion::frame_target();
@@ -592,13 +583,13 @@ const rsf_anomaly_sr_stage_platform platform{
             static_cast<ID3D11RenderTargetView*>(motion_target), first_person_depth_limit,
             first_person_zero};
         const auto input = prepare_views(prepare);
-        return rsf_anomaly_sr_run_pass(host.pass, host.context(), RSF_SR_PREPARE, &input) != 0;
+        return rsf_anomaly_sr_run_pass(host.pass(), host.context(), RSF_SR_PREPARE, &input) != 0;
     },
-    .depth_texture = [] { return host.depth_texture; },
+    .depth_texture = [] { return host.depth_texture(); },
     .reinsert = [](void* reconstruction) {
         if (!host.seam_views) return false;
         const auto views = upscale_views(*host.seam_views, reconstruction);
-        return rsf_anomaly_sr_run_pass(host.pass, host.context(), RSF_SR_REINSERT, &views) != 0;
+        return rsf_anomaly_sr_run_pass(host.pass(), host.context(), RSF_SR_REINSERT, &views) != 0;
     },
     .driver_bind = [] { return driver.bind(rsf_anomaly_runtime_module()); },
     .driver_enabled = [] { return driver.enabled(); },

@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now owns the Anomaly SR host's cached D3D11 pass, current reduced
+target batch, and retirement counters. The swap host keeps one opaque
+handle. It borrows the depth texture from the current batch and uses
+the same shader variants and draw bindings. Source review traced pass
+reuse, refusal and teardown through the swap host and matched the
+private Rust and C++ declarations. Build and runtime coverage remain
+open for this revision.
+
 Rust now retains the guarded Anomaly motion shader frame and original DXBC
 through variant preparation and reload. Both paths borrow the same owned
 bytes. An unreadable DXBC range is refused before Runtime preparation can

@@ -2,8 +2,8 @@
 use super::{DEPTH_SRV, DSV, Extent, Platform, Ptr, RTV, SRV, Texture, UAV, View, pointer};
 use crate::lease::Lease;
 use crate::sr_swap_abi::{
-    RSF_ANOMALY_SWAP_MAKE_CREATED, RSF_ANOMALY_SWAP_MAKE_DEPTH, RSF_ANOMALY_SWAP_MAKE_FAILED,
-    RSF_ANOMALY_SWAP_MAKE_REFUSED, RSF_ANOMALY_SWAP_SLOT_COUNT, rsf_anomaly_swap_fields as Fields,
+    RSF_ANOMALY_SWAP_MAKE_DEPTH, RSF_ANOMALY_SWAP_MAKE_FAILED, RSF_ANOMALY_SWAP_MAKE_REFUSED,
+    RSF_ANOMALY_SWAP_SLOT_COUNT, rsf_anomaly_swap_fields as Fields,
     rsf_anomaly_swap_request as Request, rsf_anomaly_swap_twins as Twins,
 };
 use std::ffi::c_void;
@@ -28,8 +28,9 @@ const PROMOTED_SUPPORT: u32 = 0x20 | 0x100 | 0x200 | 0x4000 | 0x8000;
 const SUPPORT_UAV: u32 = 0x0200_0000;
 
 #[repr(u8)]
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) enum Error {
+    #[default]
     None,
     NotTexture,
     Shape,
@@ -291,23 +292,26 @@ impl Device<'_> {
 
 const TWIN_SLOTS: usize = RSF_ANOMALY_SWAP_SLOT_COUNT as usize;
 
-struct TwinBatch {
+pub(super) struct TwinBatch {
     slots: [Option<Target>; TWIN_SLOTS],
-    _depth: Option<Target>,
+    depth: Option<Target>,
     _scratch: Option<Target>,
 }
 
 #[repr(C)]
-struct TwinBatchInfo {
-    owner: *mut TwinBatch,
-    depth_texture: Ptr,
-    bytes: u64,
+#[derive(Default)]
+pub(super) struct TwinBatchInfo {
+    pub(super) bytes: u64,
     made: u32,
     failed_index: u32,
     cause: Error,
+    pub(super) pass_refused: bool,
 }
 
-const _: () = assert!(size_of::<TwinBatchInfo>() == 40);
+const _: () = {
+    assert!(size_of::<TwinBatchInfo>() == 24);
+    assert!(std::mem::offset_of!(TwinBatchInfo, cause) == 16);
+};
 
 impl TwinBatchInfo {
     fn refuse(&mut self, index: usize, error: Error) -> u32 {
@@ -331,27 +335,17 @@ fn bytes_of(description: Texture) -> u64 {
     (u64::from(description.size.width) * u64::from(description.size.height)).saturating_mul(texel)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_allocate_twin_batch(
+pub(super) fn allocate_twins(
     platform: &Platform,
     handle: Ptr,
     request: &Request,
     out: &mut Twins,
     info: &mut TwinBatchInfo,
-) -> u32 {
-    *out = Twins::default();
-    *info = TwinBatchInfo {
-        owner: std::ptr::null_mut(),
-        depth_texture: std::ptr::null_mut(),
-        bytes: 0,
-        made: 0,
-        failed_index: 0,
-        cause: Error::None,
-    };
+) -> Result<TwinBatch, u32> {
     let device = Device { platform, handle };
     let mut batch = TwinBatch {
         slots: [const { None }; TWIN_SLOTS],
-        _depth: None,
+        depth: None,
         _scratch: None,
     };
     let mut views = Twins::default();
@@ -379,7 +373,7 @@ extern "C" fn rsf_anomaly_sr_allocate_twin_batch(
         };
         let (twin, description, format) = match device.twin(&input) {
             Ok(twin) => twin,
-            Err(error) => return info.refuse(index, error),
+            Err(error) => return Err(info.refuse(index, error)),
         };
         views.targets[index] = twin.view(description, format).fields();
         batch.slots[index] = Some(twin);
@@ -397,19 +391,18 @@ extern "C" fn rsf_anomaly_sr_allocate_twin_batch(
         };
         let (depth, depth_desc) = match device.depth(request.engine_dsv, output, render) {
             Ok(depth) => depth,
-            Err(error) => return info.refuse(TWIN_SLOTS, error),
+            Err(error) => return Err(info.refuse(TWIN_SLOTS, error)),
         };
         let (scratch, scratch_desc) = match device.scratch(request.engine_rtv, render) {
             Ok(scratch) => scratch,
-            Err(error) => return info.refuse(TWIN_SLOTS + 1, error),
+            Err(error) => return Err(info.refuse(TWIN_SLOTS + 1, error)),
         };
         views.depth_dsv = pointer(&depth.dsv);
         views.depth_srv = pointer(&depth.srv);
         views.depth_width = depth_desc.size.width;
         views.depth_height = depth_desc.size.height;
         views.base_rt = pointer(&scratch.rtv);
-        info.depth_texture = depth.texture.as_ptr();
-        batch._depth = Some(depth);
+        batch.depth = Some(depth);
         batch._scratch = Some(scratch);
         bytes = bytes
             .saturating_add(bytes_of(depth_desc))
@@ -418,22 +411,18 @@ extern "C" fn rsf_anomaly_sr_allocate_twin_batch(
     *out = views;
     info.bytes = bytes;
     info.made = made;
-    info.owner = Box::into_raw(Box::new(batch));
-    RSF_ANOMALY_SWAP_MAKE_CREATED
+    Ok(batch)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_drop_twin_batch(
-    owner: *mut TwinBatch,
-    refs: Option<unsafe extern "C" fn(Ptr) -> u32>,
-) -> u64 {
-    if owner.is_null() {
-        return 0;
+impl TwinBatch {
+    pub(super) fn depth_texture(&self) -> Ptr {
+        self.depth
+            .as_ref()
+            .map_or(std::ptr::null_mut(), |depth| depth.texture.as_ptr())
     }
-    let mut batch = unsafe { Box::from_raw(owner) };
-    refs.map_or(0, |refs| {
-        batch
-            .slots
+
+    pub(super) fn retire(mut self, refs: unsafe extern "C" fn(Ptr) -> u32) -> u64 {
+        self.slots
             .iter_mut()
             .flatten()
             .map(|twin| {
@@ -443,7 +432,7 @@ unsafe extern "C" fn rsf_anomaly_sr_drop_twin_batch(
                 u64::from(unsafe { refs(twin.texture.as_ptr()) })
             })
             .sum()
-    })
+    }
 }
 
 #[unsafe(no_mangle)]
