@@ -12,6 +12,7 @@
 #include <rescaleframe/frame_capture.h>
 #endif
 #include <rescaleframe/vendor_census.h>
+#include "d3d12_trace.h"
 #include "diagnostics.h"
 #include "runtime_worker_native.h"
 #include <windows.h>
@@ -20,10 +21,8 @@
 #include <MinHook.h>
 #include <intrin.h>
 #include <cstdint>
-#include <cstdio>
 #include <cstring>
 #include <cwchar>
-#include <mutex>
 #include "asi_platform.h"
 #include "social_club.h"
 #include "camera_probe.h"
@@ -32,7 +31,6 @@
 
 namespace {
 HMODULE self = nullptr;
-std::mutex trace_guard;
 char census_directory[MAX_PATH * 3]{};
 #ifdef RSF_HAVE_FRAME_CAPTURE
 static_assert(RSF_CAPTURE_OK == 0);
@@ -48,47 +46,31 @@ int32_t install_frame_probe(const wchar_t* library, const wchar_t* prefix) noexc
 // the matching-build sites in rdr2-renderer.md.
 using CheckD3D12Result = HRESULT (*)(HRESULT);
 CheckD3D12Result original_check_d3d12_result = nullptr;
-wchar_t d3d12_error_path[32768]{};
-uint32_t traced_image_size{};
 
 HRESULT trace_d3d12_result(HRESULT result) noexcept
 {
     if (FAILED(result)) {
-        std::lock_guard<std::mutex> lock(trace_guard);
-        if (FILE* stream = _wfopen(d3d12_error_path, L"ab")) {
-            void* stack[24]{};
-            const auto count = CaptureStackBackTrace(1, 24, stack, nullptr);
-            const auto base = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
-            std::fprintf(stream, "tick=%llu tid=%lu hr=0x%08lx caller_rva=0x%llx stack=",
-                static_cast<unsigned long long>(GetTickCount64()), GetCurrentThreadId(),
-                static_cast<unsigned long>(result),
-                static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(_ReturnAddress()) - base));
-            for (USHORT i = 0; i < count; ++i) {
-                const auto address = reinterpret_cast<uintptr_t>(stack[i]);
-                if (address >= base && address - base < traced_image_size) {
-                    std::fprintf(stream, " RDR2+0x%llx", static_cast<unsigned long long>(address - base));
-                } else {
-                    std::fprintf(stream, " %p", stack[i]);
-                }
-            }
-            std::fprintf(stream, "\n");
-            std::fclose(stream);
-        }
+        void* stack[24]{};
+        const auto count = CaptureStackBackTrace(1, 24, stack, nullptr);
+        const auto base = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+        const auto caller = reinterpret_cast<uintptr_t>(_ReturnAddress());
+        rsf_rdr2_d3d12_trace_record(static_cast<int32_t>(result), base, caller,
+            GetTickCount64(), GetCurrentThreadId(), stack, count);
     }
     return original_check_d3d12_result(result);
 }
 
 int32_t install_d3d12_result_trace(uintptr_t target, uint32_t image_size, const wchar_t* path) noexcept
 {
-    wcsncpy_s(d3d12_error_path, path, _TRUNCATE);
-    traced_image_size = image_size;
-    auto status = MH_Initialize();
-    if (status == MH_OK || status == MH_ERROR_ALREADY_INITIALIZED) {
-        status = MH_CreateHook(reinterpret_cast<void*>(target), reinterpret_cast<void*>(&trace_d3d12_result),
-            reinterpret_cast<void**>(&original_check_d3d12_result));
-        if (status == MH_OK) status = MH_EnableHook(reinterpret_cast<void*>(target));
-    }
-    return static_cast<int32_t>(status);
+    static_assert(MH_ERROR_NOT_INITIALIZED == 2);
+    const rsf_rdr2_d3d12_trace_hook hook{
+        reinterpret_cast<const void*>(&trace_d3d12_result),
+        reinterpret_cast<void**>(&original_check_d3d12_result),
+        [](uintptr_t address) noexcept -> int32_t {
+            return static_cast<int32_t>(MH_EnableHook(reinterpret_cast<void*>(address)));
+        },
+    };
+    return rsf_rdr2_d3d12_trace_install(target, image_size, path, &hook);
 }
 
 int32_t install_census(const wchar_t* directory, uint32_t flags) noexcept

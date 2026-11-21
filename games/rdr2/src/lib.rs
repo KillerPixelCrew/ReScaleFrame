@@ -11,6 +11,8 @@ mod camera;
 mod camera_probe;
 mod capture_state;
 #[cfg(windows)]
+mod d3d12_trace;
+#[cfg(windows)]
 mod diagnostics;
 mod engine_settings;
 mod host;

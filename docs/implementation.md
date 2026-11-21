@@ -204,7 +204,10 @@ calls. Missing submissions still keep the readback pending.
 RDR2's Rust diagnostic workers preserve the module sampling marks,
 dump policy, census summary and optional RenderDoc request loop. Native
 leaves retain the existing diagnostics ABI. The RenderDoc trigger still
-requests a camera record before queuing the frame capture. Builds and
+requests a camera record before queuing the frame capture. Rust also
+sequences installation of the opt-in D3D12 HRESULT trace and appends
+the failure records. The native detour captures the caller and stack
+on its original frame and forwards the original HRESULT. Builds and
 live diagnostic verification remain open.
 
 Skyrim SE's Rust adapter publishes the GameSDK table and owns executable

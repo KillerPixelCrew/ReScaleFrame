@@ -76,7 +76,7 @@ unsafe fn start<T: Send>(work: T, entry: Worker) -> bool {
 }
 
 /// The native caller passes a NUL-terminated UTF-16 path, or null to omit it.
-unsafe fn path_units<'a>(path: *const u16) -> &'a [u16] {
+pub(crate) unsafe fn path_units<'a>(path: *const u16) -> &'a [u16] {
     if path.is_null() {
         return &[];
     }
