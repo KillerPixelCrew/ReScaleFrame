@@ -21,6 +21,11 @@ const INIT_FAILED: i32 = -6;
 const NOT_READY: i32 = -8;
 const VK_SUCCESS: i32 = 0;
 const VK_INITIALIZATION_FAILED: i32 = -3;
+const VK_FORMAT_NOT_SUPPORTED: i32 = -11;
+const TRANSFER_SOURCE: u32 = 1;
+const RGBA8: u32 = 37;
+const BGRA8: u32 = 44;
+const PRESENT_LAYOUT: u32 = 1_000_001_002;
 const WAIT_NS: u64 = 15_000_000_000;
 const PACKET_ABI_VERSION: u32 = 1;
 
@@ -55,6 +60,19 @@ const _: () = {
 };
 
 #[repr(C)]
+#[derive(Default)]
+struct Target {
+    chain: u64,
+    index: u32,
+    selected: u32,
+    usage: u32,
+    layers: u32,
+    format: u32,
+    width: u32,
+    height: u32,
+}
+
+#[repr(C)]
 pub(crate) struct Platform {
     // Writes a null native handle and succeeds when capture is disabled.
     open: unsafe extern "C" fn(*const Setup, *mut Handle) -> i32,
@@ -73,10 +91,8 @@ pub(crate) struct Platform {
     wait_fence: unsafe extern "C" fn(Handle, u64, u64) -> i32,
     wants: unsafe extern "C" fn(Handle, u64) -> u32,
     readbacks: unsafe extern "C" fn(Handle) -> u64,
-    // Checks the real chain contract and resolves the presented WSI image. A
-    // non-null reason reports failure and the result to log, which can be
-    // VK_SUCCESS.
-    target: unsafe extern "C" fn(Handle, *const Packet, *mut Image, *mut *const c_char) -> i32,
+    target: unsafe extern "C" fn(*const Packet, *mut Target),
+    images: unsafe extern "C" fn(*const Packet, u64, *mut u32, *mut u64) -> i32,
     record: unsafe extern "C" fn(Handle, Handle, *const Image, *const Record, i32) -> u32,
     // Submits the copy behind the original Present wait semaphores.
     submit: unsafe extern "C" fn(*const Packet, Handle, u64) -> i32,
@@ -89,8 +105,56 @@ pub(crate) struct Platform {
 }
 
 const _: () = {
-    assert!(size_of::<Platform>() == 23 * size_of::<Handle>());
+    assert!(size_of::<Target>() == 40 && align_of::<Target>() == 8);
+    assert!(std::mem::offset_of!(Target, index) == 8);
+    assert!(std::mem::offset_of!(Target, height) == 32);
+    assert!(size_of::<Platform>() == 24 * size_of::<Handle>());
 };
+
+impl Platform {
+    fn present_image(&self, packet: &Packet) -> Result<Image, (&'static CStr, i32)> {
+        let mut target = Target::default();
+        unsafe { (self.target)(packet, &mut target) };
+        if target.usage & TRANSFER_SOURCE == 0
+            || target.selected == 0
+            || target.layers != 1
+            || !matches!(target.format, BGRA8 | RGBA8)
+        {
+            return Err((c"real-chain-copy-contract", VK_FORMAT_NOT_SUPPORTED));
+        }
+        let mut count = 0;
+        let result = unsafe { (self.images)(packet, target.chain, &mut count, ptr::null_mut()) };
+        if result != VK_SUCCESS || target.index >= count {
+            return Err((c"real-images-count", result));
+        }
+        let mut images = Vec::new();
+        images
+            .try_reserve_exact(count as usize)
+            .map_err(|_| (c"real-images", VK_INITIALIZATION_FAILED))?;
+        images.resize(count as usize, 0);
+        let result =
+            unsafe { (self.images)(packet, target.chain, &mut count, images.as_mut_ptr()) };
+        if result != VK_SUCCESS {
+            return Err((c"real-images", result));
+        }
+        if count as usize > images.len() || target.index >= count {
+            return Err((c"real-images", VK_INITIALIZATION_FAILED));
+        }
+        let image = images[target.index as usize];
+        if image == 0 {
+            return Err((c"real-images", VK_INITIALIZATION_FAILED));
+        }
+        Ok(Image {
+            device: packet.device,
+            image,
+            format: target.format,
+            width: target.width,
+            height: target.height,
+            layout: PRESENT_LAYOUT,
+            copy_source: 1,
+        })
+    }
+}
 
 // The command buffer is freed with its pool.
 struct Family {
@@ -225,13 +289,13 @@ impl Owner {
             return original(1);
         };
         let frame = packet.source_frame;
-        let mut image: Image = unsafe { std::mem::zeroed() };
-        let mut reason: *const c_char = ptr::null();
-        let result = unsafe { (ops.target)(self.native, packet, &mut image, &mut reason) };
-        if !reason.is_null() {
-            self.failure(frame, unsafe { CStr::from_ptr(reason) }, result);
-            return original(1);
-        }
+        let image = match ops.present_image(packet) {
+            Ok(image) => image,
+            Err((reason, result)) => {
+                self.failure(frame, reason, result);
+                return original(1);
+            }
+        };
         let Some((commands, fence)) = self.commands(state, packet.queue_family) else {
             self.failure(frame, c"capture-commands", VK_INITIALIZATION_FAILED);
             return original(1);

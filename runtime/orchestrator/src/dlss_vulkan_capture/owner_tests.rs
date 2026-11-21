@@ -15,7 +15,9 @@ struct Harness {
     register_result: i32,
     callback: Option<(Callback, Handle)>,
     wants: bool,
-    target_failure: Option<(&'static CStr, i32)>,
+    target_index: u32,
+    target_unavailable: bool,
+    image_result: Option<(i32, u32, u64)>,
     readbacks: u64,
     record_adds: bool,
     record_result: u32,
@@ -118,20 +120,44 @@ unsafe extern "C" fn readbacks(native: Handle) -> u64 {
     unsafe { harness(native) }.readbacks
 }
 
-unsafe extern "C" fn target(
-    native: Handle,
-    _: *const Packet,
-    image: *mut Image,
-    reason: *mut *const c_char,
-) -> i32 {
-    let test = unsafe { harness(native) };
+unsafe extern "C" fn target(packet: *const Packet, out: *mut Target) {
+    let test = unsafe { harness((*packet).device) };
     test.events.push("target".into());
-    if let Some((text, result)) = test.target_failure {
-        unsafe { reason.write(text.as_ptr()) };
-        return result;
+    unsafe {
+        out.write(Target {
+            chain: 4,
+            index: test.target_index,
+            selected: u32::from(!test.target_unavailable),
+            usage: TRANSFER_SOURCE,
+            layers: 1,
+            format: BGRA8,
+            width: 640,
+            height: 360,
+        })
+    };
+}
+
+unsafe extern "C" fn images(
+    packet: *const Packet,
+    chain: u64,
+    count: *mut u32,
+    output: *mut u64,
+) -> i32 {
+    assert_eq!(chain, 4);
+    let test = unsafe { harness((*packet).device) };
+    if output.is_null() {
+        test.events.push("image count".into());
+        unsafe { count.write(1) };
+        return VK_SUCCESS;
     }
-    unsafe { (*image).image = 77 };
-    VK_SUCCESS
+    test.events.push("images".into());
+    assert_eq!(unsafe { count.read() }, 1);
+    let (result, returned, image) = test.image_result.unwrap_or((VK_SUCCESS, 1, 77));
+    unsafe {
+        count.write(returned);
+        output.write(image);
+    }
+    result
 }
 
 unsafe extern "C" fn record(
@@ -142,7 +168,19 @@ unsafe extern "C" fn record(
     generated: i32,
 ) -> u32 {
     let test = unsafe { harness(native) };
-    assert_eq!(unsafe { (*image).image }, 77);
+    let image = unsafe { &*image };
+    assert_eq!(image.device, native);
+    assert_eq!(
+        (
+            image.image,
+            image.format,
+            image.width,
+            image.height,
+            image.layout,
+            image.copy_source
+        ),
+        (77, BGRA8, 640, 360, PRESENT_LAYOUT, 1),
+    );
     test.events.push(format!("record {} {generated}", unsafe {
         (*record).frame_id
     }));
@@ -211,6 +249,7 @@ static PLATFORM: Platform = Platform {
     wants,
     readbacks,
     target,
+    images,
     record,
     submit,
     present: present_leaf,
@@ -352,6 +391,8 @@ fn capture_consumes_waits_in_its_fenced_copy_before_a_waitless_present() {
         [
             "trace 1",
             "target",
+            "image count",
+            "images",
             "create pool 2",
             "allocate 1",
             "create fence 2",
@@ -374,6 +415,8 @@ fn capture_consumes_waits_in_its_fenced_copy_before_a_waitless_present() {
         [
             "trace 1",
             "target",
+            "image count",
+            "images",
             "reset pool 1",
             "reset fence 2",
             "begin",
@@ -410,7 +453,17 @@ fn timed_out_copy_blocks_reuse_and_flush_until_its_own_fence_completes() {
     // The pending family waits its own fence before resetting its pool.
     test.harness.waits = [VK_DEVICE_LOST].into();
     assert_eq!(test.present(&packet), VK_SUCCESS);
-    assert_eq!(test.take(), ["trace 1", "target", "wait 2", "present 1"]);
+    assert_eq!(
+        test.take(),
+        [
+            "trace 1",
+            "target",
+            "image count",
+            "images",
+            "wait 2",
+            "present 1"
+        ]
+    );
     assert_eq!(
         test.harness.failures.last().unwrap(),
         &(42, "capture-commands".into(), VK_INITIALIZATION_FAILED)
@@ -425,14 +478,55 @@ fn timed_out_copy_blocks_reuse_and_flush_until_its_own_fence_completes() {
 fn unresolved_real_image_presents_with_its_waits_before_any_command_reset() {
     let mut test = Test::enabled();
     test.remember(42, 1);
-    test.harness.target_failure = Some((c"real-images-count", VK_SUCCESS));
+    test.harness.target_index = 1;
     test.take();
     let packet = test.packet(42, 0, -1);
     assert_eq!(test.present(&packet), VK_SUCCESS);
-    assert_eq!(test.take(), ["trace 1", "target", "present 1"]);
+    assert_eq!(
+        test.take(),
+        ["trace 1", "target", "image count", "present 1"]
+    );
     assert_eq!(
         test.harness.failures,
         [(42, "real-images-count".into(), VK_SUCCESS)]
+    );
+}
+
+#[test]
+fn capture_refuses_missing_selection_and_changed_image_arrays() {
+    let mut test = Test::enabled();
+    test.remember(42, 1);
+    test.take();
+    let packet = test.packet(42, 0, -1);
+    test.harness.target_unavailable = true;
+    assert_eq!(test.present(&packet), VK_SUCCESS);
+    assert_eq!(test.take(), ["trace 1", "target", "present 1"]);
+
+    test.harness.target_unavailable = false;
+    for (code, count, image) in [
+        (VK_SUCCESS, 2, 77),
+        (VK_SUCCESS, 1, 0),
+        (VK_DEVICE_LOST, 1, 77),
+    ] {
+        test.harness.image_result = Some((code, count, image));
+        assert_eq!(test.present(&packet), VK_SUCCESS);
+        assert_eq!(
+            test.take(),
+            ["trace 1", "target", "image count", "images", "present 1"]
+        );
+    }
+    assert_eq!(
+        test.harness.failures,
+        [
+            (
+                42,
+                "real-chain-copy-contract".into(),
+                VK_FORMAT_NOT_SUPPORTED
+            ),
+            (42, "real-images".into(), VK_INITIALIZATION_FAILED),
+            (42, "real-images".into(), VK_INITIALIZATION_FAILED),
+            (42, "real-images".into(), VK_DEVICE_LOST),
+        ],
     );
 }
 

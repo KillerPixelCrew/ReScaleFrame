@@ -3625,6 +3625,12 @@ receipt from the pinned SDK, loaded the Runtime DLL in the export
 fixture, and passed the focused synthetic Vulkan contracts.
 See [the present capture audit](research/rust-vulkan-dlss-present-capture.md).
 
+DLSS-G Present capture now checks the real image copy contract and
+both WSI enumeration results in Rust. An out-of-range or missing image
+leaves the original Present waits in place and skips recording. The
+expanded fixture and live capture remain unrun.
+[Image selection](research/rust-vulkan-dlss-present-capture.md#real-present-image-selection)
+
 The shared Vulkan readback owner now holds selection, pending buffers,
 completion proof and publication in Rust. A shared watermark cannot
 complete an exact group or command retirement. Destruction fails any

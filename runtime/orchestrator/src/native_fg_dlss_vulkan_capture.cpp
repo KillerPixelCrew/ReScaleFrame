@@ -21,7 +21,13 @@ namespace {
 using CapturePacket = rsf_sl_present_capture_packet;
 static_assert(sizeof(CapturePacket) == 96 && offsetof(CapturePacket, source_frame) == 48 &&
     offsetof(CapturePacket, queue_family) == 68 && offsetof(CapturePacket, native_wsi_call) == 88);
-static_assert(sizeof(rsf_dlss_capture_platform) == 23 * sizeof(void*));
+static_assert(sizeof(rsf_dlss_capture_platform) == 24 * sizeof(void*));
+static_assert(sizeof(rsf_dlss_capture_target) == 40 && alignof(rsf_dlss_capture_target) == 8 &&
+    offsetof(rsf_dlss_capture_target, index) == 8 && offsetof(rsf_dlss_capture_target, height) == 32);
+static_assert(sizeof(VkImage) == sizeof(uint64_t) && alignof(VkImage) == alignof(uint64_t));
+static_assert(VK_IMAGE_USAGE_TRANSFER_SRC_BIT == 1 && VK_FORMAT_R8G8B8A8_UNORM == 37 &&
+    VK_FORMAT_B8G8R8A8_UNORM == 44 && VK_IMAGE_LAYOUT_PRESENT_SRC_KHR == 1000001002 &&
+    VK_ERROR_FORMAT_NOT_SUPPORTED == -11);
 
 struct CaptureVk {
     rsf_fgvk_setup setup{};
@@ -49,12 +55,13 @@ int32_t wsi_present(const CapturePacket& packet, const VkPresentInfoKHR* info) {
     return reinterpret_cast<WsiCall>(packet.native_wsi_call)([](void* user) -> int32_t {
         const auto& item = *static_cast<Call*>(user); return item.next(item.queue, item.info); }, &call);
 }
-int32_t wsi_images(const CapturePacket& packet, VkSwapchainKHR chain, uint32_t* count, VkImage* output) {
+int32_t wsi_images(const CapturePacket* packet, uint64_t chain, uint32_t* count, uint64_t* output) noexcept try {
     struct Call { PFN_vkGetSwapchainImagesKHR next; VkDevice device; VkSwapchainKHR chain; uint32_t* count; VkImage* images; };
-    Call call{reinterpret_cast<PFN_vkGetSwapchainImagesKHR>(packet.native_images), static_cast<VkDevice>(packet.device), chain, count, output};
-    return reinterpret_cast<WsiCall>(packet.native_wsi_call)([](void* user) -> int32_t {
+    Call call{reinterpret_cast<PFN_vkGetSwapchainImagesKHR>(packet->native_images), static_cast<VkDevice>(packet->device),
+        reinterpret_cast<VkSwapchainKHR>(chain), count, reinterpret_cast<VkImage*>(output)};
+    return reinterpret_cast<WsiCall>(packet->native_wsi_call)([](void* user) -> int32_t {
         const auto& item = *static_cast<Call*>(user); return item.next(item.device, item.chain, item.count, item.images); }, &call);
-}
+} catch (...) { return VK_ERROR_INITIALIZATION_FAILED; }
 
 rsf_backend_result open_capture(const rsf_fgvk_setup* setup, void** out) noexcept try {
     *out = nullptr;
@@ -128,26 +135,17 @@ int32_t create_fence(void* native, uint64_t* out) noexcept {
     return result;
 }
 
-int32_t target(void*, const CapturePacket* packet, rsf_srvk_image* image, const char** reason) noexcept try {
+void target(const CapturePacket* packet, rsf_dlss_capture_target* out) noexcept {
     const auto& info = present_info(*packet);
     const auto& chain = *static_cast<const VkSwapchainCreateInfoKHR*>(packet->swapchain_info);
-    if (!(chain.imageUsage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) || info.swapchainCount != 1 || !info.pSwapchains || !info.pImageIndices ||
-        chain.imageArrayLayers != 1 || (chain.imageFormat != VK_FORMAT_B8G8R8A8_UNORM && chain.imageFormat != VK_FORMAT_R8G8B8A8_UNORM)) {
-        *reason = "real-chain-copy-contract"; return VK_ERROR_FORMAT_NOT_SUPPORTED;
+    *out = {0, 0, 0, chain.imageUsage, chain.imageArrayLayers, uint32_t(chain.imageFormat),
+        chain.imageExtent.width, chain.imageExtent.height};
+    if (info.swapchainCount == 1 && info.pSwapchains && info.pImageIndices) {
+        out->chain = reinterpret_cast<uint64_t>(info.pSwapchains[0]);
+        out->index = info.pImageIndices[0];
+        out->selected = 1;
     }
-    const auto index = info.pImageIndices[0];
-    uint32_t count = 0;
-    auto result = wsi_images(*packet, info.pSwapchains[0], &count, nullptr);
-    if (result != VK_SUCCESS || index >= count) { *reason = "real-images-count"; return result; }
-    std::vector<VkImage> actual(count);
-    result = wsi_images(*packet, info.pSwapchains[0], &count, actual.data());
-    if (result != VK_SUCCESS || count > actual.size() || index >= count || !actual[index]) {
-        *reason = "real-images"; return result != VK_SUCCESS ? result : VK_ERROR_INITIALIZATION_FAILED;
-    }
-    *image = {packet->device, reinterpret_cast<uint64_t>(actual[index]), uint32_t(chain.imageFormat),
-        chain.imageExtent.width, chain.imageExtent.height, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, 1};
-    return VK_SUCCESS;
-} catch (...) { *reason = "real-images"; return VK_ERROR_INITIALIZATION_FAILED; }
+}
 
 uint32_t record(void* native, void* commands, const rsf_srvk_image* image, const rsf_frame_record* identity, int32_t generated) noexcept try {
     return capture_vk(native).capture.record(static_cast<VkCommandBuffer>(commands), *image, *identity,
@@ -242,7 +240,7 @@ const rsf_dlss_capture_platform capture_platform{
     [](void* native) noexcept -> uint64_t {
         try { return capture_vk(native).capture.pending_count(); } catch (...) { return UINT64_MAX; }
     },
-    target, record, submit, present,
+    target, wsi_images, record, submit, present,
     [](void* native) -> uint32_t { return capture_vk(native).capture.flush(false); },
     failure, trace, metadata,
 };

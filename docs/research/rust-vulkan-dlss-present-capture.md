@@ -157,3 +157,26 @@ registered the native classes and left the graphics bridge inactive.
 The rebuilt add-on retained all 398 export names and ordinals and its
 embedded Runtime. The startup probe and logs are in
 `.local/godot/visual/rust-pinned-display-mode-combined/`.
+## Real Present image selection
+
+At `6b5bebe7`, the capture owner delegated the copy contract and image
+enumeration to a native callback. Rust now checks transfer-source usage,
+one selected swapchain, a single array layer, and the two accepted
+UNORM formats before querying the real WSI image count. The native leaf
+still reads the typed Vulkan records and performs both queries through
+the packet's WSI lease.
+
+Rust keeps the first count as the buffer limit and refuses a returned
+count beyond that limit, a missing index, or a null image. A failed
+allocation reports the existing initialization error. A refusal leaves
+the original wait semaphores with Present. The admitted image keeps
+the reported device, format and extent and the Present source layout.
+Source comparison matched the normal diagnostics, including the
+successful count query with an out-of-range index. An exception caught
+in the count query now reports `real-images-count`; its error code
+and Present fallback are unchanged.
+
+The private table now has 24 callbacks and the target facts occupy
+40 bytes on x64. The fixture covers both enumeration calls, the
+selected image facts, and refusal before recording or consuming waits.
+Build, fixture and live capture verification remain open.

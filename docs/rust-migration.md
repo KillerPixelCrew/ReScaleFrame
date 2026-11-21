@@ -364,6 +364,13 @@ the shipped declarations. Enabled and disabled linkage, the bridge
 contract, and device and game checks remain open.
 [FSR4 FG graphics setup](research/rust-vulkan-fsr4-fg-cutover.md#dxgi-and-d3d12-setup-ownership)
 
+The DLSS-G Present capture owner now admits the real image and
+enumerates it under the same WSI lease. Rust owns the image list and
+preserves Present's original waits on refusal. The native leaf
+keeps the Vulkan calls. The extended fixture and live capture
+remain unrun.
+[Real Present image selection](research/rust-vulkan-dlss-present-capture.md#real-present-image-selection)
+
 ## Verification coverage
 
 | Requirement | Recorded evidence | Still open |

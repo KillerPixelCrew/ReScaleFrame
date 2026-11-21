@@ -11,6 +11,11 @@ typedef struct rsf_dlss_capture_source {
     uint32_t generated_count, configured;
 } rsf_dlss_capture_source;
 
+typedef struct rsf_dlss_capture_target {
+    uint64_t chain;
+    uint32_t index, selected, usage, layers, format, width, height;
+} rsf_dlss_capture_target;
+
 /* Native leaves of the Rust present capture owner. Vulkan results are
    returned unchanged. Handles cross as opaque values, and the packet and
    source are borrowed for one call. */
@@ -32,9 +37,8 @@ typedef struct rsf_dlss_capture_platform {
     int32_t (*wait_fence)(void*, uint64_t, uint64_t timeout);
     uint32_t (*wants)(void*, uint64_t frame);
     uint64_t (*readbacks)(void*);
-    /* Resolves the presented real image. A non-null reason reports failure
-       and the result to log, which can be VK_SUCCESS. */
-    int32_t (*target)(void*, const rsf_sl_present_capture_packet*, rsf_srvk_image*, const char** reason);
+    void (*target)(const rsf_sl_present_capture_packet*, rsf_dlss_capture_target*);
+    int32_t (*images)(const rsf_sl_present_capture_packet*, uint64_t chain, uint32_t* count, uint64_t* images);
     uint32_t (*record)(void*, void* commands, const rsf_srvk_image*, const rsf_frame_record*, int32_t generated_index);
     /* Submits the copy behind the Present's original wait semaphores. */
     int32_t (*submit)(const rsf_sl_present_capture_packet*, void* commands, uint64_t fence);
