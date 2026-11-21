@@ -25,9 +25,9 @@ The [Anomaly release record](releases/v0.1.2-anomaly.md) distinguishes the shipp
 
 ## C ABI comparison
 
-The GameSDK and runtime contract headers match `2db07f4` byte for byte. GameSDK ABI 24 is unchanged. After removing comments, the orchestrator and presentation header comparison found only four additional linked-runtime declarations and an increase in overlay option capacity from 24 to 32. The existing function signatures and public record layouts match the baseline.
+The GameSDK and runtime contract headers match `2db07f4` byte for byte, including GameSDK ABI 24. The source audit at `d4de507` compared 88 baseline public headers across the SDK, runtime, and Anomaly. Three headers differed after removing comments and whitespace. `native_fg.h` adds three linked-runtime declarations, `d3d11_present_bridge.h` adds `rsf_d3d11_present_source_queue`, and `overlay_api.h` raises `RSF_OVERLAY_SERVICE_OPTION_LIMIT` from 24 to 32. All existing function signatures and public record layouts matched.
 
-A case-sensitive MSVC Release export comparison matched all names and ordinals for Runtime (381), AC7 (256), Loader (273), and Minecraft (267) in the Streamline-enabled build tree. The Anomaly DLL matched all three entry points in the staged C++ adapter and has no static Runtime DLL dependency.
+On November 21, 2026, both archived MSVC Release trees (`build/rust-migration` and `build/rust-migration-streamline`) matched the recorded case-sensitive export names and ordinals for Runtime (381), AC7 (256), Loader (273), Minecraft (267), and the staged C++ Anomaly adapter (3). Neither archived Anomaly DLL imports the Runtime DLL statically. Both archives predate `d4de507`.
 
 The Runtime version entry point now returns the workspace version from
 Rust with the existing C signature and static string lifetime. On the
@@ -90,10 +90,9 @@ audit found one layout defect in the private D3D11 state snapshots.
 The Windows SDK defines 253 class-instance entries, and both sides
 now check the corrected layout. See commit `bc9256f`.
 
-The current branch keeps the GameSDK and runtime contract headers
-byte-identical to `2db07f4`. Source review also traces Anomaly's
-by-name Runtime lookups and its linked Graphics calls. The final
-link still needs to cover binaries that consume more than one Rust
+Source review traced Anomaly's by-name Runtime lookups and its linked
+Graphics calls. Windows link verification still needs to cover binaries
+that consume more than one Rust
 archive. Anomaly links its adapter archive and the shared Graphics
 owner. The Runtime and combined carriers also link the FSR4 compatibility
 archive. The standalone FSR4 Vulkan bridge uses the Windows GNU
