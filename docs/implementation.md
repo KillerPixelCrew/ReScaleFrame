@@ -4,6 +4,15 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now preflights and applies Anomaly's jitter correction to the
+position reconstruction constant. The native hook supplies the verified
+engine layout and guarded reads, writes and buffer lookup. Stages
+sharing the same vector still apply the correction once. Partially
+overlapping vectors are refused before any staging write. The existing
+reconstruction fixture now covers that case and calls the same Rust
+implementation as the hook. The fixture and in-game reconstruction
+remain unverified for this revision.
+
 Rust now owns the Anomaly SR host's cached D3D11 pass, current reduced
 target batch, and retirement counters. The swap host keeps one opaque
 handle. It borrows the depth texture from the current batch and uses

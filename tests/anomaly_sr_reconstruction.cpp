@@ -87,6 +87,12 @@ void staging_contract() {
     Engine alias; alias.selected[1]=alias.selected[0]; const uint16_t index=16; put(alias.constant,0x18,index);
     CHECK(correct_position_constant(alias,alias.constant.data(),0.25f,-0.125f));
     CHECK(alias.writes == 10 && alias.value(0)[0] == 0.8f+0.25f*0.001f);
+    Engine overlap;
+    overlap.selected[1] = overlap.selected[0];
+    const uint16_t overlapping_index = 20;
+    put(overlap.constant, 0x18, overlapping_index);
+    CHECK(!correct_position_constant(overlap, overlap.constant.data(), 0.25f, -0.125f));
+    CHECK(overlap.writes == 0 && overlap.value(0) == Engine::stock);
     for (int failure=0; failure < 12; ++failure) {
         Engine bad; const auto data=bad.data, cb=bad.cb; bad.fail_write=failure;
         CHECK(!correct_position_constant(bad,bad.constant.data(),0.25f,-0.125f));

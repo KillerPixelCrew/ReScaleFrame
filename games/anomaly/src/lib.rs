@@ -54,6 +54,7 @@ mod runtime_module;
 mod shader_loader;
 mod sr_d3d11;
 mod sr_pass;
+mod sr_reconstruction;
 mod sr_stage;
 mod sr_stage_abi;
 mod sr_swap;
