@@ -16,7 +16,8 @@ type Handle = *mut c_void;
 const RESOURCES: usize = 128;
 const SAMPLERS: usize = 16;
 const CONSTANTS: usize = 14;
-const INTERFACES: usize = 256;
+// D3D11_SHADER_MAX_INTERFACES, the native class instance array length.
+const INTERFACES: usize = 253;
 const VERTEX_BUFFERS: usize = 32;
 const UAVS: usize = 64;
 const STREAM_TARGETS: usize = 4;
@@ -144,11 +145,11 @@ struct Scope {
 }
 
 const _: () = {
-    assert!(size_of::<Stage>() == 3432);
-    assert!(size_of::<Snapshot>() == 23048);
+    assert!(size_of::<Stage>() == 3408);
+    assert!(size_of::<Snapshot>() == 22904);
     assert!(std::mem::offset_of!(Snapshot, stages) == 608);
-    assert!(std::mem::offset_of!(Snapshot, targets) == 22928);
-    assert!(size_of::<DepthSnapshot>() == 2152 && size_of::<DrawSnapshot>() == 832);
+    assert!(std::mem::offset_of!(Snapshot, targets) == 22784);
+    assert!(size_of::<DepthSnapshot>() == 2128 && size_of::<DrawSnapshot>() == 832);
     assert!(size_of::<Features>() == 8);
     assert!(size_of::<Platform>() == 11 * size_of::<Handle>());
     // The narrow snapshots and the full scope live in the caller's storage.

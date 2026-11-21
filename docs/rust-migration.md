@@ -80,11 +80,37 @@ and the public C entry points retain their signatures and exports in the
 rebuilt DLL and embedded consumers.
 [Surface and teardown checks](implementation.md#rust-orchestrator-and-first-anomaly-port)
 
+## Source audit checkpoint
+
+The integrated ABI audit examined `41aa6bd` and traced the later
+Streamline host and FSR4 compatibility link paths. It matched 29
+generated ABI files, the 18 frame-tap C entries and their native table,
+and the SDK guards on the D3D12 provider calls and CMake targets. The
+audit found one layout defect in the private D3D11 state snapshots.
+The Windows SDK defines 253 class-instance entries, and both sides
+now check the corrected layout. See commit `bc9256f`.
+
+The current branch keeps the GameSDK and runtime contract headers
+byte-identical to `2db07f4`. Source review also traces Anomaly's
+by-name Runtime lookups and its linked Graphics calls. The final
+link still needs to cover binaries that consume more than one Rust
+archive. Anomaly links its adapter archive and the shared Graphics
+owner. The Runtime and combined carriers also link the FSR4 compatibility
+archive. The standalone FSR4 Vulkan bridge uses the Windows GNU
+target.
+
+Build and fixture results below apply to their recorded candidates.
+The merged source-only cutovers still need a Windows build and
+linked and DLL export comparison. Focused verification includes
+D3D11 state and fullscreen restoration, frame-tap admission and
+retirement, SR and FG provider refusal and switching, and shader
+compile and cache parity. Device and game evidence remain separate.
+
 ## Verification coverage
 
 | Requirement | Recorded evidence | Still open |
 | --- | --- | --- |
-| Core ownership | Rust owns plugin sessions, frame assembly, capture, provider admission, latency and pacing, presentation buffers, readbacks, paired physical DXGI swapchain and queue, and shared D3D11 panel state. The OpenGL and FidelityFX Vulkan WSI routes also use Rust ownership. The merged Standard clone exercised native rendering, DLSS SR and a DLSS-G to FSR3 and back provider transition. [Implementation tracker](implementation.md) · [Shared overlay host evidence](research/rust-overlay-host.md#integrated-runtime-and-standard-game-run) | Complete the ownership audit and independent device checks. Fullscreen and D3D11-on-12 overlay wrapping remain open. |
+| Core ownership | Rust owns plugin sessions, frame assembly, capture, provider admission, latency and pacing, presentation buffers, readbacks, paired physical DXGI swapchain and queue, and shared D3D11 panel state. The OpenGL and FidelityFX Vulkan WSI routes also use Rust ownership. The merged Standard clone exercised native rendering, DLSS SR and a DLSS-G to FSR3 and back provider transition. [Implementation tracker](implementation.md) · [Shared overlay host evidence](research/rust-overlay-host.md#integrated-runtime-and-standard-game-run) | The latest fullscreen, D3D11-on-12 overlay wrapping and provider cutovers need device verification. |
 | Stable C ABI and linked consumers | The merged shader patch and configuration build kept all eight checked Release PE inventories and Anomaly's by-name Runtime lookup. The enabled Debug and Vulkan Streamline-disabled Release builds matched the four core export inventories and Anomaly's three exports. Both built and ran the public shader patch cache-reopen probe. [Build variants](research/rust-shader-patch.md#avx-cold-cache-and-build-variants) | Recheck affected artifacts after further changes. |
 | C++ Anomaly baseline | Standard and AVX ran the existing C++ adapter with the Rust Runtime. Standard exercised the overlay, held-key gameplay, SR switching and DLSS-G. Both shut down through the engine. [C++ adapter baseline](research/rust-anomaly-cpp-baseline.md) | The baseline covers the exact recorded executable and payload hashes. |
 | Rust Anomaly game acceptance | Both profiles reloaded the Rust manifest in the foreground and drew the merged overlay through resize. Standard switched native and DLSS SR and changed FG providers. AVX switched SR providers with DLSS-G active and returned gameplay mouse input after closing the panel. The combined build compiled byte-identical cold shader caches in both profiles and passed the native AVX opt-out run with a gameplay backbuffer. Earlier Standard evidence covers refused-SR spatial recovery. [Cold-cache results](research/rust-shader-patch.md#avx-cold-cache-and-build-variants) · [AVX opt-out](research/rust-anomaly-sr-configuration.md#merged-avx-opt-out-retest) | Verify held-key gameplay on the Rust adapter. The pointer-bound Forward attempt left the player indoors and the capture position stationary. [Movement attempt](research/rust-overlay-host.md#pointer-bound-movement-attempt) |

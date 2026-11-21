@@ -4,6 +4,12 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The integrated ABI audit found a D3D11 snapshot layout mismatch.
+The Rust class-instance arrays now use the SDK's 253 entries, with
+matching native and Rust size and offset checks. The public state
+storage is unchanged. The audit's source evidence and the remaining
+link checks are recorded in the [migration plan](rust-migration.md#source-audit-checkpoint).
+
 Rust now owns resizing and replacement of the legacy D3D11 motion
 resolver. A refused allocation keeps the previous resolver and
 generation. Native code supplies the existing create and destroy calls.

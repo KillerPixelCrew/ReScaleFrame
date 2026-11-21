@@ -386,10 +386,11 @@ constexpr rsf_d3d11_state_platform platform{
 // Layouts the Rust owner mirrors.
 static_assert(sizeof(rsf_d3d11_state_platform) == 11 * sizeof(void*));
 static_assert(sizeof(rsf_d3d11_features) == 8);
-static_assert(sizeof(rsf_d3d11_stage_snapshot) == 3432);
-static_assert(sizeof(rsf_d3d11_snapshot) == 23048 && offsetof(rsf_d3d11_snapshot, stages) == 608 &&
-    offsetof(rsf_d3d11_snapshot, targets) == 22928);
-static_assert(sizeof(rsf_d3d11_depth_snapshot) == 2152 && sizeof(rsf_d3d11_draw_snapshot) == 832);
+static_assert(D3D11_SHADER_MAX_INTERFACES == 253);
+static_assert(sizeof(rsf_d3d11_stage_snapshot) == 3408);
+static_assert(sizeof(rsf_d3d11_snapshot) == 22904 && offsetof(rsf_d3d11_snapshot, stages) == 608 &&
+    offsetof(rsf_d3d11_snapshot, targets) == 22784);
+static_assert(sizeof(rsf_d3d11_depth_snapshot) == 2128 && sizeof(rsf_d3d11_draw_snapshot) == 832);
 static_assert(sizeof(D3D11_VIEWPORT) == 24 && sizeof(D3D11_RECT) == 16);
 
 } // namespace
