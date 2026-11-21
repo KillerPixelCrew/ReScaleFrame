@@ -11,6 +11,8 @@ mod colour_d3d11;
 #[cfg(windows)]
 mod com_ref;
 #[cfg(windows)]
+mod constant_buffer_read;
+#[cfg(windows)]
 mod constant_twins;
 #[cfg(windows)]
 mod cpu_abi;

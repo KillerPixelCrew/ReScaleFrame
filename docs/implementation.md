@@ -4,6 +4,13 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now owns D3D11 constant-buffer readback admission, the staging
+lease and the caller's byte copy. The native bridge checks the
+resource type before reading its descriptor, and the Rust path
+checks both device identities. Deferred contexts report map failure
+before a copy can enter their command lists. The public C signature
+and result values are unchanged.
+
 Rust now owns the D3D11 depth rescale transaction and the depth replay
 frame. The port keeps the original shader and native draw calls,
 including the order of depth and stencil writes. A replay with a

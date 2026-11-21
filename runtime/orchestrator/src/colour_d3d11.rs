@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
-use crate::d3d11_output::{RestoreBindings, SaveBindings, SavedBindings, texture_desc};
+use crate::d3d11_output::{
+    RestoreBindings, SaveBindings, SavedBindings, same_device, texture_desc,
+};
 use crate::d3d11_output_abi::{
     RSF_D3D11_BIND_SHADER_RESOURCE, RSF_D3D11_FORMAT_R32_FLOAT, RSF_D3D11_FORMAT_RGBA16_FLOAT,
-    RSF_D3D11_FORMAT_RGBA32_FLOAT, RSF_D3D11_USAGE_IMMUTABLE, rsf_d3d11_output_child_device,
-    rsf_d3d11_output_clear_state, rsf_d3d11_output_copy_region, rsf_d3d11_output_copy_resource,
-    rsf_d3d11_output_create_texture, rsf_d3d11_output_is_immediate, rsf_d3d11_output_srv_format,
+    RSF_D3D11_FORMAT_RGBA32_FLOAT, RSF_D3D11_USAGE_IMMUTABLE, rsf_d3d11_output_clear_state,
+    rsf_d3d11_output_copy_region, rsf_d3d11_output_copy_resource, rsf_d3d11_output_create_texture,
+    rsf_d3d11_output_is_immediate, rsf_d3d11_output_srv_format,
     rsf_d3d11_texture_desc as TextureDesc,
 };
 use crate::motion_d3d11::{GROUP_EDGE, Handle, MakeView, SourceViews};
@@ -74,8 +76,7 @@ impl Program {
     }
 
     fn same_device(&self, child: Handle) -> bool {
-        unsafe { ComRef::from_owned(rsf_d3d11_output_child_device(child)) }
-            .is_some_and(|owner| owner.as_ptr() == self.device.as_ptr())
+        unsafe { same_device(self.device.as_ptr(), child) }
     }
 
     fn accepts_context(&self, context: Handle) -> bool {

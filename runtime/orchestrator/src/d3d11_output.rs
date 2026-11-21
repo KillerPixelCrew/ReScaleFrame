@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
 use crate::d3d11_output_abi::{
-    rsf_d3d11_output_texture_desc, rsf_d3d11_state, rsf_d3d11_texture_desc, rsf_fullscreen_pass,
+    rsf_d3d11_output_child_device, rsf_d3d11_output_texture_desc, rsf_d3d11_state,
+    rsf_d3d11_texture_desc, rsf_fullscreen_pass,
 };
 use std::ffi::c_void;
 use std::ptr::NonNull;
@@ -94,6 +95,13 @@ pub(super) unsafe fn texture_desc(texture: *mut c_void) -> rsf_d3d11_texture_des
     let mut desc = rsf_d3d11_texture_desc::default();
     unsafe { rsf_d3d11_output_texture_desc(texture, &mut desc) };
     desc
+}
+
+// A non-null child must be a live ID3D11DeviceChild interface.
+pub(super) unsafe fn same_device(device: *mut c_void, child: *mut c_void) -> bool {
+    !child.is_null()
+        && unsafe { ComRef::from_owned(rsf_d3d11_output_child_device(child)) }
+            .is_some_and(|owner| owner.as_ptr() == device)
 }
 
 pub(super) struct GraphicsCache<T>(Mutex<Option<T>>);
