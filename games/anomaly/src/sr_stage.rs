@@ -21,6 +21,7 @@ use crate::sr_d3d11::{Extent, Platform as D3d11Platform, TemporalTargets};
 use crate::sr_stage_abi::*;
 use rsf_game_sys::{RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record};
 use std::ffi::{CStr, CString, c_char, c_void};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
@@ -95,6 +96,7 @@ macro_rules! leaf {
     };
 }
 
+mod burst_file;
 mod gpu_timer;
 
 fn default_jitter() -> JitterState {
@@ -2175,9 +2177,21 @@ impl Stage {
         let context = leaf!(p, context());
         if context.is_null() {
             state.burst.result = "no device context".into();
+            state.burst.frames.clear();
             return;
         }
-        let _ = std::fs::create_dir(&state.burst.directory);
+        if let Err(error) = std::fs::create_dir(&state.burst.directory) {
+            state.burst.result = format!(
+                "could not create {} ({error})",
+                state.burst.directory.to_string_lossy()
+            );
+            state.burst.frames.clear();
+            self.say(
+                state,
+                &format!("Anomaly SR stage 3 jitter burst: {}", state.burst.result),
+            );
+            return;
+        }
         let mut json = String::from(
             "{\n  \"schema\": \"rsf-anomaly-sr-jitter-burst-1\",\n  \"convention\": \"jitter in render pixels, +X right, +Y down; the rasterized world moves by (+x, +y). world_NN.bin: render-size FP16 RGBA generic0 twin at the S-B seam (engine low tonemap space), rows packed. final_NN.bin: back buffer before Present, rows packed.\",\n",
         );
@@ -2192,15 +2206,7 @@ impl Stage {
         let mut written = 0u32;
         for (i, frame) in state.burst.frames.iter_mut().enumerate() {
             let write = |name: String, texture: &Option<GpuLease>| {
-                let (mut w, mut h, mut f) = (0, 0, 0);
-                let path = wide(&state.burst.directory.join(name));
-                let texture = texture.as_ref().map_or(null_mut(), |t| t.0.as_ptr());
-                let ok = !texture.is_null()
-                    && leaf!(
-                        p,
-                        write_raw(path.as_ptr(), context, texture, &mut w, &mut h, &mut f)
-                    );
-                (ok, w, h, f)
+                burst_file::staging(p, context, texture, &state.burst.directory.join(name))
             };
             let (world_ok, ww, wh, wf) = write(format!("world_{i:02}.bin"), &frame.world);
             let (final_ok, fw, fh, ff) = write(format!("final_{i:02}.bin"), &frame.presented);
@@ -2230,11 +2236,15 @@ impl Stage {
             frame.presented = None;
         }
         json += "  ]\n}\n";
-        let _ = std::fs::write(state.burst.directory.join("burst.json"), json);
-        state.burst.result = format!(
-            "{written} of {count} world frames written to {}",
-            state.burst.directory.to_string_lossy()
-        );
+        let summary = state.burst.directory.join("burst.json");
+        state.burst.result =
+            match burst_file::write_new(&summary, |file| file.write_all(json.as_bytes())) {
+                Ok(()) => format!(
+                    "{written} of {count} world frames written to {}",
+                    state.burst.directory.to_string_lossy()
+                ),
+                Err(error) => format!("could not write {} ({error})", summary.to_string_lossy()),
+            };
         let text = format!("Anomaly SR stage 3 jitter burst: {}", state.burst.result);
         self.say(state, &text);
     }

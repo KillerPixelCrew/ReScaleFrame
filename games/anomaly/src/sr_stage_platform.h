@@ -227,6 +227,11 @@ typedef struct rsf_anomaly_sr_timer {
     bool device;
 } rsf_anomaly_sr_timer;
 
+typedef struct rsf_anomaly_sr_mapped_texture {
+    const void* data;
+    uint32_t width, height, format, row_pitch, pixel_bytes;
+} rsf_anomaly_sr_mapped_texture;
+
 // TemporalOptions (sr_temporal.h) for Stages 4 and 5. The UTF-8 vendor directories are borrowed for the call.
 typedef struct rsf_anomaly_sr_driver_config {
     uint32_t stage;
@@ -277,7 +282,8 @@ typedef struct rsf_anomaly_sr_stage_platform {
     void (*host_reset)(void);
     void* (*staging_copy)(void* context, void* source);   // an owned staging texture or null
     void (*release)(void*);
-    bool (*write_raw)(const uint16_t* path, void* context, void* texture, uint32_t* width, uint32_t* height, uint32_t* format);
+    bool (*map_staging)(void* context, void* texture, rsf_anomaly_sr_mapped_texture*);
+    void (*unmap_staging)(void* context, void* texture);
     bool (*bilinear)(void);
     bool (*round_trip)(void);
     bool (*temporal_ready)(void);

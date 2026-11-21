@@ -4,6 +4,15 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now writes Anomaly's SR jitter burst files. The native bridge maps
+the staging textures and reports their DXGI row layout. Rust validates
+the pitch and address range, writes the same packed rows and releases
+each map on exit. Failed writes remove their partial files, and the
+summary reports a write failure. The staging copy checks device
+ownership and restores the original D3D11 predication state after the
+copy. The private bindings were regenerated. Build and runtime
+validation remain open.
+
 The Anomaly input frame hook and SR position binder share one Rust
 vtable slot owner. It checks image bounds, publishes the original
 before installing the detour, and uses the native guarded

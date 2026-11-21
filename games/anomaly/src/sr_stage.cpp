@@ -18,6 +18,7 @@
 #include "sr_swap.h"
 #include "sr_reconstruction.h"
 #include "sr_temporal.h"
+#include "../../../runtime/graphics/src/device_owner.h"
 #include <rescaleframe/d3d11_state.h>
 #include <rescaleframe/game_frame.h>
 #include <rescaleframe/overlay_api.h>
@@ -30,6 +31,8 @@
 #include <cwchar>
 #include <string>
 #include <string_view>
+
+namespace rsf { uint32_t texture_pixel_bytes(DXGI_FORMAT format); }
 
 extern "C" {
 void rsf_anomaly_sr_stage_register(const rsf_anomaly_sr_stage_platform*) noexcept;
@@ -123,7 +126,7 @@ bool loading_screen_active() noexcept {
 // An owned staging copy of a single-sample texture (the Stage 3 burst copies frames here and maps them once at the end).
 void* staging_copy(void* context, void* source) noexcept {
     auto* ctx = static_cast<ID3D11DeviceContext*>(context);
-    if (!ctx || !source) return nullptr;
+    if (!ctx || !source || ctx->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) return nullptr;
     ComPtr<ID3D11Texture2D> texture;
     if (FAILED(static_cast<IUnknown*>(source)->QueryInterface(IID_PPV_ARGS(&texture)))) return nullptr;
     D3D11_TEXTURE2D_DESC desc{};
@@ -137,8 +140,13 @@ void* staging_copy(void* context, void* source) noexcept {
     ComPtr<ID3D11Device> device;
     ctx->GetDevice(&device);
     ComPtr<ID3D11Texture2D> copy;
-    if (!device || FAILED(device->CreateTexture2D(&desc, nullptr, &copy))) return nullptr;
+    if (!rsf::same_device(texture.Get(), device.Get()) || FAILED(device->CreateTexture2D(&desc, nullptr, &copy))) return nullptr;
+    ComPtr<ID3D11Predicate> predicate;
+    BOOL predicate_value{};
+    ctx->GetPredication(&predicate, &predicate_value);
+    ctx->SetPredication(nullptr, FALSE);
     ctx->CopySubresourceRegion(copy.Get(), 0, 0, 0, 0, texture.Get(), 0, nullptr);
+    ctx->SetPredication(predicate.Get(), predicate_value);
     return copy.Detach();
 }
 
@@ -424,25 +432,21 @@ bool install_hooks() noexcept {
     return hooks.install(image, build->image_size(), sites);
 }
 
-// Raw rows (tightly packed) of a mapped staging texture.
-bool write_raw(const wchar_t* path, ID3D11DeviceContext* ctx, ID3D11Texture2D* texture, uint32_t& width, uint32_t& height,
-    uint32_t& format) noexcept {
-    if (!texture || !ctx || !path) return false;
+bool map_staging(void* context, void* source, rsf_anomaly_sr_mapped_texture* out) noexcept {
+    auto* ctx = static_cast<ID3D11DeviceContext*>(context);
+    auto* texture = static_cast<ID3D11Texture2D*>(source);
     D3D11_TEXTURE2D_DESC desc{};
     texture->GetDesc(&desc);
-    width = desc.Width;
-    height = desc.Height;
-    format = desc.Format;
-    const uint32_t texel = desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT ? 8 : 4;
+    *out = {nullptr, desc.Width, desc.Height, static_cast<uint32_t>(desc.Format), 0, rsf::texture_pixel_bytes(desc.Format)};
+    ComPtr<ID3D11Device> device;
+    ctx->GetDevice(&device);
+    if (!out->pixel_bytes || ctx->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE || !rsf::same_device(texture, device.Get()))
+        return false;
     D3D11_MAPPED_SUBRESOURCE mapped{};
     if (FAILED(ctx->Map(texture, 0, D3D11_MAP_READ, 0, &mapped))) return false;
-    FILE* file{};
-    bool ok = _wfopen_s(&file, path, L"wb") == 0 && file;
-    for (uint32_t row = 0; ok && row < desc.Height; ++row)
-        ok = std::fwrite(static_cast<const std::byte*>(mapped.pData) + std::size_t(row) * mapped.RowPitch, texel, desc.Width, file) == desc.Width;
-    if (file) std::fclose(file);
-    ctx->Unmap(texture, 0);
-    return ok;
+    out->data = mapped.pData;
+    out->row_pitch = mapped.RowPitch;
+    return true;
 }
 void apply_colour_transport(bool transport) noexcept {
     using Set = void (*)(uint32_t);
@@ -613,9 +617,9 @@ const rsf_anomaly_sr_stage_platform platform{
     },
     .staging_copy = [](void* context, void* source) { return staging_copy(context, source); },
     .release = [](void* object) { if (object) static_cast<IUnknown*>(object)->Release(); },
-    .write_raw = [](const uint16_t* path, void* context, void* texture, uint32_t* width, uint32_t* height, uint32_t* format) {
-        return write_raw(reinterpret_cast<const wchar_t*>(path), static_cast<ID3D11DeviceContext*>(context),
-            static_cast<ID3D11Texture2D*>(texture), *width, *height, *format);
+    .map_staging = map_staging,
+    .unmap_staging = [](void* context, void* texture) {
+        static_cast<ID3D11DeviceContext*>(context)->Unmap(static_cast<ID3D11Texture2D*>(texture), 0);
     },
     .bilinear = [] { return host.seam_views && host.upscale_pass.run(host.context(), *host.seam_views); },
     .round_trip = [] {
