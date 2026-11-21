@@ -7,7 +7,7 @@
 use crate::com_ref::ComRef;
 use crate::dxgi_format::{
     D24_UNORM_S8_UINT, D32_FLOAT, D32_FLOAT_S8X24_UINT, R24_UNORM_X8_TYPELESS, R24G8_TYPELESS,
-    R32_TYPELESS, R32G8X24_TYPELESS, half_to_f32,
+    R32_TYPELESS, R32G8X24_TYPELESS, RGBA16_FLOAT, RGBA32_FLOAT, half_to_f32,
 };
 use crate::gl_pipeline_abi::{rsf_dlss_setup, rsf_sr12_setup as Setup};
 use crate::render_abi::*;
@@ -38,8 +38,6 @@ const SR_NONE: u32 = 0;
 const SR_DLSS: u32 = 1;
 const MAX_QUALITY: u32 = 5;
 
-const RGBA32_FLOAT: u32 = 2;
-const RGBA16_FLOAT: u32 = 10;
 const RG32_FLOAT: u32 = 16;
 const R32_FLOAT_X8X24_TYPELESS: u32 = 21;
 const R11G11B10_FLOAT: u32 = 26;

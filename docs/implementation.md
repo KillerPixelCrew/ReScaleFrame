@@ -4,6 +4,13 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now owns D3D12 sharpening admission, pipeline leases, scratch
+replacement and the three descriptor slots. The caller still retires
+each slot before reuse. Native leaves preserve the descriptor layout,
+barriers, copy order, shaders and constant packing. The internal
+facade keeps its run and counter calls, and an inactive pass performs
+no GPU work.
+
 The D3D11, D3D12 and Vulkan sharpening bridges share one mapping from
 the public options to the native constant-packing inputs. D3D11 refuses
 immutable outputs before dispatch because the post-pass copy requires

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
-// DXGI depth format values shared by the D3D11 and D3D12 paths.
+// DXGI format values shared by the Direct3D paths.
+pub(super) const RGBA32_FLOAT: u32 = 2;
+pub(super) const RGBA16_FLOAT: u32 = 10;
 pub(super) const R32G8X24_TYPELESS: u32 = 19;
 pub(super) const D32_FLOAT_S8X24_UINT: u32 = 20;
 pub(super) const R32_TYPELESS: u32 = 39;

@@ -2,24 +2,23 @@
 #pragma once
 #include "options.h"
 #include <d3d12.h>
-#include <wrl/client.h>
-#include <array>
+struct rsf_sharpen12;
+
 namespace rsf::sharpening {
-// Caller retires slot 0..2 before reuse, and all submitted work before destruction.
+// Caller serializes calls, retires slot 0..2 before reuse, and drains all work before destruction.
 // Output enters/leaves UAV; optional inputs remain NON_PIXEL_SHADER_RESOURCE.
 // Root constants are copied into the command recording; descriptors/scratch are per slot.
 class D3D12 {
 public:
+    D3D12() = default;
+    D3D12(const D3D12&) = delete;
+    D3D12& operator=(const D3D12&) = delete;
+    ~D3D12();
+
     bool run(ID3D12GraphicsCommandList*, ID3D12Resource* output, ID3D12Resource* motion,
         ID3D12Resource* depth, ID3D12Resource* exposure, const Options&, Frame, uint32_t slot);
-    uint64_t dispatches() const { return dispatches_; }
+    uint64_t dispatches() const;
 private:
-    bool prepare(ID3D12Device*, const D3D12_RESOURCE_DESC&, uint32_t slot);
-    Microsoft::WRL::ComPtr<ID3D12Device> device_;
-    Microsoft::WRL::ComPtr<ID3D12RootSignature> root_;
-    Microsoft::WRL::ComPtr<ID3D12PipelineState> pipelines_[3];
-    std::array<Microsoft::WRL::ComPtr<ID3D12DescriptorHeap>,3> heaps_;
-    std::array<Microsoft::WRL::ComPtr<ID3D12Resource>,3> scratch_;
-    uint64_t dispatches_=0;
+    rsf_sharpen12* owner_ = nullptr;
 };
 }
