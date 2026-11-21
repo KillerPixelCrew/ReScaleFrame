@@ -929,7 +929,7 @@ unsafe extern "C" fn rsf_core_native_regions_temporal_mask(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_native_regions_release() {
+pub(super) extern "C" fn rsf_core_native_regions_release() {
     RESOURCES.with(|cache| *cache = None);
 }
 

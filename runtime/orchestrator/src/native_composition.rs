@@ -304,7 +304,7 @@ unsafe extern "C" fn rsf_native_composition_read(frame: *mut Frame) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_native_composition_release() {
+pub(super) extern "C" fn rsf_native_composition_release() {
     rsf_native_composition_request(0);
     COMPOSITION.with(|state| *state = Composition::new());
 }

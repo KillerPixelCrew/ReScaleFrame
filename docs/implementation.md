@@ -4,6 +4,20 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The shared D3D11 SR pipeline now admits and publishes surfaces in Rust.
+Resource shutdown calls the existing Rust owners directly in the same
+release order. Shutdown closes surface admission before clearing the
+game-facing configuration. The focused Rust fixture reproduced stale
+surface publication when admission closed at the end of teardown and
+passed with the corrected ordering.
+
+All 413 locked workspace Rust tests, formatting and Clippy passed on
+Rust 1.94.1. MSVC Release passed six focused CPU and ABI contracts. A
+direct Runtime DLL call verified idle surface refusal and repeated
+resource release. Runtime, AC7, Loader and Minecraft matched every
+baseline export name and ordinal. Device and game behavior for this
+change remain unverified.
+
 The integrated workspace passed all 332 locked tests, formatting, Clippy
 with warnings denied and the optimized Cargo build on the pinned Rust
 1.94.1 toolchain. MSVC 19.52 Release built Runtime and Anomaly with

@@ -158,9 +158,6 @@ catch (...) { return RSF_DLSS_ERROR_FEATURE_FAILED; }
 void fg_capture(void* context, const rsf_dlss_frame* frame) noexcept try { rsf_native_fg_capture(context, frame); }
 catch (...) {}
 
-void native_sr_release() noexcept try { rsf_native_sr_release_resources(); }
-catch (...) {}
-
 /* D3D11 textures. */
 void clear_black(void* raw_device, void* texture) noexcept try
 {
@@ -403,7 +400,7 @@ catch (...) { return RSF_TEXTURE_ERROR_INVALID_ARGUMENT; }
 constexpr rsf_dlssp_platform leaves{
     present_host, share_host, load, set_device, query_support, plan_render, release_resources, release_viewport,
     shutdown_streamline, evaluate_layer, preset_valid,
-    fg_evaluate, fg_capture, native_sr_release,
+    fg_evaluate, fg_capture, rsf_native_sr_release_resources,
     texture_desc, create_texture, clear_black, create_zeroed,
     decode_create, decode_run, decode_texture, decode_destroy,
     resolve_create, resolve_run, resolve_motion, resolve_depth, resolve_destroy,

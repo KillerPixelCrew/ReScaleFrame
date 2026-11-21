@@ -158,7 +158,7 @@ unsafe extern "C" fn rsf_core_native_scalar_exposure(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_native_exposure_release() {
+pub(super) extern "C" fn rsf_core_native_exposure_release() {
     EXPOSURE.with(|cache| *cache = None);
 }
 

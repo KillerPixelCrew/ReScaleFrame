@@ -333,6 +333,6 @@ unsafe extern "C" fn rsf_core_native_reinsert(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_native_reinsert_release() {
+pub(super) extern "C" fn rsf_core_native_reinsert_release() {
     REINSERT.with(|cache| *cache = None);
 }

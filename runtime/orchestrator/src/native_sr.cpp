@@ -1,11 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <rescaleframe/native_sr.h>
 #include <rescaleframe/game_api.h>
-#include <rescaleframe/native_composition.h>
-#include <rescaleframe/native_cpu.h>
 #include <rescaleframe/native_fg.h>
-#include <rescaleframe/native_window.h>
-#include <rescaleframe/native_scene.h>
 #include <rescaleframe/native_translucency.h>
 #include <rescaleframe/d3d11_state.h>
 #include <rescaleframe/motion_resolve.h>
@@ -15,12 +11,6 @@
 #include <d3d11.h>
 #include <wrl/client.h>
 
-enum class Temporal : uint32_t { Sr };
-extern "C" void rsf_core_native_sr_reset(Temporal);
-extern "C" void rsf_core_native_sr_publish_surface(uint32_t width, uint32_t height,
-    uint32_t render_width, uint32_t render_height);
-extern "C" void rsf_core_native_sr_clear_surface();
-extern "C" void rsf_core_native_exposure_release();
 void* rsf_native_scalar_exposure(void* context, void* input);
 
 namespace {
@@ -213,30 +203,8 @@ constexpr FgServices fg_services{
 
 extern "C" int32_t rsf_core_native_sr_capture_fg(void* context, const rsf_game_render_pass* pass,
     const rsf_motion_decode_params* motion, const SrServices*, const FgServices*);
-extern "C" void rsf_core_native_sr_fg_inputs_release();
-
 extern "C" RSF_RUNTIME_API int32_t rsf_native_sr_capture_fg(void* context, const rsf_game_render_pass* pass,
     const rsf_motion_decode_params* motion)
 {
     return rsf_core_native_sr_capture_fg(context, pass, motion, &sr_services, &fg_services);
 }
-
-extern "C" RSF_RUNTIME_API void rsf_native_sr_release_resources(void)
-{
-    rsf_native_scene_reset(); rsf_native_window_reset(); rsf_native_cpu_release(); rsf_native_composition_release();
-    rsf_native_sr_set_enabled(0);
-    rsf_core_native_exposure_release(); rsf_native_regions_release();
-    rsf_core_native_sr_fg_inputs_release(); rsf_native_reinsert_release(); rsf_core_native_sr_reset(Temporal::Sr);
-    rsf_native_translucency_release();
-    rsf_core_native_sr_clear_surface();
-}
-
-extern "C" RSF_RUNTIME_API int rsf_native_sr_set_surface(uint32_t width, uint32_t height) try
-{
-    rsf_dlss_pipeline_status status{}; status.struct_size = sizeof(status);
-    if (!width || !height || rsf_dlss_pipeline_get_status(&status) != RSF_DLSS_PIPELINE_OK || !status.running ||
-        status.output_width != width || status.output_height != height) return 0;
-    rsf_core_native_sr_publish_surface(width, height, status.render_width, status.render_height);
-    return 1;
-}
-catch (...) { return 0; }

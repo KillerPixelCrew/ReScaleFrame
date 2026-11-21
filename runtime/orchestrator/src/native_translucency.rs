@@ -846,7 +846,7 @@ unsafe extern "C" fn rsf_core_native_translucency_take(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_native_translucency_release() {
+pub(super) extern "C" fn rsf_core_native_translucency_release() {
     OWNER.release();
 }
 

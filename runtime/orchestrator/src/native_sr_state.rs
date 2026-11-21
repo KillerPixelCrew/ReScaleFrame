@@ -152,19 +152,15 @@ pub(super) fn commit_history(kind: u32, pass: &Pass) {
     }
 }
 
-#[unsafe(no_mangle)]
-pub(super) extern "C" fn rsf_core_native_sr_reset(kind: u32) {
+pub(super) fn reset_history(kind: u32) {
     if let Some(slot) = HISTORY.lock().unwrap().get_mut(kind as usize) {
         *slot = None;
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_native_sr_publish_surface(
-    output_width: u32,
-    output_height: u32,
-    render_width: u32,
-    render_height: u32,
+pub(super) fn publish_surface(
+    [output_width, output_height]: [u32; 2],
+    [render_width, render_height]: [u32; 2],
 ) {
     let mut surface = SURFACE.lock().unwrap();
     *surface = Config {
@@ -177,13 +173,12 @@ extern "C" fn rsf_core_native_sr_publish_surface(
     };
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_native_sr_clear_surface() {
+pub(super) fn clear_surface() {
     *SURFACE.lock().unwrap() = EMPTY_CONFIG;
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_native_sr_set_enabled(enabled: u32) {
+pub(super) extern "C" fn rsf_native_sr_set_enabled(enabled: u32) {
     SURFACE.lock().unwrap().enabled = u32::from(enabled != 0);
 }
 

@@ -74,6 +74,12 @@ Runtime DLL. Anomaly borrows the already-loaded module with
 `GetModuleHandleW` and resolves the C tables by name. The public GameSDK,
 runtime contract and shader patch headers match the baseline byte for byte.
 
+The remaining shared D3D11 SR surface admission and release sequence now
+run in Rust. The pipeline closes admission before releasing the surface,
+and the public C entry points retain their signatures and exports in the
+rebuilt DLL and embedded consumers.
+[Surface and teardown checks](implementation.md#rust-orchestrator-and-first-anomaly-port)
+
 ## Verification coverage
 
 | Requirement | Recorded evidence | Still open |

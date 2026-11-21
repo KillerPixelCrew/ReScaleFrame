@@ -8,11 +8,21 @@ use crate::d3d11_output_abi::{
 };
 use crate::fg_scene::with_scene;
 use crate::frame_assembly::rsf_assemble_dlss_frame;
+use crate::native_composition::rsf_native_composition_release;
+use crate::native_cpu::rsf_native_cpu_release;
+use crate::native_exposure::rsf_core_native_exposure_release;
+use crate::native_regions::rsf_core_native_regions_release;
+use crate::native_reinsert::rsf_core_native_reinsert_release;
+use crate::native_scene::rsf_native_scene_reset;
 use crate::native_sr_abi::{
     RSF_DLSS_PIPELINE_ABI_VERSION, rsf_dlss_pipeline_frame as Frame,
     rsf_motion_decode_params as DecodeParams, rsf_native_translucency_masks as Masks,
 };
-use crate::native_sr_state::{camera_for, commit_history, rsf_core_native_sr_reset};
+use crate::native_sr_state::{
+    camera_for, clear_surface, commit_history, reset_history, rsf_native_sr_set_enabled,
+};
+use crate::native_translucency::rsf_core_native_translucency_release;
+use crate::native_window::rsf_native_window_reset;
 use crate::render_abi::{
     rsf_dlss_frame as DlssFrame, rsf_frame_resources, rsf_motion_resolve_params,
 };
@@ -97,7 +107,7 @@ unsafe fn input_is_local(pass: &Pass, depth_layout: i32) -> bool {
 
 fn discard_history(result: i32) -> i32 {
     if result != LEAF_FAULT {
-        rsf_core_native_sr_reset(SR);
+        reset_history(SR);
     }
     result
 }
@@ -306,7 +316,7 @@ unsafe fn capture_on_stream(
                 inputs
             } else {
                 *cache = None;
-                rsf_core_native_sr_reset(FG);
+                reset_history(FG);
                 let decode = MotionPass::new(
                     unsafe { (fg.create_decode)(device.as_ptr(), width, height) },
                     fg.destroy_decode,
@@ -484,9 +494,20 @@ unsafe extern "C" fn rsf_core_native_sr_capture_fg(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_native_sr_fg_inputs_release() {
+extern "C" fn rsf_native_sr_release_resources() {
+    rsf_native_scene_reset();
+    rsf_native_window_reset();
+    rsf_native_cpu_release();
+    rsf_native_composition_release();
+    rsf_native_sr_set_enabled(0);
+    rsf_core_native_exposure_release();
+    rsf_core_native_regions_release();
     FG_INPUTS.with(|cache| *cache = None);
-    rsf_core_native_sr_reset(FG);
+    reset_history(FG);
+    rsf_core_native_reinsert_release();
+    reset_history(SR);
+    rsf_core_native_translucency_release();
+    clear_surface();
 }
 
 #[cfg(test)]

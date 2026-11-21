@@ -207,7 +207,7 @@ unsafe extern "C" fn rsf_core_native_scene_present_path(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_native_scene_reset() {
+pub(super) extern "C" fn rsf_native_scene_reset() {
     SCENES.with(|scenes| {
         if let Ok(mut scenes) = scenes.try_borrow_mut() {
             *scenes = [EMPTY; CAPACITY];

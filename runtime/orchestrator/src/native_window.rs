@@ -270,7 +270,7 @@ unsafe extern "C" fn rsf_native_window_last_present(record: *mut rsf_native_pres
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_native_window_reset() {
+pub(super) extern "C" fn rsf_native_window_reset() {
     SCOPES.with_borrow_mut(|scopes| *scopes = WindowScopes::new());
     LAST_PRESENT.set(None);
 }

@@ -24,6 +24,7 @@ use crate::native_sr_abi::{
     RSF_DLSS_PIPELINE_ABI_VERSION as ABI, rsf_dlss_pipeline_frame as Frame,
     rsf_motion_decode_params as DecodeParams,
 };
+use crate::native_sr_state::publish_surface;
 use crate::render_abi::{
     RSF_FRAME_ASSEMBLY_ABI_VERSION, RSF_SHARPENING_ABI_VERSION, rsf_dlss_frame as DlssFrame,
     rsf_frame_resources, rsf_motion_resolve_params, rsf_pipeline_camera_frame as Camera,
@@ -621,6 +622,8 @@ impl Pipeline {
     // Undo whatever is held, in the reverse of the order it was acquired. Safe at any point in a
     // partially completed start, which is what its failure paths rely on.
     unsafe fn tear_down(&self, p: &P, owned: &mut Owned) {
+        // Close surface admission before the release callback clears the published configuration.
+        self.shared().running = false;
         unsafe {
             (p.native_sr_release)();
             if !owned.fidelity.is_null() {
@@ -675,7 +678,6 @@ impl Pipeline {
         owned.layer_given_up = false;
         owned.layer_reported = Reported::default();
         let mut shared = self.shared();
-        shared.running = false;
         shared.backend = SR_DLSS;
         shared.requested_backend = SR_DLSS;
         shared.last_switch_result = 0;
@@ -1602,6 +1604,15 @@ as RenderDoc is the usual reason: it wraps the device and NGX refuses it"
         OK
     }
 
+    fn set_surface(&self, output: [u32; 2]) -> i32 {
+        let shared = self.shared();
+        if !shared.running || shared.output != output || output.contains(&0) {
+            return 0;
+        }
+        publish_surface(output, [shared.range.width, shared.range.height]);
+        1
+    }
+
     pub(super) unsafe fn status(&self, status: *mut Status) -> i32 {
         if !unsafe { has_capacity(status) } {
             return INVALID;
@@ -2212,6 +2223,11 @@ unsafe extern "C" fn rsf_core_dlss_pipeline_request_dump(prefix: *const c_char) 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_dlss_pipeline_get_status(status: *mut Status) -> i32 {
     unsafe { PROCESS.status(status) }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_native_sr_set_surface(width: u32, height: u32) -> i32 {
+    PROCESS.set_surface([width, height])
 }
 
 #[unsafe(no_mangle)]

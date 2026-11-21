@@ -620,6 +620,9 @@ fn start_validates_plans_and_stop_releases_every_lease() {
         (state.output_width, state.output_height, state.backend),
         (1280, 720, SR_DLSS)
     );
+    assert_eq!(pipeline.set_surface([1280, 720]), 1);
+    assert_eq!(pipeline.set_surface([1280, 721]), 0);
+    assert_eq!(pipeline.set_surface([0, 720]), 0);
     assert_eq!(
         with(|world| world.calls.clone()),
         [
@@ -648,7 +651,22 @@ fn start_validates_plans_and_stop_releases_every_lease() {
     );
 
     with(|world| world.calls.clear());
-    assert_eq!(unsafe { pipeline.stop(&PLATFORM) }, OK);
+    unsafe extern "C" fn release_with_surface_retry() {
+        crate::native_sr_state::clear_surface();
+        let published = unsafe { &*PIPE.get() }.set_surface([1280, 720]);
+        call(if published == 0 {
+            "native_sr_release"
+        } else {
+            "surface republished during release"
+        });
+    }
+    let platform = P {
+        native_sr_release: release_with_surface_retry,
+        ..PLATFORM
+    };
+    PIPE.set(&pipeline);
+    assert_eq!(unsafe { pipeline.stop(&platform) }, OK);
+    PIPE.set(ptr::null());
     assert_eq!(
         with(|world| world.calls.clone()),
         [
@@ -661,6 +679,7 @@ fn start_validates_plans_and_stop_releases_every_lease() {
     assert_eq!((refs(device), refs(output)), (1, 0));
     assert!(pipeline.output_texture().is_null());
     assert_eq!(status(&pipeline).running, 0);
+    assert_eq!(pipeline.set_surface([1280, 720]), 0);
     let lines = with(|world| world.logs.len());
     assert_eq!(unsafe { pipeline.set_preset(&PLATFORM, 5) }, OK);
     assert_eq!(with(|world| world.logs.len()), lines, "no line after stop");
