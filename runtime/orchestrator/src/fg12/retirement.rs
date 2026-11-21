@@ -20,7 +20,7 @@ impl VendorUse {
     pub(super) fn reusable(&self, generation: u64) -> bool {
         match self {
             Self::None => false,
-            // The bridge increments the provider generation after a drained switch.
+            // The bridge advances the generation after a drained switch or retirement.
             Self::Preparing(old) | Self::Unfenced(old) => *old != generation,
             Self::Joined(point) => point.state() == FenceState::Complete,
         }

@@ -4,6 +4,13 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The Direct3D presentation bridge keeps replacement admission closed
+while an unpublished owner drains. It advances the provider generation
+after successful retirement. A failed drain keeps the owner retained
+and prevents a successor switch from releasing its outstanding input
+leases. Source review checked publication order. The updated retirement
+fixtures remain unrun.
+
 The native D3D12 overlay retains the value for its outstanding fence
 event. A wake before that value keeps the event armed. Device removal
 allows failed-path retirement without waiting for a wake and still

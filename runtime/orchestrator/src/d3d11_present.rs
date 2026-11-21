@@ -280,6 +280,8 @@ static ACTIVE_HOST: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 static ACTIVE_CHAIN: AtomicPtr<Owner> = AtomicPtr::new(null_mut());
 static ACTIVE_BRIDGE: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 static ACTIVE_SESSION: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
+// An unpublished owner still owns its provider until its queues have drained.
+static RETIREMENT_PENDING: AtomicBool = AtomicBool::new(false);
 // The active provider paces through the shared Streamline host (Reflex), so latency calls go
 // to the host once rather than to both. Changes only with ACTIVE_SESSION, under PROVIDER_GUARD.
 static HOST_PACED: AtomicBool = AtomicBool::new(false);
@@ -1893,13 +1895,15 @@ impl Owner {
     fn retire_owner(&self) {
         let p = self.p();
         let b = self.b();
-        {
+        let published = {
             // Drain existing shared provider leases before unpublishing. Release this lock
             // before the GPU drain; new leases cannot obtain this session.
             let _guard = PROVIDER_GUARD
                 .write()
                 .unwrap_or_else(PoisonError::into_inner);
-            if ACTIVE_CHAIN.load(Ordering::Acquire) == ptr::from_ref(self).cast_mut() {
+            let published = ACTIVE_CHAIN.load(Ordering::Acquire) == ptr::from_ref(self).cast_mut();
+            if published {
+                RETIREMENT_PENDING.store(true, Ordering::Release);
                 lock(&STATUS).invalidate();
                 OUTER_ALIAS.store(null_mut(), Ordering::Release);
                 lock(&ACTIVE_GRAPHICS).0 = Graphics::EMPTY;
@@ -1908,7 +1912,8 @@ impl Owner {
                 ACTIVE_SESSION.store(null_mut(), Ordering::Release);
                 HOST_PACED.store(false, Ordering::SeqCst);
             }
-        }
+            published
+        };
         // On device failure retain GPU-reachable storage for the process rather than free it.
         if failed(self.drain()) {
             log("presentation bridge: retirement failed; retaining provider and shared inputs");
@@ -1940,6 +1945,10 @@ impl Owner {
         let private = !host.is_null() && ACTIVE_HOST.load(Ordering::Acquire) != host;
         unsafe { (p.release_device)(b, u32::from(private)) };
         drop(direct_buffers);
+        if published {
+            CHAIN_GENERATION.fetch_add(1, Ordering::SeqCst);
+            RETIREMENT_PENDING.store(false, Ordering::Release);
+        }
     }
 
     fn refuse(&self) {
@@ -2036,7 +2045,8 @@ pub(crate) unsafe extern "C" fn rsf_core_d3d11p_create(
         return DXGI_ERROR_UNSUPPORTED;
     }
     let _creation = lock(&CREATION_GUARD);
-    if !ACTIVE_CHAIN.load(Ordering::Acquire).is_null() {
+    if !ACTIVE_CHAIN.load(Ordering::Acquire).is_null() || RETIREMENT_PENDING.load(Ordering::Acquire)
+    {
         return DXGI_ERROR_UNSUPPORTED;
     }
     CREATING.set(true);

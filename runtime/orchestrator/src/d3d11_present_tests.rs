@@ -974,6 +974,7 @@ fn reset() -> MutexGuard<'static, ()> {
     BACKEND_CHOICES.store((RSF_FG_BACKEND_ALL | 1) & !(1 << FSR4), Ordering::SeqCst);
     SWITCH_RESULT.store(0, Ordering::SeqCst);
     CHAIN_GENERATION.store(1, Ordering::SeqCst);
+    RETIREMENT_PENDING.store(false, Ordering::Release);
     HOST_PACED.store(false, Ordering::SeqCst);
     SCOPED.store(false, Ordering::SeqCst);
     SCOPED_ADMITTED.store(false, Ordering::SeqCst);
@@ -1268,6 +1269,8 @@ fn creation_admission_publication_and_retirement() {
         ]
     );
     assert!(rsf_core_d3d11p_active_bridge().is_null() && rsf_core_d3d11p_session().is_null());
+    assert_eq!(generation(), 2);
+    assert!(!RETIREMENT_PENDING.load(Ordering::Acquire));
     assert_eq!(rsf_core_d3d11p_has_owner(), 0);
     assert_eq!(status().0, NOT_READY);
     assert_eq!(unsafe { rsf_core_d3d11p_graphics(&mut graphics) }, 0);
@@ -2128,6 +2131,9 @@ fn failed_retirement_retains_provider_and_inputs() {
         unsafe { bridge_release_owned(bridge) };
         assert_eq!(take_calls(), ["signal_wait 1 1", "retain"]);
         assert!(rsf_core_d3d11p_active_bridge().is_null());
+        assert_eq!(generation(), 1);
+        assert_eq!(create_with(&request(0)).0, DXGI_ERROR_UNSUPPORTED);
+        assert!(take_calls().is_empty());
         with(|fake| {
             let physical = fake.physical.last().unwrap();
             assert_eq!(physical.chain.refs.get(), 2);
