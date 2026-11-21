@@ -217,6 +217,11 @@ device-function aliases. The loaders try the requested name before
 the core alias. FG's miss on a null name now bypasses the alias lookup.
 The typed calls and WSI borrow stay native. Link and device checks remain open.
 
+FidelityFX Vulkan SR's staging allocation now follows the existing
+create, requirements, memory choice, allocate and bind sequence in
+Rust. The shared typed Vulkan leaves keep the same descriptors.
+[Image allocation source comparison](research/rust-vulkan-ffx-sr-images.md)
+
 The legacy D3D11 Streamline SR owner now selects the required
 interposer and DLSS feature lookups in Rust. It shares the seven
 common lookups and adds the five owner-only lookups for a session

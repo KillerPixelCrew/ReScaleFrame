@@ -838,6 +838,13 @@ and remains unrun. Build and live observer verification remain open.
 
 ## Rust orchestrator and first Anomaly port
 
+FidelityFX Vulkan SR staging images now allocate in Rust through
+the shared typed image leaves. The owner selects the first compatible
+device-local memory type, or the last compatible type when there is
+no device-local choice. It retains each partial handle for the same
+rollback. Link and device verification remain open.
+[Staging-image ownership](research/rust-vulkan-ffx-sr-images.md)
+
 The legacy D3D11 Streamline SR owner now resolves the interposer
 and DLSS feature functions in Rust. The source comparison matched
 the required entry order for owned and borrowed hosts and the

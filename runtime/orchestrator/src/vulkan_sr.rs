@@ -4,6 +4,7 @@ use crate::render_abi::rsf_sharpening_options;
 use crate::sdk_module::{FIDELITYFX_DLL, Loader, SdkModule};
 use crate::sr_session::has_capacity;
 use crate::vulkan_dispatch::promoted_device_proc_alias;
+use crate::vulkan_fg_resources_abi::rsf_vkfg_platform as ImageOps;
 use crate::vulkan_sr_abi::*;
 use crate::vulkan_sr_split::normalize_frame;
 use rsf_game_sys::{
@@ -341,7 +342,11 @@ struct FfxOps {
     effective_version: unsafe extern "C" fn(Handle, &mut u64) -> i32,
     destroy_effect: unsafe extern "C" fn(Handle) -> i32,
     plan: unsafe extern "C" fn(Handle, &Setup, &mut u32, &mut u32) -> i32,
-    allocate: unsafe extern "C" fn(Handle, &mut Image, u32, &mut u64) -> i32,
+    // Typed vkCreateImage/requirements/vkAllocateMemory/vkBindImageMemory leaves and the
+    // device-local mask over the owner's device; Rust sequences them in StagingImage::allocate.
+    image_user: unsafe extern "C" fn(Handle) -> Handle,
+    images: &'static ImageOps,
+    memory_type_count: unsafe extern "C" fn(Handle) -> u32,
     release: unsafe extern "C" fn(Handle, u64, u64),
     initialize_mask: unsafe extern "C" fn(Handle, Handle, u64),
     initialize_output: unsafe extern "C" fn(Handle, Handle, u64),
@@ -378,7 +383,8 @@ struct FfxDispatch<'a> {
 }
 
 const _: () = {
-    assert!(size_of::<Platform>() == 256);
+    assert!(size_of::<FfxOps>() == 27 * size_of::<usize>());
+    assert!(size_of::<Platform>() == 272);
     assert!(size_of::<Blit>() == 24);
     assert!(size_of::<FfxDispatch>() == 144);
     assert!(std::mem::offset_of!(FfxDispatch, reset) == 136);
@@ -403,6 +409,56 @@ impl StagingImage {
             },
             memory: 0,
         }
+    }
+
+    /// Creates the 2D optimal-tiling image, then allocates and binds dedicated memory.
+    /// Each handle is published as soon as it exists, so a failed later step leaves it
+    /// for the owner's `release`. Every Vulkan failure reports `INIT_FAILED`.
+    unsafe fn allocate(&mut self, ops: &FfxOps, handle: Handle, usage: u32) -> Result<(), i32> {
+        let images = ops.images;
+        let user = unsafe { (ops.image_user)(handle) };
+        let description = &mut self.description;
+        let mut image = 0;
+        let result = unsafe {
+            (images.create_image.unwrap())(
+                user,
+                description.width,
+                description.height,
+                description.format,
+                usage,
+                &mut image,
+            )
+        };
+        if result != 0 {
+            return Err(INIT_FAILED);
+        }
+        description.image = image;
+        let (mut size, mut required) = (0, 0);
+        unsafe { (images.requirements.unwrap())(user, image, &mut size, &mut required) };
+        let kind = memory_type(
+            required,
+            unsafe { (ops.memory_type_count)(handle) },
+            unsafe { (images.local_memory_types.unwrap())(user) },
+        )
+        .ok_or(INIT_FAILED)?;
+        let mut memory = 0;
+        if unsafe { (images.allocate.unwrap())(user, size, kind, &mut memory) } != 0 {
+            return Err(INIT_FAILED);
+        }
+        self.memory = memory;
+        if unsafe { (images.bind.unwrap())(user, image, memory) } != 0 {
+            return Err(INIT_FAILED);
+        }
+        Ok(())
+    }
+}
+
+/// The first compatible device-local memory type, else the last compatible type.
+fn memory_type(required: u32, count: u32, device_local: u32) -> Option<u32> {
+    let compatible = required & 1u32.checked_shl(count).map_or(u32::MAX, |bit| bit - 1);
+    match compatible & device_local {
+        0 => compatible.checked_ilog2(),
+        preferred => Some(preferred.trailing_zeros()),
     }
 }
 
@@ -503,9 +559,7 @@ impl FidelityFx {
             (&mut owner.zero_mask, mask_usage),
         ] {
             image.description.copy_source = u32::from(usage & TRANSFER_SRC_USAGE != 0);
-            check(unsafe {
-                (ops.allocate)(handle, &mut image.description, usage, &mut image.memory)
-            })?;
+            unsafe { image.allocate(ops, handle, usage) }?;
         }
         Ok((owner, plan))
     }
