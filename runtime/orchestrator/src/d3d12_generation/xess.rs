@@ -31,7 +31,7 @@ struct Present {
 #[repr(C)]
 struct Ops {
     check: &'static Checks,
-    open: unsafe extern "C" fn(*const Setup, *mut Raw) -> i32,
+    resolve: Resolve,
     close: unsafe extern "C" fn(Raw),
     create_fg: unsafe extern "C" fn(Raw, Raw, *mut Raw) -> i32,
     create_xell: unsafe extern "C" fn(Raw, Raw, *mut Raw) -> i32,
@@ -512,17 +512,20 @@ unsafe extern "C" fn rsf_core_xeg12_create(
     if setup.streamline_host.is_null() && unsafe { (ops.check.streamline_loaded)() } != 0 {
         return NEEDS_RESTART;
     }
-    let mut bindings = null_mut();
-    let result = unsafe { (ops.open)(setup, &mut bindings) };
-    if result != OK {
-        return result;
-    }
+    let sdk = match Bindings::open(
+        setup,
+        ops.check,
+        "libxess_fg.dll",
+        Some("libxell.dll"),
+        ops.resolve,
+        ops.close,
+    ) {
+        Ok(sdk) => sdk,
+        Err(result) => return result,
+    };
     let session = crate::allocate_handle(Xess {
         ops,
-        sdk: Bindings {
-            raw: bindings,
-            close: ops.close,
-        },
+        sdk,
         log: Log::new(setup),
         device: unsafe { ComRef::retain(setup.chain.d3d12_device) },
         queue: unsafe { ComRef::retain(setup.chain.d3d12_queue) },

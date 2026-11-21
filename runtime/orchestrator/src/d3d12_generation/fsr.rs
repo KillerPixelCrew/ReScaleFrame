@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicI32, AtomicPtr, AtomicU32, AtomicU64, Ordering::Re
 const CAPTURE_SLOTS: usize = 64;
 const NON_PIXEL_READ: u32 = 0x40; // D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
 const VENDOR_PARAMETER_ERROR: u32 = 6;
+const MODULE: &str = "amd_fidelityfx_framegeneration_dx12.dll";
 
 #[repr(C)]
 struct Configuration {
@@ -47,7 +48,7 @@ struct Generated {
 struct Ops {
     check: &'static Checks,
     capture: &'static CapturePlatform,
-    open: unsafe extern "C" fn(*const Setup, *mut Raw) -> i32,
+    resolve: Resolve,
     close: unsafe extern "C" fn(Raw),
     select_version: unsafe extern "C" fn(Raw, *const Setup, *mut c_char, u32) -> u64,
     surface_format: unsafe extern "C" fn(u32) -> u32,
@@ -500,6 +501,17 @@ extern "C" fn rsf_core_fsr12_provider() -> *const Provider {
 }
 
 #[unsafe(no_mangle)]
+extern "C" fn rsf_core_fsr12_probe(
+    checks: &Checks,
+    setup: &Setup,
+    query: unsafe extern "C" fn(Raw, &Setup) -> u32,
+) -> u32 {
+    checks
+        .module(setup, MODULE)
+        .map_or(0, |module| unsafe { query(module.as_ptr(), setup) })
+}
+
+#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_fsr12_create(
     ops: &'static Ops,
     setup: *const Setup,
@@ -517,14 +529,9 @@ unsafe extern "C" fn rsf_core_fsr12_create(
     if !matches!(setup.feature_major, 3 | 4) || !matches!(setup.chain.ui_mode, UI_NONE | HUDLESS) {
         return UNSUPPORTED;
     }
-    let mut bindings = null_mut();
-    let result = unsafe { (ops.open)(setup, &mut bindings) };
-    if result != OK {
-        return result;
-    }
-    let sdk = Bindings {
-        raw: bindings,
-        close: ops.close,
+    let sdk = match Bindings::open(setup, ops.check, MODULE, None, ops.resolve, ops.close) {
+        Ok(sdk) => sdk,
+        Err(result) => return result,
     };
     let mut initial = initial_status(1);
     initial.version_id = unsafe {

@@ -4,6 +4,7 @@ use crate::render_abi::{
     rsf_fg_frame as Frame, rsf_fg_options as Options, rsf_fg_retirement as Retirement,
     rsf_fg_status as Status, rsf_generation_provider as Provider, rsf_generation_setup as Setup,
 };
+use crate::sdk_module::SdkModule;
 use crate::sr_session::has_capacity;
 use rsf_game_sys::rsf_frame_record as Record;
 use std::ffi::{CString, c_char, c_void};
@@ -19,6 +20,7 @@ type Raw = *mut c_void;
 const OK: i32 = 0;
 const INVALID: i32 = -1;
 const ABI_MISMATCH: i32 = -2;
+const LOAD_FAILED: i32 = -4;
 const INIT_FAILED: i32 = -6;
 const UNSUPPORTED: i32 = -7;
 const NOT_READY: i32 = -8;
@@ -37,6 +39,14 @@ struct Checks {
     frame: unsafe extern "C" fn(*const Frame, Raw) -> i32,
     command: unsafe extern "C" fn(Raw, Raw) -> i32,
     streamline_loaded: unsafe extern "C" fn() -> u32,
+    load_library: unsafe extern "C" fn(&Setup, *const u16) -> Raw,
+}
+
+impl Checks {
+    fn module(&self, setup: &Setup, name: &str) -> Option<SdkModule> {
+        let name: Vec<u16> = name.encode_utf16().chain([0]).collect();
+        SdkModule::adopt_system(unsafe { (self.load_library)(setup, name.as_ptr()) })
+    }
 }
 
 #[repr(C)]
@@ -48,13 +58,59 @@ struct Extent {
 }
 
 const _: () = {
-    assert!(size_of::<Checks>() == 4 * size_of::<Raw>());
+    assert!(size_of::<Checks>() == 5 * size_of::<Raw>());
     assert!(size_of::<Extent>() == 12);
 };
 
 struct Bindings {
     raw: Raw,
     close: unsafe extern "C" fn(Raw),
+    _module: SdkModule,
+    _latency: Option<SdkModule>,
+}
+
+type Resolve = unsafe extern "C" fn(&Setup, Raw, Raw, &mut Raw) -> i32;
+
+impl Bindings {
+    fn open(
+        setup: &Setup,
+        checks: &Checks,
+        primary: &str,
+        latency: Option<&str>,
+        resolve: Resolve,
+        close: unsafe extern "C" fn(Raw),
+    ) -> Result<Self, i32> {
+        let module = checks.module(setup, primary);
+        let latency = match latency {
+            Some(name) => Some(checks.module(setup, name).ok_or(LOAD_FAILED)?),
+            None => None,
+        };
+        let module = module.ok_or(LOAD_FAILED)?;
+        let mut raw = null_mut();
+        let result = unsafe {
+            resolve(
+                setup,
+                module.as_ptr(),
+                latency.as_ref().map_or(null_mut(), SdkModule::as_ptr),
+                &mut raw,
+            )
+        };
+        if result != OK {
+            if !raw.is_null() {
+                unsafe { close(raw) };
+            }
+            return Err(result);
+        }
+        if raw.is_null() {
+            return Err(INIT_FAILED);
+        }
+        Ok(Self {
+            raw,
+            close,
+            _module: module,
+            _latency: latency,
+        })
+    }
 }
 
 // Old entries can be overwritten. A lookup must match the entire key, since

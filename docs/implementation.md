@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The D3D12 FSR and XeSS frame-generation bindings now own their
+SDK module references in Rust. The shared owner releases the typed
+native bindings before unloading FidelityFX, XeSS FG or XeLL. The
+FSR4 capability query uses the same module lease. Source review
+checked loader and resolver signatures, refusal cleanup and the
+feature-disabled stubs. The Windows builds and SDK checks remain
+open for this revision.
+
 The shared D3D12 Streamline host now owns its interposer reference
 and SDK directory in Rust. Callers borrow the same module through
 the existing host entry. Native disposal calls SDK shutdown and

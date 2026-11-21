@@ -12,6 +12,7 @@ typedef struct rsf_gen12_checks {
     rsf_backend_result (*frame)(const rsf_fg_frame*, void*);
     rsf_backend_result (*command)(void*, void*);
     uint32_t (*streamline_loaded)(void);
+    void* (*load_library)(const rsf_generation_setup*, const uint16_t*);
 } rsf_gen12_checks;
 
 typedef struct rsf_gen12_extent {
@@ -42,7 +43,7 @@ typedef struct rsf_fsr12_generated {
 typedef struct rsf_fsr12_ops {
     const rsf_gen12_checks* check;
     const struct rsf_core_capture12_platform* capture;
-    rsf_backend_result (*open)(const rsf_generation_setup*, void**);
+    rsf_backend_result (*resolve)(const rsf_generation_setup*, void* module, void* latency, void**);
     void (*close)(void*);
     uint64_t (*select_version)(void*, const rsf_generation_setup*, char*, uint32_t);
     uint32_t (*surface_format)(uint32_t);
@@ -71,7 +72,7 @@ typedef struct rsf_xeg12_present {
 
 typedef struct rsf_xeg12_ops {
     const rsf_gen12_checks* check;
-    rsf_backend_result (*open)(const rsf_generation_setup*, void**);
+    rsf_backend_result (*resolve)(const rsf_generation_setup*, void* module, void* latency, void**);
     void (*close)(void*);
     int32_t (*create_fg)(void*, void*, void**);
     int32_t (*create_xell)(void*, void*, void**);
@@ -97,6 +98,8 @@ typedef struct rsf_xeg12_ops {
 } rsf_xeg12_ops;
 
 const rsf_generation_provider* rsf_core_fsr12_provider(void);
+uint32_t rsf_core_fsr12_probe(const rsf_gen12_checks*, const rsf_generation_setup*,
+    uint32_t (*query)(void*, const rsf_generation_setup*));
 rsf_backend_result rsf_core_fsr12_create(const rsf_fsr12_ops*, const rsf_generation_setup*, void**, void**);
 uint32_t rsf_core_fsr12_generate(void*, void*);
 uint32_t rsf_core_fsr12_present(void*, void*, uint32_t);
@@ -105,7 +108,7 @@ rsf_backend_result rsf_core_xeg12_create(const rsf_xeg12_ops*, const rsf_generat
 
 #ifdef __cplusplus
 }
-static_assert(sizeof(rsf_gen12_checks) == 4 * sizeof(void*));
+static_assert(sizeof(rsf_gen12_checks) == 5 * sizeof(void*));
 static_assert(sizeof(rsf_gen12_extent) == 12);
 static_assert(sizeof(rsf_fsr12_config) == 48);
 static_assert(sizeof(rsf_fsr12_generated) == 104);

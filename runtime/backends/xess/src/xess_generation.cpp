@@ -16,8 +16,6 @@ static_assert(RSF_REFLEX_ON == 1);
 static_assert(XEFG_SWAPCHAIN_RESULT_SUCCESS == 0 && XELL_RESULT_SUCCESS == 0);
 
 struct Bindings {
-    HMODULE module{};
-    HMODULE xell_module{};
     decltype(&xefgSwapChainD3D12CreateContext) create{};
     decltype(&xefgSwapChainD3D12InitFromSwapChainDesc) init{};
     decltype(&xefgSwapChainD3D12GetSwapChainPtr) chain_ptr{};
@@ -37,22 +35,14 @@ struct Bindings {
     decltype(&xellSetSleepMode) xell_options{};
     decltype(&xellSleep) sleep{};
     decltype(&xellAddMarkerData) marker{};
-
-    ~Bindings() {
-        if (module) FreeLibrary(module);
-        if (xell_module) FreeLibrary(xell_module);
-    }
 };
 
-rsf_backend_result open(const rsf_generation_setup* setup, void** out)
+rsf_backend_result resolve(const rsf_generation_setup*, void* module, void* xell_module, void** out)
 {
     auto api = std::unique_ptr<Bindings>(new (std::nothrow) Bindings{});
     if (!api) return RSF_BACKEND_ERROR_INIT_FAILED;
-    api->module = rsf::fg_library(*setup, L"libxess_fg.dll");
-    api->xell_module = rsf::fg_library(*setup, L"libxell.dll");
-    if (!api->module || !api->xell_module) return RSF_BACKEND_ERROR_LOAD_FAILED;
 #define ENTRY(module, member, function) \
-    api->member = rsf::entry<decltype(&function)>(api->module, #function); \
+    api->member = rsf::entry<decltype(&function)>(static_cast<HMODULE>(module), #function); \
     if (!api->member) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT
     ENTRY(module, create, xefgSwapChainD3D12CreateContext);
     ENTRY(module, init, xefgSwapChainD3D12InitFromSwapChainDesc);
@@ -262,7 +252,7 @@ int32_t drain(void* queue, void* fence, void* event, uint64_t serial)
 
 const rsf_xeg12_ops& native_ops()
 {
-    static const rsf_xeg12_ops ops{&rsf::generation12_checks, open, close, create_fg, create_xell,
+    static const rsf_xeg12_ops ops{&rsf::generation12_checks, resolve, close, create_fg, create_xell,
         destroy_fg, destroy_xell, max_count, bind_xell, version, create_chain, compose, count, enabled,
         sleep_mode, sleep, marker, present_id, tag, constants, present_status, create_fence, create_event, drain};
     return ops;

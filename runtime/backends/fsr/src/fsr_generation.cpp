@@ -16,7 +16,6 @@ static_assert(FFX_API_RETURN_ERROR_PARAMETER == 6);
 // The SDK requires pointers passed in create descriptors to remain live
 // until context destruction. Rust owns both contexts and this backing storage.
 struct Bindings {
-    HMODULE module{};
     PfnFfxCreateContext create{};
     PfnFfxDestroyContext destroy{};
     PfnFfxConfigure configure{};
@@ -34,23 +33,18 @@ struct Bindings {
     IDXGISwapChain4* chain{};
     ffxCreateContextDescFrameGenerationSwapChainVersionDX12 chain_version{};
     ffxCreateContextDescFrameGenerationSwapChainForHwndDX12 swapchain{};
-
-    ~Bindings() {
-        if (module) FreeLibrary(module);
-    }
 };
 
-rsf_backend_result open(const rsf_generation_setup* setup, void** out)
+rsf_backend_result resolve(const rsf_generation_setup* setup, void* handle, void*, void** out)
 {
     auto api = std::unique_ptr<Bindings>(new (std::nothrow) Bindings{});
     if (!api) return RSF_BACKEND_ERROR_INIT_FAILED;
-    api->module = rsf::fg_library(*setup, L"amd_fidelityfx_framegeneration_dx12.dll");
-    if (!api->module) return RSF_BACKEND_ERROR_LOAD_FAILED;
-    api->create = rsf::entry<PfnFfxCreateContext>(api->module, "ffxCreateContext");
-    api->destroy = rsf::entry<PfnFfxDestroyContext>(api->module, "ffxDestroyContext");
-    api->configure = rsf::entry<PfnFfxConfigure>(api->module, "ffxConfigure");
-    api->dispatch = rsf::entry<PfnFfxDispatch>(api->module, "ffxDispatch");
-    api->query = rsf::entry<PfnFfxQuery>(api->module, "ffxQuery");
+    const auto module = static_cast<HMODULE>(handle);
+    api->create = rsf::entry<PfnFfxCreateContext>(module, "ffxCreateContext");
+    api->destroy = rsf::entry<PfnFfxDestroyContext>(module, "ffxDestroyContext");
+    api->configure = rsf::entry<PfnFfxConfigure>(module, "ffxConfigure");
+    api->dispatch = rsf::entry<PfnFfxDispatch>(module, "ffxDispatch");
+    api->query = rsf::entry<PfnFfxQuery>(module, "ffxQuery");
     if (!api->create || !api->destroy || !api->configure || !api->dispatch || !api->query)
         return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
     api->log = setup->chain.log;
@@ -99,6 +93,13 @@ uint64_t select_version(PfnFfxQuery query, const rsf_generation_setup& setup, ch
 uint64_t select_version(void* bindings, const rsf_generation_setup* setup, char* name, uint32_t capacity)
 {
     return select_version(static_cast<Bindings*>(bindings)->query, *setup, name, capacity);
+}
+
+uint32_t query_support(void* module, const rsf_generation_setup* setup)
+{
+    const auto query = rsf::entry<PfnFfxQuery>(static_cast<HMODULE>(module), "ffxQuery");
+    char name[64]{};
+    return uint32_t(select_version(query, *setup, name, sizeof(name)) != 0);
 }
 
 uint32_t surface_format(uint32_t dxgi)
@@ -307,7 +308,7 @@ int32_t present_count(void* chain, uint32_t* count)
 rsf_backend_result create(const rsf_generation_setup* setup, void** out, void** chain)
 {
     static const rsf_fsr12_ops ops{&rsf::generation12_checks, rsf::FrameCapture12::native_platform(),
-        open, close, select_version, surface_format, create_generation, provider_matches, create_chain,
+        resolve, close, select_version, surface_format, create_generation, provider_matches, create_chain,
         destroy_context, wait, chain_extent, whole_texture, configure, prepare, generate, copy_present, present_count};
     return rsf_core_fsr12_create(&ops, setup, out, chain);
 }
@@ -330,13 +331,7 @@ extern "C" uint32_t rsf_generation_fsr4_supported(void* device, const char* dire
     setup.runtime_directory_utf8 = directory;
     setup.chain.d3d12_device = device;
     setup.feature_major = 4;
-    HMODULE module = rsf::fg_library(setup, L"amd_fidelityfx_framegeneration_dx12.dll");
-    if (!module) return 0;
-    const auto query = rsf::entry<PfnFfxQuery>(module, "ffxQuery");
-    char name[64]{};
-    const bool supported = select_version(query, setup, name, sizeof(name)) != 0;
-    FreeLibrary(module);
-    return uint32_t(supported);
+    return rsf_core_fsr12_probe(&rsf::generation12_checks, &setup, query_support);
 }
 #else
 extern "C" const rsf_generation_provider* rsf_generation_fsr() { return rsf::not_compiled_provider(); }
