@@ -213,13 +213,6 @@ typedef struct rsf_anomaly_sr_motion_target {
     uint32_t frame, width, height;
 } rsf_anomaly_sr_motion_target;
 
-typedef struct rsf_anomaly_sr_temporal_textures {
-    void* colour;
-    void* depth;
-    void* motion;
-    void* output;
-} rsf_anomaly_sr_temporal_textures;
-
 typedef struct rsf_anomaly_sr_timer {
     double world_ms[2], seam_ms;
     uint64_t samples[2], seam_samples, skipped;
@@ -280,19 +273,19 @@ typedef struct rsf_anomaly_sr_stage_platform {
     bool (*bilinear)(void);
     bool (*round_trip)(void);
     bool (*temporal_ready)(void);
-    int32_t (*temporal_targets)(uint32_t format);   // 0 kept, 1 created, -1 refused
+    const void* (*temporal_platform)(void);   // the static rsf_sr_d3d11 table
     bool (*motion_target)(rsf_anomaly_sr_motion_target*);
     void* (*create_motion_view)(void* device, void* texture);   // an owned reference or null
-    bool (*seam_prepare)(void* motion_view, bool first_person_zero);
-    void (*temporal_textures)(rsf_anomaly_sr_temporal_textures*);
-    bool (*reinsert)(void);
+    bool (*seam_prepare)(void* motion_view, void* colour_target, void* motion_target, bool first_person_zero);
+    void* (*depth_texture)(void);   // borrowed by the seam
+    bool (*reinsert)(void* reconstruction);
     // TemporalDriver (sr_temporal.h).
     bool (*driver_bind)(void);
     bool (*driver_enabled)(void);
     uint32_t (*driver_output_format)(void);
     bool (*driver_planned)(uint32_t output_width, uint32_t output_height, uint32_t* render_width, uint32_t* render_height);
     void (*driver_boundary)(uint32_t output_width, uint32_t output_height);
-    bool (*driver_evaluate)(const rsf_anomaly_sr_pass*, struct rsf_camera_frame*, uint32_t*);
+    bool (*driver_evaluate)(rsf_anomaly_sr_pass_inputs*, struct rsf_camera_frame*, uint32_t*);
     bool (*driver_request_dump)(const char* prefix_utf8);
     void (*driver_count)(uint8_t refusal);
     void (*driver_count_bilinear)(void);

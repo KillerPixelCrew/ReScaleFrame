@@ -833,38 +833,6 @@ impl Default for rsf_anomaly_sr_motion_target {
     }
 }
 #[repr(C)]
-#[derive(Copy, Clone)]
-pub struct rsf_anomaly_sr_temporal_textures {
-    pub colour: *mut ::core::ffi::c_void,
-    pub depth: *mut ::core::ffi::c_void,
-    pub motion: *mut ::core::ffi::c_void,
-    pub output: *mut ::core::ffi::c_void,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_anomaly_sr_temporal_textures"]
-        [::core::mem::size_of::<rsf_anomaly_sr_temporal_textures>() - 32usize];
-    ["Alignment of rsf_anomaly_sr_temporal_textures"]
-        [::core::mem::align_of::<rsf_anomaly_sr_temporal_textures>() - 8usize];
-    ["Offset of field: rsf_anomaly_sr_temporal_textures::colour"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_temporal_textures, colour) - 0usize];
-    ["Offset of field: rsf_anomaly_sr_temporal_textures::depth"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_temporal_textures, depth) - 8usize];
-    ["Offset of field: rsf_anomaly_sr_temporal_textures::motion"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_temporal_textures, motion) - 16usize];
-    ["Offset of field: rsf_anomaly_sr_temporal_textures::output"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_temporal_textures, output) - 24usize];
-};
-impl Default for rsf_anomaly_sr_temporal_textures {
-    fn default() -> Self {
-        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
-        unsafe {
-            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
-            s.assume_init()
-        }
-    }
-}
-#[repr(C)]
 #[derive(Default, Copy, Clone)]
 pub struct rsf_anomaly_sr_timer {
     pub world_ms: [f64; 2usize],
@@ -1038,7 +1006,8 @@ pub struct rsf_anomaly_sr_stage_platform {
     pub bilinear: ::core::option::Option<unsafe extern "C" fn() -> bool>,
     pub round_trip: ::core::option::Option<unsafe extern "C" fn() -> bool>,
     pub temporal_ready: ::core::option::Option<unsafe extern "C" fn() -> bool>,
-    pub temporal_targets: ::core::option::Option<unsafe extern "C" fn(format: u32) -> i32>,
+    pub temporal_platform:
+        ::core::option::Option<unsafe extern "C" fn() -> *const ::core::ffi::c_void>,
     pub motion_target: ::core::option::Option<
         unsafe extern "C" fn(arg1: *mut rsf_anomaly_sr_motion_target) -> bool,
     >,
@@ -1051,12 +1020,15 @@ pub struct rsf_anomaly_sr_stage_platform {
     pub seam_prepare: ::core::option::Option<
         unsafe extern "C" fn(
             motion_view: *mut ::core::ffi::c_void,
+            colour_target: *mut ::core::ffi::c_void,
+            motion_target: *mut ::core::ffi::c_void,
             first_person_zero: bool,
         ) -> bool,
     >,
-    pub temporal_textures:
-        ::core::option::Option<unsafe extern "C" fn(arg1: *mut rsf_anomaly_sr_temporal_textures)>,
-    pub reinsert: ::core::option::Option<unsafe extern "C" fn() -> bool>,
+    pub depth_texture: ::core::option::Option<unsafe extern "C" fn() -> *mut ::core::ffi::c_void>,
+    pub reinsert: ::core::option::Option<
+        unsafe extern "C" fn(reconstruction: *mut ::core::ffi::c_void) -> bool,
+    >,
     pub driver_bind: ::core::option::Option<unsafe extern "C" fn() -> bool>,
     pub driver_enabled: ::core::option::Option<unsafe extern "C" fn() -> bool>,
     pub driver_output_format: ::core::option::Option<unsafe extern "C" fn() -> u32>,
@@ -1072,7 +1044,7 @@ pub struct rsf_anomaly_sr_stage_platform {
         ::core::option::Option<unsafe extern "C" fn(output_width: u32, output_height: u32)>,
     pub driver_evaluate: ::core::option::Option<
         unsafe extern "C" fn(
-            arg1: *const rsf_anomaly_sr_pass,
+            arg1: *mut rsf_anomaly_sr_pass_inputs,
             arg2: *mut rsf_camera_frame,
             arg3: *mut u32,
         ) -> bool,
@@ -1228,16 +1200,16 @@ const _: () = {
         [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, round_trip) - 296usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::temporal_ready"]
         [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, temporal_ready) - 304usize];
-    ["Offset of field: rsf_anomaly_sr_stage_platform::temporal_targets"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, temporal_targets) - 312usize];
+    ["Offset of field: rsf_anomaly_sr_stage_platform::temporal_platform"]
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, temporal_platform) - 312usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::motion_target"]
         [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, motion_target) - 320usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::create_motion_view"]
         [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, create_motion_view) - 328usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::seam_prepare"]
         [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, seam_prepare) - 336usize];
-    ["Offset of field: rsf_anomaly_sr_stage_platform::temporal_textures"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, temporal_textures) - 344usize];
+    ["Offset of field: rsf_anomaly_sr_stage_platform::depth_texture"]
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, depth_texture) - 344usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::reinsert"]
         [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, reinsert) - 352usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::driver_bind"]

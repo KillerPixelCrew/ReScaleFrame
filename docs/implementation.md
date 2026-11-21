@@ -4,6 +4,16 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The Anomaly SR stage now retains the temporal target set directly in
+Rust. It reuses the existing D3D11 target allocator and passes borrowed
+views to the native draw calls and existing pass inputs to the Runtime
+driver. It releases old targets when their device, dimensions or
+format change or when the engine twins retire. A refused allocation
+still draws the bilinear fallback. The native host retains only the
+seam's borrowed draw views during the call.
+The private bindings were regenerated. Build and runtime validation
+remain open.
+
 The Anomaly SR stage retains the motion shader view in Rust. The cache
 reuses a view for the same device and texture, and releases it when the
 device or twin resources change or the stage shuts down. The previous

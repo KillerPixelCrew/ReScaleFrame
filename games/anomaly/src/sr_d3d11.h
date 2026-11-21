@@ -126,12 +126,12 @@ struct TemporalTargets {
     ResourceView<ID3D11Texture2D> colour, motion, output, exposure, empty_motion;
     ResourceView<ID3D11RenderTargetView> colour_rtv, motion_rtv;
     ResourceView<ID3D11ShaderResourceView> colour_srv, motion_srv, output_srv, empty_motion_srv;
-    bool matches(ID3D11Device* device, uint32_t rw, uint32_t rh, uint32_t ow, uint32_t oh, DXGI_FORMAT format) const noexcept;
 private:
     RustOwner<rsf_sr_temporal_targets, rsf_anomaly_sr_drop_temporal> owner_;
     friend TwinError make_temporal_targets(ID3D11Device*, uint32_t, uint32_t, uint32_t, uint32_t, DXGI_FORMAT,
         TemporalTargets&) noexcept;
 };
+const rsf_sr_d3d11& d3d11_platform() noexcept;
 // colour and motion: render size, R16G16B16A16_FLOAT, RTV + SRV. output: output size in `output_format` (the
 // pipeline's output texture format), SRV. exposure: 1x1 R32_FLOAT = 1.0. empty_motion: render size, all zero (every
 // pixel invalid), bound when no motion target exists this frame.

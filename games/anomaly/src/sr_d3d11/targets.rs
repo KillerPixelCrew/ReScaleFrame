@@ -23,7 +23,7 @@ const SUPPORT_UAV: u32 = 0x0200_0000;
 
 #[repr(u8)]
 #[derive(Debug, PartialEq, Eq)]
-enum Error {
+pub(crate) enum Error {
     None,
     NotTexture,
     Shape,
@@ -347,18 +347,18 @@ extern "C" fn rsf_anomaly_sr_release_twin_view(owner: &mut Target, kind: u32) {
 }
 
 #[repr(C)]
-struct TemporalView {
-    colour: Ptr,
-    motion: Ptr,
-    output: Ptr,
-    exposure: Ptr,
+pub(crate) struct TemporalView {
+    pub(crate) colour: Ptr,
+    pub(crate) motion: Ptr,
+    pub(crate) output: Ptr,
+    pub(crate) exposure: Ptr,
     empty_motion: Ptr,
-    colour_rtv: Ptr,
-    motion_rtv: Ptr,
+    pub(crate) colour_rtv: Ptr,
+    pub(crate) motion_rtv: Ptr,
     colour_srv: Ptr,
     motion_srv: Ptr,
-    output_srv: Ptr,
-    empty_motion_srv: Ptr,
+    pub(crate) output_srv: Ptr,
+    pub(crate) empty_motion_srv: Ptr,
 }
 
 const _: () = {
@@ -367,7 +367,7 @@ const _: () = {
     assert!(size_of::<TemporalView>() == 88);
 };
 
-struct TemporalTargets {
+pub(crate) struct TemporalTargets {
     platform: &'static Platform,
     render: Extent,
     output_size: Extent,
@@ -385,6 +385,9 @@ struct TemporalTargets {
     empty_motion: Lease,
 }
 
+// These free-threaded D3D11 references move only under the stage lock.
+unsafe impl Send for TemporalTargets {}
+
 fn zero_layout(render: Extent) -> Result<(u32, usize), Error> {
     let pitch = render.width.checked_mul(8).ok_or(Error::Create)?;
     let words = (pitch as usize / size_of::<u16>())
@@ -394,7 +397,7 @@ fn zero_layout(render: Extent) -> Result<(u32, usize), Error> {
 }
 
 impl TemporalTargets {
-    fn new(
+    pub(crate) fn new(
         platform: &'static Platform,
         handle: Ptr,
         render: Extent,
@@ -458,7 +461,7 @@ impl TemporalTargets {
         })
     }
 
-    fn view(&self) -> TemporalView {
+    pub(crate) fn view(&self) -> TemporalView {
         TemporalView {
             colour: self.colour.as_ptr(),
             motion: self.motion.as_ptr(),
@@ -474,7 +477,7 @@ impl TemporalTargets {
         }
     }
 
-    fn matches(&self, device: Ptr, render: Extent, output: Extent, format: u32) -> bool {
+    pub(crate) fn matches(&self, device: Ptr, render: Extent, output: Extent, format: u32) -> bool {
         let handle = unsafe { (self.platform.texture_device)(self.colour.as_ptr()) };
         self.platform.lease(handle).is_some_and(|owner| {
             owner.as_ptr() == device
@@ -510,17 +513,6 @@ extern "C" fn rsf_anomaly_sr_drop_temporal(owner: *mut TemporalTargets) {
     if !owner.is_null() {
         drop(unsafe { Box::from_raw(owner) });
     }
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_temporal_matches(
-    owner: Option<&TemporalTargets>,
-    device: Ptr,
-    render: Extent,
-    output: Extent,
-    format: u32,
-) -> u32 {
-    u32::from(owner.is_some_and(|targets| targets.matches(device, render, output, format)))
 }
 
 #[cfg(test)]

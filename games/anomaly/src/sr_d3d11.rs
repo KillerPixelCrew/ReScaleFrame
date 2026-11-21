@@ -6,15 +6,16 @@ mod passes;
 mod targets;
 #[cfg(test)]
 mod tests;
+pub(crate) use targets::TemporalTargets;
 
 type Ptr = *mut c_void;
 type Log = Option<unsafe extern "C" fn(Ptr, *const c_char)>;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
-struct Extent {
-    width: u32,
-    height: u32,
+pub(crate) struct Extent {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
 }
 
 impl Extent {
@@ -63,7 +64,7 @@ struct Draw {
 }
 
 #[repr(C)]
-struct Platform {
+pub(crate) struct Platform {
     retain: unsafe extern "C" fn(Ptr),
     release: unsafe extern "C" fn(Ptr),
     as_texture: unsafe extern "C" fn(Ptr) -> Ptr,
@@ -117,3 +118,18 @@ const ROUND_TRIP: u32 = 0;
 const UPSCALE: u32 = 1;
 const PREPARE: u32 = 2;
 const REINSERT: u32 = 3;
+
+#[cfg(test)]
+pub(crate) fn fixture_device() -> Ptr {
+    tests::ptr(tests::DEVICE)
+}
+
+#[cfg(test)]
+pub(crate) fn fixture_platform() -> *const c_void {
+    std::ptr::from_ref(&tests::PLATFORM).cast()
+}
+
+#[cfg(test)]
+pub(crate) fn refuse_fixture_target_view() {
+    tests::fake(|state| state.fail_view = Some(RTV));
+}

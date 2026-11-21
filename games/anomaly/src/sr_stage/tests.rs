@@ -17,7 +17,6 @@ struct Fake {
     refused: bool,
     driver_enabled: bool,
     temporal_ready: bool,
-    targets: i32,
     motion: rsf_anomaly_sr_motion_target,
     engine_frame: u32,
     evaluate: bool,
@@ -60,6 +59,7 @@ unsafe extern "C" fn frame_facts(
     let (scope, generation) = fake(|f| (f.scope, f.generation));
     let facts = unsafe { &mut *out };
     *facts = rsf_anomaly_sr_frame_facts {
+        device: device(),
         device_width: 1920,
         device_height: 1080,
         scope,
@@ -142,6 +142,9 @@ extern "C" fn seam(cookie: *mut c_void) -> bool {
 extern "C" fn context() -> *mut c_void {
     CONTEXT
 }
+extern "C" fn device() -> *mut c_void {
+    crate::sr_d3d11::fixture_device()
+}
 extern "C" fn bilinear() -> bool {
     record("bilinear");
     true
@@ -149,8 +152,8 @@ extern "C" fn bilinear() -> bool {
 extern "C" fn temporal_ready() -> bool {
     fake(|f| f.temporal_ready)
 }
-extern "C" fn temporal_targets(_: u32) -> i32 {
-    fake(|f| f.targets)
+extern "C" fn temporal_platform() -> *const c_void {
+    crate::sr_d3d11::fixture_platform()
 }
 unsafe extern "C" fn motion_target(out: *mut rsf_anomaly_sr_motion_target) -> bool {
     let target = fake(|f| f.motion);
@@ -164,8 +167,13 @@ extern "C" fn release_view(_: *mut c_void) {}
 extern "C" fn engine_frame() -> u32 {
     fake(|f| f.engine_frame)
 }
-extern "C" fn seam_prepare(view: *mut c_void, first_person_zero: bool) -> bool {
-    let motion = !view.is_null();
+extern "C" fn seam_prepare(
+    view: *mut c_void,
+    _: *mut c_void,
+    _: *mut c_void,
+    first_person_zero: bool,
+) -> bool {
+    let motion = view == CONTEXT;
     record(format!(
         "seam prepare motion={motion} fp_zero={first_person_zero}"
     ));
@@ -184,18 +192,18 @@ extern "C" fn driver_count_prepared(missing: bool) {
     record(format!("prepared missing={missing}"));
 }
 unsafe extern "C" fn driver_evaluate(
-    pass: *const rsf_anomaly_sr_pass,
+    pass: *mut rsf_anomaly_sr_pass_inputs,
     _: *mut rsf_camera_frame,
     _: *mut u32,
 ) -> bool {
-    let pass = unsafe { *pass };
+    let pass = unsafe { (*pass).frame };
     record("evaluate");
     fake(|f| {
         f.passes.push(pass);
         f.evaluate
     })
 }
-extern "C" fn reinsert() -> bool {
+extern "C" fn reinsert(_: *mut c_void) -> bool {
     record("reinsert");
     fake(|f| f.reinsert)
 }
@@ -350,7 +358,7 @@ fn platform() -> Box<Platform> {
         device_size: Some(device_size),
         read_camera: Some(read_camera),
         context: Some(context),
-        device: Some(context),
+        device: Some(device),
         now: Some(now),
         geometry_active: Some(geometry_active),
         prepare: Some(prepare),
@@ -361,7 +369,8 @@ fn platform() -> Box<Platform> {
         controller: Some(controller),
         bilinear: Some(bilinear),
         temporal_ready: Some(temporal_ready),
-        temporal_targets: Some(temporal_targets),
+        temporal_platform: Some(temporal_platform),
+        depth_texture: Some(context),
         motion_target: Some(motion_target),
         create_motion_view: Some(create_motion_view),
         release: Some(release_view),
@@ -696,7 +705,8 @@ fn temporal_seam_counts_each_refusal_once_and_always_draws_a_world_image() {
         ]
     );
     // Refused input targets are logged and refused before any input is prepared.
-    fake(|f| f.targets = -1);
+    driver.lock().as_mut().unwrap().temporal_targets = None;
+    crate::sr_d3d11::refuse_fixture_target_view();
     driver.prepare(null_mut());
     calls();
     driver.seam(null_mut());

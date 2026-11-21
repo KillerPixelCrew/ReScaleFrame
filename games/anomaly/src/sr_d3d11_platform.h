@@ -92,7 +92,6 @@ void rsf_anomaly_sr_release_twin_view(rsf_sr_target*, uint32_t) noexcept;
 uint8_t rsf_anomaly_sr_make_temporal(const rsf_sr_d3d11*, void*, rsf_sr_extent, rsf_sr_extent, uint32_t, rsf_sr_temporal_targets**,
     rsf_sr_temporal_view*) noexcept;
 void rsf_anomaly_sr_drop_temporal(rsf_sr_temporal_targets*) noexcept;
-uint32_t rsf_anomaly_sr_temporal_matches(const rsf_sr_temporal_targets*, void*, rsf_sr_extent, rsf_sr_extent, uint32_t) noexcept;
 rsf_sr_pass* rsf_anomaly_sr_create_pass(const rsf_sr_d3d11*, void*, uint32_t, rsf_sr_log, void*) noexcept;
 void rsf_anomaly_sr_drop_pass(rsf_sr_pass*) noexcept;
 void* rsf_anomaly_sr_pass_device(const rsf_sr_pass*) noexcept;

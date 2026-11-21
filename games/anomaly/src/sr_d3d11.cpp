@@ -274,6 +274,7 @@ rsf_sr_draw_views upscale_views(const UpscaleViews& v, ID3D11ShaderResourceView*
 
 const char* round_trip_source() noexcept { return rsf_sr_roundtrip_hlsl; }
 const char* upscale_source() noexcept { return rsf_sr_upscale_hlsl; }
+const rsf_sr_d3d11& d3d11_platform() noexcept { return platform; }
 
 const char* twin_error_name(TwinError error) noexcept {
     static constexpr const char* names[] = {"none", "not_texture", "shape", "format", "support", "create", "depth"};
@@ -364,10 +365,6 @@ TwinError make_temporal_targets(ID3D11Device* device, uint32_t rw, uint32_t rh, 
     out.output_srv = ResourceView<ID3D11ShaderResourceView>(view.output_srv);
     out.empty_motion_srv = ResourceView<ID3D11ShaderResourceView>(view.empty_motion_srv);
     return result;
-}
-
-bool TemporalTargets::matches(ID3D11Device* device, uint32_t rw, uint32_t rh, uint32_t ow, uint32_t oh, DXGI_FORMAT format) const noexcept {
-    return rsf_anomaly_sr_temporal_matches(owner_.get(), device, {rw, rh}, {ow, oh}, format) != 0;
 }
 
 void set_full_viewport(ID3D11DeviceContext* context, uint32_t width, uint32_t height) noexcept {

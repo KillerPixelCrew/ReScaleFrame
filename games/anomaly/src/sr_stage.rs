@@ -17,6 +17,7 @@ use self::math::{
 use crate::camera;
 use crate::frame_dump::DumpApi;
 use crate::lease::Lease;
+use crate::sr_d3d11::{Extent, Platform as D3d11Platform, TemporalTargets};
 use crate::sr_stage_abi::*;
 use rsf_game_sys::{RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record};
 use std::ffi::{CStr, CString, c_char, c_void};
@@ -428,7 +429,6 @@ unsafe impl Send for Raw {}
 struct MotionView {
     device: Raw,
     texture: Raw,
-    twin_drops: u64,
     view: GpuLease,
 }
 
@@ -552,6 +552,8 @@ struct State {
     burst_gate: BurstGate,
     timer: gpu_timer::Timer,
     motion_view: Option<MotionView>,
+    temporal_targets: Option<TemporalTargets>,
+    twin_drops: u64,
     reported: Reported,
 }
 
@@ -588,6 +590,8 @@ impl Default for State {
             burst_gate: BurstGate::new(),
             timer: gpu_timer::Timer::default(),
             motion_view: None,
+            temporal_targets: None,
+            twin_drops: 0,
             reported: Reported::default(),
         }
     }
@@ -1266,6 +1270,7 @@ impl Stage {
         let state = guard.get_or_insert_with(Default::default);
         leaf!(p, shutdown());
         state.motion_view = None;
+        state.temporal_targets = None;
         state.native_depth_frame = None;
         state.timer = gpu_timer::Timer::default();
         self.publish(state, default_jitter());
@@ -1590,10 +1595,19 @@ impl Stage {
         let (sample, reset) = self.choose_jitter(state, &mut facts);
         state.prepared_this_frame = true;
         let swapped = leaf!(p, prepare(&facts));
-        if state.motion_view.as_ref().is_some_and(|cached| {
-            cached.device.0 != facts.device || cached.twin_drops != self.counters().twin_drops
-        }) {
-            state.motion_view = None;
+        if sr_inputs(state.config.stage) {
+            let twin_drops = self.counters().twin_drops;
+            if state.twin_drops != twin_drops {
+                state.motion_view = None;
+                state.temporal_targets = None;
+                state.twin_drops = twin_drops;
+            } else if state
+                .motion_view
+                .as_ref()
+                .is_some_and(|cached| cached.device.0 != facts.device)
+            {
+                state.motion_view = None;
+            }
         }
         if state.config.stage == 5 && (swapped || !facts.scope) {
             // Expose the stock depth only for the main frame that actually ran with SR off.
@@ -1799,7 +1813,6 @@ impl Stage {
             state.motion_view = Some(MotionView {
                 device: Raw(device),
                 texture: Raw(texture),
-                twin_drops: self.counters().twin_drops,
                 view: GpuLease(view),
             });
         }
@@ -1840,17 +1853,41 @@ impl Stage {
         } else {
             FORMAT_RGBA16F
         };
-        let targets = leaf!(p, temporal_targets(format));
-        if targets != 0 {
+        let render = Extent {
+            width: rw,
+            height: rh,
+        };
+        let output = Extent {
+            width: ow,
+            height: oh,
+        };
+        if state
+            .temporal_targets
+            .as_ref()
+            .is_none_or(|targets| !targets.matches(device, render, output, format))
+        {
+            // The old targets are only valid for their old shape. Free them before allocating replacements.
+            state.temporal_targets = None;
+            let platform = leaf!(p, temporal_platform()).cast::<D3d11Platform>();
+            // This leaf returns the process-lifetime table from sr_d3d11.cpp.
+            state.temporal_targets = unsafe { platform.as_ref() }.and_then(|platform| {
+                TemporalTargets::new(platform, device, render, output, format).ok()
+            });
             let text = format!(
                 "Anomaly SR stage {stage}: SR input targets {} at render {rw}x{rh}, output {ow}x{oh} (format {format}).",
-                if targets > 0 { "created" } else { "refused" }
+                if state.temporal_targets.is_some() {
+                    "created"
+                } else {
+                    "refused"
+                }
             );
             self.say(state, &text);
-            if targets < 0 {
-                return refuse(REFUSAL_PREPARE);
-            }
         }
+        let Some(targets) = &state.temporal_targets else {
+            return refuse(REFUSAL_PREPARE);
+        };
+        let textures = targets.view();
+        let depth = leaf!(p, depth_texture());
         // The motion target the main view's G-buffer window wrote this frame, at render size.
         let mut target = rsf_anomaly_sr_motion_target::default();
         leaf!(p, motion_target(&mut target));
@@ -1867,13 +1904,24 @@ impl Stage {
             null_mut()
         };
         let motion_present = !motion_view.is_null();
+        let motion_input = if motion_present {
+            motion_view
+        } else {
+            textures.empty_motion_srv
+        };
         let first_person_zero = self.live.first_person_zero.load(Ordering::Relaxed);
-        if !leaf!(p, seam_prepare(motion_view, first_person_zero)) {
+        if !leaf!(
+            p,
+            seam_prepare(
+                motion_input,
+                textures.colour_rtv,
+                textures.motion_rtv,
+                first_person_zero
+            )
+        ) {
             return refuse(REFUSAL_PREPARE);
         }
         leaf!(p, driver_count_prepared(!motion_present));
-        let mut textures = rsf_anomaly_sr_temporal_textures::default();
-        leaf!(p, temporal_textures(&mut textures));
         self.take(
             state,
             c"anomaly_sr_color",
@@ -1886,7 +1934,7 @@ impl Stage {
             state,
             c"anomaly_sr_depth",
             c"SRStage=4/5 SR depth: render-size R24G8 depth twin, standard device depth (first person in [0, 0.02])",
-            textures.depth,
+            depth,
             VIEW_DEPTH,
             1.0,
         );
@@ -1969,7 +2017,20 @@ impl Stage {
         } else {
             (null_mut(), null_mut())
         };
-        if !leaf!(p, driver_evaluate(&pass, camera_out, backend_out)) {
+        let mut inputs = rsf_anomaly_sr_pass_inputs {
+            frame: pass,
+            color: textures.colour,
+            color_output: textures.output,
+            depth,
+            motion: textures.motion,
+            exposure: if pass.exposure_auto {
+                null_mut()
+            } else {
+                textures.exposure
+            },
+            ..Default::default()
+        };
+        if !leaf!(p, driver_evaluate(&mut inputs, camera_out, backend_out)) {
             return bilinear();
         }
         if let Some(result) = result {
@@ -1983,7 +2044,7 @@ impl Stage {
             VIEW_HDR,
             1.0,
         );
-        if !leaf!(p, reinsert()) {
+        if !leaf!(p, reinsert(textures.output_srv)) {
             return refuse(REFUSAL_REINSERT);
         }
         true

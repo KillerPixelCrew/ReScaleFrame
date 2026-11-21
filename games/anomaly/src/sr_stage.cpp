@@ -149,12 +149,10 @@ struct Host final : SwapHost {
     ScratchTarget scratch{};
     RoundTripPass pass;
     UpscalePass upscale_pass;
-    TemporalTargets temporal{};
     uint64_t last_drop_refs{};
     uint64_t twin_bytes{};
     // While controller.seam() runs: the Rust scope lent by the seam call, and the seam being closed.
     void* cookie{};
-    const UpscaleInputs* seam_inputs{};
     const UpscaleViews* seam_views{};
     const TargetFields* trip_twin{};
     const TargetFields* trip_engine{};
@@ -258,7 +256,6 @@ struct Host final : SwapHost {
         }
         depth = {};
         scratch = {};
-        temporal = {};
         last_drop_refs = refs;
     }
     // Stage 2 and later: the Rust seam pass decides inputs, captures and fallback; the leaves below act on these views.
@@ -272,10 +269,8 @@ struct Host final : SwapHost {
             in.output_width, in.output_height};
         const rsf_anomaly_sr_seam seam{in.generic0_twin->surface, in.generic0->surface, in.render_width, in.render_height,
             in.output_width, in.output_height};
-        seam_inputs = &in;
         seam_views = &views;
         const bool ok = rsf_anomaly_sr_stage_upscale(cookie, &seam);
-        seam_inputs = nullptr;
         seam_views = nullptr;
         return ok;
     }
@@ -628,7 +623,6 @@ const rsf_anomaly_sr_stage_platform platform{
     },
     .host_stats = [](uint64_t* bytes, uint64_t* refs) { *bytes = host.twin_bytes; *refs = host.last_drop_refs; },
     .host_reset = [] {
-        host.temporal = {};
         host.pass.reset();
         host.upscale_pass.reset();
     },
@@ -647,53 +641,34 @@ const rsf_anomaly_sr_stage_platform platform{
             static_cast<ID3D11RenderTargetView*>(engine.rtv), engine.width, engine.height);
     },
     .temporal_ready = [] { return host.seam_views && host.upscale_pass.temporal_ready() && host.depth.texture; },
-    .temporal_targets = [](uint32_t format) -> int32_t {
-        if (!host.seam_inputs) return -1;
-        const auto& in = *host.seam_inputs;
-        auto* d3d = host.device();
-        const auto dxgi = static_cast<DXGI_FORMAT>(format);
-        if (host.temporal.matches(d3d, in.render_width, in.render_height, in.output_width, in.output_height, dxgi)) return 0;
-        return make_temporal_targets(d3d, in.render_width, in.render_height, in.output_width, in.output_height, dxgi, host.temporal) ==
-            TwinError::None ? 1 : -1;
-    },
+    .temporal_platform = []() -> const void* { return &d3d11_platform(); },
     .motion_target = [](rsf_anomaly_sr_motion_target* out) {
         const auto target = motion::frame_target();
         *out = {target.texture, target.written, target.main, target.frame, target.width, target.height};
         return target.texture != nullptr;
     },
     .create_motion_view = rsf_d3d11_create_shader_view,
-    .seam_prepare = [](void* motion_view, bool first_person_zero) {
-        if (!host.seam_views || !host.seam_inputs) return false;
+    .seam_prepare = [](void* motion_view, void* colour_target, void* motion_target, bool first_person_zero) {
+        if (!host.seam_views) return false;
         const auto& views = *host.seam_views;
-        const auto& in = *host.seam_inputs;
-        auto& t = host.temporal;
-        const auto motion = motion_view ? static_cast<ID3D11ShaderResourceView*>(motion_view) : t.empty_motion_srv.Get();
-        const PrepareViews prepare{views.colour, motion, views.depth,
-            in.render_width, in.render_height, t.colour_rtv.Get(), t.motion_rtv.Get(), first_person_depth_limit,
+        const PrepareViews prepare{views.colour, static_cast<ID3D11ShaderResourceView*>(motion_view), views.depth,
+            views.source_width, views.source_height, static_cast<ID3D11RenderTargetView*>(colour_target),
+            static_cast<ID3D11RenderTargetView*>(motion_target), first_person_depth_limit,
             first_person_zero};
         return host.upscale_pass.prepare(host.context(), prepare);
     },
-    .temporal_textures = [](rsf_anomaly_sr_temporal_textures* out) {
-        *out = {host.temporal.colour.Get(), host.depth.texture.Get(), host.temporal.motion.Get(), host.temporal.output.Get()};
-    },
-    .reinsert = [] {
-        return host.seam_views && host.upscale_pass.reinsert(host.context(), *host.seam_views, host.temporal.output_srv.Get());
+    .depth_texture = []() -> void* { return host.depth.texture.Get(); },
+    .reinsert = [](void* reconstruction) {
+        return host.seam_views && host.upscale_pass.reinsert(host.context(), *host.seam_views,
+            static_cast<ID3D11ShaderResourceView*>(reconstruction));
     },
     .driver_bind = [] { return driver.bind(GetModuleHandleW(L"ReScaleFrame.Runtime.dll")); },
     .driver_enabled = [] { return driver.enabled(); },
     .driver_output_format = [] { return driver.output_format(); },
     .driver_planned = [](uint32_t ow, uint32_t oh, uint32_t* rw, uint32_t* rh) { return driver.planned_render(ow, oh, *rw, *rh); },
     .driver_boundary = [](uint32_t width, uint32_t height) { driver.boundary(host.device(), width, height); },
-    .driver_evaluate = [](const rsf_anomaly_sr_pass* in, rsf_camera_frame* camera, uint32_t* backend) {
-        auto& t = host.temporal;
-        rsf_anomaly_sr_pass_inputs pass{};
-        pass.frame = *in;
-        pass.color = t.colour.Get();
-        pass.color_output = t.output.Get();
-        pass.depth = host.depth.texture.Get();
-        pass.motion = t.motion.Get();
-        pass.exposure = in->exposure_auto ? nullptr : t.exposure.Get();
-        return driver.evaluate(host.context(), pass, {.sequence = in->reset_sequence, .cut = in->cut}, camera, backend);
+    .driver_evaluate = [](rsf_anomaly_sr_pass_inputs* in, rsf_camera_frame* camera, uint32_t* backend) {
+        return driver.evaluate(host.context(), *in, {.sequence = in->frame.reset_sequence, .cut = in->frame.cut}, camera, backend);
     },
     .driver_request_dump = [](const char* prefix) {
         try { return driver.request_dump(prefix); } catch (...) { return false; }
