@@ -25,20 +25,50 @@ const UI_TARGETS: usize = RSF_PROMOTE_MAX_UI_TARGETS as usize;
 const CHAIN_TARGETS: usize = RSF_PROMOTE_MAX_CHAIN_TARGETS as usize;
 const _: () = assert!(5 + UI_TARGETS + CHAIN_TARGETS <= RSF_FRAME_TAP_MAX_SUBSTITUTIONS as usize);
 
+const BGRX8_UNORM: u32 = 88;
+const BGRX8_TYPELESS: u32 = 92;
+
+fn typeless_family(format: u32) -> u32 {
+    match format {
+        9..=14 => 9,        // R16G16B16A16
+        23..=25 => 23,      // R10G10B10A2
+        27..=32 => 27,      // R8G8B8A8
+        87 | 90 | 91 => 90, // B8G8R8A8
+        88 | 92 | 93 => BGRX8_TYPELESS,
+        _ => format,
+    }
+}
+
 #[repr(C)]
 #[derive(Default)]
-struct ReplacementResources {
-    texture: Handle,
-    target: Handle,
-    view: Handle,
+struct TextureFacts {
+    width: u32,
+    height: u32,
     format: u32,
+    default_view_format: u32,
+}
+
+impl TextureFacts {
+    fn view_format(&self, hint: u32) -> u32 {
+        // The chain's hint can come from a different surface family.
+        if hint != 0 && typeless_family(hint) == typeless_family(self.format) {
+            hint
+        } else if self.format == BGRX8_TYPELESS {
+            BGRX8_UNORM
+        } else {
+            self.default_view_format
+        }
+    }
 }
 
 #[repr(C)]
 struct Platform {
-    make_replacement:
-        unsafe extern "C" fn(&Setup, Handle, u32, *const c_char, &mut ReplacementResources),
-    make_view: unsafe extern "C" fn(Handle, Handle, u32) -> Handle,
+    owns_texture: unsafe extern "C" fn(Handle, Handle) -> u32,
+    describe: unsafe extern "C" fn(Handle, &mut TextureFacts) -> u32,
+    log_replacement: unsafe extern "C" fn(&Setup, Handle, *const c_char, &TextureFacts) -> u32,
+    make_texture: unsafe extern "C" fn(Handle, u32, u32, u32) -> Handle,
+    make_target: unsafe extern "C" fn(Handle, Handle, u32) -> Handle,
+    make_view: unsafe extern "C" fn(Handle, Handle, u32, u32) -> Handle,
     copy: unsafe extern "C" fn(Handle, Handle, Handle, Handle) -> u32,
     create_blit: CreateBlit,
     draw_blit: DrawBlit,
@@ -47,8 +77,8 @@ struct Platform {
 }
 
 const _: () = {
-    assert!(size_of::<ReplacementResources>() == 32);
-    assert!(size_of::<Platform>() == 7 * size_of::<Handle>());
+    assert!(size_of::<TextureFacts>() == 16);
+    assert!(size_of::<Platform>() == 11 * size_of::<Handle>());
 };
 
 struct Replacement {
@@ -124,24 +154,87 @@ impl Promote {
         }
     }
 
-    fn make_replacement(&self, original: Handle, hint: u32, role: &CStr) -> Option<Replacement> {
-        let mut out = ReplacementResources::default();
+    fn describe(&self, texture: Handle) -> Option<TextureFacts> {
+        let mut facts = TextureFacts::default();
+        (unsafe { (self.platform.describe)(texture, &mut facts) } != 0).then_some(facts)
+    }
+
+    fn view(&self, texture: Handle, format: Option<u32>) -> Option<ComRef> {
         unsafe {
-            (self.platform.make_replacement)(&self.setup, original, hint, role.as_ptr(), &mut out)
+            ComRef::from_owned((self.platform.make_view)(
+                self.device.as_ptr(),
+                texture,
+                u32::from(format.is_some()),
+                format.unwrap_or(0),
+            ))
+        }
+    }
+
+    fn source_view(&self, texture: Handle, typed: bool) -> Option<ComRef> {
+        if unsafe { (self.platform.owns_texture)(self.device.as_ptr(), texture) } == 0 {
+            return None;
+        }
+        let format = if typed {
+            Some(self.describe(texture)?.view_format(0))
+        } else {
+            None
         };
-        let (texture, target, view) = unsafe {
-            (
-                ComRef::from_owned(out.texture),
-                ComRef::from_owned(out.target),
-                ComRef::from_owned(out.view),
-            )
+        self.view(texture, format)
+    }
+
+    fn make_replacement(&self, original: Handle, hint: u32, role: &CStr) -> Option<Replacement> {
+        let device = self.device.as_ptr();
+        let role_name = role.to_string_lossy();
+        if unsafe { (self.platform.owns_texture)(device, original) } == 0 {
+            self.log(format_args!(
+                "promote: the {role_name} belongs to another device"
+            ));
+            return None;
+        }
+        let facts = self.describe(original)?;
+        if unsafe { (self.platform.log_replacement)(&self.setup, original, role.as_ptr(), &facts) }
+            == 0
+        {
+            return None;
+        }
+        let (width, height) = (self.setup.output_width, self.setup.output_height);
+        let texture = unsafe {
+            ComRef::from_owned((self.platform.make_texture)(
+                device,
+                width,
+                height,
+                facts.format,
+            ))
+        };
+        let Some(texture) = texture else {
+            self.log(format_args!(
+                "promote: the {role_name} replacement could not be created"
+            ));
+            return None;
+        };
+        let format = facts.view_format(hint);
+        let target = unsafe {
+            ComRef::from_owned((self.platform.make_target)(
+                device,
+                texture.as_ptr(),
+                format,
+            ))
+        };
+        let view = target
+            .as_ref()
+            .and_then(|_| self.view(texture.as_ptr(), Some(format)));
+        let Some(view) = view else {
+            self.log(format_args!(
+                "promote: the {role_name} replacement views could not be created with view format {format}"
+            ));
+            return None;
         };
         Some(Replacement {
             original,
-            texture: texture?,
+            texture,
             target: target?,
-            view: view?,
-            format: out.format,
+            view,
+            format: facts.format,
         })
     }
 
@@ -179,7 +272,6 @@ impl Promote {
             tail.chain_view_format,
             c"chain target",
         )?;
-        let device = self.device.as_ptr();
         let recombine = if tail.composed.is_null() {
             None
         } else {
@@ -187,9 +279,7 @@ impl Promote {
             let scene = self.make_replacement(tail.scene_color, 0, c"scene colour")?;
             let scratch =
                 self.make_replacement(tail.scene_color, 0, c"scene colour's discarded writes")?;
-            let source_view = unsafe {
-                ComRef::from_owned((self.platform.make_view)(device, tail.scene_color, 1))
-            };
+            let source_view = self.source_view(tail.scene_color, true);
             let Some(source_view) = source_view else {
                 self.log("promote: scene colour could not be made readable for the fallback seed");
                 return None;
@@ -230,9 +320,7 @@ impl Promote {
         if chain[0].is_none() {
             self.log("promote: no chain target named; the scene is downsampled before the interface composite");
         }
-        let reconstruction = unsafe {
-            ComRef::from_owned((self.platform.make_view)(device, tail.reconstruction, 0))
-        };
+        let reconstruction = self.source_view(tail.reconstruction, false);
         let Some(reconstruction) = reconstruction else {
             self.log("promote: the reconstruction could not be made readable");
             return None;

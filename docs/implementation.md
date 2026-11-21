@@ -1,5 +1,11 @@
 # Implementation tracker
 
+Scene promotion now builds its replacement texture and views in Rust.
+It accepts a view hint only within the source's format family and
+releases partial allocations on refusal. The typed D3D11 descriptors
+and public C calls are unchanged in source. The device fixture remains
+unrun on this port. [Source comparison](rust-migration.md#native-policy-cutover)
+
 The standalone `rsf_negotiate` contract uses Rust for capability
 selection, preserving the C entry point, record layouts and FG-before-SR
 order. The native contract fixture and its new static link remain unrun.

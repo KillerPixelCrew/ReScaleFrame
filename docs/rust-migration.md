@@ -174,6 +174,17 @@ reading the full request and keeps the original FG-before-SR policy.
 The standalone fixture remains unrun. The Runtime uses its production
 backend and session owners.
 
+Scene promotion's Rust owner now admits the source texture, selects a
+compatible view format and owns the partial texture, RTV and SRV
+allocations until the replacement is complete. D3D11 calls, the common
+SRV format lookup and the allocation receipt's native pointer formatting
+remain in the native leaves. Source comparison against `301ad289`
+matched all 21 format family entries using Windows SDK 10.0.26100.0,
+the descriptor values and allocation order, and the 11 private table
+entries. The public C declarations and existing `scene_promote`
+device fixture are unchanged. Pinned format, locked Windows metadata
+and whitespace checks passed. Link and device verification remain open.
+
 The retained standalone FSR3 Vulkan bridge still has native SDK binding,
 SR, FG and swapchain owners. Its managed caller resolves the
 `VulkanStoryFsr3*` entry points by name. This is a separate linkage path
