@@ -11,7 +11,6 @@ bool rsf_anomaly_slot_install(uint32_t kind, const rsf_anomaly_guard_image*, uin
 bool rsf_anomaly_slot_set(uint32_t kind, bool enabled) noexcept;
 void* rsf_anomaly_slot_original(uint32_t kind) noexcept;
 bool rsf_anomaly_position_slot_active() noexcept;
-const uint32_t* rsf_anomaly_input_slot_counter() noexcept;
 }
 
 namespace rsf::anomaly {

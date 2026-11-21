@@ -79,3 +79,29 @@ detour reports the engine frame before starting the Rust polling scope.
 A Rust regression checks that an admitted call cannot route buffered
 records before polling starts, that nested polling restores the outer
 scope, and that retirement stops routing while an in-flight call drains.
+
+## Verified input entry and buffered receipt
+
+Compared with `fc706ca9`, the Rust input owner now selects the
+`CInput::OnFrame`, `KeyUpdate`, and `MouseUpdate` guards in order.
+The complete OnFrame body check follows the three prologues. The
+shared slot owner then checks and exchanges primary slot 0 using the
+same Standard or AVX profile. The refusal reason is unchanged on
+those paths. The native detour lends the guarded read and frame
+report callbacks. Rust reads the selected engine counter, reports
+the boundary and opens polling in that order. The original call and
+unwind cleanup stay on the native frame.
+
+The buffered-read gate now receives the native result, count, peek
+flag and hardware fact after the device call. It admits only
+successful, nonempty hardware reads that consumed records. The
+observer runs after the device lock is released. The polling scope
+still decides whether that device kind becomes a GameSDK input
+event. The Runtime continues to own pacing and marker semantics.
+
+The private profile and buffered-read records are 112 and 32 bytes
+on x64. The existing Standard and AVX fixture now checks the guard
+refusal reasons. A Rust fixture covers hardware, peek and failure
+cases. Source comparison, pinned formatting, locked offline Cargo
+metadata and whitespace passed. The updated native build, fixtures,
+held-key gameplay and overlay release remain open.

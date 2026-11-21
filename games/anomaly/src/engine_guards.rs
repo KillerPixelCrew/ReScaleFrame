@@ -12,11 +12,10 @@ pub(super) struct Image {
     size: u32,
     pub(super) read: Read,
 }
-
 #[repr(C)]
 pub(super) struct NativeSite {
-    name: *const c_char,
-    rva: u32,
+    pub(super) name: *const c_char,
+    pub(super) rva: u32,
     expected: [u8; 16],
 }
 
@@ -43,13 +42,17 @@ impl Image {
         Self { base, size, read }
     }
 
+    pub(super) fn matches(&self, site: &NativeSite) -> bool {
+        self.matches_site(site.rva, &site.expected)
+    }
+
     pub(super) unsafe fn matches_sites(
         &self,
         sites: &[NativeSite],
         guards: &[UniqueGuard],
     ) -> bool {
         sites.iter().all(|site| {
-            self.matches_site(site.rva, &site.expected)
+            self.matches(site)
                 && guards
                     .iter()
                     .filter(|guard| guard.rva == site.rva)
@@ -90,7 +93,7 @@ impl Image {
         self.copy(rva).as_ref() == Some(expected)
     }
 
-    unsafe fn matches_hex_guard(&self, rva: u32, hex: *const c_char) -> bool {
+    pub(super) unsafe fn matches_hex_guard(&self, rva: u32, hex: *const c_char) -> bool {
         !hex.is_null() && self.matches_hex(rva, unsafe { CStr::from_ptr(hex) }.to_bytes())
     }
 

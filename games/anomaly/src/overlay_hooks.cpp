@@ -6,7 +6,7 @@
 
 using HookAddress = uintptr_t;
 using HookReason = const char*;
-using InputObserver = void (*)(rsf::anomaly::overlay::DeviceKind) noexcept;
+using InputObserver = rsf::anomaly::overlay::InputObserver;
 using PresentCallback = void (*)(void*, IDXGISwapChain*) noexcept;
 
 struct ComProbeOps {
@@ -147,11 +147,7 @@ HRESULT STDMETHODCALLTYPE hook_get_device_data(void* self, DWORD object_size, DI
     try { result = gate ? gate->get_data(self, calls, object_size, data, count, flags, &hardware_data) :
         calls.get_data(self, object_size, data, count, flags); }
     catch (...) { result = calls.get_data(self, object_size, data, count, flags); }
-    if (hardware_data && SUCCEEDED(result) && data && count && *count && !(flags & DIGDD_PEEK) && gate) {
-        DeviceKind kind{};
-        if (const auto observer = rsf_anomaly_overlay_input_observer(); observer && gate->device_kind(self, kind))
-            observer(kind);
-    }
+    if (gate) gate->buffered_read(self, {data, count, result, flags, hardware_data}, rsf_anomaly_overlay_input_observer);
     return result;
 }
 HRESULT STDMETHODCALLTYPE hook_set_cooperative_level(void* self, HWND window, DWORD flags) {

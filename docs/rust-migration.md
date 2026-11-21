@@ -415,6 +415,12 @@ Source checks matched bindings and the public declarations. Native
 builds, fixtures and live checks remain open.
 [Seam draw bindings](research/rust-anomaly-sr-stage.md#seam-draw-bindings)
 
+Anomaly now admits the verified OnFrame guards and consumed
+hardware reads in Rust. The existing native callback supplies the
+engine counter before polling opens. Builds, focused fixtures,
+held-key gameplay and overlay release remain open.
+[Verified input entry](research/rust-anomaly-input.md#verified-input-entry-and-buffered-receipt)
+
 ## Verification coverage
 
 | Requirement | Recorded evidence | Still open |

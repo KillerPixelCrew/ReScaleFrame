@@ -937,6 +937,13 @@ records. Source comparison matched the binding order and shader
 inputs. The updated fixtures and game checks remain open.
 [Seam draw bindings](research/rust-anomaly-sr-stage.md#seam-draw-bindings)
 
+Anomaly now owns the OnFrame profile admission, engine frame report
+order, and buffered hardware receipt gate in Rust. The native detours
+keep the original engine and DirectInput calls and unwind cleanup.
+Source checks matched the Standard and AVX guards. Updated fixtures
+and held-input game checks remain open.
+[Verified input entry](research/rust-anomaly-input.md#verified-input-entry-and-buffered-receipt)
+
 Native D3D12 DLSS now resolves the required interposer and feature
 addresses in Rust. The native capsule binds the typed pointers
 after admission. Source comparison matched the ordered lookups and

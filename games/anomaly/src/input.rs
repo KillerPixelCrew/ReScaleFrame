@@ -17,7 +17,69 @@ use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
+#[cfg(windows)]
+use crate::engine_guards::{Image, NativeSite, Read};
+#[cfg(windows)]
+use crate::engine_slots::{Exchange, INPUT, input_counter, rsf_anomaly_slot_install};
+
 // ---- CInput::OnFrame admission ------------------------------------------------------------------
+
+#[cfg(windows)]
+#[repr(C)]
+struct InputProfile {
+    sites: [NativeSite; 3],
+    slot_rva: u32,
+    frame_code: *const std::ffi::c_char,
+}
+
+#[cfg(windows)]
+const _: () = {
+    assert!(size_of::<InputProfile>() == 112);
+    assert!(std::mem::offset_of!(InputProfile, slot_rva) == 96);
+    assert!(std::mem::offset_of!(InputProfile, frame_code) == 104);
+};
+
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_input_install(
+    image: &Image,
+    profile: &InputProfile,
+    counter_rva: u32,
+    replacement: *mut c_void,
+    exchange: Exchange,
+    reason: Option<&mut *const std::ffi::c_char>,
+) -> bool {
+    for site in &profile.sites {
+        if !image.matches(site) {
+            if let Some(reason) = reason {
+                *reason = site.name;
+            }
+            return false;
+        }
+    }
+    let frame = &profile.sites[0];
+    if !unsafe { image.matches_hex_guard(frame.rva, profile.frame_code) } {
+        if let Some(reason) = reason {
+            *reason = c"CInput OnFrame complete body/vtable guard".as_ptr();
+        }
+        return false;
+    }
+    if !rsf_anomaly_slot_install(
+        INPUT as u32,
+        image,
+        profile.slot_rva,
+        frame.rva,
+        counter_rva,
+        replacement,
+        exchange,
+    ) {
+        if let Some(reason) = reason {
+            *reason = c"CInput primary slot 0".as_ptr();
+        }
+        return false;
+    }
+    true
+}
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 static IN_FLIGHT: AtomicU32 = AtomicU32::new(0);
@@ -31,21 +93,41 @@ const POLLING_STARTED: u32 = 1;
 const WAS_POLLING: u32 = 2;
 
 /// Counts an `OnFrame` call in flight and admits its engine frame event.
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_input_frame_enter() -> bool {
+#[cfg(any(windows, test))]
+fn frame_enter() -> bool {
     IN_FLIGHT.fetch_add(1, Ordering::AcqRel);
     ACTIVE.load(Ordering::Acquire)
 }
 
 /// The detour has reported the frame boundary and is about to call the original.
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_input_polling_begin() -> u32 {
+#[cfg(any(windows, test))]
+fn polling_begin() -> u32 {
     POLLING_STARTED
         | if POLLING.replace(true) {
             WAS_POLLING
         } else {
             0
         }
+}
+
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_input_frame_begin(read: Read, emit: unsafe extern "C" fn(u32)) -> u32 {
+    if !frame_enter() {
+        return 0;
+    }
+    let mut frame = 0u32;
+    if !unsafe {
+        read(
+            (&raw mut frame).cast(),
+            input_counter().cast(),
+            size_of::<u32>(),
+        )
+    } {
+        return 0;
+    }
+    unsafe { emit(frame) };
+    polling_begin()
 }
 
 #[unsafe(no_mangle)]
@@ -69,8 +151,7 @@ extern "C" fn rsf_anomaly_input_idle() -> bool {
 
 /// The input kinds to report for hardware records the gate returned to the engine, or 0 when the
 /// read did not happen inside an admitted `OnFrame` on this thread.
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_input_route(kind: u8) -> u32 {
+fn route(kind: u8) -> u32 {
     if !POLLING.get() || !ACTIVE.load(Ordering::Acquire) {
         return 0;
     }
@@ -81,24 +162,32 @@ extern "C" fn rsf_anomaly_input_route(kind: u8) -> u32 {
     }
 }
 
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_input_received(kind: u8, emit: unsafe extern "C" fn(u32, u32)) {
+    let kinds = route(kind);
+    if kinds != 0 {
+        unsafe { emit(kinds, 0) };
+    }
+}
+
 #[cfg(test)]
 #[test]
 fn routing_starts_after_frame_report_and_ends_at_poll_retirement() {
     rsf_anomaly_input_activate(true);
-    assert!(rsf_anomaly_input_frame_enter());
+    assert!(frame_enter());
     assert!(!rsf_anomaly_input_idle());
-    assert_eq!(rsf_anomaly_input_route(KEYBOARD), 0);
+    assert_eq!(route(KEYBOARD), 0);
 
-    let outer = rsf_anomaly_input_polling_begin();
-    assert_eq!(rsf_anomaly_input_route(KEYBOARD), RSF_GAME_INPUT_KEYBOARD);
-    assert!(rsf_anomaly_input_frame_enter());
-    let inner = rsf_anomaly_input_polling_begin();
+    let outer = polling_begin();
+    assert_eq!(route(KEYBOARD), RSF_GAME_INPUT_KEYBOARD);
+    assert!(frame_enter());
+    let inner = polling_begin();
     rsf_anomaly_input_frame_exit(inner);
-    assert_eq!(rsf_anomaly_input_route(MOUSE), RSF_GAME_INPUT_MOUSE);
+    assert_eq!(route(MOUSE), RSF_GAME_INPUT_MOUSE);
 
     rsf_anomaly_input_activate(false);
-    assert_eq!(rsf_anomaly_input_route(MOUSE), 0);
-    assert!(!rsf_anomaly_input_frame_enter());
+    assert_eq!(route(MOUSE), 0);
+    assert!(!frame_enter());
     rsf_anomaly_input_frame_exit(0);
     assert!(!rsf_anomaly_input_idle());
     rsf_anomaly_input_frame_exit(outer);
@@ -371,21 +460,90 @@ extern "C" fn rsf_anomaly_input_gate_tracked(gate: &Gate, device: *mut c_void) -
     gate.lock().contains_key(&(device as usize))
 }
 
-/// # Safety
-/// `kind` is writable.
+#[repr(C)]
+struct BufferedRead {
+    data: *const c_void,
+    count: *const u32,
+    result: HResult,
+    flags: u32,
+    hardware: bool,
+}
+
+type Observer = unsafe extern "C" fn(u8);
+type ObserverQuery = unsafe extern "C" fn() -> Option<Observer>;
+
+const _: () = {
+    assert!(size_of::<BufferedRead>() == 32);
+    assert!(std::mem::offset_of!(BufferedRead, hardware) == 24);
+};
+
+// Called after the original or gated GetDeviceData returned. The native detour
+// lends its count only for this call. The observer runs outside the device lock.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_input_gate_device_kind(
+unsafe extern "C" fn rsf_anomaly_input_gate_buffered_read(
     gate: &Gate,
     device: *mut c_void,
-    kind: *mut u8,
-) -> bool {
-    match gate.lock().get(&(device as usize)) {
-        Some(entry) => {
-            unsafe { kind.write(entry.kind) };
-            true
-        }
-        None => false,
+    read: &BufferedRead,
+    query: ObserverQuery,
+) {
+    if !read.hardware
+        || read.result < 0
+        || read.data.is_null()
+        || read.count.is_null()
+        || unsafe { read.count.read() } == 0
+        || read.flags & DIGDD_PEEK != 0
+    {
+        return;
     }
+    let Some(observer) = (unsafe { query() }) else {
+        return;
+    };
+    let kind = gate.lock().get(&(device as usize)).map(|entry| entry.kind);
+    if let Some(kind) = kind {
+        unsafe { observer(kind) };
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn buffered_read_routes_only_consumed_hardware_records() {
+    thread_local! {
+        static OBSERVED: Cell<Option<u8>> = const { Cell::new(None) };
+    }
+    unsafe extern "C" fn observe(kind: u8) {
+        OBSERVED.set(Some(kind));
+    }
+    unsafe extern "C" fn query() -> Option<Observer> {
+        Some(observe)
+    }
+    let gate = Gate {
+        capture: None,
+        user: ptr::null_mut(),
+        devices: Mutex::default(),
+    };
+    let device = ptr::without_provenance_mut(1);
+    rsf_anomaly_input_gate_add(&gate, device, KEYBOARD);
+    let count = 1;
+    let mut read = BufferedRead {
+        data: ptr::without_provenance(2),
+        count: &count,
+        result: DI_OK,
+        flags: DIGDD_PEEK,
+        hardware: true,
+    };
+    unsafe { rsf_anomaly_input_gate_buffered_read(&gate, device, &read, query) };
+    assert_eq!(OBSERVED.get(), None);
+    read.flags = 0;
+    read.hardware = false;
+    unsafe { rsf_anomaly_input_gate_buffered_read(&gate, device, &read, query) };
+    assert_eq!(OBSERVED.get(), None);
+    read.hardware = true;
+    read.result = DIERR_INPUTLOST;
+    unsafe { rsf_anomaly_input_gate_buffered_read(&gate, device, &read, query) };
+    assert_eq!(OBSERVED.get(), None);
+    read.result = DI_OK;
+    unsafe { rsf_anomaly_input_gate_buffered_read(&gate, device, &read, query) };
+    assert_eq!(OBSERVED.get(), Some(KEYBOARD));
 }
 
 /// # Safety

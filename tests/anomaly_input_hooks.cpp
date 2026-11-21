@@ -27,11 +27,14 @@ int main(int argc,char** argv) {
     if(!mapped) {
         for(const auto* site : {&p.frame,&p.keyboard,&p.mouse}) {
             fill(image,p); image[site->rva]^=std::byte{1}; CHECK(!input::install(image,build.image_size(),build,&reason));
+            CHECK(reason && std::string_view(reason)==site->name);
         }
         fill(image,p); image[p.frame.rva+std::strlen(p.frame_code)/2-1]^=std::byte{1};
         CHECK(!input::install(image,build.image_size(),build,&reason));
+        CHECK(reason && std::string_view(reason)=="CInput OnFrame complete body/vtable guard");
         fill(image,p); *reinterpret_cast<void**>(image+p.frame_vtable_rva)=image+p.mouse.rva;
         CHECK(!input::install(image,build.image_size(),build,&reason)); fill(image,p);
+        CHECK(reason && std::string_view(reason)=="CInput primary slot 0");
     }
     CHECK(input::install(image,build.image_size(),build,&reason));
     CHECK(*reinterpret_cast<void**>(image+p.frame_vtable_rva)!=image+p.frame.rva);

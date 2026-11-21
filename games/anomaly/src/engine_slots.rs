@@ -6,7 +6,7 @@ use std::ptr::{null_mut, with_exposed_provenance, with_exposed_provenance_mut};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-const INPUT: usize = 0;
+pub(super) const INPUT: usize = 0;
 const POSITION: usize = 1;
 const SLOT_BYTES: usize = size_of::<usize>();
 const PAGE_READWRITE: u32 = 4;
@@ -22,7 +22,7 @@ unsafe extern "system" {
 }
 
 type Read = unsafe extern "C" fn(*mut c_void, *const c_void, usize) -> bool;
-type Exchange =
+pub(super) type Exchange =
     unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *mut *mut c_void) -> bool;
 
 struct Slot {
@@ -104,7 +104,7 @@ fn publish(kind: usize, enabled: bool) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_slot_install(
+pub(super) extern "C" fn rsf_anomaly_slot_install(
     kind: u32,
     image: &Image,
     slot_rva: u32,
@@ -199,7 +199,6 @@ extern "C" fn rsf_anomaly_position_slot_active() -> bool {
     POSITION_ACTIVE.load(Ordering::Acquire)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_input_slot_counter() -> *const u32 {
+pub(super) fn input_counter() -> *const u32 {
     with_exposed_provenance(INPUT_COUNTER.load(Ordering::Acquire))
 }

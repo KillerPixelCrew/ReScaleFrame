@@ -30,10 +30,21 @@ struct DeviceCalls {
     HRESULT (STDMETHODCALLTYPE* get_data)(void*, DWORD, DIDEVICEOBJECTDATA*, DWORD*, DWORD);
 };
 
+struct BufferedRead {
+    const void* data;
+    const DWORD* count;
+    HRESULT result;
+    DWORD flags;
+    bool hardware;
+};
+using InputObserver = void (*)(DeviceKind) noexcept;
+using ObserverQuery = InputObserver (*)() noexcept;
+
 // The DirectInput values input.rs uses.
 static_assert(sizeof(DIDEVICEOBJECTDATA) == 24 && offsetof(DIDEVICEOBJECTDATA, dwTimeStamp) == 8);
 static_assert(DIMOFS_BUTTON0 == 12 && DIMOFS_BUTTON7 == 19 && DIGDD_PEEK == 1 && DISCL_EXCLUSIVE == 1);
 static_assert(DIERR_INPUTLOST == HRESULT(0x8007001EL) && DIERR_NOTACQUIRED == HRESULT(0x8007000CL));
+static_assert(sizeof(BufferedRead) == 32 && offsetof(BufferedRead, hardware) == 24);
 }
 
 extern "C" {
@@ -44,7 +55,6 @@ void rsf_anomaly_input_gate_add(rsf_anomaly_input_gate*, void* device, uint8_t k
 void rsf_anomaly_input_gate_remove(rsf_anomaly_input_gate*, void* device) noexcept;
 void rsf_anomaly_input_gate_cooperative_level(rsf_anomaly_input_gate*, void* device, DWORD flags) noexcept;
 bool rsf_anomaly_input_gate_tracked(rsf_anomaly_input_gate*, void* device) noexcept;
-bool rsf_anomaly_input_gate_device_kind(rsf_anomaly_input_gate*, void* device, uint8_t* kind) noexcept;
 HRESULT rsf_anomaly_input_gate_acquire(rsf_anomaly_input_gate*, void* device,
     const rsf::anomaly::overlay::DeviceCalls*) noexcept;
 HRESULT rsf_anomaly_input_gate_unacquire(rsf_anomaly_input_gate*, void* device,
@@ -54,6 +64,8 @@ HRESULT rsf_anomaly_input_gate_get_state(rsf_anomaly_input_gate*, void* device,
 HRESULT rsf_anomaly_input_gate_get_data(rsf_anomaly_input_gate*, void* device,
     const rsf::anomaly::overlay::DeviceCalls*, DWORD object_size, DIDEVICEOBJECTDATA* data, DWORD* count, DWORD flags,
     bool* hardware_data) noexcept;
+void rsf_anomaly_input_gate_buffered_read(rsf_anomaly_input_gate*, void* device,
+    const rsf::anomaly::overlay::BufferedRead*, rsf::anomaly::overlay::ObserverQuery) noexcept;
 }
 
 namespace rsf::anomaly::overlay {
@@ -83,12 +95,6 @@ public:
         rsf_anomaly_input_gate_cooperative_level(gate_, device, flags);
     }
     bool tracked(void* device) noexcept { return rsf_anomaly_input_gate_tracked(gate_, device); }
-    bool device_kind(void* device, DeviceKind& kind) noexcept {
-        uint8_t value{};
-        if (!rsf_anomaly_input_gate_device_kind(gate_, device, &value)) return false;
-        kind = DeviceKind(value);
-        return true;
-    }
 
     HRESULT acquire(void* device, const DeviceCalls& calls) noexcept {
         return rsf_anomaly_input_gate_acquire(gate_, device, &calls);
@@ -102,6 +108,9 @@ public:
     HRESULT get_data(void* device, const DeviceCalls& calls, DWORD object_size, DIDEVICEOBJECTDATA* data,
         DWORD* count, DWORD flags, bool* hardware_data = nullptr) noexcept {
         return rsf_anomaly_input_gate_get_data(gate_, device, &calls, object_size, data, count, flags, hardware_data);
+    }
+    void buffered_read(void* device, const BufferedRead& read, ObserverQuery query) noexcept {
+        rsf_anomaly_input_gate_buffered_read(gate_, device, &read, query);
     }
 
 private:
