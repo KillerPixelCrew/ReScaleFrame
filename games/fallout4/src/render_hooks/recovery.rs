@@ -196,7 +196,7 @@ pub(super) struct Leaves {
 const _: () = assert!(size_of::<Leaves>() == 15 * size_of::<usize>());
 
 impl Leaves {
-    fn report(&self, text: &CStr) {
+    pub(super) fn report(&self, text: &CStr) {
         unsafe { (self.report)(text.as_ptr()) }
     }
     /// Reports a terminated message from `crate::message`.
@@ -528,7 +528,7 @@ pub(super) fn finish(leaves: &Leaves) -> bool {
 /// straight to the host, so a retry after the imagespace exit cleared the World's
 /// `full_output_resolved` still reaches it, and FINISH is never repeated. Without it, the guarded
 /// FINISH admission runs first, as before.
-fn retire(leaves: &Leaves) -> bool {
+pub(super) fn retire(leaves: &Leaves) -> bool {
     let recovery = state();
     if recovery.token == 0 {
         return true;
@@ -567,10 +567,14 @@ extern "C" fn rsf_fallout4_recovery_committed() -> bool {
     state().committed
 }
 
-/// Clears the calling thread's state with its World, which C++ resets only without a token.
+/// Clears the calling thread's state with its World, which resets only without a token.
+pub(super) fn reset() {
+    RECOVERY.set(Recovery::EMPTY);
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn rsf_fallout4_recovery_reset() {
-    RECOVERY.set(Recovery::EMPTY);
+    reset();
 }
 
 #[cfg(test)]

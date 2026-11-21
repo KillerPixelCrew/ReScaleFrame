@@ -2,8 +2,9 @@
 #pragma once
 // Private boundary between render_hooks.cpp and its Rust owner (render_hooks.rs): the render hook
 // lifecycle, the ordinary World and outer Present guards, the reduced-render recovery
-// transaction (render_hooks/recovery.rs) and SR and HUDless publication
-// (render_hooks/publication.rs). Not a DLL ABI.
+// transaction (render_hooks/recovery.rs), SR and HUDless publication
+// (render_hooks/publication.rs) and the FRAME, SUBMISSION and WINDOW scope
+// (render_hooks/scope.rs). Not a DLL ABI.
 #include "cpu_events_platform.h"
 #include "resolution.h"
 #include <cstddef>
@@ -207,6 +208,62 @@ static_assert(sizeof(NativePublicationFramebuffer) == 40 &&
     offsetof(NativePublicationFramebuffer, native_frame) == 24);
 static_assert(sizeof(NativePublicationLeaves) == 22 * sizeof(void*));
 
+// FRAME, SUBMISSION and WINDOW scope (render_hooks/scope.rs). Rust owns the before/after owner
+// lease verdict, the FRAME pass identity and keys, FRAME then SUBMISSION begin, the balanced
+// SUBMISSION close before Present or after Swap, NO_FG on refusal, the WINDOW then FRAME close
+// order, the recovery, auxiliary and resolution continuation and the conditional World reset.
+// C++ keeps the typed owner read, COM identity and the Context and chain leases, the scope
+// counters, the guarded auxiliary and resolution calls, the guarded pass callback and receipts and
+// the World fields. Rust also uses the recovery leaves' report, refuse and same_source and retires
+// recovery through them.
+struct NativeRenderOwner {
+    uintptr_t renderer, device, context, chain, window, graph, view;
+    uint32_t frame;
+};
+struct NativeScopeWorld {
+    rsf_fallout4_cpu_identity cpu;
+    rsf_game_render_pass* pass;                // World pass
+    rsf_game_render_pass* frame_pass;
+    rsf_game_render_pass* submission_pass;
+    void* context;                             // World Context
+    bool inputs, published, window_open, frame_open, submission_open, refused, auxiliary_open;
+};
+struct NativeScopeLeaves {
+    void (*world)(NativeScopeWorld*) noexcept;
+    // Renderer cell, RendererData device, Context, window and chain, scene graph view, frame
+    // counter and accepted window; false when any is unreadable, null or not the renderer.
+    bool (*read_owner)(NativeRenderOwner*) noexcept;
+    // Lease the owner's Context and chain as the candidate, then require an immediate Context on
+    // the owner device, the chain on that device and the chain output window.
+    bool (*lease_owner)(const NativeRenderOwner*) noexcept;
+    // Move the candidate into the World Context and chain.
+    void (*adopt_owner)() noexcept;
+    void (*discard_owner)() noexcept;
+    // FRAME open with its counter; SUBMISSION open.
+    void (*open_frame)() noexcept;
+    void (*open_submission)() noexcept;
+    // Clear the open flag, and the WINDOW or FRAME counter.
+    void (*close_submission)() noexcept;
+    void (*close_window)() noexcept;
+    void (*close_frame)() noexcept;
+    // The guarded auxiliary restore; true when none is open or it drained.
+    bool (*drain_auxiliaries)() noexcept;
+    bool (*finish_resolution)() noexcept;
+    // World = {}.
+    void (*reset)() noexcept;
+    // The publication leaves' notify, diagnostic and report_state.
+    void (*notify)(const rsf_game_render_pass*, void* context, uint32_t begin) noexcept;
+    void (*diagnostic)(const char*) noexcept;
+    void (*report_state)(uint32_t stage, const rsf_game_render_pass*, void* context, bool published,
+        int32_t result) noexcept;
+};
+
+static_assert(sizeof(NativeRenderOwner) == 64 && offsetof(NativeRenderOwner, frame) == 56);
+static_assert(sizeof(NativeScopeWorld) == 80 && offsetof(NativeScopeWorld, pass) == 40 &&
+    offsetof(NativeScopeWorld, context) == 64 && offsetof(NativeScopeWorld, inputs) == 72 &&
+    offsetof(NativeScopeWorld, auxiliary_open) == 78);
+static_assert(sizeof(NativeScopeLeaves) == 16 * sizeof(void*));
+
 extern "C" {
 // Binds the leaves. The table must be complete and live for the process.
 bool rsf_fallout4_render_publish(const NativeRenderHookLeaves*) noexcept;
@@ -237,7 +294,13 @@ void rsf_fallout4_render_emit_hudless(const NativePublicationLeaves*,
 // The screen verdict on a World pass.
 void rsf_fallout4_render_screen_facts(const NativePublicationLeaves*, const NativeRecoveryLeaves*,
     rsf_game_render_pass*, bool first) noexcept;
-// Session, source, submission, scope, primary/after-simulation/NO_FG flags, unknown screen.
-void rsf_fallout4_render_identify(rsf_game_render_pass*, const rsf_fallout4_cpu_identity*) noexcept;
+// FRAME then SUBMISSION before the original ordinary WorldBegin, on the World just reset and
+// bound to the admitted source. A refused owner lease refuses the World with its diagnostic.
+void rsf_fallout4_render_begin_scope(const NativeScopeLeaves*, const NativeRecoveryLeaves*) noexcept;
+// The SUBMISSION end of an admitted complete outer Present.
+void rsf_fallout4_render_close_submission(const NativeScopeLeaves*) noexcept;
+// After the original Swap: balance a withheld SUBMISSION, end WINDOW then FRAME, retire recovery,
+// drain auxiliaries, finish the resolution source and reset the World when nothing is owned.
+void rsf_fallout4_render_finish_scope(const NativeScopeLeaves*, const NativeRecoveryLeaves*) noexcept;
 }
 }

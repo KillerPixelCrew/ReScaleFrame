@@ -260,8 +260,8 @@ static HUDLESS_STAGES: AtomicU32 = AtomicU32::new(0);
 
 /// Pass identity from the World's CPU source. The admitted ordinary WorldBegin follows the
 /// native update/redraw work; this constructor fact does not report a SIM_END or classify
-/// gameplay.
-fn identify(pass: &mut rsf_game_render_pass, cpu: &CpuIdentity) {
+/// gameplay. The FRAME and SUBMISSION passes (scope.rs) share it.
+pub(super) fn identify(pass: &mut rsf_game_render_pass, cpu: &CpuIdentity) {
     pass.session_id = cpu.session;
     pass.source_frame_id = cpu.source;
     pass.submission_id = cpu.submission;
@@ -589,12 +589,6 @@ unsafe extern "C" fn rsf_fallout4_render_screen_facts(
     };
     screen_facts(leaves, recovery, &mut copy, first);
     unsafe { pass.write(copy) };
-}
-
-/// Pass identity for the FRAME/SUBMISSION owner, which C++ still opens.
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_render_identify(pass: &mut rsf_game_render_pass, cpu: &CpuIdentity) {
-    identify(pass, cpu);
 }
 
 #[cfg(test)]

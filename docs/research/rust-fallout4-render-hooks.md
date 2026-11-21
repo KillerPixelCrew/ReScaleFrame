@@ -220,3 +220,63 @@ link, Clippy, tests, the shared host fixture, deployment and game checks remain 
 this is a source port, not a runtime result. Open game checks: SR published at native and reduced
 quality, SR off with FG inputs, a HUDless refusal stage, and Present revalidation after a screen
 change.
+
+## FRAME, SUBMISSION and WINDOW scope in Rust
+
+This source port starts at `0c6db204`, which includes the SR and HUDless publication above and
+the RETIRE retry, and moves `begin_render_scope`, `close_submission` and `finish_render_scope`
+from `render_hooks.cpp` into `render_hooks/scope.rs` without new research. The owner cells, the
+WorldBegin pass key `0x21f0ac0` and the Present and Swap seams are the ones in the [native callback analysis](fallout4-render-integration-20261116.md);
+the post-Swap retirement order is the one in the [reduced recovery analysis](fallout4-native-reduced-recovery-20261116.md).
+No option, GPU work, address, Runtime export, GameSDK field or vendor and producer policy changes.
+
+| Owner | Rust (`render_hooks/scope.rs`) | C++ (`render_hooks.cpp`) |
+| --- | --- | --- |
+| Lease admission | Owner read, COM lease, second owner read compared whole (renderer, device, Context, chain, window, graph, view, frame), current source, then adoption; any failure refuses the World with the original diagnostic. | The typed owner read with the accepted window, the immediate Context, device and chain-device COM identity and output window checks, and the candidate Context and chain leases that adoption moves into the World. |
+| FRAME identity | Struct size, the shared pass identity, FRAME role, native frame, view keys, window keys, pass key and swapchain on the World FRAME pass; the SUBMISSION copy with its role. | None. |
+| Begin order | FRAME open, FRAME begin callback, SUBMISSION open, SUBMISSION begin callback, the once-per-process announcement. | The open flags and the FRAME counter. |
+| Balanced close | An open SUBMISSION ends once, with NO_FG when the World is refused, at the admitted complete outer Present or after Swap. | The Present match, admission dispatch, CPU Present phase and its announcement are unchanged. |
+| After Swap | No source: nothing. Changed source refuses. A withheld SUBMISSION refuses, reports and closes. World pass NO_FG on refusal, WINDOW end, then FRAME end with NO_FG on refusal. RETIRE through the recovery transaction, auxiliary drain, resolution source finish (refusal on failure), the `source_retired` receipt on the input or FRAME pass, and the World and recovery reset only when no resolution, auxiliary or token obligation remains. | The guarded auxiliary restore, `finish_resolution_source`, the WINDOW and FRAME counters and `World = {}`. |
+
+`NativeScopeLeaves` has 16 entries, size-asserted on both sides. Its notify, diagnostic and
+report_state entries bind the same C++ functions as the publication leaves, so the pass callback
+guard, the shared 16-row diagnostic budget and the resolution receipt are unchanged; the scope
+table carries them so it does not depend on publication internals. The scope reuses the recovery
+leaves' report, refuse and same_source and calls the Rust RETIRE directly. `NativeRenderOwner`
+replaces the C++ `Owner` (64 bytes, frame at 56) and `NativeScopeWorld` is 80 bytes. The
+`rsf_fallout4_render_identify` export lost its only caller and is removed. The CPU owner still
+calls `finish_render_scope` through `rsf_fallout4_cpu_platform`, which is unchanged.
+
+### Differences
+
+- The device and chain-device references are released when the COM lease leaf returns, before
+  the second owner read, instead of at the end of the begin step. The Context and chain leases
+  are still held across that read, as a World candidate discarded by a drop guard.
+- The FRAME pass is composed on a copy and written back before any callback. The World was just
+  reset and nothing reads it in between, and both callbacks still receive the World fields.
+- The `try`/`catch` around the begin step and around the post-Swap end are gone. Every call they
+  covered is noexcept or already guarded: the pass callback and log keep their catches, the
+  Runtime auxiliary call keeps its catch, and the COM methods return codes. A C++ exception from
+  a leaf would now terminate under noexcept instead of refusing the World or skipping the rest
+  of the post-Swap end; no such throw is known.
+
+### Traces
+
+Source comparison walked every return of the three original functions. A refused owner (first
+read, COM lease, second read, comparison or source) opens nothing and refuses the World before its
+diagnostic, as before. A completed Present closes SUBMISSION before the CPU Present phase. The
+post-Swap end keeps the original sequence of refusal, diagnostic, callbacks, counters, RETIRE,
+drain, resolution finish, receipt and conditional reset; RETIRE still goes through the retry that
+uses the token's own `finished` record.
+
+A scripted comparison against `0c6db204` found all sixteen receipt texts of the original
+`render_hooks.cpp` in the new sources. `render_hooks/scope/tests.rs` adds unrun fake-leaf checks
+of the begin order and FRAME identity, a changed owner and a refused COM lease, a single refused
+SUBMISSION close, the post-Swap WINDOW then FRAME order with NO_FG and reset, retention with open
+auxiliaries, and the no-source return. Pinned Rust 1.94.1 formatting, locked offline Cargo
+metadata and whitespace checks passed. Build, link, Clippy, tests, the shared host fixture,
+deployment and game checks remain with the user; this is a source port, not a runtime result.
+Open game checks: FRAME and SUBMISSION begin before WorldBegin with the expected keys, SUBMISSION
+completion before Present, a refused or unpresented SUBMISSION balanced after Swap with NO_FG on
+WINDOW and FRAME, an owner change across the lease, and retention while an auxiliary, token or
+resolution obligation remains.
