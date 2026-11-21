@@ -4,6 +4,15 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now decides which overlay key and button events reach the game
+and owns the input counters. System keys and releases the game is owed
+still forward. Focus loss also clears the toggle latch, so a release
+that happened in another window cannot suppress the next press. The
+diagnostic pointer coordinates come from one render sample. The Win32
+bridge still decodes messages and chooses the native return value.
+Public C records are unchanged. Build and regression test execution
+remain open.
+
 Rust now owns overlay cursor capture policy and its remembered clip,
 frozen position, logical ShowCursor count and suppression counters.
 The native bridge supplies typed cursor reads and effects. Closing the

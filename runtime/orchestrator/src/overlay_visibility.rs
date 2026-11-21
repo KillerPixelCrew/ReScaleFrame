@@ -8,7 +8,7 @@ const EXTERNAL: u32 = 0;
 const WINDOW: u32 = 1;
 const POLL: u32 = 2;
 
-type Apply = unsafe extern "C" fn(u32, u32);
+pub(super) type Apply = unsafe extern "C" fn(u32, u32);
 
 #[derive(Clone, Copy)]
 struct Change {
@@ -80,6 +80,11 @@ impl Visibility {
         self.applying = next.is_some();
         next
     }
+
+    fn focus_lost(&mut self) {
+        self.key_down = false;
+        self.poll_focused = false;
+    }
 }
 
 static STATE: Mutex<Visibility> = Mutex::new(Visibility::new(false));
@@ -127,16 +132,18 @@ extern "C" fn rsf_core_overlay_visibility_set(visible: u32, now: u64, apply: App
     apply_changes(change, apply);
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay_toggle_press(repeat: u32, now: u64, apply: Apply) -> u32 {
-    let (edge, change) = lock().press(repeat != 0, now);
+pub(super) fn message_press(repeat: bool, now: u64, apply: Apply) -> bool {
+    let (edge, change) = lock().press(repeat, now);
     apply_changes(change, apply);
-    edge.into()
+    edge
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay_toggle_release() {
+pub(super) fn message_release() {
     lock().key_down = false;
+}
+
+pub(super) fn focus_lost() {
+    lock().focus_lost();
 }
 
 #[unsafe(no_mangle)]
@@ -169,5 +176,16 @@ mod tests {
         assert!(state.poll(true, true, 1).is_none());
         assert!(state.poll(true, false, 2).is_none());
         assert!(state.poll(true, true, 3).unwrap().visible);
+    }
+
+    #[test]
+    fn focus_loss_releases_the_message_latch() {
+        let mut state = Visibility::new(false);
+        assert!(state.press(false, 0).1.unwrap().visible);
+        assert!(state.next().is_none());
+        state.focus_lost();
+        let (edge, change) = state.press(false, 300);
+        assert!(edge);
+        assert!(!change.unwrap().visible);
     }
 }

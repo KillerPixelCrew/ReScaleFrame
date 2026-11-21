@@ -12,13 +12,11 @@ enum {
 
 extern "C" {
 void rsf_core_overlay_pointer_clear(void);
-void rsf_core_overlay_pointer_focus_lost(void);
 void rsf_core_overlay_pointer_raw(const rsf_overlay_client_point*);
 void rsf_core_overlay_pointer_move(const rsf_overlay_client_point*, uint32_t cursor_freed);
 void rsf_core_overlay_pointer_seed(const rsf_overlay_client_point*);
 void rsf_core_overlay_pointer_button(uint32_t bit, uint32_t down);
 void rsf_core_overlay_pointer_polled_buttons(uint32_t buttons);
-void rsf_core_overlay_pointer_scroll(float notches);
 void rsf_core_overlay_pointer_contact(const rsf_overlay_client_point*, uint32_t id, uint32_t flags);
 void rsf_core_overlay_pointer_capture_lost(uint32_t id);
 /* A completed gesture returns the desired visibility, or -1 for no change. */

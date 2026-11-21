@@ -128,6 +128,8 @@ mod overlay_host;
 #[cfg(windows)]
 mod overlay_host_abi;
 #[cfg(windows)]
+mod overlay_input_route;
+#[cfg(windows)]
 mod overlay_native12;
 #[cfg(windows)]
 mod overlay_native12_abi;

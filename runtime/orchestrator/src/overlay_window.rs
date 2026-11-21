@@ -98,7 +98,7 @@ pub(super) fn diagnostic(text: &str) {
 }
 
 fn reset_input(toggle: u32, down: bool) -> bool {
-    rsf_core_overlay_input_clear_holds();
+    clear_holds();
     overlay_pointer::reset();
     overlay_visibility::reset(toggle, down)
 }
@@ -247,7 +247,7 @@ unsafe extern "C" fn rsf_core_overlay_input_uninstall(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay_input_window() -> Handle {
+pub(super) extern "C" fn rsf_core_overlay_input_window() -> Handle {
     WINDOW.load(Ordering::Acquire)
 }
 
@@ -265,22 +265,18 @@ unsafe extern "C" fn rsf_core_overlay_input_log(message: *const c_char) {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay_input_hold(key: u32) {
+pub(super) fn hold(key: u32) {
     if let Some(held) = HELD.get(key as usize) {
         held.store(true, Ordering::Relaxed);
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay_input_release(key: u32) -> u32 {
+pub(super) fn release(key: u32) -> bool {
     HELD.get(key as usize)
         .is_some_and(|held| held.swap(false, Ordering::Relaxed))
-        .into()
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay_input_clear_holds() {
+pub(super) fn clear_holds() {
     for held in &HELD {
         held.store(false, Ordering::Relaxed);
     }

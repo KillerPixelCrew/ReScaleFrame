@@ -3,6 +3,7 @@
 #include <rescaleframe/overlay_input.h>
 #include "overlay_cursor_capture.h"
 #include "overlay_cursor_platform.h"
+#include "overlay_input_route.h"
 #include "overlay_pointer_platform.h"
 #include "overlay_visibility_platform.h"
 #include "overlay_window_platform.h"
@@ -15,7 +16,6 @@
 
 #include <rescaleframe/log.h>
 
-#include <atomic>
 #include <cstddef>
 #include <initializer_list>
 
@@ -23,22 +23,6 @@ namespace {
 
 constexpr size_t raw_mouse_bytes = offsetof(RAWINPUT, data) + sizeof(RAWMOUSE);
 static_assert(sizeof(rsf_overlay_client_point) == 16 && RSF_OVERLAY_MOUSE_LEFT == 1);
-
-struct State {
-    /* Diagnostics only, counted while the overlay is visible so the hidden path stays free of them.
-       They answer "did the panel's window receive pointer input and keep it from the game", which
-       a screenshot cannot when the panel itself cannot be captured. */
-    std::atomic<uint64_t> pointer_received{0}, pointer_consumed{0}, button_downs_consumed{0};
-    std::atomic<uint64_t> raw_mouse_reports{0}, keys_consumed{0}, wheel_notches_consumed{0};
-    std::atomic<uint64_t> frames_with_button{0}, frames_collected_visible{0};
-    std::atomic<uint32_t> last_x{0}, last_y{0};
-};
-
-State& state()
-{
-    static State instance;
-    return instance;
-}
 
 void log_to_rust(void*, const char* message) noexcept
 {
@@ -328,21 +312,18 @@ uint32_t mouse_button_key(UINT message, WPARAM wparam)
 
 LRESULT CALLBACK hooked_window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
 {
-    State& self = state();
     // Acquire, to pair with the release store install makes before it swaps the procedure in. It
     // costs nothing on x64, and the alternative to reading a stale null here is chain_to_game
     // handing the game's own message to DefWindowProcW instead of to the game.
     const WNDPROC forward = reinterpret_cast<WNDPROC>(rsf_core_overlay_input_original());
     const bool visible = rsf_core_overlay_visible() != 0;
-    const uint32_t toggle = rsf_core_overlay_toggle_key();
 
     // Windows can promote touch to mouse messages for a legacy window such as Unity's.
     // Their location must survive cursor polling, and a down/up between frames is still a tap.
     const auto extra = static_cast<ULONG_PTR>(GetMessageExtraInfo());
     if (visible && (extra & 0xffffff80u) == 0xff515780u &&
         (message == WM_MOUSEMOVE || message == WM_LBUTTONDOWN || message == WM_LBUTTONUP)) {
-        self.pointer_received.fetch_add(1, std::memory_order_relaxed);
-        self.pointer_consumed.fetch_add(1, std::memory_order_relaxed);
+        rsf_core_overlay_note_pointer(1, 1);
         POINT point{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
         record_contact(window, point, 0, message == WM_LBUTTONDOWN, message == WM_LBUTTONUP);
         return 0;
@@ -366,13 +347,13 @@ LRESULT CALLBACK hooked_window_proc(HWND window, UINT message, WPARAM wparam, LP
         if (canceled) rsf_core_overlay_pointer_capture_lost(info.pointerId);
         // Hidden: tracked above, and the game still receives every contact.
         if (!visible) break;
-        self.pointer_received.fetch_add(1, std::memory_order_relaxed);
-        if (have_info && (info.pointerType == PT_TOUCH || info.pointerType == PT_PEN)) {
+        const bool supported = have_info && (info.pointerType == PT_TOUCH || info.pointerType == PT_PEN);
+        rsf_core_overlay_note_pointer(1, supported ? 1u : 0u);
+        if (supported) {
             POINT point = info.ptPixelLocation;
             if (!canceled && ScreenToClient(window, &point))
                 record_contact(window, point, info.pointerId, message == WM_POINTERDOWN,
                     message == WM_POINTERUP);
-            self.pointer_consumed.fetch_add(1, std::memory_order_relaxed);
             return 0;
         }
         break;
@@ -399,8 +380,7 @@ LRESULT CALLBACK hooked_window_proc(HWND window, UINT message, WPARAM wparam, LP
         }
         if (desired >= 0) apply_visibility(desired != 0);
         if (!visible) break;
-        self.pointer_received.fetch_add(count, std::memory_order_relaxed);
-        self.pointer_consumed.fetch_add(count, std::memory_order_relaxed);
+        rsf_core_overlay_note_pointer(count, count);
         for (UINT i = 0; i < count; ++i) {
             POINT point{TOUCH_COORD_TO_PIXEL(contacts[i].x), TOUCH_COORD_TO_PIXEL(contacts[i].y)};
             if (ScreenToClient(window, &point))
@@ -413,72 +393,25 @@ LRESULT CALLBACK hooked_window_proc(HWND window, UINT message, WPARAM wparam, LP
     case WM_KILLFOCUS:
         // Releases arrive at whatever took focus, not here, so anything still marked held would
         // stay held for the life of the process.
-        rsf_core_overlay_input_clear_holds();
-        rsf_core_overlay_pointer_focus_lost();
+        rsf_core_overlay_route_focus_lost();
         break;
 
     case WM_ACTIVATEAPP:
         if (wparam == FALSE) {
-            rsf_core_overlay_input_clear_holds();
-            rsf_core_overlay_pointer_focus_lost();
+            rsf_core_overlay_route_focus_lost();
         }
         break;
 
     case WM_KEYDOWN:
-    case WM_SYSKEYDOWN: {
-        const uint32_t key = static_cast<uint32_t>(wparam);
-        if (key == toggle) {
-            // Bit 30 is the previous key state. Holding the toggle down otherwise opens and closes
-            // the overlay at the auto repeat rate.
-            const uint32_t repeat = (lparam & 0x40000000) != 0 ? 1u : 0u;
-            if (!rsf_core_overlay_toggle_press(repeat, GetTickCount64(), apply_visibility_change)) {
-                return visible ? 0 : chain_to_game(forward, window, message, wparam, lparam);
-            }
-            if (visible) {
-                return 0;
-            }
-            // Chained deliberately. While the overlay is hidden the game's input stream is
-            // untouched, toggle included, so the game sees this press exactly as it would with
-            // nothing installed. Marking it held means the release is forwarded too, even though
-            // the overlay is open by then, and the game does not end up with a half pressed key.
-            rsf_core_overlay_input_hold(key);
-            return chain_to_game(forward, window, message, wparam, lparam);
-        }
-        if (visible) {
-            // System keys other than the toggle keep going. They are window management rather than
-            // gameplay, and swallowing WM_SYSKEYDOWN would take Alt+F4 with it: an overlay bug
-            // should not be able to leave a user unable to close the game.
-            if (message == WM_SYSKEYDOWN) {
-                rsf_core_overlay_input_hold(key);
-                return chain_to_game(forward, window, message, wparam, lparam);
-            }
-            self.keys_consumed.fetch_add(1, std::memory_order_relaxed);
-            return 0;
-        }
-        rsf_core_overlay_input_hold(key);
-        break;
-    }
-
+    case WM_SYSKEYDOWN:
     case WM_KEYUP:
     case WM_SYSKEYUP: {
         const uint32_t key = static_cast<uint32_t>(wparam);
-        if (key == toggle) rsf_core_overlay_toggle_release();
-        const bool owed = rsf_core_overlay_input_release(key) != 0;
-        // System keys chain in both directions, matching the WM_SYSKEYDOWN rule above. Chaining the
-        // press and swallowing the release is the one combination that can leave the game holding
-        // Alt, and it is reachable without the held table knowing: WM_KILLFOCUS forgets every hold,
-        // so an Alt held across an alt-tab returns with no record of its press, and so does an Alt
-        // held at the moment the runtime was injected.
-        if (visible && !owed && message != WM_SYSKEYUP) {
-            self.keys_consumed.fetch_add(1, std::memory_order_relaxed);
-            return 0;
-        }
-        // The toggle does the same thing from the other direction: closing the overlay swallows the
-        // toggle's press, and the matching release then arrives with the overlay hidden, where the
-        // rule is to chain everything unchanged. A release of a key the game is not holding is a
-        // no-op in an input handler that tracks key state, which is reasoning about the game rather
-        // than something checked in one. The alternative is filtering the stream while the overlay
-        // is hidden, which is the one thing this module promises not to do.
+        const uint32_t flags =
+            ((message == WM_KEYDOWN || message == WM_SYSKEYDOWN) ? uint32_t(RSF_OVERLAY_KEY_DOWN) : 0u) |
+            ((message == WM_SYSKEYDOWN || message == WM_SYSKEYUP) ? uint32_t(RSF_OVERLAY_KEY_SYSTEM) : 0u) |
+            ((lparam & 0x40000000) != 0 ? uint32_t(RSF_OVERLAY_KEY_REPEAT) : 0u);
+        if (rsf_core_overlay_route_key(key, flags, visible, apply_visibility_change)) return 0;
         break;
     }
 
@@ -493,8 +426,7 @@ LRESULT CALLBACK hooked_window_proc(HWND window, UINT message, WPARAM wparam, LP
 
     case WM_MOUSEMOVE:
         if (visible) {
-            self.pointer_received.fetch_add(1, std::memory_order_relaxed);
-            self.pointer_consumed.fetch_add(1, std::memory_order_relaxed);
+            rsf_core_overlay_note_pointer(1, 1);
             record_mouse_position(window, lparam);
             return 0;
         }
@@ -512,18 +444,13 @@ LRESULT CALLBACK hooked_window_proc(HWND window, UINT message, WPARAM wparam, LP
     case WM_XBUTTONDOWN:
     case WM_XBUTTONDBLCLK: {
         const uint32_t key = mouse_button_key(message, wparam);
+        const bool consumed = rsf_core_overlay_route_button(key, 1, visible) != 0;
         if (visible) {
-            self.pointer_received.fetch_add(1, std::memory_order_relaxed);
-            self.pointer_consumed.fetch_add(1, std::memory_order_relaxed);
-            self.button_downs_consumed.fetch_add(1, std::memory_order_relaxed);
-            // The position first: a click can arrive without a move before it, and the overlay
-            // would otherwise apply it wherever the cursor was last seen.
+            // A click can arrive without a preceding move.
             record_mouse_position(window, lparam);
             record_button(key, true);
-            // The X button messages are documented as returning TRUE when handled.
-            return (message == WM_XBUTTONDOWN || message == WM_XBUTTONDBLCLK) ? TRUE : 0;
         }
-        rsf_core_overlay_input_hold(key);
+        if (consumed) return (message == WM_XBUTTONDOWN || message == WM_XBUTTONDBLCLK) ? TRUE : 0;
         break;
     }
 
@@ -532,16 +459,12 @@ LRESULT CALLBACK hooked_window_proc(HWND window, UINT message, WPARAM wparam, LP
     case WM_MBUTTONUP:
     case WM_XBUTTONUP: {
         const uint32_t key = mouse_button_key(message, wparam);
-        const bool owed = rsf_core_overlay_input_release(key) != 0;
+        const bool consumed = rsf_core_overlay_route_button(key, 0, visible) != 0;
         if (visible) {
-            self.pointer_received.fetch_add(1, std::memory_order_relaxed);
             record_mouse_position(window, lparam);
             record_button(key, false);
-            if (!owed) {
-                self.pointer_consumed.fetch_add(1, std::memory_order_relaxed);
-                return message == WM_XBUTTONUP ? TRUE : 0;
-            }
         }
+        if (consumed) return message == WM_XBUTTONUP ? TRUE : 0;
         break;
     }
 
@@ -552,10 +475,7 @@ LRESULT CALLBACK hooked_window_proc(HWND window, UINT message, WPARAM wparam, LP
             // The position in this message is in screen coordinates, unlike every other mouse
             // message, so it is ignored rather than converted.
             const float notches = static_cast<float>(GET_WHEEL_DELTA_WPARAM(wparam)) / WHEEL_DELTA;
-            rsf_core_overlay_pointer_scroll(notches);
-            self.pointer_received.fetch_add(1, std::memory_order_relaxed);
-            self.pointer_consumed.fetch_add(1, std::memory_order_relaxed);
-            self.wheel_notches_consumed.fetch_add(1, std::memory_order_relaxed);
+            rsf_core_overlay_note_wheel(notches);
             return 0;
         }
         break;
@@ -575,7 +495,7 @@ LRESULT CALLBACK hooked_window_proc(HWND window, UINT message, WPARAM wparam, LP
             // centre and before Windows coalesced anything, which is what makes it smooth where
             // following the window's own moves is chunky.
             record_raw_mouse(window, lparam);
-            self.raw_mouse_reports.fetch_add(1, std::memory_order_relaxed);
+            rsf_core_overlay_note_raw();
 
             // Raw input is how a game reads mouse movement for aiming, so it has to stop here or
             // the overlay's clicks steer as well. The default procedure still runs: WM_INPUT is
@@ -677,7 +597,6 @@ extern "C" rsf_overlay_input_result rsf_overlay_input_collect(rsf_overlay_input*
     out->delta_seconds = delta_seconds > 0.0f ? delta_seconds : 0.0f;
     out->startup_hint_alpha = 0.0f; // The presentation host owns the hint timer.
 
-    State& self = state();
     const HWND window = static_cast<HWND>(rsf_core_overlay_input_window());
     if (!window) {
         out->mouse_x = 0.0f;
@@ -701,31 +620,10 @@ extern "C" rsf_overlay_input_result rsf_overlay_input_collect(rsf_overlay_input*
         }
     }
     rsf_core_overlay_pointer_collect(out, sample);
-    if (out->visible) {
-        self.frames_collected_visible.fetch_add(1, std::memory_order_relaxed);
-        if (out->mouse_buttons) self.frames_with_button.fetch_add(1, std::memory_order_relaxed);
-        self.last_x.store(static_cast<uint32_t>(out->mouse_x > 0.0f ? out->mouse_x : 0.0f), std::memory_order_relaxed);
-        self.last_y.store(static_cast<uint32_t>(out->mouse_y > 0.0f ? out->mouse_y : 0.0f), std::memory_order_relaxed);
-    }
     return RSF_OVERLAY_INPUT_OK;
 }
 
 extern "C" rsf_overlay_input_result rsf_overlay_input_counters_get(rsf_overlay_input_counters* out)
 {
-    if (!out || out->struct_size < sizeof(*out)) return RSF_OVERLAY_INPUT_ERROR_INVALID_ARGUMENT;
-    const State& self = state();
-    out->installed = rsf_core_overlay_input_window() != nullptr ? 1u : 0u;
-    out->visible = rsf_core_overlay_visible();
-    out->cursor_freed = rsf_core_overlay_cursor_ready() != 0 ? 1u : 0u;
-    out->pointer_received = self.pointer_received.load(std::memory_order_relaxed);
-    out->pointer_consumed = self.pointer_consumed.load(std::memory_order_relaxed);
-    out->button_downs_consumed = self.button_downs_consumed.load(std::memory_order_relaxed);
-    out->wheel_consumed = self.wheel_notches_consumed.load(std::memory_order_relaxed);
-    out->raw_mouse_reports = self.raw_mouse_reports.load(std::memory_order_relaxed);
-    out->keys_consumed = self.keys_consumed.load(std::memory_order_relaxed);
-    out->frames_visible = self.frames_collected_visible.load(std::memory_order_relaxed);
-    out->frames_with_button = self.frames_with_button.load(std::memory_order_relaxed);
-    out->last_pointer_x = self.last_x.load(std::memory_order_relaxed);
-    out->last_pointer_y = self.last_y.load(std::memory_order_relaxed);
-    return RSF_OVERLAY_INPUT_OK;
+    return rsf_core_overlay_input_counters(out);
 }

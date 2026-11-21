@@ -15,7 +15,4 @@ int32_t rsf_core_overlay_input_uninstall(intptr_t procedure, const rsf_overlay_w
 void* rsf_core_overlay_input_window(void);
 intptr_t rsf_core_overlay_input_original(void);
 void rsf_core_overlay_input_log(const char* message);
-void rsf_core_overlay_input_hold(uint32_t key);
-uint32_t rsf_core_overlay_input_release(uint32_t key);
-void rsf_core_overlay_input_clear_holds(void);
 }

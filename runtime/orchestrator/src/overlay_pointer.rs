@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::overlay_host_abi::rsf_overlay_input as Input;
+use crate::overlay_input_route;
 use std::mem;
 use std::ptr::addr_of_mut;
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -302,8 +303,7 @@ extern "C" fn rsf_core_overlay_pointer_clear() {
     lock().clear_transient();
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay_pointer_focus_lost() {
+pub(super) fn focus_lost() {
     lock().focus_lost();
 }
 
@@ -339,8 +339,7 @@ extern "C" fn rsf_core_overlay_pointer_polled_buttons(buttons: u32) {
     lock().polled_buttons = buttons;
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay_pointer_scroll(notches: f32) {
+pub(super) fn scroll(notches: f32) {
     lock().scroll += notches;
 }
 
@@ -379,6 +378,9 @@ unsafe extern "C" fn rsf_core_overlay_pointer_collect(out: *mut Input, cursor: *
         )
     };
     let ([x, y], buttons, wheel) = lock().sample(display, cursor);
+    if unsafe { (*out).visible } != 0 {
+        overlay_input_route::sampled(x, y, buttons);
+    }
     unsafe {
         addr_of_mut!((*out).mouse_x).write(x);
         addr_of_mut!((*out).mouse_y).write(y);
