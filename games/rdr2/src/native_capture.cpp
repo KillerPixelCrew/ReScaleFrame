@@ -43,6 +43,11 @@ constexpr rsf_rdr2_capture_gpu_ops gpu_ops{
     [](void* queue, void* fence, uint64_t value) noexcept {
         return SUCCEEDED(static_cast<ID3D12CommandQueue*>(queue)->Signal(static_cast<ID3D12Fence*>(fence), value));
     },
+    [](void* swapchain, uint32_t index) noexcept -> void* {
+        ComPtr<ID3D12Resource> buffer;
+        if (FAILED(static_cast<IDXGISwapChain*>(swapchain)->GetBuffer(index, IID_PPV_ARGS(&buffer)))) return nullptr;
+        return buffer.Detach();
+    },
 };
 Pipeline pipeline_facts(uint32_t ps, uint32_t vs, const D3D12_RENDER_TARGET_BLEND_DESC& b) noexcept
 {
@@ -108,8 +113,6 @@ struct State {
     wchar_t directory[MAX_PATH]{}, request[MAX_PATH]{}, log[MAX_PATH]{};
     uintptr_t base{};
     rsf_rdr2_capture_state* capture{};
-    ID3D12Resource* selected{};
-    std::array<ComPtr<ID3D12Resource>, 4> buffers;
     std::unordered_map<SIZE_T, ID3D12Resource*> rtvs;
     std::unordered_map<ID3D12GraphicsCommandList*, List> lists;
     std::unordered_map<ID3D12PipelineState*, Pipeline> pipelines;
@@ -537,9 +540,7 @@ void snapshot(ID3D12GraphicsCommandList* list, UINT vertices, UINT instances, vo
     const auto state = g->lists.find(list);
     if (state == g->lists.end() || !state->second.target) return;
     auto* target = state->second.target;
-    bool backbuffer = false;
-    for (const auto& buffer : g->buffers) if (buffer.Get() == target) backbuffer = true;
-    if (!backbuffer || (g->selected && g->selected != target)) return;
+    if (!rsf_rdr2_capture_gpu_accepts_target(g->capture, target)) return;
     const auto progress = capture_progress();
     const bool reuse_tail = progress.reuse_tail != 0;
     auto shot = reuse_tail ? g->tail : std::make_shared<Shot>();
@@ -557,7 +558,7 @@ void snapshot(ID3D12GraphicsCommandList* list, UINT vertices, UINT instances, vo
     const auto pipeline = g->pipelines.find(state->second.pso);
     shot->pipeline = {};
     if (pipeline != g->pipelines.end()) shot->pipeline = pipeline->second;
-    g->selected = target;
+    rsf_rdr2_capture_gpu_select_target(g->capture, target);
     const auto action = rsf_rdr2_capture_commit_draw(g->capture, static_cast<uint32_t>(g->draws.size()));
     if (action & RSF_RDR2_CAPTURE_KEEP_TAIL) g->tail = shot;
     if (action & RSF_RDR2_CAPTURE_SAVE_DRAW) {
@@ -592,7 +593,8 @@ HRESULT STDMETHODCALLTYPE create_list(ID3D12Device* d, UINT node, D3D12_COMMAND_
         bind(*out, 26, reinterpret_cast<void*>(&barriers), original_barrier);
         bind(*out, 46, reinterpret_cast<void*>(&set_rtv), original_set_rtv);
         std::lock_guard<std::mutex> lock(g->mutex);
-        auto& state = g->lists[static_cast<ID3D12GraphicsCommandList*>(*out)];
+        auto* list = static_cast<ID3D12GraphicsCommandList*>(*out);
+        auto& state = g->lists[list];
         state.target = nullptr; state.pso = pso;
         rsf_rdr2_capture_reset_list(g->capture, list);
     }
@@ -709,26 +711,25 @@ void before_present(void* pointer) noexcept try
     if (pointer != game_swapchain) return;
     auto* swapchain = static_cast<IDXGISwapChain*>(pointer);
     std::lock_guard<std::mutex> lock(g->mutex);
-    if (rsf_rdr2_capture_active(g->capture) && g->selected) {
+    auto* selected = rsf_rdr2_capture_gpu_selected(g->capture, swapchain);
+    if (rsf_rdr2_capture_active(g->capture) && selected) {
         ComPtr<IDXGISwapChain3> sc3; ComPtr<ID3D12Resource> current;
         if (SUCCEEDED(swapchain->QueryInterface(IID_PPV_ARGS(&sc3))) &&
             SUCCEEDED(sc3->GetBuffer(sc3->GetCurrentBackBufferIndex(), IID_PPV_ARGS(&current))) &&
-            current.Get() == g->selected) {
+            current.Get() == selected) {
             rsf_rdr2_capture_end_draws(g->capture);
             const auto progress = capture_progress();
-            log("capture %u recording complete: %u draws, %zu readbacks resource=%p", progress.sequence, progress.draws, g->shots.size(), g->selected);
+            log("capture %u recording complete: %u draws, %zu readbacks resource=%p", progress.sequence, progress.draws, g->shots.size(), selected);
         }
     }
     if (rsf_rdr2_capture_can_arm(g->capture, g->shots.empty())) {
         DXGI_SWAP_CHAIN_DESC desc{};
-        if (FAILED(swapchain->GetDesc(&desc)) || desc.BufferCount > g->buffers.size()) return;
-        for (auto& buffer : g->buffers) buffer.Reset();
-        for (UINT i = 0; i < desc.BufferCount; ++i)
-            if (FAILED(swapchain->GetBuffer(i, IID_PPV_ARGS(&g->buffers[i])))) return;
+        if (FAILED(swapchain->GetDesc(&desc))) return;
+        auto presentation = g->presentation[identity(swapchain)];
+        if (!rsf_rdr2_capture_gpu_arm_backbuffers(g->capture, swapchain, desc.BufferCount, &gpu_ops)) return;
         rsf_rdr2_capture_arm(g->capture, GetTickCount64());
-        g->selected = nullptr;
         g->tail.reset(); g->draws.clear(); g->temporal.clear();
-        g->captured_presentation = g->presentation[identity(swapchain)];
+        g->captured_presentation = std::move(presentation);
         g->captured_presentation.format = desc.BufferDesc.Format;
         g->captured_presentation.width = desc.BufferDesc.Width; g->captured_presentation.height = desc.BufferDesc.Height;
         rsf_rdr2_request_camera_capture();
@@ -800,7 +801,7 @@ DWORD WINAPI poll(void*) noexcept
 #endif
         rsf_rdr2_capture_poll_request(g->capture, reinterpret_cast<const uint16_t*>(g->request));
         std::vector<std::shared_ptr<Shot>> ready;
-        rsf_rdr2_capture_gpu_queues* retired_queues{};
+        rsf_rdr2_capture_gpu_retired* retired{};
         {
             std::lock_guard<std::mutex> lock(g->mutex);
             if (rsf_rdr2_capture_timeout(g->capture, GetTickCount64())) {
@@ -815,14 +816,10 @@ DWORD WINAPI poll(void*) noexcept
                     } else ++it;
                 }
                 // ResizeBuffers must not be blocked by diagnostic references after retirement.
-                if (g->shots.empty()) {
-                    retired_queues = rsf_rdr2_capture_gpu_take_queues(g->capture);
-                    for (auto& buffer : g->buffers) buffer.Reset();
-                    g->selected = nullptr;
-                }
+                if (g->shots.empty()) retired = rsf_rdr2_capture_gpu_take_idle(g->capture);
             }
         }
-        rsf_rdr2_capture_gpu_drop_queues(retired_queues);
+        rsf_rdr2_capture_gpu_drop_idle(retired);
         for (const auto& shot : ready) {
             const bool ok = write_shot(*shot);
             std::lock_guard<std::mutex> lock(g->mutex);

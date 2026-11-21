@@ -204,6 +204,14 @@ idle queue owners outside the capture mutex once no readbacks are
 pending. Native code executes the GPU calls. Missing submissions
 still keep the readback pending. Source and layout checks passed.
 
+The RDR2 capture owner now leases the admitted swapchain and its full
+backbuffer batch in Rust. A failed buffer lookup drops the partial
+batch and leaves capture unarmed. Draw selection commits after the
+copy is recorded, and Present closes the draw phase only for the same
+swapchain and selected buffer. Idle leases drop outside the capture
+mutex. The native list-creation hook now resets the generation for
+the actual returned list. Builds and GPU fixtures remain unrun.
+
 RDR2's Rust diagnostic workers preserve the module sampling marks,
 dump policy, census summary and optional RenderDoc request loop. Native
 leaves retain the existing diagnostics ABI. The RenderDoc trigger still

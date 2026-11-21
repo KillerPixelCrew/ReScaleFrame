@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//! COM ownership of the capture readbacks and their per-queue completion fences.
+//! COM ownership of capture backbuffers, readbacks and per-queue completion fences.
 
 use super::{Capture, allocate};
 use std::collections::HashMap;
@@ -14,6 +14,7 @@ struct Ops {
     release: RefCall,
     create_fence: unsafe extern "C" fn(*mut c_void) -> *mut c_void,
     signal: unsafe extern "C" fn(*mut c_void, *mut c_void, u64) -> bool,
+    get_buffer: unsafe extern "C" fn(*mut c_void, u32) -> *mut c_void,
 }
 
 #[repr(C)]
@@ -42,8 +43,30 @@ struct Queue {
     next: u64,
 }
 
+const MAX_BUFFERS: usize = 4;
+
+struct Backbuffers {
+    buffers: [Option<Com>; MAX_BUFFERS],
+    chain: Com,
+    selected: Option<NonNull<c_void>>,
+}
+
+impl Backbuffers {
+    fn accepts(&self, target: NonNull<c_void>) -> bool {
+        self.selected.is_none_or(|selected| selected == target)
+            && self
+                .buffers
+                .iter()
+                .flatten()
+                .any(|buffer| buffer.raw == target)
+    }
+}
+
 #[derive(Default)]
-pub(super) struct Queues(HashMap<usize, Queue>);
+pub(super) struct Gpu {
+    queues: HashMap<usize, Queue>,
+    backbuffers: Option<Backbuffers>,
+}
 
 #[repr(C)]
 struct Signal {
@@ -58,7 +81,7 @@ const NO_SLOT: u32 = 3;
 
 const _: () = {
     assert!(size_of::<ReadbackLeases>() == 32);
-    assert!(size_of::<Ops>() == 32);
+    assert!(size_of::<Ops>() == 40);
     assert!(size_of::<Signal>() == 16);
 };
 
@@ -129,7 +152,7 @@ unsafe extern "C" fn rsf_rdr2_capture_gpu_signal(
     let Some(queue) = NonNull::new(queue) else {
         return CREATE_REFUSED;
     };
-    let map = unsafe { &mut (*owner.queues.get()).0 };
+    let map = unsafe { &mut (*owner.gpu.get()).queues };
     let key = queue.as_ptr().addr();
     if !map.contains_key(&key) {
         if map.try_reserve(1).is_err() {
@@ -171,23 +194,99 @@ unsafe extern "C" fn rsf_rdr2_capture_gpu_signal(
     SIGNAL_ACCEPTED
 }
 
-/// The native caller has removed all pending readback receipts under its capture mutex.
-/// Take the idle queue owners so their final Release calls run outside that mutex.
+/// The native caller lends the admitted swapchain and exact buffer count under the capture mutex.
+/// Keep any successful acquisitions local until the entire batch exists.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_gpu_take_queues(owner: &Capture) -> *mut Queues {
-    let queues = unsafe { &mut *owner.queues.get() };
-    if queues.0.is_empty() {
+unsafe extern "C" fn rsf_rdr2_capture_gpu_arm_backbuffers(
+    owner: &Capture,
+    swapchain: *mut c_void,
+    count: u32,
+    ops: &Ops,
+) -> bool {
+    let Some(chain) = NonNull::new(swapchain) else {
+        return false;
+    };
+    let count = count as usize;
+    let gpu = unsafe { &mut *owner.gpu.get() };
+    if !(1..=MAX_BUFFERS).contains(&count) || gpu.backbuffers.is_some() {
+        return false;
+    }
+    let mut buffers = [const { None }; MAX_BUFFERS];
+    for (index, slot) in buffers[..count].iter_mut().enumerate() {
+        let Some(raw) = NonNull::new(unsafe { (ops.get_buffer)(swapchain, index as u32) }) else {
+            return false;
+        };
+        *slot = Some(Com {
+            raw,
+            release: ops.release,
+        });
+    }
+    unsafe { (ops.retain)(chain.as_ptr()) };
+    gpu.backbuffers = Some(Backbuffers {
+        buffers,
+        chain: Com {
+            raw: chain,
+            release: ops.release,
+        },
+        selected: None,
+    });
+    true
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_rdr2_capture_gpu_accepts_target(
+    owner: &Capture,
+    target: *mut c_void,
+) -> bool {
+    let gpu = unsafe { &*owner.gpu.get() };
+    NonNull::new(target).is_some_and(|target| {
+        gpu.backbuffers
+            .as_ref()
+            .is_some_and(|set| set.accepts(target))
+    })
+}
+
+/// Commit the target only after the copy was recorded under the same capture mutex.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_rdr2_capture_gpu_select_target(owner: &Capture, target: *mut c_void) {
+    let gpu = unsafe { &mut *owner.gpu.get() };
+    if let (Some(set), Some(target)) = (&mut gpu.backbuffers, NonNull::new(target))
+        && set.accepts(target)
+    {
+        set.selected = Some(target);
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_rdr2_capture_gpu_selected(
+    owner: &Capture,
+    swapchain: *mut c_void,
+) -> *mut c_void {
+    unsafe { &*owner.gpu.get() }
+        .backbuffers
+        .as_ref()
+        .filter(|set| set.chain.raw.as_ptr() == swapchain)
+        .and_then(|set| set.selected)
+        .map_or(ptr::null_mut(), NonNull::as_ptr)
+}
+
+/// The native caller has removed all pending readback receipts under its capture mutex.
+/// Take the idle queue and swapchain owners so their final Release calls run outside that mutex.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_rdr2_capture_gpu_take_idle(owner: &Capture) -> *mut Gpu {
+    let gpu = unsafe { &mut *owner.gpu.get() };
+    if gpu.queues.is_empty() && gpu.backbuffers.is_none() {
         return ptr::null_mut();
     }
-    let retired = allocate(Queues::default());
+    let retired = allocate(Gpu::default());
     if !retired.is_null() {
-        unsafe { ptr::swap(queues, retired) };
+        unsafe { ptr::swap(gpu, retired) };
     }
     retired
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_gpu_drop_queues(retired: *mut Queues) {
+unsafe extern "C" fn rsf_rdr2_capture_gpu_drop_idle(retired: *mut Gpu) {
     if !retired.is_null() {
         drop(unsafe { Box::from_raw(retired) });
     }

@@ -6,12 +6,13 @@
 
 typedef struct rsf_rdr2_capture_state rsf_rdr2_capture_state;
 typedef struct rsf_rdr2_capture_submission rsf_rdr2_capture_submission;
-typedef struct rsf_rdr2_capture_gpu_queues rsf_rdr2_capture_gpu_queues;
+typedef struct rsf_rdr2_capture_gpu_retired rsf_rdr2_capture_gpu_retired;
 typedef struct rsf_rdr2_capture_gpu_ops {
     void (*retain)(void*);
     void (*release)(void*);
     void* (*create_fence)(void* queue);
     bool (*signal)(void* queue, void* fence, uint64_t value);
+    void* (*get_buffer)(void* swapchain, uint32_t index);
 } rsf_rdr2_capture_gpu_ops;
 typedef struct rsf_rdr2_capture_gpu_leases {
     void* buffer;
@@ -162,14 +163,19 @@ void rsf_rdr2_capture_gpu_bind_fence(rsf_rdr2_capture_gpu_leases*, void* fence);
 void rsf_rdr2_capture_gpu_drop(rsf_rdr2_capture_gpu_leases*);
 uint32_t rsf_rdr2_capture_gpu_signal(rsf_rdr2_capture_state*, void* queue,
     const rsf_rdr2_capture_gpu_ops*, rsf_rdr2_capture_gpu_proof*);
-rsf_rdr2_capture_gpu_queues* rsf_rdr2_capture_gpu_take_queues(rsf_rdr2_capture_state*);
-/* Drop detached queue owners outside the capture mutex. */
-void rsf_rdr2_capture_gpu_drop_queues(rsf_rdr2_capture_gpu_queues*);
+bool rsf_rdr2_capture_gpu_arm_backbuffers(rsf_rdr2_capture_state*, void* swapchain, uint32_t count,
+    const rsf_rdr2_capture_gpu_ops*);
+bool rsf_rdr2_capture_gpu_accepts_target(const rsf_rdr2_capture_state*, void* target);
+void rsf_rdr2_capture_gpu_select_target(rsf_rdr2_capture_state*, void* target);
+void* rsf_rdr2_capture_gpu_selected(const rsf_rdr2_capture_state*, void* swapchain);
+rsf_rdr2_capture_gpu_retired* rsf_rdr2_capture_gpu_take_idle(rsf_rdr2_capture_state*);
+/* Drop detached queue and backbuffer owners outside the capture mutex. */
+void rsf_rdr2_capture_gpu_drop_idle(rsf_rdr2_capture_gpu_retired*);
 #ifdef __cplusplus
 }
 static_assert(sizeof(rsf_rdr2_capture_progress) == 32);
 static_assert(sizeof(rsf_rdr2_capture_readback) == 48 && offsetof(rsf_rdr2_capture_readback, list) == 24);
-static_assert(sizeof(rsf_rdr2_capture_gpu_ops) == 32 && sizeof(rsf_rdr2_capture_gpu_leases) == 32);
+static_assert(sizeof(rsf_rdr2_capture_gpu_ops) == 40 && sizeof(rsf_rdr2_capture_gpu_leases) == 32);
 static_assert(sizeof(rsf_rdr2_capture_gpu_proof) == 16);
 static_assert(sizeof(rsf_rdr2_capture_pipeline) == 40);
 static_assert(sizeof(rsf_rdr2_capture_image) == 160);

@@ -12,7 +12,7 @@ mod artifacts;
 mod bundle;
 mod gpu_leases;
 mod recordings;
-use gpu_leases::Queues;
+use gpu_leases::Gpu;
 use recordings::Recordings;
 
 const MAX_DRAW_COPIES: u32 = 64;
@@ -58,7 +58,7 @@ struct Capture {
     inputs_remaining: AtomicU32,
     ledger: UnsafeCell<Ledger>,
     recordings: UnsafeCell<Recordings>,
-    queues: UnsafeCell<Queues>,
+    gpu: UnsafeCell<Gpu>,
 }
 
 // The ASI passes its process-lived owner. The native mutex guards the non-atomic ledger.
@@ -74,7 +74,7 @@ impl Capture {
             inputs_remaining: AtomicU32::new(0),
             ledger: UnsafeCell::new(Ledger::default()),
             recordings: UnsafeCell::new(Recordings::default()),
-            queues: UnsafeCell::new(Queues::default()),
+            gpu: UnsafeCell::new(Gpu::default()),
         }
     }
 }

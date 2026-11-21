@@ -100,6 +100,18 @@ excludes the device-removal sentinel. When the pending list empties, native
 code detaches the idle owners under its capture mutex and drops them outside
 it. Ready readbacks keep their own buffer and fence for mapping. A later
 capture may start a new fence at value one. Artifact fields and the original
-submission identity remain unchanged. Typed D3D12 effects and backbuffer
-selection stay native. Source and layout comparison passed, with build and
-both GPU fixture runs still open.
+submission identity remain unchanged. Typed D3D12 effects stay native.
+Source and layout comparison passed, with build and both GPU fixture runs
+still open.
+
+The same GPU owner now publishes the capture swapchain and one to four
+backbuffers together. Failure to acquire any buffer discards the partial
+batch. Its selected colour target is committed only after the copy is
+recorded. The native Present check supplies the exact swapchain and observed
+current buffer. It can end the draw phase only for the selected buffer on
+the admitted chain. Retirement detaches the buffer, chain and queue owners
+after the pending reads empty. The command-list creation hook now passes
+its actual output list to the generation reset, correcting an undefined
+identifier in the prior source. Capture receipts and artifacts keep their
+existing fields. Source and layout checks passed. Build, resize and GPU
+fixture verification remain open.
