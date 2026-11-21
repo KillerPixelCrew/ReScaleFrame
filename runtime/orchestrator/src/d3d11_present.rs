@@ -20,7 +20,7 @@ use std::ffi::{CStr, CString, c_char, c_void};
 use std::fmt::Write as _;
 use std::ptr::{self, null_mut};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicPtr, AtomicU32, AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError, RwLock, TryLockError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, TryLockError};
 
 type Platform = rsf_d3d11p_platform;
 type Graphics = rsf_streamline_graphics;
@@ -466,6 +466,17 @@ impl ApplicationBuffer {
 
 type ApplicationBuffers = [Option<ApplicationBuffer>; MAX_BUFFERS as usize];
 
+pub(crate) struct Physical {
+    // Release the chain before its creation queue.
+    chain: ComRef,
+    queue: ComRef,
+}
+
+// The DXGI chain and D3D12 queue can be referenced from the render and window threads.
+// A lease pins their lifetime. DXGI and the caller still govern operation ordering.
+unsafe impl Send for Physical {}
+unsafe impl Sync for Physical {}
+
 // DXGI serializes the application's frame calls. Provider callbacks and the retire
 // lease can reenter on the same thread.
 pub(crate) struct Owner {
@@ -476,6 +487,7 @@ pub(crate) struct Owner {
     host: AtomicPtr<c_void>,
     provider: AtomicPtr<c_void>,
     provider_backend: AtomicU32,
+    physical: Mutex<Option<Arc<Physical>>>,
     physical_pending: AtomicBool,
     faulted: AtomicBool,
     serial: AtomicU64,
@@ -507,6 +519,7 @@ impl Owner {
             host: AtomicPtr::new(null_mut()),
             provider: AtomicPtr::new(null_mut()),
             provider_backend: AtomicU32::new(0),
+            physical: Mutex::default(),
             physical_pending: AtomicBool::new(false),
             faulted: AtomicBool::new(false),
             serial: AtomicU64::new(0),
@@ -663,14 +676,39 @@ impl Owner {
         value
     }
 
+    fn physical(&self) -> Option<Arc<Physical>> {
+        // Copy only the lease under the mutex. COM calls and releases run outside it.
+        lock(&self.physical).clone()
+    }
+
+    fn publish_physical(&self, chain: Result<ComRef, i32>, queue: Raw) -> i32 {
+        let Ok(chain) = chain else { return INIT_FAILED };
+        if queue.is_null() {
+            return INIT_FAILED;
+        }
+        let physical = Arc::new(Physical {
+            chain,
+            queue: unsafe { ComRef::retain(queue) },
+        });
+        let mut current = lock(&self.physical);
+        if current.is_some() {
+            return INIT_FAILED;
+        }
+        *current = Some(physical);
+        OK
+    }
+
+    fn take_physical(&self) -> Option<Arc<Physical>> {
+        lock(&self.physical).take()
+    }
+
     fn create_physical(&self, backend: u32) -> i32 {
         let p = self.p();
         if backend == 0 {
-            return if failed(unsafe { (p.create_plain)(self.b()) }) {
-                INIT_FAILED
-            } else {
-                OK
-            };
+            let mut queue = null_mut();
+            let chain =
+                acquire_resource(|out| unsafe { (p.create_plain)(self.b(), out, &mut queue) });
+            return self.publish_physical(chain, queue);
         }
         let setup = self.generation_setup(backend);
         let Some(api) = provider_api(p, backend) else {
@@ -705,10 +743,9 @@ impl Owner {
         if result == OK {
             result = unsafe { configure(provider, &FG_OFF) };
         }
-        if result == OK
-            && failed(unsafe { (p.adopt_chain)(self.b(), chain, setup.chain.d3d12_queue) })
-        {
-            result = INIT_FAILED;
+        if result == OK {
+            let chain4 = acquire_resource(|out| unsafe { (p.query_chain4)(chain, out) });
+            result = self.publish_physical(chain4, setup.chain.d3d12_queue);
         }
         if result == OK {
             self.provider_backend.store(backend, Ordering::Relaxed);
@@ -760,18 +797,14 @@ impl Owner {
         S_OK
     }
 
-    fn ensure_physical(&self) -> i32 {
+    fn ensure_physical(&self) -> Result<Arc<Physical>, i32> {
         let p = self.p();
         // Never create the HWND owner from an outer wrapper's constructor query.
         if SCOPED.load(Ordering::Acquire) && SCOPE_TOKEN.get() != 0 {
-            return DXGI_ERROR_WAS_STILL_DRAWING;
+            return Err(DXGI_ERROR_WAS_STILL_DRAWING);
         }
         if !self.physical_pending.swap(false, Ordering::AcqRel) {
-            return if unsafe { (p.physical)(self.b()) }.is_null() {
-                DXGI_ERROR_WAS_STILL_DRAWING
-            } else {
-                S_OK
-            };
+            return self.physical().ok_or(DXGI_ERROR_WAS_STILL_DRAWING);
         }
         // Overlay creation callbacks retain per-call device and queue state. A provider's
         // nested native creation happens after the engine's factory call returns.
@@ -787,7 +820,7 @@ impl Owner {
             && ACTIVE_BACKEND.load(Ordering::SeqCst) != DLSS
             && unsafe { (p.host_generation_load)(host, 0) } != OK
         {
-            return E_FAIL;
+            return Err(E_FAIL);
         }
         let result = self.create_physical(ACTIVE_BACKEND.load(Ordering::SeqCst));
         if result != OK {
@@ -795,9 +828,10 @@ impl Owner {
             ACTIVE_BACKEND.store(0, Ordering::SeqCst);
             if self.create_physical(0) != OK {
                 self.faulted.store(true, Ordering::Release);
-                return E_FAIL;
+                return Err(E_FAIL);
             }
         }
+        let physical = self.physical().ok_or(DXGI_ERROR_WAS_STILL_DRAWING)?;
         // Publish the created chain before fullscreen entry. A refused entry fails this call,
         // but the chain stays and later calls present through it, so its session must be visible.
         ACTIVE_SESSION.store(self.provider(), Ordering::Release);
@@ -805,11 +839,11 @@ impl Owner {
         lock(&STATUS).activate(ACTIVE_BACKEND.load(Ordering::SeqCst), generation());
         self.publish_status();
         if self.facts().windowed == 0
-            && failed(unsafe { (p.set_fullscreen)(self.b(), 1, null_mut()) })
+            && failed(unsafe { (p.set_fullscreen)(physical.chain.as_ptr(), 1, null_mut()) })
         {
-            return E_FAIL;
+            return Err(E_FAIL);
         }
-        S_OK
+        Ok(physical)
     }
 
     fn create_application_buffers(&self, facts: &rsf_d3d11p_facts) -> Result<(), i32> {
@@ -878,19 +912,23 @@ impl Owner {
                 (p.query_buffer_interface)(buffer.as_ptr(), iid, out)
             });
         }
-        let initialized = self.ensure_physical();
-        if failed(initialized) {
-            if self.failed_buffer_reports.fetch_add(1, Ordering::Relaxed) < 4 {
-                let pending = u32::from(self.physical_pending.load(Ordering::Acquire));
-                unsafe { (p.log_buffer_refusal)(self.b(), index, iid, initialized, pending) };
+        let physical = match self.ensure_physical() {
+            Ok(physical) => physical,
+            Err(error) => {
+                if self.failed_buffer_reports.fetch_add(1, Ordering::Relaxed) < 4 {
+                    let pending = u32::from(self.physical_pending.load(Ordering::Acquire));
+                    unsafe { (p.log_buffer_refusal)(self.b(), index, iid, error, pending) };
+                }
+                return error;
             }
-            return initialized;
-        }
-        unsafe { (p.get_physical_buffer)(self.b(), index, iid, out) }
+        };
+        unsafe { (p.get_physical_buffer)(physical.chain.as_ptr(), index, iid, out) }
     }
 
-    fn acquire_backbuffer(&self) -> Result<ComRef, i32> {
-        acquire_resource(|out| unsafe { (self.p().acquire_backbuffer)(self.b(), out) })
+    fn acquire_backbuffer(&self, physical: &Physical) -> Result<ComRef, i32> {
+        acquire_resource(|out| unsafe {
+            (self.p().acquire_backbuffer)(physical.chain.as_ptr(), out)
+        })
     }
 
     fn copy_source(&self, index: u32) -> Option<ComRef> {
@@ -1056,9 +1094,9 @@ impl Owner {
                 return E_FAIL;
             }
         }
-        if !unsafe { (p.physical)(b) }.is_null()
-            && request.windowed == 0
-            && failed(unsafe { (p.set_fullscreen)(b, 1, null_mut()) })
+        if request.windowed == 0
+            && let Some(physical) = self.physical()
+            && failed(unsafe { (p.set_fullscreen)(physical.chain.as_ptr(), 1, null_mut()) })
         {
             return E_FAIL;
         }
@@ -1108,6 +1146,16 @@ impl Owner {
         }
     }
 
+    fn defer_switch(backend: u32) {
+        // Retry at another completed Present without displacing a newer request.
+        let _ = REQUESTED_BACKEND.compare_exchange(
+            NO_REQUEST,
+            backend,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+    }
+
     fn switch_provider(&self, backend: u32) {
         let p = self.p();
         let b = self.b();
@@ -1130,13 +1178,7 @@ impl Owner {
             Err(TryLockError::Poisoned(guard)) => guard.into_inner(),
             Err(TryLockError::WouldBlock) => {
                 // A pacer may still need this Present thread to finish the older frame.
-                // Retry at another completed Present without displacing a newer request.
-                let _ = REQUESTED_BACKEND.compare_exchange(
-                    NO_REQUEST,
-                    backend,
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                );
+                Self::defer_switch(backend);
                 return;
             }
         };
@@ -1162,19 +1204,37 @@ impl Owner {
             SWITCH_RESULT.store(result, Ordering::SeqCst);
             return;
         }
+        let outgoing = {
+            let mut current = lock(&self.physical);
+            // DXGI needs the old HWND chain released before its replacement. A query or
+            // window operation may hold it on a thread that needs this Present to return.
+            if current
+                .as_ref()
+                .is_some_and(|pair| Arc::strong_count(pair) != 1)
+            {
+                Self::defer_switch(backend);
+                return;
+            }
+            current.take()
+        };
         let mut fullscreen = 0;
-        let _ = unsafe { (p.get_fullscreen)(b, &mut fullscreen) };
-        if fullscreen != 0 {
-            let _ = unsafe { (p.set_fullscreen)(b, 0, null_mut()) };
+        let old_chain = outgoing
+            .as_ref()
+            .map_or(null_mut(), |pair| pair.chain.as_ptr());
+        if !old_chain.is_null() {
+            let _ = unsafe { (p.get_fullscreen)(old_chain, &mut fullscreen) };
+            if fullscreen != 0 {
+                let _ = unsafe { (p.set_fullscreen)(old_chain, 0, null_mut()) };
+            }
         }
         log(&format!(
             "Generation switch identity facade={} old_physical={} old_provider={} requested={backend}",
             hex(b),
-            hex(unsafe { (p.physical)(b) }),
+            hex(old_chain),
             hex(self.provider())
         ));
         lock(&STATUS).invalidate();
-        unsafe { (p.clear_physical)(b) };
+        drop(outgoing);
         ACTIVE_SESSION.store(null_mut(), Ordering::Release);
         HOST_PACED.store(false, Ordering::SeqCst);
         let provider = self.provider.swap(null_mut(), Ordering::AcqRel);
@@ -1207,8 +1267,11 @@ impl Owner {
             }
         }
         CREATING.set(false);
-        if fullscreen != 0 && !unsafe { (p.physical)(b) }.is_null() {
-            let _ = unsafe { (p.set_fullscreen)(b, 1, null_mut()) };
+        let physical = self.physical();
+        if fullscreen != 0
+            && let Some(physical) = &physical
+        {
+            let _ = unsafe { (p.set_fullscreen)(physical.chain.as_ptr(), 1, null_mut()) };
         }
         ACTIVE_BACKEND.store(effective, Ordering::SeqCst);
         ACTIVE_SESSION.store(self.provider(), Ordering::Release);
@@ -1230,7 +1293,9 @@ impl Owner {
         log(&format!(
             "Generation switch identity facade={} new_physical={} new_provider={} effective={effective}",
             hex(b),
-            hex(unsafe { (p.physical)(b) }),
+            hex(physical
+                .as_ref()
+                .map_or(null_mut(), |pair| pair.chain.as_ptr())),
             hex(self.provider())
         ));
     }
@@ -1266,13 +1331,13 @@ impl Owner {
     // Physical Present and the provider callbacks around it, after the frame's list was submitted.
     fn present_physical(
         &self,
+        chain: Raw,
         event: &mut Event,
         mut sync: u32,
         flags: u32,
         ticks: &mut [u64; 6],
     ) -> i32 {
         let p = self.p();
-        let b = self.b();
         let setup = settings();
         let debug = setup.debug_timing != 0;
         self.receipt("physical-enter", S_OK);
@@ -1295,8 +1360,7 @@ impl Owner {
         }
         let host = self.host();
         let common = !host.is_null() && ACTIVE_BACKEND.load(Ordering::SeqCst) != DLSS;
-        if common && unsafe { (p.host_present_common)(host, (p.physical)(b), sync, flags, 1) } != OK
-        {
+        if common && unsafe { (p.host_present_common)(host, chain, sync, flags, 1) } != OK {
             log("presentation bridge: shared Streamline common Present begin refused");
             return E_FAIL;
         }
@@ -1307,10 +1371,9 @@ impl Owner {
             ticks[3] = tick();
         }
         self.receipt("vendor-present-enter", S_OK);
-        let result = unsafe { (p.physical_present)(b, sync, flags) };
+        let result = unsafe { (p.physical_present)(chain, sync, flags) };
         self.receipt("vendor-present-done", result);
-        if common && unsafe { (p.host_present_common)(host, (p.physical)(b), sync, flags, 0) } != OK
-        {
+        if common && unsafe { (p.host_present_common)(host, chain, sync, flags, 0) } != OK {
             log("presentation bridge: shared Streamline common Present end refused");
         }
         if debug {
@@ -1364,25 +1427,25 @@ impl Owner {
             return DXGI_ERROR_DEVICE_REMOVED;
         }
         if flags & DXGI_PRESENT_TEST != 0 {
-            let result = self.ensure_physical();
-            return if failed(result) {
-                result
-            } else {
-                unsafe { (p.present_test)(b, sync, flags) }
-            };
+            return self.ensure_physical().map_or_else(
+                |error| error,
+                |physical| unsafe { (p.physical_present)(physical.chain.as_ptr(), sync, flags) },
+            );
         }
         self.receipt("application-enter", S_OK);
-        let initialized = self.ensure_physical();
-        if failed(initialized) {
-            return initialized;
-        }
+        let physical = match self.ensure_physical() {
+            Ok(physical) => physical,
+            Err(error) => return error,
+        };
+        let chain = physical.chain.as_ptr();
+        let queue = physical.queue.as_ptr();
         // Legacy discard chains cannot request the flip-model tearing creation flag. Translate
         // VSync Off to the supported windowed immediate-present contract.
         let mut physical_flags = flags & !DXGI_PRESENT_ALLOW_TEARING;
         let mut fullscreen = 0;
         if sync == 0
             && self.tearing.load(Ordering::Relaxed)
-            && !failed(unsafe { (p.get_fullscreen)(b, &mut fullscreen) })
+            && !failed(unsafe { (p.get_fullscreen)(chain, &mut fullscreen) })
             && fullscreen == 0
         {
             physical_flags |= DXGI_PRESENT_ALLOW_TEARING;
@@ -1420,13 +1483,15 @@ impl Owner {
         if self.native12() {
             // Streamline requires CreateCommandQueue through its upgraded device, so its queue is
             // not the engine queue. Join the engine's source work into it, and the copy back out.
-            let joined = unsafe { (p.queues_joined)(b) } != 0;
+            let joined = unsafe { (p.queues_joined)(b, queue) } != 0;
             // Each step before the physical Present keeps its own HRESULT for the failure report.
             // Every failure still completes the application notification and faults the facade.
             let mut step = "source queue join";
             let mut stage = DXGI_ERROR_DEVICE_REMOVED;
             let source_joined = !joined
-                || !failed(unsafe { (p.join)(b, JOIN_SOURCE_TO_PRESENT, self.next_serial()) });
+                || !failed(unsafe {
+                    (p.join)(b, queue, JOIN_SOURCE_TO_PRESENT, self.next_serial())
+                });
             if source_joined {
                 let mut step_index = 0;
                 stage = unsafe {
@@ -1439,7 +1504,7 @@ impl Owner {
             if source_joined && !failed(stage) {
                 let render_index = self.render_index.load(Ordering::Relaxed);
                 step = "physical GetBuffer";
-                let backbuffer = self.acquire_backbuffer();
+                let backbuffer = self.acquire_backbuffer(&physical);
                 match &backbuffer {
                     Err(error) => stage = *error,
                     Ok(backbuffer) => {
@@ -1453,15 +1518,25 @@ impl Owner {
                                     (p.record_copy)(b, index, backbuffer.as_ptr(), source.as_ptr())
                                 };
                             }
-                            let command = unsafe { (p.slot_command)(b, index) };
-                            self.prepare_callback(null_mut(), command, backbuffer, sync);
-                            self.publish_status();
-                            step = "command list Close";
-                            stage = unsafe { (p.close_execute)(b, index, command) };
+                            let command = unsafe { (p.slot_command)(b, queue, index) };
+                            if command.is_null() {
+                                step = "command list unwrap";
+                                stage = E_FAIL;
+                            } else {
+                                self.prepare_callback(null_mut(), command, backbuffer, sync);
+                                self.publish_status();
+                                step = "command list Close";
+                                stage = unsafe { (p.close_execute)(b, queue, index, command) };
+                            }
                             if !failed(stage) {
                                 if joined
                                     && failed(unsafe {
-                                        (p.join)(b, JOIN_PRESENT_TO_SOURCE, self.next_serial())
+                                        (p.join)(
+                                            b,
+                                            queue,
+                                            JOIN_PRESENT_TO_SOURCE,
+                                            self.next_serial(),
+                                        )
                                     })
                                 {
                                     // The submitted list stays covered by the slot fence below.
@@ -1471,6 +1546,7 @@ impl Owner {
                                 } else {
                                     step = "physical Present";
                                     result = self.present_physical(
+                                        chain,
                                         &mut event,
                                         sync,
                                         physical_flags,
@@ -1484,7 +1560,7 @@ impl Owner {
                 }
                 let fence = self.next_serial();
                 slot.store(fence, Ordering::Relaxed);
-                if failed(unsafe { (p.signal_slot)(b, fence) }) {
+                if failed(unsafe { (p.signal_slot)(b, queue, fence) }) {
                     result = DXGI_ERROR_DEVICE_REMOVED;
                 }
                 drop(backbuffer);
@@ -1501,6 +1577,7 @@ impl Owner {
                 };
             }
             self.notify_presented(&mut event, result);
+            drop(physical);
             if !failed(result) && switching {
                 let available = self.application_frame_complete(slot.load(Ordering::Relaxed));
                 if failed(available) {
@@ -1530,38 +1607,39 @@ impl Owner {
             }
             // Real DXGI backbuffers (the Off path) must be written on their creation queue.
             // The separate interop queue stays with SR; the final upload uses the present queue.
-            // Without one the frame fails like any other step: completed notification, faulted facade.
-            let queue = unsafe { (p.has_provider_queue)(b) } != 0;
-            if !queue {
-                result = DXGI_ERROR_DEVICE_REMOVED;
-            }
             // Submit the D3D11 signal with its preceding work before D3D12 waits on it.
-            if queue
-                && !failed(unsafe { (p.upload_wait)(b, self.next_serial()) })
-                && let Ok(backbuffer) = self.acquire_backbuffer()
+            if !failed(unsafe { (p.upload_wait)(b, queue, self.next_serial()) })
+                && let Ok(backbuffer) = self.acquire_backbuffer(&physical)
                 && let Some(source) = self.copy_source(0)
             {
                 // The application writes slot zero. Generated frames use the physical backbuffer.
                 unsafe { (p.record_copy)(b, index, backbuffer.as_ptr(), source.as_ptr()) };
-                let command = unsafe { (p.slot_command)(b, index) };
-                self.prepare_callback(unsafe { (p.context11)(b) }, command, &backbuffer, sync);
-                self.publish_status();
-                if !failed(unsafe { (p.close_execute)(b, index, command) })
-                    && !failed(unsafe { (p.upload_return)(b, self.next_serial()) })
-                {
-                    result = self.present_physical(&mut event, sync, physical_flags, &mut ticks);
+                let command = unsafe { (p.slot_command)(b, queue, index) };
+                if !command.is_null() {
+                    self.prepare_callback(unsafe { (p.context11)(b) }, command, &backbuffer, sync);
+                    self.publish_status();
+                    if !failed(unsafe { (p.close_execute)(b, queue, index, command) })
+                        && !failed(unsafe { (p.upload_return)(b, queue, self.next_serial()) })
+                    {
+                        result = self.present_physical(
+                            chain,
+                            &mut event,
+                            sync,
+                            physical_flags,
+                            &mut ticks,
+                        );
+                    }
                 }
             }
-            if queue {
-                let fence = self.next_serial();
-                slot.store(fence, Ordering::Relaxed);
-                if failed(unsafe { (p.signal_slot)(b, fence) }) {
-                    result = DXGI_ERROR_DEVICE_REMOVED;
-                }
+            let fence = self.next_serial();
+            slot.store(fence, Ordering::Relaxed);
+            if failed(unsafe { (p.signal_slot)(b, queue, fence) }) {
+                result = DXGI_ERROR_DEVICE_REMOVED;
             }
         }
         self.receipt("application-complete", result);
         self.notify_presented(&mut event, result);
+        drop(physical);
         let frames = self.post_switch_frames.load(Ordering::Relaxed);
         if frames != 0 {
             self.post_switch_frames.store(frames - 1, Ordering::Relaxed);
@@ -1651,14 +1729,14 @@ impl Owner {
     }
 
     fn set_fullscreen(&self, fullscreen: i32, target: Raw) -> i32 {
-        let initialized = self.ensure_physical();
-        if failed(initialized) {
-            return initialized;
-        }
+        let physical = match self.ensure_physical() {
+            Ok(physical) => physical,
+            Err(error) => return error,
+        };
         if failed(self.drain()) {
             return E_FAIL;
         }
-        unsafe { (self.p().set_fullscreen)(self.b(), fullscreen, target) }
+        unsafe { (self.p().set_fullscreen)(physical.chain.as_ptr(), fullscreen, target) }
     }
 
     fn resize(
@@ -1671,10 +1749,10 @@ impl Owner {
     ) -> i32 {
         let p = self.p();
         let b = self.b();
-        let initialized = self.ensure_physical();
-        if failed(initialized) {
-            return initialized;
-        }
+        let physical = match self.ensure_physical() {
+            Ok(physical) => physical,
+            Err(error) => return error,
+        };
         if count > MAX_BUFFERS || self.faulted.load(Ordering::Acquire) {
             return DXGI_ERROR_INVALID_CALL;
         }
@@ -1722,7 +1800,16 @@ impl Owner {
             (true, true) => 0,
             (true, false) => count,
         };
-        let result = unsafe { (p.resize_physical)(b, physical_count, width, height, format) };
+        let result = unsafe {
+            (p.resize_physical)(
+                b,
+                physical.chain.as_ptr(),
+                physical_count,
+                width,
+                height,
+                format,
+            )
+        };
         if failed(result) {
             return result;
         }
@@ -1759,12 +1846,12 @@ impl Owner {
         let Some(retirement) = self.api().and_then(|api| api.retirement) else {
             return NOT_READY;
         };
-        if unsafe { (p.presentation_queue)(b) }.is_null()
-            || session.is_null()
-            || session != provider
-        {
+        if session.is_null() || session != provider {
             return NOT_READY;
         }
+        let Some(physical) = self.physical() else {
+            return NOT_READY;
+        };
         // The fence exists before anything is queued, so a failure never leaves the list unsignalled.
         let retired = unsafe { (p.retire_fence)(b) };
         if retired.is_null() {
@@ -1780,7 +1867,16 @@ impl Owner {
             return result;
         }
         let next = self.retired_serial.load(Ordering::Relaxed) + 1;
-        let result = unsafe { (p.retire_submit)(b, vendor.fence, vendor.value, list, next) };
+        let result = unsafe {
+            (p.retire_submit)(
+                b,
+                physical.queue.as_ptr(),
+                vendor.fence,
+                vendor.value,
+                list,
+                next,
+            )
+        };
         if result != OK {
             return result;
         }
@@ -1814,6 +1910,7 @@ impl Owner {
         if failed(self.drain()) {
             log("presentation bridge: retirement failed; retaining provider and shared inputs");
             std::mem::forget(self.take_application_buffers());
+            std::mem::forget(self.take_physical());
             unsafe { (p.retain_all)(b) };
             return;
         }
@@ -1826,7 +1923,9 @@ impl Owner {
             drop(buffers);
             None
         };
+        let physical = self.take_physical();
         unsafe { (p.release_presentation)(b) };
+        drop(physical);
         let provider = self.provider.swap(null_mut(), Ordering::AcqRel);
         if !provider.is_null()
             && let Some(destroy) = self.api().and_then(|api| api.destroy)
@@ -2080,7 +2179,44 @@ macro_rules! facade {
     };
 }
 
-facade!(rsf_core_d3d11p_ensure() -> i32, E_FAIL, |o| o.ensure_physical());
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_core_d3d11p_acquire_physical(
+    chain: *mut Chain,
+    initialize: u32,
+    lease: *mut *const Physical,
+    physical: *mut Raw,
+) -> i32 {
+    let (Some(lease), Some(physical)) = (unsafe { lease.as_mut() }, unsafe { physical.as_mut() })
+    else {
+        return E_POINTER;
+    };
+    *lease = ptr::null();
+    *physical = null_mut();
+    let Some(owner) = (unsafe { owner(chain) }) else {
+        return E_FAIL;
+    };
+    let pair = if initialize == 0 {
+        owner.physical().ok_or(DXGI_ERROR_WAS_STILL_DRAWING)
+    } else {
+        owner.ensure_physical()
+    };
+    match pair {
+        Ok(pair) => {
+            *physical = pair.chain.as_ptr();
+            *lease = Arc::into_raw(pair);
+            S_OK
+        }
+        Err(error) => error,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_core_d3d11p_release_physical(lease: *const Physical) {
+    if !lease.is_null() {
+        drop(unsafe { Arc::from_raw(lease) });
+    }
+}
+
 #[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_core_d3d11p_get_buffer(
     chain: *mut Chain,
@@ -2175,10 +2311,12 @@ pub(crate) unsafe extern "C" fn rsf_core_d3d11p_queue(platform: *const Platform)
     let Some(_guard) = read_guard() else {
         return null_mut();
     };
-    match (unsafe { platform.as_ref() }, active()) {
-        (Some(p), Some(owner)) => unsafe { (p.presentation_queue)(owner.b()) },
-        _ => null_mut(),
+    if platform.is_null() {
+        return null_mut();
     }
+    active()
+        .and_then(Owner::physical)
+        .map_or(null_mut(), |physical| physical.queue.as_ptr())
 }
 
 #[unsafe(no_mangle)]
@@ -2201,10 +2339,18 @@ pub(crate) unsafe extern "C" fn rsf_core_d3d11p_command_list(
     let Some(_guard) = read_guard() else {
         return null_mut();
     };
-    match (unsafe { platform.as_ref() }, active()) {
-        (Some(p), Some(owner)) if !list.is_null() => unsafe { (p.command_list)(owner.b(), list) },
-        _ => null_mut(),
+    if list.is_null() {
+        return null_mut();
     }
+    let (Some(p), Some(owner)) = (unsafe { platform.as_ref() }, active()) else {
+        return null_mut();
+    };
+    let physical = owner.physical();
+    let queue = physical
+        .as_ref()
+        .map_or(null_mut(), |pair| pair.queue.as_ptr());
+    // Pending creation used the native-list path when a host was already available.
+    unsafe { (p.command_list)(owner.b(), queue, list) }
 }
 
 #[unsafe(no_mangle)]

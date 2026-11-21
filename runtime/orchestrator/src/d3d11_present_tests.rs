@@ -18,13 +18,24 @@ struct FakeBuffer {
     handle: Raw,
 }
 
+struct FakePhysical {
+    chain: Box<FakeCom>,
+    queue: Raw,
+}
+
 struct Fake {
     calls: Vec<String>,
     logs: Vec<String>,
     slots: Vec<(u32, u64)>,
     presents: Vec<(u32, u32)>,
     native12: bool,
-    physical: usize,
+    physical: Vec<FakePhysical>,
+    provider_queue: Raw,
+    proxy_queue: Box<FakeCom>,
+    native_queue: Box<FakeCom>,
+    direct_queue: Box<FakeCom>,
+    query_chain_result: i32,
+    reenter_physical: bool,
     width: u32,
     height: u32,
     format: u32,
@@ -60,6 +71,7 @@ struct Fake {
     backbuffer: Box<FakeCom>,
     backbuffer_result: i32,
     backbuffer_null: bool,
+    unwrap_failure: bool,
     close_result: i32,
     application_ready: bool,
     sessions: usize,
@@ -76,7 +88,13 @@ impl Fake {
             slots: Vec::new(),
             presents: Vec::new(),
             native12: false,
-            physical: 0,
+            physical: Vec::new(),
+            provider_queue: null_mut(),
+            proxy_queue: fake_com(),
+            native_queue: fake_com(),
+            direct_queue: fake_com(),
+            query_chain_result: S_OK,
+            reenter_physical: false,
             width: 640,
             height: 480,
             format: 28,
@@ -112,6 +130,7 @@ impl Fake {
             backbuffer: fake_com(),
             backbuffer_result: S_OK,
             backbuffer_null: false,
+            unwrap_failure: false,
             close_result: S_OK,
             application_ready: false,
             sessions: 0,
@@ -166,6 +185,9 @@ unsafe extern "C" fn p_create(
     if result == OK {
         let id = with(|fake| {
             fake.sessions += 1;
+            if !probe {
+                fake.provider_queue = setup.chain.d3d12_queue;
+            }
             0x1000 + fake.sessions
         });
         unsafe {
@@ -297,7 +319,8 @@ unsafe extern "C" fn host_generation_load(_: Raw, enabled: u32) -> i32 {
     call(format!("host_load {enabled}"));
     OK
 }
-unsafe extern "C" fn host_present_common(_: Raw, _: Raw, _: u32, _: u32, begin: u32) -> i32 {
+unsafe extern "C" fn host_present_common(_: Raw, chain: Raw, _: u32, _: u32, begin: u32) -> i32 {
+    assert_chain(chain);
     call(format!("host_common {begin}"));
     OK
 }
@@ -325,12 +348,16 @@ unsafe extern "C" fn facts(_: Raw, out: *mut rsf_d3d11p_facts) {
         graphics: Graphics {
             struct_size: 48,
             device: raw(0x40),
-            queue: raw(0x41),
+            queue: com_raw(&fake.proxy_queue),
             factory: null_mut(),
             native_device: raw(0x42),
-            native_queue: raw(0x43),
+            native_queue: com_raw(&fake.native_queue),
         },
-        direct_queue: if fake.native12 { raw(0x50) } else { null_mut() },
+        direct_queue: if fake.native12 {
+            com_raw(&fake.direct_queue)
+        } else {
+            null_mut()
+        },
         interop_queue: raw(0x60),
         device11: raw(0x44),
         buffer_usage: fake.buffer_usage,
@@ -355,8 +382,13 @@ unsafe extern "C" fn owning_adapter(_: Raw, _: Raw, adapter: *mut rsf_d3d11p_ada
 unsafe extern "C" fn ok_bridge(_: Raw) -> i32 {
     S_OK
 }
-unsafe extern "C" fn adopt_host(_: Raw, _: u32, _: *mut i32) -> u32 {
-    0
+unsafe extern "C" fn adopt_host(bridge: Raw, _: u32, result: *mut i32) -> u32 {
+    if with(|fake| fake.host_available) {
+        unsafe { *result = create_host(bridge) };
+        1
+    } else {
+        0
+    }
 }
 unsafe extern "C" fn d3d11_device(_: Raw, _: Raw) -> i32 {
     S_OK
@@ -476,47 +508,119 @@ unsafe extern "C" fn shared_surface_platform() -> *const shared_surface::Platfor
     };
     &SHARED
 }
-unsafe extern "C" fn create_plain(_: Raw) -> i32 {
+fn stage_physical(fake: &mut Fake, queue: Raw) -> Raw {
+    assert!(
+        fake.physical.iter().all(|old| old.chain.refs.get() == 1),
+        "one physical chain at a time"
+    );
+    let chain = fake_com();
+    let raw = com_raw(&chain);
+    fake.physical.push(FakePhysical { chain, queue });
+    raw
+}
+
+fn assert_chain(chain: Raw) {
+    with(|fake| {
+        let physical = fake.physical.last().unwrap();
+        assert_eq!(chain, com_raw(&physical.chain));
+        assert_eq!(physical.chain.refs.get(), 2);
+    });
+}
+
+fn assert_queue(queue: Raw) {
+    with(|fake| {
+        assert_eq!(queue, fake.physical.last().unwrap().queue);
+        assert_eq!(unsafe { &*queue.cast::<FakeCom>() }.refs.get(), 2);
+    });
+}
+
+unsafe extern "C" fn create_plain(_: Raw, physical: *mut Raw, queue: *mut Raw) -> i32 {
     call("plain");
     with(|fake| {
         if fake.plain_result >= 0 {
-            fake.physical = 0x70;
+            let owner_queue = if fake.native12 {
+                com_raw(&fake.direct_queue)
+            } else {
+                com_raw(&fake.native_queue)
+            };
+            let chain = stage_physical(fake, owner_queue);
+            unsafe {
+                give_ref(chain, physical);
+                *queue = if fake.queue_missing {
+                    null_mut()
+                } else {
+                    owner_queue
+                };
+            }
         }
         fake.plain_result
     })
 }
-unsafe extern "C" fn adopt_chain(_: Raw, chain: Raw, _: Raw) -> i32 {
+unsafe extern "C" fn query_chain4(_: Raw, out: *mut Raw) -> i32 {
     call("adopt");
-    with(|fake| fake.physical = chain as usize);
-    S_OK
+    with(|fake| {
+        let chain = stage_physical(fake, fake.provider_queue);
+        unsafe { give_ref(chain, out) };
+        fake.query_chain_result
+    })
 }
-unsafe extern "C" fn physical(_: Raw) -> Raw {
-    raw(with(|fake| fake.physical))
+
+fn physical_lease(chain: *mut Chain, initialize: u32) -> (i32, *const Physical, Raw) {
+    let mut lease = null();
+    let mut physical = null_mut();
+    let result =
+        unsafe { rsf_core_d3d11p_acquire_physical(chain, initialize, &mut lease, &mut physical) };
+    (result, lease, physical)
 }
-unsafe extern "C" fn clear_physical(_: Raw) {
-    call("clear");
-    with(|fake| fake.physical = 0);
+fn reenter_physical(expected: Raw) {
+    if with(|fake| fake.reenter_physical) {
+        let bridge = rsf_core_d3d11p_active_bridge();
+        let (result, lease, chain) = physical_lease(chain_of(bridge), 1);
+        assert_eq!(chain, expected);
+        assert_eq!(
+            result,
+            if expected.is_null() {
+                DXGI_ERROR_WAS_STILL_DRAWING
+            } else {
+                S_OK
+            }
+        );
+        unsafe { rsf_core_d3d11p_release_physical(lease) };
+    }
 }
-unsafe extern "C" fn get_fullscreen(_: Raw, fullscreen: *mut i32) -> i32 {
+unsafe extern "C" fn get_fullscreen(chain: Raw, fullscreen: *mut i32) -> i32 {
+    assert_chain(chain);
     unsafe { *fullscreen = with(|fake| fake.fullscreen) };
     S_OK
 }
-unsafe extern "C" fn set_fullscreen(_: Raw, fullscreen: i32, _: Raw) -> i32 {
+unsafe extern "C" fn set_fullscreen(chain: Raw, fullscreen: i32, _: Raw) -> i32 {
+    assert_chain(chain);
     call(format!("fullscreen {fullscreen}"));
+    reenter_physical(if fullscreen == 0 { null_mut() } else { chain });
     with(|fake| std::mem::replace(&mut fake.fullscreen_result, S_OK))
 }
-unsafe extern "C" fn present_test(_: Raw, _: u32, _: u32) -> i32 {
-    call("present_test");
-    S_OK
-}
-unsafe extern "C" fn physical_present(_: Raw, sync: u32, flags: u32) -> i32 {
+unsafe extern "C" fn physical_present(chain: Raw, sync: u32, flags: u32) -> i32 {
+    assert_chain(chain);
+    reenter_physical(chain);
+    if flags & DXGI_PRESENT_TEST != 0 {
+        call("present_test");
+        return S_OK;
+    }
     call("present");
     with(|fake| {
         fake.presents.push((sync, flags));
         fake.present_result
     })
 }
-unsafe extern "C" fn resize_physical(_: Raw, count: u32, width: u32, height: u32, _: u32) -> i32 {
+unsafe extern "C" fn resize_physical(
+    _: Raw,
+    chain: Raw,
+    count: u32,
+    width: u32,
+    height: u32,
+    _: u32,
+) -> i32 {
+    assert_chain(chain);
     call(format!("resize {count} {width}x{height}"));
     with(|fake| {
         if !failed(fake.resize_result) {
@@ -525,13 +629,12 @@ unsafe extern "C" fn resize_physical(_: Raw, count: u32, width: u32, height: u32
         fake.resize_result
     })
 }
-unsafe extern "C" fn has_provider_queue(_: Raw) -> u32 {
-    u32::from(with(|fake| fake.physical != 0 && !fake.queue_missing))
-}
-unsafe extern "C" fn queues_joined(_: Raw) -> u32 {
+unsafe extern "C" fn queues_joined(_: Raw, queue: Raw) -> u32 {
+    assert_queue(queue);
     u32::from(with(|fake| fake.joined))
 }
-unsafe extern "C" fn join(_: Raw, direction: u32, value: u64) -> i32 {
+unsafe extern "C" fn join(_: Raw, queue: Raw, direction: u32, value: u64) -> i32 {
+    assert_queue(queue);
     call(format!("join {direction} {value}"));
     with(|fake| fake.join_result)
 }
@@ -540,11 +643,13 @@ unsafe extern "C" fn slot_reset(_: Raw, slot: u32, fence: u64, step: *mut u32) -
     with(|fake| fake.slots.push((slot, fence)));
     S_OK
 }
-unsafe extern "C" fn upload_wait(_: Raw, value: u64) -> i32 {
+unsafe extern "C" fn upload_wait(_: Raw, queue: Raw, value: u64) -> i32 {
+    assert_queue(queue);
     call(format!("upload {value}"));
     S_OK
 }
-unsafe extern "C" fn acquire_backbuffer(_: Raw, out: *mut Raw) -> i32 {
+unsafe extern "C" fn acquire_backbuffer(chain: Raw, out: *mut Raw) -> i32 {
+    assert_chain(chain);
     let (resource, result, null) = with(|fake| {
         (
             com_raw(&fake.backbuffer),
@@ -568,20 +673,29 @@ unsafe extern "C" fn record_copy(_: Raw, slot: u32, destination: Raw, source: Ra
     });
     call(format!("copy {slot} {render_index}"));
 }
-unsafe extern "C" fn slot_command(_: Raw, slot: u32) -> Raw {
-    raw(0xC0 + slot as usize)
+unsafe extern "C" fn slot_command(_: Raw, queue: Raw, slot: u32) -> Raw {
+    assert_queue(queue);
+    if with(|fake| fake.unwrap_failure) {
+        null_mut()
+    } else {
+        raw(0xC0 + slot as usize)
+    }
 }
 unsafe extern "C" fn context11(_: Raw) -> Raw {
     raw(0xD0)
 }
-unsafe extern "C" fn close_execute(_: Raw, _: u32, _: Raw) -> i32 {
+unsafe extern "C" fn close_execute(_: Raw, queue: Raw, _: u32, command: Raw) -> i32 {
+    assert_queue(queue);
+    assert!(!command.is_null());
     with(|fake| fake.close_result)
 }
-unsafe extern "C" fn upload_return(_: Raw, value: u64) -> i32 {
+unsafe extern "C" fn upload_return(_: Raw, queue: Raw, value: u64) -> i32 {
+    assert_queue(queue);
     call(format!("return {value}"));
     S_OK
 }
-unsafe extern "C" fn signal_slot(_: Raw, value: u64) -> i32 {
+unsafe extern "C" fn signal_slot(_: Raw, queue: Raw, value: u64) -> i32 {
+    assert_queue(queue);
     with(|fake| {
         let held = fake.native12 && !failed(fake.backbuffer_result) && !fake.backbuffer_null;
         assert_eq!(fake.backbuffer.refs.get(), 1 + u32::from(held));
@@ -621,11 +735,12 @@ unsafe extern "C" fn query_buffer_interface(resource: Raw, _: *const c_void, out
     S_OK
 }
 unsafe extern "C" fn get_physical_buffer(
-    _: Raw,
+    chain: Raw,
     index: u32,
     _: *const c_void,
     out: *mut Raw,
 ) -> i32 {
+    assert_chain(chain);
     call(format!("physical GetBuffer {index}"));
     let resource = with(|fake| com_raw(&fake.backbuffer));
     unsafe { give_ref(resource, out) };
@@ -657,7 +772,8 @@ unsafe extern "C" fn set_description(
 unsafe extern "C" fn retire_fence(_: Raw) -> Raw {
     raw(0xFE)
 }
-unsafe extern "C" fn retire_submit(_: Raw, _: Raw, _: u64, _: Raw, value: u64) -> i32 {
+unsafe extern "C" fn retire_submit(_: Raw, queue: Raw, _: Raw, _: u64, _: Raw, value: u64) -> i32 {
+    assert_queue(queue);
     call(format!("retire_submit {value}"));
     OK
 }
@@ -670,17 +786,13 @@ unsafe extern "C" fn release_presentation(_: Raw) {
 unsafe extern "C" fn release_device(_: Raw, destroy_host: u32) {
     call(format!("release_device {destroy_host}"));
 }
-unsafe extern "C" fn presentation_queue(_: Raw) -> Raw {
-    if with(|fake| fake.physical) != 0 {
-        raw(0x80)
-    } else {
-        null_mut()
-    }
-}
 unsafe extern "C" fn source_queue(_: Raw) -> Raw {
     raw(0x81)
 }
-unsafe extern "C" fn command_list(_: Raw, list: Raw) -> Raw {
+unsafe extern "C" fn command_list(_: Raw, queue: Raw, list: Raw) -> Raw {
+    if !queue.is_null() {
+        assert_queue(queue);
+    }
     list
 }
 unsafe extern "C" fn verify_outer(_: Raw, _: Raw, _: Raw, _: Raw, _: Raw) -> i32 {
@@ -723,15 +835,11 @@ static PLATFORM: Platform = Platform {
     shared_surface_platform,
     create_render_buffer,
     create_plain,
-    adopt_chain,
-    physical,
-    clear_physical,
+    query_chain4,
     get_fullscreen,
     set_fullscreen,
-    present_test,
     physical_present,
     resize_physical,
-    has_provider_queue,
     queues_joined,
     join,
     slot_reset,
@@ -760,7 +868,6 @@ static PLATFORM: Platform = Platform {
     retain_all,
     release_presentation,
     release_device,
-    presentation_queue,
     source_queue,
     command_list,
     verify_outer,
@@ -794,9 +901,24 @@ unsafe extern "C" fn latency_event(_: Raw, event: *const Event) {
         "latency_begin"
     });
 }
-unsafe extern "C" fn retire_callback(_: Raw, _: Raw) {
+unsafe extern "C" fn retire_callback(_: Raw, session: Raw) {
     assert_eq!(with(|fake| fake.backbuffer.refs.get()), 2);
     call("retire");
+    if with(|fake| fake.reenter_physical) && !session.is_null() {
+        assert_queue(unsafe { rsf_core_d3d11p_queue(&PLATFORM) });
+        let list = raw(0xCA);
+        assert_eq!(
+            unsafe { rsf_core_d3d11p_command_list(&PLATFORM, list) },
+            list
+        );
+        let mut fence = null_mut();
+        let mut value = 0;
+        assert_eq!(
+            unsafe { rsf_core_d3d11p_retire(&PLATFORM, session, list, &mut fence, &mut value) },
+            OK
+        );
+        assert!(!fence.is_null() && value != 0);
+    }
 }
 #[allow(clippy::too_many_arguments)]
 unsafe extern "C" fn prepare_callback(
@@ -1318,14 +1440,13 @@ fn native12_switching_sequences_frames_and_providers() {
     let calls = take_calls();
     let switch = calls.iter().position(|call| call == "probe 3").unwrap();
     assert_eq!(
-        calls[switch - 3..switch + 5],
+        calls[switch - 3..switch + 4],
         [
             "signal_wait 1 4",
             "signal_wait 0 5",
             "wait_fence 7",
             "probe 3",
             "destroy 1002",
-            "clear",
             "destroy 1001",
             "create 3"
         ]
@@ -1377,7 +1498,8 @@ fn switch_probe_refusal_keeps_and_double_refusal_presents_plain() {
     assert_eq!(rsf_core_d3d11p_request(FSR3), OK);
     take_calls();
     assert_eq!(present(bridge, 1, 0), S_OK);
-    assert!(!take_calls().iter().any(|call| call == "clear"));
+    assert!(!take_calls().iter().any(|call| call.starts_with("destroy")));
+    assert_eq!(with(|fake| fake.physical[0].chain.refs.get()), 2);
     assert_eq!(rsf_core_d3d11p_switch_result(), INIT_FAILED);
     assert_eq!(rsf_core_d3d11p_backend(), XESS);
     assert_eq!(rsf_core_d3d11p_generation(), 1);
@@ -1392,11 +1514,10 @@ fn switch_probe_refusal_keeps_and_double_refusal_presents_plain() {
     let calls = take_calls();
     let probe = calls.iter().position(|call| call == "probe 3").unwrap();
     assert_eq!(
-        calls[probe..probe + 7],
+        calls[probe..probe + 6],
         [
             "probe 3",
             "destroy 1002",
-            "clear",
             "destroy 1001",
             "create 3",
             "create 5",
@@ -1426,6 +1547,114 @@ fn ensure_failure_falls_back_to_plain_presentation() {
     assert_eq!(rsf_core_d3d11p_switch_result(), INIT_FAILED);
     assert!(rsf_core_d3d11p_session().is_null());
     unsafe { bridge_release_owned(bridge) };
+}
+
+#[test]
+fn physical_lease_defers_switch_and_keeps_callbacks_on_the_creation_queue() {
+    for native12 in [false, true] {
+        let _guard = reset();
+        let mut value = setup(FSR3, 1);
+        value.streamline_directory_utf8 = c"streamline".as_ptr();
+        assert_eq!(prepare(&value), 1);
+        with(|fake| {
+            fake.native12 = native12;
+            fake.host_available = true;
+            fake.windowed = 0;
+            fake.fullscreen = 1;
+            fake.reenter_physical = true;
+        });
+        let bridge = create();
+        let chain = chain_of(bridge);
+        assert_eq!(
+            physical_lease(chain, 0),
+            (DXGI_ERROR_WAS_STILL_DRAWING, null(), null_mut())
+        );
+        assert_eq!(
+            unsafe { rsf_core_d3d11p_command_list(&PLATFORM, raw(0xC1)) },
+            raw(0xC1)
+        );
+        assert_eq!(present(bridge, 0, DXGI_PRESENT_TEST), S_OK);
+        let (result, old_lease, old_chain) = physical_lease(chain, 1);
+        assert_eq!(result, S_OK);
+        let old_queue = with(|fake| {
+            if native12 {
+                com_raw(&fake.direct_queue)
+            } else {
+                com_raw(&fake.native_queue)
+            }
+        });
+        assert_eq!(unsafe { rsf_core_d3d11p_queue(&PLATFORM) }, old_queue);
+        assert_eq!(rsf_core_d3d11p_request(DLSS), OK);
+        assert_eq!(present(bridge, 1, 0), S_OK);
+        assert_eq!(rsf_core_d3d11p_backend(), FSR3);
+        assert_eq!(rsf_core_d3d11p_generation(), 1);
+        assert_eq!(REQUESTED_BACKEND.load(Ordering::SeqCst), DLSS);
+        assert_chain(old_chain);
+        assert_queue(old_queue);
+        unsafe { rsf_core_d3d11p_release_physical(old_lease) };
+
+        assert_eq!(present(bridge, 1, 0), S_OK);
+        assert_eq!(rsf_core_d3d11p_backend(), DLSS);
+        assert_eq!(rsf_core_d3d11p_generation(), 2);
+        let (result, new_lease, new_chain) = physical_lease(chain, 0);
+        assert_eq!(result, S_OK);
+        assert_ne!(new_chain, old_chain);
+        let new_queue = with(|fake| {
+            assert_eq!(fake.physical[0].chain.refs.get(), 1);
+            assert_eq!(unsafe { &*old_queue.cast::<FakeCom>() }.refs.get(), 1);
+            com_raw(&fake.proxy_queue)
+        });
+        assert_eq!(unsafe { rsf_core_d3d11p_queue(&PLATFORM) }, new_queue);
+        unsafe { rsf_core_d3d11p_release_physical(new_lease) };
+        assert_eq!(present(bridge, 1, 0), S_OK);
+        unsafe { bridge_release_owned(bridge) };
+        assert!(unsafe { rsf_core_d3d11p_queue(&PLATFORM) }.is_null());
+        with(|fake| {
+            assert_eq!(fake.physical[1].chain.refs.get(), 1);
+            assert_eq!(fake.proxy_queue.refs.get(), 1);
+        });
+    }
+}
+
+#[test]
+fn failed_creation_releases_partial_pairs_before_fallback() {
+    for queue_missing in [false, true] {
+        let _guard = reset();
+        assert_eq!(prepare(&setup(XESS, 1)), 1);
+        with(|fake| {
+            fake.query_chain_result = E_FAIL;
+            fake.queue_missing = queue_missing;
+        });
+        let bridge = create();
+        let chain = chain_of(bridge);
+        let (result, lease, physical) = physical_lease(chain, 1);
+        assert_eq!(rsf_core_d3d11p_backend(), 0);
+        assert_eq!(rsf_core_d3d11p_switch_result(), INIT_FAILED);
+        assert!(rsf_core_d3d11p_session().is_null());
+        let calls = take_calls();
+        assert!(calls.ends_with(&[
+            "create 5".into(),
+            "adopt".into(),
+            "destroy 1001".into(),
+            "plain".into()
+        ]));
+        with(|fake| assert_eq!(fake.physical[0].chain.refs.get(), 1));
+        if queue_missing {
+            assert_eq!((result, lease, physical), (E_FAIL, null(), null_mut()));
+            assert_eq!(unsafe { rsf_core_d3d11p_faulted(chain) }, 1);
+            assert!(unsafe { rsf_core_d3d11p_queue(&PLATFORM) }.is_null());
+            with(|fake| {
+                assert_eq!(fake.physical[1].chain.refs.get(), 1);
+                assert_eq!(fake.native_queue.refs.get(), 1);
+            });
+        } else {
+            assert_eq!(result, S_OK);
+            assert_chain(physical);
+            assert_queue(unsafe { rsf_core_d3d11p_queue(&PLATFORM) });
+            unsafe { rsf_core_d3d11p_release_physical(lease) };
+        }
+        unsafe { bridge_release_owned(bridge) };
+    }
 }
 
 #[test]
@@ -1591,7 +1820,7 @@ fn application_buffers_are_queryable_before_physical_creation() {
         assert_eq!(result, S_OK);
         assert_eq!(unsafe { rsf_core_d3d11p_physical_pending(chain) }, 1);
         with(|fake| {
-            assert_eq!(fake.physical, 0);
+            assert!(fake.physical.is_empty());
             let held = &fake.buffers[1].application;
             assert_eq!(pointer, com_raw(held));
             assert_eq!(held.refs.get(), 3);
@@ -1616,7 +1845,7 @@ fn strict_native_buffer_queries_use_dxgi_and_clear_refused_output() {
     assert_eq!(pointer, with(|fake| com_raw(&fake.backbuffer)));
     assert!(take_calls().contains(&"physical GetBuffer 2".to_owned()));
     drop(unsafe { ComRef::from_owned(pointer) });
-    with(|fake| fake.physical = 0);
+    drop(unsafe { owner(chain) }.unwrap().take_physical());
     for _ in 0..5 {
         assert_eq!(
             get_buffer(chain, 2),
@@ -1690,7 +1919,7 @@ fn retire_lease_matches_session_and_serializes_fences() {
     assert!(fence.is_null() && value == 0);
     with(|fake| fake.retirement_result = OK);
     let list = raw(0xC1);
-    assert_eq!(unsafe { rsf_core_d3d11p_queue(&PLATFORM) }, raw(0x80));
+    assert_queue(unsafe { rsf_core_d3d11p_queue(&PLATFORM) });
     assert_eq!(
         unsafe { rsf_core_d3d11p_command_list(&PLATFORM, list) },
         list
@@ -1826,8 +2055,8 @@ fn scoped_creation_admits_only_the_verified_outer_chain() {
         "one capture per transaction"
     );
     assert_eq!(
-        unsafe { rsf_core_d3d11p_ensure(chain_of(bridge)) },
-        DXGI_ERROR_WAS_STILL_DRAWING
+        physical_lease(chain_of(bridge), 1),
+        (DXGI_ERROR_WAS_STILL_DRAWING, null(), null_mut())
     );
     assert_eq!(unsafe { rsf_core_d3d11p_is_owner(&PLATFORM, bridge) }, 0);
     assert_eq!(rsf_core_d3d11p_has_owner(), 0);
@@ -1886,12 +2115,16 @@ fn failed_retirement_retains_provider_and_inputs() {
         assert_eq!(prepare(&setup(FSR3, u32::from(native12))), 1);
         with(|fake| fake.native12 = native12);
         let bridge = create();
+        assert_eq!(present(bridge, 1, DXGI_PRESENT_TEST), S_OK);
         take_calls();
         with(|fake| fake.drain_result = E_FAIL);
         unsafe { bridge_release_owned(bridge) };
         assert_eq!(take_calls(), ["signal_wait 1 1", "retain"]);
         assert!(rsf_core_d3d11p_active_bridge().is_null());
         with(|fake| {
+            let physical = fake.physical.last().unwrap();
+            assert_eq!(physical.chain.refs.get(), 2);
+            assert_eq!(unsafe { &*physical.queue.cast::<FakeCom>() }.refs.get(), 2);
             for buffer in &fake.buffers {
                 assert_eq!(buffer.application.refs.get(), 2);
                 if let Some(peer) = &buffer.peer {
@@ -1968,7 +2201,6 @@ fn early_present_failures_complete_the_notification_and_fault() {
     assert_eq!(unsafe { rsf_core_d3d11p_faulted(chain_of(bridge)) }, 1);
     unsafe { bridge_release_owned(bridge) };
 
-    let _ = reset;
     assert_eq!(prepare(&setup(FSR3, 0)), 1);
     with(|fake| {
         fake.native12 = false;
@@ -1977,11 +2209,16 @@ fn early_present_failures_complete_the_notification_and_fault() {
     });
     let bridge = create();
     take_calls();
-    with(|fake| fake.queue_missing = true);
-    assert_eq!(present(bridge, 1, 0), DXGI_ERROR_DEVICE_REMOVED);
+    with(|fake| fake.unwrap_failure = true);
+    assert_eq!(present(bridge, 1, 0), E_FAIL);
     let calls = take_calls();
     assert!(calls.contains(&"observed".to_owned()) && calls.contains(&"presented".to_owned()));
+    assert!(
+        !calls
+            .iter()
+            .any(|call| matches!(call.as_str(), "prepare" | "present"))
+    );
+    assert!(calls.iter().any(|call| call.starts_with("slot_signal")));
     assert_eq!(unsafe { rsf_core_d3d11p_faulted(chain_of(bridge)) }, 1);
-    with(|fake| fake.queue_missing = false);
     unsafe { bridge_release_owned(bridge) };
 }

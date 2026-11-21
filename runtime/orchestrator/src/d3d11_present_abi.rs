@@ -126,28 +126,24 @@ pub(crate) struct rsf_d3d11p_platform {
     pub shared_surface_platform: unsafe extern "C" fn() -> *const shared_surface::Platform,
     pub create_render_buffer: unsafe extern "C" fn(Raw, u32, u32, u32, *mut Raw) -> i32,
 
-    pub create_plain: unsafe extern "C" fn(Raw) -> i32,
-    pub adopt_chain: unsafe extern "C" fn(Raw, Raw, Raw) -> i32,
-    pub physical: unsafe extern "C" fn(Raw) -> Raw,
-    pub clear_physical: unsafe extern "C" fn(Raw),
+    pub create_plain: unsafe extern "C" fn(Raw, *mut Raw, *mut Raw) -> i32,
+    pub query_chain4: unsafe extern "C" fn(Raw, *mut Raw) -> i32,
     pub get_fullscreen: unsafe extern "C" fn(Raw, *mut i32) -> i32,
     pub set_fullscreen: unsafe extern "C" fn(Raw, i32, Raw) -> i32,
-    pub present_test: unsafe extern "C" fn(Raw, u32, u32) -> i32,
     pub physical_present: unsafe extern "C" fn(Raw, u32, u32) -> i32,
-    pub resize_physical: unsafe extern "C" fn(Raw, u32, u32, u32, u32) -> i32,
+    pub resize_physical: unsafe extern "C" fn(Raw, Raw, u32, u32, u32, u32) -> i32,
 
-    pub has_provider_queue: unsafe extern "C" fn(Raw) -> u32,
-    pub queues_joined: unsafe extern "C" fn(Raw) -> u32,
-    pub join: unsafe extern "C" fn(Raw, u32, u64) -> i32,
+    pub queues_joined: unsafe extern "C" fn(Raw, Raw) -> u32,
+    pub join: unsafe extern "C" fn(Raw, Raw, u32, u64) -> i32,
     pub slot_reset: unsafe extern "C" fn(Raw, u32, u64, *mut u32) -> i32,
-    pub upload_wait: unsafe extern "C" fn(Raw, u64) -> i32,
+    pub upload_wait: unsafe extern "C" fn(Raw, Raw, u64) -> i32,
     pub acquire_backbuffer: unsafe extern "C" fn(Raw, *mut Raw) -> i32,
     pub record_copy: unsafe extern "C" fn(Raw, u32, Raw, Raw),
-    pub slot_command: unsafe extern "C" fn(Raw, u32) -> Raw,
+    pub slot_command: unsafe extern "C" fn(Raw, Raw, u32) -> Raw,
     pub context11: unsafe extern "C" fn(Raw) -> Raw,
-    pub close_execute: unsafe extern "C" fn(Raw, u32, Raw) -> i32,
-    pub upload_return: unsafe extern "C" fn(Raw, u64) -> i32,
-    pub signal_slot: unsafe extern "C" fn(Raw, u64) -> i32,
+    pub close_execute: unsafe extern "C" fn(Raw, Raw, u32, Raw) -> i32,
+    pub upload_return: unsafe extern "C" fn(Raw, Raw, u64) -> i32,
+    pub signal_slot: unsafe extern "C" fn(Raw, Raw, u64) -> i32,
     pub has_application_ready: unsafe extern "C" fn(Raw) -> u32,
     pub application_ready: unsafe extern "C" fn(Raw, u32, u64) -> i32,
     pub report_device_failure: unsafe extern "C" fn(Raw, i32, u32),
@@ -163,13 +159,12 @@ pub(crate) struct rsf_d3d11p_platform {
     pub buffer_referenced: unsafe extern "C" fn(Raw) -> u32,
     pub set_description: unsafe extern "C" fn(Raw, u32, u32, u32, u32, u32),
     pub retire_fence: unsafe extern "C" fn(Raw) -> Raw,
-    pub retire_submit: unsafe extern "C" fn(Raw, Raw, u64, Raw, u64) -> i32,
+    pub retire_submit: unsafe extern "C" fn(Raw, Raw, Raw, u64, Raw, u64) -> i32,
     pub retain_all: unsafe extern "C" fn(Raw),
     pub release_presentation: unsafe extern "C" fn(Raw),
     pub release_device: unsafe extern "C" fn(Raw, u32),
-    pub presentation_queue: unsafe extern "C" fn(Raw) -> Raw,
     pub source_queue: unsafe extern "C" fn(Raw) -> Raw,
-    pub command_list: unsafe extern "C" fn(Raw, Raw) -> Raw,
+    pub command_list: unsafe extern "C" fn(Raw, Raw, Raw) -> Raw,
     pub verify_outer: unsafe extern "C" fn(Raw, Raw, Raw, Raw, Raw) -> i32,
 }
 
@@ -183,15 +178,15 @@ const _: () = {
     assert!(offset_of!(rsf_d3d11p_facts, device11) == 104);
     assert!(offset_of!(rsf_d3d11p_facts, buffer_usage) == 112);
     assert!(size_of::<rsf_d3d11p_adapter>() == 16);
-    assert!(size_of::<rsf_d3d11p_platform>() == 76 * 8);
+    assert!(size_of::<rsf_d3d11p_platform>() == 71 * 8);
     assert!(offset_of!(rsf_d3d11p_platform, bridge_new) == 15 * 8);
     assert!(offset_of!(rsf_d3d11p_platform, init_source) == 19 * 8);
     assert!(offset_of!(rsf_d3d11p_platform, shared_surface_platform) == 32 * 8);
     assert!(offset_of!(rsf_d3d11p_platform, create_plain) == 34 * 8);
-    assert!(offset_of!(rsf_d3d11p_platform, has_provider_queue) == 43 * 8);
-    assert!(offset_of!(rsf_d3d11p_platform, acquire_backbuffer) == 48 * 8);
-    assert!(offset_of!(rsf_d3d11p_platform, query_buffer_interface) == 59 * 8);
-    assert!(offset_of!(rsf_d3d11p_platform, drain_queues) == 62 * 8);
-    assert!(offset_of!(rsf_d3d11p_platform, set_description) == 66 * 8);
-    assert!(offset_of!(rsf_d3d11p_platform, verify_outer) == 75 * 8);
+    assert!(offset_of!(rsf_d3d11p_platform, join) == 41 * 8);
+    assert!(offset_of!(rsf_d3d11p_platform, acquire_backbuffer) == 44 * 8);
+    assert!(offset_of!(rsf_d3d11p_platform, query_buffer_interface) == 55 * 8);
+    assert!(offset_of!(rsf_d3d11p_platform, drain_queues) == 58 * 8);
+    assert!(offset_of!(rsf_d3d11p_platform, set_description) == 62 * 8);
+    assert!(offset_of!(rsf_d3d11p_platform, verify_outer) == 70 * 8);
 };
