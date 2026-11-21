@@ -5,8 +5,12 @@ target_include_directories(rsf_ac7_view PUBLIC include)
 target_link_libraries(rsf_ac7_view PRIVATE rsf_build_options)
 add_library(ReScaleFrame::AC7View ALIAS rsf_ac7_view)
 
+# Exact-build identity, the GameSDK table and the renderer lifecycle are the Rust crate rsf-ac7
+# (src/lib.rs, src/lifecycle.rs). plugin.cpp keeps the export and lends the guarded native
+# renderer entry points through src/ac7_platform.h.
+rsf_add_rust_static(rsf_ac7_rust rsf_rust_ac7 rsf-ac7 rsf_ac7)
 add_library(rsf_game_ac7 SHARED src/plugin.cpp)
-target_link_libraries(rsf_game_ac7 PRIVATE ReScaleFrame::GameSDK rsf_ac7_view rsf_ac7_render_scope rsf_build_options)
+target_link_libraries(rsf_game_ac7 PRIVATE rsf_ac7_rust ReScaleFrame::GameSDK rsf_ac7_view rsf_ac7_render_scope rsf_build_options)
 set_target_properties(rsf_game_ac7 PROPERTIES OUTPUT_NAME "ReScaleFrame.Game.AC7")
 
 # Which draws are the interface is a game fact, so the rule lives here. It is a pure function over

@@ -866,5 +866,13 @@
     "facts": "Real native Slate/message sample boundaries, removed-message/raw keyboard and mouse receipts, successful XInput state reads scoped to native controller polling; loader dispatches normalized CPU facts. No adapter pacing or SDK marker policy.",
     "owner": "Core orchestrator, shared Direct3D Reflex/PCL, required XeLL or AMD Anti-Lag 2 owner",
     "validation": "Source migration and synthetic/device fixture validation; no new game acceptance or AMD hardware acceptance. Rendering readiness remains unchanged."
+  },
+  "rust_game_entry": {
+    "date": "2026-11-21",
+    "owner": "Crate rsf-ac7 (games/ac7/src/lib.rs, lifecycle.rs) owns Ace7Game.exe/SHA-256 c7da97f5...58f4f AMD64 detection, the ac7 GameSDK table, prepare/start/quiesce/stop/status with the 256-entry pending capacity, the busy transition, refusal codes and reason texts; plugin.cpp keeps rsf_get_game_plugin_api and exception guards around the five rsf_ac7_native_renderer_* entry points",
+    "preserved": "DLL name and export, ABI 24 contract, rendering_ready 0, lifecycle order, native output retained on refused prepare, renderer options, carrier probes and exports, linked render-scope/view/UI/scene/motion/velocity libraries",
+    "remaining": "native_renderer.cpp and render-scope library, both DirectInput carriers (dinput8_proxy.c, dlss_bridge.c, shim_loader.cpp AC7 branch), engine patches, window acceptance and D3D11 bridge; see evidence",
+    "validation": "Source review only; rustfmt --edition 2024 check, cargo metadata --locked --offline, JSON parse and git diff --check. bindgen-cli absent, bindings hand-mirrored with asserts. Not compiled, linked, Cargo-tested, Clippy-checked, CTest-run, deployed or game-tested",
+    "evidence": "docs/research/rust-ac7-entry.md"
   }
 }
