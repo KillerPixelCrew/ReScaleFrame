@@ -2,12 +2,15 @@
 use super::*;
 use crate::ffx_version::{self, MAX_VERSIONS, Version as ProviderVersion};
 use std::ffi::{CStr, CString};
+use std::ptr::NonNull;
 
 // Private ABI with fsr_backend.cpp.
 #[repr(C)]
 struct Ops {
     load: Load,
-    bind: unsafe extern "C" fn(Raw, *const Open, u32, *mut Raw) -> i32,
+    acquire_compatibility: unsafe extern "C" fn(Raw, *const Open) -> *const c_void,
+    release_compatibility: unsafe extern "C" fn(*const c_void),
+    bind: unsafe extern "C" fn(Raw, *mut Raw) -> i32,
     unbind: unsafe extern "C" fn(Raw),
     versions: unsafe extern "C" fn(Raw, Raw, *mut ProviderVersion, *mut u64) -> i32,
     create: unsafe extern "C" fn(Raw, *const Open, u64, *mut Raw) -> i32,
@@ -18,23 +21,45 @@ struct Ops {
 }
 
 const _: () = {
-    assert!(size_of::<Ops>() == 9 * size_of::<Raw>());
+    assert!(size_of::<Ops>() == 11 * size_of::<Raw>());
 };
+
+struct Compatibility {
+    handle: NonNull<c_void>,
+    release: unsafe extern "C" fn(*const c_void),
+}
+
+impl Drop for Compatibility {
+    fn drop(&mut self) {
+        unsafe { (self.release)(self.handle.as_ptr()) };
+    }
+}
 
 pub(super) struct Owner {
     ops: &'static Ops,
-    sdk: Bindings,
+    sdk: Bindings<Option<Compatibility>>,
     context: Raw,
     major: u32,
 }
 
 impl Owner {
     fn open(desc: &Open, ops: &'static Ops) -> Result<(Backend, Version), i32> {
-        let enable_int8 = u32::from(desc.fsr_major == 4);
         let sdk = Bindings::open(
             desc,
             ops.load,
-            |module, out| unsafe { (ops.bind)(module, desc, enable_int8, out) },
+            |module, out| {
+                let result = unsafe { (ops.bind)(module, out) };
+                let compatibility = if result == OK && desc.fsr_major == 4 {
+                    let handle = unsafe { (ops.acquire_compatibility)(module, desc) };
+                    NonNull::new(handle.cast_mut()).map(|handle| Compatibility {
+                        handle,
+                        release: ops.release_compatibility,
+                    })
+                } else {
+                    None
+                };
+                (result, compatibility)
+            },
             ops.unbind,
         )?;
         let mut owner = Self {

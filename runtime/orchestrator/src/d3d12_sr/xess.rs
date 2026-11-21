@@ -33,7 +33,7 @@ impl Owner {
         let sdk = Bindings::open(
             desc,
             ops.load,
-            |module, out| unsafe { (ops.bind)(module, out) },
+            |module, out| (unsafe { (ops.bind)(module, out) }, ()),
             ops.unbind,
         )?;
         let mut owner = Self {

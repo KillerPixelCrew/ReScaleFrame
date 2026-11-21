@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The Rust D3D12 FSR session now owns the optional FSR4 compatibility
+lease. It resolves the SDK before acquiring compatibility and holds
+the lease until after context and native binding cleanup, then unloads
+the module. The standalone bridge keeps its existing C++ facade over
+the same acquisition. Source review checked success and refusal order
+without changing the compatibility implementation. Build and FSR4
+runtime validation remain open for this revision.
+
 D3D12 reconstruction, Vulkan reconstruction and D3D12 frame
 generation now choose FidelityFX providers through one Rust selector.
 The selector honors the requested opaque ID, ranks revisions within

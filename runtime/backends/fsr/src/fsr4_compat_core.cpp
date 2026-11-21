@@ -95,7 +95,7 @@ struct Fsr4Compatibility {
     explicit Fsr4Compatibility(NativeLease value) : lease(std::move(value)) {}
 };
 
-std::shared_ptr<Fsr4Compatibility> rsf_fsr4_enable_int8_adapter(HMODULE module,
+const rsf_fsr4_compat_lease* rsf_fsr4_acquire_int8_adapter(HMODULE module,
     IDXGIAdapter1* adapter, ID3D12Device* device, Fsr4Log log, void* user) try
 {
     if (!module || !adapter || !device) return {};
@@ -106,14 +106,26 @@ std::shared_ptr<Fsr4Compatibility> rsf_fsr4_enable_int8_adapter(HMODULE module,
         if (log && diagnostic.refusal) log(user, diagnostic.refusal);
         return {};
     }
-    auto result = std::make_shared<Fsr4Compatibility>(std::move(lease));
     if (log && diagnostic.sdk_version) {
         char message[160]{};
         std::snprintf(message, sizeof(message), "FSR4 INT8 compatibility active: SDK %s, device-scoped predicate RVA 0x%llx; real adapter identity preserved",
             diagnostic.sdk_version, static_cast<unsigned long long>(diagnostic.capability_rva));
         log(user, message);
     }
-    return result;
+    return lease.release();
+}
+catch (...) {
+    if (log) log(user, "FSR4 INT8 compatibility preparation failed");
+    return {};
+}
+
+std::shared_ptr<Fsr4Compatibility> rsf_fsr4_enable_int8_adapter(HMODULE module,
+    IDXGIAdapter1* adapter, ID3D12Device* device, Fsr4Log log, void* user) try
+{
+    NativeLease lease(rsf_fsr4_acquire_int8_adapter(module, adapter, device, log, user),
+        rsf_fsr4_compat_release);
+    if (!lease) return {};
+    return std::make_shared<Fsr4Compatibility>(std::move(lease));
 }
 catch (...) {
     if (log) log(user, "FSR4 INT8 compatibility preparation failed");

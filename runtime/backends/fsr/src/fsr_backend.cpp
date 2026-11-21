@@ -70,7 +70,6 @@ void sr_close(void*) {}
 // The Rust owner retains this storage through context destruction. The
 // SDK's chained create descriptions must have stable addresses.
 struct FsrBindings {
-    std::shared_ptr<Fsr4Compatibility> compatibility;
     PfnFfxCreateContext create{};
     PfnFfxDestroyContext destroy{};
     PfnFfxQuery query{};
@@ -94,14 +93,17 @@ void* load(const rsf_sr_open_desc* desc)
     return rsf::load_runtime(*desc, L"amd_fidelityfx_upscaler_dx12.dll");
 }
 
-rsf_backend_result bind(void* module, const rsf_sr_open_desc* desc, uint32_t enable_int8, void** out)
+const rsf_fsr4_compat_lease* acquire_compatibility(void* module, const rsf_sr_open_desc* desc)
+{
+    return rsf_fsr4_acquire_int8(static_cast<HMODULE>(module), static_cast<ID3D12Device*>(desc->device),
+        desc->log, desc->log_user);
+}
+
+rsf_backend_result bind(void* module, void** out)
 {
     auto sdk = std::unique_ptr<FsrBindings>(new (std::nothrow) FsrBindings{});
     if (!sdk) return RSF_BACKEND_ERROR_INIT_FAILED;
     const auto library = static_cast<HMODULE>(module);
-    if (enable_int8)
-        sdk->compatibility = rsf_fsr4_enable_int8(library, static_cast<ID3D12Device*>(desc->device),
-            desc->log, desc->log_user);
     sdk->create = rsf::entry<PfnFfxCreateContext>(library, "ffxCreateContext");
     sdk->destroy = rsf::entry<PfnFfxDestroyContext>(library, "ffxDestroyContext");
     sdk->query = rsf::entry<PfnFfxQuery>(library, "ffxQuery");
@@ -223,6 +225,8 @@ rsf_backend_result dispatch(void* bindings, void** context, void* commands, cons
 
 struct FsrOps {
     decltype(&load) load_library;
+    decltype(&acquire_compatibility) acquire_compatibility;
+    decltype(&rsf_fsr4_compat_release) release_compatibility;
     decltype(&bind) bind_sdk;
     decltype(&unbind) unbind_sdk;
     decltype(&versions) query_versions;
@@ -232,8 +236,9 @@ struct FsrOps {
     decltype(&plan) plan_resolution;
     decltype(&dispatch) evaluate;
 };
-static_assert(sizeof(FsrOps) == 9 * sizeof(void*));
-constexpr FsrOps fsr_ops{load, bind, unbind, versions, create, destroy, effective_version, plan, dispatch};
+static_assert(sizeof(FsrOps) == 11 * sizeof(void*));
+constexpr FsrOps fsr_ops{load, acquire_compatibility, rsf_fsr4_compat_release,
+    bind, unbind, versions, create, destroy, effective_version, plan, dispatch};
 
 } // namespace
 
