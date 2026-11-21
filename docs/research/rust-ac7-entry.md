@@ -64,6 +64,8 @@ In `games/ac7`, still C++:
   install and removal, scene-precision, velocity, TrueSky cloud resolution, depth and motion
   relays, input hook, controller facts, drain and pinning. Next coherent candidate: the site
   tables and expected bytes as data owned by Rust, with MinHook and code writes as leaves.
+  Done on 21 November for the Ace7Game.exe sites, the scene-precision and velocity patches and
+  the hook guards; see [the site migration note](rust-ac7-native-sites.md).
 - `render_scope.cpp`, `view_uniforms.cpp`, `ui_rules.cpp`, `scene_color.cpp`,
   `motion_capture.cpp`, `velocity_pass.cpp`, `velocity_shader.cpp`, `truesky_*`,
   `contact_shadow.cpp`.

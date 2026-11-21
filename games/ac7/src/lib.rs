@@ -1,14 +1,25 @@
 // SPDX-License-Identifier: MIT
 //! Ace Combat 7 (Steam build 9855922) adapter policy linked into `ReScaleFrame.Game.AC7.dll`:
-//! the exact recognized build, the GameSDK table and the renderer lifecycle (`lifecycle.rs`).
+//! the exact recognized build, the GameSDK table and the renderer lifecycle (`lifecycle.rs`),
+//! and for the native renderer the exact-build code sites and their admission (`sites.rs`), the
+//! scene-precision and temporal velocity patch transactions (`patches.rs`) and the hook body
+//! guards (`guards.rs`), all reached through ac7_sites.h.
 //!
-//! The native renderer stays C++ (native_renderer.cpp and the render-scope library): expected
-//! bytes, MinHook, RHI scopes and patches. plugin.cpp lends its entry points through the
-//! exception-guarded leaf table in ac7_platform.h and keeps the exported
-//! rsf_get_game_plugin_api. The DirectInput carriers, their decryption wait, engine patches,
-//! window acceptance and D3D11 bridge are not part of this crate yet.
+//! The rest of the native renderer stays C++ (native_renderer.cpp and the render-scope library):
+//! MinHook, detours, engine relays, RHI scopes, SEH reads, protected code writes and the TrueSky
+//! plugin patches. plugin.cpp lends its entry points through the exception-guarded leaf table in
+//! ac7_platform.h and keeps the exported rsf_get_game_plugin_api. The DirectInput carriers, their
+//! decryption wait, carrier engine patches, window acceptance and D3D11 bridge are not part of
+//! this crate yet.
+mod guards;
 mod lifecycle;
+mod patches;
 mod platform_abi;
+mod sites;
+mod sites_abi;
+
+#[cfg(test)]
+mod fake_code;
 
 use lifecycle::{Leaves, Lifecycle, Renderer};
 use platform_abi::{rsf_ac7_native_renderer_options, rsf_ac7_platform};
@@ -31,7 +42,8 @@ const UNKNOWN: rsf_detection = 0;
 const RECOGNIZED: rsf_detection = 1;
 const AMD64: u16 = 0x8664;
 
-// The only recognized build. Every RVA and expected byte in native_renderer.cpp belongs to it.
+// The only recognized build. Every RVA and expected byte in sites.rs, patches.rs and
+// native_renderer.cpp belongs to it.
 const EXECUTABLE: &CStr = c"Ace7Game.exe";
 const EXECUTABLE_SHA256: &CStr =
     c"c7da97f5f8a807d4f1264adbb074146fcffe9bdc2ffa98791b822cd28e558f4f";

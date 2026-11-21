@@ -17,7 +17,7 @@ Runtime. Preserve the supported paths, feature refusals and package names.
 | RDR2 | The game DLL renderer, scene owner, ASI and attach Runtime workers, engine settings and ScriptHook input guard are in Rust. The settings and camera probes are ported. Native graphics capture and remaining diagnostics are open. |
 | Unity Mono and Unity package | The Mono loader, plugin lifecycle, shared D3D12 frame state and Runtime setup are in Rust. Continue the bridge's CPU fact routing and package settings, preview and Vulkan owners. Both native consumers share the `[UnitySR]` path and bridge code. |
 | Steam, Fallout 4 and Skyrim SE | The shared Steam chain and both games' cold creation paths are in Rust. Fallout 4 identity and lifecycle are also ported. Continue Skyrim SE lifecycle, and both games' rendering, CPU facts, compatibility and recovery. |
-| AC7 | The game DLL's GameSDK entry and lifecycle are in Rust. Continue the native renderer and the combined DirectInput carriers' game-side owners for hook admission, view, scene colour, UI, visibility and motion. |
+| AC7 | The game DLL's GameSDK, lifecycle, native site admission and scene and velocity patch policy are in Rust. Continue TrueSky, hook retirement and the game-side owners in the combined DirectInput carriers. |
 | Godot | The native Runtime control, settings, status and D3D12 session policy are in Rust. Continue the Vulkan state, D3D12 frame ownership, window input and engine bindings while preserving the GDExtension and compositor contracts. |
 | Minecraft | The native session, surface, message observer, frame packets, settings and status are in Rust. The Java mod, typed JNI marshaling and linked Runtime entry points retain their existing contracts. |
 

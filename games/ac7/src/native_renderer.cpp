@@ -3,6 +3,7 @@
 #include <rescaleframe/ac7_view.h>
 #include <rescaleframe/ac7_hooks.h>
 #include <rescaleframe/ac7_memory.h>
+#include "ac7_sites.h"
 #include "truesky_depth.h"
 #include "truesky_motion.h"
 #include "contact_shadow.h"
@@ -28,14 +29,14 @@ namespace {
 using rsf::ac7::copy_memory;
 using rsf::ac7::read;
 using Process = void(*)(void*, void*);
+// MinHook state of one hooked entry site. The site's RVA, expected bytes and pass role are owned
+// by the Rust crate (sites.rs) and reached through ac7_sites.h.
 struct Site {
-    uint32_t rva, role;
-    const char* expected;
     void* target = nullptr;
     void* original = nullptr;
     void* detour = nullptr;
 };
-// Index of each hooked function in sites[], in table order.
+// Index of each hooked function in sites[] and in the Rust site table, in table order.
 enum Hook : uint32_t {
     hook_process_tonemap, hook_process_aa, hook_process_material, hook_process_hud, hook_process_composite,
     hook_process_output,
@@ -57,123 +58,28 @@ enum Hook : uint32_t {
     hook_count
 };
 static_assert(hook_process_tonemap == 0 && hook_process_output == 5);
+static_assert(hook_count == RSF_AC7_HOOK_SITE_COUNT, "the Hook enum indexes the Rust site table");
+static_assert(hook_rhi_pixel_uniform == RSF_AC7_EVIDENCE_FIRST && hook_pixel_enqueue_d == RSF_AC7_EVIDENCE_LAST,
+    "the evidence hooks are the Rust table's evidence range");
 // The pass hooks come first: one process and one descriptor hook per reviewed graph pass.
 constexpr uint32_t process_hooks = 6;
-// Hooks that only log evidence of a native failure. They are not installed unless the pixel
-// binding diagnostic is on, because they run for every pixel uniform bind of every draw.
-constexpr bool evidence_hook(uint32_t hook)
-{ return hook >= hook_rhi_pixel_uniform && hook <= hook_pixel_enqueue_d; }
-Site sites[] = {
-    {0x10b0220, RSF_AC7_ROLE_TONEMAP, "\x40\x55\x53\x56\x57\x41\x55\x41\x57\x48\x8d\x6c\x24\xb8\x48\x81"},
-    {0xfbfe90, RSF_AC7_ROLE_AA, "\x40\x55\x56\x41\x56\x48\x8d\x6c\x24\xb9\x48\x81\xec\x00\x01\x00"},
-    {0x1004960, RSF_AC7_ROLE_MATERIAL, "\x40\x55\x53\x56\x57\x41\x54\x41\x55\x41\x56\x48\x8d\xac\x24\xe0"},
-    {0xfcbc90, RSF_AC7_ROLE_HUD, "\x40\x55\x53\x56\x41\x55\x41\x56\x41\x57\x48\x8d\xac\x24\xe8\xfe"},
-    {0xfc86c0, RSF_AC7_ROLE_COMPOSITE, "\x48\x89\x5c\x24\x18\x55\x56\x57\x41\x54\x41\x55\x41\x56\x41\x57"},
-    {0x10b1650, RSF_AC7_ROLE_OUTPUT, "\x40\x55\x56\x57\x48\x8d\x6c\x24\xf0\x48\x81\xec\x10\x01\x00\x00"},
-    {0x1098ff0, 0, "\x48\x89\x5c\x24\x08\x57\x48\x83\xec\x40\x48\x8b\x01\x48\x8b\xda"},
-    {0xfb6f20, 0, "\x40\x53\x48\x83\xec\x20\x48\x8b\x01\x48\x8b\xda\x33\xd2\xff\x50"},
-    {0xff7b50, 0, "\x48\x89\x5c\x24\x08\x57\x48\x83\xec\x40\x48\x8b\x01\x48\x8b\xfa"},
-    {0xfb7bc0, 0, "\x40\x53\x48\x83\xec\x20\x48\x8b\x01\x48\x8b\xda\x33\xd2\xff\x50"},
-    {0xfb7b50, 0, "\x40\x53\x48\x83\xec\x20\x48\x8b\x01\x48\x8b\xda\x33\xd2\xff\x50"},
-    {0x10991e0, 0, "\x48\x89\x5c\x24\x08\x57\x48\x83\xec\x20\x48\x8b\x01\x48\x8b\xda"},
-    {0xffb900, 0, "\x4c\x8b\xdc\x55\x49\x8d\xab\xe8\xfc\xff\xff\x48\x81\xec\x10\x04"},
-    {0x10b3970, 0, "\x40\x56\x57\x41\x57\x48\x83\xec\x30\x65\x48\x8b\x04\x25\x58\x00"},
-    {0x112afa0, 0, "\x40\x55\x53\x41\x54\x41\x57\x48\x8d\xac\x24\x68\xff\xff\xff\x48"},
-    {0x1113080, 0, "\x48\x89\x5c\x24\x20\x4c\x89\x44\x24\x18\x48\x89\x4c\x24\x08\x55"},
-    {0x4d6340, 0, "\x40\x55\x57\x48\x8d\x6c\x24\xa8\x48\x81\xec\x58\x01\x00\x00\x0f"},
-    {0x4d6660, 0, "\x48\x89\x5c\x24\x08\x57\x48\x83\xec\x50\x80\x79\x78\x00\x48\x8b"},
-    {0x1380d80, 0, "\x48\x8b\xc4\x48\x89\x58\x08\x48\x89\x70\x10\x48\x89\x78\x18\x4c"},
-    {0x3a3f70, 0, "\x48\x8b\xc4\x48\x89\x58\x10\x48\x89\x70\x18\x55\x57\x41\x54\x41"},
-    {0x113a0c0, 0, "\x48\x89\x5c\x24\x08\x57\x48\x83\xec\x20\x48\x8b\xfa\x48\x8b\xd9"},
-    {0xcea130, 0, "\x83\xb9\xb0\x01\x00\x00\x00\x48\x8b\xd1\x75\x22\xf2\x0f\x10\x82"},
-    {0x3cd130, 0, "\x48\x89\x5c\x24\x10\x48\x89\x74\x24\x18\x48\x89\x7c\x24\x20\x55"},
-    {0x1ab0200, 0, "\x0f\xb6\x44\x24\x28\x83\xe0\x01\x89\x91\xd0\x00\x00\x00\x44\x89"},
-    {0x3c7a30, 0, "\x48\x89\x5c\x24\x08\x57\x48\x83\xec\x30\x0f\x29\x74\x24\x20\x41"},
-    {0x1781e80, 0, "\x48\x8b\xc4\x44\x88\x40\x18\x48\x89\x48\x08\x55\x53\x56\x57\x41"},
-    {0x177cdd0, 0, "\x48\x89\x5c\x24\x08\x57\x48\x83\xec\x20\x48\x8b\xd9\x0f\xb6\xfa"},
-    {0x1ac3600, 0, "\x40\x55\x56\x57\x41\x54\x41\x55\x48\x8d\xac\x24\x70\xfe\xff\xff"},
-    {0x1345310, 0, "\x48\x8b\xc4\x48\x89\x50\x10\x55\x53\x48\x8d\xa8\x88\xfe\xff\xff"},
-    {0x133c6c0, 0, "\x40\x56\x57\x48\x83\xec\x48\x48\x89\x5c\x24\x40\x48\x8b\xf1\x48"},
-    {0x1346520, 0, "\x48\x89\x5c\x24\x10\x48\x89\x6c\x24\x18\x48\x89\x74\x24\x20\x57"},
-    {0x1343660, 0, "\x4c\x8b\xdc\x55\x53\x57\x49\x8d\xab\x08\xfa\xff\xff\x48\x81\xec"},
-    {0x1351e10, 0, "\x48\x89\x5c\x24\x18\x55\x56\x57\x41\x55\x41\x56\x48\x83\xec\x20"},
-    {0x10be2b0, 0, "\x48\x89\x5c\x24\x08\x57\x48\x83\xec\x20\x65\x48\x8b\x04\x25\x58"},
-    {0x1097d20, 0, "\x48\x89\x5c\x24\x18\x55\x56\x57\x48\x83\xec\x30\x83\xb9\x58\x02"},
-    {0x109d320, 0, "\x40\x57\x48\x83\xec\x40\x83\xb9\x58\x02\x00\x00\x02\x48\x8b\xfa"},
-    {0x1168d40, 0, "\x40\x55\x56\x57\x41\x56\x48\x8d\x6c\x24\xc1\x48\x81\xec\xb8\x00"},
-    {0xe97d80, 0, "\x48\x89\x5c\x24\x08\x48\x89\x6c\x24\x10\x48\x89\x74\x24\x18\x57"},
-    {0xe39520, 0, "\x48\x89\x5c\x24\x10\x55\x56\x57\x41\x56\x41\x57\x48\x83\xec\x20"},
-    {0xe1f8d0, 0, "\x48\x89\x5c\x24\x20\x55\x41\x56\x41\x57\x48\x83\xec\x30\x0f\xb7"},
-    {0xe9b880, 0, "\x48\x89\x5c\x24\x18\x48\x89\x6c\x24\x20\x56\x48\x83\xec\x20\x41"},
-    {0xedb9d0, 0, "\x48\x89\x5c\x24\x20\x56\x48\x83\xec\x20\x41\x80\x78\x06\x00\x48"},
-    {0x18d21c0, 0, "\x48\x89\x5c\x24\x20\x56\x48\x83\xec\x20\x41\x80\x78\x06\x00\x48"},
-    {0xf4c620, 0, "\x40\x53\x56\x57\x48\x83\xec\x30\x41\x80\x78\x06\x00\x4d\x8b\xd1"},
-    {0x2225470, 0, "\x48\x83\xec\x08\x80\x3d\x15\x02\x69\x01\x00\x0f\x28\xd9\xf3\x0f"},
-    {0x222afa0, 0, "\x40\x55\x41\x54\x41\x55\x41\x57\x48\x8d\xac\x24\x38\xfc\xff\xff"},
-    {0x10ecdd0, 0, "\x0f\xb6\x81\x1c\x0c\x00\x00\xc3\xcc\xcc\xcc\xcc\xcc\xcc\xcc\xcc"},
-    {0x109f300, 0, "\x83\xb9\x58\x02\x00\x00\x02\x41\xba\x0a\x00\x00\x00\x45\x8b\xc2"},
-    {0x112ff00, 0, "\x4c\x8b\xdc\x49\x89\x5b\x08\x49\x89\x6b\x18\x56\x57\x41\x56\x48"},
-    {0x3a5a20, 0, "\x40\x53\x48\x83\xec\x20\xc7\x41\x08\xff\x00\x00\x00\x48\x8d\x05"},
-    {0x3a8b60, 0, "\x48\x89\x5c\x24\x10\x48\x89\x6c\x24\x18\x48\x89\x74\x24\x20\x57"},
-    {0x1207df0, 0, "\x48\x89\x5c\x24\x08\x57\x48\x83\xec\x20\x48\x8b\x51\x30\x48\x8b"},
-    {0x120c540, 0, "\x48\x89\x5c\x24\x08\x57\x48\x83\xec\x20\x48\x8b\x51\x30\x48\x8b"},
-    {0x1ada010, 0, "\x48\x89\x5c\x24\x08\x48\x89\x74\x24\x10\x57\x48\x83\xec\x20\x48"},
-    {0xa88dc0, 0, "\x48\x83\xec\x68\x45\x33\xc9\x45\x33\xc0\x33\xd2\x84\xc9\x48\x8d"},
-    {0x1adbcb0, 0, "\x40\x55\x53\x57\x48\x8d\x6c\x24\xb9\x48\x81\xec\xc0\x00\x00\x00"},
-    {0xe31e90, 0, "\x48\x89\x5c\x24\x08\x48\x89\x6c\x24\x10\x48\x89\x74\x24\x18\x57"},
-    {0xebf050, 0, "\x48\x89\x5c\x24\x10\x55\x56\x57\x41\x54\x41\x57\x48\x83\xec\x40"},
-    {0x1158250, 0, "\x4c\x89\x4c\x24\x20\x4c\x89\x44\x24\x18\x48\x89\x54\x24\x10\x48"},
-    {0x188cfa0, 0, "\x48\x89\x5c\x24\x08\x48\x89\x6c\x24\x10\x48\x89\x74\x24\x20\x57"},
-    {0x190e740, 0, "\x4c\x8b\xdc\x55\x53\x56\x57\x41\x56\x41\x57\x49\x8d\xab\xd8\xfe"},
-    {0x1904d40, 0, "\x4c\x8b\xdc\x55\x49\x8d\xab\xd8\xfc\xff\xff\x48\x81\xec\x20\x04"},
-    {0x1907980, 0, "\x40\x55\x48\x8d\xac\x24\xc0\xfb\xff\xff\x48\x81\xec\x40\x05\x00"},
-    {0x190d510, 0, "\x40\x55\x53\x57\x41\x54\x41\x57\x48\x8d\xac\x24\x50\xfe\xff\xff"},
-    {0x190ce60, 0, "\x48\x89\x4c\x24\x08\x55\x53\x57\x41\x57\x48\x8d\xac\x24\x38\xff"},
-};
-static_assert(sizeof(sites) / sizeof(sites[0]) == hook_count);
+static_assert(process_hooks == RSF_AC7_PROCESS_HOOKS);
+Site sites[hook_count];
 std::atomic<rsf_ac7_native_renderer*> installed{nullptr};
 // Hook bodies count themselves in and out so stop() can tell when no thread is inside this module.
-// Each thread keeps to one cache line, so the counting does not bounce a shared line between the
-// game, render and RHI threads; the slots are summed only on the stop and failure paths.
-constexpr uint32_t guard_slot_count = 64;
-#ifdef _MSC_VER
-#pragma warning(push)
-#pragma warning(disable : 4324) // the padding to one cache line is the point
-#endif
-struct alignas(64) GuardSlot {
-    std::atomic<uint32_t> entry{0}, outer{0};
-};
-#ifdef _MSC_VER
-#pragma warning(pop)
-#endif
-GuardSlot guard_slots[guard_slot_count];
-std::atomic<uint32_t> next_guard_slot{0};
-GuardSlot& guard_slot()
-{
-    thread_local uint32_t index = guard_slot_count;
-    if (index == guard_slot_count) index = next_guard_slot.fetch_add(1, std::memory_order_relaxed) % guard_slot_count;
-    return guard_slots[index];
-}
-// Hook bodies held by a thread: the entry guards, and the outer guards too when asked.
-uint32_t guards_held(bool outer_too)
-{
-    std::atomic_thread_fence(std::memory_order_seq_cst);
-    uint32_t total = 0;
-    for (const auto& slot : guard_slots) {
-        total += slot.entry.load(std::memory_order_acquire);
-        if (outer_too) total += slot.outer.load(std::memory_order_acquire);
-    }
-    return total;
-}
+// The per-thread slots and their sum are owned by the Rust crate (guards.rs).
+uint32_t guards_held(bool outer_too) { return rsf_ac7_guards_held(outer_too); }
 struct OuterGuard {
-    GuardSlot& slot = guard_slot();
-    OuterGuard() { slot.outer.fetch_add(1, std::memory_order_relaxed); }
-    ~OuterGuard() { slot.outer.fetch_sub(1, std::memory_order_release); }
+    OuterGuard() noexcept { rsf_ac7_guard_enter(RSF_AC7_GUARD_OUTER); }
+    ~OuterGuard() { rsf_ac7_guard_leave(RSF_AC7_GUARD_OUTER); }
+    OuterGuard(const OuterGuard&) = delete;
+    OuterGuard& operator=(const OuterGuard&) = delete;
 };
 struct EntryGuard {
-    GuardSlot& slot = guard_slot();
-    EntryGuard() { slot.entry.fetch_add(1, std::memory_order_relaxed); }
-    ~EntryGuard() { slot.entry.fetch_sub(1, std::memory_order_release); }
+    EntryGuard() noexcept { rsf_ac7_guard_enter(RSF_AC7_GUARD_ENTRY); }
+    ~EntryGuard() { rsf_ac7_guard_leave(RSF_AC7_GUARD_ENTRY); }
+    EntryGuard(const EntryGuard&) = delete;
+    EntryGuard& operator=(const EntryGuard&) = delete;
 };
 #if defined(RSF_AC7_GRAPH_TEST)
 unsigned char* test_module = nullptr;
@@ -253,9 +159,9 @@ struct rsf_ac7_native_renderer {
     rsf_ac7_cloud_depth cloud_motion{};
     std::atomic<uint32_t> cloud_motion_reports{0};
     bool cloud_depth_shader_refused = false;
-    unsigned char* scene_precision_site = nullptr;
-    unsigned char* velocity_module = nullptr;
-    uint32_t velocity_patches = 0;
+    // Scene-precision and temporal velocity patch ownership, changed only by the Rust owner
+    // (patches.rs) at start and stop.
+    rsf_ac7_code_patches patches{};
     bool cloud_resolution_refused = false;
     std::mutex cloud_resolution_guard;
     std::atomic<uint32_t> render_thread{0};
@@ -1155,7 +1061,7 @@ bool make_plan(rsf_ac7_native_renderer& self, void* context, void* root, GraphPl
             [entry](const Site& site) { return uint64_t(uintptr_t(site.target)) == entry; });
         if (found == std::begin(sites) + process_hooks) return false; // No unreviewed downstream pass is resized.
         plan.consumers.push_back(cursor);
-        if (found->role == RSF_AC7_ROLE_TONEMAP) { tone = cursor; break; }
+        if (rsf_ac7_hook_role(uint32_t(found - std::begin(sites))) == RSF_AC7_ROLE_TONEMAP) { tone = cursor; break; }
         auto* input = input_ref(cursor); if (!input) return false; cursor = input->node;
     }
     auto* input = tone ? input_ref(tone) : nullptr;
@@ -1780,7 +1686,7 @@ template<uint32_t Index> void hooked_pixel_enqueue(void* list, void* shader, voi
             const auto base = uint64_t(uintptr_t(game_module()));
             char message[224]{};
             std::snprintf(message, sizeof(message), "native null PS slot1 CPU creator: RVA 0x%x shader %p parameter %p input %p UI %u renderer %p",
-                sites[Index].rva, shader, parameter, input, ui_producer.active ? 1u : 0u, translucency_renderer);
+                rsf_ac7_hook_rva(Index), shader, parameter, input, ui_producer.active ? 1u : 0u, translucency_renderer);
             log(*self, message);
             for (uint32_t i = 0; i < count; ++i) {
                 const auto frame = uint64_t(uintptr_t(frames[i]));
@@ -2012,7 +1918,7 @@ void process(uint32_t index, void* node, void* context)
     if (!self || !self->active.load(std::memory_order_acquire)) { original(node, context); return; }
     rsf_ac7_render_scope scope{};
     scope.struct_size = sizeof(scope); scope.session_id = self->options.session_id;
-    scope.role = sites[index].role; scope.pass_key = uint64_t(uintptr_t(node));
+    scope.role = rsf_ac7_hook_role(index); scope.pass_key = uint64_t(uintptr_t(node));
     // Nimbus front-end composition has its UI in graph input one. The separate
     // HUDCombine path instead reads the view-owned raster. Both are native UI boundaries.
     if (index == hook_process_composite) scope.role = RSF_GAME_RENDER_UI_COMPOSITE;
@@ -2411,8 +2317,6 @@ constexpr unsigned char native_cloud_divisor[]{0x8b,0x87,0x10,0x02,0x00,0x00};
 constexpr unsigned char full_cloud_divisor[]{0xb8,0x01,0x00,0x00,0x00,0x90};
 constexpr unsigned char native_cloud_depth_format[]{0x16,0x00,0x00,0x00};
 constexpr unsigned char precise_cloud_depth_format[]{0x05,0x00,0x00,0x00};
-constexpr unsigned char native_scene_format[]{0x48,0x8b,0x05,0x29,0x33,0xbc,0x02,0x48,0x8b,0xcb,0x8b,0x40,0x04};
-constexpr unsigned char precise_scene_format[]{0xb8,0x04,0x00,0x00,0x00,0x90,0x90,0x48,0x8b,0xcb,0x90,0x90,0x90};
 bool write_render_code(unsigned char* site, const unsigned char* expected, const unsigned char* replacement, size_t size)
 {
     if (!size || !bytes_match(site, expected, size)) return false;
@@ -2423,49 +2327,13 @@ bool write_render_code(unsigned char* site, const unsigned char* expected, const
     DWORD ignored = 0; VirtualProtect(site, size, protection, &ignored);
     return true;
 }
-// UE4's motion-blur selection is too restrictive for temporal reconstruction. Keep visibility,
-// main-pass relevance, mobility, camera cuts, native transform/bone history and shader support.
-// The transform test becomes unconditional only AFTER a successful history lookup.
-struct VelocityPatch { uint32_t rva, size; const char* native; const char* temporal; };
-constexpr VelocityPatch velocity_patches[]{
-    {0x118a4e3, 2, "\x75\x0e", "\x90\x90"}, // produce velocity even without native TAA/motion blur
-    {0x10fdd0c, 2, "\x76\x38", "\x90\x90"}, // small weapons and distant vehicles
-    {0x11838c4, 2, "\x77\x88", "\xeb\x88"}, // bone/WPO motion with unchanged root transform
-};
-bool restore_velocity_patches(rsf_ac7_native_renderer& self)
+// The code leaves lent to the Rust site and patch owner (ac7_sites.h). The temporal velocity and
+// scene-precision patch tables and transactions are owned there (patches.rs).
+rsf_ac7_code_leaves code_leaves(rsf_ac7_renderer_log_fn log, void* user)
 {
-    while (self.velocity_patches) {
-        const auto& patch = velocity_patches[self.velocity_patches - 1];
-        if (!write_render_code(self.velocity_module + patch.rva,
-            reinterpret_cast<const unsigned char*>(patch.temporal),
-            reinterpret_cast<const unsigned char*>(patch.native), patch.size)) return false;
-        --self.velocity_patches;
-    }
-    self.velocity_module = nullptr;
-    return true;
-}
-bool apply_velocity_patches(rsf_ac7_native_renderer& self, unsigned char* base)
-{
-    if (self.velocity_patches) return self.velocity_patches == std::size(velocity_patches);
-    for (const auto& patch : velocity_patches) {
-        if (!bytes_match(base + patch.rva, patch.native, patch.size)) {
-            char message[144]{};
-            std::snprintf(message, sizeof(message), "AC7 temporal velocity refused: expected bytes differ at RVA 0x%x", patch.rva);
-            log(self, message); return false;
-        }
-    }
-    self.velocity_module = base;
-    for (const auto& patch : velocity_patches) {
-        if (!write_render_code(base + patch.rva,
-            reinterpret_cast<const unsigned char*>(patch.native),
-            reinterpret_cast<const unsigned char*>(patch.temporal), patch.size)) {
-            if (!restore_velocity_patches(self)) log(self, "AC7 temporal velocity rollback refused; patched module retained");
-            return false;
-        }
-        ++self.velocity_patches;
-    }
-    log(self, "AC7 temporal velocity: native pass enabled without TAA; small and fixed-root movable opaque geometry retained with native history, camera-cut and shader checks");
-    return true;
+    return {[](const unsigned char* address, const unsigned char* expected, size_t count) {
+        return bytes_match(address, expected, count);
+    }, &write_render_code, log, user};
 }
 void STDMETHODCALLTYPE native_cloud_depth_dispatch(ID3D11DeviceContext* context, UINT x, UINT y, UINT z)
 {
@@ -2717,22 +2585,6 @@ void install_cloud_motion(rsf_ac7_native_renderer& self, unsigned char* module)
     self.cloud_motion_call = relay;
     log(self, "native TrueSky cloud motion: composite_tile draw relay installed at DLL RVA 0xabc6b");
 }
-bool apply_scene_precision_patch(rsf_ac7_native_renderer& self)
-{
-    if (self.scene_precision_site) return true;
-    auto* site = engine<unsigned char*>(0x1095620);
-    constexpr unsigned char expected[]{0x48,0x8b,0x05,0x29,0x33,0xbc,0x02,0x48,0x8b,0xcb,0x8b,0x40,0x04,0x89,0x45,0xd7};
-    if (!bytes_match(site, expected, sizeof(expected)) ||
-        !write_render_code(site, native_scene_format, precise_scene_format, sizeof(native_scene_format))) {
-        log(self, "native scene-precision patch refused: expected bytes differ or code protection failed at RVA 0x1095620");
-        return false;
-    }
-    // Allocate compares this effective format to its cache before UpdateRHI. Existing packed
-    // targets therefore retire through the engine's own reallocation path on the next family.
-    self.scene_precision_site = site;
-    log(self, "native scene precision: allocation format policy 4 at RVA 0x1095620; engine owns FP16 resource rebuild");
-    return true;
-}
 void apply_cloud_resolution_patch(rsf_ac7_native_renderer& self)
 {
     std::lock_guard<std::mutex> lock(self.cloud_resolution_guard);
@@ -2895,68 +2747,10 @@ extern "C" int rsf_ac7_native_renderer_prepare(const rsf_ac7_native_renderer_opt
     if (!options || options->struct_size < sizeof(*options) || !out || !options->session_id || installed.load()) return 0;
     *out = nullptr;
     auto* base = game_module();
-    for (const auto& site : sites) {
-        if (!bytes_match(base + site.rva, site.expected, 16)) {
-            char message[128]{};
-            std::snprintf(message, sizeof(message), "AC7 native renderer refused: expected entry bytes differ at RVA 0x%x", site.rva);
-            if (options->log) options->log(options->user, message);
-            return 0;
-        }
-    }
-    const Site helpers[] = {
-        {0xfb7a00, 0, "\x48\x89\x5c\x24\x08\x57\x48\x83\xec\x40\x48\x8b\x01\x48\x8b\xda"},
-        {0x1126090, 0, "\x83\xb9\xb0\x09\x00\x00\x02\x4c\x8b\x89\x10\x14\x00\x00\x75\x58"},
-        {0x12183c0, 0, "\x40\x53\x48\x83\xec\x20\x8b\x1d\x94\x0c\xa6\x02\x85\xdb\x0f\x84"},
-        {0x116ea00, 0, "\x4c\x8b\xdc\x55\x56\x57\x41\x56\x48\x81\xec\x78\x0d\x00\x00\x48"},
-        {0x109e0d0, 0, "\x4c\x89\x44\x24\x18\x53\x56\x57\x48\x81\xec\xa0\x00\x00\x00\x48"},
-        {0xee93f0, 0, "\x48\x89\x5c\x24\x08\x55\x56\x57\x41\x54\x41\x55\x41\x56\x41\x57"},
-        {0x923e60, 0, "\x4c\x8b\xdc\x48\x83\xec\x78\x48\x8b\x05\x0a\xe1\x15\x03\x48\x85"},
-        {0x938fb0, 0, "\x4c\x8b\xdc\x48\x83\xec\x78\x48\x8b\x05\xa2\xb6\x14\x03\x48\x85"},
-        {0x925860, 0, "\x4c\x8b\xdc\x48\x83\xec\x78\x48\x8b\x05\xc2\xc8\x15\x03\x48\x85"},
-        {0x925d10, 0, "\x4c\x8b\xdc\x48\x83\xec\x78\x48\x8b\x05\x22\xc4\x15\x03\x48\x85"},
-        {0x925e10, 0, "\x4c\x8b\xdc\x48\x83\xec\x78\x48\x8b\x05\x3a\xc3\x15\x03\x48\x85"},
-        {0x925710, 0, "\x4c\x8b\xdc\x48\x83\xec\x78\x48\x8b\x05\xea\xc8\x15\x03\x48\x85"},
-        {0x8b3100, 0, "\x4c\x8b\xdc\x48\x83\xec\x78\x48\x8b\x05\x22\x16\x1c\x03\x48\x85"},
-        {0x1b495f0, 0, "\x4c\x8b\xdc\x48\x83\xec\x78\x48\x8b\x05\x52\x6b\x17\x02\x48\x85"},
-        {0x8c1bd0, 0, "\x4c\x8b\xdc\x48\x83\xec\x78\x48\x8b\x05\xb2\x50\x1b\x03\x48\x85"},
-        {0xfcf880, 0, "\x48\x8b\xc4\x55\x53\x57\x41\x55\x48\x8d\x68\xa1\x48\x81\xec\x88"},
-        {0x1ab0200, 0, "\x0f\xb6\x44\x24\x28\x83\xe0\x01\x89\x91\xd0\x00\x00\x00\x44\x89"},
-        {0x1ab7dc0, 0, "\x48\x89\x5c\x24\x10\x57\x48\x83\xec\x40\x48\x83\x79\x70\x00\x0f"},
-        {0xde5cf0, 0, "\x40\x53\x48\x83\xec\x20\x48\x8b\xd9\x48\x3b\xca\x0f\x84\xbe\x00"},
-        {0x19b6fe0, 0, "\x48\x83\xec\x28\x8b\x41\x08\x45\x32\xc0\x0f\x57\xd2\x4c\x8b\xd9"},
-        {0xe93670, 0, "\x48\x89\x5c\x24\x08\x48\x89\x74\x24\x10\x57\x48\x83\xec\x20\x48"},
-        {0x10b4870, 0, "\x48\x89\x5c\x24\x10\x48\x89\x6c\x24\x18\x48\x89\x74\x24\x20\x57"},
-        {0x109dc70, 0, "\x48\x8d\x05\x99\xcf\xb9\x02\xc3\xcc\xcc\xcc\xcc\xcc\xcc\xcc\xcc"},
-        {0x1127a20, 0, "\x48\x89\x5c\x24\x20\x55\x56\x57\x48\x8d\x6c\x24\xb9\x48\x81\xec"},
-        {0xff9af0, 0, "\x40\x53\x48\x83\xec\x60\xf3\x0f\x10\x41\x20\x48\x8b\xd9\xf3\x0f"},
-        {0x11346d0, 0, "\x48\x8b\xc4\x55\x56\x57\x41\x56\x41\x57\x48\x8d\x68\xb9\x48\x81"},
-    };
-    // Enlarged separate translucency needs the matching depth and shader-view paths.
-    const struct { uint32_t rva; const char* bytes; size_t count; } depth_gates[] = {
-        {0x1168f6f, "\x74\x0e", 2}, {0x1097a0c, "\x74\x17", 2},
-        {0x109d03a, "\x44\x0f\x45\xf9", 4}, {0x109d061, "\x74\x17", 2},
-        {0x11583a6, "\x0f\x2f\x80\x20\x02\x00\x00\x74\x0e", 9},
-        {0x1025b12, "\x0f\x2f\x86\x20\x02\x00\x00\x74\x04", 9},
-        {0x10294d2, "\x0f\x2f\x86\x20\x02\x00\x00\x74\x04", 9},
-        {0x102ada2, "\x0f\x2f\x86\x20\x02\x00\x00\x74\x04", 9},
-        {0x102c672, "\x0f\x2f\x86\x20\x02\x00\x00\x74\x04", 9},
-        {0x102e792, "\x0f\x2f\x86\x20\x02\x00\x00\x74\x04", 9},
-        {0x1031902, "\x0f\x2f\x86\x20\x02\x00\x00\x74\x04", 9}
-    };
-    for (const auto& gate : depth_gates) {
-        if (!bytes_match(base + gate.rva, gate.bytes, gate.count)) {
-            char message[144]{};
-            std::snprintf(message, sizeof(message), "AC7 native renderer refused: enlarged UI depth/view gate missing at RVA 0x%x", gate.rva);
-            if (options->log) options->log(options->user, message);
-            return 0;
-        }
-    }
-    for (const auto& helper : helpers) if (!bytes_match(base + helper.rva, helper.expected, 16)) {
-        char message[128]{};
-        std::snprintf(message, sizeof(message), "AC7 native renderer refused: expected helper bytes differ at RVA 0x%x", helper.rva);
-        if (options->log) options->log(options->user, message);
-        return 0;
-    }
+    // Exact-build admission (sites.rs): every hooked entry site, the enlarged UI depth/view gates
+    // and the helper sites, compared before anything is allocated or hooked.
+    const auto admission = code_leaves(options->log, options->user);
+    if (!rsf_ac7_build_admit(base, &admission)) return 0;
     auto* self = new(std::nothrow) rsf_ac7_native_renderer;
     if (!self) return 0;
     self->options = *options;
@@ -2970,13 +2764,13 @@ extern "C" int rsf_ac7_native_renderer_prepare(const rsf_ac7_native_renderer_opt
         rsf_ac7_render_scopes_quiesce(self->scopes); rsf_ac7_render_scopes_destroy(self->scopes); delete self; return 0;
     }
     // The evidence hooks run for every pixel uniform bind. Their sites are still verified above, but
-    // they are hooked only when the diagnostic is asked for.
+    // they are hooked only when the diagnostic is asked for (rsf_ac7_hook_wanted).
     const bool diagnostics = (options->diagnostics & RSF_AC7_DIAG_PIXEL_BINDINGS) != 0 ||
         environment_flag("RSF_AC7_PIXEL_DIAGNOSTICS");
     bind_detours();
     void* targets[hook_count]; void* detours[hook_count]; void** originals[hook_count];
     for (uint32_t i = 0; i < hook_count; ++i) {
-        sites[i].target = evidence_hook(i) && !diagnostics ? nullptr : base + sites[i].rva;
+        sites[i].target = rsf_ac7_hook_wanted(i, diagnostics) ? base + rsf_ac7_hook_rva(i) : nullptr;
         targets[i] = sites[i].target; detours[i] = sites[i].detour; originals[i] = &sites[i].original;
     }
     installed.store(self, std::memory_order_release);
@@ -3003,8 +2797,11 @@ extern "C" int rsf_ac7_native_renderer_prepare(const rsf_ac7_native_renderer_opt
 catch (...) { return 0; }
 extern "C" int rsf_ac7_native_renderer_start(rsf_ac7_native_renderer* self)
 {
-    if (!self || installed.load() != self || self->quiescing.load() || !apply_scene_precision_patch(*self) ||
-        !apply_velocity_patches(*self, game_module())) return 0;
+    if (!self || installed.load() != self || self->quiescing.load()) return 0;
+    // Scene precision, then temporal velocity (patches.rs). A refusal keeps what was applied owned
+    // until stop restores it.
+    const auto leaves = code_leaves(self->options.log, self->options.user);
+    if (!rsf_ac7_engine_patches_apply(&self->patches, game_module(), &leaves)) return 0;
     self->active.store(true); return 1;
 }
 extern "C" int rsf_ac7_native_renderer_is_active(rsf_ac7_native_renderer* self)
@@ -3026,15 +2823,9 @@ extern "C" int rsf_ac7_native_renderer_stop(rsf_ac7_native_renderer* self)
     // A null target is a hook that was never installed; MH_DisableHook(NULL) would disable them all.
     for (const auto& site : sites) if (site.target) MH_DisableHook(site.target);
     if (guards_held(true) || !controller_facts.remove()) return 0;
-    if (!restore_velocity_patches(*self)) {
-        log(*self, "AC7 temporal velocity patch could not restore; renderer retained"); return 0;
-    }
-    if (self->scene_precision_site) {
-        if (!write_render_code(self->scene_precision_site, precise_scene_format, native_scene_format, sizeof(native_scene_format))) {
-            log(*self, "native scene-precision patch could not restore; renderer retained"); return 0;
-        }
-        self->scene_precision_site = nullptr;
-    }
+    // Temporal velocity, then scene precision (patches.rs); a refusal is logged there.
+    const auto leaves = code_leaves(self->options.log, self->options.user);
+    if (!rsf_ac7_engine_patches_restore(&self->patches, &leaves)) return 0;
     if (self->cloud_resolution_site) {
         if (!write_render_code(self->cloud_resolution_site, full_cloud_divisor, native_cloud_divisor, sizeof(native_cloud_divisor))) {
             log(*self, "native TrueSky cloud-resolution patch could not restore; renderer retained"); return 0;

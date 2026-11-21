@@ -125,6 +125,13 @@ their interfaces. The lifecycle retains a renderer returned on a refused
 prepare for later retirement. The private binding was regenerated. Build
 and game verification remain open.
 
+AC7's Rust renderer policy owns the exact-build site table, hook counters
+and scene precision and velocity patches. The native renderer lends the
+guarded reads and protected writes. Source comparison matched 65 hook
+entries, 26 helpers and 11 depth and view gates. The public renderer ABI
+and linked carrier route were checked in source. Builds and gameplay
+remain open.
+
 Godot's native control and settings owner is Rust. It preserves the
 GDExtension entry points and linked Runtime, and refuses overlapping or
 reentrant D3D12 boot attempts. The Vulkan path still owns its own session

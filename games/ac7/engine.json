@@ -874,5 +874,13 @@
     "remaining": "native_renderer.cpp and render-scope library, both DirectInput carriers (dinput8_proxy.c, dlss_bridge.c, shim_loader.cpp AC7 branch), engine patches, window acceptance and D3D11 bridge; see evidence",
     "validation": "Source review only; rustfmt --edition 2024 check, cargo metadata --locked --offline, JSON parse and git diff --check. bindgen-cli absent, bindings hand-mirrored with asserts. Not compiled, linked, Cargo-tested, Clippy-checked, CTest-run, deployed or game-tested",
     "evidence": "docs/research/rust-ac7-entry.md"
+  },
+  "rust_native_sites": {
+    "date": "2026-11-21",
+    "owner": "Crate rsf-ac7 owns the 65 hooked entry sites (RVA, 16 expected bytes, Process pass roles), 26 helper sites, 11 enlarged UI depth/view gates and the admission order and refusal texts (sites.rs); the evidence-hook rule for hooks 38-43; scene precision +1095620 and the temporal velocity group +118A4E3/+10FDD0C/+11838C4 with apply/rollback/restore order and texts (patches.rs); per-thread hook body guard slots and their sum (guards.rs). native_renderer.cpp reaches them through src/ac7_sites.h and lends SEH-guarded code reads, protected code writes and the host log",
+    "preserved": "Every RVA and byte (mechanically compared with the removed C++), admission before allocation or hooking, diagnostics gating, start order scene precision then velocity, stop order velocity then scene precision then TrueSky, guard memory orders, MinHook targets, TrueSky decisions, public renderer C ABI, both carrier links",
+    "remaining": "TrueSky plugin sites, relays and device checks; MinHook install/removal, pinned partial activation and the rest of stop; all detours, engine relays and layouts; carriers. See evidence",
+    "validation": "Source review only; rustfmt --edition 2024 check, cargo metadata --locked --offline, JSON parse, git diff --check and a byte comparison of the moved tables. bindgen-cli absent, sites_abi.rs hand-mirrored with layout asserts. Not compiled, linked, Cargo-tested, Clippy-checked, CTest-run, deployed or game-tested",
+    "evidence": "docs/research/rust-ac7-native-sites.md"
   }
 }
