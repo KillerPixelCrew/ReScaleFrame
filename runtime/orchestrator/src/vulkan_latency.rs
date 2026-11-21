@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::latency_lease::{
     rsf_core_latency_pacing_owner, rsf_native_latency_claim, rsf_native_latency_has_claim,
+    rsf_native_latency_release_claim,
 };
 use crate::native_cpu::rsf_native_cpu_release_session;
 use crate::render_abi::{RSF_PACING_NONE, RSF_PACING_REFLEX, RSF_PACING_XELL};
@@ -84,6 +85,9 @@ struct Host {
     initialized: bool,
     closing: bool,
     owner: u32,
+    // The last provider to acquire the process lease. A refused selection may
+    // clear the current owner while leaving that provider's lease outstanding.
+    claimed_owner: u32,
     requested: u32,
     limit: u32,
     facts_session: u64,
@@ -93,6 +97,7 @@ static HOST: Mutex<Host> = Mutex::new(Host {
     initialized: false,
     closing: false,
     owner: RSF_PACING_NONE,
+    claimed_owner: RSF_PACING_NONE,
     requested: 0,
     limit: 0,
     facts_session: 0,
@@ -179,8 +184,12 @@ impl Host {
             };
             owner =
                 rsf_core_latency_pacing_owner(required, u32::from(reflex && amd == 0), amd, AMD);
-            if owner != RSF_PACING_NONE && rsf_native_latency_claim(CLIENT) == 0 {
-                owner = RSF_PACING_NONE;
+            if owner != RSF_PACING_NONE {
+                if rsf_native_latency_claim(CLIENT) != 0 {
+                    self.claimed_owner = owner;
+                } else {
+                    owner = RSF_PACING_NONE;
+                }
             }
         }
         self.owner = owner;
@@ -193,6 +202,18 @@ impl Host {
         {
             rsf_core_latencyvk_token_mark(session, frame, kind, &sdk.tokens);
         }
+    }
+}
+
+// Called after AMD calls drain, with no AMD lock held and new AMD admission closed.
+pub(crate) fn amd_device_retired() {
+    let mut host = HOST.lock().unwrap();
+    if host.owner == AMD {
+        host.owner = RSF_PACING_NONE;
+    }
+    if host.claimed_owner == AMD && rsf_core_latencyvk_token_pacing() == 0 {
+        rsf_native_latency_release_claim(CLIENT);
+        host.claimed_owner = RSF_PACING_NONE;
     }
 }
 
@@ -465,6 +486,8 @@ unsafe extern "C" fn fact(user: *mut c_void, event: *const rsf_game_cpu_event) {
         rsf_core_latencyvk_token_begin(session, id, &sdk.tokens);
     } else if pacing
         && owner != RSF_PACING_NONE
+        && host.owner == owner
+        && rsf_native_latency_has_claim(CLIENT) != 0
         && rsf_core_latencyvk_token_pace_begin(session, id, &sdk.tokens) != 0
     {
         drop(host);
@@ -681,6 +704,9 @@ extern "C" fn rsf_core_latencyvk_shutdown(platform: &Platform) -> i32 {
     drop(amd);
     presentation.commit = true;
     drop(presentation);
-    HOST.lock().unwrap().closing = false;
+    let mut host = HOST.lock().unwrap();
+    rsf_native_latency_release_claim(CLIENT);
+    host.claimed_owner = RSF_PACING_NONE;
+    host.closing = false;
     OK
 }

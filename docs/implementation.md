@@ -4,6 +4,16 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The Vulkan latency host now releases the process pacing claim. An
+AMD device retirement releases it after outstanding calls drain if
+AMD still holds it and no Streamline pacing call is active. A live
+XeLL or Reflex claim survives AMD retirement. The host also checks
+the claim again before starting Streamline pacing and releases it
+after successful full shutdown. The CPU fixture covers AMD retirement
+with XeLL holding the claim. Source review traced both teardown
+paths and their lock order. The updated fixture and device behavior
+remain unverified.
+
 The Rust Anti-Lag owner supplies the active Direct3D API and the
 generated-frame attachment decision to the AMD leaves. The native
 driver no longer keeps a second API value. If a session reset cannot

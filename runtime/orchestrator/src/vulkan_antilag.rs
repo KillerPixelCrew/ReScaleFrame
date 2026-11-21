@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 use crate::latency_antilag::{AMD_VENDOR_ID, fps_from_interval};
-use crate::latency_lease::rsf_native_latency_release_claim;
 use crate::sr_session::has_capacity;
 use crate::vulkan_latency_abi::{
     RSF_LATENCYVK_DEVICE_ABI_VERSION, rsf_amd_vk_device_info as DeviceInfo,
@@ -418,7 +417,7 @@ fn bind(handle: *mut c_void, update: rsf_vk_function, invoke: Invoke) -> i32 {
 pub(crate) extern "C" fn rsf_core_amd_vk_status() -> Status {
     let state = STATE.lock().unwrap();
     Status {
-        available: u32::from(state.device.is_some()),
+        available: u32::from(state.device.is_some() && state.phase != Phase::Closing),
         enabled: u32::from(state.enabled()),
         input_updates: state.input_updates,
         present_updates: state.present_updates,
@@ -493,7 +492,7 @@ pub(crate) extern "C" fn rsf_core_amd_vk_frame(session: u64, frame: u64, stage: 
     }
 }
 
-fn close() {
+fn close(retire_device: bool) {
     let device = {
         let state = STATE.lock().unwrap();
         debug_assert!(state.phase == Phase::Closing && state.calls == 0);
@@ -502,8 +501,10 @@ fn close() {
     if let Some(device) = device {
         device.call(MODE_ONLY, 0, false, 0);
     }
+    if retire_device {
+        crate::vulkan_latency::amd_device_retired();
+    }
     let mut state = STATE.lock().unwrap();
-    rsf_native_latency_release_claim(2);
     *state = State::new();
     DRAINED.notify_all();
 }
@@ -521,7 +522,7 @@ pub(crate) extern "C" fn rsf_core_amd_vk_shutdown_begin() -> i32 {
 #[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_core_amd_vk_shutdown_end(committed: u32) {
     if committed != 0 {
-        close();
+        close(false);
     } else {
         STATE.lock().unwrap().phase = Phase::Open;
         DRAINED.notify_all();
@@ -545,5 +546,5 @@ extern "C" fn rsf_core_amd_vk_device_destroyed(device: *mut c_void) {
     let mut state = DRAINED.wait_while(state, |state| state.calls != 0).unwrap();
     state.phase = Phase::Closing;
     drop(state);
-    close();
+    close(true);
 }

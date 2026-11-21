@@ -23,6 +23,7 @@ int failures{};
 const auto instance=reinterpret_cast<VkInstance>(uintptr_t(1));
 const auto physical=reinterpret_cast<VkPhysicalDevice>(uintptr_t(2));
 const auto device=reinterpret_cast<VkDevice>(uintptr_t(3));
+auto* const xell = reinterpret_cast<rsf_fgvk*>(uintptr_t(4));
 uint32_t vendor=0x1002;bool extension_available=true,feature_available=true,function_available=true;
 struct Mark {uint64_t frame;uint32_t mode,fps,stage;};
 std::vector<Mark> marks;
@@ -70,9 +71,14 @@ size_t count(uint32_t stage,uint64_t source) {
     std::lock_guard lock(records);size_t result=0;for (const auto& mark:marks) if (mark.stage==stage && mark.frame==source) ++result;return result;
 }
 }
-// No XeLL context is present in this contract. Its separate contract covers owner precedence.
-extern "C" rsf_backend_result rsf_fgvk_backend(const rsf_fgvk*,uint32_t*) {return RSF_BACKEND_ERROR_NOT_READY;}
-extern "C" rsf_backend_result rsf_fgvk_latency_options(rsf_fgvk*,uint32_t,uint32_t) {return RSF_BACKEND_ERROR_NOT_READY;}
+extern "C" rsf_backend_result rsf_fgvk_backend(const rsf_fgvk* fg, uint32_t* backend) {
+    if (fg != xell) return RSF_BACKEND_ERROR_NOT_READY;
+    *backend = RSF_FG_BACKEND_XESS;
+    return RSF_BACKEND_OK;
+}
+extern "C" rsf_backend_result rsf_fgvk_latency_options(rsf_fgvk* fg, uint32_t, uint32_t) {
+    return fg == xell ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_NOT_READY;
+}
 extern "C" rsf_backend_result rsf_fgvk_latency_sleep(rsf_fgvk*,uint64_t) {return RSF_BACKEND_ERROR_NOT_READY;}
 extern "C" rsf_backend_result rsf_fgvk_latency_marker(rsf_fgvk*,uint64_t,uint32_t) {return RSF_BACKEND_ERROR_NOT_READY;}
 extern "C" rsf_backend_result rsf_fgvk_latency_get_status(rsf_fgvk*,rsf_fgvk_latency_status*) {return RSF_BACKEND_ERROR_NOT_READY;}
@@ -169,7 +175,16 @@ int main() {
     final_sleep.join();destroy.join();
     CHECK(destroyed.load() && !rsf_native_latency_has_claim(2));
     CHECK(rsf_latencyvk_options(1,0)==RSF_BACKEND_ERROR_NOT_SUPPORTED);
-    rsf_latencyvk_shutdown();rsf_native_cpu_release();
+    CHECK(rsf_latencyvk_shutdown() == RSF_BACKEND_OK);
+    CHECK(rsf_latencyvk_device_created(&created) == RSF_BACKEND_OK);
+    CHECK(rsf_latencyvk_options(1, 10000) == RSF_BACKEND_OK && rsf_native_latency_has_claim(2));
+    CHECK(rsf_latencyvk_presentation(xell) == RSF_BACKEND_OK);
+    CHECK(rsf_latencyvk_get_status(&status) == RSF_BACKEND_OK && status.owner == RSF_PACING_XELL);
+    rsf_latencyvk_device_destroyed(device);
+    CHECK(rsf_native_latency_has_claim(2) && !rsf_native_latency_claim(1));
+    CHECK(rsf_latencyvk_get_status(&status) == RSF_BACKEND_OK && status.owner == RSF_PACING_XELL);
+    CHECK(rsf_latencyvk_shutdown() == RSF_BACKEND_OK && !rsf_native_latency_has_claim(2));
+    rsf_native_cpu_release();
     std::printf("%d failures; AMD Vulkan requirements, same-index pairing, no duplicate sleep, skip/Off and unlocked Present verified with stubs\n",failures);
     return failures ? 1 : 0;
 }
