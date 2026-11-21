@@ -4,6 +4,15 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The Streamline Vulkan bridge owns its interposer lifecycle in Rust. It
+holds the verified file through admission and keeps the plugin paths,
+feature selection, shutdown result and Vulkan resolvers for their
+respective lifetimes. The Runtime and standalone Windows GNU bridge link
+the same lifecycle crate. Its Windows bindings are gated. Overlapping
+start and shutdown return busy, and unload can be retried when the
+lifecycle is idle. Source comparison matched all 45 C export signatures. The
+synthetic fixtures, both build paths and SDK runs remain unverified.
+
 The D3D12 render host refuses slot reuse after device removal even when
 the existing context matches the requested extent. Its wait, capture and
 slot selection share the removal check. The D3D12 capture drain also

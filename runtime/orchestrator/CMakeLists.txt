@@ -139,7 +139,9 @@ if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_STREAMLINE_I
     target_sources(rsf_native_vulkan PRIVATE ../vulkan/streamline/bridge.cpp)
     target_compile_definitions(rsf_native_vulkan PRIVATE RSF_HAVE_STREAMLINE_VK=1 RSF_STREAMLINE_VULKAN_STATIC=1 "VULKANSTORY_CORRECTED_STREAMLINE_SHA256=${rsf_sl_bytes}")
     target_include_directories(rsf_native_vulkan SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}" "${RSF_STREAMLINE_INCLUDE}")
-    target_link_libraries(rsf_native_vulkan PRIVATE wintrust advapi32)
+    # The interposer lifecycle is Rust; the standalone bridge links the same crate.
+    rsf_add_rust_static(rsf_streamline_vk_rust rsf_rust_streamline_vk rsf-streamline-vk rsf_streamline_vk)
+    target_link_libraries(rsf_native_vulkan PRIVATE rsf_streamline_vk_rust wintrust advapi32)
 endif()
 add_library(ReScaleFrame::NativeVulkan ALIAS rsf_native_vulkan)
 find_path(RSF_FRAME_DUMP_VULKAN_INCLUDE vulkan/vulkan.h

@@ -95,8 +95,9 @@ Graphics calls. Windows link verification still needs to cover binaries
 that consume more than one Rust
 archive. Anomaly links its adapter archive and the shared Graphics
 owner. The Runtime and combined carriers also link the FSR4 compatibility
-archive. The standalone FSR4 Vulkan bridge uses the Windows GNU
-target.
+archive. With the corrected Streamline runtime present, the Runtime
+also links the Streamline Vulkan lifecycle archive. The standalone
+FSR4 and Streamline Vulkan bridges use the Windows GNU target.
 
 Build and fixture results below apply to their recorded candidates.
 The merged source-only cutovers still need a Windows build and

@@ -1,5 +1,8 @@
 // Streamline's Vulkan entry points must come from sl.interposer.dll.  Keep its
 // C++ ABI and frame tokens on this side of the managed/native boundary.
+// The Rust lifecycle owner (runtime/vulkan/streamline/lifecycle) admits, loads,
+// initializes, shuts down and unloads the interposer. This file keeps the export
+// names, the typed SDK calls and the verified-file leaf.
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -8,10 +11,8 @@
 #include <wintrust.h>
 #include <softpub.h>
 #include <wincrypt.h>
-#include <string>
 #include <cstdint>
 #include <atomic>
-#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <vulkan/vulkan.h>
@@ -26,8 +27,30 @@
 #define RSF_SL_VK_EXPORT __declspec(dllexport)
 #endif
 
+// Native leaves called by the Rust lifecycle owner, in its Platform order.
+struct RsfSlLifecyclePlatform {
+    void* (*openVerified)(const wchar_t* path);
+    int32_t (*resolve)(void* module);
+    int32_t (*init)(uint32_t features, const char* projectId, const wchar_t** pluginPaths);
+    uint32_t (*shutdown)(int32_t* result);
+    void (*clear)(uint32_t presentation);
+};
+static_assert(sizeof(RsfSlLifecyclePlatform) == 5 * sizeof(void*));
+
+extern "C" {
+int32_t rsf_slvk_life_initialize(const RsfSlLifecyclePlatform*, const wchar_t*, const char*,
+    uint32_t, uint32_t, uint32_t);
+int32_t rsf_slvk_life_shutdown(const RsfSlLifecyclePlatform*);
+void rsf_slvk_life_unload(const RsfSlLifecyclePlatform*);
+uint32_t rsf_slvk_life_initialized();
+void* rsf_slvk_life_module();
+void* rsf_slvk_life_instance_proc();
+void* rsf_slvk_life_device_proc();
+void* rsf_slvk_life_interposer_symbol(const char*);
+void* rsf_slvk_life_common_symbol(const char*);
+}
+
 namespace {
-HMODULE module{};
 PFun_slInit* init{};
 PFun_slShutdown* shutdown{};
 PFun_slGetFeatureFunction* featureFunction{};
@@ -36,8 +59,6 @@ PFun_slIsFeatureSupported* isFeatureSupported{};
 PFun_slSetTagForFrame* setTagForFrame{};
 PFun_slSetConstants* setConstants{};
 PFun_slFreeResources* freeResources{};
-PFN_vkGetInstanceProcAddr instanceProc{};
-PFN_vkGetDeviceProcAddr deviceProc{};
 PFun_slReflexSetOptions* reflexOptions{};
 PFun_slReflexSleep* reflexSleep{};
 PFun_slReflexGetState* reflexState{};
@@ -46,11 +67,6 @@ PFun_slPCLGetState* pclState{};
 PFun_slPCLSetOptions* pclOptions{};
 PFun_slDLSSGSetOptions* fgOptions{};
 PFun_slDLSSGGetState* fgState{};
-// True between a successful slInit and the matching slShutdown. The module can
-// stay loaded after shutdown, so it does not mean the SDK is initialized.
-bool initialized{};
-bool shutdownAttempted{};
-int shutdownResult{};
 bool fgConfigured{};
 bool fgResourcesMayExist{};
 bool fgEnabled{};
@@ -61,21 +77,30 @@ std::atomic<int> lastPresentError{0};
 std::atomic<uint64_t> workerTimeoutEpoch{0};
 bool verboseLog{};
 const sl::ViewportHandle viewport(0);
-std::wstring pluginDirectory;
-std::string projectIdentity;
-const wchar_t* pluginPath{};
 
-/// @brief Resolves a function from the currently loaded interposer without acquiring another module reference.
-template<class T> T proc(const char* name) { return reinterpret_cast<T>(GetProcAddress(module, name)); }
-template<class T> T commonProc(const char* name) {
-    std::wstring path = pluginDirectory + L"\\sl.common.dll";
-    std::replace(path.begin(), path.end(), L'/', L'\\');
-    HMODULE common = GetModuleHandleW(path.c_str());
-    return common ? reinterpret_cast<T>(GetProcAddress(common, name)) : nullptr;
+/// @brief Resolves a function from the supplied interposer without acquiring another module reference.
+template<class T> T entry(HMODULE library, const char* name) { return reinterpret_cast<T>(GetProcAddress(library, name)); }
+/// @brief Resolves an export of the plugin directory's loaded sl.common.dll, or null.
+template<class T> T commonProc(const char* name) { return reinterpret_cast<T>(rsf_slvk_life_common_symbol(name)); }
+bool sdkInitialized() { return rsf_slvk_life_initialized() != 0; }
+/// @brief Interposer Vulkan resolvers. Rust keeps them after slShutdown until explicit unload.
+PFN_vkGetInstanceProcAddr instanceProc() {
+    return reinterpret_cast<PFN_vkGetInstanceProcAddr>(rsf_slvk_life_instance_proc());
+}
+PFN_vkGetDeviceProcAddr deviceProc() {
+    return reinterpret_cast<PFN_vkGetDeviceProcAddr>(rsf_slvk_life_device_proc());
+}
+template<class T> T instanceCall(VkInstance instance, const char* name) {
+    const auto resolve = instanceProc();
+    return resolve ? reinterpret_cast<T>(resolve(instance, name)) : nullptr;
+}
+template<class T> T deviceCall(VkDevice device, const char* name) {
+    const auto resolve = deviceProc();
+    return resolve ? reinterpret_cast<T>(resolve(device, name)) : nullptr;
 }
 
-/// @brief Clears the SDK entry points and frame token that slShutdown or a failed slInit invalidates.
-/// @details The Vulkan dispatch entry points stay: Vulkan objects may still use interposer code until the module is unloaded.
+/// @brief Clears the SDK entry points and frame token that slShutdown, a failed slInit or unload invalidates.
+/// @details The Vulkan dispatch entry points are owned by the Rust lifecycle and stay until the module is unloaded.
 void clearSdkFunctions() {
     init = nullptr; shutdown = nullptr; featureFunction = nullptr; newFrameToken = nullptr;
     isFeatureSupported = nullptr; setTagForFrame = nullptr; setConstants = nullptr; freeResources = nullptr;
@@ -90,9 +115,9 @@ bool loadFeature(sl::Feature feature, const char* name, void*& target) {
 }
 
 /// @brief Opens the interposer without write/delete sharing and verifies the build-pinned SHA-256 through that handle.
-/// @details The returned handle keeps the verified file from being written, renamed or deleted; the caller holds it across LoadLibraryExW and closes it afterwards. WinTrust and cryptographic handles are released before returning.
+/// @details The returned handle keeps the verified file from being written, renamed or deleted; the Rust lifecycle holds it across LoadLibraryExW and closes it afterwards. WinTrust and cryptographic handles are released before returning.
 /// @return The open verified file handle, or INVALID_HANDLE_VALUE when opening or verification fails.
-HANDLE openVerifiedRelease(const wchar_t* path) {
+HANDLE openVerifiedRelease(const wchar_t* path) noexcept {
     HANDLE input = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ,
         nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
     if (input == INVALID_HANDLE_VALUE) return INVALID_HANDLE_VALUE;
@@ -217,66 +242,41 @@ void onStreamlineMessage(sl::LogType type, const char* message) {
     std::fprintf(stderr, "[Streamline %s] %s\n",
         type == sl::LogType::eError ? "error" : type == sl::LogType::eWarn ? "warning" : "info", message);
 }
+
+/// @brief Resolves the typed SDK exports from the module admitted by the Rust lifecycle.
+/// @return Zero when every required export resolves.
+int32_t lifecycleResolve(void* handle) noexcept {
+    const auto library = static_cast<HMODULE>(handle);
+    init = entry<PFun_slInit*>(library, "slInit");
+    shutdown = entry<PFun_slShutdown*>(library, "slShutdown");
+    featureFunction = entry<PFun_slGetFeatureFunction*>(library, "slGetFeatureFunction");
+    newFrameToken = entry<PFun_slGetNewFrameToken*>(library, "slGetNewFrameToken");
+    isFeatureSupported = entry<PFun_slIsFeatureSupported*>(library, "slIsFeatureSupported");
+    setTagForFrame = entry<PFun_slSetTagForFrame*>(library, "slSetTagForFrame");
+    setConstants = entry<PFun_slSetConstants*>(library, "slSetConstants");
+    freeResources = entry<PFun_slFreeResources*>(library, "slFreeResources");
+    return init && shutdown && featureFunction && newFrameToken && isFeatureSupported && setTagForFrame &&
+        setConstants && freeResources ? 0 : -1;
 }
 
-extern "C" {
-/// @brief Loads the verified interposer and initializes the selected PCL/Reflex/DLSS feature set.
-/// @details Global bridge state is owned by one serialized host session. Plugin path and project identity are copied into persistent strings. Repeated initialization while initialized returns zero. After VulkanStorySlShutdown the interposer stays loaded, so a later call re-runs slInit on that module, which must come from the same directory.
-/// @param directory Borrowed terminated directory path containing the private interposer/plugins.
-/// @param projectId Borrowed terminated project identity copied for SDK use.
-/// @param loadReflex Requests Reflex plus PCL when DLSS-G is not requested.
-/// @param loadDlssG Requests DLSS-G, Reflex and PCL.
-/// @param loadDlssSr Adds DLSS SR to the shared session.
-/// @return Zero on successful/already-initialized state, a negative local failure or native Streamline result.
-RSF_SL_VK_EXPORT int VulkanStorySlInitializeFeatures(const wchar_t* directory, const char* projectId,
-    uint32_t loadReflex, uint32_t loadDlssG, uint32_t loadDlssSr) {
-    if (shutdownAttempted && shutdownResult != 0) return shutdownResult;
-    if (initialized) return 0;
-    if (!directory || !projectId) return -1;
-    // A module kept loaded after shutdown may still back Vulkan dispatch tables;
-    // only a module loaded by this call is released on failure.
-    const bool loadedHere = !module;
-    if (loadedHere) {
-        wchar_t path[MAX_PATH]{};
-        if (swprintf(path, MAX_PATH, L"%ls\\sl.interposer.dll", directory) < 0) return -2;
-        // The verified handle denies writes, renames and deletes until the loader
-        // has mapped the same file.
-        HANDLE verified = openVerifiedRelease(path);
-        if (verified == INVALID_HANDLE_VALUE) return -5;
-        module = LoadLibraryExW(path, nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
-        CloseHandle(verified);
-        if (!module) return -3;
-    } else if (pluginDirectory != directory) {
-        return -6;
-    }
-    init = proc<PFun_slInit*>("slInit");
-    shutdown = proc<PFun_slShutdown*>("slShutdown");
-    featureFunction = proc<PFun_slGetFeatureFunction*>("slGetFeatureFunction");
-    newFrameToken = proc<PFun_slGetNewFrameToken*>("slGetNewFrameToken");
-    isFeatureSupported = proc<PFun_slIsFeatureSupported*>("slIsFeatureSupported");
-    setTagForFrame = proc<PFun_slSetTagForFrame*>("slSetTagForFrame");
-    setConstants = proc<PFun_slSetConstants*>("slSetConstants");
-    freeResources = proc<PFun_slFreeResources*>("slFreeResources");
-    instanceProc = proc<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
-    deviceProc = proc<PFN_vkGetDeviceProcAddr>("vkGetDeviceProcAddr");
-    if (!init || !shutdown || !featureFunction || !newFrameToken || !isFeatureSupported || !setTagForFrame ||
-        !setConstants || !freeResources || !instanceProc || !deviceProc) {
-        clearSdkFunctions();
-        if (loadedHere) { FreeLibrary(module); module = nullptr; }
-        return -4;
-    }
-    pluginDirectory = directory;
-    projectIdentity = projectId;
-    pluginPath = pluginDirectory.c_str();
-    sl::Feature features[4] = {sl::kFeaturePCL};
-    uint32_t featureCount = 1;
-    if (loadReflex || loadDlssG) features[featureCount++] = sl::kFeatureReflex;
-    if (loadDlssG) features[featureCount++] = sl::kFeatureDLSS_G;
-    if (loadDlssSr) features[featureCount++] = sl::kFeatureDLSS;
+// Feature bits chosen by the Rust lifecycle, loaded in this order.
+constexpr uint32_t featurePcl = 1u, featureReflex = 2u, featureDlssG = 4u, featureDlss = 8u;
+
+/// @brief Calls slInit for the Vulkan custom engine with manual hooking and frame-based tagging.
+/// @details The project identity and plugin path array are owned by the Rust lifecycle until the next initialization.
+/// @return The native Streamline result.
+int32_t lifecycleInit(uint32_t mask, const char* projectId, const wchar_t** pluginPaths) noexcept try {
+    if (!init) return -4;
+    sl::Feature features[4]{};
+    uint32_t featureCount = 0;
+    if (mask & featurePcl) features[featureCount++] = sl::kFeaturePCL;
+    if (mask & featureReflex) features[featureCount++] = sl::kFeatureReflex;
+    if (mask & featureDlssG) features[featureCount++] = sl::kFeatureDLSS_G;
+    if (mask & featureDlss) features[featureCount++] = sl::kFeatureDLSS;
     sl::Preferences preferences{};
     preferences.featuresToLoad = features;
     preferences.numFeaturesToLoad = featureCount;
-    preferences.projectId = projectIdentity.c_str();
+    preferences.projectId = projectId;
     preferences.engine = sl::EngineType::eCustom;
     preferences.engineVersion = "0.3";
     preferences.renderAPI = sl::RenderAPI::eVulkan;
@@ -285,47 +285,65 @@ RSF_SL_VK_EXPORT int VulkanStorySlInitializeFeatures(const wchar_t* directory, c
     preferences.logMessageCallback = onStreamlineMessage;
     preferences.flags = sl::PreferenceFlags::eUseManualHooking |
         sl::PreferenceFlags::eUseFrameBasedResourceTagging;
-    preferences.pathsToPlugins = &pluginPath;
+    preferences.pathsToPlugins = pluginPaths;
     preferences.numPathsToPlugins = 1;
-    const auto result = init(preferences, sl::kSDKVersion);
-    if (result != sl::Result::eOk) {
-        clearSdkFunctions();
-        if (loadedHere) { FreeLibrary(module); module = nullptr; }
-        return static_cast<int>(result);
-    }
-    initialized = true;
-    shutdownAttempted = false;
-    shutdownResult = 0;
-    return 0;
+    return static_cast<int32_t>(init(preferences, sl::kSDKVersion));
+} catch (...) {
+    return static_cast<int32_t>(sl::Result::eErrorExceptionHandler);
 }
-RSF_SL_VK_EXPORT int VulkanStorySlInitialize(const wchar_t* directory, const char* projectId,
-    uint32_t loadReflex, uint32_t loadDlssG) {
-    return VulkanStorySlInitializeFeatures(directory, projectId, loadReflex, loadDlssG, 0);
-}
-RSF_SL_VK_EXPORT void* VulkanStorySlModule() { return initialized ? module : nullptr; }
-RSF_SL_VK_EXPORT uint64_t VulkanStorySlWorkerTimeoutEpoch() { return workerTimeoutEpoch.load(std::memory_order_relaxed); }
 
-/// @brief Shuts down Streamline and clears SDK function pointers/state while retaining the interposer module.
-/// @details Call after provider work is retired. Vulkan dispatch pointers can still reference interposer code until Vulkan devices/instances are destroyed. A later VulkanStorySlInitialize re-runs slInit.
-RSF_SL_VK_EXPORT int VulkanStorySlShutdownChecked() {
-    if (!module) return 0;
-    if (shutdownAttempted) return shutdownResult;
-    // An SDK failure may follow partial plugin destruction. Spend the attempt
-    // before calling it; neither feature entry points nor retries remain valid.
-    shutdownAttempted = true;
-    if (initialized && shutdown) {
-        shutdownResult = static_cast<int>(sl::Result::eErrorExceptionHandler);
-        shutdownResult = static_cast<int>(shutdown());
+/// @brief Calls slShutdown when it was resolved.
+/// @return Nonzero when the SDK was called; result receives its result or the exception-handler error.
+uint32_t lifecycleShutdown(int32_t* result) noexcept {
+    if (!shutdown) return 0;
+    try {
+        *result = static_cast<int32_t>(shutdown());
+    } catch (...) {
+        *result = static_cast<int32_t>(sl::Result::eErrorExceptionHandler);
     }
-    initialized = false;
-    // Only the Vulkan dispatch entry points remain valid after slShutdown.
+    return 1;
+}
+
+/// @brief Clears SDK entry points, and after slShutdown also the frame-generation cache and pending present error.
+void lifecycleClear(uint32_t presentation) noexcept {
     clearSdkFunctions();
+    if (!presentation) return;
     fgConfigured = false;
     fgResourcesMayExist = false;
     fgEnabled = false;
     currentSwapchain = VK_NULL_HANDLE;
     lastPresentError.store(0, std::memory_order_relaxed);
-    return shutdownResult;
+}
+
+constexpr RsfSlLifecyclePlatform lifecycle{
+    openVerifiedRelease, lifecycleResolve, lifecycleInit, lifecycleShutdown, lifecycleClear,
+};
+}
+
+extern "C" {
+/// @brief Loads the verified interposer and initializes the selected PCL/Reflex/DLSS feature set.
+/// @details The Rust lifecycle owns the module, the copied plugin path and project identity, and the sticky shutdown result. Repeated initialization while initialized returns zero. After VulkanStorySlShutdown the interposer stays loaded, so a later call re-runs slInit on that module, which must come from the same directory.
+/// @param directory Borrowed terminated directory path containing the private interposer/plugins.
+/// @param projectId Borrowed terminated project identity copied for SDK use.
+/// @param loadReflex Requests Reflex plus PCL when DLSS-G is not requested.
+/// @param loadDlssG Requests DLSS-G, Reflex and PCL.
+/// @param loadDlssSr Adds DLSS SR to the shared session.
+/// @return Zero on successful/already-initialized state, a negative local failure or native Streamline result.
+RSF_SL_VK_EXPORT int VulkanStorySlInitializeFeatures(const wchar_t* directory, const char* projectId,
+    uint32_t loadReflex, uint32_t loadDlssG, uint32_t loadDlssSr) {
+    return rsf_slvk_life_initialize(&lifecycle, directory, projectId, loadReflex, loadDlssG, loadDlssSr);
+}
+RSF_SL_VK_EXPORT int VulkanStorySlInitialize(const wchar_t* directory, const char* projectId,
+    uint32_t loadReflex, uint32_t loadDlssG) {
+    return VulkanStorySlInitializeFeatures(directory, projectId, loadReflex, loadDlssG, 0);
+}
+RSF_SL_VK_EXPORT void* VulkanStorySlModule() { return rsf_slvk_life_module(); }
+RSF_SL_VK_EXPORT uint64_t VulkanStorySlWorkerTimeoutEpoch() { return workerTimeoutEpoch.load(std::memory_order_relaxed); }
+
+/// @brief Shuts down Streamline and clears SDK function pointers/state while retaining the interposer module.
+/// @details Call after provider work is retired. Vulkan dispatch pointers can still reference interposer code until Vulkan devices/instances are destroyed. The first result is sticky; a nonzero result refuses later initialization and unload. After success, a later VulkanStorySlInitialize re-runs slInit.
+RSF_SL_VK_EXPORT int VulkanStorySlShutdownChecked() {
+    return rsf_slvk_life_shutdown(&lifecycle);
 }
 
 /// @brief Retains the original void ABI for hosts predating checked shutdown.
@@ -336,14 +354,9 @@ RSF_SL_VK_EXPORT void VulkanStorySlShutdown() {
 // Vulkan dispatch pointers can still point into the interposer after slShutdown.
 // Release its code only after the host has destroyed Vulkan and its API tables.
 /// @brief Unloads interposer code and clears Vulkan dispatch pointers.
-/// @details Call only after shutdown and after every Vulkan object/API table referencing this module is destroyed.
+/// @details Call only after shutdown and after every Vulkan object/API table referencing this module is destroyed. Refused after a failed shutdown.
 RSF_SL_VK_EXPORT void VulkanStorySlUnload() {
-    if (shutdownAttempted && shutdownResult != 0) return;
-    if (module) FreeLibrary(module);
-    module = nullptr;
-    initialized = false;
-    instanceProc = nullptr;
-    deviceProc = nullptr;
+    rsf_slvk_life_unload(&lifecycle);
 }
 
 /// @brief Returns an interposer instance/global Vulkan function address.
@@ -351,35 +364,36 @@ RSF_SL_VK_EXPORT void VulkanStorySlUnload() {
 /// @return Resolved address, or null when the module/lookup is unavailable.
 RSF_SL_VK_EXPORT PFN_vkVoidFunction VulkanStorySlGetInstanceProcAddr(
     VkInstance instance, const char* name) {
-    return module && instanceProc ? instanceProc(instance, name) : nullptr;
+    const auto resolve = instanceProc();
+    return resolve ? resolve(instance, name) : nullptr;
 }
 /// @brief Returns an interposer device Vulkan function address.
 /// @details Returned pointers borrow the loaded module lifetime.
 /// @return Resolved address, or null when the module/lookup is unavailable.
 RSF_SL_VK_EXPORT PFN_vkVoidFunction VulkanStorySlGetDeviceProcAddr(
     VkDevice device, const char* name) {
-    return module && deviceProc ? deviceProc(device, name) : nullptr;
+    const auto resolve = deviceProc();
+    return resolve ? resolve(device, name) : nullptr;
 }
 
 /// @brief Forwards instance creation through interposer-owned Vulkan dispatch.
 /// @return The Vulkan result, or VK_ERROR_INITIALIZATION_FAILED when dispatch is unavailable.
 RSF_SL_VK_EXPORT VkResult VulkanStorySlCreateInstance(const VkInstanceCreateInfo* info, VkInstance* instance) {
-    auto call = module ? reinterpret_cast<PFN_vkCreateInstance>(instanceProc(nullptr, "vkCreateInstance")) : nullptr;
+    auto call = instanceCall<PFN_vkCreateInstance>(nullptr, "vkCreateInstance");
     return call ? call(info, nullptr, instance) : VK_ERROR_INITIALIZATION_FAILED;
 }
 /// @brief Enumerates physical devices through the interposer using Vulkan count/query semantics.
 /// @return The Vulkan enumeration result or initialization failure.
 RSF_SL_VK_EXPORT VkResult VulkanStorySlEnumeratePhysicalDevices(VkInstance instance,
     uint32_t* count, VkPhysicalDevice* devices) {
-    auto call = module ? reinterpret_cast<PFN_vkEnumeratePhysicalDevices>(
-        instanceProc(instance, "vkEnumeratePhysicalDevices")) : nullptr;
+    auto call = instanceCall<PFN_vkEnumeratePhysicalDevices>(instance, "vkEnumeratePhysicalDevices");
     return call ? call(instance, count, devices) : VK_ERROR_INITIALIZATION_FAILED;
 }
 /// @brief Creates a logical device through the interposer for the selected physical device.
 /// @return The Vulkan creation result or initialization failure.
 RSF_SL_VK_EXPORT VkResult VulkanStorySlCreateDevice(VkInstance instance, VkPhysicalDevice physical,
     const VkDeviceCreateInfo* info, VkDevice* device) {
-    auto call = module ? reinterpret_cast<PFN_vkCreateDevice>(instanceProc(instance, "vkCreateDevice")) : nullptr;
+    auto call = instanceCall<PFN_vkCreateDevice>(instance, "vkCreateDevice");
     return call ? call(physical, info, nullptr, device) : VK_ERROR_INITIALIZATION_FAILED;
 }
 /// @brief Creates a Win32 Vulkan surface through interposer dispatch.
@@ -387,13 +401,13 @@ RSF_SL_VK_EXPORT VkResult VulkanStorySlCreateDevice(VkInstance instance, VkPhysi
 /// @return The Vulkan creation result or initialization failure.
 RSF_SL_VK_EXPORT VkResult VulkanStorySlCreateWin32Surface(VkInstance instance,
     const VkWin32SurfaceCreateInfoKHR* info, VkSurfaceKHR* surface) {
-    auto call = module ? reinterpret_cast<PFN_vkCreateWin32SurfaceKHR>(instanceProc(instance, "vkCreateWin32SurfaceKHR")) : nullptr;
+    auto call = instanceCall<PFN_vkCreateWin32SurfaceKHR>(instance, "vkCreateWin32SurfaceKHR");
     return call ? call(instance, info, nullptr, surface) : VK_ERROR_INITIALIZATION_FAILED;
 }
 /// @brief Destroys a caller-owned surface through its interposer dispatch when available.
 /// @details The caller must first retire swapchains referring to this surface.
 RSF_SL_VK_EXPORT void VulkanStorySlDestroySurface(VkInstance instance, VkSurfaceKHR surface) {
-    auto call = module ? reinterpret_cast<PFN_vkDestroySurfaceKHR>(instanceProc(instance, "vkDestroySurfaceKHR")) : nullptr;
+    auto call = instanceCall<PFN_vkDestroySurfaceKHR>(instance, "vkDestroySurfaceKHR");
     if (call) call(instance, surface, nullptr);
 }
 /// @brief Creates an interposer swapchain and records it as the current presentation owner.
@@ -401,7 +415,7 @@ RSF_SL_VK_EXPORT void VulkanStorySlDestroySurface(VkInstance instance, VkSurface
 /// @return The Vulkan creation result or initialization failure.
 RSF_SL_VK_EXPORT VkResult VulkanStorySlCreateSwapchain(VkDevice device,
     const VkSwapchainCreateInfoKHR* info, VkSwapchainKHR* swapchain) {
-    auto call = module ? reinterpret_cast<PFN_vkCreateSwapchainKHR>(deviceProc(device, "vkCreateSwapchainKHR")) : nullptr;
+    auto call = deviceCall<PFN_vkCreateSwapchainKHR>(device, "vkCreateSwapchainKHR");
     VkResult result = call ? call(device, info, nullptr, swapchain) : VK_ERROR_INITIALIZATION_FAILED;
     if (result == VK_SUCCESS && swapchain) {
         currentSwapchain = *swapchain;
@@ -412,7 +426,7 @@ RSF_SL_VK_EXPORT VkResult VulkanStorySlCreateSwapchain(VkDevice device,
 /// @brief Destroys the supplied interposer swapchain after caller-provided retirement.
 /// @details Destroying an old retired chain does not clear the live successor's cached state.
 RSF_SL_VK_EXPORT void VulkanStorySlDestroySwapchain(VkDevice device, VkSwapchainKHR swapchain) {
-    auto call = module ? reinterpret_cast<PFN_vkDestroySwapchainKHR>(deviceProc(device, "vkDestroySwapchainKHR")) : nullptr;
+    auto call = deviceCall<PFN_vkDestroySwapchainKHR>(device, "vkDestroySwapchainKHR");
     if (!call) return;
     call(device, swapchain, nullptr);
     // Deferred retirement of an old chain must not invalidate the live
@@ -427,7 +441,7 @@ RSF_SL_VK_EXPORT void VulkanStorySlDestroySwapchain(VkDevice device, VkSwapchain
 /// @return The Vulkan enumeration result or initialization failure.
 RSF_SL_VK_EXPORT VkResult VulkanStorySlGetSwapchainImages(VkDevice device, VkSwapchainKHR swapchain,
     uint32_t* count, VkImage* images) {
-    auto call = module ? reinterpret_cast<PFN_vkGetSwapchainImagesKHR>(deviceProc(device, "vkGetSwapchainImagesKHR")) : nullptr;
+    auto call = deviceCall<PFN_vkGetSwapchainImagesKHR>(device, "vkGetSwapchainImagesKHR");
     return call ? call(device, swapchain, count, images) : VK_ERROR_INITIALIZATION_FAILED;
 }
 /// @brief Acquires an image through the same interposer owner that created the chain.
@@ -435,42 +449,42 @@ RSF_SL_VK_EXPORT VkResult VulkanStorySlGetSwapchainImages(VkDevice device, VkSwa
 /// @return The Vulkan acquisition result or initialization failure.
 RSF_SL_VK_EXPORT VkResult VulkanStorySlAcquire(VkDevice device, VkSwapchainKHR swapchain,
     uint64_t timeout, VkSemaphore semaphore, VkFence fence, uint32_t* index) {
-    auto call = module ? reinterpret_cast<PFN_vkAcquireNextImageKHR>(deviceProc(device, "vkAcquireNextImageKHR")) : nullptr;
+    auto call = deviceCall<PFN_vkAcquireNextImageKHR>(device, "vkAcquireNextImageKHR");
     return call ? call(device, swapchain, timeout, semaphore, fence, index) : VK_ERROR_INITIALIZATION_FAILED;
 }
 /// @brief Queues presentation through the interposer on the borrowed Vulkan queue.
 /// @details Returned success does not establish GPU or display scanout completion.
 /// @return The Vulkan queue-present result or initialization failure.
 RSF_SL_VK_EXPORT VkResult VulkanStorySlPresent(VkDevice device, VkQueue queue, const VkPresentInfoKHR* info) {
-    auto call = module ? reinterpret_cast<PFN_vkQueuePresentKHR>(deviceProc(device, "vkQueuePresentKHR")) : nullptr;
+    auto call = deviceCall<PFN_vkQueuePresentKHR>(device, "vkQueuePresentKHR");
     return call ? call(queue, info) : VK_ERROR_INITIALIZATION_FAILED;
 }
 RSF_SL_VK_EXPORT int VulkanStorySlQueuePresentSynchronized(uintptr_t function, void* queue, const void* info) {
     auto present = reinterpret_cast<PFN_vkQueuePresentKHR>(function);
     if (!present || !queue || !info) return VK_ERROR_INITIALIZATION_FAILED;
-    if (!initialized) return present(static_cast<VkQueue>(queue), static_cast<const VkPresentInfoKHR*>(info));
+    if (!sdkInitialized()) return present(static_cast<VkQueue>(queue), static_cast<const VkPresentInfoKHR*>(info));
     using Call = VkResult (*)(PFN_vkQueuePresentKHR, VkQueue, const VkPresentInfoKHR*);
     auto call = commonProc<Call>("rsfSlVulkanQueuePresent");
     return call ? call(present, static_cast<VkQueue>(queue), static_cast<const VkPresentInfoKHR*>(info)) : VK_ERROR_EXTENSION_NOT_PRESENT;
 }
 RSF_SL_VK_EXPORT int VulkanStorySlVulkanWsiCall(int32_t (*callback)(void*), void* user) {
     if (!callback || !user) return VK_ERROR_INITIALIZATION_FAILED;
-    if (!initialized) return callback(user);
+    if (!sdkInitialized()) return callback(user);
     using Call = int32_t (*)(int32_t (*)(void*), void*);
     auto call = commonProc<Call>("rsfSlVulkanWsiCall");
     return call ? call(callback, user) : VK_ERROR_EXTENSION_NOT_PRESENT;
 }
 RSF_SL_VK_EXPORT int VulkanStorySlWithoutDlssG(int32_t (*callback)(void*), void* user) {
     if (!callback) return VK_ERROR_INITIALIZATION_FAILED;
-    if (!initialized) return callback(user);
+    if (!sdkInitialized()) return callback(user);
     using Call = int32_t (*)(int32_t (*)(void*), void*);
-    auto call = reinterpret_cast<Call>(GetProcAddress(module, "rsfSlVulkanWithoutDlssGCall"));
+    auto call = reinterpret_cast<Call>(rsf_slvk_life_interposer_symbol("rsfSlVulkanWithoutDlssGCall"));
     return call ? call(callback, user) : VK_ERROR_EXTENSION_NOT_PRESENT;
 }
 /// @brief Forwards logical-device idle waiting through interposer dispatch.
 /// @return The checked Vulkan wait result, or initialization failure.
 RSF_SL_VK_EXPORT VkResult VulkanStorySlDeviceWaitIdle(VkDevice device) {
-    auto call = module ? reinterpret_cast<PFN_vkDeviceWaitIdle>(deviceProc(device, "vkDeviceWaitIdle")) : nullptr;
+    auto call = deviceCall<PFN_vkDeviceWaitIdle>(device, "vkDeviceWaitIdle");
     return call ? call(device) : VK_ERROR_INITIALIZATION_FAILED;
 }
 
