@@ -41,9 +41,16 @@ pub(super) struct SdkModule {
 impl SdkModule {
     // Adopt a system loader reference from a native leaf that uses its own path policy.
     pub(super) fn adopt_system(handle: *mut c_void) -> Option<Self> {
+        Self::adopt(handle, rsf_core_vk_sdk_unload)
+    }
+
+    pub(super) fn adopt(
+        handle: *mut c_void,
+        unload: unsafe extern "C" fn(*mut c_void),
+    ) -> Option<Self> {
         Some(Self {
             handle: NonNull::new(handle)?,
-            unload: rsf_core_vk_sdk_unload,
+            unload,
         })
     }
 

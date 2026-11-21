@@ -7,6 +7,7 @@ const PING: u32 = 0xc123;
 thread_local! {
     static SLEEPS: Cell<u32> = const { Cell::new(0) };
     static MARKERS: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
+    static STARTUP: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
 }
 
 unsafe extern "C" fn interposer_loaded() -> u32 {
@@ -15,18 +16,34 @@ unsafe extern "C" fn interposer_loaded() -> u32 {
 unsafe extern "C" fn admit(_: &Setup) -> i32 {
     OK
 }
+unsafe extern "C" fn load(_: *const u16, _: &Setup) -> Handle {
+    STARTUP.with_borrow_mut(|calls| calls.push("load"));
+    std::ptr::without_provenance_mut(0x1000)
+}
+unsafe extern "C" fn unload(module: Handle) {
+    assert_eq!(module.addr(), 0x1000);
+    STARTUP.with_borrow_mut(|calls| calls.push("unload"));
+}
 unsafe extern "C" fn open(
     _: &Setup,
+    module: Handle,
     _: Handle,
     _: Handle,
+    _: *const u16,
     _: u32,
     _: *const c_char,
     _: *const c_char,
-    _: &mut Opened,
+    out: &mut Opened,
 ) -> i32 {
+    assert_eq!(module.addr(), 0x1000);
+    STARTUP.with_borrow_mut(|calls| calls.push("open"));
+    out.native = std::ptr::without_provenance_mut(0x2000);
     INIT_FAILED
 }
-unsafe extern "C" fn dispose(_: Handle) {}
+unsafe extern "C" fn dispose(native: Handle) {
+    assert_eq!(native.addr(), 0x2000);
+    STARTUP.with_borrow_mut(|calls| calls.push("dispose"));
+}
 unsafe extern "C" fn token(_: Handle, index: u32, out: &mut Handle) -> i32 {
     *out = std::ptr::without_provenance_mut(index as usize * 16);
     OK
@@ -94,6 +111,8 @@ unsafe extern "C" fn tags(_: Handle, _: Handle, _: Handle, _: &Frame) -> i32 {
 const PLATFORM: Platform = Platform {
     interposer_loaded,
     admit,
+    load,
+    unload,
     open,
     dispose,
     token,
@@ -137,6 +156,26 @@ fn host(profile: u32) -> Box<Host> {
 
 fn markers() -> Vec<u32> {
     MARKERS.with_borrow_mut(std::mem::take)
+}
+
+#[test]
+fn refused_open_disposes_native_state_before_unloading_the_module() {
+    let mut setup: Setup = unsafe { zeroed() };
+    setup.struct_size = size_of::<Setup>() as u32;
+    setup.abi_version = ABI_VERSION;
+    setup.runtime_directory_utf8 = c"C:\\runtime".as_ptr();
+    setup.dxgi_adapter = NonNull::<c_void>::dangling().as_ptr();
+    setup.engine_version_utf8 = c"fixture".as_ptr();
+    setup.project_id_utf8 = c"fixture".as_ptr();
+    let mut host = null_mut();
+    let result =
+        unsafe { rsf_core_slhost_create(&setup, null_mut(), null_mut(), &mut host, &PLATFORM) };
+    assert_eq!(result, INIT_FAILED);
+    assert!(host.is_null());
+    assert_eq!(
+        STARTUP.with_borrow_mut(std::mem::take),
+        ["load", "open", "dispose", "unload"]
+    );
 }
 
 #[test]

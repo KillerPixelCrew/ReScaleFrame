@@ -51,7 +51,10 @@ struct rsf_slhost_observed {
 struct rsf_slhost_platform {
     uint32_t (*interposer_loaded)();
     int32_t (*admit)(const rsf_streamline_host_setup*);
-    int32_t (*open)(const rsf_streamline_host_setup*, void*, void*, uint32_t, const char*, const char*, rsf_slhost_opened*);
+    void* (*load)(const wchar_t*, const rsf_streamline_host_setup*);
+    void (*unload)(void*);
+    int32_t (*open)(const rsf_streamline_host_setup*, void*, void*, void*, const wchar_t*, uint32_t,
+        const char*, const char*, rsf_slhost_opened*);
     void (*dispose)(void*);
     int32_t (*token)(void*, uint32_t, void**);
     int32_t (*sleep)(void*, void*);
@@ -76,7 +79,7 @@ struct rsf_slhost_platform {
     int32_t (*constants)(void*, void*, const rsf_fg_frame*, uint32_t, uint32_t);
     int32_t (*tags)(void*, void*, void*, const rsf_fg_frame*);
 };
-static_assert(sizeof(rsf_slhost_platform) == 26 * sizeof(void*));
+static_assert(sizeof(rsf_slhost_platform) == 28 * sizeof(void*));
 static_assert(sizeof(rsf_slhost_opened) == 16 && sizeof(rsf_slhost_reflex) == 8 &&
     sizeof(rsf_slhost_request) == 16 && sizeof(rsf_slhost_observed) == 56 &&
     offsetof(rsf_slhost_observed, presented) == 32);
@@ -99,6 +102,8 @@ int32_t rsf_core_slhost_create(const rsf_streamline_host_setup*, void*, void*, r
     const rsf_slhost_platform*);
 int32_t rsf_core_slhost_destroy(rsf_streamline_host*, const rsf_slhost_platform*);
 void* rsf_core_slhost_native(rsf_streamline_host*);
+void* rsf_core_slhost_module(const rsf_streamline_host*);
+void rsf_core_vk_sdk_unload(void*);
 void* rsf_core_slhost_token(rsf_streamline_host*, uint64_t);
 int32_t rsf_core_slhost_begin(rsf_streamline_host*, uint64_t, const rsf_slhost_platform*);
 int32_t rsf_core_slhost_acquire(rsf_streamline_host*, uint64_t, const rsf_slhost_platform*);
@@ -132,14 +137,13 @@ constexpr uint32_t entry_get_state = 1, entry_set_options = 2, entry_reflex_opti
 
 // The typed SDK, COM and Win32 state of one host.
 struct Native {
-    HMODULE module = nullptr;
     bool initialized = false, development_runtime = false;
     rsf_backend_log_fn log = nullptr;
     void* log_user = nullptr;
     ComPtr<ID3D12Device> device, native_device;
     ComPtr<ID3D12CommandQueue> queue, native_queue;
     ComPtr<IDXGIFactory2> factory;
-    wchar_t directory[1024]{};
+    const wchar_t* directory{};
     const wchar_t* paths[1]{};
     sl::Feature features[4]{};
     PFun_slInit* init{};
@@ -223,7 +227,6 @@ void dispose(Native* host)
     if (host->initialized) host->shutdown();
     host->mfg.release();
     rsf_core_streamline_log_clear(RSF_STREAMLINE_LOG_D3D12_HOST, uintptr_t(host));
-    if (host->module) FreeLibrary(host->module);
     delete host;
 }
 // Borrowed native alias, valid through the supplied proxy object's lifetime.
@@ -259,20 +262,21 @@ int32_t admit(const rsf_streamline_host_setup* setup) noexcept
     return RSF_BACKEND_OK;
 }
 
-int32_t open(const rsf_streamline_host_setup* setup, void* existing_device, void* existing_queue, uint32_t features,
-    const char* engine_version, const char* project_id, rsf_slhost_opened* opened) noexcept
+void* load(const wchar_t* path, const rsf_streamline_host_setup* setup) noexcept
+{
+    return rsf::load_interposer(path, setup->require_signature != 0, setup->log, setup->log_user);
+}
+
+int32_t open(const rsf_streamline_host_setup* setup, void* module, void* existing_device, void* existing_queue,
+    const wchar_t* directory, uint32_t features, const char* engine_version, const char* project_id,
+    rsf_slhost_opened* opened) noexcept
 {
     *opened = {};
     auto* host = new (std::nothrow) Native; if (!host) return RSF_BACKEND_ERROR_INIT_FAILED;
     host->log = setup->log; host->log_user = setup->log_user;
     host->development_runtime = setup->development_runtime != 0;
-    if (!rsf::runtime_directory(setup->runtime_directory_utf8, host->directory)) {
-        dispose(host); return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    }
-    wchar_t path[1200]{}; swprintf_s(path, L"%s\\sl.interposer.dll", host->directory);
-    host->module = rsf::load_interposer(path, setup->require_signature != 0, setup->log, setup->log_user);
-    if (!host->module) { dispose(host); return RSF_BACKEND_ERROR_LOAD_FAILED; }
-#define CORE(member, function) host->member = rsf::entry<PFun_##function*>(host->module, #function); if (!host->member) { dispose(host); return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT; }
+    host->directory = directory;
+#define CORE(member, function) host->member = rsf::entry<PFun_##function*>(static_cast<HMODULE>(module), #function); if (!host->member) { dispose(host); return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT; }
     CORE(init, slInit); CORE(shutdown, slShutdown); CORE(upgrade, slUpgradeInterface); CORE(native, slGetNativeInterface);
     CORE(set_device, slSetD3DDevice); CORE(supported, slIsFeatureSupported); CORE(function, slGetFeatureFunction);
     CORE(version, slGetFeatureVersion); CORE(loaded, slSetFeatureLoaded);
@@ -638,7 +642,8 @@ int32_t tags(void* native, void* token, void* command, const rsf_fg_frame* frame
         static_cast<sl::CommandBuffer*>(command)) == sl::Result::eOk ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
 }
 
-constexpr rsf_slhost_platform platform{interposer_loaded, admit, open, dispose_native, token, sleep, marker, common,
+constexpr rsf_slhost_platform platform{interposer_loaded, admit, load, rsf_core_vk_sdk_unload, open,
+    dispose_native, token, sleep, marker, common,
     reflex_state, reflex_options, pcl_message, driver_sleep, ring_capture, ring_write, generation_load, same_graphics,
     support, version, chain, options, off, observe, frame, command, constants, tags};
 
@@ -688,7 +693,7 @@ extern "C" rsf_backend_result rsf_streamline_host_graphics(rsf_streamline_host* 
     out->native_device = native.native_device.Get(); out->native_queue = native.native_queue.Get(); return RSF_BACKEND_OK;
 }
 extern "C" void* rsf_streamline_host_module(rsf_streamline_host* host)
-{ return host ? native_of(host)->module : nullptr; }
+{ return rsf_core_slhost_module(host); }
 extern "C" rsf_backend_result rsf_streamline_host_drain(rsf_streamline_host* host)
 {
     if (!host) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;

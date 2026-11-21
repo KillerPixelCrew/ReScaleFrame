@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The shared D3D12 Streamline host now owns its interposer reference
+and SDK directory in Rust. Callers borrow the same module through
+the existing host entry. Native disposal calls SDK shutdown and
+clears diagnostics before Rust releases the module. Startup and teardown
+refuse overlapping calls. An unrun fixture covers disposal before
+unload on failed startup. Source review checked the private table
+and module lookup. Build and SDK validation remain open.
+
 The legacy D3D11 Streamline session now owns its interposer reference
 and preference paths in Rust. Native code keeps signature verification,
 export resolution and the typed SDK calls. The module, device and

@@ -9,6 +9,7 @@ use crate::render_abi::{
     rsf_backend_log_fn as Log, rsf_fg_frame as Frame, rsf_fg_status as Status,
     rsf_fg_swapchain_desc as ChainDesc,
 };
+use crate::sdk_module::{SdkModule, wide_path};
 use crate::sr_session::has_capacity;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::mem::{offset_of, zeroed};
@@ -58,6 +59,9 @@ const FEATURE_DLSS: u32 = 1;
 const FEATURE_PCL: u32 = 2;
 const FEATURE_REFLEX: u32 = 4;
 const FEATURE_GENERATION: u32 = 8;
+const BACKSLASH: u16 = b'\\' as u16;
+const SLASH: u16 = b'/' as u16;
+const COLON: u16 = b':' as u16;
 
 // Feature functions the native table resolved.
 const GET_STATE: u32 = 1;
@@ -106,10 +110,14 @@ struct Reflex {
 struct Platform {
     interposer_loaded: unsafe extern "C" fn() -> u32,
     admit: unsafe extern "C" fn(&Setup) -> i32,
+    load: unsafe extern "C" fn(*const u16, &Setup) -> Handle,
+    unload: unsafe extern "C" fn(Handle),
     open: unsafe extern "C" fn(
         &Setup,
         Handle,
         Handle,
+        Handle,
+        *const u16,
         u32,
         *const c_char,
         *const c_char,
@@ -148,7 +156,7 @@ const _: () = {
     assert!(offset_of!(Setup, profile) == 72);
     assert!(size_of::<Opened>() == 16);
     assert!(size_of::<Reflex>() == 8);
-    assert!(size_of::<Platform>() == 26 * size_of::<Handle>());
+    assert!(size_of::<Platform>() == 28 * size_of::<Handle>());
 };
 
 #[derive(Clone, Copy, Default)]
@@ -225,6 +233,8 @@ impl Frames {
 
 pub(crate) struct Host {
     native: Handle,
+    module: Option<SdkModule>,
+    directory: Vec<u16>,
     profile: u32,
     engine_type: u32,
     // Borrowed by the SDK from slInit until shutdown.
@@ -246,6 +256,8 @@ impl Host {
     fn new(setup: &Setup) -> Self {
         Self {
             native: null_mut(),
+            module: None,
+            directory: Vec::new(),
             profile: setup.profile,
             engine_type: setup.engine_type,
             engine_version: [0; 128],
@@ -321,12 +333,15 @@ unsafe extern "C" fn rsf_core_slhost_create(
     {
         return INVALID;
     }
+    // Admission and SDK startup may log into the caller before publishing a host.
+    let Ok(_owner) = OWNER.try_lock() else {
+        return NOT_READY;
+    };
     // Engine identity range, then an NVIDIA adapter. Another vendor is a clean refusal.
     let admitted = unsafe { (platform.admit)(setup) };
     if admitted != OK {
         return admitted;
     }
-    let _owner = OWNER.lock().unwrap();
     // Never start a second SDK or device registration over an existing interposer.
     if unsafe { (platform.interposer_loaded)() } != 0 {
         return NEEDS_RESTART;
@@ -341,6 +356,25 @@ unsafe extern "C" fn rsf_core_slhost_create(
     {
         return INVALID;
     }
+    let Some(directory) = (unsafe { wide_path(setup.runtime_directory_utf8) }).filter(|path| {
+        path.len() <= 1024
+            && (path.starts_with(&[BACKSLASH, BACKSLASH])
+                || matches!(path.get(1..3), Some([COLON, SLASH | BACKSLASH])))
+    }) else {
+        return INVALID;
+    };
+    let path: Vec<u16> = directory[..directory.len() - 1]
+        .iter()
+        .copied()
+        .chain("\\sl.interposer.dll".encode_utf16())
+        .chain([0])
+        .collect();
+    let module = unsafe { (platform.load)(path.as_ptr(), setup) };
+    let Some(lease) = SdkModule::adopt(module, platform.unload) else {
+        return LOAD_FAILED;
+    };
+    host.module = Some(lease);
+    host.directory = directory;
     // PCL excludes Reflex and DLSS-G, so telemetry has no sleeper, and requests no NGX
     // feature unless shared DLSS SR asks for one.
     let mut features = FEATURE_PCL;
@@ -361,8 +395,10 @@ unsafe extern "C" fn rsf_core_slhost_create(
     let result = unsafe {
         (platform.open)(
             setup,
+            module,
             device,
             queue,
+            host.directory.as_ptr(),
             features,
             host.engine_version.as_ptr(),
             host.project_id.as_ptr(),
@@ -370,6 +406,9 @@ unsafe extern "C" fn rsf_core_slhost_create(
         )
     };
     if result != OK {
+        if !opened.native.is_null() {
+            unsafe { (platform.dispose)(opened.native) };
+        }
         return result;
     }
     if opened.native.is_null() {
@@ -390,7 +429,9 @@ unsafe extern "C" fn rsf_core_slhost_destroy(host: *mut Host, platform: &Platfor
     let Some(owner) = (unsafe { host.as_ref() }) else {
         return INVALID;
     };
-    let _owner = OWNER.lock().unwrap();
+    let Ok(_owner) = OWNER.try_lock() else {
+        return NOT_READY;
+    };
     if owner.borrowers.load(Relaxed) != 0 || owner.frames().tokens.iter().any(|token| token.id != 0)
     {
         return NOT_READY;
@@ -404,6 +445,13 @@ unsafe extern "C" fn rsf_core_slhost_destroy(host: *mut Host, platform: &Platfor
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_slhost_native(host: *mut Host) -> Handle {
     unsafe { host.as_ref() }.map_or(null_mut(), |host| host.native)
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_slhost_module(host: *const Host) -> Handle {
+    unsafe { host.as_ref() }
+        .and_then(|host| host.module.as_ref())
+        .map_or(null_mut(), SdkModule::as_ptr)
 }
 
 #[unsafe(no_mangle)]
