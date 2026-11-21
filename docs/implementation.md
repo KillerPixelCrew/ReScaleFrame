@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The FidelityFX 4 Vulkan SR bridge now owns provider admission, frame
+validation, submission and checked retirement in Rust. The Runtime
+and standalone bridge use the same compatibility archive. Rust checks
+the public record size first and pins the effective SDK provider to
+the selected ID and version family. Source comparison matched the 15
+bridge signatures. Both links, the CPU fixtures and device behavior
+remain unverified. [Bridge cutover](research/rust-vulkan-fsr4-sr-cutover.md)
+
 Anomaly's window subclass reports delivered input messages only while
 the observer admits callbacks. In-flight reports hold the same lease as
 native observations, so quiesce waits for them. The subclass continues

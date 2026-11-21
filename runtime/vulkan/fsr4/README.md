@@ -14,6 +14,13 @@ The SDK root defaults to the `sdk/fidelityfx` submodule when built through
 
 At runtime it loads `amd_fidelityfx_upscaler_dx12.dll` from the same directory.
 
+The bridge state lives in the Rust [owner](owner.rs), compiled into the same
+`rsf-fsr4-compat` archive that the Runtime and this DLL already link. It owns
+argument and frame validation, provider selection and the FSR 4 pin, the
+compatibility decision, allocator and fence sequencing, the ready/done handoff
+and checked retirement. `bridge.cpp` keeps the typed DXGI, D3D12, Vulkan and
+FidelityFX calls behind the private table in `bridge_platform.h`.
+
 NVIDIA and Intel run FSR 4 through the shared [Rust INT8 compatibility owner](../../backends/fsr/compat/src/lib.rs).
 It requires a pinned upscaler build, SDK 2.3.0 (4.1.1.2740) or SDK 2.4.0 (4.1.2.4555),
 and otherwise refuses creation.

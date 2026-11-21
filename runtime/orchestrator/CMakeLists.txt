@@ -100,7 +100,8 @@ if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_FFX_INCLUDE}
     target_compile_definitions(rsf_native_vulkan PUBLIC RSF_VULKAN_FSR4_ENABLED=1 PRIVATE RSF_FSR4_VULKAN_STATIC=1)
     target_include_directories(rsf_native_vulkan PRIVATE ../backends/fsr/src)
     target_include_directories(rsf_native_vulkan SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}" "${RSF_FFX_INCLUDE}/../..")
-    target_link_libraries(rsf_native_vulkan PRIVATE ReScaleFrame::FSR bcrypt)
+    # bridge.cpp calls the Rust owner compiled into the FSR 4 compatibility archive.
+    target_link_libraries(rsf_native_vulkan PRIVATE ReScaleFrame::FSR rsf_fsr4_compat_rust bcrypt)
 endif()
 if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_FFX_INCLUDE}/dx12/ffx_api_dx12.h" AND EXISTS "${RSF_FFX_INCLUDE}/../../framegeneration/include/ffx_framegeneration.h")
     target_sources(rsf_native_vulkan PRIVATE src/native_fg_fsr4_vulkan.cpp ../vulkan/fsr4-fg/bridge.cpp)

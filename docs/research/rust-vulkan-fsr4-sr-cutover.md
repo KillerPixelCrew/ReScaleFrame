@@ -59,3 +59,61 @@ coordinator checkout into the ignored vendor directory unblocked configuration.
   Godot has 398 named exports, including all seven linked split exports. The DLL
   fixture imports Runtime, while Godot and the FSR4 device fixture link the
   provider directly.
+
+## SDK bridge ownership
+
+Starting at `65759f7`, the D3D12 SDK bridge under the Rust Vulkan owner uses its
+own Rust owner, `runtime/vulkan/fsr4/owner.rs`, behind the unchanged 15 bridge
+exports. This is separate from the FSR4 frame-generation bridge.
+
+Source review traced both consumers. In CMake, the optional FSR4 Vulkan block in
+`runtime/orchestrator/CMakeLists.txt` compiles `bridge.cpp` into
+`rsf_native_vulkan`, which the Runtime links as a whole archive and the FSR4
+contract and state tests link directly. The standalone `build.ps1` builds
+`rsf-fsr4-compat` with Cargo for `x86_64-pc-windows-gnu` and links its archive
+with g++. Both already link that archive for the INT8 compatibility owner, so
+the bridge owner is compiled there. The orchestrator's stateless provider
+selection, `ffx_version.rs`, is included by path rather than copied. The FSR4
+block now names the archive directly because `bridge.cpp` calls into it. With
+the block disabled, nothing references the owner's symbols.
+
+The effective provider name keeps the previous rule. The private provider leaf
+reports the shared parse and, separately, whether the name has the `%u.%u.%u`
+shape. A parsed name, including family 0 such as `0.1.2 FSR4`, is FSR4 only for
+family 4. Other labels pass only when they contain `FSR4` or `FSR 4`. The ID
+must still equal the selected 4.x provider. The owner's source fixture covers
+the family-0 case and a header whose caller allocated only `struct_size`.
+
+Rust owns the public and legacy create validation, the absolute-directory rule,
+provider-path construction, the candidate-vendor policy, the NVIDIA and Intel
+lease decision and its refusal, the newest family-4 selection, and the check
+that the effective provider has the selected ID and an FSR4 name. It also owns
+public frame validation, including texture extents and DXGI formats, the
+three-slot allocator schedule, local completion values, the ready/done handoff
+on every failure, the terminal release failure and checked retirement. Checked
+destruction drains the queue and destroys the SDK context. It then drops the
+INT8 lease and releases the native owners. A failed step keeps the bridge
+attached. `bridge.cpp` keeps the DXGI adapter match, D3D12 objects, Vulkan
+queries, FidelityFX descriptors, the provider query and the compatibility lease
+behind the private table in `bridge_platform.h`.
+
+Deliberate differences from the previous C++ owner:
+
+- A prepared bridge refuses both evaluate entry points and enqueues no handoff.
+  The Rust Vulkan owner closes admission before preparing.
+- Image and fence creation return -1 when a retained, partially created bridge
+  has no device. Planning returns -1 without the SDK query export. A local
+  signal without a completion fence returns `E_POINTER`. Each of these
+  previously dereferenced null.
+- Size-checked structures read `abi_version` only after `struct_size` admits
+  the full structure. The previous inline check read both fields first.
+- Exceptions from the INT8 lease are caught at the native leaf and refuse the
+  lease.
+
+The compared export signatures, all 15, match `65759f7`. Rust and C++ assert
+the same sizes and offsets for the public and legacy frames, create request,
+info, private request, context, texture and dispatch structures and the
+24-entry platform table. Pinned Rust 1.94.1 formatting, PowerShell parsing and
+Git whitespace checks passed. Nothing was compiled or run. Native linking,
+Clippy, Rust tests, the FSR4 CTest contracts, the standalone DLL build and
+device behavior await user verification.
