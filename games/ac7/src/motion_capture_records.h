@@ -102,6 +102,19 @@ struct MotionDraw {
     MotionResource depth;
     MotionDrawConstants constants[5];
 };
+struct MotionBeforeDrawPlan;
+struct MotionSampler {
+    uint32_t slot, filter, address[3], comparison;
+    float min_lod, max_lod;
+};
+struct MotionBeforeDraw {
+    MotionQueuedDraw queued;
+    uint64_t qpc;
+    uint32_t thread, draw_index, input_count, sampler_count, constant_count;
+    MotionDrawTarget colour, loss, inputs[6];
+    MotionSampler samplers[6];
+    MotionBoundConstant constants[2];
+};
 struct MotionGeometryPlan;
 struct MotionGeometryStream {
     uint64_t buffer;
@@ -169,14 +182,16 @@ bool rsf_ac7_capture_execution_pass(const rsf_game_render_pass* pass);
 void rsf_ac7_capture_execution_root(RootRecord* root);
 GeometryScope rsf_ac7_capture_geometry_scope();
 
-// Draws and dispatches preflight before querying D3D. All row types share the final
-// admission check. A false commit result reports a serialization or allocation failure.
+// Ordinary draws, dispatches and geometry preflight before querying D3D. Before-draw
+// diagnostics take their snapshots before the shared final admission check. A false
+// commit result reports a serialization or allocation failure.
 bool rsf_ac7_capture_can_record_draw(MotionCaptureInterval capture);
 bool rsf_ac7_capture_record_draw(MotionCaptureInterval capture, const MotionDraw* draw);
 bool rsf_ac7_capture_record_dispatch(MotionCaptureInterval capture, const MotionDispatch* dispatch);
 bool rsf_ac7_capture_record_geometry(MotionCaptureInterval capture, const MotionGeometryPlan* plan,
     const MotionGeometry* draw);
-bool rsf_ac7_capture_record_draw_text(MotionCaptureInterval capture, const char* text, std::size_t size);
+bool rsf_ac7_capture_record_before_draw(MotionCaptureInterval capture, const MotionBeforeDrawPlan* plan,
+    const MotionBeforeDraw* draw);
 
 // Record and copy share the native storage guard with the companion blob snapshots.
 bool rsf_ac7_capture_copy_roots(void* user, MotionCopyRoots copy);
@@ -208,6 +223,10 @@ static_assert(offsetof(MotionDraw, shader_hashes) == 132 && offsetof(MotionDraw,
 static_assert(offsetof(MotionDraw, inputs) == 192 && offsetof(MotionDraw, ps_resources) == 576);
 static_assert(offsetof(MotionDraw, vs_resources) == 5696 && offsetof(MotionDraw, render_targets) == 10816);
 static_assert(offsetof(MotionDraw, depth) == 11968 && offsetof(MotionDraw, constants) == 12000);
+static_assert(sizeof(MotionSampler) == 32 && offsetof(MotionSampler, min_lod) == 24);
+static_assert(sizeof(MotionBeforeDraw) == 1496 && offsetof(MotionBeforeDraw, colour) == 88);
+static_assert(offsetof(MotionBeforeDraw, inputs) == 376 && offsetof(MotionBeforeDraw, samplers) == 1240 &&
+    offsetof(MotionBeforeDraw, constants) == 1432);
 static_assert(sizeof(MotionGeometryStream) == 32 && offsetof(MotionGeometryStream, blob) == 28);
 static_assert(sizeof(MotionGeometryVsBuffer) == 32 && offsetof(MotionGeometryVsBuffer, blob) == 28);
 static_assert(sizeof(MotionGeometry) == 1256 && offsetof(MotionGeometry, qpc) == 88);

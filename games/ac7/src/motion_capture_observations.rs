@@ -2,7 +2,7 @@
 //! F9 shader and layout creation, constant-buffer contents and colour snapshots.
 
 mod buffers;
-mod colour;
+pub(super) mod colour;
 pub(super) mod geometry;
 
 use crate::motion_capture_session::rsf_ac7_capture_enabled;

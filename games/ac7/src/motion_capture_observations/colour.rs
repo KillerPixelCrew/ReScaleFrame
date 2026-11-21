@@ -1,11 +1,98 @@
 // SPDX-License-Identifier: MIT
 //! Admission for sampled colour reads and the contact-light before/after pair.
 
-use super::observations;
+use super::{observations, rsf_ac7_capture_shader_facts};
 use crate::motion_capture_session::{CaptureInterval, rsf_ac7_capture_current};
+use std::ffi::{c_char, c_void};
+use std::mem::{offset_of, size_of};
 
 const SHARED_READ_LIMIT: u32 = 48;
 const TOTAL_READ_LIMIT: u32 = 72;
+const CLOUD_COMPOSITE: u32 = 0x83524e47;
+
+// Only the directional light with the contact ray and its AC7 noise/depth variant.
+fn is_contact_light(hash: u32) -> bool {
+    matches!(hash, 3619939816 | 4154163049)
+}
+
+#[repr(C)]
+pub(crate) struct BeforeDrawPlan {
+    colour_role: *const c_char,
+    loss_role: *const c_char,
+    input_roles: [*const c_char; 6],
+    input_slots: u32,
+    sampler_slots: u32,
+    constant_slots: u32,
+    pub(crate) ps_hash: u32,
+    pub(crate) lighting: u32,
+}
+
+const _: () = {
+    assert!(size_of::<BeforeDrawPlan>() == 88 && offset_of!(BeforeDrawPlan, input_slots) == 64);
+    assert!(offset_of!(BeforeDrawPlan, ps_hash) == 76);
+};
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_ac7_capture_is_cloud_composite(hash: u32) -> bool {
+    hash == CLOUD_COMPOSITE
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_ac7_capture_plan_before_draw(
+    capture: CaptureInterval,
+    width: u32,
+    height: u32,
+    pixel_shader: *mut c_void,
+    plan: &mut BeforeDrawPlan,
+) -> bool {
+    if !capture.active() || width < 400 || height < 200 {
+        return false;
+    }
+    let ps_hash = rsf_ac7_capture_shader_facts(pixel_shader, 1).hash;
+    *plan = if is_contact_light(ps_hash) {
+        if !begin_lighting_pair(capture) {
+            return false;
+        }
+        BeforeDrawPlan {
+            colour_role: c"contact_light_before".as_ptr(),
+            loss_role: std::ptr::null(),
+            input_roles: [
+                c"contact_ps_input_0".as_ptr(),
+                c"contact_ps_input_1".as_ptr(),
+                c"contact_ps_input_2".as_ptr(),
+                c"contact_light_mask".as_ptr(),
+                c"contact_scene_depth".as_ptr(),
+                c"contact_static_shadow".as_ptr(),
+            ],
+            input_slots: 6,
+            sampler_slots: 6,
+            constant_slots: 2,
+            ps_hash,
+            lighting: 1,
+        }
+    } else if rsf_ac7_capture_is_cloud_composite(ps_hash) {
+        BeforeDrawPlan {
+            colour_role: c"cloud_composite_before".as_ptr(),
+            loss_role: c"cloud_loss_before".as_ptr(),
+            input_roles: [
+                c"cloud_near".as_ptr(),
+                c"cloud_far".as_ptr(),
+                c"cloud_near_far_depth".as_ptr(),
+                c"cloud_scene_depth".as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+            ],
+            input_slots: 4,
+            sampler_slots: 0,
+            constant_slots: 0,
+            ps_hash,
+            lighting: 0,
+        }
+    } else {
+        return false;
+    };
+    true
+}
 
 #[derive(Default)]
 pub(super) struct ColourReadbacks {
@@ -30,8 +117,7 @@ impl ColourReadbacks {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_capture_begin_lighting_pair(capture: CaptureInterval) -> bool {
+fn begin_lighting_pair(capture: CaptureInterval) -> bool {
     let mut observations = observations();
     let colour = &mut observations.colour;
     if !capture.active()
@@ -46,7 +132,10 @@ extern "C" fn rsf_ac7_capture_begin_lighting_pair(capture: CaptureInterval) -> b
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_capture_take_lighting_after(capture: CaptureInterval) -> bool {
+extern "C" fn rsf_ac7_capture_take_lighting_after(capture: CaptureInterval, hash: u32) -> bool {
+    if !is_contact_light(hash) {
+        return false;
+    }
     let mut observations = observations();
     let colour = &mut observations.colour;
     capture.active()

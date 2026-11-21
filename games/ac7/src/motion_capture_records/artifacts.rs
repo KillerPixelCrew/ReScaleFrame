@@ -112,27 +112,40 @@ pub(super) fn write_float(out: &mut Bytes, value: f32) -> fmt::Result {
     if !value.is_finite() {
         return out.write_str("null");
     }
+    write_finite_float(out, value, 9)
+}
+
+pub(super) fn write_finite_float(
+    out: &mut Bytes,
+    value: f32,
+    significant_digits: i32,
+) -> fmt::Result {
     if value == 0.0 {
         return out.write_str(if value.is_sign_negative() { "-0" } else { "0" });
     }
-    // Same default-float conversion as frame_capture_vk::general_precision at precision 9.
-    // The stack buffer fits either representation for all finite f32 values.
+    // The stack buffer fits either representation for all finite f32 values at 6 or 9 digits.
     let value = f64::from(value);
     let mut buffer = [0; 24];
     let mut cursor = buffer.as_mut_slice();
-    write!(cursor, "{value:.8e}").map_err(|_| fmt::Error)?;
+    let fractional_digits = significant_digits - 1;
+    write!(
+        cursor,
+        "{value:.precision$e}",
+        precision = fractional_digits as usize
+    )
+    .map_err(|_| fmt::Error)?;
     let remaining = cursor.len();
     let scientific = str::from_utf8(&buffer[..buffer.len() - remaining]).map_err(|_| fmt::Error)?;
     let (mantissa, exponent) = scientific.split_once('e').ok_or(fmt::Error)?;
     let exponent: i32 = exponent.parse().map_err(|_| fmt::Error)?;
-    if !(-4..9).contains(&exponent) {
+    if !(-4..significant_digits).contains(&exponent) {
         return write!(out, "{}e{exponent:+03}", trim_fraction(mantissa));
     }
     let mut cursor = buffer.as_mut_slice();
     write!(
         cursor,
         "{value:.precision$}",
-        precision = (8 - exponent) as usize
+        precision = (fractional_digits - exponent) as usize
     )
     .map_err(|_| fmt::Error)?;
     let remaining = cursor.len();
