@@ -4,10 +4,11 @@
 // and callback retirement are the shared bridge state (bridge_state.rs). The D3D11 path's command
 // ring, completion values and shared fence values are bridge_interop.rs, which the Vulkan bridge
 // (vulkan_bridge.cpp, its own state in vulkan_state.rs) uses for its slots too. The D3D11 path's
-// devices, immediate context, queue, completion and shared fences and command slots are one Rust
-// record with its creation, checked close and release (d3d11_state.rs). This file keeps the Unity
-// interfaces, the typed D3D11/D3D12/DXGI calls as that record's leaves, shared surfaces, the D3D11
-// texture leases, render-pass and CPU-event calls and the exported entry points.
+// devices, immediate context, queue, completion and shared fences, command slots and six shared
+// surfaces are one Rust record with its creation, surface keys, replacement and lease, checked
+// close and release (d3d11_state.rs). This file keeps the Unity interfaces, the typed
+// D3D11/D3D12/DXGI calls as that record's leaves, the shared surface format choice, the D3D11
+// texture leases of queued packets, render-pass and CPU-event calls and the exported entry points.
 #include "bridge.h"
 #include "bridge_interop.h"
 #include "d3d11_state.h"
@@ -47,7 +48,7 @@ static_assert(offsetof(rsf_unity_d3d11_device_handles, device12) == 16);
 static_assert(offsetof(rsf_unity_d3d11_device_handles, sharing) == 40);
 static_assert(sizeof(rsf_unity_d3d11_command_handles) == 16, "d3d11_state.rs CommandSlot");
 static_assert(offsetof(rsf_unity_d3d11_command_handles, list) == 8);
-static_assert(sizeof(rsf_unity_d3d11_device_ops) == 6 * sizeof(void*), "d3d11_state.rs DeviceOps");
+static_assert(sizeof(rsf_unity_d3d11_device_ops) == 9 * sizeof(void*), "d3d11_state.rs DeviceOps");
 
 namespace {
 using Microsoft::WRL::ComPtr;
@@ -62,10 +63,13 @@ std::mutex guard;
 rsf_game_host_services services{};
 std::array<Leases, RSF_UNITY_FRAMES_PACKETS> pending_leases;
 int event_id = 0;
-struct Surface {
-    rsf_shared_surface* surface = nullptr;
-    D3D11_TEXTURE2D_DESC description{};
-    ~Surface() { rsf_shared_surface_destroy(surface); }
+// Holds the record's surface table from the first surface a render event borrows until it returns.
+struct SurfaceLease {
+    bool held = rsf_unity_d3d11_surfaces_begin();
+    SurfaceLease() = default;
+    SurfaceLease(const SurfaceLease&) = delete;
+    SurfaceLease& operator=(const SurfaceLease&) = delete;
+    ~SurfaceLease() { if (held) rsf_unity_d3d11_surfaces_end(); }
 };
 // Closes a reset list on every early return, so the slot's allocator resets on its next use.
 struct Recording {
@@ -92,7 +96,6 @@ struct SlotView {
     ID3D12CommandAllocator* allocator() const { return static_cast<ID3D12CommandAllocator*>(handles.allocator); }
     ID3D12GraphicsCommandList* list() const { return static_cast<ID3D12GraphicsCommandList*>(handles.list); }
 };
-std::array<Surface, 6> surfaces;
 bool active() { return rsf_unity_frames_active() != 0; }
 void log(const char* text) { if (services.log) services.log(services.user, text); }
 bool wait(const DeviceView& graphics, uint64_t value)
@@ -195,8 +198,27 @@ uint64_t shared_value(const rsf_unity_d3d11_device_handles* shared) noexcept
     auto* fence = DeviceView{*shared}.fence11();
     return fence ? fence->GetCompletedValue() : 0;
 }
+// Surface replacement's retirement wait: the completion fence, as the C++ replacement waited.
+bool wait_completion(const rsf_unity_d3d11_device_handles* shared, uint64_t value) noexcept
+{
+    return wait(DeviceView{*shared}, value);
+}
+// A render-target surface on both devices, as the C++ replacement created it.
+bool create_surface(const rsf_unity_d3d11_device_handles* shared, const rsf_game_host_services* host,
+    uint32_t width, uint32_t height, uint32_t format, void** output) noexcept
+{
+    const DeviceView graphics{*shared};
+    rsf_shared_surface_setup setup{sizeof(setup), RSF_SHARED_SURFACE_ABI_VERSION, width, height, format, 1,
+        host ? host->log : nullptr, host ? host->user : nullptr, 0};
+    rsf_shared_surface* created = nullptr;
+    const auto result = rsf_shared_surface_create(graphics.device11(), graphics.device12(), &setup, &created);
+    *output = created;
+    return result == RSF_SHARED_OK;
+}
+void destroy_surface(void* surface) noexcept { rsf_shared_surface_destroy(static_cast<rsf_shared_surface*>(surface)); }
 constexpr rsf_unity_d3d11_device_ops device_ops{
     create_shared, destroy_shared, create_command_slot, destroy_command_slot, completion_value, shared_value,
+    wait_completion, create_surface, destroy_surface,
 };
 // The caller holds a frame callback. Only the attempt that failed reports, once until release.
 bool initialize11(DeviceView& graphics)
@@ -206,23 +228,20 @@ bool initialize11(DeviceView& graphics)
         rsf_unity_package_bridge_error(RSF_BACKEND_ERROR_INIT_FAILED, "Unity DX11 shared device/fence initialization failed; native output remains in place.");
     return ready == RSF_UNITY_D3D11_DEVICE_READY;
 }
-bool prepare_surface(const DeviceView& graphics, uint32_t index, ID3D11Texture2D* texture)
+// The caller holds the surface lease. The record keys surface index by the source description and
+// replaces it after the ring retires; this leaf only reads the description and picks the format.
+rsf_shared_surface* prepare_surface(uint32_t index, ID3D11Texture2D* texture)
 {
-    if (!texture) return false;
+    if (!texture) return nullptr;
     D3D11_TEXTURE2D_DESC desc{}; texture->GetDesc(&desc);
-    auto& surface = surfaces[index];
-    if (surface.surface && desc.Width == surface.description.Width && desc.Height == surface.description.Height && desc.Format == surface.description.Format) return true;
-    if (!wait(graphics, rsf_unity_interop_submitted())) return false;
     DXGI_FORMAT format = index == 1 ? DXGI_FORMAT_R32_FLOAT : index == 2 ? DXGI_FORMAT_R16G16_FLOAT : desc.Format;
     if (format == DXGI_FORMAT_R16G16B16A16_TYPELESS) format = DXGI_FORMAT_R16G16B16A16_FLOAT;
     if (format == DXGI_FORMAT_R8G8B8A8_TYPELESS || format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB) format = DXGI_FORMAT_R8G8B8A8_UNORM;
     if (format == DXGI_FORMAT_B8G8R8A8_TYPELESS || format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB) format = DXGI_FORMAT_B8G8R8A8_UNORM;
-    rsf_shared_surface_setup setup{sizeof(setup), RSF_SHARED_SURFACE_ABI_VERSION, desc.Width, desc.Height,
-        static_cast<uint32_t>(format), 1, services.log, services.user, 0};
-    rsf_shared_surface* replacement = nullptr;
-    if (rsf_shared_surface_create(graphics.device11(), graphics.device12(), &setup, &replacement) != RSF_SHARED_OK) return false;
-    rsf_shared_surface_destroy(surface.surface); surface.surface = replacement; surface.description = desc;
-    return true;
+    void* surface = nullptr;
+    if (!rsf_unity_d3d11_prepare_surface(index, &services, desc.Width, desc.Height,
+            static_cast<uint32_t>(desc.Format), static_cast<uint32_t>(format), &surface)) return nullptr;
+    return static_cast<rsf_shared_surface*>(surface);
 }
 void make_pass(const rsf_unity_packet& packet, rsf_game_render_pass& pass)
 {
@@ -269,14 +288,17 @@ void execute11(int id, const rsf_unity_packet& packet)
     if (id == event_id + 1) {
         pass.role = RSF_GAME_RENDER_WINDOW; pass.swapchain = unity11->GetSwapChain();
         if (rsf_unity_package_is_editor() && packet.color) {
+            SurfaceLease lease;
             ComPtr<ID3D11Texture2D> source;
-            if (FAILED(static_cast<IUnknown*>(packet.color)->QueryInterface(IID_PPV_ARGS(&source))) || !prepare_surface(graphics, 5, source.Get())) return;
+            if (!lease.held || FAILED(static_cast<IUnknown*>(packet.color)->QueryInterface(IID_PPV_ARGS(&source)))) return;
+            rsf_shared_surface* preview = prepare_surface(5, source.Get());
+            if (!preview) return;
             rsf_unity_interop_record_d3d11_copy();
-            context11->CopyResource(static_cast<ID3D11Resource*>(rsf_shared_surface_d3d11(surfaces[5].surface)), source.Get());
+            context11->CopyResource(static_cast<ID3D11Resource*>(rsf_shared_surface_d3d11(preview)), source.Get());
             uint64_t uploaded = 0, consumed = 0;
             if (!rsf_unity_interop_shared_pair(&uploaded, &consumed) || !signal11(graphics, fence11, uploaded)) return;
             if (FAILED(queue12->Wait(fence12, uploaded))) return;
-            pass.color_input = rsf_shared_surface_d3d12(surfaces[5].surface); pass.flags |= RSF_UNITY_PREVIEW_SOURCE_COMMON;
+            pass.color_input = rsf_shared_surface_d3d12(preview); pass.flags |= RSF_UNITY_PREVIEW_SOURCE_COMMON;
             services.render_pass(services.user, queue12, &pass, 1);
             const bool handed_back = SUCCEEDED(queue12->Signal(fence12, consumed)) &&
                 SUCCEEDED(context11->Wait(fence11, consumed));
@@ -285,6 +307,9 @@ void execute11(int id, const rsf_unity_packet& packet)
         }
         services.render_pass(services.user, queue12, &pass, 1); return;
     }
+    // Held through the output copy and the closing render-pass call, which read the surfaces.
+    SurfaceLease lease;
+    if (!lease.held) return;
     uint64_t retired = 0;
     const uint32_t index = rsf_unity_interop_slot(&retired);
     SlotView slot;
@@ -293,6 +318,7 @@ void execute11(int id, const rsf_unity_packet& packet)
     if (FAILED(slot.allocator()->Reset()) || FAILED(slot.list()->Reset(slot.allocator(), nullptr))) return;
     Recording recording{slot.list()};
     std::array<ComPtr<ID3D11Texture2D>, 4> input;
+    std::array<rsf_shared_surface*, 4> shared{};
     void* pointers[] = {packet.color, packet.depth, packet.motion, packet.output};
     const bool hudless = id == event_id + 2;
     if (hudless && !pointers[0]) {
@@ -302,17 +328,17 @@ void execute11(int id, const rsf_unity_packet& packet)
     for (uint32_t i = 0; i < 4; ++i) {
         if (pointers[i] && FAILED(static_cast<IUnknown*>(pointers[i])->QueryInterface(IID_PPV_ARGS(&input[i])))) return;
         if (!input[i]) continue;
-        const uint32_t surface = hudless ? 4u : i;
-        if (!prepare_surface(graphics, surface, input[i].Get())) return;
+        shared[i] = prepare_surface(hudless ? 4u : i, input[i].Get());
+        if (!shared[i]) return;
         rsf_unity_interop_record_d3d11_copy();
-        context11->CopyResource(static_cast<ID3D11Resource*>(rsf_shared_surface_d3d11(surfaces[surface].surface)), input[i].Get());
+        context11->CopyResource(static_cast<ID3D11Resource*>(rsf_shared_surface_d3d11(shared[i])), input[i].Get());
     }
     uint64_t upload = 0, download = 0;
     if (!rsf_unity_interop_shared_pair(&upload, &download) || !signal11(graphics, fence11, upload)) return;
     if (FAILED(queue12->Wait(fence12, upload))) return;
     std::array<ID3D12Resource*, 4> resources{};
     for (uint32_t i = 0; i < 4; ++i) if (input[i]) {
-        resources[i] = static_cast<ID3D12Resource*>(rsf_shared_surface_d3d12(surfaces[hudless ? 4u : i].surface));
+        resources[i] = static_cast<ID3D12Resource*>(rsf_shared_surface_d3d12(shared[i]));
         barrier(slot.list(), resources[i], D3D12_RESOURCE_STATE_COMMON,
             hudless ? D3D12_RESOURCE_STATE_RENDER_TARGET : i == 3 ? D3D12_RESOURCE_STATE_COPY_DEST : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     }
@@ -335,7 +361,7 @@ void execute11(int id, const rsf_unity_packet& packet)
         SUCCEEDED(context11->Wait(fence11, download));
     if (handed_back && input[3] && !hudless) {
         rsf_unity_interop_record_d3d11_copy();
-        context11->CopyResource(input[3].Get(), static_cast<ID3D11Resource*>(rsf_shared_surface_d3d11(surfaces[3].surface)));
+        context11->CopyResource(input[3].Get(), static_cast<ID3D11Resource*>(rsf_shared_surface_d3d11(shared[3])));
         if (!signal11(graphics, fence11, rsf_unity_interop_d3d11_tail())) {
             rsf_unity_frames_activate(0);
             log("Unity DX11 output copy has no completion signal; adapter stopped and remains owned.");
@@ -447,11 +473,9 @@ void rsf_unity_package_bridge_finish_retirement(bool commit) noexcept
     if (!commit) return;
     if (renderer == kUnityGfxRendererD3D12) { rsf_unity_d3d12_release(); return; }
     std::lock_guard<std::mutex> lock(guard);
-    // Surfaces first, while the record's devices are still referenced by it.
-    for (auto& surface : surfaces) { rsf_shared_surface_destroy(surface.surface); surface.surface = nullptr; }
     // The Vulkan bridge releases the ring itself, only together with the objects that used it.
-    // Otherwise the D3D11 record destroys its slots, fences, queue and devices, then forgets the
-    // ring. It refuses without the checked close and keeps everything.
+    // Otherwise the D3D11 record destroys its surfaces, slots, fences, queue and devices, then
+    // forgets the ring. It refuses without the checked close and keeps everything.
     if (!vulkan && !rsf_unity_d3d11_release())
         log("Unity DX11 bridge release refused without a checked close; its graphics remain owned.");
     pending_leases = {}; services = {};

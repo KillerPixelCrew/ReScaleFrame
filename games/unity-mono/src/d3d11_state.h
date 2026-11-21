@@ -5,19 +5,22 @@
    bindings: d3d11_state.rs mirrors these records with size assertions and bridge.cpp checks the
    same sizes.
 
-   Rust owns one shared graphics record and its command slots, created, published and retired as
-   one unit: Unity's D3D11 device and immediate context (as ID3D11Device5 and
+   Rust owns one shared graphics record, its command slots and its shared surfaces, published and
+   retired as one unit: Unity's D3D11 device and immediate context (as ID3D11Device5 and
    ID3D11DeviceContext4), the D3D12 device and queue the render pass records on, the bridge's
-   completion fence and the shared D3D11/D3D12 fence, then one D3D12 command allocator and list
-   per submission ring slot (RSF_UNITY_FRAMES_SLOTS, bridge_state.h). Rust also owns the single
-   creator, the stopped state after a failed creation, the checked close and the release. The ring's
-   slot rotation, completion values and shared fence values stay in bridge_interop.h.
+   completion fence and the shared D3D11/D3D12 fence, one D3D12 command allocator and list per
+   submission ring slot (RSF_UNITY_FRAMES_SLOTS, bridge_state.h), and six rsf_shared_surface slots:
+   colour, depth, motion, output, the HUD-less scene and the Editor preview source. Rust also owns
+   the single creator, the stopped state after a failed creation, each surface's source key, its
+   replacement, the surface lease, the checked close and the release. The ring's slot rotation,
+   completion values and shared fence values stay in bridge_interop.h.
 
-   bridge.cpp keeps Unity interface access, the typed D3D11, D3D12 and DXGI calls, the shared
-   surfaces, the D3D11 texture leases, the render-pass calls and the frame callbacks. Its render
-   callbacks are the bridge's admission: a caller borrows the published record only while it holds
-   an rsf_unity_frame_callback, and the package closes callback admission (rsf_unity_frames_try_close)
-   before it closes this owner. */
+   bridge.cpp keeps Unity interface access, the typed D3D11, D3D12 and DXGI calls (the shared
+   format choice and the rsf_shared_surface calls among them), the D3D11 texture leases of queued
+   packets, the render-pass calls and the frame callbacks. Its render callbacks are the bridge's
+   admission: a caller borrows the published record only while it holds an rsf_unity_frame_callback,
+   and the package closes callback admission (rsf_unity_frames_try_close) before it closes this
+   owner. Inside a callback, a surface view is borrowed only under the surface lease. */
 #include "bridge_state.h"
 
 /* rsf_unity_d3d11_initialize results. */
@@ -53,7 +56,10 @@ typedef struct rsf_unity_d3d11_command_handles {
 /* Typed native leaves. create and create_slot transfer each reference as soon as they hold it,
    partial results included, so Rust can roll a refused creation back with destroy_slot and
    destroy, which accept null fields. completed reads the completion fence and shared_completed
-   the shared fence's D3D11 side; neither waits. */
+   the shared fence's D3D11 side; neither waits. wait blocks until the completion fence reaches
+   value, 0 passing at once, and refuses after its timeout. create_surface creates one
+   rsf_shared_surface of format on both devices, logging through services, and transfers it, null
+   on refusal; destroy_surface accepts null. */
 typedef struct rsf_unity_d3d11_device_ops {
     bool (*create)(const rsf_game_host_services* services, rsf_unity_d3d11_device_handles* output);
     void (*destroy)(const rsf_unity_d3d11_device_handles* shared);
@@ -61,6 +67,10 @@ typedef struct rsf_unity_d3d11_device_ops {
     void (*destroy_slot)(const rsf_unity_d3d11_command_handles* slot);
     uint64_t (*completed)(const rsf_unity_d3d11_device_handles* shared);
     uint64_t (*shared_completed)(const rsf_unity_d3d11_device_handles* shared);
+    bool (*wait)(const rsf_unity_d3d11_device_handles* shared, uint64_t value);
+    bool (*create_surface)(const rsf_unity_d3d11_device_handles* shared, const rsf_game_host_services* services,
+        uint32_t width, uint32_t height, uint32_t format, void** output);
+    void (*destroy_surface)(void* surface);
 } rsf_unity_d3d11_device_ops;
 
 /* The caller holds a frame callback. READY lends a view of the published record. Otherwise the
@@ -77,14 +87,28 @@ bool rsf_unity_d3d11_device_view(rsf_unity_d3d11_device_handles* view);
    recording and submission. */
 bool rsf_unity_d3d11_command_slot(uint32_t index, rsf_unity_d3d11_command_handles* view);
 
+/* The caller holds a frame callback. Lends the surface table to that caller alone until
+   rsf_unity_d3d11_surfaces_end. False when closed, unpublished or already lent. */
+bool rsf_unity_d3d11_surfaces_begin(void);
+void rsf_unity_d3d11_surfaces_end(void);
+/* The caller holds the surface lease. Writes surface index (0 to 5) as an rsf_shared_surface view
+   valid until the lease ends. A surface whose key (the source texture's width, height and DXGI
+   format) matches is borrowed as it is. Otherwise Rust waits for the last completion value handed
+   out when a surface is being replaced, creates one of shared_format, publishes it and only then
+   destroys the old one. A refused wait or creation keeps the old surface. A slot this lease already
+   borrowed is never replaced within it. services is borrowed for the creation leaf. */
+bool rsf_unity_d3d11_prepare_surface(uint32_t index, const rsf_game_host_services* services,
+    uint32_t width, uint32_t height, uint32_t source_format, uint32_t shared_format, void** view);
+
 /* Serialized by the package lifecycle, after rsf_unity_frames_try_close succeeded. Closes this
-   owner (no new view, claim or creation) and polls, without waiting, the completion fence against
-   the ring and the shared fence against the last D3D11 copy. Device removal (UINT64_MAX) refuses.
-   Without a record both read as 0. A refusal keeps the owner closed for a retry. */
+   owner (no new view, claim, creation or surface lease) and polls, without waiting, the completion
+   fence against the ring and the shared fence against the last D3D11 copy. Device removal
+   (UINT64_MAX) refuses. Without a record both read as 0. Refuses without closing while a creation
+   runs or the surface lease is held. A fence refusal keeps the owner closed for a retry. */
 bool rsf_unity_d3d11_try_close(void);
-/* After a successful close: destroys the command slots, then the shared fence, completion fence,
-   queue and both devices, and forgets the submission ring. The owner stays closed until open.
-   False, destroying nothing, when it was not closed or a creation is in progress. */
+/* After a successful close: destroys the surfaces, the command slots, then the shared fence,
+   completion fence, queue and both devices, and forgets the submission ring. The owner stays closed
+   until open. False, destroying nothing, when it was not closed or a creation is in progress. */
 bool rsf_unity_d3d11_release(void);
 /* Resumes admission for the next package session. */
 void rsf_unity_d3d11_open(void);
