@@ -10,6 +10,8 @@ mod camera;
 mod engine_settings;
 mod host;
 mod layout;
+#[cfg(windows)]
+mod native_settings;
 mod platform;
 mod renderer;
 #[cfg(windows)]

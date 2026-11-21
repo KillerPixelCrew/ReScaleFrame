@@ -210,7 +210,7 @@ catch (...) {}
 constexpr rsf_rdr2_runtime_leaves runtime_leaves{
     rsf_rdr2_fingerprint,
     start_diagnostics,
-    [](const wchar_t* path) noexcept { return rsf_rdr2_native_settings_probe(path, log, nullptr); },
+    rsf_rdr2_native_settings_probe,
 };
 
 DWORD WINAPI startup(void*) noexcept

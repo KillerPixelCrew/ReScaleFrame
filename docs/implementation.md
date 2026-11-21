@@ -86,6 +86,14 @@ and suppresses gameplay actions while the shared overlay is visible.
 The binding table is complete before registration can call the fiber.
 Build and live input verification remain open.
 
+RDR2's read-only settings probe uses Rust for two exact-byte guards and
+bounded JSONL capture. It still requires the opt-in setting and an arm
+call, and the current ScriptHook path has no arm call. On partial hook
+enable, it can retain the trampolines for any
+callback already in flight. The typed detours preserve the original
+call order. Source checks cover the bytes, keys and bounds. Builds and
+live probe verification remain open.
+
 Fallout 4 now owns exact-build identity, GameSDK lifecycle, Runtime
 session setup and cold D3D11 creation in Rust. The creation owner
 checks the final outer swapchain slot before binding presentation, and

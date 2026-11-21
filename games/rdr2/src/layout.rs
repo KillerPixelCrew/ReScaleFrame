@@ -90,6 +90,30 @@ pub(crate) const TLS_INDEX: usize = 0x5b4_03e0;
 pub(crate) const FRAME_COUNTER: usize = 0x542_904c;
 pub(crate) const FRAME_COUNTER_POINTER: usize = 0x542_9058;
 pub(crate) const FRAME_TIME: usize = 0x59b_393c;
+
+/// Read-only settings row and value diagnostics for the same executable.
+#[cfg(windows)]
+pub(crate) mod settings_probe {
+    use super::Site;
+
+    pub(crate) const BIND: Site = Site {
+        rva: 0x2c6_26e0,
+        expected: [
+            0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x7c, 0x24, 0x18, 0x55, 0x48, 0x8d, 0x6c,
+            0x24, 0xd0,
+        ],
+    };
+    pub(crate) const READ: Site = Site {
+        rva: 0x2c6_27b8,
+        expected: [
+            0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x50, 0x48, 0x8b, 0x02, 0x4c,
+            0x8b, 0xd2,
+        ],
+    };
+    pub(crate) const KEYS: [u32; 4] = [0x4de8_7d5b, 0x58e2_3159, 0x3420_e356, 0x0cd9_de94];
+    pub(crate) const METADATA_KEY: usize = 8;
+    pub(crate) const GETTER_SLOT: usize = 0x78;
+}
 pub(crate) const FSR_IMPORT: usize = 0x603_2a98;
 /// The measured game wrapper call into ffxFsr2ContextDispatch.
 pub(crate) const FSR_WRAPPER_RETURN: usize = 0x26f_050a;
