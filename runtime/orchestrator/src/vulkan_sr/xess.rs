@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: MIT
 //! XeSS Vulkan super resolution. Rust owns the SDK session, context lifetime,
 //! admission, sizing, the private image cache, history, capture order and
-//! teardown. The native table resolves typed SDK entry points and records Vulkan work.
+//! teardown. Rust plans transfers and the native table performs the typed Vulkan and SDK calls.
 use super::*;
 use crate::sdk_module::{Loader, SdkModule};
+use crate::vulkan_fg_copy::{
+    Barrier, BarrierFn, CopyFn, ImageCopy, TRANSFER_SRC, UNDEFINED, record_shader_read_copy,
+};
 use crate::vulkan_fg_resources::{ensure_image, rsf_core_vkfg_release_image};
 use crate::vulkan_fg_resources_abi::{rsf_vkfg_image as OwnedImage, rsf_vkfg_platform as ImageOps};
 use std::ffi::CString;
@@ -59,10 +62,9 @@ pub(super) struct XessOps {
     image_user: unsafe extern "C" fn(Handle) -> Handle,
     images: &'static ImageOps,
     velocity: unsafe extern "C" fn(Handle, f32, f32) -> i32,
-    stage: unsafe extern "C" fn(Handle, Handle, &Image, u64, u32),
-    prepare_output: unsafe extern "C" fn(Handle, Handle, u64, u32),
+    barrier: BarrierFn,
+    copy: CopyFn,
     execute: unsafe extern "C" fn(Handle, Handle, &XessExecute) -> i32,
-    copy_output: unsafe extern "C" fn(Handle, Handle, &Image, &Image),
     sharpen: unsafe extern "C" fn(Handle, &Setup, Handle, &Frame, u64) -> i32,
     clear_sharpen: unsafe extern "C" fn(Handle),
     log: unsafe extern "C" fn(&Frame, *const c_char),
@@ -104,7 +106,11 @@ pub(super) struct XessExecute {
 }
 
 const _: () = {
-    assert!(size_of::<XessOps>() == 31 * 8);
+    assert!(size_of::<XessOps>() == 30 * 8);
+    assert!(std::mem::offset_of!(XessOps, barrier) == 19 * 8);
+    assert!(std::mem::offset_of!(XessOps, copy) == 20 * 8);
+    assert!(std::mem::offset_of!(XessOps, execute) == 21 * 8);
+    assert!(std::mem::offset_of!(XessOps, sharpen) == 22 * 8);
     assert!(size_of::<XessSetup>() == 16 && size_of::<XessInit>() == 16);
     assert!(size_of::<XessTexture>() == 32);
     assert!(size_of::<XessExecute>() == 152);
@@ -284,7 +290,6 @@ unsafe extern "C" fn rsf_core_xessvk_shutdown(ops: Option<&'static XessOps>) -> 
 struct Private {
     description: Image,
     allocation: OwnedImage,
-    initialized: bool,
 }
 
 impl Private {
@@ -300,7 +305,6 @@ impl Private {
                 copy_source: 1,
             },
             allocation: OwnedImage::default(),
-            initialized: false,
         }
     }
 
@@ -490,23 +494,28 @@ impl XessOwner {
             (&frame.depth, &mut self.depth),
             (&frame.motion, &mut self.motion),
         ] {
-            let initialized = u32::from(target.initialized);
             unsafe {
-                (ops.stage)(
+                record_shader_read_copy(
+                    ops.barrier,
+                    ops.copy,
                     native,
                     commands,
-                    source,
-                    target.description.image,
-                    initialized,
+                    source.image,
+                    &target.allocation,
+                    [source.width, source.height],
                 )
             };
-            target.initialized = true;
+            target.allocation.initialized = 1;
         }
-        let initialized = u32::from(self.output.initialized);
-        unsafe {
-            (ops.prepare_output)(native, commands, self.output.description.image, initialized)
+        let output_image = self.output.description.image;
+        let output_before = if self.output.allocation.initialized == 0 {
+            UNDEFINED
+        } else {
+            GENERAL
         };
-        self.output.initialized = true;
+        let barrier = |plan: Barrier| unsafe { (ops.barrier)(native, commands, &plan) };
+        barrier(Barrier::new(output_image, output_before, GENERAL));
+        self.output.allocation.initialized = 1;
 
         let render = [record.render_width, record.render_height];
         let output = [record.output_width, record.output_height];
@@ -552,7 +561,16 @@ impl XessOwner {
             };
         }
         self.record_capture(commands, &private, record, c"sr-output-linear", reset);
-        unsafe { (ops.copy_output)(native, commands, &private, &frame.output) };
+        // The caller already supplied its output in TRANSFER_DST_OPTIMAL.
+        barrier(Barrier::new(output_image, GENERAL, TRANSFER_SRC));
+        unsafe {
+            (ops.copy)(
+                native,
+                commands,
+                &ImageCopy::transfer(output_image, frame.output.image, output),
+            )
+        };
+        barrier(Barrier::new(output_image, TRANSFER_SRC, GENERAL));
         self.active = render;
         self.history.commit(record);
         0

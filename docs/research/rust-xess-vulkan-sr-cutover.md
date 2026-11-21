@@ -52,3 +52,57 @@ through the same Rust helper as DLSS SR and Vulkan FG. The real-leaf input
 range fixture still verifies the XeSS-specific image usage and sizes. The
 synthetic partial-allocation test verifies release of the unpublished image
 and memory before context and earlier image retirement.
+
+## Transfer recording in the Rust owner
+
+Compared `transition`, `copy_region`, `stage`, `prepare_output` and `copy_output`
+in `native_xess_vulkan.cpp` at `8f5d0b4944ff9573eb5f5af6bf2eb0837409c` with
+`vulkan_sr/xess.rs` and the shared `vulkan_fg_copy` Rust and native recorders.
+The guide transfers match the shared shader-read copy sequence used by
+[Vulkan FG](rust-vulkan-dlss-fg-cutover.md#guide-and-hud-less-staging-commands).
+The XeSS owner uses the same records for its output, where the layouts and
+barrier order differ from guide staging.
+
+| Position in evaluation | Recording and state |
+| --- | --- |
+| After velocity scale succeeds | For each guide in colour, depth, motion order, transition the caller's image from `SHADER_READ_ONLY_OPTIMAL` to `TRANSFER_SRC_OPTIMAL`. Transition the cache image from `UNDEFINED` on first use or `SHADER_READ_ONLY_OPTIMAL` on reuse to `TRANSFER_DST_OPTIMAL`. Copy the leased guide's width and height, restore the source to `SHADER_READ_ONLY_OPTIMAL`, then restore the cache image to `SHADER_READ_ONLY_OPTIMAL`. Mark that cache image initialized after its restore. The SDK still sees the maximum-size cache views with the active input extent passed separately. |
+| Before the typed XeSS execute call | Transition the private output from `UNDEFINED` to `GENERAL` on first use and record `GENERAL` to `GENERAL` on reuse. Mark the allocation initialized after this barrier, including when the subsequent SDK call refuses. A refused execute clears history and returns before capture, sharpening or copy-back. The host's existing submit-in-order or retire contract still applies to that recording. |
+| After accepted execute | Record the SR parameters and leased colour, depth and motion captures in their existing order. Run sharpening and record the private output capture in `GENERAL`. Transition only the private output from `GENERAL` to `TRANSFER_SRC_OPTIMAL`, copy the record's output width and height to the caller's existing `TRANSFER_DST_OPTIMAL` image, then restore the private output to `GENERAL`. Commit active extent and history after that restore. |
+
+Every transfer barrier still uses `ALL_COMMANDS` for both stages and
+`MEMORY_READ | MEMORY_WRITE` for both access masks, with source access zero
+from `UNDEFINED`. Both queue families remain `VK_QUEUE_FAMILY_IGNORED` and
+each command stays on the supplied command buffer, preserving graphics queue
+ownership without a queue submission. The typed leaves still emit one colour
+image barrier with zero dependency flags and no other barriers in that call.
+Barriers and copies use mip 0 and layer 0 with one level and one layer. Each
+copy has zero offsets and depth 1. FFX SR's narrower access masks and the
+Vulkan/D3D12 external queue transfers use their own recorders.
+
+The private `Ops` table replaces `stage` and `prepare_output` with typed
+`barrier` and `copy` leaves and removes `copy_output`. It shrinks from 248 to
+240 bytes on x64. Both declarations assert the size and the offsets for
+`barrier` (152), `copy` (160), `execute` (168) and `sharpen` (176). The shared
+barrier and copy records remain 40 and 32 bytes. The public requirement ABI 1
+and SRVK ABI 2 structures and exports keep their signatures. The initial
+`libxess.dll` resolver, module pin and typed SDK calls follow the existing code
+and package pin.
+
+Source review traced the disabled configurations through the unchanged CMake
+guards and `native_xess_vulkan.h`. Without XeSS headers, the four requirement
+exports still pass a null XeSS table. Initialize and the requirement queries
+retain argument validation and `NOT_COMPILED`, and shutdown still succeeds.
+SRVK with FFX Vulkan headers uses its shared table with a null XeSS member.
+Without FFX Vulkan headers it passes a null shared table. Both create paths
+clear the output handle and validate setup before returning `NOT_COMPILED` for
+XeSS. Neither disabled path reaches Vulkan recording or the SDK loader.
+
+The existing Rust owner fixture now records primitive barriers and copies
+instead of the former compound leaves. The native range fixture uses the
+production table and mocks typed Vulkan calls. Its barrier mock discards the
+fields and its copy mock checks extents and count, so masks, queue families,
+subresources and layout parity were reviewed in source. Rust 1.94.1 formatting,
+locked offline Cargo metadata and Git whitespace checks passed. Enabled and
+disabled compilation and linking, binary export checks, Clippy, fixture
+execution, GPU execution and capture, and game acceptance remain unverified
+for this change. The producer and shader coverage limits above still apply.

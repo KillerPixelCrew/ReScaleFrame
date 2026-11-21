@@ -20,14 +20,13 @@ enum Call {
     Provider(u64),
     Allocate(u64, u32, u32, u32),
     Velocity,
-    Stage(u64, u64, u32),
-    Output(u32),
+    Barrier(Barrier),
+    Copy(ImageCopy),
     Execute(u32, u32, u32, u32, u32),
     Parameters(u32),
     Capture(String, u64),
     Sharpen,
     Log(String),
-    Copy(u64, u64, u32, u32),
     Retire(usize),
     Flush,
     Destroy,
@@ -224,13 +223,11 @@ pub(in crate::vulkan_sr) static OPS: XessOps = XessOps {
         push(Call::Velocity);
         state().velocity
     }),
-    stage: leaf!(
-        |_: Handle, _: Handle, source: &Image, target: u64, initialized: u32| -> () {
-            push(Call::Stage(source.image, target, initialized))
-        }
-    ),
-    prepare_output: leaf!(|_: Handle, _: Handle, _: u64, initialized: u32| -> () {
-        push(Call::Output(initialized))
+    barrier: leaf!(|_: Handle, _: Handle, plan: *const Barrier| -> () {
+        push(Call::Barrier(unsafe { *plan }));
+    }),
+    copy: leaf!(|_: Handle, _: Handle, plan: *const ImageCopy| -> () {
+        push(Call::Copy(unsafe { *plan }));
     }),
     execute: leaf!(|_: Handle, _: Handle, call: &XessExecute| -> i32 {
         assert_eq!(
@@ -248,16 +245,6 @@ pub(in crate::vulkan_sr) static OPS: XessOps = XessOps {
         ));
         state().execute
     }),
-    copy_output: leaf!(
-        |_: Handle, _: Handle, output: &Image, target: &Image| -> () {
-            push(Call::Copy(
-                output.image,
-                target.image,
-                output.width,
-                output.layout,
-            ))
-        }
-    ),
     sharpen: leaf!(
         |_: Handle, _: &Setup, _: Handle, _: &Frame, output: u64| -> i32 {
             assert_eq!(output, 13);
@@ -548,7 +535,9 @@ fn owner_sizes_the_cache_and_keys_history_on_identity_and_extent() {
             fake.calls.clear();
             rsf_core_xessvk_evaluate(owner, commands, &input)
         };
-        assert_eq!(run(fake, [1128, 632], 1, &|_| {}), 0);
+        let extent = [1128, 632];
+        let output_copy = ImageCopy::transfer(13, 23, [1920, 1080]);
+        assert_eq!(run(fake, extent, 1, &|_| {}), 0);
         assert_eq!(
             fake.calls,
             [
@@ -557,10 +546,22 @@ fn owner_sizes_the_cache_and_keys_history_on_identity_and_extent() {
                         .into()
                 ),
                 Call::Velocity,
-                Call::Stage(20, 10, 0),
-                Call::Stage(21, 11, 0),
-                Call::Stage(22, 12, 0),
-                Call::Output(0),
+                Call::Barrier(Barrier::new(20, SHADER_READ, TRANSFER_SRC)),
+                Call::Barrier(Barrier::new(10, UNDEFINED, TRANSFER_DST)),
+                Call::Copy(ImageCopy::transfer(20, 10, extent)),
+                Call::Barrier(Barrier::new(20, TRANSFER_SRC, SHADER_READ)),
+                Call::Barrier(Barrier::new(10, TRANSFER_DST, SHADER_READ)),
+                Call::Barrier(Barrier::new(21, SHADER_READ, TRANSFER_SRC)),
+                Call::Barrier(Barrier::new(11, UNDEFINED, TRANSFER_DST)),
+                Call::Copy(ImageCopy::transfer(21, 11, extent)),
+                Call::Barrier(Barrier::new(21, TRANSFER_SRC, SHADER_READ)),
+                Call::Barrier(Barrier::new(11, TRANSFER_DST, SHADER_READ)),
+                Call::Barrier(Barrier::new(22, SHADER_READ, TRANSFER_SRC)),
+                Call::Barrier(Barrier::new(12, UNDEFINED, TRANSFER_DST)),
+                Call::Copy(ImageCopy::transfer(22, 12, extent)),
+                Call::Barrier(Barrier::new(22, TRANSFER_SRC, SHADER_READ)),
+                Call::Barrier(Barrier::new(12, TRANSFER_DST, SHADER_READ)),
+                Call::Barrier(Barrier::new(13, UNDEFINED, GENERAL)),
                 Call::Execute(1128, 632, 1920, 1080, 1),
                 Call::Parameters(1),
                 Call::Capture("sr-source-jittered".into(), 20),
@@ -569,16 +570,22 @@ fn owner_sizes_the_cache_and_keys_history_on_identity_and_extent() {
                 Call::Capture("sr-motion-uv".into(), 22),
                 Call::Sharpen,
                 Call::Capture("sr-output-linear".into(), 13),
-                Call::Copy(13, 23, 1920, GENERAL),
+                Call::Barrier(Barrier::new(13, GENERAL, TRANSFER_SRC)),
+                Call::Copy(output_copy),
+                Call::Barrier(Barrier::new(13, TRANSFER_SRC, GENERAL)),
             ]
         );
-        assert_eq!(run(fake, [1128, 632], 2, &|_| {}), 0);
+        assert_eq!(run(fake, extent, 2, &|_| {}), 0);
         assert!(
             fake.calls
                 .contains(&Call::Execute(1128, 632, 1920, 1080, 0))
         );
         assert!(
-            fake.calls.contains(&Call::Stage(20, 10, 1)) && fake.calls.contains(&Call::Output(1))
+            fake.calls
+                .contains(&Call::Barrier(Barrier::new(10, SHADER_READ, TRANSFER_DST)))
+                && fake
+                    .calls
+                    .contains(&Call::Barrier(Barrier::new(13, GENERAL, GENERAL)))
         );
         // A changed active extent inside the SDK range resets history.
         assert_eq!(run(fake, [1280, 720], 3, &|_| {}), 0);
@@ -619,15 +626,9 @@ fn owner_sizes_the_cache_and_keys_history_on_identity_and_extent() {
         fake.velocity = XESS_SUCCESS;
         fake.execute = -6;
         assert_eq!(run(fake, [1280, 720], 4, &|_| {}), FEATURE_FAILED);
-        assert!(
-            fake.calls
-                .contains(&Call::Execute(1280, 720, 1920, 1080, 0))
-        );
-        assert!(
-            !fake
-                .calls
-                .iter()
-                .any(|call| matches!(call, Call::Copy(..) | Call::Sharpen))
+        assert_eq!(
+            fake.calls.last(),
+            Some(&Call::Execute(1280, 720, 1920, 1080, 0)),
         );
         // A refused dispatch forgets history, even for the next sequential frame.
         fake.execute = XESS_SUCCESS;
@@ -638,10 +639,7 @@ fn owner_sizes_the_cache_and_keys_history_on_identity_and_extent() {
                 .contains(&Call::Execute(1280, 720, 1920, 1080, 1))
         );
         let message = Call::Log("Vulkan sharpening unavailable; retaining vendor output".into());
-        assert!(
-            fake.calls.contains(&message)
-                && fake.calls.contains(&Call::Copy(13, 23, 1920, GENERAL))
-        );
+        assert!(fake.calls.contains(&message) && fake.calls.contains(&Call::Copy(output_copy)));
         assert_eq!(run(fake, [1280, 720], 6, &|_| {}), 0);
         assert!(!fake.calls.contains(&message));
         assert!(

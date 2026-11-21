@@ -281,6 +281,12 @@ extents. Build, device and game checks remain open.
 [Anomaly probes](research/rust-anomaly-overlay-probes.md) ·
 [Vulkan FG staging](research/rust-vulkan-dlss-fg-cutover.md#guide-and-hud-less-staging-commands)
 
+XeSS Vulkan SR also plans guide staging, private output preparation and
+copy-back in Rust. Its guide copies use the shared shader-read sequence.
+Its output retains the XeSS-specific GENERAL layout and copy extent.
+Source checks matched the private table and disabled routes. GPU and
+game verification remain open. [XeSS SR transfers](research/rust-xess-vulkan-sr-cutover.md#transfer-recording-in-the-rust-owner)
+
 The legacy D3D11 Streamline SR owner now selects the required
 interposer and DLSS feature lookups in Rust. It shares the seven
 common lookups and adds the five owner-only lookups for a session

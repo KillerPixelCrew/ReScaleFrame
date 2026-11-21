@@ -843,6 +843,12 @@ and remains unrun. Build and live observer verification remain open.
 
 ## Rust orchestrator and first Anomaly port
 
+XeSS Vulkan SR now plans its guide staging, private output barrier
+and copy-back in Rust. It shares the typed Vulkan recorder with
+the FG sequence and preserves the SR output layouts and extent.
+Source comparison covered the capture order and disabled routes.
+[XeSS SR transfers](research/rust-xess-vulkan-sr-cutover.md#transfer-recording-in-the-rust-owner)
+
 Anomaly's FG input owner now leases and retires the compute shader
 and constant buffer in Rust. A refused buffer allocation releases
 the shader and retains the existing device failure latch. The
