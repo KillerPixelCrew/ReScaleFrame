@@ -1670,7 +1670,7 @@ fn complete<'a>(leaves: *const Leaves) -> Option<&'a Leaves> {
 
 /// Checks the executable and the expected bytes of every native site the readers depend on.
 #[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_inputs_verify() -> bool {
+pub(crate) extern "C" fn rsf_fallout4_inputs_verify() -> bool {
     verify()
 }
 

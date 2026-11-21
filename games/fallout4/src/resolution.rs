@@ -822,7 +822,7 @@ fn collect_shadow(scope: &Scope, receipt: &mut Receipt) -> Option<()> {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_resolution_verify() -> bool {
+pub(crate) extern "C" fn rsf_fallout4_resolution_verify() -> bool {
     let base = image();
     fn guard<const N: usize>(base: usize, rva: usize, expected: &[u8; N]) -> bool {
         read::<[u8; N]>(base + rva).as_ref() == Some(expected)

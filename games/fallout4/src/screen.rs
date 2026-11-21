@@ -171,7 +171,7 @@ fn literal(base: usize, query: &MenuQuery) -> bool {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_verify_screen_queries() -> bool {
+pub(crate) extern "C" fn rsf_fallout4_verify_screen_queries() -> bool {
     VERIFIED_IMAGE.store(0, Ordering::Release);
     let base = image();
     let valid = base != 0

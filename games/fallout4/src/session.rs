@@ -8,15 +8,13 @@
 use crate::creation::{self, rsf_fallout4_accept_window};
 use crate::platform_abi::{
     RSF_D3D11_HOST_ABI_VERSION, RSF_D3D11_HOST_CAP_FG_INPUTS, RSF_D3D11_HOST_CAP_INPUT_TIMELINE,
-    RSF_FALLOUT4_PREPARE_RENDER, RSF_FALLOUT4_QUIESCE_RENDER, RSF_FALLOUT4_RENDER_BUSY,
-    RSF_FALLOUT4_START_RENDER, RSF_FALLOUT4_STOP_RENDER, RSF_FALLOUT4_VERIFY_RENDER,
     rsf_d3d11_host_setup, rsf_fallout4_host_active_fn, rsf_fallout4_host_create_fn,
     rsf_motion_decode_params,
 };
 use crate::{
     EXECUTABLE_SHA256, Ops, PENDING, RSF_ERROR_ABI_MISMATCH, RSF_ERROR_BUSY,
     RSF_ERROR_INVALID_ARGUMENT, RSF_ERROR_NATIVE_REFUSED, RSF_ERROR_NOT_READY, RSF_OK, Threw,
-    cpu_events, dpi, ops, pin,
+    cpu_events, dpi, ops, pin, render_hooks,
 };
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, rsf_game_control_args, rsf_game_host_services, rsf_game_prepare_args,
@@ -115,12 +113,8 @@ fn wide(units: &[u16], suffix: &str) -> Vec<u16> {
 }
 
 impl Session {
-    fn busy(&self, ops: &Ops) -> Result<bool, Threw> {
-        Ok(
-            creation::busy()
-                || ops.subsystem(RSF_FALLOUT4_RENDER_BUSY, None)?
-                || cpu_events::busy(),
-        )
+    fn busy(&self) -> bool {
+        creation::busy() || render_hooks::busy() || cpu_events::busy()
     }
 
     fn refuse(&mut self, ops: &Ops, message: &'static CStr) -> Result<rsf_result, Threw> {
@@ -131,7 +125,7 @@ impl Session {
 
     fn suspend(&mut self, ops: &Ops) -> Result<(), Threw> {
         creation::quiesce();
-        ops.subsystem(RSF_FALLOUT4_QUIESCE_RENDER, None)?;
+        render_hooks::quiesce();
         cpu_events::quiesce();
         if let Some(activate) = self.activate
             && !self.services.user.is_null()
@@ -142,14 +136,14 @@ impl Session {
         Ok(())
     }
 
-    fn release_hooks(&mut self, ops: &Ops) -> Result<bool, Threw> {
-        let rendering = ops.subsystem(RSF_FALLOUT4_STOP_RENDER, None)?;
+    fn release_hooks(&self, ops: &Ops) -> bool {
+        let rendering = render_hooks::stop(ops);
         let created = creation::stop(ops);
         // Keep the CPU owner until its native Swap has closed every render lease.
-        if !rendering || !created || self.busy(ops)? {
-            return Ok(false);
+        if !rendering || !created || self.busy() {
+            return false;
         }
-        Ok(cpu_events::stop(ops))
+        cpu_events::stop(ops)
     }
 
     // The Runtime's scoped D3D11 host for this process, with this adapter's facts.
@@ -213,7 +207,7 @@ impl Session {
     }
 
     fn prepare(&mut self, ops: &Ops, host: &rsf_game_host_services) -> Result<rsf_result, Threw> {
-        if self.prepared || self.busy(ops)? {
+        if self.prepared || self.busy() {
             return Ok(RSF_ERROR_BUSY);
         }
         if !creation::verify_executable(ops)? {
@@ -233,7 +227,7 @@ impl Session {
             ops.log_host(host, refusal)?;
             return Ok(RSF_ERROR_NATIVE_REFUSED);
         }
-        if !ops.subsystem(RSF_FALLOUT4_VERIFY_RENDER, None)? {
+        if !render_hooks::verify_with_inputs() {
             return self.refuse(
                 ops,
                 c"Fallout4 render preparation refused: native call, TAA, resource, camera or depth-domain guard mismatch.",
@@ -282,7 +276,7 @@ impl Session {
                 c"Fallout4 cold creation refused: native bytes, owner, Steam forwarding or scoped services unavailable.",
             );
         }
-        if !ops.subsystem(RSF_FALLOUT4_PREPARE_RENDER, Some(&services))? {
+        if !render_hooks::prepare(ops, &services) {
             return self.refuse(
                 ops,
                 c"Fallout4 render preparation refused: native guards, synchronous services or hook creation unavailable.",
@@ -308,7 +302,7 @@ impl Session {
         }
         let failed = if !cpu_events::start(ops) {
             Some(c"Fallout4 start refused: CPU source/input guards or hooks.")
-        } else if !ops.subsystem(RSF_FALLOUT4_START_RENDER, None)? {
+        } else if !render_hooks::start(ops) {
             Some(c"Fallout4 start refused: render/TAA guards or hooks.")
         } else if !creation::start(ops) {
             Some(c"Fallout4 start refused: cold owner, creation call/thunk or hook.")
@@ -317,7 +311,7 @@ impl Session {
         };
         if let Some(failed) = failed {
             self.suspend(ops)?;
-            let _ = self.release_hooks(ops)?;
+            let _ = self.release_hooks(ops);
             self.prepared = false;
             return self.refuse(ops, failed);
         }
@@ -325,7 +319,7 @@ impl Session {
         let result = ops.host_set_active(activate, self.services.user, 1)?;
         if result != RSF_OK {
             self.suspend(ops)?;
-            let _ = self.release_hooks(ops)?;
+            let _ = self.release_hooks(ops);
             self.prepared = false;
             return Ok(result);
         }
@@ -335,16 +329,12 @@ impl Session {
 
     fn quiesce(&mut self, ops: &Ops) -> Result<rsf_result, Threw> {
         self.suspend(ops)?;
-        Ok(if self.busy(ops)? {
-            RSF_ERROR_BUSY
-        } else {
-            RSF_OK
-        })
+        Ok(if self.busy() { RSF_ERROR_BUSY } else { RSF_OK })
     }
 
     fn stop(&mut self, ops: &Ops) -> Result<rsf_result, Threw> {
         self.suspend(ops)?;
-        if !self.release_hooks(ops)? {
+        if !self.release_hooks(ops) {
             return Ok(RSF_ERROR_BUSY);
         }
         // Steam's immutable relays and MinHook trampolines remain process-lived.
