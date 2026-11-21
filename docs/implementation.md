@@ -302,8 +302,11 @@ callback were removed. The merged build passed 385 pinned Rust tests
 and 14 focused MSVC contracts. The adapter's three exports, dynamic
 Runtime lookup and the pack SHA-256 matched staging. The isolated
 AVX run opened 73 allowlisted roots, reported 79 cached replacements,
-resized with DLSS SR and shut down cleanly. Foreground rendering,
-input and pack reload still need checks on the final build.
+resized with DLSS SR and shut down cleanly. Standard opened the same
+pack in the foreground, resumed DLSS-G after resize and reloaded the
+pack through the overlay. DLSS-G stayed active after reload and overlay
+close. Both Standard runs exited through the engine. Held-key input
+and AVX foreground reload still need checks on the final build.
 [Manifest and AVX evidence](research/rust-anomaly-shader-manifest.md#merged-adapter-verification)
 
 The overlay and FG merge passed 17 focused MSVC contracts in Debug

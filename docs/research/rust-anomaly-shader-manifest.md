@@ -162,6 +162,35 @@ were restored and checked against their backup hashes.
 
 The background run verifies live AVX pack admission and cached
 replacement. It provides no foreground input, overlay or generated-frame
-evidence and did not exercise pack reload. Standard remains open for this
-manifest build. Logs, script and payload hashes are under
+evidence and did not exercise pack reload. Logs, script and payload hashes are under
 `.local/anomaly/staging/live-58fe95a-stage5/evidence/merged-shader-manifest-avx-7d8b4df/`.
+
+## Standard foreground and pack reload
+
+Two isolated Standard runs used the same merged DLL and pack hashes as
+the AVX check. The Standard executable matched its recorded fingerprint
+and opened 73 roots with 79 cached replacements. The first run resized
+from 1280×720 to 1600×900 in the foreground. DLSS-G was active on both
+sides, with steady windows of 240 vendor presents per 120 source frames
+at the new size. Insert opened the overlay with the DLSS Quality and
+DLSS-G 2x states visible. The final full sample showed 569 SR evaluations
+and zero refusals. The scripted quit ended the first run before the
+reload control was reached.
+
+The second run extended the isolated script's quit timer from 18 to
+150 game seconds. Selecting **Reload motion shader pack** in the overlay
+applied the option. The motion stage then reported that it reloaded from
+Runtime source and reset history. Closing the overlay returned its cursor
+ownership. The first panel session drew all 4,128 visible frames and
+consumed all 51 reported pointer events. DLSS-G still reported 240 vendor
+presents per 120 source frames after reload and close, and the final full
+SR sample recorded 7,769 evaluations and zero refusals.
+
+Both runs shut down Direct3D and exited with code 0. DLLs, pack, settings
+and the temporary lifecycle script were restored and checked against the
+backup hashes. A short Escape press after the panel closed did not open
+the game menu. Held-key input and AVX foreground reload remain unverified.
+The logs, scripts and payload hashes are under
+`.local/anomaly/staging/live-58fe95a-stage5/evidence/` in
+`merged-shader-manifest-standard-7d8b4df` and
+`merged-shader-reload-standard-7d8b4df`.
