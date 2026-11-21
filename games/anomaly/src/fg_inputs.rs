@@ -11,6 +11,10 @@ use std::ptr;
 const R24G8_TYPELESS: u32 = 44;
 const D24_UNORM_S8_UINT: u32 = 45;
 const RGBA16_FLOAT: u32 = 10;
+const R32_FLOAT: u32 = 41;
+const RG16_FLOAT: u32 = 34;
+const BIND_SHADER_RESOURCE: u32 = 0x8;
+const BIND_UNORDERED_ACCESS: u32 = 0x80;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Result {
@@ -21,11 +25,64 @@ pub(crate) enum Result {
     Resources,
 }
 
+/// One complete staging set. Fields drop in declaration order, which is the reverse of creation and
+/// matches the destruction order of the former C++ `Targets` members.
 struct SurfaceSet {
-    resources: Lease,
+    motion_uav: Lease,
+    depth_uav: Lease,
+    depth_view: Lease,
+    motion: Lease,
+    depth: Lease,
+    depth_copy: Lease,
     extent: [u32; 2],
-    depth: *mut c_void,
-    motion: *mut c_void,
+}
+
+impl SurfaceSet {
+    /// Creates the textures, then their views. A failed create drops the leases already taken in
+    /// reverse order and returns None, so a caller keeps its previous complete set.
+    fn create(platform: &Platform, device: *mut c_void, extent: [u32; 2]) -> Option<Self> {
+        let release = platform.release_interface?;
+        let create_texture = platform.texture?;
+        let create_depth_view = platform.depth_view?;
+        let create_uav = platform.unordered_view?;
+        let make = |format: u32, bind: u32| {
+            Lease::new(
+                unsafe { create_texture(device, extent[0], extent[1], format, bind) },
+                release,
+            )
+        };
+        let output_bind = BIND_SHADER_RESOURCE | BIND_UNORDERED_ACCESS;
+        let depth_copy = make(R24G8_TYPELESS, BIND_SHADER_RESOURCE)?;
+        let depth = make(R32_FLOAT, output_bind)?;
+        let motion = make(RG16_FLOAT, output_bind)?;
+        let depth_view = Lease::new(
+            unsafe { create_depth_view(device, depth_copy.as_ptr()) },
+            release,
+        )?;
+        let depth_uav = Lease::new(unsafe { create_uav(device, depth.as_ptr()) }, release)?;
+        let motion_uav = Lease::new(unsafe { create_uav(device, motion.as_ptr()) }, release)?;
+        Some(Self {
+            motion_uav,
+            depth_uav,
+            depth_view,
+            motion,
+            depth,
+            depth_copy,
+            extent,
+        })
+    }
+
+    /// Borrows the handles for one dispatch; the set keeps every reference.
+    fn bindings(&self) -> Targets {
+        Targets {
+            depth_copy: self.depth_copy.as_ptr(),
+            depth: self.depth.as_ptr(),
+            motion: self.motion.as_ptr(),
+            depth_view: self.depth_view.as_ptr(),
+            depth_uav: self.depth_uav.as_ptr(),
+            motion_uav: self.motion_uav.as_ptr(),
+        }
+    }
 }
 
 pub(crate) struct Owner {
@@ -51,7 +108,7 @@ impl Owner {
 
     pub(crate) fn outputs(&self) -> Option<[*mut c_void; 2]> {
         let set = self.surfaces.as_ref().filter(|_| self.ready)?;
-        Some([set.depth, set.motion])
+        Some([set.depth.as_ptr(), set.motion.as_ptr()])
     }
 
     fn describe(&self, texture: *mut c_void) -> Description {
@@ -62,18 +119,8 @@ impl Owner {
 
     fn ensure_targets(&mut self, device: *mut c_void, extent: [u32; 2]) -> Option<&SurfaceSet> {
         if self.surfaces.as_ref().is_none_or(|s| s.extent != extent) {
-            let mut targets = Targets::default();
-            unsafe { (self.platform.targets.unwrap())(device, extent[0], extent[1], &mut targets) };
-            let resources = Lease::new(targets.resources, self.platform.release_targets.unwrap())?;
-            if targets.depth.is_null() || targets.motion.is_null() {
-                return None;
-            }
-            self.surfaces = Some(SurfaceSet {
-                resources,
-                extent,
-                depth: targets.depth,
-                motion: targets.motion,
-            });
+            // The new set is complete before the older one drops.
+            self.surfaces = Some(SurfaceSet::create(self.platform, device, extent)?);
         }
         self.surfaces.as_ref()
     }
@@ -138,9 +185,9 @@ impl Owner {
             self.shader_failed = true;
             return Result::Shader;
         };
-        let Some(resources) = self
+        let Some(targets) = self
             .ensure_targets(device, extent)
-            .map(|set| set.resources.as_ptr())
+            .map(SurfaceSet::bindings)
         else {
             return Result::Resources;
         };
@@ -176,7 +223,7 @@ impl Owner {
             (platform.dispatch.unwrap())(
                 context,
                 pipeline,
-                resources,
+                &targets,
                 frame.depth,
                 motion_view.as_ref().map_or(ptr::null_mut(), Lease::as_ptr),
                 &constants,
