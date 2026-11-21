@@ -119,3 +119,22 @@ No device, visible window or game ran. The Rust driver's live behaviour on
 Standard and AVX, live option changes, the Stage 3 burst files, the Stage 5
 capture guides and quiesce with an in-flight frame still need game runs.
 The prior game baseline applies to the C++ driver.
+
+## SR guard admission
+
+The verified Standard and AVX profiles and image reader are shared with
+the native fixture. Rust now selects the SR checks inside the existing
+stage guard callback. The native leaf lends the matched profile and
+guarded image. Stage 2 checks the SSAO viewport helper first. Stage 3
+then checks the set_P unique guard, SetMipLODBias, all six first-person
+call pairs and the reconstruction guards. The common path checks the
+same six function sites, the blur and sun-cascade unique guards and
+the call sites, and returns the first mismatch with the original name.
+The geometry owner still supplies the shared rmNear slot.
+
+Source comparison against `c509a09b` matched the sequence, refusal names,
+16 fields of the private record and its x64 layout. The existing stage
+ABI, profile tables and both `anomaly_sr_hooks` contract sources are
+unchanged. Pinned Rust 1.94.1 formatting, locked offline Windows Cargo
+metadata and Git whitespace checks passed. Compile, link, fixture and
+game verification remain user-owned.

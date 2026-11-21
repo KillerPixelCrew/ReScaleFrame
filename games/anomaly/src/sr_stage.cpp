@@ -30,6 +30,7 @@
 #include <cstring>
 #include <cwchar>
 #include <string_view>
+#include <tuple>
 
 namespace rsf { uint32_t texture_pixel_bytes(DXGI_FORMAT format); }
 
@@ -64,6 +65,34 @@ void rsf_anomaly_sr_stage_jitter_uv(rsf_anomaly_sr_jitter_uv*) noexcept;
 }
 
 namespace rsf::anomaly::sr {
+// Borrowed SR guard facts for the selected build. Each array pointer borrows the full profile array.
+struct SrGuardProfile {
+    const NativeSite* scene_prepare;
+    const NativeSite* combine;
+    const NativeSite* sunshafts;
+    const NativeSite* blur;
+    const NativeSite* sun_cascades;
+    const NativeSite* position_setup;
+    const NativeSite* set_projection;
+    const NativeSite* set_mip_bias;
+    const UniqueGuard* unique;
+    size_t unique_count;
+    const NativeSite* call_sites;
+    const FirstPersonSite* first_person;
+    const UniqueGuard* reconstruction;
+    const char* ssao_code;
+    uint32_t ssao_rva;
+    uint32_t rm_near_rva;
+};
+static_assert(sizeof(NativeSite) == 32 && offsetof(NativeSite, rva) == 8 && offsetof(NativeSite, expected) == 12);
+static_assert(sizeof(UniqueGuard) == 24 && offsetof(UniqueGuard, rva) == 8 && offsetof(UniqueGuard, expected_hex) == 16);
+static_assert(sizeof(FirstPersonSite) == 24 && offsetof(FirstPersonSite, set_p_call) == 12 &&
+    offsetof(FirstPersonSite, rm_near_call) == 16);
+static_assert(sizeof(SrGuardProfile) == 120 && offsetof(SrGuardProfile, unique) == 64 &&
+    offsetof(SrGuardProfile, call_sites) == 80 && offsetof(SrGuardProfile, ssao_rva) == 112);
+extern "C" const char* rsf_anomaly_sr_guard_failure(const rsf_anomaly_guard_image*,
+    const SrGuardProfile*, bool world_window, bool temporal) noexcept;
+
 static_assert(static_cast<std::size_t>(Skip::Count) == RSF_ANOMALY_SR_SKIPS &&
     static_cast<std::size_t>(Restore::Count) == RSF_ANOMALY_SR_RESTORES);
 static_assert(static_cast<uint8_t>(Refusal::Prepare) == 2 && static_cast<uint8_t>(Refusal::Reinsert) == 5);
@@ -319,55 +348,6 @@ void __fastcall combine_hook(void* self) {
 }
 void rm_near_callback(void*) noexcept { rsf_anomaly_sr_stage_rm_near(); }
 
-// Stage 3 calls R_xforms::set_P and SetMipLODBias, and relies on every first-person projection site uploading with
-// set_P and then calling rmNear (the shared slot). Each must still be the verified code.
-bool stage3_guards_match(const rsf_anomaly_guard_image& module, const SrProfile& sr_profile, const char** failed) noexcept {
-    const auto& set_p = sr_profile.sr_function_sites[site_set_p];
-    const auto& set_bias = sr_profile.sr_function_sites[site_set_mip_lod_bias];
-    const auto& rm_near = sr_profile.sr_function_sites[site_rm_near];
-    if (!unique_guards_match(module, sr_profile.sr_unique_guards, set_p.rva)) { *failed = set_p.name; return false; }
-    if (!matches(module, set_bias)) { *failed = set_bias.name; return false; }
-    for (const auto& site : sr_profile.sr_first_person_sites) {
-        if (!rsf_anomaly_guard_first_person(&module, site.set_p_call, site.rm_near_call, set_p.rva, rm_near.rva)) {
-            *failed = site.name; return false;
-        }
-    }
-    return true;
-}
-bool guards_match(std::byte* module, uint32_t image_size, const BuildProfile& selected, bool world_window, bool temporal,
-    const char** failed) noexcept {
-    const auto& sr_profile = *selected.sr;
-    const auto checked = guard_image(module, image_size);
-    // Stage 2 writes the SSAO helper's static viewport: its code, which encodes both data addresses, must match.
-    if (world_window && !rsf_anomaly_guard_hex(&checked, sr_profile.ssao_set_viewport_rva, sr_profile.ssao_set_viewport_code)) {
-        *failed = "set_viewport (r4_rendertarget_phase_ssao.cpp:3)"; return false;
-    }
-    if (temporal && !stage3_guards_match(checked, sr_profile, failed)) return false;
-    if (temporal) {
-        for (const auto& site : sr_profile.reconstruction_guards) {
-            if (!matches(checked, site)) {
-                *failed = site.name; return false;
-            }
-        }
-    }
-    // rmNear is not checked here: the geometry producer verified and patched it, and Stage 1 reaches it only through
-    // the shared slot.
-    for (const auto index : {site_phase_scene_prepare, site_phase_combine, site_phase_sunshafts, site_phase_blur, site_sun_cascades, site_position_setup}) {
-        const auto& site = sr_profile.sr_function_sites[index];
-        if (!matches(checked, site)) {
-            *failed = site.name; return false;
-        }
-    }
-    for (const auto& guard_site : sr_profile.sr_unique_guards) {
-        if (guard_site.rva != sr_profile.sr_function_sites[site_phase_blur].rva &&
-            guard_site.rva != sr_profile.sr_function_sites[site_sun_cascades].rva) continue;
-        if (!matches(checked, guard_site)) { *failed = guard_site.name; return false; }
-    }
-    for (const auto& site : sr_profile.sr_call_sites) {
-        if (!matches(checked, site)) { *failed = site.name; return false; }
-    }
-    return true;
-}
 bool install_hooks() noexcept {
     if (hooks.created()) return hooks.enable();
     if (!build || !image) return false;
@@ -617,9 +597,30 @@ const rsf_anomaly_sr_stage_platform platform{
     .driver_overlay_report = [](void* report) { (void)driver.overlay_report(*static_cast<rsf_overlay_sr_report*>(report)); },
     .driver_request = [](const rsf_anomaly_sr_settings* settings) { driver.request(to_native(*settings)); },
     .verify_guards = [](void* module, uint32_t image_size, const void* selected, bool world_window, bool temporal) -> const char* {
-        const char* failed = "unknown";
-        return guards_match(static_cast<std::byte*>(module), image_size, *static_cast<const BuildProfile*>(selected), world_window,
-            temporal, &failed) ? nullptr : failed;
+        const auto& profile = *static_cast<const BuildProfile*>(selected)->sr;
+        const auto& sites = profile.sr_function_sites;
+        static_assert(sr_call_site_count == 6 && sr_first_person_site_count == 6 &&
+            std::tuple_size_v<decltype(SrProfile::reconstruction_guards)> == 4);
+        const SrGuardProfile guards{
+            .scene_prepare = &sites[site_phase_scene_prepare],
+            .combine = &sites[site_phase_combine],
+            .sunshafts = &sites[site_phase_sunshafts],
+            .blur = &sites[site_phase_blur],
+            .sun_cascades = &sites[site_sun_cascades],
+            .position_setup = &sites[site_position_setup],
+            .set_projection = &sites[site_set_p],
+            .set_mip_bias = &sites[site_set_mip_lod_bias],
+            .unique = profile.sr_unique_guards.data(),
+            .unique_count = profile.sr_unique_guards.size(),
+            .call_sites = profile.sr_call_sites.data(),
+            .first_person = profile.sr_first_person_sites.data(),
+            .reconstruction = profile.reconstruction_guards.data(),
+            .ssao_code = profile.ssao_set_viewport_code,
+            .ssao_rva = profile.ssao_set_viewport_rva,
+            .rm_near_rva = sites[site_rm_near].rva,
+        };
+        const auto checked = guard_image(static_cast<const std::byte*>(module), image_size);
+        return rsf_anomaly_sr_guard_failure(&checked, &guards, world_window, temporal);
     },
     .hooks_created = [] { return hooks.created(); },
     .set_engine = [](void* module, const void* selected, bool temporal) {

@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+mod sr;
+
 use std::ffi::{CStr, c_char, c_void};
 
 pub(super) type Read = unsafe extern "C" fn(*mut c_void, *const c_void, usize) -> bool;
@@ -12,14 +14,14 @@ pub(super) struct Image {
 
 #[repr(C)]
 pub(super) struct NativeSite {
-    _name: *const c_char,
+    name: *const c_char,
     rva: u32,
     expected: [u8; 16],
 }
 
 #[repr(C)]
 pub(super) struct UniqueGuard {
-    _name: *const c_char,
+    name: *const c_char,
     rva: u32,
     expected_hex: *const c_char,
 }
@@ -155,12 +157,12 @@ mod tests {
     fn site_admission_requires_the_unique_suffix() {
         let name = c"fixture".as_ptr();
         let sites = [NativeSite {
-            _name: name,
+            name,
             rva: 0,
             expected: [0x90; 16],
         }];
         let guards = [UniqueGuard {
-            _name: name,
+            name,
             rva: 0,
             expected_hex: c"9090909090909090909090909090909091".as_ptr(),
         }];
