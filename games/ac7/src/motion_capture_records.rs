@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
-//! Native CPU observations and their candidate graph-to-RHI associations. The C++ capture
-//! owns the session, guarded engine reads and the artifact writer, including blob snapshots.
+//! Native CPU observations, candidate graph-to-RHI associations and capture publication.
+//! The C++ capture owns the session, guarded engine reads, GPU data and narrow file effects.
+
+mod artifacts;
 
 use rsf_game_sys::rsf_game_render_pass;
 use std::cell::{Cell, RefCell};
@@ -115,21 +117,21 @@ const MAIN_TEMPORAL_BUILD_BEFORE: u32 = 6;
 const MAIN_TEMPORAL_PROCESS_BEGIN: u32 = 8;
 const GRAPH_PASS_BEGIN: u32 = 10;
 
-const ROOT_NAMES: [&CStr; 14] = [
-    c"postprocess_begin",
-    c"postprocess_end",
-    c"widget_prepare_before",
-    c"widget_prepare_after",
-    c"widget_queue_before",
-    c"widget_queue_after",
-    c"main_temporal_build_before",
-    c"main_temporal_build_after",
-    c"main_temporal_process_begin",
-    c"main_temporal_process_end",
-    c"graph_pass_begin",
-    c"graph_pass_end",
-    c"rhi_scope_begin",
-    c"rhi_scope_restore",
+const ROOT_NAMES: [&str; 14] = [
+    "postprocess_begin",
+    "postprocess_end",
+    "widget_prepare_before",
+    "widget_prepare_after",
+    "widget_queue_before",
+    "widget_queue_after",
+    "main_temporal_build_before",
+    "main_temporal_build_after",
+    "main_temporal_process_begin",
+    "main_temporal_process_end",
+    "graph_pass_begin",
+    "graph_pass_end",
+    "rhi_scope_begin",
+    "rhi_scope_restore",
 ];
 
 #[repr(C)]
@@ -160,7 +162,6 @@ pub struct GeometryScope {
     role: u32,
 }
 
-#[repr(C)]
 struct NativeRecordCounts {
     engine: usize,
     roots: usize,
@@ -168,13 +169,6 @@ struct NativeRecordCounts {
     engine_dropped: u32,
     roots_dropped: u32,
     commands_dropped: u32,
-}
-
-#[repr(C)]
-pub struct NativeRecordsView {
-    engine: *const EngineRecord,
-    roots: *const RootRecord,
-    counts: NativeRecordCounts,
 }
 
 #[repr(u32)]
@@ -190,7 +184,6 @@ const _: () = {
     assert!(size_of::<RootRecord>() == 376 && offset_of!(RootRecord, output_name) == 304);
     assert!(size_of::<NativeRootScope>() == 16 && size_of::<QueuedScope>() == 40);
     assert!(size_of::<GeometryScope>() == 32);
-    assert!(size_of::<NativeRecordCounts>() == 40 && size_of::<NativeRecordsView>() == 56);
 };
 
 #[derive(Clone, Copy)]
@@ -219,8 +212,8 @@ thread_local! {
 }
 
 fn records() -> MutexGuard<'static, Records> {
-    // The native session mutex is taken first whenever both locks are needed. No engine
-    // call runs under this lock, and the artifact reader is synchronous and non-reentrant.
+    // The native session mutex is taken first whenever both locks are needed.
+    // No engine call or file effect runs under this lock.
     RECORDS.lock().unwrap_or_else(|error| error.into_inner())
 }
 
@@ -347,15 +340,6 @@ pub unsafe extern "C" fn rsf_ac7_capture_init_root(root: *mut RootRecord, kind: 
     root.owner = owner;
     root.id = ROOT_SERIAL.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
     root.parent = ROOT.get().id;
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn rsf_ac7_capture_root_kind(kind: u32) -> *const c_char {
-    ROOT_NAMES
-        .get(kind as usize)
-        .copied()
-        .unwrap_or(c"")
-        .as_ptr()
 }
 
 #[unsafe(no_mangle)]
@@ -550,29 +534,14 @@ pub extern "C" fn rsf_ac7_capture_geometry_scope() -> GeometryScope {
     })
 }
 
-type RecordsReader = unsafe extern "C" fn(*mut c_void, *const NativeRecordsView) -> bool;
+type CopyRoots = unsafe extern "C" fn(*mut c_void, *const RootRecord, usize) -> bool;
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn rsf_ac7_capture_read_records(
-    user: *mut c_void,
-    read: RecordsReader,
-) -> bool {
+pub unsafe extern "C" fn rsf_ac7_capture_copy_roots(user: *mut c_void, copy: CopyRoots) -> bool {
     let records = records();
-    let view = NativeRecordsView {
-        engine: records.engine.as_ptr(),
-        roots: records.roots.as_ptr(),
-        counts: NativeRecordCounts {
-            engine: records.engine.len(),
-            roots: records.roots.len(),
-            commands: records.commands.len(),
-            engine_dropped: records.engine_dropped,
-            roots_dropped: records.roots_dropped,
-            commands_dropped: records.commands_dropped,
-        },
-    };
-    // SAFETY: The non-reentrant native reader borrows both arrays only during this call.
-    // The lock prevents their mutation or reallocation for the duration of the borrow.
-    unsafe { read(user, &view) }
+    // SAFETY: The native callback only copies the locked array into checkpoint storage
+    // while holding its session guard, which also protects the companion blob snapshot.
+    records.roots.is_empty() || unsafe { copy(user, records.roots.as_ptr(), records.roots.len()) }
 }
 
 #[unsafe(no_mangle)]
