@@ -736,6 +736,11 @@ impl Owner {
     }
 
     fn drain(&mut self) -> i32 {
+        // Once retirement has started, graphics are already drained. The SDK
+        // swapchain may have been destroyed even while other cleanup is pending.
+        if self.retiring || self.status.available == 0 {
+            return OK;
+        }
         // Device idle cannot cover commands the host has not submitted yet.
         if self.unsubmitted() {
             return NOT_READY;
@@ -756,20 +761,23 @@ impl Owner {
             self.withdraw();
             return OK;
         }
-        if self.unsubmitted() {
-            return NOT_READY;
-        }
-        // An owner that never became available has never been returned for
-        // recording or presentation, so it has no SDK work to disable or drain.
-        if self.status.available != 0 {
-            if self.effect && self.configure(None) != OK {
-                return FEATURE_FAILED;
-            }
-            if self.chain != 0 && self.drain() != OK {
+        if !self.retiring {
+            if self.unsubmitted() {
                 return NOT_READY;
             }
+            // An owner that never became available has no engine work to drain.
+            if self.status.available != 0 {
+                if self.effect && self.configure(None) != OK {
+                    return FEATURE_FAILED;
+                }
+                if self.chain != 0 && self.drain() != OK {
+                    return NOT_READY;
+                }
+            }
+            self.retiring = true;
+            self.status.available = 0;
+            self.status.enabled = 0;
         }
-        self.retiring = true;
         if self.chain != 0 && !self.context {
             // A replacement chain without its SDK context cannot be passed to either destructor.
             // Keep the provider and WSI route live for this unproven SDK allocation.
@@ -1020,7 +1028,7 @@ unsafe extern "C" fn rsf_core_ffxgvk_submitted(
     commands: *const Handle,
     count: u32,
 ) {
-    if let Some(owner) = unsafe { owner.as_mut() }
+    if let Some(owner) = unsafe { live(owner) }
         && !commands.is_null()
     {
         owner.submitted(commands, count);
@@ -1512,6 +1520,8 @@ mod tests {
             calls(|c| (c.effects_destroyed, c.chains_destroyed, c.closes)),
             (1, 1, 0)
         );
+        assert_eq!(unsafe { rsf_core_ffxgvk_drain(owner) }, OK);
+        assert_eq!(calls(|c| c.drains), 0);
         calls(|c| c.fail_swapchain_destroy = false);
         assert_eq!(unsafe { rsf_core_ffxgvk_destroy(owner) }, OK);
         assert_eq!(
@@ -1593,6 +1603,8 @@ mod tests {
         assert_eq!(calls(|c| (c.drains, c.effects_destroyed)), (1, 0));
         calls(|c| (c.fail_drain, c.fail_effect_destroy) = (false, true));
         assert_eq!(unsafe { rsf_core_ffxgvk_destroy(owner) }, FEATURE_FAILED);
+        assert_eq!(unsafe { rsf_core_ffxgvk_drain(owner) }, OK);
+        assert_eq!(calls(|c| c.drains), 2);
         let mut count = 0;
         unsafe {
             assert_eq!(
@@ -1615,7 +1627,7 @@ mod tests {
                 c.swapchains_destroyed,
                 c.closes
             )),
-            (3, 1, 1, 1, 1)
+            (2, 1, 1, 1, 1)
         );
     }
 

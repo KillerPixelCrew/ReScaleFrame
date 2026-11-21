@@ -4,6 +4,15 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The Rust FidelityFX Vulkan owner now records successful disable and
+drain before it starts releasing SDK objects. A teardown retry skips
+that work and resumes release. Public drain no longer dispatches to
+an SDK swapchain that may already be destroyed, and retiring owners
+no longer take submission notifications. Updated synthetic fixtures
+cover the drained retry and refused cleanup after partial creation.
+Source review traced the native dispatch. The revised fixtures and
+device teardown remain unverified.
+
 The Rust Vulkan FG dispatch retains a partially created provider
 for cleanup without admitting new rendering or latency work. The
 provider and chain outputs still carry the existing destroy-retry
