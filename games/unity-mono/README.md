@@ -25,6 +25,14 @@ tables and the D3D12 debug layer through `rsf_unity_runtime_platform`. Path reso
 `[UnitySR]` lives in `runtime_config.rs`; the Unity package reads it through
 `unity_runtime_config.h` from the same archive.
 
+The Unity package's own state is in the archive too (`package_state.rs`, through
+`integrations/unity/native/package_state.h`): the stored settings and their validation, the
+`rsfu_status` and `rsfu_frame_counters` snapshots, the render plan, temporal readiness, the
+pending reconfiguration and the session lifecycle with its `rsfu_initialize` result codes.
+`package.cpp` keeps the `rsfu_*` exports, the SR views, the Unity, DXGI, Vulkan and preview work
+and the input window, and lends the typed SDK and Runtime calls through
+`rsf_unity_package_platform`.
+
 Detection currently requires the exact x64 Drag'n Wash executable name and SHA256. A different
 build remains unknown, including other Unity Mono games. Recognition only establishes identity.
 The initial adapter targets Unity 6000.3 URP RenderGraph on native D3D12. Its Mono helper uses
