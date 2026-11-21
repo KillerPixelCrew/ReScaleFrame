@@ -2,28 +2,13 @@
 
 #![allow(non_camel_case_types)]
 use crate::overlay_abi::{rsf_overlay_intent, rsf_overlay_stats, rsf_overlay_texture_update};
+use crate::overlay_host_abi::rsf_overlay_draw_data;
 
 pub type rsf_overlay12_log = ::core::option::Option<
     unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void, arg2: *const ::core::ffi::c_char),
 >;
 pub const RSF_OVERLAY12_TEXTURE_LIMIT: _bindgen_ty_1 = 64;
 pub type _bindgen_ty_1 = ::core::ffi::c_int;
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct rsf_overlay12_texture {
-    pub id: u64,
-    pub resource: *mut ::core::ffi::c_void,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_overlay12_texture"][::core::mem::size_of::<rsf_overlay12_texture>() - 16usize];
-    ["Alignment of rsf_overlay12_texture"]
-        [::core::mem::align_of::<rsf_overlay12_texture>() - 8usize];
-    ["Offset of field: rsf_overlay12_texture::id"]
-        [::core::mem::offset_of!(rsf_overlay12_texture, id) - 0usize];
-    ["Offset of field: rsf_overlay12_texture::resource"]
-        [::core::mem::offset_of!(rsf_overlay12_texture, resource) - 8usize];
-};
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct rsf_overlay12_target {
@@ -44,19 +29,29 @@ const _: () = {
 };
 #[repr(C)]
 #[derive(Copy, Clone)]
-pub struct rsf_overlay12_geometry {
-    pub vertex_count: u32,
+pub struct rsf_overlay12_draw_call {
+    pub descriptor: u32,
+    pub first_index: u32,
     pub index_count: u32,
+    pub vertex_offset: i32,
+    pub clip: [i32; 4usize],
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of rsf_overlay12_geometry"][::core::mem::size_of::<rsf_overlay12_geometry>() - 8usize];
-    ["Alignment of rsf_overlay12_geometry"]
-        [::core::mem::align_of::<rsf_overlay12_geometry>() - 4usize];
-    ["Offset of field: rsf_overlay12_geometry::vertex_count"]
-        [::core::mem::offset_of!(rsf_overlay12_geometry, vertex_count) - 0usize];
-    ["Offset of field: rsf_overlay12_geometry::index_count"]
-        [::core::mem::offset_of!(rsf_overlay12_geometry, index_count) - 4usize];
+    ["Size of rsf_overlay12_draw_call"]
+        [::core::mem::size_of::<rsf_overlay12_draw_call>() - 32usize];
+    ["Alignment of rsf_overlay12_draw_call"]
+        [::core::mem::align_of::<rsf_overlay12_draw_call>() - 4usize];
+    ["Offset of field: rsf_overlay12_draw_call::descriptor"]
+        [::core::mem::offset_of!(rsf_overlay12_draw_call, descriptor) - 0usize];
+    ["Offset of field: rsf_overlay12_draw_call::first_index"]
+        [::core::mem::offset_of!(rsf_overlay12_draw_call, first_index) - 4usize];
+    ["Offset of field: rsf_overlay12_draw_call::index_count"]
+        [::core::mem::offset_of!(rsf_overlay12_draw_call, index_count) - 8usize];
+    ["Offset of field: rsf_overlay12_draw_call::vertex_offset"]
+        [::core::mem::offset_of!(rsf_overlay12_draw_call, vertex_offset) - 12usize];
+    ["Offset of field: rsf_overlay12_draw_call::clip"]
+        [::core::mem::offset_of!(rsf_overlay12_draw_call, clip) - 16usize];
 };
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -65,6 +60,8 @@ pub struct rsf_overlay12_draw {
     pub pipeline: *mut ::core::ffi::c_void,
     pub vertices: *mut ::core::ffi::c_void,
     pub indices: *mut ::core::ffi::c_void,
+    pub vertex_data: *const ::core::ffi::c_void,
+    pub index_data: *const ::core::ffi::c_void,
     pub width: u32,
     pub height: u32,
     pub vertex_bytes: u32,
@@ -72,7 +69,7 @@ pub struct rsf_overlay12_draw {
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of rsf_overlay12_draw"][::core::mem::size_of::<rsf_overlay12_draw>() - 48usize];
+    ["Size of rsf_overlay12_draw"][::core::mem::size_of::<rsf_overlay12_draw>() - 64usize];
     ["Alignment of rsf_overlay12_draw"][::core::mem::align_of::<rsf_overlay12_draw>() - 8usize];
     ["Offset of field: rsf_overlay12_draw::target"]
         [::core::mem::offset_of!(rsf_overlay12_draw, target) - 0usize];
@@ -82,14 +79,18 @@ const _: () = {
         [::core::mem::offset_of!(rsf_overlay12_draw, vertices) - 16usize];
     ["Offset of field: rsf_overlay12_draw::indices"]
         [::core::mem::offset_of!(rsf_overlay12_draw, indices) - 24usize];
+    ["Offset of field: rsf_overlay12_draw::vertex_data"]
+        [::core::mem::offset_of!(rsf_overlay12_draw, vertex_data) - 32usize];
+    ["Offset of field: rsf_overlay12_draw::index_data"]
+        [::core::mem::offset_of!(rsf_overlay12_draw, index_data) - 40usize];
     ["Offset of field: rsf_overlay12_draw::width"]
-        [::core::mem::offset_of!(rsf_overlay12_draw, width) - 32usize];
+        [::core::mem::offset_of!(rsf_overlay12_draw, width) - 48usize];
     ["Offset of field: rsf_overlay12_draw::height"]
-        [::core::mem::offset_of!(rsf_overlay12_draw, height) - 36usize];
+        [::core::mem::offset_of!(rsf_overlay12_draw, height) - 52usize];
     ["Offset of field: rsf_overlay12_draw::vertex_bytes"]
-        [::core::mem::offset_of!(rsf_overlay12_draw, vertex_bytes) - 40usize];
+        [::core::mem::offset_of!(rsf_overlay12_draw, vertex_bytes) - 56usize];
     ["Offset of field: rsf_overlay12_draw::index_bytes"]
-        [::core::mem::offset_of!(rsf_overlay12_draw, index_bytes) - 44usize];
+        [::core::mem::offset_of!(rsf_overlay12_draw, index_bytes) - 60usize];
 };
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -141,14 +142,13 @@ pub struct rsf_overlay12_platform {
     pub layout: ::core::option::Option<
         unsafe extern "C" fn(
             panel: *mut ::core::ffi::c_void,
-            slot: u32,
             width: u32,
             height: u32,
             elapsed: f32,
             hint_alpha: f32,
             arg1: *const rsf_overlay_stats,
             arg2: *mut rsf_overlay_intent,
-            arg3: *mut rsf_overlay12_geometry,
+            arg3: *mut rsf_overlay_draw_data,
         ) -> u32,
     >,
     pub updates: ::core::option::Option<
@@ -181,8 +181,10 @@ pub struct rsf_overlay12_platform {
             panel: *mut ::core::ffi::c_void,
             slot: u32,
             arg1: *const rsf_overlay12_draw,
-            arg2: *const rsf_overlay12_texture,
+            textures: *const *mut ::core::ffi::c_void,
             texture_count: u32,
+            arg2: *const rsf_overlay12_draw_call,
+            call_count: u32,
         ) -> u32,
     >,
     pub execute:

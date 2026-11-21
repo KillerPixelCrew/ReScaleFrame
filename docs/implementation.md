@@ -4,6 +4,15 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now prepares native D3D12 overlay draw calls from the shared panel
+layout. It resolves atlas texture IDs, clamps scissors to the
+backbuffer, and verifies both the index range and the vertices
+referenced by each draw. The old range check covered the index slice
+but could accept an index whose base vertex put it outside the vertex
+buffer. Native code records the validated D3D12 commands without
+keeping a copy of the borrowed layout. The private bindings were
+regenerated. Build and device validation remain open.
+
 Rust now caches the native D3D12 overlay pipeline by backbuffer format
 and owns each slot's vertex and index upload buffers. A submitted slot
 keeps its pipeline reference through fence retirement. Rust checks

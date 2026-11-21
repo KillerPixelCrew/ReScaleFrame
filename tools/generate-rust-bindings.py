@@ -215,9 +215,10 @@ generate("runtime/orchestrator/src/overlay_abi.rs", "runtime/orchestrator/src/ov
                         "};"],
          use_core=False)
 generate("runtime/orchestrator/src/overlay_native12_abi.rs", "runtime/orchestrator/src/overlay_wrapped12_platform.h",
-         "rsf_overlay(12_(log|platform|texture|target|geometry|draw)|11on12_(device|target|platform))", "RSF_OVERLAY12_TEXTURE_LIMIT",
+         "rsf_overlay(12_(log|platform|target|draw|draw_call)|11on12_(device|target|platform))", "RSF_OVERLAY12_TEXTURE_LIMIT",
          ["-Iruntime/orchestrator/include", "-Iui/overlay/include", "-Isdk/game/include"],
          ["--no-recursive-allowlist", "--raw-line",
+          "use crate::overlay_host_abi::rsf_overlay_draw_data;", "--raw-line",
           "use crate::overlay_abi::{rsf_overlay_intent, rsf_overlay_stats, rsf_overlay_texture_update};"])
 generate("runtime/orchestrator/src/overlay_host_abi.rs", "loader/proxy/src/overlay_host_platform.h",
          "rsf_overlay(_result|_input|_draw_data|_vertex|_draw_call|_host_(log|panel|texture_desc|targets|platform))?",

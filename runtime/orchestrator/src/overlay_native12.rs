@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
 use crate::overlay_abi::{rsf_overlay_intent, rsf_overlay_stats, rsf_overlay_texture_update};
-use crate::overlay_host_abi::rsf_overlay_vertex;
+use crate::overlay_host_abi::{rsf_overlay_draw_data as DrawData, rsf_overlay_vertex};
 use crate::overlay_native12_abi::{
-    RSF_OVERLAY12_TEXTURE_LIMIT, rsf_overlay12_draw as Draw, rsf_overlay12_geometry as Geometry,
+    RSF_OVERLAY12_TEXTURE_LIMIT, rsf_overlay12_draw as Draw, rsf_overlay12_draw_call as DrawCall,
     rsf_overlay12_log, rsf_overlay12_platform as Platform, rsf_overlay12_target as Target,
-    rsf_overlay12_texture,
 };
 use crate::owned_win32_handle;
 use crate::sr_session::has_capacity;
@@ -151,16 +150,19 @@ impl DrawSlot {
         &mut self,
         platform: &Platform,
         native: *mut c_void,
-        geometry: Geometry,
+        data: &DrawData,
         binding: &mut Draw,
     ) -> Option<()> {
-        if geometry.vertex_count == 0 || geometry.index_count == 0 {
+        if data.vertex_count == 0 || data.index_count == 0 {
             return Some(());
         }
-        binding.vertex_bytes = geometry
+        if data.vertices.is_null() || data.indices.is_null() {
+            return None;
+        }
+        binding.vertex_bytes = data
             .vertex_count
             .checked_mul(size_of::<rsf_overlay_vertex>() as u32)?;
-        binding.index_bytes = geometry.index_count.checked_mul(size_of::<u32>() as u32)?;
+        binding.index_bytes = data.index_count.checked_mul(size_of::<u32>() as u32)?;
         binding.vertices = upload(&mut self.vertices, platform, native, binding.vertex_bytes)?;
         binding.indices = upload(&mut self.indices, platform, native, binding.index_bytes)?;
         Some(())
@@ -210,6 +212,20 @@ struct Texture {
     width: u32,
     height: u32,
     resource: ComRef,
+}
+
+// The overlay lends these arrays until its next layout. The caller serializes that layout.
+unsafe fn borrowed_draw_slice<'a, T>(data: *const T, count: u32) -> Option<&'a [T]> {
+    if count == 0 {
+        return Some(&[]);
+    }
+    let count = count as usize;
+    let bytes = count.checked_mul(size_of::<T>())?;
+    if data.is_null() || !data.is_aligned() || bytes > isize::MAX as usize {
+        return None;
+    }
+    data.addr().checked_add(bytes)?;
+    Some(unsafe { std::slice::from_raw_parts(data, count) })
 }
 
 struct Atlas {
@@ -298,12 +314,53 @@ impl Atlas {
         Some(())
     }
 
-    fn record(
+    unsafe fn draw_calls(&self, data: &DrawData, binding: &Draw) -> Option<Vec<DrawCall>> {
+        if binding.vertex_bytes == 0 || binding.index_bytes == 0 {
+            return Some(Vec::new());
+        }
+        let indices = unsafe { borrowed_draw_slice(data.indices, data.index_count) }?;
+        let calls = unsafe { borrowed_draw_slice(data.calls, data.call_count) }?;
+        let mut planned = Vec::new();
+        planned.try_reserve_exact(calls.len()).ok()?;
+        let edge = |origin: u32, offset: u32, limit: u32| {
+            i32::try_from(origin.saturating_add(offset).min(limit)).ok()
+        };
+        for call in calls {
+            let descriptor = self.position(call.texture_id)? as u32;
+            let end = call.index_offset.checked_add(call.index_count)? as usize;
+            let first = call.index_offset as usize;
+            let available_vertices = data.vertex_count.checked_sub(call.vertex_offset)?;
+            if indices
+                .get(first..end)?
+                .iter()
+                .any(|&index| index >= available_vertices)
+            {
+                return None;
+            }
+            planned.push(DrawCall {
+                descriptor,
+                first_index: call.index_offset,
+                index_count: call.index_count,
+                vertex_offset: i32::try_from(call.vertex_offset).ok()?,
+                clip: [
+                    edge(call.clip_x, 0, binding.width)?,
+                    edge(call.clip_y, 0, binding.height)?,
+                    edge(call.clip_x, call.clip_width, binding.width)?,
+                    edge(call.clip_y, call.clip_height, binding.height)?,
+                ],
+            });
+        }
+        Some(planned)
+    }
+
+    // data borrows the live panel layout while this slot is recorded.
+    unsafe fn record(
         &mut self,
         platform: &Platform,
         native: *mut c_void,
         slot: usize,
         binding: &Draw,
+        data: &DrawData,
     ) -> Option<()> {
         let mut batch = [rsf_overlay_texture_update::default(); ATLAS_BATCH];
         loop {
@@ -318,15 +375,10 @@ impl Atlas {
             }
         }
 
-        let mut bindings = [rsf_overlay12_texture {
-            id: 0,
-            resource: std::ptr::null_mut(),
-        }; TEXTURES];
+        let calls = unsafe { self.draw_calls(data, binding) }?;
+        let mut bindings = [std::ptr::null_mut(); TEXTURES];
         for (binding, texture) in bindings.iter_mut().zip(&self.textures) {
-            *binding = rsf_overlay12_texture {
-                id: texture.id,
-                resource: texture.resource.as_ptr(),
-            };
+            *binding = texture.resource.as_ptr();
             self.retained[slot].push(texture.resource.clone());
         }
         let recorded = unsafe {
@@ -336,6 +388,8 @@ impl Atlas {
                 binding,
                 bindings.as_ptr(),
                 self.textures.len() as u32,
+                calls.as_ptr(),
+                calls.len() as u32,
             )
         };
         if recorded == 0 {
@@ -612,21 +666,20 @@ unsafe extern "C" fn rsf_core_overlay12_present(
         struct_size: size_of::<rsf_overlay_intent>() as u32,
         ..Default::default()
     };
-    let mut geometry = Geometry {
-        vertex_count: 0,
-        index_count: 0,
+    let mut data = DrawData {
+        struct_size: size_of::<DrawData>() as u32,
+        ..Default::default()
     };
     if unsafe {
         (platform.layout.unwrap())(
             native,
-            slot_index,
             frame.width,
             frame.height,
             elapsed,
             hint_alpha,
             stats,
             &mut decided,
-            &mut geometry,
+            &mut data,
         )
     } == 0
     {
@@ -644,22 +697,20 @@ unsafe extern "C" fn rsf_core_overlay12_present(
         pipeline,
         vertices: std::ptr::null_mut(),
         indices: std::ptr::null_mut(),
+        vertex_data: data.vertices.cast(),
+        index_data: data.indices.cast(),
         width: frame.width,
         height: frame.height,
         vertex_bytes: 0,
         index_bytes: 0,
     };
     if panel.graphics.slots[slot]
-        .bind_uploads(platform, native, geometry, &mut binding)
+        .bind_uploads(platform, native, &data, &mut binding)
         .is_none()
     {
         return panel.fail(platform);
     }
-    if panel
-        .atlas
-        .record(platform, native, slot, &binding)
-        .is_none()
-    {
+    if unsafe { panel.atlas.record(platform, native, slot, &binding, &data) }.is_none() {
         return panel.fail(platform);
     }
     let Some(value) = panel
@@ -769,15 +820,17 @@ mod tests {
         native: *mut c_void,
         _: u32,
         _: *const Draw,
-        bindings: *const rsf_overlay12_texture,
+        bindings: *const *mut c_void,
         count: u32,
+        calls: *const DrawCall,
+        call_count: u32,
     ) -> u32 {
         let fixture = unsafe { &*native.cast::<AtlasFixture>() };
-        let binding = unsafe { &*bindings };
         u32::from(
             count == 1
-                && binding.id == UPDATE.id
-                && binding.resource == raw(&fixture.textures[fixture.created - 1]),
+                && call_count == 1
+                && unsafe { (*calls).descriptor == 0 }
+                && unsafe { *bindings == raw(&fixture.textures[fixture.created - 1]) },
         )
     }
 
@@ -819,23 +872,43 @@ mod tests {
         let mut fixture = fixture();
         let target_resource = fake();
         let target = unsafe { ComRef::from_owned(raw(&target_resource)).unwrap() };
+        let vertices = [rsf_overlay_vertex::default()];
+        let indices = [0u32; 3];
+        let calls = [crate::overlay_host_abi::rsf_overlay_draw_call {
+            index_count: 3,
+            clip_width: 4,
+            clip_height: 4,
+            texture_id: UPDATE.id,
+            ..Default::default()
+        }];
+        let data = DrawData {
+            struct_size: size_of::<DrawData>() as u32,
+            vertices: vertices.as_ptr(),
+            vertex_count: 1,
+            indices: indices.as_ptr(),
+            index_count: 3,
+            calls: calls.as_ptr(),
+            call_count: 1,
+        };
         let binding = Draw {
             target: target.as_ptr(),
             pipeline: null_mut(),
             vertices: null_mut(),
             indices: null_mut(),
+            vertex_data: data.vertices.cast(),
+            index_data: data.indices.cast(),
             width: 4,
             height: 4,
-            vertex_bytes: 0,
-            index_bytes: 0,
+            vertex_bytes: size_of_val(&vertices) as u32,
+            index_bytes: size_of_val(&indices) as u32,
         };
         let mut atlas = Atlas::new();
         let native = from_mut(&mut fixture).cast();
-        assert!(atlas.record(&PLATFORM, native, 0, &binding).is_some());
+        assert!(unsafe { atlas.record(&PLATFORM, native, 0, &binding, &data) }.is_some());
         fixture.pending = true;
         fixture.free = true;
         let native = from_mut(&mut fixture).cast();
-        assert!(atlas.record(&PLATFORM, native, 1, &binding).is_some());
+        assert!(unsafe { atlas.record(&PLATFORM, native, 1, &binding, &data) }.is_some());
         assert!(atlas.textures.is_empty());
         assert_eq!(fixture.textures[0].refs.get(), 3);
         assert_eq!(fixture.textures[1].refs.get(), 3);

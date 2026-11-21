@@ -6,7 +6,6 @@
 #include <d3dcompiler.h>
 #include <dxgi1_4.h>
 #include <wrl/client.h>
-#include <algorithm>
 #include <array>
 #include <cstring>
 #include <memory>
@@ -25,7 +24,6 @@ struct Frame {
     ComPtr<ID3D12CommandAllocator> allocator;
     ComPtr<ID3D12GraphicsCommandList> commands;
     ComPtr<ID3D12DescriptorHeap> srv, rtv;
-    rsf_overlay_draw_data draw{};
 };
 struct Panel {
     HMODULE module{};
@@ -190,24 +188,23 @@ void* upload_texture(void* native, uint32_t slot, void* resource, const rsf_over
     return upload.Detach();
 }
 bool draw(Panel& p, Frame& frame, const rsf_overlay12_draw& binding,
-    const rsf_overlay12_texture* textures, UINT texture_count)
+    void* const* textures, UINT texture_count, const rsf_overlay12_draw_call* calls, UINT call_count)
 {
-    const auto& data=frame.draw;
-    const auto [target_resource,pipeline,vertex_resource,index_resource,width,height,vertex_bytes,index_bytes]=binding;
+    const auto [target_resource,pipeline,vertex_resource,index_resource,vertex_data,index_data,width,height,vertex_bytes,index_bytes]=binding;
     if (!vertex_bytes||!index_bytes) return true;
     auto* target=static_cast<ID3D12Resource*>(target_resource);
     auto* vertex_buffer=static_cast<ID3D12Resource*>(vertex_resource);
     auto* index_buffer=static_cast<ID3D12Resource*>(index_resource);
     void* mapped{};const D3D12_RANGE empty{0,0};
     if (FAILED(vertex_buffer->Map(0,&empty,&mapped))) return false;
-    std::memcpy(mapped,data.vertices,vertex_bytes);vertex_buffer->Unmap(0,nullptr);
+    std::memcpy(mapped,vertex_data,vertex_bytes);vertex_buffer->Unmap(0,nullptr);
     if (FAILED(index_buffer->Map(0,&empty,&mapped))) return false;
-    std::memcpy(mapped,data.indices,index_bytes);index_buffer->Unmap(0,nullptr);
+    std::memcpy(mapped,index_data,index_bytes);index_buffer->Unmap(0,nullptr);
     for (UINT index=0;index<texture_count;++index) {
         auto cpu=frame.srv->GetCPUDescriptorHandleForHeapStart();cpu.ptr+=uint64_t(index)*p.stride;
         D3D12_SHADER_RESOURCE_VIEW_DESC view{};view.Format=DXGI_FORMAT_R8G8B8A8_UNORM;
         view.ViewDimension=D3D12_SRV_DIMENSION_TEXTURE2D;view.Shader4ComponentMapping=D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;view.Texture2D.MipLevels=1;
-        p.device->CreateShaderResourceView(static_cast<ID3D12Resource*>(textures[index].resource),&view,cpu);
+        p.device->CreateShaderResourceView(static_cast<ID3D12Resource*>(textures[index]),&view,cpu);
     }
     auto* commands=frame.commands.Get();transition(commands,target,D3D12_RESOURCE_STATE_PRESENT,D3D12_RESOURCE_STATE_RENDER_TARGET);
     const auto rtv=frame.rtv->GetCPUDescriptorHandleForHeapStart();p.device->CreateRenderTargetView(target,nullptr,rtv);
@@ -218,15 +215,11 @@ bool draw(Panel& p, Frame& frame, const rsf_overlay12_draw& binding,
     D3D12_VERTEX_BUFFER_VIEW vertices{vertex_buffer->GetGPUVirtualAddress(),vertex_bytes,sizeof(rsf_overlay_vertex)};
     D3D12_INDEX_BUFFER_VIEW indices{index_buffer->GetGPUVirtualAddress(),index_bytes,DXGI_FORMAT_R32_UINT};
     commands->IASetVertexBuffers(0,1,&vertices);commands->IASetIndexBuffer(&indices);commands->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    const auto end=textures+texture_count;
-    for (UINT i=0;i<data.call_count;++i) {
-        const auto& call=data.calls[i];
-        const auto descriptor=std::find_if(textures,end,[&](const auto& texture){return texture.id==call.texture_id;});
-        if (descriptor==end||uint64_t(call.index_offset)+call.index_count>data.index_count||call.vertex_offset>data.vertex_count) return false;
-        const D3D12_RECT clip{static_cast<LONG>(std::min(call.clip_x,width)),static_cast<LONG>(std::min(call.clip_y,height)),
-            static_cast<LONG>(std::min(uint64_t(call.clip_x)+call.clip_width,uint64_t(width))),static_cast<LONG>(std::min(uint64_t(call.clip_y)+call.clip_height,uint64_t(height)))};
-        commands->RSSetScissorRects(1,&clip);auto gpu=frame.srv->GetGPUDescriptorHandleForHeapStart();gpu.ptr+=uint64_t(descriptor-textures)*p.stride;
-        commands->SetGraphicsRootDescriptorTable(1,gpu);commands->DrawIndexedInstanced(call.index_count,1,call.index_offset,static_cast<INT>(call.vertex_offset),0);
+    for (UINT i=0;i<call_count;++i) {
+        const auto& call=calls[i];
+        const D3D12_RECT clip{call.clip[0],call.clip[1],call.clip[2],call.clip[3]};
+        commands->RSSetScissorRects(1,&clip);auto gpu=frame.srv->GetGPUDescriptorHandleForHeapStart();gpu.ptr+=uint64_t(call.descriptor)*p.stride;
+        commands->SetGraphicsRootDescriptorTable(1,gpu);commands->DrawIndexedInstanced(call.index_count,1,call.first_index,call.vertex_offset,0);
     }
     transition(commands,target,D3D12_RESOURCE_STATE_RENDER_TARGET,D3D12_RESOURCE_STATE_PRESENT);return true;
 }
@@ -268,19 +261,13 @@ void* begin_frame(void* native, uint32_t slot, void* chain, rsf_overlay12_target
     return target.Detach();
 } catch (...) { return nullptr; }
 
-uint32_t layout(void* native, uint32_t slot, uint32_t width, uint32_t height, float elapsed,
-    float hint_alpha, const rsf_overlay_stats* stats, rsf_overlay_intent* decided, rsf_overlay12_geometry* geometry) noexcept try {
+uint32_t layout(void* native, uint32_t width, uint32_t height, float elapsed,
+    float hint_alpha, const rsf_overlay_stats* stats, rsf_overlay_intent* decided, rsf_overlay_draw_data* data) noexcept try {
     auto& panel=*static_cast<Panel*>(native);
-    auto& data=panel.frames[slot].draw;
     rsf_overlay_input input{};input.struct_size=sizeof(input);
     if (rsf_overlay_input_collect(&input,width,height,elapsed)!=RSF_OVERLAY_INPUT_OK) return 0;
     input.startup_hint_alpha=hint_alpha;
-    data={};data.struct_size=sizeof(data);
-    if (panel.layout(panel.ui,&input,stats,&data,decided)!=RSF_OVERLAY_OK) return 0;
-    if (data.vertex_count && data.index_count && (!data.vertices || !data.indices || (data.call_count && !data.calls)))
-        return 0;
-    *geometry={data.vertex_count,data.index_count};
-    return 1;
+    return panel.layout(panel.ui,&input,stats,data,decided)==RSF_OVERLAY_OK;
 } catch (...) { return 0; }
 
 uint32_t updates(void* native, rsf_overlay_texture_update* output, uint32_t capacity) {
@@ -294,10 +281,10 @@ uint32_t frees(void* native, uint64_t* output, uint32_t capacity) {
 }
 
 uint32_t record(void* native, uint32_t slot, const rsf_overlay12_draw* binding,
-    const rsf_overlay12_texture* textures, uint32_t texture_count) noexcept try {
+    void* const* textures, uint32_t texture_count, const rsf_overlay12_draw_call* calls, uint32_t call_count) noexcept try {
     auto& panel=*static_cast<Panel*>(native);
     auto& frame=panel.frames[slot];
-    return draw(panel,frame,*binding,textures,texture_count) &&
+    return draw(panel,frame,*binding,textures,texture_count,calls,call_count) &&
         SUCCEEDED(frame.commands->Close());
 } catch (...) { return 0; }
 
