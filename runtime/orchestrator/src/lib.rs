@@ -27,6 +27,8 @@ mod d3d11_present;
 #[cfg(windows)]
 mod d3d11_present_abi;
 #[cfg(windows)]
+mod d3d12_observer;
+#[cfg(windows)]
 mod dlss_pipeline;
 #[cfg(windows)]
 mod dlss_pipeline_abi;

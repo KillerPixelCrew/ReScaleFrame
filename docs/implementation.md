@@ -4,6 +4,13 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The D3D12 observer now keeps its process-lifetime owner, hook slots,
+trampolines, forwarding depth and submission serials in Rust. The
+trampoline is published before the native hook can dispatch. Native COM
+trampolines and diagnostic callbacks remain in Graphics, which links
+the Rust owner for standalone and runtime callers. The observer C ABI
+is unchanged. Build and runtime validation remain open.
+
 The FSR3 D3D12 capture drain now snapshots pending readbacks in Rust
 before waiting for the SDK's submitted Presents and the recording queue.
 Only that batch can publish when the wait completes. A late recording

@@ -8,6 +8,7 @@
 //! and keeps the exported entry points. Settings keys and text belong to settings_store.rs,
 //! SR vendor selection to rsf_gpu_select_sr_backend and FG provider admission to fg_choice.rs.
 use crate::com_ref::ComRef;
+use crate::d3d12_observer::ObserverSetup;
 use crate::fg_choice;
 use crate::fg12_abi::rsf_fg12_setup as FgSetup;
 use crate::gl_pipeline_abi::{rsf_dlss_setup as DlssSetup, rsf_sr12_setup as SrSetup};
@@ -125,25 +126,10 @@ pub(crate) struct Setup {
     user: *mut c_void,
 }
 
-/// d3d12_observer.h's rsf_d3d12_observer_setup.
-#[repr(C)]
-pub(crate) struct ObserverSetup {
-    struct_size: u32,
-    abi_version: u32,
-    user: *mut c_void,
-    accept_window: WindowFn,
-    submit: Option<unsafe extern "C" fn(*mut c_void, Handle, u64, u32, *const Handle, u32)>,
-    present: Option<unsafe extern "C" fn(*mut c_void, Handle, u32, u32, u32)>,
-    swapchain: Option<unsafe extern "C" fn(*mut c_void, Handle, Handle, Handle)>,
-}
-
 const _: () = {
     assert!(size_of::<Setup>() == 96 && std::mem::offset_of!(Setup, presentation_owner) == 32);
     assert!(
         std::mem::offset_of!(Setup, accept_window) == 80 && std::mem::offset_of!(Setup, user) == 88
-    );
-    assert!(
-        size_of::<ObserverSetup>() == 48 && std::mem::offset_of!(ObserverSetup, swapchain) == 40
     );
 };
 

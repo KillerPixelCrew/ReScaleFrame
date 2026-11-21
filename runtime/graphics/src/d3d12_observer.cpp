@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-#include <rescaleframe/d3d12_observer.h>
+#include "d3d12_observer_platform.h"
 #include <windows.h>
 #include <d3d12.h>
 #include <d3d12sdklayers.h>
@@ -8,13 +8,10 @@
 #include <MinHook.h>
 #include <array>
 #include <atomic>
-#include <mutex>
-#include <new>
 #include <utility>
 #include <cstdio>
 #include <cstring>
 
-struct rsf_d3d12_observer { rsf_d3d12_observer_setup setup{}; std::atomic<uint64_t> serial{}; };
 namespace {
 using Microsoft::WRL::ComPtr;
 using Factory = HRESULT (STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, HWND, const DXGI_SWAP_CHAIN_DESC1*,
@@ -22,14 +19,19 @@ using Factory = HRESULT (STDMETHODCALLTYPE*)(IDXGIFactory2*, IUnknown*, HWND, co
 using Device = HRESULT (STDMETHODCALLTYPE*)(ID3D12Device*, const D3D12_COMMAND_QUEUE_DESC*, REFIID, void**);
 using Queue = void (STDMETHODCALLTYPE*)(ID3D12CommandQueue*, UINT, ID3D12CommandList* const*);
 using Present = HRESULT (STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT);
-template<class Function> struct Entry { void* target{}; Function original{}; };
-constexpr size_t capacity = 8;
-std::array<Entry<Factory>, capacity> factories;
-std::array<Entry<Device>, capacity> devices;
-std::array<Entry<Queue>, capacity> queues;
-std::array<Entry<Present>, capacity> chains;
-std::mutex binding;
-rsf_d3d12_observer* owner{};
+constexpr size_t capacity = RSF_OBSERVER12_CAPACITY;
+static_assert(sizeof(rsf_observer12_hooks) == 4 * sizeof(void*));
+constexpr rsf_observer12_hooks hooks{
+    []() -> int32_t {
+        const auto status = MH_Initialize();
+        return status == MH_OK || status == MH_ERROR_ALREADY_INITIALIZED;
+    },
+    [](void* target, void* detour, void** original) -> int32_t {
+        return MH_CreateHook(target, detour, original) == MH_OK;
+    },
+    [](void* target) -> int32_t { return MH_EnableHook(target) == MH_OK; },
+    [](void* target) { (void)MH_RemoveHook(target); },
+};
 void (*diagnostic_log)(void*, const char*){};
 void* diagnostic_user{};
 std::atomic<bool> removal_reported{};
@@ -93,27 +95,27 @@ void report_removal(ID3D12CommandQueue* queue)
 // SDK proxies can forward through another observed implementation. Each public
 // operation has one callback pair, including its native forwarding chain.
 struct CallScope {
-    unsigned& depth;
+    uint32_t kind;
     bool outer;
-    explicit CallScope(unsigned& value) : depth(value), outer(value++ == 0) {}
-    ~CallScope() { --depth; }
+    explicit CallScope(uint32_t kind_) : kind(kind_), outer(rsf_core_observer12_enter(kind) != 0) {}
+    ~CallScope() { rsf_core_observer12_leave(kind); }
 };
-thread_local unsigned factory_depth{}, queue_depth{}, present_depth{};
+template<class Method> Method original(uint32_t kind, size_t index)
+{ return reinterpret_cast<Method>(rsf_core_observer12_original(kind, index)); }
+
 void attach_queue(ID3D12CommandQueue*);
 void attach_chain(IDXGISwapChain1*);
-bool accepted(HWND window)
-{ return owner && owner->setup.accept_window && owner->setup.accept_window(owner->setup.user, window); }
 template<size_t I> HRESULT STDMETHODCALLTYPE factory(IDXGIFactory2* self, IUnknown* queue, HWND window,
     const DXGI_SWAP_CHAIN_DESC1* desc, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* fullscreen,
     IDXGIOutput* output, IDXGISwapChain1** chain)
 {
-    CallScope scope(factory_depth);
-    const auto result = factories[I].original(self, queue, window, desc, fullscreen, output, chain);
-    if (scope.outer && SUCCEEDED(result) && chain && *chain && accepted(window)) {
+    CallScope scope(RSF_OBSERVER12_FACTORY);
+    const auto result = original<Factory>(RSF_OBSERVER12_FACTORY, I)(self, queue, window, desc, fullscreen, output, chain);
+    if (scope.outer && SUCCEEDED(result) && queue && chain && *chain && rsf_core_observer12_accept(window)) {
         ComPtr<ID3D12CommandQueue> direct;
         if (SUCCEEDED(queue->QueryInterface(IID_PPV_ARGS(&direct))) && direct->GetDesc().Type == D3D12_COMMAND_LIST_TYPE_DIRECT) {
             attach_queue(direct.Get()); attach_chain(*chain);
-            if (owner->setup.swapchain) owner->setup.swapchain(owner->setup.user, direct.Get(), *chain, window);
+            rsf_core_observer12_swapchain(direct.Get(), *chain, window);
         }
     }
     return result;
@@ -121,7 +123,7 @@ template<size_t I> HRESULT STDMETHODCALLTYPE factory(IDXGIFactory2* self, IUnkno
 template<size_t I> HRESULT STDMETHODCALLTYPE device(ID3D12Device* self, const D3D12_COMMAND_QUEUE_DESC* desc,
     REFIID iid, void** result)
 {
-    const auto code = devices[I].original(self, desc, iid, result);
+    const auto code = original<Device>(RSF_OBSERVER12_DEVICE, I)(self, desc, iid, result);
     if (SUCCEEDED(code) && result && *result) {
         ComPtr<ID3D12CommandQueue> queue;
         if (SUCCEEDED(static_cast<IUnknown*>(*result)->QueryInterface(IID_PPV_ARGS(&queue)))) attach_queue(queue.Get());
@@ -130,24 +132,25 @@ template<size_t I> HRESULT STDMETHODCALLTYPE device(ID3D12Device* self, const D3
 }
 template<size_t I> void STDMETHODCALLTYPE queue(ID3D12CommandQueue* self, UINT count, ID3D12CommandList* const* lists)
 {
-    CallScope scope(queue_depth);
-    if (!scope.outer) { queues[I].original(self, count, lists); return; }
-    const auto id = ++owner->serial;
+    CallScope scope(RSF_OBSERVER12_QUEUE);
+    const auto call = original<Queue>(RSF_OBSERVER12_QUEUE, I);
+    if (!scope.outer) { call(self, count, lists); return; }
     const auto pointers = reinterpret_cast<void* const*>(lists);
-    if (owner->setup.submit) owner->setup.submit(owner->setup.user, self, id, count, pointers, 1);
-    queues[I].original(self, count, lists);
-    if (owner->setup.submit) owner->setup.submit(owner->setup.user, self, id, count, pointers, 0);
+    const auto id = rsf_core_observer12_submit_begin(self, count, pointers);
+    call(self, count, lists);
+    rsf_core_observer12_submit_end(self, id, count, pointers);
     report_removal(self);
 }
 template<size_t I> HRESULT STDMETHODCALLTYPE present(IDXGISwapChain* self, UINT interval, UINT flags)
 {
-    CallScope scope(present_depth);
-    if (!scope.outer) return chains[I].original(self, interval, flags);
+    CallScope scope(RSF_OBSERVER12_CHAIN);
+    const auto call = original<Present>(RSF_OBSERVER12_CHAIN, I);
+    if (!scope.outer) return call(self, interval, flags);
     DXGI_SWAP_CHAIN_DESC description{};
-    const bool selected = SUCCEEDED(self->GetDesc(&description)) && accepted(description.OutputWindow);
-    if (selected && owner->setup.present) owner->setup.present(owner->setup.user, self, interval, flags, 1);
-    const auto result = chains[I].original(self, interval, flags);
-    if (selected && owner->setup.present) owner->setup.present(owner->setup.user, self, interval, flags, 0);
+    const bool selected = SUCCEEDED(self->GetDesc(&description)) && rsf_core_observer12_accept(description.OutputWindow);
+    if (selected) rsf_core_observer12_present(self, interval, flags, 1);
+    const auto result = call(self, interval, flags);
+    if (selected) rsf_core_observer12_present(self, interval, flags, 0);
     return result;
 }
 template<size_t... I> auto factory_wrappers(std::index_sequence<I...>)
@@ -158,48 +161,29 @@ template<size_t... I> auto queue_wrappers(std::index_sequence<I...>)
 { return std::array<void*, sizeof...(I)>{reinterpret_cast<void*>(&queue<I>)...}; }
 template<size_t... I> auto present_wrappers(std::index_sequence<I...>)
 { return std::array<void*, sizeof...(I)>{reinterpret_cast<void*>(&present<I>)...}; }
-template<class Function> bool bind(std::array<Entry<Function>, capacity>& entries, const std::array<void*, capacity>& wrappers, void* target)
+bool bind(uint32_t kind, const std::array<void*, capacity>& wrappers, void* target)
 {
-    if (!target) return false;
-    std::lock_guard lock(binding);
-    for (const auto& entry : entries) if (entry.target == target) return true;
-    for (size_t i = 0; i < capacity; ++i) if (!entries[i].target) {
-        void* trampoline{};
-        if (MH_CreateHook(target, wrappers[i], &trampoline) != MH_OK) return false;
-        entries[i].original = reinterpret_cast<Function>(trampoline);
-        entries[i].target = target;
-        if (MH_EnableHook(target) == MH_OK) return true;
-        MH_RemoveHook(target); entries[i] = {}; return false;
-    }
-    return false;
+    return rsf_core_observer12_bind(kind, target, wrappers.data(), &hooks) != 0;
 }
 void attach_queue(ID3D12CommandQueue* object)
 {
     if (object->GetDesc().Type != D3D12_COMMAND_LIST_TYPE_DIRECT) return;
     const auto wrappers = queue_wrappers(std::make_index_sequence<capacity>{});
-    (void)bind(queues, wrappers, (*reinterpret_cast<void***>(object))[10]);
+    (void)bind(RSF_OBSERVER12_QUEUE, wrappers, (*reinterpret_cast<void***>(object))[10]);
 }
 void attach_chain(IDXGISwapChain1* object)
 {
     const auto wrappers = present_wrappers(std::make_index_sequence<capacity>{});
-    (void)bind(chains, wrappers, (*reinterpret_cast<void***>(object))[8]);
+    (void)bind(RSF_OBSERVER12_CHAIN, wrappers, (*reinterpret_cast<void***>(object))[8]);
 }
 }
 extern "C" int32_t rsf_d3d12_observer_create(const rsf_d3d12_observer_setup* setup, rsf_d3d12_observer** out)
 {
-    if (!setup || setup->struct_size < sizeof(*setup) || setup->abi_version != 1 || !setup->accept_window || !out) return -1;
-    *out = nullptr;
-    std::lock_guard lock(binding);
-    if (owner) return -2;
-    const auto initialized = MH_Initialize();
-    if (initialized != MH_OK && initialized != MH_ERROR_ALREADY_INITIALIZED) return -3;
-    owner = new(std::nothrow) rsf_d3d12_observer;
-    if (!owner) return -3;
-    owner->setup = *setup; *out = owner; return 0;
+    return rsf_core_observer12_create(setup, out, &hooks);
 }
 extern "C" int32_t rsf_d3d12_observer_device(rsf_d3d12_observer* observer, void* pointer)
 {
-    if (!observer || observer != owner || !pointer) return -1;
+    if (!pointer || !rsf_core_observer12_owns(observer)) return -1;
     ComPtr<ID3D12Device> object;
     if (FAILED(static_cast<IUnknown*>(pointer)->QueryInterface(IID_PPV_ARGS(&object)))) return -1;
     if (diagnostic_log) {
@@ -208,15 +192,15 @@ extern "C" int32_t rsf_d3d12_observer_device(rsf_d3d12_observer* observer, void*
         if (SUCCEEDED(object.As(&info))) (void)info->RegisterMessageCallback(debug_message, D3D12_MESSAGE_CALLBACK_FLAG_NONE, nullptr, &cookie);
     }
     const auto wrappers = device_wrappers(std::make_index_sequence<capacity>{});
-    return bind(devices, wrappers, (*reinterpret_cast<void***>(object.Get()))[8]) ? 0 : -3;
+    return bind(RSF_OBSERVER12_DEVICE, wrappers, (*reinterpret_cast<void***>(object.Get()))[8]) ? 0 : -3;
 }
 extern "C" int32_t rsf_d3d12_observer_factory(rsf_d3d12_observer* observer, void* pointer)
 {
-    if (!observer || observer != owner || !pointer) return -1;
+    if (!pointer || !rsf_core_observer12_owns(observer)) return -1;
     ComPtr<IDXGIFactory2> object;
     if (FAILED(static_cast<IUnknown*>(pointer)->QueryInterface(IID_PPV_ARGS(&object)))) return -1;
     const auto wrappers = factory_wrappers(std::make_index_sequence<capacity>{});
-    return bind(factories, wrappers, (*reinterpret_cast<void***>(object.Get()))[15]) ? 0 : -3;
+    return bind(RSF_OBSERVER12_FACTORY, wrappers, (*reinterpret_cast<void***>(object.Get()))[15]) ? 0 : -3;
 }
 
 extern "C" int32_t rsf_d3d12_diagnostics_enable(void (*log)(void*, const char*), void* user)

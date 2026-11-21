@@ -32,6 +32,8 @@ target_link_libraries(rsf_graphics PRIVATE rsf_build_options)
 target_link_libraries(rsf_graphics PUBLIC d3d11 d3d12 dxgi)
 target_link_libraries(rsf_graphics PRIVATE windowscodecs ole32)
 target_link_libraries(rsf_graphics PRIVATE minhook)
+# The D3D12 observer supplies native leaves to the Rust owner.
+target_link_libraries(rsf_graphics PRIVATE rsf_orchestrator_rust)
 # Public: shader_compile.h includes log.h, and presentation and the orchestrator reach it through here.
 target_link_libraries(rsf_graphics PUBLIC ReScaleFrame::RuntimeCommon)
 # MinHook's length disassembler, for building a trampoline over a function's bytes as the file has
