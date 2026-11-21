@@ -1,5 +1,12 @@
 // SPDX-License-Identifier: MIT
 mod abi;
+// The orchestrator's stateless FidelityFX provider-version policy.
+#[path = "../../../../orchestrator/src/ffx_version.rs"]
+mod ffx_version;
+// The FSR 4 DX12 bridge owner for Vulkan SR. Both the Runtime and the
+// standalone VulkanStoryFsr4.dll already link this archive.
+#[path = "../../../../vulkan/fsr4/owner.rs"]
+mod vulkan_bridge;
 
 use abi::*;
 use core::ffi::{CStr, c_void};

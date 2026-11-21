@@ -2,7 +2,7 @@
 .SYNOPSIS
 Compiles the retained FSR4 Vulkan/DX12 bridge DLL.
 .DESCRIPTION
-Builds the shared Rust compatibility owner for Windows GNU, compiles MinHook with gcc, and links both with the C++20 bridge through g++. Builds a sibling temporary DLL, replacing Output only after success.
+Builds the shared rsf-fsr4-compat archive (INT8 compatibility and bridge owner) for Windows GNU, compiles MinHook with gcc, and links both with the C++20 bridge through g++. Builds a sibling temporary DLL, replacing Output only after success.
 .PARAMETER SdkRoot
 FidelityFX SDK root containing Kits/FidelityFX/api/include/dx12/ffx_api_dx12.h.
 .PARAMETER Output
