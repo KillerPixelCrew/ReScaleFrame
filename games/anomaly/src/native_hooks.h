@@ -6,6 +6,26 @@
 #include <span>
 
 namespace rsf::anomaly {
+struct DosFacts {
+    int32_t nt_offset;
+    uint16_t signature;
+};
+
+struct PeFacts {
+    uint32_t signature;
+    uint32_t image_size;
+    uint16_t machine;
+    uint16_t optional_magic;
+};
+
+struct ImageHeaders {
+    bool (*dos)(const void*, DosFacts*) noexcept;
+    bool (*pe)(const void*, const void*, PeFacts*) noexcept;
+};
+
+// Observer prepare uses SEH reads. Hook installation also checks mapped region ownership and protection.
+extern const ImageHeaders guarded_image_headers;
+
 struct HookSite {
     const char* name{};
     uint32_t rva{};

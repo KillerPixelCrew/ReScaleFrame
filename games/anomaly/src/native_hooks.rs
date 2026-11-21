@@ -51,9 +51,14 @@ struct PeFacts {
 }
 
 #[repr(C)]
-struct Platform {
+pub(super) struct ImageHeaders {
     dos: unsafe extern "C" fn(Address, *mut DosFacts) -> bool,
     pe: unsafe extern "C" fn(Address, Address, *mut PeFacts) -> bool,
+}
+
+#[repr(C)]
+struct Platform {
+    headers: ImageHeaders,
     read: unsafe extern "C" fn(Address, Address, Address, usize, bool) -> bool,
     hooks: HookOps,
 }
@@ -68,6 +73,8 @@ pub(super) struct HookOps {
 }
 
 const _: () = {
+    assert!(size_of::<DosFacts>() == 8 && size_of::<PeFacts>() == 12);
+    assert!(size_of::<ImageHeaders>() == 16 && std::mem::offset_of!(ImageHeaders, pe) == 8);
     assert!(size_of::<HookOps>() == 40);
     assert!(size_of::<Platform>() == 64 && std::mem::offset_of!(Platform, hooks) == 24);
 };
@@ -90,28 +97,28 @@ impl HookOps {
     }
 }
 
-fn matching_image(platform: &Platform, module: Address, image_size: u32) -> bool {
-    if module.is_null() || (image_size as usize) < MIN_IMAGE_BYTES {
-        return false;
+impl ImageHeaders {
+    pub(super) fn matches(&self, module: Address, image_size: u32, max_nt_offset: usize) -> bool {
+        if module.is_null() {
+            return false;
+        }
+        let mut dos = DosFacts::default();
+        if !unsafe { (self.dos)(module, &mut dos) } || dos.signature != DOS_SIGNATURE {
+            return false;
+        }
+        let Ok(offset) = usize::try_from(dos.nt_offset) else {
+            return false;
+        };
+        if offset > max_nt_offset || module.addr().checked_add(offset).is_none() {
+            return false;
+        }
+        let mut pe = PeFacts::default();
+        let read = unsafe { (self.pe)(module, module.wrapping_byte_add(offset), &mut pe) };
+        read && pe.signature == PE_SIGNATURE
+            && pe.machine == AMD64
+            && pe.optional_magic == PE32_PLUS
+            && pe.image_size == image_size
     }
-    let mut dos = DosFacts::default();
-    if !unsafe { (platform.dos)(module, &mut dos) } || dos.signature != DOS_SIGNATURE {
-        return false;
-    }
-    let Ok(offset) = usize::try_from(dos.nt_offset) else {
-        return false;
-    };
-    if offset > image_size as usize - PE_HEADER_BYTES
-        || (module as usize).checked_add(offset).is_none()
-    {
-        return false;
-    }
-    let mut pe = PeFacts::default();
-    let read = unsafe { (platform.pe)(module, module.wrapping_byte_add(offset), &mut pe) };
-    read && pe.signature == PE_SIGNATURE
-        && pe.machine == AMD64
-        && pe.optional_magic == PE32_PLUS
-        && pe.image_size == image_size
 }
 
 fn preflight(
@@ -121,7 +128,11 @@ fn preflight(
     sites: &[Site],
     targets: &mut [Target],
 ) -> bool {
-    if !matching_image(platform, module, image_size) {
+    if (image_size as usize) < MIN_IMAGE_BYTES
+        || !platform
+            .headers
+            .matches(module, image_size, image_size as usize - PE_HEADER_BYTES)
+    {
         return false;
     }
     for (site, target) in sites.iter().zip(targets.iter_mut()) {

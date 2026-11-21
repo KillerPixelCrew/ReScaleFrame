@@ -64,8 +64,7 @@ thread_local! {
 }
 
 const PLATFORM: Platform = Platform {
-    dos,
-    pe,
+    headers: ImageHeaders { dos, pe },
     read,
     hooks: HookOps {
         initialize,

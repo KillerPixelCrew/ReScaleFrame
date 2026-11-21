@@ -4,28 +4,90 @@
 #[cfg(test)]
 mod tests;
 
+use crate::engine_guards::{Image, NativeSite, Read, UniqueGuard};
+use crate::executable::running_build;
+use crate::native_hooks::ImageHeaders;
 use crate::native_observer_abi::{
     RSF_ANOMALY_OBSERVATION_ABI, rsf_anomaly_native_observation as Observation,
     rsf_anomaly_observer_camera as Camera, rsf_anomaly_observer_engine as Engine,
     rsf_anomaly_observer_frame as Frame, rsf_anomaly_observer_platform as Platform,
 };
-use crate::{ABI_MISMATCH, INVALID_ARGUMENT};
+use crate::{ABI_MISMATCH, BuildIdentity, INVALID_ARGUMENT};
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, rsf_game_control_args, rsf_game_host_services, rsf_game_log_fn,
     rsf_game_prepare_args, rsf_game_renderer_status, rsf_game_start_args, rsf_result,
 };
-use std::ffi::{CStr, CString, c_void};
-use std::ptr;
+use std::ffi::{CStr, CString, c_char, c_void};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
+use std::{ptr, slice};
 use windows_sys::Win32::System::LibraryLoader::{
     GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN, GetModuleHandleExW,
+    GetModuleHandleW,
 };
 
 const OK: rsf_result = 0;
 const NOT_READY: rsf_result = -3;
 const BUSY: rsf_result = -4;
 const NATIVE_REFUSED: rsf_result = -5;
+
+#[repr(C)]
+struct ObserverProfile {
+    label: *const c_char,
+    image_size: u32,
+    sites: *const NativeSite,
+    site_count: usize,
+    unique_guards: *const UniqueGuard,
+    unique_guard_count: usize,
+}
+
+const _: () = {
+    assert!(size_of::<ObserverProfile>() == 48);
+    assert!(std::mem::offset_of!(ObserverProfile, image_size) == 8);
+    assert!(std::mem::offset_of!(ObserverProfile, sites) == 16);
+    assert!(std::mem::offset_of!(ObserverProfile, unique_guards) == 32);
+};
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_anomaly_observer_identify(
+    out: &mut Engine,
+    builds: *const BuildIdentity,
+    profiles: *const ObserverProfile,
+    count: usize,
+    headers: &ImageHeaders,
+    read: Read,
+) -> *const c_char {
+    // Both tables borrow the same static C++ build order as the native detours.
+    let builds = unsafe { slice::from_raw_parts(builds, count) };
+    let build = match running_build(builds) {
+        Ok(build) => build,
+        Err(reason) => return reason.as_ptr(),
+    };
+    let profile = unsafe { &*profiles.add(build) };
+    let image = unsafe { GetModuleHandleW(ptr::null()) };
+    // HookSet adds a mapped-region check and an NT header extent check on install.
+    if !headers.matches(image, profile.image_size, usize::MAX) {
+        return c"Running image size differs from the verified build.".as_ptr();
+    }
+    let checked = Image::new(image.cast(), profile.image_size, read);
+    let sites = unsafe { slice::from_raw_parts(profile.sites, profile.site_count) };
+    let guards = if profile.unique_guard_count == 0 {
+        &[]
+    } else {
+        unsafe { slice::from_raw_parts(profile.unique_guards, profile.unique_guard_count) }
+    };
+    if !unsafe { checked.matches_sites(sites, guards) } {
+        return c"A native hook's expected instructions do not match; no hook was written."
+            .as_ptr();
+    }
+    *out = Engine {
+        image,
+        build,
+        label: profile.label,
+        executable: builds[build].executable,
+    };
+    ptr::null()
+}
 
 // One atomic records whether entry was admitted and registers that invocation.
 // Inactive invocations also count until they return from the native trampoline.
@@ -159,7 +221,7 @@ impl Observer {
         let mut engine = Engine::default();
         let refusal = unsafe { (platform.identify.unwrap())(&mut engine) };
         if !refusal.is_null() {
-            // The guard returns only static native string literals.
+            // Admission returns only static string literals.
             control.reason = unsafe { CStr::from_ptr(refusal) };
             return NATIVE_REFUSED;
         }

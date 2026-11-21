@@ -718,6 +718,13 @@ inaccessible input or output and preserves last error. The existing
 native hooks fixture now covers both refusals. The fixture remains
 unrun on this revision.
 
+Anomaly's native observer now checks the exact Standard or AVX running
+build, PE image size and hook guards in Rust. The typed native calls
+still copy the PE data under SEH and run the mapped-region checks
+before MinHook registration. The changed-guard regression is present
+and remains unrun. Build and live observer verification remain open.
+[Observer admission audit](research/rust-anomaly-native-observer.md#prepare-admission-from-3c73e3c4)
+
 ## Rust orchestrator and first Anomaly port
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
