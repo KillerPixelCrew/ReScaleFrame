@@ -51,7 +51,7 @@ the live screen and FG refusal. The existing diagnostic lines still report the l
 reservation facts at those callbacks. The adapter reports them to Runtime, which owns pacing,
 latency, vendor selection and physical Present dependency handling.
 
-## Native boundary and open work
+## Native boundary after the first slice
 
 The 13 MinHook targets and typed originals, named callback pointer guard at `0x20b5130`,
 native submit/join and PollDevices provenance, completed poll/writer atomics, control sink,
@@ -76,3 +76,51 @@ ordering were compared against `e17d1df`. The existing fixture now also describe
 scope nesting, World admission and duplicate refusal, active gating, skipped render, and sample
 timestamps. Pinned Rust formatting, locked Cargo metadata and Git whitespace checks passed.
 Build, link, test, Clippy, device and game validation, deployment and push remain with the user.
+
+## Native job and poll proof continuation
+
+This continuation starts at `9260a14` on `rust/orchestrator-anomaly`. It compares the source
+port against that revision and uses the prior Steam 1.7.104.0 executable evidence (SHA256
+`846efccf0c1374d71f892907f46549560f2fcb0a75cb87a3eed438baa0f1402f`). The question was
+which parts of job, poll and input consumption proof could move together while preserving the
+engine thread, callback arguments and ordering that give the proof meaning.
+[Native input ownership](skyrim-input-ownership-20261115.md) ·
+[Prospective source](skyrim-prospective-source-20261115.md)
+
+- Main's submit `0x60eaf0` publishes a Rust ticket after the normal-simulation gate at caller
+  `0x658b14`, after any BIND or ABORT and SIMULATION_BEGIN, and before the original can wake
+  workers. Rust preserves the sequentially consistent publication, double-read snapshot and
+  poison transitions. An overlapping submit poisons proof and recovery requires the native idle
+  fields. The join at `0x60eb80` still validates caller `0x659334`, the same Main and manager,
+  the wait result and idle post-state in C++ before Rust records the retired generation.
+- The named scheduler callback at caller `0xebc248` keeps a copy of the ticket in native
+  thread-local storage only around its original. PollDevices `0xcf95f0` lends its own stack
+  record through native TLS. Rust checks exclusive poll and job ownership before the guarded
+  native manager read, then rechecks the job and poll. C++ still checks active admission
+  before and after. The controls callback `0x7ad900` opens a Rust write epoch around its original.
+  A producer receipt requires the same dispatched list and native PlayerControls singleton.
+  The unchanged completion stamp requires that poll's exclusive generation and no intervening
+  writer or invalidation. Nested polls restore the enclosing TLS and are refused as producers.
+- Pending and adopted sources still have separate slots. Rust checks the completed poll and
+  matching pending source before the native detour emits SAMPLED, and the detour publishes the
+  transition to sampled only after that host call returns. RESERVE, the QPC read immediately
+  before PollDevices, SAMPLED, targeted ABORT, tick adoption on a normal join and binding with the
+  matching completed generation retain their order. The same native guarded queued-move and
+  free-camera observations can refuse BIND. Unreserved tick input and unframed dispatch still
+  come from their original sites. Runtime owns pacing, latency and markers.
+- Rust stores the main-thread player, movement and camera observations and rejects an ambiguous
+  or changed stamp. C++ still takes the stamp before each original and checks the same actor
+  and camera evidence around it. Off-thread counts use the bound source and its published job,
+  and stay diagnostic. The control and camera envelopes cover the same observed callbacks.
+- C++ deactivates the observer before Rust poisons jobs, invalidates input, clears both source
+  slots and releases the worker diagnostic source. Startup checks hook state and entry bytes
+  before resetting Rust proof and enabling hooks. C++ retains the MinHook transaction and drains
+  entered detours before releasing services. The fixture keeps private stores and calls the same
+  Rust operations through its existing C++ interface.
+
+Verification is source-only. Callback guards, native forwards, GameSDK receipts, clocks, and
+teardown were compared with `9260a14`. Rust 1.94.1 formatting, locked offline Windows x64
+metadata, and Git whitespace checks passed. The remaining native layer contains the engine
+callbacks, guarded reads, native admission, QPC and host delivery, and hook effects. The existing
+proof coverage boundaries still apply. Build, link, tests, Clippy, deployment and device/game
+validation remain with the user.

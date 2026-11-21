@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
+#include "input_ownership.h"
 #include "screen_classification.h"
 #include <cstddef>
 
@@ -13,11 +14,20 @@ struct rsf_skyrim_cpu_render_state {
     bool render_entered{}, simulation_ended{}, sampled{};
 };
 
+struct rsf_skyrim_cpu_frame_input {
+    rsf::skyrim::InputOwnership::Stamp consumed{};
+    uint32_t camera_updates{}, movement_calls{}, player_update_calls{}, player_camera_updates{};
+    bool ambiguous{};
+};
+
 using rsf_skyrim_cpu_read = bool (*)(uintptr_t, void*, size_t);
 using rsf_skyrim_cpu_menus = bool (*)(uintptr_t open, uintptr_t frozen, uintptr_t ui,
     uintptr_t loading_name, uintptr_t main_name, rsf::skyrim::NativeScreenFacts*);
 
 extern "C" {
+void rsf_skyrim_cpu_record_consumer(rsf_skyrim_cpu_frame_input*, const rsf::skyrim::InputOwnership::Stamp*,
+    rsf::skyrim::CpuConsumer, bool mapped) noexcept;
+bool rsf_skyrim_cpu_consumption_proven(const rsf_skyrim_cpu_frame_input*) noexcept;
 uint64_t rsf_skyrim_cpu_next_source() noexcept;
 uint32_t rsf_skyrim_cpu_bad_screen_query(const rsf_skyrim_creation_platform*, uintptr_t base) noexcept;
 rsf_screen_class rsf_skyrim_cpu_screen(uintptr_t main, bool primary, rsf_skyrim_cpu_menus) noexcept;
@@ -43,4 +53,5 @@ uint32_t rsf_skyrim_cpu_input_kinds(uintptr_t list, rsf_skyrim_cpu_read) noexcep
 
 static_assert(sizeof(rsf_skyrim_cpu_render_state) == 24);
 static_assert(offsetof(rsf_skyrim_cpu_render_state, render_entered) == 20);
+static_assert(sizeof(rsf_skyrim_cpu_frame_input) == 40 && offsetof(rsf_skyrim_cpu_frame_input, ambiguous) == 32);
 static_assert(RSF_SCREEN_UNKNOWN == 0 && RSF_SCREEN_MENU == 1 && RSF_SCREEN_LOADING == 7 && RSF_SCREEN_GAMEPLAY == 8);
