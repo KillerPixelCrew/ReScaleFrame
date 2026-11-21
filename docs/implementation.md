@@ -4,6 +4,13 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now owns the Reflex diagnostic listener, source history, log
+budget and sync snapshot. Native NVAPI detours still forward each
+original call before recording it and keep the existing log format
+and hook installation. Listener callbacks run outside the audit
+state lock, so reentrant report or stop calls do not deadlock the
+listener. The diagnostics-disabled path is unchanged.
+
 Rust now owns the D3D12 FidelityFX and XeSS frame-generation sessions,
 including shared provider status, identity and capture retirement.
 FidelityFX retries a refused resize recreation and drains the final

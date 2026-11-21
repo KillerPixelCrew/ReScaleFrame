@@ -5,8 +5,6 @@
 #include <dxgi.h>
 #include <nvapi.h>
 #include <MinHook.h>
-#include <array>
-#include <mutex>
 #include <cstdio>
 #include <cwchar>
 #if defined(_MSC_VER)
@@ -15,40 +13,35 @@
 #else
 #define RSF_AUDIT_CALLER __builtin_return_address(0)
 #endif
+using RsfReflexAuditEmit = void (*)(rsf_backend_log_fn, void*, const void*);
+struct rsf_reflex_sync_report {
+    uintptr_t caller, device;
+    int32_t queue_us;
+    uint32_t target_us, vblank_us, fg, dfg_max, dfg_fps;
+    int32_t result;
+    uint32_t enabled;
+};
+static_assert(sizeof(rsf_reflex_sync_report) == 48 && NVAPI_OK == 0);
+
+extern "C" {
+void rsf_core_reflex_audit_start(rsf_backend_log_fn, void*, uint32_t (*)(), RsfReflexAuditEmit);
+void rsf_core_reflex_audit_stop();
+void rsf_core_reflex_audit_event(uintptr_t, uintptr_t, uint32_t, uint64_t, const void*, RsfReflexAuditEmit);
+void rsf_core_reflex_audit_sync(const rsf_reflex_sync_report*, uint32_t, uint32_t);
+void rsf_core_reflex_audit_report(RsfReflexAuditEmit);
+}
+
 namespace {
-std::mutex guard;
-rsf_backend_log_fn listener = nullptr;
-void* listener_user = nullptr;
 decltype(&NvAPI_D3D_SetSleepMode) original_mode = nullptr;
 decltype(&NvAPI_D3D_SetLatencyMarker) original_marker = nullptr;
 decltype(&NvAPI_D3D_SetReflexSync) original_sync = nullptr;
 decltype(&NvAPI_D3D12_SetAsyncFrameMarker) original_async = nullptr;
-bool installed = false;
-struct Entry {
-    void* caller = nullptr;
-    IUnknown* device = nullptr;
-    uint32_t kind = 0;
-    uint64_t settings = 0;
+struct Origin {
+    wchar_t name[MAX_PATH];
+    uintptr_t offset;
 };
-std::array<Entry, 64> sources{};
-uint32_t lines = 0;
-struct SyncState {
-    void* caller = nullptr;
-    IUnknown* device = nullptr;
-    NV_SET_REFLEX_SYNC_PARAMS params{};
-    bool enabled = false;
-    int result = 0;
-} sync_state;
-bool changed(const Entry& next)
-{
-    for (auto& entry : sources) if (entry.caller == next.caller && entry.device == next.device && entry.kind == next.kind) {
-        if (entry.settings == next.settings) return false;
-        entry = next; return true;
-    }
-    for (auto& entry : sources) if (!entry.caller) { entry = next; return true; }
-    return false;
-}
-void provenance(void* caller, wchar_t (&name)[MAX_PATH], uintptr_t& offset)
+
+Origin provenance(void* caller)
 {
     HMODULE module = nullptr;
     GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
@@ -56,9 +49,81 @@ void provenance(void* caller, wchar_t (&name)[MAX_PATH], uintptr_t& offset)
     wchar_t path[MAX_PATH]{};
     if (module) GetModuleFileNameW(module, path, MAX_PATH);
     const auto* leaf = std::wcsrchr(path, L'\\');
-    std::swprintf(name, MAX_PATH, L"%ls", leaf ? leaf + 1 : path[0] ? path : L"unknown");
-    offset = uintptr_t(caller) - uintptr_t(module);
+    Origin origin{};
+    std::swprintf(origin.name, MAX_PATH, L"%ls", leaf ? leaf + 1 : path[0] ? path : L"unknown");
+    origin.offset = uintptr_t(caller) - uintptr_t(module);
+    return origin;
 }
+template<class Object, class Params>
+struct Event {
+    void* caller;
+    Object* object;
+    const Params* params;
+    int result;
+};
+using ModeEvent = Event<IUnknown, NV_SET_SLEEP_MODE_PARAMS>;
+using MarkerEvent = Event<IUnknown, NV_LATENCY_MARKER_PARAMS>;
+using AsyncEvent = Event<ID3D12CommandQueue, NV_ASYNC_FRAME_MARKER_PARAMS>;
+
+void emit_text(rsf_backend_log_fn log, void* user, const void* text) noexcept try
+{
+    log(user, static_cast<const char*>(text));
+} catch (...) {}
+
+void emit_mode(rsf_backend_log_fn log, void* user, const void* payload) noexcept try
+{
+    const auto& event = *static_cast<const ModeEvent*>(payload);
+    const auto* params = event.params;
+    const auto origin = provenance(event.caller);
+    char text[480];
+    std::snprintf(text, sizeof(text),
+        "Reflex API mode caller=%ls+0x%llx device=%p low_latency=%u boost=%u minimum_us=%u marker_opt=%u min_queue=%u result=%d thread=%lu",
+        origin.name, static_cast<unsigned long long>(origin.offset), static_cast<void*>(event.object), unsigned(params->bLowLatencyMode),
+        unsigned(params->bLowLatencyBoost), params->minimumIntervalUs, unsigned(params->bUseMarkersToOptimize),
+        unsigned(params->bUseMinQueueTime), event.result, GetCurrentThreadId());
+    log(user, text);
+} catch (...) {}
+
+void emit_marker(rsf_backend_log_fn log, void* user, const void* payload) noexcept try
+{
+    const auto& event = *static_cast<const MarkerEvent*>(payload);
+    const auto* params = event.params;
+    const auto origin = provenance(event.caller);
+    char text[480];
+    std::snprintf(text, sizeof(text),
+        "Reflex API marker source caller=%ls+0x%llx device=%p marker=%u frame=%llu high_bits=%llu result=%d thread=%lu",
+        origin.name, static_cast<unsigned long long>(origin.offset), static_cast<void*>(event.object), unsigned(params->markerType),
+        static_cast<unsigned long long>(params->frameID), static_cast<unsigned long long>(params->frameID >> 32),
+        event.result, GetCurrentThreadId());
+    log(user, text);
+} catch (...) {}
+
+void emit_async(rsf_backend_log_fn log, void* user, const void* payload) noexcept try
+{
+    const auto& event = *static_cast<const AsyncEvent*>(payload);
+    const auto* params = event.params;
+    const auto origin = provenance(event.caller);
+    char text[480];
+    std::snprintf(text, sizeof(text),
+        "Reflex API async source caller=%ls+0x%llx queue=%p marker=%u frame=%llu present_frame=%llu vendor=%u result=%d thread=%lu",
+        origin.name, static_cast<unsigned long long>(origin.offset), static_cast<void*>(event.object), unsigned(params->markerType),
+        static_cast<unsigned long long>(params->frameID), static_cast<unsigned long long>(params->presentFrameID),
+        unsigned(params->vendorInternal), event.result, GetCurrentThreadId());
+    log(user, text);
+} catch (...) {}
+
+void emit_sync(rsf_backend_log_fn log, void* user, const void* payload) noexcept try
+{
+    const auto& report = *static_cast<const rsf_reflex_sync_report*>(payload);
+    const auto origin = provenance(reinterpret_cast<void*>(report.caller));
+    char text[480];
+    std::snprintf(text, sizeof(text),
+        "Reflex API sync caller=%ls+0x%llx device=%p enabled=%u queue_us=%d target_us=%u vblank_us=%u fg=%u dfg_max=%u dfg_fps=%u result=%d",
+        origin.name, static_cast<unsigned long long>(origin.offset), reinterpret_cast<void*>(report.device), report.enabled,
+        report.queue_us, report.target_us, report.vblank_us, report.fg, report.dfg_max, report.dfg_fps, report.result);
+    log(user, text);
+} catch (...) {}
+
 NvAPI_Status __cdecl observe_mode(IUnknown* device, NV_SET_SLEEP_MODE_PARAMS* params)
 {
     void* caller = RSF_AUDIT_CALLER;
@@ -67,82 +132,53 @@ NvAPI_Status __cdecl observe_mode(IUnknown* device, NV_SET_SLEEP_MODE_PARAMS* pa
     const uint64_t settings = uint64_t(params->minimumIntervalUs) << 32 |
         uint32_t(params->bLowLatencyMode) | uint32_t(params->bLowLatencyBoost) << 1 |
         uint32_t(params->bUseMarkersToOptimize) << 2 | uint32_t(params->bUseMinQueueTime) << 3;
-    std::lock_guard<std::mutex> lock(guard);
-    if (listener && lines < 192 && changed({caller, device, 0, settings})) {
-        ++lines; wchar_t name[MAX_PATH]{}; uintptr_t offset = 0; provenance(caller, name, offset);
-        char text[480]; std::snprintf(text, sizeof(text),
-            "Reflex API mode caller=%ls+0x%llx device=%p low_latency=%u boost=%u minimum_us=%u marker_opt=%u min_queue=%u result=%d thread=%lu",
-            name, static_cast<unsigned long long>(offset), static_cast<void*>(device), unsigned(params->bLowLatencyMode),
-            unsigned(params->bLowLatencyBoost), params->minimumIntervalUs, unsigned(params->bUseMarkersToOptimize),
-            unsigned(params->bUseMinQueueTime), int(result), GetCurrentThreadId());
-        listener(listener_user, text);
-    }
+    const ModeEvent event{caller, device, params, int(result)};
+    rsf_core_reflex_audit_event(uintptr_t(caller), uintptr_t(device), 0, settings, &event, emit_mode);
     return result;
 }
+
 NvAPI_Status __cdecl observe_marker(IUnknown* device, NV_LATENCY_MARKER_PARAMS* params)
 {
     void* caller = RSF_AUDIT_CALLER;
     const auto result = original_marker(device, params);
     if (!params || params->version != NV_LATENCY_MARKER_PARAMS_VER) return result;
-    const uint32_t kind = 1u + uint32_t(params->markerType);
-    const uint64_t wide = params->frameID >> 32;
-    std::lock_guard<std::mutex> lock(guard);
-    if (listener && lines < 192 && changed({caller, device, kind, wide})) {
-        ++lines; wchar_t name[MAX_PATH]{}; uintptr_t offset = 0; provenance(caller, name, offset);
-        char text[480]; std::snprintf(text, sizeof(text),
-            "Reflex API marker source caller=%ls+0x%llx device=%p marker=%u frame=%llu high_bits=%llu result=%d thread=%lu",
-            name, static_cast<unsigned long long>(offset), static_cast<void*>(device), unsigned(params->markerType),
-            static_cast<unsigned long long>(params->frameID), static_cast<unsigned long long>(wide), int(result), GetCurrentThreadId());
-        listener(listener_user, text);
-    }
+    const MarkerEvent event{caller, device, params, int(result)};
+    rsf_core_reflex_audit_event(uintptr_t(caller), uintptr_t(device), 1u + uint32_t(params->markerType),
+        params->frameID >> 32, &event, emit_marker);
     return result;
 }
+
 NvAPI_Status __cdecl observe_sync(IUnknown* device, NV_SET_REFLEX_SYNC_PARAMS* params)
 {
     void* caller = RSF_AUDIT_CALLER;
     const auto result = original_sync(device, params);
     if (params && params->version == NV_SET_REFLEX_SYNC_PARAMS_VER) {
-        std::lock_guard<std::mutex> lock(guard);
-        sync_state.caller = caller; sync_state.device = device; sync_state.params = *params; sync_state.result = int(result);
-        if (result == NVAPI_OK) {
-            if (params->bEnable) sync_state.enabled = true;
-            if (params->bDisable) sync_state.enabled = false;
-        }
+        const rsf_reflex_sync_report report{uintptr_t(caller), uintptr_t(device), params->timeInQueueUs,
+            params->timeInQueueUsTarget, params->vblankIntervalUs, unsigned(params->fgMultiplier),
+            unsigned(params->dfgMaxMultiplier), params->dfgTargetFps, int(result), 0};
+        rsf_core_reflex_audit_sync(&report, uint32_t(params->bEnable), uint32_t(params->bDisable));
     }
     return result;
 }
+
 NvAPI_Status __cdecl observe_async(ID3D12CommandQueue* queue, NV_ASYNC_FRAME_MARKER_PARAMS* params)
 {
     void* caller = RSF_AUDIT_CALLER;
     const auto result = original_async(queue, params);
     if (!params || params->version != NV_ASYNC_FRAME_MARKER_PARAMS_VER) return result;
-    std::lock_guard<std::mutex> lock(guard);
-    if (listener && lines < 192 && changed({caller, queue, 100u + uint32_t(params->markerType), uint64_t(params->vendorInternal)})) {
-        ++lines; wchar_t name[MAX_PATH]{}; uintptr_t offset = 0; provenance(caller, name, offset);
-        char text[480]; std::snprintf(text, sizeof(text),
-            "Reflex API async source caller=%ls+0x%llx queue=%p marker=%u frame=%llu present_frame=%llu vendor=%u result=%d thread=%lu",
-            name, static_cast<unsigned long long>(offset), static_cast<void*>(queue), unsigned(params->markerType),
-            static_cast<unsigned long long>(params->frameID), static_cast<unsigned long long>(params->presentFrameID),
-            unsigned(params->vendorInternal), int(result), GetCurrentThreadId());
-        listener(listener_user, text);
-    }
+    const AsyncEvent event{caller, queue, params, int(result)};
+    rsf_core_reflex_audit_event(uintptr_t(caller), uintptr_t(queue), 100u + uint32_t(params->markerType),
+        uint64_t(params->vendorInternal), &event, emit_async);
     return result;
 }
-}
-RsfNvapiQuery rsf_nvapi_query()
+
+enum InstallResult : uint32_t { silent_failure = 0, installed = 1, module_missing = 2, hook_refused = 3 };
+uint32_t install()
 {
-    const auto module = GetModuleHandleW(L"nvapi64.dll");
-    return module ? reinterpret_cast<RsfNvapiQuery>(GetProcAddress(module, "nvapi_QueryInterface")) : nullptr;
-}
-void rsf_reflex_audit_start(rsf_backend_log_fn log, void* user)
-{
-    std::lock_guard<std::mutex> lock(guard);
-    listener = log; listener_user = user; sources = {}; lines = 0; sync_state = {};
-    if (installed) return;
     const auto query = rsf_nvapi_query();
-    if (!query) { if (listener) listener(listener_user, "Reflex API audit unavailable: NVAPI module/export absent"); return; }
+    if (!query) return module_missing;
     const auto init = MH_Initialize();
-    if (init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) return;
+    if (init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) return silent_failure;
     void* targets[]{query(0xac1ca9e0u), query(0xd9984c05u), query(0xb9f6faffu), query(0x13c98f73u)};
     void* hooks[]{reinterpret_cast<void*>(&observe_mode), reinterpret_cast<void*>(&observe_marker),
         reinterpret_cast<void*>(&observe_sync), reinterpret_cast<void*>(&observe_async)};
@@ -154,10 +190,8 @@ void rsf_reflex_audit_start(rsf_backend_log_fn log, void* user)
     for (uint32_t i = 0; enabled && i < made; ++i) enabled = MH_EnableHook(targets[i]) == MH_OK;
     if (!enabled) {
         for (uint32_t i = 0; i < made; ++i) { MH_DisableHook(targets[i]); MH_RemoveHook(targets[i]); }
-        if (listener) listener(listener_user, "Reflex API audit refused: existing entry cannot be chained safely");
-        return;
+        return hook_refused;
     }
-    installed = true;
     // External tools may attach after us and retain our entry as their original. Both
     // target and observer code must therefore remain resident until process exit.
     HMODULE pinned = nullptr;
@@ -165,27 +199,21 @@ void rsf_reflex_audit_start(rsf_backend_log_fn log, void* user)
         reinterpret_cast<LPCWSTR>(targets[0]), &pinned);
     GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN | GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
         reinterpret_cast<LPCWSTR>(&observe_mode), &pinned);
-    if (listener) listener(listener_user, "Reflex API audit installed: observing mode, sync and marker callers without filtering");
+    return installed;
 }
-void rsf_reflex_audit_stop()
+} // namespace
+
+RsfNvapiQuery rsf_nvapi_query()
 {
-    // Detours stay with the process-owned backend module, preserving later external chains.
-    // Drain the bounded logging callback before its owner can be destroyed.
-    std::lock_guard<std::mutex> lock(guard); listener = nullptr; listener_user = nullptr;
+    const auto module = GetModuleHandleW(L"nvapi64.dll");
+    return module ? reinterpret_cast<RsfNvapiQuery>(GetProcAddress(module, "nvapi_QueryInterface")) : nullptr;
 }
-void rsf_reflex_audit_report()
+void rsf_reflex_audit_start(rsf_backend_log_fn log, void* user)
 {
-    std::lock_guard<std::mutex> lock(guard);
-    if (!listener || !sync_state.caller) return;
-    wchar_t name[MAX_PATH]{}; uintptr_t offset = 0; provenance(sync_state.caller, name, offset);
-    const auto& params = sync_state.params;
-    char text[480]; std::snprintf(text, sizeof(text),
-        "Reflex API sync caller=%ls+0x%llx device=%p enabled=%u queue_us=%d target_us=%u vblank_us=%u fg=%u dfg_max=%u dfg_fps=%u result=%d",
-        name, static_cast<unsigned long long>(offset), static_cast<void*>(sync_state.device), unsigned(sync_state.enabled),
-        params.timeInQueueUs, params.timeInQueueUsTarget, params.vblankIntervalUs, unsigned(params.fgMultiplier),
-        unsigned(params.dfgMaxMultiplier), params.dfgTargetFps, sync_state.result);
-    listener(listener_user, text);
+    rsf_core_reflex_audit_start(log, user, install, emit_text);
 }
+void rsf_reflex_audit_stop() { rsf_core_reflex_audit_stop(); }
+void rsf_reflex_audit_report() { rsf_core_reflex_audit_report(emit_sync); }
 #else
 RsfNvapiQuery rsf_nvapi_query() { return nullptr; }
 void rsf_reflex_audit_start(rsf_backend_log_fn, void*) {}

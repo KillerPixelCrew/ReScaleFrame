@@ -17,7 +17,6 @@ target_link_libraries(rsf_dlss PRIVATE ReScaleFrame::RuntimeCommon)
 # and tests. What is lost is the implementation, not the contract: the entry points still exist and
 # report RSF_DLSS_ERROR_NOT_COMPILED, which is a different thing from DLSS failing.
 if(EXISTS "${RSF_STREAMLINE_INCLUDE}/sl.h")
-    target_link_libraries(rsf_dlss PRIVATE rsf_orchestrator_rust)
     target_include_directories(rsf_dlss PRIVATE "${RSF_STREAMLINE_INCLUDE}")
     target_compile_definitions(rsf_dlss PUBLIC RSF_HAVE_STREAMLINE=1)
     # NVIDIA's headers are not compiled with our warning settings and are not ours to change.
@@ -40,4 +39,8 @@ if(RSF_NVAPI_INCLUDE)
     target_link_libraries(rsf_dlss PRIVATE minhook)
     target_include_directories(rsf_dlss SYSTEM PRIVATE "${RSF_NVAPI_INCLUDE}")
     target_compile_definitions(rsf_dlss PRIVATE RSF_HAVE_NVAPI_DIAGNOSTICS=1)
+endif()
+
+if(EXISTS "${RSF_STREAMLINE_INCLUDE}/sl.h" OR RSF_NVAPI_INCLUDE)
+    target_link_libraries(rsf_dlss PRIVATE rsf_orchestrator_rust)
 endif()

@@ -180,6 +180,8 @@ mod overlay_wrapped12;
 #[cfg(windows)]
 mod plugin_session;
 #[cfg(windows)]
+mod reflex_audit;
+#[cfg(windows)]
 mod render_abi;
 #[cfg(windows)]
 mod render_host;
