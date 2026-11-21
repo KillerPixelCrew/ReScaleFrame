@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MIT
 //! Project Wingman game SDK entry and exact-build identity.
 mod camera;
+#[cfg(windows)]
+mod carrier;
+#[cfg(windows)]
+mod carrier_abi;
 mod execution;
 mod observer;
 

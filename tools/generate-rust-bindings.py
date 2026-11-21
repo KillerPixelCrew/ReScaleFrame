@@ -33,6 +33,11 @@ generate("sdk/game/src/lib.rs", "sdk/game/include/rescaleframe/game_api.h",
 generate("sdk/game/src/shader_patch_abi.rs", "runtime/shader_patch/include/rescaleframe/shader_patch.h",
          "rsf_(get_shader_patch_api_fn|shader_patch_api|patch_.*)", "RSF_(SHADER_PATCH_VERSION|PATCH_.*)", [],
          ["--with-derive-default"])
+generate("games/project-wingman/src/carrier_abi.rs", "runtime/orchestrator/include/rescaleframe/plugin_session.h",
+         "rsf_plugin_session_options", "RSF_PLUGIN_SESSION_ABI_VERSION",
+         ["-Isdk/game/include", "-Iruntime/orchestrator/include"],
+         ["--no-recursive-allowlist", "--raw-line", "type wchar_t = u16;",
+          "--raw-line", "use rsf_game_sys::{rsf_game_host_services, rsf_game_probe};"])
 generate("ui/overlay/src/host_option_limit.rs", "runtime/orchestrator/include/rescaleframe/overlay_api.h",
          "NOTHING", "RSF_OVERLAY_SERVICE_OPTION_LIMIT",
          ["-Isdk/game/include", "-Iruntime/orchestrator/include", "-Iruntime/contract/include",

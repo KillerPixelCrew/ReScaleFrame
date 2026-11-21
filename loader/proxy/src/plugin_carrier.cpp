@@ -10,9 +10,6 @@
 
 namespace {
 HMODULE self = nullptr;
-INIT_ONCE forwarding = INIT_ONCE_STATIC_INIT;
-FARPROC exports[12]{};
-constexpr WORD ordinals[] = {1,2,3,4,5,6,7,8,100,101,102,103};
 std::wstring log_path;
 std::mutex log_mutex;
 rsf_plugin_session* session = nullptr;
@@ -28,18 +25,6 @@ void cpu_event(void*, const rsf_game_cpu_event* event)
             event->stage, static_cast<unsigned long long>(event->source_frame_id), GetCurrentThreadId(), accepted, event->flags);
         log(nullptr, message);
     }
-}
-
-BOOL CALLBACK initialize(PINIT_ONCE, void*, void**)
-{
-    wchar_t directory[MAX_PATH]{};
-    const auto length = GetSystemDirectoryW(directory, MAX_PATH);
-    if (!length || length >= MAX_PATH) return FALSE;
-    const auto path = std::wstring(directory, length) + L"\\xinput1_3.dll";
-    const auto system = LoadLibraryExW(path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
-    if (!system) return FALSE;
-    for (size_t i = 0; i < 12; ++i) exports[i] = GetProcAddress(system, MAKEINTRESOURCEA(ordinals[i]));
-    return TRUE;
 }
 
 void log(void*, const char* message)
@@ -109,16 +94,6 @@ DWORD WINAPI startup(void*) noexcept try
     return unsigned(started);
 }
 catch (...) { return 1; }
-}
-
-extern "C" FARPROC rsf_xinput_resolve(uint32_t index)
-{
-    if (index >= 12 || !InitOnceExecuteOnce(&forwarding, initialize, nullptr, nullptr) || !exports[index]) {
-        SetLastError(ERROR_PROC_NOT_FOUND);
-        RaiseException(EXCEPTION_ILLEGAL_INSTRUCTION, EXCEPTION_NONCONTINUABLE, 0, nullptr);
-        return nullptr;
-    }
-    return exports[index];
 }
 
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD event, void*)

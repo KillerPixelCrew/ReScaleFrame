@@ -29,6 +29,11 @@ leases. Reservation respects the original 256-command cap across threads,
 and retirement keeps the borrowed services until calls and commands finish.
 Build, fixture and live execution checks remain open.
 
+Wingman's dedicated XInput carrier starts its optional plugin session in
+Rust. It retains the exact executable gate and `ObserveNative` setting.
+Both XInput carriers use the same native System32 forwarding code with
+the original ordinals. The carrier and game contracts remain unrun.
+
 The Steam D3D11 chain uses one Rust owner for the exact overlay profile,
 guarded forwarding and Present hook lifetime. Fallout 4 and Skyrim SE
 keep their existing native entry points. MinHook, C++ exception guards and
