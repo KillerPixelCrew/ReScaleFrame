@@ -1,0 +1,15 @@
+[package]
+name = "rsf-streamline-vk"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# Linked into both the Runtime's native Vulkan services and the standalone
+# Streamline bridge DLL, so it carries no dependencies.
+[lib]
+crate-type = ["staticlib"]
+
+[lints]
+workspace = true

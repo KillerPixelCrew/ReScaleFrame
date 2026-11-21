@@ -2,7 +2,7 @@
 .SYNOPSIS
 Compiles the retained Streamline Vulkan bridge with its compiler runtime linked statically.
 .DESCRIPTION
-Checks Streamline/Vulkan headers, invokes g++ in C++20 mode with wintrust/advapi32 linkage, and builds a sibling temporary DLL. Successful compilation replaces Output; failure removes temporary output and throws. SDK plugin binaries are supplied separately by native bundle preparation.
+Checks Streamline/Vulkan headers, builds the shared Rust interposer lifecycle owner for Windows GNU, then invokes g++ in C++20 mode with wintrust/advapi32 linkage and builds a sibling temporary DLL. Successful compilation replaces Output; failure removes temporary output and throws. SDK plugin binaries are supplied separately by native bundle preparation.
 .PARAMETER SdkRoot
 Streamline SDK root containing include/sl.h.
 .PARAMETER Output
@@ -19,6 +19,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $compiler = (Get-Command g++.exe -ErrorAction Stop).Source
+$cargo = (Get-Command cargo.exe -ErrorAction Stop).Source
 if (-not $VulkanSdkRoot) { throw 'Specify -VulkanSdkRoot or set VULKAN_SDK.' }
 
 $source = Join-Path $PSScriptRoot 'bridge.cpp'
@@ -55,10 +56,31 @@ if ($CorrectedRuntimeDirectory) {
     $bytes = for ($i = 0; $i -lt 64; $i += 2) { '0x' + $hash.Substring($i, 2) }
     $correctionArguments += '-DVULKANSTORY_CORRECTED_STREAMLINE_SHA256=' + ($bytes -join ',')
 }
-& $compiler -std=c++20 -O2 -shared -static -I $include -I $vulkanInclude @correctionArguments $source -o $temporary -lwintrust -ladvapi32
-if ($LASTEXITCODE -ne 0) {
-    if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force }
-    throw 'Streamline bridge compilation failed.'
+$objects = Join-Path ([IO.Path]::GetTempPath()) ('VulkanStoryStreamline-' + [Guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $objects | Out-Null
+try {
+    # The interposer lifecycle is the same Rust crate the Runtime links.
+    $rustTarget = 'x86_64-pc-windows-gnu'
+    $rustOutput = Join-Path $objects 'cargo'
+    Push-Location -LiteralPath (Join-Path $PSScriptRoot '../../..')
+    try {
+        & $cargo build --locked --release -p rsf-streamline-vk --target $rustTarget --target-dir $rustOutput
+        if ($LASTEXITCODE -ne 0) { throw "Streamline Rust lifecycle compilation failed: $LASTEXITCODE" }
+    }
+    finally {
+        Pop-Location
+    }
+    $rustArchive = Join-Path $rustOutput "$rustTarget/release/librsf_streamline_vk.a"
+    & $compiler -std=c++20 -O2 -shared -static -I $include -I $vulkanInclude @correctionArguments $source $rustArchive `
+        -o $temporary -lwintrust -ladvapi32 -lntdll -luserenv -lws2_32 -ldbghelp
+    if ($LASTEXITCODE -ne 0) { throw 'Streamline bridge compilation failed.' }
+    Move-Item -LiteralPath $temporary -Destination $target -Force
 }
-Move-Item -LiteralPath $temporary -Destination $target -Force
+catch {
+    if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force }
+    throw
+}
+finally {
+    if (Test-Path -LiteralPath $objects) { Remove-Item -LiteralPath $objects -Recurse -Force }
+}
 Write-Host "vulkanstory-streamline: built $target"

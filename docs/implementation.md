@@ -4,6 +4,20 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The Streamline Vulkan bridge's interposer lifecycle is now Rust
+(`runtime/vulkan/streamline/lifecycle`). It owns admission under the
+held verified file handle, the module, the slInit feature selection,
+the plugin path and project strings, the sticky shutdown result and
+explicit unload. The interposer's Vulkan resolvers stay published after
+SDK shutdown until unload. The C++ bridge keeps every export, the typed
+SDK calls and the signature and hash check. The Runtime and the
+standalone `build.ps1` DLL link the same crate. Native SDK exceptions now
+return the exception-handler result, unload clears stale SDK entry
+points, and reentered lifecycle calls return -7. Unrun Rust fixtures
+cover admission order, sticky refusal, retained dispatch and module
+release on failure. Source and formatting checks passed. Builds, the
+latency and DLSS SR/FG consumers and SDK runs remain unverified.
+
 The callback render host refuses overlapping lifecycle calls, including
 stop reentered from an adapter policy callback. A refused start keeps the
 host if quiesce or stop refuses. After both succeed it releases any SR
