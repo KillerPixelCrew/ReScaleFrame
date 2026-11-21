@@ -117,9 +117,20 @@ panel with the mouse and turned the camera after closing it. The last SR
 status recorded 5,489 evaluations with no refusals. Steady FG windows
 recorded 240 vendor presents per 120 source frames. The engine destroyed
 the level, shut down Direct3D and exited with code 0. The test restored the
-staged inputs. Gameplay keyboard consumption and this cut's live AVX
-path remain unverified. Logs and hashes are in
+staged inputs. Logs and hashes are in
 `.local/anomaly/staging/live-58fe95a-stage5/evidence/rust-overlay-hook-registry/`.
+
+The same Release DLLs also passed the isolated Anomaly 1.5.3 AVX run. Insert
+opened and closed the overlay, the mouse switched to the sharpening tab,
+and mouse input turned the game camera after the panel closed. The save
+loaded at 1280×720 and resized once to 1600×900. DLSS reached 5,609
+evaluations with zero refusals, and steady DLSS-G windows recorded 240
+vendor presents per 120 source frames. The engine queued its scripted
+quit, destroyed the level and Direct3D, and exited with code 0. All five
+staged inputs matched their backups after restoration. Gameplay keyboard
+consumption is still unverified. Two opening captures at 1280×720 and
+two closing captures at 1600×900 are beside the logs and hashes in
+`.local/anomaly/staging/live-58fe95a-stage5/evidence/rust-overlay-hook-registry-avx/`.
 
 Anomaly's cold entry and startup retry state now live in Rust. The
 entry borrows the Runtime already loaded by the thin carrier. A partial

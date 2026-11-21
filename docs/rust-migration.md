@@ -34,6 +34,8 @@ Rust with the existing C signature and static string lifetime. On the
 pinned Rust toolchain, the rebuilt Streamline-enabled Runtime returned
 `0.1.2` on two direct DLL calls, matching `VERSION`. All four Release
 export inventories matched again. Five focused MSVC DLL and embedded
-contracts, 333 locked Rust tests, formatting and Clippy passed.
+contracts, 333 locked Rust tests, formatting and Clippy passed. The
+rebuilt Godot extension also matched all 398 export names and ordinals
+and kept its embedded Runtime linkage.
 
 Callers still need to account for documented behavior changes. Frame assembly requires the output record to advertise its capacity and refuses a zero or short capacity before writing. Overlay settings callbacks can read the committed values, and a second write returns `BUSY` while the first is active. Vulkan capture and SR recording require completion proof before readbacks can be published or reused. The [implementation tracker](implementation.md) records the fixture coverage for those changes.
