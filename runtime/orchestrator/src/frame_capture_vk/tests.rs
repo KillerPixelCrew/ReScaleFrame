@@ -454,12 +454,16 @@ fn non_core_source_skips_reservation() {
 }
 
 #[test]
-fn destroy_releases_pending_without_mapping() {
+fn destroy_fails_pending_tickets_and_releases_without_mapping() {
     core();
     let owner = owner(false, Legacy::default());
-    record(&owner, 1, c"snapshot", 0);
+    let (accepted, ticket) = record(&owner, 1, c"snapshot", 0);
+    assert!(accepted && ticket != 0);
     drop(owner);
-    world(|w| assert!(w.mapped.is_empty() && w.released.len() == 1));
+    world(|w| {
+        assert!(w.mapped.is_empty() && w.released.len() == 1);
+        assert_eq!(w.failed, vec![(ticket, "snapshot".into(), STAGING_FAILED)]);
+    });
 }
 
 fn legacy_directory(tag: &str) -> PathBuf {

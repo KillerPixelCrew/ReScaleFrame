@@ -43,8 +43,9 @@ as the C++ owner did. Such a bundle reaches the input dump's 30 second
 incomplete timeout instead of reporting a readback failure. This was observed in
 source review only and was not changed.
 
-The source port found no demonstrated defect in the C++ completion logic, so
-none was fixed.
+After the merge, destruction now fails each remaining core ticket before
+releasing its readback. The caller still drains submissions before destroying
+the owner. The test checks immediate failure and release without mapping.
 
 ## Validation
 
@@ -75,14 +76,14 @@ yyjson files were copied into the ignored vendor directory.
   310 tests.
 - All Debug and Release targets built without warnings. This covers every
   header consumer except the Godot extension.
-- Debug and Release each passed 20 CPU contracts:
+- Debug and Release each passed 20 focused contracts:
   `native_vulkan_contract` (the fake-device command-retirement case),
   `input_dump_vulkan_cpu_linked` and `input_dump_vulkan_cpu_dll` (poisoned and
   stale shared proof, refusal, timeout and drain), `native_vulkan_dll_exports`,
   the DLSS, DLSS FG, XeSS, FSR4 SR, FFX reset and submission, FG dispatch
   (three variants), DX12 interop and split SR (contract, disabled and stub)
   contracts, `capture_metadata_contract`, `failure_capture_policy_contract`
-  and `input_dump_d3d12`.
+  and `input_dump_d3d12`. The last fixture creates a D3D12 WARP software device.
 - Release PE exports matched every name and ordinal in
   `build/rust-migration/baseline-exports`: Runtime 381, AC7 256, Loader 273 and
   Minecraft 267. No `rsf_core_capture_vk_*` symbol is exported. The linked
@@ -93,6 +94,6 @@ yyjson files were copied into the ignored vendor directory.
 
 ## Gaps
 
-No GPU, device, visible-window or game fixture ran. Actual Vulkan
+No physical GPU, visible-window or game fixture ran. Actual Vulkan
 synchronization, the Godot extension (no `RSF_GODOT_CPP_DIR`) and the
 Streamline-enabled native Vulkan configuration were not built in this run.

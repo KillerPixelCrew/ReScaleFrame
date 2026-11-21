@@ -1144,6 +1144,13 @@ receipt from the pinned SDK, loaded the Runtime DLL in the export
 fixture, and passed the focused synthetic Vulkan contracts.
 See [the present capture audit](research/rust-vulkan-dlss-present-capture.md).
 
+The shared Vulkan readback owner now holds selection, pending buffers,
+completion proof and publication in Rust. A shared watermark cannot
+complete an exact group or command retirement. Destruction fails any
+remaining capture ticket and releases its readback after the caller's
+drain. The regression checks that this path never maps the readback.
+See [the Vulkan readback audit](research/rust-vulkan-readback-owner.md).
+
 The D3D11 translucency owner now keeps its pass order, mask and cloud-depth
 leases, device identity and publication in Rust. Cloud association uses
 the reported session, rectangle and pass order. It refuses late composites

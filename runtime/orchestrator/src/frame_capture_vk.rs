@@ -682,6 +682,7 @@ impl Drop for Owner {
         // Owners drain referencing submissions before destruction.
         let pending = std::mem::take(&mut self.lock().pending);
         for value in &pending {
+            self.fail(value, STAGING_FAILED);
             self.release(value);
         }
     }
