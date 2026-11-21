@@ -149,14 +149,13 @@ typedef struct rsf_d3d11p_platform {
     uint32_t (*buffer_referenced)(void* resource);
     void (*set_description)(void* bridge, uint32_t count, uint32_t width, uint32_t height,
         uint32_t format, uint32_t flags);
-    void* (*retire_fence)(void* bridge);
-    int32_t (*retire_submit)(void* bridge, void* queue, void* vendor_fence,
+    int32_t (*create_retirement_fence)(void* bridge, void** out); /* transfers one owned COM reference */
+    int32_t (*retire_submit)(void* bridge, void* queue, void* retirement_fence, void* vendor_fence,
         uint64_t vendor_value, void* list, uint64_t value);
     /* Retains the facade's GPU references. Rust retains its synchronization resources and slots. */
     void (*retain_all)(void* bridge);
     void (*release_presentation)(void* bridge);
     /* Preserve the old member release order around the Rust-owned synchronization references. */
-    void (*release_retire_fence)(void* bridge);
     void (*release_direct_graphics)(void* bridge);
     void (*release_host)(void* bridge);
     void* (*source_queue)(void* bridge, void* interop_queue); /* returns one owned COM reference */

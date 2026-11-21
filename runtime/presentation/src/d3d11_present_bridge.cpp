@@ -26,7 +26,7 @@ static_assert(sizeof(rsf_d3d11p_facts) == 112 && offsetof(rsf_d3d11p_facts, grap
     offsetof(rsf_d3d11p_facts, buffer_usage) == 104);
 static_assert(sizeof(rsf_d3d11p_plain_plan) == 24 && offsetof(rsf_d3d11p_plain_plan, swap_effect) == 8);
 static_assert(sizeof(rsf_d3d11p_adapter) == 16);
-static_assert(sizeof(rsf_d3d11p_platform) == 73 * sizeof(void*));
+static_assert(sizeof(rsf_d3d11p_platform) == 72 * sizeof(void*));
 static_assert(offsetof(rsf_d3d11p_platform, bridge_new) == 15 * sizeof(void*) &&
     offsetof(rsf_d3d11p_platform, init_source) == 19 * sizeof(void*) &&
     offsetof(rsf_d3d11p_platform, create_interop_queue) == 29 * sizeof(void*) &&
@@ -38,9 +38,10 @@ static_assert(offsetof(rsf_d3d11p_platform, bridge_new) == 15 * sizeof(void*) &&
     offsetof(rsf_d3d11p_platform, query_buffer_interface) == 56 * sizeof(void*) &&
     offsetof(rsf_d3d11p_platform, signal_wait) == 59 * sizeof(void*) &&
     offsetof(rsf_d3d11p_platform, set_description) == 62 * sizeof(void*) &&
-    offsetof(rsf_d3d11p_platform, release_retire_fence) == 67 * sizeof(void*) &&
-    offsetof(rsf_d3d11p_platform, release_host) == 69 * sizeof(void*) &&
-    offsetof(rsf_d3d11p_platform, verify_outer) == 72 * sizeof(void*));
+    offsetof(rsf_d3d11p_platform, create_retirement_fence) == 63 * sizeof(void*) &&
+    offsetof(rsf_d3d11p_platform, release_direct_graphics) == 67 * sizeof(void*) &&
+    offsetof(rsf_d3d11p_platform, release_host) == 68 * sizeof(void*) &&
+    offsetof(rsf_d3d11p_platform, verify_outer) == 71 * sizeof(void*));
 static_assert(sizeof(rsf_d3d11_present_status) == 280 && sizeof(rsf_observer_present_event) == 32);
 static_assert(DXGI_FORMAT_R8G8B8A8_UNORM == 28 && DXGI_FORMAT_B8G8R8A8_UNORM == 87 &&
     DXGI_FORMAT_R10G10B10A2_UNORM == 24 && DXGI_FORMAT_R16G16B16A16_FLOAT == 10);
@@ -98,8 +99,6 @@ struct Bridge final : public IDXGISwapChain4 {
     ComPtr<ID3D12CommandQueue> direct_queue;
     bool native12 = false;
     rsf_shared_fence* shared_fence = nullptr;
-    // Signalled on the provider queue once vendor retirement has joined.
-    ComPtr<ID3D12Fence> retired;
     // The three slot allocator/list pairs are leased by the Rust owner, which releases them
     // where these members were destroyed.
     DXGI_SWAP_CHAIN_DESC description{};
@@ -637,13 +636,10 @@ void set_description(void* b, uint32_t count, uint32_t width, uint32_t height, u
     d.BufferCount = count;
     d.BufferDesc.Width = width; d.BufferDesc.Height = height; d.BufferDesc.Format = DXGI_FORMAT(format); d.Flags = flags;
 }
-void* retire_fence(void* b) {
-    auto& self = *as_bridge(b);
-    if (!self.retired && FAILED(static_cast<ID3D12Device*>(self.graphics.native_device)->CreateFence(0, D3D12_FENCE_FLAG_NONE,
-            IID_PPV_ARGS(&self.retired)))) return nullptr;
-    return self.retired.Get();
+int32_t create_retirement_fence(void* b, void** out) {
+    return create_completion_fence(as_bridge(b)->graphics.native_device, out);
 }
-int32_t retire_submit(void* b, void* raw_queue, void* vendor_fence, uint64_t vendor_value, void* list, uint64_t value) {
+int32_t retire_submit(void* b, void* raw_queue, void* retirement_fence, void* vendor_fence, uint64_t vendor_value, void* list, uint64_t value) {
     auto& self = *as_bridge(b); auto* queue = static_cast<ID3D12CommandQueue*>(raw_queue);
     if (vendor_fence && FAILED(queue->Wait(static_cast<ID3D12Fence*>(vendor_fence), vendor_value)))
         return RSF_BACKEND_ERROR_FEATURE_FAILED;
@@ -652,20 +648,19 @@ int32_t retire_submit(void* b, void* raw_queue, void* vendor_fence, uint64_t ven
         if (!command) return RSF_BACKEND_ERROR_FEATURE_FAILED;
         ID3D12CommandList* lists[]{command}; queue->ExecuteCommandLists(1, lists);
     }
-    return FAILED(queue->Signal(self.retired.Get(), value)) ? RSF_BACKEND_ERROR_FEATURE_FAILED : RSF_BACKEND_OK;
+    return FAILED(signal_slot(queue, retirement_fence, value)) ? RSF_BACKEND_ERROR_FEATURE_FAILED : RSF_BACKEND_OK;
 }
 // On device failure retain GPU-reachable storage for the process rather than free it.
 // The Rust owner has already retained its synchronization resources and slots.
 void retain_all(void* b) {
     auto& self = *as_bridge(b);
-    self.retired.Detach(); self.context.Detach(); self.device.Detach(); self.parent.Detach();
+    self.context.Detach(); self.device.Detach(); self.parent.Detach();
     self.direct_device.Detach(); self.direct_queue.Detach();
 }
 void release_presentation(void* b) {
     auto& self = *as_bridge(b);
     rsf_shared_fence_destroy(self.shared_fence); self.shared_fence = nullptr;
 }
-void release_retire_fence(void* b) { as_bridge(b)->retired.Reset(); }
 void release_direct_graphics(void* b) {
     auto& self = *as_bridge(b);
     self.direct_queue.Reset(); self.direct_device.Reset();
@@ -673,7 +668,7 @@ void release_direct_graphics(void* b) {
 // A private host ends after the Rust owner has released the slot lists on its device.
 void release_host(void* b) {
     auto& self = *as_bridge(b);
-    self.retired.Reset(); self.context.Reset(); self.device.Reset(); self.parent.Reset();
+    self.context.Reset(); self.device.Reset(); self.parent.Reset();
     rsf_streamline_host_destroy(self.host);
 }
 void* source_queue(void* b, void* interop_queue) {
@@ -733,8 +728,8 @@ const rsf_d3d11p_platform platform{
     .log_buffer_refusal = leaf::log_buffer_refusal,
     .signal_wait = leaf::signal_wait, .wait_fence = leaf::wait_fence,
     .buffer_referenced = leaf::buffer_referenced, .set_description = leaf::set_description,
-    .retire_fence = leaf::retire_fence, .retire_submit = leaf::retire_submit, .retain_all = leaf::retain_all,
-    .release_presentation = leaf::release_presentation, .release_retire_fence = leaf::release_retire_fence,
+    .create_retirement_fence = leaf::create_retirement_fence, .retire_submit = leaf::retire_submit, .retain_all = leaf::retain_all,
+    .release_presentation = leaf::release_presentation,
     .release_direct_graphics = leaf::release_direct_graphics,
     .release_host = leaf::release_host,
     .source_queue = leaf::source_queue,

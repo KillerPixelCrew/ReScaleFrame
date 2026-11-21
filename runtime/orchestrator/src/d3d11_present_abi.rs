@@ -167,11 +167,10 @@ pub(crate) struct rsf_d3d11p_platform {
     pub wait_fence: unsafe extern "C" fn(Raw, Raw, u64) -> i32,
     pub buffer_referenced: unsafe extern "C" fn(Raw) -> u32,
     pub set_description: unsafe extern "C" fn(Raw, u32, u32, u32, u32, u32),
-    pub retire_fence: unsafe extern "C" fn(Raw) -> Raw,
-    pub retire_submit: unsafe extern "C" fn(Raw, Raw, Raw, u64, Raw, u64) -> i32,
+    pub create_retirement_fence: unsafe extern "C" fn(Raw, *mut Raw) -> i32,
+    pub retire_submit: unsafe extern "C" fn(Raw, Raw, Raw, Raw, u64, Raw, u64) -> i32,
     pub retain_all: unsafe extern "C" fn(Raw),
     pub release_presentation: unsafe extern "C" fn(Raw),
-    pub release_retire_fence: unsafe extern "C" fn(Raw),
     pub release_direct_graphics: unsafe extern "C" fn(Raw),
     pub release_host: unsafe extern "C" fn(Raw),
     pub source_queue: unsafe extern "C" fn(Raw, Raw) -> Raw,
@@ -189,7 +188,7 @@ const _: () = {
     assert!(offset_of!(rsf_d3d11p_facts, device11) == 96);
     assert!(offset_of!(rsf_d3d11p_facts, buffer_usage) == 104);
     assert!(size_of::<rsf_d3d11p_adapter>() == 16);
-    assert!(size_of::<rsf_d3d11p_platform>() == 73 * 8);
+    assert!(size_of::<rsf_d3d11p_platform>() == 72 * 8);
     assert!(offset_of!(rsf_d3d11p_platform, bridge_new) == 15 * 8);
     assert!(offset_of!(rsf_d3d11p_platform, init_source) == 19 * 8);
     assert!(offset_of!(rsf_d3d11p_platform, create_interop_queue) == 29 * 8);
@@ -201,7 +200,8 @@ const _: () = {
     assert!(offset_of!(rsf_d3d11p_platform, query_buffer_interface) == 56 * 8);
     assert!(offset_of!(rsf_d3d11p_platform, signal_wait) == 59 * 8);
     assert!(offset_of!(rsf_d3d11p_platform, set_description) == 62 * 8);
-    assert!(offset_of!(rsf_d3d11p_platform, release_retire_fence) == 67 * 8);
-    assert!(offset_of!(rsf_d3d11p_platform, release_host) == 69 * 8);
-    assert!(offset_of!(rsf_d3d11p_platform, verify_outer) == 72 * 8);
+    assert!(offset_of!(rsf_d3d11p_platform, create_retirement_fence) == 63 * 8);
+    assert!(offset_of!(rsf_d3d11p_platform, release_direct_graphics) == 67 * 8);
+    assert!(offset_of!(rsf_d3d11p_platform, release_host) == 68 * 8);
+    assert!(offset_of!(rsf_d3d11p_platform, verify_outer) == 71 * 8);
 };

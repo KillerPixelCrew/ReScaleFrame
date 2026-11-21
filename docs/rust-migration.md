@@ -350,6 +350,12 @@ and 33 public facade signatures. Binary linkage, partial-initialization
 fixtures and D3D11 and D3D12 device retirement remain open.
 [Synchronization ownership](research/rust-d3d11-present-sync.md)
 
+The presentation owner also owns the lazy provider retirement fence
+and its receipt counter. The current private table has 72 callbacks.
+The public retirement entry and both linked callers keep the borrowed
+fence contract. The extended reentry fixture and device checks remain
+unrun. [Provider retirement](research/rust-d3d11-present-sync.md#provider-retirement-receipt)
+
 ## Verification coverage
 
 | Requirement | Recorded evidence | Still open |

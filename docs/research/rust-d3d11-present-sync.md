@@ -90,3 +90,28 @@ formatting, locked offline Cargo metadata and whitespace checks passed. The user
 linking, Clippy, tests, device and game verification, and deployment. Device checks remain for
 native D3D12 switching with a retained application wait handle, the D3D11 interop/physical queue
 split, and teardown with shared and private hosts.
+
+## Provider retirement receipt
+
+The follow-up to `ad202c08` moves the lazy provider retirement fence into
+the Rust owner alongside its last successful signal value. The native
+leaf still creates the fence on `graphics.native_device` at zero with
+`D3D12_FENCE_FLAG_NONE`. The bridge asks for vendor retirement, waits on
+that fence on the physical queue, submits the optional closed list, then
+signals the private fence. The two production callers, `fg12` and native
+D3D11 FG, still retain the borrowed fence only on success.
+
+The existing provider read guard protects the session but allows multiple
+readers. A nonblocking lock now covers fence creation and receipt issuance,
+so an overlapping or reentered retirement returns `NOT_READY` with zeroed
+outputs. The serial advances only after a successful signal and never issues
+the device-removal sentinel. Failed initialization drops any partial fence
+reference. The successful path keeps the same fence across provider switches
+and drops it at the same point during facade teardown. Failed GPU drain
+retains it with the other presentation synchronization resources.
+
+The private table now has 72 entries. The release leaf is removed, and
+the submit leaf borrows the Rust-owned fence explicitly. The existing
+retirement fixture now checks shared fence identity, reuse, release and
+reentry. The queue effects, declarations and caller paths were compared
+in source. The fixture, native linkage and device checks remain unrun.

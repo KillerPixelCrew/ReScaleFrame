@@ -593,6 +593,12 @@ impl PresentationSync {
     }
 }
 
+#[derive(Default)]
+struct ProviderRetirement {
+    fence: Option<ComRef>,
+    serial: u64,
+}
+
 // DXGI serializes the application's frame calls. Provider callbacks and the retire
 // lease can reenter on the same thread.
 pub(crate) struct Owner {
@@ -617,7 +623,7 @@ pub(crate) struct Owner {
     application_fences: [AtomicU64; APPLICATION_FENCES],
     application_latency: AtomicU32,
     application_presents: AtomicU32,
-    retired_serial: AtomicU64,
+    provider_retirement: Mutex<ProviderRetirement>,
     failed_buffer_reports: AtomicU32,
     post_switch_frames: AtomicU32,
     last_normalized_sync: AtomicU32,
@@ -651,7 +657,7 @@ impl Owner {
             application_fences: Default::default(),
             application_latency: AtomicU32::new(1),
             application_presents: AtomicU32::new(0),
-            retired_serial: AtomicU64::new(0),
+            provider_retirement: Mutex::default(),
             failed_buffer_reports: AtomicU32::new(0),
             post_switch_frames: AtomicU32::new(0),
             last_normalized_sync: AtomicU32::new(0),
@@ -2086,11 +2092,30 @@ impl Owner {
         let Some(physical) = self.physical() else {
             return NOT_READY;
         };
-        // The fence exists before anything is queued, so a failure never leaves the list unsignalled.
-        let retired = unsafe { (p.retire_fence)(b) };
-        if retired.is_null() {
-            return INIT_FAILED;
+        // The provider guard pins the session. This lock also protects the fence and serial
+        // against overlapping retire calls, including a callback that reenters on this thread.
+        let mut state = match self.provider_retirement.try_lock() {
+            Ok(state) => state,
+            Err(TryLockError::Poisoned(error)) => error.into_inner(),
+            Err(TryLockError::WouldBlock) => return NOT_READY,
+        };
+        if state.fence.is_none() {
+            let mut acquired = null_mut();
+            let result = unsafe { (p.create_retirement_fence)(b, &mut acquired) };
+            let acquired = unsafe { ComRef::from_owned(acquired) };
+            if failed(result) || acquired.is_none() {
+                return INIT_FAILED;
+            }
+            state.fence = acquired;
         }
+        let retired = state.fence.as_ref().map_or(null_mut(), ComRef::as_ptr);
+        let Some(next) = state
+            .serial
+            .checked_add(1)
+            .filter(|&value| value != u64::MAX)
+        else {
+            return NOT_READY;
+        };
         let mut vendor = rsf_fg_retirement {
             struct_size: size_of::<rsf_fg_retirement>() as u32,
             fence: null_mut(),
@@ -2100,11 +2125,11 @@ impl Owner {
         if result != OK {
             return result;
         }
-        let next = self.retired_serial.load(Ordering::Relaxed) + 1;
         let result = unsafe {
             (p.retire_submit)(
                 b,
                 physical.queue.as_ptr(),
+                retired,
                 vendor.fence,
                 vendor.value,
                 list,
@@ -2114,7 +2139,7 @@ impl Owner {
         if result != OK {
             return result;
         }
-        self.retired_serial.store(next, Ordering::Relaxed);
+        state.serial = next;
         *fence = retired;
         *value = next;
         OK
@@ -2154,6 +2179,7 @@ impl Owner {
             std::mem::forget(self.take_command_slots());
             // A refused wait can leave the completion and application events armed.
             std::mem::forget(std::mem::take(&mut *lock(&self.sync)));
+            std::mem::forget(lock(&self.provider_retirement).fence.take());
             unsafe { (p.retain_all)(b) };
             return;
         }
@@ -2179,6 +2205,7 @@ impl Owner {
         let host = self.host();
         let private = !host.is_null() && ACTIVE_HOST.load(Ordering::Acquire) != host;
         let mut sync = std::mem::take(&mut *lock(&self.sync));
+        let retired = lock(&self.provider_retirement).fence.take();
         drop(sync.completion_event.take());
         drop(sync.application_ready.take());
         if private {
@@ -2187,6 +2214,7 @@ impl Owner {
             drop(sync.interop_queue.take());
             self.release_command_slots(false);
             drop(sync.completion_fence.take());
+            drop(retired);
             unsafe { (p.release_host)(b) };
         } else if !host.is_null() {
             // Shared SR callbacks keep using the process-owned interop queue.
@@ -2200,7 +2228,7 @@ impl Owner {
         if !private {
             // Preserve the former reverse member release order after the events close.
             self.release_command_slots(true);
-            unsafe { (p.release_retire_fence)(b) };
+            drop(retired);
             drop(sync.completion_fence.take());
             unsafe { (p.release_direct_graphics)(b) };
             drop(sync.interop_queue.take());

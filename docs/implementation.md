@@ -979,6 +979,13 @@ the drain and release order for shared and private hosts, including
 retention after failed drain. The new fixtures and device checks remain
 unrun. [Presentation synchronization](research/rust-d3d11-present-sync.md)
 
+The same owner now holds the provider retirement fence and issues each
+successful receipt under one nonblocking lock. Reentered retirement
+returns `NOT_READY` with zeroed outputs. The native wait, optional
+command list submission and signal retain their source order. The
+extended fixture and device checks remain unrun.
+[Provider retirement](research/rust-d3d11-present-sync.md#provider-retirement-receipt)
+
 Native FidelityFX Vulkan FG now plans the HUD-less copy and its
 image-layout barriers in Rust. The SDK, capture and WSI borrow still
 use the same order. Source checks covered the private table and the

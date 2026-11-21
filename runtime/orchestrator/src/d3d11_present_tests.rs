@@ -50,6 +50,8 @@ struct Fake {
     direct_queue: Box<FakeCom>,
     interop_queue: Box<FakeCom>,
     completion_fence: Box<FakeCom>,
+    retirement_fence: Box<FakeCom>,
+    reenter_retirement: bool,
     sync_failure: Option<SyncFailure>,
     sync_calls: Vec<&'static str>,
     query_chain_result: i32,
@@ -116,6 +118,8 @@ impl Fake {
             direct_queue: fake_com(),
             interop_queue: fake_com(),
             completion_fence: fake_com(),
+            retirement_fence: fake_com(),
+            reenter_retirement: false,
             sync_failure: None,
             sync_calls: Vec::new(),
             query_chain_result: S_OK,
@@ -960,11 +964,40 @@ unsafe extern "C" fn set_description(
         fake.flags = flags;
     });
 }
-unsafe extern "C" fn retire_fence(_: Raw) -> Raw {
-    raw(0xFE)
+unsafe extern "C" fn create_retirement_fence(_: Raw, out: *mut Raw) -> i32 {
+    with(|fake| {
+        fake.sync_calls.push("create retirement fence");
+        unsafe { give_ref(com_raw(&fake.retirement_fence), out) };
+    });
+    S_OK
 }
-unsafe extern "C" fn retire_submit(_: Raw, queue: Raw, _: Raw, _: u64, _: Raw, value: u64) -> i32 {
+unsafe extern "C" fn retire_submit(
+    _: Raw,
+    queue: Raw,
+    retirement_fence: Raw,
+    _: Raw,
+    _: u64,
+    _: Raw,
+    value: u64,
+) -> i32 {
     assert_queue(queue);
+    with(|fake| assert_eq!(retirement_fence, com_raw(&fake.retirement_fence)));
+    if with(|fake| std::mem::take(&mut fake.reenter_retirement)) {
+        let (mut fence, mut serial) = (retirement_fence, value);
+        assert_eq!(
+            unsafe {
+                rsf_core_d3d11p_retire(
+                    &PLATFORM,
+                    rsf_core_d3d11p_session(),
+                    null_mut(),
+                    &mut fence,
+                    &mut serial,
+                )
+            },
+            NOT_READY
+        );
+        assert!(fence.is_null() && serial == 0);
+    }
     call(format!("retire_submit {value}"));
     OK
 }
@@ -974,12 +1007,10 @@ unsafe extern "C" fn retain_all(_: Raw) {
 unsafe extern "C" fn release_presentation(_: Raw) {
     call("release_presentation");
 }
-unsafe extern "C" fn release_retire_fence(_: Raw) {
-    with(|fake| fake.sync_calls.push("release retire fence"));
-}
 unsafe extern "C" fn release_direct_graphics(_: Raw) {
     with(|fake| {
         assert_eq!(fake.completion_fence.refs.get(), 1);
+        assert_eq!(fake.retirement_fence.refs.get(), 1);
         fake.sync_calls.push("release direct graphics");
     });
 }
@@ -988,6 +1019,7 @@ unsafe extern "C" fn release_host(_: Raw) {
     with(|fake| {
         assert_eq!(fake.interop().refs.get(), 1);
         assert_eq!(fake.completion_fence.refs.get(), 1);
+        assert_eq!(fake.retirement_fence.refs.get(), 1);
         let held = held_slot_pairs(fake);
         fake.held_at_release.push(held);
     });
@@ -1075,11 +1107,10 @@ static PLATFORM: Platform = Platform {
     wait_fence,
     buffer_referenced,
     set_description,
-    retire_fence,
+    create_retirement_fence,
     retire_submit,
     retain_all,
     release_presentation,
-    release_retire_fence,
     release_direct_graphics,
     release_host,
     source_queue,
@@ -1563,7 +1594,7 @@ fn partial_sync_initialization_retires_acquired_resources() {
             if matches!(failure, Fence | ReadyEvent) {
                 sequence.push("close completion event");
             }
-            sequence.extend(["release retire fence", "release direct graphics"]);
+            sequence.push("release direct graphics");
         }
         let calls = take_calls();
         if failure == ReadyEvent {
@@ -1843,7 +1874,6 @@ fn native12_switching_sequences_frames_and_providers() {
     assert!(with(|fake| fake.sync_calls.ends_with(&[
         "close completion event",
         "close ready event",
-        "release retire fence",
         "release direct graphics",
     ])));
 }
@@ -2285,6 +2315,14 @@ fn retire_lease_matches_session_and_serializes_fences() {
         unsafe { rsf_core_d3d11p_retire(&PLATFORM, raw(0x55), null_mut(), &mut fence, &mut value) },
         NOT_READY
     );
+    with(|fake| fake.reenter_retirement = true);
+    let (expected_fence, completion_fence) = with(|fake| {
+        (
+            com_raw(&fake.retirement_fence),
+            com_raw(&fake.completion_fence),
+        )
+    });
+    assert_ne!(expected_fence, completion_fence);
     for expected in 1..=2 {
         assert_eq!(
             unsafe {
@@ -2292,8 +2330,16 @@ fn retire_lease_matches_session_and_serializes_fences() {
             },
             OK
         );
-        assert!(fence == raw(0xFE) && value == expected);
+        assert!(fence == expected_fence && value == expected);
     }
+    assert_eq!(
+        with(|fake| fake
+            .sync_calls
+            .iter()
+            .filter(|&&call| call == "create retirement fence")
+            .count()),
+        1
+    );
     with(|fake| fake.retirement_result = NOT_READY);
     assert_eq!(
         unsafe { rsf_core_d3d11p_retire(&PLATFORM, session, null_mut(), &mut fence, &mut value) },
@@ -2319,6 +2365,7 @@ fn retire_lease_matches_session_and_serializes_fences() {
         );
     }
     unsafe { bridge_release_owned(bridge) };
+    assert_eq!(with(|fake| fake.retirement_fence.refs.get()), 1);
 }
 
 #[test]
