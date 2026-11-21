@@ -186,6 +186,7 @@ struct Api {
     present: unsafe extern "C" fn(*mut c_void, *mut u32) -> i32,
     notify: unsafe extern "C" fn(*mut c_void, u32) -> i32,
     visible: unsafe extern "C" fn() -> u32,
+    set_visible: unsafe extern "C" fn(u32) -> i32,
     toggle: unsafe extern "C" fn() -> i32,
     capture: unsafe extern "C" fn(*mut rsf_overlay_capture) -> i32,
     settings_get: unsafe extern "C" fn(*mut rsf_render_settings) -> i32,
@@ -193,7 +194,6 @@ struct Api {
 
 impl Api {
     fn new(table: &rsf_overlay_api) -> Option<Self> {
-        table.set_visible?;
         table.status?;
         table.settings_apply?;
         Some(Self {
@@ -202,6 +202,7 @@ impl Api {
             present: table.present?,
             notify: table.notify?,
             visible: table.visible?,
+            set_visible: table.set_visible?,
             toggle: table.toggle?,
             capture: table.capture?,
             settings_get: table.settings_get?,
@@ -558,6 +559,7 @@ struct Panel {
     chain: usize,
     device: usize,
     insert_down: bool,
+    reset_pending: bool,
     run: PanelRun,
 }
 
@@ -768,7 +770,10 @@ impl Service {
         run.visible = visible;
     }
 
-    fn present(&self, panel: &mut Panel, chain: *mut c_void) {
+    fn present(&self, panel: &mut Panel, chain: *mut c_void, suspended: bool) {
+        if suspended && !panel.reset_pending {
+            return;
+        }
         // With the FG bridge presenting, DXGI's Present also runs for the provider's physical or proxy chain (on the
         // provider's own thread for generated frames). The panel belongs to the engine-facing chain only.
         if (self.controls.fg_foreign_chain)(chain) {
@@ -779,6 +784,21 @@ impl Service {
             || info.window.is_null()
             || !(self.desktop.engine_window)(info.window)
         {
+            return;
+        }
+        if panel.reset_pending {
+            if unsafe { (self.api.notify)(chain, RSF_OVERLAY_NOTIFY_DEVICE_RESET) } != OK {
+                return;
+            }
+            panel.chain = 0;
+            panel.device = 0;
+            panel.insert_down = false;
+            panel.reset_pending = false;
+            panel.run.visible = false;
+            panel.run.phase_active = false;
+            panel.run.have_base = false;
+        }
+        if suspended {
             return;
         }
         let device = info.device as usize;
@@ -822,6 +842,7 @@ struct Overlay {
     gate: Mutex<()>,
     service: OnceLock<Service>,
     started: AtomicBool,
+    suspended: AtomicBool,
     desktop: Desktop,
     controls: StageControls,
 }
@@ -832,6 +853,7 @@ impl Overlay {
             gate: Mutex::new(()),
             service: OnceLock::new(),
             started: AtomicBool::new(false),
+            suspended: AtomicBool::new(false),
             desktop,
             controls,
         }
@@ -978,21 +1000,55 @@ impl Overlay {
         Ok(STARTED)
     }
 
-    fn running(&self) -> Option<&Service> {
+    fn committed(&self) -> Option<&Service> {
         self.started
             .load(Ordering::Acquire)
             .then(|| self.service.get())
             .flatten()
+    }
+
+    fn running(&self) -> Option<&Service> {
+        self.committed()
+            .filter(|_| !self.suspended.load(Ordering::Acquire))
+    }
+
+    // Hide input on the caller's thread, but leave renderer retirement to Present.
+    fn suspend(&self, panel: &Mutex<Panel>) -> bool {
+        self.suspended.store(true, Ordering::Release);
+        let Some(service) = self.committed() else {
+            return true;
+        };
+        let Ok(mut panel) = panel.try_lock() else {
+            return false;
+        };
+        if panel.chain != 0 {
+            panel.reset_pending = true;
+        }
+        if unsafe { (service.api.visible)() } != 0 {
+            unsafe { (service.api.set_visible)(0) };
+        }
+        unsafe { (service.api.visible)() == 0 }
     }
 }
 
 static OVERLAY: Overlay = Overlay::new(DESKTOP, STAGES);
 static PANEL: LazyLock<Mutex<Panel>> = LazyLock::new(Mutex::default);
 
+pub(crate) fn suspend() -> bool {
+    OVERLAY.suspend(&PANEL)
+}
+
+pub(crate) fn resume() {
+    OVERLAY.suspended.store(false, Ordering::Release);
+}
+
 /// The configured service the Runtime's callbacks reach. The Runtime calls them only from present() and
 /// settings_apply(), after configure succeeded.
 fn service() -> Option<&'static Service> {
-    OVERLAY.service.get()
+    OVERLAY
+        .service
+        .get()
+        .filter(|_| !OVERLAY.suspended.load(Ordering::Acquire))
 }
 
 #[unsafe(no_mangle)]
@@ -1030,7 +1086,7 @@ unsafe extern "C" fn rsf_anomaly_overlay_start(
 /// The capture bits (RSF_OVERLAY_CAPTURE_*) the input gate acts on; 0 before start or when the query fails.
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_overlay_capture_bits(_: *mut c_void) -> u32 {
-    service().map_or(0, Service::capture_bits)
+    OVERLAY.running().map_or(0, Service::capture_bits)
 }
 
 #[unsafe(no_mangle)]
@@ -1044,8 +1100,10 @@ extern "C" fn rsf_anomaly_overlay_present(_: *mut c_void, chain: *mut c_void) {
     if chain.is_null() {
         return;
     }
-    if let Some(service) = OVERLAY.running() {
-        service.present(&mut lock(&PANEL), chain);
+    if let Some(service) = OVERLAY.committed()
+        && let Ok(mut panel) = PANEL.try_lock()
+    {
+        service.present(&mut panel, chain, OVERLAY.suspended.load(Ordering::Acquire));
     }
 }
 

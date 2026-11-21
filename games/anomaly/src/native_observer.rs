@@ -60,6 +60,7 @@ enum Retirement {
     Inactive,
     Live,
     Input,
+    Overlay,
     Sr,
     Motion,
     ObserverHooks,
@@ -199,6 +200,7 @@ impl Observer {
         let input_enabled = unsafe { (platform.enable_input.unwrap())() };
         let geometry_installed = control.geometry_installed;
         if input_enabled {
+            crate::overlay::resume();
             self.activity.fetch_or(ACTIVE, Ordering::Release);
             control.reason = if geometry_installed {
                 c"Native boundaries and geometry identity hooks active; observation does not establish temporal SR/FG execution."
@@ -256,6 +258,12 @@ impl Observer {
         if control.retirement == Retirement::Input {
             if !unsafe { (platform.disable_input.unwrap())() } {
                 return NATIVE_REFUSED;
+            }
+            control.retirement = Retirement::Overlay;
+        }
+        if control.retirement == Retirement::Overlay {
+            if !crate::overlay::suspend() {
+                return BUSY;
             }
             control.retirement = Retirement::Sr;
         }

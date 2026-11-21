@@ -490,20 +490,20 @@ fn the_panel_restarts_on_a_new_chain_and_polls_insert() {
     let service = service(&api, log_into(&log), None);
     let mut panel = Panel::default();
     let first = ptr::without_provenance_mut(0x100);
-    service.present(&mut panel, first);
-    service.present(&mut panel, first);
+    service.present(&mut panel, first, false);
+    service.present(&mut panel, first, false);
     assert_eq!(RESETS.load(Ordering::SeqCst), 0);
     let next = ptr::without_provenance_mut(0x200);
     REFUSE_RESET.store(true, Ordering::SeqCst);
-    service.present(&mut panel, next);
+    service.present(&mut panel, next, false);
     assert_eq!(RESETS.load(Ordering::SeqCst), 1);
     assert_eq!(panel.chain, first.addr());
     REFUSE_RESET.store(false, Ordering::SeqCst);
-    service.present(&mut panel, next);
+    service.present(&mut panel, next, false);
     assert_eq!(RESETS.load(Ordering::SeqCst), 2);
     assert_eq!(panel.chain, next.addr());
     DEVICE.store(0x2000, Ordering::SeqCst);
-    service.present(&mut panel, next);
+    service.present(&mut panel, next, false);
     assert_eq!(RESETS.load(Ordering::SeqCst), 3);
     assert!(
         lines(&log)
@@ -512,13 +512,30 @@ fn the_panel_restarts_on_a_new_chain_and_polls_insert() {
     );
 
     INSERT.store(true, Ordering::SeqCst);
-    service.present(&mut panel, ptr::without_provenance_mut(0x200));
-    service.present(&mut panel, ptr::without_provenance_mut(0x200));
+    service.present(&mut panel, next, false);
+    service.present(&mut panel, next, false);
     INSERT.store(false, Ordering::SeqCst);
-    service.present(&mut panel, ptr::without_provenance_mut(0x200));
+    service.present(&mut panel, next, false);
     INSERT.store(true, Ordering::SeqCst);
-    service.present(&mut panel, ptr::without_provenance_mut(0x200));
+    service.present(&mut panel, next, false);
     assert_eq!(TOGGLES.load(Ordering::SeqCst), 2);
+
+    let overlay = Overlay::new(service.desktop, service.controls);
+    assert!(overlay.service.set(service).is_ok());
+    overlay.started.store(true, Ordering::Release);
+    let panel = Mutex::new(panel);
+    assert!(overlay.suspend(&panel));
+    assert!(overlay.running().is_none());
+    assert_eq!(RESETS.load(Ordering::SeqCst), 3);
+    let mut panel = lock(&panel);
+    assert!(panel.reset_pending);
+    let service = overlay.committed().unwrap();
+    service.present(&mut panel, next, true);
+    assert_eq!(RESETS.load(Ordering::SeqCst), 4);
+    assert!(!panel.reset_pending && panel.chain == 0);
+    assert_eq!(TOGGLES.load(Ordering::SeqCst), 2);
+    overlay.suspended.store(false, Ordering::Release);
+    assert!(overlay.running().is_some());
 }
 
 #[test]

@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Anomaly observer quiesce now suspends the overlay before retiring the
+render stages. It closes DirectInput capture and hides the window
+panel. The next accepted Present performs the Runtime reset on its
+graphics owner, and a restarted session can reuse the configured
+service after that reset. If the engine sends no further Present,
+the hidden renderer remains retained. An unrun synthetic case covers
+suspension and the deferred reset. Live teardown remains open.
+
 The Runtime overlay keeps a device reset pending until its stop call
 succeeds. Present and reset share panel admission, so a refused stop
 cannot open a new renderer. Anomaly keeps the previous chain identity
