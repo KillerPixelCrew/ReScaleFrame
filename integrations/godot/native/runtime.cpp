@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <atomic>
 #include "../../../runtime/backends/common/frame_capture12.h"
+#include "../../../runtime/orchestrator/src/fg_auto_choice.h"
 
 // Settings, their generation, the D3D12 session identity and paths, the status record and the
 // engine-service routing are owned by the Rust control owner (native/control.rs), the D3D12 SR
@@ -232,9 +233,10 @@ uint32_t leaf_sr_select_backend(uint32_t vendor, uint32_t software, uint32_t cho
 {
     return rsf_gpu_select_sr_backend(vendor, software, choices);
 }
+// The Runtime's vendor preference (frame_generation.h) and its private served-provider fallback.
 uint32_t leaf_fg_select_backend(uint32_t vendor, uint32_t software, uint32_t choices)
 {
-    return rsf_gpu_select_fg_backend(vendor, software, choices);
+    return rsf_fg_select_auto_backend(rsf_fg_default_backend(vendor, software), choices);
 }
 uint32_t leaf_present_owner(uint32_t* backend)
 {

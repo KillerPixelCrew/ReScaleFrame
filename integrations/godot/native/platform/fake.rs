@@ -667,8 +667,8 @@ unsafe extern "C" fn sr_select_backend(vendor: u32, software: u32, choices: u32)
         .unwrap_or(0)
 }
 
-/// As `rsf_gpu_select_fg_backend`: the hardware vendor's DLSS, XeSS or FSR3, then FSR3, among
-/// `choices`.
+/// As `rsf_fg_select_auto_backend` of `rsf_fg_default_backend`: the hardware vendor's DLSS, XeSS
+/// or FSR3, then FSR3, among `choices`.
 unsafe extern "C" fn fg_select_backend(vendor: u32, software: u32, choices: u32) -> u32 {
     FG_ASKED.set(Some((vendor, software, choices)));
     let preferred = match (software, vendor) {

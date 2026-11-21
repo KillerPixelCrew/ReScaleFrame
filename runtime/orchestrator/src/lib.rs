@@ -386,25 +386,3 @@ pub extern "C" fn rsf_gpu_select_sr_backend(vendor: u32, software: u32, choices:
         .find(|backend| choices & (1 << backend) != 0)
         .unwrap_or(NONE)
 }
-
-// FG provider IDs from rescaleframe/frame_generation.h share the SR numbering for these three.
-const FG_DLSS: u32 = 1;
-const FG_FSR3: u32 = 3;
-const FG_XESS: u32 = 5;
-
-/// The generic FG Auto policy the D3D12 hosts apply (`render_host.rs` and `d3d11_present.rs`):
-/// the adapter's `rsf_fg_default_backend` preference when the host can serve it, otherwise FSR3
-/// when it can, otherwise none. Software and unknown adapters have no preference.
-#[unsafe(no_mangle)]
-pub extern "C" fn rsf_gpu_select_fg_backend(vendor: u32, software: u32, choices: u32) -> u32 {
-    let preferred = match (software, vendor) {
-        (0, 0x10de) => FG_DLSS,
-        (0, 0x8086) => FG_XESS,
-        (0, 0x1002) => FG_FSR3,
-        _ => NONE,
-    };
-    [preferred, FG_FSR3]
-        .into_iter()
-        .find(|&backend| backend != NONE && choices & (1 << backend) != 0)
-        .unwrap_or(NONE)
-}

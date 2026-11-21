@@ -1355,7 +1355,8 @@ impl Platform {
         unsafe { (self.sr_select_backend)(vendor, software, choices) }
     }
 
-    /// `rsf_gpu_select_fg_backend`: the Runtime's FG Auto choice among `choices`.
+    /// `rsf_fg_select_auto_backend` of `rsf_fg_default_backend`: the Runtime's FG Auto choice
+    /// among `choices`.
     pub(crate) fn fg_select_backend(&self, vendor: u32, software: u32, choices: u32) -> u32 {
         unsafe { (self.fg_select_backend)(vendor, software, choices) }
     }

@@ -590,11 +590,12 @@ fn auto_resolves_through_the_runtime_policy_for_the_device_adapter() {
     };
     fake::VK_FACTS.set(served);
     fake::take_auto();
-    // Every provider servable: SR DLSS, FSR3, FSR4 and XeSS; FG DLSS, FSR3 and XeSS.
+    // Every provider servable: SR DLSS, FSR3, FSR4 and XeSS; FG FSR3 and XeSS. DLSS-G is never
+    // offered to Auto, so NVIDIA's FG preference falls back to FSR3.
     let sr_all = bits(&[SR_DLSS, SR_FSR3, SR_FSR4, SR_XESS]);
-    let fg_all = bits(&[FG_DLSS, FG_FSR3, FG_XESS]);
+    let fg_all = bits(&[FG_FSR3, FG_XESS]);
     let cases = [
-        (adapter(0x10de, 0), (SR_DLSS, FG_DLSS)),
+        (adapter(0x10de, 0), (SR_DLSS, FG_FSR3)),
         (adapter(0x8086, 0), (SR_XESS, FG_XESS)),
         (adapter(0x1002, 0), (SR_FSR3, FG_FSR3)),
         (adapter(0x10de, 1), (0, FG_FSR3)),
@@ -688,23 +689,31 @@ fn auto_admission_and_presenter_follow_the_resolved_provider() {
         presenter_backend: FG_FSR3,
         ..ready()
     });
-    // Auto FG resolves to DLSS: FSR3's single-frame rule does not apply, the live FSR3
-    // presenter's capacity is not asked, and the FSR3 presenter is no longer current.
+    // NVIDIA with Streamline: Auto FG is not offered DLSS-G and resolves to FSR3, so FSR3's
+    // single-frame rule refuses three generated frames and the FSR3 presenter stays current.
     let request = settings(|s| {
         s.fg_mode = 1;
         s.generated_frames = 3;
     });
+    fake::VK_PRESENTER_MAX.set(Some(1));
+    assert_eq!(vulkan.configure(&fake::LEAVES, &request), 0);
+    assert_eq!(
+        vulkan.configure(&fake::LEAVES, &settings(|s| s.fg_mode = 1)),
+        1
+    );
+    assert!(vulkan.presenter_current(&fake::LEAVES, FG_FSR3));
+    assert!(!vulkan.presenter_current(&fake::LEAVES, FG_DLSS));
+    // An explicit DLSS-G request keeps its documented admission: not bounded by the live FSR3
+    // presenter's capacity, and the FSR3 presenter is no longer current.
+    let explicit = settings(|s| {
+        s.fg_backend = FG_DLSS;
+        s.fg_mode = 1;
+        s.generated_frames = 3;
+    });
     fake::VK_PRESENTER_MAX.set(None);
-    assert_eq!(vulkan.configure(&fake::LEAVES, &request), 1);
+    assert_eq!(vulkan.configure(&fake::LEAVES, &explicit), 1);
     assert!(!vulkan.presenter_current(&fake::LEAVES, FG_FSR3));
     assert!(vulkan.presenter_current(&fake::LEAVES, FG_DLSS));
-    // Without the Streamline session Auto keeps FSR3, whose single-frame rule refuses.
-    fake::VK_FACTS.set(VkFacts {
-        presenter_backend: FG_FSR3,
-        ..ready()
-    });
-    assert_eq!(vulkan.configure(&fake::LEAVES, &request), 0);
-    assert!(vulkan.presenter_current(&fake::LEAVES, FG_FSR3));
     // Auto FG on Intel before the primary window is reported resolves to FSR3 instead of
     // refusing the request for XeSS's missing window.
     let intel = Vulkan::new();

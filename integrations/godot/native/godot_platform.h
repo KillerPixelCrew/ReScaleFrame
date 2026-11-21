@@ -534,7 +534,8 @@ typedef struct rsf_godot_platform {
     /* rsf_latencyvk_present. */
     void (*vulkan_present_marker)(uint32_t begin);
     /* Version 6. The Runtime's Auto policy for an adapter and the providers a host can serve (bit n
-       = provider n): rsf_gpu_select_sr_backend and rsf_gpu_select_fg_backend. */
+       = provider n): rsf_gpu_select_sr_backend, and for FG rsf_fg_default_backend's preference
+       through the Runtime's private rsf_fg_select_auto_backend (fg_auto_choice.h). */
     uint32_t (*sr_select_backend)(uint32_t vendor, uint32_t software, uint32_t choices);
     uint32_t (*fg_select_backend)(uint32_t vendor, uint32_t software, uint32_t choices);
 } rsf_godot_platform;

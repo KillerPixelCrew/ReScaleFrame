@@ -429,13 +429,17 @@ Runtime policy:
 - SR uses the existing `rsf_gpu_select_sr_backend(vendor, software, choices)`
   (`runtime/orchestrator/src/lib.rs`): no provider on a software adapter, otherwise NVIDIA DLSS,
   Intel XeSS, anything else FSR3, then FSR3, then XeSS among the choices. FSR4 is never chosen.
-- FG uses the new `rsf_gpu_select_fg_backend(vendor, software, choices)` beside it
-  (`gpu_policy.h`, exported in `rust_exports.c`). It codifies the rule both generic D3D12 hosts
-  already apply: `render_host.rs` `poll` takes `fg_default_backend(vendor, 0)` and falls back to
-  FSR3 when the host's choices lack it, and `d3d11_present.rs` takes the owning adapter's
-  `default_backend` (`rsf_fg_default_backend` with the DXGI software flag) with the same FSR3
-  fallback when the setup restricts its choices. `tests/gpu_policy.cpp` checks it against `rsf_fg_default_backend` for every vendor and
-  software case. The D3D12 hosts are not switched to it in this slice.
+- FG takes the existing vendor preference `rsf_fg_default_backend(vendor, software)`
+  (`frame_generation.h`) and passes it to `rsf_fg_select_auto_backend(preferred, choices)`, a new
+  Runtime function in `fg_choice.rs` built on that module's existing `allowed` provider check. It
+  returns the preference when served, otherwise FSR3 when served, otherwise none, the fallback both
+  generic D3D12 hosts already apply (`render_host.rs` `poll` after `fg_default_backend(vendor, 0)`,
+  and `d3d11_present.rs` Auto with the owning adapter's `default_backend` when the setup restricts
+  its choices). It is declared only in the private `runtime/orchestrator/src/fg_auto_choice.h` and
+  is not listed in `rust_exports.c`, so the Runtime DLL's exported names are unchanged; the Godot
+  DLL links OrchestratorCore statically and calls it from `runtime.cpp`. No vendor ID is repeated
+  outside `frame_generation.h`. Its cases are a Rust unit test in `fg_choice.rs`. The D3D12 hosts
+  are not switched to it in this slice.
 
 Facts the session passes, each read where it is proven:
 
@@ -449,12 +453,16 @@ Facts the session passes, each read where it is proven:
   records the facts.
 - SDK availability: `rsf_slvk_initialize` with DLSS SR and FG succeeding in the start leaf, reported
   as `rsf_godot_vk_facts.streamline_ready` (the former `reserved` field, cleared at each start and
-  after a completed stop). DLSS is offered only then; `native_sr_vulkan.h` requires that session.
+  after a completed stop). DLSS SR is offered only then; `native_sr_vulkan.h` requires that session.
 - Servable providers, the admission's own facts so Auto never picks a provider `admit` refuses:
   SR FSR3 always, DLSS with Streamline, XeSS with the device created with the XeSS requirements,
   FSR4 with its build, the engine's graph handoff capability and the interop device; FG FSR3
-  always, DLSS with Streamline, XeSS with its build, the interop device and the primary window.
-  FSR4 FG is not offered: its admission asks a provider probe, and Auto must not trigger it. The
+  always, XeSS with its build, the interop device and the primary window.
+- DLSS-G is not offered to FG Auto. Its presenter's retirement after native secondary window use
+  still ends in an access violation (see the notes below), so it stays an explicit opt-in until
+  that path is proven safe. An NVIDIA adapter's DLSS preference therefore falls back to FSR3 for
+  FG, as before this slice. An explicit DLSS-G request keeps its admission and refusals unchanged.
+- FSR4 FG is not offered: its admission asks a provider probe, and Auto must not trigger it. The
   per-pass FSR4 graph lease (`handoff`, `split_record`, `continuation`) stays the render-time
   admission of an explicit FSR4 request; the policy never prefers FSR4, so Auto never reaches it.
 
@@ -477,19 +485,21 @@ Intentional Auto differences from the former FSR3 default, with their source:
 
 | Adapter and facts | SR Auto | FG Auto | Source of the choice |
 | --- | --- | --- | --- |
-| NVIDIA, Streamline session started | DLSS (was FSR3) | DLSS (was FSR3) | `rsf_gpu_default_sr_backend` and `rsf_fg_default_backend`: `0x10de` prefers DLSS |
-| Intel, XeSS device | XeSS (was FSR3) | FSR3, then XeSS once interop and the primary window exist (was FSR3) | the same functions: `0x8086` prefers XeSS |
+| NVIDIA, Streamline session started | DLSS (was FSR3) | FSR3 (unchanged): DLSS-G is not offered | `rsf_gpu_default_sr_backend`: `0x10de` prefers DLSS |
+| Intel, XeSS device | XeSS (was FSR3) | FSR3, then XeSS once interop and the primary window exist (was FSR3) | `rsf_gpu_default_sr_backend` and `rsf_fg_default_backend`: `0x8086` prefers XeSS |
 | CPU device type | none: spatial fallback (was an FSR3 attempt) | FSR3 (unchanged) | `rsf_gpu_default_sr_backend` returns none for a software adapter; the FG rule falls back to FSR3 |
 
 Notes on these differences:
 
 - Godot Vulkan DLSS SR on NVIDIA passed standard switching and resize with four raw frames
-  (`docs/implementation.md`, "Godot developer integration in progress, 25 October 2026"). DLSS FG passes the strict
-  eleven-phase lifecycle fixture but still ends with `0xc0000005` in driver queue destruction
-  after native secondary window use ([DLSS lifecycle investigation](../../docs/research/godot-vulkan-dlss-fg.md),
-  wrap-up section). With Auto FG an NVIDIA session now hosts the DLSS-G presenter from swapchain
-  creation, also with FG mode off, as the D3D12 path already does. That open shutdown defect now
-  applies to the default settings; an explicit FSR3 FG request avoids it.
+  (`docs/implementation.md`, "Godot developer integration in progress, 25 October 2026"). DLSS
+  FG passes the strict eleven-phase lifecycle fixture but still ends with `0xc0000005` in driver
+  queue destruction after native secondary window use
+  ([DLSS lifecycle investigation](../../docs/research/godot-vulkan-dlss-fg.md), wrap-up section).
+  Because the presenter for the resolved FG provider is created at swapchain creation, also with
+  FG mode off, offering DLSS-G to Auto would have made that fault reachable from default settings.
+  The first version of this slice did so; it was corrected before integration by leaving DLSS-G
+  out of the FG Auto choices. Offer it again only after secondary-window retirement is proven safe.
 - Intel FG: `bridge.cpp` reports the primary window in `configure` just before `native_configure`
   (`modules/rescaleframe/bridge.cpp` line 226), after the startup swapchain already created an
   FSR3 owner. The first configure then makes Auto resolve to XeSS, and the next acquire recreates
@@ -506,16 +516,19 @@ This is a source change from review, with no new experiment. Checks: rustfmt 1.1
 `--edition 2024 --check` (the pinned 1.94.1 toolchain is not installed),
 `cargo metadata --locked --offline`, `git diff --check`, and size and offset assertions for the
 new leaves, record and table version in `platform.rs`, `runtime.cpp` and `vulkan_creation.cpp`.
-Not run: native build and link, Cargo tests (the updated `native/vulkan/tests.rs`,
-`native/vulkan/sr/tests.rs`, `native/vulkan/creation/tests.rs`), Clippy, CTest (`gpu_sr_policy`,
-`gpu_sr_policy_embedded`, `godot_vulkan_creation_contract`), editor, exported players, NVIDIA,
-Intel, AMD and software-device runs, and the visual harness.
+The Runtime DLL export list (`rust_exports.c`), `gpu_policy.h` and `tests/gpu_policy.cpp` are
+unchanged from before this slice. Not run: native build and link (including the static link of
+`rsf_fg_select_auto_backend` into the Godot DLL and the export table of the Runtime DLL), Cargo
+tests (`fg_choice.rs`, the updated `native/vulkan/tests.rs`, `native/vulkan/sr/tests.rs`,
+`native/vulkan/creation/tests.rs`), Clippy, CTest (`godot_vulkan_creation_contract`), editor,
+exported players, NVIDIA, Intel, AMD and software-device runs, and the visual harness.
 
 ## Remaining Godot ownership slices
 
-1. Vulkan Auto SR and FG resolution moved to the Runtime policy in the eighth slice. Residual: the
-   D3D12 hosts still carry their own copies of the FG Auto rule that `rsf_gpu_select_fg_backend`
-   now codifies, and the Godot D3D12 leaves still pass software as false.
+1. Vulkan Auto SR and FG resolution moved to the Runtime policy in the eighth slice. Residual:
+   DLSS-G stays out of Vulkan FG Auto until its secondary-window retirement is proven safe; the
+   D3D12 hosts still carry their own copies of the FSR3 fallback `rsf_fg_select_auto_backend`
+   now provides; and the Godot D3D12 leaves still pass software as false.
 2. `effect.cpp` keeps no owner state after the seventh slice. Its class registration, callback
    contract, typed scene reads, readback compute pass and Dictionary keys are godot-cpp leaves.
    Residual: the readback's extent check against a velocity override (see that slice).

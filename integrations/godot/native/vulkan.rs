@@ -132,18 +132,22 @@ impl Vulkan {
     }
 
     /// `settings`' providers with Auto resolved by the Runtime's adapter policy
-    /// (`rsf_gpu_select_sr_backend`, `rsf_gpu_select_fg_backend`) for the physical device the
-    /// engine's last device was created on, among the providers this session can serve now.
+    /// (`rsf_gpu_select_sr_backend`; `rsf_fg_select_auto_backend` of `rsf_fg_default_backend`) for
+    /// the physical device the engine's last device was created on, among the providers this
+    /// session can serve now.
     /// Explicit requests pass unchanged and read no facts. `facts` are the guarded owner facts
     /// when the caller already read them. Runs under the guard; the state lock is not held.
     ///
     /// The choices are the admission's own facts, so Auto never selects a provider `admit` would
-    /// refuse: DLSS needs the Streamline session started with DLSS SR and FG; XeSS SR the device
+    /// refuse: DLSS SR needs the Streamline session started with DLSS SR and FG; XeSS SR the device
     /// created with the XeSS requirements; FSR4 SR its build, the engine's graph lease capability
     /// and the Win32 interop device; XeSS FG its build, the interop device and the primary window.
-    /// FSR3 is always served. FSR4 FG is left out: its admission asks a provider probe, which Auto
-    /// does not trigger, and the Runtime never prefers it. Without adapter facts (no device yet, or
-    /// the properties read failed) vendor and software are zero, the Runtime's unknown adapter.
+    /// FSR3 is always served. Two FG providers are not offered to Auto. DLSS-G: its presenter's
+    /// retirement after native secondary window use still ends in an access violation (NATIVE.md,
+    /// eighth slice), so it stays an explicit opt-in until that path is proven safe. FSR4 FG: its
+    /// admission asks a provider probe, which Auto does not trigger, and the Runtime never prefers
+    /// it. Without adapter facts (no device yet, or the properties read failed) vendor and software
+    /// are zero, the Runtime's unknown adapter.
     fn providers(
         &self,
         platform: &Platform,
@@ -177,7 +181,6 @@ impl Vulkan {
         if auto_fg {
             let primary = !self.primary_window().is_null();
             let choices = choice(true, FG_FSR3)
-                | choice(streamline, FG_DLSS)
                 | choice(on(facts.xess_fg_compiled) && interop && primary, FG_XESS);
             providers.fg = platform.fg_select_backend(adapter.vendor, adapter.software, choices);
         }
