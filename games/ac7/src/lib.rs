@@ -39,6 +39,7 @@ mod truesky;
 mod ui;
 mod ui_abi;
 mod velocity_container;
+mod velocity_tokens;
 mod view;
 mod view_abi;
 

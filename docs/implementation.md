@@ -328,6 +328,13 @@ check. The typed compiler calls, shader instruction transforms, HLSL,
 and C++ caller vectors remain in place. Shader replay, linkage and GPU
 verification remain open.
 
+AC7's velocity shader transforms now use Rust to decode instructions
+and operands, validate edited register shapes and serialize the
+token stream. The same HLSL, typed compilation and C++ stage assembly
+remain. Malformed custom data, invalid edits and oversized temporary
+declarations are refused. Shader replay and GPU validation remain open.
+[Velocity token evidence](research/rust-ac7-velocity-tokens.md)
+
 ## Rust orchestrator and first Anomaly port
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
