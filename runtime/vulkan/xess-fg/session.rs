@@ -170,11 +170,15 @@ const _: () = {
     assert!(std::mem::offset_of!(Frame, view) == 56);
     assert!(std::mem::offset_of!(Frame, ready) == 200);
     assert!(size_of::<IntegratedFrame>() == 216 && align_of::<IntegratedFrame>() == 8);
+    assert!(std::mem::offset_of!(IntegratedFrame, struct_size) == 0);
+    assert!(std::mem::offset_of!(IntegratedFrame, abi_version) == 4);
     assert!(std::mem::offset_of!(IntegratedFrame, color) == 24);
     assert!(std::mem::offset_of!(IntegratedFrame, view) == 56);
     assert!(std::mem::offset_of!(IntegratedFrame, ready) == 200);
     assert!(size_of::<PresentResult>() == 12);
     assert!(size_of::<IntegratedStatus>() == 24);
+    assert!(std::mem::offset_of!(IntegratedStatus, struct_size) == 0);
+    assert!(std::mem::offset_of!(IntegratedStatus, abi_version) == 4);
     assert!(std::mem::offset_of!(IntegratedStatus, result) == 8);
     assert!(std::mem::offset_of!(IntegratedStatus, _reserved) == 20);
     assert!(size_of::<Platform>() == 424 && align_of::<Platform>() == 8);
@@ -220,11 +224,14 @@ enum TimingPhase {
     Retire = 4,
 }
 
-fn check_present_abi(size: u32, version: u32, required: usize) -> Result<(), i32> {
-    if (size as usize) < required {
+// The caller guarantees the size word. The version is readable only after the
+// declared size covers the whole record.
+unsafe fn check_present_abi<T>(record: *const T) -> Result<(), i32> {
+    let header = record.cast::<u32>();
+    if (unsafe { header.read() } as usize) < size_of::<T>() {
         return Err(INVALID_ARGUMENT);
     }
-    if version != BRIDGE_ABI_VERSION {
+    if unsafe { header.add(1).read() } != BRIDGE_ABI_VERSION {
         return Err(ABI_MISMATCH);
     }
     Ok(())
@@ -782,21 +789,7 @@ unsafe extern "C" fn rsf_core_xess_bridge_present_integrated(
     if frame.is_null() || status.is_null() {
         return INVALID_ARGUMENT;
     }
-    // Check only the headers until both callers' records supply the whole ABI.
-    let admission = unsafe {
-        check_present_abi(
-            ptr::addr_of!((*frame).struct_size).read(),
-            ptr::addr_of!((*frame).abi_version).read(),
-            size_of::<IntegratedFrame>(),
-        )
-        .and_then(|()| {
-            check_present_abi(
-                ptr::addr_of!((*status).struct_size).read(),
-                ptr::addr_of!((*status).abi_version).read(),
-                size_of::<IntegratedStatus>(),
-            )
-        })
-    };
+    let admission = unsafe { check_present_abi(frame).and_then(|()| check_present_abi(status)) };
     if let Err(code) = admission {
         return code;
     }
@@ -843,4 +836,82 @@ unsafe extern "C" fn rsf_core_xess_bridge_destroy(session: *mut Session) -> i32 
         drop(unsafe { Box::from_raw(session) });
     }
     code
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows_sys::Win32::System::Memory::{
+        MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_NOACCESS, PAGE_READWRITE, VirtualAlloc,
+        VirtualFree, VirtualProtect,
+    };
+    use windows_sys::Win32::System::SystemInformation::{GetSystemInfo, SYSTEM_INFO};
+
+    #[test]
+    fn integrated_present_checks_both_headers_before_writing_status() {
+        let mut system = MaybeUninit::<SYSTEM_INFO>::uninit();
+        unsafe { GetSystemInfo(system.as_mut_ptr()) };
+        let page = unsafe { system.assume_init() }.dwPageSize as usize;
+        let pages = unsafe {
+            VirtualAlloc(
+                ptr::null(),
+                2 * page,
+                MEM_COMMIT | MEM_RESERVE,
+                PAGE_READWRITE,
+            )
+        };
+        assert!(!pages.is_null());
+        let second_page = unsafe { pages.cast::<u8>().add(page) };
+        let mut protection = 0;
+        let guarded =
+            unsafe { VirtualProtect(second_page.cast(), page, PAGE_NOACCESS, &mut protection) };
+        if guarded == 0 {
+            unsafe { VirtualFree(pages, 0, MEM_RELEASE) };
+            panic!("could not protect the page after struct_size");
+        }
+        let prefix = unsafe { second_page.cast::<u32>().sub(1) };
+        let prefix_size = size_of::<u32>() as u32;
+        unsafe { prefix.write(prefix_size) };
+
+        let mut frame: IntegratedFrame = unsafe { std::mem::zeroed() };
+        frame.struct_size = size_of::<IntegratedFrame>() as u32;
+        frame.abi_version = BRIDGE_ABI_VERSION;
+        let mut status = IntegratedStatus {
+            struct_size: size_of::<IntegratedStatus>() as u32,
+            abi_version: BRIDGE_ABI_VERSION,
+            result: PresentResult {
+                frames_presented: 7,
+                fg_enabled: 1,
+                fg_result: -9,
+            },
+            _reserved: 0,
+        };
+        let short_frame = unsafe {
+            rsf_core_xess_bridge_present_integrated(ptr::null_mut(), prefix.cast(), &mut status)
+        };
+        let short_status = unsafe {
+            rsf_core_xess_bridge_present_integrated(ptr::null_mut(), &frame, prefix.cast())
+        };
+        let prefix_after = unsafe { prefix.read() };
+        unsafe { VirtualFree(pages, 0, MEM_RELEASE) };
+
+        assert_eq!(short_frame, INVALID_ARGUMENT);
+        assert_eq!(short_status, INVALID_ARGUMENT);
+        assert_eq!(prefix_after, prefix_size);
+
+        frame.abi_version += 1;
+        let wrong_frame = unsafe {
+            rsf_core_xess_bridge_present_integrated(ptr::null_mut(), &frame, &mut status)
+        };
+        frame.abi_version = BRIDGE_ABI_VERSION;
+        status.abi_version += 1;
+        let wrong_status = unsafe {
+            rsf_core_xess_bridge_present_integrated(ptr::null_mut(), &frame, &mut status)
+        };
+        assert_eq!(wrong_frame, ABI_MISMATCH);
+        assert_eq!(wrong_status, ABI_MISMATCH);
+        assert_eq!(status.result.frames_presented, 7);
+        assert_eq!(status.result.fg_enabled, 1);
+        assert_eq!(status.result.fg_result, -9);
+    }
 }
