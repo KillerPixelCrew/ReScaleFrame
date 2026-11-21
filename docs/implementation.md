@@ -662,6 +662,14 @@ declarations match the baseline. Binary exports, build and device
 behavior remain unverified.
 [Vulkan Auto ownership notes](../integrations/godot/NATIVE.md#vulkan-auto-through-the-runtime-provider-policy-eighth-slice)
 
+The D3D12 render host and D3D11 presentation bridge now reuse the linked
+Runtime FG Auto selector. The render host keeps its Off choice, and the
+presentation bridge keeps its adapter default for an unrestricted mask.
+All 192 source comparisons matched the earlier host rules. The public
+Runtime declarations stay the same. Build and binary export verification
+remain open.
+[Current source ABI check](rust-migration.md#c-abi-comparison)
+
 ## Rust orchestrator and first Anomaly port
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.

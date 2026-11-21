@@ -69,7 +69,6 @@ const SR_NONE: u32 = 0;
 const SR_DLSS: u32 = 1;
 const SR_XESS: u32 = 5;
 const SR_AUTO: u32 = 7;
-const FG_FSR3: u32 = 3;
 const PRESENT_TEST: u32 = 1;
 const SLOTS: usize = 3;
 const SCENES: usize = 64;
@@ -573,11 +572,14 @@ impl Host {
         let mut desired = values.fg_backend;
         if desired == RSF_FG_BACKEND_AUTO && s.device.is_some() {
             let vendor = self.adapter(s).map_or(0, |adapter| adapter.vendor);
-            desired = unsafe { (p.fg_default_backend)(vendor, 0) };
+            let preferred = unsafe { (p.fg_default_backend)(vendor, 0) };
             let choices = unsafe { (p.present_backend_choices)() };
-            if !has(choices, desired) {
-                desired = if has(choices, FG_FSR3) { FG_FSR3 } else { 0 };
-            }
+            // Honor the bridge's Off choice when the adapter has no preference.
+            desired = if preferred == 0 && has(choices, 0) {
+                0
+            } else {
+                fg_choice::rsf_fg_select_auto_backend(preferred, choices)
+            };
         }
         if desired != RSF_FG_BACKEND_AUTO
             && desired != s.fg_backend_requested

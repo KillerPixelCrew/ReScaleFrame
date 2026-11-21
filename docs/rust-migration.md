@@ -44,13 +44,23 @@ orchestrator and Anomaly verification gaps remain open.
 2. Introduce one workspace crate for core code. Start with SR backend selection, whose two scalar C exports already have a native caller test. Link the same implementation into both forms, retire the corresponding C++ implementation and verify symbol names and behavior. Port plugin sessions and frame sequencing next. Exercise short structs, version refusal, busy shutdown and failed startup.
 3. Move settings, diagnostics, overlay services, rendering sessions, latency, graphics and presentation ownership. Keep the published headers authoritative. Inventory each service's callers and failure paths before switching it. Compare exports against the baseline for each enabled backend and exercise existing consumers on their graphics APIs.
 4. Run the current C++ Anomaly adapter with the new runtime. Check standard and AVX profiles, overlay changes, quality and backend switches, camera movement, moving geometry, UI, FG, resize, fallback and teardown against recorded acceptance. Capture the evaluation frame and resource identity for rendering comparisons. Recheck other linked and DLL consumers before retiring the old core.
-5. Port Anomaly behind its existing game DLL entry and package it with the same runtime. Repeat the fixture, device and game checks on the Rust adapter. Record known pre-existing gaps separately from regressions. Other games retain their current adapters.
+5. Port Anomaly behind its existing game DLL entry and package it with the same runtime. Repeat the fixture, device and game checks on the Rust adapter. Record known pre-existing gaps separately from regressions. Then carry the same ownership and ABI rules through the remaining integrations.
 
 The [Anomaly release record](releases/v0.1.2-anomaly.md) distinguishes the shipped payload from later shader-provider work. It supplies historical acceptance only. Record validation of this branch in the [implementation tracker](implementation.md).
 
 ## C ABI comparison
 
-The GameSDK and runtime contract headers match `2db07f4` byte for byte, including GameSDK ABI 24. The source audit at `6414a05` compared the same 88 headers across the SDK, runtime, and Anomaly. Four headers differed after removing comments and whitespace. `native_fg.h` adds three linked-runtime declarations, `d3d11_present_bridge.h` adds `rsf_d3d11_present_source_queue`, and `overlay_api.h` raises `RSF_OVERLAY_SERVICE_OPTION_LIMIT` from 24 to 32. `shader_compile.h` changes the compiler helper's native ownership. All existing C function signatures and public record layouts matched. At `2ceec77` the public include tree still matches that audit and the tracked carrier `.def` files still match `2db07f4`.
+The GameSDK stays at ABI 24. The source audit at `6414a05` compared 88 headers across the SDK, Runtime and Anomaly against `2db07f4`. Four headers differed after removing comments and whitespace. `native_fg.h` adds three linked-runtime declarations, `d3d11_present_bridge.h` adds `rsf_d3d11_present_source_queue`, and `overlay_api.h` raises `RSF_OVERLAY_SERVICE_OPTION_LIMIT` from 24 to 32. `shader_compile.h` changes the compiler helper's native ownership. All existing C function signatures and public record layouts matched. At `2ceec77` the public include tree still matched that audit and the tracked carrier `.def` files still matched `2db07f4`.
+
+The source check on `31a06a94` and the linked FG Auto merge matches both
+public include trees and all four carrier `.def` files to `2ceec77`.
+Each of the 99 Runtime Rust export directives names a Rust source definition.
+Compared with `58fe95a`, five pre-existing C/C++ exports now use Rust
+directives. They are the Runtime version, CPU event and dispatch, and SR
+surface set and release entries. Anomaly still declares the same three
+DLL exports as `58fe95a` and borrows the already-loaded Runtime by name.
+Both linked and DLL consumers still need matching-feature builds and PE
+export comparison on this candidate.
 
 On November 21, 2026, both archived MSVC Release trees (`build/rust-migration` and `build/rust-migration-streamline`) matched the recorded case-sensitive export names and ordinals for Runtime (381), AC7 (256), Loader (273), Minecraft (267), and the staged C++ Anomaly adapter (3). Neither archived Anomaly DLL imports the Runtime DLL statically. Both archives predate `d4de507`.
 

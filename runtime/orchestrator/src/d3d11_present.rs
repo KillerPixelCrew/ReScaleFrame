@@ -6,6 +6,7 @@
 // fallback, resize and retirement, status and callback order, and latency routing.
 use crate::com_ref::ComRef;
 use crate::d3d11_present_abi::*;
+use crate::fg_choice::rsf_fg_select_auto_backend;
 use crate::fg12_abi::{rsf_d3d11_present_setup as Setup, rsf_streamline_host};
 use crate::native_fg_cpu_abi::rsf_d3d11_present_status as PresentStatus;
 use crate::render_abi::{
@@ -978,10 +979,12 @@ impl Owner {
                 return E_FAIL;
             }
             let allowed = setup.allowed_backend_choices;
-            let mut backend = adapter.default_backend;
-            if allowed != 0 && allowed & bit(backend) == 0 {
-                backend = if allowed & bit(FSR3) != 0 { FSR3 } else { 0 };
-            }
+            // An unrestricted setup keeps the adapter default, including Off.
+            let backend = if allowed == 0 {
+                adapter.default_backend
+            } else {
+                rsf_fg_select_auto_backend(adapter.default_backend, allowed)
+            };
             ACTIVE_BACKEND.store(backend, Ordering::SeqCst);
             log(&format!(
                 "Auto FG selected backend {backend} from owning adapter vendor=0x{:x} device=0x{:x}",
