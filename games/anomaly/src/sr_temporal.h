@@ -90,6 +90,7 @@ public:
     TemporalDriver(const TemporalDriver&) = delete;
     TemporalDriver& operator=(const TemporalDriver&) = delete;
     void configure(const TemporalOptions&, rsf_game_log_fn log, void* user) noexcept;
+    void configure(const rsf_anomaly_sr_driver_config&, rsf_game_log_fn log, void* user) noexcept;
     // Install time: query the Runtime's table. Stage 4 does not need it; Stage 5 refuses SR without it.
     bool bind(HMODULE runtime) noexcept;
     // Test seam: a table supplied directly (validated the same way).

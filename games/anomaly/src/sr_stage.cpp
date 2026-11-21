@@ -726,20 +726,7 @@ const rsf_anomaly_sr_stage_platform platform{
     .configured = [](rsf_anomaly_sr_log log, void* user, const rsf_anomaly_sr_driver_config* config) {
         log_fn = log;
         log_user = user;
-        if (!config) return;
-        TemporalOptions temporal{};
-        temporal.stage = config->stage;
-        temporal.exposure_auto = config->exposure_auto;
-        temporal.colour_transport = config->colour_transport;
-        temporal.first_person_zero = config->first_person_zero;
-        try {
-            temporal.streamline = config->streamline;
-            temporal.fidelityfx = config->fidelityfx;
-            temporal.xess = config->xess;
-        } catch (...) {}
-        temporal.require_signature = config->require_signature;
-        temporal.initial = to_native(config->initial);
-        driver.configure(temporal, log, user);
+        if (config) driver.configure(*config, log, user);
     },
 };
 void bind_platform() noexcept { rsf_anomaly_sr_stage_register(&platform); }

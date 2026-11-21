@@ -38,9 +38,8 @@ const BACKEND_DLSS: u32 = 1;
 const BACKEND_FSR3: u32 = 3;
 const BACKEND_FSR4: u32 = 4;
 const BACKEND_XESS: u32 = 5;
-const BACKENDS: u32 =
-    (1 << BACKEND_DLSS) | (1 << BACKEND_FSR3) | (1 << BACKEND_FSR4) | (1 << BACKEND_XESS);
-const QUALITIES: u32 = 0x1f;
+const BACKENDS: u32 = RSF_ANOMALY_SR_ADAPTER_BACKENDS;
+const QUALITIES: u32 = RSF_ANOMALY_SR_ADAPTER_QUALITIES;
 const MAX_PATH: usize = 260;
 // The vendor runtime directories, in Paths::vendors order.
 const STREAMLINE: usize = 0;

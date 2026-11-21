@@ -19,9 +19,9 @@
 
 namespace rsf::anomaly::sr {
 // ---- engine identity: adapter-supplied metadata for Streamline/NGX, never a runtime switch ------------------------
-inline constexpr char engine_version[] = "X-Ray Monolith 1.5.3 (S.T.A.L.K.E.R. Anomaly, DX11)";
-inline constexpr char project_id[] = "8d3b6f52-1c4e-4f7a-b0d9-2e6a51c7f3a4";
-inline constexpr float view_space_to_meters = 1.0f;   // X-Ray world units are metres
+inline constexpr char engine_version[] = RSF_ANOMALY_SR_ENGINE_VERSION;
+inline constexpr char project_id[] = RSF_ANOMALY_SR_PROJECT_ID;
+inline constexpr float view_space_to_meters = RSF_ANOMALY_SR_VIEW_SPACE_TO_METERS;   // X-Ray world units are metres
 
 // ---- shared settings values: sr_settings.h -----------------------------------------------------------------------
 
@@ -29,20 +29,13 @@ inline constexpr float view_space_to_meters = 1.0f;   // X-Ray world units are m
 // Channels (current-minus-previous UV x, UV y down, validity, 0) (shaders/core/README.md). A valid stationary pixel is
 // (0, 0, 1, 0) and must stay zero motion; an unwritten or invalid pixel is (0, 0, 0, 0) and must be reconstructed
 // from depth and the camera. So the decode marks unwritten pixels by the validity channel, never by a stored zero.
-inline constexpr uint32_t motion_validity_channel = 2;
-inline constexpr float motion_validity_threshold = 0.5f;
-inline constexpr float motion_sentinel = -1000.0f;   // outside any real UV motion, exact in half precision
+inline constexpr uint32_t motion_validity_channel = RSF_ANOMALY_SR_MOTION_VALIDITY_CHANNEL;
+inline constexpr float motion_validity_threshold = RSF_ANOMALY_SR_MOTION_VALIDITY_THRESHOLD;
+inline constexpr float motion_sentinel = RSF_ANOMALY_SR_MOTION_SENTINEL;   // outside any real UV motion, exact in half precision
+extern "C" void rsf_anomaly_sr_motion_decode_params(rsf_motion_decode_params*) noexcept;
 inline rsf_motion_decode_params motion_decode_params() noexcept {
     rsf_motion_decode_params p{};
-    p.struct_size = sizeof(p);
-    p.scale_x = p.scale_y = 1.0f;          // stored values are already UV
-    p.bias_x = p.bias_y = 0.0f;
-    p.output_scale_x = p.output_scale_y = 1.0f;
-    p.invalid_value = motion_sentinel;
-    p.zero_means_unwritten = 0;
-    p.validity_enabled = 1;
-    p.validity_channel = motion_validity_channel;
-    p.validity_threshold = motion_validity_threshold;
+    rsf_anomaly_sr_motion_decode_params(&p);
     return p;
 }
 // Decoded motion is already canonical current-minus-previous UV, Y down.

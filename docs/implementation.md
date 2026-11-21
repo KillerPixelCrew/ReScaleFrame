@@ -4,6 +4,15 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The Anomaly temporal driver builds its Runtime setup and motion decode
+parameters in Rust. It takes the stage's existing configuration directly
+and copies each vendor directory once into the driver that owns it. The
+adapter capability masks, engine metadata and motion validity constants
+come from the same private header in both languages. The native facade
+still provides the exception-guarded log sink and the versioned Runtime
+lookup. The private bindings were regenerated. Build and runtime
+validation remain open.
+
 The Anomaly SR stage now retains the temporal target set directly in
 Rust. It reuses the existing D3D11 target allocator and passes borrowed
 views to the native draw calls and existing pass inputs to the Runtime

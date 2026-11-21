@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: MIT
 use crate::sr_pass::{PassInputs, ResetFacts, ResetReason, build_pass, reset_reason};
 use crate::sr_stage::plan_for_render;
+use crate::sr_stage_abi::{
+    RSF_ANOMALY_SR_ADAPTER_BACKENDS, RSF_ANOMALY_SR_ADAPTER_QUALITIES,
+    RSF_ANOMALY_SR_ENGINE_VERSION, RSF_ANOMALY_SR_MOTION_SENTINEL,
+    RSF_ANOMALY_SR_MOTION_VALIDITY_CHANNEL, RSF_ANOMALY_SR_MOTION_VALIDITY_THRESHOLD,
+    RSF_ANOMALY_SR_PROJECT_ID, RSF_ANOMALY_SR_VIEW_SPACE_TO_METERS, rsf_anomaly_sr_driver_config,
+};
 use rsf_game_sys::sr_abi::*;
 use rsf_game_sys::{rsf_camera_frame, rsf_game_log_fn};
 use std::cell::UnsafeCell;
@@ -17,6 +23,8 @@ const DLSS: u32 = 1;
 const FSR3: u32 = 3;
 const FSR4: u32 = 4;
 const XESS: u32 = 5;
+// RSF_DLSS_ENGINE_CUSTOM, checked in the native facade.
+const CUSTOM_ENGINE: u32 = 0;
 
 fn backend_name(backend: u32) -> &'static str {
     match backend {
@@ -171,18 +179,6 @@ impl Settings {
     }
 }
 
-#[repr(C)]
-struct DriverOptions {
-    stage: u32,
-    exposure_auto: bool,
-    colour_transport: bool,
-    first_person_zero: bool,
-    backends: u32,
-    qualities: u32,
-    initial: Settings,
-    setup: rsf_dlss_pipeline_setup,
-}
-
 #[derive(Clone, Copy)]
 #[repr(u8)]
 enum Refusal {
@@ -283,8 +279,6 @@ impl Status {
 }
 
 const _: () = {
-    assert!(size_of::<DriverOptions>() == 200);
-    assert!(std::mem::offset_of!(DriverOptions, setup) == 32);
     assert!(size_of::<Settings>() == 16);
     assert!(std::mem::offset_of!(Settings, backend) == 4);
     assert!(size_of::<ResetFacts>() == 5);
@@ -313,23 +307,55 @@ struct Setup {
     xess: CString,
 }
 
+fn motion_decode_params() -> rsf_motion_decode_params {
+    rsf_motion_decode_params {
+        struct_size: size_of::<rsf_motion_decode_params>() as u32,
+        scale_x: 1.0,
+        scale_y: 1.0,
+        output_scale_x: 1.0,
+        output_scale_y: 1.0,
+        invalid_value: RSF_ANOMALY_SR_MOTION_SENTINEL as f32,
+        validity_enabled: 1,
+        validity_channel: RSF_ANOMALY_SR_MOTION_VALIDITY_CHANNEL,
+        validity_threshold: RSF_ANOMALY_SR_MOTION_VALIDITY_THRESHOLD as f32,
+        ..Default::default()
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_sr_motion_decode_params(out: &mut rsf_motion_decode_params) {
+    *out = motion_decode_params();
+}
+
 impl Setup {
-    // The facade builds the template from shared Anomaly constants. Its identity strings
-    // are static, and its log sink lives until the render driver is stopped.
-    fn new(mut template: rsf_dlss_pipeline_setup) -> Self {
-        // Config's directory arguments are borrowed only during configure.
-        let streamline = unsafe { CStr::from_ptr(template.streamline_directory_utf8) }.to_owned();
-        let fidelityfx = unsafe { CStr::from_ptr(template.fsr3_directory_utf8) }.to_owned();
-        let xess = unsafe { CStr::from_ptr(template.xess_directory_utf8) }.to_owned();
-        template.streamline_directory_utf8 = null();
-        template.fsr3_directory_utf8 = null();
-        template.fsr4_directory_utf8 = null();
-        template.xess_directory_utf8 = null();
+    unsafe fn new(options: &rsf_anomaly_sr_driver_config, log: rsf_game_log_fn, user: Raw) -> Self {
+        let directory = |path: *const c_char| {
+            if path.is_null() {
+                c"".to_owned()
+            } else {
+                // The stage and fixture facade lend the directory strings for configure.
+                unsafe { CStr::from_ptr(path) }.to_owned()
+            }
+        };
         Self {
-            template,
-            streamline,
-            fidelityfx,
-            xess,
+            template: rsf_dlss_pipeline_setup {
+                struct_size: size_of::<rsf_dlss_pipeline_setup>() as u32,
+                abi_version: RSF_DLSS_PIPELINE_ABI_VERSION,
+                require_signature: u32::from(options.require_signature),
+                motion: motion_decode_params(),
+                log,
+                log_user: user,
+                engine: CUSTOM_ENGINE,
+                engine_version_utf8: RSF_ANOMALY_SR_ENGINE_VERSION.as_ptr().cast(),
+                project_id_utf8: RSF_ANOMALY_SR_PROJECT_ID.as_ptr().cast(),
+                fsr2_directory_utf8: c"".as_ptr(),
+                view_space_to_meters: RSF_ANOMALY_SR_VIEW_SPACE_TO_METERS as f32,
+                standard_depth: 1,
+                ..Default::default()
+            },
+            streamline: directory(options.streamline),
+            fidelityfx: directory(options.fidelityfx),
+            xess: directory(options.xess),
         }
     }
 
@@ -712,22 +738,31 @@ unsafe extern "C" fn rsf_anomaly_sr_query(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_configure(driver: &Driver, options: &DriverOptions) {
+unsafe extern "C" fn rsf_anomaly_sr_configure(
+    driver: &Driver,
+    options: &rsf_anomaly_sr_driver_config,
+    log: rsf_game_log_fn,
+    user: Raw,
+) {
     // The facade serializes configuration with the render side of the handle.
     let render = unsafe { &mut *driver.render.get() };
-    render.setup = Some(Setup::new(options.setup));
+    render.setup = Some(unsafe { Setup::new(options, log, user) });
     render.colour_transport = options.colour_transport;
 
     let mut published = driver.published();
     published.stage = options.stage;
     published.exposure_auto = options.exposure_auto;
     published.first_person_zero = options.first_person_zero;
-    published.backends = options.backends;
-    published.qualities = options.qualities;
-    published.status.requested =
-        options
-            .initial
-            .admitted(Settings::default(), options.backends, options.qualities);
+    published.backends = RSF_ANOMALY_SR_ADAPTER_BACKENDS;
+    published.qualities = RSF_ANOMALY_SR_ADAPTER_QUALITIES;
+    let initial = options.initial;
+    published.status.requested = Settings {
+        enabled: initial.enabled,
+        backend: initial.backend,
+        quality: initial.quality,
+        preset: initial.preset,
+    }
+    .admitted(Settings::default(), published.backends, published.qualities);
 }
 
 #[unsafe(no_mangle)]

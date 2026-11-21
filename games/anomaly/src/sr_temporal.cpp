@@ -7,19 +7,12 @@ namespace rsf::anomaly::sr {
 static_assert(backend_dlss == RSF_SR_DLSS && backend_fsr3 == RSF_SR_FSR3 &&
     backend_fsr4 == RSF_SR_FSR4 && backend_xess == RSF_SR_XESS);
 static_assert(motion_validity_channel == 2, "the core motion target stores validity in Z");
+static_assert(RSF_DLSS_ENGINE_CUSTOM == 0);
 namespace {
-struct DriverOptions {
-    uint32_t stage;
-    bool exposure_auto, colour_transport, first_person_zero;
-    uint32_t backends, qualities;
-    SrSettings initial;
-    rsf_dlss_pipeline_setup setup;
-};
 using SetTransport = void (*)(uint32_t);
 
 static_assert(sizeof(rsf_d3d11_sr_api) == 112 && offsetof(rsf_d3d11_sr_api, start) == 16 &&
     offsetof(rsf_d3d11_sr_api, set_sharpening) == 104);
-static_assert(sizeof(DriverOptions) == 200 && offsetof(DriverOptions, setup) == 32);
 static_assert(sizeof(SrSettings) == 16 && offsetof(SrSettings, backend) == 4);
 static_assert(sizeof(TemporalStatusData) == 288 &&
     offsetof(TemporalStatusData, reason_utf8) == 188);
@@ -37,7 +30,7 @@ extern "C" {
 TemporalState* rsf_anomaly_sr_create() noexcept;
 void rsf_anomaly_sr_destroy(TemporalState*) noexcept;
 ApiStatus rsf_anomaly_sr_query(rsf_get_d3d11_sr_api_fn, rsf_d3d11_sr_api*, const char**) noexcept;
-void rsf_anomaly_sr_configure(TemporalState*, const DriverOptions*) noexcept;
+void rsf_anomaly_sr_configure(TemporalState*, const rsf_anomaly_sr_driver_config*, rsf_game_log_fn, void*) noexcept;
 bool rsf_anomaly_sr_bind(TemporalState*, rsf_get_d3d11_sr_api_fn, SetTransport, uint64_t) noexcept;
 bool rsf_anomaly_sr_bind_table(TemporalState*, const rsf_d3d11_sr_api*, uint64_t) noexcept;
 void rsf_anomaly_sr_request(TemporalState*, const SrSettings*) noexcept;
@@ -69,27 +62,16 @@ void TemporalDriver::LogSink::call(void* user, const char* message) noexcept {
 }
 
 void TemporalDriver::configure(const TemporalOptions& options, rsf_game_log_fn log, void* user) noexcept {
+    const auto& initial = options.initial;
+    const rsf_anomaly_sr_driver_config config{options.stage, options.exposure_auto, options.colour_transport,
+        options.first_person_zero, options.require_signature, {initial.enabled, initial.backend, initial.quality, initial.preset},
+        options.streamline.c_str(), options.fidelityfx.c_str(), options.xess.c_str()};
+    configure(config, log, user);
+}
+
+void TemporalDriver::configure(const rsf_anomaly_sr_driver_config& config, rsf_game_log_fn log, void* user) noexcept {
     log_ = {log, user};
-    rsf_dlss_pipeline_setup setup{};
-    setup.struct_size = sizeof(setup);
-    setup.abi_version = RSF_DLSS_PIPELINE_ABI_VERSION;
-    setup.streamline_directory_utf8 = options.streamline.c_str();
-    setup.require_signature = options.require_signature ? 1u : 0u;
-    setup.motion = motion_decode_params();
-    setup.log = log ? &LogSink::call : nullptr;
-    setup.log_user = log ? &log_ : nullptr;
-    setup.engine = RSF_DLSS_ENGINE_CUSTOM;
-    setup.engine_version_utf8 = engine_version;
-    setup.project_id_utf8 = project_id;
-    setup.fsr2_directory_utf8 = "";
-    setup.fsr3_directory_utf8 = options.fidelityfx.c_str();
-    setup.fsr4_directory_utf8 = options.fidelityfx.c_str();
-    setup.xess_directory_utf8 = options.xess.c_str();
-    setup.view_space_to_meters = view_space_to_meters;
-    setup.standard_depth = 1;
-    const DriverOptions args{options.stage, options.exposure_auto, options.colour_transport,
-        options.first_person_zero, adapter_backends, adapter_qualities, options.initial, setup};
-    rsf_anomaly_sr_configure(state_, &args);
+    rsf_anomaly_sr_configure(state_, &config, log ? &LogSink::call : nullptr, log ? &log_ : nullptr);
 }
 
 ApiStatus bind_sr_api(rsf_get_d3d11_sr_api_fn query, rsf_d3d11_sr_api& out, const char** reason) noexcept {
