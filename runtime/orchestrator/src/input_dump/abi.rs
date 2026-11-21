@@ -399,15 +399,12 @@ unsafe extern "C" fn rsf_core_dump_named_texture(
     let Ok(prefix) = prefix(&directory.join(name)) else {
         return WRITE_FAILED;
     };
-    let options = TextureOptions {
-        struct_size: size_of::<TextureOptions>() as u32,
-        abi_version: 2,
-        prefix: prefix.as_ptr(),
-        view: preview_view(request.view, surface.format, false),
-        scale: request.scale,
-        log: request.log,
-        log_user: request.log_user,
-    };
+    let options = TextureOptions::new(
+        &prefix,
+        preview_view(request.view, surface.format, false),
+        request.scale,
+        Log::new(request.log, request.log_user),
+    );
     let mut encoding = Encoding::INVALID;
     unsafe { (platform().encode_texture)(context, texture.as_ptr(), &options, 0, &mut encoding) };
     if encoding.preview == 0

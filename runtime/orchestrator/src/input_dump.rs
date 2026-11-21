@@ -22,7 +22,7 @@ const INVALID: i32 = -1;
 const ABI_MISMATCH: i32 = -2;
 const WRITE_FAILED: i32 = -6;
 const RAW: u32 = 0;
-const DECODED_MOTION: u32 = 2;
+pub(super) const DECODED_MOTION: u32 = 2;
 const HDR: u32 = 3;
 const DEPTH: u32 = 4;
 const SCALAR: u32 = 5;
@@ -85,7 +85,7 @@ struct Pixels {
 }
 
 #[repr(C)]
-struct TextureOptions {
+pub(super) struct TextureOptions {
     struct_size: u32,
     abi_version: u32,
     prefix: *const c_char,
@@ -93,6 +93,20 @@ struct TextureOptions {
     scale: f32,
     log: rsf_backend_log_fn,
     log_user: *mut c_void,
+}
+
+impl TextureOptions {
+    pub(super) fn new(prefix: &CStr, view: u32, scale: f32, log: Log) -> Self {
+        Self {
+            struct_size: size_of::<Self>() as u32,
+            abi_version: 2,
+            prefix: prefix.as_ptr(),
+            view,
+            scale,
+            log: log.callback,
+            log_user: log.user as *mut c_void,
+        }
+    }
 }
 
 #[repr(C)]
@@ -151,14 +165,21 @@ fn clock() -> Clock {
 }
 
 #[derive(Clone, Copy, Default)]
-struct Log {
+pub(super) struct Log {
     callback: rsf_backend_log_fn,
     // An opaque caller-supplied token. Rust never dereferences it.
     user: usize,
 }
 
 impl Log {
-    fn say(self, text: &str) {
+    pub(super) fn new(callback: rsf_backend_log_fn, user: *mut c_void) -> Self {
+        Self {
+            callback,
+            user: user as usize,
+        }
+    }
+
+    pub(super) fn say(self, text: &str) {
         if let Some(callback) = self.callback
             && let Ok(message) = CString::new(text)
         {
@@ -694,15 +715,7 @@ struct Work {
 
 impl Work {
     fn options(&self, prefix: &CString, view: u32) -> TextureOptions {
-        TextureOptions {
-            struct_size: size_of::<TextureOptions>() as u32,
-            abi_version: 2,
-            prefix: prefix.as_ptr(),
-            view,
-            scale: self.scale,
-            log: self.log.callback,
-            log_user: self.log.user as *mut c_void,
-        }
+        TextureOptions::new(prefix, view, self.scale, self.log)
     }
 }
 

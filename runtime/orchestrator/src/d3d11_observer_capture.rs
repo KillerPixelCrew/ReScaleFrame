@@ -7,9 +7,11 @@ use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
+mod dump;
+use dump::{DumpPlatform, DumpSettings};
+
 type Handle = *mut c_void;
 type Immediate = unsafe extern "C" fn(Handle) -> Handle;
-type WriteDump = unsafe extern "C" fn(&Dump, &mut DumpResult);
 const OK: i32 = 0;
 const INVALID: i32 = -1;
 const NOT_READY: i32 = -6;
@@ -40,25 +42,6 @@ struct CaptureStatus {
     constant_bytes_written: u32,
 }
 
-#[repr(C)]
-struct DumpBuffer {
-    bytes: u32,
-    buffer: Handle,
-}
-
-#[repr(C)]
-struct Dump {
-    device: Handle,
-    context: Handle,
-    prefix: *const c_char,
-    textures: *const Handle,
-    texture_count: usize,
-    buffers: *const DumpBuffer,
-    buffer_count: usize,
-    view: u32,
-}
-
-#[repr(C)]
 #[derive(Default)]
 struct DumpResult {
     textures: u32,
@@ -68,9 +51,6 @@ struct DumpResult {
 const _: () = {
     assert!(size_of::<Filter>() == 20);
     assert!(size_of::<CaptureStatus>() == 32);
-    assert!(size_of::<DumpBuffer>() == 16);
-    assert!(size_of::<Dump>() == 64);
-    assert!(size_of::<DumpResult>() == 8);
 };
 
 struct Request {
@@ -104,6 +84,7 @@ impl Retained {
 
 struct Capture {
     filter: Filter,
+    dump_settings: DumpSettings,
     retained: Retained,
     sizes: Vec<(u32, u32)>,
     textures_created: u32,
@@ -125,6 +106,7 @@ static CAPTURE: Mutex<Capture> = Mutex::new(Capture {
         constant_min: 0,
         constant_max: 0,
     },
+    dump_settings: DumpSettings::EMPTY,
     retained: Retained::new(),
     sizes: Vec::new(),
     textures_created: 0,
@@ -144,8 +126,9 @@ fn lock() -> MutexGuard<'static, Capture> {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_observer11_capture_configure(filter: &Filter) {
-    lock().filter = Filter {
+extern "C" fn rsf_core_observer11_capture_configure(filter: &Filter, dump_settings: &DumpSettings) {
+    let mut state = lock();
+    state.filter = Filter {
         capacity: if filter.capacity == 0 {
             16
         } else {
@@ -153,6 +136,7 @@ extern "C" fn rsf_core_observer11_capture_configure(filter: &Filter) {
         },
         ..*filter
     };
+    state.dump_settings = *dump_settings;
 }
 
 #[unsafe(no_mangle)]
@@ -258,6 +242,7 @@ pub(super) fn clear() {
     let retained = {
         let mut state = lock();
         state.request = None;
+        state.dump_settings = DumpSettings::EMPTY;
         REQUESTED.store(false, Ordering::Release);
         PRESENTING_DEVICE.store(false, Ordering::Release);
         std::mem::replace(&mut state.retained, Retained::new())
@@ -346,11 +331,11 @@ unsafe extern "C" fn rsf_core_observer11_request_dump(prefix: *const c_char, vie
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_observer11_dump(immediate: Immediate, write: WriteDump) {
+extern "C" fn rsf_core_observer11_dump(platform: &DumpPlatform) {
     if !REQUESTED.load(Ordering::Acquire) {
         return;
     }
-    let (request, device, context, textures, buffers) = {
+    let (request, settings, device, context, textures, buffers) = {
         let mut state = lock();
         let Some(device) = state.retained.device.clone() else {
             return;
@@ -361,33 +346,23 @@ unsafe extern "C" fn rsf_core_observer11_dump(immediate: Immediate, write: Write
         REQUESTED.store(false, Ordering::Release);
         (
             request,
+            state.dump_settings,
             device,
             state.retained.context.clone(),
             state.retained.textures.clone(),
             state.retained.constants.clone(),
         )
     };
-    let context = resolve_context(&device, context, immediate);
-    let texture_views: Vec<_> = textures.iter().map(ComRef::as_ptr).collect();
-    let buffer_views: Vec<_> = buffers
-        .iter()
-        .map(|entry| DumpBuffer {
-            bytes: entry.bytes,
-            buffer: entry.buffer.as_ptr(),
-        })
-        .collect();
-    let dump = Dump {
-        device: device.as_ptr(),
-        context: context.as_ref().map_or(ptr::null_mut(), ComRef::as_ptr),
-        prefix: request.prefix.as_ptr(),
-        textures: texture_views.as_ptr(),
-        texture_count: texture_views.len(),
-        buffers: buffer_views.as_ptr(),
-        buffer_count: buffer_views.len(),
-        view: request.view,
-    };
-    let mut result = DumpResult::default();
-    unsafe { write(&dump, &mut result) };
+    let context = resolve_context(&device, context, platform.immediate);
+    let result = dump::write(
+        platform,
+        &settings,
+        &request,
+        &device,
+        context.as_ref(),
+        &textures,
+        &buffers,
+    );
     let mut state = lock();
     state.dumps_completed = state.dumps_completed.wrapping_add(1);
     state.dump_result = result;

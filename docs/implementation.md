@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now sequences D3D11 observer dumps, names outputs, writes constant
+buffers and owns the temporary motion decoder. The native layer reads
+buffers, encodes textures and runs the typed D3D11 decode operations.
+Constant bytes are counted only after a successful file write. The
+existing suffixes and motion parameters are preserved, and the observer
+passes the full UTF-8 prefix to the native encoders. Public C headers
+are unchanged. Build and runtime validation remain open.
+
 Rust now owns D3D11 observer hook admission, original targets,
 activation, rollback and retirement. A refused required Present hook
 rolls back both creation hooks. Slot restoration checks that the

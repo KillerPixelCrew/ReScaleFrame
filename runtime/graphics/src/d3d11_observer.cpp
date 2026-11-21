@@ -2,7 +2,6 @@
 
 #include <rescaleframe/constant_buffer_read.h>
 #include <rescaleframe/d3d11_observer.h>
-#include <rescaleframe/log.h>
 #include <rescaleframe/motion_decode.h>
 #include <rescaleframe/texture_dump.h>
 
@@ -70,8 +69,11 @@ Observer& observer()
 static_assert(D3D11_BIND_RENDER_TARGET == 0x20 && D3D11_BIND_CONSTANT_BUFFER == 0x4);
 static_assert(RSF_OBSERVER_OK == 0 && RSF_OBSERVER_ERROR_INVALID_ARGUMENT == -1 && RSF_OBSERVER_ERROR_NOT_READY == -6);
 static_assert(sizeof(rsf_observer11_capture_filter) == 20 && sizeof(rsf_observer11_capture_status) == 32);
-static_assert(sizeof(rsf_observer11_dump) == 64 && sizeof(rsf_observer11_dump_buffer) == 16 &&
-    sizeof(rsf_observer11_dump_result) == 8);
+static_assert(sizeof(rsf_observer11_dump_settings) == 32 && sizeof(rsf_observer11_dump_ops) == 7 * sizeof(void*));
+static_assert(sizeof(rsf_texture_dump_options) == 40 && sizeof(rsf_motion_decode_params) == 48);
+static_assert(RSF_TEXTURE_DUMP_ABI_VERSION == 2 && RSF_DUMP_VIEW_DECODED_MOTION == 2 &&
+    RSF_TEXTURE_OK == 0 && RSF_MOTION_DECODE_OK == 0 && RSF_CONSTANT_BUFFER_OK == 0 &&
+    RSF_CONSTANT_BUFFER_ERROR_FOREIGN_DEVICE == -6);
 static_assert(RSF_OBSERVER_ERROR_ALREADY_INSTALLED == -3 && RSF_OBSERVER_ERROR_PATCH_FAILED == -5);
 static_assert(sizeof(rsf_observer11_slot) == 2 * sizeof(void*) && sizeof(rsf_observer11_hook_ops) == 4 * sizeof(void*));
 static_assert(RSF_OBSERVER11_STAGE_BASE + stage_shader_count == RSF_OBSERVER11_SLOT_COUNT);
@@ -215,66 +217,6 @@ HRESULT STDMETHODCALLTYPE hooked_create_buffer(ID3D11Device* device,
     return result;
 }
 
-// Read without the lock, which is safe because options are written once during install and never
-// again, and necessary because the interesting lines come from inside the dump loop.
-
-// Decode one target the way a backend needs it, and write the result beside the raw dump.
-//
-// The pass is built and thrown away per texture rather than kept. This runs on a key press a few
-// times a session, so the cost does not matter, and a cached pass would have to be invalidated
-// whenever the render size changed, which is exactly what this project makes happen.
-void decode_and_dump(Observer& self, ID3D11Device* device, ID3D11DeviceContext* context,
-                     ID3D11Texture2D* source, const char* prefix)
-{
-    D3D11_TEXTURE2D_DESC description{};
-    source->GetDesc(&description);
-
-    rsf_motion_decode_setup setup{};
-    setup.struct_size = sizeof(setup);
-    setup.abi_version = RSF_MOTION_DECODE_ABI_VERSION;
-    setup.width = description.Width;
-    setup.height = description.Height;
-    setup.log = self.options.log;
-    setup.log_user = self.options.log_user;
-
-    rsf_motion_decode* pass = nullptr;
-    const rsf_motion_decode_result made = rsf_motion_decode_create(device, &setup, &pass);
-    if (made != RSF_MOTION_DECODE_OK || !pass) {
-        rsf::say(self.options.log, self.options.log_user, "motion decode unavailable, result %d", int(made));
-        return;
-    }
-
-    rsf_motion_decode_params params{};
-    params.struct_size = sizeof(params);
-    params.scale_x = self.options.motion_scale;
-    params.scale_y = self.options.motion_scale;
-    params.bias_x = self.options.motion_bias;
-    params.bias_y = self.options.motion_bias;
-    params.output_scale_x = 1.0f;
-    params.output_scale_y = 1.0f;
-    params.invalid_value = self.options.motion_invalid_value;
-    params.zero_means_unwritten = 1;
-
-    const rsf_motion_decode_result ran = rsf_motion_decode_run(pass, context, source, &params);
-    if (ran != RSF_MOTION_DECODE_OK) {
-        rsf::say(self.options.log, self.options.log_user, "motion decode refused, result %d", int(ran));
-        rsf_motion_decode_destroy(pass);
-        return;
-    }
-
-    char path[1024];
-    std::snprintf(path, sizeof(path), "%s_decoded", prefix);
-    rsf_texture_dump_options dump{};
-    dump.struct_size = sizeof(dump);
-    dump.abi_version = RSF_TEXTURE_DUMP_ABI_VERSION;
-    dump.output_prefix_utf8 = path;
-    dump.view = RSF_DUMP_VIEW_DECODED_MOTION;
-    dump.log = self.options.log;
-    dump.log_user = self.options.log_user;
-    rsf_dump_texture(device, context, rsf_motion_decode_texture(pass), &dump, nullptr);
-    rsf_motion_decode_destroy(pass);
-}
-
 void* capture_immediate(void* device) noexcept
 {
     ID3D11DeviceContext* context = nullptr;
@@ -282,70 +224,39 @@ void* capture_immediate(void* device) noexcept
     return context;
 }
 
-// Rust retains the snapshot while it is written on the presenting thread.
-void write_dump(const rsf_observer11_dump* snapshot, rsf_observer11_dump_result* out) noexcept try
+void capture_log(void* user, const char* message) noexcept
 {
-    auto& self = observer();
-    auto* device = static_cast<ID3D11Device*>(snapshot->device);
-    auto* context = static_cast<ID3D11DeviceContext*>(snapshot->context);
-    uint32_t written = 0;
-    uint32_t constant_bytes = 0;
-    rsf::say(self.options.log, self.options.log_user, "dump begin: %zu textures, %zu constant buffers",
-        snapshot->texture_count, snapshot->buffer_count);
-    if (context) {
-        for (size_t index = 0; index < snapshot->texture_count; ++index) {
-            auto* texture = static_cast<ID3D11Texture2D*>(snapshot->textures[index]);
-            char path[1024];
-            std::snprintf(path, sizeof(path), "%s_%zu", snapshot->prefix, index);
-            rsf_texture_dump_options dump{};
-            dump.struct_size = sizeof(dump);
-            dump.abi_version = RSF_TEXTURE_DUMP_ABI_VERSION;
-            dump.output_prefix_utf8 = path;
-            dump.view = snapshot->view;
-            dump.log = self.options.log;
-            dump.log_user = self.options.log_user;
-            rsf::say(self.options.log, self.options.log_user, "texture %zu of %zu", index + 1, snapshot->texture_count);
-            const rsf_dump_texture_result result =
-                rsf_dump_texture(device, context, texture, &dump, nullptr);
-            if (result == RSF_TEXTURE_OK) {
-                ++written;
-            } else {
-                rsf::say(self.options.log, self.options.log_user, "texture %zu refused, result %d", index + 1, int(result));
-            }
-
-            if (self.options.decode_motion) {
-                decode_and_dump(self, device, context, texture, path);
-            }
-        }
-
-        for (size_t index = 0; index < snapshot->buffer_count; ++index) {
-            const auto& entry = snapshot->buffers[index];
-            rsf::say(self.options.log, self.options.log_user, "constant buffer of %u bytes", entry.bytes);
-            // The helper refuses a buffer or context from another device, which crashes rather
-            // than failing, and stages and maps the copy.
-            std::vector<uint8_t> contents(entry.bytes);
-            const rsf_constant_buffer_result read = rsf_read_constant_buffer(
-                device, context, entry.buffer, contents.data(), entry.bytes);
-            if (read == RSF_CONSTANT_BUFFER_ERROR_FOREIGN_DEVICE) {
-                rsf::say(self.options.log, self.options.log_user,
-                         "constant buffer skipped, it belongs to another device");
-            } else if (read == RSF_CONSTANT_BUFFER_OK) {
-                char path[1024];
-                std::snprintf(path, sizeof(path), "%s_cb%u.bin", snapshot->prefix, entry.bytes);
-                if (std::FILE* stream = std::fopen(path, "wb")) {
-                    std::fwrite(contents.data(), 1, entry.bytes, stream);
-                    std::fclose(stream);
-                    constant_bytes += entry.bytes;
-                }
-            }
-        }
-    } else {
-        rsf::say(self.options.log, self.options.log_user, "dump abandoned: no device context");
+    const auto& options = static_cast<const Observer*>(user)->options;
+    if (options.log) {
+        try { options.log(options.log_user, message); }
+        catch (...) { /* Diagnostics must not interrupt capture or Present. */ }
     }
+}
 
-    rsf::say(self.options.log, self.options.log_user, "dump end: %u textures, %u constant bytes", written, constant_bytes);
-    *out = {written, constant_bytes};
-} catch (...) { /* The Rust snapshot releases all retained references. */ }
+int32_t create_capture_decode(void* device, void* raw_source, rsf_dump_log_fn log,
+    void* log_user, rsf_motion_decode** out) noexcept try
+{
+    D3D11_TEXTURE2D_DESC description{};
+    static_cast<ID3D11Texture2D*>(raw_source)->GetDesc(&description);
+    const rsf_motion_decode_setup setup{
+        sizeof(setup), RSF_MOTION_DECODE_ABI_VERSION, description.Width, description.Height, 0, log, log_user};
+    return rsf_motion_decode_create(device, &setup, out);
+} catch (...) { return RSF_MOTION_DECODE_ERROR_RESOURCE_FAILED; }
+
+constexpr rsf_observer11_dump_ops dump_ops{
+    capture_immediate,
+    [](void* device, void* context, void* texture, const rsf_texture_dump_options* options) {
+        return rsf_dump_texture(device, context, texture, options, nullptr);
+    },
+    rsf_read_constant_buffer,
+    create_capture_decode,
+    [](rsf_motion_decode* pass, void* context, void* source, const rsf_motion_decode_params* params) noexcept -> int32_t {
+        try { return rsf_motion_decode_run(pass, context, source, params); }
+        catch (...) { return RSF_MOTION_DECODE_ERROR_RESOURCE_FAILED; }
+    },
+    rsf_motion_decode_texture,
+    rsf_motion_decode_destroy,
+};
 
 void update_presenter(Observer& self, IDXGISwapChain* swapchain)
 {
@@ -391,7 +302,7 @@ void update_presenter(Observer& self, IDXGISwapChain* swapchain)
             }
         }
     }
-    rsf_core_observer11_dump(capture_immediate, write_dump);
+    rsf_core_observer11_dump(&dump_ops);
 }
 
 static_assert(DXGI_PRESENT_TEST == 1 && S_OK == 0);
@@ -1023,7 +934,10 @@ extern "C" rsf_observer_result rsf_observer_install(const rsf_observer_options* 
     const rsf_observer11_capture_filter filter{
         options->format, options->minimum_width, options->capacity,
         options->constant_buffer_min_bytes, options->constant_buffer_max_bytes};
-    rsf_core_observer11_capture_configure(&filter);
+    const rsf_observer11_dump_settings dump{
+        options->log ? capture_log : nullptr, &self, options->decode_motion,
+        options->motion_scale, options->motion_bias, options->motion_invalid_value};
+    rsf_core_observer11_capture_configure(&filter, &dump);
 
     rsf_observer11_slot slots[RSF_OBSERVER11_SLOT_COUNT]{};
     slots[RSF_OBSERVER11_TEXTURE] = {device + slot_create_texture2d, reinterpret_cast<void*>(&hooked_create_texture2d)};
