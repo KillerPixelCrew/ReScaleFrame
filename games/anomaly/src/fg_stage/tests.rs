@@ -15,6 +15,24 @@ fn vendor_present_delta_requires_one_generation_and_increasing_totals() {
 }
 
 #[test]
+fn successful_present_requires_the_matching_accepted_window() {
+    let swapchain = ptr::without_provenance_mut(1);
+    let window = Pass {
+        source_frame_id: 9,
+        swapchain,
+        ..unsafe { mem::zeroed() }
+    };
+    assert!(!matches_window(None, 9, swapchain));
+    assert!(!matches_window(Some(&window), 10, swapchain));
+    assert!(!matches_window(
+        Some(&window),
+        9,
+        ptr::without_provenance_mut(2)
+    ));
+    assert!(matches_window(Some(&window), 9, swapchain));
+}
+
+#[test]
 fn changing_scope_hold_applies_to_the_next_source_without_resetting_history() {
     use crate::fg_policy_abi::{RSF_ANOMALY_RESET_SCOPE_END, RSF_ANOMALY_SKIP_SCOPE};
 

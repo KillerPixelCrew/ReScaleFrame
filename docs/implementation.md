@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The Rust Anomaly FG adapter checks the Present event size and counts
+completion only for the accepted window's source and swapchain.
+Device reset clears borrowed SR identity and camera history before
+the engine tears down its targets. The existing Runtime remains
+responsible for submitted GPU leases. Source review matched the
+bridge's event identity to the adapter window. The new synthetic
+case and device reset behavior remain unverified for this revision.
+
 Anomaly observer quiesce now suspends the overlay before retiring the
 render stages. It closes DirectInput capture and hides the window
 panel. The next accepted Present performs the Runtime reset on its

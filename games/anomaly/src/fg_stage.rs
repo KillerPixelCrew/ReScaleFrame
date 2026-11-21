@@ -655,12 +655,21 @@ unsafe extern "C" fn before_present(_: Raw, chain: Raw) {
     }
 }
 
+fn matches_window(window: Option<&Pass>, source: u64, chain: Raw) -> bool {
+    window.is_some_and(|window| window.source_frame_id == source && window.swapchain == chain)
+}
+
 unsafe extern "C" fn present_event(user: Raw, event: *const rsf_observer_present_event) {
-    let Some(stage) = STAGE.get() else { return };
-    unsafe { stage.tables.fg.present_event.unwrap()(user, event) };
-    let Some(event) = (unsafe { event.as_ref() }) else {
+    if event.is_null()
+        || (unsafe { event.cast::<u32>().read() } as usize)
+            < size_of::<rsf_observer_present_event>()
+    {
         return;
-    };
+    }
+    let Some(stage) = STAGE.get() else { return };
+    // Forward the checked event even when it doesn't belong to the adapter's window.
+    unsafe { stage.tables.fg.present_event.unwrap()(user, event) };
+    let event = unsafe { &*event };
     if event.flags & DXGI_PRESENT_TEST != 0 || !stage.owns(event.swapchain) {
         return;
     }
@@ -668,7 +677,9 @@ unsafe extern "C" fn present_event(user: Raw, event: *const rsf_observer_present
         stage.facade.store(event.swapchain, Ordering::Release);
     } else if event.result >= 0 {
         let mut engine = stage.engine.lock().unwrap();
-        if engine.phase == Phase::Rendering {
+        if engine.phase == Phase::Rendering
+            && matches_window(engine.window.as_ref(), engine.source, event.swapchain)
+        {
             engine.policy.presented();
         }
     }
@@ -1033,8 +1044,13 @@ extern "C" fn rsf_anomaly_fg_stage_device_reset() {
         let inputs = {
             let mut engine = stage.engine.lock().unwrap();
             engine.policy.device_reset();
+            engine.camera_now = None;
+            engine.camera_fed = None;
+            engine.previous_begin = 0;
             engine.inputs.take()
         };
+        // The graphics owner must not lend the old frame's identity to later SR work.
+        stage.bind_source(None);
         // Release before the original CRender::reset_begin tears down the device/targets.
         drop(inputs);
     }
