@@ -4,6 +4,12 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The Streamline Vulkan bridge tracks FG options, swapchain changes and
+resource release in Rust. The interposer lifecycle guard serializes
+these SDK calls with shutdown. A swapchain change during an SDK call
+invalidates the previously applied cache revision. Source comparison
+matched all 45 C export signatures. Build and SDK behavior remain open.
+
 Anomaly quiesce now releases the adapter's private FG input pass once
 native callbacks and scopes have drained. It clears camera and input
 history while preserving the monotonic source counter. Runtime keeps
