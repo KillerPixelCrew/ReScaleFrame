@@ -42,6 +42,9 @@ barriers, the device and swapchain interception with semaphore creation and dest
 presentation window and its swap chain. An admitted Present holds its entry through native
 forwarding. Swapchain setup publishes only a complete chain and rolls back earlier semaphores if a
 later step or the publication refuses.
+Each Vulkan event and window frame keeps the host services it was admitted with.
+Drain probes hold an entry while reading native slot fences. The Unity instance
+belongs to the shared-device creation and release path.
 
 The Editor preview uses the same Rust submission-ring logic with its own fence and slots
 (`preview.rs`). Rust selects the containing editor window, tracks visibility and admits

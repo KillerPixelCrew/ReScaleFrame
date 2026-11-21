@@ -32,21 +32,25 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-/* Stores the player window frame identity the present interception renders under. Zero when the
-   bridge faulted or is closing. */
-uint32_t rsf_unity_vulkan_set_window(const rsf_unity_packet* packet);
-/* Copies the stored window frame to packet. Zero without a frame or after a fault. */
-uint32_t rsf_unity_vulkan_window(rsf_unity_packet* packet);
+/* The frame and its process-lived host callbacks are copied together at admission. */
+typedef struct rsf_unity_vulkan_frame {
+    rsf_unity_packet packet;
+    rsf_game_host_services services;
+} rsf_unity_vulkan_frame;
+/* Stores the player window frame. Zero when the bridge faulted or is closing. */
+uint32_t rsf_unity_vulkan_set_window(const rsf_unity_vulkan_frame* frame);
+/* Copies the stored window frame and its services. Zero without a frame or after a fault. */
+uint32_t rsf_unity_vulkan_window(rsf_unity_vulkan_frame* frame);
 
-/* Copies packet into a free event slot of this kind. Returns the copy's address, which Unity hands
+/* Copies frame into a free event slot of this kind. Returns the copy's address, which Unity hands
    back to the queue callback as identity only, and its slot for the caller's images; NULL when
    faulted, closing, of an unknown kind or full. */
-void* rsf_unity_vulkan_admit_event(const rsf_unity_packet* packet, uint32_t kind, uint32_t reconfigure,
+void* rsf_unity_vulkan_admit_event(const rsf_unity_vulkan_frame* frame, uint32_t kind, uint32_t reconfigure,
     uint32_t* slot);
 /* Copies out the queued event at address and marks it running; it stays outstanding until
    rsf_unity_vulkan_finish_event. Zero when address names no queued event; a faulted bridge frees
    the event and returns zero. */
-uint32_t rsf_unity_vulkan_start_event(const void* address, rsf_unity_packet* packet, uint32_t* kind,
+uint32_t rsf_unity_vulkan_start_event(const void* address, rsf_unity_vulkan_frame* frame, uint32_t* kind,
     uint32_t* reconfigure, uint32_t* slot);
 void rsf_unity_vulkan_finish_event(uint32_t slot);
 
@@ -66,9 +70,9 @@ uint32_t rsf_unity_vulkan_ready(void);
 uint32_t rsf_unity_vulkan_fault(void);
 uint32_t rsf_unity_vulkan_faulted(void);
 
-/* Non-zero when no event, entry or device creation is outstanding; *ready, when non-null,
-   receives whether the shared device exists. */
-uint32_t rsf_unity_vulkan_idle(uint32_t* ready);
+/* Enters an idle bridge to inspect the native fences. Non-zero must be paired with leave.
+   *ready, when non-null, receives whether the shared device exists. */
+uint32_t rsf_unity_vulkan_probe_idle(uint32_t* ready);
 /* Closes an idle bridge: events, entries and device claims are refused until release or reopen.
    Zero when work is outstanding or it is already closed. */
 uint32_t rsf_unity_vulkan_close(void);

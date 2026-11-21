@@ -29,6 +29,7 @@
 //! could destroy the slots, images and swap chain a present interception was recording into on the
 //! render thread, and it cleared the window frame identity while that thread copied it.
 use crate::bridge_abi::{RSF_UNITY_FRAMES_PACKETS, rsf_unity_packet};
+use rsf_game_sys::rsf_game_host_services;
 use std::ffi::c_void;
 use std::ptr;
 use std::slice;
@@ -41,8 +42,19 @@ const DEVICE_BUSY: u32 = 0;
 const DEVICE_CLAIMED: u32 = 1;
 const DEVICE_READY: u32 = 2;
 
-// SAFETY: all-zero is a valid packet: integers, floats and null pointers.
-const EMPTY_PACKET: rsf_unity_packet = unsafe { std::mem::zeroed() };
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Frame {
+    packet: rsf_unity_packet,
+    services: rsf_game_host_services,
+}
+const _: () = assert!(
+    size_of::<Frame>() == size_of::<rsf_unity_packet>() + size_of::<rsf_game_host_services>()
+        && std::mem::offset_of!(Frame, services) == size_of::<rsf_unity_packet>()
+);
+
+// SAFETY: both C records accept zero integers, floats and null pointers.
+const EMPTY_FRAME: Frame = unsafe { std::mem::zeroed() };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Device {
@@ -62,21 +74,21 @@ enum Stage {
 
 #[derive(Clone, Copy)]
 struct Event {
-    packet: rsf_unity_packet,
+    frame: Frame,
     kind: u32,
     reconfigure: bool,
     stage: Stage,
 }
 
 const FREE: Event = Event {
-    packet: EMPTY_PACKET,
+    frame: EMPTY_FRAME,
     kind: 0,
     reconfigure: false,
     stage: Stage::Free,
 };
 
-/// One started event: its slot, packet, kind and whether it applies a policy change.
-type Started = (usize, rsf_unity_packet, u32, bool);
+/// One started event: its slot, frame with services, kind and whether it applies a policy change.
+type Started = (usize, Frame, u32, bool);
 
 struct State {
     device: Device,
@@ -88,12 +100,12 @@ struct State {
     /// Present interceptions and surface updates in progress.
     entries: u32,
     /// The last player window frame, whose identity the present interception renders under.
-    window: Option<rsf_unity_packet>,
+    window: Option<Frame>,
     /// The bridge's DXGI swap chain exists. It goes with the other objects at release.
     surface: bool,
 }
 
-// The packets hold Unity resource addresses as identity. This module never dereferences them.
+// Packets hold resource addresses as identity only. Host code and user data are process-lived.
 unsafe impl Send for State {}
 
 static STATE: Mutex<State> = Mutex::new(State::new());
@@ -119,28 +131,23 @@ impl State {
         !self.faulted && !self.closed
     }
 
-    fn set_window(&mut self, packet: &rsf_unity_packet) -> bool {
+    fn set_window(&mut self, frame: &Frame) -> bool {
         if !self.open() {
             return false;
         }
-        self.window = Some(*packet);
+        self.window = Some(*frame);
         true
     }
 
     /// The window frame, once one with a frame identity arrived, until a fault or release.
-    fn window(&self) -> Option<rsf_unity_packet> {
+    fn window(&self) -> Option<Frame> {
         if self.faulted {
             return None;
         }
-        self.window.filter(|packet| packet.frame_id != 0)
+        self.window.filter(|frame| frame.packet.frame_id != 0)
     }
 
-    fn admit_event(
-        &mut self,
-        packet: &rsf_unity_packet,
-        kind: u32,
-        reconfigure: bool,
-    ) -> Option<usize> {
+    fn admit_event(&mut self, frame: &Frame, kind: u32, reconfigure: bool) -> Option<usize> {
         if !self.open() || kind > EVENT_HUDLESS {
             return None;
         }
@@ -149,7 +156,7 @@ impl State {
             .iter()
             .position(|event| event.stage == Stage::Free)?;
         self.events[slot] = Event {
-            packet: *packet,
+            frame: *frame,
             kind,
             reconfigure,
             stage: Stage::Queued,
@@ -158,7 +165,7 @@ impl State {
     }
 
     fn event_address(&self, slot: usize) -> *mut c_void {
-        ptr::from_ref(&self.events[slot].packet).cast_mut().cast()
+        ptr::from_ref(&self.events[slot].frame).cast_mut().cast()
     }
 
     /// The queued event at address, now running. A faulted bridge frees it instead.
@@ -173,7 +180,7 @@ impl State {
         }
         let event = &mut self.events[slot];
         event.stage = Stage::Running;
-        Some((slot, event.packet, event.kind, event.reconfigure))
+        Some((slot, event.frame, event.kind, event.reconfigure))
     }
 
     fn finish_event(&mut self, slot: usize) {
@@ -249,40 +256,40 @@ impl State {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_vulkan_set_window(packet: *const rsf_unity_packet) -> u32 {
-    let Some(packet) = (unsafe { packet.as_ref() }) else {
+unsafe extern "C" fn rsf_unity_vulkan_set_window(frame: *const Frame) -> u32 {
+    let Some(frame) = (unsafe { frame.as_ref() }) else {
         return 0;
     };
-    u32::from(lock().set_window(packet))
+    u32::from(lock().set_window(frame))
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_vulkan_window(packet: *mut rsf_unity_packet) -> u32 {
-    if packet.is_null() {
+unsafe extern "C" fn rsf_unity_vulkan_window(frame: *mut Frame) -> u32 {
+    if frame.is_null() {
         return 0;
     }
     let Some(window) = lock().window() else {
         return 0;
     };
-    unsafe { packet.write(window) };
+    unsafe { frame.write(window) };
     1
 }
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_unity_vulkan_admit_event(
-    packet: *const rsf_unity_packet,
+    frame: *const Frame,
     kind: u32,
     reconfigure: u32,
     slot: *mut u32,
 ) -> *mut c_void {
-    let Some(packet) = (unsafe { packet.as_ref() }) else {
+    let Some(frame) = (unsafe { frame.as_ref() }) else {
         return ptr::null_mut();
     };
     if slot.is_null() {
         return ptr::null_mut();
     }
     let mut state = lock();
-    let Some(index) = state.admit_event(packet, kind, reconfigure != 0) else {
+    let Some(index) = state.admit_event(frame, kind, reconfigure != 0) else {
         return ptr::null_mut();
     };
     unsafe { slot.write(index as u32) };
@@ -292,19 +299,19 @@ unsafe extern "C" fn rsf_unity_vulkan_admit_event(
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_unity_vulkan_start_event(
     address: *const c_void,
-    packet: *mut rsf_unity_packet,
+    frame: *mut Frame,
     kind: *mut u32,
     reconfigure: *mut u32,
     slot: *mut u32,
 ) -> u32 {
-    if packet.is_null() || kind.is_null() || reconfigure.is_null() || slot.is_null() {
+    if frame.is_null() || kind.is_null() || reconfigure.is_null() || slot.is_null() {
         return 0;
     }
     let Some((index, stored, event_kind, applies)) = lock().start_event(address) else {
         return 0;
     };
     unsafe {
-        packet.write(stored);
+        frame.write(stored);
         kind.write(event_kind);
         reconfigure.write(u32::from(applies));
         slot.write(index as u32);
@@ -353,12 +360,12 @@ extern "C" fn rsf_unity_vulkan_faulted() -> u32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_vulkan_idle(ready: *mut u32) -> u32 {
-    let state = lock();
+unsafe extern "C" fn rsf_unity_vulkan_probe_idle(ready: *mut u32) -> u32 {
+    let mut state = lock();
     if !ready.is_null() {
         unsafe { ready.write(u32::from(state.device == Device::Ready)) };
     }
-    u32::from(state.idle())
+    u32::from(state.idle() && state.enter())
 }
 
 #[unsafe(no_mangle)]
@@ -608,24 +615,27 @@ mod tests {
 
     const EVENT_SR: u32 = 0;
 
-    fn packet(frame_id: u64) -> rsf_unity_packet {
-        rsf_unity_packet {
-            frame_id,
-            ..EMPTY_PACKET
-        }
+    fn work(frame_id: u64) -> Frame {
+        let mut frame = EMPTY_FRAME;
+        frame.packet.frame_id = frame_id;
+        frame.services.session_id = frame_id + 100;
+        frame
     }
 
     #[test]
     fn events_stay_outstanding_until_their_callback_finishes() {
         let mut state = State::new();
-        let slot = state.admit_event(&packet(4), EVENT_HUDLESS, false).unwrap();
+        let slot = state.admit_event(&work(4), EVENT_HUDLESS, false).unwrap();
         let address = state.event_address(slot);
+        assert!(state.set_window(&work(5)));
         assert!(!state.idle());
         let (started, stored, kind, reconfigure) = state.start_event(address).unwrap();
         assert_eq!(
-            (started, stored.frame_id, kind, reconfigure),
+            (started, stored.packet.frame_id, kind, reconfigure),
             (slot, 4, EVENT_HUDLESS, false)
         );
+        assert_eq!(stored.services.session_id, 104);
+        assert_eq!(state.window().unwrap().services.session_id, 105);
         // A running event is not started twice and still blocks retirement.
         assert!(state.start_event(address).is_none());
         assert!(!state.idle());
@@ -634,7 +644,7 @@ mod tests {
         assert!(state.start_event(address).is_none());
         assert!(
             state
-                .admit_event(&packet(5), EVENT_HUDLESS + 1, false)
+                .admit_event(&work(5), EVENT_HUDLESS + 1, false)
                 .is_none()
         );
     }
@@ -644,26 +654,26 @@ mod tests {
         let mut state = State::new();
         for frame in 0..EVENTS {
             assert_eq!(
-                state.admit_event(&packet(frame as u64 + 1), EVENT_SR, true),
+                state.admit_event(&work(frame as u64 + 1), EVENT_SR, true),
                 Some(frame)
             );
         }
-        assert!(state.admit_event(&packet(99), EVENT_SR, false).is_none());
+        assert!(state.admit_event(&work(99), EVENT_SR, false).is_none());
         state.finish_event(EVENTS);
         state.finish_event(3);
-        assert_eq!(state.admit_event(&packet(99), EVENT_SR, false), Some(3));
+        assert_eq!(state.admit_event(&work(99), EVENT_SR, false), Some(3));
     }
 
     #[test]
     fn a_fault_discards_queued_events_and_the_window_frame() {
         let mut state = State::new();
-        assert!(state.set_window(&packet(8)));
-        let slot = state.admit_event(&packet(9), EVENT_SR, false).unwrap();
+        assert!(state.set_window(&work(8)));
+        let slot = state.admit_event(&work(9), EVENT_SR, false).unwrap();
         assert!(state.fault());
         assert!(!state.fault());
         assert!(state.window().is_none());
-        assert!(!state.set_window(&packet(10)));
-        assert!(state.admit_event(&packet(11), EVENT_SR, false).is_none());
+        assert!(!state.set_window(&work(10)));
+        assert!(state.admit_event(&work(11), EVENT_SR, false).is_none());
         assert!(state.start_event(state.event_address(slot)).is_none());
         assert!(state.idle());
         state.release();
@@ -675,10 +685,10 @@ mod tests {
     fn the_window_frame_needs_a_frame_identity() {
         let mut state = State::new();
         assert!(state.window().is_none());
-        assert!(state.set_window(&packet(0)));
+        assert!(state.set_window(&work(0)));
         assert!(state.window().is_none());
-        assert!(state.set_window(&packet(12)));
-        assert_eq!(state.window().unwrap().frame_id, 12);
+        assert!(state.set_window(&work(12)));
+        assert_eq!(state.window().unwrap().packet.frame_id, 12);
     }
 
     #[test]
@@ -707,8 +717,8 @@ mod tests {
         assert!(!state.close());
         assert!(!state.enter());
         assert_eq!(state.claim_device(), DEVICE_BUSY);
-        assert!(state.admit_event(&packet(1), EVENT_SR, false).is_none());
-        assert!(!state.set_window(&packet(1)));
+        assert!(state.admit_event(&work(1), EVENT_SR, false).is_none());
+        assert!(!state.set_window(&work(1)));
         state.reopen();
         assert!(state.enter());
         state.leave();
@@ -722,7 +732,7 @@ mod tests {
     #[test]
     fn exports_check_their_pointers() {
         rsf_unity_vulkan_release();
-        let frame = packet(21);
+        let frame = work(21);
         let mut slot = u32::MAX;
         let address = unsafe { rsf_unity_vulkan_admit_event(&frame, EVENT_SR, 1, &mut slot) };
         assert!(!address.is_null());
@@ -730,7 +740,7 @@ mod tests {
         assert!(
             unsafe { rsf_unity_vulkan_admit_event(ptr::null(), EVENT_SR, 0, &mut slot) }.is_null()
         );
-        let (mut out, mut kind, mut reconfigure, mut index) = (EMPTY_PACKET, 9, 9, 9);
+        let (mut out, mut kind, mut reconfigure, mut index) = (EMPTY_FRAME, 9, 9, 9);
         assert_eq!(
             unsafe {
                 rsf_unity_vulkan_start_event(
@@ -756,14 +766,16 @@ mod tests {
             1
         );
         assert_eq!(
-            (out.frame_id, kind, reconfigure, index),
+            (out.packet.frame_id, kind, reconfigure, index),
             (21, EVENT_SR, 1, 0)
         );
         let mut ready = 7;
-        assert_eq!(unsafe { rsf_unity_vulkan_idle(&mut ready) }, 0);
+        assert_eq!(unsafe { rsf_unity_vulkan_probe_idle(&mut ready) }, 0);
         assert_eq!(ready, 0);
         rsf_unity_vulkan_finish_event(index);
-        assert_eq!(unsafe { rsf_unity_vulkan_idle(ptr::null_mut()) }, 1);
+        assert_eq!(unsafe { rsf_unity_vulkan_probe_idle(ptr::null_mut()) }, 1);
+        assert_eq!(rsf_unity_vulkan_close(), 0);
+        rsf_unity_vulkan_leave();
         assert_eq!(unsafe { rsf_unity_vulkan_window(ptr::null_mut()) }, 0);
         assert_eq!(unsafe { rsf_unity_vulkan_set_window(ptr::null()) }, 0);
         rsf_unity_vulkan_release();

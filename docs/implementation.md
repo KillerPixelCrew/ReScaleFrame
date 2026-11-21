@@ -261,6 +261,12 @@ a command list. A refused post-submit signal stops slot reuse.
 Win32, DXGI, D3D12 and source leases remain in typed native calls.
 Build and Editor playback verification remain open.
 
+Unity Vulkan render events and window frames now carry their own copied
+host services. A held probe covers native fence reads during drain
+checks. Shared-device creation publishes its instance only with the
+associated objects, and release clears it. Native queue synchronization,
+borrowed device use and live teardown still need verification.
+
 AC7's Rust renderer transaction owns prepare, start, quiesce and stop.
 Failed activation keeps any renderer with reachable callbacks, and a
 refused hook disable or removal keeps the renderer available for retry.

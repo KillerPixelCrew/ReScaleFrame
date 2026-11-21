@@ -21,17 +21,20 @@
 #include <IUnityGraphicsVulkan.h>
 #include <rescaleframe/native_fg_d3d12.h>
 #include <array>
+#include <atomic>
+#include <cstddef>
 #include <algorithm>
 #include <cstring>
 #include <vector>
 
 static_assert(sizeof(rsf_unity_vulkan_present_source) == 24, "vulkan_state.rs PresentSource");
+static_assert(sizeof(rsf_unity_vulkan_frame) == sizeof(rsf_unity_packet) + sizeof(rsf_game_host_services));
+static_assert(offsetof(rsf_unity_vulkan_frame, services) == sizeof(rsf_unity_packet));
 
 namespace {
 using Microsoft::WRL::ComPtr;
 IUnityGraphicsVulkanV2* unity = nullptr;
 UnityVulkanInstance instance{};
-rsf_game_host_services host{};
 int base_event = 0;
 PFN_vkGetInstanceProcAddr original_gipa = nullptr;
 PFN_vkGetDeviceProcAddr original_gdpa = nullptr;
@@ -39,8 +42,7 @@ PFN_vkCreateDevice original_create_device = nullptr;
 PFN_vkCreateSwapchainKHR original_create_swapchain = nullptr;
 PFN_vkDestroySwapchainKHR original_destroy_swapchain = nullptr;
 PFN_vkQueuePresentKHR original_present = nullptr;
-PFN_vkImportSemaphoreWin32HandleKHR import_semaphore = nullptr;
-bool external_extensions = false;
+std::atomic<bool> external_extensions{false};
 ComPtr<ID3D12Device> device;
 ComPtr<ID3D12CommandQueue> queue;
 ComPtr<ID3D12Fence> shared_fence;
@@ -79,7 +81,11 @@ struct PresentationLease {
     PresentationLease& operator=(const PresentationLease&) = delete;
     ~PresentationLease() { if (held) rsf_unity_vulkan_presentation_end(); }
 };
-void log(const char* text) { if (host.log) host.log(host.user, text); else { OutputDebugStringA(text); OutputDebugStringA("\n"); } }
+void log(const rsf_game_host_services* services, const char* text)
+{
+    if (services && services->log) services->log(services->user, text);
+    else { OutputDebugStringA(text); OutputDebugStringA("\n"); }
+}
 // Stops the bridge until release. The first fault is reported, so the package status and the
 // managed jitter gate see it instead of a silent stop.
 void fault(int32_t result, const char* message)
@@ -92,6 +98,7 @@ void stop(const char* message) { fault(RSF_BACKEND_ERROR_FEATURE_FAILED, message
 struct BridgeEntry {
     bool admitted = rsf_unity_vulkan_enter() != 0;
     BridgeEntry() = default;
+    explicit BridgeEntry(bool acquired) : admitted(acquired) {}
     BridgeEntry(const BridgeEntry&) = delete;
     BridgeEntry& operator=(const BridgeEntry&) = delete;
     ~BridgeEntry() { if (admitted) rsf_unity_vulkan_leave(); }
@@ -127,6 +134,7 @@ void destroy_objects()
     if (command_pool) vkDestroyCommandPool(instance.device, command_pool, nullptr);
     if (semaphore) vkDestroySemaphore(instance.device, semaphore, nullptr);
     command_pool = VK_NULL_HANDLE; semaphore = VK_NULL_HANDLE; chain.Reset(); shared_fence.Reset(); queue.Reset(); device.Reset();
+    instance = {};
 }
 bool create_image(uint32_t index, uint32_t width, uint32_t height, VkFormat format, DXGI_FORMAT dx_format)
 {
@@ -167,18 +175,18 @@ bool create_image(uint32_t index, uint32_t width, uint32_t height, VkFormat form
 }
 // Creates the shared D3D12 device, queue, fence, imported semaphore and command slots. A failure
 // may leave some of them; the caller destroys them.
-bool create_shared()
+bool create_shared(const rsf_game_host_services* services)
 {
     instance = unity->Instance(); if (!instance.device) return false;
     if (!external_extensions) {
         external_extensions = vkGetDeviceProcAddr(instance.device, "vkImportSemaphoreWin32HandleKHR") &&
             vkGetDeviceProcAddr(instance.device, "vkGetMemoryWin32HandlePropertiesKHR");
     }
-    if (!external_extensions) { log("Unity Vulkan device lacks enabled Win32 external-memory/semaphore extensions."); return false; }
+    if (!external_extensions) { log(services, "Unity Vulkan device lacks enabled Win32 external-memory/semaphore extensions."); return false; }
     VkPhysicalDeviceIDProperties id{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
     VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2}; properties.pNext = &id;
     vkGetPhysicalDeviceProperties2(instance.physicalDevice, &properties);
-    if (!id.deviceLUIDValid) { log("Unity Vulkan adapter supplied no Windows LUID."); return false; }
+    if (!id.deviceLUIDValid) { log(services, "Unity Vulkan adapter supplied no Windows LUID."); return false; }
     LUID luid{}; std::memcpy(&luid, id.deviceLUID, sizeof(luid));
     ComPtr<IDXGIFactory4> factory; ComPtr<IDXGIAdapter1> adapter;
     if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))) || FAILED(factory->EnumAdapterByLuid(luid, IID_PPV_ARGS(&adapter))) ||
@@ -190,7 +198,7 @@ bool create_shared()
     if (FAILED(device->CreateSharedHandle(shared_fence.Get(), nullptr, GENERIC_ALL, nullptr, &handle))) return false;
     VkSemaphoreCreateInfo semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
     auto result = vkCreateSemaphore(instance.device, &semaphore_info, nullptr, &semaphore);
-    import_semaphore = reinterpret_cast<PFN_vkImportSemaphoreWin32HandleKHR>(vkGetDeviceProcAddr(instance.device, "vkImportSemaphoreWin32HandleKHR"));
+    const auto import_semaphore = reinterpret_cast<PFN_vkImportSemaphoreWin32HandleKHR>(vkGetDeviceProcAddr(instance.device, "vkImportSemaphoreWin32HandleKHR"));
     VkImportSemaphoreWin32HandleInfoKHR import{VK_STRUCTURE_TYPE_IMPORT_SEMAPHORE_WIN32_HANDLE_INFO_KHR};
     import.semaphore = semaphore; import.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_D3D12_FENCE_BIT; import.handle = handle;
     if (result == VK_SUCCESS && import_semaphore) result = import_semaphore(instance.device, &import); else result = VK_ERROR_EXTENSION_NOT_PRESENT;
@@ -208,12 +216,12 @@ bool create_shared()
             FAILED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, slot.allocator.Get(), nullptr, IID_PPV_ARGS(&slot.commands))) ||
             FAILED(slot.commands->Close())) return false;
     }
-    log("Unity Vulkan textures share same-adapter D3D12 resources and GPU fences."); return true;
+    log(services, "Unity Vulkan textures share same-adapter D3D12 resources and GPU fences."); return true;
 }
 enum class SharedDevice { ready, busy, failed };
 // The shared device, created by one thread at a time. busy while another thread creates it or
 // release closes the bridge; a failed creation leaves nothing behind and is retried by a later call.
-SharedDevice initialize()
+SharedDevice initialize(const rsf_game_host_services* services = nullptr)
 {
     if (!unity) return SharedDevice::failed;
     const uint32_t claim = rsf_unity_vulkan_claim_device();
@@ -224,7 +232,7 @@ SharedDevice initialize()
         bool created = false;
         ~Claim() { if (!created) destroy_objects(); rsf_unity_vulkan_device_created(created ? 1u : 0u); }
     } claimed;
-    claimed.created = create_shared();
+    claimed.created = create_shared(services);
     return claimed.created ? SharedDevice::ready : SharedDevice::failed;
 }
 bool begin(Slot& slot)
@@ -313,14 +321,16 @@ void make_pass(const rsf_unity_packet& packet, rsf_game_render_pass& pass)
 // Unity's queue access for one admitted render event; data is the event's Rust address.
 void UNITY_INTERFACE_API execute_queue(int, void* data) noexcept try
 {
-    rsf_unity_packet packet{}; uint32_t kind = 0, reconfigure = 0, index = 0;
+    rsf_unity_vulkan_frame frame{}; uint32_t kind = 0, reconfigure = 0, index = 0;
     // A faulted bridge discards the event here.
-    if (!rsf_unity_vulkan_start_event(data, &packet, &kind, &reconfigure, &index)) return;
+    if (!rsf_unity_vulkan_start_event(data, &frame, &kind, &reconfigure, &index)) return;
     struct Finish { uint32_t index; ~Finish() { rsf_unity_vulkan_finish_event(index); } } finish{index};
-    if (index >= event_images.size()) return;
+    if (index >= event_images.size() || !frame.services.render_pass) return;
+    const auto& host = frame.services;
+    const auto& packet = frame.packet;
     const auto& textures = event_images[index];
     const bool present = kind == RSF_UNITY_VULKAN_EVENT_WINDOW, hudless = kind == RSF_UNITY_VULKAN_EVENT_HUDLESS;
-    const SharedDevice ready = initialize();
+    const SharedDevice ready = initialize(&host);
     if (ready == SharedDevice::busy) return;
     if (ready != SharedDevice::ready) {
         fault(RSF_BACKEND_ERROR_INIT_FAILED, "Unity Vulkan shared device/fence initialization failed; native output remains in place.");
@@ -421,10 +431,11 @@ bool configure_chain(HWND window, uint32_t width, uint32_t height)
 VKAPI_ATTR VkResult VKAPI_CALL intercept_present(VkQueue vk_queue, const VkPresentInfoKHR* info) noexcept try
 {
     if (!original_present || !info) return VK_ERROR_INITIALIZATION_FAILED;
-    BridgeEntry entry; rsf_unity_packet frame{};
+    BridgeEntry entry; rsf_unity_vulkan_frame frame{};
     const auto unchanged = [&] { return original_present(vk_queue, info); };
     const HWND window = surface_window();
-    if (!window || !entry.admitted || !rsf_unity_vulkan_window(&frame) || info->swapchainCount != 1 || initialize() != SharedDevice::ready) return unchanged();
+    if (!window || !entry.admitted || !rsf_unity_vulkan_window(&frame) || !frame.services.render_pass || info->swapchainCount != 1 ||
+        initialize(&frame.services) != SharedDevice::ready) return unchanged();
     // The lease is held from the lookup through the forwarded Present, also when the swapchain is
     // unknown or the index out of range and the Present is forwarded unchanged.
     rsf_unity_vulkan_present_source source{};
@@ -454,8 +465,8 @@ VKAPI_ATTR VkResult VKAPI_CALL intercept_present(VkQueue vk_queue, const VkPrese
     slot.commands->CopyResource(buffer.Get(), images[5].resource.Get());
     dx_barrier(slot.commands.Get(), buffer.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT);
     dx_barrier(slot.commands.Get(), images[5].resource.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
-    rsf_game_render_pass pass{}; make_pass(frame, pass); pass.role = RSF_GAME_RENDER_WINDOW; pass.swapchain = chain.Get();
-    host.render_pass(host.user, queue.Get(), &pass, 1);
+    rsf_game_render_pass pass{}; make_pass(frame.packet, pass); pass.role = RSF_GAME_RENDER_WINDOW; pass.swapchain = chain.Get();
+    frame.services.render_pass(frame.services.user, queue.Get(), &pass, 1);
     if (!submit(slot, ring, present_ready)) { stop("Unity Vulkan present submission failed; the bridge stopped."); return VK_ERROR_DEVICE_LOST; }
     if (SUCCEEDED(chain->Present(0, 0))) ShowWindowAsync(window, SW_SHOWNOACTIVATE);
     auto forwarded = *info; forwarded.waitSemaphoreCount = 1; forwarded.pWaitSemaphores = &present_ready;
@@ -583,7 +594,6 @@ void rsf_uvk_load(IUnityInterfaces* interfaces, int event_id)
 {
     unity = interfaces->Get<IUnityGraphicsVulkanV2>(); base_event = event_id;
     if (!unity) return;
-    instance = unity->Instance();
     UnityVulkanPluginEventConfig config{}; config.renderPassPrecondition = kUnityVulkanRenderPass_EnsureOutside;
     config.graphicsQueueAccess = kUnityVulkanGraphicsQueueAccess_DontCare;
     config.flags = kUnityVulkanEventConfigFlag_SyncWorkerThreads;
@@ -616,7 +626,8 @@ bool rsf_uvk_owns_window(void* candidate)
 }
 bool rsf_uvk_graphics(void** owning_device, void** owning_queue)
 {
-    if (!owning_device || !owning_queue || !rsf_unity_vulkan_ready()) return false;
+    BridgeEntry entry;
+    if (!entry.admitted || !owning_device || !owning_queue || !rsf_unity_vulkan_ready()) return false;
     *owning_device = device.Get(); *owning_queue = queue.Get(); return true;
 }
 bool rsf_uvk_update_window(uint32_t width, uint32_t height)
@@ -638,11 +649,12 @@ bool rsf_uvk_update_window(uint32_t width, uint32_t height)
 }
 bool rsf_uvk_render(int event_id, const rsf_unity_packet& packet, const rsf_game_host_services& services, bool reconfigure)
 {
-    if (!unity || rsf_unity_vulkan_faulted()) return false;
-    host = services;
+    BridgeEntry entry;
+    if (!entry.admitted || !unity || !services.render_pass || rsf_unity_vulkan_faulted()) return false;
+    const rsf_unity_vulkan_frame frame{packet, services};
     const uint32_t kind = event_id == base_event + 1 ? RSF_UNITY_VULKAN_EVENT_WINDOW :
         event_id == base_event + 2 ? RSF_UNITY_VULKAN_EVENT_HUDLESS : RSF_UNITY_VULKAN_EVENT_SR;
-    if (kind == RSF_UNITY_VULKAN_EVENT_WINDOW && !rsf_unity_package_is_editor()) return rsf_unity_vulkan_set_window(&packet) != 0;
+    if (kind == RSF_UNITY_VULKAN_EVENT_WINDOW && !rsf_unity_package_is_editor()) return rsf_unity_vulkan_set_window(&frame) != 0;
     std::array<UnityVulkanImage, 4> textures{};
     void* pointers[] = {packet.color, packet.depth, packet.motion, packet.output};
     for (uint32_t i = 0; i < 4; ++i) {
@@ -651,12 +663,12 @@ bool rsf_uvk_render(int event_id, const rsf_unity_packet& packet, const rsf_game
         if (!unity->AccessTexture(pointers[i], UnityVulkanWholeImage,
             output ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
             VK_PIPELINE_STAGE_TRANSFER_BIT, output ? (VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT) : VK_ACCESS_TRANSFER_READ_BIT,
-            kUnityVulkanResourceAccess_PipelineBarrier, &textures[i])) { log("Unity Vulkan texture access was refused."); return false; }
+            kUnityVulkanResourceAccess_PipelineBarrier, &textures[i])) { log(&services, "Unity Vulkan texture access was refused."); return false; }
     }
     if (!textures[0].image) return false;
     // The event stays outstanding from here until its queue callback finishes.
     uint32_t index = 0;
-    void* address = rsf_unity_vulkan_admit_event(&packet, kind, reconfigure ? 1u : 0u, &index);
+    void* address = rsf_unity_vulkan_admit_event(&frame, kind, reconfigure ? 1u : 0u, &index);
     if (!address) return false;
     event_images[index] = textures;
     unity->AccessQueue(execute_queue, event_id, address, true);
@@ -665,7 +677,8 @@ bool rsf_uvk_render(int event_id, const rsf_unity_packet& packet, const rsf_game
 bool rsf_uvk_drained()
 {
     uint32_t ready = 0;
-    if (!rsf_unity_vulkan_idle(&ready)) return false;
+    BridgeEntry entry{rsf_unity_vulkan_probe_idle(&ready) != 0};
+    if (!entry.admitted) return false;
     return !ready || slots_retired();
 }
 void rsf_uvk_release()
