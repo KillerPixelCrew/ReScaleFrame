@@ -280,6 +280,77 @@ This is a behaviour-preserving port from source review, with no new experiment. 
 `native/vulkan/tests.rs`), Clippy, CTest, editor, exported players, device fixtures and visual
 harness.
 
+## Rust Vulkan creation owner, sixth slice
+
+`native/vulkan/creation.rs` now owns the state and policy `vulkan_creation.cpp` held in globals, as
+a child of the existing Vulkan session (`Vulkan::creation`), not a second owner:
+
+- the underlying resolver and session log the start leaf hands over, the owner instance, the XeSS
+  preparation flag and the XeSS and Win32 interop readiness. The session's configure admission now
+  reads the readiness from this owner directly, and `rsfg_vk_create` reads interop readiness
+  through `rsf_godot_vk_interop_ready` for the presenter host options;
+- the resolver routes: `vkCreateInstance`, `vkGetDeviceProcAddr` and `vkCreateDevice` (which
+  records a non-null instance as the owner) are intercepted, the device-level `vkDestroyDevice`
+  too, and every other name goes unchanged to the underlying resolver or, at device level, to the
+  owner instance's `vkGetDeviceProcAddr`;
+- instance creation: with XeSS prepared, the SDK's instance extensions merged once each and its
+  minimum API version; an SDK refusal ends preparation, and `VK_ERROR_EXTENSION_NOT_PRESENT` or
+  `VK_ERROR_INCOMPATIBLE_DRIVER` retries the engine's request and ends preparation;
+- device creation in the same stage order and with the same retries: XeSS (fallback to the
+  engine's request on an uncloneable chain, a `pEnabledFeatures` beside a `Features2`, a refused
+  clone or SDK query, or a feature or extension refusal), then Win32 interop (both
+  `VK_KHR_external_memory_win32` and `VK_KHR_external_semaphore_win32` listed and timeline
+  semaphores enabled; retried unchanged on refusal), then the Runtime's optional core latency
+  requirements (retried without them on refusal; the created device and the request that made it
+  reported), then the native create;
+- which feature structures the XeSS clone gets before the SDK patches it: a `Features2` (empty, or
+  holding `pEnabledFeatures`), and the individual float16/int8, scalar block layout and integer
+  dot product structures only where neither the structure nor its Vulkan 1.2 or 1.3 aggregate is
+  present;
+- every diagnostic, in the same words and order, and the destroy order (the Runtime stops pacing
+  the device before `vkDestroyDevice`).
+
+`vulkan_creation.cpp` keeps the Vulkan entry points the resolver hands out, which forward to the
+owner with a private per-call record, and thirteen typed leaves in a separate table,
+`rsf_godot_vk_creation_leaves` (version 1, 112 bytes, asserted on both sides): the chain facts
+(the clone's admission without copying, structure presence, timeline semaphores), the XeSS clone
+with its added structures and `Features2` first, request copies for the instance and for each
+device stage, the XeSS instance and device requirement calls, the device extension enumeration,
+the core latency requirement, created and destroyed calls, and the Vulkan create and destroy
+calls. Extension lists are built by the owner and borrowed by the copies for the call. The
+table is separate from `rsf_godot_platform` so the native creation contract test links it with the
+Rust archive and without `runtime.cpp`; `rsf_godot_platform` is unchanged (version 5). The facts
+fields `xess_device_ready` and `interop_device_ready` are now `reserved_creation` and zero. The
+start leaf still picks the underlying resolver (Streamline's dispatch when it resolves
+`vkCreateInstance`, otherwise the system loader's), and the stop leaf still ends preparation
+between the XeSS and SDK shutdowns, both now through the owner. `api.h`, every `rsfg_*` export,
+the Runtime calls, their arguments and their order are unchanged.
+
+Preserved behaviour, including quirks: the owner instance survives a new start; the resolver keeps
+forwarding after stop; a chain with an unknown structure keeps the engine's request and leaves
+XeSS unavailable; the latency stage clones whatever request reaches it, so an SDK-appended
+structure the clone does not know skips the latency requirements for that request.
+
+Local fixes from source review: the C++ read the underlying resolver without a check in the
+device-level resolver, the destroy path and the interop enumeration; these now refuse or skip when
+none is set (not reachable with the pinned engine, which boots once per process). The underlying
+resolver, owner instance and log were plain globals written by the start leaf and by the loader's
+calls; they are now an atomic and a short lock never held across a leaf. A merge that cannot
+allocate returns `VK_ERROR_OUT_OF_HOST_MEMORY` as the entry point's catch did, rather than
+aborting.
+
+Build: the `rsf_godot_rust` archive is now defined before the godot-cpp gate, as the other game
+archives are, so `godot_vulkan_creation_contract` links it; it builds only for a target that links
+it. That native test keeps its cases unchanged and now exercises the Rust owner through the C++
+leaves, including the Runtime's AMD latency negotiation.
+
+This is a behaviour-preserving port from source review, with no new experiment. Checks: rustfmt
+1.11.0 `--edition 2024 --check` (the pinned 1.94.1 toolchain is not installed), `git diff
+--check`, and size and offset assertions written for the new records and table in `platform.rs`
+and `vulkan_creation.cpp`. Not run: native build and link, Cargo tests
+(`native/vulkan/creation/tests.rs`, the updated `native/vulkan/tests.rs` and
+`native/vulkan/sr/tests.rs`), Clippy, CTest (`godot_vulkan_creation_contract`), editor, exported
+players, device fixtures and visual harness.
 ## Remaining Godot ownership slices
 
 1. Vulkan Auto SR and FG resolution (Rule 3). `vulkan.rs` still resolves `Auto` to FSR3 for both,
@@ -289,11 +360,9 @@ harness.
    time; `rsf_fg_default_backend` picks by vendor and would change behaviour. Moving this needs a
    Runtime policy that takes the Vulkan host's servable providers and an adapter fact from the
    packet, which is a behaviour decision outside this behaviour-preserving slice.
-2. `vulkan_creation.cpp`: the creation resolver, device feature and extension requirements, and
-   XeSS/interop readiness.
-3. `effect.cpp`: the compositor probe snapshot and the motion capture classification
+2. `effect.cpp`: the compositor probe snapshot and the motion capture classification
    (unwritten, moving and non-finite pixels). The GPU readback stays a godot-cpp leaf.
-4. The engine module `modules/rescaleframe` (bridge, graph, motion, D3D12 and Vulkan drivers) is
+3. The engine module `modules/rescaleframe` (bridge, graph, motion, D3D12 and Vulkan drivers) is
    compiled into the Godot engine by SCons against engine headers and cannot link this archive. It
    still holds CPU frame identity and markers, the primary viewport, render-scale policy (the
    per-quality scale table and scaling mode), history reset heuristics, camera matrices, motion
@@ -305,9 +374,9 @@ harness.
    `RSFGodot::input_event` with `INPUT_UNFRAMED` outside a frame. The window handle passed to
    `rsfg_vk_window` and each Vulkan surface's `rescaleframe_window` for the present marker are
    engine module facts too.
-5. The addon (`settings.gd`, `controller.gd`, `csharp/ReScaleFrame.cs`) keeps its own option
+4. The addon (`settings.gd`, `controller.gd`, `csharp/ReScaleFrame.cs`) keeps its own option
    defaults for the Inspector resource.
-6. D3D12 residue in the `runtime.cpp` leaves: the fixed SR context inputs (setup ABI 1 planning,
+5. D3D12 residue in the `runtime.cpp` leaves: the fixed SR context inputs (setup ABI 1 planning,
    inverted depth, the custom DLSS engine identity and its flag) and the capture record mapping
    from the pass (view, reset flag, extents, frame time) could move into the owner's request
    records.
@@ -316,8 +385,10 @@ harness.
 
 ## Build requirements
 
-- The Rust archive builds through `rsf_add_rust_static` only when `RSF_GODOT_CPP_DIR` configures
-  the Godot target; `eng/build-godot.ps1` builds `--target rsf_godot`, which now also runs
+- The Rust archive is defined through `rsf_add_rust_static` in every configuration and built for a
+  target that links it: `rsf_godot` when `RSF_GODOT_CPP_DIR` configures the Godot target, and the
+  `godot_vulkan_creation_contract` test when the Vulkan headers are present.
+  `eng/build-godot.ps1` builds `--target rsf_godot`, which also runs
   `cargo build --locked -p rsf-godot`. Cargo is already required by the root build.
 - `rsf_godot` now carries a second Rust archive beside the orchestrator's, the same unverified
   multi-archive link as Fallout 4 and Minecraft. It has not been linked.

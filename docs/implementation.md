@@ -168,6 +168,12 @@ window procedure so subsequent messages can still forward. The
 engine's input facts and Runtime pacing calls keep their existing
 contracts. Shutdown with an intervening subclass still needs live verification.
 
+Godot's Vulkan resolver and device creation policy are Rust-owned.
+The existing path still tries XeSS, Win32 interop and optional Runtime
+latency requirements before native creation. Readiness and extension
+merging use the same session owner. Native leaves retain the Vulkan
+types and process SDK requests. Build and device verification remain open.
+
 Godot's D3D12 SR context, recording slots and submission ledger are Rust-owned.
 Pending recordings keep their slot and context until the engine reports a
 submission and the queue accepts a fence. A later submission on that queue

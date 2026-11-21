@@ -31,7 +31,9 @@ struct rsf_fsr4vk;
 // (native/vulkan.rs), which also keeps the engine's primary window, and the SR contexts, their
 // retirement, creation, plan, evaluate and fallback sequencing by its SR context owner
 // (native/vulkan/sr.rs). The CPU events and present markers route through native/window.rs and
-// the leaves in runtime.cpp. This file keeps the guard, the Vulkan,
+// the leaves in runtime.cpp. The creation resolver's routes, requirements and XeSS and interop
+// readiness are owned by native/vulkan/creation.rs, with its leaves in vulkan_creation.cpp; the
+// start leaf below still picks its underlying resolver. This file keeps the guard, the Vulkan,
 // Streamline, XeSS, FidelityFX, presenter, capture and SR provider calls; under the guard it reads
 // the session through rsf_godot_vk_view_get and reports each transition. Lock order: guard, then
 // the Rust state.
@@ -269,8 +271,6 @@ void leaf_release(uint64_t session_id) try {
 } catch (...) {}
 void leaf_facts(rsf_godot_vk_facts* facts) try {
     *facts = {};
-    facts->xess_device_ready = xess_device_ready() ? 1u : 0u;
-    facts->interop_device_ready = interop_device_ready() ? 1u : 0u;
     facts->graph_handoff = graph_handoff_available ? 1u : 0u;
 #if defined(RSF_VULKAN_FSR4_ENABLED)
     facts->fsr4_sr_compiled = 1;

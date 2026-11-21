@@ -2,14 +2,16 @@
 //! Godot 4.7.2 native integration owner linked into `ReScaleFrame.Godot.Native.dll`. It owns the
 //! Runtime control, settings and D3D12 session state (`control.rs`), the D3D12 SR context and
 //! submission owner (`d3d12.rs`), the Vulkan session state (`vulkan.rs`) with its SR context
-//! owner (`vulkan/sr.rs`), the input window, its procedure and the input session (`window.rs`)
+//! owner (`vulkan/sr.rs`) and device creation owner (`vulkan/creation.rs`), the input window, its procedure and the input session (`window.rs`)
 //! and the `ReScaleFrameRuntime` option schema and renderer admission (`extension.rs`).
 //!
 //! The `rsfg_*` exports in `api.h`, the GDExtension entry and the godot-cpp classes stay C++.
 //! `runtime.cpp` and `vulkan.cpp` forward to these entry points and lend their leaves through
 //! `rsf_godot_platform` (`godot_platform.h`, mirrored in `platform.rs`): the D3D12 device, fence,
 //! SR context, FG, presentation and capture calls, DXGI, Win32 window calls, the linked Runtime
-//! and the Vulkan owner's guard, device, provider, presenter and SDK calls. No second Runtime is
+//! and the Vulkan owner's guard, device, provider, presenter and SDK calls. `vulkan_creation.cpp`
+//! lends its Vulkan-typed creation leaves with each creation call (`rsf_godot_vk_creation_leaves`).
+//! No second Runtime is
 //! loaded and no vendor, pacing or presentation policy is added here.
 mod control;
 mod d3d12;
@@ -21,13 +23,17 @@ mod window;
 use control::Control;
 use platform::{
     ABI_VERSION, EngineServices, OptionField, OptionValue, Platform, SETTINGS_ABI_VERSION,
-    Settings, Setup, Status, VkFgPass, VkPresentFacts, VkSrPass, VkView,
+    Settings, Setup, Status, VkCreationLeaves, VkDeviceCall, VkFgPass, VkFunction, VkInstanceCall,
+    VkPresentFacts, VkProc, VkSrPass, VkView,
 };
-use rsf_game_sys::{rsf_game_cpu_event, rsf_game_render_pass};
+use rsf_game_sys::{rsf_game_cpu_event, rsf_game_log_fn, rsf_game_render_pass};
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::sync::LazyLock;
 
 static CONTROL: LazyLock<Control> = LazyLock::new(Control::new);
+
+/// `VK_ERROR_INITIALIZATION_FAILED`, for a creation call without its table or record.
+const VK_ERROR_INITIALIZATION_FAILED: i32 = -3;
 
 /// A size- and ABI-checked record: `struct_size` and `abi_version` lead every one of them.
 ///
@@ -386,6 +392,105 @@ unsafe extern "C" fn rsf_godot_vk_sr_contexts(
         if !fsr4_context.is_null() {
             fsr4_context.write(fsr4);
         }
+    }
+}
+
+// The Vulkan creation owner (vulkan/creation.rs), reached from vulkan_creation.cpp without the
+// guard: the start and stop leaves and the resolver's entry points on the engine's thread.
+
+/// The start leaf's underlying resolver, XeSS preparation and session log. Nonzero when the
+/// resolver is installed.
+#[unsafe(no_mangle)]
+extern "C" fn rsf_godot_vk_creation_begin(
+    underlying: Option<VkProc>,
+    xess: u32,
+    log: rsf_game_log_fn,
+    log_user: *mut c_void,
+) -> c_int {
+    CONTROL
+        .vulkan
+        .creation()
+        .begin(underlying, xess != 0, log, log_user)
+        .into()
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_godot_vk_creation_stop() {
+    CONTROL.vulkan.creation().stop();
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_godot_vk_xess_ready() -> c_int {
+    CONTROL.vulkan.creation().xess_ready().into()
+}
+
+/// Read by `rsfg_vk_create` for the presenter host options.
+#[unsafe(no_mangle)]
+extern "C" fn rsf_godot_vk_interop_ready() -> c_int {
+    CONTROL.vulkan.creation().interop_ready().into()
+}
+
+/// # Safety
+/// `name` is null or NUL-terminated for the call; `forwarded` is null or writable.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_godot_vk_creation_resolve(
+    scope: u32,
+    object: *mut c_void,
+    name: *const c_char,
+    forwarded: *mut Option<VkFunction>,
+) -> u32 {
+    // SAFETY: the caller's guarantee.
+    let (route, function) = unsafe { CONTROL.vulkan.creation().resolve(scope, object, name) };
+    if !forwarded.is_null() {
+        // SAFETY: the caller's guarantee.
+        unsafe { forwarded.write(function) };
+    }
+    route
+}
+
+/// # Safety
+/// `leaves` is null or the creation table; `call` is null or a readable
+/// `rsf_godot_vk_instance_call` whose record, request, allocator and output are live for the call.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_godot_vk_create_instance(
+    leaves: *const VkCreationLeaves,
+    call: *const VkInstanceCall,
+) -> i32 {
+    // SAFETY: the caller's guarantee.
+    match unsafe { (platform::creation_leaves(leaves), call.as_ref()) } {
+        (Some(leaves), Some(call)) => CONTROL.vulkan.creation().create_instance(leaves, call),
+        _ => VK_ERROR_INITIALIZATION_FAILED,
+    }
+}
+
+/// # Safety
+/// As `rsf_godot_vk_create_instance`, for an `rsf_godot_vk_device_call`.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_godot_vk_create_device(
+    leaves: *const VkCreationLeaves,
+    call: *const VkDeviceCall,
+) -> i32 {
+    // SAFETY: the caller's guarantee.
+    match unsafe { (platform::creation_leaves(leaves), call.as_ref()) } {
+        (Some(leaves), Some(call)) => CONTROL.vulkan.creation().create_device(leaves, call),
+        _ => VK_ERROR_INITIALIZATION_FAILED,
+    }
+}
+
+/// # Safety
+/// `leaves` is null or the creation table; `device` and `allocator` are the engine's arguments.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_godot_vk_destroy_device(
+    leaves: *const VkCreationLeaves,
+    device: *mut c_void,
+    allocator: *const c_void,
+) {
+    // SAFETY: the caller's guarantee.
+    if let Some(leaves) = unsafe { platform::creation_leaves(leaves) } {
+        CONTROL
+            .vulkan
+            .creation()
+            .destroy_device(leaves, device, allocator);
     }
 }
 

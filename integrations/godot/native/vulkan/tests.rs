@@ -23,15 +23,15 @@ fn booted() -> Vulkan {
     let vulkan = Vulkan::new();
     assert_eq!(vulkan.boot(&fake::LEAVES, &setup(c"C:/game/runtime")), 1);
     vulkan.report_window(ptr::without_provenance_mut(WINDOW));
+    vulkan.creation().report_ready(true, true);
     fake::take_calls();
     vulkan
 }
 
-/// Every device, provider and presenter fact present.
+/// Every provider and presenter fact present. Device readiness is the creation owner's.
 fn ready() -> VkFacts {
     VkFacts {
-        xess_device_ready: 1,
-        interop_device_ready: 1,
+        reserved_creation: [0; 2],
         graph_handoff: 1,
         fsr4_sr_compiled: 1,
         fsr4_fg_compiled: 1,
@@ -152,14 +152,7 @@ fn an_unbooted_session_refuses_configuration() {
 #[test]
 fn device_and_provider_refusals_keep_the_request() {
     let vulkan = booted();
-    let refusals: [(VkFacts, Settings); 11] = [
-        (
-            VkFacts {
-                xess_device_ready: 0,
-                ..ready()
-            },
-            settings(|s| s.sr_backend = SR_XESS),
-        ),
+    let refusals: [(VkFacts, Settings); 8] = [
         (
             VkFacts {
                 fsr4_sr_compiled: 0,
@@ -170,13 +163,6 @@ fn device_and_provider_refusals_keep_the_request() {
         (
             VkFacts {
                 graph_handoff: 0,
-                ..ready()
-            },
-            settings(|s| s.sr_backend = SR_FSR4),
-        ),
-        (
-            VkFacts {
-                interop_device_ready: 0,
                 ..ready()
             },
             settings(|s| s.sr_backend = SR_FSR4),
@@ -211,13 +197,6 @@ fn device_and_provider_refusals_keep_the_request() {
         ),
         (
             VkFacts {
-                interop_device_ready: 0,
-                ..ready()
-            },
-            settings(|s| s.fg_backend = FG_XESS),
-        ),
-        (
-            VkFacts {
                 presenter: 0,
                 ..ready()
             },
@@ -237,13 +216,32 @@ fn device_and_provider_refusals_keep_the_request() {
         assert_eq!(vulkan.settings().0, default_settings());
         assert!(!fake::take_calls().contains(&"latency_options"));
     }
-    assert_eq!(vulkan.view().0.generation, 1);
+    // XeSS SR needs the XeSS device, FSR4 SR and XeSS FG the Win32 interop device, as the
+    // creation owner last created them.
+    let unready = [
+        ((false, true), settings(|s| s.sr_backend = SR_XESS)),
+        ((true, false), settings(|s| s.sr_backend = SR_FSR4)),
+        ((true, false), settings(|s| s.fg_backend = FG_XESS)),
+    ];
+    fake::VK_FACTS.set(ready());
+    for ((xess, interop), request) in unready {
+        vulkan.creation().report_ready(xess, interop);
+        assert_eq!(vulkan.configure(&fake::LEAVES, &request), 0, "{request:?}");
+        assert_eq!(vulkan.settings().0, default_settings());
+        assert!(!fake::take_calls().contains(&"latency_options"));
+        vulkan.creation().report_ready(true, true);
+        assert_eq!(vulkan.configure(&fake::LEAVES, &request), 1, "{request:?}");
+        assert_eq!(vulkan.configure(&fake::LEAVES, &default_settings()), 1);
+        fake::take_calls();
+    }
+    assert_eq!(vulkan.view().0.generation, 5);
 }
 
 #[test]
 fn interop_fg_needs_the_primary_window_reported_since_the_start() {
     let vulkan = Vulkan::new();
     assert_eq!(vulkan.boot(&fake::LEAVES, &setup(c"C:/game/runtime")), 1);
+    vulkan.creation().report_ready(true, true);
     fake::VK_FACTS.set(ready());
     fake::VK_PROBE.set(1);
     let fsr4 = settings(|s| s.fg_backend = FG_FSR4);

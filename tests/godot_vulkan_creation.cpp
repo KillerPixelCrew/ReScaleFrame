@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-// Synthetic Vulkan creation boundary. No loader, SDK DLL or GPU is exercised.
+// Synthetic Vulkan creation boundary: the Rust creation owner (rsf-godot, vulkan/creation.rs)
+// through the Vulkan-typed leaves of vulkan_creation.cpp. No loader, SDK DLL or GPU is exercised.
 #include "../integrations/godot/native/vulkan_creation.cpp"
 #include <cstdio>
 #include <cstdlib>
