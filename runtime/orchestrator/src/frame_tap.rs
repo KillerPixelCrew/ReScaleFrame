@@ -17,7 +17,7 @@ use std::ptr::{null, null_mut};
 use std::slice;
 use std::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release, SeqCst};
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicUsize};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
 
 type Handle = *mut c_void;
 type Platform = rsf_frame_tap_platform;
@@ -150,43 +150,102 @@ impl Drop for Reentry {
 
 // Hooks on the observed context that may read the plan or the render-thread state hold an
 // admission, counted as the overlay cursor and observer Present hooks count their calls. set_plan
-// and uninstall clear their flag and then wait until only their own thread holds admissions, so a
-// hook on another thread can no longer read a plan being overwritten, forward a substitute the
-// caller is about to release, or borrow a shadow being retired. Their own thread's admissions
-// belong to a callback's caller further up the stack: same-thread reentry keeps working, its
-// retirement waits for the outermost admission to end, and readers never hold the plan across a
-// callback.
+// and uninstall close a gate, which keeps new hooks out, and drain the admitted ones before they
+// change anything, so no hook on another thread reads a plan being overwritten, forwards a
+// substitute the caller is about to release, or borrows a shadow being retired.
+//
+// A control call made from a tap callback already holds an admission further up its own stack.
+// It never waits: it takes the control lock only if it is free and proceeds only if no other
+// thread is admitted, and is otherwise refused before any change. Its own admissions stay valid:
+// readers never hold the plan across a callback, and its retirement waits for the outermost
+// admission to end.
 static ADMITTED: AtomicU32 = AtomicU32::new(0);
+// Closed while a control entry drains and changes state. Nested calls of an admitted hook still
+// pass, since the entry may be waiting for that very hook.
+static GATE_CLOSED: AtomicBool = AtomicBool::new(false);
 // The render state is retired by whoever ends the last admission after an uninstall. The lock
 // keeps an install from seeding the shadow while it is being retired.
 static RETIRE_PENDING: AtomicBool = AtomicBool::new(false);
 static RETIRING: Mutex<()> = Mutex::new(());
-// Serialises install, uninstall and set_plan, which wait for admissions. Hooks never take it, so a
-// wait cannot block a hook it is waiting for.
+// Serialises install, uninstall and set_plan. Hooks never take it, and an admitted caller never
+// waits for it.
 static CONTROL: Mutex<()> = Mutex::new(());
 
 thread_local! {
     static OWN: Cell<u32> = const { Cell::new(0) };
 }
 
-fn control() -> MutexGuard<'static, ()> {
-    CONTROL.lock().unwrap_or_else(PoisonError::into_inner)
+fn admitted_here() -> bool {
+    OWN.with(Cell::get) != 0
+}
+
+// The control lock, or none for a caller inside a hook while another control call holds it: the
+// holder may be draining that caller's own admission.
+fn control() -> Option<MutexGuard<'static, ()>> {
+    if !admitted_here() {
+        return Some(CONTROL.lock().unwrap_or_else(PoisonError::into_inner));
+    }
+    match CONTROL.try_lock() {
+        Ok(lock) => Some(lock),
+        Err(TryLockError::Poisoned(error)) => Some(error.into_inner()),
+        Err(TryLockError::WouldBlock) => None,
+    }
 }
 
 fn retiring() -> MutexGuard<'static, ()> {
     RETIRING.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+// A control entry's exclusive section, with the gate closed until it ends.
+struct Writer {
+    _lock: MutexGuard<'static, ()>,
+}
+
+impl Drop for Writer {
+    fn drop(&mut self) {
+        GATE_CLOSED.store(false, SeqCst);
+    }
+}
+
+// Close the gate and drain the admitted hooks. An ordinary caller waits for them. A caller inside a
+// hook is refused when another thread is admitted; the gate reopens and nothing has changed.
+fn drain(lock: MutexGuard<'static, ()>) -> Option<Writer> {
+    GATE_CLOSED.store(true, SeqCst);
+    let writer = Writer { _lock: lock };
+    let own = OWN.with(Cell::get);
+    if own != 0 {
+        return (ADMITTED.load(SeqCst) == own).then_some(writer);
+    }
+    while ADMITTED.load(SeqCst) != 0 {
+        std::thread::yield_now();
+    }
+    Some(writer)
+}
+
 struct Admission;
 
 impl Admission {
-    // Admitted only for the observed context while installed. Counted before the flag is read, and
-    // the writers clear the flag before reading the count, so one of the two always sees the other.
+    // Admitted only for the observed context while installed. Counted before the gate is read, and
+    // a writer closes the gate before reading the count, so one of the two always sees the other.
     fn enter(context: Handle) -> Option<Self> {
         if !observed(context) {
             return None;
         }
-        ADMITTED.fetch_add(1, SeqCst);
+        if admitted_here() {
+            ADMITTED.fetch_add(1, SeqCst);
+        } else {
+            loop {
+                while GATE_CLOSED.load(SeqCst) {
+                    std::thread::yield_now();
+                }
+                ADMITTED.fetch_add(1, SeqCst);
+                if !GATE_CLOSED.load(SeqCst) {
+                    break;
+                }
+                // A writer that drains to zero retires on its own, so this never has to.
+                ADMITTED.fetch_sub(1, SeqCst);
+            }
+        }
         OWN.with(|own| own.set(own.get() + 1));
         let admission = Self;
         TAP.installed.load(SeqCst).then_some(admission)
@@ -205,14 +264,6 @@ impl Drop for Admission {
         if ADMITTED.fetch_sub(1, SeqCst) == 1 && RETIRE_PENDING.load(SeqCst) {
             retire_render();
         }
-    }
-}
-
-// Wait until every admission left belongs to this thread.
-fn wait_for_admissions() {
-    let own = OWN.with(Cell::get);
-    while ADMITTED.load(SeqCst) > own {
-        std::thread::yield_now();
     }
 }
 
@@ -1977,7 +2028,11 @@ unsafe extern "C" fn rsf_core_frame_tap_install(
         return INVALID;
     }
 
-    let lock = control();
+    // A caller inside a hook belongs to a session that is installed or still retiring, so a busy
+    // lock is the same answer as the check below.
+    let Some(lock) = control() else {
+        return ALREADY_INSTALLED;
+    };
     let retiring = retiring();
     // A session retired from inside one of its own callbacks still owns the shadow until that
     // hook returns.
@@ -2042,15 +2097,22 @@ unsafe extern "C" fn rsf_core_frame_tap_install(
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_core_frame_tap_uninstall(platform: &Platform) -> i32 {
-    TAP.research_draw.store(null_mut(), Release);
-    TAP.research_before.store(null_mut(), Release);
-    TAP.research_compute.store(null_mut(), Release);
-    let _lock = control();
+    // Everything that can refuse comes before the first change. A caller inside a hook is refused
+    // with INVALID_ARGUMENT when it would have to wait for another thread.
+    let Some(lock) = control() else {
+        return INVALID;
+    };
     if !TAP.installed.load(SeqCst) {
         return NOT_INSTALLED;
     }
-    // Cleared before the vtable goes back, so a call inside a hook stops substituting rather than
-    // reaching for views the caller is about to release.
+    // No hook on another thread is admitted from here on: none is using the shadow, a substitute
+    // or a biased clone, and none starts until the gate reopens on a session that is gone.
+    let Some(_writer) = drain(lock) else {
+        return INVALID;
+    };
+    TAP.research_draw.store(null_mut(), Release);
+    TAP.research_before.store(null_mut(), Release);
+    TAP.research_compute.store(null_mut(), Release);
     TAP.plan_active.store(false, SeqCst);
     TAP.divert.armed.store(false, Relaxed);
     TAP.constant_override.store(null_mut(), Relaxed);
@@ -2067,10 +2129,7 @@ extern "C" fn rsf_core_frame_tap_uninstall(platform: &Platform) -> i32 {
     TAP.divert.layer_target.store(null_mut(), Relaxed);
     TAP.divert.layer_texture.store(null_mut(), Relaxed);
     TAP.divert.verdict.store(null_mut(), Relaxed);
-    // Hooks still admitted on other threads may be using the shadow, a substitute or a biased
-    // clone. Nothing they hold is released until they have left.
     RETIRE_PENDING.store(true, SeqCst);
-    wait_for_admissions();
     {
         let mut samplers = sampler_state();
         samplers.biased.clear();
@@ -2083,7 +2142,7 @@ extern "C" fn rsf_core_frame_tap_uninstall(platform: &Platform) -> i32 {
     // The watches name the caller's textures; a later install must not match a past session's.
     // Under the lock rsf_frame_tap_watch_target checks `installed` with.
     {
-        let _lock = held();
+        let _held = held();
         for (watch, budget) in TAP.watch.iter().zip(&TAP.watch_budget) {
             watch.store(null_mut(), Relaxed);
             budget.store(0, Relaxed);
@@ -2094,7 +2153,7 @@ extern "C" fn rsf_core_frame_tap_uninstall(platform: &Platform) -> i32 {
     close_gates();
     // From inside a callback this thread's own hook is still on the stack and retires the shadow
     // when its admission ends.
-    if OWN.with(Cell::get) == 0 {
+    if !admitted_here() {
         retire_render();
     }
     OK
@@ -2146,7 +2205,12 @@ extern "C" fn rsf_core_frame_tap_set_sampler_bias(platform: &Platform, bias: f32
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_frame_tap_set_plan(plan: *const rsf_frame_tap_plan) -> i32 {
-    let _lock = control();
+    // Everything that can refuse comes before the first change, so a refused call keeps the old
+    // plan. A caller inside a hook is refused with INVALID_ARGUMENT when it would have to wait for
+    // another thread.
+    let Some(lock) = control() else {
+        return INVALID;
+    };
     if !TAP.installed.load(SeqCst) {
         return NOT_INSTALLED;
     }
@@ -2172,11 +2236,13 @@ unsafe extern "C" fn rsf_core_frame_tap_set_plan(plan: *const rsf_frame_tap_plan
         }
         Some(*plan)
     };
-    // Cleared first, then every hook that saw the old plan on another thread has forwarded and
-    // left, so nothing reads the plan while it is overwritten and the caller may release the old
-    // views when this returns.
+    // Every hook that saw the old plan on another thread has forwarded and left, and none starts
+    // until the gate reopens, so nothing reads the plan while it is overwritten and the caller may
+    // release the old views when this returns.
+    let Some(_writer) = drain(lock) else {
+        return INVALID;
+    };
     TAP.plan_active.store(false, SeqCst);
-    wait_for_admissions();
     unsafe { *TAP.plan.get() = replacement.unwrap_or(ZERO_PLAN) };
     TAP.plan_generation.fetch_add(1, SeqCst);
     close_gates();

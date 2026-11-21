@@ -223,8 +223,9 @@ rsf_frame_tap_result rsf_core_frame_tap_get_status(rsf_frame_tap_status* status)
 /* Hook entries. `enter` re-applies a rewritten vtable and returns the hook's current original;
    `leave` re-applies it after a call that may have rewritten it.
 
-   A hook that reads the plan or the render thread's shadow holds an admission, and set_plan and
-   uninstall wait until only their own thread holds any. Entries whose decision the detour
+   A hook that reads the plan or the render thread's shadow holds an admission. set_plan and
+   uninstall close a gate to new ones and drain the rest, or refuse from inside a callback when
+   that would mean waiting for another thread. Entries whose decision the detour
    forwards (clear, copy, samplers) set `*admitted` when they hold one, and the detour
    passes it to `leave` after forwarding, so a substitute or clone cannot outlive a clear. */
 void* rsf_core_frame_tap_enter(rsf_frame_tap_platform_ref, uint32_t hook);

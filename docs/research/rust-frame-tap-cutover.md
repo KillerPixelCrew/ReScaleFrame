@@ -67,9 +67,10 @@ the caller then released, and uninstall cleared the render-thread shadow while a
 still borrow it. The follow-up after merging `744be82` uses the counted-call pattern of
 `overlay_cursor_hooks.rs` and the observer's Present calls:
 
-- Hooks on the observed context take an admission: a SeqCst count raised before `installed` or
-  `plan_active` is read. set_plan and uninstall clear their flag first, then wait until only their
-  own thread holds admissions, so one side always sees the other.
+- Hooks on the observed context take an admission: a SeqCst count raised before `installed` and
+  the writer gate are read. set_plan and uninstall close the gate, which holds new hooks at entry,
+  and drain the admitted ones before their first change, so one side always sees the other and the
+  drain cannot be outrun by new hooks. Nested calls of an admitted hook pass a closed gate.
 - The admission spans the game's forwarded call. Where the detour forwards a Rust decision (clear,
   copy, samplers), the entry hands its admission to the detour's `leave`.
 - Same-thread reentry stays possible. Readers copy what they need of the plan instead of holding it
@@ -78,6 +79,12 @@ still borrow it. The follow-up after merging `744be82` uses the counted-call pat
   install refuses until it has.
 - install, uninstall and set_plan serialise on a lock hooks never take. The view-constant lock is
   never held while waiting.
+- A control call from inside a tap callback never waits. It takes the lock only if free and
+  proceeds only if no other thread is admitted; otherwise set_plan and uninstall return
+  `RSF_FRAME_TAP_ERROR_INVALID_ARGUMENT` and install `RSF_FRAME_TAP_ERROR_ALREADY_INSTALLED` (an
+  admitted caller's session is installed or still retiring). Validation, the lock, the installed
+  check and the drain all precede the first change, so a refusal keeps the old plan and session.
+  `frame_tap.h` states this for set_plan and uninstall.
 
 The bridge (`loader/proxy/src/dlss_bridge.c`) calls set and clear plan (`apply_tail`,
 `stop_reinsert`, `watch_for_stalled_plan`) and uninstall (`drain_shutdown`) from its Present
@@ -89,8 +96,9 @@ around `rsf_promote_finish` without touching the plan. That path never waits.
 - Source review, `cargo fmt` and bindgen 0.72.1 only. The user owns building and every test: the
   frame tap, constant override, scene promotion and AC7 capture fixtures, and a Windows game run
   for the vtable refresh.
-- The wait spins with `yield_now`. A callback that calls set_plan, install or uninstall while
-  another thread is in one of them deadlocks, as no caller does today.
+- The drain and the closed gate spin with `yield_now`; hooks on other threads stall at entry while
+  a writer drains. A hook entering on another thread at the instant an admitted caller closes the
+  gate can make that caller refuse.
 - set_divert, set_candidates, the watches and the constant callbacks keep their atomic publication
   without a wait. A divert layer cleared mid-draw on another thread is still the caller's to keep
   alive, as `frame_tap.h` states.
