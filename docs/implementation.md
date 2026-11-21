@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now owns the shared D3D11 motion decoder's resources, parameter
+admission, constant packing and two-entry source view cache. It reads
+only the legacy prefix when the caller supplies a short parameter
+record, and a failed view creation leaves the selected cache entry
+intact. The native dispatch keeps the full context save and restore.
+Source review confirmed the decode HLSL and public C headers are
+unchanged. Build, regression and device validation remain open.
+
 Rust now owns the D3D11 overlay renderer, including pipeline leases,
 atlas replacement, geometry buffers and draw admission. D3D11 and D3D12
 share atlas bounds and actual index checks. The D3D11 bridge rejects
