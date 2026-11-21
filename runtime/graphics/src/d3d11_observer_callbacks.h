@@ -18,8 +18,6 @@ struct rsf_observer11_callbacks {
 };
 
 extern "C" {
-int32_t rsf_core_observer11_validate(const rsf_observer_options*);
-void rsf_core_observer11_set_options(const rsf_observer_options*, const rsf_observer11_callbacks*);
 int32_t rsf_core_observer11_logging(void);
 void rsf_core_observer11_log(const char*);
 void rsf_core_observer11_texture_created(void* device, void* texture, const rsf_observer11_texture_facts*);

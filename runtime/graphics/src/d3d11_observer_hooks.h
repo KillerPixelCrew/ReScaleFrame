@@ -9,6 +9,9 @@ enum {
 };
 
 struct rsf_observer11_slot { void** address; void* hook; };
+struct rsf_observer_options;
+struct rsf_observer11_callbacks;
+using RsfObserver11Probe = int32_t (*)(void* user, rsf_observer11_slot*, uint32_t* has_present1);
 struct rsf_observer11_hook_ops {
     void* (*read)(void** address);
     int32_t (*replace)(void** address, void* expected, void* replacement);
@@ -17,9 +20,8 @@ struct rsf_observer11_hook_ops {
 };
 
 extern "C" {
-int32_t rsf_core_observer11_can_install(void);
-int32_t rsf_core_observer11_install_hooks(const rsf_observer11_slot*, uint32_t has_present1,
-    void* user, const rsf_observer11_hook_ops*);
+int32_t rsf_core_observer11_install(const rsf_observer_options*, const rsf_observer11_callbacks*,
+    void* user, RsfObserver11Probe, const rsf_observer11_hook_ops*);
 int32_t rsf_core_observer11_uninstall_hooks(const rsf_observer11_hook_ops*);
 int32_t rsf_core_observer11_installed(void);
 void* rsf_core_observer11_original(size_t slot);

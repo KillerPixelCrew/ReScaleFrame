@@ -4,6 +4,13 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now serializes D3D11 observer install and uninstall across
+vtable probing, callback registration and hook retirement. The native
+probe still supplies the same slots. Busy or reentrant lifecycle
+requests return the existing not-ready result. Creation callbacks
+stay serialized without holding the registration lock, and teardown
+waits for their capture updates. Nested notifications are skipped.
+
 Rust now owns the Streamline SDK log registrations used by legacy SR
 and the D3D12 host. The D3D12 callback no longer dereferences the
 native host. Teardown drains the listener before unloading the

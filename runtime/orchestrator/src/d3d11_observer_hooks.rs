@@ -1,16 +1,19 @@
 // SPDX-License-Identifier: MIT
+use crate::d3d11_observer_abi::rsf_observer_options as Options;
+use crate::d3d11_observer_callbacks::Callbacks;
 use crate::d3d11_observer_present::{present_calls, rsf_core_observer11_replace_size};
 use crate::{d3d11_observer_callbacks, d3d11_observer_capture};
 use std::ffi::c_void;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard, TryLockError};
 
 type Handle = *mut c_void;
 const TEXTURE: usize = 0;
 const BUFFER: usize = 1;
 const PRESENT: usize = 2;
 const LAYOUT: usize = 3;
+const STAGE_BASE: usize = 4;
 const SLOT_COUNT: usize = 11;
 const OK: i32 = 0;
 const ALREADY_INSTALLED: i32 = -3;
@@ -23,6 +26,12 @@ struct Slot {
     address: *mut Handle,
     hook: Handle,
 }
+
+const EMPTY_SLOT: Slot = Slot {
+    address: null_mut(),
+    hook: null_mut(),
+};
+type Probe = unsafe extern "C" fn(Handle, &mut [Slot; SLOT_COUNT], &mut u32) -> i32;
 
 #[repr(C)]
 struct Platform {
@@ -81,8 +90,15 @@ static ORIGINALS: [AtomicPtr<c_void>; SLOT_COUNT] =
     [const { AtomicPtr::new(null_mut()) }; SLOT_COUNT];
 static ROUTES: [Route; 2] = [const { Route::new() }; 2];
 
-fn lock() -> MutexGuard<'static, Hooks> {
-    HOOKS.lock().unwrap_or_else(PoisonError::into_inner)
+fn lifecycle() -> Option<MutexGuard<'static, Hooks>> {
+    if d3d11_observer_callbacks::in_creation_callback() {
+        return None;
+    }
+    match HOOKS.try_lock() {
+        Ok(state) => Some(state),
+        Err(TryLockError::Poisoned(error)) => Some(error.into_inner()),
+        Err(TryLockError::WouldBlock) => None,
+    }
 }
 
 impl Hooks {
@@ -135,61 +151,86 @@ impl Hooks {
         }
         !self.has_patches()
     }
-}
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_observer11_can_install() -> i32 {
-    let state = lock();
-    if state.has_patches() {
-        ALREADY_INSTALLED
-    } else {
+    fn install(
+        &mut self,
+        slots: &[Slot; SLOT_COUNT],
+        has_present1: u32,
+        user: Handle,
+        platform: &Platform,
+    ) -> i32 {
+        let required = self.patch(platform, TEXTURE, slots[TEXTURE])
+            && (slots[BUFFER].address.is_null() || self.patch(platform, BUFFER, slots[BUFFER]))
+            && (unsafe { (platform.detour)(user, 0) } != 0
+                || (ROUTES[0].target.load(Ordering::Relaxed).is_null()
+                    && self.patch(platform, PRESENT, slots[PRESENT])));
+        if !required {
+            if self.retire(platform) {
+                d3d11_observer_capture::clear();
+            }
+            return PATCH_FAILED;
+        }
+        for (index, &slot) in slots.iter().enumerate().skip(LAYOUT) {
+            self.patch(platform, index, slot);
+        }
+        if has_present1 != 0 {
+            unsafe { (platform.detour)(user, 1) };
+        }
+        ACTIVE.store(true, Ordering::Release);
         OK
     }
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_observer11_install_hooks(
-    slots: &[Slot; SLOT_COUNT],
-    has_present1: u32,
+unsafe extern "C" fn rsf_core_observer11_install(
+    options: *const Options,
+    callbacks: &'static Callbacks,
     user: Handle,
+    probe: Probe,
     platform: &Platform,
 ) -> i32 {
-    let mut state = lock();
+    let validated = unsafe { d3d11_observer_callbacks::validate(options) };
+    if validated != OK {
+        return validated;
+    }
+    let Some(mut state) = lifecycle() else {
+        return NOT_READY;
+    };
     if state.has_patches() {
         return ALREADY_INSTALLED;
     }
-    let required = state.patch(platform, TEXTURE, slots[TEXTURE])
-        && (slots[BUFFER].address.is_null() || state.patch(platform, BUFFER, slots[BUFFER]))
-        && (unsafe { (platform.detour)(user, 0) } != 0
-            || (ROUTES[0].target.load(Ordering::Relaxed).is_null()
-                && state.patch(platform, PRESENT, slots[PRESENT])));
-    if !required {
-        if state.retire(platform) {
-            drop(state);
-            d3d11_observer_capture::clear();
-        }
-        return PATCH_FAILED;
+
+    let mut slots = [EMPTY_SLOT; SLOT_COUNT];
+    let mut has_present1 = 0;
+    let result = unsafe { probe(user, &mut slots, &mut has_present1) };
+    if result != OK {
+        return result;
     }
-    for (index, &slot) in slots.iter().enumerate().skip(LAYOUT) {
-        state.patch(platform, index, slot);
+    let options = unsafe { &*options };
+    if options.constant_buffer_max_bytes == 0 {
+        slots[BUFFER] = EMPTY_SLOT;
     }
-    if has_present1 != 0 {
-        unsafe { (platform.detour)(user, 1) };
+    if options.on_layout.is_none() {
+        slots[LAYOUT] = EMPTY_SLOT;
     }
-    ACTIVE.store(true, Ordering::Release);
-    OK
+    if options.on_shader.is_none() {
+        slots[STAGE_BASE..].fill(EMPTY_SLOT);
+    }
+    d3d11_observer_callbacks::configure(options, callbacks);
+    state.install(&slots, has_present1, user, platform)
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_core_observer11_uninstall_hooks(platform: &Platform) -> i32 {
-    let mut state = lock();
+    let Some(mut state) = lifecycle() else {
+        return NOT_READY;
+    };
     if !state.has_patches() || present_calls() != 0 {
         return NOT_READY;
     }
     if !state.retire(platform) {
         return PATCH_FAILED;
     }
-    drop(state);
     d3d11_observer_capture::clear();
     rsf_core_observer11_replace_size(0, 0);
     OK
@@ -256,20 +297,23 @@ mod tests {
     }
 
     unsafe extern "C" fn detour(_: Handle, _: u32) -> i32 {
+        assert_eq!(rsf_core_observer11_uninstall_hooks(&PLATFORM), NOT_READY);
         0
     }
     unsafe extern "C" fn remove(_: Handle) -> i32 {
         1
     }
 
+    static PLATFORM: Platform = Platform {
+        read,
+        replace,
+        detour,
+        remove,
+    };
+
     #[test]
     fn required_present_failure_restores_both_creation_hooks() {
-        let platform = Platform {
-            read,
-            replace,
-            detour,
-            remove,
-        };
+        let mut state = lifecycle().unwrap();
         let original = without_provenance_mut(11);
         let mut table = [original; 3];
         let mut slots = [Slot {
@@ -283,11 +327,11 @@ mod tests {
             };
         }
         assert_eq!(
-            unsafe { rsf_core_observer11_install_hooks(&slots, 0, null_mut(), &platform) },
+            state.install(&slots, 0, null_mut(), &PLATFORM),
             PATCH_FAILED
         );
         assert_eq!(table, [original; 3]);
-        assert_eq!(rsf_core_observer11_can_install(), OK);
+        assert!(!state.has_patches());
         assert!(rsf_core_observer11_original(TEXTURE).is_null());
         assert!(rsf_core_observer11_original(BUFFER).is_null());
     }

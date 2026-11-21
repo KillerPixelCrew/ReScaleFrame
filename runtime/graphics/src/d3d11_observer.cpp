@@ -19,7 +19,6 @@
 #include <cstdio>
 #include <cstring>
 #include <cwchar>
-#include <mutex>
 #include <memory>
 
 #include "d3d11_observer_callbacks.h"
@@ -58,7 +57,6 @@ using create_input_layout_fn = HRESULT(STDMETHODCALLTYPE*)(ID3D11Device*,
                                                            const void*, SIZE_T,
                                                            ID3D11InputLayout**);
 
-std::mutex observer_lifecycle;
 
 template<class Callback, class... Args>
 void invoke(Callback callback, Args... args) noexcept
@@ -828,54 +826,43 @@ bool acquire_vtables(void*** device_vtable, void*** swapchain_vtable, void*** sw
     return true;
 }
 
+int32_t probe_hooks(void* user, rsf_observer11_slot* slots, uint32_t* has_present1) noexcept try
+{
+    auto& setup = *static_cast<HookSetup*>(user);
+    void** device = nullptr;
+    if (!acquire_vtables(&device, &setup.chain, &setup.chain1)) {
+        return RSF_OBSERVER_ERROR_NO_DEVICE;
+    }
+    *has_present1 = setup.chain1 != nullptr;
+    slots[RSF_OBSERVER11_TEXTURE] = {device + slot_create_texture2d, reinterpret_cast<void*>(&hooked_create_texture2d)};
+    slots[RSF_OBSERVER11_BUFFER] = {device + slot_create_buffer, reinterpret_cast<void*>(&hooked_create_buffer)};
+    slots[RSF_OBSERVER11_PRESENT] = {setup.chain + slot_present, reinterpret_cast<void*>(&hooked_present)};
+    slots[RSF_OBSERVER11_LAYOUT] = {device + slot_create_input_layout, reinterpret_cast<void*>(&hooked_create_input_layout)};
+    void* shaders[stage_shader_count] = {
+        reinterpret_cast<void*>(&hooked_create_geometry_shader),
+        reinterpret_cast<void*>(&hooked_create_hull_shader),
+        reinterpret_cast<void*>(&hooked_create_domain_shader),
+        reinterpret_cast<void*>(&hooked_create_compute_shader),
+        reinterpret_cast<void*>(&hooked_create_geometry_so),
+        reinterpret_cast<void*>(&hooked_create_vertex_shader),
+        reinterpret_cast<void*>(&hooked_create_pixel_shader)};
+    for (size_t i = 0; i < stage_shader_count; ++i) {
+        slots[RSF_OBSERVER11_STAGE_BASE + i] = {device + stage_shader_slots[i], shaders[i]};
+    }
+    return RSF_OBSERVER_OK;
+} catch (...) { return RSF_OBSERVER_ERROR_NO_DEVICE; }
+
 } // namespace
 
 extern "C" rsf_observer_result rsf_observer_install(const rsf_observer_options* options)
 {
-    const auto validated = rsf_core_observer11_validate(options);
-    if (validated != RSF_OBSERVER_OK) return validated;
-    std::lock_guard<std::mutex> lock(observer_lifecycle);
-    const auto allowed = rsf_core_observer11_can_install();
-    if (allowed != RSF_OBSERVER_OK) return allowed;
-
-    void** device = nullptr;
-    void** chain = nullptr;
-    void** chain1 = nullptr;
-    if (!acquire_vtables(&device, &chain, &chain1)) {
-        return RSF_OBSERVER_ERROR_NO_DEVICE;
-    }
-    rsf_core_observer11_set_options(options, &callbacks);
-
-    rsf_observer11_slot slots[RSF_OBSERVER11_SLOT_COUNT]{};
-    slots[RSF_OBSERVER11_TEXTURE] = {device + slot_create_texture2d, reinterpret_cast<void*>(&hooked_create_texture2d)};
-    if (options->constant_buffer_max_bytes != 0) {
-        slots[RSF_OBSERVER11_BUFFER] = {device + slot_create_buffer, reinterpret_cast<void*>(&hooked_create_buffer)};
-    }
-    slots[RSF_OBSERVER11_PRESENT] = {chain + slot_present, reinterpret_cast<void*>(&hooked_present)};
-    if (options->on_layout) {
-        slots[RSF_OBSERVER11_LAYOUT] = {device + slot_create_input_layout, reinterpret_cast<void*>(&hooked_create_input_layout)};
-    }
-    if (options->on_shader) {
-        void* hooks[stage_shader_count] = {
-            reinterpret_cast<void*>(&hooked_create_geometry_shader),
-            reinterpret_cast<void*>(&hooked_create_hull_shader),
-            reinterpret_cast<void*>(&hooked_create_domain_shader),
-            reinterpret_cast<void*>(&hooked_create_compute_shader),
-            reinterpret_cast<void*>(&hooked_create_geometry_so),
-            reinterpret_cast<void*>(&hooked_create_vertex_shader),
-            reinterpret_cast<void*>(&hooked_create_pixel_shader)};
-        for (size_t i = 0; i < stage_shader_count; ++i) {
-            slots[RSF_OBSERVER11_STAGE_BASE + i] = {device + stage_shader_slots[i], hooks[i]};
-        }
-    }
-    // Both routes share one lazy copy of DXGI's module image.
-    HookSetup setup{chain, chain1, {}};
-    return rsf_core_observer11_install_hooks(slots, chain1 ? 1u : 0u, &setup, &hook_ops);
+    // Both native routes can reuse the module file borrowed for this probe.
+    HookSetup setup{};
+    return rsf_core_observer11_install(options, &callbacks, &setup, probe_hooks, &hook_ops);
 }
 
 extern "C" rsf_observer_result rsf_observer_uninstall(void)
 {
-    std::lock_guard<std::mutex> lock(observer_lifecycle);
     return rsf_core_observer11_uninstall_hooks(&hook_ops);
 }
 

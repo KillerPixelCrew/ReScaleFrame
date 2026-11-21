@@ -4,6 +4,7 @@ use crate::d3d11_observer_capture;
 use crate::d3d11_observer_hooks::rsf_core_observer11_installed;
 use crate::scene_abi::rsf_observer_present_event as Event;
 use crate::sr_session::has_capacity;
+use std::cell::Cell;
 use std::ffi::{CStr, c_char, c_void};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
@@ -24,7 +25,7 @@ struct TextureFacts {
 }
 
 #[repr(C)]
-struct Callbacks {
+pub(super) struct Callbacks {
     log: unsafe extern "C" fn(rsf_dump_log_fn, Handle, *const c_char),
     layout: unsafe extern "C" fn(rsf_observer_layout_fn, Handle, Handle, *const Layout, u32, u32),
     shader: unsafe extern "C" fn(rsf_observer_shader_fn, Handle, Handle, u32, *const c_void, u32),
@@ -50,6 +51,34 @@ pub(super) struct Registration {
 unsafe impl Send for Registration {}
 
 static OPTIONS: Mutex<Option<Registration>> = Mutex::new(None);
+static CREATION: Mutex<()> = Mutex::new(());
+thread_local! { static IN_CREATION: Cell<bool> = const { Cell::new(false) }; }
+
+struct CreationCall;
+
+impl Drop for CreationCall {
+    fn drop(&mut self) {
+        IN_CREATION.set(false);
+    }
+}
+
+pub(super) fn in_creation_callback() -> bool {
+    IN_CREATION.get()
+}
+
+// Skip nested notifications while the application's creation callback runs.
+fn creation(run: impl FnOnce(&Registration)) {
+    if in_creation_callback() {
+        return;
+    }
+    let _serialized = CREATION.lock().unwrap_or_else(PoisonError::into_inner);
+    let Some(config) = snapshot().filter(|_| rsf_core_observer11_installed() != 0) else {
+        return;
+    };
+    IN_CREATION.set(true);
+    let _call = CreationCall;
+    run(&config);
+}
 
 fn lock() -> MutexGuard<'static, Option<Registration>> {
     OPTIONS.lock().unwrap_or_else(PoisonError::into_inner)
@@ -60,6 +89,7 @@ pub(super) fn snapshot() -> Option<Registration> {
 }
 
 pub(super) fn clear() {
+    let _serialized = CREATION.lock().unwrap_or_else(PoisonError::into_inner);
     *lock() = None;
 }
 
@@ -92,8 +122,7 @@ impl Registration {
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_observer11_validate(options: *const Options) -> i32 {
+pub(super) unsafe fn validate(options: *const Options) -> i32 {
     if !unsafe { has_capacity(options) } {
         return -1;
     }
@@ -103,8 +132,7 @@ unsafe extern "C" fn rsf_core_observer11_validate(options: *const Options) -> i3
     0
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_observer11_set_options(options: &Options, calls: &'static Callbacks) {
+pub(super) fn configure(options: &Options, calls: &'static Callbacks) {
     *lock() = Some(Registration {
         options: *options,
         calls,
@@ -135,30 +163,23 @@ unsafe extern "C" fn rsf_core_observer11_texture_created(
     texture: Handle,
     facts: &TextureFacts,
 ) {
-    {
-        let guard = lock();
-        let Some(config) = guard
-            .as_ref()
-            .filter(|_| rsf_core_observer11_installed() != 0)
-        else {
-            return;
-        };
+    creation(|config| {
         let callback = config.options.on_texture;
         if callback.is_some() {
             unsafe {
                 (config.calls.texture)(callback, config.options.on_texture_user, texture, facts)
             };
         }
-    }
-    unsafe {
-        d3d11_observer_capture::record_texture(
-            device,
-            texture,
-            facts.width,
-            facts.format,
-            facts.bind_flags,
-        )
-    };
+        unsafe {
+            d3d11_observer_capture::record_texture(
+                device,
+                texture,
+                facts.width,
+                facts.format,
+                facts.bind_flags,
+            )
+        };
+    });
 }
 
 #[unsafe(no_mangle)]
@@ -169,14 +190,7 @@ unsafe extern "C" fn rsf_core_observer11_buffer_created(
     size: u32,
     flags: u32,
 ) {
-    {
-        let guard = lock();
-        let Some(config) = guard
-            .as_ref()
-            .filter(|_| rsf_core_observer11_installed() != 0)
-        else {
-            return;
-        };
+    creation(|config| {
         let callback = config.options.on_buffer;
         if callback.is_some() {
             unsafe {
@@ -190,8 +204,8 @@ unsafe extern "C" fn rsf_core_observer11_buffer_created(
                 )
             };
         }
-    }
-    unsafe { d3d11_observer_capture::record_buffer(device, buffer, size, flags) };
+        unsafe { d3d11_observer_capture::record_buffer(device, buffer, size, flags) };
+    });
 }
 
 #[unsafe(no_mangle)]
@@ -201,23 +215,20 @@ unsafe extern "C" fn rsf_core_observer11_shader_created(
     bytes: *const c_void,
     size: u32,
 ) {
-    let guard = lock();
-    if let Some(config) = guard
-        .as_ref()
-        .filter(|_| rsf_core_observer11_installed() != 0)
-        && config.options.on_shader.is_some()
-    {
-        unsafe {
-            (config.calls.shader)(
-                config.options.on_shader,
-                config.options.on_shader_user,
-                shader,
-                stage,
-                bytes,
-                size,
-            )
-        };
-    }
+    creation(|config| {
+        if config.options.on_shader.is_some() {
+            unsafe {
+                (config.calls.shader)(
+                    config.options.on_shader,
+                    config.options.on_shader_user,
+                    shader,
+                    stage,
+                    bytes,
+                    size,
+                )
+            };
+        }
+    });
 }
 
 #[unsafe(no_mangle)]
@@ -227,21 +238,18 @@ unsafe extern "C" fn rsf_core_observer11_layout_created(
     copied: u32,
     count: u32,
 ) {
-    let guard = lock();
-    if let Some(config) = guard
-        .as_ref()
-        .filter(|_| rsf_core_observer11_installed() != 0)
-        && config.options.on_layout.is_some()
-    {
-        unsafe {
-            (config.calls.layout)(
-                config.options.on_layout,
-                config.options.on_layout_user,
-                layout,
-                elements,
-                copied,
-                count,
-            )
-        };
-    }
+    creation(|config| {
+        if config.options.on_layout.is_some() {
+            unsafe {
+                (config.calls.layout)(
+                    config.options.on_layout,
+                    config.options.on_layout_user,
+                    layout,
+                    elements,
+                    copied,
+                    count,
+                )
+            };
+        }
+    });
 }
