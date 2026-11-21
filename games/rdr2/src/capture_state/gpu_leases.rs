@@ -270,10 +270,9 @@ unsafe extern "C" fn rsf_rdr2_capture_gpu_selected(
         .map_or(ptr::null_mut(), NonNull::as_ptr)
 }
 
-/// The native caller has removed all pending readback receipts under its capture mutex.
+/// Ready admission has removed all pending readback receipts under the native capture mutex.
 /// Take the idle queue and swapchain owners so their final Release calls run outside that mutex.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_gpu_take_idle(owner: &Capture) -> *mut Gpu {
+pub(super) unsafe fn take_idle(owner: &Capture) -> *mut Gpu {
     let gpu = unsafe { &mut *owner.gpu.get() };
     if gpu.queues.is_empty() && gpu.backbuffers.is_none() {
         return ptr::null_mut();

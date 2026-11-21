@@ -47,6 +47,13 @@ typedef struct rsf_rdr2_capture_readback {
     void* queue;
     uint32_t claimed;
 } rsf_rdr2_capture_readback;
+typedef struct rsf_rdr2_capture_drain_ops {
+    uint32_t struct_size, version;
+    /* Sample the retained fence and lend this slot's receipt until the next callback. */
+    const rsf_rdr2_capture_readback* (*sample)(void* context, size_t index, uint64_t* completed);
+    /* Move this slot to the caller's ready batch. A refusal leaves the pending list intact. */
+    bool (*take)(void* context, size_t index);
+} rsf_rdr2_capture_drain_ops;
 typedef struct rsf_rdr2_capture_progress {
     uint32_t sequence, draws, written;
     uint32_t draw_overflow, timed_out, write_failed, reuse_tail;
@@ -140,10 +147,10 @@ bool rsf_rdr2_capture_timeout(rsf_rdr2_capture_state*, uint64_t tick);
 void rsf_rdr2_capture_progress_get(const rsf_rdr2_capture_state*, rsf_rdr2_capture_progress*);
 uint32_t rsf_rdr2_capture_commit_draw(rsf_rdr2_capture_state*);
 void rsf_rdr2_capture_readback_written(rsf_rdr2_capture_state*, bool success);
-bool rsf_rdr2_capture_can_publish(const rsf_rdr2_capture_state*, bool readbacks_empty);
-void rsf_rdr2_capture_published(rsf_rdr2_capture_state*);
-bool rsf_rdr2_capture_write_bundle(rsf_rdr2_capture_state*, const rsf_rdr2_capture_bundle*,
-    int32_t (*format_scalar)(double, char*, size_t), size_t* draw_count, size_t* temporal_count);
+/* Call after accounting for the ready batch. True means a publication attempt, even on failure. */
+bool rsf_rdr2_capture_publish_bundle(rsf_rdr2_capture_state*, bool readbacks_empty, const rsf_rdr2_capture_bundle*,
+    int32_t (*format_scalar)(double, char*, size_t),
+    void (*report)(uint32_t sequence, bool saved, size_t inputs, size_t draws, uint32_t written));
 
 /* Swapchain observations use canonical IUnknown identity. Any lent bytes are copied. */
 void rsf_rdr2_capture_reset_presentation(rsf_rdr2_capture_state*, void* identity);
@@ -183,7 +190,6 @@ uint32_t rsf_rdr2_capture_resource_state(const rsf_rdr2_capture_state*, void* li
 void rsf_rdr2_capture_stamp_copy(rsf_rdr2_capture_state*, void* list, rsf_rdr2_capture_readback*);
 bool rsf_rdr2_capture_reuse_readback(const rsf_rdr2_capture_state*, const rsf_rdr2_capture_readback*,
     void* list, uint64_t completed);
-bool rsf_rdr2_capture_readback_complete(const rsf_rdr2_capture_readback*, uint64_t completed);
 
 /* A receipt snapshots the lists and their final recorded states before submission. Native code
    retains only the readback objects named by the receipt, until the original queue call returns.
@@ -208,13 +214,17 @@ bool rsf_rdr2_capture_gpu_arm_backbuffers(rsf_rdr2_capture_state*, void* swapcha
 bool rsf_rdr2_capture_gpu_accepts_target(const rsf_rdr2_capture_state*, void* target);
 void rsf_rdr2_capture_gpu_select_target(rsf_rdr2_capture_state*, void* target);
 void* rsf_rdr2_capture_gpu_selected(const rsf_rdr2_capture_state*, void* swapchain);
-rsf_rdr2_capture_gpu_retired* rsf_rdr2_capture_gpu_take_idle(rsf_rdr2_capture_state*);
+/* Admit completed shots under the capture mutex and detach any idle GPU owners. */
+rsf_rdr2_capture_gpu_retired* rsf_rdr2_capture_collect_ready(rsf_rdr2_capture_state*, void* context,
+    size_t pending_count, const rsf_rdr2_capture_drain_ops*);
 /* Drop detached queue and backbuffer owners outside the capture mutex. */
 void rsf_rdr2_capture_gpu_drop_idle(rsf_rdr2_capture_gpu_retired*);
 #ifdef __cplusplus
 }
 static_assert(sizeof(rsf_rdr2_capture_progress) == 32);
 static_assert(sizeof(rsf_rdr2_capture_readback) == 48 && offsetof(rsf_rdr2_capture_readback, list) == 24);
+static_assert(sizeof(rsf_rdr2_capture_drain_ops) == 8 + 2 * sizeof(void*) &&
+    offsetof(rsf_rdr2_capture_drain_ops, sample) == 8);
 static_assert(sizeof(rsf_rdr2_capture_gpu_ops) == 40 && sizeof(rsf_rdr2_capture_gpu_leases) == 32);
 static_assert(sizeof(rsf_rdr2_capture_gpu_proof) == 16);
 static_assert(RSF_RDR2_CAPTURE_HOOK_COUNT == 16 && sizeof(rsf_rdr2_capture_hook_ops) == 32);
