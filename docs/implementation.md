@@ -4,6 +4,17 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The FidelityFX Vulkan owner now records swapchain and effect context
+ownership independently of the SDK result. When the SDK returns a
+context alongside an error, Rust uses the existing checked teardown
+path and retains the owner if destruction refuses. A replacement
+chain without a context stays quarantined because the SDK destructor
+requires that context. Creation checks the setup ABI and Vulkan
+structure tag before reading the swapchain descriptor. The pinned
+provider source publishes contexts on success. The partial-result
+handling covers defensive SDK returns and has no build or runtime
+verification recorded.
+
 Rust now prepares native D3D12 overlay draw calls from the shared panel
 layout. It resolves atlas texture IDs, clamps scissors to the
 backbuffer, and verifies both the index range and the vertices

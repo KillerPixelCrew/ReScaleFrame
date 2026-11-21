@@ -256,7 +256,7 @@ int32_t open(const rsf_fgvk_setup* setup, uint32_t width, uint32_t height, rsf_f
     return RSF_BACKEND_OK;
 } catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
 
-int32_t create_swapchain(rsf_ffxgvk_native* self, uint64_t* chain) noexcept {
+int32_t create_swapchain(rsf_ffxgvk_native* self, uint64_t* chain, uint32_t* has_context) noexcept {
     const auto& info = *static_cast<const VkSwapchainCreateInfoKHR*>(self->setup.create_info);
     const auto& setup = self->setup;
     ffxCreateContextDescFrameGenerationSwapChainVK create{}; create.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_FGSWAPCHAIN_VK;
@@ -266,13 +266,10 @@ int32_t create_swapchain(rsf_ffxgvk_native* self, uint64_t* chain) noexcept {
     create.asyncComputeQueue = {static_cast<VkQueue>(setup.queues[1]), setup.queue_family, nullptr};
     create.presentQueue = {static_cast<VkQueue>(setup.queues[2]), setup.queue_family, nullptr};
     create.imageAcquireQueue = {static_cast<VkQueue>(setup.queues[3]), setup.queue_family, nullptr};
-    if (self->create(&self->swapchain, &create.header, nullptr) != FFX_API_RETURN_OK) {
-        if (self->swapchain) (void)self->destroy(&self->swapchain, nullptr);
-        self->swapchain = nullptr; self->chain = VK_NULL_HANDLE;
-        return RSF_BACKEND_ERROR_INIT_FAILED;
-    }
+    const auto created = self->create(&self->swapchain, &create.header, nullptr);
     *chain = handle_value(self->chain);
-    return RSF_BACKEND_OK;
+    *has_context = self->swapchain ? 1u : 0u;
+    return created == FFX_API_RETURN_OK ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_INIT_FAILED;
 }
 int32_t query_swapchain(rsf_ffxgvk_native* self) noexcept {
     self->functions.header.type = FFX_API_QUERY_DESC_TYPE_FGSWAPCHAIN_FUNCTIONS_VK;
@@ -281,7 +278,7 @@ int32_t query_swapchain(rsf_ffxgvk_native* self) noexcept {
         return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
     return RSF_BACKEND_OK;
 }
-int32_t create_effect(rsf_ffxgvk_native* self) noexcept {
+int32_t create_effect(rsf_ffxgvk_native* self, uint32_t* has_context) noexcept {
     const auto& info = *static_cast<const VkSwapchainCreateInfoKHR*>(self->setup.create_info);
     const auto& graphics = self->setup.graphics;
     ffxCreateBackendVKDesc backend{}; backend.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_VK;
@@ -294,12 +291,9 @@ int32_t create_effect(rsf_ffxgvk_native* self) noexcept {
         (graphics.depth_infinite ? FFX_FRAMEGENERATION_ENABLE_DEPTH_INFINITE : 0u) |
         (graphics.motion_jittered ? FFX_FRAMEGENERATION_ENABLE_MOTION_VECTORS_JITTER_CANCELLATION : 0u);
     fg.displaySize = fg.maxRenderSize = {self->width, self->height}; fg.backBufferFormat = ffxApiGetSurfaceFormatVK(info.imageFormat);
-    if (self->create(&self->effect, &fg.header, nullptr) != FFX_API_RETURN_OK) {
-        if (self->effect) (void)self->destroy(&self->effect, nullptr);
-        self->effect = nullptr;
-        return RSF_BACKEND_ERROR_INIT_FAILED;
-    }
-    return RSF_BACKEND_OK;
+    const auto created = self->create(&self->effect, &fg.header, nullptr);
+    *has_context = self->effect ? 1u : 0u;
+    return created == FFX_API_RETURN_OK ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_INIT_FAILED;
 }
 int32_t query_provider(rsf_ffxgvk_native* self) noexcept {
     ffxQueryGetProviderVersion provider{}; provider.header.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
@@ -416,10 +410,14 @@ int32_t ffx_present(rsf_ffxgvk* self, const void* info, const rsf_frame_record* 
 extern "C" rsf_backend_result rsf_ffxgvk_create(const rsf_fgvk_setup* setup, rsf_ffxgvk** out, uint64_t* chain) {
     rsf_ffxgvk_swapchain swapchain{};
     const rsf_ffxgvk_swapchain* description = nullptr;
-    if (setup && setup->struct_size >= sizeof(*setup) && setup->create_info) {
-        const auto& info = *static_cast<const VkSwapchainCreateInfoKHR*>(setup->create_info);
-        swapchain = {info.imageExtent.width, info.imageExtent.height, uint32_t(info.imageFormat), uint32_t(info.imageColorSpace),
-            info.imageArrayLayers, info.sType == VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR ? 1u : 0u, handle_value(info.oldSwapchain)};
+    if (setup && setup->struct_size >= sizeof(*setup) && setup->abi_version == RSF_FGVK_ABI_VERSION &&
+        setup->graphics.struct_size >= sizeof(setup->graphics) && setup->graphics.abi_version == RSF_SRVK_ABI_VERSION &&
+        setup->create_info) {
+        if (*static_cast<const VkStructureType*>(setup->create_info) == VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR) {
+            const auto& info = *static_cast<const VkSwapchainCreateInfoKHR*>(setup->create_info);
+            swapchain = {info.imageExtent.width, info.imageExtent.height, uint32_t(info.imageFormat), uint32_t(info.imageColorSpace),
+                info.imageArrayLayers, 1u, handle_value(info.oldSwapchain)};
+        }
         description = &swapchain;
     }
     return rsf_core_ffxgvk_create(&operations, setup, description, out, chain);

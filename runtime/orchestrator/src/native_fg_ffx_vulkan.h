@@ -38,9 +38,10 @@ struct rsf_ffxgvk_swapchain {
 struct rsf_ffxgvk_ops {
     int32_t (*open)(const rsf_fgvk_setup*, uint32_t width, uint32_t height, rsf_ffxgvk_native**, void** resources);
     void (*close)(rsf_ffxgvk_native*);
-    int32_t (*create_swapchain)(rsf_ffxgvk_native*, uint64_t* chain);
+    /* Ownership facts are valid on refusal as well as success. */
+    int32_t (*create_swapchain)(rsf_ffxgvk_native*, uint64_t* chain, uint32_t* has_context);
     int32_t (*query_swapchain)(rsf_ffxgvk_native*);
-    int32_t (*create_effect)(rsf_ffxgvk_native*);
+    int32_t (*create_effect)(rsf_ffxgvk_native*, uint32_t* has_context);
     int32_t (*query_provider)(rsf_ffxgvk_native*);
     int32_t (*destroy_effect)(rsf_ffxgvk_native*);
     void (*destroy_chain)(rsf_ffxgvk_native*);

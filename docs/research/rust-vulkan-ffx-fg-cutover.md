@@ -101,6 +101,17 @@ through Rust before calling the provider. The combined fixtures check
 short and foreign prefixes, explicit null sources, and frame, session,
 view and generation matching.
 
+The creation leaves now report which SDK contexts exist separately from
+the SDK result. The pinned `ffxCreateContext` clears its output and the
+frame generation providers write their context outputs on success. The
+Vulkan swapchain provider writes its replacement chain before querying
+replacement functions, and that query returns success in the pinned
+source. For defensive SDK results, Rust sends returned contexts through
+the existing retirement path. It retains a refused destroy for retry.
+It also retains an unexpected replacement chain with no context because
+`vkDestroySwapchainFFXAPI` requires its context. These are source findings.
+The updated creation path has no build or runtime results recorded.
+
 ## Verification
 
 The Windows MSVC build used Visual Studio 18 2026 (MSVC 14.52) with the

@@ -78,9 +78,9 @@ impl Swapchain {
 struct Ops {
     open: unsafe extern "C" fn(*const Setup, u32, u32, *mut Handle, *mut Handle) -> i32,
     close: unsafe extern "C" fn(Handle),
-    create_swapchain: unsafe extern "C" fn(Handle, *mut u64) -> i32,
+    create_swapchain: unsafe extern "C" fn(Handle, *mut u64, *mut u32) -> i32,
     query_swapchain: unsafe extern "C" fn(Handle) -> i32,
-    create_effect: unsafe extern "C" fn(Handle) -> i32,
+    create_effect: unsafe extern "C" fn(Handle, *mut u32) -> i32,
     query_provider: unsafe extern "C" fn(Handle) -> i32,
     destroy_effect: unsafe extern "C" fn(Handle) -> i32,
     destroy_chain: unsafe extern "C" fn(Handle),
@@ -325,22 +325,33 @@ impl Owner {
         if opened != OK {
             return opened;
         }
+        if self.native.is_null() || self.resources.is_null() {
+            return INIT_FAILED;
+        }
         // The SDK calls the create, image and destroy hooks synchronously
         // inside swapchain-context creation and failure cleanup.
         route().publish(self.id(), self.native.expose_provenance());
-        let mut chain = 0;
-        let created = unsafe { (ops.create_swapchain)(self.native, &mut chain) };
+        let mut context = 0;
+        let created = unsafe { (ops.create_swapchain)(self.native, &mut self.chain, &mut context) };
+        self.context = context != 0;
         if created != OK {
             return created;
         }
-        self.context = true;
-        self.chain = chain;
-        for (step, effect) in [(ops.query_swapchain, false), (ops.create_effect, true)] {
-            let result = unsafe { step(self.native) };
-            if result != OK {
-                return result;
-            }
-            self.effect |= effect;
+        if !self.context || self.chain == 0 {
+            return INIT_FAILED;
+        }
+        let queried = unsafe { (ops.query_swapchain)(self.native) };
+        if queried != OK {
+            return queried;
+        }
+        let mut context = 0;
+        let created = unsafe { (ops.create_effect)(self.native, &mut context) };
+        self.effect = context != 0;
+        if created != OK {
+            return created;
+        }
+        if !self.effect {
+            return INIT_FAILED;
         }
         let provider = unsafe { (ops.query_provider)(self.native) };
         if provider != OK {
@@ -732,6 +743,11 @@ impl Owner {
             }
         }
         self.retiring = true;
+        if self.chain != 0 && !self.context {
+            // A replacement chain without its SDK context cannot be passed to either destructor.
+            // Keep the provider and WSI route live for this unproven SDK allocation.
+            return NOT_READY;
+        }
         let (ops, native) = (self.ops, self.native);
         if self.effect {
             if unsafe { (ops.destroy_effect)(native) } != OK {
@@ -868,6 +884,7 @@ unsafe extern "C" fn rsf_core_ffxgvk_create(
     let state = unsafe { &mut *owner };
     let result = state.initialize(setup);
     if result != OK {
+        state.status.result = result;
         // A refused cleanup retains the owner for the documented destroy retry.
         if unsafe { rsf_core_ffxgvk_destroy(owner) } != OK {
             unsafe { output.write(owner) };
@@ -1138,8 +1155,15 @@ mod tests {
         assert!(routed(DEVICE).is_null() && route().owner != 0 && route().closing);
         calls(|c| c.closes += 1);
     }
-    unsafe extern "C" fn create_swapchain(_: Handle, chain: *mut u64) -> i32 {
-        unsafe { chain.write(3) };
+    unsafe extern "C" fn create_swapchain(_: Handle, chain: *mut u64, context: *mut u32) -> i32 {
+        unsafe {
+            chain.write(3);
+            context.write(1);
+        }
+        OK
+    }
+    unsafe extern "C" fn create_effect(_: Handle, context: *mut u32) -> i32 {
+        unsafe { context.write(1) };
         OK
     }
     unsafe extern "C" fn step(_: Handle) -> i32 {
@@ -1283,7 +1307,7 @@ mod tests {
         close,
         create_swapchain,
         query_swapchain: step,
-        create_effect: step,
+        create_effect,
         query_provider,
         destroy_effect,
         destroy_chain,

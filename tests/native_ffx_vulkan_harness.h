@@ -158,8 +158,10 @@ int32_t open(const rsf_fgvk_setup* setup, uint32_t width, uint32_t height, rsf_f
     state.native = self; *resources = &self->gpu; *out = self;
     return RSF_BACKEND_OK;
 }
-int32_t create_swapchain(rsf_ffxgvk_native* self, uint64_t* chain) {
-    self->swapchain = id<ffxContext>(4); self->chain = id<VkSwapchainKHR>(3); *chain = 3; return RSF_BACKEND_OK;
+int32_t create_swapchain(rsf_ffxgvk_native* self, uint64_t* chain, uint32_t* has_context) {
+    self->swapchain = id<ffxContext>(4); self->chain = id<VkSwapchainKHR>(3); *chain = 3;
+    *has_context = 1;
+    return RSF_BACKEND_OK;
 }
 int32_t query_swapchain(rsf_ffxgvk_native* self) {
     auto& functions = self->functions;
@@ -168,7 +170,9 @@ int32_t query_swapchain(rsf_ffxgvk_native* self) {
     functions.pOutGetLastPresentCountFFXAPI = present_count;
     return RSF_BACKEND_OK;
 }
-int32_t create_effect(rsf_ffxgvk_native* self) { self->effect = id<ffxContext>(5); return RSF_BACKEND_OK; }
+int32_t create_effect(rsf_ffxgvk_native* self, uint32_t* has_context) {
+    self->effect = id<ffxContext>(5); *has_context = 1; return RSF_BACKEND_OK;
+}
 int32_t query_provider(rsf_ffxgvk_native*) { return RSF_BACKEND_OK; }
 
 inline rsf_ffxgvk_ops ops() {
