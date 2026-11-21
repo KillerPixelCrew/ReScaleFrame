@@ -1,8 +1,8 @@
 // Streamline's Vulkan entry points must come from sl.interposer.dll.  Keep its
 // C++ ABI and frame tokens on this side of the managed/native boundary.
 // The Rust lifecycle owner (runtime/vulkan/streamline/lifecycle) admits, loads,
-// initializes, shuts down and unloads the interposer. This file keeps the export
-// names, the typed SDK calls and the verified-file leaf.
+// initializes, shuts down and unloads the interposer and tracks the legacy FG
+// configuration. This file keeps the exports, typed SDK calls and file check.
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -37,6 +37,15 @@ struct RsfSlLifecyclePlatform {
 };
 static_assert(sizeof(RsfSlLifecyclePlatform) == 5 * sizeof(void*));
 
+struct RsfSlFgOptions {
+    uint32_t count, width, height, format, backBuffers;
+};
+static_assert(sizeof(RsfSlFgOptions) == 5 * sizeof(uint32_t));
+using RsfSlFgSetOptions = int32_t (*)(uint32_t enabled, const RsfSlFgOptions*);
+using RsfSlFgFreeResources = int32_t (*)();
+static_assert(static_cast<int32_t>(sl::Result::eOk) == 0);
+static_assert(static_cast<int32_t>(sl::Result::eWarnOutOfVRAM) == 39);
+
 extern "C" {
 int32_t rsf_slvk_life_initialize(const RsfSlLifecyclePlatform*, const wchar_t*, const char*,
     uint32_t, uint32_t, uint32_t);
@@ -48,6 +57,11 @@ void* rsf_slvk_life_instance_proc();
 void* rsf_slvk_life_device_proc();
 void* rsf_slvk_life_interposer_symbol(const char*);
 void* rsf_slvk_life_common_symbol(const char*);
+void rsf_slvk_fg_swapchain_created(uint64_t);
+void rsf_slvk_fg_swapchain_destroyed(uint64_t);
+int32_t rsf_slvk_fg_set(RsfSlFgSetOptions, int32_t, const RsfSlFgOptions*);
+int32_t rsf_slvk_fg_disable(RsfSlFgSetOptions);
+int32_t rsf_slvk_fg_free(uint32_t, RsfSlFgFreeResources);
 }
 
 namespace {
@@ -67,11 +81,6 @@ PFun_slPCLGetState* pclState{};
 PFun_slPCLSetOptions* pclOptions{};
 PFun_slDLSSGSetOptions* fgOptions{};
 PFun_slDLSSGGetState* fgState{};
-bool fgConfigured{};
-bool fgResourcesMayExist{};
-bool fgEnabled{};
-VkSwapchainKHR currentSwapchain{};
-uint32_t fgCount{}, fgWidth{}, fgHeight{}, fgFormat{}, fgBackBuffers{};
 sl::FrameToken* frameToken{};
 std::atomic<int> lastPresentError{0};
 std::atomic<uint64_t> workerTimeoutEpoch{0};
@@ -234,6 +243,27 @@ void onPresentError(const sl::APIError& error) {
     lastPresentError.store(static_cast<int>(error.vkRes), std::memory_order_relaxed);
 }
 
+int32_t applyFgOptions(uint32_t enabled, const RsfSlFgOptions* request) noexcept try {
+    sl::DLSSGOptions options{};
+    options.mode = enabled ? sl::DLSSGMode::eOn : sl::DLSSGMode::eOff;
+    options.numFramesToGenerate = request->count;
+    options.colorWidth = request->width;
+    options.colorHeight = request->height;
+    options.colorBufferFormat = request->format;
+    options.numBackBuffers = request->backBuffers;
+    options.enableUserInterfaceRecomposition = sl::Boolean::eTrue;
+    options.onErrorCallback = onPresentError;
+    return static_cast<int32_t>(fgOptions(viewport, options));
+} catch (...) {
+    return static_cast<int32_t>(sl::Result::eErrorExceptionHandler);
+}
+
+int32_t releaseFgResources() noexcept try {
+    return static_cast<int32_t>(freeResources(sl::kFeatureDLSS_G, viewport));
+} catch (...) {
+    return static_cast<int32_t>(sl::Result::eErrorExceptionHandler);
+}
+
 /// @brief Writes SDK warnings/errors and enabled verbose messages to stderr.
 void onStreamlineMessage(sl::LogType type, const char* message) {
     if (message && std::strstr(message, "Worker thread '") && std::strstr(message, "' timed out"))
@@ -304,15 +334,10 @@ uint32_t lifecycleShutdown(int32_t* result) noexcept {
     return 1;
 }
 
-/// @brief Clears SDK entry points, and after slShutdown also the frame-generation cache and pending present error.
+/// @brief Clears SDK entry points, and after slShutdown also the pending present error.
 void lifecycleClear(uint32_t presentation) noexcept {
     clearSdkFunctions();
-    if (!presentation) return;
-    fgConfigured = false;
-    fgResourcesMayExist = false;
-    fgEnabled = false;
-    currentSwapchain = VK_NULL_HANDLE;
-    lastPresentError.store(0, std::memory_order_relaxed);
+    if (presentation) lastPresentError.store(0, std::memory_order_relaxed);
 }
 
 constexpr RsfSlLifecyclePlatform lifecycle{
@@ -417,10 +442,7 @@ RSF_SL_VK_EXPORT VkResult VulkanStorySlCreateSwapchain(VkDevice device,
     const VkSwapchainCreateInfoKHR* info, VkSwapchainKHR* swapchain) {
     auto call = deviceCall<PFN_vkCreateSwapchainKHR>(device, "vkCreateSwapchainKHR");
     VkResult result = call ? call(device, info, nullptr, swapchain) : VK_ERROR_INITIALIZATION_FAILED;
-    if (result == VK_SUCCESS && swapchain) {
-        currentSwapchain = *swapchain;
-        fgConfigured = false;
-    }
+    if (result == VK_SUCCESS && swapchain) rsf_slvk_fg_swapchain_created(reinterpret_cast<uint64_t>(*swapchain));
     return result;
 }
 /// @brief Destroys the supplied interposer swapchain after caller-provided retirement.
@@ -429,12 +451,7 @@ RSF_SL_VK_EXPORT void VulkanStorySlDestroySwapchain(VkDevice device, VkSwapchain
     auto call = deviceCall<PFN_vkDestroySwapchainKHR>(device, "vkDestroySwapchainKHR");
     if (!call) return;
     call(device, swapchain, nullptr);
-    // Deferred retirement of an old chain must not invalidate the live
-    // successor's options and cause a redundant SetOptions on its next frame.
-    if (swapchain == currentSwapchain) {
-        currentSwapchain = VK_NULL_HANDLE;
-        fgConfigured = false;
-    }
+    rsf_slvk_fg_swapchain_destroyed(reinterpret_cast<uint64_t>(swapchain));
 }
 /// @brief Enumerates images belonging to the interposer-created swapchain.
 /// @details Count and image storage use ordinary Vulkan query/enumeration rules.
@@ -679,41 +696,8 @@ RSF_SL_VK_EXPORT int VulkanStorySlInvalidateFrameTags() {
 /// @return SDK result, -1 without options or -2 for an enabled zero interpolation count.
 RSF_SL_VK_EXPORT int VulkanStorySlSetFrameGeneration(int enabled, uint32_t count,
     uint32_t width, uint32_t height, uint32_t colorFormat, uint32_t backBuffers) {
-    // Swapchain recreation invalidates the dimensions/options cache, not the
-    // feature's enabled state. Off is also the SDK default. Do not re-submit
-    // Off for an unused/already-disabled feature when another provider rebuilds
-    // presentation; Streamline can observe both requests before one Present.
-    // A subsequent On still supplies the new swapchain description below.
-    if (!enabled && !fgEnabled) return 0;
-    if (!fgOptions) return -1;
-    if (enabled && count == 0) return -2;
-    if (fgConfigured && fgEnabled == (enabled != 0) && fgCount == count &&
-        fgWidth == width && fgHeight == height && fgFormat == colorFormat &&
-        fgBackBuffers == backBuffers) return 0;
-    sl::DLSSGOptions options{};
-    options.mode = enabled ? sl::DLSSGMode::eOn : sl::DLSSGMode::eOff;
-    options.numFramesToGenerate = enabled ? count : 1;
-    options.colorWidth = width; options.colorHeight = height;
-    options.colorBufferFormat = colorFormat; options.numBackBuffers = backBuffers;
-    options.enableUserInterfaceRecomposition = sl::Boolean::eTrue;
-    options.onErrorCallback = onPresentError;
-    int result = static_cast<int>(fgOptions(viewport, options));
-    if (!enabled && result == static_cast<int>(sl::Result::eWarnOutOfVRAM)) {
-        // Do not cache Off as a successful configuration. Allow the host's
-        // checked device drain + explicit slFreeResources path to release the
-        // feature instead of throwing while disposing framebuffer inputs.
-        fgEnabled = false;
-        fgConfigured = false;
-    }
-    if (result == 0) {
-        fgConfigured = true;
-        fgEnabled = enabled != 0;
-        if (fgEnabled) fgResourcesMayExist = true;
-        fgCount = count;
-        fgWidth = width; fgHeight = height; fgFormat = colorFormat;
-        fgBackBuffers = backBuffers;
-    }
-    return result;
+    const RsfSlFgOptions request{count, width, height, colorFormat, backBuffers};
+    return rsf_slvk_fg_set(fgOptions ? applyFgOptions : nullptr, enabled, &request);
 }
 // Called after FG is off and the proxy's DeviceWaitIdle has drained presentation.
 // Direct NGX SR shutdown must not precede release of Streamline's FG handle.
@@ -721,20 +705,13 @@ RSF_SL_VK_EXPORT int VulkanStorySlSetFrameGeneration(int enabled, uint32_t count
 /// @details Unused or already disabled features return zero without configuring another provider's presentation.
 /// @return SDK option result, or zero when no disable is required.
 RSF_SL_VK_EXPORT int VulkanStorySlDisableFrameGenerationForRelease() {
-    // A different provider may own presentation. Do not configure an unused
-    // DLSS-G feature solely to shut it down, or repeat an already-applied Off.
-    if (!fgResourcesMayExist || !fgEnabled) return 0;
-    return VulkanStorySlSetFrameGeneration(0, fgCount, fgWidth, fgHeight, fgFormat, fgBackBuffers);
+    return rsf_slvk_fg_disable(fgOptions ? applyFgOptions : nullptr);
 }
 /// @brief Frees known DLSS-G resources after enablement is Off and the host has drained proxy GPU/present work.
 /// @details Resource-ownership state clears only when slFreeResources succeeds.
 /// @return SDK result, zero for no resources, or -1 when release prerequisites are missing.
 RSF_SL_VK_EXPORT int VulkanStorySlFreeFrameGenerationResources() {
-    if (!fgOptions || !fgResourcesMayExist) return 0;
-    if (!freeResources || fgEnabled) return -1;
-    const auto result = freeResources(sl::kFeatureDLSS_G, viewport);
-    if (result == sl::Result::eOk) { fgConfigured = false; fgResourcesMayExist = false; }
-    return static_cast<int>(result);
+    return rsf_slvk_fg_free(fgOptions != nullptr, freeResources ? releaseFgResources : nullptr);
 }
 /// @brief Atomically consumes the latest recorded asynchronous presentation error.
 /// @return Recorded Vulkan error code, or zero when none is pending.

@@ -2,6 +2,8 @@
 //! Portable interposer lifecycle state machine. The loader and the native SDK
 //! leaves are supplied by the caller.
 
+#[cfg(windows)]
+use crate::frame_generation::FrameGeneration;
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr::{NonNull, null, null_mut, without_provenance_mut};
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
@@ -67,7 +69,7 @@ pub(crate) struct Platform {
     /// nonzero when the SDK was called.
     pub shutdown: unsafe extern "C" fn(*mut i32) -> u32,
     /// Clears the SDK entry points and frame token. Nonzero also clears the
-    /// frame-generation configuration and the pending presentation error.
+    /// pending presentation error.
     pub clear: unsafe extern "C" fn(u32),
 }
 
@@ -114,6 +116,8 @@ struct Published {
 
 pub(crate) struct Lifecycle {
     session: Mutex<Session>,
+    #[cfg(windows)]
+    frame_generation: Mutex<FrameGeneration>,
     published: Published,
     // sl.common.dll path for presentation lookups, held only around loader queries.
     common: Mutex<Vec<u16>>,
@@ -159,6 +163,8 @@ impl Lifecycle {
                 shutdown_result: 0,
                 paths: None,
             }),
+            #[cfg(windows)]
+            frame_generation: Mutex::new(FrameGeneration::new()),
             published: Published {
                 module: AtomicPtr::new(null_mut()),
                 initialized: AtomicBool::new(false),
@@ -175,6 +181,20 @@ impl Lifecycle {
             Ok(session) => Some(session),
             Err(TryLockError::Poisoned(session)) => Some(session.into_inner()),
             Err(TryLockError::WouldBlock) => None,
+        }
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn frame_generation(&self) -> MutexGuard<'_, FrameGeneration> {
+        self.frame_generation
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn reset_frame_generation(&self) {
+        #[cfg(windows)]
+        {
+            *self.frame_generation() = FrameGeneration::new();
         }
     }
 
@@ -277,6 +297,7 @@ impl Lifecycle {
         session.initialized = false;
         self.published.initialized.store(false, Ordering::Release);
         // Only the Vulkan dispatch entry points remain valid after slShutdown.
+        self.reset_frame_generation();
         unsafe { (platform.clear)(1) };
         session.shutdown_result
     }
@@ -315,6 +336,7 @@ impl Lifecycle {
         self.published.device.store(null_mut(), Ordering::Release);
         self.published.module.store(null_mut(), Ordering::Release);
         if let Some(module) = session.module.take() {
+            self.reset_frame_generation();
             unsafe { (platform.clear)(0) };
             unsafe { system.free(module) };
         }

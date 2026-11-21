@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 //! Windows loader bindings and the C entry points called by bridge.cpp.
 
+use crate::frame_generation::{FreeResources, Options, SetOptions};
 use crate::lifecycle::{Lifecycle, Platform, System, feature_mask};
 use std::ffi::{c_char, c_void};
 use std::ptr::{NonNull, null_mut};
@@ -103,4 +104,44 @@ unsafe extern "C" fn rsf_slvk_life_interposer_symbol(name: *const c_char) -> *mu
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_slvk_life_common_symbol(name: *const c_char) -> *mut c_void {
     unsafe { LIFECYCLE.common_symbol(&Win32, name) }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_slvk_fg_swapchain_created(swapchain: u64) {
+    LIFECYCLE.frame_generation().swapchain_created(swapchain);
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_slvk_fg_swapchain_destroyed(swapchain: u64) {
+    LIFECYCLE.frame_generation().swapchain_destroyed(swapchain);
+}
+
+// The host serializes SDK feature lifetime with these calls. The FG guard
+// spans the synchronous options/resource call and its state update. The
+// native SDK callbacks only log or publish atomic error/timeout information.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_slvk_fg_set(
+    apply: Option<SetOptions>,
+    enabled: i32,
+    options: &Options,
+) -> i32 {
+    unsafe {
+        LIFECYCLE
+            .frame_generation()
+            .set(apply, enabled != 0, *options)
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_slvk_fg_disable(apply: Option<SetOptions>) -> i32 {
+    unsafe { LIFECYCLE.frame_generation().disable(apply) }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_slvk_fg_free(options_bound: u32, release: Option<FreeResources>) -> i32 {
+    unsafe {
+        LIFECYCLE
+            .frame_generation()
+            .free(options_bound != 0, release)
+    }
 }
