@@ -4,15 +4,16 @@
 //! creation and presentation binding sequence, the CPU event owner (poll and worker source
 //! handoff, input receipts and their GameSDK facts), native depth-domain admission and
 //! composition, native input/output resolution scopes, the render hook lifecycle with World/Present
-//! admission, and render-input admission with its camera history and leased passes.
+//! admission and the reduced-render recovery transaction, and render-input admission with its
+//! camera history and leased passes.
 //!
 //! Native leaves stay in C++ and reach this crate through rsf_fallout4_platform
 //! (fallout4_platform.h), rsf_fallout4_cpu_platform (cpu_events_platform.h), the render hook
 //! leaves (render_hooks_platform.h) and the per-call depth-domain and render-input leaves
 //! (depth_domains_platform.h, render_inputs_platform.h): MinHook, the typed detour shells with
 //! their return addresses and trampoline calls, exception guards, the shared file hash, the Steam
-//! chain facade, the render producer and recovery callbacks, the typed COM leases, and the D3D11
-//! and COM facts.
+//! chain facade, the render producer callbacks and recovery leaves, the typed COM leases, and the
+//! D3D11 and COM facts.
 //! The Runtime decides vendors, presentation and pacing; this crate reports native facts only.
 #![cfg(windows)]
 

@@ -945,7 +945,7 @@ pub(crate) extern "C" fn rsf_fallout4_resolution_busy() -> bool {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_resolution_output_busy() -> bool {
+pub(crate) extern "C" fn rsf_fallout4_resolution_output_busy() -> bool {
     SCOPE.get().output
 }
 

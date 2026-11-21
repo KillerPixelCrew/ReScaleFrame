@@ -19,6 +19,13 @@ See [the Rust migration record](rust-migration.md#native-policy-cutover).
 
 ## Remaining Rust integration ports
 
+Fallout 4's Rust recovery transaction now owns the reservation token,
+five-surface plan and checked SEAL, FINISH and RETIRE requests. The
+adapter retains the original raster reads, COM identity checks and
+held leases. Source tracing found that an imagespace reset can still
+prevent a RETIRE retry after Swap. The correction is a separate
+follow-up. [Recovery transaction](research/rust-fallout4-render-hooks.md#reduced-render-recovery-transaction-in-rust)
+
 Godot's private Rust object now tracks the primary viewport and target,
 resource generation and the SR inputs that drive reset and admission.
 The engine still supplies typed RID and render-buffer facts. AC7's
@@ -829,6 +836,13 @@ and remains unrun. Build and live observer verification remain open.
 [Observer admission audit](research/rust-anomaly-native-observer.md#prepare-admission-from-3c73e3c4)
 
 ## Rust orchestrator and first Anomaly port
+
+Anomaly's Rust motion owner now checks the existing Standard and AVX
+profile guards in the same order. The native leaf supplies the profile
+and the guarded reader. FidelityFX Vulkan SR and FG also share one
+Rust alias table. Pinned formatting, locked Windows Cargo metadata and
+whitespace passed. Build, link and runtime checks remain open.
+[Motion admission](research/rust-anomaly-motion-stage.md)
 
 The standalone NGX shim publishes its module and 12 resolved symbols
 from Rust while the C wrappers call NGX from the same native frames.

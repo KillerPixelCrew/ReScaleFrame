@@ -20,6 +20,31 @@
 #include <type_traits>
 
 namespace rsf::anomaly::motion {
+// Borrowed motion guard facts for the selected build. Each array pointer borrows the full profile array; Rust
+// (engine_guards/motion.rs) owns the check order and the refusal names.
+struct MotionGuardProfile {
+    const NativeSite* sites;
+    const UniqueGuard* unique;
+    size_t unique_count;
+    const NativeSite* create_shader_calls;
+    const TessCreateSite* tess_create_sites;
+    const char* shader_compile_prologue;
+    const char* d3dcompile_setup;
+    const char* tess_dispatch;
+    uint32_t shader_compile_rva;
+    uint32_t d3dcompile_setup_rva;
+    uint32_t tess_dispatch_rva;
+    uint32_t source_name_rva;
+};
+static_assert(sizeof(NativeSite) == 32 && offsetof(NativeSite, rva) == 8 && offsetof(NativeSite, expected) == 12);
+static_assert(sizeof(UniqueGuard) == 24 && offsetof(UniqueGuard, rva) == 8 && offsetof(UniqueGuard, expected_hex) == 16);
+static_assert(sizeof(TessCreateSite) == 40 && offsetof(TessCreateSite, prologue) == 16 &&
+    offsetof(TessCreateSite, wrapper_rva) == 24 && offsetof(TessCreateSite, wrapper) == 32);
+static_assert(sizeof(MotionGuardProfile) == 80 && offsetof(MotionGuardProfile, create_shader_calls) == 24 &&
+    offsetof(MotionGuardProfile, shader_compile_prologue) == 40 && offsetof(MotionGuardProfile, shader_compile_rva) == 64 &&
+    offsetof(MotionGuardProfile, source_name_rva) == 76);
+extern "C" const char* rsf_anomaly_motion_guard_failure(const rsf_anomaly_guard_image*, const MotionGuardProfile*) noexcept;
+
 namespace {
 std::byte* image{};
 // The exact build install() was given (build_profile.h), set together with `image`. Until then every read fails on the null
@@ -81,25 +106,27 @@ bool install_draw_hooks(void* context) noexcept {
     return draw_hooks.install_resolved(sites);
 }
 
-bool guards_match(std::byte* module, uint32_t image_size, const MotionProfile& profile, const char** failed) noexcept {
-    const auto checked = guard_image(module, image_size);
-    for (const auto& site : profile.motion_sites) {
-        if (!matches(checked, site) || !unique_guards_match(checked, profile.motion_unique_guards, site.rva)) {
-            *failed = site.name; return false;
-        }
-    }
-    for (const auto& site : profile.create_shader_calls) {
-        if (!matches(checked, site)) { *failed = site.name; return false; }
-    }
-    if (!rsf_anomaly_guard_hex(&checked, profile.shader_compile_rva, profile.shader_compile_prologue)) { *failed = "CRender::shader_compile prologue"; return false; }
-    if (!rsf_anomaly_guard_hex(&checked, profile.d3dcompile_setup_rva, profile.d3dcompile_setup)) { *failed = "CRender::shader_compile D3DCompile setup"; return false; }
-    if (!rsf_anomaly_guard_hex(&checked, profile.tess_dispatch_rva, profile.tess_dispatch)) { *failed = "create_shader hull/domain dispatch"; return false; }
-    for (const auto& site : profile.tess_create_sites) {
-        if (!rsf_anomaly_guard_hex(&checked, site.rva, site.prologue)) { *failed = site.name; return false; }
-        if (!rsf_anomaly_guard_hex(&checked, site.wrapper_rva, site.wrapper)) { *failed = "CreateHWShader (hull/domain)"; return false; }
-    }
-    if (!rsf_anomaly_guard_hex(&checked, profile.source_name_rva, "00")) { *failed = "D3DCompile pSourceName"; return false; }
-    return true;
+// Lends the selected build's tables; Rust returns the first mismatching check's name or null.
+const char* guard_failure(void* module, uint32_t image_size, const void* selected) noexcept {
+    const auto& profile = *static_cast<const BuildProfile*>(selected)->motion;
+    static_assert(motion_site_count == 3 && std::tuple_size_v<decltype(MotionProfile::create_shader_calls)> == 2 &&
+        std::tuple_size_v<decltype(MotionProfile::tess_create_sites)> == 2);
+    const MotionGuardProfile guards{
+        .sites = profile.motion_sites.data(),
+        .unique = profile.motion_unique_guards.data(),
+        .unique_count = profile.motion_unique_guards.size(),
+        .create_shader_calls = profile.create_shader_calls.data(),
+        .tess_create_sites = profile.tess_create_sites.data(),
+        .shader_compile_prologue = profile.shader_compile_prologue,
+        .d3dcompile_setup = profile.d3dcompile_setup,
+        .tess_dispatch = profile.tess_dispatch,
+        .shader_compile_rva = profile.shader_compile_rva,
+        .d3dcompile_setup_rva = profile.d3dcompile_setup_rva,
+        .tess_dispatch_rva = profile.tess_dispatch_rva,
+        .source_name_rva = profile.source_name_rva,
+    };
+    const auto checked = guard_image(static_cast<const std::byte*>(module), image_size);
+    return rsf_anomaly_motion_guard_failure(&checked, &guards);
 }
 
 rsf_anomaly_shader_bytes bytes(std::string_view s) noexcept {
@@ -291,11 +318,7 @@ void* create_shader(void* pack, const char* target, void* device, void* reflecti
 const MotionPlatform platform{
     sizeof(MotionPlatform), motion_platform_abi, &motion_device_platform(), &bind_platform,
     {sr::backend_rt_offset, sr::backend_zb_offset, sr::backend_rt_changed_offset},
-    [](void* module, uint32_t size, const void* profile) -> const char* {
-        const char* failed = "unknown";
-        return guards_match(static_cast<std::byte*>(module), size, *static_cast<const BuildProfile*>(profile)->motion, &failed)
-            ? nullptr : failed;
-    },
+    guard_failure,
     geometry::geometry_hooks_active,
     [](bool enabled) { geometry::geometry_set_flush_callback(enabled ? flush : nullptr); },
     geometry::geometry_enable_foliage_identity, install_hooks, [] { return hooks.disable(); }, [] { return hooks.created(); },

@@ -56,3 +56,69 @@ seventeen call pairs in order and every refusal and receipt text. Pinned Rust 1.
 locked offline Cargo metadata and whitespace checks passed. Build, link, Clippy, tests, the shared
 host fixture, deployment and game checks remain with the user; this is a source port, not a
 runtime result.
+
+## Reduced-render recovery transaction in Rust
+
+This source port starts at `c163aead` and moves the reduced-render recovery transaction from
+`render_hooks.cpp` into `render_hooks/recovery.rs` without new research. The transaction, its
+native seams and the Runtime contract are the ones in the [reduced recovery analysis](fallout4-native-reduced-recovery-20261116.md);
+the reduced-frame ABI is the existing `rsf_d3d11_host_reduced_frame` (ABI 1, 56-byte request) in
+`d3d11_host.h`. No option, fallback branch, graphics measurement or Runtime change is added, and
+the domain facts the adapter selects (the five raster resources, their kinds, the VATS restore flag
+and the output-owner association) stay in the adapter.
+
+| Owner | Rust (`render_hooks/recovery.rs`) | C++ (`render_hooks.cpp`) |
+| --- | --- | --- |
+| Token and verdict | The per-thread token, `committed`, `sealed`, `finished`, every RESERVE/SEAL/FINISH/RETIRE/CANCEL request and the verdict from its result, disposition and flags. FINISH sets the World full-output and temporal flags through `resolve` and refuses the source unless temporal output was published. | `World::full_output_resolved`, `published` and `refused`, which the TAA gate, SR publication and receipts keep reading. |
+| Surface plan | Five surfaces in lease order (depth/stencil, then motion, Pip-Boy, VATS, refraction as colour), integer render rect as source, output rect, zero operator offsets, the original names, VATS with `RESTORE_CONTENTS`. | The texture pointers, from the held lease. `reconstruct` still requires all five when a token is owned. |
+| Identity | The `NativeOutputOwner` recorded at reservation and the exact comparisons at confirmation, SEAL and FINISH. | Typed raster reads, `same_object` COM identity of colour, depth, motion, Pip-Boy, VATS and refraction (plus Context and chain at SEAL), and the full-output preflight call. |
+| Leases | When to adopt the candidate, when to discard it (a drop guard at the end of every step, as the C++ stack lease ended) and when to release the held lease. | `recovery_inputs` (held) and `recovery_candidate` COM leases on the World. |
+| Runtime effect | The request contents and when to call. | The `reduce` leaf: the held pass as owner, the held Context, `try`/`catch` answering `RSF_ERROR_NOT_READY`. |
+| Receipts and retention | Once-per-stage refusal texts (eight stages), the 32-row FINISH receipt budget, and the process-wide owned-token count that `busy()` now reads beside the C++ scope counters. | Native detour frames, `LastError`, the World reset points, which also reset the Rust state. |
+
+The C++ World fields `recovery_flags` and `recovery_disposition` were written and never read, so
+they are not carried over; each verdict reads the request it just made. Admission, prepass,
+imagespace, Effects, TAA receipts, Present capture and the post-Swap reset read the token or
+`committed` through `rsf_fallout4_recovery_token` and `rsf_fallout4_recovery_committed`.
+
+### Traces
+
+- **Refusal.** Stage 0 (no live adapter, no export, an owned token, no FRAME or a changed source)
+  and stage 1 (raster lease or full-output preflight missing) happen before any token and do not
+  refuse the World. The resolution owner then makes no ratio commitment and native ratios stay.
+  Stage 2 (RESERVE refused, or source, output owner or any of the six resources changed after
+  RESERVE) cancels a returned token. A CANCEL that allows the next reduction drops the token and
+  the held lease, so the refusal leaves the World unrefused; a refused CANCEL keeps both, refuses
+  the World and blocks the next World admission. Stages 3 to 7 refuse the World and retain the
+  token.
+- **Partial ratio write.** `committed` is set before `rsf_fallout4_resolution_configure` writes
+  any ratio. When the write fails part way, configure returns false, the World is marked
+  raster-refused while the resolution owner is busy or refused, and the committed token stays
+  owned. The prepass and Effects seams stay selected while a token is owned, even after quiesce,
+  so the SR seam SEALs the produced originals and its scope guard FINISHes the spatial recovery
+  even though SR is refused.
+- **Retry.** RETIRE is attempted at the original Effects return, at the selected imagespace exit
+  and after Swap. A FINISH that did not define full output leaves `finished` false and is retried
+  at the next point while the producer snapshot and output owner still match. Once `finished`
+  is true, a later FINISH answers the World's `full_output_resolved`. The imagespace exit clears
+  that flag after its own retirement attempt, so a RETIRE refused twice inside imagespace is not
+  sent again after Swap: the token stays owned. This matches the C++ source exactly and is kept;
+  it corrects the analysis note's statement that Swap cleanup retries retirement.
+- **Post-Swap retention.** `finish_render_scope` closes SUBMISSION, WINDOW and FRAME, then
+  retires recovery, drains auxiliaries and finishes the resolution source. The World and the Rust
+  state reset only when no resolution, auxiliary or token obligation remains. An owned token
+  keeps `busy()` true, so stop refuses, and the World admission refuses `recovery_owned`. A
+  committed token whose frame never reaches the SR seam is never sealed; post-Swap FINISH then
+  refuses at stage 6 and the token stays owned for the process, as before.
+
+The `reduce` leaf answers without calling the Runtime when the export or the held Context is
+missing. RESERVE in the C++ called the Runtime unconditionally after stage 0; a held lease always
+has a Context there, because the raster reader requires a nonzero immediate context.
+
+A scripted comparison against `c163aead` matched all eight refusal texts by stage, the FINISH
+receipt format and the five surface names. Pinned Rust 1.94.1 formatting, locked offline Cargo
+metadata and whitespace checks passed. Build, link, Clippy, tests, the shared host fixture,
+deployment and game checks remain with the user; this is a source port, not a runtime result.
+Open game checks: a reduced quality with temporal SR published, a spatial FINISH after temporal
+refusal, a forced ratio-write failure, a RETIRE refusal inside imagespace (expected to stay owned
+after Swap), quiesce with an owned token, and VATS/Pip-Boy contents after RETIRE.

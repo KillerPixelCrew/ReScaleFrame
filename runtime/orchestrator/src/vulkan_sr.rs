@@ -3,6 +3,7 @@ use crate::ffx_version::{self, MAX_VERSIONS, Version};
 use crate::render_abi::rsf_sharpening_options;
 use crate::sdk_module::{FIDELITYFX_DLL, Loader, SdkModule};
 use crate::sr_session::has_capacity;
+use crate::vulkan_dispatch::promoted_device_proc_alias;
 use crate::vulkan_sr_abi::*;
 use crate::vulkan_sr_split::normalize_frame;
 use rsf_game_sys::{
@@ -278,14 +279,7 @@ unsafe extern "C" fn rsf_core_srvk_dispatch_lookup(
     if result.is_some() || name.is_null() {
         return result;
     }
-    // Older SDKs ask for KHR spellings even when Vulkan exposes their promoted core equivalents.
-    let alias = match unsafe { CStr::from_ptr(name) }.to_bytes() {
-        b"vkGetBufferMemoryRequirements2KHR" => c"vkGetBufferMemoryRequirements2",
-        b"vkGetImageMemoryRequirements2KHR" => c"vkGetImageMemoryRequirements2",
-        b"vkBindBufferMemory2KHR" => c"vkBindBufferMemory2",
-        b"vkBindImageMemory2KHR" => c"vkBindImageMemory2",
-        _ => return None,
-    };
+    let alias = promoted_device_proc_alias(unsafe { CStr::from_ptr(name) })?;
     if unsafe { lookup(proc, device, alias.as_ptr(), &mut result) } != 0 {
         result
     } else {

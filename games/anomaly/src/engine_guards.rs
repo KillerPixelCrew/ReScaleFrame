@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+mod motion;
 mod sr;
 
 use std::ffi::{CStr, c_char, c_void};

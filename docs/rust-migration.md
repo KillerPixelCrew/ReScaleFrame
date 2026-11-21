@@ -16,7 +16,7 @@ Runtime. Preserve the supported paths, feature refusals and package names.
 | Project Wingman | The game DLL and its dedicated XInput startup owner are in Rust. Both XInput carriers share the native forwarding leaf. Current binary and live verification remain open. |
 | RDR2 | The game DLL renderer, ASI and attach workers, input guard, probes, Social Club backbuffer owner, capture installation and admission, hook registration, GPU leases, draw and pipeline records, presentation and NGX metadata, pending shots and capture drain, artifact publication and diagnostic workers are in Rust. Verify native observation coverage and the interleaved submission and retirement paths. |
 | Unity Mono and Unity package | Mono loader, plugin lifecycle, Runtime setup, package services, per-view D3D12 SR, presentation and input, D3D11 and Vulkan graphics, commands, shared surfaces and queued texture leases, D3D11 render-pass planning, Editor preview resources, Vulkan resolver state and checked package retirement are in Rust. Device, editor and player lifetime checks remain open. |
-| Steam, Fallout 4 and Skyrim SE | The shared Steam chain and both games' cold creation, identity, session lifecycle, camera math, screen and CPU event ownership are in Rust. Skyrim also owns its renderer observations, pre-HDR producers, presentation, resolution, auxiliaries and Community Shaders handover in Rust. Fallout 4's producer resolution, World and Present admission, render-input selection and render hook lifecycle are in Rust. Continue reduced-render recovery and producer callbacks. |
+| Steam, Fallout 4 and Skyrim SE | The shared Steam chain and both games' cold creation, identity, session lifecycle, camera math, screen and CPU event ownership are in Rust. Skyrim also owns its renderer observations, pre-HDR producers, presentation, resolution, auxiliaries and Community Shaders handover in Rust. Fallout 4's producer resolution, World and Present admission, render-input selection, render hook lifecycle and reduced-render recovery transaction are in Rust. Continue the producer callbacks and verify recovery in game. |
 | AC7 | The game DLL's GameSDK, native site admission, scene and velocity patches, renderer transaction, TrueSky, queued scopes, view buffer, UI, scene colour, contact-shadow rewrite, velocity shaders, variants, history, stream and commit planning, and per-device velocity renderer lifetime are in Rust. F9 scheduling, root registration, draw, dispatch, geometry and before-draw records and carrier startup admission are also in Rust. Native GPU reads and artifact I/O retain their existing boundaries. |
 | Godot | The native control, D3D12 and Vulkan sessions and SR contexts, D3D12 submission ledger, window and input routing, Vulkan creation, Auto provider routing and compositor diagnostics are in Rust. The private engine object owns viewport mode and identity, reset and render admission, CPU event records, the CPU frame lifecycle and render frame identity. SCons linkage and GDExtension, editor and player checks remain open. |
 | Minecraft | The native session, surface, message observer, frame packets, settings and status are in Rust. The Java mod, typed JNI marshaling and linked Runtime entry points retain their existing contracts. |
@@ -211,6 +211,11 @@ The Runtime's Vulkan-to-D3D12 FG owner now plans copy versus blit,
 placeholder clear, image layout transitions and queue ownership in
 Rust on the XeSS and FSR4 routes. The Vulkan SDK descriptors and command
 calls stay native. [Transfer plan](research/rust-vulkan-dx12-copy-plan.md)
+
+FidelityFX SR and FG share one Rust table for the four promoted Vulkan
+device-function aliases. The loaders try the requested name before
+the core alias. FG's miss on a null name now bypasses the alias lookup.
+The typed calls and WSI borrow stay native. Link and device checks remain open.
 
 ## Verification coverage
 
