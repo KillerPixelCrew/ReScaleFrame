@@ -13,6 +13,7 @@ mod passes;
 mod targets;
 #[cfg(test)]
 mod tests;
+pub(crate) use passes::DrawViews;
 pub(crate) use targets::TemporalTargets;
 
 type Ptr = *mut c_void;
@@ -229,10 +230,10 @@ const SRV: u32 = 1;
 const UAV: u32 = 2;
 const DSV: u32 = 3;
 const DEPTH_SRV: u32 = 4;
-const ROUND_TRIP: u32 = 0;
-const UPSCALE: u32 = 1;
-const PREPARE: u32 = 2;
-const REINSERT: u32 = 3;
+pub(crate) const ROUND_TRIP: u32 = 0;
+pub(crate) const UPSCALE: u32 = 1;
+pub(crate) const PREPARE: u32 = 2;
+pub(crate) const REINSERT: u32 = 3;
 
 #[cfg(test)]
 pub(crate) fn fixture_device() -> Ptr {

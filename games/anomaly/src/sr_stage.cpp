@@ -56,8 +56,8 @@ void rsf_anomaly_sr_stage_sun_end(bool) noexcept;
 void rsf_anomaly_sr_stage_position_setup(void*) noexcept;
 void rsf_anomaly_sr_stage_rm_near() noexcept;
 void rsf_anomaly_sr_stage_frame_end() noexcept;
-bool rsf_anomaly_sr_stage_upscale(void*, const rsf_anomaly_sr_seam*) noexcept;
-bool rsf_anomaly_sr_stage_round_trip(void*, const rsf_anomaly_sr_seam*) noexcept;
+bool rsf_anomaly_sr_stage_upscale(void*, const rsf_anomaly_swap_upscale*) noexcept;
+bool rsf_anomaly_sr_stage_round_trip(void*, const rsf_anomaly_swap_fields*, const rsf_anomaly_swap_fields*) noexcept;
 void rsf_anomaly_sr_stage_report(rsf_anomaly_sr_log, void*) noexcept;
 void rsf_anomaly_sr_stage_jitter(rsf_anomaly_sr_jitter_state*) noexcept;
 void rsf_anomaly_sr_stage_jitter_uv(rsf_anomaly_sr_jitter_uv*) noexcept;
@@ -143,9 +143,11 @@ EnginePositionConstants position_constants;
 static_assert(D3D11_DEVICE_CONTEXT_IMMEDIATE == 0 && D3D11_USAGE_STAGING == 3 && D3D11_CPU_ACCESS_READ == 0x20000);
 static_assert(sizeof(rsf_anomaly_sr_frame_reads) == 168 && offsetof(rsf_anomaly_sr_frame_reads, render_view) == 152);
 static_assert(static_cast<uint32_t>(temporal::ViewId::Scope) == 1 && dx10_msaa_bit == (1u << 14));
-static_assert(sizeof(rsf_anomaly_sr_stage_platform) == 640 &&
+static_assert(sizeof(rsf_anomaly_sr_stage_platform) == 616 &&
     offsetof(rsf_anomaly_sr_stage_platform, immediate_context) == 280 &&
-    offsetof(rsf_anomaly_sr_stage_platform, pixel_bytes) == 328 && offsetof(rsf_anomaly_sr_stage_platform, bilinear) == 336);
+    offsetof(rsf_anomaly_sr_stage_platform, pixel_bytes) == 328 && offsetof(rsf_anomaly_sr_stage_platform, draw_pass) == 336);
+static_assert(first_person_depth_limit == 0.02f && RSF_SR_ROUND_TRIP == 0 && RSF_SR_UPSCALE == 1 &&
+    RSF_SR_PREPARE == 2 && RSF_SR_REINSERT == 3);
 // Predication is cleared for the copy and restored afterwards, as the burst always did.
 void copy_subresource(void* context, void* destination, uint32_t destination_subresource, void* source,
     uint32_t source_subresource) noexcept {
@@ -185,10 +187,8 @@ struct TwinLog {
 struct Host final : SwapHost {
     rsf_sr_stage_resources* resources{};
     const TwinLog* twin_log{}; // borrowed only while controller.prepare() runs
-    // While controller.seam() runs: the Rust scope lent by the seam call, and the seam being closed.
+    // While controller.seam() runs: the Rust scope lent by the seam call.
     void* cookie{};
-    const UpscaleViews* seam_views{};
-    const rsf_sr_draw_views* trip_views{};
     Host() = default;
     Host(const Host&) = delete;
     Host& operator=(const Host&) = delete;
@@ -245,21 +245,8 @@ struct Host final : SwapHost {
         // takes references it never releases (stock leaks them on its own targets too), so this is diagnostic only.
         rsf_anomaly_sr_stage_retire_twins(resources, twin_refs);
     }
-    // Stage 2 and later: the Rust seam pass decides inputs, captures and fallback; the leaves below act on these views.
     bool upscale(const UpscaleInputs& in) noexcept override {
-        if (!in.generic0_twin || !in.position_twin || !in.generic1_twin || !in.generic0 || !in.position || !in.generic1) return false;
-        const UpscaleViews views{static_cast<ID3D11ShaderResourceView*>(in.generic0_twin->srv),
-            static_cast<ID3D11ShaderResourceView*>(in.position_twin->srv), static_cast<ID3D11ShaderResourceView*>(in.generic1_twin->srv),
-            static_cast<ID3D11ShaderResourceView*>(in.depth_srv), in.render_width, in.render_height,
-            static_cast<ID3D11RenderTargetView*>(in.generic0->rtv), static_cast<ID3D11RenderTargetView*>(in.position->rtv),
-            static_cast<ID3D11RenderTargetView*>(in.generic1->rtv), static_cast<ID3D11DepthStencilView*>(in.engine_dsv),
-            in.output_width, in.output_height};
-        const rsf_anomaly_sr_seam seam{in.generic0_twin->surface, in.generic0->surface, in.render_width, in.render_height,
-            in.output_width, in.output_height};
-        seam_views = &views;
-        const bool ok = rsf_anomaly_sr_stage_upscale(cookie, &seam);
-        seam_views = nullptr;
-        return ok;
+        return rsf_anomaly_sr_stage_upscale(cookie, &in);
     }
     void set_viewport(uint32_t width, uint32_t height) noexcept override { set_full_viewport(context(), width, height); }
     bool upload_projection(const void* matrix) noexcept override { return call_set_projection(matrix); }
@@ -268,12 +255,7 @@ struct Host final : SwapHost {
         return sr::correct_position_constant(position_constants, constant, x, y);
     }
     bool round_trip(const TargetFields& twin, const TargetFields& engine) noexcept override {
-        const rsf_anomaly_sr_seam seam{twin.surface, engine.surface, twin.width, twin.height, engine.width, engine.height};
-        const auto views = round_trip_views(twin.srv, twin.width, twin.height, engine.rtv, engine.width, engine.height);
-        trip_views = &views;
-        const bool ok = rsf_anomaly_sr_stage_round_trip(cookie, &seam);
-        trip_views = nullptr;
-        return ok;
+        return rsf_anomaly_sr_stage_round_trip(cookie, &twin, &engine);
     }
 };
 
@@ -534,15 +516,10 @@ const rsf_anomaly_sr_stage_platform platform{
         static_cast<ID3D11DeviceContext*>(context)->Unmap(static_cast<ID3D11Resource*>(texture), subresource);
     },
     .pixel_bytes = [](uint32_t format) { return rsf::texture_pixel_bytes(static_cast<DXGI_FORMAT>(format)); },
-    .bilinear = [] {
-        if (!host.seam_views) return false;
-        const auto views = upscale_views(*host.seam_views);
-        return rsf_anomaly_sr_run_pass(host.pass(), host.context(), RSF_SR_UPSCALE, &views) != 0;
+    .draw_pass = [](uint32_t kind, const rsf_sr_draw_views* views) {
+        return rsf_anomaly_sr_run_pass(host.pass(), host.context(), kind, views) != 0;
     },
-    .round_trip = [] {
-        return host.trip_views && rsf_anomaly_sr_run_pass(host.pass(), host.context(), RSF_SR_ROUND_TRIP, host.trip_views) != 0;
-    },
-    .temporal_ready = [] { return host.seam_views && rsf_anomaly_sr_temporal_ready(host.pass()) && host.depth_texture(); },
+    .temporal_ready = [] { return rsf_anomaly_sr_temporal_ready(host.pass()) && host.depth_texture(); },
     .temporal_platform = []() -> const void* { return &d3d11_platform(); },
     .motion_target = [](rsf_anomaly_sr_motion_target* out) {
         const auto target = motion::frame_target();
@@ -550,22 +527,7 @@ const rsf_anomaly_sr_stage_platform platform{
         return target.texture != nullptr;
     },
     .create_motion_view = rsf_d3d11_create_shader_view,
-    .seam_prepare = [](void* motion_view, void* colour_target, void* motion_target, bool first_person_zero) {
-        if (!host.seam_views) return false;
-        const auto& views = *host.seam_views;
-        const PrepareViews prepare{views.colour, static_cast<ID3D11ShaderResourceView*>(motion_view), views.depth,
-            views.source_width, views.source_height, static_cast<ID3D11RenderTargetView*>(colour_target),
-            static_cast<ID3D11RenderTargetView*>(motion_target), first_person_depth_limit,
-            first_person_zero};
-        const auto input = prepare_views(prepare);
-        return rsf_anomaly_sr_run_pass(host.pass(), host.context(), RSF_SR_PREPARE, &input) != 0;
-    },
     .depth_texture = [] { return host.depth_texture(); },
-    .reinsert = [](void* reconstruction) {
-        if (!host.seam_views) return false;
-        const auto views = upscale_views(*host.seam_views, reconstruction);
-        return rsf_anomaly_sr_run_pass(host.pass(), host.context(), RSF_SR_REINSERT, &views) != 0;
-    },
     .driver_bind = [] { return driver.bind(rsf_anomaly_runtime_module()); },
     .driver_enabled = [] { return driver.enabled(); },
     .driver_output_format = [] { return driver.output_format(); },

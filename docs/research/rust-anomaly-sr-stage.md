@@ -233,3 +233,26 @@ slots. Focused bindgen regeneration and source checks covered both
 profile reads, the admission order and public declarations. The
 extended fixtures, current build, and Standard and AVX game checks
 remain open.
+
+## Seam draw bindings
+
+Compared with `9a1a9516`, the swap controller now lends its existing
+twin and engine records directly to the Rust SR stage. The native host
+no longer publishes pointers to local seam or round-trip view records.
+Rust assembles the existing 96-byte draw record for the synchronous
+pass callback. The controller retains the resource leases through the
+seam, and the native leaf still borrows the same pass and context.
+
+| Pass | Binding comparison |
+| --- | --- |
+| Stage 1 round trip | Read twin generic0 at the twin extent and write the original generic0 RTV at its engine extent. |
+| Spatial reconstruction | Use the twin colour, position, distortion and depth views and the three original colour targets and original depth view. |
+| Temporal preparation | Keep the render extent, colour, depth and selected motion inputs, and the colour and motion output views. Keep the 0.02 depth threshold and the live first-person zero flag. |
+| Temporal reinsertion | Use the spatial bindings with the reconstructed output SRV in the fifth input slot. |
+
+The stage table now has 77 callbacks because the four draw entries
+share one native leaf. The fixture inspects the borrowed bindings at
+that leaf. Source comparison and focused binding regeneration passed.
+The public declarations, shaders, capture order and profile data
+match in source. Build, fixtures and live Standard and AVX checks
+remain open.

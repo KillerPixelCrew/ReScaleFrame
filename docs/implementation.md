@@ -930,6 +930,13 @@ stock capture seam before computing the texture address. The new
 fixtures and game checks remain unrun.
 [Frame and loading admission](research/rust-anomaly-sr-stage.md#frame-and-loading-admission)
 
+Anomaly now assembles the round-trip, spatial, temporal preparation,
+and reinsertion bindings in Rust. The native host borrows those
+bindings for one draw and no longer stores pointers to seam-local
+records. Source comparison matched the binding order and shader
+inputs. The updated fixtures and game checks remain open.
+[Seam draw bindings](research/rust-anomaly-sr-stage.md#seam-draw-bindings)
+
 Native D3D12 DLSS now resolves the required interposer and feature
 addresses in Rust. The native capsule binds the typed pointers
 after admission. Source comparison matched the ordered lookups and

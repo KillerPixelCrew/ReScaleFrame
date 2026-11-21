@@ -19,8 +19,14 @@ use crate::camera;
 use crate::frame_dump::DumpApi;
 use crate::lease::Lease;
 use crate::native_geometry_abi::SCOPE;
-use crate::sr_d3d11::{Extent, Platform as D3d11Platform, TemporalTargets};
+use crate::sr_d3d11::{
+    DrawViews, Extent, PREPARE, Platform as D3d11Platform, REINSERT, ROUND_TRIP, TemporalTargets,
+    UPSCALE,
+};
 use crate::sr_stage_abi::*;
+use crate::sr_swap_abi::{
+    rsf_anomaly_swap_fields as TargetFields, rsf_anomaly_swap_upscale as UpscaleInputs,
+};
 use rsf_game_sys::{RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record};
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::io::Write;
@@ -34,6 +40,7 @@ const SCREEN_UNKNOWN: u32 = 0;
 const E_FAIL: i32 = 0x8000_4005_u32 as i32;
 const FORMAT_RGBA16F: u32 = 10;
 const DX10_MSAA: u32 = 1 << 14;
+const FIRST_PERSON_DEPTH_BITS: u32 = 0.02f32.to_bits();
 const VIEW_RAW: u32 = 0;
 const VIEW_HDR: u32 = 3;
 const VIEW_DEPTH: u32 = 4;
@@ -103,6 +110,68 @@ macro_rules! leaf {
 fn admitted_target(platform: &Platform, this: *mut c_void) -> *mut c_void {
     let target = leaf!(platform, render_target());
     if target == this { target } else { null_mut() }
+}
+
+// The swap controller lends these views through the synchronous seam call.
+struct Seam {
+    twin_surface: *mut c_void,
+    engine_surface: *mut c_void,
+    views: DrawViews,
+}
+
+impl Seam {
+    unsafe fn upscale(input: &UpscaleInputs) -> Option<Self> {
+        let colour = unsafe { input.generic0_twin.as_ref() }?;
+        let position = unsafe { input.position_twin.as_ref() }?;
+        let distort = unsafe { input.generic1_twin.as_ref() }?;
+        let colour_target = unsafe { input.generic0.as_ref() }?;
+        let position_target = unsafe { input.position.as_ref() }?;
+        let distort_target = unsafe { input.generic1.as_ref() }?;
+        Some(Self {
+            twin_surface: colour.surface,
+            engine_surface: colour_target.surface,
+            views: DrawViews {
+                output: Extent {
+                    width: input.output_width,
+                    height: input.output_height,
+                },
+                source: Extent {
+                    width: input.render_width,
+                    height: input.render_height,
+                },
+                targets: [colour_target.rtv, position_target.rtv, distort_target.rtv],
+                depth: input.engine_dsv,
+                inputs: [
+                    colour.srv,
+                    position.srv,
+                    distort.srv,
+                    input.depth_srv,
+                    null_mut(),
+                ],
+                ..DrawViews::default()
+            },
+        })
+    }
+
+    fn round_trip(twin: &TargetFields, engine: &TargetFields) -> Self {
+        Self {
+            twin_surface: twin.surface,
+            engine_surface: engine.surface,
+            views: DrawViews {
+                output: Extent {
+                    width: engine.width,
+                    height: engine.height,
+                },
+                source: Extent {
+                    width: twin.width,
+                    height: twin.height,
+                },
+                targets: [engine.rtv, null_mut(), null_mut()],
+                inputs: [twin.srv, null_mut(), null_mut(), null_mut(), null_mut()],
+                ..DrawViews::default()
+            },
+        }
+    }
 }
 
 mod burst_file;
@@ -1764,7 +1833,7 @@ impl Stage {
     }
 
     // Stage 2 and later, after the restore at the seam (Host::upscale).
-    fn upscale(&self, state: &mut State, seam: &rsf_anomaly_sr_seam) -> bool {
+    fn upscale(&self, state: &mut State, seam: &Seam) -> bool {
         let p = self.platform();
         let stage = state.config.stage;
         if state.capture.active {
@@ -1787,7 +1856,7 @@ impl Stage {
         let ok = if sr_inputs(stage) {
             self.temporal_seam(state, seam)
         } else {
-            leaf!(p, bilinear())
+            leaf!(p, draw_pass(UPSCALE, &seam.views))
         };
         if state.capture.active {
             self.take(
@@ -1808,7 +1877,7 @@ impl Stage {
     }
 
     // Stage 1, after the restore at the seam (Host::round_trip).
-    fn round_trip(&self, state: &mut State, seam: &rsf_anomaly_sr_seam) -> bool {
+    fn round_trip(&self, state: &mut State, seam: &Seam) -> bool {
         if state.capture.active {
             self.take(
                 state,
@@ -1819,7 +1888,7 @@ impl Stage {
                 1.0,
             );
         }
-        let ok = leaf!(self.platform(), round_trip());
+        let ok = leaf!(self.platform(), draw_pass(ROUND_TRIP, &seam.views));
         if state.capture.active {
             self.take(
                 state,
@@ -1869,11 +1938,11 @@ impl Stage {
 
     // Stages 4 and 5 at the S-B seam, after the engine fields are restored (section 12). Every refusal draws the Stage 2
     // bilinear pass instead, so the engine always receives a complete world image.
-    fn temporal_seam(&self, state: &mut State, seam: &rsf_anomaly_sr_seam) -> bool {
+    fn temporal_seam(&self, state: &mut State, seam: &Seam) -> bool {
         let p = self.platform();
         let bilinear = || {
             leaf!(p, driver_count_bilinear());
-            leaf!(p, bilinear())
+            leaf!(p, draw_pass(UPSCALE, &seam.views))
         };
         let refuse = |reason: u8| {
             leaf!(p, driver_count(reason));
@@ -1885,10 +1954,10 @@ impl Stage {
         }
         let stage = state.config.stage;
         let (rw, rh, ow, oh) = (
-            seam.render_width,
-            seam.render_height,
-            seam.output_width,
-            seam.output_height,
+            seam.views.source.width,
+            seam.views.source.height,
+            seam.views.output.width,
+            seam.views.output.height,
         );
         let evaluate = stage == 5 && leaf!(p, driver_enabled());
         let pipeline_format = if evaluate {
@@ -1958,15 +2027,21 @@ impl Stage {
             textures.empty_motion_srv
         };
         let first_person_zero = self.live.first_person_zero.load(Ordering::Relaxed);
-        if !leaf!(
-            p,
-            seam_prepare(
+        let prepare = DrawViews {
+            output: seam.views.source,
+            targets: [textures.colour_rtv, textures.motion_rtv, null_mut()],
+            inputs: [
+                seam.views.inputs[0],
+                seam.views.inputs[3],
                 motion_input,
-                textures.colour_rtv,
-                textures.motion_rtv,
-                first_person_zero
-            )
-        ) {
+                null_mut(),
+                null_mut(),
+            ],
+            first_person_depth: FIRST_PERSON_DEPTH_BITS,
+            first_person_zero: u32::from(first_person_zero),
+            ..DrawViews::default()
+        };
+        if !leaf!(p, draw_pass(PREPARE, &prepare)) {
             return refuse(REFUSAL_PREPARE);
         }
         leaf!(p, driver_count_prepared(!motion_present));
@@ -2092,7 +2167,9 @@ impl Stage {
             VIEW_HDR,
             1.0,
         );
-        if !leaf!(p, reinsert(textures.output_srv)) {
+        let mut reinsert = seam.views;
+        reinsert.inputs[4] = textures.output_srv;
+        if !leaf!(p, draw_pass(REINSERT, &reinsert)) {
             return refuse(REFUSAL_REINSERT);
         }
         true
@@ -2764,28 +2841,35 @@ extern "C" fn rsf_anomaly_sr_stage_frame_end() {
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_anomaly_sr_stage_upscale(
     cookie: *mut c_void,
-    seam: *const rsf_anomaly_sr_seam,
+    input: *const UpscaleInputs,
 ) -> bool {
-    if cookie.is_null() || seam.is_null() {
+    let (Some(scope), Some(input)) = (unsafe { cookie.cast::<Scope>().as_ref() }, unsafe {
+        input.as_ref()
+    }) else {
         return false;
-    }
-    let scope = unsafe { &*cookie.cast::<Scope>() };
-    scope
-        .stage
-        .upscale(unsafe { &mut *scope.state }, unsafe { &*seam })
+    };
+    let Some(seam) = (unsafe { Seam::upscale(input) }) else {
+        return false;
+    };
+    scope.stage.upscale(unsafe { &mut *scope.state }, &seam)
 }
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_anomaly_sr_stage_round_trip(
     cookie: *mut c_void,
-    seam: *const rsf_anomaly_sr_seam,
+    twin: *const TargetFields,
+    engine: *const TargetFields,
 ) -> bool {
-    if cookie.is_null() || seam.is_null() {
+    let (Some(scope), Some(twin), Some(engine)) = (
+        unsafe { cookie.cast::<Scope>().as_ref() },
+        unsafe { twin.as_ref() },
+        unsafe { engine.as_ref() },
+    ) else {
         return false;
-    }
-    let scope = unsafe { &*cookie.cast::<Scope>() };
-    scope
-        .stage
-        .round_trip(unsafe { &mut *scope.state }, unsafe { &*seam })
+    };
+    scope.stage.round_trip(
+        unsafe { &mut *scope.state },
+        &Seam::round_trip(twin, engine),
+    )
 }
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_anomaly_sr_stage_report(emit: rsf_anomaly_sr_log, user: *mut c_void) {

@@ -13,6 +13,7 @@
 
 struct rsf_camera_frame;
 struct rsf_game_render_pass;
+struct rsf_sr_draw_views;
 
 typedef void (*rsf_anomaly_sr_log)(void*, const char*);
 
@@ -214,13 +215,6 @@ uint8_t rsf_anomaly_sr_reset_reason(const rsf_anomaly_sr_reset_facts*);
 }
 #endif
 
-// The S-B seam the controller is closing: the engine and twin generic0 surfaces and the window sizes.
-typedef struct rsf_anomaly_sr_seam {
-    void* twin_surface;
-    void* engine_surface;
-    uint32_t render_width, render_height, output_width, output_height;
-} rsf_anomaly_sr_seam;
-
 typedef struct rsf_anomaly_sr_motion_target {
     void* texture;
     bool written, main;
@@ -295,15 +289,12 @@ typedef struct rsf_anomaly_sr_stage_platform {
     bool (*map_read)(void* context, void* texture, uint32_t subresource, const void** data, uint32_t* row_pitch);
     void (*unmap)(void* context, void* texture, uint32_t subresource);
     uint32_t (*pixel_bytes)(uint32_t format);
-    bool (*bilinear)(void);
-    bool (*round_trip)(void);
+    bool (*draw_pass)(uint32_t kind, const struct rsf_sr_draw_views*);
     bool (*temporal_ready)(void);
     const void* (*temporal_platform)(void);   // the static rsf_sr_d3d11 table
     bool (*motion_target)(rsf_anomaly_sr_motion_target*);
     void* (*create_motion_view)(void* device, void* texture);   // an owned reference or null
-    bool (*seam_prepare)(void* motion_view, void* colour_target, void* motion_target, bool first_person_zero);
     void* (*depth_texture)(void);   // borrowed by the seam
-    bool (*reinsert)(void* reconstruction);
     // TemporalDriver (sr_temporal.h).
     bool (*driver_bind)(void);
     bool (*driver_enabled)(void);

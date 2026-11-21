@@ -165,26 +165,54 @@ extern "C" fn seam(cookie: *mut c_void) -> bool {
         return false;
     }
     fake(|f| f.window_open = false);
-    let seam = rsf_anomaly_sr_seam {
-        twin_surface: CONTEXT,
-        engine_surface: CONTEXT,
+    let colour = TargetFields {
+        surface: CONTEXT,
+        srv: std::ptr::without_provenance_mut(0x30),
+        ..Default::default()
+    };
+    let position = TargetFields {
+        srv: std::ptr::without_provenance_mut(0x31),
+        ..Default::default()
+    };
+    let distort = TargetFields {
+        srv: std::ptr::without_provenance_mut(0x32),
+        ..Default::default()
+    };
+    let engine_colour = TargetFields {
+        surface: CONTEXT,
+        rtv: std::ptr::without_provenance_mut(0x40),
+        ..Default::default()
+    };
+    let engine_position = TargetFields {
+        rtv: std::ptr::without_provenance_mut(0x41),
+        ..Default::default()
+    };
+    let engine_distort = TargetFields {
+        rtv: std::ptr::without_provenance_mut(0x42),
+        ..Default::default()
+    };
+    let input = UpscaleInputs {
+        generic0_twin: &colour,
+        position_twin: &position,
+        generic1_twin: &distort,
+        depth_srv: std::ptr::without_provenance_mut(0x33),
+        generic0: &engine_colour,
+        position: &engine_position,
+        generic1: &engine_distort,
+        engine_dsv: std::ptr::without_provenance_mut(0x43),
         render_width: 1280,
         render_height: 720,
         output_width: 1920,
         output_height: 1080,
     };
     // The real controller reaches the Rust seam pass through the host exactly like this.
-    unsafe { rsf_anomaly_sr_stage_upscale(cookie, &seam) }
+    unsafe { rsf_anomaly_sr_stage_upscale(cookie, &input) }
 }
 extern "C" fn context() -> *mut c_void {
     CONTEXT
 }
 extern "C" fn device() -> *mut c_void {
     crate::sr_d3d11::fixture_device()
-}
-extern "C" fn bilinear() -> bool {
-    record("bilinear");
-    true
 }
 extern "C" fn temporal_ready() -> bool {
     fake(|f| f.temporal_ready)
@@ -204,17 +232,42 @@ extern "C" fn release_view(_: *mut c_void) {}
 extern "C" fn engine_frame() -> u32 {
     fake(|f| f.engine_frame)
 }
-extern "C" fn seam_prepare(
-    view: *mut c_void,
-    _: *mut c_void,
-    _: *mut c_void,
-    first_person_zero: bool,
-) -> bool {
-    let motion = view == CONTEXT;
-    record(format!(
-        "seam prepare motion={motion} fp_zero={first_person_zero}"
-    ));
-    true
+unsafe extern "C" fn draw_pass(kind: u32, views: *const DrawViews) -> bool {
+    let views = unsafe { &*views };
+    match kind {
+        PREPARE => {
+            assert_eq!((views.output.width, views.output.height), (1280, 720));
+            assert_eq!(views.inputs[0].addr(), 0x30);
+            assert_eq!(views.inputs[1].addr(), 0x33);
+            assert_eq!(views.first_person_depth, 0.02f32.to_bits());
+            let motion = views.inputs[2] == CONTEXT;
+            let first_person_zero = views.first_person_zero != 0;
+            record(format!(
+                "seam prepare motion={motion} fp_zero={first_person_zero}"
+            ));
+            true
+        }
+        UPSCALE | REINSERT => {
+            assert_eq!((views.output.width, views.output.height), (1920, 1080));
+            assert_eq!((views.source.width, views.source.height), (1280, 720));
+            assert_eq!(views.targets.map(|view| view.addr()), [0x40, 0x41, 0x42]);
+            assert_eq!(views.depth.addr(), 0x43);
+            assert_eq!(
+                views.inputs.map(|view| view.addr())[..4],
+                [0x30, 0x31, 0x32, 0x33]
+            );
+            if kind == UPSCALE {
+                assert!(views.inputs[4].is_null());
+                record("bilinear");
+                true
+            } else {
+                assert!(!views.inputs[4].is_null());
+                record("reinsert");
+                fake(|f| f.reinsert)
+            }
+        }
+        _ => unreachable!(),
+    }
 }
 extern "C" fn driver_enabled() -> bool {
     fake(|f| f.driver_enabled)
@@ -239,10 +292,6 @@ unsafe extern "C" fn driver_evaluate(
         f.passes.push(pass);
         f.evaluate
     })
-}
-extern "C" fn reinsert(_: *mut c_void) -> bool {
-    record("reinsert");
-    fake(|f| f.reinsert)
 }
 extern "C" fn controller_frame_end() {
     record("controller frame_end");
@@ -411,15 +460,13 @@ fn platform() -> Box<Platform> {
         shutdown: Some(shutdown),
         set_swap_enabled: Some(set_swap_enabled),
         controller: Some(controller),
-        bilinear: Some(bilinear),
+        draw_pass: Some(draw_pass),
         temporal_ready: Some(temporal_ready),
         temporal_platform: Some(temporal_platform),
         depth_texture: Some(context),
         motion_target: Some(motion_target),
         create_motion_view: Some(create_motion_view),
         release: Some(release_view),
-        seam_prepare: Some(seam_prepare),
-        reinsert: Some(reinsert),
         driver_bind: Some(driver_bind),
         driver_enabled: Some(driver_enabled),
         driver_boundary: Some(driver_boundary),

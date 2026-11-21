@@ -408,6 +408,13 @@ Standard and AVX profile data. Build, fixture and game verification
 remain open.
 [Frame and loading admission](research/rust-anomaly-sr-stage.md#frame-and-loading-admission)
 
+Anomaly's Rust stage builds each seam draw record from the existing
+borrowed twin and engine views. One native callback submits the
+typed draw instead of retaining separate view records on the host.
+Source checks matched bindings and the public declarations. Native
+builds, fixtures and live checks remain open.
+[Seam draw bindings](research/rust-anomaly-sr-stage.md#seam-draw-bindings)
+
 ## Verification coverage
 
 | Requirement | Recorded evidence | Still open |

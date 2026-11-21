@@ -5,17 +5,32 @@ use std::ffi::CStr;
 use std::ptr::{NonNull, null_mut};
 
 #[repr(C)]
-struct DrawViews {
-    output: Extent,
-    source: Extent,
-    targets: [Ptr; 3],
-    depth: Ptr,
-    inputs: [Ptr; 5],
-    first_person_depth: u32,
-    first_person_zero: u32,
+#[derive(Clone, Copy)]
+pub(crate) struct DrawViews {
+    pub(crate) output: Extent,
+    pub(crate) source: Extent,
+    pub(crate) targets: [Ptr; 3],
+    pub(crate) depth: Ptr,
+    pub(crate) inputs: [Ptr; 5],
+    pub(crate) first_person_depth: u32,
+    pub(crate) first_person_zero: u32,
 }
 
 const _: () = assert!(size_of::<DrawViews>() == 96);
+
+impl Default for DrawViews {
+    fn default() -> Self {
+        Self {
+            output: Extent::default(),
+            source: Extent::default(),
+            targets: [null_mut(); 3],
+            depth: null_mut(),
+            inputs: [null_mut(); 5],
+            first_person_depth: 0,
+            first_person_zero: 0,
+        }
+    }
+}
 
 impl DrawViews {
     fn sizes(&self) -> [u32; 4] {
