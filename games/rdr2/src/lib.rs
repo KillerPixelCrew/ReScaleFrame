@@ -9,6 +9,7 @@ mod asi;
 mod camera;
 #[cfg(windows)]
 mod camera_probe;
+mod capture_state;
 mod engine_settings;
 mod host;
 mod layout;

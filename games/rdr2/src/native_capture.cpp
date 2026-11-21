@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Bounded copies after actual swapchain draws, preserving the game's command list and state.
 #include "native_capture.h"
+#include "capture_state.h"
 #include "camera_probe.h"
 #include <rescaleframe/census_d3d12_observer.h>
 #include <windows.h>
@@ -89,10 +90,7 @@ struct State {
     std::mutex mutex;
     wchar_t directory[MAX_PATH]{}, request[MAX_PATH]{}, log[MAX_PATH]{};
     uintptr_t base{};
-    std::atomic<bool> pending{};
-    std::atomic<bool> active{};
-    UINT sequence{}, ordinal{}, input_index{};
-    std::atomic<UINT> inputs_remaining{};
+    rsf_rdr2_capture_state* capture{};
     uint64_t submission_serial{}, write_serial{};
     ID3D12Resource* selected{};
     std::array<ComPtr<ID3D12Resource>, 4> buffers;
@@ -106,10 +104,6 @@ struct State {
     std::unordered_map<void*, uint32_t> sr_features;
     std::vector<DrawEvent> draws;
     std::vector<std::shared_ptr<Temporal>> temporal;
-    bool draw_overflow{};
-    bool capture_dirty{}, capture_timeout{}, write_failed{};
-    UINT inputs_in_flight{}, written{};
-    uint64_t capture_started{};
     std::unordered_map<void*, Presentation> presentation;
     Presentation captured_presentation;
 #ifdef RSF_RDR2_CAPTURE_TEST
@@ -119,6 +113,12 @@ struct State {
 #endif
 };
 State* g{}; // Pinned with the diagnostic ASI until process exit.
+rsf_rdr2_capture_progress capture_progress() noexcept
+{
+    rsf_rdr2_capture_progress status{};
+    rsf_rdr2_capture_progress_get(g->capture, &status);
+    return status;
+}
 bool read_local(uint64_t address, void* out, size_t bytes);
 std::mutex bind_mutex;
 void log(const char* format, ...) noexcept
@@ -476,22 +476,26 @@ void ngx_released(void* handle) noexcept
 }
 void ngx_evaluate(void* pointer, void* handle, const void* parameters, uint32_t phase, uint64_t result) noexcept try
 {
-    if (!pointer || (!phase && !g->inputs_remaining.load(std::memory_order_relaxed))) return;
+    if (!pointer || (!phase && !rsf_rdr2_capture_has_inputs(g->capture))) return;
     auto* list = static_cast<ID3D12GraphicsCommandList*>(pointer);
     std::lock_guard<std::mutex> lock(g->mutex);
     if (phase) {
         if (!evaluating || evaluating->list != reinterpret_cast<uint64_t>(list)) return;
-        evaluating->result = result;
-        if (static_cast<uint32_t>(result) == 1) input_resource(list, parameters, "Output", "output", *evaluating, true);
-        else evaluating->refusals.emplace_back("native_evaluation_failed");
-        evaluating.reset(); --g->inputs_in_flight;
+        auto record = std::move(evaluating);
+        struct FinishInput {
+            ~FinishInput() { rsf_rdr2_capture_end_input(g->capture); }
+        } finish;
+        record->result = result;
+        if (static_cast<uint32_t>(result) == 1) input_resource(list, parameters, "Output", "output", *record, true);
+        else record->refusals.emplace_back("native_evaluation_failed");
         return;
     }
-    if (evaluating || !g->inputs_remaining) return;
+    if (evaluating || !rsf_rdr2_capture_has_inputs(g->capture)) return;
     const auto feature = g->sr_features.find(handle);
     if (feature == g->sr_features.end()) return;
     auto t = std::make_shared<Temporal>();
-    t->sequence = g->sequence; t->index = g->input_index++; t->feature_flags = feature->second;
+    t->sequence = capture_progress().sequence;
+    t->index = rsf_rdr2_capture_reserve_input(g->capture); t->feature_flags = feature->second;
     t->list = reinterpret_cast<uint64_t>(list); t->generation = g->lists[list].generation;
     input_camera(*t);
     static const char* const floats[]{"Jitter.Offset.X", "Jitter.Offset.Y", "MV.Scale.X", "MV.Scale.Y",
@@ -515,38 +519,39 @@ void ngx_evaluate(void* pointer, void* handle, const void* parameters, uint32_t 
     input_resource(list, parameters, "Depth", "depth", *t, true);
     input_resource(list, parameters, "MotionVectors", "motion", *t, true);
     input_resource(list, parameters, "ExposureTexture", "exposure", *t, false);
-    g->temporal.push_back(t); evaluating = std::move(t); --g->inputs_remaining; ++g->inputs_in_flight;
+    g->temporal.push_back(t); evaluating = std::move(t); rsf_rdr2_capture_begin_input(g->capture);
 }
 catch (...) { log("NGX input observation failed"); }
 void snapshot(ID3D12GraphicsCommandList* list, UINT vertices, UINT instances, void* caller) noexcept try
 {
-    if (!g->active.load(std::memory_order_relaxed)) return;
+    if (!rsf_rdr2_capture_active(g->capture)) return;
     std::lock_guard<std::mutex> lock(g->mutex);
-    if (!g->active) return;
+    if (!rsf_rdr2_capture_active(g->capture)) return;
     const auto state = g->lists.find(list);
     if (state == g->lists.end() || !state->second.target) return;
     auto* target = state->second.target;
     bool backbuffer = false;
     for (const auto& buffer : g->buffers) if (buffer.Get() == target) backbuffer = true;
     if (!backbuffer || (g->selected && g->selected != target)) return;
-    const bool reuse_tail = g->ordinal >= 64;
+    const auto progress = capture_progress();
+    const bool reuse_tail = progress.reuse_tail != 0;
     auto shot = reuse_tail ? g->tail : std::make_shared<Shot>();
     if (!shot || !copy_resource(list, target, D3D12_RESOURCE_STATE_RENDER_TARGET, shot)) return;
-    shot->sequence = g->sequence; shot->ordinal = g->ordinal++;
+    shot->sequence = progress.sequence; shot->ordinal = progress.draws;
     shot->vertices = vertices; shot->instances = instances;
     shot->caller = reinterpret_cast<uint64_t>(caller);
     const auto pipeline = g->pipelines.find(state->second.pso);
     shot->pipeline = {};
     if (pipeline != g->pipelines.end()) shot->pipeline = pipeline->second;
     g->selected = target;
-    if (g->draws.size() < 4096) {
+    const auto action = rsf_rdr2_capture_commit_draw(g->capture, static_cast<uint32_t>(g->draws.size()));
+    if (action & RSF_RDR2_CAPTURE_SAVE_DRAW) {
         DrawEvent event{shot->ordinal, shot->frame, vertices, instances, reinterpret_cast<uint64_t>(list),
             shot->generation, shot->caller, reinterpret_cast<uint64_t>(state->second.pso), shot->pipeline};
         event.stack_size = CaptureStackBackTrace(1, static_cast<DWORD>(event.stack.size()), event.stack.data(), nullptr);
         g->draws.push_back(event);
     }
-    else g->draw_overflow = true;
-    if (shot->ordinal == 63) g->tail = shot;
+    if (action & RSF_RDR2_CAPTURE_KEEP_TAIL) g->tail = shot;
     if (!reuse_tail) g->shots.push_back(std::move(shot));
 }
 catch (...) { log("snapshot failed"); }
@@ -691,32 +696,30 @@ void before_present(void* pointer) noexcept try
     if (pointer != game_swapchain) return;
     auto* swapchain = static_cast<IDXGISwapChain*>(pointer);
     std::lock_guard<std::mutex> lock(g->mutex);
-    if (g->active && g->selected) {
+    if (rsf_rdr2_capture_active(g->capture) && g->selected) {
         ComPtr<IDXGISwapChain3> sc3; ComPtr<ID3D12Resource> current;
         if (SUCCEEDED(swapchain->QueryInterface(IID_PPV_ARGS(&sc3))) &&
             SUCCEEDED(sc3->GetBuffer(sc3->GetCurrentBackBufferIndex(), IID_PPV_ARGS(&current))) &&
             current.Get() == g->selected) {
-            g->active = false;
-            log("capture %u recording complete: %u draws, %zu readbacks resource=%p", g->sequence, g->ordinal, g->shots.size(), g->selected);
+            rsf_rdr2_capture_end_draws(g->capture);
+            const auto progress = capture_progress();
+            log("capture %u recording complete: %u draws, %zu readbacks resource=%p", progress.sequence, progress.draws, g->shots.size(), g->selected);
         }
     }
-    if (g->pending.load() && !g->active && g->shots.empty() && !g->inputs_remaining &&
-        !g->inputs_in_flight && !g->capture_dirty) {
+    if (rsf_rdr2_capture_can_arm(g->capture, g->shots.empty())) {
         DXGI_SWAP_CHAIN_DESC desc{};
         if (FAILED(swapchain->GetDesc(&desc)) || desc.BufferCount > g->buffers.size()) return;
         for (auto& buffer : g->buffers) buffer.Reset();
         for (UINT i = 0; i < desc.BufferCount; ++i)
             if (FAILED(swapchain->GetBuffer(i, IID_PPV_ARGS(&g->buffers[i])))) return;
-        ++g->sequence; g->ordinal = 0; g->selected = nullptr; g->active = true; g->pending = false;
-        g->tail.reset(); g->draws.clear(); g->draw_overflow = false; g->temporal.clear();
-        g->input_index = 0; g->inputs_remaining = 4;
-        g->capture_dirty = true; g->capture_timeout = false; g->write_failed = false; g->written = 0;
-        g->capture_started = GetTickCount64();
+        rsf_rdr2_capture_arm(g->capture, GetTickCount64());
+        g->selected = nullptr;
+        g->tail.reset(); g->draws.clear(); g->temporal.clear();
         g->captured_presentation = g->presentation[identity(swapchain)];
         g->captured_presentation.format = desc.BufferDesc.Format;
         g->captured_presentation.width = desc.BufferDesc.Width; g->captured_presentation.height = desc.BufferDesc.Height;
         rsf_rdr2_request_camera_capture();
-        log("capture %u armed", g->sequence);
+        log("capture %u armed", capture_progress().sequence);
     }
 }
 catch (...) { log("present observation failed"); }
@@ -764,23 +767,24 @@ bool write_bundle() noexcept
         if (!t->camera_valid) continue;
         swprintf_s(path, L"%s\\input-%lu-%03u-%03u-camera.bin", g->directory, GetCurrentProcessId(), t->sequence, t->index);
         FILE* camera = _wfopen(path, L"wb");
-        if (!camera) { g->write_failed = true; continue; }
-        if (fwrite(t->camera.data(), 1, t->camera.size(), camera) != t->camera.size()) g->write_failed = true;
-        if (fclose(camera)) g->write_failed = true;
+        if (!camera) { rsf_rdr2_capture_write_failed(g->capture); continue; }
+        if (fwrite(t->camera.data(), 1, t->camera.size(), camera) != t->camera.size()) rsf_rdr2_capture_write_failed(g->capture);
+        if (fclose(camera)) rsf_rdr2_capture_write_failed(g->capture);
     }
-    swprintf_s(path, L"%s\\bundle-%lu-%03u.json", g->directory, GetCurrentProcessId(), g->sequence);
+    const auto progress = capture_progress();
+    swprintf_s(path, L"%s\\bundle-%lu-%03u.json", g->directory, GetCurrentProcessId(), progress.sequence);
     FILE* f = _wfopen(path, L"wb");
     if (!f) return false;
     const auto& presentation = g->captured_presentation;
     fprintf(f, "{\"version\":1,\"sequence\":%u,\"module_base\":\"0x%llx\",\"draw_count\":%u,"
         "\"draw_overflow\":%s,\"capture_timeout\":%s,\"write_failed\":%s,\"readbacks_written\":%u,"
         "\"presentation\":{\"format\":%u,\"width\":%u,\"height\":%u,\"color_space\":%u,\"color_space_set\":%s,"
-        "\"hdr_metadata_type\":%u,\"hdr_metadata_hex\":\"", g->sequence,static_cast<unsigned long long>(g->base),g->ordinal,
-        g->draw_overflow?"true":"false",g->capture_timeout?"true":"false",g->write_failed?"true":"false",g->written,
+        "\"hdr_metadata_type\":%u,\"hdr_metadata_hex\":\"", progress.sequence,static_cast<unsigned long long>(g->base),progress.draws,
+        progress.draw_overflow?"true":"false",progress.timed_out?"true":"false",progress.write_failed?"true":"false",progress.written,
         presentation.format,presentation.width,presentation.height,presentation.color_space,presentation.color_space_set?"true":"false",
         presentation.metadata_type);
     for (auto byte : presentation.metadata) fprintf(f, "%02x", byte);
-    fputs("\"},\"requested_input_frames\":4,\"temporal\":[", f);
+    fprintf(f, "\"},\"requested_input_frames\":%u,\"temporal\":[", progress.requested_input_frames);
     bool comma = false;
     for (const auto& t : g->temporal) {
         fprintf(f, "%s{\"index\":%u,\"frame_counter_observation\":%u,\"thread\":%u,\"feature_flags\":%u,"
@@ -831,19 +835,17 @@ DWORD WINAPI poll(void*) noexcept
         if (down && !was_down) {
             DWORD foreground{};
             GetWindowThreadProcessId(GetForegroundWindow(), &foreground);
-            if (foreground == GetCurrentProcessId()) g->pending = true;
+            if (foreground == GetCurrentProcessId()) rsf_rdr2_capture_request(g->capture);
         }
         was_down = down;
-        if (GetFileAttributesW(g->request) != INVALID_FILE_ATTRIBUTES && DeleteFileW(g->request)) g->pending = true;
+        if (GetFileAttributesW(g->request) != INVALID_FILE_ATTRIBUTES && DeleteFileW(g->request)) rsf_rdr2_capture_request(g->capture);
         std::vector<std::shared_ptr<Shot>> ready;
         {
             std::lock_guard<std::mutex> lock(g->mutex);
-            if (g->capture_dirty && GetTickCount64() - g->capture_started > 5000 &&
-                (g->active || g->inputs_remaining)) {
-                g->active = false; g->inputs_remaining = 0; g->capture_timeout = true;
-                log("capture %u timed out waiting for scene or DLSS input; retaining explicit incomplete result",g->sequence);
+            if (rsf_rdr2_capture_timeout(g->capture, GetTickCount64())) {
+                log("capture %u timed out waiting for scene or DLSS input; retaining explicit incomplete result",capture_progress().sequence);
             }
-            if (!g->active) {
+            if (!rsf_rdr2_capture_active(g->capture)) {
                 auto it = g->shots.begin();
                 while (it != g->shots.end()) {
                     const auto& shot = *it;
@@ -862,14 +864,16 @@ DWORD WINAPI poll(void*) noexcept
         for (const auto& shot : ready) {
             const bool ok = write_shot(*shot);
             std::lock_guard<std::mutex> lock(g->mutex);
-            if (ok) ++g->written; else g->write_failed = true;
+            rsf_rdr2_capture_readback_written(g->capture, ok);
         }
         {
             std::lock_guard<std::mutex> lock(g->mutex);
-            if (g->capture_dirty && !g->active && !g->inputs_remaining && !g->inputs_in_flight && g->shots.empty()) {
+            if (rsf_rdr2_capture_can_publish(g->capture, g->shots.empty())) {
                 const bool ok = write_bundle();
-                log("capture %u bundle saved=%d input_frames=%zu draws=%zu readbacks=%u",g->sequence,ok,g->temporal.size(),g->draws.size(),g->written);
-                g->capture_dirty = false; g->tail.reset();
+                const auto progress = capture_progress();
+                log("capture %u bundle saved=%d input_frames=%zu draws=%zu readbacks=%u",progress.sequence,ok,g->temporal.size(),g->draws.size(),progress.written);
+                rsf_rdr2_capture_published(g->capture);
+                g->tail.reset();
             }
         }
     }
@@ -878,7 +882,10 @@ DWORD WINAPI poll(void*) noexcept
 bool rsf_rdr2_install_native_capture(const wchar_t* directory) noexcept try
 {
     if (g || !directory || wcslen(directory) > MAX_PATH - 64) return false;
-    g = new State;
+    auto state = std::make_unique<State>();
+    state->capture = rsf_rdr2_capture_create();
+    if (!state->capture) return false;
+    g = state.release();
     g->base = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
     wcscpy_s(g->directory, directory);
     swprintf_s(g->request, L"%s\\native.request", directory);
@@ -902,7 +909,7 @@ catch (...) { return false; }
 void rsf_rdr2_capture_test_arm(void* swapchain) noexcept
 {
     std::lock_guard<std::mutex> lock(g->mutex);
-    g->fixture_swapchain = swapchain; g->pending = true;
+    g->fixture_swapchain = swapchain; rsf_rdr2_capture_request(g->capture);
 }
 void rsf_rdr2_capture_test_stop() noexcept
 {

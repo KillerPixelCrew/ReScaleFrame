@@ -150,6 +150,13 @@ GDExtension entry points and linked Runtime, and refuses overlapping or
 reentrant D3D12 boot attempts. The Vulkan path still owns its own session
 and frame state. Build and Godot player verification remain open.
 
+RDR2's native graphics capture uses Rust for requests, draw and input
+limits, timeout, drain admission and bundle status. It uses the existing
+native mutex to order those decisions with the retained D3D12 resources.
+An interrupted NGX exit releases its input reservation. GPU copies,
+fences and output file encoding remain native. Builds and the two native
+capture fixtures remain unrun.
+
 ## Rust orchestrator and first Anomaly port
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
