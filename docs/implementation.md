@@ -1064,6 +1064,16 @@ OpenGL cases. Formatting, Clippy and binding regeneration passed. Export
 names and ordinals matched for the Runtime, both carriers and Minecraft.
 The OpenGL device fixture and the game remain unrun.
 
+Rust now also owns the OpenGL and D3D12 sharing context and textures.
+A refused D3D12 completion signal retains the slot and its leases. The
+next begin or drain retries the signal and hands the textures back to
+OpenGL once the queue accepts it. Recovery never executes the closed
+list twice. Nine new synthetic cases and six focused MSVC Release
+contracts passed in the worker build. The matching Release binaries
+kept their export names and ordinals. The device fixture built and
+device recovery remains unverified.
+[OpenGL shared surface audit](research/rust-gl-shared-surface-cutover.md)
+
 Rust now owns D3D12 FG source identity, copied resources and retirement.
 Unity confirms its recorded sources at the flush event before the DXGI
 presenter consumes them. The C ABI and existing command, SDK and DXGI calls

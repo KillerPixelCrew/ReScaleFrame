@@ -84,9 +84,9 @@ remains pending. See the [RDR2 integration guide](games/rdr2/README.md).
 ReScaleFrameCraft connects Minecraft's Java/OpenGL renderer to ReScaleFrame's native runtime.
 The adapter supplies scene colour, depth, motion, camera state and frame boundaries.
 
-The [OpenGL sharing layer](runtime/presentation/src/gl_shared_surface.cpp) imports shared
+The [OpenGL sharing layer](runtime/orchestrator/src/gl_shared_surface.rs) imports shared
 D3D12 resources as OpenGL textures and synchronizes access through shared fences and
-semaphores. The [GL pipeline](runtime/orchestrator/src/gl_pipeline.cpp) passes those resources
+semaphores. The [GL pipeline](runtime/orchestrator/src/gl_pipeline.rs) passes those resources
 to the D3D12 SR/FG paths and exposes reconstructed output back to OpenGL.
 
 That bridge brings technology requiring D3D12 into Minecraft's OpenGL rendering path.
