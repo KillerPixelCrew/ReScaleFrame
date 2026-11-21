@@ -4,12 +4,23 @@
 #include "geometry_retirement.h"
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstring>
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
 #include <windows.h>
 #include "native_memory.h"
+
+struct VertexConstantTable {
+    std::uintptr_t module;
+    std::uint32_t table_rva, slots, size_offset, data_offset;
+};
+static_assert(sizeof(VertexConstantTable) == 24 && offsetof(VertexConstantTable, table_rva) == 8);
+extern "C" std::uintptr_t rsf_anomaly_geometry_vertex_constant_data(const VertexConstantTable*,
+    std::uint32_t slot, std::uint32_t expected_size, std::uint32_t offset, std::uint32_t bytes,
+    decltype(&rsf::anomaly::guarded_copy) read) noexcept;
+
 namespace rsf::anomaly::geometry {
 namespace {
 std::optional<InstanceKey> identity(std::uint64_t owner, std::uint64_t visual, std::uint64_t generation) noexcept
@@ -367,14 +378,10 @@ std::uintptr_t vertex_constant_data(std::uint32_t slot, std::uint32_t expected_s
     std::uint32_t bytes) noexcept
 {
     const auto engine = rsf_anomaly_geometry_binding();
-    if (!engine.module || slot >= constant_buffer_slots || !expected_size || bytes > expected_size ||
-        offset > expected_size - bytes) return 0;
-    std::uintptr_t object{}, data{};
-    std::uint32_t size{};
-    if (!read(engine.module + build_of(engine).geometry->vertex_constant_buffers_rva + slot * sizeof(object), object) ||
-        !object || !read(object + constant_buffer_size_offset, size) || size != expected_size ||
-        !read(object + constant_buffer_data_offset, data) || !data) return 0;
-    return data + offset;
+    if (!engine.module) return 0;
+    const VertexConstantTable table{engine.module, build_of(engine).geometry->vertex_constant_buffers_rva,
+        constant_buffer_slots, constant_buffer_size_offset, constant_buffer_data_offset};
+    return rsf_anomaly_geometry_vertex_constant_data(&table, slot, expected_size, offset, bytes, guarded_copy);
 }
 }
 

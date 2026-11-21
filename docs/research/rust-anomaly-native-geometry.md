@@ -106,3 +106,20 @@ byte, the untouched entries after a refused install, and the guarded
 install, restore and re-enable. Pinned Rust 1.94.1 formatting, locked
 offline Windows Cargo metadata and Git whitespace checks passed. Compile,
 link, Clippy, tests, fixtures and game verification remain user-owned.
+
+## Vertex constant-buffer admission
+
+Compared with `fab9fe5a`, the Rust geometry owner now checks the
+slot, reflected size and requested span before resolving the staged
+vertex constants. The native leaf still supplies the selected geometry
+profile, including the table RVA, 14 slots and the size and data
+offsets at `0x58` and `0x60`. The same guarded reads obtain the object,
+its size and its data in that order. The existing read and write
+helpers still use the guarded native copy.
+
+A source comparison matched the profile facts, the 24-byte record,
+all 512 modeled range cases and both native consumers. Checked address
+arithmetic refuses a wrapping span before a guarded copy. Pinned
+formatting, locked Windows Cargo metadata and whitespace checks
+passed. The existing geometry hook fixture and game checks remain
+unrun.

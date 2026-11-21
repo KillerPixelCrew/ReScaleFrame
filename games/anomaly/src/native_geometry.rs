@@ -5,6 +5,7 @@
 
 mod coverage;
 mod scopes;
+mod vertex_constants;
 
 use crate::engine_guards::Image;
 use crate::geometry_registry::{

@@ -857,6 +857,12 @@ and remains unrun. Build and live observer verification remain open.
 
 ## Rust orchestrator and first Anomaly port
 
+Anomaly's vertex constant-buffer reads and writes now share Rust
+admission for reflected size, slot and span. Native code still
+supplies the selected profile and performs the guarded copy.
+The geometry hook fixture remains unrun.
+[Vertex constant-buffer admission](research/rust-anomaly-native-geometry.md#vertex-constant-buffer-admission)
+
 FidelityFX Vulkan SR now records its first-use mask clear and
 output copy-back in Rust. Source comparison matched the five
 barriers, narrower shader and transfer access masks, capture order
