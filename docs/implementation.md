@@ -1291,6 +1291,28 @@ fixtures. All 99 Rust tests passed, including transfer ordering and pending
 warm-up retention. The Release DLL and both carriers retain 381, 256 and
 273 baseline exports. Device and in-game execution remain pending.
 
+The D3D11/D3D12 shared texture and fence factory now owns COM references
+and NT handles in Rust. The native calls retain the same resource flags,
+and the Rust owner releases COM interfaces before closing their handle.
+Rejected peer opens leave no published object. The old source guard
+omitted nine typeless or partially typeless formats. The new guard
+refuses all 26 listed by the pinned Windows SDK before calling the
+device. [DXGI format reference](https://learn.microsoft.com/en-us/windows/win32/api/dxgiformat/ne-dxgiformat-dxgi_format)
+
+The pinned toolchain passed 335 locked Rust tests, formatting and Clippy,
+including checks for short requests, typeless formats and cleanup on a
+refused peer open. Six MSVC Release CPU and ABI contracts passed.
+Runtime, AC7, Loader, Minecraft and Godot retained all export names and
+ordinals. The shared surface device fixture built.
+
+The isolated Anomaly Standard run resized from 1280×720 to 1600×900 with
+the new Runtime. After the game took foreground, DLSS-G reached 240
+vendor presents per 120 source frames. The last DLSS status reported
+1,289 evaluations with zero refusals. The engine shut down Direct3D and
+exited with code 0. The game test restored the staged inputs. Logs and
+artifact hashes are in
+`.local/anomaly/staging/live-58fe95a-stage5/evidence/rust-shared-surface/`.
+
 Eight focused host, frame and Anomaly ABI fixtures passed in Debug and
 Release, and all 91 Rust tests passed. The linked AC7 carrier and rendered
 host device fixture built in both configurations. Device and game execution

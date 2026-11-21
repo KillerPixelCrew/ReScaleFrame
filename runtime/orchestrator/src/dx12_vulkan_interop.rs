@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 use crate::allocate_handle;
 use crate::dx12_vulkan_interop_abi::*;
+use crate::owned_win32_handle;
 use crate::sr_session::has_capacity;
 use crate::vulkan_sr_abi::{RSF_SRVK_ABI_VERSION, rsf_srvk_setup};
 use std::ffi::c_void;
-use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+use std::os::windows::io::AsRawHandle;
 use std::ptr;
-use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
 
 const OUT_OF_HOST_MEMORY: i32 = -1;
 const INITIALIZATION_FAILED: i32 = -3;
@@ -30,14 +30,6 @@ const ABI_MISMATCH: i32 = RSF_DX12VK_INTEROP_ABI_MISMATCH;
 
 pub(super) fn checked(result: i32) -> Result<(), i32> {
     if result == 0 { Ok(()) } else { Err(result) }
-}
-
-// Win32 imports retain the payload, so the NT handle always remains ours.
-unsafe fn owned_handle(raw: Handle) -> Option<OwnedHandle> {
-    if raw.is_null() || raw == INVALID_HANDLE_VALUE {
-        return None;
-    }
-    Some(unsafe { OwnedHandle::from_raw_handle(raw) })
 }
 
 #[derive(Default)]
@@ -149,7 +141,7 @@ impl Owner {
         }
         let mut raw = ptr::null_mut();
         let result = unsafe { create(user, &mut raw) };
-        let handle = unsafe { owned_handle(raw) };
+        let handle = unsafe { owned_win32_handle(raw) };
         checked(result)?;
         let handle = handle.ok_or(INVALID_EXTERNAL_HANDLE)?;
         checked(unsafe {
@@ -183,7 +175,7 @@ impl Owner {
 
         let mut raw = ptr::null_mut();
         let result = create(&mut raw, &mut image.dx12);
-        let handle = unsafe { owned_handle(raw) };
+        let handle = unsafe { owned_win32_handle(raw) };
         checked(result)?;
         let handle = handle.ok_or(INVALID_EXTERNAL_HANDLE)?;
         if image.dx12.is_null() {

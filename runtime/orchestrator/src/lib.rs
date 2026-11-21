@@ -126,6 +126,8 @@ mod scene_abi;
 #[cfg(windows)]
 mod settings_store;
 #[cfg(windows)]
+mod shared_surface;
+#[cfg(windows)]
 mod sr12;
 #[cfg(windows)]
 mod sr_bridge;
@@ -201,6 +203,20 @@ fn allocate_handle<T>(value: T) -> *mut T {
         unsafe { raw.write(value) };
     }
     raw
+}
+
+// Adopt a returned Win32 handle. APIs use both null and -1 to report failure.
+#[cfg(windows)]
+unsafe fn owned_win32_handle(
+    raw: std::os::windows::io::RawHandle,
+) -> Option<std::os::windows::io::OwnedHandle> {
+    use std::os::windows::io::{FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+
+    if raw.is_null() || raw == INVALID_HANDLE_VALUE {
+        return None;
+    }
+    Some(unsafe { OwnedHandle::from_raw_handle(raw) })
 }
 
 // Public backend IDs from rescaleframe/sr_session.h, checked by the native ABI test.

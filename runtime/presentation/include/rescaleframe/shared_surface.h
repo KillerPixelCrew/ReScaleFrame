@@ -5,8 +5,8 @@
  * game draws has to reach a device it was not created on, and this is how: create on D3D11 with a
  * shared NT handle, open the same memory on D3D12, and synchronise with a fence both can see.
  *
- * The legacy `D3D11_RESOURCE_MISC_SHARED` flag is deliberately not used. It produces a handle only
- * another D3D11 device can open, which is the one thing that would not help.
+ * The texture pairs `D3D11_RESOURCE_MISC_SHARED` with `D3D11_RESOURCE_MISC_SHARED_NTHANDLE`.
+ * The NT handle is what the D3D12 device opens.
  *
  * Whether this works at all outside Windows is the open question this file exists to answer.
  * DXVK has to export a handle that vkd3d-proton can open, and the two are separate translations of

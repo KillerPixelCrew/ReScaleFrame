@@ -1,108 +1,38 @@
-/* SPDX-License-Identifier: MIT */
+// SPDX-License-Identifier: MIT
 #include <rescaleframe/shared_surface.h>
-
-#include <windows.h>
-
 #include <d3d11_4.h>
 #include <d3d12.h>
-#include <wrl/client.h>
-
-#include <rescaleframe/log.h>
-
-#include <new>
+#include <cstddef>
 
 namespace {
+using Create = HRESULT (*)(void*, void**) noexcept;
+using Open = HRESULT (*)(void*, void*, void**) noexcept;
 
-using Microsoft::WRL::ComPtr;
-using rsf::say;
-
-/* Typeless formats are refused rather than resolved. A shared surface is opened by a runtime that
-   cannot ask what was intended, and picking an interpretation on its behalf is how a colour buffer
-   quietly becomes a depth buffer. */
-bool format_is_typeless(uint32_t format)
-{
-    switch (format) {
-    case DXGI_FORMAT_R32G32B32A32_TYPELESS:
-    case DXGI_FORMAT_R32G32B32_TYPELESS:
-    case DXGI_FORMAT_R16G16B16A16_TYPELESS:
-    case DXGI_FORMAT_R32G32_TYPELESS:
-    case DXGI_FORMAT_R10G10B10A2_TYPELESS:
-    case DXGI_FORMAT_R8G8B8A8_TYPELESS:
-    case DXGI_FORMAT_R16G16_TYPELESS:
-    case DXGI_FORMAT_R32_TYPELESS:
-    case DXGI_FORMAT_R24G8_TYPELESS:
-    case DXGI_FORMAT_R8G8_TYPELESS:
-    case DXGI_FORMAT_R16_TYPELESS:
-    case DXGI_FORMAT_R8_TYPELESS:
-    case DXGI_FORMAT_BC1_TYPELESS:
-    case DXGI_FORMAT_BC2_TYPELESS:
-    case DXGI_FORMAT_BC3_TYPELESS:
-    case DXGI_FORMAT_B8G8R8A8_TYPELESS:
-    case DXGI_FORMAT_B8G8R8X8_TYPELESS:
-        return true;
-    default:
-        return false;
-    }
-}
-
-} // namespace
-
-struct rsf_shared_surface {
-    ComPtr<ID3D11Texture2D> texture;
-    ComPtr<ID3D11RenderTargetView> target;
-    ComPtr<ID3D12Resource> opened;
-    HANDLE handle = nullptr;
-    /* The handle is closed after the resources that were opened from it. Closing it first is legal
-       and makes a leak look like a driver problem, which is a bad half hour. */
-    ~rsf_shared_surface()
-    {
-        opened.Reset();
-        target.Reset();
-        texture.Reset();
-        if (handle) {
-            CloseHandle(handle);
-        }
-    }
+struct Platform {
+    HRESULT (*texture)(void*, const rsf_shared_surface_setup*, void**) noexcept;
+    Open target;
+    Create query_resource;
+    Create resource_handle;
+    Open open_resource;
+    Create query_device5;
+    Create fence;
+    Create fence_handle;
+    Open open_fence;
 };
 
-struct rsf_shared_fence {
-    ComPtr<ID3D11Fence> fence11;
-    ComPtr<ID3D12Fence> fence12;
-    HANDLE handle = nullptr;
-    ~rsf_shared_fence()
-    {
-        fence12.Reset();
-        fence11.Reset();
-        if (handle) {
-            CloseHandle(handle);
-        }
-    }
-};
+static_assert(RSF_SHARED_SURFACE_ABI_VERSION == 2 && RSF_SHARED_OK == 0 &&
+    RSF_SHARED_ERROR_INVALID_ARGUMENT == -1 && RSF_SHARED_ERROR_ABI_MISMATCH == -2 &&
+    RSF_SHARED_ERROR_CREATE_FAILED == -3 && RSF_SHARED_ERROR_NO_HANDLE == -4 &&
+    RSF_SHARED_ERROR_OPEN_FAILED == -5);
+static_assert(sizeof(rsf_shared_surface_setup) == 48 && offsetof(rsf_shared_surface_setup, log) == 24 &&
+    offsetof(rsf_shared_surface_setup, unordered_access) == 40 && sizeof(Platform) == 9 * sizeof(void*));
+static_assert(DXGI_FORMAT_R32G8X24_TYPELESS == 19 && DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS == 21 &&
+    DXGI_FORMAT_X32_TYPELESS_G8X24_UINT == 22 && DXGI_FORMAT_R24_UNORM_X8_TYPELESS == 46 &&
+    DXGI_FORMAT_X24_TYPELESS_G8_UINT == 47 && DXGI_FORMAT_BC4_TYPELESS == 79 &&
+    DXGI_FORMAT_BC5_TYPELESS == 82 && DXGI_FORMAT_BC6H_TYPELESS == 94 && DXGI_FORMAT_BC7_TYPELESS == 97);
 
-extern "C" rsf_shared_result rsf_shared_surface_create(void* d3d11_device_pointer,
-                                                       void* d3d12_device_pointer,
-                                                       const rsf_shared_surface_setup* setup,
-                                                       rsf_shared_surface** out)
+HRESULT texture(void* device, const rsf_shared_surface_setup* setup, void** out) noexcept
 {
-    if (!d3d11_device_pointer || !setup || !out ||
-        setup->struct_size < sizeof(rsf_shared_surface_setup)) {
-        return RSF_SHARED_ERROR_INVALID_ARGUMENT;
-    }
-    if (setup->abi_version != RSF_SHARED_SURFACE_ABI_VERSION) {
-        return RSF_SHARED_ERROR_ABI_MISMATCH;
-    }
-    if (setup->width == 0 || setup->height == 0 || setup->format == 0 ||
-        format_is_typeless(setup->format)) {
-        return RSF_SHARED_ERROR_INVALID_ARGUMENT;
-    }
-    *out = nullptr;
-
-    auto* device = static_cast<ID3D11Device*>(d3d11_device_pointer);
-    auto* surface = new (std::nothrow) rsf_shared_surface();
-    if (!surface) {
-        return RSF_SHARED_ERROR_CREATE_FAILED;
-    }
-
     D3D11_TEXTURE2D_DESC description{};
     description.Width = setup->width;
     description.Height = setup->height;
@@ -118,149 +48,79 @@ extern "C" rsf_shared_result rsf_shared_surface_create(void* d3d11_device_pointe
     if (setup->unordered_access) {
         description.BindFlags |= D3D11_BIND_UNORDERED_ACCESS;
     }
-    /* Both flags together. `SHARED_NTHANDLE` alone is not a thing D3D11 accepts, and `SHARED`
-       alone produces a handle only another D3D11 device can open. */
     description.MiscFlags = D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
 
-    HRESULT made = device->CreateTexture2D(&description, nullptr, &surface->texture);
-    if (FAILED(made) || !surface->texture) {
-        say(setup->log, setup->log_user,
-            "shared surface: %ux%u format %u could not be created shareable, hr 0x%08lx",
-            setup->width, setup->height, setup->format, (unsigned long)made);
-        rsf_shared_surface_destroy(surface);
-        return RSF_SHARED_ERROR_CREATE_FAILED;
-    }
-
-    if (setup->render_target) {
-        if (FAILED(device->CreateRenderTargetView(surface->texture.Get(), nullptr, &surface->target))) {
-            rsf_shared_surface_destroy(surface);
-            return RSF_SHARED_ERROR_CREATE_FAILED;
-        }
-    }
-
-    /* The handle comes from IDXGIResource1, not from the texture. A runtime that supports the flags
-       but not the interface fails here rather than at open time, which is a clearer place for it. */
-    ComPtr<IDXGIResource1> resource;
-    made = surface->texture.As(&resource);
-    if (FAILED(made) || !resource) {
-        say(setup->log, setup->log_user,
-            "shared surface: the texture is not an IDXGIResource1, hr 0x%08lx", (unsigned long)made);
-        rsf_shared_surface_destroy(surface);
-        return RSF_SHARED_ERROR_NO_HANDLE;
-    }
-    made = resource->CreateSharedHandle(nullptr, DXGI_SHARED_RESOURCE_READ |
-                                                     DXGI_SHARED_RESOURCE_WRITE,
-                                        nullptr, &surface->handle);
-    if (FAILED(made) || !surface->handle) {
-        say(setup->log, setup->log_user, "shared surface: no NT handle, hr 0x%08lx",
-            (unsigned long)made);
-        rsf_shared_surface_destroy(surface);
-        return RSF_SHARED_ERROR_NO_HANDLE;
-    }
-
-    if (d3d12_device_pointer) {
-        auto* device12 = static_cast<ID3D12Device*>(d3d12_device_pointer);
-        made = device12->OpenSharedHandle(surface->handle, IID_PPV_ARGS(&surface->opened));
-        if (FAILED(made) || !surface->opened) {
-            /* The interesting failure. The handle exists, so the D3D11 side is willing; the D3D12
-               side will not take it. On Windows that is a bug, and under Proton it is a statement
-               about whether DXVK and vkd3d-proton agree about memory. */
-            say(setup->log, setup->log_user,
-                "shared surface: D3D12 would not open the handle, hr 0x%08lx", (unsigned long)made);
-            rsf_shared_surface_destroy(surface);
-            return RSF_SHARED_ERROR_OPEN_FAILED;
-        }
-    }
-
-    *out = surface;
-    return RSF_SHARED_OK;
+    ID3D11Texture2D* value = nullptr;
+    const auto hr = static_cast<ID3D11Device*>(device)->CreateTexture2D(&description, nullptr, &value);
+    *out = value;
+    return hr;
 }
 
-extern "C" void rsf_shared_surface_destroy(rsf_shared_surface* surface)
+HRESULT target(void* device, void* texture11, void** out) noexcept
 {
-    delete surface;
+    ID3D11RenderTargetView* value = nullptr;
+    const auto hr = static_cast<ID3D11Device*>(device)->CreateRenderTargetView(
+        static_cast<ID3D11Texture2D*>(texture11), nullptr, &value);
+    *out = value;
+    return hr;
 }
 
-extern "C" void* rsf_shared_surface_d3d11(rsf_shared_surface* surface)
+template<class Interface, class Object>
+HRESULT query(void* object, void** out) noexcept
 {
-    return surface ? surface->texture.Get() : nullptr;
+    Interface* value = nullptr;
+    const auto hr = static_cast<Object*>(object)->QueryInterface(IID_PPV_ARGS(&value));
+    *out = value;
+    return hr;
 }
 
-extern "C" void* rsf_shared_surface_d3d12(rsf_shared_surface* surface)
+HRESULT resource_handle(void* resource, void** out) noexcept
 {
-    return surface ? surface->opened.Get() : nullptr;
+    return static_cast<IDXGIResource1*>(resource)->CreateSharedHandle(
+        nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE, nullptr, out);
 }
 
-extern "C" void* rsf_shared_surface_target(rsf_shared_surface* surface)
+HRESULT fence(void* device, void** out) noexcept
 {
-    return surface ? surface->target.Get() : nullptr;
+    ID3D11Fence* value = nullptr;
+    const auto hr = static_cast<ID3D11Device5*>(device)->CreateFence(
+        0, D3D11_FENCE_FLAG_SHARED, IID_PPV_ARGS(&value));
+    *out = value;
+    return hr;
 }
 
-extern "C" rsf_shared_result rsf_shared_fence_create(void* d3d11_device_pointer,
-                                                     void* d3d12_device_pointer,
-                                                     rsf_shared_log_fn log, void* log_user,
-                                                     rsf_shared_fence** out)
+HRESULT fence_handle(void* fence11, void** out) noexcept
 {
-    if (!d3d11_device_pointer || !out) {
-        return RSF_SHARED_ERROR_INVALID_ARGUMENT;
-    }
-    *out = nullptr;
-
-    /* ID3D11Device5 rather than ID3D11Device: fences are an 11.4 feature and a runtime without them
-       cannot bridge at all, so failing to get the interface is the same answer as failing to make
-       the fence. */
-    ComPtr<ID3D11Device5> device;
-    HRESULT made = static_cast<ID3D11Device*>(d3d11_device_pointer)->QueryInterface(IID_PPV_ARGS(&device));
-    if (FAILED(made) || !device) {
-        say(log, log_user, "shared fence: no ID3D11Device5, hr 0x%08lx", (unsigned long)made);
-        return RSF_SHARED_ERROR_CREATE_FAILED;
-    }
-
-    auto* fence = new (std::nothrow) rsf_shared_fence();
-    if (!fence) {
-        return RSF_SHARED_ERROR_CREATE_FAILED;
-    }
-
-    made = device->CreateFence(0, D3D11_FENCE_FLAG_SHARED, IID_PPV_ARGS(&fence->fence11));
-    if (FAILED(made) || !fence->fence11) {
-        say(log, log_user, "shared fence: could not be created, hr 0x%08lx", (unsigned long)made);
-        rsf_shared_fence_destroy(fence);
-        return RSF_SHARED_ERROR_CREATE_FAILED;
-    }
-
-    made = fence->fence11->CreateSharedHandle(nullptr, GENERIC_ALL, nullptr, &fence->handle);
-    if (FAILED(made) || !fence->handle) {
-        say(log, log_user, "shared fence: no NT handle, hr 0x%08lx", (unsigned long)made);
-        rsf_shared_fence_destroy(fence);
-        return RSF_SHARED_ERROR_NO_HANDLE;
-    }
-
-    if (d3d12_device_pointer) {
-        made = static_cast<ID3D12Device*>(d3d12_device_pointer)
-                   ->OpenSharedHandle(fence->handle, IID_PPV_ARGS(&fence->fence12));
-        if (FAILED(made) || !fence->fence12) {
-            say(log, log_user, "shared fence: D3D12 would not open the handle, hr 0x%08lx",
-                (unsigned long)made);
-            rsf_shared_fence_destroy(fence);
-            return RSF_SHARED_ERROR_OPEN_FAILED;
-        }
-    }
-
-    *out = fence;
-    return RSF_SHARED_OK;
+    return static_cast<ID3D11Fence*>(fence11)->CreateSharedHandle(nullptr, GENERIC_ALL, nullptr, out);
 }
 
-extern "C" void rsf_shared_fence_destroy(rsf_shared_fence* fence)
+template<class Interface>
+HRESULT open(void* device, void* handle, void** out) noexcept
 {
-    delete fence;
+    Interface* value = nullptr;
+    const auto hr = static_cast<ID3D12Device*>(device)->OpenSharedHandle(handle, IID_PPV_ARGS(&value));
+    *out = value;
+    return hr;
 }
 
-extern "C" void* rsf_shared_fence_d3d11(rsf_shared_fence* fence)
-{
-    return fence ? fence->fence11.Get() : nullptr;
+constexpr Platform platform{texture, target, query<IDXGIResource1, ID3D11Texture2D>,
+    resource_handle, open<ID3D12Resource>, query<ID3D11Device5, ID3D11Device>,
+    fence, fence_handle, open<ID3D12Fence>};
 }
 
-extern "C" void* rsf_shared_fence_d3d12(rsf_shared_fence* fence)
+extern "C" rsf_shared_result rsf_core_shared_surface_create(const Platform*, void*, void*,
+    const rsf_shared_surface_setup*, rsf_shared_surface**);
+extern "C" rsf_shared_result rsf_core_shared_fence_create(const Platform*, void*, void*,
+    rsf_shared_log_fn, void*, rsf_shared_fence**);
+
+extern "C" rsf_shared_result rsf_shared_surface_create(void* device11, void* device12,
+    const rsf_shared_surface_setup* setup, rsf_shared_surface** out)
 {
-    return fence ? fence->fence12.Get() : nullptr;
+    return rsf_core_shared_surface_create(&platform, device11, device12, setup, out);
+}
+
+extern "C" rsf_shared_result rsf_shared_fence_create(void* device11, void* device12,
+    rsf_shared_log_fn log, void* user, rsf_shared_fence** out)
+{
+    return rsf_core_shared_fence_create(&platform, device11, device12, log, user, out);
 }
