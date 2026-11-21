@@ -20,9 +20,9 @@ and [native renderer sites](rust-ac7-native-sites.md).
 - The worker starts the observer and cold presentation interception before waiting for decrypted
   code. It calls `rsf_ac7_carrier_install_decrypted` after the existing entropy wait or optional
   dump succeeds. Rust applies the jitter gate, optional translucent velocity gate, depth and view
-  gates, separate-translucency scale patch and then calls native plugin preparation. The worker
-  still installs optional motion capture and publishes `startup_ready` after preparation returns,
-  including on a native preparation refusal.
+  gates, separate-translucency scale patch and then calls native plugin preparation. At this stage
+  the native worker installed optional motion capture and published `startup_ready` after
+  preparation returned, including on a native preparation refusal.
 - The cold presentation callback still checks that the window belongs to this process and compares
   its class to `UnrealWindow` before attempting preparation. The adapter supplies the class and DLL
   basename. Native code still resolves the sibling `ReScaleFrame.Game.AC7.dll` and hashes the main
@@ -63,3 +63,46 @@ The carrier still owns the Win32 worker, settings reader, diagnostics, console a
 mechanics, presentation setup and the compatibility bridge. The cold path can call preparation
 independently of the worker, as in the base revision. Existing start timing and refusal behavior
 are part of the pending game validation.
+
+## Worker readiness cutover from `1eda132`
+
+The worker calls `start_observer` then `start_generation` before its native decryption wait.
+`RSF_OBSERVE=0` skips observer and overlay registration while the worker still requests cold
+presentation interception. The optional module dump and the measure-only path use the same 250 ms
+interval, 180 s timeout and two consecutive samples below 7.0. Failure returns from the worker
+before the Rust call. The non-dump diagnostic and the dump report and module sampling follow that
+call as before.
+
+The cold swapchain path invokes `accept_ac7_window` before allocating a presentation bridge. The
+native callback checks current process ownership and `UnrealWindow`, then calls the same native
+preparation leaf as the worker. Preparation hashes the executable and supplies the sibling DLL
+path and GameSDK probe to the bridge. Under its SRW lock, the bridge reuses the result when a
+session exists. The Runtime drops a refused session after successful cleanup so a later attempt
+can retry, and retains a partial session if cleanup fails. Window or preparation refusal falls
+through to the original DXGI create call. Cold preparation still runs independently of worker
+readiness and SR enablement.
+
+Rust now reads `RSF_MOTION_CAPTURE` with the existing native settings reader after the preparation
+log. A nonzero value calls the native capture installer and discards its return value. Rust then
+publishes `startup_ready` with a sequentially consistent atomic store. The overlay action reads it
+with the same ordering, replacing the Win32 interlocked flag. Preparation refusal or capture
+refusal still allows publication. Capture configuration in the observer and compile-time
+RenderDoc gating at attach are unchanged. The private carrier callback table appends the capture
+installer and advances to version 2 with matching x64 layout assertions. Both carriers use the
+same table and existing Rust archive. GameSDK ABI 24, Runtime interfaces and carrier export
+definitions are unchanged.
+
+Automatic SR startup remains on Present. It needs enablement, worker readiness, an unstarted
+backend, no previous automatic attempt and a valid presenting swapchain extent. The bridge
+records the attempt before calling `start_dlss`, which reads the observer's presented size and
+starts on its acquired D3D11 device. Re-enabling clears the attempt flag. A manual start request
+still calls the native action directly. The bridge activates the native session only after the
+pipeline starts and selects the compatibility frame-tap callbacks when the native session is
+absent or activation refuses.
+
+Source comparison with `1eda132` covered the worker failure and success paths, cold-window and
+device ordering, optional capture and SR enablement, prepare/refusal and fallback paths, the
+private table and both carriers' link and export definitions. Rust 1.94.1 formatting, locked
+offline Windows Cargo metadata and whitespace checks passed. The native thread, wait, window and
+device calls, preparation bridge and compatibility activation still reside in native code.
+Compile, link, Clippy, tests and device and in-game behavior remain unverified for this cutover.

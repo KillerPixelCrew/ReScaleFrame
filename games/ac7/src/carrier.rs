@@ -3,11 +3,12 @@
 use crate::sites::DEPTH_GATES;
 use crate::{AMD64, EXECUTABLE};
 use rsf_game_sys::{rsf_game_log_fn, rsf_game_probe};
-use std::ffi::{CStr, CString, c_char, c_int};
+use std::ffi::{CStr, CString, c_char, c_int, c_ulong};
 use std::mem::offset_of;
 use std::ptr::{null, null_mut};
+use std::sync::atomic::{AtomicBool, Ordering};
 
-const ABI_VERSION: u32 = 1;
+const ABI_VERSION: u32 = 2;
 const PATCH_OK: i32 = 0;
 const PATCH_INVALID_ARGUMENT: i32 = -1;
 const JITTER_RVA: u32 = 0x112b1f3;
@@ -39,6 +40,7 @@ static EXECUTABLE_WIDE: [u16; EXECUTABLE.to_bytes_with_nul().len()] =
 static GAME_DLL: [u16; b"ReScaleFrame.Game.AC7.dll\0".len()] =
     widen(b"ReScaleFrame.Game.AC7.dll\0");
 static WINDOW_CLASS: [u16; b"UnrealWindow\0".len()] = widen(b"UnrealWindow\0");
+static STARTUP_READY: AtomicBool = AtomicBool::new(false);
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_ac7_carrier_executable() -> *const u16 {
@@ -92,12 +94,14 @@ struct CarrierLeaves {
     set_depth_conformed: Option<unsafe extern "C" fn(c_int)>,
     register_translucency_scale: Option<unsafe extern "C" fn(u32, u32)>,
     prepare_native_game: Option<unsafe extern "C" fn() -> c_int>,
+    install_motion_capture: Option<unsafe extern "C" fn() -> c_int>,
 }
 
 const _: () = {
-    assert!(size_of::<CarrierLeaves>() == 64);
+    assert!(size_of::<CarrierLeaves>() == 72);
     assert!(offset_of!(CarrierLeaves, read_number) == 8);
     assert!(offset_of!(CarrierLeaves, prepare_native_game) == 56);
+    assert!(offset_of!(CarrierLeaves, install_motion_capture) == 64);
 };
 
 struct PatchIo {
@@ -251,6 +255,7 @@ unsafe extern "C" fn rsf_ac7_carrier_install_decrypted(leaves: *const CarrierLea
         Some(set_depth),
         Some(register_scale),
         Some(prepare),
+        Some(install_motion_capture),
     ) = (
         leaves.read_number,
         leaves.patch,
@@ -258,6 +263,7 @@ unsafe extern "C" fn rsf_ac7_carrier_install_decrypted(leaves: *const CarrierLea
         leaves.set_depth_conformed,
         leaves.register_translucency_scale,
         leaves.prepare_native_game,
+        leaves.install_motion_capture,
     )
     else {
         return;
@@ -304,4 +310,14 @@ unsafe extern "C" fn rsf_ac7_carrier_install_decrypted(leaves: *const CarrierLea
     } else {
         "native AC7 plugin preparation: refused"
     });
+    if number(c"RSF_MOTION_CAPTURE", 0) != 0 {
+        unsafe { install_motion_capture() };
+    }
+    // Compatibility SR can start after native preparation refuses.
+    STARTUP_READY.store(true, Ordering::SeqCst);
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_ac7_carrier_startup_ready() -> c_ulong {
+    c_ulong::from(STARTUP_READY.load(Ordering::SeqCst))
 }

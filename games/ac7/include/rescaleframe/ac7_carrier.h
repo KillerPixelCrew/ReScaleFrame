@@ -21,7 +21,7 @@ int rsf_ac7_carrier_probe(rsf_game_probe* probe, const char* sha256);
 typedef int32_t (*rsf_ac7_carrier_patch_fn)(uint32_t rva, const uint8_t* bytes, uint32_t count,
     const uint8_t* expected, uint32_t expected_count, uint8_t* previous);
 
-#define RSF_AC7_CARRIER_ABI_VERSION 1u
+#define RSF_AC7_CARRIER_ABI_VERSION 2u
 typedef struct rsf_ac7_carrier_leaves {
     uint32_t struct_size;
     uint32_t abi_version;
@@ -32,10 +32,14 @@ typedef struct rsf_ac7_carrier_leaves {
     void (*set_depth_conformed)(int conformed);
     void (*register_translucency_scale)(uint32_t rva, uint32_t immediate_offset);
     int (*prepare_native_game)(void);
+    int (*install_motion_capture)(void);
 } rsf_ac7_carrier_leaves;
 
-/* Called once by the worker after the existing decryption wait succeeds. */
+/* Runs patches, native preparation and optional capture install, then publishes worker readiness.
+   Called once by the worker after the decryption wait succeeds. */
 void rsf_ac7_carrier_install_decrypted(const rsf_ac7_carrier_leaves* leaves);
+/* Used by the Present callback to gate automatic SR startup. */
+unsigned long rsf_ac7_carrier_startup_ready(void);
 
 /* Opens or closes the verified gate. stub_rel32 is null for the all-views instruction.
    previous must have room for six bytes. Returns the native patch result. */
