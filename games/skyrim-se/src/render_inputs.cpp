@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "render_inputs.h"
-#include "camera.h"
+#include "render_camera.h"
+#include "observer_platform.h"
 #include "resolution.h"
 #include "auxiliary.h"
 #include "presentation_inputs.h"
@@ -11,9 +12,17 @@
 #include <wrl/client.h>
 #include <cstring>
 #include <cstdio>
-#include <cmath>
 #include <initializer_list>
 #include <atomic>
+
+struct rsf_skyrim_render_camera_leaves {
+    bool (*extent)(uint32_t, uint32_t, uint32_t*, uint32_t*);
+    bool (*clock)(int64_t*, int64_t*);
+};
+static_assert(sizeof(rsf_skyrim_render_camera_leaves) == 16);
+extern "C" bool rsf_skyrim_read_render_camera(const rsf_skyrim_creation_platform*,
+    const rsf_skyrim_render_camera_leaves*, uintptr_t manager, bool fg,
+    rsf_game_render_pass*, rsf::skyrim::RenderCamera*) noexcept;
 
 namespace rsf::skyrim {
 namespace {
@@ -31,17 +40,6 @@ bool read(void* out, uintptr_t address, size_t size) noexcept {
 #endif
 }
 template<class T> bool read(T& out, uintptr_t address) { return read(&out, address, sizeof(out)); }
-struct History {
-    uintptr_t camera{};
-    uint32_t frame{}, width{}, height{};
-    NativeCamera native{};
-    float jitter[2]{};
-    LARGE_INTEGER time{};
-} history;
-bool same_matrix(const float* a, const float* b) {
-    for (unsigned i = 0; i < 16; ++i) if (!std::isfinite(a[i]) || !std::isfinite(b[i]) || std::abs(a[i] - b[i]) > 0.001f) return false;
-    return true;
-}
 bool temporal_mask_format(DXGI_FORMAT format) {
     // TAA consumes numeric X/Y rejection channels, never colour or integer data.
     switch (format) {
@@ -55,49 +53,32 @@ bool temporal_mask_format(DXGI_FORMAT format) {
     }
 }
 }
+bool read_render_camera(void* manager, bool fg, rsf_game_render_pass& pass, RenderCamera& facts) noexcept
+{
+    constexpr rsf_skyrim_render_camera_leaves leaves{
+        [](uint32_t w, uint32_t h, uint32_t* rw, uint32_t* rh) noexcept { return resolution_extent(w, h, *rw, *rh); },
+        [](int64_t* tick, int64_t* rate) noexcept {
+            LARGE_INTEGER now{}, frequency{};
+            if (!QueryPerformanceCounter(&now) || !QueryPerformanceFrequency(&frequency)) return false;
+            *tick = now.QuadPart;
+            *rate = frequency.QuadPart;
+            return true;
+        },
+    };
+    return rsf_skyrim_read_render_camera(creation_platform(), &leaves, uintptr_t(manager), fg, &pass, &facts);
+}
+
 uint32_t renderer_thread() { return scene_thread.load(std::memory_order_acquire); }
 bool reconstruct(void* manager, const rsf_game_host_services& host) {
     if (!host.process_upscale) return false;
-    const uintptr_t base = uintptr_t(GetModuleHandleW(nullptr)), state = base + 0x33363a0;
-    uintptr_t camera{}, cache{}, taa{}, window{};
-    uint32_t count{}, width{}, height{}, frame{}; float ratios[2]{}; unsigned char enabled{};
-    if (!read(taa, uintptr_t(manager) + 0x1f0) || !taa || !read(enabled, taa + 0x18) || !enabled ||
-        !read(camera, base + 0x33d3d28) || !camera || !read(cache, state + 0xb8) || !cache ||
-        !read(count, state + 0xc8) || !count || count > 256 || !read(width, state + 0x24) ||
-        !read(height, state + 0x28) || !width || !height || width > 16384 || height > 16384 ||
-        !read(ratios, state + 0x114) ||
-        !read(frame, base + 0x33363f4) || !read(window, base + 0x3330198) || !window) return false;
-    uintptr_t selected{};
-    for (uint32_t i = 0; i < count; ++i) {
-        uintptr_t owner{}; unsigned char jittered{}; const auto entry = cache + size_t(i) * 0x290;
-        if (!read(owner, entry) || !read(jittered, entry + 0x284)) return false;
-        if (owner == camera && jittered == 1) { if (selected) return false; selected = entry; }
-    }
-    NativeCamera native{};
-    if (!selected || !read(native.view, selected + 0x40) || !read(native.projection, selected + 0x1c0) ||
-        !read(native.view_projection, selected + 0x140) || !read(native.previous_view_projection, selected + 0x180) ||
-        !read(native.origin, selected + 0x26c) || !read(native.previous_origin, selected + 0x278) ||
-        !read(native.jitter_ndc, state + 0x44) || !read(native.near_plane, camera + 0x160) || !read(native.far_plane, camera + 0x164)) return false;
-    uint32_t render_width = width, render_height = height;
-    const bool controlled = resolution_extent(width, height, render_width, render_height);
-    if ((!controlled && (ratios[0] != 1 || ratios[1] != 1)) || !std::isfinite(ratios[0]) || !std::isfinite(ratios[1]) ||
-        std::abs(ratios[0] - float(render_width) / float(width)) > 0.00001f ||
-        std::abs(ratios[1] - float(render_height) / float(height)) > 0.00001f) return false;
-    rsf_game_render_pass pass{}; bool valid_history{};
-    if (!camera_frame(native, render_width, render_height, pass.camera, pass.previous_clip_to_clip, valid_history)) return false;
-    pass.camera.output_width = width; pass.camera.output_height = height;
-    LARGE_INTEGER now{}, frequency{};
-    if (!QueryPerformanceCounter(&now) || !QueryPerformanceFrequency(&frequency) || frequency.QuadPart <= 0) return false;
-    const auto previous = history;
-    history = {camera, frame, render_width, render_height, native, {pass.camera.jitter_pixels[0], pass.camera.jitter_pixels[1]}, now};
-    const double elapsed = double(now.QuadPart - previous.time.QuadPart) / double(frequency.QuadPart);
-    if (!previous.time.QuadPart || elapsed <= 0 || elapsed > 1) return false;
-    pass.camera.frame_time_seconds = float(elapsed); // Measured interval of this native render callback.
-    const bool continuous = valid_history && previous.camera == camera && frame == uint32_t(previous.frame + 1) &&
-        previous.width == render_width && previous.height == render_height && same_matrix(native.previous_view_projection, previous.native.view_projection) &&
-        !std::memcmp(native.previous_origin, previous.native.origin, sizeof(native.origin));
-    if (continuous) std::memcpy(pass.camera.previous_jitter_pixels, previous.jitter, sizeof(previous.jitter));
-    else pass.flags |= RSF_GAME_RENDER_RESET;
+    rsf_game_render_pass pass{};
+    RenderCamera view{};
+    if (!read_render_camera(manager, false, pass, view)) return false;
+    const auto base = uintptr_t(GetModuleHandleW(nullptr));
+    const auto [width, height] = view.output;
+    const auto [render_width, render_height] = view.render;
+    const auto camera = view.camera, window = view.window;
+    const auto frame = view.frame;
     ID3D11DeviceContext* raw_context{}; ID3D11Texture2D *raw_color{}, *raw_depth{}, *raw_motion{}, *raw_mask{}; IDXGISwapChain* raw_chain{};
     if (!read(raw_context, base + 0x3331f30) || !raw_context ||
         !read(raw_color, base + 0x3331f40 + 0xa58 + 0x30) || !raw_color ||
@@ -114,7 +95,7 @@ bool reconstruct(void* manager, const rsf_game_host_services& host) {
         char message[240]{}; std::snprintf(message, sizeof(message),
             "Skyrim pre-HDR native viewport %.5gx%.5g (%u views); active inputs %ux%u allocation %ux%u lock=%u ratios=%g,%g",
             double(viewport.Width), double(viewport.Height), viewports, render_width, render_height, width, height,
-            *reinterpret_cast<const uint32_t*>(state + 0x128), double(ratios[0]), double(ratios[1]));
+            *reinterpret_cast<const uint32_t*>(base + 0x33364c8), double(view.ratios[0]), double(view.ratios[1]));
         host.log(host.user, message); logged_width = render_width; logged_height = render_height;
     }
     ComPtr<ID3D11Device> device, owner; context->GetDevice(&device);

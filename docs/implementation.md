@@ -228,6 +228,13 @@ for invalid history. A refused camera clears the SDK record and history
 flag. The existing camera fixture links the same Rust archive as the
 adapter. It remains unrun.
 
+The pre-HDR SR and FG producers now share one Rust camera-cache reader.
+Each producer keeps its own previous camera, native frame, extent and
+callback timestamp. The reader retains the native TAA and unique-entry
+checks, the render-to-output ratios and the bitwise origin match used
+for history. D3D11 leases and pass delivery still use the existing
+native paths. Source comparison passed. Live timing remains unverified.
+
 Skyrim SE's sampler owner now checks the native flush entry and owns
 scene admission, mip bias, slot selection, and pending restoration in
 Rust. The typed detour still forwards the native flush first. The owner

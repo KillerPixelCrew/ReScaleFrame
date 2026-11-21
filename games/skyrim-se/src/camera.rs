@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! Decode the copied Skyrim row-vector camera cache for the GameSDK.
 
+mod render;
+
 use rsf_game_sys::camera_math::inverse_4x4;
 use rsf_game_sys::{RSF_GAME_CAMERA_ABI_VERSION, rsf_camera_frame};
 

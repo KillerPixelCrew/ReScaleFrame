@@ -123,6 +123,17 @@ Still C++ in `rsf_game_skyrim_se`, in suggested order:
    the camera output and history flag. `tests/skyrim_camera.cpp` now links the Rust
    archive. Source comparison and layout review were the scope of this change.
 
+`camera/render.rs` now reads the same pre-HDR cache for SR and FG, replacing
+their identical native cache and history code. The exact site and camera
+convention remain documented in [the integration report](skyrim-se-integration.md).
+The old stores were separate, so Rust keeps a receipt per producer with the
+same first-sample refusal, QPC interval bound and reset rule. The copied history
+holds scalar identities and the prior view-projection, origin bits and jitter.
+The guards now refuse overflowing cache addresses and timing differences.
+The native consumers still lease their textures and submit their original
+passes. Source comparison matched both baseline blocks, including the cache
+offsets and bitwise origin check. No build or live test was run.
+
 ## Sampler hook
 
 Rust uses the existing guarded read and MinHook leaves for the sampler flush.
