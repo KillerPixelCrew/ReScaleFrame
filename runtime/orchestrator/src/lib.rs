@@ -53,6 +53,10 @@ mod dlss_pipeline;
 #[cfg(windows)]
 mod dlss_pipeline_abi;
 #[cfg(windows)]
+mod dlss_streamline;
+#[cfg(windows)]
+mod dlss_streamline_abi;
+#[cfg(windows)]
 mod dlss_vulkan_capture;
 #[cfg(windows)]
 mod dlss_vulkan_capture_ledger;

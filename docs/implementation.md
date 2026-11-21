@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now owns the legacy Streamline SR session, including its owned and
+borrowed host routes, device leases, viewport option cache and the
+token, constants, options, tags and evaluate order. The native bridge
+keeps SDK types, entry points and signature verification. Replacing a
+registered D3D11 device releases the previous lease, and diagnostics
+no longer read stale driver fields when requirements are unavailable.
+The public declarations and SDK-disabled stubs are unchanged.
+
 Rust now owns D3D11 constant-buffer readback admission, the staging
 lease and the caller's byte copy. The native bridge checks the
 resource type before reading its descriptor, and the Rust path

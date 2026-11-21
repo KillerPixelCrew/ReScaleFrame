@@ -44,6 +44,9 @@ generate("sdk/game/src/sr_abi.rs", "runtime/orchestrator/include/rescaleframe/d3
          ["--no-recursive-allowlist", "--with-derive-default",
           "--raw-line", "use crate::{rsf_game_render_pass, rsf_result};",
           "--raw-line", "type rsf_sharpening_options = ::core::ffi::c_void;"])
+generate("runtime/orchestrator/src/dlss_streamline_abi.rs", "runtime/backends/dlss/include/rescaleframe/dlss.h",
+         "rsf_dlss_(plan|support|quality)", "NOTHING", ["-Iruntime/backends/dlss/include"],
+         ["--no-recursive-allowlist"])
 generate("runtime/orchestrator/src/resource_roles_abi.rs", "runtime/graphics/include/rescaleframe/resource_roles.h",
          "rsf_(texture_facts|frame_shape|resource_role|role_(table|rule|verdict|confidence))",
          "RSF_ROLE_RULE_.*", [], ["--no-recursive-allowlist"])
