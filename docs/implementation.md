@@ -1934,6 +1934,12 @@ references before WARP starts. The typed Win32 and D3D11 calls stay
 in native callbacks. The updated fixture remains unrun.
 [Observer startup probe](rust-migration.md#d3d11-observer-startup-probe)
 
+The D3D12 observer now admits factory, device, queue and swapchain
+attachments in Rust. It leases the queried interfaces until
+publication and selects Present from the same accepted window.
+The typed COM calls and original detours remain native.
+[D3D12 observer attachment](rust-migration.md#d3d12-observer-attachment)
+
 Rust now owns D3D12 diagnostics dispatch, validation message budgets,
 stack formatting and the one-time device-removal report. The logger
 and its user context are published together and copied before calling

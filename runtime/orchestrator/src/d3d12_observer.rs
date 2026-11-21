@@ -6,6 +6,7 @@ use std::ptr;
 use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock, PoisonError};
 
+mod attachment;
 mod diagnostics;
 
 type Handle = *mut c_void;
@@ -51,6 +52,11 @@ unsafe impl Send for Observer {}
 unsafe impl Sync for Observer {}
 
 impl Observer {
+    fn accepts_window(&self, window: Handle) -> bool {
+        let accept = self.setup.accept_window.expect("validated observer setup");
+        unsafe { accept(self.setup.user, window) != 0 }
+    }
+
     fn notify_submit(&self, queue: Handle, id: u64, count: u32, lists: *const Handle, begin: u32) {
         if let Some(submit) = self.setup.submit {
             unsafe { submit(self.setup.user, queue, id, count, lists, begin) };
@@ -108,11 +114,6 @@ unsafe extern "C" fn rsf_core_observer12_create(
     });
     unsafe { out.write(ptr::from_ref(observer).cast_mut()) };
     0
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_observer12_owns(observer: *const Observer) -> i32 {
-    i32::from(OBSERVER.get().is_some_and(|owner| ptr::eq(owner, observer)))
 }
 
 #[unsafe(no_mangle)]
@@ -184,23 +185,6 @@ extern "C" fn rsf_core_observer12_leave(kind: u32) {
         current[kind as usize] -= 1;
         depth.set(current);
     });
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_observer12_accept(window: Handle) -> i32 {
-    OBSERVER.get().map_or(0, |owner| {
-        let accept = owner.setup.accept_window.expect("validated observer setup");
-        unsafe { accept(owner.setup.user, window) }
-    })
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_observer12_swapchain(queue: Handle, chain: Handle, window: Handle) {
-    if let Some(owner) = OBSERVER.get()
-        && let Some(swapchain) = owner.setup.swapchain
-    {
-        unsafe { swapchain(owner.setup.user, queue, chain, window) };
-    }
 }
 
 #[unsafe(no_mangle)]

@@ -461,6 +461,28 @@ hardware cleanup before WARP and window cleanup on an exception.
 Pinned formatting, locked offline metadata, and whitespace checks
 passed. Native linkage, fixture execution and device use remain open.
 
+## D3D12 observer attachment
+
+Compared with `ee294f19`, Rust now admits the device and factory
+interfaces and holds their COM references through hook registration.
+After native swapchain creation, Rust checks the host's accepted
+window and direct queue. It attempts the queue and chain hooks in
+order, then reports the swapchain to the host while the queue
+reference is live. The second, redundant queue-type query is gone.
+
+The original COM creation and Present calls stay on native frames.
+Rust admits Present from the same typed window description and
+publishes the same callback pair. The native leaves contain C++
+exceptions. Query, descriptor and bind failures report refusal,
+and debug registration remains optional.
+
+The private attachment table has seven callbacks. Source comparison
+matched the four vtable slots, typed detours and public declarations.
+The new fixture covers refused windows, non-direct queues and
+publication after both bind attempts. Pinned formatting, locked
+offline metadata and whitespace passed. Native linkage, the fixture,
+and device and game execution remain open.
+
 ## Verification coverage
 
 | Requirement | Recorded evidence | Still open |

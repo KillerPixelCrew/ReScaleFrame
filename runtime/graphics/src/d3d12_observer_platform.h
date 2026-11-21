@@ -17,6 +17,15 @@ struct rsf_observer12_hooks {
     int32_t (*enable)(void* target);
     void (*remove)(void* target);
 };
+struct rsf_observer12_attachment {
+    int32_t (*query_factory)(void*, void**);
+    int32_t (*query_device)(void*, void**);
+    int32_t (*query_queue)(void*, void**);
+    uint32_t (*queue_type)(void*);
+    int32_t (*bind_interface)(uint32_t kind, void*, size_t slot);
+    void (*register_debug)(void*);
+    int32_t (*describe_window)(void*, void**);
+};
 
 struct rsf_observer12_breadcrumb {
     void* list;
@@ -35,19 +44,21 @@ typedef void (*rsf_observer12_read_dred)(void* device, uint32_t limit,
 extern "C" {
 int32_t rsf_core_observer12_create(const rsf_d3d12_observer_setup*, rsf_d3d12_observer**,
     const rsf_observer12_hooks*);
-int32_t rsf_core_observer12_owns(const rsf_d3d12_observer*);
 int32_t rsf_core_observer12_bind(uint32_t kind, void* target, void* const* wrappers,
     const rsf_observer12_hooks*);
 void* rsf_core_observer12_original(uint32_t kind, size_t index);
 int32_t rsf_core_observer12_enter(uint32_t kind);
 void rsf_core_observer12_leave(uint32_t kind);
-int32_t rsf_core_observer12_accept(void* window);
-void rsf_core_observer12_swapchain(void* queue, void* chain, void* window);
+int32_t rsf_core_observer12_attach(const rsf_d3d12_observer*, void*, uint32_t kind,
+    const rsf_observer12_attachment*);
+void rsf_core_observer12_factory_result(const rsf_observer12_attachment*, int32_t result, uint32_t outer,
+    void* queue, void* window, void* const* chain);
+void rsf_core_observer12_device_result(const rsf_observer12_attachment*, int32_t result, void* const* queue);
+uint32_t rsf_core_observer12_present_begin(const rsf_observer12_attachment*, void* chain, uint32_t interval, uint32_t flags);
 uint64_t rsf_core_observer12_submit_begin(void* queue, uint32_t count, void* const* lists);
 void rsf_core_observer12_submit_end(void* queue, uint64_t id, uint32_t count, void* const* lists);
 void rsf_core_observer12_present(void* chain, uint32_t interval, uint32_t flags, uint32_t begin);
 int32_t rsf_core_observer12_diagnostics_enable(rsf_observer12_log, void* user, int32_t (*enable)(void));
-int32_t rsf_core_observer12_diagnostics_enabled();
 void rsf_core_observer12_debug_message(uint32_t severity, uint32_t id, const char* description);
 int32_t rsf_core_observer12_check_removal();
 void rsf_core_observer12_report_removal(void* device, int32_t reason, rsf_observer12_read_dred);

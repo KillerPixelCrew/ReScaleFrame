@@ -87,9 +87,8 @@ unsafe extern "C" fn rsf_core_observer12_diagnostics_enable(
     0
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_observer12_diagnostics_enabled() -> i32 {
-    i32::from(SINK.get().is_some())
+pub(super) fn enabled() -> bool {
+    SINK.get().is_some()
 }
 
 #[unsafe(no_mangle)]
