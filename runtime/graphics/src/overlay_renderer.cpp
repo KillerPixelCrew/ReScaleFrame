@@ -85,14 +85,13 @@ static_assert(offsetof(rsf_overlay_vertex, color) == 16, "input layout offset");
 constexpr uint32_t max_class_instances = D3D11_SHADER_MAX_INTERFACES;
 constexpr uint32_t max_viewports = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
 
-// Everything this pass touches on the context. The game did not ask for any of it to change, and
-// what is left changed corrupts the game's own rendering after we return, which presents as the
-// game breaking rather than as the overlay breaking.
-//
-// The list matches what the draw below sets, one for one, by reading. That is the only check it
-// has had: none of this has been run against a device, so it is not evidence that a game renders
-// correctly after the overlay returns.
-struct SavedState {
+} // namespace
+
+// The caller keeps the render targets, depth view and UAVs bound throughout the draw.
+// Each context getter transfers its COM references to the Rust overlay renderer.
+struct rsf_overlay11_snapshot {
+    ID3D11Predicate* predicate;
+    BOOL predicate_value;
     ID3D11InputLayout* input_layout;
     D3D11_PRIMITIVE_TOPOLOGY topology;
     ID3D11Buffer* vertex_buffer;
@@ -136,28 +135,26 @@ struct SavedState {
     UINT sample_mask;
     ID3D11DepthStencilState* depth_stencil;
     UINT stencil_reference;
-    ID3D11Predicate* predicate;
-    BOOL predicate_value;
-
-    // Render targets are deliberately absent. This pass draws into whatever is bound and never
-    // rebinds it, because putting render targets back means calling OMSetRenderTargets, and that
-    // call also unbinds every unordered access view the output merger holds. Their original start
-    // slot is not something OMGetRenderTargetsAndUnorderedAccessViews reports, so a game that had
-    // any bound could not be put back exactly. Not touching them is the only safe answer, and it
-    // costs nothing: the caller has already bound the image the overlay belongs on.
 };
 
-void release_instances(ID3D11ClassInstance** instances, UINT count)
-{
-    for (UINT index = 0; index < count; ++index) {
-        if (instances[index]) {
-            instances[index]->Release();
-        }
-    }
-}
+static_assert(sizeof(D3D11_PRIMITIVE_TOPOLOGY) == 4 && sizeof(DXGI_FORMAT) == 4);
+static_assert(sizeof(D3D11_VIEWPORT) == 24 && sizeof(D3D11_RECT) == 16);
+static_assert(sizeof(rsf_overlay11_snapshot) == 10992 && alignof(rsf_overlay11_snapshot) == 8);
+static_assert(offsetof(rsf_overlay11_snapshot, vertex_instances) == 72);
+static_assert(offsetof(rsf_overlay11_snapshot, pixel_instances) == 2120);
+static_assert(offsetof(rsf_overlay11_snapshot, geometry_instances) == 4176);
+static_assert(offsetof(rsf_overlay11_snapshot, hull_instances) == 6216);
+static_assert(offsetof(rsf_overlay11_snapshot, domain_instances) == 8256);
+static_assert(offsetof(rsf_overlay11_snapshot, viewports) == 10296);
+static_assert(offsetof(rsf_overlay11_snapshot, scissors) == 10684);
+static_assert(offsetof(rsf_overlay11_snapshot, blend) == 10944);
 
-void save_state(ID3D11DeviceContext* context, SavedState& state)
+namespace {
+
+int32_t read_state(void* raw, rsf_overlay11_snapshot* snapshot) noexcept try
 {
+    auto* context = static_cast<ID3D11DeviceContext*>(raw);
+    auto& state = *snapshot;
     state.vertex_instance_count = max_class_instances;
     state.pixel_instance_count = max_class_instances;
     state.geometry_instance_count = max_class_instances;
@@ -193,12 +190,13 @@ void save_state(ID3D11DeviceContext* context, SavedState& state)
     context->OMGetBlendState(&state.blend, state.blend_factor, &state.sample_mask);
     context->OMGetDepthStencilState(&state.depth_stencil, &state.stencil_reference);
     context->GetPredication(&state.predicate, &state.predicate_value);
-}
+    return 1;
+} catch (...) { return 0; }
 
-// Puts the context back and drops every reference the Get calls above handed over. Those are real
-// references and this runs every frame, so a missed Release is a leak that grows with playtime.
-void restore_state(ID3D11DeviceContext* context, SavedState& state)
+void restore_state(void* raw, const rsf_overlay11_snapshot* snapshot) noexcept
 {
+    auto* context = static_cast<ID3D11DeviceContext*>(raw);
+    const auto& state = *snapshot;
     context->IASetInputLayout(state.input_layout);
     context->IASetPrimitiveTopology(state.topology);
     context->IASetVertexBuffers(0, 1, &state.vertex_buffer, &state.vertex_stride,
@@ -224,55 +222,6 @@ void restore_state(ID3D11DeviceContext* context, SavedState& state)
     context->OMSetBlendState(state.blend, state.blend_factor, state.sample_mask);
     context->OMSetDepthStencilState(state.depth_stencil, state.stencil_reference);
     context->SetPredication(state.predicate, state.predicate_value);
-    if (state.predicate) state.predicate->Release();
-
-    if (state.input_layout) {
-        state.input_layout->Release();
-    }
-    if (state.vertex_buffer) {
-        state.vertex_buffer->Release();
-    }
-    if (state.index_buffer) {
-        state.index_buffer->Release();
-    }
-    if (state.vertex_shader) {
-        state.vertex_shader->Release();
-    }
-    release_instances(state.vertex_instances, state.vertex_instance_count);
-    if (state.vertex_constants) {
-        state.vertex_constants->Release();
-    }
-    if (state.pixel_shader) {
-        state.pixel_shader->Release();
-    }
-    release_instances(state.pixel_instances, state.pixel_instance_count);
-    if (state.pixel_resource) {
-        state.pixel_resource->Release();
-    }
-    if (state.pixel_sampler) {
-        state.pixel_sampler->Release();
-    }
-    if (state.geometry_shader) {
-        state.geometry_shader->Release();
-    }
-    release_instances(state.geometry_instances, state.geometry_instance_count);
-    if (state.hull_shader) {
-        state.hull_shader->Release();
-    }
-    release_instances(state.hull_instances, state.hull_instance_count);
-    if (state.domain_shader) {
-        state.domain_shader->Release();
-    }
-    release_instances(state.domain_instances, state.domain_instance_count);
-    if (state.rasterizer) {
-        state.rasterizer->Release();
-    }
-    if (state.blend) {
-        state.blend->Release();
-    }
-    if (state.depth_stencil) {
-        state.depth_stencil->Release();
-    }
 }
 
 bool is_srgb_format(DXGI_FORMAT format)
@@ -481,13 +430,6 @@ int32_t draw(void* raw, const rsf_overlay11_pipeline* pipeline, void* vertices, 
     uint32_t width, uint32_t height, const rsf_overlay11_draw* draws, size_t count) noexcept try
 {
     auto* context = static_cast<ID3D11DeviceContext*>(raw);
-    SavedState saved{};
-    save_state(context, saved);
-    struct Restore {
-        ID3D11DeviceContext* context;
-        SavedState& state;
-        ~Restore() { restore_state(context, state); }
-    } restore{context, saved};
 
     auto* vertex_buffer = static_cast<ID3D11Buffer*>(vertices);
     auto* index_buffer = static_cast<ID3D11Buffer*>(indices);
@@ -529,14 +471,14 @@ int32_t draw(void* raw, const rsf_overlay11_pipeline* pipeline, void* vertices, 
 
 constexpr rsf_overlay11_platform platform{
     make_pipeline, validate_context, make_texture, make_view, patch_texture, make_buffer, write_buffer,
-    target_kind, draw,
+    target_kind, read_state, draw, restore_state,
     [](rsf_overlay_renderer_log_fn log, void* user, const char* message) noexcept {
         try { log(user, message); } catch (...) {}
     },
 };
 
 static_assert(sizeof(rsf_overlay11_pipeline) == 8 * sizeof(void*) && sizeof(rsf_overlay11_draw) == 40);
-static_assert(sizeof(rsf_overlay11_platform) == 10 * sizeof(void*) && sizeof(rsf_overlay_renderer_setup) == 24);
+static_assert(sizeof(rsf_overlay11_platform) == 12 * sizeof(void*) && sizeof(rsf_overlay_renderer_setup) == 24);
 static_assert(D3D11_BIND_VERTEX_BUFFER == 1 && D3D11_BIND_INDEX_BUFFER == 2 && D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION == 16384);
 static_assert(RSF_OVERLAY_RENDERER_ABI_VERSION == 1 && RSF_OVERLAY_RENDERER_OK == 0 &&
     RSF_OVERLAY_RENDERER_ERROR_INVALID_ARGUMENT == -1 && RSF_OVERLAY_RENDERER_ERROR_ABI_MISMATCH == -2 &&
