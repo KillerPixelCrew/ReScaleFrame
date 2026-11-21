@@ -391,6 +391,22 @@ fn pass_and_state_callbacks_see_the_ticket_and_the_selected_scope() {
 }
 
 #[test]
+fn an_out_of_order_end_does_not_leave_a_released_scope_current() {
+    let check = Check::new();
+    let scopes = create(&check, 2, Some(state), Some(pass), &CALLS);
+    let mut list = List::new();
+    let outer = open(scopes, &mut list, &scene(1, 0x10));
+    let inner = open(scopes, &mut list, &scene(2, 0x20));
+    assert!(close(outer, &mut list) && close(inner, &mut list));
+    list.run();
+    assert_eq!(check.frames(), [1, 1, 2, 2, 2, 0]);
+    assert!(current(scopes).is_none());
+    quiesce(scopes);
+    assert!(idle(scopes));
+    assert!(destroy(scopes));
+}
+
+#[test]
 fn current_reports_the_innermost_executed_scope() {
     let check = Check::new();
     let scopes = create(&check, 2, None, None, &CALLS);
@@ -481,6 +497,55 @@ fn a_throwing_resolve_skips_the_stack_and_callbacks_but_retires_the_ticket() {
         1,
         "a release that threw still retires the ticket"
     );
+    quiesce(scopes);
+    assert!(destroy(scopes));
+}
+
+#[test]
+fn a_refused_end_resolve_restores_state_without_delivering_a_pass() {
+    unsafe extern "C" fn resolve_begin_only(
+        lease: *const rsf_ac7_scope_lease,
+        scope: *mut rsf_ac7_render_scope,
+    ) -> bool {
+        if check(unsafe { (*lease).object }).resolved.get() == 0 {
+            unsafe { resolve(lease, scope) }
+        } else {
+            // A failed resolve may have partly modified the record.
+            unsafe { (*scope).scope_id = 0 };
+            false
+        }
+    }
+
+    static CALLS_WITH_REFUSED_END: rsf_ac7_scope_calls = rsf_ac7_scope_calls {
+        resolve: Some(resolve_begin_only),
+        ..CALLS
+    };
+    let check = Check::new();
+    let scopes = create(&check, 1, Some(state), Some(pass), &CALLS_WITH_REFUSED_END);
+    let mut list = List::new();
+    let lease = rsf_ac7_scope_lease {
+        object: check.user(),
+        resolve: Some(lease_resolve),
+        release: Some(lease_release),
+    };
+    let mut ticket = null_mut();
+    assert_eq!(
+        unsafe {
+            rsf_ac7_render_scope_open_leased(
+                scopes,
+                list.raw(),
+                &scene(1, 0x10),
+                &lease,
+                &mut ticket,
+            )
+        },
+        1
+    );
+    assert!(close(ticket, &mut list));
+    list.run();
+    assert_eq!(check.frames(), [101, 101, 0]);
+    assert_eq!(check.released.get(), 1);
+    assert!(current(scopes).is_none());
     quiesce(scopes);
     assert!(destroy(scopes));
 }

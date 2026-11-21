@@ -94,8 +94,7 @@ symbol, so there is no archive cycle.
 - Open copies the caller's scope before taking the owner lock rather than under it; the copy is of
   caller memory on the calling thread.
 - Begin grows the stack with `try_reserve(1)`. Within the reserved capacity it never allocates,
-  as before; beyond it (see the stranded scopes below) a failed growth skips that begin's stack
-  change and callbacks, as a C++ `bad_alloc` did.
+  as before. A failed growth skips that begin's stack change and callbacks, as a C++ `bad_alloc` did.
 - A null or incomplete leaf table refuses create; `render_scope.cpp` always passes a complete one.
 - `std::sync::Mutex` replaces `std::mutex`; nothing panics under it and poisoning is ignored.
 
@@ -130,13 +129,20 @@ Source-only uncertainty, none of it checked by a link:
   `rsf_unity_package`, `rsf_minecraft`, `rsf_godot`, `rsf_gl_shared_surface_test` and
   `rsf_ac7_native_graph_test`.
 
+## Closing a retired scope
+
+The first Rust port retained the C++ behavior when an end arrived outside stack order or its
+lease resolve refused. The ticket and lease were released while the copied scope could stay
+current. The end marker now removes its own entry by the ticket's scope ID, even if resolution
+partly modified the copied record. A non-innermost end leaves the current inner scope active and
+emits no callbacks. A refused innermost resolve restores the selected state without emitting a
+completed pass. Normal begin and end still report pass before state. The regressions exercise
+both synthetic sequences and remain unrun. Neither sequence was observed in gameplay.
+
 ## Remaining risks
 
-- An end that is not innermost does not pop or notify, as before. Its scope stays on the stack:
-  `current` keeps reporting it and idle and destroy refuse, so the module is retained. The pass
-  consumer also gets no end for it although its lease is released. No such interleaving is known
-  in AC7's hooks, which open and close in nested pairs; changing it would assume engine ordering
-  that has not been observed, so it is unchanged.
+- When the engine emits a misordered end, pass consumers still receive no completion for that
+  ticket. The owner clears the stale scope without making assumptions about rendering order.
 - A ticket whose end is never queued or executed (refused close, a list discarded without
   execution) keeps the owner busy and the module loaded, by design.
 - `execute` is a Rust `extern "C"` function on the engine's RHI thread. A panic there would abort

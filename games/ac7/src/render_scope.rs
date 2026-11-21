@@ -204,28 +204,29 @@ unsafe extern "C" fn execute(command_list: *mut c_void, command: *mut Command) {
     let mut selected: rsf_ac7_render_scope = unsafe { zeroed() };
     let mut notify = false;
     // Output allocation may be published after begin was queued. End is appended only after
-    // publication, so resolve again before notifying the matching pass consumer. A throwing
-    // resolve skips the stack and both callbacks, as the C++ catch did.
+    // publication, so resolve again before notifying the matching pass consumer. A refused
+    // resolve leaves no pass to deliver, but an end still retires its stack entry.
+    let id = unsafe { (*scope).scope_id };
     let resolved = unsafe { (*lease).resolve.is_none() || (owner.calls.resolve)(lease, scope) };
-    if resolved {
+    unsafe { (*scope).scope_id = id };
+    if begin && resolved {
         let mut state = owner.lock();
-        if begin {
-            // `capacity` is reserved and bounds outstanding tickets. Only scopes stranded by an
-            // end that was not innermost can exceed it; growth that fails skips this begin.
-            if state.stack.try_reserve(1).is_ok() {
-                let copy = unsafe { scope.read() };
-                state.stack.push(copy);
-                selected = copy;
-                notify = true;
-            }
-        } else {
-            let id = unsafe { (*scope).scope_id };
-            if state.stack.last().is_some_and(|top| top.scope_id == id) {
-                state.stack.pop();
-                if let Some(top) = state.stack.last() {
-                    selected = *top;
-                }
-                notify = true;
+        // The reserved capacity covers every outstanding ticket in a normal stream.
+        if state.stack.try_reserve(1).is_ok() {
+            let copy = unsafe { scope.read() };
+            state.stack.push(copy);
+            selected = copy;
+            notify = true;
+        }
+    } else if !begin {
+        let mut state = owner.lock();
+        if let Some(index) = state.stack.iter().rposition(|item| item.scope_id == id) {
+            // An out-of-order close cannot complete a pass or restore graphics state. It
+            // still retires the copied scope before dropping the lease that backed it.
+            notify = index + 1 == state.stack.len();
+            state.stack.remove(index);
+            if notify && let Some(top) = state.stack.last() {
+                selected = *top;
             }
         }
     }
@@ -233,7 +234,7 @@ unsafe extern "C" fn execute(command_list: *mut c_void, command: *mut Command) {
     if notify {
         // A consumer refusal must not suppress the scope-state restoration, and neither callback
         // can interrupt native work or ticket retirement.
-        if owner.pass_callback.is_some() {
+        if resolved && owner.pass_callback.is_some() {
             unsafe {
                 (owner.calls.notify)(owner.pass_callback, owner.user, command_list, scope, phase)
             };

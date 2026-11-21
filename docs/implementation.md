@@ -234,8 +234,10 @@ existing native calls. Builds and live TrueSky verification remain open.
 
 The AC7 queued render scopes and tickets are Rust-owned. Native leaves
 guard state, pass and resource lease callbacks. The end marker frees its
-ticket before reporting idle. Out-of-order end markers and native link
-and in-game retirement verification remain open.
+ticket before reporting idle. An out-of-order end removes its copied
+scope without reporting a completed pass. A failed end resolve also
+retires the scope and restores enclosing state when needed. Native link,
+fixtures and in-game retirement verification remain open.
 
 ## Rust orchestrator and first Anomaly port
 
