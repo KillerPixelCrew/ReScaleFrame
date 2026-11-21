@@ -4,10 +4,13 @@
 //!
 //! Rust owns the eight hook records (RVA, expected entry bytes and created state), the call-site
 //! and instruction guards, Runtime export negotiation, the live flag and the verify, prepare,
-//! start, quiesce, stop and busy decisions. render_hooks.cpp keeps each typed detour and its typed
-//! MinHook trampoline, which it calls on its own C++ frame, the callback scope counters, and the
-//! producer and recovery bodies (render_hooks_platform.h). Every value belongs to the exact
-//! recognized build; see docs/research/rust-fallout4-render-hooks.md.
+//! start, quiesce, stop and busy decisions, and the reduced-render recovery transaction
+//! (recovery.rs). render_hooks.cpp keeps each typed detour and its typed MinHook trampoline,
+//! which it calls on its own C++ frame, the callback scope counters, the producer bodies and the
+//! recovery leaves (render_hooks_platform.h). Every value belongs to the exact recognized build;
+//! see docs/research/rust-fallout4-render-hooks.md.
+
+mod recovery;
 
 use crate::cpu_abi::rsf_fallout4_cpu_identity as CpuIdentity;
 use crate::cpu_events::{rsf_fallout4_cpu_begin_render, rsf_fallout4_cpu_render_source_is_current};
@@ -315,10 +318,11 @@ extern "C" fn rsf_fallout4_render_live() -> bool {
 // ---------------------------------------------------------------------------------------------
 // Lifecycle, called under the session lock.
 
-/// A detour in flight, an open WINDOW, FRAME, auxiliary or recovery scope, or pending resolution
-/// ownership.
+/// A detour in flight, an open WINDOW, FRAME or auxiliary scope, an owned recovery token, or
+/// pending resolution ownership.
 pub(crate) fn busy() -> bool {
     leaves().is_some_and(|leaves| unsafe { (leaves.scopes_busy)() })
+        || recovery::owned()
         || rsf_fallout4_resolution_busy()
 }
 
