@@ -28,10 +28,10 @@ struct Site {
 
 #[derive(Clone, Copy, Default)]
 #[repr(C)]
-struct Target {
-    address: Address,
-    replacement: Address,
-    original: *mut Address,
+pub(super) struct Target {
+    pub(super) address: Address,
+    pub(super) replacement: Address,
+    pub(super) original: *mut Address,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -55,11 +55,39 @@ struct Platform {
     dos: unsafe extern "C" fn(Address, *mut DosFacts) -> bool,
     pe: unsafe extern "C" fn(Address, Address, *mut PeFacts) -> bool,
     read: unsafe extern "C" fn(Address, Address, Address, usize, bool) -> bool,
-    initialize: unsafe extern "C" fn() -> bool,
-    create: unsafe extern "C" fn(Address, Address, *mut Address) -> bool,
-    remove_unqueued: unsafe extern "C" fn(Address),
-    queue: Queue,
-    apply: Apply,
+    hooks: HookOps,
+}
+
+#[repr(C)]
+pub(super) struct HookOps {
+    pub(super) initialize: unsafe extern "C" fn() -> bool,
+    pub(super) create: unsafe extern "C" fn(Address, Address, *mut Address) -> bool,
+    pub(super) remove_unqueued: unsafe extern "C" fn(Address),
+    pub(super) queue: Queue,
+    pub(super) apply: Apply,
+}
+
+const _: () = {
+    assert!(size_of::<HookOps>() == 40);
+    assert!(size_of::<Platform>() == 64 && std::mem::offset_of!(Platform, hooks) == 24);
+};
+
+impl HookOps {
+    // The caller holds the shared transaction and has validated the targets.
+    pub(super) unsafe fn create_unqueued(&self, sites: &[Target]) -> bool {
+        for (index, site) in sites.iter().enumerate() {
+            if !unsafe { (self.create)(site.address, site.replacement, site.original) } {
+                for prior in &sites[..index] {
+                    unsafe {
+                        (self.remove_unqueued)(prior.address);
+                        prior.original.write(ptr::null_mut());
+                    }
+                }
+                return false;
+            }
+        }
+        true
+    }
 }
 
 fn matching_image(platform: &Platform, module: Address, image_size: u32) -> bool {
@@ -142,7 +170,7 @@ impl Batch {
                 return None;
             }
         }
-        if !unsafe { (platform.initialize)() } {
+        if !unsafe { (platform.hooks.initialize)() } {
             return None;
         }
         let mut batch = Box::new(Self {
@@ -150,17 +178,10 @@ impl Batch {
             count: sites.len(),
             enabled: false,
         });
+        if !unsafe { platform.hooks.create_unqueued(sites) } {
+            return None;
+        }
         for (index, site) in sites.iter().enumerate() {
-            if !unsafe { (platform.create)(site.address, site.replacement, site.original) } {
-                for prior in &sites[..index] {
-                    // No member of this batch has ever been queued or applied.
-                    unsafe {
-                        (platform.remove_unqueued)(prior.address);
-                        prior.original.write(ptr::null_mut());
-                    }
-                }
-                return None;
-            }
             batch.targets[index] = site.address;
         }
         Some(batch)
@@ -172,8 +193,8 @@ impl Batch {
         }
         self.enabled = enable_batch(
             &self.targets[..self.count],
-            platform.queue,
-            platform.apply,
+            platform.hooks.queue,
+            platform.hooks.apply,
             || {},
         );
         self.enabled
@@ -181,7 +202,11 @@ impl Batch {
 
     fn disable(&mut self, platform: &Platform) -> bool {
         self.enabled = false;
-        disable_batch(&self.targets[..self.count], platform.queue, platform.apply)
+        disable_batch(
+            &self.targets[..self.count],
+            platform.hooks.queue,
+            platform.hooks.apply,
+        )
     }
 }
 

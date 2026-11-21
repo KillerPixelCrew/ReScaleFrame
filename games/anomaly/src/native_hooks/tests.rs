@@ -67,11 +67,13 @@ const PLATFORM: Platform = Platform {
     dos,
     pe,
     read,
-    initialize,
-    create,
-    remove_unqueued: remove,
-    queue,
-    apply,
+    hooks: HookOps {
+        initialize,
+        create,
+        remove_unqueued: remove,
+        queue,
+        apply,
+    },
 };
 
 unsafe extern "C" fn dos(_: Address, out: *mut DosFacts) -> bool {

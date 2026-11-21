@@ -3,7 +3,7 @@ use std::cell::Cell;
 use std::ffi::{c_char, c_void};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use crate::native_hooks::{enable_batch, transaction};
+use crate::native_hooks::{HookOps, Target, enable_batch, transaction};
 
 const MAX_HOOKS: usize = 32;
 
@@ -13,14 +13,6 @@ type SinkCallback = unsafe extern "C" fn(*mut c_void, *mut c_void);
 type InputObserver = unsafe extern "C" fn(u8);
 type Add = unsafe extern "C" fn(*mut c_void, Address, Address, u32, *mut Reason) -> bool;
 type Probe = unsafe extern "C" fn(*mut c_void, Add, *mut Reason) -> bool;
-
-#[repr(C)]
-struct Platform {
-    initialize: unsafe extern "C" fn() -> bool,
-    create: unsafe extern "C" fn(Address, Address, *mut Address) -> bool,
-    queue: unsafe extern "C" fn(*mut c_void, bool) -> bool,
-    apply: unsafe extern "C" fn() -> bool,
-}
 
 #[derive(Clone, Copy)]
 struct PresentSink {
@@ -74,11 +66,11 @@ impl Hooks {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn install(&self, binding: Binding, platform: &Platform, probe: Probe) -> Result<(), Reason> {
+    fn install(&self, binding: Binding, platform: &HookOps, probe: Probe) -> Result<(), Reason> {
         let Ok(_installation) = self.installation.try_lock() else {
             return Err(c"another overlay hook installation is in progress".as_ptr());
         };
-        let first = {
+        {
             let mut state = self.state();
             match binding {
                 Binding::Input(gate) if state.input_attempted => {
@@ -96,15 +88,12 @@ impl Hooks {
                 }
                 Binding::Present(_) => state.present_attempted = true,
             }
-            state.hooks.len()
-        };
-        if !unsafe { (platform.initialize)() } {
-            return Err(c"MinHook initialization failed".as_ptr());
         }
         let mut reason = c"overlay hook discovery failed".as_ptr();
         let mut registration = Registration {
             hooks: self,
-            platform,
+            pending: [Pending::default(); MAX_HOOKS],
+            count: 0,
         };
         if !unsafe {
             probe(
@@ -116,21 +105,52 @@ impl Hooks {
             return Err(reason);
         }
 
-        // Publish the complete table and binding before the first enabled detour can run.
+        let batch = &registration.pending[..registration.count];
+        if batch.is_empty() {
+            return Err(c"no overlay hook targets found".as_ptr());
+        }
+        self.state()
+            .hooks
+            .try_reserve_exact(batch.len())
+            .map_err(|_| c"overlay hook table allocation failed".as_ptr())?;
         let _transaction = transaction();
+        if !unsafe { (platform.initialize)() } {
+            return Err(c"MinHook initialization failed".as_ptr());
+        }
         let mut targets = [std::ptr::null_mut(); MAX_HOOKS];
-        let count = {
+        let mut originals = [std::ptr::null_mut(); MAX_HOOKS];
+        let mut sites = [Target::default(); MAX_HOOKS];
+        for (i, hook) in batch.iter().enumerate() {
+            targets[i] = std::ptr::with_exposed_provenance_mut(hook.target);
+            sites[i] = Target {
+                address: targets[i],
+                replacement: std::ptr::with_exposed_provenance_mut(hook.detour),
+                original: &mut originals[i],
+            };
+        }
+        if !unsafe { platform.create_unqueued(&sites[..batch.len()]) } {
+            return Err(c"MinHook refused to create a hook".as_ptr());
+        }
+        // Publish only after the full batch exists, before any detour can run.
+        {
             let mut state = self.state();
+            state
+                .hooks
+                .extend(batch.iter().zip(originals).map(|(hook, original)| Hook {
+                    target: hook.target,
+                    original: original.expose_provenance(),
+                    method: hook.method,
+                }));
             state.publish(binding, true);
-            let batch = &state.hooks[first..];
-            for (out, hook) in targets.iter_mut().zip(batch) {
-                *out = std::ptr::with_exposed_provenance_mut(hook.target);
-            }
-            batch.len()
-        };
-        if !enable_batch(&targets[..count], platform.queue, platform.apply, || {
-            self.state().publish(binding, false);
-        }) {
+        }
+        if !enable_batch(
+            &targets[..batch.len()],
+            platform.queue,
+            platform.apply,
+            || {
+                self.state().publish(binding, false);
+            },
+        ) {
             return Err(c"MinHook refused to enable the overlay hook batch".as_ptr());
         }
         Ok(())
@@ -148,7 +168,15 @@ impl State {
 
 struct Registration<'a> {
     hooks: &'a Hooks,
-    platform: &'a Platform,
+    pending: [Pending; MAX_HOOKS],
+    count: usize,
+}
+
+#[derive(Clone, Copy, Default)]
+struct Pending {
+    target: Address,
+    detour: Address,
+    method: u32,
 }
 
 unsafe extern "C" fn add(
@@ -158,36 +186,42 @@ unsafe extern "C" fn add(
     method: u32,
     reason: *mut Reason,
 ) -> bool {
-    let registration = unsafe { &*registration.cast::<Registration<'_>>() };
+    let registration = unsafe { &mut *registration.cast::<Registration<'_>>() };
     let result = {
         let state = registration.hooks.state();
         if target == 0 || detour == 0 {
             Err(c"a hook target resolved to null")
-        } else if let Some(hook) = state.hooks.iter().find(|hook| hook.target == target) {
-            if hook.method == method {
-                return true;
-            }
-            Err(c"two different methods share one code address")
-        } else if state.hooks.len() == MAX_HOOKS {
-            Err(c"hook table is full")
         } else {
-            Ok(())
+            let existing = state
+                .hooks
+                .iter()
+                .map(|hook| (hook.target, hook.method))
+                .chain(
+                    registration.pending[..registration.count]
+                        .iter()
+                        .map(|hook| (hook.target, hook.method)),
+                )
+                .find(|&(address, _)| address == target);
+            match existing {
+                Some((_, mapped)) if mapped == method => return true,
+                Some(_) => Err(c"two different methods share one code address"),
+                None if state.hooks.len() + registration.count == MAX_HOOKS => {
+                    Err(c"hook table is full")
+                }
+                None => Ok(()),
+            }
         }
     };
     if let Err(message) = result {
         unsafe { reason.write(message.as_ptr()) };
         return false;
     }
-    let mut original = 0;
-    if !unsafe { (registration.platform.create)(target, detour, &mut original) } {
-        unsafe { reason.write(c"MinHook refused to create a hook".as_ptr()) };
-        return false;
-    }
-    registration.hooks.state().hooks.push(Hook {
+    registration.pending[registration.count] = Pending {
         target,
-        original,
+        detour,
         method,
-    });
+    };
+    registration.count += 1;
     true
 }
 
@@ -199,7 +233,7 @@ thread_local! {
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_anomaly_overlay_install_input(
     gate: Address,
-    platform: &Platform,
+    platform: &HookOps,
     probe: Probe,
     reason: &mut Reason,
 ) -> bool {
@@ -217,7 +251,7 @@ unsafe extern "C" fn rsf_anomaly_overlay_install_present(
     before_present: Option<SinkCallback>,
     resize: Option<SinkCallback>,
     user: Address,
-    platform: &Platform,
+    platform: &HookOps,
     probe: Probe,
     reason: &mut Reason,
 ) -> bool {
@@ -307,16 +341,28 @@ mod tests {
 
     thread_local! {
         static CALLS: RefCell<Vec<(char, Address)>> = const { RefCell::new(Vec::new()) };
+        static REFUSE_CREATE: Cell<Address> = const { Cell::new(0) };
     }
 
     unsafe extern "C" fn initialize() -> bool {
         true
     }
 
-    unsafe extern "C" fn create(target: Address, _detour: Address, out: *mut Address) -> bool {
-        CALLS.with_borrow_mut(|calls| calls.push(('c', target)));
-        unsafe { out.write(target + 100) };
+    unsafe extern "C" fn create(
+        target: *mut c_void,
+        _detour: *mut c_void,
+        out: *mut *mut c_void,
+    ) -> bool {
+        CALLS.with_borrow_mut(|calls| calls.push(('c', target.addr())));
+        if REFUSE_CREATE.get() == target.addr() {
+            return false;
+        }
+        unsafe { out.write(target.wrapping_byte_add(100)) };
         true
+    }
+
+    unsafe extern "C" fn remove_unqueued(target: *mut c_void) {
+        CALLS.with_borrow_mut(|calls| calls.push(('r', target.addr())));
     }
 
     unsafe extern "C" fn queue(target: *mut c_void, enable: bool) -> bool {
@@ -343,28 +389,56 @@ mod tests {
         unsafe { add(registration, 21, 1, 6, reason) && add(registration, 22, 1, 7, reason) }
     }
 
+    unsafe extern "C" fn aliased(registration: *mut c_void, add: Add, reason: *mut Reason) -> bool {
+        unsafe { add(registration, 21, 1, 6, reason) && add(registration, 21, 1, 7, reason) }
+    }
+
     unsafe extern "C" fn callback(_user: *mut c_void, _chain: *mut c_void) {
         // A callback can reenter without waiting for the registry or routing itself twice.
         CALLS.with_borrow_mut(|calls| calls.push(('p', 0)));
         unsafe { rsf_anomaly_overlay_before_present(null_mut(), 0) };
     }
 
+    const PLATFORM: HookOps = HookOps {
+        initialize,
+        create,
+        remove_unqueued,
+        queue,
+        apply,
+    };
+
+    const PRESENT: Binding = Binding::Present(PresentSink {
+        before_present: callback,
+        resize: None,
+        user: 0,
+    });
+
+    #[test]
+    fn a_failed_probe_creates_nothing_and_a_failed_create_removes_unqueued_hooks() {
+        CALLS.with_borrow_mut(Vec::clear);
+        let hooks = Hooks::new();
+        assert!(hooks.install(PRESENT, &PLATFORM, aliased).is_err());
+        assert!(CALLS.with_borrow(Vec::is_empty));
+        assert!(hooks.state().hooks.is_empty());
+
+        let hooks = Hooks::new();
+        REFUSE_CREATE.set(22);
+        assert!(hooks.install(PRESENT, &PLATFORM, present).is_err());
+        REFUSE_CREATE.set(0);
+        assert_eq!(
+            CALLS.with_borrow(|calls| calls.clone()),
+            [('c', 21), ('c', 22), ('r', 21)]
+        );
+        assert!(hooks.state().hooks.is_empty());
+        assert!(hooks.state().sink.is_none());
+    }
+
     #[test]
     fn refused_present_install_keeps_input_and_trampolines() {
-        let platform = Platform {
-            initialize,
-            create,
-            queue,
-            apply,
-        };
-        assert!(HOOKS.install(Binding::Input(9), &platform, input).is_ok());
-        assert!(HOOKS.install(Binding::Input(9), &platform, input).is_ok());
-        let binding = Binding::Present(PresentSink {
-            before_present: callback,
-            resize: None,
-            user: 0,
-        });
-        let refusal = HOOKS.install(binding, &platform, present).unwrap_err();
+        CALLS.with_borrow_mut(Vec::clear);
+        assert!(HOOKS.install(Binding::Input(9), &PLATFORM, input).is_ok());
+        assert!(HOOKS.install(Binding::Input(9), &PLATFORM, input).is_ok());
+        let refusal = HOOKS.install(PRESENT, &PLATFORM, present).unwrap_err();
         assert_eq!(
             unsafe { CStr::from_ptr(refusal) },
             c"MinHook refused to enable the overlay hook batch"
@@ -390,7 +464,7 @@ mod tests {
                 ('a', 0)
             ]
         );
-        HOOKS.state().publish(binding, true);
+        HOOKS.state().publish(PRESENT, true);
         unsafe {
             rsf_anomaly_overlay_before_present(null_mut(), 1);
             rsf_anomaly_overlay_before_present(null_mut(), 0);

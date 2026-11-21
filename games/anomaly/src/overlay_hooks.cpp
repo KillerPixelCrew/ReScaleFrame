@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "overlay_hooks.h"
-#include <MinHook.h>
+#include "native_hook_ops.h"
 #include <d3d11.h>
 #include <dxgi1_2.h>
 #include <initializer_list>
@@ -13,17 +13,12 @@ using ProbeHooks = bool (*)(void*, AddHook, HookReason*) noexcept;
 using InputObserver = void (*)(rsf::anomaly::overlay::DeviceKind) noexcept;
 using PresentCallback = void (*)(void*, IDXGISwapChain*) noexcept;
 
-struct HookPlatform {
-    bool (*initialize)() noexcept;
-    bool (*create)(HookAddress, HookAddress, HookAddress*) noexcept;
-    bool (*queue)(void*, bool) noexcept;
-    bool (*apply)() noexcept;
-};
+using rsf::anomaly::HookOps;
 
 extern "C" {
-bool rsf_anomaly_overlay_install_input(HookAddress, const HookPlatform*, ProbeHooks, HookReason*) noexcept;
+bool rsf_anomaly_overlay_install_input(HookAddress, const HookOps*, ProbeHooks, HookReason*) noexcept;
 bool rsf_anomaly_overlay_install_present(PresentCallback, PresentCallback, HookAddress,
-    const HookPlatform*, ProbeHooks, HookReason*) noexcept;
+    const HookOps*, ProbeHooks, HookReason*) noexcept;
 HookAddress rsf_anomaly_overlay_original(HookAddress) noexcept;
 HookAddress rsf_anomaly_overlay_present_original(uint32_t) noexcept;
 HookAddress rsf_anomaly_overlay_input_gate() noexcept;
@@ -34,7 +29,7 @@ void rsf_anomaly_overlay_before_resize(IDXGISwapChain*) noexcept;
 }
 
 static_assert(DXGI_PRESENT_TEST == 1);
-static_assert(sizeof(HookPlatform) == 4 * sizeof(void*) && sizeof(HookAddress) == sizeof(void*));
+static_assert(sizeof(HookAddress) == sizeof(void*));
 
 namespace rsf::anomaly::overlay {
 namespace {
@@ -63,24 +58,6 @@ constexpr GUID iid_direct_input8_w{0xBF798031, 0x483A, 0x4DA2, {0xAA, 0x99, 0x5D
 
 enum class Method : uint32_t { create_device, acquire, unacquire, get_state, get_data, cooperative, present,
     present1, resize_buffers, resize_target };
-
-constexpr HookPlatform platform{
-    []() noexcept {
-        const auto status = MH_Initialize();
-        return status == MH_OK || status == MH_ERROR_ALREADY_INITIALIZED;
-    },
-    [](HookAddress target, HookAddress detour, HookAddress* out) noexcept {
-        void* original = nullptr;
-        if (MH_CreateHook(reinterpret_cast<void*>(target), reinterpret_cast<void*>(detour), &original) != MH_OK)
-            return false;
-        *out = reinterpret_cast<HookAddress>(original);
-        return true;
-    },
-    [](void* target, bool enable) noexcept {
-        return (enable ? MH_QueueEnableHook(target) : MH_QueueDisableHook(target)) == MH_OK;
-    },
-    []() noexcept { return MH_ApplyQueued() == MH_OK; },
-};
 
 struct Collector {
     void* registry;
@@ -293,13 +270,13 @@ void set_input_observer(void (*observer)(DeviceKind) noexcept) noexcept {
 
 bool install_input_hooks(InputGate& input, HookReason* reason) noexcept {
     HookReason unused = nullptr;
-    return rsf_anomaly_overlay_install_input(reinterpret_cast<HookAddress>(&input), &platform, probe_input,
+    return rsf_anomaly_overlay_install_input(reinterpret_cast<HookAddress>(&input), &hook_ops, probe_input,
         reason ? reason : &unused);
 }
 
 bool install_present_hooks(const PresentSink& sink, HookReason* reason) noexcept {
     HookReason unused = nullptr;
     return rsf_anomaly_overlay_install_present(sink.before_present, sink.resize,
-        reinterpret_cast<HookAddress>(sink.user), &platform, probe_present, reason ? reason : &unused);
+        reinterpret_cast<HookAddress>(sink.user), &hook_ops, probe_present, reason ? reason : &unused);
 }
 }

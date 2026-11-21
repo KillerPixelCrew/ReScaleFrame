@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "native_hooks.h"
+#include "native_hook_ops.h"
 #include "native_memory.h"
-#include <MinHook.h>
 
 namespace rsf::anomaly {
 namespace {
@@ -42,12 +42,9 @@ struct Platform {
     bool (*dos)(const void*, DosFacts*) noexcept;
     bool (*pe)(const void*, const void*, PeFacts*) noexcept;
     bool (*read)(const void*, const void*, void*, size_t, bool) noexcept;
-    bool (*initialize)() noexcept;
-    bool (*create)(void*, void*, void**) noexcept;
-    void (*remove_unqueued)(void*) noexcept;
-    bool (*queue)(void*, bool) noexcept;
-    bool (*apply)() noexcept;
+    HookOps hooks;
 };
+static_assert(sizeof(Platform) == 64 && offsetof(Platform, hooks) == 24);
 constexpr Platform platform{
     [](const void* module, DosFacts* out) noexcept {
         IMAGE_DOS_HEADER dos{};
@@ -62,19 +59,7 @@ constexpr Platform platform{
         return true;
     },
     read_mapped,
-    []() noexcept {
-        const auto status = MH_Initialize();
-        return status == MH_OK || status == MH_ERROR_ALREADY_INITIALIZED;
-    },
-    [](void* target, void* replacement, void** original) noexcept {
-        return MH_CreateHook(target, replacement, original) == MH_OK;
-    },
-    // An unqueued, never enabled entry has no disable step that can fail.
-    [](void* target) noexcept { (void)MH_RemoveHook(target); },
-    [](void* target, bool enable) noexcept {
-        return (enable ? MH_QueueEnableHook(target) : MH_QueueDisableHook(target)) == MH_OK;
-    },
-    []() noexcept { return MH_ApplyQueued() == MH_OK; },
+    hook_ops,
 };
 
 extern "C" bool rsf_anomaly_hook_set_install(void**, const Platform*, std::byte*, uint32_t,

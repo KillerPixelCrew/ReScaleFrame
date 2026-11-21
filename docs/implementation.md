@@ -4,6 +4,15 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Anomaly's overlay finishes discovering hook targets before it
+registers any. It shares the Rust cleanup for never-enabled hooks
+and the native MinHook calls with the engine hooks. A refused create
+removes only the new, unqueued entries. A refused activation retains
+the original trampolines for callbacks that may already be in flight.
+An unrun fixture case covers a late discovery refusal and a refused
+second create. Source review checked callback publication and the
+private table layouts. Build and live overlay validation remain open.
+
 Rust now decides when Anomaly's invalidation replay can run, keeps
 the original OM and pixel shader bindings alive, and restores them
 after the draw. The D3D11 leaves and the existing device fixture use
