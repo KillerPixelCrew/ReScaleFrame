@@ -13,21 +13,20 @@
 #include <d3d12.h>
 #include <dxgi1_4.h>
 #include <wrl/client.h>
-#include <array>
 #include <cstddef>
 #include <mutex>
 #include <string>
-#include <vector>
-#include <algorithm>
 #include <cstdio>
 #include <atomic>
 #include "../../../runtime/backends/common/frame_capture12.h"
 
 // Settings, their generation, the D3D12 session identity and paths, the status record and the
-// engine-service routing are owned by the Rust control owner (native/control.rs), the Vulkan
-// session by native/vulkan.rs. This file keeps the rsfg_* exports as forwarders and the leaves:
-// the D3D12 SR context, fences, pending submissions and capture, DXGI, Win32 window calls and the
-// linked Runtime. The Vulkan leaves in the table below live in vulkan.cpp.
+// engine-service routing are owned by the Rust control owner (native/control.rs), the D3D12 SR
+// context plan, its retirement and recreation, the fence and slot ledger, the pending
+// submissions and the Present pass identity by native/d3d12.rs, the Vulkan session by
+// native/vulkan.rs. This file keeps the rsfg_* exports as forwarders and the leaves: the device,
+// queue and fence references, the Runtime SR, FG and presentation calls, capture, DXGI, Win32
+// window calls and the linked Runtime. The Vulkan leaves in the table below live in vulkan.cpp.
 static_assert(sizeof(rsf_sharpening_options) == 56);
 static_assert(sizeof(rsf_godot_settings) == 100 && offsetof(rsf_godot_settings, sharpening) == 44);
 static_assert(sizeof(rsf_godot_status) == 256 && offsetof(rsf_godot_status, sr_result) == 40 &&
@@ -39,37 +38,28 @@ static_assert(sizeof(rsf_godot_fg_options) == 20 && sizeof(rsf_godot_fg_install)
     offsetof(rsf_godot_fg_install, fidelityfx_directory) == 56);
 static_assert(sizeof(rsf_godot_paths) == 56 && sizeof(rsf_godot_input_facts) == 56 && sizeof(rsf_godot_window_facts) == 16);
 static_assert(sizeof(rsf_godot_fg_facts) == 96 && offsetof(rsf_godot_fg_facts, tagged_frames) == 48);
-static_assert(sizeof(rsf_godot_latency_facts) == 88 && sizeof(rsf_godot_sr_frame) == 32);
+static_assert(sizeof(rsf_godot_latency_facts) == 88);
+static_assert(sizeof(rsf_godot_sr_create) == 88 && offsetof(rsf_godot_sr_create, paths) == 32 &&
+    sizeof(rsf_godot_sr_context) == 24 && offsetof(rsf_godot_sr_context, desired_width) == 12 &&
+    sizeof(rsf_godot_sr_evaluate) == 64);
 static_assert(sizeof(rsf_godot_option_field) == 16 && sizeof(rsf_godot_option_value) == 24);
-static_assert(sizeof(rsf_godot_platform) == 184 && offsetof(rsf_godot_platform, vulkan_locked) == 88 &&
-    offsetof(rsf_godot_platform, latency_facts) == 176);
+static_assert(sizeof(rsf_godot_platform) == 328 && offsetof(rsf_godot_platform, vulkan_locked) == 88 &&
+    offsetof(rsf_godot_platform, latency_facts) == 176 && offsetof(rsf_godot_platform, d3d12_bind) == 184 &&
+    offsetof(rsf_godot_platform, sr_evaluate) == 256 && offsetof(rsf_godot_platform, d3d12_release) == 320);
 static_assert(RSF_SR_AUTO == 7 && RSF_SR_SPATIAL == 6 && RSF_SR_DLSS == 1 && RSF_FG_BACKEND_AUTO == 7 &&
     RSF_FG_OFF == 0 && RSF_FG_FIXED == 1 && RSF_REFLEX_OFF == 0 && RSF_UI_MODE_BACKBUFFER_HUDLESS == 4 &&
     RSF_DLSS_ENGINE_CUSTOM == 0 && RSF_FG_STAT_TOTAL_PRESENTED == 1 && RSF_BACKEND_OK == 0,
     "native/control.rs mirrors these Runtime constants");
+static_assert(RSF_SR_NONE == 0 && RSF_BACKEND_ERROR_INVALID_ARGUMENT == -1 && RSF_SCREEN_UNKNOWN == 0 &&
+    RSF_SCREEN_MENU == 1 && RSF_SCREEN_FLIGHT == 4 && RSF_GAME_RENDER_SR == 1 && RSF_GAME_RENDER_WINDOW == 9 &&
+    RSF_GAME_RENDER_FINAL_SCENE == 10, "native/d3d12.rs mirrors these Runtime constants");
 
 namespace {
 using Microsoft::WRL::ComPtr;
-rsf_sr12* context = nullptr;
 ComPtr<ID3D12Device> device;
 ComPtr<ID3D12CommandQueue> queue;
 ComPtr<ID3D12Fence> fence;
-uint64_t submitted = 0;
-uint64_t current_render_frame = 0;
-uint64_t context_generation = 0;
 thread_local bool capture_native_primary_present = false;
-std::array<uint64_t, 3> slots{};
-uint32_t next_slot = 0, context_backend = 0, desired_width = 0, desired_height = 0;
-uint32_t output_width = 0, output_height = 0;
-rsf_backend_result context_result = RSF_BACKEND_OK;
-rsf_game_render_pass rendered{};
-struct Pending {
-    void* commands;
-    uint32_t slot;
-    uint64_t session, frame;
-    bool hudless;
-};
-std::vector<Pending> pending;
 std::atomic<HWND> input_window{nullptr};
 WNDPROC previous_proc = nullptr;
 std::atomic<uint64_t> input_session{0};
@@ -189,12 +179,131 @@ uint32_t leaf_latency_facts(rsf_godot_latency_facts* facts)
     facts->owner = latency.owner;
     return 1;
 }
+// D3D12 SR context and submission leaves for native/d3d12.rs.
+uint32_t leaf_d3d12_bind(void* owning_device, void* owning_queue)
+{
+    device = static_cast<ID3D12Device*>(owning_device);
+    queue = static_cast<ID3D12CommandQueue*>(owning_queue);
+    return SUCCEEDED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence))) ? 1u : 0u;
+}
+uint32_t leaf_d3d12_wait(uint64_t value) { return wait(value) ? 1u : 0u; }
+uint32_t leaf_d3d12_signal(uint64_t value)
+{
+    return queue && fence && SUCCEEDED(queue->Signal(fence.Get(), value)) ? 1u : 0u;
+}
+uint32_t leaf_sr_default_backend() { return rsf_gpu_default_sr_backend(vendor_id(), false); }
+uint32_t leaf_fg_default_backend() { return rsf_fg_default_backend(vendor_id(), false); }
+uint32_t leaf_present_owner(uint32_t* backend)
+{
+    if (!rsf_d3d11_present_has_owner()) return 0;
+    *backend = rsf_d3d11_present_backend();
+    return 1;
+}
+void leaf_present_request(uint32_t backend) { (void)rsf_d3d11_present_request(backend); }
+uint32_t leaf_sr_create(const rsf_godot_sr_create* request, rsf_godot_sr_context* created) try {
+    const auto& paths = request->paths;
+    rsf_sr12_setup setup{};
+    setup.struct_size = sizeof(setup); setup.abi_version = 1; setup.device = device.Get();
+    setup.backend = request->backend; setup.quality = request->quality;
+    setup.output_width = request->output_width; setup.output_height = request->output_height;
+    setup.render_width = request->render_width; setup.render_height = request->render_height;
+    setup.inverted_depth = 1; setup.streamline_host = rsf_d3d11_present_host();
+    setup.fsr2_directory_utf8 = setup.fsr3_directory_utf8 = setup.fsr4_directory_utf8 = paths.fidelityfx_directory;
+    setup.xess_directory_utf8 = paths.xess_directory; setup.log = log;
+    setup.dlss = {sizeof(setup.dlss), RSF_DLSS_ABI_VERSION, paths.streamline_interposer, paths.streamline_directory,
+        paths.runtime_directory, 0, RSF_DLSS_ENGINE_CUSTOM, paths.engine_version, paths.project_id, 1, log, nullptr,
+        request->dlss_preset};
+    rsf_sr12* context = nullptr;
+    created->result = rsf_sr12_create(&setup, &context);
+    created->handle = context;
+    if (context) rsf_sr12_plan(context, &created->desired_width, &created->desired_height);
+    return 1;
+} catch (...) { return 0; }
+void leaf_sr_destroy(void* context) { rsf_sr12_destroy(static_cast<rsf_sr12*>(context)); }
+uint32_t leaf_sr_evaluate(void* context, void* commands, const rsf_game_render_pass* pass,
+    const rsf_godot_sr_evaluate* request, int32_t* result) try {
+    auto* sr = static_cast<rsf_sr12*>(context);
+    rsf_game_render_pass frame = *pass;
+    frame.screen = request->screen;
+    (void)rsf_sr12_set_sharpening(sr, &request->sharpening);
+    *result = rsf_sr12_evaluate(sr, commands, &frame, request->slot);
+    return 1;
+} catch (...) { return 0; }
+void leaf_sr_refusal_log(const rsf_game_render_pass* pass, uint32_t desired_width, uint32_t desired_height) try {
+    const auto& camera = pass->camera;
+    char text[256];
+    std::snprintf(text, sizeof(text), "Godot SR input refusal: actual=%ux%u output=%ux%u plan=%ux%u device=%p frame=%llu history=%llu",
+        camera.render_width, camera.render_height, camera.output_width, camera.output_height,
+        desired_width, desired_height, device.Get(), static_cast<unsigned long long>(pass->native_frame),
+        static_cast<unsigned long long>(pass->history_key));
+    log(nullptr, text);
+    void* resources[] = {pass->color_input, pass->depth, pass->motion, pass->color_output};
+    for (size_t i = 0; i < 4; ++i) if (resources[i]) {
+        auto* resource = static_cast<ID3D12Resource*>(resources[i]);
+        const auto description = resource->GetDesc();
+        ComPtr<ID3D12Device> owner;
+        (void)resource->GetDevice(IID_PPV_ARGS(&owner));
+        std::snprintf(text, sizeof(text), "Godot SR resource %zu: %llux%u format=%u samples=%u layers=%u device=%p",
+            i, description.Width, description.Height, description.Format, description.SampleDesc.Count,
+            description.DepthOrArraySize, owner.Get());
+        log(nullptr, text);
+    }
+} catch (...) {}
+uint32_t leaf_capture_sr_begin(const rsf_game_render_pass* pass) try {
+    if (capture && capture->wants(pass->source_frame_id)) {
+        rsf_frame_record identity{};
+        identity.session_id = pass->session_id; identity.frame_id = pass->source_frame_id;
+        (void)capture->event(identity, "native-sr-begin", pass->source_frame_id, false, 0);
+    }
+    return 1;
+} catch (...) { return 0; }
+uint32_t leaf_final_scene(void* commands, const rsf_game_render_pass* pass, uint32_t slot) try {
+    if (capture) {
+        (void)capture->flush(slot);
+        rsf_frame_record record{};
+        record.struct_size = sizeof(record); record.abi_version = RSF_GAME_FRAME_ABI_VERSION;
+        record.frame_id = pass->source_frame_id; record.session_id = pass->session_id;
+        record.view_id = static_cast<uint32_t>(pass->view_key); record.camera = pass->camera;
+        record.resource_generation = pass->resource_generation;
+        record.flags = (pass->flags & RSF_GAME_RENDER_RESET) ? RSF_FRAME_FLAG_RESET : 0;
+        record.render_width = pass->camera.render_width; record.render_height = pass->camera.render_height;
+        record.frame_time_ms = pass->camera.frame_time_seconds * 1000.0f;
+        record.output_width = pass->camera.output_width; record.output_height = pass->camera.output_height;
+        (void)capture->record(static_cast<ID3D12GraphicsCommandList*>(commands), static_cast<ID3D12Resource*>(pass->color_input),
+            D3D12_RESOURCE_STATE_RENDER_TARGET, record, "fg-hudless-color", slot);
+    }
+    rsf_fg12_hudless(commands, pass);
+    return 1;
+} catch (...) { return 0; }
+void leaf_fg_submitted(uint64_t session, uint64_t frame) { rsf_fg12_submitted(session, frame); }
+uint32_t leaf_render_begin(uint64_t session, uint64_t frame) try {
+    const auto result = rsf_fg12_render_begin(session, frame);
+    if (capture && capture->wants(frame)) {
+        rsf_frame_record identity{};
+        identity.session_id = session; identity.frame_id = frame;
+        (void)capture->event(identity, "render-submit-begin", frame, false, result);
+    }
+    return 1;
+} catch (...) { return 0; }
+void leaf_present_window(const rsf_game_render_pass* pass) { rsf_fg12_window(pass); }
+uint32_t leaf_fg_end_session(uint64_t session) { return rsf_fg12_end_session(session) ? 1u : 0u; }
+uint32_t leaf_d3d12_release(void* context, uint64_t session) try {
+    if (capture) (void)capture->flush();
+    rsf_sr12_destroy(static_cast<rsf_sr12*>(context));
+    rsf_input_dump_cancel(session);
+    return 1;
+} catch (...) { return 0; }
+
 namespace vk = rsf::godot_vk;
 const rsf_godot_platform platform{sizeof(platform), RSF_GODOT_PLATFORM_VERSION, leaf_tick_count, leaf_prepare_capture,
     leaf_fg_install, leaf_fg_options, leaf_dlss_preset_valid, leaf_sharpening_valid, leaf_sharpening_defaults,
     leaf_fg_backend_known, vk::leaf_supported, vk::leaf_latency_facts, vk::leaf_locked, vk::leaf_start, vk::leaf_stop,
     vk::leaf_release, vk::leaf_facts, vk::leaf_presenter_max, vk::leaf_fsr4_fg_probe, vk::leaf_latency_options,
-    leaf_cpu_counters, leaf_window_facts, leaf_fg_facts, leaf_latency_facts};
+    leaf_cpu_counters, leaf_window_facts, leaf_fg_facts, leaf_latency_facts,
+    leaf_d3d12_bind, leaf_d3d12_wait, leaf_d3d12_signal, leaf_sr_default_backend, leaf_fg_default_backend,
+    leaf_present_owner, leaf_present_request, leaf_sr_create, leaf_sr_destroy, leaf_sr_evaluate, leaf_sr_refusal_log,
+    leaf_capture_sr_begin, leaf_final_scene, leaf_fg_submitted, leaf_render_begin, leaf_present_window,
+    leaf_fg_end_session, leaf_d3d12_release};
 bool booted() { return rsf_godot_booted() != 0; }
 }
 
@@ -244,163 +353,25 @@ extern "C" int rsfg_render(void* owning_device, void* owning_queue, void* comman
 {
     if (!booted() || !owning_device || !owning_queue || !commands || !pass || pass->struct_size < sizeof(*pass)) return 0;
     if (rsf_game_depth_domains_requested(&pass->depth_domains)) return 0;
-    if (!device) {
-        device = static_cast<ID3D12Device*>(owning_device);
-        queue = static_cast<ID3D12CommandQueue*>(owning_queue);
-        if (FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)))) return 0;
-    }
-    if (device.Get() != owning_device || queue.Get() != owning_queue) return 0;
-    rendered = *pass;
-    // Present retains copied identity, never the callback's borrowed texture handles.
-    rendered.color_input = rendered.color_output = rendered.depth = rendered.motion = rendered.exposure = nullptr;
-    rendered.color_output_readable = rendered.ui_input = rendered.swapchain = rendered.scene_surface = rendered.sampled_texture = nullptr;
-    if (pass->role == RSF_GAME_RENDER_SR && capture && capture->wants(pass->source_frame_id)) {
-        rsf_frame_record identity{};
-        identity.session_id = pass->session_id; identity.frame_id = pass->source_frame_id;
-        (void)capture->event(identity, "native-sr-begin", pass->source_frame_id, false, 0);
-    }
-    if (pass->role == RSF_GAME_RENDER_FINAL_SCENE) {
-        const uint32_t slot = next_slot ? (next_slot - 1) % 3 : 0;
-        (void)capture->flush(slot);
-        rsf_frame_record record{};
-        record.struct_size = sizeof(record); record.abi_version = RSF_GAME_FRAME_ABI_VERSION;
-        record.frame_id = pass->source_frame_id; record.session_id = pass->session_id;
-        record.view_id = static_cast<uint32_t>(pass->view_key); record.camera = pass->camera;
-        record.resource_generation = pass->resource_generation;
-        record.flags = (pass->flags & RSF_GAME_RENDER_RESET) ? RSF_FRAME_FLAG_RESET : 0;
-        record.render_width = pass->camera.render_width; record.render_height = pass->camera.render_height;
-        record.frame_time_ms = pass->camera.frame_time_seconds * 1000.0f;
-        record.output_width = pass->camera.output_width; record.output_height = pass->camera.output_height;
-        (void)capture->record(static_cast<ID3D12GraphicsCommandList*>(commands), static_cast<ID3D12Resource*>(pass->color_input),
-            D3D12_RESOURCE_STATE_RENDER_TARGET, record, "fg-hudless-color", slot);
-        rsf_fg12_hudless(commands, pass);
-        pending.push_back({commands, slot, pass->session_id, pass->source_frame_id, true});
-        return 1;
-    }
-    rsf_godot_settings options{sizeof(options), RSF_GODOT_SETTINGS_ABI_VERSION};
-    uint64_t generation = 0;
-    rsf_godot_settings_snapshot(&options, &generation);
-    uint32_t fg = options.fg_backend;
-    if (fg == RSF_FG_BACKEND_AUTO) fg = rsf_fg_default_backend(vendor_id(), false);
-    if (rsf_d3d11_present_has_owner() && fg != rsf_d3d11_present_backend())
-        (void)rsf_d3d11_present_request(fg);
-    const auto& camera = pass->camera;
-    if (context && (generation != context_generation || camera.output_width != output_width || camera.output_height != output_height ||
-        (!context_backend && (camera.render_width != desired_width || camera.render_height != desired_height)))) {
-        if (!wait(submitted)) return 0;
-        rsf_sr12_destroy(context); context = nullptr;
-    }
-    rsf_backend_result result = RSF_BACKEND_OK;
-    if (!context) {
-        rsf_godot_paths paths{};
-        if (!rsf_godot_paths_get(&paths)) return 0;
-        uint32_t backend = options.sr_backend;
-        if (backend == RSF_SR_AUTO) backend = rsf_gpu_default_sr_backend(vendor_id(), false);
-        if (backend == RSF_SR_SPATIAL) backend = RSF_SR_NONE;
-        rsf_sr12_setup setup{};
-        setup.struct_size = sizeof(setup); setup.abi_version = 1; setup.device = device.Get();
-        setup.backend = backend; setup.quality = options.quality;
-        setup.output_width = camera.output_width; setup.output_height = camera.output_height;
-        setup.render_width = camera.render_width; setup.render_height = camera.render_height;
-        setup.inverted_depth = 1; setup.streamline_host = rsf_d3d11_present_host();
-        setup.fsr2_directory_utf8 = setup.fsr3_directory_utf8 = setup.fsr4_directory_utf8 = paths.fidelityfx_directory;
-        setup.xess_directory_utf8 = paths.xess_directory; setup.log = log;
-        setup.dlss = {sizeof(setup.dlss), RSF_DLSS_ABI_VERSION, paths.streamline_interposer, paths.streamline_directory,
-            paths.runtime_directory, 0, RSF_DLSS_ENGINE_CUSTOM, paths.engine_version, paths.project_id, 1, log, nullptr,
-            options.dlss_preset};
-        result = rsf_sr12_create(&setup, &context);
-        context_result = result;
-        if (!context && backend) {
-            setup.backend = 0;
-            (void)rsf_sr12_create(&setup, &context);
-            backend = 0;
-        }
-        if (!context) return 0;
-        context_backend = backend; context_generation = generation;
-        output_width = camera.output_width; output_height = camera.output_height;
-        rsf_sr12_plan(context, &desired_width, &desired_height);
-    }
-    const uint32_t slot = next_slot++ % 3;
-    if (!wait(slots[slot])) return 0;
-    rsf_game_render_pass frame = *pass;
-    frame.screen = options.gameplay && pass->screen == RSF_SCREEN_FLIGHT ? RSF_SCREEN_FLIGHT : RSF_SCREEN_MENU;
-    auto sharp=options.sharpening.struct_size?options.sharpening:rsf_sharpening_defaults();
-    (void)rsf_sr12_set_sharpening(context,&sharp);
-    const auto evaluated = rsf_sr12_evaluate(context, commands, &frame, slot);
-    static uint32_t diagnostics = 0;
-    if (evaluated == RSF_BACKEND_ERROR_INVALID_ARGUMENT && diagnostics++ < 4) {
-        char text[256];
-        std::snprintf(text, sizeof(text), "Godot SR input refusal: actual=%ux%u output=%ux%u plan=%ux%u device=%p frame=%llu history=%llu",
-            camera.render_width, camera.render_height, camera.output_width, camera.output_height,
-            desired_width, desired_height, device.Get(), static_cast<unsigned long long>(frame.native_frame),
-            static_cast<unsigned long long>(frame.history_key));
-        log(nullptr, text);
-        void* resources[] = {frame.color_input, frame.depth, frame.motion, frame.color_output};
-        for (size_t i = 0; i < 4; ++i) if (resources[i]) {
-            auto* resource = static_cast<ID3D12Resource*>(resources[i]);
-            const auto description = resource->GetDesc();
-            ComPtr<ID3D12Device> owner;
-            (void)resource->GetDevice(IID_PPV_ARGS(&owner));
-            std::snprintf(text, sizeof(text), "Godot SR resource %zu: %llux%u format=%u samples=%u layers=%u device=%p",
-                i, description.Width, description.Height, description.Format, description.SampleDesc.Count,
-                description.DepthOrArraySize, owner.Get());
-            log(nullptr, text);
-        }
-    }
-    // The driver submission callback signals this pending slot after recording is submitted.
-    pending.push_back({commands, slot, pass->session_id, pass->source_frame_id, false});
-    const rsf_godot_sr_frame report{options.sr_backend, context_backend, context_result, evaluated,
-        desired_width, desired_height, output_width, output_height};
-    rsf_godot_sr_frame_report(&report);
-    return evaluated == RSF_BACKEND_OK ? 1 : 0;
+    return rsf_godot_d3d12_render(&platform, owning_device, owning_queue, commands, pass);
 } catch (...) { return 0; }
 
 extern "C" void rsfg_render_begin(uint64_t frame) try
 {
     if (rsf::godot_vk::booted()) { rsf::godot_vk::render_begin(frame); return; }
     if (!booted()) return;
-    current_render_frame = frame;
-    if (!frame) return;
-    const uint64_t session = rsf_godot_session_id();
-    const auto result = rsf_fg12_render_begin(session, frame);
-    if (capture && capture->wants(frame)) {
-        rsf_frame_record identity{};
-        identity.session_id = session; identity.frame_id = frame;
-        (void)capture->event(identity, "render-submit-begin", frame, false, result);
-    }
-} catch (...) { current_render_frame = 0; }
+    rsf_godot_d3d12_render_begin(&platform, frame);
+} catch (...) {}
 
 extern "C" void rsfg_submitted(void* owning_queue, void* const* command_lists, uint32_t count)
 {
-    if (!queue || queue.Get() != owning_queue || !fence || !command_lists || !count) return;
-    auto matched = [command_lists, count](const Pending& item) {
-        return std::find(command_lists, command_lists + count, item.commands) != command_lists + count;
-    };
-    if (std::none_of(pending.begin(), pending.end(), matched)) return;
-    if (FAILED(queue->Signal(fence.Get(), submitted + 1))) return;
-    ++submitted;
-    for (const auto& item : pending) if (matched(item)) {
-        if (item.slot != UINT32_MAX) slots[item.slot] = submitted;
-        // HUD-less colour depends on the SR output in the engine graph. Its actual
-        // submission establishes both captures; recording completion establishes neither.
-        if (item.hudless) rsf_fg12_submitted(item.session, item.frame);
-    }
-    std::erase_if(pending, matched);
+    rsf_godot_d3d12_submitted(&platform, owning_queue, command_lists, count);
 }
 
 extern "C" void rsfg_present(void* chain)
 {
-    if (!booted() || !chain || !current_render_frame) return;
-    rsf_game_render_pass pass{};
-    if (rendered.source_frame_id == current_render_frame) pass = rendered;
-    else {
-        rsf_godot_sr_missed();
-        pass.struct_size = sizeof(pass); pass.session_id = rsf_godot_session_id();
-        pass.source_frame_id = pass.native_frame = current_render_frame;
-        pass.screen = RSF_SCREEN_UNKNOWN;
-    }
-    pass.role = RSF_GAME_RENDER_WINDOW; pass.swapchain = chain;
-    rsf_fg12_window(&pass);
+    if (!booted() || !chain) return;
+    rsf_godot_d3d12_present(&platform, chain);
 }
 
 extern "C" int rsfg_status(rsf_godot_status* output) try
@@ -452,10 +423,5 @@ extern "C" int rsfg_shutdown(void) try
     }
     input_window.store(nullptr); input_session.store(0);
     if (rsf::godot_vk::booted()) return rsf_godot_shutdown_vulkan(&platform);
-    const uint64_t session = rsf_godot_session_id();
-    if (!wait(submitted) || !rsf_fg12_end_session(session)) return 0;
-    if (capture) (void)capture->flush();
-    rsf_sr12_destroy(context); context = nullptr;
-    rsf_input_dump_cancel(session);
-    return 1;
+    return rsf_godot_d3d12_shutdown(&platform);
 } catch (...) { return 0; }

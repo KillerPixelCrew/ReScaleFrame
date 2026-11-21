@@ -29,7 +29,7 @@ window facts.
 `runtime_control.cpp` keeps the typed godot-cpp `Dictionary`, `RID` and `RenderingServer` calls and
 the status Dictionary keys. The D3D12 SR context, its fences, slots and pending submissions, DXGI
 vendor lookup and the Win32 input window stay in `runtime.cpp` and report each evaluated SR pass
-to the owner. No second Runtime is loaded, and no vendor, pacing or presentation policy moved into
+to the owner (the context and submission state moved to `d3d12.rs` in the third slice). No second Runtime is loaded, and no vendor, pacing or presentation policy moved into
 the integration; FG backend Auto resolution and SR Auto resolution still call the Runtime's
 `rsf_fg_default_backend` and `rsf_gpu_default_sr_backend`.
 
@@ -101,35 +101,83 @@ sides. Not run: native build and link, Cargo tests (`native/vulkan/tests.rs` and
 `native/control/tests.rs`), Clippy, CTest, editor, exported players, device fixtures and visual
 harness.
 
+## Rust D3D12 SR context and submission owner, third slice
+
+`native/d3d12.rs` now owns the D3D12 render path state that `runtime.cpp` held in globals:
+
+- the engine's first device and queue identity (kept when the fence fails, as before, and any
+  other pair refused);
+- the SR context plan: the requested provider with Auto resolved by the Runtime's
+  `rsf_gpu_default_sr_backend` through a leaf, spatial mapped to the normalising context because
+  Godot evaluates FSR1 itself, the fallback to backend 0 when a provider is not created (the
+  first creation result is the one reported), the `rsf_sr12_plan` extent and the context handle;
+- retirement and recreation: a settings generation change, a new output extent, or, for the
+  normalising context only, an input extent other than its plan drains all submitted work and
+  destroys the context before a new one is made;
+- the fence and slot ledger: three command slots taken in turn, each waiting for its own last
+  submission, the pending command lists, one fence signal per matched `rsfg_submitted` with every
+  matched slot taking that value, and the HUD-less record's submission reported to FG only after
+  the signal; a refused signal keeps everything pending;
+- the final-scene HUD-less record on the last SR slot, the FG provider switch request (only with
+  a provider owner on another backend, Auto resolved by `rsf_fg_default_backend`), screen gating
+  (flight only in requested gameplay), sharpening defaults, the four-entry refusal diagnostics
+  budget, the current render frame, the identity Present reuses with the borrowed texture handles
+  cleared, the missed-SR report, and the D3D12 branch of `rsfg_shutdown` (drain, FG session end,
+  capture flush, context destroy, frame dump cancel).
+
+`runtime.cpp` keeps every `rsfg_*` export with its name, signature, checks and return values, and
+lends eighteen typed leaves (`rsf_godot_platform` version 3, 328 bytes): the device, queue and
+fence references with the 15 s wait and the Signal, the Runtime Auto provider calls behind the
+DXGI vendor lookup, `rsf_d3d11_present_*`, `rsf_sr12_create`, `plan`, `set_sharpening`,
+`evaluate` and `destroy`, the refusal log text, the capture events and records, and
+`rsf_fg12_hudless`, `submitted`, `render_begin`, `window` and `end_session`. Leaves whose
+work the export's `catch` used to abort return a completion flag, and the owner refuses the
+call at the same point. The ledger lock is never held across a leaf except the fence signal,
+which calls no owner. The obsolete `rsf_godot_paths_get`, `rsf_godot_settings_snapshot`,
+`rsf_godot_sr_frame_report`, `rsf_godot_sr_missed` and `rsf_godot_session_id` entry points and
+the `rsf_godot_sr_frame` record are gone; `api.h` and the engine module interface are unchanged.
+
+Preserved behaviour: the capture, evaluate and Present ordering, the slot reused only after its
+fence value, the stored creation result and plan surviving retirement, pending lists recorded
+even for refused evaluations, and the HUD-less submission establishing both captures.
+Intentional differences: the final-scene leaf checks the capture owner before using it (a booted
+session always has one), and the ledger is lock-guarded.
+
+This is a behaviour-preserving port from source review, with no new experiment. Checks: rustfmt
+1.11.0 `--edition 2024 --check` (the pinned 1.94.1 toolchain is not installed),
+`cargo metadata --locked --offline` and `git diff --check`; `platform.rs` stays hand-mirrored
+and the generated `rsf_game_render_pass` binding is used for the pass. Not run: native build and
+link, Cargo tests (`native/d3d12/tests.rs`), Clippy, CTest, editor, exported players, device
+fixtures and visual harness.
+
 ## Remaining Godot ownership slices
 
-1. The D3D12 SR context owner in `rsfg_render`: SR context retirement and recreation rules, the
-   FG provider switch request, spatial-to-native mapping and the fallback to backend 0, screen
-   gating, sharpening defaults, the three-slot fence ledger in `rsfg_submitted`, the Present pass
-   identity in `rsfg_present`, capture and diagnostics. The D3D12 FG presenter itself stays in the
-   Runtime (`rsf_fg12_*`, `rsf_d3d11_present_*`).
-2. The Vulkan SR context owner in `rsfg_render_vulkan`: context retirement and recreation (SR
+1. The Vulkan SR context owner in `rsfg_render_vulkan`: context retirement and recreation (SR
    generation, device and output size), FSR4 graph handoff and continuation, the spatial fallback
    call, DLSS preset application, sharpening defaults, frame dump capture and diagnostics. Its
    decisions read the Rust session view; the contexts and the presenter owner stay C++ leaves.
    The Vulkan Auto SR and FG resolution to FSR3, ported unchanged into `vulkan.rs`, is backend
    choice the Runtime should own (Rule 3), unlike D3D12, which asks `rsf_gpu_default_sr_backend`
    and `rsf_fg_default_backend`.
-3. Window ownership: the `Engine` window-class admission, the WNDPROC subclass and its restore,
+2. Window ownership: the `Engine` window-class admission, the WNDPROC subclass and its restore,
    the input session and PCL ping routing in `runtime.cpp`, and the Vulkan primary window and
    present-marker admission (`rsfg_vk_window`, `rsfg_vk_present_marker`).
-4. `vulkan_creation.cpp`: the creation resolver, device feature and extension requirements, and
+3. `vulkan_creation.cpp`: the creation resolver, device feature and extension requirements, and
    XeSS/interop readiness.
-5. `effect.cpp`: the compositor probe snapshot and the motion capture classification
+4. `effect.cpp`: the compositor probe snapshot and the motion capture classification
    (unwritten, moving and non-finite pixels). The GPU readback stays a godot-cpp leaf.
-6. The engine module `modules/rescaleframe` (bridge, graph, motion, D3D12 and Vulkan drivers) is
+5. The engine module `modules/rescaleframe` (bridge, graph, motion, D3D12 and Vulkan drivers) is
    compiled into the Godot engine by SCons against engine headers and cannot link this archive. It
    still holds CPU frame identity and markers, the primary viewport, render-scale policy (the
    per-quality scale table and scaling mode), history reset heuristics, camera matrices, motion
    resolve and a second Dictionary option parser in `ReScaleFrameBridge::configure`. Sharing the
    option schema there needs a new native export, which is an ABI change.
-7. The addon (`settings.gd`, `controller.gd`, `csharp/ReScaleFrame.cs`) keeps its own option
+6. The addon (`settings.gd`, `controller.gd`, `csharp/ReScaleFrame.cs`) keeps its own option
    defaults for the Inspector resource.
+7. D3D12 residue in the `runtime.cpp` leaves: the fixed SR context inputs (setup ABI 1 planning,
+   inverted depth, the custom DLSS engine identity and its flag) and the capture record mapping
+   from the pass (view, reset flag, extents, frame time) could move into the owner's request
+   records.
 
 `extension.cpp` (the GDExtension entry) and the godot-cpp class bindings stay C++.
 

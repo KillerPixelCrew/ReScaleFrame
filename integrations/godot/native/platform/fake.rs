@@ -2,10 +2,13 @@
 //! Test leaves. Recorded calls are thread-local, so parallel tests do not share them.
 use super::{
     FgFacts, FgInstall, FgOptions, InputFacts, LatencyFacts, LockedBody, PLATFORM_VERSION,
-    Platform, Setup, Sharpening, VkFacts, VkLatencyFacts, WindowFacts,
+    Platform, Setup, Sharpening, SrContext, SrCreate, SrEvaluate, VkFacts, VkLatencyFacts,
+    WindowFacts,
 };
+use rsf_game_sys::rsf_game_render_pass;
 use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
+use std::ptr;
 
 thread_local! {
     pub(crate) static INSTALL_RESULT: Cell<i32> = const { Cell::new(0) };
@@ -26,6 +29,24 @@ thread_local! {
     pub(crate) static VK_PROBE: Cell<u32> = const { Cell::new(0) };
     pub(crate) static VK_LATENCY_OPTIONS: Cell<Option<(u32, u32)>> = const { Cell::new(None) };
     pub(crate) static VK_LATENCY_RESULT: Cell<i32> = const { Cell::new(0) };
+    /// The D3D12 leaves in call order, each with its main argument.
+    static D3D12_CALLS: RefCell<Vec<(&'static str, u64)>> = const { RefCell::new(Vec::new()) };
+    pub(crate) static BIND: Cell<u32> = const { Cell::new(1) };
+    pub(crate) static SIGNAL: Cell<u32> = const { Cell::new(1) };
+    pub(crate) static SR_DEFAULT: Cell<u32> = const { Cell::new(1) };
+    pub(crate) static FG_DEFAULT: Cell<u32> = const { Cell::new(3) };
+    pub(crate) static PRESENT_OWNER: Cell<Option<u32>> = const { Cell::new(None) };
+    /// A provider whose context is not created, and the result its creation returns.
+    pub(crate) static REFUSED: Cell<Option<(u32, i32)>> = const { Cell::new(None) };
+    pub(crate) static PLAN: Cell<(u32, u32)> = const { Cell::new((1280, 720)) };
+    static CONTEXTS: Cell<usize> = const { Cell::new(0) };
+    pub(crate) static EVALUATED: Cell<i32> = const { Cell::new(0) };
+    pub(crate) static EVALUATE: Cell<Option<SrEvaluate>> = const { Cell::new(None) };
+    pub(crate) static RENDER_BEGIN: Cell<u32> = const { Cell::new(1) };
+    pub(crate) static END_SESSION: Cell<u32> = const { Cell::new(1) };
+    /// The last Present pass: source frame, session, role, screen, swapchain and colour input.
+    pub(crate) static WINDOW: Cell<Option<(u64, u64, u32, u32, usize, usize)>> =
+        const { Cell::new(None) };
 }
 
 /// `rsf_sharpening_defaults()` as `sharpening_settings.h` defines it.
@@ -213,6 +234,139 @@ unsafe extern "C" fn latency_facts(facts: *mut LatencyFacts) -> u32 {
     }
 }
 
+fn d3d12(call: &'static str, argument: u64) {
+    D3D12_CALLS.with_borrow_mut(|calls| calls.push((call, argument)));
+}
+
+/// The D3D12 leaf calls since the last take.
+pub(crate) fn take_d3d12_calls() -> Vec<(&'static str, u64)> {
+    D3D12_CALLS.take()
+}
+
+/// The handle of the nth context the fake created.
+pub(crate) const fn context_handle(nth: usize) -> u64 {
+    (nth * 0x1000) as u64
+}
+
+unsafe extern "C" fn d3d12_bind(_: *mut c_void, _: *mut c_void) -> u32 {
+    d3d12("bind", 0);
+    BIND.get()
+}
+
+unsafe extern "C" fn d3d12_wait(value: u64) -> u32 {
+    d3d12("wait", value);
+    1
+}
+
+unsafe extern "C" fn d3d12_signal(value: u64) -> u32 {
+    d3d12("signal", value);
+    SIGNAL.get()
+}
+
+unsafe extern "C" fn sr_default_backend() -> u32 {
+    SR_DEFAULT.get()
+}
+
+unsafe extern "C" fn fg_default_backend() -> u32 {
+    FG_DEFAULT.get()
+}
+
+unsafe extern "C" fn present_owner(backend: *mut u32) -> u32 {
+    match PRESENT_OWNER.get() {
+        Some(value) => {
+            // SAFETY: the owner passes a writable backend.
+            unsafe { backend.write(value) };
+            1
+        }
+        None => 0,
+    }
+}
+
+unsafe extern "C" fn present_request(backend: u32) {
+    d3d12("present_request", backend.into());
+}
+
+unsafe extern "C" fn sr_create(request: *const SrCreate, context: *mut SrContext) -> u32 {
+    // SAFETY: the owner passes live records.
+    let (request, context) = unsafe { (&*request, &mut *context) };
+    d3d12("create", request.backend.into());
+    match REFUSED.get() {
+        Some((backend, result)) if backend == request.backend => context.result = result,
+        _ => {
+            CONTEXTS.set(CONTEXTS.get() + 1);
+            context.handle = ptr::without_provenance_mut(context_handle(CONTEXTS.get()) as usize);
+            context.result = 0;
+            (context.desired_width, context.desired_height) = PLAN.get();
+        }
+    }
+    1
+}
+
+unsafe extern "C" fn sr_destroy(context: *mut c_void) {
+    d3d12("destroy", context.addr() as u64);
+}
+
+unsafe extern "C" fn sr_evaluate(
+    _: *mut c_void,
+    _: *mut c_void,
+    _: *const rsf_game_render_pass,
+    request: *const SrEvaluate,
+    result: *mut i32,
+) -> u32 {
+    // SAFETY: the owner passes live records.
+    let request = unsafe { *request };
+    d3d12("evaluate", request.slot.into());
+    EVALUATE.set(Some(request));
+    // SAFETY: the owner passes a writable result.
+    unsafe { result.write(EVALUATED.get()) };
+    1
+}
+
+unsafe extern "C" fn sr_refusal_log(_: *const rsf_game_render_pass, width: u32, _: u32) {
+    d3d12("refusal_log", width.into());
+}
+
+unsafe extern "C" fn capture_sr_begin(_: *const rsf_game_render_pass) -> u32 {
+    1
+}
+
+unsafe extern "C" fn final_scene(_: *mut c_void, _: *const rsf_game_render_pass, slot: u32) -> u32 {
+    d3d12("final_scene", slot.into());
+    1
+}
+
+unsafe extern "C" fn fg_submitted(_: u64, frame: u64) {
+    d3d12("fg_submitted", frame);
+}
+
+unsafe extern "C" fn render_begin(_: u64, frame: u64) -> u32 {
+    d3d12("render_begin", frame);
+    RENDER_BEGIN.get()
+}
+
+unsafe extern "C" fn present_window(pass: *const rsf_game_render_pass) {
+    // SAFETY: the owner passes a live pass.
+    let pass = unsafe { &*pass };
+    WINDOW.set(Some((
+        pass.source_frame_id,
+        pass.session_id,
+        pass.role,
+        pass.screen,
+        pass.swapchain.addr(),
+        pass.color_input.addr(),
+    )));
+}
+
+unsafe extern "C" fn fg_end_session(session: u64) -> u32 {
+    d3d12("end_session", session);
+    END_SESSION.get()
+}
+
+unsafe extern "C" fn d3d12_release(context: *mut c_void, _: u64) -> u32 {
+    d3d12("release", context.addr() as u64);
+    1
+}
+
 pub(crate) static LEAVES: Platform = Platform {
     struct_size: size_of::<Platform>() as u32,
     version: PLATFORM_VERSION,
@@ -238,4 +392,22 @@ pub(crate) static LEAVES: Platform = Platform {
     window_facts,
     fg_facts,
     latency_facts,
+    d3d12_bind,
+    d3d12_wait,
+    d3d12_signal,
+    sr_default_backend,
+    fg_default_backend,
+    present_owner,
+    present_request,
+    sr_create,
+    sr_destroy,
+    sr_evaluate,
+    sr_refusal_log,
+    capture_sr_begin,
+    final_scene,
+    fg_submitted,
+    render_begin,
+    present_window,
+    fg_end_session,
+    d3d12_release,
 };

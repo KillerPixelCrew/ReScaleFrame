@@ -6,8 +6,9 @@
 //!
 //! The Vulkan session (`vulkan.rs`) holds its own settings, generation and status record, as
 //! `vulkan.cpp` did; while it is booted, configuration, settings and status route to it after the
-//! same refusal rules. The D3D12 SR context, fences and capture stay C++ leaves in `runtime.cpp`
-//! and report each evaluated pass here.
+//! same refusal rules. The D3D12 SR context and submission owner (`d3d12.rs`) reads the request,
+//! its generation and the paths here and reports each evaluated pass here.
+use crate::d3d12::D3d12;
 use crate::platform::{
     EngineServices, FgFacts, FgInstall, FgOptions, InputFacts, LatencyFacts, Paths, Platform,
     SETTINGS_ABI_VERSION, Settings, Setup, Sharpening, SrFrame, Status, WindowFacts,
@@ -168,12 +169,14 @@ pub(crate) struct Control {
     boot_gate: Mutex<()>,
     session: Mutex<Session>,
     pub(crate) vulkan: Vulkan,
+    pub(crate) d3d12: D3d12,
 }
 
 impl Control {
     pub(crate) fn new() -> Self {
         Self {
             vulkan: Vulkan::new(),
+            d3d12: D3d12::new(),
             booted: AtomicBool::new(false),
             boot_gate: Mutex::new(()),
             session: Mutex::new(Session {
