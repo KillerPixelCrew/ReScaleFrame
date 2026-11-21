@@ -53,14 +53,20 @@ public:
     // DS slot 13 (RSFTessPrevious) for a swapped tessellation chain.
     bool set_tess_domain(ID3D11DeviceContext*, const TessDomainBytes&) noexcept;
     // Re-issues the draw (`redraw(context)`) as the invalidation pass described above.
-    template<class Redraw> ReplayResult invalidate(ID3D11DeviceContext* context, Redraw&& redraw) noexcept
+    template<class Redraw> ReplayResult invalidate(ID3D11DeviceContext* context, Redraw&& redraw)
     {
-        using Call = std::remove_reference_t<Redraw>;
         const auto resources = view();
-        return static_cast<ReplayResult>(rsf_anomaly_motion_replay(&motion_replay_platform(), &resources, context,
-            [](void* user, void* raw) noexcept {
-                (*static_cast<Call*>(user))(static_cast<ID3D11DeviceContext*>(raw));
-            }, const_cast<void*>(static_cast<const void*>(std::addressof(redraw)))));
+        rsf_anomaly_motion_replay_scope scope;
+        const auto result = static_cast<ReplayResult>(
+            rsf_anomaly_motion_replay_begin(&motion_replay_platform(), &resources, context, &scope));
+        if (result == ReplayResult::Done) {
+            struct Restore {
+                rsf_anomaly_motion_replay_scope* scope;
+                ~Restore() { rsf_anomaly_motion_replay_end(scope); }
+            } restore{&scope};
+            redraw(context);
+        }
+        return result;
     }
     std::uint64_t uploads() const noexcept { return view().uploads; }
     std::uint64_t upload_skips() const noexcept { return view().upload_skips; }

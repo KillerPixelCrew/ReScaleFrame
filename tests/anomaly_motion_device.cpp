@@ -456,16 +456,31 @@ void draw_scene()
     auto stale = read_back<Half4>(motion.texture());
     require(half(stale[size / 2 * size + 4].c[2]) == 1, "fixture: a stock draw leaves the old vector (the reason for the replay)");
     const auto occluded_position = read_back<Half4>(s.position.texture.Get());
+    const auto check_restored = [&] {
+        ID3D11RenderTargetView* bound[3]{};
+        ComPtr<ID3D11DepthStencilView> bound_depth;
+        context->OMGetRenderTargets(3, bound, &bound_depth);
+        ComPtr<ID3D11PixelShader> bound_ps;
+        context->PSGetShader(&bound_ps, nullptr, nullptr);
+        ComPtr<ID3D11DepthStencilState> bound_state;
+        UINT reference = 0;
+        context->OMGetDepthStencilState(&bound_state, &reference);
+        const bool restored = bound[0] == s.position.rtv.Get() && bound[1] == s.albedo.rtv.Get() && bound[2] == motion.rtv() &&
+            bound_depth.Get() == s.depth.Get() && bound_ps.Get() == s.stock_ps.Get() && bound_state.Get() == s.less.Get() && reference == 0;
+        for (auto* p : bound) if (p) p->Release();
+        require(restored, "OM state and PS restored");
+    };
+    struct ReplayAborted {};
+    bool unwound = false;
+    try {
+        (void)motion.invalidate(context.Get(), [](ID3D11DeviceContext*) { throw ReplayAborted{}; });
+    } catch (const ReplayAborted&) {
+        unwound = true;
+    }
+    require(unwound, "replay callback unwound on the native frame");
+    check_restored();
     require(motion.invalidate(context.Get(), [&](ID3D11DeviceContext* c) { c->Draw(6, 0); }) == ReplayResult::Done, "replay");
-    ID3D11RenderTargetView* bound[3]{};
-    ID3D11DepthStencilView* bound_depth{};
-    context->OMGetRenderTargets(3, bound, &bound_depth);
-    ComPtr<ID3D11PixelShader> bound_ps;
-    context->PSGetShader(&bound_ps, nullptr, nullptr);
-    require(bound[0] == s.position.rtv.Get() && bound[1] == s.albedo.rtv.Get() && bound[2] == motion.rtv() &&
-        bound_depth == s.depth.Get() && bound_ps.Get() == s.stock_ps.Get(), "OM state and PS restored");
-    for (auto* p : bound) if (p) p->Release();
-    if (bound_depth) bound_depth->Release();
+    check_restored();
     // Behind the surface: the occluder fails the depth test, so the replay's EQUAL test fails too.
     setup(false, s.behind_vb.Get(), true);
     context->Draw(6, 0);

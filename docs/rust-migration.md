@@ -433,6 +433,13 @@ leaf. The same native detour frame supplies caller identity.
 Builds, fixtures, live reload and motion checks remain open.
 [Stock shader creation](research/rust-anomaly-motion-stage.md#stock-shader-creation-admission)
 
+Anomaly's motion draw owner now lends restoration scopes across
+the original native draw and replay. The two calls stay on native
+frames, and scope cleanup restores the Rust-owned bindings during
+C++ unwind. Native builds, the unwind fixture and game checks remain
+open.
+[Native draw calls and restoration](research/rust-anomaly-motion-stage.md#native-draw-calls-and-restoration)
+
 ## Verification coverage
 
 | Requirement | Recorded evidence | Still open |

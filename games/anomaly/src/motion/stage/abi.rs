@@ -13,8 +13,10 @@ use crate::shader_loader::{Bytes, Entry, FrameLayout, Manifest, Read, Request as
 use std::ffi::c_char;
 
 pub(super) type Raw = *mut std::ffi::c_void;
-pub(super) type Redraw = unsafe extern "C" fn(Raw, Raw);
 pub(super) const PLATFORM_ABI: u32 = 9;
+
+#[repr(C)]
+pub(super) struct DrawScope([std::mem::MaybeUninit<u64>; 22]);
 
 #[repr(C)]
 pub(super) struct PositionViews {

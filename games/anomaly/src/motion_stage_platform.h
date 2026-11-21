@@ -44,7 +44,9 @@ struct ShaderCreation {
 // The pack's Rust-admitted manifest, owned by the pack until close_pack.
 struct PackInfo { const rsf_anomaly_shader_admitted* manifest; };
 struct PatchCounters { uint64_t intercepted, built, cache_hits, refused, refusals[11]; };
-using Redraw = void (*)(void*, void*);
+enum : uint8_t { NoMotionDraw, RestoreMotionDraw, ReplayMotionDraw };
+// Begin initializes the opaque owner for the Restore and Replay routes.
+struct MotionDrawScope { uint64_t storage[22]; };
 struct MotionPlatform {
     uint32_t struct_size, abi_version;
     const rsf_anomaly_motion_device_platform* device;
@@ -100,7 +102,10 @@ bool rsf_anomaly_motion_stage_enabled() noexcept;
 void rsf_anomaly_motion_stage_report(rsf_dump_log_fn, void*) noexcept;
 void rsf_anomaly_motion_stage_frame_target(FrameTarget*) noexcept;
 void rsf_anomaly_motion_stage_cancel_draw() noexcept;
-void rsf_anomaly_motion_stage_draw(void*, Redraw, void*) noexcept;
+uint8_t rsf_anomaly_motion_stage_draw_begin(void*, MotionDrawScope*) noexcept;
+void rsf_anomaly_motion_stage_draw_end(MotionDrawScope*, bool completed) noexcept;
+bool rsf_anomaly_motion_stage_replay_begin(const MotionDrawScope*, rsf_anomaly_motion_replay_scope*) noexcept;
+void rsf_anomaly_motion_stage_replay_end(const MotionDrawScope*, rsf_anomaly_motion_replay_scope*, bool completed) noexcept;
 void rsf_anomaly_motion_stage_open(void*) noexcept;
 void rsf_anomaly_motion_stage_close() noexcept;
 void rsf_anomaly_motion_stage_flush(const DrawFacts*) noexcept;

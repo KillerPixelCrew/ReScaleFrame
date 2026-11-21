@@ -67,10 +67,35 @@ using DrawInstancedFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UIN
 HookSet draw_hooks;
 std::array<void*, 4> draw_originals{};
 
+static_assert(sizeof(MotionDrawScope) == 176 && alignof(MotionDrawScope) == 8 &&
+    sizeof(rsf_anomaly_motion_replay_scope) == 2184 && alignof(rsf_anomaly_motion_replay_scope) == 8);
+static_assert(NoMotionDraw == 0 && RestoreMotionDraw == 1 && ReplayMotionDraw == 2);
+
+template<class Call> void replay_draw(const MotionDrawScope& draw, ID3D11DeviceContext* context, Call& call) {
+    rsf_anomaly_motion_replay_scope replay;
+    if (!rsf_anomaly_motion_stage_replay_begin(&draw, &replay)) return;
+    struct Restore {
+        const MotionDrawScope* draw;
+        rsf_anomaly_motion_replay_scope* replay;
+        bool completed{};
+        ~Restore() { rsf_anomaly_motion_stage_replay_end(draw, replay, completed); }
+    } restore{&draw, &replay};
+    call(context);
+    restore.completed = true;
+}
+
 template<class Call> void around_draw(ID3D11DeviceContext* context, Call&& call) {
-    rsf_anomaly_motion_stage_draw(context, [](void* user, void* immediate) {
-        (*static_cast<std::remove_reference_t<Call>*>(user))(static_cast<ID3D11DeviceContext*>(immediate));
-    }, &call);
+    MotionDrawScope scope;
+    const auto route = rsf_anomaly_motion_stage_draw_begin(context, &scope);
+    struct Restore {
+        MotionDrawScope* scope;
+        bool initialized;
+        bool completed{};
+        ~Restore() { if (initialized) rsf_anomaly_motion_stage_draw_end(scope, completed); }
+    } restore{&scope, route != NoMotionDraw};
+    call(context);
+    restore.completed = true;
+    if (route == ReplayMotionDraw) replay_draw(scope, context, call);
 }
 void STDMETHODCALLTYPE draw_indexed_hook(ID3D11DeviceContext* c, UINT count, UINT start, INT base) {
     around_draw(c, [&](ID3D11DeviceContext* x) { reinterpret_cast<DrawIndexedFn>(draw_originals[0])(x, count, start, base); });

@@ -192,3 +192,26 @@ the detour, reader order, ABI declarations and unchanged Standard
 and AVX profiles. The added fixture covers hull admission, a partial
 filename and overflowing object addresses. Compile and link, fixture
 execution, live shader reload and motion checks remain open.
+
+## Native draw calls and restoration
+
+At `a7ea5419`, the motion stage invoked both the original draw and
+the zero-motion replay through Rust callback frames. The C++ detours
+now call both on native frames. Rust still takes the pending action
+only for its matching context, pins the shader chain or replay
+resources, and decides whether the second draw is eligible.
+
+An active replacement restores the stock shaders after the original
+draw. A retired replacement restores them before the original draw
+and keeps the shader chain alive until the call exits. Replay keeps
+its earlier active check, depth-write gate, zero pixel shader and
+restoration sequence. The native scope guards ask Rust to restore
+and release saved state during C++ unwind as well as normal return.
+Completion counters advance only for calls that returned.
+
+The two scopes use caller-owned storage and allocate no heap memory
+per draw. The private stage table, native detour signatures, profiles
+and shader pack match the baseline in source. The motion device
+fixture now injects a C++ exception during replay and checks that the
+depth state, render targets and pixel shader are restored. The fixture
+and live Standard and AVX checks remain unrun.

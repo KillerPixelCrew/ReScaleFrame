@@ -16,7 +16,10 @@ use std::slice;
 
 mod replay;
 #[cfg(windows)]
-pub(crate) use replay::{Platform as ReplayPlatform, replay};
+pub(crate) use replay::{
+    Platform as ReplayPlatform, REPLAY_NO_DEPTH_WRITE, REPLAY_READY, ReplayScope,
+    rsf_anomaly_motion_replay_begin, rsf_anomaly_motion_replay_end,
+};
 
 struct Buffer {
     resource: Lease,

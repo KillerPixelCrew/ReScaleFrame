@@ -56,7 +56,10 @@ typedef struct rsf_anomaly_motion_replay_platform {
     void (*blend)(void*, void*, const float*, uint32_t);
     void (*shader)(void*, void*, void* const*, uint32_t);
 } rsf_anomaly_motion_replay_platform;
-typedef void (*rsf_anomaly_motion_redraw)(void*, void*);
+// The replay owner is initialized only when begin returns 0. End consumes it.
+typedef struct rsf_anomaly_motion_replay_scope {
+    uint64_t storage[273];
+} rsf_anomaly_motion_replay_scope;
 
 #ifdef __cplusplus
 extern "C" {
@@ -68,8 +71,9 @@ uint32_t rsf_anomaly_motion_device_create(void*, void* device, rsf_anomaly_motio
 int32_t rsf_anomaly_motion_device_target(void*, uint32_t width, uint32_t height, uint32_t samples, uint32_t layers);
 void rsf_anomaly_motion_device_get(const void*, rsf_anomaly_motion_device_view*);
 uint32_t rsf_anomaly_motion_device_upload(void*, void* context, int32_t kind, const void* data, size_t size);
-uint8_t rsf_anomaly_motion_replay(const rsf_anomaly_motion_replay_platform*, const rsf_anomaly_motion_device_view*,
-    void* context, rsf_anomaly_motion_redraw, void* user);
+uint8_t rsf_anomaly_motion_replay_begin(const rsf_anomaly_motion_replay_platform*, const rsf_anomaly_motion_device_view*,
+    void* context, rsf_anomaly_motion_replay_scope*);
+void rsf_anomaly_motion_replay_end(rsf_anomaly_motion_replay_scope*);
 #ifdef __cplusplus
 }
 #endif

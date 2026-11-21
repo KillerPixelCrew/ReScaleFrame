@@ -13,7 +13,7 @@ use self::abi::*;
 use self::capture::Capture;
 use self::options::Settings;
 use self::report::Counters;
-use self::shaders::{Loader, Pack, Registry};
+use self::shaders::{Chain, Loader, Pack, Registry};
 use super::{foliage, window, *};
 use crate::geometry_registry::RetirementQueue;
 use crate::lease::Lease;
@@ -40,6 +40,34 @@ use std::sync::atomic::{
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 const MAIN: u8 = 0;
+
+const NO_DRAW_ACTION: u8 = 0;
+const RESTORE_AFTER_DRAW: u8 = 1;
+const REPLAY_AFTER_DRAW: u8 = 2;
+
+// The native detour owns the storage and calls finish on every exit.
+struct DrawFlight {
+    stage: &'static Stage,
+    context: Raw,
+    action: ActiveDraw,
+}
+
+enum ActiveDraw {
+    Restore {
+        stock: ShaderObjects,
+        chain: Chain,
+        restore_after: bool,
+    },
+    Replay {
+        view: DeviceView,
+        _leases: [Option<Lease>; 4],
+    },
+}
+
+const _: () = {
+    assert!(size_of::<DrawFlight>() <= size_of::<DrawScope>());
+    assert!(std::mem::align_of::<DrawFlight>() <= std::mem::align_of::<DrawScope>());
+};
 
 struct WindowFacts {
     device: Raw,
@@ -576,56 +604,43 @@ impl Stage {
         }
     }
 
-    fn draw(&self, context: Raw, call: Redraw, user: Raw) {
-        let Some(draw) = window::take(context) else {
-            unsafe { call(user, context) };
-            return;
-        };
+    fn begin_draw(&'static self, context: Raw) -> Option<DrawFlight> {
+        let draw = window::take(context)?;
         let live = self.active.load(Acquire);
         let p = self.platform;
-        match draw.action {
+        let action = match draw.action {
             window::Action::Restore { stock, chain } => {
-                if live {
-                    unsafe { call(user, context) };
-                }
-                unsafe { (p.set_shaders)(context, &stock, chain.tessellated()) };
-                if live {
-                    lock(&self.render).counters.restores += 1;
-                } else {
-                    unsafe { call(user, context) };
-                }
-            }
-            window::Action::Replay => {
                 if !live {
-                    unsafe { call(user, context) };
-                    return;
+                    unsafe { (p.set_shaders)(context, &stock, chain.tessellated()) };
                 }
-                let (view, _leases) = {
-                    // Replay calls the real draw. Hold just the COM
-                    // leases it needs across that call, with no owner lock.
-                    let render = lock(&self.render);
-                    let view = render.device_view();
-                    let leases =
-                        [view.rtv, view.zero_shader, view.no_depth, view.equal_depth].map(|raw| {
-                            Lease::new(raw, p.device.release.unwrap()).inspect(|lease| {
-                                unsafe { (p.device.retain.unwrap())(lease.as_ptr()) };
-                            })
-                        });
-                    (view, leases)
-                };
-                unsafe { call(user, context) };
-                if !self.active.load(Acquire) {
-                    return;
-                }
-                let result = replay(p.replay, &view, context, call, user);
-                let mut render = lock(&self.render);
-                match result {
-                    0 => render.counters.replays += 1,
-                    1 => render.counters.replay_skipped_no_depth_write += 1,
-                    _ => render.counters.replay_failed += 1,
+                ActiveDraw::Restore {
+                    stock,
+                    chain,
+                    restore_after: live,
                 }
             }
-        }
+            window::Action::Replay if !live => return None,
+            window::Action::Replay => {
+                // Hold the replay resources through both draws without holding the owner lock.
+                let render = lock(&self.render);
+                let view = render.device_view();
+                let leases =
+                    [view.rtv, view.zero_shader, view.no_depth, view.equal_depth].map(|raw| {
+                        Lease::new(raw, p.device.release.unwrap()).inspect(|lease| {
+                            unsafe { (p.device.retain.unwrap())(lease.as_ptr()) };
+                        })
+                    });
+                ActiveDraw::Replay {
+                    view,
+                    _leases: leases,
+                }
+            }
+        };
+        Some(DrawFlight {
+            stage: self,
+            context,
+            action,
+        })
     }
 }
 
@@ -723,11 +738,71 @@ extern "C" fn rsf_anomaly_motion_stage_cancel_draw() {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_motion_stage_draw(context: Raw, call: Redraw, user: Raw) {
-    if let Some(stage) = STAGE.get() {
-        stage.draw(context, call, user);
-    } else {
-        unsafe { call(user, context) };
+unsafe extern "C" fn rsf_anomaly_motion_stage_draw_begin(
+    context: Raw,
+    scope: *mut DrawScope,
+) -> u8 {
+    let Some(flight) = STAGE.get().and_then(|stage| stage.begin_draw(context)) else {
+        return NO_DRAW_ACTION;
+    };
+    let route = match &flight.action {
+        ActiveDraw::Restore { .. } => RESTORE_AFTER_DRAW,
+        ActiveDraw::Replay { .. } => REPLAY_AFTER_DRAW,
+    };
+    unsafe { scope.cast::<DrawFlight>().write(flight) };
+    route
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_anomaly_motion_stage_draw_end(scope: *mut DrawScope, completed: bool) {
+    let flight = unsafe { scope.cast::<DrawFlight>().read() };
+    if let ActiveDraw::Restore {
+        stock,
+        chain,
+        restore_after: true,
+    } = flight.action
+    {
+        unsafe { (flight.stage.platform.set_shaders)(flight.context, &stock, chain.tessellated()) };
+        if completed {
+            lock(&flight.stage.render).counters.restores += 1;
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_anomaly_motion_stage_replay_begin(
+    scope: *const DrawScope,
+    replay: *mut ReplayScope,
+) -> bool {
+    let flight = unsafe { &*scope.cast::<DrawFlight>() };
+    let ActiveDraw::Replay { view, .. } = &flight.action else {
+        return false;
+    };
+    let stage = flight.stage;
+    if !stage.active.load(Acquire) {
+        return false;
+    }
+    let result = unsafe {
+        rsf_anomaly_motion_replay_begin(stage.platform.replay, view, flight.context, replay)
+    };
+    match result {
+        REPLAY_READY => return true,
+        REPLAY_NO_DEPTH_WRITE => lock(&stage.render).counters.replay_skipped_no_depth_write += 1,
+        _ => lock(&stage.render).counters.replay_failed += 1,
+    }
+    false
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_anomaly_motion_stage_replay_end(
+    scope: *const DrawScope,
+    replay: *mut ReplayScope,
+    completed: bool,
+) {
+    unsafe { rsf_anomaly_motion_replay_end(replay) };
+    if completed {
+        let flight = unsafe { &*scope.cast::<DrawFlight>() };
+        lock(&flight.stage.render).counters.replays += 1;
     }
 }
 

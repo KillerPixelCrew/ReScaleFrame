@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: MIT
 use super::{Raw, View};
-use std::ptr::{null, null_mut};
+use std::mem::{MaybeUninit, align_of};
+use std::ptr::{drop_in_place, null, null_mut};
 
-const DONE: u8 = 0;
-const NO_DEPTH_WRITE: u8 = 1;
+pub(crate) const REPLAY_READY: u8 = 0;
+pub(crate) const REPLAY_NO_DEPTH_WRITE: u8 = 1;
 const FAILED: u8 = 2;
 const RENDER_TARGETS: usize = 8;
 const CLASS_INTERFACES: usize = 253;
-
-type Draw = unsafe extern "C" fn(Raw, Raw);
 
 #[repr(C)]
 #[derive(Default)]
@@ -64,15 +63,15 @@ const _: () = {
 
 // Get calls return owned references. The scope drops them even when a
 // read-only depth draw or a missing replay resource prevents rebinding.
-struct Saved<'a> {
-    platform: &'a Platform,
+struct Saved {
+    platform: &'static Platform,
     context: Raw,
     depth: Depth,
     pixel: Pixel,
     modified: bool,
 }
 
-impl Drop for Saved<'_> {
+impl Drop for Saved {
     fn drop(&mut self) {
         let p = self.platform;
         let ctx = self.context;
@@ -118,7 +117,22 @@ impl Drop for Saved<'_> {
     }
 }
 
-pub(crate) fn replay(platform: &Platform, view: &View, context: Raw, draw: Draw, user: Raw) -> u8 {
+#[repr(C)]
+pub(crate) struct ReplayScope([MaybeUninit<u64>; 273]);
+
+const _: () = {
+    assert!(size_of::<Saved>() <= size_of::<ReplayScope>());
+    assert!(align_of::<Saved>() <= align_of::<ReplayScope>());
+};
+
+/// A successful begin moves the saved state into the native frame.
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_anomaly_motion_replay_begin(
+    platform: &'static Platform,
+    view: &View,
+    context: Raw,
+    scope: *mut ReplayScope,
+) -> u8 {
     if context.is_null() || view.rtv.is_null() || view.zero_shader.is_null() {
         return FAILED;
     }
@@ -132,7 +146,7 @@ pub(crate) fn replay(platform: &Platform, view: &View, context: Raw, draw: Draw,
     unsafe { (platform.read_depth)(context, &mut saved.depth) };
     let depth_state = if !saved.depth.view.is_null() && saved.depth.enabled {
         if !saved.depth.writable {
-            return NO_DEPTH_WRITE;
+            return REPLAY_NO_DEPTH_WRITE;
         }
         view.equal_depth
     } else {
@@ -157,18 +171,12 @@ pub(crate) fn replay(platform: &Platform, view: &View, context: Raw, draw: Draw,
         (platform.depth)(context, depth_state, 0);
         (platform.blend)(context, null_mut(), null(), u32::MAX);
         (platform.shader)(context, view.zero_shader, null(), 0);
-        draw(user, context);
+        scope.cast::<Saved>().write(saved);
     }
-    DONE
+    REPLAY_READY
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_motion_replay(
-    platform: &Platform,
-    view: &View,
-    context: Raw,
-    draw: Draw,
-    user: Raw,
-) -> u8 {
-    replay(platform, view, context, draw, user)
+pub(crate) unsafe extern "C" fn rsf_anomaly_motion_replay_end(scope: *mut ReplayScope) {
+    unsafe { drop_in_place(scope.cast::<Saved>()) };
 }
