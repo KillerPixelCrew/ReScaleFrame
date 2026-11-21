@@ -175,6 +175,10 @@ mod vulkan_pcl;
 #[cfg(windows)]
 mod vulkan_presentation;
 #[cfg(windows)]
+mod vulkan_sharpening;
+#[cfg(windows)]
+mod vulkan_sharpening_abi;
+#[cfg(windows)]
 mod vulkan_sr;
 #[cfg(windows)]
 mod vulkan_sr_abi;
