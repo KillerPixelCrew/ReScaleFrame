@@ -434,6 +434,13 @@ name = "rsf-game-sys"
 version = "0.1.2"
 
 [[package]]
+name = "rsf-godot"
+version = "0.1.2"
+dependencies = [
+ "rsf-game-sys",
+]
+
+[[package]]
 name = "rsf-minecraft"
 version = "0.1.2"
 dependencies = [

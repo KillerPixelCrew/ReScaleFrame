@@ -1,14 +1,37 @@
 // SPDX-License-Identifier: MIT
 #include "runtime_control.h"
 #include "api.h"
+#include "godot_platform.h"
 #include <rescaleframe/input_dump.h>
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/variant/callable_method_pointer.hpp>
 
+// The option schema, its type/range/default rules, renderer admission and bridge readiness are
+// owned by the Rust control owner (native/extension.rs, native/control.rs). This class keeps the
+// typed godot-cpp Dictionary, RID and RenderingServer calls.
 namespace rsf {
 using namespace godot;
-namespace { void capture_on_render_thread() { rsf_input_dump_request(); } }
+namespace {
+void capture_on_render_thread() { rsf_input_dump_request(); }
+uint32_t admission(RenderingServer* rendering)
+{
+    if (!rendering) return 0;
+    const CharString driver = rendering->get_current_rendering_driver_name().utf8();
+    const CharString method = rendering->get_current_rendering_method().utf8();
+    return rsf_godot_renderer_admission(driver.get_data(), method.get_data(), rsfg_vulkan_supported() ? 1u : 0u);
+}
+void read_option(const Dictionary& options, const rsf_godot_option_field& field, rsf_godot_option_value& value)
+{
+    if (!field.name || !options.has(field.name)) return;
+    const Variant raw = options[field.name];
+    value.present = 1;
+    value.variant = raw.get_type() == Variant::INT ? RSF_GODOT_VARIANT_INT :
+        raw.get_type() == Variant::BOOL ? RSF_GODOT_VARIANT_BOOL : RSF_GODOT_VARIANT_OTHER;
+    if (field.conversion == RSF_GODOT_OPTION_REAL) value.real = static_cast<double>(raw);
+    else value.integer = static_cast<int64_t>(raw);
+}
+}
 void ReScaleFrameRuntime::_bind_methods()
 {
     ClassDB::bind_method(D_METHOD("configure", "options", "viewport"), &ReScaleFrameRuntime::configure);
@@ -20,54 +43,28 @@ void ReScaleFrameRuntime::_bind_methods()
 bool ReScaleFrameRuntime::configure(const Dictionary& options, RID viewport)
 {
     if (!viewport.is_valid()) return false;
-    auto* rendering = RenderingServer::get_singleton();
-    if (!rendering || (rendering->get_current_rendering_driver_name() != "d3d12" &&
-        !(rendering->get_current_rendering_driver_name() == "vulkan" && rsfg_vulkan_supported())) ||
-        rendering->get_current_rendering_method() != "forward_plus") return false;
-    const char* fields[] = {"sr_backend", "quality", "dlss_preset", "fg_backend", "fg_mode", "generated_frames", "latency_mode", "frame_limit_us", "gameplay"};
-    for (const auto* name : fields) if (options.has(name)) {
-        const Variant raw = options[name];
-        if (raw.get_type() != Variant::INT && raw.get_type() != Variant::BOOL) return false;
-        const int64_t number = raw;
-        if (number < 0 || number > UINT32_MAX) return false;
-    }
-    rsf_godot_settings value{sizeof(value), RSF_GODOT_SETTINGS_ABI_VERSION, 7, 1, 0, 7, 0, 1, 0, 0, 1};
-    auto field = [&options](const char* name, uint32_t fallback) { return static_cast<uint32_t>(static_cast<int64_t>(options.get(name, fallback))); };
-    value.sr_backend = field("sr_backend", value.sr_backend);
-    value.quality = field("quality", value.quality);
-    value.dlss_preset = field("dlss_preset", value.dlss_preset);
-    value.fg_backend = field("fg_backend", value.fg_backend);
-    value.fg_mode = field("fg_mode", value.fg_mode);
-    value.generated_frames = field("generated_frames", value.generated_frames);
-    value.latency_mode = field("latency_mode", value.latency_mode);
-    value.frame_limit_us = field("frame_limit_us", value.frame_limit_us);
-    value.gameplay = field("gameplay", value.gameplay);
-    value.sharpening=rsf_sharpening_defaults();
-    value.sharpening.mode=field("sharpening_mode",value.sharpening.mode);
-    value.sharpening.sharpness=static_cast<float>(static_cast<double>(options.get("sharpening_sharpness",value.sharpening.sharpness)));
-    value.sharpening.mas=field("sharpening_mas",value.sharpening.mas);
-    value.sharpening.motion_sharpness=static_cast<float>(static_cast<double>(options.get("sharpening_motion_sharpness",value.sharpening.motion_sharpness)));
-    value.sharpening.motion_threshold=static_cast<float>(static_cast<double>(options.get("sharpening_motion_threshold",value.sharpening.motion_threshold)));
-    value.sharpening.motion_scale_limit=static_cast<float>(static_cast<double>(options.get("sharpening_motion_scale_limit",value.sharpening.motion_scale_limit)));
-    value.sharpening.contrast_enabled=field("sharpening_contrast_enabled",value.sharpening.contrast_enabled);
-    value.sharpening.contrast=static_cast<float>(static_cast<double>(options.get("sharpening_contrast",value.sharpening.contrast)));
-    value.sharpening.depth_scale=static_cast<float>(static_cast<double>(options.get("sharpening_depth_scale",value.sharpening.depth_scale)));
-    value.sharpening.depth_bias=static_cast<float>(static_cast<double>(options.get("sharpening_depth_bias",value.sharpening.depth_bias)));
-    value.sharpening.clamp_output=field("sharpening_clamp_output",value.sharpening.clamp_output);
-    value.sharpening.debug=field("sharpening_debug",value.sharpening.debug);
+    constexpr uint32_t required = RSF_GODOT_ADMIT_DRIVER | RSF_GODOT_ADMIT_RENDERER;
+    if ((admission(RenderingServer::get_singleton()) & required) != required) return false;
+    uint32_t count = 0;
+    const rsf_godot_option_field* fields = rsf_godot_option_fields(&count);
+    if (!fields || count != RSF_GODOT_OPTION_COUNT) return false;
+    rsf_godot_option_value values[RSF_GODOT_OPTION_COUNT]{};
+    for (uint32_t i = 0; i < count; ++i) read_option(options, fields[i], values[i]);
+    rsf_godot_settings value{};
+    if (!rsf_godot_compose_settings(rsf_godot_platform_leaves(), values, count, &value)) return false;
     return rsfg_configure_engine(&value, viewport.get_id()) != 0;
 }
 Dictionary ReScaleFrameRuntime::get_status() const
 {
     Dictionary result;
     auto* rendering = RenderingServer::get_singleton();
+    const uint32_t admitted = admission(rendering);
     result["graphics_driver"] = rendering ? rendering->get_current_rendering_driver_name() : String();
     result["renderer"] = rendering ? rendering->get_current_rendering_method() : String();
-    result["graphics_driver_supported"] = rendering && (rendering->get_current_rendering_driver_name() == "d3d12" ||
-        (rendering->get_current_rendering_driver_name() == "vulkan" && rsfg_vulkan_supported()));
-    result["renderer_supported"] = rendering && rendering->get_current_rendering_method() == "forward_plus";
+    result["graphics_driver_supported"] = (admitted & RSF_GODOT_ADMIT_DRIVER) != 0;
+    result["renderer_supported"] = (admitted & RSF_GODOT_ADMIT_RENDERER) != 0;
     rsf_godot_status status{sizeof(status), RSF_GODOT_ABI_VERSION};
-    const bool available = rsfg_status(&status) && status.session_id != 0;
+    const bool available = rsf_godot_status_ready(rsf_godot_platform_leaves(), &status) != 0;
     result["engine_bridge_ready"] = available;
     if (!available) return result;
     rsf_godot_settings requested{sizeof(requested), RSF_GODOT_SETTINGS_ABI_VERSION};

@@ -1,0 +1,20 @@
+[package]
+name = "rsf-godot"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# Runtime control, settings and session state of ReScaleFrame.Godot.Native.dll. The GDExtension,
+# the engine module and the addon keep their own layouts; the Rust owner lives beside the C++
+# leaves in native/.
+[lib]
+path = "native/lib.rs"
+crate-type = ["staticlib"]
+
+[dependencies]
+rsf-game-sys = { path = "../../sdk/game" }
+
+[lints]
+workspace = true

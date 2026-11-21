@@ -118,6 +118,11 @@ their interfaces. The lifecycle retains a renderer returned on a refused
 prepare for later retirement. The private binding was regenerated. Build
 and game verification remain open.
 
+Godot's native control and settings owner is Rust. It preserves the
+GDExtension entry points and linked Runtime, and refuses overlapping or
+reentrant D3D12 boot attempts. The Vulkan path still owns its own session
+and frame state. Build and Godot player verification remain open.
+
 ## Rust orchestrator and first Anomaly port
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.

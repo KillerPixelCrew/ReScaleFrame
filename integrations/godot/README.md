@@ -74,6 +74,8 @@ engine binaries, vendor binaries and captures remain ignored.
 ./eng/build-godot-engine.ps1 -Mono
 ```
 
+The native DLL links the `rsf-godot` Rust control owner; [NATIVE.md](NATIVE.md) records what it
+owns and the remaining C++ ownership slices.
 The add-on is staged under `.local/godot/package/addons/rescaleframe` and custom
 editors under `.local/godot/engines/{standard,mono}`. Source revisions and official
 engine archive hashes are pinned in [dependencies.json](dependencies.json).
