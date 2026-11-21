@@ -122,36 +122,16 @@ impl Render {
             );
             self.counters.camera_conflicts += u64::from(h.conflict);
         }
-        if !facts.capture.is_null() {
-            let mut snapshot = MaybeUninit::uninit();
-            if unsafe { (p.snapshot)(facts.capture, snapshot.as_mut_ptr()) } {
-                let facts = unsafe { snapshot.assume_init() };
-                let input = SnapshotInput {
-                    draw: DrawSnapshotView {
-                        world: facts.world,
-                        bones: PaletteView {
-                            data: facts.bones,
-                            count: facts.bone_count,
-                        },
-                    },
-                    palette_layout: facts.palette_layout,
-                    deformation_constants: ptr::null(),
-                    deformation_count: 0,
-                    deformation_layout: 0,
-                    detail: ptr::null(),
-                    domain: facts.domain,
-                    kind: facts.kind,
-                    has_deformation: false,
-                };
-                let snapshot = unsafe { Snapshot::borrow(&input) };
-                h.previous = self
-                    .history
-                    .record(view, facts.key, input.domain, snapshot)
-                    .map_or_else(DrawSnapshotView::default, Snapshot::draw_view);
-                h.stale =
-                    unsafe { rsf_anomaly_motion_stale_palette(&h.previous, &input.draw, 0.001) };
-                self.counters.snapshots += 1;
-            }
+        if let Some(capture) = unsafe { facts.capture.as_ref() }
+            && let Some(input) = capture.input()
+        {
+            let snapshot = unsafe { Snapshot::borrow(&input) };
+            h.previous = self
+                .history
+                .record(view, capture.key, input.domain, snapshot)
+                .map_or_else(DrawSnapshotView::default, Snapshot::draw_view);
+            h.stale = unsafe { rsf_anomaly_motion_stale_palette(&h.previous, &input.draw, 0.001) };
+            self.counters.snapshots += 1;
         }
         h
     }

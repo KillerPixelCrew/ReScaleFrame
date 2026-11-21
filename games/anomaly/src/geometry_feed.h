@@ -3,7 +3,6 @@
 #include "native_geometry.h"
 #include <cstddef>
 #include <cstdint>
-#include <optional>
 
 namespace rsf::anomaly::geometry {
 
@@ -18,8 +17,6 @@ public:
     // GeometrySink::retired target. Thread-safe, noexcept; an allocation failure is counted, not thrown.
     static void sink(void* queue, temporal::InstanceKey key) noexcept;
     // Render thread only. Applies every queued retirement to the history that owns the frame.
-    std::size_t drain(temporal::TemporalHistory& history);
-    // Same, for another render-thread history owner (the motion stage's draw-time history).
     std::size_t drain(void (*apply)(void* user, temporal::InstanceKey), void* user);
     // Retirements that could not be queued. Stale snapshots stay harmless because the new generation
     // never equals an old key and the registry refuses retired draws, but the count is evidence.
@@ -28,27 +25,15 @@ private:
     rsf_anomaly_geometry_retirements* state_;
 };
 
-enum class FeedStatus : std::uint8_t {
-    NoDraw,           // No active, still-live identity on this thread.
-    MissingContext,   // The draw has no view/projection domain; nothing may be guessed.
-    WrongView,        // The draw belongs to a different view than the frame token.
-    MissingWorld,     // The actual-draw world matrix was unreadable or not an affine Fmatrix.
-    UnsupportedKind,  // Software-skinned and tree draws have no verified snapshot schema.
-    MissingPalette,   // A hardware-skinned draw whose bone palette could not be copied.
-    Rejected,         // TemporalHistory refused the snapshot; see FeedResult::history.
-    Captured          // Stored (or an identical repeat of the stored) snapshot.
+// Borrowed from the guarded draw capture for this call. 255 denotes missing view or domain.
+struct SnapshotFacts {
+    rsf_anomaly_geometry_key key;
+    const temporal::Mat4* world;
+    const temporal::Mat4* bones;
+    std::size_t bone_count;
+    std::uint64_t palette_layout;
+    std::uint8_t view, domain, draw_kind;
 };
-struct FeedResult {
-    FeedStatus status{FeedStatus::NoDraw};
-    std::optional<temporal::CaptureStatus> history;
-};
-
-// Pure mapping: no engine memory is read. Returns nullopt with the reason in `why`.
-std::optional<temporal::InstanceSnapshot> to_snapshot(const DrawCapture&, FeedStatus& why) noexcept;
-// Render thread, inside the actual draw of the current visual. Drains retirements first, then copies
-// the current draw's world/palette and records it for `frame`.
-FeedResult feed_current_draw(temporal::TemporalHistory&, temporal::FrameToken frame, RetirementQueue&);
-// Same mapping for a capture the draw-time hook already copied (DrawSink::draw), on the history owner's thread.
-FeedResult feed_draw(temporal::TemporalHistory&, temporal::FrameToken frame, RetirementQueue&, const DrawCapture&);
+SnapshotFacts snapshot_facts(const DrawCapture&) noexcept;
 
 }

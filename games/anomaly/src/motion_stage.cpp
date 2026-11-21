@@ -190,27 +190,13 @@ void __fastcall scene_end_hook(void* self) {
     rsf_anomaly_motion_stage_close();
     reinterpret_cast<Unary>(originals[site_phase_scene_end])(self);
 }
-struct CaptureBorrow {
-    const geometry::DrawCapture* capture;
-    std::optional<temporal::InstanceSnapshot> snapshot;
-};
 void flush(const geometry::DrawTimeFacts& facts) noexcept {
-    CaptureBorrow capture{facts.capture, {}};
+    const auto capture = facts.capture ? geometry::snapshot_facts(*facts.capture) : geometry::SnapshotFacts{};
     const DrawFacts draw{facts.capture ? &capture : nullptr, facts.visual, facts.tree_lod,
         static_cast<uint8_t>(facts.pass), static_cast<uint8_t>(facts.kind), static_cast<uint8_t>(facts.classification.verdict),
         facts.view ? static_cast<uint8_t>(*facts.view) : uint8_t{255},
         facts.domain ? static_cast<uint8_t>(*facts.domain) : uint8_t{255}, facts.in_visual, facts.detail};
     rsf_anomaly_motion_stage_flush(&draw);
-}
-bool snapshot(void* raw, SnapshotFacts* out) noexcept {
-    auto& borrow = *static_cast<CaptureBorrow*>(raw);
-    geometry::FeedStatus why{};
-    borrow.snapshot = geometry::to_snapshot(*borrow.capture, why);
-    if (!borrow.snapshot) return false;
-    const auto& value = *borrow.snapshot;
-    *out = {geometry::geometry_key(borrow.capture->key), &value.world, value.bones.data(), value.bones.size(),
-        value.palette_layout, static_cast<uint8_t>(value.domain), static_cast<uint8_t>(value.kind)};
-    return true;
 }
 bool install_hooks(void* module, uint32_t size, const void* profile) noexcept {
     build = static_cast<const BuildProfile*>(profile);
@@ -404,7 +390,7 @@ const MotionPlatform platform{
         return static_cast<uint8_t>(MotionDevice::invalidate(*view, static_cast<ID3D11DeviceContext*>(c),
             [&](ID3D11DeviceContext* context) { draw(user, context); }));
     },
-    camera, [](float (*world)[16]) { return geometry::read_world_matrix(*world); }, snapshot,
+    camera, [](float (*world)[16]) { return geometry::read_world_matrix(*world); },
     [](Retire apply, void* user) -> size_t {
         struct Sink { Retire apply; void* user; } sink{apply, user};
         return retirements.drain([](void* u, temporal::InstanceKey key) {
@@ -449,10 +435,10 @@ const MotionPlatform platform{
     create_shader, [] { return sr::options().capture; }
 };
 
-static_assert(sizeof(WindowFacts) == 56 && sizeof(DrawFacts) == 32 && sizeof(SnapshotFacts) == 64);
+static_assert(sizeof(WindowFacts) == 56 && sizeof(DrawFacts) == 32);
 static_assert(sizeof(ShaderObjects) == 40 && sizeof(ShaderEntry) == 32 && sizeof(ShaderResult) == 32);
 static_assert(sizeof(FoliageLayout) == 108 && offsetof(FoliageLayout, xform) == 4 && offsetof(FoliageLayout, usable) == 104);
-static_assert(sizeof(MotionPlatform) == 360 && offsetof(MotionPlatform, guards) == 40);
+static_assert(sizeof(MotionPlatform) == 352 && offsetof(MotionPlatform, guards) == 40);
 static_assert(sizeof(FrameTarget) == 24 && offsetof(FrameTarget, main) == 20);
 static_assert(static_cast<uint8_t>(ReplayResult::Done) == 0 && static_cast<uint8_t>(ReplayResult::SkippedNoDepthWrite) == 1);
 static_assert(RSF_PHASE_RENDER_SUBMIT == 2 && RSF_DUMP_VIEW_DENSE_MOTION == 7);

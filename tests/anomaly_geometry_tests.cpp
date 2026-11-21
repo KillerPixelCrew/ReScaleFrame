@@ -12,6 +12,85 @@
 #define CHECK(expression) do { if (!(expression)) { std::fprintf(stderr, "%s:%d: %s\n", __FILE__, __LINE__, #expression); std::exit(1); } } while (false)
 using namespace rsf::anomaly::geometry;
 
+extern "C" uint8_t rsf_anomaly_geometry_snapshot_kind(const SnapshotFacts*, uint8_t*) noexcept;
+
+namespace {
+namespace temporal = rsf::anomaly::temporal;
+
+enum class FeedStatus : std::uint8_t {
+    NoDraw,           // No active, still-live identity on this thread.
+    MissingContext,   // The draw has no view/projection domain; nothing may be guessed.
+    WrongView,        // The draw belongs to a different view than the frame token.
+    MissingWorld,     // The actual-draw world matrix was unreadable or not an affine Fmatrix.
+    UnsupportedKind,  // Software-skinned and tree draws have no verified snapshot schema.
+    MissingPalette,   // A hardware-skinned draw whose bone palette could not be copied.
+    Rejected,         // TemporalHistory refused the snapshot; see FeedResult::history.
+    Captured          // Stored (or an identical repeat of the stored) snapshot.
+};
+struct FeedResult {
+    FeedStatus status{FeedStatus::NoDraw};
+    std::optional<temporal::CaptureStatus> history;
+};
+
+static_assert(uint8_t(FeedStatus::MissingContext) == 1 && uint8_t(FeedStatus::MissingWorld) == 3 &&
+    uint8_t(FeedStatus::UnsupportedKind) == 4 && uint8_t(FeedStatus::MissingPalette) == 5 &&
+    uint8_t(FeedStatus::Captured) == 7 && uint8_t(temporal::InstanceKind::Rigid) == 0 &&
+    uint8_t(temporal::InstanceKind::Skinned) == 1);
+
+std::size_t drain_history(RetirementQueue& queue, temporal::TemporalHistory& history)
+{
+    return queue.drain([](void* user, temporal::InstanceKey key) {
+        static_cast<temporal::TemporalHistory*>(user)->retire(key);
+    }, &history);
+}
+
+std::optional<temporal::InstanceSnapshot> to_snapshot(const DrawCapture& draw, FeedStatus& why) noexcept
+{
+    const auto facts = snapshot_facts(draw);
+    uint8_t kind{};
+    why = FeedStatus(rsf_anomaly_geometry_snapshot_kind(&facts, &kind));
+    if (why != FeedStatus::Captured) return std::nullopt;
+    try {
+        temporal::InstanceSnapshot snapshot;
+        snapshot.world = *draw.world;
+        snapshot.domain = *draw.domain;
+        snapshot.kind = temporal::InstanceKind(kind);
+        if (snapshot.kind == temporal::InstanceKind::Skinned) {
+            snapshot.palette_layout = draw.palette_layout;
+            snapshot.bones = draw.bones;
+        }
+        return snapshot;
+    } catch (...) {
+        why = FeedStatus::Rejected;
+        return std::nullopt;
+    }
+}
+
+FeedResult feed_draw(temporal::TemporalHistory& history, temporal::FrameToken frame, RetirementQueue& queue,
+    const DrawCapture& draw)
+{
+    drain_history(queue, history);
+    if (draw.view && *draw.view != frame.view) return {FeedStatus::WrongView, std::nullopt};
+    FeedStatus why{};
+    const auto snapshot = to_snapshot(draw, why);
+    if (!snapshot) return {why, std::nullopt};
+    const auto stored = history.capture(frame, draw.key, *snapshot);
+    const bool ok = stored.status == temporal::CaptureStatus::Captured || stored.status == temporal::CaptureStatus::Repeated;
+    return {ok ? FeedStatus::Captured : FeedStatus::Rejected, stored.status};
+}
+
+FeedResult feed_current_draw(temporal::TemporalHistory& history, temporal::FrameToken frame, RetirementQueue& queue)
+{
+    const auto draw = capture_current_draw();
+    if (!draw) {
+        drain_history(queue, history);
+        return {FeedStatus::NoDraw, std::nullopt};
+    }
+    return feed_draw(history, frame, queue, *draw);
+}
+
+}
+
 int main()
 {
     IdentityRegistry identities;
@@ -210,7 +289,7 @@ int main()
     lifecycle.join();
     feed_identities.retire(rigid_key->owner, rigid_key->visual);
     CHECK(queue.dropped() == 0);
-    CHECK(queue.drain(history) == 1 && queue.drain(history) == 0);
+    CHECK(drain_history(queue, history) == 1 && drain_history(queue, history) == 0);
     RetirementQueue::sink(&queue, *rigid_key);
     unsigned requeued = 0;
     struct Requeue { RetirementQueue& queue; unsigned& seen; } requeue{queue, requeued};
@@ -219,7 +298,7 @@ int main()
         ++state.seen;
         RetirementQueue::sink(&state.queue, key);
     }, &requeue) == 1);
-    CHECK(requeued == 1 && queue.drain(history) == 1);
+    CHECK(requeued == 1 && drain_history(queue, history) == 1);
     temporal::InstanceSnapshot retired_snapshot;
     retired_snapshot.world = temporal::Mat4::identity();
     CHECK(history.capture(*second.token, *rigid_key, retired_snapshot).status == temporal::CaptureStatus::Retired);

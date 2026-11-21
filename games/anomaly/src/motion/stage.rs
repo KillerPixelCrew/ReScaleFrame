@@ -568,7 +568,7 @@ unsafe fn checked_platform(platform: *const Platform) -> Option<&'static Platfor
     }
     let prefix = platform.cast::<u32>();
     if unsafe { prefix.read() } < size_of::<Platform>() as u32
-        || unsafe { prefix.add(1).read() } != 1
+        || unsafe { prefix.add(1).read() } != PLATFORM_ABI
     {
         return None;
     }

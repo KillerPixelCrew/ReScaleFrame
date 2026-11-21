@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 // Draw-time history for the motion MRT: the previous frame's camera per projection domain and the previous frame's
-// instance snapshots (world, bone palette) from the geometry feed (geometry_feed.h to_snapshot()).
+// instance snapshots (world, bone palette) from the guarded geometry capture.
 //
 // Why not temporal::TemporalHistory directly: its begin_frame() needs both the world and the first-person camera up
 // front, but the first-person projection only exists once r_dsgraph_render_hud has rebuilt it, after the G-buffer

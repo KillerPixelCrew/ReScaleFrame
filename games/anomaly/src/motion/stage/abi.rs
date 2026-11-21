@@ -13,6 +13,7 @@ use std::ffi::c_char;
 
 pub(super) type Raw = *mut std::ffi::c_void;
 pub(super) type Redraw = unsafe extern "C" fn(Raw, Raw);
+pub(super) const PLATFORM_ABI: u32 = 2;
 type Retire = unsafe extern "C" fn(Raw, &InstanceKey);
 
 #[repr(C)]
@@ -37,7 +38,7 @@ pub(super) struct TargetFacts {
 
 #[repr(C)]
 pub(super) struct DrawFacts {
-    pub capture: Raw,
+    pub capture: *const GeometrySnapshotFacts,
     pub visual: u64,
     pub tree_lod: i64,
     pub pass: u8,
@@ -57,17 +58,6 @@ pub(in crate::motion) struct ShaderObjects {
     pub ds: Raw,
     pub ps: Raw,
     pub gs: Raw,
-}
-
-#[repr(C)]
-pub(super) struct SnapshotFacts {
-    pub key: InstanceKey,
-    pub world: *const Mat4,
-    pub bones: *const Mat4,
-    pub bone_count: usize,
-    pub palette_layout: u64,
-    pub domain: u8,
-    pub kind: u8,
 }
 
 #[repr(C)]
@@ -146,7 +136,6 @@ pub(super) struct Platform {
     pub replay: unsafe extern "C" fn(&DeviceView, Raw, Redraw, Raw) -> u8,
     pub camera: unsafe extern "C" fn(&mut [f32; 16], &mut [f32; 16]) -> bool,
     pub world: unsafe extern "C" fn(&mut [f32; 16]) -> bool,
-    pub snapshot: unsafe extern "C" fn(Raw, *mut SnapshotFacts) -> bool,
     pub drain: unsafe extern "C" fn(Retire, Raw) -> usize,
     pub read_constant: unsafe extern "C" fn(u32, u32, u32, Raw, u32) -> bool,
     pub write_constant: unsafe extern "C" fn(u32, u32, u32, *const std::ffi::c_void, u32) -> bool,
@@ -214,13 +203,12 @@ pub(super) struct FrameTarget {
 const _: () = {
     assert!(size_of::<WindowFacts>() == 56);
     assert!(size_of::<DrawFacts>() == 32);
-    assert!(size_of::<SnapshotFacts>() == 64);
     assert!(size_of::<ShaderObjects>() == 40);
     assert!(size_of::<ShaderEntry>() == 32);
     assert!(size_of::<ShaderResult>() == 32);
     assert!(size_of::<FoliageLayout>() == 108);
     assert!(std::mem::offset_of!(FoliageLayout, usable) == 104);
     assert!(size_of::<FrameTarget>() == 24);
-    assert!(size_of::<Platform>() == 360);
+    assert!(size_of::<Platform>() == 352);
     assert!(std::mem::offset_of!(Platform, guards) == 40);
 };

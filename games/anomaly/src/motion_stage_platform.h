@@ -7,6 +7,8 @@
 #include <rescaleframe/game_frame.h>
 #include <rescaleframe/texture_dump.h>
 
+namespace rsf::anomaly::geometry { struct SnapshotFacts; }
+
 namespace rsf::anomaly::motion {
 struct FrameTarget;
 struct FoliageLayout;
@@ -25,21 +27,13 @@ struct WindowFacts {
 };
 struct TargetFacts { uint32_t width, height, samples, layers; };
 struct DrawFacts {
-    void* capture;
+    const geometry::SnapshotFacts* capture;
     uint64_t visual;
     int64_t tree_lod;
     uint8_t pass, kind, verdict, view, domain;
     bool in_visual, detail;
 };
 struct ShaderObjects { void* vs; void* hs; void* ds; void* ps; void* gs; };
-struct SnapshotFacts {
-    rsf_anomaly_geometry_key key;
-    const void* world;
-    const void* bones;
-    size_t bone_count;
-    uint64_t palette_layout;
-    uint8_t domain, kind;
-};
 struct MotionDrawState { float viewport[4], jitter[4]; };
 struct ShaderEntry { const void* entry; rsf_anomaly_shader_bytes name; uint8_t stage, family; };
 struct ShaderResult {
@@ -76,7 +70,6 @@ struct MotionPlatform {
     uint8_t (*replay)(const rsf_anomaly_motion_device_view*, void*, Redraw, void*);
     bool (*camera)(float (*)[16], float (*)[16]);
     bool (*world)(float (*)[16]);
-    bool (*snapshot)(void*, SnapshotFacts*);
     size_t (*drain)(Retire, void*);
     bool (*read_constant)(uint32_t, uint32_t, uint32_t, void*, uint32_t);
     bool (*write_constant)(uint32_t, uint32_t, uint32_t, const void*, uint32_t);
@@ -98,7 +91,7 @@ struct MotionPlatform {
     void* (*create_shader)(void*, void*, void*, void*, bool, bool*);
     bool (*sr_capture)();
 };
-inline constexpr uint32_t motion_platform_abi = 1;
+inline constexpr uint32_t motion_platform_abi = 2;
 
 extern "C" {
 void rsf_anomaly_motion_stage_configure(const MotionPlatform*, const wchar_t*, rsf_dump_log_fn, void*) noexcept;

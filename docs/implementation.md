@@ -149,6 +149,15 @@ with FXC, and its focused CPU contracts passed in Debug and Release.
 The shader pack hash matched the staged game baseline.
 See [the motion cutover audit](research/rust-anomaly-motion-history.md).
 
+The motion flush now lends the guarded draw's world and bone data to
+Rust for the call. Rust classifies the snapshot and copies its palette
+only when history accepts the draw. The allocating C++ history adapter
+is confined to the geometry fixture. Seven focused Release contracts
+passed, including geometry hooks on Standard and AVX, and all 336
+locked Rust tests passed on the pinned toolchain. The motion device
+fixture built and the Anomaly DLL retained its three exports and
+dynamic Runtime lookup.
+
 Anomaly's Stage 5 temporal SR driver, retry state and published
 settings now live in Rust. The native Stage still supplies its engine
 frame and texture leases through the checked Runtime table. A refused

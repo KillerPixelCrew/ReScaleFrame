@@ -103,6 +103,154 @@ struct SnapshotInput {
     has_deformation: bool,
 }
 
+// The guarded draw capture owns the matrices through the synchronous flush.
+#[cfg(windows)]
+#[repr(C)]
+struct GeometrySnapshotFacts {
+    key: InstanceKey,
+    world: *const Mat4,
+    bones: *const Mat4,
+    bone_count: usize,
+    palette_layout: u64,
+    view: u8,
+    domain: u8,
+    draw_kind: u8,
+}
+
+#[cfg(windows)]
+const _: () = {
+    assert!(size_of::<GeometrySnapshotFacts>() == 64);
+    assert!(std::mem::offset_of!(GeometrySnapshotFacts, world) == 24);
+    assert!(std::mem::offset_of!(GeometrySnapshotFacts, view) == 56);
+    assert!(std::mem::offset_of!(GeometrySnapshotFacts, draw_kind) == 58);
+};
+
+#[cfg(windows)]
+impl GeometrySnapshotFacts {
+    fn kind(&self) -> Result<u8, u8> {
+        use crate::native_geometry_abi::{HARDWARE_SKINNED, RIGID, SINGLE_BONE, UNSET};
+
+        if self.view == UNSET || self.domain == UNSET {
+            return Err(1); // MissingContext
+        }
+        match self.draw_kind {
+            RIGID | HARDWARE_SKINNED | SINGLE_BONE => {}
+            _ => return Err(4), // UnsupportedKind
+        }
+        if self.world.is_null() {
+            return Err(3); // MissingWorld
+        }
+        if self.draw_kind == HARDWARE_SKINNED {
+            if self.bones.is_null() || self.bone_count == 0 || self.palette_layout == 0 {
+                return Err(5); // MissingPalette
+            }
+            return Ok(1); // InstanceKind::Skinned
+        }
+        // The engine already folded the single bone into the world matrix at the draw flush.
+        Ok(0) // InstanceKind::Rigid
+    }
+
+    fn input(&self) -> Option<SnapshotInput> {
+        let kind = self.kind().ok()?;
+        let (bones, palette_layout) = if kind == 1 {
+            (
+                PaletteView {
+                    data: self.bones,
+                    count: self.bone_count,
+                },
+                self.palette_layout,
+            )
+        } else {
+            (PaletteView::default(), 0)
+        };
+        Some(SnapshotInput {
+            draw: DrawSnapshotView {
+                world: self.world,
+                bones,
+            },
+            palette_layout,
+            deformation_constants: ptr::null(),
+            deformation_count: 0,
+            deformation_layout: 0,
+            detail: ptr::null(),
+            domain: self.domain,
+            kind,
+            has_deformation: false,
+        })
+    }
+}
+
+// The native geometry contract uses the same classifier for its owning fixture snapshots.
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_geometry_snapshot_kind(
+    capture: &GeometrySnapshotFacts,
+    kind: &mut u8,
+) -> u8 {
+    match capture.kind() {
+        Ok(value) => {
+            *kind = value;
+            7 // Captured
+        }
+        Err(refusal) => refusal,
+    }
+}
+
+#[cfg(all(test, windows))]
+#[test]
+fn geometry_palette_is_borrowed_until_history_accepts_it() {
+    use crate::native_geometry_abi::{HARDWARE_SKINNED, MAIN, SINGLE_BONE, WORLD};
+
+    let world = Mat4::IDENTITY;
+    let palette = [Mat4::IDENTITY; 2];
+    let mut capture = GeometrySnapshotFacts {
+        key: InstanceKey {
+            owner: 1,
+            visual: 2,
+            generation: 3,
+        },
+        world: &world,
+        bones: palette.as_ptr(),
+        bone_count: palette.len(),
+        palette_layout: 1,
+        view: MAIN,
+        domain: WORLD,
+        draw_kind: HARDWARE_SKINNED,
+    };
+    let input = capture.input().unwrap();
+    assert_eq!(input.draw.bones.data, palette.as_ptr());
+    assert_eq!(input.draw.bones.count, palette.len());
+    let snapshot = unsafe { Snapshot::borrow(&input) };
+    assert!(matches!(snapshot.bones, Cow::Borrowed(_)));
+
+    let mut history = MotionHistoryState::default();
+    history.begin(
+        0,
+        FrameIdentity {
+            source: 1,
+            generation: 1,
+            width: 1280,
+            height: 720,
+        },
+    );
+    assert!(
+        history
+            .record(0, capture.key, capture.domain, snapshot)
+            .is_none()
+    );
+    let frame = history.views[0].current.as_ref().unwrap();
+    let stored = frame.instances[&(capture.key, capture.domain)]
+        .as_ref()
+        .unwrap();
+    assert!(matches!(stored.bones, Cow::Owned(_)));
+    assert_ne!(stored.bones.as_ptr(), palette.as_ptr());
+
+    capture.draw_kind = SINGLE_BONE;
+    let input = capture.input().unwrap();
+    assert_eq!(input.palette_layout, 0);
+    assert_eq!(input.draw.bones.count, 0);
+}
+
 #[derive(PartialEq)]
 struct Snapshot<'a> {
     world: Mat4,
