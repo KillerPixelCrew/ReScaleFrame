@@ -11,8 +11,9 @@
    Fence values are Unity frame-fence completions read by bridge.cpp; 0 means no fence.
 
    The Unity package's D3D11 and Vulkan bridge (integrations/unity/native/bridge.cpp) uses the
-   same activity, managed stage, callbacks, packet store, policy and config. A process has one
-   Unity renderer, so the two bridges never share this state at once. */
+   same activity, managed stage, callbacks, packet store, policy and config. Its D3D11 route's
+   packets carry their texture references in the store (d3d11_state.h). A process has one Unity
+   renderer, so the two bridges never share this state at once. */
 #include <rescaleframe/unity_bridge.h>
 
 /* Packet storage and source-submission ring sizes. bridge.cpp sizes its lease arrays to match. */
@@ -45,8 +46,14 @@ uint32_t rsf_unity_frames_managed_stage(void);
    which Unity hands back to the render event as identity only, and its slot for the caller's
    leases; NULL when inactive, invalid or full. */
 void* rsf_unity_frames_admit_packet(const rsf_unity_packet* packet, uint64_t session_id, uint32_t* slot);
-/* Copies out and frees the packet stored at address. Zero when address names no stored packet. */
+/* Copies out the queued packet stored at address and frees its slot. A packet admitted with a
+   lease (rsf_unity_d3d11_admit_packet, d3d11_state.h) instead keeps its slot and references,
+   consuming, until rsf_unity_frames_end_packet; its address cannot be taken again meanwhile. Zero
+   when address names no queued packet. */
 uint32_t rsf_unity_frames_take_packet(const void* address, rsf_unity_packet* packet, uint32_t* slot);
+/* The render event that took a packet from slot has ended. A consuming slot is freed and its
+   references released outside the store's lock; any other slot is left alone. */
+void rsf_unity_frames_end_packet(uint32_t slot);
 
 /* Fills output from the host render configuration and the current policy. Zero when output is
    not this ABI's structure or the host refuses. services is borrowed for the call. */
@@ -81,13 +88,15 @@ uint32_t rsf_unity_frames_take_flushed(uint64_t session_id, uint64_t source_fram
    enter while inactive to return their packets. */
 uint32_t rsf_unity_frames_callback_enter(void);
 void rsf_unity_frames_callback_leave(void);
-/* The package closes callback admission once inactive, without pending packets or callbacks.
+/* The package closes callback admission once inactive, without queued or consuming packets or
+   callbacks.
    A closed bridge stays closed through release and reopens on activation of the next session. */
 uint32_t rsf_unity_frames_try_close(void);
 /* Non-zero when no callback, packet or submission is outstanding at this completion. */
 uint32_t rsf_unity_frames_drained(uint64_t completed);
-/* Forgets packets, ring completions, sources, extents and the managed stage. The activity flag
-   and the policy, including its generation, persist, as does a package retirement close. */
+/* Forgets packets, ring completions, sources, extents and the managed stage, releasing the
+   references of any leased packet still queued or consuming. The activity flag and the policy,
+   including its generation, persist, as does a package retirement close. */
 void rsf_unity_frames_release(void);
 #ifdef __cplusplus
 }

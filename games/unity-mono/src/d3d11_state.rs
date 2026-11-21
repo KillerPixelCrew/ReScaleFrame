@@ -12,6 +12,12 @@
 //! and the release. Slot rotation and fence values are the package bridge's submission ring
 //! (`bridge_interop.rs`).
 //!
+//! The D3D11 route also admits its packets here (`rsf_unity_d3d11_admit_packet`): the shared
+//! packet store (`bridge_state.rs`) retains the packet's Unity textures through the typed leaves
+//! before the stored address reaches Unity, holds the references through the render event that
+//! takes the packet and releases them when that event ends or the store's release cancels it.
+//! These references exist before the record is created and do not depend on it.
+//!
 //! bridge.cpp keeps Unity interface access and the typed COM calls as leaves, which run outside
 //! the state mutex. Its frame callbacks (`bridge_state.rs`) are the admission that keeps a
 //! borrowed view alive: the package closes callback admission before it closes this owner. Inside
@@ -20,13 +26,15 @@
 //!
 //! The C++ kept these objects as unguarded globals. It created the command slots lazily on the
 //! render thread, kept partial objects after a failed creation until release, let the package's
-//! graphics lookup copy the D3D12 device and queue without any admission, and replaced surfaces
-//! without any hold on the views a frame had already taken.
-use crate::bridge_abi::RSF_UNITY_FRAMES_SLOTS;
+//! graphics lookup copy the D3D12 device and queue without any admission, replaced surfaces
+//! without any hold on the views a frame had already taken, and kept the queued packets' texture
+//! references in a native array beside the Rust store.
+use crate::bridge_abi::{RSF_UNITY_FRAMES_SLOTS, rsf_unity_packet};
 use crate::bridge_interop::{
     rsf_unity_interop_d3d11_drained, rsf_unity_interop_drained, rsf_unity_interop_release,
     rsf_unity_interop_submitted,
 };
+use crate::bridge_state::{LeaseOps, admit_leased_packet};
 use rsf_game_sys::rsf_game_host_services;
 use std::ffi::c_void;
 use std::ptr;
@@ -587,6 +595,20 @@ extern "C" fn rsf_unity_d3d11_open() {
     lock().open();
 }
 
+/// `ops` is `rsf_unity_d3d11_texture_ops`. The store runs the retain leaf under its mutex while it
+/// publishes the packet, so the address is never visible without the lease.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_unity_d3d11_admit_packet(
+    packet: *const rsf_unity_packet,
+    session_id: u64,
+    ops: *const LeaseOps,
+) -> *mut c_void {
+    let Some(ops) = (unsafe { ops.as_ref() }) else {
+        return ptr::null_mut();
+    };
+    unsafe { admit_leased_packet(packet, session_id, *ops) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -967,6 +989,8 @@ mod tests {
         });
         // No record, so no surface lease.
         assert!(!rsf_unity_d3d11_surfaces_begin());
+        // Without leaves or a packet nothing is admitted.
+        assert!(unsafe { rsf_unity_d3d11_admit_packet(ptr::null(), 0, ptr::null()) }.is_null());
         // Nothing was published by these refusals.
         assert!(!unsafe { rsf_unity_d3d11_device_view(&mut view) });
         assert_eq!(view, DeviceHandles::EMPTY);

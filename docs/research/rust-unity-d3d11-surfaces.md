@@ -21,9 +21,10 @@ motion, typeless and sRGB colour formats mapped to their `FLOAT` or `UNORM` form
 fence wait, `rsf_shared_surface_create` with the same render-target setup and `services` log
 routing, and `rsf_shared_surface_destroy`. The copies, barriers and render-pass calls still use
 `rsf_shared_surface_d3d11` and `rsf_shared_surface_d3d12` on the view Rust lends. The D3D11 texture
-leases that queued packets hold from `enqueue` to their render event stay native: they belong to
-the packet store, exist before the record is created and are shared with the Vulkan path's
-admission.
+leases that queued packets hold from `enqueue` to their render event stayed native here: they belong
+to the packet store, exist before the record is created and are shared with the Vulkan path's
+admission. They later moved into the Rust packet store; see
+[queued packet texture leases](rust-unity-d3d11-packet-leases.md).
 
 ## Creation, partial failure and replacement
 

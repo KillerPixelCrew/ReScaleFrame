@@ -231,6 +231,13 @@ and camera facts. Evaluation output is admitted for the same wrapper
 and recording generation. Source comparison matched the artifact
 fields and all 18 scalar keys. Build and live verification remain open.
 
+RDR2's capture installer now prepares paths and owns its worker startup
+in Rust. A refused thread start releases the prepared owners before
+census registration, so a later install can retry. Game and fixture
+entry points keep their existing contract. The fixture still needs
+native verification.
+[Capture installation audit](research/rust-rdr2-asi.md#native-capture-installation)
+
 RDR2's Rust diagnostic workers preserve the module sampling marks,
 dump policy, census summary and optional RenderDoc request loop. Native
 leaves retain the existing diagnostics ABI. The RenderDoc trigger still
@@ -488,6 +495,13 @@ still lend the queued packet textures. Build and live resize verification
 remain open.
 [Surface ownership audit](research/rust-unity-d3d11-surfaces.md)
 
+Unity's D3D11 packet store now owns queued texture references through
+the matching render event. A consuming slot remains reserved until its
+lease returns, and retirement releases cancelled entries after resetting
+the store. Vulkan and Mono still use the existing unleased packet calls.
+Build and Unity callback verification remain open.
+[Packet lease audit](research/rust-unity-d3d11-packet-leases.md)
+
 AC7's Rust renderer transaction owns prepare, start, quiesce and stop.
 Failed activation keeps any renderer with reachable callbacks, and a
 refused hook disable or removal keeps the renderer available for retry.
@@ -661,6 +675,12 @@ selector is private to linked consumers, and the public Runtime export
 declarations match the baseline. Binary exports, build and device
 behavior remain unverified.
 [Vulkan Auto ownership notes](../integrations/godot/NATIVE.md#vulkan-auto-through-the-runtime-provider-policy-eighth-slice)
+
+Godot's engine module now links its viewport mode and initial scale
+policy as a private Rust object through SCons. The module keeps the
+existing extension settings conversion and C ABI. The documented
+Windows x64 build needs a matching Rust target. Editor and player
+linkage and viewport behavior remain open.
 
 The D3D12 render host and D3D11 presentation bridge now reuse the linked
 Runtime FG Auto selector. The render host keeps its Off choice, and the

@@ -76,6 +76,8 @@ engine binaries, vendor binaries and captures remain ignored.
 
 The native DLL links the `rsf-godot` Rust control owner; [NATIVE.md](NATIVE.md) records what it
 owns and the remaining C++ ownership slices.
+The custom engine build also needs `rustc` on PATH for its viewport policy object. The repository
+toolchain pin applies when using rustup. See the [engine module details](NATIVE.md#engine-module-viewport-policy).
 The add-on is staged under `.local/godot/package/addons/rescaleframe` and custom
 editors under `.local/godot/engines/{standard,mono}`. Source revisions and official
 engine archive hashes are pinned in [dependencies.json](dependencies.json).

@@ -12,6 +12,13 @@
 //! its own D3D12 submission ring is `bridge_interop.rs`. The Vulkan bridge's admission and
 //! lifecycle are `vulkan_state.rs`.
 //!
+//! The package's D3D11 route admits its packets with a lease (`rsf_unity_d3d11_admit_packet`,
+//! d3d11_state.rs): the store retains each Unity texture before the packet's address is returned,
+//! keeps the references with the stored packet, keeps the slot through the render event that
+//! takes it and releases them when that event ends or release cancels the packet. The typed
+//! AddRef and Release calls are bridge.cpp leaves. Mono D3D12 and Vulkan packets carry no lease
+//! and are freed when taken, as before.
+//!
 //! A fence completion of 0 stands for "no fence": every recorded submission is then in flight,
 //! as the C++ check `complete && (!fence || completed < complete)` had it.
 use crate::bridge_abi::{
@@ -41,11 +48,53 @@ const NO_SOURCE: rsf_unity_source_submission = rsf_unity_source_submission {
     view_key: 0,
 };
 
+/// Typed reference leaves for a leased admission. Mirrors `rsf_unity_d3d11_texture_ops`
+/// (d3d11_state.h): `retain` adds one reference to a resource and `release` drops one. Neither is
+/// called with null.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(crate) struct LeaseOps {
+    pub(crate) retain: unsafe extern "C" fn(*mut c_void),
+    pub(crate) release: unsafe extern "C" fn(*mut c_void),
+}
+
+const _: () = assert!(size_of::<LeaseOps>() == 2 * size_of::<usize>());
+
+/// The references a stored packet holds on its colour, depth, motion and output resources, in
+/// that order, and the leaf that drops them. A null resource holds nothing.
+#[derive(Clone, Copy)]
+struct Lease {
+    resources: [*mut c_void; 4],
+    release: unsafe extern "C" fn(*mut c_void),
+}
+
+impl Lease {
+    /// Drops every held reference. Runs outside the state mutex.
+    fn end(self) {
+        for resource in self.resources {
+            if !resource.is_null() {
+                unsafe { (self.release)(resource) };
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Pending {
     packet: rsf_unity_packet,
     used: bool,
+    /// Taken by its render event, which still reads the leased resources. The slot stays used and
+    /// its address cannot be taken again until `end_packet`.
+    consuming: bool,
+    lease: Option<Lease>,
 }
+
+const FREE: Pending = Pending {
+    packet: EMPTY_PACKET,
+    used: false,
+    consuming: false,
+    lease: None,
+};
 
 /// The engine policy the managed adapter reads through config and stamps into packets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,8 +123,9 @@ struct State {
     policy: Policy,
 }
 
-// The packets hold Unity resource addresses as identity. This module never dereferences them;
-// bridge.cpp holds the leases.
+// The packets hold Unity resource addresses as identity. This module never dereferences them.
+// A D3D11 packet's lease references are only passed to the typed leaves; the Mono D3D12 bridge
+// holds its own leases.
 unsafe impl Send for State {}
 
 static STATE: Mutex<State> = Mutex::new(State::new());
@@ -144,10 +194,7 @@ fn valid(packet: &rsf_unity_packet, session_id: u64) -> bool {
 impl State {
     const fn new() -> Self {
         Self {
-            pending: [Pending {
-                packet: EMPTY_PACKET,
-                used: false,
-            }; PACKETS],
+            pending: [FREE; PACKETS],
             complete: [0; SLOTS],
             next: 0,
             sources: [NO_SOURCE; SOURCES],
@@ -174,7 +221,33 @@ impl State {
         self.pending[slot] = Pending {
             packet: *packet,
             used: true,
+            ..FREE
         };
+        Some(slot)
+    }
+
+    /// Admits like `admit_packet`, then retains each non-null resource of the stored copy under
+    /// the state mutex, so the address is never returned, and the packet never taken, without its
+    /// lease. A refused packet retains nothing.
+    fn admit_leased(
+        &mut self,
+        packet: &rsf_unity_packet,
+        session_id: u64,
+        ops: LeaseOps,
+    ) -> Option<usize> {
+        let slot = self.admit_packet(packet, session_id)?;
+        let entry = &mut self.pending[slot];
+        let stored = &entry.packet;
+        let resources = [stored.color, stored.depth, stored.motion, stored.output];
+        for resource in resources {
+            if !resource.is_null() {
+                unsafe { (ops.retain)(resource) };
+            }
+        }
+        entry.lease = Some(Lease {
+            resources,
+            release: ops.release,
+        });
         Some(slot)
     }
 
@@ -182,16 +255,35 @@ impl State {
         ptr::from_ref(&self.pending[slot].packet).cast_mut().cast()
     }
 
+    /// Copies out the queued packet stored at `address`. An unleased packet's slot is freed at
+    /// once; a leased one stays with its lease, consuming, until `end_packet`.
     fn take_packet(&mut self, address: *const c_void) -> Option<(usize, rsf_unity_packet)> {
         let slot = (0..PACKETS).find(|&slot| {
-            self.pending[slot].used && ptr::eq(self.packet_address(slot).cast_const(), address)
+            let entry = &self.pending[slot];
+            entry.used
+                && !entry.consuming
+                && ptr::eq(self.packet_address(slot).cast_const(), address)
         })?;
-        let packet = self.pending[slot].packet;
-        self.pending[slot] = Pending {
-            packet: EMPTY_PACKET,
-            used: false,
-        };
+        let entry = &mut self.pending[slot];
+        let packet = entry.packet;
+        if entry.lease.is_some() {
+            entry.consuming = true;
+        } else {
+            *entry = FREE;
+        }
         Some((slot, packet))
+    }
+
+    /// Frees a consuming slot and hands its lease out for release outside the mutex. Any other
+    /// slot, including one queued since an unleased take freed it, is left alone.
+    fn end_packet(&mut self, slot: usize) -> Option<Lease> {
+        let entry = self.pending.get_mut(slot)?;
+        if !entry.consuming {
+            return None;
+        }
+        let lease = entry.lease;
+        *entry = FREE;
+        lease
     }
 
     fn any_in_flight(&self, completed: u64) -> bool {
@@ -329,7 +421,10 @@ impl State {
         !in_flight(self.inline_complete, completed) && !self.any_in_flight(completed)
     }
 
-    fn release(&mut self) {
+    /// Forgets the store and returns the leases of any packet still queued or consuming, which
+    /// release cancels outside the mutex.
+    fn release(&mut self) -> [Option<Lease>; PACKETS] {
+        let leases = self.pending.map(|entry| entry.lease);
         let policy = self.policy;
         // Mono keeps its separate drain/release sequence and can still receive callbacks.
         let callbacks = self.callbacks;
@@ -338,6 +433,7 @@ impl State {
         self.policy = policy;
         self.callbacks = callbacks;
         self.closed = closed;
+        leases
     }
 
     fn config(
@@ -395,29 +491,59 @@ extern "C" fn rsf_unity_frames_managed_stage() -> u32 {
     MANAGED_STAGE.load(Ordering::SeqCst)
 }
 
+/// The admission both exports share: the stored slot and the address Unity hands back.
+unsafe fn admit(
+    packet: *const rsf_unity_packet,
+    session_id: u64,
+    lease: Option<LeaseOps>,
+) -> Option<(usize, *mut c_void)> {
+    if packet.is_null() {
+        return None;
+    }
+    // Only the size field is readable from a short packet.
+    if unsafe { packet.cast::<u32>().read_unaligned() } != size_of::<rsf_unity_packet>() as u32 {
+        return None;
+    }
+    let packet = unsafe { packet.read_unaligned() };
+    let mut state = lock();
+    if state.closed || !ACTIVE.load(Ordering::SeqCst) {
+        return None;
+    }
+    let index = match lease {
+        Some(ops) => state.admit_leased(&packet, session_id, ops),
+        None => state.admit_packet(&packet, session_id),
+    }?;
+    Some((index, state.packet_address(index)))
+}
+
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_unity_frames_admit_packet(
     packet: *const rsf_unity_packet,
     session_id: u64,
     slot: *mut u32,
 ) -> *mut c_void {
-    if packet.is_null() || slot.is_null() {
+    if slot.is_null() {
         return ptr::null_mut();
     }
-    // Only the size field is readable from a short packet.
-    if unsafe { packet.cast::<u32>().read_unaligned() } != size_of::<rsf_unity_packet>() as u32 {
-        return ptr::null_mut();
-    }
-    let packet = unsafe { packet.read_unaligned() };
-    let mut state = lock();
-    if state.closed || !ACTIVE.load(Ordering::SeqCst) {
-        return ptr::null_mut();
-    }
-    let Some(index) = state.admit_packet(&packet, session_id) else {
+    let Some((index, address)) = (unsafe { admit(packet, session_id, None) }) else {
         return ptr::null_mut();
     };
     unsafe { slot.write(index as u32) };
-    state.packet_address(index)
+    address
+}
+
+/// The package D3D11 route's admission (`rsf_unity_d3d11_admit_packet`). The returned address
+/// already holds the packet's lease.
+///
+/// # Safety
+/// `packet` is null or readable for its leading size field, and for a whole packet when that
+/// field matches. `ops` must accept every non-null resource the packet names.
+pub(crate) unsafe fn admit_leased_packet(
+    packet: *const rsf_unity_packet,
+    session_id: u64,
+    ops: LeaseOps,
+) -> *mut c_void {
+    unsafe { admit(packet, session_id, Some(ops)) }.map_or(ptr::null_mut(), |(_, address)| address)
 }
 
 #[unsafe(no_mangle)]
@@ -437,6 +563,16 @@ unsafe extern "C" fn rsf_unity_frames_take_packet(
         slot.write(index as u32);
     }
     1
+}
+
+/// The render event that took a leased packet from `slot` has ended: free the slot, then release
+/// the lease outside the state mutex.
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_frames_end_packet(slot: u32) {
+    let lease = lock().end_packet(slot as usize);
+    if let Some(lease) = lease {
+        lease.end();
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -585,7 +721,8 @@ pub(crate) extern "C" fn rsf_unity_frames_callback_leave() {
     lock().callbacks -= 1;
 }
 
-/// Package retirement only. Keep queued packet delivery open until all packets have been taken.
+/// Package retirement only. Keep queued packet delivery open until all packets have been taken
+/// and every leased packet's render event has ended.
 #[unsafe(no_mangle)]
 extern "C" fn rsf_unity_frames_try_close() -> u32 {
     let mut state = lock();
@@ -607,8 +744,11 @@ extern "C" fn rsf_unity_frames_drained(completed: u64) -> u32 {
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_unity_frames_release() {
-    lock().release();
+    let leases = lock().release();
     MANAGED_STAGE.store(0, Ordering::SeqCst);
+    for lease in leases.into_iter().flatten() {
+        lease.end();
+    }
 }
 
 #[cfg(test)]
@@ -721,6 +861,102 @@ mod tests {
         assert!(state.take_packet(addresses[4]).is_none());
         assert!(state.take_packet(ptr::null()).is_none());
         assert_eq!(state.admit_packet(&packet(100), SESSION), Some(4));
+    }
+
+    thread_local! {
+        /// Lease leaf calls of the current test, in order. Tests run on their own threads.
+        static LEASE_CALLS: std::cell::RefCell<Vec<(&'static str, usize)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    unsafe extern "C" fn retain(resource: *mut c_void) {
+        LEASE_CALLS.with(|calls| calls.borrow_mut().push(("retain", resource.addr())));
+    }
+
+    unsafe extern "C" fn release(resource: *mut c_void) {
+        LEASE_CALLS.with(|calls| calls.borrow_mut().push(("release", resource.addr())));
+    }
+
+    const LEASE: LeaseOps = LeaseOps { retain, release };
+
+    fn lease_calls() -> Vec<(&'static str, usize)> {
+        LEASE_CALLS.with(|calls| std::mem::take(&mut *calls.borrow_mut()))
+    }
+
+    #[test]
+    fn a_leased_packet_holds_its_textures_until_its_event_ends() {
+        let mut state = State::new();
+        let mut first = packet(1);
+        first.motion = ptr::null_mut();
+        first.flags = RSF_UNITY_PACKET_PROBE;
+        let slot = state.admit_leased(&first, SESSION, LEASE).unwrap();
+        // Retained before the address exists; a null resource holds nothing.
+        assert_eq!(
+            lease_calls(),
+            [("retain", 0x10), ("retain", 0x20), ("retain", 0x40)]
+        );
+        let address = state.packet_address(slot).cast_const();
+
+        // The render event takes it; the slot stays with its lease and cannot be taken again.
+        let (taken, copy) = state.take_packet(address).unwrap();
+        assert_eq!((taken, copy.frame_id), (slot, 1));
+        assert!(state.take_packet(address).is_none());
+        assert!(!state.drained(0));
+        assert_eq!(state.admit_packet(&packet(2), SESSION), Some(slot + 1));
+        assert!(lease_calls().is_empty());
+
+        // The event ends: the slot is free and the lease is handed out for release.
+        state.end_packet(slot).unwrap().end();
+        assert_eq!(
+            lease_calls(),
+            [("release", 0x10), ("release", 0x20), ("release", 0x40)]
+        );
+        assert!(state.end_packet(slot).is_none());
+        assert_eq!(state.admit_packet(&packet(3), SESSION), Some(slot));
+    }
+
+    #[test]
+    fn unleased_packets_are_freed_when_taken_and_never_ended() {
+        let mut state = State::new();
+        let slot = state.admit_packet(&packet(1), SESSION).unwrap();
+        let address = state.packet_address(slot).cast_const();
+        assert!(state.take_packet(address).is_some());
+        // A queued packet that reused the freed slot is not ended by the earlier event.
+        assert_eq!(state.admit_packet(&packet(2), SESSION), Some(slot));
+        assert!(state.end_packet(slot).is_none());
+        assert!(state.end_packet(PACKETS).is_none());
+        assert!(state.take_packet(address).is_some());
+        assert!(lease_calls().is_empty());
+    }
+
+    #[test]
+    fn a_refused_leased_admission_retains_nothing() {
+        let mut state = State::new();
+        assert!(state.admit_leased(&packet(1), SESSION + 1, LEASE).is_none());
+        for frame in 1..=PACKETS as u64 {
+            assert!(state.admit_packet(&packet(frame), SESSION).is_some());
+        }
+        assert!(state.admit_leased(&packet(99), SESSION, LEASE).is_none());
+        assert!(lease_calls().is_empty());
+    }
+
+    #[test]
+    fn release_cancels_queued_and_consuming_leases() {
+        let mut state = State::new();
+        let queued = state.admit_leased(&packet(1), SESSION, LEASE).unwrap();
+        let consuming = state.admit_leased(&packet(2), SESSION, LEASE).unwrap();
+        state.admit_packet(&packet(3), SESSION).unwrap();
+        let address = state.packet_address(consuming).cast_const();
+        assert!(state.take_packet(address).is_some());
+        lease_calls();
+        let leases = state.release();
+        assert_eq!(leases.iter().flatten().count(), 2);
+        assert!(leases[queued].is_some() && leases[consuming].is_some());
+        assert!(lease_calls().is_empty());
+        leases.into_iter().flatten().for_each(Lease::end);
+        assert_eq!(lease_calls().len(), 8);
+        assert!(state.drained(0));
+        assert!(state.end_packet(consuming).is_none());
     }
 
     #[test]

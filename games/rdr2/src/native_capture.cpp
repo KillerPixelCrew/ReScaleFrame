@@ -11,7 +11,6 @@
 #include <MinHook.h>
 #include <intrin.h>
 #include <algorithm>
-#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstdarg>
@@ -91,15 +90,13 @@ struct DrawScope {
 };
 struct State {
     std::mutex mutex;
-    wchar_t directory[MAX_PATH]{}, request[MAX_PATH]{}, log[MAX_PATH]{};
+    rsf_rdr2_capture_paths paths{};
     uintptr_t base{};
     rsf_rdr2_capture_state* capture{};
     std::vector<std::shared_ptr<Shot>> shots;
     std::shared_ptr<Shot> tail;
 #ifdef RSF_RDR2_CAPTURE_TEST
     void* fixture_swapchain{};
-    std::atomic<bool> fixture_stop{};
-    HANDLE fixture_thread{};
 #endif
 };
 State* g{}; // Pinned with the diagnostic ASI until process exit.
@@ -112,7 +109,7 @@ rsf_rdr2_capture_progress capture_progress() noexcept
 bool read_local(uint64_t address, void* out, size_t bytes);
 void log(const char* format, ...) noexcept
 {
-    FILE* f = _wfopen(g->log, L"ab");
+    FILE* f = _wfopen(g->paths.log, L"ab");
     if (!f) return;
     fprintf(f, "[%llu] ", static_cast<unsigned long long>(GetTickCount64()));
     va_list args; va_start(args, format); vfprintf(f, format, args); va_end(args);
@@ -727,7 +724,7 @@ bool write_shot(const Shot& s) noexcept
         return false;
     }
     const bool ok = rsf_rdr2_capture_write_image(&image,
-        reinterpret_cast<const uint16_t*>(g->directory), wcslen(g->directory), GetCurrentProcessId(),
+        reinterpret_cast<const uint16_t*>(g->paths.directory), wcslen(g->paths.directory), GetCurrentProcessId(),
         s.role.c_str(), static_cast<const uint8_t*>(data), bytes);
     const D3D12_RANGE empty{0, 0};
     s.buffer()->Unmap(0, &empty);
@@ -738,9 +735,9 @@ DWORD WINAPI poll(void*) noexcept
     for (;;) {
         Sleep(100);
 #ifdef RSF_RDR2_CAPTURE_TEST
-        if (g->fixture_stop) return 0;
+        if (rsf_rdr2_capture_fixture_stopping()) return 0;
 #endif
-        rsf_rdr2_capture_poll_request(g->capture, reinterpret_cast<const uint16_t*>(g->request));
+        rsf_rdr2_capture_poll_request(g->capture, reinterpret_cast<const uint16_t*>(g->paths.request));
         std::vector<std::shared_ptr<Shot>> ready;
         rsf_rdr2_capture_gpu_retired* retired{};
         {
@@ -770,7 +767,7 @@ DWORD WINAPI poll(void*) noexcept
             std::lock_guard<std::mutex> lock(g->mutex);
             if (rsf_rdr2_capture_can_publish(g->capture, g->shots.empty())) {
                 const rsf_rdr2_capture_bundle bundle{
-                    reinterpret_cast<const uint16_t*>(g->directory), wcslen(g->directory), g->base, GetCurrentProcessId(),
+                    reinterpret_cast<const uint16_t*>(g->paths.directory), wcslen(g->paths.directory), g->base, GetCurrentProcessId(),
                 };
                 size_t draw_count{}, temporal_count{};
                 const bool ok = rsf_rdr2_capture_write_bundle(g->capture, &bundle,
@@ -785,31 +782,43 @@ DWORD WINAPI poll(void*) noexcept
         }
     }
 }
-}
-bool rsf_rdr2_install_native_capture(const wchar_t* directory) noexcept try
+bool create_state(rsf_rdr2_capture_state* capture, const rsf_rdr2_capture_paths* paths) noexcept try
 {
-    if (g || !directory || wcslen(directory) > MAX_PATH - 64) return false;
     auto state = std::make_unique<State>();
-    state->capture = rsf_rdr2_capture_create();
-    if (!state->capture) return false;
+    state->capture = capture;
+    state->base = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+    state->paths = *paths;
+    // The worker can run as soon as CreateThread succeeds.
     g = state.release();
-    g->base = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
-    wcscpy_s(g->directory, directory);
-    swprintf_s(g->request, L"%s\\native.request", directory);
-    swprintf_s(g->log, L"%s\\native-probe.log", directory);
-    // The census owns MinHook initialization. Its device callback runs only after installation.
-    rsf_census_observe_d3d12(device_created, before_submit, after_submit, before_present, swapchain_created, color_space_set);
-    rsf_census_observe_ngx_d3d12(ngx_created, ngx_evaluate, ngx_released);
-    HANDLE thread = CreateThread(nullptr, 0, poll, nullptr, 0, nullptr);
-    if (!thread) return false;
-#ifdef RSF_RDR2_CAPTURE_TEST
-    g->fixture_thread = thread;
-#else
-    CloseHandle(thread);
-#endif
-    log("native capture installed"); return true;
+    return true;
 }
 catch (...) { return false; }
+
+constexpr rsf_rdr2_capture_install_ops install_ops{
+    sizeof(rsf_rdr2_capture_install_ops), 1,
+    create_state,
+    []() noexcept { delete g; g = nullptr; },
+    []() noexcept { return CreateThread(nullptr, 0, poll, nullptr, 0, nullptr); },
+    []() noexcept {
+        // The census initializes MinHook before its device callback can run.
+        rsf_census_observe_d3d12(device_created, before_submit, after_submit, before_present, swapchain_created, color_space_set);
+    },
+    []() noexcept { rsf_census_observe_ngx_d3d12(ngx_created, ngx_evaluate, ngx_released); },
+    [](void* thread, uint32_t timeout_ms) noexcept { WaitForSingleObject(thread, timeout_ms); },
+    [](void* thread) noexcept { CloseHandle(thread); },
+    [](const char* message) noexcept { log("%s", message); },
+};
+}
+
+bool rsf_rdr2_install_native_capture(const wchar_t* directory) noexcept
+{
+#ifdef RSF_RDR2_CAPTURE_TEST
+    constexpr bool fixture = true;
+#else
+    constexpr bool fixture = false;
+#endif
+    return rsf_rdr2_capture_install(directory, &install_ops, fixture);
+}
 
 #ifdef RSF_RDR2_CAPTURE_TEST
 // The standalone GPU fixture owns its swapchain; production only accepts the guarded game owner.
@@ -820,7 +829,6 @@ void rsf_rdr2_capture_test_arm(void* swapchain) noexcept
 }
 void rsf_rdr2_capture_test_stop() noexcept
 {
-    g->fixture_stop = true;
-    WaitForSingleObject(g->fixture_thread,5000); CloseHandle(g->fixture_thread);
+    rsf_rdr2_capture_stop_fixture();
 }
 #endif

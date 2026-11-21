@@ -7,7 +7,7 @@
 //! exports and lends the typed Runtime calls through rsf_unity_runtime_platform. The Unity package
 //! links this archive for the bridge state (shared by its D3D11 and Vulkan bridge, whose D3D12
 //! submission sequencing is bridge_interop.rs, with the D3D11 bridge's graphics record, command
-//! slots and shared surfaces in d3d11_state.rs and the Vulkan bridge's admission, lifecycle and presentation in
+//! slots, shared surfaces and leased packet admission in d3d11_state.rs and the Vulkan bridge's admission, lifecycle and presentation in
 //! vulkan_state.rs), the [UnitySR] path settings and its own settings,
 //! status, session state, D3D12 SR views, presentation and session services (package_state.rs,
 //! package_views.rs, package_state/presentation.rs, package_state/services.rs), whose leaves stay in
