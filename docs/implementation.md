@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now owns D3D11 frame-tap hook state, substitutions, draw
+classification and retained references. Plan replacement and uninstall
+drain admitted hooks before releasing their state. Control requests
+from a callback refuse if they would wait for another thread, leaving
+the active plan and installation intact. The tap uses the shared Rust
+texture-role classifier. Native detours keep the published C signatures.
+[Frame-tap source review and open validation](research/rust-frame-tap-cutover.md)
+
 D3D12 and Vulkan readbacks now use one Rust implementation for capture
 names, aliases, preview views and scale. The existing names, description
 labels and motion units are preserved. Vulkan rejects overflowing

@@ -186,6 +186,10 @@ generate("runtime/orchestrator/src/d3d11_observer_abi.rs", "runtime/graphics/inc
          "rsf_(observer_(options|status|layout_element|(layout|shader|texture|buffer|present|present_event)_fn)|dump_log_fn)",
          "RSF_OBSERVER_ABI_VERSION", ["-Iruntime/graphics/include"],
          ["--no-recursive-allowlist", "--raw-line", "use crate::scene_abi::rsf_observer_present_event;"])
+generate("runtime/orchestrator/src/frame_tap_abi.rs", "runtime/graphics/src/frame_tap_platform.h",
+         "rsf_frame_tap_.*", "RSF_FRAME_TAP_.*", ["-Iruntime/graphics/include"],
+         ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]",
+          "--raw-line", "use crate::resource_roles_abi::{rsf_role_table, rsf_texture_facts};"])
 generate("runtime/orchestrator/src/d3d11_output_abi.rs", "runtime/orchestrator/src/d3d11_output_platform.h",
          "rsf_(native_composition_frame|d3d11_reinsert_kernels)", "RSF_D3D11_(FORMAT_.*|USAGE_.*|BIND_.*)",
          ["-include", "rescaleframe/native_composition.h", "-Iruntime/orchestrator/include",

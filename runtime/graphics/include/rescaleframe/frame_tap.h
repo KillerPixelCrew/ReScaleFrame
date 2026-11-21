@@ -644,11 +644,12 @@ rsf_frame_tap_result rsf_frame_tap_install(void* device_context,
 
 /* Restore the original vtable entries and release what is retained.
 
-   This cannot make a call already inside the hook finish first, so `on_pass` can still run once
-   after this returns, and the callback and its user pointer have to stay valid until the caller
-   knows the render thread has left. Uninstalling while the game is rendering is the same race the
-   observer has, and the same mitigation applies: do it from a point where the render thread is
-   known to be elsewhere, or leave it installed for the process's life. */
+   Calls already inside the hooks on other threads finish before anything is released, and new ones
+   wait until this returns. Called from inside one of this module's callbacks, it never waits: it is
+   refused with `RSF_FRAME_TAP_ERROR_INVALID_ARGUMENT`, and nothing changes, when another thread is
+   inside the hooks or in another install, uninstall or set_plan. When it succeeds there, the hook
+   that made the callback still finishes on that thread, so callbacks and their user pointers have
+   to stay valid until it returns. */
 rsf_frame_tap_result rsf_frame_tap_uninstall(void);
 
 /* Report the next `limit` draws into `texture`, an `ID3D11Texture2D*`, through `on_target_draw`.
@@ -682,7 +683,10 @@ rsf_frame_tap_result rsf_frame_tap_watch_input(void* texture);
    Setting a plan changes what the game draws, which nothing else in this module does. It is refused
    unless the plan is complete enough to be coherent: a substitution with a texture and no
    replacement, or a viewport scale of zero, is `RSF_FRAME_TAP_ERROR_INVALID_ARGUMENT` rather than a
-   frame that half works. Safe to call from any thread; it takes effect on the next binding. */
+   frame that half works. Safe to call from any thread; it takes effect on the next binding. It
+   waits for calls inside the hooks on other threads to finish. From inside one of this module's
+   callbacks it never waits, and is refused with `RSF_FRAME_TAP_ERROR_INVALID_ARGUMENT`, leaving
+   the old plan, where it would have to. */
 rsf_frame_tap_result rsf_frame_tap_set_plan(const rsf_frame_tap_plan* plan);
 
 /* Put the hooks back if the runtime has rewritten its vtable underneath them.

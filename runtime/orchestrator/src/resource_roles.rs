@@ -85,14 +85,26 @@ unsafe extern "C" fn rsf_classify_texture(
         role: UNKNOWN,
         confidence: CONFIDENT,
     };
-    // Zero samples or slices denote the default. Zero mips requests a full chain.
-    if facts.sample_count <= 1 && facts.mip_levels == 1 && facts.array_size <= 1 && count != 0 {
+    if count != 0 {
         let rules = unsafe { std::slice::from_raw_parts(table.rules, count) };
-        if let Some(rule) = rules.iter().find(|rule| matches_rule(rule, &facts, &shape)) {
+        if let Some(rule) = matching_rule(rules, &facts, &shape) {
             result.role = rule.role;
             result.confidence = rule.confidence;
         }
     }
     unsafe { verdict.write(result) };
     1
+}
+
+// The first rule a texture matches, for owners that hold a copied rule table.
+pub(crate) fn matching_rule<'a>(
+    rules: &'a [Rule],
+    facts: &Facts,
+    shape: &Shape,
+) -> Option<&'a Rule> {
+    // Zero samples or slices denote the default. Zero mips requests a full chain.
+    if facts.sample_count > 1 || facts.mip_levels != 1 || facts.array_size > 1 {
+        return None;
+    }
+    rules.iter().find(|rule| matches_rule(rule, facts, shape))
 }
