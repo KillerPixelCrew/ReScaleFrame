@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: MIT
 //! Private layouts mirrored in native_geometry_platform.h.
 
+use crate::engine_guards::{NativeSite, Read, UniqueGuard};
 use crate::geometry_registry::IdentityRegistry;
 use crate::geometry_registry_abi::{
     RSF_ANOMALY_DRAW_COUNT, RSF_ANOMALY_PASS_COUNT, RSF_ANOMALY_TYPE_COUNT,
     rsf_anomaly_geometry_key as Key,
 };
 use std::ffi::c_void;
+use std::slice;
 
 pub(crate) const UNSET: u8 = 255;
 pub(crate) const RIGID: u8 = 0;
@@ -120,9 +122,47 @@ pub(crate) struct Writer {
     pub finish: unsafe extern "C" fn(*mut c_void, u64) -> *const c_void,
 }
 
+/// The selected build's immutable guard facts. Each pointer borrows a static
+/// profile table, and `read` is the guarded engine-memory leaf.
+#[repr(C)]
+pub(crate) struct GuardProfile {
+    pub read: Read,
+    pub layout_sites: *const NativeSite,
+    pub layout_count: usize,
+    pub sites: *const NativeSite,
+    pub site_count: usize,
+    pub unique: *const UniqueGuard,
+    pub unique_count: usize,
+    pub image_size: u32,
+}
+
+// SAFETY for each accessor: the native lender returns pointers and counts of
+// static profile tables, so every borrowed slice lives for the process.
+impl GuardProfile {
+    pub fn layout_sites(&self) -> &[NativeSite] {
+        unsafe { borrowed(self.layout_sites, self.layout_count) }
+    }
+
+    pub fn sites(&self) -> &[NativeSite] {
+        unsafe { borrowed(self.sites, self.site_count) }
+    }
+
+    pub fn unique(&self) -> &[UniqueGuard] {
+        unsafe { borrowed(self.unique, self.unique_count) }
+    }
+}
+
+unsafe fn borrowed<'a, T>(data: *const T, count: usize) -> &'a [T] {
+    if count == 0 {
+        &[]
+    } else {
+        unsafe { slice::from_raw_parts(data, count) }
+    }
+}
+
 #[repr(C)]
 pub(crate) struct Platform {
-    pub guard: unsafe extern "C" fn(Engine, u32) -> bool,
+    pub guard_profile: unsafe extern "C" fn(Engine) -> GuardProfile,
     pub created: unsafe extern "C" fn() -> bool,
     pub install: unsafe extern "C" fn(Engine, u32) -> bool,
     pub enable: unsafe extern "C" fn() -> bool,
@@ -182,6 +222,10 @@ const _: () = {
     assert!(size_of::<Facts>() == 32);
     assert!(size_of::<Callback>() == 24);
     assert!(size_of::<Writer>() == 24);
+    assert!(size_of::<GuardProfile>() == 64);
+    assert!(std::mem::offset_of!(GuardProfile, sites) == 24);
+    assert!(std::mem::offset_of!(GuardProfile, unique) == 40);
+    assert!(std::mem::offset_of!(GuardProfile, image_size) == 56);
     assert!(size_of::<Platform>() == 128);
     assert!(size_of::<Stats>() == 40);
     assert!(size_of::<Coverage>() == 1472);

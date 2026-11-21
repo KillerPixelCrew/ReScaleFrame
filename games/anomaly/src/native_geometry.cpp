@@ -9,7 +9,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
-#include "engine_guards.h"
+#include "native_memory.h"
 namespace rsf::anomaly::geometry {
 namespace {
 std::optional<InstanceKey> identity(std::uint64_t owner, std::uint64_t visual, std::uint64_t generation) noexcept
@@ -66,6 +66,12 @@ static_assert(sizeof(GeometryStats) == 40 && sizeof(GeometryCoverage) == 1472);
 static_assert(sizeof(rsf_anomaly_geometry_palette) == 24 && sizeof(rsf_anomaly_geometry_view_sample) == 8);
 static_assert(sizeof(rsf_anomaly_geometry_child_range) == 24 && sizeof(rsf_anomaly_geometry_callback) == 24);
 static_assert(sizeof(rsf_anomaly_geometry_writer) == 24 && sizeof(Matrix) == 128);
+static_assert(sizeof(NativeSite) == 32 && offsetof(NativeSite, rva) == 8 && offsetof(NativeSite, expected) == 12);
+static_assert(sizeof(UniqueGuard) == 24 && offsetof(UniqueGuard, rva) == 8 && offsetof(UniqueGuard, expected_hex) == 16);
+static_assert(sizeof(rsf_anomaly_geometry_guard_profile) == 64 &&
+    offsetof(rsf_anomaly_geometry_guard_profile, sites) == 24 &&
+    offsetof(rsf_anomaly_geometry_guard_profile, unique) == 40 &&
+    offsetof(rsf_anomaly_geometry_guard_profile, image_size) == 56);
 static_assert(static_cast<std::uint8_t>(DrawKind::Rigid) == RSF_ANOMALY_GEOMETRY_RIGID);
 static_assert(static_cast<std::uint8_t>(DrawKind::HardwareSkinned) == RSF_ANOMALY_GEOMETRY_HARDWARE_SKINNED);
 static_assert(static_cast<std::uint8_t>(DrawKind::SingleBone) == RSF_ANOMALY_GEOMETRY_SINGLE_BONE);
@@ -115,17 +121,14 @@ using Unary = void(__fastcall*)(void*);
 std::array<void*, geometry_site_count> originals{};
 HookSet native_hooks;
 
-bool guard(Engine engine, std::uint32_t image_size) noexcept
+// Rust checks the image size, then every layout guard, then every detour entry, each with its unique prefix.
+rsf_anomaly_geometry_guard_profile guard_profile(Engine engine) noexcept
 {
-    if (!engine.module || image_size != build_of(engine).image_size()) return false;
-    const auto checked = guard_image(reinterpret_cast<const std::byte*>(engine.module), image_size);
-    const auto& profile = *build_of(engine).geometry;
-    const auto guarded = [&](const NativeSite& site) {
-        return matches(checked, site) && unique_guards_match(checked, profile.geometry_unique_guards, site.rva);
-    };
-    for (const auto& site : profile.geometry_layout_sites) if (!guarded(site)) return false;
-    for (const auto& site : profile.geometry_sites) if (!guarded(site)) return false;
-    return true;
+    const auto& build = build_of(engine);
+    const auto& profile = *build.geometry;
+    return {guarded_copy, profile.geometry_layout_sites.data(), profile.geometry_layout_sites.size(),
+        profile.geometry_sites.data(), profile.geometry_sites.size(), profile.geometry_unique_guards.data(),
+        profile.geometry_unique_guards.size(), build.image_size()};
 }
 
 bool hook_install(Engine engine, std::uint32_t size) noexcept
@@ -203,7 +206,7 @@ std::int64_t tree_lod(std::uintptr_t visual) noexcept
 }
 
 constexpr rsf_anomaly_geometry_platform platform{
-    guard,
+    guard_profile,
     []() noexcept { return native_hooks.created(); },
     hook_install,
     []() noexcept { return native_hooks.enable(); },
