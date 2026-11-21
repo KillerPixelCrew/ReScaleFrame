@@ -114,9 +114,10 @@ Still C++ in `rsf_game_skyrim_se`, in suggested order:
 3. `cpu_events.cpp` with `input_ownership.h` and `screen_classification.h`: CPU frame, input
    ownership, prospective source and screen classification (one hook, about forty RVAs). Its
    fixture `tests/skyrim_input.cpp` compiles the source directly.
-4. `presentation_inputs.cpp` and `render_inputs.cpp` still supply pre-HDR textures
-   and deliver native SR. Rust owns the sampler hook at `+1010de0`, interface hook
-   at `+116ac80`, resolution planning and auxiliary reconstruction and diagnostics.
+4. Rust owns pre-HDR texture discovery and admission, SR and FG delivery, the
+   sampler hook at `+1010de0`, interface hook at `+116ac80`, resolution planning
+   and auxiliary reconstruction and diagnostics. The native files lend typed
+   engine, COM, and Runtime calls.
 5. `camera.rs` owns the native camera conversion for both SR and presentation. It
    uses the shared GameSDK inverse with the old float output and double accumulation
    rules. The adapter still supplies the same copied row-vector cache. Refusals clear
@@ -130,8 +131,7 @@ The old stores were separate, so Rust keeps a receipt per producer with the
 same first-sample refusal, QPC interval bound and reset rule. The copied history
 holds scalar identities and the prior view-projection, origin bits and jitter.
 The guards now refuse overflowing cache addresses and timing differences.
-The native consumers still lease their textures and submit their original
-passes. Source comparison matched both baseline blocks, including the cache
+Source comparison matched both baseline blocks, including the cache
 offsets and bitwise origin check. No build or live test was run.
 
 ## Interface and window handoff
@@ -144,8 +144,8 @@ Final-scene begin and end precede window begin. The retained window owns
 references until renderer-end and keeps retirement busy while a callback is
 opening or closing it. A reentrant end waits for the begin attempt to return.
 An exception in final-scene delivery skips window publication, and capture
-uses the identity matched at entry. The pre-HDR texture producer still
-checks its descriptors and hands off through the same GameSDK calls.
+uses the identity matched at entry. The pre-HDR texture producer checks
+its descriptors and hands off through the same GameSDK calls.
 Source review matched the hook bytes, copied fields, pre-HDR producer
 block and capture names. Builds and live callback ordering are unverified.
 
@@ -177,6 +177,18 @@ pointer. If the renderer cannot restore producer ratios immediately, the
 matching auxiliary receipt records whether Runtime restoration already
 completed, so a retry only performs the remaining output restore. Source
 and layout checks passed. Builds and live quality switches remain open.
+
+## Pre-HDR texture producers
+
+`render_inputs.rs` leases the context, shared textures, optional SR mask
+and swapchain while the native leaves query D3D11 descriptors and deliver
+the pass. The same device, full allocation and single-subresource checks
+apply to both paths. SR accepts its original two colour formats and
+twelve mask formats. FG keeps its narrower colour check, exact native
+frame and source/submission/scope recheck, before the engine mutates
+the inputs. Null devices now refuse, and guarded reads cover the
+viewport diagnostic. Source comparison matched the existing pass fields,
+mask formats and native addresses. Build and live replay remain open.
 
 ## Sampler hook
 

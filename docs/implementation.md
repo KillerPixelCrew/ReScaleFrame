@@ -268,6 +268,13 @@ owner retains its receipt and skips the Runtime restore it already
 completed. Source checks matched the engine fields and call sites.
 Build and in-game resize and fallback verification remain open.
 
+Skyrim SE's pre-HDR SR and FG producers now share one Rust reader for
+texture discovery, leases, D3D11 admission and pass construction. SR
+keeps its optional rejection mask and both colour formats. FG checks
+its source, submission and scope again before the synchronous handoff.
+Native leaves retain the exact typed D3D11 and Runtime calls. Source
+comparison passed. Build and live producer verification remain open.
+
 Unity package D3D12 SR contexts and their recording slots are Rust-owned.
 The existing Unity bridge still provides recording and completion facts.
 The view owner preserves reconfiguration, spatial fallback and retirement

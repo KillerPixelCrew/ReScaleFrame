@@ -2,7 +2,7 @@
 //! One native camera-cache reader for Skyrim's pre-HDR SR and FG producers.
 
 use super::{Matrix, NativeCamera, decode};
-use crate::platform::{self, Platform};
+use crate::platform::Platform;
 use rsf_game_sys::{RSF_GAME_RENDER_RESET, rsf_game_render_pass};
 use std::sync::{Mutex, PoisonError};
 
@@ -12,28 +12,22 @@ const NATIVE_FRAME: usize = 0x333_63f4;
 const ACTIVE_WINDOW: usize = 0x333_0198;
 const CACHE_STRIDE: usize = 0x290;
 
-#[repr(C)]
-struct RenderCamera {
-    camera: usize,
-    window: usize,
-    frame: u32,
-    output: [u32; 2],
-    render: [u32; 2],
-    ratios: [f32; 2],
+pub(crate) struct RenderCamera {
+    pub(crate) camera: usize,
+    pub(crate) window: usize,
+    pub(crate) frame: u32,
+    pub(crate) output: [u32; 2],
+    pub(crate) render: [u32; 2],
+    pub(crate) ratios: [f32; 2],
 }
 
 #[repr(C)]
-struct Leaves {
+pub(crate) struct Leaves {
     extent: unsafe extern "C" fn(u32, u32, *mut u32, *mut u32) -> bool,
     clock: unsafe extern "C" fn(*mut i64, *mut i64) -> bool,
 }
 
-const _: () = {
-    assert!(size_of::<RenderCamera>() == 48);
-    assert!(std::mem::offset_of!(RenderCamera, frame) == 16);
-    assert!(std::mem::offset_of!(RenderCamera, ratios) == 36);
-    assert!(size_of::<Leaves>() == 16);
-};
+const _: () = assert!(size_of::<Leaves>() == 16);
 
 struct History {
     camera: usize,
@@ -138,7 +132,7 @@ fn same_matrix(a: Matrix, b: Matrix) -> bool {
         .all(|(a, b)| a.is_finite() && b.is_finite() && (a - b).abs() <= 0.001)
 }
 
-fn read_frame(
+pub(crate) fn read_frame(
     platform: &Platform,
     leaves: &Leaves,
     manager: usize,
@@ -201,24 +195,4 @@ fn read_frame(
     pass.camera = camera;
     pass.previous_clip_to_clip = history.unwrap_or(super::IDENTITY);
     Some(facts)
-}
-
-/// The two native producers supply the same static platform and distinct history indices.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_read_render_camera(
-    platform: *const Platform,
-    leaves: &Leaves,
-    manager: usize,
-    fg: bool,
-    pass: &mut rsf_game_render_pass,
-    facts: *mut RenderCamera,
-) -> bool {
-    let Some(platform) = (unsafe { platform::inspect(platform) }) else {
-        return false;
-    };
-    let Some(camera) = read_frame(platform, leaves, manager, fg, pass) else {
-        return false;
-    };
-    unsafe { facts.write(camera) };
-    true
 }

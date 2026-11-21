@@ -176,12 +176,12 @@ fn binding() -> Option<Binding> {
     *BINDING.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-fn empty_pass() -> rsf_game_render_pass {
+pub(crate) fn empty_pass() -> rsf_game_render_pass {
     // The GameSDK record contains scalars, arrays and raw resource pointers.
     unsafe { std::mem::zeroed() }
 }
 
-fn same_source(a: &rsf_game_render_pass, b: &rsf_game_render_pass) -> bool {
+pub(crate) fn same_source(a: &rsf_game_render_pass, b: &rsf_game_render_pass) -> bool {
     a.source_frame_id == b.source_frame_id
         && a.submission_id == b.submission_id
         && a.scope_id == b.scope_id
@@ -239,8 +239,7 @@ fn scalar_scene(pass: &rsf_game_render_pass) -> Scene {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_presentation_begin_inputs(services: &rsf_game_host_services) -> bool {
+pub(crate) fn begin_inputs(services: &rsf_game_host_services) -> bool {
     if !FRAME.with_borrow_mut(|frame| {
         if !matches!(frame.window_state, WindowState::Idle) {
             return false;
@@ -257,8 +256,7 @@ extern "C" fn rsf_skyrim_presentation_begin_inputs(services: &rsf_game_host_serv
         })
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_presentation_identify(pass: &rsf_game_render_pass) {
+pub(crate) fn identify(pass: &rsf_game_render_pass) {
     let Some(binding) = binding() else { return };
     if binding.host.session_id != pass.session_id
         || binding.native_frame() != Some(pass.native_frame)

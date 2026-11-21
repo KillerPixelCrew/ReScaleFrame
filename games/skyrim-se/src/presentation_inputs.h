@@ -9,7 +9,5 @@ bool presentation_inputs_stop();
 bool presentation_inputs_busy();
 // Report native pre-HDR inputs before SR or post-processing modifies them.
 bool prepare_presentation_inputs(void* manager, const rsf_game_host_services&);
-// Copy identity only. Textures and contexts remain borrowed by the native callbacks.
-void identify_presentation_inputs(const rsf_game_render_pass&);
 void finish_presentation_inputs();
 }
