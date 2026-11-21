@@ -77,6 +77,13 @@ selection, `ffx_version.rs`, is included by path rather than copied. The FSR4
 block now names the archive directly because `bridge.cpp` calls into it. With
 the block disabled, nothing references the owner's symbols.
 
+The effective provider name keeps the previous rule. The private provider leaf
+reports the shared parse and, separately, whether the name has the `%u.%u.%u`
+shape. A parsed name, including family 0 such as `0.1.2 FSR4`, is FSR4 only for
+family 4. Other labels pass only when they contain `FSR4` or `FSR 4`. The ID
+must still equal the selected 4.x provider. The owner's source fixture covers
+the family-0 case and a header whose caller allocated only `struct_size`.
+
 Rust owns the public and legacy create validation, the absolute-directory rule,
 provider-path construction, the candidate-vendor policy, the NVIDIA and Intel
 lease decision and its refusal, the newest family-4 selection, and the check
@@ -98,9 +105,8 @@ Deliberate differences from the previous C++ owner:
   has no device. Planning returns -1 without the SDK query export. A local
   signal without a completion fence returns `E_POINTER`. Each of these
   previously dereferenced null.
-- The effective provider name uses the shared `major.minor.patch` parse. A name
-  that parses as family 0 but contains "FSR4" would now pass the name check.
-  Its ID must still equal the selected 4.x provider.
+- Size-checked structures read `abi_version` only after `struct_size` admits
+  the full structure. The previous inline check read both fields first.
 - Exceptions from the INT8 lease are caught at the native leaf and refuse the
   lease.
 

@@ -206,7 +206,7 @@ struct Platform {
     release_compatibility: unsafe extern "C" fn(Native),
     versions: unsafe extern "C" fn(Native, *mut Version, *mut u64) -> i32,
     create_context: unsafe extern "C" fn(Native, *const Context) -> i32,
-    provider: unsafe extern "C" fn(Native, *mut Version) -> i32,
+    provider: unsafe extern "C" fn(Native, *mut Version, *mut u32) -> i32,
     create_commands: Step,
     plan: unsafe extern "C" fn(Native, u32, u32, u32, *mut u32, *mut u32) -> i32,
     create_image: unsafe extern "C" fn(Native, u32, u32, u32, u32, *mut Handle, *mut Handle) -> i32,
@@ -245,13 +245,14 @@ fn candidate(vendor: u32) -> bool {
 
 /// Whether the effective provider's display name identifies FSR 4.
 ///
-/// The shared parse reports a family for "major.minor.patch" names. Labels
-/// without that shape are accepted only when they say "FSR4" or "FSR 4".
-fn is_fsr4(version: &Version) -> bool {
-    if version.major == FSR4_MAJOR {
-        return true;
+/// `parsed` is the native leaf's `%u.%u.%u` result for the name. A parsed
+/// name, including family 0, is FSR 4 only for family 4. Labels without that
+/// shape are accepted only when they say "FSR4" or "FSR 4".
+fn is_fsr4(version: &Version, parsed: bool) -> bool {
+    if parsed {
+        return version.major == FSR4_MAJOR;
     }
-    if version.major != 0 || version.name.is_null() {
+    if version.name.is_null() {
         return false;
     }
     let name = unsafe { CStr::from_ptr(version.name) }.to_bytes();
@@ -312,13 +313,19 @@ fn provider_path(ops: &Platform, directory: *const u16) -> Option<Vec<u16>> {
     Some(path)
 }
 
+/// Checks a size-checked call structure. `abi_version` is read only after
+/// `struct_size` proves the caller allocated at least `required` bytes.
+///
 /// # Safety
-/// `header` must point to a readable call structure header.
+/// `header` must point to a readable `struct_size`, and the structure must be
+/// readable for the size it states.
 unsafe fn check_header(header: *const u32, required: usize) -> i32 {
-    let [size, version] = unsafe { header.cast::<[u32; 2]>().read() };
+    let size = unsafe { header.read() };
     if (size as usize) < required {
-        INVALID_ARGUMENT
-    } else if version == BRIDGE_ABI_VERSION {
+        return INVALID_ARGUMENT;
+    }
+    let version = unsafe { header.add(1).read() };
+    if version == BRIDGE_ABI_VERSION {
         0
     } else {
         ABI_MISMATCH
@@ -444,13 +451,14 @@ impl Session {
             return code;
         }
         let mut provider = Version::default();
-        let code = unsafe { (ops.provider)(native, &mut provider) };
+        let mut parsed = 0;
+        let code = unsafe { (ops.provider)(native, &mut provider, &mut parsed) };
         if code != 0 {
             return code;
         }
         // The signed loader can select a legacy FSR provider on older GPUs.
         // This option promises the ML upscaler, so reject that substitution.
-        if provider.id != selected || !is_fsr4(&provider) {
+        if provider.id != selected || !is_fsr4(&provider, parsed != 0) {
             return NO_FSR4_PROVIDER;
         }
         self.adapter_luid = request.luid;
@@ -1060,12 +1068,26 @@ mod tests {
 
     #[test]
     fn accepts_only_fsr4_provider_names() {
-        assert!(is_fsr4(&version(1, c"4.0.2", 4)));
-        assert!(is_fsr4(&version(1, c"AMD FSR4 upscaler", 0)));
-        assert!(is_fsr4(&version(1, c"FSR 4", 0)));
-        assert!(!is_fsr4(&version(1, c"3.1.4", 3)));
-        assert!(!is_fsr4(&version(1, c"FSR3", 0)));
-        assert!(!is_fsr4(&Version::default()));
+        assert!(is_fsr4(&version(1, c"4.0.2", 4), true));
+        assert!(is_fsr4(&version(1, c"AMD FSR4 upscaler", 0), false));
+        assert!(is_fsr4(&version(1, c"FSR 4", 0), false));
+        assert!(!is_fsr4(&version(1, c"3.1.4", 3), true));
+        assert!(!is_fsr4(&version(1, c"FSR3", 0), false));
+        assert!(!is_fsr4(&Version::default(), false));
+        // A parsed family-0 name stays family 0 whatever label follows it.
+        assert!(!is_fsr4(&version(1, c"0.1.2 FSR4", 0), true));
+        assert!(!is_fsr4(&version(1, c"0.0.0 FSR 4", 0), true));
+    }
+
+    #[test]
+    fn reads_the_abi_version_only_after_the_size_admits_it() {
+        // Only struct_size is allocated: a short size must not read past it.
+        let short = [7_u32];
+        assert_eq!(unsafe { check_header(short.as_ptr(), 8) }, INVALID_ARGUMENT);
+        let mismatch = [8_u32, 2];
+        assert_eq!(unsafe { check_header(mismatch.as_ptr(), 8) }, ABI_MISMATCH);
+        let current = [8_u32, BRIDGE_ABI_VERSION];
+        assert_eq!(unsafe { check_header(current.as_ptr(), 8) }, 0);
     }
 
     #[test]

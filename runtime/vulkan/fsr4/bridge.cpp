@@ -12,6 +12,7 @@
 #include <vulkan/vulkan.h>
 #include <cstdint>
 #include <cstddef>
+#include <cstdio>
 #include <cstring>
 #include <memory>
 #include <new>
@@ -213,13 +214,18 @@ int32_t CreateContext(rsf_fsr4sr_native* native, const rsf_fsr4sr_context* setup
     return static_cast<int32_t>(native->create(&native->effect, &upscale.header, nullptr));
 }
 
-/// @brief Reports the effective provider ID and its parsed display name.
-int32_t Provider(rsf_fsr4sr_native* native, rsf_ffx_version* out) {
+/// @brief Reports the effective provider ID, its parsed display name and whether the name parsed.
+/// @details The shared parse reports family 0 both for "0.x.y" and for labels without that shape, so
+/// `parsed` carries the previous IsFsr4Name sscanf result separately.
+int32_t Provider(rsf_fsr4sr_native* native, rsf_ffx_version* out, uint32_t* parsed) {
     ffxQueryGetProviderVersion provider{};
     provider.header.type = FFX_API_QUERY_DESC_TYPE_GET_PROVIDER_VERSION;
     const auto result = static_cast<int32_t>(native->query(&native->effect, &provider.header));
     if (result) return result;
     *out = rsf::ffx_version(provider.versionId, provider.versionName);
+    unsigned major = 0, minor = 0, patch = 0;
+    *parsed = (provider.versionName &&
+        std::sscanf(provider.versionName, "%u.%u.%u", &major, &minor, &patch) == 3) ? 1u : 0u;
     return 0;
 }
 

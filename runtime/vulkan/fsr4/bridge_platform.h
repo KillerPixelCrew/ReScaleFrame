@@ -87,7 +87,8 @@ struct rsf_fsr4sr_platform {
     void (*release_compatibility)(rsf_fsr4sr_native*);
     int32_t (*versions)(rsf_fsr4sr_native*, rsf_ffx_version*, uint64_t* count);
     int32_t (*create_context)(rsf_fsr4sr_native*, const rsf_fsr4sr_context*);
-    int32_t (*provider)(rsf_fsr4sr_native*, rsf_ffx_version*);
+    // parsed: 1 when the name has the "%u.%u.%u" shape, including family 0.
+    int32_t (*provider)(rsf_fsr4sr_native*, rsf_ffx_version*, uint32_t* parsed);
     int32_t (*create_commands)(rsf_fsr4sr_native*);
     int32_t (*plan)(rsf_fsr4sr_native*, uint32_t quality, uint32_t width, uint32_t height, uint32_t*, uint32_t*);
     int32_t (*create_image)(rsf_fsr4sr_native*, uint32_t, uint32_t, uint32_t, uint32_t, void**, void**);
