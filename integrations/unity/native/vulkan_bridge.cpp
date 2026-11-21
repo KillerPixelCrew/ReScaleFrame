@@ -1,5 +1,15 @@
 // SPDX-License-Identifier: MIT
+// The Unity package's Vulkan bridge: Unity's Vulkan images are copied into same-adapter D3D12
+// resources for the render pass, and Unity's present is replaced by this bridge's DXGI swap chain.
+// Shared device readiness, the fault, queued render events and their packets, present and surface
+// entries, the window frame identity and the checked release are Rust (vulkan_state.rs). The
+// command slot rotation and shared fence values are the package bridge's submission ring
+// (bridge_interop.rs). This file keeps the Unity interfaces, Vulkan, D3D12 and DXGI objects and
+// calls, images, command buffers, slot fences, waits, copies, barriers, the swapchain interception
+// and the window.
 #include "vulkan_bridge.h"
+#include "vulkan_state.h"
+#include "bridge_interop.h"
 #include "package.h"
 #include <windows.h>
 #include <d3d12.h>
@@ -9,10 +19,8 @@
 #include <IUnityGraphicsVulkan.h>
 #include <rescaleframe/native_fg_d3d12.h>
 #include <array>
-#include <atomic>
 #include <algorithm>
 #include <cstring>
-#include <memory>
 #include <mutex>
 #include <unordered_map>
 #include <vector>
@@ -23,7 +31,6 @@ IUnityGraphicsVulkanV2* unity = nullptr;
 UnityVulkanInstance instance{};
 rsf_game_host_services host{};
 int base_event = 0;
-std::atomic<uint32_t> callbacks{0};
 PFN_vkGetInstanceProcAddr original_gipa = nullptr;
 PFN_vkGetDeviceProcAddr original_gdpa = nullptr;
 PFN_vkCreateDevice original_create_device = nullptr;
@@ -31,7 +38,7 @@ PFN_vkCreateSwapchainKHR original_create_swapchain = nullptr;
 PFN_vkDestroySwapchainKHR original_destroy_swapchain = nullptr;
 PFN_vkQueuePresentKHR original_present = nullptr;
 PFN_vkImportSemaphoreWin32HandleKHR import_semaphore = nullptr;
-bool external_extensions = false, faulted = false, initialized = false;
+bool external_extensions = false;
 HWND window = nullptr;
 ComPtr<ID3D12Device> device;
 ComPtr<ID3D12CommandQueue> queue;
@@ -39,9 +46,6 @@ ComPtr<ID3D12Fence> shared_fence;
 ComPtr<IDXGISwapChain3> chain;
 VkSemaphore semaphore = VK_NULL_HANDLE;
 VkCommandPool command_pool = VK_NULL_HANDLE;
-uint64_t fence_value = 0;
-uint32_t next_slot = 0;
-rsf_unity_packet last_window{};
 struct Image {
     ComPtr<ID3D12Resource> resource;
     VkImage image = VK_NULL_HANDLE;
@@ -57,7 +61,10 @@ struct Slot {
     std::array<VkCommandBuffer, 2> vk{};
     VkFence complete = VK_NULL_HANDLE;
 };
-std::array<Slot, 3> slots;
+// Indexed by the submission ring's slot (bridge_interop.h).
+std::array<Slot, RSF_UNITY_FRAMES_SLOTS> slots;
+// Unity's images for each queued render event, indexed by its event slot (vulkan_state.h).
+std::array<std::array<UnityVulkanImage, 4>, RSF_UNITY_FRAMES_PACKETS> event_images{};
 struct Swapchain {
     VkDevice device = VK_NULL_HANDLE;
     VkExtent2D extent{};
@@ -68,6 +75,22 @@ struct Swapchain {
 std::mutex swapchain_guard;
 std::unordered_map<VkSwapchainKHR, Swapchain> swapchains;
 void log(const char* text) { if (host.log) host.log(host.user, text); else { OutputDebugStringA(text); OutputDebugStringA("\n"); } }
+// Stops the bridge until release. The first fault is reported, so the package status and the
+// managed jitter gate see it instead of a silent stop.
+void fault(int32_t result, const char* message)
+{
+    if (rsf_unity_vulkan_fault()) rsf_unity_package_bridge_error(result, message);
+}
+void stop(const char* message) { fault(RSF_BACKEND_ERROR_FEATURE_FAILED, message); }
+// A present interception or surface update in progress. Keep admission through the forwarded
+// Present so release cannot drain the Vulkan queue during that call.
+struct BridgeEntry {
+    bool admitted = rsf_unity_vulkan_enter() != 0;
+    BridgeEntry() = default;
+    BridgeEntry(const BridgeEntry&) = delete;
+    BridgeEntry& operator=(const BridgeEntry&) = delete;
+    ~BridgeEntry() { if (admitted) rsf_unity_vulkan_leave(); }
+};
 void dx_barrier(ID3D12GraphicsCommandList* list, ID3D12Resource* resource, D3D12_RESOURCE_STATES from, D3D12_RESOURCE_STATES to)
 {
     D3D12_RESOURCE_BARRIER b{}; b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -77,9 +100,9 @@ bool drain()
 {
     if (!instance.device) return true;
     if (vkQueueWaitIdle(instance.graphicsQueue) != VK_SUCCESS) return false;
-    if (shared_fence && shared_fence->GetCompletedValue() < fence_value) {
+    if (shared_fence && !rsf_unity_interop_drained(shared_fence->GetCompletedValue())) {
         HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr); if (!event) return false;
-        const bool done = SUCCEEDED(shared_fence->SetEventOnCompletion(fence_value, event)) && WaitForSingleObject(event, 10000) == WAIT_OBJECT_0;
+        const bool done = SUCCEEDED(shared_fence->SetEventOnCompletion(rsf_unity_interop_submitted(), event)) && WaitForSingleObject(event, 10000) == WAIT_OBJECT_0;
         CloseHandle(event); return done;
     }
     return true;
@@ -89,6 +112,16 @@ void destroy_image(Image& image)
     if (image.image) vkDestroyImage(instance.device, image.image, nullptr);
     if (image.memory) vkFreeMemory(instance.device, image.memory, nullptr);
     image = {};
+}
+// Destroys the shared device's objects. Only their owner calls it: the device's creator before it
+// reports a failure, or release while the bridge is closed.
+void destroy_objects()
+{
+    for (auto& image : images) destroy_image(image);
+    for (auto& slot : slots) { if (slot.complete) vkDestroyFence(instance.device, slot.complete, nullptr); slot = {}; }
+    if (command_pool) vkDestroyCommandPool(instance.device, command_pool, nullptr);
+    if (semaphore) vkDestroySemaphore(instance.device, semaphore, nullptr);
+    command_pool = VK_NULL_HANDLE; semaphore = VK_NULL_HANDLE; chain.Reset(); shared_fence.Reset(); queue.Reset(); device.Reset();
 }
 bool create_image(uint32_t index, uint32_t width, uint32_t height, VkFormat format, DXGI_FORMAT dx_format)
 {
@@ -127,10 +160,10 @@ bool create_image(uint32_t index, uint32_t width, uint32_t height, VkFormat form
     next.width = width; next.height = height; next.format = format;
     destroy_image(image); image = std::move(next); return true;
 }
-bool initialize()
+// Creates the shared D3D12 device, queue, fence, imported semaphore and command slots. A failure
+// may leave some of them; the caller destroys them.
+bool create_shared()
 {
-    if (initialized) return true;
-    if (!unity) return false;
     instance = unity->Instance(); if (!instance.device) return false;
     if (!external_extensions) {
         external_extensions = vkGetDeviceProcAddr(instance.device, "vkImportSemaphoreWin32HandleKHR") &&
@@ -170,7 +203,24 @@ bool initialize()
             FAILED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, slot.allocator.Get(), nullptr, IID_PPV_ARGS(&slot.commands))) ||
             FAILED(slot.commands->Close())) return false;
     }
-    initialized = true; log("Unity Vulkan textures share same-adapter D3D12 resources and GPU fences."); return true;
+    log("Unity Vulkan textures share same-adapter D3D12 resources and GPU fences."); return true;
+}
+enum class SharedDevice { ready, busy, failed };
+// The shared device, created by one thread at a time. busy while another thread creates it or
+// release closes the bridge; a failed creation leaves nothing behind and is retried by a later call.
+SharedDevice initialize()
+{
+    if (!unity) return SharedDevice::failed;
+    const uint32_t claim = rsf_unity_vulkan_claim_device();
+    if (claim == RSF_UNITY_VULKAN_DEVICE_READY) return SharedDevice::ready;
+    if (claim != RSF_UNITY_VULKAN_DEVICE_CLAIMED) return SharedDevice::busy;
+    // Reports on every exit, so the claim never stays open and blocks retirement.
+    struct Claim {
+        bool created = false;
+        ~Claim() { if (!created) destroy_objects(); rsf_unity_vulkan_device_created(created ? 1u : 0u); }
+    } claimed;
+    claimed.created = create_shared();
+    return claimed.created ? SharedDevice::ready : SharedDevice::failed;
 }
 bool begin(Slot& slot)
 {
@@ -203,12 +253,13 @@ void release_image(VkCommandBuffer commands, Image& image, bool output)
         VK_IMAGE_LAYOUT_GENERAL, instance.queueFamilyIndex, VK_QUEUE_FAMILY_EXTERNAL,
         output ? VK_ACCESS_TRANSFER_READ_BIT : VK_ACCESS_TRANSFER_WRITE_BIT, 0);
 }
+// Vulkan signals the next shared fence value after the copies; the D3D12 queue waits for it.
 bool upload(Slot& slot, const VkSemaphore* waits = nullptr, uint32_t wait_count = 0)
 {
     if (vkEndCommandBuffer(slot.vk[0]) != VK_SUCCESS) return false;
     std::vector<VkPipelineStageFlags> stages(wait_count, VK_PIPELINE_STAGE_TRANSFER_BIT);
     std::vector<uint64_t> values(wait_count, 0);
-    const uint64_t value = ++fence_value;
+    const uint64_t value = rsf_unity_interop_completion();
     VkD3D12FenceSubmitInfoKHR fence{VK_STRUCTURE_TYPE_D3D12_FENCE_SUBMIT_INFO_KHR};
     fence.waitSemaphoreValuesCount = wait_count; fence.pWaitSemaphoreValues = values.data();
     fence.signalSemaphoreValuesCount = 1; fence.pSignalSemaphoreValues = &value;
@@ -217,12 +268,14 @@ bool upload(Slot& slot, const VkSemaphore* waits = nullptr, uint32_t wait_count 
     submit.commandBufferCount = 1; submit.pCommandBuffers = &slot.vk[0]; submit.signalSemaphoreCount = 1; submit.pSignalSemaphores = &semaphore;
     return vkQueueSubmit(instance.graphicsQueue, 1, &submit, VK_NULL_HANDLE) == VK_SUCCESS && SUCCEEDED(queue->Wait(shared_fence.Get(), value));
 }
-bool submit(Slot& slot, VkSemaphore ready = VK_NULL_HANDLE)
+// The D3D12 queue signals the ring slot's shared fence value; Vulkan waits for it before the
+// hand-back copies and signals the slot's fence.
+bool submit(Slot& slot, uint32_t ring, VkSemaphore ready = VK_NULL_HANDLE)
 {
     if (FAILED(slot.commands->Close()) || vkEndCommandBuffer(slot.vk[1]) != VK_SUCCESS) return false;
     ID3D12CommandList* lists[] = {slot.commands.Get()}; queue->ExecuteCommandLists(1, lists);
-    const uint64_t value = ++fence_value;
-    if (FAILED(queue->Signal(shared_fence.Get(), value))) return false;
+    const uint64_t value = rsf_unity_interop_submit(ring);
+    if (!value || FAILED(queue->Signal(shared_fence.Get(), value))) return false;
     VkD3D12FenceSubmitInfoKHR fence{VK_STRUCTURE_TYPE_D3D12_FENCE_SUBMIT_INFO_KHR};
     fence.waitSemaphoreValuesCount = 1; fence.pWaitSemaphoreValues = &value;
     uint64_t zero = 0; fence.signalSemaphoreValuesCount = ready ? 1u : 0u; fence.pSignalSemaphoreValues = &zero;
@@ -252,31 +305,33 @@ void make_pass(const rsf_unity_packet& packet, rsf_game_render_pass& pass)
     pass.motion_to_uv[0] = pass.motion_to_uv[1] = 1; pass.motion_camera_included = 1;
     std::memcpy(pass.previous_clip_to_clip, packet.previous_clip_to_clip, sizeof(pass.previous_clip_to_clip));
 }
-struct Event {
-    rsf_unity_packet packet{};
-    std::array<UnityVulkanImage, 4> textures{};
-    bool reconfigure = false, hudless = false, present = false;
-};
+// Unity's queue access for one admitted render event; data is the event's Rust address.
 void UNITY_INTERFACE_API execute_queue(int, void* data) noexcept try
 {
-    std::unique_ptr<Event> event(static_cast<Event*>(data));
-    struct Finish { ~Finish() { callbacks.fetch_sub(1); } } finish;
-    if (faulted) return;
-    if (!initialize()) {
-        faulted = true;
-        rsf_unity_package_bridge_error(RSF_BACKEND_ERROR_INIT_FAILED, "Unity Vulkan shared device/fence initialization failed; native output remains in place.");
+    rsf_unity_packet packet{}; uint32_t kind = 0, reconfigure = 0, index = 0;
+    // A faulted bridge discards the event here.
+    if (!rsf_unity_vulkan_start_event(data, &packet, &kind, &reconfigure, &index)) return;
+    struct Finish { uint32_t index; ~Finish() { rsf_unity_vulkan_finish_event(index); } } finish{index};
+    if (index >= event_images.size()) return;
+    const auto& textures = event_images[index];
+    const bool present = kind == RSF_UNITY_VULKAN_EVENT_WINDOW, hudless = kind == RSF_UNITY_VULKAN_EVENT_HUDLESS;
+    const SharedDevice ready = initialize();
+    if (ready == SharedDevice::busy) return;
+    if (ready != SharedDevice::ready) {
+        fault(RSF_BACKEND_ERROR_INIT_FAILED, "Unity Vulkan shared device/fence initialization failed; native output remains in place.");
         return;
     }
-    auto& packet = event->packet;
-    auto& slot = slots[next_slot]; if (!begin(slot)) { faulted = true; return; }
-    if (event->reconfigure && !drain()) { faulted = true; return; }
+    const uint32_t ring = rsf_unity_interop_slot(nullptr);
+    if (ring >= slots.size()) return;
+    auto& slot = slots[ring]; if (!begin(slot)) { stop("Unity Vulkan command slot could not be reused; the bridge stopped."); return; }
+    if (reconfigure && !drain()) { stop("Unity Vulkan GPU drain before reconfiguration failed; the bridge stopped."); return; }
     constexpr VkFormat formats[] = {VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R32_SFLOAT, VK_FORMAT_R16G16_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT};
     constexpr DXGI_FORMAT dx_formats[] = {DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R32_FLOAT, DXGI_FORMAT_R16G16_FLOAT, DXGI_FORMAT_R16G16B16A16_FLOAT};
     const bool probe = (packet.flags & RSF_UNITY_PACKET_PROBE) != 0;
-    if (event->hudless || event->present) {
-        const auto& texture = event->textures[0];
-        const uint32_t target = event->present ? 5u : 4u;
-        if (!create_image(target, packet.camera.output_width, packet.camera.output_height, VK_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM)) { faulted = true; return; }
+    if (hudless || present) {
+        const auto& texture = textures[0];
+        const uint32_t target = present ? 5u : 4u;
+        if (!create_image(target, packet.camera.output_width, packet.camera.output_height, VK_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM)) { stop("Unity Vulkan shared image creation failed; the bridge stopped."); return; }
         acquire_image(slot.vk[0], images[target], false);
         copy(slot.vk[0], texture.image, texture.layout, texture.aspect, images[target].image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, images[target].width, images[target].height);
         release_image(slot.vk[0], images[target], false);
@@ -284,19 +339,19 @@ void UNITY_INTERFACE_API execute_queue(int, void* data) noexcept try
         if (probe && (i == 1 || i == 2)) continue;
         uint32_t width = i == 3 ? packet.camera.output_width : packet.camera.render_width;
         uint32_t height = i == 3 ? packet.camera.output_height : packet.camera.render_height;
-        if (!create_image(i, width, height, formats[i], dx_formats[i])) { faulted = true; return; }
+        if (!create_image(i, width, height, formats[i], dx_formats[i])) { stop("Unity Vulkan shared image creation failed; the bridge stopped."); return; }
         acquire_image(slot.vk[0], images[i], false);
-        copy(slot.vk[0], event->textures[i].image, event->textures[i].layout, event->textures[i].aspect,
+        copy(slot.vk[0], textures[i].image, textures[i].layout, textures[i].aspect,
             images[i].image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, width, height);
         release_image(slot.vk[0], images[i], false);
     }
-    if (!upload(slot)) { faulted = true; return; }
+    if (!upload(slot)) { stop("Unity Vulkan upload submission failed; the bridge stopped."); return; }
     rsf_game_render_pass pass{}; make_pass(packet, pass);
-    if (event->reconfigure) { pass.flags |= RSF_GAME_RENDER_RECONFIGURE; pass.camera_valid = 0; }
-    if (event->present) {
+    if (reconfigure) { pass.flags |= RSF_GAME_RENDER_RECONFIGURE; pass.camera_valid = 0; }
+    if (present) {
         pass.role = RSF_GAME_RENDER_WINDOW; pass.color_input = images[5].resource.Get(); pass.flags |= RSF_UNITY_PREVIEW_SOURCE_COMMON;
         host.render_pass(host.user, queue.Get(), &pass, 1);
-    } else if (event->hudless) {
+    } else if (hudless) {
         pass.role = RSF_GAME_RENDER_FINAL_SCENE; pass.color_input = images[4].resource.Get();
         dx_barrier(slot.commands.Get(), images[4].resource.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         host.render_pass(host.user, slot.commands.Get(), &pass, 1);
@@ -311,17 +366,17 @@ void UNITY_INTERFACE_API execute_queue(int, void* data) noexcept try
         host.render_pass(host.user, slot.commands.Get(), &pass, 1);
         for (uint32_t i = 0; i < 4; ++i) if (!(probe && (i == 1 || i == 2)))
             dx_barrier(slot.commands.Get(), images[i].resource.Get(), i == 3 ? D3D12_RESOURCE_STATE_COPY_DEST : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON);
-        if (!probe && !(event->reconfigure)) {
+        if (!probe && !reconfigure) {
             acquire_image(slot.vk[1], images[3], true);
             copy(slot.vk[1], images[3].image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT,
-                event->textures[3].image, event->textures[3].layout, images[3].width, images[3].height);
+                textures[3].image, textures[3].layout, images[3].width, images[3].height);
             release_image(slot.vk[1], images[3], true);
         }
     }
-    if (!submit(slot)) { faulted = true; return; }
+    if (!submit(slot, ring)) { stop("Unity Vulkan render submission failed; the bridge stopped."); return; }
     host.render_pass(host.user, slot.commands.Get(), &pass, 0);
-    next_slot = (next_slot + 1) % 3;
-} catch (...) { faulted = true; log("Unity Vulkan queue execution failed; resources remain owned."); }
+    rsf_unity_interop_advance(ring);
+} catch (...) { stop("Unity Vulkan queue execution failed; resources remain owned."); }
 
 LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 {
@@ -359,14 +414,18 @@ bool configure_chain(uint32_t width, uint32_t height)
 VKAPI_ATTR VkResult VKAPI_CALL intercept_present(VkQueue vk_queue, const VkPresentInfoKHR* info) noexcept try
 {
     if (!original_present || !info) return VK_ERROR_INITIALIZATION_FAILED;
-    if (!window || faulted || !last_window.frame_id || info->swapchainCount != 1 || !initialize()) return original_present(vk_queue, info);
+    BridgeEntry entry; rsf_unity_packet frame{};
+    const auto unchanged = [&] { return original_present(vk_queue, info); };
+    if (!window || !entry.admitted || !rsf_unity_vulkan_window(&frame) || info->swapchainCount != 1 || initialize() != SharedDevice::ready) return unchanged();
     std::lock_guard<std::mutex> lock(swapchain_guard);
     auto found = swapchains.find(info->pSwapchains[0]);
-    if (found == swapchains.end()) return original_present(vk_queue, info);
+    if (found == swapchains.end()) return unchanged();
     auto& source = found->second; const uint32_t index = info->pImageIndices[0];
     if (index >= source.images.size() || !configure_chain(source.extent.width, source.extent.height) ||
-        !create_image(5, source.extent.width, source.extent.height, VK_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM)) return original_present(vk_queue, info);
-    auto& slot = slots[next_slot]; if (!begin(slot)) return original_present(vk_queue, info);
+        !create_image(5, source.extent.width, source.extent.height, VK_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM)) return unchanged();
+    const uint32_t ring = rsf_unity_interop_slot(nullptr);
+    if (ring >= slots.size()) return unchanged();
+    auto& slot = slots[ring]; if (!begin(slot)) return unchanged();
     acquire_image(slot.vk[0], images[5], false);
     image_barrier(slot.vk[0], source.images[index], VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
         VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, 0, VK_ACCESS_TRANSFER_READ_BIT);
@@ -376,23 +435,23 @@ VKAPI_ATTR VkResult VKAPI_CALL intercept_present(VkQueue vk_queue, const VkPrese
     image_barrier(slot.vk[0], source.images[index], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
         VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, VK_ACCESS_TRANSFER_READ_BIT, 0);
     release_image(slot.vk[0], images[5], false);
-    if (!upload(slot, info->pWaitSemaphores, info->waitSemaphoreCount)) { faulted = true; return VK_ERROR_DEVICE_LOST; }
+    if (!upload(slot, info->pWaitSemaphores, info->waitSemaphoreCount)) { stop("Unity Vulkan present upload failed; the bridge stopped."); return VK_ERROR_DEVICE_LOST; }
     ComPtr<ID3D12Resource> buffer;
-    if (FAILED(chain->GetBuffer(chain->GetCurrentBackBufferIndex(), IID_PPV_ARGS(&buffer)))) { faulted = true; return VK_ERROR_DEVICE_LOST; }
+    if (FAILED(chain->GetBuffer(chain->GetCurrentBackBufferIndex(), IID_PPV_ARGS(&buffer)))) { stop("Unity Vulkan swap chain buffer was unavailable; the bridge stopped."); return VK_ERROR_DEVICE_LOST; }
     dx_barrier(slot.commands.Get(), images[5].resource.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_SOURCE);
     dx_barrier(slot.commands.Get(), buffer.Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_DEST);
     slot.commands->CopyResource(buffer.Get(), images[5].resource.Get());
     dx_barrier(slot.commands.Get(), buffer.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT);
     dx_barrier(slot.commands.Get(), images[5].resource.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
-    rsf_game_render_pass pass{}; make_pass(last_window, pass); pass.role = RSF_GAME_RENDER_WINDOW; pass.swapchain = chain.Get();
+    rsf_game_render_pass pass{}; make_pass(frame, pass); pass.role = RSF_GAME_RENDER_WINDOW; pass.swapchain = chain.Get();
     host.render_pass(host.user, queue.Get(), &pass, 1);
-    if (!submit(slot, source.present_ready[index])) { faulted = true; return VK_ERROR_DEVICE_LOST; }
+    if (!submit(slot, ring, source.present_ready[index])) { stop("Unity Vulkan present submission failed; the bridge stopped."); return VK_ERROR_DEVICE_LOST; }
     const HRESULT presented = chain->Present(0, 0);
     if (SUCCEEDED(presented)) ShowWindowAsync(window, SW_SHOWNOACTIVATE);
     auto forwarded = *info; forwarded.waitSemaphoreCount = 1; forwarded.pWaitSemaphores = &source.present_ready[index];
-    next_slot = (next_slot + 1) % 3;
+    rsf_unity_interop_advance(ring);
     return original_present(vk_queue, &forwarded);
-} catch (...) { faulted = true; return VK_ERROR_DEVICE_LOST; }
+} catch (...) { stop("Unity Vulkan present interception failed; the bridge stopped."); return VK_ERROR_DEVICE_LOST; }
 VKAPI_ATTR VkResult VKAPI_CALL intercept_create_device(VkPhysicalDevice physical, const VkDeviceCreateInfo* info, const VkAllocationCallbacks* allocator, VkDevice* output)
 {
     if (!original_create_device) return VK_ERROR_INITIALIZATION_FAILED;
@@ -408,19 +467,57 @@ VKAPI_ATTR VkResult VKAPI_CALL intercept_create_device(VkPhysicalDevice physical
     const auto result = original_create_device(physical, &request, allocator, output);
     external_extensions = result == VK_SUCCESS; return result;
 }
-VKAPI_ATTR VkResult VKAPI_CALL intercept_create_swapchain(VkDevice vk_device, const VkSwapchainCreateInfoKHR* info, const VkAllocationCallbacks* allocator, VkSwapchainKHR* output)
+VKAPI_ATTR VkResult VKAPI_CALL intercept_create_swapchain(VkDevice vk_device, const VkSwapchainCreateInfoKHR* info, const VkAllocationCallbacks* allocator, VkSwapchainKHR* output) noexcept try
 {
+    if (!original_create_swapchain || !info || !output) return VK_ERROR_INITIALIZATION_FAILED;
+    auto destroy = original_destroy_swapchain;
+    if (!destroy && original_gdpa)
+        destroy = reinterpret_cast<PFN_vkDestroySwapchainKHR>(original_gdpa(vk_device, "vkDestroySwapchainKHR"));
+    if (!destroy) return original_create_swapchain(vk_device, info, allocator, output);
+
     auto request = *info; request.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-    const auto result = original_create_swapchain(vk_device, &request, allocator, output);
-    if (result != VK_SUCCESS) return result;
     Swapchain source; source.device = vk_device; source.extent = request.imageExtent; source.format = request.imageFormat;
-    uint32_t count = 0; vkGetSwapchainImagesKHR(vk_device, *output, &count, nullptr);
-    source.images.resize(count); source.present_ready.resize(count);
-    vkGetSwapchainImagesKHR(vk_device, *output, &count, source.images.data());
+    struct PendingSwapchain {
+        VkDevice device;
+        const VkAllocationCallbacks* allocator;
+        PFN_vkDestroySwapchainKHR destroy;
+        const std::vector<VkSemaphore>& semaphores;
+        VkSwapchainKHR chain = VK_NULL_HANDLE;
+        ~PendingSwapchain()
+        {
+            if (!chain) return;
+            for (auto semaphore : semaphores)
+                if (semaphore) vkDestroySemaphore(device, semaphore, nullptr);
+            destroy(device, chain, allocator);
+        }
+    } pending{vk_device, allocator, destroy, source.present_ready};
+
+    *output = VK_NULL_HANDLE;
+    VkSwapchainKHR created = VK_NULL_HANDLE;
+    const auto result = original_create_swapchain(vk_device, &request, allocator, &created);
+    if (result != VK_SUCCESS) return result;
+    pending.chain = created;
+    uint32_t count = 0;
+    if (vkGetSwapchainImagesKHR(vk_device, pending.chain, &count, nullptr) != VK_SUCCESS || !count)
+        return VK_ERROR_INITIALIZATION_FAILED;
+    source.images.resize(count);
+    if (vkGetSwapchainImagesKHR(vk_device, pending.chain, &count, source.images.data()) != VK_SUCCESS || !count)
+        return VK_ERROR_INITIALIZATION_FAILED;
+    source.images.resize(count);
+    source.present_ready.resize(count);
     VkSemaphoreCreateInfo semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
-    for (auto& ready : source.present_ready) if (vkCreateSemaphore(vk_device, &semaphore_info, nullptr, &ready) != VK_SUCCESS) return VK_ERROR_OUT_OF_DEVICE_MEMORY;
-    std::lock_guard<std::mutex> lock(swapchain_guard); swapchains[*output] = std::move(source); return result;
-}
+    for (auto& ready : source.present_ready) {
+        VkSemaphore semaphore = VK_NULL_HANDLE;
+        if (vkCreateSemaphore(vk_device, &semaphore_info, nullptr, &semaphore) != VK_SUCCESS)
+            return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        ready = semaphore;
+    }
+    std::lock_guard<std::mutex> lock(swapchain_guard);
+    if (!swapchains.try_emplace(pending.chain, std::move(source)).second) return VK_ERROR_INITIALIZATION_FAILED;
+    *output = pending.chain;
+    pending.chain = VK_NULL_HANDLE;
+    return result;
+} catch (...) { return VK_ERROR_OUT_OF_HOST_MEMORY; }
 VKAPI_ATTR void VKAPI_CALL intercept_destroy_swapchain(VkDevice vk_device, VkSwapchainKHR swapchain, const VkAllocationCallbacks* allocator)
 {
     { std::lock_guard<std::mutex> lock(swapchain_guard);
@@ -448,6 +545,13 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL get_instance_proc(VkInstance vk_instanc
     return intercept(name, original);
 }
 PFN_vkGetInstanceProcAddr UNITY_INTERFACE_API initialize_intercept(PFN_vkGetInstanceProcAddr original, void*) { original_gipa = original; return get_instance_proc; }
+// Every slot fence signalled. Slot fences exist only while the shared device is ready, and only
+// release replaces them.
+bool slots_retired()
+{
+    for (auto& slot : slots) if (slot.complete && vkGetFenceStatus(instance.device, slot.complete) != VK_SUCCESS) return false;
+    return true;
+}
 }
 
 void rsf_uvk_preload(IUnityInterfaces* interfaces)
@@ -480,7 +584,7 @@ bool rsf_uvk_create_window()
 bool rsf_uvk_owns_window(void* candidate) { return window && candidate == window; }
 bool rsf_uvk_graphics(void** owning_device, void** owning_queue)
 {
-    if (!initialized || !owning_device || !owning_queue) return false;
+    if (!owning_device || !owning_queue || !rsf_unity_vulkan_ready()) return false;
     *owning_device = device.Get(); *owning_queue = queue.Get(); return true;
 }
 bool rsf_uvk_update_window(uint32_t width, uint32_t height)
@@ -491,15 +595,17 @@ bool rsf_uvk_update_window(uint32_t width, uint32_t height)
         !SetWindowPos(window, nullptr, 0, 0, static_cast<int>(width), static_cast<int>(height), SWP_NOACTIVATE | SWP_NOZORDER)) return false;
     // Establish the shared SDK owner before SR can register a standalone instance. Initial
     // DXGI creation runs on the window thread; subsequent GPU-drained resize stays in Present.
-    return chain || (initialize() && configure_chain(width, height));
+    BridgeEntry entry;
+    return entry.admitted && (chain || (initialize() == SharedDevice::ready && configure_chain(width, height)));
 }
 bool rsf_uvk_render(int event_id, const rsf_unity_packet& packet, const rsf_game_host_services& services, bool reconfigure)
 {
-    if (!unity || faulted) return false;
+    if (!unity || rsf_unity_vulkan_faulted()) return false;
     host = services;
-    if (event_id == base_event + 1 && !rsf_unity_package_is_editor()) { last_window = packet; return true; }
-    auto event = std::make_unique<Event>(); event->packet = packet; event->reconfigure = reconfigure; event->hudless = event_id == base_event + 2;
-    event->present = event_id == base_event + 1;
+    const uint32_t kind = event_id == base_event + 1 ? RSF_UNITY_VULKAN_EVENT_WINDOW :
+        event_id == base_event + 2 ? RSF_UNITY_VULKAN_EVENT_HUDLESS : RSF_UNITY_VULKAN_EVENT_SR;
+    if (kind == RSF_UNITY_VULKAN_EVENT_WINDOW && !rsf_unity_package_is_editor()) return rsf_unity_vulkan_set_window(&packet) != 0;
+    std::array<UnityVulkanImage, 4> textures{};
     void* pointers[] = {packet.color, packet.depth, packet.motion, packet.output};
     for (uint32_t i = 0; i < 4; ++i) {
         if (!pointers[i]) continue;
@@ -507,25 +613,31 @@ bool rsf_uvk_render(int event_id, const rsf_unity_packet& packet, const rsf_game
         if (!unity->AccessTexture(pointers[i], UnityVulkanWholeImage,
             output ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
             VK_PIPELINE_STAGE_TRANSFER_BIT, output ? (VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT) : VK_ACCESS_TRANSFER_READ_BIT,
-            kUnityVulkanResourceAccess_PipelineBarrier, &event->textures[i])) { log("Unity Vulkan texture access was refused."); return false; }
+            kUnityVulkanResourceAccess_PipelineBarrier, &textures[i])) { log("Unity Vulkan texture access was refused."); return false; }
     }
-    if (!event->textures[0].image) return false;
-    callbacks.fetch_add(1); unity->AccessQueue(execute_queue, event_id, event.release(), true);
+    if (!textures[0].image) return false;
+    // The event stays outstanding from here until its queue callback finishes.
+    uint32_t index = 0;
+    void* address = rsf_unity_vulkan_admit_event(&packet, kind, reconfigure ? 1u : 0u, &index);
+    if (!address) return false;
+    event_images[index] = textures;
+    unity->AccessQueue(execute_queue, event_id, address, true);
     return true;
 }
 bool rsf_uvk_drained()
 {
-    if (callbacks.load()) return false;
-    for (auto& slot : slots) if (slot.complete && vkGetFenceStatus(instance.device, slot.complete) != VK_SUCCESS) return false;
-    return true;
+    uint32_t ready = 0;
+    if (!rsf_unity_vulkan_idle(&ready)) return false;
+    return !ready || slots_retired();
 }
 void rsf_uvk_release()
 {
-    if (!rsf_uvk_drained() || !drain()) return;
-    for (auto& image : images) destroy_image(image);
-    for (auto& slot : slots) { if (slot.complete) vkDestroyFence(instance.device, slot.complete, nullptr); slot = {}; }
-    if (command_pool) vkDestroyCommandPool(instance.device, command_pool, nullptr);
-    if (semaphore) vkDestroySemaphore(instance.device, semaphore, nullptr);
-    command_pool = VK_NULL_HANDLE; semaphore = VK_NULL_HANDLE; chain.Reset(); shared_fence.Reset(); queue.Reset(); device.Reset();
-    next_slot = 0; fence_value = 0; last_window = {}; faulted = initialized = false;
+    // Closing refuses new events, present interceptions, surface updates and device creation until
+    // the objects are gone or the GPU work is found outstanding.
+    if (!rsf_unity_vulkan_close()) return;
+    if (!slots_retired() || !drain()) { rsf_unity_vulkan_reopen(); return; }
+    destroy_objects();
+    // The slot ring and shared fence values go with the objects that used them.
+    rsf_unity_interop_release();
+    rsf_unity_vulkan_release();
 }

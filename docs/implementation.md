@@ -241,6 +241,13 @@ requests a completion signal before the adapter stops. The shared packet checks 
 to both D3D11 and Vulkan producers. Native builds and player verification
 remain open.
 
+Unity's Vulkan bridge now owns event, window-frame and shared-device
+admission, queue slots and retirement in Rust. A present interception
+holds admission through forwarding. Swapchain setup destroys partial
+semaphores and the new chain if setup fails. The native queue drain
+still needs live synchronization verification. Builds and player
+checks remain open.
+
 AC7's Rust renderer transaction owns prepare, start, quiesce and stop.
 Failed activation keeps any renderer with reachable callbacks, and a
 refused hook disable or removal keeps the renderer available for retry.

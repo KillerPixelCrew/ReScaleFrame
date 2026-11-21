@@ -9,7 +9,8 @@
 //! activity flag, managed stage, callback count, packet store, policy and config: a process has
 //! one Unity renderer, so only one bridge uses this state. That bridge does not use the D3D12
 //! ring or sources; it applies policy changes through `pending_change` and `settle_change`, and
-//! its own D3D12 submission ring is `bridge_interop.rs`.
+//! its own D3D12 submission ring is `bridge_interop.rs`. The Vulkan bridge's admission and
+//! lifecycle are `vulkan_state.rs`.
 //!
 //! A fence completion of 0 stands for "no fence": every recorded submission is then in flight,
 //! as the C++ check `complete && (!fence || completed < complete)` had it.
