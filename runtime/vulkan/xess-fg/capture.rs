@@ -14,7 +14,6 @@
 //! modules that the standalone `rustc` build of the session cannot link.
 
 use super::{Handle, Platform};
-use std::collections::BTreeMap;
 use std::ffi::CStr;
 use std::mem::MaybeUninit;
 use std::os::windows::ffi::OsStrExt;
@@ -40,6 +39,8 @@ const STATE_COMMON: u32 = 0;
 const PUBLISHED: i32 = 0;
 const MAP_FAILED: i32 = -1;
 const WRITE_FAILED: i32 = -2;
+// RsfXessBridgeCaptureSource result when the source cannot be bound.
+const SOURCE_FAILED: i32 = -7012;
 
 /// The rsf_frame_record ABI 2 prefix Rust reads. The remainder, from
 /// `input_qpc` through `source_qpc_frequency`, is published unchanged.
@@ -144,11 +145,22 @@ struct Source {
 
 #[derive(Default)]
 struct State {
-    // Keyed by the low 32 bits of the frame ID, which the SDK token carries.
-    sources: BTreeMap<u32, Source>,
+    // Sorted by the low 32 bits of the frame ID, which the SDK token carries.
+    // At most MAX_SOURCES entries; the smallest key is evicted first.
+    sources: Vec<(u32, Source)>,
+    // At most MAX_PENDING images, reserved before any GPU readback exists.
     pending: Vec<Image>,
     retained_bytes: u64,
     registered: bool,
+    // Set when checked retirement starts. No receipt or readback follows.
+    closed: bool,
+}
+
+impl State {
+    fn find(&self, token: u64) -> Result<usize, usize> {
+        let key = token as u32;
+        self.sources.binary_search_by_key(&key, |&(entry, _)| entry)
+    }
 }
 
 struct Config {
@@ -313,28 +325,42 @@ impl Capture {
         true
     }
 
-    fn source(&self, record: &Record, generated_count: u32) {
+    fn source(&self, record: &Record, generated_count: u32) -> bool {
         if !self.enabled() {
-            return;
+            return true;
         }
+        let source = Source {
+            record: *record,
+            generated_count,
+            actual_count: 0,
+        };
         let mut state = self.lock();
         // The SDK token carries only the low 32 bits of the frame ID.
-        state.sources.insert(
-            record.frame_id as u32,
-            Source {
-                record: *record,
-                generated_count,
-                actual_count: 0,
-            },
-        );
-        while state.sources.len() > MAX_SOURCES {
-            state.sources.pop_first();
+        match state.find(record.frame_id) {
+            Ok(index) => state.sources[index].1 = source,
+            Err(index) => {
+                // Room for the bound plus the entry evicted after insertion.
+                let spare = MAX_SOURCES + 1 - state.sources.len();
+                if state.sources.try_reserve_exact(spare).is_err() {
+                    drop(state);
+                    self.failure(c"source-binding");
+                    return false;
+                }
+                state
+                    .sources
+                    .insert(index, (record.frame_id as u32, source));
+                if state.sources.len() > MAX_SOURCES {
+                    state.sources.remove(0);
+                }
+            }
         }
+        true
     }
 
     fn before_outputs(&self, token: u64, count: u32) {
-        if let Some(source) = self.lock().sources.get_mut(&(token as u32)) {
-            source.actual_count = if count <= OUTPUT_SLOTS { count } else { 0 };
+        let mut state = self.lock();
+        if let Ok(index) = state.find(token) {
+            state.sources[index].1.actual_count = if count <= OUTPUT_SLOTS { count } else { 0 };
         }
     }
 
@@ -351,14 +377,18 @@ impl Capture {
     ) {
         let ops = self.ops;
         let mut state = self.lock();
-        let Some(&source) = state.sources.get(&(token as u32)) else {
+        let Ok(index) = state.find(token) else {
             return;
         };
+        let source = state.sources[index].1;
         if resource.is_null() || commands.is_null() {
             return;
         }
         if generated {
             self.callbacks.fetch_add(1, Ordering::SeqCst);
+        }
+        if state.closed {
+            return;
         }
         let record = &source.record;
         if !self.wants(record.frame_id) {
@@ -414,6 +444,13 @@ impl Capture {
             self.failure(c"capture-count-budget");
             return;
         }
+        // Reserve the bounded slot first, so the push below cannot allocate
+        // after a readback exists or a copy is recorded.
+        let spare = MAX_PENDING - state.pending.len();
+        if state.pending.try_reserve_exact(spare).is_err() {
+            self.failure(c"callback-exception");
+            return;
+        }
         let mut footprint = Footprint::default();
         let mut bytes = 0;
         let mut device = std::ptr::null_mut();
@@ -464,6 +501,9 @@ impl Capture {
     pub(super) fn flush(&self, native: Handle) -> bool {
         let ops = self.ops;
         let mut state = self.lock();
+        // Retirement has started. A late callback still counts but is no
+        // longer admitted, including while the setter runs unlocked below.
+        state.closed = true;
         let mut okay = true;
         for image in &state.pending {
             match unsafe { (ops.capture_publish)(self.directory(), image) } {
@@ -484,11 +524,17 @@ impl Capture {
             unsafe { (ops.capture_release)(image.readback) };
         }
         state.retained_bytes = 0;
-        if state.registered && unsafe { (ops.unregister_diagnostics)(native) } < 0 {
-            self.failure(c"diagnostic-unregister");
-            return false;
+        let registered = state.registered;
+        // The SDK setter can wait for a callback in flight, which takes this
+        // lock. On refusal the registration and the owner stay in place.
+        drop(state);
+        if registered {
+            if unsafe { (ops.unregister_diagnostics)(native) } < 0 {
+                self.failure(c"diagnostic-unregister");
+                return false;
+            }
+            self.lock().registered = false;
         }
-        state.registered = false;
         okay
     }
 }
@@ -508,10 +554,15 @@ unsafe extern "C" fn rsf_core_xess_capture_source(
     capture: *const Capture,
     record: *const Record,
     generated_count: u32,
-) {
-    if let (Some(capture), Some(record)) = (unsafe { capture.as_ref() }, unsafe { record.as_ref() })
-    {
-        capture.source(record, generated_count);
+) -> i32 {
+    let (Some(capture), Some(record)) = (unsafe { capture.as_ref() }, unsafe { record.as_ref() })
+    else {
+        return SOURCE_FAILED;
+    };
+    if capture.source(record, generated_count) {
+        0
+    } else {
+        SOURCE_FAILED
     }
 }
 

@@ -46,7 +46,8 @@ static_assert(offsetof(rsf_xess_capture_image, footprint) == 8 && offsetof(rsf_x
     offsetof(rsf_xess_capture_image, source) == 96);
 
 extern "C" {
-void rsf_core_xess_capture_source(rsf_xess_capture_owner*, const rsf_frame_record*, uint32_t);
+// Zero, or -7012 when the source cannot be bound.
+int32_t rsf_core_xess_capture_source(rsf_xess_capture_owner*, const rsf_frame_record*, uint32_t);
 void rsf_core_xess_capture_input(rsf_xess_capture_owner*, uint64_t, uint32_t, uint32_t, void*, void*, uint32_t);
 void rsf_core_xess_capture_output(rsf_xess_capture_owner*, uint64_t, uint32_t, void*, void*, uint32_t);
 void rsf_core_xess_capture_before_outputs(rsf_xess_capture_owner*, uint64_t, uint32_t);
