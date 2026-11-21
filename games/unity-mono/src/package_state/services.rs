@@ -15,6 +15,9 @@
 //! neither leaf calls back. The message and CPU paths take neither lock, so a message the window
 //! dispatches while it is being hooked cannot wait on the hook.
 use super::{BACKEND_OK, Leaves, PACKAGE, Package};
+use crate::bridge_state::{
+    rsf_unity_frames_active, rsf_unity_frames_callback_enter, rsf_unity_frames_callback_leave,
+};
 use crate::package_abi::rsf_unity_package_platform;
 use crate::plugin_abi::rsf_unity_native_api;
 use crate::runtime_config::{PATH_CAPACITY, terminated};
@@ -44,8 +47,24 @@ const WM_MOUSELAST: u32 = 0x020e;
 const RIM_TYPEMOUSE: u32 = 0;
 const RIM_TYPEKEYBOARD: u32 = 1;
 
-const SURFACE_REFUSED: &str =
-    "Unity Vulkan presentation surface could not initialize on the window thread.";
+const BRIDGE_REFUSED: &str = "Unity graphics bridge or player presentation surface could not open.";
+
+struct InputCallback;
+
+impl InputCallback {
+    fn enter() -> Option<Self> {
+        if rsf_unity_frames_callback_enter() == 0 {
+            return None;
+        }
+        Some(Self).filter(|_| rsf_unity_frames_active() != 0)
+    }
+}
+
+impl Drop for InputCallback {
+    fn drop(&mut self) {
+        rsf_unity_frames_callback_leave();
+    }
+}
 
 /// A file, window or window procedure that only package.cpp's leaves interpret.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -116,6 +135,12 @@ impl Services {
         lock(&self.api).0
     }
 
+    pub(super) fn retired(&self) {
+        *lock(&self.api) = Api(empty_api());
+        self.session.store(0, SeqCst);
+        self.input_frame.store(0, SeqCst);
+    }
+
     /// A received-input fact for this session, stamped `now`.
     fn received(
         &self,
@@ -144,8 +169,8 @@ impl Services {
 // SAFETY for every call below: package.cpp's noexcept leaves, borrowing their pointer arguments
 // for the call only. Paths are terminated here.
 impl Leaves {
-    fn vulkan_surface(&self) -> bool {
-        unsafe { (self.vulkan_surface)() != 0 }
+    fn bridge_open(&self, editor: bool) -> bool {
+        unsafe { (self.bridge_open)(u32::from(editor)) != 0 }
     }
     fn session_seed(&self) -> u64 {
         unsafe { (self.session_seed)() }
@@ -265,8 +290,8 @@ impl Package {
         } else {
             self.hook(leaves, Leaves::player_window);
         }
-        if !editor && !leaves.vulkan_surface() {
-            self.log(leaves, SURFACE_REFUSED);
+        if !leaves.bridge_open(editor) {
+            self.log(leaves, BRIDGE_REFUSED);
             return false;
         }
         let services = rsf_game_host_services {
@@ -442,10 +467,12 @@ unsafe extern "C" fn rsf_unity_package_window_message(
     lparam: isize,
     platform: *const rsf_unity_package_platform,
 ) -> *mut c_void {
-    match unsafe { Leaves::adopt(platform) } {
-        Some(leaves) => PACKAGE.window_message(&leaves, message, lparam),
-        None => PACKAGE.services.previous.load(SeqCst),
+    if let Some(leaves) = unsafe { Leaves::adopt(platform) }
+        && let Some(_callback) = InputCallback::enter()
+    {
+        return PACKAGE.window_message(&leaves, message, lparam);
     }
+    PACKAGE.services.previous.load(SeqCst)
 }
 
 /// rsfu_input's checks come first, as they did; nothing is reported for no kinds.
@@ -462,7 +489,12 @@ unsafe extern "C" fn rsf_unity_package_input(
         return BACKEND_OK;
     }
     match unsafe { Leaves::adopt(platform) } {
-        Some(leaves) => PACKAGE.input(&leaves, frame, kinds),
+        Some(leaves) => {
+            let Some(_callback) = InputCallback::enter() else {
+                return BACKEND_OK;
+            };
+            PACKAGE.input(&leaves, frame, kinds)
+        }
         None => BACKEND_FEATURE_FAILED,
     }
 }

@@ -106,7 +106,6 @@ void stop(const char* message) { fault(RSF_BACKEND_ERROR_FEATURE_FAILED, message
 struct BridgeEntry {
     bool admitted = rsf_unity_vulkan_enter() != 0;
     BridgeEntry() = default;
-    explicit BridgeEntry(bool acquired) : admitted(acquired) {}
     BridgeEntry(const BridgeEntry&) = delete;
     BridgeEntry& operator=(const BridgeEntry&) = delete;
     ~BridgeEntry() { if (admitted) rsf_unity_vulkan_leave(); }
@@ -413,13 +412,8 @@ void make_pass(const rsf_unity_packet& packet, rsf_game_render_pass& pass)
     pass.motion_to_uv[0] = pass.motion_to_uv[1] = 1; pass.motion_camera_included = 1;
     std::memcpy(pass.previous_clip_to_clip, packet.previous_clip_to_clip, sizeof(pass.previous_clip_to_clip));
 }
-// Unity's queue access for one admitted render event; data is the event's Rust address.
-void UNITY_INTERFACE_API execute_queue(int, void* data) noexcept try
+void execute_admitted(const rsf_unity_vulkan_frame& frame, uint32_t kind, uint32_t reconfigure, uint32_t index) noexcept try
 {
-    rsf_unity_vulkan_frame frame{}; uint32_t kind = 0, reconfigure = 0, index = 0;
-    // A faulted bridge discards the event here.
-    if (!rsf_unity_vulkan_start_event(data, &frame, &kind, &reconfigure, &index)) return;
-    struct Finish { uint32_t index; ~Finish() { rsf_unity_vulkan_finish_event(index); } } finish{index};
     PresentationLease lease{rsf_unity_vulkan_presentation_try_begin() != 0};
     if (!lease.held) return;
     if (index >= event_images.size() || !frame.services.render_pass) return;
@@ -495,6 +489,15 @@ void UNITY_INTERFACE_API execute_queue(int, void* data) noexcept try
     rsf_unity_interop_advance(ring);
 } catch (...) { stop("Unity Vulkan queue execution failed; resources remain owned."); }
 
+// Keep the event admitted through the worker's exception handler as well as its queue calls.
+void UNITY_INTERFACE_API execute_queue(int, void* data) noexcept
+{
+    rsf_unity_vulkan_frame frame{}; uint32_t kind = 0, reconfigure = 0, index = 0;
+    if (!rsf_unity_vulkan_start_event(data, &frame, &kind, &reconfigure, &index)) return;
+    struct Finish { uint32_t index; ~Finish() { rsf_unity_vulkan_finish_event(index); } } finish{index};
+    execute_admitted(frame, kind, reconfigure, index);
+}
+
 LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 {
     if (message == WM_NCHITTEST) return HTTRANSPARENT;
@@ -537,15 +540,13 @@ constexpr rsf_unity_vulkan_surface_ops surface_ops{
     },
     [](void* chain) noexcept { static_cast<IDXGISwapChain3*>(chain)->Release(); },
 };
-VKAPI_ATTR VkResult VKAPI_CALL intercept_present(VkQueue vk_queue, const VkPresentInfoKHR* info) noexcept try
+VkResult present_admitted(PFN_vkQueuePresentKHR original_present, VkQueue vk_queue, const VkPresentInfoKHR* info) noexcept try
 {
-    const auto original_present = saved_proc<PFN_vkQueuePresentKHR>(RSF_UNITY_VK_PRESENT);
-    if (!original_present || !info) return VK_ERROR_INITIALIZATION_FAILED;
-    BridgeEntry entry; rsf_unity_vulkan_frame frame{};
+    rsf_unity_vulkan_frame frame{};
     DeviceView graphics;
     const auto unchanged = [&] { return original_present(vk_queue, info); };
     const HWND window = surface_window();
-    if (!window || !entry.admitted || !rsf_unity_vulkan_window(&frame) || !frame.services.render_pass || info->swapchainCount != 1 ||
+    if (!window || !rsf_unity_vulkan_window(&frame) || !frame.services.render_pass || info->swapchainCount != 1 ||
         initialize(graphics, &frame.services) != RSF_UNITY_VULKAN_DEVICE_READY) return unchanged();
     // The lease is held from the lookup through the forwarded Present, also when the swapchain is
     // unknown or the index out of range and the Present is forwarded unchanged.
@@ -594,6 +595,14 @@ VKAPI_ATTR VkResult VKAPI_CALL intercept_present(VkQueue vk_queue, const VkPrese
     rsf_unity_interop_advance(ring);
     return original_present(vk_queue, &forwarded);
 } catch (...) { stop("Unity Vulkan present interception failed; the bridge stopped."); return VK_ERROR_DEVICE_LOST; }
+VKAPI_ATTR VkResult VKAPI_CALL intercept_present(VkQueue vk_queue, const VkPresentInfoKHR* info) noexcept try
+{
+    const auto original_present = saved_proc<PFN_vkQueuePresentKHR>(RSF_UNITY_VK_PRESENT);
+    if (!original_present || !info) return VK_ERROR_INITIALIZATION_FAILED;
+    BridgeEntry entry;
+    return entry.admitted ? present_admitted(original_present, vk_queue, info) : original_present(vk_queue, info);
+} catch (...) { return VK_ERROR_DEVICE_LOST; }
+
 struct DeviceRequest {
     VkPhysicalDevice physical;
     const VkDeviceCreateInfo* info;
@@ -766,6 +775,7 @@ void rsf_uvk_load(IUnityInterfaces* interfaces, int event_id)
     config.flags = kUnityVulkanEventConfigFlag_SyncWorkerThreads;
     for (int offset = 0; offset < 3; ++offset) unity->ConfigureEvent(base_event + offset, &config);
 }
+void rsf_uvk_unload() noexcept { unity = nullptr; }
 bool rsf_uvk_create_window()
 {
     HWND window = surface_window();
@@ -846,17 +856,4 @@ bool rsf_uvk_render(int event_id, const rsf_unity_packet& packet, const rsf_game
     event_images[index] = textures;
     unity->AccessQueue(execute_queue, event_id, address, true);
     return true;
-}
-bool rsf_uvk_drained()
-{
-    uint32_t ready = 0;
-    BridgeEntry entry{rsf_unity_vulkan_probe_idle(&ready) != 0};
-    if (!entry.admitted) return false;
-    if (!ready) return true;
-    PresentationLease lease{rsf_unity_vulkan_presentation_try_begin() != 0};
-    return lease.held && rsf_unity_vulkan_commands_retired();
-}
-bool rsf_uvk_release()
-{
-    return rsf_unity_vulkan_release();
 }

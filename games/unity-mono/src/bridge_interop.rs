@@ -29,6 +29,10 @@ pub(crate) struct Interop {
     submitted: u64,
     /// The last shared D3D11/D3D12 fence value handed out.
     shared: u64,
+    /// The last D3D11 copy accepted by its context and flushed to the shared fence.
+    d3d11_complete: u64,
+    /// D3D11 issued a copy but has yet to publish a fence for it.
+    d3d11_unknown: bool,
 }
 
 static INTEROP: Mutex<Interop> = Mutex::new(Interop::new());
@@ -44,6 +48,8 @@ impl Interop {
             complete: [0; SLOTS],
             submitted: 0,
             shared: 0,
+            d3d11_complete: 0,
+            d3d11_unknown: false,
         }
     }
 
@@ -119,6 +125,13 @@ unsafe extern "C" fn rsf_unity_interop_shared_pair(first: *mut u64, second: *mut
 }
 
 #[unsafe(no_mangle)]
+extern "C" fn rsf_unity_interop_d3d11_tail() -> u64 {
+    let mut ring = lock();
+    ring.shared += 1;
+    ring.shared
+}
+
+#[unsafe(no_mangle)]
 extern "C" fn rsf_unity_interop_completion() -> u64 {
     lock().completion()
 }
@@ -141,6 +154,28 @@ extern "C" fn rsf_unity_interop_advance(slot: u32) {
 #[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_unity_interop_drained(completed: u64) -> u32 {
     u32::from(lock().drained(completed))
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_interop_record_d3d11_copy() {
+    lock().d3d11_unknown = true;
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_interop_d3d11_submitted(value: u64) {
+    let mut ring = lock();
+    ring.d3d11_complete = value;
+    ring.d3d11_unknown = false;
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_interop_d3d11_drained(completed: u64) -> u32 {
+    let ring = lock();
+    u32::from(
+        !ring.d3d11_unknown
+            && (ring.d3d11_complete == 0
+                || (completed != u64::MAX && completed >= ring.d3d11_complete)),
+    )
 }
 
 #[unsafe(no_mangle)]

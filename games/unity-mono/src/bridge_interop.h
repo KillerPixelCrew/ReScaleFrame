@@ -27,6 +27,8 @@ uint64_t rsf_unity_interop_submitted(void);
 /* Two consecutive shared fence values: the D3D11 upload signal, then the D3D12 hand-back.
    Zero when either output is null. */
 uint32_t rsf_unity_interop_shared_pair(uint64_t* first, uint64_t* second);
+/* The shared fence value for a D3D11 output copy after the hand-back. */
+uint64_t rsf_unity_interop_d3d11_tail(void);
 /* The next completion value for a submission outside the ring (the Editor preview window). */
 uint64_t rsf_unity_interop_completion(void);
 /* Vulkan's queue owner peeks at the signal value and commits it only after submit succeeds. */
@@ -37,6 +39,11 @@ uint64_t rsf_unity_interop_submit(uint32_t slot);
 void rsf_unity_interop_advance(uint32_t slot);
 /* Non-zero when nothing was submitted or completed reached the last completion value. */
 uint32_t rsf_unity_interop_drained(uint64_t completed);
+/* Upload and output copies run on Unity's D3D11 context. Mark copies before recording and
+   publish their shared fence only after Signal and Flush. An unfenced copy stays pending. */
+void rsf_unity_interop_record_d3d11_copy(void);
+void rsf_unity_interop_d3d11_submitted(uint64_t value);
+uint32_t rsf_unity_interop_d3d11_drained(uint64_t completed);
 /* Forgets the ring, the completion counter and the shared fence values. */
 void rsf_unity_interop_release(void);
 #ifdef __cplusplus

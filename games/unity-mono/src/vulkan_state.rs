@@ -295,7 +295,9 @@ struct State {
     device: Option<SharedDevice>,
     /// A failed step stopped the bridge until release.
     faulted: bool,
-    /// Release is checking the GPU; nothing new starts.
+    /// Refuse new bridge entries while existing entries and queued events finish.
+    retiring: bool,
+    /// CPU ownership is idle. Only retirement may access the resources.
     closed: bool,
     events: [Event; EVENTS],
     /// Present interceptions and surface updates in progress.
@@ -327,6 +329,7 @@ impl State {
             creating: false,
             device: None,
             faulted: false,
+            retiring: false,
             closed: false,
             events: [FREE; EVENTS],
             entries: 0,
@@ -401,7 +404,7 @@ impl State {
     }
 
     fn enter(&mut self) -> bool {
-        if self.closed {
+        if self.retiring || self.closed {
             return false;
         }
         self.entries += 1;
@@ -481,17 +484,19 @@ impl State {
     }
 
     fn reopen(&mut self) {
+        self.retiring = false;
         self.closed = false;
     }
 
     fn release(&mut self) {
-        if self.closed
-            && self.device.is_none()
-            && self.surface.is_none()
-            && self.images.iter().all(Option::is_none)
-        {
-            *self = Self::new();
-        }
+        debug_assert!(self.closed);
+        debug_assert!(self.device.is_none() && self.surface.is_none());
+        debug_assert!(self.images.iter().all(Option::is_none));
+        *self = Self {
+            retiring: true,
+            closed: true,
+            ..Self::new()
+        };
     }
 }
 
@@ -654,13 +659,12 @@ unsafe extern "C" fn rsf_unity_vulkan_command_slot(index: u32, view: *mut Comman
     true
 }
 
-/// Fence reads run outside the state mutex, under the caller's presentation lease and idle
-/// admission or close. Those holds keep the device and the copied fences alive.
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_vulkan_commands_retired() -> bool {
+/// Fence reads run outside the state mutex. The retirement close and presentation lease keep
+/// the copied fences alive and prevent new submissions.
+fn commands_retired() -> bool {
     let proof = {
         let state = lock();
-        if state.creating || state.partial_submission || (!state.closed && state.entries == 0) {
+        if !state.closed || (state.device.is_none() && state.images.iter().any(Option::is_some)) {
             return false;
         }
         state.device.as_ref().map(|device| {
@@ -789,40 +793,45 @@ extern "C" fn rsf_unity_vulkan_faulted() -> u32 {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_vulkan_probe_idle(ready: *mut u32) -> u32 {
-    let mut state = lock();
-    if !ready.is_null() {
-        unsafe { ready.write(u32::from(state.device.is_some())) };
-    }
-    u32::from(state.idle() && state.enter())
+extern "C" fn rsf_unity_vulkan_stop_admission() {
+    lock().retiring = true;
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_unity_vulkan_release() -> bool {
-    if !lock().close() {
-        return false;
-    }
-    if rsf_unity_vulkan_presentation_try_begin() == 0 {
-        lock().reopen();
-        return false;
-    }
-    let released = release_closed();
-    if !released {
-        lock().reopen();
-    }
-    end_lease();
-    released
-}
-
-fn release_closed() -> bool {
-    if !rsf_unity_vulkan_commands_retired() {
-        return false;
-    }
-    let (images, surface, mut device) = {
+extern "C" fn rsf_unity_vulkan_try_close() -> bool {
+    {
         let mut state = lock();
-        if state.device.is_none() && state.images.iter().any(Option::is_some) {
+        if !state.closed && !state.close() {
             return false;
         }
+    }
+    if rsf_unity_vulkan_presentation_try_begin() == 0 {
+        return false;
+    }
+    if commands_retired() {
+        return true;
+    }
+    end_lease();
+    false
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_vulkan_finish_retirement(commit: bool) {
+    if commit {
+        release_closed();
+    }
+    end_lease();
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_vulkan_open() {
+    lock().reopen();
+}
+
+/// The close and lease still hold the proof. The destruction leaves are infallible.
+fn release_closed() {
+    let (images, surface, mut device) = {
+        let mut state = lock();
         (
             std::mem::take(&mut state.images),
             state.surface.take(),
@@ -840,7 +849,6 @@ fn release_closed() -> bool {
     drop(device);
     rsf_unity_interop_release();
     lock().release();
-    true
 }
 
 #[unsafe(no_mangle)]
@@ -1237,6 +1245,8 @@ mod tests {
     fn close_waits_for_entries_and_blocks_new_work() {
         let mut state = State::new();
         assert!(state.enter());
+        state.retiring = true;
+        assert!(!state.enter());
         assert!(!state.close());
         state.leave();
         assert!(state.close());
@@ -1250,7 +1260,8 @@ mod tests {
         state.leave();
         assert!(state.close());
         state.release();
-        assert!(!state.closed);
+        assert!(!state.enter());
+        state.reopen();
         assert!(state.claim_device());
     }
 
@@ -1294,17 +1305,18 @@ mod tests {
             (out.packet.frame_id, kind, reconfigure, index),
             (21, EVENT_SR, 1, 0)
         );
-        let mut ready = 7;
-        assert_eq!(unsafe { rsf_unity_vulkan_probe_idle(&mut ready) }, 0);
-        assert_eq!(ready, 0);
+        assert!(!lock().idle());
         rsf_unity_vulkan_finish_event(index);
-        assert_eq!(unsafe { rsf_unity_vulkan_probe_idle(ptr::null_mut()) }, 1);
+        assert!(lock().idle());
+        assert_eq!(rsf_unity_vulkan_enter(), 1);
         assert!(!lock().close());
         rsf_unity_vulkan_leave();
         assert_eq!(unsafe { rsf_unity_vulkan_window(ptr::null_mut()) }, 0);
         assert_eq!(unsafe { rsf_unity_vulkan_set_window(ptr::null()) }, 0);
         assert!(lock().close());
         lock().release();
+        assert_eq!(rsf_unity_vulkan_enter(), 0);
+        rsf_unity_vulkan_open();
     }
 
     fn swapchain(chain: u64, count: u64) -> Swapchain {

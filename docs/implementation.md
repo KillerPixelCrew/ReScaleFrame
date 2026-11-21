@@ -374,8 +374,11 @@ and player verification remain open.
 Unity Vulkan's DXGI swapchain and resize transaction now use the Rust
 presentation lease. A failed drain or resize retains the chain, and
 checked release drops it before the shared device. Package shutdown
-can still report success after the bridge refuses release, because
-the outer callback has no result. Build and live teardown remain open.
+now holds bridge admission and submitted-fence proof through Runtime
+session retirement, SR view destruction and bridge release. Refusal
+keeps the live session retryable across shutdown and restart. A physical
+device shutdown or DLL unload initiated by Unity still requires the
+host's lifetime guarantees. Build and live teardown remain open.
 [DXGI ownership audit](research/rust-unity-vulkan-dxgi.md)
 
 AC7's Rust renderer transaction owns prepare, start, quiesce and stop.

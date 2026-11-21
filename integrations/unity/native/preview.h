@@ -8,4 +8,6 @@ void* rsf_unity_preview_parent();
 bool rsf_unity_preview_prepare(void* device, void* queue, uint32_t width, uint32_t height);
 bool rsf_unity_preview_present(void* resource, const rsf_game_render_pass& pass, bool common_state = false);
 void rsf_unity_preview_hide();
+bool rsf_unity_preview_drained() noexcept;
+void rsf_unity_preview_release() noexcept;
 uint64_t rsf_unity_preview_base_frames();

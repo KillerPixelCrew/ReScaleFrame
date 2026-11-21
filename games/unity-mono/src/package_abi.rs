@@ -607,7 +607,7 @@ pub struct rsf_unity_package_platform {
     pub present_switch_result: ::core::option::Option<unsafe extern "C" fn() -> i32>,
     pub present_generation: ::core::option::Option<unsafe extern "C" fn() -> u64>,
     pub bridge_activate: ::core::option::Option<unsafe extern "C" fn(enabled: u32)>,
-    pub bridge_drained: ::core::option::Option<unsafe extern "C" fn() -> u32>,
+    pub bridge_try_close: ::core::option::Option<unsafe extern "C" fn() -> u32>,
     pub end_session: ::core::option::Option<unsafe extern "C" fn(session: u64) -> u32>,
     pub sr_default_backend: ::core::option::Option<
         unsafe extern "C" fn(commands: *mut ::core::ffi::c_void, backend: *mut u32) -> u32,
@@ -637,7 +637,7 @@ pub struct rsf_unity_package_platform {
         ) -> i32,
     >,
     pub sr_destroy: ::core::option::Option<unsafe extern "C" fn(sr: *mut rsf_sr12)>,
-    pub bridge_release: ::core::option::Option<unsafe extern "C" fn()>,
+    pub bridge_finish_retirement: ::core::option::Option<unsafe extern "C" fn(commit: u32)>,
     pub accept_window: ::core::option::Option<
         unsafe extern "C" fn(
             user: *mut ::core::ffi::c_void,
@@ -652,7 +652,7 @@ pub struct rsf_unity_package_platform {
     pub present_has_owner: ::core::option::Option<unsafe extern "C" fn() -> u32>,
     pub present_request: ::core::option::Option<unsafe extern "C" fn(backend: u32) -> i32>,
     pub fg_default_backend: ::core::option::Option<unsafe extern "C" fn(backend: *mut u32) -> u32>,
-    pub vulkan_surface: ::core::option::Option<unsafe extern "C" fn() -> u32>,
+    pub bridge_open: ::core::option::Option<unsafe extern "C" fn(editor: u32) -> u32>,
     pub session_seed: ::core::option::Option<unsafe extern "C" fn() -> u64>,
     pub render_pass: rsf_game_render_pass_fn,
     pub render_config: rsf_game_render_config_fn,
@@ -712,8 +712,8 @@ const _: () = {
         [::core::mem::offset_of!(rsf_unity_package_platform, present_generation) - 64usize];
     ["Offset of field: rsf_unity_package_platform::bridge_activate"]
         [::core::mem::offset_of!(rsf_unity_package_platform, bridge_activate) - 72usize];
-    ["Offset of field: rsf_unity_package_platform::bridge_drained"]
-        [::core::mem::offset_of!(rsf_unity_package_platform, bridge_drained) - 80usize];
+    ["Offset of field: rsf_unity_package_platform::bridge_try_close"]
+        [::core::mem::offset_of!(rsf_unity_package_platform, bridge_try_close) - 80usize];
     ["Offset of field: rsf_unity_package_platform::end_session"]
         [::core::mem::offset_of!(rsf_unity_package_platform, end_session) - 88usize];
     ["Offset of field: rsf_unity_package_platform::sr_default_backend"]
@@ -730,8 +730,8 @@ const _: () = {
         [::core::mem::offset_of!(rsf_unity_package_platform, sr_evaluate) - 136usize];
     ["Offset of field: rsf_unity_package_platform::sr_destroy"]
         [::core::mem::offset_of!(rsf_unity_package_platform, sr_destroy) - 144usize];
-    ["Offset of field: rsf_unity_package_platform::bridge_release"]
-        [::core::mem::offset_of!(rsf_unity_package_platform, bridge_release) - 152usize];
+    ["Offset of field: rsf_unity_package_platform::bridge_finish_retirement"]
+        [::core::mem::offset_of!(rsf_unity_package_platform, bridge_finish_retirement) - 152usize];
     ["Offset of field: rsf_unity_package_platform::accept_window"]
         [::core::mem::offset_of!(rsf_unity_package_platform, accept_window) - 160usize];
     ["Offset of field: rsf_unity_package_platform::backend_log"]
@@ -744,8 +744,8 @@ const _: () = {
         [::core::mem::offset_of!(rsf_unity_package_platform, present_request) - 192usize];
     ["Offset of field: rsf_unity_package_platform::fg_default_backend"]
         [::core::mem::offset_of!(rsf_unity_package_platform, fg_default_backend) - 200usize];
-    ["Offset of field: rsf_unity_package_platform::vulkan_surface"]
-        [::core::mem::offset_of!(rsf_unity_package_platform, vulkan_surface) - 208usize];
+    ["Offset of field: rsf_unity_package_platform::bridge_open"]
+        [::core::mem::offset_of!(rsf_unity_package_platform, bridge_open) - 208usize];
     ["Offset of field: rsf_unity_package_platform::session_seed"]
         [::core::mem::offset_of!(rsf_unity_package_platform, session_seed) - 216usize];
     ["Offset of field: rsf_unity_package_platform::render_pass"]

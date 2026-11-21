@@ -191,6 +191,16 @@ bool rsf_unity_preview_enabled() { return rsf_core_unity_preview_enabled(); }
 bool rsf_unity_preview_owns(void* candidate) { return rsf_core_unity_preview_owns(candidate); }
 void* rsf_unity_preview_parent() { return rsf_core_unity_preview_parent(); }
 void rsf_unity_preview_hide() { rsf_core_unity_preview_hide(&leaves); }
+bool rsf_unity_preview_drained() noexcept
+{
+    const uint64_t completed = fence ? fence->GetCompletedValue() : 0;
+    return completed != UINT64_MAX && rsf_core_unity_preview_drained(completed);
+}
+void rsf_unity_preview_release() noexcept
+{
+    slots = {}; chain.Reset(); fence.Reset(); queue.Reset(); device.Reset();
+    rsf_core_unity_preview_reset();
+}
 uint64_t rsf_unity_preview_base_frames() { return rsf_core_unity_preview_base_frames(); }
 bool rsf_unity_preview_prepare(void* device, void* queue, uint32_t width, uint32_t height)
 { return rsf_core_unity_preview_prepare(device, queue, width, height, &leaves); }

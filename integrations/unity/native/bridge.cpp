@@ -7,10 +7,11 @@
 // the Unity interfaces, D3D11/D3D12/DXGI objects and calls, shared surfaces and fences, the D3D11
 // texture leases, render-pass and CPU-event calls and the exported entry points.
 #include "bridge.h"
-#include "bridge_state.h"
 #include "bridge_interop.h"
 #include "vulkan_bridge.h"
+#include "vulkan_state.h"
 #include "package.h"
+#include "preview.h"
 #include <rescaleframe/shared_surface.h>
 #include <windows.h>
 #include <d3d11_4.h>
@@ -28,7 +29,7 @@
 
 extern bool rsf_unity_d3d12_prepare(const rsf_game_host_services&, rsf_unity_native_api*) noexcept;
 extern void rsf_unity_d3d12_activate(bool) noexcept;
-extern bool rsf_unity_d3d12_drained() noexcept;
+extern bool rsf_unity_d3d12_try_close() noexcept;
 extern void rsf_unity_d3d12_release() noexcept;
 extern uint32_t rsf_unity_d3d12_managed_state() noexcept;
 extern "C" void UNITY_INTERFACE_API rsf_unity_d3d12_load(IUnityInterfaces*);
@@ -166,6 +167,13 @@ bool retire_interop_submission(uint64_t value, bool handed_back)
     }
     return true;
 }
+bool signal11(ID3D11Fence* fence, uint64_t value)
+{
+    if (!value || FAILED(context11->Signal(fence, value))) return false;
+    context11->Flush();
+    rsf_unity_interop_d3d11_submitted(value);
+    return true;
+}
 void execute11(int id, const rsf_unity_packet& packet)
 {
     if (!active() || !unity11 || !initialize11() || !services.render_pass) return;
@@ -175,12 +183,13 @@ void execute11(int id, const rsf_unity_packet& packet)
         if (rsf_unity_package_is_editor() && packet.color) {
             ComPtr<ID3D11Texture2D> source;
             if (FAILED(static_cast<IUnknown*>(packet.color)->QueryInterface(IID_PPV_ARGS(&source))) || !prepare_surface(5, source.Get())) return;
+            rsf_unity_interop_record_d3d11_copy();
             context11->CopyResource(static_cast<ID3D11Resource*>(rsf_shared_surface_d3d11(surfaces[5].surface)), source.Get());
             auto* fence11 = static_cast<ID3D11Fence*>(rsf_shared_fence_d3d11(sharing_fence));
             auto* fence12 = static_cast<ID3D12Fence*>(rsf_shared_fence_d3d12(sharing_fence));
             uint64_t uploaded = 0, consumed = 0;
-            if (!rsf_unity_interop_shared_pair(&uploaded, &consumed) || FAILED(context11->Signal(fence11, uploaded))) return;
-            context11->Flush(); if (FAILED(queue12->Wait(fence12, uploaded))) return;
+            if (!rsf_unity_interop_shared_pair(&uploaded, &consumed) || !signal11(fence11, uploaded)) return;
+            if (FAILED(queue12->Wait(fence12, uploaded))) return;
             pass.color_input = rsf_shared_surface_d3d12(surfaces[5].surface); pass.flags |= RSF_UNITY_PREVIEW_SOURCE_COMMON;
             services.render_pass(services.user, queue12.Get(), &pass, 1);
             const bool handed_back = SUCCEEDED(queue12->Signal(fence12, consumed)) &&
@@ -213,13 +222,14 @@ void execute11(int id, const rsf_unity_packet& packet)
         if (!input[i]) continue;
         const uint32_t surface = hudless ? 4u : i;
         if (!prepare_surface(surface, input[i].Get())) return;
+        rsf_unity_interop_record_d3d11_copy();
         context11->CopyResource(static_cast<ID3D11Resource*>(rsf_shared_surface_d3d11(surfaces[surface].surface)), input[i].Get());
     }
     auto* fence11 = static_cast<ID3D11Fence*>(rsf_shared_fence_d3d11(sharing_fence));
     auto* fence12 = static_cast<ID3D12Fence*>(rsf_shared_fence_d3d12(sharing_fence));
     uint64_t upload = 0, download = 0;
-    if (!rsf_unity_interop_shared_pair(&upload, &download) || FAILED(context11->Signal(fence11, upload))) return;
-    context11->Flush(); if (FAILED(queue12->Wait(fence12, upload))) return;
+    if (!rsf_unity_interop_shared_pair(&upload, &download) || !signal11(fence11, upload)) return;
+    if (FAILED(queue12->Wait(fence12, upload))) return;
     std::array<ID3D12Resource*, 4> resources{};
     for (uint32_t i = 0; i < 4; ++i) if (input[i]) {
         resources[i] = static_cast<ID3D12Resource*>(rsf_shared_surface_d3d12(surfaces[hudless ? 4u : i].surface));
@@ -243,17 +253,23 @@ void execute11(int id, const rsf_unity_packet& packet)
     ID3D12CommandList* lists[] = {slot.list.Get()}; queue12->ExecuteCommandLists(1, lists);
     const bool handed_back = SUCCEEDED(queue12->Signal(fence12, download)) &&
         SUCCEEDED(context11->Wait(fence11, download));
-    if (handed_back && input[3] && !hudless)
+    if (handed_back && input[3] && !hudless) {
+        rsf_unity_interop_record_d3d11_copy();
         context11->CopyResource(input[3].Get(), static_cast<ID3D11Resource*>(rsf_shared_surface_d3d11(surfaces[3].surface)));
+        if (!signal11(fence11, rsf_unity_interop_d3d11_tail())) {
+            rsf_unity_frames_activate(0);
+            log("Unity DX11 output copy has no completion signal; adapter stopped and remains owned.");
+        }
+    }
     if (!retire_interop_submission(rsf_unity_interop_submit(index), handed_back)) return;
     services.render_pass(services.user, slot.list.Get(), &pass, 0);
     rsf_unity_interop_advance(index);
 }
 void UNITY_INTERFACE_API render_event(int id, void* address) noexcept try
 {
+    rsf_unity_frame_callback call;
+    if (!call.entered) return;
     if (id < event_id || id > event_id + 2) return;
-    rsf_unity_frames_callback_enter();
-    struct Finish { ~Finish() { rsf_unity_frames_callback_leave(); } } finish;
     rsf_unity_packet packet{};
     Leases leases;
     {
@@ -263,20 +279,26 @@ void UNITY_INTERFACE_API render_event(int id, void* address) noexcept try
         leases = std::move(pending_leases[slot]);
         pending_leases[slot] = {};
     }
+    if (!active()) return;
     if (renderer == kUnityGfxRendererVulkan) {
         uint32_t change = 0;
         const bool reconfigure = id == event_id && rsf_unity_frames_pending_change(&change);
         if (rsf_uvk_render(id, packet, services, reconfigure) && reconfigure) rsf_unity_frames_settle_change(change);
     }
     else execute11(id, packet);
-} catch (...) { log("Unity DX11 bridge refused its render event."); }
+} catch (...) {
+    rsf_unity_frame_callback call;
+    if (call.entered) log("Unity DX11 bridge refused its render event.");
+}
 void cpu_fact(const rsf_game_cpu_event* fact) {
-    if (active() && fact && fact->struct_size>=sizeof(*fact) && fact->session_id==services.session_id && services.cpu_event)
+    rsf_unity_frame_callback call;
+    if (call.entered && active() && fact && fact->struct_size>=sizeof(*fact) && fact->session_id==services.session_id && services.cpu_event)
         services.cpu_event(services.user,fact);
 }
 void cpu(uint32_t stage, uint64_t frame)
 {
-    if (!active() || !frame || !services.cpu_event) return;
+    rsf_unity_frame_callback call;
+    if (!call.entered || !active() || !frame || !services.cpu_event) return;
     LARGE_INTEGER now{}, frequency{}; QueryPerformanceCounter(&now); QueryPerformanceFrequency(&frequency);
     rsf_game_cpu_event event{sizeof(event), stage, services.session_id, frame, static_cast<uint64_t>(now.QuadPart), static_cast<uint64_t>(frequency.QuadPart), 0, 0, 0};
     event.event_version=RSF_GAME_CPU_EVENT_VERSION; event.flags=RSF_GAME_CPU_INPUT_KEYED;
@@ -284,6 +306,8 @@ void cpu(uint32_t stage, uint64_t frame)
 }
 int configuration(uint32_t width, uint32_t height, rsf_unity_config* output)
 {
+    rsf_unity_frame_callback call;
+    if (!call.entered) return 0;
     return rsf_unity_frames_config(&services, width, height, output);
 }
 void* enqueue(const rsf_unity_packet* packet)
@@ -300,12 +324,16 @@ void* enqueue(const rsf_unity_packet* packet)
     }
     return stored;
 }
-// The shared D3D12 ring and sources stay unused on this path, so a completion of 0 checks only
-// the render callbacks and stored packets there.
-bool drained_locked()
+bool try_close_shared_bridge()
 {
-    if (!rsf_unity_frames_drained(0)) return false;
-    return renderer == kUnityGfxRendererVulkan ? rsf_uvk_drained() : rsf_unity_interop_drained(completed()) != 0;
+    std::lock_guard<std::mutex> lock(guard);
+    if (!rsf_unity_frames_try_close()) return false;
+    // Read completion only after admission closes. Callbacks own the fence while recording.
+    if (renderer == kUnityGfxRendererVulkan) return true;
+    const auto value = completed();
+    auto* shared = static_cast<ID3D11Fence*>(rsf_shared_fence_d3d11(sharing_fence));
+    return value != UINT64_MAX && rsf_unity_interop_drained(value) != 0 &&
+        rsf_unity_interop_d3d11_drained(shared ? shared->GetCompletedValue() : 0) != 0;
 }
 }
 
@@ -315,34 +343,50 @@ bool rsf_unity_bridge_prepare(const rsf_game_host_services& host, rsf_unity_nati
     if (!output || !host.render_pass || !host.render_config || !host.log) return false;
     std::lock_guard<std::mutex> lock(guard);
     services = host;
-    *output = {sizeof(*output), RSF_UNITY_NATIVE_ABI_VERSION, host.session_id, [](const char* text) { log(text); }, configuration, enqueue,
+    *output = {sizeof(*output), RSF_UNITY_NATIVE_ABI_VERSION, host.session_id,
+        [](const char* text) { rsf_unity_frame_callback call; if (call.entered) log(text); }, configuration, enqueue,
         reinterpret_cast<void*>(render_event), rsf_unity_frames_report_managed, cpu, cpu_fact}; return true;
 }
 void rsf_unity_bridge_activate(bool enabled) noexcept
 {
     if (renderer == kUnityGfxRendererD3D12) rsf_unity_d3d12_activate(enabled); else rsf_unity_frames_activate(enabled ? 1u : 0u);
 }
-bool rsf_unity_bridge_drained() noexcept
+bool rsf_unity_package_bridge_try_close() noexcept
 {
-    if (renderer == kUnityGfxRendererD3D12) return rsf_unity_d3d12_drained();
-    std::lock_guard<std::mutex> lock(guard);
-    return drained_locked();
+    rsf_unity_bridge_activate(false);
+    const bool vulkan = renderer == kUnityGfxRendererVulkan;
+    if (vulkan) rsf_unity_vulkan_stop_admission();
+    if (!(renderer == kUnityGfxRendererD3D12 ? rsf_unity_d3d12_try_close() : try_close_shared_bridge())) return false;
+    if (vulkan && !rsf_unity_vulkan_try_close()) return false;
+    if (!rsf_unity_package_is_editor() || rsf_unity_preview_drained()) return true;
+    if (vulkan) rsf_unity_vulkan_finish_retirement(false);
+    return false;
 }
-void rsf_unity_bridge_release() noexcept
+void rsf_unity_package_bridge_finish_retirement(bool commit) noexcept
 {
+    const bool vulkan = renderer == kUnityGfxRendererVulkan;
+    if (commit && rsf_unity_package_is_editor()) rsf_unity_preview_release();
+    if (vulkan) rsf_unity_vulkan_finish_retirement(commit);
+    if (!commit) return;
     if (renderer == kUnityGfxRendererD3D12) { rsf_unity_d3d12_release(); return; }
     std::lock_guard<std::mutex> lock(guard);
-    if (!drained_locked()) return;
-    if (renderer == kUnityGfxRendererVulkan && !rsf_uvk_release()) return;
     for (auto& surface : surfaces) { rsf_shared_surface_destroy(surface.surface); surface.surface = nullptr; }
     rsf_shared_fence_destroy(sharing_fence); sharing_fence = nullptr;
     commands = {}; completion.Reset(); queue12.Reset(); device12.Reset(); context11.Reset(); device11.Reset();
     pending_leases = {}; services = {};
-    // Forgets the ring, the stored packets and the managed stage; activity and policy persist.
+    // The frame owner stays closed. The next session activates it after preparation.
     // The Vulkan bridge releases the ring itself, only together with the objects that used it.
-    if (renderer != kUnityGfxRendererVulkan) rsf_unity_interop_release();
+    if (!vulkan) rsf_unity_interop_release();
     rsf_unity_frames_release();
     initialized11 = failed11 = false;
+}
+bool rsf_unity_package_bridge_open(bool editor)
+{
+    if (renderer == kUnityGfxRendererVulkan) {
+        rsf_unity_vulkan_open();
+        return editor || rsf_uvk_create_window();
+    }
+    return renderer == kUnityGfxRendererD3D11 || renderer == kUnityGfxRendererD3D12;
 }
 uint32_t rsf_unity_bridge_managed_state() noexcept
 {
@@ -378,7 +422,9 @@ extern "C" void UNITY_INTERFACE_API rsf_unity_package_bridge_load(IUnityInterfac
 extern "C" void UNITY_INTERFACE_API rsf_unity_package_bridge_unload()
 {
     if (renderer == kUnityGfxRendererD3D12) rsf_unity_d3d12_unload();
+    if (renderer == kUnityGfxRendererVulkan) rsf_uvk_unload();
     rsf_unity_frames_activate(0); unity11 = nullptr; unity12 = nullptr;
+    renderer = kUnityGfxRendererNull;
 }
 bool rsf_unity_package_graphics(Microsoft::WRL::ComPtr<ID3D12Device>& owning_device,
     Microsoft::WRL::ComPtr<ID3D12CommandQueue>& owning_queue) noexcept
