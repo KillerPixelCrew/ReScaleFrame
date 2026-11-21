@@ -65,7 +65,12 @@ typedef struct rsf_d3d11h_platform {
     void (*chain_dispatch)(rsf_d3d11_chain_dispatch*);
     int32_t (*creation_begin)(void* window, uint64_t* token); /* HRESULT */
     int32_t (*creation_end)(void* window, uint64_t token, void* device, void* context, void* outer); /* HRESULT */
-    int32_t (*wrap_chain)(const rsf_d3d11_native_chain*, rsf_game_log_fn, void* user); /* rsf_result */
+    /* Outer native-chain adoption. d3d11_host.rs owns validation, the caller
+       slot, the caller reference and the receipts; these are the typed leaves. */
+    int32_t (*wrap_native)(void* device, void* native_chain, void** facade); /* HRESULT; set facade owns one reference */
+    void* (*com_identity)(void* object); /* IUnknown identity with one reference, or null */
+    void* (*chain_present)(void* chain); /* IDXGISwapChain::Present vtable entry, diagnostic only */
+    uint32_t (*com_release)(void* object); /* releases one reference, returns the reported count */
     /* Native scene, window, FG and CPU owners. */
     void (*fg_frame)(const rsf_game_render_pass*, uint32_t begin);
     void (*fg_submission)(const rsf_game_render_pass*, uint32_t begin);

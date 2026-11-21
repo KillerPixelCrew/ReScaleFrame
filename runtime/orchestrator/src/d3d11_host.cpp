@@ -19,7 +19,6 @@
 #include <dxgi.h>
 #include <wrl/client.h>
 #include <cstddef>
-#include <cstdio>
 
 extern "C" {
 const rsf_aux_platform* rsf_auxiliary_sr_platform(void);
@@ -63,8 +62,10 @@ static_assert(sizeof(rsf_d3d11_sampler_bias) == 160 && offsetof(rsf_d3d11_sample
     offsetof(rsf_d3d11_sampler_bias, applied_mask) == 152);
 static_assert(sizeof(rsf_d3d11h_strings) == 64 && sizeof(rsf_d3d11h_bridge) == 64 &&
     sizeof(rsf_d3d11h_pipeline_start) == 48 && sizeof(rsf_d3d11h_pipeline_status) == 20);
-static_assert(sizeof(rsf_d3d11h_platform) == 57 * sizeof(void*) &&
-    offsetof(rsf_d3d11h_platform, auxiliary) == 56 * sizeof(void*));
+static_assert(sizeof(rsf_d3d11h_platform) == 60 * sizeof(void*) &&
+    offsetof(rsf_d3d11h_platform, wrap_native) == 15 * sizeof(void*) &&
+    offsetof(rsf_d3d11h_platform, com_release) == 18 * sizeof(void*) &&
+    offsetof(rsf_d3d11h_platform, auxiliary) == 59 * sizeof(void*));
 static_assert(RSF_DUMP_VIEW_RAW == 0 && RSF_DUMP_VIEW_HDR == 3 && RSF_DUMP_VIEW_DEPTH == 4 &&
     RSF_DUMP_VIEW_DENSE_MOTION == 7 && DXGI_PRESENT_TEST == 1 && RSF_SCREEN_GAMEPLAY == 8);
 static_assert(RSF_NATIVE_SCENE_PRESENT_NONE == 0 && RSF_SR_DLSS == 1 && RSF_DLSS_OK == 0 && RSF_DLSS_PIPELINE_OK == 0);
@@ -166,47 +167,25 @@ int32_t creation_end(void* window, uint64_t token, void* device, void* context, 
     return rsf_d3d11_present_creation_end(window, token, device, context, outer);
 }
 
-int32_t wrap_chain(const rsf_d3d11_native_chain* request, rsf_game_log_fn log, void* user) noexcept try
+// The bridge catches its own exceptions. A throw escaping it here reports
+// E_FAIL, which the Rust owner refuses with NOT_READY as the former wrapper's
+// catch did, before the caller slot or reference is touched.
+int32_t wrap_native(void* device, void* native_chain, void** facade) noexcept try
 {
-    auto* context = static_cast<ID3D11DeviceContext*>(request->immediate_context);
-    if (context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) return RSF_ERROR_INVALID_ARGUMENT;
-    ComPtr<ID3D11Device> context_device; context->GetDevice(&context_device);
-    ComPtr<IUnknown> expected, observed;
-    if (FAILED(static_cast<IUnknown*>(request->device)->QueryInterface(IID_PPV_ARGS(&expected))) ||
-        FAILED(context_device.As(&observed)) || expected.Get() != observed.Get()) return RSF_ERROR_INVALID_ARGUMENT;
-    auto* native = static_cast<IDXGISwapChain*>(*request->swapchain);
-    void* facade = nullptr;
-    const auto result = rsf_d3d11_present_wrap_native_chain(request->device, native, &facade);
-    if (FAILED(result) || !facade) {
-        char text[192]{}; std::snprintf(text, sizeof(text), "D3D11 outer creation facade refused HRESULT=0x%08lx; native outputs preserved",
-            static_cast<unsigned long>(result)); log(user, text); return RSF_ERROR_NOT_READY;
-    }
-    if (!rsf_d3d11_present_is_owner(facade)) {
-        static_cast<IDXGISwapChain*>(facade)->Release();
-        log(user, "D3D11 outer creation refused non-owner facade; native outputs preserved.");
-        return RSF_ERROR_NOT_READY;
-    }
-    ComPtr<IUnknown> native_owner, facade_owner;
-    (void)native->QueryInterface(IID_PPV_ARGS(&native_owner));
-    (void)static_cast<IDXGISwapChain*>(facade)->QueryInterface(IID_PPV_ARGS(&facade_owner));
-    void* native_identity = native_owner.Get(); void* facade_identity = facade_owner.Get();
-    char identity[320]{}; std::snprintf(identity, sizeof(identity),
-        "D3D11 outer creation identity native=%p unknown=%p Present=%p facade=%p unknown=%p Present=%p owner=%d",
-        static_cast<void*>(native), native_identity, (*reinterpret_cast<void***>(native))[8], facade,
-        facade_identity, (*reinterpret_cast<void***>(facade))[8], rsf_d3d11_present_is_owner(facade));
-    log(user, identity);
-    *request->swapchain = facade;
-    // Drop our diagnostic identity reference before observing the caller's
-    // release. A remaining count belongs to another owner, not this temporary.
-    native_owner.Reset();
-    const auto remaining = native->Release();
-    char released[192]{}; std::snprintf(released, sizeof(released),
-        "D3D11 outer native chain caller reference released identity=%p reported_remaining=%lu; no external references consumed",
-        native_identity, static_cast<unsigned long>(remaining));
-    log(user, released);
-    log(user, "D3D11 outer native creation returned final application facade; native creation HRESULT preserved by adapter.");
-    return RSF_OK;
-} catch (...) { return RSF_ERROR_NOT_READY; }
+    return rsf_d3d11_present_wrap_native_chain(device, native_chain, facade);
+} catch (...) { return E_FAIL; }
+
+void* com_identity(void* object) noexcept
+{
+    IUnknown* identity{};
+    return SUCCEEDED(static_cast<IUnknown*>(object)->QueryInterface(IID_PPV_ARGS(&identity))) ? identity : nullptr;
+}
+
+// IDXGISwapChain::Present is vtable slot 8: IUnknown 0-2, IDXGIObject 3-6,
+// IDXGIDeviceSubObject 7. The address is only logged.
+void* chain_present(void* chain) noexcept { return (*static_cast<void***>(chain))[8]; }
+
+uint32_t com_release(void* object) noexcept { return static_cast<IUnknown*>(object)->Release(); }
 
 void fg_frame(const rsf_game_render_pass* pass, uint32_t begin) noexcept { rsf_native_fg_frame(pass, begin); }
 void fg_submission(const rsf_game_render_pass* pass, uint32_t begin) noexcept { rsf_native_fg_submission(pass, begin); }
@@ -374,7 +353,10 @@ const rsf_d3d11h_platform& platform()
         .chain_dispatch = chain_dispatch,
         .creation_begin = creation_begin,
         .creation_end = creation_end,
-        .wrap_chain = wrap_chain,
+        .wrap_native = wrap_native,
+        .com_identity = com_identity,
+        .chain_present = chain_present,
+        .com_release = com_release,
         .fg_frame = fg_frame,
         .fg_submission = fg_submission,
         .fg_final = fg_final,

@@ -1967,6 +1967,73 @@ impl Host {
         );
         OK
     }
+
+    // Outer D3D11 creation adoption. The caller's slot keeps the native chain
+    // until an owned facade is proven; then the slot takes the facade's
+    // reference and the caller's native reference is released.
+    fn wrap_native_chain(&self, request: &rsf_d3d11_native_chain) -> i32 {
+        let p = &self.platform;
+        let context = request.immediate_context;
+        if !self.is_immediate(context) {
+            return INVALID;
+        }
+        // Exact COM identity: the declared device first, then the context's device.
+        let context_device = self.child_device(context);
+        if !self.same(request.device, ptr_of(&context_device)) {
+            return INVALID;
+        }
+        // SAFETY: the export admitted the request and checked both slot levels.
+        let native = unsafe { *request.swapchain };
+        let mut facade = null_mut();
+        let result = unsafe { (p.wrap_native)(request.device, native, &mut facade) };
+        // A set out pointer owns one facade reference even beside a failed
+        // HRESULT; filtering drops (releases) it so a refusal never leaks it.
+        let Some(facade) = (unsafe { ComRef::from_owned(facade) }).filter(|_| result >= 0) else {
+            self.log(&format!(
+                "D3D11 outer creation facade refused HRESULT=0x{:08x}; native outputs preserved",
+                result as u32
+            ));
+            return NOT_READY;
+        };
+        if unsafe { (p.present_is_owner)(facade.as_ptr()) } == 0 {
+            drop(facade);
+            self.log("D3D11 outer creation refused non-owner facade; native outputs preserved.");
+            return NOT_READY;
+        }
+        let native_identity = unsafe { ComRef::from_owned((p.com_identity)(native)) };
+        let facade_identity = unsafe { ComRef::from_owned((p.com_identity)(facade.as_ptr())) };
+        let native_unknown = ptr_of(&native_identity);
+        self.log(&format!(
+            "D3D11 outer creation identity native={} unknown={} Present={} facade={} unknown={} Present={} owner={}",
+            msvc_pointer(native),
+            msvc_pointer(native_unknown),
+            msvc_pointer(unsafe { (p.chain_present)(native) }),
+            msvc_pointer(facade.as_ptr()),
+            msvc_pointer(ptr_of(&facade_identity)),
+            msvc_pointer(unsafe { (p.chain_present)(facade.as_ptr()) }),
+            unsafe { (p.present_is_owner)(facade.as_ptr()) },
+        ));
+        // SAFETY: the slot is writable caller storage; it now owns the facade reference.
+        unsafe { *request.swapchain = facade.into_raw() };
+        // Drop our diagnostic identity reference before observing the caller's
+        // release. A remaining count belongs to another owner, not this temporary.
+        drop(native_identity);
+        let remaining = unsafe { (p.com_release)(native) };
+        self.log(&format!(
+            "D3D11 outer native chain caller reference released identity={} reported_remaining={remaining}; no external references consumed",
+            msvc_pointer(native_unknown)
+        ));
+        self.log(
+            "D3D11 outer native creation returned final application facade; native creation HRESULT preserved by adapter.",
+        );
+        drop(facade_identity);
+        OK
+    }
+}
+
+// MSVC's %p, which the native-chain receipts used before the port.
+fn msvc_pointer(value: Raw) -> String {
+    format!("{:016X}", value as usize)
 }
 
 fn rect_size([left, top, right, bottom]: [i32; 4]) -> [u32; 2] {
@@ -2450,7 +2517,8 @@ unsafe extern "C" fn rsf_core_d3d11_host_wrap_native_swapchain(
     if g.configured || g.scene_bound {
         return NOT_READY;
     }
-    unsafe { (host.platform.wrap_chain)(request, Some(host_log), host.user()) }
+    // The lease `g` stays held across the adoption, as it did around the C++ wrapper.
+    host.wrap_native_chain(request)
 }
 
 #[unsafe(no_mangle)]

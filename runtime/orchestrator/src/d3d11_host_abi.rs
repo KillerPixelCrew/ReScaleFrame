@@ -263,8 +263,10 @@ pub(crate) struct rsf_d3d11h_platform {
     pub chain_dispatch: unsafe extern "C" fn(*mut rsf_d3d11_chain_dispatch),
     pub creation_begin: unsafe extern "C" fn(Raw, *mut u64) -> i32,
     pub creation_end: unsafe extern "C" fn(Raw, u64, Raw, Raw, Raw) -> i32,
-    pub wrap_chain:
-        unsafe extern "C" fn(*const rsf_d3d11_native_chain, rsf_game_log_fn, Raw) -> i32,
+    pub wrap_native: unsafe extern "C" fn(Raw, Raw, *mut Raw) -> i32,
+    pub com_identity: unsafe extern "C" fn(Raw) -> Raw,
+    pub chain_present: unsafe extern "C" fn(Raw) -> Raw,
+    pub com_release: unsafe extern "C" fn(Raw) -> u32,
     pub fg_frame: unsafe extern "C" fn(*const Pass, u32),
     pub fg_submission: unsafe extern "C" fn(*const Pass, u32),
     pub fg_final: unsafe extern "C" fn(Raw, *const Pass),
@@ -352,6 +354,8 @@ const _: () = {
     assert!(size_of::<rsf_d3d11h_bridge>() == 64);
     assert!(size_of::<rsf_d3d11h_pipeline_start>() == 48);
     assert!(size_of::<rsf_d3d11h_pipeline_status>() == 20);
-    assert!(size_of::<rsf_d3d11h_platform>() == 57 * 8);
-    assert!(offset_of!(rsf_d3d11h_platform, auxiliary) == 56 * 8);
+    assert!(size_of::<rsf_d3d11h_platform>() == 60 * 8);
+    assert!(offset_of!(rsf_d3d11h_platform, wrap_native) == 15 * 8);
+    assert!(offset_of!(rsf_d3d11h_platform, com_release) == 18 * 8);
+    assert!(offset_of!(rsf_d3d11h_platform, auxiliary) == 59 * 8);
 };

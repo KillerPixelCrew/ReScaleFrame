@@ -96,8 +96,11 @@ unsafe extern "C" fn begin(_: Raw, _: *mut u64) -> i32 {
 unsafe extern "C" fn end(_: Raw, _: u64, _: Raw, _: Raw, _: Raw) -> i32 {
     0
 }
-unsafe extern "C" fn wrap(_: *const rsf_d3d11_native_chain, _: rsf_game_log_fn, _: Raw) -> i32 {
-    NOT_READY
+unsafe extern "C" fn wrap(_: Raw, _: Raw, _: *mut Raw) -> i32 {
+    0x8000_4005_u32 as i32 // E_FAIL
+}
+unsafe extern "C" fn release_count(_: Raw) -> u32 {
+    0
 }
 unsafe extern "C" fn pass_fact(_: *const Pass, _: u32) {}
 unsafe extern "C" fn final_fact(_: Raw, _: *const Pass) {}
@@ -224,7 +227,10 @@ const PLATFORM: rsf_d3d11h_platform = rsf_d3d11h_platform {
     chain_dispatch: dispatch,
     creation_begin: begin,
     creation_end: end,
-    wrap_chain: wrap,
+    wrap_native: wrap,
+    com_identity: none,
+    chain_present: none,
+    com_release: release_count,
     fg_frame: pass_fact,
     fg_submission: pass_fact,
     fg_final: final_fact,
