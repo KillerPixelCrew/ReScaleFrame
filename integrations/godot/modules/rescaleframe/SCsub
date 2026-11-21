@@ -44,7 +44,7 @@ else:
 # Archive the Rust object with the C++ module objects. It needs no Rust runtime or DLL imports.
 env.modules_sources += env_rsf.CommandNoCache(
     "#modules/rsf_godot_viewport" + env["OBJSUFFIX"],
-    ["viewport.rs", "../../../../rust-toolchain.toml", "cpu_facts.rs"],
+    ["viewport.rs", "../../../../rust-toolchain.toml", "cpu_facts.rs", "frame.rs"],
     Action(build_viewport_object, "Compiling $SOURCE", varlist=["RSF_RUST_TARGET"]),
     RSF_RUST_TARGET=f"{rust_arch}-pc-windows-{rust_abi}",
 )
