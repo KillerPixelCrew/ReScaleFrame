@@ -7,6 +7,7 @@
 //! D3D12/Win32 leaves and the public symbol forwards.
 use crate::capture_names::CaptureName;
 use crate::com_ref::ComRef;
+use crate::d3d12_fence::FenceState;
 use crate::frame_capture_vk::{Legacy, Pixels, general, general_precision};
 use crate::sr_session::has_capacity;
 use rsf_game_sys::{RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record as Record};
@@ -290,16 +291,18 @@ impl Owner {
                     continue;
                 };
                 let completed = unsafe { (self.ops.completed)(fence.as_ptr()) };
-                if completed == u64::MAX {
-                    // A removed device never completes the copy.
-                    self.fail(value, MAP_FAILED);
-                    okay = false;
-                    state.pending.remove(index);
-                    continue;
-                }
-                if completed < SUBMITTED {
-                    index += 1;
-                    continue;
+                match FenceState::check(completed, SUBMITTED) {
+                    FenceState::DeviceRemoved => {
+                        self.fail(value, MAP_FAILED);
+                        okay = false;
+                        state.pending.remove(index);
+                        continue;
+                    }
+                    FenceState::Pending => {
+                        index += 1;
+                        continue;
+                    }
+                    FenceState::Complete => {}
                 }
             }
             let data = unsafe { (self.ops.map)(value.buffer.as_ptr(), value.layout.bytes) };
@@ -419,7 +422,7 @@ impl Owner {
             return None;
         }
         let completed = unsafe { (self.ops.drain)(queue) };
-        if completed < SUBMITTED || completed == u64::MAX {
+        if FenceState::check(completed, SUBMITTED) != FenceState::Complete {
             return None;
         }
         Some(self.flush_matching(&mut self.lock(), false, |value| {

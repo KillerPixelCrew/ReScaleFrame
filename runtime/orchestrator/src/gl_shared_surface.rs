@@ -10,6 +10,7 @@
 // acquire stay pending until a later queue signal succeeds. The executed list is never closed or
 // submitted again, and GL never waits on a value that the queue has not been asked to signal.
 use crate::com_ref::ComRef;
+use crate::d3d12_fence::FenceState;
 use crate::gl_pipeline_abi::{
     RSF_GL_R32F, RSF_GL_RG16F, RSF_GL_RGBA8, RSF_GL_RGBA16F, rsf_gl_setup, rsf_gl_texture_info,
 };
@@ -293,11 +294,12 @@ impl Context {
         }
         let l = self.leaves;
         let completed = unsafe { (l.fence_completed)(self.fence.as_ptr()) };
-        unsafe {
-            completed != u64::MAX
-                && (completed >= value
-                    || (l.fence_wait)(self.fence.as_ptr(), value, self.event.get(), CPU_WAIT_MS)
-                        != 0)
+        match FenceState::check(completed, value) {
+            FenceState::Complete => true,
+            FenceState::DeviceRemoved => false,
+            FenceState::Pending => unsafe {
+                (l.fence_wait)(self.fence.as_ptr(), value, self.event.get(), CPU_WAIT_MS) != 0
+            },
         }
     }
 

@@ -596,6 +596,16 @@ impl Host {
         }
     }
 
+    fn completed(&self, fence: &ComRef) -> Option<u64> {
+        let completed = unsafe { (self.p.fence_completed)(fence.as_ptr()) };
+        if completed == u64::MAX {
+            self.poisoned.store(true, Ordering::Relaxed);
+            None
+        } else {
+            Some(completed)
+        }
+    }
+
     fn wait(&self, s: &State, value: u64) -> bool {
         if value == 0 {
             return true;
@@ -603,24 +613,15 @@ impl Host {
         let Some(fence) = s.fence.as_ref() else {
             return false;
         };
-        let completed = unsafe { (self.p.fence_completed)(fence.as_ptr()) };
-        if completed == u64::MAX {
-            self.poisoned.store(true, Ordering::Relaxed);
+        let Some(completed) = self.completed(fence) else {
             return false;
-        }
+        };
         if completed >= value {
             return true;
         }
         match unsafe { (self.p.fence_wait)(fence.as_ptr(), value, FENCE_TIMEOUT_MS) } {
             0 => false,
-            result if result > 0 => {
-                let completed = unsafe { (self.p.fence_completed)(fence.as_ptr()) };
-                if completed == u64::MAX {
-                    self.poisoned.store(true, Ordering::Relaxed);
-                    return false;
-                }
-                completed >= value
-            }
+            result if result > 0 => self.completed(fence).is_some_and(|done| done >= value),
             _ => {
                 self.poisoned.store(true, Ordering::Relaxed);
                 false
@@ -640,11 +641,9 @@ impl Host {
         let Some(fence) = s.fence.as_ref() else {
             return;
         };
-        let completed = unsafe { (self.p.fence_completed)(fence.as_ptr()) };
-        if completed == u64::MAX {
-            self.poisoned.store(true, Ordering::Relaxed);
+        let Some(completed) = self.completed(fence) else {
             return;
-        }
+        };
         for (index, slot) in s.slots.iter_mut().enumerate() {
             if !slot.pending
                 && !slot.capture_retired
@@ -833,12 +832,14 @@ impl Host {
                 return result;
             }
         }
-        let fence = s.fence.as_ref().map_or(null_mut(), ComRef::as_ptr);
-        let mut index = s.slots.iter().position(|slot| {
-            !slot.pending
-                && (slot.fence_value == 0
-                    || unsafe { (p.fence_completed)(fence) } >= slot.fence_value)
-        });
+        let Some(completed) = s.fence.as_ref().and_then(|fence| self.completed(fence)) else {
+            s.reset = true;
+            return NOT_READY;
+        };
+        let mut index = s
+            .slots
+            .iter()
+            .position(|slot| !slot.pending && completed >= slot.fence_value);
         if index.is_none() {
             // A submitted slot can be joined. An unsubmitted one must never block its producer.
             index =

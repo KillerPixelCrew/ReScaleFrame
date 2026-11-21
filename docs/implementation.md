@@ -4,6 +4,13 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The D3D12 render host refuses slot reuse after device removal even when
+the existing context matches the requested extent. Its wait, capture and
+slot selection share the removal check. The D3D12 capture drain also
+uses the shared fence wait. FG leases, readbacks and OpenGL share the
+Rust fence state check. Source review traced all three outcomes and
+the updated render-host fixture remains unrun.
+
 Shared D3D12 waits now require the requested fence value after an event
 wake. Rust handles stale wakes and device removal within the original wait
 budget. The OpenGL bridge and D3D12 render host use the same wait,

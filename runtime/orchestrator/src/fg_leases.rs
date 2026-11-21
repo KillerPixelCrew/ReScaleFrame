@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
+pub(super) use crate::d3d12_fence::FenceState;
 use crate::render_abi::{rsf_backend_result, rsf_fg_retirement};
 use std::ffi::c_void;
 use std::ptr::{self, NonNull};
@@ -43,23 +44,10 @@ pub(super) struct FencePoint {
 // D3D12 fences are free-threaded and all calls on the retained interface are safe across threads.
 unsafe impl Send for FencePoint {}
 
-#[derive(PartialEq, Eq)]
-pub(super) enum FenceState {
-    Pending,
-    Complete,
-    DeviceRemoved,
-}
-
 impl FencePoint {
     pub(super) fn state(&self) -> FenceState {
         let completed = unsafe { rsf_d3d12_fence_completed(self.fence.0.as_ptr()) };
-        if completed == u64::MAX {
-            FenceState::DeviceRemoved
-        } else if completed >= self.value {
-            FenceState::Complete
-        } else {
-            FenceState::Pending
-        }
+        FenceState::check(completed, self.value)
     }
 }
 

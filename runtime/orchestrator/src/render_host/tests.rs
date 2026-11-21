@@ -800,10 +800,16 @@ fn fence_failures_poison_and_present_routes_to_the_registration() {
     unsafe { present(host.user(), null_mut(), 1, 0, 0) };
     assert_eq!(host.lock().application_presents, 1);
     assert!(events().contains(&"registration present 0".to_string()));
-    // A device-removed fence poisons.
+    // A device-removed fence must refuse slot reuse even at the current extent.
     host.submit(queue, 2, 1, lists.as_ptr(), true);
     host.submit(queue, 2, 1, lists.as_ptr(), false);
+    events();
     with(|world| world.completed = u64::MAX);
+    assert_eq!(
+        host.process(list, &pass(3, (1280, 720), (1920, 1080))),
+        NOT_READY
+    );
+    assert!(!has_event(&events(), "evaluate"));
     assert!(!host.wait(&host.lock(), 5));
     assert!(host.poisoned.load(Ordering::Relaxed));
     with(|world| world.completed = 0);

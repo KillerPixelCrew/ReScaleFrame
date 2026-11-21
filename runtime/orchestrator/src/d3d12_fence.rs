@@ -10,11 +10,30 @@ const DEVICE_REMOVED: i32 = 0x887a_0005_u32 as i32;
 const DEVICE_HUNG: i32 = 0x887a_0006_u32 as i32;
 type Handle = *mut c_void;
 
+#[derive(PartialEq, Eq)]
+pub(super) enum FenceState {
+    Pending,
+    Complete,
+    DeviceRemoved,
+}
+
+impl FenceState {
+    pub(super) fn check(done: u64, value: u64) -> Self {
+        if done == u64::MAX {
+            Self::DeviceRemoved
+        } else if done >= value {
+            Self::Complete
+        } else {
+            Self::Pending
+        }
+    }
+}
+
 fn completion_result(done: u64, value: u64) -> Option<i32> {
-    if done == u64::MAX {
-        Some(DEVICE_REMOVED)
-    } else {
-        (done >= value).then_some(S_OK)
+    match FenceState::check(done, value) {
+        FenceState::Pending => None,
+        FenceState::Complete => Some(S_OK),
+        FenceState::DeviceRemoved => Some(DEVICE_REMOVED),
     }
 }
 

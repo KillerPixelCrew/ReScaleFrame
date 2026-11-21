@@ -117,9 +117,11 @@ class FrameCapture12 {
         if (FAILED(queue->GetDevice(IID_PPV_ARGS(&device))) || FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)))) return 0;
         HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
         if (!event) return 0;
-        const bool complete = SUCCEEDED(queue->Signal(fence.Get(), 1)) && SUCCEEDED(fence->SetEventOnCompletion(1, event)) && WaitForSingleObject(event, 15000) == WAIT_OBJECT_0;
+        HRESULT result = queue->Signal(fence.Get(), 1);
+        if (SUCCEEDED(result)) result = wait_fence(fence.Get(), 1, event, 15000);
         CloseHandle(event);
-        return complete ? fence->GetCompletedValue() : 0;
+        if (result == DXGI_ERROR_DEVICE_REMOVED) return UINT64_MAX;
+        return SUCCEEDED(result) ? 1u : 0u;
     }
 public:
     static const rsf_core_capture12_platform* native_platform() noexcept {
