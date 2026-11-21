@@ -4,6 +4,12 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Anomaly quiesce waits for an admitted FG frame even between native
+callbacks. The existing engine End callback can still close that frame
+and its Runtime binding after observation admission closes. Source
+review traced the paired callbacks. The updated retirement fixture is
+unrun, and live quiesce remains unverified.
+
 Anomaly closes any accepted FG window scope before the engine resets its
 device. The interrupted render frame cannot prepare more inputs or open
 another window scope. End still reports the real engine boundary, and a

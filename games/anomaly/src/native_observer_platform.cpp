@@ -23,7 +23,7 @@ rsf_result rsf_anomaly_observer_read(rsf_anomaly_native_observation*) noexcept;
 bool rsf_anomaly_observer_enter() noexcept;
 void rsf_anomaly_observer_leave() noexcept;
 void rsf_anomaly_observer_render_begin(const rsf_anomaly_observer_platform*) noexcept;
-void rsf_anomaly_observer_end_before(const rsf_anomaly_observer_platform*) noexcept;
+bool rsf_anomaly_observer_end_before(const rsf_anomaly_observer_platform*, bool observing) noexcept;
 void rsf_anomaly_observer_end_after(const rsf_anomaly_observer_platform*) noexcept;
 void rsf_anomaly_observer_camera_sample(const rsf_anomaly_observer_platform*, const float*, const float*) noexcept;
 void rsf_anomaly_observer_scene() noexcept;
@@ -54,9 +54,9 @@ void render_begin(void* self) {
 }
 void render_end(void* self) {
     const Invocation call;
-    if (call.observe) rsf_anomaly_observer_end_before(&platform);
+    const bool finish = rsf_anomaly_observer_end_before(&platform, call.observe);
     reinterpret_cast<Unary>(originals[1])(self);
-    if (call.observe) rsf_anomaly_observer_end_after(&platform);
+    if (finish) rsf_anomaly_observer_end_after(&platform);
 }
 void camera(void* self, const float* view, const float* projection) {
     const Invocation call;

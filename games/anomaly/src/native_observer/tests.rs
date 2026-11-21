@@ -4,6 +4,8 @@ use std::sync::atomic::AtomicBool;
 
 static INPUT_IDLE: AtomicBool = AtomicBool::new(false);
 static MOTION_REFUSED: AtomicBool = AtomicBool::new(false);
+static FG_FRAME_OPEN: AtomicBool = AtomicBool::new(false);
+static FG_ENDS: AtomicU32 = AtomicU32::new(0);
 static TEARDOWN: Mutex<Vec<&str>> = Mutex::new(Vec::new());
 
 unsafe extern "C" fn disable_input() -> bool {
@@ -29,10 +31,14 @@ unsafe extern "C" fn disable_geometry() -> bool {
     lock(&TEARDOWN).push("geometry");
     true
 }
+unsafe extern "C" fn sr_frame_end() {}
+unsafe extern "C" fn fg_end_before() {
+    FG_ENDS.fetch_add(1, Ordering::Relaxed);
+}
 
 #[test]
 fn lifecycle_and_status_refuse_reentry_while_the_owner_is_locked() {
-    let observer = Observer::new();
+    let observer = Observer::new(|| false);
     let platform = Platform::default();
     let services: rsf_game_host_services = unsafe { std::mem::zeroed() };
     {
@@ -48,7 +54,7 @@ fn lifecycle_and_status_refuse_reentry_while_the_owner_is_locked() {
 
 #[test]
 fn stop_drains_native_and_input_invocations_before_retiring_the_stages() {
-    let observer = Observer::new();
+    let observer = Observer::new(|| FG_FRAME_OPEN.load(Ordering::Relaxed));
     lock(&observer.state).session = Some(Session {
         engine: Engine::default(),
         log: None,
@@ -67,6 +73,8 @@ fn stop_drains_native_and_input_invocations_before_retiring_the_stages() {
         quiesce_sr: Some(quiesce_sr),
         quiesce_motion: Some(quiesce_motion),
         disable_geometry: Some(disable_geometry),
+        sr_frame_end: Some(sr_frame_end),
+        end_before: Some(fg_end_before),
         ..Platform::default()
     };
 
@@ -82,6 +90,16 @@ fn stop_drains_native_and_input_invocations_before_retiring_the_stages() {
     assert_eq!(*lock(&TEARDOWN), ["input"]);
 
     INPUT_IDLE.store(true, Ordering::Relaxed);
+    FG_FRAME_OPEN.store(true, Ordering::Relaxed);
+    assert_eq!(observer.control(&platform, true), BUSY);
+    assert_eq!(*lock(&TEARDOWN), ["input"]);
+    assert!(!observer.enter());
+    assert!(observer.end_before(&platform, false));
+    FG_FRAME_OPEN.store(false, Ordering::Relaxed);
+    observer.leave();
+    assert!(!observer.end_before(&platform, false));
+    assert_eq!(FG_ENDS.load(Ordering::Relaxed), 1);
+
     MOTION_REFUSED.store(true, Ordering::Relaxed);
     assert_eq!(observer.control(&platform, true), NATIVE_REFUSED);
     assert_eq!(observer.status().unwrap().prepared, 1);
@@ -117,7 +135,7 @@ unsafe extern "C" fn fg_render_begin(id: u32, width: u32, height: u32) {
 
 #[test]
 fn observation_and_fg_share_one_guarded_source_frame_sample() {
-    let observer = Observer::new();
+    let observer = Observer::new(|| false);
     lock(&observer.state).session = Some(Session {
         engine: Engine::default(),
         log: None,

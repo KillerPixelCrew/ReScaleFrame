@@ -620,6 +620,10 @@ fn installed() -> Option<&'static Stage> {
     }
 }
 
+pub(crate) fn frame_open() -> bool {
+    installed().is_some_and(|stage| stage.engine.lock().unwrap().phase == Phase::Rendering)
+}
+
 fn identity(stage: &Stage, engine: &Engine, role: u32) -> Pass {
     let source = engine.source;
     let [width, height] = engine.render.extent;

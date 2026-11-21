@@ -77,16 +77,17 @@ struct Observer {
     control: Mutex<Control>,
     state: Mutex<State>,
     activity: AtomicU32,
+    fg_frame_open: fn() -> bool,
 }
 
-static OBSERVER: Observer = Observer::new();
+static OBSERVER: Observer = Observer::new(crate::fg_stage::frame_open);
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl Observer {
-    const fn new() -> Self {
+    const fn new(fg_frame_open: fn() -> bool) -> Self {
         Self {
             control: Mutex::new(Control {
                 reason: c"Native rendering has not been prepared.",
@@ -103,6 +104,7 @@ impl Observer {
                 },
             }),
             activity: AtomicU32::new(0),
+            fg_frame_open,
         }
     }
 
@@ -270,7 +272,7 @@ impl Observer {
         // End and reset can still use stage resources after observation closes.
         // The inactive detours continue to supply the native geometry scope
         // until SR and motion have finished teardown.
-        if !self.idle(platform) {
+        if !self.idle(platform) || (self.fg_frame_open)() {
             return BUSY;
         }
         if control.retirement == Retirement::Sr {
@@ -364,6 +366,19 @@ impl Observer {
         if read {
             unsafe { (platform.render_begin.unwrap())(frame.id, frame.width, frame.height) };
         }
+    }
+
+    fn end_before(&self, platform: &Platform, observing: bool) -> bool {
+        // A frame can remain open between callbacks after quiesce has closed
+        // admission. Its actual End still owns the matching Runtime scope.
+        if !observing && !(self.fg_frame_open)() {
+            return false;
+        }
+        unsafe {
+            (platform.sr_frame_end.unwrap())();
+            (platform.end_before.unwrap())();
+        }
+        true
     }
 
     fn end_after(&self, platform: &Platform) {
@@ -530,11 +545,8 @@ extern "C" fn rsf_anomaly_observer_render_begin(platform: &Platform) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_observer_end_before(platform: &Platform) {
-    unsafe {
-        (platform.sr_frame_end.unwrap())();
-        (platform.end_before.unwrap())();
-    }
+extern "C" fn rsf_anomaly_observer_end_before(platform: &Platform, observing: bool) -> bool {
+    OBSERVER.end_before(platform, observing)
 }
 
 #[unsafe(no_mangle)]
