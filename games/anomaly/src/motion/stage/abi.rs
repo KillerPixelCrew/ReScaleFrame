@@ -14,18 +14,12 @@ use std::ffi::c_char;
 
 pub(super) type Raw = *mut std::ffi::c_void;
 pub(super) type Redraw = unsafe extern "C" fn(Raw, Raw);
-pub(super) const PLATFORM_ABI: u32 = 8;
+pub(super) const PLATFORM_ABI: u32 = 9;
 
 #[repr(C)]
-pub(super) struct WindowFacts {
-    pub device: Raw,
-    pub context: Raw,
-    pub backend: Raw,
-    pub position_rtv: Raw,
-    pub position_surface: Raw,
-    pub generation: u64,
-    pub frame: u32,
-    pub view: u8,
+pub(super) struct PositionViews {
+    pub rtv: Raw,
+    pub surface: Raw,
 }
 
 #[repr(C)]
@@ -117,8 +111,13 @@ pub(super) struct Platform {
     pub disable_hooks: unsafe extern "C" fn() -> bool,
     pub hooks_created: unsafe extern "C" fn() -> bool,
     pub install_draw_hooks: unsafe extern "C" fn(Raw) -> bool,
-    pub window_facts: unsafe extern "C" fn(Raw, *mut WindowFacts) -> bool,
-    pub target_facts: unsafe extern "C" fn(Raw, *mut TargetFacts) -> i32,
+    pub render_target: unsafe extern "C" fn() -> Raw,
+    pub position_views: unsafe extern "C" fn(Raw, *mut PositionViews) -> bool,
+    pub native_frame: unsafe extern "C" fn(&mut u32) -> bool,
+    pub render_view: unsafe extern "C" fn(&mut u8) -> bool,
+    pub reset_generation: unsafe extern "C" fn() -> u64,
+    pub options_word3: unsafe extern "C" fn(&mut u32) -> bool,
+    pub target_facts: unsafe extern "C" fn(Raw, *mut TargetFacts) -> bool,
     pub backend: unsafe extern "C" fn() -> Raw,
     pub context: unsafe extern "C" fn() -> Raw,
     pub shader_device: unsafe extern "C" fn() -> Raw,
@@ -187,7 +186,7 @@ pub(super) struct FrameTarget {
 }
 
 const _: () = {
-    assert!(size_of::<WindowFacts>() == 56);
+    assert!(size_of::<PositionViews>() == 16);
     assert!(size_of::<DrawFacts>() == 32);
     assert!(size_of::<ShaderObjects>() == 40);
     assert!(size_of::<ShaderResult>() == 32);
@@ -195,8 +194,10 @@ const _: () = {
     assert!(size_of::<FoliageLayout>() == 108);
     assert!(std::mem::offset_of!(FoliageLayout, usable) == 104);
     assert!(size_of::<FrameTarget>() == 24);
-    assert!(size_of::<Platform>() == 312);
+    assert!(size_of::<Platform>() == 352);
     assert!(std::mem::offset_of!(Platform, guards) == 40);
-    assert!(std::mem::offset_of!(Platform, frame_layout) == 256);
-    assert!(std::mem::offset_of!(Platform, create_shader) == 304);
+    assert!(std::mem::offset_of!(Platform, render_target) == 104);
+    assert!(std::mem::offset_of!(Platform, target_facts) == 152);
+    assert!(std::mem::offset_of!(Platform, frame_layout) == 296);
+    assert!(std::mem::offset_of!(Platform, create_shader) == 344);
 };

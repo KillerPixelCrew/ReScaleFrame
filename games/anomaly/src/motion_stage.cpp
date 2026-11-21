@@ -203,39 +203,37 @@ bool install_hooks(void* module, uint32_t size, const void* profile) noexcept {
             reinterpret_cast<void*>(&scene_end_hook), &originals[site_phase_scene_end]}}};
     return hooks.install(image, size, sites);
 }
-bool window_facts(void* target, WindowFacts* facts) noexcept {
-    auto* device = hw_device();
-    auto* context = hw_context();
-    std::byte* engine_target{};
-    if (!target || !device || !context || !read_global(srp().render_implementation_rva + sr::render_target_offset, engine_target) ||
-        engine_target != target) return false;
+void* render_target() noexcept {
+    std::byte* target{};
+    return read_global(srp().render_implementation_rva + sr::render_target_offset, target) ? target : nullptr;
+}
+bool position_views(void* target, PositionViews* views) noexcept {
     constexpr auto position_offset = sr::target_slots[0].offset;
     static_assert(position_offset == 0x378);
     std::byte* crt{};
-    void* rtv{};
-    void* surface{};
-    if (!guarded_copy(&crt, engine_target + position_offset, sizeof(crt)) || !crt ||
-        !guarded_copy(&rtv, crt + sr::crt_rtv_offset, sizeof(rtv)) ||
-        !guarded_copy(&surface, crt + sr::crt_surface_offset, sizeof(surface)) || !rtv || !surface) return false;
-    uint32_t frame{};
-    if (!read_global(np().device_frame_rva, frame)) return false;
+    return guarded_copy(&crt, static_cast<std::byte*>(target) + position_offset, sizeof(crt)) && crt &&
+        guarded_copy(&views->rtv, crt + sr::crt_rtv_offset, sizeof(views->rtv)) &&
+        guarded_copy(&views->surface, crt + sr::crt_surface_offset, sizeof(views->surface));
+}
+bool native_frame(uint32_t* frame) noexcept { return read_global(np().device_frame_rva, *frame); }
+bool render_view(uint8_t* out) noexcept {
     const auto view = geometry::current_render_view(image, *build);
     if (!view) return false;
-    NativeObservation observation{sizeof(observation), observation_abi};
-    const auto generation = rsf_anomaly_observation(&observation) == RSF_OK ? observation.resets : 0;
-    *facts = {device, context, backend(), rtv, surface, generation, frame, static_cast<uint8_t>(*view)};
+    *out = static_cast<uint8_t>(*view);
     return true;
 }
-int32_t target_facts(void* surface, TargetFacts* out) noexcept {
-    uint32_t options3{};
-    if (!read_global(srp().render_options_word3_rva, options3) || (options3 & sr::dx10_msaa_bit))
-        return RSF_MOTION_MULTISAMPLED;
+uint64_t reset_generation() noexcept {
+    NativeObservation observation{sizeof(observation), observation_abi};
+    return rsf_anomaly_observation(&observation) == RSF_OK ? observation.resets : 0;
+}
+bool options_word3(uint32_t* options) noexcept { return read_global(srp().render_options_word3_rva, *options); }
+bool target_facts(void* surface, TargetFacts* out) noexcept {
     ComPtr<ID3D11Texture2D> texture;
-    if (FAILED(static_cast<IUnknown*>(surface)->QueryInterface(IID_PPV_ARGS(&texture)))) return RSF_MOTION_FAILED;
+    if (FAILED(static_cast<IUnknown*>(surface)->QueryInterface(IID_PPV_ARGS(&texture)))) return false;
     D3D11_TEXTURE2D_DESC desc{};
     texture->GetDesc(&desc);
     *out = {desc.Width, desc.Height, desc.SampleDesc.Count, desc.ArraySize};
-    return RSF_MOTION_READY;
+    return true;
 }
 bool camera(float (*view)[16], float (*projection)[16]) noexcept {
     const auto* xforms = image + srp().backend_rva + sr::backend_xforms_offset;
@@ -322,7 +320,8 @@ const MotionPlatform platform{
     geometry::geometry_hooks_active,
     [](bool enabled) { geometry::geometry_set_flush_callback(enabled ? flush : nullptr); },
     geometry::geometry_enable_foliage_identity, install_hooks, [] { return hooks.disable(); }, [] { return hooks.created(); },
-    install_draw_hooks, window_facts, target_facts, backend, hw_context, hw_device,
+    install_draw_hooks, render_target, position_views, native_frame, render_view, reset_generation,
+    options_word3, target_facts, backend, hw_context, hw_device,
     [](void* c, void* rtv) {
         static constexpr float zero[4]{};
         static_cast<ID3D11DeviceContext*>(c)->ClearRenderTargetView(static_cast<ID3D11RenderTargetView*>(rtv), zero);
@@ -367,11 +366,12 @@ const MotionPlatform platform{
     create_shader
 };
 
-static_assert(sizeof(WindowFacts) == 56 && sizeof(DrawFacts) == 32);
+static_assert(sizeof(PositionViews) == 16 && sizeof(TargetFacts) == 16 && sizeof(DrawFacts) == 32);
 static_assert(sizeof(ShaderObjects) == 40 && sizeof(ShaderResult) == 32 && sizeof(PackInfo) == 8);
 static_assert(sizeof(FoliageLayout) == 108 && offsetof(FoliageLayout, xform) == 4 && offsetof(FoliageLayout, usable) == 104);
-static_assert(sizeof(MotionPlatform) == 312 && offsetof(MotionPlatform, guards) == 40 &&
-    offsetof(MotionPlatform, frame_layout) == 256 && offsetof(MotionPlatform, create_shader) == 304);
+static_assert(sizeof(MotionPlatform) == 352 && offsetof(MotionPlatform, guards) == 40 &&
+    offsetof(MotionPlatform, render_target) == 104 && offsetof(MotionPlatform, target_facts) == 152 &&
+    offsetof(MotionPlatform, frame_layout) == 296 && offsetof(MotionPlatform, create_shader) == 344);
 static_assert(sizeof(FrameTarget) == 24 && offsetof(FrameTarget, main) == 20);
 static_assert(static_cast<uint8_t>(ReplayResult::Done) == 0 && static_cast<uint8_t>(ReplayResult::SkippedNoDepthWrite) == 1);
 static_assert(RSF_PHASE_RENDER_SUBMIT == 2 && RSF_DUMP_VIEW_DENSE_MOTION == 7);

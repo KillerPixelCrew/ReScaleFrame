@@ -14,16 +14,7 @@ struct FoliageLayout;
 
 // Private static-library ABI. Engine objects borrow their native lifetime.
 // Pack and reflection handles use the corresponding destroy leaf.
-struct WindowFacts {
-    void* device;
-    void* context;
-    void* backend;
-    void* position_rtv;
-    void* position_surface;
-    uint64_t generation;
-    uint32_t frame;
-    uint8_t view;
-};
+struct PositionViews { void* rtv; void* surface; };
 struct TargetFacts { uint32_t width, height, samples, layers; };
 struct DrawFacts {
     const geometry::SnapshotFacts* capture;
@@ -57,8 +48,13 @@ struct MotionPlatform {
     bool (*disable_hooks)();
     bool (*hooks_created)();
     bool (*install_draw_hooks)(void*);
-    bool (*window_facts)(void*, WindowFacts*);
-    int32_t (*target_facts)(void*, TargetFacts*);
+    void* (*render_target)();
+    bool (*position_views)(void*, PositionViews*);
+    bool (*native_frame)(uint32_t*);
+    bool (*render_view)(uint8_t*);
+    uint64_t (*reset_generation)();
+    bool (*options_word3)(uint32_t*);
+    bool (*target_facts)(void*, TargetFacts*);
     void* (*backend)();
     void* (*context)();
     void* (*shader_device)();
@@ -84,7 +80,7 @@ struct MotionPlatform {
     bool (*link_shaders)(const void*, const void*, const void*, const void*);
     void* (*create_shader)(void*, const char*, void*, void*, bool, bool*);
 };
-inline constexpr uint32_t motion_platform_abi = 8;
+inline constexpr uint32_t motion_platform_abi = 9;
 
 extern "C" {
 void rsf_anomaly_motion_stage_configure(const MotionPlatform*, const wchar_t*, rsf_dump_log_fn, void*) noexcept;

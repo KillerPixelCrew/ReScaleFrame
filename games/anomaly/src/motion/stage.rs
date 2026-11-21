@@ -19,7 +19,7 @@ use crate::geometry_registry::RetirementQueue;
 use crate::lease::Lease;
 use crate::motion_device::*;
 use crate::motion_device_abi::{
-    RSF_MOTION_CREATED, RSF_MOTION_MULTISAMPLED, RSF_MOTION_READY,
+    RSF_MOTION_CREATED, RSF_MOTION_FAILED, RSF_MOTION_MULTISAMPLED, RSF_MOTION_READY,
     rsf_anomaly_motion_device_view as DeviceView,
 };
 use crate::motion_target::{rsf_anomaly_motion_bind_close, rsf_anomaly_motion_bind_draw};
@@ -29,6 +29,7 @@ use crate::motion_target_abi::{
     RSF_ANOMALY_MOTION_BIND_UNBOUND as UNBOUND, rsf_anomaly_motion_bind_state as BindState,
 };
 use crate::shader_loader::Bytes;
+use crate::sr_stage::DX10_MSAA;
 use rsf_game_sys::rsf_game_log_fn;
 use std::ffi::{CStr, CString};
 use std::os::windows::ffi::OsStrExt;
@@ -40,6 +41,54 @@ use std::sync::atomic::{
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 const MAIN: u8 = 0;
+
+struct WindowFacts {
+    device: Raw,
+    context: Raw,
+    backend: Raw,
+    position_rtv: Raw,
+    position_surface: Raw,
+    generation: u64,
+    frame: u32,
+    view: u8,
+}
+
+impl WindowFacts {
+    fn read(p: &Platform, target: Raw) -> Option<Self> {
+        let device = unsafe { (p.shader_device)() };
+        let context = unsafe { (p.context)() };
+        if target.is_null()
+            || device.is_null()
+            || context.is_null()
+            || unsafe { (p.render_target)() } != target
+        {
+            return None;
+        }
+        let mut position = MaybeUninit::uninit();
+        if !unsafe { (p.position_views)(target, position.as_mut_ptr()) } {
+            return None;
+        }
+        let position = unsafe { position.assume_init() };
+        if position.rtv.is_null() || position.surface.is_null() {
+            return None;
+        }
+        let (mut frame, mut view) = (0, 0);
+        if !unsafe { (p.native_frame)(&mut frame) } || !unsafe { (p.render_view)(&mut view) } {
+            return None;
+        }
+        let generation = unsafe { (p.reset_generation)() };
+        Some(Self {
+            device,
+            context,
+            backend: unsafe { (p.backend)() },
+            position_rtv: position.rtv,
+            position_surface: position.surface,
+            generation,
+            frame,
+            view,
+        })
+    }
+}
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
@@ -370,11 +419,9 @@ impl Stage {
         if !self.enabled.load(Relaxed) {
             return;
         }
-        let mut facts = MaybeUninit::uninit();
-        if !unsafe { (p.window_facts)(target, facts.as_mut_ptr()) } {
+        let Some(facts) = WindowFacts::read(p, target) else {
             return;
-        }
-        let facts = unsafe { facts.assume_init() };
+        };
         if !render.install_draw_hooks(p, facts.context, self.log()) {
             return;
         }
@@ -414,7 +461,15 @@ impl Stage {
                 render.history.retire(key);
             }
             let mut desc = MaybeUninit::uninit();
-            let observed = unsafe { (p.target_facts)(facts.position_surface, desc.as_mut_ptr()) };
+            let mut options = 0;
+            let observed =
+                if !unsafe { (p.options_word3)(&mut options) } || options & DX10_MSAA != 0 {
+                    RSF_MOTION_MULTISAMPLED
+                } else if unsafe { (p.target_facts)(facts.position_surface, desc.as_mut_ptr()) } {
+                    RSF_MOTION_READY
+                } else {
+                    RSF_MOTION_FAILED
+                };
             let result = if observed == RSF_MOTION_READY {
                 let desc = unsafe { desc.assume_init() };
                 rsf_anomaly_motion_device_target(

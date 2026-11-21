@@ -421,6 +421,12 @@ engine counter before polling opens. Builds, focused fixtures,
 held-key gameplay and overlay release remain open.
 [Verified input entry](research/rust-anomaly-input.md#verified-input-entry-and-buffered-receipt)
 
+Anomaly's Rust motion owner now admits the scene window and checks
+MSAA before the typed texture query. The guarded profile reads,
+resource leases and capture sequence match the existing paths in
+source. Motion device and game verification remain open.
+[Motion window admission](research/rust-anomaly-motion-stage.md#motion-window-admission)
+
 ## Verification coverage
 
 | Requirement | Recorded evidence | Still open |

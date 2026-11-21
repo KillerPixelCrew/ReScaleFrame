@@ -9,6 +9,11 @@
     "source_baseline": "c57905d1",
     "validation": "Standard and AVX profile reads checked in source. Updated native build, fixtures and game runs pending."
   },
+  "motion_window_admission": {
+    "evidence": "../../docs/research/rust-anomaly-motion-stage.md#motion-window-admission",
+    "source_baseline": "bfbed34e",
+    "validation": "Standard and AVX motion window and MSAA checks compared in source. Native build, fixtures and game validation pending."
+  },
   "shader_patching": {
     "pack": "patches/motion.rsfpatch",
     "rules": "patches/motion/rules.json",

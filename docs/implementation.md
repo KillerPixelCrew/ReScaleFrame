@@ -1054,6 +1054,12 @@ Rust alias table. Pinned formatting, locked Windows Cargo metadata and
 whitespace passed. Build, link and runtime checks remain open.
 [Motion admission](research/rust-anomaly-motion-stage.md)
 
+Anomaly now admits motion windows and selects the MSAA refusal in
+Rust. Native leaves provide the same guarded position, view and
+frame facts. The motion target leases, history and capture sequence
+match in source. Device and game checks remain open.
+[Motion window admission](research/rust-anomaly-motion-stage.md#motion-window-admission)
+
 The standalone NGX shim publishes its module and 12 resolved symbols
 from Rust while the C wrappers call NGX from the same native frames.
 The Vulkan-to-D3D12 FG port moves transfer, barrier and placeholder-clear

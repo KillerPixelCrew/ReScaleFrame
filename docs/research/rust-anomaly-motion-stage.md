@@ -146,3 +146,26 @@ tests are unchanged. No engine analysis or instruction site was added. Pinned
 Rust 1.94.1 formatting, locked offline Windows Cargo metadata and Git
 whitespace checks passed. Compile, link, Clippy, tests, fixtures and game
 verification remain user-owned.
+
+## Motion window admission
+
+Compared with `bfbed34e`, Rust now checks the scene callback's
+target against the guarded `CRender::Target` read before requesting
+the position RTV and surface. The native leaves still read
+`HW.pDevice` and `HW.pContext` first, then the guarded position
+fields from the same profile. After both views are present, Rust
+reads the native frame, render view and reset generation in the
+original order. The typed engine reads and the verified Standard
+and AVX profiles match the baseline.
+
+On a fresh motion window, Rust applies the same SR-stage MSAA mask
+to the options word. An unreadable word still counts as MSAA and
+skips the texture descriptor query. The native leaf still borrows
+the source surface for the typed D3D11 texture query. The motion
+target creation, clear, history and capture order match the baseline.
+
+The private platform table moves to version 9 and 352 bytes.
+Source comparison covered the callback positions, the short-circuit
+reads and public declarations. Pinned formatting, locked offline
+metadata and whitespace passed. Native linkage, fixtures, and
+Standard and AVX motion and fallback checks remain open.
