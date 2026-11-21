@@ -22,8 +22,6 @@ fn reset() {
     fake::VK_THROWS.set(None);
     fake::VK_STOP.set(1);
     fake::VK_FACTS.set(VkFacts {
-        xess_device_ready: 1,
-        interop_device_ready: 1,
         graph_handoff: 1,
         fsr4_sr_compiled: 1,
         ..VkFacts::default()
@@ -46,6 +44,7 @@ fn booted() -> Vulkan {
     };
     let vulkan = Vulkan::new();
     assert_eq!(vulkan.boot(&fake::LEAVES, &setup), 1);
+    vulkan.creation().report_ready(true, true);
     fake::take_calls();
     vulkan
 }

@@ -4,7 +4,9 @@
 //! overlay, the configure admission, the presenter currency rule for acquire, the FG enable rule,
 //! the fixed-guide retirement, the SR and FG accounting and the engine's primary window. The SR
 //! context owner of `rsfg_render_vulkan` is the `sr` child module. The primary window is an
-//! atomic the guarded paths read; it was a guarded global, written only by `rsfg_vk_window`.
+//! atomic the guarded paths read; it was a guarded global, written only by `rsfg_vk_window`. The
+//! device creation owner (resolver routes, XeSS and interop requirements and their readiness) is
+//! the `creation` child module; the admission reads its readiness directly.
 //!
 //! `vulkan.cpp` keeps its guard and every Vulkan, Streamline, XeSS, FidelityFX, presenter,
 //! capture and SR provider call. Each transition that ran under that guard still does: boot,
@@ -101,6 +103,9 @@ pub(crate) struct Vulkan {
     primary_window: AtomicPtr<c_void>,
     state: Mutex<State>,
     contexts: Mutex<sr::Contexts>,
+    /// The device creation owner: the resolver, its requirements and the XeSS and interop
+    /// readiness `admit` reads.
+    creation: creation::Creation,
 }
 
 impl Vulkan {
@@ -116,7 +121,12 @@ impl Vulkan {
                 guides: None,
             }),
             contexts: Mutex::new(sr::Contexts::default()),
+            creation: creation::Creation::new(),
         }
+    }
+
+    pub(crate) fn creation(&self) -> &creation::Creation {
+        &self.creation
     }
 
     fn state(&self) -> MutexGuard<'_, State> {
@@ -227,15 +237,14 @@ impl Vulkan {
         let facts: VkFacts = platform.vulkan_facts();
         let on = |flag: u32| flag != 0;
         let primary = !self.primary_window().is_null();
-        if value.sr_backend == SR_XESS && !on(facts.xess_device_ready) {
+        let interop = self.creation.interop_ready();
+        if value.sr_backend == SR_XESS && !self.creation.xess_ready() {
             return false;
         }
         // These paths are added independently. Do not accept unavailable FG or silently
         // substitute an FSR3 provider for a requested DLSS, XeSS or FSR4 path.
         if value.sr_backend == SR_FSR4
-            && !(on(facts.fsr4_sr_compiled)
-                && on(facts.graph_handoff)
-                && on(facts.interop_device_ready))
+            && !(on(facts.fsr4_sr_compiled) && on(facts.graph_handoff) && interop)
         {
             return false;
         }
@@ -246,7 +255,7 @@ impl Vulkan {
         if selected == FG_FSR4 {
             if !on(facts.fsr4_fg_compiled)
                 || !on(facts.presenter)
-                || !on(facts.interop_device_ready)
+                || !interop
                 || !primary
                 || value.generated_frames != 1
             {
@@ -257,9 +266,7 @@ impl Vulkan {
                 return false;
             }
         }
-        if selected == FG_XESS
-            && !(on(facts.xess_fg_compiled) && on(facts.interop_device_ready) && primary)
-        {
+        if selected == FG_XESS && !(on(facts.xess_fg_compiled) && interop && primary) {
             return false;
         }
         if value.fg_mode != 0
@@ -452,6 +459,7 @@ fn apply_latency(status: &mut Status, latency: &VkLatencyFacts) {
     status.latency_owner = latency.owner;
 }
 
+mod creation;
 mod sr;
 
 #[cfg(test)]

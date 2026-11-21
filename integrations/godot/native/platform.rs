@@ -315,8 +315,9 @@ pub(crate) struct SrEvaluate {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct VkFacts {
-    pub(crate) xess_device_ready: u32,
-    pub(crate) interop_device_ready: u32,
+    /// Formerly `xess_device_ready` and `interop_device_ready`; the creation owner
+    /// (`vulkan/creation.rs`) keeps both now and the leaf leaves these zero.
+    pub(crate) reserved_creation: [u32; 2],
     pub(crate) graph_handoff: u32,
     pub(crate) fsr4_sr_compiled: u32,
     pub(crate) fsr4_fg_compiled: u32,
@@ -438,6 +439,151 @@ pub(crate) struct VkSrContext {
     pub(crate) handle: *mut c_void,
     pub(crate) result: i32,
     pub(crate) reserved: u32,
+}
+
+/// `RSF_GODOT_VK_CREATION_VERSION`.
+pub(crate) const VK_CREATION_VERSION: u32 = 1;
+/// `RSF_GODOT_VK_SCOPE_*`.
+pub(crate) const VK_SCOPE_INSTANCE: u32 = 0;
+pub(crate) const VK_SCOPE_DEVICE: u32 = 1;
+/// `RSF_GODOT_VK_ROUTE_*`.
+pub(crate) const VK_ROUTE_NONE: u32 = 0;
+pub(crate) const VK_ROUTE_FORWARD: u32 = 1;
+pub(crate) const VK_ROUTE_CREATE_INSTANCE: u32 = 2;
+pub(crate) const VK_ROUTE_DEVICE_PROC: u32 = 3;
+pub(crate) const VK_ROUTE_CREATE_DEVICE: u32 = 4;
+pub(crate) const VK_ROUTE_DESTROY_DEVICE: u32 = 5;
+/// `RSF_GODOT_VK_XESS_*`.
+pub(crate) const VK_XESS_FEATURES2: u32 = 1;
+pub(crate) const VK_XESS_ENABLED_FEATURES: u32 = 2;
+pub(crate) const VK_XESS_FLOAT16_INT8: u32 = 4;
+pub(crate) const VK_XESS_SCALAR_BLOCK_LAYOUT: u32 = 8;
+pub(crate) const VK_XESS_INTEGER_DOT_PRODUCT: u32 = 16;
+/// `RSF_GODOT_VK_STAGE_*`.
+pub(crate) const VK_STAGE_XESS: u32 = 0;
+pub(crate) const VK_STAGE_INTEROP: u32 = 1;
+pub(crate) const VK_STAGE_LATENCY: u32 = 2;
+
+/// `rsf_godot_vk_chain_facts`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct VkChainFacts {
+    pub(crate) cloneable: u32,
+    pub(crate) features2: u32,
+    pub(crate) vulkan12: u32,
+    pub(crate) vulkan13: u32,
+    pub(crate) float16_int8: u32,
+    pub(crate) scalar_block_layout: u32,
+    pub(crate) integer_dot_product: u32,
+    pub(crate) enabled_features: u32,
+    pub(crate) timeline_semaphore: u32,
+    pub(crate) reserved: u32,
+}
+
+/// `rsf_godot_vk_device_derive`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct VkDeviceDerive {
+    pub(crate) base: *const c_void,
+    pub(crate) extensions: *const *const c_char,
+    pub(crate) extension_count: u32,
+    pub(crate) replace_next: u32,
+    pub(crate) next: *mut c_void,
+    pub(crate) clear_enabled_features: u32,
+    pub(crate) reserved: u32,
+}
+
+/// `rsf_godot_vk_latency_requirements`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct VkLatencyRequirements {
+    pub(crate) result: i32,
+    pub(crate) extension_count: u32,
+    pub(crate) extensions: *const *const c_char,
+    pub(crate) features: *mut c_void,
+}
+
+/// `rsf_godot_vk_instance_call`: one intercepted `vkCreateInstance`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct VkInstanceCall {
+    pub(crate) call: *mut c_void,
+    pub(crate) request: *const c_void,
+    pub(crate) allocator: *const c_void,
+    pub(crate) output: *mut c_void,
+    pub(crate) extensions: *const *const c_char,
+    pub(crate) extension_count: u32,
+    pub(crate) reserved: u32,
+}
+
+/// `rsf_godot_vk_device_call`: one intercepted `vkCreateDevice`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct VkDeviceCall {
+    pub(crate) call: *mut c_void,
+    pub(crate) physical_device: *mut c_void,
+    pub(crate) request: *const c_void,
+    pub(crate) allocator: *const c_void,
+    pub(crate) output: *mut c_void,
+    pub(crate) extensions: *const *const c_char,
+    pub(crate) extension_count: u32,
+    pub(crate) reserved: u32,
+}
+
+/// `rsf_godot_vk_creation_leaves`, the Vulkan-typed leaves of `vulkan_creation.cpp`.
+#[repr(C)]
+pub(crate) struct VkCreationLeaves {
+    pub(crate) struct_size: u32,
+    pub(crate) version: u32,
+    pub(crate) xess_instance_requirements:
+        unsafe extern "C" fn(*mut u32, *mut *const *const c_char, *mut u32) -> i32,
+    pub(crate) derive_instance: unsafe extern "C" fn(
+        *mut c_void,
+        *const c_void,
+        u32,
+        *const *const c_char,
+        u32,
+    ) -> *const c_void,
+    pub(crate) create_instance:
+        unsafe extern "C" fn(VkFunction, *const c_void, *const c_void, *mut c_void) -> i32,
+    pub(crate) chain_facts: unsafe extern "C" fn(*const c_void, *mut VkChainFacts),
+    pub(crate) xess_features:
+        unsafe extern "C" fn(*mut c_void, *const c_void, u32, *mut *mut c_void) -> u32,
+    pub(crate) xess_device_requirements: unsafe extern "C" fn(
+        *mut c_void,
+        *mut c_void,
+        *mut u32,
+        *mut *const *const c_char,
+        *mut *mut c_void,
+    ) -> i32,
+    pub(crate) device_extensions:
+        unsafe extern "C" fn(VkFunction, *mut c_void, *const *const c_char, u32) -> u32,
+    pub(crate) latency_requirements: unsafe extern "C" fn(
+        *mut c_void,
+        *mut c_void,
+        *mut c_void,
+        Option<VkProc>,
+        *const c_void,
+        *mut VkLatencyRequirements,
+    ) -> u32,
+    pub(crate) derive_device:
+        unsafe extern "C" fn(*mut c_void, u32, *const VkDeviceDerive) -> *const c_void,
+    pub(crate) create_device: unsafe extern "C" fn(
+        VkFunction,
+        *mut c_void,
+        *const c_void,
+        *const c_void,
+        *mut c_void,
+    ) -> i32,
+    pub(crate) latency_created: unsafe extern "C" fn(
+        *mut c_void,
+        *mut c_void,
+        *mut c_void,
+        Option<VkProc>,
+        *const c_void,
+    ) -> i32,
+    pub(crate) latency_destroyed: unsafe extern "C" fn(*mut c_void),
+    pub(crate) destroy_device: unsafe extern "C" fn(VkFunction, *mut c_void, *const c_void),
 }
 
 /// `RSF_GODOT_VK_LOG_*`.
@@ -602,6 +748,17 @@ const _: () = {
     assert!(size_of::<VkSrCreate>() == 8);
     assert!(size_of::<VkSrContext>() == 16);
     assert!(offset_of!(VkSrContext, result) == 8);
+    assert!(offset_of!(VkFacts, graph_handoff) == 8);
+    assert!(size_of::<VkChainFacts>() == 40);
+    assert!(size_of::<VkDeviceDerive>() == 40);
+    assert!(offset_of!(VkDeviceDerive, next) == 24);
+    assert!(size_of::<VkLatencyRequirements>() == 24);
+    assert!(size_of::<VkInstanceCall>() == 48);
+    assert!(size_of::<VkDeviceCall>() == 56);
+    assert!(offset_of!(VkDeviceCall, extension_count) == 48);
+    assert!(size_of::<VkCreationLeaves>() == 112);
+    assert!(offset_of!(VkCreationLeaves, latency_requirements) == 64);
+    assert!(offset_of!(VkCreationLeaves, destroy_device) == 104);
     assert!(size_of::<WindowIdentity>() == 144);
     assert!(offset_of!(WindowIdentity, class_name) == 16);
     assert!(size_of::<Platform>() == 520);
@@ -1042,5 +1199,207 @@ impl Platform {
     /// `rsf_latencyvk_present`.
     pub(crate) fn vulkan_present_marker(&self, begin: u32) {
         unsafe { (self.vulkan_present_marker)(begin) }
+    }
+}
+
+/// The creation table from `vulkan_creation.cpp`, when its header matches.
+///
+/// # Safety
+/// `table` is null or a process-lived `rsf_godot_vk_creation_leaves`.
+pub(crate) unsafe fn creation_leaves(
+    table: *const VkCreationLeaves,
+) -> Option<&'static VkCreationLeaves> {
+    // SAFETY: the caller passes null or a table that lives for the process.
+    let table: &'static VkCreationLeaves = unsafe { table.as_ref() }?;
+    (table.struct_size as usize >= size_of::<VkCreationLeaves>()
+        && table.version == VK_CREATION_VERSION)
+        .then_some(table)
+}
+
+// Each creation leaf is a complete entry of a checked table and catches its own C++ exceptions.
+// SAFETY for every unsafe block below: the entry is valid; requests, call records, allocators,
+// outputs and handles are the entry point's live arguments for the call, and extension lists are
+// readable for their counts while the call lasts.
+impl VkCreationLeaves {
+    /// The XeSS instance extensions and minimum API version, when the SDK answers.
+    pub(crate) fn xess_instance_requirements(&self) -> Option<(&[*const c_char], u32)> {
+        let (mut count, mut minimum) = (0, 0);
+        let mut names: *const *const c_char = std::ptr::null();
+        let result =
+            unsafe { (self.xess_instance_requirements)(&mut count, &mut names, &mut minimum) };
+        // SAFETY: the SDK's names stay valid until shutdown.
+        (result == 0).then(|| (unsafe { extension_list(names, count) }, minimum))
+    }
+
+    pub(crate) fn derive_instance(
+        &self,
+        call: *mut c_void,
+        base: *const c_void,
+        minimum_api: u32,
+        extensions: &[*const c_char],
+    ) -> *const c_void {
+        unsafe {
+            (self.derive_instance)(
+                call,
+                base,
+                minimum_api,
+                extensions.as_ptr(),
+                extensions.len() as u32,
+            )
+        }
+    }
+
+    pub(crate) fn create_instance(
+        &self,
+        create: VkFunction,
+        request: *const c_void,
+        allocator: *const c_void,
+        output: *mut c_void,
+    ) -> i32 {
+        unsafe { (self.create_instance)(create, request, allocator, output) }
+    }
+
+    pub(crate) fn chain_facts(&self, request: *const c_void) -> VkChainFacts {
+        let mut facts = VkChainFacts::default();
+        unsafe { (self.chain_facts)(request, &mut facts) };
+        facts
+    }
+
+    /// The patched clone's head, null when the clone refused; `None` when the leaf threw.
+    pub(crate) fn xess_features(
+        &self,
+        call: *mut c_void,
+        request: *const c_void,
+        structures: u32,
+    ) -> Option<*mut c_void> {
+        let mut features = std::ptr::null_mut();
+        (unsafe { (self.xess_features)(call, request, structures, &mut features) } != 0)
+            .then_some(features)
+    }
+
+    /// The XeSS device extensions and the chain to create with, when the SDK answers.
+    pub(crate) fn xess_device_requirements(
+        &self,
+        instance: *mut c_void,
+        physical_device: *mut c_void,
+        features: *mut c_void,
+    ) -> Option<(&[*const c_char], *mut c_void)> {
+        let (mut count, mut features) = (0, features);
+        let mut names: *const *const c_char = std::ptr::null();
+        let result = unsafe {
+            (self.xess_device_requirements)(
+                instance,
+                physical_device,
+                &mut count,
+                &mut names,
+                &mut features,
+            )
+        };
+        // SAFETY: the SDK's names stay valid until shutdown.
+        (result == 0).then(|| (unsafe { extension_list(names, count) }, features))
+    }
+
+    pub(crate) fn device_extensions(
+        &self,
+        enumerate: VkFunction,
+        physical_device: *mut c_void,
+        names: &[*const c_char],
+    ) -> bool {
+        unsafe {
+            (self.device_extensions)(
+                enumerate,
+                physical_device,
+                names.as_ptr(),
+                names.len() as u32,
+            ) != 0
+        }
+    }
+
+    /// `None` when the leaf threw.
+    pub(crate) fn latency_requirements(
+        &self,
+        call: *mut c_void,
+        instance: *mut c_void,
+        physical_device: *mut c_void,
+        instance_proc: Option<VkProc>,
+        request: *const c_void,
+    ) -> Option<VkLatencyRequirements> {
+        let mut requirements = VkLatencyRequirements {
+            result: 0,
+            extension_count: 0,
+            extensions: std::ptr::null(),
+            features: std::ptr::null_mut(),
+        };
+        (unsafe {
+            (self.latency_requirements)(
+                call,
+                instance,
+                physical_device,
+                instance_proc,
+                request,
+                &mut requirements,
+            )
+        } != 0)
+            .then_some(requirements)
+    }
+
+    pub(crate) fn derive_device(
+        &self,
+        call: *mut c_void,
+        stage: u32,
+        derive: &VkDeviceDerive,
+    ) -> *const c_void {
+        unsafe { (self.derive_device)(call, stage, derive) }
+    }
+
+    pub(crate) fn create_device(
+        &self,
+        create: VkFunction,
+        physical_device: *mut c_void,
+        request: *const c_void,
+        allocator: *const c_void,
+        output: *mut c_void,
+    ) -> i32 {
+        unsafe { (self.create_device)(create, physical_device, request, allocator, output) }
+    }
+
+    pub(crate) fn latency_created(
+        &self,
+        instance: *mut c_void,
+        physical_device: *mut c_void,
+        device: *mut c_void,
+        instance_proc: Option<VkProc>,
+        request: *const c_void,
+    ) -> i32 {
+        unsafe { (self.latency_created)(instance, physical_device, device, instance_proc, request) }
+    }
+
+    pub(crate) fn latency_destroyed(&self, device: *mut c_void) {
+        unsafe { (self.latency_destroyed)(device) }
+    }
+
+    pub(crate) fn destroy_device(
+        &self,
+        destroy: VkFunction,
+        device: *mut c_void,
+        allocator: *const c_void,
+    ) {
+        unsafe { (self.destroy_device)(destroy, device, allocator) }
+    }
+}
+
+/// An extension list as a slice; empty for a zero count or a null list.
+///
+/// # Safety
+/// `names` is null or readable for `count` entries for the returned lifetime.
+pub(crate) unsafe fn extension_list<'a>(
+    names: *const *const c_char,
+    count: u32,
+) -> &'a [*const c_char] {
+    if count == 0 || names.is_null() {
+        &[]
+    } else {
+        // SAFETY: the caller's guarantee.
+        unsafe { std::slice::from_raw_parts(names, count as usize) }
     }
 }

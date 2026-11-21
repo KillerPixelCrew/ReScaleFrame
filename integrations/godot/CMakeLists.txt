@@ -1,3 +1,8 @@
+# Runtime control, settings, session, status and Vulkan creation state are Rust (native/lib.rs,
+# crate rsf-godot). Defined before the godot-cpp gate: the godot_vulkan_creation_contract test links
+# it without godot-cpp. The archive is built only for a target that links it.
+rsf_add_rust_static(rsf_godot_rust rsf_rust_godot rsf-godot rsf_godot)
+
 set(RSF_GODOT_CPP_DIR "" CACHE PATH "Pinned godot-cpp checkout for the optional Godot integration")
 if(NOT RSF_GODOT_CPP_DIR)
     return()
@@ -17,9 +22,7 @@ set_property(TARGET godot-cpp PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CO
 # explicitly, so drop the leaked entry; the root CMakeLists clears stale copies before targets exist.
 unset(CMAKE_MSVC_RUNTIME_LIBRARY CACHE)
 
-# Runtime control, settings, session and status state are Rust (native/lib.rs, crate rsf-godot).
 # runtime.cpp keeps the rsfg_* exports and lends the linked Runtime through native/godot_platform.h.
-rsf_add_rust_static(rsf_godot_rust rsf_rust_godot rsf-godot rsf_godot)
 add_library(rsf_godot SHARED native/extension.cpp native/effect.cpp native/runtime.cpp native/runtime_control.cpp native/vulkan.cpp native/vulkan_creation.cpp)
 if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h")
     target_include_directories(rsf_godot SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}")

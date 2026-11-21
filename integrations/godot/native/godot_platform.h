@@ -10,10 +10,12 @@
    admission, engine-service routing, the D3D12 session identity and paths, the status record,
    the D3D12 SR context plan and submission ledger (d3d12.rs), the Vulkan session (boot state,
    settings, generation, status, configure admission, the presenter, FG and SR accounting, the
-   primary window, and the SR context owner in vulkan/sr.rs), and the input window owner
-   (window.rs: admission, window procedure, input session, CPU event and ping routing, and the
-   present-marker admission). The leaves hold godot-cpp, D3D12, DXGI, Win32, Vulkan and Runtime
-   calls and decide nothing. */
+   primary window, the SR context owner in vulkan/sr.rs and the device creation owner in
+   vulkan/creation.rs), and the input window owner (window.rs: admission, window procedure, input
+   session, CPU event and ping routing, and the present-marker admission). The leaves hold
+   godot-cpp, D3D12, DXGI, Win32, Vulkan and Runtime calls and decide nothing. The creation leaves
+   are a separate table (rsf_godot_vk_creation_leaves) that vulkan_creation.cpp lends with each
+   creation call, so the creation contract test links them without runtime.cpp. */
 #include "api.h"
 #include <stdint.h>
 
@@ -111,7 +113,10 @@ typedef struct rsf_godot_sr_evaluate {
 
 /* Vulkan owner facts, read under its guard. The compiled flags are build facts. */
 typedef struct rsf_godot_vk_facts {
-    uint32_t xess_device_ready, interop_device_ready, graph_handoff;
+    /* Formerly xess_device_ready and interop_device_ready; the creation owner (vulkan/creation.rs)
+       keeps both now. Zero. */
+    uint32_t reserved_creation[2];
+    uint32_t graph_handoff;
     uint32_t fsr4_sr_compiled, fsr4_fg_compiled, xess_fg_compiled;
     uint32_t presenter;
     /* Formerly primary_window; the Vulkan session owns that window now. Zero. */
@@ -186,6 +191,135 @@ typedef struct rsf_godot_vk_sr_context {
     int32_t result;
     uint32_t reserved;
 } rsf_godot_vk_sr_context;
+
+/* The Vulkan creation boundary. The creation owner (vulkan/creation.rs) keeps the resolver routes,
+   the stage order XeSS, Win32 interop, core latency, the extension lists, the feature structures
+   XeSS needs added, the retries and the XeSS and interop readiness. The leaves in
+   vulkan_creation.cpp keep every Vulkan structure: a request is a VkInstanceCreateInfo or
+   VkDeviceCreateInfo, the engine's or one a leaf derived into the call record, and call is the
+   entry point's private record for one creation call. These are not vulkan.cpp's guarded leaves
+   and none takes its guard. */
+#define RSF_GODOT_VK_CREATION_VERSION 1u
+
+/* rsf_godot_vk_creation_resolve scopes and routes. FORWARD returns the resolved function. */
+#define RSF_GODOT_VK_SCOPE_INSTANCE 0u /* the resolver rsfg_vk_resolver returns */
+#define RSF_GODOT_VK_SCOPE_DEVICE 1u   /* the vkGetDeviceProcAddr that resolver returns */
+#define RSF_GODOT_VK_ROUTE_NONE 0u
+#define RSF_GODOT_VK_ROUTE_FORWARD 1u
+#define RSF_GODOT_VK_ROUTE_CREATE_INSTANCE 2u
+#define RSF_GODOT_VK_ROUTE_DEVICE_PROC 3u
+#define RSF_GODOT_VK_ROUTE_CREATE_DEVICE 4u
+#define RSF_GODOT_VK_ROUTE_DESTROY_DEVICE 5u
+
+/* A device request's pNext chain and pEnabledFeatures, as read. */
+typedef struct rsf_godot_vk_chain_facts {
+    /* At most 64 structures, each of a type the clone copies, none repeated. The presence flags
+       below are read only for such a chain. */
+    uint32_t cloneable;
+    uint32_t features2, vulkan12, vulkan13, float16_int8, scalar_block_layout, integer_dot_product;
+    uint32_t enabled_features;
+    /* Within the first 64 structures, timelineSemaphore set in the timeline semaphore or the
+       Vulkan 1.2 features. */
+    uint32_t timeline_semaphore;
+    uint32_t reserved;
+} rsf_godot_vk_chain_facts;
+
+/* RSF_GODOT_VK_XESS_*: the structures the XeSS clone adds before the SDK patches it. FEATURES2 is an
+   empty VkPhysicalDeviceFeatures2, ENABLED_FEATURES one holding the request's pEnabledFeatures. */
+#define RSF_GODOT_VK_XESS_FEATURES2 1u
+#define RSF_GODOT_VK_XESS_ENABLED_FEATURES 2u
+#define RSF_GODOT_VK_XESS_FLOAT16_INT8 4u
+#define RSF_GODOT_VK_XESS_SCALAR_BLOCK_LAYOUT 8u
+#define RSF_GODOT_VK_XESS_INTEGER_DOT_PRODUCT 16u
+
+/* RSF_GODOT_VK_STAGE_*: the derived device request slot of each creation stage. */
+#define RSF_GODOT_VK_STAGE_XESS 0u
+#define RSF_GODOT_VK_STAGE_INTEROP 1u
+#define RSF_GODOT_VK_STAGE_LATENCY 2u
+
+/* A copy of base with the given extension list, its pNext replaced when replace_next is set (also
+   by null) and pEnabledFeatures cleared when clear_enabled_features is set. */
+typedef struct rsf_godot_vk_device_derive {
+    const void* base;
+    const char* const* extensions;
+    uint32_t extension_count, replace_next;
+    void* next;
+    uint32_t clear_enabled_features, reserved;
+} rsf_godot_vk_device_derive;
+
+/* rsf_latencyvk_require_device's result and requirements. */
+typedef struct rsf_godot_vk_latency_requirements {
+    int32_t result;
+    uint32_t extension_count;
+    const char* const* extensions;
+    void* features;
+} rsf_godot_vk_latency_requirements;
+
+/* One vkCreateInstance through the resolver. request, allocator and output are the engine's;
+   extensions and extension_count are request's list as read. */
+typedef struct rsf_godot_vk_instance_call {
+    void* call;
+    const void* request;
+    const void* allocator;
+    void* output; /* VkInstance*, a dispatchable handle the owner reads after success */
+    const char* const* extensions;
+    uint32_t extension_count, reserved;
+} rsf_godot_vk_instance_call;
+
+/* One vkCreateDevice through the resolver, as rsf_godot_vk_instance_call. */
+typedef struct rsf_godot_vk_device_call {
+    void* call;
+    void* physical_device;
+    const void* request;
+    const void* allocator;
+    void* output; /* VkDevice* */
+    const char* const* extensions;
+    uint32_t extension_count, reserved;
+} rsf_godot_vk_device_call;
+
+/* Process-lived table from vulkan_creation.cpp, lent with each creation call. Every entry is
+   present and catches its own exceptions. A uint32_t completion of zero or a null derived request
+   means an exception ended the leaf; the owner then ends the creation call with
+   VK_ERROR_OUT_OF_HOST_MEMORY as the entry point's catch did. Functions are the owner's resolved
+   Vulkan entry points, passed back unchanged. */
+typedef struct rsf_godot_vk_creation_leaves {
+    uint32_t struct_size, version;
+    /* rsf_xessvk_instance_requirements. */
+    int32_t (*xess_instance_requirements)(uint32_t* count, const char* const** names, uint32_t* minimum_api);
+    /* A copy of base in call whose application info (a default one when base has none) has an API
+       version of at least minimum_api, with the given extension list. */
+    const void* (*derive_instance)(void* call, const void* base, uint32_t minimum_api,
+        const char* const* extensions, uint32_t extension_count);
+    /* create is vkCreateInstance. */
+    int32_t (*create_instance)(rsf_godot_vk_function create, const void* request, const void* allocator, void* output);
+    void (*chain_facts)(const void* request, rsf_godot_vk_chain_facts* facts);
+    /* Clones request's pNext chain into call, adds the RSF_GODOT_VK_XESS_* structures, moves
+       VkPhysicalDeviceFeatures2 first and writes the head; null when the clone refused. */
+    uint32_t (*xess_features)(void* call, const void* request, uint32_t structures, void** features);
+    /* rsf_xessvk_device_requirements. */
+    int32_t (*xess_device_requirements)(void* instance, void* physical_device, uint32_t* count,
+        const char* const** names, void** features);
+    /* Nonzero when enumerate (vkEnumerateDeviceExtensionProperties) lists every name for
+       physical_device within 4096 entries; zero when either enumeration fails. */
+    uint32_t (*device_extensions)(rsf_godot_vk_function enumerate, void* physical_device,
+        const char* const* names, uint32_t count);
+    /* Clones request's pNext chain into call and asks rsf_latencyvk_require_device with
+       instance_proc; RSF_BACKEND_ERROR_NOT_SUPPORTED without asking when the clone refused. */
+    uint32_t (*latency_requirements)(void* call, void* instance, void* physical_device,
+        rsf_godot_vk_proc instance_proc, const void* request, rsf_godot_vk_latency_requirements* requirements);
+    /* The stage's derived request in call. */
+    const void* (*derive_device)(void* call, uint32_t stage, const rsf_godot_vk_device_derive* derive);
+    /* create is vkCreateDevice. */
+    int32_t (*create_device)(rsf_godot_vk_function create, void* physical_device, const void* request,
+        const void* allocator, void* output);
+    /* rsf_latencyvk_device_created for the device and the request that created it. */
+    int32_t (*latency_created)(void* instance, void* physical_device, void* device,
+        rsf_godot_vk_proc instance_proc, const void* request);
+    /* rsf_latencyvk_device_destroyed. */
+    void (*latency_destroyed)(void* device);
+    /* destroy is the device's vkDestroyDevice. */
+    void (*destroy_device)(rsf_godot_vk_function destroy, void* device, const void* allocator);
+} rsf_godot_vk_creation_leaves;
 
 /* rsf_godot_platform.vulkan_sr_log messages. Each leaf writes nothing without a session log. */
 #define RSF_GODOT_VK_LOG_REJECTED 1u       /* provider result and spatial fallback result */
@@ -399,6 +533,25 @@ int rsf_godot_vk_sr_render(const rsf_godot_platform* platform, const rsf_godot_v
 void rsf_godot_vk_sr_contexts(void** context, void** fsr4_context);
 /* The primary window rsfg_vk_window last reported since the session's start, or null. */
 void* rsf_godot_vk_primary_window(void);
+
+/* Vulkan creation owner (vulkan/creation.rs), reached from vulkan_creation.cpp without the guard:
+   from the start and stop leaves and from the resolver's entry points on the engine's thread. */
+/* Keeps underlying (Streamline's or the loader's resolver), whether XeSS requirements are
+   prepared and the session log, and clears both readiness facts. Nonzero when underlying is set. */
+int rsf_godot_vk_creation_begin(rsf_godot_vk_proc underlying, uint32_t xess, rsf_game_log_fn log, void* log_user);
+/* Ends XeSS preparation and clears both readiness facts. The resolver keeps forwarding. */
+void rsf_godot_vk_creation_stop(void);
+/* The last device was created with the XeSS, or the Win32 interop, requirements. */
+int rsf_godot_vk_xess_ready(void);
+int rsf_godot_vk_interop_ready(void);
+/* An RSF_GODOT_VK_ROUTE_*; forwarded receives the function for ROUTE_FORWARD, otherwise null. */
+uint32_t rsf_godot_vk_creation_resolve(uint32_t scope, void* object, const char* name,
+    rsf_godot_vk_function* forwarded);
+/* The VkResult of the intercepted vkCreateInstance, vkCreateDevice. */
+int32_t rsf_godot_vk_create_instance(const rsf_godot_vk_creation_leaves* leaves, const rsf_godot_vk_instance_call* call);
+int32_t rsf_godot_vk_create_device(const rsf_godot_vk_creation_leaves* leaves, const rsf_godot_vk_device_call* call);
+/* The intercepted vkDestroyDevice. */
+void rsf_godot_vk_destroy_device(const rsf_godot_vk_creation_leaves* leaves, void* device, const void* allocator);
 
 /* Input window owner (window.rs). */
 /* The Runtime's accept_window question: nonzero for the admitted window, the first window of this
