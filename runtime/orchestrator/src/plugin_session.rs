@@ -1,8 +1,15 @@
 // SPDX-License-Identifier: MIT
+use crate::sdk_module::SdkModule;
 use rsf_game_sys::*;
-use std::ffi::c_void;
+use std::ffi::CStr;
 use std::ptr;
 use std::sync::RwLock;
+use windows_sys::Win32::{
+    Foundation::FARPROC,
+    System::LibraryLoader::{
+        LOAD_LIBRARY_SEARCH_DEFAULT_DIRS, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LoadLibraryExW,
+    },
+};
 
 const INVALID_ARGUMENT: i32 = -1;
 const ABI_MISMATCH: i32 = -2;
@@ -16,21 +23,6 @@ struct Options {
     path: *const u16,
     probe: *const rsf_game_probe,
     services: rsf_game_host_services,
-}
-
-struct Module(*mut c_void);
-
-#[link(name = "kernel32")]
-unsafe extern "system" {
-    fn LoadLibraryExW(path: *const u16, file: *mut c_void, flags: u32) -> *mut c_void;
-    fn GetProcAddress(module: *mut c_void, name: *const u8) -> rsf_get_game_plugin_api_fn;
-    fn FreeLibrary(module: *mut c_void) -> i32;
-}
-
-impl Drop for Module {
-    fn drop(&mut self) {
-        unsafe { FreeLibrary(self.0) };
-    }
 }
 
 type Control = Option<unsafe extern "C" fn(*const rsf_game_control_args) -> i32>;
@@ -57,11 +49,12 @@ enum Phase {
     Partial,
     Prepared,
     Started,
+    Quiescing,
     Quiesced,
 }
 
 struct Session {
-    _module: Module,
+    _module: SdkModule,
     hooks: rsf_game_hooks_api,
     services: rsf_game_host_services,
     phase: RwLock<Phase>,
@@ -104,13 +97,20 @@ unsafe extern "C" fn rsf_plugin_session_prepare(
         return ABI_MISMATCH;
     }
 
-    // LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS
-    let handle = unsafe { LoadLibraryExW(options.path, ptr::null_mut(), 0x100 | 0x1000) };
-    if handle.is_null() {
+    let handle = unsafe {
+        LoadLibraryExW(
+            options.path,
+            ptr::null_mut(),
+            LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
+        )
+    };
+    let Some(module) = SdkModule::adopt_system(handle) else {
         return NOT_READY;
-    }
-    let module = Module(handle);
-    let entry = unsafe { GetProcAddress(handle, RSF_GAME_ENTRY_POINT.as_ptr()) };
+    };
+    let name = CStr::from_bytes_with_nul(RSF_GAME_ENTRY_POINT).expect("GameSDK entry point");
+    // This export uses the checked GameSDK signature on Windows x64.
+    let entry =
+        unsafe { std::mem::transmute::<FARPROC, rsf_get_game_plugin_api_fn>(module.symbol(name)) };
     if entry.is_none() {
         return ABI_MISMATCH;
     }
@@ -196,6 +196,9 @@ unsafe extern "C" fn rsf_plugin_session_quiesce(raw: *const Session) -> i32 {
     if *phase == Phase::Quiesced {
         return 0;
     }
+    // A refusal may leave some producers closed. Only another quiesce can
+    // finish the transition. Do not tell a caller that this session started.
+    *phase = Phase::Quiescing;
     let result = unsafe { rsf_plugin_call_control(session.hooks.quiesce) };
     if result == 0 {
         *phase = Phase::Quiesced;

@@ -17,7 +17,7 @@ rsf_result start(const rsf_game_start_args*) {
 }
 rsf_result quiesce(const rsf_game_control_args*) {
     ++quiesce_calls;
-    return host->session_id == 2 && quiesce_calls == 1 ? RSF_ERROR_BUSY : RSF_OK;
+    return (host->session_id == 2 || host->session_id == 3) && quiesce_calls == 1 ? RSF_ERROR_BUSY : RSF_OK;
 }
 rsf_result stop(const rsf_game_control_args*) {
     ++stop_calls;

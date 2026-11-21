@@ -4,10 +4,11 @@ use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use std::ptr::{NonNull, null_mut};
 use windows_sys::Win32::{
-    Foundation::FreeLibrary,
+    Foundation::{FARPROC, FreeLibrary},
     System::LibraryLoader::{
         GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN, GetModuleHandleExW,
-        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
+        GetProcAddress, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32,
+        LoadLibraryExW,
     },
 };
 
@@ -81,6 +82,10 @@ impl SdkModule {
 
     pub(super) fn as_ptr(&self) -> *mut c_void {
         self.handle.as_ptr()
+    }
+
+    pub(super) fn symbol(&self, name: &CStr) -> FARPROC {
+        unsafe { GetProcAddress(self.as_ptr(), name.as_ptr().cast()) }
     }
 }
 

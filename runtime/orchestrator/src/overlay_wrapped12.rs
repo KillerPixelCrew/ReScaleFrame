@@ -11,7 +11,7 @@ use std::ffi::{CStr, c_void};
 use std::ptr;
 use std::sync::{Mutex, OnceLock};
 use windows_sys::Win32::System::{
-    LibraryLoader::{GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW},
+    LibraryLoader::{LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW},
     SystemInformation::{GetSystemDirectoryW, GetTickCount64},
 };
 
@@ -41,8 +41,7 @@ impl SystemEntry {
         let module = SdkModule::adopt_system(unsafe {
             LoadLibraryExW(path.as_ptr(), ptr::null_mut(), LOAD_LIBRARY_SEARCH_SYSTEM32)
         })?;
-        let create =
-            unsafe { GetProcAddress(module.as_ptr(), c"D3D11On12CreateDevice".as_ptr().cast()) }?;
+        let create = module.symbol(c"D3D11On12CreateDevice")?;
         Some(Self {
             _module: module,
             create,

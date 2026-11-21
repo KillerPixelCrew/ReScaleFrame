@@ -62,6 +62,16 @@ int main(int argc, char** argv) {
     CHECK(rsf_plugin_session_stop(session) == RSF_ERROR_BUSY);
     CHECK(rsf_plugin_session_status(session, &status) == RSF_OK);
     CHECK(rsf_plugin_session_stop(session) == RSF_OK && !GetModuleHandleW(name.c_str()));
+
+    options.services.session_id = 3;
+    CHECK(rsf_plugin_session_prepare(&options, &session) == RSF_OK && session);
+    CHECK(rsf_plugin_session_start(session) == RSF_OK);
+    CHECK(rsf_plugin_session_quiesce(session) == RSF_ERROR_BUSY);
+    CHECK(rsf_plugin_session_start(session) == RSF_ERROR_NOT_READY);
+    CHECK(rsf_plugin_session_stop(session) == RSF_ERROR_BUSY);
+    CHECK(rsf_plugin_session_status(session, &status) == RSF_OK);
+    CHECK(rsf_plugin_session_quiesce(session) == RSF_OK);
+    CHECK(rsf_plugin_session_stop(session) == RSF_OK && !GetModuleHandleW(name.c_str()));
     CHECK(rsf_plugin_session_stop(nullptr) == RSF_OK);
     return 0;
 }

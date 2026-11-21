@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The Runtime keeps a refused plugin quiesce in progress. Start cannot
+report success while the plugin may have partially retired, and
+stop still requires quiesce to finish. The DLL remains leased through
+the retry. Plugin sessions now use the shared Rust module lease with
+the existing dependency search flags. An unrun fixture covers a
+started plugin refusing quiesce and then retiring successfully.
+Source review checked the state transitions and public ABI.
+
 The Rust Anomaly FG adapter checks the Present event size and counts
 completion only for the accepted window's source and swapchain.
 Device reset clears borrowed SR identity and camera history before
