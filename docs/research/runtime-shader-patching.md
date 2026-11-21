@@ -16,6 +16,13 @@ last-close release, source and original bytecode proof, cache reuse,
 and truncated-pack refusal. The 676-byte variant matched the
 independently compiled patched source byte for byte.
 
+A separate process reopened a copy of the C++ cache. Its first
+prepare hit the cache and left the filename and DXBC hash unchanged.
+It also passed genuinely short four-byte records to the API query,
+root, prepare request, prepare output and counter calls. Each
+received the size refusal. The copied cache and reopen probe provide
+the compatibility check for existing artifacts after the Rust port.
+
 The probe retained the exact Runtime hash, pack, input sources,
 cache filename and DXBC hash under
 `.local/rust-1.94.1-verification/shader-patch-public-api-probe/`.
