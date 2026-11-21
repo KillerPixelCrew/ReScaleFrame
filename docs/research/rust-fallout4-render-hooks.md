@@ -278,3 +278,74 @@ Open game checks: FRAME and SUBMISSION begin before WorldBegin with the expected
 completion before Present, a refused or unpresented SUBMISSION balanced after Swap with NO_FG on
 WINDOW and FRAME, an owner change across the lease, and retention while an auxiliary, token or
 resolution obligation remains.
+
+## Imagespace, Effects and TAA seams in Rust
+
+This source port starts at `fab9fe5a`, which includes the scope port above and the COM lease
+catch, and moves the remaining first-party choices of `observe_imagespace`, `observe_effects` and
+`observe_taa` from `render_hooks.cpp` into `render_hooks/imagespace.rs` without new research. The
+three imagespace calls, the Effects call inside imagespace, the native imagespace manager cell and
+the TAA vtable slot are the ones in the [native callback analysis](fallout4-render-integration-20261116.md)
+and are still checked by `verify` (`WORLD_CALLS` and the TAA slot); the exit and Effects-return
+retirement order is the one in the [reduced recovery analysis](fallout4-native-reduced-recovery-20261116.md),
+the `ui_return` and `ui_restored` receipts are the ones in the [reduced output scope notes](fallout4-native-reduced-output-scope-20261116.md),
+and the TAA exclusion is the callback analysis rule with the bounded receipt from the [SR dropout notes](fallout4-sr-dropout-20261116.md).
+No option, GPU work, shader, address, Runtime export, GameSDK field or vendor and producer policy
+changes, and nothing visual is meant to change.
+
+| Owner | Rust (`render_hooks/imagespace.rs`) | C++ (`render_hooks.cpp`) |
+| --- | --- | --- |
+| Imagespace entry | Selection in the original short-circuit order: not already inside imagespace, FRAME open, live on the current source or a recovery token owned, then one of the returns `0xc383c7`, `0xc39d6f`, `0xc39e13`. A selected call sets the World inside imagespace. | The return address and LastError save, the original call after the LastError restore. |
+| Imagespace exit | RETIRE (with its diagnostic), auxiliary drain (with its diagnostic), `ui_return` receipt, output resolution end (refusal on failure), `ui_restored` receipt, refusal and diagnostic while output state stays owned, then the World leaves imagespace and clears `published` and `full_output_resolved`. | The scope guard whose destructor calls the exit when the original returns or unwinds, inside its own LastError save and restore; the guarded drain and `end_output_resolution`. |
+| Before Effects | Live or token owned, return `0x21fa288` and arguments `(0, 13, 1, 1)`, then the native manager read compared with the argument; the `pre_sr` receipt on the FRAME pass with `NOT_READY`, the SR seam (`publication.rs`) and the callback-failure diagnostic when it answers failed. | The typed read of the manager cell `0x3e5e4b0`, the LastError save and restore around the original. |
+| After Effects | The same return and arguments, without the live or manager check: the `effects_return` receipt, RETIRE when a token is owned (with its diagnostic), then the drain when auxiliaries are open (with its diagnostic). | The native LastError captured after the original and restored after the Rust step. |
+| TAA | The original answer is excluded while the World is inside imagespace with full output resolved and the raster snapshot is current (or, without a valid snapshot, the source is current). One receipt per observed combination of original, imagespace, full output, temporal and exclusion bits, with the original text. | The original query first, then the LastError save and restore around the Rust gate. |
+
+`NativeImagespaceLeaves` has 8 entries: the World read (72 bytes), enter, leave, the manager read,
+and the same drain, `end_output_resolution`, resolution receipt and shared diagnostic functions the
+scope and publication tables bind. `NativeEffectsCall` (32 bytes) carries the return address and
+arguments. Both are size-asserted on both sides. Rust uses the recovery leaves' report, refuse,
+same_source and raster_current, calls RETIRE and the SR seam directly, and reads
+`rsf_fallout4_resolution_output_busy` directly, as `output_resolution_busy` did. The
+`rsf_fallout4_render_emit_sr` and `rsf_fallout4_recovery_retire` exports, the C++
+`retire_recovery` wrapper and `NativeSrOutcome` lost their only callers and are removed;
+`SrOutcome` is now a Rust-only enum.
+
+### Differences
+
+- The World enters imagespace inside the Rust selection step, before the C++ scope guard is
+  constructed instead of just after it. Nothing between them can throw: the Rust export cannot
+  unwind and every leaf is noexcept.
+- Every new leaf is noexcept, so no C++ exception can unwind into a Rust frame. The manager read
+  leaf calls only `ReadProcessMemory`, like the owner read leaf, so it has no `catch`: under
+  `/EHsc` that handler would be provably unreachable. The other new leaves set World flags or
+  call functions that are already noexcept and guarded; host callbacks, logs, Runtime calls and
+  the COM lease keep their own catches.
+- The TAA receipt is built by `format!` instead of a 400-byte `snprintf` buffer. The longest
+  possible text is under 300 bytes, so the original never truncated it.
+- The TAA receipt bits are one process-wide atomic, as the function-local static was.
+
+### Traces
+
+Source comparison walked every path of the three original functions. Imagespace: an unselected
+call (wrong caller, already inside, FRAME closed, not live without a token, or a changed source
+without a token) runs only the original; a selected call keeps the exit order above on return and
+on unwind, and the LastError the engine left is restored after the exit. Effects: the SR seam
+still runs only for the live or token-owning call whose manager matches the native cell, after the
+`pre_sr` receipt; the after step still runs for the exact call even when the before step was not
+selected, and keeps receipt, RETIRE, drain order. TAA: the original runs first, the predicate reads
+the same World fields and leaves, and the answer is the original and not excluded.
+
+A scripted comparison against `fab9fe5a` found all thirteen receipt texts of the original
+`render_hooks.cpp` in the new sources, with format specifiers normalized.
+`render_hooks/imagespace/tests.rs` adds unrun fake-leaf checks of the three imagespace callers and
+a single entry, a closed FRAME and a changed source, the exit order on the input and FRAME passes
+with an output-end refusal, the Effects manager and argument selection with SR emission and its
+failure diagnostic, the Effects-return receipt and drain, and the TAA exclusion by source and by
+raster snapshot with one receipt per combination. Pinned Rust 1.94.1 formatting, locked offline
+Cargo metadata and whitespace checks passed. Build, link, Clippy, tests, the shared host fixture,
+deployment and game checks remain with the user; this is a source port, not a runtime result.
+Open game checks: SR published at native and reduced quality with native TAA excluded only inside
+the resolved imagespace, the `ui_return` and `ui_restored` receipts each frame, a forced RETIRE
+refusal at the Effects return that drains at the imagespace exit or after Swap, VATS and Pip-Boy
+contents after the Effects-return drain, and an imagespace call from an unselected caller.

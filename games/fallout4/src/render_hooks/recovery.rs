@@ -550,11 +550,6 @@ extern "C" fn rsf_fallout4_recovery_reserve(
     reserve(leaves, planned)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_recovery_retire(leaves: &Leaves) -> bool {
-    retire(leaves)
-}
-
 /// The calling thread's token, zero when none is owned.
 #[unsafe(no_mangle)]
 extern "C" fn rsf_fallout4_recovery_token() -> u64 {

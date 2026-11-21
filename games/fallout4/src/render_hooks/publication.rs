@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! SR and HUDless publication for Fallout 4 AE 1.11.240.
 //!
-//! Rust owns the admission and ordering of the SR seam inside the imagespace Effects call and of
-//! the HUDless viewport seam: the recovery SEAL before any temporal reader and its FINISH at the
+//! Rust owns the admission and ordering of the SR seam inside the imagespace Effects call
+//! (selected and sequenced by imagespace.rs) and of the HUDless viewport seam: the recovery SEAL before any temporal reader and its FINISH at the
 //! end of the SR step, every refusal and its World refusal, the FRAME/SUBMISSION lease and
 //! producer comparisons, the pass identity and role, the SR-off decision, the screen verdict, the
 //! FG_INPUTS, FINAL_SCENE and WINDOW callback order, the scalar identity kept after FG input
@@ -314,17 +314,16 @@ fn screen_facts(
     leased
 }
 
-#[repr(u32)]
 #[derive(Debug, PartialEq, Eq)]
-enum SrOutcome {
-    Refused = 0,
-    Published = 1,
+pub(super) enum SrOutcome {
+    Refused,
+    Published,
     // A Runtime call that the C++ owner let propagate threw.
-    Failed = 2,
+    Failed,
 }
 
-/// The SR seam before the original Effects range.
-fn emit_sr(leaves: &Leaves, recovery: &RecoveryLeaves) -> SrOutcome {
+/// The SR seam before the original Effects range, sequenced by imagespace.rs.
+pub(super) fn emit_sr(leaves: &Leaves, recovery: &RecoveryLeaves) -> SrOutcome {
     // Seal originals before any temporal reader, CPU attribution or screen gate.
     let sealed = recovery::seal(recovery);
     let _resolve = Finish(recovery);
@@ -560,11 +559,6 @@ fn emit_hudless(leaves: &Leaves, recovery: &RecoveryLeaves) {
     let world = leaves.world();
     // SAFETY: the World names its pass, now the open WINDOW.
     leaves.notify(unsafe { &*world.pass }, world.context, 1);
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_render_emit_sr(leaves: &Leaves, recovery: &RecoveryLeaves) -> SrOutcome {
-    emit_sr(leaves, recovery)
 }
 
 #[unsafe(no_mangle)]

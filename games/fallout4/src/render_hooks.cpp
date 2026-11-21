@@ -12,7 +12,6 @@
 #include <windows.h>
 #include <array>
 #include <atomic>
-#include <cstdio>
 #include <cstring>
 #include <utility>
 #if defined(_MSC_VER)
@@ -184,7 +183,6 @@ bool recovery_owned() noexcept { return rsf_fallout4_recovery_token()!=0; }
 bool reserve_recovery(const rsf_game_render_pass& planned) noexcept {
     return rsf_fallout4_recovery_reserve(&recovery_leaves,&planned);
 }
-bool retire_recovery() noexcept { return rsf_fallout4_recovery_retire(&recovery_leaves); }
 bool auxiliary_colour(ID3D11Texture2D* texture, const NativeInputs& inputs) {
     if (!texture) return false;
     Microsoft::WRL::ComPtr<ID3D11Device> device,owner;
@@ -362,6 +360,22 @@ constexpr NativeScopeLeaves scope_leaves{scope_world, scope_read_owner, scope_le
     scope_discard_owner, scope_open_frame, scope_open_submission, scope_close_submission, scope_close_window,
     scope_close_frame, drain_auxiliaries, finish_resolution_source, scope_reset, publication_notify, diagnostic,
     publication_report_state};
+// Imagespace, Effects and TAA leaves (render_hooks_platform.h). Rust (render_hooks/imagespace.rs)
+// selects the calls and sequences entry, the SR seam, retirement, drain, output resolution and
+// the TAA gate; these read the World, read the native manager cell and keep the World flags.
+static_assert(int(ResolutionStage::pre_sr)==0 && int(ResolutionStage::effects_return)==3 &&
+    int(ResolutionStage::ui_return)==5 && int(ResolutionStage::ui_restored)==6);
+void imagespace_world(NativeImagespaceWorld* out) noexcept {
+    *out={cpu_identity_abi(world.cpu),&world.pass,&world.frame_pass,world.context.Get(),world.in_imagespace,
+        world.inputs,world.published,world.frame_open,world.full_output_resolved,world.auxiliary_open,
+        world.raster_snapshot.raster_valid};
+}
+void imagespace_enter() noexcept { world.in_imagespace=true; }
+void imagespace_leave() noexcept { world.in_imagespace=world.published=world.full_output_resolved=false; }
+// ReadProcessMemory only, like the owner read; noexcept keeps any throw out of the Rust frame.
+bool imagespace_manager(uintptr_t* manager) noexcept { return read(image()+0x3e5e4b0,manager,sizeof(*manager)); }
+constexpr NativeImagespaceLeaves imagespace_leaves{imagespace_world, imagespace_enter, imagespace_leave,
+    imagespace_manager, drain_auxiliaries, end_output_resolution, publication_report_state, diagnostic};
 void observe_viewport(void* manager, bool enabled) {
     Entry entry;
 #if defined(_MSC_VER)
@@ -486,25 +500,18 @@ void observe_imagespace() {
 #else
     const auto caller = uintptr_t(__builtin_return_address(0));
 #endif
-    const bool selected = !world.in_imagespace && world.frame_open &&
-        ((live() && same_source()) || recovery_owned()) &&
-        (caller == image() + 0xc383c7 || caller == image() + 0xc39d6f || caller == image() + 0xc39e13);
+    // Rust selects the call and enters imagespace; the exit runs after the original returns or
+    // unwinds, between its own LastError save and restore.
+    const bool selected = rsf_fallout4_render_enter_imagespace(&imagespace_leaves,&recovery_leaves,caller);
     struct Cleanup {
         bool selected;
         ~Cleanup() {
             if (!selected) return;
             const auto error = GetLastError();
-            if (!retire_recovery()) diagnostic("Fallout4 reduced recovery remains owned after imagespace; next reduction blocked.");
-            if (!drain_auxiliaries()) diagnostic("Fallout4 auxiliary retirement remains pending after native imagespace; owner retained.");
-            report_resolution_state(ResolutionStage::ui_return,world.inputs ? world.pass : world.frame_pass,world.context.Get(),world.published,RSF_OK,report);
-            if (!end_output_resolution()) world.refused=true;
-            report_resolution_state(ResolutionStage::ui_restored,world.inputs ? world.pass : world.frame_pass,world.context.Get(),world.published,RSF_OK,report);
-            if (output_resolution_busy()) { world.refused=true; diagnostic("Fallout4 native output-state cleanup remains owned; subsequent world admission blocked."); }
-            world.in_imagespace = world.published = world.full_output_resolved = false;
+            rsf_fallout4_render_leave_imagespace(&imagespace_leaves,&recovery_leaves);
             SetLastError(error);
         }
     } cleanup{selected};
-    if (selected) world.in_imagespace = true;
     SetLastError(error);
     imagespace();
 }
@@ -516,47 +523,25 @@ void observe_effects(void* manager, uint32_t first, uint32_t last, uint32_t mode
     const auto caller = uintptr_t(__builtin_return_address(0));
 #endif
     const auto error = GetLastError();
-    uintptr_t native_manager{};
-    if ((live() || recovery_owned()) && caller == image() + 0x21fa288 && first == 0 && last == 13 && mode == 1 && flags == 1 &&
-        read(image() + 0x3e5e4b0, &native_manager, sizeof(native_manager)) && uintptr_t(manager) == native_manager) {
-        report_resolution_state(ResolutionStage::pre_sr,world.frame_pass,world.context.Get(),world.published,RSF_ERROR_NOT_READY,report);
-        if (rsf_fallout4_render_emit_sr(&publication_leaves,&recovery_leaves)==NativeSrOutcome::failed)
-            diagnostic("Fallout4 SR callback failed; native imagespace retained.");
-    }
+    // Rust verifies the call and arguments against the native manager read, then sequences the
+    // pre-SR receipt and the SR seam before the original, and the Effects receipt, RETIRE and
+    // auxiliary drain after it.
+    const NativeEffectsCall call{caller,uintptr_t(manager),first,last,mode,flags};
+    rsf_fallout4_render_before_effects(&imagespace_leaves,&publication_leaves,&recovery_leaves,&call);
     SetLastError(error);
     effects(manager, first, last, mode, flags);
     const auto native_error=GetLastError();
-    if (caller==image()+0x21fa288 && first==0 && last==13 && mode==1 && flags==1)
-        report_resolution_state(ResolutionStage::effects_return,world.inputs ? world.pass : world.frame_pass,world.context.Get(),world.published,RSF_OK,report);
-    if (caller==image()+0x21fa288 && first==0 && last==13 && mode==1 && flags==1 && recovery_owned())
-        if (!retire_recovery()) diagnostic("Fallout4 recovery VATS retirement refused at original Effects return; ownership retained.");
-    if (caller==image()+0x21fa288 && first==0 && last==13 && mode==1 && flags==1 && world.auxiliary_open)
-        if (!drain_auxiliaries()) diagnostic("Fallout4 VATS/auxiliary restoration refused at native Effects return; owner retained.");
+    rsf_fallout4_render_after_effects(&imagespace_leaves,&recovery_leaves,&call);
     SetLastError(native_error);
 }
 bool observe_taa(void* effect) {
     Entry entry;
     const auto result = taa_active(effect);
     const auto error = GetLastError();
-    const bool owner_current = world.in_imagespace && world.full_output_resolved &&
-        (world.raster_snapshot.raster_valid ? native_raster_snapshot_current(world.raster_snapshot) : same_source());
-    const bool excluded = owner_current;
-    // One receipt per observed gate combination, not an unbounded frame log.
-    const unsigned key=unsigned(result) | (unsigned(world.in_imagespace)<<1) |
-        (unsigned(world.full_output_resolved)<<2) | (unsigned(world.published)<<3) | (unsigned(excluded)<<4);
-    static std::atomic<uint32_t> receipts{};
-    if (!(receipts.fetch_or(uint32_t(1)<<key,std::memory_order_relaxed)&(uint32_t(1)<<key))) {
-        char text[400]{};
-        std::snprintf(text,sizeof(text),
-            "Fallout4 TAA gate source=%llu native=%llu original=%u imagespace=%u full_output=%u temporal=%u owner_current=%u native_taa_runs=%u recovery=%llu",
-            static_cast<unsigned long long>(world.cpu.source),
-            static_cast<unsigned long long>(world.frame_pass.native_frame),unsigned(result),unsigned(world.in_imagespace),
-            unsigned(world.full_output_resolved),unsigned(world.published),unsigned(owner_current),unsigned(result && !excluded),
-            static_cast<unsigned long long>(rsf_fallout4_recovery_token()));
-        report(text);
-    }
+    // Rust decides the exclusion and its once-per-combination receipt.
+    const bool active = rsf_fallout4_render_gate_taa(&imagespace_leaves,&recovery_leaves,result);
     SetLastError(error);
-    return result && !excluded;
+    return active;
 }
 bool read_present_owner(NativeRenderScopeKey* key, uintptr_t* outer_chain) noexcept {
     Owner current{};

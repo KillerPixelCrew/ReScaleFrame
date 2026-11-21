@@ -3,8 +3,9 @@
 // Private boundary between render_hooks.cpp and its Rust owner (render_hooks.rs): the render hook
 // lifecycle, the ordinary World and outer Present guards, the reduced-render recovery
 // transaction (render_hooks/recovery.rs), SR and HUDless publication
-// (render_hooks/publication.rs) and the FRAME, SUBMISSION and WINDOW scope
-// (render_hooks/scope.rs). Not a DLL ABI.
+// (render_hooks/publication.rs), the FRAME, SUBMISSION and WINDOW scope
+// (render_hooks/scope.rs) and the imagespace, Effects and TAA seams
+// (render_hooks/imagespace.rs). Not a DLL ABI.
 #include "cpu_events_platform.h"
 #include "resolution.h"
 #include <cstddef>
@@ -199,8 +200,6 @@ struct NativePublicationLeaves {
     // Final colour lease, World pass and open WINDOW.
     void (*publish_window)(const rsf_game_render_pass* window) noexcept;
 };
-enum class NativeSrOutcome : uint32_t { refused = 0, published = 1, failed = 2 };
-
 static_assert(sizeof(NativePublicationWorld) == 96 && offsetof(NativePublicationWorld, pass) == 40 &&
     offsetof(NativePublicationWorld, upscale) == 80 && offsetof(NativePublicationWorld, depth_valid) == 89);
 static_assert(sizeof(NativePublicationInputs) == 3 * sizeof(void*));
@@ -264,6 +263,51 @@ static_assert(sizeof(NativeScopeWorld) == 80 && offsetof(NativeScopeWorld, pass)
     offsetof(NativeScopeWorld, auxiliary_open) == 78);
 static_assert(sizeof(NativeScopeLeaves) == 16 * sizeof(void*));
 
+// Imagespace, Effects and TAA seams (render_hooks/imagespace.rs). Rust owns the verified caller
+// and argument selection, the imagespace entry, the before and after Effects sequence around the
+// SR seam, the imagespace exit order of recovery RETIRE, auxiliary drain and output resolution
+// with its receipts and refusals, and the TAA exclusion predicate with its bounded receipt. C++
+// keeps the typed detours, the original calls, the return addresses, the LastError saves and
+// restores, the typed native manager read, the guarded auxiliary and resolution calls, the World
+// fields and the scope guard that runs the imagespace exit when the original returns or unwinds.
+// Rust also uses the recovery leaves' report, refuse, same_source and raster_current, and the
+// publication leaves for the SR seam.
+struct NativeImagespaceWorld {
+    rsf_fallout4_cpu_identity cpu;
+    const rsf_game_render_pass* pass;          // World pass
+    const rsf_game_render_pass* frame_pass;
+    void* context;                             // World Context
+    bool in_imagespace, inputs, published, frame_open, full_output_resolved, auxiliary_open;
+    bool raster_valid;                         // same-frame prepass raster snapshot
+};
+struct NativeEffectsCall {
+    uintptr_t caller, manager;
+    uint32_t first, last, mode, flags;
+};
+struct NativeImagespaceLeaves {
+    void (*world)(NativeImagespaceWorld*) noexcept;
+    // World inside the selected imagespace.
+    void (*enter)() noexcept;
+    // Clear the World's imagespace, temporal publication and full-output flags.
+    void (*leave)() noexcept;
+    // The native imagespace manager cell; false when unreadable.
+    bool (*manager)(uintptr_t*) noexcept;
+    // The guarded auxiliary restore; true when none is open or it drained.
+    bool (*drain_auxiliaries)() noexcept;
+    bool (*end_output)() noexcept;
+    // The publication leaves' report_state and diagnostic.
+    void (*report_state)(uint32_t stage, const rsf_game_render_pass*, void* context, bool published,
+        int32_t result) noexcept;
+    void (*diagnostic)(const char*) noexcept;
+};
+
+static_assert(sizeof(NativeImagespaceWorld) == 72 && offsetof(NativeImagespaceWorld, pass) == 40 &&
+    offsetof(NativeImagespaceWorld, context) == 56 && offsetof(NativeImagespaceWorld, in_imagespace) == 64 &&
+    offsetof(NativeImagespaceWorld, raster_valid) == 70);
+static_assert(sizeof(NativeEffectsCall) == 32 && offsetof(NativeEffectsCall, first) == 16 &&
+    offsetof(NativeEffectsCall, flags) == 28);
+static_assert(sizeof(NativeImagespaceLeaves) == 8 * sizeof(void*));
+
 extern "C" {
 // Binds the leaves. The table must be complete and live for the process.
 bool rsf_fallout4_render_publish(const NativeRenderHookLeaves*) noexcept;
@@ -277,17 +321,27 @@ NativePresentAdmission rsf_fallout4_render_admit_present(NativePresentMatch, uin
     const rsf_fallout4_cpu_identity*, RevalidatePresentScreen) noexcept;
 // Preflight, RESERVE and confirmation before the first native ratio write.
 bool rsf_fallout4_recovery_reserve(const NativeRecoveryLeaves*, const rsf_game_render_pass* planned) noexcept;
-// The SR seam (rsf_fallout4_render_emit_sr) SEALs before any temporal reader and FINISHes as it
-// returns. CANCEL an uncommitted token, or FINISH then RETIRE a committed one.
-bool rsf_fallout4_recovery_retire(const NativeRecoveryLeaves*) noexcept;
+// The calling thread's token, zero when none is owned. The SR seam SEALs before any temporal
+// reader and FINISHes as it returns; the imagespace and Effects exits RETIRE in Rust.
 uint64_t rsf_fallout4_recovery_token() noexcept;
 bool rsf_fallout4_recovery_committed() noexcept;
 // Clear with the World; called only where the World resets without a token.
 void rsf_fallout4_recovery_reset() noexcept;
-// The SR seam before the original Effects range. Failed asks the caller for its callback
-// failure receipt.
-NativeSrOutcome rsf_fallout4_render_emit_sr(const NativePublicationLeaves*,
-    const NativeRecoveryLeaves*) noexcept;
+// Select a verified imagespace call and enter imagespace before the original. True asks the
+// caller to run the exit after the original returns or unwinds.
+bool rsf_fallout4_render_enter_imagespace(const NativeImagespaceLeaves*, const NativeRecoveryLeaves*,
+    uintptr_t caller) noexcept;
+// The selected imagespace exit: RETIRE, auxiliary drain, output resolution end and leave.
+void rsf_fallout4_render_leave_imagespace(const NativeImagespaceLeaves*, const NativeRecoveryLeaves*) noexcept;
+// Before the original Effects range: the pre-SR receipt and the SR seam on the verified call.
+void rsf_fallout4_render_before_effects(const NativeImagespaceLeaves*, const NativePublicationLeaves*,
+    const NativeRecoveryLeaves*, const NativeEffectsCall*) noexcept;
+// After the original Effects range: the Effects receipt, RETIRE and auxiliary drain.
+void rsf_fallout4_render_after_effects(const NativeImagespaceLeaves*, const NativeRecoveryLeaves*,
+    const NativeEffectsCall*) noexcept;
+// The TAA active answer from the original answer.
+bool rsf_fallout4_render_gate_taa(const NativeImagespaceLeaves*, const NativeRecoveryLeaves*,
+    bool original) noexcept;
 // The HUDless seam after the native HUDless viewport selection.
 void rsf_fallout4_render_emit_hudless(const NativePublicationLeaves*,
     const NativeRecoveryLeaves*) noexcept;

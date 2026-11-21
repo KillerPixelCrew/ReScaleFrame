@@ -24,6 +24,13 @@ See [the Rust migration record](rust-migration.md#native-policy-cutover).
 
 ## Remaining Rust integration ports
 
+Fallout 4 now selects the imagespace and Effects seams in Rust
+and owns their recovery and cleanup sequence. Rust also applies the
+existing TAA gate and bounded receipt. Native detours retain the
+original calls, return addresses, unwind guard and LastError handling.
+The new fixtures and game checks remain unrun.
+[Imagespace and TAA ownership](research/rust-fallout4-render-hooks.md#imagespace-effects-and-taa-seams-in-rust)
+
 Fallout 4 now admits and closes FRAME, SUBMISSION and WINDOW scopes
 in Rust, including the balanced post-Swap close and recovery retry.
 The native COM lease probe still catches exceptions at the C++
