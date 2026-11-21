@@ -20,7 +20,6 @@ add_library(rsf_graphics STATIC
     src/ui_layer.cpp
     src/overlay_renderer.cpp
     src/overlay_input.cpp
-    src/ui_identify.cpp
     src/constant_twin.cpp
     src/d3d11_observer.cpp)
 target_sources(rsf_graphics PRIVATE src/d3d12_observer.cpp)

@@ -60,7 +60,7 @@ typedef int32_t rsf_ui_result;
 
 typedef struct rsf_ui_registry rsf_ui_registry;
 
-/* Create an empty registry. Returns null only when out of memory. */
+/* Create an empty registry. Returns null for an ABI mismatch or allocation failure. */
 rsf_ui_registry* rsf_ui_registry_create(uint32_t abi_version);
 void rsf_ui_registry_destroy(rsf_ui_registry* registry);
 
@@ -85,16 +85,17 @@ rsf_ui_result rsf_ui_registry_add(rsf_ui_registry* registry, rsf_ui_set set, voi
    object was already there, so a caller republishing the set does it only when it has to. */
 int rsf_ui_registry_note_recent(rsf_ui_registry* registry, rsf_ui_set set, void* object);
 
-/* Drop `object` from every set. Call this for every object the game creates, before deciding what
-   the new one is, whether or not the address was ever recorded. Cheap when it was not. */
+/* Drop `object` from every set and preserve the order of the surviving entries. Call this for every
+   object the game creates, before deciding what the new one is, whether or not the address was
+   ever recorded. Cheap when it was not. */
 void rsf_ui_registry_forget(rsf_ui_registry* registry, void* object);
 
 int rsf_ui_registry_contains(const rsf_ui_registry* registry, rsf_ui_set set, const void* object);
 
 /* The set as a contiguous array, for handing to a game's own rule.
 
-   Valid until the next add or forget, which is the same thread and the same call stack in practice:
-   the sets change on the game's creation path and are read on its draw path. */
+   Valid until the next add, forget, note_recent or destroy. A note_recent call may reorder the
+   view even when it returns 0. The caller serializes access to the registry and its views. */
 void* const* rsf_ui_registry_view(const rsf_ui_registry* registry, rsf_ui_set set,
                                   uint32_t* count_out);
 
