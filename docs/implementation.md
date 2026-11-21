@@ -466,6 +466,17 @@ the outstanding resources. The worker passed 377 pinned Rust tests
 and 21 MSVC Release contracts. Its eight PE export inventories matched.
 [Presentation buffer audit](research/rust-d3d11-present-buffers.md)
 
+The merged build passed 377 locked Rust tests, formatting and Clippy,
+plus 13 focused MSVC Release contracts. All eight Release export
+inventories matched, and the Anomaly DLL retained its three exports and
+dynamic Runtime lookup. The isolated Standard run used the new Runtime
+and resized from 1280×720 to 1600×900. It drew all 389 visible overlay
+frames, recorded 240 DLSS-G vendor presents per 120 source frames,
+and completed 3,089 DLSS evaluations with zero refusals. The engine
+shut down Direct3D, exited with code 0 and the test restored the staged
+inputs. Logs and hashes are in
+`.local/anomaly/staging/live-58fe95a-stage5/evidence/merged-present-buffers-standard/`.
+
 The combined bridge build passed 15 focused CPU and ABI contracts in
 Debug and Release, and all 290 locked Rust tests, formatting and Clippy.
 Both configurations match the reference Runtime, AC7, Loader and
