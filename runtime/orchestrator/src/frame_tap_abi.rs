@@ -2,6 +2,7 @@
 
 #![allow(non_camel_case_types)]
 #![allow(dead_code)]
+use crate::resource_roles_abi::{rsf_role_table, rsf_texture_facts};
 
 pub const RSF_FRAME_TAP_ABI_VERSION: u32 = 15;
 pub const RSF_FRAME_TAP_CONSTANT_SLOTS: u32 = 70;
@@ -17,88 +18,6 @@ pub const RSF_FRAME_TAP_REFUSED_BLEND: u32 = 5;
 pub const RSF_FRAME_TAP_DEPTH_DROP: u32 = 0;
 pub const RSF_FRAME_TAP_DEPTH_KEEP: u32 = 1;
 pub const RSF_FRAME_TAP_DEPTH_REFUSE: u32 = 2;
-pub type rsf_resource_role = u32;
-pub type rsf_role_confidence = u32;
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct rsf_texture_facts {
-    pub struct_size: u32,
-    pub width: u32,
-    pub height: u32,
-    pub format: u32,
-    pub bind_flags: u32,
-    pub mip_levels: u32,
-    pub array_size: u32,
-    pub sample_count: u32,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_texture_facts"][::core::mem::size_of::<rsf_texture_facts>() - 32usize];
-    ["Alignment of rsf_texture_facts"][::core::mem::align_of::<rsf_texture_facts>() - 4usize];
-    ["Offset of field: rsf_texture_facts::struct_size"]
-        [::core::mem::offset_of!(rsf_texture_facts, struct_size) - 0usize];
-    ["Offset of field: rsf_texture_facts::width"]
-        [::core::mem::offset_of!(rsf_texture_facts, width) - 4usize];
-    ["Offset of field: rsf_texture_facts::height"]
-        [::core::mem::offset_of!(rsf_texture_facts, height) - 8usize];
-    ["Offset of field: rsf_texture_facts::format"]
-        [::core::mem::offset_of!(rsf_texture_facts, format) - 12usize];
-    ["Offset of field: rsf_texture_facts::bind_flags"]
-        [::core::mem::offset_of!(rsf_texture_facts, bind_flags) - 16usize];
-    ["Offset of field: rsf_texture_facts::mip_levels"]
-        [::core::mem::offset_of!(rsf_texture_facts, mip_levels) - 20usize];
-    ["Offset of field: rsf_texture_facts::array_size"]
-        [::core::mem::offset_of!(rsf_texture_facts, array_size) - 24usize];
-    ["Offset of field: rsf_texture_facts::sample_count"]
-        [::core::mem::offset_of!(rsf_texture_facts, sample_count) - 28usize];
-};
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct rsf_role_rule {
-    pub role: rsf_resource_role,
-    pub confidence: rsf_role_confidence,
-    pub flags: u32,
-    pub format: u32,
-    pub bind_flags: u32,
-    pub width: u32,
-    pub height: u32,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_role_rule"][::core::mem::size_of::<rsf_role_rule>() - 28usize];
-    ["Alignment of rsf_role_rule"][::core::mem::align_of::<rsf_role_rule>() - 4usize];
-    ["Offset of field: rsf_role_rule::role"][::core::mem::offset_of!(rsf_role_rule, role) - 0usize];
-    ["Offset of field: rsf_role_rule::confidence"]
-        [::core::mem::offset_of!(rsf_role_rule, confidence) - 4usize];
-    ["Offset of field: rsf_role_rule::flags"]
-        [::core::mem::offset_of!(rsf_role_rule, flags) - 8usize];
-    ["Offset of field: rsf_role_rule::format"]
-        [::core::mem::offset_of!(rsf_role_rule, format) - 12usize];
-    ["Offset of field: rsf_role_rule::bind_flags"]
-        [::core::mem::offset_of!(rsf_role_rule, bind_flags) - 16usize];
-    ["Offset of field: rsf_role_rule::width"]
-        [::core::mem::offset_of!(rsf_role_rule, width) - 20usize];
-    ["Offset of field: rsf_role_rule::height"]
-        [::core::mem::offset_of!(rsf_role_rule, height) - 24usize];
-};
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct rsf_role_table {
-    pub struct_size: u32,
-    pub rules: *const rsf_role_rule,
-    pub count: u32,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_role_table"][::core::mem::size_of::<rsf_role_table>() - 24usize];
-    ["Alignment of rsf_role_table"][::core::mem::align_of::<rsf_role_table>() - 8usize];
-    ["Offset of field: rsf_role_table::struct_size"]
-        [::core::mem::offset_of!(rsf_role_table, struct_size) - 0usize];
-    ["Offset of field: rsf_role_table::rules"]
-        [::core::mem::offset_of!(rsf_role_table, rules) - 8usize];
-    ["Offset of field: rsf_role_table::count"]
-        [::core::mem::offset_of!(rsf_role_table, count) - 16usize];
-};
 pub type rsf_frame_tap_result = i32;
 pub type rsf_frame_tap_log_fn = ::core::option::Option<
     unsafe extern "C" fn(user: *mut ::core::ffi::c_void, message: *const ::core::ffi::c_char),
@@ -970,15 +889,6 @@ pub struct rsf_frame_tap_platform {
     pub buffer_width: ::core::option::Option<
         unsafe extern "C" fn(resource: *mut ::core::ffi::c_void, bind_flags: *mut u32) -> u32,
     >,
-    pub classify: ::core::option::Option<
-        unsafe extern "C" fn(
-            rules: *const rsf_role_rule,
-            count: u32,
-            facts: *const rsf_texture_facts,
-            output_width: u32,
-            output_height: u32,
-        ) -> rsf_resource_role,
-    >,
     pub shader_views: ::core::option::Option<
         unsafe extern "C" fn(
             context: *mut ::core::ffi::c_void,
@@ -1173,7 +1083,7 @@ pub struct rsf_frame_tap_platform {
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of rsf_frame_tap_platform"][::core::mem::size_of::<rsf_frame_tap_platform>() - 264usize];
+    ["Size of rsf_frame_tap_platform"][::core::mem::size_of::<rsf_frame_tap_platform>() - 256usize];
     ["Alignment of rsf_frame_tap_platform"]
         [::core::mem::align_of::<rsf_frame_tap_platform>() - 8usize];
     ["Offset of field: rsf_frame_tap_platform::patch"]
@@ -1190,57 +1100,55 @@ const _: () = {
         [::core::mem::offset_of!(rsf_frame_tap_platform, target_view_format) - 40usize];
     ["Offset of field: rsf_frame_tap_platform::buffer_width"]
         [::core::mem::offset_of!(rsf_frame_tap_platform, buffer_width) - 48usize];
-    ["Offset of field: rsf_frame_tap_platform::classify"]
-        [::core::mem::offset_of!(rsf_frame_tap_platform, classify) - 56usize];
     ["Offset of field: rsf_frame_tap_platform::shader_views"]
-        [::core::mem::offset_of!(rsf_frame_tap_platform, shader_views) - 64usize];
+        [::core::mem::offset_of!(rsf_frame_tap_platform, shader_views) - 56usize];
     ["Offset of field: rsf_frame_tap_platform::set_shader_views"]
-        [::core::mem::offset_of!(rsf_frame_tap_platform, set_shader_views) - 72usize];
+        [::core::mem::offset_of!(rsf_frame_tap_platform, set_shader_views) - 64usize];
     ["Offset of field: rsf_frame_tap_platform::set_targets"]
-        [::core::mem::offset_of!(rsf_frame_tap_platform, set_targets) - 80usize];
+        [::core::mem::offset_of!(rsf_frame_tap_platform, set_targets) - 72usize];
     ["Offset of field: rsf_frame_tap_platform::set_viewports"]
-        [::core::mem::offset_of!(rsf_frame_tap_platform, set_viewports) - 88usize];
+        [::core::mem::offset_of!(rsf_frame_tap_platform, set_viewports) - 80usize];
     ["Offset of field: rsf_frame_tap_platform::set_scissors"]
-        [::core::mem::offset_of!(rsf_frame_tap_platform, set_scissors) - 96usize];
+        [::core::mem::offset_of!(rsf_frame_tap_platform, set_scissors) - 88usize];
     ["Offset of field: rsf_frame_tap_platform::viewport"]
-        [::core::mem::offset_of!(rsf_frame_tap_platform, viewport) - 104usize];
+        [::core::mem::offset_of!(rsf_frame_tap_platform, viewport) - 96usize];
     ["Offset of field: rsf_frame_tap_platform::set_blend"]
-        [::core::mem::offset_of!(rsf_frame_tap_platform, set_blend) - 112usize];
+        [::core::mem::offset_of!(rsf_frame_tap_platform, set_blend) - 104usize];
     ["Offset of field: rsf_frame_tap_platform::save_output"]
-        [::core::mem::offset_of!(rsf_frame_tap_platform, save_output) - 120usize];
+        [::core::mem::offset_of!(rsf_frame_tap_platform, save_output) - 112usize];
     ["Offset of field: rsf_frame_tap_platform::patch_blend"]
-        [::core::mem::offset_of!(rsf_frame_tap_platform, patch_blend) - 128usize];
+        [::core::mem::offset_of!(rsf_frame_tap_platform, patch_blend) - 120usize];
     ["Offset of field: rsf_frame_tap_platform::stage_constants"]
-        [::core::mem::offset_of!(rsf_frame_tap_platform, stage_constants) - 136usize];
+        [::core::mem::offset_of!(rsf_frame_tap_platform, stage_constants) - 128usize];
     ["Offset of field: rsf_frame_tap_platform::bind_constants"]
-        [::core::mem::offset_of!(rsf_frame_tap_platform, bind_constants) - 144usize];
+        [::core::mem::offset_of!(rsf_frame_tap_platform, bind_constants) - 136usize];
     ["Offset of field: rsf_frame_tap_platform::seed_geometry"]
-        [::core::mem::offset_of!(rsf_frame_tap_platform, seed_geometry) - 152usize];
+        [::core::mem::offset_of!(rsf_frame_tap_platform, seed_geometry) - 144usize];
     ["Offset of field: rsf_frame_tap_platform::draw"]
-        [::core::mem::offset_of!(rsf_frame_tap_platform, draw) - 160usize];
+        [::core::mem::offset_of!(rsf_frame_tap_platform, draw) - 152usize];
     ["Offset of field: rsf_frame_tap_platform::samplers"]
-        [::core::mem::offset_of!(rsf_frame_tap_platform, samplers) - 168usize];
+        [::core::mem::offset_of!(rsf_frame_tap_platform, samplers) - 160usize];
     ["Offset of field: rsf_frame_tap_platform::set_samplers"]
-        [::core::mem::offset_of!(rsf_frame_tap_platform, set_samplers) - 176usize];
+        [::core::mem::offset_of!(rsf_frame_tap_platform, set_samplers) - 168usize];
     ["Offset of field: rsf_frame_tap_platform::clone_sampler"]
-        [::core::mem::offset_of!(rsf_frame_tap_platform, clone_sampler) - 184usize];
+        [::core::mem::offset_of!(rsf_frame_tap_platform, clone_sampler) - 176usize];
     ["Offset of field: rsf_frame_tap_platform::log"]
-        [::core::mem::offset_of!(rsf_frame_tap_platform, log) - 192usize];
+        [::core::mem::offset_of!(rsf_frame_tap_platform, log) - 184usize];
     ["Offset of field: rsf_frame_tap_platform::pass"]
-        [::core::mem::offset_of!(rsf_frame_tap_platform, pass) - 200usize];
+        [::core::mem::offset_of!(rsf_frame_tap_platform, pass) - 192usize];
     ["Offset of field: rsf_frame_tap_platform::report"]
-        [::core::mem::offset_of!(rsf_frame_tap_platform, report) - 208usize];
+        [::core::mem::offset_of!(rsf_frame_tap_platform, report) - 200usize];
     ["Offset of field: rsf_frame_tap_platform::geometry"]
-        [::core::mem::offset_of!(rsf_frame_tap_platform, geometry) - 216usize];
+        [::core::mem::offset_of!(rsf_frame_tap_platform, geometry) - 208usize];
     ["Offset of field: rsf_frame_tap_platform::compute"]
-        [::core::mem::offset_of!(rsf_frame_tap_platform, compute) - 224usize];
+        [::core::mem::offset_of!(rsf_frame_tap_platform, compute) - 216usize];
     ["Offset of field: rsf_frame_tap_platform::constants"]
-        [::core::mem::offset_of!(rsf_frame_tap_platform, constants) - 232usize];
+        [::core::mem::offset_of!(rsf_frame_tap_platform, constants) - 224usize];
     ["Offset of field: rsf_frame_tap_platform::gate"]
-        [::core::mem::offset_of!(rsf_frame_tap_platform, gate) - 240usize];
+        [::core::mem::offset_of!(rsf_frame_tap_platform, gate) - 232usize];
     ["Offset of field: rsf_frame_tap_platform::verdict"]
-        [::core::mem::offset_of!(rsf_frame_tap_platform, verdict) - 248usize];
+        [::core::mem::offset_of!(rsf_frame_tap_platform, verdict) - 240usize];
     ["Offset of field: rsf_frame_tap_platform::override_constants"]
-        [::core::mem::offset_of!(rsf_frame_tap_platform, override_constants) - 256usize];
+        [::core::mem::offset_of!(rsf_frame_tap_platform, override_constants) - 248usize];
 };
 pub type rsf_frame_tap_platform_ref = *const rsf_frame_tap_platform;

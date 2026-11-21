@@ -141,9 +141,6 @@ typedef struct rsf_frame_tap_platform {
     uint32_t (*target_view_format)(void* view);
     /* Zero when the resource is not a buffer. */
     uint32_t (*buffer_width)(void* resource, uint32_t* bind_flags);
-    rsf_resource_role (*classify)(const rsf_role_rule* rules, uint32_t count,
-                                  const rsf_texture_facts* facts, uint32_t output_width,
-                                  uint32_t output_height);
     /* Every pixel shader resource slot, as owned references. */
     void (*shader_views)(void* context, void** views);
     void (*set_shader_views)(void* original, void* context, uint32_t start, uint32_t count,
@@ -224,9 +221,14 @@ rsf_frame_tap_result rsf_core_frame_tap_watch_target(uint32_t index, void* textu
 rsf_frame_tap_result rsf_core_frame_tap_get_status(rsf_frame_tap_status* status);
 
 /* Hook entries. `enter` re-applies a rewritten vtable and returns the hook's current original;
-   `leave` re-applies it after a call that may have rewritten it. */
+   `leave` re-applies it after a call that may have rewritten it.
+
+   A hook that reads the plan or the render thread's shadow holds an admission, and set_plan and
+   uninstall wait until only their own thread holds any. Entries whose decision the detour
+   forwards (clear, copy, samplers) set `*admitted` when they hold one, and the detour
+   passes it to `leave` after forwarding, so a substitute or clone cannot outlive a clear. */
 void* rsf_core_frame_tap_enter(rsf_frame_tap_platform_ref, uint32_t hook);
-void rsf_core_frame_tap_leave(rsf_frame_tap_platform_ref);
+void rsf_core_frame_tap_leave(rsf_frame_tap_platform_ref, uint32_t admitted);
 void rsf_core_frame_tap_views(rsf_frame_tap_platform_ref, void* context, uint32_t start,
                               uint32_t count, void* const* views);
 void rsf_core_frame_tap_targets(rsf_frame_tap_platform_ref, void* context, uint32_t count,
@@ -235,7 +237,8 @@ void rsf_core_frame_tap_viewports(rsf_frame_tap_platform_ref, void* context, uin
                                   const rsf_frame_tap_viewport* viewports);
 void rsf_core_frame_tap_scissors(rsf_frame_tap_platform_ref, void* context, uint32_t count,
                                  const rsf_frame_tap_rect* rectangles);
-void* rsf_core_frame_tap_clear_target(rsf_frame_tap_platform_ref, void* context, void* view);
+void* rsf_core_frame_tap_clear_target(rsf_frame_tap_platform_ref, void* context, void* view,
+                                      uint32_t* admitted);
 void rsf_core_frame_tap_draw(rsf_frame_tap_platform_ref, void* context, uint32_t hook,
                              const rsf_frame_tap_draw_call* call);
 void rsf_core_frame_tap_indirect(rsf_frame_tap_platform_ref, void* context, uint32_t kind,
@@ -251,20 +254,20 @@ void rsf_core_frame_tap_vertex_constants(void* context, uint32_t start, uint32_t
                                          void* const* buffers);
 void rsf_core_frame_tap_pixel_constants(rsf_frame_tap_platform_ref, void* context,
                                         uint32_t start, uint32_t count, void* const* buffers);
-void rsf_core_frame_tap_invalidate(rsf_frame_tap_platform_ref, void* context, uint32_t restore);
+void rsf_core_frame_tap_invalidate(void* context, uint32_t restore);
 void rsf_core_frame_tap_mapped(rsf_frame_tap_platform_ref, void* context, void* resource,
                                uint32_t subresource, uint32_t kind, void* data);
 void rsf_core_frame_tap_unmapping(rsf_frame_tap_platform_ref, void* context, void* resource);
 void rsf_core_frame_tap_dispatch(rsf_frame_tap_platform_ref, void* context, uint32_t x,
                                  uint32_t y, uint32_t z, void* arguments, uint32_t offset);
 void rsf_core_frame_tap_copy(rsf_frame_tap_platform_ref, void* context, void** destination,
-                             void** source);
+                             void** source, uint32_t* admitted);
 const void* rsf_core_frame_tap_update(rsf_frame_tap_platform_ref, void* context,
                                       void* destination, uint32_t subresource, uint32_t has_box,
                                       const void* data, uint32_t row_pitch, void* scratch);
 void* const* rsf_core_frame_tap_samplers(rsf_frame_tap_platform_ref, void* context,
                                          uint32_t start, uint32_t count, void* const* samplers,
-                                         void** bound);
+                                         void** bound, uint32_t* admitted);
 
 #ifdef __cplusplus
 } /* extern "C" */

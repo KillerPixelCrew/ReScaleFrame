@@ -78,7 +78,7 @@ static_assert(RSF_FRAME_TAP_OK == 0 && RSF_FRAME_TAP_ERROR_INVALID_ARGUMENT == -
 static_assert(RSF_FRAME_TAP_LEAVE == 0 && RSF_FRAME_TAP_DIVERT_PATCH_ALPHA == 2);
 static_assert(RSF_ROLE_SCENE_COLOR == 1 && RSF_ROLE_DEPTH == 2 && RSF_ROLE_MOTION == 3 &&
               RSF_ROLE_EXPOSURE == 4 && RSF_ROLE_HISTORY == 5);
-static_assert(sizeof(rsf_frame_tap_platform) == 33 * sizeof(void*));
+static_assert(sizeof(rsf_frame_tap_platform) == 32 * sizeof(void*));
 
 ID3D11DeviceContext* context_of(void* context)
 {
@@ -323,18 +323,6 @@ constexpr rsf_frame_tap_platform platform{
         *bind_flags = description.BindFlags;
         return description.ByteWidth;
     },
-    [](const rsf_role_rule* rules, uint32_t count, const rsf_texture_facts* facts,
-       uint32_t output_width, uint32_t output_height) noexcept -> rsf_resource_role {
-        const rsf_role_table table{sizeof(rsf_role_table), rules, count};
-        rsf_frame_shape shape{};
-        shape.struct_size = sizeof(shape);
-        shape.output_width = output_width;
-        shape.output_height = output_height;
-        rsf_role_verdict verdict{};
-        verdict.struct_size = sizeof(verdict);
-        return rsf_classify_texture(&table, facts, &shape, &verdict) ? verdict.role
-                                                                    : RSF_ROLE_UNKNOWN;
-    },
     [](void* context, void** views) noexcept {
         ID3D11ShaderResourceView* bound[view_slots]{};
         context_of(context)->PSGetShaderResources(0, view_slots, bound);
@@ -476,9 +464,10 @@ Fn original(uint32_t hook)
     return reinterpret_cast<Fn>(rsf_core_frame_tap_enter(&platform, hook));
 }
 
-void leave()
+// `admitted` is what a deciding entry handed over, released after the game's call is forwarded.
+void leave(uint32_t admitted = 0)
 {
-    rsf_core_frame_tap_leave(&platform);
+    rsf_core_frame_tap_leave(&platform, admitted);
 }
 
 template <class Target, class Source>
@@ -537,11 +526,12 @@ void STDMETHODCALLTYPE hooked_clear_render_target_view(ID3D11DeviceContext* cont
     if (!forward) {
         return;
     }
+    uint32_t admitted = 0;
     forward(context,
             static_cast<ID3D11RenderTargetView*>(
-                rsf_core_frame_tap_clear_target(&platform, context, view)),
+                rsf_core_frame_tap_clear_target(&platform, context, view, &admitted)),
             colour);
-    leave();
+    leave(admitted);
 }
 
 void STDMETHODCALLTYPE hooked_draw_indexed(ID3D11DeviceContext* context, UINT count, UINT start,
@@ -688,16 +678,18 @@ void STDMETHODCALLTYPE hooked_ps_set_samplers(ID3D11DeviceContext* context, UINT
         return;
     }
     void* bound[sampler_slots];
+    uint32_t admitted = 0;
     forward(context, start, count,
             as<ID3D11SamplerState* const*>(rsf_core_frame_tap_samplers(
-                &platform, context, start, count, as<void* const*>(samplers), bound)));
+                &platform, context, start, count, as<void* const*>(samplers), bound, &admitted)));
+    leave(admitted);
 }
 
 void STDMETHODCALLTYPE hooked_clear_state(ID3D11DeviceContext* context)
 {
     using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*);
     original<Fn>(RSF_FRAME_TAP_HOOK_CLEAR_STATE)(context);
-    rsf_core_frame_tap_invalidate(&platform, context, 0);
+    rsf_core_frame_tap_invalidate(context, 0);
 }
 
 void STDMETHODCALLTYPE hooked_execute(ID3D11DeviceContext* context, ID3D11CommandList* list,
@@ -705,7 +697,7 @@ void STDMETHODCALLTYPE hooked_execute(ID3D11DeviceContext* context, ID3D11Comman
 {
     using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11CommandList*, BOOL);
     original<Fn>(RSF_FRAME_TAP_HOOK_EXECUTE)(context, list, restore);
-    rsf_core_frame_tap_invalidate(&platform, context, restore ? 1u : 0u);
+    rsf_core_frame_tap_invalidate(context, restore ? 1u : 0u);
 }
 
 // Pass-through hooks for the flush-class calls and the rest of the work-submission family. Each
@@ -765,11 +757,13 @@ void STDMETHODCALLTYPE hooked_copy_resource(ID3D11DeviceContext* context,
     using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Resource*, ID3D11Resource*);
     void* forwarded_destination = destination;
     void* forwarded_source = source;
-    rsf_core_frame_tap_copy(&platform, context, &forwarded_destination, &forwarded_source);
+    uint32_t admitted = 0;
+    rsf_core_frame_tap_copy(&platform, context, &forwarded_destination, &forwarded_source,
+                            &admitted);
     original<Fn>(RSF_FRAME_TAP_HOOK_COPY)(context,
                                           static_cast<ID3D11Resource*>(forwarded_destination),
                                           static_cast<ID3D11Resource*>(forwarded_source));
-    leave();
+    leave(admitted);
 }
 
 // A shader's own constants on their way to the GPU. Unreal 4.18's D3D11 RHI sends them with

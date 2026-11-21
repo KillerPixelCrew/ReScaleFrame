@@ -5,13 +5,17 @@
 // it supplies as `rsf_frame_tap_platform` leaves.
 use crate::com_ref::ComRef;
 use crate::frame_tap_abi::*;
+use crate::resource_roles::matching_rule;
+use crate::resource_roles_abi::{
+    rsf_frame_shape, rsf_role_rule, rsf_role_table, rsf_texture_facts,
+};
 use std::cell::{Cell, UnsafeCell};
 use std::collections::BTreeMap;
 use std::ffi::{CString, c_void};
 use std::mem::{MaybeUninit, transmute_copy, zeroed};
 use std::ptr::{null, null_mut};
 use std::slice;
-use std::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release};
+use std::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release, SeqCst};
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicUsize};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
@@ -141,6 +145,74 @@ impl Reentry {
 impl Drop for Reentry {
     fn drop(&mut self) {
         INSIDE.with(|depth| depth.set(depth.get() - 1));
+    }
+}
+
+// Hooks on the observed context that may read the plan or the render-thread state hold an
+// admission, counted as the overlay cursor and observer Present hooks count their calls. set_plan
+// and uninstall clear their flag and then wait until only their own thread holds admissions, so a
+// hook on another thread can no longer read a plan being overwritten, forward a substitute the
+// caller is about to release, or borrow a shadow being retired. Their own thread's admissions
+// belong to a callback's caller further up the stack: same-thread reentry keeps working, its
+// retirement waits for the outermost admission to end, and readers never hold the plan across a
+// callback.
+static ADMITTED: AtomicU32 = AtomicU32::new(0);
+// The render state is retired by whoever ends the last admission after an uninstall. The lock
+// keeps an install from seeding the shadow while it is being retired.
+static RETIRE_PENDING: AtomicBool = AtomicBool::new(false);
+static RETIRING: Mutex<()> = Mutex::new(());
+// Serialises install, uninstall and set_plan, which wait for admissions. Hooks never take it, so a
+// wait cannot block a hook it is waiting for.
+static CONTROL: Mutex<()> = Mutex::new(());
+
+thread_local! {
+    static OWN: Cell<u32> = const { Cell::new(0) };
+}
+
+fn control() -> MutexGuard<'static, ()> {
+    CONTROL.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn retiring() -> MutexGuard<'static, ()> {
+    RETIRING.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+struct Admission;
+
+impl Admission {
+    // Admitted only for the observed context while installed. Counted before the flag is read, and
+    // the writers clear the flag before reading the count, so one of the two always sees the other.
+    fn enter(context: Handle) -> Option<Self> {
+        if !observed(context) {
+            return None;
+        }
+        ADMITTED.fetch_add(1, SeqCst);
+        OWN.with(|own| own.set(own.get() + 1));
+        let admission = Self;
+        TAP.installed.load(SeqCst).then_some(admission)
+    }
+
+    // Hand the admission to the detour, which returns it through `leave` after forwarding.
+    unsafe fn carry(self, admitted: *mut u32) {
+        std::mem::forget(self);
+        unsafe { *admitted = 1 };
+    }
+}
+
+impl Drop for Admission {
+    fn drop(&mut self) {
+        OWN.with(|own| own.set(own.get() - 1));
+        if ADMITTED.fetch_sub(1, SeqCst) == 1 && RETIRE_PENDING.load(SeqCst) {
+            retire_render();
+        }
+    }
+}
+
+// Wait until every admission left belongs to this thread.
+fn wait_for_admissions() {
+    let own = OWN.with(Cell::get);
+    while ADMITTED.load(SeqCst) > own {
+        std::thread::yield_now();
     }
 }
 
@@ -310,6 +382,8 @@ struct Tap {
     // after the plan is written and cleared before it is touched again.
     plan: UnsafeCell<rsf_frame_tap_plan>,
     plan_active: AtomicBool,
+    // Moved by every set_plan, so a reader can tell a callback replaced the plan under it.
+    plan_generation: AtomicU32,
     // Which of the plan's gates opened in the current frame.
     gates: [AtomicBool; SUBSTITUTIONS],
     // Whether the bound render target is one the plan replaced, which decides viewport scaling.
@@ -354,6 +428,7 @@ static TAP: Tap = Tap {
     }),
     plan: UnsafeCell::new(ZERO_PLAN),
     plan_active: AtomicBool::new(false),
+    plan_generation: AtomicU32::new(0),
     gates: [const { AtomicBool::new(false) }; SUBSTITUTIONS],
     target_substituted: AtomicBool::new(false),
     shadow_needed: AtomicBool::new(false),
@@ -706,24 +781,37 @@ fn close_gates() {
 }
 
 // Open any gate this render target opens, before the binding is forwarded: the gate is the moment
-// the scene is finished and nothing downstream has read it.
-fn open_gates_for(platform: &Platform, context: Handle, texture: Handle) {
+// the scene is finished and nothing downstream has read it. False when the gate callback replaced
+// or cleared the plan, whose entries then no longer describe this binding. The plan is copied out
+// rather than borrowed across the callback, which may set a plan on this thread.
+fn open_gates_for(platform: &Platform, context: Handle, texture: Handle) -> bool {
     if texture.is_null() {
-        return;
+        return true;
     }
-    let plan = plan();
-    let count = (plan.count as usize).min(SUBSTITUTIONS);
+    let generation = TAP.plan_generation.load(SeqCst);
+    let (count, after_targets, on_gate, on_gate_user) = {
+        let plan = plan();
+        let count = (plan.count as usize).min(SUBSTITUTIONS);
+        (
+            count,
+            plan.items.map(|item| item.after_target),
+            plan.on_gate,
+            plan.on_gate_user,
+        )
+    };
     let (mut asked, mut accepted) = (false, true);
-    for (index, item) in plan.items[..count].iter().enumerate() {
-        if item.after_target != texture || TAP.gates[index].load(Relaxed) {
+    for (index, &after_target) in after_targets[..count].iter().enumerate() {
+        if after_target != texture || TAP.gates[index].load(Relaxed) {
             continue;
         }
-        if plan.on_gate.is_some() && !asked {
+        if on_gate.is_some() && !asked {
             // Under the caller's reentry guard. A decline leaves the gate shut for the next binding.
-            accepted = unsafe {
-                (platform.gate.unwrap())(plan.on_gate, plan.on_gate_user, context, texture) != 0
-            };
+            accepted =
+                unsafe { (platform.gate.unwrap())(on_gate, on_gate_user, context, texture) != 0 };
             asked = true;
+            if TAP.plan_generation.load(SeqCst) != generation {
+                return false;
+            }
             if !accepted {
                 bump(GATES_DECLINED);
             }
@@ -734,6 +822,7 @@ fn open_gates_for(platform: &Platform, context: Handle, texture: Handle) {
         TAP.gates[index].store(true, Relaxed);
         bump(GATES_OPENED);
     }
+    true
 }
 
 fn scale_viewports(
@@ -849,6 +938,15 @@ fn target_texture(render: &Render) -> Handle {
         .map_or(null_mut(), ComRef::as_ptr)
 }
 
+fn forget_target(render: &mut Render) {
+    render.target_texture = None;
+    TAP.bound_target.store(null_mut(), Relaxed);
+    render.target_facts = ZERO_FACTS;
+    render.target_view = null_mut();
+    render.draws_into_target = 0;
+    render.target_view_format = 0;
+}
+
 // Record what render target slot 0 now holds. `resolved` is the texture behind `view` when the
 // caller already took it.
 fn shadow_target(platform: &Platform, render: &mut Render, view: Handle, resolved: Option<ComRef>) {
@@ -856,12 +954,8 @@ fn shadow_target(platform: &Platform, render: &mut Render, view: Handle, resolve
         // The same view rebound is not a new pass, so the draw ordinal continues.
         return;
     }
-    render.target_texture = None;
-    TAP.bound_target.store(null_mut(), Relaxed);
-    render.target_facts = ZERO_FACTS;
+    forget_target(render);
     render.target_view = view;
-    render.draws_into_target = 0;
-    render.target_view_format = 0;
     if view.is_null() {
         return;
     }
@@ -1446,17 +1540,19 @@ fn consider_target_draw(
     }
 }
 
-fn role_of(platform: &Platform, facts: &rsf_texture_facts) -> u32 {
+// Judged against the presented size with the render size unknown. resource_roles.rs owns the
+// rules' meaning; the tap only holds the caller's copied table.
+fn role_of(facts: &rsf_texture_facts) -> u32 {
     let setup = setup();
-    unsafe {
-        (platform.classify.unwrap())(
-            setup.rules.as_ptr(),
-            setup.rule_count,
-            facts,
-            setup.options.output_width,
-            setup.options.output_height,
-        )
-    }
+    let shape = rsf_frame_shape {
+        struct_size: size_of::<rsf_frame_shape>() as u32,
+        output_width: setup.options.output_width,
+        output_height: setup.options.output_height,
+        render_width: 0,
+        render_height: 0,
+    };
+    let rules = &setup.rules[..(setup.rule_count as usize).min(ROLE_RULES)];
+    matching_rule(rules, facts, &shape).map_or(0, |rule| rule.role)
 }
 
 // Whether anything reads the shader resource shadow. Without a reader, keeping it is a resource
@@ -1551,7 +1647,7 @@ fn consider_bound_set(platform: &Platform, render: &mut Render, context: Handle)
         let Some(texture) = entry.texture.as_ref().map(ComRef::as_ptr) else {
             continue;
         };
-        entry.role = role_of(platform, &entry.facts);
+        entry.role = role_of(&entry.facts);
         match entry.role {
             ROLE_MOTION if motion.is_null() => {
                 motion = texture;
@@ -1737,7 +1833,7 @@ fn report_geometry(
 }
 
 // Command lists and ClearState invalidate all observation until the engine binds again.
-fn invalidate_geometry(platform: &Platform, render: &mut Render) {
+fn invalidate_geometry(render: &mut Render) {
     render.geometry_valid = false;
     render.geometry = ZERO_GEOMETRY;
     render.pixel_constants = [null_mut(); STAGE_CONSTANTS];
@@ -1759,7 +1855,24 @@ fn invalidate_geometry(platform: &Platform, render: &mut Render) {
     render.shadow_dirty = true;
     render.signature_complete = false;
     TAP.input_watch_dirty.store(true, Relaxed);
-    shadow_target(platform, render, null_mut(), None);
+    forget_target(render);
+}
+
+// Everything the tap holds of the game's: the patched blends, which are keyed by the game's
+// pointers, the view constants, the shadowed bindings and the render target. Run once per
+// uninstall, when no hook holds an admission any longer.
+fn retire_render() {
+    let _retiring = retiring();
+    if !RETIRE_PENDING.load(SeqCst) {
+        return;
+    }
+    let render = unsafe { render() };
+    render.patched_blends.clear();
+    invalidate_geometry(render);
+    render.shadow_dirty = false;
+    render.shadow_live = false;
+    render.input_watch_bound = false;
+    RETIRE_PENDING.store(false, SeqCst);
 }
 
 // Whether `resource` is a constant buffer the watch wants, and its width. Only a "no" is
@@ -1864,8 +1977,11 @@ unsafe extern "C" fn rsf_core_frame_tap_install(
         return INVALID;
     }
 
-    let lock = held();
-    if TAP.installed.load(Relaxed) {
+    let lock = control();
+    let retiring = retiring();
+    // A session retired from inside one of its own callbacks still owns the shadow until that
+    // hook returns.
+    if TAP.installed.load(SeqCst) || RETIRE_PENDING.load(SeqCst) {
         return ALREADY_INSTALLED;
     }
     let setup = unsafe { &mut *TAP.setup.get() };
@@ -1911,8 +2027,9 @@ unsafe extern "C" fn rsf_core_frame_tap_install(
     HOOK_TABLE.refreshes.store(0, Relaxed);
     unsafe { render() }.shadow_live = false;
     TAP.verdict_epoch.fetch_add(1, Relaxed);
-    TAP.installed.store(true, Release);
+    TAP.installed.store(true, SeqCst);
     refresh_shadow_need();
+    drop(retiring);
     drop(lock);
     if options.on_pass.is_some() && roles.is_none() {
         say(platform, || {
@@ -1928,30 +2045,32 @@ extern "C" fn rsf_core_frame_tap_uninstall(platform: &Platform) -> i32 {
     TAP.research_draw.store(null_mut(), Release);
     TAP.research_before.store(null_mut(), Release);
     TAP.research_compute.store(null_mut(), Release);
-    {
-        let _lock = held();
-        if !TAP.installed.load(Relaxed) {
-            return NOT_INSTALLED;
-        }
-        // Cleared before the vtable goes back, so a call inside a hook stops substituting rather
-        // than reaching for views the caller is about to release.
-        TAP.plan_active.store(false, Release);
-        TAP.divert.armed.store(false, Relaxed);
-        TAP.constant_override.store(null_mut(), Relaxed);
-        TAP.constant_override_format.store(0, Relaxed);
-        TAP.constant_watch_bytes.store(0, Relaxed);
-        TAP.constant_watch.store(null_mut(), Relaxed);
-        TAP.constant_watch_writable.store(true, Relaxed);
-        TAP.verdict_epoch.fetch_add(1, Relaxed);
-        TAP.shadow_needed.store(false, Relaxed);
-        // Off before the table goes back, so a hook in flight cannot re-apply it. Each slot gets
-        // whatever the runtime last had there.
-        TAP.installed.store(false, Release);
-        restore(platform, HOOK_TABLE.vtable.load(Relaxed), 0..HOOKS, false);
-        TAP.divert.layer_target.store(null_mut(), Relaxed);
-        TAP.divert.layer_texture.store(null_mut(), Relaxed);
-        TAP.divert.verdict.store(null_mut(), Relaxed);
+    let _lock = control();
+    if !TAP.installed.load(SeqCst) {
+        return NOT_INSTALLED;
     }
+    // Cleared before the vtable goes back, so a call inside a hook stops substituting rather than
+    // reaching for views the caller is about to release.
+    TAP.plan_active.store(false, SeqCst);
+    TAP.divert.armed.store(false, Relaxed);
+    TAP.constant_override.store(null_mut(), Relaxed);
+    TAP.constant_override_format.store(0, Relaxed);
+    TAP.constant_watch_bytes.store(0, Relaxed);
+    TAP.constant_watch.store(null_mut(), Relaxed);
+    TAP.constant_watch_writable.store(true, Relaxed);
+    TAP.verdict_epoch.fetch_add(1, Relaxed);
+    TAP.shadow_needed.store(false, Relaxed);
+    // Off before the table goes back, so a hook in flight cannot re-apply it or be admitted. Each
+    // slot gets whatever the runtime last had there.
+    TAP.installed.store(false, SeqCst);
+    restore(platform, HOOK_TABLE.vtable.load(Relaxed), 0..HOOKS, false);
+    TAP.divert.layer_target.store(null_mut(), Relaxed);
+    TAP.divert.layer_texture.store(null_mut(), Relaxed);
+    TAP.divert.verdict.store(null_mut(), Relaxed);
+    // Hooks still admitted on other threads may be using the shadow, a substitute or a biased
+    // clone. Nothing they hold is released until they have left.
+    RETIRE_PENDING.store(true, SeqCst);
+    wait_for_admissions();
     {
         let mut samplers = sampler_state();
         samplers.biased.clear();
@@ -1959,24 +2078,25 @@ extern "C" fn rsf_core_frame_tap_uninstall(platform: &Platform) -> i32 {
         samplers.bias = 0.0;
         TAP.sampler_bias_active.store(false, Release);
     }
-    // The patched blends are keyed by the game's pointers, so they cannot outlive the session.
-    let render = unsafe { render() };
-    render.patched_blends.clear();
-    // Released after the vtable is restored, so a hook in flight cannot find a slot emptied
-    // underneath it.
-    invalidate_geometry(platform, render);
-    render.shadow_dirty = false;
-    render.shadow_live = false;
     TAP.input_watch.store(null_mut(), Relaxed);
-    render.input_watch_bound = false;
     TAP.context.store(null_mut(), Relaxed);
     // The watches name the caller's textures; a later install must not match a past session's.
-    for (watch, budget) in TAP.watch.iter().zip(&TAP.watch_budget) {
-        watch.store(null_mut(), Relaxed);
-        budget.store(0, Relaxed);
+    // Under the lock rsf_frame_tap_watch_target checks `installed` with.
+    {
+        let _lock = held();
+        for (watch, budget) in TAP.watch.iter().zip(&TAP.watch_budget) {
+            watch.store(null_mut(), Relaxed);
+            budget.store(0, Relaxed);
+        }
     }
     unsafe { *TAP.plan.get() = ZERO_PLAN };
+    TAP.plan_generation.fetch_add(1, SeqCst);
     close_gates();
+    // From inside a callback this thread's own hook is still on the stack and retires the shadow
+    // when its admission ends.
+    if OWN.with(Cell::get) == 0 {
+        retire_render();
+    }
     OK
 }
 
@@ -2026,40 +2146,44 @@ extern "C" fn rsf_core_frame_tap_set_sampler_bias(platform: &Platform, bias: f32
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_frame_tap_set_plan(plan: *const rsf_frame_tap_plan) -> i32 {
-    let _lock = held();
-    if !TAP.installed.load(Relaxed) {
+    let _lock = control();
+    if !TAP.installed.load(SeqCst) {
         return NOT_INSTALLED;
     }
-    if plan.is_null() {
-        // Cleared first, so the render thread stops reading the plan before it is overwritten.
-        TAP.plan_active.store(false, Release);
-        unsafe { *TAP.plan.get() = ZERO_PLAN };
-        close_gates();
-        TAP.target_substituted.store(false, Relaxed);
-        return OK;
-    }
-    if unsafe { (*plan).struct_size } < size_of::<rsf_frame_tap_plan>() as u32 {
-        return INVALID;
-    }
-    let plan = unsafe { &*plan };
-    if plan.count == 0
-        || plan.count > RSF_FRAME_TAP_MAX_SUBSTITUTIONS
-        || plan.viewport_scale_x <= 0.0
-        || plan.viewport_scale_y <= 0.0
-    {
-        return INVALID;
-    }
-    // A named texture with nothing in its place reads like an intervention and does nothing.
-    if plan.items[..plan.count as usize].iter().any(|item| {
-        item.texture.is_null() || (item.shader_view.is_null() && item.render_view.is_null())
-    }) {
-        return INVALID;
-    }
-    TAP.plan_active.store(false, Release);
-    unsafe { *TAP.plan.get() = *plan };
+    let replacement = if plan.is_null() {
+        None
+    } else {
+        if unsafe { (*plan).struct_size } < size_of::<rsf_frame_tap_plan>() as u32 {
+            return INVALID;
+        }
+        let plan = unsafe { &*plan };
+        if plan.count == 0
+            || plan.count > RSF_FRAME_TAP_MAX_SUBSTITUTIONS
+            || plan.viewport_scale_x <= 0.0
+            || plan.viewport_scale_y <= 0.0
+        {
+            return INVALID;
+        }
+        // A named texture with nothing in its place reads like an intervention and does nothing.
+        if plan.items[..plan.count as usize].iter().any(|item| {
+            item.texture.is_null() || (item.shader_view.is_null() && item.render_view.is_null())
+        }) {
+            return INVALID;
+        }
+        Some(*plan)
+    };
+    // Cleared first, then every hook that saw the old plan on another thread has forwarded and
+    // left, so nothing reads the plan while it is overwritten and the caller may release the old
+    // views when this returns.
+    TAP.plan_active.store(false, SeqCst);
+    wait_for_admissions();
+    unsafe { *TAP.plan.get() = replacement.unwrap_or(ZERO_PLAN) };
+    TAP.plan_generation.fetch_add(1, SeqCst);
     close_gates();
     TAP.target_substituted.store(false, Relaxed);
-    TAP.plan_active.store(true, Release);
+    if replacement.is_some() {
+        TAP.plan_active.store(true, SeqCst);
+    }
     OK
 }
 
@@ -2308,8 +2432,12 @@ extern "C" fn rsf_core_frame_tap_enter(platform: &Platform, hook: u32) -> Handle
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_frame_tap_leave(platform: &Platform) {
+extern "C" fn rsf_core_frame_tap_leave(platform: &Platform, admitted: u32) {
     refresh(platform);
+    if admitted != 0 {
+        // Ends the admission a deciding entry carried across the detour's forward.
+        drop(Admission);
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -2326,6 +2454,9 @@ unsafe extern "C" fn rsf_core_frame_tap_views(
         // Dropping a binding is wrong and will show; a null call ends the process silently.
         return;
     }
+    // Held through the forward, so a substitute cannot be released by a clear in between.
+    let admission = Admission::enter(context);
+    let admitted = admission.is_some();
     // A binding named by the plan is altered before it goes through. Only the views are swapped:
     // a pass that reads slot 3 has a shader that says slot 3.
     let mut substituted = [MaybeUninit::<Handle>::uninit(); VIEWS];
@@ -2335,11 +2466,11 @@ unsafe extern "C" fn rsf_core_frame_tap_views(
     };
     let mut forwarded = views;
     if !inside()
-        && observed(context)
+        && admitted
         && !views.is_null()
         && count > 0
         && count as usize <= VIEWS
-        && TAP.plan_active.load(Acquire)
+        && TAP.plan_active.load(SeqCst)
     {
         let _guard = Reentry::enter();
         let render = unsafe { render() };
@@ -2380,7 +2511,7 @@ unsafe extern "C" fn rsf_core_frame_tap_views(
     // Forwarded before the shadow, so it is in place before a callback binds something else.
     unsafe { (platform.set_shader_views.unwrap())(forward, context, start, count, forwarded) };
 
-    if inside() || !observed(context) {
+    if inside() || !admitted {
         return;
     }
     let _guard = Reentry::enter();
@@ -2426,12 +2557,7 @@ unsafe fn plan_targets(
     depth: &mut Handle,
     resolved: &mut Option<ComRef>,
 ) -> *const Handle {
-    if inside()
-        || !observed(context)
-        || views.is_null()
-        || count != 1
-        || !TAP.plan_active.load(Acquire)
-    {
+    if inside() || views.is_null() || count != 1 || !TAP.plan_active.load(SeqCst) {
         return views;
     }
     let _guard = Reentry::enter();
@@ -2444,8 +2570,10 @@ unsafe fn plan_targets(
     };
     let texture = resolved.insert(texture).as_ptr();
     // Before the substitution and before the binding is forwarded: a gate is the point in the
-    // frame this binding marks.
-    open_gates_for(platform, context, texture);
+    // frame this binding marks. A gate callback that replaced the plan leaves this binding alone.
+    if !open_gates_for(platform, context, texture) {
+        return views;
+    }
     let target = applicable(texture, View::Render);
     if target.is_null() {
         return views;
@@ -2480,7 +2608,7 @@ unsafe fn plan_targets(
 // binding is forwarded, so the viewport lands on the target it belongs to.
 fn settle_target_substitution(platform: &Platform, render: &Render, context: Handle) {
     let target = target_texture(render);
-    let substituted = TAP.plan_active.load(Acquire)
+    let substituted = TAP.plan_active.load(SeqCst)
         && !target.is_null()
         && render.target_count == 1
         && !applicable(target, View::Render).is_null();
@@ -2510,12 +2638,14 @@ unsafe extern "C" fn rsf_core_frame_tap_targets(
     if forward.is_null() {
         return;
     }
+    let admission = Admission::enter(context);
+    let admitted = admission.is_some();
     // KEEP leaves the render targets alone, so the shadow and the substitution leave them too.
     let keeps = !uavs.is_null() && count == KEEP_TARGETS;
     let mut replacement = null_mut();
     let mut forwarded_depth = depth;
     let mut resolved = None;
-    let forwarded = if keeps {
+    let forwarded = if keeps || !admitted {
         views
     } else {
         unsafe {
@@ -2533,7 +2663,7 @@ unsafe extern "C" fn rsf_core_frame_tap_targets(
     unsafe {
         (platform.set_targets.unwrap())(forward, context, count, forwarded, forwarded_depth, uavs)
     };
-    if inside() || !observed(context) || keeps {
+    if inside() || !admitted || keeps {
         return;
     }
     // The shadow records what is bound now, not what the game asked for: geometry replay reads it
@@ -2565,7 +2695,8 @@ unsafe extern "C" fn rsf_core_frame_tap_viewports(
     if forward.is_null() {
         return;
     }
-    if inside() || !observed(context) || !TAP.plan_active.load(Acquire) {
+    let admission = Admission::enter(context);
+    if inside() || admission.is_none() || !TAP.plan_active.load(SeqCst) {
         unsafe { (platform.set_viewports.unwrap())(forward, context, count, viewports) };
         return;
     }
@@ -2598,7 +2729,8 @@ unsafe extern "C" fn rsf_core_frame_tap_scissors(
     if forward.is_null() {
         return;
     }
-    if inside() || !observed(context) || !TAP.plan_active.load(Acquire) {
+    let admission = Admission::enter(context);
+    if inside() || admission.is_none() || !TAP.plan_active.load(SeqCst) {
         unsafe { (platform.set_scissors.unwrap())(forward, context, count, rectangles) };
         return;
     }
@@ -2618,14 +2750,19 @@ unsafe extern "C" fn rsf_core_frame_tap_scissors(
     apply_viewport_policy(platform, render, context);
 }
 
-// The clear follows the target: a replaced target that is never cleared keeps old frames.
+// The clear follows the target: a replaced target that is never cleared keeps old frames. A
+// substitute carries its admission to the detour's `leave`, after the clear is forwarded.
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_frame_tap_clear_target(
+unsafe extern "C" fn rsf_core_frame_tap_clear_target(
     platform: &Platform,
     context: Handle,
     view: Handle,
+    admitted: *mut u32,
 ) -> Handle {
-    if inside() || !observed(context) || view.is_null() || !TAP.plan_active.load(Acquire) {
+    let Some(admission) = Admission::enter(context) else {
+        return view;
+    };
+    if inside() || view.is_null() || !TAP.plan_active.load(SeqCst) {
         return view;
     }
     let _guard = Reentry::enter();
@@ -2647,10 +2784,10 @@ extern "C" fn rsf_core_frame_tap_clear_target(
     }
     let replacement = applicable(texture, View::Render);
     if replacement.is_null() {
-        view
-    } else {
-        replacement
+        return view;
     }
+    unsafe { admission.carry(admitted) };
+    replacement
 }
 
 // One draw the tap looks at, from the divert decision to the reports. The guard is taken before
@@ -2669,7 +2806,8 @@ extern "C" fn rsf_core_frame_tap_draw(
         return;
     }
     let forward = || unsafe { (platform.draw.unwrap())(original(hook), context, call) };
-    if inside() || !observed(context) {
+    let admission = Admission::enter(context);
+    if inside() || admission.is_none() {
         forward();
         refresh(platform);
         return;
@@ -2711,7 +2849,10 @@ extern "C" fn rsf_core_frame_tap_indirect(
     offset: u32,
 ) {
     refresh(platform);
-    if inside() || !observed(context) {
+    let Some(_admission) = Admission::enter(context) else {
+        return;
+    };
+    if inside() {
         return;
     }
     let _guard = Reentry::enter();
@@ -2750,7 +2891,10 @@ unsafe extern "C" fn rsf_core_frame_tap_vertex_buffers(
     strides: *const u32,
     offsets: *const u32,
 ) {
-    if inside() || !observed(context) {
+    let Some(_admission) = Admission::enter(context) else {
+        return;
+    };
+    if inside() {
         return;
     }
     let geometry = unsafe { &mut render().geometry };
@@ -2774,7 +2918,10 @@ extern "C" fn rsf_core_frame_tap_index_buffer(
     format: u32,
     offset: u32,
 ) {
-    if inside() || !observed(context) {
+    let Some(_admission) = Admission::enter(context) else {
+        return;
+    };
+    if inside() {
         return;
     }
     let geometry = unsafe { &mut render().geometry };
@@ -2787,7 +2934,10 @@ extern "C" fn rsf_core_frame_tap_index_buffer(
 // settled at creation and looked up by address.
 #[unsafe(no_mangle)]
 extern "C" fn rsf_core_frame_tap_object(context: Handle, object: u32, value: Handle) {
-    if inside() || !observed(context) {
+    let Some(_admission) = Admission::enter(context) else {
+        return;
+    };
+    if inside() {
         return;
     }
     let render = unsafe { render() };
@@ -2804,7 +2954,8 @@ extern "C" fn rsf_core_frame_tap_object(context: Handle, object: u32, value: Han
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_core_frame_tap_topology(context: Handle, topology: u32) {
-    if !inside() && observed(context) {
+    let admission = Admission::enter(context);
+    if !inside() && admission.is_some() {
         unsafe { render() }.geometry.topology = topology;
     }
 }
@@ -2816,7 +2967,10 @@ unsafe extern "C" fn rsf_core_frame_tap_vertex_constants(
     count: u32,
     buffers: *const Handle,
 ) {
-    if inside() || !observed(context) {
+    let Some(_admission) = Admission::enter(context) else {
+        return;
+    };
+    if inside() {
         return;
     }
     let constants = unsafe { &mut render().geometry.vertex_constants };
@@ -2837,7 +2991,13 @@ unsafe extern "C" fn rsf_core_frame_tap_pixel_constants(
     count: u32,
     buffers: *const Handle,
 ) {
-    if inside() || !observed(context) || count == 0 {
+    if count == 0 {
+        return;
+    }
+    let Some(_admission) = Admission::enter(context) else {
+        return;
+    };
+    if inside() {
         return;
     }
     // The view buffer only goes to the pass callback, so without one nothing asks a buffer its
@@ -2876,11 +3036,16 @@ unsafe extern "C" fn rsf_core_frame_tap_pixel_constants(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_frame_tap_invalidate(platform: &Platform, context: Handle, restore: u32) {
-    if inside() || !observed(context) || restore != 0 {
+extern "C" fn rsf_core_frame_tap_invalidate(context: Handle, restore: u32) {
+    if restore != 0 {
         return;
     }
-    invalidate_geometry(platform, unsafe { render() });
+    let Some(_admission) = Admission::enter(context) else {
+        return;
+    };
+    if !inside() {
+        invalidate_geometry(unsafe { render() });
+    }
 }
 
 // A constant buffer being filled: remember where, so its contents can be read at Unmap.
@@ -2899,10 +3064,12 @@ extern "C" fn rsf_core_frame_tap_mapped(
         || kind != MAP_WRITE_DISCARD
         || subresource != 0
         || inside()
-        || !observed(context)
     {
         return;
     }
+    let Some(_admission) = Admission::enter(context) else {
+        return;
+    };
     let bytes = watched_buffer(platform, unsafe { render() }, resource);
     if bytes == 0 {
         return;
@@ -2923,9 +3090,12 @@ extern "C" fn rsf_core_frame_tap_mapped(
 #[unsafe(no_mangle)]
 extern "C" fn rsf_core_frame_tap_unmapping(platform: &Platform, context: Handle, resource: Handle) {
     refresh(platform);
-    if resource.is_null() || !observed(context) {
+    if resource.is_null() {
         return;
     }
+    let Some(_admission) = Admission::enter(context) else {
+        return;
+    };
     let Some(index) = unsafe { pending() }
         .iter()
         .position(|entry| entry.resource == resource)
@@ -2961,9 +3131,13 @@ extern "C" fn rsf_core_frame_tap_dispatch(
     offset: u32,
 ) {
     let compute: rsf_frame_tap_compute_fn = unsafe { load_fn(&TAP.research_compute) };
-    if compute.is_none() || inside() || !observed(context) {
+    if compute.is_none() || inside() {
         return;
     }
+    // Admitted so uninstall does not return while the research callback is still running.
+    let Some(_admission) = Admission::enter(context) else {
+        return;
+    };
     let _guard = Reentry::enter();
     unsafe {
         (platform.compute.unwrap())(
@@ -2989,15 +3163,20 @@ fn promoted(platform: &Platform, resource: Handle) -> Option<ComRef> {
 }
 
 // A copy between promoted textures goes between their stand-ins, so a result copied from one
-// promoted target into another arrives at output resolution.
+// promoted target into another arrives at output resolution. A redirected copy carries its
+// admission to the detour's `leave`.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_frame_tap_copy(
     platform: &Platform,
     context: Handle,
     destination: *mut Handle,
     source: *mut Handle,
+    admitted: *mut u32,
 ) {
-    if inside() || !observed(context) || !TAP.plan_active.load(Acquire) {
+    let Some(admission) = Admission::enter(context) else {
+        return;
+    };
+    if inside() || !TAP.plan_active.load(SeqCst) {
         return;
     }
     let _guard = Reentry::enter();
@@ -3008,6 +3187,7 @@ unsafe extern "C" fn rsf_core_frame_tap_copy(
             unsafe {
                 *destination = promoted_destination.as_ptr();
                 *source = promoted_source.as_ptr();
+                admission.carry(admitted);
             }
             bump(COPIES_REDIRECTED);
         }
@@ -3034,7 +3214,6 @@ unsafe extern "C" fn rsf_core_frame_tap_update(
     let watch: rsf_frame_tap_constants_fn = unsafe { load_fn(&TAP.constant_watch) };
     if watch.is_none()
         || inside()
-        || !observed(context)
         || destination.is_null()
         || data.is_null()
         || has_box != 0
@@ -3044,6 +3223,10 @@ unsafe extern "C" fn rsf_core_frame_tap_update(
     {
         return data;
     }
+    // What is forwarded is the game's data or the detour's scratch, so nothing outlives this.
+    let Some(_admission) = Admission::enter(context) else {
+        return data;
+    };
     let bytes = watched_buffer(platform, unsafe { render() }, destination);
     if bytes == 0 || row_pitch > bytes {
         return data;
@@ -3065,7 +3248,8 @@ unsafe extern "C" fn rsf_core_frame_tap_update(
 }
 
 // The samplers to forward. With no bias this is the game's own array, so the hook stays a plain
-// forward: the bias reads the bindings back from the context when it starts or ends.
+// forward: the bias reads the bindings back from the context when it starts or ends. Biased clones
+// carry their admission to the detour's `leave`, so uninstall cannot release one being bound.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_frame_tap_samplers(
     platform: &Platform,
@@ -3074,11 +3258,11 @@ unsafe extern "C" fn rsf_core_frame_tap_samplers(
     count: u32,
     samplers: *const Handle,
     bound: *mut Handle,
+    admitted: *mut u32,
 ) -> *const Handle {
     let (start, count) = (start as usize, count as usize);
     if !TAP.sampler_bias_active.load(Acquire)
         || inside()
-        || !observed(context)
         || samplers.is_null()
         || count == 0
         || start >= SAMPLERS
@@ -3086,6 +3270,10 @@ unsafe extern "C" fn rsf_core_frame_tap_samplers(
     {
         return samplers;
     }
+    let Some(admission) = Admission::enter(context) else {
+        return samplers;
+    };
+    unsafe { admission.carry(admitted) };
     let mut state = sampler_state();
     let incoming = unsafe { slice::from_raw_parts(samplers, count) };
     let mut originals = [null_mut(); SAMPLERS];
