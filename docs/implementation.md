@@ -425,9 +425,17 @@ remain open.
 Rust also links AC7's history geometry shader and augments the native
 geometry shader before each emit. The typed compiler cache and native
 container payload are preserved. Bounds checks reject malformed masks,
-registers and helper triangle indices. Hull and domain assembly remain
-native. Build, emitted bytecode and replay verification remain open.
+registers and helper triangle indices. Build, emitted bytecode and
+replay verification remain open.
 [Geometry stage audit](research/rust-ac7-velocity-geometry.md)
+
+The velocity hull and domain stages now share the Rust DXBC codecs.
+Hull keeps the native control-point and patch constants, and domain
+preserves the native output while evaluating the three control corners
+for the history helper. Source comparison matched the HLSL, compiler
+arguments and token literals. The superseded private C++ codecs were
+removed. Build, emitted-bytecode parity and replay remain open.
+[Tessellation audit](research/rust-ac7-velocity-tessellation.md)
 
 ## Rust orchestrator and first Anomaly port
 
