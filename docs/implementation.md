@@ -4,6 +4,12 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Anomaly retries a refused Observe start with the session that successfully
+prepared. It leaves the previous stage configuration in place. A session
+retained after refused prepare remains ineligible for start. The updated
+synthetic fixture covers both results and remains unrun. Source review
+matched the retry to the Runtime's prepared session phase.
+
 The Rust plugin session constructs the versioned lifecycle arguments and
 checks the detection result. The C++ bridge catches native plugin
 exceptions and returns them as `NOT_READY`. Source review matched the

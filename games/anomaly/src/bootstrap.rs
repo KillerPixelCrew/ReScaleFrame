@@ -110,12 +110,20 @@ struct Request<'a> {
     overlay: bool,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Observation {
+    Unprepared,
+    RetainedAfterRefusal,
+    Prepared,
+    Active,
+}
+
 struct Entry {
     started: bool,            // every requested mode is complete
     options_registered: bool, // restart options are in the overlay list once
     stages_configured: bool,  // Observe stages were configured and FG/input installed once
-    observed: bool,           // Observe is running
-    session: *mut c_void, // the Runtime's session, including one a refused prepare or start left owned
+    observation: Observation,
+    session: *mut c_void, // the Runtime's session, including one retained after refused prepare
 }
 
 // SAFETY: the session handle is only used while ENTRY is locked.
@@ -127,7 +135,7 @@ impl Entry {
             started: false,
             options_registered: false,
             stages_configured: false,
-            observed: false,
+            observation: Observation::Unprepared,
             session: ptr::null_mut(),
         }
     }
@@ -246,8 +254,9 @@ fn orchestrate(
     register_options: fn(&[u16]),
 ) -> u32 {
     let ini = request.ini.as_ptr();
-    // A refused prepare or start can leave a session the Runtime still owns. Nothing starts or reconfigures beside it.
-    if request.observe && !entry.observed && !entry.session.is_null() {
+    // A refused prepare can retain a cleanup-only handle. A successful
+    // prepare leaves the same session available for another start attempt.
+    if request.observe && entry.observation == Observation::RetainedAfterRefusal {
         write_log(b"Anomaly refused: an earlier partial session is still owned.");
         return PREPARE_REFUSED;
     }
@@ -278,12 +287,11 @@ fn orchestrate(
         }
         entry.stages_configured = request.observe;
     }
-    if request.observe && !entry.observed {
+    if request.observe && entry.observation != Observation::Active {
         let status = start_observation(entry, request, runtime);
         if status != READY {
             return status;
         }
-        entry.observed = true;
     }
     if request.overlay {
         if !unsafe { (leaves.overlay)(runtime.module, ini, LOG_FN) } {
@@ -319,6 +327,25 @@ fn start_observation(entry: &mut Entry, request: &Request, runtime: &Runtime) ->
         write_log(b"Anomaly refused: required Runtime plugin-session exports missing.");
         return RUNTIME_REFUSED;
     };
+    if entry.observation == Observation::Unprepared {
+        let status = prepare_observation(entry, request, prepare);
+        if status != READY {
+            return status;
+        }
+    }
+    let activated = unsafe { start(entry.session) };
+    log_result("session start", activated);
+    if activated != RSF_OK {
+        return START_REFUSED;
+    }
+    entry.observation = Observation::Active;
+    write_log(
+        b"Anomaly Observe active. This is native-boundary instrumentation, not working SR or FG.",
+    );
+    READY
+}
+
+fn prepare_observation(entry: &mut Entry, request: &Request, prepare: PrepareFn) -> u32 {
     static ANCHOR: u8 = 0;
     let mut module: HMODULE = ptr::null_mut();
     let flags =
@@ -366,16 +393,16 @@ fn start_observation(entry: &mut Entry, request: &Request, runtime: &Runtime) ->
     let prepared = unsafe { prepare(&options, &mut entry.session) };
     log_result("session prepare", prepared);
     if prepared != RSF_OK {
+        if !entry.session.is_null() {
+            entry.observation = Observation::RetainedAfterRefusal;
+        }
         return PREPARE_REFUSED;
     }
-    let activated = unsafe { start(entry.session) };
-    log_result("session start", activated);
-    if activated != RSF_OK {
-        return START_REFUSED;
+    if entry.session.is_null() {
+        write_log(b"Anomaly refused: Runtime returned no prepared session.");
+        return PREPARE_REFUSED;
     }
-    write_log(
-        b"Anomaly Observe active. This is native-boundary instrumentation, not working SR or FG.",
-    );
+    entry.observation = Observation::Prepared;
     READY
 }
 
