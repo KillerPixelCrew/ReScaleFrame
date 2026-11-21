@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
-#include "patch.h"
-#include "dxbc.h"
+// Synthetic checks of the Runtime shader patch service through its real leaves. `--cpu` stops
+// before the WARP device: pack, ABI, source proof, cache, refusal and DXBC rewrite only.
+#include "platform.h"
+#include <windows.h>
+#include <bcrypt.h>
 #include <d3d11.h>
 #include <d3dcompiler.h>
 #include <wrl/client.h>
@@ -9,11 +12,41 @@
 #include <cstring>
 #include <filesystem>
 #include <iostream>
-using namespace rsf::patch;
+#include <map>
+#include <string>
+#include <string_view>
+#include <vector>
 using Microsoft::WRL::ComPtr;
 extern "C" int32_t rsf_patch_query(rsf_shader_patch_api*);
 namespace {
-void require(bool value,const char* reason){check(value,RSF_PATCH_INTERNAL,reason);}
+using Files = std::map<std::string, std::string>;
+struct Refusal { int32_t code; std::string reason; };
+void require(bool value,const char* reason){if(!value)throw Refusal{RSF_PATCH_INTERNAL,reason};}
+std::string sha256(std::string_view data){
+    unsigned char digest[32]{};
+    require(BCryptHash(BCRYPT_SHA256_ALG_HANDLE,nullptr,0,reinterpret_cast<PUCHAR>(const_cast<char*>(data.data())),
+        static_cast<ULONG>(data.size()),digest,sizeof(digest))>=0,"fixture SHA-256");
+    std::string out;for(auto n:digest){out+="0123456789abcdef"[n>>4];out+="0123456789abcdef"[n&15];}return out;
+}
+Files transform(std::string_view pack,const Files& inputs){
+    std::vector<rsf_patch_bytes> names,files;
+    for(const auto& [name,data]:inputs){names.push_back({name.data(),name.size()});files.push_back({data.data(),data.size()});}
+    Files out;char reason[256]{};
+    const auto code=rsf_patch_transform({pack.data(),pack.size()},names.data(),files.data(),names.size(),&out,
+        [](void* user,const char* name,size_t n,const void* data,size_t size){
+            (*static_cast<Files*>(user))[std::string(name,n)]=size?std::string(static_cast<const char*>(data),size):std::string{};},reason);
+    if(code)throw Refusal{code,reason};
+    return out;
+}
+std::string rewrite_dxbc(std::string_view input,const std::string& hash,const std::vector<uint32_t>& pattern,
+    const std::vector<uint32_t>& replacement){
+    std::string out;char reason[256]{};
+    const auto code=rsf_patch_rewrite_dxbc({input.data(),input.size()},hash.c_str(),pattern.data(),pattern.size(),
+        replacement.data(),replacement.size(),&out,[](void* user,const void* data,size_t size){
+            static_cast<std::string*>(user)->assign(static_cast<const char*>(data),size);},reason);
+    if(code)throw Refusal{code,reason};
+    return out;
+}
 std::string compile(const char* text,const char* target){ComPtr<ID3DBlob> blob,error;
     require(SUCCEEDED(D3DCompile(text,std::strlen(text),"",nullptr,nullptr,"main",target,0,0,&blob,&error)),"fixture compile");
     return {static_cast<const char*>(blob->GetBufferPointer()),blob->GetBufferSize()};}
@@ -31,17 +64,16 @@ int32_t resolve(void* user,const char* name,rsf_patch_bytes* out){auto& f=*stati
 uint32_t word(std::string_view s,size_t at){uint32_t n{};require(at+4<=s.size(),"fixture bounds");std::memcpy(&n,s.data()+at,4);return n;}
 void source_operations() {
     const auto apply = [](const std::string& source, const std::string& rule) {
-        Pack parsed;
-        parsed.load(pack("{\"schema\":1,\"sources\":{\"fixture.h\":" + json_string(sha256(source)) +
-            "},\"files\":{\"fixture.h\":" + rule + "}}"));
+        const auto parsed = pack("{\"schema\":1,\"sources\":{\"fixture.h\":" + json_string(sha256(source)) +
+            "},\"files\":{\"fixture.h\":" + rule + "}}");
         const Files inputs{{"fixture.h", source}};
-        const auto first = parsed.transform(inputs);
-        require(first == parsed.transform(inputs), "deterministic source tree");
+        const auto first = transform(parsed, inputs);
+        require(first == transform(parsed, inputs), "deterministic source tree");
         return first.at("fixture.h");
     };
     const auto refused = [&](const std::string& source, const std::string& rule) {
         try { (void)apply(source, rule); }
-        catch (const Error& e) { require(e.code == RSF_PATCH_ANCHOR, "anchor refusal reason"); return; }
+        catch (const Refusal& e) { require(e.code == RSF_PATCH_ANCHOR, "anchor refusal reason"); return; }
         require(false, "missing/ambiguous anchor must refuse");
     };
     const std::string io = "struct O {float4 p;};";
@@ -74,7 +106,8 @@ float render(ID3D11Device* d,ID3D11DeviceContext* c,ID3D11VertexShader* vs,ID3D1
     require(SUCCEEDED(c->Map(copy.Get(),0,D3D11_MAP_READ,0,&mapped)),"readback map");const float value=*static_cast<const float*>(mapped.pData);c->Unmap(copy.Get(),0);return value;
 }
 }
-int main(){try{
+int main(int argc,char** argv){try{
+    const bool cpu_only=argc==2&&std::string_view(argv[1])=="--cpu";
     source_operations();
     rsf_shader_patch_api api{sizeof(api),RSF_SHADER_PATCH_VERSION};require(rsf_patch_query(&api)==0,"ABI query");
     auto short_api=api;short_api.struct_size=0;require(rsf_patch_query(&short_api)==RSF_PATCH_ARGUMENT,"short ABI");
@@ -92,7 +125,7 @@ int main(){try{
     const auto blob = pack("{\"schema\":1,\"roots\":[{\"name\":\"fixture.vs\"},{\"name\":\"fixture2.vs\"}],\"sources\":{\"fixture.vs\":" +
         json_string(sha256(source)) + ",\"fixture2.vs\":" + json_string(sha256(source2)) + "},\"files\":{\"fixture.vs\":" +
         wrap(suffix) + ",\"fixture2.vs\":" + wrap(suffix2) + "},\"allowed_bindings\":[],\"added_semantics\":{\"TEXCOORD\":[12]}}");
-    Pack parsed;parsed.load(blob);require(parsed.transform(originals).at("fixture.vs").find("stock_main")!=std::string::npos,"synthetic transform");
+    require(transform(blob,originals).at("fixture.vs").find("stock_main")!=std::string::npos,"synthetic transform");
     auto cache=std::filesystem::temp_directory_path()/("rsf-shader-patch-"+std::to_string(GetCurrentProcessId()));
     rsf_patch_session* session{};require(api.open({blob.data(),blob.size()},cache.c_str(),reinterpret_cast<void*>(&D3DCompile),&session)==0,"session open");
     auto collision=blob;collision.replace(collision.find("synthetic"),9,"collision");rsf_patch_session* later{};
@@ -112,18 +145,25 @@ int main(){try{
     request.original_bytecode={variant.data(),variant.size()};require(api.prepare(session,&request,&output)==RSF_PATCH_ORIGINAL,"wrong engine DXBC refused");
     api.close(session);
     std::error_code ec;for(const auto& e:std::filesystem::directory_iterator(cache))std::filesystem::remove(e.path(),ec);std::filesystem::remove(cache,ec);
-    for(size_t i=0;i<blob.size();++i){try{Pack bad;bad.load(std::string_view(blob).substr(0,i));return 2;}catch(const Error&){}}
-    ComPtr<ID3D11Device> device;ComPtr<ID3D11DeviceContext> context;D3D_FEATURE_LEVEL level{};
-    require(SUCCEEDED(D3D11CreateDevice(nullptr,D3D_DRIVER_TYPE_WARP,nullptr,0,nullptr,0,D3D11_SDK_VERSION,&device,&level,&context)),"WARP device");
-    require(api.attach_d3d11(device.Get())==0,"API interception");ComPtr<ID3D11VertexShader> vs;
-    require(SUCCEEDED(device->CreateVertexShader(stock.data(),stock.size(),nullptr,&vs)),"stock VS");
+    for(size_t i=0;i<blob.size();++i){try{(void)transform(std::string_view(blob).substr(0,i),{});return 2;}
+        catch(const Refusal& e){require(e.code==RSF_PATCH_FORMAT,"truncated pack refusal");}}
     auto pixel=compile("float4 main():SV_Target{return float4(0.25,0.3,0.4,1);}","ps_5_0");std::vector<uint32_t> pattern,replacement;
     for(uint32_t i=0;i<word(pixel,28);++i){const size_t at=word(pixel,32+i*4);const auto kind=std::string_view(pixel).substr(at,4);if(kind!="SHDR"&&kind!="SHEX")continue;
         const size_t end=at+8+word(pixel,at+4);for(size_t pos=at+16;pos<end;){const size_t n=word(pixel,pos)>>24&127;require(n!=0,"fixture opcode");
             for(size_t j=1;j<n;++j)if(word(pixel,pos+j*4)==std::bit_cast<uint32_t>(0.25f)){pattern.resize(n);std::memcpy(pattern.data(),pixel.data()+pos,n*4);replacement=pattern;replacement[j]=std::bit_cast<uint32_t>(0.5f);}
             pos+=n*4;}}
+    // Rewriting first checks the compiler's own checksum against the first-party one.
     require(!pattern.empty(),"literal instruction pattern");const auto rewritten=rewrite_dxbc(pixel,sha256(pixel),pattern,replacement);
-    try{(void)rewrite_dxbc(pixel,std::string(64,'0'),pattern,replacement);return 3;}catch(const Error& e){require(e.code==RSF_PATCH_HASH,"hash refusal");}
+    try{(void)rewrite_dxbc(pixel,std::string(64,'0'),pattern,replacement);return 3;}catch(const Refusal& e){require(e.code==RSF_PATCH_HASH,"hash refusal");}
+    rsf_patch_counters counters{sizeof(counters),1};require(api.counters(&counters)==0,"counter ABI");
+    if(cpu_only){
+        require(counters.built&&counters.cache_hits&&counters.refused>=2,"counters");
+        std::cout<<"Synthetic pack/ABI/source proof/cache/refusal and DXBC rewrite passed without a device\n";return 0;
+    }
+    ComPtr<ID3D11Device> device;ComPtr<ID3D11DeviceContext> context;D3D_FEATURE_LEVEL level{};
+    require(SUCCEEDED(D3D11CreateDevice(nullptr,D3D_DRIVER_TYPE_WARP,nullptr,0,nullptr,0,D3D11_SDK_VERSION,&device,&level,&context)),"WARP device");
+    require(api.attach_d3d11(device.Get())==0,"API interception");ComPtr<ID3D11VertexShader> vs;
+    require(SUCCEEDED(device->CreateVertexShader(stock.data(),stock.size(),nullptr,&vs)),"stock VS");
     ComPtr<ID3D11PixelShader> old_ps,new_ps;
     require(SUCCEEDED(device->CreatePixelShader(pixel.data(),pixel.size(),nullptr,&old_ps)),"original PS");
     require(api.create_d3d11(device.Get(),"ps_5_0",{rewritten.data(),rewritten.size()},reinterpret_cast<void**>(new_ps.GetAddressOf()))==0,"rewritten PS");
@@ -133,8 +173,7 @@ int main(){try{
     const float values[4]{1,2,3,4};require(api.upload_constant(context.Get(),buffer.Get(),{values,sizeof(values)})==0,"generic constant upload");
     require(api.bind_constant(context.Get(),'v',13,buffer.Get())==0,"generic binding");
     ComPtr<ID3D11Buffer> bound;context->VSGetConstantBuffers(13,1,&bound);require(bound.Get()==buffer.Get(),"binding readback");
-    rsf_patch_counters counters{sizeof(counters),1};require(api.counters(&counters)==0,"counter ABI");
+    require(api.counters(&counters)==0,"counter ABI");
     require(counters.intercepted>=2&&counters.built&&counters.cache_hits&&counters.refused>=2,"counters");
     context->ClearState();std::cout<<"Synthetic pack/ABI/source proof/cache/refusal and WARP DXBC rewrite/interception/readback passed\n";return 0;
-}catch(const Error& e){std::cerr<<e.reason<<'\n';return 1;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
-
+}catch(const Refusal& e){std::cerr<<e.reason<<'\n';return 1;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

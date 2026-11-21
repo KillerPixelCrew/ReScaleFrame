@@ -225,6 +225,11 @@ generate("runtime/orchestrator/src/overlay_host_abi.rs", "loader/proxy/src/overl
          ["-Iui/overlay/include"],
          ["--no-recursive-allowlist", "--with-derive-default", "--raw-line",
           "use crate::overlay_abi::{rsf_overlay_intent, rsf_overlay_stats, rsf_overlay_texture_update};"])
+generate("runtime/orchestrator/src/shader_patch_abi.rs", "runtime/shader_patch/src/platform.h",
+         "rsf_(shader_patch_api|patch_(bytes|define|request|output|session|root|counters|sink|json_visit|"
+         "include_fn|compile|binding|parameter|reflection|platform|file_sink))",
+         "RSF_(SHADER_PATCH_VERSION|PATCH_.*)", ["-Iruntime/shader_patch/include"],
+         ["--with-derive-default", "--raw-line", "#![allow(dead_code)]"])
 generate("runtime/orchestrator/src/vulkan_sr_abi.rs", "runtime/orchestrator/include/rescaleframe/native_sr_split_vulkan.h",
          "rsf_(srvk_(setup|frame|image|fallback|fsr4_provider_info)|fsr4vk_handoff|vk_(function|get_proc)|input_dump_vk_setup)",
          "RSF_(SRVK_(ABI_VERSION|SPLIT_ABI_VERSION|SPLIT_TRACKED_ABI_VERSION|FSR4_INFO_ABI_VERSION)|SR_(DLSS|FSR2|FSR3|FSR4|XESS)|FSR4_BRIDGE_(INVALID_ARGUMENT|ABI_MISMATCH))",

@@ -234,7 +234,9 @@ rule representations. Only actual client requirements can add these pieces later
 
 ## Implementation evidence, first milestone
 
-Source engine and API live under runtime/shader_patch/. The sole shipped rule
+Source engine and API live under runtime/shader_patch/. Since the Rust port, the
+owner is runtime/orchestrator/src/shader_patch.rs and only its native leaves stay in C++
+([port notes](rust-shader-patch.md)). The sole shipped rule
 representation is JSON in games/anomaly/patches/motion. Native output matches
 all 454 files of the Python merged output byte for byte, including skin clones,
 foliage clones, shared IO and hull/domain stages. There are 73 allowlisted roots,
