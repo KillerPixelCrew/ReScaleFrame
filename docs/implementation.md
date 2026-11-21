@@ -431,6 +431,12 @@ DLSS sidecar across a resize. The same run confirmed mouse input after
 closing the overlay and recorded panel keyboard handling. Gameplay
 keyboard delivery remains unverified. See [capture identity at evaluation](research/rust-anomaly-sr-pass.md#capture-identity-at-evaluation).
 
+The SR and motion stages share one Rust frame-dump binding. An isolated
+Standard run preserved SR capture priority, and AVX saved motion and
+G-buffer position when motion capture owned the service. Both resized
+and quit normally. Motion headers now carry the reset generation
+already checked by the collector. See [the capture binding results](research/rust-anomaly-sr-pass.md#shared-capture-binding).
+
 The merged Release sharpening fixtures passed on D3D11, D3D12 and
 Vulkan. The D3D11 fixture checks that Depth RCAS and Depth DAS preserve
 source channel ratios and alpha in HDR and when output clamping applies.

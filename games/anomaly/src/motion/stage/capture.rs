@@ -132,6 +132,7 @@ impl Capture {
             abi_version: RSF_GAME_FRAME_ABI_VERSION,
             frame_id: u64::from(facts.frame) + 1,
             session_id: SESSION,
+            resource_generation: facts.generation as u32,
             phase: RENDER_SUBMIT,
             render_width: view.width,
             render_height: view.height,
@@ -208,7 +209,7 @@ mod tests {
         requested: bool,
         requests: u32,
         admit: bool,
-        begun: Vec<u64>,
+        begun: Vec<(u64, u32)>,
         completed: Vec<(u64, i32)>,
         copies: u32,
     }
@@ -238,7 +239,7 @@ mod tests {
                 return 0;
             }
             d.requested = false;
-            d.begun.push(record.frame_id);
+            d.begun.push((record.frame_id, record.resource_generation));
             1
         })
     }
@@ -345,7 +346,7 @@ mod tests {
         capture.finish(&window, texture, &mut counters);
         assert_eq!(counters.capture_failed, 1);
         DUMP.with_borrow(|d| {
-            assert_eq!(d.begun, [14, 17]);
+            assert_eq!(d.begun, [(14, 3), (17, 3)]);
             assert_eq!(d.copies, 3);
             assert_eq!(d.completed, [(14, 0), (17, 0x80004005_u32 as i32)]);
         });

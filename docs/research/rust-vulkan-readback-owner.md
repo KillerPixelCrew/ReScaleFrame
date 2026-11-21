@@ -38,8 +38,8 @@ includes the header already linked that archive through
 The owner still holds one lock for record, poll, group changes and flush, and
 calls the input dump and Vulkan leaves under it as before. The callers still
 drain referencing submissions before a full flush or destruction. Destruction
-releases pending allocations without failing their outstanding core tickets,
-as the C++ owner did. Such a bundle reaches the input dump's 30 second
+released pending allocations without failing their outstanding core tickets
+before the follow-up, as the C++ owner did. Such a bundle reached the input dump's 30 second
 incomplete timeout instead of reporting a readback failure. This was observed in
 source review only and was not changed.
 
@@ -97,3 +97,15 @@ yyjson files were copied into the ignored vendor directory.
 No physical GPU, visible-window or game fixture ran. Actual Vulkan
 synchronization, the Godot extension (no `RSF_GODOT_CPP_DIR`) and the
 Streamline-enabled native Vulkan configuration were not built in this run.
+
+## Integrated checks
+
+The Streamline-enabled Release Runtime and linked AC7, Loader and
+Minecraft targets built at `57c66151ff65`. Their export names and
+ordinals matched the 381, 256, 273 and 267 baseline pairs. Ten focused
+Release and seven default Debug CPU contracts passed, including both
+linkage forms of the Vulkan readback test. All 322 locked Rust tests,
+formatting and Clippy passed. See
+`build/rust-migration-streamline/evidence/57c66151ff65/` and
+`build/rust-migration/worker-evidence/rust-vulkan-readback/` for
+the integrated and worker logs. Hardware Vulkan readback remains open.

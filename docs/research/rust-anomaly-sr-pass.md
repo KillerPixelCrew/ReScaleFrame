@@ -250,3 +250,25 @@ input through the existing callback and submitted no engine events.
 The settings, logs, script and metadata comparison are in
 `evidence/standard-capture-keyboard/`.
 [Anomaly key callback reference](https://github.com/TheParaziT/anomaly-modding-book/blob/main/docs/tutorials/scripting/callbacks.md).
+
+## Shared capture binding
+
+The motion and SR stages now resolve the existing frame-dump exports
+from one Rust binding. Both MSVC configurations preserve the Anomaly
+DLL's three exports and its dynamic Runtime lookup. The SR hooks,
+motion and Runtime API CPU contracts passed.
+
+The isolated Standard run at `57c66151ff65` enabled both capture
+options. The log recorded that SR owned the service. It saved DLSS
+frames 151 and 392 with camera metadata and resource generations 1
+and 2. The isolated AVX run enabled motion capture alone and saved
+the motion, motion preview and G-buffer position for frames 152 and
+392. Both profiles resized once to 1600×900 and exited with code 0.
+These runs are in `evidence/standard-shared-dump-sr/` and
+`evidence/avx-shared-dump-motion/` under the same isolated copy.
+
+The AVX bundles initially reported generation zero after the reset.
+The motion collector already receives the observer's reset counter
+and checks it before copying. The frame header now carries that
+same value. The focused motion capture test verifies that the
+reservation receives it.
