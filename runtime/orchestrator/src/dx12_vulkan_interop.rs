@@ -45,7 +45,7 @@ type Platform = rsf_dx12vk_platform;
 pub(super) type FenceFactory = unsafe extern "C" fn(Handle, *mut Handle) -> i32;
 pub(super) type ImageRelease = unsafe extern "C" fn(Handle);
 type Output = rsf_dx12vk_shared_image;
-type Lookup =
+pub(super) type Lookup =
     unsafe extern "C" fn(rsf_vk_get_proc, Handle, *const c_char, &mut rsf_vk_function) -> i32;
 type DispatchEntries = [rsf_vk_function; INSTANCE_PROCS.len() + DEVICE_PROCS.len()];
 const INVALID: i32 = RSF_DX12VK_INTEROP_INVALID_ARGUMENT;

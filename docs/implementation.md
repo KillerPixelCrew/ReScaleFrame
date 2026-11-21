@@ -1042,6 +1042,13 @@ binary export, fixture and runtime verification remain open.
 [NGX loader](research/rust-vulkanstory-ngx-loader.md) ·
 [Vulkan FG transfers](research/rust-vulkan-dx12-copy-plan.md)
 
+The shared Vulkan-to-D3D12 FG owner now resolves the device and
+instance dispatch, admits the required format features, and cleans
+up refused startup in Rust for both XeSS and FSR4. Source checks
+matched the native bind and query order. Builds and fixtures for
+this port remain open.
+[Graphics admission](research/rust-vulkan-dx12-copy-plan.md#graphics-admission-and-dispatch-setup)
+
 The standalone FSR3 bridge now binds the SDK and owns the SR, FG and
 swapchain transactions in Rust. It keeps the active FG and swapchain
 paired through disable, drain, UI clear and checked retirement.

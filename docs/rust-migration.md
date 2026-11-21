@@ -390,6 +390,12 @@ Runtime and GameSDK headers and the carrier export definitions at
 function definitions in the orchestrator crate. The current DLL and
 linked binaries still need their export and linkage checks.
 
+The shared XeSS and FSR4 Vulkan FG owner now resolves its Vulkan
+dispatch and checks the blit features before publishing the graphics
+capsule in Rust. Native callbacks retain the typed Vulkan queries.
+Build and live graphics verification remain open.
+[Graphics admission](research/rust-vulkan-dx12-copy-plan.md#graphics-admission-and-dispatch-setup)
+
 ## Verification coverage
 
 | Requirement | Recorded evidence | Still open |

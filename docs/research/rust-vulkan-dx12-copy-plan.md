@@ -89,3 +89,29 @@ placeholder clear and the admission truth table, using the header values written
 than the module's constants. Rust 1.94.1 formatting, locked offline Cargo metadata and Git
 whitespace checks passed. Compile and link, Clippy, the Rust and native tests, device and game
 verification, deployment and push remain user-owned.
+
+## Graphics admission and dispatch setup
+
+Compared with `27f17a38`, Rust now allocates the native capsule through
+a leaf, resolves the 22 required device functions in order, and then
+resolves the two instance functions. Device lookup stops at the first
+miss. Both instance functions are queried before testing their
+addresses. The native binder installs the same typed Vulkan functions
+only after resolution succeeds.
+
+Rust queries RGBA8 and then BGRA8 optimal-tiling capabilities before
+admitting the blit. Memory properties and capture initialization follow
+that decision. On refusal Rust destroys the unpublished capsule
+directly, before it can enter platform drain or vendor initialization.
+The shared Vulkan interop lookup leaf now catches resolver exceptions
+and reports the existing feature-failed code.
+Missing entries and missing format capabilities keep their previous
+result codes.
+
+The private shared table grows from 26 to 30 pointers and FSR4's
+embedded table grows from 39 to 43. XeSS still borrows the shared table.
+Source comparison covered all 24 names, both admission orders and
+public declarations. The extended Rust fixture covers device
+short-circuit and the paired instance queries. Pinned formatting,
+locked offline metadata and whitespace passed. Native linkage,
+fixtures and live provider verification remain open.

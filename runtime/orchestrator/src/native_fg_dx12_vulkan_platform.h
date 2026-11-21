@@ -5,6 +5,7 @@
 #include "vulkan_fg_resources.h"
 
 struct rsf_dx12gvk_platform;
+using rsf_dx12gvk_dispatch_entries = rsf_vk_function[24];
 struct rsf_dx12gvk_swapchain {
     uint32_t width, height, format, usage, color_space, layers, sharing_mode, min_images, flags;
     uint32_t compatible_extensions, vsync;
@@ -29,8 +30,12 @@ struct rsf_dx12gvk_transfer {
 };
 struct rsf_dx12gvk_ops {
     int32_t (*adapter_luid)(const rsf_srvk_setup*, uint64_t*);
-    int32_t (*platform_create)(const rsf_fgvk_setup*, rsf_dx12gvk_platform**);
+    rsf_dx12gvk_platform* (*platform_allocate)(const rsf_fgvk_setup*);
     void (*platform_destroy)(rsf_dx12gvk_platform*);
+    int32_t (*lookup)(rsf_vk_get_proc, void*, const char*, rsf_vk_function*);
+    void (*platform_bind)(rsf_dx12gvk_platform*, const rsf_dx12gvk_dispatch_entries*);
+    uint32_t (*format_features)(rsf_dx12gvk_platform*, uint32_t format);
+    int32_t (*initialize_capture)(rsf_dx12gvk_platform*, const rsf_srvk_setup*);
     int32_t (*create_pool)(rsf_dx12gvk_platform*, uint64_t*);
     void (*destroy_pool)(rsf_dx12gvk_platform*, uint64_t);
     const rsf_vkfg_platform* images;
@@ -65,7 +70,6 @@ constexpr rsf_dx12gvk_interop_ops rsf_dx12gvk_interop{
     rsf_dx12vk_interop_image, rsf_dx12vk_interop_timeline, rsf_dx12vk_interop_destroy,
 };
 extern const rsf_dx12gvk_ops rsf_dx12gvk_graphics;
-extern "C" uint32_t rsf_core_dx12gvk_blit_formats_supported(uint32_t rgba_optimal, uint32_t bgra_optimal);
 
 rsf_dx12gvk_swapchain rsf_dx12gvk_describe(const void* create_info);
 using rsf_dx12gvk_present_fn = int32_t (*)(void*, const rsf_dx12gvk_present_info*, const rsf_frame_record*, uint32_t);

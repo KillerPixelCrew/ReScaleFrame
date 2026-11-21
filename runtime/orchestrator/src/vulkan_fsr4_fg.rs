@@ -40,7 +40,7 @@ struct Ops {
 
 const _: () = {
     assert!(size_of::<Options>() == 24);
-    assert!(size_of::<Ops>() == 39 * size_of::<Handle>());
+    assert!(size_of::<Ops>() == 43 * size_of::<Handle>());
 };
 
 type Owner = shared::Owner<Fsr4>;

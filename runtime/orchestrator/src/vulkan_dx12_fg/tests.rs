@@ -2,6 +2,8 @@
 // Expected values are the Vulkan header constants written out, not the
 // module's names for them, so a wrong constant cannot agree with itself.
 use super::*;
+use crate::vulkan_sr_abi::rsf_vk_get_proc;
+use std::cell::RefCell;
 
 const FAMILY: u32 = 3;
 const IGNORED: u32 = 0xffff_ffff;
@@ -123,6 +125,72 @@ fn blit_admission_needs_rgba_source_and_bgra_target_features() {
     assert!(!blit_formats_supported(0, 0x800));
     assert!(!blit_formats_supported(0x400, 0));
     assert!(!blit_formats_supported(0x800, 0x400));
-    assert_eq!(rsf_core_dx12gvk_blit_formats_supported(0x400, 0x800), 1);
-    assert_eq!(rsf_core_dx12gvk_blit_formats_supported(0x800, 0x400), 0);
+}
+
+#[derive(Default)]
+struct Lookups {
+    missing: Option<&'static CStr>,
+    calls: Vec<(usize, String)>,
+}
+
+thread_local! {
+    static LOOKUPS: RefCell<Lookups> = RefCell::new(Lookups::default());
+}
+
+unsafe extern "C" fn unused_proc() {}
+
+unsafe extern "C" fn test_proc(object: Handle, name: *const c_char) -> rsf_vk_function {
+    let name = unsafe { CStr::from_ptr(name) };
+    LOOKUPS.with_borrow_mut(|lookups| {
+        lookups
+            .calls
+            .push((object.addr(), name.to_string_lossy().into_owned()));
+        (lookups.missing != Some(name)).then_some(unused_proc as unsafe extern "C" fn())
+    })
+}
+
+unsafe extern "C" fn lookup(
+    proc: rsf_vk_get_proc,
+    object: Handle,
+    name: *const c_char,
+    output: &mut rsf_vk_function,
+) -> i32 {
+    *output = unsafe { proc.unwrap()(object, name) };
+    0
+}
+
+#[test]
+fn required_dispatch_stops_at_device_miss_and_queries_both_instance_entries() {
+    let mut graphics: Graphics = unsafe { std::mem::zeroed() };
+    graphics.device = ptr::without_provenance_mut(1);
+    graphics.instance = ptr::without_provenance_mut(2);
+    graphics.device_proc = Some(test_proc);
+    graphics.instance_proc = Some(test_proc);
+
+    for (missing, device_count, instance_count) in [
+        (None, 22, 2),
+        (Some(c"vkCreateCommandPool"), 7, 0),
+        (Some(c"vkGetPhysicalDeviceMemoryProperties"), 22, 2),
+    ] {
+        LOOKUPS.with_borrow_mut(|lookups| {
+            lookups.calls.clear();
+            lookups.missing = missing;
+        });
+        let result = resolve_platform_dispatch(&graphics, lookup);
+        if missing.is_some() {
+            assert_eq!(result.err(), Some(EXTENSION_NOT_PRESENT));
+        } else {
+            assert!(result.unwrap().iter().all(Option::is_some));
+        }
+        let expected: Vec<_> = DEVICE_PROCS[..device_count]
+            .iter()
+            .map(|name| (1, name.to_string_lossy().into_owned()))
+            .chain(
+                INSTANCE_PROCS[..instance_count]
+                    .iter()
+                    .map(|name| (2, name.to_string_lossy().into_owned())),
+            )
+            .collect();
+        LOOKUPS.with_borrow(|lookups| assert_eq!(lookups.calls, expected));
+    }
 }

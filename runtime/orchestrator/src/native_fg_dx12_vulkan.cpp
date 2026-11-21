@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <vulkan/vulkan.h>
 #include <array>
-#include <memory>
+#include <cstddef>
 #include <new>
 #include "native_fg_dx12_vulkan_platform.h"
 #include "native_dx12_vulkan_platform.h"
@@ -9,7 +9,7 @@
 
 // The Rust owner only needs these Vulkan result and descriptor constants.
 static_assert(VK_NOT_READY == 1 && VK_INCOMPLETE == 5 && VK_ERROR_OUT_OF_HOST_MEMORY == -1 &&
-    VK_ERROR_INITIALIZATION_FAILED == -3 && VK_ERROR_FORMAT_NOT_SUPPORTED == -11 && VK_ERROR_UNKNOWN == -13 &&
+    VK_ERROR_INITIALIZATION_FAILED == -3 && VK_ERROR_EXTENSION_NOT_PRESENT == -7 && VK_ERROR_FORMAT_NOT_SUPPORTED == -11 && VK_ERROR_UNKNOWN == -13 &&
     VK_ERROR_INVALID_EXTERNAL_HANDLE == -1000072003 && VK_ERROR_OUT_OF_DATE_KHR == -1000001004);
 static_assert(VK_FORMAT_R8G8B8A8_UNORM == 37 && VK_FORMAT_B8G8R8A8_UNORM == 44 &&
     VK_FORMAT_R16G16_SFLOAT == 83 && VK_FORMAT_R32_SFLOAT == 100 &&
@@ -24,10 +24,14 @@ static_assert(VK_IMAGE_LAYOUT_UNDEFINED == 0 && VK_IMAGE_LAYOUT_GENERAL == 1 &&
     VK_FORMAT_FEATURE_BLIT_SRC_BIT == 0x400 && VK_FORMAT_FEATURE_BLIT_DST_BIT == 0x800);
 static_assert(sizeof(rsf_dx12gvk_swapchain) == 56 && sizeof(rsf_dx12gvk_present_info) == 32 &&
     sizeof(rsf_dx12gvk_barrier) == 40 && sizeof(rsf_dx12gvk_transfer) == 32 &&
-    sizeof(rsf_dx12gvk_ops) == 26 * sizeof(void*));
+    sizeof(rsf_dx12gvk_ops) == 30 * sizeof(void*));
+static_assert(offsetof(rsf_dx12gvk_ops, platform_bind) == 4 * sizeof(void*) &&
+    offsetof(rsf_dx12gvk_ops, images) == 9 * sizeof(void*) &&
+    sizeof(rsf_dx12gvk_dispatch_entries) == 24 * sizeof(void*));
 
 struct rsf_dx12gvk_platform {
     VkDevice device{};
+    VkPhysicalDevice physical{};
     uint32_t family{};
     decltype(rsf_fgvk_setup::graphics_submit) submit{};
     decltype(rsf_fgvk_setup::lock_queues) lock{};
@@ -36,6 +40,7 @@ struct rsf_dx12gvk_platform {
     rsf::FrameCaptureVk capture;
     VkPhysicalDeviceMemoryProperties memory{};
     PFN_vkGetPhysicalDeviceFormatProperties format_properties{};
+    PFN_vkGetPhysicalDeviceMemoryProperties memory_properties{};
     PFN_vkCreateImage create_image{};
     PFN_vkDestroyImage destroy_image{};
     PFN_vkGetImageMemoryRequirements requirements{};
@@ -62,19 +67,22 @@ struct rsf_dx12gvk_platform {
 
 namespace {
 VkImage image(uint64_t value) { return reinterpret_cast<VkImage>(value); }
-int32_t platform_create(const rsf_fgvk_setup* setup, rsf_dx12gvk_platform** output) {
-    auto self = std::unique_ptr<rsf_dx12gvk_platform>(new (std::nothrow) rsf_dx12gvk_platform{});
-    if (!self) return VK_ERROR_OUT_OF_HOST_MEMORY;
+rsf_dx12gvk_platform* platform_allocate(const rsf_fgvk_setup* setup) {
+    auto* self = new (std::nothrow) rsf_dx12gvk_platform{};
+    if (!self) return nullptr;
     self->device = static_cast<VkDevice>(setup->graphics.device);
+    self->physical = static_cast<VkPhysicalDevice>(setup->graphics.physical_device);
     self->family = setup->queue_family;
     self->submit = setup->graphics_submit;
     self->lock = setup->lock_queues;
     self->unlock = setup->unlock_queues;
     self->queue_user = setup->queue_user;
-    auto ip = setup->graphics.instance_proc; auto dp = setup->graphics.device_proc;
-#define D(field, name) \
-    self->field = reinterpret_cast<PFN_##name>(dp(self->device, #name)); \
-    if (!self->field) return VK_ERROR_EXTENSION_NOT_PRESENT
+    return self;
+}
+
+void platform_bind(rsf_dx12gvk_platform* self, const rsf_dx12gvk_dispatch_entries* entries) {
+    size_t index = 0;
+#define D(field, name) self->field = reinterpret_cast<PFN_##name>((*entries)[index++])
     D(create_image, vkCreateImage); D(destroy_image, vkDestroyImage); D(requirements, vkGetImageMemoryRequirements);
     D(allocate, vkAllocateMemory); D(free_memory, vkFreeMemory); D(bind, vkBindImageMemory);
     D(create_pool, vkCreateCommandPool); D(destroy_pool, vkDestroyCommandPool); D(allocate_commands, vkAllocateCommandBuffers);
@@ -83,23 +91,23 @@ int32_t platform_create(const rsf_fgvk_setup* setup, rsf_dx12gvk_platform** outp
     D(wait, vkWaitSemaphores); D(idle, vkDeviceWaitIdle);
     D(create_fence, vkCreateFence); D(reset_fences, vkResetFences);
     D(wait_fences, vkWaitForFences); D(destroy_fence, vkDestroyFence);
+    D(memory_properties, vkGetPhysicalDeviceMemoryProperties);
+    D(format_properties, vkGetPhysicalDeviceFormatProperties);
 #undef D
-    const auto get_memory = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties>(
-        ip(setup->graphics.instance, "vkGetPhysicalDeviceMemoryProperties"));
-    self->format_properties = reinterpret_cast<PFN_vkGetPhysicalDeviceFormatProperties>(
-        ip(setup->graphics.instance, "vkGetPhysicalDeviceFormatProperties"));
-    if (!self->format_properties || !get_memory) return VK_ERROR_EXTENSION_NOT_PRESENT;
-    const auto physical = static_cast<VkPhysicalDevice>(setup->graphics.physical_device);
-    VkFormatProperties rgba{}, bgra{};
-    self->format_properties(physical, VK_FORMAT_R8G8B8A8_UNORM, &rgba);
-    self->format_properties(physical, VK_FORMAT_B8G8R8A8_UNORM, &bgra);
-    if (!rsf_core_dx12gvk_blit_formats_supported(rgba.optimalTilingFeatures, bgra.optimalTilingFeatures))
-        return VK_ERROR_FORMAT_NOT_SUPPORTED;
-    get_memory(physical, &self->memory);
-    if (!self->capture.initialize(self->device, dp, self->memory)) return VK_ERROR_INITIALIZATION_FAILED;
-    *output = self.release();
-    return VK_SUCCESS;
 }
+
+uint32_t format_features(rsf_dx12gvk_platform* self, uint32_t format) {
+    VkFormatProperties properties{};
+    self->format_properties(self->physical, static_cast<VkFormat>(format), &properties);
+    return properties.optimalTilingFeatures;
+}
+
+int32_t initialize_capture(rsf_dx12gvk_platform* self, const rsf_srvk_setup* graphics) {
+    self->memory_properties(self->physical, &self->memory);
+    return self->capture.initialize(self->device, graphics->device_proc, self->memory)
+        ? VK_SUCCESS : VK_ERROR_INITIALIZATION_FAILED;
+}
+
 int32_t create_pool(rsf_dx12gvk_platform* self, uint64_t* output) {
     VkCommandPoolCreateInfo info{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
     info.queueFamilyIndex = self->family;
@@ -241,7 +249,8 @@ int32_t wait_timeline(rsf_dx12gvk_platform* self, uint64_t semaphore, uint64_t v
 
 const rsf_dx12gvk_ops rsf_dx12gvk_graphics{
     dx12vk_platform::adapter_luid,
-    platform_create, [](auto* self) { delete self; },
+    platform_allocate, [](auto* self) { delete self; }, dx12vk_platform::lookup_proc,
+    platform_bind, format_features, initialize_capture,
     create_pool, [](auto* self, uint64_t pool) { self->destroy_pool(self->device, reinterpret_cast<VkCommandPool>(pool), nullptr); },
     &image_operations,
     allocate_commands,

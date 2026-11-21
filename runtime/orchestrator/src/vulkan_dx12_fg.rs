@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::allocate_handle;
+use crate::dx12_vulkan_interop::Lookup;
 use crate::dx12_vulkan_interop_abi::rsf_dx12vk_shared_image as SharedImage;
 use crate::sr_session::has_capacity;
 use crate::vulkan_fg_abi::{
@@ -11,13 +12,13 @@ use crate::vulkan_fg_frames::*;
 use crate::vulkan_fg_resources::{ensure_image, rsf_core_vkfg_release_image};
 use crate::vulkan_fg_resources_abi::{rsf_vkfg_image as OwnedImage, rsf_vkfg_platform as ImageOps};
 use crate::vulkan_sr::{SAMPLED_USAGE, TRANSFER_SRC_USAGE};
-use crate::vulkan_sr_abi::{rsf_srvk_image as Image, rsf_srvk_setup as Graphics};
+use crate::vulkan_sr_abi::{rsf_srvk_image as Image, rsf_srvk_setup as Graphics, rsf_vk_function};
 use rsf_game_sys::{
     RSF_FRAME_FLAG_AMBIGUOUS_ID, RSF_FRAME_FLAG_NO_FG, RSF_GAME_CAMERA_ABI_VERSION,
     RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record as Record,
 };
 use std::cell::UnsafeCell;
-use std::ffi::{c_char, c_void};
+use std::ffi::{CStr, c_char, c_void};
 use std::ptr;
 use std::slice;
 
@@ -27,6 +28,7 @@ pub(super) const NOT_READY: i32 = 1;
 const INCOMPLETE: i32 = 5;
 const OUT_OF_MEMORY: i32 = -1;
 const INIT_FAILED: i32 = -3;
+const EXTENSION_NOT_PRESENT: i32 = -7;
 pub(super) const FORMAT_UNSUPPORTED: i32 = -11;
 pub(super) const UNKNOWN: i32 = -13;
 pub(super) const INVALID_EXTERNAL_HANDLE: i32 = -1000072003;
@@ -52,6 +54,36 @@ const EXCLUSIVE: u32 = 0;
 const WAIT_NS: u64 = 10_000_000_000;
 const BUFFER_COUNT: usize = 3;
 pub(super) const SLOT_COUNT: usize = RSF_FGVK_FRAME_SLOTS as usize;
+
+const DEVICE_PROCS: [&CStr; 22] = [
+    c"vkCreateImage",
+    c"vkDestroyImage",
+    c"vkGetImageMemoryRequirements",
+    c"vkAllocateMemory",
+    c"vkFreeMemory",
+    c"vkBindImageMemory",
+    c"vkCreateCommandPool",
+    c"vkDestroyCommandPool",
+    c"vkAllocateCommandBuffers",
+    c"vkResetCommandBuffer",
+    c"vkBeginCommandBuffer",
+    c"vkEndCommandBuffer",
+    c"vkCmdPipelineBarrier",
+    c"vkCmdCopyImage",
+    c"vkCmdBlitImage",
+    c"vkCmdClearColorImage",
+    c"vkWaitSemaphores",
+    c"vkDeviceWaitIdle",
+    c"vkCreateFence",
+    c"vkResetFences",
+    c"vkWaitForFences",
+    c"vkDestroyFence",
+];
+const INSTANCE_PROCS: [&CStr; 2] = [
+    c"vkGetPhysicalDeviceMemoryProperties",
+    c"vkGetPhysicalDeviceFormatProperties",
+];
+type DispatchEntries = [rsf_vk_function; DEVICE_PROCS.len() + INSTANCE_PROCS.len()];
 
 pub(super) type Handle = *mut c_void;
 pub(super) type Release = unsafe extern "C" fn(Handle) -> i32;
@@ -112,8 +144,12 @@ pub(super) struct PresentInfo {
 #[repr(C)]
 pub(super) struct GraphicsOps {
     pub(super) adapter_luid: unsafe extern "C" fn(*const Graphics, *mut u64) -> i32,
-    platform_create: unsafe extern "C" fn(*const Setup, *mut Handle) -> i32,
+    platform_allocate: unsafe extern "C" fn(*const Setup) -> Handle,
     platform_destroy: unsafe extern "C" fn(Handle),
+    lookup: Lookup,
+    platform_bind: unsafe extern "C" fn(Handle, &DispatchEntries),
+    format_features: unsafe extern "C" fn(Handle, u32) -> u32,
+    initialize_capture: unsafe extern "C" fn(Handle, *const Graphics) -> i32,
     create_pool: unsafe extern "C" fn(Handle, *mut u64) -> i32,
     destroy_pool: unsafe extern "C" fn(Handle, u64),
     images: *const ImageOps,
@@ -140,7 +176,10 @@ pub(super) struct GraphicsOps {
     capture_flush: Release,
 }
 const _: () = {
-    assert!(size_of::<GraphicsOps>() == 26 * size_of::<Handle>());
+    assert!(size_of::<GraphicsOps>() == 30 * size_of::<Handle>());
+    assert!(std::mem::offset_of!(GraphicsOps, platform_bind) == 4 * size_of::<Handle>());
+    assert!(std::mem::offset_of!(GraphicsOps, images) == 9 * size_of::<Handle>());
+    assert!(size_of::<DispatchEntries>() == 24 * size_of::<Handle>());
     assert!(size_of::<Swapchain>() == 56);
     assert!(size_of::<PresentInfo>() == 32);
     assert!(size_of::<Barrier>() == 40);
@@ -279,12 +318,66 @@ fn blit_formats_supported(rgba_optimal: u32, bgra_optimal: u32) -> bool {
     rgba_optimal & BLIT_SRC != 0 && bgra_optimal & BLIT_DST != 0
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_dx12gvk_blit_formats_supported(rgba_optimal: u32, bgra_optimal: u32) -> u32 {
-    u32::from(blit_formats_supported(rgba_optimal, bgra_optimal))
+fn resolve_platform_dispatch(graphics: &Graphics, lookup: Lookup) -> Result<DispatchEntries, i32> {
+    if graphics.device_proc.is_none() || graphics.instance_proc.is_none() {
+        return Err(EXTENSION_NOT_PRESENT);
+    }
+    let mut entries = [None; DEVICE_PROCS.len() + INSTANCE_PROCS.len()];
+    let (device, instance) = entries.split_at_mut(DEVICE_PROCS.len());
+    for (name, address) in DEVICE_PROCS.iter().zip(device) {
+        succeeded(unsafe {
+            lookup(
+                graphics.device_proc,
+                graphics.device,
+                name.as_ptr(),
+                address,
+            )
+        })?;
+        if address.is_none() {
+            return Err(EXTENSION_NOT_PRESENT);
+        }
+    }
+    // Resolve both instance entries before testing their addresses, as the native setup did.
+    for (name, address) in INSTANCE_PROCS.iter().zip(instance.iter_mut()) {
+        succeeded(unsafe {
+            lookup(
+                graphics.instance_proc,
+                graphics.instance,
+                name.as_ptr(),
+                address,
+            )
+        })?;
+    }
+    if instance.iter().any(Option::is_none) {
+        return Err(EXTENSION_NOT_PRESENT);
+    }
+    Ok(entries)
 }
 
 impl GraphicsOps {
+    fn open(&self, setup: &Setup) -> Result<Handle, i32> {
+        let platform = unsafe { (self.platform_allocate)(setup) };
+        if platform.is_null() {
+            return Err(OUT_OF_MEMORY);
+        }
+        if let Err(result) = self.prepare(platform, &setup.graphics) {
+            unsafe { (self.platform_destroy)(platform) };
+            return Err(result);
+        }
+        Ok(platform)
+    }
+
+    fn prepare(&self, platform: Handle, graphics: &Graphics) -> Result<(), i32> {
+        let entries = resolve_platform_dispatch(graphics, self.lookup)?;
+        unsafe { (self.platform_bind)(platform, &entries) };
+        let rgba = unsafe { (self.format_features)(platform, RGBA8) };
+        let bgra = unsafe { (self.format_features)(platform, BGRA8) };
+        if !blit_formats_supported(rgba, bgra) {
+            return Err(FORMAT_UNSUPPORTED);
+        }
+        succeeded(unsafe { (self.initialize_capture)(platform, graphics) })
+    }
+
     fn record(&self, vk: Handle, commands: Handle, steps: impl IntoIterator<Item = Step>) {
         for step in steps {
             unsafe {
@@ -572,7 +665,7 @@ impl Presentation {
         let graphics = &setup.graphics;
         let mut luid = 0;
         succeeded(unsafe { (ops.adapter_luid)(graphics, &mut luid) })?;
-        succeeded(unsafe { (ops.platform_create)(setup, &mut self.vk) })?;
+        self.vk = ops.open(setup)?;
         let version = vendor.create(graphics, &self.swapchain, luid, options.generated_count)?;
         self.interop = vendor.import(graphics, luid, options.timeline_enabled)?;
         unsafe { (ops.capture_provider)(self.vk, version, vendor.capture_backend()) };
