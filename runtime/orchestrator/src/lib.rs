@@ -52,6 +52,8 @@ mod d3d12_generation;
 #[cfg(windows)]
 mod d3d12_observer;
 #[cfg(windows)]
+mod d3d12_sharpening;
+#[cfg(windows)]
 mod d3d12_sr;
 #[cfg(windows)]
 mod depth_replay;
