@@ -26,6 +26,7 @@ int32_t rsf_core_srvk_spatial_fallback(const Platform*, const rsf_srvk_fallback*
 #include "../../backends/common/frame_capture_vk.h"
 #include "../../backends/common/sharpening.h"
 #include "sharpening_vulkan.h"
+#include "../../backends/fsr/src/ffx_version.h"
 #include <ffx_api/ffx_api.h>
 #include <ffx_api/ffx_upscale.h>
 #include <ffx_api/vk/ffx_api_vk.h>
@@ -34,12 +35,9 @@ int32_t rsf_core_srvk_spatial_fallback(const Platform*, const rsf_srvk_fallback*
 #include <memory>
 
 namespace {
-constexpr size_t max_versions = 32;
+constexpr auto max_versions = rsf::max_ffx_versions;
 
-struct Version {
-    uint64_t id;
-    uint32_t major, minor, patch;
-};
+using Version = rsf_ffx_version;
 struct Blit {
     rsf_vk_function barrier, blit;
     uint32_t features;
@@ -87,7 +85,7 @@ struct Platform {
     int32_t (*dump_wants)(const rsf_frame_record*);
     void (*dump_result)(const rsf_frame_record*, const char*, uint32_t, int32_t);
 };
-static_assert(sizeof(Platform) == 256 && sizeof(Blit) == 24 && sizeof(Version) == 24);
+static_assert(sizeof(Platform) == 256 && sizeof(Blit) == 24);
 static_assert(sizeof(FfxDispatch) == 144 && offsetof(FfxDispatch, reset) == 136);
 static_assert(VK_FORMAT_R8_UNORM == 9 && VK_FORMAT_R16G16_SFLOAT == 83 &&
     VK_FORMAT_R16G16B16A16_SFLOAT == 97 && VK_FORMAT_R32_SFLOAT == 100 && VK_FORMAT_D32_SFLOAT == 126);
@@ -183,9 +181,7 @@ int32_t versions(FfxNative* native, Version* out, uint64_t* count) noexcept try
     if (native->sdk.query(nullptr, &query.header) != FFX_API_RETURN_OK || *count > max_versions)
         return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     for (uint64_t index = 0; index < *count; ++index) {
-        Version value{ids[index], 0, 0, 0};
-        if (names[index] && std::sscanf(names[index], "%u.%u.%u", &value.major, &value.minor, &value.patch) == 3)
-            out[index] = value;
+        out[index] = rsf::ffx_version(ids[index], names[index]);
     }
     return RSF_BACKEND_OK;
 }

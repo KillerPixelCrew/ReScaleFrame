@@ -1,18 +1,22 @@
 // SPDX-License-Identifier: MIT
 use super::*;
 use crate::com_ref::ComRef;
+use crate::ffx_version::{self, MAX_VERSIONS, Version};
 use crate::frame_capture12::{Owner as Capture, Platform as CapturePlatform};
 use crate::render_abi::{
     RSF_FG_FIXED, RSF_FG_STAT_ACTIVITY, RSF_FG_STAT_PRESENT_CALLBACKS, RSF_FG_STAT_TOTAL_PRESENTED,
     RSF_REFLEX_OFF, rsf_backend_resource as Resource,
 };
 use std::cell::{Cell, RefCell};
+use std::ffi::CStr;
 use std::sync::atomic::{AtomicI32, AtomicPtr, AtomicU32, AtomicU64, Ordering::Relaxed};
 
 const CAPTURE_SLOTS: usize = 64;
 const NON_PIXEL_READ: u32 = 0x40; // D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
 const VENDOR_PARAMETER_ERROR: u32 = 6;
 const MODULE: &str = "amd_fidelityfx_framegeneration_dx12.dll";
+type QueryVersions =
+    unsafe extern "C" fn(Raw, &Setup, &mut [Version; MAX_VERSIONS], &mut u64) -> i32;
 
 #[repr(C)]
 struct Configuration {
@@ -50,7 +54,7 @@ struct Ops {
     capture: &'static CapturePlatform,
     resolve: Resolve,
     close: unsafe extern "C" fn(Raw),
-    select_version: unsafe extern "C" fn(Raw, *const Setup, *mut c_char, u32) -> u64,
+    versions: QueryVersions,
     surface_format: unsafe extern "C" fn(u32) -> u32,
     create_generation:
         unsafe extern "C" fn(Raw, *const Extent, *const Status, *const c_char, *mut Raw) -> i32,
@@ -500,15 +504,23 @@ extern "C" fn rsf_core_fsr12_provider() -> *const Provider {
     &PROVIDER
 }
 
+fn select_version(handle: Raw, setup: &Setup, query: QueryVersions) -> Option<Version> {
+    let mut versions = [Version::default(); MAX_VERSIONS];
+    let mut count = 0;
+    if unsafe { query(handle, setup, &mut versions, &mut count) } != OK {
+        return None;
+    }
+    let versions = versions.get(..usize::try_from(count).ok()?)?;
+    ffx_version::select(versions, setup.feature_major, setup.version_id)
+        .filter(|version| version.id != 0)
+        .copied()
+}
+
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_fsr12_probe(
-    checks: &Checks,
-    setup: &Setup,
-    query: unsafe extern "C" fn(Raw, &Setup) -> u32,
-) -> u32 {
-    checks
-        .module(setup, MODULE)
-        .map_or(0, |module| unsafe { query(module.as_ptr(), setup) })
+extern "C" fn rsf_core_fsr12_probe(checks: &Checks, setup: &Setup, query: QueryVersions) -> u32 {
+    checks.module(setup, MODULE).map_or(0, |module| {
+        u32::from(select_version(module.as_ptr(), setup, query).is_some())
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -534,16 +546,16 @@ unsafe extern "C" fn rsf_core_fsr12_create(
         Err(result) => return result,
     };
     let mut initial = initial_status(1);
-    initial.version_id = unsafe {
-        (ops.select_version)(
-            sdk.raw,
-            setup,
-            initial.version_name.as_mut_ptr(),
-            initial.version_name.len() as u32,
-        )
-    };
-    if initial.version_id == 0 {
+    let Some(version) = select_version(sdk.raw, setup, ops.versions) else {
         return UNSUPPORTED;
+    };
+    initial.version_id = version.id;
+    if !version.name.is_null() {
+        let name = unsafe { CStr::from_ptr(version.name) }.to_bytes();
+        let capacity = initial.version_name.len() - 1;
+        for (out, &byte) in initial.version_name[..capacity].iter_mut().zip(name) {
+            *out = byte as c_char;
+        }
     }
     let session = crate::allocate_handle(Fsr {
         ops,

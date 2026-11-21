@@ -20,6 +20,7 @@ typedef struct rsf_gen12_extent {
 } rsf_gen12_extent;
 
 struct rsf_core_capture12_platform;
+struct rsf_ffx_version;
 typedef struct rsf_fsr12_config {
     void* chain;
     void* user;
@@ -45,7 +46,7 @@ typedef struct rsf_fsr12_ops {
     const struct rsf_core_capture12_platform* capture;
     rsf_backend_result (*resolve)(const rsf_generation_setup*, void* module, void* latency, void**);
     void (*close)(void*);
-    uint64_t (*select_version)(void*, const rsf_generation_setup*, char*, uint32_t);
+    rsf_backend_result (*versions)(void*, const rsf_generation_setup*, struct rsf_ffx_version*, uint64_t*);
     uint32_t (*surface_format)(uint32_t);
     rsf_backend_result (*create_generation)(void*, const rsf_gen12_extent*, const rsf_fg_status*, const char*, void**);
     rsf_backend_result (*provider_matches)(void*, void*, uint64_t);
@@ -99,7 +100,7 @@ typedef struct rsf_xeg12_ops {
 
 const rsf_generation_provider* rsf_core_fsr12_provider(void);
 uint32_t rsf_core_fsr12_probe(const rsf_gen12_checks*, const rsf_generation_setup*,
-    uint32_t (*query)(void*, const rsf_generation_setup*));
+    rsf_backend_result (*query)(void*, const rsf_generation_setup*, struct rsf_ffx_version*, uint64_t*));
 rsf_backend_result rsf_core_fsr12_create(const rsf_fsr12_ops*, const rsf_generation_setup*, void**, void**);
 uint32_t rsf_core_fsr12_generate(void*, void*);
 uint32_t rsf_core_fsr12_present(void*, void*, uint32_t);

@@ -1,18 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::*;
+use crate::ffx_version::{self, MAX_VERSIONS, Version as ProviderVersion};
 use std::ffi::{CStr, CString};
-
-const MAX_VERSIONS: usize = 32;
-
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-struct ProviderVersion {
-    id: u64,
-    name: *const c_char,
-    major: u32,
-    minor: u32,
-    patch: u32,
-}
 
 // Private ABI with fsr_backend.cpp.
 #[repr(C)]
@@ -30,8 +19,6 @@ struct Ops {
 
 const _: () = {
     assert!(size_of::<Ops>() == 9 * size_of::<Raw>());
-    assert!(size_of::<ProviderVersion>() == 32);
-    assert!(std::mem::offset_of!(ProviderVersion, major) == 16);
 };
 
 pub(super) struct Owner {
@@ -81,16 +68,7 @@ impl Owner {
             (self.ops.versions)(self.sdk.raw, desc.device, versions.as_mut_ptr(), &mut count)
         })?;
         let versions = versions.get(..count as usize).ok_or(NOT_SUPPORTED)?;
-        let mut best: Option<&ProviderVersion> = None;
-        for candidate in versions.iter().filter(|entry| {
-            entry.major == self.major && (desc.version_id == 0 || entry.id == desc.version_id)
-        }) {
-            // IDs are opaque. Keep the first entry on ties, including a zero ID.
-            if best.is_none_or(|best| (candidate.minor, candidate.patch) > (best.minor, best.patch))
-            {
-                best = Some(candidate);
-            }
-        }
+        let best = ffx_version::select(versions, self.major, desc.version_id);
         if let Some(best) = best.filter(|best| best.id != 0) {
             let name = unsafe { CStr::from_ptr(best.name) };
             return Ok(Version::new(best.id, name.to_bytes()));

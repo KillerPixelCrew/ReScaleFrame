@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use crate::ffx_version::{self, MAX_VERSIONS, Version};
 use crate::render_abi::rsf_sharpening_options;
 use crate::sdk_module::{FIDELITYFX_DLL, Loader, SdkModule};
 use crate::sr_session::has_capacity;
@@ -40,7 +41,6 @@ const FFX_INVERTED_DEPTH: u32 = 8;
 const FFX_INFINITE_DEPTH: u32 = 16;
 const FFX_AUTO_EXPOSURE: u32 = 32;
 pub(super) const SHARPENING_VENDOR: u32 = 4;
-const MAX_VERSIONS: usize = 32;
 
 type Setup = rsf_srvk_setup;
 type Frame = rsf_srvk_frame;
@@ -373,15 +373,6 @@ struct Blit {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default)]
-struct Version {
-    id: u64,
-    major: u32,
-    minor: u32,
-    patch: u32,
-}
-
-#[repr(C)]
 struct FfxDispatch<'a> {
     frame: &'a Frame,
     reactive: Image,
@@ -394,7 +385,7 @@ struct FfxDispatch<'a> {
 
 const _: () = {
     assert!(size_of::<Platform>() == 256);
-    assert!(size_of::<Blit>() == 24 && size_of::<Version>() == 24);
+    assert!(size_of::<Blit>() == 24);
     assert!(size_of::<FfxDispatch>() == 144);
     assert!(std::mem::offset_of!(FfxDispatch, reset) == 136);
 };
@@ -446,18 +437,6 @@ fn check(result: i32) -> Result<(), i32> {
     if result == 0 { Ok(()) } else { Err(result) }
 }
 
-fn select_version(versions: &[Version], major: u32) -> Option<u64> {
-    // The opaque ID is paired with a parsed SDK version. Preserve the first
-    // matching entry on ties, including when the ID is zero.
-    let mut best: Option<&Version> = None;
-    for version in versions.iter().filter(|version| version.major == major) {
-        if best.is_none_or(|best| (version.minor, version.patch) > (best.minor, best.patch)) {
-            best = Some(version);
-        }
-    }
-    best.map(|version| version.id)
-}
-
 impl FidelityFx {
     unsafe fn create(ops: &'static FfxOps, setup: &Setup) -> Result<(Self, [u32; 2]), i32> {
         let output = [setup.output_width, setup.output_height];
@@ -487,8 +466,13 @@ impl FidelityFx {
         let mut count = 0;
         check(unsafe { (ops.versions)(handle, &mut versions, &mut count) })?;
         let count = usize::try_from(count).map_err(|_| NOT_SUPPORTED)?;
-        let version = select_version(versions.get(..count).ok_or(NOT_SUPPORTED)?, setup.backend)
-            .ok_or(NOT_SUPPORTED)?;
+        let version = ffx_version::select(
+            versions.get(..count).ok_or(NOT_SUPPORTED)?,
+            setup.backend,
+            0,
+        )
+        .ok_or(NOT_SUPPORTED)?
+        .id;
         let flags = FFX_HDR
             | FFX_AUTO_EXPOSURE
             | (setup.depth_inverted * FFX_INVERTED_DEPTH)

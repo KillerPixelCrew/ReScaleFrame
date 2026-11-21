@@ -4,6 +4,15 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+D3D12 reconstruction, Vulkan reconstruction and D3D12 frame
+generation now choose FidelityFX providers through one Rust selector.
+The selector honors the requested opaque ID, ranks revisions within
+the requested major version and keeps the first SDK row on a tie.
+Native queries supply the same parsed records, including for the
+FSR4 capability probe. Source review matched the private layout and
+the existing zero-ID handling at each caller. The selector fixture
+and SDK provider selection remain unverified for this revision.
+
 The Rust D3D11-on-12 overlay now resolves and retains the system
 device-creation export. Shared-panel startup and stop require the
 same D3D11 device, so a wrapped overlay cannot claim or stop a panel

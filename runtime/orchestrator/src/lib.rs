@@ -113,6 +113,8 @@ mod native_reinsert;
 mod native_translucency;
 
 #[cfg(windows)]
+mod ffx_version;
+#[cfg(windows)]
 mod fg12;
 #[cfg(windows)]
 mod fg12_abi;

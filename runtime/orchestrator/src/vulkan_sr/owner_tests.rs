@@ -256,6 +256,7 @@ pub(super) static PLATFORM: Platform = Platform {
                     major,
                     minor,
                     patch,
+                    ..Version::default()
                 };
             }
             *count = 5;

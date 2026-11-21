@@ -73,33 +73,35 @@ void close(void* bindings)
     delete static_cast<Bindings*>(bindings);
 }
 
-uint64_t select_version(PfnFfxQuery query, const rsf_generation_setup& setup, char* name, uint32_t capacity)
+rsf_backend_result query_versions(PfnFfxQuery query, const rsf_generation_setup& setup,
+    rsf_ffx_version* out, uint64_t* count)
 {
-    uint64_t count = 32, ids[32]{}, id = 0;
-    const char* names[32]{};
+    uint64_t ids[rsf::max_ffx_versions]{};
+    const char* names[rsf::max_ffx_versions]{};
+    *count = rsf::max_ffx_versions;
     ffxQueryDescGetVersions versions{};
     versions.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
     versions.createDescType = FFX_API_CREATE_CONTEXT_DESC_TYPE_FRAMEGENERATION;
     versions.device = setup.chain.d3d12_device;
-    versions.outputCount = &count;
+    versions.outputCount = count;
     versions.versionIds = ids;
     versions.versionNames = names;
-    if (!query || query(nullptr, &versions.header) != FFX_API_RETURN_OK || count > 32)
-        return 0;
-    rsf::select_ffx_version(ids, names, count, setup.feature_major, setup.version_id, id, name, capacity);
-    return id;
+    if (!query || query(nullptr, &versions.header) != FFX_API_RETURN_OK || *count > rsf::max_ffx_versions)
+        return RSF_BACKEND_ERROR_NOT_SUPPORTED;
+    for (uint64_t i = 0; i < *count; ++i)
+        out[i] = rsf::ffx_version(ids[i], names[i]);
+    return RSF_BACKEND_OK;
 }
 
-uint64_t select_version(void* bindings, const rsf_generation_setup* setup, char* name, uint32_t capacity)
+rsf_backend_result versions(void* bindings, const rsf_generation_setup* setup, rsf_ffx_version* out, uint64_t* count)
 {
-    return select_version(static_cast<Bindings*>(bindings)->query, *setup, name, capacity);
+    return query_versions(static_cast<Bindings*>(bindings)->query, *setup, out, count);
 }
 
-uint32_t query_support(void* module, const rsf_generation_setup* setup)
+rsf_backend_result probe_versions(void* module, const rsf_generation_setup* setup, rsf_ffx_version* out, uint64_t* count)
 {
     const auto query = rsf::entry<PfnFfxQuery>(static_cast<HMODULE>(module), "ffxQuery");
-    char name[64]{};
-    return uint32_t(select_version(query, *setup, name, sizeof(name)) != 0);
+    return query_versions(query, *setup, out, count);
 }
 
 uint32_t surface_format(uint32_t dxgi)
@@ -308,7 +310,7 @@ int32_t present_count(void* chain, uint32_t* count)
 rsf_backend_result create(const rsf_generation_setup* setup, void** out, void** chain)
 {
     static const rsf_fsr12_ops ops{&rsf::generation12_checks, rsf::FrameCapture12::native_platform(),
-        resolve, close, select_version, surface_format, create_generation, provider_matches, create_chain,
+        resolve, close, versions, surface_format, create_generation, provider_matches, create_chain,
         destroy_context, wait, chain_extent, whole_texture, configure, prepare, generate, copy_present, present_count};
     return rsf_core_fsr12_create(&ops, setup, out, chain);
 }
@@ -331,7 +333,7 @@ extern "C" uint32_t rsf_generation_fsr4_supported(void* device, const char* dire
     setup.runtime_directory_utf8 = directory;
     setup.chain.d3d12_device = device;
     setup.feature_major = 4;
-    return rsf_core_fsr12_probe(&rsf::generation12_checks, &setup, query_support);
+    return rsf_core_fsr12_probe(&rsf::generation12_checks, &setup, probe_versions);
 }
 #else
 extern "C" const rsf_generation_provider* rsf_generation_fsr() { return rsf::not_compiled_provider(); }

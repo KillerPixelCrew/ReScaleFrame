@@ -9,6 +9,7 @@
 #if defined(RSF_HAVE_FFX)
 #include "../../common/sharpening.h"
 #include "../../common/sr12_platform.h"
+#include "ffx_version.h"
 #include "fsr4_compat.h"
 #include <ffx_api.h>
 #include <ffx_upscale.h>
@@ -79,14 +80,9 @@ struct FsrBindings {
     ffxOverrideVersion override_version{};
 };
 
-struct FsrVersion {
-    uint64_t id;
-    const char* name;
-    uint32_t major, minor, patch;
-};
+using FsrVersion = rsf_ffx_version;
 
-constexpr uint64_t max_versions = 32;
-static_assert(sizeof(FsrVersion) == 32 && offsetof(FsrVersion, major) == 16);
+constexpr auto max_versions = rsf::max_ffx_versions;
 static_assert(RSF_QUALITY_NATIVE == FFX_UPSCALE_QUALITY_MODE_NATIVEAA &&
     RSF_QUALITY_QUALITY == FFX_UPSCALE_QUALITY_MODE_QUALITY &&
     RSF_QUALITY_BALANCED == FFX_UPSCALE_QUALITY_MODE_BALANCED &&
@@ -137,10 +133,7 @@ rsf_backend_result versions(void* bindings, void* device, FsrVersion* out, uint6
         *count > max_versions)
         return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     for (uint64_t i = 0; i < *count; ++i) {
-        auto& entry = out[i];
-        entry = {ids[i], names[i], 0, 0, 0};
-        if (names[i] && std::sscanf(names[i], "%u.%u.%u", &entry.major, &entry.minor, &entry.patch) != 3)
-            entry.major = 0;
+        out[i] = rsf::ffx_version(ids[i], names[i]);
     }
     return RSF_BACKEND_OK;
 }
