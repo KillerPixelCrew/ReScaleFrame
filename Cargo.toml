@@ -6,6 +6,7 @@ members = [
   "runtime/vulkan/streamline/lifecycle",
   "runtime/orchestrator",
   "sdk/game",
+  "games/ac7",
   "games/anomaly",
   "games/fallout4",
   "games/minecraft",

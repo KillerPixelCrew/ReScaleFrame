@@ -1,0 +1,227 @@
+// SPDX-License-Identifier: MIT
+use super::*;
+use rsf_game_sys::RSF_GAME_ABI_VERSION;
+use std::cell::Cell;
+use std::ffi::c_void;
+
+/// Scripted native results; `None` is a leaf that threw.
+struct Script {
+    renderer: Renderer,
+    prepare: Option<bool>,
+    start: Option<bool>,
+    active: Option<bool>,
+    quiesce: Option<()>,
+    stop: Option<bool>,
+    calls: Cell<u32>,
+    options: Cell<Option<rsf_ac7_native_renderer_options>>,
+}
+
+impl Script {
+    fn new() -> Self {
+        Self {
+            renderer: std::ptr::dangling_mut(),
+            prepare: Some(true),
+            start: Some(true),
+            active: Some(true),
+            quiesce: Some(()),
+            stop: Some(true),
+            calls: Cell::new(0),
+            options: Cell::new(None),
+        }
+    }
+
+    fn call<T>(&self, result: Option<T>) -> Result<T, Threw> {
+        self.calls.set(self.calls.get() + 1);
+        result.ok_or(Threw)
+    }
+}
+
+impl Leaves for Script {
+    fn prepare(
+        &self,
+        options: &rsf_ac7_native_renderer_options,
+    ) -> Result<(Renderer, bool), Threw> {
+        self.options.set(Some(*options));
+        self.call(self.prepare)
+            .map(|prepared| (self.renderer, prepared))
+    }
+    fn start(&self, _: Renderer) -> Result<bool, Threw> {
+        self.call(self.start)
+    }
+    fn is_active(&self, _: Renderer) -> Result<bool, Threw> {
+        self.call(self.active)
+    }
+    fn quiesce(&self, _: Renderer) -> Result<(), Threw> {
+        self.call(self.quiesce)
+    }
+    fn stop(&self, _: Renderer) -> Result<bool, Threw> {
+        self.call(self.stop)
+    }
+}
+
+unsafe extern "C" fn log(_: *mut c_void, _: *const std::ffi::c_char) {}
+
+fn host() -> rsf_game_host_services {
+    // SAFETY: all-zero is the empty services table.
+    let mut host: rsf_game_host_services = unsafe { std::mem::zeroed() };
+    host.struct_size = size_of::<rsf_game_host_services>() as u32;
+    host.abi_version = RSF_GAME_ABI_VERSION;
+    host.session_id = 9;
+    host.log = Some(log);
+    host
+}
+
+/// The status result, prepared, active and the reason text it points at.
+fn status(lifecycle: &Lifecycle, leaves: &Script) -> (rsf_result, u32, u32, String) {
+    // SAFETY: all-zero is an empty status.
+    let mut output: rsf_game_renderer_status = unsafe { std::mem::zeroed() };
+    output.rendering_ready = 7;
+    let result = lifecycle.status(leaves, &mut output);
+    assert_eq!(output.rendering_ready, if result == RSF_OK { 0 } else { 7 });
+    let reason = if output.reason.is_null() {
+        String::new()
+    } else {
+        // SAFETY: every reason is one of this module's static strings.
+        unsafe { CStr::from_ptr(output.reason) }
+            .to_string_lossy()
+            .into_owned()
+    };
+    (result, output.prepared, output.active, reason)
+}
+
+fn text(reason: &CStr) -> String {
+    reason.to_string_lossy().into_owned()
+}
+
+#[test]
+fn options_carry_the_host_and_adapter_capacity() {
+    let host = host();
+    let options = options(&host);
+    assert_eq!(options.struct_size, 72);
+    assert_eq!(options.pending_capacity, 256);
+    assert_eq!(options.session_id, 9);
+    assert!(options.log.is_some() && options.on_stage.is_none() && options.on_state.is_none());
+    assert_eq!(options.diagnostics, 0);
+}
+
+#[test]
+fn accepted_path_matches_the_former_plugin() {
+    let lifecycle = Lifecycle::new();
+    let leaves = Script::new();
+    assert_eq!(
+        status(&lifecycle, &leaves),
+        (RSF_OK, 0, 0, text(NOT_PREPARED))
+    );
+    assert_eq!(lifecycle.start(&leaves), RSF_ERROR_NOT_READY);
+    assert_eq!(leaves.calls.get(), 0);
+    assert_eq!(lifecycle.prepare(&leaves, &host()), RSF_OK);
+    assert_eq!(
+        leaves.options.get().map(|options| options.session_id),
+        Some(9)
+    );
+    assert_eq!(status(&lifecycle, &leaves), (RSF_OK, 1, 0, text(PREPARED)));
+    assert_eq!(lifecycle.prepare(&leaves, &host()), RSF_ERROR_BUSY);
+    assert_eq!(lifecycle.start(&leaves), RSF_OK);
+    assert_eq!(status(&lifecycle, &leaves), (RSF_OK, 1, 1, text(STARTED)));
+    assert_eq!(lifecycle.stop(&leaves), RSF_ERROR_BUSY);
+    assert_eq!(lifecycle.quiesce(&leaves), RSF_OK);
+    assert_eq!(status(&lifecycle, &leaves), (RSF_OK, 1, 0, text(QUIESCED)));
+    assert_eq!(lifecycle.stop(&leaves), RSF_OK);
+    assert_eq!(status(&lifecycle, &leaves), (RSF_OK, 0, 0, text(STOPPED)));
+    // With no renderer, quiesce and stop complete without a native call.
+    let calls = leaves.calls.get();
+    assert_eq!(lifecycle.quiesce(&leaves), RSF_OK);
+    assert_eq!(lifecycle.stop(&leaves), RSF_OK);
+    assert_eq!(leaves.calls.get(), calls);
+}
+
+#[test]
+fn refusals_match_the_former_plugin() {
+    let lifecycle = Lifecycle::new();
+    let mut leaves = Script::new();
+    leaves.prepare = Some(false);
+    assert_eq!(
+        lifecycle.prepare(&leaves, &host()),
+        RSF_ERROR_NATIVE_REFUSED
+    );
+    // The native output is retained even on refusal, as the pinned partial activation needs.
+    assert_eq!(status(&lifecycle, &leaves), (RSF_OK, 1, 0, text(REFUSED)));
+
+    let lifecycle = Lifecycle::new();
+    let mut leaves = Script::new();
+    leaves.renderer = std::ptr::null_mut();
+    leaves.prepare = Some(false);
+    assert_eq!(
+        lifecycle.prepare(&leaves, &host()),
+        RSF_ERROR_NATIVE_REFUSED
+    );
+    assert_eq!(status(&lifecycle, &leaves), (RSF_OK, 0, 0, text(REFUSED)));
+    assert_eq!(lifecycle.start(&leaves), RSF_ERROR_NOT_READY);
+
+    let lifecycle = Lifecycle::new();
+    let mut leaves = Script::new();
+    leaves.start = Some(false);
+    assert_eq!(lifecycle.prepare(&leaves, &host()), RSF_OK);
+    assert_eq!(lifecycle.start(&leaves), RSF_ERROR_NOT_READY);
+    assert_eq!(
+        status(&lifecycle, &leaves),
+        (RSF_OK, 1, 0, text(START_REFUSED))
+    );
+
+    let lifecycle = Lifecycle::new();
+    let mut leaves = Script::new();
+    leaves.active = Some(false);
+    leaves.stop = Some(false);
+    assert_eq!(lifecycle.prepare(&leaves, &host()), RSF_OK);
+    assert_eq!(lifecycle.start(&leaves), RSF_OK);
+    assert_eq!(
+        status(&lifecycle, &leaves),
+        (RSF_OK, 1, 0, text(DEACTIVATED))
+    );
+    assert_eq!(lifecycle.quiesce(&leaves), RSF_OK);
+    assert_eq!(lifecycle.stop(&leaves), RSF_ERROR_BUSY);
+    assert_eq!(status(&lifecycle, &leaves), (RSF_OK, 1, 0, text(DRAINING)));
+}
+
+#[test]
+fn a_native_throw_reports_not_ready_and_clears_the_transition() {
+    let lifecycle = Lifecycle::new();
+    let mut leaves = Script::new();
+    leaves.prepare = None;
+    assert_eq!(lifecycle.prepare(&leaves, &host()), RSF_ERROR_NOT_READY);
+    assert_eq!(
+        status(&lifecycle, &leaves),
+        (RSF_OK, 0, 0, text(NOT_PREPARED))
+    );
+
+    let mut leaves = Script::new();
+    leaves.start = None;
+    leaves.quiesce = None;
+    leaves.stop = None;
+    assert_eq!(lifecycle.prepare(&leaves, &host()), RSF_OK);
+    assert_eq!(lifecycle.start(&leaves), RSF_ERROR_NOT_READY);
+    assert_eq!(status(&lifecycle, &leaves), (RSF_OK, 1, 0, text(PREPARED)));
+    assert_eq!(lifecycle.quiesce(&leaves), RSF_ERROR_NOT_READY);
+    assert_eq!(lifecycle.stop(&leaves), RSF_ERROR_NOT_READY);
+    assert_eq!(status(&lifecycle, &leaves), (RSF_OK, 1, 0, text(PREPARED)));
+
+    let lifecycle = Lifecycle::new();
+    let mut leaves = Script::new();
+    leaves.active = None;
+    assert_eq!(lifecycle.prepare(&leaves, &host()), RSF_OK);
+    assert_eq!(lifecycle.start(&leaves), RSF_OK);
+    assert_eq!(status(&lifecycle, &leaves).0, RSF_ERROR_NOT_READY);
+}
+
+#[test]
+fn reasons_are_the_former_texts() {
+    assert_eq!(NOT_PREPARED, c"Native renderer has not been prepared.");
+    assert_eq!(
+        REFUSED,
+        c"Native renderer refused: researched engine bytes are unavailable or differ."
+    );
+    assert_eq!(
+        DEACTIVATED,
+        c"Native renderer deactivated after command ownership refusal."
+    );
+}

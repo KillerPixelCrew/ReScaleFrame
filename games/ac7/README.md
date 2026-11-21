@@ -97,6 +97,13 @@ AC7 uses a modified UE4.18 renderer on D3D11. The proxy loads the game plugin, w
 engine hooks, per-view resources and reconstruction insertion before bloom, exposure and tonemapping.
 The shared runtime owns vendor SDKs and the GPU-ordered D3D11/D3D12 SR bridge.
 
+Exact-build identity, the GameSDK table and the renderer lifecycle of
+`ReScaleFrame.Game.AC7.dll` are owned by the Rust crate `rsf-ac7` (`src/lib.rs`,
+`src/lifecycle.rs`), linked into the same DLL. `src/plugin.cpp` keeps the exported entry point
+and the exception-guarded native renderer leaves; the renderer, hooks and both DirectInput
+carriers remain C++. See [the migration note](../../docs/research/rust-ac7-entry.md) for the
+moved behaviour and the remaining AC7 owners.
+
 The view reader handles the game's 4096-byte uniform buffer. Scene motion needs UE encoding
 removal, and the engine's camera transform supplies camera motion. The native integration sizes the
 game's own UI targets through engine owners, preserving grading and glow; texture promotion

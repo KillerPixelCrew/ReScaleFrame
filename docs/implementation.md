@@ -93,6 +93,12 @@ scoped Runtime calls and native creation outputs. The GameSDK lifecycle
 and rendering producers still need ports. Build and both-route gameplay
 verification remain open.
 
+AC7's GameSDK table, exact-build identity and lifecycle now use Rust.
+The public game entry and the native renderer and combined carriers keep
+their interfaces. The lifecycle retains a renderer returned on a refused
+prepare for later retirement. The private binding was regenerated. Build
+and game verification remain open.
+
 ## Rust orchestrator and first Anomaly port
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
