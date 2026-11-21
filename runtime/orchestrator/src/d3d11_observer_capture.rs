@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
+use crate::d3d11_observer_abi::{rsf_dump_log_fn, rsf_observer_options, rsf_observer_status};
+use crate::d3d11_observer_hooks::rsf_core_observer11_installed;
+use crate::d3d11_observer_present::{frames, rsf_core_observer11_present_size};
+use crate::sr_session::has_capacity;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::fmt::Write;
 use std::fs;
@@ -20,7 +24,6 @@ const RENDER_TARGET: u32 = 0x20;
 const CONSTANT_LIMIT: usize = 16;
 const HISTOGRAM_LIMIT: usize = 128;
 
-#[repr(C)]
 #[derive(Clone, Copy)]
 struct Filter {
     format: u32,
@@ -30,28 +33,11 @@ struct Filter {
     constant_max: u32,
 }
 
-#[repr(C)]
-struct CaptureStatus {
-    have_device: u32,
-    textures_matched: u32,
-    textures_created: u32,
-    constant_matches: u32,
-    distinct_buffer_sizes: u32,
-    dumps_completed: u32,
-    textures_written: u32,
-    constant_bytes_written: u32,
-}
-
 #[derive(Default)]
 struct DumpResult {
     textures: u32,
     constant_bytes: u32,
 }
-
-const _: () = {
-    assert!(size_of::<Filter>() == 20);
-    assert!(size_of::<CaptureStatus>() == 32);
-};
 
 struct Request {
     prefix: CString,
@@ -125,22 +111,23 @@ fn lock() -> MutexGuard<'static, Capture> {
     CAPTURE.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_observer11_capture_configure(filter: &Filter, dump_settings: &DumpSettings) {
+pub(super) fn configure(options: &rsf_observer_options, log: rsf_dump_log_fn) {
     let mut state = lock();
     state.filter = Filter {
-        capacity: if filter.capacity == 0 {
+        format: options.format,
+        minimum_width: options.minimum_width,
+        capacity: if options.capacity == 0 {
             16
         } else {
-            filter.capacity
+            options.capacity
         },
-        ..*filter
+        constant_min: options.constant_buffer_min_bytes,
+        constant_max: options.constant_buffer_max_bytes,
     };
-    state.dump_settings = *dump_settings;
+    state.dump_settings = DumpSettings::new(options, log);
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_observer11_texture(
+pub(super) unsafe fn record_texture(
     device: Handle,
     texture: Handle,
     width: u32,
@@ -167,13 +154,7 @@ unsafe extern "C" fn rsf_core_observer11_texture(
         .get_or_insert_with(|| unsafe { ComRef::retain(device) });
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_observer11_buffer(
-    device: Handle,
-    buffer: Handle,
-    bytes: u32,
-    bindings: u32,
-) {
+pub(super) unsafe fn record_buffer(device: Handle, buffer: Handle, bytes: u32, bindings: u32) {
     let mut state = lock();
     let filter = state.filter;
     if filter.constant_max == 0 || bindings & CONSTANT_BUFFER == 0 {
@@ -305,29 +286,47 @@ unsafe extern "C" fn rsf_core_observer11_acquire_device(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_observer11_capture_status(out: &mut CaptureStatus) {
+unsafe extern "C" fn rsf_core_observer11_status(out: *mut rsf_observer_status) -> i32 {
+    if !unsafe { has_capacity(out) } {
+        return INVALID;
+    }
     let state = lock();
-    *out = CaptureStatus {
+    let size = rsf_core_observer11_present_size();
+    let status = rsf_observer_status {
+        struct_size: unsafe { out.cast::<u32>().read() },
+        installed: rsf_core_observer11_installed() as u32,
         have_device: state.retained.device.is_some().into(),
+        frames_presented: frames(),
         textures_matched: state.retained.textures.len() as u32,
         textures_created: state.textures_created,
-        constant_matches: state.constant_matches,
+        present_width: (size >> 32) as u32,
+        present_height: size as u32,
+        constant_buffers_matched: state.constant_matches,
         distinct_buffer_sizes: state.sizes.len() as u32,
         dumps_completed: state.dumps_completed,
         textures_written: state.dump_result.textures,
         constant_bytes_written: state.dump_result.constant_bytes,
     };
+    unsafe { out.write(status) };
+    OK
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_observer11_request_dump(prefix: *const c_char, view: u32) {
+unsafe extern "C" fn rsf_core_observer11_request_dump(prefix: *const c_char, view: u32) -> i32 {
+    if prefix.is_null() {
+        return INVALID;
+    }
     let request = Request {
         prefix: unsafe { CStr::from_ptr(prefix) }.to_owned(),
         view,
     };
     let mut state = lock();
+    if rsf_core_observer11_installed() == 0 {
+        return NOT_READY;
+    }
     state.request = Some(request);
     REQUESTED.store(true, Ordering::Release);
+    OK
 }
 
 #[unsafe(no_mangle)]

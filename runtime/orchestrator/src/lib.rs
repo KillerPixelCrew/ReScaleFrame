@@ -19,6 +19,10 @@ mod d3d11_host_abi;
 #[cfg(windows)]
 mod d3d11_host_reduced;
 #[cfg(windows)]
+mod d3d11_observer_abi;
+#[cfg(windows)]
+mod d3d11_observer_callbacks;
+#[cfg(windows)]
 mod d3d11_observer_capture;
 #[cfg(windows)]
 mod d3d11_observer_hooks;

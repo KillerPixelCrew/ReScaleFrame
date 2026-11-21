@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use crate::d3d11_observer_callbacks::snapshot;
 use crate::d3d11_observer_hooks::rsf_core_observer11_installed;
 use crate::scene_abi::rsf_observer_present_event as Event;
 use crate::sr_session::has_capacity;
@@ -17,13 +18,10 @@ const OK: i32 = 0;
 struct Platform {
     is_d3d11: unsafe extern "C" fn(Handle) -> i32,
     update: Update,
-    notify: unsafe extern "C" fn(&Event),
-    before: unsafe extern "C" fn(Handle),
     forward: unsafe extern "C" fn(&Event, *const c_void, u32) -> i32,
-    warn_reentry: unsafe extern "C" fn() -> i32,
 }
 
-const _: () = assert!(size_of::<Platform>() == 6 * size_of::<Handle>());
+const _: () = assert!(size_of::<Platform>() == 3 * size_of::<Handle>());
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct ApplicationCall {
@@ -91,31 +89,32 @@ unsafe extern "C" fn rsf_core_observer11_present(
     if unsafe { (platform.is_d3d11)(event.swapchain) } == 0 {
         return unsafe { (platform.forward)(event, parameters, 0) };
     }
+    let registration = (rsf_core_observer11_installed() != 0)
+        .then(snapshot)
+        .flatten();
     let Some(_scope) = HookScope::enter() else {
-        if rsf_core_observer11_installed() != 0
+        if let Some(registration) = registration
             && !REENTRY_WARNED.swap(true, Ordering::Relaxed)
-            && unsafe { (platform.warn_reentry)() } == 0
+            && !registration.say(c"observer: Present re-entered from inside its own hook, so another hook forwards to this one. The inner call goes straight to the genuine Present where that is known, and is refused otherwise")
         {
             REENTRY_WARNED.store(false, Ordering::Relaxed);
         }
         return unsafe { (platform.forward)(event, parameters, 1) };
     };
-    if rsf_core_observer11_installed() == 0 {
+    let Some(registration) = registration else {
         return unsafe { (platform.forward)(event, parameters, 0) };
-    }
+    };
 
-    unsafe { (platform.notify)(event) };
+    registration.event(event);
     if event.flags & TEST == 0 {
-        unsafe {
-            (platform.update)(event.swapchain);
-            (platform.before)(event.swapchain);
-        }
+        unsafe { (platform.update)(event.swapchain) };
+        registration.present(event.swapchain);
     }
     let result = unsafe { (platform.forward)(event, parameters, 0) };
     count_present(event.flags, result);
     event.completed = 1;
     event.result = result;
-    unsafe { (platform.notify)(event) };
+    registration.event(event);
     result
 }
 
@@ -161,13 +160,12 @@ pub(super) fn present_calls() -> u32 {
     CALLS.load(Ordering::SeqCst)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_observer11_frames() -> u32 {
+pub(super) fn frames() -> u32 {
     FRAMES.load(Ordering::Relaxed)
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_observer11_present_size() -> u64 {
+pub(super) extern "C" fn rsf_core_observer11_present_size() -> u64 {
     SIZE.load(Ordering::Acquire)
 }
 

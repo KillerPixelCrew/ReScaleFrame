@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::{Constant, DumpResult, Handle, Immediate, OK, Request};
 use crate::com_ref::ComRef;
+use crate::d3d11_observer_abi::rsf_observer_options;
 use crate::input_dump::{DECODED_MOTION, Log, TextureOptions};
 use crate::render_abi::rsf_backend_log_fn;
 use rsf_game_sys::sr_abi::rsf_motion_decode_params as DecodeParams;
@@ -10,7 +11,6 @@ use std::ptr::{NonNull, null_mut};
 
 const FOREIGN_CONSTANT: i32 = -6;
 
-#[repr(C)]
 #[derive(Clone, Copy)]
 pub(super) struct DumpSettings {
     log: rsf_backend_log_fn,
@@ -30,6 +30,17 @@ impl DumpSettings {
         bias: 0.0,
         invalid: 0.0,
     };
+
+    pub(super) fn new(options: &rsf_observer_options, log: rsf_backend_log_fn) -> Self {
+        Self {
+            log,
+            log_user: null_mut(),
+            decode_motion: options.decode_motion,
+            scale: options.motion_scale,
+            bias: options.motion_bias,
+            invalid: options.motion_invalid_value,
+        }
+    }
 }
 
 #[repr(C)]
@@ -45,7 +56,6 @@ pub(super) struct DumpPlatform {
 }
 
 const _: () = {
-    assert!(size_of::<DumpSettings>() == 32);
     assert!(size_of::<DumpPlatform>() == 7 * size_of::<Handle>());
 };
 

@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now copies the D3D11 observer options, dispatches creation and
+Present callbacks, and fills the public status record. Creation callbacks
+stay serialized. Each Present uses one registration for its begin and
+completion, and retirement clears that registration before hook removal.
+The C++ adapters translate COM arguments and contain callback exceptions.
+The Rust options and status layouts are generated from the unchanged
+public header. Build and runtime validation remain open.
+
 Rust now sequences D3D11 observer dumps, names outputs, writes constant
 buffers and owns the temporary motion decoder. The native layer reads
 buffers, encodes textures and runs the typed D3D11 decode operations.

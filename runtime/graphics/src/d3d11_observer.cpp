@@ -21,6 +21,7 @@
 #include <mutex>
 #include <vector>
 
+#include "d3d11_observer_callbacks.h"
 #include "d3d11_observer_capture.h"
 #include "d3d11_observer_hooks.h"
 #include "d3d11_observer_present.h"
@@ -55,21 +56,32 @@ using create_input_layout_fn = HRESULT(STDMETHODCALLTYPE*)(ID3D11Device*,
                                                            const void*, SIZE_T,
                                                            ID3D11InputLayout**);
 
-struct Observer {
-    std::mutex guard;
-    rsf_observer_options options{};
-};
+std::mutex observer_lifecycle;
 
-Observer& observer()
+template<class Callback, class... Args>
+void invoke(Callback callback, Args... args) noexcept
 {
-    static Observer instance;
-    return instance;
+    try { callback(args...); }
+    catch (...) { /* Keep foreign exceptions on the native side. */ }
 }
+
+constexpr rsf_observer11_callbacks callbacks{
+    invoke<rsf_dump_log_fn, void*, const char*>,
+    invoke<rsf_observer_layout_fn, void*, void*, const rsf_observer_layout_element*, uint32_t, uint32_t>,
+    invoke<rsf_observer_shader_fn, void*, void*, uint32_t, const void*, uint32_t>,
+    [](rsf_observer_texture_fn callback, void* user, void* texture, const rsf_observer11_texture_facts* facts) noexcept {
+        invoke(callback, user, texture, facts->width, facts->height, facts->format, facts->mip_levels,
+            facts->array_size, facts->sample_count, facts->bind_flags, facts->misc_flags);
+    },
+    invoke<rsf_observer_buffer_fn, void*, void*, const void*, uint32_t, uint32_t>,
+    invoke<rsf_observer_present_fn, void*, void*>,
+    invoke<rsf_observer_present_event_fn, void*, const rsf_observer_present_event*>,
+};
 
 static_assert(D3D11_BIND_RENDER_TARGET == 0x20 && D3D11_BIND_CONSTANT_BUFFER == 0x4);
 static_assert(RSF_OBSERVER_OK == 0 && RSF_OBSERVER_ERROR_INVALID_ARGUMENT == -1 && RSF_OBSERVER_ERROR_NOT_READY == -6);
-static_assert(sizeof(rsf_observer11_capture_filter) == 20 && sizeof(rsf_observer11_capture_status) == 32);
-static_assert(sizeof(rsf_observer11_dump_settings) == 32 && sizeof(rsf_observer11_dump_ops) == 7 * sizeof(void*));
+static_assert(sizeof(rsf_observer11_texture_facts) == 32 && sizeof(rsf_observer11_callbacks) == 7 * sizeof(void*));
+static_assert(sizeof(rsf_observer11_dump_ops) == 7 * sizeof(void*));
 static_assert(sizeof(rsf_texture_dump_options) == 40 && sizeof(rsf_motion_decode_params) == 48);
 static_assert(RSF_TEXTURE_DUMP_ABI_VERSION == 2 && RSF_DUMP_VIEW_DECODED_MOTION == 2 &&
     RSF_TEXTURE_OK == 0 && RSF_MOTION_DECODE_OK == 0 && RSF_CONSTANT_BUFFER_OK == 0 &&
@@ -88,7 +100,6 @@ HRESULT STDMETHODCALLTYPE hooked_create_texture2d(ID3D11Device* device,
                                                   const D3D11_SUBRESOURCE_DATA* initial,
                                                   ID3D11Texture2D** out)
 {
-    Observer& self = observer();
     const auto call = original<create_texture2d_fn>(RSF_OBSERVER11_TEXTURE);
     if (!call) return E_FAIL;
     const HRESULT result = call(device, desc, initial, out);
@@ -96,19 +107,9 @@ HRESULT STDMETHODCALLTYPE hooked_create_texture2d(ID3D11Device* device,
         return result;
     }
 
-    // Every texture, not only the ones the dump filter retains: what a texture is for is the
-    // caller's question, and the filter above exists to serve dumping rather than identification.
-    {
-        std::lock_guard<std::mutex> lock(self.guard);
-        if (!rsf_core_observer11_installed()) return result;
-        if (self.options.on_texture) {
-            self.options.on_texture(self.options.on_texture_user, *out, desc->Width, desc->Height,
-                                    static_cast<uint32_t>(desc->Format), desc->MipLevels,
-                                    desc->ArraySize, desc->SampleDesc.Count, desc->BindFlags,
-                                    desc->MiscFlags);
-        }
-    }
-    rsf_core_observer11_texture(device, *out, desc->Width, uint32_t(desc->Format), desc->BindFlags);
+    const rsf_observer11_texture_facts facts{desc->Width, desc->Height, uint32_t(desc->Format),
+        desc->MipLevels, desc->ArraySize, desc->SampleDesc.Count, desc->BindFlags, desc->MiscFlags};
+    rsf_core_observer11_texture_created(device, *out, &facts);
     return result;
 }
 
@@ -118,7 +119,6 @@ HRESULT STDMETHODCALLTYPE hooked_create_input_layout(ID3D11Device* device,
                                                      SIZE_T signature_bytes,
                                                      ID3D11InputLayout** out)
 {
-    Observer& self = observer();
     const auto call = original<create_input_layout_fn>(RSF_OBSERVER11_LAYOUT);
     if (!call) return E_FAIL;
     const HRESULT result = call(device, descs, count, signature, signature_bytes, out);
@@ -140,10 +140,7 @@ HRESULT STDMETHODCALLTYPE hooked_create_input_layout(ID3D11Device* device,
             descs[index].InputSlotClass == D3D11_INPUT_PER_INSTANCE_DATA ? 1u : 0u;
     }
 
-    std::lock_guard<std::mutex> lock(self.guard);
-    if (rsf_core_observer11_installed() && self.options.on_layout) {
-        self.options.on_layout(self.options.on_layout_user, *out, elements, copied, count);
-    }
+    rsf_core_observer11_layout_created(*out, elements, copied, count);
     return result;
 }
 
@@ -151,16 +148,13 @@ HRESULT STDMETHODCALLTYPE hooked_create_input_layout(ID3D11Device* device,
 HRESULT STDMETHODCALLTYPE Name(ID3D11Device* device, const void* bytes, SIZE_T size, \
                                 ID3D11ClassLinkage* linkage, Type** out) \
 { \
-    Observer& self = observer(); \
     using Fn = HRESULT(STDMETHODCALLTYPE*)(ID3D11Device*, const void*, SIZE_T, \
                                            ID3D11ClassLinkage*, Type**); \
     const auto call = original<Fn>(RSF_OBSERVER11_STAGE_BASE + Index); \
     if (!call) return E_FAIL; \
     const HRESULT result = call(device, bytes, size, linkage, out); \
     if (SUCCEEDED(result) && out && *out) { \
-        std::lock_guard<std::mutex> lock(self.guard); \
-        if (rsf_core_observer11_installed() && self.options.on_shader) self.options.on_shader( \
-            self.options.on_shader_user, *out, Stage, bytes, static_cast<uint32_t>(size)); \
+        rsf_core_observer11_shader_created(*out, Stage, bytes, uint32_t(size)); \
     } \
     return result; \
 }
@@ -177,7 +171,6 @@ HRESULT STDMETHODCALLTYPE hooked_create_geometry_so(
     UINT entry_count, const UINT* strides, UINT stride_count, UINT rasterized_stream,
     ID3D11ClassLinkage* linkage, ID3D11GeometryShader** out)
 {
-    Observer& self = observer();
     using Fn = HRESULT(STDMETHODCALLTYPE*)(ID3D11Device*, const void*, SIZE_T,
         const D3D11_SO_DECLARATION_ENTRY*, UINT, const UINT*, UINT, UINT,
         ID3D11ClassLinkage*, ID3D11GeometryShader**);
@@ -186,9 +179,7 @@ HRESULT STDMETHODCALLTYPE hooked_create_geometry_so(
     const HRESULT result = call(
         device, bytes, size, entries, entry_count, strides, stride_count, rasterized_stream, linkage, out);
     if (SUCCEEDED(result) && out && *out) {
-        std::lock_guard<std::mutex> lock(self.guard);
-        if (rsf_core_observer11_installed() && self.options.on_shader) self.options.on_shader(self.options.on_shader_user, *out,
-            RSF_OBSERVER_STAGE_GEOMETRY, bytes, static_cast<uint32_t>(size));
+        rsf_core_observer11_shader_created(*out, RSF_OBSERVER_STAGE_GEOMETRY, bytes, uint32_t(size));
     }
     return result;
 }
@@ -198,22 +189,14 @@ HRESULT STDMETHODCALLTYPE hooked_create_buffer(ID3D11Device* device,
                                                const D3D11_SUBRESOURCE_DATA* initial,
                                                ID3D11Buffer** out)
 {
-    Observer& self = observer();
     const auto call = original<create_buffer_fn>(RSF_OBSERVER11_BUFFER);
     if (!call) return E_FAIL;
     const HRESULT result = call(device, desc, initial, out);
     if (FAILED(result) || !desc || !out || !*out) {
         return result;
     }
-    {
-        std::lock_guard<std::mutex> lock(self.guard);
-        if (!rsf_core_observer11_installed()) return result;
-        if (self.options.on_buffer) {
-            self.options.on_buffer(self.options.on_buffer_user, *out,
-                                   initial ? initial->pSysMem : nullptr, desc->ByteWidth, desc->BindFlags);
-        }
-    }
-    rsf_core_observer11_buffer(device, *out, desc->ByteWidth, desc->BindFlags);
+    rsf_core_observer11_buffer_created(device, *out, initial ? initial->pSysMem : nullptr,
+        desc->ByteWidth, desc->BindFlags);
     return result;
 }
 
@@ -222,15 +205,6 @@ void* capture_immediate(void* device) noexcept
     ID3D11DeviceContext* context = nullptr;
     static_cast<ID3D11Device*>(device)->GetImmediateContext(&context);
     return context;
-}
-
-void capture_log(void* user, const char* message) noexcept
-{
-    const auto& options = static_cast<const Observer*>(user)->options;
-    if (options.log) {
-        try { options.log(options.log_user, message); }
-        catch (...) { /* Diagnostics must not interrupt capture or Present. */ }
-    }
 }
 
 int32_t create_capture_decode(void* device, void* raw_source, rsf_dump_log_fn log,
@@ -258,7 +232,7 @@ constexpr rsf_observer11_dump_ops dump_ops{
     rsf_motion_decode_destroy,
 };
 
-void update_presenter(Observer& self, IDXGISwapChain* swapchain)
+void update_presenter(IDXGISwapChain* swapchain)
 {
     const auto size = rsf_core_observer11_present_size();
 
@@ -275,13 +249,13 @@ void update_presenter(Observer& self, IDXGISwapChain* swapchain)
             const auto previous = rsf_core_observer11_replace_size(desc.BufferDesc.Width, desc.BufferDesc.Height);
             const auto previous_width = uint32_t(previous >> 32);
             const auto previous_height = uint32_t(previous);
-            if (previous_width != 0 && self.options.log &&
+            if (previous_width != 0 && rsf_core_observer11_logging() &&
                 (previous_width != desc.BufferDesc.Width || previous_height != desc.BufferDesc.Height)) {
                 char message[160];
                 std::snprintf(message, sizeof(message),
                               "observer: the swap chain is now %ux%u, was %ux%u", desc.BufferDesc.Width,
                               desc.BufferDesc.Height, previous_width, previous_height);
-                self.options.log(self.options.log_user, message);
+                rsf_core_observer11_log(message);
             }
         }
     }
@@ -292,13 +266,13 @@ void update_presenter(Observer& self, IDXGISwapChain* swapchain)
             auto* presenting = device.Get();
             Microsoft::WRL::ComPtr<ID3D11Device> previous;
             previous.Attach(static_cast<ID3D11Device*>(rsf_core_observer11_adopt_device(device.Detach())));
-            if (previous && self.options.log) {
+            if (previous && rsf_core_observer11_logging()) {
                 char message[256];
                 std::snprintf(message, sizeof(message),
                     "observer: the presenting device is %p, not the %p chosen earlier. Adopted "
                     "the presenting one; anything holding the other has the wrong device",
                     static_cast<void*>(presenting), static_cast<void*>(previous.Get()));
-                self.options.log(self.options.log_user, message);
+                rsf_core_observer11_log(message);
             }
         }
     }
@@ -306,7 +280,7 @@ void update_presenter(Observer& self, IDXGISwapChain* swapchain)
 }
 
 static_assert(DXGI_PRESENT_TEST == 1 && S_OK == 0);
-static_assert(sizeof(rsf_observer11_present_ops) == 6 * sizeof(void*));
+static_assert(sizeof(rsf_observer11_present_ops) == 3 * sizeof(void*));
 constexpr rsf_observer11_present_ops present_ops{
     [](void* raw) noexcept -> int32_t {
         // D3D12 real and generated Presents share DXGI but must bypass D3D11 callbacks.
@@ -320,22 +294,8 @@ constexpr rsf_observer11_present_ops present_ops{
         } catch (...) { return 0; }
     },
     [](void* raw) noexcept {
-        try { update_presenter(observer(), static_cast<IDXGISwapChain*>(raw)); }
+        try { update_presenter(static_cast<IDXGISwapChain*>(raw)); }
         catch (...) { /* Diagnostics must not interrupt Present. */ }
-    },
-    [](const rsf_observer_present_event* event) noexcept {
-        const auto& options = observer().options;
-        if (options.on_present_event) {
-            try { options.on_present_event(options.on_present_event_user, event); }
-            catch (...) { /* Telemetry must not interrupt Present. */ }
-        }
-    },
-    [](void* raw) noexcept {
-        const auto& options = observer().options;
-        if (options.on_present) {
-            try { options.on_present(options.on_present_user, raw); }
-            catch (...) { /* A callback must not interrupt Present. */ }
-        }
     },
     [](const rsf_observer_present_event* event, const void* parameters, uint32_t nested) noexcept -> int32_t {
         try {
@@ -353,17 +313,6 @@ constexpr rsf_observer11_present_ops present_ops{
         } catch (...) {
             return E_FAIL;
         }
-    },
-    []() noexcept -> int32_t {
-        const auto& options = observer().options;
-        if (!options.log) return 0;
-        try {
-            options.log(options.log_user,
-                "observer: Present re-entered from inside its own hook, so another "
-                "hook forwards to this one. The inner call goes straight to the "
-                "genuine Present where that is known, and is refused otherwise");
-        } catch (...) { /* Logging must not interrupt Present. */ }
-        return 1;
     },
 };
 
@@ -682,7 +631,7 @@ HMODULE module_of(const void* address, wchar_t* name, size_t count)
 //
 // Returns false with a reason when no target could be established; the caller then falls back to
 // the table patch, with the re-entry guard as the only protection.
-bool install_present_route(Observer& self, ModuleImage& image, void* genuine, void* hook,
+bool install_present_route(ModuleImage& image, void* genuine, void* hook,
     uint32_t method, const char* label, char* message, size_t size)
 {
     if (!read_module_image(genuine, image, message, size)) {
@@ -769,7 +718,7 @@ bool install_present_route(Observer& self, ModuleImage& image, void* genuine, vo
         return false;
     }
 
-    if (self.options.log) {
+    if (rsf_core_observer11_logging()) {
         char note[512];
         if (patched) {
             std::snprintf(note, sizeof(note),
@@ -782,13 +731,12 @@ bool install_present_route(Observer& self, ModuleImage& image, void* genuine, vo
             std::snprintf(note, sizeof(note),
                           "observer: %s detoured at %p in dxgi, entry unpatched", label, genuine);
         }
-        try { self.options.log(self.options.log_user, note); } catch (...) {}
+        rsf_core_observer11_log(note);
     }
     return true;
 }
 
 struct HookSetup {
-    Observer& observer;
     void** chain;
     void** chain1;
     ModuleImage image;
@@ -797,17 +745,16 @@ struct HookSetup {
 int32_t try_present_detour(void* user, uint32_t method) noexcept try
 {
     auto& setup = *static_cast<HookSetup*>(user);
-    const auto& options = setup.observer.options;
     auto** table = method == 0 ? setup.chain : setup.chain1;
     const auto slot = method == 0 ? slot_present : slot_present1;
     auto* hook = method == 0 ? reinterpret_cast<void*>(&hooked_present) : reinterpret_cast<void*>(&hooked_present1);
     const auto* label = method == 0 ? "Present" : "Present1";
     char why[512]{};
     auto* genuine = genuine_slot(setup.image, table, slot, table[slot], why, sizeof(why));
-    if (genuine && install_present_route(setup.observer, setup.image, genuine, hook, method, label, why, sizeof(why))) {
+    if (genuine && install_present_route(setup.image, genuine, hook, method, label, why, sizeof(why))) {
         return 1;
     }
-    if (options.log) {
+    if (rsf_core_observer11_logging()) {
         char note[768]{};
         if (method == 0) {
             std::snprintf(note, sizeof(note), "observer: Present detour unavailable because %s. "
@@ -815,7 +762,7 @@ int32_t try_present_detour(void* user, uint32_t method) noexcept try
         } else {
             std::snprintf(note, sizeof(note), "observer: Present1 hook unavailable: %s", why);
         }
-        options.log(options.log_user, note);
+        rsf_core_observer11_log(note);
     }
     return 0;
 } catch (...) { return 0; }
@@ -912,15 +859,9 @@ bool acquire_vtables(void*** device_vtable, void*** swapchain_vtable, void*** sw
 
 extern "C" rsf_observer_result rsf_observer_install(const rsf_observer_options* options)
 {
-    if (!options || options->struct_size < sizeof(rsf_observer_options)) {
-        return RSF_OBSERVER_ERROR_INVALID_ARGUMENT;
-    }
-    if (options->abi_version != RSF_OBSERVER_ABI_VERSION) {
-        return RSF_OBSERVER_ERROR_ABI_MISMATCH;
-    }
-
-    Observer& self = observer();
-    std::lock_guard<std::mutex> lock(self.guard);
+    const auto validated = rsf_core_observer11_validate(options);
+    if (validated != RSF_OBSERVER_OK) return validated;
+    std::lock_guard<std::mutex> lock(observer_lifecycle);
     const auto allowed = rsf_core_observer11_can_install();
     if (allowed != RSF_OBSERVER_OK) return allowed;
 
@@ -930,14 +871,7 @@ extern "C" rsf_observer_result rsf_observer_install(const rsf_observer_options* 
     if (!acquire_vtables(&device, &chain, &chain1)) {
         return RSF_OBSERVER_ERROR_NO_DEVICE;
     }
-    self.options = *options;
-    const rsf_observer11_capture_filter filter{
-        options->format, options->minimum_width, options->capacity,
-        options->constant_buffer_min_bytes, options->constant_buffer_max_bytes};
-    const rsf_observer11_dump_settings dump{
-        options->log ? capture_log : nullptr, &self, options->decode_motion,
-        options->motion_scale, options->motion_bias, options->motion_invalid_value};
-    rsf_core_observer11_capture_configure(&filter, &dump);
+    rsf_core_observer11_set_options(options, &callbacks);
 
     rsf_observer11_slot slots[RSF_OBSERVER11_SLOT_COUNT]{};
     slots[RSF_OBSERVER11_TEXTURE] = {device + slot_create_texture2d, reinterpret_cast<void*>(&hooked_create_texture2d)};
@@ -962,20 +896,14 @@ extern "C" rsf_observer_result rsf_observer_install(const rsf_observer_options* 
         }
     }
     // Both routes share one lazy copy of DXGI's module image.
-    HookSetup setup{self, chain, chain1, {}};
-    const auto result = rsf_core_observer11_install_hooks(slots, chain1 ? 1u : 0u, &setup, &hook_ops);
-    if (result != RSF_OBSERVER_OK) self.options = {};
-    return result;
+    HookSetup setup{chain, chain1, {}};
+    return rsf_core_observer11_install_hooks(slots, chain1 ? 1u : 0u, &setup, &hook_ops);
 }
 
 extern "C" rsf_observer_result rsf_observer_uninstall(void)
 {
-    auto& self = observer();
-    std::lock_guard<std::mutex> lock(self.guard);
-    const auto was_active = rsf_core_observer11_installed();
-    const auto result = rsf_core_observer11_uninstall_hooks(&hook_ops);
-    if (was_active && !rsf_core_observer11_installed()) self.options = {};
-    return result;
+    std::lock_guard<std::mutex> lock(observer_lifecycle);
+    return rsf_core_observer11_uninstall_hooks(&hook_ops);
 }
 
 extern "C" rsf_observer_result rsf_observer_acquire_device(void** device_out, void** context_out)
@@ -985,27 +913,7 @@ extern "C" rsf_observer_result rsf_observer_acquire_device(void** device_out, vo
 
 extern "C" rsf_observer_result rsf_observer_get_status(rsf_observer_status* status)
 {
-    if (!status || status->struct_size < sizeof(rsf_observer_status)) {
-        return RSF_OBSERVER_ERROR_INVALID_ARGUMENT;
-    }
-    Observer& self = observer();
-    std::lock_guard<std::mutex> lock(self.guard);
-    rsf_observer11_capture_status capture{};
-    rsf_core_observer11_capture_status(&capture);
-    status->installed = uint32_t(rsf_core_observer11_installed());
-    status->have_device = capture.have_device;
-    status->frames_presented = rsf_core_observer11_frames();
-    status->textures_matched = capture.textures_matched;
-    status->textures_created = capture.textures_created;
-    const auto size = rsf_core_observer11_present_size();
-    status->present_width = uint32_t(size >> 32);
-    status->present_height = uint32_t(size);
-    status->constant_buffers_matched = capture.constant_matches;
-    status->distinct_buffer_sizes = capture.distinct_buffer_sizes;
-    status->dumps_completed = capture.dumps_completed;
-    status->textures_written = capture.textures_written;
-    status->constant_bytes_written = capture.constant_bytes_written;
-    return RSF_OBSERVER_OK;
+    return rsf_core_observer11_status(status);
 }
 extern "C" rsf_observer_result rsf_observer_notify_application_present(const rsf_observer_present_event* event)
 {
@@ -1016,16 +924,7 @@ extern "C" rsf_observer_result rsf_observer_notify_application_present(const rsf
 extern "C" rsf_observer_result rsf_observer_request_dump(const char* output_prefix_utf8,
                                                         uint32_t view)
 {
-    if (!output_prefix_utf8) {
-        return RSF_OBSERVER_ERROR_INVALID_ARGUMENT;
-    }
-    Observer& self = observer();
-    std::lock_guard<std::mutex> lock(self.guard);
-    if (!rsf_core_observer11_installed()) {
-        return RSF_OBSERVER_ERROR_NOT_READY;
-    }
-    rsf_core_observer11_request_dump(output_prefix_utf8, view);
-    return RSF_OBSERVER_OK;
+    return rsf_core_observer11_request_dump(output_prefix_utf8, view);
 }
 
 extern "C" rsf_observer_result rsf_observer_write_buffer_sizes(const char* output_path_utf8)

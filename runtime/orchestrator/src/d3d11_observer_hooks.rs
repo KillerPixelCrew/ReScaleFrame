@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-use crate::d3d11_observer_capture;
 use crate::d3d11_observer_present::{present_calls, rsf_core_observer11_replace_size};
+use crate::{d3d11_observer_callbacks, d3d11_observer_capture};
 use std::ffi::c_void;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
@@ -112,6 +112,7 @@ impl Hooks {
 
     fn retire(&mut self, platform: &Platform) -> bool {
         ACTIVE.store(false, Ordering::Release);
+        d3d11_observer_callbacks::clear();
         for (index, patch) in self.patches.iter_mut().enumerate().rev() {
             let Some(Slot { address, hook }) = *patch else {
                 continue;
