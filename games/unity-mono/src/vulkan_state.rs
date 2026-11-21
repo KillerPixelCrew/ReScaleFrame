@@ -6,12 +6,24 @@
 //! This module owns the bridge's admission and lifecycle: the shared device's readiness and its
 //! single creator, the permanent fault, the render events queued to Unity and their packets, the
 //! present interceptions and surface updates in progress, the player window frame the present
-//! renders under, and the checked close and release. The command slot rotation and the shared
-//! D3D12 fence values are the package bridge's submission ring (`bridge_interop.rs`), whose
-//! contract matches: one slot per recording, a completion value per signal, the ring advanced
-//! after a signalled submission, drained against the shared fence. vulkan_bridge.cpp keeps the
-//! Unity interfaces, Vulkan, D3D12 and DXGI objects and calls, images, command buffers, slot
-//! fences, waits, copies, barriers, the swapchain interception and the window.
+//! renders under, whether the bridge's DXGI swap chain exists, and the checked close and release.
+//! The command slot rotation and the shared D3D12 fence values are the package bridge's submission
+//! ring (`bridge_interop.rs`), whose contract matches: one slot per recording, a completion value
+//! per signal, the ring advanced after a signalled submission, drained against the shared fence.
+//!
+//! The presentation state outlives a release, because Unity owns the swapchains and the window
+//! stays: Unity's intercepted swapchains (their images and the present-ready semaphores the bridge
+//! created for them), the presentation window's identity, and the presentation lease. The lease is
+//! the one exclusive hold the C++ took as a mutex: present interceptions, swapchain retirement and
+//! the swap chain's creation on the window thread run one at a time, a present keeps it through
+//! the forwarded vkQueuePresentKHR, and retirement keeps it through vkDeviceWaitIdle and the
+//! semaphore destruction, which need host access to the device's queues.
+//!
+//! vulkan_bridge.cpp keeps the Unity interfaces, Vulkan, D3D12 and DXGI objects and calls, images,
+//! command buffers, slot fences, waits, copies, barriers, the swapchain and semaphore creation and
+//! destruction, the window and its swap chain. The orchestrator's Vulkan frame-generation
+//! swapchain owners present their own images through their own ops tables and this crate does
+//! not link them, so the registry here is the bridge's own.
 //!
 //! The C++ kept this as unguarded globals. Its release counted only queued render events, so it
 //! could destroy the slots, images and swap chain a present interception was recording into on the
@@ -19,7 +31,8 @@
 use crate::bridge_abi::{RSF_UNITY_FRAMES_PACKETS, rsf_unity_packet};
 use std::ffi::c_void;
 use std::ptr;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::slice;
+use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 
 const EVENTS: usize = RSF_UNITY_FRAMES_PACKETS as usize;
 // Event kinds and device claims, as vulkan_state.h defines them.
@@ -76,6 +89,8 @@ struct State {
     entries: u32,
     /// The last player window frame, whose identity the present interception renders under.
     window: Option<rsf_unity_packet>,
+    /// The bridge's DXGI swap chain exists. It goes with the other objects at release.
+    surface: bool,
 }
 
 // The packets hold Unity resource addresses as identity. This module never dereferences them.
@@ -96,6 +111,7 @@ impl State {
             events: [FREE; EVENTS],
             entries: 0,
             window: None,
+            surface: false,
         }
     }
 
@@ -360,6 +376,221 @@ extern "C" fn rsf_unity_vulkan_release() {
     lock().release();
 }
 
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_vulkan_surface_created() {
+    lock().surface = true;
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_vulkan_surface_ready() -> u32 {
+    u32::from(lock().surface)
+}
+
+/// One intercepted Unity swapchain: its extent, its images and the present-ready semaphore the
+/// bridge created for each image. Handles are Vulkan's, kept as identity only.
+struct Swapchain {
+    chain: u64,
+    width: u32,
+    height: u32,
+    images: Vec<u64>,
+    present_ready: Vec<u64>,
+}
+
+/// The presented image of a leased swapchain (rsf_unity_vulkan_present_source). Written for
+/// vulkan_bridge.cpp; only the tests read it here.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[allow(dead_code)]
+struct PresentSource {
+    image: u64,
+    present_ready: u64,
+    width: u32,
+    height: u32,
+}
+const _: () = assert!(size_of::<PresentSource>() == 24);
+
+struct Presentation {
+    /// The presentation window, created once on the window thread and kept for the process.
+    window: *mut c_void,
+    /// The presentation lease is held.
+    leased: bool,
+    swapchains: Vec<Swapchain>,
+}
+
+// The window is a Win32 handle kept as identity; this module never dereferences it.
+unsafe impl Send for Presentation {}
+
+static PRESENTATION: Mutex<Presentation> = Mutex::new(Presentation::new());
+/// Wakes the threads waiting for the presentation lease.
+static LEASE_ENDED: Condvar = Condvar::new();
+
+fn presentation() -> MutexGuard<'static, Presentation> {
+    PRESENTATION.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// The presentation once no lease is held. Waits as the C++ mutex did.
+fn unleased() -> MutexGuard<'static, Presentation> {
+    let mut presentation = presentation();
+    while presentation.leased {
+        presentation = LEASE_ENDED
+            .wait(presentation)
+            .unwrap_or_else(PoisonError::into_inner);
+    }
+    presentation
+}
+
+fn end_lease() {
+    presentation().leased = false;
+    LEASE_ENDED.notify_all();
+}
+
+impl Presentation {
+    const fn new() -> Self {
+        Self {
+            window: ptr::null_mut(),
+            leased: false,
+            swapchains: Vec::new(),
+        }
+    }
+
+    /// Keeps the first window; true when window is the kept one.
+    fn set_window(&mut self, window: *mut c_void) -> bool {
+        if window.is_null() {
+            return false;
+        }
+        if self.window.is_null() {
+            self.window = window;
+        }
+        self.window == window
+    }
+
+    /// Publishes a complete swapchain: one present-ready semaphore per image, a new handle.
+    fn register(&mut self, swapchain: Swapchain) -> bool {
+        if swapchain.chain == 0
+            || swapchain.images.is_empty()
+            || swapchain.images.len() != swapchain.present_ready.len()
+            || self
+                .swapchains
+                .iter()
+                .any(|known| known.chain == swapchain.chain)
+        {
+            return false;
+        }
+        self.swapchains.push(swapchain);
+        true
+    }
+
+    fn source(&self, chain: u64, index: u32) -> Option<PresentSource> {
+        let swapchain = self.swapchains.iter().find(|known| known.chain == chain)?;
+        let index = index as usize;
+        Some(PresentSource {
+            image: *swapchain.images.get(index)?,
+            present_ready: swapchain.present_ready[index],
+            width: swapchain.width,
+            height: swapchain.height,
+        })
+    }
+
+    /// Forgets the swapchain and returns its present-ready semaphores for destruction.
+    fn retire(&mut self, chain: u64) -> Option<Vec<u64>> {
+        let position = self
+            .swapchains
+            .iter()
+            .position(|known| known.chain == chain)?;
+        Some(self.swapchains.swap_remove(position).present_ready)
+    }
+}
+
+/// Destroys a retired swapchain's present-ready semaphores, with the presentation lease held.
+type Retire = unsafe extern "C" fn(context: *mut c_void, present_ready: *const u64, count: u32);
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_vulkan_set_surface_window(window: *mut c_void) -> u32 {
+    u32::from(presentation().set_window(window))
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_vulkan_surface_window() -> *mut c_void {
+    presentation().window
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_unity_vulkan_swapchain_register(
+    chain: u64,
+    width: u32,
+    height: u32,
+    images: *const u64,
+    present_ready: *const u64,
+    count: u32,
+) -> u32 {
+    if images.is_null() || present_ready.is_null() || count == 0 {
+        return 0;
+    }
+    let count = count as usize;
+    let swapchain = Swapchain {
+        chain,
+        width,
+        height,
+        images: unsafe { slice::from_raw_parts(images, count) }.to_vec(),
+        present_ready: unsafe { slice::from_raw_parts(present_ready, count) }.to_vec(),
+    };
+    u32::from(unleased().register(swapchain))
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_unity_vulkan_swapchain_retire(
+    chain: u64,
+    retire: Option<Retire>,
+    context: *mut c_void,
+) -> u32 {
+    let Some(retire) = retire else {
+        return 0;
+    };
+    let mut presentation = unleased();
+    let Some(present_ready) = presentation.retire(chain) else {
+        return 0;
+    };
+    presentation.leased = true;
+    drop(presentation);
+    // SAFETY: vulkan_bridge.cpp's noexcept leaf, borrowing the handles for the call.
+    unsafe { retire(context, present_ready.as_ptr(), present_ready.len() as u32) };
+    end_lease();
+    1
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_unity_vulkan_present_begin(
+    chain: u64,
+    index: u32,
+    source: *mut PresentSource,
+) -> u32 {
+    let mut presentation = unleased();
+    presentation.leased = true;
+    let Some(found) = presentation.source(chain, index) else {
+        return 0;
+    };
+    if source.is_null() {
+        return 0;
+    }
+    unsafe { source.write(found) };
+    1
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_vulkan_surface_begin() -> u32 {
+    let mut presentation = presentation();
+    if presentation.leased {
+        return 0;
+    }
+    presentation.leased = true;
+    1
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_vulkan_presentation_end() {
+    end_lease();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -525,5 +756,120 @@ mod tests {
         assert_eq!(unsafe { rsf_unity_vulkan_window(ptr::null_mut()) }, 0);
         assert_eq!(unsafe { rsf_unity_vulkan_set_window(ptr::null()) }, 0);
         rsf_unity_vulkan_release();
+    }
+
+    #[test]
+    fn release_forgets_the_surface() {
+        let mut state = State::new();
+        state.surface = true;
+        state.release();
+        assert!(!state.surface);
+    }
+
+    fn swapchain(chain: u64, count: u64) -> Swapchain {
+        Swapchain {
+            chain,
+            width: 640,
+            height: 360,
+            images: (1..=count).map(|image| chain * 100 + image).collect(),
+            present_ready: (1..=count).map(|ready| chain * 1000 + ready).collect(),
+        }
+    }
+
+    #[test]
+    fn swapchains_publish_complete_and_once() {
+        let mut presentation = Presentation::new();
+        assert!(!presentation.register(swapchain(0, 2)));
+        assert!(!presentation.register(swapchain(3, 0)));
+        let mut uneven = swapchain(3, 2);
+        uneven.present_ready.pop();
+        assert!(!presentation.register(uneven));
+        assert!(presentation.register(swapchain(3, 2)));
+        assert!(!presentation.register(swapchain(3, 3)));
+        assert_eq!(
+            presentation.source(3, 1),
+            Some(PresentSource {
+                image: 302,
+                present_ready: 3002,
+                width: 640,
+                height: 360,
+            })
+        );
+        assert!(presentation.source(3, 2).is_none());
+        assert!(presentation.source(4, 0).is_none());
+        assert_eq!(presentation.retire(3), Some(vec![3001, 3002]));
+        assert!(presentation.retire(3).is_none());
+        assert!(presentation.source(3, 0).is_none());
+    }
+
+    #[test]
+    fn the_first_window_is_kept() {
+        let mut presentation = Presentation::new();
+        let (first, second) = (
+            ptr::without_provenance_mut(8),
+            ptr::without_provenance_mut(16),
+        );
+        assert!(!presentation.set_window(ptr::null_mut()));
+        assert!(presentation.set_window(first));
+        assert!(presentation.set_window(first));
+        assert!(!presentation.set_window(second));
+        assert_eq!(presentation.window, first);
+    }
+
+    static RETIRED: Mutex<(Vec<u64>, bool)> = Mutex::new((Vec::new(), false));
+
+    unsafe extern "C" fn retire(_: *mut c_void, present_ready: *const u64, count: u32) {
+        let handles = unsafe { slice::from_raw_parts(present_ready, count as usize) }.to_vec();
+        // The lease is held while the semaphores are destroyed.
+        let leased = rsf_unity_vulkan_surface_begin() == 0;
+        *RETIRED.lock().unwrap() = (handles, leased);
+    }
+
+    // The only test that touches the process-wide presentation.
+    #[test]
+    fn the_presentation_lease_is_exclusive() {
+        let (images, ready) = ([71, 72], [81, 82]);
+        assert_eq!(
+            unsafe {
+                rsf_unity_vulkan_swapchain_register(7, 4, 2, images.as_ptr(), ready.as_ptr(), 2)
+            },
+            1
+        );
+        assert_eq!(
+            unsafe { rsf_unity_vulkan_swapchain_register(8, 4, 2, ptr::null(), ready.as_ptr(), 2) },
+            0
+        );
+        let mut source = PresentSource::default();
+        assert_eq!(
+            unsafe { rsf_unity_vulkan_present_begin(7, 1, &mut source) },
+            1
+        );
+        assert_eq!((source.image, source.present_ready), (72, 82));
+        assert_eq!(rsf_unity_vulkan_surface_begin(), 0);
+        rsf_unity_vulkan_presentation_end();
+        // A miss still holds the lease: the C++ forwards the present under it.
+        assert_eq!(
+            unsafe { rsf_unity_vulkan_present_begin(7, 2, &mut source) },
+            0
+        );
+        assert_eq!(rsf_unity_vulkan_surface_begin(), 0);
+        rsf_unity_vulkan_presentation_end();
+        assert_eq!(rsf_unity_vulkan_surface_begin(), 1);
+        rsf_unity_vulkan_presentation_end();
+        assert_eq!(
+            unsafe { rsf_unity_vulkan_swapchain_retire(7, None, ptr::null_mut()) },
+            0
+        );
+        assert_eq!(
+            unsafe { rsf_unity_vulkan_swapchain_retire(7, Some(retire), ptr::null_mut()) },
+            1
+        );
+        assert_eq!(*RETIRED.lock().unwrap(), (vec![81, 82], true));
+        assert_eq!(
+            unsafe { rsf_unity_vulkan_swapchain_retire(7, Some(retire), ptr::null_mut()) },
+            0
+        );
+        assert_eq!(rsf_unity_vulkan_surface_begin(), 1);
+        rsf_unity_vulkan_presentation_end();
     }
 }
