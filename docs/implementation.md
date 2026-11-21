@@ -171,6 +171,12 @@ The view owner preserves reconfiguration, spatial fallback and retirement
 through the shared Runtime. The native setup table was regenerated, and
 build and player verification remain open.
 
+AC7's Rust renderer transaction owns prepare, start, quiesce and stop.
+Failed activation keeps any renderer with reachable callbacks, and a
+refused hook disable or removal keeps the renderer available for retry.
+The native detours and TrueSky operations still use the same interface.
+The binding was regenerated. Builds and live retirement remain open.
+
 ## Rust orchestrator and first Anomaly port
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.

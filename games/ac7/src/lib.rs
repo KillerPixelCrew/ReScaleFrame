@@ -2,19 +2,22 @@
 //! Ace Combat 7 (Steam build 9855922) adapter policy linked into `ReScaleFrame.Game.AC7.dll`:
 //! the exact recognized build, the GameSDK table and the renderer lifecycle (`lifecycle.rs`),
 //! and for the native renderer the exact-build code sites and their admission (`sites.rs`), the
-//! scene-precision and temporal velocity patch transactions (`patches.rs`) and the hook body
-//! guards (`guards.rs`), all reached through ac7_sites.h.
+//! scene-precision and temporal velocity patch transactions (`patches.rs`), the hook body
+//! guards (`guards.rs`) and the prepare/start/quiesce/stop transaction with its retirement
+//! admission (`renderer.rs`), all reached through ac7_sites.h.
 //!
 //! The rest of the native renderer stays C++ (native_renderer.cpp and the render-scope library):
-//! MinHook, detours, engine relays, RHI scopes, SEH reads, protected code writes and the TrueSky
-//! plugin patches. plugin.cpp lends its entry points through the exception-guarded leaf table in
-//! ac7_platform.h and keeps the exported rsf_get_game_plugin_api. The DirectInput carriers, their
-//! decryption wait, carrier engine patches, window acceptance and D3D11 bridge are not part of
-//! this crate yet.
+//! the five exported renderer calls as wrappers, the renderer object and its fields, MinHook
+//! leaves, module pinning, detours, engine relays, RHI scopes, SEH reads, protected code writes
+//! and the TrueSky plugin patches. plugin.cpp lends its entry points through the
+//! exception-guarded leaf table in ac7_platform.h and keeps the exported
+//! rsf_get_game_plugin_api. The DirectInput carriers, their decryption wait, carrier engine
+//! patches, window acceptance and D3D11 bridge are not part of this crate yet.
 mod guards;
 mod lifecycle;
 mod patches;
 mod platform_abi;
+mod renderer;
 mod sites;
 mod sites_abi;
 

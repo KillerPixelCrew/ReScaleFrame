@@ -440,12 +440,12 @@ int main() {
         !evidence(hook_pixel_view_uniform) && !evidence(hook_sky_projection),
         "only the pixel bind evidence hooks wait for the diagnostic");
     // Hook guards count per thread and sum for the stop path.
-    check(guards_held(true) == 0, "no hook body is running");
+    check(rsf_ac7_guards_held(true) == 0, "no hook body is running");
     {
         const EntryGuard entry; const OuterGuard outer;
-        check(guards_held(false) == 1 && guards_held(true) == 2, "entry and outer guards are summed separately");
+        check(rsf_ac7_guards_held(false) == 1 && rsf_ac7_guards_held(true) == 2, "entry and outer guards are summed separately");
     }
-    check(guards_held(true) == 0, "guards release their slot");
+    check(rsf_ac7_guards_held(true) == 0, "guards release their slot");
     // A call redirected through a relay slot reads back as the native call after restore.
     auto* code = static_cast<unsigned char*>(VirtualAlloc(nullptr, 4096, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
     check(code != nullptr, "allocate a code page for the relay");

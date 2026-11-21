@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <rescaleframe/ac7_native_renderer.h>
 #include <rescaleframe/ac7_view.h>
-#include <rescaleframe/ac7_hooks.h>
 #include <rescaleframe/ac7_memory.h>
 #include "ac7_sites.h"
 #include "truesky_depth.h"
@@ -67,8 +66,8 @@ static_assert(process_hooks == RSF_AC7_PROCESS_HOOKS);
 Site sites[hook_count];
 std::atomic<rsf_ac7_native_renderer*> installed{nullptr};
 // Hook bodies count themselves in and out so stop() can tell when no thread is inside this module.
-// The per-thread slots and their sum are owned by the Rust crate (guards.rs).
-uint32_t guards_held(bool outer_too) { return rsf_ac7_guards_held(outer_too); }
+// The per-thread slots and their sum are owned by the Rust crate (guards.rs), which the renderer
+// transaction (renderer.rs) reads directly.
 struct OuterGuard {
     OuterGuard() noexcept { rsf_ac7_guard_enter(RSF_AC7_GUARD_OUTER); }
     ~OuterGuard() { rsf_ac7_guard_leave(RSF_AC7_GUARD_OUTER); }
@@ -392,7 +391,8 @@ void hooked_engine_tick(void* loop)
     simulation_closed = simulation_started = input_sampled = false;
     inside_simulation = false; after_simulation = false;
     inside_engine_tick = true; input_source_frame = reserved_source_frame; shared_repaint_targets = {};
-    if (self && !self->input_hook) {
+    // Not once quiesced: stop removes the hook from another thread and must not race a new one.
+    if (self && !self->quiescing.load() && !self->input_hook) {
         self->input_hook = SetWindowsHookExW(WH_GETMESSAGE, input_message, nullptr, GetCurrentThreadId());
         log(*self, self->input_hook ? "AC7 input markers: game-thread message dequeue and controller poll installed" :
             "AC7 input markers refused: game-thread message hook failed");
@@ -2733,135 +2733,158 @@ void bind_detours()
     };
     for (const auto& binding : bindings) sites[binding.hook].detour = binding.detour;
 }
-// True when the named environment variable is set to anything but zero.
-bool environment_flag(const char* name)
+// Restores the TrueSky plugin patches and relays in their former order, forgetting each one as it
+// is restored. False, logged, keeps the rest for the next stop.
+bool restore_truesky(rsf_ac7_native_renderer& self)
 {
-    char text[8]{};
-    const auto length = GetEnvironmentVariableA(name, text, sizeof(text));
-    return length != 0 && length < sizeof(text) && text[0] != '0';
+    if (self.cloud_resolution_site) {
+        if (!write_render_code(self.cloud_resolution_site, full_cloud_divisor, native_cloud_divisor, sizeof(native_cloud_divisor))) {
+            log(self, "native TrueSky cloud-resolution patch could not restore; renderer retained"); return false;
+        }
+        self.cloud_resolution_site = nullptr;
+    }
+    if (self.cloud_motion_call.call) {
+        if (!restore_call_relay(self.cloud_motion_call)) {
+            log(self,"native TrueSky cloud motion relay could not restore; renderer retained"); return false;
+        }
+        rsf_ac7_cloud_depth_release(self.cloud_motion);
+    }
+    if (self.cloud_depth_call.call && !restore_call_relay(self.cloud_depth_call)) {
+        log(self,"native TrueSky depth dispatch could not restore; renderer retained"); return false;
+    }
+    if (self.cloud_depth_format_site) {
+        if (!write_render_code(self.cloud_depth_format_site,precise_cloud_depth_format,native_cloud_depth_format,sizeof(native_cloud_depth_format))) {
+            log(self,"native TrueSky depth format could not restore; renderer retained"); return false;
+        }
+        self.cloud_depth_format_site=nullptr;
+    }
+    if (self.cloud_depth_branch) {
+        constexpr unsigned char branch[]{0x77}, original[]{0x75};
+        if (!write_render_code(self.cloud_depth_branch,branch,original,1)) {
+            log(self,"native TrueSky depth pass selector could not restore; renderer retained"); return false;
+        }
+        self.cloud_depth_branch=nullptr;
+    }
+    self.cloud_depth_shader.Reset(); self.cloud_depth_device.Reset();
+    self.cloud_depth_ready.store(false);
+    return true;
+}
+// The native leaves of the renderer transaction (ac7_sites.h). The Rust owner (renderer.rs)
+// decides their order and refusals; each leaf touches only the renderer object, a MinHook record,
+// the module or the TrueSky plugin, and none throws.
+rsf_ac7_renderer_leaves renderer_leaves()
+{
+    using Renderer = rsf_ac7_native_renderer;
+    rsf_ac7_renderer_leaves leaves{};
+    leaves.code = code_leaves(nullptr, nullptr);
+    leaves.base = game_module();
+    leaves.installed = []() noexcept { return installed.load(); };
+    leaves.install = [](Renderer* self) noexcept { installed.store(self); };
+    leaves.create = [](const rsf_ac7_native_renderer_options* options) noexcept {
+        auto* self = new(std::nothrow) Renderer;
+        if (self) self->options = *options;
+        return self;
+    };
+    leaves.release = [](Renderer* self) noexcept { delete self; };
+    leaves.options = [](Renderer* self) noexcept -> const rsf_ac7_native_renderer_options* { return &self->options; };
+    leaves.patches = [](Renderer* self) noexcept { return &self->patches; };
+    leaves.active = [](Renderer* self) noexcept { return self->active.load(); };
+    leaves.set_active = [](Renderer* self, bool active) noexcept { self->active.store(active); };
+    leaves.quiescing = [](Renderer* self) noexcept { return self->quiescing.load(); };
+    leaves.set_quiescing = [](Renderer* self) noexcept { self->quiescing.store(true); };
+    leaves.scopes_create = [](Renderer* self, uint32_t capacity) noexcept {
+        return rsf_ac7_render_scopes_create_passes(self->options.session_id, capacity,
+            self->options.on_state, self->options.on_stage, self->options.user, &self->scopes) != 0;
+    };
+    leaves.scopes_quiesce = [](Renderer* self) noexcept { rsf_ac7_render_scopes_quiesce(self->scopes); };
+    leaves.scopes_idle = [](Renderer* self) noexcept { return rsf_ac7_render_scopes_idle(self->scopes) != 0; };
+    leaves.scopes_destroy = [](Renderer* self) noexcept {
+        if (!rsf_ac7_render_scopes_destroy(self->scopes)) return false;
+        self->scopes = nullptr;
+        return true;
+    };
+    leaves.hooks_initialize = []() noexcept {
+        const auto init = MH_Initialize();
+        if (init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) return false;
+        bind_detours();
+        return true;
+    };
+    leaves.hook_bind = [](uint32_t hook, unsigned char* target) noexcept {
+        if (hook < hook_count) sites[hook].target = target;
+    };
+    leaves.hook_create = [](uint32_t hook) noexcept {
+        return hook < hook_count && sites[hook].target &&
+            MH_CreateHook(sites[hook].target, sites[hook].detour, &sites[hook].original) == MH_OK;
+    };
+    leaves.hook_enable = [](uint32_t hook) noexcept {
+        return hook < hook_count && sites[hook].target && MH_EnableHook(sites[hook].target) == MH_OK;
+    };
+    // MH_CreateHook writes the trampoline only on success; a removal clears it again.
+    leaves.hook_created = [](uint32_t hook) noexcept {
+        return hook < hook_count && sites[hook].target && sites[hook].original;
+    };
+    // A null target is a hook that was never installed; MH_DisableHook(NULL) would disable them all.
+    leaves.hook_disable = [](uint32_t hook) noexcept {
+        if (hook >= hook_count || !sites[hook].target) return false;
+        const auto disabled = MH_DisableHook(sites[hook].target);
+        return disabled == MH_OK || disabled == MH_ERROR_DISABLED || disabled == MH_ERROR_NOT_CREATED;
+    };
+    leaves.hook_remove = [](uint32_t hook) noexcept {
+        if (hook >= hook_count || !sites[hook].target) return false;
+        const auto removed = MH_RemoveHook(sites[hook].target);
+        if (removed != MH_OK && removed != MH_ERROR_NOT_CREATED) return false;
+        sites[hook].original = nullptr;
+        return true;
+    };
+    leaves.pin = []() noexcept {
+        HMODULE pinned = nullptr;
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+            reinterpret_cast<LPCWSTR>(&rsf_ac7_native_renderer_prepare), &pinned);
+    };
+    leaves.drain = [](Renderer* self) noexcept { drain_retired(*self); };
+    leaves.outstanding = [](Renderer* self) noexcept {
+        return self->live_renderers.load() || self->live_window_tasks.load() || self->live_frame_tasks.load() ||
+            self->pending_uniforms.load() || self->pending_particle_bindings.load() || self->retired.load();
+    };
+    leaves.retired = [](Renderer* self) noexcept { return self->retired.load() != nullptr; };
+    leaves.input_unhook = [](Renderer* self) noexcept {
+        if (!self->input_hook) return true;
+        if (!UnhookWindowsHookEx(self->input_hook)) return false;
+        self->input_hook = nullptr;
+        return true;
+    };
+    leaves.controller_disable = []() noexcept { controller_facts.disable(); };
+    leaves.controller_remove = []() noexcept { return controller_facts.remove(); };
+    leaves.truesky_restore = [](Renderer* self) noexcept { return restore_truesky(*self); };
+    return leaves;
 }
 }
+// The five renderer calls. Their transaction (argument checks, admission, MinHook order, pinned
+// partial activation, activation patches and retirement) is owned by renderer.rs.
 extern "C" int rsf_ac7_native_renderer_prepare(const rsf_ac7_native_renderer_options* options,
     rsf_ac7_native_renderer** out) try
 {
-    if (!options || options->struct_size < sizeof(*options) || !out || !options->session_id || installed.load()) return 0;
-    *out = nullptr;
-    auto* base = game_module();
-    // Exact-build admission (sites.rs): every hooked entry site, the enlarged UI depth/view gates
-    // and the helper sites, compared before anything is allocated or hooked.
-    const auto admission = code_leaves(options->log, options->user);
-    if (!rsf_ac7_build_admit(base, &admission)) return 0;
-    auto* self = new(std::nothrow) rsf_ac7_native_renderer;
-    if (!self) return 0;
-    self->options = *options;
-    if (!rsf_ac7_render_scopes_create_passes(options->session_id,
-        options->pending_capacity ? options->pending_capacity : 256,
-        options->on_state, options->on_stage, options->user, &self->scopes)) {
-        delete self; return 0;
-    }
-    const auto init = MH_Initialize();
-    if (init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) {
-        rsf_ac7_render_scopes_quiesce(self->scopes); rsf_ac7_render_scopes_destroy(self->scopes); delete self; return 0;
-    }
-    // The evidence hooks run for every pixel uniform bind. Their sites are still verified above, but
-    // they are hooked only when the diagnostic is asked for (rsf_ac7_hook_wanted).
-    const bool diagnostics = (options->diagnostics & RSF_AC7_DIAG_PIXEL_BINDINGS) != 0 ||
-        environment_flag("RSF_AC7_PIXEL_DIAGNOSTICS");
-    bind_detours();
-    void* targets[hook_count]; void* detours[hook_count]; void** originals[hook_count];
-    for (uint32_t i = 0; i < hook_count; ++i) {
-        sites[i].target = rsf_ac7_hook_wanted(i, diagnostics) ? base + rsf_ac7_hook_rva(i) : nullptr;
-        targets[i] = sites[i].target; detours[i] = sites[i].detour; originals[i] = &sites[i].original;
-    }
-    installed.store(self, std::memory_order_release);
-    if (!rsf::ac7::install_hooks(targets, detours, originals, hook_count)) {
-        // Whatever the call made is already disabled and removed.
-        self->active.store(false);
-        if (guards_held(true)) {
-            // Partial activation can overlap an inactive forwarding call. Pin this failed module
-            // instead of unloading code that a native thread will return through.
-            HMODULE pinned = nullptr;
-            GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
-                reinterpret_cast<LPCWSTR>(&rsf_ac7_native_renderer_prepare), &pinned);
-            self->quiescing.store(true); rsf_ac7_render_scopes_quiesce(self->scopes);
-            *out = self; log(*self, "AC7 native preparation failed during a forwarding call; inactive module pinned until exit");
-            return 0;
-        }
-        installed.store(nullptr);
-        rsf_ac7_render_scopes_quiesce(self->scopes); rsf_ac7_render_scopes_destroy(self->scopes); delete self; return 0;
-    }
-    if (diagnostics) log(*self, "AC7 native renderer: pixel uniform binding diagnostics enabled");
-    log(*self, "AC7 native renderer prepared: owned view sizing, pre-tonemap SR graph node, downstream engine descriptors, owned widget raster targets and RHI leases; activation pending");
-    *out = self; return 1;
+    const auto leaves = renderer_leaves();
+    return rsf_ac7_renderer_prepare(options, out, &leaves) ? 1 : 0;
 }
 catch (...) { return 0; }
 extern "C" int rsf_ac7_native_renderer_start(rsf_ac7_native_renderer* self)
 {
-    if (!self || installed.load() != self || self->quiescing.load()) return 0;
-    // Scene precision, then temporal velocity (patches.rs). A refusal keeps what was applied owned
-    // until stop restores it.
-    const auto leaves = code_leaves(self->options.log, self->options.user);
-    if (!rsf_ac7_engine_patches_apply(&self->patches, game_module(), &leaves)) return 0;
-    self->active.store(true); return 1;
+    const auto leaves = renderer_leaves();
+    return rsf_ac7_renderer_start(self, &leaves) ? 1 : 0;
 }
 extern "C" int rsf_ac7_native_renderer_is_active(rsf_ac7_native_renderer* self)
-{ return self && installed.load(std::memory_order_acquire) == self && self->active.load(std::memory_order_acquire); }
+{
+    const auto leaves = renderer_leaves();
+    return rsf_ac7_renderer_is_active(self, &leaves) ? 1 : 0;
+}
 extern "C" void rsf_ac7_native_renderer_quiesce(rsf_ac7_native_renderer* self)
-{ if (self) { self->quiescing.store(true); self->active.store(false); controller_facts.disable(); rsf_ac7_render_scopes_quiesce(self->scopes); } }
+{
+    const auto leaves = renderer_leaves();
+    rsf_ac7_renderer_quiesce(self, &leaves);
+}
 extern "C" int rsf_ac7_native_renderer_stop(rsf_ac7_native_renderer* self)
 {
-    if (!self) return 1;
-    if (self->active.load()) return 0;
-    // Keep inactive CPU observers installed until their render-thread-only pool refs retire.
-    // Disabling first would remove the only owner that can drain an asynchronous RHI release.
-    drain_retired(*self);
-    if (guards_held(false) || self->live_renderers.load() || self->live_window_tasks.load() || self->live_frame_tasks.load() || self->pending_uniforms.load() || self->pending_particle_bindings.load() || self->retired.load() || !rsf_ac7_render_scopes_idle(self->scopes)) return 0;
-    if (self->input_hook) {
-        if (!UnhookWindowsHookEx(self->input_hook)) return 0;
-        self->input_hook = nullptr;
-    }
-    // A null target is a hook that was never installed; MH_DisableHook(NULL) would disable them all.
-    for (const auto& site : sites) if (site.target) MH_DisableHook(site.target);
-    if (guards_held(true) || !controller_facts.remove()) return 0;
-    // Temporal velocity, then scene precision (patches.rs); a refusal is logged there.
-    const auto leaves = code_leaves(self->options.log, self->options.user);
-    if (!rsf_ac7_engine_patches_restore(&self->patches, &leaves)) return 0;
-    if (self->cloud_resolution_site) {
-        if (!write_render_code(self->cloud_resolution_site, full_cloud_divisor, native_cloud_divisor, sizeof(native_cloud_divisor))) {
-            log(*self, "native TrueSky cloud-resolution patch could not restore; renderer retained"); return 0;
-        }
-        self->cloud_resolution_site = nullptr;
-    }
-    if (self->cloud_motion_call.call) {
-        if (!restore_call_relay(self->cloud_motion_call)) {
-            log(*self,"native TrueSky cloud motion relay could not restore; renderer retained"); return 0;
-        }
-        rsf_ac7_cloud_depth_release(self->cloud_motion);
-    }
-    if (self->cloud_depth_call.call && !restore_call_relay(self->cloud_depth_call)) {
-        log(*self,"native TrueSky depth dispatch could not restore; renderer retained"); return 0;
-    }
-    if (self->cloud_depth_format_site) {
-        if (!write_render_code(self->cloud_depth_format_site,precise_cloud_depth_format,native_cloud_depth_format,sizeof(native_cloud_depth_format))) {
-            log(*self,"native TrueSky depth format could not restore; renderer retained"); return 0;
-        }
-        self->cloud_depth_format_site=nullptr;
-    }
-    if (self->cloud_depth_branch) {
-        constexpr unsigned char branch[]{0x77}, original[]{0x75};
-        if (!write_render_code(self->cloud_depth_branch,branch,original,1)) {
-            log(*self,"native TrueSky depth pass selector could not restore; renderer retained"); return 0;
-        }
-        self->cloud_depth_branch=nullptr;
-    }
-    self->cloud_depth_shader.Reset(); self->cloud_depth_device.Reset();
-    self->cloud_depth_ready.store(false);
-    if (!rsf_ac7_render_scopes_destroy(self->scopes)) return 0;
-    self->scopes = nullptr;
-    drain_retired(*self);
-    if (self->retired.load()) return 0;
-    void* targets[hook_count];
-    for (uint32_t i = 0; i < hook_count; ++i) targets[i] = sites[i].target;
-    rsf::ac7::remove_hooks(targets, hook_count);
-    installed.store(nullptr); delete self; return 1;
+    const auto leaves = renderer_leaves();
+    return rsf_ac7_renderer_stop(self, &leaves) ? 1 : 0;
 }

@@ -882,5 +882,14 @@
     "remaining": "TrueSky plugin sites, relays and device checks; MinHook install/removal, pinned partial activation and the rest of stop; all detours, engine relays and layouts; carriers. See evidence",
     "validation": "Source review only; rustfmt --edition 2024 check, cargo metadata --locked --offline, JSON parse, git diff --check and a byte comparison of the moved tables. bindgen-cli absent, sites_abi.rs hand-mirrored with layout asserts. Not compiled, linked, Cargo-tested, Clippy-checked, CTest-run, deployed or game-tested",
     "evidence": "docs/research/rust-ac7-native-sites.md"
+  },
+  "rust_renderer_transaction": {
+    "date": "2026-11-21",
+    "owner": "Crate rsf-ac7 owns the native renderer transaction (renderer.rs): prepare argument checks, admission before allocation, scope capacity default 256, MinHook initialise/bind/create/enable order, pinned partial activation, start patch order, quiesce, stop retirement admission and order. native_renderer.cpp keeps the five exported calls as wrappers and lends rsf_ac7_renderer_leaves: renderer object and fields, MinHook per-hook leaves, pinning, scopes, drain, input hook, controller facts, TrueSky restores",
+    "preserved": "Five-call renderer C ABI and results, every RVA, byte and hook site, admission and refusal texts, diagnostics gating, start order scene precision then velocity, stop order input hook, hook disable, controller facts, velocity, scene precision, TrueSky, scopes, drain, hook removal, TrueSky handling, both carrier links",
+    "changed": "A failed hook installation disables what it created and removes it only when no hook body is running, keeping trampolines while a pinned forwarding call may still use them; removal follows created hooks and clears their trampoline; the engine tick no longer installs the input hook once quiesced, so stop cannot race a new one",
+    "remaining": "TrueSky plugin sites, relays and device checks; all detours, engine relays and layouts; render scope library and other AC7 owners; carriers. See evidence",
+    "validation": "Source review only; rustfmt --edition 2024 check, cargo metadata --locked --offline, JSON parse and git diff --check. bindgen-cli absent, sites_abi.rs hand-mirrored with layout asserts. Not compiled, linked, Cargo-tested, Clippy-checked, CTest-run, deployed or game-tested",
+    "evidence": "docs/research/rust-ac7-renderer-transaction.md"
   }
 }

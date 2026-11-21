@@ -2,7 +2,9 @@
 
 #![allow(non_camel_case_types)]
 #![allow(dead_code)]
-use crate::platform_abi::rsf_ac7_renderer_log_fn;
+use crate::platform_abi::{
+    rsf_ac7_native_renderer, rsf_ac7_native_renderer_options, rsf_ac7_renderer_log_fn,
+};
 
 pub const RSF_AC7_ROLE_SR: u32 = 1;
 pub const RSF_AC7_ROLE_TONEMAP: u32 = 2;
@@ -90,4 +92,142 @@ const _: () = {
         [::core::mem::offset_of!(rsf_ac7_code_patches, velocity_applied) - 8usize];
     ["Offset of field: rsf_ac7_code_patches::scene_precision_site"]
         [::core::mem::offset_of!(rsf_ac7_code_patches, scene_precision_site) - 16usize];
+};
+#[repr(C)]
+pub struct rsf_ac7_renderer_leaves {
+    pub code: rsf_ac7_code_leaves,
+    pub base: *mut ::core::ffi::c_uchar,
+    pub installed: ::core::option::Option<unsafe extern "C" fn() -> *mut rsf_ac7_native_renderer>,
+    pub install:
+        ::core::option::Option<unsafe extern "C" fn(renderer: *mut rsf_ac7_native_renderer)>,
+    pub create: ::core::option::Option<
+        unsafe extern "C" fn(
+            options: *const rsf_ac7_native_renderer_options,
+        ) -> *mut rsf_ac7_native_renderer,
+    >,
+    pub release:
+        ::core::option::Option<unsafe extern "C" fn(renderer: *mut rsf_ac7_native_renderer)>,
+    pub options: ::core::option::Option<
+        unsafe extern "C" fn(
+            renderer: *mut rsf_ac7_native_renderer,
+        ) -> *const rsf_ac7_native_renderer_options,
+    >,
+    pub patches: ::core::option::Option<
+        unsafe extern "C" fn(renderer: *mut rsf_ac7_native_renderer) -> *mut rsf_ac7_code_patches,
+    >,
+    pub active: ::core::option::Option<
+        unsafe extern "C" fn(renderer: *mut rsf_ac7_native_renderer) -> bool,
+    >,
+    pub set_active: ::core::option::Option<
+        unsafe extern "C" fn(renderer: *mut rsf_ac7_native_renderer, active: bool),
+    >,
+    pub quiescing: ::core::option::Option<
+        unsafe extern "C" fn(renderer: *mut rsf_ac7_native_renderer) -> bool,
+    >,
+    pub set_quiescing:
+        ::core::option::Option<unsafe extern "C" fn(renderer: *mut rsf_ac7_native_renderer)>,
+    pub scopes_create: ::core::option::Option<
+        unsafe extern "C" fn(renderer: *mut rsf_ac7_native_renderer, capacity: u32) -> bool,
+    >,
+    pub scopes_quiesce:
+        ::core::option::Option<unsafe extern "C" fn(renderer: *mut rsf_ac7_native_renderer)>,
+    pub scopes_idle: ::core::option::Option<
+        unsafe extern "C" fn(renderer: *mut rsf_ac7_native_renderer) -> bool,
+    >,
+    pub scopes_destroy: ::core::option::Option<
+        unsafe extern "C" fn(renderer: *mut rsf_ac7_native_renderer) -> bool,
+    >,
+    pub hooks_initialize: ::core::option::Option<unsafe extern "C" fn() -> bool>,
+    pub hook_bind:
+        ::core::option::Option<unsafe extern "C" fn(hook: u32, target: *mut ::core::ffi::c_uchar)>,
+    pub hook_create: ::core::option::Option<unsafe extern "C" fn(hook: u32) -> bool>,
+    pub hook_enable: ::core::option::Option<unsafe extern "C" fn(hook: u32) -> bool>,
+    pub hook_created: ::core::option::Option<unsafe extern "C" fn(hook: u32) -> bool>,
+    pub hook_disable: ::core::option::Option<unsafe extern "C" fn(hook: u32) -> bool>,
+    pub hook_remove: ::core::option::Option<unsafe extern "C" fn(hook: u32) -> bool>,
+    pub pin: ::core::option::Option<unsafe extern "C" fn()>,
+    pub drain: ::core::option::Option<unsafe extern "C" fn(renderer: *mut rsf_ac7_native_renderer)>,
+    pub outstanding: ::core::option::Option<
+        unsafe extern "C" fn(renderer: *mut rsf_ac7_native_renderer) -> bool,
+    >,
+    pub retired: ::core::option::Option<
+        unsafe extern "C" fn(renderer: *mut rsf_ac7_native_renderer) -> bool,
+    >,
+    pub input_unhook: ::core::option::Option<
+        unsafe extern "C" fn(renderer: *mut rsf_ac7_native_renderer) -> bool,
+    >,
+    pub controller_disable: ::core::option::Option<unsafe extern "C" fn()>,
+    pub controller_remove: ::core::option::Option<unsafe extern "C" fn() -> bool>,
+    pub truesky_restore: ::core::option::Option<
+        unsafe extern "C" fn(renderer: *mut rsf_ac7_native_renderer) -> bool,
+    >,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_ac7_renderer_leaves"]
+        [::core::mem::size_of::<rsf_ac7_renderer_leaves>() - 272usize];
+    ["Alignment of rsf_ac7_renderer_leaves"]
+        [::core::mem::align_of::<rsf_ac7_renderer_leaves>() - 8usize];
+    ["Offset of field: rsf_ac7_renderer_leaves::code"]
+        [::core::mem::offset_of!(rsf_ac7_renderer_leaves, code) - 0usize];
+    ["Offset of field: rsf_ac7_renderer_leaves::base"]
+        [::core::mem::offset_of!(rsf_ac7_renderer_leaves, base) - 32usize];
+    ["Offset of field: rsf_ac7_renderer_leaves::installed"]
+        [::core::mem::offset_of!(rsf_ac7_renderer_leaves, installed) - 40usize];
+    ["Offset of field: rsf_ac7_renderer_leaves::install"]
+        [::core::mem::offset_of!(rsf_ac7_renderer_leaves, install) - 48usize];
+    ["Offset of field: rsf_ac7_renderer_leaves::create"]
+        [::core::mem::offset_of!(rsf_ac7_renderer_leaves, create) - 56usize];
+    ["Offset of field: rsf_ac7_renderer_leaves::release"]
+        [::core::mem::offset_of!(rsf_ac7_renderer_leaves, release) - 64usize];
+    ["Offset of field: rsf_ac7_renderer_leaves::options"]
+        [::core::mem::offset_of!(rsf_ac7_renderer_leaves, options) - 72usize];
+    ["Offset of field: rsf_ac7_renderer_leaves::patches"]
+        [::core::mem::offset_of!(rsf_ac7_renderer_leaves, patches) - 80usize];
+    ["Offset of field: rsf_ac7_renderer_leaves::active"]
+        [::core::mem::offset_of!(rsf_ac7_renderer_leaves, active) - 88usize];
+    ["Offset of field: rsf_ac7_renderer_leaves::set_active"]
+        [::core::mem::offset_of!(rsf_ac7_renderer_leaves, set_active) - 96usize];
+    ["Offset of field: rsf_ac7_renderer_leaves::quiescing"]
+        [::core::mem::offset_of!(rsf_ac7_renderer_leaves, quiescing) - 104usize];
+    ["Offset of field: rsf_ac7_renderer_leaves::set_quiescing"]
+        [::core::mem::offset_of!(rsf_ac7_renderer_leaves, set_quiescing) - 112usize];
+    ["Offset of field: rsf_ac7_renderer_leaves::scopes_create"]
+        [::core::mem::offset_of!(rsf_ac7_renderer_leaves, scopes_create) - 120usize];
+    ["Offset of field: rsf_ac7_renderer_leaves::scopes_quiesce"]
+        [::core::mem::offset_of!(rsf_ac7_renderer_leaves, scopes_quiesce) - 128usize];
+    ["Offset of field: rsf_ac7_renderer_leaves::scopes_idle"]
+        [::core::mem::offset_of!(rsf_ac7_renderer_leaves, scopes_idle) - 136usize];
+    ["Offset of field: rsf_ac7_renderer_leaves::scopes_destroy"]
+        [::core::mem::offset_of!(rsf_ac7_renderer_leaves, scopes_destroy) - 144usize];
+    ["Offset of field: rsf_ac7_renderer_leaves::hooks_initialize"]
+        [::core::mem::offset_of!(rsf_ac7_renderer_leaves, hooks_initialize) - 152usize];
+    ["Offset of field: rsf_ac7_renderer_leaves::hook_bind"]
+        [::core::mem::offset_of!(rsf_ac7_renderer_leaves, hook_bind) - 160usize];
+    ["Offset of field: rsf_ac7_renderer_leaves::hook_create"]
+        [::core::mem::offset_of!(rsf_ac7_renderer_leaves, hook_create) - 168usize];
+    ["Offset of field: rsf_ac7_renderer_leaves::hook_enable"]
+        [::core::mem::offset_of!(rsf_ac7_renderer_leaves, hook_enable) - 176usize];
+    ["Offset of field: rsf_ac7_renderer_leaves::hook_created"]
+        [::core::mem::offset_of!(rsf_ac7_renderer_leaves, hook_created) - 184usize];
+    ["Offset of field: rsf_ac7_renderer_leaves::hook_disable"]
+        [::core::mem::offset_of!(rsf_ac7_renderer_leaves, hook_disable) - 192usize];
+    ["Offset of field: rsf_ac7_renderer_leaves::hook_remove"]
+        [::core::mem::offset_of!(rsf_ac7_renderer_leaves, hook_remove) - 200usize];
+    ["Offset of field: rsf_ac7_renderer_leaves::pin"]
+        [::core::mem::offset_of!(rsf_ac7_renderer_leaves, pin) - 208usize];
+    ["Offset of field: rsf_ac7_renderer_leaves::drain"]
+        [::core::mem::offset_of!(rsf_ac7_renderer_leaves, drain) - 216usize];
+    ["Offset of field: rsf_ac7_renderer_leaves::outstanding"]
+        [::core::mem::offset_of!(rsf_ac7_renderer_leaves, outstanding) - 224usize];
+    ["Offset of field: rsf_ac7_renderer_leaves::retired"]
+        [::core::mem::offset_of!(rsf_ac7_renderer_leaves, retired) - 232usize];
+    ["Offset of field: rsf_ac7_renderer_leaves::input_unhook"]
+        [::core::mem::offset_of!(rsf_ac7_renderer_leaves, input_unhook) - 240usize];
+    ["Offset of field: rsf_ac7_renderer_leaves::controller_disable"]
+        [::core::mem::offset_of!(rsf_ac7_renderer_leaves, controller_disable) - 248usize];
+    ["Offset of field: rsf_ac7_renderer_leaves::controller_remove"]
+        [::core::mem::offset_of!(rsf_ac7_renderer_leaves, controller_remove) - 256usize];
+    ["Offset of field: rsf_ac7_renderer_leaves::truesky_restore"]
+        [::core::mem::offset_of!(rsf_ac7_renderer_leaves, truesky_restore) - 264usize];
 };

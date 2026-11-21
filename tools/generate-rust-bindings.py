@@ -90,11 +90,12 @@ generate("games/ac7/src/platform_abi.rs", "games/ac7/src/ac7_platform.h",
           "use rsf_game_sys::{rsf_game_cpu_event_fn, rsf_game_render_config_fn, rsf_game_render_pass};",
           "--with-derive-custom-struct", "rsf_ac7_native_renderer_options=Copy,Clone"])
 generate("games/ac7/src/sites_abi.rs", "games/ac7/src/ac7_sites.h",
-         "rsf_ac7_code_(leaves|patch|patches)",
+         "rsf_ac7_(code_(leaves|patch|patches)|renderer_leaves)",
          "RSF_AC7_(ROLE_.*|HOOK_SITE_COUNT|PROCESS_HOOKS|EVIDENCE_(FIRST|LAST)|SITE_BYTES|VELOCITY_PATCHES|GUARD_.*)",
          ["-Isdk/game/include", "-Igames/ac7/include"],
          ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]",
-          "--raw-line", "use crate::platform_abi::rsf_ac7_renderer_log_fn;"])
+          "--raw-line", "use crate::platform_abi::{rsf_ac7_native_renderer, rsf_ac7_native_renderer_options, "
+          "rsf_ac7_renderer_log_fn};"])
 generate("games/minecraft/native/platform_abi.rs", "games/minecraft/native/minecraft_platform.h",
          "rsf_(minecraft_(platform|configuration|message_fn)|gl_pipeline(_(setup|options|surfaces|status))?|"
          "native_fg_(options|status)|fg_status|sharpening_options|native_(latency_status|cpu_counters)|"
