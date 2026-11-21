@@ -191,6 +191,7 @@ fn packed_pitch(pixels: &Pixels, pixel_bytes: u32) -> Option<u32> {
     }
     let source_bytes = u64::from(pixels.row_pitch) * u64::from(pixels.height - 1) + u64::from(row);
     (source_bytes <= pixels.data_size
+        && source_bytes <= isize::MAX as u64
         && u64::from(row) * u64::from(pixels.height) <= MAX_IMAGE_BYTES)
         .then_some(row)
 }
@@ -220,19 +221,24 @@ unsafe extern "C" fn rsf_core_dump_pixels(
     };
     let view = preview_view(work.view, pixels.format, true);
     let mut encoding = Encoding::INVALID;
-    if let Some(row) = packed_pitch(pixels, unsafe { (platform().pixel_bytes)(pixels.format) })
+    let platform = platform();
+    if let Some(row) = packed_pitch(pixels, unsafe { (platform.pixel_bytes)(pixels.format) })
         && let Ok(prefix) = prefix(&work.prefix)
     {
-        unsafe {
-            (platform().encode_pixels)(
-                pixels,
-                row,
-                api,
-                native_format,
-                &work.options(&prefix, view),
-                &mut encoding,
-            )
-        };
+        let rows = (0..pixels.height).map(|y| {
+            let offset = y as usize * pixels.row_pitch as usize;
+            // Read only each row's payload. Padding can be uninitialized.
+            unsafe {
+                std::slice::from_raw_parts(pixels.data.cast::<u8>().add(offset), row as usize)
+            }
+        });
+        encoding.raw =
+            match metadata::raw_pixels(&work.prefix, pixels, rows, row, api, native_format) {
+                Ok(()) => 0,
+                Err(_) => WRITE_FAILED,
+            };
+        encoding.preview =
+            unsafe { (platform.preview_pixels)(pixels, &work.options(&prefix, view)) };
     }
     let result = ImageResult {
         surface: Surface {

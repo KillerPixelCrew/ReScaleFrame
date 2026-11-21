@@ -7,8 +7,6 @@
 #include <dxgi.h>
 #include <wrl/client.h>
 #include <cstring>
-#include <filesystem>
-#include <fstream>
 
 namespace rsf { uint32_t texture_pixel_bytes(DXGI_FORMAT format); }
 
@@ -90,30 +88,15 @@ void encode_texture(void* context, void* source, const rsf_texture_dump_options*
 
 uint32_t pixel_bytes(uint32_t format) { return rsf::texture_pixel_bytes(DXGI_FORMAT(format)); }
 
-void encode_pixels(const rsf_dump_pixels* pixels, uint32_t row, uint32_t api, uint32_t native_format,
-    const rsf_texture_dump_options* options, rsf_dump_encoding* result) try
+int32_t preview_pixels(const rsf_dump_pixels* pixels, const rsf_texture_dump_options* options)
 {
-    const auto* utf8 = reinterpret_cast<const char8_t*>(options->output_prefix_utf8);
-    const std::u8string prefix(utf8);
-    std::ofstream raw(std::filesystem::path(prefix + u8".bin"), std::ios::binary);
-    for (uint32_t y = 0; y < pixels->height; ++y)
-        raw.write(static_cast<const char*>(pixels->data) + size_t(y) * pixels->row_pitch, row);
-    raw.close();
-    result->raw = raw ? RSF_TEXTURE_OK : RSF_TEXTURE_ERROR_WRITE_FAILED;
-
-    std::ofstream metadata(std::filesystem::path(prefix + u8"_raw.json"), std::ios::binary);
-    metadata << "{\"width\":" << pixels->width << ",\"height\":" << pixels->height << ",\"format\":" << pixels->format
-        << ",\"native_api\":" << api << ",\"native_format\":" << native_format << ",\"row_pitch\":" << row
-        << ",\"source_row_pitch\":" << pixels->row_pitch << ",\"bytes\":" << uint64_t(row) * pixels->height << "}\n";
-    metadata.close();
-    if (!metadata) result->raw = RSF_TEXTURE_ERROR_WRITE_FAILED;
-    result->preview = rsf_dump_pixels_png(pixels, options, nullptr);
-} catch (...) { *result = {RSF_TEXTURE_ERROR_WRITE_FAILED, RSF_TEXTURE_ERROR_WRITE_FAILED}; }
+    return rsf_dump_pixels_png(pixels, options, nullptr);
+}
 
 void bind_platform()
 {
     static const rsf_dump_platform platform{sizeof(platform), read_clock, read_local_time, executable_sha256,
-        open_texture, backbuffer, encode_texture, pixel_bytes, encode_pixels, rsf_game_depth_domains_requested};
+        open_texture, backbuffer, encode_texture, pixel_bytes, preview_pixels, rsf_game_depth_domains_requested};
     static const bool bound = (rsf_core_dump_bind_platform(&platform), true);
     (void)bound;
 }

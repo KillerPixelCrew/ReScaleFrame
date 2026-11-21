@@ -126,8 +126,7 @@ struct Platform {
     encode_texture:
         unsafe extern "C" fn(*mut c_void, *mut c_void, *const TextureOptions, u32, *mut Encoding),
     pixel_bytes: unsafe extern "C" fn(u32) -> u32,
-    encode_pixels:
-        unsafe extern "C" fn(*const Pixels, u32, u32, u32, *const TextureOptions, *mut Encoding),
+    preview_pixels: unsafe extern "C" fn(*const Pixels, *const TextureOptions) -> i32,
     depth_domains_requested: unsafe extern "C" fn(*const rsf_game_depth_domains) -> u32,
 }
 

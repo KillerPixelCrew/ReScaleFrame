@@ -76,6 +76,8 @@ int main(int argc,char** argv) {
     if (!ticket || rsf_input_dump_reserve(&frame,"final_color","duplicate",RSF_DUMP_VIEW_RAW,1)) return 10;
     const auto first=rsf_input_dump_gpu_submission(&frame);
     if (ticket!=rsf_input_dump_reserve(&frame,"later","delayed input",RSF_DUMP_VIEW_RAW,1)) return 12;
+    if (ticket!=rsf_input_dump_reserve(&frame,"blocked_raw","occupied raw path",RSF_DUMP_VIEW_RAW,1) ||
+        ticket!=rsf_input_dump_reserve(&frame,"blocked_metadata","occupied metadata path",RSF_DUMP_VIEW_RAW,1)) return 25;
     int first_device=0, other_device=0;
     rsf_input_dump_gpu_completed(first,3,&first_device);
     if (!rsf_input_dump_gpu_ready(ticket,"final_color",3,&first_device) ||
@@ -95,6 +97,16 @@ int main(int argc,char** argv) {
 
     const std::array<uint8_t,12> source{1,2,3,4,0,0,0,0,5,6,7,8};
     const rsf_dump_pixels pixels{sizeof(pixels),1,2,DXGI_FORMAT_R8G8B8A8_UNORM,8,source.size(),source.data()};
+    fs::create_directory(later_bundle/"blocked_raw.bin");
+    if (rsf_input_dump_pixels(ticket,"blocked_raw",&pixels,3,37) ||
+        fs::exists(later_bundle/"blocked_raw_raw.json") ||
+        !fs::is_directory(later_bundle/"blocked_raw.bin") ||
+        !fs::exists(later_bundle/"blocked_raw.png")) return 26;
+    fs::create_directory(later_bundle/"blocked_metadata_raw.json");
+    if (rsf_input_dump_pixels(ticket,"blocked_metadata",&pixels,3,37) ||
+        fs::exists(later_bundle/"blocked_metadata.bin") ||
+        !fs::is_directory(later_bundle/"blocked_metadata_raw.json") ||
+        !fs::exists(later_bundle/"blocked_metadata.png")) return 27;
     if (!rsf_input_dump_pixels(ticket,"final_color",&pixels,3,37) ||
         rsf_input_dump_pixels(ticket,"final_color",&pixels,3,37) || !rsf_input_dump_requested()) return 16;
     rsf_input_dump_failed(ticket,"later",RSF_TEXTURE_ERROR_STAGING_FAILED);
@@ -102,7 +114,8 @@ int main(int argc,char** argv) {
     if (rsf_input_dump_requested() ||
         contents(later_bundle/"manifest.json").find("\"status\":\"partial\"")==std::string::npos ||
         contents(later_bundle/"final_color.bin")!=std::string("\x01\x02\x03\x04\x05\x06\x07\x08",8) ||
-        contents(later_bundle/"final_color_raw.json").find("\"native_api\":3,\"native_format\":37,\"row_pitch\":4,\"source_row_pitch\":8")==std::string::npos ||
+        contents(later_bundle/"final_color_raw.json")!="{\"width\":1,\"height\":2,\"format\":28,\"native_api\":3,"
+            "\"native_format\":37,\"row_pitch\":4,\"source_row_pitch\":8,\"bytes\":8}\n" ||
         preview.size()<8 || preview.substr(1,3)!="PNG") return 17;
 
     rsf_input_dump_request();

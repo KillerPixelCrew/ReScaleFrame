@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
-use super::{Capture, Image, ImageState, RAW};
+use super::{Capture, Image, ImageState, Pixels, RAW};
 use crate::render_abi::{rsf_dlss_frame, rsf_fg_frame, rsf_sr_frame};
 use rsf_game_sys::{
     RSF_FRAME_FLAG_AMBIGUOUS_ID, rsf_camera_frame, rsf_frame_record, rsf_game_render_pass,
 };
 use std::fmt::{self, Display, Write};
 use std::fs;
-use std::io;
+use std::io::{self, BufWriter, Write as _};
 use std::path::Path;
 
 const EXPECTED: &[&str] = &[
@@ -149,6 +149,57 @@ impl Display for Object {
         f.write_str(&self.0)?;
         f.write_char('}')
     }
+}
+
+fn write_capture_file(
+    path: &Path,
+    write: impl FnOnce(&mut BufWriter<fs::File>) -> io::Result<()>,
+) -> io::Result<()> {
+    let mut file = BufWriter::new(fs::File::create_new(path)?);
+    let result = write(&mut file).and_then(|()| file.flush());
+    drop(file);
+    if result.is_err() {
+        let _ = fs::remove_file(path);
+    }
+    result
+}
+
+pub(super) fn raw_pixels<'a>(
+    prefix: &Path,
+    pixels: &Pixels,
+    rows: impl Iterator<Item = &'a [u8]>,
+    row: u32,
+    api: u32,
+    native_format: u32,
+) -> io::Result<()> {
+    let with_suffix = |suffix: &str| {
+        let mut path = prefix.as_os_str().to_owned();
+        path.push(suffix);
+        path
+    };
+    let raw = with_suffix(".bin");
+    write_capture_file(Path::new(&raw), |file| {
+        for source in rows {
+            file.write_all(source)?;
+        }
+        Ok(())
+    })?;
+
+    let mut metadata = Object::new();
+    metadata.field("width", pixels.width);
+    metadata.field("height", pixels.height);
+    metadata.field("format", pixels.format);
+    metadata.field("native_api", api);
+    metadata.field("native_format", native_format);
+    metadata.field("row_pitch", row);
+    metadata.field("source_row_pitch", pixels.row_pitch);
+    metadata.field("bytes", u64::from(row) * u64::from(pixels.height));
+    let sidecar = with_suffix("_raw.json");
+    let result = write_capture_file(Path::new(&sidecar), |file| writeln!(file, "{metadata}"));
+    if result.is_err() {
+        let _ = fs::remove_file(raw);
+    }
+    result
 }
 
 fn image_metadata(image: &Image) -> Object {

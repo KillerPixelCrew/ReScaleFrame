@@ -4,6 +4,22 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The shared capture owner now writes packed CPU readback rows and their raw
+JSON sidecars in Rust. The native leaf still encodes the PNG preview.
+The C ABI fixture reproduced a stray sidecar on the previous writer by
+blocking the raw path with a directory. The new writer creates the
+sidecar after the raw write succeeds and removes its raw file if the
+sidecar write fails. Existing files and directories are preserved, and
+the PNG preview is still attempted. The success case matched the
+existing byte layout and JSON exactly, including the source row pitch.
+
+MSVC Release passed six CPU and ABI contracts, including the capture
+metadata fixture and both Vulkan readback CPU fixtures. Runtime, AC7,
+Loader and Minecraft matched every baseline export name and ordinal.
+All 413 locked Rust tests, formatting and Clippy passed on Rust 1.94.1.
+The D3D12 readback fixture linked. Device and game behavior for this
+change remain unverified.
+
 The shared D3D11 SR pipeline now admits and publishes surfaces in Rust.
 Resource shutdown calls the existing Rust owners directly in the same
 release order. Shutdown closes surface admission before clearing the
