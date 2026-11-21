@@ -295,6 +295,14 @@ draw. The D3D11 shader, bindings and dispatch remain unchanged. The
 regression case and device and game verification remain open.
 [TrueSky relay evidence](research/rust-ac7-truesky-relays.md)
 
+AC7's contact-shadow shader rewrite now runs in Rust. The Runtime shader
+patch service, velocity shader rehash and contact-shadow rewrite share
+one DXBC checksum implementation. The Rust port preserves the hash
+gate, shader tokens and engine trailer. Native callers still supply
+SHA-256 and output storage. Shader replay and device verification
+remain open.
+[Contact-shadow evidence](research/ac7-lighting-shadow-20261004.md)
+
 ## Rust orchestrator and first Anomaly port
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.

@@ -19,6 +19,7 @@
 //! patches, window acceptance and D3D11 bridge are not part of this crate yet.
 mod cloud_depth;
 mod cloud_depth_abi;
+mod contact_shadow;
 mod guards;
 mod lifecycle;
 mod patches;
@@ -28,6 +29,8 @@ mod renderer;
 mod scene_color;
 mod scene_color_abi;
 mod scope_abi;
+#[path = "../../../runtime/graphics/src/shader_hash.rs"]
+mod shader_hash;
 mod sites;
 mod sites_abi;
 mod truesky;

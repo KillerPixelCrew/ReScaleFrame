@@ -205,14 +205,5 @@ unsafe extern "C" fn rsf_ui_shader_hash(bytecode: *const c_void, bytes: u32) -> 
         return 0;
     }
     let data = unsafe { std::slice::from_raw_parts(bytecode.cast::<u8>(), bytes as usize) };
-    // Reflected Castagnoli CRC32C. The value is used as a persisted shader name.
-    let mut crc = u32::MAX;
-    for &byte in data {
-        crc ^= u32::from(byte);
-        for _ in 0..8 {
-            let mask = 0_u32.wrapping_sub(crc & 1);
-            crc = (crc >> 1) ^ (0x82f63b78 & mask);
-        }
-    }
-    !crc
+    crate::shader_hash::crc32c(data)
 }
