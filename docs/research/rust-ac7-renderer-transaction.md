@@ -108,7 +108,8 @@ checks (the sites, fingerprint and their transaction later moved to `truesky.rs`
 scopes, beam/trail tagging, Slate leases, widget targets and view sizing; the renderer object
 itself.
 
-Elsewhere: `render_scope.cpp`, `view_uniforms.cpp`, `ui_rules.cpp`, `scene_color.cpp`,
+Elsewhere: `render_scope.cpp` (its owner later moved to `render_scope.rs`, see
+[rust-ac7-render-scopes.md](rust-ac7-render-scopes.md)), `view_uniforms.cpp`, `ui_rules.cpp`, `scene_color.cpp`,
 `motion_capture.cpp` (with `ac7_hooks.h`), `velocity_pass.cpp`, `velocity_shader.cpp`,
 `truesky_depth.cpp`, `truesky_motion.cpp`, `contact_shadow.cpp`, and in `loader/proxy` both
 DirectInput carriers (`dinput8_proxy.c` with the decryption wait and carrier engine patches,

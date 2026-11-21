@@ -118,6 +118,11 @@ The TrueSky plugin patches and call relays (sites, bytes, effect fingerprint, in
 retirement) are `src/truesky.rs`; the relay handlers with their D3D11 checks and shaders, the
 module lookup and relay memory stay native. See
 [the TrueSky migration note](../../docs/research/rust-ac7-truesky-relays.md).
+The queued RHI render scopes behind `ac7_render_scope.h` (admission, identity, serials, the
+begin/end stack and callbacks, lease order, the native list append and the engine-called marker
+function, quiesce/idle/destroy) are `src/render_scope.rs`; `src/render_scope.cpp` keeps the two
+create calls and the exception leaves that call consumer code. See
+[the render scope migration note](../../docs/research/rust-ac7-render-scopes.md).
 
 The view reader handles the game's 4096-byte uniform buffer. Scene motion needs UE encoding
 removal, and the engine's camera transform supplies camera motion. The native integration sizes the

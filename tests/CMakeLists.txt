@@ -486,7 +486,8 @@ set_target_properties(rsf_fg_present_bridge_test PROPERTIES
 add_test(NAME shared_fg_present_bridge COMMAND rsf_fg_present_bridge_test)
 set_tests_properties(shared_fg_present_bridge PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 target_compile_definitions(rsf_d3d11_present_bridge_test PRIVATE RSF_STREAMLINE_HOST_BUILD)
-target_link_libraries(rsf_d3d11_present_bridge_test PRIVATE rsf_orchestrator_core ReScaleFrame::AC7RenderScope rsf_build_options)
+# The render scope calls other than create are exported by the rsf-ac7 crate (render_scope.rs).
+target_link_libraries(rsf_d3d11_present_bridge_test PRIVATE rsf_orchestrator_core ReScaleFrame::AC7RenderScope rsf_ac7_rust rsf_build_options)
 # Graphics fixtures must not load game-facing proxy DLLs from the shared artifact directory.
 set_target_properties(rsf_d3d11_present_bridge_test PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/fixtures/fg/$<CONFIG>")
@@ -581,7 +582,8 @@ add_test(NAME render_links COMMAND rsf_render_links_test)
 set_tests_properties(render_links PROPERTIES TIMEOUT 120)
 
 add_executable(rsf_ac7_render_scope_test ac7_render_scope.cpp)
-target_link_libraries(rsf_ac7_render_scope_test PRIVATE ReScaleFrame::AC7RenderScope rsf_build_options)
+# render_scope.cpp keeps create; the rsf-ac7 crate owns and exports the rest (render_scope.rs).
+target_link_libraries(rsf_ac7_render_scope_test PRIVATE ReScaleFrame::AC7RenderScope rsf_ac7_rust rsf_build_options)
 add_test(NAME ac7_render_scope COMMAND rsf_ac7_render_scope_test)
 set_tests_properties(ac7_render_scope PROPERTIES TIMEOUT 120)
 
@@ -599,8 +601,8 @@ if(EXISTS "${RSF_NGX_PROBE_INCLUDE}/nvsdk_ngx_params.h")
 endif()
 
 add_executable(rsf_ac7_native_graph_test ac7_native_graph.cpp)
-# native_renderer.cpp calls the rsf-ac7 site, patch, guard, renderer transaction and TrueSky owner
-# (games/ac7/src/ac7_sites.h).
+# native_renderer.cpp calls the rsf-ac7 site, patch, guard, renderer transaction, TrueSky and render
+# scope owners (games/ac7/src/ac7_sites.h, ac7_render_scope.h).
 target_link_libraries(rsf_ac7_native_graph_test PRIVATE ReScaleFrame::AC7RenderScope rsf_ac7_rust rsf_orchestrator minhook rsf_build_options)
 add_test(NAME ac7_native_graph COMMAND rsf_ac7_native_graph_test)
 set_tests_properties(ac7_native_graph PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)

@@ -226,6 +226,11 @@ resolution lock and retains relay slots and D3D11 resources while a
 guarded handler is active. The renderer and shaders still use the
 existing native calls. Builds and live TrueSky verification remain open.
 
+The AC7 queued render scopes and tickets are Rust-owned. Native leaves
+guard state, pass and resource lease callbacks. The end marker frees its
+ticket before reporting idle. Out-of-order end markers and native link
+and in-game retirement verification remain open.
+
 ## Rust orchestrator and first Anomaly port
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.

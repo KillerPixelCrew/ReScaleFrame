@@ -27,6 +27,23 @@ void notify(void* user, void*, const rsf_ac7_render_scope* scope, uint32_t)
     check.observed.push_back(scope->native_frame);
     check.callback_unload_refused &= rsf_ac7_render_scopes_destroy(check.scopes) == 0;
 }
+void throwing_pass(void*, void*, const rsf_ac7_render_scope*, uint32_t) { throw 1; }
+struct Lease {
+    int resolves = 0, releases = 0;
+    bool throw_resolve = false;
+};
+void lease_resolve(void* object, rsf_ac7_render_scope* scope)
+{
+    auto& lease = *static_cast<Lease*>(object);
+    ++lease.resolves;
+    if (lease.throw_resolve) throw 2;
+    scope->native_frame += 100;
+}
+void lease_release(void* object)
+{
+    ++static_cast<Lease*>(object)->releases;
+    throw 3;
+}
 bool expect(bool ok, const char* message)
 {
     if (!ok) std::fprintf(stderr, "%s\n", message);
@@ -90,5 +107,31 @@ int main()
     ok &= expect(!rsf_ac7_render_scope_open(check.scopes, &list, &invalid, &refused), "scene submission still needs its view");
     rsf_ac7_render_scopes_quiesce(check.scopes);
     ok &= expect(rsf_ac7_render_scopes_destroy(check.scopes) != 0, "Slate quiescent destruction");
+
+    // Consumer exceptions stay in render_scope.cpp's leaves (the owner is Rust): a throwing pass
+    // callback keeps the state callback, a throwing resolve skips that marker's stack change and
+    // callbacks, and a throwing release still retires the ticket.
+    check = {};
+    ok &= expect(rsf_ac7_render_scopes_create_passes(7, 2, notify, throwing_pass, &check, &check.scopes) != 0,
+        "create pass scopes");
+    Lease lease;
+    const rsf_ac7_scope_lease owned{&lease, lease_resolve, lease_release};
+    frame.native_frame = 5;
+    rsf_ac7_render_ticket* leased = nullptr;
+    ok &= expect(rsf_ac7_render_scope_open_leased(check.scopes, &list, &frame, &owned, &leased) != 0 &&
+        rsf_ac7_render_scope_close(leased, &list) != 0, "queue leased scope");
+    run(list);
+    ok &= expect(check.observed == std::vector<uint64_t>({105, 0}), "pass exception keeps state callbacks");
+    ok &= expect(lease.resolves == 2 && lease.releases == 1, "lease resolved per marker, released once");
+    lease.throw_resolve = true;
+    ok &= expect(rsf_ac7_render_scope_open_leased(check.scopes, &list, &frame, &owned, &leased) != 0 &&
+        rsf_ac7_render_scope_close(leased, &list) != 0, "queue throwing lease");
+    run(list);
+    ok &= expect(check.observed.size() == 2, "throwing resolve skips both markers");
+    ok &= expect(lease.resolves == 4 && lease.releases == 2, "throwing release still retires");
+    current.struct_size = sizeof(current);
+    ok &= expect(!rsf_ac7_render_scope_current(check.scopes, &current), "no scope left open");
+    rsf_ac7_render_scopes_quiesce(check.scopes);
+    ok &= expect(rsf_ac7_render_scopes_destroy(check.scopes) != 0, "exception paths retired every ticket");
     return ok ? 0 : 1;
 }
