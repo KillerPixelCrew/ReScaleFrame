@@ -21,7 +21,7 @@ static_assert(VK_FORMAT_R8G8B8A8_UNORM == 37 && VK_FORMAT_B8G8R8A8_UNORM == 44 &
     VK_FORMAT_R32_SFLOAT == 100 && VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL == 5 && VK_COLOR_SPACE_SRGB_NONLINEAR_KHR == 0);
 static_assert(VK_SUCCESS == 0 && VK_INCOMPLETE == 5 && VK_SUBOPTIMAL_KHR == 1000001003 && VK_ERROR_INITIALIZATION_FAILED == -3);
 static_assert(FFX_API_RETURN_OK == 0);
-static_assert(sizeof(rsf_ffxgvk_swapchain) == 32 && sizeof(rsf_ffxgvk_ops) == 23 * sizeof(void*));
+static_assert(sizeof(rsf_ffxgvk_swapchain) == 32 && sizeof(rsf_ffxgvk_ops) == 24 * sizeof(void*));
 
 struct rsf_ffxgvk_native {
     rsf_fgvk_setup setup{};
@@ -34,7 +34,6 @@ struct rsf_ffxgvk_native {
     PfnFfxDispatch dispatch = nullptr;
     PfnFfxConfigure configure = nullptr;
     rsf_ffx_set_wsi_dispatch wsi_dispatch = nullptr;
-    bool wsi_registered = false;
     PFN_vkQueuePresentKHR native_present = nullptr;
     PFN_vkAcquireNextImageKHR native_acquire = nullptr;
     PFN_vkGetSwapchainImagesKHR native_images = nullptr;
@@ -50,15 +49,8 @@ struct rsf_ffxgvk_native {
     // The source Rust admitted at the last successful configure. The SDK calls
     // the generation callback synchronously inside queuePresent.
     rsf::FrameCaptureVk capture;
-    // Rust destroys the effect, the swapchain and the slot resources first and
-    // has closed its WSI route, so no hook borrows this storage. Rust holds
-    // the process-wide admission until this returns. A refused unregister
-    // (-3, another device's table) means these hooks are not registered.
+    // On successful open, Rust holds admission through unregistration and module unload.
     ~rsf_ffxgvk_native() {
-        if (wsi_registered && wsi_dispatch) {
-            const rsf_ffx_wsi_dispatch clear{sizeof(clear), 2, static_cast<VkDevice>(setup.graphics.device), nullptr, nullptr, nullptr, nullptr, nullptr};
-            (void)wsi_dispatch(&clear);
-        }
         if (module) FreeLibrary(module);
     }
 };
@@ -211,9 +203,7 @@ ffxReturnCode_t generate(ffxDispatchDescFrameGeneration* data, void* userdata) {
 }
 
 int32_t open(const rsf_fgvk_setup* setup, uint32_t width, uint32_t height, rsf_ffxgvk_native** out, void** resources) noexcept try {
-    // Rust admitted this owner to the WSI route and publishes the leaf only
-    // after open succeeds. Registration is the last fallible step, so a failed
-    // open registers nothing; the destructor unloads what it loaded.
+    // Open resolves the leaves. Rust registers the WSI callbacks after this succeeds.
     auto self = std::make_unique<rsf_ffxgvk_native>(); self->setup = *setup;
     const auto& graphics = setup->graphics;
     self->width = width; self->height = height;
@@ -247,14 +237,20 @@ int32_t open(const rsf_fgvk_setup* setup, uint32_t width, uint32_t height, rsf_f
     self->native_images = reinterpret_cast<PFN_vkGetSwapchainImagesKHR>(graphics.device_proc(graphics.device, "vkGetSwapchainImagesKHR"));
     self->native_create = reinterpret_cast<PFN_vkCreateSwapchainKHR>(graphics.device_proc(graphics.device, "vkCreateSwapchainKHR"));
     self->native_destroy = reinterpret_cast<PFN_vkDestroySwapchainKHR>(graphics.device_proc(graphics.device, "vkDestroySwapchainKHR"));
-    const rsf_ffx_wsi_dispatch wsi{sizeof(wsi), 2, static_cast<VkDevice>(graphics.device),
-        serialized_create, serialized_destroy, serialized_present, serialized_acquire, serialized_images};
-    if (!self->native_create || !self->native_destroy || !self->native_present || !self->native_acquire || !self->native_images || self->wsi_dispatch(&wsi) != 0) return RSF_BACKEND_ERROR_INIT_FAILED;
-    self->wsi_registered = true;
+    if (!self->native_create || !self->native_destroy || !self->native_present || !self->native_acquire || !self->native_images)
+        return RSF_BACKEND_ERROR_INIT_FAILED;
     *resources = &self->gpu;
     *out = self.release();
     return RSF_BACKEND_OK;
 } catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
+
+int32_t set_wsi(rsf_ffxgvk_native* self, uint32_t enabled) noexcept {
+    const rsf_ffx_wsi_dispatch dispatch{sizeof(dispatch), 2, static_cast<VkDevice>(self->setup.graphics.device),
+        enabled ? serialized_create : nullptr, enabled ? serialized_destroy : nullptr,
+        enabled ? serialized_present : nullptr, enabled ? serialized_acquire : nullptr,
+        enabled ? serialized_images : nullptr};
+    return self->wsi_dispatch(&dispatch);
+}
 
 int32_t create_swapchain(rsf_ffxgvk_native* self, uint64_t* chain, uint32_t* has_context) noexcept {
     const auto& info = *static_cast<const VkSwapchainCreateInfoKHR*>(self->setup.create_info);
@@ -383,7 +379,7 @@ void capture_flush(rsf_ffxgvk_native* self) noexcept try {
     (void)self->capture.flush();
 } catch (...) {}
 constexpr rsf_ffxgvk_ops operations{
-    open, [](rsf_ffxgvk_native* self) { delete self; },
+    open, [](rsf_ffxgvk_native* self) { delete self; }, set_wsi,
     create_swapchain, query_swapchain, create_effect, query_provider, destroy_effect, destroy_chain, destroy_swapchain,
     images, acquire, prepare, copy, configure, present, drain,
     [](rsf_ffxgvk_native* self, uint64_t frame) -> uint32_t { return self->capture.wants(frame) ? 1u : 0u; },

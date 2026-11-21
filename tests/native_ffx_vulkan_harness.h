@@ -141,9 +141,8 @@ inline rsf_ffxgvk_native* routed() {
     return native;
 }
 
-// The fake open replaces module loading, Vulkan entry resolution and WSI
-// registration. Admission is the real Rust route. Every later native step is
-// the production leaf.
+// Fake open replaces module loading and Vulkan entry resolution. Admission
+// and the order of WSI registration and teardown belong to the real Rust route.
 int32_t open(const rsf_fgvk_setup* setup, uint32_t width, uint32_t height, rsf_ffxgvk_native** out, void** resources) {
     require(!routed(), "Rust publishes the leaf only after open");
     auto* self = new rsf_ffxgvk_native{};
@@ -179,6 +178,7 @@ inline rsf_ffxgvk_ops ops() {
     auto value = operations;
     value.open = open; value.create_swapchain = create_swapchain; value.query_swapchain = query_swapchain;
     value.create_effect = create_effect; value.query_provider = query_provider;
+    value.set_wsi = [](rsf_ffxgvk_native*, uint32_t) -> int32_t { return RSF_BACKEND_OK; };
     return value;
 }
 

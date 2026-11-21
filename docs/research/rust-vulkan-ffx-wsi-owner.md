@@ -97,7 +97,7 @@ not a lock.
 Unchanged: queue, Streamline suppression and latency call order inside each
 hook; every Vulkan result, including `VK_ERROR_INITIALIZATION_FAILED` for an
 unrouted device hook and `VK_ERROR_DEVICE_LOST` for an unrouted submit; SDK
-completion, capture and timing; and the `rsf_ffxgvk_ops` layout (24 pointers).
+completion, capture and timing; and the original `rsf_ffxgvk_ops` layout (23 pointers).
 Behaviour differs only when a hook is still borrowing the leaf at retirement,
 which the audit found unreachable in the pinned graph: that retirement is now
 refused instead of freeing the leaf under the hook.
@@ -176,3 +176,20 @@ No device, window, game or full `eng/verify.ps1` run, and no Debug MSVC build.
 The hook bodies ran only in the CPU fixture against fake Vulkan entry points;
 the production `open` and SDK creation steps still ran in no test. The audit's
 thread-join argument is from the pinned SDK source, not an observed trace.
+
+## Explicit registration and retirement
+
+The Rust owner now registers the corrected SDK's WSI table after opening
+the native leaf and before publishing it to callbacks. At teardown it
+retires the SDK contexts, closes the route to new borrows and waits for
+existing borrows by returning `NOT_READY` until they clear. It then
+unregisters the table through the same typed native call. The pinned
+bridge returns `-3` only if the table belongs to a different device.
+Rust accepts that result as proof that this owner's table is gone.
+Other refusals keep the module and the process-wide admission for retry.
+The native destructor only unloads the module.
+
+The private operations table adds one callback. The route fixture now
+drives that callback for registration, a refused unregister, and a
+later successful retry. The public headers have no changes. Build,
+fixture and device results for this change remain open.

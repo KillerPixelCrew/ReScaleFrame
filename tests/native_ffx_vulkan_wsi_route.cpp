@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // The production WSI hooks borrow the native leaf from the Rust route. A hook
-// inside its forwarded Vulkan call keeps the leaf, and the native close
-// unregisters while Rust still holds the process-wide admission.
+// inside its forwarded Vulkan call keeps the leaf. Rust unregisters
+// before closing the native leaf and releasing process-wide admission.
 #include "native_ffx_vulkan_harness.h"
 
 using namespace fake;
@@ -9,7 +9,8 @@ using namespace fake;
 namespace route {
 rsf_ffxgvk* owner = nullptr;
 uint32_t presents = 0, creates = 0, destroys = 0, acquires = 0, enumerations = 0, lookups = 0, unregistered = 0;
-bool destroy_inside = false;
+uint32_t registered = 0;
+bool destroy_inside = false, refuse_unregister = false;
 int32_t destroyed_inside = RSF_BACKEND_OK, created_inside = RSF_BACKEND_OK;
 rsf_ffxgvk_native* routed_inside = nullptr;
 
@@ -47,23 +48,42 @@ rsf_vk_function lookup(void*, const char* name) {
     return std::strcmp(name, "vkBindImageMemory2") == 0 ? reinterpret_cast<rsf_vk_function>(&images) : nullptr;
 }
 int32_t wsi(const rsf_ffx_wsi_dispatch* setup) {
-    require(setup && setup->struct_size == sizeof(*setup) && setup->abi_version == 2 && setup->device == id<VkDevice>(1) &&
-        !setup->create && !setup->destroy && !setup->present && !setup->acquire && !setup->images, "close clears this device's dispatch");
-    require(!routed(), "the route lends no leaf while the native close unregisters");
+    require(setup && setup->struct_size == sizeof(*setup) && setup->abi_version == 2 && setup->device == id<VkDevice>(1),
+        "the dispatch uses this device and the corrected SDK ABI");
+    if (setup->create) {
+        require(setup->create == serialized_create && setup->destroy == serialized_destroy &&
+            setup->present == serialized_present && setup->acquire == serialized_acquire && setup->images == serialized_images,
+            "registration publishes the typed host hooks");
+        require(!routed(), "the route publishes its leaf only after registration succeeds");
+        ++registered;
+        return 0;
+    }
+    require(!setup->destroy && !setup->present && !setup->acquire && !setup->images, "teardown clears every hook");
+    require(!routed(), "the route lends no leaf during unregistration");
     require(refused_second_owner() == RSF_BACKEND_ERROR_NOT_SUPPORTED, "admission is held through unregistration");
+    if (refuse_unregister) return -1;
     ++unregistered; return 0;
+}
+
+int32_t open(const rsf_fgvk_setup* setup, uint32_t width, uint32_t height, rsf_ffxgvk_native** out, void** resources) {
+    const auto result = fake::open(setup, width, height, out, resources);
+    if (result != RSF_BACKEND_OK) return result;
+    auto* native = *out;
+    native->native_present = present; native->native_create = create; native->native_destroy = destroy;
+    native->native_acquire = acquire; native->native_images = images; native->setup.graphics.device_proc = lookup;
+    native->wsi_dispatch = wsi;
+    return RSF_BACKEND_OK;
 }
 }
 
 int main() {
     Setup setup;
     auto table = ops();
+    table.open = route::open;
+    table.set_wsi = set_wsi;
     route::owner = start(table, setup);
     auto* native = state.native;
-    require(routed() == native, "Rust publishes the opened leaf to the WSI route");
-    native->native_present = route::present; native->native_create = route::create; native->native_destroy = route::destroy;
-    native->native_acquire = route::acquire; native->native_images = route::images; native->setup.graphics.device_proc = route::lookup;
-    native->wsi_dispatch = route::wsi; native->wsi_registered = true;
+    require(routed() == native && route::registered == 1, "Rust publishes the registered leaf to the WSI route");
 
     const auto device = id<VkDevice>(1), foreign = id<VkDevice>(2);
     VkSwapchainKHR chain = VK_NULL_HANDLE; uint32_t index = 0, count = 0;
@@ -97,6 +117,11 @@ int main() {
         graphics_submit(0, nullptr, id<VkFence>(77)) == VK_ERROR_DEVICE_LOST && route::presents == 2,
         "a closing route forwards no new callback");
 
+    route::refuse_unregister = true;
+    require(rsf_ffxgvk_destroy(route::owner) == RSF_BACKEND_ERROR_FEATURE_FAILED && !route::unregistered &&
+        route::refused_second_owner() == RSF_BACKEND_ERROR_NOT_SUPPORTED,
+        "a refused unregister retains admission and the leaf for retry");
+    route::refuse_unregister = false;
     require(rsf_ffxgvk_destroy(route::owner) == RSF_BACKEND_OK && route::unregistered == 1 && !routed(),
         "the retry closes the leaf once, after its last borrow");
     require(state.effects_destroyed == 1 && state.chains_destroyed == 1 && state.swapchains_destroyed == 1,

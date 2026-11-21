@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The FidelityFX Vulkan owner now registers and unregisters WSI in Rust
+through a typed native call. It publishes the route after registration
+and keeps the SDK module and admission if unregistration fails. The
+special case where the corrected SDK reports another device's table
+can retire because this owner's hooks are already gone. Build and
+runtime validation remain open.
+[WSI ownership notes](research/rust-vulkan-ffx-wsi-owner.md#explicit-registration-and-retirement)
+
 The FidelityFX Vulkan owner now records swapchain and effect context
 ownership independently of the SDK result. When the SDK returns a
 context alongside an error, Rust uses the existing checked teardown

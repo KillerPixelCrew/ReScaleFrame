@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // FidelityFX 3 Vulkan frame-generation owner. The native leaf in
 // native_fg_vulkan.cpp keeps the SDK module, its contexts, the WSI hook bodies
-// and their registration, command recording, capture and timing. This owner
-// decides admission, including the process-wide WSI route, slot reuse,
+// and their marshalling, command recording, capture and timing. This owner
+// decides admission, including WSI registration and the process-wide route, slot reuse,
 // completion evidence, presentation admission and retirement order.
 use crate::allocate_handle;
 use crate::sr_session::has_capacity;
@@ -39,6 +39,8 @@ const VK_SUCCESS: i32 = 0;
 const VK_INCOMPLETE: i32 = 5;
 const VK_SUBOPTIMAL: i32 = 1_000_001_003;
 const VK_INITIALIZATION_FAILED: i32 = -3;
+// rsfFfxSetVulkanWsiDispatch has no table for this device when it returns -3.
+const WSI_FOREIGN_DEVICE: i32 = -3;
 const RGBA8: u32 = 37;
 const BGRA8: u32 = 44;
 const RG16F: u32 = 83;
@@ -78,6 +80,7 @@ impl Swapchain {
 struct Ops {
     open: unsafe extern "C" fn(*const Setup, u32, u32, *mut Handle, *mut Handle) -> i32,
     close: unsafe extern "C" fn(Handle),
+    set_wsi: unsafe extern "C" fn(Handle, u32) -> i32,
     create_swapchain: unsafe extern "C" fn(Handle, *mut u64, *mut u32) -> i32,
     query_swapchain: unsafe extern "C" fn(Handle) -> i32,
     create_effect: unsafe extern "C" fn(Handle, *mut u32) -> i32,
@@ -104,7 +107,7 @@ struct Ops {
 
 const _: () = {
     assert!(size_of::<Swapchain>() == 32);
-    assert!(size_of::<Ops>() == 23 * size_of::<Handle>());
+    assert!(size_of::<Ops>() == 24 * size_of::<Handle>());
 };
 
 /// The process-wide WSI route. The corrected SDK keeps one WSI dispatch table
@@ -260,6 +263,7 @@ struct Owner {
     configured: bool,
     retiring: bool,
     admitted: bool,
+    wsi_registered: bool,
     timeline: RecordingTimeline,
     slots: [Slot; SLOT_COUNT],
     status: Status,
@@ -284,6 +288,7 @@ impl Owner {
             configured: false,
             retiring: false,
             admitted: false,
+            wsi_registered: false,
             timeline: unsafe { std::mem::zeroed() },
             slots: std::array::from_fn(|_| Slot::default()),
             status: Status {
@@ -328,6 +333,10 @@ impl Owner {
         if self.native.is_null() || self.resources.is_null() {
             return INIT_FAILED;
         }
+        if unsafe { (ops.set_wsi)(self.native, 1) } != OK {
+            return INIT_FAILED;
+        }
+        self.wsi_registered = true;
         // The SDK calls the create, image and destroy hooks synchronously
         // inside swapchain-context creation and failure cleanup.
         route().publish(self.id(), self.native.expose_provenance());
@@ -778,13 +787,18 @@ impl Owner {
         if !route().close(self.id()) {
             return NOT_READY;
         }
+        if self.wsi_registered {
+            let cleared = unsafe { (ops.set_wsi)(native, 0) };
+            if !matches!(cleared, OK | WSI_FOREIGN_DEVICE) {
+                return FEATURE_FAILED;
+            }
+            self.wsi_registered = false;
+        }
         for slot in &mut self.slots {
             rsf_core_vkfg_release_image(ops.resources, self.resources, &mut slot.color);
             rsf_core_vkfg_release_fences(ops.resources, self.resources, &mut slot.fences);
         }
-        // The native leaf unregisters the WSI hooks, frees its storage and
-        // unloads the SDK module. Admission ends only afterwards, so a
-        // successor cannot register before this unregistration.
+        // Keep admission through module unload, after the WSI table no longer points at the host.
         unsafe { (ops.close)(native) };
         self.native = ptr::null_mut();
         self.withdraw();
@@ -1151,9 +1165,12 @@ mod tests {
     unsafe extern "C" fn close(native: Handle) {
         assert_eq!(native.addr(), NATIVE);
         // The hooks are already refused, and admission outlives the native
-        // close so no successor can register before it unregisters.
+        // close so no successor can register while it unloads.
         assert!(routed(DEVICE).is_null() && route().owner != 0 && route().closing);
         calls(|c| c.closes += 1);
+    }
+    unsafe extern "C" fn set_wsi(_: Handle, _: u32) -> i32 {
+        OK
     }
     unsafe extern "C" fn create_swapchain(_: Handle, chain: *mut u64, context: *mut u32) -> i32 {
         unsafe {
@@ -1305,6 +1322,7 @@ mod tests {
     static OPS: Ops = Ops {
         open,
         close,
+        set_wsi,
         create_swapchain,
         query_swapchain: step,
         create_effect,

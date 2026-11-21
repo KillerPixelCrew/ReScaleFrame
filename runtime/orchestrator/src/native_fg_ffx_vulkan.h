@@ -20,15 +20,14 @@ rsf_backend_result rsf_ffxgvk_destroy(rsf_ffxgvk*);
 
 /* Private native leaf for the Rust owner in vulkan_ffx_fg.rs. The leaf keeps
    the FidelityFX module, SDK contexts, the WSI hook bodies and their
-   registration, command recording, capture and timing. Rust decides setup and
+   marshalling, command recording, capture and timing. Rust decides setup and
    swapchain admission, the process-wide WSI route, slot reuse, completion
    evidence, presentation admission and retirement order. Status-returning
    steps report rsf_backend_result; WSI steps return the VkResult unchanged.
    Creation-only steps read the borrowed create_info and run only inside
-   rsf_ffxgvk_create. Rust admits the route before open, publishes the leaf
-   after it, and calls close only once no hook borrows the leaf; close
-   unregisters the hooks, frees the leaf and unloads the module before Rust
-   releases admission. */
+   rsf_ffxgvk_create. Rust admits the route before open and publishes the leaf
+   after successful WSI registration. It closes the route to callbacks and
+   unregisters the WSI table before closing the leaf and releasing admission. */
 struct rsf_ffxgvk_native;
 struct rsf_vkfg_platform;
 struct rsf_ffxgvk_swapchain {
@@ -38,6 +37,8 @@ struct rsf_ffxgvk_swapchain {
 struct rsf_ffxgvk_ops {
     int32_t (*open)(const rsf_fgvk_setup*, uint32_t width, uint32_t height, rsf_ffxgvk_native**, void** resources);
     void (*close)(rsf_ffxgvk_native*);
+    /* Returns the corrected SDK's dispatch registration result. */
+    int32_t (*set_wsi)(rsf_ffxgvk_native*, uint32_t enabled);
     /* Ownership facts are valid on refusal as well as success. */
     int32_t (*create_swapchain)(rsf_ffxgvk_native*, uint64_t* chain, uint32_t* has_context);
     int32_t (*query_swapchain)(rsf_ffxgvk_native*);
