@@ -31,6 +31,8 @@ The pass owns one `Renderer` per D3D11 device. A draw on a different device buil
 destroys the old renderer with its variants, bytecode-keyed shader objects, models and views.
 Release destroys the renderer and clears the observed sources and layouts. The source cache keeps
 D3D11 interface addresses, which D3D11 reuses, so each observation first forgets the old entry.
+The renderer's publication and teardown moved to Rust later; see
+[Renderer lifetime](#renderer-lifetime) below.
 
 ## Moved
 
@@ -101,3 +103,97 @@ At this base the remainder was model and view history state with their epoch ret
 indirect argument validation, record counts and packing, per-draw parameter packing (rect, jitter,
 opacity cutoff, history mask), the commit identity checks and merge, CPU profiling, the device
 renderer lifecycle and every D3D11 call and HLSL source.
+
+## Renderer lifetime
+
+Base: `17904281` on `NightHammer1000/rust-ac7-velocity-renderer-lifetime`, which includes the
+commit and profile port `bb538820`. Source comparison only; nothing was built, linked or run.
+
+### Question
+
+After the variant, history, stream and commit ports, `velocity_pass.cpp` still held the
+`std::unique_ptr<Renderer>` global and decided alone which renderer was current, when a draw's
+device needed a new one, what a replacement reset and what release tore down. Can that ownership
+move into `rsf-ac7` while the native renderer object, its D3D11 calls, HLSL, the variant builder
+and the slot vectors stay native?
+
+### Traced paths at the base
+
+| Path | Behavior at `17904281` |
+| --- | --- |
+| Draw admission | After the stream draw and route checks, `GetDevice` on the immediate context. Without a renderer, or when `renderer->device` differs, `make_unique<Renderer>(device)` and `initialize()`. A false `initialize` logs "device-side pass initialization failed" and skips the draw, keeping the old renderer. An exception unwinds to the callback's `catch (...)` without a log. |
+| Publication | `renderer=std::move(made)` destroys the old renderer with its variants, bytecode-keyed shader maps, models, views, stream, capture and indirect buffers. Then `rsf_ac7_velocity_reset_variants`, `rsf_ac7_velocity_history_reset`, `rsf_ac7_velocity_profile_reset` in that order. Only after that does the `CpuSample` start. |
+| Commit | Returns 0 without a renderer or context. Later, after the target check, the context's device must be `renderer->device`. |
+| Frame end | Nothing without a renderer; otherwise the CPU line reads `renderer->shader_objects`, then history retirement with the renderer as the retire context. |
+| Release | `renderer.reset()`, `current={}` (the releasing thread's scope copy), then cache release, history reset and profile reset. |
+| Shader count | `rsf_ac7_velocity_device_shader_creation_count` reads `shader_objects`, or 0 without a renderer. Only the `ac7_velocity_shader` fixture calls it. |
+
+None of these were synchronized; the draw, commit and frame-end callbacks run on the render
+thread and release runs after the frame tap is uninstalled.
+
+### Moved
+
+[velocity_renderer.rs](../../games/ac7/src/velocity_renderer.rs), through
+[velocity_renderer.h](../../games/ac7/src/velocity_renderer.h), now owns:
+
+- `rsf_ac7_velocity_renderer_admit`: the published renderer for the draw's device, or a new one.
+  The create leaf runs without the lock because it compiles HLSL and creates D3D11 objects whose
+  creation callbacks report into the source cache. A null result keeps the published renderer and
+  returns null, so the native refusal text and the skipped draw are unchanged. On success the new
+  renderer is published, the old one is destroyed through its leaf, then the variant table,
+  history and profile are reset in the former order.
+- `rsf_ac7_velocity_renderer_published` and `rsf_ac7_velocity_renderer_for`: the published
+  renderer, and the published renderer only when it was made for a given device. The commit's
+  device check uses the second.
+- `rsf_ac7_velocity_renderer_release`: destroys the published renderer, then releases the source
+  cache and resets history and profile.
+
+The renderer is stored with its destroy leaf. The device is kept as an address for identity only;
+the native renderer still holds its `ComPtr<ID3D11Device>`. The resets are crate calls now:
+`velocity_pass_cache::reset_variants` and `release`, `velocity_history::reset` and
+`velocity_commit::reset_profile` replace the `rsf_ac7_velocity_reset_variants`,
+`rsf_ac7_velocity_cache_release`, `rsf_ac7_velocity_history_reset` and
+`rsf_ac7_velocity_profile_reset` exports, which nothing native calls any more.
+
+`velocity_pass.cpp` lends `create_renderer` (make, initialize, release ownership or null) and
+`destroy_renderer` (delete), both `noexcept`. It keeps the `Renderer` object and every member,
+`initialize`, the variant builder, the slot vectors and retirement leaf, `prepare_indirect`'s
+buffer-device check, all D3D11 calls, the HLSL, the clock, the log text and the thread-local
+scope. The public calls in `ac7_velocity_pass.h` and the bridge are unchanged.
+
+### Deliberate differences
+
+- An exception while creating or initializing a renderer now returns null from the leaf, so the
+  draw logs the initialization refusal instead of being skipped silently. The old renderer is kept
+  either way.
+- A null device is refused before creation. `GetDevice` never returns null on a live context, and
+  the old code would have dereferenced it in `initialize`.
+- Publication takes a lock. If another callback published a renderer for the same device while
+  this one was being created, the new one is destroyed and the published one is used. The old
+  code had no synchronization; the AC7 pass only admits immediate-context draws, so this path is
+  defensive.
+- Release clears the thread-local scope after the resets instead of between the renderer and the
+  cache. The scope is independent of all four, so the outcome is the same.
+- A renderer pointer returned to the native side is still used after the lock is released, as the
+  unique pointer was before. Release must not overlap draws, commits or frame ends, which the
+  bridge already ensures by uninstalling the frame tap first.
+
+### Checks
+
+Source comparison against `17904281` of every former use of the `renderer` global and of the four
+reset and release calls. `cargo fmt -p rsf-ac7 --check` with the installed rustfmt (1.11.0; the
+`rust-toolchain.toml` 1.94.1 pin is not installed through rustup here), locked offline Cargo
+metadata and Git whitespace passed. `velocity_renderer/tests.rs` covers null devices, reuse on the
+same device, replacement order (create, destroy old, reset), a failed creation keeping the
+published renderer, a publication during creation, release order and republication, the
+device-only lookup and incomplete leaves. They were not run. Build, link, Cargo tests, Clippy,
+CTest including `ac7_velocity_shader`, deployment and game runs are user-owned and not done.
+
+### Remaining in C++
+
+The `Renderer` object and its resources, `initialize`, variant construction with its
+bytecode-keyed object caches, the per-slot model and view resources and their retirement leaf,
+the indirect buffer's device check, the commit's native depth identity, every D3D11 call and
+description, the QPC clock, the log text and the HLSL. These are the native calls and resource
+leases the earlier ports kept deliberately; no further lifetime or admission policy remains in
+`velocity_pass.cpp`.

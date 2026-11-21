@@ -12,8 +12,10 @@
 //! `velocity_pass_cache.rs`, and its model and view history identity, validity, commit state and
 //! epoch retirement are `velocity_history.rs`, and its draw admission, record bounds, buffer
 //! sizing, indirect range and cbuffer packing are `velocity_stream.rs`, and its commit admission,
-//! motion target check, log budgets and CPU profile are `velocity_commit.rs`; velocity_pass.cpp
-//! keeps its D3D11 work and the resources at those history slots, and lends the variant builder.
+//! motion target check, log budgets and CPU profile are `velocity_commit.rs`, and its per-device
+//! renderer publication, replacement and teardown are `velocity_renderer.rs`; velocity_pass.cpp
+//! keeps its D3D11 work and the resources at those history slots, and lends the variant builder
+//! and the renderer's create and destroy leaves.
 //!
 //! The rest of the native renderer stays C++ (native_renderer.cpp and the render-scope library):
 //! the five exported renderer calls as wrappers, the renderer object and its fields, MinHook
@@ -54,6 +56,7 @@ mod velocity_geometry;
 mod velocity_history;
 mod velocity_pass_cache;
 mod velocity_pixel;
+mod velocity_renderer;
 mod velocity_stage;
 mod velocity_stream;
 mod velocity_tessellation;

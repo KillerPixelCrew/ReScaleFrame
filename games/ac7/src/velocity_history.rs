@@ -508,9 +508,8 @@ unsafe extern "C" fn rsf_ac7_velocity_history_frame_end(
     }
 }
 
-/// The native slots were discarded with their renderer.
-#[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_velocity_history_reset() {
+/// The native slots were discarded with their renderer (`velocity_renderer.rs`).
+pub(crate) fn reset() {
     *lock() = History::default();
 }
 

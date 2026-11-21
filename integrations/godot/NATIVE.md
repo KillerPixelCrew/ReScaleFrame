@@ -531,12 +531,13 @@ exported players, NVIDIA, Intel, AMD and software-device runs, and the visual ha
 2. `effect.cpp` keeps no owner state after the seventh slice. Its class registration, callback
    contract, typed scene reads, readback compute pass and Dictionary keys are godot-cpp leaves.
    Residual: the readback's extent check against a velocity override (see that slice).
-3. The SCons engine module still holds CPU frame identity and callback ordering, the primary viewport,
-   status-based extent updates, history reset heuristics, camera matrices, motion resolve and the
-   direct Dictionary option parser in `ReScaleFrameBridge::configure`. Native callbacks supply
-   CPU facts to the Rust record builder before passing them to `window.rs` through `rsfg_cpu`.
-   The window handle passed to `rsfg_vk_window` and each Vulkan surface's `rescaleframe_window`
-   are engine module facts too.
+3. The SCons engine module's C++ still holds the primary viewport, status-based extent updates,
+   the remaining history reset heuristics (request flag, color, size, 0.25 s frame gap, camera
+   jump), camera matrices, motion resolve and the direct Dictionary option parser in
+   `ReScaleFrameBridge::configure`. CPU frame lifecycle and render frame identity are in
+   `frame.rs` (see below). Native callbacks supply CPU facts to the Rust record builder before
+   passing them to `window.rs` through `rsfg_cpu`. The window handle passed to `rsfg_vk_window`
+   and each Vulkan surface's `rescaleframe_window` are engine module facts too.
 4. The addon (`settings.gd`, `controller.gd`, `csharp/ReScaleFrame.cs`) keeps its own option
    defaults for the Inspector resource.
 5. D3D12 residue in the `runtime.cpp` leaves: the fixed SR context inputs (setup ABI 1 planning,
@@ -614,6 +615,61 @@ and module archive at Godot `ed1daf0bf001b61586d9930840f2f1394092c079`. The CPU 
 render fact source matched `1a87cbca`. Pinned Rust 1.94.1 formatting, locked offline Windows
 Cargo metadata and whitespace checks passed. SCons compilation and final linkage, binary
 exports, and editor and player callback behavior remain unverified.
+
+## Engine module CPU frame lifecycle
+
+Relative to RSF `fd2eb13e`, `frame.rs` in the same private SCons object owns the state that
+`bridge.cpp` kept in globals: the open CPU frame, its identity, the simulation-ended and queued
+flags, the CPU frame interval, and on the render thread the queued render frame identity,
+gameplay flag, frame interval and the last SR-evaluated frame. `frame.h` declares the private
+C linkage and checks the shared layouts and stage values. Nothing new is exported from the
+Godot executable or the native DLL, and every `rsfg_*` call is unchanged.
+
+Rust decides the order and calls three typed native callbacks: the engine clock
+(`OS::get_ticks_usec`), the record report (QPC sample, `cpu_facts.rs` builder, `rsfg_cpu`) and
+the render handoff (Godot pause and window focus, `call_on_render_thread`). The patch sites in
+`eng/patch-godot.py` are unchanged. At Godot `ed1daf0bf001b61586d9930840f2f1394092c079` they are
+`Main::iteration` after `iterating++` (begin, then simulation begin), before both
+`RenderingServer::draw(wants_present, ...)` calls (queue), before `iterating--` (end), the
+Windows run loop before `process_events` and the display server's key processing while not
+iterating (begin), and `Input::_parse_input_event_impl` (input).
+
+Preserved per callback, compared line by line with `fd2eb13e`:
+
+- Begin, only when ready and enabled: no-op while a frame is open; otherwise the clock is read,
+  the interval is the wrapping microsecond difference over 10^6 (1/60 s for the first frame),
+  the identity increments with wraparound, the flags reset, then `FRAME_BEGIN` and
+  `INPUT_SAMPLE` are reported.
+- Simulation begin: `SIMULATION_BEGIN` only with a frame open.
+- Queue, only when ready and enabled: `SIMULATION_END` (with no open-frame check, as before),
+  then the ended and queued flags, then the handoff of the identity, or zero when the draw does
+  not present, with the CPU interval. Godot's pause and focus are read after the report.
+- End, with no ready check: `SIMULATION_END` unless the queue reported it since the last begin,
+  then `FRAME_END` with render-expected `1` only for a presenting draw, then the frame closes.
+  The frame stays open during both reports, so input delivered meanwhile stays framed.
+- Input, after the native kind mask check: the open frame's identity, otherwise source `0` with
+  the unframed flag.
+- Lifecycle reports require a nonzero identity and are gated on ready and enabled at each
+  report. The input report now re-reads both after the entry check on the same call, which
+  cannot change the result.
+
+On the render thread, the queued begin stores the identity, gameplay flag and interval before
+`rsfg_render_begin`. The SR and final-scene hooks read one snapshot and refuse identity zero as
+before. The final-scene hook still requires the last SR pass to carry the current identity. The
+sequence break is `last_evaluated + 1 != current` with wraparound, in the same position in the
+reset condition, so a consumed reset request still short-circuits it. It is computed when the
+hook starts, but nothing on that thread writes either value before the old evaluation point.
+A recorded SR pass stores its identity as evaluated, and a new primary target clears it, as
+`last_frame` did. The screen class, the 0.25 s gap and the camera frame time use the snapshot.
+
+The state uses relaxed atomics where the C++ used plain globals. Each value has the same
+writer thread as before, and input parsed on another thread now reads the open frame without a
+data race. Rust adds no ordering, pacing, marker or backend decision; Runtime still interprets
+every report. This is a source port with no new experiment. Checks: rustfmt 1.11.0 (Rust 1.100,
+the pinned 1.94.1 toolchain is not installed here) `--edition 2024 --check`, locked offline
+Windows Cargo metadata and `git diff --check`. Not run: SCons compilation and linkage, the
+`-Dwarnings` Rust object build, symbol checks, Clippy, Cargo tests, CTest, editor and exported
+player runs, and callback order capture in a live session.
 
 ## Build requirements
 

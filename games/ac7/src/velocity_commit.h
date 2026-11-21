@@ -44,8 +44,7 @@ void rsf_ac7_velocity_profile_sample(const VelocityProfileSample* sample);
 // Nonzero with the report written when the frame took 8 ms in total or 4 ms in one callback. The
 // totals restart either way.
 int32_t rsf_ac7_velocity_profile_frame_end(VelocityProfileReport* report);
-// The renderer that owned the profile was replaced or released.
-void rsf_ac7_velocity_profile_reset(void);
+// velocity_renderer.rs resets the profile when it publishes or releases a renderer.
 }
 
 static_assert(sizeof(VelocityCommitTarget) == 20);

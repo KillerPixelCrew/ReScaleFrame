@@ -3,6 +3,7 @@
 #![no_std]
 
 mod cpu_facts;
+mod frame;
 
 // Settings values from sr_session.h and local mode values from viewport.h.
 const SR_NONE: u32 = 0;

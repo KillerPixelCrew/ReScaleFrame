@@ -7,6 +7,18 @@ See [the Rust migration record](rust-migration.md#native-policy-cutover).
 
 ## Remaining Rust integration ports
 
+Godot now owns the CPU frame lifecycle, render handoff and render frame
+identity in its private Rust SCons object. Typed Godot callbacks still
+supply the clock, pause and focus facts and report events at the same
+engine boundaries. The AC7 velocity pass now owns renderer publication,
+replacement and release in Rust. D3D11 objects and shader calls remain
+in the native leaves. The renderer borrow relies on the render-thread
+ordering and frame-tap drain used by the carrier.
+Pinned format, locked Windows metadata and whitespace checks passed.
+Builds, fixtures and game or engine validation remain open.
+[Godot native migration](../integrations/godot/NATIVE.md) ·
+[AC7 renderer lifetime](research/rust-ac7-velocity-pass-cache.md#renderer-lifetime)
+
 The source integration at `17904281` brings the following owners into
 the migration branch. Pinned Rust 1.94.1 formatting, locked offline
 Windows Cargo metadata, and Git whitespace checks passed. Builds, binary
@@ -766,6 +778,13 @@ and remains unrun. Build and live observer verification remain open.
 [Observer admission audit](research/rust-anomaly-native-observer.md#prepare-admission-from-3c73e3c4)
 
 ## Rust orchestrator and first Anomaly port
+
+Anomaly's SR driver now chooses the order of the Standard and AVX
+stage guards in Rust. It uses the existing checked-image reader,
+native profile tables and stage callback ABI. Source comparison
+matched the first refusal names, call order and private record layout.
+The SR hook contracts for both profiles remain unrun on this port.
+[SR guard admission](research/rust-anomaly-sr-stage.md#sr-guard-admission)
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 

@@ -47,9 +47,10 @@ target_include_directories(rsf_ac7_render_scope PRIVATE "${CMAKE_SOURCE_DIR}/run
 add_library(ReScaleFrame::AC7RenderScope ALIAS rsf_ac7_render_scope)
 # The pass keeps its D3D11 work native. Its shader/layout observations and variant admission are
 # src/velocity_pass_cache.rs, its model/view history decisions src/velocity_history.rs, its
-# draw admission, record bounds and cbuffer packing src/velocity_stream.rs and its commit
-# admission, target check, log budgets and CPU profile src/velocity_commit.rs, so the Rust archive
-# follows the render scope on the link line.
+# draw admission, record bounds and cbuffer packing src/velocity_stream.rs, its commit
+# admission, target check, log budgets and CPU profile src/velocity_commit.rs and its per-device
+# renderer publication and teardown src/velocity_renderer.rs, so the Rust archive follows the
+# render scope on the link line.
 add_library(rsf_ac7_velocity_pass STATIC src/velocity_pass.cpp)
 target_include_directories(rsf_ac7_velocity_pass PUBLIC include)
 target_link_libraries(rsf_ac7_velocity_pass PRIVATE ReScaleFrame::AC7RenderScope ReScaleFrame::Graphics rsf_ac7_rust rsf_build_options)

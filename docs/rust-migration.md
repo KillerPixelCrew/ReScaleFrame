@@ -17,8 +17,8 @@ Runtime. Preserve the supported paths, feature refusals and package names.
 | RDR2 | The game DLL renderer, ASI and attach workers, input guard, probes, Social Club backbuffer owner, capture installation and admission, hook registration, GPU leases, draw and pipeline records, presentation and NGX metadata, capture drain decisions, artifact publication and diagnostic workers are in Rust. Continue pending shot ownership and verify native observation coverage. |
 | Unity Mono and Unity package | Mono loader, plugin lifecycle, Runtime setup, package services, per-view D3D12 SR, presentation and input, D3D11 and Vulkan graphics, commands, shared surfaces and queued texture leases, D3D11 render-pass planning, Editor preview admission, and checked package retirement are in Rust. Continue preview resource ownership and Vulkan resolver state. Device and player lifetime checks remain open. |
 | Steam, Fallout 4 and Skyrim SE | The shared Steam chain and both games' cold creation, identity, session lifecycle, camera math, screen and CPU event ownership are in Rust. Skyrim also owns its renderer observations, pre-HDR producers, presentation, resolution, auxiliaries and Community Shaders handover in Rust. Fallout 4's producer resolution, World and Present admission, and render-input selection are in Rust. Continue Fallout 4 hook lifecycle and reduced-render recovery. |
-| AC7 | The game DLL's GameSDK, native site admission, scene and velocity patches, renderer transaction, TrueSky, queued scopes, view buffer, UI, scene colour, contact-shadow rewrite, velocity shaders, variants, history, stream and commit planning, F9 scheduling, draw, dispatch and geometry records, and carrier startup admission are in Rust. Continue before-draw records and velocity renderer lifetime. |
-| Godot | The native control, D3D12 and Vulkan sessions and SR contexts, D3D12 submission ledger, window and input routing, Vulkan creation, Auto provider routing, compositor diagnostics and engine-module viewport policy and CPU event records are in Rust. Continue engine frame and viewport ownership and verify the GDExtension and compositor contracts. |
+| AC7 | The game DLL's GameSDK, native site admission, scene and velocity patches, renderer transaction, TrueSky, queued scopes, view buffer, UI, scene colour, contact-shadow rewrite, velocity shaders, variants, history, stream and commit planning, and per-device velocity renderer lifetime are in Rust. F9 scheduling, draw, dispatch and geometry records and carrier startup admission are also in Rust. Continue before-draw records. |
+| Godot | The native control, D3D12 and Vulkan sessions and SR contexts, D3D12 submission ledger, window and input routing, Vulkan creation, Auto provider routing and compositor diagnostics are in Rust. The private engine object owns viewport mode, CPU event records, the CPU frame lifecycle and render frame identity. Continue viewport ownership and verify the GDExtension and compositor contracts. |
 | Minecraft | The native session, surface, message observer, frame packets, settings and status are in Rust. The Java mod, typed JNI marshaling and linked Runtime entry points retain their existing contracts. |
 
 Merge coherent ownership changes to the migration branch and remove their
@@ -173,6 +173,11 @@ capability and choice layouts. The entry checks record prefixes before
 reading the full request and keeps the original FG-before-SR policy.
 The standalone fixture remains unrun. The Runtime uses its production
 backend and session owners.
+
+The retained standalone FSR3 Vulkan bridge still has native SDK binding,
+SR, FG and swapchain owners. Its managed caller resolves the
+`VulkanStoryFsr3*` entry points by name. This is a separate linkage path
+from the in-process Runtime FFX owner.
 
 ## Verification coverage
 

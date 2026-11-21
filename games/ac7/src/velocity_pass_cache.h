@@ -40,9 +40,7 @@ void rsf_ac7_velocity_cache_layout(void* layout, const rsf_observer_layout_eleme
 uint32_t rsf_ac7_velocity_admit_variant(const VelocityVariantRequest* request, void* user,
     VelocityBuildVariant build, uint32_t* vertex_hash);
 size_t rsf_ac7_velocity_variant_count(void);
-// The native variant list was discarded with its renderer.
-void rsf_ac7_velocity_reset_variants(void);
-void rsf_ac7_velocity_cache_release(void);
+// velocity_renderer.rs resets the table when it publishes a renderer and releases the cache.
 }
 
 static_assert(sizeof(VelocityVariantRequest) == 56 && offsetof(VelocityVariantRequest, stride) == 52);
