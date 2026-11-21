@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 #include <rescaleframe/overlay_input.h>
+#include "overlay_pointer_platform.h"
 #include "overlay_visibility_platform.h"
 
 #include <windows.h>
@@ -11,11 +12,10 @@
 
 #include <rescaleframe/log.h>
 
-#include <algorithm>
 #include <atomic>
-#include <cmath>
 #include <climits>
-#include <cstdlib>
+#include <cstddef>
+#include <initializer_list>
 #include <mutex>
 
 namespace {
@@ -23,6 +23,8 @@ namespace {
 // One slot per virtual key code. A VK_ value is a byte, so every key and mouse button indexes the
 // held table directly and the game's ordinary input path needs no lookup.
 constexpr uint32_t held_table_size = 256;
+constexpr size_t raw_mouse_bytes = offsetof(RAWINPUT, data) + sizeof(RAWMOUSE);
+static_assert(sizeof(rsf_overlay_client_point) == 16 && RSF_OVERLAY_MOUSE_LEFT == 1);
 
 // A cursor the user can see is not solved here, and this is the wrong module to solve it in.
 //
@@ -50,23 +52,6 @@ struct State {
     // SetWindowLongPtrW calls made under it cannot end up waiting on a message thread that is
     // waiting on us.
     std::mutex lifecycle;
-
-    // The input the window procedure records and the render thread reads. Everything under this
-    // lock is a handful of scalar stores, and nothing is called while holding it: this runs inside
-    // the game's own message dispatch, so anything that could send a message or re-enter the
-    // procedure would be re-entering the lock with it.
-    std::mutex guard;
-    /* The pointer, in the pixels of the image being presented rather than of the window's client
-       area. The two differ under a DPI scale the process did not opt into: Windows then reports
-       the client area and window messages in logical pixels while the back buffer is the physical
-       size, 1067x600 against 1600x900 at 150 percent, and a pointer kept in client pixels could
-       reach only two thirds of the panel. Raw mouse movement is in physical pixels already;
-       window messages are scaled by the ratio on the way in. The display size is what the last
-       collect passed in, zero until then, in which case client pixels are all there is. */
-    float mouse_x = 0.0f;
-    float mouse_y = 0.0f;
-    float display_width = 0.0f;
-    float display_height = 0.0f;
 
     /* The user32 detours that make the real cursor usable while the panel is open.
 
@@ -107,41 +92,6 @@ struct State {
     std::atomic<uint64_t> raw_mouse_reports{0}, keys_consumed{0}, wheel_notches_consumed{0};
     std::atomic<uint64_t> frames_with_button{0}, frames_collected_visible{0};
     std::atomic<uint32_t> last_x{0}, last_y{0};
-    /* The previous report's raw position, and whether there has been one. The overlay's pointer
-       moves by the distance between reports rather than to the position in them, because a game
-       that warps the pointer makes the position meaningless. See record_mouse_position. */
-    float last_report_x = 0.0f;
-    float last_report_y = 0.0f;
-    bool have_last_report = false;
-    /* Set once a raw mouse movement has been seen. Raw input is not affected by the game warping
-       the pointer and is not coalesced, so once it arrives it drives the overlay's pointer and the
-       window messages are ignored. See record_raw_mouse. */
-    std::atomic<bool> have_raw_input{false};
-    uint32_t buttons = 0;
-    uint32_t polled_buttons = 0;
-    float scroll = 0.0f;
-    uint32_t contact_id = 0;
-    bool contact_position = false, contact_down = false, contact_press_pending = false;
-    /* Set while two or more fingers are on the open panel. A multi-finger touch is a gesture, not
-       a press, so the panel's contact is cancelled and further contacts are ignored until every
-       finger has lifted. Under `guard`. */
-    bool multi_touch = false;
-
-    /* The three-finger tap that opens and closes the panel on a touch screen, which usually has
-       no Insert key. Window procedure thread only, so no lock. Tracked while hidden too, without
-       consuming anything: the game still sees every contact. */
-    struct Gesture {
-        static constexpr uint32_t capacity = 10;
-        uint32_t ids[capacity]{};
-        POINT origin[capacity]{};
-        uint32_t count = 0, peak = 0;
-        ULONGLONG started = 0;
-        bool moved = false, open_at_start = false;
-    } gesture;
-    /* WM_POINTER touch was seen, so a WM_TOUCH promoted from the same contacts is not counted a
-       second time under different ids. */
-    bool pointer_touch_seen = false;
-
     // Keys and buttons the game has seen pressed and not yet released, indexed by virtual key.
     // Atomic rather than under the lock so that the hidden path, which is the game's ordinary input
     // path, takes no lock at all.
@@ -178,17 +128,6 @@ void forget_game_holds(State& self)
     }
 }
 
-// Buttons and wheel are dropped on a visibility change and on focus loss. A button the overlay
-// believes is down while nobody is pressing it drags a slider on its own.
-void clear_transient_input(State& self)
-{
-    std::lock_guard<std::mutex> lock(self.guard);
-    self.buttons = 0;
-    self.polled_buttons = 0;
-    self.scroll = 0.0f;
-    self.contact_position = self.contact_down = self.contact_press_pending = false;
-}
-
 uint32_t overlay_button_bit(uint32_t virtual_key)
 {
     switch (virtual_key) {
@@ -205,245 +144,69 @@ uint32_t overlay_button_bit(uint32_t virtual_key)
     }
 }
 
-/* Move the pointer by a raw mouse movement.
+rsf_overlay_client_point client_point(HWND window, POINT point)
+{
+    RECT client{};
+    if (!GetClientRect(window, &client) || client.right <= 0 || client.bottom <= 0) {
+        return {point.x, point.y, 0, 0};
+    }
+    return {point.x, point.y, client.right, client.bottom};
+}
 
-   This is the good path, and the one an overlay wants in a game that locks the mouse. A game that
-   warps the pointer every frame is steering from raw input, so `WM_INPUT` is already being
-   delivered to this window and arrives here through the subclass without registering anything of
-   our own. Registering would be worse than useless: raw input registration is per process and per
-   device class, so ours would replace the game's and take its steering with it.
-
-   Raw movement is what the mouse reported, before the pointer was clipped, warped or coalesced.
-   Window moves are coalesced, which is why following them looked chunky: with the game warping
-   every frame, the real movement and the warp back often arrive as one message and cancel.
-
-   The caller stops the message after this, which it already did before the overlay read anything
-   from it: while the panel is open, raw movement must not also steer the aircraft. */
 void record_raw_mouse(State& self, HWND window, LPARAM lparam)
 {
-    // With the cursor freed by the detours, the panel reads the real pointer each frame and raw
-    // deltas would count every movement twice. This path is the fallback for when they are not.
-    if (self.cursor.installed) {
-        return;
-    }
-    // One read into a RAWINPUT-sized record: a mouse report always fits, and a larger one is refused.
+    // Use raw deltas only when the absolute cursor has not been freed.
+    if (self.cursor.installed) return;
     RAWINPUT raw{};
     UINT size = sizeof(raw);
     const UINT read = GetRawInputData(reinterpret_cast<HRAWINPUT>(lparam), RID_INPUT, &raw, &size,
-                                      sizeof(RAWINPUTHEADER));
-    if (read == static_cast<UINT>(-1) || read < sizeof(RAWINPUTHEADER) ||
-        raw.header.dwType != RIM_TYPEMOUSE) {
+        sizeof(RAWINPUTHEADER));
+    if (read == static_cast<UINT>(-1) || read < raw_mouse_bytes ||
+        raw.header.dwType != RIM_TYPEMOUSE || (raw.data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE) != 0) {
         return;
     }
-    // Absolute devices, a tablet or some remote desktops, report a position rather than a movement
-    // and are left to the window messages, which are correct for them.
-    if ((raw.data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE) != 0) {
-        return;
-    }
-    const long dx = raw.data.mouse.lLastX;
-    const long dy = raw.data.mouse.lLastY;
-    if (dx == 0 && dy == 0) {
-        return;
-    }
-
-    RECT client{};
-    const bool have_client = GetClientRect(window, &client) && client.right > 0 && client.bottom > 0;
-    const float width = have_client ? static_cast<float>(client.right) : 0.0f;
-    const float height = have_client ? static_cast<float>(client.bottom) : 0.0f;
-
-    std::lock_guard<std::mutex> lock(self.guard);
-    self.have_raw_input.store(true, std::memory_order_release);
-    self.mouse_x += static_cast<float>(dx);
-    self.mouse_y += static_cast<float>(dy);
-    // Raw movement is physical, so the bound is the presented image where that is known.
-    const float bound_x = self.display_width > 0.0f ? self.display_width : width;
-    const float bound_y = self.display_height > 0.0f ? self.display_height : height;
-    if (bound_x > 0.0f && bound_y > 0.0f) {
-        self.mouse_x = std::min(std::max(self.mouse_x, 0.0f), bound_x - 1.0f);
-        self.mouse_y = std::min(std::max(self.mouse_y, 0.0f), bound_y - 1.0f);
-    }
+    const POINT delta{raw.data.mouse.lLastX, raw.data.mouse.lLastY};
+    if (delta.x == 0 && delta.y == 0) return;
+    const auto facts = client_point(window, delta);
+    rsf_core_overlay_pointer_raw(&facts);
 }
 
-/* Follow the pointer by how far it moved, not by where it is.
-
-   Ace Combat 7 is played with a pad and steers with a locked mouse: it warps the pointer back to
-   the middle of the window every frame, so its absolute position is the centre no matter how the
-   mouse is moved, and a panel that trusted that position had a cursor pinned there.
-
-   What survives the warp is the distance between two reports, so the overlay keeps a pointer of its
-   own and moves it by that distance. The warp itself is the one report that must not count: it is
-   the game putting the pointer back, not the user moving it, and adding it would cancel the motion
-   that preceded it exactly. It is recognised by landing on the centre, which is where a warp goes
-   and where a hand almost never lands on the exact pixel. Losing one report when it does costs a
-   pixel of travel.
-
-   A game that does not warp never produces that report and the same arithmetic follows the pointer
-   normally, so this costs nothing where it is not needed. */
 void record_mouse_position(State& self, HWND window, LPARAM lparam)
 {
-    {
-        std::lock_guard<std::mutex> lock(self.guard);
-        self.contact_position = false;
-    }
-    // Client pixels, which is the coordinate space the overlay works in. See the assumption note in
-    // rsf_overlay_input_collect: this module does not scale them.
-    const float x = static_cast<float>(GET_X_LPARAM(lparam));
-    const float y = static_cast<float>(GET_Y_LPARAM(lparam));
-
-    // The freed cursor is polled each frame instead. See the detours.
-    if (self.cursor.installed) {
-        return;
-    }
-    // Raw input has taken over, and following both would count every movement twice.
-    if (self.have_raw_input.load(std::memory_order_acquire)) {
-        return;
-    }
-
-    RECT client{};
-    if (!GetClientRect(window, &client) || client.right <= 0 || client.bottom <= 0) {
-        std::lock_guard<std::mutex> lock(self.guard);
-        self.mouse_x = x;
-        self.mouse_y = y;
-        return;
-    }
-    const float width = static_cast<float>(client.right);
-    const float height = static_cast<float>(client.bottom);
-    const float centre_x = std::floor(width * 0.5f);
-    const float centre_y = std::floor(height * 0.5f);
-
-    std::lock_guard<std::mutex> lock(self.guard);
-    // Client pixels to presented pixels. One where the two agree, which they do in a DPI-aware
-    // process and in exclusive fullscreen.
-    const float scale_x = self.display_width > 0.0f ? self.display_width / width : 1.0f;
-    const float scale_y = self.display_height > 0.0f ? self.display_height / height : 1.0f;
-    const float bound_x = self.display_width > 0.0f ? self.display_width : width;
-    const float bound_y = self.display_height > 0.0f ? self.display_height : height;
-    const bool is_warp = x == centre_x && y == centre_y;
-    if (!self.have_last_report) {
-        self.have_last_report = true;
-    } else if (!is_warp) {
-        self.mouse_x += (x - self.last_report_x) * scale_x;
-        self.mouse_y += (y - self.last_report_y) * scale_y;
-        // Kept inside the window, or the pointer wanders off and takes several sweeps to come back.
-        self.mouse_x = std::min(std::max(self.mouse_x, 0.0f), bound_x - 1.0f);
-        self.mouse_y = std::min(std::max(self.mouse_y, 0.0f), bound_y - 1.0f);
-    }
-    self.last_report_x = x;
-    self.last_report_y = y;
+    const POINT point{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+    const bool cursor_freed = self.cursor.installed;
+    const auto facts = cursor_freed ? rsf_overlay_client_point{point.x, point.y, 0, 0} :
+        client_point(window, point);
+    rsf_core_overlay_pointer_move(&facts, cursor_freed ? 1u : 0u);
 }
 
-void record_button(State& self, uint32_t virtual_key, bool down)
+void record_button(uint32_t virtual_key, bool down)
 {
-    const uint32_t bit = overlay_button_bit(virtual_key);
-    if (bit == 0) {
-        return;
-    }
-    std::lock_guard<std::mutex> lock(self.guard);
-    if (down) {
-        self.buttons |= bit;
-    } else {
-        self.buttons &= ~bit;
-    }
+    const auto bit = overlay_button_bit(virtual_key);
+    if (bit != 0) rsf_core_overlay_pointer_button(bit, down ? 1u : 0u);
 }
 
-// Absolute contact coordinates belong to the contact, not to the separately polled mouse cursor.
-// Keep a short tap's press until a render sample sees it, then deliver its release next sample.
-void record_contact(State& self, HWND window, POINT point, uint32_t id, bool down, bool up)
+uint32_t touch_flags(bool down, bool up)
 {
-    RECT client{};
-    if (!GetClientRect(window, &client) || client.right <= 0 || client.bottom <= 0) return;
-    std::lock_guard<std::mutex> lock(self.guard);
-    if (self.multi_touch) return;
-    if (self.contact_down && self.contact_id != id) return;
-    self.contact_id = id;
-    self.contact_position = true;
-    self.mouse_x = static_cast<float>(point.x) * (self.display_width > 0 ? self.display_width / static_cast<float>(client.right) : 1);
-    self.mouse_y = static_cast<float>(point.y) * (self.display_height > 0 ? self.display_height / static_cast<float>(client.bottom) : 1);
-    if (down) { self.contact_down = true; self.contact_press_pending = true; }
-    if (up) self.contact_down = false;
+    return (down ? uint32_t(RSF_TOUCH_DOWN) : 0u) | (up ? uint32_t(RSF_TOUCH_UP) : 0u);
 }
 
-/* A three-finger tap: exactly three contacts down at once, all lifted within half a second of
-   the first, none moved further than a finger's width. Four or five fingers, a slow hold or a
-   swipe is not one. */
-constexpr ULONGLONG kGestureTapMs = 500;
-constexpr LONG kGestureSlopPixels = 48;
-
-/* Cancel the panel's pointer contact when a second finger lands on the open panel. The release
-   is delivered far outside the panel, so egui sees the pointer leave rather than a click. */
-void cancel_panel_contact(State& self)
+void record_contact(HWND window, POINT point, uint32_t id, bool down, bool up)
 {
-    std::lock_guard<std::mutex> lock(self.guard);
-    self.multi_touch = true;
-    self.contact_down = self.contact_press_pending = false;
-    self.mouse_x = self.mouse_y = -100000.0f;
+    const auto facts = client_point(window, point);
+    rsf_core_overlay_pointer_contact(&facts, id, touch_flags(down, up));
 }
 
-/* Feed one touch contact, in screen pixels. Returns true when this contact ended a three-finger
-   tap; the caller then sets visibility to the opposite of what it was when the tap began, so a
-   close the panel itself requested during the same tap cannot be undone by it. */
-bool track_gesture(State& self, uint32_t id, POINT screen, bool down, bool up, bool canceled)
-{
-    auto& gesture = self.gesture;
-    uint32_t slot = gesture.count;
-    for (uint32_t index = 0; index < gesture.count; ++index)
-        if (gesture.ids[index] == id) { slot = index; break; }
-    if (down && slot == gesture.count) {
-        if (gesture.count == 0) {
-            gesture.peak = 0; gesture.moved = false; gesture.started = GetTickCount64();
-            gesture.open_at_start = rsf_core_overlay_visible() != 0;
-        }
-        if (gesture.count == State::Gesture::capacity) { gesture.moved = true; return false; }
-        gesture.ids[gesture.count] = id; gesture.origin[gesture.count] = screen; ++gesture.count;
-        if (gesture.count > gesture.peak) gesture.peak = gesture.count;
-        if (gesture.count == 2 && gesture.open_at_start) cancel_panel_contact(self);
-        return false;
-    }
-    if (slot == gesture.count) return false;
-    if (std::abs(screen.x - gesture.origin[slot].x) > kGestureSlopPixels ||
-        std::abs(screen.y - gesture.origin[slot].y) > kGestureSlopPixels || canceled)
-        gesture.moved = true;
-    if (!up && !canceled) return false;
-    --gesture.count;
-    gesture.ids[slot] = gesture.ids[gesture.count]; gesture.origin[slot] = gesture.origin[gesture.count];
-    if (gesture.count) return false;
-    {
-        std::lock_guard<std::mutex> lock(self.guard);
-        self.multi_touch = false;
-    }
-    return gesture.peak == 3 && !gesture.moved && GetTickCount64() - gesture.started <= kGestureTapMs;
-}
-
-// Where the cursor is when the overlay opens, so the first frame does not place it at the origin
-// and wait for a move. Win32 calls only, no lock held.
 void seed_cursor_position(State& self)
 {
     HWND window = self.window.load(std::memory_order_relaxed);
     POINT point{};
-    // The genuine GetCursorPos where it is detoured: the detour would answer with the frozen
-    // position, which is exactly the one the panel must not start from.
-    const bool have_point = self.cursor.installed ? self.cursor.get_cursor_pos(&point) != FALSE
-                                                  : GetCursorPos(&point) != FALSE;
-    if (!window || !have_point || !ScreenToClient(window, &point)) {
-        return;
-    }
-    // Whatever the game left the cursor at. A game that hid and centred it reports the centre,
-    // which is as good an answer as exists before the first move. Scaled from client pixels to
-    // presented pixels like a window message.
-    RECT client{};
-    const bool have_client = GetClientRect(window, &client) && client.right > 0 && client.bottom > 0;
-    std::lock_guard<std::mutex> lock(self.guard);
-    const float scale_x = have_client && self.display_width > 0.0f
-                              ? self.display_width / static_cast<float>(client.right)
-                              : 1.0f;
-    const float scale_y = have_client && self.display_height > 0.0f
-                              ? self.display_height / static_cast<float>(client.bottom)
-                              : 1.0f;
-    self.mouse_x = static_cast<float>(point.x) * scale_x;
-    self.mouse_y = static_cast<float>(point.y) * scale_y;
-    /* Forget the previous report, so the first move after opening is measured from the report that
-       follows rather than from wherever the pointer was when the panel was last closed. */
-    self.have_last_report = false;
+    // Call the genuine GetCursorPos so the sample is not the position frozen for the game.
+    const bool have_point = self.cursor.installed ? self.cursor.get_cursor_pos(&point) != FALSE :
+        GetCursorPos(&point) != FALSE;
+    if (!window || !have_point || !ScreenToClient(window, &point)) return;
+    const auto facts = client_point(window, point);
+    rsf_core_overlay_pointer_seed(&facts);
 }
 
 // The detours. Each forwards to the genuine function through MinHook's trampoline unless the panel
@@ -527,7 +290,7 @@ HCURSOR WINAPI hooked_set_cursor(HCURSOR handle)
 // Buttons too: a click on the panel must not fire the cannon.
 void neutralise_raw_mouse(RAWINPUT* raw, size_t bytes)
 {
-    if (bytes >= sizeof(RAWINPUTHEADER) + sizeof(RAWMOUSE) && raw->header.dwType == RIM_TYPEMOUSE) {
+    if (bytes >= raw_mouse_bytes && raw->header.dwType == RIM_TYPEMOUSE) {
         raw->data.mouse.lLastX = 0;
         raw->data.mouse.lLastY = 0;
         raw->data.mouse.usButtonFlags = 0;
@@ -693,7 +456,7 @@ void set_cursor_capture(State& self, bool on, bool restore_clip = true)
 void apply_visibility_change(uint32_t visible, uint32_t route) noexcept try
 {
     auto& self = state();
-    clear_transient_input(self);
+    rsf_core_overlay_pointer_clear();
     set_cursor_capture(self, visible != 0);
     if (visible) {
         seed_cursor_position(self);
@@ -775,7 +538,7 @@ LRESULT CALLBACK hooked_window_proc(HWND window, UINT message, WPARAM wparam, LP
         self.pointer_received.fetch_add(1, std::memory_order_relaxed);
         self.pointer_consumed.fetch_add(1, std::memory_order_relaxed);
         POINT point{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
-        record_contact(self, window, point, 0, message == WM_LBUTTONDOWN, message == WM_LBUTTONUP);
+        record_contact(window, point, 0, message == WM_LBUTTONDOWN, message == WM_LBUTTONUP);
         return 0;
     }
 
@@ -785,32 +548,32 @@ LRESULT CALLBACK hooked_window_proc(HWND window, UINT message, WPARAM wparam, LP
     case WM_POINTERUP: {
         POINTER_INFO info{};
         const bool have_info = GetPointerInfo(GET_POINTERID_WPARAM(wparam), &info) != FALSE;
+        const bool canceled = have_info && (info.pointerFlags & POINTER_FLAG_CANCELED) != 0;
         if (have_info && info.pointerType == PT_TOUCH) {
-            self.pointer_touch_seen = true;
-            const bool canceled = (info.pointerFlags & POINTER_FLAG_CANCELED) != 0;
-            if (track_gesture(self, info.pointerId, info.ptPixelLocation, message == WM_POINTERDOWN,
-                    message == WM_POINTERUP, canceled))
-                apply_visibility(!self.gesture.open_at_start);
+            const uint32_t flags = uint32_t(RSF_TOUCH_POINTER) |
+                touch_flags(message == WM_POINTERDOWN, message == WM_POINTERUP) |
+                (canceled ? uint32_t(RSF_TOUCH_CANCEL) : 0u);
+            const auto desired = rsf_core_overlay_pointer_gesture(info.pointerId, info.ptPixelLocation.x,
+                info.ptPixelLocation.y, flags, GetTickCount64(), rsf_core_overlay_visible());
+            if (desired >= 0) apply_visibility(desired != 0);
         }
+        if (canceled) rsf_core_overlay_pointer_capture_lost(info.pointerId);
         // Hidden: tracked above, and the game still receives every contact.
         if (!visible) break;
         self.pointer_received.fetch_add(1, std::memory_order_relaxed);
         if (have_info && (info.pointerType == PT_TOUCH || info.pointerType == PT_PEN)) {
             POINT point = info.ptPixelLocation;
-            if (ScreenToClient(window, &point))
-                record_contact(self, window, point, info.pointerId, message == WM_POINTERDOWN,
-                    message == WM_POINTERUP || (info.pointerFlags & POINTER_FLAG_CANCELED) != 0);
+            if (!canceled && ScreenToClient(window, &point))
+                record_contact(window, point, info.pointerId, message == WM_POINTERDOWN,
+                    message == WM_POINTERUP);
             self.pointer_consumed.fetch_add(1, std::memory_order_relaxed);
             return 0;
         }
         break;
     }
     case WM_POINTERCAPTURECHANGED:
-        if (visible) {
-            std::lock_guard<std::mutex> lock(self.guard);
-            if (self.contact_id == GET_POINTERID_WPARAM(wparam)) self.contact_down = false;
-            return 0;
-        }
+        rsf_core_overlay_pointer_capture_lost(GET_POINTERID_WPARAM(wparam));
+        if (visible) return 0;
         break;
     case WM_TOUCH: {
         TOUCHINPUT contacts[32]{};
@@ -818,22 +581,24 @@ LRESULT CALLBACK hooked_window_proc(HWND window, UINT message, WPARAM wparam, LP
         // Reading the contacts does not consume them: a hidden panel leaves the handle open for
         // the game, which closes it.
         if (count > 32 || !GetTouchInputInfo(reinterpret_cast<HTOUCHINPUT>(lparam), count, contacts, sizeof(TOUCHINPUT))) break;
-        if (!self.pointer_touch_seen) {
-            bool tapped = false;
-            for (UINT i = 0; i < count; ++i) {
-                const POINT screen{TOUCH_COORD_TO_PIXEL(contacts[i].x), TOUCH_COORD_TO_PIXEL(contacts[i].y)};
-                tapped |= track_gesture(self, contacts[i].dwID, screen, (contacts[i].dwFlags & TOUCHEVENTF_DOWN) != 0,
-                    (contacts[i].dwFlags & TOUCHEVENTF_UP) != 0, false);
-            }
-            if (tapped) apply_visibility(!self.gesture.open_at_start);
+        const auto now = GetTickCount64();
+        int32_t desired = -1;
+        for (UINT i = 0; i < count; ++i) {
+            const POINT screen{TOUCH_COORD_TO_PIXEL(contacts[i].x), TOUCH_COORD_TO_PIXEL(contacts[i].y)};
+            const auto flags = touch_flags((contacts[i].dwFlags & TOUCHEVENTF_DOWN) != 0,
+                (contacts[i].dwFlags & TOUCHEVENTF_UP) != 0);
+            const auto change = rsf_core_overlay_pointer_gesture(contacts[i].dwID, screen.x, screen.y,
+                flags, now, rsf_core_overlay_visible());
+            if (change >= 0) desired = change;
         }
+        if (desired >= 0) apply_visibility(desired != 0);
         if (!visible) break;
         self.pointer_received.fetch_add(count, std::memory_order_relaxed);
         self.pointer_consumed.fetch_add(count, std::memory_order_relaxed);
         for (UINT i = 0; i < count; ++i) {
             POINT point{TOUCH_COORD_TO_PIXEL(contacts[i].x), TOUCH_COORD_TO_PIXEL(contacts[i].y)};
             if (ScreenToClient(window, &point))
-                record_contact(self, window, point, contacts[i].dwID, (contacts[i].dwFlags & TOUCHEVENTF_DOWN) != 0,
+                record_contact(window, point, contacts[i].dwID, (contacts[i].dwFlags & TOUCHEVENTF_DOWN) != 0,
                     (contacts[i].dwFlags & TOUCHEVENTF_UP) != 0);
         }
         CloseTouchInputHandle(reinterpret_cast<HTOUCHINPUT>(lparam));
@@ -843,13 +608,13 @@ LRESULT CALLBACK hooked_window_proc(HWND window, UINT message, WPARAM wparam, LP
         // Releases arrive at whatever took focus, not here, so anything still marked held would
         // stay held for the life of the process.
         forget_game_holds(self);
-        clear_transient_input(self);
+        rsf_core_overlay_pointer_focus_lost();
         break;
 
     case WM_ACTIVATEAPP:
         if (wparam == FALSE) {
             forget_game_holds(self);
-            clear_transient_input(self);
+            rsf_core_overlay_pointer_focus_lost();
         }
         break;
 
@@ -948,7 +713,7 @@ LRESULT CALLBACK hooked_window_proc(HWND window, UINT message, WPARAM wparam, LP
             // The position first: a click can arrive without a move before it, and the overlay
             // would otherwise apply it wherever the cursor was last seen.
             record_mouse_position(self, window, lparam);
-            record_button(self, key, true);
+            record_button(key, true);
             // The X button messages are documented as returning TRUE when handled.
             return (message == WM_XBUTTONDOWN || message == WM_XBUTTONDBLCLK) ? TRUE : 0;
         }
@@ -965,7 +730,7 @@ LRESULT CALLBACK hooked_window_proc(HWND window, UINT message, WPARAM wparam, LP
         if (visible) {
             self.pointer_received.fetch_add(1, std::memory_order_relaxed);
             record_mouse_position(self, window, lparam);
-            record_button(self, key, false);
+            record_button(key, false);
             if (!owed) {
                 self.pointer_consumed.fetch_add(1, std::memory_order_relaxed);
                 return message == WM_XBUTTONUP ? TRUE : 0;
@@ -980,12 +745,8 @@ LRESULT CALLBACK hooked_window_proc(HWND window, UINT message, WPARAM wparam, LP
             // choice about the interface, which belongs on the egui side rather than here.
             // The position in this message is in screen coordinates, unlike every other mouse
             // message, so it is ignored rather than converted.
-            {
-                const float notches =
-                    static_cast<float>(GET_WHEEL_DELTA_WPARAM(wparam)) / WHEEL_DELTA;
-                std::lock_guard<std::mutex> lock(self.guard);
-                self.scroll += notches;
-            }
+            const float notches = static_cast<float>(GET_WHEEL_DELTA_WPARAM(wparam)) / WHEEL_DELTA;
+            rsf_core_overlay_pointer_scroll(notches);
             self.pointer_received.fetch_add(1, std::memory_order_relaxed);
             self.pointer_consumed.fetch_add(1, std::memory_order_relaxed);
             self.wheel_notches_consumed.fetch_add(1, std::memory_order_relaxed);
@@ -1058,13 +819,7 @@ rsf_overlay_input_install(void* window, const rsf_overlay_input_options* options
     rsf_core_overlay_visibility_reset(toggle, (GetAsyncKeyState(int(toggle)) & 0x8000) != 0 ? 1u : 0u);
     self.window.store(target, std::memory_order_relaxed);
     forget_game_holds(self);
-    {
-        std::lock_guard<std::mutex> input_lock(self.guard);
-        self.mouse_x = 0.0f;
-        self.mouse_y = 0.0f;
-        self.buttons = 0;
-        self.scroll = 0.0f;
-    }
+    rsf_core_overlay_pointer_reset();
 
     if (!IsWindowUnicode(target)) {
         // Subclassing with the wide entry point converts an ANSI window to Unicode, which changes
@@ -1161,7 +916,7 @@ extern "C" rsf_overlay_input_result rsf_overlay_input_uninstall(void)
     }
     self.window.store(nullptr, std::memory_order_relaxed);
     forget_game_holds(self);
-    clear_transient_input(self);
+    rsf_core_overlay_pointer_reset();
     if (window_alive) rsf::say(self.log, self.log_user, "overlay input: window procedure restored");
     return RSF_OVERLAY_INPUT_OK;
 }
@@ -1185,8 +940,7 @@ extern "C" void rsf_overlay_input_poll_toggle(void)
         for (const int key : {VK_LBUTTON, VK_RBUTTON, VK_MBUTTON})
             if (GetAsyncKeyState(key) & 0x8000) buttons |= overlay_button_bit(uint32_t(key));
     }
-    std::lock_guard lock(self.guard);
-    self.polled_buttons = buttons;
+    rsf_core_overlay_pointer_polled_buttons(buttons);
 }
 
 extern "C" void rsf_overlay_input_set_visible(uint32_t visible)
@@ -1226,53 +980,24 @@ extern "C" rsf_overlay_input_result rsf_overlay_input_collect(rsf_overlay_input*
     }
 
     out->visible = rsf_core_overlay_visible();
-    {
-        // The pointer is kept in the pixels of the presented image, which is why the display size
-        // comes from the caller: this module has no view of the swap chain and would otherwise be
-        // guessing at the same number the renderer already knows. Window messages arrive in client
-        // pixels and are scaled by the ratio of the two on the way in, which is what a DPI scale
-        // the process did not opt into needs (AC7 on a 150 percent desktop: a 1067x600 client area
-        // presenting 1600x900). A game that letterboxes inside its client area would still need the
-        // rectangle the back buffer occupies, which nothing here knows.
-        std::lock_guard<std::mutex> lock(self.guard);
-        // Remembered for the message handlers, which scale client pixels to this. The pointer is
-        // already in presented pixels, so it passes through.
-        self.display_width = static_cast<float>(display_width);
-        self.display_height = static_cast<float>(display_height);
-        if (out->visible && self.cursor.installed && !self.contact_position) {
-            // The real cursor, freed by the detours: read where it is, every frame, through the
-            // genuine function, and scaled from client pixels to presented pixels. Nothing here
-            // sends a message, so the lock is safe to hold.
-            HWND window = self.window.load(std::memory_order_relaxed);
-            POINT point{};
-            RECT client{};
-            if (window && self.cursor.get_cursor_pos(&point) && ScreenToClient(window, &point) &&
-                GetClientRect(window, &client) && client.right > 0 && client.bottom > 0) {
-                const float scale_x = self.display_width > 0.0f
-                                          ? self.display_width / static_cast<float>(client.right)
-                                          : 1.0f;
-                const float scale_y = self.display_height > 0.0f
-                                          ? self.display_height / static_cast<float>(client.bottom)
-                                          : 1.0f;
-                self.mouse_x = static_cast<float>(point.x) * scale_x;
-                self.mouse_y = static_cast<float>(point.y) * scale_y;
-            }
+    // Sample outside the accumulator lock. Rust checks for a newer contact
+    // before applying this absolute cursor position.
+    rsf_overlay_client_point cursor{};
+    const rsf_overlay_client_point* sample = nullptr;
+    if (out->visible && self.cursor.installed) {
+        HWND window = self.window.load(std::memory_order_relaxed);
+        POINT point{};
+        if (window && self.cursor.get_cursor_pos(&point) && ScreenToClient(window, &point)) {
+            cursor = client_point(window, point);
+            if (cursor.width > 0 && cursor.height > 0) sample = &cursor;
         }
-        out->mouse_x = self.mouse_x;
-        out->mouse_y = self.mouse_y;
-        out->mouse_buttons = self.buttons | self.polled_buttons;
-        if (self.contact_down || self.contact_press_pending) out->mouse_buttons |= RSF_OVERLAY_MOUSE_LEFT;
-        if (out->visible) {
-            self.frames_collected_visible.fetch_add(1, std::memory_order_relaxed);
-            if (out->mouse_buttons) self.frames_with_button.fetch_add(1, std::memory_order_relaxed);
-            self.last_x.store(static_cast<uint32_t>(out->mouse_x > 0.0f ? out->mouse_x : 0.0f), std::memory_order_relaxed);
-            self.last_y.store(static_cast<uint32_t>(out->mouse_y > 0.0f ? out->mouse_y : 0.0f), std::memory_order_relaxed);
-        }
-        self.contact_press_pending = false;
-        // Taken, not read. The wheel accumulates between frames and each notch has to reach the
-        // overlay exactly once.
-        out->scroll_delta = self.scroll;
-        self.scroll = 0.0f;
+    }
+    rsf_core_overlay_pointer_collect(out, sample);
+    if (out->visible) {
+        self.frames_collected_visible.fetch_add(1, std::memory_order_relaxed);
+        if (out->mouse_buttons) self.frames_with_button.fetch_add(1, std::memory_order_relaxed);
+        self.last_x.store(static_cast<uint32_t>(out->mouse_x > 0.0f ? out->mouse_x : 0.0f), std::memory_order_relaxed);
+        self.last_y.store(static_cast<uint32_t>(out->mouse_y > 0.0f ? out->mouse_y : 0.0f), std::memory_order_relaxed);
     }
     return RSF_OVERLAY_INPUT_OK;
 }

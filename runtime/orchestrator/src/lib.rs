@@ -130,6 +130,8 @@ mod overlay_native12_abi;
 #[cfg(windows)]
 mod overlay_panel;
 #[cfg(windows)]
+mod overlay_pointer;
+#[cfg(windows)]
 mod overlay_service;
 #[cfg(windows)]
 mod overlay_visibility;

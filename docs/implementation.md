@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now accumulates overlay pointer positions, mouse buttons, wheel
+deltas and touch gestures. It scales client coordinates to the
+presented image, preserves short taps through the next render sample,
+and clears unfinished contacts on capture or focus loss. The native
+bridge decodes Win32 records and samples the cursor outside the input
+lock. Public overlay input records are unchanged. Build and regression
+test execution remain open.
+
 Rust now owns shared overlay visibility, the Insert key latch, focus
 edges and the 250 ms debounce. Visibility requests share one decision
 and cursor transitions run in order, including requests made during a
