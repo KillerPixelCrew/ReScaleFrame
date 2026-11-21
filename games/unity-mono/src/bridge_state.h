@@ -8,7 +8,11 @@
    Rust owns packet admission and storage, the policy generation, frame admission into the
    command ring, source-submission bookkeeping and retirement. bridge.cpp keeps the Unity
    interfaces, D3D12 objects, resource leases, render-pass calls and CPU input events.
-   Fence values are Unity frame-fence completions read by bridge.cpp; 0 means no fence. */
+   Fence values are Unity frame-fence completions read by bridge.cpp; 0 means no fence.
+
+   The Unity package's D3D11 and Vulkan bridge (integrations/unity/native/bridge.cpp) uses the
+   same activity, managed stage, callbacks, packet store, policy and config. A process has one
+   Unity renderer, so the two bridges never share this state at once. */
 #include <rescaleframe/unity_bridge.h>
 
 /* Packet storage and source-submission ring sizes. bridge.cpp sizes its lease arrays to match. */
@@ -50,6 +54,14 @@ int rsf_unity_frames_config(const rsf_game_host_services* services, uint32_t out
     uint32_t output_height, rsf_unity_config* output);
 /* Validates and stores the engine policy, advancing the generation. Zero when out of range. */
 int rsf_unity_frames_set_policy(uint32_t engine_spatial, uint32_t quality);
+
+/* The pending policy change for bridges that apply it outside rsf_unity_frames_admit_frame (the
+   package's D3D11 and Vulkan events). Non-zero with its generation in *generation while one is
+   pending; config reports the bridge disabled until it settles. */
+uint32_t rsf_unity_frames_pending_change(uint32_t* generation);
+/* Clears the pending change when it is still this generation; a newer change stays pending.
+   Non-zero when cleared. */
+uint32_t rsf_unity_frames_settle_change(uint32_t generation);
 
 /* Admits a reconstruction packet against the policy generation, extents and ring completion. */
 uint32_t rsf_unity_frames_admit_frame(const rsf_unity_packet* packet, uint64_t completed,

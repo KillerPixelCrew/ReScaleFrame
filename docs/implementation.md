@@ -226,6 +226,12 @@ The window callback snapshots its forwarding procedure before reporting
 input. The package entry points still use the same timestamps, frame
 facts and Runtime services. Builds and player verification remain open.
 
+Unity's D3D11 bridge shares Rust packet admission and owns submission
+slots and fence values in Rust. A failed hand-back still records and
+requests a completion signal before the adapter stops. The shared packet checks now apply
+to both D3D11 and Vulkan producers. Native builds and player verification
+remain open.
+
 AC7's Rust renderer transaction owns prepare, start, quiesce and stop.
 Failed activation keeps any renderer with reachable callbacks, and a
 refused hook disable or removal keeps the renderer available for retry.
