@@ -2,6 +2,7 @@
 //! GameSDK identity and the exact-build admission of the native observers.
 use crate::layout::{END, JITTER, PROCESS, PROCESS_CALL, RESET, RESOLUTION, UPLOAD, VIEWPORT};
 use crate::platform::{self, Platform};
+use crate::session::{self, Leaves};
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, rsf_detection, rsf_game_hooks_api, rsf_game_info, rsf_game_plugin_api,
     rsf_game_probe, rsf_result,
@@ -9,11 +10,13 @@ use rsf_game_sys::{
 use std::ffi::{CStr, c_char, c_void};
 use std::slice;
 
-const INVALID_ARGUMENT: rsf_result = -1;
-const ABI_MISMATCH: rsf_result = -2;
+pub(crate) const INVALID_ARGUMENT: rsf_result = -1;
+pub(crate) const ABI_MISMATCH: rsf_result = -2;
+const NOT_READY: rsf_result = -3;
 const AMD64: u16 = 0x8664;
 const EXECUTABLE: &[u8] = b"SkyrimSE.exe";
-const SHA256: &CStr = c"846efccf0c1374d71f892907f46549560f2fcb0a75cb87a3eed438baa0f1402f";
+pub(crate) const SHA256: &CStr =
+    c"846efccf0c1374d71f892907f46549560f2fcb0a75cb87a3eed438baa0f1402f";
 const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "\0");
 const STATUS: &CStr =
     c"Experimental native-resolution SR; reduced-resolution SR, FG and latency remain incomplete.";
@@ -133,12 +136,16 @@ unsafe extern "C" fn detect(probe: *const rsf_game_probe) -> rsf_detection {
     }
 }
 
-/// The native export lends its hook table for this call. A short output may contain only size.
+/// Publishes the GameSDK table backed by the Rust session. A short output may contain only size.
+///
+/// # Safety
+/// `out` is null or a caller-owned table readable for its size prefix. `leaves` is null or a
+/// table that, when accepted, lives for the process.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_skyrim_publish_api(
     requested: u32,
     out: *mut rsf_game_plugin_api,
-    hooks: &rsf_game_hooks_api,
+    leaves: *const Leaves,
 ) -> rsf_result {
     if out.is_null()
         || (unsafe { out.cast::<u32>().read() } as usize) < size_of::<rsf_game_plugin_api>()
@@ -148,6 +155,16 @@ unsafe extern "C" fn rsf_skyrim_publish_api(
     if requested != RSF_GAME_ABI_VERSION {
         return ABI_MISMATCH;
     }
+    if !unsafe { session::publish(leaves) } {
+        return NOT_READY;
+    }
+    let hooks = rsf_game_hooks_api {
+        prepare: Some(session::prepare),
+        start: Some(session::start),
+        quiesce: Some(session::quiesce),
+        stop: Some(session::stop),
+        status: Some(session::status),
+    };
     unsafe {
         out.write(rsf_game_plugin_api {
             struct_size: size_of::<rsf_game_plugin_api>() as u32,
@@ -160,7 +177,7 @@ unsafe extern "C" fn rsf_skyrim_publish_api(
                 status: STATUS.as_ptr(),
             },
             detect: Some(detect),
-            hooks: *hooks,
+            hooks,
         })
     };
     0

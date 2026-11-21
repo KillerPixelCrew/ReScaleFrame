@@ -102,9 +102,11 @@ Still C++ in `rsf_game_skyrim_se`, in suggested order:
    the profile and guard data. Build, ABI and in-game verification remain open.
    `observers.rs` owns the five observer hooks' creation, activation and disable.
    The start path reuses the same admission as prepare. Failed disable or removal retains
-   its hook record so a later stop or prepare can retry. The native session still owns the
-   host and subsystem order. A Rust regression covers a failed start with a refused disable.
-   The regression remains unrun.
+   its hook record so a later stop or prepare can retry. A Rust regression covers a failed
+   start with a refused disable. The regression remains unrun.
+   `session.rs` now owns the lifecycle; see "Session lifecycle" below. Still C++ in
+   `plugin.cpp`: the five typed observer detours, their engine facts (TAA bypass bytes,
+   presentation binding read, bounded diagnostics) and the window-class policy.
 2. `compatibility.cpp`: Community Shaders 1.9.1 handover (DLL SHA-256 `10ba95e6...097827`, PE image
    validation, six guard sites, `GetProcAddress` interception of `SKSEPlugin_Load`, Feature
    configure `+3a4b30` and HDR `+45cbd0` hooks, state machine, pre-device retention and the
@@ -116,3 +118,57 @@ Still C++ in `rsf_game_skyrim_se`, in suggested order:
    `resolution.cpp`, `render_inputs.cpp`, `auxiliary.cpp`: pre-HDR inputs, sampler binding,
    reduced-resolution ownership, SR reconstruction and auxiliary views.
 5. `camera.cpp`: native camera decode, with its fixture `tests/skyrim_camera.cpp`.
+
+## Session lifecycle
+
+Quiesce clears observer admission both before waiting and under the session lock.
+The second clear covers a start that publishes while quiesce is waiting. The
+regression is present in source and remains unrun.
+
+Source port without a new experiment. `plugin.cpp`'s prepare, start, quiesce, stop and status,
+its session state and the compatibility withdraw callback moved to `session.rs`. Nothing was
+compiled, linked, Cargo-tested, Clippy-checked or CTest-run, and no game, window, device or
+deployment run was made.
+
+Rust now owns the lifecycle order, results and reasons, the once-per-process per-monitor-v2 DPI
+request (through the creation platform's user32 export lookup and last-error leaves), the Runtime
+export lookup, the `rsf_d3d11_host_setup` identity (skyrim-se, engine 1.7.104, project id, units
+0.0142875, qualities 0x1f, native colour transport, bridge 3, `FG_INPUTS | INPUT_TIMELINE`,
+unit motion with invalid -1000), the process-lived host and its original-session check, the
+observer hook record and the start order: observers, sampling, presentation inputs, CPU events,
+native creation. `session_platform.h` lends a size- and version-checked leaf table: one guarded
+subsystem call per C++ operation, the compatibility checkpoint and status, a guarded host log,
+`GetModuleFileNameW`, guarded Runtime create and activate calls, the observer leaves and the
+window-class callback. `rsf_d3d11_host_setup` and `rsf_motion_decode_params` are mirrored by hand
+with size and offset asserts on both sides. The `rsf_skyrim_creation_*` and
+`rsf_skyrim_observers_*` exports, `native_creation.h` and its C++ wrappers are gone; the session
+calls those Rust owners directly.
+
+One lock now serializes the lifecycle, the services lent to the detours and the withdraw
+callback. Detours take a copy through `rsf_skyrim_session_lease` (only while accepting, except the
+renderer-end detour, which keeps reading the retained services so pending auxiliaries finish) and
+never hold it across native execution. The presentation-binding export also comes from the lease.
+Previously quiesce read the services and activation export without the lock and the renderer-end
+detour read the binding export unlocked. Quiesce and the withdraw callback still clear accepting
+before taking the lock, and the callback takes it only when it was accepting, as before.
+
+Preserved: every result code, reason and log text, the DPI receipt text, prepare's two CPU
+preparations (upstream host, then Runtime services), services published before the Runtime
+lookup, the start reason set before re-admission, the rollback order of a refused start stage,
+the racing-checkpoint close, stop's retryable order and status's compatibility override.
+
+Deliberate differences, all on exception paths the former code left partial:
+
+- A start stage that throws is retired together with every earlier stage (in reverse order) and
+  the observers, then start reports `NOT_READY`. Before, the catch left them enabled.
+- Each rollback, quiesce and withdraw step runs even when an earlier one throws. A throwing
+  rollback still reports `NOT_READY` without the refusal reason, as before. Quiesce now reports
+  `NOT_READY` after a throw instead of terminating through `noexcept`.
+- A throwing Runtime activation in start now suspends the host and quiesces the started
+  subsystems; stop retires the hooks. Before, they stayed live without accepting.
+- `rsf_skyrim_publish_api` reports `NOT_READY` for a malformed leaf table, which the compiled
+  constant never is.
+
+Checks: source comparison against the removed C++, `rustfmt --edition 2024 --check` with rustfmt
+1.11.0, `cargo metadata --locked --offline` and `git diff --check`. Two Rust regressions in
+`session/tests.rs` cover the refused and the throwing start stage; they remain unrun.

@@ -1,55 +1,19 @@
 // SPDX-License-Identifier: MIT
 //! Skyrim Special Edition (Steam 1.7.104.0) adapter policy linked into
 //! `ReScaleFrame.Game.SkyrimSE.dll`. Rust owns the GameSDK table and observer admission
-//! (`plugin.rs`), and cold native creation with Steam Present cooperation (`creation.rs`).
-//! Native code lends the typed callbacks and still owns the renderer lifecycle.
+//! (`plugin.rs`), the lifecycle with its process-lived Runtime session, DPI startup and subsystem
+//! order (`session.rs`), the observer hook transactions (`observers.rs`) and cold native creation
+//! with Steam Present cooperation (`creation.rs`). Native code lends the typed detours, MinHook,
+//! exception guards and the C++ render, CPU and compatibility subsystems.
 mod creation;
 mod layout;
 mod observers;
 mod platform;
 mod plugin;
+mod session;
 
-use platform::{CreationCall, Platform};
-use rsf_game_sys::rsf_game_host_services;
+use platform::CreationCall;
 use std::ffi::c_void;
-
-/// Prepares the disabled creation hook and installs the cold-only Steam forwarding.
-///
-/// # Safety
-/// `host` is null or valid for the call; `platform` is null or a process-lived table.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_skyrim_creation_prepare(
-    host: *const rsf_game_host_services,
-    platform: *const Platform,
-) -> bool {
-    let Some(platform) = (unsafe { platform::register(platform) }) else {
-        return false;
-    };
-    match unsafe { host.as_ref() } {
-        Some(host) => creation::prepare(platform, host),
-        None => false,
-    }
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_creation_start() -> bool {
-    creation::start()
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_creation_quiesce() {
-    creation::quiesce();
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_creation_stop() -> bool {
-    creation::stop()
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_creation_busy() -> bool {
-    creation::busy()
-}
 
 /// Called by the detour before the original routine, which it returns.
 ///

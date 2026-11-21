@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: MIT
+// GameSDK export, native detours and leaves of the Rust Skyrim SE owner (src/session.rs). Rust owns
+// the lifecycle order, results and reasons, the Runtime host setup and its original-session reuse,
+// DPI startup, the observer hook record and the borrowed services, which the detours lease under
+// the session lock. This file keeps the five typed observers and their native facts, MinHook,
+// exception guards and the C++ CPU, sampling, presentation-input and compatibility subsystems.
 #include <rescaleframe/game_api.h>
-#include <rescaleframe/game_plugin_util.h>
 #include <MinHook.h>
 #include <d3d11.h>
 #include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <cwchar>
-#include <mutex>
 #include "cpu_events.h"
 #include "render_inputs.h"
 #include "resolution.h"
@@ -15,15 +18,14 @@
 #include "sampling.h"
 #include "presentation_inputs.h"
 #include "compatibility.h"
-#include "native_creation.h"
-#include "observer_platform.h"
+#include "session_platform.h"
 #include <rescaleframe/d3d11_host.h>
-#include <string>
 #if defined(_MSC_VER)
 #include <intrin.h>
 #endif
 
 namespace {
+// Window class policy lent to the Runtime presentation bridge through the host setup.
 int accept_presentation_window(void*, void* window) {
     wchar_t name[128]{};
     return window && GetClassNameW(static_cast<HWND>(window), name, 128) &&
@@ -45,33 +47,13 @@ void* end_target = nullptr;
 using UploadFrame = void (*)(void*, uint8_t);
 UploadFrame original_upload = nullptr;
 void* upload_target = nullptr;
-std::mutex lifecycle;
-std::atomic<bool> accepting{false};
 std::atomic<uint32_t> calls{0};
 std::atomic<uint64_t> observations{0};
 std::atomic<uint64_t> pass_observations{0};
-rsf_game_host_services services{};
-rsf_game_host_services bound_services{}, bound_upstream{};
+using CreateHost = int32_t (*)(const rsf_d3d11_host_setup*, rsf_game_host_services*);
 using SetHostActive = int32_t (*)(void*, uint32_t);
-SetHostActive host_active = nullptr;
 using BindPresentation = int32_t (*)(void*, const rsf_d3d11_presentation_binding*);
-BindPresentation bind_presentation = nullptr;
-bool prepared = false;
-bool enabled = false;
-const char* reason = "Native hooks not prepared; native-resolution SR is experimental; FG and latency remain incomplete.";
-void withdraw_compatibility() noexcept {
-    const bool was_active = accepting.exchange(false, std::memory_order_acq_rel);
-    rsf::skyrim::cpu_quiesce();
-    rsf::skyrim::sampling_quiesce();
-    rsf::skyrim::presentation_inputs_quiesce();
-    rsf::skyrim::native_creation_quiesce();
-    // A successful start publishes host services before accepting. A failure
-    // during prepare has no live host to suspend and must not reacquire its lock.
-    if (was_active) try {
-        std::lock_guard<std::mutex> lock(lifecycle);
-        if (host_active && services.user) (void)host_active(services.user, 0);
-    } catch (...) {}
-}
+bool accepting() noexcept { return rsf_skyrim_session_accepting(); }
 
 bool copy(void* output, const void* input, size_t size) noexcept
 {
@@ -165,14 +147,14 @@ uintptr_t observe_process(void* manager, uint32_t input, uint32_t output, uintpt
 #endif
     calls.fetch_add(1, std::memory_order_acq_rel);
     bool reconstructed = false;
-    if (accepting.load(std::memory_order_acquire) && rsf::skyrim::compatibility_render_allowed() && input == 1 && output == 0 &&
+    if (accepting() && rsf::skyrim::compatibility_render_allowed() && input == 1 && output == 0 &&
         rsf::skyrim::compatibility_postprocess_call(caller, manager, input, output, argument4, argument5)) {
         rsf_game_host_services host{};
-        { std::lock_guard<std::mutex> lock(lifecycle); if (accepting.load(std::memory_order_relaxed)) host = services; }
+        (void)rsf_skyrim_session_lease(true, &host);
         try { (void)rsf::skyrim::prepare_presentation_inputs(manager, host); } catch (...) {}
         try { reconstructed = rsf::skyrim::reconstruct(manager, host); } catch (...) {}
     }
-    if (accepting.load(std::memory_order_acquire)) {
+    if (accepting()) {
         const auto number = pass_observations.fetch_add(1, std::memory_order_relaxed);
         if (number < 16) {
             char colour[160]{}, motion[160]{}, message[512]{};
@@ -183,10 +165,7 @@ uintptr_t observe_process(void* manager, uint32_t input, uint32_t output, uintpt
                 static_cast<unsigned long long>(number), static_cast<unsigned long long>(rsf::skyrim::cpu_source()),
                 GetCurrentThreadId(), manager, input, output, colour, motion);
             rsf_game_host_services host{};
-            {
-                std::lock_guard<std::mutex> lock(lifecycle);
-                if (accepting.load(std::memory_order_relaxed)) host = services;
-            }
+            (void)rsf_skyrim_session_lease(true, &host);
             if (host.log) { try { host.log(host.user, message); } catch (...) {} }
             if (host.log && number < 4) {
                 char inputs[1024]{};
@@ -216,13 +195,13 @@ uintptr_t observe_process(void* manager, uint32_t input, uint32_t output, uintpt
 void observe_jitter(void* state) noexcept
 {
     calls.fetch_add(1, std::memory_order_acq_rel);
-    // The trampoline is process-lived. Never hold lifecycle across native execution.
+    // The trampoline is process-lived. The session lease never spans native execution.
     original(state);
     rsf_game_host_services resolution_host{};
-    { std::lock_guard<std::mutex> lock(lifecycle); if (accepting.load(std::memory_order_relaxed)) resolution_host = services; }
+    (void)rsf_skyrim_session_lease(true, &resolution_host);
     if (!rsf::skyrim::compatibility_render_allowed()) resolution_host = {};
     try { rsf::skyrim::configure_resolution(state, resolution_host); } catch (...) {}
-    if (accepting.load(std::memory_order_acquire)) {
+    if (accepting()) {
         const auto number = observations.fetch_add(1, std::memory_order_relaxed);
         if (number < 16) {
             struct Dimensions { uint32_t width, height; } dimensions{};
@@ -231,10 +210,7 @@ void observe_jitter(void* state) noexcept
             const bool readable = state && copy(&dimensions, bytes + 0x24, sizeof(dimensions)) &&
                 copy(&projection, bytes + 0x44, sizeof(projection));
             rsf_game_host_services host{};
-            {
-                std::lock_guard<std::mutex> lock(lifecycle);
-                if (accepting.load(std::memory_order_relaxed)) host = services;
-            }
+            (void)rsf_skyrim_session_lease(true, &host);
             if (host.log) {
                 char message[256]{};
                 std::snprintf(message, sizeof(message),
@@ -256,9 +232,10 @@ void observe_resolution(void* state) noexcept {
 
 uintptr_t observe_end() noexcept {
     calls.fetch_add(1, std::memory_order_acq_rel);
+    // The retained services, also between quiesce and stop, let pending auxiliaries finish.
     rsf_game_host_services host{};
-    { std::lock_guard<std::mutex> lock(lifecycle); host = services; }
-    if (accepting.load(std::memory_order_acquire) && rsf::skyrim::compatibility_render_allowed() && bind_presentation) {
+    const auto bind_presentation = reinterpret_cast<BindPresentation>(rsf_skyrim_session_lease(false, &host));
+    if (accepting() && rsf::skyrim::compatibility_render_allowed() && bind_presentation) {
         uintptr_t window{}; void* chain{};
         const auto base = reinterpret_cast<const unsigned char*>(GetModuleHandleW(nullptr));
         if (copy(&window, base + 0x3330198, sizeof(window)) && window &&
@@ -322,7 +299,6 @@ const ObserverHook& observer_hook(uint32_t index) noexcept
     return hooks[index];
 }
 
-rsf_skyrim_observer_control observer_control{};
 constexpr rsf_skyrim_observer_leaves observer_leaves{
     []() noexcept {
         const auto result = MH_Initialize();
@@ -357,213 +333,71 @@ constexpr rsf_skyrim_observer_leaves observer_leaves{
 };
 static_assert(MH_OK == 0);
 
-rsf_result prepare(const rsf_game_prepare_args* args) noexcept try
+// A subsystem call that throws reports false; the Rust session then retires what it started and
+// answers RSF_ERROR_NOT_READY as the former catch did.
+bool subsystem(uint32_t operation, const rsf_game_host_services* services, int32_t* value) noexcept try
 {
-    auto valid = rsf_game::validate(args); if (valid != RSF_OK) return valid;
-    valid = rsf_game::validate(args->host); if (valid != RSF_OK) return valid;
-    if (!args->host->session_id) return RSF_ERROR_INVALID_ARGUMENT;
-    std::lock_guard<std::mutex> lock(lifecycle);
-    if (prepared || calls.load(std::memory_order_acquire) || rsf::skyrim::cpu_busy()) return RSF_ERROR_BUSY;
-    const auto admitted = admit_observers();
-    if (admitted < 0) return RSF_ERROR_NOT_READY;
-    if (!admitted) {
-        reason = "Skyrim native observer refused: executable identity or native hook bytes differ.";
-        return RSF_ERROR_NATIVE_REFUSED;
+    using namespace rsf::skyrim;
+    const auto flag = [value](bool result) { *value = result ? 1 : 0; };
+    switch (operation) {
+    case RSF_SKYRIM_ADMIT_OBSERVERS: *value = admit_observers(); break;
+    case RSF_SKYRIM_OBSERVERS_BUSY: flag(calls.load(std::memory_order_acquire) != 0); break;
+    case RSF_SKYRIM_RESET_OBSERVATIONS:
+        observations.store(0, std::memory_order_relaxed);
+        pass_observations.store(0, std::memory_order_relaxed);
+        flag(true);
+        break;
+    case RSF_SKYRIM_CPU_PREPARE: flag(services && cpu_prepare(*services)); break;
+    case RSF_SKYRIM_CPU_START: flag(cpu_start()); break;
+    case RSF_SKYRIM_CPU_QUIESCE: cpu_quiesce(); flag(true); break;
+    case RSF_SKYRIM_CPU_DISABLE: flag(cpu_disable()); break;
+    case RSF_SKYRIM_CPU_STOP: flag(cpu_stop()); break;
+    case RSF_SKYRIM_CPU_BUSY: flag(cpu_busy()); break;
+    case RSF_SKYRIM_SAMPLING_START: flag(services && sampling_start(*services)); break;
+    case RSF_SKYRIM_SAMPLING_QUIESCE: sampling_quiesce(); flag(true); break;
+    case RSF_SKYRIM_SAMPLING_STOP: flag(sampling_stop()); break;
+    case RSF_SKYRIM_SAMPLING_BUSY: flag(sampling_busy()); break;
+    case RSF_SKYRIM_PRESENTATION_START: flag(services && presentation_inputs_start(*services)); break;
+    case RSF_SKYRIM_PRESENTATION_QUIESCE: presentation_inputs_quiesce(); flag(true); break;
+    case RSF_SKYRIM_PRESENTATION_STOP: flag(presentation_inputs_stop()); break;
+    case RSF_SKYRIM_PRESENTATION_BUSY: flag(presentation_inputs_busy()); break;
+    case RSF_SKYRIM_RESOLUTION_OWNED: flag(resolution_owned()); break;
+    case RSF_SKYRIM_AUXILIARIES_PENDING: flag(auxiliaries_pending()); break;
+    default: flag(false); break;
     }
-    if (!rsf::skyrim::compatibility_checkpoint(reason, withdraw_compatibility)) {
-        if (args->host->log) args->host->log(args->host->user, reason);
-        return RSF_ERROR_NATIVE_REFUSED;
-    }
-    static bool dpi_requested = false;
-    if (!dpi_requested) {
-        dpi_requested = true;
-        using SetDpi = BOOL (WINAPI*)(HANDLE);
-        const auto set_dpi = reinterpret_cast<SetDpi>(GetProcAddress(GetModuleHandleW(L"user32.dll"), "SetProcessDpiAwarenessContext"));
-        SetLastError(0);
-        const bool accepted = set_dpi && set_dpi(reinterpret_cast<HANDLE>(INT_PTR(-4)));
-        const auto error = accepted ? 0ul : static_cast<unsigned long>(GetLastError());
-        if (args->host->log) {
-            char message[180]{}; std::snprintf(message, sizeof(message),
-                "Skyrim DPI startup per-monitor-v2 accepted=%u error=%lu; window creation must use physical pixels.",
-                accepted ? 1u : 0u, error);
-            args->host->log(args->host->user, message);
-        }
-    }
-    if (!rsf_skyrim_observers_prepare(&observer_control, &observer_leaves))
-        return RSF_ERROR_NATIVE_REFUSED;
-    if (!rsf::skyrim::cpu_prepare(*args->host)) {
-        reason = "Skyrim CPU event hooks refused: expected bytes, hook ownership or clock unavailable.";
-        return RSF_ERROR_NATIVE_REFUSED;
-    }
-    services = *args->host;
-    using CreateHost = int32_t (*)(const rsf_d3d11_host_setup*, rsf_game_host_services*);
-    const auto runtime = GetModuleHandleW(L"ReScaleFrame.Runtime.dll");
-    const auto create_host = runtime ? reinterpret_cast<CreateHost>(GetProcAddress(runtime, "rsf_d3d11_host_create")) : nullptr;
-    host_active = runtime ? reinterpret_cast<SetHostActive>(GetProcAddress(runtime, "rsf_d3d11_host_set_active")) : nullptr;
-    bind_presentation = runtime ? reinterpret_cast<BindPresentation>(GetProcAddress(runtime, "rsf_d3d11_host_bind_presentation")) : nullptr;
-    wchar_t runtime_path[32768]{};
-    const auto path_length = runtime ? GetModuleFileNameW(runtime, runtime_path, 32768) : 0;
-    if (!create_host || !host_active || !bind_presentation || !path_length || path_length >= 32768) return RSF_ERROR_NOT_READY;
-    const auto separator = std::wcsrchr(runtime_path, L'\\');
-    if (!separator) return RSF_ERROR_NOT_READY;
-    const std::wstring directory(runtime_path, size_t(separator - runtime_path));
-    const auto ini = directory + L"\\ReScaleFrame.ini";
-    rsf_d3d11_host_setup setup{}; setup.struct_size = sizeof(setup); setup.abi_version = RSF_D3D11_HOST_ABI_VERSION;
-    setup.configuration_path = ini.c_str(); setup.configuration_section = L"Rendering";
-    setup.runtime_directory = directory.c_str(); setup.identity_utf8 = "skyrim-se"; setup.executable_sha256 = rsf_skyrim_executable_sha256();
-    setup.engine_type = 0; setup.engine_version_utf8 = "1.7.104";
-    setup.project_id_utf8 = "668392a0-ecfe-4d0c-9f58-c2838c5ca308";
-    setup.units_to_meters = 0.0142875f; setup.quality_choices = 0x1f;
-    setup.colour_transport_default = 1; // Native colour by default; saved overlay choice wins.
-    // The corrected shared SR transfer has device regression evidence. Runtime
-    // capability and per-frame checks still gate generation and latency admission.
-    // Scope inner creation before external wrappers capture the chain; retain their outer result.
-    setup.presentation_bridge = 3; setup.accept_window = accept_presentation_window;
-    // Native prospective-poll ownership connects input and simulation reports;
-    // the runtime owns pacing, marker mapping and provider admission policy.
-    setup.capabilities = RSF_D3D11_HOST_CAP_FG_INPUTS | RSF_D3D11_HOST_CAP_INPUT_TIMELINE;
-    setup.motion.struct_size = sizeof(setup.motion); setup.motion.scale_x = setup.motion.scale_y = 1;
-    setup.motion.output_scale_x = setup.motion.output_scale_y = 1; setup.motion.invalid_value = -1000;
-    if (bound_services.user) {
-        if (bound_upstream.session_id != args->host->session_id || bound_upstream.user != args->host->user ||
-            bound_upstream.log != args->host->log || bound_upstream.cpu_event != args->host->cpu_event) {
-            reason = "Experimental D3D11 host is process-lived; a different session requires process restart.";
-            return RSF_ERROR_NATIVE_REFUSED;
-        }
-        services = bound_services;
-    } else {
-        const auto host_result = create_host(&setup, &services);
-        if (host_result != RSF_OK) return host_result;
-        bound_services = services; bound_upstream = *args->host;
-    }
-    if (!rsf::skyrim::native_creation_prepare(services)) {
-        reason = "Native creation root refused: cold owner, expected thunk/caller bytes or runtime service unavailable.";
-        if (services.log) services.log(services.user, reason);
-        return RSF_ERROR_NATIVE_REFUSED;
-    }
-    if (!rsf::skyrim::cpu_prepare(services)) return RSF_ERROR_NATIVE_REFUSED;
-    observations.store(0, std::memory_order_relaxed);
-    pass_observations.store(0, std::memory_order_relaxed);
-    prepared = true;
-    reason = "Native pre-HDR SR prepared at native resolution; FG and latency ownership remain incomplete.";
-    return RSF_OK;
+    return true;
 }
-catch (...) { return RSF_ERROR_NOT_READY; }
+catch (...) { return false; }
 
-rsf_result start(const rsf_game_start_args* args) noexcept try
-{
-    const auto valid = rsf_game::validate(args); if (valid != RSF_OK) return valid;
-    std::lock_guard<std::mutex> lock(lifecycle);
-    if (!prepared) return RSF_ERROR_NOT_READY;
-    const auto refused = [](const char* stage) {
-        reason = stage;
-        if (services.log) services.log(services.user, stage);
-        return RSF_ERROR_NATIVE_REFUSED;
-    };
-    if (!rsf::skyrim::compatibility_checkpoint(reason)) {
-        if (services.log) services.log(services.user, reason);
-        return RSF_ERROR_NATIVE_REFUSED;
-    }
-    if (enabled) return RSF_OK;
-    reason = "Skyrim start refused: executable identity or jitter101E360 guard changed before enable.";
-    const auto admitted = admit_observers();
-    if (admitted < 0) return RSF_ERROR_NOT_READY;
-    if (!admitted) { if (services.log) services.log(services.user, reason); return RSF_ERROR_NATIVE_REFUSED; }
-    if (!rsf_skyrim_observers_start(&observer_control, &observer_leaves, &services))
-        return RSF_ERROR_NATIVE_REFUSED;
-    if (!rsf::skyrim::sampling_start(services)) {
-        (void)rsf_skyrim_observers_disable(&observer_control, &observer_leaves, true);
-        return refused("Skyrim start refused: sampler guard, binding service or hook enable failed.");
-    }
-    if (!rsf::skyrim::presentation_inputs_start(services)) {
-        (void)rsf::skyrim::sampling_stop();
-        (void)rsf_skyrim_observers_disable(&observer_control, &observer_leaves, true);
-        return refused("Skyrim start refused: presentation-input guard or hook enable failed.");
-    }
-    if (!rsf::skyrim::cpu_start()) {
-        (void)rsf::skyrim::presentation_inputs_stop();
-        (void)rsf::skyrim::sampling_stop();
-        (void)rsf_skyrim_observers_disable(&observer_control, &observer_leaves, true);
-        return refused("Skyrim start refused: CPU guard or hook enable failed.");
-    }
-    if (!rsf::skyrim::native_creation_start()) {
-        (void)rsf::skyrim::cpu_disable();
-        (void)rsf::skyrim::presentation_inputs_stop();
-        (void)rsf::skyrim::sampling_stop();
-        (void)rsf_skyrim_observers_disable(&observer_control, &observer_leaves, true);
-        return refused("Skyrim start refused: native creation guard or hook enable failed; native presentation retained.");
-    }
-    enabled = true;
-    if (host_active) (void)host_active(services.user, 1);
-    accepting.store(true, std::memory_order_release);
-    // Close a refusal racing start: do not republish a live engine source after
-    // the compatibility callback already withdrew it on another thread.
-    if (!rsf::skyrim::compatibility_checkpoint(reason)) {
-        accepting.store(false, std::memory_order_release);
-        if (host_active) (void)host_active(services.user, 0);
-        rsf::skyrim::cpu_quiesce(); rsf::skyrim::sampling_quiesce();
-        rsf::skyrim::presentation_inputs_quiesce(); rsf::skyrim::native_creation_quiesce();
-        return RSF_ERROR_NATIVE_REFUSED;
-    }
-    reason = "Experimental native-resolution SR active with native temporal fallback; FG and latency ownership remain incomplete.";
-    return RSF_OK;
-}
-catch (...) { return RSF_ERROR_NOT_READY; }
-
-rsf_result quiesce(const rsf_game_control_args* args) noexcept
-{
-    const auto valid = rsf_game::validate(args); if (valid != RSF_OK) return valid;
-    accepting.store(false, std::memory_order_release);
-    if (host_active) (void)host_active(services.user, 0);
-    rsf::skyrim::native_creation_quiesce();
-    rsf::skyrim::cpu_quiesce();
-    rsf::skyrim::sampling_quiesce();
-    rsf::skyrim::presentation_inputs_quiesce();
-    return calls.load(std::memory_order_acquire) || rsf::skyrim::cpu_busy() || rsf::skyrim::resolution_owned() || rsf::skyrim::auxiliaries_pending() || rsf::skyrim::sampling_busy() || rsf::skyrim::presentation_inputs_busy() || rsf::skyrim::native_creation_busy() ? RSF_ERROR_BUSY : RSF_OK;
-}
-
-rsf_result stop(const rsf_game_control_args* args) noexcept try
-{
-    const auto valid = rsf_game::validate(args); if (valid != RSF_OK) return valid;
-    std::lock_guard<std::mutex> lock(lifecycle);
-    accepting.store(false, std::memory_order_release);
-    if (host_active) (void)host_active(services.user, 0);
-    if (rsf::skyrim::resolution_owned() || rsf::skyrim::auxiliaries_pending()) return RSF_ERROR_BUSY;
-    if (!rsf::skyrim::native_creation_stop()) return RSF_ERROR_BUSY;
-    if (!rsf::skyrim::presentation_inputs_stop()) return RSF_ERROR_BUSY;
-    if (!rsf::skyrim::sampling_stop()) return RSF_ERROR_BUSY;
-    const bool cpu_stopped = rsf::skyrim::cpu_disable();
-    if (!rsf_skyrim_observers_disable(&observer_control, &observer_leaves, false))
-        return RSF_ERROR_BUSY;
-    enabled = false;
-    if (!cpu_stopped || calls.load(std::memory_order_acquire)) return RSF_ERROR_BUSY;
-    if (!rsf::skyrim::cpu_stop()) return RSF_ERROR_BUSY;
-    services = {}; prepared = false;
-    reason = "Native observer stopped; no host services retained.";
-    return RSF_OK;
-}
-catch (...) { return RSF_ERROR_NOT_READY; }
-
-rsf_result status(rsf_game_renderer_status* output) noexcept try
-{
-    const auto valid = rsf_game::validate(output); if (valid != RSF_OK) return valid;
-    std::lock_guard<std::mutex> lock(lifecycle);
-    output->prepared = prepared ? 1u : 0u;
-    output->active = accepting.load(std::memory_order_acquire) ? 1u : 0u;
-    output->rendering_ready = 0;
-    output->reason = reason;
-    if (!rsf::skyrim::compatibility_render_allowed()) {
-        if (const auto compatibility = rsf::skyrim::compatibility_status()) output->reason = compatibility;
-    }
-    return RSF_OK;
-}
-catch (...) { return RSF_ERROR_NOT_READY; }
-
+const rsf_skyrim_session_leaves session_leaves{
+    sizeof(rsf_skyrim_session_leaves), RSF_SKYRIM_SESSION_LEAVES_VERSION,
+    rsf::skyrim::creation_platform(), &observer_leaves,
+    subsystem,
+    [](const char** refusal, bool arm) noexcept {
+        return rsf::skyrim::compatibility_checkpoint(*refusal, arm ? &rsf_skyrim_session_withdraw : nullptr);
+    },
+    []() noexcept { return rsf::skyrim::compatibility_status(); },
+    [](const rsf_game_host_services* host, const char* message) noexcept {
+        try { if (host && host->log) host->log(host->user, message); return true; }
+        catch (...) { return false; }
+    },
+    [](uintptr_t module, wchar_t* path, uint32_t capacity) noexcept {
+        return uint32_t(GetModuleFileNameW(reinterpret_cast<HMODULE>(module), path, capacity));
+    },
+    [](uintptr_t create, const rsf_d3d11_host_setup* setup, rsf_game_host_services* services, int32_t* result) noexcept {
+        try { *result = reinterpret_cast<CreateHost>(create)(setup, services); return true; }
+        catch (...) { return false; }
+    },
+    [](uintptr_t activate, void* user, uint32_t active, int32_t* result) noexcept {
+        try { *result = reinterpret_cast<SetHostActive>(activate)(user, active); return true; }
+        catch (...) { return false; }
+    },
+    accept_presentation_window,
+};
 }
 
 extern "C" __declspec(dllexport) rsf_result rsf_get_game_plugin_api(
     uint32_t requested_abi, rsf_game_plugin_api* api) noexcept
 {
-    constexpr rsf_game_hooks_api hooks{prepare, start, quiesce, stop, status};
-    return rsf_skyrim_publish_api(requested_abi, api, &hooks);
+    return rsf_skyrim_publish_api(requested_abi, api, &session_leaves);
 }

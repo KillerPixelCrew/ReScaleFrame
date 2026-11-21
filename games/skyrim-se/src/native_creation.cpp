@@ -5,7 +5,6 @@
 // fault-guarded read, Win32 module/memory/last-error calls, MinHook, exception guards around host
 // and Runtime callbacks, the Community Shaders gate, the shared Steam facade and the detour that
 // captures the native return address and calls the original on its own frame.
-#include "native_creation.h"
 #include "native_creation_platform.h"
 #include "observer_platform.h"
 #include "compatibility.h"
@@ -150,12 +149,5 @@ const rsf_skyrim_creation_platform platform{
 };
 }
 
-bool native_creation_prepare(const rsf_game_host_services& host) {
-    return rsf_skyrim_creation_prepare(&host, creation_platform());
-}
 const rsf_skyrim_creation_platform* creation_platform() noexcept { return &platform; }
-bool native_creation_start() { return rsf_skyrim_creation_start(); }
-void native_creation_quiesce() { rsf_skyrim_creation_quiesce(); }
-bool native_creation_busy() { return rsf_skyrim_creation_busy(); }
-bool native_creation_stop() { return rsf_skyrim_creation_stop(); }
 }

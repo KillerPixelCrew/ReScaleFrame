@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-//! Observer hook installation, activation, and retryable disable. Native code serializes calls
-//! with the lifecycle mutex and keeps typed MinHook trampolines.
+//! Observer hook installation, activation, and retryable disable. The session (`session.rs`)
+//! owns the control record under its lock; native code keeps the typed MinHook trampolines.
 use rsf_game_sys::rsf_game_host_services;
 use std::ffi::{CString, c_char};
 
@@ -13,31 +13,36 @@ const HOOKS: [&str; 5] = [
 ];
 const ALL: u32 = (1 << HOOKS.len()) - 1;
 
-#[repr(C)]
 #[derive(Default)]
-struct Control {
+pub(crate) struct Control {
     created: u32,
     active: u32,
     pinned: u32,
 }
 
+/// `rsf_skyrim_observer_leaves`, lent by `plugin.cpp` for the process.
 #[repr(C)]
-struct Leaves {
-    initialize: unsafe extern "C" fn() -> bool,
-    create: unsafe extern "C" fn(u32) -> bool,
-    remove: unsafe extern "C" fn(u32) -> bool,
-    enable: unsafe extern "C" fn(u32) -> i32,
-    disable: unsafe extern "C" fn(u32) -> bool,
-    pin: unsafe extern "C" fn() -> bool,
-    log: unsafe extern "C" fn(*const rsf_game_host_services, *const c_char),
+pub(crate) struct Leaves {
+    pub(crate) initialize: unsafe extern "C" fn() -> bool,
+    pub(crate) create: unsafe extern "C" fn(u32) -> bool,
+    pub(crate) remove: unsafe extern "C" fn(u32) -> bool,
+    pub(crate) enable: unsafe extern "C" fn(u32) -> i32,
+    pub(crate) disable: unsafe extern "C" fn(u32) -> bool,
+    pub(crate) pin: unsafe extern "C" fn() -> bool,
+    pub(crate) log: unsafe extern "C" fn(*const rsf_game_host_services, *const c_char),
 }
 
-const _: () = {
-    assert!(size_of::<Control>() == 12);
-    assert!(size_of::<Leaves>() == 56);
-};
+const _: () = assert!(size_of::<Leaves>() == 56);
 
 impl Control {
+    pub(crate) const fn new() -> Self {
+        Self {
+            created: 0,
+            active: 0,
+            pinned: 0,
+        }
+    }
+
     /// Roll back only disabled hooks, retaining any whose removal refused.
     fn remove_created(&mut self, leaves: &Leaves) {
         for index in (0..HOOKS.len() as u32).rev() {
@@ -48,7 +53,7 @@ impl Control {
         }
     }
 
-    fn prepare(&mut self, leaves: &Leaves) -> bool {
+    pub(crate) fn prepare(&mut self, leaves: &Leaves) -> bool {
         if self.pinned != 0 {
             return self.created == ALL && self.active == 0;
         }
@@ -71,7 +76,7 @@ impl Control {
         true
     }
 
-    fn disable(&mut self, leaves: &Leaves, rollback: bool) -> bool {
+    pub(crate) fn disable(&mut self, leaves: &Leaves, rollback: bool) -> bool {
         let count = HOOKS.len() as u32;
         for ordinal in 0..count {
             let index = if rollback {
@@ -87,7 +92,7 @@ impl Control {
         self.active == 0
     }
 
-    fn start(&mut self, leaves: &Leaves, host: &rsf_game_host_services) -> bool {
+    pub(crate) fn start(&mut self, leaves: &Leaves, host: &rsf_game_host_services) -> bool {
         if self.pinned == 0 || self.created != ALL || !self.disable(leaves, true) {
             return false;
         }
@@ -106,30 +111,6 @@ impl Control {
         }
         true
     }
-}
-
-// The C facade lends these tables for the call and exclusively lends Control.
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_observers_prepare(control: &mut Control, leaves: &Leaves) -> bool {
-    control.prepare(leaves)
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_observers_start(
-    control: &mut Control,
-    leaves: &Leaves,
-    host: &rsf_game_host_services,
-) -> bool {
-    control.start(leaves, host)
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_skyrim_observers_disable(
-    control: &mut Control,
-    leaves: &Leaves,
-    rollback: bool,
-) -> bool {
-    control.disable(leaves, rollback)
 }
 
 #[cfg(test)]

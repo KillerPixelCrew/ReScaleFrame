@@ -82,14 +82,8 @@ typedef struct rsf_skyrim_creation_platform {
     bool (*steam_prepare)(const rsf_game_host_services* host, bool (*cold_owner)(void));
 } rsf_skyrim_creation_platform;
 
-// Rust owner entry points (src/lib.rs). platform must live for the process; host is borrowed.
-bool rsf_skyrim_creation_prepare(const rsf_game_host_services* host,
-    const rsf_skyrim_creation_platform* platform);
-bool rsf_skyrim_creation_start(void);
-void rsf_skyrim_creation_quiesce(void);
-bool rsf_skyrim_creation_stop(void);
-bool rsf_skyrim_creation_busy(void);
-// Opens the call's lease and returns the original routine. leave is mandatory after enter, on
+// Detour entry points (src/lib.rs). The Rust session (src/session.rs) registers the platform and
+// prepares, starts, quiesces and stops the creation owner. Opens the call's lease and returns the original routine. leave is mandatory after enter, on
 // return or unwind; it closes any Runtime scope and restores the native last error.
 void* rsf_skyrim_creation_enter(rsf_skyrim_creation_call* call);
 void rsf_skyrim_creation_leave(rsf_skyrim_creation_call* call);
