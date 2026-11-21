@@ -4,6 +4,15 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now owns D3D11 observer Present sequencing, recursion, in-flight
+counts and paired output dimensions. Application completions must
+match an active call before they can change frame or uninstall state.
+Successful uninstall clears the cached size so the next attachment can
+identify the presenting device. Native leaves still select and invoke
+the COM trampoline. C++ exceptions from those calls are contained at
+the bridge. The observer C ABI is unchanged. Build and regression test
+execution remain open.
+
 Rust now owns D3D12 diagnostics dispatch, validation message budgets,
 stack formatting and the one-time device-removal report. The logger
 and its user context are published together and copied before calling

@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "vtable_patch.h"
+#include "d3d11_observer_present.h"
 
 namespace {
 
@@ -73,7 +74,6 @@ struct Observer {
     // when the entry of dxgi's Present is patched, dxgi's Present itself when it is not. See
     // `install_present_detour` for why it is never the patched entry.
     std::atomic<bool> present_detoured{false};
-    std::atomic<uint32_t> present_calls{0};
     void* present_entry = nullptr;
     // MinHook's trampoline over the detoured function's own prologue: the rest of that function,
     // whatever it forwards to, and the genuine body at the end. Where this hook forwards.
@@ -107,10 +107,7 @@ struct Observer {
     uint32_t textures_written = 0;
     uint32_t constant_bytes_written = 0;
 
-    std::atomic<uint32_t> frames{0};
     uint32_t created = 0;
-    std::atomic<uint32_t> present_width{0};
-    std::atomic<uint32_t> present_height{0};
 };
 
 Observer& observer()
@@ -499,14 +496,10 @@ void perform_pending_dump(Observer& self)
     self.constant_bytes_written = constant_bytes;
 }
 
-// Whether this thread is already inside the Present hook. Another hook chaining back into this
-// one is the recursion `genuine_slot` exists to prevent; if it happens anyway, the inner call is
-// refused rather than forwarded, which costs that frame and saves the process.
-thread_local uint32_t present_depth = 0;
-
 void update_presenter(Observer& self, IDXGISwapChain* swapchain)
 {
-    const bool need_details = self.present_width.load() == 0;
+    const auto size = rsf_core_observer11_present_size();
+    const bool need_details = (size >> 32) == 0;
 
     // Queried outside the lock for the same re-entrancy reason as the creation hook.
     // Recorded under the lock and reported outside it, because everything in this file is.
@@ -520,11 +513,13 @@ void update_presenter(Observer& self, IDXGISwapChain* swapchain)
     {
         DXGI_SWAP_CHAIN_DESC desc{};
         if (SUCCEEDED(swapchain->GetDesc(&desc)) && desc.BufferDesc.Width != 0 &&
-            (desc.BufferDesc.Width != self.present_width ||
-             desc.BufferDesc.Height != self.present_height)) {
-            const uint32_t previous_width = self.present_width.exchange(desc.BufferDesc.Width);
-            const uint32_t previous_height = self.present_height.exchange(desc.BufferDesc.Height);
-            if (previous_width != 0 && self.options.log) {
+            (desc.BufferDesc.Width != uint32_t(size >> 32) ||
+             desc.BufferDesc.Height != uint32_t(size))) {
+            const auto previous = rsf_core_observer11_replace_size(desc.BufferDesc.Width, desc.BufferDesc.Height);
+            const auto previous_width = uint32_t(previous >> 32);
+            const auto previous_height = uint32_t(previous);
+            if (previous_width != 0 && self.options.log &&
+                (previous_width != desc.BufferDesc.Width || previous_height != desc.BufferDesc.Height)) {
                 char message[160];
                 std::snprintf(message, sizeof(message),
                               "observer: the swap chain is now %ux%u, was %ux%u", desc.BufferDesc.Width,
@@ -584,89 +579,80 @@ void update_presenter(Observer& self, IDXGISwapChain* swapchain)
     perform_pending_dump(self);
 }
 
-template<class Forward> HRESULT observe_present(IDXGISwapChain* swapchain, UINT interval, UINT flags,
-    uint32_t method, Forward&& forward)
-{
-    Observer& self = observer();
-    struct CallLifetime {
-        std::atomic<uint32_t>& calls;
-        explicit CallLifetime(std::atomic<uint32_t>& value) : calls(value) { ++calls; }
-        ~CallLifetime() { --calls; }
-    } lifetime(self.present_calls);
-    // DXGI implementations are shared across APIs. The FG provider's D3D12 real/generated
-    // presents must not re-enter D3D11 callbacks, disturb window identity, or count as source frames.
-    ID3D11Device* application_device = nullptr;
-    const auto api = swapchain->GetDevice(__uuidof(ID3D11Device), reinterpret_cast<void**>(&application_device));
-    if (FAILED(api) || !application_device) return forward(false);
-    application_device->Release();
-    if (present_depth != 0) {
-        static bool said = false;
-        if (!said && self.options.log) {
-            said = true;
-            self.options.log(self.options.log_user,
-                             "observer: Present re-entered from inside its own hook, so another "
-                             "hook forwards to this one. The inner call goes straight to the "
-                             "genuine Present where that is known, and is refused otherwise");
+static_assert(DXGI_PRESENT_TEST == 1 && S_OK == 0);
+static_assert(sizeof(rsf_observer11_present_ops) == 6 * sizeof(void*));
+constexpr rsf_observer11_present_ops present_ops{
+    [](void* raw) noexcept -> int32_t {
+        // D3D12 real and generated Presents share DXGI but must bypass D3D11 callbacks.
+        try {
+            ID3D11Device* device = nullptr;
+            const auto result = static_cast<IDXGISwapChain*>(raw)->GetDevice(
+                __uuidof(ID3D11Device), reinterpret_cast<void**>(&device));
+            if (!device) return 0;
+            device->Release();
+            return SUCCEEDED(result);
+        } catch (...) { return 0; }
+    },
+    [](void* raw) noexcept {
+        try { update_presenter(observer(), static_cast<IDXGISwapChain*>(raw)); }
+        catch (...) { /* Diagnostics must not interrupt Present. */ }
+    },
+    [](const rsf_observer_present_event* event) noexcept {
+        const auto& options = observer().options;
+        if (options.on_present_event) {
+            try { options.on_present_event(options.on_present_event_user, event); }
+            catch (...) { /* Telemetry must not interrupt Present. */ }
         }
-        return forward(true);
-    }
-    struct Depth {
-        Depth() { ++present_depth; }
-        ~Depth() { --present_depth; }
-    } depth;
-    const auto event_callback = self.options.on_present_event;
-    void* const event_user = self.options.on_present_event_user;
-    auto notify_present = [&](uint32_t completed, HRESULT result) {
-        if (!event_callback) return;
-        const rsf_observer_present_event event{sizeof(event), completed, swapchain, interval, flags, result, method};
-        try { event_callback(event_user, &event); }
-        catch (...) { /* Telemetry cannot interrupt the game's original Present. */ }
-    };
-    notify_present(0, S_OK);
-    if (flags & DXGI_PRESENT_TEST) {
-        // Testing visibility must not advance frame counters, dump textures, change settings,
-        // draw an overlay or activate a graphics backend.
-        const HRESULT result = forward(false);
-        notify_present(1, result); return result;
-    }
-
-    update_presenter(self, swapchain);
-
-    // Before the game's own Present, which is the one moment the finished frame exists and nothing
-    // has been shown yet. No lock is held: this calls into D3D and back into the caller, and
-    // holding one across that is how this project deadlocked twice.
-    if (self.options.on_present) {
-        self.options.on_present(self.options.on_present_user, swapchain);
-    }
-    // Preserve the existing chain, interval, flags and returned HRESULT. Report completion only
-    // after that chain returns; a successful hook invocation alone is not successful Present.
-    const HRESULT result = forward(false);
-    if (result == S_OK) {
-        ++self.frames;
-    }
-    notify_present(1, result);
-    return result;
-}
+    },
+    [](void* raw) noexcept {
+        const auto& options = observer().options;
+        if (options.on_present) {
+            try { options.on_present(options.on_present_user, raw); }
+            catch (...) { /* A callback must not interrupt Present. */ }
+        }
+    },
+    [](const rsf_observer_present_event* event, const void* parameters, uint32_t nested) noexcept -> int32_t {
+        try {
+            auto& self = observer();
+            auto* chain = static_cast<IDXGISwapChain*>(event->swapchain);
+            if (event->method == 1) {
+                auto* chain1 = static_cast<IDXGISwapChain1*>(chain);
+                const auto call = nested ? self.present1_genuine : self.present1_chain;
+                if (nested && (!self.present1_detoured || !call)) return S_OK;
+                return call(chain1, event->sync_interval, event->flags,
+                    static_cast<const DXGI_PRESENT_PARAMETERS*>(parameters));
+            }
+            if (nested) return self.present_detoured && self.present_genuine ?
+                self.present_genuine(chain, event->sync_interval, event->flags) : S_OK;
+            const auto call = self.present_detoured ? self.present_chain : self.original_present;
+            return call(chain, event->sync_interval, event->flags);
+        } catch (...) {
+            return E_FAIL;
+        }
+    },
+    []() noexcept -> int32_t {
+        const auto& options = observer().options;
+        if (!options.log) return 0;
+        try {
+            options.log(options.log_user,
+                "observer: Present re-entered from inside its own hook, so another "
+                "hook forwards to this one. The inner call goes straight to the "
+                "genuine Present where that is known, and is refused otherwise");
+        } catch (...) { /* Logging must not interrupt Present. */ }
+        return 1;
+    },
+};
 
 HRESULT STDMETHODCALLTYPE hooked_present(IDXGISwapChain* swapchain, UINT interval, UINT flags)
 {
-    auto& self = observer();
-    return observe_present(swapchain, interval, flags, 0, [&](bool nested) {
-        if (nested) return self.present_detoured && self.present_genuine ?
-            self.present_genuine(swapchain, interval, flags) : S_OK;
-        return self.present_detoured ? self.present_chain(swapchain, interval, flags) :
-            self.original_present(swapchain, interval, flags);
-    });
+    rsf_observer_present_event event{sizeof(event), 0, swapchain, interval, flags, S_OK, 0};
+    return rsf_core_observer11_present(&event, nullptr, &present_ops);
 }
 HRESULT STDMETHODCALLTYPE hooked_present1(IDXGISwapChain1* swapchain, UINT interval, UINT flags,
     const DXGI_PRESENT_PARAMETERS* parameters)
 {
-    auto& self = observer();
-    return observe_present(swapchain, interval, flags, 1, [&](bool nested) {
-        if (nested) return self.present1_detoured && self.present1_genuine ?
-            self.present1_genuine(swapchain, interval, flags, parameters) : S_OK;
-        return self.present1_chain(swapchain, interval, flags, parameters);
-    });
+    rsf_observer_present_event event{sizeof(event), 0, static_cast<IDXGISwapChain*>(swapchain), interval, flags, S_OK, 1};
+    return rsf_core_observer11_present(&event, parameters, &present_ops);
 }
 
 // The function a module's own image has in a vtable slot, for a slot another hook has patched.
@@ -1265,7 +1251,7 @@ extern "C" rsf_observer_result rsf_observer_uninstall(void)
 {
     Observer& self = observer();
     std::lock_guard<std::mutex> lock(self.guard);
-    if (!self.installed || self.present_calls.load()) {
+    if (!self.installed || rsf_core_observer11_present_calls()) {
         return RSF_OBSERVER_ERROR_NOT_READY;
     }
     rsf::patch_slot(self.device_vtable, slot_create_texture2d,
@@ -1323,6 +1309,7 @@ extern "C" rsf_observer_result rsf_observer_uninstall(void)
         self.device->Release();
         self.device = nullptr;
     }
+    rsf_core_observer11_replace_size(0, 0);
     self.installed = false;
     return RSF_OBSERVER_OK;
 }
@@ -1384,11 +1371,12 @@ extern "C" rsf_observer_result rsf_observer_get_status(rsf_observer_status* stat
     std::lock_guard<std::mutex> lock(self.guard);
     status->installed = self.installed ? 1u : 0u;
     status->have_device = self.device != nullptr ? 1u : 0u;
-    status->frames_presented = self.frames.load();
+    status->frames_presented = rsf_core_observer11_frames();
     status->textures_matched = static_cast<uint32_t>(self.matches.size());
     status->textures_created = self.created;
-    status->present_width = self.present_width.load();
-    status->present_height = self.present_height.load();
+    const auto size = rsf_core_observer11_present_size();
+    status->present_width = uint32_t(size >> 32);
+    status->present_height = uint32_t(size);
     status->constant_buffers_matched = self.constant_matches;
     status->distinct_buffer_sizes = static_cast<uint32_t>(self.buffer_sizes.size());
     status->dumps_completed = self.dumps_completed;
@@ -1398,19 +1386,7 @@ extern "C" rsf_observer_result rsf_observer_get_status(rsf_observer_status* stat
 }
 extern "C" rsf_observer_result rsf_observer_notify_application_present(const rsf_observer_present_event* event)
 {
-    if (!event || event->struct_size < sizeof(*event) || !event->swapchain || event->completed > 1)
-        return RSF_OBSERVER_ERROR_INVALID_ARGUMENT;
-    auto& self = observer();
-    if (!event->completed) {
-        ++self.present_calls;
-        if (!(event->flags & DXGI_PRESENT_TEST)) update_presenter(self, static_cast<IDXGISwapChain*>(event->swapchain));
-    } else {
-        if (event->result == S_OK && !(event->flags & DXGI_PRESENT_TEST)) {
-            ++self.frames;
-        }
-        --self.present_calls;
-    }
-    return RSF_OBSERVER_OK;
+    return rsf_core_observer11_application_present(event, present_ops.update);
 }
 
 

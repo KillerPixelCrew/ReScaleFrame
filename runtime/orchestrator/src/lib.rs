@@ -19,6 +19,8 @@ mod d3d11_host_abi;
 #[cfg(windows)]
 mod d3d11_host_reduced;
 #[cfg(windows)]
+mod d3d11_observer_present;
+#[cfg(windows)]
 mod d3d11_output;
 #[cfg(windows)]
 mod d3d11_output_abi;
