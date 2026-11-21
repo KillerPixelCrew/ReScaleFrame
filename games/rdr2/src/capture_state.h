@@ -6,6 +6,12 @@
 
 typedef struct rsf_rdr2_capture_state rsf_rdr2_capture_state;
 typedef struct rsf_rdr2_capture_submission rsf_rdr2_capture_submission;
+typedef struct rsf_rdr2_capture_readback {
+    uint64_t generation, submission, fence_value;
+    void* list;
+    void* queue;
+    uint32_t claimed;
+} rsf_rdr2_capture_readback;
 typedef struct rsf_rdr2_capture_progress {
     uint32_t sequence, draws, written;
     uint32_t draw_overflow, timed_out, write_failed, reuse_tail;
@@ -115,18 +121,25 @@ void rsf_rdr2_capture_alias(rsf_rdr2_capture_state*, void* list, void* resource)
 void rsf_rdr2_capture_reset_list(rsf_rdr2_capture_state*, void* list);
 uint32_t rsf_rdr2_capture_resource_state(const rsf_rdr2_capture_state*, void* list, void* resource);
 uint64_t rsf_rdr2_capture_list_generation(const rsf_rdr2_capture_state*, void* list);
-void rsf_rdr2_capture_stamp_copy(rsf_rdr2_capture_state*, void* list, uint64_t* generation, uint64_t* serial);
+void rsf_rdr2_capture_stamp_copy(rsf_rdr2_capture_state*, void* list, rsf_rdr2_capture_readback*);
+bool rsf_rdr2_capture_reuse_readback(const rsf_rdr2_capture_state*, const rsf_rdr2_capture_readback*,
+    void* list, uint64_t completed);
+bool rsf_rdr2_capture_readback_complete(const rsf_rdr2_capture_readback*, uint64_t completed);
 
 /* A receipt snapshots the lists and their final recorded states before submission. Native code
    retains only the readback objects named by the receipt, until the original queue call returns.
    The caller frees the receipt after publishing or abandoning it. */
 rsf_rdr2_capture_submission* rsf_rdr2_capture_before_submit(rsf_rdr2_capture_state*, uint32_t count, void* const* lists);
-bool rsf_rdr2_capture_submission_has_list(const rsf_rdr2_capture_submission*, void* list, uint64_t generation);
+bool rsf_rdr2_capture_claim_readback(const rsf_rdr2_capture_submission*, rsf_rdr2_capture_readback*);
+void rsf_rdr2_capture_submit_readback(rsf_rdr2_capture_readback*, void* queue, uint64_t submission);
+bool rsf_rdr2_capture_readback_awaits_fence(const rsf_rdr2_capture_readback*, void* queue);
+bool rsf_rdr2_capture_fence_readback(rsf_rdr2_capture_readback*, void* queue, uint64_t value);
 uint64_t rsf_rdr2_capture_after_submit(rsf_rdr2_capture_state*, rsf_rdr2_capture_submission*);
 void rsf_rdr2_capture_discard_submission(rsf_rdr2_capture_submission*);
 #ifdef __cplusplus
 }
 static_assert(sizeof(rsf_rdr2_capture_progress) == 32);
+static_assert(sizeof(rsf_rdr2_capture_readback) == 48 && offsetof(rsf_rdr2_capture_readback, list) == 24);
 static_assert(sizeof(rsf_rdr2_capture_pipeline) == 40);
 static_assert(sizeof(rsf_rdr2_capture_image) == 160);
 static_assert(sizeof(rsf_rdr2_capture_draw) == 192 && offsetof(rsf_rdr2_capture_draw, stack) == 88);

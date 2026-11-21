@@ -176,6 +176,13 @@ artifact names and JSON fields. GPU copies, fence completion and mapping
 remain native.
 Builds and the two native capture fixtures remain unrun.
 
+The RDR2 readback ledger claims the exact list generation before submit.
+If the post-submit fence fails, a later signal on the same queue can
+complete the original readback with its original submission identity.
+Rust also checks fence completion before recycling the tail across
+recordings. Native code retains the COM leases and executes the GPU
+calls. Missing submissions still keep the readback pending.
+
 Unity package D3D12 SR contexts and their recording slots are Rust-owned.
 The existing Unity bridge still provides recording and completion facts.
 The view owner preserves reconfiguration, spatial fallback and retirement
