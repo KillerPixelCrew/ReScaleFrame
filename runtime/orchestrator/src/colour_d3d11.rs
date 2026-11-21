@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
-use crate::d3d11_output::texture_desc;
+use crate::d3d11_output::{RestoreBindings, SaveBindings, SavedBindings, texture_desc};
 use crate::d3d11_output_abi::{
     RSF_D3D11_BIND_SHADER_RESOURCE, RSF_D3D11_FORMAT_R32_FLOAT, RSF_D3D11_FORMAT_RGBA16_FLOAT,
     RSF_D3D11_FORMAT_RGBA32_FLOAT, RSF_D3D11_USAGE_IMMUTABLE, rsf_d3d11_output_child_device,
     rsf_d3d11_output_clear_state, rsf_d3d11_output_copy_region, rsf_d3d11_output_copy_resource,
     rsf_d3d11_output_create_texture, rsf_d3d11_output_is_immediate, rsf_d3d11_output_srv_format,
-    rsf_d3d11_state, rsf_d3d11_texture_desc as TextureDesc,
+    rsf_d3d11_texture_desc as TextureDesc,
 };
 use crate::motion_d3d11::{GROUP_EDGE, Handle, MakeView, SourceViews};
 use std::ffi::{CStr, c_char, c_void};
@@ -24,26 +24,14 @@ struct Platform {
     sampler: unsafe extern "C" fn(Handle, u32) -> Handle,
     target_view: unsafe extern "C" fn(Handle, Handle, u32) -> Handle,
     source_view: MakeView,
-    save: unsafe extern "C" fn(Handle, &mut rsf_d3d11_state) -> u32,
-    restore: unsafe extern "C" fn(Handle, &mut rsf_d3d11_state),
+    save: SaveBindings,
+    restore: RestoreBindings,
     prepare_transport: unsafe extern "C" fn(Handle),
     bind_parameters: unsafe extern "C" fn(Handle, Handle, Handle, *const c_void),
     dispatch: unsafe extern "C" fn(Handle, Handle, *const Handle, u32, Handle, u32, u32, u32),
 }
 
 const _: () = assert!(size_of::<Platform>() == 10 * size_of::<Handle>());
-
-struct ContextState<'a> {
-    context: Handle,
-    saved: &'a mut rsf_d3d11_state,
-    platform: &'static Platform,
-}
-
-impl Drop for ContextState<'_> {
-    fn drop(&mut self) {
-        unsafe { (self.platform.restore)(self.context, self.saved) };
-    }
-}
 
 struct Program {
     shaders: [ComRef; 2],
@@ -120,20 +108,8 @@ impl Program {
         .cloned()
     }
 
-    fn save<'a>(
-        &self,
-        context: Handle,
-        saved: &'a mut rsf_d3d11_state,
-    ) -> Option<ContextState<'a>> {
-        let platform = self.platform;
-        if unsafe { (platform.save)(context, saved) } == 0 {
-            return None;
-        }
-        Some(ContextState {
-            context,
-            saved,
-            platform,
-        })
+    fn save(&self, context: Handle) -> Option<SavedBindings> {
+        unsafe { SavedBindings::new(context, self.platform.save, self.platform.restore) }
     }
 
     fn bind<T>(&self, context: Handle, constants: &T) {
@@ -309,8 +285,7 @@ impl Transport {
         target: &Target,
         constants: &TransportConstants,
     ) -> Option<()> {
-        let mut saved = rsf_d3d11_state::default();
-        let _restore = self.program.save(context, &mut saved)?;
+        let _restore = self.program.save(context)?;
         unsafe { (self.program.platform.prepare_transport)(context) };
         self.program.bind(context, constants);
         let sources: [Handle; 3] =
@@ -532,8 +507,7 @@ impl Fidelity {
             self.targets = Some(FidelityTargets::new(&self.program, layout)?);
         }
         let targets = self.targets.as_ref()?;
-        let mut saved = rsf_d3d11_state::default();
-        let _restore = self.program.save(context, &mut saved)?;
+        let _restore = self.program.save(context)?;
         // Vendor work can leave the output bound at any stage or UAV slot.
         unsafe { rsf_d3d11_output_clear_state(context) };
         self.program.bind(

@@ -4,6 +4,20 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now owns D3D11 colour transport and fidelity, including resource
+leases and dispatch order, using the shared view cache and context
+restore helper. A refused resize leaves the last encoded target
+intact, and leased views survive further cache lookups. The two C
+headers and both HLSL programs match the previous implementation.
+See the source checks in commit `50f4378`.
+
+Rust now owns the D3D11 UI layer ring and identity registry. The layer
+keeps its sharing retry, format choices and clear order. Forgetting a
+recycled identity preserves the recency of the surviving entries, so
+the next insertion evicts the oldest one. The 17 C signatures are
+unchanged, and the header comments clarify the borrow lifetimes.
+See commit `164885d` for the source checks and the unrun regression.
+
 The shared texture-role classifier is now a single Rust C entry point.
 It still evaluates the caller's rules in order and rejects short
 records before writing a verdict. The render-size fallback uses
