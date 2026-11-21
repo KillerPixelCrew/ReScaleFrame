@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Anomaly's Rust SR stage now closes render admission when hook removal
+is refused. It restores an open reduced-resolution window and keeps
+the renderer resources for a removal retry. Late callbacks recheck
+admission under the stage lock before using those resources. The
+updated but unrun fixture covers refusal, stock callbacks and
+successful retry. Source review checked hook and resource order.
+Live teardown and restart remain open for this revision.
+
 The Rust D3D12 FSR session now owns the optional FSR4 compatibility
 lease. It resolves the SDK before acquiring compatibility and holds
 the lease until after context and native binding cleanup, then unloads

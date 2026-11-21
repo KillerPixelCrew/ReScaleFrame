@@ -22,6 +22,7 @@ struct Fake {
     evaluate: bool,
     reinsert: bool,
     hooks_created: bool,
+    refuse_remove_hooks: bool,
     passes: Vec<rsf_anomaly_sr_pass>,
     logs: Vec<String>,
     files: Vec<String>,
@@ -238,7 +239,11 @@ extern "C" fn set_rm_near(on: bool) {
 }
 extern "C" fn remove_hooks() -> bool {
     record("remove hooks");
-    true
+    !fake(|f| f.refuse_remove_hooks)
+}
+extern "C" fn close_stale() {
+    record("close stale");
+    fake(|f| f.window_open = false);
 }
 extern "C" fn shutdown() {
     record("controller shutdown");
@@ -511,8 +516,24 @@ fn options_parse_like_the_native_reader() {
 
 #[test]
 fn quiesce_releases_hooks_before_state_and_the_pipeline_before_resources() {
-    let table = platform();
+    let mut table = platform();
+    table.close_stale = Some(close_stale);
     let driver = installed(5, &table);
+    driver.prepare(null_mut());
+    assert!(fake(|f| f.window_open));
+    calls();
+    fake(|f| f.refuse_remove_hooks = true);
+    assert!(!driver.quiesce());
+    assert!(!driver.active());
+    assert_eq!(calls(), ["remove hooks", "close stale"]);
+    assert!(!fake(|f| f.window_open) && !driver.jitter().applied);
+    driver.prepare(null_mut());
+    driver.prepared();
+    driver.seam(null_mut());
+    driver.frame_end();
+    assert!(!driver.sun_begin());
+    assert!(calls().is_empty());
+    fake(|f| f.refuse_remove_hooks = false);
     assert!(driver.quiesce());
     let order = calls();
     let at = |name| position(&order, name);

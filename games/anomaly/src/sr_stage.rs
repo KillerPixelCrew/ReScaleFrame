@@ -763,6 +763,14 @@ impl Stage {
             .unwrap_or_else(|poison| poison.into_inner())
     }
 
+    fn active_lock(&self) -> Option<MutexGuard<'_, Option<Box<State>>>> {
+        if !self.active() {
+            return None;
+        }
+        let guard = self.lock();
+        self.active().then_some(guard)
+    }
+
     fn with<R>(&self, f: impl FnOnce(&mut State) -> R) -> R {
         let mut guard = self.lock();
         f(guard.get_or_insert_with(Default::default))
@@ -1268,7 +1276,16 @@ impl Stage {
         }
         let disabled = leaf!(p, remove_hooks());
         let mut guard = self.lock();
+        self.active.store(false, Ordering::Release);
         let state = guard.get_or_insert_with(Default::default);
+        if !disabled {
+            // A partially disabled hook can still enter. Let it run stock and
+            // keep its resources until the native removal can be retried.
+            leaf!(p, close_stale());
+            self.publish(state, default_jitter());
+            state.main_state = default_jitter();
+            return false;
+        }
         leaf!(p, shutdown());
         state.motion_view = None;
         state.temporal_targets = None;
@@ -1288,10 +1305,7 @@ impl Stage {
         // Teardown: the pipeline releases its device reference and every vendor context before the engine's device goes.
         leaf!(p, driver_stop());
         leaf!(p, host_reset());
-        if disabled {
-            self.active.store(false, Ordering::Release);
-        }
-        disabled
+        true
     }
 
     // ---- H1: CRenderTarget::phase_scene_prepare ---------------------------------------------------------------
@@ -1582,7 +1596,9 @@ impl Stage {
 
     pub(crate) fn prepare(&self, this: *mut c_void) {
         let p = self.platform();
-        let mut guard = self.lock();
+        let Some(mut guard) = self.active_lock() else {
+            return;
+        };
         let state = guard.get_or_insert_with(Default::default);
         // A window still open here (never expected) is closed first, so Device.dwWidth reads the output size again.
         leaf!(p, close_stale());
@@ -1631,7 +1647,9 @@ impl Stage {
 
     // H1 epilogue. Stage 2: the viewport now describes the render-size targets.
     pub(crate) fn prepared(&self) {
-        let _guard = self.lock();
+        let Some(_guard) = self.active_lock() else {
+            return;
+        };
         leaf!(self.platform(), prepared());
     }
 
@@ -1679,7 +1697,9 @@ impl Stage {
 
     pub(crate) fn seam(&self, this: *mut c_void) {
         let p = self.platform();
-        let mut guard = self.lock();
+        let Some(mut guard) = self.active_lock() else {
+            return;
+        };
         let state = guard.get_or_insert_with(Default::default);
         let device = leaf!(p, device());
         let context = leaf!(p, context());
@@ -2053,7 +2073,9 @@ impl Stage {
 
     pub(crate) fn combine_end(&self) {
         let p = self.platform();
-        let mut guard = self.lock();
+        let Some(mut guard) = self.active_lock() else {
+            return;
+        };
         let state = guard.get_or_insert_with(Default::default);
         let was_refused = self.controller().refused;
         leaf!(p, combine_end());
@@ -2073,29 +2095,36 @@ impl Stage {
     }
 
     pub(crate) fn sun_begin(&self) -> bool {
-        let _guard = self.lock();
+        let Some(_guard) = self.active_lock() else {
+            return false;
+        };
         leaf!(self.platform(), sun_begin())
     }
     pub(crate) fn sun_end(&self, suspended: bool) {
-        let _guard = self.lock();
+        let Some(_guard) = self.active_lock() else {
+            return;
+        };
         leaf!(self.platform(), sun_end(suspended));
     }
     pub(crate) fn position_setup(&self, constant: *mut c_void) {
-        let _guard = self.lock();
+        let Some(_guard) = self.active_lock() else {
+            return;
+        };
         leaf!(self.platform(), position_setup(constant));
     }
     pub(crate) fn rm_near(&self) {
-        let _guard = self.lock();
+        let Some(_guard) = self.active_lock() else {
+            return;
+        };
         leaf!(self.platform(), rm_near());
     }
 
     // ---- IRenderDeviceRender::End, before Present -------------------------------------------------------------
     pub(crate) fn frame_end(&self) {
-        if !self.active.load(Ordering::Acquire) {
-            return;
-        }
         let p = self.platform();
-        let mut guard = self.lock();
+        let Some(mut guard) = self.active_lock() else {
+            return;
+        };
         let state = guard.get_or_insert_with(Default::default);
         leaf!(p, frame_end());
         state.native_depth_frame = None;
