@@ -41,6 +41,8 @@ mod d3d11_present;
 #[cfg(windows)]
 mod d3d11_present_abi;
 #[cfg(windows)]
+mod d3d11_state;
+#[cfg(windows)]
 mod d3d12_observer;
 #[cfg(windows)]
 mod depth_replay;
