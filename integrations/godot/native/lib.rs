@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! Godot 4.7.2 native integration owner linked into `ReScaleFrame.Godot.Native.dll`. It owns the
 //! Runtime control, settings and D3D12 session state (`control.rs`), the D3D12 SR context and
-//! submission owner (`d3d12.rs`), the Vulkan session state (`vulkan.rs`) and the
-//! `ReScaleFrameRuntime` option schema and renderer admission (`extension.rs`).
+//! submission owner (`d3d12.rs`), the Vulkan session state (`vulkan.rs`) with its SR context
+//! owner (`vulkan/sr.rs`) and the `ReScaleFrameRuntime` option schema and renderer admission
+//! (`extension.rs`).
 //!
 //! The `rsfg_*` exports in `api.h`, the GDExtension entry and the godot-cpp classes stay C++.
 //! `runtime.cpp` and `vulkan.cpp` forward to these entry points and lend their leaves through
@@ -19,7 +20,7 @@ mod vulkan;
 use control::Control;
 use platform::{
     ABI_VERSION, EngineServices, OptionField, OptionValue, Platform, SETTINGS_ABI_VERSION,
-    Settings, Setup, Status, VkFgPass, VkPresentFacts, VkSrFrame, VkView,
+    Settings, Setup, Status, VkFgPass, VkPresentFacts, VkSrPass, VkView,
 };
 use rsf_game_sys::rsf_game_render_pass;
 use std::ffi::{CStr, c_char, c_int, c_void};
@@ -351,13 +352,39 @@ unsafe extern "C" fn rsf_godot_vk_fg_recorded(pass: *const VkFgPass, result: i32
     }
 }
 
+/// The SR section of `rsfg_render_vulkan`, called with the guard held.
+///
 /// # Safety
-/// `frame` is null or readable.
+/// `table` is null or the leaf table; `pass` is null or a readable `rsf_godot_vk_sr_pass` whose
+/// `call` record stays live for the call.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_godot_vk_sr_frame_report(frame: *const VkSrFrame) {
+unsafe extern "C" fn rsf_godot_vk_sr_render(
+    table: *const Platform,
+    pass: *const VkSrPass,
+) -> c_int {
     // SAFETY: the caller's guarantee.
-    if let Some(frame) = unsafe { frame.as_ref() } {
-        CONTROL.vulkan.sr_frame(frame);
+    match unsafe { (leaves(table), pass.as_ref()) } {
+        (Some(platform), Some(pass)) => CONTROL.vulkan.sr_render(platform, pass),
+        _ => 0,
+    }
+}
+
+/// # Safety
+/// `context` and `fsr4_context` are null or writable.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_godot_vk_sr_contexts(
+    context: *mut *mut c_void,
+    fsr4_context: *mut *mut c_void,
+) {
+    let (sr, fsr4) = CONTROL.vulkan.sr_contexts();
+    // SAFETY: the caller's guarantee.
+    unsafe {
+        if !context.is_null() {
+            context.write(sr);
+        }
+        if !fsr4_context.is_null() {
+            fsr4_context.write(fsr4);
+        }
     }
 }
 

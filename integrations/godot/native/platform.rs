@@ -2,17 +2,18 @@
 //! `api.h` records and the leaves lent by `runtime.cpp`, mirrored by hand from `api.h` and
 //! `godot_platform.h` (bindgen-cli 0.72.1 was not available). Both sides assert sizes and offsets.
 //! The leaves carry the D3D12 capture owner, the FG presenter install, header-inline Runtime
-//! validators, the Vulkan owner's guard and its device, provider, presenter and SDK calls in
-//! `vulkan.cpp`, the status facts, and the D3D12 device, fence, SR context, FG, presentation and
-//! capture calls the `d3d12.rs` owner drives; every decision stays in this crate. The render pass
-//! is the generated `rsf_game_render_pass` binding. The archive imports no native symbol.
+//! validators, the Vulkan owner's guard and its device, provider, presenter, SDK and SR context
+//! calls in `vulkan.cpp` (the latter driven by `vulkan/sr.rs`), the status facts, and the D3D12
+//! device, fence, SR context, FG, presentation and capture calls the `d3d12.rs` owner drives;
+//! every decision stays in this crate. The render pass is the generated `rsf_game_render_pass`
+//! binding. The archive imports no native symbol.
 // Mirrored C layouts: the leaves and the engine module read fields this crate only writes.
 #![allow(dead_code)]
 use rsf_game_sys::{rsf_game_log_fn, rsf_game_render_pass};
 use std::ffi::{c_char, c_int, c_void};
 use std::sync::OnceLock;
 
-pub(crate) const PLATFORM_VERSION: u32 = 3;
+pub(crate) const PLATFORM_VERSION: u32 = 4;
 /// `RSF_GODOT_ABI_VERSION`: setup, status, engine services and the Vulkan packet.
 pub(crate) const ABI_VERSION: u32 = 3;
 /// `RSF_GODOT_SETTINGS_ABI_VERSION`.
@@ -356,8 +357,8 @@ pub(crate) struct VkPresentFacts {
     pub(crate) tagged: u64,
 }
 
-/// `rsf_godot_vk_sr_frame`.
-#[repr(C)]
+/// One SR pass of `rsfg_render_vulkan` as `vulkan/sr.rs` reports it to the status record.
+/// Formerly the `rsf_godot_vk_sr_frame` record; no leaf reads it any more.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct VkSrFrame {
     pub(crate) identity: u32,
@@ -370,6 +371,52 @@ pub(crate) struct VkSrFrame {
     pub(crate) output_height: u32,
     pub(crate) source_frame_id: u64,
 }
+
+/// `PFN_vkVoidFunction`.
+pub(crate) type VkFunction = unsafe extern "C" fn();
+/// `rsf_godot_vk_proc`: `vkGetInstanceProcAddr` or `vkGetDeviceProcAddr`.
+pub(crate) type VkProc = unsafe extern "C" fn(*mut c_void, *const c_char) -> Option<VkFunction>;
+
+/// `rsf_godot_vk_sr_pass`. `call` is `vulkan.cpp`'s private pass record, lent back to the leaves.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct VkSrPass {
+    pub(crate) call: *mut c_void,
+    pub(crate) commands: *mut c_void,
+    pub(crate) device: *mut c_void,
+    pub(crate) device_proc: Option<VkProc>,
+    pub(crate) output_width: u32,
+    pub(crate) output_height: u32,
+    pub(crate) source_frame_id: u64,
+    pub(crate) render_width: u32,
+    pub(crate) render_height: u32,
+    pub(crate) handoff: u32,
+    pub(crate) split_record: u32,
+    pub(crate) continuation: u32,
+    pub(crate) fsr4_compiled: u32,
+}
+
+/// `rsf_godot_vk_sr_create`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct VkSrCreate {
+    pub(crate) backend: u32,
+    pub(crate) quality: u32,
+}
+
+/// `rsf_godot_vk_sr_context`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct VkSrContext {
+    pub(crate) handle: *mut c_void,
+    pub(crate) result: i32,
+    pub(crate) reserved: u32,
+}
+
+/// `RSF_GODOT_VK_LOG_*`.
+pub(crate) const VK_LOG_REJECTED: u32 = 1;
+pub(crate) const VK_LOG_FSR4_DISPATCH: u32 = 2;
+pub(crate) const VK_LOG_INPUT_REFUSAL: u32 = 3;
 
 /// The body `vulkan_locked` runs under the Vulkan owner's guard.
 pub(crate) type LockedBody = unsafe extern "C" fn(*mut c_void) -> i32;
@@ -444,6 +491,31 @@ pub(crate) struct Platform {
     pub(crate) present_window: unsafe extern "C" fn(*const rsf_game_render_pass),
     pub(crate) fg_end_session: unsafe extern "C" fn(u64) -> u32,
     pub(crate) d3d12_release: unsafe extern "C" fn(*mut c_void, u64) -> u32,
+    pub(crate) vulkan_presenter_drain: unsafe extern "C" fn(u32) -> i32,
+    pub(crate) vulkan_device_idle: unsafe extern "C" fn(*mut c_void, Option<VkProc>) -> u32,
+    pub(crate) vulkan_sr_destroy: unsafe extern "C" fn(*mut c_void) -> i32,
+    pub(crate) vulkan_fsr4_destroy: unsafe extern "C" fn(*mut c_void) -> i32,
+    pub(crate) vulkan_sr_create:
+        unsafe extern "C" fn(*mut c_void, *const VkSrCreate, *mut VkSrContext) -> u32,
+    pub(crate) vulkan_fsr4_create:
+        unsafe extern "C" fn(*mut c_void, *const VkSrCreate, *mut VkSrContext) -> u32,
+    pub(crate) vulkan_dlss_preset: unsafe extern "C" fn(*mut c_void, u32) -> u32,
+    pub(crate) vulkan_sr_plan:
+        unsafe extern "C" fn(*mut c_void, *mut c_void, *mut u32, *mut u32) -> u32,
+    pub(crate) vulkan_fsr4_plan:
+        unsafe extern "C" fn(*mut c_void, *mut c_void, *mut u32, *mut u32) -> u32,
+    pub(crate) vulkan_sr_evaluate:
+        unsafe extern "C" fn(*mut c_void, *mut c_void, *const Sharpening, *mut i32) -> u32,
+    pub(crate) vulkan_fsr4_evaluate: unsafe extern "C" fn(
+        *mut c_void,
+        *mut c_void,
+        *const Sharpening,
+        *mut i32,
+        *mut *mut c_void,
+    ) -> u32,
+    pub(crate) vulkan_sr_fallback: unsafe extern "C" fn(*mut c_void, *mut i32) -> u32,
+    pub(crate) vulkan_sr_log: unsafe extern "C" fn(*mut c_void, u32, i32, i32) -> u32,
+    pub(crate) vulkan_sr_dump_result: unsafe extern "C" fn(*mut c_void, u32, i32) -> u32,
 }
 
 const _: () = {
@@ -486,14 +558,23 @@ const _: () = {
     assert!(size_of::<VkFgPass>() == 48);
     assert!(offset_of!(VkFgPass, options_result) == 36);
     assert!(size_of::<VkPresentFacts>() == 32);
-    assert!(size_of::<VkSrFrame>() == 40);
-    assert!(offset_of!(VkSrFrame, source_frame_id) == 32);
-    assert!(size_of::<Platform>() == 328);
+    assert!(size_of::<VkSrPass>() == 72);
+    assert!(offset_of!(VkSrPass, output_width) == 32);
+    assert!(offset_of!(VkSrPass, source_frame_id) == 40);
+    assert!(offset_of!(VkSrPass, handoff) == 56);
+    assert!(size_of::<VkSrCreate>() == 8);
+    assert!(size_of::<VkSrContext>() == 16);
+    assert!(offset_of!(VkSrContext, result) == 8);
+    assert!(size_of::<Platform>() == 440);
     assert!(offset_of!(Platform, vulkan_locked) == 88);
     assert!(offset_of!(Platform, latency_facts) == 176);
     assert!(offset_of!(Platform, d3d12_bind) == 184);
     assert!(offset_of!(Platform, sr_evaluate) == 256);
     assert!(offset_of!(Platform, d3d12_release) == 320);
+    assert!(offset_of!(Platform, vulkan_presenter_drain) == 328);
+    assert!(offset_of!(Platform, vulkan_sr_create) == 360);
+    assert!(offset_of!(Platform, vulkan_sr_evaluate) == 400);
+    assert!(offset_of!(Platform, vulkan_sr_dump_result) == 432);
 };
 
 #[cfg(test)]
@@ -738,5 +819,117 @@ impl Platform {
     /// Capture flush, context destroy (null accepted) and the session's frame dump cancel.
     pub(crate) fn d3d12_release(&self, context: *mut c_void, session_id: u64) -> bool {
         unsafe { (self.d3d12_release)(context, session_id) != 0 }
+    }
+
+    // The Vulkan SR context leaves, called only while `vulkan.cpp` holds its guard. Context
+    // handles are the Runtime's, held here as addresses; `call` is the leaf's live pass record for
+    // the call. A `None` completion means the leaf caught an exception.
+
+    /// Drains the live presenter, disabling it first when asked; `BACKEND_OK` without one.
+    pub(crate) fn vulkan_presenter_drain(&self, disable: bool) -> i32 {
+        unsafe { (self.vulkan_presenter_drain)(u32::from(disable)) }
+    }
+
+    /// `vkDeviceWaitIdle` on the device the contexts were created for.
+    pub(crate) fn vulkan_device_idle(&self, device: *mut c_void, proc: Option<VkProc>) -> bool {
+        unsafe { (self.vulkan_device_idle)(device, proc) != 0 }
+    }
+
+    pub(crate) fn vulkan_sr_destroy(&self, context: *mut c_void) -> i32 {
+        unsafe { (self.vulkan_sr_destroy)(context) }
+    }
+
+    /// The FSR4 bridge code; zero is success.
+    pub(crate) fn vulkan_fsr4_destroy(&self, context: *mut c_void) -> i32 {
+        unsafe { (self.vulkan_fsr4_destroy)(context) }
+    }
+
+    /// The created record, also when the leaf did not complete, so a handle it wrote is kept.
+    pub(crate) fn vulkan_sr_create(
+        &self,
+        call: *mut c_void,
+        request: &VkSrCreate,
+        fsr4: bool,
+    ) -> (bool, VkSrContext) {
+        let mut created = VkSrContext {
+            handle: std::ptr::null_mut(),
+            result: 0,
+            reserved: 0,
+        };
+        let leaf = if fsr4 {
+            self.vulkan_fsr4_create
+        } else {
+            self.vulkan_sr_create
+        };
+        let completed = unsafe { leaf(call, request, &mut created) } != 0;
+        (completed, created)
+    }
+
+    pub(crate) fn vulkan_dlss_preset(&self, context: *mut c_void, preset: u32) -> Option<()> {
+        (unsafe { (self.vulkan_dlss_preset)(context, preset) } != 0).then_some(())
+    }
+
+    /// The context's planned input extent.
+    pub(crate) fn vulkan_sr_plan(
+        &self,
+        call: *mut c_void,
+        context: *mut c_void,
+        fsr4: bool,
+    ) -> Option<(u32, u32)> {
+        let (mut width, mut height) = (0, 0);
+        let leaf = if fsr4 {
+            self.vulkan_fsr4_plan
+        } else {
+            self.vulkan_sr_plan
+        };
+        (unsafe { leaf(call, context, &mut width, &mut height) } != 0).then_some((width, height))
+    }
+
+    pub(crate) fn vulkan_sr_evaluate(
+        &self,
+        call: *mut c_void,
+        context: *mut c_void,
+        sharpening: &Sharpening,
+    ) -> Option<i32> {
+        let mut result = 0;
+        (unsafe { (self.vulkan_sr_evaluate)(call, context, sharpening, &mut result) } != 0)
+            .then_some(result)
+    }
+
+    /// The result and the command buffer recording continues on.
+    pub(crate) fn vulkan_fsr4_evaluate(
+        &self,
+        call: *mut c_void,
+        context: *mut c_void,
+        sharpening: &Sharpening,
+    ) -> Option<(i32, *mut c_void)> {
+        let (mut result, mut next) = (0, std::ptr::null_mut());
+        (unsafe { (self.vulkan_fsr4_evaluate)(call, context, sharpening, &mut result, &mut next) }
+            != 0)
+            .then_some((result, next))
+    }
+
+    pub(crate) fn vulkan_sr_fallback(&self, call: *mut c_void) -> Option<i32> {
+        let mut result = 0;
+        (unsafe { (self.vulkan_sr_fallback)(call, &mut result) } != 0).then_some(result)
+    }
+
+    pub(crate) fn vulkan_sr_log(
+        &self,
+        call: *mut c_void,
+        kind: u32,
+        provider: i32,
+        fallback: i32,
+    ) -> Option<()> {
+        (unsafe { (self.vulkan_sr_log)(call, kind, provider, fallback) } != 0).then_some(())
+    }
+
+    pub(crate) fn vulkan_sr_dump_result(
+        &self,
+        call: *mut c_void,
+        backend: u32,
+        result: i32,
+    ) -> Option<()> {
+        (unsafe { (self.vulkan_sr_dump_result)(call, backend, result) } != 0).then_some(())
     }
 }

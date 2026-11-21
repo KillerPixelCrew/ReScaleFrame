@@ -9,12 +9,13 @@
    Rust owns the requested settings and their generation, the extension option schema, renderer
    admission, engine-service routing, the D3D12 session identity and paths, the status record,
    the D3D12 SR context plan and submission ledger (d3d12.rs), and the Vulkan session (boot state,
-   settings, generation, status, configure admission and the presenter, FG and SR accounting).
-   The leaves hold godot-cpp, D3D12, DXGI, Win32, Vulkan and Runtime calls and decide nothing. */
+   settings, generation, status, configure admission, the presenter, FG and SR accounting, and the
+   SR context owner in vulkan/sr.rs). The leaves hold godot-cpp, D3D12, DXGI, Win32, Vulkan and
+   Runtime calls and decide nothing. */
 #include "api.h"
 #include <stdint.h>
 
-#define RSF_GODOT_PLATFORM_VERSION 3u
+#define RSF_GODOT_PLATFORM_VERSION 4u
 
 /* Mirror of rsf_native_fg_options without its header. */
 typedef struct rsf_godot_fg_options {
@@ -143,19 +144,41 @@ typedef struct rsf_godot_vk_present_facts {
     uint64_t generated_callbacks, presented, tagged;
 } rsf_godot_vk_present_facts;
 
-/* How an SR pass of rsfg_render_vulkan ended. A refused pass took the spatial fallback; an
-   uncounted one could not record it. identity is zero when context retirement refused the pass
-   before its identity was taken. */
-#define RSF_GODOT_VK_SR_UNCOUNTED 0u
-#define RSF_GODOT_VK_SR_EVALUATED 1u
-#define RSF_GODOT_VK_SR_REFUSED 2u
-typedef struct rsf_godot_vk_sr_frame {
-    uint32_t identity, outcome;
-    int32_t result;
-    uint32_t backend; /* the provider that produced the output, read when evaluated */
-    uint32_t render_width, render_height, output_width, output_height;
+/* One SR pass of rsfg_render_vulkan after its FG section, as the SR context owner reads it under
+   the guard. call is vulkan.cpp's private record of the packet, handoff, continuation, frame record
+   and current command buffer; the owner only lends it back to the SR leaves. device and
+   device_proc are compared and kept for retirement, never called by the owner. */
+typedef struct rsf_godot_vk_sr_pass {
+    void* call;
+    void* commands;
+    void* device;
+    rsf_godot_vk_proc device_proc;
+    uint32_t output_width, output_height;
     uint64_t source_frame_id;
-} rsf_godot_vk_sr_frame;
+    uint32_t render_width, render_height;
+    /* The graph lease: a handoff, its split_record, the continuation output. */
+    uint32_t handoff, split_record, continuation;
+    /* Build fact: the FSR4 SR provider is compiled. */
+    uint32_t fsr4_compiled;
+} rsf_godot_vk_sr_pass;
+
+/* The provider and quality of one Vulkan SR context. The leaf adds the packet's device, procs and
+   camera depth and motion facts and the provider's runtime directory. */
+typedef struct rsf_godot_vk_sr_create {
+    uint32_t backend, quality;
+} rsf_godot_vk_sr_create;
+
+/* The created context, kept by the owner even when result is not RSF_BACKEND_OK. */
+typedef struct rsf_godot_vk_sr_context {
+    void* handle;
+    int32_t result;
+    uint32_t reserved;
+} rsf_godot_vk_sr_context;
+
+/* rsf_godot_platform.vulkan_sr_log messages. Each leaf writes nothing without a session log. */
+#define RSF_GODOT_VK_LOG_REJECTED 1u       /* provider result and spatial fallback result */
+#define RSF_GODOT_VK_LOG_FSR4_DISPATCH 2u  /* the last FSR4 evaluate's code and continuation */
+#define RSF_GODOT_VK_LOG_INPUT_REFUSAL 3u  /* the last evaluated frame, its plan and record */
 
 /* Process-lived table from runtime.cpp. Every entry is present and catches its own exceptions. */
 typedef struct rsf_godot_platform {
@@ -179,10 +202,11 @@ typedef struct rsf_godot_platform {
     int32_t (*vulkan_locked)(int32_t (*body)(void* user), void* user);
     /* Directories, Streamline and XeSS initialization, creation resolver and the ready log. */
     int32_t (*vulkan_start)(const rsf_godot_setup* setup);
-    /* Presenter disable and drain, SR context and capture retirement, XeSS shutdown and the SDK
-       shutdown or its deferral to presenter retirement. Zero keeps the session. */
+    /* After the owner drained the presenter and retired the SR contexts: capture retirement,
+       XeSS shutdown and the SDK shutdown or its deferral to presenter retirement. Zero keeps the
+       session. */
     int32_t (*vulkan_stop)(void);
-    /* Frame dump cancel and device borrow release after the session ended. */
+    /* Frame dump cancel and runtime directory release after the session ended. */
     void (*vulkan_release)(uint64_t session_id);
     void (*vulkan_facts)(rsf_godot_vk_facts* facts);
     int32_t (*vulkan_presenter_max)(uint32_t* count);
@@ -228,6 +252,37 @@ typedef struct rsf_godot_platform {
     uint32_t (*fg_end_session)(uint64_t session_id);
     /* Capture flush, context destroy (null accepted) and the session's frame dump cancel. */
     uint32_t (*d3d12_release)(void* context, uint64_t session_id);
+    /* The Vulkan SR context leaves (vulkan/sr.rs), called only while vulkan.cpp's guard is held:
+       inside a vulkan_locked body or from rsf_godot_vk_sr_render. None takes the guard. */
+    /* rsf_fgvk_drain of the live presenter, after rsf_fgvk_enable(0) when disable is nonzero;
+       RSF_BACKEND_OK without a presenter. */
+    int32_t (*vulkan_presenter_drain)(uint32_t disable);
+    /* vkDeviceWaitIdle through device_proc; zero without the entry point or on failure. */
+    uint32_t (*vulkan_device_idle)(void* device, rsf_godot_vk_proc device_proc);
+    int32_t (*vulkan_sr_destroy)(void* context);
+    /* rsf_fsr4vk_destroy's bridge code; zero is success. */
+    int32_t (*vulkan_fsr4_destroy)(void* context);
+    /* The calls below take the pass's call record. A uint32_t completion of zero means an
+       exception ended the leaf; the owner then refuses the pass as the export's catch did. */
+    /* rsf_srvk_create, and the FSR4 interop context with the pass's handoff and its log. */
+    uint32_t (*vulkan_sr_create)(void* call, const rsf_godot_vk_sr_create* request, rsf_godot_vk_sr_context* created);
+    uint32_t (*vulkan_fsr4_create)(void* call, const rsf_godot_vk_sr_create* request, rsf_godot_vk_sr_context* created);
+    uint32_t (*vulkan_dlss_preset)(void* context, uint32_t preset);
+    /* The context's planned input extent; zero when the provider does not answer. */
+    uint32_t (*vulkan_sr_plan)(void* call, void* context, uint32_t* width, uint32_t* height);
+    uint32_t (*vulkan_fsr4_plan)(void* call, void* context, uint32_t* width, uint32_t* height);
+    /* The frame from the packet with the owner's sharpening, then the provider evaluate. The FSR4
+       leaf continues the call and the export's continuation on next. */
+    uint32_t (*vulkan_sr_evaluate)(void* call, void* context, const rsf_sharpening_options* sharpening,
+        int32_t* result);
+    uint32_t (*vulkan_fsr4_evaluate)(void* call, void* context, const rsf_sharpening_options* sharpening,
+        int32_t* result, void** next);
+    /* rsf_srvk_spatial_fallback of the call's colour into its output on its current commands. */
+    uint32_t (*vulkan_sr_fallback)(void* call, int32_t* result);
+    /* One RSF_GODOT_VK_LOG_* message. */
+    uint32_t (*vulkan_sr_log)(void* call, uint32_t kind, int32_t provider_result, int32_t fallback_result);
+    /* rsf_input_dump_result of the call's record for the "sr" stage. */
+    uint32_t (*vulkan_sr_dump_result)(void* call, uint32_t backend, int32_t result);
 } rsf_godot_platform;
 
 /* Extension option schema. The leaf reads each named Dictionary entry once, with the conversion
@@ -302,7 +357,11 @@ void rsf_godot_vk_fg_begin(rsf_godot_vk_fg_pass* pass);
 /* Nonzero: record the pass. Zero stored the refusal as the FG result. */
 int rsf_godot_vk_fg_admit(const rsf_godot_vk_fg_pass* pass);
 void rsf_godot_vk_fg_recorded(const rsf_godot_vk_fg_pass* pass, int32_t result);
-void rsf_godot_vk_sr_frame_report(const rsf_godot_vk_sr_frame* frame);
+/* The SR section of rsfg_render_vulkan: context retirement, creation, plan, evaluate, the spatial
+   fallback and the SR accounting. Returns the export's result. */
+int rsf_godot_vk_sr_render(const rsf_godot_platform* platform, const rsf_godot_vk_sr_pass* pass);
+/* The live SR context handles, null when none, for rsfg_vk_recording_begin. */
+void rsf_godot_vk_sr_contexts(void** context, void** fsr4_context);
 
 /* Extension control (runtime_control.cpp). */
 const rsf_godot_option_field* rsf_godot_option_fields(uint32_t* count);

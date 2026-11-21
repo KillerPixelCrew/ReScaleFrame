@@ -78,7 +78,8 @@ status owner remains in the native DLL:
   spatial fallback, or uncounted when the fallback could not record), with Auto SR resolved to FSR3.
 
 `vulkan.cpp` keeps its guard and every Vulkan, Streamline, XeSS, FidelityFX, presenter, capture
-and SR context call, and decides nothing. Boot, shutdown and configure run inside the
+and SR context call (the SR context state moved to `vulkan/sr.rs` in the fourth slice), and
+decides nothing. Boot, shutdown and configure run inside the
 `vulkan_locked` leaf, so the admission facts, the FSR4 FG probe, the presenter capacity, the
 latency options and the commit see one guarded presenter state as before. The render, acquire,
 create, Present and destroy paths read the session through `rsf_godot_vk_view_get` and report each
@@ -154,15 +155,75 @@ and the generated `rsf_game_render_pass` binding is used for the pass. Not run: 
 link, Cargo tests (`native/d3d12/tests.rs`), Clippy, CTest, editor, exported players, device
 fixtures and visual harness.
 
+## Rust Vulkan SR context owner, fourth slice
+
+`native/vulkan/sr.rs` now owns the SR context state and sequencing that `rsfg_render_vulkan` held
+in `vulkan.cpp` globals:
+
+- the `rsf_srvk` and FSR4 interop context handles, the device and `vkGetDeviceProcAddr` they were
+  created on, the generation and provider they were made for and their readiness;
+- retirement before a pass when the last creation failed, the settings generation changed, the
+  engine device changed, or the last reported SR output differs from the pass output (presenter
+  drain, `vkDeviceWaitIdle` on the creation device, FSR4 then `rsf_srvk` destroy; a refusal keeps
+  what was not destroyed and takes the spatial fallback before the pass identity is counted);
+- the passthrough of no SR and spatial (FSR1 is evaluated by Godot), creation with the requested
+  quality, the FSR4 admission (`NOT_COMPILED` without the provider build, `NOT_READY` without a
+  handoff, its `split_record` or a continuation output), the DLSS preset once after creation,
+  the plan, the evaluate dispatch with the FSR4 continuation, the sharpening rule shared with
+  D3D12 (`d3d12::sharpening`), the frame dump result, the spatial fallback (not counted when an
+  FSR4 dispatch left no command buffer), the four-entry refusal log budget reset at boot, and the
+  SR outcome reported to the session;
+- the session stop sequence: presenter disable and drain, context retirement, then the
+  `vulkan_stop` leaf (capture release, XeSS shutdown, creation requirements, SDK shutdown or its
+  deferral), and the device borrow released with the session.
+
+`vulkan.cpp` keeps the argument, depth-domain, frame record, frame dump and FG sections of
+`rsfg_render_vulkan` unchanged and forwards its SR section with the guard held through
+`rsf_godot_vk_sr_render`. It lends fourteen typed leaves (`rsf_godot_platform` version 4,
+440 bytes, appended after the D3D12 leaves): the presenter drain, `vkDeviceWaitIdle`,
+`rsf_srvk_destroy`, `rsf_fsr4vk_destroy`, `rsf_srvk_create` and the FSR4 interop create with the
+handoff and its log, `rsf_srvk_dlss_preset`, the two plans, the two evaluates with the frame built
+from the packet, `rsf_srvk_spatial_fallback`, the three log texts, and `rsf_input_dump_result`.
+The pass reaches the owner as `rsf_godot_vk_sr_pass` with an opaque record of the packet,
+handoff, continuation, frame record and current command buffer that only the leaves read; the
+owner never keeps it past the call. `rsfg_vk_recording_begin` reads the live handles through
+`rsf_godot_vk_sr_contexts` under the guard. The `rsf_godot_vk_sr_frame_report` export and its
+record are gone. `api.h`, the engine module interface, every `rsfg_*` export, the statuses and
+the leaf command order are unchanged.
+
+Preserved behaviour, including quirks: the stale check compares the status output of the last
+reported pass, not the context's own extent; a context returned with a failed result is kept and
+retired by the next pass; FSR4 creation asks for `split_record` but evaluation does not; the FSR4
+interop creation log is unbudgeted; the input refusal log uses the last plan and frame; `Auto`
+still resolves to FSR3 on Vulkan. Intentional differences: an exception in the presenter drain,
+device wait or destroy leaves during a render now counts as a refused retirement and takes the
+spatial fallback, where the export's catch returned 0 without a report; the boot resets the log
+budget just before the start leaf instead of inside it.
+
+Lifetime review: no concrete local defect was found to fix. The creation leaf reports the handle
+it received even when it ends in an exception, so the owner retires it as the globals did. The
+FSR4 context keeps the handoff's `user` (the engine's rendering driver) and `split_record` from
+creation; the engine compares that user against its active graph scope and a device change
+retires the context. Unverified: retirement after a device change waits on and destroys through
+the previous device; if the engine destroyed that device first, the wait is undefined. This is
+unchanged from the C++ and was not checked against the pinned engine's device lifetime.
+
+This is a behaviour-preserving port from source review, with no new experiment. Checks: rustfmt
+1.11.0 `--edition 2024 --check` (the pinned 1.94.1 toolchain is not installed), `git diff
+--check`, and `platform.rs`, `vulkan.cpp` and `runtime.cpp` size and offset assertions written for
+the new records and table. Not run: native build and link, Cargo tests (`native/vulkan/sr/tests.rs`,
+`native/vulkan/tests.rs`), Clippy, CTest, editor, exported players, device fixtures and visual
+harness.
+
 ## Remaining Godot ownership slices
 
-1. The Vulkan SR context owner in `rsfg_render_vulkan`: context retirement and recreation (SR
-   generation, device and output size), FSR4 graph handoff and continuation, the spatial fallback
-   call, DLSS preset application, sharpening defaults, frame dump capture and diagnostics. Its
-   decisions read the Rust session view; the contexts and the presenter owner stay C++ leaves.
-   The Vulkan Auto SR and FG resolution to FSR3, ported unchanged into `vulkan.rs`, is backend
-   choice the Runtime should own (Rule 3), unlike D3D12, which asks `rsf_gpu_default_sr_backend`
-   and `rsf_fg_default_backend`.
+1. Vulkan Auto SR and FG resolution (Rule 3). `vulkan.rs` still resolves `Auto` to FSR3 for both,
+   unchanged from the C++. The Runtime's `rsf_gpu_select_sr_backend(vendor, software, 1 << FSR3)`
+   would return FSR3 only on a hardware adapter (NONE on a software one) and needs the Vulkan
+   vendor id, which the session does not have when it resolves `Auto` at configure and status
+   time; `rsf_fg_default_backend` picks by vendor and would change behaviour. Moving this needs a
+   Runtime policy that takes the Vulkan host's servable providers and an adapter fact from the
+   packet, which is a behaviour decision outside this behaviour-preserving slice.
 2. Window ownership: the `Engine` window-class admission, the WNDPROC subclass and its restore,
    the input session and PCL ping routing in `runtime.cpp`, and the Vulkan primary window and
    present-marker admission (`rsfg_vk_window`, `rsfg_vk_present_marker`).
