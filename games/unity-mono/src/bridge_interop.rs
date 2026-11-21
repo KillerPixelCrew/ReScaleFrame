@@ -93,7 +93,7 @@ impl Interop {
 
     /// No submission, or the completion fence reached the last one. A fence value of 0 stands
     /// for a missing fence.
-    fn drained(&self, completed: u64) -> bool {
+    pub(crate) fn drained(&self, completed: u64) -> bool {
         self.submitted == 0 || completed >= self.submitted
     }
 }
