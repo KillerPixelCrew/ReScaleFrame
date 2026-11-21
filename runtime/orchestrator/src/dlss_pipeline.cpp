@@ -13,6 +13,7 @@
 #include <rescaleframe/colour_fidelity.h>
 #include <rescaleframe/colour_transport.h>
 #include "dlss_pipeline_platform.h"
+#include "sharpening_pass_options.h"
 #include "sr_legacy_adapter.h"
 #include "../../graphics/src/sharpening/d3d11.h"
 #include <rescaleframe/input_dump.h>
@@ -316,19 +317,7 @@ float vendor_sharpness(const rsf_sharpening_options* options, uint32_t backend) 
 int32_t sharpen(void** pass, void* context, void* output, void* motion, void* depth, void* exposure,
     const rsf_sharpening_options* request, const rsf_dlssp_sharpen_frame* frame) noexcept try
 {
-    rsf::sharpening::Options options;
-    options.mode = static_cast<rsf::sharpening::Mode>(request->mode);
-    options.sharpness = request->sharpness;
-    options.mas = request->mas;
-    options.motion_sharpness = request->motion_sharpness;
-    options.motion_threshold = request->motion_threshold;
-    options.motion_scale_limit = request->motion_scale_limit;
-    options.contrast_enabled = request->contrast_enabled;
-    options.contrast = request->contrast;
-    options.depth_scale = request->depth_scale;
-    options.depth_bias = request->depth_bias;
-    options.clamp_output = request->clamp_output;
-    options.debug = request->debug;
+    const auto options = rsf::sharpening::options_from_request(*request);
     if (!rsf::sharpening::active(options)) return 1;
     rsf::sharpening::Frame mapping{};
     mapping.depth_inverted = frame->depth_inverted;

@@ -4,6 +4,12 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The D3D11, D3D12 and Vulkan sharpening bridges share one mapping from
+the public options to the native constant-packing inputs. D3D11 refuses
+immutable outputs before dispatch because the post-pass copy requires
+a writable destination.
+[Direct3D CopyResource requirements](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11devicecontext-copyresource)
+
 Rust now owns the D3D11 sharpening device and resource cache,
 image admission, filter selection and dispatch counter. A failed
 scratch view allocation leaves no incomplete texture in the cache,

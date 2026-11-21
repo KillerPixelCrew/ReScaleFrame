@@ -2,9 +2,9 @@
 #pragma once
 #include <rescaleframe/native_sr_vulkan.h>
 #include <vulkan/vulkan.h>
+#include "sharpening_pass_options.h"
 #include "sharpening_vulkan_core.h"
 #include "vulkan_fg_resources_native.h"
-#include "../../graphics/src/sharpening/options.h"
 #include "../../graphics/src/sharpening/rcas_spirv.h"
 #include "../../graphics/src/sharpening/da_rcas_spirv.h"
 #include "../../graphics/src/sharpening/da_das_spirv.h"
@@ -161,25 +161,9 @@ inline int32_t create_view(void* user, uint64_t image, uint32_t format, uint64_t
     VkImageView view=VK_NULL_HANDLE; const auto result=d.images.create_view(d.device,&info,nullptr,&view); *out=value(view);
     return result;
 }
-inline Options options_of(const rsf_sharpening_options& request) {
-    Options options;
-    options.mode=static_cast<Mode>(request.mode);
-    options.sharpness=request.sharpness;
-    options.mas=request.mas;
-    options.motion_sharpness=request.motion_sharpness;
-    options.motion_threshold=request.motion_threshold;
-    options.motion_scale_limit=request.motion_scale_limit;
-    options.contrast_enabled=request.contrast_enabled;
-    options.contrast=request.contrast;
-    options.depth_scale=request.depth_scale;
-    options.depth_bias=request.depth_bias;
-    options.clamp_output=request.clamp_output;
-    options.debug=request.debug;
-    return options;
-}
 inline uint32_t options(const rsf_sharpening_options* request, rsf_sharpening_options* out) {
     auto value=request?*request:rsf_sharpening_defaults();
-    const auto o=sanitize(options_of(value));
+    const auto o=sanitize(options_from_request(value));
     value.mode=static_cast<uint32_t>(o.mode); value.sharpness=o.sharpness; value.mas=o.mas;
     value.motion_sharpness=o.motion_sharpness; value.motion_threshold=o.motion_threshold; value.motion_scale_limit=o.motion_scale_limit;
     value.contrast_enabled=o.contrast_enabled; value.contrast=o.contrast; value.depth_scale=o.depth_scale; value.depth_bias=o.depth_bias;
@@ -194,7 +178,7 @@ inline void write_constants(void* mapped, const rsf_sharpening_options* options,
     frame.motion_x=f->motion_x; frame.motion_y=f->motion_y;
     frame.depth_inverted=f->depth_inverted; frame.near_plane=f->near_plane; frame.far_plane=f->far_plane;
     frame.exposure_texture=f->exposure_texture; frame.exposure=f->exposure;
-    const auto data=constants(options_of(*options),frame,static_cast<Mode>(f->effective_mode)); std::memcpy(mapped,&data,sizeof(data));
+    const auto data=constants(options_from_request(*options),frame,static_cast<Mode>(f->effective_mode)); std::memcpy(mapped,&data,sizeof(data));
 }
 inline void barrier(const Device& d,VkCommandBuffer commands,VkImage image,VkImageLayout before,VkImageLayout after,VkAccessFlags from,VkAccessFlags to) {
     VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER}; b.image=image; b.oldLayout=before; b.newLayout=after;

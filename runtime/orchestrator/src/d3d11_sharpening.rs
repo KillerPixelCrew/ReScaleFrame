@@ -5,8 +5,8 @@ use crate::d3d11_output::{
 };
 use crate::d3d11_output_abi::{
     RSF_D3D11_BIND_SHADER_RESOURCE, RSF_D3D11_FORMAT_RGBA16_FLOAT, RSF_D3D11_FORMAT_RGBA32_FLOAT,
-    rsf_d3d11_output_child_device, rsf_d3d11_output_create_srv, rsf_d3d11_output_is_immediate,
-    rsf_d3d11_output_srv_format, rsf_d3d11_texture_desc as Texture,
+    RSF_D3D11_USAGE_IMMUTABLE, rsf_d3d11_output_child_device, rsf_d3d11_output_create_srv,
+    rsf_d3d11_output_is_immediate, rsf_d3d11_output_srv_format, rsf_d3d11_texture_desc as Texture,
 };
 use crate::sharpening_policy::{FILTERS, effective_mode};
 use std::ffi::c_void;
@@ -153,6 +153,7 @@ impl Owner {
         if desc.width == 0
             || desc.height == 0
             || desc.mips != 1
+            || desc.usage == RSF_D3D11_USAGE_IMMUTABLE
             || !matches!(
                 desc.format,
                 RSF_D3D11_FORMAT_RGBA16_FLOAT | RSF_D3D11_FORMAT_RGBA32_FLOAT

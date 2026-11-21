@@ -11,6 +11,7 @@
 #include "../../backends/common/frame_capture12.h"
 #include "../../graphics/src/sharpening/d3d12.h"
 #include "fg12_platform.h"
+#include "sharpening_pass_options.h"
 #include <windows.h>
 #include <d3d12.h>
 #include <wrl/client.h>
@@ -266,19 +267,7 @@ int sharpen_run(void* pass, void* list, void* output, void* motion, void* depth,
     const rsf_sharpening_options* sharpen, uint32_t hdr, uint32_t depth_inverted, float near_plane, float far_plane,
     uint32_t slot) try
 {
-    rsf::sharpening::Options options;
-    options.mode = static_cast<rsf::sharpening::Mode>(sharpen->mode);
-    options.sharpness = sharpen->sharpness;
-    options.mas = sharpen->mas;
-    options.motion_sharpness = sharpen->motion_sharpness;
-    options.motion_threshold = sharpen->motion_threshold;
-    options.motion_scale_limit = sharpen->motion_scale_limit;
-    options.contrast_enabled = sharpen->contrast_enabled;
-    options.contrast = sharpen->contrast;
-    options.depth_scale = sharpen->depth_scale;
-    options.depth_bias = sharpen->depth_bias;
-    options.clamp_output = sharpen->clamp_output;
-    options.debug = sharpen->debug;
+    const auto options = rsf::sharpening::options_from_request(*sharpen);
     if (!rsf::sharpening::active(options)) return 1;
     rsf::sharpening::Frame mapping{};
     mapping.hdr = hdr != 0; mapping.depth_inverted = depth_inverted;
