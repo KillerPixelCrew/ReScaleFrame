@@ -25,6 +25,15 @@ leases, render-pass and CPU-event calls and the package's bridge exports. D3D11 
 now pass the shared admission rules: the resources each event kind reads and a finite camera with
 extents up to 16384.
 
+The Vulkan bridge's state is Rust too (`vulkan_state.rs`): the shared device's readiness and its
+single creator, the permanent fault, the render events queued to Unity with their packets, the
+present interceptions and surface updates in progress, the player window frame identity the
+present renders under, and a release that first closes the bridge to new work. Its command slots
+and shared fence values use the same submission ring (`bridge_interop.rs`).
+`integrations/unity/native/vulkan_bridge.cpp` keeps the Unity Vulkan interfaces, the Vulkan,
+D3D12 and DXGI objects and calls, shared images, command buffers, slot fences, waits, copies and
+barriers, the device and swapchain interception, the presentation window and its swap chain.
+
 The Runtime setup behind the loader entry `rsf_unity_start` and `rsf_unity_fg_start`,
 `rsf_unity_sr_start` and `rsf_unity_sr_stop` is Rust as well (`runtime_setup.rs`): the
 `[UnitySR]` keys and defaults, the start gates and result codes, the wait for Unity's Mono

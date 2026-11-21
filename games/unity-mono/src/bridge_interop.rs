@@ -6,6 +6,12 @@
 //! keeps the devices, fences, waits, copies and command lists, and reads the completion fence.
 //! Packets, policy, activity and callbacks are the shared bridge state (bridge_state.rs).
 //!
+//! The package's Vulkan bridge (vulkan_bridge.cpp, vulkan_state.rs) uses the same ring for its
+//! command slots and the values on its shared D3D12/Vulkan fence: `completion` for the Vulkan
+//! upload signal, `submit` for the D3D12 signal, `drained` against that fence. It reuses a slot
+//! after the slot's Vulkan fence and releases the ring with its objects. One Unity renderer per
+//! process means the two bridges never use the ring at once.
+//!
 //! The C++ kept these counters as unguarded globals that the lifecycle thread read in drained
 //! while the render thread advanced them; one lock now orders both.
 use crate::bridge_abi::RSF_UNITY_FRAMES_SLOTS;

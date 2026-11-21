@@ -2,9 +2,10 @@
 // The Unity package's D3D11 and Vulkan render bridge; D3D12 routes to the shared D3D12 bridge.
 // Packet admission and storage, the engine policy and its generation, activity, the managed stage
 // and callback retirement are the shared bridge state (bridge_state.rs). The D3D11 path's command
-// ring, completion values and shared fence values are bridge_interop.rs. This file keeps the Unity
-// interfaces, D3D11/D3D12/DXGI objects and calls, shared surfaces and fences, the D3D11 texture
-// leases, render-pass and CPU-event calls and the exported entry points.
+// ring, completion values and shared fence values are bridge_interop.rs, which the Vulkan bridge
+// (vulkan_bridge.cpp, its own state in vulkan_state.rs) uses for its slots too. This file keeps
+// the Unity interfaces, D3D11/D3D12/DXGI objects and calls, shared surfaces and fences, the D3D11
+// texture leases, render-pass and CPU-event calls and the exported entry points.
 #include "bridge.h"
 #include "bridge_state.h"
 #include "bridge_interop.h"
@@ -338,7 +339,9 @@ void rsf_unity_bridge_release() noexcept
     commands = {}; completion.Reset(); queue12.Reset(); device12.Reset(); context11.Reset(); device11.Reset();
     pending_leases = {}; services = {};
     // Forgets the ring, the stored packets and the managed stage; activity and policy persist.
-    rsf_unity_interop_release(); rsf_unity_frames_release();
+    // The Vulkan bridge releases the ring itself, only together with the objects that used it.
+    if (renderer != kUnityGfxRendererVulkan) rsf_unity_interop_release();
+    rsf_unity_frames_release();
     initialized11 = failed11 = false;
 }
 uint32_t rsf_unity_bridge_managed_state() noexcept
