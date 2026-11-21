@@ -25,7 +25,7 @@ The [Anomaly release record](releases/v0.1.2-anomaly.md) distinguishes the shipp
 
 ## C ABI comparison
 
-The GameSDK and runtime contract headers match `2db07f4` byte for byte, including GameSDK ABI 24. The source audit at `d4de507` compared 88 baseline public headers across the SDK, runtime, and Anomaly. Three headers differed after removing comments and whitespace. `native_fg.h` adds three linked-runtime declarations, `d3d11_present_bridge.h` adds `rsf_d3d11_present_source_queue`, and `overlay_api.h` raises `RSF_OVERLAY_SERVICE_OPTION_LIMIT` from 24 to 32. All existing function signatures and public record layouts matched.
+The GameSDK and runtime contract headers match `2db07f4` byte for byte, including GameSDK ABI 24. The source audit at `6414a05` compared the same 88 headers across the SDK, runtime, and Anomaly. Four headers differed after removing comments and whitespace. `native_fg.h` adds three linked-runtime declarations, `d3d11_present_bridge.h` adds `rsf_d3d11_present_source_queue`, and `overlay_api.h` raises `RSF_OVERLAY_SERVICE_OPTION_LIMIT` from 24 to 32. `shader_compile.h` changes the compiler helper's native ownership. All existing C function signatures and public record layouts matched.
 
 On November 21, 2026, both archived MSVC Release trees (`build/rust-migration` and `build/rust-migration-streamline`) matched the recorded case-sensitive export names and ordinals for Runtime (381), AC7 (256), Loader (273), Minecraft (267), and the staged C++ Anomaly adapter (3). Neither archived Anomaly DLL imports the Runtime DLL statically. Both archives predate `d4de507`.
 
@@ -97,14 +97,20 @@ archive. Anomaly links its adapter archive and the shared Graphics
 owner. The Runtime and combined carriers also link the FSR4 compatibility
 archive. With the corrected Streamline runtime present, the Runtime
 also links the Streamline Vulkan lifecycle archive. The standalone
-FSR4 and Streamline Vulkan bridges use the Windows GNU target.
+FidelityFX 4, Streamline and XeSS Vulkan bridges use the Windows GNU
+target.
 
 Build and fixture results below apply to their recorded candidates.
-The merged source-only cutovers still need a Windows build and
-linked and DLL export comparison. Focused verification includes
-D3D11 state and fullscreen restoration, frame-tap admission and
-retirement, SR and FG provider refusal and switching, and shader
-compile and cache parity. Device and game evidence remain separate.
+The newest Runtime and Anomaly binaries found under `build/` at
+`6414a05` still date to the November 21 morning builds recorded above.
+They predate the latest bridge, overlay, input and retirement cutovers.
+
+| Check | Evidence still needed for the merged source |
+| --- | --- |
+| Build and ABI | Windows builds of the Runtime DLL, embedded AC7 and Loader carriers, Minecraft and Anomaly. Compare names and ordinals against the corresponding enabled or disabled baseline. The standalone Windows GNU Vulkan bridges also need link verification. |
+| Focused contracts | Run `plugin_session_lifetime` and `plugin_session_lifetime_embedded`, `callback_host_abi` and `callback_host_abi_embedded`, the Anomaly lifecycle and both profiles' input and SR hook contracts, and the enabled Vulkan provider contracts. Record the build commit and feature set with the results. |
+| Device | Check provider switches, fullscreen and resize, GPU retirement, D3D11 state restoration, OpenGL sharing, capture completion and overlay drawing on the affected APIs. |
+| Game | Use the same candidate on Standard and AVX. Record movement and held input, SR and FG switching, overlay capture and release, resize and fallback, and the observed shutdown sequence. Record an engine quit and explicit plugin retirement separately. |
 
 ## Verification coverage
 
