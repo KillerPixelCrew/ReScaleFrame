@@ -427,6 +427,14 @@ name = "rsf-game-sys"
 version = "0.1.2"
 
 [[package]]
+name = "rsf-minecraft"
+version = "0.1.2"
+dependencies = [
+ "rsf-game-sys",
+ "windows-sys",
+]
+
+[[package]]
 name = "rsf-orchestrator"
 version = "0.1.2"
 dependencies = [

@@ -1,5 +1,35 @@
 # ReScaleFrameCraft native integration
 
+### Rust native owner
+
+`ReScaleFrame.Minecraft.dll` now links the `rsf-minecraft` staticlib (`native/lib.rs`) next to the
+same OrchestratorCore. Rust owns the adapter state that `jni.cpp` held: the process log
+(`minecraft-native.log`), the session identity (`Minecraft 1.21.1`, project
+`11e3ed7f-06c6-4863-a54d-2b790f2176f2`, capture name `Minecraft`), the open pipeline the message
+observer reports to, the presentation child with its WH_GETMESSAGE observer (formerly
+`input_observer.h`), the 88-float camera packet to SR pass translation, the Sodium settings to
+`rsf_gl_pipeline_options` translation including the 12 sharpening fields, the ten configure
+values and the 25 status values (14 still accepted). `jni.cpp` keeps all twelve
+`NativeBridge` exports with unchanged names and signatures, does the typed JNI marshaling and lends
+the Runtime's `rsf_gl_*`, capture, latency-status and header-inline sharpening helpers through
+`minecraft_platform.h`; `native/platform_abi.rs` is generated from it. Java, Gradle and the GL,
+D3D12 and presentation contracts are unchanged, and no backend or frame policy was added.
+
+Intentional differences: the log path is decoded as UTF-8 and opened through the wide API, where
+`fopen` used the ANSI code page; the Runtime still receives the unchanged JNI bytes. Log lines keep
+their CRLF ends, are serialised under a lock and a null message is ignored. The GL interop test
+links the Rust observer instead of the header class.
+
+This is a behaviour-preserving port from source review. Checks were rustfmt (1.11.0, edition
+2024; the pinned 1.94.1 toolchain is not installed), locked offline Cargo metadata, bindgen 0.72.1
+regeneration of the Minecraft entry only and Git whitespace checks. Not run: native build and
+link (this DLL and `rsf_gl_shared_surface_test` now carry a second Rust archive next to the
+orchestrator's, the same unverified multi-archive pattern as Fallout 4), Cargo tests including
+`native/frame/tests.rs`, Clippy, CTest, the RTX GL interop fixture, Gradle `NativeBridgeTest`
+and a game run. Remaining native C++ is the JNI marshaling itself, kept typed against the JDK's
+`jni.h` rather than generating bindings from that out-of-tree header, and the two sharpening
+helpers, which can move once the shared Runtime exposes them as linked C functions.
+
 ### Frame-generation multiplier limits, 1.1.14-dev
 
 Sodium/Reese's multiplier uses the selected FG backend's reported capacity, independently of

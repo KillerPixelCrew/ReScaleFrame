@@ -69,6 +69,12 @@ checks the final outer swapchain slot before binding presentation, and
 keeps the existing Steam facade and typed native call. The rendering and
 CPU producers still need ports. Link, fixture and game checks remain open.
 
+The Minecraft native adapter uses Rust for session startup, the surface
+and message observer, SR and HUD-less packets, and configuration and status
+translation. Existing JNI exports still marshal Java arguments and call the
+same linked Runtime. The log directory is opened through the Windows wide
+path API. Builds, the native and Gradle fixtures, and gameplay remain open.
+
 ## Rust orchestrator and first Anomaly port
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.

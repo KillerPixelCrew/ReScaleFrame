@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define RSF_STREAMLINE_HOST_BUILD
-#include "../games/minecraft/native/input_observer.h"
+#include "../games/minecraft/native/minecraft_platform.h"
 #include <rescaleframe/gl_shared_surface.h>
 #include <rescaleframe/gl_pipeline.h>
 #include <rescaleframe/native_cpu.h>
@@ -119,8 +119,7 @@ int main() try {
         // Minecraft has presented its loading screen before the first runTick hook.
         require(SwapBuffers(window.dc)!=0,"present WGL before adopting native presentation");
         void* child=rsf_gl_window_create(window.window);require(child!=nullptr,"create native child on GLFW owner thread");
-        auto& observer=MinecraftInputObserver::instance();
-        require(observer.install(window.window,static_cast<HWND>(child),[](UINT message) {if (message==probe_message_id) ++probe_dequeued;}),"observe GLFW owner's dequeued messages");
+        require(rsf_minecraft_observer_install(window.window,child,[](uint32_t message) {if (message==probe_message_id) ++probe_dequeued;}),"observe GLFW owner's dequeued messages");
         const UINT probe=RegisterWindowMessageW(L"ReScaleFrame.HiddenInputProbe");
         probe_message_id=probe; probe_dequeued=0;
         require(PostMessageW(window.window,probe,0,0)!=0,"post ping to hidden GLFW parent");
@@ -254,7 +253,7 @@ int main() try {
             while(PeekMessageW(&message,nullptr,0,0,PM_REMOVE)) {TranslateMessage(&message);DispatchMessageW(&message);}
             MsgWaitForMultipleObjects(0,nullptr,FALSE,1,QS_ALLINPUT);
         }
-        graphics.join();observer.close();require(rsf_gl_window_destroy(child)!=0,"destroy native child on its owner thread");
+        graphics.join();rsf_minecraft_observer_close();require(rsf_gl_window_destroy(child)!=0,"destroy native child on its owner thread");
         if(render_error)std::rethrow_exception(render_error);
         std::puts("PASS: separate event/render threads, window ownership, transparent input hit testing, resize and shutdown.");
     }

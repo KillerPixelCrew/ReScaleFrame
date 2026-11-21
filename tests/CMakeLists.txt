@@ -604,7 +604,7 @@ add_test(NAME ac7_native_graph COMMAND rsf_ac7_native_graph_test)
 set_tests_properties(ac7_native_graph PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
 add_executable(rsf_gl_shared_surface_test gl_shared_surface.cpp)
-target_link_libraries(rsf_gl_shared_surface_test PRIVATE ReScaleFrame::OrchestratorCore rsf_build_options opengl32)
+target_link_libraries(rsf_gl_shared_surface_test PRIVATE rsf_minecraft_rust ReScaleFrame::OrchestratorCore rsf_build_options opengl32)
 add_test(NAME gl_shared_surface COMMAND rsf_gl_shared_surface_test)
 set_tests_properties(gl_shared_surface PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
 

@@ -19,7 +19,7 @@ Runtime. Preserve the supported paths, feature refusals and package names.
 | Steam, Fallout 4 and Skyrim SE | The shared Steam D3D11 chain and Fallout 4 identity, plugin lifecycle and cold creation are in Rust. Continue Skyrim SE creation and both games' rendering, CPU facts, compatibility and recovery. |
 | AC7 | Trace the combined DirectInput carriers and their game-side libraries for hook admission, view, scene colour, UI, visibility and motion. Keep engine-specific policy in the adapter as the carriers transition. |
 | Godot | Preserve the GDExtension and compositor contracts while moving Runtime control, frame and presentation ownership behind the native engine bindings. |
-| Minecraft | Preserve the Java mod and JNI contracts. Move first-party native frame and presentation ownership behind those entry points and keep the linked Runtime. |
+| Minecraft | The native session, surface, message observer, frame packets, settings and status are in Rust. The Java mod, typed JNI marshaling and linked Runtime entry points retain their existing contracts. |
 
 Merge coherent ownership changes to the migration branch and remove their
 worker worktrees. The user runs builds and verification. Record each
