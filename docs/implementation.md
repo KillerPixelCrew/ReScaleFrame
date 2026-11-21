@@ -1046,6 +1046,15 @@ MSVC Release contracts and matched the Runtime and three linked
 export inventories. The callback-retirement regression is synthetic.
 [FidelityFX WSI ownership audit](research/rust-vulkan-ffx-wsi-owner.md)
 
+The integrated Vulkan owner build passed 379 pinned Rust tests,
+formatting, Clippy and 13 focused MSVC Release contracts. The Runtime,
+AC7, Loader, Minecraft and Godot export inventories matched, and the
+Anomaly DLL kept its three exports and dynamic Runtime lookup. The
+rebuilt Godot add-on matched all 37 runtime manifest hashes and
+registered its classes in a headless process with the graphics bridge
+inactive. This load check did not exercise a Vulkan device. Logs are in
+`.local/rust-1.94.1-verification/`.
+
 The ordinary Vulkan SR owner now manages FidelityFX context selection,
 staging, dispatch, history, output publication and checked teardown in Rust.
 The existing provider boundaries and SRVK ABI remain intact. FSR2/3
