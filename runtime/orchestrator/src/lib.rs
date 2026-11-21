@@ -226,6 +226,8 @@ mod sr_legacy;
 #[cfg(windows)]
 mod sr_session;
 #[cfg(windows)]
+mod streamline_host;
+#[cfg(windows)]
 mod texture_dump;
 #[cfg(windows)]
 mod ui_identify;

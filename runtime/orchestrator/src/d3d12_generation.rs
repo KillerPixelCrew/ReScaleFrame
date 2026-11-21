@@ -254,7 +254,7 @@ fn initial_status(max_frames: u32) -> Status {
     status
 }
 
-unsafe fn read_options(options: *const Options) -> Result<Options, i32> {
+pub(crate) unsafe fn read_options(options: *const Options) -> Result<Options, i32> {
     if !unsafe { has_capacity(options) } {
         return Err(INVALID);
     }

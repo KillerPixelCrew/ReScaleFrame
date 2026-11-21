@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now owns the D3D12 Streamline host and DLSS-G provider, including
+host admission, frame tokens, Reflex/PCL state, generation options
+and retirement. Native leaves keep the typed SDK and COM calls.
+The host checks optional PCL entry points and synchronizes borrower,
+capability and sleep counter access. The public host declarations
+and disabled stubs are unchanged. Source checks and open verification
+are recorded in commit `aac0c56`.
+
 Rust now owns D3D12 FidelityFX and XeSS super-resolution provider
 sessions, including SDK module lifetime, quality planning and frame
 dispatch. The typed bridges keep SDK calls, validation and the pinned

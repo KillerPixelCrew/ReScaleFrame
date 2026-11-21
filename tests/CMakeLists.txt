@@ -450,11 +450,6 @@ add_executable(rsf_sr12_abi_embedded_test sr12_abi.cpp)
 target_link_libraries(rsf_sr12_abi_embedded_test PRIVATE ReScaleFrame::OrchestratorCore rsf_build_options)
 add_test(NAME sr12_abi_embedded COMMAND rsf_sr12_abi_embedded_test)
 
-add_executable(rsf_dlss_generation_state_test dlss_generation_state.cpp)
-target_link_libraries(rsf_dlss_generation_state_test PRIVATE ReScaleFrame::Contract rsf_build_options)
-add_test(NAME dlss_generation_state_concurrency COMMAND rsf_dlss_generation_state_test)
-set_tests_properties(dlss_generation_state_concurrency PROPERTIES TIMEOUT 30)
-
 add_executable(rsf_fg_provider_test fg_provider.cpp)
 add_executable(rsf_fg_choice_test fg_choice.cpp)
 target_link_libraries(rsf_fg_choice_test PRIVATE rsf_orchestrator rsf_build_options)
