@@ -69,6 +69,15 @@ generate("games/fallout4/src/platform_abi.rs", "games/fallout4/src/fallout4_plat
           "-Iruntime/presentation/include"],
          ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]", "--raw-line", "type wchar_t = u16;",
           "--raw-line", "use rsf_game_sys::{rsf_game_host_services, rsf_game_log_fn};"])
+generate("games/minecraft/native/platform_abi.rs", "games/minecraft/native/minecraft_platform.h",
+         "rsf_(minecraft_(platform|configuration|message_fn)|gl_pipeline(_(setup|options|surfaces|status))?|"
+         "native_fg_(options|status)|fg_status|sharpening_options|native_(latency_status|cpu_counters)|"
+         "backend_(log_fn|result)|dump_log_fn|fg_mode|pacing_owner|reflex_mode)",
+         "RSF_(MINECRAFT_.*|FG_(OFF|FIXED))",
+         ["-Iruntime/orchestrator/include", "-Iruntime/backends/dlss/include", "-Iruntime/graphics/include",
+          "-Iruntime/contract/include", "-Iruntime/presentation/include", "-Isdk/game/include"],
+         ["--no-recursive-allowlist", "--with-derive-default", "--raw-line", "#![allow(dead_code)]",
+          "--raw-line", "use rsf_game_sys::rsf_game_render_pass;"])
 generate("games/anomaly/src/fg_inputs_abi.rs", "games/anomaly/src/fg_inputs_platform.h",
          "rsf_anomaly_input_(log|frame|desc|targets|constants|platform)", "NOTHING", [],
          ["--no-recursive-allowlist", "--with-derive-default"])
