@@ -350,6 +350,12 @@ remain. Malformed custom data, invalid edits and oversized temporary
 declarations are refused. Shader replay and GPU validation remain open.
 [Velocity token evidence](research/rust-ac7-velocity-tokens.md)
 
+The AC7 velocity pixel stage now assembles its shader in Rust. It
+preserves the helper HLSL and compiler arguments, recovers the captured
+additive opacity and injects at native unconditional returns. It also
+keeps aliased input alive and refuses shaders with no injection site.
+Emitted bytecode parity, builds and GPU replay remain open.
+
 ## Rust orchestrator and first Anomaly port
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.

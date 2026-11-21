@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: MIT
 //! AC7 velocity SHEX/SHDR framing, operand decoding and immediate register edits.
-//! Stage assembly and the D3DCompiler interface stay in velocity_shader.cpp.
+//! Used by Rust pixel assembly and the native transforms of the other stages.
 
 use crate::dxbc_chunks::word;
-use crate::velocity_container::{Resize, borrowed};
+use crate::velocity_container::{Resize, borrowed, native_output};
+use std::borrow::Cow;
 use std::ffi::c_void;
-use std::slice;
 
 const CUSTOM_DATA: u32 = 53;
 const DCL_TEMPS: u32 = 104;
-const MAX_TEMPS: u32 = 4096;
+pub(crate) const MAX_TEMPS: u32 = 4096;
 const MAX_INSTRUCTION_WORDS: usize = 127;
 const OPCODE_MASK: u32 = 0x7ff;
 const LENGTH_MASK: u32 = 0x7f00_0000;
@@ -25,22 +25,46 @@ struct InstructionView {
 }
 
 #[repr(C)]
-struct OperandView {
-    token: usize,
-    end: usize,
-    kind: u32,
+pub(crate) struct OperandView {
+    pub(crate) token: usize,
+    pub(crate) end: usize,
+    pub(crate) kind: u32,
     dimensions: u32,
     immediate32: u32,
     registers: [u32; 3],
 }
 
 #[repr(C)]
-struct OperandEdit {
+pub(crate) struct OperandEdit {
     // All old indices must be immediate 32-bit values. UINT32_MAX leaves the operand intact.
     old_count: u32,
     kind: u32,
     count: u32,
     registers: [u32; 2],
+}
+
+impl OperandView {
+    pub(crate) fn direct_register(&self) -> Option<u32> {
+        (self.dimensions == 1 && self.immediate32 == 1).then_some(self.registers[0])
+    }
+}
+
+impl OperandEdit {
+    pub(crate) const KEEP: Self = Self {
+        old_count: u32::MAX,
+        kind: 0,
+        count: 0,
+        registers: [0; 2],
+    };
+
+    pub(crate) fn register(kind: u32, register: u32) -> Self {
+        Self {
+            old_count: 1,
+            kind,
+            count: 1,
+            registers: [register, 0],
+        }
+    }
 }
 
 const _: () = {
@@ -85,35 +109,40 @@ unsafe extern "C" fn rsf_core_ac7_velocity_read_instructions(
     let Some(bytes) = (unsafe { borrowed(bytes, size) }) else {
         return false;
     };
+    read_instructions(bytes, profile, |opcode, words, declaration| {
+        let view = InstructionView {
+            words: words.as_ptr(),
+            count: words.len(),
+            opcode,
+            declaration,
+        };
+        unsafe { append(user, &view) }.then_some(())
+    })
+    .is_some()
+}
+
+pub(crate) fn read_instructions(
+    bytes: &[u8],
+    profile: u32,
+    mut visit: impl FnMut(u32, &[u32], bool) -> Option<()>,
+) -> Option<()> {
     let (data, trailing) = bytes.as_chunks::<4>();
     if !trailing.is_empty()
         || word(bytes, 0) != Some(profile)
         || word(bytes, 4).map(|count| count as usize) != Some(data.len())
     {
-        return false;
+        return None;
     }
     let mut code = Vec::new();
-    if code.try_reserve_exact(data.len() - 2).is_err() {
-        return false;
-    }
+    code.try_reserve_exact(data.len() - 2).ok()?;
     code.extend(data[2..].iter().copied().map(u32::from_le_bytes));
     let mut remaining = code.as_slice();
     while !remaining.is_empty() {
-        let Some((opcode, words)) = instruction(remaining) else {
-            return false;
-        };
-        let view = InstructionView {
-            words: words.as_ptr(),
-            count: words.len(),
-            opcode,
-            declaration: (88..=106).contains(&opcode),
-        };
-        if !unsafe { append(user, &view) } {
-            return false;
-        }
+        let (opcode, words) = instruction(remaining)?;
+        visit(opcode, words, (88..=106).contains(&opcode))?;
         remaining = &remaining[words.len()..];
     }
-    true
+    Some(())
 }
 
 /// The caller lends a stream beginning with its shader profile and a count placeholder.
@@ -128,26 +157,26 @@ unsafe extern "C" fn rsf_core_ac7_velocity_write_instructions(
     let Some(code) = (unsafe { borrowed(code, count) }) else {
         return false;
     };
-    let (Ok(count), Some(mut remaining)) = (u32::try_from(count), code.get(2..)) else {
-        return false;
-    };
+    write_instructions(code, |size| unsafe { native_output(user, resize, size) }).is_some()
+}
+
+pub(crate) fn write_instructions<'a>(
+    code: &[u32],
+    allocate: impl FnOnce(usize) -> Option<&'a mut [u8]>,
+) -> Option<()> {
+    let count = u32::try_from(code.len()).ok()?;
+    let mut remaining = code.get(2..)?;
     while !remaining.is_empty() {
-        let Some((_, words)) = instruction(remaining) else {
-            return false;
-        };
+        let (_, words) = instruction(remaining)?;
         remaining = &remaining[words.len()..];
     }
-    let size = code.len() * 4;
-    let bytes = unsafe { resize(user, size) };
-    if bytes.is_null() {
-        return false;
-    }
-    let bytes = unsafe { slice::from_raw_parts_mut(bytes, size) };
+    let size = code.len().checked_mul(4)?;
+    let bytes = allocate(size)?.get_mut(..size)?;
     for (dst, &value) in bytes.chunks_exact_mut(4).zip(code) {
         dst.copy_from_slice(&value.to_le_bytes());
     }
     bytes[4..8].copy_from_slice(&count.to_le_bytes());
-    true
+    Some(())
 }
 
 struct Operand {
@@ -255,13 +284,19 @@ unsafe extern "C" fn rsf_core_ac7_velocity_read_operands(
     user: *mut c_void,
     append: AppendOperand,
 ) -> bool {
-    let Some(operands) = (unsafe { borrowed(words, count) }).and_then(decode_operands) else {
+    let Some(mut operands) = (unsafe { borrowed(words, count) }).and_then(read_operands) else {
         return false;
     };
-    operands
-        .iter()
-        .filter(|operand| !operand.nested)
-        .all(|operand| unsafe { append(user, &operand.view) })
+    operands.all(|operand| unsafe { append(user, &operand) })
+}
+
+pub(crate) fn read_operands(words: &[u32]) -> Option<impl Iterator<Item = OperandView> + use<>> {
+    Some(
+        decode_operands(words)?
+            .into_iter()
+            .filter(|operand| !operand.nested)
+            .map(|operand| operand.view),
+    )
 }
 
 /// The caller lends one instruction. SelectEdit supplies register mappings and StoreWords
@@ -279,9 +314,24 @@ unsafe extern "C" fn rsf_core_ac7_velocity_rewrite_operands(
     let Some(words) = (unsafe { borrowed(words, count) }) else {
         return false;
     };
-    let Some(operands) = decode_operands(words) else {
-        return false;
-    };
+    let edited = rewrite_operands(words, nested, |view| {
+        let mut edit = OperandEdit::KEEP;
+        unsafe { select(user, view, &mut edit) }.then_some(edit)
+    });
+    match edited {
+        Some(Cow::Owned(edited)) => unsafe { store(user, edited.as_ptr(), edited.len()) },
+        Some(Cow::Borrowed(_)) => true,
+        None => false,
+    }
+}
+
+/// An unchanged instruction borrows its input words.
+pub(crate) fn rewrite_operands(
+    words: &[u32],
+    nested: bool,
+    mut select: impl FnMut(&OperandView) -> Option<OperandEdit>,
+) -> Option<Cow<'_, [u32]>> {
+    let operands = decode_operands(words)?;
     let mut edited = Vec::new();
     for operand in operands
         .iter()
@@ -289,15 +339,7 @@ unsafe extern "C" fn rsf_core_ac7_velocity_rewrite_operands(
         .filter(|operand| nested || !operand.nested)
     {
         let view = &operand.view;
-        let mut edit = OperandEdit {
-            old_count: u32::MAX,
-            kind: 0,
-            count: 0,
-            registers: [0; 2],
-        };
-        if !unsafe { select(user, view, &mut edit) } {
-            return false;
-        }
+        let edit = select(view)?;
         if edit.old_count == u32::MAX {
             continue;
         }
@@ -309,16 +351,13 @@ unsafe extern "C" fn rsf_core_ac7_velocity_rewrite_operands(
             || view.dimensions != edit.old_count
             || view.immediate32 != (1 << edit.old_count) - 1
         {
-            return false;
+            return None;
         }
         if edited.is_empty() {
             // At most two indices can be added per operand.
-            if edited
+            edited
                 .try_reserve_exact(words.len() + 2 * operands.len())
-                .is_err()
-            {
-                return false;
-            }
+                .ok()?;
             edited.extend_from_slice(words);
         }
         let new_representations = ((1 << (edit.count * 3)) - 1) << 22;
@@ -335,11 +374,11 @@ unsafe extern "C" fn rsf_core_ac7_velocity_rewrite_operands(
         }
     }
     if edited.is_empty() {
-        return true;
+        return Some(Cow::Borrowed(words));
     }
     if edited.len() > MAX_INSTRUCTION_WORDS {
-        return false;
+        return None;
     }
     edited[0] = (edited[0] & !LENGTH_MASK) | ((edited.len() as u32) << 24);
-    unsafe { store(user, edited.as_ptr(), edited.len()) }
+    Some(Cow::Owned(edited))
 }

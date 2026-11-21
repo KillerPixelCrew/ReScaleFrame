@@ -32,7 +32,7 @@ assemble stages and write stage-specific declaration and instruction literals.
 
 | Entry point | Remaining C++ logic |
 | --- | --- |
-| `rsf_ac7_velocity_pixel_shader` | Material and binding admission, additive-opacity pattern and liveness checks, signature mapping, declaration merge and return-time injection. |
+| `rsf_ac7_velocity_pixel_shader` | The C++ vector and typed compiler cache. `velocity_pixel.rs` now owns admission, additive opacity, register mapping and return-time assembly. |
 | `rsf_ac7_velocity_vertex_shader` | Generic, sprite, mesh and beam key helper selection, stage signature and declaration linking, dummy-position suppression and return-time injection. |
 | `rsf_ac7_velocity_geometry_shader` | Compile and cache the history GS template, link its signatures, match position moves to three emissions and copy packed native varyings. |
 | `rsf_ac7_velocity_native_geometry_shader` | Admit the native triangle GS and its bindings, map history-helper inputs, and inject clip position, ordinal and history work at emissions. |
@@ -48,6 +48,11 @@ grammar for validating declaration payloads or reconciling linked immediate
 constant buffers. Existing stream, topology and stage restrictions still
 apply. The broader motion coverage and gameplay acceptance gaps are recorded
 in the velocity research.
+
+The pixel-stage follow-up reused the existing Rust codecs. Source comparison matched its helper
+HLSL, compiler arguments, stage entry and emitted token literals. The native wrapper keeps aliased
+input alive while Rust writes a separate result, and Rust refuses a stream with no unconditional
+return. Emitted bytecode parity and replay still need verification.
 
 Validation for this port is source-only. HLSL literals, compiler call sites,
 stage entry points, token emission sites and bridge declarations were compared

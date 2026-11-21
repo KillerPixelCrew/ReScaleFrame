@@ -150,176 +150,39 @@ bool has_cb(const std::vector<Instruction>& code,uint32_t slot)
     for (const auto& i:code) if (i.op==89 && i.words.size()>2 && i.words[2]==slot) return true;
     return false;
 }
-constexpr char helper_source[]=R"(
-cbuffer Velocity : register(b13) {
-    float4 Rect; float4 Jitter; float Cutoff; uint HasHistory; float2 Padding;
-};
-float4 main(float4 current_clip:RSFCUR0,float4 previous:RSFPREV0,float4 colour:RSFCOLOR0):SV_Target0 {
-    clip(colour.w-Cutoff);
-    float2 current=current_clip.xy/current_clip.w-Jitter.xy;
-    float2 old=previous.xy/previous.w-Jitter.zw;
-    return float4((current-old)*0.2495+32767.0/65535.0,0,0);
-})";
-const std::vector<uint8_t>& helper()
-{
-    static const auto bytes=[] { std::vector<uint8_t> result;
-        rsf::compile_shader(helper_source,"ac7-translucent-velocity","main","ps_5_0",result); return result; }();
-    return bytes;
+// D3DCompiler's blobs and module remain native. The cached copy owns the returned
+// bytecode for the lifetime of this module, including throughout every Rust call.
+bool compile_pixel_helper(const char* source, size_t length, const uint8_t** bytes, size_t* size) noexcept
+try {
+    static const auto bytecode = [source, length] {
+        std::vector<uint8_t> result;
+        rsf::compile_shader(source, length, "ac7-translucent-velocity", "main", "ps_5_0", result);
+        return result;
+    }();
+    *bytes = bytecode.data();
+    *size = bytecode.size();
+    return !bytecode.empty();
+} catch (...) { return false; }
 }
-}
-rsf_ac7_velocity_shader_result rsf_ac7_velocity_pixel_shader(const void* bytes,size_t size,
-    uint32_t blend,std::vector<uint8_t>& output,uint32_t previous_register,uint32_t current_register) noexcept
+
+extern "C" bool rsf_core_ac7_velocity_pixel_shader(const uint8_t*, size_t, uint32_t blend,
+    uint32_t previous, uint32_t current, bool (*compile_helper)(const char*, size_t, const uint8_t**, size_t*),
+    void* user, uint8_t* (*resize)(void*, size_t)) noexcept;
+
+rsf_ac7_velocity_shader_result rsf_ac7_velocity_pixel_shader(const void* bytes, size_t size,
+    uint32_t blend, std::vector<uint8_t>& output, uint32_t previous_register, uint32_t current_register) noexcept
 {
-    output.clear();
-    try {
-        if (blend<2 || blend>5) return rsf_ac7_velocity_shader_result::refused;
-        Container native,extra;
-        if (!native.read(bytes,size) || !extra.read(helper().data(),helper().size())) return rsf_ac7_velocity_shader_result::refused;
-        auto* shader=native.find("SHEX"); if (!shader) shader=native.find("SHDR");
-        auto* input=native.find("ISGN"); auto* output_signature=native.find("OSGN");
-        auto* add_shader=extra.find("SHEX"); if (!add_shader) add_shader=extra.find("SHDR");
-        auto* add_input=extra.find("ISGN");
-        std::vector<Instruction> original,added; std::vector<Semantic> inputs,outputs,add_inputs;
-        if (!shader || !input || !output_signature || !add_shader || !add_input ||
-            !instructions(*shader,original) || !instructions(*add_shader,added) ||
-            !read_signature(*input,inputs) || !read_signature(*output_signature,outputs) ||
-            !read_signature(*add_input,add_inputs) || has_cb(original,13)) return rsf_ac7_velocity_shader_result::refused;
-        bool target=false; for (const auto& s:outputs) {
-            if (!_stricmp(s.name.c_str(),"SV_Target")) {
-                if (s.index || s.reg) return rsf_ac7_velocity_shader_result::refused;
-                target=true;
-            }
-        }
-        if (!target) return rsf_ac7_velocity_shader_result::refused;
-        uint32_t current_clip=0,previous=0,extra_current=UINT32_MAX,extra_previous=UINT32_MAX,extra_colour=UINT32_MAX;
-        for (auto& s:inputs) {
-            previous=std::max(previous,s.reg+1);
-            if (s.name=="RSFPREV") return rsf_ac7_velocity_shader_result::refused;
-        }
-        if (previous_register!=UINT32_MAX) {
-            if (previous_register<previous) return rsf_ac7_velocity_shader_result::refused;
-            previous=previous_register;
-        }
-        current_clip=current_register==UINT32_MAX ? previous+1 : current_register;
-        if (previous>=32 || current_clip>=32 || current_clip==previous) return rsf_ac7_velocity_shader_result::refused;
-        for (const auto& s:inputs) if (s.reg==current_clip) return rsf_ac7_velocity_shader_result::refused;
-        for (const auto& s:add_inputs) {
-            if (s.name=="RSFCUR") extra_current=s.reg;
-            if (s.name=="RSFPREV") extra_previous=s.reg;
-            if (s.name=="RSFCOLOR") extra_colour=s.reg;
-        }
-        if (extra_current==UINT32_MAX || extra_previous==UINT32_MAX || extra_colour==UINT32_MAX)
-            return rsf_ac7_velocity_shader_result::refused;
-        inputs.push_back({"RSFPREV",0,0,3,previous,15,11});
-        inputs.push_back({"RSFCUR",0,0,3,current_clip,15,11});
-        const uint32_t colour=temp_count(original),helper_base=colour+1,total=helper_base+temp_count(added);
-        if (total>4096) return rsf_ac7_velocity_shader_result::refused;
-        // Standard AC7 additive base-pass shaders finish with Colour*Opacity, alpha=0, return.
-        // Read that preserved scalar, never infer opacity from additive radiance or output alpha.
-        std::vector<uint32_t> additive_opacity;
-        if (blend==3) {
-            if (original.size()<3 || original.back().op!=62) return rsf_ac7_velocity_shader_result::refused;
-            size_t multiply_index=original.size(),zero_index=original.size();
-            for (size_t j=original.size()-1;j>0;--j) {
-                const auto& candidate=original[j-1];
-                if (candidate.declaration || candidate.op==53) continue;
-                std::vector<Operand> values;
-                if (!candidate.operands(values)) return rsf_ac7_velocity_shader_result::refused;
-                if (values.empty() || values[0].type!=2 || !values[0].direct(1) || values[0].reg()!=0) continue;
-                const uint32_t mask=(candidate.words[values[0].token]>>4)&15;
-                if ((mask&7) && multiply_index==original.size()) multiply_index=j-1;
-                if ((mask&8) && zero_index==original.size()) zero_index=j-1;
-            }
-            if (multiply_index==original.size() || zero_index==original.size()) return rsf_ac7_velocity_shader_result::refused;
-            const auto& multiply=original[multiply_index]; const auto& zero=original[zero_index];
-            std::vector<Operand> operands,zero_operands;
-            if (multiply.op!=56 || zero.op!=54 || original.back().op!=62 ||
-                !multiply.operands(operands) || operands.size()!=3 || !zero.operands(zero_operands) || zero_operands.size()!=2 ||
-                operands[0].type!=2 || !operands[0].direct(1) || operands[0].reg()!=0 || ((multiply.words[operands[0].token]>>4)&15)!=7 ||
-                zero_operands[0].type!=2 || !zero_operands[0].direct(1) || zero_operands[0].reg()!=0 || ((zero.words[zero_operands[0].token]>>4)&15)!=8 ||
-                zero_operands[1].type!=4 || zero.words[zero_operands[1].end-1]!=0)
-                return rsf_ac7_velocity_shader_result::refused;
-            const Operand* scalar=nullptr;
-            for (size_t i=1;i<3;++i) {
-                const uint32_t swizzle=(multiply.words[operands[i].token]>>4)&255;
-                if (operands[i].type==0 && operands[i].direct(1) && swizzle==(swizzle&3)*85) {
-                    if (scalar) return rsf_ac7_velocity_shader_result::refused;
-                    scalar=&operands[i];
-                }
-            }
-            if (!scalar) return rsf_ac7_velocity_shader_result::refused;
-            for (size_t j=multiply_index+1;j+1<original.size();++j) {
-                std::vector<Operand> values; const auto& candidate=original[j];
-                if (candidate.declaration || candidate.op==53) continue;
-                if (!candidate.operands(values)) return rsf_ac7_velocity_shader_result::refused;
-                if (!values.empty() && values[0].type==0 && values[0].direct(1) && values[0].reg()==scalar->reg() &&
-                    ((candidate.words[values[0].token]>>4)&(1u<<((multiply.words[scalar->token]>>4)&3))))
-                    return rsf_ac7_velocity_shader_result::refused;
-            }
-            additive_opacity.assign(multiply.words.begin()+scalar->token,multiply.words.begin()+scalar->end);
-        }
-        std::vector<uint32_t> declarations,injection; bool temps_declared=false;
-        std::vector<Instruction> body;
-        auto append=[](std::vector<uint32_t>& into,const std::vector<uint32_t>& words) { into.insert(into.end(),words.begin(),words.end()); };
-        for (auto i:original) {
-            if (i.op==63 || i.op==4 || i.op==5) return rsf_ac7_velocity_shader_result::refused;
-            if (i.op==104) {
-                i.words[1]=total; temps_declared=true; append(declarations,i.words); continue;
-            }
-            if (i.declaration) {
-                append(declarations,i.words); continue;
-            }
-            if (i.op!=53 && !i.rewrite([&](const Operand& o, OperandEdit& edit) {
-                if (o.type==2) {
-                    if (!o.direct(1)) return false;
-                    if (o.reg()==0) edit.to_temp(colour);
-                }
-                return true;
-            })) return rsf_ac7_velocity_shader_result::refused;
-            body.push_back(std::move(i));
-        }
-        if (!temps_declared) append(declarations,{0x02000068u,total});
-        for (auto i:added) {
-            if (i.op==104 || i.op==106 || i.op==101 || i.op==62) continue;
-            if (i.op>=98 && i.op<=100) {
-                if (i.words.size()<3) return rsf_ac7_velocity_shader_result::refused;
-                if (i.words[2]==extra_colour) continue;
-                if (i.words[2]==extra_current) i.words[2]=current_clip;
-                else if (i.words[2]==extra_previous) i.words[2]=previous;
-                else return rsf_ac7_velocity_shader_result::refused;
-                append(declarations,i.words); continue;
-            }
-            if (i.declaration) { append(declarations,i.words); continue; }
-            if (!i.rewrite([&](const Operand& o, OperandEdit& edit) {
-                if (o.type==0) return rebase_temp(o,edit,helper_base);
-                if (o.type==1) {
-                    if (o.reg()==extra_colour) edit.to_temp(colour);
-                    else if (o.reg()==extra_current) edit.remap(o,current_clip);
-                    else if (o.reg()==extra_previous) edit.remap(o,previous);
-                    else return false;
-                }
-                return true;
-            })) return rsf_ac7_velocity_shader_result::refused;
-            append(injection,i.words);
-        }
-        // Inlining at each unconditional return keeps native material control flow and discards.
-        std::vector<uint32_t> code{0x50,0}; append(code,declarations);
-        for (const auto& i:body) {
-            if (i.op==62) {
-                if (!additive_opacity.empty()) {
-                    const uint32_t length_mov=uint32_t(3+additive_opacity.size());
-                    append(code,{(length_mov<<24)|54u,0x00100082u,colour}); append(code,additive_opacity);
-                }
-                append(code,injection);
-            }
-            append(code,i.words);
-        }
-        write_instructions(*shader,code);
-        write_signature(*input,inputs);
-        native.write(output);
+    // The input may point into output. Keep it alive until Rust has finished borrowing it.
+    std::vector<uint8_t> patched;
+    if (rsf_core_ac7_velocity_pixel_shader(static_cast<const uint8_t*>(bytes), size, blend,
+            previous_register, current_register, compile_pixel_helper, &patched, rsf::ac7::resize_shader_bytes)) {
+        output.swap(patched);
         return rsf_ac7_velocity_shader_result::patched;
-    } catch (...) { output.clear(); return rsf_ac7_velocity_shader_result::refused; }
+    }
+    output.clear();
+    return rsf_ac7_velocity_shader_result::refused;
 }
+
 bool rsf_ac7_velocity_signature(const void* bytes,size_t size,bool output,
     std::vector<rsf_ac7_velocity_semantic>& semantics) noexcept
 {
