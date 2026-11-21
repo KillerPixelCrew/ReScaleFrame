@@ -1,12 +1,10 @@
 // SPDX-License-Identifier: MIT
 // Native leaves of the Anomaly overlay service. overlay.rs owns the binding, the configuration translation, the
 // callbacks, the start state and the panel diagnostics and capture. This file keeps the COM calls on a presented chain,
-// the SR and FG stage links and the guarded hook installs, and forwards the C++ entry points the cold entry, the FG
+// guarded hook installs, and forwards the C++ entry points the cold entry, the FG
 // stage and the fixtures call.
 #include "overlay_service.h"
 #include "overlay_platform.h"
-#include "sr_overlay.h"
-#include "fg_overlay.h"
 #include <d3d11.h>
 
 static_assert(rsf::anomaly::overlay::capture_mouse == RSF_OVERLAY_CAPTURE_MOUSE);
@@ -21,35 +19,6 @@ static_assert(int(StartStatus::hooks_refused) == RSF_ANOMALY_OVERLAY_HOOKS_REFUS
 
 namespace rsf::anomaly::overlay {
 namespace {
-// SR Stage 5 (sr_overlay.h). Null when SRStage=5 is not configured: SR is then unavailable in the panel.
-const sr::OverlayLink* sr_link() noexcept { return sr::overlay_link.load(std::memory_order_acquire); }
-void sr_choices(rsf_anomaly_overlay_sr_choices* out) noexcept {
-    const auto* link = sr_link();
-    const auto sr = link && link->choices ? link->choices() : sr::OverlayChoices{};
-    *out = {sr.backends, sr.qualities, sr.preset ? 1u : 0u,
-        {sr.defaults.enabled ? 1u : 0u, sr.defaults.backend, sr.defaults.quality, sr.defaults.preset}};
-}
-int sr_report(rsf_overlay_sr_report* report) noexcept {
-    const auto* link = sr_link();
-    return link && link->report ? link->report(report) : 0;
-}
-void sr_request(const rsf_anomaly_overlay_sr_settings* wanted) noexcept {
-    if (const auto* link = sr_link(); link && link->request)
-        link->request({wanted->enabled != 0, wanted->backend, wanted->quality, wanted->preset});
-}
-
-// Frame generation (fg_overlay.h). Null when the presentation bridge was not installed.
-uint32_t fg_link(rsf_anomaly_overlay_fg* out) noexcept {
-    const auto* link = fg::overlay_link.load(std::memory_order_acquire);
-    if (!link) return 0;
-    *out = {link->enabled, link->backend, link->generated, link->latency, link->frame_limit_us};
-    return 1;
-}
-uint32_t fg_foreign_chain(void* chain) noexcept {
-    const auto* link = fg::overlay_link.load(std::memory_order_acquire);
-    return link && link->foreign_chain && link->foreign_chain(static_cast<IDXGISwapChain*>(chain)) ? 1u : 0u;
-}
-
 uint32_t describe_chain(void* chain, rsf_anomaly_overlay_chain* out) noexcept {
     auto* swap = static_cast<IDXGISwapChain*>(chain);
     DXGI_SWAP_CHAIN_DESC desc{};
@@ -82,8 +51,7 @@ uint32_t install_present(const char** reason) noexcept {
     return install_present_hooks(present_sink(), reason) ? 1u : 0u;
 }
 
-constexpr rsf_anomaly_overlay_platform platform{&sr_choices, &sr_report, &sr_request, &fg_link, &fg_foreign_chain,
-    &describe_chain, &capture_backbuffer, &install_input, &install_present};
+constexpr rsf_anomaly_overlay_platform platform{&describe_chain, &capture_backbuffer, &install_input, &install_present};
 }
 
 StartStatus bind_api(rsf_get_overlay_api_fn query, rsf_overlay_api* out, const char** reason) noexcept {

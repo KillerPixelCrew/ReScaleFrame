@@ -144,3 +144,21 @@ so both were built and not executed. A game run on the Standard and AVX
 executables must confirm Insert open and close, mouse and keyboard withholding
 and release, option and SR/FG application with saved INI values, and the
 adapter log lines recorded in the baseline.
+
+## Direct stage links
+
+The overlay now gets SR choices, effective reports and next-frame settings
+directly from the Rust Stage 5 owner. It gets FG startup defaults from the
+installed Rust FG stage and uses that stage's existing chain identity check
+to skip provider presents. The C++ overlay and stage facades previously
+published two extra pointers and copied the same records across the private
+ABI. Both publications and the unused native record types were removed.
+The native overlay table now carries chain description, capture, and the two
+hook installers.
+
+The stage readiness checks and settings application order are preserved.
+The pinned Rust workspace passed 382 tests, formatting and Clippy.
+The Anomaly DLL and ten focused MSVC Release contracts passed, including
+overlay API and input gate, SR and input hooks for both profiles, and the
+Runtime SR API. The DLL kept the staged three exports and by-name Runtime
+lookup. This change still needs foreground overlay and gameplay validation.

@@ -260,7 +260,6 @@ unsafe extern "C" fn dump(_: Raw, _: u64, _: *const c_char, _: *const c_char) ->
 unsafe extern "C" fn prepare(_: Raw, _: Raw, _: Raw, _: Raw, _: Raw, _: Raw, _: Raw, _: u32) {}
 unsafe extern "C" fn retire(_: Raw, _: Raw) {}
 unsafe extern "C" fn present(_: Raw, _: *const rsf_observer_present_event) {}
-unsafe extern "C" fn publish(_: *const rsf_anomaly_fg_overlay_link) {}
 unsafe extern "C" fn immediate(_: Raw) -> Raw {
     CONTEXT
 }
@@ -347,7 +346,6 @@ fn missing_hudless_backbuffer_cannot_advance_fg_history() {
     };
     let platform = Box::leak(Box::new(Platform {
         inputs: &INPUTS,
-        publish_overlay: Some(publish),
         immediate_context: Some(immediate),
         backbuffer: Some(backbuffer),
         output_window: Some(output_window),

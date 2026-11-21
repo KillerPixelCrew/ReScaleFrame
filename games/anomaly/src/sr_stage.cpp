@@ -56,9 +56,6 @@ bool rsf_anomaly_sr_stage_round_trip(void*, const rsf_anomaly_sr_seam*) noexcept
 void rsf_anomaly_sr_stage_report(rsf_anomaly_sr_log, void*) noexcept;
 void rsf_anomaly_sr_stage_jitter(rsf_anomaly_sr_jitter_state*) noexcept;
 void rsf_anomaly_sr_stage_jitter_uv(rsf_anomaly_sr_jitter_uv*) noexcept;
-void rsf_anomaly_sr_stage_choices(rsf_anomaly_sr_choices*) noexcept;
-int32_t rsf_anomaly_sr_stage_overlay_report(void*) noexcept;
-void rsf_anomaly_sr_stage_request(const rsf_anomaly_sr_settings*) noexcept;
 }
 
 namespace rsf::anomaly::sr {
@@ -992,8 +989,6 @@ void configure(const StageOptions& value, rsf_game_log_fn log, void* user) noexc
         temporal.initial = value.settings;
         driver.configure(temporal, log, user);
     }
-    static constexpr OverlayLink link{&overlay_choices, &overlay_report, &request_settings};
-    overlay_link.store(value.stage == 5 ? &link : nullptr, std::memory_order_release);
 }
 const StageOptions& options() noexcept { return configured_options; }
 bool active() noexcept { return rsf_anomaly_sr_stage_active(); }
@@ -1006,15 +1001,4 @@ bool quiesce() noexcept { return rsf_anomaly_sr_stage_quiesce(); }
 void frame_end() noexcept { rsf_anomaly_sr_stage_frame_end(); }
 void report(void (*emit)(void*, const char*), void* user) noexcept { rsf_anomaly_sr_stage_report(emit, user); }
 
-// ---- the shared overlay (overlay_service.cpp) -------------------------------------------------------------------
-OverlayChoices overlay_choices() noexcept {
-    rsf_anomaly_sr_choices c{};
-    rsf_anomaly_sr_stage_choices(&c);
-    return {c.backends, c.qualities, c.preset, to_native(c.defaults)};
-}
-int overlay_report(rsf_overlay_sr_report* report) noexcept { return rsf_anomaly_sr_stage_overlay_report(report); }
-void request_settings(const SrSettings& settings) noexcept {
-    const auto c = to_c(settings);
-    rsf_anomaly_sr_stage_request(&c);
-}
 }

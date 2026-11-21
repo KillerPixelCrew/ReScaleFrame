@@ -1216,25 +1216,3 @@ const _: () = {
     ["Offset of field: rsf_anomaly_sr_stage_platform::vendor_file"]
         [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, vendor_file) - 584usize];
 };
-#[repr(C)]
-#[derive(Default, Copy, Clone)]
-pub struct rsf_anomaly_sr_choices {
-    pub backends: u32,
-    pub qualities: u32,
-    pub preset: bool,
-    pub defaults: rsf_anomaly_sr_settings,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_anomaly_sr_choices"][::core::mem::size_of::<rsf_anomaly_sr_choices>() - 28usize];
-    ["Alignment of rsf_anomaly_sr_choices"]
-        [::core::mem::align_of::<rsf_anomaly_sr_choices>() - 4usize];
-    ["Offset of field: rsf_anomaly_sr_choices::backends"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_choices, backends) - 0usize];
-    ["Offset of field: rsf_anomaly_sr_choices::qualities"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_choices, qualities) - 4usize];
-    ["Offset of field: rsf_anomaly_sr_choices::preset"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_choices, preset) - 8usize];
-    ["Offset of field: rsf_anomaly_sr_choices::defaults"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_choices, defaults) - 12usize];
-};

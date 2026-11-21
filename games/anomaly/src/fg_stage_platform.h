@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 #include "fg_inputs_platform.h"
-#include "fg_overlay.h"
 #include <rescaleframe/d3d11_fg_api.h>
 #include <rescaleframe/d3d11_present_api.h>
 #include <stdbool.h>
@@ -27,6 +26,11 @@ typedef struct rsf_anomaly_fg_motion_target {
     bool written, main;
 } rsf_anomaly_fg_motion_target;
 
+#ifdef __cplusplus
+typedef struct IDXGISwapChain rsf_anomaly_fg_swap_chain;
+#else
+typedef void rsf_anomaly_fg_swap_chain;
+#endif
 typedef void (*rsf_anomaly_fg_overlay_present)(void* user, rsf_anomaly_fg_swap_chain* chain);
 typedef void* (*rsf_anomaly_fg_depth_source)(void);
 
@@ -36,7 +40,6 @@ typedef struct rsf_anomaly_fg_platform {
     const char* engine_version;
     const char* project_id;
     float units_to_meters;
-    void (*publish_overlay)(const rsf_anomaly_fg_overlay_link* link);
     // Selected from the fingerprinted profile. Returns a borrowed depth view.
     void* (*engine_depth_view)(uint32_t rva);
     bool (*sr_owns_depth)(uint32_t native_frame);

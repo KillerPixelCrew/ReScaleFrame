@@ -308,13 +308,6 @@ typedef struct rsf_anomaly_sr_stage_platform {
     bool (*vendor_file)(uint32_t directory, const char* name);   // 0 Streamline, 1 FidelityFX, 2 XeSS
 } rsf_anomaly_sr_stage_platform;
 
-// The overlay choices for SRStage=5 (OverlayChoices, sr_overlay.h).
-typedef struct rsf_anomaly_sr_choices {
-    uint32_t backends, qualities;
-    bool preset;
-    rsf_anomaly_sr_settings defaults;
-} rsf_anomaly_sr_choices;
-
 // Live options, in registration order.
 #define RSF_ANOMALY_SR_OPTION_COLOUR_TRANSPORT 0
 #define RSF_ANOMALY_SR_OPTION_EXPOSURE_AUTO 1

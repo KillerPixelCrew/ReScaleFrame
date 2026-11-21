@@ -63,7 +63,6 @@ bool output_window(void* chain, uintptr_t* window) noexcept {
 const rsf_anomaly_fg_platform& platform() noexcept {
     static const rsf_anomaly_fg_platform value{
         &input_platform(), sr::engine_version, sr::project_id, sr::view_space_to_meters,
-        [](const rsf_anomaly_fg_overlay_link* link) { overlay_link.store(link, std::memory_order_release); },
         &engine_depth_view,
         rsf_anomaly_sr_stage_owns_depth,
         [] {

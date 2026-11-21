@@ -58,6 +58,14 @@ type Platform = rsf_anomaly_sr_stage_platform;
 type Config = rsf_anomaly_sr_stage_config;
 type JitterState = rsf_anomaly_sr_jitter_state;
 
+#[derive(Default)]
+pub(crate) struct OverlayChoices {
+    pub backends: u32,
+    pub qualities: u32,
+    pub preset: bool,
+    pub defaults: rsf_anomaly_sr_settings,
+}
+
 // A missing native leaf answers with a refusal: null, zero or false.
 trait Refused {
     fn refused() -> Self;
@@ -2125,10 +2133,10 @@ impl Stage {
     }
 
     // ---- the shared overlay -------------------------------------------------------------------------------------
-    pub(crate) fn choices(&self) -> rsf_anomaly_sr_choices {
+    pub(crate) fn choices(&self) -> OverlayChoices {
         let p = self.platform();
         let config = self.with(|state| state.config);
-        let mut out = rsf_anomaly_sr_choices::default();
+        let mut out = OverlayChoices::default();
         if config.stage != 5 {
             return out;
         }
@@ -2362,22 +2370,5 @@ unsafe extern "C" fn rsf_anomaly_sr_stage_jitter_uv(out: *mut rsf_anomaly_sr_jit
         unsafe { out.write(STAGE.jitter_uv()) };
     }
 }
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_stage_choices(out: *mut rsf_anomaly_sr_choices) {
-    if !out.is_null() {
-        unsafe { out.write(STAGE.choices()) };
-    }
-}
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_stage_overlay_report(report: *mut c_void) -> i32 {
-    i32::from(STAGE.overlay_report(report))
-}
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_stage_request(settings: *const rsf_anomaly_sr_settings) {
-    if !settings.is_null() {
-        STAGE.request(unsafe { &*settings });
-    }
-}
-
 #[cfg(test)]
 mod tests;

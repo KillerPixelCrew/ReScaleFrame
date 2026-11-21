@@ -141,49 +141,41 @@ static SR_OFFER: AtomicU32 = AtomicU32::new(0);
 static FG_LINK: AtomicU32 = AtomicU32::new(0);
 static SR_REQUESTS: AtomicU32 = AtomicU32::new(0);
 
-unsafe extern "C" fn sr_choices(out: *mut rsf_anomaly_overlay_sr_choices) {
-    if SR_OFFER.load(Ordering::SeqCst) != 0 {
-        unsafe {
-            out.write(rsf_anomaly_overlay_sr_choices {
-                backends: (1 << 1) | (1 << 5),
-                qualities: 0x1f,
-                preset: 1,
-                defaults: rsf_anomaly_overlay_sr_settings {
-                    enabled: 1,
-                    backend: 5,
-                    quality: 2,
-                    preset: 4,
-                },
-            })
-        };
+fn sr_choices() -> OverlayChoices {
+    if SR_OFFER.load(Ordering::SeqCst) == 0 {
+        return Default::default();
+    }
+    OverlayChoices {
+        backends: (1 << 1) | (1 << 5),
+        qualities: 0x1f,
+        preset: true,
+        defaults: rsf_anomaly_sr_settings {
+            enabled: true,
+            backend: 5,
+            quality: 2,
+            preset: 4,
+        },
     }
 }
-unsafe extern "C" fn no_report(_: *mut rsf_overlay_sr_report) -> c_int {
-    0
-}
-unsafe extern "C" fn count_request(settings: *const rsf_anomaly_overlay_sr_settings) {
-    let settings = unsafe { &*settings };
-    assert!(settings.enabled <= 1);
+fn count_request(_: &rsf_anomaly_sr_settings) {
     SR_REQUESTS.fetch_add(1, Ordering::SeqCst);
 }
-unsafe extern "C" fn fg_link(out: *mut rsf_anomaly_overlay_fg) -> u32 {
-    if FG_LINK.load(Ordering::SeqCst) == 0 {
-        return 0;
-    }
-    unsafe {
-        out.write(rsf_anomaly_overlay_fg {
-            enabled: 1,
-            backend: 3,
-            generated: 2,
-            latency: 1,
-            frame_limit_us: 7000,
-        })
-    };
-    1
+fn fg_options() -> Option<Frontend> {
+    (FG_LINK.load(Ordering::SeqCst) != 0).then_some(Frontend {
+        enabled: 1,
+        backend: 3,
+        generated: 2,
+        latency: 1,
+        frame_limit_us: 7000,
+    })
 }
-unsafe extern "C" fn engine_facing(_: *mut c_void) -> u32 {
-    0
-}
+const TEST_STAGES: StageControls = StageControls {
+    sr_choices,
+    sr_report: |_| false,
+    sr_request: count_request,
+    fg_options,
+    fg_foreign_chain: |_| false,
+};
 static DEVICE: AtomicUsize = AtomicUsize::new(0x1000);
 unsafe extern "C" fn describe(_: *mut c_void, out: *mut rsf_anomaly_overlay_chain) -> u32 {
     unsafe {
@@ -231,11 +223,6 @@ unsafe extern "C" fn dump(
 
 fn platform() -> rsf_anomaly_overlay_platform {
     rsf_anomaly_overlay_platform {
-        sr_choices: Some(sr_choices),
-        sr_report: Some(no_report),
-        sr_request: Some(count_request),
-        fg_link: Some(fg_link),
-        fg_foreign_chain: Some(engine_facing),
         chain: Some(describe),
         capture_backbuffer: Some(capture_backbuffer),
         install_input: Some(installed),
@@ -284,7 +271,6 @@ unsafe extern "C" fn option_set(_: i32) {}
 
 #[test]
 fn setup_translates_what_the_adapter_can_apply() {
-    let leaves = Leaves::new(&platform()).unwrap();
     let api = table();
     let start = options(&api, false);
     let registered = [rsf_anomaly_overlay_option {
@@ -305,7 +291,7 @@ fn setup_translates_what_the_adapter_can_apply() {
 
     let mut table = Vec::new();
     // Neither SR Stage 5 nor the FG bridge: SR unavailable, FG Off only.
-    let setup = make_setup(&leaves, &start, INI.as_ptr(), &adapter, &mut table);
+    let setup = make_setup(TEST_STAGES, &start, INI.as_ptr(), &adapter, &mut table);
     assert_eq!(setup.abi_version, RSF_OVERLAY_API_VERSION);
     assert_eq!(
         setup.struct_size as usize,
@@ -333,13 +319,13 @@ fn setup_translates_what_the_adapter_can_apply() {
     );
 
     FG_LINK.store(1, Ordering::SeqCst);
-    let fg_only = make_setup(&leaves, &start, INI.as_ptr(), &[], &mut table);
+    let fg_only = make_setup(TEST_STAGES, &start, INI.as_ptr(), &[], &mut table);
     assert_eq!(fg_only.sr_backend_choices, 0);
     assert_ne!(fg_only.fg_backend_choices, 0);
     assert_eq!(fg_only.defaults.fg_enabled, 1);
 
     SR_OFFER.store(1, Ordering::SeqCst);
-    let setup = make_setup(&leaves, &start, INI.as_ptr(), &[], &mut table);
+    let setup = make_setup(TEST_STAGES, &start, INI.as_ptr(), &[], &mut table);
     SR_OFFER.store(0, Ordering::SeqCst);
     FG_LINK.store(0, Ordering::SeqCst);
     assert_eq!(
@@ -399,7 +385,7 @@ fn a_hook_refusal_stays_refused_on_retry() {
     };
     let mut leaves = platform();
     leaves.install_present = Some(present_refused);
-    let overlay = Overlay::new(TEST_DESKTOP);
+    let overlay = Overlay::new(TEST_DESKTOP, TEST_STAGES);
     let first = overlay
         .start(&options(&api, true), &leaves, Vec::new())
         .unwrap_err();
@@ -414,7 +400,7 @@ fn a_hook_refusal_stays_refused_on_retry() {
     assert!(overlay.running().is_none());
 
     // Without hooks the same table starts once; the next start reports it.
-    let overlay = Overlay::new(TEST_DESKTOP);
+    let overlay = Overlay::new(TEST_DESKTOP, TEST_STAGES);
     let mut empty = options(&api, false);
     empty.configuration = [0u16].as_ptr();
     assert_eq!(
@@ -475,6 +461,7 @@ fn service(api: &rsf_overlay_api, log: Log, capture: Option<Capture>) -> Service
     Service {
         api: Api::new(api).unwrap(),
         leaves: Leaves::new(&platform()).unwrap(),
+        controls: TEST_STAGES,
         desktop: Desktop {
             engine_window: any_window,
             insert_held: insert,

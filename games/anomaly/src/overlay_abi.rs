@@ -673,77 +673,6 @@ impl Default for rsf_anomaly_overlay_option {
     }
 }
 #[repr(C)]
-#[derive(Default, Copy, Clone)]
-pub struct rsf_anomaly_overlay_sr_settings {
-    pub enabled: u32,
-    pub backend: u32,
-    pub quality: u32,
-    pub preset: u32,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_anomaly_overlay_sr_settings"]
-        [::core::mem::size_of::<rsf_anomaly_overlay_sr_settings>() - 16usize];
-    ["Alignment of rsf_anomaly_overlay_sr_settings"]
-        [::core::mem::align_of::<rsf_anomaly_overlay_sr_settings>() - 4usize];
-    ["Offset of field: rsf_anomaly_overlay_sr_settings::enabled"]
-        [::core::mem::offset_of!(rsf_anomaly_overlay_sr_settings, enabled) - 0usize];
-    ["Offset of field: rsf_anomaly_overlay_sr_settings::backend"]
-        [::core::mem::offset_of!(rsf_anomaly_overlay_sr_settings, backend) - 4usize];
-    ["Offset of field: rsf_anomaly_overlay_sr_settings::quality"]
-        [::core::mem::offset_of!(rsf_anomaly_overlay_sr_settings, quality) - 8usize];
-    ["Offset of field: rsf_anomaly_overlay_sr_settings::preset"]
-        [::core::mem::offset_of!(rsf_anomaly_overlay_sr_settings, preset) - 12usize];
-};
-#[repr(C)]
-#[derive(Default, Copy, Clone)]
-pub struct rsf_anomaly_overlay_sr_choices {
-    pub backends: u32,
-    pub qualities: u32,
-    pub preset: u32,
-    pub defaults: rsf_anomaly_overlay_sr_settings,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_anomaly_overlay_sr_choices"]
-        [::core::mem::size_of::<rsf_anomaly_overlay_sr_choices>() - 28usize];
-    ["Alignment of rsf_anomaly_overlay_sr_choices"]
-        [::core::mem::align_of::<rsf_anomaly_overlay_sr_choices>() - 4usize];
-    ["Offset of field: rsf_anomaly_overlay_sr_choices::backends"]
-        [::core::mem::offset_of!(rsf_anomaly_overlay_sr_choices, backends) - 0usize];
-    ["Offset of field: rsf_anomaly_overlay_sr_choices::qualities"]
-        [::core::mem::offset_of!(rsf_anomaly_overlay_sr_choices, qualities) - 4usize];
-    ["Offset of field: rsf_anomaly_overlay_sr_choices::preset"]
-        [::core::mem::offset_of!(rsf_anomaly_overlay_sr_choices, preset) - 8usize];
-    ["Offset of field: rsf_anomaly_overlay_sr_choices::defaults"]
-        [::core::mem::offset_of!(rsf_anomaly_overlay_sr_choices, defaults) - 12usize];
-};
-#[repr(C)]
-#[derive(Default, Copy, Clone)]
-pub struct rsf_anomaly_overlay_fg {
-    pub enabled: u32,
-    pub backend: u32,
-    pub generated: u32,
-    pub latency: u32,
-    pub frame_limit_us: u32,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_anomaly_overlay_fg"][::core::mem::size_of::<rsf_anomaly_overlay_fg>() - 20usize];
-    ["Alignment of rsf_anomaly_overlay_fg"]
-        [::core::mem::align_of::<rsf_anomaly_overlay_fg>() - 4usize];
-    ["Offset of field: rsf_anomaly_overlay_fg::enabled"]
-        [::core::mem::offset_of!(rsf_anomaly_overlay_fg, enabled) - 0usize];
-    ["Offset of field: rsf_anomaly_overlay_fg::backend"]
-        [::core::mem::offset_of!(rsf_anomaly_overlay_fg, backend) - 4usize];
-    ["Offset of field: rsf_anomaly_overlay_fg::generated"]
-        [::core::mem::offset_of!(rsf_anomaly_overlay_fg, generated) - 8usize];
-    ["Offset of field: rsf_anomaly_overlay_fg::latency"]
-        [::core::mem::offset_of!(rsf_anomaly_overlay_fg, latency) - 12usize];
-    ["Offset of field: rsf_anomaly_overlay_fg::frame_limit_us"]
-        [::core::mem::offset_of!(rsf_anomaly_overlay_fg, frame_limit_us) - 16usize];
-};
-#[repr(C)]
 #[derive(Copy, Clone)]
 pub struct rsf_anomaly_overlay_chain {
     pub window: *mut ::core::ffi::c_void,
@@ -778,17 +707,6 @@ impl Default for rsf_anomaly_overlay_chain {
 #[repr(C)]
 #[derive(Default, Copy, Clone)]
 pub struct rsf_anomaly_overlay_platform {
-    pub sr_choices:
-        ::core::option::Option<unsafe extern "C" fn(arg1: *mut rsf_anomaly_overlay_sr_choices)>,
-    pub sr_report: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *mut rsf_overlay_sr_report) -> ::core::ffi::c_int,
-    >,
-    pub sr_request:
-        ::core::option::Option<unsafe extern "C" fn(arg1: *const rsf_anomaly_overlay_sr_settings)>,
-    pub fg_link:
-        ::core::option::Option<unsafe extern "C" fn(arg1: *mut rsf_anomaly_overlay_fg) -> u32>,
-    pub fg_foreign_chain:
-        ::core::option::Option<unsafe extern "C" fn(chain: *mut ::core::ffi::c_void) -> u32>,
     pub chain: ::core::option::Option<
         unsafe extern "C" fn(
             chain: *mut ::core::ffi::c_void,
@@ -813,27 +731,17 @@ pub struct rsf_anomaly_overlay_platform {
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
     ["Size of rsf_anomaly_overlay_platform"]
-        [::core::mem::size_of::<rsf_anomaly_overlay_platform>() - 72usize];
+        [::core::mem::size_of::<rsf_anomaly_overlay_platform>() - 32usize];
     ["Alignment of rsf_anomaly_overlay_platform"]
         [::core::mem::align_of::<rsf_anomaly_overlay_platform>() - 8usize];
-    ["Offset of field: rsf_anomaly_overlay_platform::sr_choices"]
-        [::core::mem::offset_of!(rsf_anomaly_overlay_platform, sr_choices) - 0usize];
-    ["Offset of field: rsf_anomaly_overlay_platform::sr_report"]
-        [::core::mem::offset_of!(rsf_anomaly_overlay_platform, sr_report) - 8usize];
-    ["Offset of field: rsf_anomaly_overlay_platform::sr_request"]
-        [::core::mem::offset_of!(rsf_anomaly_overlay_platform, sr_request) - 16usize];
-    ["Offset of field: rsf_anomaly_overlay_platform::fg_link"]
-        [::core::mem::offset_of!(rsf_anomaly_overlay_platform, fg_link) - 24usize];
-    ["Offset of field: rsf_anomaly_overlay_platform::fg_foreign_chain"]
-        [::core::mem::offset_of!(rsf_anomaly_overlay_platform, fg_foreign_chain) - 32usize];
     ["Offset of field: rsf_anomaly_overlay_platform::chain"]
-        [::core::mem::offset_of!(rsf_anomaly_overlay_platform, chain) - 40usize];
+        [::core::mem::offset_of!(rsf_anomaly_overlay_platform, chain) - 0usize];
     ["Offset of field: rsf_anomaly_overlay_platform::capture_backbuffer"]
-        [::core::mem::offset_of!(rsf_anomaly_overlay_platform, capture_backbuffer) - 48usize];
+        [::core::mem::offset_of!(rsf_anomaly_overlay_platform, capture_backbuffer) - 8usize];
     ["Offset of field: rsf_anomaly_overlay_platform::install_input"]
-        [::core::mem::offset_of!(rsf_anomaly_overlay_platform, install_input) - 56usize];
+        [::core::mem::offset_of!(rsf_anomaly_overlay_platform, install_input) - 16usize];
     ["Offset of field: rsf_anomaly_overlay_platform::install_present"]
-        [::core::mem::offset_of!(rsf_anomaly_overlay_platform, install_present) - 64usize];
+        [::core::mem::offset_of!(rsf_anomaly_overlay_platform, install_present) - 24usize];
 };
 #[repr(C)]
 pub struct rsf_anomaly_overlay_options {

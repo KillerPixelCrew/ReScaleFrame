@@ -288,6 +288,14 @@ diagnostics. Native COM, stage links and guarded hook calls keep the
 same boundaries. A refused hook install now stays refused when the
 cold entry retries it. See [the overlay service audit](research/rust-anomaly-overlay-service.md).
 
+Anomaly now connects its Rust overlay directly to the Rust SR and FG
+stages. The C++ publication tables and duplicate setting records were
+removed. All 382 pinned Rust tests and ten focused MSVC Release
+contracts passed. The adapter's three exports and dynamic Runtime
+lookup match the staged baseline. The foreground overlay and game
+checks remain open for this change.
+[Direct stage links](research/rust-anomaly-overlay-service.md#direct-stage-links)
+
 The overlay and FG merge passed 17 focused MSVC contracts in Debug
 and Release, including the hidden-window overlay API contract and the
 input gate. All 233 locked Rust tests, formatting and Clippy passed.

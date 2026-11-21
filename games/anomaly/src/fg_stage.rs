@@ -31,6 +31,15 @@ type Raw = *mut c_void;
 type Pass = rsf_game_render_pass;
 type Status = rsf_anomaly_fg_status;
 type Platform = rsf_anomaly_fg_platform;
+#[derive(Clone, Copy)]
+pub(crate) struct Frontend {
+    pub enabled: u32,
+    pub backend: u32,
+    pub generated: u32,
+    pub latency: u32,
+    pub frame_limit_us: u32,
+}
+
 const MAIN_VIEW: u64 = 1;
 const VIEWPORT: u64 = 1;
 const RHI_VIEWPORT: u64 = 1;
@@ -365,7 +374,6 @@ impl Stage {
             return false;
         }
         INSTALLED.store(true, Ordering::Release);
-        unsafe { self.platform.publish_overlay.unwrap()(frontend) };
         self.log.say(format!(
             "Anomaly FG: presentation bridge installed at cold start, before device creation. FG={} backend={backend} generated={} Latency={} FrameLimitUs={} scope_hold={}.",
             frontend.enabled, frontend.generated, frontend.latency, frontend.frame_limit_us, options.scope_hold
@@ -786,8 +794,11 @@ extern "C" fn rsf_anomaly_fg_set_overlay_sink(sink: rsf_anomaly_fg_overlay_prese
     let _ = OVERLAY.set((sink, user as usize));
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_fg_foreign_chain(chain: Raw) -> bool {
+pub(crate) fn overlay_options() -> Option<Frontend> {
+    installed().map(|stage| stage.options.frontend)
+}
+
+pub(crate) fn foreign_chain(chain: Raw) -> bool {
     installed().is_some_and(|stage| {
         (unsafe { stage.tables.present.has_owner.unwrap()() != 0 }) && !stage.owns(chain)
     })

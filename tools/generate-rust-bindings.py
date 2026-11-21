@@ -83,7 +83,7 @@ generate("games/anomaly/src/native_observer_abi.rs", "games/anomaly/src/native_o
          ["--no-recursive-allowlist", "--with-derive-default",
           "--raw-line", "use rsf_game_sys::rsf_game_log_fn;"])
 generate("games/anomaly/src/overlay_abi.rs", "games/anomaly/src/overlay_platform.h",
-         "wchar_t|rsf_anomaly_overlay_(option|sr_settings|sr_choices|fg|chain|platform|options)|"
+         "wchar_t|rsf_anomaly_overlay_(option|chain|platform|options)|"
          "rsf_overlay_(api|service_setup|service_option|capture|diagnostics)|rsf_named_frame_dump(_report|_log_fn)?|"
          "rsf_render_(settings|status)|rsf_get_overlay_(api|diagnostics)_fn|rsf_input_dump_named_texture_fn",
          "RSF_ANOMALY_OVERLAY_.*|RSF_OVERLAY_(API_VERSION|API_ENTRY_POINT|DIAGNOSTICS_ENTRY_POINT|CAPTURE_.*|"

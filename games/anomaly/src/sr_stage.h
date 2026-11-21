@@ -13,7 +13,7 @@
 //              The render size follows the selected backend's quality plan. Any refusal draws the bilinear pass.
 // Stages 1 to 4 call no SR provider.
 #include "sr_jitter.h"
-#include "sr_overlay.h"
+#include "sr_settings.h"
 #include "sr_pass.h"
 #include "build_profile.h"
 #include <rescaleframe/game_api.h>
@@ -73,10 +73,4 @@ void frame_end() noexcept;
 void report(void (*emit)(void*, const char*), void* user) noexcept;
 bool active() noexcept;
 
-// The shared overlay (overlay_service.cpp reaches these through sr_overlay.h, published by configure()).
-OverlayChoices overlay_choices() noexcept;
-// Any thread: what reached the last presented frame. Zero (no report) unless SRStage=5 is installed.
-int overlay_report(rsf_overlay_sr_report* report) noexcept;
-// Any thread: shared settings to apply at the next frame boundary (Stage 5).
-void request_settings(const SrSettings&) noexcept;
 }

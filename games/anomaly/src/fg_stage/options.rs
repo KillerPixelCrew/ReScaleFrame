@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use super::Frontend;
 use crate::fg_stage_abi::*;
 use std::ffi::{CString, OsString};
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
@@ -112,7 +113,7 @@ pub(super) struct Options {
     pub streamline: CString,
     pub fidelityfx: CString,
     pub xess: CString,
-    pub frontend: rsf_anomaly_fg_overlay_link,
+    pub frontend: Frontend,
 }
 
 impl Options {
@@ -204,8 +205,7 @@ impl Options {
             streamline: c_string(plain_directory(streamline)),
             fidelityfx: c_string(plain_directory(fidelityfx)),
             xess: c_string(plain_directory(xess)),
-            frontend: rsf_anomaly_fg_overlay_link {
-                foreign_chain: Some(super::rsf_anomaly_fg_foreign_chain),
+            frontend: Frontend {
                 enabled: u32::from(native.enabled),
                 backend: if known { backend } else { RSF_FG_BACKEND_AUTO },
                 generated: native.generated.clamp(1, 3),
