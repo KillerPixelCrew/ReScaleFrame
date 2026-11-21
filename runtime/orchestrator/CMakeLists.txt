@@ -93,7 +93,7 @@ if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_XESS_VK_INCL
     target_sources(rsf_native_vulkan PRIVATE src/native_fg_xess_vulkan.cpp src/native_fg_xess_vulkan_present.cpp ../vulkan/xess-fg/bridge.cpp)
     target_compile_definitions(rsf_native_vulkan PRIVATE RSF_HAVE_XESS_FG_VK=1 PUBLIC RSF_VULKAN_XESS_FG_ENABLED=1)
     target_include_directories(rsf_native_vulkan SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}" "${RSF_XESS_VK_INCLUDE}")
-    target_link_libraries(rsf_native_vulkan PRIVATE d3d12 dxgi bcrypt)
+    target_link_libraries(rsf_native_vulkan PRIVATE rsf_orchestrator_rust d3d12 dxgi bcrypt)
 endif()
 if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_FFX_INCLUDE}/dx12/ffx_api_dx12.h" AND EXISTS "${RSF_FFX_INCLUDE}/../../upscalers/include/ffx_upscale.h")
     target_sources(rsf_native_vulkan PRIVATE src/native_sr_fsr4_vulkan.cpp ../vulkan/fsr4/bridge.cpp)
