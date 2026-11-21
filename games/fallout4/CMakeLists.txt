@@ -1,5 +1,5 @@
 add_library(rsf_game_fallout4 SHARED src/plugin.cpp src/native_creation.cpp
-    src/cpu_events.cpp src/camera.cpp src/render_inputs.cpp src/render_hooks.cpp src/resolution.cpp src/screen.cpp
+    src/cpu_events.cpp src/render_inputs.cpp src/render_hooks.cpp src/resolution.cpp src/screen.cpp
     src/depth_domains.cpp)
 # Identity, lifecycle, Runtime session, DPI startup and creation sequencing are Rust (src/lib.rs).
 # plugin.cpp and native_creation.cpp supply the native leaves through src/fallout4_platform.h.
