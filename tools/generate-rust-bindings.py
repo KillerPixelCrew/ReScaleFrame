@@ -194,14 +194,15 @@ generate("games/unity-mono/src/runtime_abi.rs", "games/unity-mono/src/runtime_pl
          ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]",
           "--raw-line", "use rsf_game_sys::rsf_game_probe;"])
 generate("games/unity-mono/src/package_abi.rs", "integrations/unity/native/package_state.h",
-         "rsf_(unity_(package_(settings|status|platform)|frame_counters)|native_fg_(options|status)|fg_status|"
-         "sharpening_options|native_(latency_status|cpu_counters)|fg_mode|pacing_owner|reflex_mode)",
+         "rsf_(unity_(package_(settings|status|platform|view_setup)|frame_counters)|native_fg_(options|status)|fg_status|"
+         "sharpening_options|native_(latency_status|cpu_counters)|fg_mode|pacing_owner|reflex_mode|sr12)",
          "RSF_(UNITY_(SETTINGS|PACKAGE)_ABI_VERSION|SR_NONE|FG_STAT_TOTAL_PRESENTED)",
          ["-include", "rescaleframe/native_fg.h", "-include", "rescaleframe/native_cpu.h",
           "-include", "rescaleframe/sr_session.h", "-Iruntime/orchestrator/include", "-Iruntime/contract/include",
           "-Iruntime/backends/dlss/include", "-Iruntime/graphics/include", "-Iruntime/presentation/include",
           "-Isdk/game/include"],
-         ["--no-recursive-allowlist", "--with-derive-default", "--raw-line", "#![allow(dead_code)]"])
+         ["--no-recursive-allowlist", "--with-derive-default", "--raw-line", "#![allow(dead_code)]",
+          "--raw-line", "use rsf_game_sys::rsf_game_render_pass;"])
 generate("runtime/orchestrator/src/render_abi.rs", "runtime/orchestrator/include/rescaleframe/frame_assembly.h",
          "rsf_(frame_resources|pipeline_camera_frame|dlss_frame|fg_choice|render_link|sr_session_setup|sr_session_status|sr_provider|fg_host|fg_session_status|generation_provider|native_fg_status|motion_resolve_params|render_settings|sharpening_options)",
          "RSF_(FRAME_ASSEMBLY_ABI_VERSION|DLSS_ABI_VERSION|FG_(BACKEND_(AUTO|ALL)|ABI_VERSION|OFF|FIXED|AUTO|DYNAMIC|STAT_(TOTAL_PRESENTED|GENERATED_PRESENTED|PRESENT_CALLBACKS|ACTIVITY))|NATIVE_FG_REASON_NONE|PACING_(NONE|REFLEX|XELL)|REFLEX_(OFF|BOOST)|RENDER_LINK_ABI_VERSION|SR_SESSION_ABI_VERSION|BACKEND_ABI_VERSION|API_D3D12|SR_(FSR2|XESS)|RENDER_FRONTEND_ABI_VERSION|SHARPENING_ABI_VERSION)",

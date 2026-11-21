@@ -1,10 +1,12 @@
 #include <rescaleframe/native_cpu.h>
 // SPDX-License-Identifier: MIT
-// The settings, status snapshot, render plan, temporal readiness, pending reconfiguration and
-// session lifecycle are Rust (games/unity-mono/src/package_state.rs, through package_state.h).
-// This file keeps the SR views, the Unity, DXGI, Vulkan and preview work, the input window and
-// the log, and lends the typed SDK and Runtime calls through rsf_unity_package_platform. Its
-// mutex still serializes the exports and the render path where it did.
+// The settings, status snapshot, render plan, temporal readiness, pending reconfiguration,
+// session lifecycle and the D3D12 SR views with their recording slots are Rust
+// (games/unity-mono/src/package_state.rs and package_views.rs, through package_state.h). This
+// file keeps the Unity, DXGI, Vulkan and preview work, the render callback's routing, the input
+// window and the log, and lends the typed SDK and Runtime calls through
+// rsf_unity_package_platform. Its mutex still serializes the exports and the render path where
+// it did.
 #include "package.h"
 #include "bridge.h"
 #include "vulkan_bridge.h"
@@ -20,12 +22,10 @@
 #include <IUnityGraphics.h>
 #include <IUnityGraphicsD3D12.h>
 #include <wrl/client.h>
-#include <array>
 #include <mutex>
 #include <string>
 #include <cstdio>
 #include <cstring>
-#include <unordered_map>
 #include <atomic>
 
 extern "C" void UNITY_INTERFACE_API rsf_unity_package_bridge_load(IUnityInterfaces*);
@@ -34,10 +34,11 @@ extern "C" int rsf_unity_set_engine_spatial(uint32_t, uint32_t) noexcept;
 
 // package_abi.rs mirrors these layouts and constants.
 static_assert(sizeof(rsf_unity_package_settings) == 100 && sizeof(rsf_unity_package_status) == 184);
-static_assert(sizeof(rsf_unity_frame_counters) == 40 && sizeof(rsf_unity_package_platform) == 120);
+static_assert(sizeof(rsf_unity_frame_counters) == 40 && sizeof(rsf_unity_package_platform) == 176);
 static_assert(sizeof(rsf_native_fg_status) == 352 && sizeof(rsf_native_latency_status) == 152);
 static_assert(sizeof(rsf_native_fg_options) == 24 && RSF_BACKEND_OK == 0);
 static_assert(RSF_FG_STAT_TOTAL_PRESENTED == 1 && RSF_SR_NONE == 0);
+static_assert(sizeof(rsf_unity_package_view_setup) == 32 && RSF_SCREEN_MENU == 1 && RSF_SCREEN_FLIGHT == 4);
 
 namespace {
 using Microsoft::WRL::ComPtr;
@@ -81,12 +82,6 @@ BOOL CALLBACK find_input_window(HWND hwnd, LPARAM)
     previous_proc = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(input_proc)));
     return FALSE;
 }
-struct View {
-    rsf_sr12* sr = nullptr;
-    uint32_t width = 0, height = 0, render_width = 0, render_height = 0, backend = 0;
-    std::array<void*, 3> lists{};
-};
-std::unordered_map<uint64_t, View> views;
 void log(void*, const char* text)
 {
     if (!text) return;
@@ -116,11 +111,36 @@ int configuration(void*, rsf_game_render_config* output)
     if (!output || output->struct_size < sizeof(*output)) return 0;
     std::lock_guard<std::mutex> lock(guard); return rsf_unity_package_plan(output);
 }
-void destroy_views() noexcept
+// rsf_unity_package_platform's SR view leaves. commands is the bridge's D3D12 command list.
+uint32_t sr_default_backend(void* commands, uint32_t* backend) noexcept
 {
-    for (auto& item : views) rsf_sr12_destroy(item.second.sr);
-    views.clear();
+    ComPtr<ID3D12Device> device; ComPtr<IDXGIFactory4> factory; ComPtr<IDXGIAdapter1> adapter; DXGI_ADAPTER_DESC1 desc{};
+    if (FAILED(static_cast<ID3D12GraphicsCommandList*>(commands)->GetDevice(IID_PPV_ARGS(&device))) ||
+        FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))) ||
+        FAILED(factory->EnumAdapterByLuid(device->GetAdapterLuid(), IID_PPV_ARGS(&adapter))) ||
+        FAILED(adapter->GetDesc1(&desc))) return 0;
+    *backend = rsf_gpu_default_sr_backend(desc.VendorId, (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0);
+    return 1;
 }
+uint32_t sr_create(void* commands, const rsf_unity_package_view_setup* view, int32_t* result, rsf_sr12** output) noexcept try
+{
+    ComPtr<ID3D12Device> device;
+    if (FAILED(static_cast<ID3D12GraphicsCommandList*>(commands)->GetDevice(IID_PPV_ARGS(&device)))) return 0;
+    rsf_sr12_setup setup{}; setup.struct_size = sizeof(setup); setup.abi_version = 1;
+    setup.device = device.Get(); setup.backend = view->backend; setup.quality = view->quality;
+    setup.output_width = view->output_width; setup.output_height = view->output_height;
+    setup.render_width = view->render_width; setup.render_height = view->render_height;
+    setup.inverted_depth = view->inverted_depth;
+    setup.streamline_host = rsf_d3d11_present_host();
+    setup.fsr2_directory_utf8 = setup.fsr3_directory_utf8 = setup.fsr4_directory_utf8 = fsr.c_str();
+    setup.xess_directory_utf8 = xess.c_str(); setup.log = log;
+    const std::string interposer = streamline + "/sl.interposer.dll";
+    setup.dlss = {sizeof(setup.dlss), RSF_DLSS_ABI_VERSION, interposer.c_str(), streamline.c_str(), root.c_str(),
+        0, RSF_DLSS_ENGINE_UNITY, version.c_str(), project.c_str(), 1, log, nullptr, view->dlss_preset};
+    *output = nullptr; *result = rsf_sr12_create(&setup, output);
+    return 1;
+} catch (...) { return 0; }
+void render_sr(void* commands, const rsf_game_render_pass* pass);
 void request_generation()
 {
     if (!rsf_d3d11_present_has_owner()) return;
@@ -173,60 +193,7 @@ void render(void*, void* commands, const rsf_game_render_pass* original, uint32_
         if (!rsf_unity_package_graphics(&owning_device, &owning_queue) ||
             !rsf_unity_preview_prepare(owning_device, owning_queue, pass.camera.output_width, pass.camera.output_height)) return;
     }
-    std::lock_guard<std::mutex> lock(guard);
-    rsf_unity_package_settings settings{}; rsf_unity_package_current(&settings);
-    pass.screen = settings.gameplay ? RSF_SCREEN_FLIGHT : RSF_SCREEN_MENU;
-    if (pass.flags & RSF_GAME_RENDER_RECONFIGURE) { rsf_unity_package_reconfigured(); destroy_views(); }
-    auto& view = views[pass.view_key];
-    const auto& camera = pass.camera;
-    if (view.sr && (view.width != camera.output_width || view.height != camera.output_height ||
-        (view.backend == 0 && (view.render_width != camera.render_width || view.render_height != camera.render_height)))) {
-        rsf_sr12_destroy(view.sr); view = {};
-    }
-    if (!view.sr) {
-        auto* list = static_cast<ID3D12GraphicsCommandList*>(commands);
-        ComPtr<ID3D12Device> device;
-        if (FAILED(list->GetDevice(IID_PPV_ARGS(&device)))) return;
-        uint32_t backend = settings.sr_backend;
-        if (backend == RSF_SR_AUTO) {
-            ComPtr<IDXGIFactory4> factory; ComPtr<IDXGIAdapter1> adapter; DXGI_ADAPTER_DESC1 desc{};
-            if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))) ||
-                FAILED(factory->EnumAdapterByLuid(device->GetAdapterLuid(), IID_PPV_ARGS(&adapter))) ||
-                FAILED(adapter->GetDesc1(&desc))) return;
-            backend = rsf_gpu_default_sr_backend(desc.VendorId, (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0);
-        }
-        if (backend == RSF_SR_SPATIAL) backend = 0;
-        rsf_sr12_setup setup{}; setup.struct_size = sizeof(setup); setup.abi_version = 1;
-        setup.device = device.Get(); setup.backend = backend; setup.quality = settings.quality;
-        setup.output_width = camera.output_width; setup.output_height = camera.output_height;
-        setup.render_width = camera.render_width; setup.render_height = camera.render_height;
-        setup.inverted_depth = camera.depth_inverted;
-        setup.streamline_host = rsf_d3d11_present_host();
-        setup.fsr2_directory_utf8 = setup.fsr3_directory_utf8 = setup.fsr4_directory_utf8 = fsr.c_str();
-        setup.xess_directory_utf8 = xess.c_str(); setup.log = log;
-        const std::string interposer = streamline + "/sl.interposer.dll";
-        setup.dlss = {sizeof(setup.dlss), RSF_DLSS_ABI_VERSION, interposer.c_str(), streamline.c_str(), root.c_str(),
-            0, RSF_DLSS_ENGINE_UNITY, version.c_str(), project.c_str(), 1, log, nullptr, settings.dlss_preset};
-        const int32_t created = rsf_sr12_create(&setup, &view.sr);
-        rsf_unity_package_sr_created(created);
-        if (!view.sr && backend) { setup.backend = 0; (void)rsf_sr12_create(&setup, &view.sr); backend = 0; }
-        if (!view.sr) return;
-        view.backend = backend; view.width = camera.output_width; view.height = camera.output_height;
-        rsf_sr12_plan(view.sr, &view.render_width, &view.render_height);
-        rsf_unity_package_view_planned(backend, view.width, view.height, view.render_width, view.render_height);
-        char text[192]; std::snprintf(text, sizeof(text), "URP SR requested=%u active=%u result=%d %ux%u -> %ux%u",
-            settings.sr_backend, backend, created, view.render_width, view.render_height, view.width, view.height);
-        log(nullptr, text);
-    }
-    if (!pass.camera_valid || rsf_unity_package_pending()) return;
-    uint32_t slot = 3;
-    for (uint32_t i = 0; i < 3; ++i) if (view.lists[i] == commands) { slot = i; break; }
-    if (slot == 3) for (uint32_t i = 0; i < 3; ++i) if (!view.lists[i]) { view.lists[i] = commands; slot = i; break; }
-    if (slot == 3) return;
-    auto sharp=settings.sharpening.struct_size?settings.sharpening:rsf_sharpening_defaults();
-    (void)rsf_sr12_set_sharpening(view.sr,&sharp);
-    const auto result = rsf_sr12_evaluate(view.sr, commands, &pass, slot);
-    rsf_unity_package_evaluated(result, view.backend);
+    render_sr(commands, original);
 }
 void cpu_event(void*, const rsf_game_cpu_event* event) {
     if (!event) return;
@@ -287,9 +254,22 @@ constexpr rsf_unity_package_platform platform{
     [](uint32_t enabled) noexcept { rsf_unity_bridge_activate(enabled != 0); },
     []() noexcept -> uint32_t { return rsf_unity_bridge_drained() ? 1u : 0u; },
     []() noexcept -> uint32_t { return rsf_fg12_end_session(api.session_id) ? 1u : 0u; },
-    destroy_views,
+    sr_default_backend,
+    sr_create,
+    [](const rsf_sr12* sr, uint32_t* width, uint32_t* height) noexcept -> int32_t { return rsf_sr12_plan(sr, width, height); },
+    [](rsf_sharpening_options* output) noexcept { *output = rsf_sharpening_defaults(); },
+    [](rsf_sr12* sr, const rsf_sharpening_options* options) noexcept -> int32_t { return rsf_sr12_set_sharpening(sr, options); },
+    [](rsf_sr12* sr, void* commands, const rsf_game_render_pass* pass, uint32_t slot) noexcept -> int32_t {
+        return rsf_sr12_evaluate(sr, commands, pass, slot);
+    },
+    [](rsf_sr12* sr) noexcept { rsf_sr12_destroy(sr); },
+    [](const char* text) noexcept { log(nullptr, text); },
     []() noexcept { rsf_unity_bridge_release(); },
 };
+void render_sr(void* commands, const rsf_game_render_pass* pass)
+{
+    std::lock_guard<std::mutex> lock(guard); rsf_unity_package_render(commands, pass, &platform);
+}
 void UNITY_INTERFACE_API device_event(UnityGfxDeviceEventType type)
 {
     if (type == kUnityGfxDeviceEventInitialize) rsf_unity_package_bridge_load(registry);
