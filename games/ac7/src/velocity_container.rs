@@ -37,10 +37,10 @@ const _: () = {
 
 type AppendChunk = unsafe extern "C" fn(*mut c_void, *const ChunkView) -> bool;
 type AppendSemantic = unsafe extern "C" fn(*mut c_void, *const SemanticView) -> bool;
-type Resize = unsafe extern "C" fn(*mut c_void, usize) -> *mut u8;
+pub(crate) type Resize = unsafe extern "C" fn(*mut c_void, usize) -> *mut u8;
 
 /// The caller lends a readable span for the call. An empty vector may lend null.
-unsafe fn borrowed<'a, T>(ptr: *const T, len: usize) -> Option<&'a [T]> {
+pub(crate) unsafe fn borrowed<'a, T>(ptr: *const T, len: usize) -> Option<&'a [T]> {
     if len == 0 {
         return Some(&[]);
     }
