@@ -2,7 +2,7 @@
 //! F9 checkpoint and completion artifacts over the native capture's copied observations.
 
 use super::{EngineRecord, NativeRecordCounts, ROOT_NAMES, RootRecord, observe_velocity, records};
-use crate::motion_capture_observations::observations;
+use crate::motion_capture_observations::{Observations, observations};
 use std::ffi::{CStr, c_char, c_void};
 use std::fmt::{self, Write as _};
 use std::io::Write as _;
@@ -275,8 +275,6 @@ struct Stats {
     renderer_root_hooks: u32,
     draw_dropped: u32,
     blob_dropped: u32,
-    readbacks: u32,
-    readback_failures: u32,
     colour_readbacks: u32,
     colour_readback_failures: u32,
     capture_failures: u32,
@@ -292,7 +290,7 @@ struct FinalArtifacts {
 
 const _: () = {
     assert!(size_of::<Artifact>() == 16 && size_of::<ArtifactList>() == 24);
-    assert!(size_of::<Stats>() == 48 && offset_of!(Stats, capture_failures) == 40);
+    assert!(size_of::<Stats>() == 40 && offset_of!(Stats, capture_failures) == 32);
     assert!(size_of::<FinalArtifacts>() == 64 && offset_of!(FinalArtifacts, stats) == 56);
 };
 
@@ -301,9 +299,10 @@ fn write_summary(
     counts: &NativeRecordCounts,
     stats: &Stats,
     draws: usize,
-    shader_creation_dropped: u32,
+    observations: &Observations,
     files_written: bool,
 ) -> fmt::Result {
+    let (readbacks, readback_failures) = observations.constant_readback_counts();
     writeln!(
         out,
         concat!(
@@ -332,9 +331,9 @@ fn write_summary(
         counts.engine_dropped,
         stats.draw_dropped,
         stats.blob_dropped,
-        shader_creation_dropped,
-        stats.readbacks,
-        stats.readback_failures,
+        observations.shaders_dropped,
+        readbacks,
+        readback_failures,
         stats.colour_readbacks,
         stats.colour_readback_failures,
         stats.capture_failures,
@@ -447,7 +446,7 @@ impl<'a> Publisher<'a> {
             &snapshot.counts,
             &stats,
             sources.draws.count,
-            observations.shaders_dropped,
+            &observations,
             self.ok,
         )?;
         self.file(format_args!("\\session.json"), &text.0)?;

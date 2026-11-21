@@ -22,10 +22,10 @@
 #include <cstdio>
 #include <cstring>
 #include <mutex>
+#include <new>
 #include <sstream>
 #include <set>
 #include <string>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -40,13 +40,10 @@ constexpr uint32_t cloud_composite_shader = 0x83524e47u;
 constexpr uint32_t contact_light_shader = 3619939816u;
 constexpr uint32_t contact_light_phased_shader = 4154163049u; // AC7 transform: noise phase and depth quantisation bias
 
-struct Bytes { std::vector<unsigned char> data; uint64_t serial = 0; };
 // Counters for the typed graphics effects.
 struct SessionCounters {
     uint32_t draw_dropped = 0, blob_dropped = 0;
-    uint32_t readbacks = 0, readback_failed = 0;
-    uint32_t readback_interval = UINT32_MAX, interval_readbacks = 0;
-    uint32_t lighting_readbacks = 0, lighting_interval = UINT32_MAX;
+    uint32_t lighting_interval = UINT32_MAX;
     bool lighting_after_pending = false;
     uint32_t colour_readbacks = 0, colour_readback_failed = 0;
 };
@@ -54,13 +51,11 @@ struct Capture {
     std::mutex guard;
     std::atomic<bool> installed{false};
     std::atomic<bool> roots_installed{false};
-    uint64_t upload_serial = 0;
     std::string directory, prefix;
     rsf_ac7_capture_log_fn log = nullptr;
     void* user = nullptr;
     std::vector<std::string> draws;
     std::vector<std::vector<unsigned char>> blobs;
-    std::unordered_map<void*, Bytes> buffers;
     uint32_t geometry_interval = UINT32_MAX;
     std::array<uint32_t,5> geometry_reads{};
     std::array<std::set<std::pair<uint32_t,void*>>,5> geometry_seen;
@@ -452,63 +447,44 @@ void install_roots(unsigned char* base)
     std::fill(std::begin(root_targets), std::end(root_targets), nullptr);
     say("renderer root capture failed and was rolled back");
 }
-void constants(MotionCaptureInterval capture, std::ostream& out, ID3D11DeviceContext* context, void* const* buffers,
-               uint32_t mask = 0x3fffu, bool lighting = false)
+bool copy_upload(void* user, const unsigned char* bytes, size_t size) noexcept try
 {
-    auto& s = state();
+    static_cast<std::vector<unsigned char>*>(user)->assign(bytes, bytes + size);
+    return true;
+}
+catch (...) { return false; }
+
+void constants(MotionCaptureInterval capture, std::ostream& out, ID3D11DeviceContext* context, void* const* buffers,
+               uint32_t mask, bool lighting = false)
+{
     out << '['; bool first = true;
     for (uint32_t slot = 0; slot < 14; ++slot) {
         if (!buffers[slot] || !(mask & (1u << slot))) continue;
         std::vector<unsigned char> bytes;
-        uint64_t serial = 0;
-        bool budget;
-        const auto has_budget = [&] {
-            return lighting ? s.counters.interval_readbacks < 128 && s.counters.lighting_readbacks < 8 :
-                s.counters.interval_readbacks < 120;
-        };
-        {
-            std::lock_guard<std::mutex> lock(s.guard);
-            if (rsf_ac7_capture_interval() != capture) break;
-            if (s.counters.readback_interval != capture.interval) {
-                s.counters.readback_interval = capture.interval;
-                s.counters.interval_readbacks = s.counters.lighting_readbacks = 0;
-            }
-            if (!lighting) {
-                const auto found = s.buffers.find(buffers[slot]);
-                if (found != s.buffers.end()) { bytes = found->second.data; serial = found->second.serial; }
-            }
-            // Reserve eight of the existing 128 reads for the verified lighting producer.
-            budget = has_budget();
-        }
+        MotionConstantRecord record{};
+        const auto source = rsf_ac7_capture_constant_source(capture, buffers[slot], lighting, &record, &bytes, copy_upload);
+        if (source == constant_stopped) break;
+        if (source == constant_failed) throw std::bad_alloc{};
         bool fallback = false;
-        if (bytes.empty() && budget) {
+        if (source == constant_try_read) {
             auto* buffer = static_cast<ID3D11Buffer*>(buffers[slot]);
             D3D11_BUFFER_DESC desc{}; buffer->GetDesc(&desc);
-            if (desc.ByteWidth <= 8192 && desc.ByteWidth) {
-                {
-                    std::lock_guard<std::mutex> lock(s.guard);
-                    if (rsf_ac7_capture_interval() != capture) break;
-                    fallback = has_budget();
-                    if (fallback) {
-                        ++s.counters.readbacks; ++s.counters.interval_readbacks;
-                        if (lighting) ++s.counters.lighting_readbacks;
-                    }
-                }
-            }
+            const auto read = rsf_ac7_capture_reserve_constant_read(capture, desc.ByteWidth, lighting);
+            if (read == constant_read_stopped) break;
+            fallback = read == constant_read_reserved;
             if (fallback) {
                 bytes.resize(desc.ByteWidth);
                 ComPtr<ID3D11Device> device; context->GetDevice(&device);
                 if (rsf_read_constant_buffer(device.Get(), context, buffer, bytes.data(), desc.ByteWidth) != RSF_CONSTANT_BUFFER_OK) {
                     bytes.clear();
-                    std::lock_guard<std::mutex> lock(s.guard);
-                    if (rsf_ac7_capture_current(capture.session)) ++s.counters.readback_failed;
+                    rsf_ac7_capture_constant_read_failed(capture);
                 }
             }
         }
         const uint32_t id = bytes.empty() ? 0 : save_blob(capture, std::move(bytes));
         if (!first) out << ','; first = false;
-        out << "{\"slot\":" << slot << ",\"buffer\":" << uint64_t(uintptr_t(buffers[slot]))
-            << ",\"blob\":" << id << ",\"upload_serial\":" << serial
+        out << "{\"slot\":" << slot << ",\"buffer\":" << record.buffer
+            << ",\"blob\":" << id << ",\"upload_serial\":" << record.upload_serial
             << ",\"readback\":" << (fallback ? 1 : 0) << '}';
     }
     out << ']';
@@ -851,7 +827,7 @@ MotionArtifactStats finish_stats(const void* user) noexcept
     const auto& s = *static_cast<const Capture*>(user);
     LARGE_INTEGER frequency{}; QueryPerformanceFrequency(&frequency);
     return {frequency.QuadPart, s.installed.load(), s.roots_installed.load(), s.counters.draw_dropped,
-        s.counters.blob_dropped, s.counters.readbacks, s.counters.readback_failed,
+        s.counters.blob_dropped,
         s.counters.colour_readbacks, s.counters.colour_readback_failed, rsf_ac7_capture_failures()};
 }
 void finish() noexcept try
@@ -895,7 +871,6 @@ bool prepare_capture(uint32_t session) noexcept try
     std::lock_guard<std::mutex> lock(s.guard);
     s.prefix = std::move(path);
     s.draws.clear(); s.blobs.clear(); s.blob_bytes = 0;
-    s.buffers.clear(); // Uploads are session-local.
     s.counters = {};
     s.geometry_interval = UINT32_MAX;
     s.geometry_reads.fill(0);
@@ -980,25 +955,17 @@ extern "C" void rsf_ac7_motion_capture_shader(void* shader, uint32_t stage, cons
 {
     if (!rsf_ac7_capture_observe_shader(shader, stage, bytes, size, disassemble_constants)) capture_failed();
 }
-extern "C" void rsf_ac7_motion_capture_buffer(void*, void* buffer, const void* initial, uint32_t bytes, uint32_t bind_flags) try
+extern "C" void rsf_ac7_motion_capture_buffer(void*, void* buffer, const void* initial, uint32_t bytes, uint32_t bind_flags)
 {
-    auto& s = state(); if (!rsf_ac7_capture_enabled()) return;
-    { std::lock_guard<std::mutex> lock(s.guard); s.buffers.erase(buffer); }
-    if (initial && (bind_flags & D3D11_BIND_CONSTANT_BUFFER)) rsf_ac7_motion_capture_upload(buffer, initial, bytes);
+    const auto capture = rsf_ac7_capture_interval();
+    const auto* data = (bind_flags & D3D11_BIND_CONSTANT_BUFFER) ? static_cast<const unsigned char*>(initial) : nullptr;
+    if (!rsf_ac7_capture_store_upload(capture, buffer, data, bytes, true)) capture_failed(capture);
 }
-catch (...) { capture_failed(); }
 extern "C" void rsf_ac7_motion_capture_upload(void* buffer, const void* bytes, uint32_t size)
 {
-    // Snapshots only matter inside a capture; copying every dynamic upload otherwise costs a lock and a vector.
     const auto capture = rsf_ac7_capture_interval();
-    if (!rsf_ac7_capture_enabled() || !capture || !buffer || !bytes || !size || size > 8192) return;
-    try {
-        auto& s = state(); std::lock_guard<std::mutex> lock(s.guard);
-        if (!rsf_ac7_capture_current(capture.session)) return;
-        if (!s.buffers.contains(buffer) && s.buffers.size() >= 2048) return;
-        auto& snapshot = s.buffers[buffer]; snapshot.serial = ++s.upload_serial;
-        snapshot.data.assign(static_cast<const unsigned char*>(bytes), static_cast<const unsigned char*>(bytes) + size);
-    } catch (...) { capture_failed(capture); }
+    if (!rsf_ac7_capture_store_upload(capture, buffer, static_cast<const unsigned char*>(bytes), size, false))
+        capture_failed(capture);
 }
 extern "C" void rsf_ac7_motion_capture_layout(void* layout, const rsf_observer_layout_element* elements,
     uint32_t copied, uint32_t count)

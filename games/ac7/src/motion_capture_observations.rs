@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: MIT
-//! Process-lifetime F9 observations of successfully created shaders and input layouts.
+//! F9 observations of shader and layout creation and per-session constant buffer contents.
+
+mod buffers;
 
 use crate::motion_capture_session::rsf_ac7_capture_enabled;
 use crate::shader_hash::crc32c;
 use crate::velocity_container::borrowed;
+use buffers::ConstantBuffers;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::mem::offset_of;
@@ -68,6 +71,7 @@ pub(super) struct Observations {
     shader_bytes: usize,
     pub(super) shaders_dropped: u32,
     layouts: HashMap<usize, LayoutSnapshot>,
+    constants: ConstantBuffers,
 }
 
 static OBSERVATIONS: LazyLock<Mutex<Observations>> = LazyLock::new(Mutex::default);
@@ -78,7 +82,15 @@ pub(super) fn observations() -> MutexGuard<'static, Observations> {
         .unwrap_or_else(|error| error.into_inner())
 }
 
+pub(super) fn reset_constant_buffers() {
+    observations().constants.reset();
+}
+
 impl Observations {
+    pub(super) fn constant_readback_counts(&self) -> (u32, u32) {
+        self.constants.readback_counts()
+    }
+
     fn observe_shader(
         &mut self,
         identity: usize,

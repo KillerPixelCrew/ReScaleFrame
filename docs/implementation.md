@@ -568,6 +568,13 @@ names. D3DDisassemble and its typed blob lease stay native. The draw
 and geometry captures still consume the same metadata. Source checks
 passed. Build and captured shader verification remain open.
 
+AC7 F9 now stores constant-buffer upload snapshots, serials and
+readback admission in Rust. The recorded spans remain the exact
+creation, update or mapped bytes lent by the native callbacks. Live
+buffer reads and draw serialization remain native. Build and captured
+byte comparison remain open.
+[Upload observation audit](research/rust-ac7-motion-uploads.md)
+
 The AC7 adapter now owns the carrier's executable and window identity,
 GameSDK probe, guarded patch bytes and post-decryption install order.
 Both carriers keep their native forwarding, the guarded patch leaf

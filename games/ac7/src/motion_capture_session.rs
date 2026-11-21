@@ -2,6 +2,7 @@
 //! F9 trigger admission and the Present-relative capture session. Native leaves poll Win32,
 //! prepare the directory and graphics storage, change the tap, and lend artifacts to the writer.
 
+use crate::motion_capture_observations::reset_constant_buffers;
 use crate::motion_capture_records::reset_records;
 use std::ffi::{c_char, c_void};
 use std::mem::{offset_of, size_of};
@@ -12,10 +13,10 @@ pub(super) const INTERVALS: u32 = 60;
 const INACTIVE: u32 = u32::MAX;
 
 #[repr(C)]
-#[derive(Clone, Copy)]
-struct CaptureInterval {
-    session: u32,
-    interval: u32,
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) struct CaptureInterval {
+    pub(super) session: u32,
+    pub(super) interval: u32,
 }
 
 impl CaptureInterval {
@@ -30,7 +31,7 @@ impl CaptureInterval {
         }
     }
 
-    fn load() -> Self {
+    pub(super) fn load() -> Self {
         let key = CURRENT.load(Ordering::Acquire);
         Self {
             session: (key >> 32) as u32,
@@ -38,7 +39,7 @@ impl CaptureInterval {
         }
     }
 
-    fn active(self) -> bool {
+    pub(super) fn active(self) -> bool {
         self.interval != INACTIVE
     }
 
@@ -183,6 +184,7 @@ unsafe extern "C" fn rsf_ac7_capture_present(
         }
         let session = current.session.wrapping_add(1);
         if unsafe { (effects.prepare)(session) } {
+            reset_constant_buffers();
             reset_records();
             clock.start = clock.presents;
             let started = CaptureInterval {
