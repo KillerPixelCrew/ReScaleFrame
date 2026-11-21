@@ -1,5 +1,7 @@
 // Small ABI boundary for the signed AMD FidelityFX SDK 1.1.4 Vulkan runtime.
 // The SDK headers and binary are supplied from the sdk/fidelityfx-vk submodule at build time.
+// owner.rs owns the runtime binding and the SR context; the leaves below keep
+// the typed FidelityFX and Vulkan calls. Frame generation and WSI stay here.
 #include <windows.h>
 #include <cstdint>
 #include <cstddef>
@@ -11,30 +13,11 @@
 #include "ffx_api/ffx_upscale.h"
 #include "ffx_api/ffx_framegeneration.h"
 #include "ffx_api/vk/ffx_api_vk.h"
+#include "bridge_platform.h"
 
-/// @brief Borrowed level-zero Vulkan image metadata in the FidelityFX bridge C ABI.
-/// @details The caller owns the VkImage and supplies its extent/format; this record owns no view, allocation or synchronization.
-struct VulkanStoryFsr3Image {
-    VkImage image;
-    uint32_t width, height;
-    VkFormat format;
-};
-/// @brief Fixed-layout SR dispatch record shared with the managed FSR3 ABI.
-/// @details The 184-byte record contains six 24-byte image records; jitter begins at byte 152. Color/output use RGBA16F, depth D32F, motion RG16F and independent material reactive/composition masks R8_UNORM. The host keeps all resources live through GPU completion.
-struct VulkanStoryFsr3Frame {
-    VkCommandBuffer commands;
-    /// @brief Borrowed SR scene color, depth, motion, output and separate render-resolution material/composition resources.
-    VulkanStoryFsr3Image color, depth, motion, output, reactive, composition;
-    float jitterX, jitterY, deltaMs, nearPlane, farPlane, fovRadians;
-    uint32_t reset;
-};
-static_assert(sizeof(VulkanStoryFsr3Image) == 24);
-static_assert(sizeof(VulkanStoryFsr3Frame) == 184);
-static_assert(offsetof(VulkanStoryFsr3Frame, jitterX) == 152);
-static_assert(offsetof(VulkanStoryFsr3Frame, composition) == 128);
 /// @brief Owns one FidelityFX reconstruction effect and its creation descriptors.
-/// @details Device handles and the process-retained SDK function table are borrowed. The host retires referencing Vulkan work before destruction.
-struct VulkanStoryFsr3Context {
+/// @details The Rust SR context owns this capsule. Device handles and the process-retained SDK function table are borrowed. The host retires referencing Vulkan work before destruction.
+struct rsf_fsr3sr_native {
     ffxContext effect = nullptr;
     ffxCreateContextDescUpscale upscale{};
     ffxCreateBackendVKDesc backend{};
@@ -86,13 +69,11 @@ struct VulkanStoryFsr3Swapchain {
 extern "C" __declspec(dllexport) int VulkanStoryFsr3FgDisable(
     VulkanStoryFsr3FgContext* context, VulkanStoryFsr3Swapchain* swapchain);
 
-static HMODULE sdk;
-static PfnFfxCreateContext createContext;
-static PfnFfxDestroyContext destroyContext;
-static PfnFfxQuery query;
-static PfnFfxDispatch dispatch;
-static PfnFfxConfigure configure;
 static PFN_vkGetDeviceProcAddr vulkanGetDeviceProcAddr;
+
+/// @brief Returns the SDK table that VulkanStoryFsr3Open bound in Rust.
+/// @details All entries are null before a successful open and never change afterwards.
+static const rsf_fsr3_sdk& Sdk() { return *rsf_core_fsr3_sdk(); }
 
 /// @brief Resolves Vulkan device commands with the retained promoted-core fallback for the SDK's KHR buffer-requirements query.
 /// @details The returned function pointer borrows the Vulkan loader/device lifetime.
@@ -105,88 +86,13 @@ static PFN_vkVoidFunction VKAPI_PTR Fsr3GetDeviceProcAddr(VkDevice device, const
     return function;
 }
 
-/// @brief Binds the required FidelityFX API exports from a borrowed signed-runtime module.
-/// @details One runtime identity is retained for this bridge. The caller keeps the module loaded for all contexts and deferred destruction.
-/// @param runtime Borrowed SDK module; this bridge does not acquire or release a module reference.
-/// @return Zero on success or rebinding the same module, -1 for null, -2 for another runtime or missing exports.
-extern "C" __declspec(dllexport) int VulkanStoryFsr3Open(HMODULE runtime) {
-    if (!runtime) return -1;
-    if (sdk) return sdk == runtime ? 0 : -2;
-    auto create = reinterpret_cast<PfnFfxCreateContext>(GetProcAddress(runtime, "ffxCreateContext"));
-    auto destroy = reinterpret_cast<PfnFfxDestroyContext>(GetProcAddress(runtime, "ffxDestroyContext"));
-    auto queryFunction = reinterpret_cast<PfnFfxQuery>(GetProcAddress(runtime, "ffxQuery"));
-    auto dispatchFunction = reinterpret_cast<PfnFfxDispatch>(GetProcAddress(runtime, "ffxDispatch"));
-    auto configureFunction = reinterpret_cast<PfnFfxConfigure>(GetProcAddress(runtime, "ffxConfigure"));
-    if (!create || !destroy || !queryFunction || !dispatchFunction || !configureFunction) return -2;
-    sdk = runtime;
-    createContext = create;
-    destroyContext = destroy;
-    query = queryFunction;
-    dispatch = dispatchFunction;
-    configure = configureFunction;
-    return 0;
-}
-
-/// @brief Queries input dimensions for the requested output dimensions and FidelityFX quality mode.
-/// @param displayWidth Requested output width.
-/// @param displayHeight Requested output height.
-/// @param quality FidelityFX quality-mode value.
-/// @param renderWidth Required SDK output slot for input width.
-/// @param renderHeight Required SDK output slot for input height.
-/// @return SDK query result; -1 when the query function or output pointers are absent.
-extern "C" __declspec(dllexport) int VulkanStoryFsr3Plan(
-    uint32_t displayWidth, uint32_t displayHeight, uint32_t quality,
-    uint32_t* renderWidth, uint32_t* renderHeight) {
-    if (!query || !renderWidth || !renderHeight) return -1;
-    ffxQueryDescUpscaleGetRenderResolutionFromQualityMode desc{};
-    desc.header.type = FFX_API_QUERY_DESC_TYPE_UPSCALE_GETRENDERRESOLUTIONFROMQUALITYMODE;
-    desc.displayWidth = displayWidth;
-    desc.displayHeight = displayHeight;
-    desc.qualityMode = quality;
-    desc.pOutRenderWidth = renderWidth;
-    desc.pOutRenderHeight = renderHeight;
-    return static_cast<int>(query(nullptr, &desc.header));
-}
-
-/// @brief Creates an HDR/auto-exposure reconstruction context with independent input and output maxima.
-/// @details The context borrows the selected Vulkan device/physical device and the bridge's process-retained SDK table.
-/// @param device Borrowed live logical device.
-/// @param physical Borrowed matching physical device.
-/// @param renderWidth Nonzero maximum input width.
-/// @param renderHeight Nonzero maximum input height.
-/// @param width Nonzero maximum display/output width.
-/// @param height Nonzero maximum display/output height.
-/// @param result Required owner slot written on success; callers initialize it before calling.
-/// @return Zero on success, -1 for missing prerequisites, -2 for allocation failure, -3 for required Vulkan dispatch absence, or the SDK creation result.
-extern "C" __declspec(dllexport) int VulkanStoryFsr3Create(
-    VkDevice device, VkPhysicalDevice physical, uint32_t renderWidth, uint32_t renderHeight,
-    uint32_t width, uint32_t height,
-    VulkanStoryFsr3Context** result) {
-    if (!createContext || !result || !device || !physical || !renderWidth || !renderHeight || !width || !height) return -1;
-    auto* value = new (std::nothrow) VulkanStoryFsr3Context();
-    if (!value) return -2;
-    value->width = width;
-    value->height = height;
-    value->upscale.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
-    value->upscale.header.pNext = &value->backend.header;
-    value->upscale.flags = FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE | FFX_UPSCALE_ENABLE_AUTO_EXPOSURE;
-    value->upscale.maxRenderSize = {renderWidth, renderHeight};
-    value->upscale.maxUpscaleSize = {width, height};
-    value->backend.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_VK;
-    value->backend.vkDevice = device;
-    value->backend.vkPhysicalDevice = physical;
+/// @brief Rebinds the shared vkGetDeviceProcAddr from the already loaded vulkan-1.dll.
+/// @return Whether the loader export resolved.
+static bool BindVulkanLoader() {
     HMODULE vulkan = GetModuleHandleW(L"vulkan-1.dll");
     vulkanGetDeviceProcAddr = vulkan ? reinterpret_cast<PFN_vkGetDeviceProcAddr>(
         GetProcAddress(vulkan, "vkGetDeviceProcAddr")) : nullptr;
-    if (!vulkanGetDeviceProcAddr || !Fsr3GetDeviceProcAddr(device, "vkGetBufferMemoryRequirements2KHR")) {
-        delete value;
-        return -3;
-    }
-    value->backend.vkDeviceProcAddr = Fsr3GetDeviceProcAddr;
-    int code = static_cast<int>(createContext(&value->effect, &value->upscale.header, nullptr));
-    if (code != 0) { delete value; return code; }
-    *result = value;
-    return 0;
+    return vulkanGetDeviceProcAddr != nullptr;
 }
 
 /// @brief Converts borrowed Vulkan image metadata into the SDK resource description/state convention.
@@ -214,20 +120,56 @@ static FfxApiResource Resource(VulkanStoryFsr3Image image, bool output = false) 
     return resource;
 }
 
-/// @brief Records reconstruction using matching temporal constants and independent R8 reactive/composition masks.
-/// @details Inputs must already have SDK-compatible compute-read usage and output storage-write usage. The call records GPU work without submitting or waiting; all borrowed images remain live through host timeline completion.
-/// @param context Borrowed live SR owner.
-/// @param frame Borrowed 184-byte frame record with render-resolution material/composition masks and matching input/output extents.
-/// @return SDK dispatch result; -1 for absent context/frame/dispatch, -2 for incompatible required image formats.
-extern "C" __declspec(dllexport) int VulkanStoryFsr3EvaluateWithComposition(
-    VulkanStoryFsr3Context* context, const VulkanStoryFsr3Frame* frame) {
-    if (!context || !frame || !dispatch) return -1;
-    if (frame->color.format != VK_FORMAT_R16G16B16A16_SFLOAT ||
-        frame->depth.format != VK_FORMAT_D32_SFLOAT ||
-        frame->motion.format != VK_FORMAT_R16G16_SFLOAT ||
-        frame->output.format != VK_FORMAT_R16G16B16A16_SFLOAT ||
-        frame->reactive.format != VK_FORMAT_R8_UNORM ||
-        frame->composition.format != VK_FORMAT_R8_UNORM) return -2;
+/// @brief Resolves one SDK export from the borrowed runtime module.
+static void* SrResolve(void* module, const char* name) {
+    return reinterpret_cast<void*>(GetProcAddress(static_cast<HMODULE>(module), name));
+}
+
+static rsf_fsr3sr_native* SrAllocate() { return new (std::nothrow) rsf_fsr3sr_native(); }
+
+static void SrRelease(rsf_fsr3sr_native* value) { delete value; }
+
+/// @brief Binds the Vulkan loader and probes the KHR buffer-requirements entry with its promoted-core fallback.
+static uint32_t SrBindVulkan(VkDevice device) {
+    if (!BindVulkanLoader()) return 0;
+    return RSF_FSR3SR_VULKAN_LOADER |
+        (Fsr3GetDeviceProcAddr(device, "vkGetBufferMemoryRequirements2KHR") ? RSF_FSR3SR_VULKAN_BUFFER_REQUIREMENTS : 0u);
+}
+
+/// @brief Fills the HDR/auto-exposure upscale and Vulkan backend descriptors and creates the effect.
+/// @details Rust has validated the request and bound the Vulkan loader.
+static int32_t SrCreate(rsf_fsr3sr_native* value, PfnFfxCreateContext create, const rsf_fsr3sr_create* request) {
+    value->width = request->width;
+    value->height = request->height;
+    value->upscale.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
+    value->upscale.header.pNext = &value->backend.header;
+    value->upscale.flags = FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE | FFX_UPSCALE_ENABLE_AUTO_EXPOSURE;
+    value->upscale.maxRenderSize = {request->render_width, request->render_height};
+    value->upscale.maxUpscaleSize = {request->width, request->height};
+    value->backend.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_VK;
+    value->backend.vkDevice = request->device;
+    value->backend.vkPhysicalDevice = request->physical;
+    value->backend.vkDeviceProcAddr = Fsr3GetDeviceProcAddr;
+    return static_cast<int32_t>(create(&value->effect, &value->upscale.header, nullptr));
+}
+
+/// @brief Queries input dimensions for the requested output dimensions and FidelityFX quality mode.
+static int32_t SrPlan(PfnFfxQuery query, uint32_t displayWidth, uint32_t displayHeight, uint32_t quality,
+    uint32_t* renderWidth, uint32_t* renderHeight) {
+    ffxQueryDescUpscaleGetRenderResolutionFromQualityMode desc{};
+    desc.header.type = FFX_API_QUERY_DESC_TYPE_UPSCALE_GETRENDERRESOLUTIONFROMQUALITYMODE;
+    desc.displayWidth = displayWidth;
+    desc.displayHeight = displayHeight;
+    desc.qualityMode = quality;
+    desc.pOutRenderWidth = renderWidth;
+    desc.pOutRenderHeight = renderHeight;
+    return static_cast<int32_t>(query(nullptr, &desc.header));
+}
+
+/// @brief Records reconstruction with independent R8 reactive and composition masks.
+/// @details Rust has checked the six formats and chosen the frame time. The call records GPU work without submitting or waiting.
+static int32_t SrEvaluate(rsf_fsr3sr_native* context, PfnFfxDispatch dispatch,
+    const VulkanStoryFsr3Frame* frame, float frameTimeMs) {
     ffxDispatchDescUpscale desc{};
     desc.header.type = FFX_API_DISPATCH_DESC_TYPE_UPSCALE;
     desc.commandList = frame->commands;
@@ -241,27 +183,82 @@ extern "C" __declspec(dllexport) int VulkanStoryFsr3EvaluateWithComposition(
     desc.motionVectorScale = {1.0f, 1.0f};
     desc.renderSize = {frame->color.width, frame->color.height};
     desc.upscaleSize = {frame->output.width, frame->output.height};
-    desc.frameTimeDelta = frame->deltaMs > 0 ? frame->deltaMs : 16.667f;
+    desc.frameTimeDelta = frameTimeMs;
     desc.preExposure = 1.0f;
     desc.reset = frame->reset != 0;
     desc.cameraNear = frame->nearPlane;
     desc.cameraFar = frame->farPlane;
     desc.cameraFovAngleVertical = frame->fovRadians;
     desc.viewSpaceToMetersFactor = 1.0f;
-    int code = static_cast<int>(dispatch(&context->effect, &desc.header));
-    return code;
+    return static_cast<int32_t>(dispatch(&context->effect, &desc.header));
 }
 
-/// @brief Destroys the reconstruction effect then deletes its native owner on successful SDK release.
+static uint32_t SrHasEffect(const rsf_fsr3sr_native* context) { return context->effect ? 1u : 0u; }
+
+/// @brief Releases the SDK effect; a nonzero result leaves the capsule attached.
+static int32_t SrDestroy(rsf_fsr3sr_native* context, PfnFfxDestroyContext destroy) {
+    return static_cast<int32_t>(destroy(&context->effect, nullptr));
+}
+
+static const rsf_fsr3sr_platform srPlatform = {
+    sizeof(rsf_fsr3sr_platform), RSF_FSR3SR_PLATFORM_ABI_VERSION,
+    SrResolve, SrAllocate, SrRelease, SrBindVulkan, SrCreate, SrPlan, SrEvaluate, SrHasEffect, SrDestroy,
+};
+
+/// @brief Binds the required FidelityFX API exports from a borrowed signed-runtime module.
+/// @details One runtime identity is retained for this bridge. The caller keeps the module loaded for all contexts and deferred destruction.
+/// @param runtime Borrowed SDK module; this bridge does not acquire or release a module reference.
+/// @return Zero on success or rebinding the same module, -1 for null, -2 for another runtime or missing exports.
+extern "C" __declspec(dllexport) int VulkanStoryFsr3Open(HMODULE runtime) {
+    return rsf_core_fsr3_open(&srPlatform, runtime);
+}
+
+/// @brief Queries input dimensions for the requested output dimensions and FidelityFX quality mode.
+/// @param displayWidth Requested output width.
+/// @param displayHeight Requested output height.
+/// @param quality FidelityFX quality-mode value.
+/// @param renderWidth Required SDK output slot for input width.
+/// @param renderHeight Required SDK output slot for input height.
+/// @return SDK query result; -1 when the query function or output pointers are absent.
+extern "C" __declspec(dllexport) int VulkanStoryFsr3Plan(
+    uint32_t displayWidth, uint32_t displayHeight, uint32_t quality,
+    uint32_t* renderWidth, uint32_t* renderHeight) {
+    return rsf_core_fsr3_plan(&srPlatform, displayWidth, displayHeight, quality, renderWidth, renderHeight);
+}
+
+/// @brief Creates an HDR/auto-exposure reconstruction context with independent input and output maxima.
+/// @details The context borrows the selected Vulkan device/physical device and the bridge's process-retained SDK table.
+/// @param device Borrowed live logical device.
+/// @param physical Borrowed matching physical device.
+/// @param renderWidth Nonzero maximum input width.
+/// @param renderHeight Nonzero maximum input height.
+/// @param width Nonzero maximum display/output width.
+/// @param height Nonzero maximum display/output height.
+/// @param result Required owner slot written on success; callers initialize it before calling.
+/// @return Zero on success, -1 for missing prerequisites, -2 for allocation failure, -3 for required Vulkan dispatch absence, or the SDK creation result.
+extern "C" __declspec(dllexport) int VulkanStoryFsr3Create(
+    VkDevice device, VkPhysicalDevice physical, uint32_t renderWidth, uint32_t renderHeight,
+    uint32_t width, uint32_t height,
+    VulkanStoryFsr3Context** result) {
+    const rsf_fsr3sr_create request{device, physical, renderWidth, renderHeight, width, height};
+    return rsf_core_fsr3_create(&srPlatform, &request, result);
+}
+
+/// @brief Records reconstruction using matching temporal constants and independent R8 reactive/composition masks.
+/// @details Inputs must already have SDK-compatible compute-read usage and output storage-write usage. The call records GPU work without submitting or waiting; all borrowed images remain live through host timeline completion.
+/// @param context Borrowed live SR owner.
+/// @param frame Borrowed 184-byte frame record with render-resolution material/composition masks and matching input/output extents.
+/// @return SDK dispatch result; -1 for absent context/frame/dispatch, -2 for incompatible required image formats.
+extern "C" __declspec(dllexport) int VulkanStoryFsr3EvaluateWithComposition(
+    VulkanStoryFsr3Context* context, const VulkanStoryFsr3Frame* frame) {
+    return rsf_core_fsr3_evaluate(context, frame);
+}
+
+/// @brief Destroys the reconstruction effect then deletes its owner on successful SDK release.
 /// @details The caller must first complete Vulkan work referencing the effect. A nonzero SDK release result preserves the context pointer.
 /// @return Zero for successful destruction/null, -1 when an existing effect has no destroy export, or the SDK release error.
 extern "C" __declspec(dllexport) int VulkanStoryFsr3Destroy(VulkanStoryFsr3Context* context) {
-    if (!context) return 0;
-    if (context->effect && !destroyContext) return -1;
-    int code = context->effect ? static_cast<int>(destroyContext(&context->effect, nullptr)) : 0;
-    if (code != 0) return code;
-    delete context;
-    return 0;
+    return rsf_core_fsr3_destroy(context);
 }
 
 /// @brief Creates the FidelityFX Vulkan presentation context and queries its complete replacement function table.
@@ -280,7 +277,7 @@ extern "C" __declspec(dllexport) int VulkanStoryFsr3SwapchainCreate(
     VkPhysicalDevice physical, VkDevice device, VkQueue gameQueue, VkQueue asyncQueue,
     VkQueue presentQueue, VkQueue acquireQueue, uint32_t queueFamily,
     const VkSwapchainCreateInfoKHR* info, VulkanStoryFsr3Swapchain** result) {
-    if (!createContext || !query || !destroyContext || !physical || !device ||
+    if (!Sdk().create || !Sdk().query || !Sdk().destroy || !physical || !device ||
         !gameQueue || !asyncQueue || !presentQueue || !acquireQueue ||
         !info || !result || info->oldSwapchain) return -1;
     *result = nullptr;
@@ -300,16 +297,16 @@ extern "C" __declspec(dllexport) int VulkanStoryFsr3SwapchainCreate(
     desc.asyncComputeQueue = {asyncQueue, queueFamily, nullptr};
     desc.presentQueue = {presentQueue, queueFamily, nullptr};
     desc.imageAcquireQueue = {acquireQueue, queueFamily, nullptr};
-    int code = static_cast<int>(createContext(&value->context, &desc.header, nullptr));
+    int code = static_cast<int>(Sdk().create(&value->context, &desc.header, nullptr));
     if (code != 0) { delete value; return code; }
     value->functions.header.type = FFX_API_QUERY_DESC_TYPE_FGSWAPCHAIN_FUNCTIONS_VK;
-    code = static_cast<int>(query(&value->context, &value->functions.header));
+    code = static_cast<int>(Sdk().query(&value->context, &value->functions.header));
     if (code != 0 || !value->functions.pOutCreateSwapchainFFXAPI ||
         !value->functions.pOutDestroySwapchainFFXAPI ||
         !value->functions.pOutGetSwapchainImagesKHR ||
         !value->functions.pOutAcquireNextImageKHR ||
         !value->functions.pOutQueuePresentKHR) {
-        destroyContext(&value->context, nullptr);
+        Sdk().destroy(&value->context, nullptr);
         delete value;
         return code != 0 ? code : -3;
     }
@@ -370,14 +367,14 @@ extern "C" __declspec(dllexport) VkResult VulkanStoryFsr3SwapchainPresent(
 extern "C" __declspec(dllexport) int VulkanStoryFsr3SwapchainPrepareDestroy(
     VulkanStoryFsr3Swapchain* value, VkSwapchainKHR chain) {
     if (!chain) return 0;
-    if (!value || !value->context || !dispatch) return -1;
+    if (!value || !value->context || !Sdk().dispatch) return -1;
     if (value->activeFg && value->activeFg->chain == chain) {
         int disabled = VulkanStoryFsr3FgDisable(value->activeFg, value);
         if (disabled != 0) return disabled;
     }
     ffxDispatchDescFrameGenerationSwapChainWaitForPresentsVK wait{};
     wait.header.type = FFX_API_DISPATCH_DESC_TYPE_FGSWAPCHAIN_WAIT_FOR_PRESENTS_VK;
-    return static_cast<int>(dispatch(&value->context, &wait.header));
+    return static_cast<int>(Sdk().dispatch(&value->context, &wait.header));
 }
 
 /// @brief Prepares release and destroys the specified chain through its SDK owner.
@@ -425,8 +422,8 @@ extern "C" __declspec(dllexport) int VulkanStoryFsr3SwapchainDestroy(
     }
     int prepared = VulkanStoryFsr3SwapchainPrepareDestroy(value, value->chain);
     if (prepared != 0) return prepared;
-    if (value->context && !destroyContext) return -1;
-    int code = value->context ? static_cast<int>(destroyContext(&value->context, nullptr)) : 0;
+    if (value->context && !Sdk().destroy) return -1;
+    int code = value->context ? static_cast<int>(Sdk().destroy(&value->context, nullptr)) : 0;
     if (code != 0) return code;
     delete value;
     return 0;
@@ -438,7 +435,7 @@ extern "C" __declspec(dllexport) int VulkanStoryFsr3SwapchainDestroy(
 extern "C" __declspec(dllexport) int VulkanStoryFsr3FgCreate(
     VkDevice device, VkPhysicalDevice physical, uint32_t width, uint32_t height, VkFormat backBufferFormat,
     VulkanStoryFsr3FgContext** result) {
-    if (!createContext || !result || !device || !physical || !width || !height) return -1;
+    if (!Sdk().create || !result || !device || !physical || !width || !height) return -1;
     auto* value = new (std::nothrow) VulkanStoryFsr3FgContext();
     if (!value) return -2;
     value->width = width;
@@ -458,12 +455,9 @@ extern "C" __declspec(dllexport) int VulkanStoryFsr3FgCreate(
     value->backend.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_VK;
     value->backend.vkDevice = device;
     value->backend.vkPhysicalDevice = physical;
-    HMODULE vulkan = GetModuleHandleW(L"vulkan-1.dll");
-    vulkanGetDeviceProcAddr = vulkan ? reinterpret_cast<PFN_vkGetDeviceProcAddr>(
-        GetProcAddress(vulkan, "vkGetDeviceProcAddr")) : nullptr;
-    if (!vulkanGetDeviceProcAddr) { delete value; return -3; }
+    if (!BindVulkanLoader()) { delete value; return -3; }
     value->backend.vkDeviceProcAddr = Fsr3GetDeviceProcAddr;
-    int code = static_cast<int>(createContext(&value->effect, &value->frameGeneration.header, nullptr));
+    int code = static_cast<int>(Sdk().create(&value->effect, &value->frameGeneration.header, nullptr));
     if (code != 0) { delete value; return code; }
     *result = value;
     return 0;
@@ -474,8 +468,8 @@ extern "C" __declspec(dllexport) int VulkanStoryFsr3FgCreate(
 /// @return FidelityFX dispatch result, or its parameter error for a missing context/description/function.
 static ffxReturnCode_t Fsr3GenerateOnPresent(ffxDispatchDescFrameGeneration* params, void* user) {
     auto* context = static_cast<VulkanStoryFsr3FgContext*>(user);
-    return context && params && dispatch ?
-        dispatch(&context->effect, &params->header) : FFX_API_RETURN_ERROR_PARAMETER;
+    return context && params && Sdk().dispatch ?
+        Sdk().dispatch(&context->effect, &params->header) : FFX_API_RETURN_ERROR_PARAMETER;
 }
 
 /// @brief Disables proxy interpolation, drains matching SDK presents and clears registered UI ownership.
@@ -484,23 +478,23 @@ static ffxReturnCode_t Fsr3GenerateOnPresent(ffxDispatchDescFrameGeneration* par
 extern "C" __declspec(dllexport) int VulkanStoryFsr3FgDisable(
     VulkanStoryFsr3FgContext* context, VulkanStoryFsr3Swapchain* swapchain) {
     if (!context || !context->chain) return 0;
-    if (!context->effect || !configure) return -1;
+    if (!context->effect || !Sdk().configure) return -1;
     if (swapchain != context->swapchain) swapchain = context->swapchain;
     if (!swapchain || !swapchain->context || swapchain->chain != context->chain) return -1;
     ffxConfigureDescFrameGeneration config{};
     config.header.type = FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION;
     config.swapChain = reinterpret_cast<void*>(context->chain);
     config.frameGenerationEnabled = false;
-    int code = static_cast<int>(configure(&context->effect, &config.header));
+    int code = static_cast<int>(Sdk().configure(&context->effect, &config.header));
     if (code != 0) return code;
     if (swapchain && swapchain->context && swapchain->chain == context->chain) {
         ffxDispatchDescFrameGenerationSwapChainWaitForPresentsVK wait{};
         wait.header.type = FFX_API_DISPATCH_DESC_TYPE_FGSWAPCHAIN_WAIT_FOR_PRESENTS_VK;
-        int waited = dispatch ? static_cast<int>(dispatch(&swapchain->context, &wait.header)) : -1;
+        int waited = Sdk().dispatch ? static_cast<int>(Sdk().dispatch(&swapchain->context, &wait.header)) : -1;
         if (waited != 0) return waited;
         ffxConfigureDescFrameGenerationSwapChainRegisterUiResourceVK ui{};
         ui.header.type = FFX_API_CONFIGURE_DESC_TYPE_FGSWAPCHAIN_REGISTERUIRESOURCE_VK;
-        int cleared = static_cast<int>(configure(&swapchain->context, &ui.header));
+        int cleared = static_cast<int>(Sdk().configure(&swapchain->context, &ui.header));
         if (cleared != 0) return cleared;
     }
     // Keep the ownership links when disable/drain failed. The caller must not
@@ -518,7 +512,7 @@ extern "C" __declspec(dllexport) int VulkanStoryFsr3FgDisable(
 /// @return SDK configuration/dispatch result; -1 for missing prerequisites or -2 for unsupported resources/path metadata.
 extern "C" __declspec(dllexport) int VulkanStoryFsr3FgEvaluate(
     VulkanStoryFsr3FgContext* context, const VulkanStoryFsr3FgFrame* frame) {
-    if (!context || !frame || !dispatch || !configure) return -1;
+    if (!context || !frame || !Sdk().dispatch || !Sdk().configure) return -1;
     auto* swapchain = static_cast<VulkanStoryFsr3Swapchain*>(frame->swapchainContext);
     const bool directInterpolation = frame->swapchainContext == nullptr;
     if (frame->color.format != VK_FORMAT_R8G8B8A8_UNORM ||
@@ -552,7 +546,7 @@ extern "C" __declspec(dllexport) int VulkanStoryFsr3FgEvaluate(
     config.HUDLessColor = frame->hudless.image ? Resource(frame->hudless) : FfxApiResource{};
     config.generationRect = {0, 0, static_cast<int32_t>(context->width), static_cast<int32_t>(context->height)};
     config.frameID = frame->frameId;
-    int code = static_cast<int>(configure(&context->effect, &config.header));
+    int code = static_cast<int>(Sdk().configure(&context->effect, &config.header));
     if (code != 0) return code;
     if (!directInterpolation) {
         context->chain = swapchain->chain;
@@ -591,7 +585,7 @@ extern "C" __declspec(dllexport) int VulkanStoryFsr3FgEvaluate(
     prepare.viewSpaceToMetersFactor = 1.0f;
     prepare.depth = Resource(frame->depth);
     prepare.motionVectors = Resource(frame->motion);
-    code = static_cast<int>(dispatch(&context->effect, &prepare.header));
+    code = static_cast<int>(Sdk().dispatch(&context->effect, &prepare.header));
     if (code != 0) return code;
 
     if (directInterpolation) {
@@ -607,7 +601,7 @@ extern "C" __declspec(dllexport) int VulkanStoryFsr3FgEvaluate(
         generate.minMaxLuminance[1] = 1.0f;
         generate.generationRect = config.generationRect;
         generate.frameID = frame->frameId;
-        return static_cast<int>(dispatch(&context->effect, &generate.header));
+        return static_cast<int>(Sdk().dispatch(&context->effect, &generate.header));
     }
 
     ffxConfigureDescFrameGenerationSwapChainRegisterUiResourceVK ui{};
@@ -615,7 +609,7 @@ extern "C" __declspec(dllexport) int VulkanStoryFsr3FgEvaluate(
     ui.uiResource = Resource(frame->ui);
     ui.flags = FFX_FRAMEGENERATION_UI_COMPOSITION_FLAG_USE_PREMUL_ALPHA |
         FFX_FRAMEGENERATION_UI_COMPOSITION_FLAG_ENABLE_INTERNAL_UI_DOUBLE_BUFFERING;
-    return static_cast<int>(configure(&swapchain->context, &ui.header));
+    return static_cast<int>(Sdk().configure(&swapchain->context, &ui.header));
 }
 
 // Explicit ABI capability prevents pairing a direct-present host with an older bridge.
@@ -635,8 +629,8 @@ extern "C" __declspec(dllexport) int VulkanStoryFsr3FgDestroy(VulkanStoryFsr3FgC
     if (!context) return 0;
     int disabled = VulkanStoryFsr3FgDisable(context, context->swapchain);
     if (disabled != 0) return disabled;
-    int code = context->effect && destroyContext
-        ? static_cast<int>(destroyContext(&context->effect, nullptr)) : 0;
+    int code = context->effect && Sdk().destroy
+        ? static_cast<int>(Sdk().destroy(&context->effect, nullptr)) : 0;
     if (code != 0) return code;
     delete context;
     return 0;
