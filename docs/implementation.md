@@ -1,5 +1,10 @@
 # Implementation tracker
 
+The standalone `rsf_negotiate` contract uses Rust for capability
+selection, preserving the C entry point, record layouts and FG-before-SR
+order. The native contract fixture and its new static link remain unrun.
+See [the Rust migration record](rust-migration.md#native-policy-cutover).
+
 ## Remaining Rust integration ports
 
 The [integration migration scope](rust-migration.md#remaining-integration-ports)

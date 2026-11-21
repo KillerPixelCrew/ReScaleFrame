@@ -418,6 +418,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsf-contract"
+version = "0.1.2"
+
+[[package]]
 name = "rsf-fallout4"
 version = "0.1.2"
 dependencies = [

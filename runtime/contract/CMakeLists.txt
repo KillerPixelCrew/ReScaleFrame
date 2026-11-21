@@ -8,7 +8,8 @@
 # Internal header-only helpers, defined first so every runtime library can link them.
 add_subdirectory("${CMAKE_SOURCE_DIR}/runtime/common" "${CMAKE_BINARY_DIR}/runtime/common")
 add_library(rsf_contract STATIC src/negotiate.cpp)
+rsf_add_rust_static(rsf_contract_rust rsf_rust_contract rsf-contract rsf_contract)
 target_include_directories(rsf_contract PUBLIC include)
 target_link_libraries(rsf_contract PUBLIC ReScaleFrame::GameSDK)
-target_link_libraries(rsf_contract PRIVATE rsf_build_options)
+target_link_libraries(rsf_contract PRIVATE rsf_contract_rust rsf_build_options)
 add_library(ReScaleFrame::Contract ALIAS rsf_contract)

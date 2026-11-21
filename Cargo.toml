@@ -4,6 +4,7 @@ members = [
   "runtime/backends/rsf-upscaler",
   "runtime/backends/fsr/compat",
   "runtime/vulkan/streamline/lifecycle",
+  "runtime/contract",
   "runtime/orchestrator",
   "sdk/game",
   "games/ac7",

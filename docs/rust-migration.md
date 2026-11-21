@@ -167,9 +167,12 @@ give the following expected ordinals for builds with matching options.
 | Loader carrier | 140 | 141 |
 | Minecraft DLL | 134 | 135 |
 
-`rsf_negotiate` in `runtime/contract` has a native fixture and no
-production caller. The running Runtime and adapter use the Rust backend
-and session owners.
+The standalone Rust contract crate owns capability negotiation behind
+`rsf_negotiate`. The existing C shim and fixture use the same request,
+capability and choice layouts. The entry checks record prefixes before
+reading the full request and keeps the original FG-before-SR policy.
+The standalone fixture remains unrun. The Runtime uses its production
+backend and session owners.
 
 ## Verification coverage
 
