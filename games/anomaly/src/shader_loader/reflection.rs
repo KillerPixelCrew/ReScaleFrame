@@ -1,6 +1,89 @@
 // SPDX-License-Identifier: MIT
 use super::{Bytes, Span};
-use std::ffi::{CStr, c_char};
+use std::ffi::{CStr, c_char, c_void};
+
+#[derive(Clone, Copy)]
+#[repr(u8)]
+enum Signature {
+    Input = 0,
+    Output = 1,
+    Patch = 2,
+}
+
+#[derive(PartialEq, Eq)]
+#[repr(transparent)]
+struct ReflectionStep(u8);
+
+impl ReflectionStep {
+    const COPIED: Self = Self(0);
+    const UNAVAILABLE: Self = Self(1);
+}
+
+#[repr(C)]
+struct ReflectionCounts {
+    inputs: u32,
+    outputs: u32,
+    patch: u32,
+    bindings: u32,
+    buffers: u32,
+}
+
+#[repr(C)]
+struct ReflectionOperations {
+    parameter: unsafe extern "C" fn(*mut c_void, Signature, u32) -> ReflectionStep,
+    binding: unsafe extern "C" fn(*mut c_void, u32) -> ReflectionStep,
+    begin_buffer: unsafe extern "C" fn(*mut c_void, u32, *mut u32) -> ReflectionStep,
+    variable: unsafe extern "C" fn(*mut c_void, u32) -> ReflectionStep,
+    finish_buffer: unsafe extern "C" fn(*mut c_void) -> ReflectionStep,
+}
+
+const _: () = {
+    assert!(size_of::<ReflectionCounts>() == 20);
+    assert!(size_of::<ReflectionOperations>() == 40);
+};
+
+// The native reflector, destination and current buffer are live for this synchronous traversal.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_anomaly_shader_enumerate_reflection(
+    user: *mut c_void,
+    counts: &ReflectionCounts,
+    ops: &ReflectionOperations,
+) -> bool {
+    for (signature, count) in [
+        (Signature::Input, counts.inputs),
+        (Signature::Output, counts.outputs),
+        (Signature::Patch, counts.patch),
+    ] {
+        for index in 0..count {
+            let step = unsafe { (ops.parameter)(user, signature, index) };
+            // An unreadable signature row is omitted. A native copy failure ends enumeration.
+            if !matches!(step, ReflectionStep::COPIED | ReflectionStep::UNAVAILABLE) {
+                return false;
+            }
+        }
+    }
+    for index in 0..counts.bindings {
+        if unsafe { (ops.binding)(user, index) } != ReflectionStep::COPIED {
+            return false;
+        }
+    }
+    for index in 0..counts.buffers {
+        let mut variables = 0;
+        if unsafe { (ops.begin_buffer)(user, index, &mut variables) } != ReflectionStep::COPIED {
+            return false;
+        }
+        for variable in 0..variables {
+            if unsafe { (ops.variable)(user, variable) } != ReflectionStep::COPIED {
+                return false;
+            }
+        }
+        // Publish only complete buffers, retaining any rows already published if this one fails.
+        if unsafe { (ops.finish_buffer)(user) } != ReflectionStep::COPIED {
+            return false;
+        }
+    }
+    true
+}
 
 #[repr(C)]
 struct Parameter {
