@@ -13,7 +13,7 @@ use std::ffi::c_char;
 
 pub(super) type Raw = *mut std::ffi::c_void;
 pub(super) type Redraw = unsafe extern "C" fn(Raw, Raw);
-pub(super) const PLATFORM_ABI: u32 = 3;
+pub(super) const PLATFORM_ABI: u32 = 4;
 type Retire = unsafe extern "C" fn(Raw, &InstanceKey);
 
 #[repr(C)]
@@ -155,7 +155,6 @@ pub(super) struct Platform {
     pub foliage_layout: unsafe extern "C" fn(Raw, u8, &mut FoliageLayout) -> bool,
     pub link_shaders: unsafe extern "C" fn(Raw, Raw, Raw, Raw) -> bool,
     pub create_shader: unsafe extern "C" fn(Raw, Raw, Raw, Raw, bool, &mut bool) -> Raw,
-    pub sr_capture: unsafe extern "C" fn() -> bool,
 }
 
 #[repr(C)]
@@ -200,6 +199,6 @@ const _: () = {
     assert!(size_of::<FoliageLayout>() == 108);
     assert!(std::mem::offset_of!(FoliageLayout, usable) == 104);
     assert!(size_of::<FrameTarget>() == 24);
-    assert!(size_of::<Platform>() == 344);
+    assert!(size_of::<Platform>() == 336);
     assert!(std::mem::offset_of!(Platform, guards) == 40);
 };

@@ -409,13 +409,13 @@ const MotionPlatform platform{
         return hs ? tess_chain_linkable(reflection(vs), reflection(hs), reflection(ds), reflection(ps)) :
             linkable(reflection(vs), reflection(ps));
     },
-    create_shader, [] { return sr::options().capture; }
+    create_shader
 };
 
 static_assert(sizeof(WindowFacts) == 56 && sizeof(DrawFacts) == 32);
 static_assert(sizeof(ShaderObjects) == 40 && sizeof(ShaderResult) == 32 && sizeof(PackInfo) == 8);
 static_assert(sizeof(FoliageLayout) == 108 && offsetof(FoliageLayout, xform) == 4 && offsetof(FoliageLayout, usable) == 104);
-static_assert(sizeof(MotionPlatform) == 344 && offsetof(MotionPlatform, guards) == 40);
+static_assert(sizeof(MotionPlatform) == 336 && offsetof(MotionPlatform, guards) == 40);
 static_assert(sizeof(FrameTarget) == 24 && offsetof(FrameTarget, main) == 20);
 static_assert(static_cast<uint8_t>(ReplayResult::Done) == 0 && static_cast<uint8_t>(ReplayResult::SkippedNoDepthWrite) == 1);
 static_assert(RSF_PHASE_RENDER_SUBMIT == 2 && RSF_DUMP_VIEW_DENSE_MOTION == 7);

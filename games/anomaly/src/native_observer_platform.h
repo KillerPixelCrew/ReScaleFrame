@@ -36,7 +36,6 @@ typedef struct rsf_anomaly_observer_platform {
     bool (*disable_hooks)(void);
     bool (*install_geometry)(const rsf_anomaly_observer_engine*);
     bool (*disable_geometry)(void);
-    bool (*sr_selected)(void);
     bool (*install_sr)(const rsf_anomaly_observer_engine*);
     bool (*quiesce_sr)(void);
     bool (*install_motion)(const rsf_anomaly_observer_engine*);

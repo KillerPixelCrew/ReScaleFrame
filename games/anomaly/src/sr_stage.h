@@ -12,52 +12,39 @@
 //              or XeSS as the shared settings select, the reconstruction re-tonemapped into the engine's generic0.
 //              The render size follows the selected backend's quality plan. Any refusal draws the bilinear pass.
 // Stages 1 to 4 call no SR provider.
+//
+// Configuration ([Anomaly] keys, sr_stage.rs). SRStage and SRStageCapture select the hooks. SRScale (default 0.67) is
+// re-read from the same INI after each device reset (vid_restart applies a new value). SRJitter (default 1), SRMipBias
+// (an offset added to log2(render/output), clamped to [-2, 1], or "off"), SRStageCaptureStart/Count/Interval (600,
+// 3, 300; Stage 3 captures 8, at most 32, consecutive world frames). Stages 4 and 5: SRExposure (constant or auto),
+// SRColourTransport (default 0: linear, HDR on), SRFirstPersonZero (default 1), SRCutDistance (metres, default 4),
+// SRCutAngle (degrees, default 45), SRRequireSignature (default 0), SR/SRBackend/SRQuality/DLSSPreset (the shared
+// frontend keys). SRStreamlineDir, SRFidelityFXDir and SRXeSSDir override the vendor package beside the INI
+// (ReScaleFrame\streamline, fidelityfx, xess). The panel changes the live options and saves them.
 #include "sr_jitter.h"
 #include "sr_settings.h"
 #include "sr_pass.h"
+#include "sr_stage_platform.h"
 #include "build_profile.h"
 #include <rescaleframe/game_api.h>
 #include <cstddef>
 #include <cstdint>
-#include <string>
 
 namespace rsf::anomaly::sr {
-struct StageOptions {
-    uint32_t stage{};               // 0 off, 1 scale-1.0 swap, 2 render-size window, 3 = 2 + jitter/mip bias, 4 = 3 + SR inputs, 5 = 4 + SR
-    float scale{0.67f};             // SRScale, clamped (sr_plan.h); stages 2 to 4, and stage 5 while no backend plans
-    bool scale_defaulted{true};     // SRScale missing or unparsable
-    bool jitter{true};              // SRJitter (stage 3 and 4; stage 5 needs it), default 1
-    bool mip_bias{true};            // SRMipBias=off disables the bias change (stages 3 to 5)
-    float mip_bias_offset{default_mip_bias_offset};   // SRMipBias, added to log2(render/output), clamped [-2, 1]
-    bool capture{};
-    // Stage 3 captures SRStageCaptureCount (default 8, at most 32) CONSECUTIVE world frames from SRStageCaptureStart.
-    uint32_t capture_start{600}, capture_count{3}, capture_interval{300};
-    std::wstring ini;               // where SRScale is re-read after each device reset (vid_restart applies a new value)
-    // Stages 4 and 5 (section 12).
-    bool exposure_auto{};           // SRExposure=auto (default constant: a 1x1 exposure of 1.0)
-    bool colour_transport{};        // SRColourTransport=1: display-range encoding with HDR off (default 0: linear, HDR on)
-    bool first_person_zero{true};   // SRFirstPersonZero (default 1)
-    CutRule cut{};                  // SRCutDistance (metres, default 4), SRCutAngle (degrees, default 45)
-    std::wstring streamline_dir, fidelityfx_dir, xess_dir;   // SRStreamlineDir / SRFidelityFXDir / SRXeSSDir
-    bool require_signature{};       // SRRequireSignature (default 0)
-    SrSettings settings{};          // SR, SRBackend, SRQuality, DLSSPreset (shared frontend keys) at startup
-    bool world_window() const noexcept { return stage >= 2 && stage <= 5; }
-    bool temporal() const noexcept { return stage >= 3 && stage <= 5; }   // jitter and mip bias in the window
-    bool sr_inputs() const noexcept { return stage == 4 || stage == 5; }
-    bool selected() const noexcept { return stage == 1 || world_window() || capture; }
-};
 // Stage 3: the jitter published at the last phase_scene_prepare (all zero for scope frames and below Stage 3). The SR
 // pass reads current_jitter(); the motion stage reads current_jitter_uv() for its PS b13 rsf_jitter on every draw.
 JitterState current_jitter() noexcept;
 JitterUv current_jitter_uv() noexcept;
-StageOptions read_options(const wchar_t* ini) noexcept;
+// The scalar keys as the stage parses them (the defaults for a null INI), for the contract fixtures.
+rsf_anomaly_sr_stage_config read_options(const wchar_t* ini) noexcept;
 // SRScale from the INI, clamped. `defaulted` is set when the key is missing or not a number.
 float read_scale(const wchar_t* ini, bool* defaulted = nullptr) noexcept;
 // SRMipBias from the INI: a decimal offset clamped to [-2, 1] (missing or unparsable: 0), or "off" (enabled false).
 float read_mip_bias(const wchar_t* ini, bool* enabled = nullptr) noexcept;
-// Called by bootstrap before Observe starts. Inert unless options.selected().
-void configure(const StageOptions&, rsf_game_log_fn log, void* user) noexcept;
-const StageOptions& options() noexcept;
+// Called by bootstrap before Observe starts. Reads the keys from `ini`; when `apply` and a stage or the capture is
+// selected, the Rust stage keeps them with the INI path and the vendor directories (refused while installed). Returns
+// whether one is selected.
+bool configure(const wchar_t* ini, bool apply, rsf_game_log_fn log, void* user) noexcept;
 // Stage 2: a new scale for the next world window (clamped). The twins are rebuilt at the next eligible frame.
 void set_scale(float) noexcept;
 // Called by the native observer after its own and the geometry hooks are installed on the verified image. Verifies

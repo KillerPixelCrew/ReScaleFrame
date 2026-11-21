@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Native leaves of the SR stage driver. sr_stage.rs owns the lifecycle, view admission, the H1 and seam ordering,
-// jitter and camera publication, capture and burst bookkeeping, options and status (sr_stage_platform.h). This file
-// keeps the guarded engine reads, the stage hooks and trampolines, the SwapController with its D3D11 host, the jitter
-// and plan math objects and the TemporalDriver facade.
+// jitter and camera publication, capture and burst bookkeeping, the configuration (INI path, vendor directories, live
+// panel options) and status (sr_stage_platform.h). This file keeps the guarded engine reads, the stage hooks and
+// trampolines, the SwapController with its D3D11 host, typed INI and file calls and the TemporalDriver facade.
 #include "sr_stage.h"
 #include "sr_stage_platform.h"
 #include "adapter_options.h"
@@ -20,7 +20,6 @@
 #include <rescaleframe/game_frame.h>
 #include <rescaleframe/overlay_api.h>
 #include <rescaleframe/texture_dump.h>
-#include <filesystem>
 #include <windows.h>
 #include <algorithm>
 #include <cstdio>
@@ -35,9 +34,7 @@ void rsf_anomaly_sr_stage_register(const rsf_anomaly_sr_stage_platform*) noexcep
 void rsf_anomaly_sr_stage_read_options(const void*, rsf_anomaly_sr_stage_config*) noexcept;
 float rsf_anomaly_sr_stage_read_scale(const void*, bool*) noexcept;
 float rsf_anomaly_sr_stage_read_mip_bias(const void*, bool*) noexcept;
-bool rsf_anomaly_sr_stage_configure(const rsf_anomaly_sr_stage_config*, rsf_anomaly_sr_log, void*) noexcept;
-int32_t rsf_anomaly_sr_stage_option(uint32_t) noexcept;
-void rsf_anomaly_sr_stage_set_option(uint32_t, int32_t) noexcept;
+bool rsf_anomaly_sr_stage_configure_ini(const wchar_t*, bool, rsf_anomaly_sr_log, void*) noexcept;
 void rsf_anomaly_sr_stage_set_scale(float) noexcept;
 bool rsf_anomaly_sr_stage_install(void*, uint32_t, uint32_t, const void*) noexcept;
 bool rsf_anomaly_sr_stage_quiesce() noexcept;
@@ -65,9 +62,8 @@ static_assert(static_cast<uint8_t>(Refusal::Prepare) == 2 && static_cast<uint8_t
 static_assert(DXGI_FORMAT_R16G16B16A16_FLOAT == 10 && RSF_DUMP_VIEW_HDR == 3 && RSF_DUMP_VIEW_DEPTH == 4 &&
     RSF_DUMP_VIEW_DENSE_MOTION == 7 && RSF_PHASE_RENDER_SUBMIT == 2 && RSF_SCREEN_UNKNOWN == 0);
 namespace {
-// ---- configuration -------------------------------------------------------------------------------------------
-// The native copy of the configured options: the INI and vendor paths, and the stage flags the other stages read.
-StageOptions configured_options{};
+// ---- log --------------------------------------------------------------------------------------------------------
+// The log of the accepted configuration (the configured leaf), for the D3D11 host's messages.
 rsf_game_log_fn log_fn{};
 void* log_user{};
 void say(const char* message) noexcept {
@@ -407,7 +403,6 @@ JitterState to_native(const rsf_anomaly_sr_jitter_state& s) noexcept {
     return out;
 }
 SrSettings to_native(const rsf_anomaly_sr_settings& s) noexcept { return {s.enabled, s.backend, s.quality, s.preset}; }
-rsf_anomaly_sr_settings to_c(const SrSettings& s) noexcept { return {s.enabled, s.backend, s.quality, s.preset}; }
 std::wstring widen(const char* text) {
     std::wstring out;
     for (; text && *text; ++text) out.push_back(static_cast<unsigned char>(*text));
@@ -557,13 +552,6 @@ bool install_hooks() noexcept {
     return hooks.install(image, build->image_size(), sites);
 }
 
-std::string utf8(const std::wstring& value) {
-    if (value.empty()) return {};
-    const int size = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), int(value.size()), nullptr, 0, nullptr, nullptr);
-    std::string result(size > 0 ? size : 0, '\0');
-    if (size > 0) WideCharToMultiByte(CP_UTF8, 0, value.c_str(), int(value.size()), result.data(), size, nullptr, nullptr);
-    return result;
-}
 // Raw rows (tightly packed) of a mapped staging texture.
 bool write_raw(const wchar_t* path, ID3D11DeviceContext* ctx, ID3D11Texture2D* texture, uint32_t& width, uint32_t& height,
     uint32_t& format) noexcept {
@@ -584,11 +572,6 @@ bool write_raw(const wchar_t* path, ID3D11DeviceContext* ctx, ID3D11Texture2D* t
     ctx->Unmap(texture, 0);
     return ok;
 }
-bool file_exists(const std::wstring& directory, const wchar_t* name) noexcept try {
-    const auto path = std::filesystem::path(directory) / name;
-    const DWORD attributes = GetFileAttributesW(path.c_str());
-    return attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_DIRECTORY);
-} catch (...) { return false; }
 void apply_colour_transport(bool transport) noexcept {
     using Set = void (*)(uint32_t);
     const HMODULE runtime = GetModuleHandleW(L"ReScaleFrame.Runtime.dll");
@@ -857,55 +840,35 @@ const rsf_anomaly_sr_stage_platform platform{
                 capacity, static_cast<const wchar_t*>(ini));
         } catch (...) { return 0; }
     },
-    .configured_ini = []() -> const void* { return configured_options.ini.empty() ? nullptr : configured_options.ini.c_str(); },
     .persist_int = [](const char* key, int32_t value) { try { options::write_int(widen(key).c_str(), value); } catch (...) {} },
     .persist_text = [](const char* key, const char* value) {
         try { options::write_text(widen(key).c_str(), widen(value).c_str()); } catch (...) {}
     },
     .apply_colour_transport = [](bool transport) { apply_colour_transport(transport); },
-    .vendor_file = [](uint32_t directory, const char* name) {
+    .file_exists = [](const uint16_t* path) {
+        const DWORD attributes = GetFileAttributesW(reinterpret_cast<const wchar_t*>(path));
+        return attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_DIRECTORY);
+    },
+    .configured = [](rsf_anomaly_sr_log log, void* user, const rsf_anomaly_sr_driver_config* config) {
+        log_fn = log;
+        log_user = user;
+        if (!config) return;
+        TemporalOptions temporal{};
+        temporal.stage = config->stage;
+        temporal.exposure_auto = config->exposure_auto;
+        temporal.colour_transport = config->colour_transport;
+        temporal.first_person_zero = config->first_person_zero;
         try {
-            const auto& o = configured_options;
-            const std::wstring& root = directory == 0 ? o.streamline_dir : directory == 1 ? o.fidelityfx_dir : o.xess_dir;
-            return file_exists(root, widen(name).c_str());
-        } catch (...) { return false; }
+            temporal.streamline = config->streamline;
+            temporal.fidelityfx = config->fidelityfx;
+            temporal.xess = config->xess;
+        } catch (...) {}
+        temporal.require_signature = config->require_signature;
+        temporal.initial = to_native(config->initial);
+        driver.configure(temporal, log, user);
     },
 };
 void bind_platform() noexcept { rsf_anomaly_sr_stage_register(&platform); }
-
-rsf_anomaly_sr_stage_config to_c(const StageOptions& o) noexcept {
-    return {o.stage, o.scale, o.scale_defaulted, o.jitter, o.mip_bias, o.mip_bias_offset, o.capture, o.capture_start,
-        o.capture_count, o.capture_interval, o.exposure_auto, o.colour_transport, o.first_person_zero, o.require_signature,
-        o.cut.distance, o.cut.degrees, to_c(o.settings)};
-}
-
-// The options the panel changes while the game runs. Render thread only (adapter_options.h). Rust applies and saves
-// them; the native copy follows so options() reports the live values.
-void refresh_live() noexcept {
-    configured_options.colour_transport = rsf_anomaly_sr_stage_option(RSF_ANOMALY_SR_OPTION_COLOUR_TRANSPORT) == 0;
-    configured_options.exposure_auto = rsf_anomaly_sr_stage_option(RSF_ANOMALY_SR_OPTION_EXPOSURE_AUTO) != 0;
-    configured_options.first_person_zero = rsf_anomaly_sr_stage_option(RSF_ANOMALY_SR_OPTION_FIRST_PERSON_ZERO) != 0;
-    configured_options.jitter = rsf_anomaly_sr_stage_option(RSF_ANOMALY_SR_OPTION_JITTER) != 0;
-    configured_options.mip_bias = rsf_anomaly_sr_stage_option(RSF_ANOMALY_SR_OPTION_MIP_BIAS) != 0;
-    configured_options.mip_bias_offset = float(rsf_anomaly_sr_stage_option(RSF_ANOMALY_SR_OPTION_MIP_BIAS_OFFSET)) / 10.0f;
-}
-template<uint32_t Id> int32_t live_get() noexcept { return rsf_anomaly_sr_stage_option(Id); }
-template<uint32_t Id> void live_set(int32_t value) noexcept { rsf_anomaly_sr_stage_set_option(Id, value); refresh_live(); }
-void register_live_options() noexcept {
-    using options::add;
-    add({"DLSS input: linear HDR colour", true, 0, 1, 1, 1, false,
-        &live_get<RSF_ANOMALY_SR_OPTION_COLOUR_TRANSPORT>, &live_set<RSF_ANOMALY_SR_OPTION_COLOUR_TRANSPORT>});
-    add({"DLSS auto exposure", true, 0, 1, 1, 1, false,
-        &live_get<RSF_ANOMALY_SR_OPTION_EXPOSURE_AUTO>, &live_set<RSF_ANOMALY_SR_OPTION_EXPOSURE_AUTO>});
-    add({"First-person pixels: zero motion", true, 0, 1, 1, 1, false,
-        &live_get<RSF_ANOMALY_SR_OPTION_FIRST_PERSON_ZERO>, &live_set<RSF_ANOMALY_SR_OPTION_FIRST_PERSON_ZERO>});
-    add({"Subpixel jitter (SR needs it; off = no upscaling)", true, 0, 1, 1, 1, false,
-        &live_get<RSF_ANOMALY_SR_OPTION_JITTER>, &live_set<RSF_ANOMALY_SR_OPTION_JITTER>});
-    add({"Texture mip bias", true, 0, 1, 1, 1, false,
-        &live_get<RSF_ANOMALY_SR_OPTION_MIP_BIAS>, &live_set<RSF_ANOMALY_SR_OPTION_MIP_BIAS>});
-    add({"Mip bias offset", false, -20, 0, 1, 10, false,
-        &live_get<RSF_ANOMALY_SR_OPTION_MIP_BIAS_OFFSET>, &live_set<RSF_ANOMALY_SR_OPTION_MIP_BIAS_OFFSET>});
-}
 }
 
 JitterState current_jitter() noexcept {
@@ -928,69 +891,18 @@ float read_mip_bias(const wchar_t* ini, bool* enabled) noexcept {
     return rsf_anomaly_sr_stage_read_mip_bias(ini, enabled);
 }
 
-StageOptions read_options(const wchar_t* ini) noexcept try {
-    StageOptions result{};
-    if (!ini) return result;
+rsf_anomaly_sr_stage_config read_options(const wchar_t* ini) noexcept {
     bind_platform();
-    rsf_anomaly_sr_stage_config c{};
-    rsf_anomaly_sr_stage_read_options(ini, &c);
-    result.stage = c.stage;
-    result.scale = c.scale;
-    result.scale_defaulted = c.scale_defaulted;
-    result.jitter = c.jitter;
-    result.mip_bias = c.mip_bias;
-    result.mip_bias_offset = c.mip_bias_offset;
-    result.capture = c.capture;
-    result.capture_start = c.capture_start;
-    result.capture_count = c.capture_count;
-    result.capture_interval = c.capture_interval;
-    result.exposure_auto = c.exposure_auto;
-    result.colour_transport = c.colour_transport;
-    result.first_person_zero = c.first_person_zero;
-    result.require_signature = c.require_signature;
-    result.cut.distance = c.cut_distance;
-    result.cut.degrees = c.cut_degrees;
-    result.settings = to_native(c.settings);
-    result.ini = ini;
-    // Vendor runtimes: the package layout beside the INI (ReScaleFrame\streamline, fidelityfx, xess) unless overridden.
-    const auto base = std::filesystem::path(ini).parent_path() / L"ReScaleFrame";
-    const auto read_dir = [&](const wchar_t* key, const wchar_t* fallback) {
-        wchar_t value[MAX_PATH]{};
-        GetPrivateProfileStringW(L"Anomaly", key, L"", value, MAX_PATH, ini);
-        return plain_directory(value[0] ? std::wstring(value) : (base / fallback).wstring());
-    };
-    result.streamline_dir = read_dir(L"SRStreamlineDir", L"streamline");
-    result.fidelityfx_dir = read_dir(L"SRFidelityFXDir", L"fidelityfx");
-    result.xess_dir = read_dir(L"SRXeSSDir", L"xess");
-    return result;
-} catch (...) { return {}; }
+    rsf_anomaly_sr_stage_config config{};
+    rsf_anomaly_sr_stage_read_options(ini, &config);
+    return config;
+}
 void set_scale(float value) noexcept { rsf_anomaly_sr_stage_set_scale(value); }
 
-void configure(const StageOptions& value, rsf_game_log_fn log, void* user) noexcept {
+bool configure(const wchar_t* ini, bool apply, rsf_game_log_fn log, void* user) noexcept {
     bind_platform();
-    const auto config = to_c(value);
-    if (!rsf_anomaly_sr_stage_configure(&config, log, user)) return;   // the hooks are installed
-    try { configured_options = value; } catch (...) { configured_options = {}; }
-    register_live_options();
-    log_fn = log;
-    log_user = user;
-    if (value.sr_inputs()) {
-        TemporalOptions temporal{};
-        temporal.stage = value.stage;
-        temporal.exposure_auto = value.exposure_auto;
-        temporal.colour_transport = value.colour_transport;
-        temporal.first_person_zero = value.first_person_zero;
-        try {
-            temporal.streamline = utf8(value.streamline_dir);
-            temporal.fidelityfx = utf8(value.fidelityfx_dir);
-            temporal.xess = utf8(value.xess_dir);
-        } catch (...) {}
-        temporal.require_signature = value.require_signature;
-        temporal.initial = value.settings;
-        driver.configure(temporal, log, user);
-    }
+    return rsf_anomaly_sr_stage_configure_ini(ini, apply, log, user);
 }
-const StageOptions& options() noexcept { return configured_options; }
 bool active() noexcept { return rsf_anomaly_sr_stage_active(); }
 
 bool install(std::byte* module, uint32_t image_size, const BuildProfile& selected) noexcept {

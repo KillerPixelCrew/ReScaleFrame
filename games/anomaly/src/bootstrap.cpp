@@ -44,11 +44,7 @@ constexpr rsf_anomaly_bootstrap_leaves leaves{
         } catch (...) { return false; }
     },
     [](const wchar_t* ini) noexcept { options::register_restart_options(ini); fg::register_options(); },
-    [](const wchar_t* ini, bool configure, rsf_game_log_fn log) noexcept {
-        const auto options = sr::read_options(ini);
-        if (configure && options.selected()) sr::configure(options, log, nullptr);
-        return options.selected();
-    },
+    [](const wchar_t* ini, bool configure, rsf_game_log_fn log) noexcept { return sr::configure(ini, configure, log, nullptr); },
     [](const wchar_t* ini, rsf_game_log_fn log) noexcept {
         motion::configure(ini, log, nullptr);
     },

@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: MIT
 // SR stage driver (docs/research/anomaly-sr-seam.md sections 9 to 12, docs/research/rust-anomaly-sr-stage.md).
 // Rust owns the lifecycle, source identity and view admission, the H1 preparation and S-B seam ordering, the
-// published jitter and main-view camera, the frame dump and burst bookkeeping, the options and the status text.
-// sr_stage.cpp keeps guarded engine reads, trampolines, the SwapController and its D3D11 host,
-// and the TemporalDriver facade over the existing Rust temporal driver.
+// published jitter and main-view camera, the frame dump and burst bookkeeping, the configuration (the [Anomaly] keys,
+// the INI path, the vendor directories and their availability, the live panel options) and the status text.
+// sr_stage.cpp keeps guarded engine reads, trampolines, the SwapController and its D3D11 host, typed INI and file
+// calls, and the TemporalDriver facade over the existing Rust temporal driver
+// (docs/research/rust-anomaly-sr-configuration.md).
 mod math;
 
 pub(crate) use self::math::plan_for_render;
@@ -17,7 +19,7 @@ use crate::lease::Lease;
 use crate::sr_stage_abi::*;
 use rsf_game_sys::{RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record};
 use std::ffi::{CStr, CString, c_char, c_void};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard};
@@ -37,6 +39,11 @@ const BACKEND_XESS: u32 = 5;
 const BACKENDS: u32 =
     (1 << BACKEND_DLSS) | (1 << BACKEND_FSR3) | (1 << BACKEND_FSR4) | (1 << BACKEND_XESS);
 const QUALITIES: u32 = 0x1f;
+const MAX_PATH: usize = 260;
+// The vendor runtime directories, in Paths::vendors order.
+const STREAMLINE: usize = 0;
+const FIDELITYFX: usize = 1;
+const XESS: usize = 2;
 // Refusal (sr_temporal.h).
 const REFUSAL_PREPARE: u8 = 2;
 const REFUSAL_REINSERT: u8 = 5;
@@ -259,7 +266,11 @@ impl Ini<'_> {
         leaf!(self.platform, ini_int(self.ini, key.as_ptr(), fallback))
     }
     fn text(&self, key: &CStr, fallback: &CStr) -> Vec<u16> {
-        let mut out = [0u16; 64];
+        self.text_of::<64>(key, fallback)
+    }
+    // At most N - 1 UTF-16 units, as GetPrivateProfileStringW returns them for an N-unit buffer.
+    fn text_of<const N: usize>(&self, key: &CStr, fallback: &CStr) -> Vec<u16> {
+        let mut out = [0u16; N];
         let length = leaf!(
             self.platform,
             ini_text(
@@ -267,12 +278,35 @@ impl Ini<'_> {
                 key.as_ptr(),
                 fallback.as_ptr(),
                 out.as_mut_ptr(),
-                64
+                N as u32
             )
         );
-        let length = (length as usize).min(63);
+        let length = (length as usize).min(N - 1);
         let end = out[..length].iter().position(|&c| c == 0).unwrap_or(length);
         out[..end].to_vec()
+    }
+    // SRStreamlineDir, SRFidelityFXDir and SRXeSSDir: an explicit value, else the package layout beside the INI
+    // (ReScaleFrame\streamline, fidelityfx, xess), as a plain directory. `path` is the INI path without its NUL.
+    fn vendor_directories(&self, path: &[u16]) -> [PathBuf; 3] {
+        let beside = path_of(path);
+        let base = beside
+            .parent()
+            .unwrap_or_else(|| Path::new(""))
+            .join("ReScaleFrame");
+        [
+            (c"SRStreamlineDir", "streamline"),
+            (c"SRFidelityFXDir", "fidelityfx"),
+            (c"SRXeSSDir", "xess"),
+        ]
+        .map(|(key, fallback)| {
+            let value = self.text_of::<MAX_PATH>(key, c"");
+            let value = if value.is_empty() {
+                units(&base.join(fallback))
+            } else {
+                value
+            };
+            path_of(&plain_directory(&value))
+        })
     }
     // SRScale: clamped; `defaulted` when missing or not a number (sr_stage.h).
     fn scale(&self) -> (f32, bool) {
@@ -469,8 +503,17 @@ struct Reported {
     seam_samples: u64,
 }
 
+// The configuration beyond its scalar keys: the INI that SRScale is re-read from after a device reset
+// (NUL-terminated, empty when configured without one) and the vendor runtime directories.
+#[derive(Clone, Default)]
+struct Paths {
+    ini: Vec<u16>,
+    vendors: [PathBuf; 3],
+}
+
 struct State {
     config: Config,
+    paths: Paths,
     log: rsf_anomaly_sr_log,
     log_user: Raw,
     build: Raw,
@@ -504,6 +547,7 @@ impl Default for State {
     fn default() -> Self {
         Self {
             config: default_config(),
+            paths: Paths::default(),
             log: None,
             log_user: Raw(null_mut()),
             build: Raw(null_mut()),
@@ -549,8 +593,10 @@ pub(crate) struct Stage {
     platform: AtomicPtr<Platform>,
     state: Mutex<Option<Box<State>>>,
     active: AtomicBool,
-    // The configured stage, read by the overlay's report and request paths without the stage lock.
+    // The configured stage and SRStageCapture, read without the stage lock by the overlay's report and request paths,
+    // the observer's install decision and the motion stage's capture binding.
     stage: AtomicU32,
+    capture: AtomicBool,
     uv: [AtomicU32; 4],
     live: Live,
 }
@@ -577,16 +623,72 @@ fn dump_directory() -> Option<PathBuf> {
     Some(PathBuf::from(local).join("ReScaleFrame").join("Anomaly"))
 }
 
-fn wide(path: &std::path::Path) -> Vec<u16> {
+// A path's UTF-16 units, without a terminator.
+fn units(path: &Path) -> Vec<u16> {
     #[cfg(windows)]
     {
         use std::os::windows::ffi::OsStrExt;
-        path.as_os_str().encode_wide().chain([0]).collect()
+        path.as_os_str().encode_wide().collect()
     }
     #[cfg(not(windows))]
     {
-        path.to_string_lossy().encode_utf16().chain([0]).collect()
+        path.to_string_lossy().encode_utf16().collect()
     }
+}
+
+fn wide(path: &Path) -> Vec<u16> {
+    let mut out = units(path);
+    out.push(0);
+    out
+}
+
+// The path UTF-16 units name. Windows keeps unpaired surrogates.
+fn path_of(units: &[u16]) -> PathBuf {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStringExt;
+        std::ffi::OsString::from_wide(units).into()
+    }
+    #[cfg(not(windows))]
+    {
+        String::from_utf16_lossy(units).into()
+    }
+}
+
+// A vendor runtime directory as Streamline, FidelityFX and XeSS can use it. The INI path the carrier hands over can
+// be a Win32 long-path name ("\\?\D:\...", "\\?\UNC\server\share\..."). Streamline appends "/sl.common.dll" to its
+// plugin directory, and a "\\?\" name disables the slash conversion, so every plugin failed to load and Stage 5
+// stayed on the bilinear seam (wave 7 run, c1 log). Strips the prefix, uses backslashes only and drops trailing
+// separators.
+pub(crate) fn plain_directory(path: &[u16]) -> Vec<u16> {
+    let starts = |prefix: &str| {
+        let prefix: Vec<u16> = prefix.encode_utf16().collect();
+        path.starts_with(&prefix)
+    };
+    let backslash = u16::from(b'\\');
+    let mut out = if starts(r"\\?\UNC\") {
+        [backslash, backslash]
+            .into_iter()
+            .chain(path[8..].iter().copied())
+            .collect()
+    } else if starts(r"\\?\") || starts(r"\??\") {
+        path[4..].to_vec()
+    } else {
+        path.to_vec()
+    };
+    for unit in &mut out {
+        if *unit == u16::from(b'/') {
+            *unit = backslash;
+        }
+    }
+    while out.len() > 3 && out.last() == Some(&backslash) {
+        out.pop();
+    }
+    out
+}
+
+fn selected(config: &Config) -> bool {
+    config.stage == 1 || world_window(config.stage) || config.capture
 }
 
 fn yes(value: bool) -> &'static str {
@@ -603,6 +705,7 @@ impl Stage {
             state: Mutex::new(None),
             active: AtomicBool::new(false),
             stage: AtomicU32::new(0),
+            capture: AtomicBool::new(false),
             uv: [
                 AtomicU32::new(0),
                 AtomicU32::new(0),
@@ -701,19 +804,54 @@ impl Stage {
         .mip_bias()
     }
 
-    // Before Observe starts. Refused while the hooks are installed.
-    pub(crate) fn configure(
+    // The cold entry: reads the [Anomaly] SR keys from the INI at `path` (UTF-16, no terminator) and, when `apply`
+    // and a stage or the capture is selected, keeps them with the INI path and the vendor directories. Returns
+    // whether one is selected.
+    pub(crate) fn configure_ini(
         &self,
-        config: &Config,
+        path: &[u16],
+        apply: bool,
         log: rsf_anomaly_sr_log,
         user: *mut c_void,
     ) -> bool {
-        self.with(|state| {
+        let ini: Vec<u16> = path.iter().copied().chain([0]).collect();
+        let reader = Ini {
+            platform: self.platform(),
+            ini: ini.as_ptr().cast(),
+        };
+        let config = reader.options();
+        if !(apply && selected(&config)) {
+            return selected(&config);
+        }
+        let vendors = reader.vendor_directories(path);
+        let paths = Paths { ini, vendors };
+        if self.configure(&config, paths, log, user) {
+            #[cfg(windows)]
+            register_live_options();
+        }
+        true
+    }
+
+    // Before Observe starts. Refused while the hooks are installed.
+    fn configure(
+        &self,
+        config: &Config,
+        paths: Paths,
+        log: rsf_anomaly_sr_log,
+        user: *mut c_void,
+    ) -> bool {
+        let [streamline, fidelityfx, xess] = paths
+            .vendors
+            .clone()
+            .map(|path| CString::new(path.to_string_lossy().as_bytes()).unwrap_or_default());
+        let accepted = self.with(|state| {
             if self.active.load(Ordering::Acquire) {
                 return false;
             }
             state.config = *config;
+            state.paths = paths;
             self.stage.store(config.stage, Ordering::Release);
+            self.capture.store(config.capture, Ordering::Release);
             state.log = log;
             state.log_user = Raw(user);
             let live = &self.live;
@@ -728,7 +866,40 @@ impl Stage {
             live.mip_offset
                 .store(config.mip_bias_offset.to_bits(), Ordering::Relaxed);
             true
-        })
+        });
+        if !accepted {
+            return false;
+        }
+        // Stages 4 and 5 hand the TemporalDriver its options; the directories are borrowed for the call.
+        let options = rsf_anomaly_sr_driver_config {
+            stage: config.stage,
+            exposure_auto: config.exposure_auto,
+            colour_transport: config.colour_transport,
+            first_person_zero: config.first_person_zero,
+            require_signature: config.require_signature,
+            initial: config.settings,
+            streamline: streamline.as_ptr(),
+            fidelityfx: fidelityfx.as_ptr(),
+            xess: xess.as_ptr(),
+        };
+        let driver = if sr_inputs(config.stage) {
+            &raw const options
+        } else {
+            std::ptr::null()
+        };
+        leaf!(self.platform(), configured(log, user, driver));
+        true
+    }
+
+    // Whether the configured stage or capture needs the SR hooks (the observer installs them only then).
+    pub(crate) fn selected(&self) -> bool {
+        let stage = self.stage.load(Ordering::Acquire);
+        stage == 1 || world_window(stage) || self.capture()
+    }
+
+    // SRStageCapture: this run's frame dump service belongs to the SR stage.
+    pub(crate) fn capture(&self) -> bool {
+        self.capture.load(Ordering::Acquire)
     }
 
     pub(crate) fn option(&self, id: u32) -> i32 {
@@ -841,7 +1012,7 @@ impl Stage {
         let mut guard = self.lock();
         let state = guard.get_or_insert_with(Default::default);
         let stage = state.config.stage;
-        if !(stage == 1 || world_window(stage) || state.config.capture) {
+        if !selected(&state.config) {
             return true;
         }
         if self.active.load(Ordering::Acquire) {
@@ -1123,9 +1294,12 @@ impl Stage {
         }
         // A device reset (vid_restart, resolution change) re-reads SRScale, so a new value applies without a restart.
         if facts.generation != state.scale_generation {
-            let ini = leaf!(p, configured_ini());
-            if state.scale_generation != u64::MAX && !ini.is_null() {
-                let (scale, _) = Ini { platform: p, ini }.scale();
+            if state.scale_generation != u64::MAX && !state.paths.ini.is_empty() {
+                let (scale, _) = Ini {
+                    platform: p,
+                    ini: state.paths.ini.as_ptr().cast(),
+                }
+                .scale();
                 if scale != state.current_scale {
                     let text = format!(
                         "Anomaly SR stage {stage}: SRScale {:.3} -> {:.3} after a device reset.",
@@ -2135,22 +2309,26 @@ impl Stage {
     // ---- the shared overlay -------------------------------------------------------------------------------------
     pub(crate) fn choices(&self) -> OverlayChoices {
         let p = self.platform();
-        let config = self.with(|state| state.config);
+        let (config, vendors) = self.with(|state| (state.config, state.paths.vendors.clone()));
         let mut out = OverlayChoices::default();
         if config.stage != 5 {
             return out;
         }
-        let has = |directory: u32, name: &CStr| leaf!(p, vendor_file(directory, name.as_ptr()));
+        let has = |directory: usize, name: &str| {
+            let path = wide(&vendors[directory].join(name));
+            leaf!(p, file_exists(path.as_ptr()))
+        };
         // Offered when the runtime the backend loads is where the pipeline will look. Whether this GPU runs it is
         // only known once the pipeline starts; the report says so when it does not.
-        if has(0, c"sl.interposer.dll") && has(0, c"nvngx_dlss.dll") {
+        if has(STREAMLINE, "sl.interposer.dll") && has(STREAMLINE, "nvngx_dlss.dll") {
             out.backends |= 1 << BACKEND_DLSS;
         }
-        if has(1, c"amd_fidelityfx_upscaler_dx12.dll") && has(1, c"amd_fidelityfx_loader_dx12.dll")
+        if has(FIDELITYFX, "amd_fidelityfx_upscaler_dx12.dll")
+            && has(FIDELITYFX, "amd_fidelityfx_loader_dx12.dll")
         {
             out.backends |= (1 << BACKEND_FSR3) | (1 << BACKEND_FSR4);
         }
-        if has(2, c"libxess.dll") {
+        if has(XESS, "libxess.dll") {
             out.backends |= 1 << BACKEND_XESS;
         }
         if out.backends == 0 {
@@ -2245,21 +2423,96 @@ unsafe extern "C" fn rsf_anomaly_sr_stage_read_mip_bias(
     }
     value
 }
+// `ini` is null (nothing selected) or a NUL-terminated UTF-16 path that stays readable for the call: the carrier's
+// configuration path at cold start, or a fixture's INI.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_sr_stage_configure(
-    config: *const Config,
+unsafe extern "C" fn rsf_anomaly_sr_stage_configure_ini(
+    ini: *const u16,
+    apply: bool,
     log: rsf_anomaly_sr_log,
     user: *mut c_void,
 ) -> bool {
-    !config.is_null() && STAGE.configure(unsafe { &*config }, log, user)
+    if ini.is_null() {
+        return false;
+    }
+    let mut length = 0;
+    while unsafe { ini.add(length).read() } != 0 {
+        length += 1;
+    }
+    let path = unsafe { std::slice::from_raw_parts(ini, length) };
+    STAGE.configure_ini(path, apply, log, user)
 }
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_stage_option(id: u32) -> i32 {
-    STAGE.option(id)
+
+// The six live options in the shared overlay (AGENTS.md Rule 2), in RSF_ANOMALY_SR_OPTION_* order. The panel calls
+// get and set on the Present-owner thread, which is the engine's render thread.
+#[cfg(windows)]
+fn register_live_options() {
+    for option in &live_options() {
+        // The registry copies the entry; labels and functions are static.
+        unsafe { crate::overlay::rsf_anomaly_overlay_option_add(option) };
+    }
 }
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_stage_set_option(id: u32, value: i32) {
-    STAGE.set_option(id, value);
+
+#[cfg(windows)]
+fn live_options() -> [crate::overlay_abi::rsf_anomaly_overlay_option; 6] {
+    use crate::overlay_abi::rsf_anomaly_overlay_option;
+    extern "C" fn get<const ID: u32>() -> i32 {
+        STAGE.option(ID)
+    }
+    extern "C" fn set<const ID: u32>(value: i32) {
+        STAGE.set_option(ID, value);
+    }
+    type Get = unsafe extern "C" fn() -> i32;
+    type Set = unsafe extern "C" fn(i32);
+    let toggle = |label: &'static CStr, get: Get, set: Set| rsf_anomaly_overlay_option {
+        label: label.as_ptr(),
+        toggle: 1,
+        restart: 0,
+        minimum: 0,
+        maximum: 1,
+        step: 1,
+        divisor: 1,
+        get: Some(get),
+        set: Some(set),
+    };
+    [
+        toggle(
+            c"DLSS input: linear HDR colour",
+            get::<RSF_ANOMALY_SR_OPTION_COLOUR_TRANSPORT>,
+            set::<RSF_ANOMALY_SR_OPTION_COLOUR_TRANSPORT>,
+        ),
+        toggle(
+            c"DLSS auto exposure",
+            get::<RSF_ANOMALY_SR_OPTION_EXPOSURE_AUTO>,
+            set::<RSF_ANOMALY_SR_OPTION_EXPOSURE_AUTO>,
+        ),
+        toggle(
+            c"First-person pixels: zero motion",
+            get::<RSF_ANOMALY_SR_OPTION_FIRST_PERSON_ZERO>,
+            set::<RSF_ANOMALY_SR_OPTION_FIRST_PERSON_ZERO>,
+        ),
+        toggle(
+            c"Subpixel jitter (SR needs it; off = no upscaling)",
+            get::<RSF_ANOMALY_SR_OPTION_JITTER>,
+            set::<RSF_ANOMALY_SR_OPTION_JITTER>,
+        ),
+        toggle(
+            c"Texture mip bias",
+            get::<RSF_ANOMALY_SR_OPTION_MIP_BIAS>,
+            set::<RSF_ANOMALY_SR_OPTION_MIP_BIAS>,
+        ),
+        rsf_anomaly_overlay_option {
+            toggle: 0,
+            minimum: -20,
+            maximum: 0,
+            divisor: 10,
+            ..toggle(
+                c"Mip bias offset",
+                get::<RSF_ANOMALY_SR_OPTION_MIP_BIAS_OFFSET>,
+                set::<RSF_ANOMALY_SR_OPTION_MIP_BIAS_OFFSET>,
+            )
+        },
+    ]
 }
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_sr_stage_set_scale(value: f32) {

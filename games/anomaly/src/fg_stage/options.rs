@@ -228,25 +228,10 @@ unsafe fn wide<'a>(value: PCWSTR) -> &'a [u16] {
     unsafe { slice::from_raw_parts(value, size) }
 }
 
-// Match sr_settings.h: Streamline appends '/' to these paths, which a verbatim Win32 path rejects.
+// The SR stage's rule: Streamline appends '/' to these paths, which a verbatim Win32 path rejects.
 fn plain_directory(path: String) -> String {
-    let mut path = if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
-        format!(r"\\{rest}")
-    } else if let Some(rest) = path
-        .strip_prefix(r"\\?\")
-        .or_else(|| path.strip_prefix(r"\??\"))
-    {
-        rest.to_owned()
-    } else {
-        path
-    }
-    .replace('/', "\\");
-    let mut units = path.encode_utf16().count();
-    while units > 3 && path.ends_with('\\') {
-        path.pop();
-        units -= 1;
-    }
-    path
+    let units: Vec<u16> = path.encode_utf16().collect();
+    String::from_utf16_lossy(&crate::sr_stage::plain_directory(&units))
 }
 
 fn c_string(text: String) -> CString {
