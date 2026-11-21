@@ -120,6 +120,8 @@ mod native_window;
 #[cfg(windows)]
 mod overlay_abi;
 #[cfg(windows)]
+mod overlay_cursor_hooks;
+#[cfg(windows)]
 mod overlay_host;
 #[cfg(windows)]
 mod overlay_host_abi;

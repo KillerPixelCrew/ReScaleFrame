@@ -4,6 +4,13 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now owns installation, forwarding and retirement for the seven
+overlay cursor detours. The cursor switches to the native entry after
+disable, and any caller still using the trampoline delays removal.
+A failed removal remains tracked for retry after the window detaches.
+The C++ bridge keeps typed User32 and MinHook calls. Public C signatures
+are unchanged. Build and regression test execution remain open.
+
 Rust now owns shared overlay window attachment, the original window
 procedure, the attachment logger and the game's held input state.
 Attach publishes the forwarder before the subclass can receive messages

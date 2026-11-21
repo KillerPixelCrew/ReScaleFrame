@@ -4,7 +4,7 @@
 
 struct rsf_overlay_window_ops {
     void (*install_cursor)(void);
-    void (*retire_cursor)(uint32_t visible, uint32_t window_alive);
+    int32_t (*retire_cursor)(uint32_t visible, uint32_t window_alive);
     void (*log)(rsf_overlay_input_log_fn, void* user, const char* message);
 };
 

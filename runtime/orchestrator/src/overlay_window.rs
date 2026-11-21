@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-use crate::overlay_pointer;
 use crate::overlay_visibility::{self, rsf_core_overlay_toggle_key};
 use crate::sr_session::has_capacity;
+use crate::{overlay_cursor_hooks, overlay_pointer};
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicPtr, Ordering};
@@ -42,7 +42,7 @@ struct Options {
 #[repr(C)]
 struct Platform {
     install_cursor: unsafe extern "C" fn(),
-    retire_cursor: unsafe extern "C" fn(u32, u32),
+    retire_cursor: unsafe extern "C" fn(u32, u32) -> i32,
     log: InvokeLog,
 }
 
@@ -68,7 +68,7 @@ impl Logger {
         }
     }
 
-    fn line(self, text: String) {
+    fn line(self, text: impl Into<Vec<u8>>) {
         if self.callback.is_some()
             && let Ok(text) = CString::new(text)
         {
@@ -89,6 +89,12 @@ fn set_logger(logger: Option<Logger>) {
 
 fn logger() -> Option<Logger> {
     *LOGGER.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+pub(super) fn diagnostic(text: &str) {
+    if let Some(log) = logger() {
+        log.line(text);
+    }
 }
 
 fn reset_input(toggle: u32, down: bool) -> bool {
@@ -193,7 +199,15 @@ unsafe extern "C" fn rsf_core_overlay_input_uninstall(
     let _lifecycle = LIFECYCLE.lock().unwrap_or_else(PoisonError::into_inner);
     let window = rsf_core_overlay_input_window();
     if window.is_null() {
-        return NOT_INSTALLED;
+        return if overlay_cursor_hooks::has_hooks() {
+            if unsafe { (platform.retire_cursor)(0, 0) } != 0 {
+                OK
+            } else {
+                SUBCLASS_FAILED
+            }
+        } else {
+            NOT_INSTALLED
+        };
     }
     let log = logger();
     let alive = unsafe { IsWindow(window) } != 0;
@@ -218,8 +232,14 @@ unsafe extern "C" fn rsf_core_overlay_input_uninstall(
     // A message already inside the subclass can still read ORIGINAL.
     WINDOW.store(null_mut(), Ordering::Release);
     let visible = reset_input(rsf_core_overlay_toggle_key(), false);
-    unsafe { (platform.retire_cursor)(visible.into(), alive.into()) };
+    let retired = unsafe { (platform.retire_cursor)(visible.into(), alive.into()) } != 0;
     set_logger(None);
+    if !retired {
+        if let Some(log) = log {
+            log.say(c"overlay input: cursor hook removal is pending");
+        }
+        return SUBCLASS_FAILED;
+    }
     if alive && let Some(log) = log {
         log.say(c"overlay input: window procedure restored");
     }
