@@ -127,7 +127,7 @@ pub(super) fn reset(toggle_key: u32, down: bool) -> bool {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay_visibility_set(visible: u32, now: u64, apply: Apply) {
+pub(super) extern "C" fn rsf_core_overlay_visibility_set(visible: u32, now: u64, apply: Apply) {
     let change = lock().request(visible != 0, EXTERNAL, now);
     apply_changes(change, apply);
 }

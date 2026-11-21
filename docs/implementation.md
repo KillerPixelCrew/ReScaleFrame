@@ -1,5 +1,12 @@
 # Implementation tracker
 
+The shared overlay input owner now routes window messages in Rust.
+Native leaves read Windows contact and mouse facts and forward the
+message. Source comparison matched key and button release pairing,
+touch delivery and handle ownership, raw-input cleanup, and the
+public declarations. Live input and linkage remain unverified.
+[Window message routing](research/rust-overlay-host.md#window-message-routing)
+
 Auxiliary SR now admits D3D11 texture shapes and packed-colour
 capabilities in Rust. Typed descriptor and capability queries remain
 native. The public host ABI is unchanged in source, and the existing

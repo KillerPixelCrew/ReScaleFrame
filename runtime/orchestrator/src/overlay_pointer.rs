@@ -10,10 +10,10 @@ use std::mem;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 const LEFT: u32 = 1;
-const DOWN: u32 = 1;
-const UP: u32 = 2;
-const CANCEL: u32 = 4;
-const POINTER: u32 = 8;
+pub(super) const DOWN: u32 = 1;
+pub(super) const UP: u32 = 2;
+pub(super) const CANCEL: u32 = 4;
+pub(super) const POINTER: u32 = 8;
 const TAP_MS: u64 = 500;
 const TAP_SLOP: u32 = 48;
 const TOUCH_LIMIT: usize = 10;
@@ -353,20 +353,11 @@ extern "C" fn rsf_core_overlay_pointer_contact(point: &ClientPoint, id: u32, fla
     lock().contact(point, id, flags);
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay_pointer_capture_lost(id: u32) {
+pub(super) fn capture_lost(id: u32) {
     lock().capture_lost(id);
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay_pointer_gesture(
-    id: u32,
-    x: i32,
-    y: i32,
-    flags: u32,
-    now: u64,
-    visible: u32,
-) -> i32 {
+pub(super) fn gesture(id: u32, x: i32, y: i32, flags: u32, now: u64, visible: u32) -> i32 {
     lock()
         .gesture(Finger { id, x, y }, flags, now, visible != 0)
         .map_or(-1, i32::from)

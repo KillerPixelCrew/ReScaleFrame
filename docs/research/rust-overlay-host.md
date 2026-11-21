@@ -1,5 +1,28 @@
 # Shared D3D11 overlay host in Rust
 
+## Window message routing
+
+Compared with `711025f2`, the shared overlay input owner now routes
+window messages in Rust. The C++ window procedure still borrows the
+original procedure and maps the Rust decision to the same Win32 result.
+The typed leaves read pointer, touch and raw mouse records and convert
+screen coordinates when the routing decision requests it.
+
+| Path | Source comparison |
+| --- | --- |
+| Keyboard and focus | Keep the entry visibility, repeat and system key flags, and the game-visible press and release pairing. Focus loss clears held state. Visible character and dead-character messages are consumed. |
+| Mouse | Promoted touch keeps its client coordinates and is delivered before ordinary mouse routing. Moves are forwarded while hidden. Button down, double-click and up keep their virtual keys and position-before-button delivery. A game-visible press still receives its release. Consumed X buttons return TRUE and consumed ordinary buttons return zero. |
+| Pointer and legacy touch | Read pointer information before deciding delivery. Touch gestures run while hidden and visible, pen delivery is visible-only, and cancellation clears the contact before any delivery. Legacy touch checks the 32-contact bound, resolves gesture changes before delivering contacts, and closes the handle only when the overlay consumes it. |
+| Wheel and raw input | Vertical wheel units are signed Win32 detents. Horizontal wheel is consumed while visible. Visible raw input is sampled before calling the default procedure to release the record. Hidden input follows the original window procedure. |
+
+The private table has eight callbacks and the contact record is 20
+bytes. The public overlay input declarations and linked and DLL
+call paths match in source. Pinned formatting, locked offline Cargo
+metadata and whitespace checks passed. Native linkage, live input,
+touch, resize and overlay teardown remain unverified on this change.
+
+## Host cutover
+
 This source port starts at `05facc0`. The shared D3D11 overlay host in
 `loader/proxy/src/overlay_host.cpp` was compiled into `rsf_orchestrator_core` and every consumer
 that links its objects. Its decisions now live in the

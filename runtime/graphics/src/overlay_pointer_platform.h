@@ -18,10 +18,6 @@ void rsf_core_overlay_pointer_seed(const rsf_overlay_client_point*);
 void rsf_core_overlay_pointer_button(uint32_t bit, uint32_t down);
 void rsf_core_overlay_pointer_polled_buttons(uint32_t buttons);
 void rsf_core_overlay_pointer_contact(const rsf_overlay_client_point*, uint32_t id, uint32_t flags);
-void rsf_core_overlay_pointer_capture_lost(uint32_t id);
-/* A completed gesture returns the desired visibility, or -1 for no change. */
-int32_t rsf_core_overlay_pointer_gesture(uint32_t id, int32_t x, int32_t y,
-    uint32_t flags, uint64_t now, uint32_t visible);
 int32_t rsf_core_overlay_input_collect(rsf_overlay_input*, uint32_t width, uint32_t height, float delta_seconds,
     uint32_t (*sample_cursor)(void* window, rsf_overlay_client_point*));
 }

@@ -371,6 +371,13 @@ keeps the Vulkan calls. The extended fixture and live capture
 remain unrun.
 [Real Present image selection](research/rust-vulkan-dlss-present-capture.md#real-present-image-selection)
 
+The shared overlay now routes its window messages in Rust, including
+keyboard press and release pairing, touch gesture and handle ownership,
+and visible raw-input forwarding to the default procedure. The typed
+Win32 leaves and public input declarations match the existing caller
+paths. Live input and native linkage remain open.
+[Window message routing](research/rust-overlay-host.md#window-message-routing)
+
 ## Verification coverage
 
 | Requirement | Recorded evidence | Still open |

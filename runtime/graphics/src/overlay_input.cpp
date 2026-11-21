@@ -104,12 +104,6 @@ uint32_t touch_flags(bool down, bool up)
     return (down ? uint32_t(RSF_TOUCH_DOWN) : 0u) | (up ? uint32_t(RSF_TOUCH_UP) : 0u);
 }
 
-void record_contact(HWND window, POINT point, uint32_t id, bool down, bool up)
-{
-    const auto facts = client_point(window, point);
-    rsf_core_overlay_pointer_contact(&facts, id, touch_flags(down, up));
-}
-
 void seed_cursor_position()
 {
     HWND window = static_cast<HWND>(rsf_core_overlay_input_window());
@@ -289,230 +283,61 @@ LRESULT chain_to_game(WNDPROC forward, HWND window, UINT message, WPARAM wparam,
     return DefWindowProcW(window, message, wparam, lparam);
 }
 
-// The virtual key a mouse button message stands for, down, double-click and up alike.
-uint32_t mouse_button_key(UINT message, WPARAM wparam)
+// Typed Win32 message effects. Rust owns delivery, gesture sequencing and holds.
+uint32_t pointer_contact(uint32_t id, rsf_overlay_contact* out)
 {
-    switch (message) {
-    case WM_RBUTTONDOWN:
-    case WM_RBUTTONDBLCLK:
-    case WM_RBUTTONUP:
-        return VK_RBUTTON;
-    case WM_MBUTTONDOWN:
-    case WM_MBUTTONDBLCLK:
-    case WM_MBUTTONUP:
-        return VK_MBUTTON;
-    case WM_XBUTTONDOWN:
-    case WM_XBUTTONDBLCLK:
-    case WM_XBUTTONUP:
-        return GET_XBUTTON_WPARAM(wparam) == XBUTTON2 ? VK_XBUTTON2 : VK_XBUTTON1;
-    default:
-        return VK_LBUTTON;
-    }
+    POINTER_INFO info{};
+    if (!GetPointerInfo(id, &info)) return 0;
+    const uint32_t flags = (info.pointerFlags & POINTER_FLAG_CANCELED) != 0 ? uint32_t(RSF_TOUCH_CANCEL) : 0u;
+    *out = {info.ptPixelLocation.x, info.ptPixelLocation.y, info.pointerId, flags, int32_t(info.pointerType)};
+    return 1;
 }
+
+uint32_t touch_contacts(intptr_t handle, uint32_t count, rsf_overlay_contact* out, uint64_t* now)
+{
+    TOUCHINPUT contacts[32]{};
+    if (count > 32 || !GetTouchInputInfo(reinterpret_cast<HTOUCHINPUT>(handle), count, contacts, sizeof(TOUCHINPUT)))
+        return 0;
+    *now = GetTickCount64();
+    for (UINT i = 0; i < count; ++i) {
+        const auto& contact = contacts[i];
+        const auto flags = touch_flags((contact.dwFlags & TOUCHEVENTF_DOWN) != 0,
+            (contact.dwFlags & TOUCHEVENTF_UP) != 0);
+        out[i] = {TOUCH_COORD_TO_PIXEL(contact.x), TOUCH_COORD_TO_PIXEL(contact.y), contact.dwID, flags, PT_TOUCH};
+    }
+    return 1;
+}
+
+void deliver_contact(void* handle, const rsf_overlay_contact* contact, uint32_t screen_coordinates)
+{
+    const auto window = static_cast<HWND>(handle);
+    POINT point{contact->x, contact->y};
+    if (screen_coordinates && !ScreenToClient(window, &point)) return;
+    const auto facts = client_point(window, point);
+    rsf_core_overlay_pointer_contact(&facts, contact->id, contact->flags);
+}
+
+constexpr rsf_overlay_message_ops message_ops{
+    pointer_contact, touch_contacts,
+    [](intptr_t handle) { CloseTouchInputHandle(reinterpret_cast<HTOUCHINPUT>(handle)); },
+    deliver_contact,
+    [](void* window, intptr_t lparam) { record_mouse_position(static_cast<HWND>(window), lparam); },
+    [](uint32_t key, uint32_t down) { record_button(key, down != 0); },
+    [](void* window, intptr_t lparam) { record_raw_mouse(static_cast<HWND>(window), lparam); },
+    apply_visibility_change,
+};
+static_assert(sizeof(rsf_overlay_contact) == 20 && offsetof(rsf_overlay_contact, kind) == 16);
+static_assert(sizeof(rsf_overlay_message_ops) == 8 * sizeof(void*));
 
 LRESULT CALLBACK hooked_window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
 {
-    // Acquire, to pair with the release store install makes before it swaps the procedure in. It
-    // costs nothing on x64, and the alternative to reading a stale null here is chain_to_game
-    // handing the game's own message to DefWindowProcW instead of to the game.
     const WNDPROC forward = reinterpret_cast<WNDPROC>(rsf_core_overlay_input_original());
-    const bool visible = rsf_core_overlay_visible() != 0;
-
-    // Windows can promote touch to mouse messages for a legacy window such as Unity's.
-    // Their location must survive cursor polling, and a down/up between frames is still a tap.
-    const auto extra = static_cast<ULONG_PTR>(GetMessageExtraInfo());
-    if (visible && (extra & 0xffffff80u) == 0xff515780u &&
-        (message == WM_MOUSEMOVE || message == WM_LBUTTONDOWN || message == WM_LBUTTONUP)) {
-        rsf_core_overlay_note_pointer(1, 1);
-        POINT point{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
-        record_contact(window, point, 0, message == WM_LBUTTONDOWN, message == WM_LBUTTONUP);
-        return 0;
+    switch (rsf_core_overlay_route_message(window, message, wparam, lparam, &message_ops)) {
+    case RSF_OVERLAY_MESSAGE_CONSUME: return 0;
+    case RSF_OVERLAY_MESSAGE_CONSUME_XBUTTON: return TRUE;
+    case RSF_OVERLAY_MESSAGE_DEFAULT: return DefWindowProcW(window, message, wparam, lparam);
+    default: return chain_to_game(forward, window, message, wparam, lparam);
     }
-
-    switch (message) {
-    case WM_POINTERDOWN:
-    case WM_POINTERUPDATE:
-    case WM_POINTERUP: {
-        POINTER_INFO info{};
-        const bool have_info = GetPointerInfo(GET_POINTERID_WPARAM(wparam), &info) != FALSE;
-        const bool canceled = have_info && (info.pointerFlags & POINTER_FLAG_CANCELED) != 0;
-        if (have_info && info.pointerType == PT_TOUCH) {
-            const uint32_t flags = uint32_t(RSF_TOUCH_POINTER) |
-                touch_flags(message == WM_POINTERDOWN, message == WM_POINTERUP) |
-                (canceled ? uint32_t(RSF_TOUCH_CANCEL) : 0u);
-            const auto desired = rsf_core_overlay_pointer_gesture(info.pointerId, info.ptPixelLocation.x,
-                info.ptPixelLocation.y, flags, GetTickCount64(), rsf_core_overlay_visible());
-            if (desired >= 0) apply_visibility(desired != 0);
-        }
-        if (canceled) rsf_core_overlay_pointer_capture_lost(info.pointerId);
-        // Hidden: tracked above, and the game still receives every contact.
-        if (!visible) break;
-        const bool supported = have_info && (info.pointerType == PT_TOUCH || info.pointerType == PT_PEN);
-        rsf_core_overlay_note_pointer(1, supported ? 1u : 0u);
-        if (supported) {
-            POINT point = info.ptPixelLocation;
-            if (!canceled && ScreenToClient(window, &point))
-                record_contact(window, point, info.pointerId, message == WM_POINTERDOWN,
-                    message == WM_POINTERUP);
-            return 0;
-        }
-        break;
-    }
-    case WM_POINTERCAPTURECHANGED:
-        rsf_core_overlay_pointer_capture_lost(GET_POINTERID_WPARAM(wparam));
-        if (visible) return 0;
-        break;
-    case WM_TOUCH: {
-        TOUCHINPUT contacts[32]{};
-        const UINT count = LOWORD(wparam);
-        // Reading the contacts does not consume them: a hidden panel leaves the handle open for
-        // the game, which closes it.
-        if (count > 32 || !GetTouchInputInfo(reinterpret_cast<HTOUCHINPUT>(lparam), count, contacts, sizeof(TOUCHINPUT))) break;
-        const auto now = GetTickCount64();
-        int32_t desired = -1;
-        for (UINT i = 0; i < count; ++i) {
-            const POINT screen{TOUCH_COORD_TO_PIXEL(contacts[i].x), TOUCH_COORD_TO_PIXEL(contacts[i].y)};
-            const auto flags = touch_flags((contacts[i].dwFlags & TOUCHEVENTF_DOWN) != 0,
-                (contacts[i].dwFlags & TOUCHEVENTF_UP) != 0);
-            const auto change = rsf_core_overlay_pointer_gesture(contacts[i].dwID, screen.x, screen.y,
-                flags, now, rsf_core_overlay_visible());
-            if (change >= 0) desired = change;
-        }
-        if (desired >= 0) apply_visibility(desired != 0);
-        if (!visible) break;
-        rsf_core_overlay_note_pointer(count, count);
-        for (UINT i = 0; i < count; ++i) {
-            POINT point{TOUCH_COORD_TO_PIXEL(contacts[i].x), TOUCH_COORD_TO_PIXEL(contacts[i].y)};
-            if (ScreenToClient(window, &point))
-                record_contact(window, point, contacts[i].dwID, (contacts[i].dwFlags & TOUCHEVENTF_DOWN) != 0,
-                    (contacts[i].dwFlags & TOUCHEVENTF_UP) != 0);
-        }
-        CloseTouchInputHandle(reinterpret_cast<HTOUCHINPUT>(lparam));
-        return 0;
-    }
-    case WM_KILLFOCUS:
-        // Releases arrive at whatever took focus, not here, so anything still marked held would
-        // stay held for the life of the process.
-        rsf_core_overlay_route_focus_lost();
-        break;
-
-    case WM_ACTIVATEAPP:
-        if (wparam == FALSE) {
-            rsf_core_overlay_route_focus_lost();
-        }
-        break;
-
-    case WM_KEYDOWN:
-    case WM_SYSKEYDOWN:
-    case WM_KEYUP:
-    case WM_SYSKEYUP: {
-        const uint32_t key = static_cast<uint32_t>(wparam);
-        const uint32_t flags =
-            ((message == WM_KEYDOWN || message == WM_SYSKEYDOWN) ? uint32_t(RSF_OVERLAY_KEY_DOWN) : 0u) |
-            ((message == WM_SYSKEYDOWN || message == WM_SYSKEYUP) ? uint32_t(RSF_OVERLAY_KEY_SYSTEM) : 0u) |
-            ((lparam & 0x40000000) != 0 ? uint32_t(RSF_OVERLAY_KEY_REPEAT) : 0u);
-        if (rsf_core_overlay_route_key(key, flags, visible, apply_visibility_change)) return 0;
-        break;
-    }
-
-    case WM_CHAR:
-    case WM_DEADCHAR:
-        // Consumed but not delivered: rsf_overlay_input has no text field. Letting them through
-        // while the overlay has focus means typing into the overlay also types into the game.
-        if (visible) {
-            return 0;
-        }
-        break;
-
-    case WM_MOUSEMOVE:
-        if (visible) {
-            rsf_core_overlay_note_pointer(1, 1);
-            record_mouse_position(window, lparam);
-            return 0;
-        }
-        // Nothing is recorded while hidden, deliberately. Moves are the highest rate message the
-        // window gets and the overlay seeds its position when it opens, so this path stays free of
-        // both the lock and the work.
-        break;
-
-    case WM_LBUTTONDOWN:
-    case WM_LBUTTONDBLCLK:
-    case WM_RBUTTONDOWN:
-    case WM_RBUTTONDBLCLK:
-    case WM_MBUTTONDOWN:
-    case WM_MBUTTONDBLCLK:
-    case WM_XBUTTONDOWN:
-    case WM_XBUTTONDBLCLK: {
-        const uint32_t key = mouse_button_key(message, wparam);
-        const bool consumed = rsf_core_overlay_route_button(key, 1, visible) != 0;
-        if (visible) {
-            // A click can arrive without a preceding move.
-            record_mouse_position(window, lparam);
-            record_button(key, true);
-        }
-        if (consumed) return (message == WM_XBUTTONDOWN || message == WM_XBUTTONDBLCLK) ? TRUE : 0;
-        break;
-    }
-
-    case WM_LBUTTONUP:
-    case WM_RBUTTONUP:
-    case WM_MBUTTONUP:
-    case WM_XBUTTONUP: {
-        const uint32_t key = mouse_button_key(message, wparam);
-        const bool consumed = rsf_core_overlay_route_button(key, 0, visible) != 0;
-        if (visible) {
-            record_mouse_position(window, lparam);
-            record_button(key, false);
-        }
-        if (consumed) return message == WM_XBUTTONUP ? TRUE : 0;
-        break;
-    }
-
-    case WM_MOUSEWHEEL:
-        if (visible) {
-            // Notches, not pixels. WHEEL_DELTA is one detent and how far a detent scrolls is a
-            // choice about the interface, which belongs on the egui side rather than here.
-            // The position in this message is in screen coordinates, unlike every other mouse
-            // message, so it is ignored rather than converted.
-            const float notches = static_cast<float>(GET_WHEEL_DELTA_WPARAM(wparam)) / WHEEL_DELTA;
-            rsf_core_overlay_note_wheel(notches);
-            return 0;
-        }
-        break;
-
-    case WM_MOUSEHWHEEL:
-        // Consumed with nowhere to put it: the contract has one scroll axis. Passing it through
-        // while the overlay is open would scroll the game sideways under the menu.
-        if (visible) {
-            return 0;
-        }
-        break;
-
-    case WM_INPUT:
-        if (visible) {
-            // Read before it is stopped. This is the movement the overlay's own pointer follows:
-            // raw input is what the mouse reported, before the pointer was warped back to the
-            // centre and before Windows coalesced anything, which is what makes it smooth where
-            // following the window's own moves is chunky.
-            record_raw_mouse(window, lparam);
-            rsf_core_overlay_note_raw();
-
-            // Raw input is how a game reads mouse movement for aiming, so it has to stop here or
-            // the overlay's clicks steer as well. The default procedure still runs: WM_INPUT is
-            // documented as requiring it so the system can release the input data, and skipping
-            // that leaks for as long as the overlay is open.
-            //
-            // This only covers raw input delivered as a message. A game reading its device through
-            // DirectInput or XInput is not intercepted at all, and this cannot make it so.
-            return DefWindowProcW(window, message, wparam, lparam);
-        }
-        break;
-
-    default:
-        break;
-    }
-
-    return chain_to_game(forward, window, message, wparam, lparam);
 }
 
 constexpr rsf_overlay_window_ops window_ops{
