@@ -159,6 +159,15 @@ generate("games/unity-mono/src/bridge_abi.rs", "games/unity-mono/src/bridge_stat
          ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]",
           "--raw-line", "use rsf_game_sys::rsf_camera_frame;",
           "--with-derive-custom-struct", "rsf_unity_packet=Copy,Clone"])
+generate("games/unity-mono/src/runtime_abi.rs", "games/unity-mono/src/runtime_platform.h",
+         "rsf_(unity_runtime_platform|fg12_setup|native_fg_options|callback_host_setup|backend_result|backend_log_fn)|wchar_t",
+         "RSF_(FG_BACKEND_(DLSS|FSR3|FSR4|XESS|AUTO|ALL)|FG_FIXED|REFLEX_OFF|UI_MODE_BACKBUFFER_HUDLESS|"
+         "SR_(DLSS|FSR2|FSR3|FSR4|XESS|SPATIAL|AUTO)|CALLBACK_HOST_ABI_VERSION)",
+         ["-include", "rescaleframe/sr_session.h", "-Iruntime/orchestrator/include", "-Iruntime/contract/include",
+          "-Iruntime/backends/dlss/include", "-Iruntime/graphics/include", "-Iruntime/presentation/include",
+          "-Isdk/game/include"],
+         ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]",
+          "--raw-line", "use rsf_game_sys::rsf_game_probe;"])
 generate("runtime/orchestrator/src/render_abi.rs", "runtime/orchestrator/include/rescaleframe/frame_assembly.h",
          "rsf_(frame_resources|pipeline_camera_frame|dlss_frame|fg_choice|render_link|sr_session_setup|sr_session_status|sr_provider|fg_host|fg_session_status|generation_provider|native_fg_status|motion_resolve_params|render_settings|sharpening_options)",
          "RSF_(FRAME_ASSEMBLY_ABI_VERSION|DLSS_ABI_VERSION|FG_(BACKEND_(AUTO|ALL)|ABI_VERSION|OFF|FIXED|AUTO|DYNAMIC|STAT_(TOTAL_PRESENTED|GENERATED_PRESENTED|PRESENT_CALLBACKS|ACTIVITY))|NATIVE_FG_REASON_NONE|PACING_(NONE|REFLEX|XELL)|REFLEX_(OFF|BOOST)|RENDER_LINK_ABI_VERSION|SR_SESSION_ABI_VERSION|BACKEND_ABI_VERSION|API_D3D12|SR_(FSR2|XESS)|RENDER_FRONTEND_ABI_VERSION|SHARPENING_ABI_VERSION)",

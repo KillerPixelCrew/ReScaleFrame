@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: MIT
-//! Unity Mono game plugin: build detection, the renderer lifecycle, the Mono helper bootstrap and
-//! the frame state of the shared D3D12 render bridge (bridge_state.rs). bridge.cpp keeps the Unity
-//! graphics interfaces, D3D12 commands and CPU input events, and runtime_host.cpp the runtime host
-//! entry points; plugin.cpp lends the bridge through rsf_unity_plugin_platform. The Unity package
-//! links this archive for the bridge state only.
+//! Unity Mono game plugin: build detection, the renderer lifecycle, the Mono helper bootstrap, the
+//! frame state of the shared D3D12 render bridge (bridge_state.rs), and the Runtime setup behind
+//! the rsf_unity_* exports (runtime_setup.rs) with its [UnitySR] settings (runtime_config.rs).
+//! bridge.cpp keeps the Unity graphics interfaces, D3D12 commands and CPU input events;
+//! plugin.cpp lends the bridge through rsf_unity_plugin_platform, and runtime_host.cpp keeps the
+//! exports and lends the typed Runtime calls through rsf_unity_runtime_platform. The Unity package
+//! links this archive for the bridge state and the [UnitySR] path settings.
 #![cfg(any(windows, test))]
 
 mod bridge_abi;
@@ -13,6 +15,10 @@ mod lifecycle;
 #[cfg(windows)]
 mod mono;
 mod plugin_abi;
+mod runtime_abi;
+mod runtime_config;
+#[cfg(windows)]
+mod runtime_setup;
 
 use rsf_game_sys::{rsf_detection, rsf_game_probe};
 use std::ffi::CStr;
