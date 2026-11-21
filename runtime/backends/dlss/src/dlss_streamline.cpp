@@ -29,18 +29,42 @@
 #define RSF_HAVE_SIGNATURE_CHECK 0
 #endif
 
+#include <cstddef>
 #include <cstdio>
-#include <memory>
 
 struct rsf_streamline_sr_options {
     uint32_t quality, width, height, hdr, auto_exposure, alpha, preset;
 };
 
+using rsf_streamline_sr_entry_addresses = void*[12];
+
+struct rsf_streamline_sr_preferences {
+    const wchar_t* plugins;
+    const wchar_t* logs;
+    const char* engine_version;
+    const char* project_id;
+    uint64_t flags;
+    uint32_t engine, application_id, render_api, log_level, show_console, feature;
+};
+
+struct rsf_streamline_sr_startup {
+    void* (*allocate)();
+    void (*dispose)(void*);
+    void (*set_log)(rsf_dlss_log_fn, void*);
+    void (*missing_entry)(const char*);
+    void (*bind_entries)(void*, const rsf_streamline_sr_entry_addresses*);
+    int32_t (*init)(void*, const rsf_streamline_sr_preferences*);
+    void* (*host_module)(void*);
+    void* (*host_device)(void*);
+    int32_t (*register_device)(void*, void*);
+    int32_t (*lookup_feature)(void*, const char*, void**);
+    void (*bind_features)(void*, void*, void*);
+    void (*report)(const char*);
+};
+
 struct rsf_streamline_sr_platform {
     void* (*load)(const wchar_t*, const rsf_dlss_setup*);
-    int32_t (*start)(void*, const rsf_dlss_setup*, const wchar_t*, const wchar_t*, void**);
-    int32_t (*borrow_host)(void*, rsf_dlss_log_fn, void*, void**, void**);
-    int32_t (*device)(void*, void*, uint32_t*);
+    const rsf_streamline_sr_startup* startup;
     int32_t (*support)(void*, void*, uint32_t, rsf_dlss_support*);
     int32_t (*plan)(void*, rsf_dlss_plan*);
     int32_t (*present)(void*, void*, uint32_t, uint32_t, uint32_t);
@@ -55,23 +79,6 @@ struct rsf_streamline_sr_platform {
     void (*destroy)(void*);
 };
 
-using rsf_streamline_sr_entry_addresses = void*[12];
-
-extern "C" {
-int32_t rsf_core_dlss_streamline_resolve_entries(void*, uint32_t, rsf_streamline_sr_entry_addresses*,
-    void (*)(const char*));
-int32_t rsf_core_dlss_streamline_resolve_features(void*, uint32_t,
-    int32_t (*)(void*, const char*, void**), void (*)(void*, void*, void*), uint32_t*);
-}
-
-// sl_security.h defines globals, so it belongs in exactly one translation unit.
-bool rsf_dlss_verify_runtime_signature(const wchar_t* path)
-{
-#if RSF_HAVE_SIGNATURE_CHECK
-    return sl::security::verifyEmbeddedSignature(path);
-#else
-    (void)path;
-    return false;
 #endif
 }
 
@@ -108,9 +115,10 @@ struct Native {
 
     // The SDK borrows this array and Rust owns the strings through shutdown.
     const wchar_t* plugin_paths[1]{};
+    sl::Feature feature{};
 };
 
-void set_log(rsf_dlss_log_fn callback, void* user)
+void set_log(rsf_dlss_log_fn callback, void* user) noexcept
 {
     if (callback) {
         rsf_core_streamline_log_set(RSF_STREAMLINE_LOG_LEGACY_SR, 0, callback, user, 0);
@@ -147,16 +155,12 @@ void missing_entry(const char* name) noexcept
     say("entry point %s is missing from the interposer", name);
 }
 
-bool bind_entries(HMODULE module, Entries& entries, bool owner) noexcept
+void bind_entries(void* native, const rsf_streamline_sr_entry_addresses* addresses) noexcept
 {
-    rsf_streamline_sr_entry_addresses addresses{};
-    if (rsf_core_dlss_streamline_resolve_entries(module, owner, &addresses, missing_entry) != RSF_DLSS_OK)
-        return false;
-
-    // Keep the vendor function pointer types here. The raw slots follow Rust's ENTRY_NAMES.
+    auto& entries = static_cast<Native*>(native)->sl;
     const auto& [is_feature_supported, get_feature_function, get_feature_requirements, set_constants,
         set_tag_for_frame, evaluate_feature, free_resources, init, shutdown, set_device,
-        get_new_frame_token, allocate_resources] = addresses;
+        get_new_frame_token, allocate_resources] = *addresses;
     entries.is_feature_supported = reinterpret_cast<PFun_slIsFeatureSupported*>(is_feature_supported);
     entries.get_feature_function = reinterpret_cast<PFun_slGetFeatureFunction*>(get_feature_function);
     entries.get_feature_requirements = reinterpret_cast<PFun_slGetFeatureRequirements*>(get_feature_requirements);
@@ -169,7 +173,6 @@ bool bind_entries(HMODULE module, Entries& entries, bool owner) noexcept
     entries.set_device = reinterpret_cast<PFun_slSetD3DDevice*>(set_device);
     entries.get_new_frame_token = reinterpret_cast<PFun_slGetNewFrameToken*>(get_new_frame_token);
     entries.allocate_resources = reinterpret_cast<PFun_slAllocateResources*>(allocate_resources);
-    return true;
 }
 
 sl::Boolean flag(uint32_t value)
@@ -201,116 +204,67 @@ void* load_owned(const wchar_t* path, const rsf_dlss_setup* setup) noexcept try
     return rsf::load_interposer(path, setup->require_signature != 0, setup->log, setup->log_user);
 } catch (...) { return nullptr; }
 
-int32_t open_owned(HMODULE module, const rsf_dlss_setup* setup,
-    const wchar_t* plugin_directory, const wchar_t* log_directory, void** out)
+void* allocate_native() noexcept try
 {
-    auto self = std::make_unique<Native>();
-    if (!bind_entries(module, self->sl, true)) return RSF_DLSS_ERROR_MISSING_ENTRY_POINT;
+    return new Native();
+} catch (...) { return nullptr; }
 
+void dispose_native(void* native) noexcept
+{
+    delete static_cast<Native*>(native);
+}
+
+int32_t init_owned(void* native, const rsf_streamline_sr_preferences* input) noexcept try
+{
+    auto& self = *static_cast<Native*>(native);
     sl::Preferences preferences{};
-    // Manual hooking is what makes this integration possible at all. The regular mode expects to
-    // be in place before the swap chain exists; we attach to a game that is already rendering, and
-    // in manual hooking the D3D device may be created before slInit.
-    preferences.flags |= sl::PreferenceFlags::eUseManualHooking;
-    // Required by slSetTagForFrame, which is what this integration uses: tagging resources against
-    // a frame token is what lets Streamline know a tag belongs to the frame being evaluated rather
-    // than to whatever was last set. Without the flag the call is refused outright, and the
-    // evaluate that follows fails with nothing wrong in the frame itself.
-    preferences.flags |= sl::PreferenceFlags::eUseFrameBasedResourceTagging;
-    preferences.renderAPI = sl::RenderAPI::eD3D11;
-    preferences.logLevel = sl::LogLevel::eDefault;
-    preferences.showConsole = false;
+    preferences.flags |= static_cast<sl::PreferenceFlags>(input->flags);
+    preferences.renderAPI = static_cast<sl::RenderAPI>(input->render_api);
+    preferences.logLevel = static_cast<sl::LogLevel>(input->log_level);
+    preferences.showConsole = input->show_console != 0;
     preferences.logMessageCallback = streamline_message;
-
-    static const sl::Feature features[] = {sl::kFeatureDLSS};
-    preferences.featuresToLoad = features;
+    self.feature = static_cast<sl::Feature>(input->feature);
+    preferences.featuresToLoad = &self.feature;
     preferences.numFeaturesToLoad = 1;
-
-    if (plugin_directory) {
-        self->plugin_paths[0] = plugin_directory;
-        preferences.pathsToPlugins = self->plugin_paths;
+    if (input->plugins) {
+        self.plugin_paths[0] = input->plugins;
+        preferences.pathsToPlugins = self.plugin_paths;
         preferences.numPathsToPlugins = 1;
     }
-    preferences.pathToLogsAndData = log_directory;
-    // NGX will not start without an identity, and DLSS is an NGX feature, so getting this wrong
-    // costs the whole thing: the plugin loads and then reports "Missing NGX context". An injected
-    // integration has no application id of its own, since that belongs to the game's publisher, so
-    // the engine route is the one available. For a UE4 title it is also just true.
-    preferences.applicationId = setup->application_id;
-    switch (setup->engine) {
-    case RSF_DLSS_ENGINE_UNREAL:
-        preferences.engine = sl::EngineType::eUnreal;
-        break;
-    case RSF_DLSS_ENGINE_UNITY:
-        preferences.engine = sl::EngineType::eUnity;
-        break;
-    default:
-        preferences.engine = sl::EngineType::eCustom;
-        break;
-    }
-    preferences.engineVersion = setup->engine_version_utf8;
-    preferences.projectId = setup->project_id_utf8;
-
-    const auto result = self->sl.init(preferences, sl::kSDKVersion);
+    preferences.pathToLogsAndData = input->logs;
+    preferences.applicationId = input->application_id;
+    preferences.engine = static_cast<sl::EngineType>(input->engine);
+    preferences.engineVersion = input->engine_version;
+    preferences.projectId = input->project_id;
+    const auto result = self.sl.init(preferences, sl::kSDKVersion);
     if (result != sl::Result::eOk) {
         say("slInit failed with result %u", static_cast<unsigned>(result));
         return RSF_DLSS_ERROR_INIT_FAILED;
     }
-    *out = self.release();
-    say("streamline loaded and initialised");
-    return RSF_DLSS_OK;
-}
-
-int32_t start_owned(void* module, const rsf_dlss_setup* setup,
-    const wchar_t* plugins, const wchar_t* logs, void** out) noexcept try
-{
-    set_log(setup->log, setup->log_user);
-    const auto result = open_owned(static_cast<HMODULE>(module), setup, plugins, logs, out);
-    if (result != RSF_DLSS_OK) set_log(nullptr, nullptr);
-    return result;
-} catch (...) {
-    set_log(nullptr, nullptr);
-    return RSF_DLSS_ERROR_INIT_FAILED;
-}
-
-int32_t borrow_host(void* raw_host, rsf_dlss_log_fn log, void* user, void** out, void** device) noexcept try
-{
-    auto* host = static_cast<rsf_streamline_host*>(raw_host);
-    rsf_streamline_graphics graphics{};
-    graphics.struct_size = sizeof(graphics);
-    const auto module = static_cast<HMODULE>(rsf_streamline_host_module(host));
-    if (!module || rsf_streamline_host_graphics(host, &graphics) != RSF_BACKEND_OK ||
-        !graphics.native_device) {
-        return RSF_DLSS_ERROR_NOT_READY;
-    }
-    auto self = std::make_unique<Native>();
-    if (!bind_entries(module, self->sl, false)) return RSF_DLSS_ERROR_MISSING_ENTRY_POINT;
-    uint32_t features = 0;
-    const auto resolved = rsf_core_dlss_streamline_resolve_features(self.get(), 1,
-        lookup_dlss_function, bind_dlss_functions, &features);
-    if (resolved != RSF_DLSS_OK)
-        return resolved == RSF_DLSS_ERROR_FEATURE_FAILED ? RSF_DLSS_ERROR_INIT_FAILED : resolved;
-    set_log(log, user);
-    *device = graphics.native_device;
-    *out = self.release();
-    say("DLSS SR shares the D3D12 FG host and CPU frame token");
     return RSF_DLSS_OK;
 } catch (...) { return RSF_DLSS_ERROR_INIT_FAILED; }
 
-int32_t set_device(void* native, void* device, uint32_t* features) noexcept try
+void* host_module(void* raw_host) noexcept
 {
-    auto& self = *static_cast<Native*>(native);
-    const auto result = self.sl.set_device(device);
+    return rsf_streamline_host_module(static_cast<rsf_streamline_host*>(raw_host));
+}
+
+void* host_device(void* raw_host) noexcept
+{
+    rsf_streamline_graphics graphics{};
+    graphics.struct_size = sizeof(graphics);
+    return rsf_streamline_host_graphics(static_cast<rsf_streamline_host*>(raw_host), &graphics) == RSF_BACKEND_OK
+        ? graphics.native_device : nullptr;
+}
+
+int32_t register_device(void* native, void* device) noexcept try
+{
+    const auto result = static_cast<Native*>(native)->sl.set_device(device);
     if (result != sl::Result::eOk) {
         say("slSetD3DDevice failed with result %u", static_cast<unsigned>(result));
         return RSF_DLSS_ERROR_FEATURE_FAILED;
     }
-    const auto resolved = rsf_core_dlss_streamline_resolve_features(native, 0,
-        lookup_dlss_function, bind_dlss_functions, features);
-    if (resolved == RSF_DLSS_ERROR_MISSING_ENTRY_POINT) {
-        say("DLSS feature functions are not available");
-    }
-    return resolved;
+    return RSF_DLSS_OK;
 } catch (...) { return RSF_DLSS_ERROR_FEATURE_FAILED; }
 
 int32_t present(void* native, void* swapchain, uint32_t interval, uint32_t flags, uint32_t begin) noexcept try
@@ -572,13 +526,24 @@ int32_t shutdown(void* native) noexcept try
 void destroy(void* native) noexcept
 {
     say("streamline shut down");
-    delete static_cast<Native*>(native);
+    dispose_native(native);
 }
 
-constexpr rsf_streamline_sr_platform platform{load_owned, start_owned, borrow_host, set_device, query_support,
+constexpr rsf_streamline_sr_startup startup{
+    allocate_native, dispose_native, set_log, missing_entry, bind_entries, init_owned, host_module, host_device,
+    register_device, lookup_dlss_function, bind_dlss_functions, [](const char* text) { say(text); },
+};
+static_assert(sizeof(rsf_streamline_sr_startup) == 12 * sizeof(void*));
+static_assert(sizeof(rsf_streamline_sr_preferences) == 64 && offsetof(rsf_streamline_sr_preferences, flags) == 32);
+static_assert(uint64_t(sl::PreferenceFlags::eUseManualHooking) == (1ull << 2) &&
+    uint64_t(sl::PreferenceFlags::eUseFrameBasedResourceTagging) == (1ull << 7) &&
+    uint32_t(sl::RenderAPI::eD3D11) == 0 && uint32_t(sl::LogLevel::eDefault) == 1 && sl::kFeatureDLSS == 0);
+static_assert(uint32_t(sl::EngineType::eCustom) == 0 && uint32_t(sl::EngineType::eUnreal) == RSF_DLSS_ENGINE_UNREAL &&
+    uint32_t(sl::EngineType::eUnity) == RSF_DLSS_ENGINE_UNITY);
+constexpr rsf_streamline_sr_platform platform{load_owned, &startup, query_support,
     render_plan, present, get_token, set_constants, set_options, set_tags, evaluate, drain,
     release_viewport, shutdown, destroy};
-static_assert(sizeof(rsf_streamline_sr_platform) == 16 * sizeof(void*));
+static_assert(sizeof(rsf_streamline_sr_platform) == 14 * sizeof(void*));
 static_assert(RSF_DLSS_ERROR_LOAD_FAILED == -4);
 static_assert(sizeof(rsf_streamline_sr_options) == 28);
 static_assert(sizeof(rsf_dlss_setup) == 88 && sizeof(rsf_dlss_support) == 36 &&

@@ -23,6 +23,14 @@ const NOT_READY: i32 = -8;
 const FEATURE_FAILED: i32 = -9;
 const OPTIMAL: u32 = 1;
 const OPTIONS: u32 = 2;
+const USE_MANUAL_HOOKING: u64 = 1 << 2;
+const USE_FRAME_BASED_RESOURCE_TAGGING: u64 = 1 << 7;
+const ENGINE_CUSTOM: u32 = 0;
+const ENGINE_UNREAL: u32 = 1;
+const ENGINE_UNITY: u32 = 2;
+const RENDER_D3D11: u32 = 0;
+const LOG_DEFAULT: u32 = 1;
+const FEATURE_DLSS: u32 = 0;
 
 const SHARED_ENTRY_COUNT: usize = 7;
 const ENTRY_NAMES: [&CStr; 12] = [
@@ -40,18 +48,19 @@ const ENTRY_NAMES: [&CStr; 12] = [
     c"slAllocateResources",
 ];
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_streamline_resolve_entries(
+type Entries = [Handle; ENTRY_NAMES.len()];
+
+unsafe fn resolve_entries(
     module: Handle,
-    owner: u32,
-    addresses: &mut [Handle; ENTRY_NAMES.len()],
+    owned: bool,
+    addresses: &mut Entries,
     missing: unsafe extern "C" fn(*const c_char),
 ) -> i32 {
     // The shared host already owns initialization, the device, tokens and allocation.
-    let count = if owner == 0 {
-        SHARED_ENTRY_COUNT
-    } else {
+    let count = if owned {
         ENTRY_NAMES.len()
+    } else {
+        SHARED_ENTRY_COUNT
     };
     for (address, name) in addresses.iter_mut().zip(&ENTRY_NAMES[..count]) {
         let Some(entry) = (unsafe { GetProcAddress(module, name.as_ptr().cast()) }) else {
@@ -63,10 +72,9 @@ unsafe extern "C" fn rsf_core_dlss_streamline_resolve_entries(
     OK
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_streamline_resolve_features(
+unsafe fn resolve_features(
     native: Handle,
-    strict: u32,
+    strict: bool,
     lookup: unsafe extern "C" fn(Handle, *const c_char, &mut Handle) -> i32,
     bind: unsafe extern "C" fn(Handle, Handle, Handle),
     features: &mut u32,
@@ -79,7 +87,7 @@ unsafe extern "C" fn rsf_core_dlss_streamline_resolve_features(
     ] {
         let status = unsafe { lookup(native, name.as_ptr(), address) };
         // Only the owned-device probe uses addresses returned alongside a vendor error.
-        if status == FEATURE_FAILED || (strict != 0 && status != OK) {
+        if status == FEATURE_FAILED || (strict && status != OK) {
             return status;
         }
     }
@@ -93,6 +101,188 @@ unsafe extern "C" fn rsf_core_dlss_streamline_resolve_features(
         OK
     } else {
         MISSING_ENTRY
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn shared_features_refuse_a_vendor_error_even_with_an_address() {
+    use std::cell::Cell;
+    use std::ptr::without_provenance_mut;
+
+    thread_local! {
+        static BOUND: Cell<bool> = const { Cell::new(false) };
+    }
+
+    unsafe extern "C" fn lookup(_: Handle, name: *const c_char, address: &mut Handle) -> i32 {
+        if unsafe { CStr::from_ptr(name) } == c"slDLSSGetOptimalSettings" {
+            *address = without_provenance_mut(1);
+            MISSING_ENTRY
+        } else {
+            *address = without_provenance_mut(2);
+            OK
+        }
+    }
+    unsafe extern "C" fn bind(_: Handle, optimal: Handle, options: Handle) {
+        assert_eq!((optimal.addr(), options.addr()), (1, 2));
+        BOUND.set(true);
+    }
+    let mut features = 0;
+    let result = unsafe { resolve_features(null_mut(), true, lookup, bind, &mut features) };
+    assert_eq!((result, features, BOUND.get()), (MISSING_ENTRY, 0, false));
+    let result = unsafe { resolve_features(null_mut(), false, lookup, bind, &mut features) };
+    assert_eq!(
+        (result, features, BOUND.get()),
+        (OK, OPTIMAL | OPTIONS, true)
+    );
+}
+
+#[repr(C)]
+struct InitPreferences {
+    plugins: *const u16,
+    logs: *const u16,
+    engine_version: *const c_char,
+    project_id: *const c_char,
+    flags: u64,
+    engine: u32,
+    application_id: u32,
+    render_api: u32,
+    log_level: u32,
+    show_console: u32,
+    feature: u32,
+}
+
+#[repr(C)]
+struct Startup {
+    allocate: unsafe extern "C" fn() -> Handle,
+    dispose: unsafe extern "C" fn(Handle),
+    set_log: unsafe extern "C" fn(Log, Handle),
+    missing_entry: unsafe extern "C" fn(*const c_char),
+    bind_entries: unsafe extern "C" fn(Handle, &Entries),
+    init: unsafe extern "C" fn(Handle, &InitPreferences) -> i32,
+    host_module: unsafe extern "C" fn(Handle) -> Handle,
+    host_device: unsafe extern "C" fn(Handle) -> Handle,
+    register_device: unsafe extern "C" fn(Handle, Handle) -> i32,
+    lookup_feature: unsafe extern "C" fn(Handle, *const c_char, &mut Handle) -> i32,
+    bind_features: unsafe extern "C" fn(Handle, Handle, Handle),
+    report: unsafe extern "C" fn(*const c_char),
+}
+
+impl Startup {
+    fn open(&self, module: Handle, owned: bool) -> Result<NonNull<c_void>, i32> {
+        let native = NonNull::new(unsafe { (self.allocate)() }).ok_or(INIT_FAILED)?;
+        let mut entries = [null_mut(); ENTRY_NAMES.len()];
+        let result = unsafe { resolve_entries(module, owned, &mut entries, self.missing_entry) };
+        if result != OK {
+            unsafe { (self.dispose)(native.as_ptr()) };
+            return Err(result);
+        }
+        unsafe { (self.bind_entries)(native.as_ptr(), &entries) };
+        Ok(native)
+    }
+
+    fn start_owned(
+        &self,
+        module: Handle,
+        setup: &Setup,
+        plugins: *const u16,
+        logs: *const u16,
+    ) -> Result<NonNull<c_void>, i32> {
+        unsafe { (self.set_log)(setup.log, setup.log_user) };
+        let native = match self.open(module, true) {
+            Ok(native) => native,
+            Err(result) => {
+                unsafe { (self.set_log)(None, null_mut()) };
+                return Err(result);
+            }
+        };
+        let preferences = InitPreferences {
+            plugins,
+            logs,
+            engine_version: setup.engine_version_utf8,
+            project_id: setup.project_id_utf8,
+            flags: USE_MANUAL_HOOKING | USE_FRAME_BASED_RESOURCE_TAGGING,
+            engine: match setup.engine {
+                ENGINE_UNREAL => ENGINE_UNREAL,
+                ENGINE_UNITY => ENGINE_UNITY,
+                _ => ENGINE_CUSTOM,
+            },
+            application_id: setup.application_id,
+            render_api: RENDER_D3D11,
+            log_level: LOG_DEFAULT,
+            show_console: 0,
+            feature: FEATURE_DLSS,
+        };
+        let result = unsafe { (self.init)(native.as_ptr(), &preferences) };
+        if result != OK {
+            unsafe {
+                (self.dispose)(native.as_ptr());
+                (self.set_log)(None, null_mut());
+            }
+            return Err(result);
+        }
+        unsafe { (self.report)(c"streamline loaded and initialised".as_ptr()) };
+        Ok(native)
+    }
+
+    fn borrow_host(
+        &self,
+        host: Handle,
+        log: Log,
+        user: Handle,
+    ) -> Result<(NonNull<c_void>, ComRef), i32> {
+        let module = unsafe { (self.host_module)(host) };
+        if module.is_null() {
+            return Err(NOT_READY);
+        }
+        let device = unsafe { (self.host_device)(host) };
+        if device.is_null() {
+            return Err(NOT_READY);
+        }
+        let native = self.open(module, false)?;
+        let mut features = 0;
+        let result = unsafe {
+            resolve_features(
+                native.as_ptr(),
+                true,
+                self.lookup_feature,
+                self.bind_features,
+                &mut features,
+            )
+        };
+        if result != OK {
+            unsafe { (self.dispose)(native.as_ptr()) };
+            return Err(if result == FEATURE_FAILED {
+                INIT_FAILED
+            } else {
+                result
+            });
+        }
+        unsafe {
+            (self.set_log)(log, user);
+            (self.report)(c"DLSS SR shares the D3D12 FG host and CPU frame token".as_ptr());
+        }
+        Ok((native, unsafe { ComRef::retain(device) }))
+    }
+
+    fn set_device(&self, native: Handle, device: Handle, features: &mut u32) -> i32 {
+        let result = unsafe { (self.register_device)(native, device) };
+        if result != OK {
+            return result;
+        }
+        let result = unsafe {
+            resolve_features(
+                native,
+                false,
+                self.lookup_feature,
+                self.bind_features,
+                features,
+            )
+        };
+        if result == MISSING_ENTRY {
+            unsafe { (self.report)(c"DLSS feature functions are not available".as_ptr()) };
+        }
+        result
     }
 }
 
@@ -111,9 +301,7 @@ struct Options {
 #[repr(C)]
 struct Platform {
     load: unsafe extern "C" fn(*const u16, &Setup) -> Handle,
-    start: unsafe extern "C" fn(Handle, &Setup, *const u16, *const u16, &mut Handle) -> i32,
-    borrow_host: unsafe extern "C" fn(Handle, Log, Handle, &mut Handle, &mut Handle) -> i32,
-    device: unsafe extern "C" fn(Handle, Handle, &mut u32) -> i32,
+    startup: &'static Startup,
     support: unsafe extern "C" fn(Handle, Handle, u32, *mut Support) -> i32,
     plan: unsafe extern "C" fn(Handle, *mut Plan) -> i32,
     present: unsafe extern "C" fn(Handle, Handle, u32, u32, u32) -> i32,
@@ -130,7 +318,10 @@ struct Platform {
 
 const _: () = {
     assert!(size_of::<Options>() == 28);
-    assert!(size_of::<Platform>() == 16 * size_of::<Handle>());
+    assert!(size_of::<InitPreferences>() == 64);
+    assert!(std::mem::offset_of!(InitPreferences, flags) == 32);
+    assert!(size_of::<Startup>() == 12 * size_of::<Handle>());
+    assert!(size_of::<Platform>() == 14 * size_of::<Handle>());
 };
 
 enum Route {
@@ -222,13 +413,12 @@ unsafe extern "C" fn rsf_core_dlss_streamline_load(
     let [plugins, logs] = directories
         .each_ref()
         .map(|directory| directory.as_deref().map_or(null(), <[u16]>::as_ptr));
-    let mut native = null_mut();
-    let result = unsafe { (platform.start)(module.as_ptr(), setup, plugins, logs, &mut native) };
-    if result != OK {
-        return result;
-    }
-    let Some(native) = NonNull::new(native) else {
-        return INIT_FAILED;
+    let native = match platform
+        .startup
+        .start_owned(module.as_ptr(), setup, plugins, logs)
+    {
+        Ok(native) => native,
+        Err(result) => return result,
     };
     *state = Some(Session {
         native,
@@ -257,26 +447,13 @@ unsafe extern "C" fn rsf_core_dlss_streamline_share_host(
     if state.is_some() {
         return NOT_READY;
     }
-    let mut native = null_mut();
-    let mut device = null_mut();
-    let status =
-        unsafe { (platform.borrow_host)(host.as_ptr(), log, user, &mut native, &mut device) };
-    if status != OK {
-        return status;
-    }
-    let Some(native) = NonNull::new(native) else {
-        return NOT_READY;
+    let (native, device) = match platform.startup.borrow_host(host.as_ptr(), log, user) {
+        Ok(route) => route,
+        Err(result) => return result,
     };
-    if device.is_null() {
-        unsafe { (platform.destroy)(native.as_ptr()) };
-        return NOT_READY;
-    }
     *state = Some(Session {
         native,
-        route: Route::Shared {
-            host,
-            device: unsafe { ComRef::retain(device) },
-        },
+        route: Route::Shared { host, device },
         features: OPTIMAL | OPTIONS,
         applied: [None; 2],
         _module: None,
@@ -306,7 +483,9 @@ unsafe extern "C" fn rsf_core_dlss_streamline_set_device(
         return NOT_READY;
     };
     let mut capabilities = 0;
-    let result = unsafe { (platform.device)(session.native.as_ptr(), device, &mut capabilities) };
+    let result = platform
+        .startup
+        .set_device(session.native.as_ptr(), device, &mut capabilities);
     if matches!(result, OK | MISSING_ENTRY) {
         session.route = Route::Owned(Some(unsafe { ComRef::retain(device) }));
         session.features = capabilities;

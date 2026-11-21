@@ -1053,6 +1053,12 @@ the required entry order for owned and borrowed hosts and the
 SDK-disabled C++ stubs. Enabled and disabled builds and binary
 exports remain to be checked. [Streamline resolution](research/rust-d3d11-streamline-resolution.md)
 
+D3D11 Streamline SR now owns legacy initialization, shared-host
+borrowing and the device feature sequence in Rust. The typed
+initializer keeps the pinned SDK preferences and the same
+feature and log effects. Builds, fixtures and live checks remain open.
+[Owned and shared SR startup](research/rust-d3d11-streamline-resolution.md#owned-and-shared-sr-startup)
+
 Anomaly's Rust motion owner now checks the existing Standard and AVX
 profile guards in the same order. The native leaf supplies the profile
 and the guarded reader. FidelityFX Vulkan SR and FG also share one

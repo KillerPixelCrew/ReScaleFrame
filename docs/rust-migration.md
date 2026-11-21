@@ -452,6 +452,11 @@ and initialize capture. Source checks matched the enabled and
 disabled declarations. Builds, fixtures and live checks remain open.
 [FidelityFX Vulkan SR startup](research/rust-vulkan-ffx-sr-images.md#fidelityfx-vulkan-sr-startup)
 
+D3D11 Streamline SR startup and shared-host borrowing now run in
+Rust. The typed SDK initialization and feature calls retain their
+native boundaries. Builds, fixtures and live checks remain open.
+[Owned and shared SR startup](research/rust-d3d11-streamline-resolution.md#owned-and-shared-sr-startup)
+
 ## D3D11 observer startup probe
 
 Compared with `fe267be4`, the Rust observer owns the temporary

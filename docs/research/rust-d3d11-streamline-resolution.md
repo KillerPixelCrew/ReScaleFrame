@@ -39,3 +39,28 @@ preferences, resource tags and host platform sources matched the baseline.
 Pinned Rust formatting, locked offline Cargo metadata and whitespace checks
 passed. Compile and link for both SDK configurations, PE export comparison,
 Clippy, tests, and device and game verification remain pending.
+
+## Owned and shared SR startup
+
+Compared with `d4d7504c`, Rust now holds the native capsule during
+owned startup and shared-host borrowing. Owned startup establishes
+the log sink, resolves the twelve entries, and calls the typed
+initializer. The initializer still adds manual hooking and
+frame-based tagging to the SDK defaults, loads DLSS, and retains
+the optional plugin paths. Application and engine identity, log
+level and D3D11 remain at the existing values.
+
+Borrowing still checks the existing host module and native device,
+resolves the seven shared entries and strictly checks the feature
+pair before publishing the borrowed route. Owned device registration
+still calls `slSetD3DDevice` before resolving the pair. Rust retains
+the distinction between a shared lookup error and an owned lookup
+that returns a usable address alongside an error. Failed startup
+disposes of the capsule and clears its log registration.
+
+The private startup table has 12 callbacks and the main table 14.
+Source comparison matched their layouts, the pinned manual-hooking
+and tagging preferences, the public signatures and disabled stubs.
+The added fixture covers the strict and owned feature distinction.
+Pinned formatting, locked offline metadata and whitespace passed.
+Builds, fixtures and Standard and AVX live verification remain open.
