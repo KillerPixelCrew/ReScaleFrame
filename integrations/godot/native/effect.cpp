@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "effect.h"
+#include "godot_platform.h"
 #include <rescaleframe/version.h>
 #include <godot_cpp/classes/rd_texture_format.hpp>
 #include <godot_cpp/classes/rd_shader_source.hpp>
@@ -12,13 +13,44 @@
 #include <godot_cpp/classes/rendering_device.hpp>
 #include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/core/class_db.hpp>
-#include <algorithm>
-#include <cmath>
+#include <godot_cpp/variant/projection.hpp>
+#include <godot_cpp/variant/transform3d.hpp>
+#include <godot_cpp/variant/vector2i.hpp>
+#include <cstddef>
+
+// The snapshot, callback count, capture request, buffer and capture admission, the motion
+// classification and the probe's published stage, reason and inactive pipeline claims are owned by
+// native/effect.rs. This class keeps its registration and callback contract, the scene buffer,
+// scene data and RenderingDevice reads, the readback compute pass and the status Dictionary keys,
+// and lends them as rsf_godot_effect_leaves (godot_platform.h).
+static_assert(sizeof(rsf_godot_effect_frame) == 272 && offsetof(rsf_godot_effect_frame, motion_valid) == 36 &&
+    offsetof(rsf_godot_effect_frame, camera_transform) == 48 &&
+    offsetof(rsf_godot_effect_frame, jittered_projection) == 144 && sizeof(rsf_godot_effect_resources) == 24 &&
+    sizeof(rsf_godot_effect_status) == 416 && offsetof(rsf_godot_effect_status, frame) == 16 &&
+    offsetof(rsf_godot_effect_status, resources) == 288 && offsetof(rsf_godot_effect_status, buffers_available) == 312 &&
+    offsetof(rsf_godot_effect_status, captures) == 320 && offsetof(rsf_godot_effect_status, capture_max_abs_uv) == 368 &&
+    offsetof(rsf_godot_effect_status, stage) == 376 && offsetof(rsf_godot_effect_status, rendering_ready) == 400 &&
+    sizeof(rsf_godot_effect_leaves) == 32 && offsetof(rsf_godot_effect_leaves, read_motion) == 24,
+    "native/platform.rs mirrors these layouts");
 
 namespace rsf {
 using namespace godot;
+static_assert(RenderingDevice::DATA_FORMAT_R16G16_SFLOAT == RSF_GODOT_EFFECT_MOTION_FORMAT,
+    "native/effect.rs admits this velocity format");
 
 namespace {
+// One POST_TRANSPARENT callback. Scene objects, RIDs and native pointers are borrowed only for the
+// callback; the readback bytes are owned here until it returns.
+struct Call {
+    RenderData* data = nullptr;
+    Ref<RenderSceneBuffersRD> buffers;
+    RenderingDevice* rd = nullptr;
+    RID color, depth, motion;
+    Vector2i internal_size;
+    PackedByteArray bytes;
+};
+Call& call_of(void* call) { return *static_cast<Call*>(call); }
+
 PackedByteArray read_motion(RenderingDevice* rd, RID motion, Vector2i size)
 {
     // The engine velocity target is sampleable, but deliberately is not a copy source.
@@ -74,14 +106,81 @@ void main() {
     rd->free_rid(shader);
     return result;
 }
+
+uint32_t leaf_frame(void* call, rsf_godot_effect_frame* frame) noexcept try {
+    auto& value = call_of(call);
+    value.buffers = value.data->get_render_scene_buffers();
+    RenderSceneData* scene = value.data->get_render_scene_data();
+    RenderingDevice* rd = RenderingServer::get_singleton()->get_rendering_device();
+    if (!rd || !value.buffers.is_valid() || !scene) return 0;
+    value.rd = rd;
+    const Ref<RenderSceneBuffersRD>& buffers = value.buffers;
+    frame->render_target = buffers->get_render_target().get_id();
+    frame->views = buffers->get_view_count();
+    value.internal_size = buffers->get_internal_size();
+    const Vector2i output = buffers->get_target_size();
+    frame->internal_width = value.internal_size.x;
+    frame->internal_height = value.internal_size.y;
+    frame->output_width = output.x;
+    frame->output_height = output.y;
+    const Transform3D camera = scene->get_cam_transform();
+    const Projection projection = scene->get_cam_projection();
+    for (int row = 0; row < 3; ++row) {
+        for (int column = 0; column < 3; ++column) frame->camera_transform[row * 3 + column] = camera.basis[row][column];
+        frame->camera_transform[9 + row] = camera.origin[row];
+    }
+    for (int column = 0; column < 4; ++column)
+        for (int row = 0; row < 4; ++row) frame->jittered_projection[column * 4 + row] = projection[column][row];
+    value.color = buffers->get_color_layer(0);
+    value.depth = buffers->get_depth_layer(0);
+    value.motion = buffers->get_velocity_layer(0);
+    frame->color_valid = rd->texture_is_valid(value.color) ? 1u : 0u;
+    frame->depth_valid = rd->texture_is_valid(value.depth) ? 1u : 0u;
+    frame->motion_valid = rd->texture_is_valid(value.motion) ? 1u : 0u;
+    return 1;
+} catch (...) { return 0; }
+
+uint32_t leaf_resources(void* call, rsf_godot_effect_resources* resources) noexcept try {
+    const auto& value = call_of(call);
+    RenderingDevice* rd = value.rd;
+    resources->color_format = rd->texture_get_format(value.color)->get_format();
+    resources->depth_format = rd->texture_get_format(value.depth)->get_format();
+    resources->motion_format = rd->texture_get_format(value.motion)->get_format();
+    resources->native_device = rd->get_driver_resource(RenderingDevice::DRIVER_RESOURCE_LOGICAL_DEVICE, RID(), 0) != 0;
+    resources->native_queue = rd->get_driver_resource(RenderingDevice::DRIVER_RESOURCE_COMMAND_QUEUE, RID(), 0) != 0;
+    resources->native_textures = rd->get_driver_resource(RenderingDevice::DRIVER_RESOURCE_TEXTURE, value.color, 0) != 0 &&
+        rd->get_driver_resource(RenderingDevice::DRIVER_RESOURCE_TEXTURE, value.depth, 0) != 0 &&
+        rd->get_driver_resource(RenderingDevice::DRIVER_RESOURCE_TEXTURE, value.motion, 0) != 0;
+    return 1;
+} catch (...) { return 0; }
+
+uint32_t leaf_read_motion(void* call, const uint8_t** data, uint64_t* size) noexcept try {
+    auto& value = call_of(call);
+    *data = nullptr;
+    *size = 0;
+    // Packed data owns its CPU storage; the borrowed texture never leaves the callback.
+    value.bytes = read_motion(value.rd, value.motion, value.internal_size);
+    *data = value.bytes.ptr();
+    *size = static_cast<uint64_t>(value.bytes.size());
+    return 1;
+} catch (...) { return 0; }
+
+const rsf_godot_effect_leaves effect_leaves{sizeof(effect_leaves), RSF_GODOT_EFFECT_VERSION,
+    leaf_frame, leaf_resources, leaf_read_motion};
 }
 
 ReScaleFrameEffect::ReScaleFrameEffect()
+    : probe(rsf_godot_effect_create())
 {
     set_effect_callback_type(EFFECT_CALLBACK_TYPE_POST_TRANSPARENT);
     set_access_resolved_color(true);
     set_access_resolved_depth(true);
     set_needs_motion_vectors(true);
+}
+
+ReScaleFrameEffect::~ReScaleFrameEffect()
+{
+    rsf_godot_effect_destroy(probe);
 }
 
 void ReScaleFrameEffect::_bind_methods()
@@ -92,118 +191,66 @@ void ReScaleFrameEffect::_bind_methods()
 
 void ReScaleFrameEffect::request_motion_capture()
 {
-    capture_requested.store(true);
+    rsf_godot_effect_request_capture(probe);
 }
 
 void ReScaleFrameEffect::_render_callback(int32_t type, RenderData* data)
 {
     if (type != EFFECT_CALLBACK_TYPE_POST_TRANSPARENT || !data) return;
-    Snapshot next;
-    MotionCapture sampled;
-    const bool requested = capture_requested.exchange(false);
-    Ref<RenderSceneBuffersRD> buffers = data->get_render_scene_buffers();
-    RenderSceneData* scene = data->get_render_scene_data();
-    RenderingDevice* rd = RenderingServer::get_singleton()->get_rendering_device();
-    if (rd && buffers.is_valid() && scene) {
-        next.render_target = buffers->get_render_target().get_id();
-        next.views = buffers->get_view_count();
-        next.internal_size = buffers->get_internal_size();
-        next.output_size = buffers->get_target_size();
-        next.camera_transform = scene->get_cam_transform();
-        next.jittered_projection = scene->get_cam_projection();
-        const RID color = buffers->get_color_layer(0);
-        const RID depth = buffers->get_depth_layer(0);
-        const RID motion = buffers->get_velocity_layer(0);
-        next.buffers_available = next.views == 1 && next.internal_size.x > 0 &&
-            next.internal_size.y > 0 && rd->texture_is_valid(color) &&
-            rd->texture_is_valid(depth) && rd->texture_is_valid(motion);
-        if (next.buffers_available) {
-            next.color_format = rd->texture_get_format(color)->get_format();
-            next.depth_format = rd->texture_get_format(depth)->get_format();
-            next.motion_format = rd->texture_get_format(motion)->get_format();
-            next.native_device_available = rd->get_driver_resource(RenderingDevice::DRIVER_RESOURCE_LOGICAL_DEVICE, RID(), 0) != 0;
-            next.native_queue_available = rd->get_driver_resource(RenderingDevice::DRIVER_RESOURCE_COMMAND_QUEUE, RID(), 0) != 0;
-            next.native_textures_available = rd->get_driver_resource(RenderingDevice::DRIVER_RESOURCE_TEXTURE, color, 0) != 0 &&
-                rd->get_driver_resource(RenderingDevice::DRIVER_RESOURCE_TEXTURE, depth, 0) != 0 &&
-                rd->get_driver_resource(RenderingDevice::DRIVER_RESOURCE_TEXTURE, motion, 0) != 0;
-            if (requested && next.motion_format == RenderingDevice::DATA_FORMAT_R16G16_SFLOAT) {
-                // Explicit bounded diagnostics only. This readback stalls the GPU.
-                // Packed data owns its CPU storage; the borrowed texture never leaves the callback.
-                const PackedByteArray bytes = read_motion(rd, motion, next.internal_size);
-                sampled.pixels = static_cast<uint64_t>(next.internal_size.x) * next.internal_size.y;
-                sampled.succeeded = static_cast<uint64_t>(bytes.size()) == sampled.pixels * 8;
-                if (sampled.succeeded) {
-                    for (int64_t offset = 0; offset < bytes.size(); offset += 8) {
-                        const double x = bytes.decode_float(offset);
-                        const double y = bytes.decode_float(offset + 4);
-                        if (!std::isfinite(x) || !std::isfinite(y)) {
-                            ++sampled.nonfinite_pixels;
-                        } else if (x <= -1.0 && y <= -1.0) {
-                            ++sampled.unwritten_pixels;
-                        } else {
-                            const double magnitude = std::max(std::abs(x), std::abs(y));
-                            if (magnitude > 0.00001) ++sampled.moving_pixels;
-                            sampled.max_abs_uv = std::max(sampled.max_abs_uv, magnitude);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    // Scene objects, RIDs and native pointers are borrowed only inside this callback.
-    // Publish copied CPU metadata; no resource lease or GPU completion is implied.
-    std::lock_guard lock(guard);
-    next.callbacks = snapshot.callbacks + 1;
-    if (requested) {
-        sampled.count = capture.count + 1;
-        sampled.callback = next.callbacks;
-        capture = sampled;
-    }
-    snapshot = next;
+    Call call;
+    call.data = data;
+    rsf_godot_effect_render(probe, &effect_leaves, &call);
 }
 
 Dictionary ReScaleFrameEffect::get_status() const
 {
-    Snapshot value;
-    MotionCapture sampled;
-    {
-        std::lock_guard lock(guard);
-        value = snapshot;
-        sampled = capture;
-    }
+    rsf_godot_effect_status value{};
+    value.struct_size = sizeof(value);
+    value.version = RSF_GODOT_EFFECT_VERSION;
     Dictionary result;
+    if (!rsf_godot_effect_status_get(probe, &value)) return result;
+    Transform3D camera;
+    for (int row = 0; row < 3; ++row) {
+        for (int column = 0; column < 3; ++column)
+            camera.basis[row][column] = static_cast<real_t>(value.frame.camera_transform[row * 3 + column]);
+        camera.origin[row] = static_cast<real_t>(value.frame.camera_transform[9 + row]);
+    }
+    Projection projection;
+    for (int column = 0; column < 4; ++column)
+        for (int row = 0; row < 4; ++row)
+            projection[column][row] = static_cast<real_t>(value.frame.jittered_projection[column * 4 + row]);
     result["version"] = RSF_VERSION_STRING;
-    result["stage"] = "renderer_probe";
-    result["rendering_ready"] = false;
-    result["sr_active"] = false;
-    result["fg_active"] = false;
-    result["latency_active"] = false;
-    result["reason"] = "Compositor motion producer/probe only. Query ReScaleFrameRuntime for active SR, FG and latency.";
+    result["stage"] = value.stage;
+    result["rendering_ready"] = value.rendering_ready != 0;
+    result["sr_active"] = value.sr_active != 0;
+    result["fg_active"] = value.fg_active != 0;
+    result["latency_active"] = value.latency_active != 0;
+    result["reason"] = value.reason;
     result["renderer"] = RenderingServer::get_singleton()->get_current_rendering_method();
     result["driver"] = RenderingServer::get_singleton()->get_current_rendering_driver_name();
-    result["snapshot_scope"] = "last_post_transparent_callback";
+    result["snapshot_scope"] = value.snapshot_scope;
     result["callbacks"] = static_cast<int64_t>(value.callbacks);
-    result["render_target_id"] = static_cast<int64_t>(value.render_target);
-    result["view_count"] = value.views;
-    result["internal_size"] = value.internal_size;
-    result["output_size"] = value.output_size;
-    result["camera_transform"] = value.camera_transform;
-    result["jittered_projection"] = value.jittered_projection;
-    result["color_format"] = value.color_format;
-    result["depth_format"] = value.depth_format;
-    result["motion_format"] = value.motion_format;
-    result["buffers_available"] = value.buffers_available;
-    result["native_device_available"] = value.native_device_available;
-    result["native_queue_available"] = value.native_queue_available;
-    result["native_textures_available"] = value.native_textures_available;
-    result["motion_captures"] = static_cast<int64_t>(sampled.count);
-    result["capture_callback"] = static_cast<int64_t>(sampled.callback);
-    result["capture_succeeded"] = sampled.succeeded;
-    result["capture_pixels"] = static_cast<int64_t>(sampled.pixels);
-    result["capture_moving_pixels"] = static_cast<int64_t>(sampled.moving_pixels);
-    result["capture_nonfinite_pixels"] = static_cast<int64_t>(sampled.nonfinite_pixels);
-    result["capture_unwritten_pixels"] = static_cast<int64_t>(sampled.unwritten_pixels);
-    result["capture_max_abs_uv"] = sampled.max_abs_uv;
+    result["render_target_id"] = static_cast<int64_t>(value.frame.render_target);
+    result["view_count"] = value.frame.views;
+    result["internal_size"] = Vector2i(value.frame.internal_width, value.frame.internal_height);
+    result["output_size"] = Vector2i(value.frame.output_width, value.frame.output_height);
+    result["camera_transform"] = camera;
+    result["jittered_projection"] = projection;
+    result["color_format"] = value.resources.color_format;
+    result["depth_format"] = value.resources.depth_format;
+    result["motion_format"] = value.resources.motion_format;
+    result["buffers_available"] = value.buffers_available != 0;
+    result["native_device_available"] = value.resources.native_device != 0;
+    result["native_queue_available"] = value.resources.native_queue != 0;
+    result["native_textures_available"] = value.resources.native_textures != 0;
+    result["motion_captures"] = static_cast<int64_t>(value.captures);
+    result["capture_callback"] = static_cast<int64_t>(value.capture_callback);
+    result["capture_succeeded"] = value.capture_succeeded != 0;
+    result["capture_pixels"] = static_cast<int64_t>(value.capture_pixels);
+    result["capture_moving_pixels"] = static_cast<int64_t>(value.capture_moving_pixels);
+    result["capture_nonfinite_pixels"] = static_cast<int64_t>(value.capture_nonfinite_pixels);
+    result["capture_unwritten_pixels"] = static_cast<int64_t>(value.capture_unwritten_pixels);
+    result["capture_max_abs_uv"] = value.capture_max_abs_uv;
     return result;
 }
 }

@@ -2,29 +2,33 @@
 //! Godot 4.7.2 native integration owner linked into `ReScaleFrame.Godot.Native.dll`. It owns the
 //! Runtime control, settings and D3D12 session state (`control.rs`), the D3D12 SR context and
 //! submission owner (`d3d12.rs`), the Vulkan session state (`vulkan.rs`) with its SR context
-//! owner (`vulkan/sr.rs`) and device creation owner (`vulkan/creation.rs`), the input window, its procedure and the input session (`window.rs`)
-//! and the `ReScaleFrameRuntime` option schema and renderer admission (`extension.rs`).
+//! owner (`vulkan/sr.rs`) and device creation owner (`vulkan/creation.rs`), the input window, its procedure and the input session (`window.rs`),
+//! the `ReScaleFrameRuntime` option schema and renderer admission (`extension.rs`) and each
+//! `ReScaleFrameEffect`'s probe snapshot and motion capture classification (`effect.rs`).
 //!
 //! The `rsfg_*` exports in `api.h`, the GDExtension entry and the godot-cpp classes stay C++.
 //! `runtime.cpp` and `vulkan.cpp` forward to these entry points and lend their leaves through
 //! `rsf_godot_platform` (`godot_platform.h`, mirrored in `platform.rs`): the D3D12 device, fence,
 //! SR context, FG, presentation and capture calls, DXGI, Win32 window calls, the linked Runtime
 //! and the Vulkan owner's guard, device, provider, presenter and SDK calls. `vulkan_creation.cpp`
-//! lends its Vulkan-typed creation leaves with each creation call (`rsf_godot_vk_creation_leaves`).
+//! lends its Vulkan-typed creation leaves with each creation call (`rsf_godot_vk_creation_leaves`),
+//! and `effect.cpp` its godot-cpp leaves with each compositor callback (`rsf_godot_effect_leaves`).
 //! No second Runtime is
 //! loaded and no vendor, pacing or presentation policy is added here.
 mod control;
 mod d3d12;
+mod effect;
 mod extension;
 mod platform;
 mod vulkan;
 mod window;
 
 use control::Control;
+use effect::Effect;
 use platform::{
-    ABI_VERSION, EngineServices, OptionField, OptionValue, Platform, SETTINGS_ABI_VERSION,
-    Settings, Setup, Status, VkCreationLeaves, VkDeviceCall, VkFgPass, VkFunction, VkInstanceCall,
-    VkPresentFacts, VkProc, VkSrPass, VkView,
+    ABI_VERSION, EFFECT_VERSION, EffectLeaves, EffectStatus, EngineServices, OptionField,
+    OptionValue, Platform, SETTINGS_ABI_VERSION, Settings, Setup, Status, VkCreationLeaves,
+    VkDeviceCall, VkFgPass, VkFunction, VkInstanceCall, VkPresentFacts, VkProc, VkSrPass, VkView,
 };
 use rsf_game_sys::{rsf_game_cpu_event, rsf_game_log_fn, rsf_game_render_pass};
 use std::ffi::{CStr, c_char, c_int, c_void};
@@ -598,6 +602,77 @@ unsafe extern "C" fn rsf_godot_vk_present_marker(
                 .present_marker(platform, CONTROL.vulkan.booted(), window, begin)
         })
         .into()
+}
+
+// The compositor effect owner (effect.rs), one per ReScaleFrameEffect, created and destroyed with
+// the godot-cpp object.
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_godot_effect_create() -> *mut Effect {
+    Box::into_raw(Box::default())
+}
+
+/// # Safety
+/// `effect` is null or an owner from `rsf_godot_effect_create` that no other call is using and
+/// none uses afterwards.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_godot_effect_destroy(effect: *mut Effect) {
+    if !effect.is_null() {
+        // SAFETY: the caller's guarantee; the owner came from Box::into_raw.
+        drop(unsafe { Box::from_raw(effect) });
+    }
+}
+
+/// `ReScaleFrameEffect.request_motion_capture`.
+///
+/// # Safety
+/// `effect` is null or a live owner from `rsf_godot_effect_create`.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_godot_effect_request_capture(effect: *const Effect) {
+    // SAFETY: the caller's guarantee.
+    if let Some(effect) = unsafe { effect.as_ref() } {
+        effect.request_capture();
+    }
+}
+
+/// `ReScaleFrameEffect._render_callback` after its callback type check.
+///
+/// # Safety
+/// `effect` is null or a live owner; `leaves` is null or the effect table; `call` is the
+/// callback's record, live for the call.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_godot_effect_render(
+    effect: *const Effect,
+    leaves: *const EffectLeaves,
+    call: *mut c_void,
+) {
+    // SAFETY: the caller's guarantee.
+    if let (Some(effect), Some(leaves)) =
+        unsafe { (effect.as_ref(), platform::effect_leaves(leaves)) }
+    {
+        effect.render(leaves, call);
+    }
+}
+
+/// `ReScaleFrameEffect.get_status`.
+///
+/// # Safety
+/// `effect` is null or a live owner; `status` is null or a writable `rsf_godot_effect_status` of
+/// its stated size.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_godot_effect_status_get(
+    effect: *const Effect,
+    status: *mut EffectStatus,
+) -> c_int {
+    // SAFETY: the caller's guarantee.
+    match unsafe { (effect.as_ref(), checked_output(status, EFFECT_VERSION)) } {
+        (Some(effect), Some(status)) => {
+            // SAFETY: checked_output established the record.
+            unsafe { status.write(effect.status()) };
+            1
+        }
+        _ => 0,
+    }
 }
 
 /// # Safety

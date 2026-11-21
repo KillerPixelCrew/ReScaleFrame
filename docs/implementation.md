@@ -522,6 +522,13 @@ window, clock, frame-tap and directory effects. Build and captured
 artifact verification remain open.
 [F9 session audit](research/rust-ac7-motion-session.md)
 
+The Godot compositor probe now keeps requests, snapshots and motion
+classification per effect instance in Rust. The typed godot-cpp
+callbacks retain scene reads, the GPU readback pass and the same status
+keys. The existing callback destruction and XR velocity extent limits
+remain open, along with build and live renderer verification.
+[Compositor owner notes](../integrations/godot/NATIVE.md#rust-compositor-effect-owner-seventh-slice)
+
 ## Rust orchestrator and first Anomaly port
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
