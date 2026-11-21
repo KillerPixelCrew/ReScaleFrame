@@ -194,3 +194,23 @@ The logs, scripts and payload hashes are under
 `.local/anomaly/staging/live-58fe95a-stage5/evidence/` in
 `merged-shader-manifest-standard-7d8b4df` and
 `merged-shader-reload-standard-7d8b4df`.
+
+## AVX foreground settings and pack reload
+
+The isolated AVX profile ran the same merged manifest and pack. Its
+overlay drew at 1280×720 before resize and at 1600×900 afterward.
+Selecting Balanced changed the DLSS render size from 1067×600 to
+928×522 with 1600×900 output and saved `SRQuality=2`. Returning to
+Quality restored 1067×600 and saved `SRQuality=1`. The Rust SR stage
+recorded both quality changes as applied.
+
+The overlay's **Reload motion shader pack** option reloaded Runtime
+source and reset history. The panel drew all 4,468 visible frames and
+consumed all 57 reported pointer events before Insert closed it.
+After reload and close, DLSS-G reported steady windows of 240 vendor
+presents per 120 source frames. The last SR sample reported 7,889
+evaluations with zero refusals. The scripted engine exit destroyed
+Direct3D and returned code 0. The isolated DLLs, pack, settings and
+script were restored. Held-key gameplay remains unverified.
+Logs and both saved INI values are under
+`.local/anomaly/staging/live-58fe95a-stage5/evidence/merged-shader-reload-avx-7d8b4df/`.

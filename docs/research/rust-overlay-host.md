@@ -83,3 +83,33 @@ It was built in its own tree with its own Cargo target directory.
 Device, foreground, visible-window and game tests were not run. These cover the D3D11 fixture,
 the D3D12 backpressure fixture, the overlay DLL device fixture and the hotkey fixture. Real
 panel drawing, input subclassing and D3D11-on-12 wrapping remain unverified on this build.
+
+## Integrated Runtime and Standard game run
+
+The merge at `9e2cd87` passed 395 pinned Rust tests, formatting, Clippy
+and 12 focused MSVC Release contracts. All eight Runtime and embedded
+export inventories still matched by name and ordinal. The Anomaly DLL
+kept its three exports and dynamic Runtime lookup. The overlay host
+fixture linked. The worker branch and worktree were removed after archiving
+its build, test and PE comparison evidence.
+
+The isolated Standard foreground run used the merged Runtime, exact
+Standard executable and matching manifest. The Rust host drew the
+panel through a resize from 1280×720 to 1600×900. Turning SR off
+saved `SR=0`, kept the native scene visible, stopped DLSS evaluations
+and left DLSS-G active. Re-enabling SR saved `SR=1` and resumed
+evaluations. This exercised the requested native rendering path.
+The previously recorded refused-evaluation recovery is separate.
+
+The panel then switched DLSS-G to FSR3 and back. Both transitions kept
+the same engine facade, changed the physical swapchain identity and
+reported a successful switch. FSR3 stabilized at about 240 vendor
+presents per 120 source frames. The final complete status sample showed
+DLSS-G active again and 3,436 DLSS SR evaluations with zero refusals.
+The engine quit, destroyed Direct3D and returned code 0. The isolated
+payload and settings were restored. The logs, artifacts and saved
+intermediate settings are under
+`.local/anomaly/staging/live-58fe95a-stage5/evidence/merged-overlay-host-standard-9e2cd87/`.
+
+The merged Runtime still needs the AVX retest, held-key gameplay, and
+separate D3D11-on-12 wrapping and fullscreen checks.

@@ -305,8 +305,9 @@ AVX run opened 73 allowlisted roots, reported 79 cached replacements,
 resized with DLSS SR and shut down cleanly. Standard opened the same
 pack in the foreground, resumed DLSS-G after resize and reloaded the
 pack through the overlay. DLSS-G stayed active after reload and overlay
-close. Both Standard runs exited through the engine. Held-key input
-and AVX foreground reload still need checks on the final build.
+close. The same manifest build passed the AVX foreground resize,
+Quality to Balanced and back, and overlay reload. All three foreground
+runs exited through the engine. Held-key input still needs verification.
 [Manifest and AVX evidence](research/rust-anomaly-shader-manifest.md#merged-adapter-verification)
 
 The overlay and FG merge passed 17 focused MSVC contracts in Debug
@@ -783,6 +784,18 @@ adapter and both linked carriers built. The runtime retained 381 baseline
 exports, including overlay table ordinals 144 and 145. The two carrier export
 lists also matched. The overlay device fixture built in Release. Device,
 visible-window and gameplay checks remain pending.
+
+The shared D3D11 overlay host now owns the panel, renderer, device,
+draw admission, texture sequencing and failure state in Rust. A
+layout failure latches until stop and stop waits for an in-flight
+draw. The integrated build passed 395 pinned Rust tests and 12
+focused MSVC Release contracts. All checked PE export inventories
+matched, and Anomaly kept its three exports and dynamic Runtime lookup.
+The merged Standard game run drew the panel through resize, saved
+SR Off and On, and switched DLSS-G to FSR3 and back on the same game
+facade. It exited cleanly. D3D11-on-12 wrapping, fullscreen and
+held-key gameplay remain open.
+[Shared overlay host evidence](research/rust-overlay-host.md#integrated-runtime-and-standard-game-run)
 
 Rust now validates the split Vulkan SR C ABI and tracks the producer and
 continuation submission lease. The older ABI 2 frame prefix still zero-fills
