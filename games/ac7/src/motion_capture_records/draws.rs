@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: MIT
 //! Shared draw-stream admission and serialization over copied D3D11 facts.
 
+mod before;
 mod geometry;
 mod ordinary;
 
 use super::{NativeRootScope, QueuedScope, Records, artifacts::Bytes, records};
 use crate::motion_capture_session::{CaptureInterval, rsf_ac7_capture_current};
-use std::ffi::c_char;
 use std::fmt::{self, Write as _};
 use std::mem::{offset_of, size_of};
-use std::slice;
 
 const MAX_DRAWS: usize = 12000;
 const TEXTURE_2D: u32 = 3;
@@ -49,6 +48,18 @@ struct BoundConstant {
 }
 
 #[repr(C)]
+struct ColourSnapshot {
+    name: [u8; 96],
+    result: i32,
+}
+
+#[repr(C)]
+struct DrawTarget {
+    view: BoundView,
+    snapshot: ColourSnapshot,
+}
+
+#[repr(C)]
 struct Dispatch {
     root: NativeRootScope,
     queued: QueuedDraw,
@@ -70,6 +81,8 @@ const _: () = {
     assert!(size_of::<QueuedDraw>() == 56 && size_of::<Resource>() == 32);
     assert!(size_of::<BoundView>() == 40 && offset_of!(BoundView, slot) == 32);
     assert!(size_of::<BoundConstant>() == 32 && offset_of!(BoundConstant, readback) == 24);
+    assert!(size_of::<ColourSnapshot>() == 100 && offset_of!(ColourSnapshot, result) == 96);
+    assert!(size_of::<DrawTarget>() == 144 && offset_of!(DrawTarget, snapshot) == 40);
     assert!(size_of::<Dispatch>() == 6016 && offset_of!(Dispatch, qpc) == 72);
     assert!(offset_of!(Dispatch, inputs) == 128 && offset_of!(Dispatch, outputs) == 5248);
     assert!(offset_of!(Dispatch, constants) == 5568);
@@ -105,23 +118,6 @@ fn commit(
     Ok(())
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_capture_record_draw_text(
-    capture: CaptureInterval,
-    text: *const c_char,
-    size: usize,
-) -> bool {
-    commit(capture, || {
-        let mut row = Bytes::default();
-        if size != 0 {
-            // SAFETY: Native lends the completed row for the duration of this call.
-            row.extend(unsafe { slice::from_raw_parts(text.cast(), size) })?;
-        }
-        Ok(row)
-    })
-    .is_ok()
-}
-
 fn write_resource(out: &mut Bytes, r: &Resource) -> fmt::Result {
     write!(
         out,
@@ -136,6 +132,37 @@ fn write_resource(out: &mut Bytes, r: &Resource) -> fmt::Result {
         write!(out, ",\"format\":{}", r.format)?;
     }
     out.write_char('}')
+}
+
+fn write_snapshot(out: &mut Bytes, snapshot: &ColourSnapshot) -> fmt::Result {
+    // A reserved native dump has a basename even if readback or file publication failed.
+    let name = snapshot
+        .name
+        .split(|&byte| byte == 0)
+        .next()
+        .unwrap_or_default();
+    if !name.is_empty() {
+        let name = str::from_utf8(name).map_err(|_| fmt::Error)?;
+        write!(
+            out,
+            ",\"snapshot\":\"{name}\",\"snapshot_result\":{}",
+            snapshot.result
+        )?;
+    }
+    Ok(())
+}
+
+fn write_targets(out: &mut Bytes, targets: &[DrawTarget]) -> fmt::Result {
+    for (index, DrawTarget { view, snapshot }) in targets.iter().enumerate() {
+        if index != 0 {
+            out.write_char(',')?;
+        }
+        write!(out, "{{\"slot\":{},\"view\":", view.slot)?;
+        write_resource(out, &view.resource)?;
+        write_snapshot(out, snapshot)?;
+        out.write_char('}')?;
+    }
+    Ok(())
 }
 
 fn write_views(out: &mut Bytes, views: &[BoundView]) -> fmt::Result {

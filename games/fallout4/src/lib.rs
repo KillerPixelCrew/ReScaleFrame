@@ -3,15 +3,16 @@
 //! lifecycle with its process-lived Runtime session, DPI startup, the cold native D3D11
 //! creation and presentation binding sequence, the CPU event owner (poll and worker source
 //! handoff, input receipts and their GameSDK facts), native depth-domain admission and
-//! composition, native input/output resolution scopes, World/Present admission, and render-input
-//! admission with its camera history and leased passes.
+//! composition, native input/output resolution scopes, the render hook lifecycle with World/Present
+//! admission, and render-input admission with its camera history and leased passes.
 //!
 //! Native leaves stay in C++ and reach this crate through rsf_fallout4_platform
-//! (fallout4_platform.h), rsf_fallout4_cpu_platform (cpu_events_platform.h) and the per-call
-//! depth-domain and render-input leaves (depth_domains_platform.h, render_inputs_platform.h):
-//! MinHook, the typed detour shells with their return addresses and trampoline calls, exception
-//! guards, the shared file hash, the Steam chain facade, the render subsystem, the typed COM
-//! leases, and the D3D11 and COM facts.
+//! (fallout4_platform.h), rsf_fallout4_cpu_platform (cpu_events_platform.h), the render hook
+//! leaves (render_hooks_platform.h) and the per-call depth-domain and render-input leaves
+//! (depth_domains_platform.h, render_inputs_platform.h): MinHook, the typed detour shells with
+//! their return addresses and trampoline calls, exception guards, the shared file hash, the Steam
+//! chain facade, the render producer and recovery callbacks, the typed COM leases, and the D3D11
+//! and COM facts.
 //! The Runtime decides vendors, presentation and pacing; this crate reports native facts only.
 #![cfg(windows)]
 
@@ -98,7 +99,6 @@ impl Ops {
             && table.creation_begin.is_some()
             && table.creation_end.is_some()
             && table.bind_presentation.is_some()
-            && table.subsystem.is_some()
     }
 
     pub(crate) fn log(
@@ -225,19 +225,6 @@ impl Ops {
         let mut result = RSF_ERROR_NOT_READY;
         completed(unsafe { leaf(bind, user, binding, &mut result) })?;
         Ok(result)
-    }
-
-    /// One RSF_FALLOUT4_* subsystem operation. `services` is read only by the prepare operations.
-    pub(crate) fn subsystem(
-        &self,
-        operation: u32,
-        services: Option<&rsf_game_host_services>,
-    ) -> Result<bool, Threw> {
-        let leaf = self.0.subsystem.ok_or(Threw)?;
-        let services = services.map_or(std::ptr::null(), std::ptr::from_ref);
-        let mut value = false;
-        completed(unsafe { leaf(operation, services, &mut value) })?;
-        Ok(value)
     }
 }
 

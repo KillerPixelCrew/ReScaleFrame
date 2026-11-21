@@ -7,6 +7,30 @@ See [the Rust migration record](rust-migration.md#native-policy-cutover).
 
 ## Remaining Rust integration ports
 
+Fallout 4's render hook lifecycle now verifies, installs, starts and
+retires the eight hooks in Rust. Typed detours still call their original
+functions on native frames. Pinned bindgen reproduced the changed private
+platform layout exactly. Producer callbacks and reduced-render recovery
+remain native. [Render hook lifecycle](research/rust-fallout4-render-hooks.md)
+
+Unity's Editor preview now owns its device, queue, swapchain and per-slot
+resources in Rust and requires a fresh drain proof before release. The
+Vulkan resolver owner also publishes the interceptor table, selects
+device extensions and resolves the swapchain destroy fallback. The
+saved function slots remain process-wide, and retirement still depends
+on reaching the destroy hook. [Editor preview](research/rust-unity-preview-resources.md) ·
+[Vulkan resolver](research/rust-unity-vulkan-resolver.md)
+
+AC7's Rust F9 capture owner now writes the cloud and contact-light
+before-draw rows with the existing query and receipt order. Source
+comparison covered the native reads and 60 archived rows. Fresh
+capture and device verification remain open.
+[Before-draw records](research/rust-ac7-motion-before-draw.md)
+
+Pinned formatting, locked offline Windows Cargo metadata and Git
+whitespace checks passed for these four ports. Builds, binary ABI
+checks, fixtures and game or engine checks remain user-owned.
+
 Godot now owns the CPU frame lifecycle, render handoff and render frame
 identity in its private Rust SCons object. Typed Godot callbacks still
 supply the clock, pause and focus facts and report events at the same

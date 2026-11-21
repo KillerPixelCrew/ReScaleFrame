@@ -38,19 +38,11 @@ typedef struct rsf_fallout4_create_call {
     void** immediate_context;
 } rsf_fallout4_create_call;
 
-// Native render subsystem that remains C++ (render_hooks, render_inputs). The CPU event owner is
-// Rust (cpu_events.rs) with its own leaves in cpu_events_platform.h; values 2, 4, 6, 8 and 10
-// were its retired operations.
-#define RSF_FALLOUT4_VERIFY_RENDER 0u  /* verify_render_hooks() && verify_render_inputs() */
-#define RSF_FALLOUT4_PREPARE_RENDER 1u /* prepare_render_hooks(services) */
-#define RSF_FALLOUT4_START_RENDER 3u
-#define RSF_FALLOUT4_QUIESCE_RENDER 5u /* value is always true */
-#define RSF_FALLOUT4_STOP_RENDER 7u
-#define RSF_FALLOUT4_RENDER_BUSY 9u
-
 // Leaves the Rust owner cannot express without C++, MinHook or a typed native call. A guarded
 // leaf returns false only when its native call threw; its result goes to the out parameter.
 // The table lives for the process: the installed creation hook reads it after prepare returns.
+// The CPU event owner (cpu_events_platform.h) and the render hook lifecycle
+// (render_hooks_platform.h) publish their own leaf tables.
 typedef struct rsf_fallout4_platform {
     // Guarded host log. A null log completes without a call.
     bool (*log)(rsf_game_log_fn log, void* user, const char* message);
@@ -77,8 +69,6 @@ typedef struct rsf_fallout4_platform {
         const rsf_d3d11_creation_scope* scope, const rsf_d3d11_native_chain* outputs, int32_t* result);
     bool (*bind_presentation)(rsf_fallout4_bind_presentation_fn bind, void* services_user,
         const rsf_d3d11_presentation_binding* binding, int32_t* result);
-    // Guarded subsystem operation (RSF_FALLOUT4_*). services is read only by the prepare operations.
-    bool (*subsystem)(uint32_t operation, const rsf_game_host_services* services, bool* value);
 } rsf_fallout4_platform;
 
 // Rust owner entry points.

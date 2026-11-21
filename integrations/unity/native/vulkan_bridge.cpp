@@ -7,7 +7,9 @@
 // semaphores, the presentation window's identity and the presentation lease. The command slot
 // rotation and shared fence values are the package bridge's submission ring (bridge_interop.rs).
 // Rust owns the shared device, queue, fence and imported semaphore, as well as the pool, slots
-// and shared images. This file keeps Unity interface access and typed graphics and Win32 calls.
+// and shared images. Unity's Vulkan resolver keys and routes, the registered interceptors, the
+// saved loader functions and the interop device-extension selection are vulkan_resolver.rs.
+// This file keeps Unity interface access and typed graphics, loader and Win32 calls.
 #include "vulkan_bridge.h"
 #include "vulkan_state.h"
 #include "bridge_interop.h"
@@ -21,7 +23,6 @@
 #include <rescaleframe/native_fg_d3d12.h>
 #include <array>
 #include <cstddef>
-#include <algorithm>
 #include <cstring>
 #include <vector>
 
@@ -246,6 +247,11 @@ void destroy_command_slot(const rsf_unity_vulkan_device_handles* shared, const r
     if (slot->commands) static_cast<ID3D12GraphicsCommandList*>(slot->commands)->Release();
     if (slot->allocator) static_cast<ID3D12CommandAllocator*>(slot->allocator)->Release();
 }
+// Rust names the Win32 import entry points and orders the lookups (vulkan_resolver.rs).
+bool device_function_exists(void* vk_device, const char* name) noexcept
+{
+    return vkGetDeviceProcAddr(static_cast<VkDevice>(vk_device), name) != nullptr;
+}
 bool create_shared(const rsf_game_host_services* services, rsf_unity_vulkan_device_handles* output) noexcept try
 {
     const auto instance = unity->Instance();
@@ -254,10 +260,7 @@ bool create_shared(const rsf_game_host_services* services, rsf_unity_vulkan_devi
     output->vk_physical_device = handle_id(instance.physicalDevice);
     output->vk_queue = handle_id(instance.graphicsQueue);
     output->vk_queue_family = instance.queueFamilyIndex;
-    const bool external_extensions = rsf_unity_vk_interop_enabled(instance.device) ||
-        (vkGetDeviceProcAddr(instance.device, "vkImportSemaphoreWin32HandleKHR") &&
-            vkGetDeviceProcAddr(instance.device, "vkGetMemoryWin32HandlePropertiesKHR"));
-    if (!external_extensions) {
+    if (!rsf_unity_vk_interop_ready(instance.device, device_function_exists)) {
         log(services, "Unity Vulkan device lacks enabled Win32 external-memory/semaphore extensions.");
         return false;
     }
@@ -610,23 +613,15 @@ struct DeviceRequest {
     VkDevice* output;
 };
 
-bool device_extensions(void* context, const char* const* names, uint32_t name_count) noexcept try
+static_assert(VK_MAX_EXTENSION_NAME_SIZE == 256 && sizeof(VkExtensionProperties) == 260 &&
+    offsetof(VkExtensionProperties, specVersion) == 256, "vulkan_resolver.rs ExtensionProperties");
+
+// Rust sizes the list, matches the names and decides the request (vulkan_resolver.rs).
+int32_t device_extensions(void* context, uint32_t* count, VkExtensionProperties* properties) noexcept
 {
     const auto& request = *static_cast<const DeviceRequest*>(context);
-    uint32_t count = 0;
-    if (vkEnumerateDeviceExtensionProperties(request.physical, nullptr, &count, nullptr) != VK_SUCCESS)
-        return false;
-    std::vector<VkExtensionProperties> available(count);
-    if (vkEnumerateDeviceExtensionProperties(request.physical, nullptr, &count, available.data()) != VK_SUCCESS ||
-        count > available.size()) return false;
-    available.resize(count);
-    for (uint32_t i = 0; i < name_count; ++i) {
-        if (std::none_of(available.begin(), available.end(), [&](const auto& item) {
-                return std::strcmp(item.extensionName, names[i]) == 0;
-            })) return false;
-    }
-    return true;
-} catch (...) { return false; }
+    return vkEnumerateDeviceExtensionProperties(request.physical, nullptr, count, properties);
+}
 
 int32_t create_device(void* context, PFN_vkVoidFunction original, const char* const* names,
     uint32_t count, void** created) noexcept
@@ -656,14 +651,17 @@ VKAPI_ATTR VkResult VKAPI_CALL intercept_create_device(VkPhysicalDevice physical
     return static_cast<VkResult>(rsf_unity_vk_resolver_create_device(info->ppEnabledExtensionNames,
         info->enabledExtensionCount, &request, device_extensions, create_device));
 }
+// The typed lookup through the saved vkGetDeviceProcAddr; Rust chooses when and under which key.
+PFN_vkVoidFunction resolve_device_function(PFN_vkVoidFunction device_proc, void* vk_device, const char* name) noexcept
+{
+    return reinterpret_cast<PFN_vkGetDeviceProcAddr>(device_proc)(static_cast<VkDevice>(vk_device), name);
+}
 VKAPI_ATTR VkResult VKAPI_CALL intercept_create_swapchain(VkDevice vk_device, const VkSwapchainCreateInfoKHR* info, const VkAllocationCallbacks* allocator, VkSwapchainKHR* output) noexcept try
 {
     const auto original_create_swapchain = saved_proc<PFN_vkCreateSwapchainKHR>(RSF_UNITY_VK_CREATE_SWAPCHAIN);
     if (!original_create_swapchain || !info || !output) return VK_ERROR_INITIALIZATION_FAILED;
-    auto destroy = saved_proc<PFN_vkDestroySwapchainKHR>(RSF_UNITY_VK_DESTROY_SWAPCHAIN);
-    const auto gdpa = saved_proc<PFN_vkGetDeviceProcAddr>(RSF_UNITY_VK_DEVICE_PROC);
-    if (!destroy && gdpa)
-        destroy = reinterpret_cast<PFN_vkDestroySwapchainKHR>(gdpa(vk_device, "vkDestroySwapchainKHR"));
+    const auto destroy = reinterpret_cast<PFN_vkDestroySwapchainKHR>(
+        rsf_unity_vk_resolver_device_function(RSF_UNITY_VK_DESTROY_SWAPCHAIN, vk_device, resolve_device_function));
     if (!destroy) return original_create_swapchain(vk_device, info, allocator, output);
 
     auto request = *info; request.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
@@ -729,35 +727,31 @@ VKAPI_ATTR void VKAPI_CALL intercept_destroy_swapchain(VkDevice vk_device, VkSwa
     if (destroy) destroy(vk_device, swapchain, allocator);
 }
 
-VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL get_device_proc(VkDevice vk_device, const char* name);
-
-PFN_vkVoidFunction intercept(const char* name, PFN_vkVoidFunction original, bool from_instance)
-{
-    switch (rsf_unity_vk_resolver_route(name, original, from_instance)) {
-    case RSF_UNITY_VK_DEVICE_PROC: return reinterpret_cast<PFN_vkVoidFunction>(get_device_proc);
-    case RSF_UNITY_VK_CREATE_DEVICE: return reinterpret_cast<PFN_vkVoidFunction>(intercept_create_device);
-    case RSF_UNITY_VK_CREATE_SWAPCHAIN: return reinterpret_cast<PFN_vkVoidFunction>(intercept_create_swapchain);
-    case RSF_UNITY_VK_DESTROY_SWAPCHAIN: return reinterpret_cast<PFN_vkVoidFunction>(intercept_destroy_swapchain);
-    case RSF_UNITY_VK_PRESENT: return reinterpret_cast<PFN_vkVoidFunction>(intercept_present);
-    default: return original;
-    }
-}
-
+// Rust routes each resolved name to the interceptor registered for its slot (vulkan_resolver.rs).
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL get_device_proc(VkDevice vk_device, const char* name)
 {
     const auto get = saved_proc<PFN_vkGetDeviceProcAddr>(RSF_UNITY_VK_DEVICE_PROC);
-    return get && name ? intercept(name, get(vk_device, name), false) : nullptr;
+    return get && name ? rsf_unity_vk_resolver_resolve(name, get(vk_device, name), false) : nullptr;
 }
 
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL get_instance_proc(VkInstance vk_instance, const char* name)
 {
     const auto get = saved_proc<PFN_vkGetInstanceProcAddr>(RSF_UNITY_VK_INSTANCE_PROC);
-    return get && name ? intercept(name, get(vk_instance, name), true) : nullptr;
+    return get && name ? rsf_unity_vk_resolver_resolve(name, get(vk_instance, name), true) : nullptr;
 }
 
+template <class Function> PFN_vkVoidFunction as_void(Function function)
+{
+    return reinterpret_cast<PFN_vkVoidFunction>(function);
+}
 PFN_vkGetInstanceProcAddr UNITY_INTERFACE_API initialize_intercept(PFN_vkGetInstanceProcAddr original, void*)
 {
-    return rsf_unity_vk_bind_resolver(reinterpret_cast<PFN_vkVoidFunction>(original)) ? get_instance_proc : original;
+    // Indexed by the vulkan_resolver.h slots; Rust copies the table with the loader's resolver.
+    const PFN_vkVoidFunction interceptors[RSF_UNITY_VK_SLOTS]{nullptr, as_void(get_instance_proc),
+        as_void(get_device_proc), as_void(intercept_create_device), as_void(intercept_create_swapchain),
+        as_void(intercept_destroy_swapchain), as_void(intercept_present)};
+    return reinterpret_cast<PFN_vkGetInstanceProcAddr>(
+        rsf_unity_vk_bind_resolver(as_void(original), interceptors, RSF_UNITY_VK_SLOTS));
 }
 }
 

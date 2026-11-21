@@ -2,8 +2,8 @@
 //! Ordinary draw rows pair the frame tap's shadow state with live post-draw observations.
 
 use super::{
-    BoundConstant, BoundView, QueuedDraw, Resource, commit, write_constants, write_queued,
-    write_resource, write_views,
+    BoundConstant, BoundView, DrawTarget, QueuedDraw, Resource, commit, write_constants,
+    write_queued, write_resource, write_targets, write_views,
 };
 use crate::motion_capture_records::{
     NativeRootScope,
@@ -20,18 +20,6 @@ struct DrawInput {
     width: u32,
     height: u32,
     format: u32,
-}
-
-#[repr(C)]
-struct ColourSnapshot {
-    name: [u8; 96],
-    result: i32,
-}
-
-#[repr(C)]
-struct DrawTarget {
-    view: BoundView,
-    snapshot: ColourSnapshot,
 }
 
 #[repr(C)]
@@ -78,8 +66,6 @@ struct Draw {
 
 const _: () = {
     assert!(size_of::<DrawInput>() == 24 && offset_of!(DrawInput, slot) == 8);
-    assert!(size_of::<ColourSnapshot>() == 100 && offset_of!(ColourSnapshot, result) == 96);
-    assert!(size_of::<DrawTarget>() == 144 && offset_of!(DrawTarget, snapshot) == 40);
     assert!(size_of::<DrawConstants>() == 456 && offset_of!(DrawConstants, count) == 448);
     assert!(size_of::<Draw>() == 14280 && offset_of!(Draw, qpc) == 72);
     assert!(offset_of!(Draw, shader_hashes) == 132 && offset_of!(Draw, viewport_x) == 160);
@@ -98,32 +84,6 @@ fn write_inputs(out: &mut Bytes, inputs: &[DrawInput]) -> fmt::Result {
             "{{\"slot\":{},\"resource\":{},\"width\":{},\"height\":{},\"format\":{}}}",
             input.slot, input.resource, input.width, input.height, input.format,
         )?;
-    }
-    Ok(())
-}
-
-fn write_targets(out: &mut Bytes, targets: &[DrawTarget]) -> fmt::Result {
-    for (index, DrawTarget { view, snapshot }) in targets.iter().enumerate() {
-        if index != 0 {
-            out.write_char(',')?;
-        }
-        write!(out, "{{\"slot\":{},\"view\":", view.slot)?;
-        write_resource(out, &view.resource)?;
-        // Native builds these basenames from static ASCII roles and the sample and read ordinals.
-        let name = snapshot
-            .name
-            .split(|&byte| byte == 0)
-            .next()
-            .unwrap_or_default();
-        if !name.is_empty() {
-            let name = str::from_utf8(name).map_err(|_| fmt::Error)?;
-            write!(
-                out,
-                ",\"snapshot\":\"{name}\",\"snapshot_result\":{}",
-                snapshot.result
-            )?;
-        }
-        out.write_char('}')?;
     }
     Ok(())
 }

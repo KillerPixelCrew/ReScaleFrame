@@ -9,12 +9,6 @@ pub const RSF_D3D11_HOST_ABI_VERSION: u32 = 8;
 pub const RSF_D3D11_HOST_CAP_FG_INPUTS: u32 = 1;
 pub const RSF_D3D11_HOST_CAP_INPUT_TIMELINE: u32 = 2;
 pub const RSF_D3D11_HOST_CAP_RENDERED_SOURCE: u32 = 4;
-pub const RSF_FALLOUT4_VERIFY_RENDER: u32 = 0;
-pub const RSF_FALLOUT4_PREPARE_RENDER: u32 = 1;
-pub const RSF_FALLOUT4_START_RENDER: u32 = 3;
-pub const RSF_FALLOUT4_QUIESCE_RENDER: u32 = 5;
-pub const RSF_FALLOUT4_STOP_RENDER: u32 = 7;
-pub const RSF_FALLOUT4_RENDER_BUSY: u32 = 9;
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct rsf_motion_decode_params {
@@ -345,17 +339,10 @@ pub struct rsf_fallout4_platform {
             result: *mut i32,
         ) -> bool,
     >,
-    pub subsystem: ::core::option::Option<
-        unsafe extern "C" fn(
-            operation: u32,
-            services: *const rsf_game_host_services,
-            value: *mut bool,
-        ) -> bool,
-    >,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of rsf_fallout4_platform"][::core::mem::size_of::<rsf_fallout4_platform>() - 112usize];
+    ["Size of rsf_fallout4_platform"][::core::mem::size_of::<rsf_fallout4_platform>() - 104usize];
     ["Alignment of rsf_fallout4_platform"]
         [::core::mem::align_of::<rsf_fallout4_platform>() - 8usize];
     ["Offset of field: rsf_fallout4_platform::log"]
@@ -384,6 +371,4 @@ const _: () = {
         [::core::mem::offset_of!(rsf_fallout4_platform, creation_end) - 88usize];
     ["Offset of field: rsf_fallout4_platform::bind_presentation"]
         [::core::mem::offset_of!(rsf_fallout4_platform, bind_presentation) - 96usize];
-    ["Offset of field: rsf_fallout4_platform::subsystem"]
-        [::core::mem::offset_of!(rsf_fallout4_platform, subsystem) - 104usize];
 };

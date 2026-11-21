@@ -43,8 +43,10 @@ decltype(&rsf_d3d11_host_reduced_frame) reduced_frame{};
 decltype(&rsf_d3d11_host_capture_texture) capture_texture{};
 using CaptureRequested = int (*)();
 CaptureRequested capture_requested{};
+// Bound by the Rust prepare (render_hooks.rs) before any hook is enabled.
 rsf_game_host_services host{};
-std::atomic<bool> live{};
+// Rust owns the live flag with its release store and acquire load.
+bool live() noexcept { return rsf_fallout4_render_live(); }
 std::atomic<uint32_t> entered{}, windows{}, frames{}, auxiliaries{}, recoveries{};
 struct World {
     CpuIdentity cpu{};
@@ -230,7 +232,7 @@ void recovery_surfaces(const rsf_game_render_pass& pass) noexcept {
     }
 }
 bool reserve_recovery(const rsf_game_render_pass& planned) noexcept {
-    if (!live.load(std::memory_order_acquire) || !reduced_frame || world.recovery_token || !world.frame_open || !same_source())
+    if (!live() || !reduced_frame || world.recovery_token || !world.frame_open || !same_source())
         return recovery_refusal(0,"Fallout4 reduction preflight refused: recovery export/current source unavailable or previous token remains owned.");
     NativeInputs inputs;
     if (!read_native_raster_inputs(inputs,world.frame_pass) ||
@@ -250,7 +252,7 @@ bool reserve_recovery(const rsf_game_render_pass& planned) noexcept {
     }
     NativeInputs confirmed; NativeOutputOwner output_owner{};
     const bool unchanged=result==RSF_OK && request.token && request.disposition==RSF_D3D11_REDUCED_RESERVED &&
-        live.load(std::memory_order_acquire) && same_source() && preflight_output_resolution(planned,world.context.Get(),&output_owner) &&
+        live() && same_source() && preflight_output_resolution(planned,world.context.Get(),&output_owner) &&
         output_owner==world.recovery_output_owner &&
         read_native_raster_inputs(confirmed,world.frame_pass) &&
         same_object(confirmed.colour.Get(),world.recovery_inputs.colour.Get()) &&
@@ -370,7 +372,7 @@ bool emit_sr() {
     const bool sealed=seal_recovery();
     struct Resolve { ~Resolve() { (void)finish_recovery(); } } resolve;
     if (!sealed) { world.refused=true; return false; }
-    if (!live.load(std::memory_order_acquire) || !world.in_imagespace || !same_source() || world.inputs || world.raster_refused || world.auxiliary_open || !host.process_upscale) return false;
+    if (!live() || !world.in_imagespace || !same_source() || world.inputs || world.raster_refused || world.auxiliary_open || !host.process_upscale) return false;
     NativeInputs inputs;
     if (!read_native_inputs(inputs, report, &world.depth_snapshot)) return false;
     if (world.recovery_token && (!same_object(inputs.colour.Get(),world.recovery_inputs.colour.Get()) ||
@@ -501,7 +503,7 @@ void observe_viewport(void* manager, bool enabled) {
         world.refused=true;
         diagnostic("Fallout4 owned full-output selector write failed after native viewport intent; scope retained.");
     }
-    if (live.load(std::memory_order_acquire) && manager == reinterpret_cast<void*>(image() + 0x2f4d750)) {
+    if (live() && manager == reinterpret_cast<void*>(image() + 0x2f4d750)) {
         if (caller == image() + 0x21fa2ca) {
             report_resolution_state(ResolutionStage::hudless,world.inputs ? world.pass : world.frame_pass,world.context.Get(),world.published,RSF_OK,report);
             try { emit_hudless(); } catch (...) { diagnostic("Fallout4 HUDless callback failed; native drawing retained."); }
@@ -522,7 +524,7 @@ void observe_world_begin() {
         bool previous;
         ~Restore() { ordinary_world = previous; }
     } restore{ordinary_world};
-    const bool active=live.load(std::memory_order_acquire);
+    const bool active=live();
     const NativeWorldAdmission candidate{caller, active ? host.session_id : 0, active,
         ordinary_world, world.frame_open, world.auxiliary_open, world.recovery_token != 0};
     if (rsf_fallout4_render_admit_world(&candidate, &cpu)) {
@@ -555,7 +557,7 @@ void observe_dynamic_resolution(void* manager,void* a,void* b,void* c,void* d) {
         world.raster_refused=world.refused=true;
         if (!native_resolution_write()) diagnostic("Fallout4 native DR ownership transfer refused; pending scope retained.");
     }
-    if (live.load(std::memory_order_acquire) && caller==image()+0x21f9f34 &&
+    if (live() && caller==image()+0x21f9f34 &&
         manager==reinterpret_cast<void*>(image()+0x2f4d750) && !overlapping && world.frame_open && world.submission_open && !world.inputs && same_source()) {
         Owner owner_now{};
         const rsf_game_render_pass candidate{};
@@ -581,7 +583,7 @@ void observe_prepass() {
     struct Exit { ~Exit() { --prepass_depth; } } exit;
     const auto identity = world.cpu;
     // FRAME admission records the ordinary parent beyond WorldBegin's return.
-    const bool selected = (live.load(std::memory_order_acquire) || world.recovery_token) && prepass_depth == 1 &&
+    const bool selected = (live() || world.recovery_token) && prepass_depth == 1 &&
         caller == image() + 0x21f9f78 && world.frame_open &&
         world.submission_open && !world.inputs;
     // Every producer call invalidates the previous copy, including foreign views.
@@ -594,7 +596,7 @@ void observe_prepass() {
     SetLastError(error);
     prepass();
     const auto native_error = GetLastError();
-    if (selected && (live.load(std::memory_order_acquire) || world.recovery_token) &&
+    if (selected && (live() || world.recovery_token) &&
         world.frame_open && world.submission_open && !world.inputs &&
         !world.depth_interrupted) {
         (void)capture_native_raster(identity,world.raster_snapshot,report);
@@ -618,7 +620,7 @@ void observe_imagespace() {
     const auto caller = uintptr_t(__builtin_return_address(0));
 #endif
     const bool selected = !world.in_imagespace && world.frame_open &&
-        ((live.load(std::memory_order_acquire) && same_source()) || world.recovery_token) &&
+        ((live() && same_source()) || world.recovery_token) &&
         (caller == image() + 0xc383c7 || caller == image() + 0xc39d6f || caller == image() + 0xc39e13);
     struct Cleanup {
         bool selected;
@@ -648,7 +650,7 @@ void observe_effects(void* manager, uint32_t first, uint32_t last, uint32_t mode
 #endif
     const auto error = GetLastError();
     uintptr_t native_manager{};
-    if ((live.load(std::memory_order_acquire) || world.recovery_token) && caller == image() + 0x21fa288 && first == 0 && last == 13 && mode == 1 && flags == 1 &&
+    if ((live() || world.recovery_token) && caller == image() + 0x21fa288 && first == 0 && last == 13 && mode == 1 && flags == 1 &&
         read(image() + 0x3e5e4b0, &native_manager, sizeof(native_manager)) && uintptr_t(manager) == native_manager) {
         report_resolution_state(ResolutionStage::pre_sr,world.frame_pass,world.context.Get(),world.published,RSF_ERROR_NOT_READY,report);
         try { (void)emit_sr(); } catch (...) { diagnostic("Fallout4 SR callback failed; native imagespace retained."); }
@@ -765,121 +767,46 @@ void observe_native_present(void* renderer) {
     if (cpu_phase) end_cpu_present_phase(phase_owner);
     SetLastError(native_error);
 }
-struct Hook {
-    uintptr_t rva;
-    const char* bytes;
-    size_t length;
-    void* detour;
-    void** original;
-    bool created{};
-};
-Hook hooks[]{
-    {0x1839ed0, "\x48\x83\xec\x18\x8b\x05\x5e\x48\x71\x01", 10, reinterpret_cast<void*>(&observe_dynamic_resolution), reinterpret_cast<void**>(&dynamic_resolution)},
-    {0x21f38b0, "\x48\x89\x5c\x24\x08\x48\x89\x6c\x24\x10", 10, reinterpret_cast<void*>(&observe_prepass), reinterpret_cast<void**>(&prepass)},
-    {0x1818550, "\x40\x53\x48\x83\xec\x20", 6, reinterpret_cast<void*>(&observe_native_present), reinterpret_cast<void**>(&native_present)},
-    {0x21f0ac0, "\x48\x8b\xc4\x53\x48\x81\xec\xb0\x00\x00\x00", 11, reinterpret_cast<void*>(&observe_world_begin), reinterpret_cast<void**>(&world_begin)},
-    {0x1839ec0, "\x88\x91\xe4\x0f\x00\x00\xc3", 7, reinterpret_cast<void*>(&observe_viewport), reinterpret_cast<void**>(&viewport)},
-    {0x21fa200, "\x48\x89\x5c\x24\x10\x56\x48\x83\xec\x40", 10, reinterpret_cast<void*>(&observe_imagespace), reinterpret_cast<void**>(&imagespace)},
-    {0x2185420, "\x48\x89\x5c\x24\x18\x55\x56\x57\x41\x55\x41\x56\x48\x83\xec\x30", 16, reinterpret_cast<void*>(&observe_effects), reinterpret_cast<void**>(&effects)},
-    {0x2214fc0, "\x83\x3d\x85\x22\xb7\x01\x01\x75\x12\x80\x79\x08\x00\x74\x0c\x83\x3d\x7a\x22\xb7\x01\x00\x75\x03\xb0\x01\xc3", 27, reinterpret_cast<void*>(&observe_taa), reinterpret_cast<void**>(&taa_active)}
-};
-bool call(uintptr_t rva, uintptr_t target) {
-    unsigned char bytes[5]{};
-    if (!read(image() + rva, bytes, sizeof(bytes)) || bytes[0] != 0xe8) return false;
-    int32_t relative{}; std::memcpy(&relative, bytes + 1, sizeof(relative));
-    return uintptr_t(intptr_t(rva + 5) + relative) == target;
+// NativeRenderHook order. MinHook writes each typed trampoline at creation; the detours call
+// them on their own C++ frames. Rust (render_hooks.rs) owns the RVAs, entry bytes and created
+// state of these records.
+const std::array<void*, RenderHookCount> detours{
+    reinterpret_cast<void*>(&observe_dynamic_resolution), reinterpret_cast<void*>(&observe_prepass),
+    reinterpret_cast<void*>(&observe_native_present), reinterpret_cast<void*>(&observe_world_begin),
+    reinterpret_cast<void*>(&observe_viewport), reinterpret_cast<void*>(&observe_imagespace),
+    reinterpret_cast<void*>(&observe_effects), reinterpret_cast<void*>(&observe_taa)};
+const std::array<void**, RenderHookCount> originals{
+    reinterpret_cast<void**>(&dynamic_resolution), reinterpret_cast<void**>(&prepass),
+    reinterpret_cast<void**>(&native_present), reinterpret_cast<void**>(&world_begin),
+    reinterpret_cast<void**>(&viewport), reinterpret_cast<void**>(&imagespace),
+    reinterpret_cast<void**>(&effects), reinterpret_cast<void**>(&taa_active)};
+bool create_hook(uint32_t hook, void* target) noexcept {
+    return hook < detours.size() && MH_CreateHook(target, detours[hook], originals[hook]) == MH_OK;
 }
-}
-bool verify_render_hooks() noexcept try {
-    for (const auto& hook : hooks) {
-        char actual[32]{};
-        if (!read(image() + hook.rva, actual, hook.length) || std::memcmp(actual, hook.bytes, hook.length)) return false;
-    }
-    const auto guard = [](uintptr_t rva, const char* bytes, size_t length) {
-        char actual[16]{};
-        return length <= sizeof(actual) && read(image() + rva, actual, length) && !std::memcmp(actual, bytes, length);
-    };
-    uintptr_t native_taa{};
-    return verify_resolution() && verify_screen_queries() && verify_native_depth_domains() &&
-        read(image() + 0x2915eb0 + 8 * sizeof(void*), &native_taa, sizeof(native_taa)) &&
-        native_taa == image() + 0x2214fc0 && call(0xc335e7,0x1818550) &&
-        call(0x21f9f73, 0x21f38b0) &&
-        call(0x21f9f2f, 0x1839ed0) &&
-        call(0x21f9f69, 0x21f30b0) &&
-        call(0x21f32a5, 0x182bf20) && call(0x21f32bb, 0x182bf20) && call(0x21f32d1, 0x182bf20) &&
-        call(0x182c02d, 0x182d750) &&
-        call(0x182c597, 0x1817ef0) &&
-        guard(0xc335e0, "\x48\x8d\x0d\x19\x27\xdf\x02", 7) &&
-        guard(0x1818572, "\x48\x8b\x05\x37\x8e\x0c\x02", 7) &&
-        guard(0x181858a, "\x48\x8b\x48\x18", 4) &&
-        guard(0x181859b, "\x41\xff\x51\x40", 4) &&
-        guard(0x18185b6, "\x48\x8b\x05\xf3\x8d\x0c\x02", 7) &&
-        guard(0x18185c4, "\x48\x8b\x48\x18", 4) &&
-        guard(0x18185d5, "\x41\xff\x51\x40", 4) &&
-        call(0xc382a0, 0x21f0ac0) &&
-        call(0x21f0ae6, 0x1839ec0) && call(0x21f0e4c, 0x182d580) &&
-        call(0x21fa283, 0x2185420) && call(0x21fa2c5, 0x1839ec0) &&
-        call(0xc383c2, 0x21fa200) && call(0xc39d6a, 0x21fa200) && call(0xc39e0e, 0x21fa200);
-} catch (...) { return false; }
-bool prepare_render_hooks(const rsf_game_host_services& services) {
-    if (live.load(std::memory_order_acquire) || render_hooks_busy() || !services.process_upscale || !services.render_pass ||
-        !verify_render_hooks() || !verify_render_inputs()) return false;
-    const auto runtime=GetModuleHandleW(L"ReScaleFrame.Runtime.dll");
-    upscale_auxiliaries=reinterpret_cast<decltype(upscale_auxiliaries)>(GetProcAddress(runtime,"rsf_d3d11_host_upscale_auxiliaries"));
-    restore_auxiliaries=reinterpret_cast<decltype(restore_auxiliaries)>(GetProcAddress(runtime,"rsf_d3d11_host_restore_auxiliaries"));
-    reduced_frame=reinterpret_cast<decltype(reduced_frame)>(GetProcAddress(runtime,"rsf_d3d11_host_reduced_frame"));
-    capture_texture=reinterpret_cast<decltype(capture_texture)>(GetProcAddress(runtime,"rsf_d3d11_host_capture_texture"));
-    capture_requested=reinterpret_cast<CaptureRequested>(GetProcAddress(runtime,"rsf_input_dump_requested"));
-    // Independent export negotiation. An older runtime retains native raster.
-    if (!upscale_auxiliaries || !restore_auxiliaries || !services.render_config) return false;
-    std::array<Hook*, sizeof(hooks) / sizeof(hooks[0])> created{};
-    size_t count{};
-    for (auto& hook : hooks) {
-        if (hook.created) continue;
-        if (MH_CreateHook(reinterpret_cast<void*>(image() + hook.rva), hook.detour, hook.original) != MH_OK) {
-            while (count) {
-                auto& added = *created[--count];
-                if (MH_RemoveHook(reinterpret_cast<void*>(image() + added.rva)) == MH_OK) {
-                    added.created = false;
-                    *added.original = nullptr;
-                } else report("Fallout4 cold render-hook rollback refused; retained hook ownership, startup remains refused.");
-            }
-            return false;
-        }
-        hook.created = true;
-        created[count++] = &hook;
-    }
-    host = services;
+bool remove_hook(uint32_t hook, void* target) noexcept {
+    if (hook >= originals.size() || MH_RemoveHook(target) != MH_OK) return false;
+    *originals[hook] = nullptr;
     return true;
 }
-bool start_render_hooks() {
-    if (render_hooks_busy() || !verify_render_hooks()) return false;
-    bool queued = true;
-    for (auto& hook : hooks) if (!hook.created || MH_QueueEnableHook(reinterpret_cast<void*>(image() + hook.rva)) != MH_OK) queued = false;
-    if (queued) live.store(true, std::memory_order_release);
-    if (!queued || MH_ApplyQueued() != MH_OK) {
-        live.store(false, std::memory_order_release);
-        for (auto& hook : hooks) if (hook.created) (void)MH_QueueDisableHook(reinterpret_cast<void*>(image() + hook.rva));
-        (void)MH_ApplyQueued();
-        return false;
-    }
-    report("Fallout4 guarded native DR/SR/auxiliary output callbacks enabled; actual producer and screen admission required, FG/input capabilities remain gated.");
-    return true;
+bool queue_enable_hook(void* target) noexcept { return MH_QueueEnableHook(target) == MH_OK; }
+bool queue_disable_hook(void* target) noexcept { return MH_QueueDisableHook(target) == MH_OK; }
+bool apply_queued() noexcept { return MH_ApplyQueued() == MH_OK; }
+// The C++ half of busy; Rust adds the resolution owner.
+bool scopes_busy() noexcept {
+    return entered.load(std::memory_order_acquire) || windows.load(std::memory_order_acquire) || frames.load(std::memory_order_acquire) || auxiliaries.load(std::memory_order_acquire) || recoveries.load(std::memory_order_acquire);
 }
-void quiesce_render_hooks() { live.store(false, std::memory_order_release); }
-bool stop_render_hooks() {
-    quiesce_render_hooks();
-    if (render_hooks_busy()) return false;
-    bool disabled = true;
-    for (auto& hook : hooks) if (hook.created) {
-        const auto result = MH_DisableHook(reinterpret_cast<void*>(image() + hook.rva));
-        disabled = disabled && (result == MH_OK || result == MH_ERROR_DISABLED);
-    }
-    return disabled && !render_hooks_busy();
+void bind_exports(const NativeRenderExports* exports) noexcept {
+    upscale_auxiliaries=reinterpret_cast<decltype(upscale_auxiliaries)>(exports->upscale_auxiliaries);
+    restore_auxiliaries=reinterpret_cast<decltype(restore_auxiliaries)>(exports->restore_auxiliaries);
+    reduced_frame=reinterpret_cast<decltype(reduced_frame)>(exports->reduced_frame);
+    capture_texture=reinterpret_cast<decltype(capture_texture)>(exports->capture_texture);
+    capture_requested=reinterpret_cast<CaptureRequested>(exports->capture_requested);
 }
-bool render_hooks_busy() {
-    return entered.load(std::memory_order_acquire) || windows.load(std::memory_order_acquire) || frames.load(std::memory_order_acquire) || auxiliaries.load(std::memory_order_acquire) || recoveries.load(std::memory_order_acquire) || resolution_busy();
+void bind_host(const rsf_game_host_services* services) noexcept { host = *services; }
+constexpr NativeRenderHookLeaves leaves{create_hook, remove_hook, queue_enable_hook, queue_disable_hook,
+    apply_queued, scopes_busy, bind_exports, bind_host};
 }
+const NativeRenderHookLeaves* render_hook_leaves() noexcept { return &leaves; }
 void finish_render_scope() noexcept try {
     if (!world.cpu.source) return;
     if (!same_source()) world.refused=true;

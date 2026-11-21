@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: MIT
 // GameSDK export and native leaves of the Rust Fallout 4 owner (lib.rs). Rust owns the exact
 // build identity, the lifecycle and its Runtime session, DPI startup, the cold creation
-// sequence and the CPU event owner. This file supplies MinHook, exception guards, the shared file
-// hash, the shared Steam chain facade and the C++ render subsystem; cpu_events.cpp supplies the
-// CPU leaves.
+// sequence, the CPU event owner and the render hook lifecycle. This file supplies MinHook,
+// exception guards, the shared file hash and the shared Steam chain facade; cpu_events.cpp and
+// render_hooks.cpp supply the CPU and render hook leaves.
 #include "fallout4_platform.h"
 #include "native_creation.h"
 #include "cpu_events.h"
-#include "render_hooks.h"
-#include "render_inputs.h"
+#include "render_hooks_platform.h"
 #include <rescaleframe/sha256_file.h>
 #include <rescaleframe/steam_d3d11_chain.h>
 #include <MinHook.h>
@@ -17,26 +16,12 @@
 
 namespace {
 using namespace rsf::fallout4;
-static_assert(sizeof(rsf_fallout4_platform) == 14 * sizeof(void*));
+static_assert(sizeof(rsf_fallout4_platform) == 13 * sizeof(void*));
 
 // A native call that throws reports false; the Rust lifecycle then answers RSF_ERROR_NOT_READY
 // as the previous native catch did.
 template<class Call> bool guarded(Call&& call) noexcept {
     try { call(); return true; } catch (...) { return false; }
-}
-
-bool subsystem(uint32_t operation, const rsf_game_host_services* services, bool* value) noexcept {
-    return guarded([&] {
-        switch (operation) {
-        case RSF_FALLOUT4_VERIFY_RENDER: *value = verify_render_hooks() && verify_render_inputs(); break;
-        case RSF_FALLOUT4_PREPARE_RENDER: *value = services && prepare_render_hooks(*services); break;
-        case RSF_FALLOUT4_START_RENDER: *value = start_render_hooks(); break;
-        case RSF_FALLOUT4_QUIESCE_RENDER: quiesce_render_hooks(); *value = true; break;
-        case RSF_FALLOUT4_STOP_RENDER: *value = stop_render_hooks(); break;
-        case RSF_FALLOUT4_RENDER_BUSY: *value = render_hooks_busy(); break;
-        default: *value = false; break;
-        }
-    });
 }
 
 constexpr rsf_fallout4_platform platform{
@@ -82,11 +67,12 @@ constexpr rsf_fallout4_platform platform{
         int32_t* result) noexcept {
         return guarded([&] { *result = bind ? bind(user, binding) : RSF_ERROR_NOT_READY; });
     },
-    subsystem,
 };
 }
 extern "C" __declspec(dllexport) rsf_result rsf_get_game_plugin_api(uint32_t requested_abi, rsf_game_plugin_api* api) noexcept {
-    // The CPU leaves are constant and complete; prepare refuses CPU hooks if they are unbound.
+    // The CPU and render hook leaves are constant and complete; prepare refuses their hooks if
+    // they are unbound.
     (void)rsf_fallout4_cpu_publish(rsf::fallout4::cpu_event_platform());
+    (void)rsf::fallout4::rsf_fallout4_render_publish(rsf::fallout4::render_hook_leaves());
     return rsf_fallout4_publish_api(requested_abi, api, &platform);
 }

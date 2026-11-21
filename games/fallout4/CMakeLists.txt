@@ -5,8 +5,8 @@ add_library(rsf_game_fallout4 SHARED src/plugin.cpp src/native_creation.cpp
 # Rust (src/lib.rs, src/cpu_events.rs). plugin.cpp and native_creation.cpp supply the native leaves
 # through src/fallout4_platform.h; cpu_events.cpp supplies the CPU detour shells, MinHook
 # trampolines and guarded host callback through src/cpu_events_platform.h. Rust also owns
-# depth-domain admission and composition, producer resolution, and render-input admission
-# with its camera history and leased passes.
+# depth-domain admission and composition, producer resolution, the render hook lifecycle with
+# World/Present admission, and render-input admission with its camera history and leased passes.
 # Their C++ leaves provide typed native calls through the matching private platform headers.
 rsf_add_rust_static(rsf_fallout4_rust rsf_rust_fallout4 rsf-fallout4 rsf_fallout4)
 target_include_directories(rsf_game_fallout4 PRIVATE

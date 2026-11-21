@@ -23,7 +23,6 @@
 #include <iterator>
 #include <mutex>
 #include <new>
-#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -33,10 +32,6 @@ using Microsoft::WRL::ComPtr;
 namespace {
 constexpr uint32_t max_blobs = 4096;
 constexpr size_t blob_budget = 32u * 1024u * 1024u;
-constexpr uint32_t cloud_composite_shader = 0x83524e47u;
-// Captured directional light variant: screen-space contact ray and stationary IGN.
-constexpr uint32_t contact_light_shader = 3619939816u;
-constexpr uint32_t contact_light_phased_shader = 4154163049u; // AC7 transform: noise phase and depth quantisation bias
 
 struct Capture {
     std::mutex guard;
@@ -382,14 +377,6 @@ MotionQueuedDraw queued_draw()
     } else draw.scope = rsf_ac7_capture_queued_scope(draw.command, draw.execute, false);
     return draw;
 }
-void queued_scope(std::ostream& out)
-{
-    const auto [command, execute, scope] = queued_draw();
-    out << ",\"rhi_command\":" << command << ",\"rhi_execute\":" << execute
-        << ",\"queued_native_scope\":" << scope.scope << ",\"queued_native_view\":" << scope.view
-        << ",\"queued_native_family\":" << scope.family << ",\"queued_native_frame\":" << scope.native_frame
-        << ",\"queued_list\":" << scope.command_list << ",\"queued_uid\":" << scope.queue_uid;
-}
 void install_roots(unsigned char* base)
 {
     auto& s = state(); if (s.roots_installed) return;
@@ -476,18 +463,6 @@ void visit_constants(MotionCaptureInterval capture, ID3D11DeviceContext* context
         visit(MotionBoundConstant{record.buffer, record.upload_serial, slot, id, uint32_t(fallback)});
     }
 }
-void constants(MotionCaptureInterval capture, std::ostream& out, ID3D11DeviceContext* context, void* const* buffers,
-               uint32_t mask, bool lighting = false)
-{
-    out << '['; bool first = true;
-    visit_constants(capture, context, buffers, mask, lighting, [&](const MotionBoundConstant& record) {
-        if (!first) out << ','; first = false;
-        out << "{\"slot\":" << record.slot << ",\"buffer\":" << record.buffer
-            << ",\"blob\":" << record.blob << ",\"upload_serial\":" << record.upload_serial
-            << ",\"readback\":" << record.readback << '}';
-    });
-    out << ']';
-}
 uint32_t shader_hash(void* pointer, uint32_t stage) { return rsf_ac7_capture_shader_facts(pointer, stage).hash; }
 uint32_t shader_constants(void* pointer, uint32_t stage) { return rsf_ac7_capture_shader_facts(pointer, stage).constant_mask; }
 uint32_t disassemble_constants(const void* bytes, size_t size) noexcept
@@ -506,7 +481,7 @@ uint32_t disassemble_constants(const void* bytes, size_t size) noexcept
     }
     return rsf_ac7_capture_declared_constants(nullptr, 0);
 }
-// These dimension values select the optional fields in the Rust draw and dispatch writers.
+// These dimension values select the optional fields in the Rust row writers.
 static_assert(D3D11_RESOURCE_DIMENSION_TEXTURE2D == 3 && D3D11_RESOURCE_DIMENSION_TEXTURE3D == 4);
 MotionResource resource_facts(ID3D11Resource* r)
 {
@@ -521,18 +496,6 @@ MotionResource resource_facts(ID3D11Resource* r)
     }
     return facts;
 }
-void resource(std::ostream& out, const MotionResource& facts)
-{
-    out << "{\"resource\":" << facts.resource << ",\"dimension\":" << facts.dimension;
-    if (facts.dimension == D3D11_RESOURCE_DIMENSION_TEXTURE2D ||
-        facts.dimension == D3D11_RESOURCE_DIMENSION_TEXTURE3D) {
-        out << ",\"width\":" << facts.width << ",\"height\":" << facts.height;
-        if (facts.dimension == D3D11_RESOURCE_DIMENSION_TEXTURE3D) out << ",\"depth\":" << facts.depth;
-        out << ",\"format\":" << facts.format;
-    }
-    out << '}';
-}
-void resource(std::ostream& out, ID3D11Resource* r) { resource(out, resource_facts(r)); }
 
 template<class View, size_t N, class Visit> void visit_bound_views(View* (&views)[N], Visit visit)
 {
@@ -543,10 +506,6 @@ template<class View, size_t N, class Visit> void visit_bound_views(View* (&views
         views[i]->Release();
     }
 }
-void record_draw_text(MotionCaptureInterval capture, const std::string& text)
-{
-    if (!rsf_ac7_capture_record_draw_text(capture, text.data(), text.size())) capture_failed(capture);
-}
 const char* colour_stage(uint32_t hash)
 {
     // Captured AC7 producers, mapped through original DXBC and the RenoDX AC7 reference.
@@ -556,8 +515,7 @@ const char* colour_stage(uint32_t hash)
     case 0xa5c9147bu: return "scene_effect";
     case 0xb2f7719du: return "hud";
     case 0x2136e125u: case 0xa7441be5u: return "composite";
-    case cloud_composite_shader: return "cloud_composite_after";
-    default: return nullptr;
+    default: return rsf_ac7_capture_is_cloud_composite(hash) ? "cloud_composite_after" : nullptr;
     }
 }
 MotionColourSnapshot colour_snapshot(MotionCaptureInterval capture, ID3D11DeviceContext* context,
@@ -584,94 +542,65 @@ MotionColourSnapshot colour_snapshot(MotionCaptureInterval capture, ID3D11Device
     if (snapshot.result != RSF_TEXTURE_OK) rsf_ac7_capture_colour_snapshot_failed(capture);
     return snapshot;
 }
-void write_colour_snapshot(MotionCaptureInterval capture, std::ostream& out, ID3D11DeviceContext* context,
-                           ID3D11Resource* resource, const char* role, bool lighting = false)
+MotionDrawTarget sampled_target(MotionCaptureInterval capture, ID3D11DeviceContext* context,
+    ID3D11Resource* resource, const char* role, bool lighting, uint32_t slot)
 {
+    const auto facts = resource_facts(resource);
     const auto snapshot = colour_snapshot(capture, context, resource, role, lighting);
-    if (snapshot.name[0])
-        out << ",\"snapshot\":\"" << snapshot.name << "\",\"snapshot_result\":" << snapshot.result;
-}
-void lighting_before(MotionCaptureInterval capture, ID3D11DeviceContext* context,
-                     const rsf_frame_tap_target_draw& draw, uint32_t hash)
-{
-    if (!rsf_ac7_capture_begin_lighting_pair(capture)) return;
-    const auto interval = capture.interval;
-    std::ostringstream out;
-    out << "{\"kind\":\"contact_light_before\",\"qpc\":" << tick()
-        << ",\"interval\":" << interval << ",\"thread\":" << GetCurrentThreadId()
-        << ",\"ps_hash\":" << hash << ",\"colour\":{\"view\":";
-    resource(out, static_cast<ID3D11Resource*>(draw.render_target));
-    write_colour_snapshot(capture, out, context, static_cast<ID3D11Resource*>(draw.render_target), "contact_light_before", true);
-    out << "},\"inputs\":[";
-    ID3D11ShaderResourceView* views[6]{}; context->PSGetShaderResources(0, 6, views);
-    ComPtr<ID3D11ShaderResourceView> retained[6];
-    for (uint32_t i = 0; i < 6; ++i) retained[i].Attach(views[i]);
-    constexpr const char* roles[]{"contact_ps_input_0", "contact_ps_input_1", "contact_ps_input_2",
-        "contact_light_mask", "contact_scene_depth", "contact_static_shadow"};
-    bool first = true;
-    for (uint32_t slot = 0; slot < 6; ++slot) {
-        if (!retained[slot]) continue;
-        ComPtr<ID3D11Resource> texture; retained[slot]->GetResource(&texture);
-        if (!first) out << ','; first = false;
-        out << "{\"slot\":" << slot << ",\"view\":"; resource(out, texture.Get());
-        write_colour_snapshot(capture, out, context, texture.Get(), roles[slot], true); out << '}';
-    }
-    out << "],\"samplers\":[";
-    ID3D11SamplerState* samplers[6]{}; context->PSGetSamplers(0, 6, samplers);
-    first = true;
-    for (uint32_t slot = 0; slot < 6; ++slot) if (samplers[slot]) {
-        D3D11_SAMPLER_DESC sampler{}; samplers[slot]->GetDesc(&sampler); samplers[slot]->Release();
-        if (!first) out << ','; first = false;
-        out << "{\"slot\":" << slot << ",\"filter\":" << uint32_t(sampler.Filter)
-            << ",\"address\":[" << uint32_t(sampler.AddressU) << ',' << uint32_t(sampler.AddressV) << ',' << uint32_t(sampler.AddressW)
-            << "],\"comparison\":" << uint32_t(sampler.ComparisonFunc) << ",\"lod\":[" << sampler.MinLOD << ',' << sampler.MaxLOD << "]}";
-    }
-    out << "],\"ps_cb\":";
-    // Read the two live shader inputs before the light executes, using the reserved quota.
-    ID3D11Buffer* raw[14]{}; context->PSGetConstantBuffers(0, 2, raw);
-    ComPtr<ID3D11Buffer> retained_buffers[2]; void* buffers[14]{};
-    for (uint32_t i = 0; i < 2; ++i) { retained_buffers[i].Attach(raw[i]); buffers[i] = raw[i]; }
-    constants(capture, out, context, buffers, 3u, true);
-    queued_scope(out); out << '}'; record_draw_text(capture, out.str());
+    return {{facts, slot}, snapshot};
 }
 void before_draw_capture(MotionCaptureInterval capture, const rsf_frame_tap_target_draw* d) try
 {
-    if (!capture || d->target_width < 400 || d->target_height < 200) return;
-    const auto ps = shader_hash(d->pixel_shader, 1);
-    auto* c = static_cast<ID3D11DeviceContext*>(d->context);
-    if (ps == contact_light_shader || ps == contact_light_phased_shader) { lighting_before(capture, c, *d, ps); return; }
-    if (ps != cloud_composite_shader) return;
-    std::ostringstream out;
-    out << "{\"kind\":\"cloud_composite_before\",\"qpc\":" << tick()
-        << ",\"interval\":" << capture.interval << ",\"thread\":" << GetCurrentThreadId()
-        << ",\"target\":" << uint64_t(uintptr_t(d->render_target))
-        << ",\"draw_index\":" << d->draw_index << ",\"ps_hash\":" << cloud_composite_shader
-        << ",\"colour\":{\"view\":";
-    resource(out, static_cast<ID3D11Resource*>(d->render_target));
-    write_colour_snapshot(capture, out, c, static_cast<ID3D11Resource*>(d->render_target), "cloud_composite_before");
-    out << "},\"loss\":";
-    ID3D11RenderTargetView* targets[2]{}; c->OMGetRenderTargets(2, targets, nullptr);
+    if (!capture) return;
+    MotionBeforeDrawPlan plan{};
+    if (!rsf_ac7_capture_plan_before_draw(capture, d->target_width, d->target_height, d->pixel_shader, &plan)) return;
+    auto* context = static_cast<ID3D11DeviceContext*>(d->context);
+    const bool lighting = plan.lighting != 0;
+    MotionBeforeDraw row{};
+    row.qpc = tick(); row.thread = GetCurrentThreadId();
+    if (!lighting) row.draw_index = d->draw_index;
+    row.colour = sampled_target(capture, context, static_cast<ID3D11Resource*>(d->render_target),
+        plan.colour_role, lighting, 0);
+
     ComPtr<ID3D11RenderTargetView> colour_target, loss_target;
-    colour_target.Attach(targets[0]); loss_target.Attach(targets[1]);
-    if (loss_target) {
-        ComPtr<ID3D11Resource> texture; loss_target->GetResource(&texture);
-        out << "{\"view\":"; resource(out, texture.Get());
-        write_colour_snapshot(capture, out, c, texture.Get(), "cloud_loss_before"); out << '}';
-    } else out << "null";
-    out << ",\"inputs\":[";
-    ID3D11ShaderResourceView* views[4]{}; c->PSGetShaderResources(0, 4, views);
-    ComPtr<ID3D11ShaderResourceView> retained[4];
-    for (uint32_t slot = 0; slot < 4; ++slot) retained[slot].Attach(views[slot]);
-    constexpr const char* roles[]{"cloud_near", "cloud_far", "cloud_near_far_depth", "cloud_scene_depth"};
-    bool first = true;
-    for (uint32_t slot = 0; slot < 4; ++slot) {
+    if (plan.loss_role) {
+        ID3D11RenderTargetView* targets[2]{}; context->OMGetRenderTargets(2, targets, nullptr);
+        colour_target.Attach(targets[0]); loss_target.Attach(targets[1]);
+        if (loss_target) {
+            ComPtr<ID3D11Resource> texture; loss_target->GetResource(&texture);
+            row.loss = sampled_target(capture, context, texture.Get(), plan.loss_role, lighting, 1);
+        }
+    }
+
+    ID3D11ShaderResourceView* views[6]{}; context->PSGetShaderResources(0, plan.input_slots, views);
+    ComPtr<ID3D11ShaderResourceView> retained[6];
+    for (uint32_t slot = 0; slot < plan.input_slots; ++slot) retained[slot].Attach(views[slot]);
+    for (uint32_t slot = 0; slot < plan.input_slots; ++slot) {
         if (!retained[slot]) continue;
         ComPtr<ID3D11Resource> texture; retained[slot]->GetResource(&texture);
-        if (!first) out << ','; first = false;
-        out << "{\"slot\":" << slot << ",\"view\":"; resource(out, texture.Get());
-        write_colour_snapshot(capture, out, c, texture.Get(), roles[slot]); out << '}';
+        row.inputs[row.input_count++] = sampled_target(capture, context, texture.Get(),
+            plan.input_roles[slot], lighting, slot);
     }
-    out << "]}"; record_draw_text(capture, out.str());
+
+    ComPtr<ID3D11Buffer> retained_buffers[2];
+    if (lighting) {
+        ID3D11SamplerState* samplers[6]{}; context->PSGetSamplers(0, plan.sampler_slots, samplers);
+        for (uint32_t slot = 0; slot < plan.sampler_slots; ++slot) if (samplers[slot]) {
+            D3D11_SAMPLER_DESC sampler{}; samplers[slot]->GetDesc(&sampler); samplers[slot]->Release();
+            row.samplers[row.sampler_count++] = {slot, uint32_t(sampler.Filter),
+                {uint32_t(sampler.AddressU), uint32_t(sampler.AddressV), uint32_t(sampler.AddressW)},
+                uint32_t(sampler.ComparisonFunc), sampler.MinLOD, sampler.MaxLOD};
+        }
+        // Read the two live shader inputs before the light executes, using the reserved quota.
+        ID3D11Buffer* raw[2]{}; context->PSGetConstantBuffers(0, plan.constant_slots, raw);
+        void* buffers[14]{};
+        for (uint32_t i = 0; i < plan.constant_slots; ++i) { retained_buffers[i].Attach(raw[i]); buffers[i] = raw[i]; }
+        const uint32_t mask = (1u << plan.constant_slots) - 1;
+        visit_constants(capture, context, buffers, mask, lighting,
+            [&](const MotionBoundConstant& record) { row.constants[row.constant_count++] = record; });
+        row.queued = queued_draw();
+    }
+    if (!rsf_ac7_capture_record_before_draw(capture, &plan, &row)) capture_failed(capture);
 }
 catch (...) { capture_failed(capture); }
 void draw_capture(MotionCaptureInterval capture, const rsf_frame_tap_target_draw* d) try
@@ -679,8 +608,7 @@ void draw_capture(MotionCaptureInterval capture, const rsf_frame_tap_target_draw
     if (!capture || !rsf_ac7_capture_can_record_draw(capture)) return;
     auto* c = static_cast<ID3D11DeviceContext*>(d->context);
     const uint32_t ps = shader_hash(d->pixel_shader, 1);
-    const bool light_after = (ps == contact_light_shader || ps == contact_light_phased_shader) &&
-        rsf_ac7_capture_take_lighting_after(capture);
+    const bool light_after = rsf_ac7_capture_take_lighting_after(capture, ps);
     ComPtr<ID3D11GeometryShader> gs; ComPtr<ID3D11HullShader> hs; ComPtr<ID3D11DomainShader> ds;
     c->GSGetShader(&gs, nullptr, nullptr); c->HSGetShader(&hs, nullptr, nullptr); c->DSGetShader(&ds, nullptr, nullptr);
     MotionDraw draw{};
@@ -735,7 +663,7 @@ void draw_capture(MotionCaptureInterval capture, const rsf_frame_tap_target_draw
             const auto* role = large ? colour_stage(ps) : nullptr;
             if (light_after) role = "contact_light_after";
             record.snapshot = colour_snapshot(capture, c, resource.Get(), role, light_after);
-        } else if (i == 1 && ps == cloud_composite_shader && large) {
+        } else if (i == 1 && large && rsf_ac7_capture_is_cloud_composite(ps)) {
             record.snapshot = colour_snapshot(capture, c, resource.Get(), "cloud_loss_after");
         }
     }

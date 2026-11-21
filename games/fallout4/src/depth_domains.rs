@@ -1801,7 +1801,7 @@ pub(crate) fn complete<'a>(leaves: *const Leaves) -> Option<&'a Leaves> {
 
 /// Checks the expected bytes of every native site the snapshot depends on.
 #[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_depth_verify() -> bool {
+pub(crate) extern "C" fn rsf_fallout4_depth_verify() -> bool {
     verify()
 }
 

@@ -45,9 +45,12 @@ later step or publication refuses.
 Each Vulkan event and window frame keeps the host services it was admitted with.
 Drain probes hold an entry while reading native slot fences. The Unity instance
 belongs to the shared-device creation and release path.
-The Vulkan loader's original-function slots and the Win32 interop extension
-request are Rust-owned (`vulkan_resolver.rs`). Native code still invokes the typed
-Vulkan functions. The extension request falls back unchanged when preflight
+Unity's Vulkan resolver is Rust-owned (`vulkan_resolver.rs`): the resolver keys
+and their separate instance and device routes, the interceptor table registered
+at initialization, the saved loader functions, the swapchain-destroy fallback
+lookup, the Win32 interop extension selection and the interop readiness check.
+Native code keeps the Vulkan types and invokes the typed loader, enumeration and
+create functions. The extension request falls back unchanged when the device
 cannot supply both names, and readiness is attached to the created device.
 Rust also tracks the shared Vulkan image plans, publishes first-use layout
 only after queue acceptance and refuses retirement for a partially submitted
@@ -59,9 +62,12 @@ cleans up its partial image before the existing Rust record can change.
 
 The Editor preview uses the same Rust submission-ring logic with its own fence and slots
 (`preview.rs`). Rust selects the containing editor window, tracks visibility and admits
-graphics preparation and Present. Native leaves keep window messages, resource copies and
-DXGI calls. Failed fence creation can be retried, and a failed backbuffer lookup leaves
-the existing command slot closed. The port preserves the source pass identity.
+graphics preparation and Present. It also owns the preview's references to the lent device
+and queue, its fence and swapchain, and each slot's allocator, list and source texture, and
+releases them only after a drained proof taken since the last submission. Native leaves keep
+window messages, resource copies and the typed D3D12 and DXGI calls. Failed fence creation
+can be retried, and a failed backbuffer lookup leaves the existing command slot closed. The
+port preserves the source pass identity.
 
 The Runtime setup behind the loader entry `rsf_unity_start` and `rsf_unity_fg_start`,
 `rsf_unity_sr_start` and `rsf_unity_sr_stop` is Rust as well (`runtime_setup.rs`): the
