@@ -15,8 +15,16 @@ static_assert(VK_FORMAT_R8G8B8A8_UNORM == 37 && VK_FORMAT_B8G8R8A8_UNORM == 44 &
     VK_FORMAT_R16G16_SFLOAT == 83 && VK_FORMAT_R32_SFLOAT == 100 &&
     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL == 5 && VK_COLOR_SPACE_SRGB_NONLINEAR_KHR == 0 &&
     VK_SHARING_MODE_EXCLUSIVE == 0 && VK_IMAGE_USAGE_TRANSFER_SRC_BIT == 1 && VK_IMAGE_USAGE_SAMPLED_BIT == 4);
+// The Rust transfer plan carries these layouts, queue families, masks and format features.
+static_assert(VK_IMAGE_LAYOUT_UNDEFINED == 0 && VK_IMAGE_LAYOUT_GENERAL == 1 &&
+    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL == 6 && VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL == 7 &&
+    VK_QUEUE_FAMILY_IGNORED == ~0u && VK_QUEUE_FAMILY_EXTERNAL == ~1u &&
+    VK_ACCESS_MEMORY_READ_BIT == 0x8000 && VK_ACCESS_MEMORY_WRITE_BIT == 0x10000 &&
+    VK_PIPELINE_STAGE_ALL_COMMANDS_BIT == 0x10000 &&
+    VK_FORMAT_FEATURE_BLIT_SRC_BIT == 0x400 && VK_FORMAT_FEATURE_BLIT_DST_BIT == 0x800);
 static_assert(sizeof(rsf_dx12gvk_swapchain) == 56 && sizeof(rsf_dx12gvk_present_info) == 32 &&
-    sizeof(rsf_dx12gvk_ops) == 24 * sizeof(void*));
+    sizeof(rsf_dx12gvk_barrier) == 40 && sizeof(rsf_dx12gvk_transfer) == 32 &&
+    sizeof(rsf_dx12gvk_ops) == 26 * sizeof(void*));
 
 struct rsf_dx12gvk_platform {
     VkDevice device{};
@@ -85,7 +93,7 @@ int32_t platform_create(const rsf_fgvk_setup* setup, rsf_dx12gvk_platform** outp
     VkFormatProperties rgba{}, bgra{};
     self->format_properties(physical, VK_FORMAT_R8G8B8A8_UNORM, &rgba);
     self->format_properties(physical, VK_FORMAT_B8G8R8A8_UNORM, &bgra);
-    if (!(rgba.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_SRC_BIT) || !(bgra.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_DST_BIT))
+    if (!rsf_core_dx12gvk_blit_formats_supported(rgba.optimalTilingFeatures, bgra.optimalTilingFeatures))
         return VK_ERROR_FORMAT_NOT_SUPPORTED;
     get_memory(physical, &self->memory);
     if (!self->capture.initialize(self->device, dp, self->memory)) return VK_ERROR_INITIALIZATION_FAILED;
@@ -161,56 +169,37 @@ int32_t allocate_commands(rsf_dx12gvk_platform* self, uint64_t pool, void** outp
     if (!result) *output = command;
     return result;
 }
-void transition(rsf_dx12gvk_platform& self, VkCommandBuffer commands, VkImage target,
-    VkImageLayout before, VkImageLayout after, uint32_t source_family, uint32_t target_family) {
-    VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-    barrier.srcAccessMask = before == VK_IMAGE_LAYOUT_UNDEFINED || source_family == VK_QUEUE_FAMILY_EXTERNAL ? 0 :
-        VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-    barrier.dstAccessMask = target_family == VK_QUEUE_FAMILY_EXTERNAL ? 0 :
-        VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-    barrier.oldLayout = before; barrier.newLayout = after;
-    barrier.srcQueueFamilyIndex = source_family; barrier.dstQueueFamilyIndex = target_family;
-    barrier.image = target; barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    self.barrier(commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-        0, 0, nullptr, 0, nullptr, 1, &barrier);
+// Rust plans layouts, queue ownership, access and stage masks, and the copy-or-blit choice.
+// These leaves only translate one planned step into its typed Vulkan command.
+void barrier(rsf_dx12gvk_platform* self, void* list, const rsf_dx12gvk_barrier* plan) {
+    VkImageMemoryBarrier transition{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    transition.srcAccessMask = plan->source_access; transition.dstAccessMask = plan->target_access;
+    transition.oldLayout = static_cast<VkImageLayout>(plan->old_layout);
+    transition.newLayout = static_cast<VkImageLayout>(plan->new_layout);
+    transition.srcQueueFamilyIndex = plan->source_family; transition.dstQueueFamilyIndex = plan->target_family;
+    transition.image = image(plan->image); transition.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    self->barrier(static_cast<VkCommandBuffer>(list), plan->source_stages, plan->target_stages,
+        0, 0, nullptr, 0, nullptr, 1, &transition);
 }
-void copy_input(rsf_dx12gvk_platform& self, VkCommandBuffer commands, const rsf_srvk_image& source,
-    const rsf_dx12vk_shared_image& target, bool initialized) {
-    const auto family = self.family;
-    transition(self, commands, image(source.image), static_cast<VkImageLayout>(source.layout),
-        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED);
-    transition(self, commands, image(target.image), initialized ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED,
-        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, initialized ? VK_QUEUE_FAMILY_EXTERNAL : family, family);
-    if (source.format == target.format) {
-        VkImageCopy region{};
-        region.srcSubresource = region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        region.extent = {target.width, target.height, 1};
-        self.copy(commands, image(source.image), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            image(target.image), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-    } else {
-        VkImageBlit region{};
-        region.srcSubresource = region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        region.srcOffsets[1] = {static_cast<int32_t>(source.width), static_cast<int32_t>(source.height), 1};
-        region.dstOffsets[1] = {static_cast<int32_t>(target.width), static_cast<int32_t>(target.height), 1};
-        self.blit(commands, image(source.image), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            image(target.image), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region, VK_FILTER_NEAREST);
-    }
-    transition(self, commands, image(source.image), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        static_cast<VkImageLayout>(source.layout), VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED);
-    transition(self, commands, image(target.image), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-        VK_IMAGE_LAYOUT_GENERAL, family, VK_QUEUE_FAMILY_EXTERNAL);
+void copy(rsf_dx12gvk_platform* self, void* list, const rsf_dx12gvk_transfer* plan) {
+    VkImageCopy region{};
+    region.srcSubresource = region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.extent = {plan->target_width, plan->target_height, 1};
+    self->copy(static_cast<VkCommandBuffer>(list), image(plan->source), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        image(plan->target), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 }
-
-void clear(rsf_dx12gvk_platform* self, void* list, const rsf_dx12vk_shared_image* target) {
-    const auto commands = static_cast<VkCommandBuffer>(list);
-    const auto img = image(target->image);
-    transition(*self, commands, img, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-        self->family, self->family);
+void blit(rsf_dx12gvk_platform* self, void* list, const rsf_dx12gvk_transfer* plan) {
+    VkImageBlit region{};
+    region.srcSubresource = region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.srcOffsets[1] = {static_cast<int32_t>(plan->source_width), static_cast<int32_t>(plan->source_height), 1};
+    region.dstOffsets[1] = {static_cast<int32_t>(plan->target_width), static_cast<int32_t>(plan->target_height), 1};
+    self->blit(static_cast<VkCommandBuffer>(list), image(plan->source), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        image(plan->target), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region, VK_FILTER_NEAREST);
+}
+void clear(rsf_dx12gvk_platform* self, void* list, uint64_t target) {
     const VkClearColorValue zero{};
     const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    self->clear(commands, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
-    transition(*self, commands, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
-        self->family, VK_QUEUE_FAMILY_EXTERNAL);
+    self->clear(static_cast<VkCommandBuffer>(list), image(target), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
 }
 int32_t acquire_submit(rsf_dx12gvk_platform* self, uint64_t semaphore, uint64_t fence) {
     const auto signal = reinterpret_cast<VkSemaphore>(semaphore);
@@ -265,10 +254,7 @@ const rsf_dx12gvk_ops rsf_dx12gvk_graphics{
         return self->begin(commands, &info);
     },
     [](auto* self, void* list) -> int32_t { return self->end(static_cast<VkCommandBuffer>(list)); },
-    [](auto* self, void* list, const auto* source, const auto* target, uint32_t initialized) {
-        copy_input(*self, static_cast<VkCommandBuffer>(list), *source, *target, initialized != 0);
-    },
-    clear, acquire_submit, present_submit, wait_timeline,
+    barrier, copy, blit, clear, acquire_submit, present_submit, wait_timeline,
     [](auto* self, uint64_t* output) -> int32_t {
         VkFence fence{};
         const VkFenceCreateInfo info{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};

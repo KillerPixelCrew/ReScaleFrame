@@ -36,6 +36,17 @@ const BGRA8: u32 = 44;
 const RG16F: u32 = 83;
 const R32F: u32 = 100;
 const SHADER_READ: u32 = 5;
+const UNDEFINED_LAYOUT: u32 = 0;
+const GENERAL_LAYOUT: u32 = 1;
+const TRANSFER_SRC_LAYOUT: u32 = 6;
+const TRANSFER_DST_LAYOUT: u32 = 7;
+const FAMILY_IGNORED: u32 = !0;
+const FAMILY_EXTERNAL: u32 = !1;
+// VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT.
+const MEMORY_ACCESS: u32 = 0x8000 | 0x1_0000;
+const ALL_COMMANDS: u32 = 0x1_0000;
+const BLIT_SRC: u32 = 0x400;
+const BLIT_DST: u32 = 0x800;
 const SRGB_NONLINEAR: u32 = 0;
 const EXCLUSIVE: u32 = 0;
 const WAIT_NS: u64 = 10_000_000_000;
@@ -109,8 +120,10 @@ pub(super) struct GraphicsOps {
     allocate_commands: unsafe extern "C" fn(Handle, u64, *mut Handle) -> i32,
     begin: unsafe extern "C" fn(Handle, Handle) -> i32,
     end: unsafe extern "C" fn(Handle, Handle) -> i32,
-    copy: unsafe extern "C" fn(Handle, Handle, *const Image, *const SharedImage, u32),
-    clear: unsafe extern "C" fn(Handle, Handle, *const SharedImage),
+    barrier: unsafe extern "C" fn(Handle, Handle, *const Barrier),
+    copy: unsafe extern "C" fn(Handle, Handle, *const Transfer),
+    blit: unsafe extern "C" fn(Handle, Handle, *const Transfer),
+    clear: unsafe extern "C" fn(Handle, Handle, u64),
     acquire_submit: unsafe extern "C" fn(Handle, u64, u64) -> i32,
     present_submit: unsafe extern "C" fn(Handle, Handle, *const PresentInfo, u64, u64, u64) -> i32,
     wait_timeline: unsafe extern "C" fn(Handle, u64, u64, u64) -> i32,
@@ -127,10 +140,164 @@ pub(super) struct GraphicsOps {
     capture_flush: Release,
 }
 const _: () = {
-    assert!(size_of::<GraphicsOps>() == 24 * size_of::<Handle>());
+    assert!(size_of::<GraphicsOps>() == 26 * size_of::<Handle>());
     assert!(size_of::<Swapchain>() == 56);
     assert!(size_of::<PresentInfo>() == 32);
+    assert!(size_of::<Barrier>() == 40);
+    assert!(size_of::<Transfer>() == 32);
 };
+
+/// One single-subresource colour image barrier recorded by the native leaf.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Barrier {
+    image: u64,
+    old_layout: u32,
+    new_layout: u32,
+    source_family: u32,
+    target_family: u32,
+    source_access: u32,
+    target_access: u32,
+    source_stages: u32,
+    target_stages: u32,
+}
+
+/// Source and target of one single-subresource colour copy or blit.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Transfer {
+    source: u64,
+    target: u64,
+    source_extent: [u32; 2],
+    target_extent: [u32; 2],
+}
+
+/// One recorded command of a planned transfer, in submission order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Step {
+    Barrier(Barrier),
+    Copy(Transfer),
+    Blit(Transfer),
+    Clear(u64),
+}
+
+// External acquires and undefined contents have no prior access to make
+// visible; an external release leaves visibility to the importing queue.
+fn barrier(image: u64, before: u32, after: u32, source_family: u32, target_family: u32) -> Step {
+    Step::Barrier(Barrier {
+        image,
+        old_layout: before,
+        new_layout: after,
+        source_family,
+        target_family,
+        source_access: if before == UNDEFINED_LAYOUT || source_family == FAMILY_EXTERNAL {
+            0
+        } else {
+            MEMORY_ACCESS
+        },
+        target_access: if target_family == FAMILY_EXTERNAL {
+            0
+        } else {
+            MEMORY_ACCESS
+        },
+        source_stages: ALL_COMMANDS,
+        target_stages: ALL_COMMANDS,
+    })
+}
+
+// The producer image stays on its queue and returns to its layout. The shared
+// image is acquired from the D3D12 side once it holds content, otherwise its
+// undefined contents are discarded, and it is always released back as GENERAL.
+// Matching formats copy; a format conversion uses a nearest-filtered blit.
+fn copy_steps(family: u32, source: &Image, target: &SharedImage, initialized: bool) -> [Step; 5] {
+    let (target_layout, acquire_family) = if initialized {
+        (GENERAL_LAYOUT, FAMILY_EXTERNAL)
+    } else {
+        (UNDEFINED_LAYOUT, family)
+    };
+    let transfer = Transfer {
+        source: source.image,
+        target: target.image,
+        source_extent: [source.width, source.height],
+        target_extent: [target.width, target.height],
+    };
+    [
+        barrier(
+            source.image,
+            source.layout,
+            TRANSFER_SRC_LAYOUT,
+            FAMILY_IGNORED,
+            FAMILY_IGNORED,
+        ),
+        barrier(
+            target.image,
+            target_layout,
+            TRANSFER_DST_LAYOUT,
+            acquire_family,
+            family,
+        ),
+        if source.format == target.format {
+            Step::Copy(transfer)
+        } else {
+            Step::Blit(transfer)
+        },
+        barrier(
+            source.image,
+            TRANSFER_SRC_LAYOUT,
+            source.layout,
+            FAMILY_IGNORED,
+            FAMILY_IGNORED,
+        ),
+        barrier(
+            target.image,
+            TRANSFER_DST_LAYOUT,
+            GENERAL_LAYOUT,
+            family,
+            FAMILY_EXTERNAL,
+        ),
+    ]
+}
+
+// A cleared placeholder discards its contents and is released like a copy target.
+fn clear_steps(family: u32, image: u64) -> [Step; 3] {
+    [
+        barrier(image, UNDEFINED_LAYOUT, TRANSFER_DST_LAYOUT, family, family),
+        Step::Clear(image),
+        barrier(
+            image,
+            TRANSFER_DST_LAYOUT,
+            GENERAL_LAYOUT,
+            family,
+            FAMILY_EXTERNAL,
+        ),
+    ]
+}
+
+/// Presentation colour arrives as RGBA8 or BGRA8 and every shared colour
+/// image is BGRA8, so RGBA8 swapchains need the format-converting blit.
+fn blit_formats_supported(rgba_optimal: u32, bgra_optimal: u32) -> bool {
+    rgba_optimal & BLIT_SRC != 0 && bgra_optimal & BLIT_DST != 0
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_core_dx12gvk_blit_formats_supported(rgba_optimal: u32, bgra_optimal: u32) -> u32 {
+    u32::from(blit_formats_supported(rgba_optimal, bgra_optimal))
+}
+
+impl GraphicsOps {
+    fn record(&self, vk: Handle, commands: Handle, steps: impl IntoIterator<Item = Step>) {
+        for step in steps {
+            unsafe {
+                match step {
+                    Step::Barrier(barrier) => (self.barrier)(vk, commands, &barrier),
+                    Step::Copy(transfer) => (self.copy)(vk, commands, &transfer),
+                    Step::Blit(transfer) => (self.blit)(vk, commands, &transfer),
+                    Step::Clear(image) => (self.clear)(vk, commands, image),
+                }
+            }
+        }
+    }
+}
 
 pub(super) struct Start {
     pub(super) window: Handle,
@@ -335,6 +502,7 @@ struct Presentation {
     ops: &'static GraphicsOps,
     vk: Handle,
     device: Handle,
+    family: u32,
     depth_inverted: u32,
     interop: Handle,
     pool: u64,
@@ -361,6 +529,7 @@ impl Presentation {
             ops,
             vk: ptr::null_mut(),
             device: setup.graphics.device,
+            family: setup.queue_family,
             depth_inverted: setup.graphics.depth_inverted,
             interop: ptr::null_mut(),
             pool: 0,
@@ -578,14 +747,9 @@ impl Presentation {
             (&frame.depth, &slot.depth, c"fg-depth"),
             (&frame.motion, &slot.motion, c"fg-motion-uv"),
         ] {
+            let steps = copy_steps(self.family, source, target, slot.guides_initialized);
+            ops.record(self.vk, commands, steps);
             unsafe {
-                (ops.copy)(
-                    self.vk,
-                    commands,
-                    source,
-                    target,
-                    u32::from(slot.guides_initialized),
-                );
                 (ops.capture_record)(
                     self.vk,
                     commands,
@@ -619,14 +783,14 @@ impl Presentation {
         {
             return Err(INVALID);
         }
+        let steps = copy_steps(
+            self.family,
+            &frame.hudless,
+            &slot.hudless,
+            slot.hudless_initialized,
+        );
+        self.ops.record(self.vk, commands, steps);
         unsafe {
-            (self.ops.copy)(
-                self.vk,
-                commands,
-                &frame.hudless,
-                &slot.hudless,
-                u32::from(slot.hudless_initialized),
-            );
             (self.ops.capture_record)(
                 self.vk,
                 commands,
@@ -761,18 +925,17 @@ impl Presentation {
         succeeded(unsafe { (ops.begin)(self.vk, buffer.commands) })?;
         if !self.fallback_initialized {
             for image in [&self.fallback_depth, &self.fallback_motion] {
-                unsafe { (ops.clear)(self.vk, buffer.commands, image) };
+                let steps = clear_steps(self.family, image.image);
+                ops.record(self.vk, buffer.commands, steps);
             }
         }
-        unsafe {
-            (ops.copy)(
-                self.vk,
-                buffer.commands,
-                &source_image,
-                &buffer.shared,
-                u32::from(buffer.initialized),
-            );
-        }
+        let steps = copy_steps(
+            self.family,
+            &source_image,
+            &buffer.shared,
+            buffer.initialized,
+        );
+        ops.record(self.vk, buffer.commands, steps);
         succeeded(unsafe { (ops.end)(self.vk, buffer.commands) })?;
 
         // The SDK queue signals done after restoring HUD-less ownership.
@@ -1113,3 +1276,6 @@ pub(super) unsafe fn destroy<V: Vendor>(owner: *mut Owner<V>) -> i32 {
     drop(unsafe { Box::from_raw(owner) });
     0
 }
+
+#[cfg(test)]
+mod tests;
