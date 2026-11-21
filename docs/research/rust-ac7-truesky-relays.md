@@ -66,6 +66,14 @@ both relay handlers and their D3D11 checks, the one-to-one depth shader, the dev
 rebuild, cloud motion depth, the public renderer C ABI, `plugin.cpp`, the lifecycle and both
 carrier links. No patch, site or rendering behaviour is added.
 
+The separate cloud-depth texture used for motion reprojection now has a Rust owner in
+`cloud_depth.rs`. It consumes the same composite tile bindings and preserves the padded-grid
+calculation, opacity and distance constants. Native code keeps the original shader, D3D11
+descriptors, dispatch and compute-state restoration. The Rust owner refuses nonfinite viewport
+extents and stages a resized texture and view before dropping the old pair. A failed allocation
+still refuses the draw. The source shader and binding order matched the previous implementation.
+The synthetic viewport case and device and game checks remain unrun.
+
 ## Fixes
 
 1. Restore ran without `cloud_resolution_guard`. The depth relay is not a MinHook hook, so the

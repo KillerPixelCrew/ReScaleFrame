@@ -275,6 +275,13 @@ uses overflow-safe aspect checks and refuses short or truncated draws.
 Builds, frame-tap fixtures and replay remain open.
 [Scene colour evidence](research/ac7-composed-scene-color.md)
 
+The TrueSky composite's cloud-depth parameters and resource ownership
+now live in Rust. It refuses nonfinite viewports and retains the
+previous target on a failed resize, while returning no output for that
+draw. The D3D11 shader, bindings and dispatch remain unchanged. The
+regression case and device and game verification remain open.
+[TrueSky relay evidence](research/rust-ac7-truesky-relays.md)
+
 ## Rust orchestrator and first Anomaly port
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.

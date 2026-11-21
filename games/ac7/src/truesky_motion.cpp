@@ -2,7 +2,6 @@
 #include "truesky_motion.h"
 #include <rescaleframe/shader_compile.h>
 #include <wrl/client.h>
-#include <algorithm>
 using Microsoft::WRL::ComPtr;
 
 namespace {
@@ -43,7 +42,6 @@ cbuffer Params : register(b1) {
     }
     CloudDepth[id.xy] = isfinite(depth) ? depth : 0;
 })";
-struct Params { uint32_t size[2], divisor[2], grid[2]; float minimum_km, minimum_opacity; };
 
 bool texture_of(ID3D11ShaderResourceView* view, ComPtr<ID3D11Texture2D>& texture, D3D11_TEXTURE2D_DESC& desc)
 {
@@ -55,58 +53,69 @@ bool texture_of(ID3D11ShaderResourceView* view, ComPtr<ID3D11Texture2D>& texture
     texture->GetDesc(&desc);
     return desc.SampleDesc.Count == 1 && desc.ArraySize == 1;
 }
-bool prepare(rsf_ac7_cloud_depth& state, ID3D11Device* device, uint32_t width, uint32_t height)
+bool create_pipeline(void* owning_device, void** shader, void** constants) noexcept try
 {
-    if (state.device != device) { rsf_ac7_cloud_depth_release(state); state.device = device; device->AddRef(); }
-    if (state.refused) return false;
-    if (!state.shader) {
-        state.refused = true;
-        const bool compiled = rsf::compile_compute(device, source, "AC7TrueSkyCloudDepth", "main", &state.shader);
-        D3D11_BUFFER_DESC buffer{};
-        buffer.ByteWidth = sizeof(Params); buffer.Usage = D3D11_USAGE_DEFAULT; buffer.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-        if (!compiled || FAILED(device->CreateBuffer(&buffer, nullptr, &state.constants))) return false;
-        state.refused = false;
-    }
-    if (state.texture && state.width == width && state.height == height) return true;
-    if (state.view) { state.view->Release(); state.view = nullptr; }
-    if (state.texture) { state.texture->Release(); state.texture = nullptr; }
+    auto* device = static_cast<ID3D11Device*>(owning_device);
+    ComPtr<ID3D11ComputeShader> compiled;
+    if (!rsf::compile_compute(device, source, "AC7TrueSkyCloudDepth", "main", compiled.GetAddressOf()))
+        return false;
+    D3D11_BUFFER_DESC desc{};
+    desc.ByteWidth = sizeof(rsf_ac7_cloud_depth_params);
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    ComPtr<ID3D11Buffer> buffer;
+    if (FAILED(device->CreateBuffer(&desc, nullptr, &buffer))) return false;
+    *shader = compiled.Detach();
+    *constants = buffer.Detach();
+    return true;
+}
+catch (...) { return false; }
+
+bool create_target(void* owning_device, uint32_t width, uint32_t height, void** texture, void** view) noexcept try
+{
+    auto* device = static_cast<ID3D11Device*>(owning_device);
     D3D11_TEXTURE2D_DESC desc{};
     desc.Width = width; desc.Height = height; desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
     desc.Format = DXGI_FORMAT_R32_FLOAT; desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-    if (FAILED(device->CreateTexture2D(&desc, nullptr, &state.texture)) ||
-        FAILED(device->CreateUnorderedAccessView(state.texture, nullptr, &state.view))) {
-        if (state.texture) { state.texture->Release(); state.texture = nullptr; }
-        return false;
-    }
-    state.width = width; state.height = height;
+    ComPtr<ID3D11Texture2D> target;
+    ComPtr<ID3D11UnorderedAccessView> uav;
+    if (FAILED(device->CreateTexture2D(&desc, nullptr, &target)) ||
+        FAILED(device->CreateUnorderedAccessView(target.Get(), nullptr, &uav))) return false;
+    *texture = target.Detach();
+    *view = uav.Detach();
     return true;
 }
+catch (...) { return false; }
+
+constexpr rsf_ac7_cloud_depth_leaves leaves{
+    [](void* object) noexcept { static_cast<IUnknown*>(object)->AddRef(); },
+    [](void* object) noexcept { static_cast<IUnknown*>(object)->Release(); },
+    create_pipeline,
+    create_target,
+};
 }
 
 ID3D11Texture2D* rsf_ac7_cloud_depth_write(rsf_ac7_cloud_depth& state, ID3D11DeviceContext* context,
     const D3D11_VIEWPORT& viewport)
 {
-    if (!context || viewport.Width < 16 || viewport.Height < 16 || viewport.Width > 16384 || viewport.Height > 16384) return nullptr;
+    if (!context) return nullptr;
     ID3D11ShaderResourceView* views[2]{}; context->PSGetShaderResources(1, 2, views);
     ComPtr<ID3D11ShaderResourceView> far_view, near_far_view; far_view.Attach(views[0]); near_far_view.Attach(views[1]);
     ID3D11Buffer* bound = nullptr; context->PSGetConstantBuffers(12, 1, &bound);
     ComPtr<ID3D11Buffer> hdr; hdr.Attach(bound);
     ComPtr<ID3D11Texture2D> far_texture, near_far;
     D3D11_TEXTURE2D_DESC far_desc{}, near_far_desc{};
-    if (!hdr || !texture_of(far_view.Get(), far_texture, far_desc) || !texture_of(near_far_view.Get(), near_far, near_far_desc) ||
-        far_desc.Width != near_far_desc.Width || far_desc.Height != near_far_desc.Height) return nullptr;
+    if (!hdr || !texture_of(far_view.Get(), far_texture, far_desc) ||
+        !texture_of(near_far_view.Get(), near_far, near_far_desc)) return nullptr;
     D3D11_BUFFER_DESC hdr_desc{}; hdr->GetDesc(&hdr_desc);
-    if (hdr_desc.ByteWidth < 640) return nullptr;
-    const auto width = uint32_t(viewport.Width), height = uint32_t(viewport.Height);
-    // TrueSky addresses its grid as (pixel - offset) / divisor. Recover the divisor from extents;
-    // the grid carries up to a texel of padding at divisor 1.
-    auto divisor = [](uint32_t pixels, uint32_t grid) { return grid ? (std::max)(1u, (pixels + grid / 2) / grid) : 0u; };
-    Params params{{width, height}, {divisor(width, near_far_desc.Width), divisor(height, near_far_desc.Height)},
-        {near_far_desc.Width, near_far_desc.Height}, 0.3f, 0.5f};
-    if (!params.divisor[0] || !params.divisor[1]) return nullptr;
+    const rsf_ac7_cloud_depth_facts facts{viewport.Width, viewport.Height, far_desc.Width, far_desc.Height,
+        near_far_desc.Width, near_far_desc.Height, hdr_desc.ByteWidth};
     ComPtr<ID3D11Device> device; context->GetDevice(&device);
-    if (!prepare(state, device.Get(), width, height)) return nullptr;
-    context->UpdateSubresource(state.constants, 0, nullptr, &params, 0, 0);
+    rsf_ac7_cloud_depth_params params{};
+    if (!rsf_core_ac7_cloud_depth_prepare(&state, device.Get(), &facts, &params, &leaves)) return nullptr;
+    auto* constants = static_cast<ID3D11Buffer*>(state.constants);
+    auto* output = static_cast<ID3D11UnorderedAccessView*>(state.view);
+    context->UpdateSubresource(constants, 0, nullptr, &params, 0, 0);
     // TrueSky's graphics pass stays bound; only compute bindings are borrowed and restored.
     ComPtr<ID3D11ComputeShader> shader; ID3D11ClassInstance* instances[256]{}; UINT instance_count = 256;
     context->CSGetShader(&shader, instances, &instance_count);
@@ -114,12 +123,12 @@ ID3D11Texture2D* rsf_ac7_cloud_depth_write(rsf_ac7_cloud_depth& state, ID3D11Dev
     ID3D11UnorderedAccessView* saved_uav = nullptr; context->CSGetUnorderedAccessViews(0, 1, &saved_uav);
     ID3D11Buffer* saved_buffers[2]{}; context->CSGetConstantBuffers(0, 2, saved_buffers);
     ID3D11ShaderResourceView* inputs[]{far_view.Get(), near_far_view.Get()};
-    ID3D11Buffer* buffers[]{hdr.Get(), state.constants};
-    context->CSSetShader(state.shader, nullptr, 0);
+    ID3D11Buffer* buffers[]{hdr.Get(), constants};
+    context->CSSetShader(static_cast<ID3D11ComputeShader*>(state.shader), nullptr, 0);
     context->CSSetShaderResources(0, 2, inputs);
-    context->CSSetUnorderedAccessViews(0, 1, &state.view, nullptr);
+    context->CSSetUnorderedAccessViews(0, 1, &output, nullptr);
     context->CSSetConstantBuffers(0, 2, buffers);
-    context->Dispatch((width + 7) / 8, (height + 7) / 8, 1);
+    context->Dispatch((params.size[0] + 7) / 8, (params.size[1] + 7) / 8, 1);
     context->CSSetShader(shader.Get(), instances, instance_count);
     context->CSSetShaderResources(0, 2, saved_views);
     context->CSSetUnorderedAccessViews(0, 1, &saved_uav, nullptr);
@@ -128,15 +137,10 @@ ID3D11Texture2D* rsf_ac7_cloud_depth_write(rsf_ac7_cloud_depth& state, ID3D11Dev
     if (saved_uav) saved_uav->Release();
     for (auto* buffer : saved_buffers) if (buffer) buffer->Release();
     for (UINT i = 0; i < instance_count; ++i) if (instances[i]) instances[i]->Release();
-    return state.texture;
+    return static_cast<ID3D11Texture2D*>(state.texture);
 }
 
 void rsf_ac7_cloud_depth_release(rsf_ac7_cloud_depth& state)
 {
-    if (state.view) state.view->Release();
-    if (state.texture) state.texture->Release();
-    if (state.constants) state.constants->Release();
-    if (state.shader) state.shader->Release();
-    if (state.device) state.device->Release();
-    state = {};
+    rsf_core_ac7_cloud_depth_release(&state, &leaves);
 }

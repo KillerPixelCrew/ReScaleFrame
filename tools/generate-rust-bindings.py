@@ -113,6 +113,9 @@ generate("games/ac7/src/scene_color_abi.rs", "games/ac7/include/rescaleframe/ac7
          "rsf_(ac7_scene_color|frame_tap_(input|target_draw|geometry))", "RSF_FRAME_TAP_MAX_INPUTS",
          ["-Iruntime/graphics/include"],
          ["--no-recursive-allowlist", "--with-derive-default", "--raw-line", "#![allow(dead_code)]"])
+generate("games/ac7/src/cloud_depth_abi.rs", "games/ac7/src/cloud_depth_platform.h",
+         "rsf_ac7_cloud_depth(_(facts|params|leaves))?", "NOTHING", [],
+         ["--with-derive-default", "--raw-line", "#![allow(dead_code)]"])
 generate("games/minecraft/native/platform_abi.rs", "games/minecraft/native/minecraft_platform.h",
          "rsf_(minecraft_(platform|configuration|message_fn)|gl_pipeline(_(setup|options|surfaces|status))?|"
          "native_fg_(options|status)|fg_status|sharpening_options|native_(latency_status|cpu_counters)|"

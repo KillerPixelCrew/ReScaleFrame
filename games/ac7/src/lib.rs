@@ -17,6 +17,8 @@
 //! exception-guarded leaf table in ac7_platform.h and keeps the exported
 //! rsf_get_game_plugin_api. The DirectInput carriers, their decryption wait, carrier engine
 //! patches, window acceptance and D3D11 bridge are not part of this crate yet.
+mod cloud_depth;
+mod cloud_depth_abi;
 mod guards;
 mod lifecycle;
 mod patches;

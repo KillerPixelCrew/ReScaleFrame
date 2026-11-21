@@ -1,19 +1,10 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 #include <d3d11.h>
-#include <cstdint>
+#include "cloud_depth_platform.h"
 
 // Device depth of the dominant cloud surface at each scene pixel, for reprojecting pixels that
 // have no object velocity. Written at TrueSky's composite_tile draw while its inputs are bound.
-struct rsf_ac7_cloud_depth {
-    ID3D11Device* device = nullptr;
-    ID3D11ComputeShader* shader = nullptr;
-    ID3D11Buffer* constants = nullptr;
-    ID3D11Texture2D* texture = nullptr;
-    ID3D11UnorderedAccessView* view = nullptr;
-    uint32_t width = 0, height = 0;
-    bool refused = false;
-};
 // Reads the composite's bound far image (t1, alpha = transmittance), near/far/cloud distance
 // (t2, z = km to the first 25% opacity) and HdrConstants (b12), and writes an R32_FLOAT texture
 // of the viewport. Zero where no sufficiently opaque cloud lies in front. Restores compute state.
