@@ -15,7 +15,8 @@
    session, CPU event and ping routing, and the present-marker admission). The leaves hold
    godot-cpp, D3D12, DXGI, Win32, Vulkan and Runtime calls and decide nothing. The creation leaves
    are a separate table (rsf_godot_vk_creation_leaves) that vulkan_creation.cpp lends with each
-   creation call, so the creation contract test links them without runtime.cpp. */
+   creation call, so the creation contract test links them without runtime.cpp. The compositor
+   effect's leaves are another (rsf_godot_effect_leaves, effect.cpp), lent with each callback. */
 #include "api.h"
 #include <stdint.h>
 
@@ -321,6 +322,75 @@ typedef struct rsf_godot_vk_creation_leaves {
     void (*destroy_device)(rsf_godot_vk_function destroy, void* device, const void* allocator);
 } rsf_godot_vk_creation_leaves;
 
+/* The compositor effect boundary. The effect owner (effect.rs) keeps each ReScaleFrameEffect's
+   published snapshot, its callback count, the pending capture request and the last motion capture,
+   the scene buffer admission, the capture admission and the motion classification, and the probe's
+   published stage, reason and inactive pipeline claims. effect.cpp keeps the godot-cpp class, its
+   registration and callback contract, the RenderSceneBuffersRD, RenderSceneData and
+   RenderingDevice reads, the readback compute pass and the status Dictionary keys. call is the
+   render callback's private record. These leaves take no guard and call no other owner. */
+#define RSF_GODOT_EFFECT_VERSION 1u
+/* RenderingDevice::DATA_FORMAT_R16G16_SFLOAT, the engine's velocity format and the only one the
+   readback is interpreted for. effect.cpp asserts the value. */
+#define RSF_GODOT_EFFECT_MOTION_FORMAT 82
+
+/* The scene buffer facts of one POST_TRANSPARENT callback. Matrices are the scene data's real_t
+   values widened to double: camera_transform is the basis rows then the origin, and
+   jittered_projection the four columns. The three valid flags are texture_is_valid of layer 0. */
+typedef struct rsf_godot_effect_frame {
+    uint64_t render_target;
+    uint32_t views;
+    int32_t internal_width, internal_height, output_width, output_height;
+    uint32_t color_valid, depth_valid, motion_valid;
+    uint32_t reserved[2];
+    double camera_transform[12];
+    double jittered_projection[16];
+} rsf_godot_effect_frame;
+
+/* Read only for admitted buffers: the three layer formats (RenderingDevice::DataFormat), and
+   whether the logical device, the command queue and all three native textures have handles. */
+typedef struct rsf_godot_effect_resources {
+    int32_t color_format, depth_format, motion_format;
+    uint32_t native_device, native_queue, native_textures;
+} rsf_godot_effect_resources;
+
+/* An effect's published state, copied under the owner's lock. stage, reason and snapshot_scope are
+   owner-held static strings. A field the last callback did not reach keeps its default: zero, the
+   identity matrices and format -1. */
+typedef struct rsf_godot_effect_status {
+    uint32_t struct_size, version;
+    uint64_t callbacks;
+    rsf_godot_effect_frame frame;
+    rsf_godot_effect_resources resources;
+    uint32_t buffers_available;
+    uint32_t capture_succeeded;
+    uint64_t captures, capture_callback, capture_pixels, capture_moving_pixels;
+    uint64_t capture_nonfinite_pixels, capture_unwritten_pixels;
+    double capture_max_abs_uv;
+    const char* stage;
+    const char* reason;
+    const char* snapshot_scope;
+    uint32_t rendering_ready, sr_active, fg_active, latency_active;
+} rsf_godot_effect_status;
+
+/* Process-lived table from effect.cpp, lent with each render callback. Every entry is present and
+   catches its own exceptions; a completion of zero means an exception ended the leaf. */
+typedef struct rsf_godot_effect_leaves {
+    uint32_t struct_size, version;
+    /* The scene buffers, scene data and the RenderingServer's RenderingDevice, then the frame facts
+       and the layer 0 color, depth and velocity textures kept in call. Zero when any of the three
+       is missing; frame is then untouched. */
+    uint32_t (*frame)(void* call, rsf_godot_effect_frame* frame);
+    /* The layer formats and native handle facts of the textures frame kept. */
+    uint32_t (*resources)(void* call, rsf_godot_effect_resources* resources);
+    /* Converts the velocity texture through the render graph into an owned storage buffer of
+       internal_width * internal_height vec2 and reads it back (a GPU stall). The bytes stay in call
+       until the callback ends; empty when the shader, pipeline or buffer was refused. */
+    uint32_t (*read_motion)(void* call, const uint8_t** data, uint64_t* size);
+} rsf_godot_effect_leaves;
+
+typedef struct rsf_godot_effect rsf_godot_effect;
+
 /* rsf_godot_platform.vulkan_sr_log messages. Each leaf writes nothing without a session log. */
 #define RSF_GODOT_VK_LOG_REJECTED 1u       /* provider result and spatial fallback result */
 #define RSF_GODOT_VK_LOG_FSR4_DISPATCH 2u  /* the last FSR4 evaluate's code and continuation */
@@ -552,6 +622,16 @@ int32_t rsf_godot_vk_create_instance(const rsf_godot_vk_creation_leaves* leaves,
 int32_t rsf_godot_vk_create_device(const rsf_godot_vk_creation_leaves* leaves, const rsf_godot_vk_device_call* call);
 /* The intercepted vkDestroyDevice. */
 void rsf_godot_vk_destroy_device(const rsf_godot_vk_creation_leaves* leaves, void* device, const void* allocator);
+
+/* Compositor effect owner (effect.rs), one per ReScaleFrameEffect instance. create and destroy run
+   in the class constructor and destructor; request_capture and status on the caller's thread;
+   render in _render_callback on the render thread, after the class's callback type check. */
+rsf_godot_effect* rsf_godot_effect_create(void);
+void rsf_godot_effect_destroy(rsf_godot_effect* effect);
+void rsf_godot_effect_request_capture(rsf_godot_effect* effect);
+void rsf_godot_effect_render(rsf_godot_effect* effect, const rsf_godot_effect_leaves* leaves, void* call);
+/* Nonzero when the record's header matched and it was filled. */
+int rsf_godot_effect_status_get(const rsf_godot_effect* effect, rsf_godot_effect_status* status);
 
 /* Input window owner (window.rs). */
 /* The Runtime's accept_window question: nonzero for the admitted window, the first window of this

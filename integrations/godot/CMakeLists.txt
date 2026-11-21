@@ -1,5 +1,5 @@
-# Runtime control, settings, session, status and Vulkan creation state are Rust (native/lib.rs,
-# crate rsf-godot). Defined before the godot-cpp gate: the godot_vulkan_creation_contract test links
+# Runtime control, settings, session, status, Vulkan creation and compositor effect state are Rust
+# (native/lib.rs, crate rsf-godot). Defined before the godot-cpp gate: the godot_vulkan_creation_contract test links
 # it without godot-cpp. The archive is built only for a target that links it.
 rsf_add_rust_static(rsf_godot_rust rsf_rust_godot rsf-godot rsf_godot)
 

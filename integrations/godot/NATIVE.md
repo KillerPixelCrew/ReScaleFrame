@@ -351,6 +351,72 @@ and `vulkan_creation.cpp`. Not run: native build and link, Cargo tests
 (`native/vulkan/creation/tests.rs`, the updated `native/vulkan/tests.rs` and
 `native/vulkan/sr/tests.rs`), Clippy, CTest (`godot_vulkan_creation_contract`), editor, exported
 players, device fixtures and visual harness.
+
+## Rust compositor effect owner, seventh slice
+
+`native/effect.rs` now owns the state and policy `effect.cpp` held in each `ReScaleFrameEffect`, as
+one owner per instance created and destroyed with the godot-cpp object (`rsf_godot_effect_create`
+and `rsf_godot_effect_destroy`), not a second Runtime status:
+
+- the pending capture request (`request_motion_capture` on any thread, taken first by the next
+  callback), the callback count, and the snapshot and capture each callback publishes under one
+  lock, read by `get_status`;
+- the scene buffer admission: one view, a nonempty internal extent and valid layer 0 color, depth
+  and velocity textures. Formats and native handle facts are read only for admitted buffers;
+- the capture admission: a pending request and a velocity format of `DATA_FORMAT_R16G16_SFLOAT`
+  (82, asserted against godot-cpp in `effect.cpp`). A request the callback cannot read is still
+  answered with an unsucceeded capture, as before;
+- the classification of the readback: it succeeds only at exactly `internal_width *
+  internal_height * 8` bytes; each texel is two little-endian `f32` widened to `f64`, as
+  `PackedByteArray.decode_float` does, and is non-finite when either component is, otherwise
+  unwritten when both are at most -1, otherwise its larger magnitude feeds `capture_max_abs_uv` and
+  it moves above 0.00001 compared in `f64`. Valid zero motion is neither moving nor unwritten. The
+  -1 rule matches the pinned 4.7.2 Forward+ source, which clears the velocity-only framebuffer to
+  `Color(-1, -1, 0, 0)` before its motion pass (`render_forward_clustered.cpp`);
+- the published probe claims: stage `renderer_probe`, the reason text, the snapshot scope
+  `last_post_transparent_callback`, and `rendering_ready`, `sr_active`, `fg_active` and
+  `latency_active` false. The effect reads no Runtime settings or status, so no duplicate of the
+  `control.rs` status exists; `ReScaleFrameRuntime.get_status` remains the source of SR, FG and
+  latency state.
+
+`effect.cpp` keeps the class registration (`extension.cpp`), its callback contract
+(`POST_TRANSPARENT`, resolved color and depth, motion vectors) and the callback type and null data
+check before forwarding, and lends three godot-cpp leaves in a separate table,
+`rsf_godot_effect_leaves` (version 1, 32 bytes, asserted on both sides): the frame facts (scene
+buffers, scene data and the RenderingServer's RenderingDevice in that order, the render target,
+view count, internal and target extents, camera transform and jittered projection widened from
+`real_t` to `double`, and the three texture validity facts), the formats and native handle facts,
+and the unchanged readback compute pass, whose bytes stay in the callback record until it returns.
+`get_status` rebuilds the same Dictionary keys, in the same order and with the same Variant types,
+from `rsf_godot_effect_status` (416 bytes); the matrices round-trip exactly. `RSF_VERSION_STRING`
+and the renderer and driver names stay C++ reads. `api.h`, the engine module, the addon and the
+GDScript and C# callers are unchanged.
+
+Preserved behaviour: the snapshot is replaced at every admitted callback, including the identity
+matrices and format -1 when the scene objects or the buffers are missing; a capture reports the
+callback it was taken in; the readback stalls the GPU and compiles its shader for each request.
+Intentional differences: the three `texture_is_valid` queries run for every callback with scene
+objects rather than short-circuiting after the view and extent checks (they are pure queries); a
+leaf exception counts as missing scene objects, missing resources or an empty readback; and a
+status record the owner refuses yields an empty Dictionary (not reachable: the owner exists for the
+object's lifetime).
+
+Source review found no demonstrated local defect to fix. Unverified and unchanged: the readback
+buffer and the CPU stride use the internal extent while the shader strides by the velocity
+texture's own extent. The pinned engine creates the velocity texture at the internal extent, but a
+render target velocity override (`render_target_get_override_velocity`, used for XR) could differ;
+with the single-view admission and no override set by the engine module (`bridge.cpp` reads
+`get_velocity_buffer`), this was not reached. Whether Godot can destroy the effect while its
+render-thread callback runs is also unchanged from the C++, whose members had the same lifetime.
+`request_motion_capture` is a diagnostic action, not a setting, so Rule 2 adds no overlay control.
+
+This is a behaviour-preserving port from source review, with no new experiment. Checks: rustfmt
+1.11.0 `--edition 2024` (the pinned 1.94.1 toolchain is not installed), `git diff --check`, the
+`DATA_FORMAT_R16G16_SFLOAT` value from the pinned `extension_api-4-7.json` and engine enum, and size
+and offset assertions written for the new records and table in `platform.rs` and `effect.cpp`. Not
+run: native build and link, Cargo tests (`native/effect/tests.rs`), Clippy, CTest, editor, exported
+players, the renderer probe demo (`demo/main.gd`), device fixtures and visual harness.
+
 ## Remaining Godot ownership slices
 
 1. Vulkan Auto SR and FG resolution (Rule 3). `vulkan.rs` still resolves `Auto` to FSR3 for both,
@@ -360,8 +426,9 @@ players, device fixtures and visual harness.
    time; `rsf_fg_default_backend` picks by vendor and would change behaviour. Moving this needs a
    Runtime policy that takes the Vulkan host's servable providers and an adapter fact from the
    packet, which is a behaviour decision outside this behaviour-preserving slice.
-2. `effect.cpp`: the compositor probe snapshot and the motion capture classification
-   (unwritten, moving and non-finite pixels). The GPU readback stays a godot-cpp leaf.
+2. `effect.cpp` keeps no owner state after the seventh slice. Its class registration, callback
+   contract, typed scene reads, readback compute pass and Dictionary keys are godot-cpp leaves.
+   Residual: the readback's extent check against a velocity override (see that slice).
 3. The engine module `modules/rescaleframe` (bridge, graph, motion, D3D12 and Vulkan drivers) is
    compiled into the Godot engine by SCons against engine headers and cannot link this archive. It
    still holds CPU frame identity and markers, the primary viewport, render-scale policy (the

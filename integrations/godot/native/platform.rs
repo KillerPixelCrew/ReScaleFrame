@@ -6,8 +6,9 @@
 //! calls in `vulkan.cpp` (the latter driven by `vulkan/sr.rs`), the status facts, and the D3D12
 //! device, fence, SR context, FG, presentation and capture calls the `d3d12.rs` owner drives,
 //! and the Win32 window, counter, CPU event, ping and present marker calls `window.rs` drives;
-//! every decision stays in this crate. The render pass and CPU event are the generated
-//! `rsf_game_render_pass` and `rsf_game_cpu_event` bindings. The archive imports no native symbol.
+//! every decision stays in this crate. The Vulkan creation and compositor effect leaves are
+//! separate tables (`VkCreationLeaves`, `EffectLeaves`). The render pass and CPU event are the
+//! generated `rsf_game_render_pass` and `rsf_game_cpu_event` bindings. The archive imports no native symbol.
 // Mirrored C layouts: the leaves and the engine module read fields this crate only writes.
 #![allow(dead_code)]
 use rsf_game_sys::{rsf_game_cpu_event, rsf_game_log_fn, rsf_game_render_pass};
@@ -586,6 +587,122 @@ pub(crate) struct VkCreationLeaves {
     pub(crate) destroy_device: unsafe extern "C" fn(VkFunction, *mut c_void, *const c_void),
 }
 
+/// `RSF_GODOT_EFFECT_VERSION`: the effect leaves and the effect status record.
+pub(crate) const EFFECT_VERSION: u32 = 1;
+/// `RSF_GODOT_EFFECT_MOTION_FORMAT`, `RenderingDevice::DATA_FORMAT_R16G16_SFLOAT`.
+pub(crate) const EFFECT_MOTION_FORMAT: i32 = 82;
+
+/// `rsf_godot_effect_frame`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct EffectFrame {
+    pub(crate) render_target: u64,
+    pub(crate) views: u32,
+    pub(crate) internal_width: i32,
+    pub(crate) internal_height: i32,
+    pub(crate) output_width: i32,
+    pub(crate) output_height: i32,
+    pub(crate) color_valid: u32,
+    pub(crate) depth_valid: u32,
+    pub(crate) motion_valid: u32,
+    pub(crate) reserved: [u32; 2],
+    /// Basis rows, then the origin.
+    pub(crate) camera_transform: [f64; 12],
+    /// Columns.
+    pub(crate) jittered_projection: [f64; 16],
+}
+
+impl Default for EffectFrame {
+    /// The godot-cpp defaults: zero extents, the identity transform and the identity projection.
+    fn default() -> Self {
+        let mut camera_transform = [0.0; 12];
+        let mut jittered_projection = [0.0; 16];
+        for axis in 0..3 {
+            camera_transform[axis * 3 + axis] = 1.0;
+        }
+        for axis in 0..4 {
+            jittered_projection[axis * 4 + axis] = 1.0;
+        }
+        Self {
+            render_target: 0,
+            views: 0,
+            internal_width: 0,
+            internal_height: 0,
+            output_width: 0,
+            output_height: 0,
+            color_valid: 0,
+            depth_valid: 0,
+            motion_valid: 0,
+            reserved: [0; 2],
+            camera_transform,
+            jittered_projection,
+        }
+    }
+}
+
+/// `rsf_godot_effect_resources`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct EffectResources {
+    pub(crate) color_format: i32,
+    pub(crate) depth_format: i32,
+    pub(crate) motion_format: i32,
+    pub(crate) native_device: u32,
+    pub(crate) native_queue: u32,
+    pub(crate) native_textures: u32,
+}
+
+impl Default for EffectResources {
+    /// Format -1 and no native handle, as for buffers that were not admitted.
+    fn default() -> Self {
+        Self {
+            color_format: -1,
+            depth_format: -1,
+            motion_format: -1,
+            native_device: 0,
+            native_queue: 0,
+            native_textures: 0,
+        }
+    }
+}
+
+/// `rsf_godot_effect_status`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct EffectStatus {
+    pub(crate) struct_size: u32,
+    pub(crate) version: u32,
+    pub(crate) callbacks: u64,
+    pub(crate) frame: EffectFrame,
+    pub(crate) resources: EffectResources,
+    pub(crate) buffers_available: u32,
+    pub(crate) capture_succeeded: u32,
+    pub(crate) captures: u64,
+    pub(crate) capture_callback: u64,
+    pub(crate) capture_pixels: u64,
+    pub(crate) capture_moving_pixels: u64,
+    pub(crate) capture_nonfinite_pixels: u64,
+    pub(crate) capture_unwritten_pixels: u64,
+    pub(crate) capture_max_abs_uv: f64,
+    pub(crate) stage: *const c_char,
+    pub(crate) reason: *const c_char,
+    pub(crate) snapshot_scope: *const c_char,
+    pub(crate) rendering_ready: u32,
+    pub(crate) sr_active: u32,
+    pub(crate) fg_active: u32,
+    pub(crate) latency_active: u32,
+}
+
+/// `rsf_godot_effect_leaves`, the godot-cpp leaves of `effect.cpp`.
+#[repr(C)]
+pub(crate) struct EffectLeaves {
+    pub(crate) struct_size: u32,
+    pub(crate) version: u32,
+    pub(crate) frame: unsafe extern "C" fn(*mut c_void, *mut EffectFrame) -> u32,
+    pub(crate) resources: unsafe extern "C" fn(*mut c_void, *mut EffectResources) -> u32,
+    pub(crate) read_motion: unsafe extern "C" fn(*mut c_void, *mut *const u8, *mut u64) -> u32,
+}
+
 /// `RSF_GODOT_VK_LOG_*`.
 pub(crate) const VK_LOG_REJECTED: u32 = 1;
 pub(crate) const VK_LOG_FSR4_DISPATCH: u32 = 2;
@@ -759,6 +876,21 @@ const _: () = {
     assert!(size_of::<VkCreationLeaves>() == 112);
     assert!(offset_of!(VkCreationLeaves, latency_requirements) == 64);
     assert!(offset_of!(VkCreationLeaves, destroy_device) == 104);
+    assert!(size_of::<EffectFrame>() == 272);
+    assert!(offset_of!(EffectFrame, motion_valid) == 36);
+    assert!(offset_of!(EffectFrame, camera_transform) == 48);
+    assert!(offset_of!(EffectFrame, jittered_projection) == 144);
+    assert!(size_of::<EffectResources>() == 24);
+    assert!(size_of::<EffectStatus>() == 416);
+    assert!(offset_of!(EffectStatus, frame) == 16);
+    assert!(offset_of!(EffectStatus, resources) == 288);
+    assert!(offset_of!(EffectStatus, buffers_available) == 312);
+    assert!(offset_of!(EffectStatus, captures) == 320);
+    assert!(offset_of!(EffectStatus, capture_max_abs_uv) == 368);
+    assert!(offset_of!(EffectStatus, stage) == 376);
+    assert!(offset_of!(EffectStatus, rendering_ready) == 400);
+    assert!(size_of::<EffectLeaves>() == 32);
+    assert!(offset_of!(EffectLeaves, read_motion) == 24);
     assert!(size_of::<WindowIdentity>() == 144);
     assert!(offset_of!(WindowIdentity, class_name) == 16);
     assert!(size_of::<Platform>() == 520);
@@ -1385,6 +1517,50 @@ impl VkCreationLeaves {
         allocator: *const c_void,
     ) {
         unsafe { (self.destroy_device)(destroy, device, allocator) }
+    }
+}
+
+/// The effect table from `effect.cpp`, when its header matches.
+///
+/// # Safety
+/// `table` is null or a process-lived `rsf_godot_effect_leaves`.
+pub(crate) unsafe fn effect_leaves(table: *const EffectLeaves) -> Option<&'static EffectLeaves> {
+    // SAFETY: the caller passes null or a table that lives for the process.
+    let table: &'static EffectLeaves = unsafe { table.as_ref() }?;
+    (table.struct_size as usize >= size_of::<EffectLeaves>() && table.version == EFFECT_VERSION)
+        .then_some(table)
+}
+
+// Each effect leaf is a complete entry of a checked table and catches its own C++ exceptions.
+// SAFETY for every unsafe block below: the entry is valid and `call` is the render callback's live
+// record, which outlives the owner's render call.
+impl EffectLeaves {
+    /// The frame facts; `None` without a RenderingDevice, scene buffers or scene data, or when the
+    /// leaf threw.
+    pub(crate) fn frame(&self, call: *mut c_void) -> Option<EffectFrame> {
+        let mut frame = EffectFrame::default();
+        (unsafe { (self.frame)(call, &mut frame) } != 0).then_some(frame)
+    }
+
+    /// The formats and native handle facts; the defaults when the leaf threw.
+    pub(crate) fn resources(&self, call: *mut c_void) -> EffectResources {
+        let mut resources = EffectResources::default();
+        if unsafe { (self.resources)(call, &mut resources) } == 0 {
+            resources = EffectResources::default();
+        }
+        resources
+    }
+
+    /// Runs `read` over the readback bytes, which `call` keeps alive until the callback ends.
+    /// An empty slice when the readback was refused or the leaf threw.
+    pub(crate) fn read_motion<R>(&self, call: *mut c_void, read: impl FnOnce(&[u8]) -> R) -> R {
+        let (mut data, mut size): (*const u8, u64) = (std::ptr::null(), 0);
+        let completed = unsafe { (self.read_motion)(call, &mut data, &mut size) } != 0;
+        if !completed || data.is_null() || size == 0 {
+            return read(&[]);
+        }
+        // SAFETY: the leaf's bytes stay in `call` for the callback.
+        read(unsafe { std::slice::from_raw_parts(data, size as usize) })
     }
 }
 
