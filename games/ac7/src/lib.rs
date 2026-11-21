@@ -3,13 +3,15 @@
 //! the exact recognized build, the GameSDK table and the renderer lifecycle (`lifecycle.rs`),
 //! and for the native renderer the exact-build code sites and their admission (`sites.rs`), the
 //! scene-precision and temporal velocity patch transactions (`patches.rs`), the hook body
-//! guards (`guards.rs`) and the prepare/start/quiesce/stop transaction with its retirement
-//! admission (`renderer.rs`), all reached through ac7_sites.h.
+//! guards (`guards.rs`), the prepare/start/quiesce/stop transaction with its retirement
+//! admission (`renderer.rs`) and the TrueSky plugin patches and call relays with their admission,
+//! rollback and retirement (`truesky.rs`), all reached through ac7_sites.h.
 //!
 //! The rest of the native renderer stays C++ (native_renderer.cpp and the render-scope library):
 //! the five exported renderer calls as wrappers, the renderer object and its fields, MinHook
-//! leaves, module pinning, detours, engine relays, RHI scopes, SEH reads, protected code writes
-//! and the TrueSky plugin patches. plugin.cpp lends its entry points through the
+//! leaves, module pinning, detours, engine relays, the TrueSky relay handlers with their D3D11
+//! checks and shaders, relay memory, RHI scopes, SEH reads and protected code writes. plugin.cpp
+//! lends its entry points through the
 //! exception-guarded leaf table in ac7_platform.h and keeps the exported
 //! rsf_get_game_plugin_api. The DirectInput carriers, their decryption wait, carrier engine
 //! patches, window acceptance and D3D11 bridge are not part of this crate yet.
@@ -20,6 +22,7 @@ mod platform_abi;
 mod renderer;
 mod sites;
 mod sites_abi;
+mod truesky;
 
 #[cfg(test)]
 mod fake_code;

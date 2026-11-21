@@ -231,3 +231,106 @@ const _: () = {
     ["Offset of field: rsf_ac7_renderer_leaves::truesky_restore"]
         [::core::mem::offset_of!(rsf_ac7_renderer_leaves, truesky_restore) - 264usize];
 };
+pub const RSF_AC7_RELAY_BYTES: u32 = 7;
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_ac7_call_relay {
+    pub call: *mut ::core::ffi::c_uchar,
+    pub slot: *mut ::core::ffi::c_void,
+    pub native: [::core::ffi::c_uchar; 7usize],
+    pub relayed: [::core::ffi::c_uchar; 7usize],
+    pub size: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_ac7_call_relay"][::core::mem::size_of::<rsf_ac7_call_relay>() - 40usize];
+    ["Alignment of rsf_ac7_call_relay"][::core::mem::align_of::<rsf_ac7_call_relay>() - 8usize];
+    ["Offset of field: rsf_ac7_call_relay::call"]
+        [::core::mem::offset_of!(rsf_ac7_call_relay, call) - 0usize];
+    ["Offset of field: rsf_ac7_call_relay::slot"]
+        [::core::mem::offset_of!(rsf_ac7_call_relay, slot) - 8usize];
+    ["Offset of field: rsf_ac7_call_relay::native"]
+        [::core::mem::offset_of!(rsf_ac7_call_relay, native) - 16usize];
+    ["Offset of field: rsf_ac7_call_relay::relayed"]
+        [::core::mem::offset_of!(rsf_ac7_call_relay, relayed) - 23usize];
+    ["Offset of field: rsf_ac7_call_relay::size"]
+        [::core::mem::offset_of!(rsf_ac7_call_relay, size) - 32usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_ac7_truesky_patches {
+    pub resolution_site: *mut ::core::ffi::c_uchar,
+    pub depth_branch: *mut ::core::ffi::c_uchar,
+    pub depth_format_site: *mut ::core::ffi::c_uchar,
+    pub depth_call: rsf_ac7_call_relay,
+    pub motion_call: rsf_ac7_call_relay,
+    pub resolution_refused: bool,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_ac7_truesky_patches"]
+        [::core::mem::size_of::<rsf_ac7_truesky_patches>() - 112usize];
+    ["Alignment of rsf_ac7_truesky_patches"]
+        [::core::mem::align_of::<rsf_ac7_truesky_patches>() - 8usize];
+    ["Offset of field: rsf_ac7_truesky_patches::resolution_site"]
+        [::core::mem::offset_of!(rsf_ac7_truesky_patches, resolution_site) - 0usize];
+    ["Offset of field: rsf_ac7_truesky_patches::depth_branch"]
+        [::core::mem::offset_of!(rsf_ac7_truesky_patches, depth_branch) - 8usize];
+    ["Offset of field: rsf_ac7_truesky_patches::depth_format_site"]
+        [::core::mem::offset_of!(rsf_ac7_truesky_patches, depth_format_site) - 16usize];
+    ["Offset of field: rsf_ac7_truesky_patches::depth_call"]
+        [::core::mem::offset_of!(rsf_ac7_truesky_patches, depth_call) - 24usize];
+    ["Offset of field: rsf_ac7_truesky_patches::motion_call"]
+        [::core::mem::offset_of!(rsf_ac7_truesky_patches, motion_call) - 64usize];
+    ["Offset of field: rsf_ac7_truesky_patches::resolution_refused"]
+        [::core::mem::offset_of!(rsf_ac7_truesky_patches, resolution_refused) - 104usize];
+};
+#[repr(C)]
+pub struct rsf_ac7_truesky_leaves {
+    pub code: rsf_ac7_code_leaves,
+    pub renderer: *mut rsf_ac7_native_renderer,
+    pub module:
+        ::core::option::Option<unsafe extern "C" fn(name: *const u16) -> *mut ::core::ffi::c_uchar>,
+    pub relay_allocate: ::core::option::Option<
+        unsafe extern "C" fn(
+            call: *mut ::core::ffi::c_uchar,
+            handler: *mut ::core::ffi::c_void,
+        ) -> *mut ::core::ffi::c_void,
+    >,
+    pub relay_release: ::core::option::Option<unsafe extern "C" fn(slot: *mut ::core::ffi::c_void)>,
+    pub depth_dispatch: *mut ::core::ffi::c_void,
+    pub composite_draw: *mut ::core::ffi::c_void,
+    pub depth_ready: ::core::option::Option<
+        unsafe extern "C" fn(renderer: *mut rsf_ac7_native_renderer) -> bool,
+    >,
+    pub motion_release:
+        ::core::option::Option<unsafe extern "C" fn(renderer: *mut rsf_ac7_native_renderer)>,
+    pub depth_release:
+        ::core::option::Option<unsafe extern "C" fn(renderer: *mut rsf_ac7_native_renderer)>,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_ac7_truesky_leaves"][::core::mem::size_of::<rsf_ac7_truesky_leaves>() - 104usize];
+    ["Alignment of rsf_ac7_truesky_leaves"]
+        [::core::mem::align_of::<rsf_ac7_truesky_leaves>() - 8usize];
+    ["Offset of field: rsf_ac7_truesky_leaves::code"]
+        [::core::mem::offset_of!(rsf_ac7_truesky_leaves, code) - 0usize];
+    ["Offset of field: rsf_ac7_truesky_leaves::renderer"]
+        [::core::mem::offset_of!(rsf_ac7_truesky_leaves, renderer) - 32usize];
+    ["Offset of field: rsf_ac7_truesky_leaves::module"]
+        [::core::mem::offset_of!(rsf_ac7_truesky_leaves, module) - 40usize];
+    ["Offset of field: rsf_ac7_truesky_leaves::relay_allocate"]
+        [::core::mem::offset_of!(rsf_ac7_truesky_leaves, relay_allocate) - 48usize];
+    ["Offset of field: rsf_ac7_truesky_leaves::relay_release"]
+        [::core::mem::offset_of!(rsf_ac7_truesky_leaves, relay_release) - 56usize];
+    ["Offset of field: rsf_ac7_truesky_leaves::depth_dispatch"]
+        [::core::mem::offset_of!(rsf_ac7_truesky_leaves, depth_dispatch) - 64usize];
+    ["Offset of field: rsf_ac7_truesky_leaves::composite_draw"]
+        [::core::mem::offset_of!(rsf_ac7_truesky_leaves, composite_draw) - 72usize];
+    ["Offset of field: rsf_ac7_truesky_leaves::depth_ready"]
+        [::core::mem::offset_of!(rsf_ac7_truesky_leaves, depth_ready) - 80usize];
+    ["Offset of field: rsf_ac7_truesky_leaves::motion_release"]
+        [::core::mem::offset_of!(rsf_ac7_truesky_leaves, motion_release) - 88usize];
+    ["Offset of field: rsf_ac7_truesky_leaves::depth_release"]
+        [::core::mem::offset_of!(rsf_ac7_truesky_leaves, depth_release) - 96usize];
+};

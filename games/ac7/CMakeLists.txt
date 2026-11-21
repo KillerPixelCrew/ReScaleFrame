@@ -8,8 +8,9 @@ add_library(ReScaleFrame::AC7View ALIAS rsf_ac7_view)
 # Exact-build identity, the GameSDK table and the renderer lifecycle are the Rust crate rsf-ac7
 # (src/lib.rs, src/lifecycle.rs). plugin.cpp keeps the export and lends the guarded native
 # renderer entry points through src/ac7_platform.h. The crate also owns the native renderer's
-# code sites, patch transactions, hook guards and its prepare/start/quiesce/stop transaction
-# (src/sites.rs, patches.rs, guards.rs, renderer.rs), which native_renderer.cpp calls through
+# code sites, patch transactions, hook guards, its prepare/start/quiesce/stop transaction and the
+# TrueSky patches and relays (src/sites.rs, patches.rs, guards.rs, renderer.rs, truesky.rs),
+# which native_renderer.cpp calls through
 # src/ac7_sites.h with its native leaves, so the Rust archive follows the render scope
 # on the link line. Only this DLL and the native graph fixture pull native_renderer.cpp; the
 # carriers link rsf_ac7_render_scope without it and are unchanged.

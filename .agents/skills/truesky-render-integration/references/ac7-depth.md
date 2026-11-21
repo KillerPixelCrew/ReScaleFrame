@@ -10,8 +10,10 @@ why earlier clean-looking results were regressions. It is specific to the instal
   `c6c58ea3a355ed345888b1528e84aa753c6fc69db9c8fb8789e729c7651004d0`, 1,711,616 bytes.
 - `mixed_resolution.fxo`: 45,263 bytes, CRC32 IEEE `78881ef3`; full SHA-256 and pass/shader
   fingerprints are in [the hook map](../../../../docs/research/ue418-hook-map.md).
-- Runtime implementation: [native_renderer.cpp](../../../../games/ac7/src/native_renderer.cpp)
-  and [truesky_depth.cpp](../../../../games/ac7/src/truesky_depth.cpp).
+- Runtime implementation: sites, bytes, fingerprint, install, rollback and restore in
+  [truesky.rs](../../../../games/ac7/src/truesky.rs); relay handlers and D3D11 checks in
+  [native_renderer.cpp](../../../../games/ac7/src/native_renderer.cpp); the x1 kernel in
+  [truesky_depth.cpp](../../../../games/ac7/src/truesky_depth.cpp).
 - Captures, revisions, precision results and limitations:
   [aircraft/cloud research](../../../../docs/research/ac7-plane-artifacts-20261002.md) and
   [engine evidence](../../../../games/ac7/engine.json).
