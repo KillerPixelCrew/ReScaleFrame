@@ -12,6 +12,10 @@ links. Build, export comparison and an AC7 settings round trip remain open.
 The carriers also use the same store for `DLSSPreset`. Their existing
 `RSF_DLSS_PRESET` fallback and preset validation still apply at startup.
 The Runtime callback host uses the same write function.
+Within each Runtime instance, the store serializes section rewrites,
+partial updates and multi-key reads. A layout or preset key write can no
+longer interleave with the store's section read and replacement. Source
+review checked that the lock covers only file operations and formatting.
 
 Anomaly's Rust bootstrap now installs DirectInput observation before
 requesting the engine's guarded `CInput::OnFrame` slot. It handles refusals

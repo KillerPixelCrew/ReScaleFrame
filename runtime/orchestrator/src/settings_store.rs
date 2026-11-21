@@ -9,6 +9,7 @@ use crate::render_abi::{
     rsf_sharpening_options as Sharpening,
 };
 use std::ptr::null;
+use std::sync::Mutex;
 use windows_sys::Win32::System::WindowsProgramming::{
     GetPrivateProfileIntW, GetPrivateProfileSectionW, GetPrivateProfileStringW,
     WritePrivateProfileSectionW, WritePrivateProfileStringW,
@@ -18,6 +19,10 @@ use windows_sys::core::PCWSTR;
 const OK: i32 = 0;
 const INVALID_ARGUMENT: i32 = -1;
 const NOT_READY: i32 = -3;
+
+// A section rewrite reads existing keys before publishing. Keep partial updates and their
+// rollback in the same lock so they cannot race a rewrite from another caller of this store.
+static PROFILE_IO: Mutex<()> = Mutex::new(());
 
 // The section buffer the store has always read. A larger section is refused rather than truncated.
 const SECTION_CAPACITY: usize = 32768;
@@ -215,6 +220,17 @@ impl File {
         unsafe { WritePrivateProfileStringW(self.section, key.as_ptr(), value, self.ini) != 0 }
     }
 
+    fn write_integer(&self, key: &str, value: u32) -> i32 {
+        let key = wide(key);
+        let value = text(Value::Integer(value));
+        let _io = PROFILE_IO.lock().unwrap();
+        if self.write(&key, value.as_ptr()) {
+            OK
+        } else {
+            NOT_READY
+        }
+    }
+
     // The stored value, or None when the key is absent. Two distinct defaults tell an absent key
     // from a stored one without parsing the section.
     fn previous(&self, key: &[u16]) -> Option<Vec<u16>> {
@@ -260,6 +276,7 @@ fn read(file: &File, defaults: &Settings, sharpening: &Sharpening) -> Settings {
 // Also returns the stored FG value before it is reduced to `fg_enabled`. Native FG owners take it
 // as their rsf_fg_mode, so a saved 2 (Auto) or 3 (Dynamic) still reaches them.
 fn read_with_fg_mode(file: &File, defaults: &Settings, sharpening: &Sharpening) -> (Settings, u32) {
+    let _io = PROFILE_IO.lock().unwrap();
     let value = |key, fallback| file.integer(key, fallback);
     let number = |key, fallback| file.decimal(key, fallback);
     let fg_mode = value("FG", defaults.fg_enabled);
@@ -322,6 +339,7 @@ fn owned(entry: &[u16]) -> bool {
 // Rewrites the owned keys in one section write and keeps every other entry of the section, so a
 // failed write leaves the previous section intact.
 fn write(file: &File, request: &Settings) -> i32 {
+    let _io = PROFILE_IO.lock().unwrap();
     let mut buffer = vec![0u16; SECTION_CAPACITY];
     let length = unsafe {
         GetPrivateProfileSectionW(
@@ -361,6 +379,7 @@ fn write_sharpening(
     options: &Sharpening,
     store: &mut dyn FnMut(&File, &[u16], PCWSTR) -> bool,
 ) -> i32 {
+    let _io = PROFILE_IO.lock().unwrap();
     let keys: Vec<Vec<u16>> = KEYS[SHARPENING_START..]
         .iter()
         .map(|key| wide(key))
@@ -456,12 +475,7 @@ pub(crate) unsafe extern "C" fn rsf_settings_store_write_layout(
     let Some(file) = File::new(ini, section) else {
         return INVALID_ARGUMENT;
     };
-    let value = wide(&value.to_string());
-    if file.write(&wide(OVERLAY_LAYOUT), value.as_ptr()) {
-        OK
-    } else {
-        NOT_READY
-    }
+    file.write_integer(OVERLAY_LAYOUT, value)
 }
 
 /// Persists only the shared post-pass keys for hosts that own their base SR settings.
@@ -513,12 +527,7 @@ pub(crate) unsafe extern "C" fn write_dlss_preset(
     let Some(file) = File::new(ini, section) else {
         return INVALID_ARGUMENT;
     };
-    let value = text(Value::Integer(preset));
-    if file.write(&wide(DLSS_PRESET), value.as_ptr()) {
-        OK
-    } else {
-        NOT_READY
-    }
+    file.write_integer(DLSS_PRESET, preset)
 }
 
 #[cfg(test)]
