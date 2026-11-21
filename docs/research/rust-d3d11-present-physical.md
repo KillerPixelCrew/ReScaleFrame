@@ -43,3 +43,21 @@ strict native `GetBuffer`, null list refusal, and retained references after fail
 
 Real DXGI fullscreen and resize, device queue ordering, vendor SDK execution, and gameplay remain
 unverified. The device fixtures and full release suite were outside this run.
+
+## Merged Standard game retest
+
+The isolated Standard clone ran at `35f99ca` with the rebuilt Rust adapter
+and Runtime. The known executable hash matched the Standard profile.
+The actor callback requested a windowed resize from 1280×720 to 1600×900
+and then queued an engine quit. The Runtime reported one successful resize
+and 689 DLSS SR evaluations with zero refusals at the last full status
+sample. The engine destroyed Direct3D and returned exit code 0. The staged
+DLLs and settings were restored and checked against their backup hashes.
+
+Windows kept the window out of the foreground. The activation attempt
+reported that the foreground window had no process ID. DLSS-G stayed
+inactive and the run supplies no foreground input, generated-frame or
+fullscreen evidence. Streamline printed the same native swapchain
+reference warning on release as the preceding presentation-buffer run.
+Logs, script, sizes and payload hashes are under
+`.local/anomaly/staging/live-58fe95a-stage5/evidence/merged-physical-standard-35f99ca/`.

@@ -488,6 +488,16 @@ device run for resize, fullscreen and provider transitions. Worker and
 integration logs are in `.local/rust-1.94.1-verification/`.
 [Physical swapchain audit](research/rust-d3d11-present-physical.md)
 
+The isolated Standard clone then reached gameplay on `35f99ca`,
+resized from 1280×720 to 1600×900 and shut down through the engine.
+The final full SR status sample reported 689 DLSS evaluations and zero
+refusals. The process exited with code 0 and the staged inputs were
+restored. Windows kept it in the background, so DLSS-G never became
+active. Foreground input, generated-frame continuation after resize,
+AVX, fullscreen and provider transitions still need checks on the
+merged owner.
+[Standard retest evidence](research/rust-d3d11-present-physical.md#merged-standard-game-retest)
+
 The combined bridge build passed 15 focused CPU and ABI contracts in
 Debug and Release, and all 290 locked Rust tests, formatting and Clippy.
 Both configurations match the reference Runtime, AC7, Loader and
