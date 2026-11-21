@@ -6,6 +6,8 @@ use std::ptr;
 use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock, PoisonError};
 
+mod diagnostics;
+
 type Handle = *mut c_void;
 const KINDS: usize = 4;
 const CAPACITY: usize = 8;

@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now owns D3D12 diagnostics dispatch, validation message budgets,
+stack formatting and the one-time device-removal report. The logger
+and its user context are published together and copied before calling
+the sink. Counters saturate once their budget is exhausted. DRED
+breadcrumb enumeration and debug-layer activation still use typed
+D3D12 calls. The public observer ABI is unchanged. Build and runtime
+validation remain open.
+
 The D3D12 observer now keeps its process-lifetime owner, hook slots,
 trampolines, forwarding depth and submission serials in Rust. The
 trampoline is published before the native hook can dispatch. Native COM

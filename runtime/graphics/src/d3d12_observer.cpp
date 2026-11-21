@@ -7,10 +7,7 @@
 #include <wrl/client.h>
 #include <MinHook.h>
 #include <array>
-#include <atomic>
 #include <utility>
-#include <cstdio>
-#include <cstring>
 
 namespace {
 using Microsoft::WRL::ComPtr;
@@ -21,6 +18,8 @@ using Queue = void (STDMETHODCALLTYPE*)(ID3D12CommandQueue*, UINT, ID3D12Command
 using Present = HRESULT (STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT);
 constexpr size_t capacity = RSF_OBSERVER12_CAPACITY;
 static_assert(sizeof(rsf_observer12_hooks) == 4 * sizeof(void*));
+static_assert(sizeof(rsf_observer12_breadcrumb) == 40);
+static_assert(D3D12_MESSAGE_SEVERITY_ERROR == 1 && D3D12_MESSAGE_SEVERITY_WARNING == 2);
 constexpr rsf_observer12_hooks hooks{
     []() -> int32_t {
         const auto status = MH_Initialize();
@@ -32,65 +31,53 @@ constexpr rsf_observer12_hooks hooks{
     [](void* target) -> int32_t { return MH_EnableHook(target) == MH_OK; },
     [](void* target) { (void)MH_RemoveHook(target); },
 };
-void (*diagnostic_log)(void*, const char*){};
-void* diagnostic_user{};
-std::atomic<bool> removal_reported{};
-std::array<std::atomic<uint32_t>, 4096> diagnostic_counts{};
 void CALLBACK debug_message(D3D12_MESSAGE_CATEGORY, D3D12_MESSAGE_SEVERITY severity,
     D3D12_MESSAGE_ID id, LPCSTR description, void*)
 {
-    if (!diagnostic_log || severity > D3D12_MESSAGE_SEVERITY_WARNING) return;
-    const auto key = static_cast<unsigned>(id);
-    if (key >= diagnostic_counts.size()) return;
-    const auto occurrence = ++diagnostic_counts[key];
-    if (occurrence > (severity == D3D12_MESSAGE_SEVERITY_WARNING ? 4u : 16u)) return;
-    char message[2048]{};
-    std::snprintf(message, sizeof(message), "D3D12 validation severity=%u id=%u: %s", unsigned(severity), unsigned(id), description);
-    diagnostic_log(diagnostic_user, message);
-    if (severity <= D3D12_MESSAGE_SEVERITY_ERROR && occurrence <= 2) {
-        void* stack[16]{};
-        const auto count = CaptureStackBackTrace(1, 16, stack, nullptr);
-        for (USHORT i = 0; i < count; ++i) {
-            HMODULE module{}; char path[MAX_PATH]{};
-            if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                    static_cast<const char*>(stack[i]), &module)) continue;
-            (void)GetModuleFileNameA(module, path, MAX_PATH);
-            const auto* leaf = std::strrchr(path, '\\');
-            std::snprintf(message, sizeof(message), "D3D12 validation stack[%u] %s+0x%llx.", unsigned(i), leaf ? leaf + 1 : path,
-                static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(stack[i]) - reinterpret_cast<uintptr_t>(module)));
-            diagnostic_log(diagnostic_user, message);
-        }
-    }
+    rsf_core_observer12_debug_message(uint32_t(severity), uint32_t(id), description);
 }
-void report_removal(ID3D12CommandQueue* queue)
+void read_dred(void* raw_device, uint32_t limit, rsf_observer12_breadcrumb_fn breadcrumb,
+    rsf_observer12_fault_fn page_fault, void* user)
 {
-    if (!diagnostic_log || removal_reported.load()) return;
-    ComPtr<ID3D12Device> device;
-    if (FAILED(queue->GetDevice(IID_PPV_ARGS(&device)))) return;
-    const auto reason = device->GetDeviceRemovedReason();
-    if (SUCCEEDED(reason) || removal_reported.exchange(true)) return;
-    char message[512]{};
-    std::snprintf(message, sizeof(message), "D3D12 device removal reason=0x%08lx.", static_cast<unsigned long>(reason));
-    diagnostic_log(diagnostic_user, message);
+    auto* device = static_cast<ID3D12Device*>(raw_device);
     ComPtr<ID3D12DeviceRemovedExtendedData> dred;
-    if (FAILED(device.As(&dred))) return;
+    if (FAILED(device->QueryInterface(IID_PPV_ARGS(&dred)))) return;
     D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT breadcrumbs{};
     if (SUCCEEDED(dred->GetAutoBreadcrumbsOutput(&breadcrumbs))) {
         auto* node = breadcrumbs.pHeadAutoBreadcrumbNode;
-        for (unsigned i = 0; node && i < 64; ++i, node = node->pNext) {
+        for (uint32_t i = 0; node && i < limit; ++i, node = node->pNext) {
             const auto completed = node->pLastBreadcrumbValue ? *node->pLastBreadcrumbValue : 0;
-            std::snprintf(message, sizeof(message), "DRED list=%p queue=%p completed=%u/%u next_operation=%u name=%s.",
-                static_cast<void*>(node->pCommandList), static_cast<void*>(node->pCommandQueue), completed, node->BreadcrumbCount,
-                completed < node->BreadcrumbCount && node->pCommandHistory ? unsigned(node->pCommandHistory[completed]) : UINT_MAX,
-                node->pCommandListDebugNameA ? node->pCommandListDebugNameA : "");
-            diagnostic_log(diagnostic_user, message);
+            const rsf_observer12_breadcrumb row{node->pCommandList, node->pCommandQueue, completed, node->BreadcrumbCount,
+                completed < node->BreadcrumbCount && node->pCommandHistory ? uint32_t(node->pCommandHistory[completed]) : UINT32_MAX,
+                node->pCommandListDebugNameA};
+            breadcrumb(user, &row);
         }
     }
     D3D12_DRED_PAGE_FAULT_OUTPUT fault{};
     if (SUCCEEDED(dred->GetPageFaultAllocationOutput(&fault))) {
-        std::snprintf(message, sizeof(message), "DRED page fault address=0x%llx.", static_cast<unsigned long long>(fault.PageFaultVA));
-        diagnostic_log(diagnostic_user, message);
+        page_fault(user, fault.PageFaultVA);
     }
+}
+
+void report_removal(ID3D12CommandQueue* queue)
+{
+    if (!rsf_core_observer12_check_removal()) return;
+    ComPtr<ID3D12Device> device;
+    if (FAILED(queue->GetDevice(IID_PPV_ARGS(&device)))) return;
+    rsf_core_observer12_report_removal(device.Get(), device->GetDeviceRemovedReason(), read_dred);
+}
+
+int32_t enable_diagnostics()
+{
+    ComPtr<ID3D12DeviceRemovedExtendedDataSettings> dred;
+    if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&dred)))) {
+        dred->SetAutoBreadcrumbsEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+        dred->SetPageFaultEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+    }
+    ComPtr<ID3D12Debug> debug;
+    if (FAILED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug)))) return 0;
+    debug->EnableDebugLayer();
+    return 1;
 }
 // SDK proxies can forward through another observed implementation. Each public
 // operation has one callback pair, including its native forwarding chain.
@@ -186,7 +173,7 @@ extern "C" int32_t rsf_d3d12_observer_device(rsf_d3d12_observer* observer, void*
     if (!pointer || !rsf_core_observer12_owns(observer)) return -1;
     ComPtr<ID3D12Device> object;
     if (FAILED(static_cast<IUnknown*>(pointer)->QueryInterface(IID_PPV_ARGS(&object)))) return -1;
-    if (diagnostic_log) {
+    if (rsf_core_observer12_diagnostics_enabled()) {
         ComPtr<ID3D12InfoQueue1> info;
         DWORD cookie{};
         if (SUCCEEDED(object.As(&info))) (void)info->RegisterMessageCallback(debug_message, D3D12_MESSAGE_CALLBACK_FLAG_NONE, nullptr, &cookie);
@@ -205,18 +192,5 @@ extern "C" int32_t rsf_d3d12_observer_factory(rsf_d3d12_observer* observer, void
 
 extern "C" int32_t rsf_d3d12_diagnostics_enable(void (*log)(void*, const char*), void* user)
 {
-    if (!log) return -1;
-    diagnostic_log = log; diagnostic_user = user;
-    ComPtr<ID3D12DeviceRemovedExtendedDataSettings> dred;
-    if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&dred)))) {
-        dred->SetAutoBreadcrumbsEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
-        dred->SetPageFaultEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
-    }
-    ComPtr<ID3D12Debug> debug;
-    if (FAILED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug)))) {
-        log(user, "D3D12 diagnostics: debug layer unavailable; DRED requested."); return -2;
-    }
-    debug->EnableDebugLayer();
-    log(user, "D3D12 diagnostics: validation layer and DRED requested before device creation.");
-    return 0;
+    return rsf_core_observer12_diagnostics_enable(log, user, enable_diagnostics);
 }

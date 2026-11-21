@@ -208,6 +208,8 @@ mod vulkan_sr_split;
 mod vulkan_timing;
 #[cfg(windows)]
 mod vulkan_xess_fg;
+#[cfg(windows)]
+mod win32_diagnostics;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn rsf_get_runtime_version() -> *const std::ffi::c_char {

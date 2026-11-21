@@ -1,17 +1,14 @@
 // SPDX-License-Identifier: MIT
 use crate::owned_win32_handle;
+use crate::win32_diagnostics::module_location;
 use std::ffi::{c_char, c_void};
 use std::os::windows::io::{AsRawHandle, OwnedHandle};
 use std::ptr::{null, null_mut};
 use std::sync::OnceLock;
 use windows_sys::Win32::{
-    Foundation::{DuplicateHandle, HANDLE, MAX_PATH, WAIT_FAILED, WAIT_OBJECT_0},
+    Foundation::{DuplicateHandle, HANDLE, WAIT_FAILED, WAIT_OBJECT_0},
     System::{
         Diagnostics::Debug::{CONTEXT, CONTEXT_CONTROL_AMD64, GetThreadContext, ReadProcessMemory},
-        LibraryLoader::{
-            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-            GetModuleFileNameW, GetModuleHandleExW,
-        },
         Memory::{
             MEM_COMMIT, MEMORY_BASIC_INFORMATION, PAGE_EXECUTE, PAGE_EXECUTE_READ,
             PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY, PAGE_GUARD, PAGE_NOACCESS,
@@ -213,14 +210,6 @@ unsafe extern "C" fn rsf_core_nfg_describe_address(
     capacity: usize,
 ) -> usize {
     let address = address as usize;
-    let mut module = null_mut();
-    let flags =
-        GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT;
-    if unsafe { GetModuleHandleExW(flags, address as *const u16, &mut module) } == 0
-        || module.is_null()
-    {
-        return 0;
-    }
     let mut region = MEMORY_BASIC_INFORMATION::default();
     let executable =
         PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
@@ -235,18 +224,7 @@ unsafe extern "C" fn rsf_core_nfg_describe_address(
     {
         return 0;
     }
-    let mut path = [0; MAX_PATH as usize];
-    let len = unsafe { GetModuleFileNameW(module, path.as_mut_ptr(), MAX_PATH) } as usize;
-    if len == 0 || len >= path.len() {
-        return 0;
-    }
-    let path = &path[..len];
-    let leaf = path
-        .iter()
-        .rposition(|&ch| ch == u16::from(b'\\'))
-        .map_or(path, |separator| &path[separator + 1..]);
-    let name = String::from_utf16_lossy(leaf);
-    let Some(offset) = address.checked_sub(module.addr()) else {
+    let Some((name, offset)) = module_location(address) else {
         return 0;
     };
     let text = format!(" {name}+0x{offset:x}");
