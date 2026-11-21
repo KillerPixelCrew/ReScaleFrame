@@ -31,6 +31,8 @@ mod dlss_pipeline;
 #[cfg(windows)]
 mod dlss_pipeline_abi;
 #[cfg(windows)]
+mod dlss_vulkan_capture;
+#[cfg(windows)]
 mod dlss_vulkan_capture_ledger;
 #[cfg(windows)]
 mod dx12_vulkan_interop;

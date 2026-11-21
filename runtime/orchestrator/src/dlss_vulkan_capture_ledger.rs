@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: MIT
-use crate::allocate_handle;
 use crate::vulkan_fg_abi::rsf_dlss_capture_source as Source;
 use std::collections::{BTreeMap, BTreeSet};
 
-const AMBIGUOUS: u32 = 1;
-const TOKEN_RANGE: u32 = 2;
+pub(crate) const AMBIGUOUS: u32 = 1;
+pub(crate) const TOKEN_RANGE: u32 = 2;
 
+// Exact source identity and per-queue-family completion proof for the
+// dedicated present capture. Its owner serializes every call.
 #[derive(Default)]
-struct Ledger {
+pub(crate) struct Ledger {
     // None is a token for which two distinct capture identities were seen.
     sources: BTreeMap<u32, Option<Source>>,
     observed: Option<u32>,
@@ -17,7 +18,9 @@ struct Ledger {
 }
 
 impl Ledger {
-    fn remember(&mut self, source: Option<&Source>) -> u32 {
+    // Null source clears the observation anchor. Codes report an ambiguous
+    // identity or a source that cannot fit in the SDK token domain.
+    pub(crate) fn remember(&mut self, source: Option<&Source>) -> u32 {
         self.observed = None;
         let Some(source) = source else {
             return 0;
@@ -50,106 +53,55 @@ impl Ledger {
         0
     }
 
-    fn source(&self, token: u32) -> Option<&Source> {
-        self.sources.get(&token)?.as_ref()
+    pub(crate) fn source(&self, token: u64) -> Option<&Source> {
+        self.sources.get(&u32::try_from(token).ok()?)?.as_ref()
     }
 
-    fn can_flush(&self) -> bool {
+    pub(crate) fn observed(&self) -> Option<&Source> {
+        self.observed.and_then(|token| self.source(token.into()))
+    }
+
+    pub(crate) fn pending(&self, family: u32) -> bool {
+        self.pending.contains(&family)
+    }
+
+    pub(crate) fn submitted(&mut self, family: u32) {
+        self.pending.insert(family);
+    }
+
+    pub(crate) fn completed(&mut self, family: u32) {
+        self.pending.remove(&family);
+    }
+
+    pub(crate) fn unsubmitted(&mut self) {
+        self.unsubmitted = true;
+    }
+
+    pub(crate) fn can_record(&self) -> bool {
+        !self.unsubmitted
+    }
+
+    pub(crate) fn can_flush(&self) -> bool {
         !self.unsubmitted && self.pending.is_empty()
     }
-}
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_dlss_capture_create() -> *mut Ledger {
-    allocate_handle(Ledger::default())
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_capture_destroy(ledger: *mut Ledger) {
-    if !ledger.is_null() {
-        unsafe { drop(Box::from_raw(ledger)) };
+    // The caller has already drained the presenter and device. This proves
+    // completion of submitted copies only.
+    pub(crate) fn drained(&mut self) {
+        self.pending.clear();
     }
-}
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_capture_remember(
-    ledger: &mut Ledger,
-    source: *const Source,
-) -> u32 {
-    ledger.remember(unsafe { source.as_ref() })
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_capture_source(
-    ledger: &Ledger,
-    token: u64,
-    out: *mut Source,
-) -> u32 {
-    let Some(source) = u32::try_from(token)
-        .ok()
-        .and_then(|token| ledger.source(token))
-    else {
-        return 0;
-    };
-    unsafe { out.write(*source) };
-    1
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_dlss_capture_observed(ledger: &Ledger, out: *mut Source) -> u32 {
-    let Some(source) = ledger.observed.and_then(|token| ledger.source(token)) else {
-        return 0;
-    };
-    unsafe { out.write(*source) };
-    1
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_dlss_capture_pending(ledger: &Ledger, family: u32) -> u32 {
-    u32::from(ledger.pending.contains(&family))
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_dlss_capture_submitted(ledger: &mut Ledger, family: u32) {
-    ledger.pending.insert(family);
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_dlss_capture_completed(ledger: &mut Ledger, family: u32) {
-    ledger.pending.remove(&family);
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_dlss_capture_unsubmitted(ledger: &mut Ledger) {
-    ledger.unsubmitted = true;
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_dlss_capture_can_record(ledger: &Ledger) -> u32 {
-    u32::from(!ledger.unsubmitted)
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_dlss_capture_can_flush(ledger: &Ledger) -> u32 {
-    u32::from(ledger.can_flush())
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_dlss_capture_drained(ledger: &mut Ledger) {
-    ledger.pending.clear();
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_dlss_capture_sequence(ledger: &mut Ledger) -> u64 {
-    ledger.sequence += 1;
-    ledger.sequence
+    pub(crate) fn next_sequence(&mut self) -> u64 {
+        self.sequence += 1;
+        self.sequence
+    }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
-    fn source(frame: u64, view: u32) -> Source {
+    pub(crate) fn source(frame: u64, view: u32) -> Source {
         let mut source: Source = unsafe { std::mem::zeroed() };
         source.record.frame_id = frame;
         source.record.session_id = 1;
@@ -167,8 +119,9 @@ mod tests {
         assert_eq!(ledger.remember(Some(&first)), 0);
         assert_eq!(ledger.remember(Some(&refreshed)), 0);
         assert_eq!(ledger.source(7).unwrap().generated_count, 3);
+        assert_eq!(ledger.observed().unwrap().generated_count, 3);
         assert_eq!(ledger.remember(Some(&source(7, 2))), AMBIGUOUS);
-        assert!(ledger.source(7).is_none() && ledger.observed.is_none());
+        assert!(ledger.source(7).is_none() && ledger.observed().is_none());
         assert_eq!(ledger.remember(Some(&first)), AMBIGUOUS);
     }
 
@@ -181,22 +134,23 @@ mod tests {
             TOKEN_RANGE
         );
         assert_eq!(ledger.source(7).unwrap().record.view_id, 1);
-        assert!(ledger.observed.is_none());
+        assert!(ledger.source(7 + (1u64 << 32)).is_none());
+        assert!(ledger.observed().is_none());
     }
 
     #[test]
     fn completion_proof_is_exact_to_a_family_and_excludes_unsubmitted_copies() {
         let mut ledger = Ledger::default();
-        rsf_core_dlss_capture_submitted(&mut ledger, 1);
-        rsf_core_dlss_capture_submitted(&mut ledger, 2);
-        rsf_core_dlss_capture_completed(&mut ledger, 2);
-        assert_eq!(rsf_core_dlss_capture_can_flush(&ledger), 0);
-        rsf_core_dlss_capture_completed(&mut ledger, 1);
-        assert_eq!(rsf_core_dlss_capture_can_flush(&ledger), 1);
-        rsf_core_dlss_capture_submitted(&mut ledger, 1);
-        rsf_core_dlss_capture_unsubmitted(&mut ledger);
-        rsf_core_dlss_capture_drained(&mut ledger);
-        assert_eq!(rsf_core_dlss_capture_can_record(&ledger), 0);
-        assert_eq!(rsf_core_dlss_capture_can_flush(&ledger), 0);
+        ledger.submitted(1);
+        ledger.submitted(2);
+        ledger.completed(2);
+        assert!(!ledger.can_flush());
+        ledger.completed(1);
+        assert!(ledger.can_flush());
+        ledger.submitted(1);
+        ledger.unsubmitted();
+        ledger.drained();
+        assert!(!ledger.can_record());
+        assert!(!ledger.can_flush());
     }
 }

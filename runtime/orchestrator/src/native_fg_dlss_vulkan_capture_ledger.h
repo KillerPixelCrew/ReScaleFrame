@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 #include <rescaleframe/native_fg_dlss_vulkan.h>
+#include "../../vulkan/streamline/present-capture.h"
 
-typedef struct rsf_dlss_capture_ledger rsf_dlss_capture_ledger;
+typedef struct rsf_dlss_capture rsf_dlss_capture;
 
 typedef struct rsf_dlss_capture_source {
     rsf_frame_record record;
@@ -10,29 +11,54 @@ typedef struct rsf_dlss_capture_source {
     uint32_t generated_count, configured;
 } rsf_dlss_capture_source;
 
+/* Native leaves of the Rust present capture owner. Vulkan results are
+   returned unchanged. Handles cross as opaque values, and the packet and
+   source are borrowed for one call. */
+typedef struct rsf_dlss_capture_platform {
+    /* Writes a null native handle and succeeds while capture is disabled. */
+    rsf_backend_result (*open)(const rsf_fgvk_setup*, void** native);
+    void (*close)(void*);
+    /* A null callback clears the registration for the same device and user. */
+    int32_t (*set_callback)(void*, rsf_sl_present_capture_callback, void* user);
+    int32_t (*create_pool)(void*, uint32_t queue_family, uint64_t*);
+    void (*destroy_pool)(void*, uint64_t);
+    int32_t (*allocate)(void*, uint64_t pool, void** commands);
+    int32_t (*reset_pool)(void*, uint64_t);
+    int32_t (*begin)(void*, void* commands);
+    int32_t (*end)(void*, void* commands);
+    int32_t (*create_fence)(void*, uint64_t*);
+    void (*destroy_fence)(void*, uint64_t);
+    int32_t (*reset_fence)(void*, uint64_t);
+    int32_t (*wait_fence)(void*, uint64_t, uint64_t timeout);
+    uint32_t (*wants)(void*, uint64_t frame);
+    uint64_t (*readbacks)(void*);
+    /* Resolves the presented real image. A non-null reason reports failure
+       and the result to log, which can be VK_SUCCESS. */
+    int32_t (*target)(void*, const rsf_sl_present_capture_packet*, rsf_srvk_image*, const char** reason);
+    uint32_t (*record)(void*, void* commands, const rsf_srvk_image*, const rsf_frame_record*, int32_t generated_index);
+    /* Submits the copy behind the Present's original wait semaphores. */
+    int32_t (*submit)(const rsf_sl_present_capture_packet*, void* commands, uint64_t fence);
+    /* Zero waits presents without the semaphores the copy already consumed. */
+    int32_t (*present)(const rsf_sl_present_capture_packet*, uint32_t waits);
+    uint32_t (*flush)(void*);
+    void (*failure)(void*, uint64_t source, const char* reason, int32_t result);
+    void (*trace)(void*, const rsf_sl_present_capture_packet*, const rsf_dlss_capture_source* observed, uint32_t found);
+    void (*metadata)(void*, const rsf_sl_present_capture_packet*, const rsf_dlss_capture_source*, uint64_t sequence,
+        int32_t result, uint32_t flush_attempted, uint32_t flushed);
+} rsf_dlss_capture_platform;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
-/* Private state. The native capture owner serializes calls and unregisters
-   the SDK callback before destroying the ledger. No graphics handles cross. */
-rsf_dlss_capture_ledger* rsf_core_dlss_capture_create(void);
-void rsf_core_dlss_capture_destroy(rsf_dlss_capture_ledger*);
-/* Null source clears the observation anchor. Codes 1 and 2 report an
-   ambiguous identity or a source that cannot fit in the SDK token domain. */
-uint32_t rsf_core_dlss_capture_remember(rsf_dlss_capture_ledger*, const rsf_dlss_capture_source*);
-uint32_t rsf_core_dlss_capture_source(const rsf_dlss_capture_ledger*, uint64_t sdk_frame,
-    rsf_dlss_capture_source*);
-uint32_t rsf_core_dlss_capture_observed(const rsf_dlss_capture_ledger*, rsf_dlss_capture_source*);
-uint32_t rsf_core_dlss_capture_pending(const rsf_dlss_capture_ledger*, uint32_t queue_family);
-void rsf_core_dlss_capture_submitted(rsf_dlss_capture_ledger*, uint32_t queue_family);
-void rsf_core_dlss_capture_completed(rsf_dlss_capture_ledger*, uint32_t queue_family);
-void rsf_core_dlss_capture_unsubmitted(rsf_dlss_capture_ledger*);
-uint32_t rsf_core_dlss_capture_can_record(const rsf_dlss_capture_ledger*);
-uint32_t rsf_core_dlss_capture_can_flush(const rsf_dlss_capture_ledger*);
-/* The caller has already drained the presenter and device. This proves
-   completion of submitted copies only. */
-void rsf_core_dlss_capture_drained(rsf_dlss_capture_ledger*);
-uint64_t rsf_core_dlss_capture_sequence(rsf_dlss_capture_ledger*);
+/* The platform outlives the owner. Registration is the last step of open.
+   Detach before close; close follows presenter and GPU drain. */
+rsf_backend_result rsf_core_dlss_capture_open(const rsf_dlss_capture_platform*, const rsf_fgvk_setup*, rsf_dlss_capture**);
+void rsf_core_dlss_capture_remember(rsf_dlss_capture*, const rsf_frame_record*, uint32_t generated_count,
+    const rsf_dlssgvk_status*, uint32_t configured);
+/* The caller has already drained the presenter and device. */
+void rsf_core_dlss_capture_flush(rsf_dlss_capture*);
+rsf_backend_result rsf_core_dlss_capture_detach(rsf_dlss_capture*);
+void rsf_core_dlss_capture_close(rsf_dlss_capture*);
 #ifdef __cplusplus
 }
 #endif
