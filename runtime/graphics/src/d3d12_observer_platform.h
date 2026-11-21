@@ -28,18 +28,31 @@ struct rsf_observer12_attachment {
 };
 
 struct rsf_observer12_breadcrumb {
+    const void* next;
     void* list;
     void* queue;
-    uint32_t completed, count, next_operation;
+    uint32_t completed, count;
     const char* name;
 };
 
 typedef void (*rsf_observer12_log)(void* user, const char* text);
-/* The visitors and user context are borrowed for the synchronous DRED read. */
-typedef void (*rsf_observer12_breadcrumb_fn)(void* user, const rsf_observer12_breadcrumb*);
-typedef void (*rsf_observer12_fault_fn)(void* user, uint64_t address);
-typedef void (*rsf_observer12_read_dred)(void* device, uint32_t limit,
-    rsf_observer12_breadcrumb_fn, rsf_observer12_fault_fn, void* user);
+struct rsf_observer12_diagnostic_setup {
+    int32_t (*query_settings)(void**);
+    void (*enable_breadcrumbs)(void*);
+    void (*enable_page_faults)(void*);
+    int32_t (*query_debug)(void**);
+    int32_t (*enable_debug)(void*);
+};
+/* Query results transfer one reference. DRED nodes are borrowed while the interface is held. */
+struct rsf_observer12_removal {
+    int32_t (*queue_device)(void*, void**);
+    int32_t (*removed_reason)(void*);
+    int32_t (*query_dred)(void*, void**);
+    const void* (*breadcrumb_head)(void*);
+    void (*breadcrumb)(const void*, rsf_observer12_breadcrumb*);
+    uint32_t (*operation)(const void*, uint32_t);
+    int32_t (*page_fault)(void*, uint64_t*);
+};
 
 extern "C" {
 int32_t rsf_core_observer12_create(const rsf_d3d12_observer_setup*, rsf_d3d12_observer**,
@@ -58,8 +71,7 @@ uint32_t rsf_core_observer12_present_begin(const rsf_observer12_attachment*, voi
 uint64_t rsf_core_observer12_submit_begin(void* queue, uint32_t count, void* const* lists);
 void rsf_core_observer12_submit_end(void* queue, uint64_t id, uint32_t count, void* const* lists);
 void rsf_core_observer12_present(void* chain, uint32_t interval, uint32_t flags, uint32_t begin);
-int32_t rsf_core_observer12_diagnostics_enable(rsf_observer12_log, void* user, int32_t (*enable)(void));
+int32_t rsf_core_observer12_diagnostics_enable(rsf_observer12_log, void* user, const rsf_observer12_diagnostic_setup*);
 void rsf_core_observer12_debug_message(uint32_t severity, uint32_t id, const char* description);
-int32_t rsf_core_observer12_check_removal();
-void rsf_core_observer12_report_removal(void* device, int32_t reason, rsf_observer12_read_dred);
+void rsf_core_observer12_report_removal(void* queue, const rsf_observer12_removal*);
 }

@@ -21,7 +21,9 @@ static_assert(sizeof(rsf_observer12_hooks) == 4 * sizeof(void*));
 static_assert(sizeof(rsf_observer12_attachment) == 7 * sizeof(void*));
 static_assert(RSF_OBSERVER12_FACTORY == 0 && RSF_OBSERVER12_DEVICE == 1 && RSF_OBSERVER12_QUEUE == 2 &&
     RSF_OBSERVER12_CHAIN == 3 && D3D12_COMMAND_LIST_TYPE_DIRECT == 0);
-static_assert(sizeof(rsf_observer12_breadcrumb) == 40);
+static_assert(sizeof(rsf_observer12_breadcrumb) == 40 && offsetof(rsf_observer12_breadcrumb, name) == 32);
+static_assert(sizeof(rsf_observer12_diagnostic_setup) == 5 * sizeof(void*) &&
+    sizeof(rsf_observer12_removal) == 7 * sizeof(void*));
 static_assert(D3D12_MESSAGE_SEVERITY_ERROR == 1 && D3D12_MESSAGE_SEVERITY_WARNING == 2);
 constexpr rsf_observer12_hooks hooks{
     []() -> int32_t {
@@ -39,49 +41,82 @@ void CALLBACK debug_message(D3D12_MESSAGE_CATEGORY, D3D12_MESSAGE_SEVERITY sever
 {
     rsf_core_observer12_debug_message(uint32_t(severity), uint32_t(id), description);
 }
-void read_dred(void* raw_device, uint32_t limit, rsf_observer12_breadcrumb_fn breadcrumb,
-    rsf_observer12_fault_fn page_fault, void* user)
+template<class Interface> int32_t query_interface(void* object, void** out) noexcept try
 {
-    auto* device = static_cast<ID3D12Device*>(raw_device);
-    ComPtr<ID3D12DeviceRemovedExtendedData> dred;
-    if (FAILED(device->QueryInterface(IID_PPV_ARGS(&dred)))) return;
-    D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT breadcrumbs{};
-    if (SUCCEEDED(dred->GetAutoBreadcrumbsOutput(&breadcrumbs))) {
-        auto* node = breadcrumbs.pHeadAutoBreadcrumbNode;
-        for (uint32_t i = 0; node && i < limit; ++i, node = node->pNext) {
-            const auto completed = node->pLastBreadcrumbValue ? *node->pLastBreadcrumbValue : 0;
-            const rsf_observer12_breadcrumb row{node->pCommandList, node->pCommandQueue, completed, node->BreadcrumbCount,
-                completed < node->BreadcrumbCount && node->pCommandHistory ? uint32_t(node->pCommandHistory[completed]) : UINT32_MAX,
-                node->pCommandListDebugNameA};
-            breadcrumb(user, &row);
-        }
-    }
-    D3D12_DRED_PAGE_FAULT_OUTPUT fault{};
-    if (SUCCEEDED(dred->GetPageFaultAllocationOutput(&fault))) {
-        page_fault(user, fault.PageFaultVA);
-    }
+    return static_cast<IUnknown*>(object)->QueryInterface(__uuidof(Interface), out);
+} catch (...) { return E_FAIL; }
+
+template<class Interface> int32_t query_debug(void** out) noexcept try
+{
+    return D3D12GetDebugInterface(__uuidof(Interface), out);
+} catch (...) { return E_FAIL; }
+
+int32_t queue_device(void* queue, void** out) noexcept try
+{
+    return static_cast<ID3D12CommandQueue*>(queue)->GetDevice(__uuidof(ID3D12Device), out);
+} catch (...) { return E_FAIL; }
+
+int32_t removed_reason(void* device) noexcept try
+{
+    return static_cast<ID3D12Device*>(device)->GetDeviceRemovedReason();
+} catch (...) { return S_OK; }
+
+const void* breadcrumb_head(void* dred) noexcept try
+{
+    D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT output{};
+    const auto result = static_cast<ID3D12DeviceRemovedExtendedData*>(dred)->GetAutoBreadcrumbsOutput(&output);
+    return SUCCEEDED(result) ? output.pHeadAutoBreadcrumbNode : nullptr;
+} catch (...) { return nullptr; }
+
+void breadcrumb(const void* raw, rsf_observer12_breadcrumb* out) noexcept
+{
+    const auto& node = *static_cast<const D3D12_AUTO_BREADCRUMB_NODE*>(raw);
+    *out = {node.pNext, node.pCommandList, node.pCommandQueue,
+        node.pLastBreadcrumbValue ? *node.pLastBreadcrumbValue : 0, node.BreadcrumbCount, node.pCommandListDebugNameA};
 }
 
-void report_removal(ID3D12CommandQueue* queue)
+uint32_t breadcrumb_operation(const void* raw, uint32_t index) noexcept
 {
-    if (!rsf_core_observer12_check_removal()) return;
-    ComPtr<ID3D12Device> device;
-    if (FAILED(queue->GetDevice(IID_PPV_ARGS(&device)))) return;
-    rsf_core_observer12_report_removal(device.Get(), device->GetDeviceRemovedReason(), read_dred);
+    const auto& node = *static_cast<const D3D12_AUTO_BREADCRUMB_NODE*>(raw);
+    return node.pCommandHistory ? static_cast<uint32_t>(node.pCommandHistory[index]) : UINT32_MAX;
 }
 
-int32_t enable_diagnostics()
+int32_t page_fault(void* dred, uint64_t* address) noexcept try
 {
-    ComPtr<ID3D12DeviceRemovedExtendedDataSettings> dred;
-    if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&dred)))) {
-        dred->SetAutoBreadcrumbsEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
-        dred->SetPageFaultEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
-    }
-    ComPtr<ID3D12Debug> debug;
-    if (FAILED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug)))) return 0;
-    debug->EnableDebugLayer();
-    return 1;
-}
+    D3D12_DRED_PAGE_FAULT_OUTPUT output{};
+    const auto result = static_cast<ID3D12DeviceRemovedExtendedData*>(dred)->GetPageFaultAllocationOutput(&output);
+    if (SUCCEEDED(result)) *address = output.PageFaultVA;
+    return result;
+} catch (...) { return E_FAIL; }
+
+constexpr rsf_observer12_diagnostic_setup diagnostic_setup{
+    query_debug<ID3D12DeviceRemovedExtendedDataSettings>,
+    [](void* settings) noexcept {
+        try {
+            static_cast<ID3D12DeviceRemovedExtendedDataSettings*>(settings)->SetAutoBreadcrumbsEnablement(
+                D3D12_DRED_ENABLEMENT_FORCED_ON);
+        } catch (...) {}
+    },
+    [](void* settings) noexcept {
+        try {
+            static_cast<ID3D12DeviceRemovedExtendedDataSettings*>(settings)->SetPageFaultEnablement(
+                D3D12_DRED_ENABLEMENT_FORCED_ON);
+        } catch (...) {}
+    },
+    query_debug<ID3D12Debug>,
+    [](void* debug) noexcept -> int32_t {
+        try {
+            static_cast<ID3D12Debug*>(debug)->EnableDebugLayer();
+            return 1;
+        } catch (...) { return 0; }
+    },
+};
+
+constexpr rsf_observer12_removal removal{
+    queue_device, removed_reason, query_interface<ID3D12DeviceRemovedExtendedData>,
+    breadcrumb_head, breadcrumb, breadcrumb_operation, page_fault,
+};
+
 // SDK proxies can forward through another observed implementation. Each public
 // operation has one callback pair, including its native forwarding chain.
 struct CallScope {
@@ -120,7 +155,7 @@ template<size_t I> void STDMETHODCALLTYPE queue(ID3D12CommandQueue* self, UINT c
     const auto id = rsf_core_observer12_submit_begin(self, count, pointers);
     call(self, count, lists);
     rsf_core_observer12_submit_end(self, id, count, pointers);
-    report_removal(self);
+    rsf_core_observer12_report_removal(self, &removal);
 }
 template<size_t I> HRESULT STDMETHODCALLTYPE present(IDXGISwapChain* self, UINT interval, UINT flags)
 {
@@ -157,11 +192,6 @@ int32_t bind_interface(uint32_t kind, void* object, size_t slot) noexcept try
         return 0;
     }
 } catch (...) { return 0; }
-
-template<class Interface> int32_t query_interface(void* object, void** out) noexcept try
-{
-    return static_cast<IUnknown*>(object)->QueryInterface(__uuidof(Interface), out);
-} catch (...) { return E_FAIL; }
 
 uint32_t queue_type(void* queue) noexcept try
 {
@@ -204,5 +234,5 @@ extern "C" int32_t rsf_d3d12_observer_factory(rsf_d3d12_observer* observer, void
 
 extern "C" int32_t rsf_d3d12_diagnostics_enable(void (*log)(void*, const char*), void* user)
 {
-    return rsf_core_observer12_diagnostics_enable(log, user, enable_diagnostics);
+    return rsf_core_observer12_diagnostics_enable(log, user, &diagnostic_setup);
 }

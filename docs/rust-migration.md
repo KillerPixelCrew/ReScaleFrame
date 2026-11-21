@@ -483,6 +483,26 @@ publication after both bind attempts. Pinned formatting, locked
 offline metadata and whitespace passed. Native linkage, the fixture,
 and device and game execution remain open.
 
+## D3D12 device-removal diagnostics
+
+Compared with `f1bf25dc`, Rust now owns the DRED settings and debug
+interfaces through startup, and the removed device and DRED interface
+through reporting. The enable order stays breadcrumbs, page faults,
+then the debug layer. The queue lookup still runs only with diagnostics
+enabled and before the one-time report has been claimed.
+
+Rust follows at most 64 breadcrumb nodes and reads an operation only
+when its index is within the history. A completed list or absent
+history retains the same sentinel. Page-fault reporting follows the
+breadcrumb walk. Typed native leaves lend the SDK records and contain
+C++ exceptions at SDK calls.
+
+Source comparison matched the two private callback tables, log schema
+and public observer declarations. The new fixture exercises the bound
+and the operation refusal using a cyclic list. Pinned formatting,
+locked offline metadata and whitespace passed. The native build,
+fixture and device-removal runs remain open.
+
 ## Verification coverage
 
 | Requirement | Recorded evidence | Still open |

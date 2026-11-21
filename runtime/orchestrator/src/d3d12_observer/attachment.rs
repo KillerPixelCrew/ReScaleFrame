@@ -13,7 +13,7 @@ const CREATE_COMMAND_QUEUE: usize = 8;
 const EXECUTE_COMMAND_LISTS: usize = 10;
 const PRESENT: usize = 8;
 
-type Query = unsafe extern "C" fn(Handle, &mut Handle) -> i32;
+pub(super) type Query = unsafe extern "C" fn(Handle, &mut Handle) -> i32;
 
 #[repr(C)]
 struct Platform {
@@ -28,7 +28,7 @@ struct Platform {
 
 const _: () = assert!(size_of::<Platform>() == 7 * size_of::<Handle>());
 
-fn query_interface(query: Query, pointer: Handle) -> Option<ComRef> {
+pub(super) fn query_interface(query: Query, pointer: Handle) -> Option<ComRef> {
     if pointer.is_null() {
         return None;
     }

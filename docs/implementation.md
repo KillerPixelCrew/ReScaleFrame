@@ -1944,9 +1944,11 @@ Rust now owns D3D12 diagnostics dispatch, validation message budgets,
 stack formatting and the one-time device-removal report. The logger
 and its user context are published together and copied before calling
 the sink. Counters saturate once their budget is exhausted. DRED
-breadcrumb enumeration and debug-layer activation still use typed
-D3D12 calls. The public observer ABI is unchanged. Build and runtime
-validation remain open.
+startup, removed-device lifetime and the bounded breadcrumb walk
+now also run in Rust. SDK leaves provide typed D3D12 reads and
+activation calls. Public declarations match in source. Build,
+fixture and device-removal verification remain open.
+[D3D12 device-removal diagnostics](rust-migration.md#d3d12-device-removal-diagnostics)
 
 The D3D12 observer now keeps its process-lifetime owner, hook slots,
 trampolines, forwarding depth and submission serials in Rust. The
