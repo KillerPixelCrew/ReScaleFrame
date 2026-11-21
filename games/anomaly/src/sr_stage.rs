@@ -2,7 +2,8 @@
 // SR stage driver (docs/research/anomaly-sr-seam.md sections 9 to 12, docs/research/rust-anomaly-sr-stage.md).
 // Rust owns the lifecycle, source identity and view admission, the H1 preparation and S-B seam ordering, the
 // published jitter and main-view camera, the frame dump and burst bookkeeping, the configuration (the [Anomaly] keys,
-// the INI path, the vendor directories and their availability, the live panel options) and the status text.
+// the INI path, the vendor directories and their availability, the live panel options), GPU query retirement and the
+// status text.
 // sr_stage.cpp keeps guarded engine reads, trampolines, the SwapController and its D3D11 host, typed INI and file
 // calls, and the TemporalDriver facade over the existing Rust temporal driver
 // (docs/research/rust-anomaly-sr-configuration.md).
@@ -93,6 +94,8 @@ macro_rules! leaf {
         }
     };
 }
+
+mod gpu_timer;
 
 fn default_jitter() -> JitterState {
     JitterState {
@@ -540,6 +543,7 @@ struct State {
     capture: Capture,
     burst: Burst,
     burst_gate: BurstGate,
+    timer: gpu_timer::Timer,
     reported: Reported,
 }
 
@@ -574,6 +578,7 @@ impl Default for State {
             capture: Capture::default(),
             burst: Burst::default(),
             burst_gate: BurstGate::new(),
+            timer: gpu_timer::Timer::default(),
             reported: Reported::default(),
         }
     }
@@ -1252,7 +1257,7 @@ impl Stage {
         let state = guard.get_or_insert_with(Default::default);
         leaf!(p, shutdown());
         state.native_depth_frame = None;
-        leaf!(p, timer_reset());
+        state.timer = gpu_timer::Timer::default();
         self.publish(state, default_jitter());
         state.main_state = default_jitter();
         for frame in &mut state.burst.frames {
@@ -1565,7 +1570,9 @@ impl Stage {
         let state = guard.get_or_insert_with(Default::default);
         // A window still open here (never expected) is closed first, so Device.dwWidth reads the output size again.
         leaf!(p, close_stale());
-        leaf!(p, timer_begin());
+        state
+            .timer
+            .begin(p, leaf!(p, device()), leaf!(p, context()));
         let mut facts = self.gather(state, this);
         if sr_inputs(state.config.stage) && !facts.scope {
             self.read_main_camera(state);
@@ -1644,14 +1651,18 @@ impl Stage {
         let p = self.platform();
         let mut guard = self.lock();
         let state = guard.get_or_insert_with(Default::default);
+        let device = leaf!(p, device());
+        let context = leaf!(p, context());
         if self.controller().window_open {
-            leaf!(p, timer_seam(true));
+            state.timer.seam(p, device, context, true);
             self.controller_seam(state);
-            leaf!(p, timer_finish());
+            state
+                .timer
+                .finish(p, leaf!(p, device()), leaf!(p, context()));
             return;
         }
-        leaf!(p, timer_seam(false));
-        leaf!(p, timer_finish());
+        state.timer.seam(p, device, context, false);
+        state.timer.finish(p, device, context);
         self.controller_seam(state); // counted as a pass-through
         // Stock capture: the engine generic0 as the post chain receives it, once per frame at the first seam call.
         if state.capture.active && !state.capture.seam_taken {
@@ -2153,8 +2164,9 @@ impl Stage {
         };
         let (mut twin_bytes, mut twin_refs) = (0, 0);
         leaf!(p, host_stats(&mut twin_bytes, &mut twin_refs));
-        let mut timer = rsf_anomaly_sr_timer::default();
-        leaf!(p, timer_sample(&mut timer));
+        let timer = state
+            .timer
+            .sample(p, leaf!(p, device()), leaf!(p, context()));
         let r = &state.reported;
         let average = |sum: f64, before: f64, count: u64, before_count: u64| {
             if count > before_count {

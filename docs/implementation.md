@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The Anomaly SR stage now owns its four D3D11 timestamp slots and their
+device and query references in Rust. It records the existing world and
+seam boundaries, polls without flushing, and keeps abandoned intervals
+pending until the disjoint query retires. An abandoned interval counts
+as skipped and contributes no timing sample. Native code only issues,
+creates and polls the typed queries. The private bindings were
+regenerated, and build and runtime validation remain open.
+
 Anomaly SR, motion, geometry and native observation share Rust checks
 for fixed and extended profile signatures. The SR first-person check
 also verifies the relative call targets and their ordering in Rust.

@@ -265,12 +265,12 @@ typedef struct rsf_anomaly_sr_stage_platform {
     void (*set_swap_enabled)(bool);
     void (*controller)(rsf_anomaly_sr_controller*);
     void (*swap_counters)(rsf_anomaly_sr_swap_counters*);
-    // GPU timestamps of the world window and the seam pass.
-    void (*timer_begin)(void);
-    void (*timer_seam)(bool swapped);
-    void (*timer_finish)(void);
-    void (*timer_reset)(void);
-    void (*timer_sample)(rsf_anomaly_sr_timer*);
+    // GPU timestamp leaves. Device and query creation return owned references.
+    void* (*timer_retain_device)(void* device);
+    void* (*timer_create_query)(void* device, bool disjoint);
+    void (*timer_issue)(void* context, void* query, bool begin);
+    bool (*timer_clock)(void* context, void* query, uint64_t* frequency, bool* disjoint);
+    bool (*timer_timestamp)(void* context, void* query, uint64_t* ticks);
     // D3D11 host. The seam calls act on the seam the controller is closing.
     void (*host_stats)(uint64_t* twin_bytes, uint64_t* drop_refs);
     void (*host_reset)(void);

@@ -984,11 +984,37 @@ pub struct rsf_anomaly_sr_stage_platform {
         ::core::option::Option<unsafe extern "C" fn(arg1: *mut rsf_anomaly_sr_controller)>,
     pub swap_counters:
         ::core::option::Option<unsafe extern "C" fn(arg1: *mut rsf_anomaly_sr_swap_counters)>,
-    pub timer_begin: ::core::option::Option<unsafe extern "C" fn()>,
-    pub timer_seam: ::core::option::Option<unsafe extern "C" fn(swapped: bool)>,
-    pub timer_finish: ::core::option::Option<unsafe extern "C" fn()>,
-    pub timer_reset: ::core::option::Option<unsafe extern "C" fn()>,
-    pub timer_sample: ::core::option::Option<unsafe extern "C" fn(arg1: *mut rsf_anomaly_sr_timer)>,
+    pub timer_retain_device: ::core::option::Option<
+        unsafe extern "C" fn(device: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void,
+    >,
+    pub timer_create_query: ::core::option::Option<
+        unsafe extern "C" fn(
+            device: *mut ::core::ffi::c_void,
+            disjoint: bool,
+        ) -> *mut ::core::ffi::c_void,
+    >,
+    pub timer_issue: ::core::option::Option<
+        unsafe extern "C" fn(
+            context: *mut ::core::ffi::c_void,
+            query: *mut ::core::ffi::c_void,
+            begin: bool,
+        ),
+    >,
+    pub timer_clock: ::core::option::Option<
+        unsafe extern "C" fn(
+            context: *mut ::core::ffi::c_void,
+            query: *mut ::core::ffi::c_void,
+            frequency: *mut u64,
+            disjoint: *mut bool,
+        ) -> bool,
+    >,
+    pub timer_timestamp: ::core::option::Option<
+        unsafe extern "C" fn(
+            context: *mut ::core::ffi::c_void,
+            query: *mut ::core::ffi::c_void,
+            ticks: *mut u64,
+        ) -> bool,
+    >,
     pub host_stats:
         ::core::option::Option<unsafe extern "C" fn(twin_bytes: *mut u64, drop_refs: *mut u64)>,
     pub host_reset: ::core::option::Option<unsafe extern "C" fn()>,
@@ -1169,16 +1195,16 @@ const _: () = {
         [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, controller) - 192usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::swap_counters"]
         [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, swap_counters) - 200usize];
-    ["Offset of field: rsf_anomaly_sr_stage_platform::timer_begin"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, timer_begin) - 208usize];
-    ["Offset of field: rsf_anomaly_sr_stage_platform::timer_seam"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, timer_seam) - 216usize];
-    ["Offset of field: rsf_anomaly_sr_stage_platform::timer_finish"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, timer_finish) - 224usize];
-    ["Offset of field: rsf_anomaly_sr_stage_platform::timer_reset"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, timer_reset) - 232usize];
-    ["Offset of field: rsf_anomaly_sr_stage_platform::timer_sample"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, timer_sample) - 240usize];
+    ["Offset of field: rsf_anomaly_sr_stage_platform::timer_retain_device"]
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, timer_retain_device) - 208usize];
+    ["Offset of field: rsf_anomaly_sr_stage_platform::timer_create_query"]
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, timer_create_query) - 216usize];
+    ["Offset of field: rsf_anomaly_sr_stage_platform::timer_issue"]
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, timer_issue) - 224usize];
+    ["Offset of field: rsf_anomaly_sr_stage_platform::timer_clock"]
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, timer_clock) - 232usize];
+    ["Offset of field: rsf_anomaly_sr_stage_platform::timer_timestamp"]
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, timer_timestamp) - 240usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::host_stats"]
         [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, host_stats) - 248usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::host_reset"]

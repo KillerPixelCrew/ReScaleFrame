@@ -305,83 +305,6 @@ SwapController controller{host};
 HookSet hooks;
 TemporalDriver driver;
 
-// GPU time of the world window (H1 prologue to the S-B seam) and of the seam pass, from D3D11 timestamp queries read
-// back without stalling a few frames later. Runs whenever the hooks are installed, so a capture-only stock run
-// (SRStage=0, SRStageCapture=1) measures the same window at output size for the comparison.
-struct GpuTimer {
-    struct Set {
-        ComPtr<ID3D11Query> disjoint, begin, seam, end;
-        bool pending{}, swapped{};
-    };
-    std::array<Set, 4> sets{};
-    ComPtr<ID3D11Device> device;
-    std::size_t cursor{};
-    bool open{}, seam_marked{};
-    double world_ms[2]{}, seam_ms{};
-    uint64_t samples[2]{}, seam_samples{}, skipped{};
-    bool ready(ID3D11Device* d3d) noexcept {
-        if (device.Get() == d3d && sets[0].end) return true;
-        *this = {};
-        if (!d3d) return false;
-        D3D11_QUERY_DESC timestamp{D3D11_QUERY_TIMESTAMP, 0}, disjoint{D3D11_QUERY_TIMESTAMP_DISJOINT, 0};
-        for (auto& set : sets)
-            if (FAILED(d3d->CreateQuery(&disjoint, &set.disjoint)) || FAILED(d3d->CreateQuery(&timestamp, &set.begin)) ||
-                FAILED(d3d->CreateQuery(&timestamp, &set.seam)) || FAILED(d3d->CreateQuery(&timestamp, &set.end))) {
-                *this = {};
-                return false;
-            }
-        device = d3d;
-        return true;
-    }
-    void collect(ID3D11DeviceContext* ctx) noexcept {
-        for (auto& set : sets) {
-            if (!set.pending) continue;
-            D3D11_QUERY_DATA_TIMESTAMP_DISJOINT clock{};
-            uint64_t begin{}, seam{}, end{};
-            if (ctx->GetData(set.disjoint.Get(), &clock, sizeof(clock), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK ||
-                ctx->GetData(set.begin.Get(), &begin, sizeof(begin), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK ||
-                ctx->GetData(set.seam.Get(), &seam, sizeof(seam), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK ||
-                ctx->GetData(set.end.Get(), &end, sizeof(end), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK)
-                continue;
-            set.pending = false;
-            if (clock.Disjoint || !clock.Frequency || seam < begin || end < seam) { ++skipped; continue; }
-            const double scale = 1000.0 / double(clock.Frequency);
-            world_ms[set.swapped ? 1 : 0] += double(seam - begin) * scale;
-            ++samples[set.swapped ? 1 : 0];
-            if (set.swapped) { seam_ms += double(end - seam) * scale; ++seam_samples; }
-        }
-    }
-    // H1 prologue.
-    void begin(ID3D11Device* d3d, ID3D11DeviceContext* ctx) noexcept {
-        if (!ctx || !ready(d3d)) return;
-        collect(ctx);
-        if (open) { ctx->End(sets[cursor].disjoint.Get()); open = false; }   // an unfinished set (no seam): dropped
-        auto& set = sets[cursor];
-        if (set.pending) { ++skipped; return; }   // the GPU is more than four frames behind: skip this frame
-        ctx->Begin(set.disjoint.Get());
-        ctx->End(set.begin.Get());
-        open = true;
-        seam_marked = false;
-    }
-    // First seam call of the frame, before the restore (end of the world window).
-    void seam(ID3D11DeviceContext* ctx, bool swapped) noexcept {
-        if (!open || seam_marked || !ctx) return;
-        ctx->End(sets[cursor].seam.Get());
-        sets[cursor].swapped = swapped;
-        seam_marked = true;
-    }
-    // After the seam pass (or immediately on a stock frame).
-    void finish(ID3D11DeviceContext* ctx) noexcept {
-        if (!open || !seam_marked || !ctx) return;
-        auto& set = sets[cursor];
-        ctx->End(set.end.Get());
-        ctx->End(set.disjoint.Get());
-        set.pending = true;
-        open = false;
-        cursor = (cursor + 1) % sets.size();
-    }
-};
-GpuTimer gpu_timer;
 std::array<void*, 6> originals{};
 using Unary = void(__fastcall*)(void*);
 
@@ -680,14 +603,31 @@ const rsf_anomaly_sr_stage_platform platform{
         std::copy(std::begin(c.skipped), std::end(c.skipped), out->skipped);
         std::copy(std::begin(c.restores), std::end(c.restores), out->restores);
     },
-    .timer_begin = [] { gpu_timer.begin(host.device(), host.context()); },
-    .timer_seam = [](bool swapped) { gpu_timer.seam(host.context(), swapped); },
-    .timer_finish = [] { gpu_timer.finish(host.context()); },
-    .timer_reset = [] { gpu_timer = {}; },
-    .timer_sample = [](rsf_anomaly_sr_timer* out) {
-        if (auto* ctx = host.context(); ctx && gpu_timer.device) gpu_timer.collect(ctx);
-        *out = {{gpu_timer.world_ms[0], gpu_timer.world_ms[1]}, gpu_timer.seam_ms, {gpu_timer.samples[0], gpu_timer.samples[1]},
-            gpu_timer.seam_samples, gpu_timer.skipped, gpu_timer.device != nullptr};
+    .timer_retain_device = [](void* device) {
+        static_cast<ID3D11Device*>(device)->AddRef();
+        return device;
+    },
+    .timer_create_query = [](void* device, bool disjoint) -> void* {
+        const D3D11_QUERY_DESC desc{disjoint ? D3D11_QUERY_TIMESTAMP_DISJOINT : D3D11_QUERY_TIMESTAMP, 0};
+        ComPtr<ID3D11Query> query;
+        return SUCCEEDED(static_cast<ID3D11Device*>(device)->CreateQuery(&desc, &query)) ? query.Detach() : nullptr;
+    },
+    .timer_issue = [](void* context, void* query, bool begin) {
+        auto* ctx = static_cast<ID3D11DeviceContext*>(context);
+        auto* timestamp = static_cast<ID3D11Query*>(query);
+        if (begin) ctx->Begin(timestamp); else ctx->End(timestamp);
+    },
+    .timer_clock = [](void* context, void* query, uint64_t* frequency, bool* disjoint) {
+        D3D11_QUERY_DATA_TIMESTAMP_DISJOINT clock{};
+        if (static_cast<ID3D11DeviceContext*>(context)->GetData(static_cast<ID3D11Query*>(query),
+                &clock, sizeof(clock), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK) return false;
+        *frequency = clock.Frequency;
+        *disjoint = clock.Disjoint != FALSE;
+        return true;
+    },
+    .timer_timestamp = [](void* context, void* query, uint64_t* ticks) {
+        return static_cast<ID3D11DeviceContext*>(context)->GetData(static_cast<ID3D11Query*>(query),
+            ticks, sizeof(*ticks), D3D11_ASYNC_GETDATA_DONOTFLUSH) == S_OK;
     },
     .host_stats = [](uint64_t* bytes, uint64_t* refs) { *bytes = host.twin_bytes; *refs = host.last_drop_refs; },
     .host_reset = [] {
