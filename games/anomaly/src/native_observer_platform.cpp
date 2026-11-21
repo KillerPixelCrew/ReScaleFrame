@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "native_observer.h"
 #include "build_profile.h"
+#include "engine_guards.h"
 #include "fg_stage.h"
 #include "input_hooks.h"
 #include "motion_stage.h"
@@ -107,19 +108,11 @@ uint32_t image_size(const std::byte* image) noexcept {
 #endif
 }
 bool guarded_sites(const std::byte* image, const BuildProfile& build) noexcept {
-#ifdef _MSC_VER
-    __try {
-#endif
-        for (const auto& site : build.native->native_sites) {
-            if (site.rva > build.image_size() || site.expected.size() > build.image_size() - site.rva ||
-                std::memcmp(image + site.rva, site.expected.data(), site.expected.size()) ||
-                !unique_guards_match(image, build.image_size(), build.native->native_unique_guards, site.rva))
-                return false;
-        }
-        return true;
-#ifdef _MSC_VER
-    } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
-#endif
+    const auto checked = guard_image(image, build.image_size());
+    for (const auto& site : build.native->native_sites)
+        if (!matches(checked, site) || !unique_guards_match(checked, build.native->native_unique_guards, site.rva))
+            return false;
+    return true;
 }
 const char* identify(rsf_anomaly_observer_engine* out) noexcept try {
     wchar_t path[32768]{};

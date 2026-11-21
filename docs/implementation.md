@@ -4,6 +4,16 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Anomaly SR, motion, geometry and native observation share Rust checks
+for fixed and extended profile signatures. The SR first-person check
+also verifies the relative call targets and their ordering in Rust.
+Native profile tables supply the existing expected bytes and the common
+exception-guarded copy supplies the mapped bytes. The Standard and AVX
+baseline fixtures reached hook installation with matching call bytes
+outside the declared image. The new guard rejects those ranges before
+reading, and the fixture now requires a guard refusal at that call site.
+The replacement has no build, fixture or in-game verification recorded.
+
 Rust now owns the Vulkan DLSS-G proxy handle from creation through
 retirement, including descriptor admission, transfer-usage selection,
 image count and rollback after capture registration refusal. The

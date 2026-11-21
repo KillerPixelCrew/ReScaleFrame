@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "motion_stage.h"
 #include "motion_stage_platform.h"
+#include "engine_guards.h"
 #include "geometry_feed.h"
 #include "geometry_retirement.h"
 #include "motion_d3d11.h"
@@ -21,16 +22,6 @@
 namespace rsf::anomaly::motion {
 namespace {
 std::byte* image{};
-bool guarded_copy(void* output, const void* input, std::size_t size) noexcept {
-    if (!output || !input) return false;
-    __try { std::memcpy(output, input, size); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
-}
-bool guarded_write(void* output, const void* input, std::size_t size) noexcept {
-    if (!output || !input) return false;
-    __try { std::memcpy(output, input, size); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
-}
 // The exact build install() was given (build_profile.h), set together with `image`. Until then every read fails on the null
 // image and the empty tables are never dereferenced into engine memory.
 const BuildProfile* build{};
@@ -38,15 +29,6 @@ const MotionProfile& mp() noexcept { static constexpr MotionProfile none{}; retu
 const sr::SrProfile& srp() noexcept { static constexpr sr::SrProfile none{}; return build ? *build->sr : none; }
 const NativeProfile& np() noexcept { static constexpr NativeProfile none{}; return build ? *build->native : none; }
 template<class T> bool read_global(uint32_t rva, T& value) noexcept { return image && guarded_copy(&value, image + rva, sizeof(T)); }
-bool bytes_match(const std::byte* address, const char* hex) noexcept {
-    const auto digit = [](char c) { return c <= '9' ? c - '0' : c - 'a' + 10; };
-    for (std::size_t i = 0; hex[2 * i] && hex[2 * i + 1]; ++i) {
-        std::byte value{};
-        if (!guarded_copy(&value, address + i, 1) || value != static_cast<std::byte>(digit(hex[2 * i]) * 16 + digit(hex[2 * i + 1])))
-            return false;
-    }
-    return true;
-}
 
 HookSet hooks;
 std::array<void*, motion_site_count> originals{};
@@ -101,27 +83,23 @@ bool install_draw_hooks(void* context) noexcept {
 }
 
 bool guards_match(std::byte* module, uint32_t image_size, const MotionProfile& profile, const char** failed) noexcept {
+    const auto checked = guard_image(module, image_size);
     for (const auto& site : profile.motion_sites) {
-        std::array<std::byte, 16> bytes{};
-        if (site.rva > image_size - bytes.size() || !guarded_copy(bytes.data(), module + site.rva, bytes.size()) || bytes != site.expected) {
+        if (!matches(checked, site) || !unique_guards_match(checked, profile.motion_unique_guards, site.rva)) {
             *failed = site.name; return false;
         }
-        for (const auto& guard : profile.motion_unique_guards)
-            if (guard.rva == site.rva && !bytes_match(module + guard.rva, guard.expected_hex)) { *failed = site.name; return false; }
     }
     for (const auto& site : profile.create_shader_calls) {
-        std::array<std::byte, 16> bytes{};
-        if (!guarded_copy(bytes.data(), module + site.rva, bytes.size()) || bytes != site.expected) { *failed = site.name; return false; }
+        if (!matches(checked, site)) { *failed = site.name; return false; }
     }
-    if (!bytes_match(module + profile.shader_compile_rva, profile.shader_compile_prologue)) { *failed = "CRender::shader_compile prologue"; return false; }
-    if (!bytes_match(module + profile.d3dcompile_setup_rva, profile.d3dcompile_setup)) { *failed = "CRender::shader_compile D3DCompile setup"; return false; }
-    if (!bytes_match(module + profile.tess_dispatch_rva, profile.tess_dispatch)) { *failed = "create_shader hull/domain dispatch"; return false; }
+    if (!rsf_anomaly_guard_hex(&checked, profile.shader_compile_rva, profile.shader_compile_prologue)) { *failed = "CRender::shader_compile prologue"; return false; }
+    if (!rsf_anomaly_guard_hex(&checked, profile.d3dcompile_setup_rva, profile.d3dcompile_setup)) { *failed = "CRender::shader_compile D3DCompile setup"; return false; }
+    if (!rsf_anomaly_guard_hex(&checked, profile.tess_dispatch_rva, profile.tess_dispatch)) { *failed = "create_shader hull/domain dispatch"; return false; }
     for (const auto& site : profile.tess_create_sites) {
-        if (!bytes_match(module + site.rva, site.prologue)) { *failed = site.name; return false; }
-        if (!bytes_match(module + site.wrapper_rva, site.wrapper)) { *failed = "CreateHWShader (hull/domain)"; return false; }
+        if (!rsf_anomaly_guard_hex(&checked, site.rva, site.prologue)) { *failed = site.name; return false; }
+        if (!rsf_anomaly_guard_hex(&checked, site.wrapper_rva, site.wrapper)) { *failed = "CreateHWShader (hull/domain)"; return false; }
     }
-    char name{1};
-    if (!guarded_copy(&name, module + profile.source_name_rva, 1) || name != 0) { *failed = "D3DCompile pSourceName"; return false; }
+    if (!rsf_anomaly_guard_hex(&checked, profile.source_name_rva, "00")) { *failed = "D3DCompile pSourceName"; return false; }
     return true;
 }
 
@@ -269,7 +247,7 @@ void set_shaders(void* raw, const ShaderObjects* shader, bool tess) noexcept {
 }
 constexpr rsf_anomaly_motion_bind_platform bind_platform{
     [](void*, const void* address, void* out, size_t size) -> uint32_t { return guarded_copy(out, address, size); },
-    [](void*, void* address, const void* in, size_t size) -> uint32_t { return guarded_write(address, in, size); },
+    [](void*, void* address, const void* in, size_t size) -> uint32_t { return guarded_copy(address, in, size); },
     [](void* context, void* const* targets, void* depth) {
         if (context) static_cast<ID3D11DeviceContext*>(context)->OMSetRenderTargets(4,
             reinterpret_cast<ID3D11RenderTargetView* const*>(targets), static_cast<ID3D11DepthStencilView*>(depth));

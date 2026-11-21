@@ -9,6 +9,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include "engine_guards.h"
 namespace rsf::anomaly::geometry {
 namespace {
 std::optional<InstanceKey> identity(std::uint64_t owner, std::uint64_t visual, std::uint64_t generation) noexcept
@@ -88,17 +89,10 @@ std::uint8_t encode_enum(std::optional<T> value) noexcept
     return value ? static_cast<std::uint8_t>(*value) : static_cast<std::uint8_t>(RSF_ANOMALY_GEOMETRY_UNSET);
 }
 
-bool safe_copy(void* output, const void* input, std::size_t size) noexcept
-{
-    if (!input) return false;
-    __try { std::memcpy(output, input, size); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
-}
-
 template<class T>
 bool read(std::uintptr_t address, T& value) noexcept
 {
-    return safe_copy(&value, reinterpret_cast<const void*>(address), sizeof(T));
+    return guarded_copy(&value, reinterpret_cast<const void*>(address), sizeof(T));
 }
 
 Engine bind(const std::byte* module, const BuildProfile& build) noexcept
@@ -124,13 +118,10 @@ HookSet native_hooks;
 bool guard(Engine engine, std::uint32_t image_size) noexcept
 {
     if (!engine.module || image_size != build_of(engine).image_size()) return false;
-    const auto* module = reinterpret_cast<const std::byte*>(engine.module);
+    const auto checked = guard_image(reinterpret_cast<const std::byte*>(engine.module), image_size);
     const auto& profile = *build_of(engine).geometry;
     const auto guarded = [&](const NativeSite& site) {
-        std::array<std::byte, 16> bytes;
-        return site.rva <= image_size - bytes.size() &&
-            safe_copy(bytes.data(), module + site.rva, bytes.size()) && bytes == site.expected &&
-            unique_guards_match(module, image_size, profile.geometry_unique_guards, site.rva);
+        return matches(checked, site) && unique_guards_match(checked, profile.geometry_unique_guards, site.rva);
     };
     for (const auto& site : profile.geometry_layout_sites) if (!guarded(site)) return false;
     for (const auto& site : profile.geometry_sites) if (!guarded(site)) return false;
@@ -197,7 +188,7 @@ std::uintptr_t bone_instances(std::uintptr_t skeleton) noexcept
 
 bool matrix(std::uintptr_t address, float* out) noexcept
 {
-    return safe_copy(out, reinterpret_cast<const void*>(address), sizeof(float) * 16);
+    return guarded_copy(out, reinterpret_cast<const void*>(address), sizeof(float) * 16);
 }
 
 bool bone(std::uintptr_t instances, std::uint32_t index, float* out) noexcept
@@ -530,14 +521,14 @@ bool read_vertex_constants(std::uint32_t slot, std::uint32_t expected_size, std:
     std::uint32_t bytes) noexcept
 {
     const auto source = vertex_constant_data(slot, expected_size, offset, bytes);
-    return source && safe_copy(out, reinterpret_cast<const void*>(source), bytes);
+    return source && guarded_copy(out, reinterpret_cast<const void*>(source), bytes);
 }
 
 bool write_vertex_constants(std::uint32_t slot, std::uint32_t expected_size, std::uint32_t offset, const void* in,
     std::uint32_t bytes) noexcept
 {
     const auto target = vertex_constant_data(slot, expected_size, offset, bytes);
-    return target && safe_copy(reinterpret_cast<void*>(target), in, bytes);
+    return target && guarded_copy(reinterpret_cast<void*>(target), in, bytes);
 }
 
 bool read_world_matrix(float (&out)[16]) noexcept

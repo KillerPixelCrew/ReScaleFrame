@@ -33,24 +33,6 @@ struct UniqueGuard {
     uint32_t rva;
     const char* expected_hex;
 };
-// True when `hex` (lowercase, even length) is at image + rva inside image_size. The image is the mapped executable.
-inline bool unique_guard_matches(const std::byte* image, uint32_t image_size, const UniqueGuard& guard) noexcept {
-    const auto length = std::strlen(guard.expected_hex) / 2;
-    if (!image || guard.rva > image_size || length > image_size - guard.rva) return false;
-    const auto digit = [](char c) { return c <= '9' ? c - '0' : c - 'a' + 10; };
-    for (size_t i = 0; i < length; ++i)
-        if (image[guard.rva + i] != static_cast<std::byte>(digit(guard.expected_hex[2 * i]) * 16 + digit(guard.expected_hex[2 * i + 1])))
-            return false;
-    return true;
-}
-// Every guard in `guards` whose RVA is `rva` matches (none listed is also true).
-inline bool unique_guards_match(const std::byte* image, uint32_t image_size, std::span<const UniqueGuard> guards,
-    uint32_t rva) noexcept {
-    for (const auto& guard : guards)
-        if (guard.rva == rva && !unique_guard_matches(image, image_size, guard)) return false;
-    return true;
-}
-
 // Native observer boundaries, matched against RTTI virtual slots and decompiled bodies (docs/research/anomaly-native-hooks.md,
 // docs/research/anomaly-avx-profile.md). Order is the observer's detour order.
 inline constexpr std::size_t native_site_count = 8;

@@ -2,6 +2,8 @@
 #[cfg(windows)]
 mod bootstrap;
 mod camera;
+#[cfg(windows)]
+mod engine_guards;
 #[cfg(any(windows, test))]
 mod fg_inputs;
 #[cfg(any(windows, test))]

@@ -6,6 +6,7 @@
 #include "sr_stage.h"
 #include "sr_stage_platform.h"
 #include "adapter_options.h"
+#include "engine_guards.h"
 #include "native_geometry.h"
 #include "native_hooks.h"
 #include "native_observer.h"
@@ -71,11 +72,6 @@ void say(const char* message) noexcept {
 }
 
 // ---- engine memory ------------------------------------------------------------------------------------------
-bool guarded_copy(void* output, const void* input, std::size_t size) noexcept {
-    if (!output || !input) return false;
-    __try { std::memcpy(output, input, size); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
-}
 std::byte* image{};
 // The exact build install() was given (build_profile.h). Set together with `image`; until then every read fails on the
 // null image, and the empty tables below are never dereferenced into engine memory.
@@ -464,38 +460,16 @@ void __fastcall combine_hook(void* self) {
 }
 void rm_near_callback(void*) noexcept { rsf_anomaly_sr_stage_rm_near(); }
 
-bool bytes_match(const std::byte* address, const char* hex) noexcept {
-    const auto digit = [](char c) { return c <= '9' ? c - '0' : c - 'a' + 10; };
-    for (std::size_t i = 0; hex[2 * i] && hex[2 * i + 1]; ++i) {
-        std::byte value{};
-        if (!guarded_copy(&value, address + i, 1) || value != static_cast<std::byte>(digit(hex[2 * i]) * 16 + digit(hex[2 * i + 1])))
-            return false;
-    }
-    return true;
-}
 // Stage 3 calls R_xforms::set_P and SetMipLODBias, and relies on every first-person projection site uploading with
 // set_P and then calling rmNear (the shared slot). Each must still be the verified code.
-bool stage3_guards_match(std::byte* module, uint32_t image_size, const SrProfile& sr_profile, const char** failed) noexcept {
+bool stage3_guards_match(const rsf_anomaly_guard_image& module, const SrProfile& sr_profile, const char** failed) noexcept {
     const auto& set_p = sr_profile.sr_function_sites[site_set_p];
     const auto& set_bias = sr_profile.sr_function_sites[site_set_mip_lod_bias];
     const auto& rm_near = sr_profile.sr_function_sites[site_rm_near];
-    for (const auto& guard_site : sr_profile.sr_unique_guards)
-        if (guard_site.rva == set_p.rva && !bytes_match(module + guard_site.rva, guard_site.expected_hex)) { *failed = set_p.name; return false; }
-    std::array<std::byte, 16> bytes{};
-    if (set_bias.rva > image_size - bytes.size() || !guarded_copy(bytes.data(), module + set_bias.rva, bytes.size()) ||
-        bytes != set_bias.expected) { *failed = set_bias.name; return false; }
-    const auto rel_call_to = [&](uint32_t at, uint32_t target) {
-        std::array<std::byte, 5> call{};
-        if (at > image_size - call.size() || !guarded_copy(call.data(), module + at, call.size()) || call[0] != std::byte{0xe8}) return false;
-        int32_t displacement{};
-        std::memcpy(&displacement, call.data() + 1, sizeof(displacement));
-        return static_cast<int64_t>(at) + 5 + displacement == static_cast<int64_t>(target);
-    };
+    if (!unique_guards_match(module, sr_profile.sr_unique_guards, set_p.rva)) { *failed = set_p.name; return false; }
+    if (!matches(module, set_bias)) { *failed = set_bias.name; return false; }
     for (const auto& site : sr_profile.sr_first_person_sites) {
-        // `call R_xforms::set_P`, then within 0x120 bytes `call [rax+0x1b8]` (vtable slot 55) or `call CRender::rmNear`.
-        if (!rel_call_to(site.set_p_call, set_p.rva) || site.rm_near_call <= site.set_p_call ||
-            site.rm_near_call - site.set_p_call >= 0x120 ||
-            !(bytes_match(module + site.rm_near_call, "ff90b8010000") || rel_call_to(site.rm_near_call, rm_near.rva))) {
+        if (!rsf_anomaly_guard_first_person(&module, site.set_p_call, site.rm_near_call, set_p.rva, rm_near.rva)) {
             *failed = site.name; return false;
         }
     }
@@ -504,15 +478,15 @@ bool stage3_guards_match(std::byte* module, uint32_t image_size, const SrProfile
 bool guards_match(std::byte* module, uint32_t image_size, const BuildProfile& selected, bool world_window, bool temporal,
     const char** failed) noexcept {
     const auto& sr_profile = *selected.sr;
+    const auto checked = guard_image(module, image_size);
     // Stage 2 writes the SSAO helper's static viewport: its code, which encodes both data addresses, must match.
-    if (world_window && !bytes_match(module + sr_profile.ssao_set_viewport_rva, sr_profile.ssao_set_viewport_code)) {
+    if (world_window && !rsf_anomaly_guard_hex(&checked, sr_profile.ssao_set_viewport_rva, sr_profile.ssao_set_viewport_code)) {
         *failed = "set_viewport (r4_rendertarget_phase_ssao.cpp:3)"; return false;
     }
-    if (temporal && !stage3_guards_match(module, image_size, sr_profile, failed)) return false;
+    if (temporal && !stage3_guards_match(checked, sr_profile, failed)) return false;
     if (temporal) {
         for (const auto& site : sr_profile.reconstruction_guards) {
-            const auto length = std::strlen(site.expected_hex) / 2;
-            if (site.rva > image_size || length > image_size - site.rva || !bytes_match(module + site.rva, site.expected_hex)) {
+            if (!matches(checked, site)) {
                 *failed = site.name; return false;
             }
         }
@@ -521,19 +495,17 @@ bool guards_match(std::byte* module, uint32_t image_size, const BuildProfile& se
     // the shared slot.
     for (const auto index : {site_phase_scene_prepare, site_phase_combine, site_phase_sunshafts, site_phase_blur, site_sun_cascades, site_position_setup}) {
         const auto& site = sr_profile.sr_function_sites[index];
-        std::array<std::byte, 16> bytes{};
-        if (site.rva > image_size - bytes.size() || !guarded_copy(bytes.data(), module + site.rva, bytes.size()) || bytes != site.expected) {
+        if (!matches(checked, site)) {
             *failed = site.name; return false;
         }
     }
     for (const auto& guard_site : sr_profile.sr_unique_guards) {
         if (guard_site.rva != sr_profile.sr_function_sites[site_phase_blur].rva &&
             guard_site.rva != sr_profile.sr_function_sites[site_sun_cascades].rva) continue;
-        if (!bytes_match(module + guard_site.rva, guard_site.expected_hex)) { *failed = guard_site.name; return false; }
+        if (!matches(checked, guard_site)) { *failed = guard_site.name; return false; }
     }
     for (const auto& site : sr_profile.sr_call_sites) {
-        std::array<std::byte, 16> bytes{};
-        if (!guarded_copy(bytes.data(), module + site.rva, bytes.size()) || bytes != site.expected) { *failed = site.name; return false; }
+        if (!matches(checked, site)) { *failed = site.name; return false; }
     }
     return true;
 }

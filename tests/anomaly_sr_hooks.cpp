@@ -126,6 +126,18 @@ void install_refusals() {
     image[B->sr->sr_call_sites[5].rva + 1] ^= std::byte{0x01};
     lines.clear();
     CHECK(!sr::install(image.data(), B->image_size(), *B) && logged("guard mismatch at CRender::Render -> render_sun_cascades"));
+    // Matching bytes after SizeOfImage cannot prove an in-image call site.
+    auto outside = *B;
+    auto outside_sr = *B->sr;
+    outside.sr = &outside_sr;
+    auto& outside_call = outside_sr.sr_call_sites[0];
+    outside_call.rva = B->image_size();
+    image.resize(B->image_size() + outside_call.expected.size());
+    fill_guards(image);
+    std::memcpy(image.data() + outside_call.rva, outside_call.expected.data(), outside_call.expected.size());
+    lines.clear();
+    CHECK(!sr::install(image.data(), B->image_size(), outside) && logged("guard mismatch at") && logged(outside_call.name));
+    image.resize(B->image_size());
     // All guards match, but the bytes are a heap buffer, not the mapped executable: HookSet refuses before any patch.
     fill_guards(image);
     lines.clear();
