@@ -834,6 +834,10 @@ pub(crate) fn rendered_source() -> bool {
     CPU.rendered()
 }
 
+pub(crate) fn owns_session(session: u64) -> bool {
+    session != 0 && CPU.lock().current_session == session
+}
+
 pub(crate) fn frame_facts(session: u64, source: u64) -> Option<rsf_native_cpu_frame> {
     CPU.read(session, source)
 }

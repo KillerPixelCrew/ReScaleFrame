@@ -290,6 +290,20 @@ int main() {
     pass.source_frame_id = 1;
     pass.native_frame = 1;
     rsf_core_native_fg_frame(&pass, 1, &platform);
+
+    // A previous integration must not retire the current session's SDK tokens or advance its completion.
+    static uint32_t retirement_calls{};
+    const auto original_host = platform.host;
+    const auto original_retire = platform.host_retire;
+    platform.host = +[]() -> void* { return &platform; };
+    platform.host_retire = +[](void*, uint64_t) { ++retirement_calls; return RSF_BACKEND_OK; };
+    CHECK(!snapshot(1).completed);
+    rsf_core_native_latency_retire(session + 1, 1, &platform);
+    rsf_core_native_latency_retire(session, 0, &platform);
+    CHECK(!snapshot(1).completed && retirement_calls == 0);
+    platform.host = original_host;
+    platform.host_retire = original_retire;
+
     rsf_core_native_latency_render(1, 1, &platform);
     rsf_core_native_latency_present(1, nullptr, 1, &platform);
     rsf_core_native_latency_present(1, nullptr, 0, &platform);

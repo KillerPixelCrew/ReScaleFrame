@@ -9,8 +9,8 @@ use crate::latency_lease::{
     rsf_core_latency_pacing_owner, rsf_native_latency_claim, rsf_native_latency_release_claim,
 };
 use crate::native_cpu::{
-    counters, frame_facts, mark_frame, marker_prerequisites, record_pacing, rendered_source,
-    reservation, rsf_native_cpu_is_ping_message, rsf_native_cpu_ping_message,
+    counters, frame_facts, mark_frame, marker_prerequisites, owns_session, record_pacing,
+    rendered_source, reservation, rsf_native_cpu_is_ping_message, rsf_native_cpu_ping_message,
     rsf_native_cpu_release_session,
 };
 use crate::native_fg::{now_qpc, requested};
@@ -1564,6 +1564,9 @@ extern "C" fn rsf_core_native_latency_ping(window: Handle, p: &Platform) -> i32 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_core_native_latency_retire(session: u64, through: u64, p: &Platform) {
     // The caller reports older sources with no submitted GPU work.
+    if through == 0 || !owns_session(session) {
+        return;
+    }
     let host = call!(p, host);
     if !host.is_null() {
         call!(p, host_retire, host, through);

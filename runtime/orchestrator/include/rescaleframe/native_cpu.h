@@ -64,7 +64,8 @@ RSF_RUNTIME_API void rsf_native_latency_render(uint64_t source, uint32_t begin);
 RSF_RUNTIME_API void rsf_native_latency_present(uint64_t source, void* chain, uint32_t begin);
 /* Diagnostic tool request; registration/message selection remains in the core. */
 RSF_RUNTIME_API int rsf_native_latency_ping(void* window);
-/* An engine's completed native output can retire earlier CPU sources that never submitted. */
+/* A completed native output can retire earlier CPU sources that never submitted in the active session.
+   Zero sources and foreign sessions are ignored. */
 RSF_RUNTIME_API void rsf_native_latency_retire(uint64_t session, uint64_t through);
 /* Only after CPU/render/Present producers and their GPU leases have drained. */
 RSF_RUNTIME_API void rsf_native_latency_end_session(uint64_t session);

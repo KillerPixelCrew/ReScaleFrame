@@ -4,6 +4,12 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Direct3D latency retirement now checks the dispatcher session before
+retiring SDK tokens or advancing completion. An earlier session or
+zero source cannot affect the current one. Source review traced the
+session admission and retirement paths. The updated CPU fixture remains
+unrun.
+
 The XeSS Vulkan/DX12 bridge uses one Rust session owner for creation,
 startup, completion and checked retirement. The integrated Runtime and
 standalone bridge compile the same source. Native leaves retain typed
