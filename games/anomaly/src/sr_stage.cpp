@@ -138,20 +138,14 @@ struct EnginePositionConstants final : PositionConstantHost {
 };
 EnginePositionConstants position_constants;
 
-// True while the engine draws its loading screen over the world: the precache frames and the "Press any key to continue"
-// wait (sr_profile.h). Unreadable counts as loading, so a capture never starts on a guess.
-bool loading_screen_active() noexcept {
-    uint8_t registered{};
-    uint32_t precache{};
-    return !read_global(srp().load_screen_registered_rva, registered) || !read_global(srp().device_precache_frame_rva, precache) ||
-        registered != 0 || precache != 0;
-}
 // Stage 3 burst readback leaves. sr_stage/staging.rs admits the context, source and device and describes the
 // staging texture (USAGE_STAGING, CPU_ACCESS_READ, one mip and layer); these keep the typed context calls.
 static_assert(D3D11_DEVICE_CONTEXT_IMMEDIATE == 0 && D3D11_USAGE_STAGING == 3 && D3D11_CPU_ACCESS_READ == 0x20000);
-static_assert(sizeof(rsf_anomaly_sr_stage_platform) == 624 &&
-    offsetof(rsf_anomaly_sr_stage_platform, immediate_context) == 264 &&
-    offsetof(rsf_anomaly_sr_stage_platform, pixel_bytes) == 312 && offsetof(rsf_anomaly_sr_stage_platform, bilinear) == 320);
+static_assert(sizeof(rsf_anomaly_sr_frame_reads) == 168 && offsetof(rsf_anomaly_sr_frame_reads, render_view) == 152);
+static_assert(static_cast<uint32_t>(temporal::ViewId::Scope) == 1 && dx10_msaa_bit == (1u << 14));
+static_assert(sizeof(rsf_anomaly_sr_stage_platform) == 640 &&
+    offsetof(rsf_anomaly_sr_stage_platform, immediate_context) == 280 &&
+    offsetof(rsf_anomaly_sr_stage_platform, pixel_bytes) == 328 && offsetof(rsf_anomaly_sr_stage_platform, bilinear) == 336);
 // Predication is cleared for the copy and restored afterwards, as the burst always did.
 void copy_subresource(void* context, void* destination, uint32_t destination_subresource, void* source,
     uint32_t source_subresource) noexcept {
@@ -364,12 +358,14 @@ bool install_hooks() noexcept {
 
 // ---- the leaf table ---------------------------------------------------------------------------------------------
 const rsf_anomaly_sr_stage_platform platform{
-    .frame_facts = [](void* self, bool world_window, bool temporal, rsf_anomaly_sr_frame_facts* out) {
-        *out = {};
+    .render_target = []() -> void* {
         std::byte* target{};
-        if (read_global(srp().render_implementation_rva + render_target_offset, target) && target == self)
-            out->render_target = target;   // phase_scene_prepare's `this` must be CRender::Target
-        if (!image || !build) { out->scope = out->msaa = true; return; }
+        return read_global(srp().render_implementation_rva + render_target_offset, target) ? target : nullptr;
+    },
+    .frame_facts = [](bool world_window, bool temporal, rsf_anomaly_sr_frame_reads* reads) {
+        *reads = {};
+        if (!image || !build) return;
+        auto* out = &reads->facts;
         out->backend = image + srp().backend_rva;
         read_global(srp().hw_device_rva, out->device);
         NativeObservation observation{sizeof(observation), observation_abi};
@@ -377,9 +373,9 @@ const rsf_anomaly_sr_stage_platform platform{
         read_global(np().device_width_rva, out->device_width);
         read_global(np().device_height_rva, out->device_height);
         const auto view = geometry::current_render_view(image, *build);
-        out->scope = !view || *view == temporal::ViewId::Scope;   // unreadable counts as not eligible
-        uint32_t options3{};
-        out->msaa = !read_global(srp().render_options_word3_rva, options3) || (options3 & dx10_msaa_bit);
+        reads->view_read = view.has_value();
+        if (view) reads->render_view = static_cast<uint32_t>(*view);
+        reads->options_read = read_global(srp().render_options_word3_rva, reads->options_word3);
         if (world_window) {
             out->device_size = image + np().device_width_rva;
             out->base_zb = image + srp().hw_base_zb_rva;
@@ -394,7 +390,8 @@ const rsf_anomaly_sr_stage_platform platform{
             out->sampler_bias = image + srp().sampler_cache_rva + sampler_mip_lod_bias_offset;
         }
     },
-    .loading_screen = [] { return loading_screen_active(); },
+    .loading_registered = [](uint8_t* registered) { return read_global(srp().load_screen_registered_rva, *registered); },
+    .precache_frame = [](uint32_t* frame) { return read_global(srp().device_precache_frame_rva, *frame); },
     .engine_frame = [] { uint32_t frame{}; read_global(np().device_frame_rva, frame); return frame; },
     .device_size = [](uint32_t* width, uint32_t* height) {
         read_global(np().device_width_rva, *width);
@@ -403,12 +400,11 @@ const rsf_anomaly_sr_stage_platform platform{
     .read_camera = [](rsf_anomaly_sr_camera* out) {
         return read_global(srp().device_view_rva, out->view) && read_global(srp().device_project_rva, out->projection);
     },
-    .seam_surface = [](void* self) -> void* {
-        std::byte* target{};
+    .seam_surface = [](void* target) -> void* {
         std::byte* crt{};
         void* surface{};
-        if (read_global(srp().render_implementation_rva + render_target_offset, target) && target == self &&
-            guarded_copy(&crt, target + 0x3a8, sizeof(crt)) && crt && guarded_copy(&surface, crt + crt_surface_offset, sizeof(surface)))
+        if (guarded_copy(&crt, static_cast<std::byte*>(target) + 0x3a8, sizeof(crt)) && crt &&
+            guarded_copy(&surface, crt + crt_surface_offset, sizeof(surface)))
             return surface;
         return nullptr;
     },

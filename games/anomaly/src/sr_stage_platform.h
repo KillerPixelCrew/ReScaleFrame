@@ -102,7 +102,7 @@ void rsf_anomaly_sr_burst_interrupted(rsf_anomaly_sr_burst_gate*);
 }
 #endif
 
-// FrameFacts (sr_swap.h). The leaf fills the engine reads and addresses; Rust fills sizes, jitter and bias.
+// FrameFacts (sr_swap.h). Rust fills admission, sizes, jitter and bias from the native reads.
 typedef struct rsf_anomaly_sr_frame_facts {
     void* render_target;
     void* backend;
@@ -124,6 +124,12 @@ typedef struct rsf_anomaly_sr_frame_facts {
     float mip_bias_delta;
     void* sampler_bias;
 } rsf_anomaly_sr_frame_facts;
+
+typedef struct rsf_anomaly_sr_frame_reads {
+    rsf_anomaly_sr_frame_facts facts;
+    uint32_t render_view, options_word3;
+    bool view_read, options_read;
+} rsf_anomaly_sr_frame_reads;
 
 // What the stage reads back from the SwapController after each call.
 typedef struct rsf_anomaly_sr_controller {
@@ -239,12 +245,14 @@ typedef struct rsf_anomaly_sr_driver_config {
 
 typedef struct rsf_anomaly_sr_stage_platform {
     // Guarded engine reads and engine identity.
-    void (*frame_facts)(void* self, bool world_window, bool temporal, rsf_anomaly_sr_frame_facts* out);
-    bool (*loading_screen)(void);
+    void* (*render_target)(void);
+    void (*frame_facts)(bool world_window, bool temporal, rsf_anomaly_sr_frame_reads* out);
+    bool (*loading_registered)(uint8_t* registered);
+    bool (*precache_frame)(uint32_t* frame);
     uint32_t (*engine_frame)(void);
     void (*device_size)(uint32_t* width, uint32_t* height);
     bool (*read_camera)(rsf_anomaly_sr_camera* out);
-    void* (*seam_surface)(void* self);
+    void* (*seam_surface)(void* target);
     void* (*back_buffer)(void);   // an owned reference released through `release`
     void* (*context)(void);
     void* (*device)(void);

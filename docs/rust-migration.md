@@ -402,6 +402,12 @@ result write and graphics queue call retain their typed boundaries.
 Build and live graphics verification remain open.
 [Present admission and waits](research/rust-vulkan-dx12-copy-plan.md#present-admission-and-waits)
 
+Anomaly's Rust SR stage now admits render-target identity, view and
+MSAA facts, and loading state. The native leaf reads the same
+Standard and AVX profile data. Build, fixture and game verification
+remain open.
+[Frame and loading admission](research/rust-anomaly-sr-stage.md#frame-and-loading-admission)
+
 ## Verification coverage
 
 | Requirement | Recorded evidence | Still open |

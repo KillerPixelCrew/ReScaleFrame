@@ -4,6 +4,11 @@
   "source_revision": "028ccf5f5189b393396480076b11e40852ba3ecd",
   "api": "D3D11",
   "rendering_ready": false,
+  "sr_stage_admission": {
+    "evidence": "../../docs/research/rust-anomaly-sr-stage.md#frame-and-loading-admission",
+    "source_baseline": "c57905d1",
+    "validation": "Standard and AVX profile reads checked in source. Updated native build, fixtures and game runs pending."
+  },
   "shader_patching": {
     "pack": "patches/motion.rsfpatch",
     "rules": "patches/motion/rules.json",

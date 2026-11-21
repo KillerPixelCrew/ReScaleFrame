@@ -9,6 +9,15 @@ struct Fake {
     calls: Vec<String>,
     ini: Vec<(&'static str, &'static str)>,
     scope: bool,
+    unreadable_view: bool,
+    unreadable_options: bool,
+    options_word3: u32,
+    render_target: usize,
+    registered: u8,
+    precache: u32,
+    unreadable_loading: bool,
+    unreadable_precache: bool,
+    precache_reads: u32,
     generation: u64,
     eye_x: f32,
     window_open: bool,
@@ -51,23 +60,46 @@ fn position(calls: &[String], name: &str) -> usize {
 
 const CONTEXT: *mut c_void = 0x1000 as *mut c_void;
 
+extern "C" fn render_target() -> *mut c_void {
+    std::ptr::without_provenance_mut(fake(|f| f.render_target))
+}
+
 unsafe extern "C" fn frame_facts(
-    _: *mut c_void,
     world: bool,
     temporal: bool,
-    out: *mut rsf_anomaly_sr_frame_facts,
+    out: *mut rsf_anomaly_sr_frame_reads,
 ) {
-    let (scope, generation) = fake(|f| (f.scope, f.generation));
-    let facts = unsafe { &mut *out };
-    *facts = rsf_anomaly_sr_frame_facts {
-        device: device(),
-        device_width: 1920,
-        device_height: 1080,
-        scope,
-        generation,
-        ..Default::default()
-    };
+    let native_device = device();
+    let reads = fake(|f| rsf_anomaly_sr_frame_reads {
+        facts: rsf_anomaly_sr_frame_facts {
+            device: native_device,
+            device_width: 1920,
+            device_height: 1080,
+            generation: f.generation,
+            ..Default::default()
+        },
+        render_view: u32::from(f.scope),
+        options_word3: f.options_word3,
+        view_read: !f.unreadable_view,
+        options_read: !f.unreadable_options,
+    });
+    unsafe { out.write(reads) };
     record(format!("facts world={world} temporal={temporal}"));
+}
+
+unsafe extern "C" fn loading_registered(out: *mut u8) -> bool {
+    let (readable, registered) = fake(|f| (!f.unreadable_loading, f.registered));
+    unsafe { out.write(registered) };
+    readable
+}
+
+unsafe extern "C" fn precache_frame(out: *mut u32) -> bool {
+    let (readable, frame) = fake(|f| {
+        f.precache_reads += 1;
+        (!f.unreadable_precache, f.precache)
+    });
+    unsafe { out.write(frame) };
+    readable
 }
 unsafe extern "C" fn controller(out: *mut rsf_anomaly_sr_controller) {
     let (open, jittered, refused) = fake(|f| (f.window_open, f.jittered, f.refused));
@@ -362,7 +394,10 @@ unsafe extern "C" fn log(_: *mut c_void, text: *const c_char) {
 
 fn platform() -> Box<Platform> {
     Box::new(Platform {
+        render_target: Some(render_target),
         frame_facts: Some(frame_facts),
+        loading_registered: Some(loading_registered),
+        precache_frame: Some(precache_frame),
         engine_frame: Some(engine_frame),
         device_size: Some(device_size),
         read_camera: Some(read_camera),
@@ -429,6 +464,66 @@ fn installed(stage: u32, table: &Platform) -> Stage {
     assert!(driver.active());
     calls();
     driver
+}
+
+#[test]
+fn frame_facts_require_the_current_target_and_readable_world_options() {
+    let table = platform();
+    let driver = Stage::new();
+    driver.register(&table);
+    let mut state = State::default();
+    let target = std::ptr::without_provenance_mut(0x20);
+    fake(|f| f.render_target = 0x20);
+    let facts = driver.gather(&mut state, target);
+    assert_eq!(facts.render_target, target);
+    assert!(!facts.scope && !facts.msaa);
+    assert!(driver.gather(&mut state, CONTEXT).render_target.is_null());
+
+    fake(|f| {
+        f.unreadable_view = true;
+        f.unreadable_options = true;
+    });
+    let facts = driver.gather(&mut state, target);
+    assert!(facts.scope && facts.msaa);
+    fake(|f| {
+        f.unreadable_view = false;
+        f.unreadable_options = false;
+        f.scope = true;
+        f.options_word3 = 1 << 14;
+    });
+    let facts = driver.gather(&mut state, target);
+    assert!(facts.scope && facts.msaa);
+}
+
+#[test]
+fn loading_gate_preserves_precache_read_order_and_refuses_unknown_facts() {
+    let table = platform();
+    let driver = Stage::new();
+    driver.register(&table);
+    assert!(!driver.loading());
+    fake(|f| {
+        f.precache_reads = 0;
+        f.registered = 1;
+    });
+    assert!(driver.loading());
+    assert_eq!(fake(|f| f.precache_reads), 1);
+    fake(|f| {
+        f.precache_reads = 0;
+        f.unreadable_loading = true;
+    });
+    assert!(driver.loading());
+    assert_eq!(fake(|f| f.precache_reads), 0);
+    fake(|f| {
+        f.registered = 0;
+        f.unreadable_loading = false;
+        f.unreadable_precache = true;
+    });
+    assert!(driver.loading());
+    fake(|f| {
+        f.unreadable_precache = false;
+        f.precache = 1;
+    });
+    assert!(driver.loading());
 }
 
 #[test]

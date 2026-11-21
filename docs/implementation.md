@@ -923,6 +923,13 @@ The private binding regenerated identically. Standard and AVX
 device and burst runs remain unverified.
 [Anomaly SR staging](research/rust-anomaly-sr-stage.md)
 
+Anomaly now checks the current render-target identity, scope and
+MSAA exclusions, and loading capture gate in Rust. The native leaves
+keep the guarded Standard and AVX reads. A null target refuses the
+stock capture seam before computing the texture address. The new
+fixtures and game checks remain unrun.
+[Frame and loading admission](research/rust-anomaly-sr-stage.md#frame-and-loading-admission)
+
 Native D3D12 DLSS now resolves the required interposer and feature
 addresses in Rust. The native capsule binds the typed pointers
 after admission. Source comparison matched the ordered lookups and

@@ -210,3 +210,26 @@ ABI, profile tables and both `anomaly_sr_hooks` contract sources are
 unchanged. Pinned Rust 1.94.1 formatting, locked offline Windows Cargo
 metadata and Git whitespace checks passed. Compile, link, fixture and
 game verification remain user-owned.
+## Frame and loading admission
+
+Compared with `c57905d1`, the Rust stage now admits the render-target
+identity at the verified scene-prepare hook and stock capture seam.
+It uses the original guarded `CRender::Target` read for each callback.
+A mismatched target skips the seam read. A null target now also skips
+the read before native code forms the texture address.
+
+The native leaves borrow the same Standard and AVX profile addresses
+and report the render view, options word and read results. Rust
+applies the original scope and MSAA exclusions, including unreadable
+values. The loading gate reads the registration byte before the
+precache count. If the first read fails, it skips the second read
+and holds capture. A nonzero value or failed second read also holds
+capture. The original guard profiles and active producer and buffer
+paths come from the recorded seam evidence.
+[SR seam research](anomaly-sr-seam.md)
+
+The frame-read record is 168 bytes and the private stage table has 80
+slots. Focused bindgen regeneration and source checks covered both
+profile reads, the admission order and public declarations. The
+extended fixtures, current build, and Standard and AVX game checks
+remain open.

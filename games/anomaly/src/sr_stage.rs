@@ -18,6 +18,7 @@ use self::math::{
 use crate::camera;
 use crate::frame_dump::DumpApi;
 use crate::lease::Lease;
+use crate::native_geometry_abi::SCOPE;
 use crate::sr_d3d11::{Extent, Platform as D3d11Platform, TemporalTargets};
 use crate::sr_stage_abi::*;
 use rsf_game_sys::{RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record};
@@ -32,6 +33,7 @@ const PHASE_RENDER_SUBMIT: u32 = 2;
 const SCREEN_UNKNOWN: u32 = 0;
 const E_FAIL: i32 = 0x8000_4005_u32 as i32;
 const FORMAT_RGBA16F: u32 = 10;
+const DX10_MSAA: u32 = 1 << 14;
 const VIEW_RAW: u32 = 0;
 const VIEW_HDR: u32 = 3;
 const VIEW_DEPTH: u32 = 4;
@@ -95,6 +97,12 @@ macro_rules! leaf {
             None => Refused::refused(),
         }
     };
+}
+
+// H1 and the stock seam both belong to the current CRender::Target.
+fn admitted_target(platform: &Platform, this: *mut c_void) -> *mut c_void {
+    let target = leaf!(platform, render_target());
+    if target == this { target } else { null_mut() }
 }
 
 mod burst_file;
@@ -1314,11 +1322,17 @@ impl Stage {
     fn gather(&self, state: &mut State, this: *mut c_void) -> rsf_anomaly_sr_frame_facts {
         let p = self.platform();
         let stage = state.config.stage;
-        let mut facts = rsf_anomaly_sr_frame_facts::default();
+        let target = admitted_target(p, this);
+        let mut reads = rsf_anomaly_sr_frame_reads::default();
         leaf!(
             p,
-            frame_facts(this, world_window(stage), temporal(stage), &mut facts)
+            frame_facts(world_window(stage), temporal(stage), &mut reads)
         );
+        let mut facts = reads.facts;
+        facts.render_target = target;
+        // An unreadable view or options word cannot admit a reduced world frame.
+        facts.scope = !reads.view_read || reads.render_view == u32::from(SCOPE);
+        facts.msaa = !reads.options_read || reads.options_word3 & DX10_MSAA != 0;
         facts.stage = 1;
         if !world_window(stage) {
             state.last_plan = make_plan(facts.device_width, facts.device_height, 1.0).unwrap_or(
@@ -1491,7 +1505,13 @@ impl Stage {
     }
 
     fn loading(&self) -> bool {
-        leaf!(self.platform(), loading_screen())
+        let p = self.platform();
+        let (mut registered, mut precache) = (0, 0);
+        // Both precache and the post-load key wait draw the loading screen over the world.
+        !leaf!(p, loading_registered(&mut registered))
+            || !leaf!(p, precache_frame(&mut precache))
+            || registered != 0
+            || precache != 0
     }
 
     fn capture_abandon(&self, state: &mut State) {
@@ -1718,7 +1738,12 @@ impl Stage {
         self.controller_seam(state); // counted as a pass-through
         // Stock capture: the engine generic0 as the post chain receives it, once per frame at the first seam call.
         if state.capture.active && !state.capture.seam_taken {
-            let surface = leaf!(p, seam_surface(this));
+            let target = admitted_target(p, this);
+            let surface = if target.is_null() {
+                null_mut()
+            } else {
+                leaf!(p, seam_surface(target))
+            };
             if !surface.is_null() {
                 let stock = self.controller().refused || state.config.stage == 0;
                 self.take(
