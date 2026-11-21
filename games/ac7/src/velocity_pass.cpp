@@ -5,25 +5,19 @@
 #include <rescaleframe/shader_compile.h>
 #include <rescaleframe/d3d11_observer.h>
 #include "velocity_shader.h"
-#include "contact_shadow.h"
+#include "velocity_pass_cache.h"
 #include <d3d11.h>
 #include <wrl/client.h>
 #include <algorithm>
 #include <array>
 #include <map>
-#include <mutex>
+#include <span>
 #include <tuple>
 #include <memory>
 #include <cstring>
 #include <cstdio>
 using Microsoft::WRL::ComPtr;
 namespace {
-struct Code {uint32_t stage=0,hash=0;std::vector<uint8_t> bytes;};
-std::mutex code_guard;
-std::map<void*,Code> sources;
-struct Layout {std::vector<rsf_observer_layout_element> elements;uint64_t serial=0;};
-std::map<void*,Layout> layouts;uint64_t layout_serial=0;
-size_t source_bytes=0;
 thread_local rsf_game_render_pass current{};
 void (*log_line)(void*,const char*)=nullptr;void* log_user=nullptr;
 uint32_t refusal_reports=0,commit_reports=0;
@@ -135,7 +129,6 @@ struct Variant {
     bool particle=false;
     uint32_t maximum_vertices=1,history_slot=0,geometry_hash=0,input_points=0;
 };
-using VariantKey=std::tuple<void*,void*,void*,void*,void*,void*,uint64_t,uint32_t,uint32_t,uint32_t,uint32_t,uint32_t,uint32_t>;
 using ModelKey=std::tuple<uint64_t,uint64_t,uint64_t,uint64_t,uint32_t,uint64_t,uint32_t,int32_t,uint32_t>;
 using ViewKey=std::tuple<uint64_t,uint64_t>;
 struct Model {
@@ -162,7 +155,8 @@ struct Renderer {
     Buffer stream;
     Buffer indirect;
     Buffer captured;
-    std::map<VariantKey,Variant> variants;
+    // Indexed by the slots velocity_pass_cache.rs records; refusals have no entry here.
+    std::vector<Variant> variants;
     std::map<std::vector<uint8_t>,ComPtr<ID3D11VertexShader>> vertex_shaders;
     std::map<std::vector<uint8_t>,ComPtr<ID3D11PixelShader>> pixel_shaders;
     std::map<std::vector<uint8_t>,ComPtr<ID3D11HullShader>> hull_shaders;
@@ -224,53 +218,39 @@ struct Renderer {
         c->CSSetShader(validate_indirect.Get(),nullptr,0);c->Dispatch(1,1,1);
         uav=nullptr;c->CSSetUnorderedAccessViews(0,1,&uav,nullptr);return true;
     }
+    // Source lookup, identity, reuse and the refusal cache are velocity_pass_cache.rs. It lends
+    // copies of the admitted sources to make_variant once per new key.
+    struct VariantBuild {Renderer* owner;bool native_geometry,native_hull;};
+    static int32_t build_variant(void* user,const VelocityVariantSources* sources,uint32_t* slot) noexcept try {
+        const auto& context=*static_cast<const VariantBuild*>(user);
+        return context.owner->make_variant(*sources,context.native_geometry,context.native_hull,*slot);
+    } catch (...) {return VELOCITY_VARIANT_UNSTORED;}
     Variant* variant(const rsf_frame_tap_geometry& g,void* pixel,void* native_geometry,void* native_hull,void* native_domain,
-        Code& vertex_source,Code& pixel_source) {
-        Code geometry_source,hull_source,domain_source;Layout declaration;
-        {
-            std::lock_guard<std::mutex> guard(code_guard);
-            auto v=sources.find(g.vertex_shader),p=sources.find(pixel);
-            if (v==sources.end() || p==sources.end() || v->second.stage!=0 || p->second.stage!=1) return nullptr;
-            vertex_source=v->second;pixel_source=p->second;
-            if (const auto layout=layouts.find(g.input_layout);layout!=layouts.end()) declaration=layout->second;
-            if (native_geometry) {
-                const auto gs=sources.find(native_geometry);
-                if (gs==sources.end() || gs->second.stage!=2) return nullptr;
-                geometry_source=gs->second;
-            }
-            if (native_hull || native_domain) {
-                const auto h=sources.find(native_hull),d=sources.find(native_domain);
-                if (h==sources.end() || d==sources.end() || h->second.stage!=3 || d->second.stage!=4) return nullptr;
-                hull_source=h->second;domain_source=d->second;
-            }
-        }
-        const VariantKey key{g.vertex_shader,pixel,native_geometry,native_hull,native_domain,g.input_layout,declaration.serial,
-            vertex_source.hash,pixel_source.hash,geometry_source.hash,hull_source.hash,domain_source.hash,current.material_blend};
-        if (auto found=variants.find(key);found!=variants.end()) return found->second.vertex ? &found->second : nullptr;
+        uint32_t& vertex_hash) {
+        const VelocityVariantRequest request{{g.vertex_shader,pixel,native_geometry,native_hull,native_domain},g.input_layout,
+            current.material_blend,g.strides[0]};
+        VariantBuild context{this,native_geometry!=nullptr,native_hull!=nullptr};
+        const uint32_t slot=rsf_ac7_velocity_admit_variant(&request,&context,build_variant,&vertex_hash);
+        return slot<variants.size() ? &variants[slot] : nullptr;
+    }
+    int32_t make_variant(const VelocityVariantSources& lent,bool native_geometry,bool native_hull,uint32_t& slot) {
+        const std::span<const rsf_observer_layout_element> declaration(lent.elements,lent.element_count);
         Variant made;rsf_ac7_velocity_vertex_info info;std::vector<uint8_t> vertex,geometry,pixel_code;uint32_t previous=0,current_clip=0;
-        bool beam_layout=g.strides[0]==80 && declaration.elements.size()>=5 && declaration.elements.size()<=6;
-        bool seen_fields[5]{};const uint32_t beam_offsets[]{0,16,32,64,48,0};
-        for (const auto& e:declaration.elements) {
-            if (e.semantic_index>5 || e.per_instance || e.input_slot!=(e.semantic_index==5 ? 1u : 0u) ||
-                e.byte_offset!=beam_offsets[e.semantic_index] || e.format!=uint32_t(e.semantic_index==1 ? DXGI_FORMAT_R32G32B32_FLOAT : DXGI_FORMAT_R32G32B32A32_FLOAT)) {beam_layout=false;break;}
-            if (e.semantic_index<5) {if (seen_fields[e.semantic_index]) {beam_layout=false;break;}seen_fields[e.semantic_index]=true;}
-        }
-        for (bool field:seen_fields) beam_layout=beam_layout && field;
-        bool transformed=rsf_ac7_velocity_vertex_shader(vertex_source.bytes.data(),vertex_source.bytes.size(),vertex,info,native_hull!=nullptr,beam_layout)==rsf_ac7_velocity_shader_result::patched;
+        bool transformed=rsf_ac7_velocity_vertex_shader(lent.bytes[0],lent.sizes[0],vertex,info,native_hull,lent.beam_layout)==rsf_ac7_velocity_shader_result::patched;
         if (transformed && info.particle==3) {
             // Beam/trail factories declare old position as float3. Only this independent layout
             // widens it to read the producer's fourth-word identity; native colour uses its layout.
             std::vector<D3D11_INPUT_ELEMENT_DESC> elements;
             transformed=!native_geometry && !native_hull;
-            for (const auto& e:declaration.elements) {
+            for (const auto& e:declaration) {
                 elements.push_back({"ATTRIBUTE",e.semantic_index,DXGI_FORMAT_R32G32B32A32_FLOAT,e.input_slot,e.byte_offset,D3D11_INPUT_PER_VERTEX_DATA,0});
             }
             if (transformed) transformed=SUCCEEDED(device->CreateInputLayout(elements.data(),UINT(elements.size()),vertex.data(),vertex.size(),&made.layout));
         }
         if (transformed && native_hull) {
             rsf_ac7_velocity_vertex_info h,d;std::vector<uint8_t> normal,corners;
-            transformed=rsf_ac7_velocity_hull_shader(hull_source.bytes.data(),hull_source.bytes.size(),info,normal,corners,h,made.input_points)==rsf_ac7_velocity_shader_result::patched &&
-                rsf_ac7_velocity_domain_shader(domain_source.bytes.data(),domain_source.bytes.size(),h,geometry,d,previous,current_clip)==rsf_ac7_velocity_shader_result::patched;
+            transformed=rsf_ac7_velocity_hull_shader(lent.bytes[3],lent.sizes[3],info,normal,corners,h,made.input_points)==rsf_ac7_velocity_shader_result::patched &&
+                rsf_ac7_velocity_domain_shader(lent.bytes[4],lent.sizes[4],h,geometry,d,previous,current_clip)==rsf_ac7_velocity_shader_result::patched;
             if (transformed) {
                 if (const auto cached=hull_shaders.find(normal);cached!=hull_shaders.end()) made.hull=cached->second;
                 else if (SUCCEEDED(device->CreateHullShader(normal.data(),normal.size(),nullptr,&made.hull))) {hull_shaders.emplace(normal,made.hull);++shader_objects;}
@@ -280,13 +260,13 @@ struct Renderer {
                 else if (SUCCEEDED(device->CreateDomainShader(geometry.data(),geometry.size(),nullptr,&made.domain))) {domain_shaders.emplace(geometry,made.domain);++shader_objects;}
                 transformed=made.hull && made.corners && made.domain;
             }
-            info=std::move(d);made.history_slot=127;made.geometry_hash=hull_source.hash^(domain_source.hash<<1)^(domain_source.hash>>31);
+            info=std::move(d);made.history_slot=127;made.geometry_hash=lent.geometry_hash;
             made.maximum_vertices=made.input_points ? (3u+made.input_points-1)/made.input_points : 1u;
         } else if (transformed && native_geometry) {
             rsf_ac7_velocity_vertex_info generated;
-            transformed=rsf_ac7_velocity_native_geometry_shader(geometry_source.bytes.data(),geometry_source.bytes.size(),info,
+            transformed=rsf_ac7_velocity_native_geometry_shader(lent.bytes[2],lent.sizes[2],info,
                 geometry,generated,made.maximum_vertices,previous,current_clip)==rsf_ac7_velocity_shader_result::patched;
-            info=std::move(generated);made.history_slot=127;made.geometry_hash=geometry_source.hash;
+            info=std::move(generated);made.history_slot=127;made.geometry_hash=lent.geometry_hash;
         } else if (transformed) transformed=rsf_ac7_velocity_geometry_shader(info,geometry,previous,current_clip);
         if (transformed) {
             if (const auto cached=vertex_shaders.find(vertex);cached!=vertex_shaders.end()) made.vertex=cached->second;
@@ -296,16 +276,16 @@ struct Renderer {
                 else if (SUCCEEDED(device->CreateGeometryShader(geometry.data(),geometry.size(),nullptr,&made.geometry))) {geometry_shaders.emplace(geometry,made.geometry);++shader_objects;}
             }
         }
-        if (transformed && rsf_ac7_velocity_pixel_shader(pixel_source.bytes.data(),pixel_source.bytes.size(),current.material_blend,
+        if (transformed && rsf_ac7_velocity_pixel_shader(lent.bytes[1],lent.sizes[1],current.material_blend,
             pixel_code,previous,current_clip)==rsf_ac7_velocity_shader_result::patched) {
             if (const auto cached=pixel_shaders.find(pixel_code);cached!=pixel_shaders.end()) made.pixel=cached->second;
             else if (SUCCEEDED(device->CreatePixelShader(pixel_code.data(),pixel_code.size(),nullptr,&made.pixel))) {pixel_shaders.emplace(pixel_code,made.pixel);++shader_objects;}
         }
         if (!transformed || !made.vertex || (!native_hull && !made.geometry) || !made.pixel) {
-            refused("native material/vertex shader transform or D3D11 variant creation failed");variants.emplace(key,Variant{});return nullptr;
+            refused("native material/vertex shader transform or D3D11 variant creation failed");return VELOCITY_VARIANT_REFUSED;
         }
         const auto position=std::find_if(info.outputs.begin(),info.outputs.end(),[](const auto& s) {return s.system==1;});
-        if (position==info.outputs.end()) return nullptr;
+        if (position==info.outputs.end()) return VELOCITY_VARIANT_UNSTORED;
         const D3D11_SO_DECLARATION_ENTRY declarations[]{
             {0,position->name.c_str(),position->index,0,4,0},
             {0,"RSFKEY",0,0,4,0},{0,"RSFCENTRE",0,0,4,0},{0,"RSFOLD",0,0,4,0},
@@ -316,10 +296,10 @@ struct Renderer {
         else if (SUCCEEDED(device->CreateGeometryShaderWithStreamOutput(capture_code.data(),capture_code.size(),declarations,4,
             &stride,1,D3D11_SO_NO_RASTERIZED_STREAM,nullptr,&made.capture))) {capture_shaders.emplace(capture_code,made.capture);++shader_objects;}
         if (!made.capture) {
-            refused("stream-output signature creation failed");variants.emplace(key,Variant{});return nullptr;
+            refused("stream-output signature creation failed");return VELOCITY_VARIANT_REFUSED;
         }
         made.particle=info.particle!=0;
-        return &variants.emplace(key,std::move(made)).first->second;
+        variants.push_back(std::move(made));slot=uint32_t(variants.size()-1);return VELOCITY_VARIANT_BUILT;
     }
     void build(ID3D11DeviceContext* c,Buffer& source,Buffer& destination,uint32_t count,uint32_t mode,
         bool dynamic=false,ID3D11Predicate* predicate=nullptr,BOOL predicate_value=FALSE) {
@@ -412,23 +392,14 @@ void draw(ID3D11DeviceContext* c,const rsf_frame_tap_geometry& g,ID3D11Buffer* a
 }
 ViewKey view_key(const rsf_game_render_pass& p) {return {p.session_id,p.history_key ? p.history_key : p.view_key};}
 }
-extern "C" void rsf_ac7_velocity_shader_seen(void* shader,uint32_t stage,const void* bytes,uint32_t size) try
-{
-    if (!shader || !bytes || !size || stage>4 || size>1024*1024) return;
-    std::lock_guard<std::mutex> guard(code_guard);
-    if (auto old=sources.find(shader);old!=sources.end()) {source_bytes-=old->second.bytes.size();sources.erase(old);}
-    if (source_bytes+size>64*1024*1024) return;
-    Code code;code.stage=stage;code.hash=rsf_ac7_contact_shadow_crc(bytes,size);
-    const auto* data=static_cast<const uint8_t*>(bytes);code.bytes.assign(data,data+size);source_bytes+=size;sources.emplace(shader,std::move(code));
-} catch (...) {}
+// Creation callbacks on any thread. velocity_pass_cache.rs keeps up to 64 MiB of 1 MiB or smaller
+// shader sources and 4096 layouts of at most 16 descriptors.
+extern "C" void rsf_ac7_velocity_shader_seen(void* shader,uint32_t stage,const void* bytes,uint32_t size)
+{rsf_ac7_velocity_cache_shader(shader,stage,bytes,size);}
 extern "C" void rsf_ac7_velocity_set_log(void (*log)(void*,const char*),void* user)
 {log_line=log;log_user=user;refusal_reports=commit_reports=0;}
-extern "C" void rsf_ac7_velocity_layout_seen(void* layout,const rsf_observer_layout_element* elements,uint32_t copied,uint32_t count) try
-{
-    if (!layout) return;std::lock_guard<std::mutex> guard(code_guard);layouts.erase(layout);
-    if (!elements || copied!=count || count>16 || layouts.size()>=4096) return;
-    Layout record;record.elements.assign(elements,elements+count);record.serial=++layout_serial;layouts.emplace(layout,std::move(record));
-} catch (...) {}
+extern "C" void rsf_ac7_velocity_layout_seen(void* layout,const rsf_observer_layout_element* elements,uint32_t copied,uint32_t count)
+{rsf_ac7_velocity_cache_layout(layout,elements,copied,count);}
 extern "C" void rsf_ac7_velocity_scope(const rsf_game_render_pass* scope)
 {current=scope && scope->struct_size>=sizeof(current) ? *scope : rsf_game_render_pass{};}
 extern "C" void rsf_ac7_velocity_geometry(const rsf_frame_tap_geometry* pointer) try
@@ -445,11 +416,12 @@ extern "C" void rsf_ac7_velocity_geometry(const rsf_frame_tap_geometry* pointer)
     if (!hull && g.topology!=D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST && g.topology!=D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP) return;
     ComPtr<ID3D11Device> device;c->GetDevice(&device);
     if (!renderer || renderer->device.Get()!=device.Get()) {
-        auto made=std::make_unique<Renderer>(device.Get());if (!made->initialize()) {refused("device-side pass initialization failed");return;}renderer=std::move(made);
+        auto made=std::make_unique<Renderer>(device.Get());if (!made->initialize()) {refused("device-side pass initialization failed");return;}
+        renderer=std::move(made);rsf_ac7_velocity_reset_variants();
     }
     CpuSample timing(*renderer,entered_ms);
     ComPtr<ID3D11PixelShader> native_pixel;c->PSGetShader(&native_pixel,nullptr,nullptr);
-    Code vertex_code,pixel_code;auto* variant=renderer->variant(g,native_pixel.Get(),existing.Get(),hull.Get(),domain.Get(),vertex_code,pixel_code);
+    uint32_t vertex_hash=0;auto* variant=renderer->variant(g,native_pixel.Get(),existing.Get(),hull.Get(),domain.Get(),vertex_hash);
     timing.phase=cpu_clock_ms();timing.shader_ms=timing.phase-entered_ms;
     if (!variant) return;
     if (hull && g.topology!=D3D11_PRIMITIVE_TOPOLOGY_1_CONTROL_POINT_PATCHLIST+variant->input_points-1) return;
@@ -470,7 +442,7 @@ extern "C" void rsf_ac7_velocity_geometry(const rsf_frame_tap_geometry* pointer)
     }
     auto& view=renderer->views[view_key(current)];if (!renderer->view(c,g,view)) {refused("native scene depth allocation/identity differs from the draw");return;}
     const ModelKey key{current.session_id,current.history_key ? current.history_key : current.view_key,
-        current.primitive_key,current.material_key,vertex_code.hash,variant->particle ? uint64_t(0) : current.vertex_factory_key,
+        current.primitive_key,current.material_key,vertex_hash,variant->particle ? uint64_t(0) : current.vertex_factory_key,
         variant->particle ? 0u : g.start,variant->particle ? 0 : g.base_vertex,variant->geometry_hash};
     auto& model=renderer->models[key];if (!renderer->model(c,model,count)) {refused("geometry-history allocation failed");return;}
     if (!renderer->captured.buffer || renderer->captured.count<count) {
@@ -589,7 +561,7 @@ extern "C" void rsf_ac7_velocity_frame_end(void)
         char message[320]{};std::snprintf(message,sizeof(message),
             "AC7 velocity CPU frame=%u callbacks=%u total_ms=%.2f shader_ms=%.2f resource_ms=%.2f peak_ms=%.2f largest_records=%u models=%zu variants=%zu shader_objects=%u",
             renderer->profile_frame,renderer->profile_callbacks,renderer->cpu_ms,renderer->shader_cpu_ms,
-            renderer->resource_cpu_ms,renderer->peak_cpu_ms,renderer->largest_records,renderer->models.size(),renderer->variants.size(),renderer->shader_objects);
+            renderer->resource_cpu_ms,renderer->peak_cpu_ms,renderer->largest_records,renderer->models.size(),rsf_ac7_velocity_variant_count(),renderer->shader_objects);
         log_line(log_user,message);
     }
     renderer->cpu_ms=renderer->shader_cpu_ms=renderer->resource_cpu_ms=renderer->peak_cpu_ms=0;
@@ -598,6 +570,6 @@ extern "C" void rsf_ac7_velocity_frame_end(void)
     std::erase_if(renderer->views,[&](const auto& entry) {return entry.second.epoch+2<renderer->epoch;});
 }
 extern "C" void rsf_ac7_velocity_release(void)
-{renderer.reset();current={};std::lock_guard<std::mutex> guard(code_guard);sources.clear();layouts.clear();source_bytes=0;}
+{renderer.reset();current={};rsf_ac7_velocity_cache_release();}
 uint32_t rsf_ac7_velocity_device_shader_creation_count() noexcept
 {return renderer ? renderer->shader_objects : 0;}

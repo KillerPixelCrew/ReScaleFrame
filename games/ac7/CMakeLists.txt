@@ -45,7 +45,9 @@ target_link_libraries(rsf_ac7_render_scope PUBLIC ReScaleFrame::GameSDK PRIVATE 
 # shader_compile.h is header-only, so the scope uses it without linking the Graphics library.
 target_include_directories(rsf_ac7_render_scope PRIVATE "${CMAKE_SOURCE_DIR}/runtime/graphics/include")
 add_library(ReScaleFrame::AC7RenderScope ALIAS rsf_ac7_render_scope)
+# The pass keeps its D3D11 work native. Its shader/layout observations and variant admission are
+# src/velocity_pass_cache.rs, so the Rust archive follows the render scope on the link line.
 add_library(rsf_ac7_velocity_pass STATIC src/velocity_pass.cpp)
 target_include_directories(rsf_ac7_velocity_pass PUBLIC include)
-target_link_libraries(rsf_ac7_velocity_pass PRIVATE ReScaleFrame::AC7RenderScope ReScaleFrame::Graphics rsf_build_options)
+target_link_libraries(rsf_ac7_velocity_pass PRIVATE ReScaleFrame::AC7RenderScope ReScaleFrame::Graphics rsf_ac7_rust rsf_build_options)
 add_library(ReScaleFrame::AC7VelocityPass ALIAS rsf_ac7_velocity_pass)
