@@ -113,3 +113,36 @@ SHA-256 `d2aa077a561ee71c084f806edb2f7cdcb0bf4ccaa17907a788324043f8622bb2`.
 The device executables were built for later testing. Live detour admission,
 real shader acquisition and reload, motion images and moving-game SR and FG
 output remain unverified on this revision.
+
+## Profile guard admission
+
+Rust now owns the motion install guard sequence in
+`engine_guards/motion.rs`, following the SR and geometry guard ports and
+using the shared checked-image reader. The platform `guards` leaf keeps its
+signature and platform ABI 8. It now only lends the selected Standard or AVX
+profile from `motion_profile.h`: three detour sites, the unique prefixes, the
+two `create_shader` call sites, both hull/domain create sites with their
+`CreateHWShader` wrappers, the `shader_compile` prologue, D3DCompile setup and
+tessellation dispatch codes, their RVAs and the `pSourceName` RVA. The guarded
+copy leaf comes from `guard_image`. The tables, typed trampolines, HookSet and
+the Rust install refusals that run before the guard (image, size, profile,
+build identity, `hooks_created`) are unchanged.
+
+Rust keeps the C++ short-circuit order and names. Each detour site checks its
+16 bytes, then each unique prefix at the same RVA in table order, and refuses
+with the site name. Then come both call sites by name, the `shader_compile`
+prologue, the D3DCompile setup, the hull/domain dispatch, each create site
+prologue by name followed by its wrapper (`CreateHWShader (hull/domain)`), and
+finally the single zero byte at `pSourceName`. A null result admits the build.
+The old `"unknown"` default could never be returned, because every refusal
+path set a name. A new Rust case breaks each check from last to first on a
+fixture image and requires the earliest one's name each time.
+
+Source comparison against the C++ `guards_match` at `a5867f2f` matched the
+input fields, order and refusal strings. Both versions reach the same
+`matches_site` and `matches_hex_guard` reader. The dynamic Runtime boundary,
+the `GetModuleHandleW` and `GetProcAddress` lookups, and the existing motion
+tests are unchanged. No engine analysis or instruction site was added. Pinned
+Rust 1.94.1 formatting, locked offline Windows Cargo metadata and Git
+whitespace checks passed. Compile, link, Clippy, tests, fixtures and game
+verification remain user-owned.
