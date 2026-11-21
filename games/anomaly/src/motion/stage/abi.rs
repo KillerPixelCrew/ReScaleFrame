@@ -9,7 +9,6 @@ use crate::motion_target_abi::{
     rsf_anomaly_motion_bind_layout as BindLayout, rsf_anomaly_motion_bind_platform as BindPlatform,
 };
 use crate::shader_loader::Bytes;
-use rsf_game_sys::{rsf_frame_record, rsf_game_log_fn};
 use std::ffi::c_char;
 
 pub(super) type Raw = *mut std::ffi::c_void;
@@ -122,27 +121,6 @@ pub(super) struct PatchCounters {
 }
 
 #[repr(C)]
-pub(super) struct DumpApi {
-    pub configure:
-        unsafe extern "C" fn(*const c_char, *const c_char, *const c_char, rsf_game_log_fn, Raw),
-    pub request: unsafe extern "C" fn(),
-    pub poll: unsafe extern "C" fn(),
-    pub requested: unsafe extern "C" fn() -> i32,
-    pub begin_record: unsafe extern "C" fn(&rsf_frame_record, u32) -> i32,
-    pub texture_record: unsafe extern "C" fn(
-        Raw,
-        &rsf_frame_record,
-        *const c_char,
-        *const c_char,
-        Raw,
-        u32,
-        f32,
-    ) -> i32,
-    pub complete: unsafe extern "C" fn(&rsf_frame_record, i32),
-    pub cancel: unsafe extern "C" fn(u64),
-}
-
-#[repr(C)]
 pub(super) struct Platform {
     pub struct_size: u32,
     pub abi_version: u32,
@@ -198,7 +176,6 @@ pub(super) struct Platform {
     pub link_shaders: unsafe extern "C" fn(Raw, Raw, Raw, Raw) -> bool,
     pub create_shader: unsafe extern "C" fn(Raw, Raw, Raw, Raw, bool, &mut bool) -> Raw,
     pub sr_capture: unsafe extern "C" fn() -> bool,
-    pub bind_dump: unsafe extern "C" fn(*mut DumpApi) -> bool,
 }
 
 #[repr(C)]
@@ -244,6 +221,6 @@ const _: () = {
     assert!(size_of::<FoliageLayout>() == 108);
     assert!(std::mem::offset_of!(FoliageLayout, usable) == 104);
     assert!(size_of::<FrameTarget>() == 24);
-    assert!(size_of::<Platform>() == 368);
+    assert!(size_of::<Platform>() == 360);
     assert!(std::mem::offset_of!(Platform, guards) == 40);
 };

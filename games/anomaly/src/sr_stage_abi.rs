@@ -2,7 +2,7 @@
 
 #![allow(non_camel_case_types)]
 #![allow(dead_code)]
-use rsf_game_sys::{rsf_camera_frame, rsf_frame_record};
+use rsf_game_sys::rsf_camera_frame;
 
 pub const RSF_ANOMALY_SR_MIN_SCALE: f64 = 0.33;
 pub const RSF_ANOMALY_SR_MAX_SCALE: f64 = 1.0;
@@ -893,70 +893,6 @@ const _: () = {
 };
 #[repr(C)]
 #[derive(Default, Copy, Clone)]
-pub struct rsf_anomaly_sr_dump {
-    pub configure: ::core::option::Option<
-        unsafe extern "C" fn(
-            arg1: *const ::core::ffi::c_char,
-            arg2: *const ::core::ffi::c_char,
-            arg3: *const ::core::ffi::c_char,
-            arg4: rsf_anomaly_sr_log,
-            arg5: *mut ::core::ffi::c_void,
-        ),
-    >,
-    pub request: ::core::option::Option<unsafe extern "C" fn()>,
-    pub poll: ::core::option::Option<unsafe extern "C" fn()>,
-    pub requested: ::core::option::Option<unsafe extern "C" fn() -> ::core::ffi::c_int>,
-    pub begin_record: ::core::option::Option<
-        unsafe extern "C" fn(arg1: *const rsf_frame_record, arg2: u32) -> ::core::ffi::c_int,
-    >,
-    pub texture_record: ::core::option::Option<
-        unsafe extern "C" fn(
-            arg1: *mut ::core::ffi::c_void,
-            arg2: *const rsf_frame_record,
-            arg3: *const ::core::ffi::c_char,
-            arg4: *const ::core::ffi::c_char,
-            arg5: *mut ::core::ffi::c_void,
-            arg6: u32,
-            arg7: f32,
-        ) -> ::core::ffi::c_int,
-    >,
-    pub complete:
-        ::core::option::Option<unsafe extern "C" fn(arg1: *const rsf_frame_record, arg2: i32)>,
-    pub cancel: ::core::option::Option<unsafe extern "C" fn(arg1: u64)>,
-    pub result: ::core::option::Option<
-        unsafe extern "C" fn(
-            arg1: *const rsf_frame_record,
-            arg2: *const ::core::ffi::c_char,
-            arg3: u32,
-            arg4: i32,
-        ),
-    >,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_anomaly_sr_dump"][::core::mem::size_of::<rsf_anomaly_sr_dump>() - 72usize];
-    ["Alignment of rsf_anomaly_sr_dump"][::core::mem::align_of::<rsf_anomaly_sr_dump>() - 8usize];
-    ["Offset of field: rsf_anomaly_sr_dump::configure"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_dump, configure) - 0usize];
-    ["Offset of field: rsf_anomaly_sr_dump::request"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_dump, request) - 8usize];
-    ["Offset of field: rsf_anomaly_sr_dump::poll"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_dump, poll) - 16usize];
-    ["Offset of field: rsf_anomaly_sr_dump::requested"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_dump, requested) - 24usize];
-    ["Offset of field: rsf_anomaly_sr_dump::begin_record"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_dump, begin_record) - 32usize];
-    ["Offset of field: rsf_anomaly_sr_dump::texture_record"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_dump, texture_record) - 40usize];
-    ["Offset of field: rsf_anomaly_sr_dump::complete"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_dump, complete) - 48usize];
-    ["Offset of field: rsf_anomaly_sr_dump::cancel"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_dump, cancel) - 56usize];
-    ["Offset of field: rsf_anomaly_sr_dump::result"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_dump, result) - 64usize];
-};
-#[repr(C)]
-#[derive(Default, Copy, Clone)]
 pub struct rsf_anomaly_sr_stage_platform {
     pub frame_facts: ::core::option::Option<
         unsafe extern "C" fn(
@@ -1097,8 +1033,6 @@ pub struct rsf_anomaly_sr_stage_platform {
     pub disable_hooks: ::core::option::Option<unsafe extern "C" fn()>,
     pub set_rm_near: ::core::option::Option<unsafe extern "C" fn(arg1: bool)>,
     pub remove_hooks: ::core::option::Option<unsafe extern "C" fn() -> bool>,
-    pub dump_exports:
-        ::core::option::Option<unsafe extern "C" fn(arg1: *mut rsf_anomaly_sr_dump) -> bool>,
     pub ini_int: ::core::option::Option<
         unsafe extern "C" fn(
             ini: *const ::core::ffi::c_void,
@@ -1130,7 +1064,7 @@ pub struct rsf_anomaly_sr_stage_platform {
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
     ["Size of rsf_anomaly_sr_stage_platform"]
-        [::core::mem::size_of::<rsf_anomaly_sr_stage_platform>() - 600usize];
+        [::core::mem::size_of::<rsf_anomaly_sr_stage_platform>() - 592usize];
     ["Alignment of rsf_anomaly_sr_stage_platform"]
         [::core::mem::align_of::<rsf_anomaly_sr_stage_platform>() - 8usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::frame_facts"]
@@ -1267,22 +1201,20 @@ const _: () = {
         [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, set_rm_near) - 520usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::remove_hooks"]
         [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, remove_hooks) - 528usize];
-    ["Offset of field: rsf_anomaly_sr_stage_platform::dump_exports"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, dump_exports) - 536usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::ini_int"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, ini_int) - 544usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, ini_int) - 536usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::ini_text"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, ini_text) - 552usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, ini_text) - 544usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::configured_ini"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, configured_ini) - 560usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, configured_ini) - 552usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::persist_int"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, persist_int) - 568usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, persist_int) - 560usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::persist_text"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, persist_text) - 576usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, persist_text) - 568usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::apply_colour_transport"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, apply_colour_transport) - 584usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, apply_colour_transport) - 576usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::vendor_file"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, vendor_file) - 592usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, vendor_file) - 584usize];
 };
 #[repr(C)]
 #[derive(Default, Copy, Clone)]

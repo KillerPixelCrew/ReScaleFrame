@@ -10,7 +10,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-struct rsf_frame_record;
 struct rsf_camera_frame;
 struct rsf_game_render_pass;
 
@@ -225,19 +224,6 @@ typedef struct rsf_anomaly_sr_timer {
     bool device;
 } rsf_anomaly_sr_timer;
 
-// The Runtime's core frame dump service (rsf_input_dump_* exports).
-typedef struct rsf_anomaly_sr_dump {
-    void (*configure)(const char*, const char*, const char*, rsf_anomaly_sr_log, void*);
-    void (*request)(void);
-    void (*poll)(void);
-    int (*requested)(void);
-    int (*begin_record)(const struct rsf_frame_record*, uint32_t);
-    int (*texture_record)(void*, const struct rsf_frame_record*, const char*, const char*, void*, uint32_t, float);
-    void (*complete)(const struct rsf_frame_record*, int32_t);
-    void (*cancel)(uint64_t);
-    void (*result)(const struct rsf_frame_record*, const char*, uint32_t, int32_t);
-} rsf_anomaly_sr_dump;
-
 typedef struct rsf_anomaly_sr_stage_platform {
     // Guarded engine reads and engine identity.
     void (*frame_facts)(void* self, bool world_window, bool temporal, rsf_anomaly_sr_frame_facts* out);
@@ -312,7 +298,6 @@ typedef struct rsf_anomaly_sr_stage_platform {
     void (*disable_hooks)(void);
     void (*set_rm_near)(bool);
     bool (*remove_hooks)(void);
-    bool (*dump_exports)(rsf_anomaly_sr_dump*);
     // Options: the INI, persistence through the adapter option path and the vendor runtime directories.
     int32_t (*ini_int)(const void* ini, const char* key, int32_t fallback);
     uint32_t (*ini_text)(const void* ini, const char* key, const char* fallback, uint16_t* out, uint32_t capacity);

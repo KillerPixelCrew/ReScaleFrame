@@ -12,6 +12,7 @@ use self::math::{
     jitter_to_uv, make_plan, mip_delta, next_jitter,
 };
 use crate::camera;
+use crate::frame_dump::DumpApi;
 use crate::lease::Lease;
 use crate::sr_stage_abi::*;
 use rsf_game_sys::{RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record};
@@ -484,7 +485,7 @@ struct State {
     frame_cut: bool,
     frame_seconds: f32,
     last_main_qpc: i64,
-    dump: Option<rsf_anomaly_sr_dump>,
+    dump: Option<DumpApi>,
     capture: Capture,
     burst: Burst,
     burst_gate: BurstGate,
@@ -1005,14 +1006,13 @@ impl Stage {
     }
 
     fn bind_dump(&self, state: &mut State) {
-        let mut table = rsf_anomaly_sr_dump::default();
-        if !leaf!(self.platform(), dump_exports(&mut table)) {
+        let Some(table) = DumpApi::bind() else {
             self.say(
                 state,
                 "Anomaly SR stage capture refused: Runtime frame dump exports missing.",
             );
             return;
-        }
+        };
         let Some(directory) = dump_directory() else {
             self.say(
                 state,
@@ -1020,16 +1020,13 @@ impl Stage {
             );
             return;
         };
-        let (Some(configure), Ok(directory)) = (
-            table.configure,
-            CString::new(directory.to_string_lossy().as_bytes()),
-        ) else {
+        let Ok(directory) = CString::new(directory.to_string_lossy().as_bytes()) else {
             return;
         };
         let sha = leaf!(self.platform(), build_sha256());
         // The Runtime copies the strings; the log context outlives the session.
         unsafe {
-            configure(
+            (table.configure)(
                 directory.as_ptr(),
                 c"Anomaly".as_ptr(),
                 sha,
@@ -1086,10 +1083,7 @@ impl Stage {
         state.burst.armed = false;
         if let Some(dump) = state.dump {
             self.capture_abandon(state);
-            if let Some(cancel) = dump.cancel {
-                // A Runtime export resolved at bind time.
-                unsafe { cancel(state.session) };
-            }
+            unsafe { (dump.cancel)(state.session) };
         }
         // Teardown: the pipeline releases its device reference and every vendor context before the engine's device goes.
         leaf!(p, driver_stop());
@@ -1285,9 +1279,9 @@ impl Stage {
         if !state.capture.active {
             return;
         }
-        if let Some(complete) = state.dump.and_then(|d| d.complete) {
+        if let Some(dump) = state.dump {
             // A Runtime export resolved at bind time; the record outlives the call.
-            unsafe { complete(&state.capture.record, E_FAIL) };
+            unsafe { (dump.complete)(&state.capture.record, E_FAIL) };
         }
         state.capture.active = false;
         state.capture.failed += 1;
@@ -1298,22 +1292,14 @@ impl Stage {
         let Some(dump) = state.dump else { return };
         self.capture_abandon(state);
         state.capture.seam_taken = false;
-        // The exports were resolved together at bind time.
-        unsafe {
-            if let Some(poll) = dump.poll {
-                poll();
-            }
-        }
+        unsafe { (dump.poll)() };
         let scheduled = state.capture.remaining != 0
             && state.world_frames >= state.capture.next
             && !self.loading();
-        if scheduled && let Some(request) = dump.request {
-            unsafe { request() };
+        if scheduled {
+            unsafe { (dump.request)() };
         }
-        if dump
-            .requested
-            .is_none_or(|requested| unsafe { requested() } == 0)
-        {
+        if unsafe { (dump.requested)() } == 0 {
             return;
         }
         let c = self.controller();
@@ -1342,10 +1328,7 @@ impl Stage {
         } else {
             facts.device_height
         };
-        if dump
-            .begin_record
-            .is_none_or(|begin| unsafe { begin(&state.capture.record, 0) } == 0)
-        {
+        if unsafe { (dump.begin_record)(&state.capture.record, 0) } == 0 {
             return;
         }
         state.capture.active = true;
@@ -1443,7 +1426,7 @@ impl Stage {
         view: u32,
         scale: f32,
     ) {
-        let Some(record) = state.dump.and_then(|d| d.texture_record) else {
+        let Some(dump) = state.dump else {
             return;
         };
         let context = leaf!(self.platform(), context());
@@ -1452,7 +1435,7 @@ impl Stage {
         }
         // A Runtime export resolved at bind time; every pointer is valid for the call.
         if unsafe {
-            record(
+            (dump.texture_record)(
                 context,
                 &state.capture.record,
                 name.as_ptr(),
@@ -1879,8 +1862,8 @@ impl Stage {
                 1.0,
             );
         }
-        if let Some(complete) = state.dump.and_then(|d| d.complete) {
-            unsafe { complete(&state.capture.record, 0) };
+        if let Some(dump) = state.dump {
+            unsafe { (dump.complete)(&state.capture.record, 0) };
         }
         state.capture.active = false;
     }

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::*;
+use crate::frame_dump::DumpApi;
 use rsf_game_sys::{RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record};
 
 const SESSION: u64 = 0x0000_4d4f_5449_4f4e;
@@ -50,12 +51,10 @@ impl Capture {
             log.text(c"Anomaly motion capture refused: SRStageCapture owns the frame dump service this run.");
             return None;
         }
-        let mut api = MaybeUninit::uninit();
-        if !unsafe { (p.bind_dump)(api.as_mut_ptr()) } {
+        let Some(api) = DumpApi::bind() else {
             log.text(c"Anomaly motion capture refused: Runtime frame dump exports missing.");
             return None;
-        }
-        let api: DumpApi = unsafe { api.assume_init() };
+        };
         let path = std::env::var_os("RSF_DUMP_DIR")
             .filter(|path| !path.is_empty())
             .or_else(|| {
@@ -271,6 +270,7 @@ mod tests {
             texture_record: texture,
             complete,
             cancel,
+            result: None,
         };
         let mut capture = Capture {
             api,

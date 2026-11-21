@@ -50,16 +50,6 @@ struct ShaderResult {
 };
 struct PackInfo { rsf_anomaly_shader_bytes name_space; size_t roots; };
 struct PatchCounters { uint64_t intercepted, built, cache_hits, refused, refusals[11]; };
-struct DumpApi {
-    void (*configure)(const char*, const char*, const char*, rsf_dump_log_fn, void*);
-    void (*request)();
-    void (*poll)();
-    int (*requested)();
-    int (*begin_record)(const rsf_frame_record*, uint32_t);
-    int (*texture_record)(void*, const rsf_frame_record*, const char*, const char*, void*, rsf_dump_view, float);
-    void (*complete)(const rsf_frame_record*, int32_t);
-    void (*cancel)(uint64_t);
-};
 using Redraw = void (*)(void*, void*);
 using Retire = void (*)(void*, const rsf_anomaly_geometry_key*);
 struct MotionPlatform {
@@ -107,7 +97,6 @@ struct MotionPlatform {
     bool (*link_shaders)(const void*, const void*, const void*, const void*);
     void* (*create_shader)(void*, void*, void*, void*, bool, bool*);
     bool (*sr_capture)();
-    bool (*bind_dump)(DumpApi*);
 };
 inline constexpr uint32_t motion_platform_abi = 1;
 

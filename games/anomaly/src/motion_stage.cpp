@@ -380,24 +380,6 @@ void* create_shader(void* pack, void* raw, void* device, void* reflection, bool 
     if (shader) static_cast<IUnknown*>(shader)->Release();
     return nullptr;
 }
-bool bind_dump(DumpApi* out) noexcept {
-    const HMODULE runtime = GetModuleHandleW(L"ReScaleFrame.Runtime.dll");
-    if (!runtime) return false;
-    const auto get = [runtime](const char* name) { return reinterpret_cast<void*>(GetProcAddress(runtime, name)); };
-    *out = {
-        reinterpret_cast<decltype(out->configure)>(get("rsf_input_dump_configure")),
-        reinterpret_cast<decltype(out->request)>(get("rsf_input_dump_request")),
-        reinterpret_cast<decltype(out->poll)>(get("rsf_input_dump_poll")),
-        reinterpret_cast<decltype(out->requested)>(get("rsf_input_dump_requested")),
-        reinterpret_cast<decltype(out->begin_record)>(get("rsf_input_dump_begin_record")),
-        reinterpret_cast<decltype(out->texture_record)>(get("rsf_input_dump_texture_record")),
-        reinterpret_cast<decltype(out->complete)>(get("rsf_input_dump_complete")),
-        reinterpret_cast<decltype(out->cancel)>(get("rsf_input_dump_cancel"))
-    };
-    return out->configure && out->request && out->poll && out->requested && out->begin_record &&
-        out->texture_record && out->complete && out->cancel;
-}
-
 const MotionPlatform platform{
     sizeof(MotionPlatform), motion_platform_abi, &motion_device_platform(), &bind_platform,
     {sr::backend_rt_offset, sr::backend_zb_offset, sr::backend_rt_changed_offset},
@@ -464,13 +446,13 @@ const MotionPlatform platform{
         return hs ? tess_chain_linkable(reflection(vs), reflection(hs), reflection(ds), reflection(ps)) :
             linkable(reflection(vs), reflection(ps));
     },
-    create_shader, [] { return sr::options().capture; }, bind_dump
+    create_shader, [] { return sr::options().capture; }
 };
 
 static_assert(sizeof(WindowFacts) == 56 && sizeof(DrawFacts) == 32 && sizeof(SnapshotFacts) == 64);
 static_assert(sizeof(ShaderObjects) == 40 && sizeof(ShaderEntry) == 32 && sizeof(ShaderResult) == 32);
 static_assert(sizeof(FoliageLayout) == 108 && offsetof(FoliageLayout, xform) == 4 && offsetof(FoliageLayout, usable) == 104);
-static_assert(sizeof(MotionPlatform) == 368 && offsetof(MotionPlatform, guards) == 40);
+static_assert(sizeof(MotionPlatform) == 360 && offsetof(MotionPlatform, guards) == 40);
 static_assert(sizeof(FrameTarget) == 24 && offsetof(FrameTarget, main) == 20);
 static_assert(static_cast<uint8_t>(ReplayResult::Done) == 0 && static_cast<uint8_t>(ReplayResult::SkippedNoDepthWrite) == 1);
 static_assert(RSF_PHASE_RENDER_SUBMIT == 2 && RSF_DUMP_VIEW_DENSE_MOTION == 7);

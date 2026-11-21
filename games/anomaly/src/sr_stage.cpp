@@ -849,22 +849,6 @@ const rsf_anomaly_sr_stage_platform platform{
         remove_position_slot();
         return hooks.disable();
     },
-    .dump_exports = [](rsf_anomaly_sr_dump* out) {
-        const HMODULE runtime = GetModuleHandleW(L"ReScaleFrame.Runtime.dll");
-        if (!runtime) return false;
-        const auto get = [runtime](const char* name) { return reinterpret_cast<void*>(GetProcAddress(runtime, name)); };
-        out->configure = reinterpret_cast<decltype(out->configure)>(get("rsf_input_dump_configure"));
-        out->request = reinterpret_cast<decltype(out->request)>(get("rsf_input_dump_request"));
-        out->poll = reinterpret_cast<decltype(out->poll)>(get("rsf_input_dump_poll"));
-        out->requested = reinterpret_cast<decltype(out->requested)>(get("rsf_input_dump_requested"));
-        out->begin_record = reinterpret_cast<decltype(out->begin_record)>(get("rsf_input_dump_begin_record"));
-        out->texture_record = reinterpret_cast<decltype(out->texture_record)>(get("rsf_input_dump_texture_record"));
-        out->complete = reinterpret_cast<decltype(out->complete)>(get("rsf_input_dump_complete"));
-        out->cancel = reinterpret_cast<decltype(out->cancel)>(get("rsf_input_dump_cancel"));
-        out->result = reinterpret_cast<decltype(out->result)>(get("rsf_input_dump_result"));
-        return out->configure && out->request && out->poll && out->requested && out->begin_record && out->texture_record &&
-            out->complete && out->cancel;
-    },
     .ini_int = [](const void* ini, const char* key, int32_t fallback) {
         try {
             return static_cast<int32_t>(GetPrivateProfileIntW(L"Anomaly", widen(key).c_str(), fallback, static_cast<const wchar_t*>(ini)));

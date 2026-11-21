@@ -12,6 +12,7 @@ mod fg_policy_abi;
 mod fg_stage;
 #[cfg(windows)]
 mod fg_stage_abi;
+mod frame_dump;
 mod geometry_registry;
 mod geometry_registry_abi;
 mod input;
