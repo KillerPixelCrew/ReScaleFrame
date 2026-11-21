@@ -370,6 +370,13 @@ all six menu profiles and guarded engine addresses. Build and live
 screen transitions remain open.
 [Input and screen evidence](research/fallout4-input-ownership-20261116.md)
 
+Fallout 4's depth-domain owner now checks the 35 guarded sites, samples
+the native raster and camera, and composes both depth domains in Rust.
+Typed D3D11 leaves supply the resource and lease facts. The port keeps
+the existing refusal stages and forward-depth convention. Build and
+native capture verification remain open.
+[Depth-domain ownership audit](research/rust-fallout4-depth-domains.md)
+
 Unity package D3D12 SR contexts and their recording slots are Rust-owned.
 The existing Unity bridge still provides recording and completion facts.
 The view owner preserves reconfiguration, spatial fallback and retirement

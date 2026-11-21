@@ -8,7 +8,7 @@
 //! with a 1e-12 pivot floor, which moves both the refusal boundary and the results.
 //! All scalar work keeps the C++ types: f32 for the camera and raster, f64 for the depth bound.
 
-mod xm;
+pub(crate) mod xm;
 
 use rsf_game_sys::{RSF_GAME_CAMERA_ABI_VERSION, rsf_camera_frame};
 use std::f32::consts::PI;
@@ -33,17 +33,16 @@ pub(crate) struct NativeCamera {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub(crate) struct CameraRaster {
-    xywh: [f32; 4],
-    crop: [i32; 4],
+    pub(crate) xywh: [f32; 4],
+    pub(crate) crop: [i32; 4],
 }
 
-/// camera.h `CameraDepthBound`, read by depth_domains.cpp.
+/// camera.h `CameraDepthBound`, read by depth_domains.rs and the camera fixture.
 #[repr(C)]
-#[allow(dead_code)] // written here, read by the C++ depth-domain module
 pub(crate) struct CameraDepthBound {
-    coefficients: [f64; 4],
-    minimum: f64,
-    range: f64,
+    pub(crate) coefficients: [f64; 4],
+    pub(crate) minimum: f64,
+    pub(crate) range: f64,
 }
 
 const _: () = {
@@ -79,7 +78,7 @@ fn below(value: f32, bound: f32) -> bool {
 }
 
 /// `XMStoreFloat4x4` into `output` only when every element is finite.
-fn store(matrix: &Matrix, output: &mut Flat) -> bool {
+pub(crate) fn store(matrix: &Matrix, output: &mut Flat) -> bool {
     let values = xm::flatten(matrix);
     if values.iter().all(|value| value.is_finite()) {
         *output = values;
@@ -91,7 +90,7 @@ fn store(matrix: &Matrix, output: &mut Flat) -> bool {
 
 /// `XMMatrixInverse` admitted only for a finite determinant above 1e-8 in magnitude and a
 /// finite result.
-fn invert(matrix: &Matrix) -> Option<Matrix> {
+pub(crate) fn invert(matrix: &Matrix) -> Option<Matrix> {
     let (result, determinant) = xm::inverse(matrix);
     let mut checked = [0.0; 16];
     (determinant.is_finite() && determinant.abs() > 1e-8 && store(&result, &mut checked))
@@ -99,12 +98,12 @@ fn invert(matrix: &Matrix) -> Option<Matrix> {
 }
 
 /// Relative agreement with a unit floor.
-fn near(a: f32, b: f32) -> bool {
+pub(crate) fn near(a: f32, b: f32) -> bool {
     a.is_finite() && b.is_finite() && (a - b).abs() <= 0.0005 * 1.0_f32.max(a.abs()).max(b.abs())
 }
 
 /// Native NDC to integer crop NDC affine, row-vector convention.
-fn raster_transform(raster: &CameraRaster) -> Option<Flat> {
+pub(crate) fn raster_transform(raster: &CameraRaster) -> Option<Flat> {
     let [left, top, right, bottom] = raster.crop;
     if left < 0 || top < 0 || right <= left || bottom <= top {
         return None;
@@ -134,7 +133,7 @@ fn raster_transform(raster: &CameraRaster) -> Option<Flat> {
 }
 
 /// D24 source clip-box forward-W admission, with one endpoint quantization step.
-fn depth_domain_forward(m: &Flat, range: f32, output: &mut CameraDepthBound) -> bool {
+pub(crate) fn depth_domain_forward(m: &Flat, range: f32, output: &mut CameraDepthBound) -> bool {
     if !range.is_finite() || !above(range, 0.0) {
         return false;
     }
@@ -171,7 +170,7 @@ fn forward_perspective(p: &Flat) -> bool {
 }
 
 /// Composed first-person view-Z convention, not a shared-world point transform.
-fn composed_view_depth(source: &Flat, target: &Flat, output: &mut Flat) -> bool {
+pub(crate) fn composed_view_depth(source: &Flat, target: &Flat, output: &mut Flat) -> bool {
     if !forward_perspective(source) || !forward_perspective(target) {
         return false;
     }
