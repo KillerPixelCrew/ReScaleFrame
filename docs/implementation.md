@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now owns the D3D11 sharpening device and resource cache,
+image admission, filter selection and dispatch counter. A failed
+scratch view allocation leaves no incomplete texture in the cache,
+so the next frame can retry. Native leaves keep the Direct3D calls
+and the existing shaders and constant packing. Vulkan and Direct3D
+share the Rust depth-guide fallback. The earlier depth-mode color
+fix is unchanged.
+
 The integrated ABI audit found a D3D11 snapshot layout mismatch.
 The Rust class-instance arrays now use the SDK's 253 entries, with
 matching native and Rust size and offset checks. The public state
