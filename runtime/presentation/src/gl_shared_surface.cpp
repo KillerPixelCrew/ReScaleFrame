@@ -5,6 +5,7 @@
 // decided in Rust, which also implements the remaining rsf_gl_* entry points. GL leaves return
 // glGetError after their call; created COM interfaces carry one reference for the caller.
 #include <rescaleframe/gl_shared_surface.h>
+#include "../../backends/common/d3d12_helpers.h"
 #include <windows.h>
 #include <GL/gl.h>
 #include <d3d12.h>
@@ -211,8 +212,7 @@ int32_t list_close(void* list) { return static_cast<ID3D12GraphicsCommandList*>(
 uint64_t fence_completed(void* fence) { return static_cast<ID3D12Fence*>(fence)->GetCompletedValue(); }
 int fence_wait(void* fence, uint64_t value, void* event, uint32_t milliseconds)
 {
-    return SUCCEEDED(static_cast<ID3D12Fence*>(fence)->SetEventOnCompletion(value, event)) &&
-           WaitForSingleObject(event, milliseconds) == WAIT_OBJECT_0;
+    return SUCCEEDED(rsf::wait_fence(static_cast<ID3D12Fence*>(fence), value, event, milliseconds));
 }
 int32_t queue_wait(void* queue, void* fence, uint64_t value)
 {

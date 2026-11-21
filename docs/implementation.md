@@ -4,6 +4,13 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Shared D3D12 waits now require the requested fence value after an event
+wake. Rust handles stale wakes and device removal within the original wait
+budget. The OpenGL bridge and D3D12 render host use the same wait,
+and the OpenGL owner refuses the device-removal fence value in its fast
+path. Source review traced the C++ callers and their Rust linkage. The
+stale-wake and removal fixtures remain unrun.
+
 Vulkan presentation now honors `NO_FG` and `AMBIGUOUS_ID` when the
 explicit output record supplies those flags after prepare. A matching
 source is still consumed by the ordinary Present. The identity-only

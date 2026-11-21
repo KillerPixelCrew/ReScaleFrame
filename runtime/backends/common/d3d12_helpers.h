@@ -4,6 +4,9 @@
 #include <d3d12.h>
 #include <cstdint>
 
+extern "C" HRESULT rsf_core_d3d12_wait_fence(void* fence, uint64_t value, void* event, uint32_t timeout_ms,
+    uint64_t (*completed)(void*), HRESULT (*arm)(void*, uint64_t, void*));
+
 namespace rsf {
 // Whole-resource transition. A no-op when the states already match, which D3D12 would otherwise
 // reject as a redundant barrier on some drivers (fsr_generation was the only copy that checked).
@@ -36,13 +39,11 @@ inline void copy_transitioned(ID3D12GraphicsCommandList* list,
 // (DXGI_ERROR_DEVICE_HUNG). `event` is an auto-reset event the caller owns.
 inline HRESULT wait_fence(ID3D12Fence* fence, uint64_t value, HANDLE event, DWORD timeout_ms = 10000)
 {
-    if (!value) return S_OK;
-    if (!fence || !event) return E_FAIL;
-    const uint64_t done = fence->GetCompletedValue();
-    if (done == UINT64_MAX) return DXGI_ERROR_DEVICE_REMOVED;
-    if (done >= value) return S_OK;
-    if (FAILED(fence->SetEventOnCompletion(value, event))) return E_FAIL;
-    return WaitForSingleObject(event, timeout_ms) == WAIT_OBJECT_0 ? S_OK : DXGI_ERROR_DEVICE_HUNG;
+    return rsf_core_d3d12_wait_fence(fence, value, event, timeout_ms,
+        [](void* native) -> uint64_t { return static_cast<ID3D12Fence*>(native)->GetCompletedValue(); },
+        [](void* native, uint64_t target, void* wake) -> HRESULT {
+            return static_cast<ID3D12Fence*>(native)->SetEventOnCompletion(target, wake);
+        });
 }
 // Allocator and list of one type, the list created in the closed state. On failure both are
 // released and left null.

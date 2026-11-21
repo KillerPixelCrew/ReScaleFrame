@@ -613,11 +613,13 @@ impl Host {
         }
         match unsafe { (self.p.fence_wait)(fence.as_ptr(), value, FENCE_TIMEOUT_MS) } {
             0 => false,
-            result
-                if result > 0
-                    && unsafe { (self.p.fence_completed)(fence.as_ptr()) } != u64::MAX =>
-            {
-                true
+            result if result > 0 => {
+                let completed = unsafe { (self.p.fence_completed)(fence.as_ptr()) };
+                if completed == u64::MAX {
+                    self.poisoned.store(true, Ordering::Relaxed);
+                    return false;
+                }
+                completed >= value
             }
             _ => {
                 self.poisoned.store(true, Ordering::Relaxed);

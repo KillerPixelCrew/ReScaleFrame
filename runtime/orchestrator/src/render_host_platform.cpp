@@ -15,6 +15,7 @@
 #include <rescaleframe/overlay_fg_stats.h>
 #include <rescaleframe/d3d12_observer.h>
 #include <rescaleframe/sharpening_settings.h>
+#include "../../backends/common/d3d12_helpers.h"
 #include <dxgi1_4.h>
 #include <windows.h>
 #include <d3d12.h>
@@ -75,8 +76,7 @@ int32_t fence_wait(void* fence, uint64_t value, uint32_t timeout)
 {
     HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     if (!event) return 0;
-    const bool completed = SUCCEEDED(static_cast<ID3D12Fence*>(fence)->SetEventOnCompletion(value, event)) &&
-        WaitForSingleObject(event, timeout) == WAIT_OBJECT_0;
+    const bool completed = SUCCEEDED(rsf::wait_fence(static_cast<ID3D12Fence*>(fence), value, event, timeout));
     CloseHandle(event);
     return completed ? 1 : -1;
 }

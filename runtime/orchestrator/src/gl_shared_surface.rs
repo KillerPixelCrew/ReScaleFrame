@@ -288,10 +288,16 @@ impl Context {
     }
 
     fn wait_cpu(&self, value: u64) -> bool {
+        if value == 0 {
+            return true;
+        }
         let l = self.leaves;
+        let completed = unsafe { (l.fence_completed)(self.fence.as_ptr()) };
         unsafe {
-            (l.fence_completed)(self.fence.as_ptr()) >= value
-                || (l.fence_wait)(self.fence.as_ptr(), value, self.event.get(), CPU_WAIT_MS) != 0
+            completed != u64::MAX
+                && (completed >= value
+                    || (l.fence_wait)(self.fence.as_ptr(), value, self.event.get(), CPU_WAIT_MS)
+                        != 0)
         }
     }
 

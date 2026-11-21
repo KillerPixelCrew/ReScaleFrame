@@ -50,6 +50,8 @@ mod d3d11_sharpening;
 #[cfg(windows)]
 mod d3d11_state;
 #[cfg(windows)]
+mod d3d12_fence;
+#[cfg(windows)]
 mod d3d12_generation;
 #[cfg(windows)]
 mod d3d12_observer;
