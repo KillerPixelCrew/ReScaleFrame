@@ -393,8 +393,15 @@ particle classification, signature linking and injection at native
 returns. Source comparison matched all four helper HLSL sources and
 compiler requests. The C++ wrapper keeps the typed compiler cache and
 retains aliased input through reconstruction. Malformed declarations
-and missing return sites now refuse. Hull, domain and geometry stage
-assembly remain native. Build, bytecode parity and gameplay remain open.
+and missing return sites now refuse. Build, bytecode parity and gameplay
+remain open.
+
+Rust also links AC7's history geometry shader and augments the native
+geometry shader before each emit. The typed compiler cache and native
+container payload are preserved. Bounds checks reject malformed masks,
+registers and helper triangle indices. Hull and domain assembly remain
+native. Build, emitted bytecode and replay verification remain open.
+[Geometry stage audit](research/rust-ac7-velocity-geometry.md)
 
 ## Rust orchestrator and first Anomaly port
 

@@ -35,10 +35,26 @@ const _: () = {
     assert!(size_of::<SemanticView>() == 40);
 };
 
+impl SemanticView {
+    /// The native call keeps the referenced name readable for the duration of the borrow.
+    pub(crate) unsafe fn borrow(&self) -> Option<Semantic<'_>> {
+        Some(Semantic {
+            name: unsafe { borrowed(self.name.cast::<u8>(), self.name_size) }?,
+            index: self.index,
+            system: self.system,
+            ty: self.ty,
+            reg: self.reg,
+            mask: self.mask,
+            used: self.used,
+        })
+    }
+}
+
 type AppendChunk = unsafe extern "C" fn(*mut c_void, *const ChunkView) -> bool;
 pub(crate) type AppendSemantic = unsafe extern "C" fn(*mut c_void, *const SemanticView) -> bool;
 pub(crate) type Resize = unsafe extern "C" fn(*mut c_void, usize) -> *mut u8;
 
+#[derive(Clone)]
 pub(crate) struct Semantic<'a> {
     pub(crate) name: &'a [u8],
     pub(crate) index: u32,
@@ -312,19 +328,10 @@ unsafe extern "C" fn rsf_core_ac7_velocity_write_signature(
         return false;
     }
     for semantic in semantics {
-        let Some(name) = (unsafe { borrowed(semantic.name.cast::<u8>(), semantic.name_size) })
-        else {
+        let Some(semantic) = (unsafe { semantic.borrow() }) else {
             return false;
         };
-        borrowed_semantics.push(Semantic {
-            name,
-            index: semantic.index,
-            system: semantic.system,
-            ty: semantic.ty,
-            reg: semantic.reg,
-            mask: semantic.mask,
-            used: semantic.used,
-        });
+        borrowed_semantics.push(semantic);
     }
     write_signature(&borrowed_semantics, streams, |size| unsafe {
         native_output(user, resize, size)
