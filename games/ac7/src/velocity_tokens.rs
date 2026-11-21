@@ -1,11 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! AC7 velocity SHEX/SHDR framing, operand decoding and immediate register edits.
-//! Used by Rust pixel, vertex and geometry assembly and the native hull and domain transforms.
 
 use crate::dxbc_chunks::word;
-use crate::velocity_container::{Resize, borrowed, native_output};
 use std::borrow::Cow;
-use std::ffi::c_void;
 
 const CUSTOM_DATA: u32 = 53;
 pub(crate) const DCL_TEMPS: u32 = 104;
@@ -16,15 +13,6 @@ const LENGTH_MASK: u32 = 0x7f00_0000;
 const EXTENDED: u32 = 0x8000_0000;
 const OPERAND_TYPE_AND_DIMENSIONS: u32 = 0x003f_f000;
 
-#[repr(C)]
-struct InstructionView {
-    words: *const u32,
-    count: usize,
-    opcode: u32,
-    declaration: bool,
-}
-
-#[repr(C)]
 pub(crate) struct OperandView {
     pub(crate) token: usize,
     pub(crate) end: usize,
@@ -34,7 +22,6 @@ pub(crate) struct OperandView {
     registers: [u32; 3],
 }
 
-#[repr(C)]
 pub(crate) struct OperandEdit {
     // All old indices must be immediate 32-bit values. UINT32_MAX leaves the operand intact.
     old_count: u32,
@@ -63,11 +50,24 @@ impl OperandEdit {
     };
 
     pub(crate) fn register(kind: u32, register: u32) -> Self {
+        Self::register_from(1, kind, register)
+    }
+
+    pub(crate) fn register_from(old_count: u32, kind: u32, register: u32) -> Self {
         Self {
-            old_count: 1,
+            old_count,
             kind,
             count: 1,
             registers: [register, 0],
+        }
+    }
+
+    pub(crate) fn without_register(kind: u32) -> Self {
+        Self {
+            old_count: 1,
+            kind,
+            count: 0,
+            registers: [0; 2],
         }
     }
 
@@ -80,17 +80,6 @@ impl OperandEdit {
         }
     }
 }
-
-const _: () = {
-    assert!(size_of::<InstructionView>() == 24);
-    assert!(size_of::<OperandView>() == 40);
-    assert!(size_of::<OperandEdit>() == 20);
-};
-
-type AppendInstruction = unsafe extern "C" fn(*mut c_void, *const InstructionView) -> bool;
-type AppendOperand = unsafe extern "C" fn(*mut c_void, *const OperandView) -> bool;
-type SelectEdit = unsafe extern "C" fn(*mut c_void, *const OperandView, *mut OperandEdit) -> bool;
-type StoreWords = unsafe extern "C" fn(*mut c_void, *const u32, usize) -> bool;
 
 fn instruction(words: &[u32]) -> Option<(u32, &[u32])> {
     let token = *words.first()?;
@@ -109,30 +98,6 @@ fn instruction(words: &[u32]) -> Option<(u32, &[u32])> {
         return None;
     }
     Some((opcode, words))
-}
-
-/// The caller lends the chunk data and copies each instruction before returning.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_ac7_velocity_read_instructions(
-    bytes: *const u8,
-    size: usize,
-    profile: u32,
-    user: *mut c_void,
-    append: AppendInstruction,
-) -> bool {
-    let Some(bytes) = (unsafe { borrowed(bytes, size) }) else {
-        return false;
-    };
-    read_instructions(bytes, profile, |opcode, words, declaration| {
-        let view = InstructionView {
-            words: words.as_ptr(),
-            count: words.len(),
-            opcode,
-            declaration,
-        };
-        unsafe { append(user, &view) }.then_some(())
-    })
-    .is_some()
 }
 
 pub(crate) fn read_instructions(
@@ -191,21 +156,6 @@ pub(crate) fn temp_count(code: &[Instruction]) -> u32 {
     code.iter()
         .find(|inst| inst.opcode == DCL_TEMPS)
         .map_or(0, |inst| inst.words[1])
-}
-
-/// The caller lends a stream beginning with its shader profile and a count placeholder.
-/// The resize callback returns a separate writable buffer.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_ac7_velocity_write_instructions(
-    code: *const u32,
-    count: usize,
-    user: *mut c_void,
-    resize: Resize,
-) -> bool {
-    let Some(code) = (unsafe { borrowed(code, count) }) else {
-        return false;
-    };
-    write_instructions(code, |size| unsafe { native_output(user, resize, size) }).is_some()
 }
 
 pub(crate) fn write_instructions<'a>(
@@ -324,20 +274,6 @@ fn decode_operands(words: &[u32]) -> Option<Vec<Operand>> {
     Some(operands)
 }
 
-/// The caller lends a single instruction and copies the requested operand views.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_ac7_velocity_read_operands(
-    words: *const u32,
-    count: usize,
-    user: *mut c_void,
-    append: AppendOperand,
-) -> bool {
-    let Some(mut operands) = (unsafe { borrowed(words, count) }).and_then(read_operands) else {
-        return false;
-    };
-    operands.all(|operand| unsafe { append(user, &operand) })
-}
-
 pub(crate) fn read_operands(words: &[u32]) -> Option<impl Iterator<Item = OperandView> + use<>> {
     Some(
         decode_operands(words)?
@@ -345,32 +281,6 @@ pub(crate) fn read_operands(words: &[u32]) -> Option<impl Iterator<Item = Operan
             .filter(|operand| !operand.nested)
             .map(|operand| operand.view),
     )
-}
-
-/// The caller lends one instruction. SelectEdit supplies register mappings and StoreWords
-/// copies updated words after every edit has been checked. No store is needed for an unchanged
-/// instruction.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_ac7_velocity_rewrite_operands(
-    words: *const u32,
-    count: usize,
-    nested: bool,
-    user: *mut c_void,
-    select: SelectEdit,
-    store: StoreWords,
-) -> bool {
-    let Some(words) = (unsafe { borrowed(words, count) }) else {
-        return false;
-    };
-    let edited = rewrite_operands(words, nested, |view| {
-        let mut edit = OperandEdit::KEEP;
-        unsafe { select(user, view, &mut edit) }.then_some(edit)
-    });
-    match edited {
-        Some(Cow::Owned(edited)) => unsafe { store(user, edited.as_ptr(), edited.len()) },
-        Some(Cow::Borrowed(_)) => true,
-        None => false,
-    }
 }
 
 /// An unchanged instruction borrows its input words.

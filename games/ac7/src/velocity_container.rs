@@ -12,13 +12,6 @@ const SIGNATURE_HEADER: usize = 8;
 const MAX_SEMANTICS: usize = 64;
 
 #[repr(C)]
-struct ChunkView {
-    tag: [u8; 4],
-    bytes: *const u8,
-    size: usize,
-}
-
-#[repr(C)]
 pub(crate) struct SemanticView {
     name: *const c_char,
     name_size: usize,
@@ -30,10 +23,7 @@ pub(crate) struct SemanticView {
     used: u8,
 }
 
-const _: () = {
-    assert!(size_of::<ChunkView>() == 24);
-    assert!(size_of::<SemanticView>() == 40);
-};
+const _: () = assert!(size_of::<SemanticView>() == 40);
 
 impl SemanticView {
     /// The native call keeps the referenced name readable for the duration of the borrow.
@@ -50,7 +40,6 @@ impl SemanticView {
     }
 }
 
-type AppendChunk = unsafe extern "C" fn(*mut c_void, *const ChunkView) -> bool;
 pub(crate) type AppendSemantic = unsafe extern "C" fn(*mut c_void, *const SemanticView) -> bool;
 pub(crate) type Resize = unsafe extern "C" fn(*mut c_void, usize) -> *mut u8;
 
@@ -123,31 +112,6 @@ fn store(bytes: &mut [u8], offset: usize, value: u32) {
     bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
 }
 
-/// The caller lends a container. Each callback must copy the chunk before returning.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_ac7_velocity_read_container(
-    bytes: *const c_void,
-    size: usize,
-    user: *mut c_void,
-    append: AppendChunk,
-) -> bool {
-    if !valid_container_size(size) {
-        return false;
-    }
-    let Some(bytes) = (unsafe { borrowed(bytes.cast::<u8>(), size) }) else {
-        return false;
-    };
-    read_container(bytes, |chunk| {
-        let view = ChunkView {
-            tag: *chunk.tag,
-            bytes: chunk.data.as_ptr(),
-            size: chunk.data.len(),
-        };
-        unsafe { append(user, &view) }.then_some(())
-    })
-    .is_some()
-}
-
 pub(crate) fn read_container<'a>(
     bytes: &'a [u8],
     mut visit: impl FnMut(Chunk<'a>) -> Option<()>,
@@ -188,36 +152,6 @@ pub(crate) fn shader_index(chunks: &[Chunk<'_>]) -> Option<usize> {
     chunk_index(chunks, b"SHEX").or_else(|| chunk_index(chunks, b"SHDR"))
 }
 
-/// The caller lends each chunk and a callback returning a nonoverlapping writable output.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_ac7_velocity_write_container(
-    chunks: *const ChunkView,
-    count: usize,
-    user: *mut c_void,
-    resize: Resize,
-) -> bool {
-    let Some(chunks) = (unsafe { borrowed(chunks, count) }) else {
-        return false;
-    };
-    let mut borrowed_chunks = Vec::new();
-    if borrowed_chunks.try_reserve_exact(count).is_err() {
-        return false;
-    }
-    for chunk in chunks {
-        let Some(data) = (unsafe { borrowed(chunk.bytes, chunk.size) }) else {
-            return false;
-        };
-        borrowed_chunks.push(Chunk {
-            tag: &chunk.tag,
-            data,
-        });
-    }
-    write_container(&borrowed_chunks, |size| unsafe {
-        native_output(user, resize, size)
-    })
-    .is_some()
-}
-
 pub(crate) fn write_container<'a>(
     chunks: &[Chunk<'_>],
     allocate: impl FnOnce(usize) -> Option<&'a mut [u8]>,
@@ -255,19 +189,27 @@ fn signature_layout(streams: bool) -> (usize, usize) {
     (24 + fields_offset, fields_offset)
 }
 
-/// The caller lends a signature chunk. Each callback copies the semantic name and fields.
+/// The caller lends the original container and copies each semantic in signature order.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_ac7_velocity_read_signature(
+unsafe extern "C" fn rsf_core_ac7_velocity_signature(
     bytes: *const u8,
     size: usize,
-    streams: bool,
+    output: bool,
     user: *mut c_void,
     append: AppendSemantic,
 ) -> bool {
-    let Some(bytes) = (unsafe { borrowed(bytes, size) }) else {
+    let Some(chunks) = (unsafe { borrowed(bytes, size) }).and_then(chunks) else {
         return false;
     };
-    read_signature(bytes, streams, |semantic| {
+    let index = if output {
+        chunk_index(&chunks, b"OSGN").or_else(|| chunk_index(&chunks, b"OSG5"))
+    } else {
+        chunk_index(&chunks, b"ISGN")
+    };
+    let Some(chunk) = index.map(|index| &chunks[index]) else {
+        return false;
+    };
+    read_signature(chunk.data, chunk.tag == b"OSG5", |semantic| {
         unsafe { append(user, &semantic.view()) }.then_some(())
     })
     .is_some()
@@ -309,34 +251,6 @@ pub(crate) fn read_signature<'a>(
         })?;
     }
     Some(())
-}
-
-/// The caller lends the semantic records and a nonoverlapping native output allocation.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_ac7_velocity_write_signature(
-    semantics: *const SemanticView,
-    count: usize,
-    streams: bool,
-    user: *mut c_void,
-    resize: Resize,
-) -> bool {
-    let Some(semantics) = (unsafe { borrowed(semantics, count) }) else {
-        return false;
-    };
-    let mut borrowed_semantics = Vec::new();
-    if borrowed_semantics.try_reserve_exact(count).is_err() {
-        return false;
-    }
-    for semantic in semantics {
-        let Some(semantic) = (unsafe { semantic.borrow() }) else {
-            return false;
-        };
-        borrowed_semantics.push(semantic);
-    }
-    write_signature(&borrowed_semantics, streams, |size| unsafe {
-        native_output(user, resize, size)
-    })
-    .is_some()
 }
 
 pub(crate) fn write_signature<'a>(

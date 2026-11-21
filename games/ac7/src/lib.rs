@@ -41,6 +41,8 @@ mod ui_abi;
 mod velocity_container;
 mod velocity_geometry;
 mod velocity_pixel;
+mod velocity_stage;
+mod velocity_tessellation;
 mod velocity_tokens;
 mod velocity_vertex;
 mod view;
