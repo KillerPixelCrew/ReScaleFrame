@@ -30,6 +30,20 @@ rsf_backend_result rsf_ffxgvk_destroy(rsf_ffxgvk*);
    after successful WSI registration. It closes the route to callbacks and
    unregisters the WSI table before closing the leaf and releasing admission. */
 struct rsf_ffxgvk_native;
+using rsf_ffxgvk_core_entries = rsf_vk_function[8];
+using rsf_ffxgvk_wsi_entries = rsf_vk_function[6];
+struct rsf_ffxgvk_open_ops {
+    rsf_ffxgvk_native* (*allocate)(const rsf_fgvk_setup*, uint32_t, uint32_t);
+    void (*close)(rsf_ffxgvk_native*);
+    rsf_vk_function (*symbol)(void*, const char*);
+    int32_t (*device_proc)(rsf_ffxgvk_native*, const char*, uint32_t aliases, rsf_vk_function*);
+    int32_t (*instance_proc)(rsf_ffxgvk_native*, const char*, rsf_vk_function*);
+    void (*bind_core)(rsf_ffxgvk_native*, const rsf_ffxgvk_core_entries*);
+    int32_t (*read_memory)(rsf_ffxgvk_native*, rsf_vk_function);
+    int32_t (*load_resources)(rsf_ffxgvk_native*);
+    int32_t (*initialize_capture)(rsf_ffxgvk_native*, void** resources);
+    void (*bind_wsi)(rsf_ffxgvk_native*, const rsf_ffxgvk_wsi_entries*);
+};
 struct rsf_vkfg_platform;
 struct rsf_vkfg_barrier;
 struct rsf_vkfg_image_copy;
@@ -69,6 +83,8 @@ struct rsf_ffxgvk_ops {
 };
 
 extern "C" {
+int32_t rsf_core_ffxgvk_open(const rsf_ffxgvk_open_ops*, const rsf_fgvk_setup*, void* module,
+    uint32_t width, uint32_t height, rsf_ffxgvk_native**, void** resources);
 /* A null ops table reports a disabled build after validating the arguments. */
 rsf_backend_result rsf_core_ffxgvk_create(const rsf_ffxgvk_ops*, const rsf_fgvk_setup*, const rsf_ffxgvk_swapchain*,
     rsf_ffxgvk**, uint64_t* chain);

@@ -73,3 +73,28 @@ the baseline. The public FG interfaces keep their existing signatures.
 Source comparison, Rust 1.94.1 formatting, locked offline Cargo metadata and Git whitespace
 checks passed. Build, compile and link of both feature paths, Clippy, fixture execution,
 device and game behavior, deployment and push remain user-owned.
+
+## FidelityFX Vulkan FG startup
+
+Compared with `cc8f17ff`, Rust now owns the unpublished graphics
+capsule while it resolves the required FidelityFX and Vulkan entries.
+It preserves the order of the five FidelityFX exports and the three
+device lookups that use the existing alias policy. Memory properties,
+resource setup and capture initialization follow. The corrected WSI
+registration export is then required, and all five WSI functions are
+queried through the original device resolver without alias promotion.
+
+Typed native leaves bind those addresses and populate the same
+descriptor storage. A failed stage closes the unpublished capsule
+before returning its existing result. The outer owner still holds the
+module and reserves the same WSI route before startup. Registration
+and callback publication follow a successful open as before. The
+27-slot provider table, existing WSI fixtures and disabled path
+keep their source interfaces.
+
+The new private startup table has ten callbacks. Source comparison
+matched their order and the 15 required names across all lookup
+groups. The new fixture checks that the full WSI group is queried
+and partial startup closes on a miss. Pinned formatting, locked
+offline metadata and whitespace passed. Builds, fixtures, and
+device and game verification remain open.

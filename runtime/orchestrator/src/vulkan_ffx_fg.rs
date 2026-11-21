@@ -4,6 +4,8 @@
 // and their marshalling, command recording, capture and timing. This owner
 // decides admission, including WSI registration and the process-wide route, slot reuse,
 // copy transitions, completion evidence, presentation admission and retirement order.
+mod startup;
+
 use crate::allocate_handle;
 use crate::sdk_module::{FIDELITYFX_DLL, Loader, SdkModule};
 use crate::sr_session::has_capacity;

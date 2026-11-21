@@ -1083,6 +1083,13 @@ binary export, fixture and runtime verification remain open.
 [NGX loader](research/rust-vulkanstory-ngx-loader.md) ·
 [Vulkan FG transfers](research/rust-vulkan-dx12-copy-plan.md)
 
+The native FidelityFX Vulkan FG owner now resolves startup dispatch
+and owns the unpublished capsule in Rust through resource and
+capture setup. It closes the capsule on refusal before WSI
+registration. Source checks matched the lookup order and public
+declarations. Build, fixture and live verification remain open.
+[FidelityFX Vulkan FG startup](research/rust-vulkan-ffx-fg-copy-plan.md#fidelityfx-vulkan-fg-startup)
+
 The shared Vulkan-to-D3D12 FG owner now resolves the device and
 instance dispatch, admits the required format features, and cleans
 up refused startup in Rust for both XeSS and FSR4. Source checks

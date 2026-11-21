@@ -440,6 +440,12 @@ C++ unwind. Native builds, the unwind fixture and game checks remain
 open.
 [Native draw calls and restoration](research/rust-anomaly-motion-stage.md#native-draw-calls-and-restoration)
 
+The native FidelityFX Vulkan FG provider now resolves SDK and WSI
+entries and retires failed startup in Rust. Its outer provider
+table and public declarations match the existing interfaces in
+source. Builds and live checks remain open.
+[FidelityFX Vulkan FG startup](research/rust-vulkan-ffx-fg-copy-plan.md#fidelityfx-vulkan-fg-startup)
+
 ## D3D11 observer startup probe
 
 Compared with `fe267be4`, the Rust observer owns the temporary
