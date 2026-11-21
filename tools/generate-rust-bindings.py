@@ -51,7 +51,7 @@ generate("games/anomaly/src/fg_stage_abi.rs", "games/anomaly/src/fg_stage_platfo
          "rsf_(anomaly_fg_.*|d3d11_(present_(api|setup)|fg_api)|get_d3d11_(present|fg)_api_fn|"
          "native_fg_(options|status)|fg_status|dlss_frame|observer_present(_event)?(_fn)?|backend_log_fn)",
          "RSF_(D3D11_(PRESENT|FG)_API_(VERSION|ENTRY_POINT)|DLSS_ABI_VERSION|"
-         "FG_(BACKEND_.*|OFF|FIXED)|REFLEX_(ON|BOOST)|UI_MODE_BACKBUFFER_HUDLESS)",
+         "FG_(BACKEND_.*|OFF|FIXED|STAT_TOTAL_PRESENTED)|REFLEX_(ON|BOOST)|UI_MODE_BACKBUFFER_HUDLESS)",
          ["-Isdk/game/include", "-Iruntime/orchestrator/include", "-Iruntime/contract/include",
           "-Iruntime/graphics/include", "-Iruntime/presentation/include", "-Iruntime/backends/dlss/include"],
          ["--no-recursive-allowlist", "--with-derive-default", "--raw-line", "#![allow(dead_code)]",

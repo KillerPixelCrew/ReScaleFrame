@@ -439,6 +439,12 @@ already checked by the collector. The AVX retest captured generation
 0 before resize and generation 1 afterwards.
 See [the capture binding results](research/rust-anomaly-sr-pass.md#shared-capture-binding).
 
+The foreground Standard run verified live XeSS SR with DLSS-G, FSR3
+and XeSS frame generation, FG Off, and the return to DLSS-G. Provider
+switches exposed a wrapped diagnostic delta. The Anomaly report
+now compares valid totals within one bridge generation.
+See [the live provider switches](research/rust-anomaly-sr-pass.md#live-provider-switches).
+
 The merged Release sharpening fixtures passed on D3D11, D3D12 and
 Vulkan. The D3D11 fixture checks that Depth RCAS and Depth DAS preserve
 source channel ratios and alpha in HDR and when output clamping applies.

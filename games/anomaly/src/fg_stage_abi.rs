@@ -25,6 +25,7 @@ pub const RSF_FG_OFF: u32 = 0;
 pub const RSF_FG_FIXED: u32 = 1;
 pub const RSF_REFLEX_ON: u32 = 1;
 pub const RSF_REFLEX_BOOST: u32 = 2;
+pub const RSF_FG_STAT_TOTAL_PRESENTED: u32 = 1;
 pub const RSF_DLSS_ABI_VERSION: u32 = 5;
 pub const RSF_D3D11_FG_API_VERSION: u32 = 3;
 pub const RSF_D3D11_FG_API_ENTRY_POINT: &[u8; 21] = b"rsf_get_d3d11_fg_api\0";

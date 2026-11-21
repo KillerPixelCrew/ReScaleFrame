@@ -278,3 +278,25 @@ generation 0 and frame 392 at 1067×600 with generation 1. Both bundles
 contained motion and G-buffer position, and the game exited normally.
 The test restored the isolated INI after exit. Its captures and
 comparison are in `evidence/avx-shared-dump-generation/`.
+
+## Live provider switches
+
+An isolated Standard run of `8ccee0311c2f` switched from DLSS to
+XeSS Quality at 942×530 to 1600×900. XeSS evaluated 120 of 120
+frames in steady windows. The frame-generation overlay switched
+from DLSS-G through FSR3 and XeSS, then disabled FG and returned to
+DLSS-G while XeSS SR kept running. FSR3 and XeSS each reported active
+2× generation in live windows. An Off sample showed one display
+present per rendered frame, and DLSS-G returned to 2×. The last
+periodic sample reported a cumulative 6,209 SR evaluations with zero
+refusals. The process exited with code 0. Logs and settings are in
+`evidence/standard-provider-switches/`.
+
+The transition windows exposed a diagnostic underflow. The report
+subtracted the preceding provider's total from the new provider's
+smaller total and printed values near `u64::MAX`. The report now
+compares two valid, increasing totals from the same bridge generation.
+A switch, a missing total or a decrease reports `unavailable`.
+The regression verifies same-generation counts, a decrease and
+switches in either direction. The Runtime counters and public ABI
+retain their existing meaning.

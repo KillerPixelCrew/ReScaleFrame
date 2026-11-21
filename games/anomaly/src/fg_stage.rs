@@ -209,8 +209,23 @@ impl Render {
 struct Totals {
     policy: Counters,
     runtime_tagged: u64,
-    vendor_presented: u64,
+    vendor_presented: Option<PresentTotal>,
     captures: u64,
+}
+
+#[derive(Clone, Copy)]
+struct PresentTotal {
+    generation: u64,
+    count: u64,
+}
+
+impl PresentTotal {
+    fn delta(self, previous: Self) -> Option<u64> {
+        if self.generation != previous.generation {
+            return None;
+        }
+        self.count.checked_sub(previous.count)
+    }
 }
 
 struct Engine {
@@ -1030,14 +1045,28 @@ extern "C" fn rsf_anomaly_fg_stage_report(emit: rsf_game_log_fn, user: Raw) {
     let Some(stage) = installed().filter(|_| emit.is_some()) else {
         return;
     };
+    let bridge = stage.tables.present;
+    let generation = bridge.generation.map(|get| unsafe { get() });
     let runtime = stage.runtime_status().unwrap_or_default();
+    let vendor_presented = generation
+        .filter(|&before| {
+            runtime.available != 0
+                && runtime.vendor.valid_statistics & RSF_FG_STAT_TOTAL_PRESENTED != 0
+                && bridge
+                    .generation
+                    .is_some_and(|get| unsafe { get() } == before)
+        })
+        .map(|generation| PresentTotal {
+            generation,
+            count: runtime.vendor.total_presented,
+        });
     let captures = stage.options.capture.lock().unwrap().total;
     let (now, previous) = {
         let mut engine = stage.engine.lock().unwrap();
         let now = Totals {
             policy: engine.policy.counters(),
             runtime_tagged: runtime.tagged_frames,
-            vendor_presented: runtime.vendor.total_presented,
+            vendor_presented,
             captures,
         };
         let previous = mem::replace(&mut engine.reported, now);
@@ -1047,6 +1076,11 @@ extern "C" fn rsf_anomaly_fg_stage_report(emit: rsf_game_log_fn, user: Raw) {
     let delta = u64::wrapping_sub;
     let skipped: [u64; 5] = std::array::from_fn(|i| delta(a.skipped[i], b.skipped[i]));
     let resets: [u64; 7] = std::array::from_fn(|i| delta(a.resets[i], b.resets[i]));
+    let vendor_presents = now
+        .vendor_presented
+        .zip(previous.vendor_presented)
+        .and_then(|(now, previous)| now.delta(previous))
+        .map_or_else(|| "unavailable".to_owned(), |count| count.to_string());
     let log = Log {
         callback: emit,
         user: user as usize,
@@ -1060,9 +1094,8 @@ extern "C" fn rsf_anomaly_fg_stage_report(emit: rsf_game_log_fn, user: Raw) {
         delta(a.unpresented, b.unpresented), delta(a.scope_frames, b.scope_frames),
         skipped[1], skipped[2], skipped[3], skipped[4], resets[1], resets[2], resets[3], resets[4],
         resets[5], resets[6], delta(now.runtime_tagged, previous.runtime_tagged),
-        delta(now.vendor_presented, previous.vendor_presented), delta(now.captures, previous.captures),
+        vendor_presents, delta(now.captures, previous.captures),
     ));
-    let bridge = stage.tables.present;
     let (owner, backend, choices, switch) = unsafe {
         (
             bridge.has_owner.unwrap()(),

@@ -2,6 +2,19 @@
 use super::*;
 
 #[test]
+fn vendor_present_delta_requires_one_generation_and_increasing_totals() {
+    let previous = PresentTotal {
+        generation: 1,
+        count: 1000,
+    };
+    let sample = |generation, count| PresentTotal { generation, count };
+    assert_eq!(sample(1, 1240).delta(previous), Some(240));
+    assert_eq!(sample(1, 999).delta(previous), None);
+    assert_eq!(sample(2, 120).delta(previous), None);
+    assert_eq!(sample(2, 2000).delta(previous), None);
+}
+
+#[test]
 fn changing_scope_hold_applies_to_the_next_source_without_resetting_history() {
     use crate::fg_policy_abi::{RSF_ANOMALY_RESET_SCOPE_END, RSF_ANOMALY_SKIP_SCOPE};
 
