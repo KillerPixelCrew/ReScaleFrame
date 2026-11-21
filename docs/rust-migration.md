@@ -457,6 +457,12 @@ Rust. The typed SDK initialization and feature calls retain their
 native boundaries. Builds, fixtures and live checks remain open.
 [Owned and shared SR startup](research/rust-d3d11-streamline-resolution.md#owned-and-shared-sr-startup)
 
+D3D11 Streamline SR capability reporting and render planning now
+run in Rust with typed native queries. The source comparison
+matched adapter identity, result mapping and quality modes. Builds,
+fixtures and live checks remain open.
+[Support and render planning](research/rust-d3d11-streamline-resolution.md#support-and-render-planning)
+
 ## D3D11 observer startup probe
 
 Compared with `fe267be4`, the Rust observer owns the temporary

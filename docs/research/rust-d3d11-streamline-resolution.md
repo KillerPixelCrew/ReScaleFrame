@@ -64,3 +64,24 @@ and tagging preferences, the public signatures and disabled stubs.
 The added fixture covers the strict and owned feature distinction.
 Pinned formatting, locked offline metadata and whitespace passed.
 Builds, fixtures and Standard and AVX live verification remain open.
+
+## Support and render planning
+
+Compared with `63730f3b`, Rust holds the queried D3D11 DXGI device
+and adapter until it has read the LUID, then releases both before
+calling Streamline. Shared SR still reads the LUID of the borrowed
+D3D12 device. Both paths report capabilities for the rendering
+adapter. Rust publishes the same support flags before querying
+optional driver version requirements.
+
+The render plan and frame options now use one Rust quality-to-mode
+mapping, including the existing Off result for unknown qualities.
+Rust publishes the six size fields after the native optimal
+settings call succeeds. The typed SDK calls and the existing
+diagnostic messages retain their source paths.
+
+The private planning table has seven callbacks and the main table
+has 13. Source comparison matched the pinned result codes, mode
+values, public declarations and disabled stubs. Pinned formatting,
+locked offline metadata and whitespace passed. Builds, fixtures and
+Standard and AVX live capability and plan verification remain open.

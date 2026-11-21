@@ -1059,6 +1059,12 @@ initializer keeps the pinned SDK preferences and the same
 feature and log effects. Builds, fixtures and live checks remain open.
 [Owned and shared SR startup](research/rust-d3d11-streamline-resolution.md#owned-and-shared-sr-startup)
 
+D3D11 Streamline SR now owns capability reporting and render plans
+in Rust. It releases the temporary DXGI interfaces before the SDK
+support query and uses the same quality mapping for plans and
+frame options. Builds and live checks remain open.
+[Support and render planning](research/rust-d3d11-streamline-resolution.md#support-and-render-planning)
+
 Anomaly's Rust motion owner now checks the existing Standard and AVX
 profile guards in the same order. The native leaf supplies the profile
 and the guarded reader. FidelityFX Vulkan SR and FG also share one

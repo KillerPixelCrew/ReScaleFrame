@@ -31,9 +31,10 @@
 
 #include <cstddef>
 #include <cstdio>
+#include <cstring>
 
 struct rsf_streamline_sr_options {
-    uint32_t quality, width, height, hdr, auto_exposure, alpha, preset;
+    uint32_t mode, width, height, hdr, auto_exposure, alpha, preset;
 };
 
 using rsf_streamline_sr_entry_addresses = void*[12];
@@ -62,11 +63,26 @@ struct rsf_streamline_sr_startup {
     void (*report)(const char*);
 };
 
+struct rsf_streamline_sr_versions {
+    uint32_t required_major, required_minor, detected_major, detected_minor;
+};
+struct rsf_streamline_sr_sizes {
+    uint32_t optimal[2], minimum[2], maximum[2];
+};
+struct rsf_streamline_sr_planning {
+    int32_t (*query_dxgi_device)(void*, void**);
+    int32_t (*get_adapter)(void*, void**);
+    int32_t (*adapter_luid)(void*, uint64_t*);
+    int32_t (*device_luid)(void*, uint64_t*);
+    int32_t (*query_support)(void*, uint64_t, uint32_t*);
+    int32_t (*requirements)(void*, rsf_streamline_sr_versions*);
+    int32_t (*optimal)(void*, uint32_t, uint32_t, uint32_t, rsf_streamline_sr_sizes*);
+};
+
 struct rsf_streamline_sr_platform {
     void* (*load)(const wchar_t*, const rsf_dlss_setup*);
     const rsf_streamline_sr_startup* startup;
-    int32_t (*support)(void*, void*, uint32_t, rsf_dlss_support*);
-    int32_t (*plan)(void*, rsf_dlss_plan*);
+    const rsf_streamline_sr_planning* planning;
     int32_t (*present)(void*, void*, uint32_t, uint32_t, uint32_t);
     void* (*token)(void*, void*, uint64_t, uint32_t);
     int32_t (*constants)(void*, void*, void*, uint64_t, uint32_t, const rsf_dlss_frame*);
@@ -283,80 +299,70 @@ int32_t present(void* native, void* swapchain, uint32_t interval, uint32_t flags
     return SUCCEEDED(result) && !skip ? RSF_DLSS_OK : RSF_DLSS_ERROR_FEATURE_FAILED;
 } catch (...) { return RSF_DLSS_ERROR_FEATURE_FAILED; }
 
-int32_t query_support(void* native, void* device, uint32_t shared, rsf_dlss_support* support) noexcept try
+int32_t query_dxgi_device(void* device, void** out) noexcept try
 {
-    auto& self = *static_cast<Native*>(native);
-    // The adapter comes from the game's own device. Enumerating adapters instead would answer for
-    // a GPU the game is not rendering on, which on a laptop is the usual case rather than a rare
-    // one.
-    DXGI_ADAPTER_DESC description{};
-    if (shared) {
-        description.AdapterLuid = static_cast<ID3D12Device*>(device)->GetAdapterLuid();
-    } else {
-        Microsoft::WRL::ComPtr<IDXGIDevice> dxgi_device;
-        Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
-        if (FAILED(static_cast<ID3D11Device*>(device)->QueryInterface(IID_PPV_ARGS(&dxgi_device))) ||
-            FAILED(dxgi_device->GetAdapter(&adapter)) || !adapter) {
-            return RSF_DLSS_ERROR_NOT_READY;
-        }
-        if (FAILED(adapter->GetDesc(&description))) {
-            return RSF_DLSS_ERROR_NOT_READY;
-        }
-    }
-
-    sl::AdapterInfo info{};
-    info.deviceLUID = reinterpret_cast<uint8_t*>(&description.AdapterLuid);
-    info.deviceLUIDSizeInBytes = sizeof(description.AdapterLuid);
-
-    const sl::Result result = self.sl.is_feature_supported(sl::kFeatureDLSS, info);
-    support->supported = result == sl::Result::eOk ? 1u : 0u;
-    support->driver_out_of_date = result == sl::Result::eErrorDriverOutOfDate ? 1u : 0u;
-    support->os_out_of_date = result == sl::Result::eErrorOSOutOfDate ? 1u : 0u;
-    support->no_supported_adapter = result == sl::Result::eErrorNoSupportedAdapterFound ? 1u : 0u;
-
-    support->required_driver_major = 0;
-    support->required_driver_minor = 0;
-    support->detected_driver_major = 0;
-    support->detected_driver_minor = 0;
-    sl::FeatureRequirements requirements{};
-    if (self.sl.get_feature_requirements(sl::kFeatureDLSS, requirements) == sl::Result::eOk) {
-        support->required_driver_major = requirements.driverVersionRequired.major;
-        support->required_driver_minor = requirements.driverVersionRequired.minor;
-        support->detected_driver_major = requirements.driverVersionDetected.major;
-        support->detected_driver_minor = requirements.driverVersionDetected.minor;
-    }
-
-    const bool supported = support->supported != 0u;
-    say("DLSS support on this adapter: %s (streamline result %u, driver %u.%u, requires %u.%u)",
-        supported ? "yes" : "no", static_cast<unsigned>(result),
-        support->detected_driver_major, support->detected_driver_minor,
-        support->required_driver_major, support->required_driver_minor);
-    return supported ? RSF_DLSS_OK : RSF_DLSS_ERROR_NOT_SUPPORTED;
+    const auto result = static_cast<ID3D11Device*>(device)->QueryInterface(__uuidof(IDXGIDevice), out);
+    return SUCCEEDED(result) ? RSF_DLSS_OK : RSF_DLSS_ERROR_NOT_READY;
 } catch (...) { return RSF_DLSS_ERROR_FEATURE_FAILED; }
 
-int32_t render_plan(void* native, rsf_dlss_plan* plan) noexcept try
+int32_t get_adapter(void* device, void** out) noexcept try
 {
-    auto& self = *static_cast<Native*>(native);
-    sl::DLSSOptions options{};
-    options.mode = rsf::dlss_mode(plan->quality);
-    options.outputWidth = plan->output_width;
-    options.outputHeight = plan->output_height;
+    Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
+    const auto result = static_cast<IDXGIDevice*>(device)->GetAdapter(&adapter);
+    *out = adapter.Detach();
+    return SUCCEEDED(result) ? RSF_DLSS_OK : RSF_DLSS_ERROR_NOT_READY;
+} catch (...) { return RSF_DLSS_ERROR_FEATURE_FAILED; }
 
+int32_t adapter_luid(void* adapter, uint64_t* out) noexcept try
+{
+    DXGI_ADAPTER_DESC description{};
+    if (FAILED(static_cast<IDXGIAdapter*>(adapter)->GetDesc(&description)))
+        return RSF_DLSS_ERROR_NOT_READY;
+    std::memcpy(out, &description.AdapterLuid, sizeof(*out));
+    return RSF_DLSS_OK;
+} catch (...) { return RSF_DLSS_ERROR_FEATURE_FAILED; }
+
+int32_t device_luid(void* device, uint64_t* out) noexcept try
+{
+    const auto luid = static_cast<ID3D12Device*>(device)->GetAdapterLuid();
+    std::memcpy(out, &luid, sizeof(*out));
+    return RSF_DLSS_OK;
+} catch (...) { return RSF_DLSS_ERROR_FEATURE_FAILED; }
+
+int32_t query_support(void* native, uint64_t luid, uint32_t* out) noexcept try
+{
+    sl::AdapterInfo info{};
+    info.deviceLUID = reinterpret_cast<uint8_t*>(&luid);
+    info.deviceLUIDSizeInBytes = sizeof(luid);
+    *out = static_cast<uint32_t>(static_cast<Native*>(native)->sl.is_feature_supported(sl::kFeatureDLSS, info));
+    return RSF_DLSS_OK;
+} catch (...) { return RSF_DLSS_ERROR_FEATURE_FAILED; }
+
+int32_t requirements(void* native, rsf_streamline_sr_versions* out) noexcept try
+{
+    sl::FeatureRequirements requirements{};
+    if (static_cast<Native*>(native)->sl.get_feature_requirements(sl::kFeatureDLSS, requirements) == sl::Result::eOk) {
+        *out = {requirements.driverVersionRequired.major, requirements.driverVersionRequired.minor,
+            requirements.driverVersionDetected.major, requirements.driverVersionDetected.minor};
+    }
+    return RSF_DLSS_OK;
+} catch (...) { return RSF_DLSS_ERROR_FEATURE_FAILED; }
+
+int32_t optimal(void* native, uint32_t mode, uint32_t width, uint32_t height,
+    rsf_streamline_sr_sizes* out) noexcept try
+{
+    sl::DLSSOptions options{};
+    options.mode = static_cast<sl::DLSSMode>(mode);
+    options.outputWidth = width;
+    options.outputHeight = height;
     sl::DLSSOptimalSettings settings{};
-    const sl::Result result = self.get_optimal_settings(options, settings);
+    const auto result = static_cast<Native*>(native)->get_optimal_settings(options, settings);
     if (result != sl::Result::eOk) {
         say("slDLSSGetOptimalSettings failed with result %u", static_cast<unsigned>(result));
         return RSF_DLSS_ERROR_FEATURE_FAILED;
     }
-
-    plan->render_width = settings.optimalRenderWidth;
-    plan->render_height = settings.optimalRenderHeight;
-    plan->render_width_min = settings.renderWidthMin;
-    plan->render_height_min = settings.renderHeightMin;
-    plan->render_width_max = settings.renderWidthMax;
-    plan->render_height_max = settings.renderHeightMax;
-    say("DLSS wants %ux%u to produce %ux%u", plan->render_width, plan->render_height,
-        plan->output_width, plan->output_height);
+    *out = {{settings.optimalRenderWidth, settings.optimalRenderHeight},
+        {settings.renderWidthMin, settings.renderHeightMin}, {settings.renderWidthMax, settings.renderHeightMax}};
     return RSF_DLSS_OK;
 } catch (...) { return RSF_DLSS_ERROR_FEATURE_FAILED; }
 
@@ -419,7 +425,7 @@ int32_t set_options(void* native, uint32_t slot, const rsf_streamline_sr_options
     const auto preset = static_cast<sl::DLSSPreset>(input->preset);
     options.dlaaPreset = options.qualityPreset = options.balancedPreset = preset;
     options.performancePreset = options.ultraPerformancePreset = options.ultraQualityPreset = preset;
-    options.mode = rsf::dlss_mode(input->quality);
+    options.mode = static_cast<sl::DLSSMode>(input->mode);
     options.outputWidth = input->width;
     options.outputHeight = input->height;
     options.colorBuffersHDR = flag(input->hdr);
@@ -540,10 +546,20 @@ static_assert(uint64_t(sl::PreferenceFlags::eUseManualHooking) == (1ull << 2) &&
     uint32_t(sl::RenderAPI::eD3D11) == 0 && uint32_t(sl::LogLevel::eDefault) == 1 && sl::kFeatureDLSS == 0);
 static_assert(uint32_t(sl::EngineType::eCustom) == 0 && uint32_t(sl::EngineType::eUnreal) == RSF_DLSS_ENGINE_UNREAL &&
     uint32_t(sl::EngineType::eUnity) == RSF_DLSS_ENGINE_UNITY);
-constexpr rsf_streamline_sr_platform platform{load_owned, &startup, query_support,
-    render_plan, present, get_token, set_constants, set_options, set_tags, evaluate, drain,
+constexpr rsf_streamline_sr_planning planning{
+    query_dxgi_device, get_adapter, adapter_luid, device_luid, query_support, requirements, optimal,
+};
+static_assert(sizeof(LUID) == 8 && sizeof(rsf_streamline_sr_versions) == 16 && sizeof(rsf_streamline_sr_sizes) == 24);
+static_assert(sizeof(rsf_streamline_sr_planning) == 7 * sizeof(void*));
+static_assert(uint32_t(sl::Result::eOk) == 0 && uint32_t(sl::Result::eErrorDriverOutOfDate) == 2 &&
+    uint32_t(sl::Result::eErrorOSOutOfDate) == 3 && uint32_t(sl::Result::eErrorNoSupportedAdapterFound) == 6);
+static_assert(uint32_t(sl::DLSSMode::eOff) == 0 && uint32_t(sl::DLSSMode::eMaxPerformance) == 1 &&
+    uint32_t(sl::DLSSMode::eBalanced) == 2 && uint32_t(sl::DLSSMode::eMaxQuality) == 3 &&
+    uint32_t(sl::DLSSMode::eUltraPerformance) == 4 && uint32_t(sl::DLSSMode::eDLAA) == 6);
+constexpr rsf_streamline_sr_platform platform{load_owned, &startup, &planning,
+    present, get_token, set_constants, set_options, set_tags, evaluate, drain,
     release_viewport, shutdown, destroy};
-static_assert(sizeof(rsf_streamline_sr_platform) == 14 * sizeof(void*));
+static_assert(sizeof(rsf_streamline_sr_platform) == 13 * sizeof(void*));
 static_assert(RSF_DLSS_ERROR_LOAD_FAILED == -4);
 static_assert(sizeof(rsf_streamline_sr_options) == 28);
 static_assert(sizeof(rsf_dlss_setup) == 88 && sizeof(rsf_dlss_support) == 36 &&

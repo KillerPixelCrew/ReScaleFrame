@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+mod planning;
+
 use crate::com_ref::ComRef;
 use crate::diagnostic_output::Output;
 use crate::dlss_streamline_abi::{rsf_dlss_plan as Plan, rsf_dlss_support as Support};
@@ -6,7 +8,7 @@ use crate::gl_pipeline_abi::{rsf_dlss_log_fn as Log, rsf_dlss_setup as Setup};
 use crate::render_abi::{RSF_DLSS_ABI_VERSION, rsf_dlss_frame as Frame};
 use crate::sdk_module::{SdkModule, wide_path};
 use crate::sr_session::has_capacity;
-use std::ffi::{CStr, c_char, c_void};
+use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr::{NonNull, addr_of, null, null_mut};
 use std::sync::Mutex;
 use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
@@ -169,6 +171,12 @@ struct Startup {
 }
 
 impl Startup {
+    fn report_text(&self, line: String) {
+        if let Ok(line) = CString::new(line) {
+            unsafe { (self.report)(line.as_ptr()) };
+        }
+    }
+
     fn open(&self, module: Handle, owned: bool) -> Result<NonNull<c_void>, i32> {
         let native = NonNull::new(unsafe { (self.allocate)() }).ok_or(INIT_FAILED)?;
         let mut entries = [null_mut(); ENTRY_NAMES.len()];
@@ -289,7 +297,7 @@ impl Startup {
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Options {
-    quality: u32,
+    mode: u32,
     width: u32,
     height: u32,
     hdr: u32,
@@ -302,8 +310,7 @@ struct Options {
 struct Platform {
     load: unsafe extern "C" fn(*const u16, &Setup) -> Handle,
     startup: &'static Startup,
-    support: unsafe extern "C" fn(Handle, Handle, u32, *mut Support) -> i32,
-    plan: unsafe extern "C" fn(Handle, *mut Plan) -> i32,
+    planning: &'static planning::Platform,
     present: unsafe extern "C" fn(Handle, Handle, u32, u32, u32) -> i32,
     token: unsafe extern "C" fn(Handle, Handle, u64, u32) -> Handle,
     constants: unsafe extern "C" fn(Handle, Handle, Handle, u64, u32, &Frame) -> i32,
@@ -321,7 +328,7 @@ const _: () = {
     assert!(size_of::<InitPreferences>() == 64);
     assert!(std::mem::offset_of!(InitPreferences, flags) == 32);
     assert!(size_of::<Startup>() == 12 * size_of::<Handle>());
-    assert!(size_of::<Platform>() == 14 * size_of::<Handle>());
+    assert!(size_of::<Platform>() == 13 * size_of::<Handle>());
 };
 
 enum Route {
@@ -511,8 +518,16 @@ unsafe extern "C" fn rsf_core_dlss_streamline_support(
     let Some(device) = session.route.device() else {
         return NOT_READY;
     };
-    let shared = (!session.route.host().is_null()).into();
-    unsafe { (platform.support)(session.native.as_ptr(), device.as_ptr(), shared, support) }
+    let shared = !session.route.host().is_null();
+    unsafe {
+        platform.planning.support(
+            session.native.as_ptr(),
+            device.as_ptr(),
+            shared,
+            support,
+            platform.startup,
+        )
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -539,7 +554,11 @@ unsafe extern "C" fn rsf_core_dlss_streamline_plan(plan: *mut Plan, platform: &P
     else {
         return NOT_READY;
     };
-    unsafe { (platform.plan)(session.native.as_ptr(), plan) }
+    unsafe {
+        platform
+            .planning
+            .plan(session.native.as_ptr(), plan, platform.startup)
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -616,7 +635,7 @@ unsafe extern "C" fn rsf_core_dlss_streamline_evaluate(
     }
 
     let options = Options {
-        quality: frame.quality.min(5),
+        mode: planning::dlss_mode(frame.quality),
         width: frame.output_width,
         height: frame.output_height,
         hdr: (frame.color_encoded == 0).into(),
