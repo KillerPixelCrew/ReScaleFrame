@@ -150,11 +150,20 @@ void* staging_copy(void* context, void* source) noexcept {
     return copy.Detach();
 }
 
+void drop_twin_batch(rsf_sr_twin_batch* batch) noexcept {
+    (void)rsf_anomaly_sr_drop_twin_batch(batch, nullptr);
+}
+
+uint32_t twin_refs(void* raw) {
+    auto* texture = static_cast<ID3D11Texture2D*>(raw);
+    texture->AddRef();
+    return texture->Release() - 1;
+}
+
 // ---- the D3D11/engine host behind the swap controller --------------------------------------------------------
 struct Host final : SwapHost {
-    std::array<Twin, slot_count> twins{};
-    DepthTwin depth{};
-    ScratchTarget scratch{};
+    RustOwner<rsf_sr_twin_batch, drop_twin_batch> twins;
+    void* depth_texture{};
     RoundTripPass pass;
     UpscalePass upscale_pass;
     uint64_t last_drop_refs{};
@@ -168,17 +177,6 @@ struct Host final : SwapHost {
     bool write(void* address, const void* input, std::size_t size) noexcept override { return guarded_copy(address, input, size); }
     ID3D11Device* device() noexcept { ID3D11Device* value{}; return read_global(srp().hw_device_rva, value) ? value : nullptr; }
     ID3D11DeviceContext* context() noexcept { ID3D11DeviceContext* value{}; return read_global(srp().hw_context_rva, value) ? value : nullptr; }
-    static MakeResult result_of(TwinError error) noexcept {
-        return error == TwinError::None ? MakeResult::Created : error == TwinError::Create ? MakeResult::Failed
-            : error == TwinError::Depth ? MakeResult::Depth : MakeResult::Refused;
-    }
-    static uint64_t bytes_of(ID3D11Texture2D* texture) noexcept {
-        if (!texture) return 0;
-        D3D11_TEXTURE2D_DESC desc{};
-        texture->GetDesc(&desc);
-        const uint64_t texel = desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT ? 8 : desc.Format == DXGI_FORMAT_R16_FLOAT ? 2 : 4;
-        return texel * desc.Width * desc.Height;
-    }
     MakeResult make_twins(const TwinRequest& request, TwinSet& out) noexcept override {
         auto* d3d = device();
         if (!d3d) { say("Anomaly SR stage: HW.pDevice is null; twins not created."); return MakeResult::Failed; }
@@ -190,65 +188,37 @@ struct Host final : SwapHost {
             say("Anomaly SR stage: upscale shader could not be created.");
             return MakeResult::Refused;
         }
-        twin_bytes = 0;
-        uint32_t made = 0;
-        for (std::size_t i = 0; i < slot_count; ++i) {
-            const auto& spec = request.spec[i];
-            if (!spec.present) continue;
-            const auto& engine = request.engine[i].fields;
-            const auto error = request.stage == 1
-                ? make_twin(d3d, static_cast<ID3D11Resource*>(engine.surface), engine.uav != nullptr, twins[i])
-                : make_world_twin(d3d, engine, spec.width, spec.height, spec.promote, twins[i]);
-            if (error != TwinError::None) {
-                char text[200];
-                std::snprintf(text, sizeof(text), "Anomaly SR stage: twin of %s refused (%s) at %ux%u; this frame stays stock.",
-                    sr_world_targets[i].name, twin_error_name(error), spec.width, spec.height);
-                say(text);
-                twins = {};
-                return result_of(error);
-            }
-            out.targets[i] = twins[i].fields;
-            twin_bytes += bytes_of(twins[i].texture.Get());
-            ++made;
-        }
-        if (request.stage == 2) {
-            const auto error = make_depth_twin(d3d, static_cast<ID3D11DepthStencilView*>(request.engine_dsv),
-                request.output_width, request.output_height, request.render_width, request.render_height, depth);
-            if (error != TwinError::None) {
-                char text[160];
-                std::snprintf(text, sizeof(text), "Anomaly SR stage: depth twin refused (%s) at %ux%u.", twin_error_name(error),
-                    request.render_width, request.render_height);
-                say(text);
-                twins = {};
-                return result_of(error);
-            }
-            out.depth_dsv = depth.dsv.Get();
-            out.depth_srv = depth.srv.Get();
-            out.depth_width = depth.width;
-            out.depth_height = depth.height;
-            twin_bytes += 4ull * depth.width * depth.height;
-            const auto scratch_error = make_scratch_target(d3d, static_cast<ID3D11RenderTargetView*>(request.engine_rtv),
-                request.render_width, request.render_height, scratch);
-            if (scratch_error != TwinError::None) {
-                char text[160];
-                std::snprintf(text, sizeof(text), "Anomaly SR stage: HW.pBaseRT stand-in refused (%s) at %ux%u.", twin_error_name(scratch_error),
-                    request.render_width, request.render_height);
-                say(text);
-                twins = {};
-                depth = {};
-                return result_of(scratch_error);
-            }
-            out.base_rt = scratch.rtv.Get();
-            twin_bytes += bytes_of(scratch.texture.Get());
-        }
+        rsf_sr_twin_batch_info info{};
+        const auto result = static_cast<MakeResult>(
+            rsf_anomaly_sr_allocate_twin_batch(&d3d11_platform(), d3d, &request, &out, &info));
+        twin_bytes = info.bytes;
         char text[260];
+        if (result != MakeResult::Created) {
+            const auto error = twin_error_name(static_cast<TwinError>(info.cause));
+            if (info.failed_index < slot_count) {
+                const auto i = info.failed_index;
+                const auto& spec = request.spec[i];
+                std::snprintf(text, sizeof(text), "Anomaly SR stage: twin of %s refused (%s) at %ux%u; this frame stays stock.",
+                    sr_world_targets[i].name, error, spec.width, spec.height);
+            } else if (info.failed_index == slot_count) {
+                std::snprintf(text, sizeof(text), "Anomaly SR stage: depth twin refused (%s) at %ux%u.",
+                    error, request.render_width, request.render_height);
+            } else {
+                std::snprintf(text, sizeof(text), "Anomaly SR stage: HW.pBaseRT stand-in refused (%s) at %ux%u.",
+                    error, request.render_width, request.render_height);
+            }
+            say(text);
+            return result;
+        }
+        twins.reset(info.owner);
+        depth_texture = info.depth_texture;
         if (request.stage == 1)
             std::snprintf(text, sizeof(text), "Anomaly SR stage: FP16 twins created for generic0/generic_temp at %ux%u (uav=%d/%d).",
                 out.targets[0].width, out.targets[0].height, out.targets[0].uav ? 1 : 0, out.targets[1].uav ? 1 : 0);
         else
             std::snprintf(text, sizeof(text),
                 "Anomaly SR stage 2: %u world twins, a depth twin and a HW.pBaseRT stand-in created at render %ux%u for output %ux%u (%.1f MiB).",
-                made, request.render_width, request.render_height, request.output_width, request.output_height,
+                info.made, request.render_width, request.render_height, request.output_width, request.output_height,
                 double(twin_bytes) / (1024.0 * 1024.0));
         say(text);
         return MakeResult::Created;
@@ -256,15 +226,8 @@ struct Host final : SwapHost {
     void drop_twins() noexcept override {
         // Reference counts after our own views are gone. The engine's surface_get() before its generic_temp copy
         // takes references it never releases (stock leaks them on its own targets too), so this is diagnostic only.
-        uint64_t refs{};
-        for (auto& twin : twins) {
-            twin.rtv.Reset(); twin.srv.Reset(); twin.uav.Reset();
-            if (twin.texture) { twin.texture->AddRef(); refs += twin.texture->Release() - 1; }
-            twin = {};
-        }
-        depth = {};
-        scratch = {};
-        last_drop_refs = refs;
+        depth_texture = nullptr;
+        last_drop_refs = rsf_anomaly_sr_drop_twin_batch(twins.release(), twin_refs);
     }
     // Stage 2 and later: the Rust seam pass decides inputs, captures and fallback; the leaves below act on these views.
     bool upscale(const UpscaleInputs& in) noexcept override {
@@ -629,7 +592,7 @@ const rsf_anomaly_sr_stage_platform platform{
         return host.pass.run(host.context(), static_cast<ID3D11ShaderResourceView*>(twin.srv), twin.width, twin.height,
             static_cast<ID3D11RenderTargetView*>(engine.rtv), engine.width, engine.height);
     },
-    .temporal_ready = [] { return host.seam_views && host.upscale_pass.temporal_ready() && host.depth.texture; },
+    .temporal_ready = [] { return host.seam_views && host.upscale_pass.temporal_ready() && host.depth_texture; },
     .temporal_platform = []() -> const void* { return &d3d11_platform(); },
     .motion_target = [](rsf_anomaly_sr_motion_target* out) {
         const auto target = motion::frame_target();
@@ -646,7 +609,7 @@ const rsf_anomaly_sr_stage_platform platform{
             first_person_zero};
         return host.upscale_pass.prepare(host.context(), prepare);
     },
-    .depth_texture = []() -> void* { return host.depth.texture.Get(); },
+    .depth_texture = [] { return host.depth_texture; },
     .reinsert = [](void* reconstruction) {
         return host.seam_views && host.upscale_pass.reinsert(host.context(), *host.seam_views,
             static_cast<ID3D11ShaderResourceView*>(reconstruction));

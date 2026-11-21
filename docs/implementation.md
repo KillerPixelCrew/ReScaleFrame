@@ -4,6 +4,15 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now builds and owns Anomaly's complete SR twin batch. It reuses
+the existing color, depth and scratch allocators and publishes borrowed
+views only after every required allocation succeeds. On refusal, the
+partially built batch drops before the frame falls back to stock. Rust
+also owns the view release order before the native reference-count
+diagnostic. The batch and single-target facade share the conversion
+from a target view to engine fields. Build and runtime validation
+remain open.
+
 Rust now writes Anomaly's SR jitter burst files. The native bridge maps
 the staging textures and reports their DXGI row layout. Rust validates
 the pitch and address range, writes the same packed rows and releases

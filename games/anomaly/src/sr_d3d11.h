@@ -39,30 +39,15 @@ private:
     T* pointer_{};
 };
 
-// The Host drops these views before its diagnostic read of the texture's
-// reference count, while retaining the texture until the twin retires.
-template<class T, uint32_t Kind>
-class TwinView : public ResourceView<T> {
-public:
-    TwinView() noexcept = default;
-    TwinView(rsf_sr_target* owner, void* pointer) noexcept : ResourceView<T>(pointer), owner_(owner) {}
-    void Reset() noexcept {
-        if (this->Get()) rsf_anomaly_sr_release_twin_view(owner_, Kind);
-        ResourceView<T>::operator=(ResourceView<T>{});
-    }
-private:
-    rsf_sr_target* owner_{};
-};
-
 enum class TwinError : uint8_t { None, NotTexture, Shape, Format, Support, Create, Depth };
 const char* twin_error_name(TwinError) noexcept;
 
 using TargetOwner = RustOwner<rsf_sr_target, rsf_anomaly_sr_drop_target>;
 struct Twin {
     ResourceView<ID3D11Texture2D> texture;
-    TwinView<ID3D11RenderTargetView, RSF_SR_RTV> rtv;
-    TwinView<ID3D11ShaderResourceView, RSF_SR_SRV> srv;
-    TwinView<ID3D11UnorderedAccessView, RSF_SR_UAV> uav;
+    ResourceView<ID3D11RenderTargetView> rtv;
+    ResourceView<ID3D11ShaderResourceView> srv;
+    ResourceView<ID3D11UnorderedAccessView> uav;
     TargetFields fields{};
 private:
     TargetOwner owner_;

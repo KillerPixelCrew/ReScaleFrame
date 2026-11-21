@@ -1,12 +1,18 @@
 // SPDX-License-Identifier: MIT
 use super::{DEPTH_SRV, DSV, Extent, Platform, Ptr, RTV, SRV, Texture, UAV, View, pointer};
 use crate::lease::Lease;
+use crate::sr_swap_abi::{
+    RSF_ANOMALY_SWAP_MAKE_CREATED, RSF_ANOMALY_SWAP_MAKE_DEPTH, RSF_ANOMALY_SWAP_MAKE_FAILED,
+    RSF_ANOMALY_SWAP_MAKE_REFUSED, RSF_ANOMALY_SWAP_SLOT_COUNT, rsf_anomaly_swap_fields as Fields,
+    rsf_anomaly_swap_request as Request, rsf_anomaly_swap_twins as Twins,
+};
 use std::ffi::c_void;
 use std::ptr::null;
 
 const UNKNOWN: u32 = 0;
 const RGBA16F: u32 = 10;
 const R32_FLOAT: u32 = 41;
+const R16_FLOAT: u32 = 54;
 const R24G8_TYPELESS: u32 = 44;
 const D24_UNORM_S8_UINT: u32 = 45;
 const UNORM8: [u32; 4] = [27, 28, 87, 90];
@@ -66,6 +72,25 @@ struct TargetView {
     descriptor: Texture,
 }
 
+impl TargetView {
+    fn fields(&self) -> Fields {
+        Fields {
+            surface: self.texture,
+            rtv: self.rtv,
+            uav: self.uav,
+            width: self.size.width,
+            height: self.size.height,
+            format: self.format,
+            texture_surface: self.texture,
+            desc_cache: self.texture,
+            // Texture mirrors the initialized 44-byte D3D11_TEXTURE2D_DESC.
+            desc: unsafe { std::mem::transmute::<Texture, [u8; 44]>(self.descriptor) },
+            srv: self.srv,
+            ..Fields::default()
+        }
+    }
+}
+
 impl Target {
     fn new(texture: Lease) -> Self {
         Self {
@@ -77,14 +102,8 @@ impl Target {
         }
     }
 
-    fn publish(
-        self,
-        descriptor: Texture,
-        format: u32,
-        owner: &mut *mut Self,
-        view: &mut TargetView,
-    ) {
-        *view = TargetView {
+    fn view(&self, descriptor: Texture, format: u32) -> TargetView {
+        TargetView {
             texture: self.texture.as_ptr(),
             rtv: pointer(&self.rtv),
             srv: pointer(&self.srv),
@@ -93,7 +112,17 @@ impl Target {
             size: descriptor.size,
             format,
             descriptor,
-        };
+        }
+    }
+
+    fn publish(
+        self,
+        descriptor: Texture,
+        format: u32,
+        owner: &mut *mut Self,
+        view: &mut TargetView,
+    ) {
+        *view = self.view(descriptor, format);
         *owner = Box::into_raw(Box::new(self));
     }
 }
@@ -260,6 +289,163 @@ impl Device<'_> {
     }
 }
 
+const TWIN_SLOTS: usize = RSF_ANOMALY_SWAP_SLOT_COUNT as usize;
+
+struct TwinBatch {
+    slots: [Option<Target>; TWIN_SLOTS],
+    _depth: Option<Target>,
+    _scratch: Option<Target>,
+}
+
+#[repr(C)]
+struct TwinBatchInfo {
+    owner: *mut TwinBatch,
+    depth_texture: Ptr,
+    bytes: u64,
+    made: u32,
+    failed_index: u32,
+    cause: Error,
+}
+
+const _: () = assert!(size_of::<TwinBatchInfo>() == 40);
+
+impl TwinBatchInfo {
+    fn refuse(&mut self, index: usize, error: Error) -> u32 {
+        self.failed_index = index as u32;
+        let result = match error {
+            Error::Create => RSF_ANOMALY_SWAP_MAKE_FAILED,
+            Error::Depth => RSF_ANOMALY_SWAP_MAKE_DEPTH,
+            _ => RSF_ANOMALY_SWAP_MAKE_REFUSED,
+        };
+        self.cause = error;
+        result
+    }
+}
+
+fn bytes_of(description: Texture) -> u64 {
+    let texel: u64 = match description.format {
+        RGBA16F => 8,
+        R16_FLOAT => 2,
+        _ => 4,
+    };
+    (u64::from(description.size.width) * u64::from(description.size.height)).saturating_mul(texel)
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_sr_allocate_twin_batch(
+    platform: &Platform,
+    handle: Ptr,
+    request: &Request,
+    out: &mut Twins,
+    info: &mut TwinBatchInfo,
+) -> u32 {
+    *out = Twins::default();
+    *info = TwinBatchInfo {
+        owner: std::ptr::null_mut(),
+        depth_texture: std::ptr::null_mut(),
+        bytes: 0,
+        made: 0,
+        failed_index: 0,
+        cause: Error::None,
+    };
+    let device = Device { platform, handle };
+    let mut batch = TwinBatch {
+        slots: [const { None }; TWIN_SLOTS],
+        _depth: None,
+        _scratch: None,
+    };
+    let mut views = Twins::default();
+    let mut bytes = 0u64;
+    let mut made = 0;
+    let world = request.stage == 2;
+    for (index, spec) in request.spec.iter().enumerate() {
+        if !spec.present {
+            continue;
+        }
+        let engine = request.engine[index].fields;
+        let input = TwinInput {
+            texture: engine.surface,
+            rtv: engine.rtv,
+            srv: engine.srv,
+            uav: engine.uav,
+            size: Extent {
+                width: spec.width,
+                height: spec.height,
+            },
+            format: engine.format,
+            promote: u32::from(!world || spec.promote),
+            with_uav: u32::from(!engine.uav.is_null()),
+            world: u32::from(world),
+        };
+        let (twin, description, format) = match device.twin(&input) {
+            Ok(twin) => twin,
+            Err(error) => return info.refuse(index, error),
+        };
+        views.targets[index] = twin.view(description, format).fields();
+        batch.slots[index] = Some(twin);
+        bytes = bytes.saturating_add(bytes_of(description));
+        made += 1;
+    }
+    if world {
+        let render = Extent {
+            width: request.render_width,
+            height: request.render_height,
+        };
+        let output = Extent {
+            width: request.output_width,
+            height: request.output_height,
+        };
+        let (depth, depth_desc) = match device.depth(request.engine_dsv, output, render) {
+            Ok(depth) => depth,
+            Err(error) => return info.refuse(TWIN_SLOTS, error),
+        };
+        let (scratch, scratch_desc) = match device.scratch(request.engine_rtv, render) {
+            Ok(scratch) => scratch,
+            Err(error) => return info.refuse(TWIN_SLOTS + 1, error),
+        };
+        views.depth_dsv = pointer(&depth.dsv);
+        views.depth_srv = pointer(&depth.srv);
+        views.depth_width = depth_desc.size.width;
+        views.depth_height = depth_desc.size.height;
+        views.base_rt = pointer(&scratch.rtv);
+        info.depth_texture = depth.texture.as_ptr();
+        batch._depth = Some(depth);
+        batch._scratch = Some(scratch);
+        bytes = bytes
+            .saturating_add(bytes_of(depth_desc))
+            .saturating_add(bytes_of(scratch_desc));
+    }
+    *out = views;
+    info.bytes = bytes;
+    info.made = made;
+    info.owner = Box::into_raw(Box::new(batch));
+    RSF_ANOMALY_SWAP_MAKE_CREATED
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_anomaly_sr_drop_twin_batch(
+    owner: *mut TwinBatch,
+    refs: Option<unsafe extern "C" fn(Ptr) -> u32>,
+) -> u64 {
+    if owner.is_null() {
+        return 0;
+    }
+    let mut batch = unsafe { Box::from_raw(owner) };
+    refs.map_or(0, |refs| {
+        batch
+            .slots
+            .iter_mut()
+            .flatten()
+            .map(|twin| {
+                twin.rtv = None;
+                twin.srv = None;
+                twin.uav = None;
+                u64::from(unsafe { refs(twin.texture.as_ptr()) })
+            })
+            .sum()
+    })
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_sr_make_twin(
     platform: &Platform,
@@ -337,7 +523,12 @@ extern "C" fn rsf_anomaly_sr_drop_target(owner: *mut Target) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_sr_release_twin_view(owner: &mut Target, kind: u32) {
+extern "C" fn rsf_anomaly_sr_twin_fields(view: &TargetView, fields: &mut Fields) {
+    *fields = view.fields();
+}
+
+#[cfg(test)]
+fn rsf_anomaly_sr_release_twin_view(owner: &mut Target, kind: u32) {
     match kind {
         RTV => owner.rtv = None,
         SRV => owner.srv = None,

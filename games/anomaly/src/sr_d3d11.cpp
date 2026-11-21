@@ -290,18 +290,10 @@ TwinError Twin::create(ID3D11Device* device, const rsf_sr_twin_input& input, Twi
     if (result != TwinError::None) return result;
     out.owner_.reset(owner);
     out.texture = ResourceView<ID3D11Texture2D>(view.texture);
-    out.rtv = TwinView<ID3D11RenderTargetView, RSF_SR_RTV>(owner, view.rtv);
-    out.srv = TwinView<ID3D11ShaderResourceView, RSF_SR_SRV>(owner, view.srv);
-    out.uav = TwinView<ID3D11UnorderedAccessView, RSF_SR_UAV>(owner, view.uav);
-    auto& f = out.fields;
-    f.surface = f.texture_surface = f.desc_cache = view.texture;
-    f.rtv = view.rtv;
-    f.srv = view.srv;
-    f.uav = view.uav;
-    f.width = view.size.width;
-    f.height = view.size.height;
-    f.format = view.format;
-    std::memcpy(std::data(f.desc), &view.descriptor, sizeof(view.descriptor));
+    out.rtv = ResourceView<ID3D11RenderTargetView>(view.rtv);
+    out.srv = ResourceView<ID3D11ShaderResourceView>(view.srv);
+    out.uav = ResourceView<ID3D11UnorderedAccessView>(view.uav);
+    rsf_anomaly_sr_twin_fields(&view, &out.fields);
     return result;
 }
 

@@ -4,7 +4,11 @@
 
 // Private x64 ABI between the Rust SR owners and the D3D11 leaves.
 struct rsf_sr_target;
+struct rsf_sr_twin_batch;
 struct rsf_sr_temporal_targets;
+struct rsf_anomaly_swap_request;
+struct rsf_anomaly_swap_twins;
+struct rsf_anomaly_swap_fields;
 struct rsf_sr_pass;
 using rsf_sr_log = void (*)(void*, const char*);
 
@@ -67,6 +71,13 @@ struct rsf_sr_temporal_view {
     void *colour_rtv, *motion_rtv;
     void *colour_srv, *motion_srv, *output_srv, *empty_motion_srv;
 };
+struct rsf_sr_twin_batch_info {
+    rsf_sr_twin_batch* owner;
+    void* depth_texture;
+    uint64_t bytes;
+    uint32_t made, failed_index;
+    uint8_t cause;
+};
 struct rsf_sr_draw_views {
     rsf_sr_extent output, source;
     void *targets[3], *depth, *inputs[5];
@@ -76,6 +87,7 @@ struct rsf_sr_draw_views {
 static_assert(sizeof(rsf_sr_extent) == 8 && sizeof(rsf_sr_texture) == 44 && sizeof(rsf_sr_view) == 36);
 static_assert(sizeof(rsf_sr_draw) == 56 && sizeof(rsf_sr_d3d11) == 184 && sizeof(rsf_sr_draw_views) == 96);
 static_assert(sizeof(rsf_sr_twin_input) == 56 && sizeof(rsf_sr_target_view) == 96 && sizeof(rsf_sr_temporal_view) == 88);
+static_assert(sizeof(rsf_sr_twin_batch_info) == 40);
 
 enum : uint32_t {
     RSF_SR_RTV, RSF_SR_SRV, RSF_SR_UAV, RSF_SR_DSV, RSF_SR_DEPTH_SRV,
@@ -83,12 +95,15 @@ enum : uint32_t {
 enum : uint32_t { RSF_SR_ROUND_TRIP, RSF_SR_UPSCALE, RSF_SR_PREPARE, RSF_SR_REINSERT };
 
 extern "C" {
+uint32_t rsf_anomaly_sr_allocate_twin_batch(const rsf_sr_d3d11*, void*, const rsf_anomaly_swap_request*,
+    rsf_anomaly_swap_twins*, rsf_sr_twin_batch_info*) noexcept;
+uint64_t rsf_anomaly_sr_drop_twin_batch(rsf_sr_twin_batch*, uint32_t (*refs)(void*)) noexcept;
 uint8_t rsf_anomaly_sr_make_twin(const rsf_sr_d3d11*, void*, const rsf_sr_twin_input*, rsf_sr_target**, rsf_sr_target_view*) noexcept;
 uint8_t rsf_anomaly_sr_make_depth(const rsf_sr_d3d11*, void*, void*, rsf_sr_extent, rsf_sr_extent, rsf_sr_target**,
     rsf_sr_target_view*) noexcept;
 uint8_t rsf_anomaly_sr_make_scratch(const rsf_sr_d3d11*, void*, void*, rsf_sr_extent, rsf_sr_target**, rsf_sr_target_view*) noexcept;
 void rsf_anomaly_sr_drop_target(rsf_sr_target*) noexcept;
-void rsf_anomaly_sr_release_twin_view(rsf_sr_target*, uint32_t) noexcept;
+void rsf_anomaly_sr_twin_fields(const rsf_sr_target_view*, rsf_anomaly_swap_fields*) noexcept;
 uint8_t rsf_anomaly_sr_make_temporal(const rsf_sr_d3d11*, void*, rsf_sr_extent, rsf_sr_extent, uint32_t, rsf_sr_temporal_targets**,
     rsf_sr_temporal_view*) noexcept;
 void rsf_anomaly_sr_drop_temporal(rsf_sr_temporal_targets*) noexcept;
