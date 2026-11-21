@@ -11,7 +11,7 @@ use crate::overlay_host_abi::{
 use crate::render_abi::rsf_backend_log_fn as LogFn;
 use crate::sr_session::has_capacity;
 use std::ffi::{CString, c_char, c_void};
-use std::mem;
+use std::mem::{self, offset_of};
 use std::ptr::null_mut;
 use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
 
@@ -27,6 +27,8 @@ const GROWTH: u32 = 4096;
 const VERTEX_BUFFER: u32 = 1;
 const INDEX_BUFFER: u32 = 2;
 const CONSTANTS: usize = 3;
+const CLASS_INSTANCES: usize = 253; // D3D11_SHADER_MAX_INTERFACES
+const VIEWPORTS: usize = 16; // D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -50,6 +52,55 @@ struct Draw {
     clip: [i32; 4],
 }
 
+// Mirrors rsf_overlay11_snapshot. The native leaf fills nullable COM pointers with owned
+// references. Field order keeps their release order after the bindings are restored.
+#[repr(C)]
+struct Snapshot {
+    predicate: Option<ComRef>,
+    predicate_value: i32,
+    input_layout: Option<ComRef>,
+    topology: u32,
+    vertex_buffer: Option<ComRef>,
+    vertex_stride: u32,
+    vertex_offset: u32,
+    index_buffer: Option<ComRef>,
+    index_format: u32,
+    index_offset: u32,
+
+    vertex_shader: Option<ComRef>,
+    vertex_instances: [Option<ComRef>; CLASS_INSTANCES],
+    vertex_instance_count: u32,
+    vertex_constants: Option<ComRef>,
+
+    pixel_shader: Option<ComRef>,
+    pixel_instances: [Option<ComRef>; CLASS_INSTANCES],
+    pixel_instance_count: u32,
+    pixel_resource: Option<ComRef>,
+    pixel_sampler: Option<ComRef>,
+
+    geometry_shader: Option<ComRef>,
+    geometry_instances: [Option<ComRef>; CLASS_INSTANCES],
+    geometry_instance_count: u32,
+    hull_shader: Option<ComRef>,
+    hull_instances: [Option<ComRef>; CLASS_INSTANCES],
+    hull_instance_count: u32,
+    domain_shader: Option<ComRef>,
+    domain_instances: [Option<ComRef>; CLASS_INSTANCES],
+    domain_instance_count: u32,
+
+    rasterizer: Option<ComRef>,
+    viewports: [[f32; 6]; VIEWPORTS],
+    viewport_count: u32,
+    scissors: [[i32; 4]; VIEWPORTS],
+    scissor_count: u32,
+
+    blend: Option<ComRef>,
+    blend_factor: [f32; 4],
+    sample_mask: u32,
+    depth_stencil: Option<ComRef>,
+    stencil_reference: u32,
+}
+
 #[repr(C)]
 struct Platform {
     pipeline: unsafe extern "C" fn(Handle, &Setup, &mut RawPipeline) -> i32,
@@ -60,6 +111,7 @@ struct Platform {
     buffer: unsafe extern "C" fn(Handle, u32, u32) -> Handle,
     write: unsafe extern "C" fn(Handle, Handle, *const c_void, usize) -> i32,
     target: unsafe extern "C" fn(Handle) -> u32,
+    read_state: unsafe extern "C" fn(Handle, &mut Snapshot) -> i32,
     draw: unsafe extern "C" fn(
         Handle,
         &RawPipeline,
@@ -70,12 +122,22 @@ struct Platform {
         *const Draw,
         usize,
     ) -> i32,
+    restore_state: unsafe extern "C" fn(Handle, &Snapshot),
     log: unsafe extern "C" fn(LogFn, Handle, *const c_char),
 }
 
 const _: () = {
     assert!(size_of::<Setup>() == 24 && size_of::<Draw>() == 40);
-    assert!(size_of::<Platform>() == 10 * size_of::<Handle>());
+    assert!(size_of::<Platform>() == 12 * size_of::<Handle>());
+    assert!(size_of::<Snapshot>() == 10992 && align_of::<Snapshot>() == 8);
+    assert!(offset_of!(Snapshot, vertex_instances) == 72);
+    assert!(offset_of!(Snapshot, pixel_instances) == 2120);
+    assert!(offset_of!(Snapshot, geometry_instances) == 4176);
+    assert!(offset_of!(Snapshot, hull_instances) == 6216);
+    assert!(offset_of!(Snapshot, domain_instances) == 8256);
+    assert!(offset_of!(Snapshot, viewports) == 10296);
+    assert!(offset_of!(Snapshot, scissors) == 10684);
+    assert!(offset_of!(Snapshot, blend) == 10944);
 };
 
 struct Texture {
@@ -395,8 +457,13 @@ impl Renderer {
             }
         }
         let pipeline = std::array::from_fn(|i| self.pipeline[i].as_ptr());
+        // Zero is valid for each numeric field and is None for each nullable COM pointer.
+        let mut snapshot: Snapshot = unsafe { mem::zeroed() };
+        if unsafe { (self.platform.read_state)(context, &mut snapshot) } == 0 {
+            return RESOURCE_FAILED;
+        }
         let drawn = unsafe {
-            (self.platform.draw)(
+            let drawn = (self.platform.draw)(
                 context,
                 &pipeline,
                 vertices,
@@ -405,8 +472,11 @@ impl Renderer {
                 height,
                 plan.as_ptr(),
                 plan.len(),
-            )
+            );
+            (self.platform.restore_state)(context, &snapshot);
+            drawn
         };
+        drop(snapshot);
         if drawn != 0 { OK } else { RESOURCE_FAILED }
     }
 }

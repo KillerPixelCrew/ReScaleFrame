@@ -22,6 +22,8 @@ struct rsf_overlay11_draw {
     int32_t clip[4];
 };
 
+struct rsf_overlay11_snapshot;
+
 struct rsf_overlay11_platform {
     int32_t (*pipeline)(void*, const rsf_overlay_renderer_setup*, rsf_overlay11_pipeline*);
     int32_t (*context)(void* device, void* context);
@@ -31,8 +33,10 @@ struct rsf_overlay11_platform {
     void* (*buffer)(void* device, uint32_t bytes, uint32_t bind_flags);
     int32_t (*write)(void* context, void* buffer, const void* bytes, size_t length);
     uint32_t (*target)(void* context);
+    int32_t (*read_state)(void* context, rsf_overlay11_snapshot*);
     int32_t (*draw)(void* context, const rsf_overlay11_pipeline*, void* vertices, void* indices,
         uint32_t width, uint32_t height, const rsf_overlay11_draw*, size_t count);
+    void (*restore_state)(void* context, const rsf_overlay11_snapshot*);
     void (*log)(rsf_overlay_renderer_log_fn, void* user, const char*);
 };
 
