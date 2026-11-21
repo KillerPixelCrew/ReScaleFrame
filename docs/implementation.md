@@ -1241,6 +1241,16 @@ linked consumers retained their Release export inventories. The
 device fixture built and its device execution remains pending.
 [D3D12 readback audit](research/rust-d3d12-readback-owner.md)
 
+The integrated hook, motion and readback build passed 362 locked Rust
+tests, formatting and Clippy, plus 20 focused MSVC Release contracts.
+The Godot and Unity sharpening fixture again compiles and passes. It
+checks the original Vulkan SR frame offsets and the appended colour-bias
+field at byte 384 in the 424-byte record. The SDK headers match the
+baseline, Runtime and four linked consumers retained all export names
+and ordinals, and Anomaly retained three exports with dynamic Runtime
+lookup. Worker and integrated logs are under
+`.local/rust-1.94.1-verification/`.
+
 The Vulkan sharpening owner now admits passes, selects the filter and
 holds command slots through retirement in Rust. The native leaves
 reuse the existing SPIR-V and constant packing. The CPU fixture

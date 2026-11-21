@@ -9,7 +9,8 @@
 static_assert(RSF_GODOT_ABI_VERSION==3, "embedded render pass uses coherent ABI");
 static_assert(sizeof(rsf_godot_settings)==100 && offsetof(rsf_godot_settings,sharpening)==44);
 static_assert(sizeof(rsf_unity_package_settings)==100 && offsetof(rsf_unity_package_settings,sharpening)==44);
-static_assert(sizeof(rsf_srvk_frame)==384 && offsetof(rsf_srvk_frame,exposure)==272 && offsetof(rsf_srvk_frame,sharpening)==312);
+static_assert(offsetof(rsf_srvk_frame, exposure) == 272 && offsetof(rsf_srvk_frame, sharpening) == 312);
+static_assert(offsetof(rsf_srvk_frame, bias_current_color) == 384 && sizeof(rsf_srvk_frame) == 424);
 static_assert(RSF_SRVK_ABI_VERSION==2 && RSF_GODOT_SETTINGS_ABI_VERSION==2 && RSF_UNITY_SETTINGS_ABI_VERSION==2);
 template<class Settings> bool verify(const char* path,const char* configure_name,const char* get_name) {
     auto module=LoadLibraryA(path);if(!module){std::printf("LoadLibrary failed %lu: %s\n",GetLastError(),path);return false;}
