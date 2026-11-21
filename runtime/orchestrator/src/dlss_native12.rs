@@ -3,6 +3,7 @@ use crate::com_ref::ComRef;
 use crate::gl_pipeline_abi::rsf_dlss_setup as Setup;
 use crate::render_abi::{RSF_DLSS_ABI_VERSION, rsf_sr_frame as Frame};
 use crate::sdk_module::{SdkModule, wide_path};
+use crate::streamline_sr::{Options, TagBatch, dlss_mode};
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr::{NonNull, null_mut};
 use std::sync::Arc;
@@ -114,8 +115,8 @@ struct Platform {
     token: unsafe extern "C" fn(Handle, u32, &mut Handle) -> i32,
     shared_token: unsafe extern "C" fn(Handle, u64) -> Handle,
     constants: unsafe extern "C" fn(Handle, Handle, u32, &Frame) -> i32,
-    options: unsafe extern "C" fn(Handle, u32, &Frame, u32, u32, u32) -> i32,
-    dispatch: unsafe extern "C" fn(Handle, Handle, u32, Handle, &Frame) -> i32,
+    options: unsafe extern "C" fn(Handle, u32, &Options) -> i32,
+    dispatch: unsafe extern "C" fn(Handle, Handle, u32, Handle, &TagBatch) -> i32,
     free_viewport: unsafe extern "C" fn(Handle, u32),
 }
 
@@ -454,7 +455,7 @@ unsafe extern "C" fn rsf_core_dlss_native12_plan(
             registration.native.as_ptr(),
             width,
             height,
-            quality,
+            dlss_mode(quality),
             &mut planned_width,
             &mut planned_height,
         )
@@ -490,7 +491,8 @@ unsafe extern "C" fn rsf_core_dlss_native12_evaluate(
         return validated;
     }
     let frame = unsafe { &*frame };
-    let frame_id = unsafe { (*frame.record).frame_id };
+    let record = unsafe { &*frame.record };
+    let frame_id = record.frame_id;
     let token = match unsafe { registration.token(frame_id, engine_token) } {
         Ok(token) => token.as_ptr(),
         Err(result) => return result,
@@ -503,20 +505,22 @@ unsafe extern "C" fn rsf_core_dlss_native12_evaluate(
     }
     // From the first feature options call onward, this context can have SDK viewport state.
     context.used_viewport.store(true, Ordering::Relaxed);
-    let options = unsafe {
-        (platform.options)(
-            native,
-            viewport,
-            frame,
-            context.quality.load(Ordering::Relaxed),
-            context.preset,
-            context.sdr.load(Ordering::Relaxed).into(),
-        )
+    let sdr = context.sdr.load(Ordering::Relaxed);
+    let options = Options {
+        mode: dlss_mode(context.quality.load(Ordering::Relaxed)),
+        width: record.output_width,
+        height: record.output_height,
+        hdr: (!sdr).into(),
+        auto_exposure: (!sdr && frame.exposure.resource.is_null()).into(),
+        alpha: 0,
+        preset: context.preset,
     };
-    if options != OK {
-        return options;
+    let result = unsafe { (platform.options)(native, viewport, &options) };
+    if result != OK {
+        return result;
     }
-    unsafe { (platform.dispatch)(native, token, viewport, list, frame) }
+    let tags = TagBatch::d3d12(frame, record);
+    unsafe { (platform.dispatch)(native, token, viewport, list, &tags) }
 }
 
 #[unsafe(no_mangle)]

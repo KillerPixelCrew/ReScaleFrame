@@ -1,16 +1,12 @@
 // SPDX-License-Identifier: MIT
 use super::{ComRef, Handle, NOT_READY, OK, Plan, Startup, Support};
+use crate::streamline_sr::dlss_mode;
 use std::ptr::{addr_of, addr_of_mut, null_mut};
 
 const NOT_SUPPORTED: i32 = -7;
 const DRIVER_OUT_OF_DATE: u32 = 2;
 const OS_OUT_OF_DATE: u32 = 3;
 const NO_SUPPORTED_ADAPTER: u32 = 6;
-
-pub(super) fn dlss_mode(quality: u32) -> u32 {
-    // DLAA, MaxQuality, Balanced, MaxPerformance, UltraPerformance, Off.
-    [6, 3, 2, 1, 4].get(quality as usize).copied().unwrap_or(0)
-}
 
 #[repr(C)]
 #[derive(Default)]

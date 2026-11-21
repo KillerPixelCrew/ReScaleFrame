@@ -2,6 +2,27 @@
 
 Branch `rust/orchestrator-anomaly` starts at `2db07f4`. The first cutover replaces the orchestrator behind its existing C interfaces. The second replaces the Anomaly adapter. Each production path has one implementation during the move.
 
+## Fast path to a verified candidate
+
+Batch remaining ownership changes by subsystem. Prioritize production
+entry points, lifecycle and failure behavior, and issues that block
+the next build. Keep the typed SDK, COM and guarded native calls, and
+reuse the established C ABI, frame events and resource leases.
+Defer standalone cleanup while a coherent candidate awaits verification.
+The integration scope and acceptance criteria below still apply.
+
+The next acceptance checks use one candidate revision and feature
+set. Compare the Runtime DLL and linked consumers' exports and
+linkage, then record focused fixtures and device behavior separately.
+Use that candidate for Standard and AVX Anomaly runs, with explicit
+coverage of held input, moving world characters, provider fallback,
+resize and plugin retirement. The user owns build and test execution.
+
+Native D3D12 DLSS now shares Rust tag assembly and frame options with
+the D3D11 entry, including the existing route differences. Native
+D3D12 startup policy and camera constants remain separate source
+work. Previous build and game results retain their recorded scope.
+
 ## Remaining integration ports
 
 Carry the same Rust ownership and public C ABI through every in-tree game

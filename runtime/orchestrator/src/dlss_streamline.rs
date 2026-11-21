@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 mod frame;
 mod planning;
-mod tags;
 
 use crate::com_ref::ComRef;
 use crate::diagnostic_output::Output;
@@ -10,6 +9,7 @@ use crate::gl_pipeline_abi::{rsf_dlss_log_fn as Log, rsf_dlss_setup as Setup};
 use crate::render_abi::{RSF_DLSS_ABI_VERSION, rsf_dlss_frame as Frame};
 use crate::sdk_module::{SdkModule, wide_path};
 use crate::sr_session::has_capacity;
+use crate::streamline_sr::{Options, TagBatch, dlss_mode};
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr::{NonNull, addr_of, null, null_mut};
 use std::sync::Mutex;
@@ -297,18 +297,6 @@ impl Startup {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct Options {
-    mode: u32,
-    width: u32,
-    height: u32,
-    hdr: u32,
-    auto_exposure: u32,
-    alpha: u32,
-    preset: u32,
-}
-
-#[repr(C)]
 struct Platform {
     load: unsafe extern "C" fn(*const u16, &Setup) -> Handle,
     startup: &'static Startup,
@@ -316,7 +304,7 @@ struct Platform {
     present: unsafe extern "C" fn(Handle, Handle, u32, u32, u32) -> i32,
     frame: &'static frame::Platform,
     options: unsafe extern "C" fn(Handle, u32, &Options) -> i32,
-    tags: unsafe extern "C" fn(Handle, Handle, Handle, u32, &tags::TagBatch) -> i32,
+    tags: unsafe extern "C" fn(Handle, Handle, Handle, u32, &TagBatch) -> i32,
     evaluate: unsafe extern "C" fn(Handle, Handle, Handle, u32) -> i32,
     drain: unsafe extern "C" fn(Handle) -> u32,
     release_viewport: unsafe extern "C" fn(Handle, u32) -> i32,
@@ -640,7 +628,7 @@ unsafe extern "C" fn rsf_core_dlss_streamline_evaluate(
     }
 
     let options = Options {
-        mode: planning::dlss_mode(frame.quality),
+        mode: dlss_mode(frame.quality),
         width: frame.output_width,
         height: frame.output_height,
         hdr: (frame.color_encoded == 0).into(),
@@ -659,7 +647,7 @@ unsafe extern "C" fn rsf_core_dlss_streamline_evaluate(
         }
         *applied = Some(options);
     }
-    let tags = tags::TagBatch::new(frame, shared);
+    let tags = TagBatch::d3d11(frame, shared);
     let tagged = unsafe { (platform.tags)(native, context, token, slot, &tags) };
     if tagged != OK {
         return tagged;

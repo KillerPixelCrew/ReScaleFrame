@@ -1,6 +1,27 @@
 // SPDX-License-Identifier: MIT
-use super::{Frame, Handle};
+use crate::render_abi::{rsf_dlss_frame as Frame11, rsf_sr_frame as Frame12};
+use rsf_game_sys::rsf_frame_record as Record;
+use std::ffi::c_void;
 use std::ptr::null_mut;
+
+type Handle = *mut c_void;
+
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) struct Options {
+    pub(super) mode: u32,
+    pub(super) width: u32,
+    pub(super) height: u32,
+    pub(super) hdr: u32,
+    pub(super) auto_exposure: u32,
+    pub(super) alpha: u32,
+    pub(super) preset: u32,
+}
+
+pub(super) fn dlss_mode(quality: u32) -> u32 {
+    // DLAA, MaxQuality, Balanced, MaxPerformance, UltraPerformance, Off.
+    [6, 3, 2, 1, 4].get(quality as usize).copied().unwrap_or(0)
+}
 
 const MAX_TAGS: usize = 9;
 const ONLY_VALID_NOW: u32 = 0;
@@ -25,6 +46,7 @@ struct Tag {
     kind: u32,
     state: u32,
     size: [u32; 2],
+    has_extent: u32,
 }
 
 impl Tag {
@@ -36,6 +58,7 @@ impl Tag {
             kind,
             state,
             size,
+            has_extent: 1,
         }
     }
 }
@@ -48,13 +71,13 @@ pub(super) struct TagBatch {
 }
 
 const _: () = {
-    assert!(size_of::<Tag>() == 24);
-    assert!(size_of::<TagBatch>() == 224);
+    assert!(size_of::<Tag>() == 32);
+    assert!(size_of::<TagBatch>() == 296);
     assert!(std::mem::offset_of!(TagBatch, entries) == 8);
 };
 
 impl TagBatch {
-    pub(super) fn new(frame: &Frame, shared: bool) -> Self {
+    pub(super) fn d3d11(frame: &Frame11, shared: bool) -> Self {
         let render = [frame.render_width, frame.render_height];
         let output = [frame.output_width, frame.output_height];
         let (read, write) = if shared {
@@ -93,6 +116,57 @@ impl TagBatch {
         }
         batch
     }
+    pub(super) fn d3d12(frame: &Frame12, record: &Record) -> Self {
+        let render = [record.render_width, record.render_height];
+        let output = [record.output_width, record.output_height];
+        let read = NON_PIXEL_SHADER_RESOURCE;
+        let mut exposure = Tag::new(frame.exposure.resource, EXPOSURE, read, [0, 0]);
+        // Native D3D12 uses the full exposure resource with no explicit extent.
+        exposure.has_extent = 0;
+        let mut entries = [Tag::EMPTY; MAX_TAGS];
+        entries[..5].copy_from_slice(&[
+            Tag::new(frame.color.resource, COLOR_IN, read, render),
+            Tag::new(frame.depth.resource, DEPTH, read, render),
+            Tag::new(frame.motion.resource, MOTION, read, render),
+            Tag::new(frame.output.resource, COLOR_OUT, UNORDERED_ACCESS, output),
+            exposure,
+        ]);
+        Self {
+            count: 4 + u32::from(!frame.exposure.resource.is_null()),
+            lifecycle: ONLY_VALID_NOW,
+            entries,
+        }
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn native_d3d12_keeps_output_after_motion_and_uses_the_full_exposure_resource() {
+    let mut frame: Frame12 = unsafe { std::mem::zeroed() };
+    let mut record: Record = unsafe { std::mem::zeroed() };
+    record.render_width = 640;
+    record.render_height = 360;
+    record.output_width = 1280;
+    record.output_height = 720;
+    assert_eq!(TagBatch::d3d12(&frame, &record).count, 4);
+    frame.exposure.resource = std::ptr::without_provenance_mut(1);
+    let tags = TagBatch::d3d12(&frame, &record);
+    assert_eq!(tags.count, 5);
+    assert_eq!(
+        tags.entries[..5]
+            .iter()
+            .map(|tag| tag.kind)
+            .collect::<Vec<_>>(),
+        [3, 0, 1, 4, 13]
+    );
+    assert_eq!(
+        (tags.entries[3].size, tags.entries[3].state),
+        ([1280, 720], 8)
+    );
+    assert_eq!(
+        (tags.entries[4].has_extent, tags.entries[4].state),
+        (0, 0x40)
+    );
 }
 
 #[cfg(test)]
@@ -103,7 +177,7 @@ fn optional_tags_keep_order_extents_and_shared_states() {
     }
 
     // Only the tag inputs are used. The fake handles are never dereferenced.
-    let mut frame: Frame = unsafe { std::mem::zeroed() };
+    let mut frame: Frame11 = unsafe { std::mem::zeroed() };
     frame.color_in = texture(1);
     frame.color_out = texture(2);
     frame.depth = texture(3);
@@ -115,7 +189,7 @@ fn optional_tags_keep_order_extents_and_shared_states() {
     frame.output_width = 1280;
     frame.output_height = 720;
 
-    let owned = TagBatch::new(&frame, false);
+    let owned = TagBatch::d3d11(&frame, false);
     assert_eq!((owned.count, owned.lifecycle), (6, 0));
     assert!(owned.entries.iter().all(|tag| tag.state == 0));
     assert_eq!(owned.entries[4].kind, 29);
@@ -124,7 +198,7 @@ fn optional_tags_keep_order_extents_and_shared_states() {
     frame.exposure = texture(7);
     frame.transparency_hint = texture(8);
     frame.color_before_transparency = texture(9);
-    let shared = TagBatch::new(&frame, true);
+    let shared = TagBatch::d3d11(&frame, true);
     assert_eq!((shared.count, shared.lifecycle), (9, 0));
     assert_eq!(
         shared.entries.map(|tag| tag.kind),

@@ -258,6 +258,8 @@ mod streamline_host;
 #[cfg(windows)]
 mod streamline_log;
 #[cfg(windows)]
+mod streamline_sr;
+#[cfg(windows)]
 mod texture_dump;
 #[cfg(windows)]
 mod ui_identify;

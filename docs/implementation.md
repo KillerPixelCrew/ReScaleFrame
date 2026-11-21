@@ -1,5 +1,13 @@
 # Implementation tracker
 
+Native D3D12 DLSS now shares Rust tag assembly and quality mapping
+with the D3D11 route. Native D3D12 keeps colour, depth, motion and
+output in order, with optional exposure covering the entire resource.
+Rust selects HDR and auto-exposure options. The typed SDK calls and
+public declarations match in source. Current-candidate builds and
+runtime checks remain open.
+[Current verification priorities](rust-migration.md#fast-path-to-a-verified-candidate)
+
 The shared overlay input owner now routes window messages in Rust.
 Native leaves read Windows contact and mouse facts and forward the
 message. Source comparison matched key and button release pairing,

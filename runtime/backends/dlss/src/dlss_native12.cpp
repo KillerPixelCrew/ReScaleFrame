@@ -3,6 +3,7 @@
 
 #if RSF_HAVE_STREAMLINE
 #include "streamline_frame.h"
+#include "streamline_sr.h"
 #include "streamline_load.h"
 #include <sl_consts.h>
 #include <DirectXMath.h>
@@ -166,11 +167,11 @@ rsf_backend_result native_present(void* handle, void* swapchain, uint32_t interv
     return SUCCEEDED(result) && !skip ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
 } catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 
-rsf_backend_result native_plan(void* handle, uint32_t width, uint32_t height, uint32_t quality,
+rsf_backend_result native_plan(void* handle, uint32_t width, uint32_t height, uint32_t mode,
     uint32_t* render_width, uint32_t* render_height) noexcept try
 {
     sl::DLSSOptions options{};
-    options.mode = rsf::dlss_mode(quality);
+    options.mode = static_cast<sl::DLSSMode>(mode);
     options.outputWidth = width;
     options.outputHeight = height;
     sl::DLSSOptimalSettings settings{};
@@ -241,45 +242,29 @@ rsf_backend_result native_constants(void* handle, void* token_ptr, uint32_t view
         RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
 } catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 
-rsf_backend_result native_options(void* handle, uint32_t viewport, const rsf_sr_frame* frame,
-    uint32_t quality, uint32_t preset_value, uint32_t sdr) noexcept try
+rsf_backend_result native_options(void* handle, uint32_t viewport, const rsf_streamline_sr_options* input) noexcept try
 {
     const auto& native = *static_cast<Native*>(handle);
-    const auto& record = *frame->record;
     sl::DLSSOptions options{};
-    options.mode = rsf::dlss_mode(quality);
-    const auto preset = static_cast<sl::DLSSPreset>(preset_value);
+    options.mode = static_cast<sl::DLSSMode>(input->mode);
+    const auto preset = static_cast<sl::DLSSPreset>(input->preset);
     options.dlaaPreset = options.qualityPreset = options.balancedPreset = preset;
     options.performancePreset = options.ultraPerformancePreset = options.ultraQualityPreset = preset;
-    options.outputWidth = record.output_width;
-    options.outputHeight = record.output_height;
-    options.colorBuffersHDR = sdr ? sl::Boolean::eFalse : sl::Boolean::eTrue;
-    options.useAutoExposure = sdr || frame->exposure.resource ? sl::Boolean::eFalse : sl::Boolean::eTrue;
+    options.outputWidth = input->width;
+    options.outputHeight = input->height;
+    options.colorBuffersHDR = input->hdr ? sl::Boolean::eTrue : sl::Boolean::eFalse;
+    options.useAutoExposure = input->auto_exposure ? sl::Boolean::eTrue : sl::Boolean::eFalse;
     return native.options(sl::ViewportHandle(viewport), options) == sl::Result::eOk ?
         RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
 } catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 
 rsf_backend_result native_dispatch(void* handle, void* token_ptr, uint32_t viewport_id, void* list,
-    const rsf_sr_frame* frame) noexcept try
+    const rsf_streamline_sr_tags* tags) noexcept try
 {
     const auto& native = *static_cast<Native*>(handle);
     const auto* token = static_cast<sl::FrameToken*>(token_ptr);
     const sl::ViewportHandle viewport(viewport_id);
-    const auto& record = *frame->record;
-    sl::Resource input(sl::ResourceType::eTex2d, frame->color.resource, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-    sl::Resource depth(sl::ResourceType::eTex2d, frame->depth.resource, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-    sl::Resource motion(sl::ResourceType::eTex2d, frame->motion.resource, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-    sl::Resource output(sl::ResourceType::eTex2d, frame->output.resource, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    sl::Resource exposure(sl::ResourceType::eTex2d, frame->exposure.resource, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-    sl::Extent render{0, 0, record.render_width, record.render_height};
-    sl::Extent presented{0, 0, record.output_width, record.output_height};
-    sl::ResourceTag tags[] = {
-        {&input, sl::kBufferTypeScalingInputColor, sl::ResourceLifecycle::eOnlyValidNow, &render},
-        {&depth, sl::kBufferTypeDepth, sl::ResourceLifecycle::eOnlyValidNow, &render},
-        {&motion, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eOnlyValidNow, &render},
-        {&output, sl::kBufferTypeScalingOutputColor, sl::ResourceLifecycle::eOnlyValidNow, &presented},
-        {&exposure, sl::kBufferTypeExposure, sl::ResourceLifecycle::eOnlyValidNow, nullptr}};
-    if (native.tags(*token, viewport, tags, frame->exposure.resource ? 5u : 4u, list) != sl::Result::eOk)
+    if (rsf::set_sr_tags(native.tags, *token, viewport, *tags, static_cast<sl::CommandBuffer*>(list)) != sl::Result::eOk)
         return RSF_BACKEND_ERROR_FEATURE_FAILED;
     const sl::BaseStructure* inputs[] = {&viewport};
     return native.evaluate(sl::kFeatureDLSS, *token, inputs, 1, list) == sl::Result::eOk ?
@@ -312,6 +297,7 @@ struct Platform {
     decltype(&native_free_viewport) free_viewport;
 };
 static_assert(sizeof(Platform) == 18 * sizeof(void*));
+static_assert(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE == 0x40 && D3D12_RESOURCE_STATE_UNORDERED_ACCESS == 8);
 static_assert(RSF_BACKEND_OK == 0 && RSF_BACKEND_ERROR_INVALID_ARGUMENT == -1 &&
     RSF_BACKEND_ERROR_ABI_MISMATCH == -2 && RSF_BACKEND_ERROR_LOAD_FAILED == -4 && RSF_BACKEND_ERROR_INIT_FAILED == -6 &&
     RSF_BACKEND_ERROR_NOT_READY == -8 && RSF_BACKEND_ERROR_FEATURE_FAILED == -9 &&

@@ -18,6 +18,7 @@
 #include <sl.h>
 #include <sl_consts.h>
 #include <sl_dlss.h>
+#include "streamline_sr.h"
 
 // sl_security.h includes <Softpub.h>, which mingw-w64 ships as <softpub.h>. Windows filesystems do
 // not care and the reference MSVC build gets the real check; the cross build compiles without it
@@ -32,10 +33,6 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
-
-struct rsf_streamline_sr_options {
-    uint32_t mode, width, height, hdr, auto_exposure, alpha, preset;
-};
 
 using rsf_streamline_sr_entry_addresses = void*[12];
 
@@ -77,16 +74,6 @@ struct rsf_streamline_sr_planning {
     int32_t (*query_support)(void*, uint64_t, uint32_t*);
     int32_t (*requirements)(void*, rsf_streamline_sr_versions*);
     int32_t (*optimal)(void*, uint32_t, uint32_t, uint32_t, rsf_streamline_sr_sizes*);
-};
-
-inline constexpr uint32_t sr_max_tags = 9;
-struct rsf_streamline_sr_tag {
-    void* texture;
-    uint32_t kind, state, size[2];
-};
-struct rsf_streamline_sr_tags {
-    uint32_t count, lifecycle;
-    rsf_streamline_sr_tag entries[sr_max_tags];
 };
 
 struct rsf_streamline_sr_constants {
@@ -479,17 +466,8 @@ int32_t set_tags(void* native, void* context, void* token, uint32_t slot,
     const rsf_streamline_sr_tags* input) noexcept try
 {
     auto& self = *static_cast<Native*>(native);
-    sl::Resource resources[sr_max_tags]{};
-    sl::ResourceTag tags[sr_max_tags]{};
-    for (uint32_t i = 0; i < input->count; ++i) {
-        const auto& entry = input->entries[i];
-        const sl::Extent extent{0, 0, entry.size[0], entry.size[1]};
-        resources[i] = sl::Resource{sl::ResourceType::eTex2d, entry.texture, nullptr, nullptr, entry.state};
-        tags[i] = sl::ResourceTag{&resources[i], static_cast<sl::BufferType>(entry.kind),
-            static_cast<sl::ResourceLifecycle>(input->lifecycle), &extent};
-    }
-    if (self.sl.set_tag_for_frame(*static_cast<sl::FrameToken*>(token), viewport_handle(slot),
-        tags, input->count, static_cast<sl::CommandBuffer*>(context)) != sl::Result::eOk) {
+    if (rsf::set_sr_tags(self.sl.set_tag_for_frame, *static_cast<sl::FrameToken*>(token),
+        viewport_handle(slot), *input, static_cast<sl::CommandBuffer*>(context)) != sl::Result::eOk) {
         say("slSetTagForFrame failed");
         return RSF_DLSS_ERROR_FEATURE_FAILED;
     }
@@ -562,15 +540,6 @@ constexpr rsf_streamline_sr_platform platform{load_owned, &startup, &planning,
     release_viewport, shutdown, destroy};
 static_assert(sizeof(rsf_streamline_sr_platform) == 12 * sizeof(void*));
 static_assert(RSF_DLSS_ERROR_LOAD_FAILED == -4);
-static_assert(sizeof(rsf_streamline_sr_options) == 28);
-static_assert(sizeof(rsf_streamline_sr_tag) == 24 && sizeof(rsf_streamline_sr_tags) == 224 &&
-    offsetof(rsf_streamline_sr_tags, entries) == 8);
-static_assert(sl::kBufferTypeScalingInputColor == 3 && sl::kBufferTypeScalingOutputColor == 4 &&
-    sl::kBufferTypeDepth == 0 && sl::kBufferTypeMotionVectors == 1 && sl::kBufferTypeExposure == 13 &&
-    sl::kBufferTypeTransparencyHint == 27 && sl::kBufferTypeBiasCurrentColorHint == 29 &&
-    sl::kBufferTypeColorBeforeTransparency == 40 && sl::kBufferTypeTransparencyLayer == 51);
-static_assert(sl::ResourceLifecycle::eOnlyValidNow == 0 && D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE == 0x40 &&
-    D3D12_RESOURCE_STATE_UNORDERED_ACCESS == 8);
 static_assert(sizeof(rsf_dlss_setup) == 88 && sizeof(rsf_dlss_support) == 36 &&
     sizeof(rsf_dlss_plan) == 40 && sizeof(rsf_dlss_frame) == 488);
 static_assert(RSF_DLSS_OK == 0 && RSF_DLSS_ERROR_INVALID_ARGUMENT == -1 &&

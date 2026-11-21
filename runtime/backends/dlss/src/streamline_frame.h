@@ -27,17 +27,5 @@ inline sl::float4x4 sl_matrix(const float* values)
     }
     return matrix;
 }
-// rsf_quality and rsf_dlss_quality share their values.
-inline sl::DLSSMode dlss_mode(uint32_t quality)
-{
-    switch (quality) {
-    case 0: return sl::DLSSMode::eDLAA;
-    case 1: return sl::DLSSMode::eMaxQuality;
-    case 2: return sl::DLSSMode::eBalanced;
-    case 3: return sl::DLSSMode::eMaxPerformance;
-    case 4: return sl::DLSSMode::eUltraPerformance;
-    default: return sl::DLSSMode::eOff;
-    }
-}
 }
 #endif
