@@ -3,12 +3,15 @@
 // Shared persistence for rsf_render_settings in an adapter-supplied INI section. The keys are
 // the render frontend's; the file and section always come from the adapter. settings_store.rs
 // owns the keys and file format; this facade maps them onto the hosts' C++ types and applies
-// the public sharpening range checks.
+// the public sharpening range checks. The declarations are C so the combined C carrier persists
+// the shared post-pass keys through the same owner.
 #include <rescaleframe/game_api.h>
 #include <rescaleframe/render_frontend.h>
-#include <string>
+#include <wchar.h>
 
+#ifdef __cplusplus
 extern "C" {
+#endif
 // Internal to the runtime and its embedding carriers; none is exported.
 rsf_result rsf_settings_store_read(const wchar_t* ini, const wchar_t* section,
     const rsf_render_settings* defaults, const rsf_sharpening_options* sharpening_defaults,
@@ -17,9 +20,19 @@ rsf_result rsf_settings_store_write(const wchar_t* ini, const wchar_t* section,
     const rsf_render_settings* request);
 uint32_t rsf_settings_store_read_layout(const wchar_t* ini, const wchar_t* section);
 rsf_result rsf_settings_store_write_layout(const wchar_t* ini, const wchar_t* section, uint32_t value);
+// The caller has range-checked `options`.
 rsf_result rsf_settings_store_write_sharpening(const wchar_t* ini, const wchar_t* section,
     const rsf_sharpening_options* options);
+// The shared post-pass keys, missing ones at rsf_sharpening_defaults, sanitized by the public
+// sharpening_settings.h rules. Defined in render_settings_store.cpp.
+void rsf_settings_store_read_sharpening(const wchar_t* ini, const wchar_t* section,
+    rsf_sharpening_options* output);
+#ifdef __cplusplus
 }
+#endif
+
+#ifdef __cplusplus
+#include <string>
 
 namespace rsf::render_settings {
 inline rsf_sharpening_options sharpening(const rsf_render_settings& s) {
@@ -96,3 +109,4 @@ inline rsf_result write_sharpening(const std::wstring& ini,const std::wstring& s
 }
 
 }
+#endif
