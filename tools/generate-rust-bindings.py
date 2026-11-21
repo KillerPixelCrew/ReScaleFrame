@@ -26,7 +26,10 @@ def generate(output, header, types, constants, clang_args, extra=(), *, use_core
 
 generate("sdk/game/src/lib.rs", "sdk/game/include/rescaleframe/game_api.h",
          "rsf_(get_game_plugin_api_fn|frame_record|game_cpu_(source|receipt)_event)", "RSF_.*",
-         ["-Isdk/game/include"], ["--raw-line", "pub mod sr_abi;"])
+         ["-Isdk/game/include"], ["--raw-line", "pub mod sr_abi;", "--raw-line", "pub mod shader_patch_abi;"])
+generate("sdk/game/src/shader_patch_abi.rs", "runtime/shader_patch/include/rescaleframe/shader_patch.h",
+         "rsf_(get_shader_patch_api_fn|shader_patch_api|patch_.*)", "RSF_(SHADER_PATCH_VERSION|PATCH_.*)", [],
+         ["--with-derive-default"])
 generate("ui/overlay/src/host_option_limit.rs", "runtime/orchestrator/include/rescaleframe/overlay_api.h",
          "NOTHING", "RSF_OVERLAY_SERVICE_OPTION_LIMIT",
          ["-Isdk/game/include", "-Iruntime/orchestrator/include", "-Iruntime/contract/include",
@@ -227,10 +230,11 @@ generate("runtime/orchestrator/src/overlay_host_abi.rs", "loader/proxy/src/overl
          ["--no-recursive-allowlist", "--with-derive-default", "--raw-line",
           "use crate::overlay_abi::{rsf_overlay_intent, rsf_overlay_stats, rsf_overlay_texture_update};"])
 generate("runtime/orchestrator/src/shader_patch_abi.rs", "runtime/shader_patch/src/platform.h",
-         "rsf_(shader_patch_api|patch_(bytes|define|request|output|session|root|counters|sink|json_visit|"
-         "include_fn|compile|binding|parameter|reflection|platform|file_sink))",
-         "RSF_(SHADER_PATCH_VERSION|PATCH_.*)", ["-Iruntime/shader_patch/include"],
-         ["--with-derive-default", "--raw-line", "#![allow(dead_code)]"])
+         "rsf_patch_(sink|json_visit|include_fn|compile|binding|parameter|reflection|platform|file_sink)",
+         "RSF_PATCH_(JSON_.*|SIGNATURE_.*|USAGE_DYNAMIC|CPU_ACCESS_WRITE|CONSTANT_SLOTS)",
+         ["-Iruntime/shader_patch/include"],
+         ["--no-recursive-allowlist", "--with-derive-default", "--raw-line", "#![allow(dead_code)]",
+          "--raw-line", "pub(crate) use rsf_game_sys::shader_patch_abi::*;"])
 generate("runtime/orchestrator/src/vulkan_sr_abi.rs", "runtime/orchestrator/include/rescaleframe/native_sr_split_vulkan.h",
          "rsf_(srvk_(setup|frame|image|fallback|fsr4_provider_info)|fsr4vk_handoff|vk_(function|get_proc)|input_dump_vk_setup)",
          "RSF_(SRVK_(ABI_VERSION|SPLIT_ABI_VERSION|SPLIT_TRACKED_ABI_VERSION|FSR4_INFO_ABI_VERSION)|SR_(DLSS|FSR2|FSR3|FSR4|XESS)|FSR4_BRIDGE_(INVALID_ARGUMENT|ABI_MISMATCH))",

@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: MIT
 #include "runtime_shaders.h"
-#include "runtime_module.h"
 #include "shader_loader_platform.h"
 #include <d3dcompiler.h>
 #include <cstring>
-#include <fstream>
-#include <memory>
 
 namespace rsf::anomaly::motion {
+extern "C" {
+RuntimePack* rsf_anomaly_runtime_pack_open(const uint16_t*, const uint16_t*, void*, char*, size_t) noexcept;
+void rsf_anomaly_runtime_pack_close(RuntimePack*) noexcept;
+const rsf_anomaly_shader_admitted* rsf_anomaly_runtime_pack_manifest(const RuntimePack*) noexcept;
+const rsf_shader_patch_api* rsf_anomaly_runtime_pack_api(const RuntimePack*) noexcept;
+rsf_patch_session* rsf_anomaly_runtime_pack_session(const RuntimePack*) noexcept;
+}
 namespace {
 // Match the Runtime v1 statuses interpreted by Rust.
 static_assert(RSF_SHADER_PATCH_VERSION == 1 && RSF_PATCH_OK == 0 && RSF_PATCH_ORIGINAL == -7 && RSF_PATCH_REFLECTION == -8);
@@ -33,12 +37,19 @@ void include_close(void* table, const void* data) noexcept
 
 RuntimeShaders::~RuntimeShaders()
 {
-    if (session_) api_.close(session_);
+    rsf_anomaly_runtime_pack_close(pack_);
 }
+const rsf_anomaly_shader_admitted* RuntimeShaders::manifest() const noexcept {
+    return rsf_anomaly_runtime_pack_manifest(pack_);
+}
+const rsf_shader_patch_api& RuntimeShaders::api() const noexcept {
+    return *rsf_anomaly_runtime_pack_api(pack_);
+}
+
 bool RuntimeShaders::open(const std::filesystem::path& pack, const std::filesystem::path& cache,
     std::byte* image, const MotionProfile& profile, std::string& error)
 {
-    if (session_) return false;
+    if (pack_) return false;
     // The guarded D3DCompile setup loads the stateless includer's vtable with lea rax,[rip+disp32].
     const auto* lea = image + profile.d3dcompile_setup_rva + 6;
     unsigned char opcode[3]{};
@@ -58,44 +69,16 @@ bool RuntimeShaders::open(const std::filesystem::path& pack, const std::filesyst
         error = "engine includer entries";
         return false;
     }
-    const auto query = reinterpret_cast<rsf_get_shader_patch_api_fn>(
-        rsf_anomaly_runtime_symbol(rsf_anomaly_runtime_module(), "rsf_get_shader_patch_api"));
-    api_.struct_size = sizeof(api_);
-    api_.abi_version = RSF_SHADER_PATCH_VERSION;
-    if (!query || query(&api_) != RSF_PATCH_OK ||
-        api_.abi_version != RSF_SHADER_PATCH_VERSION || api_.struct_size < sizeof(api_) ||
-        !api_.open || !api_.hash || !api_.root_count || !api_.root || !api_.prepare || !api_.close ||
-        !api_.attach_d3d11 || !api_.create_d3d11 || !api_.constant_buffer || !api_.upload_constant ||
-        !api_.bind_constant || !api_.counters || !api_.dump) {
-        error = "Runtime shader service unavailable";
-        return false;
-    }
-    std::ifstream file(pack, std::ios::binary);
-    const std::string data((std::istreambuf_iterator<char>(file)), {});
     const auto compiler = GetModuleHandleW(engine_compiler_module);
     const auto fn = compiler ? GetProcAddress(compiler, "D3DCompile") : nullptr;
-    rsf_patch_session* session{};
-    const auto status = api_.open({data.data(), data.size()}, cache.c_str(), reinterpret_cast<void*>(fn), &session);
-    if (status != RSF_PATCH_OK || !session) {
-        error = "Runtime pack refused: " + std::to_string(status);
+    char message[512]{};
+    pack_ = rsf_anomaly_runtime_pack_open(reinterpret_cast<const uint16_t*>(pack.c_str()),
+        reinterpret_cast<const uint16_t*>(cache.c_str()), reinterpret_cast<void*>(fn), message, sizeof(message));
+    if (!pack_) {
+        error = message;
         return false;
     }
-    std::unique_ptr<rsf_patch_session, decltype(api_.close)> pending(session, api_.close);
-    struct RootSource { const rsf_shader_patch_api& api; const rsf_patch_session* session; } source{api_, session};
-    const auto root = [](const void* user, uint32_t index, rsf_anomaly_shader_root* out) noexcept {
-        const auto& reader = *static_cast<const RootSource*>(user);
-        rsf_patch_root item{sizeof(item), RSF_SHADER_PATCH_VERSION};
-        if (reader.api.root(reader.session, index, &item) != RSF_PATCH_OK) return false;
-        const auto bytes = [](const char* value) -> rsf_anomaly_shader_bytes {
-            return {reinterpret_cast<const uint8_t*>(value), value ? std::strlen(value) : 0};
-        };
-        *out = {bytes(item.name), bytes(item.source_sha256), bytes(item.patched_sha256), bytes(item.tag), item.stage};
-        return true;
-    };
-    const auto* pack_hash = api_.hash(session);
-    if (!admit_runtime_manifest(manifest, pack_hash ? pack_hash : "", api_.root_count(session), &source, root, error)) return false;
     include_table_ = table;
-    session_ = pending.release();
     return true;
 }
 int32_t RuntimeShaders::resolve(void* user, const char* name, rsf_patch_bytes* out) noexcept try
@@ -125,7 +108,7 @@ Prepared RuntimeShaders::prepare(const ShaderRequest& r, const ManifestEntry& en
     rsf_patch_output output{};
     output.struct_size = sizeof(output);
     output.abi_version = RSF_SHADER_PATCH_VERSION;
-    const auto status = api_.prepare(session_, &request, &output);
+    const auto status = api().prepare(rsf_anomaly_runtime_pack_session(pack_), &request, &output);
     return finish_runtime_shader(r, entry, reflector, status, output.cache_hit != 0,
         {static_cast<const std::byte*>(output.bytecode.data), output.bytecode.size}, output.reason);
 }

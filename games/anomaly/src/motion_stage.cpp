@@ -269,7 +269,7 @@ void* open_pack(void* module, const void* profile, const wchar_t* pack, const wc
     std::string error;
     if (!reflector().ready()) error = "engine D3DCompiler unavailable";
     else if (result->open(pack, cache, static_cast<std::byte*>(module), *static_cast<const BuildProfile*>(profile)->motion, error)) {
-        *info = {result->manifest.admitted()};
+        *info = {result->manifest()};
         return result.release();
     }
     std::snprintf(message, size, "%s", error.c_str());

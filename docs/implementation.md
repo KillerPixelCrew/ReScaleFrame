@@ -4,6 +4,13 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now reads and admits Anomaly's motion shader pack, validates the
+Runtime shader API and owns the admitted manifest and session together.
+A refused pack closes any session the Runtime returned. Anomaly and
+the Runtime share generated definitions for the public shader C ABI.
+The native bridge still supplies the engine's guarded include and
+compiler calls. Build and runtime validation remain open.
+
 Anomaly now uses one Rust path to borrow the carrier's Runtime module
 and resolve its exports. Bootstrap, SR, FG, overlay, capture and shader
 patching use that path. Callers still check the API table they request

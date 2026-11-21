@@ -34,11 +34,11 @@ pub(super) struct Root {
     pub name: Bytes,
     pub original: Bytes,
     pub motion: Bytes,
-    tag: Bytes,
+    pub(super) tag: Bytes,
     pub stage: u32,
 }
 
-type ReadRoot = unsafe extern "C" fn(*const c_void, u32, *mut Root) -> bool;
+pub(super) type ReadRoot = unsafe extern "C" fn(*const c_void, u32, *mut Root) -> bool;
 
 /// One admitted root, laid out as `rsf_anomaly_shader_entry`. Its text borrows the owning
 /// manifest's storage, so a row is only reachable through that manifest.
@@ -266,7 +266,7 @@ unsafe fn parse(text: &[u8]) -> Result<Manifest, String> {
     Ok(candidate.finish(namespace))
 }
 
-unsafe fn admit_pack(
+pub(super) unsafe fn admit_pack(
     namespace: &[u8],
     count: u32,
     session: *const c_void,

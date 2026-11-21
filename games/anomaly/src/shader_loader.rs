@@ -2,6 +2,7 @@
 mod frame;
 mod manifest;
 mod reflection;
+mod runtime_pack;
 
 pub(crate) use manifest::{Entry, Manifest};
 use reflection::{Compatibility, Reflection, rsf_anomaly_shader_compatible};
