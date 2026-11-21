@@ -4,6 +4,13 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The shared texture-role classifier is now a single Rust C entry point.
+It still evaluates the caller's rules in order and rejects short
+records before writing a verdict. The render-size fallback uses
+widened aspect arithmetic so large extents cannot overflow. D3D11
+regions, D3D12 SR and the classifier share the same DXGI depth format
+values. The frame tap and the standalone fixture retain their C calls.
+
 Rust now owns the 32-slot D3D11 constant-buffer twin cache. It preserves
 write recency and rejects stale matches against the live buffer's
 descriptor. The upload runs without the cache lock and publishes its

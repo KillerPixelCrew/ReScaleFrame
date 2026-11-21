@@ -2,6 +2,9 @@
 use crate::com_ref::ComRef;
 use crate::d3d11_output::{GraphicsCache, texture_desc};
 use crate::d3d11_output_abi::*;
+use crate::dxgi_format::{
+    D24_UNORM_S8_UINT, D32_FLOAT, R24_UNORM_X8_TYPELESS, R24G8_TYPELESS, R32_TYPELESS,
+};
 use rsf_game_sys::{
     RSF_DEPTH_DOMAIN_INCLUDE_MAX, RSF_DEPTH_DOMAIN_INCLUDE_MIN, RSF_DEPTH_DOMAINS_VERSION,
     rsf_game_depth_domain, rsf_game_depth_domains,
@@ -19,11 +22,6 @@ const RGBA8_UNORM: u32 = 28;
 const RGBA8_SNORM: u32 = 31;
 const RG16_UNORM: u32 = 35;
 const RG16_SNORM: u32 = 37;
-const R32_TYPELESS: u32 = 39;
-const D32_FLOAT: u32 = 40;
-const R24G8_TYPELESS: u32 = 44;
-const D24_UNORM_S8_UINT: u32 = 45;
-const R24_UNORM_X8_TYPELESS: u32 = 46;
 const RG8_UNORM: u32 = 49;
 const RG8_SNORM: u32 = 51;
 const R16_TYPELESS: u32 = 53;

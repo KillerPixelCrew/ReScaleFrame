@@ -53,6 +53,8 @@ mod dx12_vulkan_interop;
 #[cfg(windows)]
 mod dx12_vulkan_interop_abi;
 #[cfg(windows)]
+mod dxgi_format;
+#[cfg(windows)]
 mod motion_d3d11;
 #[cfg(windows)]
 mod motion_decode;
@@ -167,6 +169,10 @@ mod render_abi;
 mod render_host;
 #[cfg(windows)]
 mod render_links;
+#[cfg(windows)]
+mod resource_roles;
+#[cfg(windows)]
+mod resource_roles_abi;
 #[cfg(windows)]
 mod sampler_bias;
 #[cfg(windows)]
