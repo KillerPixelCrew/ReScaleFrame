@@ -51,8 +51,9 @@ pub(crate) struct SdkTokens {
     mark: unsafe extern "C" fn(usize, u32) -> i32,
 }
 
-// The caller holds the existing SDK mutex for every token operation. Rust holds
-// the frame lock only to read or commit bookkeeping, never for a vendor call.
+// The host serializes ledger operations. It drops its guard for Reflex sleep
+// so older Present markers can still look up and use their retained tokens.
+// The frame lock only covers bookkeeping.
 fn validated(sdk: &SdkTokens, session: u64, id: u64) -> Option<Token> {
     let index = u32::try_from(id).ok().filter(|index| *index != 0)?;
     let token = (*FRAMES.lock().unwrap().streamline.slot(id))?;

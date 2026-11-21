@@ -259,6 +259,53 @@ fn overlapping_lifecycle_call_is_refused_without_waiting() {
     assert_eq!(start(&lifecycle, "C:\\sl"), 0);
 }
 
+#[cfg(windows)]
+#[test]
+fn reflex_token_borrow_allows_older_present_and_defers_shutdown() {
+    use std::{sync::mpsc, thread, time::Duration};
+
+    let lifecycle = Lifecycle::new();
+    let tokens = &lifecycle.frame_token;
+    assert_eq!(start(&lifecycle, "C:\\sl"), 0);
+    assert_eq!(
+        tokens.begin(|token| {
+            *token = 2;
+            0
+        }),
+        0
+    );
+    assert_eq!(tokens.begin(|_| 7), 7);
+    take_events();
+
+    thread::scope(|scope| {
+        assert_eq!(
+            tokens.with_token(0, -1, |current| {
+                assert_eq!(current, 2);
+                let (send, receive) = mpsc::channel();
+                scope.spawn(move || {
+                    let marker = tokens.with_token(1, -1, |older| {
+                        assert_eq!(older, 1);
+                        assert_eq!(tokens.current(), current);
+                        0
+                    });
+                    let _ = send.send(marker);
+                });
+                assert_eq!(receive.recv_timeout(Duration::from_secs(2)), Ok(0));
+                assert_eq!(unsafe { lifecycle.shutdown(&PLATFORM) }, BUSY);
+                unsafe { lifecycle.unload(&Fake, &PLATFORM) };
+                assert_eq!(lifecycle.module().addr(), MODULE);
+                assert!(take_events().is_empty());
+                0
+            }),
+            0
+        );
+    });
+    assert_eq!(unsafe { lifecycle.shutdown(&PLATFORM) }, 0);
+    assert_eq!(take_events(), ["shutdown", "reset"]);
+    assert_eq!(tokens.current(), 0);
+    assert_eq!(tokens.with_token(1, -1, |_| 0), -1);
+}
+
 #[test]
 fn symbol_lookups_follow_the_published_modules() {
     let lifecycle = Lifecycle::new();

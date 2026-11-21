@@ -106,6 +106,8 @@ constexpr rsf_vk_streamline_calls streamline{
     initialize, VulkanStorySlShutdownChecked, VulkanStorySlModule, invoke, pace,
     {
         [](uint32_t index) -> uintptr_t {
+            // The Rust host holds its guard for both calls. The bridge owns the
+            // current pointer, and the host ledger associates it with a source.
             const auto result = VulkanStorySlBeginFrame(index);
             rsf_core_latencyvk_sdk_result(result, 0);
             return result==0 ? VulkanStorySlCurrentFrameToken() : 0;
