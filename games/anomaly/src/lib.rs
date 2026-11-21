@@ -5,9 +5,13 @@ mod adapter_options;
 mod bootstrap;
 mod camera;
 #[cfg(windows)]
+mod digest;
+#[cfg(windows)]
 mod engine_guards;
 #[cfg(windows)]
 mod engine_slots;
+#[cfg(windows)]
+mod executable;
 #[cfg(any(windows, test))]
 mod fg_inputs;
 #[cfg(any(windows, test))]

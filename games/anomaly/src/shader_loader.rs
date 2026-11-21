@@ -4,6 +4,7 @@ mod manifest;
 mod reflection;
 mod runtime_pack;
 
+use crate::digest::sha256;
 pub(crate) use manifest::{Entry, Manifest};
 use reflection::{Compatibility, Reflection, rsf_anomaly_shader_compatible};
 use std::ffi::{OsString, c_void};
@@ -11,9 +12,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::os::windows::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
-use std::ptr;
 use std::sync::atomic::{AtomicU64, Ordering};
-use windows_sys::Win32::Security::Cryptography::{BCRYPT_SHA256_ALG_HANDLE, BCryptHash};
 
 #[derive(Clone, Copy)]
 #[repr(C)]
@@ -68,32 +67,6 @@ struct Identity {
     motion: Bytes,
     name: Bytes,
     stage: u8,
-}
-
-pub(crate) fn sha256(bytes: &[u8]) -> Option<[u8; 64]> {
-    let len = u32::try_from(bytes.len()).ok()?;
-    let mut digest = [0; 32];
-    let status = unsafe {
-        BCryptHash(
-            BCRYPT_SHA256_ALG_HANDLE,
-            ptr::null(),
-            0,
-            bytes.as_ptr(),
-            len,
-            digest.as_mut_ptr(),
-            32,
-        )
-    };
-    if status < 0 {
-        return None;
-    }
-    const HEX: &[u8] = b"0123456789abcdef";
-    let mut result = [0; 64];
-    for (pair, byte) in result.as_chunks_mut::<2>().0.iter_mut().zip(digest) {
-        pair[0] = HEX[usize::from(byte >> 4)];
-        pair[1] = HEX[usize::from(byte & 15)];
-    }
-    Some(result)
 }
 
 #[unsafe(no_mangle)]

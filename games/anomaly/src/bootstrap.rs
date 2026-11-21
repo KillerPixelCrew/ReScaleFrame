@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 //! Anomaly's synchronous cold entry. The thin carrier calls `rsf_anomaly_start` with the absolute adapter INI before
 //! genuine DirectInput creation. This module selects the exact executable build, borrows the Runtime DLL the carrier
-//! already loaded and starts Observe through the Runtime's stable plugin-session C ABI. The C++ stages keep their
-//! options, hooks and profiles behind the private leaves in bootstrap.cpp; this module owns their order, the refusals,
-//! the retry state and the adapter log.
+//! already loaded and starts Observe through the Runtime's stable plugin-session C ABI. This module owns the step
+//! order, refusals, retry state and adapter log. The private leaves in bootstrap.cpp call the native engine code.
 
-use crate::{AMD64, BuildIdentity, match_build};
+use crate::executable::{identity_name, module_path, running_build};
+use crate::{AMD64, BuildIdentity};
 use rsf_game_sys::{RSF_GAME_ABI_VERSION, rsf_game_host_services, rsf_game_log_fn, rsf_game_probe};
 use std::ffi::{CStr, OsString, c_char, c_void};
 use std::fs::OpenOptions;
@@ -21,7 +21,7 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 use windows_sys::Win32::System::LibraryLoader::{
     GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-    GetModuleFileNameW, GetModuleHandleExW,
+    GetModuleHandleExW,
 };
 use windows_sys::Win32::System::Performance::QueryPerformanceCounter;
 use windows_sys::Win32::System::SystemInformation::GetTickCount64;
@@ -42,7 +42,6 @@ const OVERLAY_REFUSED: u32 = 9;
 
 const RSF_OK: i32 = 0;
 const SESSION_ABI_VERSION: u32 = 1;
-const PATH_CAPACITY: usize = 32768;
 
 /// The C++ owners this entry orders, supplied by the export in bootstrap.cpp. Every leaf is noexcept, runs under the
 /// entry lock and takes a build index this module selected from `builds`.
@@ -51,7 +50,6 @@ pub(crate) struct Leaves {
     builds: *const BuildIdentity,
     build_count: usize,
     label: unsafe extern "C" fn(usize) -> *const c_char,
-    sha256: unsafe extern "C" fn(*const u16, *mut c_char) -> bool,
     /// Returns whether SR is selected; configures it only when the flag is set.
     sr: unsafe extern "C" fn(*const u16, bool, rsf_game_log_fn) -> bool,
     motion: unsafe extern "C" fn(*const u16, rsf_game_log_fn),
@@ -169,49 +167,6 @@ fn log_result(operation: &str, result: i32) {
     write_log(format!("Anomaly {operation} result={result}").as_bytes());
 }
 
-/// The NUL-terminated wide string at `text`, or None when it is null or empty.
-fn module_path(module: HMODULE) -> Option<Vec<u16>> {
-    let mut path = vec![0u16; PATH_CAPACITY];
-    let length =
-        unsafe { GetModuleFileNameW(module, path.as_mut_ptr(), PATH_CAPACITY as u32) } as usize;
-    if length == 0 || length >= PATH_CAPACITY {
-        return None;
-    }
-    path.truncate(length + 1);
-    Some(path)
-}
-
-fn identity_name(identity: &BuildIdentity) -> &CStr {
-    // The native profile table supplies immutable, NUL-terminated strings.
-    unsafe { CStr::from_ptr(identity.executable) }
-}
-
-/// Exact build selection: the running executable's ASCII name must be profiled before it is hashed, and the name and
-/// SHA-256 must then match one profile through the same lookup the plugin detection uses.
-fn select_build(builds: &[BuildIdentity], executable: &[u16], leaves: &Leaves) -> Option<usize> {
-    let file = &executable[..executable.len() - 1];
-    let start = file
-        .iter()
-        .rposition(|&c| c == u16::from(b'\\'))
-        .map_or(0, |i| i + 1);
-    let name = file[start..]
-        .iter()
-        .map(|&c| u8::try_from(c).ok().filter(u8::is_ascii))
-        .collect::<Option<Vec<u8>>>()?;
-    if !builds
-        .iter()
-        .any(|build| identity_name(build).to_bytes().eq_ignore_ascii_case(&name))
-    {
-        return None;
-    }
-    let mut hash = [0 as c_char; 65];
-    if !unsafe { (leaves.sha256)(executable.as_ptr(), hash.as_mut_ptr()) } {
-        return None;
-    }
-    let hash = unsafe { CStr::from_ptr(hash.as_ptr()) };
-    match_build(builds, &name, hash.to_bytes())
-}
-
 fn observe_selected(ini: &[u16]) -> bool {
     let mut mode = [0u16; 64];
     let length = unsafe { crate::ini::read_text(ini.as_ptr(), w!("Mode"), w!(""), &mut mode) };
@@ -237,11 +192,8 @@ unsafe fn enter(configuration: *const u16, leaves: &Leaves) -> u32 {
     if entry.started {
         return READY;
     }
-    let Some(executable) = module_path(ptr::null_mut()) else {
-        return BUILD_REFUSED;
-    };
     let builds = unsafe { slice::from_raw_parts(leaves.builds, leaves.build_count) };
-    let Some(build) = select_build(builds, &executable, leaves) else {
+    let Ok(build) = running_build(builds) else {
         return BUILD_REFUSED;
     };
     *lock(&LOG) = path

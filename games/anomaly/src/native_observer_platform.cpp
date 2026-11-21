@@ -9,14 +9,11 @@
 #include "native_hooks.h"
 #include "native_memory.h"
 #include "sr_stage.h"
-#include <rescaleframe/sha256_file.h>
 #include <windows.h>
 #include <cstdio>
-#include <cstring>
-#include <cwchar>
-#include <string>
 
 extern "C" {
+const char* rsf_anomaly_running_build(const rsf_anomaly_build_identity*, size_t, size_t*) noexcept;
 rsf_result rsf_anomaly_observer_prepare(const rsf_game_prepare_args*, const rsf_anomaly_observer_platform*) noexcept;
 rsf_result rsf_anomaly_observer_start(const rsf_game_start_args*, const rsf_anomaly_observer_platform*) noexcept;
 rsf_result rsf_anomaly_observer_quiesce(const rsf_game_control_args*, const rsf_anomaly_observer_platform*) noexcept;
@@ -114,27 +111,18 @@ bool guarded_sites(const std::byte* image, const BuildProfile& build) noexcept {
             return false;
     return true;
 }
-const char* identify(rsf_anomaly_observer_engine* out) noexcept try {
-    wchar_t path[32768]{};
-    const auto length = GetModuleFileNameW(nullptr, path, 32768);
-    if (!length || length >= 32768) return "Could not read the running executable path.";
-    const auto* separator = std::wcsrchr(path, L'\\');
-    const auto* name = separator ? separator + 1 : path;
-    bool profiled_name = false;
-    for (const auto& candidate : build_profiles) profiled_name |= !_wcsicmp(name, candidate.executable_wide);
-    if (!profiled_name)
-        return "Native sites belong to the profiled DX11 executables (standard or AVX), not this process.";
-    std::string hash;
-    const BuildProfile* build = nullptr;
-    if (!rsf::sha256_file(path, hash) || !(build = find_build(std::wstring_view{name}, hash)))
-        return "Running executable SHA-256 does not match a guarded native profile.";
+const char* identify(rsf_anomaly_observer_engine* out) noexcept {
+    size_t index = 0;
+    if (const auto* reason = rsf_anomaly_running_build(build_identities.data(), build_identities.size(), &index))
+        return reason;
+    const auto& build = build_profiles[index];
     auto* image = reinterpret_cast<std::byte*>(GetModuleHandleW(nullptr));
-    if (image_size(image) != build->image_size()) return "Running image size differs from the verified build.";
-    if (!guarded_sites(image, *build))
+    if (image_size(image) != build.image_size()) return "Running image size differs from the verified build.";
+    if (!guarded_sites(image, build))
         return "A native hook's expected instructions do not match; no hook was written.";
-    *out = {image, static_cast<size_t>(build - build_profiles.data()), build->label, build->executable};
+    *out = {image, index, build.label, build.executable};
     return nullptr;
-} catch (...) { return "Could not verify the running native profile."; }
+}
 
 bool enable_hooks(const rsf_anomaly_observer_engine* engine) noexcept {
     const auto& build = build_profiles[engine->build];

@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Anomaly's cold entry and native observer now share Rust executable
+identification. Both check the profiled filename before streaming the
+file into Windows SHA-256 with full file sharing. The observer still
+rechecks the executable before it admits the loaded image and verifies
+the native hook bytes. The executable and shader paths share lowercase
+digest formatting. Public C ABI signatures are unchanged. Build and
+runtime validation remain open.
+
 The D3D11 and native D3D12 overlay hosts share one Rust panel loader.
 It resolves the override or adjacent DLL, binds the five exports, and
 keeps one process-lifetime reference per published module. An aborted

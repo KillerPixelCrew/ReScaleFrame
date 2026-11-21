@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::*;
-use crate::shader_loader::{Bytes, Entry, Manifest, sha256};
+use crate::digest::sha256;
+use crate::shader_loader::{Bytes, Entry, Manifest};
 use std::collections::HashMap;
 use std::sync::Arc;
 

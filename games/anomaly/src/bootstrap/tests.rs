@@ -19,9 +19,6 @@ static SESSION: u8 = 0;
 unsafe extern "C" fn label(_: usize) -> *const c_char {
     c"standard".as_ptr()
 }
-unsafe extern "C" fn sha256(_: *const u16, _: *mut c_char) -> bool {
-    false
-}
 fn register_options(_: &[u16]) {
     REGISTERED.fetch_add(1, SeqCst);
 }
@@ -111,7 +108,6 @@ fn retry_repeats_only_unfinished_steps() {
         builds: builds.as_ptr(),
         build_count: builds.len(),
         label,
-        sha256,
         sr,
         motion,
         fg,

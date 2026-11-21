@@ -7,17 +7,13 @@
 #include "overlay_service.h"
 #include "motion_stage.h"
 #include "sr_stage.h"
-#include <rescaleframe/sha256_file.h>
 #include <windows.h>
-#include <cstring>
-#include <string>
 
 // Layout shared with bootstrap.rs `Leaves`.
 struct rsf_anomaly_bootstrap_leaves {
     const rsf_anomaly_build_identity* builds;
     size_t build_count;
     const char* (*label)(size_t build) noexcept;
-    bool (*sha256)(const wchar_t* path, char* hex65) noexcept;
     bool (*sr)(const wchar_t* ini, bool configure, rsf_game_log_fn log) noexcept;
     void (*motion)(const wchar_t* ini, rsf_game_log_fn log) noexcept;
     bool (*fg)(const wchar_t* ini, bool configure, HMODULE runtime, size_t build, rsf_game_log_fn log) noexcept;
@@ -33,14 +29,6 @@ using namespace rsf::anomaly;
 constexpr rsf_anomaly_bootstrap_leaves leaves{
     build_identities.data(), build_identities.size(),
     [](size_t build) noexcept { return build_profiles[build].label; },
-    [](const wchar_t* path, char* hex65) noexcept {
-        try {
-            std::string hash;
-            if (!rsf::sha256_file(path, hash) || hash.size() != 64) return false;
-            std::memcpy(hex65, hash.c_str(), 65);
-            return true;
-        } catch (...) { return false; }
-    },
     [](const wchar_t* ini, bool configure, rsf_game_log_fn log) noexcept { return sr::configure(ini, configure, log, nullptr); },
     [](const wchar_t* ini, rsf_game_log_fn log) noexcept {
         motion::configure(ini, log, nullptr);
