@@ -16,7 +16,7 @@ Runtime. Preserve the supported paths, feature refusals and package names.
 | Project Wingman | The XInput carrier and game DLL. The game DLL's exact-build detection and API publication now run in Rust. Port its guarded observation, render execution, camera records and retirement next. |
 | RDR2 | The game DLL's renderer and scene bridges, then ASI startup, settings, input and capture. Account for shared ABI with the explicit research attach target. |
 | Unity Mono and Unity package | Mono bootstrap, native Runtime setup and render event bridge, then package settings, preview and Vulkan paths. The native package also builds the Mono bridge. Preserve both users of that source and the managed engine callbacks. |
-| Steam, Fallout 4 and Skyrim SE | Port the shared Steam D3D11 chain cooperation before changing its two adapters' creation and Present routes. Port adapter-specific scene inputs, CPU facts, compatibility and recovery separately. |
+| Steam, Fallout 4 and Skyrim SE | The shared Steam D3D11 chain owner is in Rust. Next port its two adapters' creation and Present routes, scene inputs, CPU facts, compatibility and recovery. |
 | AC7 | Trace the combined DirectInput carriers and their game-side libraries for hook admission, view, scene colour, UI, visibility and motion. Keep engine-specific policy in the adapter as the carriers transition. |
 | Godot | Preserve the GDExtension and compositor contracts while moving Runtime control, frame and presentation ownership behind the native engine bindings. |
 | Minecraft | Preserve the Java mod and JNI contracts. Move first-party native frame and presentation ownership behind those entry points and keep the linked Runtime. |

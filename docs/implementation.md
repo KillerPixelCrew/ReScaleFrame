@@ -10,6 +10,13 @@ uses the same fingerprint. Its observation, camera and execution ports are
 still open. Source checks cover the entry path; the plugin and carrier
 contracts remain unrun.
 
+The Steam D3D11 chain uses one Rust owner for the exact overlay profile,
+guarded forwarding and Present hook lifetime. Fallout 4 and Skyrim SE
+keep their existing native entry points. MinHook, C++ exception guards and
+the shared file hash remain native. Source checks cover both call paths
+and the private table. The game plugin links, Steam-present path and
+device verification remain unrun on this revision.
+
 ## Rust orchestrator and first Anomaly port
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.

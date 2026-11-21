@@ -56,6 +56,12 @@ generate("runtime/orchestrator/src/scene_promote_abi.rs", "runtime/graphics/incl
          "rsf_(promote_(setup|frame_tail|status|log_fn)|frame_tap_(plan|substitution|gate_fn))",
          "RSF_(PROMOTE_(ABI_VERSION|MAX_(UI|CHAIN)_TARGETS)|FRAME_TAP_MAX_SUBSTITUTIONS)",
          ["-Iruntime/graphics/include"], ["--no-recursive-allowlist", "--with-derive-default"])
+generate("integrations/steam/src/chain_abi.rs", "integrations/steam/src/d3d11_chain_platform.h",
+         "rsf_(steam_chain_(platform|service_fn)|d3d11_chain_dispatch.*)", "RSF_D3D11_(HOST_ABI_VERSION|DISPATCH_.*)",
+         ["-Isdk/game/include", "-Iruntime/orchestrator/include", "-Iruntime/graphics/include",
+          "-Iruntime/presentation/include"],
+         ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]", "--raw-line", "type wchar_t = u16;",
+          "--raw-line", "use rsf_game_sys::rsf_game_host_services;"])
 generate("games/anomaly/src/fg_inputs_abi.rs", "games/anomaly/src/fg_inputs_platform.h",
          "rsf_anomaly_input_(log|frame|desc|targets|constants|platform)", "NOTHING", [],
          ["--no-recursive-allowlist", "--with-derive-default"])

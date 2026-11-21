@@ -435,6 +435,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsf-steam"
+version = "0.1.2"
+dependencies = [
+ "rsf-game-sys",
+ "windows-sys",
+]
+
+[[package]]
 name = "rsf-streamline-vk"
 version = "0.1.2"
 
