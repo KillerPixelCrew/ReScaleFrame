@@ -156,6 +156,14 @@ struct MotionFinalArtifacts {
 
 enum CommandAdvance : uint32_t { command_stop, command_next, command_failed };
 enum MotionPublication : uint32_t { publication_failed, publication_partial, publication_complete };
+enum class MotionRootInstall : uint32_t { already_installed, rhi_refused, entry_refused, rolled_back, installed };
+
+struct MotionRootHookEffects {
+    bool(*copy)(void* destination, const void* source, std::size_t size);
+    bool(*native_owner)();
+    bool(*install)(void* const* targets, uint32_t count);
+    void(*remove)(void* const* targets, uint32_t count);
+};
 
 // Callbacks are synchronous and return normally even if their native effects fail.
 using MotionHistoryCopy = bool(*)(float* destination, const float* source);
@@ -163,6 +171,10 @@ using MotionCopyRoots = bool(*)(void* user, const RootRecord* roots, std::size_t
 using MotionWriteFile = bool(*)(const char* path, const unsigned char* data, std::size_t size);
 
 extern "C" {
+MotionRootInstall rsf_ac7_capture_install_roots(unsigned char* base, const MotionRootHookEffects* effects);
+void rsf_ac7_capture_remove_roots(const MotionRootHookEffects* effects);
+const void* rsf_ac7_capture_current_command_address();
+
 EngineRecord* rsf_ac7_capture_swap_engine(EngineRecord* event);
 void rsf_ac7_capture_history(uint64_t primitive, bool found, const float* previous, MotionHistoryCopy copy);
 void rsf_ac7_capture_has_velocity(uint64_t primitive, bool has_velocity);
@@ -204,6 +216,7 @@ MotionPublication rsf_ac7_capture_publish_finish(const char* prefix, MotionWrite
     const MotionFinalArtifacts* artifacts);
 }
 
+static_assert(sizeof(MotionRootHookEffects) == 32 && offsetof(MotionRootHookEffects, remove) == 24);
 static_assert(sizeof(rsf_ac7_velocity_facts) == 60);
 static_assert(sizeof(EngineRecord) == 264 && offsetof(EngineRecord, previous) == 200);
 static_assert(sizeof(RootRecord) == 376 && offsetof(RootRecord, output_name) == 304);

@@ -2,7 +2,7 @@
 #include <windows.h>
 #include "native_fg_fsr4_vulkan_platform.h"
 
-static_assert(sizeof(rsf_fsr4gvk_ops) == 37 * sizeof(void*) && sizeof(rsf_fsr4gvk_options) == 24 &&
+static_assert(sizeof(rsf_fsr4gvk_ops) == 39 * sizeof(void*) && sizeof(rsf_fsr4gvk_options) == 24 &&
     sizeof(rsf_fsr4fg_create) == 48 && sizeof(rsf_fsr4fg_info) == 32 &&
     sizeof(rsf_fsr4fg_frame) == 80 && sizeof(rsf_fsr4fg_present_status) == 32);
 

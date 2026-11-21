@@ -1,0 +1,15 @@
+[package]
+name = "rsf-vulkanstory-ngx"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["staticlib"]
+# The standalone C shim supplies the native loader symbols at link time.
+test = false
+
+[lints]
+workspace = true

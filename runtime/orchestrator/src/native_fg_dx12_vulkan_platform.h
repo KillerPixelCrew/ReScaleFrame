@@ -16,6 +16,17 @@ struct rsf_dx12gvk_present_info {
     const uint64_t* waits;
     int32_t* result;
 };
+// One single-subresource colour image barrier planned by vulkan_dx12_fg.rs.
+struct rsf_dx12gvk_barrier {
+    uint64_t image;
+    uint32_t old_layout, new_layout, source_family, target_family;
+    uint32_t source_access, target_access, source_stages, target_stages;
+};
+// Source and target of one planned single-subresource colour copy or blit.
+struct rsf_dx12gvk_transfer {
+    uint64_t source, target;
+    uint32_t source_width, source_height, target_width, target_height;
+};
 struct rsf_dx12gvk_ops {
     int32_t (*adapter_luid)(const rsf_srvk_setup*, uint64_t*);
     int32_t (*platform_create)(const rsf_fgvk_setup*, rsf_dx12gvk_platform**);
@@ -26,8 +37,10 @@ struct rsf_dx12gvk_ops {
     int32_t (*allocate_commands)(rsf_dx12gvk_platform*, uint64_t, void**);
     int32_t (*begin)(rsf_dx12gvk_platform*, void*);
     int32_t (*end)(rsf_dx12gvk_platform*, void*);
-    void (*copy)(rsf_dx12gvk_platform*, void*, const rsf_srvk_image*, const rsf_dx12vk_shared_image*, uint32_t);
-    void (*clear)(rsf_dx12gvk_platform*, void*, const rsf_dx12vk_shared_image*);
+    void (*barrier)(rsf_dx12gvk_platform*, void*, const rsf_dx12gvk_barrier*);
+    void (*copy)(rsf_dx12gvk_platform*, void*, const rsf_dx12gvk_transfer*);
+    void (*blit)(rsf_dx12gvk_platform*, void*, const rsf_dx12gvk_transfer*);
+    void (*clear)(rsf_dx12gvk_platform*, void*, uint64_t);
     int32_t (*acquire_submit)(rsf_dx12gvk_platform*, uint64_t, uint64_t);
     int32_t (*present_submit)(rsf_dx12gvk_platform*, void*, const rsf_dx12gvk_present_info*, uint64_t, uint64_t, uint64_t);
     int32_t (*wait_timeline)(rsf_dx12gvk_platform*, uint64_t, uint64_t, uint64_t);
@@ -52,6 +65,7 @@ constexpr rsf_dx12gvk_interop_ops rsf_dx12gvk_interop{
     rsf_dx12vk_interop_image, rsf_dx12vk_interop_timeline, rsf_dx12vk_interop_destroy,
 };
 extern const rsf_dx12gvk_ops rsf_dx12gvk_graphics;
+extern "C" uint32_t rsf_core_dx12gvk_blit_formats_supported(uint32_t rgba_optimal, uint32_t bgra_optimal);
 
 rsf_dx12gvk_swapchain rsf_dx12gvk_describe(const void* create_info);
 using rsf_dx12gvk_present_fn = int32_t (*)(void*, const rsf_dx12gvk_present_info*, const rsf_frame_record*, uint32_t);

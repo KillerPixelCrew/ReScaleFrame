@@ -4,6 +4,7 @@
 #include "cpu_facts.h"
 #include "frame.h"
 #include "graph.h"
+#include "primary.h"
 #include "viewport.h"
 #include "servers/rendering/renderer_rd/storage_rd/render_data_rd.h"
 #include "core/config/project_settings.h"
@@ -64,15 +65,12 @@ decltype(&rsfg_shutdown) native_shutdown = nullptr;
 bool ready = false;
 std::atomic<bool> enabled{false};
 std::atomic<uint32_t> requested_sr{7};
-std::atomic<bool> reset_requested{true};
 
 uint64_t session = 0;
-RID primary_viewport, primary_target;
-uint32_t generation = 1;
-Vector2i previous_size;
+// primary.rs keeps the primary viewport and target identity, the resource generation and the
+// history reset state. The camera matrices of the last recorded SR pass stay here.
 Projection previous_projection;
 Transform3D previous_camera;
-uint64_t previous_color = 0;
 rsf_game_render_pass last_pass{};
 
 int configure_from_extension(const rsf_godot_settings *value, uint64_t viewport_id) {
@@ -98,7 +96,7 @@ int configure_from_extension(const rsf_godot_settings *value, uint64_t viewport_
 #undef RSF_FIELD
     return bridge->configure(options, RID::from_uint64(viewport_id)) ? 1 : 0;
 }
-void reset_from_extension() { reset_requested.store(true); }
+void reset_from_extension() { rsf_godot_reset_request(); }
 
 void log(void *, const char *message) { print_line(String("ReScaleFrame: ") + String::utf8(message)); }
 void set_render_frame(uint64_t frame, bool gameplay, double seconds);
@@ -120,15 +118,14 @@ void queue_render(uint64_t frame, double cpu_seconds) {
 }
 const rsf_godot_frame_callbacks frame_callbacks{frame_now_usec, report_cpu, queue_render};
 void set_primary(RID viewport) {
-    primary_viewport = viewport;
-    primary_target = RSG::viewport->viewport_get_render_target(viewport);
-    ++generation; rsf_godot_render_frame_retarget();
+    rsf_godot_primary_set(viewport.get_id(), RSG::viewport->viewport_get_render_target(viewport).get_id());
 }
 void set_render_frame(uint64_t frame, bool gameplay, double seconds) {
     rsf_godot_render_frame_begin(frame, gameplay, seconds);
     native_render_begin(frame);
     rsf_godot_status status{sizeof(status), RSF_GODOT_ABI_VERSION};
     const uint32_t requested = requested_sr.load();
+    const RID primary_viewport = RID::from_uint64(rsf_godot_primary_viewport());
     if (rsf_godot_viewport_mode(requested) == RSF_GODOT_VIEWPORT_TEMPORAL &&
         primary_viewport.is_valid() && native_status(&status) && status.requested_sr == requested &&
         requested_sr.load() == requested && status.render_width && status.output_width) {
@@ -183,11 +180,17 @@ void execute(RenderingDeviceDriver *driver, RenderingDeviceDriver::CommandBuffer
     }
     memdelete(packet);
 }
-bool admit(const RenderDataRD *data, uint64_t frame) {
-    return ready && enabled.load() && frame && data && data->render_buffers.is_valid() &&
-        data->render_buffers->get_render_target() == primary_target && data->render_buffers->get_view_count() == 1 &&
-        (RenderingServer::get_singleton()->get_current_rendering_driver_name() == "d3d12" ||
-        RenderingServer::get_singleton()->get_current_rendering_driver_name() == "vulkan");
+// Engine facts for primary.rs's admission. Every read is a pure query.
+rsf_godot_render_admission admission(const RenderDataRD *data, uint64_t frame) {
+    rsf_godot_render_admission facts{frame, 0, uint32_t(ready && enabled.load()), 0, 0, RSF_GODOT_DRIVER_OTHER};
+    if (data && data->render_buffers.is_valid()) {
+        facts.buffers_valid = 1;
+        facts.render_target = data->render_buffers->get_render_target().get_id();
+        facts.view_count = data->render_buffers->get_view_count();
+    }
+    const String driver = RenderingServer::get_singleton()->get_current_rendering_driver_name();
+    facts.driver = driver == "d3d12" ? RSF_GODOT_DRIVER_D3D12 : driver == "vulkan" ? RSF_GODOT_DRIVER_VULKAN : RSF_GODOT_DRIVER_OTHER;
+    return facts;
 }
 Packet *packet_for(const rsf_game_render_pass &pass) {
     RD *rd = RD::get_singleton();
@@ -205,7 +208,7 @@ void ReScaleFrameBridge::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_status"), &ReScaleFrameBridge::get_status);
     ClassDB::bind_method(D_METHOD("reset_history"), &ReScaleFrameBridge::reset_history);
 }
-void ReScaleFrameBridge::reset_history() { reset_requested.store(true); }
+void ReScaleFrameBridge::reset_history() { rsf_godot_reset_request(); }
 bool ReScaleFrameBridge::configure(const Dictionary &options, RID viewport) {
     if (!ready || !viewport.is_valid()) return false;
     SceneTree *tree = SceneTree::get_singleton();
@@ -349,7 +352,7 @@ void input_event(uint32_t kind) {
     rsf_godot_cpu_input(&frame_callbacks, kind);
 }
 void render_size(RID target, const Vector2i &output, Vector2i &internal) {
-    if (!ready || !enabled.load() || target != primary_target) return;
+    if (!rsf_godot_primary_sizing(ready && enabled.load(), target.get_id())) return;
     const uint32_t requested = requested_sr.load();
     const uint32_t mode = rsf_godot_viewport_mode(requested);
     if (mode == RSF_GODOT_VIEWPORT_NATIVE) { internal = output; return; }
@@ -360,12 +363,13 @@ void render_size(RID target, const Vector2i &output, Vector2i &internal) {
         internal = Vector2i(status.render_width, status.render_height);
 }
 void camera_changed(RID target) {
-    if (ready && enabled.load() && target == primary_target) reset_requested.store(true);
+    rsf_godot_camera_changed(ready && enabled.load(), target.get_id());
 }
 void upscale(const RenderDataRD *data, double) {
     rsf_godot_render_frame frame;
     rsf_godot_render_frame_read(&frame);
-    if (!admit(data, frame.source_frame_id)) return;
+    const rsf_godot_render_admission facts = admission(data, frame.source_frame_id);
+    if (!rsf_godot_sr_admit(&facts)) return;
     Ref<RenderSceneBuffersRD> rb = data->render_buffers;
     RD *rd = RD::get_singleton();
     rb->ensure_upscaled();
@@ -376,14 +380,15 @@ void upscale(const RenderDataRD *data, double) {
     pass.struct_size = sizeof(pass); pass.role = RSF_GAME_RENDER_SR;
     pass.session_id = session; pass.source_frame_id = pass.native_frame = frame.source_frame_id;
     pass.view_key = pass.history_key = pass.viewport_key = rb->get_render_target().get_id();
-    pass.resource_generation = generation;
     pass.flags = RSF_GAME_RENDER_PRIMARY;
-    if (previous_color != color.get_id()) ++generation;
-    pass.resource_generation = generation;
+    const Vector2i internal = rb->get_internal_size();
+    const rsf_godot_sr_history history{color.get_id(), internal.x, internal.y, frame.frame_seconds,
+        double(previous_camera.origin.distance_to(scene->cam_transform.origin)), frame.sequence_break, 0};
+    rsf_godot_sr_identity identity;
+    rsf_godot_sr_decide(&history, &identity);
+    pass.resource_generation = identity.resource_generation;
     pass.screen = frame.gameplay ? RSF_SCREEN_FLIGHT : RSF_SCREEN_MENU;
-    if (reset_requested.exchange(false) || previous_color != color.get_id() || previous_size != rb->get_internal_size() ||
-        frame.sequence_break || frame.frame_seconds > 0.25 || previous_camera.origin.distance_to(scene->cam_transform.origin) > 20.0f)
-        pass.flags |= RSF_GAME_RENDER_RESET;
+    if (identity.reset) pass.flags |= RSF_GAME_RENDER_RESET;
     auto native = [rd](RID texture) { return reinterpret_cast<void *>(rd->get_driver_resource(RD::DRIVER_RESOURCE_TEXTURE, texture)); };
     pass.color_input = native(color); pass.color_output = native(output); pass.depth = native(depth); pass.motion = native(motion);
     pass.motion_to_uv[0] = pass.motion_to_uv[1] = -1;
@@ -416,8 +421,8 @@ void upscale(const RenderDataRD *data, double) {
     if (!resolved_depth.is_valid()) return;
     pass.depth = native(resolved_depth);
     pass.motion = native(resolved_motion);
-    previous_projection = projection; previous_camera = scene->cam_transform; previous_size = rb->get_internal_size();
-    previous_color = color.get_id(); rsf_godot_render_frame_evaluated();
+    previous_projection = projection; previous_camera = scene->cam_transform;
+    rsf_godot_sr_recorded(frame.source_frame_id, color.get_id(), rb->get_internal_size().x, rb->get_internal_size().y);
     last_pass = pass;
     last_pass.color_input = last_pass.color_output = last_pass.depth = last_pass.motion = last_pass.exposure = nullptr;
     last_pass.color_output_readable = last_pass.ui_input = last_pass.swapchain = last_pass.scene_surface = last_pass.sampled_texture = nullptr;
@@ -449,9 +454,11 @@ void upscale(const RenderDataRD *data, double) {
 void hudless(const RenderDataRD *data) {
     rsf_godot_render_frame frame;
     rsf_godot_render_frame_read(&frame);
-    if (!admit(data, frame.source_frame_id) || last_pass.source_frame_id != frame.source_frame_id) return;
+    const rsf_godot_render_admission facts = admission(data, frame.source_frame_id);
+    if (!rsf_godot_final_scene_admit(&facts)) return;
     RD *rd = RD::get_singleton();
-    RID color = RendererRD::TextureStorage::get_singleton()->render_target_get_rd_texture_slice(primary_target, 0);
+    // Admission proved these buffers render to the primary target.
+    RID color = RendererRD::TextureStorage::get_singleton()->render_target_get_rd_texture_slice(data->render_buffers->get_render_target(), 0);
     if (!color.is_valid()) return;
     auto pass = last_pass; pass.role = RSF_GAME_RENDER_FINAL_SCENE;
     pass.color_input = reinterpret_cast<void *>(rd->get_driver_resource(RD::DRIVER_RESOURCE_TEXTURE, color));

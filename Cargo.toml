@@ -3,6 +3,7 @@ members = [
   "ui/overlay",
   "runtime/backends/rsf-upscaler",
   "runtime/backends/fsr/compat",
+  "runtime/vulkan/ngx",
   "runtime/vulkan/streamline/lifecycle",
   "runtime/contract",
   "runtime/orchestrator",

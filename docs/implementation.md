@@ -13,6 +13,14 @@ See [the Rust migration record](rust-migration.md#native-policy-cutover).
 
 ## Remaining Rust integration ports
 
+Godot's private Rust object now tracks the primary viewport and target,
+resource generation and the SR inputs that drive reset and admission.
+The engine still supplies typed RID and render-buffer facts. AC7's
+Rust F9 owner now verifies and registers the six root observers and
+retires their registration. Guarded reads, MinHook calls and engine
+trampolines stay native. [Godot engine module](../integrations/godot/NATIVE.md) ·
+[AC7 F9 roots](research/rust-ac7-motion-root-admission.md)
+
 RDR2's pending and ready readbacks and retained final draw live in Rust.
 The native submission and Map leaves keep the exact list, generation,
 queue, fence and value receipt. The pending owner caps simultaneous
@@ -815,6 +823,15 @@ and remains unrun. Build and live observer verification remain open.
 [Observer admission audit](research/rust-anomaly-native-observer.md#prepare-admission-from-3c73e3c4)
 
 ## Rust orchestrator and first Anomaly port
+
+The standalone NGX shim publishes its module and 12 resolved symbols
+from Rust while the C wrappers call NGX from the same native frames.
+The Vulkan-to-D3D12 FG port moves transfer, barrier and placeholder-clear
+plans into Rust for both XeSS and FSR4. Source, script syntax, pinned
+format, locked Windows metadata and whitespace checks passed. Link,
+binary export, fixture and runtime verification remain open.
+[NGX loader](research/rust-vulkanstory-ngx-loader.md) ·
+[Vulkan FG transfers](research/rust-vulkan-dx12-copy-plan.md)
 
 The standalone FSR3 bridge now binds the SDK and owns the SR create,
 plan, evaluate and checked retirement paths in Rust. Native leaves

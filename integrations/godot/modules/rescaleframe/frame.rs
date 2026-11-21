@@ -199,14 +199,13 @@ pub unsafe extern "C" fn rsf_godot_render_frame_read(out: *mut RenderFrame) {
     unsafe { out.write(value) };
 }
 
-/// Render thread: the current frame's SR pass was recorded.
-#[unsafe(no_mangle)]
-pub extern "C" fn rsf_godot_render_frame_evaluated() {
+/// Render thread: the current frame's SR pass was recorded (`primary.rs`).
+pub(crate) fn evaluated() {
     RENDER.last_evaluated.store(RENDER.frame.load(R), R);
 }
 
-/// Render thread: the primary render target changed, so no evaluation precedes the next frame.
-#[unsafe(no_mangle)]
-pub extern "C" fn rsf_godot_render_frame_retarget() {
+/// Render thread: the primary render target changed, so no evaluation precedes the next frame
+/// (`primary.rs`).
+pub(crate) fn retarget() {
     RENDER.last_evaluated.store(0, R);
 }

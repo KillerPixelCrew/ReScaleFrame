@@ -30,8 +30,7 @@ extern "C" void rsf_godot_cpu_input(const rsf_godot_frame_callbacks *callbacks, 
 // Render thread.
 extern "C" void rsf_godot_render_frame_begin(uint64_t source_frame_id, uint32_t gameplay, double seconds);
 extern "C" void rsf_godot_render_frame_read(rsf_godot_render_frame *out);
-extern "C" void rsf_godot_render_frame_evaluated();
-extern "C" void rsf_godot_render_frame_retarget();
+// primary.h records the SR evaluation and the retarget that sequence_break reads.
 
 static_assert(sizeof(rsf_godot_frame_callbacks) == 3 * sizeof(void *), "frame.rs mirrors the callbacks");
 static_assert(sizeof(rsf_godot_render_frame) == 24 && alignof(rsf_godot_render_frame) == 8 &&
