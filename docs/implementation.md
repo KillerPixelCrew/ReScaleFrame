@@ -4,6 +4,13 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now owns the 32-slot D3D11 constant-buffer twin cache. It preserves
+write recency and rejects stale matches against the live buffer's
+descriptor. The upload runs without the cache lock and publishes its
+pairing only after a successful write. Forgetting the original during
+an upload prevents publication. The native bridge checks the context
+device before mapping the buffer. All five C signatures are unchanged.
+
 Rust now owns D3D11 scene promotion, including stand-in texture leases,
 rebuild admission, substitution order, gate selection and fallback.
 The same fullscreen pass seeds scene colour on the recombine route.

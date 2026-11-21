@@ -9,6 +9,8 @@ mod callback_host;
 #[cfg(windows)]
 mod com_ref;
 #[cfg(windows)]
+mod constant_twins;
+#[cfg(windows)]
 mod cpu_abi;
 #[cfg(windows)]
 mod cpu_reservations;

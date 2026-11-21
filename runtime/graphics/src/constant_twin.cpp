@@ -1,129 +1,92 @@
 // SPDX-License-Identifier: MIT
+#include "device_owner.h"
 
 #include <rescaleframe/constant_twin.h>
 
-#include <windows.h>
-
-#include <d3d11.h>
-
 #include <cstring>
-#include <new>
+#include <wrl/client.h>
 
-struct rsf_constant_twins {
-    ID3D11Device* device = nullptr;
-    uint32_t bytes = 0;
-    struct Entry {
-        const void* original = nullptr;
-        ID3D11Buffer* twin = nullptr;
-        uint64_t written = 0;
-    } entries[RSF_CONSTANT_TWINS];
-    uint64_t clock = 0;
+struct rsf_constant_twins_platform {
+    uint32_t (*owns_context)(void*, void*);
+    void* (*make_buffer)(void*, uint32_t);
+    uint32_t (*upload)(void*, void*, const void*, uint32_t);
+    uint32_t (*matches_size)(const void*, uint32_t);
 };
 
-extern "C" rsf_constant_twins* rsf_constant_twins_create(void* device, uint32_t bytes)
+static_assert(RSF_CONSTANT_TWINS == 32);
+static_assert(sizeof(rsf_constant_twins_platform) == 4 * sizeof(void*));
+
+namespace {
+uint32_t owns_context(void* device, void* context)
 {
-    if (!device || bytes == 0 || (bytes % 16) != 0) {
-        return nullptr;
-    }
-    auto* twins = new (std::nothrow) rsf_constant_twins();
-    if (!twins) {
-        return nullptr;
-    }
-    twins->device = static_cast<ID3D11Device*>(device);
-    twins->device->AddRef();
-    twins->bytes = bytes;
-    return twins;
+    return rsf::same_device(static_cast<ID3D11DeviceContext*>(context),
+        static_cast<ID3D11Device*>(device));
 }
 
-extern "C" void rsf_constant_twins_destroy(rsf_constant_twins* twins)
+void* make_buffer(void* raw_device, uint32_t bytes)
 {
-    if (!twins) {
-        return;
-    }
-    for (auto& entry : twins->entries) {
-        if (entry.twin) {
-            entry.twin->Release();
-        }
-    }
-    twins->device->Release();
-    delete twins;
+    D3D11_BUFFER_DESC desc{};
+    desc.ByteWidth = bytes;
+    desc.Usage = D3D11_USAGE_DYNAMIC;
+    desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    auto* device = static_cast<ID3D11Device*>(raw_device);
+    Microsoft::WRL::ComPtr<ID3D11Buffer> buffer;
+    if (FAILED(device->CreateBuffer(&desc, nullptr, &buffer))) return nullptr;
+    return buffer.Detach();
 }
 
-extern "C" void* rsf_constant_twins_write(rsf_constant_twins* twins, void* context_pointer,
-                                          void* original, const void* contents)
+uint32_t upload(void* raw_context, void* raw_buffer, const void* contents, uint32_t bytes)
 {
-    if (!twins || !context_pointer || !original || !contents) {
-        return nullptr;
-    }
-    auto* context = static_cast<ID3D11DeviceContext*>(context_pointer);
-    rsf_constant_twins::Entry* slot = nullptr;
-    rsf_constant_twins::Entry* oldest = &twins->entries[0];
-    for (auto& entry : twins->entries) {
-        if (entry.original == original) {
-            slot = &entry;
-            break;
-        }
-        if (entry.written < oldest->written) {
-            oldest = &entry;
-        }
-    }
-    if (!slot) {
-        // A twin already made is reused for the new original; only its owner changes.
-        slot = oldest;
-        slot->original = original;
-    }
-    if (!slot->twin) {
-        D3D11_BUFFER_DESC description{};
-        description.ByteWidth = twins->bytes;
-        description.Usage = D3D11_USAGE_DYNAMIC;
-        description.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-        description.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-        if (FAILED(twins->device->CreateBuffer(&description, nullptr, &slot->twin)) ||
-            !slot->twin) {
-            slot->original = nullptr;
-            return nullptr;
-        }
-    }
+    auto* context = static_cast<ID3D11DeviceContext*>(raw_context);
+    auto* buffer = static_cast<ID3D11Buffer*>(raw_buffer);
     D3D11_MAPPED_SUBRESOURCE mapped{};
-    if (FAILED(context->Map(slot->twin, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)) || !mapped.pData) {
-        slot->original = nullptr;
-        slot->written = 0;
-        return nullptr;
-    }
-    std::memcpy(mapped.pData, contents, twins->bytes);
-    context->Unmap(slot->twin, 0);
-    slot->written = ++twins->clock;
-    return slot->twin;
+    if (FAILED(context->Map(buffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) return 0;
+    if (mapped.pData) std::memcpy(mapped.pData, contents, bytes);
+    context->Unmap(buffer, 0);
+    return mapped.pData != nullptr;
 }
 
-extern "C" void* rsf_constant_twins_find(const rsf_constant_twins* twins, const void* original)
+uint32_t matches_size(const void* original, uint32_t bytes)
 {
-    if (!twins || !original) {
-        return nullptr;
-    }
-    for (const auto& entry : twins->entries) {
-        if (entry.original == original) {
-            // The engine recycles COM addresses. A former view address may now identify a small
-            // material buffer; never replace that binding with an old view just because it matches.
-            D3D11_BUFFER_DESC description{};
-            static_cast<ID3D11Buffer*>(const_cast<void*>(original))->GetDesc(&description);
-            return description.ByteWidth == twins->bytes &&
-                   (description.BindFlags & D3D11_BIND_CONSTANT_BUFFER) != 0 ? entry.twin : nullptr;
-        }
-    }
-    return nullptr;
+    D3D11_BUFFER_DESC desc{};
+    static_cast<ID3D11Buffer*>(const_cast<void*>(original))->GetDesc(&desc);
+    return desc.ByteWidth == bytes && (desc.BindFlags & D3D11_BIND_CONSTANT_BUFFER) != 0;
 }
 
-extern "C" void rsf_constant_twins_forget(rsf_constant_twins* twins, const void* original)
+constexpr rsf_constant_twins_platform platform{owns_context, make_buffer, upload, matches_size};
+}
+
+extern "C" {
+rsf_constant_twins* rsf_core_constant_twins_create(void*, uint32_t, const rsf_constant_twins_platform*);
+void rsf_core_constant_twins_destroy(rsf_constant_twins*);
+void* rsf_core_constant_twins_write(const rsf_constant_twins*, void*, const void*, const void*);
+void* rsf_core_constant_twins_find(const rsf_constant_twins*, const void*);
+void rsf_core_constant_twins_forget(const rsf_constant_twins*, const void*);
+
+rsf_constant_twins* rsf_constant_twins_create(void* device, uint32_t bytes)
 {
-    if (!twins || !original) {
-        return;
-    }
-    for (auto& entry : twins->entries) {
-        if (entry.original == original) {
-            // The buffer stays with the slot for the next original; only the pairing goes.
-            entry.original = nullptr;
-            entry.written = 0;
-        }
-    }
+    return rsf_core_constant_twins_create(device, bytes, &platform);
+}
+
+void rsf_constant_twins_destroy(rsf_constant_twins* twins)
+{
+    rsf_core_constant_twins_destroy(twins);
+}
+
+void* rsf_constant_twins_write(rsf_constant_twins* twins, void* context, void* original,
+                               const void* contents)
+{
+    return rsf_core_constant_twins_write(twins, context, original, contents);
+}
+
+void* rsf_constant_twins_find(const rsf_constant_twins* twins, const void* original)
+{
+    return rsf_core_constant_twins_find(twins, original);
+}
+
+void rsf_constant_twins_forget(rsf_constant_twins* twins, const void* original)
+{
+    rsf_core_constant_twins_forget(twins, original);
+}
 }
