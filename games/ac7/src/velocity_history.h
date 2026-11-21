@@ -53,8 +53,7 @@ void rsf_ac7_velocity_view_written(uint32_t slot);
 void rsf_ac7_velocity_view_committed(uint32_t slot);
 size_t rsf_ac7_velocity_model_count(void);
 void rsf_ac7_velocity_history_frame_end(void* user, VelocityRetireSlot retire);
-// The native slots were discarded with their renderer.
-void rsf_ac7_velocity_history_reset(void);
+// velocity_renderer.rs resets the history when it publishes or releases a renderer.
 }
 
 static_assert(sizeof(VelocityModelDraw) == 80 && offsetof(VelocityModelDraw, vertex_hash) == 48 &&

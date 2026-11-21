@@ -387,13 +387,13 @@ extern "C" fn rsf_ac7_velocity_variant_count() -> usize {
     lock(&CACHE).variants.len()
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_velocity_reset_variants() {
+/// The native variant list was discarded with its renderer (`velocity_renderer.rs`).
+pub(crate) fn reset_variants() {
     lock(&CACHE).reset_variants();
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_velocity_cache_release() {
+/// The pass was released (`velocity_renderer.rs`).
+pub(crate) fn release() {
     lock(&CACHE).release();
 }
 

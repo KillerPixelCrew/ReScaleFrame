@@ -238,9 +238,8 @@ unsafe extern "C" fn rsf_ac7_velocity_profile_frame_end(output: *mut ProfileRepo
     }
 }
 
-/// The renderer that owned the profile was replaced or released.
-#[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_velocity_profile_reset() {
+/// The renderer that owned the profile was replaced or released (`velocity_renderer.rs`).
+pub(crate) fn reset_profile() {
     lock().profile = Profile::default();
 }
 

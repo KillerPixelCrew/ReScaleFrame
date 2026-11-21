@@ -80,4 +80,6 @@ are user-owned and not done.
 ## Remaining in C++
 
 The device renderer lifecycle and variant construction, every D3D11 call and description, the
-native resource identity checks, the clock and log text, and the HLSL.
+native resource identity checks, the clock and log text, and the HLSL. The renderer's per-device
+publication, replacement and teardown later moved to `velocity_renderer.rs`; see
+[Renderer lifetime](rust-ac7-velocity-pass-cache.md#renderer-lifetime).

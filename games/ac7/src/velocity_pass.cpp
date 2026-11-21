@@ -9,6 +9,7 @@
 #include "velocity_history.h"
 #include "velocity_stream.h"
 #include "velocity_commit.h"
+#include "velocity_renderer.h"
 #include <d3d11.h>
 #include <wrl/client.h>
 #include <algorithm>
@@ -366,7 +367,14 @@ struct Renderer {
         else if (kind==VELOCITY_RETIRE_VIEW && slot<owner.views.size()) owner.views[slot]={};
     }
 };
-std::unique_ptr<Renderer> renderer;
+// velocity_renderer.rs publishes one renderer per device and replaces and destroys it through these.
+void* create_renderer(void* device) noexcept try {
+    auto made=std::make_unique<Renderer>(static_cast<ID3D11Device*>(device));
+    return made->initialize() ? made.release() : nullptr;
+} catch (...) {return nullptr;}
+void destroy_renderer(void* renderer) noexcept {delete static_cast<Renderer*>(renderer);}
+constexpr VelocityRendererLeaves renderer_leaves{create_renderer,destroy_renderer};
+Renderer* published() noexcept {return static_cast<Renderer*>(rsf_ac7_velocity_renderer_published());}
 double cpu_clock_ms() {
     static const double scale=[] {LARGE_INTEGER frequency{};QueryPerformanceFrequency(&frequency);return 1000./double(frequency.QuadPart);}();
     LARGE_INTEGER ticks{};QueryPerformanceCounter(&ticks);return double(ticks.QuadPart)*scale;
@@ -415,10 +423,8 @@ extern "C" void rsf_ac7_velocity_geometry(const rsf_frame_tap_geometry* pointer)
     if (route==VELOCITY_ROUTE_MISMATCHED) {refused("incomplete tessellation pipeline or combined native GS/tessellation requires a matching route");return;}
     if (route!=VELOCITY_ROUTE_ADMITTED) return;
     ComPtr<ID3D11Device> device;c->GetDevice(&device);
-    if (!renderer || renderer->device.Get()!=device.Get()) {
-        auto made=std::make_unique<Renderer>(device.Get());if (!made->initialize()) {refused("device-side pass initialization failed");return;}
-        renderer=std::move(made);rsf_ac7_velocity_reset_variants();rsf_ac7_velocity_history_reset();rsf_ac7_velocity_profile_reset();
-    }
+    auto* renderer=static_cast<Renderer*>(rsf_ac7_velocity_renderer_admit(device.Get(),&renderer_leaves));
+    if (!renderer) {refused("device-side pass initialization failed");return;}
     CpuSample timing(entered_ms);
     ComPtr<ID3D11PixelShader> native_pixel;c->PSGetShader(&native_pixel,nullptr,nullptr);
     uint32_t vertex_hash=0;auto* variant=renderer->variant(g,native_pixel.Get(),existing.Get(),hull.Get(),domain.Get(),vertex_hash);
@@ -504,6 +510,7 @@ extern "C" void rsf_ac7_velocity_geometry(const rsf_frame_tap_geometry* pointer)
 extern "C" int rsf_ac7_velocity_commit(void* context,const rsf_game_render_pass* pass) try
 {
     // Pass admission, its view identity and the target check are velocity_commit.rs.
+    auto* renderer=published();
     if (!renderer || !context) return 0;
     VelocityViewDecision found{VELOCITY_NO_SLOT,VELOCITY_VIEW_UNAVAILABLE,0,0};
     if (!rsf_ac7_velocity_commit_view(pass,&found) || found.slot>=renderer->views.size()) return 0;
@@ -513,7 +520,7 @@ extern "C" int rsf_ac7_velocity_commit(void* context,const rsf_game_render_pass*
     D3D11_TEXTURE2D_DESC desc{};native->GetDesc(&desc);
     const VelocityCommitTarget target{desc.Width,desc.Height,desc.SampleDesc.Count,desc.ArraySize,uint32_t(desc.Format)};
     if (!rsf_ac7_velocity_commit_target(&found,&target)) return 0;
-    ComPtr<ID3D11Device> device;c->GetDevice(&device);if (device.Get()!=renderer->device.Get()) return 0;
+    ComPtr<ID3D11Device> device;c->GetDevice(&device);if (rsf_ac7_velocity_renderer_for(device.Get())!=renderer) return 0;
     State saved(c);if (!saved.context) return 0;c->SetPredication(nullptr,FALSE);
     c->SOSetTargets(0,nullptr,nullptr);c->GSSetShader(nullptr,nullptr,0);c->HSSetShader(nullptr,nullptr,0);c->DSSetShader(nullptr,nullptr,0);
     c->VSSetShader(renderer->fullscreen.Get(),nullptr,0);c->PSSetShader(renderer->merge.Get(),nullptr,0);
@@ -535,6 +542,7 @@ extern "C" int rsf_ac7_velocity_commit(void* context,const rsf_game_render_pass*
 } catch (...) {return 0;}
 extern "C" void rsf_ac7_velocity_frame_end(void)
 {
+    auto* renderer=published();
     if (!renderer) return;
     // velocity_commit.rs restarts the totals whether or not the frame is reported.
     VelocityProfileReport report{};
@@ -545,9 +553,11 @@ extern "C" void rsf_ac7_velocity_frame_end(void)
             report.resource_ms,report.peak_ms,report.largest_records,rsf_ac7_velocity_model_count(),rsf_ac7_velocity_variant_count(),renderer->shader_objects);
         log_line(log_user,message);
     }
-    rsf_ac7_velocity_history_frame_end(renderer.get(),Renderer::retire);
+    rsf_ac7_velocity_history_frame_end(renderer,Renderer::retire);
 }
+// velocity_renderer.rs destroys the renderer, then forgets the sources, layouts, variants,
+// history and profile.
 extern "C" void rsf_ac7_velocity_release(void)
-{renderer.reset();current={};rsf_ac7_velocity_cache_release();rsf_ac7_velocity_history_reset();rsf_ac7_velocity_profile_reset();}
+{rsf_ac7_velocity_renderer_release();current={};}
 uint32_t rsf_ac7_velocity_device_shader_creation_count() noexcept
-{return renderer ? renderer->shader_objects : 0;}
+{const auto* renderer=published();return renderer ? renderer->shader_objects : 0;}
