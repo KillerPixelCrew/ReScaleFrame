@@ -752,7 +752,7 @@ fn draw_target_keeps_the_device_hint_clock_and_retraces_each_opening() {
     );
     assert_eq!(
         logs().last().unwrap(),
-        "Unity overlay: draw completed result=-4"
+        "D3D11-on-12 overlay: draw completed result=-4"
     );
     host.stop(&p);
     assert!(scene.balanced());

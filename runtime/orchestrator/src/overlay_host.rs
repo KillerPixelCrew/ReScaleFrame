@@ -435,7 +435,7 @@ impl Host {
         };
         if trace {
             say(format_args!(
-                "Unity overlay: laying out panel on thread {}",
+                "D3D11-on-12 overlay: laying out panel on thread {}",
                 unsafe { leaf(p.thread_id)() }
             ));
         }
@@ -448,14 +448,14 @@ impl Host {
             unsafe { leaf(p.input_set_visible)(0) };
         }
         if trace {
-            say("Unity overlay: uploading textures");
+            say("D3D11-on-12 overlay: uploading textures");
         }
         self.carry_textures(p, &api, context);
         let result = {
             let _targets = SavedTargets::bind(p, context, target);
             if trace {
                 say(format_args!(
-                    "Unity overlay: drawing {} vertices, {} indices",
+                    "D3D11-on-12 overlay: drawing {} vertices, {} indices",
                     data.vertex_count, data.index_count
                 ));
             }
@@ -466,7 +466,7 @@ impl Host {
         }
         if trace {
             say(format_args!(
-                "Unity overlay: draw completed result={result}"
+                "D3D11-on-12 overlay: draw completed result={result}"
             ));
             self.trace_frames -= 1;
         }
@@ -738,7 +738,7 @@ impl Refusals {
         match self.panel {
             Some(line) => say(line),
             None => say(format_args!(
-                "overlay: the panel refused ABI {RSF_OVERLAY_ABI_VERSION}. Deploy rescaleframe_overlay.dll and dinput8.dll from the same build; an allocation failure is also possible"
+                "overlay: the panel refused ABI {RSF_OVERLAY_ABI_VERSION}. Use rescaleframe_overlay.dll and the RSF host from the same build. An allocation failure is also possible."
             )),
         }
     }

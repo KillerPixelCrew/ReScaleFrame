@@ -152,3 +152,19 @@ three staged entry points and retained by-name Runtime discovery.
 The GameSDK and runtime contract headers matched the baseline byte for
 byte. Build and test logs are under
 `.local/rust-1.94.1-verification/merged-core-debug-8268cb9-*`.
+
+## Merged device fixture builds
+
+The shared host and bridge now use D3D11-on-12 and native D3D12
+diagnostics. The overlay ABI refusal asks for a matching panel and
+RSF host. Registration and presentation follow the same typed
+capabilities and caller-supplied setup.
+
+MSVC Release linked OpenGL shared surface, D3D12 input readback,
+native D3D12 overlay, D3D11 presentation, shared FG presentation,
+shared surface and rendered FG device fixtures. The three overlay
+DLL contracts and the embedded render frontend contract passed,
+along with 395 pinned Rust tests, formatting and Clippy. The rebuilt
+Runtime matched all 381 export names and ordinals. The device
+executables were built and remain unrun. Logs are under
+`.local/rust-1.94.1-verification/device-fixtures-merged-*`.

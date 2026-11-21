@@ -989,7 +989,7 @@ impl Owner {
         let explicit =
             prepared().is_some_and(|value| value.streamline_explicit && !value.streamline_empty);
         if native12 {
-            // Unity and other native D3D12 plugins use the engine's device and queue.
+            // Native D3D12 plugins use the engine's device and queue.
             if setup.backend == DLSS && setup.runtime_switching == 0 {
                 return DXGI_ERROR_UNSUPPORTED;
             }
@@ -1004,12 +1004,12 @@ impl Owner {
                     // engine device, which may then be half registered. Every other refusal happens
                     // before the device is touched and only leaves DLSS-G unavailable.
                     if adopted == INIT_FAILED {
-                        log("Unity shared Streamline registration refused");
+                        log("Native D3D12 shared Streamline registration refused");
                         return DXGI_ERROR_UNSUPPORTED;
                     }
                     if adopted != OK {
                         log(&format!(
-                            "Unity shared Streamline host unavailable ({adopted}); DLSS-G disabled"
+                            "Native D3D12 shared Streamline host unavailable ({adopted}). DLSS-G disabled"
                         ));
                     }
                 }

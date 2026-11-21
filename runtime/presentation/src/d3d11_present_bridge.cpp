@@ -580,7 +580,7 @@ int32_t application_ready(void* b, uint32_t on_completion, uint64_t value) {
 }
 void report_device_failure(void* b, int32_t result, uint32_t backend) {
     auto& self = *as_bridge(b);
-    char text[160]; std::snprintf(text, sizeof(text), "Unity presentation failed backend=%u HRESULT=%08lx device_reason=%08lx",
+    char text[160]; std::snprintf(text, sizeof(text), "Native D3D12 presentation failed backend=%u HRESULT=%08lx device_reason=%08lx",
         backend, static_cast<unsigned long>(result), static_cast<unsigned long>(self.direct_device->GetDeviceRemovedReason())); log(text);
     ComPtr<ID3D12InfoQueue> messages;
     if (FAILED(self.direct_device.As(&messages))) return;
