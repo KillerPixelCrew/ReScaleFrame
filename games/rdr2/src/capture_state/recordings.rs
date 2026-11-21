@@ -71,24 +71,21 @@ pub(super) struct Recordings {
     pub(super) draws: Vec<Draw>,
 }
 
-struct Submission {
-    serial: u64,
+pub(super) struct Submission {
+    pub(super) serial: u64,
     generations: HashMap<usize, u64>,
     states: States,
 }
 
-#[repr(C)]
 #[derive(Default)]
 pub(super) struct Readback {
-    generation: u64,
-    submission: u64,
-    fence_value: u64,
-    list: *mut c_void,
-    queue: *mut c_void,
-    claimed: u32,
+    pub(super) generation: u64,
+    pub(super) submission: u64,
+    pub(super) fence_value: u64,
+    pub(super) list: *mut c_void,
+    pub(super) queue: *mut c_void,
+    claimed: Option<u64>,
 }
-
-const _: () = assert!(size_of::<Readback>() == 48 && std::mem::offset_of!(Readback, list) == 24);
 
 impl Readback {
     pub(super) fn is_complete(&self, completed: u64) -> bool {
@@ -131,7 +128,8 @@ impl Recordings {
     }
 
     fn snapshot(&mut self, lists: &[*mut c_void]) -> Option<Submission> {
-        self.submission_serial = self.submission_serial.wrapping_add(1);
+        // A claim can outlive a refused or abandoned submission. Never reuse its serial.
+        self.submission_serial = self.submission_serial.checked_add(1)?;
         let mut submission = Submission {
             serial: self.submission_serial,
             generations: HashMap::new(),
@@ -355,12 +353,7 @@ unsafe extern "C" fn rsf_rdr2_capture_resource_state(
     unsafe { &*owner.recordings.get() }.state(list as usize, resource as usize)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_stamp_copy(
-    owner: &Capture,
-    list: *mut c_void,
-    readback: &mut Readback,
-) {
+pub(super) unsafe fn stamp_copy(owner: &Capture, list: *mut c_void, readback: &mut Readback) {
     let recordings = unsafe { &mut *owner.recordings.get() };
     let generation =
         try_entry(&mut recordings.lists, list as usize).map_or(0, |recording| recording.generation);
@@ -371,8 +364,7 @@ unsafe extern "C" fn rsf_rdr2_capture_stamp_copy(
     };
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_reuse_readback(
+pub(super) unsafe fn reuse_readback(
     owner: &Capture,
     readback: &Readback,
     list: *mut c_void,
@@ -380,14 +372,13 @@ unsafe extern "C" fn rsf_rdr2_capture_reuse_readback(
 ) -> bool {
     // Writes in one recording execute in order. A different recording may run on another queue.
     readback.is_complete(completed)
-        || (readback.claimed == 0
+        || (readback.claimed.is_none()
             && readback.queue.is_null()
             && readback.list == list
             && readback.generation == unsafe { &*owner.recordings.get() }.generation(list as usize))
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_before_submit(
+pub(super) unsafe fn snapshot_submission(
     owner: &Capture,
     count: u32,
     lists: *const *mut c_void,
@@ -404,58 +395,44 @@ unsafe extern "C" fn rsf_rdr2_capture_before_submit(
         .map_or(null_mut(), allocate)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_rdr2_capture_claim_readback(
-    submission: &Submission,
-    readback: &mut Readback,
-) -> bool {
-    if readback.claimed != 0
-        || !readback.queue.is_null()
-        || submission.generations.get(&(readback.list as usize)) != Some(&readback.generation)
+pub(super) fn claim_readback(submission: &Submission, readback: &mut Readback) -> bool {
+    if readback.claimed.is_none()
+        && readback.queue.is_null()
+        && submission.generations.get(&(readback.list as usize)) == Some(&readback.generation)
     {
-        return false;
+        readback.claimed = Some(submission.serial);
+        return true;
     }
-    readback.claimed = 1;
-    true
+    false
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_rdr2_capture_submit_readback(
+pub(super) fn submit_readback(
     readback: &mut Readback,
     queue: *mut c_void,
     submission: u64,
-) {
-    readback.claimed = 0;
+) -> bool {
+    if readback.claimed != Some(submission) {
+        return false;
+    }
+    readback.claimed = None;
     readback.queue = queue;
     readback.submission = submission;
+    true
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_rdr2_capture_readback_awaits_fence(
-    readback: &Readback,
-    queue: *mut c_void,
-) -> bool {
+pub(super) fn awaits_fence(readback: &Readback, queue: *mut c_void) -> bool {
     !queue.is_null() && readback.queue == queue && readback.fence_value == 0
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_rdr2_capture_fence_readback(
-    readback: &mut Readback,
-    queue: *mut c_void,
-    value: u64,
-) -> bool {
-    if value == 0 || !rsf_rdr2_capture_readback_awaits_fence(readback, queue) {
+pub(super) fn fence_readback(readback: &mut Readback, queue: *mut c_void, value: u64) -> bool {
+    if value == 0 || !awaits_fence(readback, queue) {
         return false;
     }
     readback.fence_value = value;
     true
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_after_submit(
-    owner: &Capture,
-    submission: *mut Submission,
-) -> u64 {
+pub(super) unsafe fn apply_submission(owner: &Capture, submission: *mut Submission) -> u64 {
     let recordings = unsafe { &mut *owner.recordings.get() };
     if let Some(submission) = unsafe { submission.as_mut() } {
         recordings.submit(submission)
@@ -512,17 +489,17 @@ mod tests {
             rsf_rdr2_capture_reset_list(&owner, list, null_mut());
             rsf_rdr2_capture_transition(&owner, list, resource, 0, 8, false);
             let mut readback = Readback::default();
-            rsf_rdr2_capture_stamp_copy(&owner, list, &mut readback);
+            stamp_copy(&owner, list, &mut readback);
             let batch = [list];
-            let receipt = rsf_rdr2_capture_before_submit(&owner, 1, batch.as_ptr());
+            let receipt = snapshot_submission(&owner, 1, batch.as_ptr());
             assert!(!receipt.is_null());
             rsf_rdr2_capture_reset_list(&owner, list, null_mut());
             rsf_rdr2_capture_transition(&owner, list, resource, 0, 16, false);
             let mut later = Readback::default();
-            rsf_rdr2_capture_stamp_copy(&owner, list, &mut later);
-            assert!(rsf_rdr2_capture_claim_readback(&*receipt, &mut readback));
-            assert!(!rsf_rdr2_capture_claim_readback(&*receipt, &mut later));
-            assert_eq!(rsf_rdr2_capture_after_submit(&owner, receipt), 1);
+            stamp_copy(&owner, list, &mut later);
+            assert!(claim_readback(&*receipt, &mut readback));
+            assert!(!claim_readback(&*receipt, &mut later));
+            assert_eq!(apply_submission(&owner, receipt), 1);
             assert_eq!(
                 rsf_rdr2_capture_resource_state(&owner, other_list, resource),
                 8
@@ -540,29 +517,26 @@ mod tests {
         let other_queue = without_provenance_mut(3);
         let mut readback = Readback::default();
         unsafe {
-            rsf_rdr2_capture_stamp_copy(&owner, list, &mut readback);
-            assert!(rsf_rdr2_capture_reuse_readback(&owner, &readback, list, 0));
-            let receipt = rsf_rdr2_capture_before_submit(&owner, 1, [list].as_ptr());
+            stamp_copy(&owner, list, &mut readback);
+            assert!(reuse_readback(&owner, &readback, list, 0));
+            let receipt = snapshot_submission(&owner, 1, [list].as_ptr());
             assert!(!receipt.is_null());
-            assert!(rsf_rdr2_capture_claim_readback(&*receipt, &mut readback));
-            assert!(!rsf_rdr2_capture_reuse_readback(&owner, &readback, list, 0));
-            let serial = rsf_rdr2_capture_after_submit(&owner, receipt);
-            rsf_rdr2_capture_submit_readback(&mut readback, queue, serial);
+            assert!(claim_readback(&*receipt, &mut readback));
+            assert!(!reuse_readback(&owner, &readback, list, 0));
+            let serial = apply_submission(&owner, receipt);
+            assert!(!submit_readback(&mut readback, other_queue, serial + 1));
+            assert!(submit_readback(&mut readback, queue, serial));
             rsf_rdr2_capture_discard_submission(receipt);
         }
-        assert!(rsf_rdr2_capture_readback_awaits_fence(&readback, queue));
-        assert!(!rsf_rdr2_capture_fence_readback(
-            &mut readback,
-            other_queue,
-            1
-        ));
+        assert!(awaits_fence(&readback, queue));
+        assert!(!fence_readback(&mut readback, other_queue, 1));
         assert!(!readback.is_complete(1));
         // A future signal on the same queue covers the submitted copy, with or without its list.
-        assert!(rsf_rdr2_capture_fence_readback(&mut readback, queue, 2));
+        assert!(fence_readback(&mut readback, queue, 2));
         assert_eq!(readback.submission, 1);
         assert!(!readback.is_complete(u64::MAX));
         assert!(!readback.is_complete(1));
         assert!(readback.is_complete(2));
-        assert!(unsafe { rsf_rdr2_capture_reuse_readback(&owner, &readback, list, 2) });
+        assert!(unsafe { reuse_readback(&owner, &readback, list, 2) });
     }
 }

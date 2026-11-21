@@ -3,6 +3,7 @@
 use super::artifacts::{output_directory, write_camera};
 use super::metadata::Temporal;
 use super::recordings::Draw;
+use super::shots::settle_tail;
 use super::{Capture, can_publish, mark_published};
 use std::ffi::c_char;
 use std::fmt::Write as _;
@@ -94,17 +95,17 @@ fn write_temporal(out: &mut String, input: &Temporal, format_scalar: FormatScala
 }
 
 /// The poller has finished writing its ready batch and holds the capture mutex.
-/// Return true once publication was attempted, even if the file write failed.
+/// Keep the completed tail through publication, including a failed write attempt.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_rdr2_capture_publish_bundle(
     owner: &Capture,
-    readbacks_empty: bool,
     bundle: &Bundle,
     format_scalar: FormatScalar,
     report: Report,
-) -> bool {
-    if !unsafe { can_publish(owner, readbacks_empty) } {
-        return false;
+) {
+    if !unsafe { can_publish(owner) } {
+        unsafe { settle_tail(owner, false) };
+        return;
     }
     let saved = unsafe { write_bundle(owner, bundle, format_scalar) };
     let progress = unsafe { &*owner.ledger.get() }.progress();
@@ -119,8 +120,8 @@ unsafe extern "C" fn rsf_rdr2_capture_publish_bundle(
             progress.written,
         );
         mark_published(owner);
+        settle_tail(owner, true);
     }
-    true
 }
 
 unsafe fn write_bundle(owner: &Capture, bundle: &Bundle, format_scalar: FormatScalar) -> bool {

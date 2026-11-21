@@ -11,16 +11,17 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 mod artifacts;
 #[cfg(windows)]
 mod bundle;
-mod drain;
 mod gpu_leases;
 mod hooks;
 #[cfg(windows)]
 mod install;
 mod metadata;
 mod recordings;
+mod shots;
 use gpu_leases::Gpu;
 use metadata::{Metadata, PresentationDesc};
 use recordings::Recordings;
+use shots::{Ready, Shots};
 
 const MAX_DRAW_COPIES: u32 = 64;
 const MAX_DRAW_METADATA: usize = 4096;
@@ -37,11 +38,10 @@ struct Progress {
     draw_overflow: u32,
     timed_out: u32,
     write_failed: u32,
-    reuse_tail: u32,
     requested_input_frames: u32,
 }
 
-const _: () = assert!(size_of::<Progress>() == 32);
+const _: () = assert!(size_of::<Progress>() == 28);
 
 #[derive(Default)]
 struct Ledger {
@@ -66,7 +66,6 @@ impl Ledger {
             draw_overflow: u32::from(self.draw_overflow),
             timed_out: u32::from(self.timed_out),
             write_failed: u32::from(self.write_failed),
-            reuse_tail: u32::from(self.draws >= MAX_DRAW_COPIES),
             requested_input_frames: INPUT_FRAMES,
         }
     }
@@ -82,9 +81,13 @@ struct Capture {
     metadata: UnsafeCell<Metadata>,
     recordings: UnsafeCell<Recordings>,
     gpu: UnsafeCell<Gpu>,
+    shots: UnsafeCell<Shots>,
+    // The poll thread alone accesses this batch. It detaches shots under the native mutex.
+    ready: UnsafeCell<Ready>,
 }
 
-// The ASI passes its process-lived owner. The native mutex guards the non-atomic ledger.
+// The ASI keeps the owner for the life of the process. The native mutex guards shared
+// non-atomic state. The detached ready batch is exclusive to the poll thread.
 unsafe impl Sync for Capture {}
 
 impl Capture {
@@ -99,6 +102,8 @@ impl Capture {
             metadata: UnsafeCell::new(Metadata::default()),
             recordings: UnsafeCell::new(Recordings::default()),
             gpu: UnsafeCell::new(Gpu::default()),
+            shots: UnsafeCell::new(Shots::default()),
+            ready: UnsafeCell::new(Ready::default()),
         }
     }
 }
@@ -149,19 +154,17 @@ extern "C" fn rsf_rdr2_capture_has_inputs(owner: &Capture) -> bool {
     owner.inputs_remaining.load(Ordering::Acquire) != 0
 }
 
-fn drained(owner: &Capture, ledger: &Ledger, readbacks_empty: bool) -> bool {
-    readbacks_empty
+unsafe fn drained(owner: &Capture, ledger: &Ledger) -> bool {
+    unsafe { &*owner.shots.get() }.pending.is_empty()
         && !rsf_rdr2_capture_active(owner)
         && !rsf_rdr2_capture_has_inputs(owner)
         && ledger.inputs_in_flight == 0
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_can_arm(owner: &Capture, readbacks_empty: bool) -> bool {
+unsafe extern "C" fn rsf_rdr2_capture_can_arm(owner: &Capture) -> bool {
     let ledger = unsafe { &*owner.ledger.get() };
-    owner.pending.load(Ordering::Acquire)
-        && !ledger.dirty
-        && drained(owner, ledger, readbacks_empty)
+    owner.pending.load(Ordering::Acquire) && !ledger.dirty && unsafe { drained(owner, ledger) }
 }
 
 #[unsafe(no_mangle)]
@@ -212,8 +215,7 @@ unsafe extern "C" fn rsf_rdr2_capture_progress_get(owner: &Capture, out: &mut Pr
     *out = unsafe { &*owner.ledger.get() }.progress();
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_capture_commit_draw(owner: &Capture) -> u32 {
+unsafe fn commit_draw(owner: &Capture) -> u32 {
     let ledger = unsafe { &mut *owner.ledger.get() };
     let draw_count = unsafe { &*owner.recordings.get() }.draws.len();
     let mut action = 0;
@@ -240,9 +242,9 @@ unsafe extern "C" fn rsf_rdr2_capture_readback_written(owner: &Capture, success:
 }
 
 #[cfg(any(windows, test))]
-unsafe fn can_publish(owner: &Capture, readbacks_empty: bool) -> bool {
+unsafe fn can_publish(owner: &Capture) -> bool {
     let ledger = unsafe { &*owner.ledger.get() };
-    ledger.dirty && drained(owner, ledger, readbacks_empty)
+    ledger.dirty && unsafe { drained(owner, ledger) }
 }
 
 #[cfg(any(windows, test))]
@@ -262,7 +264,7 @@ mod tests {
         let feature = without_provenance_mut(2);
         rsf_rdr2_capture_request(&owner);
         unsafe {
-            assert!(rsf_rdr2_capture_can_arm(&owner, true));
+            assert!(rsf_rdr2_capture_can_arm(&owner));
             rsf_rdr2_capture_arm(&owner, 100, null_mut(), &PresentationDesc::default());
             metadata::rsf_rdr2_capture_record_feature(&owner, feature, &0);
             assert!(metadata::rsf_rdr2_capture_track_evaluation(false));
@@ -276,16 +278,20 @@ mod tests {
             rsf_rdr2_capture_request(&owner);
             assert!(!rsf_rdr2_capture_timeout(&owner, 5100));
             assert!(rsf_rdr2_capture_timeout(&owner, 5101));
-            assert!(!can_publish(&owner, true));
+            assert!(!can_publish(&owner));
             assert!(metadata::rsf_rdr2_capture_track_evaluation(true));
             assert!(!metadata::rsf_rdr2_capture_track_evaluation(false));
             assert!(!metadata::rsf_rdr2_capture_track_evaluation(true));
             metadata::rsf_rdr2_capture_finish_input(&owner);
-            assert!(!can_publish(&owner, false));
-            assert!(can_publish(&owner, true));
-            assert!(!rsf_rdr2_capture_can_arm(&owner, true));
+            (&mut *owner.shots.get())
+                .pending
+                .push(shots::Shot::default());
+            assert!(!can_publish(&owner));
+            (&mut *owner.shots.get()).pending.clear();
+            assert!(can_publish(&owner));
+            assert!(!rsf_rdr2_capture_can_arm(&owner));
             mark_published(&owner);
-            assert!(rsf_rdr2_capture_can_arm(&owner, true));
+            assert!(rsf_rdr2_capture_can_arm(&owner));
         }
     }
 
@@ -295,13 +301,13 @@ mod tests {
         unsafe {
             rsf_rdr2_capture_arm(&owner, 0, null_mut(), &PresentationDesc::default());
             for _ in 0..MAX_DRAW_COPIES - 1 {
-                assert_eq!(rsf_rdr2_capture_commit_draw(&owner), SAVE_DRAW);
+                assert_eq!(commit_draw(&owner), SAVE_DRAW);
             }
-            assert_eq!(rsf_rdr2_capture_commit_draw(&owner), SAVE_DRAW | KEEP_TAIL);
+            assert_eq!(commit_draw(&owner), SAVE_DRAW | KEEP_TAIL);
             (&mut *owner.recordings.get())
                 .draws
                 .resize(MAX_DRAW_METADATA, recordings::Draw::default());
-            assert_eq!(rsf_rdr2_capture_commit_draw(&owner), 0);
+            assert_eq!(commit_draw(&owner), 0);
         }
     }
 }

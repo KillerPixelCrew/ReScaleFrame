@@ -248,3 +248,55 @@ predicate, poll order and artifact serializer. Pinned Rust 1.94.1 formatting and
 offline Windows Cargo metadata passed. Native compilation and linking, Clippy, tests,
 the BGRA and RGB10 GPU fixtures, and live capture remain user-owned. Descriptor-copy
 and object-retirement observation coverage remain open.
+
+## Native capture shot and tail ownership
+
+Compared the draw, NGX, submit and poll paths with `b30a9973`, which is already merged
+in the starting checkout. The drain previously selected ready shots in Rust but relied
+on C++ shared pointers to keep pending, submitted and retained shots alive. The Rust
+`capture_state/shots.rs` owner now holds the pending set, the poller's ready batch and
+the retained final draw. Native leaves still observe the same game callbacks and perform
+the D3D12 work. The observed frame counter at `RDR2.exe+0x542904c` and the tick in
+milliseconds are sampled where the native copy is recorded. Draw caller and stack
+observations still come from the draw hook on its calling thread.
+
+The pending set reserves fallibly before recording a new copy. Its 84-slot limit follows the
+existing budget of 64 draw copies plus five roles for each of four NGX evaluations. It also
+bounds pending growth if allocation failures repeatedly interrupt partially recorded
+evaluations. Slot refusal follows the existing allocation failure path, and copies already
+recorded keep their leases. A refused native copy rolls back its new slot. After the 64th
+draw, later copies reuse that slot only when its retained fence proves completion or its
+unclaimed copy is still on the same command list and recording generation. Copy refusal
+leaves that tail's prior receipt intact.
+
+The census runs on the original queue call's thread, with the native mutex released
+around `ExecuteCommandLists`. The pre-call snapshot claims each eligible pending shot
+by exact list address and generation, with a unique submission serial. A claimed shot
+cannot drain or be reused, so the native callback needs only its paired receipt and queue
+identity. The post-call path resolves only that receipt's claims. A refused native stack
+allocation preserves the outer call's receipt even when the nested call uses the same queue.
+A refused Rust snapshot establishes no claims and invalidates the prior submitted state
+observations when the original returns. Queue AddRef, fence creation, Signal and Release
+still run through the typed native leaves. A failed signal preserves the queue lease and
+original serial for a later signal on that same queue. Only the fence retained by the shot
+can prove completion, and the device-removal value still refuses completion and reuse.
+
+The worker detaches completed shots in pending order under the capture mutex and leaves
+a shot pending if ready-batch allocation is refused. It maps the buffer off lock with
+the same row-pitch-times-height byte range, hands the mapped bytes to the existing image
+writer, unmaps with an empty written range, then accounts for each write under the mutex.
+If the tail was written before publication was possible, Rust carries its lease across
+polls. After a bundle attempt, including a failed write, the poller releases detached
+shots off lock. The command-list, generation, submission, queue and fence values in each
+sidecar still come from its own receipt. The artifact names, pixel and sidecar write order,
+camera files and manifest serializer are unchanged.
+
+Source comparison checked the private C and Rust image layout, the typed GPU and Map
+operations, the draw and census callbacks, the poll order and the artifact writers.
+Pinned Rust 1.94.1 formatting, locked offline Windows Cargo metadata and Git whitespace
+checks passed. Native compilation and linking, Clippy, Rust tests, the BGRA and RGB10
+D3D12 fixtures and live capture remain user-owned. Descriptor-copy and object-retirement
+observations remain open. A recording with no observed covering submission or usable
+fence can still hold the capture pending. Runtime behavior under interleaved submissions,
+allocation or Signal refusal, device removal and a tail written in an earlier poll
+remains unverified.

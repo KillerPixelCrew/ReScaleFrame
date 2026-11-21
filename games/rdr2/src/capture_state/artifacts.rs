@@ -2,6 +2,7 @@
 //! Names and writes completed image readbacks and copied camera records.
 use super::metadata::InputId;
 use super::recordings::Pipeline;
+use super::shots::Image;
 use std::ffi::{CStr, OsString, c_char};
 use std::fmt;
 use std::fs;
@@ -39,35 +40,7 @@ impl fmt::Display for Pipeline {
     }
 }
 
-#[repr(C)]
-struct Readback {
-    list: u64,
-    generation: u64,
-    submission: u64,
-    queue: u64,
-    fence_value: u64,
-    tick: u64,
-    resource: u64,
-    caller: u64,
-    sequence: u32,
-    ordinal: u32,
-    width: u32,
-    height: u32,
-    pitch: u32,
-    format: u32,
-    input_index: u32,
-    footprint_format: u32,
-    state_before: u32,
-    subresource: u32,
-    frame: u32,
-    vertices: u32,
-    instances: u32,
-    pipeline: Pipeline,
-}
-
-const _: () = assert!(size_of::<Readback>() == 160);
-
-impl Readback {
+impl Image {
     fn file_stem(&self, pid: u32, role: &str) -> String {
         if role == "draw" {
             format!("native-{pid}-{:03}-{:03}", self.sequence, self.ordinal)
@@ -115,7 +88,7 @@ impl Readback {
 /// The caller lends the directory array, known role string and mapped pixels for this call.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_rdr2_capture_write_image(
-    image: &Readback,
+    image: &Image,
     directory: *const u16,
     directory_len: usize,
     pid: u32,

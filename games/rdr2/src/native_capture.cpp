@@ -10,7 +10,6 @@
 #include <wrl/client.h>
 #include <MinHook.h>
 #include <intrin.h>
-#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdarg>
@@ -19,9 +18,10 @@
 #include <memory>
 #include <iterator>
 #include <mutex>
+#include <new>
 #include <optional>
+#include <utility>
 #include <vector>
-#include <string>
 
 namespace {
 using Microsoft::WRL::ComPtr;
@@ -53,29 +53,14 @@ Pipeline blend_facts(const D3D12_RENDER_TARGET_BLEND_DESC& b) noexcept
         static_cast<uint32_t>(b.DestBlendAlpha), static_cast<uint32_t>(b.BlendOpAlpha), b.RenderTargetWriteMask};
 }
 constexpr auto unknown_state = static_cast<D3D12_RESOURCE_STATES>(~0u);
-struct Shot : rsf_rdr2_capture_readback {
-    rsf_rdr2_capture_gpu_leases gpu{};
-    uint64_t resource{}, tick{}, caller{};
-    UINT width{}, height{}, pitch{}, format{}, vertices{}, instances{}, frame{}, sequence{}, ordinal{};
-    Pipeline pipeline{};
-    std::string role{"draw"};
-    UINT footprint_format{}, subresource{}, state_before{}, input_index{};
-
-    Shot() : rsf_rdr2_capture_readback{} {}
-    Shot(const Shot&) = delete;
-    Shot& operator=(const Shot&) = delete;
-    ~Shot() { rsf_rdr2_capture_gpu_drop(&gpu); }
-    ID3D12Resource* buffer() const noexcept { return static_cast<ID3D12Resource*>(gpu.buffer); }
-    uint64_t completed() const noexcept { return gpu.fence ? static_cast<ID3D12Fence*>(gpu.fence)->GetCompletedValue() : 0; }
-};
 struct Submission {
     ID3D12CommandQueue* queue{};
     std::unique_ptr<rsf_rdr2_capture_submission, decltype(&rsf_rdr2_capture_discard_submission)>
         facts{nullptr, rsf_rdr2_capture_discard_submission};
-    std::vector<std::shared_ptr<Shot>> shots;
 };
 using DrawEvent = rsf_rdr2_capture_draw;
 thread_local std::vector<Submission> submissions;
+thread_local size_t refused_submissions{};
 thread_local bool recording_copy{};
 thread_local bool drawing{};
 struct CopyScope {
@@ -93,8 +78,6 @@ struct State {
     rsf_rdr2_capture_paths paths{};
     uintptr_t base{};
     rsf_rdr2_capture_state* capture{};
-    std::vector<std::shared_ptr<Shot>> shots;
-    std::shared_ptr<Shot> tail;
 #ifdef RSF_RDR2_CAPTURE_TEST
     void* fixture_swapchain{};
 #endif
@@ -343,10 +326,17 @@ void STDMETHODCALLTYPE set_rtv(ID3D12GraphicsCommandList* list, UINT count,
     std::lock_guard<std::mutex> lock(g->mutex);
     rsf_rdr2_capture_bind_rtv(g->capture, list, count && handles ? &handles[0].ptr : nullptr);
 }
-bool copy_resource(ID3D12GraphicsCommandList* list, ID3D12Resource* target,
-    D3D12_RESOURCE_STATES before, const std::shared_ptr<Shot>& shot)
+uint64_t completed_value(void* fence) noexcept
+{
+    return static_cast<ID3D12Fence*>(fence)->GetCompletedValue();
+}
+bool copy_resource(void* list_pointer, void* target_pointer, uint32_t state,
+    rsf_rdr2_capture_gpu_leases* leases, rsf_rdr2_capture_image* image) noexcept
 {
     CopyScope copying;
+    auto* list = static_cast<ID3D12GraphicsCommandList*>(list_pointer);
+    auto* target = static_cast<ID3D12Resource*>(target_pointer);
+    const auto before = static_cast<D3D12_RESOURCE_STATES>(state);
     const auto desc = target->GetDesc();
     if (desc.SampleDesc.Count != 1 || desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D ||
         desc.DepthOrArraySize != 1 || before == unknown_state) return false;
@@ -363,14 +353,14 @@ bool copy_resource(ID3D12GraphicsCommandList* list, ID3D12Resource* target,
     destination.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER; destination.Width = bytes;
     destination.Height = 1; destination.DepthOrArraySize = 1; destination.MipLevels = 1;
     destination.SampleDesc.Count = 1; destination.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-    if (!shot->buffer()) {
+    if (!leases->buffer) {
         ComPtr<ID3D12Resource> buffer;
         const auto hr = device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &destination,
             D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&buffer));
         if (FAILED(hr)) { log("readback allocation failed hr=%08lx", static_cast<unsigned long>(hr)); return false; }
-        if (!rsf_rdr2_capture_gpu_adopt(&shot->gpu, buffer.Detach(), &gpu_ops)) return false;
+        if (!rsf_rdr2_capture_gpu_adopt(leases, buffer.Detach(), &gpu_ops)) return false;
     }
-    rsf_rdr2_capture_gpu_bind_fence(&shot->gpu, nullptr);
+    rsf_rdr2_capture_gpu_bind_fence(leases, nullptr);
     // Preserve the observed input state; copying does not alter the producer/consumer contract.
     D3D12_RESOURCE_BARRIER barrier{};
     barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -378,18 +368,17 @@ bool copy_resource(ID3D12GraphicsCommandList* list, ID3D12Resource* target,
     if (before != D3D12_RESOURCE_STATE_COPY_SOURCE) list->ResourceBarrier(1, &barrier);
     D3D12_TEXTURE_COPY_LOCATION source{}; source.pResource = target;
     source.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-    D3D12_TEXTURE_COPY_LOCATION dest{}; dest.pResource = shot->buffer();
+    D3D12_TEXTURE_COPY_LOCATION dest{}; dest.pResource = static_cast<ID3D12Resource*>(leases->buffer);
     dest.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT; dest.PlacedFootprint = footprint;
     list->CopyTextureRegion(&dest, 0, 0, 0, &source, nullptr);
     barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
     barrier.Transition.StateAfter = before;
     if (before != D3D12_RESOURCE_STATE_COPY_SOURCE) list->ResourceBarrier(1, &barrier);
-    shot->width = static_cast<UINT>(desc.Width); shot->height = desc.Height;
-    shot->format = desc.Format; shot->pitch = footprint.Footprint.RowPitch;
-    shot->footprint_format = footprint.Footprint.Format; shot->state_before = before;
-    rsf_rdr2_capture_stamp_copy(g->capture, list, shot.get());
-    shot->resource = reinterpret_cast<uint64_t>(target); shot->tick = GetTickCount64();
-    read_local(g->base + 0x542904c, &shot->frame, sizeof(shot->frame));
+    image->width = static_cast<UINT>(desc.Width); image->height = desc.Height;
+    image->format = desc.Format; image->pitch = footprint.Footprint.RowPitch;
+    image->footprint_format = footprint.Footprint.Format; image->state_before = before;
+    image->resource = reinterpret_cast<uint64_t>(target); image->tick = GetTickCount64();
+    read_local(g->base + 0x542904c, &image->frame, sizeof(image->frame));
     return true;
 }
 template<class T> bool ngx_get(const void* params, size_t slot, const char* key, T& value)
@@ -424,19 +413,17 @@ void input_camera(const rsf_rdr2_capture_input_id& id)
 }
 void input_resource(ID3D12GraphicsCommandList* list, const void* parameters,
     const rsf_rdr2_capture_input_id& id, rsf_rdr2_capture_input_role input_role,
-    const char* key, const char* role, bool required = true)
+    const char* key, bool required = true)
 {
     ID3D12Resource* resource{};
     if ((!ngx_get(parameters, 9, key, resource) && !ngx_get(parameters, 8, key, resource)) || !resource) {
         if (required) rsf_rdr2_capture_input_resource_refused(g->capture, &id, input_role, true);
         return;
     }
-    const auto before = static_cast<D3D12_RESOURCE_STATES>(rsf_rdr2_capture_resource_state(g->capture, list, resource));
-    auto shot = std::make_shared<Shot>();
-    shot->role = role; shot->sequence = id.sequence; shot->input_index = id.index;
-    g->shots.push_back(shot);
-    if (!copy_resource(list, resource, before, shot)) {
-        g->shots.pop_back();
+    const auto before = rsf_rdr2_capture_resource_state(g->capture, list, resource);
+    const auto result = rsf_rdr2_capture_input_shot(g->capture, &id, input_role, list, resource, before, copy_resource);
+    if (result == RSF_RDR2_CAPTURE_COPY_NO_SLOT) throw std::bad_alloc{};
+    if (result == RSF_RDR2_CAPTURE_COPY_REFUSED) {
         rsf_rdr2_capture_input_resource_refused(g->capture, &id, input_role, false);
     }
 }
@@ -476,7 +463,7 @@ void ngx_evaluate(void* pointer, void* handle, const void* parameters, uint32_t 
     if (phase) {
         FinishInput finish;
         if (rsf_rdr2_capture_input_result(g->capture, list, result, &id))
-            input_resource(list, parameters, id, RSF_RDR2_CAPTURE_OUTPUT, "Output", "output");
+            input_resource(list, parameters, id, RSF_RDR2_CAPTURE_OUTPUT, "Output");
         return;
     }
     if (!rsf_rdr2_capture_begin_input(g->capture, list, handle, &id)) return;
@@ -500,10 +487,10 @@ void ngx_evaluate(void* pointer, void* handle, const void* parameters, uint32_t 
             }
         }
     }
-    input_resource(list, parameters, id, RSF_RDR2_CAPTURE_COLOR, "Color", "color");
-    input_resource(list, parameters, id, RSF_RDR2_CAPTURE_DEPTH, "Depth", "depth");
-    input_resource(list, parameters, id, RSF_RDR2_CAPTURE_MOTION, "MotionVectors", "motion");
-    input_resource(list, parameters, id, RSF_RDR2_CAPTURE_EXPOSURE, "ExposureTexture", "exposure", false);
+    input_resource(list, parameters, id, RSF_RDR2_CAPTURE_COLOR, "Color");
+    input_resource(list, parameters, id, RSF_RDR2_CAPTURE_DEPTH, "Depth");
+    input_resource(list, parameters, id, RSF_RDR2_CAPTURE_MOTION, "MotionVectors");
+    input_resource(list, parameters, id, RSF_RDR2_CAPTURE_EXPOSURE, "ExposureTexture", false);
     finish.pending = !rsf_rdr2_capture_commit_input(g->capture);
 }
 catch (...) { log("NGX input observation failed"); }
@@ -516,27 +503,14 @@ void snapshot(ID3D12GraphicsCommandList* list, UINT vertices, UINT instances, vo
     if (!rsf_rdr2_capture_get_draw_binding(g->capture, list, &binding)) return;
     auto* target = static_cast<ID3D12Resource*>(binding.target);
     if (!rsf_rdr2_capture_gpu_accepts_target(g->capture, target)) return;
-    const auto progress = capture_progress();
-    const bool reuse_tail = progress.reuse_tail != 0;
-    auto shot = reuse_tail ? g->tail : std::make_shared<Shot>();
-    if (!shot || (reuse_tail && !rsf_rdr2_capture_reuse_readback(g->capture, shot.get(), list, shot->completed())))
-        return;
-    // Keep the lease before issuing the GPU copy. Later diagnostic allocations may fail.
-    if (!reuse_tail) g->shots.push_back(shot);
-    if (!copy_resource(list, target, D3D12_RESOURCE_STATE_RENDER_TARGET, shot)) {
-        if (!reuse_tail) g->shots.pop_back();
-        return;
-    }
-    shot->sequence = progress.sequence; shot->ordinal = progress.draws;
-    shot->vertices = vertices; shot->instances = instances;
-    shot->caller = reinterpret_cast<uint64_t>(caller);
-    shot->pipeline = binding.pipeline;
-    rsf_rdr2_capture_gpu_select_target(g->capture, target);
-    const auto action = rsf_rdr2_capture_commit_draw(g->capture);
-    if (action & RSF_RDR2_CAPTURE_KEEP_TAIL) g->tail = shot;
-    if (action & RSF_RDR2_CAPTURE_SAVE_DRAW) {
-        DrawEvent event{shot->ordinal, shot->frame, vertices, instances, reinterpret_cast<uint64_t>(list),
-            shot->generation, shot->caller, binding.pso, shot->pipeline, {}, 0};
+    DrawEvent event{0, 0, vertices, instances, reinterpret_cast<uint64_t>(list), 0,
+        reinterpret_cast<uint64_t>(caller), binding.pso, binding.pipeline, {}, 0};
+    const auto result = rsf_rdr2_capture_draw_shot(g->capture, list, target, D3D12_RESOURCE_STATE_RENDER_TARGET,
+        copy_resource, completed_value, &event);
+    if (result == RSF_RDR2_CAPTURE_COPY_NO_SLOT) {
+        lock.unlock();
+        log("snapshot failed");
+    } else if (result == RSF_RDR2_CAPTURE_DRAW_SAVE_EVENT) {
         event.stack_size = CaptureStackBackTrace(1, static_cast<DWORD>(std::size(event.stack)), event.stack, nullptr);
         if (!rsf_rdr2_capture_record_draw(g->capture, &event)) {
             lock.unlock();
@@ -628,46 +602,43 @@ void swapchain_created(void* pointer) noexcept try
 catch (...) { log("swapchain observation failed"); }
 void before_submit(void* pointer, uint32_t count, void* const* lists) noexcept try
 {
+    if (refused_submissions) {
+        ++refused_submissions;
+        return;
+    }
     std::lock_guard<std::mutex> lock(g->mutex);
     auto& submission = submissions.emplace_back();
     submission.queue = static_cast<ID3D12CommandQueue*>(pointer);
     submission.facts.reset(rsf_rdr2_capture_before_submit(g->capture, count, lists));
-    if (submission.facts) {
-        submission.shots.reserve(g->shots.size());
-        for (const auto& shot : g->shots) {
-            if (rsf_rdr2_capture_claim_readback(submission.facts.get(), shot.get()))
-                submission.shots.push_back(shot);
-        }
-    }
 }
-catch (...) { log("submission snapshot failed"); }
-void after_submit(void* pointer, uint32_t, void* const*) noexcept try
+catch (...) {
+    // Match the refused call's after phase without consuming an outer receipt.
+    ++refused_submissions;
+    log("submission snapshot failed");
+}
+void record_submission(void* queue, rsf_rdr2_capture_submission* facts)
 {
-    if (submissions.empty() || submissions.back().queue != pointer) {
-        log("submission pairing failed"); return;
-    }
-    auto submitted = std::move(submissions.back()); submissions.pop_back();
-    auto* queue = submitted.queue;
     std::lock_guard<std::mutex> lock(g->mutex);
-    const auto serial = rsf_rdr2_capture_after_submit(g->capture, submitted.facts.get());
-    for (const auto& shot : submitted.shots) {
-        rsf_rdr2_capture_submit_readback(shot.get(), queue, serial);
-        rsf_rdr2_capture_gpu_bind_queue(&shot->gpu, queue);
-    }
-    const auto awaits_fence = [queue](const std::shared_ptr<Shot>& shot) {
-        return rsf_rdr2_capture_readback_awaits_fence(shot.get(), queue);
-    };
-    if (std::none_of(g->shots.begin(), g->shots.end(), awaits_fence)) return;
-    rsf_rdr2_capture_gpu_proof proof{};
-    switch (rsf_rdr2_capture_gpu_signal(g->capture, queue, &gpu_ops, &proof)) {
-    case RSF_RDR2_GPU_SIGNAL_ACCEPTED: break;
+    switch (rsf_rdr2_capture_after_submit(g->capture, queue, facts, &gpu_ops)) {
+    case RSF_RDR2_GPU_NO_SIGNAL_NEEDED:
+    case RSF_RDR2_GPU_SIGNAL_ACCEPTED: return;
     case RSF_RDR2_GPU_CREATE_REFUSED: log("cannot create readback fence; retaining submitted readbacks"); return;
     case RSF_RDR2_GPU_SIGNAL_REFUSED: log("readback fence Signal failed"); return;
     default: log("readback fence owner unavailable; retaining submitted readbacks"); return;
     }
-    for (const auto& shot : g->shots)
-        if (rsf_rdr2_capture_fence_readback(shot.get(), queue, proof.value))
-            rsf_rdr2_capture_gpu_bind_fence(&shot->gpu, proof.fence);
+}
+void after_submit(void* pointer, uint32_t, void* const*) noexcept try
+{
+    if (refused_submissions) {
+        --refused_submissions;
+        record_submission(pointer, nullptr);
+        return;
+    }
+    if (submissions.empty() || submissions.back().queue != pointer) {
+        log("submission pairing failed"); return;
+    }
+    auto submitted = std::move(submissions.back()); submissions.pop_back();
+    record_submission(pointer, submitted.facts.get());
 }
 catch (...) { log("submission observation failed"); }
 void before_present(void* pointer) noexcept try
@@ -688,10 +659,11 @@ void before_present(void* pointer) noexcept try
             current.Get() == selected) {
             rsf_rdr2_capture_end_draws(g->capture);
             const auto progress = capture_progress();
-            log("capture %u recording complete: %u draws, %zu readbacks resource=%p", progress.sequence, progress.draws, g->shots.size(), selected);
+            log("capture %u recording complete: %u draws, %zu readbacks resource=%p", progress.sequence, progress.draws,
+                rsf_rdr2_capture_pending_count(g->capture), selected);
         }
     }
-    if (rsf_rdr2_capture_can_arm(g->capture, g->shots.empty())) {
+    if (rsf_rdr2_capture_can_arm(g->capture)) {
         DXGI_SWAP_CHAIN_DESC desc{};
         if (FAILED(swapchain->GetDesc(&desc))) return;
         auto* key = identity(swapchain);
@@ -700,59 +672,31 @@ void before_present(void* pointer) noexcept try
             static_cast<uint32_t>(desc.BufferDesc.Format), desc.BufferDesc.Width, desc.BufferDesc.Height,
         };
         rsf_rdr2_capture_arm(g->capture, GetTickCount64(), key, &descriptor);
-        g->tail.reset();
         rsf_rdr2_request_camera_capture();
         log("capture %u armed", capture_progress().sequence);
     }
 }
 catch (...) { log("present observation failed"); }
-bool write_shot(const Shot& s) noexcept
+bool write_shot(const rsf_rdr2_capture_gpu_leases* leases, const rsf_rdr2_capture_image* image,
+    const char* role) noexcept
 {
-    const rsf_rdr2_capture_image image{
-        reinterpret_cast<uint64_t>(s.list), s.generation, s.submission, reinterpret_cast<uint64_t>(s.queue), s.fence_value,
-        s.tick, s.resource, s.caller, s.sequence, s.ordinal, s.width, s.height, s.pitch, s.format,
-        s.input_index, s.footprint_format, s.state_before, s.subresource, s.frame,
-        s.vertices, s.instances, s.pipeline,
-    };
+    auto* buffer = static_cast<ID3D12Resource*>(leases->buffer);
     void* data{};
-    const SIZE_T bytes = static_cast<SIZE_T>(s.pitch) * s.height;
+    const SIZE_T bytes = static_cast<SIZE_T>(image->pitch) * image->height;
     const D3D12_RANGE range{0, bytes};
-    if (!s.buffer()) return false;
-    const auto mapped = s.buffer()->Map(0, &range, &data);
+    if (!buffer) return false;
+    const auto mapped = buffer->Map(0, &range, &data);
     if (FAILED(mapped)) {
-        log("readback Map failed hr=%08lx role=%s", static_cast<unsigned long>(mapped), s.role.c_str());
+        log("readback Map failed hr=%08lx role=%s", static_cast<unsigned long>(mapped), role);
         return false;
     }
-    const bool ok = rsf_rdr2_capture_write_image(&image,
+    const bool ok = rsf_rdr2_capture_write_image(image,
         reinterpret_cast<const uint16_t*>(g->paths.directory), wcslen(g->paths.directory), GetCurrentProcessId(),
-        s.role.c_str(), static_cast<const uint8_t*>(data), bytes);
+        role, static_cast<const uint8_t*>(data), bytes);
     const D3D12_RANGE empty{0, 0};
-    s.buffer()->Unmap(0, &empty);
+    buffer->Unmap(0, &empty);
     return ok;
 }
-struct ReadbackDrain {
-    std::vector<std::shared_ptr<Shot>>& pending;
-    std::vector<std::shared_ptr<Shot>> ready;
-};
-constexpr rsf_rdr2_capture_drain_ops drain_ops{
-    sizeof(rsf_rdr2_capture_drain_ops), 1,
-    [](void* context, size_t index, uint64_t* completed) noexcept -> const rsf_rdr2_capture_readback* {
-        const auto& shot = static_cast<ReadbackDrain*>(context)->pending[index];
-        *completed = shot->completed();
-        return shot.get();
-    },
-    [](void* context, size_t index) noexcept {
-        auto& drain = *static_cast<ReadbackDrain*>(context);
-        // Keep a ready reference before erasing the pending slot under the mutex.
-        try {
-            drain.ready.push_back(drain.pending[index]);
-        } catch (...) {
-            return false;
-        }
-        drain.pending.erase(drain.pending.begin() + static_cast<std::ptrdiff_t>(index));
-        return true;
-    },
-};
 DWORD WINAPI poll(void*) noexcept
 {
     const rsf_rdr2_capture_bundle bundle{
@@ -764,35 +708,32 @@ DWORD WINAPI poll(void*) noexcept
         if (rsf_rdr2_capture_fixture_stopping()) return 0;
 #endif
         rsf_rdr2_capture_poll_request(g->capture, reinterpret_cast<const uint16_t*>(g->paths.request));
-        ReadbackDrain drain{g->shots, {}};
         rsf_rdr2_capture_gpu_retired* retired{};
         {
             std::lock_guard<std::mutex> lock(g->mutex);
             if (rsf_rdr2_capture_timeout(g->capture, GetTickCount64())) {
                 log("capture %u timed out waiting for scene or DLSS input; retaining explicit incomplete result",capture_progress().sequence);
             }
-            retired = rsf_rdr2_capture_collect_ready(g->capture, &drain, g->shots.size(), &drain_ops);
+            retired = rsf_rdr2_capture_collect_ready(g->capture, completed_value);
         }
         rsf_rdr2_capture_gpu_drop_idle(retired);
-        for (const auto& shot : drain.ready) {
-            const bool ok = write_shot(*shot);
+        const auto count = rsf_rdr2_capture_ready_count(g->capture);
+        for (size_t index = 0; index < count; ++index) {
+            const bool ok = rsf_rdr2_capture_write_ready(g->capture, index, write_shot);
             std::lock_guard<std::mutex> lock(g->mutex);
             rsf_rdr2_capture_readback_written(g->capture, ok);
         }
-        std::shared_ptr<Shot> retired_tail;
         {
             std::lock_guard<std::mutex> lock(g->mutex);
-            if (rsf_rdr2_capture_publish_bundle(g->capture, g->shots.empty(), &bundle,
+            rsf_rdr2_capture_publish_bundle(g->capture, &bundle,
                 [](double value, char* buffer, size_t size) noexcept {
                     return std::snprintf(buffer, size, "%.12g", value);
                 },
                 [](uint32_t sequence, bool saved, size_t inputs, size_t draws, uint32_t written) noexcept {
                     log("capture %u bundle saved=%d input_frames=%zu draws=%zu readbacks=%u", sequence, saved, inputs, draws, written);
-                })) {
-                // The tail may have been written in an earlier poll.
-                retired_tail = std::move(g->tail);
-            }
+                });
         }
+        rsf_rdr2_capture_drop_ready(g->capture);
     }
 }
 bool create_state(rsf_rdr2_capture_state* capture, const rsf_rdr2_capture_paths* paths) noexcept try
