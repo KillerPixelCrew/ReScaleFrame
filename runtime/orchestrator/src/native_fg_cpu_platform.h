@@ -70,6 +70,19 @@ typedef struct rsf_nfg_cpu_platform {
 
 extern const rsf_nfg_cpu_platform rsf_native_fg_cpu_platform;
 
+/* Win32 callbacks supplied by the Rust owner in the production table. */
+uint32_t rsf_core_nfg_owned_window_thread(uint64_t);
+int rsf_core_nfg_post_ping(void*, uint32_t);
+void rsf_core_nfg_signal_completion(void);
+int rsf_core_nfg_wait_completion(uint32_t, uint32_t);
+uint32_t rsf_core_nfg_input_idle_ms(void);
+uint64_t rsf_core_nfg_tick_millis(void);
+uint64_t rsf_core_nfg_qpc_frequency(void);
+uint32_t rsf_core_nfg_thread_id(void);
+void* rsf_core_nfg_duplicate_render_thread(void);
+size_t rsf_core_nfg_sample_render_thread(void*, uint64_t*, size_t);
+size_t rsf_core_nfg_describe_address(uint64_t, char*, size_t);
+
 void rsf_core_native_fg_cpu(const rsf_game_cpu_event*, const rsf_nfg_cpu_platform*);
 void rsf_core_native_fg_frame(const rsf_game_render_pass*, uint32_t begin, const rsf_nfg_cpu_platform*);
 void rsf_core_native_fg_submission(const rsf_game_render_pass*, uint32_t begin, const rsf_nfg_cpu_platform*);

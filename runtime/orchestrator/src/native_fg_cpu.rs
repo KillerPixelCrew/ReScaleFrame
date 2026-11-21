@@ -58,6 +58,7 @@ macro_rules! call {
 
 mod diagnostics;
 mod hitch;
+mod win32;
 use diagnostics::{Diagnostics, audit, failure, report_latency_window};
 pub(crate) use diagnostics::{Failure, report_timing, sr_failure, stage, trace};
 

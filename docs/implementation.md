@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The Direct3D FG CPU path now uses Rust for its Win32 completion event,
+window ownership checks, input age and clocks, and bounded render-thread
+sampling. The wait still pumps sent messages when requested. The sampler
+resumes the render thread before module lookup or formatting, and module
+names are written as UTF-8. The production callbacks keep the existing
+private table layout and the public C ABI. Build and runtime validation
+remain open.
+
 Anomaly's cold entry and native observer now share Rust executable
 identification. Both check the profiled filename before streaming the
 file into Windows SHA-256 with full file sharing. The observer still

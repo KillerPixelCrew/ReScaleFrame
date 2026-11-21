@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 use super::{Platform, Source, lock, now_qpc};
 use crate::native_fg::sink;
+use crate::owned_win32_handle;
 use std::ffi::{c_char, c_void};
-use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+use std::os::windows::io::{AsRawHandle, OwnedHandle};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -80,15 +81,14 @@ pub(super) fn open(p: &Platform, source: Source, submission: u64, opened_qpc: u6
         .is_none_or(|thread| thread.id != id || thread.session != source.session)
     {
         let handle = call!(p, duplicate_render_thread);
-        if handle.is_null() {
+        // The callback transfers a real duplicated handle to this thread.
+        let Some(handle) = (unsafe { owned_win32_handle(handle) }) else {
             state.thread = None;
             return;
-        }
-        // The native leaf transfers a real duplicated handle to this thread.
-        let handle = Arc::new(unsafe { OwnedHandle::from_raw_handle(handle) });
+        };
         state.thread = Some(RenderThread {
             id,
-            handle,
+            handle: Arc::new(handle),
             session: source.session,
             interval: None,
         });

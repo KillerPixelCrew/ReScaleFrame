@@ -6,9 +6,7 @@
 #include <d3d12.h>
 #include <dxgi1_6.h>
 #include <wrl/client.h>
-#include <algorithm>
 #include <array>
-#include <cstdio>
 
 extern "C" int32_t rsf_d3d11_present_pace_for_generation(uint64_t, rsf_pacing_owner, uint64_t);
 
@@ -25,74 +23,6 @@ static_assert(RSF_NFG_CPU_SUBMIT_START == RSF_LATENCY_RENDER_SUBMIT_START);
 static_assert(RSF_NFG_CPU_SUBMIT_END == RSF_LATENCY_RENDER_SUBMIT_END);
 static_assert(RSF_NFG_CPU_PRESENT_START == RSF_LATENCY_PRESENT_START);
 static_assert(RSF_NFG_CPU_PRESENT_END == RSF_LATENCY_PRESENT_END);
-
-size_t describe_address(uint64_t address, char* text, size_t size) {
-    HMODULE module = nullptr;
-    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-            reinterpret_cast<LPCWSTR>(uintptr_t(address)), &module) || !module) return 0;
-    MEMORY_BASIC_INFORMATION region{};
-    if (!VirtualQuery(reinterpret_cast<void*>(uintptr_t(address)), &region, sizeof(region)) ||
-        !(region.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY))) return 0;
-    wchar_t path[MAX_PATH]{};
-    const auto length = GetModuleFileNameW(module, path, MAX_PATH);
-    if (!length || length >= MAX_PATH) return 0;
-    const wchar_t* leaf = path; for (const wchar_t* c = path; *c; ++c) if (*c == L'\\') leaf = c + 1;
-    const int written = std::snprintf(text, size, " %ls+0x%llx", leaf,
-        static_cast<unsigned long long>(address - uint64_t(uintptr_t(module))));
-    return written > 0 && size_t(written) < size ? size_t(written) : 0;
-}
-void* duplicate_render_thread() {
-    HANDLE copy = nullptr;
-    return DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &copy,
-        THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, 0) ? copy : nullptr;
-}
-
-size_t sample_render_thread(void* thread, uint64_t* addresses, size_t capacity) {
-    if (capacity == 0 || SuspendThread(thread) == DWORD(-1)) return 0;
-    CONTEXT context{};
-    context.ContextFlags = CONTEXT_CONTROL;
-    size_t count = 0;
-    if (GetThreadContext(thread, &context)) {
-        addresses[count++] = context.Rip;
-        const auto stack = reinterpret_cast<const void*>(uintptr_t(context.Rsp));
-        MEMORY_BASIC_INFORMATION region{};
-        if (VirtualQuery(stack, &region, sizeof(region)) &&
-            region.State == MEM_COMMIT && !(region.Protect & (PAGE_NOACCESS | PAGE_GUARD))) {
-            const auto offset = uintptr_t(stack) - uintptr_t(region.BaseAddress);
-            if (offset < region.RegionSize) {
-                const size_t words = std::min(capacity - count, (region.RegionSize - offset) / sizeof(uint64_t));
-                SIZE_T copied = 0;
-                if (words && ReadProcessMemory(GetCurrentProcess(), stack, addresses + count, words * sizeof(uint64_t), &copied))
-                    count += copied / sizeof(uint64_t);
-            }
-        }
-    }
-    // No module lookup, formatting or log sink runs while the thread is suspended.
-    return ResumeThread(thread) == DWORD(-1) ? 0 : count;
-}
-
-HANDLE completion_event() {
-    static const HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-    return event;
-}
-
-int wait_completion(uint32_t timeout, uint32_t sent_messages) {
-    const auto event = completion_event();
-    if (!event) return 0;
-    if (!sent_messages) return WaitForSingleObject(event, timeout) != WAIT_FAILED;
-    const auto result = MsgWaitForMultipleObjectsEx(1, &event, timeout, QS_SENDMESSAGE, 0);
-    if (result == WAIT_OBJECT_0 + 1) {
-        MSG message{};
-        PeekMessageW(&message, nullptr, 0, 0, PM_NOREMOVE | PM_QS_SENDMESSAGE);
-    }
-    return result != WAIT_FAILED;
-}
-
-uint32_t owned_window_thread(uint64_t key) {
-    DWORD process{};
-    const auto thread = GetWindowThreadProcessId(reinterpret_cast<HWND>(uintptr_t(key)), &process);
-    return process == GetCurrentProcessId() ? thread : 0;
-}
 
 uint32_t adapter_vendor(void* device) {
     ComPtr<IDXGIFactory4> factory;
@@ -149,25 +79,18 @@ extern "C" const rsf_nfg_cpu_platform rsf_native_fg_cpu_platform{
         return rsf::latency::AntiLag::create_context(*driver);
     },
     receipt_owner,
-    owned_window_thread,
-    +[](void* window, uint32_t message) { return int(PostMessageW(static_cast<HWND>(window), message, 0, 0)); },
-    +[]() { if (const auto event = completion_event()) SetEvent(event); },
-    wait_completion,
-    +[]() -> uint32_t {
-        LASTINPUTINFO input{sizeof(input), 0};
-        return GetLastInputInfo(&input) ? uint32_t(GetTickCount() - input.dwTime) : UINT32_MAX;
-    },
-    +[]() -> uint64_t { return GetTickCount64(); },
-    +[]() -> uint64_t {
-        LARGE_INTEGER frequency{};
-        QueryPerformanceFrequency(&frequency);
-        return uint64_t(frequency.QuadPart);
-    },
-    +[]() -> uint32_t { return GetCurrentThreadId(); },
+    rsf_core_nfg_owned_window_thread,
+    rsf_core_nfg_post_ping,
+    rsf_core_nfg_signal_completion,
+    rsf_core_nfg_wait_completion,
+    rsf_core_nfg_input_idle_ms,
+    rsf_core_nfg_tick_millis,
+    rsf_core_nfg_qpc_frequency,
+    rsf_core_nfg_thread_id,
     rsf_frame_allows_fg,
-    duplicate_render_thread,
-    sample_render_thread,
-    describe_address,
+    rsf_core_nfg_duplicate_render_thread,
+    rsf_core_nfg_sample_render_thread,
+    rsf_core_nfg_describe_address,
 };
 
 extern "C" RSF_RUNTIME_API void rsf_native_fg_rendered_source_set(uint32_t enabled) {
