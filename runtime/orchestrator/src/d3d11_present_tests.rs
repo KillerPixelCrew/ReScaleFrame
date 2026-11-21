@@ -1240,6 +1240,12 @@ fn creation_admission_publication_and_retirement() {
         DXGI_ERROR_UNSUPPORTED,
         "one active owner"
     );
+    let mut short = size_of::<u32>() as u32;
+    assert_eq!(
+        unsafe { rsf_core_d3d11p_graphics(ptr::from_mut(&mut short).cast()) },
+        0
+    );
+    assert_eq!(short, size_of::<u32>() as u32);
     let mut graphics = Graphics::EMPTY;
     graphics.struct_size = 48;
     assert_eq!(unsafe { rsf_core_d3d11p_graphics(&mut graphics) }, 1);
@@ -1264,6 +1270,7 @@ fn creation_admission_publication_and_retirement() {
     assert!(rsf_core_d3d11p_active_bridge().is_null() && rsf_core_d3d11p_session().is_null());
     assert_eq!(rsf_core_d3d11p_has_owner(), 0);
     assert_eq!(status().0, NOT_READY);
+    assert_eq!(unsafe { rsf_core_d3d11p_graphics(&mut graphics) }, 0);
 }
 
 #[test]

@@ -15,6 +15,7 @@ use crate::render_abi::{
 };
 use crate::scene_abi::rsf_observer_present_event as Event;
 use crate::shared_surface::{self, Surface, SurfaceSetup};
+use crate::sr_session::has_capacity;
 use std::cell::Cell;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::fmt::Write as _;
@@ -278,7 +279,6 @@ static CHAIN_GENERATION: AtomicU64 = AtomicU64::new(1);
 static ACTIVE_HOST: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 static ACTIVE_CHAIN: AtomicPtr<Owner> = AtomicPtr::new(null_mut());
 static ACTIVE_BRIDGE: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
-static ACTIVE_INTEROP: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 static ACTIVE_SESSION: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 // The active provider paces through the shared Streamline host (Reflex), so latency calls go
 // to the host once rather than to both. Changes only with ACTIVE_SESSION, under PROVIDER_GUARD.
@@ -1107,10 +1107,13 @@ impl Owner {
         });
         let facts = self.facts();
         ACTIVE_HOST.store(self.host(), Ordering::Release);
-        lock(&ACTIVE_GRAPHICS).0 = facts.graphics;
         ACTIVE_SESSION.store(self.provider(), Ordering::Release);
         HOST_PACED.store(self.paced_by_host(), Ordering::SeqCst);
-        ACTIVE_INTEROP.store(facts.interop_queue, Ordering::Release);
+        lock(&ACTIVE_GRAPHICS).0 = Graphics {
+            queue: facts.interop_queue,
+            native_queue: null_mut(),
+            ..facts.graphics
+        };
         ACTIVE_BRIDGE.store(b, Ordering::Release);
         ACTIVE_CHAIN.store(ptr::from_ref(self).cast_mut(), Ordering::Release);
         lock(&STATUS).activate(ACTIVE_BACKEND.load(Ordering::SeqCst), generation());
@@ -1899,9 +1902,9 @@ impl Owner {
             if ACTIVE_CHAIN.load(Ordering::Acquire) == ptr::from_ref(self).cast_mut() {
                 lock(&STATUS).invalidate();
                 OUTER_ALIAS.store(null_mut(), Ordering::Release);
+                lock(&ACTIVE_GRAPHICS).0 = Graphics::EMPTY;
                 ACTIVE_CHAIN.store(null_mut(), Ordering::Release);
                 ACTIVE_BRIDGE.store(null_mut(), Ordering::Release);
-                ACTIVE_INTEROP.store(null_mut(), Ordering::Release);
                 ACTIVE_SESSION.store(null_mut(), Ordering::Release);
                 HOST_PACED.store(false, Ordering::SeqCst);
             }
@@ -2293,16 +2296,14 @@ pub(crate) extern "C" fn rsf_core_d3d11p_host() -> Raw {
 
 #[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn rsf_core_d3d11p_graphics(graphics: *mut Graphics) -> i32 {
-    let queue = ACTIVE_INTEROP.load(Ordering::Acquire);
-    let Some(graphics) = (unsafe { graphics.as_mut() }) else {
-        return 0;
-    };
-    if (graphics.struct_size as usize) < size_of::<Graphics>() || queue.is_null() {
+    if !unsafe { has_capacity(graphics) } {
         return 0;
     }
-    *graphics = lock(&ACTIVE_GRAPHICS).0;
-    graphics.queue = queue;
-    graphics.native_queue = null_mut();
+    let snapshot = lock(&ACTIVE_GRAPHICS).0;
+    if snapshot.queue.is_null() {
+        return 0;
+    }
+    unsafe { graphics.write(snapshot) };
     1
 }
 

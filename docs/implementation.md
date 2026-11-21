@@ -4,6 +4,18 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The presentation bridge publishes the graphics device and upload queue as
+one snapshot and clears it during retirement. The graphics query checks
+the caller's size field before writing the full record. Source review
+traced publication and retirement. The updated short-buffer and retired
+owner fixture remains unrun.
+
+Anomaly's motion stage now locates foliage constants and validates their
+buffer ranges in Rust. It borrows the stock reflection from the native
+shader preparation record. Source comparison matched first-name lookup,
+tree and detail size rules, and optional constant handling. The existing
+contract and device fixtures remain unrun for this revision.
+
 The Rust D3D11 overlay renderer now owns the bindings saved around each
 draw and restores them before releasing the COM references. Its narrow
 native read and restore calls leave the caller's render targets and UAVs
