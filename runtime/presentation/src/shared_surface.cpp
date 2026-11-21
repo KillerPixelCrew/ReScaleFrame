@@ -4,11 +4,10 @@
 #include <d3d12.h>
 #include <cstddef>
 
-namespace {
 using Create = HRESULT (*)(void*, void**) noexcept;
 using Open = HRESULT (*)(void*, void*, void**) noexcept;
 
-struct Platform {
+struct rsf_shared_surface_platform {
     HRESULT (*texture)(void*, const rsf_shared_surface_setup*, void**) noexcept;
     Open target;
     Create query_resource;
@@ -19,6 +18,9 @@ struct Platform {
     Create fence_handle;
     Open open_fence;
 };
+
+namespace {
+using Platform = rsf_shared_surface_platform;
 
 static_assert(RSF_SHARED_SURFACE_ABI_VERSION == 2 && RSF_SHARED_OK == 0 &&
     RSF_SHARED_ERROR_INVALID_ARGUMENT == -1 && RSF_SHARED_ERROR_ABI_MISMATCH == -2 &&
@@ -106,6 +108,11 @@ HRESULT open(void* device, void* handle, void** out) noexcept
 constexpr Platform platform{texture, target, query<IDXGIResource1, ID3D11Texture2D>,
     resource_handle, open<ID3D12Resource>, query<ID3D11Device5, ID3D11Device>,
     fence, fence_handle, open<ID3D12Fence>};
+}
+
+extern "C" const rsf_shared_surface_platform* rsf_shared_surface_native_platform()
+{
+    return &platform;
 }
 
 extern "C" rsf_shared_result rsf_core_shared_surface_create(const Platform*, void*, void*,

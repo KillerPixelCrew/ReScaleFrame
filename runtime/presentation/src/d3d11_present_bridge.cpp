@@ -13,7 +13,6 @@
 #include <dxgi1_6.h>
 #include <wrl/client.h>
 #include <MinHook.h>
-#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdio>
@@ -23,21 +22,26 @@
 
 static_assert(sizeof(rsf_streamline_graphics) == 48);
 static_assert(sizeof(rsf_d3d11p_request) == 48 && offsetof(rsf_d3d11p_request, refresh_denominator) == 44);
-static_assert(sizeof(rsf_d3d11p_facts) == 104 && offsetof(rsf_d3d11p_facts, graphics) == 40 &&
-    offsetof(rsf_d3d11p_facts, direct_queue) == 88);
+static_assert(sizeof(rsf_d3d11p_facts) == 120 && offsetof(rsf_d3d11p_facts, graphics) == 40 &&
+    offsetof(rsf_d3d11p_facts, direct_queue) == 88 && offsetof(rsf_d3d11p_facts, device11) == 104 &&
+    offsetof(rsf_d3d11p_facts, buffer_usage) == 112);
 static_assert(sizeof(rsf_d3d11p_adapter) == 16);
-static_assert(sizeof(rsf_d3d11p_platform) == 77 * sizeof(void*));
+static_assert(sizeof(rsf_d3d11p_platform) == 76 * sizeof(void*));
 static_assert(offsetof(rsf_d3d11p_platform, bridge_new) == 15 * sizeof(void*) &&
     offsetof(rsf_d3d11p_platform, init_source) == 19 * sizeof(void*) &&
-    offsetof(rsf_d3d11p_platform, create_plain) == 33 * sizeof(void*) &&
-    offsetof(rsf_d3d11p_platform, has_provider_queue) == 42 * sizeof(void*) &&
-    offsetof(rsf_d3d11p_platform, drain_queues) == 61 * sizeof(void*) &&
-    offsetof(rsf_d3d11p_platform, verify_outer) == 76 * sizeof(void*));
+    offsetof(rsf_d3d11p_platform, shared_surface_platform) == 32 * sizeof(void*) &&
+    offsetof(rsf_d3d11p_platform, create_plain) == 34 * sizeof(void*) &&
+    offsetof(rsf_d3d11p_platform, has_provider_queue) == 43 * sizeof(void*) &&
+    offsetof(rsf_d3d11p_platform, acquire_backbuffer) == 48 * sizeof(void*) &&
+    offsetof(rsf_d3d11p_platform, query_buffer_interface) == 59 * sizeof(void*) &&
+    offsetof(rsf_d3d11p_platform, drain_queues) == 62 * sizeof(void*) &&
+    offsetof(rsf_d3d11p_platform, set_description) == 66 * sizeof(void*) &&
+    offsetof(rsf_d3d11p_platform, verify_outer) == 75 * sizeof(void*));
 static_assert(sizeof(rsf_d3d11_present_status) == 280 && sizeof(rsf_observer_present_event) == 32);
 static_assert(DXGI_FORMAT_R8G8B8A8_UNORM == 28 && DXGI_FORMAT_B8G8R8A8_UNORM == 87 &&
     DXGI_FORMAT_R10G10B10A2_UNORM == 24 && DXGI_FORMAT_R16G16B16A16_FLOAT == 10);
 static_assert(DXGI_PRESENT_TEST == 1 && DXGI_PRESENT_ALLOW_TEARING == 0x200 &&
-    DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT == 64);
+    DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT == 64 && DXGI_USAGE_UNORDERED_ACCESS == 0x400);
 static_assert(RSF_FG_BACKEND_DLSS == 1 && RSF_FG_BACKEND_FSR3 == 3 && RSF_FG_BACKEND_FSR4 == 4 &&
     RSF_FG_BACKEND_XESS == 5 && RSF_FG_BACKEND_AUTO == 7 && RSF_PACING_ANTILAG2 == 3 &&
     RSF_LATENCY_INPUT_SAMPLE == 6 && RSF_UI_MODE_NONE == 1);
@@ -78,8 +82,6 @@ struct Bridge final : public IDXGISwapChain4 {
     ComPtr<ID3D12Device> direct_device;
     ComPtr<ID3D12CommandQueue> direct_queue;
     bool native12 = false;
-    std::array<ComPtr<ID3D12Resource>, 8> render_buffers;
-    std::array<rsf_shared_surface*, 8> surfaces{};
     rsf_shared_fence* shared_fence = nullptr;
     ComPtr<ID3D12Fence> complete;
     // Signalled on the provider queue once vendor retirement has joined.
@@ -88,7 +90,6 @@ struct Bridge final : public IDXGISwapChain4 {
         ComPtr<ID3D12CommandAllocator> allocator;
         ComPtr<ID3D12GraphicsCommandList> list;
     } slots[3];
-    ComPtr<ID3D12Resource> frame_buffer; // The physical backbuffer of the Present in progress.
     DXGI_SWAP_CHAIN_DESC description{};
     HANDLE completion_event = nullptr;
     HANDLE application_ready = nullptr;
@@ -113,33 +114,6 @@ struct Bridge final : public IDXGISwapChain4 {
         std::lock_guard<std::mutex> lock(physical_guard); physical = std::move(value); provider_queue.store(queue);
     }
     HRESULT wait(ID3D12Fence* fence, uint64_t value) { return rsf::wait_fence(fence, value, completion_event); }
-    HRESULT make_surface(UINT width, UINT height, DXGI_FORMAT format) {
-        if (!description.BufferCount || description.BufferCount > surfaces.size()) return E_INVALIDARG;
-        rsf_shared_surface_setup setup{sizeof(setup), RSF_SHARED_SURFACE_ABI_VERSION,
-            width, height, uint32_t(format), 1, settings().log, settings().user,
-            (description.BufferUsage & DXGI_USAGE_UNORDERED_ACCESS) != 0 ? 1u : 0u};
-        for (UINT i = 0; i < description.BufferCount; ++i) {
-            if (rsf_shared_surface_create(device.Get(), graphics.native_device, &setup, &surfaces[i]) != RSF_SHARED_OK) {
-                release_surfaces(); return E_FAIL;
-            }
-        }
-        return S_OK;
-    }
-    void release_surfaces() {
-        for (auto& surface : surfaces) { rsf_shared_surface_destroy(surface); surface = nullptr; }
-    }
-    HRESULT make_render_buffers() {
-        if (!description.BufferCount || description.BufferCount > render_buffers.size()) return E_INVALIDARG;
-        D3D12_RESOURCE_DESC desc{}; desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        desc.Width = description.BufferDesc.Width; desc.Height = description.BufferDesc.Height;
-        desc.Format = description.BufferDesc.Format; desc.DepthOrArraySize = desc.MipLevels = 1;
-        desc.SampleDesc.Count = 1; desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
-        D3D12_HEAP_PROPERTIES heap{}; heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-        for (UINT i = 0; i < description.BufferCount; ++i)
-            if (FAILED(direct_device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
-                D3D12_RESOURCE_STATE_PRESENT, nullptr, IID_PPV_ARGS(&render_buffers[i])))) return E_FAIL;
-        return S_OK;
-    }
     // Streamline's proxy queue takes the proxy list; any other provider queue takes the native
     // list behind it. Null when the host cannot unwrap the list.
     void* provider_list(ID3D12GraphicsCommandList* list) {
@@ -184,33 +158,7 @@ struct Bridge final : public IDXGISwapChain4 {
     // A downstream wrapper continuation must not reenter the detoured virtual entry.
     __declspec(noinline) HRESULT present_owned(UINT sync, UINT flags) { return rsf_core_d3d11p_present(chain, sync, flags); }
     HRESULT STDMETHODCALLTYPE GetBuffer(UINT index, REFIID iid, void** out) override {
-        if (!out) return E_POINTER;
-        // Physical creation can fail before a resource is queried. Never leave a
-        // caller's previous/uninitialized pointer behind on that failure path.
-        *out = nullptr;
-        // Virtual application buffers already exist. Outer wrappers may inspect,
-        // annotate and upload them before they finish their creation call.
-        if (!native12) {
-            if (index >= description.BufferCount || !surfaces[index]) return DXGI_ERROR_INVALID_CALL;
-            return static_cast<IUnknown*>(rsf_shared_surface_d3d11(surfaces[index]))->QueryInterface(iid, out);
-        }
-        if (switching())
-            return index < description.BufferCount && render_buffers[index] ? render_buffers[index]->QueryInterface(iid, out) : DXGI_ERROR_INVALID_CALL;
-        const auto initialized = rsf_core_d3d11p_ensure(chain);
-        if (FAILED(initialized)) {
-            if (rsf_core_d3d11p_report_buffer_refusal(chain)) {
-                char text[320]{}; std::snprintf(text, sizeof(text),
-                    "GetBuffer refused HRESULT=0x%08lx facade=%p index=%u IID=%08lx-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x output=%p native12=%u physical_pending=%u",
-                    static_cast<unsigned long>(initialized), static_cast<void*>(this), index, static_cast<unsigned long>(iid.Data1),
-                    uint32_t(iid.Data2), uint32_t(iid.Data3), uint32_t(iid.Data4[0]), uint32_t(iid.Data4[1]),
-                    uint32_t(iid.Data4[2]), uint32_t(iid.Data4[3]), uint32_t(iid.Data4[4]), uint32_t(iid.Data4[5]),
-                    uint32_t(iid.Data4[6]), uint32_t(iid.Data4[7]),
-                    *out, uint32_t(native12), rsf_core_d3d11p_physical_pending(chain));
-                log(text);
-            }
-            return initialized;
-        }
-        return query_physical([&](IDXGISwapChain4* c) { return c->GetBuffer(index, iid, out); });
+        return rsf_core_d3d11p_get_buffer(chain, index, &iid, out);
     }
     HRESULT STDMETHODCALLTYPE SetFullscreenState(BOOL enabled, IDXGIOutput* target) override {
         const volatile HRESULT result = set_fullscreen_owned(enabled,target); return result;
@@ -384,7 +332,7 @@ void facts(void* b, rsf_d3d11p_facts* out) {
     const auto& self = *as_bridge(b); const auto& d = self.description;
     *out = {d.OutputWindow, d.BufferDesc.Width, d.BufferDesc.Height, uint32_t(d.BufferDesc.Format), d.BufferCount,
         d.Flags, d.Windowed ? 1u : 0u, self.native12 ? 1u : 0u, self.tearing_supported ? 1u : 0u, self.graphics,
-        self.direct_queue.Get(), self.interop_queue.Get()};
+        self.direct_queue.Get(), self.interop_queue.Get(), self.device.Get(), d.BufferUsage};
 }
 
 uint32_t init_source(void* b, void* factory, void* source, const void* desc) {
@@ -482,11 +430,10 @@ int32_t create_queues(void* b, uint32_t application_ready) {
     }
     return S_OK;
 }
-int32_t create_shared_inputs(void* b) {
-    auto& self = *as_bridge(b); const auto& d = self.description;
-    if (rsf_shared_fence_create(self.device.Get(), self.graphics.native_device, settings().log, settings().user, &self.shared_fence) != RSF_SHARED_OK)
-        return E_FAIL;
-    return self.make_surface(d.BufferDesc.Width, d.BufferDesc.Height, d.BufferDesc.Format);
+int32_t create_upload_fence(void* b) {
+    auto& self = *as_bridge(b);
+    return rsf_shared_fence_create(self.device.Get(), self.graphics.native_device, settings().log,
+        settings().user, &self.shared_fence) == RSF_SHARED_OK ? S_OK : E_FAIL;
 }
 int32_t create_slots(void* b) {
     auto& self = *as_bridge(b);
@@ -496,7 +443,18 @@ int32_t create_slots(void* b) {
                 slot.list.ReleaseAndGetAddressOf())) return E_FAIL;
     return S_OK;
 }
-int32_t make_render_buffers(void* b) { return as_bridge(b)->make_render_buffers(); }
+int32_t create_render_buffer(void* b, uint32_t width, uint32_t height, uint32_t format, void** out) {
+    D3D12_RESOURCE_DESC desc{}; desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    desc.Width = width; desc.Height = height; desc.Format = DXGI_FORMAT(format);
+    desc.DepthOrArraySize = desc.MipLevels = 1;
+    desc.SampleDesc.Count = 1; desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+    D3D12_HEAP_PROPERTIES heap{}; heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+    ID3D12Resource* value = nullptr;
+    const auto hr = as_bridge(b)->direct_device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE,
+        &desc, D3D12_RESOURCE_STATE_PRESENT, nullptr, IID_PPV_ARGS(&value));
+    *out = value;
+    return hr;
+}
 
 int32_t create_plain(void* b) {
     auto& self = *as_bridge(b); const auto& description = self.description;
@@ -579,24 +537,22 @@ int32_t upload_wait(void* b, uint64_t value) {
     self.context->Flush();
     return self.provider_queue.load()->Wait(fence12, value);
 }
-int32_t acquire_backbuffer(void* b) {
-    auto& self = *as_bridge(b); self.frame_buffer.Reset();
-    return self.physical->GetBuffer(self.physical->GetCurrentBackBufferIndex(), IID_PPV_ARGS(&self.frame_buffer));
+int32_t acquire_backbuffer(void* b, void** out) {
+    const auto physical = as_bridge(b)->current_physical();
+    if (!physical) return DXGI_ERROR_WAS_STILL_DRAWING;
+    ID3D12Resource* value = nullptr;
+    const auto hr = physical->GetBuffer(physical->GetCurrentBackBufferIndex(), IID_PPV_ARGS(&value));
+    *out = value;
+    return hr;
 }
-uint32_t has_render_buffer(void* b, uint32_t index) {
-    auto& self = *as_bridge(b); return index < self.render_buffers.size() && self.render_buffers[index] ? 1u : 0u;
-}
-void record_copy(void* b, uint32_t index, uint32_t render_index) {
+void record_copy(void* b, uint32_t index, void* backbuffer, void* source) {
     auto& self = *as_bridge(b); auto* list = self.slots[index].list.Get();
-    if (self.native12)
-        rsf::copy_transitioned(list, self.frame_buffer.Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_PRESENT,
-            self.render_buffers[render_index].Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_PRESENT);
-    else
-        rsf::copy_transitioned(list, self.frame_buffer.Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_PRESENT,
-            static_cast<ID3D12Resource*>(rsf_shared_surface_d3d12(self.surfaces[0])), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON);
+    const auto source_state = self.native12 ? D3D12_RESOURCE_STATE_PRESENT : D3D12_RESOURCE_STATE_COMMON;
+    rsf::copy_transitioned(list, static_cast<ID3D12Resource*>(backbuffer),
+        D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_PRESENT,
+        static_cast<ID3D12Resource*>(source), source_state, source_state);
 }
 void* slot_command(void* b, uint32_t index) { auto& self = *as_bridge(b); return self.provider_list(self.slots[index].list.Get()); }
-void* backbuffer(void* b) { return as_bridge(b)->frame_buffer.Get(); }
 void* context11(void* b) { return as_bridge(b)->context.Get(); }
 int32_t close_execute(void* b, uint32_t index, void* command) {
     auto& self = *as_bridge(b);
@@ -617,7 +573,6 @@ int32_t upload_return(void* b, uint64_t value) {
     return result;
 }
 int32_t signal_slot(void* b, uint64_t value) { auto& self = *as_bridge(b); return self.provider_queue.load()->Signal(self.complete.Get(), value); }
-void release_backbuffer(void* b) { as_bridge(b)->frame_buffer.Reset(); }
 uint32_t has_application_ready(void* b) { return as_bridge(b)->application_ready ? 1u : 0u; }
 int32_t application_ready(void* b, uint32_t on_completion, uint64_t value) {
     auto& self = *as_bridge(b);
@@ -650,6 +605,27 @@ void log_present_failure(void* b, const char* step, int32_t result, uint32_t ren
     log(text);
 }
 
+int32_t query_buffer_interface(void* resource, const void* iid, void** out) {
+    return static_cast<IUnknown*>(resource)->QueryInterface(*static_cast<const IID*>(iid), out);
+}
+int32_t get_physical_buffer(void* b, uint32_t index, const void* iid, void** out) {
+    auto& self = *as_bridge(b);
+    std::lock_guard<std::mutex> lock(self.physical_guard);
+    return self.physical ? self.physical->GetBuffer(index, *static_cast<const IID*>(iid), out) :
+        DXGI_ERROR_WAS_STILL_DRAWING;
+}
+void log_buffer_refusal(void* b, uint32_t index, const void* requested, int32_t result, uint32_t pending) {
+    const auto& iid = *static_cast<const IID*>(requested);
+    char text[320]{};
+    std::snprintf(text, sizeof(text),
+        "GetBuffer refused HRESULT=0x%08lx facade=%p index=%u IID=%08lx-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x output=%p native12=%u physical_pending=%u",
+        static_cast<unsigned long>(result), b, index, static_cast<unsigned long>(iid.Data1),
+        uint32_t(iid.Data2), uint32_t(iid.Data3), uint32_t(iid.Data4[0]), uint32_t(iid.Data4[1]),
+        uint32_t(iid.Data4[2]), uint32_t(iid.Data4[3]), uint32_t(iid.Data4[4]), uint32_t(iid.Data4[5]),
+        uint32_t(iid.Data4[6]), uint32_t(iid.Data4[7]), static_cast<void*>(nullptr), uint32_t(as_bridge(b)->native12), pending);
+    log(text);
+}
+
 uint32_t drain_queues(void* b) {
     auto& self = *as_bridge(b);
     if (!self.graphics.queue || !self.complete) return 0;
@@ -662,35 +638,15 @@ int32_t signal_wait(void* b, uint32_t interop, uint64_t value) {
     return self.wait(self.complete.Get(), value);
 }
 int32_t wait_fence(void* b, void* fence, uint64_t value) { return as_bridge(b)->wait(static_cast<ID3D12Fence*>(fence), value); }
-uint32_t buffers_referenced(void* b, uint32_t kind) {
-    auto& self = *as_bridge(b);
-    if (kind == RSF_D3D11P_BUFFERS_SHARED) {
-        for (auto* surface : self.surfaces) if (surface) {
-            auto* texture = static_cast<IUnknown*>(rsf_shared_surface_d3d11(surface));
-            texture->AddRef(); if (texture->Release() > 1) return 1;
-        }
-        return 0;
-    }
-    for (const auto& buffer : self.render_buffers) if (buffer) {
-        buffer->AddRef(); if (buffer->Release() > 1) return 1;
-    }
-    return 0;
+uint32_t buffer_referenced(void* resource) {
+    auto* buffer = static_cast<IUnknown*>(resource);
+    buffer->AddRef();
+    return buffer->Release() > 1 ? 1u : 0u;
 }
-int32_t remake_surfaces(void* b, uint32_t count, uint32_t width, uint32_t height, uint32_t format) {
-    auto& self = *as_bridge(b);
-    self.release_surfaces();
-    if (count) self.description.BufferCount = count;
-    return self.make_surface(width, height, DXGI_FORMAT(format));
-}
-void set_description(void* b, uint32_t width, uint32_t height, uint32_t format, uint32_t flags) {
+void set_description(void* b, uint32_t count, uint32_t width, uint32_t height, uint32_t format, uint32_t flags) {
     auto& d = as_bridge(b)->description;
+    d.BufferCount = count;
     d.BufferDesc.Width = width; d.BufferDesc.Height = height; d.BufferDesc.Format = DXGI_FORMAT(format); d.Flags = flags;
-}
-int32_t remake_render_buffers(void* b, uint32_t count) {
-    auto& self = *as_bridge(b);
-    if (count) self.description.BufferCount = count;
-    for (auto& buffer : self.render_buffers) buffer.Reset();
-    return self.make_render_buffers();
 }
 void* retire_fence(void* b) {
     auto& self = *as_bridge(b);
@@ -716,12 +672,10 @@ void retain_all(void* b) {
     for (auto& slot : self.slots) { slot.list.Detach(); slot.allocator.Detach(); }
     self.complete.Detach(); self.retired.Detach(); self.physical.Detach(); self.context.Detach(); self.device.Detach();
     self.parent.Detach(); self.interop_queue.Detach(); self.direct_device.Detach(); self.direct_queue.Detach();
-    self.frame_buffer.Detach();
-    for (auto& buffer : self.render_buffers) buffer.Detach();
 }
 void release_presentation(void* b) {
     auto& self = *as_bridge(b);
-    self.release_surfaces(); rsf_shared_fence_destroy(self.shared_fence); self.shared_fence = nullptr;
+    rsf_shared_fence_destroy(self.shared_fence); self.shared_fence = nullptr;
     self.clear_physical();
 }
 void release_device(void* b, uint32_t destroy_host) {
@@ -775,23 +729,23 @@ const rsf_d3d11p_platform platform{
     .adopt_host = leaf::adopt_host, .d3d11_device = leaf::d3d11_device, .create_host = leaf::create_host,
     .host = leaf::host, .resolve_graphics = leaf::resolve_graphics, .tearing_supported = leaf::tearing_supported,
     .fsr4_supported = leaf::fsr4_supported, .create_queues = leaf::create_queues,
-    .create_shared_inputs = leaf::create_shared_inputs, .create_slots = leaf::create_slots,
-    .make_render_buffers = leaf::make_render_buffers,
+    .create_upload_fence = leaf::create_upload_fence, .create_slots = leaf::create_slots,
+    .shared_surface_platform = rsf_shared_surface_native_platform, .create_render_buffer = leaf::create_render_buffer,
     .create_plain = leaf::create_plain, .adopt_chain = leaf::adopt_chain, .physical = leaf::physical,
     .clear_physical = leaf::clear_physical, .get_fullscreen = leaf::get_fullscreen,
     .set_fullscreen = leaf::set_fullscreen, .present_test = leaf::present_test,
     .physical_present = leaf::physical_present, .resize_physical = leaf::resize_physical,
     .has_provider_queue = leaf::has_provider_queue, .queues_joined = leaf::queues_joined, .join = leaf::join,
     .slot_reset = leaf::slot_reset, .upload_wait = leaf::upload_wait, .acquire_backbuffer = leaf::acquire_backbuffer,
-    .has_render_buffer = leaf::has_render_buffer, .record_copy = leaf::record_copy,
-    .slot_command = leaf::slot_command, .backbuffer = leaf::backbuffer, .context11 = leaf::context11,
+    .record_copy = leaf::record_copy, .slot_command = leaf::slot_command, .context11 = leaf::context11,
     .close_execute = leaf::close_execute, .upload_return = leaf::upload_return, .signal_slot = leaf::signal_slot,
-    .release_backbuffer = leaf::release_backbuffer, .has_application_ready = leaf::has_application_ready,
+    .has_application_ready = leaf::has_application_ready,
     .application_ready = leaf::application_ready, .report_device_failure = leaf::report_device_failure,
     .log_present_failure = leaf::log_present_failure,
+    .query_buffer_interface = leaf::query_buffer_interface, .get_physical_buffer = leaf::get_physical_buffer,
+    .log_buffer_refusal = leaf::log_buffer_refusal,
     .drain_queues = leaf::drain_queues, .signal_wait = leaf::signal_wait, .wait_fence = leaf::wait_fence,
-    .buffers_referenced = leaf::buffers_referenced, .remake_surfaces = leaf::remake_surfaces,
-    .set_description = leaf::set_description, .remake_render_buffers = leaf::remake_render_buffers,
+    .buffer_referenced = leaf::buffer_referenced, .set_description = leaf::set_description,
     .retire_fence = leaf::retire_fence, .retire_submit = leaf::retire_submit, .retain_all = leaf::retain_all,
     .release_presentation = leaf::release_presentation, .release_device = leaf::release_device,
     .presentation_queue = leaf::presentation_queue, .source_queue = leaf::source_queue,

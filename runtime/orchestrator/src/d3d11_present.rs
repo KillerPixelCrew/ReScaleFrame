@@ -4,6 +4,7 @@
 // D3D11, Win32, MinHook and SDK call; this module decides admission and
 // publication, provider switching, frame and slot sequencing, accepted Present,
 // fallback, resize and retirement, status and callback order, and latency routing.
+use crate::com_ref::ComRef;
 use crate::d3d11_present_abi::*;
 use crate::fg12_abi::{rsf_d3d11_present_setup as Setup, rsf_streamline_host};
 use crate::native_fg_cpu_abi::rsf_d3d11_present_status as PresentStatus;
@@ -13,6 +14,7 @@ use crate::render_abi::{
     rsf_fg_retirement, rsf_fg_status, rsf_generation_provider as Provider, rsf_generation_setup,
 };
 use crate::scene_abi::rsf_observer_present_event as Event;
+use crate::shared_surface::{self, Surface, SurfaceSetup};
 use std::cell::Cell;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::fmt::Write as _;
@@ -25,6 +27,7 @@ type Graphics = rsf_streamline_graphics;
 
 pub(crate) const S_OK: i32 = 0;
 pub(crate) const E_FAIL: i32 = 0x8000_4005_u32 as i32;
+const E_POINTER: i32 = 0x8000_4003_u32 as i32;
 pub(crate) const E_INVALIDARG: i32 = 0x8007_0057_u32 as i32;
 pub(crate) const E_OUTOFMEMORY: i32 = 0x8007_000E_u32 as i32;
 pub(crate) const E_UNEXPECTED: i32 = 0x8000_FFFF_u32 as i32;
@@ -35,6 +38,7 @@ pub(crate) const DXGI_ERROR_WAS_STILL_DRAWING: i32 = 0x887A_000A_u32 as i32;
 const DXGI_PRESENT_TEST: u32 = 0x1;
 const DXGI_PRESENT_ALLOW_TEARING: u32 = 0x200;
 const DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT: u32 = 64;
+const DXGI_USAGE_UNORDERED_ACCESS: u32 = 0x400;
 const FORMATS: [u32; 4] = [28, 87, 24, 10]; // R8G8B8A8, B8G8R8A8, R10G10B10A2 UNORM, R16G16B16A16 FLOAT
 
 pub(crate) const OK: i32 = 0;
@@ -71,6 +75,17 @@ const FG_OFF: rsf_fg_options = rsf_fg_options {
 
 fn failed(result: i32) -> bool {
     result < 0
+}
+
+fn acquire_resource(create: impl FnOnce(*mut Raw) -> i32) -> Result<ComRef, i32> {
+    let mut resource = null_mut();
+    let result = create(&mut resource);
+    let owned = unsafe { ComRef::from_owned(resource) };
+    if failed(result) {
+        Err(result)
+    } else {
+        owned.ok_or(E_UNEXPECTED)
+    }
 }
 
 fn bit(backend: u32) -> u32 {
@@ -428,8 +443,31 @@ impl Timing {
     }
 }
 
-// One facade. Fields are atomics because DXGI serializes the application's calls but
-// provider callbacks and the retire lease reenter on the same thread.
+enum ApplicationBuffer {
+    Shared(Surface),
+    Render(ComRef),
+}
+
+impl ApplicationBuffer {
+    fn application(&self) -> &ComRef {
+        match self {
+            Self::Shared(surface) => &surface.texture11,
+            Self::Render(resource) => resource,
+        }
+    }
+
+    fn copy_source(&self) -> Option<&ComRef> {
+        match self {
+            Self::Shared(surface) => surface.texture12.as_ref(),
+            Self::Render(resource) => Some(resource),
+        }
+    }
+}
+
+type ApplicationBuffers = [Option<ApplicationBuffer>; MAX_BUFFERS as usize];
+
+// DXGI serializes the application's frame calls. Provider callbacks and the retire
+// lease can reenter on the same thread.
 pub(crate) struct Owner {
     platform: *const Platform,
     bridge: AtomicPtr<c_void>,
@@ -443,6 +481,7 @@ pub(crate) struct Owner {
     serial: AtomicU64,
     next_slot: AtomicU32,
     slot_fences: [AtomicU64; SLOTS],
+    buffers: Mutex<ApplicationBuffers>,
     render_index: AtomicU32,
     application_serial: AtomicU64,
     application_fences: [AtomicU64; APPLICATION_FENCES],
@@ -473,6 +512,7 @@ impl Owner {
             serial: AtomicU64::new(0),
             next_slot: AtomicU32::new(0),
             slot_fences: Default::default(),
+            buffers: Mutex::default(),
             render_index: AtomicU32::new(0),
             application_serial: AtomicU64::new(0),
             application_fences: Default::default(),
@@ -524,6 +564,8 @@ impl Owner {
             graphics: Graphics::EMPTY,
             direct_queue: null_mut(),
             interop_queue: null_mut(),
+            device11: null_mut(),
+            buffer_usage: 0,
         };
         unsafe { (self.p().facts)(self.b(), &mut facts) };
         facts
@@ -770,12 +812,93 @@ impl Owner {
         S_OK
     }
 
-    fn make_render_buffers(&self) -> i32 {
-        let result = unsafe { (self.p().make_render_buffers)(self.b()) };
-        if !failed(result) {
-            self.reset_application_frames();
+    fn create_application_buffers(&self, facts: &rsf_d3d11p_facts) -> Result<(), i32> {
+        let p = self.p();
+        let mut batch = ApplicationBuffers::default();
+        let slots = batch
+            .get_mut(..facts.buffer_count as usize)
+            .filter(|slots| !slots.is_empty())
+            .ok_or(E_INVALIDARG)?;
+        if self.native12() {
+            for slot in slots {
+                let resource = acquire_resource(|out| unsafe {
+                    (p.create_render_buffer)(self.b(), facts.width, facts.height, facts.format, out)
+                })?;
+                *slot = Some(ApplicationBuffer::Render(resource));
+            }
+        } else {
+            let setup = SurfaceSetup {
+                struct_size: size_of::<SurfaceSetup>() as u32,
+                abi_version: shared_surface::ABI_VERSION,
+                width: facts.width,
+                height: facts.height,
+                format: facts.format,
+                render_target: 1,
+                log: settings().log,
+                log_user: settings().user,
+                unordered_access: u32::from(facts.buffer_usage & DXGI_USAGE_UNORDERED_ACCESS != 0),
+            };
+            let device12 = facts.graphics.native_device;
+            if device12.is_null() || !shared_surface::valid_surface(facts.device11, &setup) {
+                return Err(E_FAIL);
+            }
+            let platform = unsafe { &*(p.shared_surface_platform)() };
+            for slot in slots {
+                let surface = unsafe {
+                    shared_surface::create_surface(platform, facts.device11, device12, &setup)
+                }
+                .map_err(|_| E_FAIL)?;
+                *slot = Some(ApplicationBuffer::Shared(surface));
+            }
         }
-        result
+        // Publish only a full batch. A failure drops every allocation made so far.
+        *lock(&self.buffers) = batch;
+        Ok(())
+    }
+
+    fn take_application_buffers(&self) -> ApplicationBuffers {
+        std::mem::take(&mut *lock(&self.buffers))
+    }
+
+    fn buffers_referenced(&self) -> bool {
+        lock(&self.buffers).iter().flatten().any(|buffer| unsafe {
+            (self.p().buffer_referenced)(buffer.application().as_ptr()) != 0
+        })
+    }
+
+    unsafe fn get_buffer(&self, index: u32, iid: *const c_void, out: *mut Raw) -> i32 {
+        let p = self.p();
+        // Wrappers can query virtual buffers before any physical chain is created.
+        if !self.native12() || switching() {
+            let buffer = lock(&self.buffers)
+                .get(index as usize)
+                .and_then(Option::as_ref)
+                .map(|buffer| buffer.application().clone());
+            return buffer.map_or(DXGI_ERROR_INVALID_CALL, |buffer| unsafe {
+                (p.query_buffer_interface)(buffer.as_ptr(), iid, out)
+            });
+        }
+        let initialized = self.ensure_physical();
+        if failed(initialized) {
+            if self.failed_buffer_reports.fetch_add(1, Ordering::Relaxed) < 4 {
+                let pending = u32::from(self.physical_pending.load(Ordering::Acquire));
+                unsafe { (p.log_buffer_refusal)(self.b(), index, iid, initialized, pending) };
+            }
+            return initialized;
+        }
+        unsafe { (p.get_physical_buffer)(self.b(), index, iid, out) }
+    }
+
+    fn acquire_backbuffer(&self) -> Result<ComRef, i32> {
+        acquire_resource(|out| unsafe { (self.p().acquire_backbuffer)(self.b(), out) })
+    }
+
+    fn copy_source(&self, index: u32) -> Option<ComRef> {
+        lock(&self.buffers)
+            .get(index as usize)
+            .and_then(Option::as_ref)
+            .and_then(ApplicationBuffer::copy_source)
+            .cloned()
     }
 
     fn reset_application_frames(&self) {
@@ -905,7 +1028,9 @@ impl Owner {
             return E_FAIL;
         }
         if !native12 {
-            if failed(unsafe { (p.create_shared_inputs)(b) }) {
+            if failed(unsafe { (p.create_upload_fence)(b) })
+                || self.create_application_buffers(&self.facts()).is_err()
+            {
                 return E_FAIL;
             }
             self.render_index.store(0, Ordering::Relaxed);
@@ -914,8 +1039,11 @@ impl Owner {
             return E_FAIL;
         }
         if setup.runtime_switching != 0 {
-            if native12 && failed(self.make_render_buffers()) {
-                return E_FAIL;
+            if native12 {
+                if self.create_application_buffers(&self.facts()).is_err() {
+                    return E_FAIL;
+                }
+                self.reset_application_frames();
             }
             self.physical_pending.store(true, Ordering::Release);
         } else {
@@ -1208,17 +1336,16 @@ impl Owner {
         result
     }
 
-    fn prepare_callback(&self, context: Raw, command: Raw, sync: u32) {
+    fn prepare_callback(&self, context: Raw, command: Raw, backbuffer: &ComRef, sync: u32) {
         let setup = settings();
         if let Some(prepare) = setup.prepare {
-            let backbuffer = unsafe { (self.p().backbuffer)(self.b()) };
             unsafe {
                 prepare(
                     setup.user,
                     self.b(),
                     context,
                     command,
-                    backbuffer,
+                    backbuffer.as_ptr(),
                     self.host().cast::<rsf_streamline_host>(),
                     self.provider(),
                     sync,
@@ -1312,38 +1439,46 @@ impl Owner {
             if source_joined && !failed(stage) {
                 let render_index = self.render_index.load(Ordering::Relaxed);
                 step = "physical GetBuffer";
-                stage = unsafe { (p.acquire_backbuffer)(b) };
-                if !failed(stage)
-                    && switching
-                    && unsafe { (p.has_render_buffer)(b, render_index) } == 0
-                {
-                    step = "render buffer missing";
-                    stage = E_UNEXPECTED;
-                }
-                if !failed(stage) {
-                    if switching {
-                        unsafe { (p.record_copy)(b, index, render_index) };
-                    }
-                    let command = unsafe { (p.slot_command)(b, index) };
-                    self.prepare_callback(null_mut(), command, sync);
-                    self.publish_status();
-                    step = "command list Close";
-                    stage = unsafe { (p.close_execute)(b, index, command) };
-                    if !failed(stage) {
-                        if joined
-                            && failed(unsafe {
-                                (p.join)(b, JOIN_PRESENT_TO_SOURCE, self.next_serial())
-                            })
-                        {
-                            // The submitted list stays covered by the slot fence below.
-                            step = "present queue join";
-                            stage = DXGI_ERROR_DEVICE_REMOVED;
-                            result = stage;
+                let backbuffer = self.acquire_backbuffer();
+                match &backbuffer {
+                    Err(error) => stage = *error,
+                    Ok(backbuffer) => {
+                        let source = switching.then(|| self.copy_source(render_index)).flatten();
+                        if switching && source.is_none() {
+                            step = "render buffer missing";
+                            stage = E_UNEXPECTED;
                         } else {
-                            step = "physical Present";
-                            result =
-                                self.present_physical(&mut event, sync, physical_flags, &mut ticks);
-                            stage = result;
+                            if let Some(source) = &source {
+                                unsafe {
+                                    (p.record_copy)(b, index, backbuffer.as_ptr(), source.as_ptr())
+                                };
+                            }
+                            let command = unsafe { (p.slot_command)(b, index) };
+                            self.prepare_callback(null_mut(), command, backbuffer, sync);
+                            self.publish_status();
+                            step = "command list Close";
+                            stage = unsafe { (p.close_execute)(b, index, command) };
+                            if !failed(stage) {
+                                if joined
+                                    && failed(unsafe {
+                                        (p.join)(b, JOIN_PRESENT_TO_SOURCE, self.next_serial())
+                                    })
+                                {
+                                    // The submitted list stays covered by the slot fence below.
+                                    step = "present queue join";
+                                    stage = DXGI_ERROR_DEVICE_REMOVED;
+                                    result = stage;
+                                } else {
+                                    step = "physical Present";
+                                    result = self.present_physical(
+                                        &mut event,
+                                        sync,
+                                        physical_flags,
+                                        &mut ticks,
+                                    );
+                                    stage = result;
+                                }
+                            }
                         }
                     }
                 }
@@ -1352,7 +1487,7 @@ impl Owner {
                 if failed(unsafe { (p.signal_slot)(b, fence) }) {
                     result = DXGI_ERROR_DEVICE_REMOVED;
                 }
-                unsafe { (p.release_backbuffer)(b) };
+                drop(backbuffer);
             }
             if failed(result) {
                 let step = CString::new(step).unwrap_or_default();
@@ -1401,22 +1536,21 @@ impl Owner {
                 result = DXGI_ERROR_DEVICE_REMOVED;
             }
             // Submit the D3D11 signal with its preceding work before D3D12 waits on it.
-            if queue && !failed(unsafe { (p.upload_wait)(b, self.next_serial()) }) {
-                if !failed(unsafe { (p.acquire_backbuffer)(b) }) {
-                    // One facade render target is written by the application. The shared copy is
-                    // read only for the queued upload; generated frames use the physical backbuffer.
-                    unsafe { (p.record_copy)(b, index, 0) };
-                    let command = unsafe { (p.slot_command)(b, index) };
-                    self.prepare_callback(unsafe { (p.context11)(b) }, command, sync);
-                    self.publish_status();
-                    if !failed(unsafe { (p.close_execute)(b, index, command) })
-                        && !failed(unsafe { (p.upload_return)(b, self.next_serial()) })
-                    {
-                        result =
-                            self.present_physical(&mut event, sync, physical_flags, &mut ticks);
-                    }
+            if queue
+                && !failed(unsafe { (p.upload_wait)(b, self.next_serial()) })
+                && let Ok(backbuffer) = self.acquire_backbuffer()
+                && let Some(source) = self.copy_source(0)
+            {
+                // The application writes slot zero. Generated frames use the physical backbuffer.
+                unsafe { (p.record_copy)(b, index, backbuffer.as_ptr(), source.as_ptr()) };
+                let command = unsafe { (p.slot_command)(b, index) };
+                self.prepare_callback(unsafe { (p.context11)(b) }, command, &backbuffer, sync);
+                self.publish_status();
+                if !failed(unsafe { (p.close_execute)(b, index, command) })
+                    && !failed(unsafe { (p.upload_return)(b, self.next_serial()) })
+                {
+                    result = self.present_physical(&mut event, sync, physical_flags, &mut ticks);
                 }
-                unsafe { (p.release_backbuffer)(b) };
             }
             if queue {
                 let fence = self.next_serial();
@@ -1544,7 +1678,7 @@ impl Owner {
         if count > MAX_BUFFERS || self.faulted.load(Ordering::Acquire) {
             return DXGI_ERROR_INVALID_CALL;
         }
-        let facts = self.facts();
+        let mut facts = self.facts();
         if (width == 0 || height == 0)
             && unsafe { (p.client_size)(facts.window, &mut width, &mut height) } == 0
         {
@@ -1561,7 +1695,7 @@ impl Owner {
         }
         let native12 = self.native12();
         let switching = switching();
-        if !native12 && unsafe { (p.buffers_referenced)(b, BUFFERS_SHARED) } != 0 {
+        if !native12 && self.buffers_referenced() {
             return DXGI_ERROR_INVALID_CALL;
         }
         let provider = self.provider();
@@ -1577,7 +1711,7 @@ impl Owner {
             }
         }
         self.publish_status();
-        if native12 && switching && unsafe { (p.buffers_referenced)(b, BUFFERS_RENDER) } != 0 {
+        if native12 && switching && self.buffers_referenced() {
             return DXGI_ERROR_INVALID_CALL;
         }
         // With runtime switching the application renders into its own buffers, never the physical
@@ -1592,20 +1726,26 @@ impl Owner {
         if failed(result) {
             return result;
         }
-        if !native12 {
-            if failed(unsafe { (p.remake_surfaces)(b, count, width, height, format) }) {
+        if !native12 || switching {
+            // The physical resize succeeded and the old application buffers can be retired.
+            // Release them before allocating their replacements to keep the same memory budget.
+            drop(self.take_application_buffers());
+            if count != 0 {
+                facts.buffer_count = count;
+            }
+            facts.width = width;
+            facts.height = height;
+            facts.format = format;
+            if self.create_application_buffers(&facts).is_err() {
                 self.faulted.store(true, Ordering::Release);
                 return E_FAIL;
             }
-            self.render_index.store(0, Ordering::Relaxed);
         }
-        unsafe { (p.set_description)(b, width, height, format, flags) };
+        unsafe { (p.set_description)(b, facts.buffer_count, width, height, format, flags) };
         if native12 && switching {
-            if failed(unsafe { (p.remake_render_buffers)(b, count) }) {
-                self.faulted.store(true, Ordering::Release);
-                return E_FAIL;
-            }
             self.reset_application_frames();
+        } else if !native12 {
+            self.render_index.store(0, Ordering::Relaxed);
         }
         S_OK
     }
@@ -1673,9 +1813,19 @@ impl Owner {
         // On device failure retain GPU-reachable storage for the process rather than free it.
         if failed(self.drain()) {
             log("presentation bridge: retirement failed; retaining provider and shared inputs");
+            std::mem::forget(self.take_application_buffers());
             unsafe { (p.retain_all)(b) };
             return;
         }
+        let buffers = self.take_application_buffers();
+        // Shared textures precede the fence and physical chain. Direct render buffers had
+        // facade lifetime and follow provider and host teardown.
+        let direct_buffers = if self.native12() {
+            Some(buffers)
+        } else {
+            drop(buffers);
+            None
+        };
         unsafe { (p.release_presentation)(b) };
         let provider = self.provider.swap(null_mut(), Ordering::AcqRel);
         if !provider.is_null()
@@ -1687,6 +1837,7 @@ impl Owner {
         let host = self.host();
         let private = !host.is_null() && ACTIVE_HOST.load(Ordering::Acquire) != host;
         unsafe { (p.release_device)(b, u32::from(private)) };
+        drop(direct_buffers);
     }
 
     fn refuse(&self) {
@@ -1930,6 +2081,23 @@ macro_rules! facade {
 }
 
 facade!(rsf_core_d3d11p_ensure() -> i32, E_FAIL, |o| o.ensure_physical());
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_core_d3d11p_get_buffer(
+    chain: *mut Chain,
+    index: u32,
+    iid: *const c_void,
+    out: *mut Raw,
+) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    // Failed admission or deferred physical creation must clear the caller's output.
+    unsafe { out.write(null_mut()) };
+    let Some(owner) = (unsafe { owner(chain) }) else {
+        return E_FAIL;
+    };
+    unsafe { owner.get_buffer(index, iid, out) }
+}
 facade!(
     rsf_core_d3d11p_present(sync: u32, flags: u32) -> i32,
     E_FAIL,
@@ -1951,8 +2119,6 @@ facade!(rsf_core_d3d11p_physical_pending() -> u32, 0,
 facade!(rsf_core_d3d11p_render_index() -> u32, 0, |o| o.render_index.load(Ordering::Relaxed));
 facade!(rsf_core_d3d11p_application_presents() -> u32, 0,
     |o| o.application_presents.load(Ordering::Relaxed));
-facade!(rsf_core_d3d11p_report_buffer_refusal() -> u32, 0,
-    |o| u32::from(o.failed_buffer_reports.fetch_add(1, Ordering::Relaxed) < 4));
 facade!(
     rsf_core_d3d11p_set_max_latency(value: u32) -> i32,
     DXGI_ERROR_INVALID_CALL,

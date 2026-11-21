@@ -1,12 +1,22 @@
 // SPDX-License-Identifier: MIT
 // Fake leaf table and provider for the presentation bridge owner. No device, window or SDK.
 use super::*;
+use crate::com_ref::test::{
+    Fake as FakeCom, add_ref as com_add_ref, fake as fake_com, raw as com_raw,
+};
 use crate::render_abi::{RSF_FG_FIXED, rsf_fg_frame};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ptr::null;
 
 static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+struct FakeBuffer {
+    application: Box<FakeCom>,
+    peer: Option<Box<FakeCom>>,
+    slot: usize,
+    handle: Raw,
+}
 
 struct Fake {
     calls: Vec<String>,
@@ -32,6 +42,7 @@ struct Fake {
     host: usize,
     adapter_default: u32,
     present_result: i32,
+    resize_result: i32,
     create_results: HashMap<u32, i32>,
     real_results: HashMap<u32, i32>,
     plain_result: i32,
@@ -40,9 +51,16 @@ struct Fake {
     retirement_result: i32,
     verify_result: i32,
     unpublish_alias_on_lookup: bool,
-    referenced: bool,
     client: (u32, u32),
-    remake_result: i32,
+    allocation_failure: Option<usize>,
+    buffers: Vec<FakeBuffer>,
+    buffer_slot: usize,
+    buffer_usage: u32,
+    target_view: Box<FakeCom>,
+    backbuffer: Box<FakeCom>,
+    backbuffer_result: i32,
+    backbuffer_null: bool,
+    close_result: i32,
     application_ready: bool,
     sessions: usize,
     refs: i64,
@@ -76,6 +94,7 @@ impl Fake {
             host: 0,
             adapter_default: XESS,
             present_result: S_OK,
+            resize_result: S_OK,
             create_results: HashMap::new(),
             real_results: HashMap::new(),
             plain_result: S_OK,
@@ -84,9 +103,16 @@ impl Fake {
             retirement_result: OK,
             verify_result: S_OK,
             unpublish_alias_on_lookup: false,
-            referenced: false,
             client: (800, 600),
-            remake_result: S_OK,
+            allocation_failure: None,
+            buffers: Vec::new(),
+            buffer_slot: 0,
+            buffer_usage: 0,
+            target_view: fake_com(),
+            backbuffer: fake_com(),
+            backbuffer_result: S_OK,
+            backbuffer_null: false,
+            close_result: S_OK,
             application_ready: false,
             sessions: 0,
             refs: 0,
@@ -306,6 +332,8 @@ unsafe extern "C" fn facts(_: Raw, out: *mut rsf_d3d11p_facts) {
         },
         direct_queue: if fake.native12 { raw(0x50) } else { null_mut() },
         interop_queue: raw(0x60),
+        device11: raw(0x44),
+        buffer_usage: fake.buffer_usage,
     });
     unsafe { *out = value };
 }
@@ -356,9 +384,97 @@ unsafe extern "C" fn create_queues(_: Raw, ready: u32) -> i32 {
     with(|fake| fake.application_ready = ready != 0);
     S_OK
 }
-unsafe extern "C" fn make_render_buffers(_: Raw) -> i32 {
-    call("make_render");
+fn allocate_buffer(shared: bool) -> (Raw, i32) {
+    with(|fake| {
+        let failure = fake.allocation_failure == Some(fake.buffers.len());
+        let slot = fake.buffer_slot;
+        fake.buffer_slot += 1;
+        let buffer = FakeBuffer {
+            application: fake_com(),
+            peer: shared.then(fake_com),
+            slot,
+            handle: null_mut(),
+        };
+        let resource = com_raw(&buffer.application);
+        fake.buffers.push(buffer);
+        (resource, if failure { E_FAIL } else { S_OK })
+    })
+}
+
+unsafe fn give_ref(resource: Raw, out: *mut Raw) {
+    unsafe {
+        com_add_ref(resource.cast());
+        out.write(resource);
+    }
+}
+
+unsafe extern "C" fn create_render_buffer(
+    _: Raw,
+    width: u32,
+    height: u32,
+    format: u32,
+    out: *mut Raw,
+) -> i32 {
+    call(format!("make_render {width}x{height} {format}"));
+    let (resource, result) = allocate_buffer(false);
+    unsafe { give_ref(resource, out) };
+    result
+}
+
+unsafe extern "C" fn shared_texture(_: Raw, setup: &SurfaceSetup, out: *mut Raw) -> i32 {
+    assert_eq!(setup.render_target, 1);
+    assert_eq!(
+        setup.unordered_access,
+        with(|fake| u32::from(fake.buffer_usage & DXGI_USAGE_UNORDERED_ACCESS != 0))
+    );
+    let (resource, result) = allocate_buffer(true);
+    unsafe { give_ref(resource, out) };
+    result
+}
+
+unsafe extern "C" fn shared_target(_: Raw, _: Raw, out: *mut Raw) -> i32 {
+    let view = with(|fake| com_raw(&fake.target_view));
+    unsafe { give_ref(view, out) };
     S_OK
+}
+
+unsafe extern "C" fn shared_resource(texture11: Raw, out: *mut Raw) -> i32 {
+    unsafe { give_ref(texture11, out) };
+    S_OK
+}
+
+unsafe extern "C" fn shared_handle(_: Raw, out: *mut Raw) -> i32 {
+    let handle =
+        unsafe { windows_sys::Win32::System::Threading::CreateEventW(null(), 0, 0, null()) };
+    assert!(!handle.is_null());
+    with(|fake| fake.buffers.last_mut().unwrap().handle = handle);
+    unsafe { out.write(handle) };
+    S_OK
+}
+
+unsafe extern "C" fn shared_peer(_: Raw, _: Raw, out: *mut Raw) -> i32 {
+    let peer = with(|fake| com_raw(fake.buffers.last().unwrap().peer.as_ref().unwrap()));
+    unsafe { give_ref(peer, out) };
+    S_OK
+}
+
+unsafe extern "C" fn no_output(_: Raw, _: *mut Raw) -> i32 {
+    E_UNEXPECTED
+}
+
+unsafe extern "C" fn shared_surface_platform() -> *const shared_surface::Platform {
+    static SHARED: shared_surface::Platform = shared_surface::Platform {
+        texture: shared_texture,
+        target: shared_target,
+        query_resource: shared_resource,
+        resource_handle: shared_handle,
+        open_resource: shared_peer,
+        query_device5: no_output,
+        fence: no_output,
+        fence_handle: no_output,
+        open_fence: shared_peer,
+    };
+    &SHARED
 }
 unsafe extern "C" fn create_plain(_: Raw) -> i32 {
     call("plain");
@@ -402,7 +518,12 @@ unsafe extern "C" fn physical_present(_: Raw, sync: u32, flags: u32) -> i32 {
 }
 unsafe extern "C" fn resize_physical(_: Raw, count: u32, width: u32, height: u32, _: u32) -> i32 {
     call(format!("resize {count} {width}x{height}"));
-    S_OK
+    with(|fake| {
+        if !failed(fake.resize_result) {
+            fake.buffer_slot = 0;
+        }
+        fake.resize_result
+    })
 }
 unsafe extern "C" fn has_provider_queue(_: Raw) -> u32 {
     u32::from(with(|fake| fake.physical != 0 && !fake.queue_missing))
@@ -423,33 +544,51 @@ unsafe extern "C" fn upload_wait(_: Raw, value: u64) -> i32 {
     call(format!("upload {value}"));
     S_OK
 }
-unsafe extern "C" fn has_render_buffer(_: Raw, _: u32) -> u32 {
-    1
+unsafe extern "C" fn acquire_backbuffer(_: Raw, out: *mut Raw) -> i32 {
+    let (resource, result, null) = with(|fake| {
+        (
+            com_raw(&fake.backbuffer),
+            fake.backbuffer_result,
+            fake.backbuffer_null,
+        )
+    });
+    if !null {
+        unsafe { give_ref(resource, out) };
+    }
+    result
 }
-unsafe extern "C" fn record_copy(_: Raw, slot: u32, render_index: u32) {
+unsafe extern "C" fn record_copy(_: Raw, slot: u32, destination: Raw, source: Raw) {
+    let render_index = with(|fake| {
+        assert_eq!(destination, com_raw(&fake.backbuffer));
+        fake.buffers
+            .iter()
+            .find(|buffer| com_raw(buffer.peer.as_ref().unwrap_or(&buffer.application)) == source)
+            .unwrap()
+            .slot
+    });
     call(format!("copy {slot} {render_index}"));
 }
 unsafe extern "C" fn slot_command(_: Raw, slot: u32) -> Raw {
     raw(0xC0 + slot as usize)
 }
-unsafe extern "C" fn backbuffer(_: Raw) -> Raw {
-    raw(0xB0)
-}
 unsafe extern "C" fn context11(_: Raw) -> Raw {
     raw(0xD0)
 }
 unsafe extern "C" fn close_execute(_: Raw, _: u32, _: Raw) -> i32 {
-    S_OK
+    with(|fake| fake.close_result)
 }
 unsafe extern "C" fn upload_return(_: Raw, value: u64) -> i32 {
     call(format!("return {value}"));
     S_OK
 }
 unsafe extern "C" fn signal_slot(_: Raw, value: u64) -> i32 {
+    with(|fake| {
+        let held = fake.native12 && !failed(fake.backbuffer_result) && !fake.backbuffer_null;
+        assert_eq!(fake.backbuffer.refs.get(), 1 + u32::from(held));
+    });
     call(format!("slot_signal {value}"));
     S_OK
 }
-unsafe extern "C" fn nothing(_: Raw) {}
 unsafe extern "C" fn has_application_ready(_: Raw) -> u32 {
     u32::from(with(|fake| fake.application_ready))
 }
@@ -477,24 +616,43 @@ unsafe extern "C" fn wait_fence(_: Raw, _: Raw, value: u64) -> i32 {
     call(format!("wait_fence {value}"));
     S_OK
 }
-unsafe extern "C" fn buffers_referenced(_: Raw, _: u32) -> u32 {
-    u32::from(with(|fake| fake.referenced))
+unsafe extern "C" fn query_buffer_interface(resource: Raw, _: *const c_void, out: *mut Raw) -> i32 {
+    unsafe { give_ref(resource, out) };
+    S_OK
 }
-unsafe extern "C" fn remake_surfaces(_: Raw, count: u32, _: u32, _: u32, _: u32) -> i32 {
-    call(format!("remake {count}"));
-    with(|fake| fake.remake_result)
+unsafe extern "C" fn get_physical_buffer(
+    _: Raw,
+    index: u32,
+    _: *const c_void,
+    out: *mut Raw,
+) -> i32 {
+    call(format!("physical GetBuffer {index}"));
+    let resource = with(|fake| com_raw(&fake.backbuffer));
+    unsafe { give_ref(resource, out) };
+    S_OK
 }
-unsafe extern "C" fn set_description(_: Raw, width: u32, height: u32, format: u32, flags: u32) {
+unsafe extern "C" fn log_buffer_refusal(_: Raw, _: u32, _: *const c_void, _: i32, _: u32) {
+    call("GetBuffer refused");
+}
+unsafe extern "C" fn buffer_referenced(resource: Raw) -> u32 {
+    let refs = unsafe { &*resource.cast::<FakeCom>() }.refs.get();
+    u32::from(refs > 2)
+}
+unsafe extern "C" fn set_description(
+    _: Raw,
+    count: u32,
+    width: u32,
+    height: u32,
+    format: u32,
+    flags: u32,
+) {
     with(|fake| {
+        fake.buffer_count = count;
         fake.width = width;
         fake.height = height;
         fake.format = format;
         fake.flags = flags;
     });
-}
-unsafe extern "C" fn remake_render_buffers(_: Raw, count: u32) -> i32 {
-    call(format!("remake_render {count}"));
-    with(|fake| fake.remake_result)
 }
 unsafe extern "C" fn retire_fence(_: Raw) -> Raw {
     raw(0xFE)
@@ -560,9 +718,10 @@ static PLATFORM: Platform = Platform {
     tearing_supported,
     fsr4_supported,
     create_queues,
-    create_shared_inputs: ok_bridge,
+    create_upload_fence: ok_bridge,
     create_slots: ok_bridge,
-    make_render_buffers,
+    shared_surface_platform,
+    create_render_buffer,
     create_plain,
     adopt_chain,
     physical,
@@ -577,27 +736,25 @@ static PLATFORM: Platform = Platform {
     join,
     slot_reset,
     upload_wait,
-    acquire_backbuffer: ok_bridge,
-    has_render_buffer,
+    acquire_backbuffer,
     record_copy,
     slot_command,
-    backbuffer,
     context11,
     close_execute,
     upload_return,
     signal_slot,
-    release_backbuffer: nothing,
     has_application_ready,
     application_ready,
     report_device_failure,
     log_present_failure,
+    query_buffer_interface,
+    get_physical_buffer,
+    log_buffer_refusal,
     drain_queues,
     signal_wait,
     wait_fence,
-    buffers_referenced,
-    remake_surfaces,
+    buffer_referenced,
     set_description,
-    remake_render_buffers,
     retire_fence,
     retire_submit,
     retain_all,
@@ -638,6 +795,7 @@ unsafe extern "C" fn latency_event(_: Raw, event: *const Event) {
     });
 }
 unsafe extern "C" fn retire_callback(_: Raw, _: Raw) {
+    assert_eq!(with(|fake| fake.backbuffer.refs.get()), 2);
     call("retire");
 }
 #[allow(clippy::too_many_arguments)]
@@ -646,11 +804,15 @@ unsafe extern "C" fn prepare_callback(
     _: Raw,
     _: Raw,
     _: Raw,
-    _: Raw,
+    backbuffer: Raw,
     _: *mut rsf_streamline_host,
     _: Raw,
     _: u32,
 ) {
+    with(|fake| {
+        assert_eq!(backbuffer, com_raw(&fake.backbuffer));
+        assert_eq!(fake.backbuffer.refs.get(), 2);
+    });
     call("prepare");
 }
 
@@ -746,6 +908,12 @@ fn chain_of(bridge: Raw) -> *mut Chain {
 
 fn present(bridge: Raw, sync: u32, flags: u32) -> i32 {
     unsafe { rsf_core_d3d11p_present(chain_of(bridge), sync, flags) }
+}
+
+fn get_buffer(chain: *mut Chain, index: u32) -> (i32, Raw) {
+    let mut out = raw(0xDEAD);
+    let result = unsafe { rsf_core_d3d11p_get_buffer(chain, index, null(), &mut out) };
+    (result, out)
 }
 
 fn status() -> (i32, PresentStatus) {
@@ -1102,7 +1270,14 @@ fn native12_switching_sequences_frames_and_providers() {
         create_with(&request(DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT));
     assert_eq!(result, S_OK);
     let chain = chain_of(bridge);
-    assert_eq!(take_calls(), ["make_render", "app_ready 0 0"]);
+    assert_eq!(
+        take_calls(),
+        [
+            "make_render 640x480 28",
+            "make_render 640x480 28",
+            "app_ready 0 0"
+        ]
+    );
     assert_eq!(
         rsf_core_d3d11p_backend(),
         XESS,
@@ -1269,30 +1444,218 @@ fn resize_normalizes_and_faults_on_lost_surfaces() {
         S_OK
     );
     let calls = take_calls();
-    assert!(
-        calls.contains(&"resize 3 800x600".to_owned()) && calls.contains(&"remake 0".to_owned())
-    );
+    assert!(calls.contains(&"resize 3 800x600".to_owned()));
     assert_eq!(
-        with(|fake| (fake.width, fake.height, fake.format, fake.flags)),
-        (800, 600, 28, 2)
+        with(|fake| (
+            fake.width,
+            fake.height,
+            fake.format,
+            fake.flags,
+            fake.buffer_count
+        )),
+        (800, 600, 28, 2, 2)
     );
-    with(|fake| fake.referenced = true);
+    let (result, pointer) = get_buffer(chain, 1);
+    assert_eq!(result, S_OK);
+    let retained = unsafe { ComRef::from_owned(pointer) }.unwrap();
     assert_eq!(
         unsafe { rsf_core_d3d11p_resize(chain, 2, 320, 200, 0, 0) },
         DXGI_ERROR_INVALID_CALL
     );
+    drop(retained);
     with(|fake| {
-        fake.referenced = false;
-        fake.remake_result = E_FAIL;
+        fake.allocation_failure = Some(fake.buffers.len() + 1);
     });
     assert_eq!(
         unsafe { rsf_core_d3d11p_resize(chain, 2, 320, 200, 0, 0) },
         E_FAIL
     );
     assert_eq!(unsafe { rsf_core_d3d11p_faulted(chain) }, 1);
+    assert_eq!(get_buffer(chain, 0), (DXGI_ERROR_INVALID_CALL, null_mut()));
+    with(|fake| {
+        assert_eq!(fake.buffers.len(), 6);
+        assert_eq!(fake.target_view.refs.get(), 1);
+        for buffer in &fake.buffers {
+            assert_eq!(buffer.application.refs.get(), 1);
+            assert_eq!(buffer.peer.as_ref().unwrap().refs.get(), 1);
+        }
+    });
     assert_eq!(present(bridge, 1, 0), DXGI_ERROR_DEVICE_REMOVED);
-    with(|fake| fake.remake_result = S_OK);
     unsafe { bridge_release_owned(bridge) };
+}
+
+#[test]
+fn partial_render_buffer_creation_rolls_back_without_publication() {
+    let _guard = reset();
+    assert_eq!(prepare(&setup(FSR3, 1)), 1);
+    with(|fake| {
+        fake.native12 = true;
+        fake.allocation_failure = Some(1);
+    });
+    assert_eq!(create_with(&request(0)), (E_FAIL, null_mut()));
+    assert!(rsf_core_d3d11p_active_bridge().is_null());
+    with(|fake| {
+        assert_eq!(fake.buffers.len(), 2);
+        assert!(fake.buffers.iter().all(|b| b.application.refs.get() == 1));
+    });
+}
+
+#[test]
+fn failed_render_buffer_resize_exposes_no_partial_batch() {
+    let _guard = reset();
+    assert_eq!(prepare(&setup(FSR3, 1)), 1);
+    with(|fake| fake.native12 = true);
+    let bridge = create();
+    let chain = chain_of(bridge);
+    with(|fake| fake.allocation_failure = Some(3));
+    assert_eq!(
+        unsafe { rsf_core_d3d11p_resize(chain, 3, 320, 200, 24, 0) },
+        E_FAIL
+    );
+    assert!(take_calls().contains(&"resize 0 320x200".to_owned()));
+    assert_eq!(unsafe { rsf_core_d3d11p_faulted(chain) }, 1);
+    assert_eq!(get_buffer(chain, 0), (DXGI_ERROR_INVALID_CALL, null_mut()));
+    with(|fake| {
+        assert_eq!(fake.buffers.len(), 4);
+        assert!(fake.buffers.iter().all(|b| b.application.refs.get() == 1));
+    });
+    unsafe { bridge_release_owned(bridge) };
+}
+
+#[test]
+fn native_resize_publishes_new_bounds_only_after_physical_success() {
+    let _guard = reset();
+    assert_eq!(prepare(&setup(FSR3, 1)), 1);
+    with(|fake| fake.native12 = true);
+    let bridge = create();
+    let chain = chain_of(bridge);
+    assert_eq!(present(bridge, 1, 0), S_OK);
+    assert_eq!(unsafe { rsf_core_d3d11p_render_index(chain) }, 1);
+
+    let (result, old) = get_buffer(chain, 1);
+    assert_eq!(result, S_OK);
+    let held = unsafe { ComRef::from_owned(old) };
+    let resize = || unsafe { rsf_core_d3d11p_resize(chain, 3, 320, 200, 24, 0) };
+    assert_eq!(resize(), DXGI_ERROR_INVALID_CALL);
+    drop(held);
+    with(|fake| fake.resize_result = E_FAIL);
+    assert_eq!(resize(), E_FAIL);
+    assert_eq!(unsafe { rsf_core_d3d11p_render_index(chain) }, 1);
+    let (result, still_old) = get_buffer(chain, 1);
+    assert_eq!((result, still_old), (S_OK, old));
+    drop(unsafe { ComRef::from_owned(still_old) });
+    assert_eq!(get_buffer(chain, 2), (DXGI_ERROR_INVALID_CALL, null_mut()));
+
+    with(|fake| fake.resize_result = S_OK);
+    assert_eq!(resize(), S_OK);
+    assert_eq!(unsafe { rsf_core_d3d11p_render_index(chain) }, 0);
+    with(|fake| {
+        assert_eq!(fake.buffer_count, 3);
+        assert_eq!(fake.buffers.len(), 5);
+        assert!(
+            fake.buffers[..2]
+                .iter()
+                .all(|b| b.application.refs.get() == 1)
+        );
+    });
+    let (result, new) = get_buffer(chain, 2);
+    assert_eq!(
+        (result, new),
+        (S_OK, with(|fake| com_raw(&fake.buffers[4].application)))
+    );
+    drop(unsafe { ComRef::from_owned(new) });
+    unsafe { bridge_release_owned(bridge) };
+}
+
+#[test]
+fn application_buffers_are_queryable_before_physical_creation() {
+    for native12 in [false, true] {
+        let _guard = reset();
+        assert_eq!(prepare(&setup(FSR3, 1)), 1);
+        with(|fake| {
+            fake.native12 = native12;
+            fake.buffer_usage = DXGI_USAGE_UNORDERED_ACCESS;
+        });
+        let bridge = create();
+        let chain = chain_of(bridge);
+        assert_eq!(
+            get_buffer(chain, MAX_BUFFERS),
+            (DXGI_ERROR_INVALID_CALL, null_mut())
+        );
+        assert_eq!(get_buffer(chain, 2), (DXGI_ERROR_INVALID_CALL, null_mut()));
+        assert_eq!(
+            unsafe { rsf_core_d3d11p_get_buffer(chain, 0, null(), null_mut()) },
+            E_POINTER
+        );
+        let (result, pointer) = get_buffer(chain, 1);
+        assert_eq!(result, S_OK);
+        assert_eq!(unsafe { rsf_core_d3d11p_physical_pending(chain) }, 1);
+        with(|fake| {
+            assert_eq!(fake.physical, 0);
+            let held = &fake.buffers[1].application;
+            assert_eq!(pointer, com_raw(held));
+            assert_eq!(held.refs.get(), 3);
+        });
+        unsafe { bridge_release_owned(bridge) };
+        assert_eq!(with(|fake| fake.buffers[1].application.refs.get()), 2);
+        drop(unsafe { ComRef::from_owned(pointer) });
+        assert_eq!(with(|fake| fake.buffers[1].application.refs.get()), 1);
+    }
+}
+
+#[test]
+fn strict_native_buffer_queries_use_dxgi_and_clear_refused_output() {
+    let _guard = reset();
+    assert_eq!(prepare(&setup(FSR3, 0)), 1);
+    with(|fake| fake.native12 = true);
+    let bridge = create();
+    let chain = chain_of(bridge);
+    assert!(with(|fake| fake.buffers.is_empty()));
+    let (result, pointer) = get_buffer(chain, 2);
+    assert_eq!(result, S_OK);
+    assert_eq!(pointer, with(|fake| com_raw(&fake.backbuffer)));
+    assert!(take_calls().contains(&"physical GetBuffer 2".to_owned()));
+    drop(unsafe { ComRef::from_owned(pointer) });
+    with(|fake| fake.physical = 0);
+    for _ in 0..5 {
+        assert_eq!(
+            get_buffer(chain, 2),
+            (DXGI_ERROR_WAS_STILL_DRAWING, null_mut())
+        );
+    }
+    assert_eq!(take_calls(), ["GetBuffer refused"; 4]);
+    unsafe { bridge_release_owned(bridge) };
+}
+
+#[test]
+fn present_releases_backbuffer_on_success_and_refusal() {
+    for native12 in [false, true] {
+        for (acquire, no_output, close, expected) in [
+            (S_OK, false, S_OK, S_OK),
+            (S_OK, false, E_FAIL, E_FAIL),
+            (E_FAIL, false, S_OK, E_FAIL),
+            (S_OK, true, S_OK, E_FAIL),
+        ] {
+            let _guard = reset();
+            assert_eq!(prepare(&setup(FSR3, 1)), 1);
+            with(|fake| {
+                fake.native12 = native12;
+                fake.backbuffer_result = acquire;
+                fake.backbuffer_null = no_output;
+                fake.close_result = close;
+            });
+            let bridge = create();
+            assert_eq!(present(bridge, 1, 0), expected);
+            assert_eq!(with(|fake| fake.backbuffer.refs.get()), 1);
+            let calls = take_calls();
+            assert_eq!(
+                calls.iter().any(|call| call == "prepare"),
+                acquire == S_OK && !no_output
+            );
+            assert_eq!(calls.iter().any(|call| call == "present"), expected == S_OK);
+            unsafe { bridge_release_owned(bridge) };
+        }
+    }
 }
 
 #[test]
@@ -1518,14 +1881,30 @@ fn scoped_creation_admits_only_the_verified_outer_chain() {
 
 #[test]
 fn failed_retirement_retains_provider_and_inputs() {
-    let _guard = reset();
-    assert_eq!(prepare(&setup(FSR3, 0)), 1);
-    let bridge = create();
-    take_calls();
-    with(|fake| fake.drain_result = E_FAIL);
-    unsafe { bridge_release_owned(bridge) };
-    assert_eq!(take_calls(), ["signal_wait 1 1", "retain"]);
-    assert!(rsf_core_d3d11p_active_bridge().is_null());
+    for native12 in [false, true] {
+        let _guard = reset();
+        assert_eq!(prepare(&setup(FSR3, u32::from(native12))), 1);
+        with(|fake| fake.native12 = native12);
+        let bridge = create();
+        take_calls();
+        with(|fake| fake.drain_result = E_FAIL);
+        unsafe { bridge_release_owned(bridge) };
+        assert_eq!(take_calls(), ["signal_wait 1 1", "retain"]);
+        assert!(rsf_core_d3d11p_active_bridge().is_null());
+        with(|fake| {
+            for buffer in &fake.buffers {
+                assert_eq!(buffer.application.refs.get(), 2);
+                if let Some(peer) = &buffer.peer {
+                    assert_eq!(peer.refs.get(), 2);
+                    // Under the fake drain refusal, the Win32 handle is still open.
+                    assert_ne!(
+                        unsafe { windows_sys::Win32::Foundation::CloseHandle(buffer.handle) },
+                        0
+                    );
+                }
+            }
+        });
+    }
 }
 
 #[test]
