@@ -17,7 +17,6 @@
 #include <wrl/client.h>
 
 #include <algorithm>
-#include <array>
 #include <atomic>
 #include <cstdio>
 #include <cstring>
@@ -25,7 +24,6 @@
 #include <mutex>
 #include <new>
 #include <sstream>
-#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -48,9 +46,6 @@ struct Capture {
     rsf_ac7_capture_log_fn log = nullptr;
     void* user = nullptr;
     std::vector<std::vector<unsigned char>> blobs;
-    uint32_t geometry_interval = UINT32_MAX;
-    std::array<uint32_t,5> geometry_reads{};
-    std::array<std::set<std::pair<uint32_t,void*>>,5> geometry_seen;
     size_t blob_bytes = 0;
     uint32_t blob_dropped = 0;
 };
@@ -884,9 +879,6 @@ bool prepare_capture(uint32_t session) noexcept try
     s.prefix = std::move(path);
     s.blobs.clear(); s.blob_bytes = 0;
     s.blob_dropped = 0;
-    s.geometry_interval = UINT32_MAX;
-    s.geometry_reads.fill(0);
-    for (auto& seen : s.geometry_seen) seen.clear();
     return true;
 }
 catch (...) { capture_failed(); return false; }
@@ -985,144 +977,117 @@ extern "C" void rsf_ac7_motion_capture_layout(void* layout, const rsf_observer_l
     if (!rsf_ac7_capture_observe_layout(layout, elements, copied, count)) capture_failed();
 }
 namespace {
+// The Rust capture classifies the target and the copied input layout with these DXGI values.
+static_assert(DXGI_FORMAT_R32G32B32A32_FLOAT == 2 && DXGI_FORMAT_R32G32B32_FLOAT == 6 &&
+    DXGI_FORMAT_R16G16_UNORM == 35);
+
 void capture_geometry(MotionCaptureInterval capture, const rsf_frame_tap_geometry* draw) try
 {
-    auto& s = state();
     if (!draw || !capture) return;
-    const bool native_velocity=draw->format==DXGI_FORMAT_R16G16_UNORM && draw->depth_view;
-    if (!native_velocity) {
-        const auto role = rsf_ac7_capture_geometry_scope().role;
-        if (role != RSF_GAME_RENDER_TRANSLUCENCY && role != RSF_GAME_RENDER_TRANSLUCENT_MESH) return;
-    }
-    const auto interval = capture.interval;
-    // Bounded samples carry actual OldPosition/particle IDs and mesh vertex histories. Never
-    // retain a borrowed buffer expecting a later frame to still contain the same vertices.
-    MotionLayoutSnapshot layout{};
-    {
-        std::lock_guard<std::mutex> lock(s.guard);
-        if (rsf_ac7_capture_interval() != capture) return;
-        if (s.geometry_interval != interval) {
-            s.geometry_interval = interval;
-            s.geometry_reads.fill(0);
-            for (auto& seen : s.geometry_seen) seen.clear();
-        }
-        if (!rsf_ac7_capture_find_layout(draw->input_layout, &layout)) return;
-    }
-    uint32_t slots=0;bool fields[16]{};bool old3=false;
-    for (uint32_t i = 0; i < layout.copied; ++i) {
-        const auto& e = layout.elements[i];
-        if (e.input_slot<32) slots|=uint32_t(1)<<e.input_slot;
-        if (e.semantic_index<16 && e.format==DXGI_FORMAT_R32G32B32A32_FLOAT) fields[e.semantic_index]=true;
-        if (e.semantic_index==1 && e.format==DXGI_FORMAT_R32G32B32_FLOAT) old3=true;
-    }
-    const uint32_t bucket=native_velocity ? 4u : fields[8] && fields[9] && fields[10] ? 2u :
-        fields[0] && old3 && fields[2] && fields[3] && fields[4] ? 3u : fields[0] && fields[1] ? 1u : 0u;
-    constexpr uint32_t limits[]{8,12,12,8,12};
-    const auto hash = shader_hash(draw->vertex_shader, 0);
-    {
-        std::lock_guard<std::mutex> lock(s.guard);
-        if (rsf_ac7_capture_interval() != capture || s.geometry_reads[bucket] >= limits[bucket]) return;
-        // Reserve independent budgets for sprites, mesh particles, curves and native velocity.
-        // Repeated particle sections must not hide later producers. These are capture candidates.
-        if (bucket >= 1 && bucket <= 3 && !s.geometry_seen[bucket].emplace(hash, draw->input_layout).second) return;
-    }
+    MotionGeometryPlan plan{};
+    const auto admission = rsf_ac7_capture_plan_geometry(capture, draw->format, draw->depth_view != nullptr,
+        draw->input_layout, draw->vertex_shader, &plan);
+    if (admission == geometry_failed) { capture_failed(capture); return; }
+    if (admission != geometry_admitted) return;
+
     auto* context = static_cast<ID3D11DeviceContext*>(draw->context);
     if (!context || context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) return;
     ComPtr<ID3D11Device> device; context->GetDevice(&device);
-    std::ostringstream out;
-    const auto execution_pass = rsf_ac7_capture_geometry_scope();
-    out << "{\"kind\":\"geometry\",\"interval\":" << interval
-        << ",\"qpc\":" << tick() << ",\"layout\":" << uint64_t(uintptr_t(draw->input_layout))
-        << ",\"vs_hash\":" << hash << ",\"geometry_bucket\":" << bucket
-        << ",\"native_role\":" << execution_pass.role << ",\"native_frame\":" << execution_pass.native_frame
-        << ",\"primitive\":" << execution_pass.primitive << ",\"material\":" << execution_pass.material
-        << ",\"geometry_capacity\":" << execution_pass.geometry_capacity
-        << ",\"draw_kind\":" << draw->kind << ",\"count\":" << draw->count
-        << ",\"start\":" << draw->start << ",\"base_vertex\":" << draw->base_vertex
-        << ",\"instances\":" << draw->instances << ",\"start_instance\":" << draw->start_instance
-        << ",\"layout_count\":" << layout.count << ",\"elements\":[";
-    for (uint32_t i = 0; i < layout.copied; ++i) {
-        const auto& e = layout.elements[i];
-        if (i) out << ',';
-        out << "{\"attribute\":" << e.semantic_index << ",\"format\":" << e.format
-            << ",\"slot\":" << e.input_slot << ",\"offset\":" << e.byte_offset
-            << ",\"instance\":" << e.per_instance << '}';
-    }
-    out << "],\"streams\":["; bool first = true;
-    const auto can_read = [&] {
-        std::lock_guard<std::mutex> lock(s.guard);
-        return rsf_ac7_capture_interval() == capture && s.geometry_reads[bucket] < limits[bucket];
-    };
-    auto read_buffer=[&](ID3D11Buffer* buffer,uint32_t offset,uint32_t maximum=16384u) {
+    MotionGeometry row{};
+    row.scope = rsf_ac7_capture_geometry_scope();
+    row.qpc = tick();
+    row.layout = uint64_t(uintptr_t(draw->input_layout));
+    row.kind = draw->kind;
+    row.count = draw->count;
+    row.start = draw->start;
+    row.base_vertex = draw->base_vertex;
+    row.instances = draw->instances;
+    row.start_instance = draw->start_instance;
+
+    const auto can_read = [&] { return rsf_ac7_capture_geometry_read(capture, plan.bucket, false); };
+    constexpr uint32_t max_sample_bytes = 16384u;
+    // Copy while the callback still owns the binding and its contents. Later uploads can reuse it.
+    const auto read_buffer = [&](ID3D11Buffer* buffer, uint32_t offset, uint32_t maximum) {
         std::vector<unsigned char> data;
-        if (!buffer) return data;
-        D3D11_BUFFER_DESC desc{};buffer->GetDesc(&desc);
-        if (offset>=desc.ByteWidth) return data;
-        const uint32_t bytes=std::min(desc.ByteWidth-offset,std::min(maximum,16384u));
+        D3D11_BUFFER_DESC desc{}; buffer->GetDesc(&desc);
+        if (offset >= desc.ByteWidth) return data;
+        const uint32_t bytes = std::min(desc.ByteWidth - offset, std::min(maximum, max_sample_bytes));
         if (!bytes) return data;
-        D3D11_BUFFER_DESC staging{};staging.ByteWidth=bytes;
-        staging.Usage=D3D11_USAGE_STAGING;staging.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
-        {
-            std::lock_guard<std::mutex> lock(s.guard);
-            if (rsf_ac7_capture_interval() != capture || s.geometry_reads[bucket] >= limits[bucket]) return data;
-            ++s.geometry_reads[bucket];
-        }
+        D3D11_BUFFER_DESC staging{};
+        staging.ByteWidth = bytes;
+        staging.Usage = D3D11_USAGE_STAGING;
+        staging.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        if (!rsf_ac7_capture_geometry_read(capture, plan.bucket, true)) return data;
         ComPtr<ID3D11Buffer> readable;
-        if (FAILED(device->CreateBuffer(&staging,nullptr,&readable))) return data;
-        const D3D11_BOX box{offset,0,0,offset+bytes,1,1};
-        context->CopySubresourceRegion(readable.Get(),0,0,0,0,buffer,0,&box);
+        if (FAILED(device->CreateBuffer(&staging, nullptr, &readable))) return data;
+        const D3D11_BOX box{offset, 0, 0, offset + bytes, 1, 1};
+        context->CopySubresourceRegion(readable.Get(), 0, 0, 0, 0, buffer, 0, &box);
         D3D11_MAPPED_SUBRESOURCE mapped{};
-        if (SUCCEEDED(context->Map(readable.Get(),0,D3D11_MAP_READ,0,&mapped))) {
-            data.resize(bytes);std::memcpy(data.data(),mapped.pData,bytes);context->Unmap(readable.Get(),0);
+        if (SUCCEEDED(context->Map(readable.Get(), 0, D3D11_MAP_READ, 0, &mapped))) {
+            data.resize(bytes);
+            std::memcpy(data.data(), mapped.pData, bytes);
+            context->Unmap(readable.Get(), 0);
         }
         return data;
     };
     struct Predication {
-        ID3D11DeviceContext* context;ComPtr<ID3D11Predicate> predicate;BOOL value=FALSE;
-        explicit Predication(ID3D11DeviceContext* c):context(c) {context->GetPredication(&predicate,&value);context->SetPredication(nullptr,FALSE);}
-        ~Predication() {context->SetPredication(predicate.Get(),value);}
+        ID3D11DeviceContext* context;
+        ComPtr<ID3D11Predicate> predicate;
+        BOOL value = FALSE;
+        explicit Predication(ID3D11DeviceContext* c) : context(c) {
+            context->GetPredication(&predicate, &value);
+            context->SetPredication(nullptr, FALSE);
+        }
+        ~Predication() { context->SetPredication(predicate.Get(), value); }
     } predication(context);
-    for (uint32_t slot = 0; slot < 32; ++slot) {
-        if (!(slots&(uint32_t(1)<<slot))) continue;
+
+    static_assert(std::size(row.streams) == sizeof(draw->vertex_buffers) / sizeof(draw->vertex_buffers[0]));
+    for (uint32_t slot = 0; slot < std::size(row.streams); ++slot) {
+        if (!(plan.ia_slots & (uint32_t(1) << slot))) continue;
         if (!can_read()) break;
         auto* buffer = static_cast<ID3D11Buffer*>(draw->vertex_buffers[slot]);
         if (!buffer) continue;
         D3D11_BUFFER_DESC desc{}; buffer->GetDesc(&desc);
-        if (!desc.ByteWidth || draw->offsets[slot] >= desc.ByteWidth) continue;
-        const uint32_t bytes = std::min(desc.ByteWidth - draw->offsets[slot], 16384u);
-        auto data=read_buffer(buffer,draw->offsets[slot]);
+        const uint32_t offset = draw->offsets[slot];
+        if (offset >= desc.ByteWidth) continue;
+        const uint32_t bytes = std::min(desc.ByteWidth - offset, max_sample_bytes);
+        auto data = read_buffer(buffer, offset, max_sample_bytes);
         const auto blob = data.empty() ? 0u : save_blob(capture, std::move(data));
-        if (!first) out << ','; first = false;
-        out << "{\"slot\":" << slot << ",\"buffer\":" << uint64_t(uintptr_t(buffer))
-            << ",\"stride\":" << draw->strides[slot] << ",\"offset\":" << draw->offsets[slot]
-            << ",\"source_bytes\":" << desc.ByteWidth << ",\"sample_bytes\":" << bytes
-            << ",\"blob\":" << blob << '}';
+        row.streams[row.stream_count++] = {
+            uint64_t(uintptr_t(buffer)), slot, draw->strides[slot], offset, desc.ByteWidth, bytes, blob,
+        };
     }
-    out << "],\"vs_buffers\":[";first=true;
-    for (const uint32_t slot:std::array<uint32_t,3>{0,1,127}) {
-        if ((bucket!=4 && !(bucket==2 && slot==127)) || !can_read()) continue;
-        ComPtr<ID3D11ShaderResourceView> view;context->VSGetShaderResources(slot,1,&view);
+    static_assert(std::size(row.vs_buffers) == std::size(plan.vs_slots));
+    for (uint32_t index = 0; index < plan.vs_slot_count; ++index) {
+        if (!can_read()) continue;
+        const auto slot = plan.vs_slots[index];
+        ComPtr<ID3D11ShaderResourceView> view; context->VSGetShaderResources(slot, 1, &view);
         if (!view) continue;
-        ComPtr<ID3D11Resource> resource;view->GetResource(&resource);ComPtr<ID3D11Buffer> buffer;
+        ComPtr<ID3D11Resource> resource; view->GetResource(&resource);
+        ComPtr<ID3D11Buffer> buffer;
         if (FAILED(resource.As(&buffer))) continue;
-        D3D11_SHADER_RESOURCE_VIEW_DESC desc{};view->GetDesc(&desc);D3D11_BUFFER_DESC b{};buffer->GetDesc(&b);
-        uint32_t stride=b.StructureByteStride;
-        if (desc.Format==DXGI_FORMAT_R32G32B32A32_FLOAT) stride=16;
-        else if (desc.Format==DXGI_FORMAT_R32G32B32_FLOAT) stride=12;
-        else if (desc.Format==DXGI_FORMAT_R32G32_FLOAT) stride=8;
-        else if (desc.Format==DXGI_FORMAT_R32_FLOAT || desc.Format==DXGI_FORMAT_R32_TYPELESS) stride=4;
-        const uint32_t element=desc.ViewDimension==D3D11_SRV_DIMENSION_BUFFEREX ? desc.BufferEx.FirstElement : desc.Buffer.FirstElement;
-        const uint32_t elements=desc.ViewDimension==D3D11_SRV_DIMENSION_BUFFEREX ? desc.BufferEx.NumElements : desc.Buffer.NumElements;
-        if (!stride || element>b.ByteWidth/stride || elements>UINT32_MAX/stride) continue;
-        const uint32_t offset=element*stride;auto data=read_buffer(buffer.Get(),offset,elements*stride);
-        const auto bytes=data.size();
-        const auto blob=data.empty() ? 0u : save_blob(capture, std::move(data));
-        if (!first) out << ',';first=false;
-        out << "{\"slot\":" << slot << ",\"resource\":" << uint64_t(uintptr_t(buffer.Get()))
-            << ",\"format\":" << desc.Format << ",\"offset\":" << offset << ",\"source_bytes\":" << b.ByteWidth
-            << ",\"sample_bytes\":" << bytes << ",\"blob\":" << blob << '}';
+        D3D11_SHADER_RESOURCE_VIEW_DESC desc{}; view->GetDesc(&desc);
+        D3D11_BUFFER_DESC b{}; buffer->GetDesc(&b);
+        uint32_t stride = b.StructureByteStride;
+        if (desc.Format == DXGI_FORMAT_R32G32B32A32_FLOAT) stride = 16;
+        else if (desc.Format == DXGI_FORMAT_R32G32B32_FLOAT) stride = 12;
+        else if (desc.Format == DXGI_FORMAT_R32G32_FLOAT) stride = 8;
+        else if (desc.Format == DXGI_FORMAT_R32_FLOAT || desc.Format == DXGI_FORMAT_R32_TYPELESS) stride = 4;
+        const auto element = desc.ViewDimension == D3D11_SRV_DIMENSION_BUFFEREX
+            ? desc.BufferEx.FirstElement : desc.Buffer.FirstElement;
+        const auto elements = desc.ViewDimension == D3D11_SRV_DIMENSION_BUFFEREX
+            ? desc.BufferEx.NumElements : desc.Buffer.NumElements;
+        if (!stride || element > b.ByteWidth / stride || elements > UINT32_MAX / stride) continue;
+        const uint32_t offset = element * stride;
+        auto data = read_buffer(buffer.Get(), offset, elements * stride);
+        const auto bytes = static_cast<uint32_t>(data.size());
+        const auto blob = data.empty() ? 0u : save_blob(capture, std::move(data));
+        row.vs_buffers[row.vs_buffer_count++] = {
+            uint64_t(uintptr_t(buffer.Get())), slot, uint32_t(desc.Format), offset, b.ByteWidth, bytes, blob,
+        };
     }
-    out << ']'; queued_scope(out); out << '}'; record_draw_text(capture, out.str());
+    row.queued = queued_draw();
+    if (!rsf_ac7_capture_record_geometry(capture, &plan, &row)) capture_failed(capture);
 }
 catch (...) { capture_failed(capture); }
 } // namespace

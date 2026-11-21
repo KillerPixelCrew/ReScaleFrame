@@ -160,7 +160,7 @@ pub struct GeometryScope {
     primitive: u64,
     material: u64,
     geometry_capacity: u32,
-    role: u32,
+    pub(super) role: u32,
 }
 
 struct NativeRecordCounts {

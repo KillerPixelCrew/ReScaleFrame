@@ -10,6 +10,11 @@ struct MotionLayoutSnapshot {
     uint32_t count, copied;
     rsf_observer_layout_element elements[RSF_OBSERVER_MAX_LAYOUT_ELEMENTS];
 };
+struct MotionGeometryPlan {
+    MotionLayoutSnapshot layout;
+    uint32_t vs_hash, bucket, ia_slots, vs_slot_count, vs_slots[3];
+};
+enum MotionGeometryAdmission : uint32_t { geometry_skipped, geometry_admitted, geometry_failed };
 
 using MotionDisassembleConstants = uint32_t(*)(const void* bytes, std::size_t size);
 using MotionCopyUpload = bool(*)(void* user, const unsigned char* bytes, std::size_t size);
@@ -29,7 +34,9 @@ MotionShaderFacts rsf_ac7_capture_shader_facts(void* shader, uint32_t stage);
 
 bool rsf_ac7_capture_observe_layout(void* layout, const rsf_observer_layout_element* elements,
     uint32_t copied, uint32_t count);
-bool rsf_ac7_capture_find_layout(void* layout, MotionLayoutSnapshot* out);
+MotionGeometryAdmission rsf_ac7_capture_plan_geometry(MotionCaptureInterval capture, uint32_t format,
+    bool depth_bound, void* layout, void* vertex_shader, MotionGeometryPlan* plan);
+bool rsf_ac7_capture_geometry_read(MotionCaptureInterval capture, uint32_t bucket, bool reserve);
 
 // A successful creation evicts a previous upload at the same address even without initial data.
 bool rsf_ac7_capture_store_upload(MotionCaptureInterval capture, void* buffer, const unsigned char* bytes,
@@ -51,4 +58,6 @@ void rsf_ac7_capture_colour_snapshot_failed(MotionCaptureInterval capture);
 static_assert(sizeof(MotionShaderFacts) == 8 && offsetof(MotionShaderFacts, constant_mask) == 4);
 static_assert(sizeof(rsf_observer_layout_element) == 20 && offsetof(rsf_observer_layout_element, per_instance) == 16);
 static_assert(sizeof(MotionLayoutSnapshot) == 328 && offsetof(MotionLayoutSnapshot, elements) == 8);
+static_assert(sizeof(MotionGeometryPlan) == 356 && offsetof(MotionGeometryPlan, vs_hash) == 328);
+static_assert(offsetof(MotionGeometryPlan, ia_slots) == 336 && offsetof(MotionGeometryPlan, vs_slots) == 344);
 static_assert(sizeof(MotionConstantRecord) == 16 && offsetof(MotionConstantRecord, upload_serial) == 8);
