@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "shader_loader.h"
 #include "shader_loader_platform.h"
+#include "runtime_shaders.h"
 #include <utility>
 
 namespace rsf::anomaly::motion {
@@ -329,14 +330,27 @@ Prepared ShaderLoader::prepare(const ShaderRequest& request)
     rsf_anomaly_shader_prepare_tree(&input.value, &id, wide(deployment_), wide(cache_), &host, TreePreparation::compile);
     return std::move(bridge.result);
 }
+static Prepared finish_runtime_view(const rsf_anomaly_shader_request& input, const ManifestEntry& entry, Reflector& reflector,
+    int32_t status, bool cache_hit, std::span<const std::byte> code, std::string_view detail)
+{
+    PreparationBridge bridge(entry, reflector);
+    const auto host = bridge.sink();
+    rsf_anomaly_shader_finish_runtime(&input, static_cast<uint8_t>(entry.stage), status, cache_hit, bytes(code),
+        bytes(detail), &host);
+    return std::move(bridge.result);
+}
 Prepared finish_runtime_shader(const ShaderRequest& request, const ManifestEntry& entry, Reflector& reflector,
     int32_t status, bool cache_hit, std::span<const std::byte> code, std::string_view detail)
 {
     const RequestView input(request);
-    PreparationBridge bridge(entry, reflector);
-    const auto host = bridge.sink();
-    rsf_anomaly_shader_finish_runtime(&input.value, static_cast<uint8_t>(entry.stage), status, cache_hit, bytes(code),
-        bytes(detail), &host);
-    return std::move(bridge.result);
+    return finish_runtime_view(input.value, entry, reflector, status, cache_hit, code, detail);
+}
+Prepared prepare_runtime_pack(void* pack, const ShaderRequest& request, const ManifestEntry& entry, Reflector& reflector)
+{
+    const RequestView input(request);
+    rsf_patch_output output{};
+    const auto status = rsf_anomaly_runtime_pack_prepare(pack, &input.value, &output);
+    return finish_runtime_view(input.value, entry, reflector, status, output.cache_hit != 0,
+        {static_cast<const std::byte*>(output.bytecode.data), output.bytecode.size}, output.reason);
 }
 }

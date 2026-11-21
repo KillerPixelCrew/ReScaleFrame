@@ -9,6 +9,7 @@
 #include "native_hooks.h"
 #include "native_observer.h"
 #include "runtime_shaders.h"
+#include "shader_d3d.h"
 #include "sr_profile.h"
 #include "sr_stage.h"
 #include <intrin.h>
@@ -265,12 +266,12 @@ D3DShaderApi& reflector() {
 }
 void* open_pack(void* module, const void* profile, const wchar_t* pack, const wchar_t* cache,
     PackInfo* info, char* message, size_t size) noexcept try {
-    auto result = std::make_unique<RuntimeShaders>();
     std::string error;
     if (!reflector().ready()) error = "engine D3DCompiler unavailable";
-    else if (result->open(pack, cache, static_cast<std::byte*>(module), *static_cast<const BuildProfile*>(profile)->motion, error)) {
-        *info = {result->manifest()};
-        return result.release();
+    else if (auto* result = open_runtime_pack(pack, cache, static_cast<std::byte*>(module),
+            *static_cast<const BuildProfile*>(profile)->motion, error)) {
+        *info = {rsf_anomaly_runtime_pack_manifest(result)};
+        return result;
     }
     std::snprintf(message, size, "%s", error.c_str());
     return nullptr;
@@ -299,13 +300,12 @@ bool copy_bytecode(void* raw) noexcept try {
 } catch (...) { return false; }
 void prepare_shader(void* pack, void* raw, const rsf_anomaly_shader_entry* root, ShaderResult* out) noexcept try {
     const auto& request = static_cast<RequestStorage*>(raw)->request;
-    auto storage = std::make_unique<Prepared>(
-        static_cast<RuntimeShaders*>(pack)->prepare(request, manifest_entry(*root), reflector()));
+    auto storage = std::make_unique<Prepared>(prepare_runtime_pack(pack, request, manifest_entry(*root), reflector()));
     *out = {storage.get(), bytes(storage->detail), storage->skin, static_cast<uint8_t>(storage->outcome)};
     storage.release();
 } catch (...) {}
 void* create_shader(void* pack, void* raw, void* device, void* reflection, bool attach, bool* refused) noexcept {
-    const auto& api = static_cast<RuntimeShaders*>(pack)->api();
+    const auto& api = runtime_pack_api(pack);
     if (attach && api.attach_d3d11(device) != RSF_PATCH_OK) { *refused = true; return nullptr; }
     void* shader{};
     const auto& request = static_cast<RequestStorage*>(raw)->request;
@@ -363,13 +363,13 @@ const MotionPlatform platform{
         *out = {{viewport.TopLeftX, viewport.TopLeftY, viewport.Width, viewport.Height},
             {jitter.current_u, jitter.current_v, jitter.previous_u, jitter.previous_v}};
     },
-    open_pack, [](void* pack) { delete static_cast<RuntimeShaders*>(pack); },
-    [](void* pack) { set_shader_runtime(static_cast<RuntimeShaders*>(pack)->api()); },
-    [](void* pack, void* device) { static_cast<RuntimeShaders*>(pack)->api().attach_d3d11(device); },
-    [](void* pack, const wchar_t* path) { return static_cast<RuntimeShaders*>(pack)->api().dump(path); },
+    open_pack, rsf_anomaly_runtime_pack_close,
+    [](void* pack) { set_shader_runtime(runtime_pack_api(pack)); },
+    [](void* pack, void* device) { runtime_pack_api(pack).attach_d3d11(device); },
+    [](void* pack, const wchar_t* path) { return runtime_pack_api(pack).dump(path); },
     [](void* pack, PatchCounters* out) {
         rsf_patch_counters raw{sizeof(raw), RSF_SHADER_PATCH_VERSION};
-        static_cast<RuntimeShaders*>(pack)->api().counters(&raw);
+        runtime_pack_api(pack).counters(&raw);
         *out = {raw.intercepted, raw.built, raw.cache_hits, raw.refused, {}};
         std::copy(std::begin(raw.refusals), std::end(raw.refusals), out->refusals);
     },

@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
-use super::Bytes;
 use super::manifest::{Manifest, Root, admit_pack};
+use super::{Bytes, Request};
 use crate::runtime_module::{export, rsf_anomaly_runtime_module};
 use rsf_game_sys::shader_patch_abi::{
-    RSF_PATCH_OK, RSF_SHADER_PATCH_VERSION, rsf_get_shader_patch_api_fn, rsf_patch_bytes,
-    rsf_patch_root, rsf_patch_session, rsf_shader_patch_api,
+    RSF_PATCH_ARGUMENT, RSF_PATCH_OK, RSF_PATCH_SOURCE, RSF_SHADER_PATCH_VERSION,
+    rsf_get_shader_patch_api_fn, rsf_patch_bytes, rsf_patch_define, rsf_patch_output,
+    rsf_patch_request, rsf_patch_root, rsf_patch_session, rsf_shader_patch_api,
 };
-use std::ffi::{CStr, OsString, c_char, c_void};
+use std::ffi::{CStr, CString, OsString, c_char, c_void};
 use std::os::windows::ffi::OsStringExt;
 use std::ptr::{NonNull, null_mut};
 
@@ -24,6 +25,77 @@ impl Drop for Session {
 struct RuntimePack {
     session: Session,
     manifest: Manifest,
+    includes: Includes,
+}
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct Includer {
+    table: *mut c_void,
+    open: unsafe extern "C" fn(*mut c_void, *const c_char, *mut *const c_void, *mut u32) -> bool,
+    copy: unsafe extern "C" fn(*mut c_void, *const c_void, usize) -> bool,
+    close: unsafe extern "C" fn(*mut c_void, *const c_void),
+}
+
+const _: () = assert!(size_of::<Includer>() == 32);
+
+struct OpenInclude<'a> {
+    reader: &'a Includer,
+    data: *const c_void,
+}
+
+impl Drop for OpenInclude<'_> {
+    fn drop(&mut self) {
+        unsafe { (self.reader.close)(self.reader.table, self.data) };
+    }
+}
+
+struct Includes {
+    reader: Includer,
+    bytes: Vec<u8>,
+}
+
+unsafe extern "C" fn resolve_include(
+    user: *mut c_void,
+    name: *const c_char,
+    output: *mut rsf_patch_bytes,
+) -> i32 {
+    if name.is_null() || output.is_null() {
+        return RSF_PATCH_SOURCE;
+    }
+    let includes = unsafe { &mut *user.cast::<Includes>() };
+    let mut name = unsafe { CStr::from_ptr(name) }.to_bytes_with_nul().to_vec();
+    for byte in &mut name {
+        if *byte == b'/' {
+            *byte = b'\\';
+        }
+    }
+    let mut data = std::ptr::null();
+    let mut size = 0;
+    let reader = &includes.reader;
+    if !unsafe { (reader.open)(reader.table, name.as_ptr().cast(), &mut data, &mut size) }
+        || data.is_null()
+    {
+        return RSF_PATCH_SOURCE;
+    }
+    let opened = OpenInclude { reader, data };
+    let size = size as usize;
+    includes.bytes.clear();
+    if includes.bytes.try_reserve(size).is_err() {
+        return RSF_PATCH_SOURCE;
+    }
+    includes.bytes.resize(size, 0);
+    if !unsafe { (reader.copy)(includes.bytes.as_mut_ptr().cast(), opened.data, size) } {
+        return RSF_PATCH_SOURCE;
+    }
+    // The Runtime copies these bytes before the next include callback can reuse the buffer.
+    unsafe {
+        output.write(rsf_patch_bytes {
+            data: includes.bytes.as_ptr().cast(),
+            size,
+        })
+    };
+    RSF_PATCH_OK
 }
 
 fn query_api() -> Option<rsf_shader_patch_api> {
@@ -110,6 +182,7 @@ impl RuntimePack {
         pack: *const u16,
         cache: *const u16,
         compiler: *mut c_void,
+        includer: Includer,
     ) -> Result<Self, String> {
         let api = query_api().ok_or_else(|| String::from("Runtime shader service unavailable"))?;
         let path =
@@ -144,7 +217,14 @@ impl RuntimePack {
         let count = unsafe { (session.api.root_count.unwrap())(session.handle.as_ptr()) };
         let manifest =
             unsafe { admit_pack(hash, count, std::ptr::from_ref(&session).cast(), read_root) }?;
-        Ok(Self { session, manifest })
+        Ok(Self {
+            session,
+            manifest,
+            includes: Includes {
+                reader: includer,
+                bytes: Vec::new(),
+            },
+        })
     }
 }
 
@@ -153,10 +233,11 @@ unsafe extern "C" fn rsf_anomaly_runtime_pack_open(
     pack: *const u16,
     cache: *const u16,
     compiler: *mut c_void,
+    includer: &Includer,
     error: *mut c_char,
     capacity: usize,
 ) -> *mut RuntimePack {
-    match unsafe { RuntimePack::open(pack, cache, compiler) } {
+    match unsafe { RuntimePack::open(pack, cache, compiler, *includer) } {
         Ok(pack) => Box::into_raw(Box::new(pack)),
         Err(message) => {
             if !error.is_null() && capacity != 0 {
@@ -192,6 +273,58 @@ extern "C" fn rsf_anomaly_runtime_pack_api(pack: &RuntimePack) -> *const rsf_sha
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_runtime_pack_session(pack: &RuntimePack) -> *mut rsf_patch_session {
-    pack.session.handle.as_ptr()
+unsafe extern "C" fn rsf_anomaly_runtime_pack_prepare(
+    pack: &mut RuntimePack,
+    input: &Request,
+    output: &mut rsf_patch_output,
+) -> i32 {
+    *output = rsf_patch_output {
+        struct_size: size_of::<rsf_patch_output>() as u32,
+        abi_version: RSF_SHADER_PATCH_VERSION,
+        ..Default::default()
+    };
+    let (Ok(entry), Ok(target)) = (
+        CString::new(unsafe { input.entry.as_slice() }),
+        CString::new(unsafe { input.target.as_slice() }),
+    ) else {
+        return RSF_PATCH_ARGUMENT;
+    };
+    let defines = unsafe { input.defines.as_slice() };
+    let mut text = Vec::with_capacity(defines.len());
+    for define in defines {
+        let (Ok(name), Ok(value)) = (
+            CString::new(unsafe { define.name.as_slice() }),
+            CString::new(unsafe { define.value.as_slice() }),
+        ) else {
+            return RSF_PATCH_ARGUMENT;
+        };
+        text.push((name, value));
+    }
+    let defines: Vec<_> = text
+        .iter()
+        .map(|(name, value)| rsf_patch_define {
+            name: name.as_ptr(),
+            value: value.as_ptr(),
+        })
+        .collect();
+    let request = rsf_patch_request {
+        struct_size: size_of::<rsf_patch_request>() as u32,
+        abi_version: RSF_SHADER_PATCH_VERSION,
+        source: rsf_patch_bytes {
+            data: input.source.data.cast(),
+            size: input.source.len,
+        },
+        original_bytecode: rsf_patch_bytes {
+            data: input.bytecode.data.cast(),
+            size: input.bytecode.len,
+        },
+        entry: entry.as_ptr(),
+        target: target.as_ptr(),
+        flags: input.flags,
+        defines: defines.as_ptr(),
+        define_count: defines.len(),
+        resolve: Some(resolve_include),
+        user: std::ptr::from_mut(&mut pack.includes).cast(),
+    };
+    unsafe { (pack.session.api.prepare.unwrap())(pack.session.handle.as_ptr(), &request, output) }
 }

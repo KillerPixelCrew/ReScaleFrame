@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The Anomaly motion loader now holds the Rust pack directly. Rust
+assembles patch requests and keeps the include buffer alive until
+the Runtime copies it. An opened engine include is closed even when
+allocation or copying fails. The native bridge verifies the engine
+include table, calls its guarded methods and supplies D3D reflection.
+The public shader patch ABI is unchanged. Build and runtime
+validation remain open.
+
 Rust now reads and admits Anomaly's motion shader pack, validates the
 Runtime shader API and owns the admitted manifest and session together.
 A refused pack closes any session the Runtime returned. Anomaly and
