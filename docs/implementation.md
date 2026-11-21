@@ -258,6 +258,13 @@ nonfinite view data without overwriting the caller's earlier result.
 The two-Rust-archive carrier links and captured-buffer fixtures remain
 unverified.
 
+The AC7 UI classifier now owns the existing declaration, widget target
+and draw rules in Rust. The verified HUD producer checksum and size
+also moved, with CRC32C still supplied by the shared shader hash. The
+classifier still only reads the frame tap's facts and leaves diversion
+to the Runtime. Fixture and gameplay verification remain open.
+[UI extraction evidence](research/ac7-ui-extraction.md)
+
 ## Rust orchestrator and first Anomaly port
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
