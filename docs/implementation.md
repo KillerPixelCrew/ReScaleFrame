@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust owns CPU input receipt replay and FG frame selection. The dispatcher
+admits bounded callback reordering under its existing lock. FG selects a
+frame only when its session, generation and pacing and simulation timestamps
+match without ambiguity. The C++ dispatcher forwards and receipt callbacks
+are removed. Source review checked the public dispatch and the private FG
+platform layout. The original dispatch fixture still calls the C interface,
+and new Rust cases cover the policy. Build and fixture runs remain open.
+
 The D3D11 host owns failure and sequence capture budgets under its Rust
 graphics lease. The former C++ policy leaves and their private callbacks
 are gone. The three-failure cap and four-frame sequence still defer to

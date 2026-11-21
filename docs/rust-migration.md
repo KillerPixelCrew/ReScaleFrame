@@ -112,14 +112,17 @@ They predate the latest bridge, overlay, input and retirement cutovers.
 | Device | Check provider switches, fullscreen and resize, GPU retirement, D3D11 state restoration, OpenGL sharing, capture completion and overlay drawing on the affected APIs. |
 | Game | Use the same candidate on Standard and AVX. Record movement and held input, SR and FG switching, overlay capture and release, resize and fallback, and the observed shutdown sequence. Record an engine quit and explicit plugin retirement separately. |
 
-## Remaining native policy
+## Native policy cutover
 
 The source audit of the Runtime and combined carriers identified input
 receipt routing and D3D11 capture budgets as the last native policy
 helpers in the production core. The rights holder confirmed both helpers
-were written for ReScaleFrame and authorized MIT in `b2b1c5a`. The D3D11
-host now owns the capture budgets in Rust. The input receipt port covers
-both the CPU dispatcher and FG frame ownership paths.
+were written for ReScaleFrame and authorized MIT. Commit `b2b1c5a` records
+that authorization. The D3D11 host owns the capture budgets in Rust.
+The Rust CPU dispatcher owns receipt replay, and FG frame routing uses
+the Rust unique-owner selector. Their former native implementations and
+private callbacks are removed. The CPU event and dispatch C signatures
+are unchanged. Build and export verification of this cutover remain open.
 
 `rsf_negotiate` in `runtime/contract` has a native fixture and no
 production caller. The running Runtime and adapter use the Rust backend

@@ -21,12 +21,6 @@ extern "C" {
 #define RSF_NFG_CPU_FSR3 RSF_FG_BACKEND_FSR3
 #define RSF_NFG_CPU_FSR4 RSF_FG_BACKEND_FSR4
 
-/* Rows supplied to the existing receipt selector through the native bridge. */
-typedef struct rsf_nfg_receipt_candidate {
-    uint64_t source, session, generation, ready, simulation_begin;
-    uint32_t eligible;
-} rsf_nfg_receipt_candidate;
-
 /* Private leaves for the D3D CPU owner. Host and device snapshots borrow the
    existing presentation lifetime. Pace and marker calls obtain the provider's
    overlapping read leases inside the presentation bridge. */
@@ -52,8 +46,6 @@ typedef struct rsf_nfg_cpu_platform {
     int32_t (*receipt)(uint64_t generation, uint64_t source, uint32_t kind, uint32_t message);
     int32_t (*abort)(uint64_t source);
     void* (*create_antilag)(void);
-    uint64_t (*receipt_owner)(const rsf_nfg_receipt_candidate*, size_t count,
-        uint64_t session, uint64_t generation, uint64_t timestamp);
     uint32_t (*owned_window_thread)(uint64_t window_key);
     int (*post_ping)(void* window, uint32_t message);
     void (*signal_completion)(void);

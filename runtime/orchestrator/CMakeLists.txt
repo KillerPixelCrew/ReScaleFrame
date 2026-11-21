@@ -13,10 +13,10 @@ foreach(rsf_dump_backend rsf_dlss rsf_fsr rsf_xess)
     target_compile_definitions(${rsf_dump_backend} PRIVATE RSF_FRAME_DUMP_STATIC)
 endforeach()
 
-add_library(rsf_native_cpu STATIC src/native_cpu.cpp)
-target_include_directories(rsf_native_cpu PUBLIC include)
-target_compile_definitions(rsf_native_cpu PRIVATE RSF_RUNTIME_BUILD)
-target_link_libraries(rsf_native_cpu PUBLIC ReScaleFrame::GameSDK PRIVATE rsf_build_options)
+# The CPU fact dispatcher is implemented in the Rust core; this target carries its headers and archive.
+add_library(rsf_native_cpu INTERFACE)
+target_include_directories(rsf_native_cpu INTERFACE include)
+target_link_libraries(rsf_native_cpu INTERFACE ReScaleFrame::GameSDK)
 
 add_library(rsf_orchestrator_core OBJECT
     src/native_scene_platform.cpp
@@ -49,7 +49,7 @@ target_compile_definitions(rsf_orchestrator_core PUBLIC RSF_RUNTIME_BUILD)
 target_link_libraries(rsf_orchestrator_core PUBLIC rsf_native_cpu)
 rsf_add_rust_static(rsf_orchestrator_rust rsf_rust_core rsf-orchestrator rsf_orchestrator)
 target_link_libraries(rsf_orchestrator_core PUBLIC rsf_orchestrator_rust)
-target_link_libraries(rsf_native_cpu PRIVATE rsf_orchestrator_rust)
+target_link_libraries(rsf_native_cpu INTERFACE rsf_orchestrator_rust)
 target_link_libraries(rsf_frame_dump PRIVATE rsf_orchestrator_rust)
 target_compile_definitions(rsf_orchestrator_core PRIVATE RSF_STREAMLINE_HOST_BUILD)
 # Public because the orchestrator's own headers name a backend's frame structure and the decode

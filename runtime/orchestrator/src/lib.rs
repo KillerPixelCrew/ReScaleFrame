@@ -157,6 +157,8 @@ mod input_dump;
 #[cfg(windows)]
 mod input_dump_vulkan;
 #[cfg(windows)]
+mod input_receipts;
+#[cfg(windows)]
 mod latency_antilag;
 #[cfg(windows)]
 mod latency_lease;

@@ -118,35 +118,6 @@ const _: () = {
 };
 #[repr(C)]
 #[derive(Copy, Clone)]
-pub struct rsf_nfg_receipt_candidate {
-    pub source: u64,
-    pub session: u64,
-    pub generation: u64,
-    pub ready: u64,
-    pub simulation_begin: u64,
-    pub eligible: u32,
-}
-#[allow(clippy::unnecessary_operation, clippy::identity_op)]
-const _: () = {
-    ["Size of rsf_nfg_receipt_candidate"]
-        [::core::mem::size_of::<rsf_nfg_receipt_candidate>() - 48usize];
-    ["Alignment of rsf_nfg_receipt_candidate"]
-        [::core::mem::align_of::<rsf_nfg_receipt_candidate>() - 8usize];
-    ["Offset of field: rsf_nfg_receipt_candidate::source"]
-        [::core::mem::offset_of!(rsf_nfg_receipt_candidate, source) - 0usize];
-    ["Offset of field: rsf_nfg_receipt_candidate::session"]
-        [::core::mem::offset_of!(rsf_nfg_receipt_candidate, session) - 8usize];
-    ["Offset of field: rsf_nfg_receipt_candidate::generation"]
-        [::core::mem::offset_of!(rsf_nfg_receipt_candidate, generation) - 16usize];
-    ["Offset of field: rsf_nfg_receipt_candidate::ready"]
-        [::core::mem::offset_of!(rsf_nfg_receipt_candidate, ready) - 24usize];
-    ["Offset of field: rsf_nfg_receipt_candidate::simulation_begin"]
-        [::core::mem::offset_of!(rsf_nfg_receipt_candidate, simulation_begin) - 32usize];
-    ["Offset of field: rsf_nfg_receipt_candidate::eligible"]
-        [::core::mem::offset_of!(rsf_nfg_receipt_candidate, eligible) - 40usize];
-};
-#[repr(C)]
-#[derive(Copy, Clone)]
 pub struct rsf_nfg_cpu_platform {
     pub has_owner: ::core::option::Option<unsafe extern "C" fn() -> ::core::ffi::c_int>,
     pub generation: ::core::option::Option<unsafe extern "C" fn() -> u64>,
@@ -197,15 +168,6 @@ pub struct rsf_nfg_cpu_platform {
     >,
     pub abort: ::core::option::Option<unsafe extern "C" fn(source: u64) -> i32>,
     pub create_antilag: ::core::option::Option<unsafe extern "C" fn() -> *mut ::core::ffi::c_void>,
-    pub receipt_owner: ::core::option::Option<
-        unsafe extern "C" fn(
-            arg1: *const rsf_nfg_receipt_candidate,
-            count: usize,
-            session: u64,
-            generation: u64,
-            timestamp: u64,
-        ) -> u64,
-    >,
     pub owned_window_thread: ::core::option::Option<unsafe extern "C" fn(window_key: u64) -> u32>,
     pub post_ping: ::core::option::Option<
         unsafe extern "C" fn(window: *mut ::core::ffi::c_void, message: u32) -> ::core::ffi::c_int,
@@ -240,7 +202,7 @@ pub struct rsf_nfg_cpu_platform {
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of rsf_nfg_cpu_platform"][::core::mem::size_of::<rsf_nfg_cpu_platform>() - 272usize];
+    ["Size of rsf_nfg_cpu_platform"][::core::mem::size_of::<rsf_nfg_cpu_platform>() - 264usize];
     ["Alignment of rsf_nfg_cpu_platform"][::core::mem::align_of::<rsf_nfg_cpu_platform>() - 8usize];
     ["Offset of field: rsf_nfg_cpu_platform::has_owner"]
         [::core::mem::offset_of!(rsf_nfg_cpu_platform, has_owner) - 0usize];
@@ -284,30 +246,28 @@ const _: () = {
         [::core::mem::offset_of!(rsf_nfg_cpu_platform, abort) - 152usize];
     ["Offset of field: rsf_nfg_cpu_platform::create_antilag"]
         [::core::mem::offset_of!(rsf_nfg_cpu_platform, create_antilag) - 160usize];
-    ["Offset of field: rsf_nfg_cpu_platform::receipt_owner"]
-        [::core::mem::offset_of!(rsf_nfg_cpu_platform, receipt_owner) - 168usize];
     ["Offset of field: rsf_nfg_cpu_platform::owned_window_thread"]
-        [::core::mem::offset_of!(rsf_nfg_cpu_platform, owned_window_thread) - 176usize];
+        [::core::mem::offset_of!(rsf_nfg_cpu_platform, owned_window_thread) - 168usize];
     ["Offset of field: rsf_nfg_cpu_platform::post_ping"]
-        [::core::mem::offset_of!(rsf_nfg_cpu_platform, post_ping) - 184usize];
+        [::core::mem::offset_of!(rsf_nfg_cpu_platform, post_ping) - 176usize];
     ["Offset of field: rsf_nfg_cpu_platform::signal_completion"]
-        [::core::mem::offset_of!(rsf_nfg_cpu_platform, signal_completion) - 192usize];
+        [::core::mem::offset_of!(rsf_nfg_cpu_platform, signal_completion) - 184usize];
     ["Offset of field: rsf_nfg_cpu_platform::wait_completion"]
-        [::core::mem::offset_of!(rsf_nfg_cpu_platform, wait_completion) - 200usize];
+        [::core::mem::offset_of!(rsf_nfg_cpu_platform, wait_completion) - 192usize];
     ["Offset of field: rsf_nfg_cpu_platform::input_idle_ms"]
-        [::core::mem::offset_of!(rsf_nfg_cpu_platform, input_idle_ms) - 208usize];
+        [::core::mem::offset_of!(rsf_nfg_cpu_platform, input_idle_ms) - 200usize];
     ["Offset of field: rsf_nfg_cpu_platform::tick_millis"]
-        [::core::mem::offset_of!(rsf_nfg_cpu_platform, tick_millis) - 216usize];
+        [::core::mem::offset_of!(rsf_nfg_cpu_platform, tick_millis) - 208usize];
     ["Offset of field: rsf_nfg_cpu_platform::qpc_frequency"]
-        [::core::mem::offset_of!(rsf_nfg_cpu_platform, qpc_frequency) - 224usize];
+        [::core::mem::offset_of!(rsf_nfg_cpu_platform, qpc_frequency) - 216usize];
     ["Offset of field: rsf_nfg_cpu_platform::thread_id"]
-        [::core::mem::offset_of!(rsf_nfg_cpu_platform, thread_id) - 232usize];
+        [::core::mem::offset_of!(rsf_nfg_cpu_platform, thread_id) - 224usize];
     ["Offset of field: rsf_nfg_cpu_platform::allows_fg"]
-        [::core::mem::offset_of!(rsf_nfg_cpu_platform, allows_fg) - 240usize];
+        [::core::mem::offset_of!(rsf_nfg_cpu_platform, allows_fg) - 232usize];
     ["Offset of field: rsf_nfg_cpu_platform::duplicate_render_thread"]
-        [::core::mem::offset_of!(rsf_nfg_cpu_platform, duplicate_render_thread) - 248usize];
+        [::core::mem::offset_of!(rsf_nfg_cpu_platform, duplicate_render_thread) - 240usize];
     ["Offset of field: rsf_nfg_cpu_platform::sample_render_thread"]
-        [::core::mem::offset_of!(rsf_nfg_cpu_platform, sample_render_thread) - 256usize];
+        [::core::mem::offset_of!(rsf_nfg_cpu_platform, sample_render_thread) - 248usize];
     ["Offset of field: rsf_nfg_cpu_platform::describe_address"]
-        [::core::mem::offset_of!(rsf_nfg_cpu_platform, describe_address) - 264usize];
+        [::core::mem::offset_of!(rsf_nfg_cpu_platform, describe_address) - 256usize];
 };
