@@ -8,6 +8,12 @@ The plugin owns Unity discovery, engine hooks, camera/frame conventions and SR r
 The shared orchestrator retains vendor SDKs, GPU interoperability and presentation. URP, HDRP
 and built-in rendering require separate adapters. IL2CPP is outside the initial Mono adapter.
 
+Build detection, the renderer lifecycle and the Mono helper bootstrap are Rust (`rsf-unity-mono`,
+linked as a staticlib). `plugin.cpp` keeps the stable `rsf_get_game_plugin_api` export and lends
+the native D3D12 bridge through `rsf_unity_plugin_platform`. The bridge, the Unity graphics
+interfaces and the `rsf_unity_*` runtime host exports remain native; the Unity package compiles
+the same `bridge.cpp`.
+
 Detection currently requires the exact x64 Drag'n Wash executable name and SHA256. A different
 build remains unknown, including other Unity Mono games. Recognition only establishes identity.
 The initial adapter targets Unity 6000.3 URP RenderGraph on native D3D12. Its Mono helper uses

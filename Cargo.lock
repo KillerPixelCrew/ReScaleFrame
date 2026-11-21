@@ -447,6 +447,14 @@ name = "rsf-streamline-vk"
 version = "0.1.2"
 
 [[package]]
+name = "rsf-unity-mono"
+version = "0.1.2"
+dependencies = [
+ "rsf-game-sys",
+ "windows-sys",
+]
+
+[[package]]
 name = "rsf-upscaler"
 version = "0.1.2"
 

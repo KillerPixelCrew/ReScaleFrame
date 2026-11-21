@@ -17,6 +17,13 @@ the shared file hash remain native. Source checks cover both call paths
 and the private table. The game plugin links, Steam-present path and
 device verification remain unrun on this revision.
 
+Unity Mono's Rust adapter selects the researched build, owns the plugin
+lifecycle and starts and stops the managed helper on attached Mono threads.
+The existing game DLL export and native render bridge are used by the same
+callers. The Unity package still builds the shared bridge. The bridge's
+frame policy and native Runtime setup remain open for porting. Build,
+fixture and Unity player checks remain unrun on this revision.
+
 ## Rust orchestrator and first Anomaly port
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
