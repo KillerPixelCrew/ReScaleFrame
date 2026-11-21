@@ -15,6 +15,7 @@ pub const RSF_FALLOUT4_CPU_HOOK_JOB_END: u32 = 7;
 pub const RSF_FALLOUT4_CPU_HOOK_WRAPPER: u32 = 8;
 pub const RSF_FALLOUT4_CPU_HOOK_WORKER_JOIN: u32 = 9;
 pub const RSF_FALLOUT4_CPU_HOOK_COUNT: u32 = 10;
+pub const RSF_FALLOUT4_CPU_SCOPE_WORDS: u32 = 64;
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct rsf_fallout4_cpu_identity {
@@ -43,6 +44,22 @@ const _: () = {
 };
 #[repr(C)]
 #[derive(Copy, Clone)]
+pub struct rsf_fallout4_cpu_scope {
+    pub tag: u64,
+    pub state: [u64; 64usize],
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_fallout4_cpu_scope"][::core::mem::size_of::<rsf_fallout4_cpu_scope>() - 520usize];
+    ["Alignment of rsf_fallout4_cpu_scope"]
+        [::core::mem::align_of::<rsf_fallout4_cpu_scope>() - 8usize];
+    ["Offset of field: rsf_fallout4_cpu_scope::tag"]
+        [::core::mem::offset_of!(rsf_fallout4_cpu_scope, tag) - 0usize];
+    ["Offset of field: rsf_fallout4_cpu_scope::state"]
+        [::core::mem::offset_of!(rsf_fallout4_cpu_scope, state) - 8usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
 pub struct rsf_fallout4_cpu_platform {
     pub create_hook: ::core::option::Option<
         unsafe extern "C" fn(hook: u32, target: *mut ::core::ffi::c_void) -> bool,
@@ -51,14 +68,7 @@ pub struct rsf_fallout4_cpu_platform {
     pub remove_hook: ::core::option::Option<
         unsafe extern "C" fn(hook: u32, target: *mut ::core::ffi::c_void) -> bool,
     >,
-    pub call_original: ::core::option::Option<
-        unsafe extern "C" fn(
-            hook: u32,
-            first: *mut ::core::ffi::c_void,
-            second: *const ::core::ffi::c_void,
-            delta: f32,
-        ) -> u32,
-    >,
+
     pub cpu_event: ::core::option::Option<
         unsafe extern "C" fn(
             callback: rsf_game_cpu_event_fn,
@@ -72,7 +82,7 @@ pub struct rsf_fallout4_cpu_platform {
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
     ["Size of rsf_fallout4_cpu_platform"]
-        [::core::mem::size_of::<rsf_fallout4_cpu_platform>() - 56usize];
+        [::core::mem::size_of::<rsf_fallout4_cpu_platform>() - 48usize];
     ["Alignment of rsf_fallout4_cpu_platform"]
         [::core::mem::align_of::<rsf_fallout4_cpu_platform>() - 8usize];
     ["Offset of field: rsf_fallout4_cpu_platform::create_hook"]
@@ -81,12 +91,10 @@ const _: () = {
         [::core::mem::offset_of!(rsf_fallout4_cpu_platform, hook_created) - 8usize];
     ["Offset of field: rsf_fallout4_cpu_platform::remove_hook"]
         [::core::mem::offset_of!(rsf_fallout4_cpu_platform, remove_hook) - 16usize];
-    ["Offset of field: rsf_fallout4_cpu_platform::call_original"]
-        [::core::mem::offset_of!(rsf_fallout4_cpu_platform, call_original) - 24usize];
     ["Offset of field: rsf_fallout4_cpu_platform::cpu_event"]
-        [::core::mem::offset_of!(rsf_fallout4_cpu_platform, cpu_event) - 32usize];
+        [::core::mem::offset_of!(rsf_fallout4_cpu_platform, cpu_event) - 24usize];
     ["Offset of field: rsf_fallout4_cpu_platform::finish_render_scope"]
-        [::core::mem::offset_of!(rsf_fallout4_cpu_platform, finish_render_scope) - 40usize];
+        [::core::mem::offset_of!(rsf_fallout4_cpu_platform, finish_render_scope) - 32usize];
     ["Offset of field: rsf_fallout4_cpu_platform::peek_thunk"]
-        [::core::mem::offset_of!(rsf_fallout4_cpu_platform, peek_thunk) - 48usize];
+        [::core::mem::offset_of!(rsf_fallout4_cpu_platform, peek_thunk) - 40usize];
 };

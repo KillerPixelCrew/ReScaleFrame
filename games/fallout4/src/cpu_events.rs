@@ -12,8 +12,9 @@
 //! a physical sample.
 //!
 //! The integration reports what the engine did; the Runtime decides pacing, marker meaning and
-//! vendors. cpu_events.cpp keeps the typed detour shells, MinHook, the trampoline calls, the
-//! guarded host callback and the resident PeekMessageA thunk.
+//! vendors. cpu_events.cpp keeps the typed detour shells, which call each original engine function
+//! through its MinHook trampoline on their own C++ frames between the entry and exit decisions
+//! here, the guarded host callback and the resident PeekMessageA thunk.
 mod handoff;
 mod native;
 
@@ -21,8 +22,8 @@ use crate::cpu_abi::{
     RSF_FALLOUT4_CPU_HOOK_CONSUME, RSF_FALLOUT4_CPU_HOOK_COUNT, RSF_FALLOUT4_CPU_HOOK_IDLE,
     RSF_FALLOUT4_CPU_HOOK_JOB_END, RSF_FALLOUT4_CPU_HOOK_KEYBOARD, RSF_FALLOUT4_CPU_HOOK_MOUSE,
     RSF_FALLOUT4_CPU_HOOK_PLAYER_CONTROLS, RSF_FALLOUT4_CPU_HOOK_POLL, RSF_FALLOUT4_CPU_HOOK_SWAP,
-    RSF_FALLOUT4_CPU_HOOK_WORKER_JOIN, RSF_FALLOUT4_CPU_HOOK_WRAPPER, rsf_fallout4_cpu_identity,
-    rsf_fallout4_cpu_platform,
+    RSF_FALLOUT4_CPU_HOOK_WORKER_JOIN, RSF_FALLOUT4_CPU_HOOK_WRAPPER, RSF_FALLOUT4_CPU_SCOPE_WORDS,
+    rsf_fallout4_cpu_identity, rsf_fallout4_cpu_platform, rsf_fallout4_cpu_scope,
 };
 use crate::{Ops, Plain, creation, image, message, ops, pin, read};
 use handoff::{
@@ -46,7 +47,7 @@ use std::cell::Cell;
 use std::ffi::{CStr, c_void};
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
-use windows_sys::Win32::Foundation::{GetLastError, HWND, SetLastError};
+use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
 use windows_sys::Win32::System::Memory::{
     MEM_COMMIT, MEMORY_BASIC_INFORMATION, PAGE_EXECUTE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE,
     PAGE_EXECUTE_WRITECOPY, PAGE_GUARD, PAGE_NOACCESS, PAGE_READWRITE, VirtualProtect,
@@ -61,7 +62,6 @@ use Ordering::{AcqRel, Acquire, Relaxed, Release, SeqCst};
 // SAFETY: MSG holds integers and a window handle; every bit pattern is a value.
 unsafe impl Plain for MSG {}
 
-type Peek = unsafe extern "system" fn(*mut MSG, HWND, u32, u32, u32) -> i32;
 const WAIT_OBJECT_0: u32 = 0;
 
 // ---------------------------------------------------------------------------------------------
@@ -77,7 +77,6 @@ fn complete(table: &rsf_fallout4_cpu_platform) -> bool {
     table.create_hook.is_some()
         && table.hook_created.is_some()
         && table.remove_hook.is_some()
-        && table.call_original.is_some()
         && table.cpu_event.is_some()
         && table.finish_render_scope.is_some()
         && table.peek_thunk.is_some()
@@ -95,14 +94,6 @@ unsafe extern "C" fn rsf_fallout4_cpu_publish(table: *const rsf_fallout4_cpu_pla
             true
         }
         _ => false,
-    }
-}
-
-/// The original through its trampoline. The caller sets the last error immediately before.
-fn original(hook: u32, first: *mut c_void, second: *const c_void, delta: f32) -> u32 {
-    match platform().and_then(|table| table.call_original) {
-        Some(call) => unsafe { call(hook, first, second, delta) },
-        None => 0,
     }
 }
 
@@ -1095,6 +1086,7 @@ fn gate_receipt(
 }
 
 /// Reached and passed downstream checks, with the native wait result and mode when known.
+#[derive(Clone, Copy)]
 struct PhaseChecks {
     reached: u32,
     passed: u32,
@@ -1609,49 +1601,77 @@ fn end_worker_consumer() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Detour bodies. Each runs on the engine thread that entered its native shell and keeps the
-// thread's last error exactly as the engine would see it without the hook.
+// Detour entry and exit decisions.
+//
+// cpu_events.cpp keeps every native shell. A shell captures its return address and the thread's
+// last error, calls the entry decision here, restores that error, calls the original through its
+// typed trampoline on its own C++ frame, captures the native last error, calls the exit decision
+// here and restores the native error. No Rust frame is on the stack during an engine call, so a
+// native unwind passes only through the C++ shells, exactly as it did before the port; the Swap
+// shell keeps its scope destructor for that case.
+//
+// The scope is the shell's stack receipt for one call. The entry writes it with its hook tag;
+// the exit consumes it and refuses a receipt of another hook.
 
-/// One entered callback for the busy count.
-struct Entered;
+const SCOPE_TAG: u64 = 0x5253_4634_4350_0000;
 
-impl Entered {
-    fn new() -> Self {
-        ENTERED.fetch_add(1, AcqRel);
-        Self
-    }
+/// Records `value` as this call's receipt for `hook`.
+fn open_scope<T: Copy>(scope: *mut rsf_fallout4_cpu_scope, hook: u32, value: T) {
+    const {
+        assert!(
+            size_of::<T>() <= size_of::<[u64; RSF_FALLOUT4_CPU_SCOPE_WORDS as usize]>()
+                && align_of::<T>() <= align_of::<u64>()
+        )
+    };
+    // SAFETY: the shell passes its own stack receipt, or null.
+    let Some(scope) = (unsafe { scope.as_mut() }) else {
+        return;
+    };
+    // SAFETY: the state words hold T by the assertion above.
+    unsafe { scope.state.as_mut_ptr().cast::<T>().write(value) };
+    scope.tag = SCOPE_TAG | u64::from(hook);
 }
 
-impl Drop for Entered {
-    fn drop(&mut self) {
-        ENTERED.fetch_sub(1, AcqRel);
+/// This call's receipt for `hook`. `consume` closes it so a second exit refuses.
+fn scope_value<T: Copy>(scope: *mut rsf_fallout4_cpu_scope, hook: u32, consume: bool) -> Option<T> {
+    // SAFETY: the shell passes its own stack receipt, or null.
+    let scope = unsafe { scope.as_mut() }?;
+    if scope.tag != SCOPE_TAG | u64::from(hook) {
+        return None;
     }
+    if consume {
+        scope.tag = 0;
+    }
+    // SAFETY: open_scope wrote a T for this hook tag.
+    Some(unsafe { scope.state.as_ptr().cast::<T>().read() })
 }
 
-/// The PeekMessageA import thunk body.
-///
-/// # Safety
-/// The arguments are the engine's own PeekMessageA arguments.
+fn enter() {
+    ENTERED.fetch_add(1, AcqRel);
+}
+
+fn leave() {
+    ENTERED.fetch_sub(1, AcqRel);
+}
+
+/// PeekMessageA entry. Returns the immutable continuation the shell calls.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fallout4_cpu_peek(
+extern "C" fn rsf_fallout4_cpu_peek_enter() -> *mut c_void {
+    enter();
+    ORIGINAL_PEEK.load(Acquire) as *mut c_void
+}
+
+/// PeekMessageA exit with the native result and the engine's own arguments.
+#[unsafe(no_mangle)]
+extern "C" fn rsf_fallout4_cpu_peek_exit(
     caller: usize,
+    result: i32,
     message: *mut c_void,
     window: *mut c_void,
     minimum: u32,
     maximum: u32,
     flags: u32,
-) -> i32 {
-    let error = last_error();
-    let entered = Entered::new();
-    let next = ORIGINAL_PEEK.load(Acquire);
-    // SAFETY: a nonzero continuation is the PeekMessageA cell value published by prepare.
-    let next = unsafe { std::mem::transmute::<usize, Option<Peek>>(next) };
-    set_last_error(error);
-    let result = match next {
-        Some(next) => unsafe { next(message.cast(), window, minimum, maximum, flags) },
-        None => 0,
-    };
-    let native_error = last_error();
+) {
     let base = image();
     if ENABLED.load(Acquire)
         && result != 0
@@ -1667,62 +1687,49 @@ unsafe extern "C" fn rsf_fallout4_cpu_peek(
     {
         received(0, actual.message, true, actual.hwnd as usize as u64);
     }
-    drop(entered);
-    set_last_error(native_error);
-    result
+    leave();
 }
 
-// These are native RAWINPUT handlers, not the later buffered Poll methods.
-fn raw_input(
-    hook: u32,
-    expected_caller: usize,
-    kind: u32,
-    caller: usize,
-    device: *mut c_void,
-    raw: *const c_void,
-) {
-    let entered = Entered::new();
+/// Native RAWINPUT handler entry, not the later buffered Poll methods.
+#[unsafe(no_mangle)]
+extern "C" fn rsf_fallout4_cpu_raw_enter(hook: u32, caller: usize) {
+    enter();
     RAW_WRITERS.fetch_add(1, SeqCst);
     RAW_REVISION.fetch_add(1, SeqCst);
-    let error = last_error();
-    if ENABLED.load(Acquire) && caller == image() + expected_caller {
+    let selected = match hook {
+        RSF_FALLOUT4_CPU_HOOK_KEYBOARD => Some((native::KEYBOARD_CALLER, RSF_GAME_INPUT_KEYBOARD)),
+        RSF_FALLOUT4_CPU_HOOK_MOUSE => Some((native::MOUSE_CALLER, RSF_GAME_INPUT_MOUSE)),
+        _ => None,
+    };
+    if let Some((expected_caller, kind)) = selected
+        && ENABLED.load(Acquire)
+        && caller == image() + expected_caller
+    {
         received(kind, 0, false, 0);
     }
-    set_last_error(error);
-    original(hook, device, raw, 0.0);
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_fallout4_cpu_raw_exit() {
     RAW_REVISION.fetch_add(1, SeqCst);
     RAW_WRITERS.fetch_sub(1, SeqCst);
-    drop(entered);
+    leave();
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_cpu_keyboard(caller: usize, device: *mut c_void, raw: *const c_void) {
-    raw_input(
-        RSF_FALLOUT4_CPU_HOOK_KEYBOARD,
-        native::KEYBOARD_CALLER,
-        RSF_GAME_INPUT_KEYBOARD,
-        caller,
-        device,
-        raw,
-    );
+#[derive(Clone, Copy)]
+struct IdleScope {
+    owns: bool,
 }
 
+/// # Safety
+/// `scope` is the shell's receipt for this call.
 #[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_cpu_mouse(caller: usize, device: *mut c_void, raw: *const c_void) {
-    raw_input(
-        RSF_FALLOUT4_CPU_HOOK_MOUSE,
-        native::MOUSE_CALLER,
-        RSF_GAME_INPUT_MOUSE,
-        caller,
-        device,
-        raw,
-    );
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_cpu_idle(caller: usize, main: *mut c_void) {
-    let entered = Entered::new();
-    let error = last_error();
+unsafe extern "C" fn rsf_fallout4_cpu_idle_enter(
+    caller: usize,
+    main: *mut c_void,
+    scope: *mut rsf_fallout4_cpu_scope,
+) {
+    enter();
     IDLE_DEPTH.set(IDLE_DEPTH.get() + 1);
     let main = main as usize;
     let owns = ENABLED.load(Acquire)
@@ -1740,14 +1747,16 @@ extern "C" fn rsf_fallout4_cpu_idle(caller: usize, main: *mut c_void) {
             invalidate_worker(RSF_GAME_CPU_ABORT_NOT_CONSUMED, false, None);
         }
     }
-    set_last_error(error);
-    original(
-        RSF_FALLOUT4_CPU_HOOK_IDLE,
-        main as *mut c_void,
-        std::ptr::null(),
-        0.0,
-    );
-    let native_error = last_error();
+    open_scope(scope, RSF_FALLOUT4_CPU_HOOK_IDLE, IdleScope { owns });
+}
+
+/// # Safety
+/// `scope` is the receipt its entry wrote.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fallout4_cpu_idle_exit(scope: *mut rsf_fallout4_cpu_scope) {
+    let Some(IdleScope { owns }) = scope_value(scope, RSF_FALLOUT4_CPU_HOOK_IDLE, true) else {
+        return;
+    };
     if owns {
         abort_pending(if !enabled() {
             RSF_GAME_CPU_ABORT_QUIESCE
@@ -1764,11 +1773,11 @@ extern "C" fn rsf_fallout4_cpu_idle(caller: usize, main: *mut c_void) {
         IDLE_MAIN.set(0);
     }
     IDLE_DEPTH.set(IDLE_DEPTH.get() - 1);
-    drop(entered);
-    set_last_error(native_error);
+    leave();
 }
 
 /// The poll facts the candidate receipt reports.
+#[derive(Clone, Copy)]
 struct PollReceipt {
     caller: usize,
     candidate: bool,
@@ -1782,6 +1791,12 @@ struct PollReceipt {
     idle_main: usize,
     manager: usize,
     lifecycle: bool,
+}
+
+#[derive(Clone, Copy)]
+struct PollScope {
+    receipt: PollReceipt,
+    mapped: bool,
 }
 
 /// A fixed process-wide fact set, not a source or event ledger. Startup repeats use one slot
@@ -1855,10 +1870,15 @@ fn poll_receipt(r: &PollReceipt) {
     );
 }
 
+/// # Safety
+/// `scope` is the shell's receipt for this call.
 #[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_cpu_poll(caller: usize, manager: *mut c_void, delta: f32) {
-    let entered = Entered::new();
-    let error = last_error();
+unsafe extern "C" fn rsf_fallout4_cpu_poll_enter(
+    caller: usize,
+    manager: *mut c_void,
+    scope: *mut rsf_fallout4_cpu_scope,
+) {
+    enter();
     let manager_address = manager as usize;
     let (mut previous_polls, mut generation) = (0u32, 0u64);
     let mapped = reserve_worker_poll(
@@ -1946,11 +1966,45 @@ extern "C" fn rsf_fallout4_cpu_poll(caller: usize, manager: *mut c_void, delta: 
             w.future.facts.native_poll_entry();
         }
     }
-    set_last_error(error);
-    // RESERVE must have returned before taking the poll's entry timestamp.
-    let sample_begin = qpc();
-    original(RSF_FALLOUT4_CPU_HOOK_POLL, manager, std::ptr::null(), delta);
-    let native_error = last_error();
+    open_scope(
+        scope,
+        RSF_FALLOUT4_CPU_HOOK_POLL,
+        PollScope {
+            receipt: PollReceipt {
+                caller,
+                candidate,
+                state_read,
+                before,
+                generation,
+                depth: depth_at_poll,
+                previous_polls,
+                source: source_at_poll,
+                raw_writers: raw_at_poll,
+                idle_main: idle_at_poll,
+                manager: manager_address,
+                lifecycle,
+            },
+            mapped,
+        },
+    );
+}
+
+/// `sample_begin` is the QPC the shell took after restoring the last error and immediately
+/// before the native Poll: RESERVE has returned before it.
+///
+/// # Safety
+/// `scope` is the receipt its entry wrote.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fallout4_cpu_poll_exit(
+    scope: *mut rsf_fallout4_cpu_scope,
+    sample_begin: u64,
+) {
+    let Some(PollScope { receipt, mapped }) =
+        scope_value::<PollScope>(scope, RSF_FALLOUT4_CPU_HOOK_POLL, true)
+    else {
+        return;
+    };
+    let (candidate, generation, before) = (receipt.candidate, receipt.generation, receipt.before);
     let p = pending();
     if candidate && p.source != 0 && p.generation == generation {
         let mut after = InputState::ZERO;
@@ -1982,23 +2036,9 @@ extern "C" fn rsf_fallout4_cpu_poll(caller: usize, manager: *mut c_void, delta: 
     if mapped {
         sample_worker_poll(generation, sample_begin);
     }
-    poll_receipt(&PollReceipt {
-        caller,
-        candidate,
-        state_read,
-        before,
-        generation,
-        depth: depth_at_poll,
-        previous_polls,
-        source: source_at_poll,
-        raw_writers: raw_at_poll,
-        idle_main: idle_at_poll,
-        manager: manager_address,
-        lifecycle,
-    });
+    poll_receipt(&receipt);
     POLLS.fetch_sub(1, SeqCst);
-    drop(entered);
-    set_last_error(native_error);
+    leave();
 }
 
 /// The queue's enqueue sequence still equals the sampled one.
@@ -2010,14 +2050,21 @@ fn sampled_sequence(p: &Pending) -> bool {
     ) && queue_generation == p.queue_generation
 }
 
+#[derive(Clone, Copy)]
+struct PlayerControlsScope {
+    worker_consuming: bool,
+}
+
+/// # Safety
+/// `scope` is the shell's receipt for this call.
 #[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_cpu_player_controls(
+unsafe extern "C" fn rsf_fallout4_cpu_player_controls_enter(
     caller: usize,
     receiver: *mut c_void,
     events: *mut c_void,
+    scope: *mut rsf_fallout4_cpu_scope,
 ) {
-    let entered = Entered::new();
-    let error = last_error();
+    enter();
     let receiver_address = receiver as usize;
     let selected_caller = caller == image() + native::PLAYER_CONTROLS_CALLER;
     // The selected native dispatcher still holds its outer queue read lock here. Report delivery
@@ -2105,25 +2152,44 @@ extern "C" fn rsf_fallout4_cpu_player_controls(
             update_pending(|p| p.simulation_started = started);
         }
     }
-    set_last_error(error);
-    original(
+    open_scope(
+        scope,
         RSF_FALLOUT4_CPU_HOOK_PLAYER_CONTROLS,
-        receiver,
-        events.cast_const(),
-        0.0,
+        PlayerControlsScope { worker_consuming },
     );
-    let native_error = last_error();
+}
+
+/// # Safety
+/// `scope` is the receipt its entry wrote.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fallout4_cpu_player_controls_exit(scope: *mut rsf_fallout4_cpu_scope) {
+    let Some(PlayerControlsScope { worker_consuming }) =
+        scope_value(scope, RSF_FALLOUT4_CPU_HOOK_PLAYER_CONTROLS, true)
+    else {
+        return;
+    };
     if worker_consuming {
         end_worker_consumer();
     }
-    drop(entered);
-    set_last_error(native_error);
+    leave();
 }
 
+#[derive(Clone, Copy)]
+struct ConsumeScope {
+    parent: bool,
+    parent_delivery: Delivery,
+}
+
+/// # Safety
+/// `scope` is the shell's receipt for this call.
 #[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_cpu_consume(caller: usize, queue: *mut c_void, receiver: *mut c_void) {
-    let entered = Entered::new();
-    let error = last_error();
+unsafe extern "C" fn rsf_fallout4_cpu_consume_enter(
+    caller: usize,
+    queue: *mut c_void,
+    receiver: *mut c_void,
+    scope: *mut rsf_fallout4_cpu_scope,
+) {
+    enter();
     let (queue_address, receiver_address) = (queue as usize, receiver as usize);
     let parent = CONSUMER_ADMITTED.get();
     let parent_delivery = DELIVERY.get();
@@ -2148,34 +2214,68 @@ extern "C" fn rsf_fallout4_cpu_consume(caller: usize, queue: *mut c_void, receiv
             && queue_address == p.state.queue
             && receiver_address == p.state.receiver,
     );
-    set_last_error(error);
-    original(
+    open_scope(
+        scope,
         RSF_FALLOUT4_CPU_HOOK_CONSUME,
-        queue,
-        receiver.cast_const(),
-        0.0,
+        ConsumeScope {
+            parent,
+            parent_delivery,
+        },
     );
-    let native_error = last_error();
-    CONSUMER_ADMITTED.set(parent);
-    DELIVERY.set(parent_delivery);
-    drop(entered);
-    set_last_error(native_error);
 }
 
-fn swap(caller: usize, main: usize, entry_error: u32) {
+/// # Safety
+/// `scope` is the receipt its entry wrote.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fallout4_cpu_consume_exit(scope: *mut rsf_fallout4_cpu_scope) {
+    let Some(ConsumeScope {
+        parent,
+        parent_delivery,
+    }) = scope_value(scope, RSF_FALLOUT4_CPU_HOOK_CONSUME, true)
+    else {
+        return;
+    };
+    CONSUMER_ADMITTED.set(parent);
+    DELIVERY.set(parent_delivery);
+    leave();
+}
+
+#[derive(Clone, Copy)]
+struct SwapScope {
+    owns: bool,
+    parent_admitted: bool,
+}
+
+/// Swap entry. Every path, including an unowned Swap, enters the scope that the shell's
+/// destructor closes with rsf_fallout4_cpu_swap_leave.
+///
+/// # Safety
+/// `scope` is the shell's receipt for this call.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fallout4_cpu_swap_enter(
+    caller: usize,
+    main: *mut c_void,
+    scope: *mut rsf_fallout4_cpu_scope,
+) {
+    enter();
+    SWAP_DEPTH.set(SWAP_DEPTH.get() + 1);
+    let parent_admitted = SWAP_ADMITTED.get();
+    SWAP_ADMITTED.set(false);
+    let main = main as usize;
     let owns = ENABLED.load(Acquire)
         && caller == image() + native::SWAP_CALLER
         && SWAP_DEPTH.get() == 1
         && IDLE_DEPTH.get() <= 1;
+    open_scope(
+        scope,
+        RSF_FALLOUT4_CPU_HOOK_SWAP,
+        SwapScope {
+            owns,
+            parent_admitted,
+        },
+    );
     if !owns {
         abort_pending(RSF_GAME_CPU_ABORT_STATE_CHANGED);
-        set_last_error(entry_error);
-        original(
-            RSF_FALLOUT4_CPU_HOOK_SWAP,
-            main as *mut c_void,
-            std::ptr::null(),
-            0.0,
-        );
         return;
     }
     SWAP_ADMITTED.set(true);
@@ -2223,14 +2323,19 @@ fn swap(caller: usize, main: usize, entry_error: u32) {
     {
         let _ = emit_identity(&identity, RSF_GAME_CPU_SIMULATION_END, 0);
     }
-    set_last_error(entry_error);
-    original(
-        RSF_FALLOUT4_CPU_HOOK_SWAP,
-        main as *mut c_void,
-        std::ptr::null(),
-        0.0,
-    );
-    let native_error = last_error();
+}
+
+/// Swap exit after the native Swap returned. The scope stays open for the leave.
+///
+/// # Safety
+/// `scope` is the receipt its entry wrote.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fallout4_cpu_swap_exit(scope: *mut rsf_fallout4_cpu_scope) {
+    let Some(SwapScope { owns: true, .. }) =
+        scope_value::<SwapScope>(scope, RSF_FALLOUT4_CPU_HOOK_SWAP, false)
+    else {
+        return;
+    };
     if pending().source != 0 {
         let invalid = invalid_pending();
         if invalid != 0 {
@@ -2252,7 +2357,24 @@ fn swap(caller: usize, main: usize, entry_error: u32) {
         }
     }
     PENDING.set(Pending::ZERO);
-    set_last_error(native_error);
+}
+
+/// The Swap scope close, run by the shell's destructor on return and on a native unwind, as the
+/// previous native Exit guard was.
+///
+/// # Safety
+/// `scope` is the receipt its entry wrote.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fallout4_cpu_swap_leave(scope: *mut rsf_fallout4_cpu_scope) {
+    let Some(SwapScope {
+        parent_admitted, ..
+    }) = scope_value::<SwapScope>(scope, RSF_FALLOUT4_CPU_HOOK_SWAP, true)
+    else {
+        return;
+    };
+    SWAP_ADMITTED.set(parent_admitted);
+    SWAP_DEPTH.set(SWAP_DEPTH.get() - 1);
+    leave();
 }
 
 /// The next Swap claims the joined worker successor without a second FRAME_BEGIN.
@@ -2315,23 +2437,22 @@ fn claim_future(main: usize) {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_cpu_swap(caller: usize, main: *mut c_void) {
-    let entered = Entered::new();
-    let entry_error = last_error();
-    SWAP_DEPTH.set(SWAP_DEPTH.get() + 1);
-    let parent_admitted = SWAP_ADMITTED.get();
-    SWAP_ADMITTED.set(false);
-    swap(caller, main as usize, entry_error);
-    SWAP_ADMITTED.set(parent_admitted);
-    SWAP_DEPTH.set(SWAP_DEPTH.get() - 1);
-    drop(entered);
+#[derive(Clone, Copy)]
+struct JobScope {
+    parent: bool,
+    parent_source: u64,
+    // The entry snapshot, reread in place at completion as the native proof always was.
+    native: InputState,
 }
 
+/// # Safety
+/// `scope` is the shell's receipt for this call.
 #[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_cpu_job_end(caller: usize, argument: *mut c_void) {
-    let error = last_error();
-    let entered = Entered::new();
+unsafe extern "C" fn rsf_fallout4_cpu_job_end_enter(
+    caller: usize,
+    scope: *mut rsf_fallout4_cpu_scope,
+) {
+    enter();
     let previous = JOBS.fetch_add(1, SeqCst);
     JOB_DEPTH.set(JOB_DEPTH.get() + 1);
     let parent = JOB_SELECTED.get();
@@ -2348,19 +2469,34 @@ extern "C" fn rsf_fallout4_cpu_job_end(caller: usize, argument: *mut c_void) {
             && proof == c.key,
     );
     WORKER_SOURCE.set(0);
-    set_last_error(error);
-    original(
+    open_scope(
+        scope,
         RSF_FALLOUT4_CPU_HOOK_JOB_END,
-        argument,
-        std::ptr::null(),
-        0.0,
+        JobScope {
+            parent,
+            parent_source,
+            native,
+        },
     );
-    let native_error = last_error();
+}
+
+/// # Safety
+/// `scope` is the receipt its entry wrote.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fallout4_cpu_job_end_exit(scope: *mut rsf_fallout4_cpu_scope) {
+    let Some(JobScope {
+        parent,
+        parent_source,
+        mut native,
+    }) = scope_value(scope, RSF_FALLOUT4_CPU_HOOK_JOB_END, true)
+    else {
+        return;
+    };
     let f = future_copy();
     let worker_source = WORKER_SOURCE.get();
     if worker_source != 0 && f.facts.cpu.source == worker_source {
         let current = render_copy();
-        proof = f.facts.predecessor;
+        let mut proof = f.facts.predecessor;
         let mut cursor = 0u32;
         let mut trace = PhaseChecks::new();
         let valid = trace.test(0, enabled())
@@ -2409,14 +2545,23 @@ extern "C" fn rsf_fallout4_cpu_job_end(caller: usize, argument: *mut c_void) {
     JOB_SELECTED.set(parent);
     JOB_DEPTH.set(JOB_DEPTH.get() - 1);
     JOBS.fetch_sub(1, SeqCst);
-    drop(entered);
-    set_last_error(native_error);
+    leave();
 }
 
+#[derive(Clone, Copy)]
+struct WrapperScope {
+    parent: bool,
+}
+
+/// # Safety
+/// `scope` is the shell's receipt for this call.
 #[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_cpu_wrapper(caller: usize, main: *mut c_void) {
-    let error = last_error();
-    let entered = Entered::new();
+unsafe extern "C" fn rsf_fallout4_cpu_wrapper_enter(
+    caller: usize,
+    main: *mut c_void,
+    scope: *mut rsf_fallout4_cpu_scope,
+) {
+    enter();
     let parent = WRAPPER_SELECTED.get();
     WRAPPER_DEPTH.set(WRAPPER_DEPTH.get() + 1);
     let mut actual_main = 0usize;
@@ -2427,19 +2572,44 @@ extern "C" fn rsf_fallout4_cpu_wrapper(caller: usize, main: *mut c_void) {
             && load(&mut actual_main, image() + native::MAIN)
             && actual_main == main as usize,
     );
-    set_last_error(error);
-    original(RSF_FALLOUT4_CPU_HOOK_WRAPPER, main, std::ptr::null(), 0.0);
-    let native_error = last_error();
-    WRAPPER_SELECTED.set(parent);
-    WRAPPER_DEPTH.set(WRAPPER_DEPTH.get() - 1);
-    drop(entered);
-    set_last_error(native_error);
+    open_scope(
+        scope,
+        RSF_FALLOUT4_CPU_HOOK_WRAPPER,
+        WrapperScope { parent },
+    );
 }
 
+/// # Safety
+/// `scope` is the receipt its entry wrote.
 #[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_cpu_worker_join(caller: usize) -> u32 {
-    let error = last_error();
-    let entered = Entered::new();
+unsafe extern "C" fn rsf_fallout4_cpu_wrapper_exit(scope: *mut rsf_fallout4_cpu_scope) {
+    let Some(WrapperScope { parent }) = scope_value(scope, RSF_FALLOUT4_CPU_HOOK_WRAPPER, true)
+    else {
+        return;
+    };
+    WRAPPER_SELECTED.set(parent);
+    WRAPPER_DEPTH.set(WRAPPER_DEPTH.get() - 1);
+    leave();
+}
+
+#[derive(Clone, Copy)]
+struct JoinScope {
+    key: WorkerCycle,
+    entry_proof: WorkerCycle,
+    entry_trace: PhaseChecks,
+    // The entry snapshot, reread in place after the wait as the native proof always was.
+    native: InputState,
+    selected: bool,
+}
+
+/// # Safety
+/// `scope` is the shell's receipt for this call.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fallout4_cpu_worker_join_enter(
+    caller: usize,
+    scope: *mut rsf_fallout4_cpu_scope,
+) {
+    enter();
     let c = render_copy();
     let mut proof = c.key;
     let mut native = InputState::ZERO;
@@ -2458,23 +2628,46 @@ extern "C" fn rsf_fallout4_cpu_worker_join(caller: usize) -> u32 {
             native_cycle(&mut proof, &mut native, false, CyclePhase::JoinEntry),
         )
         && entry_trace.test(10, proof == c.key);
-    let entry_proof = proof;
     if selected {
         let mut w = worker();
         if w.current.key == c.key {
             w.current.joining = true;
         }
     }
-    set_last_error(error);
-    let result = original(
+    open_scope(
+        scope,
         RSF_FALLOUT4_CPU_HOOK_WORKER_JOIN,
-        std::ptr::null_mut(),
-        std::ptr::null(),
-        0.0,
+        JoinScope {
+            key: c.key,
+            entry_proof: proof,
+            entry_trace,
+            native,
+            selected,
+        },
     );
-    let native_error = last_error();
+}
+
+/// `result` is the native join's EAX.
+///
+/// # Safety
+/// `scope` is the receipt its entry wrote.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_fallout4_cpu_worker_join_exit(
+    scope: *mut rsf_fallout4_cpu_scope,
+    result: u32,
+) {
+    let Some(JoinScope {
+        key,
+        entry_proof,
+        entry_trace,
+        mut native,
+        selected,
+    }) = scope_value(scope, RSF_FALLOUT4_CPU_HOOK_WORKER_JOIN, true)
+    else {
+        return;
+    };
     let f = future_copy();
-    proof = c.key;
+    let mut proof = key;
     let (mut cursor, mut sequence, mut mode) = (0u32, 0u32, 0u32);
     // Early/no-op native RET leaves EAX undefined. Only selected proves the nonnull mode1 branch
     // that actually tail-calls WaitForSingleObjectEx.
@@ -2486,7 +2679,7 @@ extern "C" fn rsf_fallout4_cpu_worker_join(caller: usize) -> u32 {
             3,
             native_cycle(&mut proof, &mut native, true, CyclePhase::JoinReturn),
         )
-        && trace.test(4, proof == c.key)
+        && trace.test(4, proof == key)
         && trace.test(5, load(&mut mode, proof.worker + native::WORKER_MODE))
         && trace.test(6, mode == 0)
         && trace.test(7, native == f.state)
@@ -2516,7 +2709,7 @@ extern "C" fn rsf_fallout4_cpu_worker_join(caller: usize) -> u32 {
     let mut refused = false;
     {
         let mut w = worker();
-        if selected && w.current.key == c.key {
+        if selected && w.current.key == key {
             if w.future.facts.active() {
                 let joined = valid && trace.test(13, !w.future.busy) && {
                     let join = w.future.facts.join(&proof, true);
@@ -2536,9 +2729,7 @@ extern "C" fn rsf_fallout4_cpu_worker_join(caller: usize) -> u32 {
         downstream_receipt("join-return", &f, &proof, &trace, cursor);
     }
     let _ = drain_future();
-    drop(entered);
-    set_last_error(native_error);
-    result
+    leave();
 }
 
 // ---------------------------------------------------------------------------------------------
