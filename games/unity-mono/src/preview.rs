@@ -202,13 +202,7 @@ struct Graphics {
     ring: Interop,
 }
 
-static GRAPHICS: Mutex<Graphics> = Mutex::new(Graphics {
-    device: 0,
-    queue: 0,
-    chain: false,
-    faulted: false,
-    ring: Interop::new(),
-});
+static GRAPHICS: Mutex<Graphics> = Mutex::new(Graphics::new());
 
 fn graphics() -> Option<MutexGuard<'static, Graphics>> {
     // A reentrant render callback cannot record a second preview submission.
@@ -220,6 +214,16 @@ fn graphics() -> Option<MutexGuard<'static, Graphics>> {
 }
 
 impl Graphics {
+    const fn new() -> Self {
+        Self {
+            device: 0,
+            queue: 0,
+            chain: false,
+            faulted: false,
+            ring: Interop::new(),
+        }
+    }
+
     fn prepare(
         &mut self,
         window: Window,
@@ -263,6 +267,17 @@ impl Graphics {
                 (leaves.wait)(self.ring.submitted()) && (leaves.resize_chain)(width, height)
             }
     }
+}
+
+/// Package retirement closes every bridge route to the preview before reading its fence.
+#[unsafe(no_mangle)]
+extern "C" fn rsf_core_unity_preview_drained(completed: u64) -> bool {
+    graphics().is_some_and(|graphics| !graphics.faulted && graphics.ring.drained(completed))
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_core_unity_preview_reset() {
+    *GRAPHICS.lock().unwrap_or_else(PoisonError::into_inner) = Graphics::new();
 }
 
 #[unsafe(no_mangle)]

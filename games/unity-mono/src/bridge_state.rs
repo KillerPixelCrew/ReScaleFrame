@@ -69,6 +69,8 @@ struct State {
     output: (u32, u32),
     /// A submission returned no completion: its resources may still be in use.
     submission_unknown: bool,
+    callbacks: u32,
+    closed: bool,
     policy: Policy,
 }
 
@@ -78,7 +80,6 @@ unsafe impl Send for State {}
 
 static STATE: Mutex<State> = Mutex::new(State::new());
 static ACTIVE: AtomicBool = AtomicBool::new(false);
-static CALLBACKS: AtomicU32 = AtomicU32::new(0);
 static MANAGED_STAGE: AtomicU32 = AtomicU32::new(0);
 
 fn lock() -> MutexGuard<'static, State> {
@@ -154,6 +155,8 @@ impl State {
             input: (0, 0),
             output: (0, 0),
             submission_unknown: false,
+            callbacks: 0,
+            closed: false,
             policy: Policy {
                 engine_spatial: 0,
                 quality: 1,
@@ -328,8 +331,13 @@ impl State {
 
     fn release(&mut self) {
         let policy = self.policy;
+        // Mono keeps its separate drain/release sequence and can still receive callbacks.
+        let callbacks = self.callbacks;
+        let closed = self.closed;
         *self = Self::new();
         self.policy = policy;
+        self.callbacks = callbacks;
+        self.closed = closed;
     }
 
     fn config(
@@ -362,17 +370,24 @@ impl State {
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_unity_frames_activate(enabled: u32) {
+    let mut state = lock();
+    if enabled != 0 {
+        state.closed = false;
+    }
     ACTIVE.store(enabled != 0, Ordering::SeqCst);
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_unity_frames_active() -> u32 {
+pub(crate) extern "C" fn rsf_unity_frames_active() -> u32 {
     u32::from(ACTIVE.load(Ordering::SeqCst))
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_unity_frames_report_managed(stage: u32) {
-    MANAGED_STAGE.store(stage, Ordering::SeqCst);
+    let state = lock();
+    if !state.closed {
+        MANAGED_STAGE.store(stage, Ordering::SeqCst);
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -386,7 +401,7 @@ unsafe extern "C" fn rsf_unity_frames_admit_packet(
     session_id: u64,
     slot: *mut u32,
 ) -> *mut c_void {
-    if !ACTIVE.load(Ordering::SeqCst) || packet.is_null() || slot.is_null() {
+    if packet.is_null() || slot.is_null() {
         return ptr::null_mut();
     }
     // Only the size field is readable from a short packet.
@@ -395,6 +410,9 @@ unsafe extern "C" fn rsf_unity_frames_admit_packet(
     }
     let packet = unsafe { packet.read_unaligned() };
     let mut state = lock();
+    if state.closed || !ACTIVE.load(Ordering::SeqCst) {
+        return ptr::null_mut();
+    }
     let Some(index) = state.admit_packet(&packet, session_id) else {
         return ptr::null_mut();
     };
@@ -553,19 +571,38 @@ unsafe extern "C" fn rsf_unity_frames_take_flushed(
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_unity_frames_callback_enter() {
-    CALLBACKS.fetch_add(1, Ordering::SeqCst);
+pub(crate) extern "C" fn rsf_unity_frames_callback_enter() -> u32 {
+    let mut state = lock();
+    if state.closed {
+        return 0;
+    }
+    state.callbacks += 1;
+    1
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_unity_frames_callback_leave() {
-    CALLBACKS.fetch_sub(1, Ordering::SeqCst);
+pub(crate) extern "C" fn rsf_unity_frames_callback_leave() {
+    lock().callbacks -= 1;
+}
+
+/// Package retirement only. Keep queued packet delivery open until all packets have been taken.
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_frames_try_close() -> u32 {
+    let mut state = lock();
+    if ACTIVE.load(Ordering::SeqCst)
+        || state.callbacks != 0
+        || state.pending.iter().any(|entry| entry.used)
+    {
+        return 0;
+    }
+    state.closed = true;
+    1
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_unity_frames_drained(completed: u64) -> u32 {
     let state = lock();
-    u32::from(CALLBACKS.load(Ordering::SeqCst) == 0 && state.drained(completed))
+    u32::from(state.callbacks == 0 && state.drained(completed))
 }
 
 #[unsafe(no_mangle)]

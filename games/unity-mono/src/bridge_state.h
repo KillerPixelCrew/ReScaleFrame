@@ -37,7 +37,7 @@ extern "C" {
 /* Producer state. Inactive bridges refuse packets, frames and CPU events. */
 void rsf_unity_frames_activate(uint32_t enabled);
 uint32_t rsf_unity_frames_active(void);
-/* Managed helper stage, stored for the lifecycle; the managed API's managed_state entry. */
+/* Managed helper stage, stored for the lifecycle while callback admission is open. */
 void rsf_unity_frames_report_managed(uint32_t stage);
 uint32_t rsf_unity_frames_managed_stage(void);
 
@@ -77,13 +77,17 @@ void rsf_unity_frames_record_source(const rsf_unity_source_submission* source, u
 uint32_t rsf_unity_frames_take_flushed(uint64_t session_id, uint64_t source_frame_id,
     rsf_unity_source_submission* output);
 
-/* Render-event callbacks in progress, for retirement. */
-void rsf_unity_frames_callback_enter(void);
+/* Callback admission. Non-zero must be paired with leave. Queued render callbacks can still
+   enter while inactive to return their packets. */
+uint32_t rsf_unity_frames_callback_enter(void);
 void rsf_unity_frames_callback_leave(void);
+/* The package closes callback admission once inactive, without pending packets or callbacks.
+   A closed bridge stays closed through release and reopens on activation of the next session. */
+uint32_t rsf_unity_frames_try_close(void);
 /* Non-zero when no callback, packet or submission is outstanding at this completion. */
 uint32_t rsf_unity_frames_drained(uint64_t completed);
 /* Forgets packets, ring completions, sources, extents and the managed stage. The activity flag
-   and the policy, including its generation, persist. */
+   and the policy, including its generation, persist, as does a package retirement close. */
 void rsf_unity_frames_release(void);
 #ifdef __cplusplus
 }

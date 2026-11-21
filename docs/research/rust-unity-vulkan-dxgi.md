@@ -35,7 +35,7 @@ It builds on the [shared graphics device audit](rust-unity-vulkan-shared-device.
   optional window show precede ring advance and native Present, which waits on that image's
   registered ready semaphore. The lease covers the forwarded Present, including source misses.
 
-## Checked release and package residual
+## Checked release in the swapchain port
 
 Checked bridge release closes idle admission, tries the presentation lease and reuses the exact
 proof for every Vulkan slot fence and the shared D3D12 fence against the ring. An accepted upload
@@ -45,7 +45,7 @@ commands, releases the DXGI chain, then drops the shared semaphore, fence, queue
 resets the ring and reopens after destruction. Unity's intercepted swapchains and retained HWND
 remain in the presentation registry.
 
-Package cleanup still has a gap between the idle probe and checked release. The probe's entry
+At `f68978a`, package cleanup had a gap between the idle probe and checked release. The probe's entry
 and lease end before `drained_and_ended` calls `rsf_fg12_end_session`. Package deactivation
 clears the bridge's activity flag. Native Present can independently enter using the stored window
 frame. An entry or a lease holder in this interval can make the later probe or close in
@@ -61,16 +61,60 @@ The checked release path now owns the only `Release` of that reference. An actua
 following a refused teardown can leave it retained until process exit, together with the
 already Rust-owned shared graphics resources.
 
-A return value alone would leave the view teardown ahead of the final proof. Covering the gap
-requires a retained admission and proof through Runtime session retirement and view destruction,
-with the package shutdown, restart and Unity device-shutdown paths accounted for. The package
-also calls its D3D11 and D3D12 bridges through the same callback, while the Mono plugin has its
-own D3D12 lifecycle. This change leaves those call paths as found.
+## Package retirement after `f68978a`
+
+`rsfu_shutdown`, restart through `rsfu_initialize`, and Unity's graphics-device shutdown use the
+same `package_state.rs` retirement sequence under the package mutex. The native close deactivates
+packet and CPU producers. Queued render callbacks can return their packets, and callbacks already
+using the session finish before the shared frame owner closes admission. Vulkan also stops new
+bridge entries, so the last saved window frame cannot keep generating work during a retry.
+Already admitted queue events and intercepted presents retain their entries through recording,
+forwarding, and fault handling. A new Vulkan Present forwards Unity's original call while bridge
+admission is stopped.
+
+The verified close carries through `rsf_fg12_end_session`, invalidation of temporal readiness,
+SR view destruction, and bridge destruction. The native commit consumes proof from the close
+without an intervening drain or lease acquisition. A native close refusal runs no Runtime or view
+teardown. A Runtime refusal gives up the Vulkan presentation lease and keeps admission closed,
+the same session ID, the views, and all bridge resources. Each live-device retry checks the
+retained submissions again. This leaves the presentation lease available to Unity's swapchain
+registration and destruction between attempts. A partially opened session is also retired
+before another open, because player Vulkan surface setup can acquire a device before returning a
+managed API. After commit the package clears its API and input frame. Later shutdown calls use
+that stopped state without probing released resources again. The next open resumes Vulkan entries
+and the next activation reopens frame callbacks after preparing the bridge.
+
+| Consumer | Proof and destruction order |
+| --- | --- |
+| Vulkan player and Editor bridge | Close after entries, device creation and queued events are idle. Under the presentation lease, poll all Vulkan command-slot fences and compare the shared D3D12 fence with the interop ring's last submission. An accepted upload with no fenced hand-back prevents close, and the device-removal sentinel refuses proof. Destroy images and commands, then the DXGI chain, then the shared semaphore, fence, queue and device. Reset the ring and release the lease with bridge entries still closed. Unity swapchain identities and their ready semaphores remain in the registry for the existing swapchain destruction callback. |
+| Package D3D12 | Close shared callback admission before polling Unity's frame fence. Use both the submitted command slots and the latest inline pre-UI copy completion. Runtime ends the retained session before SR teardown, then the bridge unhooks its message hook and clears its command slots, packet leases, fence and services. The separately linked Mono plugin keeps its previous quiesce, drain, managed stop and release sequence. |
+| Package D3D11 | Poll the bridge D3D12 completion counter and the D3D11 copy proof. Copies are marked before recording and the D3D11 shared fence value is published after its signal and flush. The output copy after the existing hand-back wait adds a D3D11 signal and flush so the final copy has proof even if Unity stops producing frames. The earlier native submission and hand-back calls keep their order. A copy with no completed covering fence retains ownership. After proof and view destruction the bridge releases its shared surfaces, fence, commands and graphics references. |
+| Editor preview | Preview records directly onto its queue and has its own fence. After bridge producers close, its submitted fence must also complete. Commit clears preview slot source references and the DXGI chain before its queue and device, then destroys the renderer bridge. The preview window remains available for reuse. |
+
+`rsfu_shutdown` returns `0` while any checked owner refuses and `1` after commit or when the
+device is already stopped. `rsfu_initialize` returns the existing retry result `2` while a live
+bridge refuses retirement or Unity has yet to initialize the device. Unity's device-shutdown
+callback now also ends the Runtime session. It clears the renderer interfaces only after commit.
+If that callback refuses, later package initialization returns `0` and Unity initialization
+events leave the retained bridge alone. That callback returns `void`, so Unity can destroy the
+device even when RSF retains objects. A later callback cannot safely poll the old borrowed
+`VkDevice`; recovery then requires process restart. Unity can also unload the DLL despite the
+refusal. That path can still run native static destructors or leave Rust-owned resources retained
+until process exit. The Unity-owned Vulkan resolver/swapchain callback lifetime and the retained
+window procedures require host or process lifetime guarantees outside the retirement transaction.
+
+Runtime's `rsf_fg12_end_session` reports refusal for matching source or vendor work that still
+owns a slot. Its internal latency cleanup is a void call whose CPU ledger can decline a different
+session. No new Runtime ABI is used to report that separate outcome. D3D11's normal live surface
+replacement and Unity's cancellation of already queued callbacks at physical device loss also
+remain outside the checked package cleanup.
 
 ## Verification scope
 
-Source comparison covers the native leaves, both window routes, the pre-upload fallbacks,
-the fence and forwarding order, the private C/Rust layout, and preservation of the public DLL
-and managed ABI. Rust 1.94.1 formatting, locked offline workspace metadata and whitespace checks
-passed. Native and Rust compilation, linking, Clippy, tests, resize and Present on hardware,
-fault recovery and Unity shutdown still require user verification.
+Source comparison with `f68978a` covers the unchanged managed and public C signatures, the
+43-slot private C/Rust table, the Mono lifecycle calls, Vulkan queue and admitted Present order,
+and the checked close, Runtime refusal and destruction sequence. Rust 1.94.1 formatting, locked
+offline workspace metadata and whitespace checks passed. Compilation and linking, Clippy, tests,
+player and device checks, deployment and push are pending under the source-only scope. In
+particular the new D3D11 tail signal and flush, simultaneous Vulkan shutdown and Present, Editor
+preview restart, and faulted physical device shutdown have no runtime verification on this commit.

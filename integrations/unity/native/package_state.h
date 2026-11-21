@@ -100,9 +100,10 @@ typedef struct rsf_unity_package_platform {
     uint32_t (*present_backend)(void);
     int32_t (*present_switch_result)(void);
     uint64_t (*present_generation)(void);
-    /* Session leaves: the renderer bridge's activity and drain. */
+    /* Session leaves. Closing deactivates the bridge and verifies its submitted work. A
+       successful close holds admission and the Vulkan presentation lease until finish. */
     void (*bridge_activate)(uint32_t enabled);
-    uint32_t (*bridge_drained)(void);
+    uint32_t (*bridge_try_close)(void);
     /* rsf_fg12_end_session for a session's id; non-zero once its tokens are retired. */
     uint32_t (*end_session)(uint64_t session);
     /* SR views. commands is the pass's ID3D12GraphicsCommandList. sr_default_backend resolves
@@ -118,7 +119,9 @@ typedef struct rsf_unity_package_platform {
     int32_t (*sr_set_sharpening)(rsf_sr12* sr, const rsf_sharpening_options* options);
     int32_t (*sr_evaluate)(rsf_sr12* sr, void* commands, const rsf_game_render_pass* pass, uint32_t slot);
     void (*sr_destroy)(rsf_sr12* sr);
-    void (*bridge_release)(void);
+    /* Commit destroys the verified bridge and keeps it closed. On refusal release only the
+       presentation lease, retaining closed bridge admission and all resources for retry. */
+    void (*bridge_finish_retirement)(uint32_t commit);
     /* Generation. accept_window is the package's window guard (the Editor preview, the Vulkan
        surface or this process's Unity player window) and backend_log the package log in the
        Runtime's form (rsf_unity_package_log); both go into the install. fg_install is
@@ -132,12 +135,12 @@ typedef struct rsf_unity_package_platform {
     uint32_t (*present_has_owner)(void);
     int32_t (*present_request)(uint32_t backend);
     uint32_t (*fg_default_backend)(uint32_t* backend);
-    /* Session services. vulkan_surface is zero only when Unity renders with Vulkan and the
-       presentation surface could not be created on the window thread. session_seed is
+    /* Session services. bridge_open resumes the bridge after committed retirement and opens the
+       player's Vulkan surface on the window thread, if applicable. session_seed is
        GetTickCount64. render_pass and render_config are package.cpp's render callback routing
        and its locked render plan, handed to the bridge unchanged. bridge_prepare is
        rsf_unity_bridge_prepare, which writes the managed API into api; non-zero on success. */
-    uint32_t (*vulkan_surface)(void);
+    uint32_t (*bridge_open)(uint32_t editor);
     uint64_t (*session_seed)(void);
     rsf_game_render_pass_fn render_pass;
     rsf_game_render_config_fn render_config;
@@ -178,7 +181,7 @@ int rsf_unity_package_status_get(rsf_unity_package_status* output, const rsf_uni
 int rsf_unity_package_frame_counters(rsf_unity_frame_counters* output, const rsf_unity_package_platform* platform);
 uint32_t rsf_unity_package_temporal_ready(void);
 
-/* Session lifecycle. initialize retires a started session once the bridge has drained and the
+/* Session lifecycle. initialize retires a started or partially opened session once the bridge has drained and the
    Runtime has ended its session (2 while either is pending), forgets the session's plan, status
    and bridge failure, stores rsfu_initialize's identity (the UTF-8 SDK root, Unity version and
    project id; 0 when one or output is null) and opens the new session: the per-process log
@@ -189,13 +192,9 @@ uint32_t rsf_unity_package_temporal_ready(void);
    persist across sessions. */
 int rsf_unity_package_initialize(const char* runtime, const char* engine, const char* project,
     rsf_unity_native_api* output, const rsf_unity_package_platform* platform);
-/* rsfu_shutdown before its lock: deactivates the bridge; non-zero once it has drained and the
-   Runtime has ended the session. */
-uint32_t rsf_unity_package_quiesce(const rsf_unity_package_platform* platform);
-/* Releases the views and the bridge and leaves the session stopped. */
-void rsf_unity_package_retire(const rsf_unity_package_platform* platform);
-/* Unity's device shutdown: deactivates the bridge and retires the session once it has drained. */
-void rsf_unity_package_device_shutdown(const rsf_unity_package_platform* platform);
+/* Managed and Unity device shutdown, serialized with initialize and the SR callback. Non-zero
+   only after Runtime retirement and destruction of the views and bridge have committed. */
+uint32_t rsf_unity_package_retire(const rsf_unity_package_platform* platform);
 
 /* Render path, under package.cpp's mutex. */
 /* The host render configuration; zero when output is short. */

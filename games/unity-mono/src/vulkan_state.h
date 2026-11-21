@@ -76,10 +76,6 @@ typedef struct rsf_unity_vulkan_command_handles {
 } rsf_unity_vulkan_command_handles;
 bool rsf_unity_vulkan_command_slot(uint32_t index, rsf_unity_vulkan_command_handles* view);
 
-/* Polls Vulkan slot fences and the shared D3D12 fence under the presentation lease and idle
-   admission. No queue waits. */
-bool rsf_unity_vulkan_commands_retired(void);
-
 /* Rust owns these handles. A successful prepare lends a view under the caller's presentation
    lease. The native create leaf drains before allocating. */
 typedef struct rsf_unity_vulkan_image_handles {
@@ -122,13 +118,15 @@ void rsf_unity_vulkan_handback_fenced(void);
 uint32_t rsf_unity_vulkan_fault(void);
 uint32_t rsf_unity_vulkan_faulted(void);
 
-/* Enters an idle bridge to inspect the native fences. Non-zero must be paired with leave.
-   *ready, when non-null, receives whether the shared device exists. */
-uint32_t rsf_unity_vulkan_probe_idle(uint32_t* ready);
-/* Closes idle admission, tries the presentation lease and checks both fence sets without queue
-   waits. On success destroys the images, commands and DXGI swap chain, then drops shared graphics
-   and resets the ring and state. On refusal retains the resources and reopens any close it took. */
-bool rsf_unity_vulkan_release(void);
+/* Serialized by the package lifecycle. Stop new entries while already queued events and entries
+   finish. Once idle, try_close keeps admission closed and polls both fence sets without waiting.
+   A successful close holds the presentation lease until finish_retirement. A retry keeps the
+   bridge closed, without holding the lease between attempts. Commit destroys images, commands,
+   the DXGI chain and shared graphics, in that order. Only the next package open resumes entries. */
+void rsf_unity_vulkan_stop_admission(void);
+bool rsf_unity_vulkan_try_close(void);
+void rsf_unity_vulkan_finish_retirement(bool commit);
+void rsf_unity_vulkan_open(void);
 
 /* Create transfers one IDXGISwapChain3 reference on success. The other DXGI leaves borrow it
    until destroy releases it. Drain uses the published shared device and the submission ring. */

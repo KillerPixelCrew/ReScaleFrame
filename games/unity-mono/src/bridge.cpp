@@ -4,7 +4,6 @@
 // (bridge_state.rs); this file keeps the Unity interfaces, D3D12 objects and resource leases,
 // render-pass calls, CPU input events and the exported entry points.
 #include "bridge.h"
-#include "bridge_state.h"
 #include <rescaleframe/sha256_file.h>
 #include <windows.h>
 #include <d3d12.h>
@@ -126,6 +125,8 @@ void confirm_flushed_sources(ID3D12CommandQueue* queue, const rsf_game_render_pa
 #endif
 int config(uint32_t width, uint32_t height, rsf_unity_config* output)
 {
+    rsf_unity_frame_callback call;
+    if (!call.entered) return 0;
     return rsf_unity_frames_config(&services, width, height, output);
 }
 void* enqueue(const rsf_unity_packet* packet)
@@ -142,9 +143,9 @@ void* enqueue(const rsf_unity_packet* packet)
 }
 void __stdcall render(int id, void* address) noexcept try
 {
+    rsf_unity_frame_callback call;
+    if (!call.entered) return;
     if (id != event_id && id != event_id + 1 && id != event_id + 2) return;
-    rsf_unity_frames_callback_enter();
-    struct Finish { ~Finish() { rsf_unity_frames_callback_leave(); } } finish;
     Pending entry;
     {
         std::lock_guard<std::mutex> lock(guard);
@@ -239,14 +240,15 @@ void __stdcall render(int id, void* address) noexcept try
     (void)entry;
 #endif
 }
-catch (...) { if (++refusals <= 3) log("Unity render callback refused; spatial fallback remains queued."); }
+catch (...) {
+    rsf_unity_frame_callback call;
+    if (call.entered && ++refusals <= 3) log("Unity render callback refused; spatial fallback remains queued.");
+}
 }
 
 namespace {
 
 std::atomic<uint64_t> input_source{};
-std::atomic<uint32_t> input_calls{};
-struct InputCall { InputCall() { ++input_calls; } ~InputCall() { --input_calls; } };
 HHOOK message_hook{};
 void received_input(uint32_t kind,uint32_t message) {
     if (!active() || !services.cpu_event) return;
@@ -258,8 +260,8 @@ void received_input(uint32_t kind,uint32_t message) {
     services.cpu_event(services.user,&fact);
 }
 LRESULT CALLBACK received_message(int code,WPARAM removed,LPARAM argument) {
-    InputCall call;
-    if (code>=0 && removed==PM_REMOVE) {
+    rsf_unity_frame_callback call;
+    if (call.entered && code>=0 && removed==PM_REMOVE) {
         const auto& message=*reinterpret_cast<const MSG*>(argument); uint32_t kind=0;
         if (message.message>=WM_KEYFIRST && message.message<=WM_KEYLAST) kind=RSF_GAME_INPUT_KEYBOARD;
         if (message.message>=WM_MOUSEFIRST && message.message<=WM_MOUSELAST) kind=RSF_GAME_INPUT_MOUSE;
@@ -273,8 +275,8 @@ LRESULT CALLBACK received_message(int code,WPARAM removed,LPARAM argument) {
     return CallNextHookEx(nullptr,code,removed,argument);
 }
 void cpu_fact(const rsf_game_cpu_event* fact) {
-    InputCall call;
-    if (!active() || !fact || fact->struct_size<sizeof(*fact) || fact->session_id!=services.session_id || !services.cpu_event) return;
+    rsf_unity_frame_callback call;
+    if (!call.entered || !active() || !fact || fact->struct_size<sizeof(*fact) || fact->session_id!=services.session_id || !services.cpu_event) return;
     auto copy=*fact;
     if (copy.stage==RSF_GAME_CPU_INPUT_EVENT) {
         copy.source_frame_id=input_source.load();
@@ -283,8 +285,8 @@ void cpu_fact(const rsf_game_cpu_event* fact) {
     services.cpu_event(services.user,&copy);
 }
 void cpu_event(uint32_t stage, uint64_t frame_id) {
-    InputCall call;
-    if (!active() || !frame_id || !services.cpu_event) return;
+    rsf_unity_frame_callback call;
+    if (!call.entered || !active() || !frame_id || !services.cpu_event) return;
     LARGE_INTEGER now{}, frequency{}; QueryPerformanceCounter(&now); QueryPerformanceFrequency(&frequency);
     rsf_game_cpu_event event{}; event.struct_size = sizeof(event); event.stage = stage;
     event.session_id = services.session_id; event.source_frame_id = frame_id;
@@ -303,17 +305,27 @@ bool rsf_unity_bridge_prepare(const rsf_game_host_services& host, rsf_unity_nati
     if (!api || !host.render_pass || !host.render_config || !host.log) return false;
     std::lock_guard<std::mutex> lock(guard);
     services = host;
-    *api = {sizeof(*api), RSF_UNITY_NATIVE_ABI_VERSION, host.session_id, log, config, enqueue,
+    *api = {sizeof(*api), RSF_UNITY_NATIVE_ABI_VERSION, host.session_id,
+        [](const char* text) { rsf_unity_frame_callback call; if (call.entered) log(text); }, config, enqueue,
         reinterpret_cast<void*>(render), rsf_unity_frames_report_managed, cpu_event, cpu_fact};
     return true;
 }
 void rsf_unity_bridge_activate(bool enabled) noexcept { rsf_unity_frames_activate(enabled ? 1u : 0u); }
+#if defined(RSF_UNITY_PACKAGE_BRIDGE)
+bool rsf_unity_d3d12_try_close() noexcept
+{
+    std::lock_guard<std::mutex> lock(guard);
+    if (!rsf_unity_frames_try_close()) return false;
+    const auto value = completed();
+    return value != UINT64_MAX && rsf_unity_frames_drained(value) != 0;
+}
+#else
 bool rsf_unity_bridge_drained() noexcept
 {
     std::lock_guard<std::mutex> lock(guard);
-    if (input_calls.load()) return false;
     return rsf_unity_frames_drained(completed()) != 0;
 }
+#endif
 void rsf_unity_bridge_release() noexcept
 {
     std::lock_guard<std::mutex> lock(guard);

@@ -38,6 +38,8 @@ bool rsf_core_unity_preview_owns(void* window);
 void* rsf_core_unity_preview_parent();
 void rsf_core_unity_preview_hide(const rsf_unity_preview_leaves*);
 uint64_t rsf_core_unity_preview_base_frames();
+bool rsf_core_unity_preview_drained(uint64_t completed);
+void rsf_core_unity_preview_reset();
 bool rsf_core_unity_preview_prepare(void* device, void* queue, uint32_t width, uint32_t height,
     const rsf_unity_preview_leaves*);
 bool rsf_core_unity_preview_present(void* texture, const rsf_game_render_pass*, bool common_state,

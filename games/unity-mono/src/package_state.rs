@@ -12,10 +12,10 @@
 //! (integrations/unity/native/package_state.h); nothing here loads a Runtime or references its
 //! exports.
 //!
-//! package.cpp's mutex still serializes the exports and the SR pass where it did. The state lock
-//! here only makes the state sound for the callers that never took that mutex (Unity's device
-//! shutdown, renderer bridge failures, temporal readiness, the plugin load's install and the
-//! window pass's provider request), and it is never held across a leaf. The view lock is held
+//! package.cpp's mutex serializes the session exports, Unity device events and the SR pass. The
+//! state lock here also covers render plan reads, renderer bridge failures, temporal readiness,
+//! the plugin load's install and the window pass's provider request. It is never held across a
+//! leaf. The view lock is held
 //! across the SR leaves, which never re-enter, so Unity's device shutdown cannot destroy a
 //! context mid-evaluation; the presentation lock is held across the install leaf. Both are always
 //! taken before the state lock. The log and input-window locks are innermost: they are held
@@ -135,7 +135,7 @@ struct Leaves {
     present_switch_result: unsafe extern "C" fn() -> i32,
     present_generation: unsafe extern "C" fn() -> u64,
     bridge_activate: unsafe extern "C" fn(u32),
-    bridge_drained: unsafe extern "C" fn() -> u32,
+    bridge_try_close: unsafe extern "C" fn() -> u32,
     end_session: unsafe extern "C" fn(u64) -> u32,
     sr_default_backend: unsafe extern "C" fn(*mut c_void, *mut u32) -> u32,
     sr_create: unsafe extern "C" fn(
@@ -150,14 +150,14 @@ struct Leaves {
     sr_evaluate:
         unsafe extern "C" fn(*mut rsf_sr12, *mut c_void, *const rsf_game_render_pass, u32) -> i32,
     sr_destroy: unsafe extern "C" fn(*mut rsf_sr12),
-    bridge_release: unsafe extern "C" fn(),
+    bridge_finish_retirement: unsafe extern "C" fn(u32),
     accept_window: unsafe extern "C" fn(*mut c_void, *mut c_void) -> c_int,
     backend_log: unsafe extern "C" fn(*mut c_void, *const c_char),
     fg_install: unsafe extern "C" fn(*const rsf_fg12_setup) -> i32,
     present_has_owner: unsafe extern "C" fn() -> u32,
     present_request: unsafe extern "C" fn(u32) -> i32,
     fg_default_backend: unsafe extern "C" fn(*mut u32) -> u32,
-    vulkan_surface: unsafe extern "C" fn() -> u32,
+    bridge_open: unsafe extern "C" fn(u32) -> u32,
     session_seed: unsafe extern "C" fn() -> u64,
     render_pass: RenderPass,
     render_config: RenderConfig,
@@ -203,7 +203,7 @@ impl Leaves {
             present_switch_result: p.present_switch_result?,
             present_generation: p.present_generation?,
             bridge_activate: p.bridge_activate?,
-            bridge_drained: p.bridge_drained?,
+            bridge_try_close: p.bridge_try_close?,
             end_session: p.end_session?,
             sr_default_backend: p.sr_default_backend?,
             sr_create: p.sr_create?,
@@ -212,14 +212,14 @@ impl Leaves {
             sr_set_sharpening: p.sr_set_sharpening?,
             sr_evaluate: p.sr_evaluate?,
             sr_destroy: p.sr_destroy?,
-            bridge_release: p.bridge_release?,
+            bridge_finish_retirement: p.bridge_finish_retirement?,
             accept_window: p.accept_window?,
             backend_log: p.backend_log?,
             fg_install: p.fg_install?,
             present_has_owner: p.present_has_owner?,
             present_request: p.present_request?,
             fg_default_backend: p.fg_default_backend?,
-            vulkan_surface: p.vulkan_surface?,
+            bridge_open: p.bridge_open?,
             session_seed: p.session_seed?,
             render_pass: p.render_pass?,
             render_config: p.render_config?,
@@ -283,12 +283,11 @@ impl Leaves {
     fn bridge_activate(&self, enabled: bool) {
         unsafe { (self.bridge_activate)(u32::from(enabled)) }
     }
-    /// Drained, then the Runtime's session retired, in that order and only if drained.
-    fn drained_and_ended(&self, session: u64) -> bool {
-        unsafe { (self.bridge_drained)() != 0 && (self.end_session)(session) != 0 }
+    fn bridge_try_close(&self) -> bool {
+        unsafe { (self.bridge_try_close)() != 0 }
     }
-    fn bridge_drained(&self) -> bool {
-        unsafe { (self.bridge_drained)() != 0 }
+    fn end_session(&self, session: u64) -> bool {
+        unsafe { (self.end_session)(session) != 0 }
     }
     /// Auto's backend for the list's adapter; None when its device or adapter cannot be read.
     fn sr_default_backend(&self, commands: *mut c_void) -> Option<u32> {
@@ -338,9 +337,18 @@ impl Leaves {
     fn sr_destroy(&self, sr: *mut rsf_sr12) {
         unsafe { (self.sr_destroy)(sr) }
     }
-    fn bridge_release(&self) {
-        unsafe { (self.bridge_release)() }
+    fn bridge_finish_retirement(&self, commit: bool) {
+        unsafe { (self.bridge_finish_retirement)(u32::from(commit)) }
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Session {
+    Unopened,
+    Stopped,
+    /// Open can acquire Vulkan objects before it returns a session ID.
+    Opening,
+    Started(u64),
 }
 
 struct State {
@@ -349,7 +357,7 @@ struct State {
     plan: rsf_game_render_config,
     /// A settings change waits for a reconfiguring pass; no evaluation until then.
     pending: bool,
-    started: bool,
+    session: Session,
 }
 
 struct Package {
@@ -386,7 +394,7 @@ impl Package {
                 status: fresh_status(),
                 plan: EMPTY_PLAN,
                 pending: false,
-                started: false,
+                session: Session::Unopened,
             }),
             views: Mutex::new(Views::new()),
             presentation: Presentation::new(),
@@ -509,12 +517,9 @@ impl Package {
     /// The session's identity replaces the loaded one before open, which may install from it.
     /// The bridge's managed API is returned once the session has started.
     fn initialize(&self, leaves: &Leaves, identity: Identity) -> Result<rsf_unity_native_api, i32> {
-        let started = self.lock().started;
-        if started {
-            if !leaves.drained_and_ended(self.services.session()) {
-                return Err(code::BUSY);
-            }
-            self.retire(leaves);
+        let session = self.lock().session;
+        if matches!(session, Session::Opening | Session::Started(_)) && !self.retire(leaves) {
+            return Err(code::BUSY);
         }
         self.bridge_result.store(0, SeqCst);
         {
@@ -522,6 +527,7 @@ impl Package {
             state.plan = EMPTY_PLAN;
             state.status = fresh_status();
             state.status.requested_sr = state.settings.sr_backend;
+            state.session = Session::Opening;
         }
         self.presentation.set_identity(identity);
         if !self.open(leaves) {
@@ -529,28 +535,32 @@ impl Package {
         }
         let settings = self.lock().settings;
         leaves.set_engine_spatial(settings.sr_backend == RSF_SR_SPATIAL, settings.quality);
+        self.lock().session = Session::Started(self.services.session());
         leaves.bridge_activate(true);
-        self.lock().started = true;
         Ok(self.services.api())
     }
 
-    fn quiesce(&self, leaves: &Leaves) -> bool {
-        leaves.bridge_activate(false);
-        leaves.drained_and_ended(self.services.session())
-    }
-
-    fn retire(&self, leaves: &Leaves) {
+    fn retire(&self, leaves: &Leaves) -> bool {
+        let session = self.lock().session;
+        if session == Session::Stopped {
+            return true;
+        }
+        if !leaves.bridge_try_close() {
+            return false;
+        }
+        // Native admission and the Vulkan presentation lease hold the checked fence proof.
+        if let Session::Started(id) = session
+            && !leaves.end_session(id)
+        {
+            leaves.bridge_finish_retirement(false);
+            return false;
+        }
         self.views_released();
         destroy_views(&mut self.lock_views(), leaves);
-        leaves.bridge_release();
-        self.lock().started = false;
-    }
-
-    fn device_shutdown(&self, leaves: &Leaves) {
-        leaves.bridge_activate(false);
-        if leaves.bridge_drained() {
-            self.retire(leaves);
-        }
+        leaves.bridge_finish_retirement(true);
+        self.services.retired();
+        self.lock().session = Session::Stopped;
+        true
     }
 
     /// No view, so no temporal reconstruction is active or ready.
@@ -817,24 +827,8 @@ unsafe extern "C" fn rsf_unity_package_initialize(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_package_quiesce(platform: *const rsf_unity_package_platform) -> u32 {
-    u32::from(unsafe { Leaves::adopt(platform) }.is_some_and(|leaves| PACKAGE.quiesce(&leaves)))
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_package_retire(platform: *const rsf_unity_package_platform) {
-    if let Some(leaves) = unsafe { Leaves::adopt(platform) } {
-        PACKAGE.retire(&leaves);
-    }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_package_device_shutdown(
-    platform: *const rsf_unity_package_platform,
-) {
-    if let Some(leaves) = unsafe { Leaves::adopt(platform) } {
-        PACKAGE.device_shutdown(&leaves);
-    }
+unsafe extern "C" fn rsf_unity_package_retire(platform: *const rsf_unity_package_platform) -> u32 {
+    u32::from(unsafe { Leaves::adopt(platform) }.is_some_and(|leaves| PACKAGE.retire(&leaves)))
 }
 
 #[unsafe(no_mangle)]
@@ -882,6 +876,7 @@ mod tests {
         sharpening_valid: bool,
         preset_valid: bool,
         drained: bool,
+        close_held: bool,
         ended: bool,
         /// The bridge accepts the session's host services.
         prepared: bool,
@@ -922,6 +917,7 @@ mod tests {
         sharpening_valid: true,
         preset_valid: true,
         drained: true,
+        close_held: false,
         ended: true,
         prepared: true,
         surface: true,
@@ -1036,11 +1032,14 @@ mod tests {
     unsafe extern "C" fn bridge_activate(enabled: u32) {
         call(format!("activate {enabled}"));
     }
-    unsafe extern "C" fn bridge_drained() -> u32 {
-        call("drained".into());
-        fake().drained.into()
+    unsafe extern "C" fn bridge_try_close() -> u32 {
+        assert!(!fake().close_held);
+        call("close".into());
+        set(|f| f.close_held = f.drained);
+        fake().close_held.into()
     }
     unsafe extern "C" fn end_session(session: u64) -> u32 {
+        assert!(fake().close_held);
         call(format!("end {session}"));
         fake().ended.into()
     }
@@ -1133,8 +1132,10 @@ mod tests {
     unsafe extern "C" fn sr_destroy(sr: *mut rsf_sr12) {
         call(format!("destroy {:#x}", sr as usize));
     }
-    unsafe extern "C" fn bridge_release() {
-        call("release".into());
+    unsafe extern "C" fn bridge_finish_retirement(commit: u32) {
+        assert!(fake().close_held);
+        set(|f| f.close_held = false);
+        call(if commit == 0 { "retain" } else { "release" }.into());
     }
     unsafe extern "C" fn accept_window(_: *mut c_void, _: *mut c_void) -> c_int {
         call("accept".into());
@@ -1195,7 +1196,11 @@ mod tests {
         unsafe { backend.write(adapter) };
         1
     }
-    unsafe extern "C" fn vulkan_surface() -> u32 {
+    unsafe extern "C" fn bridge_open(editor: u32) -> u32 {
+        assert!(!fake().close_held);
+        if editor != 0 {
+            return 1;
+        }
         call("surface".into());
         fake().surface.into()
     }
@@ -1342,7 +1347,7 @@ mod tests {
         present_switch_result: Some(present_switch_result),
         present_generation: Some(present_generation),
         bridge_activate: Some(bridge_activate),
-        bridge_drained: Some(bridge_drained),
+        bridge_try_close: Some(bridge_try_close),
         end_session: Some(end_session),
         sr_default_backend: Some(sr_default_backend),
         sr_create: Some(sr_create),
@@ -1351,14 +1356,14 @@ mod tests {
         sr_set_sharpening: Some(sr_set_sharpening),
         sr_evaluate: Some(sr_evaluate),
         sr_destroy: Some(sr_destroy),
-        bridge_release: Some(bridge_release),
+        bridge_finish_retirement: Some(bridge_finish_retirement),
         accept_window: Some(accept_window),
         backend_log: Some(backend_log),
         fg_install: Some(fg_install),
         present_has_owner: Some(present_has_owner),
         present_request: Some(present_request),
         fg_default_backend: Some(fg_default_backend),
-        vulkan_surface: Some(vulkan_surface),
+        bridge_open: Some(bridge_open),
         session_seed: Some(session_seed),
         render_pass: Some(render),
         render_config: Some(render_config),
@@ -1386,7 +1391,7 @@ mod tests {
     #[test]
     fn an_incomplete_table_is_refused() {
         let mut table = platform();
-        table.bridge_release = None;
+        table.bridge_finish_retirement = None;
         assert!(unsafe { Leaves::adopt(&table) }.is_none());
         let mut table = platform();
         table.fg_default_backend = None;
@@ -1414,7 +1419,7 @@ mod tests {
             (184, 1)
         );
         assert_eq!((state.plan.struct_size, state.plan.enabled), (24, 0));
-        assert!(!state.pending && !state.started);
+        assert!(!state.pending && state.session == Session::Unopened);
     }
 
     #[test]
@@ -1658,7 +1663,7 @@ mod tests {
         );
         assert_eq!(package.services.session(), 42);
         assert_eq!(package.bridge_result.load(SeqCst), 0);
-        assert!(package.lock().started);
+        assert!(package.lock().session == Session::Started(42));
         assert_eq!(package.presentation.identity().xess.to_bytes(), b"R/xess");
         // A started session only restarts once drained and its own session ended.
         package.view_planned(3, (8, 8), (4, 4));
@@ -1670,12 +1675,14 @@ mod tests {
             started(&package, &leaves, Identity::new(b"Q", b"1", b"P")),
             Err(code::BUSY)
         );
-        assert_eq!(calls(), ["drained"]);
+        assert_eq!(calls(), ["close"]);
         assert_eq!(package.presentation.identity().root.to_bytes(), b"R");
         set(|f| f.drained = true);
         set(|f| f.ended = false);
         assert_eq!(started(&package, &leaves, session()), Err(code::BUSY));
-        assert_eq!(calls(), ["drained", "end 42"]);
+        assert_eq!(calls(), ["close", "end 42", "retain"]);
+        assert!(package.temporal_ready.load(SeqCst));
+        assert_eq!(package.services.session(), 42);
         set(|f| f.ended = true);
         set(|f| f.prepared = false);
         assert_eq!(started(&package, &leaves, session()), Err(code::FAILED));
@@ -1684,7 +1691,7 @@ mod tests {
             calls(),
             [
                 vec![
-                    "drained".into(),
+                    "close".into(),
                     "end 42".into(),
                     "destroy 0x300".into(),
                     "release".into()
@@ -1695,39 +1702,39 @@ mod tests {
         );
         {
             let state = package.lock();
-            assert!(!state.started);
+            assert!(state.session == Session::Opening);
             assert_eq!((state.status.evaluated_frames, state.plan.enabled), (0, 0));
         }
         assert!(!package.temporal_ready.load(SeqCst));
+        assert_eq!(package.services.session(), 0);
+        set(|f| f.drained = false);
+        assert_eq!(started(&package, &leaves, session()), Err(code::BUSY));
+        assert_eq!(calls(), ["close"]);
+        set(|f| f.drained = true);
         set(|f| f.prepared = true);
         package.lock().settings.sr_backend = RSF_SR_SPATIAL;
         assert_eq!(started(&package, &leaves, session()), Ok(42));
         assert_eq!(
             calls(),
             [
+                vec!["close".into(), "release".into()],
                 opened(false),
                 vec!["spatial 1 2".into(), "activate 1".into()]
             ]
             .concat()
         );
         assert_eq!(package.lock().status.requested_sr, RSF_SR_SPATIAL);
-        // rsfu_shutdown's unlocked half, then its locked half.
+        // Shutdown and device shutdown use the same checked transaction as restart.
         set(|f| f.drained = false);
-        assert!(!package.quiesce(&leaves));
-        assert_eq!(calls(), ["activate 0", "drained"]);
+        assert!(!package.retire(&leaves));
+        assert_eq!(calls(), ["close"]);
         set(|f| f.drained = true);
-        assert!(package.quiesce(&leaves));
-        assert_eq!(calls(), ["activate 0", "drained", "end 42"]);
-        package.retire(&leaves);
-        assert_eq!(calls(), ["release"]);
-        assert!(!package.lock().started);
-        // Unity's device shutdown never ends the Runtime session itself.
-        package.lock_views().entry(2);
-        package.device_shutdown(&leaves);
-        assert_eq!(calls(), ["activate 0", "drained", "destroy 0x0", "release"]);
+        assert!(package.retire(&leaves));
+        assert_eq!(calls(), ["close", "end 42", "release"]);
+        assert!(package.lock().session == Session::Stopped);
         set(|f| f.drained = false);
-        package.device_shutdown(&leaves);
-        assert_eq!(calls(), ["activate 0", "drained"]);
+        assert!(package.retire(&leaves));
+        assert!(calls().is_empty());
     }
 
     fn list(address: usize) -> *mut c_void {
@@ -2174,8 +2181,7 @@ mod tests {
         let mut refused = opened(true);
         refused.truncate(refused.len() - 2);
         refused.push(
-            "log Unity Vulkan presentation surface could not initialize on the window thread."
-                .into(),
+            "log Unity graphics bridge or player presentation surface could not open.".into(),
         );
         assert_eq!(calls(), refused);
         // Without %LOCALAPPDATA% there is no process log; the window stays hooked.
