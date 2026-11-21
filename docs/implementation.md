@@ -4,6 +4,13 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The FidelityFX 4 FG bridge used by Vulkan now owns admission, frame
+validation, queue and fence sequencing, telemetry and checked retirement
+in Rust. Its typed SDK calls and retained descriptors stay in the native
+binding. The bridge and outer Vulkan owner share the private record
+definitions. Source review checked call order and the optional build
+guard. The CPU contracts, builds and device paths remain unverified.
+
 The Streamline Vulkan bridge owns its interposer lifecycle in Rust. It
 holds the verified file through admission and keeps the plugin paths,
 feature selection, shutdown result and Vulkan resolvers for their

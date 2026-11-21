@@ -143,6 +143,8 @@ mod frame_tap;
 #[cfg(windows)]
 mod frame_tap_abi;
 #[cfg(windows)]
+mod fsr4_fg_bridge;
+#[cfg(windows)]
 mod fullscreen_pass;
 #[cfg(windows)]
 mod gl_pipeline;

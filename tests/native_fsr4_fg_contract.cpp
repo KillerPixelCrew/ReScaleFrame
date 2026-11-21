@@ -25,20 +25,30 @@ ffxReturnCode_t query(ffxContext* context, ffxQueryDescHeader* header) {
     desc.versionIds[3] = 50; desc.versionNames[3] = "5.0.0";
     *desc.outputCount = 4; return FFX_API_RETURN_OK;
 }
+int32_t discover(PfnFfxQuery query_versions, void* device, uint64_t& selected) {
+    rsf_ffx_version versions[rsf::max_ffx_versions]{};
+    uint64_t count = rsf::max_ffx_versions;
+    selected = 0;
+    const auto code = rsf::fsr4fg::versions(query_versions, device, versions, count);
+    if (code) return code;
+    selected = rsf_core_fsr4fg_select_version(versions, count);
+    return selected ? 0 : RSF_FSR4FG_NOT_SUPPORTED;
+}
 }
 int main() {
     uint64_t selected = 99;
-    CHECK(rsf::fsr4fg::discover(query, expected_device, selected) == RSF_FSR4FG_NOT_SUPPORTED && selected == 0);
+    CHECK(discover(query, expected_device, selected) == RSF_FSR4FG_NOT_SUPPORTED && selected == 0);
     mode = 1;
-    CHECK(rsf::fsr4fg::discover(query, expected_device, selected) == 0 && selected == 42);
+    CHECK(discover(query, expected_device, selected) == 0 && selected == 42);
     ffxContext context = reinterpret_cast<void*>(1);
-    CHECK(rsf::fsr4fg::verify(query, &context, selected));
-    mode = 4; CHECK(!rsf::fsr4fg::verify(query, &context, selected));
-    mode = 5; CHECK(!rsf::fsr4fg::verify(query, &context, selected));
-    mode = 2; CHECK(rsf::fsr4fg::discover(query, expected_device, selected) == RSF_FSR4FG_NOT_SUPPORTED && !selected);
-    mode = 3; CHECK(rsf::fsr4fg::discover(query, expected_device, selected) == RSF_FSR4FG_NOT_SUPPORTED && !selected);
-    CHECK(rsf::fsr4fg::discover(nullptr, expected_device, selected) == RSF_FSR4FG_INVALID_ARGUMENT);
-    CHECK(rsf::fsr4fg::discover(query, nullptr, selected) == RSF_FSR4FG_INVALID_ARGUMENT);
+    uint64_t actual = 0;
+    CHECK(rsf::fsr4fg::provider_version(query, &context, actual) == 0 && actual == selected);
+    mode = 4; CHECK(rsf::fsr4fg::provider_version(query, &context, actual) == 0 && actual != selected);
+    mode = 5; CHECK(rsf::fsr4fg::provider_version(query, &context, actual) == FFX_API_RETURN_ERROR);
+    mode = 2; CHECK(discover(query, expected_device, selected) == RSF_FSR4FG_NOT_SUPPORTED && !selected);
+    mode = 3; CHECK(discover(query, expected_device, selected) == RSF_FSR4FG_NOT_SUPPORTED && !selected);
+    CHECK(discover(nullptr, expected_device, selected) == RSF_FSR4FG_INVALID_ARGUMENT);
+    CHECK(discover(query, nullptr, selected) == RSF_FSR4FG_INVALID_ARGUMENT);
     rsf_frame_record record{}; record.frame_id = 12; record.render_width = 426; record.render_height = 240;
     record.frame_time_ms = 16.5f;
     auto& camera = record.camera;
@@ -49,19 +59,15 @@ int main() {
     camera.jitter_pixels[0] = 0.25f; camera.jitter_pixels[1] = -0.125f;
     rsf_fsr4fg_frame frame{}; frame.record = &record; frame.motion_scale_x = 426; frame.motion_scale_y = 240;
     ffxDispatchDescFrameGenerationPrepareV2 prepare{};
-    rsf::fsr4fg::prepare_constants(frame, 70, true, 11, prepare);
+    rsf::fsr4fg::prepare_constants(frame, 70, false, prepare);
     CHECK(prepare.header.type == FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATION_PREPARE_V2 && prepare.frameID == 70 && !prepare.reset);
     CHECK(prepare.cameraPosition[0] == 2 && prepare.cameraPosition[1] == 3 && prepare.cameraPosition[2] == 4);
     CHECK(prepare.cameraRight[0] == 1 && prepare.cameraUp[1] == 1 && prepare.cameraForward[2] == -1);
     CHECK(prepare.frameTimeDelta == 16.5f && prepare.motionVectorScale.x == 426 && prepare.motionVectorScale.y == 240);
     CHECK(prepare.jitterOffset.x == 0.25f && prepare.jitterOffset.y == -0.125f && prepare.viewSpaceToMetersFactor == 1);
     CHECK(prepare.cameraNear == 0.05f && prepare.cameraFar == 4000 && prepare.cameraFovAngleVertical == 1.3f);
-    rsf::fsr4fg::prepare_constants(frame, 71, false, 11, prepare); CHECK(prepare.reset);
-    rsf::fsr4fg::prepare_constants(frame, 72, true, 9, prepare); CHECK(prepare.reset);
-    record.flags = RSF_FRAME_FLAG_RESET;
-    rsf::fsr4fg::prepare_constants(frame, 73, true, 11, prepare); CHECK(prepare.reset);
-    record.flags = 0; camera.view_to_clip[11] = 1;
-    rsf::fsr4fg::prepare_constants(frame, 74, true, 11, prepare); CHECK(!prepare.reset && prepare.cameraForward[2] == 1);
+    camera.view_to_clip[11] = 1;
+    rsf::fsr4fg::prepare_constants(frame, 71, true, prepare); CHECK(prepare.reset && prepare.cameraForward[2] == 1);
     CHECK(rsf_fsr4fg_check(sizeof(frame) - 1, 99, sizeof(frame)) == RSF_FSR4FG_INVALID_ARGUMENT);
     CHECK(rsf_fsr4fg_check(sizeof(frame), 99, sizeof(frame)) == RSF_FSR4FG_ABI_MISMATCH);
     if (!failures) std::puts("FSR4 FG exact-provider and PrepareV2 constants passed (synthetic, no GPU).");
