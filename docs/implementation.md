@@ -1086,6 +1086,18 @@ and eight MSVC CPU and ABI contracts, including Vulkan latency. Runtime
 and linked export inventories matched. The logger has yet to collect
 timing from a live Vulkan frame on this build.
 
+The MSVC Release configuration without the corrected Streamline Vulkan
+SDK also built the merged core. All ten focused CPU and ABI contracts
+passed, including the DLL export and embedded FG12 and render frontend
+contracts, the FidelityFX WSI fixtures and the Anti-Lag feature chain
+fixture. Runtime, AC7, Loader and Minecraft retained all 381, 256, 273
+and 267 export name and ordinal pairs, respectively. A probe against the
+rebuilt Runtime DLL confirmed that Streamline Vulkan initialization
+returns `NOT_SUPPORTED`. DLSS-G creation returns `NOT_COMPILED`,
+clears both outputs, calls no host callbacks, and accepts null
+destruction. The CMake build, CTest results and DLL probe are under
+`.local/rust-1.94.1-verification/integrated-streamline-disabled-05facc0/`.
+
 The integrated Vulkan owner build passed 379 pinned Rust tests,
 formatting, Clippy and 13 focused MSVC Release contracts. The Runtime,
 AC7, Loader, Minecraft and Godot export inventories matched, and the
