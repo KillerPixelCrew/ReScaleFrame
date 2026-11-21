@@ -15,9 +15,12 @@
 #include <windows.h>
 #include <d3d11.h>
 #include <d3dcompiler.h>
+#include <wrl/client.h>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
+#include <type_traits>
 #include <vector>
 #include <rescaleframe/log.h>
 
@@ -28,33 +31,31 @@ inline bool compile_shader(const char* source, size_t length, const char* name, 
                            UINT flags = D3DCOMPILE_ENABLE_STRICTNESS)
 {
     bytecode.clear();
-    HMODULE module = LoadLibraryExW(L"d3dcompiler_47.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    auto unload = [](HMODULE handle) { FreeLibrary(handle); };
+    using Module = std::unique_ptr<std::remove_pointer_t<HMODULE>, decltype(unload)>;
+    const Module module(LoadLibraryExW(L"d3dcompiler_47.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32),
+                        unload);
     if (!module) {
         say(log, user, "shader %s: d3dcompiler_47 is not available", name);
         return false;
     }
     using Compile = decltype(&D3DCompile);
-    const auto compile = reinterpret_cast<Compile>(reinterpret_cast<void*>(GetProcAddress(module, "D3DCompile")));
-    bool ok = false;
-    if (compile) {
-        ID3DBlob* code = nullptr;
-        ID3DBlob* errors = nullptr;
-        const HRESULT result = compile(source, length, name, nullptr, nullptr, entry, profile, flags, 0,
-                                       &code, &errors);
-        if (SUCCEEDED(result) && code) {
-            const auto* data = static_cast<const uint8_t*>(code->GetBufferPointer());
-            bytecode.assign(data, data + code->GetBufferSize());
-            ok = true;
-        } else {
-            say(log, user, "shader %s (%s): compile failed 0x%08lx %s", name, entry,
-                static_cast<unsigned long>(result),
-                errors ? static_cast<const char*>(errors->GetBufferPointer()) : "");
-        }
-        if (code) code->Release();
-        if (errors) errors->Release();
+    const auto compile = reinterpret_cast<Compile>(reinterpret_cast<void*>(GetProcAddress(module.get(), "D3DCompile")));
+    if (!compile) return false;
+
+    // Both blobs must release before the compiler DLL, including if the copy throws.
+    Microsoft::WRL::ComPtr<ID3DBlob> code, errors;
+    const HRESULT result = compile(source, length, name, nullptr, nullptr, entry, profile, flags, 0,
+                                   code.GetAddressOf(), errors.GetAddressOf());
+    if (FAILED(result) || !code) {
+        say(log, user, "shader %s (%s): compile failed 0x%08lx %s", name, entry,
+            static_cast<unsigned long>(result),
+            errors ? static_cast<const char*>(errors->GetBufferPointer()) : "");
+        return false;
     }
-    FreeLibrary(module);
-    return ok;
+    const auto* data = static_cast<const uint8_t*>(code->GetBufferPointer());
+    bytecode.assign(data, data + code->GetBufferSize());
+    return true;
 }
 inline bool compile_shader(const char* source, const char* name, const char* entry, const char* profile,
                            std::vector<uint8_t>& bytecode, void (*log)(void*, const char*) = nullptr,

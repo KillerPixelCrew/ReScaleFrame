@@ -4,6 +4,12 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The FidelityFX version parser feeds the Rust selector. The unused
+native selection loop was removed. The shared HLSL compiler helper
+now releases compiler blobs before unloading the module even if
+copying bytecode throws. Source review checked callers and lifetime
+order. Native builds remain unverified for these changes.
+
 The Direct3D bridge checks resize admission before configuring the
 provider and publishes the accepted count for strict native D3D12.
 Refused oversized requests leave lazy creation pending, and an
