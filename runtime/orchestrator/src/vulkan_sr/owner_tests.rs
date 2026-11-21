@@ -11,13 +11,14 @@ enum Call {
     Create(u64, u32),
     Plan,
     Allocate(u64, u32, u32, u32),
-    Mask,
-    Output,
+    Barrier(Barrier),
+    ClearColorZero(u64, u32),
     Dispatch(u32, u64, u64, f32, f32),
+    Parameters(u32),
     Capture(String),
     Sharpen,
     Log,
-    Copy(u64, u64),
+    Copy(ImageCopy),
     DlssConstants(u32),
     DlssOptions(u32),
     DlssStage,
@@ -347,11 +348,11 @@ pub(super) static PLATFORM: Platform = Platform {
         release: leaf!(|handle: Handle, image: u64, memory: u64| -> () {
             unsafe { fake(handle).calls.push(Call::Release(image, memory)) }
         }),
-        initialize_mask: leaf!(|handle: Handle, _: Handle, _: u64| -> () {
-            unsafe { fake(handle).calls.push(Call::Mask) }
+        barrier: leaf!(|handle: Handle, _: Handle, plan: *const Barrier| -> () {
+            unsafe { fake(handle).calls.push(Call::Barrier(*plan)) }
         }),
-        initialize_output: leaf!(|handle: Handle, _: Handle, _: u64| -> () {
-            unsafe { fake(handle).calls.push(Call::Output) }
+        clear_color_zero: leaf!(|handle: Handle, _: Handle, image: u64, layout: u32| -> () {
+            unsafe { fake(handle).calls.push(Call::ClearColorZero(image, layout)) }
         }),
         dispatch: leaf!(|handle: Handle, _: Handle, call: &FfxDispatch| -> i32 {
             let state = unsafe { fake(handle) };
@@ -364,15 +365,9 @@ pub(super) static PLATFORM: Platform = Platform {
             ));
             state.dispatch_result
         }),
-        copy_output: leaf!(
-            |handle: Handle, _: Handle, output: &Image, target: &Image| -> () {
-                unsafe {
-                    fake(handle)
-                        .calls
-                        .push(Call::Copy(output.image, target.image))
-                }
-            }
-        ),
+        copy: leaf!(|handle: Handle, _: Handle, plan: *const ImageCopy| -> () {
+            unsafe { fake(handle).calls.push(Call::Copy(*plan)) }
+        }),
         sharpen: leaf!(
             |handle: Handle, _: &Setup, _: Handle, _: &Frame, _: u64| -> i32 {
                 unsafe { fake(handle).calls.push(Call::Sharpen) };
@@ -399,7 +394,9 @@ pub(super) static PLATFORM: Platform = Platform {
             unsafe { fake(handle).calls.push(Call::Capture(role)) };
         }),
         capture_wants: leaf!(|_: Handle, _: u64| -> i32 { 1 }),
-        capture_parameters: leaf!(|_: &Frame, _: u32, _: u32| -> () {}),
+        capture_parameters: leaf!(|frame: &Frame, _: u32, reset: u32| -> () {
+            unsafe { fake(frame.log_user).calls.push(Call::Parameters(reset)) }
+        }),
         retire_commands: leaf!(|handle: Handle, commands: Handle| -> () {
             unsafe { fake(handle).calls.push(Call::Retire(commands as usize)) }
         }),
@@ -541,26 +538,46 @@ fn ffx_owner_reuses_staging_and_only_publishes_an_accepted_output() {
             unsafe { rsf_core_srvk_evaluate(owner, commands, &frame, sharpen_valid) },
             state.dispatch_result
         );
-        let calls = &state.calls[previous..];
-        assert_eq!(calls.contains(&Call::Mask), sequence == 1);
-        assert_eq!(calls.contains(&Call::Output), sequence == 1);
-        assert_eq!(
-            calls.contains(&Call::Capture("sr-bias-mask".into())),
-            sequence != 1
-        );
-        assert!(calls.contains(&Call::Dispatch(
-            u32::from(sequence == 1 || sequence == 3),
-            5,
-            15,
-            f32::MAX,
-            0.75
-        )));
-        assert_eq!(calls.contains(&Call::Copy(14, 4)), !failure);
-        assert_eq!(
-            calls.contains(&Call::Capture("sr-output-linear".into())),
-            !failure
-        );
-        assert_eq!(calls.contains(&Call::Log), sequence == 1);
+        let mut expected = vec![Call::Capture("sr-source-jittered".into())];
+        if sequence != 1 {
+            expected.push(Call::Capture("sr-bias-mask".into()));
+        }
+        expected.push(Call::Capture("sr-reactive-mask".into()));
+        if sequence == 1 {
+            expected.extend([
+                Call::Barrier(Barrier::with_access(15, UNDEFINED, TRANSFER_DST, 0, 0x1000)),
+                Call::ClearColorZero(15, TRANSFER_DST),
+                Call::Barrier(Barrier::with_access(
+                    15,
+                    TRANSFER_DST,
+                    SHADER_READ,
+                    0x1000,
+                    0x20,
+                )),
+                Call::Barrier(Barrier::with_access(14, UNDEFINED, GENERAL, 0, 0x40)),
+            ]);
+        }
+        let reset = u32::from(sequence == 1 || sequence == 3);
+        expected.extend([
+            Call::Parameters(reset),
+            Call::Capture("sr-linear-color".into()),
+            Call::Capture("sr-depth".into()),
+            Call::Capture("sr-motion-uv".into()),
+            Call::Dispatch(reset, 5, 15, f32::MAX, 0.75),
+        ]);
+        if !failure {
+            expected.push(Call::Sharpen);
+            if sequence == 1 {
+                expected.push(Call::Log);
+            }
+            expected.extend([
+                Call::Capture("sr-output-linear".into()),
+                Call::Barrier(Barrier::with_access(14, GENERAL, TRANSFER_SRC, 0x40, 0x800)),
+                Call::Copy(ImageCopy::transfer(14, 4, [128, 72])),
+                Call::Barrier(Barrier::with_access(14, TRANSFER_SRC, GENERAL, 0x800, 0x40)),
+            ]);
+        }
+        assert_eq!(&state.calls[previous..], expected.as_slice());
     }
     unsafe { rsf_core_srvk_retire_commands(owner, commands) };
     assert_eq!(state.calls.last(), Some(&Call::Retire(commands as usize)));
@@ -613,8 +630,8 @@ fn ffx_creation_refusal_unwinds_partial_resources_and_native_aa_skips_the_query(
             Call::Create(29, 61),
             Call::Allocate(14, 128, 72, 15),
             Call::Allocate(15, 128, 72, 6),
-            Call::Clear,
             Call::Destroy,
+            Call::Clear,
             Call::Release(14, 114),
             Call::Release(15, 0),
             Call::Close,
@@ -637,8 +654,8 @@ fn ffx_creation_refusal_unwinds_partial_resources_and_native_aa_skips_the_query(
         state.calls,
         [
             Call::Create(29, 61),
-            Call::Clear,
             Call::Destroy,
+            Call::Clear,
             Call::Release(0, 0),
             Call::Release(0, 0),
             Call::Close,

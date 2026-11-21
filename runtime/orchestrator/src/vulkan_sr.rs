@@ -4,6 +4,7 @@ use crate::render_abi::rsf_sharpening_options;
 use crate::sdk_module::{FIDELITYFX_DLL, Loader, SdkModule};
 use crate::sr_session::has_capacity;
 use crate::vulkan_dispatch::promoted_device_proc_alias;
+use crate::vulkan_fg_copy::{Barrier, BarrierFn, CopyFn, ImageCopy, TRANSFER_SRC, UNDEFINED};
 use crate::vulkan_fg_resources_abi::rsf_vkfg_platform as ImageOps;
 use crate::vulkan_sr_abi::*;
 use crate::vulkan_sr_split::normalize_frame;
@@ -35,6 +36,10 @@ pub(super) const TRANSFER_SRC_USAGE: u32 = 1;
 pub(super) const TRANSFER_DST_USAGE: u32 = 2;
 pub(super) const SAMPLED_USAGE: u32 = 4;
 pub(super) const STORAGE_USAGE: u32 = 8;
+const SHADER_READ_ACCESS: u32 = 0x20;
+const SHADER_WRITE_ACCESS: u32 = 0x40;
+const TRANSFER_READ_ACCESS: u32 = 0x800;
+const TRANSFER_WRITE_ACCESS: u32 = 0x1000;
 const LINEAR_BLIT: u32 = 0x400 | 0x800 | 0x1000;
 
 const FFX_HDR: u32 = 1;
@@ -348,10 +353,10 @@ struct FfxOps {
     images: &'static ImageOps,
     memory_type_count: unsafe extern "C" fn(Handle) -> u32,
     release: unsafe extern "C" fn(Handle, u64, u64),
-    initialize_mask: unsafe extern "C" fn(Handle, Handle, u64),
-    initialize_output: unsafe extern "C" fn(Handle, Handle, u64),
+    barrier: BarrierFn,
+    clear_color_zero: unsafe extern "C" fn(Handle, Handle, u64, u32),
     dispatch: unsafe extern "C" fn(Handle, Handle, &FfxDispatch) -> i32,
-    copy_output: unsafe extern "C" fn(Handle, Handle, &Image, &Image),
+    copy: CopyFn,
     sharpen: unsafe extern "C" fn(Handle, &Setup, Handle, &Frame, u64) -> i32,
     clear_sharpen: unsafe extern "C" fn(Handle),
     log: unsafe extern "C" fn(&Frame, *const c_char),
@@ -384,6 +389,11 @@ struct FfxDispatch<'a> {
 
 const _: () = {
     assert!(size_of::<FfxOps>() == 27 * size_of::<usize>());
+    assert!(std::mem::offset_of!(FfxOps, barrier) == 14 * 8);
+    assert!(std::mem::offset_of!(FfxOps, clear_color_zero) == 15 * 8);
+    assert!(std::mem::offset_of!(FfxOps, dispatch) == 16 * 8);
+    assert!(std::mem::offset_of!(FfxOps, copy) == 17 * 8);
+    assert!(std::mem::offset_of!(FfxOps, sharpen) == 18 * 8);
     assert!(size_of::<Platform>() == 272);
     assert!(size_of::<Blit>() == 24);
     assert!(size_of::<FfxDispatch>() == 144);
@@ -607,13 +617,29 @@ impl FidelityFx {
         }
         let output = self.output.description;
         let zero = self.zero_mask.description;
+        let barrier = |image, from, to, source_access, target_access| {
+            let plan = Barrier::with_access(image, from, to, source_access, target_access);
+            unsafe { (ops.barrier)(handle, commands, &plan) };
+        };
         if !self.initialized {
             // The ABI requires submission in recording order, including a
             // failed dispatch. First-use layouts survive a rejected SR result.
-            unsafe {
-                (ops.initialize_mask)(handle, commands, zero.image);
-                (ops.initialize_output)(handle, commands, output.image);
-            }
+            barrier(
+                zero.image,
+                UNDEFINED,
+                TRANSFER_DST,
+                0,
+                TRANSFER_WRITE_ACCESS,
+            );
+            unsafe { (ops.clear_color_zero)(handle, commands, zero.image, TRANSFER_DST) };
+            barrier(
+                zero.image,
+                TRANSFER_DST,
+                SHADER_READ,
+                TRANSFER_WRITE_ACCESS,
+                SHADER_READ_ACCESS,
+            );
+            barrier(output.image, UNDEFINED, GENERAL, 0, SHADER_WRITE_ACCESS);
             self.initialized = true;
         }
         let reset = u32::from(self.history.needs_reset(record));
@@ -666,7 +692,26 @@ impl FidelityFx {
             };
         }
         self.record_capture(commands, &output, record, c"sr-output-linear", reset);
-        unsafe { (ops.copy_output)(handle, commands, &output, &frame.output) };
+        barrier(
+            output.image,
+            GENERAL,
+            TRANSFER_SRC,
+            SHADER_WRITE_ACCESS,
+            TRANSFER_READ_ACCESS,
+        );
+        let copy = ImageCopy::transfer(
+            output.image,
+            frame.output.image,
+            [output.width, output.height],
+        );
+        unsafe { (ops.copy)(handle, commands, &copy) };
+        barrier(
+            output.image,
+            TRANSFER_SRC,
+            GENERAL,
+            TRANSFER_READ_ACCESS,
+            SHADER_WRITE_ACCESS,
+        );
         self.history.commit(record);
         0
     }

@@ -31,18 +31,29 @@ pub(super) struct Barrier {
 
 impl Barrier {
     pub(super) fn new(image: u64, old_layout: u32, new_layout: u32) -> Self {
+        let source_access = if old_layout == UNDEFINED {
+            0
+        } else {
+            MEMORY_ACCESS
+        };
+        Self::with_access(image, old_layout, new_layout, source_access, MEMORY_ACCESS)
+    }
+
+    pub(super) fn with_access(
+        image: u64,
+        old_layout: u32,
+        new_layout: u32,
+        source_access: u32,
+        target_access: u32,
+    ) -> Self {
         Self {
             image,
             old_layout,
             new_layout,
             source_family: FAMILY_IGNORED,
             target_family: FAMILY_IGNORED,
-            source_access: if old_layout == UNDEFINED {
-                0
-            } else {
-                MEMORY_ACCESS
-            },
-            target_access: MEMORY_ACCESS,
+            source_access,
+            target_access,
             source_stages: ALL_COMMANDS,
             target_stages: ALL_COMMANDS,
         }

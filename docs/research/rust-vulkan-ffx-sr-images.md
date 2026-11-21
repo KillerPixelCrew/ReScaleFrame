@@ -25,8 +25,11 @@ Rust now sequences, per image and in the existing order (output, then mask):
 Every Vulkan failure still maps to `INIT_FAILED`, as the native leaf did. A failure part way
 leaves exactly the handles the native leaf had written. `FidelityFx::drop` then releases them
 through the unchanged native `release` leaf, which destroys the image before freeing the
-memory and skips zero handles. The constructor's rollback order (clear sharpening, destroy
-effect, release output, release mask, close) is unchanged.
+memory and skips zero handles. The constructor's rollback destroys the effect first, then
+clears sharpening, releases output and mask in that order, and closes the native owner. If SDK
+destruction is refused, the constructor retains the native state, module and device dispatch
+lease. The later recording review corrected the earlier description and the fixture's stale
+rollback expectation to match `FidelityFx::drop`.
 
 The typed Vulkan calls reuse the existing shared `rsf::vkfg::platform` leaves
 (`vulkan_fg_resources_native.h`), which the XeSS SR and FG owners already use. They match the
@@ -87,3 +90,54 @@ Not performed, and owned by the user: C++ compile and link (the new include, the
 `constexpr` table and the size assertions), Rust build, Clippy and `cargo test`, the native
 `rsf_native_vulkan_test` device test, and an FSR2/FSR3 Vulkan game run. The device test is the
 first check that the real driver's chosen memory type and bind still succeed.
+
+## First-use initialization and output publication
+
+The recording port uses `a6f4dedb34f0a23f959964e617def1f5150dab21` as its baseline. I compared
+the three compound leaves in `native_sr_vulkan.cpp` against `FidelityFx::evaluate`, the shared
+`vulkan_fg_copy` record types and Vulkan marshalling, and the public SRVK recording contract.
+The shared barrier and copy records match the required subresources and queue ownership.
+The FFX owner supplies the explicit access masks below through `Barrier::with_access`. The
+existing XeSS and FG constructor still chooses `MEMORY_READ | MEMORY_WRITE`, with source
+access zero from `UNDEFINED`.
+
+| Evaluation point | Image operation | Source and destination access |
+| --- | --- | --- |
+| After the input dump captures, on first use | Transition the plan-sized R8 mask from `UNDEFINED` to `TRANSFER_DST_OPTIMAL`. | `0` to `TRANSFER_WRITE` |
+| Next | Clear colour mip 0, layer 0 of the mask to zero in `TRANSFER_DST_OPTIMAL`. | Clear command |
+| Next | Transition the mask from `TRANSFER_DST_OPTIMAL` to `SHADER_READ_ONLY_OPTIMAL`. | `TRANSFER_WRITE` to `SHADER_READ` |
+| Next | Transition the private RGBA16F output from `UNDEFINED` to `GENERAL`, then mark initialization recorded. | `0` to `SHADER_WRITE` |
+| After accepted dispatch, sharpening and output capture | Transition the private output from `GENERAL` to `TRANSFER_SRC_OPTIMAL`. | `SHADER_WRITE` to `TRANSFER_READ` |
+| Next | Copy the private output allocation's exact width and height into the caller's existing `TRANSFER_DST_OPTIMAL` image. | Copy command |
+| Next | Restore the private output from `TRANSFER_SRC_OPTIMAL` to `GENERAL`, then commit history. | `TRANSFER_READ` to `SHADER_WRITE` |
+
+Each barrier uses `ALL_COMMANDS` for both stages, ignored queue families, zero dependency
+flags and one colour range at mip 0 and layer 0 with one level and one layer. The copy uses
+the same colour mip and layer on both images, zero offsets and depth 1. The mask is sampled
+and transfer-destination, and supplies each omitted reactive or composition slot. The
+private output is sampled, storage, transfer-source and transfer-destination. Only the private
+output changes layout during publication. The caller supplies the transfer-destination usage
+and layout and retains ownership of that image for later passes.
+
+Input dump capture precedes first-use recording. Parameter capture and optional colour, depth
+and motion captures precede the typed FFX dispatch. A refused dispatch clears history and
+returns before sharpening, output capture and copy-back. The initialization flag records the
+first-use barriers and clear even if that dispatch fails. Reuse requires the caller to submit
+the failed recording in order or retire the context. Reset flags and frame, session, view or
+resource generation discontinuities still affect history independently of image initialization.
+
+The C++ and Rust tables and the C++ initializer agree slot by slot. `barrier`,
+`clear_color_zero`, `dispatch`, `copy` and `sharpen` occupy offsets 112, 120, 128, 136 and
+144 on x64. `FfxOps` remains 27 pointer slots and `Platform` remains 272 bytes. The shared
+records are 40 and 32 bytes. Typed Vulkan and SDK calls stay behind the native table. The
+seven SRVK exports and ABI 2 stay with the existing forwarding functions. With Vulkan FFX
+headers disabled, the null platform still returns `NOT_COMPILED` after create admission and
+`NOT_SUPPORTED` after spatial fallback admission. Spatial blit, shader and version policy
+continue through their existing paths.
+
+The existing Rust owner fixture now describes the primitive recording order around capture,
+dispatch and copy-back, including refusal. Checks for this port were source comparison,
+pinned Rust 1.94.1 formatting, locked offline Windows Cargo metadata and Git whitespace
+review. Enabled and disabled compilation and linking, binary export checks, Clippy, CPU
+fixtures, Vulkan execution and visual game acceptance remain with the user. The producer and
+shader coverage limits in the [Vulkan SR cutover](rust-vulkan-sr-cutover.md) still apply.

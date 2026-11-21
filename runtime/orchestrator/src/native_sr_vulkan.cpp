@@ -26,6 +26,7 @@ int32_t rsf_core_srvk_spatial_fallback(const Platform*, const rsf_srvk_fallback*
 #include "../../backends/common/frame_capture_vk.h"
 #include "../../backends/common/sharpening.h"
 #include "sharpening_vulkan.h"
+#include "vulkan_fg_copy.h"
 #include "vulkan_fg_resources_native.h"
 #include "../../backends/fsr/src/ffx_version.h"
 #include <ffx_api/ffx_api.h>
@@ -65,10 +66,10 @@ struct FfxOps {
     const rsf_vkfg_platform* images;
     uint32_t (*memory_type_count)(FfxNative*);
     void (*release)(FfxNative*, uint64_t, uint64_t);
-    void (*initialize_mask)(FfxNative*, void*, uint64_t);
-    void (*initialize_output)(FfxNative*, void*, uint64_t);
+    void (*barrier)(FfxNative*, void*, const rsf_vkfg_barrier*);
+    void (*clear_color_zero)(FfxNative*, void*, uint64_t, uint32_t);
     int32_t (*dispatch)(FfxNative*, void*, const FfxDispatch*);
-    void (*copy_output)(FfxNative*, void*, const rsf_srvk_image*, const rsf_srvk_image*);
+    void (*copy)(FfxNative*, void*, const rsf_vkfg_image_copy*);
     int32_t (*sharpen)(FfxNative*, const rsf_srvk_setup*, void*, const rsf_srvk_frame*, uint64_t);
     void (*clear_sharpen)(FfxNative*);
     void (*log)(const rsf_srvk_frame*, const char*);
@@ -90,6 +91,8 @@ struct Platform {
     void (*dump_result)(const rsf_frame_record*, const char*, uint32_t, int32_t);
 };
 static_assert(sizeof(FfxOps) == 27 * sizeof(void*) && sizeof(Platform) == 272 && sizeof(Blit) == 24);
+static_assert(offsetof(FfxOps, barrier) == 14 * 8 && offsetof(FfxOps, clear_color_zero) == 15 * 8 &&
+    offsetof(FfxOps, dispatch) == 16 * 8 && offsetof(FfxOps, copy) == 17 * 8 && offsetof(FfxOps, sharpen) == 18 * 8);
 static_assert(sizeof(FfxDispatch) == 144 && offsetof(FfxDispatch, reset) == 136);
 static_assert(VK_FORMAT_R8_UNORM == 9 && VK_FORMAT_R16G16_SFLOAT == 83 &&
     VK_FORMAT_R16G16B16A16_SFLOAT == 97 && VK_FORMAT_R32_SFLOAT == 100 && VK_FORMAT_D32_SFLOAT == 126);
@@ -97,6 +100,8 @@ static_assert(VK_IMAGE_LAYOUT_GENERAL == 1 && VK_IMAGE_LAYOUT_SHADER_READ_ONLY_O
     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL == 7);
 static_assert(VK_IMAGE_USAGE_TRANSFER_SRC_BIT == 1 && VK_IMAGE_USAGE_TRANSFER_DST_BIT == 2 &&
     VK_IMAGE_USAGE_SAMPLED_BIT == 4 && VK_IMAGE_USAGE_STORAGE_BIT == 8);
+static_assert(VK_ACCESS_SHADER_READ_BIT == 0x20 && VK_ACCESS_SHADER_WRITE_BIT == 0x40 &&
+    VK_ACCESS_TRANSFER_READ_BIT == 0x800 && VK_ACCESS_TRANSFER_WRITE_BIT == 0x1000);
 static_assert((VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT |
     VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) == (0x400 | 0x800 | 0x1000));
 static_assert(FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE == 1 && FFX_UPSCALE_ENABLE_MOTION_VECTORS_JITTER_CANCELLATION == 4 &&
@@ -265,28 +270,22 @@ VkImageMemoryBarrier image_barrier(VkImage image, VkImageLayout from, VkImageLay
     return barrier;
 }
 
-void transition(const FfxNative* native, VkCommandBuffer commands, VkImageMemoryBarrier barrier) noexcept
+void record_barrier(FfxNative* native, void* commands, const rsf_vkfg_barrier* plan) noexcept
 {
-    native->barrier(commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-        0, 0, nullptr, 0, nullptr, 1, &barrier);
+    rsf::vkfg::record_barrier(native->barrier, static_cast<VkCommandBuffer>(commands), *plan);
 }
 
-void initialize_mask(FfxNative* native, void* commands, uint64_t image) noexcept
+void clear_color_zero(FfxNative* native, void* commands, uint64_t image, uint32_t layout) noexcept
 {
-    const auto list = static_cast<VkCommandBuffer>(commands);
-    const auto mask = reinterpret_cast<VkImage>(image);
-    transition(native, list, image_barrier(mask, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT));
     const VkClearColorValue zero{};
     const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    native->clear(list, mask, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &range);
-    transition(native, list, image_barrier(mask, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT));
+    native->clear(static_cast<VkCommandBuffer>(commands), reinterpret_cast<VkImage>(image),
+        static_cast<VkImageLayout>(layout), &zero, 1, &range);
 }
 
-void initialize_output(FfxNative* native, void* commands, uint64_t image) noexcept
+void record_copy(FfxNative* native, void* commands, const rsf_vkfg_image_copy* plan) noexcept
 {
-    transition(native, static_cast<VkCommandBuffer>(commands), image_barrier(reinterpret_cast<VkImage>(image),
-        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT));
+    rsf::vkfg::record_copy(native->copy, static_cast<VkCommandBuffer>(commands), *plan);
 }
 
 FfxApiResource resource(const rsf_srvk_image& image, bool output = false) noexcept
@@ -341,21 +340,6 @@ int32_t dispatch(FfxNative* native, void* commands, const FfxDispatch* call) noe
 }
 catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 
-void copy_output(FfxNative* native, void* commands, const rsf_srvk_image* output, const rsf_srvk_image* target) noexcept
-{
-    const auto list = static_cast<VkCommandBuffer>(commands);
-    const auto image = reinterpret_cast<VkImage>(output->image);
-    transition(native, list, image_barrier(image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT));
-    VkImageCopy region{};
-    region.srcSubresource = region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    region.extent = {output->width, output->height, 1};
-    native->copy(list, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, reinterpret_cast<VkImage>(target->image),
-        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-    transition(native, list, image_barrier(image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
-        VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_SHADER_WRITE_BIT));
-}
-
 int32_t fallback_probe(const rsf_srvk_fallback* call, Blit* out) noexcept try
 {
     const auto properties = reinterpret_cast<PFN_vkGetPhysicalDeviceFormatProperties>(
@@ -402,7 +386,8 @@ constexpr Platform native{
     {rsf_vk_sdk_system_loader, open, [](FfxNative* owner) { delete owner; }, initialize_graphics, versions, create_effect,
         effective_version, destroy_effect, plan,
         [](FfxNative* owner) -> void* { return &owner->gpu; }, &rsf::vkfg::platform,
-        [](FfxNative* owner) { return owner->memory.memoryTypeCount; }, release, initialize_mask, initialize_output, dispatch, copy_output,
+        [](FfxNative* owner) { return owner->memory.memoryTypeCount; }, release,
+        record_barrier, clear_color_zero, dispatch, record_copy,
         [](FfxNative* owner, const rsf_srvk_setup* setup, void* commands, const rsf_srvk_frame* frame, uint64_t output) -> int32_t {
             return owner->sharpen.execute(*setup, commands, *frame, reinterpret_cast<VkImage>(output));
         },
