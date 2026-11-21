@@ -793,8 +793,12 @@ focused MSVC Release contracts. All checked PE export inventories
 matched, and Anomaly kept its three exports and dynamic Runtime lookup.
 The merged Standard game run drew the panel through resize, saved
 SR Off and On, and switched DLSS-G to FSR3 and back on the same game
-facade. It exited cleanly. D3D11-on-12 wrapping, fullscreen and
-held-key gameplay remain open.
+facade. AVX drew the panel through resize, saved both directions of
+the DLSS and FSR3 SR switch, and returned gameplay mouse input after
+the panel closed. Both profiles exited cleanly. The Vulkan
+Streamline-disabled build passed 13 focused Release contracts and
+preserved the four checked export inventories and stub results.
+D3D11-on-12 wrapping, fullscreen and held-key gameplay remain open.
 [Shared overlay host evidence](research/rust-overlay-host.md#integrated-runtime-and-standard-game-run)
 
 Rust now validates the split Vulkan SR C ABI and tracks the producer and

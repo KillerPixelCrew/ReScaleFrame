@@ -111,5 +111,31 @@ payload and settings were restored. The logs, artifacts and saved
 intermediate settings are under
 `.local/anomaly/staging/live-58fe95a-stage5/evidence/merged-overlay-host-standard-9e2cd87/`.
 
-The merged Runtime still needs the AVX retest, held-key gameplay, and
-separate D3D11-on-12 wrapping and fullscreen checks.
+## Integrated AVX game run
+
+The isolated AVX executable used the same Runtime, adapter and pack hashes
+as the Standard run. The panel opened at 1280×720 and drew through the
+resize to 1600×900. The overlay switched SR from DLSS to FSR3
+Quality at 1066×600 and back to DLSS Quality at 1067×600. Both
+selections were saved and applied. DLSS-G continued at 240 reported
+vendor presents per 120 source frames. The panel drew all 2,046
+visible frames and consumed all 22 reported pointer events. After
+Insert closed it, a gameplay mouse drag visibly turned the camera.
+The engine shut down Direct3D and returned code 0. The last SR status
+sample reported 3,329 evaluations and zero refusals.
+
+The isolated payload, settings and lifecycle script were restored.
+Logs, hashes and the intermediate FSR3 INI are under
+`.local/anomaly/staging/live-58fe95a-stage5/evidence/merged-overlay-host-avx-9e2cd87/`.
+Held-key gameplay, D3D11-on-12 wrapping and fullscreen remain open.
+
+## Vulkan Streamline-disabled verification
+
+The merged core also built without the corrected Vulkan Streamline SDK.
+All 13 focused Release contracts passed, including the overlay DLL
+contracts and embedded render and FG12 clients. Runtime, AC7, Loader
+and Minecraft kept their recorded export inventories. The direct DLL
+probe still received `NOT_SUPPORTED` from Streamline initialization
+and `NOT_COMPILED` from DLSS-G creation. The latter cleared both
+outputs and made no host callbacks. Logs are under
+`.local/rust-1.94.1-verification/integrated-streamline-disabled-9e2cd87/`.
