@@ -18,6 +18,7 @@
 #include "sr_swap.h"
 #include "sr_reconstruction.h"
 #include "sr_temporal.h"
+#include <rescaleframe/d3d11_state.h>
 #include <rescaleframe/game_frame.h>
 #include <rescaleframe/overlay_api.h>
 #include <rescaleframe/texture_dump.h>
@@ -149,8 +150,6 @@ struct Host final : SwapHost {
     RoundTripPass pass;
     UpscalePass upscale_pass;
     TemporalTargets temporal{};
-    ComPtr<ID3D11ShaderResourceView> motion_view;   // SRV of the motion stage's target, rebuilt when it changes
-    void* motion_view_texture{};
     uint64_t last_drop_refs{};
     uint64_t twin_bytes{};
     // While controller.seam() runs: the Rust scope lent by the seam call, and the seam being closed.
@@ -260,8 +259,6 @@ struct Host final : SwapHost {
         depth = {};
         scratch = {};
         temporal = {};
-        motion_view.Reset();
-        motion_view_texture = nullptr;
         last_drop_refs = refs;
     }
     // Stage 2 and later: the Rust seam pass decides inputs, captures and fallback; the leaves below act on these views.
@@ -632,8 +629,6 @@ const rsf_anomaly_sr_stage_platform platform{
     .host_stats = [](uint64_t* bytes, uint64_t* refs) { *bytes = host.twin_bytes; *refs = host.last_drop_refs; },
     .host_reset = [] {
         host.temporal = {};
-        host.motion_view.Reset();
-        host.motion_view_texture = nullptr;
         host.pass.reset();
         host.upscale_pass.reset();
     },
@@ -666,22 +661,14 @@ const rsf_anomaly_sr_stage_platform platform{
         *out = {target.texture, target.written, target.main, target.frame, target.width, target.height};
         return target.texture != nullptr;
     },
-    .motion_view = [](void* texture) {
-        if (host.motion_view_texture != texture) {
-            host.motion_view.Reset();
-            host.motion_view_texture = texture;
-            auto* d3d = host.device();
-            if (!d3d || FAILED(d3d->CreateShaderResourceView(static_cast<ID3D11Texture2D*>(texture), nullptr, &host.motion_view)))
-                host.motion_view.Reset();
-        }
-        return host.motion_view != nullptr;
-    },
-    .seam_prepare = [](bool motion_present, bool first_person_zero) {
+    .create_motion_view = rsf_d3d11_create_shader_view,
+    .seam_prepare = [](void* motion_view, bool first_person_zero) {
         if (!host.seam_views || !host.seam_inputs) return false;
         const auto& views = *host.seam_views;
         const auto& in = *host.seam_inputs;
         auto& t = host.temporal;
-        const PrepareViews prepare{views.colour, motion_present ? host.motion_view.Get() : t.empty_motion_srv.Get(), views.depth,
+        const auto motion = motion_view ? static_cast<ID3D11ShaderResourceView*>(motion_view) : t.empty_motion_srv.Get();
+        const PrepareViews prepare{views.colour, motion, views.depth,
             in.render_width, in.render_height, t.colour_rtv.Get(), t.motion_rtv.Get(), first_person_depth_limit,
             first_person_zero};
         return host.upscale_pass.prepare(host.context(), prepare);

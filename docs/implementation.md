@@ -4,6 +4,15 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The Anomaly SR stage retains the motion shader view in Rust. The cache
+reuses a view for the same device and texture, and releases it when the
+device or twin resources change or the stage shuts down. The previous
+native cache recorded the texture even when view creation failed, so it
+never retried that texture. The new stage caches only successful views
+and uses the existing empty motion input on a refusal. The D3D11 view
+creation helper is shared with the other adapter passes. The private
+bindings were regenerated. Build and runtime validation remain open.
+
 The Anomaly SR stage now owns its four D3D11 timestamp slots and their
 device and query references in Rust. It records the existing world and
 seam boundaries, polls without flushing, and keeps abandoned intervals

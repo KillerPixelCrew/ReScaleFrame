@@ -416,19 +416,26 @@ impl Ini<'_> {
 }
 
 // ---- process state ------------------------------------------------------------------------------------------
-struct Staging(Lease);
-// The staging textures are free-threaded D3D11 resources released on the render thread under the stage lock.
-unsafe impl Send for Staging {}
+struct GpuLease(Lease);
+// D3D11 resources and views are free-threaded. The stage serializes access.
+unsafe impl Send for GpuLease {}
 
 #[derive(Clone, Copy)]
 struct Raw(*mut c_void);
 // Opaque engine identities and log context, used only on the threads the native caller allows.
 unsafe impl Send for Raw {}
 
+struct MotionView {
+    device: Raw,
+    texture: Raw,
+    twin_drops: u64,
+    view: GpuLease,
+}
+
 #[derive(Default)]
 struct BurstFrame {
-    world: Option<Staging>,
-    presented: Option<Staging>,
+    world: Option<GpuLease>,
+    presented: Option<GpuLease>,
     engine_frame: u32,
     jitter: JitterState,
     mip_bias: f32,
@@ -544,6 +551,7 @@ struct State {
     burst: Burst,
     burst_gate: BurstGate,
     timer: gpu_timer::Timer,
+    motion_view: Option<MotionView>,
     reported: Reported,
 }
 
@@ -579,6 +587,7 @@ impl Default for State {
             burst: Burst::default(),
             burst_gate: BurstGate::new(),
             timer: gpu_timer::Timer::default(),
+            motion_view: None,
             reported: Reported::default(),
         }
     }
@@ -1256,6 +1265,7 @@ impl Stage {
         let mut guard = self.lock();
         let state = guard.get_or_insert_with(Default::default);
         leaf!(p, shutdown());
+        state.motion_view = None;
         state.native_depth_frame = None;
         state.timer = gpu_timer::Timer::default();
         self.publish(state, default_jitter());
@@ -1580,6 +1590,11 @@ impl Stage {
         let (sample, reset) = self.choose_jitter(state, &mut facts);
         state.prepared_this_frame = true;
         let swapped = leaf!(p, prepare(&facts));
+        if state.motion_view.as_ref().is_some_and(|cached| {
+            cached.device.0 != facts.device || cached.twin_drops != self.counters().twin_drops
+        }) {
+            state.motion_view = None;
+        }
         if state.config.stage == 5 && (swapped || !facts.scope) {
             // Expose the stock depth only for the main frame that actually ran with SR off.
             state.native_depth_frame = if !swapped && !facts.scope && !leaf!(p, driver_enabled()) {
@@ -1757,9 +1772,38 @@ impl Stage {
         ok
     }
 
-    fn own(&self, handle: *mut c_void) -> Option<Staging> {
+    fn own(&self, handle: *mut c_void) -> Option<GpuLease> {
         let release = self.platform().release?;
-        Lease::new(handle, release).map(Staging)
+        Lease::new(handle, release).map(GpuLease)
+    }
+
+    fn motion_view(
+        &self,
+        state: &mut State,
+        device: *mut c_void,
+        texture: *mut c_void,
+    ) -> *mut c_void {
+        if let Some(cached) = &state.motion_view
+            && cached.device.0 == device
+            && cached.texture.0 == texture
+        {
+            return cached.view.0.as_ptr();
+        }
+        state.motion_view = None;
+        let p = self.platform();
+        let Some(release) = p.release else {
+            return null_mut();
+        };
+        let handle = leaf!(p, create_motion_view(device, texture));
+        if let Some(view) = Lease::new(handle, release) {
+            state.motion_view = Some(MotionView {
+                device: Raw(device),
+                texture: Raw(texture),
+                twin_drops: self.counters().twin_drops,
+                view: GpuLease(view),
+            });
+        }
+        handle
     }
 
     // Stages 4 and 5 at the S-B seam, after the engine fields are restored (section 12). Every refusal draws the Stage 2
@@ -1774,10 +1818,8 @@ impl Stage {
             leaf!(p, driver_count(reason));
             bilinear()
         };
-        if leaf!(p, context()).is_null()
-            || leaf!(p, device()).is_null()
-            || !leaf!(p, temporal_ready())
-        {
+        let device = leaf!(p, device());
+        if device.is_null() || leaf!(p, context()).is_null() || !leaf!(p, temporal_ready()) {
             return refuse(REFUSAL_PREPARE);
         }
         let stage = state.config.stage;
@@ -1819,9 +1861,14 @@ impl Stage {
             && target.frame == engine_frame
             && target.width == rw
             && target.height == rh;
-        let motion_present = current && leaf!(p, motion_view(target.texture));
+        let motion_view = if current {
+            self.motion_view(state, device, target.texture)
+        } else {
+            null_mut()
+        };
+        let motion_present = !motion_view.is_null();
         let first_person_zero = self.live.first_person_zero.load(Ordering::Relaxed);
-        if !leaf!(p, seam_prepare(motion_present, first_person_zero)) {
+        if !leaf!(p, seam_prepare(motion_view, first_person_zero)) {
             return refuse(REFUSAL_PREPARE);
         }
         leaf!(p, driver_count_prepared(!motion_present));
@@ -2084,7 +2131,7 @@ impl Stage {
         let count = state.burst.frames.len();
         let mut written = 0u32;
         for (i, frame) in state.burst.frames.iter_mut().enumerate() {
-            let write = |name: String, texture: &Option<Staging>| {
+            let write = |name: String, texture: &Option<GpuLease>| {
                 let (mut w, mut h, mut f) = (0, 0, 0);
                 let path = wide(&state.burst.directory.join(name));
                 let texture = texture.as_ref().map_or(null_mut(), |t| t.0.as_ptr());

@@ -1042,10 +1042,17 @@ pub struct rsf_anomaly_sr_stage_platform {
     pub motion_target: ::core::option::Option<
         unsafe extern "C" fn(arg1: *mut rsf_anomaly_sr_motion_target) -> bool,
     >,
-    pub motion_view:
-        ::core::option::Option<unsafe extern "C" fn(texture: *mut ::core::ffi::c_void) -> bool>,
+    pub create_motion_view: ::core::option::Option<
+        unsafe extern "C" fn(
+            device: *mut ::core::ffi::c_void,
+            texture: *mut ::core::ffi::c_void,
+        ) -> *mut ::core::ffi::c_void,
+    >,
     pub seam_prepare: ::core::option::Option<
-        unsafe extern "C" fn(motion_present: bool, first_person_zero: bool) -> bool,
+        unsafe extern "C" fn(
+            motion_view: *mut ::core::ffi::c_void,
+            first_person_zero: bool,
+        ) -> bool,
     >,
     pub temporal_textures:
         ::core::option::Option<unsafe extern "C" fn(arg1: *mut rsf_anomaly_sr_temporal_textures)>,
@@ -1225,8 +1232,8 @@ const _: () = {
         [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, temporal_targets) - 312usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::motion_target"]
         [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, motion_target) - 320usize];
-    ["Offset of field: rsf_anomaly_sr_stage_platform::motion_view"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, motion_view) - 328usize];
+    ["Offset of field: rsf_anomaly_sr_stage_platform::create_motion_view"]
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, create_motion_view) - 328usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::seam_prepare"]
         [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, seam_prepare) - 336usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::temporal_textures"]

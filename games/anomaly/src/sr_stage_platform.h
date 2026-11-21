@@ -282,8 +282,8 @@ typedef struct rsf_anomaly_sr_stage_platform {
     bool (*temporal_ready)(void);
     int32_t (*temporal_targets)(uint32_t format);   // 0 kept, 1 created, -1 refused
     bool (*motion_target)(rsf_anomaly_sr_motion_target*);
-    bool (*motion_view)(void* texture);
-    bool (*seam_prepare)(bool motion_present, bool first_person_zero);
+    void* (*create_motion_view)(void* device, void* texture);   // an owned reference or null
+    bool (*seam_prepare)(void* motion_view, bool first_person_zero);
     void (*temporal_textures)(rsf_anomaly_sr_temporal_textures*);
     bool (*reinsert)(void);
     // TemporalDriver (sr_temporal.h).

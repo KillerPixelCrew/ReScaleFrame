@@ -157,13 +157,15 @@ unsafe extern "C" fn motion_target(out: *mut rsf_anomaly_sr_motion_target) -> bo
     unsafe { out.write(target) };
     !target.texture.is_null()
 }
-extern "C" fn motion_view(_: *mut c_void) -> bool {
-    true
+extern "C" fn create_motion_view(_: *mut c_void, texture: *mut c_void) -> *mut c_void {
+    texture
 }
+extern "C" fn release_view(_: *mut c_void) {}
 extern "C" fn engine_frame() -> u32 {
     fake(|f| f.engine_frame)
 }
-extern "C" fn seam_prepare(motion: bool, first_person_zero: bool) -> bool {
+extern "C" fn seam_prepare(view: *mut c_void, first_person_zero: bool) -> bool {
+    let motion = !view.is_null();
     record(format!(
         "seam prepare motion={motion} fp_zero={first_person_zero}"
     ));
@@ -361,7 +363,8 @@ fn platform() -> Box<Platform> {
         temporal_ready: Some(temporal_ready),
         temporal_targets: Some(temporal_targets),
         motion_target: Some(motion_target),
-        motion_view: Some(motion_view),
+        create_motion_view: Some(create_motion_view),
+        release: Some(release_view),
         seam_prepare: Some(seam_prepare),
         reinsert: Some(reinsert),
         driver_bind: Some(driver_bind),
