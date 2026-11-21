@@ -94,9 +94,8 @@ bool rsf_ac7_capture_execution_pass(const rsf_game_render_pass* pass);
 void rsf_ac7_capture_execution_root(RootRecord* root);
 GeometryScope rsf_ac7_capture_geometry_scope();
 
-// Record/reset/copy use the native session guard to share a boundary with blob snapshots.
+// Record and copy share the native storage guard with the companion blob snapshots.
 bool rsf_ac7_capture_copy_roots(void* user, MotionCopyRoots copy);
-void rsf_ac7_capture_reset_records();
 
 // The checkpoint uses copied roots and blobs. Finish uses guarded native lists for the
 // duration of the call. File effects run after the Rust record lock has been released.

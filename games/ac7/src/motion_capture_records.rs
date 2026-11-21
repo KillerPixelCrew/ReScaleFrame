@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! Native CPU observations, candidate graph-to-RHI associations and capture publication.
-//! The C++ capture owns the session, guarded engine reads, GPU data and narrow file effects.
+//! The C++ capture owns guarded engine reads, GPU data and narrow file effects.
 
 mod artifacts;
 
@@ -544,8 +544,7 @@ pub unsafe extern "C" fn rsf_ac7_capture_copy_roots(user: *mut c_void, copy: Cop
     records.roots.is_empty() || unsafe { copy(user, records.roots.as_ptr(), records.roots.len()) }
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn rsf_ac7_capture_reset_records() {
+pub(super) fn reset_records() {
     let mut records = records();
     records.engine.clear();
     records.roots.clear();

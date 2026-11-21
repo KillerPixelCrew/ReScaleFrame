@@ -210,8 +210,8 @@ struct Snapshot {
 
 impl Snapshot {
     fn finish() -> Self {
-        // Native has stopped the session and holds its guard across finish. Record writers
-        // and reset need that guard, so finish can take the stopped arrays without copying.
+        // The scheduler disarmed the session and excludes reset until finish returns. Native
+        // holds its storage guard against record writers while finish borrows the arrays.
         let mut records = records();
         Self {
             counts: NativeRecordCounts {
@@ -311,7 +311,7 @@ fn write_summary(
         concat!(
             "{{\"schema\":1,\"qpc_frequency\":{},\"engine_hooks\":{},\"renderer_root_hooks\":{},",
             "\"root_records\":{},\"root_dropped\":{},\"command_associations\":{},\"command_associations_dropped\":{},",
-            "\"intervals\":60,\"engine_records\":{},\"draw_records\":{},\"engine_dropped\":{},\"draw_dropped\":{},",
+            "\"intervals\":{},\"engine_records\":{},\"draw_records\":{},\"engine_dropped\":{},\"draw_dropped\":{},",
             "\"blob_dropped\":{},\"shader_creation_dropped\":{},\"readbacks\":{},\"readback_failures\":{},",
             "\"colour_readbacks\":{},\"colour_readback_failures\":{},\"capture_failures\":{},\"files_written\":{},",
             "\"timing\":\"present intervals and QPC; CPU selection may precede GPU execution\",",
@@ -328,6 +328,7 @@ fn write_summary(
         counts.roots_dropped,
         counts.commands,
         counts.commands_dropped,
+        crate::motion_capture_session::INTERVALS,
         counts.engine,
         draws,
         counts.engine_dropped,
