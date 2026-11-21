@@ -432,11 +432,3 @@ unsafe extern "C" fn rsf_core_native_fg_stage(
         stage(p, call!(p, generation), &name, source, native, result, None);
     }
 }
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_native_fg_hitch_log(message: *const c_char) {
-    if !message.is_null() {
-        let text = unsafe { CStr::from_ptr(message) }.to_string_lossy();
-        sink(false).say(&text);
-    }
-}

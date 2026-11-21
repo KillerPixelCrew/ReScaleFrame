@@ -221,12 +221,26 @@ pub struct rsf_nfg_cpu_platform {
     pub allows_fg: ::core::option::Option<
         unsafe extern "C" fn(arg1: *const rsf_frame_record) -> ::core::ffi::c_int,
     >,
-    pub watch_submission:
-        ::core::option::Option<unsafe extern "C" fn(source: u64, opened_qpc: u64)>,
+    pub duplicate_render_thread:
+        ::core::option::Option<unsafe extern "C" fn() -> *mut ::core::ffi::c_void>,
+    pub sample_render_thread: ::core::option::Option<
+        unsafe extern "C" fn(
+            thread: *mut ::core::ffi::c_void,
+            addresses: *mut u64,
+            capacity: usize,
+        ) -> usize,
+    >,
+    pub describe_address: ::core::option::Option<
+        unsafe extern "C" fn(
+            address: u64,
+            output: *mut ::core::ffi::c_char,
+            capacity: usize,
+        ) -> usize,
+    >,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of rsf_nfg_cpu_platform"][::core::mem::size_of::<rsf_nfg_cpu_platform>() - 256usize];
+    ["Size of rsf_nfg_cpu_platform"][::core::mem::size_of::<rsf_nfg_cpu_platform>() - 272usize];
     ["Alignment of rsf_nfg_cpu_platform"][::core::mem::align_of::<rsf_nfg_cpu_platform>() - 8usize];
     ["Offset of field: rsf_nfg_cpu_platform::has_owner"]
         [::core::mem::offset_of!(rsf_nfg_cpu_platform, has_owner) - 0usize];
@@ -290,6 +304,10 @@ const _: () = {
         [::core::mem::offset_of!(rsf_nfg_cpu_platform, thread_id) - 232usize];
     ["Offset of field: rsf_nfg_cpu_platform::allows_fg"]
         [::core::mem::offset_of!(rsf_nfg_cpu_platform, allows_fg) - 240usize];
-    ["Offset of field: rsf_nfg_cpu_platform::watch_submission"]
-        [::core::mem::offset_of!(rsf_nfg_cpu_platform, watch_submission) - 248usize];
+    ["Offset of field: rsf_nfg_cpu_platform::duplicate_render_thread"]
+        [::core::mem::offset_of!(rsf_nfg_cpu_platform, duplicate_render_thread) - 248usize];
+    ["Offset of field: rsf_nfg_cpu_platform::sample_render_thread"]
+        [::core::mem::offset_of!(rsf_nfg_cpu_platform, sample_render_thread) - 256usize];
+    ["Offset of field: rsf_nfg_cpu_platform::describe_address"]
+        [::core::mem::offset_of!(rsf_nfg_cpu_platform, describe_address) - 264usize];
 };

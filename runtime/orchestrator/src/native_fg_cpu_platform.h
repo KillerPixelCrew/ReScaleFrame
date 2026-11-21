@@ -63,7 +63,9 @@ typedef struct rsf_nfg_cpu_platform {
     uint64_t (*qpc_frequency)(void);
     uint32_t (*thread_id)(void);
     int (*allows_fg)(const rsf_frame_record*);
-    void (*watch_submission)(uint64_t source, uint64_t opened_qpc);
+    void* (*duplicate_render_thread)(void); /* Owned thread handle, or null. */
+    size_t (*sample_render_thread)(void* thread, uint64_t* addresses, size_t capacity);
+    size_t (*describe_address)(uint64_t address, char* output, size_t capacity);
 } rsf_nfg_cpu_platform;
 
 extern const rsf_nfg_cpu_platform rsf_native_fg_cpu_platform;

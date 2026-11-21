@@ -8,12 +8,8 @@
 #include <wrl/client.h>
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <cstdio>
-#include <cstring>
-#include <iterator>
 
-extern "C" void rsf_core_native_fg_hitch_log(const char*);
 extern "C" int32_t rsf_d3d11_present_pace_for_generation(uint64_t, rsf_pacing_owner, uint64_t);
 
 namespace {
@@ -30,17 +26,6 @@ static_assert(RSF_NFG_CPU_SUBMIT_END == RSF_LATENCY_RENDER_SUBMIT_END);
 static_assert(RSF_NFG_CPU_PRESENT_START == RSF_LATENCY_PRESENT_START);
 static_assert(RSF_NFG_CPU_PRESENT_END == RSF_LATENCY_PRESENT_END);
 
-uint64_t now_qpc() {
-    LARGE_INTEGER now{};
-    QueryPerformanceCounter(&now);
-    return uint64_t(now.QuadPart);
-}
-
-// The diagnostic worker samples a suspended native thread. Resume it before
-// module lookup or calling the log sink.
-std::atomic<uint64_t> submission_opened_qpc{0}, submission_opened_id{0};
-std::atomic<HANDLE> sampled_thread{nullptr};
-std::atomic<uint32_t> hitch_watch_started{0};
 size_t describe_address(uint64_t address, char* text, size_t size) {
     HMODULE module = nullptr;
     if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
@@ -48,71 +33,42 @@ size_t describe_address(uint64_t address, char* text, size_t size) {
     MEMORY_BASIC_INFORMATION region{};
     if (!VirtualQuery(reinterpret_cast<void*>(uintptr_t(address)), &region, sizeof(region)) ||
         !(region.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY))) return 0;
-    wchar_t path[MAX_PATH]{}; GetModuleFileNameW(module, path, MAX_PATH);
+    wchar_t path[MAX_PATH]{};
+    const auto length = GetModuleFileNameW(module, path, MAX_PATH);
+    if (!length || length >= MAX_PATH) return 0;
     const wchar_t* leaf = path; for (const wchar_t* c = path; *c; ++c) if (*c == L'\\') leaf = c + 1;
     const int written = std::snprintf(text, size, " %ls+0x%llx", leaf,
         static_cast<unsigned long long>(address - uint64_t(uintptr_t(module))));
     return written > 0 && size_t(written) < size ? size_t(written) : 0;
 }
-DWORD WINAPI hitch_watch(void*) {
-    LARGE_INTEGER frequency{}; QueryPerformanceFrequency(&frequency);
-    uint64_t current = 0; uint32_t taken = 0, total = 0;
-    static uint64_t words[512];
-    while (total < 36) {
-        Sleep(2);
-        const auto opened = submission_opened_qpc.load(std::memory_order_acquire);
-        const auto id = submission_opened_id.load(std::memory_order_acquire);
-        const auto thread = sampled_thread.load(std::memory_order_acquire);
-        if (!opened || !thread) continue;
-        if (id != current) { current = id; taken = 0; }
-        const double open_ms = double(now_qpc() - opened) * 1000.0 / double(frequency.QuadPart);
-        if (taken >= 3 || open_ms < 15.0 * (taken + 1)) continue;
-        uint64_t rip = 0; size_t count = 0;
-        if (SuspendThread(thread) == DWORD(-1)) continue;
-        CONTEXT context{}; context.ContextFlags = CONTEXT_CONTROL;
-        if (GetThreadContext(thread, &context)) {
-            rip = context.Rip;
-            MEMORY_BASIC_INFORMATION region{};
-            if (VirtualQuery(reinterpret_cast<void*>(uintptr_t(context.Rsp)), &region, sizeof(region)) &&
-                region.State == MEM_COMMIT) {
-                const auto end = uint64_t(uintptr_t(region.BaseAddress)) + region.RegionSize;
-                count = std::min<size_t>(std::size(words), size_t((end - context.Rsp) / 8));
-                std::memcpy(words, reinterpret_cast<void*>(uintptr_t(context.Rsp)), count * 8);
+void* duplicate_render_thread() {
+    HANDLE copy = nullptr;
+    return DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &copy,
+        THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, 0) ? copy : nullptr;
+}
+
+size_t sample_render_thread(void* thread, uint64_t* addresses, size_t capacity) {
+    if (capacity == 0 || SuspendThread(thread) == DWORD(-1)) return 0;
+    CONTEXT context{};
+    context.ContextFlags = CONTEXT_CONTROL;
+    size_t count = 0;
+    if (GetThreadContext(thread, &context)) {
+        addresses[count++] = context.Rip;
+        const auto stack = reinterpret_cast<const void*>(uintptr_t(context.Rsp));
+        MEMORY_BASIC_INFORMATION region{};
+        if (VirtualQuery(stack, &region, sizeof(region)) &&
+            region.State == MEM_COMMIT && !(region.Protect & (PAGE_NOACCESS | PAGE_GUARD))) {
+            const auto offset = uintptr_t(stack) - uintptr_t(region.BaseAddress);
+            if (offset < region.RegionSize) {
+                const size_t words = std::min(capacity - count, (region.RegionSize - offset) / sizeof(uint64_t));
+                SIZE_T copied = 0;
+                if (words && ReadProcessMemory(GetCurrentProcess(), stack, addresses + count, words * sizeof(uint64_t), &copied))
+                    count += copied / sizeof(uint64_t);
             }
         }
-        ResumeThread(thread);
-        ++taken; ++total;
-        char text[1900]; size_t used = size_t(std::snprintf(text, sizeof(text),
-            "Render hitch source=%llu open %.1f ms; executing", static_cast<unsigned long long>(id), open_ms));
-        used += describe_address(rip, text + used, sizeof(text) - used);
-        used += size_t(std::snprintf(text + used, sizeof(text) - used, "; stack code addresses:"));
-        uint32_t listed = 0;
-        for (size_t i = 0; i < count && listed < 40 && used + 96 < sizeof(text); ++i) {
-            const auto added = describe_address(words[i], text + used, sizeof(text) - used);
-            if (added) { used += added; ++listed; }
-        }
-        rsf_core_native_fg_hitch_log(text);
     }
-    return 0;
-}
-void watch_submission(uint64_t source, uint64_t opened_qpc) {
-    if (!opened_qpc) {
-        submission_opened_qpc.store(0, std::memory_order_release);
-        return;
-    }
-    if (!sampled_thread.load(std::memory_order_acquire)) {
-        HANDLE duplicate = nullptr;
-        if (DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &duplicate,
-                THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, 0)) {
-            HANDLE empty = nullptr;
-            if (!sampled_thread.compare_exchange_strong(empty, duplicate)) CloseHandle(duplicate);
-        }
-    }
-    if (!hitch_watch_started.exchange(1)) {
-        if (const HANDLE watcher = CreateThread(nullptr, 0, hitch_watch, nullptr, 0, nullptr)) CloseHandle(watcher);
-    }
-    submission_opened_id.store(source, std::memory_order_release);
-    submission_opened_qpc.store(opened_qpc, std::memory_order_release);
+    // No module lookup, formatting or log sink runs while the thread is suspended.
+    return ResumeThread(thread) == DWORD(-1) ? 0 : count;
 }
 
 HANDLE completion_event() {
@@ -209,7 +165,9 @@ extern "C" const rsf_nfg_cpu_platform rsf_native_fg_cpu_platform{
     },
     +[]() -> uint32_t { return GetCurrentThreadId(); },
     rsf_frame_allows_fg,
-    watch_submission,
+    duplicate_render_thread,
+    sample_render_thread,
+    describe_address,
 };
 
 extern "C" RSF_RUNTIME_API void rsf_native_fg_rendered_source_set(uint32_t enabled) {

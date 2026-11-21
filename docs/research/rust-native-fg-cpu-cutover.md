@@ -151,3 +151,32 @@ and configuration changes and switch deferral were compiled and reviewed
 against their lock sites. Physical driver
 sleep behavior, real backend switching, generated presentation, game
 acceptance and measured input-to-display latency remain unverified.
+
+## Render hitch diagnostic
+
+The diagnostic now owns the watched interval, sample schedule, thread
+handle and log formatting in Rust. One lock publishes the session,
+source, submission and start time together. Only the matching close
+clears that interval. A later render thread receives its own handle,
+and the native latency session drain releases the matching handle.
+The existing three-second screen gate remains at the submission
+observer. The sampler keeps the 2 ms polling interval, the 15, 30 and
+45 ms thresholds, and the 36-attempt process limit.
+
+The C++ leaves duplicate a current-thread handle, take a bounded
+snapshot of that thread and format one address from a loaded module.
+The snapshot checks the committed readable stack range and resumes
+the thread before the Rust owner looks up modules or logs anything.
+If the watched interval changes during the snapshot, the owner drops
+the stale sample. A failed thread launch can be retried on the next
+eligible submission.
+
+The Rust tests cover stale closes and both sampling limits. The
+native CPU contract duplicates and samples its own test thread,
+resolves the captured instruction address and joins the resumed
+thread. It creates no graphics device. The seven focused MSVC
+contracts passed in both Debug and Release. The CPU owner contract
+passed 20 consecutive Release runs. All 295 locked Rust tests,
+formatting and Clippy passed. Both configurations matched the recorded
+Runtime, AC7, Loader and Minecraft export names and ordinals.
+Game hitch traces require a separate run with diagnostics enabled.

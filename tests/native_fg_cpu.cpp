@@ -7,6 +7,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
+#include <future>
 #include <mutex>
 #include <thread>
 #include <utility>
@@ -175,9 +176,33 @@ void mock_platform() {
         return key == primary_window || key == replacement_window ? GetCurrentThreadId() : 0;
     };
 }
+void sample_native_thread() {
+    const auto& native = rsf_native_fg_cpu_platform;
+    std::promise<void*> duplicated;
+    auto handle = duplicated.get_future();
+    std::atomic<bool> done{};
+    std::thread renderer([&] {
+        duplicated.set_value(native.duplicate_render_thread());
+        while (!done.load()) Sleep(1);
+    });
+    void* thread = handle.get();
+    CHECK(thread != nullptr);
+    if (thread) {
+        uint64_t addresses[9]{};
+        const size_t count = native.sample_render_thread(thread, addresses, 9);
+        CHECK(count > 0 && count <= 9);
+        CHECK(addresses[0] != 0);
+        char location[384]{};
+        CHECK(native.describe_address(addresses[0], location, sizeof(location)) > 0);
+    }
+    done.store(true);
+    renderer.join();
+    if (thread) CloseHandle(thread);
+}
 } // namespace
 
 int main() {
+    sample_native_thread();
     mock_platform();
     rsf_core_native_fg_reflex_ordering_set(1);
     CHECK(send(fact(1, RSF_GAME_CPU_FRAME_BEGIN)));

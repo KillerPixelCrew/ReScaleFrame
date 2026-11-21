@@ -1127,6 +1127,12 @@ Release exports matched the Runtime and both carriers. Real provider
 switching, device timing and game behavior await validation.
 See [the Direct3D CPU cutover audit](research/rust-native-fg-cpu-cutover.md).
 
+Rust also owns the Direct3D render hitch diagnostic's interval,
+sample limits and thread handle. A late close leaves a different
+submission's interval intact. The native CPU contract checks the
+Windows sampling leaf on its own test thread.
+See [the render hitch diagnostic](research/rust-native-fg-cpu-cutover.md#render-hitch-diagnostic).
+
 The D3D11 translucency owner now keeps its pass order, mask and cloud-depth
 leases, device identity and publication in Rust. Cloud association uses
 the reported session, rectangle and pass order. It refuses late composites

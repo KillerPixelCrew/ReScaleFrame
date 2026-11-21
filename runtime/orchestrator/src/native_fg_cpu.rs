@@ -57,6 +57,7 @@ macro_rules! call {
 }
 
 mod diagnostics;
+mod hitch;
 use diagnostics::{Diagnostics, audit, failure, report_latency_window};
 pub(crate) use diagnostics::{Failure, report_timing, sr_failure, stage, trace};
 
@@ -1324,7 +1325,7 @@ unsafe extern "C" fn rsf_core_native_fg_frame(pass: *const Pass, begin: u32, p: 
 
 fn watch(p: &Platform, pass: &Pass, begin: bool) {
     if !begin {
-        call!(p, watch_submission, pass.source_frame_id, 0);
+        hitch::close(Source::from_pass(pass), pass.submission_id);
         return;
     }
     if requested().debug == 0 {
@@ -1340,7 +1341,7 @@ fn watch(p: &Platform, pass: &Pass, begin: bool) {
     record.struct_size = size_of::<rsf_frame_record>() as u32;
     record.screen = screen;
     if now.saturating_sub(since) >= 3000 && call!(p, allows_fg, &record) != 0 {
-        call!(p, watch_submission, pass.source_frame_id, now_qpc());
+        hitch::open(p, Source::from_pass(pass), pass.submission_id, now_qpc());
     }
 }
 
@@ -1582,6 +1583,7 @@ extern "C" fn rsf_core_native_latency_end_session(session: u64, p: &Platform) {
     if rsf_native_cpu_release_session(session) == 0 {
         return;
     }
+    hitch::end_session(session);
     let host = call!(p, host);
     if !host.is_null() {
         call!(p, host_retire, host, u64::MAX);
