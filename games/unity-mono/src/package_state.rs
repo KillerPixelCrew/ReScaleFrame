@@ -2,17 +2,24 @@
 //! The Unity package's state behind ReScaleFrame.Unity.Native.dll's rsfu_* exports
 //! (integrations/unity/native/package.cpp): the stored settings and their validation, the status
 //! snapshot, the render plan, temporal readiness, the pending reconfiguration, the session
-//! lifecycle with its result codes, and the sequencing of the render callback's D3D12 SR views
-//! (their table and slot rules are package_views.rs). package.cpp keeps the Unity, DXGI, Vulkan
-//! and preview work, the render callback's routing and the input window, and lends the SDK and
-//! Runtime calls through rsf_unity_package_platform (integrations/unity/native/package_state.h);
-//! nothing here loads a Runtime or references its exports.
+//! lifecycle with its result codes, the sequencing of the render callback's D3D12 SR views
+//! (their table and slot rules are package_views.rs), and the presentation: the package identity,
+//! the generation install and the window pass's provider request (presentation.rs). package.cpp
+//! keeps the Unity, DXGI, Vulkan and preview work, the render callback's routing, the window
+//! guard, the input window and the log, and lends the SDK and Runtime calls through
+//! rsf_unity_package_platform (integrations/unity/native/package_state.h); nothing here loads a
+//! Runtime or references its exports.
 //!
-//! package.cpp's mutex still serializes the exports and the render path where it did. The state
-//! lock here only makes the state sound for the callers that never took that mutex (Unity's
-//! device shutdown, renderer bridge failures, temporal readiness), and it is never held across a
-//! leaf. The view lock is held across the SR leaves, which never re-enter, so Unity's device
-//! shutdown cannot destroy a context mid-evaluation; it is always taken before the state lock.
+//! package.cpp's mutex still serializes the exports and the SR pass where it did. The state lock
+//! here only makes the state sound for the callers that never took that mutex (Unity's device
+//! shutdown, renderer bridge failures, temporal readiness, the plugin load's install and the
+//! window pass's provider request), and it is never held across a leaf. The view lock is held
+//! across the SR leaves, which never re-enter, so Unity's device shutdown cannot destroy a
+//! context mid-evaluation; the presentation lock is held across the install leaf. Both are always
+//! taken before the state lock.
+mod presentation;
+
+use self::presentation::{Identity, Presentation};
 use crate::package_abi::{
     RSF_FG_STAT_TOTAL_PRESENTED, RSF_SR_NONE, RSF_UNITY_SETTINGS_ABI_VERSION,
     rsf_native_fg_options, rsf_native_fg_status, rsf_native_latency_status, rsf_sharpening_options,
@@ -22,12 +29,12 @@ use crate::package_abi::{
 use crate::package_views::{View, Views};
 use crate::runtime_abi::{
     RSF_FG_BACKEND_AUTO, RSF_FG_BACKEND_DLSS, RSF_FG_BACKEND_FSR3, RSF_FG_BACKEND_FSR4,
-    RSF_FG_BACKEND_XESS, RSF_FG_FIXED, RSF_SR_AUTO, RSF_SR_DLSS, RSF_SR_SPATIAL,
+    RSF_FG_BACKEND_XESS, RSF_FG_FIXED, RSF_SR_AUTO, RSF_SR_DLSS, RSF_SR_SPATIAL, rsf_fg12_setup,
 };
 use rsf_game_sys::{
     RSF_GAME_RENDER_RECONFIGURE, rsf_camera_frame, rsf_game_render_config, rsf_game_render_pass,
 };
-use std::ffi::{CString, c_char, c_int, c_void};
+use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering::SeqCst};
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -120,7 +127,7 @@ struct Leaves {
     present_backend: unsafe extern "C" fn() -> u32,
     present_switch_result: unsafe extern "C" fn() -> i32,
     present_generation: unsafe extern "C" fn() -> u64,
-    open: unsafe extern "C" fn(*mut c_void) -> u32,
+    open: unsafe extern "C" fn() -> u32,
     bridge_activate: unsafe extern "C" fn(u32),
     bridge_drained: unsafe extern "C" fn() -> u32,
     end_session: unsafe extern "C" fn() -> u32,
@@ -139,6 +146,12 @@ struct Leaves {
     sr_destroy: unsafe extern "C" fn(*mut rsf_sr12),
     log: unsafe extern "C" fn(*const c_char),
     bridge_release: unsafe extern "C" fn(),
+    accept_window: unsafe extern "C" fn(*mut c_void, *mut c_void) -> c_int,
+    backend_log: unsafe extern "C" fn(*mut c_void, *const c_char),
+    fg_install: unsafe extern "C" fn(*const rsf_fg12_setup) -> i32,
+    present_has_owner: unsafe extern "C" fn() -> u32,
+    present_request: unsafe extern "C" fn(u32) -> i32,
+    fg_default_backend: unsafe extern "C" fn(*mut u32) -> u32,
 }
 
 // SAFETY for every call below: the leaves are package.cpp's noexcept functions and borrow their
@@ -173,6 +186,12 @@ impl Leaves {
             sr_destroy: p.sr_destroy?,
             log: p.log?,
             bridge_release: p.bridge_release?,
+            accept_window: p.accept_window?,
+            backend_log: p.backend_log?,
+            fg_install: p.fg_install?,
+            present_has_owner: p.present_has_owner?,
+            present_request: p.present_request?,
+            fg_default_backend: p.fg_default_backend?,
         })
     }
 
@@ -216,8 +235,8 @@ impl Leaves {
     fn present_generation(&self) -> u64 {
         unsafe { (self.present_generation)() }
     }
-    fn open(&self, user: *mut c_void) -> bool {
-        unsafe { (self.open)(user) != 0 }
+    fn open(&self) -> bool {
+        unsafe { (self.open)() != 0 }
     }
     fn bridge_activate(&self, enabled: bool) {
         unsafe { (self.bridge_activate)(u32::from(enabled)) }
@@ -299,6 +318,7 @@ struct State {
 struct Package {
     state: Mutex<State>,
     views: Mutex<Views>,
+    presentation: Presentation,
     temporal_ready: AtomicBool,
     /// A renderer bridge failure, reported as the SR result until the next session.
     bridge_result: AtomicI32,
@@ -331,6 +351,7 @@ impl Package {
                 started: false,
             }),
             views: Mutex::new(Views::new()),
+            presentation: Presentation::new(),
             temporal_ready: AtomicBool::new(false),
             bridge_result: AtomicI32::new(0),
         }
@@ -446,7 +467,8 @@ impl Package {
         }
     }
 
-    fn initialize(&self, leaves: &Leaves, user: *mut c_void) -> i32 {
+    /// The session's identity replaces the loaded one before open, which may install from it.
+    fn initialize(&self, leaves: &Leaves, identity: Identity) -> i32 {
         let started = self.lock().started;
         if started {
             if !leaves.drained_and_ended() {
@@ -461,7 +483,8 @@ impl Package {
             state.status = fresh_status();
             state.status.requested_sr = state.settings.sr_backend;
         }
-        if !leaves.open(user) {
+        self.presentation.set_identity(identity);
+        if !leaves.open() {
             return code::FAILED;
         }
         let settings = self.lock().settings;
@@ -615,7 +638,10 @@ impl Package {
             render_width: camera.render_width,
             render_height: camera.render_height,
             inverted_depth: camera.depth_inverted,
+            ..Default::default()
         };
+        let identity = self.presentation.identity();
+        identity.lend(&mut setup);
         let (created, mut sr) = leaves.sr_create(commands, &setup)?;
         self.lock().status.sr_result = created;
         if sr.is_null() && backend != 0 {
@@ -724,13 +750,20 @@ extern "C" fn rsf_unity_package_temporal_ready() -> u32 {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_unity_package_initialize(
+    runtime: *const c_char,
+    engine: *const c_char,
+    project: *const c_char,
     platform: *const rsf_unity_package_platform,
-    user: *mut c_void,
 ) -> c_int {
-    match unsafe { Leaves::adopt(platform) } {
-        Some(leaves) => PACKAGE.initialize(&leaves, user),
-        None => code::FAILED,
+    let Some(leaves) = (unsafe { Leaves::adopt(platform) }) else {
+        return code::FAILED;
+    };
+    if runtime.is_null() || engine.is_null() || project.is_null() {
+        return code::FAILED;
     }
+    let text = |value: *const c_char| unsafe { CStr::from_ptr(value) }.to_bytes();
+    let identity = Identity::new(text(runtime), text(engine), text(project));
+    PACKAGE.initialize(&leaves, identity)
 }
 
 #[unsafe(no_mangle)]
@@ -751,13 +784,6 @@ unsafe extern "C" fn rsf_unity_package_device_shutdown(
 ) {
     if let Some(leaves) = unsafe { Leaves::adopt(platform) } {
         PACKAGE.device_shutdown(&leaves);
-    }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_package_current(output: *mut rsf_unity_package_settings) {
-    if !output.is_null() {
-        unsafe { output.write(PACKAGE.lock().settings) };
     }
 }
 
@@ -786,11 +812,6 @@ unsafe extern "C" fn rsf_unity_package_render(
         return;
     }
     PACKAGE.render(&leaves, commands, unsafe { &*pass });
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_package_fg_result(result: i32) {
-    PACKAGE.lock().status.fg_result = result;
 }
 
 #[unsafe(no_mangle)]
@@ -826,6 +847,12 @@ mod tests {
         evaluate_result: i32,
         /// A context's planned input extents.
         plan: (u32, u32),
+        install_result: i32,
+        /// The presentation host has an owner.
+        owner: bool,
+        /// Auto's generation provider for Unity's adapter; None when it cannot be read.
+        fg_adapter: Option<u32>,
+        request_result: i32,
     }
 
     const READY: Fake = Fake {
@@ -843,6 +870,10 @@ mod tests {
         create_result: 0,
         evaluate_result: 0,
         plan: (1280, 720),
+        install_result: 0,
+        owner: true,
+        fg_adapter: Some(3),
+        request_result: 0,
     };
     /// A fake context's address is 0x100 plus its backend.
     const CONTEXT: usize = 0x100;
@@ -932,8 +963,8 @@ mod tests {
         call("generation".into());
         77
     }
-    unsafe extern "C" fn open(user: *mut c_void) -> u32 {
-        call(format!("open {}", user as usize));
+    unsafe extern "C" fn open() -> u32 {
+        call("open".into());
         fake().opened.into()
     }
     unsafe extern "C" fn bridge_activate(enabled: u32) {
@@ -963,8 +994,22 @@ mod tests {
         output: *mut *mut rsf_sr12,
     ) -> u32 {
         let s = unsafe { *setup };
+        // The identity is always lent; a loaded one follows the depth flag.
+        let text = |value: *const c_char| unsafe { CStr::from_ptr(value) }.to_str().unwrap();
+        let identity = match text(s.root_utf8) {
+            "" => String::new(),
+            root => format!(
+                " {root} {} {} {} {} {} {}",
+                text(s.streamline_utf8),
+                text(s.interposer_utf8),
+                text(s.fsr_utf8),
+                text(s.xess_utf8),
+                text(s.engine_version_utf8),
+                text(s.project_id_utf8)
+            ),
+        };
         call(format!(
-            "create {} {} {} {}x{} {}x{} {}",
+            "create {} {} {} {}x{} {}x{} {}{identity}",
             s.backend,
             s.quality,
             s.dlss_preset,
@@ -1031,6 +1076,65 @@ mod tests {
     unsafe extern "C" fn bridge_release() {
         call("release".into());
     }
+    unsafe extern "C" fn accept_window(_: *mut c_void, _: *mut c_void) -> c_int {
+        call("accept".into());
+        1
+    }
+    unsafe extern "C" fn backend_log(_: *mut c_void, _: *const c_char) {
+        call("backend log".into());
+    }
+    unsafe extern "C" fn fg_install(setup: *const rsf_fg12_setup) -> i32 {
+        let s = unsafe { *setup };
+        let o = s.options;
+        let text = |value: *const c_char| unsafe { CStr::from_ptr(value) }.to_str().unwrap();
+        // The window guard and log are package.cpp's own; no user pointer is lent.
+        let lent = s.accept_window.map(|f| f as usize) == Some(accept_window as usize)
+            && s.log.map(|f| f as usize) == Some(backend_log as usize)
+            && s.user.is_null();
+        assert!(lent);
+        call(format!(
+            "install {} {} {} {} | {} {} {} {} {} {} | {} {} {} {} {} | {} {} {} {} | {} {} {}",
+            s.struct_size,
+            s.backend,
+            s.max_generated_frames,
+            text(s.runtime_directory_utf8),
+            o.struct_size,
+            o.mode,
+            o.generated_frames,
+            o.reflex_mode,
+            o.frame_limit_us,
+            o.debug,
+            s.depth_inverted,
+            s.depth_infinite,
+            s.units_to_meters,
+            s.runtime_switching,
+            s.ui_mode,
+            text(s.fsr3_directory_utf8),
+            text(s.fsr4_directory_utf8),
+            text(s.xess_directory_utf8),
+            text(s.streamline_directory_utf8),
+            s.engine_type,
+            text(s.engine_version_utf8),
+            text(s.project_id_utf8)
+        ));
+        fake().install_result
+    }
+    unsafe extern "C" fn present_has_owner() -> u32 {
+        call("owner".into());
+        fake().owner.into()
+    }
+    unsafe extern "C" fn present_request(backend: u32) -> i32 {
+        call(format!("request {backend}"));
+        fake().request_result
+    }
+    unsafe extern "C" fn fg_default_backend(backend: *mut u32) -> u32 {
+        call("fg default".into());
+        let Some(adapter) = fake().fg_adapter else {
+            return 0;
+        };
+        unsafe { backend.write(adapter) };
+        1
+    }
 
     fn platform() -> rsf_unity_package_platform {
         rsf_unity_package_platform {
@@ -1056,6 +1160,12 @@ mod tests {
             sr_destroy: Some(sr_destroy),
             log: Some(log),
             bridge_release: Some(bridge_release),
+            accept_window: Some(accept_window),
+            backend_log: Some(backend_log),
+            fg_install: Some(fg_install),
+            present_has_owner: Some(present_has_owner),
+            present_request: Some(present_request),
+            fg_default_backend: Some(fg_default_backend),
         }
     }
     /// Fresh fakes and an empty call record for this test.
@@ -1069,6 +1179,9 @@ mod tests {
     fn an_incomplete_table_is_refused() {
         let mut table = platform();
         table.bridge_release = None;
+        assert!(unsafe { Leaves::adopt(&table) }.is_none());
+        let mut table = platform();
+        table.fg_default_backend = None;
         assert!(unsafe { Leaves::adopt(&table) }.is_none());
         assert!(unsafe { Leaves::adopt(std::ptr::null()) }.is_none());
     }
@@ -1300,28 +1413,34 @@ mod tests {
         let leaves = leaves();
         package.lock().settings.quality = 2;
         package.bridge_failed(-4);
-        let user = std::ptr::without_provenance_mut::<c_void>(0x40);
-        assert_eq!(package.initialize(&leaves, user), code::STARTED);
-        assert_eq!(calls(), ["open 64", "spatial 0 2", "activate 1"]);
+        let session = || Identity::new(b"R", b"6000", b"P");
+        assert_eq!(package.initialize(&leaves, session()), code::STARTED);
+        assert_eq!(calls(), ["open", "spatial 0 2", "activate 1"]);
         assert_eq!(package.bridge_result.load(SeqCst), 0);
         assert!(package.lock().started);
+        assert_eq!(package.presentation.identity().xess.to_bytes(), b"R/xess");
         // A started session only restarts once drained and ended.
         package.view_planned(3, (8, 8), (4, 4));
         package.lock_views().entry(1).sr = without_provenance_mut(0x300);
         package.lock().status.evaluated_frames = 5;
         set(|f| f.drained = false);
-        assert_eq!(package.initialize(&leaves, user), code::BUSY);
+        // A busy restart keeps the running session's identity.
+        assert_eq!(
+            package.initialize(&leaves, Identity::new(b"Q", b"1", b"P")),
+            code::BUSY
+        );
         assert_eq!(calls(), ["drained"]);
+        assert_eq!(package.presentation.identity().root.to_bytes(), b"R");
         set(|f| f.drained = true);
         set(|f| f.ended = false);
-        assert_eq!(package.initialize(&leaves, user), code::BUSY);
+        assert_eq!(package.initialize(&leaves, session()), code::BUSY);
         assert_eq!(calls(), ["drained", "end"]);
         set(|f| f.ended = true);
         set(|f| f.opened = false);
-        assert_eq!(package.initialize(&leaves, user), code::FAILED);
+        assert_eq!(package.initialize(&leaves, session()), code::FAILED);
         assert_eq!(
             calls(),
-            ["drained", "end", "destroy 0x300", "release", "open 64"]
+            ["drained", "end", "destroy 0x300", "release", "open"]
         );
         {
             let state = package.lock();
@@ -1331,8 +1450,8 @@ mod tests {
         assert!(!package.temporal_ready.load(SeqCst));
         set(|f| f.opened = true);
         package.lock().settings.sr_backend = RSF_SR_SPATIAL;
-        assert_eq!(package.initialize(&leaves, user), code::STARTED);
-        assert_eq!(calls(), ["open 64", "spatial 1 2", "activate 1"]);
+        assert_eq!(package.initialize(&leaves, session()), code::STARTED);
+        assert_eq!(calls(), ["open", "spatial 1 2", "activate 1"]);
         assert_eq!(package.lock().status.requested_sr, RSF_SR_SPATIAL);
         // rsfu_shutdown's unlocked half, then its locked half.
         set(|f| f.drained = false);
@@ -1492,6 +1611,88 @@ mod tests {
     }
 
     #[test]
+    fn a_view_is_created_with_the_package_identity() {
+        let package = Package::new();
+        let leaves = leaves();
+        package
+            .presentation
+            .set_identity(Identity::new(b"R", b"6000", b"P"));
+        package.render(&leaves, list(0xa0), &sr_pass(1, (8, 8), (4, 4)));
+        assert_eq!(
+            calls()[1],
+            "create 3 1 0 8x8 4x4 1 R R/streamline R/streamline/sl.interposer.dll R/fidelityfx \
+             R/xess 6000 P"
+        );
+    }
+
+    #[test]
+    fn generation_installs_once_when_identified() {
+        let package = Package::new();
+        let leaves = leaves();
+        package.install(&leaves);
+        assert!(calls().is_empty());
+        package
+            .presentation
+            .set_identity(Identity::new(b"R", b"6000", b"P"));
+        set(|f| f.install_result = -4);
+        package.install(&leaves);
+        // Auto, unlimited, generation off with Reflex off until rsfu_configure, inverted finite
+        // depth in metres, switchable, HUD-less backbuffer, Unity's Streamline identity.
+        assert_eq!(
+            calls(),
+            [
+                "install 152 7 4294967295 R/fidelityfx | 24 0 1 0 0 0 | 1 0 1 1 4 | \
+                 R/fidelityfx R/fidelityfx R/xess R/streamline | 2 6000 P"
+            ]
+        );
+        assert_eq!(package.lock().status.fg_result, -4);
+        // A refusal is retried; an accepted install is not repeated.
+        set(|f| f.install_result = 0);
+        package.install(&leaves);
+        assert_eq!(calls().len(), 1);
+        assert_eq!(package.lock().status.fg_result, 0);
+        package.lock().status.fg_result = 9;
+        package.install(&leaves);
+        assert!(calls().is_empty());
+        assert_eq!(package.lock().status.fg_result, 9);
+    }
+
+    #[test]
+    fn the_window_pass_requests_the_stored_provider() {
+        let package = Package::new();
+        let leaves = leaves();
+        set(|f| f.owner = false);
+        package.request_generation(&leaves);
+        assert_eq!(calls(), ["owner"]);
+        set(|f| f.owner = true);
+        // Auto waits for a readable adapter.
+        set(|f| f.fg_adapter = None);
+        package.request_generation(&leaves);
+        assert_eq!(calls(), ["owner", "fg default"]);
+        // Auto resolves once; the active provider (5) is not requested again.
+        set(|f| f.fg_adapter = Some(5));
+        package.request_generation(&leaves);
+        assert_eq!(calls(), ["owner", "fg default", "backend"]);
+        set(|f| f.fg_adapter = Some(3));
+        package.request_generation(&leaves);
+        assert_eq!(calls(), ["owner", "backend"]);
+        assert_eq!(package.lock().status.fg_result, 0);
+        // Another provider is requested and its result recorded.
+        package.lock().settings.fg_backend = RSF_FG_BACKEND_DLSS;
+        set(|f| f.request_result = -2);
+        package.request_generation(&leaves);
+        assert_eq!(calls(), ["owner", "backend", "request 1"]);
+        assert_eq!(package.lock().status.fg_result, -2);
+        // An adapter without a provider resolves Auto to off, read again every pass.
+        let package = Package::new();
+        set(|f| f.fg_adapter = Some(0));
+        for _ in 0..2 {
+            package.request_generation(&leaves);
+            assert_eq!(calls(), ["owner", "fg default", "backend", "request 0"]);
+        }
+    }
+
+    #[test]
     fn creation_and_evaluation_wait_for_their_inputs() {
         let package = Package::new();
         let leaves = leaves();
@@ -1589,9 +1790,25 @@ mod tests {
             rsf_unity_package_render(list(1), &pass, std::ptr::null());
         }
         assert!(calls().is_empty());
-        assert_eq!(
-            unsafe { rsf_unity_package_initialize(std::ptr::null(), std::ptr::null_mut()) },
-            code::FAILED
-        );
+        let (text, none) = (c"x".as_ptr(), std::ptr::null());
+        unsafe {
+            assert_eq!(
+                rsf_unity_package_initialize(text, text, text, std::ptr::null()),
+                code::FAILED
+            );
+            assert_eq!(
+                rsf_unity_package_initialize(none, text, text, &table),
+                code::FAILED
+            );
+            assert_eq!(
+                rsf_unity_package_initialize(text, none, text, &table),
+                code::FAILED
+            );
+            assert_eq!(
+                rsf_unity_package_initialize(text, text, none, &table),
+                code::FAILED
+            );
+        }
+        assert!(calls().is_empty());
     }
 }

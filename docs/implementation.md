@@ -182,6 +182,11 @@ The view owner preserves reconfiguration, spatial fallback and retirement
 through the shared Runtime. The native setup table was regenerated, and
 build and player verification remain open.
 
+Unity's package presentation identity, FG installation and provider
+requests now use the Rust owner. Both Unity entry routes share the FG
+setup builder and resolve Auto through the Runtime. The private package
+table was regenerated. Build and player verification remain open.
+
 AC7's Rust renderer transaction owns prepare, start, quiesce and stop.
 Failed activation keeps any renderer with reachable callbacks, and a
 refused hook disable or removal keeps the renderer available for retry.

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! The [UnitySR] settings both Unity routes read: the game plugin's runtime setup and the Unity
-//! package, which links this archive and calls the two exports through unity_runtime_config.h.
-//! A relative path therefore resolves the same way in both.
+//! package, which links this archive, reads its identity through package_state/presentation.rs
+//! and calls the two exports through unity_runtime_config.h. A relative path therefore resolves
+//! the same way in both.
 
 const SLASH: u16 = b'/' as u16;
 const BACKSLASH: u16 = b'\\' as u16;
@@ -130,24 +131,34 @@ mod platform {
         })
     }
 
-    /// [UnitySR] `name` from `ini`, resolved by [`resolve`]. Empty when unset.
-    pub(crate) fn path_setting(ini: &Ini, name: PCWSTR) -> Vec<u16> {
-        let mut text = vec![0u16; PATH_CAPACITY];
+    /// [UnitySR] `name` from `ini` as written, cut as GetPrivateProfileStringW cuts it for a
+    /// buffer of `capacity` characters. Empty when unset.
+    pub(crate) fn string_setting(ini: &Ini, name: PCWSTR, capacity: usize) -> Vec<u16> {
+        let mut text = vec![0u16; capacity];
         let count = unsafe {
             GetPrivateProfileStringW(
                 SECTION,
                 name,
                 w!(""),
                 text.as_mut_ptr(),
-                PATH_CAPACITY as u32,
+                capacity as u32,
                 ini.as_ptr(),
             )
         } as usize;
-        text.truncate(count.min(PATH_CAPACITY));
+        text.truncate(count.min(capacity));
         if let Some(end) = text.iter().position(|&unit| unit == 0) {
             text.truncate(end);
         }
-        resolve(ini.chars(), text, full_path)
+        text
+    }
+
+    /// [UnitySR] `name` from `ini`, resolved by [`resolve`]. Empty when unset.
+    pub(crate) fn path_setting(ini: &Ini, name: PCWSTR) -> Vec<u16> {
+        resolve(
+            ini.chars(),
+            string_setting(ini, name, PATH_CAPACITY),
+            full_path,
+        )
     }
 
     /// Writes [UnitySR] `name` from `ini`, resolved like the game plugin's settings, with its

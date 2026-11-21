@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: MIT
 //! Runtime setup behind the game plugin's rsf_unity_* exports (runtime_host.cpp): the [UnitySR]
 //! keys and defaults, the start gates and their result codes, the wait for Unity's Mono runtime,
-//! and the rsf_fg12_setup and rsf_callback_host_setup descriptors. The descriptors reach the
-//! Runtime the loader already loaded through runtime_host.cpp's typed leaves; nothing here loads
-//! a Runtime or references its exports directly.
+//! and the rsf_fg12_setup (through generation.rs) and rsf_callback_host_setup descriptors. The
+//! descriptors reach the Runtime the loader already loaded through runtime_host.cpp's typed
+//! leaves; nothing here loads a Runtime or references its exports directly.
+use crate::generation::{self, RSF_DLSS_ENGINE_UNITY, Sources};
 use crate::runtime_abi::{
     RSF_CALLBACK_HOST_ABI_VERSION, RSF_FG_BACKEND_ALL, RSF_FG_BACKEND_AUTO, RSF_FG_BACKEND_DLSS,
     RSF_FG_BACKEND_FSR3, RSF_FG_BACKEND_FSR4, RSF_FG_BACKEND_XESS, RSF_FG_FIXED, RSF_REFLEX_OFF,
     RSF_SR_AUTO, RSF_SR_DLSS, RSF_SR_FSR2, RSF_SR_FSR3, RSF_SR_FSR4, RSF_SR_SPATIAL, RSF_SR_XESS,
-    RSF_UI_MODE_BACKBUFFER_HUDLESS, rsf_backend_result, rsf_callback_host_setup, rsf_fg12_setup,
-    rsf_native_fg_options, rsf_unity_runtime_platform,
+    rsf_backend_result, rsf_callback_host_setup, rsf_fg12_setup, rsf_native_fg_options,
+    rsf_unity_runtime_platform,
 };
 use crate::runtime_config::{
     Ini, PATH_CAPACITY, file_name, path_setting, preferences_path, profile_int, setting,
@@ -30,8 +31,7 @@ use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 use windows_sys::Win32::UI::WindowsAndMessaging::{GetClassNameW, GetWindowThreadProcessId};
 use windows_sys::core::{PCWSTR, w};
 
-/// Cast macros bindgen does not evaluate; runtime_host.cpp asserts both.
-const RSF_DLSS_ENGINE_UNITY: u32 = 2;
+/// A cast macro bindgen does not evaluate; runtime_host.cpp asserts it.
 const RSF_BACKEND_OK: rsf_backend_result = 0;
 
 /// Result codes of the exported entry points, part of their public C ABI.
@@ -229,35 +229,24 @@ fn fg_start(ini: *const u16, leaves: &Leaves) -> u32 {
     let fsr4 = terminated(backend_directory(&ini, leaves, RSF_FG_BACKEND_FSR4));
     let xess = terminated(backend_directory(&ini, leaves, RSF_FG_BACKEND_XESS));
     let streamline = terminated(backend_directory(&ini, leaves, RSF_FG_BACKEND_DLSS));
-    let setup = rsf_fg12_setup {
-        struct_size: size_of::<rsf_fg12_setup>() as u32,
-        backend,
-        max_generated_frames: u32::MAX,
-        runtime_directory_utf8: runtime.as_ptr().cast(),
-        options: rsf_native_fg_options {
-            struct_size: size_of::<rsf_native_fg_options>() as u32,
-            mode: RSF_FG_FIXED,
-            generated_frames,
-            reflex_mode: RSF_REFLEX_OFF,
-            frame_limit_us,
-            debug: 0,
-        },
-        depth_inverted: 1,
-        depth_infinite: 0,
-        units_to_meters: 1.0,
-        log: Some(log),
-        user: null_mut(),
-        accept_window: Some(accept_window),
-        runtime_switching: 1,
-        ui_mode: RSF_UI_MODE_BACKBUFFER_HUDLESS,
-        fsr3_directory_utf8: fsr3.as_ptr().cast(),
-        fsr4_directory_utf8: fsr4.as_ptr().cast(),
-        xess_directory_utf8: xess.as_ptr().cast(),
-        streamline_directory_utf8: streamline.as_ptr().cast(),
-        engine_type: RSF_DLSS_ENGINE_UNITY,
-        engine_version_utf8: leaves.engine_version,
-        project_id_utf8: leaves.project_id,
+    let options = rsf_native_fg_options {
+        struct_size: size_of::<rsf_native_fg_options>() as u32,
+        mode: RSF_FG_FIXED,
+        generated_frames,
+        reflex_mode: RSF_REFLEX_OFF,
+        frame_limit_us,
+        debug: 0,
     };
+    let sources = Sources {
+        runtime: runtime.as_ptr().cast(),
+        fsr3: fsr3.as_ptr().cast(),
+        fsr4: fsr4.as_ptr().cast(),
+        xess: xess.as_ptr().cast(),
+        streamline: streamline.as_ptr().cast(),
+        engine_version: leaves.engine_version,
+        project_id: leaves.project_id,
+    };
+    let setup: rsf_fg12_setup = generation::setup(backend, options, &sources, accept_window, log);
     *started = unsafe { (leaves.fg_install)(&setup) } == RSF_BACKEND_OK;
     let capture = utf8(&path_setting(&ini, w!("FGCaptureDirectory")));
     if *started && !capture.is_empty() {
