@@ -6,7 +6,9 @@ add_library(rsf_game_fallout4 SHARED src/plugin.cpp src/native_creation.cpp
 # through src/fallout4_platform.h; cpu_events.cpp supplies the CPU detour shells, MinHook
 # trampolines and guarded host callback through src/cpu_events_platform.h. Depth-domain admission
 # and composition are Rust (src/depth_domains.rs); depth_domains.cpp supplies its TLS, COM, D3D11
-# and receipt leaves through src/depth_domains_platform.h.
+# and receipt leaves through src/depth_domains_platform.h. Render-input admission, camera history
+# and pass construction are Rust (src/render_inputs.rs); render_inputs.cpp supplies the typed COM
+# lease, D3D11/DXGI facts and receipt leaves through src/render_inputs_platform.h.
 rsf_add_rust_static(rsf_fallout4_rust rsf_rust_fallout4 rsf-fallout4 rsf_fallout4)
 target_include_directories(rsf_game_fallout4 PRIVATE
     "${CMAKE_SOURCE_DIR}/runtime/orchestrator/include"

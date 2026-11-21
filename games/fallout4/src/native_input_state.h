@@ -3,6 +3,8 @@
 #include <bit>
 #include <cstdint>
 
+// The render-input owner is Rust (render_inputs.rs), which mirrors this layout and both comparisons;
+// render_inputs_platform.h asserts the layout and the receipt leaves print it.
 namespace rsf::fallout4::detail {
 struct NativeState {
     uintptr_t renderer{}, camera{}, cache{}, context{}, device{}, chain{}, window{};

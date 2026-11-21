@@ -20,13 +20,13 @@ type Flat = [f32; 16];
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub(crate) struct NativeCamera {
-    view: Flat,
-    projection: Flat,
-    view_projection_unjittered: Flat,
-    previous_view_projection_unjittered: Flat,
-    position_adjust: [f32; 3],
-    previous_position_adjust: [f32; 3],
-    jitter_ndc: [f32; 2],
+    pub(crate) view: Flat,
+    pub(crate) projection: Flat,
+    pub(crate) view_projection_unjittered: Flat,
+    pub(crate) previous_view_projection_unjittered: Flat,
+    pub(crate) position_adjust: [f32; 3],
+    pub(crate) previous_position_adjust: [f32; 3],
+    pub(crate) jitter_ndc: [f32; 2],
 }
 
 /// camera.h `CameraRaster`: the native viewport and its integer LTRB crop.
@@ -354,6 +354,45 @@ fn frame(
     // The C++ bound 3.14159265f rounds to the same single as PI.
     let fov = output.vertical_fov_radians;
     fov.is_finite() && fov > 0.0 && fov < PI
+}
+
+/// camera.h `camera_frame` for the Rust render-input owner: the outputs are cleared and the
+/// history marked invalid first, as `rsf_fallout4_camera_frame` does.
+#[allow(clippy::too_many_arguments)] // mirrors camera.h camera_frame
+pub(crate) fn camera_frame(
+    native: &NativeCamera,
+    width: u32,
+    height: u32,
+    output: &mut rsf_camera_frame,
+    previous_clip_to_clip: &mut Flat,
+    history_valid: &mut bool,
+    current: Option<&CameraRaster>,
+    previous: Option<&CameraRaster>,
+) -> bool {
+    // SAFETY: the SDK record holds only integers and floats.
+    *output = unsafe { std::mem::zeroed() };
+    *history_valid = false;
+    if width == 0 || height == 0 {
+        return false;
+    }
+    frame(
+        native,
+        width,
+        height,
+        current,
+        previous,
+        FrameOutputs {
+            camera: output,
+            previous_clip_to_clip,
+            history_valid,
+        },
+    )
+}
+
+/// camera.h `camera_motion_to_uv`: native previous-minus-current UV to current-minus-previous
+/// crop UV.
+pub(crate) fn motion_to_uv(raster: &CameraRaster) -> Option<[f32; 2]> {
+    raster_transform(raster).map(|affine| [-affine[0], -affine[5]])
 }
 
 /// # Safety
