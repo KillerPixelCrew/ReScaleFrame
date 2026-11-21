@@ -24,7 +24,6 @@ use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::{mem, ptr};
 use windows_sys::Win32::Foundation::HMODULE;
-use windows_sys::Win32::System::LibraryLoader::GetProcAddress;
 use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 
 type Raw = *mut c_void;
@@ -106,9 +105,14 @@ impl Tables {
     }
 
     fn query(runtime: HMODULE, log: Log) -> Option<Self> {
-        let resolve = |name: &[u8]| unsafe { GetProcAddress(runtime, name.as_ptr()) };
-        let present_query = resolve(RSF_D3D11_PRESENT_API_ENTRY_POINT);
-        let fg_query = resolve(RSF_D3D11_FG_API_ENTRY_POINT);
+        use crate::runtime_module::export;
+        let present_query = unsafe {
+            export::<rsf_get_d3d11_present_api_fn>(runtime, RSF_D3D11_PRESENT_API_ENTRY_POINT)
+        }
+        .flatten();
+        let fg_query =
+            unsafe { export::<rsf_get_d3d11_fg_api_fn>(runtime, RSF_D3D11_FG_API_ENTRY_POINT) }
+                .flatten();
         let (Some(present_query), Some(fg_query)) = (present_query, fg_query) else {
             let required = if present_query.is_none() {
                 "rsf_get_d3d11_present_api"
@@ -119,19 +123,6 @@ impl Tables {
                 "Anomaly FG refused: the Runtime has no {required}."
             ));
             return None;
-        };
-        // Both functions come from the carrier's borrowed module and have these C signatures.
-        let present_query = unsafe {
-            mem::transmute::<unsafe extern "system" fn() -> isize, rsf_get_d3d11_present_api_fn>(
-                present_query,
-            )
-            .unwrap()
-        };
-        let fg_query = unsafe {
-            mem::transmute::<unsafe extern "system" fn() -> isize, rsf_get_d3d11_fg_api_fn>(
-                fg_query,
-            )
-            .unwrap()
         };
         let mut present = rsf_d3d11_present_api {
             struct_size: size_of::<rsf_d3d11_present_api>() as u32,

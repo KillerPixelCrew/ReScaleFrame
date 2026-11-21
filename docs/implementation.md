@@ -4,6 +4,13 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Anomaly now uses one Rust path to borrow the carrier's Runtime module
+and resolve its exports. Bootstrap, SR, FG, overlay, capture and shader
+patching use that path. Callers still check the API table they request
+and report missing services at their own boundary. The shared lookup
+keeps by-name binding and takes no additional DLL reference. Build and
+runtime validation remain open.
+
 Anomaly's native SR host now retains a single opaque Rust draw pass.
 Rust selects the round-trip or upscale pass and reuses it for the
 same device and stage. A replacement is published after creation

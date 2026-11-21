@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "runtime_shaders.h"
+#include "runtime_module.h"
 #include "shader_loader_platform.h"
 #include <d3dcompiler.h>
 #include <cstring>
@@ -57,9 +58,8 @@ bool RuntimeShaders::open(const std::filesystem::path& pack, const std::filesyst
         error = "engine includer entries";
         return false;
     }
-    const auto runtime = GetModuleHandleW(L"ReScaleFrame.Runtime.dll");
-    const auto query = runtime
-        ? reinterpret_cast<rsf_get_shader_patch_api_fn>(GetProcAddress(runtime, "rsf_get_shader_patch_api")) : nullptr;
+    const auto query = reinterpret_cast<rsf_get_shader_patch_api_fn>(
+        rsf_anomaly_runtime_symbol(rsf_anomaly_runtime_module(), "rsf_get_shader_patch_api"));
     api_.struct_size = sizeof(api_);
     api_.abi_version = RSF_SHADER_PATCH_VERSION;
     if (!query || query(&api_) != RSF_PATCH_OK ||

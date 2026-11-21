@@ -451,12 +451,18 @@ fn configure_capture(
     if !options.runtime.is_null() {
         if diagnostics.is_none() {
             diagnostics = unsafe {
-                win32::export::<DiagnosticsFn>(options.runtime, RSF_OVERLAY_DIAGNOSTICS_ENTRY_POINT)
+                crate::runtime_module::export::<DiagnosticsFn>(
+                    options.runtime,
+                    RSF_OVERLAY_DIAGNOSTICS_ENTRY_POINT,
+                )
             };
         }
         if dump.is_none() {
             dump = unsafe {
-                win32::export::<DumpFn>(options.runtime, RSF_INPUT_DUMP_NAMED_TEXTURE_ENTRY_POINT)
+                crate::runtime_module::export::<DumpFn>(
+                    options.runtime,
+                    RSF_INPUT_DUMP_NAMED_TEXTURE_ENTRY_POINT,
+                )
             };
         }
     }
@@ -870,7 +876,12 @@ impl Overlay {
                     None => bind(if options.runtime.is_null() {
                         None
                     } else {
-                        unsafe { win32::export(options.runtime, RSF_OVERLAY_API_ENTRY_POINT) }
+                        unsafe {
+                            crate::runtime_module::export(
+                                options.runtime,
+                                RSF_OVERLAY_API_ENTRY_POINT,
+                            )
+                        }
                     }),
                 };
                 api.map(|api| (leaves, api))
@@ -1091,10 +1102,8 @@ unsafe extern "C" fn option_label(_: *mut c_void, index: u32) -> *const c_char {
 // ---- Win32 leaves ------------------------------------------------------------------------------------------------
 
 mod win32 {
-    use std::ffi::c_void;
     use std::{mem, slice};
     use windows_sys::Win32::Foundation::SYSTEMTIME;
-    use windows_sys::Win32::System::LibraryLoader::GetProcAddress;
     use windows_sys::Win32::System::SystemInformation::GetLocalTime;
     use windows_sys::Win32::System::Threading::GetCurrentProcessId;
     use windows_sys::Win32::System::WindowsProgramming::{
@@ -1174,13 +1183,6 @@ mod win32 {
             "{:04}{:02}{:02}-{:02}{:02}{:02}",
             t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond
         )
-    }
-
-    /// A Runtime export with the C signature `F` its header declares.
-    pub(super) unsafe fn export<F: Copy>(module: *mut c_void, name: &[u8]) -> Option<F> {
-        const { assert!(size_of::<F>() == size_of::<usize>()) };
-        let function = unsafe { GetProcAddress(module, name.as_ptr()) }?;
-        Some(unsafe { mem::transmute_copy::<unsafe extern "system" fn() -> isize, F>(&function) })
     }
 }
 

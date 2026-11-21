@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "sr_temporal.h"
+#include "runtime_module.h"
 #include "sr_plan.h"
 #include <d3d11.h>
 
@@ -80,7 +81,7 @@ ApiStatus bind_sr_api(rsf_get_d3d11_sr_api_fn query, rsf_d3d11_sr_api& out, cons
 
 bool TemporalDriver::bind(HMODULE runtime) noexcept {
     const auto lookup = [runtime](const char* name) -> void* {
-        return runtime ? reinterpret_cast<void*>(GetProcAddress(runtime, name)) : nullptr;
+        return reinterpret_cast<void*>(rsf_anomaly_runtime_symbol(runtime, name));
     };
     return rsf_anomaly_sr_bind(state_,
         reinterpret_cast<rsf_get_d3d11_sr_api_fn>(lookup(RSF_D3D11_SR_API_ENTRY_POINT)),

@@ -14,14 +14,14 @@ use std::os::windows::ffi::OsStringExt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, PoisonError};
-use std::{mem, ptr, slice};
+use std::{ptr, slice};
 use windows_sys::Win32::Foundation::HMODULE;
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_ATTRIBUTE_DIRECTORY, GetFileAttributesW, INVALID_FILE_ATTRIBUTES,
 };
 use windows_sys::Win32::System::LibraryLoader::{
     GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-    GetModuleFileNameW, GetModuleHandleExW, GetModuleHandleW, GetProcAddress,
+    GetModuleFileNameW, GetModuleHandleExW,
 };
 use windows_sys::Win32::System::Performance::QueryPerformanceCounter;
 use windows_sys::Win32::System::SystemInformation::GetTickCount64;
@@ -92,17 +92,14 @@ struct Runtime {
 
 impl Runtime {
     fn borrow() -> Option<Self> {
-        let module = unsafe { GetModuleHandleW(w!("ReScaleFrame.Runtime.dll")) };
+        use crate::runtime_module::{export, rsf_anomaly_runtime_module};
+        let module = rsf_anomaly_runtime_module();
         if module.is_null() {
             return None;
         }
-        let export = |name: &CStr| unsafe { GetProcAddress(module, name.as_ptr().cast()) };
         // Both exports have the C signatures declared in plugin_session.h.
-        let prepare = export(c"rsf_plugin_session_prepare").map(|f| unsafe {
-            mem::transmute::<unsafe extern "system" fn() -> isize, PrepareFn>(f)
-        });
-        let start = export(c"rsf_plugin_session_start")
-            .map(|f| unsafe { mem::transmute::<unsafe extern "system" fn() -> isize, StartFn>(f) });
+        let prepare = unsafe { export(module, c"rsf_plugin_session_prepare".to_bytes_with_nul()) };
+        let start = unsafe { export(module, c"rsf_plugin_session_start".to_bytes_with_nul()) };
         Some(Self {
             module,
             prepare,

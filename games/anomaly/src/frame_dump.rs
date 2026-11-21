@@ -36,22 +36,11 @@ pub(crate) struct DumpApi {
 impl DumpApi {
     #[cfg(windows)]
     pub fn bind() -> Option<Self> {
-        use std::ffi::CStr;
-        use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
-        use windows_sys::core::w;
-
-        let module = unsafe { GetModuleHandleW(w!("ReScaleFrame.Runtime.dll")) };
-        if module.is_null() {
-            return None;
-        }
-        let address = |name: &CStr| unsafe { GetProcAddress(module, name.as_ptr().cast()) };
+        use crate::runtime_module::{export, rsf_anomaly_runtime_module};
+        let module = rsf_anomaly_runtime_module();
         macro_rules! export {
             ($name:expr, $signature:ty) => {
-                address($name).map(|function| unsafe {
-                    std::mem::transmute::<unsafe extern "system" fn() -> isize, $signature>(
-                        function,
-                    )
-                })
+                unsafe { export::<$signature>(module, $name.to_bytes_with_nul()) }
             };
         }
         // The carrier keeps the loaded Runtime alive. Signatures come from input_dump.h.

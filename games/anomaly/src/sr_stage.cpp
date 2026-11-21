@@ -11,6 +11,7 @@
 #include "native_hooks.h"
 #include "native_observer.h"
 #include "motion_stage.h"
+#include "runtime_module.h"
 #include "sr_d3d11.h"
 #include "build_profile.h"
 #include "sr_jitter.h"
@@ -408,14 +409,6 @@ bool map_staging(void* context, void* source, rsf_anomaly_sr_mapped_texture* out
     out->row_pitch = mapped.RowPitch;
     return true;
 }
-void apply_colour_transport(bool transport) noexcept {
-    using Set = void (*)(uint32_t);
-    const HMODULE runtime = GetModuleHandleW(L"ReScaleFrame.Runtime.dll");
-    if (const auto set = runtime ? reinterpret_cast<Set>(reinterpret_cast<void*>(
-            GetProcAddress(runtime, "rsf_dlss_pipeline_set_colour_transport"))) : nullptr)
-        set(transport ? 1u : 0u);
-}
-
 // ---- the leaf table ---------------------------------------------------------------------------------------------
 const rsf_anomaly_sr_stage_platform platform{
     .frame_facts = [](void* self, bool world_window, bool temporal, rsf_anomaly_sr_frame_facts* out) {
@@ -610,7 +603,7 @@ const rsf_anomaly_sr_stage_platform platform{
         const auto views = upscale_views(*host.seam_views, reconstruction);
         return rsf_anomaly_sr_run_pass(host.pass, host.context(), RSF_SR_REINSERT, &views) != 0;
     },
-    .driver_bind = [] { return driver.bind(GetModuleHandleW(L"ReScaleFrame.Runtime.dll")); },
+    .driver_bind = [] { return driver.bind(rsf_anomaly_runtime_module()); },
     .driver_enabled = [] { return driver.enabled(); },
     .driver_output_format = [] { return driver.output_format(); },
     .driver_planned = [](uint32_t ow, uint32_t oh, uint32_t* rw, uint32_t* rh) { return driver.planned_render(ow, oh, *rw, *rh); },
@@ -670,7 +663,7 @@ const rsf_anomaly_sr_stage_platform platform{
     .persist_text = [](const char* key, const char* value) {
         try { options::write_text(widen(key).c_str(), widen(value).c_str()); } catch (...) {}
     },
-    .apply_colour_transport = [](bool transport) { apply_colour_transport(transport); },
+    .apply_colour_transport = rsf_anomaly_runtime_set_colour_transport,
     .file_exists = [](const uint16_t* path) {
         const DWORD attributes = GetFileAttributesW(reinterpret_cast<const wchar_t*>(path));
         return attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_DIRECTORY);
