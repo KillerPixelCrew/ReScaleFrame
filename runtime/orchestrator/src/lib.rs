@@ -21,6 +21,8 @@ mod d3d11_host_reduced;
 #[cfg(windows)]
 mod d3d11_observer_capture;
 #[cfg(windows)]
+mod d3d11_observer_hooks;
+#[cfg(windows)]
 mod d3d11_observer_present;
 #[cfg(windows)]
 mod d3d11_output;

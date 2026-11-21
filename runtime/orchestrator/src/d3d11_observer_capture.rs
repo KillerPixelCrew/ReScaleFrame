@@ -254,8 +254,7 @@ unsafe extern "C" fn rsf_core_observer11_adopt_device(incoming: Handle) -> Handl
     old.map_or(ptr::null_mut(), ComRef::into_raw)
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_observer11_capture_clear() {
+pub(super) fn clear() {
     let retained = {
         let mut state = lock();
         state.request = None;

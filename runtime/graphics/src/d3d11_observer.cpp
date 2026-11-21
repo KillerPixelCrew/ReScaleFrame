@@ -7,7 +7,6 @@
 #include <rescaleframe/texture_dump.h>
 
 #include <windows.h>
-#include <atomic>
 
 #include <d3d11.h>
 #include <dxgi1_2.h>
@@ -23,8 +22,8 @@
 #include <mutex>
 #include <vector>
 
-#include "vtable_patch.h"
 #include "d3d11_observer_capture.h"
+#include "d3d11_observer_hooks.h"
 #include "d3d11_observer_present.h"
 
 namespace {
@@ -36,7 +35,7 @@ constexpr size_t slot_create_input_layout = 11;   // ID3D11Device
 constexpr size_t slot_create_vertex_shader = 12;  // ID3D11Device
 constexpr size_t slot_create_pixel_shader = 15;   // ID3D11Device
 constexpr size_t slot_present1 = 22;
-// Device slots of the shader creators the capture hooks cover, in `original_stage_shaders` order:
+// Device slots in shader hook order:
 // geometry, hull, domain, compute, geometry with stream output, vertex, pixel.
 constexpr size_t stage_shader_slots[] = {13, 16, 17, 18, 14, slot_create_vertex_shader,
                                          slot_create_pixel_shader};
@@ -59,35 +58,7 @@ using create_input_layout_fn = HRESULT(STDMETHODCALLTYPE*)(ID3D11Device*,
 
 struct Observer {
     std::mutex guard;
-    bool installed = false;
-
-    void** device_vtable = nullptr;
-    void** swapchain_vtable = nullptr;
-    void** swapchain1_vtable = nullptr;
-    std::atomic<bool> present1_detoured{false};
-    void* present1_entry = nullptr;
-    present1_fn present1_chain = nullptr, present1_genuine = nullptr;
-    create_texture2d_fn original_create = nullptr;
-    create_buffer_fn original_create_buffer = nullptr;
-    present_fn original_present = nullptr;
-    // Present by detour, which is the route wherever the genuine function could be found.
-    // `present_entry` is the function actually detoured: the outermost foreign hook's own function
-    // when the entry of dxgi's Present is patched, dxgi's Present itself when it is not. See
-    // `install_present_detour` for why it is never the patched entry.
-    std::atomic<bool> present_detoured{false};
-    void* present_entry = nullptr;
-    // MinHook's trampoline over the detoured function's own prologue: the rest of that function,
-    // whatever it forwards to, and the genuine body at the end. Where this hook forwards.
-    present_fn present_chain = nullptr;
-    // A trampoline of this module's own over the bytes the file has for the entry, reaching the
-    // genuine body without passing any hook. Where this forwards once another hook has re-patched
-    // the entry over it, and the way out of a loop. Never freed, see uninstall.
-    present_fn present_genuine = nullptr;
-    create_input_layout_fn original_create_input_layout = nullptr;
-    void* original_stage_shaders[stage_shader_count]{};
-
     rsf_observer_options options{};
-
 };
 
 Observer& observer()
@@ -101,6 +72,14 @@ static_assert(RSF_OBSERVER_OK == 0 && RSF_OBSERVER_ERROR_INVALID_ARGUMENT == -1 
 static_assert(sizeof(rsf_observer11_capture_filter) == 20 && sizeof(rsf_observer11_capture_status) == 32);
 static_assert(sizeof(rsf_observer11_dump) == 64 && sizeof(rsf_observer11_dump_buffer) == 16 &&
     sizeof(rsf_observer11_dump_result) == 8);
+static_assert(RSF_OBSERVER_ERROR_ALREADY_INSTALLED == -3 && RSF_OBSERVER_ERROR_PATCH_FAILED == -5);
+static_assert(sizeof(rsf_observer11_slot) == 2 * sizeof(void*) && sizeof(rsf_observer11_hook_ops) == 4 * sizeof(void*));
+static_assert(RSF_OBSERVER11_STAGE_BASE + stage_shader_count == RSF_OBSERVER11_SLOT_COUNT);
+
+template<class Fn> Fn original(size_t slot) noexcept
+{
+    return reinterpret_cast<Fn>(rsf_core_observer11_original(slot));
+}
 
 HRESULT STDMETHODCALLTYPE hooked_create_texture2d(ID3D11Device* device,
                                                   const D3D11_TEXTURE2D_DESC* desc,
@@ -108,7 +87,9 @@ HRESULT STDMETHODCALLTYPE hooked_create_texture2d(ID3D11Device* device,
                                                   ID3D11Texture2D** out)
 {
     Observer& self = observer();
-    const HRESULT result = self.original_create(device, desc, initial, out);
+    const auto call = original<create_texture2d_fn>(RSF_OBSERVER11_TEXTURE);
+    if (!call) return E_FAIL;
+    const HRESULT result = call(device, desc, initial, out);
     if (FAILED(result) || !desc || !out || !*out) {
         return result;
     }
@@ -117,6 +98,7 @@ HRESULT STDMETHODCALLTYPE hooked_create_texture2d(ID3D11Device* device,
     // caller's question, and the filter above exists to serve dumping rather than identification.
     {
         std::lock_guard<std::mutex> lock(self.guard);
+        if (!rsf_core_observer11_installed()) return result;
         if (self.options.on_texture) {
             self.options.on_texture(self.options.on_texture_user, *out, desc->Width, desc->Height,
                                     static_cast<uint32_t>(desc->Format), desc->MipLevels,
@@ -135,8 +117,9 @@ HRESULT STDMETHODCALLTYPE hooked_create_input_layout(ID3D11Device* device,
                                                      ID3D11InputLayout** out)
 {
     Observer& self = observer();
-    const HRESULT result =
-        self.original_create_input_layout(device, descs, count, signature, signature_bytes, out);
+    const auto call = original<create_input_layout_fn>(RSF_OBSERVER11_LAYOUT);
+    if (!call) return E_FAIL;
+    const HRESULT result = call(device, descs, count, signature, signature_bytes, out);
     if (FAILED(result) || !descs || !out || !*out) {
         return result;
     }
@@ -156,7 +139,7 @@ HRESULT STDMETHODCALLTYPE hooked_create_input_layout(ID3D11Device* device,
     }
 
     std::lock_guard<std::mutex> lock(self.guard);
-    if (self.options.on_layout) {
+    if (rsf_core_observer11_installed() && self.options.on_layout) {
         self.options.on_layout(self.options.on_layout_user, *out, elements, copied, count);
     }
     return result;
@@ -169,11 +152,12 @@ HRESULT STDMETHODCALLTYPE Name(ID3D11Device* device, const void* bytes, SIZE_T s
     Observer& self = observer(); \
     using Fn = HRESULT(STDMETHODCALLTYPE*)(ID3D11Device*, const void*, SIZE_T, \
                                            ID3D11ClassLinkage*, Type**); \
-    const HRESULT result = reinterpret_cast<Fn>(self.original_stage_shaders[Index])( \
-        device, bytes, size, linkage, out); \
+    const auto call = original<Fn>(RSF_OBSERVER11_STAGE_BASE + Index); \
+    if (!call) return E_FAIL; \
+    const HRESULT result = call(device, bytes, size, linkage, out); \
     if (SUCCEEDED(result) && out && *out) { \
         std::lock_guard<std::mutex> lock(self.guard); \
-        if (self.options.on_shader) self.options.on_shader( \
+        if (rsf_core_observer11_installed() && self.options.on_shader) self.options.on_shader( \
             self.options.on_shader_user, *out, Stage, bytes, static_cast<uint32_t>(size)); \
     } \
     return result; \
@@ -195,11 +179,13 @@ HRESULT STDMETHODCALLTYPE hooked_create_geometry_so(
     using Fn = HRESULT(STDMETHODCALLTYPE*)(ID3D11Device*, const void*, SIZE_T,
         const D3D11_SO_DECLARATION_ENTRY*, UINT, const UINT*, UINT, UINT,
         ID3D11ClassLinkage*, ID3D11GeometryShader**);
-    const HRESULT result = reinterpret_cast<Fn>(self.original_stage_shaders[4])(
+    const auto call = original<Fn>(RSF_OBSERVER11_STAGE_BASE + 4);
+    if (!call) return E_FAIL;
+    const HRESULT result = call(
         device, bytes, size, entries, entry_count, strides, stride_count, rasterized_stream, linkage, out);
     if (SUCCEEDED(result) && out && *out) {
         std::lock_guard<std::mutex> lock(self.guard);
-        if (self.options.on_shader) self.options.on_shader(self.options.on_shader_user, *out,
+        if (rsf_core_observer11_installed() && self.options.on_shader) self.options.on_shader(self.options.on_shader_user, *out,
             RSF_OBSERVER_STAGE_GEOMETRY, bytes, static_cast<uint32_t>(size));
     }
     return result;
@@ -211,15 +197,19 @@ HRESULT STDMETHODCALLTYPE hooked_create_buffer(ID3D11Device* device,
                                                ID3D11Buffer** out)
 {
     Observer& self = observer();
-    const HRESULT result = self.original_create_buffer(device, desc, initial, out);
+    const auto call = original<create_buffer_fn>(RSF_OBSERVER11_BUFFER);
+    if (!call) return E_FAIL;
+    const HRESULT result = call(device, desc, initial, out);
     if (FAILED(result) || !desc || !out || !*out) {
         return result;
     }
-    if (self.options.on_buffer) {
+    {
         std::lock_guard<std::mutex> lock(self.guard);
-        self.options.on_buffer(self.options.on_buffer_user, *out,
-                               initial ? initial->pSysMem : nullptr, desc->ByteWidth,
-                               desc->BindFlags);
+        if (!rsf_core_observer11_installed()) return result;
+        if (self.options.on_buffer) {
+            self.options.on_buffer(self.options.on_buffer_user, *out,
+                                   initial ? initial->pSysMem : nullptr, desc->ByteWidth, desc->BindFlags);
+        }
     }
     rsf_core_observer11_buffer(device, *out, desc->ByteWidth, desc->BindFlags);
     return result;
@@ -438,18 +428,16 @@ constexpr rsf_observer11_present_ops present_ops{
     },
     [](const rsf_observer_present_event* event, const void* parameters, uint32_t nested) noexcept -> int32_t {
         try {
-            auto& self = observer();
             auto* chain = static_cast<IDXGISwapChain*>(event->swapchain);
+            const auto target = rsf_core_observer11_forward(event->method, nested);
+            if (!target) return nested ? S_OK : E_FAIL;
             if (event->method == 1) {
                 auto* chain1 = static_cast<IDXGISwapChain1*>(chain);
-                const auto call = nested ? self.present1_genuine : self.present1_chain;
-                if (nested && (!self.present1_detoured || !call)) return S_OK;
+                const auto call = reinterpret_cast<present1_fn>(target);
                 return call(chain1, event->sync_interval, event->flags,
                     static_cast<const DXGI_PRESENT_PARAMETERS*>(parameters));
             }
-            if (nested) return self.present_detoured && self.present_genuine ?
-                self.present_genuine(chain, event->sync_interval, event->flags) : S_OK;
-            const auto call = self.present_detoured ? self.present_chain : self.original_present;
+            const auto call = reinterpret_cast<present_fn>(target);
             return call(chain, event->sync_interval, event->flags);
         } catch (...) {
             return E_FAIL;
@@ -783,9 +771,8 @@ HMODULE module_of(const void* address, wchar_t* name, size_t count)
 //
 // Returns false with a reason when no target could be established; the caller then falls back to
 // the table patch, with the re-entry guard as the only protection.
-template<class Fn> bool install_present_route(Observer& self, ModuleImage& image, void* genuine, void* hook,
-    std::atomic<bool>& detoured, void*& installed_entry, Fn& forwarding, Fn& genuine_fn,
-    const char* label, char* message, size_t size)
+bool install_present_route(Observer& self, ModuleImage& image, void* genuine, void* hook,
+    uint32_t method, const char* label, char* message, size_t size)
 {
     if (!read_module_image(genuine, image, message, size)) {
         return false;
@@ -859,16 +846,14 @@ template<class Fn> bool install_present_route(Observer& self, ModuleImage& image
                       int(status));
         return false;
     }
-    installed_entry = target;
-    forwarding = reinterpret_cast<Fn>(chain);
-    genuine_fn = reinterpret_cast<Fn>(block);
-    // A newly enabled entry may execute immediately on another thread. Publish complete
-    // forwarding/recursion routes before activation, through the atomic mode flag.
-    detoured.store(true, std::memory_order_release);
+    rsf_core_observer11_publish_route(method, target, chain, block);
     status = MH_EnableHook(target);
-    if (status != MH_OK) {
-        detoured.store(false); installed_entry = nullptr; forwarding = genuine_fn = nullptr;
-        MH_RemoveHook(target); VirtualFree(block, 0, MEM_RELEASE);
+    if (status != MH_OK && status != MH_ERROR_ENABLED) {
+        const auto removed = MH_RemoveHook(target);
+        if (removed == MH_OK || removed == MH_ERROR_NOT_CREATED) {
+            rsf_core_observer11_publish_route(method, nullptr, nullptr, nullptr);
+            VirtualFree(block, 0, MEM_RELEASE);
+        }
         std::snprintf(message, size, "the detour on %ls could not be enabled, status %d", owner, int(status));
         return false;
     }
@@ -886,23 +871,70 @@ template<class Fn> bool install_present_route(Observer& self, ModuleImage& image
             std::snprintf(note, sizeof(note),
                           "observer: %s detoured at %p in dxgi, entry unpatched", label, genuine);
         }
-        self.options.log(self.options.log_user, note);
+        try { self.options.log(self.options.log_user, note); } catch (...) {}
     }
     return true;
 }
 
-bool install_present_detour(Observer& self, ModuleImage& image, void* genuine, char* why, size_t size)
+struct HookSetup {
+    Observer& observer;
+    void** chain;
+    void** chain1;
+    ModuleImage image;
+};
+
+int32_t try_present_detour(void* user, uint32_t method) noexcept try
 {
-    return install_present_route(self, image, genuine, reinterpret_cast<void*>(&hooked_present),
-        self.present_detoured, self.present_entry, self.present_chain, self.present_genuine,
-        "Present", why, size);
-}
-bool install_present1_detour(Observer& self, ModuleImage& image, void* genuine, char* why, size_t size)
+    auto& setup = *static_cast<HookSetup*>(user);
+    const auto& options = setup.observer.options;
+    auto** table = method == 0 ? setup.chain : setup.chain1;
+    const auto slot = method == 0 ? slot_present : slot_present1;
+    auto* hook = method == 0 ? reinterpret_cast<void*>(&hooked_present) : reinterpret_cast<void*>(&hooked_present1);
+    const auto* label = method == 0 ? "Present" : "Present1";
+    char why[512]{};
+    auto* genuine = genuine_slot(setup.image, table, slot, table[slot], why, sizeof(why));
+    if (genuine && install_present_route(setup.observer, setup.image, genuine, hook, method, label, why, sizeof(why))) {
+        return 1;
+    }
+    if (options.log) {
+        char note[768]{};
+        if (method == 0) {
+            std::snprintf(note, sizeof(note), "observer: Present detour unavailable because %s. "
+                "The table fallback refuses re-entry when the genuine route is unavailable", why);
+        } else {
+            std::snprintf(note, sizeof(note), "observer: Present1 hook unavailable: %s", why);
+        }
+        options.log(options.log_user, note);
+    }
+    return 0;
+} catch (...) { return 0; }
+
+int32_t replace_slot(void** address, void* expected, void* replacement) noexcept
 {
-    return install_present_route(self, image, genuine, reinterpret_cast<void*>(&hooked_present1),
-        self.present1_detoured, self.present1_entry, self.present1_chain, self.present1_genuine,
-        "Present1", why, size);
+    DWORD protection = 0;
+    if (!VirtualProtect(address, sizeof(void*), PAGE_EXECUTE_READWRITE, &protection)) return 0;
+    const auto previous = InterlockedCompareExchangePointer(
+        reinterpret_cast<void* volatile*>(address), replacement, expected);
+    DWORD restored = 0;
+    VirtualProtect(address, sizeof(void*), protection, &restored);
+    return previous == expected;
 }
+
+int32_t remove_present_detour(void* target) noexcept
+{
+    const auto disabled = MH_DisableHook(target);
+    if (disabled == MH_ERROR_NOT_CREATED) return 1;
+    if (disabled != MH_OK && disabled != MH_ERROR_DISABLED) return 0;
+    const auto removed = MH_RemoveHook(target);
+    return removed == MH_OK || removed == MH_ERROR_NOT_CREATED;
+}
+
+constexpr rsf_observer11_hook_ops hook_ops{
+    [](void** address) { return *reinterpret_cast<void* volatile*>(address); },
+    replace_slot,
+    try_present_detour,
+    remove_present_detour,
+};
 
 // A dummy device and swap chain exist only to reach the vtables, which are shared by every
 // instance the runtime creates. Once patched they can be released.
@@ -978,73 +1010,31 @@ extern "C" rsf_observer_result rsf_observer_install(const rsf_observer_options* 
 
     Observer& self = observer();
     std::lock_guard<std::mutex> lock(self.guard);
-    if (self.installed) {
-        return RSF_OBSERVER_ERROR_ALREADY_INSTALLED;
-    }
+    const auto allowed = rsf_core_observer11_can_install();
+    if (allowed != RSF_OBSERVER_OK) return allowed;
 
+    void** device = nullptr;
+    void** chain = nullptr;
+    void** chain1 = nullptr;
+    if (!acquire_vtables(&device, &chain, &chain1)) {
+        return RSF_OBSERVER_ERROR_NO_DEVICE;
+    }
     self.options = *options;
     const rsf_observer11_capture_filter filter{
         options->format, options->minimum_width, options->capacity,
         options->constant_buffer_min_bytes, options->constant_buffer_max_bytes};
     rsf_core_observer11_capture_configure(&filter);
 
-    if (!acquire_vtables(&self.device_vtable, &self.swapchain_vtable, &self.swapchain1_vtable)) {
-        return RSF_OBSERVER_ERROR_NO_DEVICE;
+    rsf_observer11_slot slots[RSF_OBSERVER11_SLOT_COUNT]{};
+    slots[RSF_OBSERVER11_TEXTURE] = {device + slot_create_texture2d, reinterpret_cast<void*>(&hooked_create_texture2d)};
+    if (options->constant_buffer_max_bytes != 0) {
+        slots[RSF_OBSERVER11_BUFFER] = {device + slot_create_buffer, reinterpret_cast<void*>(&hooked_create_buffer)};
     }
-
-    if (!rsf::patch_slot(self.device_vtable, slot_create_texture2d,
-                    reinterpret_cast<void*>(&hooked_create_texture2d),
-                    reinterpret_cast<void**>(&self.original_create))) {
-        return RSF_OBSERVER_ERROR_PATCH_FAILED;
+    slots[RSF_OBSERVER11_PRESENT] = {chain + slot_present, reinterpret_cast<void*>(&hooked_present)};
+    if (options->on_layout) {
+        slots[RSF_OBSERVER11_LAYOUT] = {device + slot_create_input_layout, reinterpret_cast<void*>(&hooked_create_input_layout)};
     }
-    if (self.options.constant_buffer_max_bytes != 0 &&
-        !rsf::patch_slot(self.device_vtable, slot_create_buffer,
-                    reinterpret_cast<void*>(&hooked_create_buffer),
-                    reinterpret_cast<void**>(&self.original_create_buffer))) {
-        rsf::patch_slot(self.device_vtable, slot_create_texture2d,
-                   reinterpret_cast<void*>(self.original_create), nullptr);
-        return RSF_OBSERVER_ERROR_PATCH_FAILED;
-    }
-    // dxgi's file is read at most once for both routes, and only when a slot needs it.
-    ModuleImage image;
-    // Present by detour on the genuine function, which the table names directly or, when another
-    // hook has rewritten the table, the module on disk still does. The table patch is the fallback
-    // and has only the re-entry guard between it and the recursion the first Windows run died of.
-    {
-        char why[512] = {};
-        void* current = self.swapchain_vtable[slot_present];
-        void* genuine = genuine_slot(image, self.swapchain_vtable, slot_present, current, why,
-                                     sizeof(why));
-        if (!genuine || !install_present_detour(self, image, genuine, why, sizeof(why))) {
-            if (self.options.log) {
-                char message[768];
-                std::snprintf(message, sizeof(message),
-                              "observer: Present is hooked in the swap chain's table, because %s. "
-                              "If another hook chains back into this one, the inner call is "
-                              "refused rather than recursed",
-                              why);
-                self.options.log(self.options.log_user, message);
-            }
-            if (!rsf::patch_slot(self.swapchain_vtable, slot_present,
-                            reinterpret_cast<void*>(&hooked_present),
-                            reinterpret_cast<void**>(&self.original_present))) {
-                rsf::patch_slot(self.device_vtable, slot_create_texture2d,
-                           reinterpret_cast<void*>(self.original_create), nullptr);
-                return RSF_OBSERVER_ERROR_PATCH_FAILED;
-            }
-        }
-    }
-
-    // Only patched when something asked to be told. These run on the game's creation path for every
-    // pipeline object it builds, and a hook that reports to nobody is pure cost. Each is
-    // independent: a failure to patch one leaves the others in place and is reported by the
-    // corresponding original staying null, because none of the three is worth failing install over.
-    if (self.options.on_layout) {
-        rsf::patch_slot(self.device_vtable, slot_create_input_layout,
-                   reinterpret_cast<void*>(&hooked_create_input_layout),
-                   reinterpret_cast<void**>(&self.original_create_input_layout));
-    }
-    if (self.options.on_shader) {
+    if (options->on_shader) {
         void* hooks[stage_shader_count] = {
             reinterpret_cast<void*>(&hooked_create_geometry_shader),
             reinterpret_cast<void*>(&hooked_create_hull_shader),
@@ -1053,76 +1043,25 @@ extern "C" rsf_observer_result rsf_observer_install(const rsf_observer_options* 
             reinterpret_cast<void*>(&hooked_create_geometry_so),
             reinterpret_cast<void*>(&hooked_create_vertex_shader),
             reinterpret_cast<void*>(&hooked_create_pixel_shader)};
-        for (size_t i = 0; i < stage_shader_count; ++i)
-            rsf::patch_slot(self.device_vtable, stage_shader_slots[i], hooks[i],
-                            &self.original_stage_shaders[i]);
-    }
-
-    if (self.swapchain1_vtable) {
-        char why[512]{};
-        void* current = self.swapchain1_vtable[slot_present1];
-        void* genuine = genuine_slot(image, self.swapchain1_vtable, slot_present1, current, why, sizeof(why));
-        if (!genuine || !install_present1_detour(self, image, genuine, why, sizeof(why))) {
-            if (self.options.log) {
-                char note[768]{}; std::snprintf(note, sizeof(note), "observer: Present1 hook unavailable: %s", why);
-                self.options.log(self.options.log_user, note);
-            }
+        for (size_t i = 0; i < stage_shader_count; ++i) {
+            slots[RSF_OBSERVER11_STAGE_BASE + i] = {device + stage_shader_slots[i], hooks[i]};
         }
     }
-    self.installed = true;
-    return RSF_OBSERVER_OK;
+    // Both routes share one lazy copy of DXGI's module image.
+    HookSetup setup{self, chain, chain1, {}};
+    const auto result = rsf_core_observer11_install_hooks(slots, chain1 ? 1u : 0u, &setup, &hook_ops);
+    if (result != RSF_OBSERVER_OK) self.options = {};
+    return result;
 }
 
 extern "C" rsf_observer_result rsf_observer_uninstall(void)
 {
-    Observer& self = observer();
+    auto& self = observer();
     std::lock_guard<std::mutex> lock(self.guard);
-    if (!self.installed || rsf_core_observer11_present_calls()) {
-        return RSF_OBSERVER_ERROR_NOT_READY;
-    }
-    rsf::patch_slot(self.device_vtable, slot_create_texture2d,
-               reinterpret_cast<void*>(self.original_create), nullptr);
-    if (self.original_create_buffer) {
-        rsf::patch_slot(self.device_vtable, slot_create_buffer,
-                   reinterpret_cast<void*>(self.original_create_buffer), nullptr);
-        self.original_create_buffer = nullptr;
-    }
-    if (self.original_create_input_layout) {
-        rsf::patch_slot(self.device_vtable, slot_create_input_layout,
-                   reinterpret_cast<void*>(self.original_create_input_layout), nullptr);
-        self.original_create_input_layout = nullptr;
-    }
-    for (size_t i = 0; i < stage_shader_count; ++i) {
-        if (self.original_stage_shaders[i]) {
-            rsf::patch_slot(self.device_vtable, stage_shader_slots[i],
-                            self.original_stage_shaders[i], nullptr);
-            self.original_stage_shaders[i] = nullptr;
-        }
-    }
-    if (self.present1_detoured) {
-        MH_DisableHook(self.present1_entry); MH_RemoveHook(self.present1_entry);
-        self.present1_detoured = false; self.present1_entry = nullptr;
-        self.present1_chain = self.present1_genuine = nullptr;
-        // Like Present's genuine clone, the executable allocation is kept for an in-flight return.
-    }
-    if (self.present_detoured) {
-        MH_DisableHook(self.present_entry);
-        MH_RemoveHook(self.present_entry);
-        self.present_detoured = false;
-        self.present_entry = nullptr;
-        self.present_chain = nullptr;
-        self.present_genuine = nullptr;
-        // The genuine trampoline is not freed. A Present already inside it when the hook came off
-        // would return into released memory, and sixty-four bytes for the life of the process are
-        // nothing.
-    } else if (self.original_present) {
-        rsf::patch_slot(self.swapchain_vtable, slot_present,
-                   reinterpret_cast<void*>(self.original_present), nullptr);
-    }
-    rsf_core_observer11_capture_clear();
-    rsf_core_observer11_replace_size(0, 0);
-    self.installed = false;
-    return RSF_OBSERVER_OK;
+    const auto was_active = rsf_core_observer11_installed();
+    const auto result = rsf_core_observer11_uninstall_hooks(&hook_ops);
+    if (was_active && !rsf_core_observer11_installed()) self.options = {};
+    return result;
 }
 
 extern "C" rsf_observer_result rsf_observer_acquire_device(void** device_out, void** context_out)
@@ -1139,7 +1078,7 @@ extern "C" rsf_observer_result rsf_observer_get_status(rsf_observer_status* stat
     std::lock_guard<std::mutex> lock(self.guard);
     rsf_observer11_capture_status capture{};
     rsf_core_observer11_capture_status(&capture);
-    status->installed = self.installed ? 1u : 0u;
+    status->installed = uint32_t(rsf_core_observer11_installed());
     status->have_device = capture.have_device;
     status->frames_presented = rsf_core_observer11_frames();
     status->textures_matched = capture.textures_matched;
@@ -1168,7 +1107,7 @@ extern "C" rsf_observer_result rsf_observer_request_dump(const char* output_pref
     }
     Observer& self = observer();
     std::lock_guard<std::mutex> lock(self.guard);
-    if (!self.installed) {
+    if (!rsf_core_observer11_installed()) {
         return RSF_OBSERVER_ERROR_NOT_READY;
     }
     rsf_core_observer11_request_dump(output_prefix_utf8, view);

@@ -15,7 +15,6 @@ extern "C" {
 int32_t rsf_core_observer11_present(rsf_observer_present_event*, const void* parameters,
     const rsf_observer11_present_ops*);
 int32_t rsf_core_observer11_application_present(const rsf_observer_present_event*, void (*update)(void*));
-uint32_t rsf_core_observer11_present_calls(void);
 uint32_t rsf_core_observer11_frames(void);
 uint64_t rsf_core_observer11_present_size(void);
 uint64_t rsf_core_observer11_replace_size(uint32_t width, uint32_t height);

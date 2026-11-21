@@ -40,7 +40,6 @@ void rsf_core_observer11_buffer(void* device, void* buffer, uint32_t bytes, uint
 int32_t rsf_core_observer11_needs_presenting_device(void);
 /* Consumes the presenting device reference and transfers the replaced one, if any. */
 void* rsf_core_observer11_adopt_device(void* device);
-void rsf_core_observer11_capture_clear(void);
 int32_t rsf_core_observer11_acquire_device(void** device, void** context, rsf_observer11_immediate);
 void rsf_core_observer11_capture_status(rsf_observer11_capture_status*);
 void rsf_core_observer11_request_dump(const char* prefix, uint32_t view);

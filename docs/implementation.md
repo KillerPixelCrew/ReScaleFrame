@@ -4,6 +4,15 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now owns D3D11 observer hook admission, original targets,
+activation, rollback and retirement. A refused required Present hook
+rolls back both creation hooks. Slot restoration checks that the
+observer still owns the slot. A failed restoration retains the original
+target for retry, with observer callbacks inactive. Native leaves still
+prepare the DXGI trampolines and make the MinHook and memory-protection
+calls. Public C headers are unchanged. Build and regression test
+execution remain open.
+
 Rust now owns the D3D11 observer's retained textures, latest constant
 buffers, size histogram, device/context pair and queued dump requests.
 Dump writers receive a retained snapshot for the duration of the

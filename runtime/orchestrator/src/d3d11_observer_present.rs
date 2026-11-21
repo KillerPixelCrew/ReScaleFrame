@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use crate::d3d11_observer_hooks::rsf_core_observer11_installed;
 use crate::scene_abi::rsf_observer_present_event as Event;
 use crate::sr_session::has_capacity;
 use std::cell::Cell;
@@ -91,13 +92,17 @@ unsafe extern "C" fn rsf_core_observer11_present(
         return unsafe { (platform.forward)(event, parameters, 0) };
     }
     let Some(_scope) = HookScope::enter() else {
-        if !REENTRY_WARNED.swap(true, Ordering::Relaxed)
+        if rsf_core_observer11_installed() != 0
+            && !REENTRY_WARNED.swap(true, Ordering::Relaxed)
             && unsafe { (platform.warn_reentry)() } == 0
         {
             REENTRY_WARNED.store(false, Ordering::Relaxed);
         }
         return unsafe { (platform.forward)(event, parameters, 1) };
     };
+    if rsf_core_observer11_installed() == 0 {
+        return unsafe { (platform.forward)(event, parameters, 0) };
+    }
 
     unsafe { (platform.notify)(event) };
     if event.flags & TEST == 0 {
@@ -152,8 +157,7 @@ unsafe extern "C" fn rsf_core_observer11_application_present(
     OK
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_core_observer11_present_calls() -> u32 {
+pub(super) fn present_calls() -> u32 {
     CALLS.load(Ordering::SeqCst)
 }
 
@@ -168,7 +172,7 @@ extern "C" fn rsf_core_observer11_present_size() -> u64 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_observer11_replace_size(width: u32, height: u32) -> u64 {
+pub(super) extern "C" fn rsf_core_observer11_replace_size(width: u32, height: u32) -> u64 {
     SIZE.swap(
         (u64::from(width) << 32) | u64::from(height),
         Ordering::AcqRel,
@@ -193,17 +197,17 @@ mod tests {
         };
         let notify =
             |event: &Event| unsafe { rsf_core_observer11_application_present(event, update) };
-        let before = rsf_core_observer11_present_calls();
+        let before = present_calls();
         assert_eq!(notify(&event), INVALID);
-        assert_eq!(rsf_core_observer11_present_calls(), before);
+        assert_eq!(present_calls(), before);
         event.completed = 0;
         assert_eq!(notify(&event), OK);
         event.completed = 1;
         event.method = 1;
         assert_eq!(notify(&event), INVALID);
-        assert_eq!(rsf_core_observer11_present_calls(), before + 1);
+        assert_eq!(present_calls(), before + 1);
         event.method = 0;
         assert_eq!(notify(&event), OK);
-        assert_eq!(rsf_core_observer11_present_calls(), before);
+        assert_eq!(present_calls(), before);
     }
 }
