@@ -4,6 +4,10 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now owns resizing and replacement of the legacy D3D11 motion
+resolver. A refused allocation keeps the previous resolver and
+generation. Native code supplies the existing create and destroy calls.
+
 Rust now owns Anomaly's fixture shader include search and buffers,
 plus the live compiler and reflector module leases. Includes still
 try `r3` first, preserve Windows path construction and refuse sizes that

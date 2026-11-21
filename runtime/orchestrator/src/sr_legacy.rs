@@ -27,15 +27,7 @@ struct Services {
     evaluate: unsafe extern "C" fn(*mut Bridge, *mut c_void, *const rsf_sr_frame) -> i32,
     warm_up: unsafe extern "C" fn(*mut Bridge, u32, u32, u32, u32, u32) -> i32,
     destroy: unsafe extern "C" fn(*mut Bridge),
-    fit_resolve: unsafe extern "C" fn(
-        *mut c_void,
-        u32,
-        u32,
-        *mut *mut Resolve,
-        *mut u32,
-        *mut u32,
-        *mut u32,
-    ) -> i32,
+    create_resolve: unsafe extern "C" fn(*mut c_void, u32, u32, *mut *mut Resolve) -> i32,
     resolve: unsafe extern "C" fn(
         *mut Resolve,
         *mut c_void,
@@ -49,6 +41,7 @@ struct Services {
     dump_active: unsafe extern "C" fn() -> i32,
     dump_frame: unsafe extern "C" fn(*mut c_void, *const Frame, u32),
 }
+const _: () = assert!(size_of::<Services>() == 14 * size_of::<*const c_void>());
 
 struct Exposure {
     auto: bool,
@@ -88,8 +81,7 @@ pub(super) struct Adapter {
     bridge: *mut Bridge,
     resolve: *mut Resolve,
     device: *mut c_void,
-    width: u32,
-    height: u32,
+    resolve_extent: [u32; 2],
     generation: u32,
     frame_id: u64,
     session_id: u64,
@@ -143,8 +135,7 @@ unsafe extern "C" fn rsf_core_sr_legacy_create(
         bridge: ptr::null_mut(),
         resolve: ptr::null_mut(),
         device: setup.open.device,
-        width: 0,
-        height: 0,
+        resolve_extent: [0; 2],
         generation: 0,
         frame_id: 0,
         session_id: NEXT_SESSION.fetch_add(1, Ordering::Relaxed),
@@ -227,23 +218,22 @@ impl Adapter {
     }
 
     fn dense_motion(&mut self, context: *mut c_void, input: &Frame, has_sentinel: u32) -> i32 {
-        let mut rebuilt = 0;
-        if unsafe {
-            (self.services.fit_resolve)(
-                self.device,
-                input.render_width,
-                input.render_height,
-                &mut self.resolve,
-                &mut self.width,
-                &mut self.height,
-                &mut rebuilt,
-            )
-        } == 0
-        {
-            return INIT_FAILED;
-        }
-        if rebuilt != 0 {
+        let extent = [input.render_width, input.render_height];
+        if self.resolve.is_null() || self.resolve_extent != extent {
+            let mut replacement = ptr::null_mut();
+            let created = unsafe {
+                (self.services.create_resolve)(self.device, extent[0], extent[1], &mut replacement)
+            };
+            if created == 0 || replacement.is_null() {
+                if !replacement.is_null() {
+                    unsafe { (self.services.destroy_resolve)(replacement) };
+                }
+                return INIT_FAILED;
+            }
+            let previous = std::mem::replace(&mut self.resolve, replacement);
+            self.resolve_extent = extent;
             self.generation = self.generation.wrapping_add(1);
+            unsafe { (self.services.destroy_resolve)(previous) };
         }
         let params = rsf_motion_resolve_params {
             struct_size: size_of::<rsf_motion_resolve_params>() as u32,
@@ -476,21 +466,13 @@ pub(super) mod fake {
     unsafe extern "C" fn destroy(_: *mut Bridge) {
         DESTROYED.set(DESTROYED.get() + 1);
     }
-    unsafe extern "C" fn fit(
+    unsafe extern "C" fn create_resolve(
         _: *mut c_void,
-        width: u32,
-        height: u32,
+        _: u32,
+        _: u32,
         resolve: *mut *mut Resolve,
-        cached_width: *mut u32,
-        cached_height: *mut u32,
-        rebuilt: *mut u32,
     ) -> i32 {
-        unsafe {
-            resolve.write(RESOLVE);
-            cached_width.write(width);
-            cached_height.write(height);
-            rebuilt.write(1);
-        }
+        unsafe { resolve.write(RESOLVE) };
         1
     }
     unsafe extern "C" fn resolve(
@@ -522,7 +504,7 @@ pub(super) mod fake {
         evaluate,
         warm_up,
         destroy,
-        fit_resolve: fit,
+        create_resolve,
         resolve,
         depth,
         motion,

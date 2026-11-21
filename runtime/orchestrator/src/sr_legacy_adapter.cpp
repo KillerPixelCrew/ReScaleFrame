@@ -4,16 +4,6 @@
 #include <rescaleframe/sr_bridge.h>
 
 namespace {
-int fit(void* device, uint32_t width, uint32_t height, rsf_motion_resolve** resolve,
-    uint32_t* cached_width, uint32_t* cached_height, uint32_t* rebuilt)
-{
-    bool changed = false;
-    const bool accepted = rsf::fit_motion_resolve(device, width, height,
-        *resolve, *cached_width, *cached_height, &changed);
-    *rebuilt = changed;
-    return accepted;
-}
-
 struct LegacyServices {
     decltype(&rsf_sr_bridge_create) create;
     decltype(&rsf_sr_bridge_select) select;
@@ -22,7 +12,7 @@ struct LegacyServices {
     decltype(&rsf_sr_bridge_evaluate) evaluate;
     decltype(&rsf_sr_bridge_warm_up) warm_up;
     decltype(&rsf_sr_bridge_destroy) destroy;
-    decltype(&fit) fit_resolve;
+    decltype(&rsf_motion_resolve_create) create_resolve;
     decltype(&rsf_motion_resolve_run) resolve;
     decltype(&rsf_motion_resolve_depth) depth;
     decltype(&rsf_motion_resolve_motion) motion;
@@ -30,11 +20,12 @@ struct LegacyServices {
     decltype(&rsf_input_dump_active) dump_active;
     decltype(&rsf_input_dump_sr) dump_frame;
 };
+static_assert(sizeof(LegacyServices) == 14 * sizeof(void*));
 
 constexpr LegacyServices services{
     rsf_sr_bridge_create, rsf_sr_bridge_select, rsf_sr_bridge_get_status, rsf_sr_bridge_set_auto_exposure,
     rsf_sr_bridge_evaluate, rsf_sr_bridge_warm_up, rsf_sr_bridge_destroy,
-    fit, rsf_motion_resolve_run, rsf_motion_resolve_depth, rsf_motion_resolve_motion, rsf_motion_resolve_destroy,
+    rsf_motion_resolve_create, rsf_motion_resolve_run, rsf_motion_resolve_depth, rsf_motion_resolve_motion, rsf_motion_resolve_destroy,
     rsf_input_dump_active, rsf_input_dump_sr,
 };
 }
