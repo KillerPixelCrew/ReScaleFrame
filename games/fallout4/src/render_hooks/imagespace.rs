@@ -15,7 +15,7 @@
 use super::publication::{self, Leaves as PublicationLeaves, SrOutcome};
 use super::recovery::{self, Leaves as RecoveryLeaves};
 use crate::cpu_abi::rsf_fallout4_cpu_identity as CpuIdentity;
-use crate::resolution::rsf_fallout4_resolution_output_busy;
+use crate::resolution::owns_full_output;
 use crate::{RSF_ERROR_NOT_READY, RSF_OK, image, message};
 use rsf_game_sys::{rsf_game_render_pass, rsf_result};
 use std::ffi::{CStr, c_char, c_void};
@@ -186,7 +186,7 @@ fn leave_imagespace(leaves: &Leaves, recovery: &RecoveryLeaves) {
         recovery.refuse();
     }
     leaves.report_state(UI_RESTORED, RSF_OK);
-    if rsf_fallout4_resolution_output_busy() {
+    if owns_full_output() {
         recovery.refuse();
         leaves.diagnostic(
             c"Fallout4 native output-state cleanup remains owned; subsequent world admission blocked.",

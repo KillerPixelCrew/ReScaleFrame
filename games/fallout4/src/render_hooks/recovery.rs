@@ -9,7 +9,7 @@
 //! World flags (NativeRecoveryLeaves in render_hooks_platform.h). The state is per thread, as the
 //! C++ World is. See docs/research/rust-fallout4-render-hooks.md.
 
-use crate::resolution::rsf_fallout4_resolution_output_busy;
+use crate::resolution::owns_full_output;
 use crate::{RSF_ERROR_NOT_READY, RSF_OK, message};
 use rsf_game_sys::{rsf_game_render_pass, rsf_result};
 use std::cell::Cell;
@@ -510,7 +510,7 @@ pub(super) fn finish(leaves: &Leaves) -> bool {
     {
         return refusal(leaves, 6);
     }
-    if !rsf_fallout4_resolution_output_busy() && !unsafe { (leaves.begin_output)() } {
+    if !owns_full_output() && !unsafe { (leaves.begin_output)() } {
         return refusal(leaves, 7);
     }
     let okay = call(leaves, FINISH);

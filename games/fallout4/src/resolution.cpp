@@ -106,10 +106,6 @@ bool begin_output_resolution(const NativeDepthSnapshot& snapshot, const rsf_game
 }
 
 bool native_resolution_write() noexcept { return rsf_fallout4_resolution_native_dr(&leaves); }
-bool native_viewport_write(bool enabled) noexcept { return rsf_fallout4_resolution_native_viewport(enabled); }
 bool end_output_resolution() noexcept { return rsf_fallout4_resolution_end_output(&leaves); }
 bool finish_resolution_source() noexcept { return rsf_fallout4_resolution_finish_source(&leaves); }
-bool resolution_busy() noexcept { return rsf_fallout4_resolution_busy(); }
-bool output_resolution_busy() noexcept { return rsf_fallout4_resolution_output_busy(); }
-bool resolution_refused() noexcept { return rsf_fallout4_resolution_refused(); }
 }

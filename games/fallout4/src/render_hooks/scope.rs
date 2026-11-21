@@ -15,7 +15,7 @@
 use super::publication;
 use super::recovery::{self, Leaves as RecoveryLeaves};
 use crate::cpu_abi::rsf_fallout4_cpu_identity as CpuIdentity;
-use crate::resolution::rsf_fallout4_resolution_busy;
+use crate::resolution::is_busy as resolution_busy;
 use crate::{RSF_ERROR_NOT_READY, RSF_OK, image};
 use rsf_game_sys::{
     RSF_GAME_RENDER_FRAME, RSF_GAME_RENDER_NO_FG, RSF_GAME_RENDER_SUBMISSION, rsf_game_render_pass,
@@ -33,18 +33,19 @@ const FRAME_PASS: usize = 0x21f_0ac0;
 const SOURCE_RETIRED: u32 = 7;
 
 /// NativeRenderOwner: the native renderer, device, Context, chain, window, scene graph view and
-/// frame counter, read whole by the typed owner reader.
+/// frame counter, read whole by the typed owner reader. The DR seam (producer.rs) compares it with
+/// the leased FRAME.
 #[repr(C)]
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct Owner {
-    renderer: usize,
-    device: usize,
-    context: usize,
-    chain: usize,
-    window: usize,
-    graph: usize,
-    view: usize,
-    frame: u32,
+    pub(super) renderer: usize,
+    pub(super) device: usize,
+    pub(super) context: usize,
+    pub(super) chain: usize,
+    pub(super) window: usize,
+    pub(super) graph: usize,
+    pub(super) view: usize,
+    pub(super) frame: u32,
 }
 
 /// NativeScopeWorld: the World values a step reads at the moment it runs. The pass pointers name
@@ -300,7 +301,7 @@ fn finish(scope: &Leaves, recovery: &RecoveryLeaves) {
             result,
         )
     };
-    if !rsf_fallout4_resolution_busy() && !scope.world().auxiliary_open && recovery::token() == 0 {
+    if !resolution_busy() && !scope.world().auxiliary_open && recovery::token() == 0 {
         unsafe { (scope.reset)() };
         recovery::reset();
     }

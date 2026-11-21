@@ -66,13 +66,6 @@ bool rsf_fallout4_depth_make(const NativeDepthLeaves*, const NativeDepthSnapshot
     NativeDepthReport) noexcept;
 }
 
-// Raster ownership deliberately does not require sampled CPU attribution or
-// temporal matrices/history. It never establishes temporal admission.
-inline bool capture_native_raster(const CpuIdentity& cpu, NativeDepthSnapshot& output,
-    void (*report)(const char*) = nullptr) noexcept {
-    const auto value = cpu_identity_abi(cpu);
-    return rsf_fallout4_depth_capture_raster(native_depth_leaves(), &value, &output, report);
-}
 inline bool native_raster_snapshot_current(const NativeDepthSnapshot& snapshot) noexcept {
     return rsf_fallout4_depth_raster_current(native_depth_leaves(), &snapshot);
 }
@@ -80,14 +73,6 @@ inline bool verify_native_depth_domains() noexcept { return rsf_fallout4_depth_v
 inline bool native_depth_snapshot_current(const NativeDepthSnapshot& snapshot,
     void (*report)(const char*) = nullptr) noexcept {
     return rsf_fallout4_depth_snapshot_current(native_depth_leaves(), &snapshot, report);
-}
-// Caller must have returned from original prepass21F38B0 at exact call21F9F73
-// (return21F9F78) inside the ordinary, unchanged CPU render source lease.
-// Optional bounded first receipt per named refusal stage, matching the input reader.
-inline bool capture_native_depth_domains(const CpuIdentity& cpu, NativeDepthSnapshot& output,
-    void (*report)(const char*) = nullptr) noexcept {
-    const auto value = cpu_identity_abi(cpu);
-    return rsf_fallout4_depth_capture(native_depth_leaves(), &value, &output, report);
 }
 // Describes scalar depth at the composed raster samples, not spatial reprojection.
 // Failure leaves output all zero; caller must refuse mapping rather than use raw depth.

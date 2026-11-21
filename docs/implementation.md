@@ -24,6 +24,14 @@ See [the Rust migration record](rust-migration.md#native-policy-cutover).
 
 ## Remaining Rust integration ports
 
+Fallout 4 now selects the viewport, dynamic-resolution and depth
+prepass calls in Rust. Rust owns the HUD-less admission, overlap
+refusal, and same-source checks. The native detours retain the
+original calls, LastError, unwind guard, and typed effect calls.
+Unused resolution and depth wrappers were removed. The producer
+fixtures and game checks remain unrun.
+[Producer ownership](research/rust-fallout4-render-hooks.md#viewport-dynamic-resolution-and-prepass-seams-in-rust)
+
 Fallout 4 now selects the imagespace and Effects seams in Rust
 and owns their recovery and cleanup sequence. Rust also applies the
 existing TAA gate and bounded receipt. Native detours retain the

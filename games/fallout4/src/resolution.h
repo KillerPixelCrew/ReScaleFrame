@@ -22,10 +22,6 @@ bool native_resolution_write() noexcept;
 // Borrow native full-output state for the synchronous transaction. On refusal,
 // restore it before native consumers; successful output drains at RenderUI end.
 bool begin_output_resolution(const NativeDepthSnapshot&, const rsf_game_render_pass&) noexcept;
-bool native_viewport_write(bool enabled) noexcept;
 bool end_output_resolution() noexcept;
 bool finish_resolution_source() noexcept;
-bool resolution_busy() noexcept;
-bool output_resolution_busy() noexcept;
-bool resolution_refused() noexcept;
 }

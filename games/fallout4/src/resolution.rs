@@ -19,7 +19,7 @@ use windows_sys::Win32::System::{
 };
 
 const STATE: usize = 0x3d871a0;
-const TARGETS: usize = 0x2f4d750;
+pub(crate) const TARGETS: usize = 0x2f4d750;
 const RATIOS: usize = TARGETS + 0xfb8;
 const VIEWPORT: usize = TARGETS + 0xfe4;
 const ACTIVE: usize = TARGETS + 0xfe5;
@@ -914,8 +914,7 @@ extern "C" fn rsf_fallout4_resolution_native_dr(leaves: &Leaves) -> bool {
     okay
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_resolution_native_viewport(enabled: bool) -> bool {
+pub(crate) fn native_viewport(enabled: bool) -> bool {
     let mut scope = SCOPE.get();
     if !scope.output {
         return true;
@@ -939,18 +938,15 @@ extern "C" fn rsf_fallout4_resolution_finish_source(leaves: &Leaves) -> bool {
     finish_source(leaves, image())
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_fallout4_resolution_busy() -> bool {
+pub(crate) fn is_busy() -> bool {
     OWNERS.load(Ordering::Acquire) != 0
 }
 
-#[unsafe(no_mangle)]
-pub(crate) extern "C" fn rsf_fallout4_resolution_output_busy() -> bool {
+pub(crate) fn owns_full_output() -> bool {
     SCOPE.get().output
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_resolution_refused() -> bool {
+pub(crate) fn refused() -> bool {
     SCOPE.get().changed
 }
 

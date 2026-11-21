@@ -4,8 +4,8 @@
 // lifecycle, the ordinary World and outer Present guards, the reduced-render recovery
 // transaction (render_hooks/recovery.rs), SR and HUDless publication
 // (render_hooks/publication.rs), the FRAME, SUBMISSION and WINDOW scope
-// (render_hooks/scope.rs) and the imagespace, Effects and TAA seams
-// (render_hooks/imagespace.rs). Not a DLL ABI.
+// (render_hooks/scope.rs), the imagespace, Effects and TAA seams (render_hooks/imagespace.rs) and
+// the viewport, dynamic-resolution and prepass seams (render_hooks/producer.rs). Not a DLL ABI.
 #include "cpu_events_platform.h"
 #include "resolution.h"
 #include <cstddef>
@@ -308,6 +308,63 @@ static_assert(sizeof(NativeEffectsCall) == 32 && offsetof(NativeEffectsCall, fir
     offsetof(NativeEffectsCall, flags) == 28);
 static_assert(sizeof(NativeImagespaceLeaves) == 8 * sizeof(void*));
 
+// Viewport selector, dynamic-resolution writer and depth prepass seams (render_hooks/producer.rs).
+// Rust owns the native-target and verified-caller selection, the owned full-output selector write
+// after the native viewport intent and its refusal, the HUDless receipt and seam, the depth
+// invalidation before DR, the overlapping DR refusal and transfer, the DR configuration admission
+// on the screen and leased owner with its refusal, the nested prepass selection, invalidation and
+// interruption, and the same-source raster and depth capture with its refusal. C++ keeps the typed
+// detours, the original calls, the return addresses, the LastError saves and restores, the nested
+// prepass counter and its guard, the typed screen, owner, resolution and depth reads, and the
+// World fields and snapshots. Rust also uses the recovery leaves' refuse and same_source, and the
+// publication leaves for the HUDless seam.
+struct NativeDepthSnapshot;
+struct NativeProducerWorld {
+    rsf_fallout4_cpu_identity cpu;
+    const rsf_game_render_pass* pass;          // World pass
+    const rsf_game_render_pass* frame_pass;
+    void* context;                             // World Context and outer chain
+    void* chain;
+    bool inputs, published, frame_open, submission_open;
+    bool depth_interrupted;                    // a nested prepass ran inside the selected one
+};
+// The World source before the original prepass and its selection, held across the original.
+struct NativePrepassCall {
+    rsf_fallout4_cpu_identity identity;
+    bool selected;
+};
+struct NativeProducerLeaves {
+    void (*world)(NativeProducerWorld*) noexcept;
+    // Clear the depth snapshot, and the raster snapshot when raster is set.
+    void (*invalidate)(bool raster) noexcept;
+    void (*interrupt_depth)(bool interrupted) noexcept;
+    // World raster and source refusal.
+    void (*refuse_raster)() noexcept;
+    // native_resolution_write after the complete original DR writer.
+    bool (*native_dr)() noexcept;
+    // classify_native_screen refusals of the World source on an empty pass in the ordinary World.
+    uint32_t (*screen_refusals)() noexcept;
+    // The scope leaves' typed owner read.
+    bool (*read_owner)(NativeRenderOwner*) noexcept;
+    // configure_native_resolution on the FRAME pass and World Context with the recovery reserve.
+    bool (*configure)() noexcept;
+    // Raster capture into the World raster snapshot; depth capture into the caller's snapshot.
+    bool (*capture_raster)(const rsf_fallout4_cpu_identity*) noexcept;
+    bool (*capture_depth)(const rsf_fallout4_cpu_identity*, NativeDepthSnapshot*) noexcept;
+    // Copy into the World depth snapshot.
+    void (*adopt_depth)(const NativeDepthSnapshot*) noexcept;
+    // The publication leaves' report_state and diagnostic.
+    void (*report_state)(uint32_t stage, const rsf_game_render_pass*, void* context, bool published,
+        int32_t result) noexcept;
+    void (*diagnostic)(const char*) noexcept;
+};
+
+static_assert(sizeof(NativeProducerWorld) == 80 && offsetof(NativeProducerWorld, pass) == 40 &&
+    offsetof(NativeProducerWorld, context) == 56 && offsetof(NativeProducerWorld, chain) == 64 &&
+    offsetof(NativeProducerWorld, inputs) == 72 && offsetof(NativeProducerWorld, depth_interrupted) == 76);
+static_assert(sizeof(NativePrepassCall) == 48 && offsetof(NativePrepassCall, selected) == 40);
+static_assert(sizeof(NativeProducerLeaves) == 13 * sizeof(void*));
+
 extern "C" {
 // Binds the leaves. The table must be complete and live for the process.
 bool rsf_fallout4_render_publish(const NativeRenderHookLeaves*) noexcept;
@@ -342,9 +399,21 @@ void rsf_fallout4_render_after_effects(const NativeImagespaceLeaves*, const Nati
 // The TAA active answer from the original answer.
 bool rsf_fallout4_render_gate_taa(const NativeImagespaceLeaves*, const NativeRecoveryLeaves*,
     bool original) noexcept;
-// The HUDless seam after the native HUDless viewport selection.
-void rsf_fallout4_render_emit_hudless(const NativePublicationLeaves*,
-    const NativeRecoveryLeaves*) noexcept;
+// After the original viewport selector store: the owned full-output selector write on the native
+// targets, then the HUDless receipt and seam after the live HUDless selection.
+void rsf_fallout4_render_after_viewport(const NativeProducerLeaves*, const NativePublicationLeaves*,
+    const NativeRecoveryLeaves*, uintptr_t caller, uintptr_t manager, bool enabled) noexcept;
+// Before the original DR writer: depth invalidation on an open FRAME.
+void rsf_fallout4_render_before_dynamic_resolution(const NativeProducerLeaves*) noexcept;
+// After the original DR writer: the overlap refusal and transfer, then the configuration admission.
+void rsf_fallout4_render_after_dynamic_resolution(const NativeProducerLeaves*, const NativeRecoveryLeaves*,
+    uintptr_t caller, uintptr_t manager) noexcept;
+// Before the original prepass, at its nested depth: selection, invalidation and interruption.
+void rsf_fallout4_render_before_prepass(const NativeProducerLeaves*, const NativeRecoveryLeaves*,
+    uintptr_t caller, uint32_t depth, NativePrepassCall*) noexcept;
+// After the original prepass: the same-source raster and depth capture of the selected call.
+void rsf_fallout4_render_after_prepass(const NativeProducerLeaves*, const NativeRecoveryLeaves*,
+    const NativePrepassCall*) noexcept;
 // The screen verdict on a World pass.
 void rsf_fallout4_render_screen_facts(const NativePublicationLeaves*, const NativeRecoveryLeaves*,
     rsf_game_render_pass*, bool first) noexcept;

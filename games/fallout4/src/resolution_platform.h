@@ -46,12 +46,8 @@ bool rsf_fallout4_resolution_preflight(const NativeResolutionLeaves*, const rsf_
 bool rsf_fallout4_resolution_begin_output(const NativeResolutionLeaves*, const NativeDepthLeaves*,
     const NativeDepthSnapshot*, const rsf_game_render_pass*) noexcept;
 bool rsf_fallout4_resolution_native_dr(const NativeResolutionLeaves*) noexcept;
-bool rsf_fallout4_resolution_native_viewport(bool enabled) noexcept;
 bool rsf_fallout4_resolution_end_output(const NativeResolutionLeaves*) noexcept;
 bool rsf_fallout4_resolution_finish_source(const NativeResolutionLeaves*) noexcept;
-bool rsf_fallout4_resolution_busy() noexcept;
-bool rsf_fallout4_resolution_output_busy() noexcept;
-bool rsf_fallout4_resolution_refused() noexcept;
 void rsf_fallout4_resolution_report(const NativeResolutionLeaves*, uint32_t stage,
     const rsf_game_render_pass*, void*, bool published, int32_t result, ResolutionReport) noexcept;
 }

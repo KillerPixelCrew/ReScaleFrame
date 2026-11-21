@@ -349,3 +349,79 @@ Open game checks: SR published at native and reduced quality with native TAA exc
 the resolved imagespace, the `ui_return` and `ui_restored` receipts each frame, a forced RETIRE
 refusal at the Effects return that drains at the imagespace exit or after Swap, VATS and Pip-Boy
 contents after the Effects-return drain, and an imagespace call from an unselected caller.
+
+## Viewport, dynamic-resolution and prepass seams in Rust
+
+This source port starts at `59783098`, which merges `c1e16179` (the imagespace port above), and
+moves the first-party choices of `observe_viewport`, `observe_dynamic_resolution` and
+`observe_prepass` from `render_hooks.cpp` into `render_hooks/producer.rs` without new research.
+The viewport selector store `0x1839ec0`, the HUDless selection return `0x21fa2ca`, the DR writer
+return `0x21f9f34` and the prepass return `0x21f9f78` are the ones in the [native callback analysis](fallout4-render-integration-20261116.md)
+and are still checked by `verify` (`WORLD_CALLS` and `PRODUCER_CALLS`). The native targets
+`0x2f4d750` (the DR and viewport manager argument) and the configuration after the DR writer are
+the ones in the [reduced output scope notes](fallout4-native-reduced-output-scope-20261116.md); the
+prepass capture after `0x21f9f78` within the same-source render lease is the one in the
+[depth-domain notes](fallout4-depth-domains-20261116.md). No option, GPU work, shader, address,
+Runtime export, GameSDK field or vendor and producer policy changes, and nothing visual is meant to
+change.
+
+| Owner | Rust (`render_hooks/producer.rs`) | C++ (`render_hooks.cpp`) |
+| --- | --- | --- |
+| Viewport | After the original store: on the native targets the owned full-output selector follows the native intent (`rsf_fallout4_resolution_native_viewport`), and a failed write refuses the World with its diagnostic. Then, when live on the native targets from the HUDless return, the `hudless` receipt on the input or FRAME pass with `RSF_OK`, then the HUDless seam (`publication.rs`). | The return address before the original, the original first, then the LastError save and restore around the Rust step. |
+| DR before | An open FRAME drops its depth snapshot (the raster snapshot is kept). | The return address and LastError save, the LastError restore before the original. |
+| DR after | A call on the native targets while resolution ownership is pending refuses the World and its raster, then transfers the native write (`native_resolution_write`), with its diagnostic on failure. The live call from the DR return on the native targets, not overlapping, on an open FRAME and SUBMISSION before inputs and on the current source asks the screen; only a refusal set of exactly `WORLD_LEASE_INVALID`, then a native owner whose frame, view and window match the FRAME pass and whose Context and chain match the World, configures native resolution with the recovery reserve. A failed configuration refuses the raster only while ownership is pending or the change was refused. Any other call on an open FRAME with pending ownership refuses the raster. | The native LastError captured after the original and restored after the Rust step; the typed screen classification on an empty pass in the ordinary World, the owner read and `configure_native_resolution`. |
+| Prepass before | Records the World source, then selects the live or recovery-owned call at nested depth 1 from the prepass return on an open FRAME and SUBMISSION before inputs. On an open FRAME every call drops the depth and raster snapshots, a nested call interrupts depth and a call after inputs refuses the World. The selected call clears the interruption. | The nested depth counter and the guard that restores it when the original returns or unwinds, the LastError save and restore, and the recorded call (`NativePrepassCall`) on the detour frame across the original. |
+| Prepass after | Only the selected call, still live or recovery-owned on an open FRAME and SUBMISSION before inputs and not interrupted: the raster capture into the World (result ignored), then a depth capture into a stack snapshot, adopted only when the recorded source is the current render source and the World's source; otherwise the World is refused with its diagnostic. | The typed raster and depth captures with the receipt logger, and the copy into the World depth snapshot. |
+
+`NativeProducerLeaves` has 13 entries: the World read (80 bytes), the snapshot invalidation, the
+depth interruption, the raster refusal, `native_resolution_write`, the screen refusals, the scope
+leaves' owner read, the configuration, the raster and depth captures, the depth adoption, and the
+same resolution receipt and shared diagnostic functions the other tables bind. `NativePrepassCall`
+(48 bytes) carries the recorded source and the selection. All three are size-asserted on both
+sides. Rust uses the recovery leaves' refuse and same_source, calls the HUDless seam, the recovery
+token, the Rust resolution helpers and `rsf_fallout4_cpu_render_source_is_current` directly. The
+`rsf_fallout4_render_emit_hudless` export lost its only caller and is removed.
+
+### Differences
+
+- The captures call `rsf_fallout4_depth_capture_raster` and `rsf_fallout4_depth_capture` with the
+  ABI identity Rust recorded, instead of the inline wrappers that converted the C++ identity to
+  the same value before the same calls.
+- The candidate depth snapshot is a Rust stack value starting from the C++ value-initialized
+  snapshot (`EMPTY`), and the capture resets its output first, as before.
+- The native targets address is `resolution.rs`'s `TARGETS` instead of a second literal, and the
+  scope `Owner` fields and `EMPTY` are visible within the crate. The public DLL exports are
+  unchanged in source.
+- Every new leaf is noexcept. The screen classification keeps its catch; configuration, the
+  native DR transfer and the captures were already noexcept, and the owner read is the scope leaf.
+- The merge removes the four unused resolution wrappers and their private C entry points.
+  Their Rust callers now use ordinary Rust functions, including the producer's callable
+  arguments. It also removes the unused C++ raster and depth capture wrappers.
+
+### Traces
+
+Source comparison walked every path of the three original functions. Viewport: the original runs
+before anything, a call off the native targets does nothing else, the selector write precedes the
+HUDless receipt and seam, and a failed write still allows the seam. DR: the depth snapshot drops
+before the original; after it the overlap refusal and transfer come first and block configuration,
+the selected path keeps screen, owner, frame, view, window, Context, chain, configuration, then
+busy and refused in short-circuit order, and the pending-ownership refusal remains the `else` of
+the selected condition. Prepass: the source is recorded before invalidation, selection is computed
+before the World changes, interruption is set by a nested call and cleared only by the selected
+one, and the capture after the original rechecks live or token, FRAME, SUBMISSION, inputs and
+interruption before the raster capture, then depth capture, current render source and World source
+in that order. LastError is restored before each original and after each Rust step as before.
+
+A scripted comparison against `c1e16179` found all six receipt texts of the original
+`render_hooks.cpp` in the new sources. `render_hooks/producer/tests.rs` adds unrun fake-leaf checks
+of the selector write and its refusal on the native targets, the HUDless receipt then seam on the
+FRAME and input pass, the DR depth drop, the overlap refusal and transfer, the pending-ownership
+refusal, the selected configuration and its refusal, exact screen and owner matching, the prepass
+selection, invalidation, interruption and post-inputs refusal, and the same-source capture and
+its refusals. Pinned Rust 1.94.1 formatting, locked offline Cargo metadata and whitespace checks
+passed. Build, link, Clippy, tests, the shared host fixture, deployment and game checks remain with
+the user; this is a source port, not a runtime result. Open game checks: a reduced quality frame
+configured at the DR return with the `hudless` receipt and HUDless WINDOW each frame, a nested or
+foreign prepass refusing that frame's depth, an overlapping DR writer while ownership is pending,
+a Pip-Boy or menu screen leaving native resolution alone, and the owned selector following a
+native full-viewport intent.

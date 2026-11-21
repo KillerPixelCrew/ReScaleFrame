@@ -260,7 +260,7 @@ const NO_CAMERA: DepthCamera = DepthCamera {
 };
 
 /// The C++ value-initialized snapshot.
-const EMPTY: Snapshot = Snapshot {
+pub(crate) const EMPTY: Snapshot = Snapshot {
     identity: NO_IDENTITY,
     native_frame: 0,
     renderer_key: 0,

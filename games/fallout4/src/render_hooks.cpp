@@ -73,6 +73,7 @@ struct World {
 };
 thread_local World world;
 thread_local bool ordinary_world{};
+// Nested prepass depth; the detour's guard restores it when the original returns or unwinds.
 thread_local uint32_t prepass_depth{};
 uintptr_t image() { return uintptr_t(GetModuleHandleW(nullptr)); }
 bool read(uintptr_t address, void* destination, size_t length) {
@@ -376,6 +377,41 @@ void imagespace_leave() noexcept { world.in_imagespace=world.published=world.ful
 bool imagespace_manager(uintptr_t* manager) noexcept { return read(image()+0x3e5e4b0,manager,sizeof(*manager)); }
 constexpr NativeImagespaceLeaves imagespace_leaves{imagespace_world, imagespace_enter, imagespace_leave,
     imagespace_manager, drain_auxiliaries, end_output_resolution, publication_report_state, diagnostic};
+// Viewport, DR and prepass leaves (render_hooks_platform.h). Rust (render_hooks/producer.rs)
+// selects the calls and sequences the selector write, the HUDless seam, the DR admission and the
+// prepass capture; these read the World, call the typed screen, owner, resolution and depth
+// readers and keep the World fields and snapshots.
+static_assert(int(ResolutionStage::hudless)==4);
+void producer_world(NativeProducerWorld* out) noexcept {
+    *out={cpu_identity_abi(world.cpu),&world.pass,&world.frame_pass,world.context.Get(),world.chain.Get(),
+        world.inputs,world.published,world.frame_open,world.submission_open,world.depth_interrupted};
+}
+void producer_invalidate(bool raster) noexcept {
+    world.depth_snapshot={};
+    if (raster) world.raster_snapshot={};
+}
+void producer_interrupt_depth(bool interrupted) noexcept { world.depth_interrupted=interrupted; }
+void producer_refuse_raster() noexcept { world.raster_refused=world.refused=true; }
+uint32_t producer_screen_refusals() noexcept {
+    const rsf_game_render_pass candidate{};
+    return classify_native_screen(world.cpu,candidate,true).refusals;
+}
+bool producer_configure() noexcept {
+    return configure_native_resolution(host,world.frame_pass,world.context.Get(),reserve_recovery);
+}
+// The raster capture does not establish temporal admission. The depth capture uses
+// the ABI identity recorded across the admitted original prepass call.
+bool producer_capture_raster(const rsf_fallout4_cpu_identity* identity) noexcept {
+    return rsf_fallout4_depth_capture_raster(native_depth_leaves(),identity,&world.raster_snapshot,report);
+}
+bool producer_capture_depth(const rsf_fallout4_cpu_identity* identity, NativeDepthSnapshot* snapshot) noexcept {
+    return rsf_fallout4_depth_capture(native_depth_leaves(),identity,snapshot,report);
+}
+void producer_adopt_depth(const NativeDepthSnapshot* snapshot) noexcept { world.depth_snapshot=*snapshot; }
+constexpr NativeProducerLeaves producer_leaves{producer_world, producer_invalidate, producer_interrupt_depth,
+    producer_refuse_raster, native_resolution_write, producer_screen_refusals, scope_read_owner,
+    producer_configure, producer_capture_raster, producer_capture_depth, producer_adopt_depth,
+    publication_report_state, diagnostic};
 void observe_viewport(void* manager, bool enabled) {
     Entry entry;
 #if defined(_MSC_VER)
@@ -385,16 +421,9 @@ void observe_viewport(void* manager, bool enabled) {
 #endif
     viewport(manager, enabled);
     const auto error = GetLastError();
-    if (manager==reinterpret_cast<void*>(image()+0x2f4d750) && !native_viewport_write(enabled)) {
-        world.refused=true;
-        diagnostic("Fallout4 owned full-output selector write failed after native viewport intent; scope retained.");
-    }
-    if (live() && manager == reinterpret_cast<void*>(image() + 0x2f4d750)) {
-        if (caller == image() + 0x21fa2ca) {
-            report_resolution_state(ResolutionStage::hudless,world.inputs ? world.pass : world.frame_pass,world.context.Get(),world.published,RSF_OK,report);
-            rsf_fallout4_render_emit_hudless(&publication_leaves,&recovery_leaves);
-        }
-    }
+    // Rust follows the native intent with the owned selector and runs the HUDless seam.
+    rsf_fallout4_render_after_viewport(&producer_leaves,&publication_leaves,&recovery_leaves,caller,
+        uintptr_t(manager),enabled);
     SetLastError(error);
 }
 void observe_world_begin() {
@@ -429,27 +458,12 @@ void observe_dynamic_resolution(void* manager,void* a,void* b,void* c,void* d) {
 #else
     const auto caller=uintptr_t(__builtin_return_address(0));
 #endif
-    if (world.frame_open) world.depth_snapshot={};
+    rsf_fallout4_render_before_dynamic_resolution(&producer_leaves);
     SetLastError(error);
     dynamic_resolution(manager,a,b,c,d);
     const auto native_error=GetLastError();
-    const bool overlapping=manager==reinterpret_cast<void*>(image()+0x2f4d750) && resolution_busy();
-    if (overlapping) {
-        world.raster_refused=world.refused=true;
-        if (!native_resolution_write()) diagnostic("Fallout4 native DR ownership transfer refused; pending scope retained.");
-    }
-    if (live() && caller==image()+0x21f9f34 &&
-        manager==reinterpret_cast<void*>(image()+0x2f4d750) && !overlapping && world.frame_open && world.submission_open && !world.inputs && same_source()) {
-        Owner owner_now{};
-        const rsf_game_render_pass candidate{};
-        const auto screen=classify_native_screen(world.cpu,candidate,true);
-        if (screen.refusals==ScreenWorldLeaseInvalid && owner(owner_now) &&
-            owner_now.frame==world.frame_pass.native_frame && owner_now.view==world.frame_pass.view_key &&
-            owner_now.window==world.frame_pass.window_key && owner_now.context==uintptr_t(world.context.Get()) && owner_now.chain==uintptr_t(world.chain.Get())) {
-            if (!configure_native_resolution(host,world.frame_pass,world.context.Get(),reserve_recovery) && (resolution_busy() || resolution_refused()))
-                world.raster_refused=world.refused=true;
-        }
-    } else if (world.frame_open && resolution_busy()) world.raster_refused=world.refused=true;
+    // Rust refuses an overlapping writer and admits the selected configuration.
+    rsf_fallout4_render_after_dynamic_resolution(&producer_leaves,&recovery_leaves,caller,uintptr_t(manager));
     SetLastError(native_error);
 }
 void observe_prepass() {
@@ -462,34 +476,14 @@ void observe_prepass() {
 #endif
     ++prepass_depth;
     struct Exit { ~Exit() { --prepass_depth; } } exit;
-    const auto identity = world.cpu;
-    // FRAME admission records the ordinary parent beyond WorldBegin's return.
-    const bool selected = (live() || recovery_owned()) && prepass_depth == 1 &&
-        caller == image() + 0x21f9f78 && world.frame_open &&
-        world.submission_open && !world.inputs;
-    // Every producer call invalidates the previous copy, including foreign views.
-    if (world.frame_open) {
-        world.depth_snapshot = {}; world.raster_snapshot = {};
-        if (prepass_depth != 1) world.depth_interrupted = true;
-        if (world.inputs) world.refused = true;
-    }
-    if (selected) world.depth_interrupted = false;
+    // Rust records the World source, selects the call and invalidates the previous snapshots; the
+    // capture after the original uses that record.
+    NativePrepassCall call{};
+    rsf_fallout4_render_before_prepass(&producer_leaves,&recovery_leaves,caller,prepass_depth,&call);
     SetLastError(error);
     prepass();
     const auto native_error = GetLastError();
-    if (selected && (live() || recovery_owned()) &&
-        world.frame_open && world.submission_open && !world.inputs &&
-        !world.depth_interrupted) {
-        (void)capture_native_raster(identity,world.raster_snapshot,report);
-        NativeDepthSnapshot snapshot{};
-        if (capture_native_depth_domains(identity, snapshot, report) &&
-            render_source_is_current(identity) && same_source()) {
-            world.depth_snapshot = snapshot;
-        } else {
-            world.refused = true;
-            diagnostic("Fallout4 native prepass returned without a valid same-source depth-domain snapshot.");
-        }
-    }
+    rsf_fallout4_render_after_prepass(&producer_leaves,&recovery_leaves,&call);
     SetLastError(native_error);
 }
 void observe_imagespace() {

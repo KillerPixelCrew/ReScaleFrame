@@ -6,13 +6,15 @@
 //! and instruction guards, Runtime export negotiation, the live flag and the verify, prepare,
 //! start, quiesce, stop and busy decisions, the reduced-render recovery transaction
 //! (recovery.rs), SR and HUDless publication (publication.rs), the FRAME, SUBMISSION and WINDOW
-//! scope (scope.rs) and the imagespace, Effects and TAA seams (imagespace.rs). render_hooks.cpp
-//! keeps each typed detour and its typed MinHook trampoline, which it calls on its own C++
-//! frame, the callback scope counters, the remaining producer bodies and the recovery,
-//! publication, scope and imagespace leaves (render_hooks_platform.h). Every value belongs to
-//! the exact recognized build; see docs/research/rust-fallout4-render-hooks.md.
+//! scope (scope.rs), the imagespace, Effects and TAA seams (imagespace.rs) and the viewport, DR
+//! and prepass seams (producer.rs). render_hooks.cpp keeps each typed detour and its typed
+//! MinHook trampoline, which it calls on its own C++ frame, the callback scope counters, the
+//! nested prepass counter and the recovery, publication, scope, imagespace and producer leaves
+//! (render_hooks_platform.h). Every value belongs to the exact recognized build; see
+//! docs/research/rust-fallout4-render-hooks.md.
 
 mod imagespace;
+mod producer;
 mod publication;
 mod recovery;
 mod scope;
@@ -21,7 +23,7 @@ use crate::cpu_abi::rsf_fallout4_cpu_identity as CpuIdentity;
 use crate::cpu_events::{rsf_fallout4_cpu_begin_render, rsf_fallout4_cpu_render_source_is_current};
 use crate::depth_domains::rsf_fallout4_depth_verify;
 use crate::render_inputs::rsf_fallout4_inputs_verify;
-use crate::resolution::{rsf_fallout4_resolution_busy, rsf_fallout4_resolution_verify};
+use crate::resolution::{is_busy as resolution_busy, rsf_fallout4_resolution_verify};
 use crate::screen::rsf_fallout4_verify_screen_queries;
 use crate::{Ops, image, read};
 use rsf_game_sys::rsf_game_host_services;
@@ -328,7 +330,7 @@ extern "C" fn rsf_fallout4_render_live() -> bool {
 pub(crate) fn busy() -> bool {
     leaves().is_some_and(|leaves| unsafe { (leaves.scopes_busy)() })
         || recovery::owned()
-        || rsf_fallout4_resolution_busy()
+        || resolution_busy()
 }
 
 /// Checks the guards and the synchronous services, negotiates the Runtime exports and creates
@@ -524,7 +526,7 @@ extern "C" fn rsf_fallout4_render_admit_world(
         && !candidate.frame_open
         && !candidate.auxiliary_open
         && !candidate.recovery_owned
-        && !rsf_fallout4_resolution_busy()
+        && !resolution_busy()
         && rsf_fallout4_cpu_begin_render()
 }
 
