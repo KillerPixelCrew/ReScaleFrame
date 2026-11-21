@@ -4,6 +4,16 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now owns the D3D11 observer's retained textures, latest constant
+buffers, size histogram, device/context pair and queued dump requests.
+Dump writers receive a retained snapshot for the duration of the
+presenting-thread call. A late context for a replaced device stays with
+its original snapshot and cannot enter the new device's cache. The
+presenting device probe retries after refusal, and uninstall clears
+unserved dump requests. The size histogram uses its existing CSV layout
+and reports write failures on UTF-8 paths. Public C headers and dump
+names are unchanged. Build and regression test execution remain open.
+
 Rust now owns D3D11 observer Present sequencing, recursion, in-flight
 counts and paired output dimensions. Application completions must
 match an active call before they can change frame or uninstall state.

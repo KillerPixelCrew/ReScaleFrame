@@ -21,6 +21,12 @@ impl ComRef {
         self.0.as_ptr()
     }
 
+    pub(super) fn into_raw(self) -> *mut c_void {
+        let raw = self.as_ptr();
+        std::mem::forget(self);
+        raw
+    }
+
     pub(super) unsafe fn retain(object: *mut c_void) -> Self {
         let object = NonNull::new(object).expect("live COM interface");
         unsafe { rsf_com_add_ref(object.as_ptr()) };
