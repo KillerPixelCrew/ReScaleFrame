@@ -504,6 +504,11 @@ fn finish(leaves: &Leaves) -> bool {
 }
 
 /// CANCEL an uncommitted token; FINISH then RETIRE a committed one.
+///
+/// `finished` is this token's own proof that FINISH resolved full output. With it, RETIRE goes
+/// straight to the host, so a retry after the imagespace exit cleared the World's
+/// `full_output_resolved` still reaches it, and FINISH is never repeated. Without it, the guarded
+/// FINISH admission runs first, as before.
 fn retire(leaves: &Leaves) -> bool {
     let recovery = state();
     if recovery.token == 0 {
@@ -512,7 +517,7 @@ fn retire(leaves: &Leaves) -> bool {
     if !recovery.committed {
         return call(leaves, CANCEL);
     }
-    if !finish(leaves) {
+    if !recovery.finished && !finish(leaves) {
         return false;
     }
     call(leaves, RETIRE)
@@ -558,3 +563,6 @@ extern "C" fn rsf_fallout4_recovery_committed() -> bool {
 extern "C" fn rsf_fallout4_recovery_reset() {
     RECOVERY.set(Recovery::EMPTY);
 }
+
+#[cfg(test)]
+mod tests;

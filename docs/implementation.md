@@ -22,9 +22,10 @@ See [the Rust migration record](rust-migration.md#native-policy-cutover).
 Fallout 4's Rust recovery transaction now owns the reservation token,
 five-surface plan and checked SEAL, FINISH and RETIRE requests. The
 adapter retains the original raster reads, COM identity checks and
-held leases. Source tracing found that an imagespace reset can still
-prevent a RETIRE retry after Swap. The correction is a separate
-follow-up. [Recovery transaction](research/rust-fallout4-render-hooks.md#reduced-render-recovery-transaction-in-rust)
+held leases. After imagespace clears its frame flag, cleanup after
+Swap can retry RETIRE using the token's successful FINISH proof.
+The fake-leaf regression and in-game retry remain unrun.
+[Recovery retirement](research/rust-fallout4-render-hooks.md#retirement-after-the-imagespace-exit)
 
 Godot's private Rust object now tracks the primary viewport and target,
 resource generation and the SR inputs that drive reset and admission.
