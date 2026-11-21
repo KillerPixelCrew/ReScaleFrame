@@ -6,8 +6,9 @@
 
    Rust owns the command ring's slot rotation (RSF_UNITY_FRAMES_SLOTS slots, bridge_state.h), each
    slot's completion value, the bridge's completion counter and the shared D3D11/D3D12 fence
-   values. bridge.cpp keeps the devices, fences, waits, copies and command lists. Completion values
-   are signalled on the bridge's own D3D12 completion fence; 0 stands for no fence.
+   values. The devices, fences and command lists are the D3D11 graphics owner (d3d11_state.h);
+   bridge.cpp keeps the waits, copies and recording. Completion values are signalled on the
+   bridge's own D3D12 completion fence; 0 stands for no fence.
 
    The package's Vulkan bridge (vulkan_bridge.cpp, vulkan_state.h) uses the same ring: its slots,
    rsf_unity_interop_completion for the Vulkan upload signal and rsf_unity_interop_submit for the
