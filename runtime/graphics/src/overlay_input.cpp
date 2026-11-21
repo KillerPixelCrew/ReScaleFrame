@@ -585,42 +585,15 @@ extern "C" rsf_overlay_input_result rsf_overlay_input_collect(rsf_overlay_input*
                                                               uint32_t display_height,
                                                               float delta_seconds)
 {
-    if (!out || out->struct_size < sizeof(rsf_overlay_input)) {
-        return RSF_OVERLAY_INPUT_ERROR_INVALID_ARGUMENT;
-    }
-
-    // The caller owns struct_size, so it is read above and never written here.
-    out->display_width = display_width;
-    out->display_height = display_height;
-    // A negative or NaN delta reaches egui's animation clock, so it is clamped rather than passed
-    // on. The comparison is written this way because NaN fails it and lands on zero.
-    out->delta_seconds = delta_seconds > 0.0f ? delta_seconds : 0.0f;
-    out->startup_hint_alpha = 0.0f; // The presentation host owns the hint timer.
-
-    const HWND window = static_cast<HWND>(rsf_core_overlay_input_window());
-    if (!window) {
-        out->mouse_x = 0.0f;
-        out->mouse_y = 0.0f;
-        out->mouse_buttons = 0;
-        out->scroll_delta = 0.0f;
-        out->visible = 0;
-        return RSF_OVERLAY_INPUT_ERROR_NOT_INSTALLED;
-    }
-
-    out->visible = rsf_core_overlay_visible();
-    // Sample outside the accumulator lock. Rust checks for a newer contact
-    // before applying this absolute cursor position.
-    rsf_overlay_client_point cursor{};
-    const rsf_overlay_client_point* sample = nullptr;
-    if (out->visible && rsf_core_overlay_cursor_ready() != 0) {
-        POINT point{};
-        if (cursor_call(RSF_CURSOR_GET_POS, &GetCursorPos, &point) && ScreenToClient(window, &point)) {
-            cursor = client_point(window, point);
-            if (cursor.width > 0 && cursor.height > 0) sample = &cursor;
-        }
-    }
-    rsf_core_overlay_pointer_collect(out, sample);
-    return RSF_OVERLAY_INPUT_OK;
+    return rsf_core_overlay_input_collect(out, display_width, display_height, delta_seconds,
+        [](void* raw, rsf_overlay_client_point* cursor) -> uint32_t {
+            const auto window = static_cast<HWND>(raw);
+            POINT point{};
+            if (!cursor_call(RSF_CURSOR_GET_POS, &GetCursorPos, &point) || !ScreenToClient(window, &point))
+                return 0;
+            *cursor = client_point(window, point);
+            return 1;
+        });
 }
 
 extern "C" rsf_overlay_input_result rsf_overlay_input_counters_get(rsf_overlay_input_counters* out)

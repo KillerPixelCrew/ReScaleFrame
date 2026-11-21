@@ -4,6 +4,12 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Shared overlay input collection now validates the caller's record and
+builds the idle or active input snapshot in Rust. The native callback
+supplies the Win32 cursor sample. Non-finite frame deltas become zero
+before reaching the panel. Source review traced collection order and
+matched the public entry point. The new synthetic case remains unrun.
+
 The callback render host refuses overlapping lifecycle calls, including
 stop reentered from an adapter policy callback. A refused start keeps the
 host if quiesce or stop refuses. After both succeed it releases any SR

@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: MIT
+use crate::overlay_cursor_hooks::rsf_core_overlay_cursor_ready;
 use crate::overlay_host_abi::rsf_overlay_input as Input;
 use crate::overlay_input_route;
+use crate::overlay_visibility::rsf_core_overlay_visible;
+use crate::overlay_window::{INVALID, NOT_INSTALLED, OK, rsf_core_overlay_input_window};
+use crate::sr_session::has_capacity;
+use std::ffi::c_void;
 use std::mem;
-use std::ptr::addr_of_mut;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 const LEFT: u32 = 1;
@@ -16,6 +20,7 @@ const TOUCH_LIMIT: usize = 10;
 const OUTSIDE_PANEL: f32 = -100000.0;
 
 #[repr(C)]
+#[derive(Default)]
 struct ClientPoint {
     x: i32,
     y: i32,
@@ -367,31 +372,92 @@ extern "C" fn rsf_core_overlay_pointer_gesture(
         .map_or(-1, i32::from)
 }
 
+type SampleCursor = unsafe extern "C" fn(*mut c_void, *mut ClientPoint) -> u32;
+
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_overlay_pointer_collect(out: *mut Input, cursor: *const ClientPoint) {
-    // The native caller has checked the size and initialized the display
-    // extent. Write only the pointer fields without reading the output record.
-    let (display, cursor) = unsafe {
-        (
-            [(*out).display_width as f32, (*out).display_height as f32],
-            cursor.as_ref(),
-        )
+unsafe extern "C" fn rsf_core_overlay_input_collect(
+    out: *mut Input,
+    display_width: u32,
+    display_height: u32,
+    delta_seconds: f32,
+    sample_cursor: SampleCursor,
+) -> i32 {
+    if !unsafe { has_capacity(out) } {
+        return INVALID;
+    }
+    let mut input = Input {
+        struct_size: unsafe { out.cast::<u32>().read() },
+        display_width,
+        display_height,
+        delta_seconds: if delta_seconds.is_finite() && delta_seconds > 0.0 {
+            delta_seconds
+        } else {
+            0.0
+        },
+        ..Input::default()
     };
-    let ([x, y], buttons, wheel) = lock().sample(display, cursor);
-    if unsafe { (*out).visible } != 0 {
+    let window = rsf_core_overlay_input_window();
+    if window.is_null() {
+        unsafe { out.write(input) };
+        return NOT_INSTALLED;
+    }
+    input.visible = rsf_core_overlay_visible();
+    // Sample outside the accumulator lock. A newer touch or raw input sample
+    // can still take priority when the pointer state is read.
+    let mut cursor = ClientPoint::default();
+    let sampled = input.visible != 0
+        && rsf_core_overlay_cursor_ready() != 0
+        && unsafe { sample_cursor(window, &mut cursor) } != 0
+        && cursor.has_extent();
+    let display = [display_width as f32, display_height as f32];
+    let ([x, y], buttons, wheel) = lock().sample(display, sampled.then_some(&cursor));
+    if input.visible != 0 {
         overlay_input_route::sampled(x, y, buttons);
     }
-    unsafe {
-        addr_of_mut!((*out).mouse_x).write(x);
-        addr_of_mut!((*out).mouse_y).write(y);
-        addr_of_mut!((*out).mouse_buttons).write(buttons);
-        addr_of_mut!((*out).scroll_delta).write(wheel);
-    }
+    input.mouse_x = x;
+    input.mouse_y = y;
+    input.mouse_buttons = buttons;
+    input.scroll_delta = wheel;
+    unsafe { out.write(input) };
+    OK
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ptr::from_mut;
+
+    unsafe extern "C" fn no_cursor(_: *mut c_void, _: *mut ClientPoint) -> u32 {
+        0
+    }
+
+    #[test]
+    fn input_collection_checks_capacity_and_returns_idle_for_an_uninstalled_window() {
+        let mut short = size_of::<u32>() as u32;
+        let short_ptr = from_mut(&mut short).cast();
+        assert_eq!(
+            unsafe { rsf_core_overlay_input_collect(short_ptr, 800, 600, 0.0, no_cursor) },
+            INVALID
+        );
+        assert_eq!(short, size_of::<u32>() as u32);
+
+        let mut input = Input {
+            struct_size: size_of::<Input>() as u32,
+            visible: 1,
+            mouse_buttons: LEFT,
+            ..Input::default()
+        };
+        assert_eq!(
+            unsafe {
+                rsf_core_overlay_input_collect(&mut input, 800, 600, f32::INFINITY, no_cursor)
+            },
+            NOT_INSTALLED
+        );
+        assert_eq!(input.struct_size, size_of::<Input>() as u32);
+        assert_eq!([input.display_width, input.display_height], [800, 600]);
+        assert_eq!([input.visible, input.mouse_buttons], [0, 0]);
+        assert_eq!(input.delta_seconds, 0.0);
+    }
 
     #[test]
     fn capture_loss_discards_a_queued_press() {

@@ -22,11 +22,11 @@ type InvokeLog = unsafe extern "C" fn(LogFn, Handle, *const c_char);
 
 const ABI_VERSION: u32 = 1;
 const INSERT: u32 = 0x2d;
-const OK: i32 = 0;
-const INVALID: i32 = -1;
+pub(super) const OK: i32 = 0;
+pub(super) const INVALID: i32 = -1;
 const ABI_MISMATCH: i32 = -2;
 const ALREADY_INSTALLED: i32 = -3;
-const NOT_INSTALLED: i32 = -4;
+pub(super) const NOT_INSTALLED: i32 = -4;
 const SUBCLASS_FAILED: i32 = -5;
 const FOREIGN_SUBCLASS: i32 = -6;
 
