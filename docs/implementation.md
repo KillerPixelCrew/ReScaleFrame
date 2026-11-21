@@ -384,6 +384,14 @@ the existing refusal stages and forward-depth convention. Build and
 native capture verification remain open.
 [Depth-domain ownership audit](research/rust-fallout4-depth-domains.md)
 
+Fallout 4's producer resolution, recovery reservation and restoration
+receipts now live in Rust. The existing native callbacks still supply
+the renderer and viewport facts. Each temporary field is restored only
+while the same scope owns its bytes. Source comparison matched the 11
+guards and eight receipt stages. Moving and all-quality recovery,
+downstream output and build verification remain open.
+[Resolution ownership audit](research/rust-fallout4-resolution.md)
+
 Unity package D3D12 SR contexts and their recording slots are Rust-owned.
 The existing Unity bridge still provides recording and completion facts.
 The view owner preserves reconfiguration, spatial fallback and retirement
