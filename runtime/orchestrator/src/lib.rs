@@ -51,6 +51,8 @@ mod depth_replay;
 #[cfg(windows)]
 mod depth_scale;
 #[cfg(windows)]
+mod dlss_native12;
+#[cfg(windows)]
 mod dlss_pipeline;
 #[cfg(windows)]
 mod dlss_pipeline_abi;
