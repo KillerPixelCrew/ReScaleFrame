@@ -531,15 +531,12 @@ exported players, NVIDIA, Intel, AMD and software-device runs, and the visual ha
 2. `effect.cpp` keeps no owner state after the seventh slice. Its class registration, callback
    contract, typed scene reads, readback compute pass and Dictionary keys are godot-cpp leaves.
    Residual: the readback's extent check against a velocity override (see that slice).
-3. The SCons engine module still holds CPU frame identity and markers, the primary viewport,
+3. The SCons engine module still holds CPU frame identity and callback ordering, the primary viewport,
    status-based extent updates, history reset heuristics, camera matrices, motion resolve and the
-   direct Dictionary option parser in `ReScaleFrameBridge::configure`. Its input sources stay
-   there and reach `window.rs` only through `rsfg_cpu`: the frame begin, input sample, simulation
-   and frame end events (`cpu_begin`, `cpu_simulation_begin`, `queue_frame`, `cpu_end`), and the
-   keyboard, mouse/touch and joypad kinds `Input::_parse_input_event_impl` reports through
-   `RSFGodot::input_event` with `INPUT_UNFRAMED` outside a frame. The window handle passed to
-   `rsfg_vk_window` and each Vulkan surface's `rescaleframe_window` for the present marker are
-   engine module facts too.
+   direct Dictionary option parser in `ReScaleFrameBridge::configure`. Native callbacks supply
+   CPU facts to the Rust record builder before passing them to `window.rs` through `rsfg_cpu`.
+   The window handle passed to `rsfg_vk_window` and each Vulkan surface's `rescaleframe_window`
+   are engine module facts too.
 4. The addon (`settings.gd`, `controller.gd`, `csharp/ReScaleFrame.cs`) keeps its own option
    defaults for the Inspector resource.
 5. D3D12 residue in the `runtime.cpp` leaves: the fixed SR context inputs (setup ABI 1 planning,
@@ -565,8 +562,8 @@ separate compatibility review.
 `modules/rescaleframe/SCsub` now invokes `rustc --emit=obj` from the repository root, where
 rustup reads `rust-toolchain.toml`. The command uses the SCons Windows target architecture and
 compiler ABI. Godot archives the resulting `no_std` object with the native module objects for
-standalone editors and export templates, including .NET builds. The
-module uses two private C linkage functions in `viewport.h` and `viewport.rs` and continues
+standalone editors and export templates, including .NET builds. The viewport policy uses
+private C linkage functions in `viewport.h` and `viewport.rs`. The module continues
 to load the native DLL through its existing ABI. This path has no Cargo or godot-cpp dependency.
 
 Rust owns the requested engine scaling class and the initial scale. Off selects native-size
@@ -593,6 +590,30 @@ DLL export checks, and standard/.NET editor and template runs covering Off, Spat
 temporal quality switches, resize and fallback. The documented build targets Windows x64 MSVC.
 Other Windows toolchains and target architectures are unverified. This path requires a Rust
 target that matches the Godot build, which is unavailable for ARM32 MinGW.
+
+## Engine module CPU event records
+
+Relative to RSF `1a87cbca`, the module now constructs its version 1 `rsf_game_cpu_event`
+records in `cpu_facts.rs`. `bridge.cpp` samples the Windows performance counter and frequency
+at the same reporting points, supplies the session and source identity, and passes the
+stack-owned record to `rsfg_cpu` synchronously after the builder returns. All records are keyed.
+Input reported with no open CPU frame uses source `0` and the unframed flag. Godot's keyboard,
+mouse/touch and joypad mapping and emulated-input exclusion stay in the native input patch.
+The frame-end expected-render count still comes from the draw's `wants_present` value. These
+records carry a zero window message ID. The native DLL's window procedure supplies message facts
+through its separate existing path, and Runtime decides pacing and marker semantics.
+
+The new function is in the existing `no_std` SCons object, with an explicit source dependency
+on `cpu_facts.rs`. It fills the C++ caller's record using fixed-width fields and imports no
+Godot, DLL or allocator entry point. The private header checks the public record layout and
+constants, and Rust checks the mirror's size, alignment and offsets. The Windows x64 MSVC target, module
+archive and native DLL symbol resolution follow the existing viewport path.
+
+Source review compared all 11 fields with the generated SDK binding and traced the patch sites
+and module archive at Godot `ed1daf0bf001b61586d9930840f2f1394092c079`. The CPU lifecycle and
+render fact source matched `1a87cbca`. Pinned Rust 1.94.1 formatting, locked offline Windows
+Cargo metadata and whitespace checks passed. SCons compilation and final linkage, binary
+exports, and editor and player callback behavior remain unverified.
 
 ## Build requirements
 

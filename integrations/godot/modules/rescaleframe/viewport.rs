@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
-//! Godot's primary viewport scaling policy. SCons links this object into the engine module.
+//! Private Rust object linked into Godot's engine module by SCons.
 #![no_std]
+
+mod cpu_facts;
 
 // Settings values from sr_session.h and local mode values from viewport.h.
 const SR_NONE: u32 = 0;
