@@ -1,5 +1,10 @@
 #include <rescaleframe/native_cpu.h>
 // SPDX-License-Identifier: MIT
+// The settings, status snapshot, render plan, temporal readiness, pending reconfiguration and
+// session lifecycle are Rust (games/unity-mono/src/package_state.rs, through package_state.h).
+// This file keeps the SR views, the Unity, DXGI, Vulkan and preview work, the input window and
+// the log, and lends the typed SDK and Runtime calls through rsf_unity_package_platform. Its
+// mutex still serializes the exports and the render path where it did.
 #include "package.h"
 #include "bridge.h"
 #include "vulkan_bridge.h"
@@ -27,20 +32,22 @@ extern "C" void UNITY_INTERFACE_API rsf_unity_package_bridge_load(IUnityInterfac
 extern "C" void UNITY_INTERFACE_API rsf_unity_package_bridge_unload();
 extern "C" int rsf_unity_set_engine_spatial(uint32_t, uint32_t) noexcept;
 
+// package_abi.rs mirrors these layouts and constants.
+static_assert(sizeof(rsf_unity_package_settings) == 100 && sizeof(rsf_unity_package_status) == 184);
+static_assert(sizeof(rsf_unity_frame_counters) == 40 && sizeof(rsf_unity_package_platform) == 120);
+static_assert(sizeof(rsf_native_fg_status) == 352 && sizeof(rsf_native_latency_status) == 152);
+static_assert(sizeof(rsf_native_fg_options) == 24 && RSF_BACKEND_OK == 0);
+static_assert(RSF_FG_STAT_TOTAL_PRESENTED == 1 && RSF_SR_NONE == 0);
+
 namespace {
 using Microsoft::WRL::ComPtr;
 std::mutex guard;
-rsf_unity_package_settings settings{sizeof(settings), RSF_UNITY_SETTINGS_ABI_VERSION, RSF_SR_AUTO, 1, 0, 7, 0, 1, 0, 0, 1};
-rsf_unity_package_status status{sizeof(status), 1};
-rsf_game_render_config plan{sizeof(plan)};
 rsf_unity_native_api api{};
 std::string root, streamline, fsr, xess, version, project;
 std::wstring ini;
-bool started = false, changed = false, editor = false;
+bool editor = false;
 bool presentation_installed = false;
 uint32_t default_fg_backend = 0;
-std::atomic<bool> temporal_ready{false};
-std::atomic<int32_t> bridge_result{0};
 IUnityInterfaces* registry = nullptr;
 IUnityGraphics* graphics = nullptr;
 HANDLE log_file = INVALID_HANDLE_VALUE;
@@ -107,11 +114,10 @@ int accept(void*, void* hwnd)
 int configuration(void*, rsf_game_render_config* output)
 {
     if (!output || output->struct_size < sizeof(*output)) return 0;
-    std::lock_guard<std::mutex> lock(guard); *output = plan; return 1;
+    std::lock_guard<std::mutex> lock(guard); return rsf_unity_package_plan(output);
 }
-void release_views()
+void destroy_views() noexcept
 {
-    temporal_ready.store(false); status.active_sr = 0;
     for (auto& item : views) rsf_sr12_destroy(item.second.sr);
     views.clear();
 }
@@ -119,7 +125,10 @@ void request_generation()
 {
     if (!rsf_d3d11_present_has_owner()) return;
     uint32_t requested = 0;
-    { std::lock_guard<std::mutex> lock(guard); requested = settings.fg_backend; }
+    {
+        std::lock_guard<std::mutex> lock(guard);
+        rsf_unity_package_settings current{}; rsf_unity_package_current(&current); requested = current.fg_backend;
+    }
     if (requested == RSF_FG_BACKEND_AUTO) {
         if (!default_fg_backend) {
             void* owning_device = nullptr; void* owning_queue = nullptr;
@@ -134,7 +143,7 @@ void request_generation()
     }
     if (requested == rsf_d3d11_present_backend()) return;
     const auto result = rsf_d3d11_present_request(requested);
-    std::lock_guard<std::mutex> lock(guard); status.fg_result = result;
+    std::lock_guard<std::mutex> lock(guard); rsf_unity_package_fg_result(result);
 }
 void render(void*, void* commands, const rsf_game_render_pass* original, uint32_t begin)
 {
@@ -165,8 +174,9 @@ void render(void*, void* commands, const rsf_game_render_pass* original, uint32_
             !rsf_unity_preview_prepare(owning_device, owning_queue, pass.camera.output_width, pass.camera.output_height)) return;
     }
     std::lock_guard<std::mutex> lock(guard);
+    rsf_unity_package_settings settings{}; rsf_unity_package_current(&settings);
     pass.screen = settings.gameplay ? RSF_SCREEN_FLIGHT : RSF_SCREEN_MENU;
-    if (pass.flags & RSF_GAME_RENDER_RECONFIGURE) { release_views(); changed = false; }
+    if (pass.flags & RSF_GAME_RENDER_RECONFIGURE) { rsf_unity_package_reconfigured(); destroy_views(); }
     auto& view = views[pass.view_key];
     const auto& camera = pass.camera;
     if (view.sr && (view.width != camera.output_width || view.height != camera.output_height ||
@@ -197,20 +207,18 @@ void render(void*, void* commands, const rsf_game_render_pass* original, uint32_
         const std::string interposer = streamline + "/sl.interposer.dll";
         setup.dlss = {sizeof(setup.dlss), RSF_DLSS_ABI_VERSION, interposer.c_str(), streamline.c_str(), root.c_str(),
             0, RSF_DLSS_ENGINE_UNITY, version.c_str(), project.c_str(), 1, log, nullptr, settings.dlss_preset};
-        status.sr_result = rsf_sr12_create(&setup, &view.sr);
+        const int32_t created = rsf_sr12_create(&setup, &view.sr);
+        rsf_unity_package_sr_created(created);
         if (!view.sr && backend) { setup.backend = 0; (void)rsf_sr12_create(&setup, &view.sr); backend = 0; }
         if (!view.sr) return;
         view.backend = backend; view.width = camera.output_width; view.height = camera.output_height;
         rsf_sr12_plan(view.sr, &view.render_width, &view.render_height);
-        plan = {sizeof(plan), 1, view.width, view.height, view.render_width, view.render_height};
-        temporal_ready.store(backend != 0);
-        status.render_width = view.render_width; status.render_height = view.render_height;
-        status.output_width = view.width; status.output_height = view.height;
+        rsf_unity_package_view_planned(backend, view.width, view.height, view.render_width, view.render_height);
         char text[192]; std::snprintf(text, sizeof(text), "URP SR requested=%u active=%u result=%d %ux%u -> %ux%u",
-            settings.sr_backend, backend, status.sr_result, view.render_width, view.render_height, view.width, view.height);
+            settings.sr_backend, backend, created, view.render_width, view.render_height, view.width, view.height);
         log(nullptr, text);
     }
-    if (!pass.camera_valid || changed) return;
+    if (!pass.camera_valid || rsf_unity_package_pending()) return;
     uint32_t slot = 3;
     for (uint32_t i = 0; i < 3; ++i) if (view.lists[i] == commands) { slot = i; break; }
     if (slot == 3) for (uint32_t i = 0; i < 3; ++i) if (!view.lists[i]) { view.lists[i] = commands; slot = i; break; }
@@ -218,27 +226,13 @@ void render(void*, void* commands, const rsf_game_render_pass* original, uint32_
     auto sharp=settings.sharpening.struct_size?settings.sharpening:rsf_sharpening_defaults();
     (void)rsf_sr12_set_sharpening(view.sr,&sharp);
     const auto result = rsf_sr12_evaluate(view.sr, commands, &pass, slot);
-    if (view.backend || settings.sr_backend == RSF_SR_NONE || settings.sr_backend == RSF_SR_SPATIAL) status.sr_result = result;
-    if (result == RSF_BACKEND_OK) {
-        ++status.evaluated_frames;
-        status.active_sr = settings.sr_backend == RSF_SR_SPATIAL ? RSF_SR_SPATIAL : view.backend;
-    }
-    else { ++status.refused_frames; status.sr_result = result; }
+    rsf_unity_package_evaluated(result, view.backend);
 }
 void cpu_event(void*, const rsf_game_cpu_event* event) {
     if (!event) return;
     if (event->stage==RSF_GAME_CPU_FRAME_BEGIN) input_frame.store(event->source_frame_id);
     rsf_fg12_cpu(event);
     if (event->stage==RSF_GAME_CPU_FRAME_END) input_frame.store(0);
-}
-void UNITY_INTERFACE_API device_event(UnityGfxDeviceEventType type)
-{
-    if (type == kUnityGfxDeviceEventInitialize) rsf_unity_package_bridge_load(registry);
-    if (type == kUnityGfxDeviceEventShutdown) {
-        rsf_unity_bridge_activate(false);
-        if (rsf_unity_bridge_drained()) { release_views(); rsf_unity_bridge_release(); started = false; }
-        rsf_unity_package_bridge_unload();
-    }
 }
 void install_presentation()
 {
@@ -250,7 +244,59 @@ void install_presentation()
     setup.runtime_directory_utf8 = setup.fsr3_directory_utf8 = setup.fsr4_directory_utf8 = fsr.c_str();
     setup.xess_directory_utf8 = xess.c_str(); setup.streamline_directory_utf8 = streamline.c_str();
     setup.engine_type = RSF_DLSS_ENGINE_UNITY; setup.engine_version_utf8 = version.c_str(); setup.project_id_utf8 = project.c_str();
-    status.fg_result = rsf_fg12_install(&setup); presentation_installed = status.fg_result == RSF_BACKEND_OK;
+    const auto result = rsf_fg12_install(&setup);
+    rsf_unity_package_fg_result(result); presentation_installed = result == RSF_BACKEND_OK;
+}
+struct Opening { const char* runtime; const char* engine; const char* id; };
+// rsf_unity_package_platform::open: everything rsfu_initialize set up between forgetting the
+// previous session's state and activating the bridge.
+uint32_t open_session(void* user) noexcept try
+{
+    const auto& opening = *static_cast<const Opening*>(user);
+    paths(opening.runtime); version = opening.engine; project = opening.id;
+    if (log_file == INVALID_HANDLE_VALUE) {
+        wchar_t local[32768]{};
+        if (GetEnvironmentVariableW(L"LOCALAPPDATA", local, 32768)) {
+            std::wstring directory(local); directory += L"\\ReScaleFrame"; CreateDirectoryW(directory.c_str(), nullptr);
+            directory += L"\\Unity"; CreateDirectoryW(directory.c_str(), nullptr);
+            const auto file = directory + L"\\" + std::to_wstring(GetCurrentProcessId()) + L".log";
+            log_file = CreateFileW(file.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        }
+    }
+    if (editor) install_presentation();
+    if (!editor && !input_window) EnumWindows(find_input_window, 0);
+    if (graphics && graphics->GetRenderer() == kUnityGfxRendererVulkan && !editor && !rsf_uvk_create_window()) {
+        log(nullptr, "Unity Vulkan presentation surface could not initialize on the window thread."); return 0;
+    }
+    rsf_game_host_services services{}; services.struct_size = sizeof(services); services.abi_version = RSF_GAME_ABI_VERSION;
+    services.session_id = GetTickCount64() + 1; services.log = log; services.render_pass = render;
+    services.render_config = configuration; services.cpu_event = cpu_event;
+    return rsf_unity_bridge_prepare(services, &api) ? 1u : 0u;
+} catch (...) { return 0; }
+constexpr rsf_unity_package_platform platform{
+    [](const rsf_sharpening_options* options) noexcept -> uint32_t { return rsf::sharpening_settings::valid(*options) ? 1u : 0u; },
+    [](uint32_t preset) noexcept -> uint32_t { return rsf_dlss_preset_valid(preset) ? 1u : 0u; },
+    rsf_unity_set_engine_spatial,
+    [](const rsf_native_fg_options* options) noexcept { rsf_fg12_options(options); },
+    [](rsf_native_fg_status* output) noexcept { return rsf_fg12_status(output); },
+    [](rsf_native_latency_status* output) noexcept { return rsf_native_latency_status_get(output); },
+    []() noexcept { return rsf_d3d11_present_backend(); },
+    []() noexcept { return rsf_d3d11_present_switch_result(); },
+    []() noexcept { return rsf_d3d11_present_generation(); },
+    open_session,
+    [](uint32_t enabled) noexcept { rsf_unity_bridge_activate(enabled != 0); },
+    []() noexcept -> uint32_t { return rsf_unity_bridge_drained() ? 1u : 0u; },
+    []() noexcept -> uint32_t { return rsf_fg12_end_session(api.session_id) ? 1u : 0u; },
+    destroy_views,
+    []() noexcept { rsf_unity_bridge_release(); },
+};
+void UNITY_INTERFACE_API device_event(UnityGfxDeviceEventType type)
+{
+    if (type == kUnityGfxDeviceEventInitialize) rsf_unity_package_bridge_load(registry);
+    if (type == kUnityGfxDeviceEventShutdown) {
+        rsf_unity_package_device_shutdown(&platform);
+        rsf_unity_package_bridge_unload();
+    }
 }
 void preload()
 {
@@ -275,7 +321,7 @@ void preload()
 
 void rsf_unity_package_bridge_error(int32_t result, const char* message) noexcept
 {
-    bridge_result.store(result); temporal_ready.store(false);
+    rsf_unity_package_bridge_failed(result);
     log(nullptr, message);
 }
 bool rsf_unity_package_is_editor() noexcept { return editor; }
@@ -284,61 +330,23 @@ extern "C" __declspec(dllexport) int rsfu_initialize(const char* runtime, const 
 {
     if (!runtime || !engine || !id || !output) return 0;
     std::lock_guard<std::mutex> lock(guard);
-    if (started) {
-        if (!rsf_unity_bridge_drained() || !rsf_fg12_end_session(api.session_id)) return 2;
-        release_views(); rsf_unity_bridge_release(); started = false;
-    }
-    if (!started) {
-        bridge_result.store(0); plan = {sizeof(plan)}; status = {sizeof(status), 1};
-        paths(runtime); version = engine; project = id;
-        if (log_file == INVALID_HANDLE_VALUE) {
-            wchar_t local[32768]{};
-            if (GetEnvironmentVariableW(L"LOCALAPPDATA", local, 32768)) {
-                std::wstring directory(local); directory += L"\\ReScaleFrame"; CreateDirectoryW(directory.c_str(), nullptr);
-                directory += L"\\Unity"; CreateDirectoryW(directory.c_str(), nullptr);
-                const auto file = directory + L"\\" + std::to_wstring(GetCurrentProcessId()) + L".log";
-                log_file = CreateFileW(file.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-            }
-        }
-        if (editor) install_presentation();
-        if (!editor && !input_window) EnumWindows(find_input_window, 0);
-        if (graphics && graphics->GetRenderer() == kUnityGfxRendererVulkan && !editor && !rsf_uvk_create_window()) {
-            log(nullptr, "Unity Vulkan presentation surface could not initialize on the window thread."); return 0;
-        }
-        rsf_game_host_services services{}; services.struct_size = sizeof(services); services.abi_version = RSF_GAME_ABI_VERSION;
-        services.session_id = GetTickCount64() + 1; services.log = log; services.render_pass = render;
-        services.render_config = configuration; services.cpu_event = cpu_event;
-        if (!rsf_unity_bridge_prepare(services, &api)) return 0;
-        rsf_unity_set_engine_spatial(0, settings.quality); rsf_unity_bridge_activate(true); started = true;
-    }
-    *output = api; return 1;
+    Opening opening{runtime, engine, id};
+    const int result = rsf_unity_package_initialize(&platform, &opening);
+    if (result == 1) *output = api;
+    return result;
 } catch (...) { return 0; }
 
 extern "C" __declspec(dllexport) int rsfu_configure(const rsf_unity_package_settings* input) noexcept try
 {
-    if (!input || input->struct_size != sizeof(*input) || input->abi_version != RSF_UNITY_SETTINGS_ABI_VERSION || input->sr_backend > RSF_SR_AUTO ||
-        (input->sharpening.struct_size && !rsf::sharpening_settings::valid(input->sharpening)) ||
-        input->quality > 5 || !rsf_dlss_preset_valid(input->dlss_preset) || input->fg_mode > RSF_FG_FIXED ||
-        input->latency_mode > 2 || input->generated_frames < 1 || input->generated_frames > 15 ||
-        (input->fg_backend != 1 && input->fg_backend != 3 && input->fg_backend != 4 && input->fg_backend != 5 && input->fg_backend != 7)) return 0;
-    std::lock_guard<std::mutex> lock(guard);
-    if (input->quality == 5 && (input->sr_backend == RSF_SR_DLSS ||
-        (input->sr_backend == RSF_SR_AUTO && status.active_sr == RSF_SR_DLSS))) return 0;
-    const bool sr_change = settings.sr_backend != input->sr_backend || settings.quality != input->quality || settings.dlss_preset != input->dlss_preset;
-    if (sr_change) { rsf_unity_set_engine_spatial(input->sr_backend == RSF_SR_SPATIAL, input->quality); changed = true; plan.enabled = 0; temporal_ready.store(false); }
-    settings = *input; status.requested_sr = settings.sr_backend;
-    rsf_native_fg_options options{sizeof(options), settings.fg_mode, settings.generated_frames, settings.latency_mode, settings.frame_limit_us, 0};
-    rsf_fg12_options(&options);
-    return 1;
+    std::lock_guard<std::mutex> lock(guard); return rsf_unity_package_configure(input, &platform);
 } catch (...) { return 0; }
 
 extern "C" __declspec(dllexport) int rsfu_settings(rsf_unity_package_settings* output) noexcept try
 {
-    if (!output || output->struct_size < sizeof(*output) || output->abi_version != RSF_UNITY_SETTINGS_ABI_VERSION) return 0;
-    std::lock_guard<std::mutex> lock(guard); *output = settings; return 1;
+    std::lock_guard<std::mutex> lock(guard); return rsf_unity_package_settings_get(output);
 } catch (...) { return 0; }
 
-extern "C" __declspec(dllexport) int rsfu_temporal_ready() noexcept { return temporal_ready.load() ? 1 : 0; }
+extern "C" __declspec(dllexport) int rsfu_temporal_ready() noexcept { return rsf_unity_package_temporal_ready() ? 1 : 0; }
 extern "C" __declspec(dllexport) int rsfu_surface(uint32_t width, uint32_t height) noexcept
 {
     return rsf_uvk_update_window(width, height) ? 1 : 0;
@@ -354,34 +362,12 @@ extern "C" __declspec(dllexport) int rsfu_preview_region(int left, int top, int 
 }
 extern "C" __declspec(dllexport) int rsfu_frame_counters(rsf_unity_frame_counters* output) noexcept
 {
-    if (!output || output->struct_size != sizeof(*output)) return 0;
-    rsf_native_fg_status fg{}; fg.struct_size = sizeof(fg); rsf_fg12_status(&fg);
-    *output = {sizeof(*output), 1, fg.vendor.valid_statistics & RSF_FG_STAT_TOTAL_PRESENTED ? 1u : 0u, fg.vendor.active,
-        fg.vendor.total_presented, fg.vendor.generated_presented, rsf_d3d11_present_generation()};
-    return 1;
+    return rsf_unity_package_frame_counters(output, &platform);
 }
 
 extern "C" __declspec(dllexport) int rsfu_status(rsf_unity_package_status* output) noexcept try
 {
-    if (!output || output->struct_size != sizeof(*output)) return 0;
-    std::lock_guard<std::mutex> lock(guard);
-    rsf_native_fg_status fg{}; fg.struct_size = sizeof(fg); rsf_fg12_status(&fg);
-    status.fg_backend = rsf_d3d11_present_backend(); status.fg_available = fg.available; status.fg_active = fg.vendor.active;
-    status.max_generated_frames = fg.vendor.max_generated_frames; status.generated_frames = fg.vendor.effective_generated_frames;
-    status.latency_available = fg.vendor.low_latency_available; status.latency_mode = fg.vendor.effective_reflex;
-    status.reason = fg.reason; status.tagged_frames = fg.tagged_frames;
-    status.fg_result = fg.last_result ? fg.last_result : rsf_d3d11_present_switch_result();
-    if (bridge_result.load()) { status.sr_result = bridge_result.load(); status.active_sr = 0; }
-    rsf_native_latency_status latency{sizeof(latency),1};
-    if (rsf_native_latency_status_get(&latency)) {
-        status.sleep_calls=latency.paced_frames; status.marker_calls=latency.marker_calls;
-        status.pcl_available=latency.pcl_available; status.latency_report_available=latency.report_available;
-        status.latency_owner=latency.owner; status.keyboard_inputs=latency.events.input_events[0];
-        status.mouse_inputs=latency.events.input_events[1];status.controller_inputs=latency.events.input_events[2];
-        status.pcl_pings=latency.events.pings;status.input_substitutes=latency.events.substitutes;
-        status.order_violations=latency.events.order_violations;status.derived_boundaries=latency.derived_boundaries;
-    }
-    *output = status; return 1;
+    std::lock_guard<std::mutex> lock(guard); return rsf_unity_package_status_get(output, &platform);
 } catch (...) { return 0; }
 
 extern "C" __declspec(dllexport) int rsfu_input(uint64_t frame, uint32_t kinds) noexcept try
@@ -398,10 +384,9 @@ extern "C" __declspec(dllexport) int rsfu_input(uint64_t frame, uint32_t kinds) 
 extern "C" __declspec(dllexport) int rsfu_shutdown() noexcept try
 {
     if (editor) rsf_unity_preview_hide();
-    rsf_unity_bridge_activate(false);
-    if (!rsf_unity_bridge_drained() || !rsf_fg12_end_session(api.session_id)) return 0;
+    if (!rsf_unity_package_quiesce(&platform)) return 0;
     std::lock_guard<std::mutex> lock(guard);
-    release_views(); rsf_unity_bridge_release(); started = false; return 1;
+    rsf_unity_package_retire(&platform); return 1;
 } catch (...) { return 0; }
 
 extern "C" void UNITY_INTERFACE_EXPORT UNITY_INTERFACE_API UnityPluginLoad(IUnityInterfaces* interfaces)

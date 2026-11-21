@@ -60,6 +60,12 @@ resolution. The four Unity exports still use the typed native facade.
 The private setup tables were regenerated against their headers. Builds,
 fixtures and Unity player verification remain open.
 
+The Unity package's Rust owner handles settings, render plans, status
+and session retirement. A restart reapplies the retained FSR1 selection
+to the engine's spatial path. The native package keeps the existing
+exports and Unity graphics calls. Build and player verification remain
+open.
+
 The RDR2 game DLL uses Rust for exact-build admission, SR input routing,
 camera decode, scene facts and its lifecycle. The engine entry export and
 typed native leaves remain available. Stop returns `BUSY` on refused hook

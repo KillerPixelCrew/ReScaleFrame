@@ -5,7 +5,8 @@
 //! bridge.cpp keeps the Unity graphics interfaces, D3D12 commands and CPU input events;
 //! plugin.cpp lends the bridge through rsf_unity_plugin_platform, and runtime_host.cpp keeps the
 //! exports and lends the typed Runtime calls through rsf_unity_runtime_platform. The Unity package
-//! links this archive for the bridge state and the [UnitySR] path settings.
+//! links this archive for the bridge state, the [UnitySR] path settings and its own settings,
+//! status and session state (package_state.rs), whose leaves stay in package.cpp.
 #![cfg(any(windows, test))]
 
 mod bridge_abi;
@@ -14,6 +15,8 @@ mod bridge_state;
 mod lifecycle;
 #[cfg(windows)]
 mod mono;
+mod package_abi;
+mod package_state;
 mod plugin_abi;
 mod runtime_abi;
 mod runtime_config;
