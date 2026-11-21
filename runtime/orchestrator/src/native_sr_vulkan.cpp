@@ -26,6 +26,7 @@ int32_t rsf_core_srvk_spatial_fallback(const Platform*, const rsf_srvk_fallback*
 #include "../../backends/common/frame_capture_vk.h"
 #include "../../backends/common/sharpening.h"
 #include "sharpening_vulkan.h"
+#include "vulkan_fg_resources_native.h"
 #include "../../backends/fsr/src/ffx_version.h"
 #include <ffx_api/ffx_api.h>
 #include <ffx_api/ffx_upscale.h>
@@ -59,7 +60,10 @@ struct FfxOps {
     int32_t (*effective_version)(FfxNative*, uint64_t*);
     int32_t (*destroy_effect)(FfxNative*);
     int32_t (*plan)(FfxNative*, const rsf_srvk_setup*, uint32_t*, uint32_t*);
-    int32_t (*allocate)(FfxNative*, rsf_srvk_image*, uint32_t, uint64_t*);
+    // Rust (vulkan_sr.rs) sequences image creation, memory choice, allocation and binding.
+    void* (*image_user)(FfxNative*);
+    const rsf_vkfg_platform* images;
+    uint32_t (*memory_type_count)(FfxNative*);
     void (*release)(FfxNative*, uint64_t, uint64_t);
     void (*initialize_mask)(FfxNative*, void*, uint64_t);
     void (*initialize_output)(FfxNative*, void*, uint64_t);
@@ -85,7 +89,7 @@ struct Platform {
     int32_t (*dump_wants)(const rsf_frame_record*);
     void (*dump_result)(const rsf_frame_record*, const char*, uint32_t, int32_t);
 };
-static_assert(sizeof(Platform) == 256 && sizeof(Blit) == 24);
+static_assert(sizeof(FfxOps) == 27 * sizeof(void*) && sizeof(Platform) == 272 && sizeof(Blit) == 24);
 static_assert(sizeof(FfxDispatch) == 144 && offsetof(FfxDispatch, reset) == 136);
 static_assert(VK_FORMAT_R8_UNORM == 9 && VK_FORMAT_R16G16_SFLOAT == 83 &&
     VK_FORMAT_R16G16B16A16_SFLOAT == 97 && VK_FORMAT_R32_SFLOAT == 100 && VK_FORMAT_D32_SFLOAT == 126);
@@ -98,6 +102,8 @@ static_assert((VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT |
 static_assert(FFX_UPSCALE_ENABLE_HIGH_DYNAMIC_RANGE == 1 && FFX_UPSCALE_ENABLE_MOTION_VECTORS_JITTER_CANCELLATION == 4 &&
     FFX_UPSCALE_ENABLE_DEPTH_INVERTED == 8 && FFX_UPSCALE_ENABLE_DEPTH_INFINITE == 16 && FFX_UPSCALE_ENABLE_AUTO_EXPOSURE == 32);
 static_assert(RSF_SHARPENING_VENDOR == 4);
+// rsf::vkfg::platform leaves sharingMode and initialLayout zero; the former FFX leaf requested the same values.
+static_assert(VK_SHARING_MODE_EXCLUSIVE == 0 && VK_IMAGE_LAYOUT_UNDEFINED == 0);
 
 extern "C" rsf_vk_function rsf_core_srvk_dispatch_lookup(void*, const char*,
     int32_t (*)(rsf_vk_get_proc, void*, const char*, rsf_vk_function*));
@@ -118,12 +124,7 @@ struct FfxNative {
     VkDevice device = VK_NULL_HANDLE;
     rsf_vkffx_exports sdk;
     ffxContext effect = nullptr;
-    PFN_vkCreateImage create_image = nullptr;
-    PFN_vkDestroyImage destroy_image = nullptr;
-    PFN_vkGetImageMemoryRequirements requirements = nullptr;
-    PFN_vkAllocateMemory allocate = nullptr;
-    PFN_vkFreeMemory free_memory = nullptr;
-    PFN_vkBindImageMemory bind = nullptr;
+    rsf::vkfg::Device gpu;
     PFN_vkCmdPipelineBarrier barrier = nullptr;
     PFN_vkCmdClearColorImage clear = nullptr;
     PFN_vkCmdCopyImage copy = nullptr;
@@ -144,16 +145,17 @@ catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
 
 int32_t initialize_graphics(FfxNative* native, const rsf_srvk_setup* setup) noexcept try
 {
-    native->device = static_cast<VkDevice>(setup->device);
+    native->device = native->gpu.device = static_cast<VkDevice>(setup->device);
+    // Same entry points, order and dispatch route as before; only the owner of the table moved.
 #define RSF_VK_LOAD(member, function) \
     native->member = reinterpret_cast<PFN_##function>(sdk_device_proc(native->device, #function)); \
     if (!native->member) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT
-    RSF_VK_LOAD(create_image, vkCreateImage);
-    RSF_VK_LOAD(destroy_image, vkDestroyImage);
-    RSF_VK_LOAD(requirements, vkGetImageMemoryRequirements);
-    RSF_VK_LOAD(allocate, vkAllocateMemory);
-    RSF_VK_LOAD(free_memory, vkFreeMemory);
-    RSF_VK_LOAD(bind, vkBindImageMemory);
+    RSF_VK_LOAD(gpu.create_image, vkCreateImage);
+    RSF_VK_LOAD(gpu.destroy_image, vkDestroyImage);
+    RSF_VK_LOAD(gpu.requirements, vkGetImageMemoryRequirements);
+    RSF_VK_LOAD(gpu.allocate, vkAllocateMemory);
+    RSF_VK_LOAD(gpu.free_memory, vkFreeMemory);
+    RSF_VK_LOAD(gpu.bind, vkBindImageMemory);
     RSF_VK_LOAD(barrier, vkCmdPipelineBarrier);
     RSF_VK_LOAD(clear, vkCmdClearColorImage);
     RSF_VK_LOAD(copy, vkCmdCopyImage);
@@ -162,6 +164,7 @@ int32_t initialize_graphics(FfxNative* native, const rsf_srvk_setup* setup) noex
         setup->instance_proc(setup->instance, "vkGetPhysicalDeviceMemoryProperties"));
     if (!properties) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
     properties(static_cast<VkPhysicalDevice>(setup->physical_device), &native->memory);
+    native->gpu.memory_types(native->memory);
     return native->capture.initialize(native->device, setup->device_proc, native->memory)
         ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_INIT_FAILED;
 }
@@ -241,45 +244,10 @@ int32_t plan(FfxNative* native, const rsf_srvk_setup* setup, uint32_t* width, ui
 }
 catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
 
-int32_t allocate(FfxNative* native, rsf_srvk_image* image, uint32_t usage, uint64_t* memory) noexcept try
-{
-    VkImageCreateInfo info{};
-    info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    info.imageType = VK_IMAGE_TYPE_2D;
-    info.extent = {image->width, image->height, 1};
-    info.mipLevels = info.arrayLayers = 1;
-    info.format = static_cast<VkFormat>(image->format);
-    info.samples = VK_SAMPLE_COUNT_1_BIT;
-    info.tiling = VK_IMAGE_TILING_OPTIMAL;
-    info.usage = usage;
-    info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    VkImage handle = VK_NULL_HANDLE;
-    if (native->create_image(native->device, &info, nullptr, &handle) != VK_SUCCESS) return RSF_BACKEND_ERROR_INIT_FAILED;
-    image->image = reinterpret_cast<uint64_t>(handle);
-    VkMemoryRequirements requirements{};
-    native->requirements(native->device, handle, &requirements);
-    uint32_t type = UINT32_MAX;
-    for (uint32_t i = 0; i < native->memory.memoryTypeCount; ++i) {
-        if (!(requirements.memoryTypeBits & (1u << i))) continue;
-        type = i;
-        if (native->memory.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) break;
-    }
-    if (type == UINT32_MAX) return RSF_BACKEND_ERROR_INIT_FAILED;
-    VkMemoryAllocateInfo allocation{};
-    allocation.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocation.allocationSize = requirements.size;
-    allocation.memoryTypeIndex = type;
-    VkDeviceMemory allocated = VK_NULL_HANDLE;
-    if (native->allocate(native->device, &allocation, nullptr, &allocated) != VK_SUCCESS) return RSF_BACKEND_ERROR_INIT_FAILED;
-    *memory = reinterpret_cast<uint64_t>(allocated);
-    return native->bind(native->device, handle, allocated, 0) == VK_SUCCESS ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_INIT_FAILED;
-}
-catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
-
 void release(FfxNative* native, uint64_t image, uint64_t memory) noexcept
 {
-    if (image) native->destroy_image(native->device, reinterpret_cast<VkImage>(image), nullptr);
-    if (memory) native->free_memory(native->device, reinterpret_cast<VkDeviceMemory>(memory), nullptr);
+    if (image) native->gpu.destroy_image(native->device, reinterpret_cast<VkImage>(image), nullptr);
+    if (memory) native->gpu.free_memory(native->device, reinterpret_cast<VkDeviceMemory>(memory), nullptr);
 }
 
 VkImageMemoryBarrier image_barrier(VkImage image, VkImageLayout from, VkImageLayout to,
@@ -432,7 +400,9 @@ constexpr Platform native{
     rsf::dlss_vk::platform,
     rsf::xess_vk::platform,
     {rsf_vk_sdk_system_loader, open, [](FfxNative* owner) { delete owner; }, initialize_graphics, versions, create_effect,
-        effective_version, destroy_effect, plan, allocate, release, initialize_mask, initialize_output, dispatch, copy_output,
+        effective_version, destroy_effect, plan,
+        [](FfxNative* owner) -> void* { return &owner->gpu; }, &rsf::vkfg::platform,
+        [](FfxNative* owner) { return owner->memory.memoryTypeCount; }, release, initialize_mask, initialize_output, dispatch, copy_output,
         [](FfxNative* owner, const rsf_srvk_setup* setup, void* commands, const rsf_srvk_frame* frame, uint64_t output) -> int32_t {
             return owner->sharpen.execute(*setup, commands, *frame, reinterpret_cast<VkImage>(output));
         },

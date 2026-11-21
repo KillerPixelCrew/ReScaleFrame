@@ -223,6 +223,62 @@ static DLSS: rsf_vkdlss_platform = rsf_vkdlss_platform {
     })),
 };
 
+// Types 1 and 2 are compatible inside the three reported types; 2 and 3 are device-local.
+static FFX_IMAGES: ImageOps = ImageOps {
+    local_memory_types: Some(leaf!(|_: Handle| -> u32 { 0b1100 })),
+    create_image: Some(leaf!(|native: Handle,
+                              width: u32,
+                              height: u32,
+                              format: u32,
+                              usage: u32,
+                              image: *mut u64|
+     -> i32 {
+        let id = if format == R8_UNORM { 15 } else { 14 };
+        unsafe {
+            fake(native)
+                .calls
+                .push(Call::Allocate(id, width, height, usage));
+            image.write(id);
+        }
+        0
+    })),
+    requirements: Some(leaf!(|_: Handle,
+                              image: u64,
+                              size: *mut u64,
+                              types: *mut u32|
+     -> () {
+        unsafe {
+            size.write(image);
+            types.write(0b10110);
+        }
+    })),
+    allocate: Some(leaf!(|native: Handle,
+                          size: u64,
+                          kind: u32,
+                          memory: *mut u64|
+     -> i32 {
+        assert_eq!(kind, 2);
+        if unsafe { fake(native) }.fail_allocation && size == 15 {
+            return -2;
+        }
+        unsafe { memory.write(size + 100) };
+        0
+    })),
+    bind: Some(leaf!(|_: Handle, image: u64, memory: u64| -> i32 {
+        assert_eq!(memory, image + 100);
+        0
+    })),
+    create_view: None,
+    destroy_view: None,
+    destroy_image: None,
+    free_memory: None,
+    create_fence: None,
+    destroy_fence: None,
+    wait_fence: None,
+    reset_fence: None,
+    submit_fence: None,
+};
+
 pub(super) static PLATFORM: Platform = Platform {
     dlss: Some(&DLSS),
     xess: Some(&super::xess::tests::OPS),
@@ -285,23 +341,9 @@ pub(super) static PLATFORM: Platform = Platform {
                 0
             }
         ),
-        allocate: leaf!(
-            |handle: Handle, image: &mut Image, usage: u32, memory: &mut u64| -> i32 {
-                let state = unsafe { fake(handle) };
-                image.image = if image.format == R8_UNORM { 15 } else { 14 };
-                state.calls.push(Call::Allocate(
-                    image.image,
-                    image.width,
-                    image.height,
-                    usage,
-                ));
-                if state.fail_allocation && image.image == 15 {
-                    return INIT_FAILED;
-                }
-                *memory = image.image + 100;
-                0
-            }
-        ),
+        image_user: leaf!(|handle: Handle| -> Handle { handle }),
+        images: &FFX_IMAGES,
+        memory_type_count: leaf!(|_: Handle| -> u32 { 3 }),
         release: leaf!(|handle: Handle, image: u64, memory: u64| -> () {
             unsafe { fake(handle).calls.push(Call::Release(image, memory)) }
         }),
@@ -603,6 +645,23 @@ fn ffx_creation_refusal_unwinds_partial_resources_and_native_aa_skips_the_query(
         ]
     );
     assert!(owner.is_null());
+}
+
+#[test]
+fn ffx_memory_type_prefers_first_device_local_else_last_compatible() {
+    // (memoryTypeBits, memoryTypeCount, device-local types) -> chosen index
+    for (required, count, local, chosen) in [
+        (0b1110, 4, 0b1100, Some(2)),
+        (0b1110, 4, 0b0001, Some(3)),
+        (0b1110, 3, 0b1000, Some(2)),
+        (0b0001, 1, 0b0000, Some(0)),
+        (0b1000, 3, 0b1000, None),
+        (0b0000, 32, u32::MAX, None),
+        (u32::MAX, 32, 0, Some(31)),
+        (u32::MAX, 0, u32::MAX, None),
+    ] {
+        assert_eq!(memory_type(required, count, local), chosen);
+    }
 }
 
 #[test]
