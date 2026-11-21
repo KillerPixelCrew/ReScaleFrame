@@ -847,6 +847,11 @@ the low-depth producer through DLSS. Two changing hand silhouettes
 had unchanged camera matrices. All 16 evaluations matched their
 Presents and the game quit cleanly.
 [First-person animation evidence](research/rust-overlay-host.md#animated-first-person-inputs)
+The AVX follow-up disabled motion generation and kept SR active.
+The matched capture verified zero fill for all first-person pixels
+and reconstructed world motion on both sampled turns. The engine
+quit cleanly and the original settings were restored.
+[Zero-fill fallback evidence](research/rust-overlay-host.md#first-person-zero-fill-with-missing-motion)
 D3D11-on-12 wrapping, fullscreen and held-key gameplay remain open.
 [Shared overlay host evidence](research/rust-overlay-host.md#integrated-runtime-and-standard-game-run)
 

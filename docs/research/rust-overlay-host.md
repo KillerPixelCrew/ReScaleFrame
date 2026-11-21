@@ -254,9 +254,36 @@ the runner restored both bindings and the original payload.
 The verifier, transcript and 208 hashes are under
 `.local/rust-1.94.1-verification/avx-first-person-audit-d0cc7ad/`.
 The images, inputs and logs are under `avx-first-person-band-d0cc7ad`
-in the clone's `evidence/` directory. A capture with unwritten
-first-person pixels is still needed to measure the zero-fill fallback.
-Moving world characters remain open.
+in the clone's `evidence/` directory. Moving world characters remain open.
+
+## First-person zero fill with missing motion
+
+The follow-up AVX test kept Stage 5 SR and the first-person zero rule
+enabled with `Motion=0`. The bolt was equipped through the temporary
+middle-button binding. The raw captures contained the depth twin and
+prepared motion, and the generated motion target was absent. The
+Runtime recorded missing motion while DLSS continued to evaluate.
+
+The capture paired 16 consecutive evaluations with successful Presents.
+On the 18.3° turn in frame 1685, all 50,977 first-person depth pixels
+became valid zero vectors and stayed zero in the submitted RG16F
+texture. All 589,223 world pixels received nonzero reconstructed motion.
+On the 13.1° return turn in frame 1696, the corresponding counts were
+45,075 first-person zeros and 595,125 reconstructed world vectors.
+Both turns retained DLSS history. The animation briefly moved the
+hands out of view in frame 1690. The verifier checks the first-person
+band when present and the actual output and matched Present on every
+frame.
+
+The final image showed the bolt animation and intact HUD. The last SR
+report showed 3,089 evaluations and zero refusals, with DLSS-G active.
+The game exited with code 0 and the isolated bindings, sensitivity
+and INI values were restored. The verifier, transcript and 192 raw
+hashes are under
+`.local/rust-1.94.1-verification/avx-first-person-zero-fill-audit-d0cc7ad/`.
+The captured inputs, images and logs are under
+`avx-first-person-zero-fill-d0cc7ad` in the isolated clone's
+`evidence/` directory.
 
 ## Vulkan Streamline-disabled verification
 
