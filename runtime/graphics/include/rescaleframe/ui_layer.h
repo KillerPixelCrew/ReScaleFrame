@@ -63,8 +63,8 @@ typedef struct rsf_ui_layer_setup {
      * This is not cosmetic. Unreal allocates its targets typeless and chooses per view; a draw that
        was being encoded and now is not stores linear values where encoded ones are expected, and
        the whole layer comes out dark and desaturated while every count says it worked. The texture
-       is created typeless so both views can exist over it, and the composite reads back through a
-       matching sRGB view so the decode undoes the encode exactly. */
+       is created typeless so both views can exist over it. The composite reads through a UNORM
+       view to preserve the stored encoding. */
     uint32_t srgb;
     rsf_ui_layer_log_fn log;
     void* log_user;
@@ -83,8 +83,10 @@ void rsf_ui_layer_destroy(rsf_ui_layer* layer);
    rather than a black screen. */
 rsf_ui_layer_result rsf_ui_layer_begin_frame(rsf_ui_layer* layer, void* context);
 
-/* The current slot's render target view, for a diverted draw to write into. Null before the first
-   `begin_frame`. Borrowed: the layer keeps it alive and the caller must not release it. */
+/* The current slot's render target view, for a diverted draw to write into.
+
+   All three slot getters return null before the first `begin_frame`. Their pointers are borrowed
+   until layer destruction. A later `begin_frame` can clear and reuse the slot's contents. */
 void* rsf_ui_layer_target(rsf_ui_layer* layer);
 
 /* The current slot's shader resource view, for the composite to read. */

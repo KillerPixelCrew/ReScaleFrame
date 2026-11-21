@@ -102,8 +102,7 @@ int main()
         rsf_ui_registry_forget(registry, &slate_b);
         check(rsf_ui_registry_contains(registry, RSF_UI_SET_SLATE_LAYOUT, &slate_a) == 1 &&
                   rsf_ui_registry_contains(registry, RSF_UI_SET_SLATE_LAYOUT, &widget) == 1,
-              "Removing the middle entry must leave the others findable. The last entry fills the "
-              "hole, so this is really a check that the fill happened.");
+              "Removing the middle entry must leave the others findable.");
         check(rsf_ui_registry_contains(registry, RSF_UI_SET_SLATE_LAYOUT, &slate_b) == 0,
               "And the removed one must be gone.");
         uint32_t count = 0;
@@ -165,6 +164,18 @@ int main()
         check(counters.evicted[RSF_UI_SET_WIDGET_TARGET] == 1 &&
                   counters.refused_full[RSF_UI_SET_WIDGET_TARGET] == 0,
               "The eviction is counted, and nothing was refused.");
+
+        // Reuse the oldest address, refill the set, then force another eviction. The newest
+        // target must keep its place when forgetting the old one compacts the set.
+        rsf_ui_registry_forget(working, &targets[2]);
+        check(rsf_ui_registry_note_recent(working, RSF_UI_SET_WIDGET_TARGET, &targets[2]) == 1 &&
+                  rsf_ui_registry_note_recent(working, RSF_UI_SET_WIDGET_TARGET,
+                                             &targets[RSF_UI_MAX_WIDGET_TARGETS + 1]) == 1,
+              "A reused address and a fresh address both change membership.");
+        check(rsf_ui_registry_contains(working, RSF_UI_SET_WIDGET_TARGET,
+                                       &targets[RSF_UI_MAX_WIDGET_TARGETS]) &&
+                  !rsf_ui_registry_contains(working, RSF_UI_SET_WIDGET_TARGET, &targets[3]),
+              "Forgetting must preserve recency so eviction removes the oldest survivor.");
         rsf_ui_registry_destroy(working);
     }
 

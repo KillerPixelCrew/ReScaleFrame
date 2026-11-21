@@ -199,6 +199,14 @@ mod sr_legacy;
 #[cfg(windows)]
 mod sr_session;
 #[cfg(windows)]
+mod ui_identify;
+#[cfg(windows)]
+mod ui_identify_abi;
+#[cfg(windows)]
+mod ui_layer;
+#[cfg(windows)]
+mod ui_layer_abi;
+#[cfg(windows)]
 mod vulkan_antilag;
 #[cfg(windows)]
 mod vulkan_dlss_fg;
