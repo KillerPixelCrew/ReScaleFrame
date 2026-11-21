@@ -91,3 +91,28 @@ engine compiler run were not repeated. The corpus fixture was rebuilt on the new
 The WARP part of the synthetic fixture, device and window fixtures, game runs and
 `eng/verify.ps1` were not run. Logs are under
 `.local/rust-1.94.1-verification/merged-worker-evidence/rust-shader-patch/`.
+
+## Integrated Runtime and cold-cache Standard run
+
+The combined shader patch and Anomaly configuration build at `74d4c48`
+passed 413 pinned Rust tests, formatting, Clippy, eight MSVC Release
+contracts, the shader patch CPU fixture and ten Anomaly package tests.
+Runtime, AC7, Loader, thin carrier, version alias, Minecraft, Unity and
+Godot export names and ordinals matched. Anomaly kept its three exports
+and dynamic Runtime lookup. The merged public DLL probe reopened the
+C++ cache unchanged and passed the short-record refusals.
+
+The isolated Standard run used the merged Runtime, adapter and matching
+pack with an empty motion shader cache. It opened 73 allowlisted roots
+and compiled 79 replacement variants across the static, model, pixel,
+foliage and tessellation families. The game resized to 1600×900, kept
+DLSS-G active and reported 1,289 DLSS SR evaluations with zero refusals
+in the last full sample. The engine shut down Direct3D and returned
+code 0.
+
+The new cache and logs were moved into the evidence directory and all
+165 original cache files were restored and hash-checked. The staged
+DLLs, pack, settings and script were also restored. Evidence is under
+`.local/anomaly/staging/live-58fe95a-stage5/evidence/` in
+`merged-rust-shader-cold-standard-74d4c48`. The AVX cold-cache run,
+licensed corpus parity and shader WARP fixture remain open.

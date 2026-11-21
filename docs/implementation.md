@@ -310,6 +310,25 @@ Quality to Balanced and back, and overlay reload. All three foreground
 runs exited through the engine. Held-key input still needs verification.
 [Manifest and AVX evidence](research/rust-anomaly-shader-manifest.md#merged-adapter-verification)
 
+Anomaly now keeps the SR configuration, package-relative vendor
+paths and live options in the Rust stage. The native settings mirror
+and its refresh and observer callbacks were removed. The merged
+adapter passed 401 Rust tests and 16 focused MSVC Release contracts.
+Standard verified the default DLSS and XeSS paths. The AVX opt-out
+run reported no SR or FG choices and timed out before the actor update.
+[SR configuration evidence](research/rust-anomaly-sr-configuration.md#coordinator-integration-and-game-checks)
+
+The shared Runtime shader patch service now owns pack validation,
+transformations, claims, original proof, reflection, DXBC, cache
+publication and interception state in Rust. Its public table and
+cache key are preserved. The combined build passed 413 Rust tests,
+eight focused MSVC Release contracts, the shader CPU fixture and
+ten package tests. The Runtime reused the C++ cache unchanged and
+all checked export inventories matched. In a cold-cache Standard
+run it compiled 79 replacements, resized with DLSS-G active and
+exited cleanly. All 165 original cache files were restored and verified.
+[Integrated shader patch evidence](research/rust-shader-patch.md#integrated-runtime-and-cold-cache-standard-run)
+
 The overlay and FG merge passed 17 focused MSVC contracts in Debug
 and Release, including the hidden-window overlay API contract and the
 input gate. All 233 locked Rust tests, formatting and Clippy passed.

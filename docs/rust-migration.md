@@ -40,25 +40,22 @@ and kept its embedded Runtime linkage.
 
 Callers still need to account for documented behavior changes. Frame assembly requires the output record to advertise its capacity and refuses a zero or short capacity before writing. Overlay settings callbacks can read the committed values, and a second write returns `BUSY` while the first is active. Vulkan capture and SR recording require completion proof before readbacks can be published or reused. The [implementation tracker](implementation.md) records the fixture coverage for those changes.
 
-## Remaining native owners
+## Shader patch and Anomaly configuration ownership
 
 The Runtime DLL publishes the generic shader patch service through
 `rsf_get_shader_patch_api`. Anomaly borrows that table from the
-carrier-loaded Runtime. The Anomaly manifest port owns the adapter's
-admitted rows and lookup, while the Runtime service still owns the
-shared pack rules, claims registry, compilation cache and interception
-inventory in C++. Those service owners are part of the remaining
-core port. Its public DLL baseline now covers a synthetic compile,
-claim lifetime, exact output bytes and cache behavior without a device.
-[Runtime shader patching](research/runtime-shader-patching.md#public-dll-baseline-for-the-rust-port)
+carrier-loaded Runtime. Rust owns the shared pack rules, claim registry,
+proof of the original shader, transformed output, reflection policy,
+cache and interception inventory. The adapter owns the admitted motion
+manifest and its lookup. The merged Runtime reopened the old C++ cache,
+and Standard compiled new replacements in a cold game cache.
+[Integrated shader patch evidence](research/rust-shader-patch.md#integrated-runtime-and-cold-cache-standard-run)
 
-Anomaly's Rust SR stage also has a second configuration record in the
-native stage facade. The facade mirrors live settings and keeps the
-INI and vendor paths for resets and availability checks. The remaining
-stage port moves that retained configuration to the Rust owner. Its
-Release candidate passed a Standard run with package-relative DLSS
-and XeSS directories and clean teardown.
-[Configuration candidate game evidence](research/rust-anomaly-sr-pass.md#package-relative-sr-paths-on-the-configuration-candidate)
+The Rust SR stage owns the retained INI, vendor directories and live
+settings. The native facade no longer keeps its second configuration
+record. Standard verified the packaged DLSS and XeSS directory defaults
+on the exact staged Release candidate.
+[SR configuration evidence](research/rust-anomaly-sr-configuration.md#coordinator-integration-and-game-checks)
 
 The shared presentation and overlay diagnostics now name the graphics
 path. Native D3D12 Streamline registration follows the adapter's backend
@@ -71,7 +68,7 @@ carrier use the same host owner and matching panel ABI check.
 | Requirement | Recorded evidence | Still open |
 | --- | --- | --- |
 | Core ownership | Rust owns plugin sessions, frame assembly, capture, provider admission, latency and pacing, presentation buffers, readbacks, paired physical DXGI swapchain and queue, and shared D3D11 panel state. The OpenGL and FidelityFX Vulkan WSI routes also use Rust ownership. The merged Standard clone exercised native rendering, DLSS SR and a DLSS-G to FSR3 and back provider transition. [Implementation tracker](implementation.md) · [Shared overlay host evidence](research/rust-overlay-host.md#integrated-runtime-and-standard-game-run) | Complete the ownership audit and independent device checks. Fullscreen and D3D11-on-12 overlay wrapping remain open. |
-| Stable C ABI and linked consumers | The GameSDK and contract headers match the baseline. The merged overlay host kept all eight checked Release PE inventories and Anomaly's by-name Runtime lookup. The enabled Debug build matched the four checked core inventories and Anomaly and passed 11 contracts. The Vulkan Streamline-disabled Release build kept all four checked inventories and passed 13 contracts and the direct stub probe. [Implementation tracker](implementation.md) | Recheck the final artifacts after the remaining ownership changes. |
+| Stable C ABI and linked consumers | The GameSDK and contract headers match the baseline. The merged shader patch and configuration build kept all eight checked Release PE inventories and Anomaly's by-name Runtime lookup. Earlier enabled Debug and Vulkan Streamline-disabled Release builds passed their focused contracts and export comparisons. [Implementation tracker](implementation.md) | Repeat the Debug and Vulkan Streamline-disabled checks with the merged shader service. |
 | C++ Anomaly baseline | Standard and AVX ran the existing C++ adapter with the Rust Runtime. Standard exercised the overlay, held-key gameplay, SR switching and DLSS-G. Both shut down through the engine. [C++ adapter baseline](research/rust-anomaly-cpp-baseline.md) | The baseline covers the exact recorded executable and payload hashes. |
 | Rust Anomaly game acceptance | Both profiles reloaded the Rust manifest in the foreground and drew the merged overlay through resize. Standard switched native and DLSS SR and changed FG providers. AVX switched SR providers with DLSS-G active and returned gameplay mouse input after closing the panel. Both shut down cleanly. Earlier Standard evidence covers refused-SR spatial recovery. [Rust adapter game evidence](research/rust-anomaly-sr-pass.md) · [AVX foreground reload](research/rust-anomaly-shader-manifest.md#avx-foreground-settings-and-pack-reload) · [Merged overlay host](research/rust-overlay-host.md#integrated-runtime-and-standard-game-run) | Verify held-key gameplay and repeat affected paths after any remaining ownership changes. |
 | Device and shader evidence | Offscreen SR and sharpening runs, exact Vulkan capture readbacks and live Anomaly results are recorded separately from synthetic contracts. The Standard and AVX captures verified raw SR inputs and outputs. The consecutive AVX burst captured both history resets at the actual camera-cut evaluations and their matched Presents. The pending OpenGL, D3D12 readback, overlay and presentation fixtures link on the merged MSVC Release build. [SR device results](research/rust-anomaly-sr-pass.md#offscreen-device-acceptance) · [Camera cut captures](research/rust-overlay-host.md#matched-camera-cuts-on-avx) · [Merged fixture builds](research/rust-overlay-host.md#merged-device-fixture-builds) | Continuous camera pans, moving-object quality, OpenGL sharing, D3D12 readback, D3D11-on-12 overlay, fullscreen and windowed Vulkan DLSS-G remain open. |

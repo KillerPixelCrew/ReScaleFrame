@@ -180,3 +180,23 @@ No game run. Standard and AVX runs need to confirm, on this build:
 - the SRScale change after `vid_restart`;
 - SRStageCapture refusing the motion capture;
 - the observer installing SR only when selected.
+
+## Coordinator integration and game checks
+
+The Release worker DLL matched the exact adapter used by the Standard
+default-path run. The worker branch and worktree were removed after
+the merge and evidence archive. The merged configuration passed 401
+pinned Rust tests and 16 focused MSVC Release contracts.
+[Standard game evidence](rust-anomaly-sr-pass.md#package-relative-sr-paths-on-the-configuration-candidate)
+
+An AVX opt-out run used the same worker DLL with SR, SRStageCapture,
+motion, FG and the FG bridge off. It selected the AVX profile and
+configured the overlay with zero SR and FG choices. The Windows
+automation helper retained an active request and could not bring the
+game forward. The background run registered the lifecycle callback
+and reached its time limit before the actor update. The runner stopped
+the isolated instance and restored the files. This run verifies the
+recorded startup settings. Native gameplay and clean engine teardown
+in this opt-out configuration still need a foreground run. Logs are
+in `rust-sr-configuration-optout-avx-346191e9` under the clone's
+`evidence/` directory.
