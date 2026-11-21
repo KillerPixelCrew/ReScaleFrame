@@ -94,6 +94,27 @@ const _: () = {
 };
 #[repr(C)]
 #[derive(Copy, Clone)]
+pub struct rsf_overlay12_frame {
+    pub allocator: *mut ::core::ffi::c_void,
+    pub commands: *mut ::core::ffi::c_void,
+    pub srv: *mut ::core::ffi::c_void,
+    pub rtv: *mut ::core::ffi::c_void,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_overlay12_frame"][::core::mem::size_of::<rsf_overlay12_frame>() - 32usize];
+    ["Alignment of rsf_overlay12_frame"][::core::mem::align_of::<rsf_overlay12_frame>() - 8usize];
+    ["Offset of field: rsf_overlay12_frame::allocator"]
+        [::core::mem::offset_of!(rsf_overlay12_frame, allocator) - 0usize];
+    ["Offset of field: rsf_overlay12_frame::commands"]
+        [::core::mem::offset_of!(rsf_overlay12_frame, commands) - 8usize];
+    ["Offset of field: rsf_overlay12_frame::srv"]
+        [::core::mem::offset_of!(rsf_overlay12_frame, srv) - 16usize];
+    ["Offset of field: rsf_overlay12_frame::rtv"]
+        [::core::mem::offset_of!(rsf_overlay12_frame, rtv) - 24usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
 pub struct rsf_overlay12_platform {
     pub window: ::core::option::Option<
         unsafe extern "C" fn(chain: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void,
@@ -104,6 +125,12 @@ pub struct rsf_overlay12_platform {
             queue: *mut ::core::ffi::c_void,
             fence: *mut *mut ::core::ffi::c_void,
         ) -> *mut ::core::ffi::c_void,
+    >,
+    pub create_frame: ::core::option::Option<
+        unsafe extern "C" fn(
+            panel: *mut ::core::ffi::c_void,
+            arg1: *mut rsf_overlay12_frame,
+        ) -> u32,
     >,
     pub install_input: ::core::option::Option<
         unsafe extern "C" fn(
@@ -127,10 +154,9 @@ pub struct rsf_overlay12_platform {
     >,
     pub begin: ::core::option::Option<
         unsafe extern "C" fn(
-            panel: *mut ::core::ffi::c_void,
-            slot: u32,
+            arg1: *const rsf_overlay12_frame,
             chain: *mut ::core::ffi::c_void,
-            arg1: *mut rsf_overlay12_target,
+            arg2: *mut rsf_overlay12_target,
         ) -> *mut ::core::ffi::c_void,
     >,
     pub create_pipeline: ::core::option::Option<
@@ -164,24 +190,25 @@ pub struct rsf_overlay12_platform {
     pub upload_texture: ::core::option::Option<
         unsafe extern "C" fn(
             panel: *mut ::core::ffi::c_void,
-            slot: u32,
+            arg1: *const rsf_overlay12_frame,
             resource: *mut ::core::ffi::c_void,
-            arg1: *const rsf_overlay_texture_update,
+            arg2: *const rsf_overlay_texture_update,
         ) -> *mut ::core::ffi::c_void,
     >,
     pub record: ::core::option::Option<
         unsafe extern "C" fn(
             panel: *mut ::core::ffi::c_void,
-            slot: u32,
-            arg1: *const rsf_overlay12_draw,
+            arg1: *const rsf_overlay12_frame,
+            arg2: *const rsf_overlay12_draw,
             textures: *const *mut ::core::ffi::c_void,
             texture_count: u32,
-            arg2: *const rsf_overlay12_draw_call,
+            arg3: *const rsf_overlay12_draw_call,
             call_count: u32,
         ) -> u32,
     >,
-    pub execute:
-        ::core::option::Option<unsafe extern "C" fn(panel: *mut ::core::ffi::c_void, slot: u32)>,
+    pub execute: ::core::option::Option<
+        unsafe extern "C" fn(panel: *mut ::core::ffi::c_void, arg1: *const rsf_overlay12_frame),
+    >,
     pub signal: ::core::option::Option<
         unsafe extern "C" fn(
             panel: *mut ::core::ffi::c_void,
@@ -192,45 +219,47 @@ pub struct rsf_overlay12_platform {
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of rsf_overlay12_platform"][::core::mem::size_of::<rsf_overlay12_platform>() - 144usize];
+    ["Size of rsf_overlay12_platform"][::core::mem::size_of::<rsf_overlay12_platform>() - 152usize];
     ["Alignment of rsf_overlay12_platform"]
         [::core::mem::align_of::<rsf_overlay12_platform>() - 8usize];
     ["Offset of field: rsf_overlay12_platform::window"]
         [::core::mem::offset_of!(rsf_overlay12_platform, window) - 0usize];
     ["Offset of field: rsf_overlay12_platform::initialize"]
         [::core::mem::offset_of!(rsf_overlay12_platform, initialize) - 8usize];
+    ["Offset of field: rsf_overlay12_platform::create_frame"]
+        [::core::mem::offset_of!(rsf_overlay12_platform, create_frame) - 16usize];
     ["Offset of field: rsf_overlay12_platform::install_input"]
-        [::core::mem::offset_of!(rsf_overlay12_platform, install_input) - 16usize];
+        [::core::mem::offset_of!(rsf_overlay12_platform, install_input) - 24usize];
     ["Offset of field: rsf_overlay12_platform::stop_input"]
-        [::core::mem::offset_of!(rsf_overlay12_platform, stop_input) - 24usize];
+        [::core::mem::offset_of!(rsf_overlay12_platform, stop_input) - 32usize];
     ["Offset of field: rsf_overlay12_platform::destroy"]
-        [::core::mem::offset_of!(rsf_overlay12_platform, destroy) - 32usize];
+        [::core::mem::offset_of!(rsf_overlay12_platform, destroy) - 40usize];
     ["Offset of field: rsf_overlay12_platform::visible"]
-        [::core::mem::offset_of!(rsf_overlay12_platform, visible) - 40usize];
+        [::core::mem::offset_of!(rsf_overlay12_platform, visible) - 48usize];
     ["Offset of field: rsf_overlay12_platform::set_visible"]
-        [::core::mem::offset_of!(rsf_overlay12_platform, set_visible) - 48usize];
+        [::core::mem::offset_of!(rsf_overlay12_platform, set_visible) - 56usize];
     ["Offset of field: rsf_overlay12_platform::completed"]
-        [::core::mem::offset_of!(rsf_overlay12_platform, completed) - 56usize];
+        [::core::mem::offset_of!(rsf_overlay12_platform, completed) - 64usize];
     ["Offset of field: rsf_overlay12_platform::arm"]
-        [::core::mem::offset_of!(rsf_overlay12_platform, arm) - 64usize];
+        [::core::mem::offset_of!(rsf_overlay12_platform, arm) - 72usize];
     ["Offset of field: rsf_overlay12_platform::begin"]
-        [::core::mem::offset_of!(rsf_overlay12_platform, begin) - 72usize];
+        [::core::mem::offset_of!(rsf_overlay12_platform, begin) - 80usize];
     ["Offset of field: rsf_overlay12_platform::create_pipeline"]
-        [::core::mem::offset_of!(rsf_overlay12_platform, create_pipeline) - 80usize];
+        [::core::mem::offset_of!(rsf_overlay12_platform, create_pipeline) - 88usize];
     ["Offset of field: rsf_overlay12_platform::create_upload"]
-        [::core::mem::offset_of!(rsf_overlay12_platform, create_upload) - 88usize];
+        [::core::mem::offset_of!(rsf_overlay12_platform, create_upload) - 96usize];
     ["Offset of field: rsf_overlay12_platform::collect_input"]
-        [::core::mem::offset_of!(rsf_overlay12_platform, collect_input) - 96usize];
+        [::core::mem::offset_of!(rsf_overlay12_platform, collect_input) - 104usize];
     ["Offset of field: rsf_overlay12_platform::create_texture"]
-        [::core::mem::offset_of!(rsf_overlay12_platform, create_texture) - 104usize];
+        [::core::mem::offset_of!(rsf_overlay12_platform, create_texture) - 112usize];
     ["Offset of field: rsf_overlay12_platform::upload_texture"]
-        [::core::mem::offset_of!(rsf_overlay12_platform, upload_texture) - 112usize];
+        [::core::mem::offset_of!(rsf_overlay12_platform, upload_texture) - 120usize];
     ["Offset of field: rsf_overlay12_platform::record"]
-        [::core::mem::offset_of!(rsf_overlay12_platform, record) - 120usize];
+        [::core::mem::offset_of!(rsf_overlay12_platform, record) - 128usize];
     ["Offset of field: rsf_overlay12_platform::execute"]
-        [::core::mem::offset_of!(rsf_overlay12_platform, execute) - 128usize];
+        [::core::mem::offset_of!(rsf_overlay12_platform, execute) - 136usize];
     ["Offset of field: rsf_overlay12_platform::signal"]
-        [::core::mem::offset_of!(rsf_overlay12_platform, signal) - 136usize];
+        [::core::mem::offset_of!(rsf_overlay12_platform, signal) - 144usize];
 };
 #[repr(C)]
 #[derive(Copy, Clone)]

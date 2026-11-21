@@ -843,6 +843,13 @@ and remains unrun. Build and live observer verification remain open.
 
 ## Rust orchestrator and first Anomaly port
 
+The native D3D12 overlay now owns its three command and descriptor
+slots in Rust. The fixed slot array keeps partial references until
+initialization releases the fence and tears down the renderer.
+The private binding regenerated identically. The backpressure
+device fixture remains unrun.
+[D3D12 overlay slots](research/rust-d3d12-overlay-slots.md)
+
 The D3D11 host now constructs the bridge setup, chooses the install
 mode and publishes startup FG Off in Rust. Anomaly's Rust FG input
 owner keeps all six staging textures and views and retains the

@@ -6,9 +6,14 @@
 #include <d3dcompiler.h>
 #include <dxgi1_4.h>
 #include <wrl/client.h>
-#include <array>
+#include <cstddef>
 #include <cstring>
 #include <memory>
+// overlay_native12_abi.rs asserts the same layout.
+static_assert(sizeof(rsf_overlay12_frame) == 4 * sizeof(void*) &&
+    offsetof(rsf_overlay12_platform, create_frame) == 2 * sizeof(void*) &&
+    offsetof(rsf_overlay12_platform, signal) == 18 * sizeof(void*) &&
+    sizeof(rsf_overlay12_platform) == 19 * sizeof(void*));
 namespace {
 using Microsoft::WRL::ComPtr;
 constexpr char shader[] = R"(
@@ -19,17 +24,26 @@ P vs(V v) { P p; p.p=float4(v.p.x*inverseSize.x-1,1-v.p.y*inverseSize.y,0,1);p.u
 Texture2D atlas:register(t0); SamplerState linearSampler:register(s0);
 float4 ps(P p):SV_Target { return p.c*atlas.Sample(linearSampler,p.uv); }
 )";
+// A Present slot borrowed from the Rust owner's lease for one leaf call.
 struct Frame {
-    ComPtr<ID3D12CommandAllocator> allocator;
-    ComPtr<ID3D12GraphicsCommandList> commands;
-    ComPtr<ID3D12DescriptorHeap> srv, rtv;
+    ID3D12CommandAllocator* allocator;
+    ID3D12GraphicsCommandList* commands;
+    ID3D12DescriptorHeap* srv;
+    ID3D12DescriptorHeap* rtv;
 };
+Frame borrow(const rsf_overlay12_frame* frame)
+{
+    return {static_cast<ID3D12CommandAllocator*>(frame->allocator),
+        static_cast<ID3D12GraphicsCommandList*>(frame->commands),
+        static_cast<ID3D12DescriptorHeap*>(frame->srv), static_cast<ID3D12DescriptorHeap*>(frame->rtv)};
+}
+// The three slot frames are leased by the Rust owner, which releases them last slot first
+// immediately before destroy_renderer, where these members used to be destroyed.
 struct Renderer {
     ComPtr<ID3D12Device> device;
     ComPtr<ID3D12CommandQueue> queue;
     ComPtr<ID3D12RootSignature> root;
     ComPtr<ID3DBlob> vertex_shader, pixel_shader;
-    std::array<Frame,3> frames;
     UINT stride{};
 
 };
@@ -76,18 +90,29 @@ bool initialize(Renderer& p, ID3D12Device* device, ID3D12CommandQueue* queue, vo
     D3D12_ROOT_SIGNATURE_DESC desc{2,parameters,1,&sampler,D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT};
     if (FAILED(D3D12SerializeRootSignature(&desc,D3D_ROOT_SIGNATURE_VERSION_1,&signature,&errors)) ||
         FAILED(device->CreateRootSignature(0,signature->GetBufferPointer(),signature->GetBufferSize(),IID_PPV_ARGS(&p.root)))) return false;
-    for (auto& frame:p.frames) {
-        if (FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,IID_PPV_ARGS(&frame.allocator))) ||
-            FAILED(device->CreateCommandList(0,D3D12_COMMAND_LIST_TYPE_DIRECT,frame.allocator.Get(),nullptr,IID_PPV_ARGS(&frame.commands))) ||
-            FAILED(frame.commands->Close())) return false;
-        D3D12_DESCRIPTOR_HEAP_DESC heap{};heap.Type=D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-        heap.NumDescriptors=RSF_OVERLAY12_TEXTURE_LIMIT;heap.Flags=D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-        if (FAILED(device->CreateDescriptorHeap(&heap,IID_PPV_ARGS(&frame.srv)))) return false;
-        heap.Type=D3D12_DESCRIPTOR_HEAP_TYPE_RTV;heap.NumDescriptors=1;heap.Flags=D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-        if (FAILED(device->CreateDescriptorHeap(&heap,IID_PPV_ARGS(&frame.rtv)))) return false;
-    }
     *completion=fence.Detach();
     return true;
+}
+// One slot's objects in their former creation order. Whatever was created passes to the Rust
+// owner, which releases a refused slot's objects in reverse creation order.
+uint32_t create_frame(void* native, rsf_overlay12_frame* out)
+{
+    auto& p=*static_cast<Renderer*>(native);
+    auto* device=p.device.Get();
+    ComPtr<ID3D12CommandAllocator> allocator;ComPtr<ID3D12GraphicsCommandList> commands;
+    ComPtr<ID3D12DescriptorHeap> srv,rtv;
+    const bool created=[&]{
+        if (FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,IID_PPV_ARGS(&allocator))) ||
+            FAILED(device->CreateCommandList(0,D3D12_COMMAND_LIST_TYPE_DIRECT,allocator.Get(),nullptr,IID_PPV_ARGS(&commands))) ||
+            FAILED(commands->Close())) return false;
+        D3D12_DESCRIPTOR_HEAP_DESC heap{};heap.Type=D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+        heap.NumDescriptors=RSF_OVERLAY12_TEXTURE_LIMIT;heap.Flags=D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+        if (FAILED(device->CreateDescriptorHeap(&heap,IID_PPV_ARGS(&srv)))) return false;
+        heap.Type=D3D12_DESCRIPTOR_HEAP_TYPE_RTV;heap.NumDescriptors=1;heap.Flags=D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+        return SUCCEEDED(device->CreateDescriptorHeap(&heap,IID_PPV_ARGS(&rtv)));
+    }();
+    *out={allocator.Detach(),commands.Detach(),srv.Detach(),rtv.Detach()};
+    return created;
 }
 void* create_pipeline(void* native, uint32_t format)
 {
@@ -124,10 +149,10 @@ void* create_texture(void* native, uint32_t width, uint32_t height)
     return SUCCEEDED(p.device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&desc,
         D3D12_RESOURCE_STATE_COPY_DEST,nullptr,IID_PPV_ARGS(&created))) ? created.Detach() : nullptr;
 }
-void* upload_texture(void* native, uint32_t slot, void* resource, const rsf_overlay_texture_update* patch)
+void* upload_texture(void* native, const rsf_overlay12_frame* slot, void* resource, const rsf_overlay_texture_update* patch)
 {
     auto& p=*static_cast<Renderer*>(native);
-    auto& frame=p.frames[slot];
+    const auto frame=borrow(slot);
     const auto& update=*patch;
     auto* destination=static_cast<ID3D12Resource*>(resource);
     auto desc=destination->GetDesc();
@@ -141,14 +166,14 @@ void* upload_texture(void* native, uint32_t slot, void* resource, const rsf_over
     for (UINT y=0;y<update.height;++y) std::memcpy(static_cast<unsigned char*>(mapped)+uint64_t(y)*footprint.Footprint.RowPitch,
         update.pixels+uint64_t(y)*update.width*4,uint64_t(update.width)*4);
     upload->Unmap(0,nullptr);
-    if (!update.is_whole_texture) transition(frame.commands.Get(),destination,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_COPY_DEST);
+    if (!update.is_whole_texture) transition(frame.commands,destination,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_COPY_DEST);
     D3D12_TEXTURE_COPY_LOCATION source{};source.pResource=upload.Get();source.Type=D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;source.PlacedFootprint=footprint;
     D3D12_TEXTURE_COPY_LOCATION target{};target.pResource=destination;target.Type=D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
     frame.commands->CopyTextureRegion(&target,update.x,update.y,0,&source,nullptr);
-    transition(frame.commands.Get(),destination,D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    transition(frame.commands,destination,D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     return upload.Detach();
 }
-bool draw(Renderer& p, Frame& frame, const rsf_overlay12_draw& binding,
+bool draw(Renderer& p, const Frame& frame, const rsf_overlay12_draw& binding,
     void* const* textures, UINT texture_count, const rsf_overlay12_draw_call* calls, UINT call_count)
 {
     const auto [target_resource,pipeline,vertex_resource,index_resource,vertex_data,index_data,width,height,vertex_bytes,index_bytes]=binding;
@@ -167,10 +192,10 @@ bool draw(Renderer& p, Frame& frame, const rsf_overlay12_draw& binding,
         view.ViewDimension=D3D12_SRV_DIMENSION_TEXTURE2D;view.Shader4ComponentMapping=D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;view.Texture2D.MipLevels=1;
         p.device->CreateShaderResourceView(static_cast<ID3D12Resource*>(textures[index]),&view,cpu);
     }
-    auto* commands=frame.commands.Get();transition(commands,target,D3D12_RESOURCE_STATE_PRESENT,D3D12_RESOURCE_STATE_RENDER_TARGET);
+    auto* commands=frame.commands;transition(commands,target,D3D12_RESOURCE_STATE_PRESENT,D3D12_RESOURCE_STATE_RENDER_TARGET);
     const auto rtv=frame.rtv->GetCPUDescriptorHandleForHeapStart();p.device->CreateRenderTargetView(target,nullptr,rtv);
     commands->OMSetRenderTargets(1,&rtv,FALSE,nullptr);commands->SetPipelineState(static_cast<ID3D12PipelineState*>(pipeline));commands->SetGraphicsRootSignature(p.root.Get());
-    ID3D12DescriptorHeap* heaps[]{frame.srv.Get()};commands->SetDescriptorHeaps(1,heaps);
+    ID3D12DescriptorHeap* heaps[]{frame.srv};commands->SetDescriptorHeaps(1,heaps);
     const float scale[]{2.0f/static_cast<float>(width),2.0f/static_cast<float>(height)};commands->SetGraphicsRoot32BitConstants(0,2,scale,0);
     const D3D12_VIEWPORT viewport{0,0,static_cast<float>(width),static_cast<float>(height),0,1};commands->RSSetViewports(1,&viewport);
     D3D12_VERTEX_BUFFER_VIEW vertices{vertex_buffer->GetGPUVirtualAddress(),vertex_bytes,sizeof(rsf_overlay_vertex)};
@@ -217,10 +242,9 @@ uint32_t arm(void* fence, void* event, uint64_t value) {
     return SUCCEEDED(static_cast<ID3D12Fence*>(fence)->SetEventOnCompletion(value,event));
 }
 
-void* begin_frame(void* native, uint32_t slot, void* chain, rsf_overlay12_target* out) noexcept try {
-    auto& renderer=*static_cast<Renderer*>(native);
-    auto& frame=renderer.frames[slot];
-    if (FAILED(frame.allocator->Reset())||FAILED(frame.commands->Reset(frame.allocator.Get(),nullptr))) return nullptr;
+void* begin_frame(const rsf_overlay12_frame* slot, void* chain, rsf_overlay12_target* out) noexcept try {
+    const auto frame=borrow(slot);
+    if (FAILED(frame.allocator->Reset())||FAILED(frame.commands->Reset(frame.allocator,nullptr))) return nullptr;
     ComPtr<IDXGISwapChain3> swapchain;ComPtr<ID3D12Resource> target;
     if (FAILED(static_cast<IDXGISwapChain*>(chain)->QueryInterface(IID_PPV_ARGS(&swapchain)))||
         FAILED(swapchain->GetBuffer(swapchain->GetCurrentBackBufferIndex(),IID_PPV_ARGS(&target)))) return nullptr;
@@ -234,17 +258,17 @@ uint32_t collect_input(rsf_overlay_input* input, uint32_t width, uint32_t height
     return rsf_overlay_input_collect(input, width, height, elapsed) == RSF_OVERLAY_INPUT_OK;
 } catch (...) { return 0; }
 
-uint32_t record(void* native, uint32_t slot, const rsf_overlay12_draw* binding,
+uint32_t record(void* native, const rsf_overlay12_frame* slot, const rsf_overlay12_draw* binding,
     void* const* textures, uint32_t texture_count, const rsf_overlay12_draw_call* calls, uint32_t call_count) noexcept try {
     auto& renderer=*static_cast<Renderer*>(native);
-    auto& frame=renderer.frames[slot];
+    const auto frame=borrow(slot);
     return draw(renderer,frame,*binding,textures,texture_count,calls,call_count) &&
         SUCCEEDED(frame.commands->Close());
 } catch (...) { return 0; }
 
-void execute(void* native, uint32_t slot) {
+void execute(void* native, const rsf_overlay12_frame* slot) {
     auto& renderer=*static_cast<Renderer*>(native);
-    ID3D12CommandList* lists[]{renderer.frames[slot].commands.Get()};
+    ID3D12CommandList* lists[]{borrow(slot).commands};
     renderer.queue->ExecuteCommandLists(1,lists);
 }
 
@@ -253,7 +277,7 @@ uint32_t signal(void* native, void* fence, uint64_t value) {
 }
 
 constexpr rsf_overlay12_platform platform{
-    output_window, create_renderer, install_input, stop_input, destroy_renderer, rsf_overlay_input_visible,
+    output_window, create_renderer, create_frame, install_input, stop_input, destroy_renderer, rsf_overlay_input_visible,
     rsf_overlay_input_set_visible, completed, arm, begin_frame, create_pipeline, create_upload, collect_input,
     create_texture, upload_texture, record, execute, signal,
 };

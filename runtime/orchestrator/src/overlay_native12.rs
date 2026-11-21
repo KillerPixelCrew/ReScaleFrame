@@ -10,7 +10,8 @@ use crate::overlay_host_abi::{
 };
 use crate::overlay_native12_abi::{
     RSF_OVERLAY12_TEXTURE_LIMIT, rsf_overlay12_draw as Draw, rsf_overlay12_draw_call as DrawCall,
-    rsf_overlay12_log, rsf_overlay12_platform as Platform, rsf_overlay12_target as Target,
+    rsf_overlay12_frame as FrameTable, rsf_overlay12_log, rsf_overlay12_platform as Platform,
+    rsf_overlay12_target as Target,
 };
 use crate::overlay_panel::{
     rsf_core_overlay_panel_open, rsf_core_overlay_panel_release, rsf_core_overlay_panel_retain,
@@ -308,7 +309,7 @@ impl Atlas {
         &mut self,
         platform: &Platform,
         native: *mut c_void,
-        slot: usize,
+        lease: &Lease,
         update: &rsf_overlay_texture_update,
     ) -> Option<()> {
         if !valid_texture(update) {
@@ -348,13 +349,13 @@ impl Atlas {
         let upload = unsafe {
             ComRef::from_owned((platform.upload_texture.unwrap())(
                 native,
-                slot as u32,
+                &lease.frame,
                 texture.resource.as_ptr(),
                 update,
             ))
         }?;
-        self.retained[slot].push(upload);
-        self.retained[slot].push(texture.resource.clone());
+        self.retained[lease.slot].push(upload);
+        self.retained[lease.slot].push(texture.resource.clone());
         if let Some(replacement) = replacement {
             match position {
                 Some(index) => self.textures[index] = replacement,
@@ -402,7 +403,7 @@ impl Atlas {
         platform: &Platform,
         native: *mut c_void,
         ui: &Ui,
-        slot: usize,
+        lease: &Lease,
         binding: &Draw,
         data: &DrawData,
     ) -> Option<()> {
@@ -419,7 +420,7 @@ impl Atlas {
                 break;
             }
             for update in batch.get(..count as usize)? {
-                self.update(platform, native, slot, update)?;
+                self.update(platform, native, lease, update)?;
             }
         }
 
@@ -427,12 +428,12 @@ impl Atlas {
         let mut bindings = [std::ptr::null_mut(); TEXTURES];
         for (binding, texture) in bindings.iter_mut().zip(&self.textures) {
             *binding = texture.resource.as_ptr();
-            self.retained[slot].push(texture.resource.clone());
+            self.retained[lease.slot].push(texture.resource.clone());
         }
         let recorded = unsafe {
             (platform.record.unwrap())(
                 native,
-                slot as u32,
+                &lease.frame,
                 binding,
                 bindings.as_ptr(),
                 self.textures.len() as u32,
@@ -465,16 +466,85 @@ impl Atlas {
     }
 }
 
+// One Present slot on the overlay device: direct allocator, its closed list, the shader-visible
+// SRV heap and the RTV heap. Fields release in declaration order, the reverse of creation, as the
+// former native members did.
+#[derive(Default)]
+struct Frame {
+    rtv: Option<ComRef>,
+    srv: Option<ComRef>,
+    commands: Option<ComRef>,
+    allocator: Option<ComRef>,
+}
+
+impl Frame {
+    // The leaf transfers every reference it acquired, including on refusal.
+    unsafe fn adopt(table: FrameTable) -> Self {
+        Self {
+            rtv: unsafe { ComRef::from_owned(table.rtv) },
+            srv: unsafe { ComRef::from_owned(table.srv) },
+            commands: unsafe { ComRef::from_owned(table.commands) },
+            allocator: unsafe { ComRef::from_owned(table.allocator) },
+        }
+    }
+
+    fn table(&self) -> Option<FrameTable> {
+        Some(FrameTable {
+            allocator: self.allocator.as_ref()?.as_ptr(),
+            commands: self.commands.as_ref()?.as_ptr(),
+            srv: self.srv.as_ref()?.as_ptr(),
+            rtv: self.rtv.as_ref()?.as_ptr(),
+        })
+    }
+}
+
+// The ring slot chosen for one Present and the borrowed table of its frame.
+struct Lease {
+    slot: usize,
+    frame: FrameTable,
+}
+
 struct Renderer {
     handle: std::ptr::NonNull<c_void>,
     destroy: unsafe extern "C" fn(*mut c_void),
+    frames: [Frame; SLOTS],
 }
 
-// Only the locked panel uses or releases the native renderer.
+// Only the locked panel uses or releases the native renderer and its frames.
 unsafe impl Send for Renderer {}
+
+impl Renderer {
+    // A refusal keeps the complete and partial frames until teardown, after the startup fence.
+    fn create_frames(&mut self, platform: &Platform) -> Option<()> {
+        for frame in &mut self.frames {
+            let mut table = FrameTable {
+                allocator: null_mut(),
+                commands: null_mut(),
+                srv: null_mut(),
+                rtv: null_mut(),
+            };
+            let created =
+                unsafe { (platform.create_frame.unwrap())(self.handle.as_ptr(), &mut table) };
+            *frame = unsafe { Frame::adopt(table) };
+            if created == 0 || frame.table().is_none() {
+                return None;
+            }
+        }
+        Some(())
+    }
+
+    fn frame(&self, slot: usize) -> Option<FrameTable> {
+        self.frames.get(slot).and_then(Frame::table)
+    }
+}
 
 impl Drop for Renderer {
     fn drop(&mut self) {
+        // The frames end last slot first and before the device objects, where the native
+        // renderer's frame members were destroyed.
+        for frame in self.frames.iter_mut().rev() {
+            *frame = Frame::default();
+        }
         unsafe { (self.destroy)(self.handle.as_ptr()) };
     }
 }
@@ -538,11 +608,15 @@ impl Panel {
         let mut fence = null_mut();
         let native = unsafe { (platform.initialize.unwrap())(device, queue, &mut fence) };
         let fence = unsafe { ComRef::from_owned(fence) };
-        let renderer = Renderer {
+        let mut renderer = Renderer {
             handle: NonNull::new(native)?,
             destroy: platform.destroy.unwrap(),
+            frames: std::array::from_fn(|_| Frame::default()),
         };
         let reference = fence?;
+        // A refusal releases the fence, then the created frames and the renderer, as the native
+        // initialization failure did. Nothing has been submitted yet.
+        renderer.create_frames(platform)?;
         let user = self.log_user as *mut c_void;
         if unsafe { (platform.install_input.unwrap())(window, self.logger, user) } == 0 {
             return None;
@@ -704,6 +778,11 @@ unsafe extern "C" fn rsf_core_overlay12_present(
     {
         return panel.fail(platform);
     }
+    // The slot's frame stays owned by the renderer. The fence proof above admits its reuse.
+    let Some(table) = panel.native.as_ref().unwrap().frame(slot) else {
+        return panel.fail(platform);
+    };
+    let lease = Lease { slot, frame: table };
     panel.atlas.retained[slot].clear();
     panel.graphics.slots[slot].pipeline = None;
     let mut frame = Target {
@@ -711,12 +790,8 @@ unsafe extern "C" fn rsf_core_overlay12_present(
         height: 0,
         format: 0,
     };
-    let slot_index = slot as u32;
-    let target = unsafe {
-        ComRef::from_owned((platform.begin.unwrap())(
-            native, slot_index, chain, &mut frame,
-        ))
-    };
+    let target =
+        unsafe { ComRef::from_owned((platform.begin.unwrap())(&lease.frame, chain, &mut frame)) };
     let Some(target) = target else {
         return panel.fail(platform);
     };
@@ -793,7 +868,7 @@ unsafe extern "C" fn rsf_core_overlay12_present(
             platform,
             native,
             ui.as_ref().unwrap(),
-            slot,
+            &lease,
             &binding,
             &data,
         )
@@ -814,7 +889,7 @@ unsafe extern "C" fn rsf_core_overlay12_present(
         panel.log(c"Overlay12: queue submission begin");
     }
     let fence = panel.fence.as_ref().unwrap().reference.as_ptr();
-    unsafe { (platform.execute.unwrap())(native, slot_index) };
+    unsafe { (platform.execute.unwrap())(native, &lease.frame) };
     if unsafe { (platform.signal.unwrap())(native, fence, value) } == 0 {
         // Execute already happened. The failed owner stays alive until a signal proves retirement.
         panel.unsignalled = Some(value);
@@ -834,7 +909,7 @@ unsafe extern "C" fn rsf_core_overlay12_present(
 mod tests {
     use super::*;
     use crate::com_ref::test::{Fake, add_ref, fake, raw};
-    use std::ptr::{from_mut, null_mut};
+    use std::ptr::{from_mut, null_mut, without_provenance_mut};
 
     struct AtlasFixture {
         textures: [Box<Fake>; 2],
@@ -844,6 +919,21 @@ mod tests {
         pending: bool,
         free: bool,
         refuse_upload: bool,
+        // The list marker of the frame each upload and record leaf received.
+        lists: Vec<usize>,
+    }
+
+    // A slot lease whose frame table carries slot + 1 as its list marker.
+    fn lease(slot: usize) -> Lease {
+        Lease {
+            slot,
+            frame: FrameTable {
+                allocator: null_mut(),
+                commands: without_provenance_mut(slot + 1),
+                srv: null_mut(),
+                rtv: null_mut(),
+            },
+        }
     }
 
     static PIXELS: [u8; 64] = [255; 64];
@@ -891,12 +981,13 @@ mod tests {
 
     unsafe extern "C" fn upload(
         native: *mut c_void,
-        _: u32,
+        frame: *const FrameTable,
         _: *mut c_void,
         _: *const rsf_overlay_texture_update,
     ) -> *mut c_void {
         let fixture = unsafe { &mut *native.cast::<AtlasFixture>() };
         fixture.uploaded += 1;
+        fixture.lists.push(unsafe { (*frame).commands }.addr());
         if fixture.refuse_upload {
             return null_mut();
         }
@@ -907,14 +998,15 @@ mod tests {
 
     unsafe extern "C" fn draw(
         native: *mut c_void,
-        _: u32,
+        frame: *const FrameTable,
         _: *const Draw,
         bindings: *const *mut c_void,
         count: u32,
         calls: *const DrawCall,
         call_count: u32,
     ) -> u32 {
-        let fixture = unsafe { &*native.cast::<AtlasFixture>() };
+        let fixture = unsafe { &mut *native.cast::<AtlasFixture>() };
+        fixture.lists.push(unsafe { (*frame).commands }.addr());
         u32::from(
             count == 1
                 && call_count == 1
@@ -926,6 +1018,7 @@ mod tests {
     const PLATFORM: Platform = Platform {
         window: None,
         initialize: None,
+        create_frame: None,
         install_input: None,
         stop_input: None,
         destroy: None,
@@ -968,6 +1061,7 @@ mod tests {
             pending: true,
             free: false,
             refuse_upload: false,
+            lists: Vec::new(),
         }
     }
 
@@ -1009,16 +1103,36 @@ mod tests {
         let mut atlas = Atlas::new();
         let native = from_mut(&mut fixture).cast();
         assert!(
-            unsafe { atlas.record(&PLATFORM, native, &fake_ui(native), 0, &binding, &data) }
-                .is_some()
+            unsafe {
+                atlas.record(
+                    &PLATFORM,
+                    native,
+                    &fake_ui(native),
+                    &lease(0),
+                    &binding,
+                    &data,
+                )
+            }
+            .is_some()
         );
         fixture.pending = true;
         fixture.free = true;
         let native = from_mut(&mut fixture).cast();
         assert!(
-            unsafe { atlas.record(&PLATFORM, native, &fake_ui(native), 1, &binding, &data) }
-                .is_some()
+            unsafe {
+                atlas.record(
+                    &PLATFORM,
+                    native,
+                    &fake_ui(native),
+                    &lease(1),
+                    &binding,
+                    &data,
+                )
+            }
+            .is_some()
         );
+        // Each slot's upload and draw recorded on that slot's own list.
+        assert_eq!(fixture.lists, [1, 1, 2, 2]);
         assert!(atlas.textures.is_empty());
         assert_eq!(fixture.textures[0].refs.get(), 3);
         assert_eq!(fixture.textures[1].refs.get(), 3);
@@ -1038,24 +1152,130 @@ mod tests {
         let mut fixture = fixture();
         let native = from_mut(&mut fixture).cast();
         let mut atlas = Atlas::new();
-        assert!(atlas.update(&PLATFORM, native, 0, &UPDATE).is_some());
+        let slot = lease(0);
+        assert!(atlas.update(&PLATFORM, native, &slot, &UPDATE).is_some());
         let mut patch = UPDATE;
         patch.is_whole_texture = 0;
         patch.x = u32::MAX;
-        assert!(atlas.update(&PLATFORM, native, 0, &patch).is_none());
+        assert!(atlas.update(&PLATFORM, native, &slot, &patch).is_none());
         assert_eq!(fixture.uploaded, 1);
         patch.x = 1;
         patch.width = 3;
         let native = from_mut(&mut fixture).cast();
-        assert!(atlas.update(&PLATFORM, native, 0, &patch).is_some());
+        assert!(atlas.update(&PLATFORM, native, &slot, &patch).is_some());
         fixture.refuse_upload = true;
         let native = from_mut(&mut fixture).cast();
-        assert!(atlas.update(&PLATFORM, native, 0, &UPDATE).is_none());
+        assert!(atlas.update(&PLATFORM, native, &slot, &UPDATE).is_none());
         assert_eq!(
             atlas.textures[0].resource.as_ptr(),
             raw(&fixture.textures[0])
         );
         assert_eq!(fixture.textures[1].refs.get(), 1);
+    }
+
+    // Hands out the fakes in creation order, four per frame, and stops at refuse_at.
+    struct FrameFixture {
+        objects: [Box<Fake>; 4 * SLOTS],
+        created: usize,
+        refuse_at: usize,
+        refs_at_destroy: Option<Vec<u32>>,
+    }
+
+    impl FrameFixture {
+        fn refs(&self) -> Vec<u32> {
+            self.objects
+                .iter()
+                .map(|object| object.refs.get())
+                .collect()
+        }
+    }
+
+    unsafe extern "C" fn create_frame(native: *mut c_void, out: *mut FrameTable) -> u32 {
+        let fixture = unsafe { &mut *native.cast::<FrameFixture>() };
+        let mut parts = [null_mut(); 4];
+        for part in &mut parts {
+            if fixture.created == fixture.refuse_at {
+                break;
+            }
+            let object = raw(&fixture.objects[fixture.created]);
+            unsafe { add_ref(object.cast()) };
+            *part = object;
+            fixture.created += 1;
+        }
+        let [allocator, commands, srv, rtv] = parts;
+        unsafe {
+            out.write(FrameTable {
+                allocator,
+                commands,
+                srv,
+                rtv,
+            })
+        };
+        u32::from(parts.iter().all(|part| !part.is_null()))
+    }
+
+    unsafe extern "C" fn destroy_renderer(native: *mut c_void) {
+        let fixture = unsafe { &mut *native.cast::<FrameFixture>() };
+        fixture.refs_at_destroy = Some(fixture.refs());
+    }
+
+    fn frame_renderer(fixture: &mut FrameFixture) -> Renderer {
+        Renderer {
+            handle: NonNull::from(fixture).cast(),
+            destroy: destroy_renderer,
+            frames: std::array::from_fn(|_| Frame::default()),
+        }
+    }
+
+    const FRAME_PLATFORM: Platform = Platform {
+        create_frame: Some(create_frame),
+        ..PLATFORM
+    };
+
+    #[test]
+    fn frames_are_created_in_slot_order_and_released_before_the_renderer() {
+        let mut fixture = FrameFixture {
+            objects: std::array::from_fn(|_| fake()),
+            created: 0,
+            refuse_at: usize::MAX,
+            refs_at_destroy: None,
+        };
+        let mut renderer = frame_renderer(&mut fixture);
+        assert!(renderer.create_frames(&FRAME_PLATFORM).is_some());
+        assert!(renderer.frames.iter().all(|frame| frame.table().is_some()));
+        let table = renderer.frame(1).unwrap();
+        assert_eq!(table.allocator, raw(&fixture.objects[4]));
+        assert_eq!(table.commands, raw(&fixture.objects[5]));
+        assert_eq!(table.srv, raw(&fixture.objects[6]));
+        assert_eq!(table.rtv, raw(&fixture.objects[7]));
+        assert!(renderer.frame(SLOTS).is_none());
+        assert_eq!(fixture.refs(), [2; 4 * SLOTS]);
+        drop(renderer);
+        assert_eq!(
+            fixture.refs_at_destroy.as_deref(),
+            Some(&[1; 4 * SLOTS][..])
+        );
+    }
+
+    #[test]
+    fn refused_frame_keeps_its_objects_and_earlier_frames_for_teardown() {
+        let mut fixture = FrameFixture {
+            objects: std::array::from_fn(|_| fake()),
+            created: 0,
+            // The third frame's SRV heap is refused after its allocator and list exist.
+            refuse_at: 10,
+            refs_at_destroy: None,
+        };
+        let mut renderer = frame_renderer(&mut fixture);
+        assert!(renderer.create_frames(&FRAME_PLATFORM).is_none());
+        assert!(renderer.frame(1).is_some());
+        assert!(renderer.frame(2).is_none());
+        assert_eq!(fixture.refs(), [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1]);
+        drop(renderer);
+        assert_eq!(
+            fixture.refs_at_destroy.as_deref(),
+            Some(&[1; 4 * SLOTS][..])
+        );
     }
 
     #[test]
