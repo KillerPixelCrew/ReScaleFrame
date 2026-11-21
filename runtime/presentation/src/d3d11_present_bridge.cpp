@@ -17,7 +17,6 @@
 #include <cstddef>
 #include <cstdio>
 #include <memory>
-#include <mutex>
 #include <new>
 
 static_assert(sizeof(rsf_streamline_graphics) == 48);
@@ -26,17 +25,17 @@ static_assert(sizeof(rsf_d3d11p_facts) == 120 && offsetof(rsf_d3d11p_facts, grap
     offsetof(rsf_d3d11p_facts, direct_queue) == 88 && offsetof(rsf_d3d11p_facts, device11) == 104 &&
     offsetof(rsf_d3d11p_facts, buffer_usage) == 112);
 static_assert(sizeof(rsf_d3d11p_adapter) == 16);
-static_assert(sizeof(rsf_d3d11p_platform) == 76 * sizeof(void*));
+static_assert(sizeof(rsf_d3d11p_platform) == 71 * sizeof(void*));
 static_assert(offsetof(rsf_d3d11p_platform, bridge_new) == 15 * sizeof(void*) &&
     offsetof(rsf_d3d11p_platform, init_source) == 19 * sizeof(void*) &&
     offsetof(rsf_d3d11p_platform, shared_surface_platform) == 32 * sizeof(void*) &&
     offsetof(rsf_d3d11p_platform, create_plain) == 34 * sizeof(void*) &&
-    offsetof(rsf_d3d11p_platform, has_provider_queue) == 43 * sizeof(void*) &&
-    offsetof(rsf_d3d11p_platform, acquire_backbuffer) == 48 * sizeof(void*) &&
-    offsetof(rsf_d3d11p_platform, query_buffer_interface) == 59 * sizeof(void*) &&
-    offsetof(rsf_d3d11p_platform, drain_queues) == 62 * sizeof(void*) &&
-    offsetof(rsf_d3d11p_platform, set_description) == 66 * sizeof(void*) &&
-    offsetof(rsf_d3d11p_platform, verify_outer) == 75 * sizeof(void*));
+    offsetof(rsf_d3d11p_platform, join) == 41 * sizeof(void*) &&
+    offsetof(rsf_d3d11p_platform, acquire_backbuffer) == 44 * sizeof(void*) &&
+    offsetof(rsf_d3d11p_platform, query_buffer_interface) == 55 * sizeof(void*) &&
+    offsetof(rsf_d3d11p_platform, drain_queues) == 58 * sizeof(void*) &&
+    offsetof(rsf_d3d11p_platform, set_description) == 62 * sizeof(void*) &&
+    offsetof(rsf_d3d11p_platform, verify_outer) == 70 * sizeof(void*));
 static_assert(sizeof(rsf_d3d11_present_status) == 280 && sizeof(rsf_observer_present_event) == 32);
 static_assert(DXGI_FORMAT_R8G8B8A8_UNORM == 28 && DXGI_FORMAT_B8G8R8A8_UNORM == 87 &&
     DXGI_FORMAT_R10G10B10A2_UNORM == 24 && DXGI_FORMAT_R16G16B16A16_FLOAT == 10);
@@ -64,6 +63,20 @@ bool same_identity(IUnknown* left, IUnknown* right) {
         SUCCEEDED(right->QueryInterface(IID_PPV_ARGS(&b))) && a.Get() == b.Get();
 }
 
+class PhysicalLease {
+    const rsf_d3d11p_physical_lease* lease = nullptr;
+    void* physical = nullptr;
+    HRESULT result;
+public:
+    explicit PhysicalLease(rsf_d3d11p_chain* chain, bool initialize = false)
+        : result(rsf_core_d3d11p_acquire_physical(chain, initialize ? 1u : 0u, &lease, &physical)) {}
+    ~PhysicalLease() { rsf_core_d3d11p_release_physical(lease); }
+    PhysicalLease(const PhysicalLease&) = delete;
+    PhysicalLease& operator=(const PhysicalLease&) = delete;
+    IDXGISwapChain4* get() const { return static_cast<IDXGISwapChain4*>(physical); }
+    HRESULT status() const { return result; }
+};
+
 struct Bridge final : public IDXGISwapChain4 {
     std::atomic<ULONG> references{1};
     rsf_d3d11p_chain* chain;
@@ -71,10 +84,6 @@ struct Bridge final : public IDXGISwapChain4 {
     ComPtr<ID3D11DeviceContext4> context;
     ComPtr<IDXGIAdapter> adapter;
     ComPtr<IDXGIFactory> parent;
-    ComPtr<IDXGISwapChain4> physical;
-    std::mutex physical_guard;
-    // The queue the current physical chain (and its provider) was created on.
-    std::atomic<ID3D12CommandQueue*> provider_queue{nullptr};
     bool tearing_supported = false;
     rsf_streamline_host* host = nullptr;
     rsf_streamline_graphics graphics{};
@@ -98,26 +107,14 @@ struct Bridge final : public IDXGISwapChain4 {
     ~Bridge() { rsf_core_d3d11p_chain_destroy(chain); }
 
     template<class Call> HRESULT query_physical(Call call) {
-        const auto initialized = rsf_core_d3d11p_ensure(chain); if (FAILED(initialized)) return initialized;
-        std::lock_guard<std::mutex> lock(physical_guard);
-        return physical ? call(physical.Get()) : DXGI_ERROR_WAS_STILL_DRAWING;
-    }
-    // Calls that make DXGI send window messages run outside the lock: a window thread that
-    // queries the chain while handling them would otherwise wait for this one.
-    ComPtr<IDXGISwapChain4> current_physical() {
-        std::lock_guard<std::mutex> lock(physical_guard); return physical;
-    }
-    void clear_physical() {
-        std::lock_guard<std::mutex> lock(physical_guard); physical.Reset(); provider_queue.store(nullptr);
-    }
-    void publish_physical(ComPtr<IDXGISwapChain4>& value, ID3D12CommandQueue* queue) {
-        std::lock_guard<std::mutex> lock(physical_guard); physical = std::move(value); provider_queue.store(queue);
+        const PhysicalLease lease(chain, true);
+        return lease.get() ? call(lease.get()) : lease.status();
     }
     HRESULT wait(ID3D12Fence* fence, uint64_t value) { return rsf::wait_fence(fence, value, completion_event); }
     // Streamline's proxy queue takes the proxy list; any other provider queue takes the native
     // list behind it. Null when the host cannot unwrap the list.
-    void* provider_list(ID3D12GraphicsCommandList* list) {
-        return host && provider_queue.load() != graphics.queue ? rsf_streamline_host_native(host, list) : list;
+    void* provider_list(void* queue, ID3D12GraphicsCommandList* list) {
+        return host && queue != graphics.queue ? rsf_streamline_host_native(host, list) : list;
     }
     // Streamline needs the engine identity; without one there is no host and no DLSS-G.
     rsf_streamline_host_setup host_setup(void* dxgi_adapter) const {
@@ -185,8 +182,7 @@ struct Bridge final : public IDXGISwapChain4 {
     HRESULT STDMETHODCALLTYPE ResizeTarget(const DXGI_MODE_DESC* desc) override {
         // The physical chain is created lazily; like every other window call, ResizeTarget creates it first instead of
         // failing with DXGI_ERROR_WAS_STILL_DRAWING when an engine resizes before its first Present.
-        const auto initialized = rsf_core_d3d11p_ensure(chain); if (FAILED(initialized)) return initialized;
-        const auto c = current_physical(); return c ? c->ResizeTarget(desc) : DXGI_ERROR_WAS_STILL_DRAWING;
+        return query_physical([&](IDXGISwapChain4* c) { return c->ResizeTarget(desc); });
     }
     HRESULT STDMETHODCALLTYPE GetContainingOutput(IDXGIOutput** out) override { return query_physical([&](IDXGISwapChain4* c) { return c->GetContainingOutput(out); }); }
     HRESULT STDMETHODCALLTYPE GetFrameStatistics(DXGI_FRAME_STATISTICS* out) override {
@@ -229,7 +225,8 @@ struct Bridge final : public IDXGISwapChain4 {
         return present_owned(sync, flags);
     }
     BOOL STDMETHODCALLTYPE IsTemporaryMonoSupported() override {
-        std::lock_guard<std::mutex> lock(physical_guard); return physical ? physical->IsTemporaryMonoSupported() : FALSE;
+        const PhysicalLease lease(chain);
+        return lease.get() ? lease.get()->IsTemporaryMonoSupported() : FALSE;
     }
     HRESULT STDMETHODCALLTYPE GetRestrictToOutput(IDXGIOutput** out) override { return query_physical([&](IDXGISwapChain4* c) { return c->GetRestrictToOutput(out); }); }
     HRESULT STDMETHODCALLTYPE SetBackgroundColor(const DXGI_RGBA* color) override { return query_physical([&](IDXGISwapChain4* c) { return c->SetBackgroundColor(color); }); }
@@ -256,7 +253,9 @@ struct Bridge final : public IDXGISwapChain4 {
             if (application_ready) DuplicateHandle(GetCurrentProcess(), application_ready, GetCurrentProcess(), &duplicate, 0, FALSE, DUPLICATE_SAME_ACCESS);
             return duplicate;
         }
-        std::lock_guard<std::mutex> lock(physical_guard); return native12 && physical ? physical->GetFrameLatencyWaitableObject() : nullptr;
+        if (!native12) return nullptr;
+        const PhysicalLease lease(chain);
+        return lease.get() ? lease.get()->GetFrameLatencyWaitableObject() : nullptr;
     }
     HRESULT STDMETHODCALLTYPE SetMatrixTransform(const DXGI_MATRIX_3X2_F* value) override { return query_physical([&](IDXGISwapChain4* c) { return c->SetMatrixTransform(value); }); }
     HRESULT STDMETHODCALLTYPE GetMatrixTransform(DXGI_MATRIX_3X2_F* value) override { return query_physical([&](IDXGISwapChain4* c) { return c->GetMatrixTransform(value); }); }
@@ -265,7 +264,8 @@ struct Bridge final : public IDXGISwapChain4 {
         // cannot perform DXGI's automatic backing-resource rotation, so keep that source.
         if (!native12) return 0;
         if (switching()) return rsf_core_d3d11p_render_index(chain);
-        std::lock_guard<std::mutex> lock(physical_guard); return physical ? physical->GetCurrentBackBufferIndex() : 0;
+        const PhysicalLease lease(chain);
+        return lease.get() ? lease.get()->GetCurrentBackBufferIndex() : 0;
     }
     HRESULT STDMETHODCALLTYPE CheckColorSpaceSupport(DXGI_COLOR_SPACE_TYPE value, UINT* out) override { return query_physical([&](IDXGISwapChain4* c) { return c->CheckColorSpaceSupport(value, out); }); }
     HRESULT STDMETHODCALLTYPE SetColorSpace1(DXGI_COLOR_SPACE_TYPE value) override {
@@ -456,7 +456,7 @@ int32_t create_render_buffer(void* b, uint32_t width, uint32_t height, uint32_t 
     return hr;
 }
 
-int32_t create_plain(void* b) {
+int32_t create_plain(void* b, void** physical, void** queue) {
     auto& self = *as_bridge(b); const auto& description = self.description;
     auto desc = description; desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD; desc.BufferCount = self.native12 ? description.BufferCount : 3u;
     desc.Flags = self.tearing_supported ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
@@ -480,41 +480,36 @@ int32_t create_plain(void* b) {
     }
     ComPtr<IDXGISwapChain4> replacement;
     if (FAILED(plain.As(&replacement))) return E_FAIL;
-    self.publish_physical(replacement, owner_queue);
+    *physical = replacement.Detach();
+    *queue = owner_queue;
     return S_OK;
 }
-int32_t adopt_chain(void* b, void* chain, void* queue) {
-    ComPtr<IDXGISwapChain4> replacement;
+int32_t query_chain4(void* chain, void** physical) {
+    IDXGISwapChain4* replacement = nullptr;
     const auto result = static_cast<IUnknown*>(chain)->QueryInterface(IID_PPV_ARGS(&replacement));
-    if (SUCCEEDED(result)) as_bridge(b)->publish_physical(replacement, static_cast<ID3D12CommandQueue*>(queue));
+    *physical = replacement;
     return result;
 }
-void* physical(void* b) { auto& self = *as_bridge(b); std::lock_guard<std::mutex> lock(self.physical_guard); return self.physical.Get(); }
-void clear_physical(void* b) { as_bridge(b)->clear_physical(); }
-int32_t get_fullscreen(void* b, int32_t* fullscreen) {
-    const auto chain = as_bridge(b)->current_physical(); if (!chain) return DXGI_ERROR_WAS_STILL_DRAWING;
+int32_t get_fullscreen(void* physical, int32_t* fullscreen) {
+    auto* chain = static_cast<IDXGISwapChain4*>(physical);
     BOOL value = FALSE; const auto result = chain->GetFullscreenState(&value, nullptr); *fullscreen = value; return result;
 }
-int32_t set_fullscreen(void* b, int32_t fullscreen, void* target) {
-    const auto chain = as_bridge(b)->current_physical();
-    return chain ? chain->SetFullscreenState(BOOL(fullscreen), static_cast<IDXGIOutput*>(target)) : DXGI_ERROR_WAS_STILL_DRAWING;
+int32_t set_fullscreen(void* physical, int32_t fullscreen, void* target) {
+    return static_cast<IDXGISwapChain4*>(physical)->SetFullscreenState(BOOL(fullscreen), static_cast<IDXGIOutput*>(target));
 }
-int32_t present_test(void* b, uint32_t sync, uint32_t flags) {
-    auto& self = *as_bridge(b); std::lock_guard<std::mutex> lock(self.physical_guard);
-    return self.physical ? self.physical->Present(sync, flags) : DXGI_ERROR_WAS_STILL_DRAWING;
+int32_t physical_present(void* physical, uint32_t sync, uint32_t flags) {
+    return static_cast<IDXGISwapChain4*>(physical)->Present(sync, flags);
 }
-int32_t physical_present(void* b, uint32_t sync, uint32_t flags) { return as_bridge(b)->physical->Present(sync, flags); }
-int32_t resize_physical(void* b, uint32_t count, uint32_t width, uint32_t height, uint32_t format) {
+int32_t resize_physical(void* b, void* physical, uint32_t count, uint32_t width, uint32_t height, uint32_t format) {
     auto& self = *as_bridge(b);
-    return self.physical->ResizeBuffers(count, width, height, DXGI_FORMAT(format),
+    return static_cast<IDXGISwapChain4*>(physical)->ResizeBuffers(count, width, height, DXGI_FORMAT(format),
         self.tearing_supported ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0);
 }
 
-uint32_t has_provider_queue(void* b) { return as_bridge(b)->provider_queue.load() ? 1u : 0u; }
-uint32_t queues_joined(void* b) { auto& self = *as_bridge(b); return self.provider_queue.load() != self.direct_queue.Get() ? 1u : 0u; }
-int32_t join(void* b, uint32_t direction, uint64_t value) {
+uint32_t queues_joined(void* b, void* queue) { return queue != as_bridge(b)->direct_queue.Get() ? 1u : 0u; }
+int32_t join(void* b, void* queue, uint32_t direction, uint64_t value) {
     auto& self = *as_bridge(b);
-    auto* present_queue = self.provider_queue.load();
+    auto* present_queue = static_cast<ID3D12CommandQueue*>(queue);
     auto* signaller = direction == RSF_D3D11P_JOIN_SOURCE_TO_PRESENT ? self.direct_queue.Get() : present_queue;
     auto* waiter = direction == RSF_D3D11P_JOIN_SOURCE_TO_PRESENT ? present_queue : self.direct_queue.Get();
     const auto signaled = signaller->Signal(self.complete.Get(), value);
@@ -528,18 +523,17 @@ int32_t slot_reset(void* b, uint32_t index, uint64_t fence, uint32_t* step) {
 }
 // Signal with the preceding D3D11 work submitted before D3D12 waits on it.
 // Flushing before Signal leaves the dependency buffered until a later frame.
-int32_t upload_wait(void* b, uint64_t value) {
+int32_t upload_wait(void* b, void* queue, uint64_t value) {
     auto& self = *as_bridge(b);
     auto* fence12 = static_cast<ID3D12Fence*>(rsf_shared_fence_d3d12(self.shared_fence));
     auto* fence11 = static_cast<ID3D11Fence*>(rsf_shared_fence_d3d11(self.shared_fence));
     const auto signaled = self.context->Signal(fence11, value);
     if (FAILED(signaled)) return signaled;
     self.context->Flush();
-    return self.provider_queue.load()->Wait(fence12, value);
+    return static_cast<ID3D12CommandQueue*>(queue)->Wait(fence12, value);
 }
-int32_t acquire_backbuffer(void* b, void** out) {
-    const auto physical = as_bridge(b)->current_physical();
-    if (!physical) return DXGI_ERROR_WAS_STILL_DRAWING;
+int32_t acquire_backbuffer(void* chain, void** out) {
+    auto* physical = static_cast<IDXGISwapChain4*>(chain);
     ID3D12Resource* value = nullptr;
     const auto hr = physical->GetBuffer(physical->GetCurrentBackBufferIndex(), IID_PPV_ARGS(&value));
     *out = value;
@@ -552,19 +546,21 @@ void record_copy(void* b, uint32_t index, void* backbuffer, void* source) {
         D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_PRESENT,
         static_cast<ID3D12Resource*>(source), source_state, source_state);
 }
-void* slot_command(void* b, uint32_t index) { auto& self = *as_bridge(b); return self.provider_list(self.slots[index].list.Get()); }
+void* slot_command(void* b, void* queue, uint32_t index) {
+    auto& self = *as_bridge(b); return self.provider_list(queue, self.slots[index].list.Get());
+}
 void* context11(void* b) { return as_bridge(b)->context.Get(); }
-int32_t close_execute(void* b, uint32_t index, void* command) {
+int32_t close_execute(void* b, void* queue, uint32_t index, void* command) {
     auto& self = *as_bridge(b);
     const auto closed = self.slots[index].list->Close();
     if (SUCCEEDED(closed)) {
         ID3D12CommandList* lists[]{static_cast<ID3D12GraphicsCommandList*>(command)};
-        self.provider_queue.load()->ExecuteCommandLists(1, lists);
+        static_cast<ID3D12CommandQueue*>(queue)->ExecuteCommandLists(1, lists);
     }
     return closed;
 }
-int32_t upload_return(void* b, uint64_t value) {
-    auto& self = *as_bridge(b); auto* queue = self.provider_queue.load();
+int32_t upload_return(void* b, void* raw_queue, uint64_t value) {
+    auto& self = *as_bridge(b); auto* queue = static_cast<ID3D12CommandQueue*>(raw_queue);
     auto* fence12 = static_cast<ID3D12Fence*>(rsf_shared_fence_d3d12(self.shared_fence));
     auto* fence11 = static_cast<ID3D11Fence*>(rsf_shared_fence_d3d11(self.shared_fence));
     HRESULT result = queue->Signal(fence12, value);
@@ -572,7 +568,9 @@ int32_t upload_return(void* b, uint64_t value) {
     if (SUCCEEDED(result)) result = self.context->Wait(fence11, value);
     return result;
 }
-int32_t signal_slot(void* b, uint64_t value) { auto& self = *as_bridge(b); return self.provider_queue.load()->Signal(self.complete.Get(), value); }
+int32_t signal_slot(void* b, void* queue, uint64_t value) {
+    return static_cast<ID3D12CommandQueue*>(queue)->Signal(as_bridge(b)->complete.Get(), value);
+}
 uint32_t has_application_ready(void* b) { return as_bridge(b)->application_ready ? 1u : 0u; }
 int32_t application_ready(void* b, uint32_t on_completion, uint64_t value) {
     auto& self = *as_bridge(b);
@@ -608,11 +606,8 @@ void log_present_failure(void* b, const char* step, int32_t result, uint32_t ren
 int32_t query_buffer_interface(void* resource, const void* iid, void** out) {
     return static_cast<IUnknown*>(resource)->QueryInterface(*static_cast<const IID*>(iid), out);
 }
-int32_t get_physical_buffer(void* b, uint32_t index, const void* iid, void** out) {
-    auto& self = *as_bridge(b);
-    std::lock_guard<std::mutex> lock(self.physical_guard);
-    return self.physical ? self.physical->GetBuffer(index, *static_cast<const IID*>(iid), out) :
-        DXGI_ERROR_WAS_STILL_DRAWING;
+int32_t get_physical_buffer(void* physical, uint32_t index, const void* iid, void** out) {
+    return static_cast<IDXGISwapChain4*>(physical)->GetBuffer(index, *static_cast<const IID*>(iid), out);
 }
 void log_buffer_refusal(void* b, uint32_t index, const void* requested, int32_t result, uint32_t pending) {
     const auto& iid = *static_cast<const IID*>(requested);
@@ -654,13 +649,12 @@ void* retire_fence(void* b) {
             IID_PPV_ARGS(&self.retired)))) return nullptr;
     return self.retired.Get();
 }
-int32_t retire_submit(void* b, void* vendor_fence, uint64_t vendor_value, void* list, uint64_t value) {
-    auto& self = *as_bridge(b); auto* queue = self.provider_queue.load();
-    if (!queue) return RSF_BACKEND_ERROR_NOT_READY;
+int32_t retire_submit(void* b, void* raw_queue, void* vendor_fence, uint64_t vendor_value, void* list, uint64_t value) {
+    auto& self = *as_bridge(b); auto* queue = static_cast<ID3D12CommandQueue*>(raw_queue);
     if (vendor_fence && FAILED(queue->Wait(static_cast<ID3D12Fence*>(vendor_fence), vendor_value)))
         return RSF_BACKEND_ERROR_FEATURE_FAILED;
     if (list) {
-        auto* command = static_cast<ID3D12GraphicsCommandList*>(self.provider_list(static_cast<ID3D12GraphicsCommandList*>(list)));
+        auto* command = static_cast<ID3D12GraphicsCommandList*>(self.provider_list(queue, static_cast<ID3D12GraphicsCommandList*>(list)));
         if (!command) return RSF_BACKEND_ERROR_FEATURE_FAILED;
         ID3D12CommandList* lists[]{command}; queue->ExecuteCommandLists(1, lists);
     }
@@ -670,13 +664,12 @@ int32_t retire_submit(void* b, void* vendor_fence, uint64_t vendor_value, void* 
 void retain_all(void* b) {
     auto& self = *as_bridge(b);
     for (auto& slot : self.slots) { slot.list.Detach(); slot.allocator.Detach(); }
-    self.complete.Detach(); self.retired.Detach(); self.physical.Detach(); self.context.Detach(); self.device.Detach();
+    self.complete.Detach(); self.retired.Detach(); self.context.Detach(); self.device.Detach();
     self.parent.Detach(); self.interop_queue.Detach(); self.direct_device.Detach(); self.direct_queue.Detach();
 }
 void release_presentation(void* b) {
     auto& self = *as_bridge(b);
     rsf_shared_fence_destroy(self.shared_fence); self.shared_fence = nullptr;
-    self.clear_physical();
 }
 void release_device(void* b, uint32_t destroy_host) {
     auto& self = *as_bridge(b);
@@ -690,7 +683,6 @@ void release_device(void* b, uint32_t destroy_host) {
         rsf_streamline_host_destroy(self.host);
     } else if (self.host) self.interop_queue.Detach(); // Shared SR callbacks retain this process-owned queue.
 }
-void* presentation_queue(void* b) { return as_bridge(b)->provider_queue.load(); }
 void* source_queue(void* b) {
     auto& self = *as_bridge(b);
     auto* queue = self.interop_queue.Get();
@@ -699,7 +691,9 @@ void* source_queue(void* b) {
     if (queue) queue->AddRef();
     return queue;
 }
-void* command_list(void* b, void* list) { return as_bridge(b)->provider_list(static_cast<ID3D12GraphicsCommandList*>(list)); }
+void* command_list(void* b, void* queue, void* list) {
+    return as_bridge(b)->provider_list(queue, static_cast<ID3D12GraphicsCommandList*>(list));
+}
 int32_t verify_outer(void* inner, void* window, void* device, void* context, void* outer) {
     auto* captured = static_cast<IDXGISwapChain*>(inner);
     auto* chain = static_cast<IDXGISwapChain*>(outer);
@@ -731,11 +725,10 @@ const rsf_d3d11p_platform platform{
     .fsr4_supported = leaf::fsr4_supported, .create_queues = leaf::create_queues,
     .create_upload_fence = leaf::create_upload_fence, .create_slots = leaf::create_slots,
     .shared_surface_platform = rsf_shared_surface_native_platform, .create_render_buffer = leaf::create_render_buffer,
-    .create_plain = leaf::create_plain, .adopt_chain = leaf::adopt_chain, .physical = leaf::physical,
-    .clear_physical = leaf::clear_physical, .get_fullscreen = leaf::get_fullscreen,
-    .set_fullscreen = leaf::set_fullscreen, .present_test = leaf::present_test,
+    .create_plain = leaf::create_plain, .query_chain4 = leaf::query_chain4, .get_fullscreen = leaf::get_fullscreen,
+    .set_fullscreen = leaf::set_fullscreen,
     .physical_present = leaf::physical_present, .resize_physical = leaf::resize_physical,
-    .has_provider_queue = leaf::has_provider_queue, .queues_joined = leaf::queues_joined, .join = leaf::join,
+    .queues_joined = leaf::queues_joined, .join = leaf::join,
     .slot_reset = leaf::slot_reset, .upload_wait = leaf::upload_wait, .acquire_backbuffer = leaf::acquire_backbuffer,
     .record_copy = leaf::record_copy, .slot_command = leaf::slot_command, .context11 = leaf::context11,
     .close_execute = leaf::close_execute, .upload_return = leaf::upload_return, .signal_slot = leaf::signal_slot,
@@ -748,7 +741,7 @@ const rsf_d3d11p_platform platform{
     .buffer_referenced = leaf::buffer_referenced, .set_description = leaf::set_description,
     .retire_fence = leaf::retire_fence, .retire_submit = leaf::retire_submit, .retain_all = leaf::retain_all,
     .release_presentation = leaf::release_presentation, .release_device = leaf::release_device,
-    .presentation_queue = leaf::presentation_queue, .source_queue = leaf::source_queue,
+    .source_queue = leaf::source_queue,
     .command_list = leaf::command_list, .verify_outer = leaf::verify_outer,
 };
 

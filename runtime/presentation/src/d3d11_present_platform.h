@@ -10,12 +10,13 @@ extern "C" {
 /* Private presentation bridge contract. d3d11_present.rs owns owner admission and
    publication, provider switching, frame and slot sequencing, accepted Present,
    fallback, resize and retirement policy, status and callback ordering, and latency
-   routing. Every leaf below is one native DXGI, D3D12, D3D11, Win32 or SDK step on
-   the C++ facade (`bridge`), which keeps the IDXGISwapChain4 object ABI. Leaves never
-   throw and never call back into the Rust owner. The Rust mirror in
+   routing. Leaves perform native DXGI, D3D12, D3D11, Win32 or SDK steps for the
+   C++ facade, which keeps the IDXGISwapChain4 object ABI. Leaves never throw or
+   call the Rust owner directly. Native calls can reenter the facade. The Rust mirror in
    d3d11_present_abi.rs is hand-written; d3d11_present_bridge.cpp asserts the layouts. */
 
 typedef struct rsf_d3d11p_chain rsf_d3d11p_chain;
+typedef struct rsf_d3d11p_physical_lease rsf_d3d11p_physical_lease;
 
 /* The application's creation request, normalized from DXGI_SWAP_CHAIN_DESC. */
 typedef struct rsf_d3d11p_request {
@@ -99,31 +100,30 @@ typedef struct rsf_d3d11p_platform {
     int32_t (*create_render_buffer)(void* bridge, uint32_t width, uint32_t height,
         uint32_t format, void** out); /* owned COM reference */
 
-    /* Physical chain. */
-    int32_t (*create_plain)(void* bridge);
-    int32_t (*adopt_chain)(void* bridge, void* chain, void* queue);
-    void* (*physical)(void* bridge); /* borrowed, null without a chain */
-    void (*clear_physical)(void* bridge);
-    int32_t (*get_fullscreen)(void* bridge, int32_t* fullscreen);
-    int32_t (*set_fullscreen)(void* bridge, int32_t fullscreen, void* target);
-    int32_t (*present_test)(void* bridge, uint32_t sync, uint32_t flags);
-    int32_t (*physical_present)(void* bridge, uint32_t sync, uint32_t flags);
-    int32_t (*resize_physical)(void* bridge, uint32_t count, uint32_t width, uint32_t height, uint32_t format);
+    /* Creation returns an owned IDXGISwapChain4 reference. The plain creation queue
+       is borrowed from the initialized facade/host. Callers lease the physical
+       chain and its creation queue for the remaining operations. */
+    int32_t (*create_plain)(void* bridge, void** physical, void** queue);
+    int32_t (*query_chain4)(void* chain, void** physical);
+    int32_t (*get_fullscreen)(void* physical, int32_t* fullscreen);
+    int32_t (*set_fullscreen)(void* physical, int32_t fullscreen, void* target);
+    int32_t (*physical_present)(void* physical, uint32_t sync, uint32_t flags);
+    int32_t (*resize_physical)(void* bridge, void* physical,
+        uint32_t count, uint32_t width, uint32_t height, uint32_t format);
 
     /* Frame and slot GPU work. */
-    uint32_t (*has_provider_queue)(void* bridge);
-    uint32_t (*queues_joined)(void* bridge);
-    int32_t (*join)(void* bridge, uint32_t direction, uint64_t value);
+    uint32_t (*queues_joined)(void* bridge, void* queue);
+    int32_t (*join)(void* bridge, void* queue, uint32_t direction, uint64_t value);
     /* Waits for the slot fence, resets allocator and list. *step is 0, 1 or 2. */
     int32_t (*slot_reset)(void* bridge, uint32_t slot, uint64_t fence, uint32_t* step);
-    int32_t (*upload_wait)(void* bridge, uint64_t value);
-    int32_t (*acquire_backbuffer)(void* bridge, void** out); /* owned COM reference */
+    int32_t (*upload_wait)(void* bridge, void* queue, uint64_t value);
+    int32_t (*acquire_backbuffer)(void* physical, void** out); /* owned COM reference */
     void (*record_copy)(void* bridge, uint32_t slot, void* backbuffer, void* source);
-    void* (*slot_command)(void* bridge, uint32_t slot);
+    void* (*slot_command)(void* bridge, void* queue, uint32_t slot);
     void* (*context11)(void* bridge);
-    int32_t (*close_execute)(void* bridge, uint32_t slot, void* command);
-    int32_t (*upload_return)(void* bridge, uint64_t value);
-    int32_t (*signal_slot)(void* bridge, uint64_t value);
+    int32_t (*close_execute)(void* bridge, void* queue, uint32_t slot, void* command);
+    int32_t (*upload_return)(void* bridge, void* queue, uint64_t value);
+    int32_t (*signal_slot)(void* bridge, void* queue, uint64_t value);
     uint32_t (*has_application_ready)(void* bridge);
     int32_t (*application_ready)(void* bridge, uint32_t on_completion, uint64_t value);
     void (*report_device_failure)(void* bridge, int32_t result, uint32_t backend);
@@ -131,7 +131,7 @@ typedef struct rsf_d3d11p_platform {
 
     /* Application GetBuffer. */
     int32_t (*query_buffer_interface)(void* resource, const void* iid, void** out);
-    int32_t (*get_physical_buffer)(void* bridge, uint32_t index, const void* iid, void** out);
+    int32_t (*get_physical_buffer)(void* physical, uint32_t index, const void* iid, void** out);
     void (*log_buffer_refusal)(void* bridge, uint32_t index, const void* iid, int32_t result,
         uint32_t physical_pending);
 
@@ -143,13 +143,14 @@ typedef struct rsf_d3d11p_platform {
     void (*set_description)(void* bridge, uint32_t count, uint32_t width, uint32_t height,
         uint32_t format, uint32_t flags);
     void* (*retire_fence)(void* bridge);
-    int32_t (*retire_submit)(void* bridge, void* vendor_fence, uint64_t vendor_value, void* list, uint64_t value);
+    int32_t (*retire_submit)(void* bridge, void* queue, void* vendor_fence,
+        uint64_t vendor_value, void* list, uint64_t value);
     void (*retain_all)(void* bridge);
     void (*release_presentation)(void* bridge);
     void (*release_device)(void* bridge, uint32_t destroy_host);
-    void* (*presentation_queue)(void* bridge);
     void* (*source_queue)(void* bridge);
-    void* (*command_list)(void* bridge, void* list);
+    /* Queue may be null while the active facade awaits physical creation. */
+    void* (*command_list)(void* bridge, void* queue, void* list);
     /* Scoped creation: canonical identity of the captured inner owner and outer chain. */
     int32_t (*verify_outer)(void* captured, void* window, void* device, void* context, void* outer);
 } rsf_d3d11p_platform;
@@ -175,7 +176,11 @@ int32_t rsf_core_d3d11p_creation_end(const rsf_d3d11p_platform* platform, void* 
 
 /* Facade methods. */
 void rsf_core_d3d11p_chain_destroy(rsf_d3d11p_chain* chain);
-int32_t rsf_core_d3d11p_ensure(rsf_d3d11p_chain* chain);
+/* The physical chain is borrowed until its lease is released. When initialize is
+   zero, this only looks up the published pair and never triggers lazy creation. */
+int32_t rsf_core_d3d11p_acquire_physical(rsf_d3d11p_chain* chain, uint32_t initialize,
+    const rsf_d3d11p_physical_lease** lease, void** physical);
+void rsf_core_d3d11p_release_physical(const rsf_d3d11p_physical_lease* lease);
 int32_t rsf_core_d3d11p_get_buffer(rsf_d3d11p_chain* chain, uint32_t index, const void* iid, void** out);
 int32_t rsf_core_d3d11p_present(rsf_d3d11p_chain* chain, uint32_t sync, uint32_t flags);
 int32_t rsf_core_d3d11p_set_fullscreen(rsf_d3d11p_chain* chain, int32_t fullscreen, void* target);
