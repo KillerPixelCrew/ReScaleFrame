@@ -3,13 +3,15 @@
 //! lifecycle with its process-lived Runtime session, DPI startup, the cold native D3D11
 //! creation and presentation binding sequence, the CPU event owner (poll and worker source
 //! handoff, input receipts and their GameSDK facts), native depth-domain admission and
-//! composition, native input/output resolution scopes, and World/Present admission.
+//! composition, native input/output resolution scopes, World/Present admission, and render-input
+//! admission with its camera history and leased passes.
 //!
 //! Native leaves stay in C++ and reach this crate through rsf_fallout4_platform
 //! (fallout4_platform.h), rsf_fallout4_cpu_platform (cpu_events_platform.h) and the per-call
-//! depth-domain leaves (depth_domains_platform.h): MinHook, the typed detour shells with their
-//! return addresses and trampoline calls, exception guards, the shared file hash, the Steam chain
-//! facade, the render subsystem, and the D3D11 and COM facts.
+//! depth-domain and render-input leaves (depth_domains_platform.h, render_inputs_platform.h):
+//! MinHook, the typed detour shells with their return addresses and trampoline calls, exception
+//! guards, the shared file hash, the Steam chain facade, the render subsystem, the typed COM
+//! leases, and the D3D11 and COM facts.
 //! The Runtime decides vendors, presentation and pacing; this crate reports native facts only.
 #![cfg(windows)]
 
@@ -21,6 +23,7 @@ mod depth_domains;
 mod dpi;
 mod platform_abi;
 mod render_hooks;
+mod render_inputs;
 mod resolution;
 mod screen;
 mod session;

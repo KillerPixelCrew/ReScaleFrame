@@ -50,12 +50,12 @@ static LEASE_BUDGET: AtomicU32 = AtomicU32::new(0);
 /// depth_domains.h `NativeDepthCamera`: one copied native camera cache entry.
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct DepthCamera {
-    view: Flat,
-    projection: Flat,
+pub(crate) struct DepthCamera {
+    pub(crate) view: Flat,
+    pub(crate) projection: Flat,
     view_projection: Flat,
-    view_projection_unjittered: Flat,
-    origin: [f32; 3],
+    pub(crate) view_projection_unjittered: Flat,
+    pub(crate) origin: [f32; 3],
     port: [f32; 4],
 }
 
@@ -65,21 +65,21 @@ struct DepthCamera {
 #[derive(Clone, Copy)]
 pub(crate) struct Snapshot {
     identity: Identity,
-    native_frame: u64,
+    pub(crate) native_frame: u64,
     renderer_key: u64,
     context_key: u64,
-    device_context_key: u64,
+    pub(crate) device_context_key: u64,
     device_key: u64,
-    window_key: u64,
-    chain_key: u64,
+    pub(crate) window_key: u64,
+    pub(crate) chain_key: u64,
     graph_key: u64,
     near_camera_key: u64,
-    world_camera_key: u64,
-    cache_key: u64,
-    depth_key: u64,
+    pub(crate) world_camera_key: u64,
+    pub(crate) cache_key: u64,
+    pub(crate) depth_key: u64,
     depth_srv_key: u64,
-    width: u32,
-    height: u32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
     cache_count: u32,
     depth_slot: u32,
     taa: u32,
@@ -90,10 +90,10 @@ pub(crate) struct Snapshot {
     ratio: [f32; 2],
     near_inverse_transposed: Flat,
     near_camera: DepthCamera,
-    world_camera: DepthCamera,
+    pub(crate) world_camera: DepthCamera,
     world_unjittered_camera: DepthCamera,
-    render_rect: [i32; 4],
-    actual_raster: [f32; 6],
+    pub(crate) render_rect: [i32; 4],
+    pub(crate) actual_raster: [f32; 6],
     shadow_raster: [f32; 6],
     normalized_port: [f32; 4],
     shadow_dirty: u32,
@@ -1492,7 +1492,7 @@ fn capture_raster(leaves: &Leaves, cpu: &Identity, report: Report) -> Option<Sna
     Some(before)
 }
 
-fn raster_current(leaves: &Leaves, snapshot: &Snapshot) -> bool {
+pub(crate) fn raster_current(leaves: &Leaves, snapshot: &Snapshot) -> bool {
     let mut current = EMPTY;
     VERIFIED.load(Ordering::Acquire)
         && snapshot.raster_valid
@@ -1522,7 +1522,7 @@ pub(crate) fn resolution_owner(
     ))
 }
 
-fn snapshot_current(leaves: &Leaves, snapshot: &Snapshot, report: Report) -> bool {
+pub(crate) fn snapshot_current(leaves: &Leaves, snapshot: &Snapshot, report: Report) -> bool {
     let mut stage = Stage::Source;
     let mut current = EMPTY;
     let (mut reached, mut passed) = (0u32, 0u32);
@@ -1795,7 +1795,7 @@ fn make(
     Some(result)
 }
 
-fn complete<'a>(leaves: *const Leaves) -> Option<&'a Leaves> {
+pub(crate) fn complete<'a>(leaves: *const Leaves) -> Option<&'a Leaves> {
     unsafe { leaves.as_ref() }.filter(|leaves| leaves.complete())
 }
 
