@@ -7,6 +7,7 @@
 // several being forgotten.
 
 #include <rescaleframe/d3d11_state.h>
+#include "../runtime/graphics/src/d3d11_state_private.h"
 
 #include <windows.h>
 
@@ -230,6 +231,15 @@ int main()
         rsf_d3d11_state inner{};
         check(rsf_d3d11_state_save(context, &outer) == 1, "The outer save must succeed.");
         context->PSSetShaderResources(3, 1, &no_resource);
+        rsf_d3d11_state independent{};
+        check(rsf_d3d11_state_save_independent(context, &independent) == 1,
+              "An independent save must succeed inside the outer scope.");
+        context->PSSetShaderResources(3, 1, &first_resource);
+        rsf_d3d11_state_restore(context, &independent);
+        ID3D11ShaderResourceView* after_independent = nullptr;
+        context->PSGetShaderResources(3, 1, &after_independent);
+        check(dropped(after_independent) == nullptr,
+              "Independent restore must restore the binding as seen inside the outer scope.");
         // Under an open save on the same context, a second one succeeds without reading anything.
         check(rsf_d3d11_state_save(context, &inner) == 1, "A nested save must succeed.");
         rsf_d3d11_state_restore(context, &inner);

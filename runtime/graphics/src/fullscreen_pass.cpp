@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: MIT */
-#include <rescaleframe/fullscreen_pass.h>
+#include "d3d11_state_private.h"
+#include "device_owner.h"
+#include "fullscreen_platform.h"
 
-#include <rescaleframe/d3d11_state.h>
 #include <rescaleframe/log.h>
 #include <rescaleframe/shader_compile.h>
 
@@ -9,7 +10,8 @@
 
 #include <d3d11.h>
 
-#include <new>
+#include <wrl/client.h>
+#include <cstring>
 
 namespace {
 
@@ -87,64 +89,17 @@ float4 pixel_main(Varying input) : SV_Target
 }
 )";
 
-struct Constants {
-    uint32_t mode;
-    float exposure;
-    uint32_t padding[2];
-};
-static_assert(sizeof(Constants) % 16 == 0, "constant buffers are bound in 16 byte registers");
-
-} // namespace
-
-struct rsf_fullscreen_pass {
-    ID3D11Device* device = nullptr;
-    ID3D11VertexShader* vertex_shader = nullptr;
-    ID3D11PixelShader* pixel_shader = nullptr;
-    /* Point and linear. Which one draws is the pass's setting, see `rsf_fullscreen_pass_set_filter`. */
-    ID3D11SamplerState* point_sampler = nullptr;
-    ID3D11SamplerState* linear_sampler = nullptr;
-    rsf_fullscreen_filter filter = RSF_FULLSCREEN_FILTER_POINT;
-    /* Two blend states, because the difference between them is the whole point of the premultiplied
-       mode and choosing at draw time costs nothing. */
-    ID3D11BlendState* opaque_blend = nullptr;
-    ID3D11BlendState* premultiplied_blend = nullptr;
-    ID3D11DepthStencilState* depth = nullptr;
-    ID3D11RasterizerState* raster = nullptr;
-    ID3D11Buffer* constants = nullptr;
-    rsf_fullscreen_log_fn log = nullptr;
-    void* log_user = nullptr;
-};
-
-extern "C" rsf_fullscreen_result rsf_fullscreen_pass_create(void* device_pointer,
-                                                            const rsf_fullscreen_setup* setup,
-                                                            rsf_fullscreen_pass** out)
+int32_t make_resources(void* raw, const rsf_fullscreen_setup* setup, uint32_t constant_bytes,
+    rsf_fullscreen_resources* pass) noexcept try
 {
-    if (!device_pointer || !setup || !out || setup->struct_size < sizeof(rsf_fullscreen_setup)) {
-        return RSF_FULLSCREEN_ERROR_INVALID_ARGUMENT;
-    }
-    if (setup->abi_version != RSF_FULLSCREEN_PASS_ABI_VERSION) {
-        return RSF_FULLSCREEN_ERROR_ABI_MISMATCH;
-    }
-    *out = nullptr;
-
-    auto* device = static_cast<ID3D11Device*>(device_pointer);
-    auto* pass = new (std::nothrow) rsf_fullscreen_pass();
-    if (!pass) {
-        return RSF_FULLSCREEN_ERROR_RESOURCE_FAILED;
-    }
-    pass->device = device;
-    pass->device->AddRef();
-    pass->log = setup->log;
-    pass->log_user = setup->log_user;
-
+    auto* device = static_cast<ID3D11Device*>(raw);
     /* Flags 0: the shader has always been compiled without strictness and nothing here is new
        enough to be worth finding out what the strict mode would say about it. */
     if (!rsf::compile_vertex(device, pass_shader, "fullscreen_pass", "vertex_main",
                              &pass->vertex_shader, setup->log, setup->log_user, 0) ||
         !rsf::compile_pixel(device, pass_shader, "fullscreen_pass", "pixel_main",
                             &pass->pixel_shader, setup->log, setup->log_user, 0)) {
-        rsf::say(pass->log, pass->log_user, "the fullscreen pass shaders could not be created");
-        rsf_fullscreen_pass_destroy(pass);
+        rsf::say(setup->log, setup->log_user, "the fullscreen pass shaders could not be created");
         return RSF_FULLSCREEN_ERROR_SHADER_FAILED;
     }
 
@@ -202,7 +157,7 @@ extern "C" rsf_fullscreen_result rsf_fullscreen_pass_create(void* device_pointer
     raster.ScissorEnable = FALSE;
 
     D3D11_BUFFER_DESC constants{};
-    constants.ByteWidth = sizeof(Constants);
+    constants.ByteWidth = constant_bytes;
     constants.Usage = D3D11_USAGE_DYNAMIC;
     constants.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
     constants.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
@@ -214,131 +169,136 @@ extern "C" rsf_fullscreen_result rsf_fullscreen_pass_create(void* device_pointer
         FAILED(device->CreateDepthStencilState(&depth, &pass->depth)) ||
         FAILED(device->CreateRasterizerState(&raster, &pass->raster)) ||
         FAILED(device->CreateBuffer(&constants, nullptr, &pass->constants))) {
-        rsf::say(pass->log, pass->log_user, "the fullscreen pass pipeline state could not be created");
-        rsf_fullscreen_pass_destroy(pass);
+        rsf::say(setup->log, setup->log_user, "the fullscreen pass pipeline state could not be created");
         return RSF_FULLSCREEN_ERROR_RESOURCE_FAILED;
     }
 
-    rsf::say(pass->log, pass->log_user, "fullscreen pass ready");
-    *out = pass;
     return RSF_FULLSCREEN_OK;
+} catch (...) { return RSF_FULLSCREEN_ERROR_RESOURCE_FAILED; }
+
+int32_t admit(void* raw, void* ctx, void* target, void* source)
+{
+    auto* device = static_cast<ID3D11Device*>(raw);
+    auto* context = static_cast<ID3D11DeviceContext*>(ctx);
+    return context->GetType() == D3D11_DEVICE_CONTEXT_IMMEDIATE &&
+        rsf::same_device(context, device) &&
+        rsf::same_device(static_cast<ID3D11RenderTargetView*>(target), device) &&
+        rsf::same_device(static_cast<ID3D11ShaderResourceView*>(source), device);
 }
 
-extern "C" rsf_fullscreen_result rsf_fullscreen_pass_draw(rsf_fullscreen_pass* pass,
-                                                          void* context_pointer, void* target,
-                                                          void* source,
-                                                          const rsf_fullscreen_draw* parameters)
+int32_t extent(void* raw, uint32_t* size)
 {
-    if (!pass || !context_pointer || !target || !source || !parameters ||
-        parameters->struct_size < sizeof(rsf_fullscreen_draw)) {
-        return RSF_FULLSCREEN_ERROR_INVALID_ARGUMENT;
-    }
-    if (parameters->mode > RSF_FULLSCREEN_COPY_RGBA) {
-        return RSF_FULLSCREEN_ERROR_INVALID_ARGUMENT;
-    }
-    auto* context = static_cast<ID3D11DeviceContext*>(context_pointer);
-    auto* target_view = static_cast<ID3D11RenderTargetView*>(target);
-    auto* source_view = static_cast<ID3D11ShaderResourceView*>(source);
+    auto* target = static_cast<ID3D11RenderTargetView*>(raw);
+    Microsoft::WRL::ComPtr<ID3D11Resource> resource;
+    target->GetResource(&resource);
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
+    if (!resource || FAILED(resource.As(&texture)) || !texture) return 0;
+    D3D11_RENDER_TARGET_VIEW_DESC view{};
+    D3D11_TEXTURE2D_DESC desc{};
+    target->GetDesc(&view);
+    texture->GetDesc(&desc);
+    const UINT mip = view.ViewDimension == D3D11_RTV_DIMENSION_TEXTURE2D ? view.Texture2D.MipSlice :
+        view.ViewDimension == D3D11_RTV_DIMENSION_TEXTURE2DARRAY ? view.Texture2DArray.MipSlice : 0;
+    if (mip >= 32 || desc.Width == 0 || desc.Height == 0) return 0;
+    const auto width = desc.Width >> mip;
+    const auto height = desc.Height >> mip;
+    size[0] = width ? width : 1u;
+    size[1] = height ? height : 1u;
+    return 1;
+}
 
-    uint32_t width = parameters->width;
-    uint32_t height = parameters->height;
-    if (width == 0 || height == 0) {
-        /* The target's own extent, taken from the resource behind the view rather than asked of
-           the caller, because a caller that has to work it out will eventually work it out wrong. */
-        ID3D11Resource* resource = nullptr;
-        target_view->GetResource(&resource);
-        if (!resource) {
-            return RSF_FULLSCREEN_ERROR_INVALID_ARGUMENT;
-        }
-        ID3D11Texture2D* texture = nullptr;
-        resource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&texture));
-        resource->Release();
-        if (!texture) {
-            return RSF_FULLSCREEN_ERROR_INVALID_ARGUMENT;
-        }
-        D3D11_TEXTURE2D_DESC description{};
-        texture->GetDesc(&description);
-        texture->Release();
-        width = description.Width;
-        height = description.Height;
-    }
-
+int32_t draw(void* raw, void* target, void* source, const rsf_fullscreen_resources* pass,
+    uint32_t width, uint32_t height, uint32_t linear, uint32_t blend, const void* constants,
+    uint32_t bytes) noexcept try
+{
+    auto* context = static_cast<ID3D11DeviceContext*>(raw);
     D3D11_MAPPED_SUBRESOURCE mapped{};
-    if (FAILED(context->Map(pass->constants, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)) ||
-        !mapped.pData) {
-        return RSF_FULLSCREEN_ERROR_RESOURCE_FAILED;
+    if (FAILED(context->Map(pass->constants, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) return 0;
+    if (!mapped.pData) {
+        context->Unmap(pass->constants, 0);
+        return 0;
     }
-    Constants values{};
-    values.mode = parameters->mode;
-    values.exposure = parameters->exposure > 0.0f ? parameters->exposure : 1.0f;
-    *static_cast<Constants*>(mapped.pData) = values;
+    std::memcpy(mapped.pData, constants, bytes);
     context->Unmap(pass->constants, 0);
 
-    /* Narrow scope: everything below is what this draw touches. The pass runs between the game's own
-       draws, so the full pipeline snapshot would cost far more than the triangle does. */
-    rsf_d3d11_state saved;
-    rsf_d3d11_draw_state_save(context, &saved);
+    // Rebinding the RTV can unbind UAVs and aliased SRVs. A private
+    // snapshot also restores this draw before another pass uses the context.
+    rsf_d3d11_state saved{};
+    if (!rsf_d3d11_state_save_independent(context, &saved)) return 0;
+    struct Restore {
+        ID3D11DeviceContext* context;
+        rsf_d3d11_state& saved;
+        ~Restore() { rsf_d3d11_state_restore(context, &saved); }
+    } restore{context, saved};
 
-    /* No depth stencil view, ever. This is an overlay: binding one would also mean matching its
-       extent to the target's, and a mismatched pair is a binding Windows refuses and DXVK
-       tolerates, which is the worst of both. */
+    auto* target_view = static_cast<ID3D11RenderTargetView*>(target);
+    auto* source_view = static_cast<ID3D11ShaderResourceView*>(source);
+    context->SetPredication(nullptr, FALSE);
+    context->SOSetTargets(0, nullptr, nullptr);
     context->OMSetRenderTargets(1, &target_view, nullptr);
     context->VSSetShader(pass->vertex_shader, nullptr, 0);
+    context->HSSetShader(nullptr, nullptr, 0);
+    context->DSSetShader(nullptr, nullptr, 0);
+    context->GSSetShader(nullptr, nullptr, 0);
     context->PSSetShader(pass->pixel_shader, nullptr, 0);
     context->IASetInputLayout(nullptr);
     context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     context->PSSetShaderResources(0, 1, &source_view);
-    ID3D11SamplerState* sampler =
-        pass->filter == RSF_FULLSCREEN_FILTER_LINEAR ? pass->linear_sampler : pass->point_sampler;
+    auto* sampler = linear ? pass->linear_sampler : pass->point_sampler;
     context->PSSetSamplers(0, 1, &sampler);
     context->PSSetConstantBuffers(0, 1, &pass->constants);
-    const FLOAT factor[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-    const bool premultiplied = parameters->mode == RSF_FULLSCREEN_PREMULTIPLIED ||
-                               parameters->mode == RSF_FULLSCREEN_PREMULTIPLIED_SRGB ||
-                               parameters->mode == RSF_FULLSCREEN_PREMULTIPLIED_GAMMA22;
-    context->OMSetBlendState(premultiplied ? pass->premultiplied_blend : pass->opaque_blend, factor,
-                             0xffffffffu);
+    const FLOAT factor[4]{};
+    context->OMSetBlendState(blend ? pass->premultiplied_blend : pass->opaque_blend, factor, UINT32_MAX);
     context->OMSetDepthStencilState(pass->depth, 0);
     context->RSSetState(pass->raster);
 
-    D3D11_VIEWPORT viewport{};
-    viewport.Width = static_cast<float>(width);
-    viewport.Height = static_cast<float>(height);
-    viewport.MaxDepth = 1.0f;
+    const D3D11_VIEWPORT viewport{0.0f, 0.0f, float(width), float(height), 0.0f, 1.0f};
     context->RSSetViewports(1, &viewport);
-
     context->Draw(3, 0);
+    return 1;
+} catch (...) { return 0; }
 
-    rsf_d3d11_draw_state_restore(context, &saved);
-    return RSF_FULLSCREEN_OK;
+constexpr rsf_fullscreen_platform platform{
+    make_resources, admit, extent, draw,
+    [](rsf_fullscreen_log_fn log, void* user, const char* message) noexcept {
+        try { log(user, message); } catch (...) {}
+    },
+};
+static_assert(sizeof(rsf_fullscreen_resources) == 9 * sizeof(void*));
+static_assert(sizeof(rsf_fullscreen_platform) == 5 * sizeof(void*));
+static_assert(sizeof(rsf_fullscreen_setup) == 24 && sizeof(rsf_fullscreen_draw) == 20);
+static_assert(RSF_FULLSCREEN_PASS_ABI_VERSION == 1 && RSF_FULLSCREEN_OK == 0 &&
+    RSF_FULLSCREEN_ERROR_INVALID_ARGUMENT == -1 && RSF_FULLSCREEN_ERROR_ABI_MISMATCH == -2 &&
+    RSF_FULLSCREEN_ERROR_RESOURCE_FAILED == -4);
+static_assert(RSF_FULLSCREEN_FILTER_POINT == 0 && RSF_FULLSCREEN_FILTER_LINEAR == 1 &&
+    RSF_FULLSCREEN_PREMULTIPLIED == 2 && RSF_FULLSCREEN_PREMULTIPLIED_SRGB == 4 &&
+    RSF_FULLSCREEN_PREMULTIPLIED_GAMMA22 == 5 && RSF_FULLSCREEN_COPY_RGBA == 6);
+
+} // namespace
+
+const rsf_fullscreen_platform* rsf_fullscreen_native_platform()
+{
+    return &platform;
+}
+
+extern "C" rsf_fullscreen_result rsf_fullscreen_pass_create(
+    void* device, const rsf_fullscreen_setup* setup, rsf_fullscreen_pass** out)
+{
+    return rsf_core_fullscreen_create(device, setup, out, &platform);
+}
+
+extern "C" rsf_fullscreen_result rsf_fullscreen_pass_draw(rsf_fullscreen_pass* pass,
+    void* context, void* target, void* source, const rsf_fullscreen_draw* parameters)
+{
+    return rsf_core_fullscreen_draw(pass, context, target, source, parameters);
 }
 
 extern "C" void rsf_fullscreen_pass_set_filter(rsf_fullscreen_pass* pass, rsf_fullscreen_filter filter)
 {
-    if (pass) {
-        pass->filter = filter;
-    }
+    rsf_core_fullscreen_filter(pass, filter);
 }
 
 extern "C" void rsf_fullscreen_pass_destroy(rsf_fullscreen_pass* pass)
 {
-    if (!pass) {
-        return;
-    }
-    auto drop = [](auto* item) {
-        if (item) {
-            item->Release();
-        }
-    };
-    drop(pass->constants);
-    drop(pass->raster);
-    drop(pass->depth);
-    drop(pass->premultiplied_blend);
-    drop(pass->opaque_blend);
-    drop(pass->linear_sampler);
-    drop(pass->point_sampler);
-    drop(pass->pixel_shader);
-    drop(pass->vertex_shader);
-    drop(pass->device);
-    delete pass;
+    rsf_core_fullscreen_destroy(pass);
 }

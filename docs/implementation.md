@@ -4,6 +4,15 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now owns the shared D3D11 fullscreen pass and Present blit through
+one handle. Foreign and deferred contexts are refused, and automatic
+viewport sizing uses the RTV's mip. The native draw takes an independent
+full context snapshot to restore UAVs, shader linkage and predication
+even inside another graphics scope. This replaces the narrower snapshot
+for this pass. Source review confirmed the shader and public C headers
+are unchanged. The nested-scope regression and device validation
+remain open.
+
 Rust now owns the D3D11 motion resolver's outputs, parameter admission
 and source views. Decode and resolve share view caching, legacy
 parameter reads and the native context-save and dispatch sequence.

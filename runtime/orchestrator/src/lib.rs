@@ -100,6 +100,8 @@ mod frame_capture12;
 mod frame_capture_vk;
 mod frame_sequencer;
 #[cfg(windows)]
+mod fullscreen_pass;
+#[cfg(windows)]
 mod gl_pipeline;
 #[cfg(windows)]
 mod gl_pipeline_abi;

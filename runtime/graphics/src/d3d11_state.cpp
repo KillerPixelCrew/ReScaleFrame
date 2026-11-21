@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-#include <rescaleframe/d3d11_state.h>
+#include "d3d11_state_private.h"
 
 #include <windows.h>
 
@@ -171,7 +171,7 @@ constexpr StageOperations operations[]{
 
 } // namespace
 
-extern "C" uint32_t rsf_d3d11_state_save(void* context_pointer, rsf_d3d11_state* state_pointer)
+static uint32_t save_full(void* context_pointer, rsf_d3d11_state* state_pointer, bool independent)
 {
     if (!context_pointer || !state_pointer) {
         return 0;
@@ -179,7 +179,7 @@ extern "C" uint32_t rsf_d3d11_state_save(void* context_pointer, rsf_d3d11_state*
     auto* context = static_cast<ID3D11DeviceContext*>(context_pointer);
     std::memset(state_pointer, 0, sizeof(*state_pointer));
     if (context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) return 0;
-    if (open_scope == context) {
+    if (open_scope == context && !independent) {
         new (state_pointer->opaque) Storage{nullptr, false};
         return 1;
     }
@@ -250,6 +250,16 @@ extern "C" uint32_t rsf_d3d11_state_save(void* context_pointer, rsf_d3d11_state*
     context->OMGetBlendState(&state.blend, state.blend_factor, &state.blend_mask);
     context->OMGetDepthStencilState(&state.depth_state, &state.stencil_reference);
     return 1;
+}
+
+extern "C" uint32_t rsf_d3d11_state_save(void* context, rsf_d3d11_state* storage)
+{
+    return save_full(context, storage, false);
+}
+
+uint32_t rsf_d3d11_state_save_independent(void* context, rsf_d3d11_state* storage)
+{
+    return save_full(context, storage, true);
 }
 
 extern "C" void rsf_d3d11_state_restore(void* context_pointer, rsf_d3d11_state* state_pointer)
