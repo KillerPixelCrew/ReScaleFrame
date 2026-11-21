@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now caches the native D3D12 overlay pipeline by backbuffer format
+and owns each slot's vertex and index upload buffers. A submitted slot
+keeps its pipeline reference through fence retirement. Rust checks
+geometry byte counts before asking the native leaf to allocate or map
+buffers. Texture uploads and geometry uploads use the same native
+allocation call. The private bindings were regenerated. Build and
+device validation remain open.
+
 Native D3D12 overlay startup now rolls back a partially created
 renderer and releases its UI instance and unpublished module. Rust
 owns the renderer after successful startup. A fault disables drawing.

@@ -25,8 +25,6 @@ struct Frame {
     ComPtr<ID3D12CommandAllocator> allocator;
     ComPtr<ID3D12GraphicsCommandList> commands;
     ComPtr<ID3D12DescriptorHeap> srv, rtv;
-    ComPtr<ID3D12Resource> vertices, indices;
-    ComPtr<ID3D12PipelineState> pipeline;
     rsf_overlay_draw_data draw{};
 };
 struct Panel {
@@ -40,9 +38,7 @@ struct Panel {
     ComPtr<ID3D12Device> device;
     ComPtr<ID3D12CommandQueue> queue;
     ComPtr<ID3D12RootSignature> root;
-    ComPtr<ID3D12PipelineState> pipeline;
     ComPtr<ID3DBlob> vertex_shader, pixel_shader;
-    DXGI_FORMAT format{DXGI_FORMAT_UNKNOWN};
     std::array<Frame,3> frames;
     UINT stride{};
 
@@ -59,16 +55,19 @@ void transition(ID3D12GraphicsCommandList* commands, ID3D12Resource* resource,
     barrier.Transition={resource,D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,before,after};
     commands->ResourceBarrier(1,&barrier);
 }
-bool upload_buffer(Panel& p, uint64_t size, ComPtr<ID3D12Resource>& buffer)
+void* create_upload(void* native, uint64_t size, uint64_t* capacity)
 {
-    if (buffer && buffer->GetDesc().Width>=size) return true;
+    if (!size || size>UINT64_MAX-65535) return nullptr;
+    auto& p=*static_cast<Panel*>(native);
     D3D12_HEAP_PROPERTIES heap{}; heap.Type=D3D12_HEAP_TYPE_UPLOAD;
     D3D12_RESOURCE_DESC desc{}; desc.Dimension=D3D12_RESOURCE_DIMENSION_BUFFER;
     desc.Width=(size+65535)&~uint64_t(65535); desc.Height=1;desc.DepthOrArraySize=1;desc.MipLevels=1;
     desc.SampleDesc.Count=1;desc.Layout=D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-    buffer.Reset();
-    return SUCCEEDED(p.device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&desc,
-        D3D12_RESOURCE_STATE_GENERIC_READ,nullptr,IID_PPV_ARGS(&buffer)));
+    ComPtr<ID3D12Resource> buffer;
+    if (FAILED(p.device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&desc,
+            D3D12_RESOURCE_STATE_GENERIC_READ,nullptr,IID_PPV_ARGS(&buffer)))) return nullptr;
+    if (capacity) *capacity=desc.Width;
+    return buffer.Detach();
 }
 bool initialize(Panel& p, ID3D12Device* device, ID3D12CommandQueue* queue, HWND window, rsf_overlay12_log logger, void* user,
     void** completion)
@@ -131,9 +130,9 @@ bool initialize(Panel& p, ID3D12Device* device, ID3D12CommandQueue* queue, HWND 
     *completion=fence.Detach();
     return true;
 }
-bool pipeline(Panel& p, DXGI_FORMAT format)
+void* create_pipeline(void* native, uint32_t format)
 {
-    if (p.pipeline && p.format==format) return true;
+    auto& p=*static_cast<Panel*>(native);
     D3D12_INPUT_ELEMENT_DESC layout[]{
         {"POSITION",0,DXGI_FORMAT_R32G32_FLOAT,0,0,D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,0},
         {"TEXCOORD",0,DXGI_FORMAT_R32G32_FLOAT,0,8,D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,0},
@@ -142,7 +141,7 @@ bool pipeline(Panel& p, DXGI_FORMAT format)
     desc.VS={p.vertex_shader->GetBufferPointer(),p.vertex_shader->GetBufferSize()};
     desc.PS={p.pixel_shader->GetBufferPointer(),p.pixel_shader->GetBufferSize()};
     desc.InputLayout={layout,3};desc.PrimitiveTopologyType=D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-    desc.NumRenderTargets=1;desc.RTVFormats[0]=format;desc.SampleDesc.Count=1;desc.SampleMask=UINT_MAX;
+    desc.NumRenderTargets=1;desc.RTVFormats[0]=static_cast<DXGI_FORMAT>(format);desc.SampleDesc.Count=1;desc.SampleMask=UINT_MAX;
     desc.RasterizerState.FillMode=D3D12_FILL_MODE_SOLID;desc.RasterizerState.CullMode=D3D12_CULL_MODE_NONE;
     desc.RasterizerState.DepthClipEnable=TRUE;
     auto& blend=desc.BlendState.RenderTarget[0];blend.BlendEnable=TRUE;
@@ -152,8 +151,8 @@ bool pipeline(Panel& p, DXGI_FORMAT format)
     desc.DepthStencilState.DepthFunc=D3D12_COMPARISON_FUNC_ALWAYS;
     desc.DepthStencilState.FrontFace={D3D12_STENCIL_OP_KEEP,D3D12_STENCIL_OP_KEEP,D3D12_STENCIL_OP_KEEP,D3D12_COMPARISON_FUNC_ALWAYS};
     desc.DepthStencilState.BackFace=desc.DepthStencilState.FrontFace;
-    p.pipeline.Reset();p.format=format;
-    return SUCCEEDED(p.device->CreateGraphicsPipelineState(&desc,IID_PPV_ARGS(&p.pipeline)));
+    ComPtr<ID3D12PipelineState> pipeline;
+    return SUCCEEDED(p.device->CreateGraphicsPipelineState(&desc,IID_PPV_ARGS(&pipeline))) ? pipeline.Detach() : nullptr;
 }
 void* create_texture(void* native, uint32_t width, uint32_t height)
 {
@@ -176,7 +175,9 @@ void* upload_texture(void* native, uint32_t slot, void* resource, const rsf_over
     desc.Width=update.width;desc.Height=update.height;
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};UINT64 bytes{};
     p.device->GetCopyableFootprints(&desc,0,1,0,&footprint,nullptr,nullptr,&bytes);
-    ComPtr<ID3D12Resource> upload;if (!upload_buffer(p,bytes,upload)) return nullptr;
+    ComPtr<ID3D12Resource> upload;
+    upload.Attach(static_cast<ID3D12Resource*>(create_upload(native,bytes,nullptr)));
+    if (!upload) return nullptr;
     void* mapped{};const D3D12_RANGE empty{0,0};if (FAILED(upload->Map(0,&empty,&mapped))) return nullptr;
     for (UINT y=0;y<update.height;++y) std::memcpy(static_cast<unsigned char*>(mapped)+uint64_t(y)*footprint.Footprint.RowPitch,
         update.pixels+uint64_t(y)*update.width*4,uint64_t(update.width)*4);
@@ -188,18 +189,20 @@ void* upload_texture(void* native, uint32_t slot, void* resource, const rsf_over
     transition(frame.commands.Get(),destination,D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     return upload.Detach();
 }
-bool draw(Panel& p, Frame& frame, ID3D12Resource* target, UINT width, UINT height,
+bool draw(Panel& p, Frame& frame, const rsf_overlay12_draw& binding,
     const rsf_overlay12_texture* textures, UINT texture_count)
 {
     const auto& data=frame.draw;
-    if (!data.vertex_count||!data.index_count) return true;
-    const uint64_t vertex_bytes=uint64_t(data.vertex_count)*sizeof(rsf_overlay_vertex), index_bytes=uint64_t(data.index_count)*4;
-    if (vertex_bytes>UINT_MAX||index_bytes>UINT_MAX||!upload_buffer(p,vertex_bytes,frame.vertices)||!upload_buffer(p,index_bytes,frame.indices)) return false;
+    const auto [target_resource,pipeline,vertex_resource,index_resource,width,height,vertex_bytes,index_bytes]=binding;
+    if (!vertex_bytes||!index_bytes) return true;
+    auto* target=static_cast<ID3D12Resource*>(target_resource);
+    auto* vertex_buffer=static_cast<ID3D12Resource*>(vertex_resource);
+    auto* index_buffer=static_cast<ID3D12Resource*>(index_resource);
     void* mapped{};const D3D12_RANGE empty{0,0};
-    if (FAILED(frame.vertices->Map(0,&empty,&mapped))) return false;
-    std::memcpy(mapped,data.vertices,static_cast<size_t>(vertex_bytes));frame.vertices->Unmap(0,nullptr);
-    if (FAILED(frame.indices->Map(0,&empty,&mapped))) return false;
-    std::memcpy(mapped,data.indices,static_cast<size_t>(index_bytes));frame.indices->Unmap(0,nullptr);
+    if (FAILED(vertex_buffer->Map(0,&empty,&mapped))) return false;
+    std::memcpy(mapped,data.vertices,vertex_bytes);vertex_buffer->Unmap(0,nullptr);
+    if (FAILED(index_buffer->Map(0,&empty,&mapped))) return false;
+    std::memcpy(mapped,data.indices,index_bytes);index_buffer->Unmap(0,nullptr);
     for (UINT index=0;index<texture_count;++index) {
         auto cpu=frame.srv->GetCPUDescriptorHandleForHeapStart();cpu.ptr+=uint64_t(index)*p.stride;
         D3D12_SHADER_RESOURCE_VIEW_DESC view{};view.Format=DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -208,12 +211,12 @@ bool draw(Panel& p, Frame& frame, ID3D12Resource* target, UINT width, UINT heigh
     }
     auto* commands=frame.commands.Get();transition(commands,target,D3D12_RESOURCE_STATE_PRESENT,D3D12_RESOURCE_STATE_RENDER_TARGET);
     const auto rtv=frame.rtv->GetCPUDescriptorHandleForHeapStart();p.device->CreateRenderTargetView(target,nullptr,rtv);
-    commands->OMSetRenderTargets(1,&rtv,FALSE,nullptr);commands->SetPipelineState(frame.pipeline.Get());commands->SetGraphicsRootSignature(p.root.Get());
+    commands->OMSetRenderTargets(1,&rtv,FALSE,nullptr);commands->SetPipelineState(static_cast<ID3D12PipelineState*>(pipeline));commands->SetGraphicsRootSignature(p.root.Get());
     ID3D12DescriptorHeap* heaps[]{frame.srv.Get()};commands->SetDescriptorHeaps(1,heaps);
     const float scale[]{2.0f/static_cast<float>(width),2.0f/static_cast<float>(height)};commands->SetGraphicsRoot32BitConstants(0,2,scale,0);
     const D3D12_VIEWPORT viewport{0,0,static_cast<float>(width),static_cast<float>(height),0,1};commands->RSSetViewports(1,&viewport);
-    D3D12_VERTEX_BUFFER_VIEW vertices{frame.vertices->GetGPUVirtualAddress(),static_cast<UINT>(vertex_bytes),sizeof(rsf_overlay_vertex)};
-    D3D12_INDEX_BUFFER_VIEW indices{frame.indices->GetGPUVirtualAddress(),static_cast<UINT>(index_bytes),DXGI_FORMAT_R32_UINT};
+    D3D12_VERTEX_BUFFER_VIEW vertices{vertex_buffer->GetGPUVirtualAddress(),vertex_bytes,sizeof(rsf_overlay_vertex)};
+    D3D12_INDEX_BUFFER_VIEW indices{index_buffer->GetGPUVirtualAddress(),index_bytes,DXGI_FORMAT_R32_UINT};
     commands->IASetVertexBuffers(0,1,&vertices);commands->IASetIndexBuffer(&indices);commands->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     const auto end=textures+texture_count;
     for (UINT i=0;i<data.call_count;++i) {
@@ -252,31 +255,32 @@ uint32_t arm(void* fence, void* event, uint64_t value) {
     return SUCCEEDED(static_cast<ID3D12Fence*>(fence)->SetEventOnCompletion(value,event));
 }
 
-void* begin_frame(void* native, uint32_t slot, void* chain, uint32_t* width, uint32_t* height) noexcept try {
+void* begin_frame(void* native, uint32_t slot, void* chain, rsf_overlay12_target* out) noexcept try {
     auto& panel=*static_cast<Panel*>(native);
     auto& frame=panel.frames[slot];
-    frame.pipeline.Reset();
     if (FAILED(frame.allocator->Reset())||FAILED(frame.commands->Reset(frame.allocator.Get(),nullptr))) return nullptr;
     ComPtr<IDXGISwapChain3> swapchain;ComPtr<ID3D12Resource> target;
     if (FAILED(static_cast<IDXGISwapChain*>(chain)->QueryInterface(IID_PPV_ARGS(&swapchain)))||
         FAILED(swapchain->GetBuffer(swapchain->GetCurrentBackBufferIndex(),IID_PPV_ARGS(&target)))) return nullptr;
     const auto desc=target->GetDesc();
-    if (!desc.Width || desc.Width>UINT_MAX || !desc.Height || !pipeline(panel,desc.Format)) return nullptr;
-    frame.pipeline=panel.pipeline;
-    *width=static_cast<uint32_t>(desc.Width);
-    *height=desc.Height;
+    if (!desc.Width || desc.Width>UINT_MAX || !desc.Height) return nullptr;
+    *out={static_cast<uint32_t>(desc.Width),desc.Height,static_cast<uint32_t>(desc.Format)};
     return target.Detach();
 } catch (...) { return nullptr; }
 
 uint32_t layout(void* native, uint32_t slot, uint32_t width, uint32_t height, float elapsed,
-    float hint_alpha, const rsf_overlay_stats* stats, rsf_overlay_intent* decided) noexcept try {
+    float hint_alpha, const rsf_overlay_stats* stats, rsf_overlay_intent* decided, rsf_overlay12_geometry* geometry) noexcept try {
     auto& panel=*static_cast<Panel*>(native);
     auto& data=panel.frames[slot].draw;
     rsf_overlay_input input{};input.struct_size=sizeof(input);
     if (rsf_overlay_input_collect(&input,width,height,elapsed)!=RSF_OVERLAY_INPUT_OK) return 0;
     input.startup_hint_alpha=hint_alpha;
     data={};data.struct_size=sizeof(data);
-    return panel.layout(panel.ui,&input,stats,&data,decided)==RSF_OVERLAY_OK;
+    if (panel.layout(panel.ui,&input,stats,&data,decided)!=RSF_OVERLAY_OK) return 0;
+    if (data.vertex_count && data.index_count && (!data.vertices || !data.indices || (data.call_count && !data.calls)))
+        return 0;
+    *geometry={data.vertex_count,data.index_count};
+    return 1;
 } catch (...) { return 0; }
 
 uint32_t updates(void* native, rsf_overlay_texture_update* output, uint32_t capacity) {
@@ -289,11 +293,11 @@ uint32_t frees(void* native, uint64_t* output, uint32_t capacity) {
     return panel.frees(panel.ui,output,capacity);
 }
 
-uint32_t record(void* native, uint32_t slot, void* target, uint32_t width, uint32_t height,
+uint32_t record(void* native, uint32_t slot, const rsf_overlay12_draw* binding,
     const rsf_overlay12_texture* textures, uint32_t texture_count) noexcept try {
     auto& panel=*static_cast<Panel*>(native);
     auto& frame=panel.frames[slot];
-    return draw(panel,frame,static_cast<ID3D12Resource*>(target),width,height,textures,texture_count) &&
+    return draw(panel,frame,*binding,textures,texture_count) &&
         SUCCEEDED(frame.commands->Close());
 } catch (...) { return 0; }
 
@@ -309,7 +313,7 @@ uint32_t signal(void* native, void* fence, uint64_t value) {
 
 constexpr rsf_overlay12_platform platform{
     create_panel, stop_input, destroy_panel, rsf_overlay_input_visible, rsf_overlay_input_set_visible,
-    completed, arm, begin_frame, layout, updates, frees, create_texture, upload_texture, record, execute, signal,
+    completed, arm, begin_frame, create_pipeline, create_upload, layout, updates, frees, create_texture, upload_texture, record, execute, signal,
 };
 }
 
