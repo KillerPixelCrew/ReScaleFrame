@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! AC7 velocity SHEX/SHDR framing, operand decoding and immediate register edits.
-//! Used by Rust pixel and vertex assembly and the native transforms of the other stages.
+//! Used by Rust pixel, vertex and geometry assembly and the native hull and domain transforms.
 
 use crate::dxbc_chunks::word;
 use crate::velocity_container::{Resize, borrowed, native_output};
@@ -47,6 +47,11 @@ impl OperandView {
     pub(crate) fn direct_register(&self) -> Option<u32> {
         (self.dimensions == 1 && self.immediate32 == 1).then_some(self.registers[0])
     }
+
+    pub(crate) fn direct_register_pair(&self) -> Option<[u32; 2]> {
+        (self.dimensions == 2 && self.immediate32 == 3)
+            .then_some([self.registers[0], self.registers[1]])
+    }
 }
 
 impl OperandEdit {
@@ -63,6 +68,15 @@ impl OperandEdit {
             kind,
             count: 1,
             registers: [register, 0],
+        }
+    }
+
+    pub(crate) fn register_pair(old_count: u32, kind: u32, registers: [u32; 2]) -> Self {
+        Self {
+            old_count,
+            kind,
+            count: 2,
+            registers,
         }
     }
 }
