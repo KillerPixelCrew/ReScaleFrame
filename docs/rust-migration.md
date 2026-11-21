@@ -217,6 +217,12 @@ device-function aliases. The loaders try the requested name before
 the core alias. FG's miss on a null name now bypasses the alias lookup.
 The typed calls and WSI borrow stay native. Link and device checks remain open.
 
+The legacy D3D11 Streamline SR owner now selects the required
+interposer and DLSS feature lookups in Rust. It shares the seven
+common lookups and adds the five owner-only lookups for a session
+it initializes. The typed SDK calls and borrowed-host behavior
+stay at their existing boundaries. [Streamline resolver source comparison](research/rust-d3d11-streamline-resolution.md)
+
 ## Verification coverage
 
 | Requirement | Recorded evidence | Still open |

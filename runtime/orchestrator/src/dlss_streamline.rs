@@ -6,10 +6,10 @@ use crate::gl_pipeline_abi::{rsf_dlss_log_fn as Log, rsf_dlss_setup as Setup};
 use crate::render_abi::{RSF_DLSS_ABI_VERSION, rsf_dlss_frame as Frame};
 use crate::sdk_module::{SdkModule, wide_path};
 use crate::sr_session::has_capacity;
-use std::ffi::c_void;
+use std::ffi::{CStr, c_char, c_void};
 use std::ptr::{NonNull, addr_of, null, null_mut};
 use std::sync::Mutex;
-use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows_sys::core::w;
 
 type Handle = *mut c_void;
@@ -23,6 +23,78 @@ const NOT_READY: i32 = -8;
 const FEATURE_FAILED: i32 = -9;
 const OPTIMAL: u32 = 1;
 const OPTIONS: u32 = 2;
+
+const SHARED_ENTRY_COUNT: usize = 7;
+const ENTRY_NAMES: [&CStr; 12] = [
+    c"slIsFeatureSupported",
+    c"slGetFeatureFunction",
+    c"slGetFeatureRequirements",
+    c"slSetConstants",
+    c"slSetTagForFrame",
+    c"slEvaluateFeature",
+    c"slFreeResources",
+    c"slInit",
+    c"slShutdown",
+    c"slSetD3DDevice",
+    c"slGetNewFrameToken",
+    c"slAllocateResources",
+];
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_dlss_streamline_resolve_entries(
+    module: Handle,
+    owner: u32,
+    addresses: &mut [Handle; ENTRY_NAMES.len()],
+    missing: unsafe extern "C" fn(*const c_char),
+) -> i32 {
+    // The shared host already owns initialization, the device, tokens and allocation.
+    let count = if owner == 0 {
+        SHARED_ENTRY_COUNT
+    } else {
+        ENTRY_NAMES.len()
+    };
+    for (address, name) in addresses.iter_mut().zip(&ENTRY_NAMES[..count]) {
+        let Some(entry) = (unsafe { GetProcAddress(module, name.as_ptr().cast()) }) else {
+            unsafe { missing(name.as_ptr()) };
+            return MISSING_ENTRY;
+        };
+        *address = entry as *const () as Handle;
+    }
+    OK
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_dlss_streamline_resolve_features(
+    native: Handle,
+    strict: u32,
+    lookup: unsafe extern "C" fn(Handle, *const c_char, &mut Handle) -> i32,
+    bind: unsafe extern "C" fn(Handle, Handle, Handle),
+    features: &mut u32,
+) -> i32 {
+    let mut optimal = null_mut();
+    let mut options = null_mut();
+    for (name, address) in [
+        (c"slDLSSGetOptimalSettings", &mut optimal),
+        (c"slDLSSSetOptions", &mut options),
+    ] {
+        let status = unsafe { lookup(native, name.as_ptr(), address) };
+        // Only the owned-device probe uses addresses returned alongside a vendor error.
+        if status == FEATURE_FAILED || (strict != 0 && status != OK) {
+            return status;
+        }
+    }
+
+    unsafe { bind(native, optimal, options) };
+    let optimal_bit = if optimal.is_null() { 0 } else { OPTIMAL };
+    let options_bit = if options.is_null() { 0 } else { OPTIONS };
+    let resolved = optimal_bit | options_bit;
+    *features = resolved;
+    if resolved == (OPTIMAL | OPTIONS) {
+        OK
+    } else {
+        MISSING_ENTRY
+    }
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Eq)]

@@ -837,6 +837,12 @@ and remains unrun. Build and live observer verification remain open.
 
 ## Rust orchestrator and first Anomaly port
 
+The legacy D3D11 Streamline SR owner now resolves the interposer
+and DLSS feature functions in Rust. The source comparison matched
+the required entry order for owned and borrowed hosts and the
+SDK-disabled C++ stubs. Enabled and disabled builds and binary
+exports remain to be checked. [Streamline resolution](research/rust-d3d11-streamline-resolution.md)
+
 Anomaly's Rust motion owner now checks the existing Standard and AVX
 profile guards in the same order. The native leaf supplies the profile
 and the guarded reader. FidelityFX Vulkan SR and FG also share one
