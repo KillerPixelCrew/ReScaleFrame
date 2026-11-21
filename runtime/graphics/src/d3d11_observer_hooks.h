@@ -9,6 +9,24 @@ enum {
 };
 
 struct rsf_observer11_slot { void** address; void* hook; };
+struct rsf_observer11_probe_desc {
+    uint32_t width, height, format, usage, buffer_count, sample_count, feature_level;
+};
+struct rsf_observer11_probe_attempt {
+    void* context;
+    void* chain;
+    void* device;
+    int32_t result;
+    uint32_t returned;
+};
+struct rsf_observer11_probe_tables { void** device; void** chain; void** chain1; };
+struct rsf_observer11_probe_ops {
+    void* (*window)(uint32_t width, uint32_t height);
+    void (*destroy_window)(void*);
+    void (*create)(void* window, uint32_t driver, const rsf_observer11_probe_desc*, rsf_observer11_probe_attempt*);
+    uint32_t (*query_chain1)(void*, void** owned, int32_t* result);
+    void** (*vtable)(void*);
+};
 struct rsf_observer_options;
 struct rsf_observer11_callbacks;
 using RsfObserver11Probe = int32_t (*)(void* user, rsf_observer11_slot*, uint32_t* has_present1);
@@ -20,6 +38,7 @@ struct rsf_observer11_hook_ops {
 };
 
 extern "C" {
+uint32_t rsf_core_observer11_probe(const rsf_observer11_probe_ops*, rsf_observer11_probe_tables*);
 int32_t rsf_core_observer11_install(const rsf_observer_options*, const rsf_observer11_callbacks*,
     void* user, RsfObserver11Probe, const rsf_observer11_hook_ops*);
 int32_t rsf_core_observer11_uninstall_hooks(const rsf_observer11_hook_ops*);

@@ -1928,6 +1928,12 @@ the COM trampoline. C++ exceptions from those calls are contained at
 the bridge. The observer C ABI is unchanged. Build and regression test
 execution remain open.
 
+The D3D11 observer now owns its temporary probe window and COM
+references in Rust. Failed hardware creation releases any partial
+references before WARP starts. The typed Win32 and D3D11 calls stay
+in native callbacks. The updated fixture remains unrun.
+[Observer startup probe](rust-migration.md#d3d11-observer-startup-probe)
+
 Rust now owns D3D12 diagnostics dispatch, validation message budgets,
 stack formatting and the one-time device-removal report. The logger
 and its user context are published together and copied before calling

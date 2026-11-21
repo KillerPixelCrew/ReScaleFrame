@@ -765,9 +765,16 @@ constexpr rsf_observer11_hook_ops hook_ops{
     remove_present_detour,
 };
 
-// A dummy device and swap chain exist only to reach the vtables, which are shared by every
-// instance the runtime creates. Once patched they can be released.
-bool acquire_vtables(void*** device_vtable, void*** swapchain_vtable, void*** swapchain1_vtable)
+// The Rust probe owns the temporary window and COM references. Only the
+// vtable addresses outlive them.
+static_assert(D3D_DRIVER_TYPE_HARDWARE == 1 && D3D_DRIVER_TYPE_WARP == 5 &&
+    D3D_FEATURE_LEVEL_11_0 == 0xb000 && DXGI_FORMAT_R8G8B8A8_UNORM == 28 &&
+    DXGI_USAGE_RENDER_TARGET_OUTPUT == 0x20);
+static_assert(sizeof(rsf_observer11_probe_desc) == 28 && sizeof(rsf_observer11_probe_attempt) == 32 &&
+    offsetof(rsf_observer11_probe_attempt, result) == 24 && sizeof(rsf_observer11_probe_tables) == 24 &&
+    sizeof(rsf_observer11_probe_ops) == 5 * sizeof(void*));
+
+void* probe_window(uint32_t width, uint32_t height) noexcept
 {
     WNDCLASSEXW window_class{};
     window_class.cbSize = sizeof(window_class);
@@ -775,64 +782,62 @@ bool acquire_vtables(void*** device_vtable, void*** swapchain_vtable, void*** sw
     window_class.hInstance = GetModuleHandleW(nullptr);
     window_class.lpszClassName = L"RsfObserverProbe";
     RegisterClassExW(&window_class);
-    HWND window = CreateWindowExW(0, window_class.lpszClassName, L"", WS_OVERLAPPEDWINDOW, 0, 0,
-                                  8, 8, nullptr, nullptr, window_class.hInstance, nullptr);
-    if (!window) {
-        return false;
-    }
+    return CreateWindowExW(0, window_class.lpszClassName, L"", WS_OVERLAPPEDWINDOW, 0, 0,
+        static_cast<int>(width), static_cast<int>(height), nullptr, nullptr, window_class.hInstance, nullptr);
+}
 
+void probe_create(void* window, uint32_t driver, const rsf_observer11_probe_desc* probe,
+    rsf_observer11_probe_attempt* out) noexcept
+{
     DXGI_SWAP_CHAIN_DESC desc{};
-    desc.BufferCount = 1;
-    desc.BufferDesc.Width = 8;
-    desc.BufferDesc.Height = 8;
-    desc.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-    desc.OutputWindow = window;
-    desc.SampleDesc.Count = 1;
+    desc.BufferCount = probe->buffer_count;
+    desc.BufferDesc.Width = probe->width;
+    desc.BufferDesc.Height = probe->height;
+    desc.BufferDesc.Format = static_cast<DXGI_FORMAT>(probe->format);
+    desc.BufferUsage = probe->usage;
+    desc.OutputWindow = static_cast<HWND>(window);
+    desc.SampleDesc.Count = probe->sample_count;
     desc.Windowed = TRUE;
 
-    IDXGISwapChain* swapchain = nullptr;
-    ID3D11Device* device = nullptr;
-    ID3D11DeviceContext* context = nullptr;
-    const D3D_FEATURE_LEVEL wanted[] = {D3D_FEATURE_LEVEL_11_0};
+    IDXGISwapChain* chain{};
+    ID3D11Device* device{};
+    ID3D11DeviceContext* context{};
+    const auto wanted = static_cast<D3D_FEATURE_LEVEL>(probe->feature_level);
     D3D_FEATURE_LEVEL obtained{};
-    HRESULT created = D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0,
-                                                    wanted, 1, D3D11_SDK_VERSION, &desc,
-                                                    &swapchain, &device, &obtained, &context);
-    if (FAILED(created)) {
-        created = D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, wanted,
-                                                1, D3D11_SDK_VERSION, &desc, &swapchain, &device,
-                                                &obtained, &context);
-    }
-    if (FAILED(created) || !swapchain || !device) {
-        DestroyWindow(window);
-        return false;
-    }
-
-    *device_vtable = *reinterpret_cast<void***>(device);
-    *swapchain_vtable = *reinterpret_cast<void***>(swapchain);
-    *swapchain1_vtable = nullptr;
-    IDXGISwapChain1* extended = nullptr;
-    if (SUCCEEDED(swapchain->QueryInterface(__uuidof(IDXGISwapChain1), reinterpret_cast<void**>(&extended)))) {
-        *swapchain1_vtable = *reinterpret_cast<void***>(extended); extended->Release();
-    }
-
-    if (context) {
-        context->Release();
-    }
-    swapchain->Release();
-    device->Release();
-    DestroyWindow(window);
-    return true;
+    HRESULT result = E_FAIL;
+    uint32_t returned = 0;
+    try {
+        result = D3D11CreateDeviceAndSwapChain(nullptr, static_cast<D3D_DRIVER_TYPE>(driver), nullptr, 0,
+            &wanted, 1, D3D11_SDK_VERSION, &desc, &chain, &device, &obtained, &context);
+        returned = 1;
+    } catch (...) {}
+    *out = {context, chain, device, result, returned};
 }
+
+uint32_t probe_chain1(void* chain, void** extended, int32_t* result) noexcept try
+{
+    *result = static_cast<IDXGISwapChain*>(chain)->QueryInterface(__uuidof(IDXGISwapChain1), extended);
+    return 1;
+} catch (...) { return 0; }
+
+constexpr rsf_observer11_probe_ops probe_ops{
+    probe_window,
+    [](void* window) { DestroyWindow(static_cast<HWND>(window)); },
+    probe_create,
+    probe_chain1,
+    [](void* object) { return *reinterpret_cast<void***>(object); },
+};
 
 int32_t probe_hooks(void* user, rsf_observer11_slot* slots, uint32_t* has_present1) noexcept try
 {
     auto& setup = *static_cast<HookSetup*>(user);
-    void** device = nullptr;
-    if (!acquire_vtables(&device, &setup.chain, &setup.chain1)) {
+    rsf_observer11_probe_tables tables{};
+    if (!rsf_core_observer11_probe(&probe_ops, &tables)) {
         return RSF_OBSERVER_ERROR_NO_DEVICE;
     }
+    void** device = tables.device;
+    setup.chain = tables.chain;
+    setup.chain1 = tables.chain1;
     *has_present1 = setup.chain1 != nullptr;
     slots[RSF_OBSERVER11_TEXTURE] = {device + slot_create_texture2d, reinterpret_cast<void*>(&hooked_create_texture2d)};
     slots[RSF_OBSERVER11_BUFFER] = {device + slot_create_buffer, reinterpret_cast<void*>(&hooked_create_buffer)};

@@ -440,6 +440,27 @@ C++ unwind. Native builds, the unwind fixture and game checks remain
 open.
 [Native draw calls and restoration](research/rust-anomaly-motion-stage.md#native-draw-calls-and-restoration)
 
+## D3D11 observer startup probe
+
+Compared with `fe267be4`, the Rust observer owns the temporary
+probe window and COM references. It requests the same 8×8 windowed
+swapchain with feature level 11.0, tries hardware first and uses WARP
+after a failed creation result. Native callbacks still register and
+create the window, call D3D11 and read the typed vtables.
+
+Rust releases any references returned by a failed attempt before
+retrying or returning. A native exception still refuses the probe
+without retrying. A successful status without the required device
+or chain refuses. Without an optional `IDXGISwapChain1` interface,
+the probe still supplies the existing Present route. The release order stays
+extended chain, immediate context, swapchain, device, then window.
+
+Source comparison matched the five private callback slots and the
+public observer entry points. The added fixture checks partial
+hardware cleanup before WARP and window cleanup on an exception.
+Pinned formatting, locked offline metadata, and whitespace checks
+passed. Native linkage, fixture execution and device use remain open.
+
 ## Verification coverage
 
 | Requirement | Recorded evidence | Still open |

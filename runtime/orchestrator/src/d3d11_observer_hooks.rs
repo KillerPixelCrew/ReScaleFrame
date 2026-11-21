@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+mod probe;
+
 use crate::d3d11_observer_abi::rsf_observer_options as Options;
 use crate::d3d11_observer_callbacks::Callbacks;
 use crate::d3d11_observer_present::{present_calls, rsf_core_observer11_replace_size};
