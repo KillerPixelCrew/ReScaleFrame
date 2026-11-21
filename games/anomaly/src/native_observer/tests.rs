@@ -6,6 +6,7 @@ static INPUT_IDLE: AtomicBool = AtomicBool::new(false);
 static MOTION_REFUSED: AtomicBool = AtomicBool::new(false);
 static FG_FRAME_OPEN: AtomicBool = AtomicBool::new(false);
 static FG_ENDS: AtomicU32 = AtomicU32::new(0);
+static FG_RETIRE_READY: AtomicBool = AtomicBool::new(false);
 static TEARDOWN: Mutex<Vec<&str>> = Mutex::new(Vec::new());
 
 unsafe extern "C" fn disable_input() -> bool {
@@ -35,10 +36,17 @@ unsafe extern "C" fn sr_frame_end() {}
 unsafe extern "C" fn fg_end_before() {
     FG_ENDS.fetch_add(1, Ordering::Relaxed);
 }
+fn retire_fg_inputs() -> bool {
+    if !FG_RETIRE_READY.load(Ordering::Relaxed) {
+        return false;
+    }
+    lock(&TEARDOWN).push("FG inputs");
+    true
+}
 
 #[test]
 fn lifecycle_and_status_refuse_reentry_while_the_owner_is_locked() {
-    let observer = Observer::new(|| false);
+    let observer = Observer::new(|| false, || true);
     let platform = Platform::default();
     let services: rsf_game_host_services = unsafe { std::mem::zeroed() };
     {
@@ -54,7 +62,7 @@ fn lifecycle_and_status_refuse_reentry_while_the_owner_is_locked() {
 
 #[test]
 fn stop_drains_native_and_input_invocations_before_retiring_the_stages() {
-    let observer = Observer::new(|| FG_FRAME_OPEN.load(Ordering::Relaxed));
+    let observer = Observer::new(|| FG_FRAME_OPEN.load(Ordering::Relaxed), retire_fg_inputs);
     lock(&observer.state).session = Some(Session {
         engine: Engine::default(),
         log: None,
@@ -105,12 +113,23 @@ fn stop_drains_native_and_input_invocations_before_retiring_the_stages() {
     assert_eq!(observer.status().unwrap().prepared, 1);
     assert_eq!(*lock(&TEARDOWN), ["input", "SR", "motion"]);
     MOTION_REFUSED.store(false, Ordering::Relaxed);
+    assert_eq!(observer.control(&platform, true), BUSY);
+    assert_eq!(observer.status().unwrap().prepared, 1);
+    FG_RETIRE_READY.store(true, Ordering::Relaxed);
     assert_eq!(observer.control(&platform, true), OK);
     assert_eq!(observer.control(&platform, true), OK);
     assert_eq!(observer.status().unwrap().prepared, 0);
     assert_eq!(
         *lock(&TEARDOWN),
-        ["input", "SR", "motion", "motion", "hooks", "geometry"]
+        [
+            "input",
+            "SR",
+            "motion",
+            "motion",
+            "hooks",
+            "geometry",
+            "FG inputs"
+        ]
     );
 }
 
@@ -135,7 +154,7 @@ unsafe extern "C" fn fg_render_begin(id: u32, width: u32, height: u32) {
 
 #[test]
 fn observation_and_fg_share_one_guarded_source_frame_sample() {
-    let observer = Observer::new(|| false);
+    let observer = Observer::new(|| false, || true);
     lock(&observer.state).session = Some(Session {
         engine: Engine::default(),
         log: None,

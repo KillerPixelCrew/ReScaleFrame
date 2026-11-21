@@ -4,6 +4,12 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Anomaly quiesce now releases the adapter's private FG input pass once
+native callbacks and scopes have drained. It clears camera and input
+history while preserving the monotonic source counter. Runtime keeps
+ownership of its copied resources. Source review checked the handoff
+and retry order. The updated fixtures and live quiesce remain unrun.
+
 Anomaly quiesce waits for an admitted FG frame even between native
 callbacks. The existing engine End callback can still close that frame
 and its Runtime binding after observation admission closes. Source

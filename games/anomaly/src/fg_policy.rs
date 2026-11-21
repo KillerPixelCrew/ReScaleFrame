@@ -139,6 +139,11 @@ impl Policy {
         self.frame.presented = false;
     }
 
+    #[cfg(windows)]
+    pub(crate) fn invalidate_history(&mut self) {
+        self.previous_fed = false;
+    }
+
     pub(crate) fn scope(&mut self) {
         if !self.frame.scope {
             self.counts.scope_frames += 1;

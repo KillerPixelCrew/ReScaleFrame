@@ -264,11 +264,25 @@ impl Engine {
 
     fn reset_device(&mut self) -> (Option<Pass>, Option<InputPass>) {
         self.policy.device_reset();
+        (self.window.take(), self.discard_inputs())
+    }
+
+    fn retire_inputs(&mut self) -> Result<Option<InputPass>, ()> {
+        if self.phase == Phase::Rendering || self.window.is_some() {
+            return Err(());
+        }
+        self.phase = Phase::Idle;
+        self.input_native_frame = None;
+        self.policy.invalidate_history();
+        Ok(self.discard_inputs())
+    }
+
+    fn discard_inputs(&mut self) -> Option<InputPass> {
         self.camera_now = None;
         self.camera_fed = None;
         self.previous_begin = 0;
         self.render.invalidated = true;
-        (self.window.take(), self.inputs.take())
+        self.inputs.take()
     }
 }
 
@@ -622,6 +636,17 @@ fn installed() -> Option<&'static Stage> {
 
 pub(crate) fn frame_open() -> bool {
     installed().is_some_and(|stage| stage.engine.lock().unwrap().phase == Phase::Rendering)
+}
+
+pub(crate) fn retire_inputs() -> bool {
+    let Some(stage) = installed() else {
+        return true;
+    };
+    let inputs = stage.engine.lock().unwrap().retire_inputs();
+    let Ok(inputs) = inputs else { return false };
+    // COM release stays outside the lock. Runtime owns its copied inputs.
+    drop(inputs);
+    true
 }
 
 fn identity(stage: &Stage, engine: &Engine, role: u32) -> Pass {

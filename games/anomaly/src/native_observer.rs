@@ -78,16 +78,18 @@ struct Observer {
     state: Mutex<State>,
     activity: AtomicU32,
     fg_frame_open: fn() -> bool,
+    fg_retire_inputs: fn() -> bool,
 }
 
-static OBSERVER: Observer = Observer::new(crate::fg_stage::frame_open);
+static OBSERVER: Observer =
+    Observer::new(crate::fg_stage::frame_open, crate::fg_stage::retire_inputs);
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl Observer {
-    const fn new(fg_frame_open: fn() -> bool) -> Self {
+    const fn new(fg_frame_open: fn() -> bool, fg_retire_inputs: fn() -> bool) -> Self {
         Self {
             control: Mutex::new(Control {
                 reason: c"Native rendering has not been prepared.",
@@ -105,6 +107,7 @@ impl Observer {
             }),
             activity: AtomicU32::new(0),
             fg_frame_open,
+            fg_retire_inputs,
         }
     }
 
@@ -300,7 +303,7 @@ impl Observer {
             control.geometry_installed = false;
             control.retirement = Retirement::Callbacks;
         }
-        if !self.idle(platform) {
+        if !self.idle(platform) || !(self.fg_retire_inputs)() {
             return BUSY;
         }
         control.retirement = Retirement::Inactive;

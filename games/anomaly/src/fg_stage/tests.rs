@@ -66,6 +66,34 @@ fn device_reset_retires_the_window_and_preserves_the_next_frame_reset() {
 }
 
 #[test]
+fn quiesce_retires_inputs_without_reusing_the_source_or_camera_history() {
+    use crate::fg_policy_abi::RSF_ANOMALY_RESET_DISCONTINUITY;
+
+    let mut engine = Engine::new(1);
+    let extent = [1280, 720];
+    engine.policy.begin(1, extent, false);
+    engine.policy.ui_boundary();
+    engine.policy.inputs(true);
+    engine.policy.presented();
+    assert_eq!(engine.policy.end().skip, RSF_ANOMALY_SKIP_NONE);
+
+    engine.phase = Phase::Rendering;
+    assert!(engine.retire_inputs().is_err());
+    engine.phase = Phase::Open;
+    engine.source = 2;
+    engine.input_native_frame = Some(2);
+    engine.previous_begin = 1;
+    assert!(engine.retire_inputs().is_ok());
+    assert!(engine.phase == Phase::Idle && engine.input_native_frame.is_none());
+    assert_eq!(engine.source, 2);
+    assert_eq!(engine.previous_begin, 0);
+    assert_eq!(
+        engine.policy.begin(3, extent, false).reset,
+        RSF_ANOMALY_RESET_DISCONTINUITY
+    );
+}
+
+#[test]
 fn changing_scope_hold_applies_to_the_next_source_without_resetting_history() {
     use crate::fg_policy_abi::{RSF_ANOMALY_RESET_SCOPE_END, RSF_ANOMALY_SKIP_SCOPE};
 
