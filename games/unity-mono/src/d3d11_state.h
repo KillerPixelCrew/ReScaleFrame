@@ -15,9 +15,13 @@
    replacement, the surface lease, the checked close and the release. The ring's slot rotation,
    completion values and shared fence values stay in bridge_interop.h.
 
+   The D3D11 route admits its packets through rsf_unity_d3d11_admit_packet: the shared packet store
+   (bridge_state.h) owns each queued packet's texture references from admission until the render
+   event that takes it ends (rsf_unity_frames_end_packet) or rsf_unity_frames_release cancels it.
+
    bridge.cpp keeps Unity interface access, the typed D3D11, D3D12 and DXGI calls (the shared
-   format choice and the rsf_shared_surface calls among them), the D3D11 texture leases of queued
-   packets, the render-pass calls and the frame callbacks. Its render callbacks are the bridge's
+   format choice, the rsf_shared_surface calls and the texture AddRef and Release among them), the
+   render-pass calls and the frame callbacks. Its render callbacks are the bridge's
    admission: a caller borrows the published record only while it holds an rsf_unity_frame_callback,
    and the package closes callback admission (rsf_unity_frames_try_close) before it closes this
    owner. Inside a callback, a surface view is borrowed only under the surface lease. */
@@ -112,6 +116,22 @@ bool rsf_unity_d3d11_try_close(void);
 bool rsf_unity_d3d11_release(void);
 /* Resumes admission for the next package session. */
 void rsf_unity_d3d11_open(void);
+
+/* Typed reference leaves for Unity's D3D11 textures, as IUnknown: retain adds one reference
+   (AddRef) and release drops one (Release). Neither is called with null. Rust runs retain under
+   the packet store's lock and release outside it. */
+typedef struct rsf_unity_d3d11_texture_ops {
+    void (*retain)(void* texture);
+    void (*release)(void* texture);
+} rsf_unity_d3d11_texture_ops;
+
+/* Admits packet as rsf_unity_frames_admit_packet does and, before the stored address is returned,
+   retains its non-null colour, depth, motion and output textures for the stored copy. A refused
+   packet retains nothing and returns NULL. The render event that takes the packet keeps its slot
+   until rsf_unity_frames_end_packet, which releases the textures; rsf_unity_frames_release cancels
+   a packet still queued or consuming. Independent of the graphics record. */
+void* rsf_unity_d3d11_admit_packet(const rsf_unity_packet* packet, uint64_t session_id,
+    const rsf_unity_d3d11_texture_ops* ops);
 #ifdef __cplusplus
 }
 #endif

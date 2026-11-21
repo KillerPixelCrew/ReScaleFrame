@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: MIT
 // The Unity package's D3D11 and Vulkan render bridge; D3D12 routes to the shared D3D12 bridge.
 // Packet admission and storage, the engine policy and its generation, activity, the managed stage
-// and callback retirement are the shared bridge state (bridge_state.rs). The D3D11 path's command
-// ring, completion values and shared fence values are bridge_interop.rs, which the Vulkan bridge
-// (vulkan_bridge.cpp, its own state in vulkan_state.rs) uses for its slots too. The D3D11 path's
-// devices, immediate context, queue, completion and shared fences, command slots and six shared
-// surfaces are one Rust record with its creation, surface keys, replacement and lease, checked
-// close and release (d3d11_state.rs). This file keeps the Unity interfaces, the typed
-// D3D11/D3D12/DXGI calls as that record's leaves, the shared surface format choice, the D3D11
-// texture leases of queued packets, render-pass and CPU-event calls and the exported entry points.
+// and callback retirement are the shared bridge state (bridge_state.rs), which also owns the D3D11
+// texture references of queued packets from admission until their render event ends. The D3D11
+// path's command ring, completion values and shared fence values are bridge_interop.rs, which the
+// Vulkan bridge (vulkan_bridge.cpp, its own state in vulkan_state.rs) uses for its slots too. The
+// D3D11 path's devices, immediate context, queue, completion and shared fences, command slots and
+// six shared surfaces are one Rust record with its creation, surface keys, replacement and lease,
+// checked close and release (d3d11_state.rs). This file keeps the Unity interfaces, the typed
+// D3D11/D3D12/DXGI calls as leaves (texture AddRef and Release among them), the shared surface
+// format choice, render-pass and CPU-event calls and the exported entry points.
 #include "bridge.h"
 #include "bridge_interop.h"
 #include "d3d11_state.h"
@@ -52,17 +53,29 @@ static_assert(sizeof(rsf_unity_d3d11_device_ops) == 9 * sizeof(void*), "d3d11_st
 
 namespace {
 using Microsoft::WRL::ComPtr;
-// D3D11 texture references a stored packet holds from enqueue until its render event ends.
-// Vulkan packets carry image handles, which are not reference counted.
-using Leases = std::array<ComPtr<IUnknown>, 4>;
 IUnityGraphicsD3D11* unity11 = nullptr;
 IUnityGraphicsD3D12v7* unity12 = nullptr;
 UnityGfxRenderer renderer = kUnityGfxRendererNull;
-// Guards the host services and the packet leases, and orders them with the Rust packet store.
+// Guards the host services. Enqueue reads the session under it.
 std::mutex guard;
 rsf_game_host_services services{};
-std::array<Leases, RSF_UNITY_FRAMES_PACKETS> pending_leases;
 int event_id = 0;
+// rsf_unity_d3d11_texture_ops. A queued D3D11 packet's store entry holds one reference to each of
+// its textures from admission until its render event ends. Vulkan packets carry image handles,
+// which are not reference counted, and are admitted without these leaves.
+void retain_texture(void* texture) noexcept { static_cast<IUnknown*>(texture)->AddRef(); }
+void release_texture(void* texture) noexcept { static_cast<IUnknown*>(texture)->Release(); }
+constexpr rsf_unity_d3d11_texture_ops texture_ops{retain_texture, release_texture};
+// A packet the render event took from the store. Its end returns a leased packet's slot and
+// releases its references once the event has used them; an unleased packet was freed at take.
+struct TakenPacket {
+    uint32_t slot = 0;
+    bool taken = false;
+    TakenPacket() = default;
+    TakenPacket(const TakenPacket&) = delete;
+    TakenPacket& operator=(const TakenPacket&) = delete;
+    ~TakenPacket() { if (taken) rsf_unity_frames_end_packet(slot); }
+};
 // Holds the record's surface table from the first surface a render event borrows until it returns.
 struct SurfaceLease {
     bool held = rsf_unity_d3d11_surfaces_begin();
@@ -377,14 +390,10 @@ void UNITY_INTERFACE_API render_event(int id, void* address) noexcept try
     if (!call.entered) return;
     if (id < event_id || id > event_id + 2) return;
     rsf_unity_packet packet{};
-    Leases leases;
-    {
-        std::lock_guard<std::mutex> lock(guard);
-        uint32_t slot = 0;
-        if (!rsf_unity_frames_take_packet(address, &packet, &slot) || slot >= pending_leases.size()) return;
-        leases = std::move(pending_leases[slot]);
-        pending_leases[slot] = {};
-    }
+    // Ends before the frame callback leaves, as the native leases did.
+    TakenPacket taken;
+    taken.taken = rsf_unity_frames_take_packet(address, &packet, &taken.slot) != 0;
+    if (!taken.taken) return;
     if (!active()) return;
     if (renderer == kUnityGfxRendererVulkan) {
         uint32_t change = 0;
@@ -419,16 +428,10 @@ int configuration(uint32_t width, uint32_t height, rsf_unity_config* output)
 void* enqueue(const rsf_unity_packet* packet)
 {
     std::lock_guard<std::mutex> lock(guard);
+    // The store retains D3D11 textures before the stored address reaches Unity's render event.
+    if (renderer == kUnityGfxRendererD3D11) return rsf_unity_d3d11_admit_packet(packet, services.session_id, &texture_ops);
     uint32_t slot = 0;
-    void* stored = rsf_unity_frames_admit_packet(packet, services.session_id, &slot);
-    if (!stored) return nullptr;
-    // Lease D3D11 textures before the stored address reaches Unity's render event.
-    if (renderer == kUnityGfxRendererD3D11) {
-        void* textures[] = {packet->color, packet->depth, packet->motion, packet->output};
-        auto& leases = pending_leases[slot];
-        for (size_t i = 0; i < leases.size(); ++i) leases[i] = static_cast<IUnknown*>(textures[i]);
-    }
-    return stored;
+    return rsf_unity_frames_admit_packet(packet, services.session_id, &slot);
 }
 bool try_close_shared_bridge()
 {
@@ -478,8 +481,9 @@ void rsf_unity_package_bridge_finish_retirement(bool commit) noexcept
     // forgets the ring. It refuses without the checked close and keeps everything.
     if (!vulkan && !rsf_unity_d3d11_release())
         log("Unity DX11 bridge release refused without a checked close; its graphics remain owned.");
-    pending_leases = {}; services = {};
-    // The frame owner stays closed. The next session activates it after preparation.
+    services = {};
+    // Releases any packet lease still held. The frame owner stays closed. The next session
+    // activates it after preparation.
     rsf_unity_frames_release();
 }
 bool rsf_unity_package_bridge_open(bool editor)
