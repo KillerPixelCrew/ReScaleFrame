@@ -21,7 +21,7 @@ struct Texture {
     desc: Description,
 }
 
-/// A fake staging texture or view. Only these are counted when released.
+/// A fake pipeline or staging resource. Only these are counted when released.
 struct Resource {
     context: *const Context,
     label: &'static str,
@@ -84,10 +84,14 @@ unsafe extern "C" fn same_device(texture: *mut c_void, device: *mut c_void) -> u
     u32::from(unsafe { (*texture.cast::<Texture>()).owner } == device)
 }
 
-unsafe extern "C" fn build(device: *mut c_void, _: Log, _: *mut c_void) -> *mut c_void {
+unsafe extern "C" fn shader(device: *mut c_void, _: Log, _: *mut c_void) -> *mut c_void {
     let state = context(device);
     state.builds.set(state.builds.get() + 1);
-    device
+    lease_resource(device, "shader")
+}
+
+unsafe extern "C" fn constant_buffer(device: *mut c_void) -> *mut c_void {
+    lease_resource(device, "constants")
 }
 
 unsafe extern "C" fn texture(
@@ -135,7 +139,7 @@ unsafe extern "C" fn motion_view(_: *mut c_void, texture: *mut c_void) -> *mut c
 
 unsafe extern "C" fn dispatch(
     context: *mut c_void,
-    _: *mut c_void,
+    pipeline: *const PipelineBindings,
     targets: *const Targets,
     _: *mut c_void,
     motion: *mut c_void,
@@ -145,6 +149,7 @@ unsafe extern "C" fn dispatch(
 ) -> u32 {
     let state = self::context(context);
     let values = unsafe { &*values };
+    let pipeline = unsafe { &*pipeline };
     let targets = unsafe { &*targets };
     let bound = [
         targets.depth_copy,
@@ -158,7 +163,9 @@ unsafe extern "C" fn dispatch(
     state.submissions.set(state.submissions.get() + 1);
     state.last_motion.set(values.has_motion);
     u32::from(
-        bound == SET
+        label(pipeline.shader) == "shader"
+            && label(pipeline.constants) == "constants"
+            && bound == SET
             && (values.has_motion == 0.0) == motion.is_null()
             && groups_x == (values.size[0] as u32).div_ceil(8)
             && groups_y == (values.size[1] as u32).div_ceil(8),
@@ -173,14 +180,16 @@ const SET: [&str; 6] = [
     "depth_uav",
     "motion_uav",
 ];
+const PIPELINE_CREATED: [Entry; 2] = [("shader", 0), ("constants", 0)];
+const PIPELINE_RELEASED: [Entry; 2] = [("constants", 0), ("shader", 0)];
 
 const PLATFORM: Platform = Platform {
     device: Some(device),
     release_interface: Some(release),
     describe: Some(describe),
     same_device: Some(same_device),
-    build: Some(build),
-    release_pipeline: Some(release),
+    shader: Some(shader),
+    constant_buffer: Some(constant_buffer),
     texture: Some(texture),
     depth_view: Some(depth_view),
     unordered_view: Some(unordered_view),
@@ -251,7 +260,10 @@ fn foreign_depth_refuses_the_copy_and_foreign_motion_falls_back_to_camera_motion
     let outputs = owner.outputs().expect("published outputs");
     assert_eq!(outputs.map(label), ["depth", "motion"]);
     drop(owner);
-    assert_eq!(*state.released.borrow(), released(1, 6));
+    assert_eq!(
+        *state.released.borrow(),
+        [released(1, 6), PIPELINE_RELEASED.to_vec()].concat()
+    );
 }
 
 #[test]
@@ -271,7 +283,9 @@ fn failed_resize_releases_the_partial_set_and_keeps_the_previous_one_for_retry()
         owner.run(context, &frame, None, ptr::null_mut()),
         Result::Ok
     );
-    assert_eq!(*state.created.borrow(), created(1, 6));
+    let mut expected_created = PIPELINE_CREATED.to_vec();
+    expected_created.extend(created(1, 6));
+    assert_eq!(*state.created.borrow(), expected_created);
     frame.width = 12;
     depth.desc.width = frame.width;
     frame.depth = ptr::from_mut(&mut depth).cast();
@@ -289,7 +303,6 @@ fn failed_resize_releases_the_partial_set_and_keeps_the_previous_one_for_retry()
         Result::Ok
     );
     assert_eq!(state.builds.get(), 1);
-    let mut expected_created = created(1, 6);
     expected_created.extend(created(2, 5));
     expected_created.extend(created(3, 6));
     assert_eq!(*state.created.borrow(), expected_created);
@@ -302,5 +315,36 @@ fn failed_resize_releases_the_partial_set_and_keeps_the_previous_one_for_retry()
     );
     drop(owner);
     expected_released.extend(released(3, 6));
+    expected_released.extend(PIPELINE_RELEASED);
     assert_eq!(*state.released.borrow(), expected_released);
+}
+
+#[test]
+fn refused_constant_buffer_releases_shader_and_latches_on_same_device() {
+    let state = Context::default();
+    let context = ptr::from_ref(&state).cast_mut().cast();
+    let mut depth = make_depth(context);
+    let frame = Frame {
+        depth: ptr::from_mut(&mut depth).cast(),
+        motion: ptr::null_mut(),
+        clip_to_previous_clip: [0.0; 16],
+        width: 9,
+        height: 17,
+    };
+    let mut owner = Owner::new(&PLATFORM);
+    state.fail_at.set(Some("constants"));
+    assert_eq!(
+        owner.run(context, &frame, None, ptr::null_mut()),
+        Result::Shader
+    );
+    assert_eq!(*state.created.borrow(), [("shader", 0)]);
+    assert_eq!(*state.released.borrow(), [("shader", 0)]);
+    assert!(owner.outputs().is_none());
+    state.fail_at.set(None);
+    assert_eq!(
+        owner.run(context, &frame, None, ptr::null_mut()),
+        Result::Shader
+    );
+    assert_eq!(state.builds.get(), 1);
+    assert_eq!(state.submissions.get(), 0);
 }

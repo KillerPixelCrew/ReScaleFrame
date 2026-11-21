@@ -107,6 +107,32 @@ impl Default for rsf_anomaly_input_targets {
     }
 }
 #[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_anomaly_input_pipeline {
+    pub shader: *mut ::core::ffi::c_void,
+    pub constants: *mut ::core::ffi::c_void,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_anomaly_input_pipeline"]
+        [::core::mem::size_of::<rsf_anomaly_input_pipeline>() - 16usize];
+    ["Alignment of rsf_anomaly_input_pipeline"]
+        [::core::mem::align_of::<rsf_anomaly_input_pipeline>() - 8usize];
+    ["Offset of field: rsf_anomaly_input_pipeline::shader"]
+        [::core::mem::offset_of!(rsf_anomaly_input_pipeline, shader) - 0usize];
+    ["Offset of field: rsf_anomaly_input_pipeline::constants"]
+        [::core::mem::offset_of!(rsf_anomaly_input_pipeline, constants) - 8usize];
+};
+impl Default for rsf_anomaly_input_pipeline {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
 #[derive(Default, Copy, Clone)]
 pub struct rsf_anomaly_input_constants {
     pub clip_to_previous: [f32; 16usize],
@@ -152,15 +178,16 @@ pub struct rsf_anomaly_input_platform {
             device: *mut ::core::ffi::c_void,
         ) -> u32,
     >,
-    pub build: ::core::option::Option<
+    pub shader: ::core::option::Option<
         unsafe extern "C" fn(
             device: *mut ::core::ffi::c_void,
             arg1: rsf_anomaly_input_log,
             arg2: *mut ::core::ffi::c_void,
         ) -> *mut ::core::ffi::c_void,
     >,
-    pub release_pipeline:
-        ::core::option::Option<unsafe extern "C" fn(arg1: *mut ::core::ffi::c_void)>,
+    pub constant_buffer: ::core::option::Option<
+        unsafe extern "C" fn(device: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void,
+    >,
     pub texture: ::core::option::Option<
         unsafe extern "C" fn(
             device: *mut ::core::ffi::c_void,
@@ -191,7 +218,7 @@ pub struct rsf_anomaly_input_platform {
     pub dispatch: ::core::option::Option<
         unsafe extern "C" fn(
             context: *mut ::core::ffi::c_void,
-            pipeline: *mut ::core::ffi::c_void,
+            pipeline: *const rsf_anomaly_input_pipeline,
             targets: *const rsf_anomaly_input_targets,
             depth: *mut ::core::ffi::c_void,
             motion_view: *mut ::core::ffi::c_void,
@@ -217,10 +244,10 @@ const _: () = {
         [::core::mem::offset_of!(rsf_anomaly_input_platform, describe) - 16usize];
     ["Offset of field: rsf_anomaly_input_platform::same_device"]
         [::core::mem::offset_of!(rsf_anomaly_input_platform, same_device) - 24usize];
-    ["Offset of field: rsf_anomaly_input_platform::build"]
-        [::core::mem::offset_of!(rsf_anomaly_input_platform, build) - 32usize];
-    ["Offset of field: rsf_anomaly_input_platform::release_pipeline"]
-        [::core::mem::offset_of!(rsf_anomaly_input_platform, release_pipeline) - 40usize];
+    ["Offset of field: rsf_anomaly_input_platform::shader"]
+        [::core::mem::offset_of!(rsf_anomaly_input_platform, shader) - 32usize];
+    ["Offset of field: rsf_anomaly_input_platform::constant_buffer"]
+        [::core::mem::offset_of!(rsf_anomaly_input_platform, constant_buffer) - 40usize];
     ["Offset of field: rsf_anomaly_input_platform::texture"]
         [::core::mem::offset_of!(rsf_anomaly_input_platform, texture) - 48usize];
     ["Offset of field: rsf_anomaly_input_platform::depth_view"]

@@ -843,6 +843,12 @@ and remains unrun. Build and live observer verification remain open.
 
 ## Rust orchestrator and first Anomaly port
 
+Anomaly's FG input owner now leases and retires the compute shader
+and constant buffer in Rust. A refused buffer allocation releases
+the shader and retains the existing device failure latch. The
+shader and normal recording order match the prior source.
+[FG pipeline ownership](research/rust-anomaly-fg-stage.md#input-pipeline-ownership)
+
 Anomaly's overlay owner now orders the DirectInput and DXGI probe
 calls and admits their methods in Rust. Typed COM and Win32 calls,
 native detours and the existing rollback remain in place. DLSS and

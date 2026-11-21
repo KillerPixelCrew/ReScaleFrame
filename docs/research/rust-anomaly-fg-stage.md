@@ -70,6 +70,23 @@ order on replacement and owner drop. The checks were pinned `rustfmt`,
 locked offline `cargo metadata` and `git diff --check`. Native builds,
 Clippy, the Rust tests, device fixtures and game runs were not run.
 
+## Input pipeline ownership
+
+Compared with `8f5d0b49`, the Rust FG input owner now leases the compute
+shader and constant buffer individually. It compiles the shader before
+allocating the 96-byte dynamic buffer. A refused buffer allocation
+releases the new shader and keeps the existing per-device shader
+failure latch. On retirement the constant buffer drops before the shader.
+The native call borrows a 16-byte record for the synchronous dispatch.
+
+The HLSL bytes, shader entry, buffer descriptor, successful recording
+order and public ABI match the previous source. A successful Map with
+a null address now unmaps, restores the saved D3D11 state and refuses
+the dispatch. The narrow binding regenerated identically with bindgen
+0.72.1. Pinned formatting, locked Windows Cargo metadata and whitespace
+passed. The partial-allocation regression and device and game checks
+remain unrun.
+
 ## Validation
 
 MSVC 19.52 x64 Debug and Release built the adapter, the FG and Stage 5 SR

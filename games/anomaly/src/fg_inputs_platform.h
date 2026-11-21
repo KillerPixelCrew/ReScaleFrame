@@ -25,6 +25,11 @@ typedef struct rsf_anomaly_input_targets {
     void* motion_uav;
 } rsf_anomaly_input_targets;
 
+typedef struct rsf_anomaly_input_pipeline {
+    void* shader;
+    void* constants;
+} rsf_anomaly_input_pipeline;
+
 typedef struct rsf_anomaly_input_constants {
     float clip_to_previous[16];
     float size[2];
@@ -36,15 +41,16 @@ typedef struct rsf_anomaly_input_platform {
     void (*release_interface)(void*);
     void (*describe)(void* texture, rsf_anomaly_input_desc*);
     uint32_t (*same_device)(void* texture, void* device);
-    void* (*build)(void* device, rsf_anomaly_input_log, void*);
-    void (*release_pipeline)(void*);
+    void* (*shader)(void* device, rsf_anomaly_input_log, void*);
+    void* (*constant_buffer)(void* device);
     /* Each create returns one reference released with release_interface, or null. The format
        is a DXGI_FORMAT and bind a D3D11_BIND_FLAG mask for a single-sample, single-mip texture. */
     void* (*texture)(void* device, uint32_t width, uint32_t height, uint32_t format, uint32_t bind);
     void* (*depth_view)(void* device, void* depth_copy);
     void* (*unordered_view)(void* device, void* texture);
     void* (*motion_view)(void* device, void* texture);
-    uint32_t (*dispatch)(void* context, void* pipeline, const rsf_anomaly_input_targets* targets, void* depth,
+    uint32_t (*dispatch)(void* context, const rsf_anomaly_input_pipeline* pipeline,
+        const rsf_anomaly_input_targets* targets, void* depth,
         void* motion_view, const rsf_anomaly_input_constants*, uint32_t groups_x, uint32_t groups_y);
     float first_person_limit, validity_threshold;
 } rsf_anomaly_input_platform;

@@ -131,7 +131,7 @@ generate("games/minecraft/native/platform_abi.rs", "games/minecraft/native/minec
          ["--no-recursive-allowlist", "--with-derive-default", "--raw-line", "#![allow(dead_code)]",
           "--raw-line", "use rsf_game_sys::rsf_game_render_pass;"])
 generate("games/anomaly/src/fg_inputs_abi.rs", "games/anomaly/src/fg_inputs_platform.h",
-         "rsf_anomaly_input_(log|frame|desc|targets|constants|platform)", "NOTHING", [],
+         "rsf_anomaly_input_(log|frame|desc|targets|constants|pipeline|platform)", "NOTHING", [],
          ["--no-recursive-allowlist", "--with-derive-default"])
 generate("games/anomaly/src/fg_policy_abi.rs", "games/anomaly/src/fg_policy_platform.h",
          "rsf_anomaly_fg_(decision|counters)", "RSF_ANOMALY_(GAMEPLAY_SCREEN|HELD_SCREEN|SKIP_.*|RESET_.*)",

@@ -6,7 +6,6 @@
 #include <rescaleframe/shader_compile.h>
 #include <wrl/client.h>
 #include <cstring>
-#include <memory>
 
 namespace rsf::anomaly::fg {
 namespace {
@@ -46,12 +45,8 @@ void rsf_fg_inputs_cs(uint3 id : SV_DispatchThreadID) {
     motion_out[id.xy] = motion;
 }
 )hlsl";
-struct Pipeline {
-    ComPtr<ID3D11ComputeShader> shader;
-    ComPtr<ID3D11Buffer> constants;
-};
-
 static_assert(sizeof(rsf_anomaly_input_constants) == 96);
+static_assert(sizeof(rsf_anomaly_input_pipeline) == 2 * sizeof(void*));
 static_assert(DXGI_FORMAT_D24_UNORM_S8_UINT == 45 && DXGI_FORMAT_R24G8_TYPELESS == 44 &&
     DXGI_FORMAT_R16G16B16A16_FLOAT == 10 && DXGI_FORMAT_R32_FLOAT == 41 && DXGI_FORMAT_R16G16_FLOAT == 34);
 static_assert(D3D11_BIND_SHADER_RESOURCE == 0x8 && D3D11_BIND_UNORDERED_ACCESS == 0x80);
@@ -71,15 +66,21 @@ void describe(void* texture, rsf_anomaly_input_desc* out) noexcept {
         desc.ArraySize, desc.MipLevels};
 }
 
-void* build(void* raw_device, rsf_anomaly_input_log log, void* user) noexcept try {
+void* create_shader(void* raw_device, rsf_anomaly_input_log log, void* user) noexcept try {
     auto* device = static_cast<ID3D11Device*>(raw_device);
-    auto pipeline = std::make_unique<Pipeline>();
+    ComPtr<ID3D11ComputeShader> shader;
     if (!rsf::compile_compute(device, source, "rsf_fg_inputs.hlsl", "rsf_fg_inputs_cs",
-        &pipeline->shader, log, user)) return nullptr;
+        &shader, log, user)) return nullptr;
+    return shader.Detach();
+} catch (...) { return nullptr; }
+
+void* create_constants(void* raw_device) noexcept try {
+    auto* device = static_cast<ID3D11Device*>(raw_device);
     D3D11_BUFFER_DESC desc{sizeof(rsf_anomaly_input_constants), D3D11_USAGE_DYNAMIC,
         D3D11_BIND_CONSTANT_BUFFER, D3D11_CPU_ACCESS_WRITE, 0, 0};
-    if (FAILED(device->CreateBuffer(&desc, nullptr, &pipeline->constants))) return nullptr;
-    return pipeline.release();
+    ComPtr<ID3D11Buffer> constants;
+    if (FAILED(device->CreateBuffer(&desc, nullptr, &constants))) return nullptr;
+    return constants.Detach();
 } catch (...) { return nullptr; }
 
 // The Rust owner chooses each format and bind mask; these leaves keep the D3D11 descriptors.
@@ -109,28 +110,34 @@ void* create_unordered_view(void* raw_device, void* texture) noexcept {
     return view.Detach();
 }
 
-uint32_t dispatch(void* raw_context, void* raw_pipeline, const rsf_anomaly_input_targets* raw_targets, void* depth,
-    void* motion_view, const rsf_anomaly_input_constants* values, uint32_t groups_x, uint32_t groups_y) noexcept {
+uint32_t dispatch(void* raw_context, const rsf_anomaly_input_pipeline* pipeline,
+    const rsf_anomaly_input_targets* raw_targets, void* depth, void* motion_view,
+    const rsf_anomaly_input_constants* values, uint32_t groups_x, uint32_t groups_y) noexcept {
     auto* context = static_cast<ID3D11DeviceContext*>(raw_context);
-    const auto& pipeline = *static_cast<const Pipeline*>(raw_pipeline);
+    auto* constants = static_cast<ID3D11Buffer*>(pipeline->constants);
     const auto& targets = *raw_targets;
     rsf_d3d11_state state{};
     if (!rsf_d3d11_state_save(context, &state)) return 0;
     D3D11_MAPPED_SUBRESOURCE mapped{};
-    if (FAILED(context->Map(pipeline.constants.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+    if (FAILED(context->Map(constants, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+        rsf_d3d11_state_restore(context, &state);
+        return 0;
+    }
+    if (!mapped.pData) {
+        context->Unmap(constants, 0);
         rsf_d3d11_state_restore(context, &state);
         return 0;
     }
     std::memcpy(mapped.pData, values, sizeof(*values));
-    context->Unmap(pipeline.constants.Get(), 0);
+    context->Unmap(constants, 0);
     context->SetPredication(nullptr, FALSE);
     context->CopyResource(static_cast<ID3D11Texture2D*>(targets.depth_copy), static_cast<ID3D11Texture2D*>(depth));
     ID3D11ShaderResourceView* views[]{static_cast<ID3D11ShaderResourceView*>(targets.depth_view),
         static_cast<ID3D11ShaderResourceView*>(motion_view)};
     ID3D11UnorderedAccessView* uavs[]{static_cast<ID3D11UnorderedAccessView*>(targets.depth_uav),
         static_cast<ID3D11UnorderedAccessView*>(targets.motion_uav)};
-    ID3D11Buffer* buffers[]{pipeline.constants.Get()};
-    context->CSSetShader(pipeline.shader.Get(), nullptr, 0);
+    ID3D11Buffer* buffers[]{constants};
+    context->CSSetShader(static_cast<ID3D11ComputeShader*>(pipeline->shader), nullptr, 0);
     context->CSSetShaderResources(0, 2, views);
     context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
     context->CSSetConstantBuffers(0, 1, buffers);
@@ -149,8 +156,8 @@ constexpr rsf_anomaly_input_platform platform{
     describe,
     [](void* texture, void* device) { return uint32_t(rsf::same_device(
         static_cast<ID3D11Texture2D*>(texture), static_cast<ID3D11Device*>(device))); },
-    build,
-    [](void* pipeline) { delete static_cast<Pipeline*>(pipeline); },
+    create_shader,
+    create_constants,
     create_texture,
     create_depth_view,
     create_unordered_view,

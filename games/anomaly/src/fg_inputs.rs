@@ -2,7 +2,8 @@
 use crate::fg_inputs_abi::{
     rsf_anomaly_input_constants as Constants, rsf_anomaly_input_desc as Description,
     rsf_anomaly_input_frame as Frame, rsf_anomaly_input_log as Log,
-    rsf_anomaly_input_platform as Platform, rsf_anomaly_input_targets as Targets,
+    rsf_anomaly_input_pipeline as PipelineBindings, rsf_anomaly_input_platform as Platform,
+    rsf_anomaly_input_targets as Targets,
 };
 use crate::lease::Lease;
 use std::ffi::c_void;
@@ -85,10 +86,39 @@ impl SurfaceSet {
     }
 }
 
+struct Pipeline {
+    // The constant buffer drops before the shader, as in the native pipeline.
+    constants: Lease,
+    shader: Lease,
+}
+
+impl Pipeline {
+    fn create(
+        platform: &Platform,
+        device: *mut c_void,
+        log: Log,
+        user: *mut c_void,
+    ) -> Option<Self> {
+        let release = platform.release_interface?;
+        let create_shader = platform.shader?;
+        let create_buffer = platform.constant_buffer?;
+        let shader = Lease::new(unsafe { create_shader(device, log, user) }, release)?;
+        let constants = Lease::new(unsafe { create_buffer(device) }, release)?;
+        Some(Self { constants, shader })
+    }
+
+    fn bindings(&self) -> PipelineBindings {
+        PipelineBindings {
+            shader: self.shader.as_ptr(),
+            constants: self.constants.as_ptr(),
+        }
+    }
+}
+
 pub(crate) struct Owner {
     platform: &'static Platform,
     surfaces: Option<SurfaceSet>,
-    pipeline: Option<Lease>,
+    pipeline: Option<Pipeline>,
     device: Option<Lease>,
     shader_failed: bool,
     ready: bool,
@@ -176,12 +206,9 @@ impl Owner {
             return Result::Shader;
         }
         if self.pipeline.is_none() {
-            self.pipeline = Lease::new(
-                unsafe { (platform.build.unwrap())(device, log, user) },
-                platform.release_pipeline.unwrap(),
-            );
+            self.pipeline = Pipeline::create(platform, device, log, user);
         }
-        let Some(pipeline) = self.pipeline.as_ref().map(Lease::as_ptr) else {
+        let Some(pipeline) = self.pipeline.as_ref().map(Pipeline::bindings) else {
             self.shader_failed = true;
             return Result::Shader;
         };
@@ -222,7 +249,7 @@ impl Owner {
         let accepted = unsafe {
             (platform.dispatch.unwrap())(
                 context,
-                pipeline,
+                &pipeline,
                 &targets,
                 frame.depth,
                 motion_view.as_ref().map_or(ptr::null_mut(), Lease::as_ptr),
