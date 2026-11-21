@@ -4,6 +4,13 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Anomaly closes any accepted FG window scope before the engine resets its
+device. The interrupted render frame cannot prepare more inputs or open
+another window scope. End still reports the real engine boundary, and a
+Present before reset cannot clear the next frame's history reset. Source
+review traced the reset hook and scope calls. The updated synthetic
+fixture remains unrun.
+
 Direct3D latency retirement now checks the dispatcher session before
 retiring SDK tokens or advancing completion. An earlier session or
 zero source cannot affect the current one. Source review traced the

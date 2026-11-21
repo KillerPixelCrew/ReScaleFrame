@@ -189,6 +189,7 @@ struct Render {
     extent: [u32; 2],
     camera: Option<Camera>,
     frame_time: f32,
+    invalidated: bool,
 }
 
 impl Render {
@@ -243,6 +244,34 @@ struct Engine {
     reported: Totals,
 }
 
+impl Engine {
+    fn new(scope_hold: u32) -> Self {
+        Self {
+            policy: Policy::new(scope_hold),
+            phase: Phase::Idle,
+            source: 0,
+            input_native_frame: None,
+            render: Render::default(),
+            window: None,
+            camera_now: None,
+            camera_fed: None,
+            previous_begin: 0,
+            inputs: None,
+            input_result: InputResult::Ok,
+            reported: Totals::default(),
+        }
+    }
+
+    fn reset_device(&mut self) -> (Option<Pass>, Option<InputPass>) {
+        self.policy.device_reset();
+        self.camera_now = None;
+        self.camera_fed = None;
+        self.previous_begin = 0;
+        self.render.invalidated = true;
+        (self.window.take(), self.inputs.take())
+    }
+}
+
 // SAFETY: the engine serializes render and reset callbacks on the D3D11 owner. The mutex also
 // protects the source facts read by a window message. It is never held across a Runtime or COM call.
 unsafe impl Send for Engine {}
@@ -275,20 +304,7 @@ impl Stage {
     ) -> bool {
         let mut frequency = 0;
         unsafe { QueryPerformanceFrequency(&mut frequency) };
-        let engine = Engine {
-            policy: Policy::new(options.scope_hold),
-            phase: Phase::Idle,
-            source: 0,
-            input_native_frame: None,
-            render: Render::default(),
-            window: None,
-            camera_now: None,
-            camera_fed: None,
-            previous_begin: 0,
-            inputs: None,
-            input_result: InputResult::Ok,
-            reported: Totals::default(),
-        };
+        let engine = Engine::new(options.scope_hold);
         // The bridge may call back during installation, so publish the bound tables first.
         if STAGE
             .set(Self {
@@ -899,6 +915,7 @@ extern "C" fn rsf_anomaly_fg_stage_render_begin(native_frame: u32, width: u32, h
             extent,
             camera: engine.camera_now,
             frame_time,
+            invalidated: false,
         };
         let cut = engine
             .render
@@ -937,7 +954,10 @@ extern "C" fn rsf_anomaly_fg_stage_ui_boundary() {
     let Some(stage) = installed() else { return };
     let (render, previous, sr, mut scene) = {
         let mut engine = stage.engine.lock().unwrap();
-        if engine.phase != Phase::Rendering || engine.policy.ui_boundary().tag == 0 {
+        if engine.phase != Phase::Rendering
+            || engine.render.invalidated
+            || engine.policy.ui_boundary().tag == 0
+        {
             return;
         }
         (
@@ -995,6 +1015,9 @@ extern "C" fn rsf_anomaly_fg_stage_end_before() {
     };
     stage.pass(ptr::null_mut(), &submission, false);
     stage.bind_source(None);
+    if stage.engine.lock().unwrap().render.invalidated {
+        return;
+    }
     let Some(chain) = stage.live_chain() else {
         return;
     };
@@ -1041,16 +1064,12 @@ extern "C" fn rsf_anomaly_fg_stage_end_after() {
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_fg_stage_device_reset() {
     if let Some(stage) = installed() {
-        let inputs = {
-            let mut engine = stage.engine.lock().unwrap();
-            engine.policy.device_reset();
-            engine.camera_now = None;
-            engine.camera_fed = None;
-            engine.previous_begin = 0;
-            engine.inputs.take()
-        };
+        let (window, inputs) = stage.engine.lock().unwrap().reset_device();
         // The graphics owner must not lend the old frame's identity to later SR work.
         stage.bind_source(None);
+        if let Some(window) = window {
+            stage.pass(ptr::null_mut(), &window, false);
+        }
         // Release before the original CRender::reset_begin tears down the device/targets.
         drop(inputs);
     }

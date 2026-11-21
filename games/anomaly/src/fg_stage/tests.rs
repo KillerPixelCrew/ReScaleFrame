@@ -33,6 +33,39 @@ fn successful_present_requires_the_matching_accepted_window() {
 }
 
 #[test]
+fn device_reset_retires_the_window_and_preserves_the_next_frame_reset() {
+    use crate::fg_policy_abi::{RSF_ANOMALY_RESET_DEVICE, RSF_ANOMALY_SKIP_NO_PRESENT};
+
+    let mut engine = Engine::new(1);
+    let extent = [1280, 720];
+    engine.policy.begin(1, extent, false);
+    engine.policy.ui_boundary();
+    engine.policy.inputs(true);
+    engine.policy.presented();
+    assert_eq!(engine.policy.end().skip, RSF_ANOMALY_SKIP_NONE);
+
+    engine.policy.begin(2, extent, false);
+    engine.policy.ui_boundary();
+    engine.policy.inputs(true);
+    engine.policy.presented();
+    let chain = ptr::without_provenance_mut(1);
+    engine.window = Some(Pass {
+        source_frame_id: 2,
+        swapchain: chain,
+        ..unsafe { mem::zeroed() }
+    });
+    let (window, _) = engine.reset_device();
+    assert!(matches_window(window.as_ref(), 2, chain));
+    assert!(engine.render.invalidated && engine.window.is_none());
+    assert!(engine.reset_device().0.is_none());
+    assert_eq!(engine.policy.end().skip, RSF_ANOMALY_SKIP_NO_PRESENT);
+    assert_eq!(
+        engine.policy.begin(3, extent, false).reset,
+        RSF_ANOMALY_RESET_DEVICE
+    );
+}
+
+#[test]
 fn changing_scope_hold_applies_to_the_next_source_without_resetting_history() {
     use crate::fg_policy_abi::{RSF_ANOMALY_RESET_SCOPE_END, RSF_ANOMALY_SKIP_SCOPE};
 

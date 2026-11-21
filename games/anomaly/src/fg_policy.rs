@@ -134,6 +134,9 @@ impl Policy {
         if self.pending == RSF_ANOMALY_RESET_NONE {
             self.pending = RSF_ANOMALY_RESET_DEVICE;
         }
+        // A reset can follow Present before the engine ends this frame.
+        // That presentation no longer establishes history on the new device.
+        self.frame.presented = false;
     }
 
     pub(crate) fn scope(&mut self) {
