@@ -62,11 +62,18 @@ retirement and retains its services until a later stop succeeds. The RDR2
 plugin and camera builds and game verification remain unrun on this revision.
 
 RDR2's ASI now admits the exact executable and sequences its configuration,
-ForceD3D12 and engine settings hooks in Rust. The ASI loader entry, Runtime
-session worker and attach helper retain their existing paths. The native
+ForceD3D12 and engine settings hooks in Rust. The ASI loader entry retains
+its existing path. The native
 settings fixture now calls the Rust policy through its existing facade.
 Source checks cover ABI and hook fields. Builds and ASI verification remain
 open.
+
+The RDR2 ASI worker and explicit attach helper now share one Rust Runtime
+setup and plugin-session caller. The ASI loads its staged Runtime. The
+attach helper only borrows an existing Runtime and still reads `attach.ini`.
+The Unity SR fixture uses the same RDR2 setup through its native facade.
+Path bounds, ABI and link wiring were checked in source. Builds,
+fixture execution and game validation remain open.
 
 Fallout 4 now owns exact-build identity, GameSDK lifecycle, Runtime
 session setup and cold D3D11 creation in Rust. The creation owner

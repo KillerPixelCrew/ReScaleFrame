@@ -69,7 +69,7 @@ set_tests_properties(game_fallout4_plugin_contract PROPERTIES
 target_compile_definitions(rsf_plugin_contract PRIVATE _CRT_SECURE_NO_WARNINGS)
 add_executable(rsf_unity_sr_d3d12_test unity_sr_d3d12.cpp)
 target_include_directories(rsf_unity_sr_d3d12_test PRIVATE ../games/unity-mono/include)
-target_link_libraries(rsf_unity_sr_d3d12_test PRIVATE rsf_orchestrator rsf_build_options d3d12 dxgi)
+target_link_libraries(rsf_unity_sr_d3d12_test PRIVATE rsf_rdr2_rust rsf_orchestrator rsf_build_options d3d12 dxgi)
 if(EXISTS "${RSF_STREAMLINE_INCLUDE}/sl.h")
     target_include_directories(rsf_unity_sr_d3d12_test SYSTEM PRIVATE "${RSF_STREAMLINE_INCLUDE}")
 endif()

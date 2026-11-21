@@ -12,6 +12,10 @@ mod host;
 mod layout;
 mod platform;
 mod renderer;
+#[cfg(windows)]
+mod runtime_worker;
+#[cfg(windows)]
+mod runtime_worker_abi;
 mod scene;
 
 use platform::Platform;

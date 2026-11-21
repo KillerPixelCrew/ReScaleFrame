@@ -3,8 +3,6 @@
 mod camera;
 #[cfg(windows)]
 mod carrier;
-#[cfg(windows)]
-mod carrier_abi;
 mod execution;
 mod observer;
 

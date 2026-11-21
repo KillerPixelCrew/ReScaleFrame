@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! The Wingman XInput carrier's optional, process-lived plugin session.
-use crate::carrier_abi::{RSF_PLUGIN_SESSION_ABI_VERSION, rsf_plugin_session_options};
 use crate::{AMD64, EXECUTABLE};
+use rsf_game_sys::plugin_session_abi::{
+    RSF_PLUGIN_SESSION_ABI_VERSION, rsf_plugin_session_options,
+};
 use rsf_game_sys::{RSF_GAME_ABI_VERSION, rsf_game_host_services, rsf_game_probe};
 use std::ffi::{CStr, OsString, c_char, c_void};
 use std::fs::OpenOptions;

@@ -28,16 +28,21 @@ generate("runtime/backends/fsr/compat/src/abi.rs", "runtime/backends/fsr/src/fsr
          "rsf_fsr4_compat_.*", "RSF_FSR4_COMPAT_PLATFORM_ABI_VERSION", [])
 generate("sdk/game/src/lib.rs", "sdk/game/include/rescaleframe/game_api.h",
          "rsf_(get_game_plugin_api_fn|frame_record|game_cpu_(source|receipt)_event)", "RSF_.*",
-         ["-Isdk/game/include"], ["--raw-line", "pub mod camera_math;",
+         ["-Isdk/game/include"], ["--raw-line", "pub mod camera_math;", "--raw-line", "pub mod plugin_session_abi;",
           "--raw-line", "pub mod shader_patch_abi;", "--raw-line", "pub mod sr_abi;"])
 generate("sdk/game/src/shader_patch_abi.rs", "runtime/shader_patch/include/rescaleframe/shader_patch.h",
          "rsf_(get_shader_patch_api_fn|shader_patch_api|patch_.*)", "RSF_(SHADER_PATCH_VERSION|PATCH_.*)", [],
          ["--with-derive-default"])
-generate("games/project-wingman/src/carrier_abi.rs", "runtime/orchestrator/include/rescaleframe/plugin_session.h",
+generate("sdk/game/src/plugin_session_abi.rs", "runtime/orchestrator/include/rescaleframe/plugin_session.h",
          "rsf_plugin_session_options", "RSF_PLUGIN_SESSION_ABI_VERSION",
          ["-Isdk/game/include", "-Iruntime/orchestrator/include"],
          ["--no-recursive-allowlist", "--raw-line", "type wchar_t = u16;",
-          "--raw-line", "use rsf_game_sys::{rsf_game_host_services, rsf_game_probe};"])
+          "--raw-line", "use crate::{rsf_game_host_services, rsf_game_probe};"])
+generate("games/rdr2/src/runtime_worker_abi.rs", "games/rdr2/src/runtime_setup.h",
+         "rsf_(rdr2_runtime_leaves|rdr2_fingerprint_fn|render_host_setup)",
+         "RSF_(RENDER_HOST_(ABI_VERSION|OWNS_PRESENTATION)|UI_MODE_BACKBUFFER_HUDLESS)",
+         ["-Isdk/game/include", "-Iruntime/orchestrator/include", "-Iruntime/contract/include"],
+         ["--no-recursive-allowlist", "--raw-line", "type wchar_t = u16;"])
 generate("ui/overlay/src/host_option_limit.rs", "runtime/orchestrator/include/rescaleframe/overlay_api.h",
          "NOTHING", "RSF_OVERLAY_SERVICE_OPTION_LIMIT",
          ["-Isdk/game/include", "-Iruntime/orchestrator/include", "-Iruntime/contract/include",

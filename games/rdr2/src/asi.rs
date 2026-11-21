@@ -496,7 +496,7 @@ unsafe extern "C" fn rsf_rdr2_asi_attach(table: *const AsiPlatform) {
 
 /// Logs the startup results from the runtime session worker.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_asi_report_startup(
+pub(crate) unsafe extern "C" fn rsf_rdr2_asi_report_startup(
     log: rsf_game_sys::rsf_game_log_fn,
     user: *mut c_void,
 ) {

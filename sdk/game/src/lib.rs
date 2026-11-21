@@ -2,6 +2,7 @@
 
 #![allow(non_camel_case_types)]
 pub mod camera_math;
+pub mod plugin_session_abi;
 pub mod shader_patch_abi;
 pub mod sr_abi;
 

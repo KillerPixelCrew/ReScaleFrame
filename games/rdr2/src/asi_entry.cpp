@@ -6,16 +6,13 @@
 //
 // Startup admission, the [RDR2] configuration gates, the ForceD3D12 write and engine-settings
 // ownership are owned by the Rust crate rsf-rdr2 (games/rdr2/src/asi.rs, engine_settings.rs).
-// This file lends it the typed leaves below and keeps the runtime session worker.
+// This file lends the startup and Runtime session workers their typed leaves.
 #include <rescaleframe/module_dump.h>
 #ifdef RSF_HAVE_FRAME_CAPTURE
 #include <rescaleframe/frame_capture.h>
 #endif
 #include <rescaleframe/vendor_census.h>
-#include <rescaleframe/plugin_session.h>
-#include <rescaleframe/render_host.h>
-#include "runtime_setup.h"
-#include <rescaleframe/sha256_file.h>
+#include "runtime_worker_native.h"
 #include <windows.h>
 #include <dxgi1_4.h>
 #include <wrl/client.h>
@@ -32,14 +29,12 @@
 #include "camera_probe.h"
 #include "native_capture.h"
 #include "script_input.h"
-#include "engine_settings.h"
 #include "native_settings.h"
 
 namespace {
 HMODULE self = nullptr;
-std::wstring log_path;
-std::mutex log_guard;
-rsf_plugin_session* session = nullptr;
+constexpr auto log = rsf_rdr2_runtime_log;
+std::mutex trace_guard;
 std::string dump_directory;
 std::string modules_path;
 char census_directory[MAX_PATH * 3]{};
@@ -89,7 +84,7 @@ uint32_t traced_image_size{};
 HRESULT trace_d3d12_result(HRESULT result) noexcept
 {
     if (FAILED(result)) {
-        std::lock_guard<std::mutex> lock(log_guard);
+        std::lock_guard<std::mutex> lock(trace_guard);
         if (FILE* stream = _wfopen(d3d12_error_path, L"ab")) {
             void* stack[24]{};
             const auto count = CaptureStackBackTrace(1, 24, stack, nullptr);
@@ -137,17 +132,6 @@ int32_t install_census(const wchar_t* directory, uint32_t flags) noexcept
     options.flags = flags;
     return static_cast<int32_t>(rsf_census_install(&options));
 }
-
-void log(void*, const char* message) noexcept try
-{
-    std::lock_guard<std::mutex> lock(log_guard);
-    FILE* stream = _wfopen(log_path.c_str(), L"ab");
-    if (stream) {
-        std::fprintf(stream, "[%llu] %s\n", static_cast<unsigned long long>(GetTickCount64()), message);
-        std::fclose(stream);
-    }
-}
-catch (...) {}
 
 std::string utf8(const std::wstring& value)
 {
@@ -216,74 +200,27 @@ DWORD WINAPI diagnostics(void*) noexcept try
 }
 catch (...) { return 1; }
 
-DWORD WINAPI startup(void*) noexcept try
+void start_diagnostics(const wchar_t* modules, const wchar_t* dumps) noexcept try
 {
-    wchar_t filename[32768]{};
-    const auto length = GetModuleFileNameW(self, filename, 32768);
-    if (!length || length >= 32768) return 1;
-    std::wstring root(filename, length);
-    root.resize(root.find_last_of(L"/\\") + 1);
-    const auto config = root + L"ReScaleFrame.ini";
-    if (!GetPrivateProfileIntW(L"RDR2", L"Enable", 1, config.c_str())) return 0;
-    const auto mod = root + L"ReScaleFrame\\";
-    log_path = mod + L"rdr2.log";
-    log(nullptr, "RDR2 ASI entry started.");
-    rsf_rdr2_asi_report_startup(log, nullptr);
-    modules_path = utf8(mod + L"rdr2-modules.log");
-    if (GetPrivateProfileIntW(L"RDR2", L"DumpModule", 0, config.c_str())) {
-        wchar_t directory[MAX_PATH]{};
-        GetPrivateProfileStringW(L"RDR2", L"DumpDirectory", L"", directory, MAX_PATH, config.c_str());
-        dump_directory = utf8(directory[0] ? std::wstring(directory) : mod + L"dumps");
-    }
+    modules_path = utf8(modules);
+    if (dumps) dump_directory = utf8(dumps);
     if (HANDLE worker = CreateThread(nullptr, 0, diagnostics, nullptr, 0, nullptr)) CloseHandle(worker);
-    const auto runtime_path = mod + L"ReScaleFrame.Runtime.dll";
-    const auto runtime = LoadLibraryExW(runtime_path.c_str(), nullptr,
-        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
-    if (!runtime) { log(nullptr, "Runtime DLL load refused."); return 1; }
-    const auto prepare = reinterpret_cast<decltype(&rsf_plugin_session_prepare)>(
-        reinterpret_cast<void*>(GetProcAddress(runtime, "rsf_plugin_session_prepare")));
-    const auto start = reinterpret_cast<decltype(&rsf_plugin_session_start)>(
-        reinterpret_cast<void*>(GetProcAddress(runtime, "rsf_plugin_session_start")));
-    if (!prepare || !start) { log(nullptr, "Runtime plugin lifecycle exports are unavailable."); return 1; }
-    if (!GetModuleFileNameW(nullptr, filename, 32768)) return 1;
-    std::string digest;
-    if (!rsf::sha256_file(filename, digest)) { log(nullptr, "Executable fingerprint could not be read."); return 1; }
-    const rsf_game_probe probe{sizeof(probe), 0x8664, 0, "RDR2.exe", digest.c_str()};
-    const auto plugin_path = mod + L"ReScaleFrame.Game.RDR2.dll";
-    rsf_plugin_session_options options{};
-    options.struct_size = sizeof(options); options.abi_version = RSF_PLUGIN_SESSION_ABI_VERSION;
-    options.plugin_path = plugin_path.c_str(); options.probe = &probe;
-    options.services.struct_size = sizeof(options.services);
-    options.services.abi_version = RSF_GAME_ABI_VERSION;
-    options.services.session_id = GetTickCount64() + 1;
-    options.services.log = log;
-    const auto create_host = reinterpret_cast<decltype(&rsf_render_host_create)>(
-        reinterpret_cast<void*>(GetProcAddress(runtime, "rsf_render_host_create")));
-    const auto setup = rsf_rdr2_runtime_setup(config.c_str(), mod.c_str());
-    if (!create_host || create_host(&setup, &options.services) != RSF_OK) {
-        log(nullptr, "RDR2 SR runtime host initialization refused.");
-        return 1;
-    }
-    if (GetPrivateProfileIntW(L"RDR2", L"NativeSettingsProbe", 0, config.c_str())) {
-        wchar_t path[32768]{};
-        GetPrivateProfileStringW(L"RDR2", L"NativeSettingsProbePath", L"", path, 32768, config.c_str());
-        if (!rsf_rdr2_native_settings_probe(path, log, nullptr)) log(nullptr, "Native settings probe refused.");
-    }
-    const auto prepared = prepare(&options, &session);
-    char message[192]{};
-    std::snprintf(message, sizeof(message), "RDR2 prepare result=%d sha256=%s", int(prepared), digest.c_str());
-    log(nullptr, message);
-    if (prepared != RSF_OK) return unsigned(prepared);
-    const auto started = start(session);
-    std::snprintf(message, sizeof(message), "RDR2 start result=%d", int(started));
-    log(nullptr, message);
-    if (started == RSF_OK && !rsf_rdr2_start_script_input(self, runtime, config.c_str(), log, nullptr))
-        log(nullptr, "RDR2 ScriptHook input guard unavailable; shared overlay still uses its window input hook.");
-    rsf_rdr2_report_engine_settings(log, nullptr);
-    // Runtime, session and entry callbacks remain owned until process termination.
-    return unsigned(started);
 }
-catch (...) { return 1; }
+catch (...) {}
+
+constexpr rsf_rdr2_runtime_leaves runtime_leaves{
+    rsf_rdr2_fingerprint,
+    start_diagnostics,
+    [](const wchar_t* path) noexcept { return rsf_rdr2_native_settings_probe(path, log, nullptr); },
+    [](void* runtime, const wchar_t* configuration) noexcept {
+        return rsf_rdr2_start_script_input(self, static_cast<HMODULE>(runtime), configuration, log, nullptr);
+    },
+};
+
+DWORD WINAPI startup(void*) noexcept
+{
+    return rsf_rdr2_asi_start_runtime(self, &runtime_leaves);
+}
 
 bool read_memory(uintptr_t address, void* out, size_t size) noexcept
 {

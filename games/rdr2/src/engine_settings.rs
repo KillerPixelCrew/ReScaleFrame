@@ -602,7 +602,10 @@ unsafe extern "C" fn rsf_rdr2_engine_quality_tick(quality: u32) {
 
 /// Announces the ownership state and keeps `log` for later engine-settings messages.
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_rdr2_report_engine_settings(log_fn: rsf_game_log_fn, user: *mut c_void) {
+pub(crate) unsafe extern "C" fn rsf_rdr2_report_engine_settings(
+    log_fn: rsf_game_log_fn,
+    user: *mut c_void,
+) {
     let Some(writer) = log_fn else { return };
     LOGGER_USER.store(user, Ordering::Release);
     LOGGER.store(writer as *mut c_void, Ordering::Release);

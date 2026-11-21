@@ -1,29 +1,34 @@
-// SPDX-License-Identifier: MIT
+/* SPDX-License-Identifier: MIT */
 #pragma once
+#include <stdbool.h>
+#include <wchar.h>
 #include <rescaleframe/render_host.h>
-#include <rescaleframe/frame_generation.h>
-#include <windows.h>
-#include <cwchar>
+#include <rescaleframe/backend.h>
 
-inline int rsf_rdr2_game_window(void*, void* pointer)
-{
-    DWORD process{}; wchar_t name[64]{};
-    const auto window = static_cast<HWND>(pointer);
-    return GetWindowThreadProcessId(window, &process) && process == GetCurrentProcessId() &&
-        GetClassNameW(window, name, 64) && !std::wcscmp(name, L"sgaWindow");
+typedef bool (*rsf_rdr2_fingerprint_fn)(const wchar_t* executable, char* digest);
+
+typedef struct rsf_rdr2_runtime_leaves {
+    rsf_rdr2_fingerprint_fn fingerprint;
+    void (*diagnostics)(const wchar_t* modules_path, const wchar_t* dump_directory);
+    bool (*native_settings)(const wchar_t* path);
+    bool (*script_input)(void* runtime, const wchar_t* configuration);
+} rsf_rdr2_runtime_leaves;
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+void rsf_rdr2_fill_runtime_setup(const wchar_t*, const wchar_t*, rsf_render_host_setup*);
+unsigned int rsf_rdr2_asi_start_runtime(void* module, const rsf_rdr2_runtime_leaves*);
+unsigned int rsf_rdr2_attach_start_runtime(void* module, rsf_rdr2_fingerprint_fn);
+void rsf_rdr2_runtime_log(void*, const char*);
+#ifdef __cplusplus
 }
+
 inline rsf_render_host_setup rsf_rdr2_runtime_setup(const wchar_t* configuration, const wchar_t* directory)
 {
     rsf_render_host_setup setup{};
-    setup.struct_size = sizeof(setup); setup.abi_version = RSF_RENDER_HOST_ABI_VERSION;
-    setup.configuration_path = configuration; setup.runtime_directory = directory;
-    setup.configuration_section = L"RDR2";
-    setup.presentation_owner = RSF_RENDER_HOST_OWNS_PRESENTATION;
-    setup.sr_backend_choices = (1u << 1) | (1u << 3) | (1u << 4) | (1u << 5);
-    setup.engine_version_utf8 = "RAGE 1.0.1491.50";
-    setup.application_id = 0x60e8ab7;
-    setup.project_id_utf8 = "6fd496e2-e0fd-48dc-9e99-0c37e87d30ca";
-    setup.depth_inverted = 1; setup.units_to_meters = 1; setup.ui_mode = RSF_UI_MODE_BACKBUFFER_HUDLESS;
-    setup.accept_window = rsf_rdr2_game_window;
+    rsf_rdr2_fill_runtime_setup(configuration, directory, &setup);
     return setup;
 }
+
+#endif

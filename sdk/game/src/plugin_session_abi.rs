@@ -2,7 +2,7 @@
 
 #![allow(non_camel_case_types)]
 type wchar_t = u16;
-use rsf_game_sys::{rsf_game_host_services, rsf_game_probe};
+use crate::{rsf_game_host_services, rsf_game_probe};
 
 pub const RSF_PLUGIN_SESSION_ABI_VERSION: u32 = 1;
 #[repr(C)]
