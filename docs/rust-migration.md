@@ -302,6 +302,12 @@ selected feature lookups succeed. Pinned formatting, locked Windows
 Cargo metadata and whitespace checks passed. Build and runtime
 verification remain open.
 
+Anomaly's Stage 3 burst owner now admits the source and device, builds
+the staging descriptor and guards the readback map in Rust. The
+existing D3D11 leaves still perform the single-subresource copy and
+the predication and map effects. Source comparison and targeted
+binding regeneration passed. [Anomaly SR staging](research/rust-anomaly-sr-stage.md)
+
 ## Verification coverage
 
 | Requirement | Recorded evidence | Still open |

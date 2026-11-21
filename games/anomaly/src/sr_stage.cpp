@@ -18,7 +18,6 @@
 #include "sr_swap.h"
 #include "sr_reconstruction.h"
 #include "sr_temporal.h"
-#include "../../../runtime/graphics/src/device_owner.h"
 #include <rescaleframe/d3d11_state.h>
 #include <rescaleframe/game_frame.h>
 #include <rescaleframe/overlay_api.h>
@@ -147,31 +146,31 @@ bool loading_screen_active() noexcept {
     return !read_global(srp().load_screen_registered_rva, registered) || !read_global(srp().device_precache_frame_rva, precache) ||
         registered != 0 || precache != 0;
 }
-// An owned staging copy of a single-sample texture (the Stage 3 burst copies frames here and maps them once at the end).
-void* staging_copy(void* context, void* source) noexcept {
+// Stage 3 burst readback leaves. sr_stage/staging.rs admits the context, source and device and describes the
+// staging texture (USAGE_STAGING, CPU_ACCESS_READ, one mip and layer); these keep the typed context calls.
+static_assert(D3D11_DEVICE_CONTEXT_IMMEDIATE == 0 && D3D11_USAGE_STAGING == 3 && D3D11_CPU_ACCESS_READ == 0x20000);
+static_assert(sizeof(rsf_anomaly_sr_stage_platform) == 624 &&
+    offsetof(rsf_anomaly_sr_stage_platform, immediate_context) == 264 &&
+    offsetof(rsf_anomaly_sr_stage_platform, pixel_bytes) == 312 && offsetof(rsf_anomaly_sr_stage_platform, bilinear) == 320);
+// Predication is cleared for the copy and restored afterwards, as the burst always did.
+void copy_subresource(void* context, void* destination, uint32_t destination_subresource, void* source,
+    uint32_t source_subresource) noexcept {
     auto* ctx = static_cast<ID3D11DeviceContext*>(context);
-    if (!ctx || !source || ctx->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) return nullptr;
-    ComPtr<ID3D11Texture2D> texture;
-    if (FAILED(static_cast<IUnknown*>(source)->QueryInterface(IID_PPV_ARGS(&texture)))) return nullptr;
-    D3D11_TEXTURE2D_DESC desc{};
-    texture->GetDesc(&desc);
-    if (desc.SampleDesc.Count != 1) return nullptr;
-    desc.MipLevels = desc.ArraySize = 1;
-    desc.Usage = D3D11_USAGE_STAGING;
-    desc.BindFlags = 0;
-    desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-    desc.MiscFlags = 0;
-    ComPtr<ID3D11Device> device;
-    ctx->GetDevice(&device);
-    ComPtr<ID3D11Texture2D> copy;
-    if (!rsf::same_device(texture.Get(), device.Get()) || FAILED(device->CreateTexture2D(&desc, nullptr, &copy))) return nullptr;
     ComPtr<ID3D11Predicate> predicate;
     BOOL predicate_value{};
     ctx->GetPredication(&predicate, &predicate_value);
     ctx->SetPredication(nullptr, FALSE);
-    ctx->CopySubresourceRegion(copy.Get(), 0, 0, 0, 0, texture.Get(), 0, nullptr);
+    ctx->CopySubresourceRegion(static_cast<ID3D11Resource*>(destination), destination_subresource, 0, 0, 0,
+        static_cast<ID3D11Resource*>(source), source_subresource, nullptr);
     ctx->SetPredication(predicate.Get(), predicate_value);
-    return copy.Detach();
+}
+bool map_read(void* context, void* texture, uint32_t subresource, const void** data, uint32_t* row_pitch) noexcept {
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    if (FAILED(static_cast<ID3D11DeviceContext*>(context)->Map(static_cast<ID3D11Resource*>(texture), subresource,
+            D3D11_MAP_READ, 0, &mapped))) return false;
+    *data = mapped.pData;
+    *row_pitch = mapped.RowPitch;
+    return true;
 }
 
 uint32_t twin_refs(void* raw) {
@@ -363,22 +362,6 @@ bool install_hooks() noexcept {
     return hooks.install(image, build->image_size(), sites);
 }
 
-bool map_staging(void* context, void* source, rsf_anomaly_sr_mapped_texture* out) noexcept {
-    auto* ctx = static_cast<ID3D11DeviceContext*>(context);
-    auto* texture = static_cast<ID3D11Texture2D*>(source);
-    D3D11_TEXTURE2D_DESC desc{};
-    texture->GetDesc(&desc);
-    *out = {nullptr, desc.Width, desc.Height, static_cast<uint32_t>(desc.Format), 0, rsf::texture_pixel_bytes(desc.Format)};
-    ComPtr<ID3D11Device> device;
-    ctx->GetDevice(&device);
-    if (!out->pixel_bytes || ctx->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE || !rsf::same_device(texture, device.Get()))
-        return false;
-    D3D11_MAPPED_SUBRESOURCE mapped{};
-    if (FAILED(ctx->Map(texture, 0, D3D11_MAP_READ, 0, &mapped))) return false;
-    out->data = mapped.pData;
-    out->row_pitch = mapped.RowPitch;
-    return true;
-}
 // ---- the leaf table ---------------------------------------------------------------------------------------------
 const rsf_anomaly_sr_stage_platform platform{
     .frame_facts = [](void* self, bool world_window, bool temporal, rsf_anomaly_sr_frame_facts* out) {
@@ -540,12 +523,21 @@ const rsf_anomaly_sr_stage_platform platform{
     },
     .host_stats = [](uint64_t* bytes, uint64_t* refs) { rsf_anomaly_sr_stage_resource_stats(host.resources, bytes, refs); },
     .host_reset = [] { rsf_anomaly_sr_stage_reset_pass(host.resources); },
-    .staging_copy = [](void* context, void* source) { return staging_copy(context, source); },
-    .release = [](void* object) { if (object) static_cast<IUnknown*>(object)->Release(); },
-    .map_staging = map_staging,
-    .unmap_staging = [](void* context, void* texture) {
-        static_cast<ID3D11DeviceContext*>(context)->Unmap(static_cast<ID3D11Texture2D*>(texture), 0);
+    .immediate_context = [](void* context) {
+        return static_cast<ID3D11DeviceContext*>(context)->GetType() == D3D11_DEVICE_CONTEXT_IMMEDIATE;
     },
+    .context_device = [](void* context) -> void* {
+        ID3D11Device* device{};
+        static_cast<ID3D11DeviceContext*>(context)->GetDevice(&device);
+        return device;
+    },
+    .copy_subresource = copy_subresource,
+    .release = [](void* object) { if (object) static_cast<IUnknown*>(object)->Release(); },
+    .map_read = map_read,
+    .unmap = [](void* context, void* texture, uint32_t subresource) {
+        static_cast<ID3D11DeviceContext*>(context)->Unmap(static_cast<ID3D11Resource*>(texture), subresource);
+    },
+    .pixel_bytes = [](uint32_t format) { return rsf::texture_pixel_bytes(static_cast<DXGI_FORMAT>(format)); },
     .bilinear = [] {
         if (!host.seam_views) return false;
         const auto views = upscale_views(*host.seam_views);

@@ -227,11 +227,6 @@ typedef struct rsf_anomaly_sr_timer {
     bool device;
 } rsf_anomaly_sr_timer;
 
-typedef struct rsf_anomaly_sr_mapped_texture {
-    const void* data;
-    uint32_t width, height, format, row_pitch, pixel_bytes;
-} rsf_anomaly_sr_mapped_texture;
-
 // TemporalOptions (sr_temporal.h) for Stages 4 and 5. The UTF-8 vendor directories are borrowed for the call.
 typedef struct rsf_anomaly_sr_driver_config {
     uint32_t stage;
@@ -280,10 +275,18 @@ typedef struct rsf_anomaly_sr_stage_platform {
     // D3D11 host. The seam calls act on the seam the controller is closing.
     void (*host_stats)(uint64_t* twin_bytes, uint64_t* drop_refs);
     void (*host_reset)(void);
-    void* (*staging_copy)(void* context, void* source);   // an owned staging texture or null
+    // Stage 3 burst readback. Rust admits the context, source and device, describes the staging texture through the
+    // rsf_sr_d3d11 table and names each subresource; these leaves keep the typed context calls. `copy_subresource`
+    // clears predication around CopySubresourceRegion(destination, subresource, 0, 0, 0, source, subresource, null)
+    // and restores it. `map_read` is Map(D3D11_MAP_READ, no flags) and `pixel_bytes` the shared DXGI size table.
+    bool (*immediate_context)(void* context);
+    void* (*context_device)(void* context);   // an owned reference or null
+    void (*copy_subresource)(void* context, void* destination, uint32_t destination_subresource, void* source,
+        uint32_t source_subresource);
     void (*release)(void*);
-    bool (*map_staging)(void* context, void* texture, rsf_anomaly_sr_mapped_texture*);
-    void (*unmap_staging)(void* context, void* texture);
+    bool (*map_read)(void* context, void* texture, uint32_t subresource, const void** data, uint32_t* row_pitch);
+    void (*unmap)(void* context, void* texture, uint32_t subresource);
+    uint32_t (*pixel_bytes)(uint32_t format);
     bool (*bilinear)(void);
     bool (*round_trip)(void);
     bool (*temporal_ready)(void);

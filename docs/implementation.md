@@ -851,6 +851,13 @@ and remains unrun. Build and live observer verification remain open.
 
 ## Rust orchestrator and first Anomaly port
 
+Anomaly now owns Stage 3 burst staging and mapping in Rust. The
+leased texture and device facts admit the same single-sample copy,
+and map refusal retains size and format for the burst summary.
+The private binding regenerated identically. Standard and AVX
+device and burst runs remain unverified.
+[Anomaly SR staging](research/rust-anomaly-sr-stage.md)
+
 Native D3D12 DLSS now resolves the required interposer and feature
 addresses in Rust. The native capsule binds the typed pointers
 after admission. Source comparison matched the ordered lookups and

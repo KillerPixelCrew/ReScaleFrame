@@ -35,19 +35,20 @@ impl Extent {
     }
 }
 
+// D3D11_TEXTURE2D_DESC, checked field by field in sr_d3d11.cpp.
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
-struct Texture {
-    size: Extent,
-    mips: u32,
-    layers: u32,
-    format: u32,
-    samples: u32,
-    sample_quality: u32,
-    usage: u32,
-    bindings: u32,
-    cpu_access: u32,
-    misc: u32,
+pub(crate) struct Texture {
+    pub(crate) size: Extent,
+    pub(crate) mips: u32,
+    pub(crate) layers: u32,
+    pub(crate) format: u32,
+    pub(crate) samples: u32,
+    pub(crate) sample_quality: u32,
+    pub(crate) usage: u32,
+    pub(crate) bindings: u32,
+    pub(crate) cpu_access: u32,
+    pub(crate) misc: u32,
 }
 
 #[repr(C)]
@@ -73,14 +74,14 @@ struct Draw {
 #[repr(C)]
 pub(crate) struct Platform {
     retain: unsafe extern "C" fn(Ptr),
-    release: unsafe extern "C" fn(Ptr),
-    as_texture: unsafe extern "C" fn(Ptr) -> Ptr,
+    pub(crate) release: unsafe extern "C" fn(Ptr),
+    pub(crate) as_texture: unsafe extern "C" fn(Ptr) -> Ptr,
     view_resource: unsafe extern "C" fn(Ptr) -> Ptr,
-    texture_device: unsafe extern "C" fn(Ptr) -> Ptr,
-    describe_texture: unsafe extern "C" fn(Ptr, &mut Texture),
+    pub(crate) texture_device: unsafe extern "C" fn(Ptr) -> Ptr,
+    pub(crate) describe_texture: unsafe extern "C" fn(Ptr, &mut Texture),
     describe_view: unsafe extern "C" fn(Ptr, u32, &mut View),
     format_support: unsafe extern "C" fn(Ptr, u32) -> u32,
-    texture: unsafe extern "C" fn(Ptr, &Texture, *const c_void, u32) -> Ptr,
+    pub(crate) texture: unsafe extern "C" fn(Ptr, &Texture, *const c_void, u32) -> Ptr,
     view: unsafe extern "C" fn(Ptr, Ptr, u32, Option<&View>) -> Ptr,
     shader: unsafe extern "C" fn(Ptr, u32, u32, *const c_char, Log, Ptr, &mut Ptr) -> i32,
     constant_buffer: unsafe extern "C" fn(Ptr) -> Ptr,
@@ -106,7 +107,7 @@ const _: () = {
 };
 
 impl Platform {
-    fn lease(&self, reference: Ptr) -> Option<Lease> {
+    pub(crate) fn lease(&self, reference: Ptr) -> Option<Lease> {
         Lease::new(reference, self.release)
     }
 }
@@ -241,6 +242,33 @@ pub(crate) fn fixture_device() -> Ptr {
 #[cfg(test)]
 pub(crate) fn fixture_platform() -> *const c_void {
     std::ptr::from_ref(&tests::PLATFORM).cast()
+}
+
+// Registers a texture the fixture's as_texture and describe_texture answer for.
+#[cfg(test)]
+pub(crate) fn fixture_source(name: usize, description: Texture) -> Ptr {
+    tests::fake(|state| {
+        state.textures.insert(name, description);
+    });
+    tests::ptr(name)
+}
+
+// The descriptors passed to the fixture's CreateTexture2D since the last call.
+#[cfg(test)]
+pub(crate) fn fixture_created() -> Vec<Texture> {
+    tests::calls()
+        .into_iter()
+        .filter_map(|call| match call {
+            tests::Call::Texture(description, _, _) => Some(description),
+            _ => None,
+        })
+        .collect()
+}
+
+// COM references the fixture handed out and has not had released.
+#[cfg(test)]
+pub(crate) fn fixture_references() -> usize {
+    tests::fake(|state| state.owned.values().sum())
 }
 
 #[cfg(test)]
