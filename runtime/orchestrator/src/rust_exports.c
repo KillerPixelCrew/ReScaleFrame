@@ -4,6 +4,7 @@
 #include <rescaleframe/gpu_policy.h>
 #include "rust_export.h"
 
+RSF_EXPORT(rsf_get_runtime_version)
 RSF_EXPORT(rsf_gpu_default_sr_backend)
 RSF_EXPORT(rsf_gpu_select_sr_backend)
 RSF_EXPORT(rsf_frame_sequencer_create)

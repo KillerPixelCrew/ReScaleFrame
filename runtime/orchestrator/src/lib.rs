@@ -187,6 +187,11 @@ mod vulkan_sr_split;
 #[cfg(windows)]
 mod vulkan_xess_fg;
 
+#[unsafe(no_mangle)]
+pub extern "C" fn rsf_get_runtime_version() -> *const std::ffi::c_char {
+    concat!(env!("CARGO_PKG_VERSION"), "\0").as_ptr().cast()
+}
+
 // C callers can recover from allocation failure. A successful handle is
 // released with Box::from_raw after its owner has retired outstanding users.
 fn allocate_handle<T>(value: T) -> *mut T {

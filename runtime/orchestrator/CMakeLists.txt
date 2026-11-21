@@ -19,7 +19,6 @@ target_compile_definitions(rsf_native_cpu PRIVATE RSF_RUNTIME_BUILD)
 target_link_libraries(rsf_native_cpu PUBLIC ReScaleFrame::GameSDK PRIVATE rsf_build_options)
 
 add_library(rsf_orchestrator_core OBJECT
-    src/runtime.cpp
     src/native_scene_platform.cpp
     src/native_window_platform.cpp
     src/native_fg.cpp

@@ -29,4 +29,11 @@ The GameSDK and runtime contract headers match `2db07f4` byte for byte. GameSDK 
 
 A case-sensitive MSVC Release export comparison matched all names and ordinals for Runtime (381), AC7 (256), Loader (273), and Minecraft (267) in the Streamline-enabled build tree. The Anomaly DLL matched all three entry points in the staged C++ adapter and has no static Runtime DLL dependency.
 
+The Runtime version entry point now returns the workspace version from
+Rust with the existing C signature and static string lifetime. On the
+pinned Rust toolchain, the rebuilt Streamline-enabled Runtime returned
+`0.1.2` on two direct DLL calls, matching `VERSION`. All four Release
+export inventories matched again. Five focused MSVC DLL and embedded
+contracts, 333 locked Rust tests, formatting and Clippy passed.
+
 Callers still need to account for documented behavior changes. Frame assembly requires the output record to advertise its capacity and refuses a zero or short capacity before writing. Overlay settings callbacks can read the committed values, and a second write returns `BUSY` while the first is active. Vulkan capture and SR recording require completion proof before readbacks can be published or reused. The [implementation tracker](implementation.md) records the fixture coverage for those changes.
