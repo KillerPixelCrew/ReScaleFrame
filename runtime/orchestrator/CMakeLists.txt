@@ -106,7 +106,7 @@ if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_FFX_INCLUDE}
     target_sources(rsf_native_vulkan PRIVATE src/native_fg_fsr4_vulkan.cpp ../vulkan/fsr4-fg/bridge.cpp)
     target_compile_definitions(rsf_native_vulkan PRIVATE RSF_HAVE_FSR4_FG_VK=1 PUBLIC RSF_VULKAN_FSR4_FG_ENABLED=1)
     target_include_directories(rsf_native_vulkan SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}" "${RSF_FFX_INCLUDE}" "${RSF_FFX_INCLUDE}/../../framegeneration/include")
-    target_link_libraries(rsf_native_vulkan PRIVATE d3d12 dxgi)
+    target_link_libraries(rsf_native_vulkan PRIVATE rsf_orchestrator_rust d3d12 dxgi)
 endif()
 set(RSF_STREAMLINE_VK_RUNTIME "${CMAKE_SOURCE_DIR}/.local/godot/vulkan/host/artifacts/streamline-production-selected-device-reflex/runtime" CACHE PATH "Corrected Streamline Production runtime")
 if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_STREAMLINE_INCLUDE}/sl.h" AND EXISTS "${RSF_STREAMLINE_VK_RUNTIME}/streamline-sdk-build.json")

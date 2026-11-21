@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: MIT
+use crate::fsr4_fg_bridge::{
+    BRIDGE_ABI, BridgeCreate, BridgeFrame, BridgeInfo, BridgeStatus, UNSUPPORTED,
+};
 use crate::sr_session::has_capacity;
 use crate::vulkan_dx12_fg::{self as shared, *};
 use crate::vulkan_fg_abi::{
@@ -10,9 +13,6 @@ use rsf_game_sys::rsf_frame_record as Record;
 use std::ffi::c_char;
 use std::ptr;
 
-const UNSUPPORTED: i32 = -13003;
-const BRIDGE_ABI: u32 = 1;
-
 #[repr(C)]
 struct Options {
     struct_size: u32,
@@ -20,58 +20,6 @@ struct Options {
     window: Handle,
     timeline_enabled: u32,
     generated_count: u32,
-}
-
-#[repr(C)]
-struct BridgeCreate {
-    struct_size: u32,
-    abi_version: u32,
-    adapter_luid: u64,
-    runtime_directory: *const u16,
-    width: u32,
-    height: u32,
-    depth_inverted: u32,
-    depth_infinite: u32,
-    motion_jittered: u32,
-    generated_count: u32,
-}
-
-#[repr(C)]
-struct BridgeInfo {
-    struct_size: u32,
-    abi_version: u32,
-    adapter_luid: u64,
-    provider_version: u64,
-    vendor_id: u32,
-    max_generated: u32,
-}
-
-#[repr(C)]
-struct BridgeFrame {
-    struct_size: u32,
-    abi_version: u32,
-    record: *const Record,
-    color: Handle,
-    depth: Handle,
-    motion: Handle,
-    hudless: Handle,
-    motion_scale_x: f32,
-    motion_scale_y: f32,
-    ready_value: u64,
-    done_value: u64,
-    enabled: u32,
-    vsync: u32,
-}
-
-#[repr(C)]
-struct BridgeStatus {
-    struct_size: u32,
-    abi_version: u32,
-    frames_presented: u32,
-    fg_enabled: u32,
-    result: i32,
-    terminal: u32,
-    generated_callbacks: u64,
 }
 
 #[repr(C)]
@@ -93,10 +41,6 @@ struct Ops {
 const _: () = {
     assert!(size_of::<Options>() == 24);
     assert!(size_of::<Ops>() == 37 * size_of::<Handle>());
-    assert!(size_of::<BridgeCreate>() == 48);
-    assert!(size_of::<BridgeInfo>() == 32);
-    assert!(size_of::<BridgeFrame>() == 80);
-    assert!(size_of::<BridgeStatus>() == 32);
 };
 
 type Owner = shared::Owner<Fsr4>;

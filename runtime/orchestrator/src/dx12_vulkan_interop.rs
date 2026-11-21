@@ -14,9 +14,9 @@ const INCOMPATIBLE_DRIVER: i32 = -9;
 const TOO_MANY_OBJECTS: i32 = -10;
 const FORMAT_NOT_SUPPORTED: i32 = -11;
 const INVALID_EXTERNAL_HANDLE: i32 = -1_000_072_003;
-const BGRA8_UNORM: u32 = 44;
-const RG16_FLOAT: u32 = 83;
-const R32_FLOAT: u32 = 100;
+pub(super) const BGRA8_UNORM: u32 = 44;
+pub(super) const RG16_FLOAT: u32 = 83;
+pub(super) const R32_FLOAT: u32 = 100;
 const IMAGE_SLOTS: usize = 24;
 
 type Handle = *mut c_void;

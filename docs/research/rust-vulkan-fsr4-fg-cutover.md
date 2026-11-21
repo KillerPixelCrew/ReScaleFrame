@@ -59,3 +59,40 @@ from this configuration.
   fixture, the Vulkan readback fixture and the FSR4 bridge fixture. Ran only
   CPU entry points. Device, visible-window, game, and full verification runs
   were outside this cutover.
+
+## FidelityFX DX12 bridge ownership
+
+Starting at `b01e43d`, the lower bridge uses a separate Rust owner behind the
+existing `RsfFsr4Fg*` C entry points. Source review followed both the Vulkan
+broker's bridge calls and its callbacks into the shared Vulkan/DX12 importer.
+The optional CMake source block supplies the native operations and links the
+Rust archive for linked consumers and the Runtime DLL. The Rust module needs
+no SDK headers or link symbols when the block is disabled.
+
+Rust owns the LUID request, provider path and exact family-4 selection, the
+created-provider ID check, HWND admission, resource and camera validation,
+sequence and reset state, callback telemetry, and checked retirement. C++
+queries the SDK and marshals its typed descriptors. Its stable allocation holds
+the retained context descriptors, COM objects and SDK callback. The callback
+uses a separate Rust atomic allocation that lives through native release.
+
+The source review against the previous bridge and FidelityFX headers at
+`7539ae8b6568ad29ed78a753404351daf3b5cca7` followed the output-sized BGRA8
+real and HUD-less inputs and render-sized R32F depth and RG16F motion. Configure
+precedes PrepareV2 for each enabled frame. The DX12 queue waits for Vulkan
+`ready`, executes the frame and presents. The SDK present wait and local fence
+prove completion before HUD-less returns to COMMON and the queue signals
+`done`. An Off frame still configures the SDK and clears an earlier callback
+error only after configuration succeeds. A retry after a local-fence timeout
+checks the fence value after waking because an earlier wait can still signal
+the shared event. A partial command setup without an event has submitted no
+work, so its cleanup skips the local signal and wait. Teardown still releases
+the generation context and DXGI chain before the swapchain context, and keeps
+the remaining owners available on failure. A prepared bridge cannot enqueue
+another handoff or drain signal before final release.
+
+The CPU fixture now drives the actual Rust bridge through native doubles for
+ordering, resets, error propagation, terminal retention and partial retirement.
+This change was reviewed at source level and checked with pinned Rust
+formatting and Git whitespace checks. Compiled contracts, export checks,
+disabled-build linkage, device and moving-frame behavior await verification.
