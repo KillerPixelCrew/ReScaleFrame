@@ -57,7 +57,7 @@ struct MotionArtifactList {
 struct MotionArtifactStats {
     int64_t qpc_frequency;
     uint32_t engine_hooks, renderer_root_hooks, draw_dropped, blob_dropped;
-    uint32_t readbacks, readback_failures, colour_readbacks, colour_readback_failures, capture_failures;
+    uint32_t colour_readbacks, colour_readback_failures, capture_failures;
 };
 struct MotionFinalArtifacts {
     MotionArtifactList draws, blobs;
@@ -109,5 +109,5 @@ static_assert(sizeof(EngineRecord) == 264 && offsetof(EngineRecord, previous) ==
 static_assert(sizeof(RootRecord) == 376 && offsetof(RootRecord, output_name) == 304);
 static_assert(sizeof(NativeRootScope) == 16 && sizeof(QueuedScope) == 40 && sizeof(GeometryScope) == 32);
 static_assert(sizeof(MotionArtifact) == 16 && sizeof(MotionArtifactList) == 24);
-static_assert(sizeof(MotionArtifactStats) == 48 && offsetof(MotionArtifactStats, capture_failures) == 40);
+static_assert(sizeof(MotionArtifactStats) == 40 && offsetof(MotionArtifactStats, capture_failures) == 32);
 static_assert(sizeof(MotionFinalArtifacts) == 64 && offsetof(MotionFinalArtifacts, stats) == 56);
