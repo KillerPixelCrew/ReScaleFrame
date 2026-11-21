@@ -4,6 +4,12 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Anomaly's Rust bootstrap now installs DirectInput observation before
+requesting the engine's guarded `CInput::OnFrame` slot. It handles refusals
+and logging, and the native callbacks install the hooks. Source review
+traced cold entry and quiesce through the existing plugin session ABI.
+The updated bootstrap fixture remains unrun.
+
 The D3D11 to D3D12 SR bridge retries a refused frame fence signal on
 the stream that issued the work. It flushes a D3D11 retry before the wait
 and keeps the session and resources alive until retirement is proved.

@@ -18,7 +18,8 @@ struct rsf_anomaly_bootstrap_leaves {
     void (*motion)(const wchar_t* ini, rsf_game_log_fn log) noexcept;
     bool (*fg)(const wchar_t* ini, bool configure, HMODULE runtime, size_t build, rsf_game_log_fn log) noexcept;
     bool (*fg_installed)() noexcept;
-    uint32_t (*input)(size_t build, const char** reason) noexcept;
+    bool (*input_observation)(const char** reason) noexcept;
+    bool (*input_hook)(size_t build, const char** reason) noexcept;
     bool (*overlay)(HMODULE runtime, const wchar_t* ini, rsf_game_log_fn log) noexcept;
     void (*overlay_sink)() noexcept;
 };
@@ -37,12 +38,15 @@ constexpr rsf_anomaly_bootstrap_leaves leaves{
         return fg::configure_ini(ini, configure, runtime, build_profiles[build], log);
     },
     []() noexcept { return fg::installed(); },
-    [](size_t build, const char** reason) noexcept -> uint32_t {
-        if (!overlay::install_input_hooks(overlay::input_gate(), reason)) return 1;
+    [](const char** reason) noexcept {
+        if (!overlay::install_input_hooks(overlay::input_gate(), reason)) return false;
         overlay::set_input_observer(&input::received);
+        return true;
+    },
+    [](size_t build, const char** reason) noexcept {
         const auto& profile = build_profiles[build];
         return input::install(reinterpret_cast<std::byte*>(GetModuleHandleW(nullptr)), profile.image_size(), profile,
-            reason) ? 0 : 2;
+            reason);
     },
     [](HMODULE runtime, const wchar_t* ini, rsf_game_log_fn log) noexcept {
         overlay::StartOptions options{};

@@ -56,8 +56,10 @@ pub(crate) struct Leaves {
     /// Returns whether FG is selected; configures it and installs its bridge only when the flag is set.
     fg: unsafe extern "C" fn(*const u16, bool, HMODULE, usize, rsf_game_log_fn) -> bool,
     fg_installed: unsafe extern "C" fn() -> bool,
-    /// 0 installed, 1 DirectInput observation refused, 2 engine input hook refused.
-    input: unsafe extern "C" fn(usize, *mut *const c_char) -> u32,
+    /// Installs the DirectInput hooks and routes the records they return to input facts.
+    input_observation: unsafe extern "C" fn(*mut *const c_char) -> bool,
+    /// Installs the guarded engine `CInput::OnFrame` slot.
+    input_hook: unsafe extern "C" fn(usize, *mut *const c_char) -> bool,
     overlay: unsafe extern "C" fn(HMODULE, *const u16, rsf_game_log_fn) -> bool,
     overlay_sink: unsafe extern "C" fn(),
 }
@@ -313,18 +315,22 @@ fn orchestrate(
     READY
 }
 
+/// The engine input hook installs only after DirectInput observation, so its facts always have their receipts.
 fn install_input(leaves: &Leaves, build: usize) {
     let mut reason: *const c_char = ptr::null();
-    let status = unsafe { (leaves.input)(build, &mut reason) };
-    let fallback: &[u8] = match status {
-        0 => b"Anomaly input facts: guarded CInput slot 0 installed; buffered keyboard/mouse reads observed.",
-        1 => b"Anomaly DirectInput observation refused.",
-        _ => b"Anomaly input hook refused.",
-    };
-    if status != 0 && !reason.is_null() {
-        write_log(unsafe { CStr::from_ptr(reason) }.to_bytes());
+    let fallback: &[u8] = if !unsafe { (leaves.input_observation)(&mut reason) } {
+        b"Anomaly DirectInput observation refused."
+    } else if !unsafe { (leaves.input_hook)(build, &mut reason) } {
+        b"Anomaly input hook refused."
     } else {
+        write_log(b"Anomaly input facts: guarded CInput slot 0 installed; buffered keyboard/mouse reads observed.");
+        return;
+    };
+    // A refusing leaf reports a static site or reason string.
+    if reason.is_null() {
         write_log(fallback);
+    } else {
+        write_log(unsafe { CStr::from_ptr(reason) }.to_bytes());
     }
 }
 
