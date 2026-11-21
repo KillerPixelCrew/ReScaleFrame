@@ -132,16 +132,16 @@ class FrameCapture12 {
         }
         return size;
     } catch (...) { return 0; }
-    static const rsf_core_capture12_platform* platform() noexcept {
+public:
+    static const rsf_core_capture12_platform* native_platform() noexcept {
         static const rsf_core_capture12_platform value{allocate_leaf, copy_leaf, map_leaf, unmap_leaf, signal_leaf,
             completed_leaf, drain_leaf, name_leaf, rsf_input_dump_wants, rsf_input_dump_reserve, rsf_input_dump_failed,
             rsf_input_dump_pixels};
         return &value;
     }
 
-public:
     explicit FrameCapture12(bool environment = true) noexcept
-        : owner(rsf_core_capture12_create(environment, platform())) {}
+        : owner(rsf_core_capture12_create(environment, native_platform())) {}
     ~FrameCapture12() { rsf_core_capture12_destroy(owner); }
     FrameCapture12(const FrameCapture12&) = delete;
     FrameCapture12& operator=(const FrameCapture12&) = delete;

@@ -4,6 +4,13 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The public D3D12 frame dump API now returns the Rust readback owner
+directly. Rust checks the frame ABI, admits requests, polls completion,
+and refuses destruction while copies remain. Creation now reports
+allocation failure instead of returning a reader without an owner.
+The DLL and linked consumers use the same public C signatures and
+typed D3D12 callbacks. Build and runtime validation remain open.
+
 The Direct3D FG CPU path now uses Rust for its Win32 completion event,
 window ownership checks, input age and clocks, and bounded render-thread
 sampling. The wait still pumps sent messages when requested. The sampler

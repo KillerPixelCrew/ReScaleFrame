@@ -17,6 +17,9 @@ using Microsoft::WRL::ComPtr;
 static_assert(sizeof(rsf_dump_clock) == 48 && sizeof(rsf_dump_surface) == 12 && sizeof(rsf_dump_encoding) == 8);
 static_assert(sizeof(rsf_dump_pixels) == 40 && sizeof(rsf_texture_dump_options) == 40);
 static_assert(sizeof(rsf_named_frame_dump) == 48 && sizeof(rsf_named_frame_dump_report) == 16);
+static_assert(RSF_BACKEND_OK == 0 && RSF_BACKEND_ERROR_INVALID_ARGUMENT == -1 &&
+    RSF_BACKEND_ERROR_ABI_MISMATCH == -2 && RSF_BACKEND_ERROR_INIT_FAILED == -6 &&
+    RSF_BACKEND_ERROR_NOT_READY == -8 && RSF_BACKEND_ERROR_FEATURE_FAILED == -9);
 
 void read_clock(rsf_dump_clock* out)
 {
@@ -147,35 +150,21 @@ RSF_DUMP_EXPORT(int32_t, named_texture, (void* context, void* source, const rsf_
     (context, source, request, report))
 #undef RSF_DUMP_EXPORT
 
-struct rsf_input_dump12 { rsf::FrameCapture12 capture{false}; };
-extern "C" RSF_RUNTIME_API int32_t rsf_input_dump12_create(rsf_input_dump12** out) try
+extern "C" int32_t rsf_core_dump12_create(rsf_input_dump12**, const rsf_core_capture12_platform*);
+extern "C" RSF_RUNTIME_API int32_t rsf_input_dump12_create(rsf_input_dump12** out)
 {
-    if (!out) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    *out = new rsf_input_dump12; return RSF_BACKEND_OK;
-} catch (...) { if (out) *out = nullptr; return RSF_BACKEND_ERROR_INIT_FAILED; }
-extern "C" RSF_RUNTIME_API int32_t rsf_input_dump12_record(rsf_input_dump12* self, void* list, void* texture,
-    const rsf_frame_record* record, const char* name, uint32_t resource_state, uint32_t slot, rsf_dump_view view, float scale) try
-{
-    if (!self || !list || !texture || !record || record->struct_size < sizeof(*record) || !name) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (record->abi_version != RSF_GAME_FRAME_ABI_VERSION) return RSF_BACKEND_ERROR_ABI_MISMATCH;
-    if (!rsf_input_dump_wants(record)) return RSF_BACKEND_OK;
-    return self->capture.record(static_cast<ID3D12GraphicsCommandList*>(list), static_cast<ID3D12Resource*>(texture),
-        D3D12_RESOURCE_STATES(resource_state), *record, name, slot, 0, UINT32_MAX, view, scale ? scale : 1) ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
-} catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
-extern "C" RSF_RUNTIME_API int32_t rsf_input_dump12_submitted(rsf_input_dump12* self, void* queue, uint32_t slot) try
-{
-    if (!self || !queue) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    return self->capture.submitted(static_cast<ID3D12CommandQueue*>(queue), slot) ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
-} catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
-extern "C" RSF_RUNTIME_API int32_t rsf_input_dump12_poll(rsf_input_dump12* self) try
-{ return !self ? RSF_BACKEND_ERROR_INVALID_ARGUMENT : self->capture.flush_ready() ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED; }
-catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
-extern "C" RSF_RUNTIME_API void rsf_input_dump12_abandon(rsf_input_dump12* self, uint32_t slot)
-{ if (self) self->capture.abandon(slot); }
-extern "C" RSF_RUNTIME_API int32_t rsf_input_dump12_destroy(rsf_input_dump12* self) try
-{
-    if (!self) return RSF_BACKEND_OK;
-    if (!self->capture.flush_ready()) return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    if (self->capture.pending()) return RSF_BACKEND_ERROR_NOT_READY;
-    delete self; return RSF_BACKEND_OK;
-} catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
+    return rsf_core_dump12_create(out, rsf::FrameCapture12::native_platform());
+}
+
+#define RSF_DUMP12_EXPORT(result, name, signature, arguments) \
+    extern "C" result rsf_core_dump12_##name signature; \
+    extern "C" RSF_RUNTIME_API result rsf_input_dump12_##name signature \
+    { return rsf_core_dump12_##name arguments; }
+RSF_DUMP12_EXPORT(int32_t, record, (rsf_input_dump12* self, void* list, void* texture, const rsf_frame_record* record,
+    const char* name, uint32_t state, uint32_t slot, rsf_dump_view view, float scale),
+    (self, list, texture, record, name, state, slot, view, scale))
+RSF_DUMP12_EXPORT(int32_t, submitted, (rsf_input_dump12* self, void* queue, uint32_t slot), (self, queue, slot))
+RSF_DUMP12_EXPORT(int32_t, poll, (rsf_input_dump12* self), (self))
+RSF_DUMP12_EXPORT(void, abandon, (rsf_input_dump12* self, uint32_t slot), (self, slot))
+RSF_DUMP12_EXPORT(int32_t, destroy, (rsf_input_dump12* self), (self))
+#undef RSF_DUMP12_EXPORT

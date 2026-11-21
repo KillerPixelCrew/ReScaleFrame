@@ -4,10 +4,11 @@
 //! Rust owns configuration, admission, pending identity, slot and fence
 //! completion, retirement, core ticket refusal and publishing, and the
 //! readback buffer, source and fence leases. The C++ façade supplies typed
-//! D3D12/Win32 leaves, the shared capture naming and the input dump C ABI.
+//! D3D12/Win32 leaves, capture naming and the public symbol forwards.
 use crate::com_ref::ComRef;
 use crate::frame_capture_vk::{Legacy, Pixels, general, general_precision};
-use rsf_game_sys::rsf_frame_record as Record;
+use crate::sr_session::has_capacity;
+use rsf_game_sys::{RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record as Record};
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::fmt::Write as _;
 use std::fs;
@@ -25,6 +26,14 @@ const D3D12_API: u32 = 2;
 const MAX_FRAMES: u32 = 16;
 // `submitted` signals a fresh fence to this value on the recording queue.
 const SUBMITTED: u64 = 1;
+
+// rsf_backend_result from rescaleframe/backend.h.
+const OK: i32 = 0;
+const INVALID: i32 = -1;
+const ABI_MISMATCH: i32 = -2;
+const INIT_FAILED: i32 = -6;
+const NOT_READY: i32 = -8;
+const FEATURE_FAILED: i32 = -9;
 
 /// Copyable footprint of subresource 0 and the readback buffer size.
 #[repr(C)]
@@ -655,6 +664,117 @@ unsafe extern "C" fn rsf_core_capture12_flush_after_queue(
     queue: Handle,
 ) -> i32 {
     unsafe { self::owner(owner) }.map_or(0, |owner| i32::from(owner.flush_after_queue(queue)))
+}
+
+// Public capture readers use the same owner as the embedded backends without
+// the environment-driven capture window.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_dump12_create(out: *mut *mut Owner, ops: &'static Platform) -> i32 {
+    if out.is_null() {
+        return INVALID;
+    }
+    let owner = unsafe { rsf_core_capture12_create(0, ops) };
+    unsafe { out.write(owner) };
+    if owner.is_null() { INIT_FAILED } else { OK }
+}
+
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn rsf_core_dump12_record(
+    owner: *const Owner,
+    list: Handle,
+    source: Handle,
+    identity: *const Record,
+    role: *const c_char,
+    resource_state: u32,
+    slot: u32,
+    view: u32,
+    scale: f32,
+) -> i32 {
+    let Some(owner) = (unsafe { self::owner(owner) }) else {
+        return INVALID;
+    };
+    if list.is_null() || source.is_null() || role.is_null() || !unsafe { has_capacity(identity) } {
+        return INVALID;
+    }
+    let identity = unsafe { &*identity };
+    if identity.abi_version != RSF_GAME_FRAME_ABI_VERSION {
+        return ABI_MISMATCH;
+    }
+    if unsafe { (owner.ops.wants)(identity) } == 0 {
+        return OK;
+    }
+    let role = unsafe { CStr::from_ptr(role) };
+    let scale = if scale == 0.0 { 1.0 } else { scale };
+    if owner.record(
+        list,
+        source,
+        resource_state,
+        identity,
+        role,
+        slot,
+        0,
+        NO_RESET,
+        view,
+        scale,
+    ) {
+        OK
+    } else {
+        FEATURE_FAILED
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_dump12_submitted(
+    owner: *const Owner,
+    queue: Handle,
+    slot: u32,
+) -> i32 {
+    let Some(owner) = (unsafe { self::owner(owner) }) else {
+        return INVALID;
+    };
+    if queue.is_null() {
+        INVALID
+    } else if owner.submitted(queue, slot, None) {
+        OK
+    } else {
+        FEATURE_FAILED
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_dump12_poll(owner: *const Owner) -> i32 {
+    let Some(owner) = (unsafe { self::owner(owner) }) else {
+        return INVALID;
+    };
+    if owner.flush(&mut owner.lock(), ALL_SLOTS, true) {
+        OK
+    } else {
+        FEATURE_FAILED
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_dump12_abandon(owner: *const Owner, slot: u32) {
+    unsafe { rsf_core_capture12_abandon(owner, slot) };
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_dump12_destroy(owner: *mut Owner) -> i32 {
+    let Some(capture) = (unsafe { self::owner(owner) }) else {
+        return OK;
+    };
+    {
+        let mut state = capture.lock();
+        if !capture.flush(&mut state, ALL_SLOTS, true) {
+            return FEATURE_FAILED;
+        }
+        if !state.pending.is_empty() {
+            return NOT_READY;
+        }
+    }
+    unsafe { rsf_core_capture12_destroy(owner) };
+    OK
 }
 
 #[cfg(test)]
