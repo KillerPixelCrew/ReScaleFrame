@@ -40,6 +40,7 @@ const BUSY: i32 = -4;
 const COLD: u8 = 0;
 const STARTED: u8 = 1;
 const FAILED: u8 = 2;
+const RESET_PENDING: u8 = 3;
 const AUTO_FG: u32 = 1 << RSF_FG_BACKEND_AUTO;
 const KNOWN_SR: u32 = (1 << RSF_SR_DLSS)
     | (1 << RSF_SR_FSR2)
@@ -66,6 +67,7 @@ fn platform() -> &'static rsf_overlay_platform {
 static CLAIMED: AtomicBool = AtomicBool::new(false);
 static CONFIG: OnceLock<Config> = OnceLock::new();
 static LIFECYCLE: AtomicU8 = AtomicU8::new(COLD);
+static PANEL: Mutex<()> = Mutex::new(());
 static STATE: LazyLock<Mutex<State>> = LazyLock::new(|| Mutex::new(State::default()));
 static APPLY_ACTIVE: AtomicBool = AtomicBool::new(false);
 // Keep refusal accounting independent of the settings lock, which covers INI I/O.
@@ -1135,8 +1137,8 @@ fn apply_intent(config: &Config, intent: &rsf_overlay_intent) {
     }
 }
 
-// The adapter calls present and notify on the same graphics owner. No graphics call or
-// adapter callback borrows the service's state lock.
+// The adapter calls present and notify on the same graphics owner. Serialize panel
+// effects without borrowing the settings/state lock across caller callbacks.
 unsafe extern "C" fn present(chain: *mut c_void, drawn: *mut u32) -> i32 {
     if !drawn.is_null() {
         unsafe { drawn.write(0) };
@@ -1146,6 +1148,9 @@ unsafe extern "C" fn present(chain: *mut c_void, drawn: *mut u32) -> i32 {
     }
     let Some(config) = CONFIG.get() else {
         return NOT_READY;
+    };
+    let Ok(_panel) = PANEL.try_lock() else {
+        return BUSY;
     };
     let mut width = 0;
     let mut height = 0;
@@ -1160,10 +1165,12 @@ unsafe extern "C" fn present(chain: *mut c_void, drawn: *mut u32) -> i32 {
     {
         return NOT_READY;
     }
-    match LIFECYCLE.load(Ordering::Acquire) {
-        FAILED => return NOT_READY,
-        STARTED => {}
-        _ => match unsafe {
+    let lifecycle = LIFECYCLE.load(Ordering::Acquire);
+    if matches!(lifecycle, FAILED | RESET_PENDING) {
+        return NOT_READY;
+    }
+    if lifecycle != STARTED {
+        match unsafe {
             (platform().start.unwrap())(chain, config.callbacks.log, config.callbacks.user)
         } {
             0 => {
@@ -1176,7 +1183,7 @@ unsafe extern "C" fn present(chain: *mut c_void, drawn: *mut u32) -> i32 {
             }
             1 => LIFECYCLE.store(STARTED, Ordering::Release),
             _ => return NOT_READY,
-        },
+        }
     }
 
     let sample = Sample::read(config);
@@ -1245,16 +1252,55 @@ unsafe extern "C" fn notify(_chain: *mut c_void, reason: u32) -> i32 {
         state().chain_size = [0; 2];
         return OK;
     }
-    let previous = LIFECYCLE.swap(COLD, Ordering::AcqRel);
-    if previous != COLD && unsafe { (platform().stop.unwrap())() } != 0 {
-        return NOT_READY;
-    }
+    let Ok(_panel) = PANEL.try_lock() else {
+        return BUSY;
+    };
+    let previous = match reset_panel(&LIFECYCLE, || unsafe { (platform().stop.unwrap())() }) {
+        Ok(previous) => previous,
+        Err(result) => return result,
+    };
     if previous == STARTED {
         config.callbacks.say(format_args!(
             "RSF overlay: released for a chain/device reset; it restarts at the next accepted Present."
         ));
     }
     OK
+}
+
+// Called with the panel admission held. A refused stop must not make the
+// renderer look cold or let another Present start it over the old one.
+fn reset_panel(lifecycle: &AtomicU8, stop: impl FnOnce() -> i32) -> Result<u8, i32> {
+    let previous = lifecycle.load(Ordering::Acquire);
+    if previous == COLD {
+        return Ok(COLD);
+    }
+    lifecycle.store(RESET_PENDING, Ordering::Release);
+    if stop() != OK {
+        return Err(NOT_READY);
+    }
+    lifecycle.store(COLD, Ordering::Release);
+    Ok(previous)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reset_runs_stop_again_until_the_panel_is_cold() {
+        let lifecycle = AtomicU8::new(STARTED);
+        assert_eq!(reset_panel(&lifecycle, || -1), Err(NOT_READY));
+        assert_eq!(lifecycle.load(Ordering::Acquire), RESET_PENDING);
+        assert_eq!(
+            reset_panel(&lifecycle, || {
+                assert_eq!(lifecycle.load(Ordering::Acquire), RESET_PENDING);
+                0
+            }),
+            Ok(RESET_PENDING)
+        );
+        assert_eq!(lifecycle.load(Ordering::Acquire), COLD);
+        assert_eq!(reset_panel(&lifecycle, || unreachable!()), Ok(COLD));
+    }
 }
 
 fn started() -> bool {

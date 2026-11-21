@@ -786,7 +786,9 @@ impl Service {
         if (panel.chain != 0 && panel.chain != chain as usize)
             || (panel.device != 0 && panel.device != device)
         {
-            unsafe { (self.api.notify)(chain, RSF_OVERLAY_NOTIFY_DEVICE_RESET) };
+            if unsafe { (self.api.notify)(chain, RSF_OVERLAY_NOTIFY_DEVICE_RESET) } != OK {
+                return;
+            }
             self.say(format_args!("Anomaly overlay: the engine presented on a new swap chain or device; the panel restarts on it."));
         }
         panel.chain = chain as usize;

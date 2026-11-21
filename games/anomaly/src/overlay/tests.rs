@@ -435,6 +435,8 @@ impl PartialEq for Refusal {
 
 static VISIBLE: AtomicU32 = AtomicU32::new(0);
 static RESETS: AtomicU32 = AtomicU32::new(0);
+static REFUSE_RESET: AtomicBool = AtomicBool::new(false);
+const NOT_READY: i32 = -3;
 static TOGGLES: AtomicU32 = AtomicU32::new(0);
 static INSERT: AtomicBool = AtomicBool::new(false);
 unsafe extern "C" fn visible() -> u32 {
@@ -443,6 +445,9 @@ unsafe extern "C" fn visible() -> u32 {
 unsafe extern "C" fn count_notify(_: *mut c_void, reason: u32) -> i32 {
     if reason == RSF_OVERLAY_NOTIFY_DEVICE_RESET {
         RESETS.fetch_add(1, Ordering::SeqCst);
+        if REFUSE_RESET.load(Ordering::SeqCst) {
+            return NOT_READY;
+        }
     }
     OK
 }
@@ -488,11 +493,18 @@ fn the_panel_restarts_on_a_new_chain_and_polls_insert() {
     service.present(&mut panel, first);
     service.present(&mut panel, first);
     assert_eq!(RESETS.load(Ordering::SeqCst), 0);
-    service.present(&mut panel, ptr::without_provenance_mut(0x200));
+    let next = ptr::without_provenance_mut(0x200);
+    REFUSE_RESET.store(true, Ordering::SeqCst);
+    service.present(&mut panel, next);
     assert_eq!(RESETS.load(Ordering::SeqCst), 1);
-    DEVICE.store(0x2000, Ordering::SeqCst);
-    service.present(&mut panel, ptr::without_provenance_mut(0x200));
+    assert_eq!(panel.chain, first.addr());
+    REFUSE_RESET.store(false, Ordering::SeqCst);
+    service.present(&mut panel, next);
     assert_eq!(RESETS.load(Ordering::SeqCst), 2);
+    assert_eq!(panel.chain, next.addr());
+    DEVICE.store(0x2000, Ordering::SeqCst);
+    service.present(&mut panel, next);
+    assert_eq!(RESETS.load(Ordering::SeqCst), 3);
     assert!(
         lines(&log)
             .iter()

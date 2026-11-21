@@ -4,6 +4,13 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The Runtime overlay keeps a device reset pending until its stop call
+succeeds. Present and reset share panel admission, so a refused stop
+cannot open a new renderer. Anomaly keeps the previous chain identity
+and retries the reset before admitting a new chain. Unrun fixtures
+cover both refusal paths. Source review checked the existing notify
+ABI and its Present-thread call order.
+
 Anomaly observer lifecycle and renderer status calls now return busy
 when a startup or teardown callback reenters the observer. The status
 output is written only after a complete snapshot. An unrun fixture
