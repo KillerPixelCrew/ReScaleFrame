@@ -52,15 +52,21 @@ The [Anomaly release record](releases/v0.1.2-anomaly.md) distinguishes the shipp
 
 The GameSDK stays at ABI 24. The source audit at `6414a05` compared 88 headers across the SDK, Runtime and Anomaly against `2db07f4`. Four headers differed after removing comments and whitespace. `native_fg.h` adds three linked-runtime declarations, `d3d11_present_bridge.h` adds `rsf_d3d11_present_source_queue`, and `overlay_api.h` raises `RSF_OVERLAY_SERVICE_OPTION_LIMIT` from 24 to 32. `shader_compile.h` changes the compiler helper's native ownership. All existing C function signatures and public record layouts matched. At `2ceec77` the public include tree still matched that audit and the tracked carrier `.def` files still matched `2db07f4`.
 
-The source check on `31a06a94` and the linked FG Auto merge matches both
-public include trees and all four carrier `.def` files to `2ceec77`.
-Each of the 99 Runtime Rust export directives names a Rust source definition.
+The source check at `a6f4dedb` matched the tracked GameSDK and Runtime
+public headers and all four carrier `.def` files to `2ceec77`. Each
+of the 99 Runtime Rust export directives names a source definition in
+the orchestrator crate. The Runtime DLL, combined loader and Minecraft
+still consume the same `rsf_orchestrator_core` object target. Its public
+link to `rsf_orchestrator_rust` carries the archive to both forms. The
+DLL still retains the native Vulkan service archive with whole-archive
+linkage.
 Compared with `58fe95a`, five pre-existing C/C++ exports now use Rust
 directives. They are the Runtime version, CPU event and dispatch, and SR
 surface set and release entries. Anomaly still declares the same three
-DLL exports as `58fe95a` and borrows the already-loaded Runtime by name.
-Both linked and DLL consumers still need matching-feature builds and PE
-export comparison on this candidate.
+DLL exports as `58fe95a` and borrows the already-loaded Runtime by name
+for session, presentation and FG lookups. Its CMake target borrows the
+Runtime include paths. Matching-feature builds and PE export comparison
+remain open for this candidate.
 
 On November 21, 2026, both archived MSVC Release trees (`build/rust-migration` and `build/rust-migration-streamline`) matched the recorded case-sensitive export names and ordinals for Runtime (381), AC7 (256), Loader (273), Minecraft (267), and the staged C++ Anomaly adapter (3). Neither archived Anomaly DLL imports the Runtime DLL statically. Both archives predate `d4de507`.
 
