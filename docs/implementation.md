@@ -107,6 +107,13 @@ detours retain their original call order and the binary record remains
 record. The two read-only probes share the hook transaction. Build and
 live capture verification remain open.
 
+RDR2's Rust Social Club owner checks the recorded renderer build and
+publishes the existing backbuffer relay. It preserves RAGE's supplied
+index on an external recording list and leaves the original comparison
+in the other path. If enable is refused after registration, the relay
+stays valid for any caller already inside it. Source comparison checked
+the guard and relay bytes. Build and live verification remain open.
+
 Fallout 4 now owns exact-build identity, GameSDK lifecycle, Runtime
 session setup and cold D3D11 creation in Rust. The creation owner
 checks the final outer swapchain slot before binding presentation, and

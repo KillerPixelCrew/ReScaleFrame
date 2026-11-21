@@ -279,7 +279,7 @@ constexpr rsf::rdr2::AsiPlatform native{
     install_census,
     [](const wchar_t* directory) noexcept { return rsf_rdr2_install_camera_probe(directory); },
     [](const wchar_t* library) noexcept { return rsf_rdr2_install_camera_reference(self, library); },
-    [](bool trace) noexcept { return rsf_rdr2_install_social_club_fix(log, trace); },
+    rsf_rdr2_install_social_club_fix,
     []() noexcept {
         if (HANDLE worker = CreateThread(nullptr, 0, startup, nullptr, 0, nullptr)) CloseHandle(worker);
     },

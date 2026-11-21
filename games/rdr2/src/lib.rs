@@ -25,6 +25,8 @@ mod scene;
 mod script_input;
 #[cfg(windows)]
 mod script_input_abi;
+#[cfg(windows)]
+mod social_club;
 
 use platform::Platform;
 use rsf_game_sys::{

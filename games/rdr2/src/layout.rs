@@ -91,6 +91,34 @@ pub(crate) const FRAME_COUNTER: usize = 0x542_904c;
 pub(crate) const FRAME_COUNTER_POINTER: usize = 0x542_9058;
 pub(crate) const FRAME_TIME: usize = 0x59b_393c;
 
+/// Exact Social Club 2.4.0.240 backbuffer renderer profile.
+#[cfg(windows)]
+pub(crate) mod social_club {
+    pub(crate) const IMAGE_TIMESTAMP: u32 = 0x6a86_d560;
+    pub(crate) const IMAGE_SIZE: u32 = 0x2e000;
+    pub(crate) const DISPATCH_BYTES: [u8; 16] = [
+        0x40, 0x53, 0x48, 0x83, 0xec, 0x30, 0x48, 0x83, 0x79, 0x08, 0x00, 0x48, 0x8b, 0xd9, 0x75,
+        0x29,
+    ];
+    pub(crate) const ENTRY: usize = 0x4b70;
+    pub(crate) const ENTRY_BYTES: [u8; 15] = [
+        0x48, 0x89, 0x5c, 0x24, 0x18, 0x48, 0x89, 0x54, 0x24, 0x10, 0x55, 0x56, 0x57, 0x41, 0x54,
+    ];
+    pub(crate) const GATE: usize = 0x4b89;
+    pub(crate) const GATE_BYTES: [u8; 15] = [
+        0x80, 0xb9, 0x0c, 0x04, 0x00, 0x00, 0x00, 0x4d, 0x8b, 0xf1, 0x48, 0x8b, 0xf9, 0x74, 0x17,
+    ];
+    pub(crate) const AFTER_COMPARISON: usize = 0x4b90;
+    pub(crate) const SWAPCHAIN: usize = 0x20;
+    pub(crate) const QUERY_CURRENT_INDEX: usize = 0x40c;
+    // With R9 set (external command list), set ZF and continue at the engine's own branch.
+    // Without R9, execute its original comparison first. Resume addresses are filled at 14 and 35.
+    pub(crate) const RELAY: [u8; 43] = [
+        0x4d, 0x85, 0xc9, 0x74, 0x11, 0x4d, 0x39, 0xc9, 0xff, 0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0x80, 0xb9, 0x0c, 0x04, 0, 0, 0, 0xff, 0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    ];
+}
+
 /// Camera probe entry bytes and the native worker fields copied by its Version 2 record.
 #[cfg(windows)]
 pub(crate) mod camera_probe {
