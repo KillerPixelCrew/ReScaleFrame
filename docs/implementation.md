@@ -228,6 +228,14 @@ for invalid history. A refused camera clears the SDK record and history
 flag. The existing camera fixture links the same Rust archive as the
 adapter. It remains unrun.
 
+Skyrim SE's sampler owner now checks the native flush entry and owns
+scene admission, mip bias, slot selection, and pending restoration in
+Rust. The typed detour still forwards the native flush first. The owner
+uses guarded reads of the same cached sampler tables and calls the
+existing Runtime sampler service on the renderer thread. Stop checks
+for entries again after disabling the hook. Live restoration and
+shutdown remain unverified.
+
 Unity package D3D12 SR contexts and their recording slots are Rust-owned.
 The existing Unity bridge still provides recording and completion facts.
 The view owner preserves reconfiguration, spatial fallback and retirement

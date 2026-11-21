@@ -11,6 +11,7 @@ mod layout;
 mod observers;
 mod platform;
 mod plugin;
+mod sampling;
 mod session;
 
 use platform::CreationCall;

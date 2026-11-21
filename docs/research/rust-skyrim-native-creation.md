@@ -114,14 +114,29 @@ Still C++ in `rsf_game_skyrim_se`, in suggested order:
 3. `cpu_events.cpp` with `input_ownership.h` and `screen_classification.h`: CPU frame, input
    ownership, prospective source and screen classification (one hook, about forty RVAs). Its
    fixture `tests/skyrim_input.cpp` compiles the source directly.
-4. `presentation_inputs.cpp` (hook `+116ac80`), `sampling.cpp` (sampler `+1010de0`),
-   `resolution.cpp`, `render_inputs.cpp`, `auxiliary.cpp`: pre-HDR inputs, sampler binding,
-   reduced-resolution ownership, SR reconstruction and auxiliary views.
+4. `presentation_inputs.cpp` (hook `+116ac80`), `resolution.cpp`, `render_inputs.cpp`,
+   `auxiliary.cpp`: pre-HDR inputs, reduced-resolution ownership, SR reconstruction and
+   auxiliary views. `sampling.rs` now owns the sampler hook at `+1010de0`.
 5. `camera.rs` owns the native camera conversion for both SR and presentation. It
    uses the shared GameSDK inverse with the old float output and double accumulation
    rules. The adapter still supplies the same copied row-vector cache. Refusals clear
    the camera output and history flag. `tests/skyrim_camera.cpp` now links the Rust
    archive. Source comparison and layout review were the scope of this change.
+
+## Sampler hook
+
+Rust uses the existing guarded read and MinHook leaves for the sampler flush.
+It reads the same cached colour and depth targets, shadow selector, active
+ratios, 16 address and filter pairs, and baseline sampler table. The
+calculation and restore mask follow the evidence in
+[the Skyrim integration report](skyrim-se-integration.md). The C++ flush
+and by-name Runtime sampler call keep their signatures. A snapshot of the
+host binding is copied before any host callback. A refused export lookup
+leaves the hook uncreated, and a refused enable restores the previous
+binding. Restore reports now print zero render dimensions when the scene
+check refuses. Stop rechecks in-flight entries after native disable and
+keeps the trampoline available. Source comparison, layout review and pinned
+formatting passed. Build, linkage, device and game checks remain open.
 
 ## Session lifecycle
 
