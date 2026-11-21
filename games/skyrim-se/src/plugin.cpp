@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <rescaleframe/game_api.h>
 #include <rescaleframe/game_plugin_util.h>
-#include <rescaleframe/sha256_file.h>
-#include <rescaleframe/version.h>
 #include <MinHook.h>
 #include <d3d11.h>
 #include <atomic>
@@ -18,6 +16,7 @@
 #include "presentation_inputs.h"
 #include "compatibility.h"
 #include "native_creation.h"
+#include "observer_platform.h"
 #include <rescaleframe/d3d11_host.h>
 #include <string>
 #if defined(_MSC_VER)
@@ -25,8 +24,6 @@
 #endif
 
 namespace {
-constexpr char fingerprint[] =
-    "846efccf0c1374d71f892907f46549560f2fcb0a75cb87a3eed438baa0f1402f";
 int accept_presentation_window(void*, void* window) {
     wchar_t name[128]{};
     return window && GetClassNameW(static_cast<HWND>(window), name, 128) &&
@@ -287,53 +284,25 @@ void observe_upload(void* renderer, uint8_t flags) noexcept {
     calls.fetch_sub(1, std::memory_order_acq_rel);
 }
 
-bool match_target()
+template<bool (*Guard)()>
+int32_t observer_guard() noexcept try { return Guard() ? 1 : 0; }
+catch (...) { return -1; }
+
+int32_t admit_observers()
 {
     wchar_t path[32768]{};
     const auto length = GetModuleFileNameW(nullptr, path, 32768);
-    if (!length || length >= 32768) return false;
-    const auto* leaf = std::wcsrchr(path, L'\\');
-    if (_wcsicmp(leaf ? leaf + 1 : path, L"SkyrimSE.exe")) return false;
-    std::string hash;
-    if (!rsf::sha256_file(path, hash) || hash != fingerprint) return false;
-    constexpr unsigned char expected[] = {
-        0x48,0x8b,0x05,0x39,0x5d,0x3b,0x02,0x0f,0x57,0xc0,
-        0x48,0x8b,0x90,0xf0,0x01,0x00,0x00,0x80,0x7a,0x18,0x00};
-    target = reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr)) + 0x101e360;
-    unsigned char actual[sizeof(expected)]{};
-    if (!copy(actual, target, sizeof(actual)) || std::memcmp(actual, expected, sizeof(actual))) return false;
-    constexpr unsigned char process_expected[] = {
-        0x48,0x89,0x5c,0x24,0x08,0x48,0x89,0x6c,0x24,0x10,
-        0x48,0x89,0x74,0x24,0x20,0x44,0x89,0x44,0x24,0x18};
-    process_target = reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr)) + 0x14edbf0;
-    unsigned char process_actual[sizeof(process_expected)]{};
-    constexpr unsigned char call_expected[] = {0xe8,0x04,0x2e,0xfb,0xff};
-    unsigned char call_actual[sizeof(call_expected)]{};
-    const auto* site = reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr)) + 0x153ade7;
-    constexpr unsigned char reset_expected[] = {0x44,0x39,0x71,0x30,0x74,0x09,0xe8,0x61,0x05,0x00,0x00,0x44,0x89,0x73,0x30};
-    unsigned char reset_actual[sizeof(reset_expected)]{};
-    const auto* reset_site = reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr)) + 0x1544df4;
-    constexpr unsigned char resolution_expected[]{0x83,0xb9,0x28,0x01,0x00,0x00,0x00,0x48,0x8b,0xd1,0x0f,0x85,0x7f,0x01,0x00,0x00};
-    unsigned char resolution_actual[sizeof(resolution_expected)]{};
-    resolution_target = reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr)) + 0x101e130;
-    constexpr unsigned char end_expected[]{0x48,0x83,0xec,0x48,0xb9,0x01,0x00,0x00,0x00,0xe8,0x22,0xa9,0x58,0x00};
-    unsigned char end_actual[sizeof(end_expected)]{};
-    end_target = reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr)) + 0x1009f70;
-    constexpr unsigned char viewport_expected[]{0x48,0x83,0xec,0x68,0x0f,0x29,0x74,0x24,0x50,0xf3,0x0f,0x10,0x35,0xb7,0x24,0xb5,0x00};
-    unsigned char viewport_actual[sizeof(viewport_expected)]{};
-    constexpr unsigned char upload_expected[]{0x48,0x89,0x5c,0x24,0x08,0x55,0x48,0x8d,0xac,0x24,0xe0,0xfd,0xff,0xff,0x48,0x81,0xec,0x20,0x03,0x00,0x00};
-    unsigned char upload_actual[sizeof(upload_expected)]{};
-    upload_target = reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr)) + 0x100ae80;
-    const auto checked = [](bool valid, const char* stage) { if (!valid) reason = stage; return valid; };
-    return checked(rsf::skyrim::sampling_guard(), "Skyrim render guard refused: sampler1010DE0.") &&
-        checked(rsf::skyrim::presentation_inputs_guard(), "Skyrim render guard refused: presentation inputs.") &&
-        checked(copy(process_actual, process_target, sizeof(process_actual)) && !std::memcmp(process_actual, process_expected, sizeof(process_actual)), "Skyrim render guard refused: process14EDBF0.") &&
-        checked(copy(call_actual, site, sizeof(call_actual)) && !std::memcmp(call_actual, call_expected, sizeof(call_actual)), "Skyrim render guard refused: process caller153ADE7.") &&
-        checked(copy(reset_actual, reset_site, sizeof(reset_actual)) && !std::memcmp(reset_actual, reset_expected, sizeof(reset_actual)), "Skyrim render guard refused: reset1544DF4.") &&
-        checked(copy(resolution_actual, resolution_target, sizeof(resolution_actual)) && !std::memcmp(resolution_actual, resolution_expected, sizeof(resolution_actual)), "Skyrim render guard refused: resolution101E130.") &&
-        checked(copy(end_actual, end_target, sizeof(end_actual)) && !std::memcmp(end_actual, end_expected, sizeof(end_actual)), "Skyrim render guard refused: renderer end1009F70.") &&
-        checked(copy(viewport_actual, reinterpret_cast<const unsigned char*>(GetModuleHandleW(nullptr)) + 0x1009960, sizeof(viewport_actual)) && !std::memcmp(viewport_actual, viewport_expected, sizeof(viewport_actual)), "Skyrim render guard refused: viewport1009960.") &&
-        checked(copy(upload_actual, upload_target, sizeof(upload_actual)) && !std::memcmp(upload_actual, upload_expected, sizeof(upload_actual)), "Skyrim render guard refused: upload100AE80.");
+    rsf_skyrim_observer_targets sites{};
+    const auto result = rsf_skyrim_observer_admit(path, length, rsf::skyrim::creation_platform(),
+        observer_guard<rsf::skyrim::sampling_guard>, observer_guard<rsf::skyrim::presentation_inputs_guard>, &sites);
+    if (result == 1) {
+        target = sites.jitter;
+        process_target = sites.process;
+        resolution_target = sites.resolution;
+        end_target = sites.end;
+        upload_target = sites.upload;
+    }
+    return result;
 }
 
 rsf_result prepare(const rsf_game_prepare_args* args) noexcept try
@@ -343,7 +312,9 @@ rsf_result prepare(const rsf_game_prepare_args* args) noexcept try
     if (!args->host->session_id) return RSF_ERROR_INVALID_ARGUMENT;
     std::lock_guard<std::mutex> lock(lifecycle);
     if (prepared || calls.load(std::memory_order_acquire) || rsf::skyrim::cpu_busy()) return RSF_ERROR_BUSY;
-    if (!match_target()) {
+    const auto admitted = admit_observers();
+    if (admitted < 0) return RSF_ERROR_NOT_READY;
+    if (!admitted) {
         reason = "Skyrim native observer refused: executable identity or native hook bytes differ.";
         return RSF_ERROR_NATIVE_REFUSED;
     }
@@ -423,7 +394,7 @@ rsf_result prepare(const rsf_game_prepare_args* args) noexcept try
     const auto ini = directory + L"\\ReScaleFrame.ini";
     rsf_d3d11_host_setup setup{}; setup.struct_size = sizeof(setup); setup.abi_version = RSF_D3D11_HOST_ABI_VERSION;
     setup.configuration_path = ini.c_str(); setup.configuration_section = L"Rendering";
-    setup.runtime_directory = directory.c_str(); setup.identity_utf8 = "skyrim-se"; setup.executable_sha256 = fingerprint;
+    setup.runtime_directory = directory.c_str(); setup.identity_utf8 = "skyrim-se"; setup.executable_sha256 = rsf_skyrim_executable_sha256();
     setup.engine_type = 0; setup.engine_version_utf8 = "1.7.104";
     setup.project_id_utf8 = "668392a0-ecfe-4d0c-9f58-c2838c5ca308";
     setup.units_to_meters = 0.0142875f; setup.quality_choices = 0x1f;
@@ -612,22 +583,11 @@ rsf_result status(rsf_game_renderer_status* output) noexcept try
 }
 catch (...) { return RSF_ERROR_NOT_READY; }
 
-rsf_detection detect(const rsf_game_probe* probe) noexcept
-{
-    return probe && probe->struct_size >= sizeof(*probe) && probe->pe_machine == 0x8664 &&
-        rsf_game::equal_ascii(probe->executable_name_utf8, "SkyrimSE.exe") &&
-        rsf_game::equal_ascii(probe->sha256_hex, fingerprint) ? RSF_GAME_RECOGNIZED : RSF_GAME_UNKNOWN;
-}
 }
 
 extern "C" __declspec(dllexport) rsf_result rsf_get_game_plugin_api(
     uint32_t requested_abi, rsf_game_plugin_api* api) noexcept
 {
-    if (!api || api->struct_size < sizeof(*api)) return RSF_ERROR_INVALID_ARGUMENT;
-    if (requested_abi != RSF_GAME_ABI_VERSION) return RSF_ERROR_ABI_MISMATCH;
-    *api = {sizeof(*api), RSF_GAME_ABI_VERSION,
-        {"skyrim-se", "Skyrim Special Edition", RSF_VERSION_STRING, 0,
-         "Experimental native-resolution SR; reduced-resolution SR, FG and latency remain incomplete."},
-        detect, {prepare, start, quiesce, stop, status}};
-    return RSF_OK;
+    constexpr rsf_game_hooks_api hooks{prepare, start, quiesce, stop, status};
+    return rsf_skyrim_publish_api(requested_abi, api, &hooks);
 }

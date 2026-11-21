@@ -89,14 +89,17 @@ toolchain is not installed), `cargo metadata --locked --offline`, `engine.json` 
 
 Still C++ in `rsf_game_skyrim_se`, in suggested order:
 
-1. `plugin.cpp`: GameSDK identity (`SkyrimSE.exe`, SHA-256 `846efccf...1402f`, AMD64, info
-   strings) and lifecycle (prepare/start/quiesce/stop/status, process-lived D3D11 host session and
+1. `plugin.cpp`: lifecycle (prepare/start/quiesce/stop/status, process-lived D3D11 host session and
    its `rsf_d3d11_host_setup` identity, units, motion, capability bits, presentation bridge 3 and
    window class policy, per-monitor-v2 DPI request), plus five observers and their guards: jitter
    `+101e360`, ProcessMain `+14edbf0` with caller `+153ade7` and TAA bypass bytes `+18`/`+30`,
    reset `+1544df4`, resolution `+101e130`, renderer end `+1009f70` with presentation binding from
    `+3330198`, viewport guard `+1009960`, frame upload `+100ae80`, and the bounded native
-   diagnostics. The next slice should move identity and lifecycle together with these observers.
+   diagnostics. `plugin.rs` now owns the GameSDK identity and eight observer guards.
+   `layout.rs` holds the same verified RVAs and bytes, and the platform reuses the cold creation
+   path's guarded reads and file hash. Rust checks the platform size before its version and
+   publishes the five hook targets only after every guard passes. Source comparison matched
+   the profile and guard data. Build, ABI and in-game verification remain open.
 2. `compatibility.cpp`: Community Shaders 1.9.1 handover (DLL SHA-256 `10ba95e6...097827`, PE image
    validation, six guard sites, `GetProcAddress` interception of `SKSEPlugin_Load`, Feature
    configure `+3a4b30` and HDR `+45cbd0` hooks, state machine, pre-device retention and the

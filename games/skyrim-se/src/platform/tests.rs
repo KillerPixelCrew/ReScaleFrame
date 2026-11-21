@@ -9,6 +9,8 @@ fn wide_names_are_terminated_utf16() {
 #[test]
 fn register_refuses_missing_short_and_foreign_tables() {
     assert!(unsafe { register(ptr::null()) }.is_none());
+    let size_only = size_of::<u32>() as u32;
+    assert!(unsafe { register(ptr::from_ref(&size_only).cast()) }.is_none());
     // Only the header is read from a refused table.
     let short = [8u32, PLATFORM_VERSION, 0, 0];
     assert!(unsafe { register(short.as_ptr().cast()) }.is_none());

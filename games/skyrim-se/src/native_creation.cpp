@@ -7,6 +7,7 @@
 // captures the native return address and calls the original on its own frame.
 #include "native_creation.h"
 #include "native_creation_platform.h"
+#include "observer_platform.h"
 #include "compatibility.h"
 #include <rescaleframe/sha256_file.h>
 #include <rescaleframe/steam_d3d11_chain.h>
@@ -150,8 +151,9 @@ const rsf_skyrim_creation_platform platform{
 }
 
 bool native_creation_prepare(const rsf_game_host_services& host) {
-    return rsf_skyrim_creation_prepare(&host, &platform);
+    return rsf_skyrim_creation_prepare(&host, creation_platform());
 }
+const rsf_skyrim_creation_platform* creation_platform() noexcept { return &platform; }
 bool native_creation_start() { return rsf_skyrim_creation_start(); }
 void native_creation_quiesce() { rsf_skyrim_creation_quiesce(); }
 bool native_creation_busy() { return rsf_skyrim_creation_busy(); }

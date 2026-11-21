@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 //! Skyrim Special Edition (Steam 1.7.104.0) adapter policy linked into
-//! `ReScaleFrame.Game.SkyrimSE.dll`. This first slice owns the cold native creation root and its
-//! Steam Present cooperation (`creation.rs`), with the game and Display Tweaks route layout in
-//! `layout.rs`. `native_creation.cpp` lends the native leaves (`platform.rs`) and keeps the C++
-//! entry points that `plugin.cpp` calls; GameSDK identity and lifecycle remain C++ for now.
+//! `ReScaleFrame.Game.SkyrimSE.dll`. Rust owns the GameSDK table and observer admission
+//! (`plugin.rs`), and cold native creation with Steam Present cooperation (`creation.rs`).
+//! Native code lends the typed callbacks and still owns the renderer lifecycle.
 mod creation;
 mod layout;
 mod platform;
+mod plugin;
 
 use platform::{CreationCall, Platform};
 use rsf_game_sys::rsf_game_host_services;

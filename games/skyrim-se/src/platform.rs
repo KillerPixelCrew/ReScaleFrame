@@ -158,18 +158,28 @@ static PLATFORM: AtomicPtr<Platform> = AtomicPtr::new(ptr::null_mut());
 /// # Safety
 /// `platform` is null or points at a table readable for at least its leading header that, when
 /// accepted, lives for the process.
-pub(crate) unsafe fn register(platform: *const Platform) -> Option<&'static Platform> {
+pub(crate) unsafe fn inspect(platform: *const Platform) -> Option<&'static Platform> {
     if platform.is_null() {
         return None;
     }
     // Only the leading header is readable from a short or foreign table.
     let header = platform.cast::<u32>();
-    let (size, version) = unsafe { (header.read(), header.add(1).read()) };
-    if (size as usize) < size_of::<Platform>() || version != PLATFORM_VERSION {
+    if (unsafe { header.read() } as usize) < size_of::<Platform>()
+        || unsafe { header.add(1).read() } != PLATFORM_VERSION
+    {
         return None;
     }
-    PLATFORM.store(platform.cast_mut(), Ordering::Release);
     Some(unsafe { &*platform })
+}
+
+/// Publishes the checked table for the cold creation detour.
+///
+/// # Safety
+/// Same contract as `inspect`.
+pub(crate) unsafe fn register(platform: *const Platform) -> Option<&'static Platform> {
+    let table = unsafe { inspect(platform) }?;
+    PLATFORM.store(platform.cast_mut(), Ordering::Release);
+    Some(table)
 }
 
 pub(crate) fn get() -> Option<&'static Platform> {

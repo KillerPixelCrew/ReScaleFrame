@@ -195,6 +195,12 @@ leaves retain the existing diagnostics ABI. The RenderDoc trigger still
 requests a camera record before queuing the frame capture. Builds and
 live diagnostic verification remain open.
 
+Skyrim SE's Rust adapter publishes the GameSDK table and owns executable
+and observer admission. It reuses the cold-creation platform for SHA-256
+and guarded byte reads, and publishes the hook targets after all checks.
+The native lifecycle and detours still consume the same targets. Build,
+binary ABI and game verification remain open.
+
 Unity package D3D12 SR contexts and their recording slots are Rust-owned.
 The existing Unity bridge still provides recording and completion facts.
 The view owner preserves reconfiguration, spatial fallback and retirement
