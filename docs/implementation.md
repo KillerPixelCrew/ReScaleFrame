@@ -4,6 +4,15 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now owns the D3D11 motion resolver's outputs, parameter admission
+and source views. Decode and resolve share view caching, legacy
+parameter reads and the native context-save and dispatch sequence.
+Resolve keeps each selected view alive through dispatch even if a
+later lookup evicts its cache entry. The optional depth layer still
+falls back to scene depth, and older records retain zero jitter.
+Source review confirmed both shaders and public C headers are
+unchanged. Build, regression and device validation remain open.
+
 Rust now owns the shared D3D11 motion decoder's resources, parameter
 admission, constant packing and two-entry source view cache. It reads
 only the legacy prefix when the caller supplies a short parameter

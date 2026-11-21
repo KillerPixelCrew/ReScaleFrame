@@ -1,8 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #pragma once
 #include <rescaleframe/motion_decode.h>
-#include <d3d11.h>
-#include <stddef.h>
+#include "motion_d3d11_platform.h"
 
 struct rsf_motion_decode_resources {
     ID3D11ComputeShader* shader;
@@ -11,14 +10,12 @@ struct rsf_motion_decode_resources {
     ID3D11Buffer* constants;
 };
 
-struct rsf_motion_decode_extent { uint32_t width, height, slices, samples; };
-
 struct rsf_motion_decode_platform {
     int32_t (*make)(void* device, const rsf_motion_decode_setup*, uint32_t constant_bytes,
         rsf_motion_decode_resources*);
     int32_t (*context)(void* device, void* context);
-    int32_t (*describe)(void* device, void* source, rsf_motion_decode_extent*);
-    void* (*source_view)(void* device, void* source);
+    int32_t (*describe)(void* device, void* source, rsf_motion_source_info*);
+    void* (*source_view)(void* device, void* source, uint32_t format);
     int32_t (*dispatch)(void* context, const rsf_motion_decode_resources*, void* source_view,
         const void* constants, size_t bytes, uint32_t groups_x, uint32_t groups_y);
     void (*log)(rsf_motion_decode_log_fn, void*, const char*);

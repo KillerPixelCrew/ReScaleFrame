@@ -51,7 +51,11 @@ mod dx12_vulkan_interop;
 #[cfg(windows)]
 mod dx12_vulkan_interop_abi;
 #[cfg(windows)]
+mod motion_d3d11;
+#[cfg(windows)]
 mod motion_decode;
+#[cfg(windows)]
+mod motion_resolve;
 #[cfg(windows)]
 mod native_composition;
 #[cfg(windows)]

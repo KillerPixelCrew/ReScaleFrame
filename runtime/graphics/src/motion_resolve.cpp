@@ -1,17 +1,7 @@
 // SPDX-License-Identifier: MIT
-#include <rescaleframe/motion_resolve.h>
-#include <rescaleframe/d3d11_state.h>
+#include "motion_resolve_platform.h"
 #include <rescaleframe/shader_compile.h>
-#include <rescaleframe/srv_cache.h>
-#include <rescaleframe/srv_format.h>
-#include "device_owner.h"
-#include <d3d11.h>
-#include <wrl/client.h>
-#include <cmath>
-#include <cstddef>
-#include <cstring>
-#include <new>
-using Microsoft::WRL::ComPtr;
+
 namespace {
 constexpr char shader_source[] = R"(
 Texture2D<float2> Motion : register(t0);
@@ -47,103 +37,83 @@ cbuffer Params : register(b0) {
     Resolved[id.xy] = all(isfinite(motion)) ? motion : 0;
     ResolvedDepth[id.xy] = depth;
 })";
-struct Constants {
-    float matrix[16]; float scale[2]; float sentinel; uint32_t has_sentinel;
-    uint32_t size[2]; uint32_t has_layer; uint32_t padding;
-    float jitter[2]; float padding2[2];
-};
-static_assert(sizeof(Constants) % 16 == 0);
-}
-struct rsf_motion_resolve {
-    ComPtr<ID3D11Device> device;
-    ComPtr<ID3D11ComputeShader> shader;
-    ComPtr<ID3D11Buffer> constants;
-    ComPtr<ID3D11Texture2D> textures[2];
-    ComPtr<ID3D11UnorderedAccessView> views[2];
-    // Motion, depth and the depth layer are engine targets that come back as the same textures.
-    rsf::SrvCache<8> sources;
-    uint32_t width = 0, height = 0;
-};
-extern "C" int rsf_motion_resolve_create(void* pointer, uint32_t width, uint32_t height, rsf_motion_resolve** out)
+int32_t make_resources(void* raw, uint32_t width, uint32_t height, uint32_t bytes,
+    rsf_motion_resolve_resources* resources) noexcept try
 {
-    if (!pointer || !out || !width || !height) return 0;
-    *out = nullptr;
-    auto* pass = new (std::nothrow) rsf_motion_resolve;
-    if (!pass) return 0;
-    pass->device = static_cast<ID3D11Device*>(pointer); pass->width = width; pass->height = height;
-    if (!rsf::compile_compute(pass->device.Get(), shader_source, "motion_resolve", "main", &pass->shader,
-            nullptr, nullptr, 0)) { delete pass; return 0; }
-    D3D11_BUFFER_DESC buffer{};
-    buffer.ByteWidth = sizeof(Constants); buffer.Usage = D3D11_USAGE_DEFAULT; buffer.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-    if (FAILED(pass->device->CreateBuffer(&buffer, nullptr, &pass->constants))) { delete pass; return 0; }
+    auto* device = static_cast<ID3D11Device*>(raw);
+    if (!rsf::compile_compute(device, shader_source, "motion_resolve", "main",
+            &resources->shader, nullptr, nullptr, 0)) return 0;
+    D3D11_BUFFER_DESC constants{};
+    constants.ByteWidth = bytes;
+    constants.Usage = D3D11_USAGE_DEFAULT;
+    constants.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    if (FAILED(device->CreateBuffer(&constants, nullptr, &resources->constants))) return 0;
     for (uint32_t i = 0; i < 2; ++i) {
         D3D11_TEXTURE2D_DESC desc{};
-        desc.Width = width; desc.Height = height; desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
-        // R16G16_FLOAT, not R32G32_FLOAT: this output crosses to D3D12 for DLSS-G, FSR and XeSS,
-        // and R32G32_FLOAT is not a D3D11 shareable format (CreateTexture2D E_INVALIDARG on the
-        // RTX 4070 Laptop, 4 October). The R32G32 decode upstream keeps the NDC precision.
+        desc.Width = width;
+        desc.Height = height;
+        desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
+        // R16G16_FLOAT can cross into D3D12 for FG. Decode upstream
+        // retains its separate R32G32_FLOAT format and NDC precision.
         desc.Format = i == 0 ? DXGI_FORMAT_R16G16_FLOAT : DXGI_FORMAT_R32_FLOAT;
         desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-        if (FAILED(pass->device->CreateTexture2D(&desc, nullptr, &pass->textures[i])) ||
-            FAILED(pass->device->CreateUnorderedAccessView(pass->textures[i].Get(), nullptr, &pass->views[i]))) {
-            delete pass; return 0;
+        if (FAILED(device->CreateTexture2D(&desc, nullptr, &resources->textures[i])) ||
+            !resources->textures[i] ||
+            FAILED(device->CreateUnorderedAccessView(resources->textures[i], nullptr, &resources->views[i])) ||
+            !resources->views[i]) {
+            return 0;
         }
     }
-    *out = pass; return 1;
-}
-extern "C" int rsf_motion_resolve_run(rsf_motion_resolve* pass, void* context_pointer,
-    void* motion_pointer, void* depth_pointer, const rsf_motion_resolve_params* params)
-{
-    if (!pass || !context_pointer || !motion_pointer || !depth_pointer || !params ||
-        params->struct_size < offsetof(rsf_motion_resolve_params, jitter_pixels)) return 0;
-    for (auto value : params->clip_to_previous) if (!std::isfinite(value)) return 0;
-    if (!std::isfinite(params->decoded_to_pixels[0]) || !std::isfinite(params->decoded_to_pixels[1]) ||
-        !std::isfinite(params->sentinel)) return 0;
-    auto* context = static_cast<ID3D11DeviceContext*>(context_pointer);
-    if (!rsf::same_device(context, pass->device.Get()) || context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) return 0;
-    ID3D11Texture2D* inputs[] = {static_cast<ID3D11Texture2D*>(motion_pointer), static_cast<ID3D11Texture2D*>(depth_pointer)};
-    ID3D11ShaderResourceView* source_views[2]{};
-    for (uint32_t i = 0; i < 2; ++i) {
-        D3D11_TEXTURE2D_DESC desc{}; inputs[i]->GetDesc(&desc);
-        if (!rsf::same_device(inputs[i], pass->device.Get()) || desc.Width < pass->width || desc.Height < pass->height ||
-            desc.SampleDesc.Count != 1 || desc.ArraySize != 1) return 0;
-        source_views[i] = pass->sources.get(pass->device.Get(), inputs[i], rsf::srv_format(desc.Format));
-        if (!source_views[i]) return 0;
-    }
-    ID3D11ShaderResourceView* layer_view = nullptr;
-    if (params->depth_layer) {
-        auto* layer = static_cast<ID3D11Texture2D*>(params->depth_layer);
-        D3D11_TEXTURE2D_DESC desc{}; layer->GetDesc(&desc);
-        // A layer that does not fit is ignored: scene depth alone is the established behaviour.
-        if (rsf::same_device(layer, pass->device.Get()) && desc.Format == DXGI_FORMAT_R32_FLOAT && desc.Width >= pass->width &&
-            desc.Height >= pass->height && desc.SampleDesc.Count == 1 && desc.ArraySize == 1)
-            layer_view = pass->sources.get(pass->device.Get(), layer, DXGI_FORMAT_R32_FLOAT);
-    }
-    Constants constants{};
-    constants.has_layer = layer_view ? 1u : 0u;
-    std::memcpy(constants.matrix, params->clip_to_previous, sizeof(constants.matrix));
-    std::memcpy(constants.scale, params->decoded_to_pixels, sizeof(constants.scale));
-    constants.sentinel = params->sentinel; constants.has_sentinel = params->has_sentinel;
-    constants.size[0] = pass->width; constants.size[1] = pass->height;
-    if (params->struct_size >= sizeof(*params)) {
-        if (!std::isfinite(params->jitter_pixels[0]) || !std::isfinite(params->jitter_pixels[1])) return 0;
-        std::memcpy(constants.jitter, params->jitter_pixels, sizeof(constants.jitter));
-    }
-    context->UpdateSubresource(pass->constants.Get(), 0, nullptr, &constants, 0, 0);
-    rsf_d3d11_state saved{};
-    if (!rsf_d3d11_state_save(context, &saved)) return 0;
-    context->SetPredication(nullptr, FALSE);
-    context->OMSetRenderTargets(0, nullptr, nullptr);
-    ID3D11ShaderResourceView* sources[] = {source_views[0], source_views[1], layer_view};
-    ID3D11UnorderedAccessView* targets[] = {pass->views[0].Get(), pass->views[1].Get()};
-    ID3D11Buffer* buffers[] = {pass->constants.Get()};
-    context->CSSetShader(pass->shader.Get(), nullptr, 0); context->CSSetShaderResources(0, 3, sources);
-    context->CSSetUnorderedAccessViews(0, 2, targets, nullptr); context->CSSetConstantBuffers(0, 1, buffers);
-    context->Dispatch((pass->width + 7) / 8, (pass->height + 7) / 8, 1);
-    ID3D11UnorderedAccessView* empty[2]{}; context->CSSetUnorderedAccessViews(0, 2, empty, nullptr);
-    rsf_d3d11_state_restore(context, &saved);
     return 1;
+} catch (...) { return 0; }
+
+int32_t dispatch(void* raw, const rsf_motion_resolve_resources* resources, void* const* sources,
+    const void* constants, uint32_t groups_x, uint32_t groups_y) noexcept try
+{
+    auto* context = static_cast<ID3D11DeviceContext*>(raw);
+    context->UpdateSubresource(resources->constants, 0, nullptr, constants, 0, 0);
+    ID3D11ShaderResourceView* inputs[]{
+        static_cast<ID3D11ShaderResourceView*>(sources[0]),
+        static_cast<ID3D11ShaderResourceView*>(sources[1]),
+        static_cast<ID3D11ShaderResourceView*>(sources[2]),
+    };
+    return rsf::motion11::dispatch(context, resources->shader, resources->constants,
+        inputs, resources->views, nullptr, groups_x, groups_y);
+} catch (...) { return 0; }
+
+constexpr rsf_motion_resolve_platform platform{
+    make_resources, rsf::motion11::context_matches, rsf::motion11::describe_source,
+    rsf::motion11::source_view, dispatch,
+};
+
+static_assert(sizeof(rsf_motion_resolve_resources) == 6 * sizeof(void*));
+static_assert(sizeof(rsf_motion_resolve_platform) == 5 * sizeof(void*) && sizeof(rsf_motion_source_info) == 24);
+static_assert(sizeof(rsf_motion_resolve_params) == 104 && offsetof(rsf_motion_resolve_params, jitter_pixels) == 96);
+static_assert(DXGI_FORMAT_R32_FLOAT == 41);
 }
-extern "C" void* rsf_motion_resolve_motion(rsf_motion_resolve* pass) { return pass ? pass->textures[0].Get() : nullptr; }
-extern "C" void* rsf_motion_resolve_depth(rsf_motion_resolve* pass) { return pass ? pass->textures[1].Get() : nullptr; }
-extern "C" void rsf_motion_resolve_destroy(rsf_motion_resolve* pass) { delete pass; }
+
+extern "C" int rsf_motion_resolve_create(void* device, uint32_t width, uint32_t height, rsf_motion_resolve** out)
+{
+    return rsf_core_motion_resolve_create(device, width, height, out, &platform);
+}
+
+extern "C" int rsf_motion_resolve_run(rsf_motion_resolve* pass, void* context,
+    void* motion, void* depth, const rsf_motion_resolve_params* params)
+{
+    return rsf_core_motion_resolve_run(pass, context, motion, depth, params);
+}
+
+extern "C" void* rsf_motion_resolve_motion(rsf_motion_resolve* pass)
+{
+    return rsf_core_motion_resolve_texture(pass, 0);
+}
+
+extern "C" void* rsf_motion_resolve_depth(rsf_motion_resolve* pass)
+{
+    return rsf_core_motion_resolve_texture(pass, 1);
+}
+
+extern "C" void rsf_motion_resolve_destroy(rsf_motion_resolve* pass)
+{
+    rsf_core_motion_resolve_destroy(pass);
+}

@@ -3,10 +3,7 @@
 #include "motion_decode_platform.h"
 
 #include <rescaleframe/log.h>
-#include <rescaleframe/d3d11_state.h>
 #include <rescaleframe/shader_compile.h>
-
-#include "device_owner.h"
 
 #include <windows.h>
 
@@ -112,23 +109,6 @@ int32_t make_resources(void* raw, const rsf_motion_decode_setup* setup, uint32_t
     return RSF_MOTION_DECODE_OK;
 } catch (...) { return RSF_MOTION_DECODE_ERROR_RESOURCE_FAILED; }
 
-int32_t context_matches(void* device, void* raw)
-{
-    auto* context = static_cast<ID3D11DeviceContext*>(raw);
-    return context->GetType() == D3D11_DEVICE_CONTEXT_IMMEDIATE &&
-        rsf::same_device(context, static_cast<ID3D11Device*>(device));
-}
-
-int32_t describe_source(void* device, void* source, rsf_motion_decode_extent* extent)
-{
-    auto* texture = static_cast<ID3D11Texture2D*>(source);
-    if (!rsf::same_device(texture, static_cast<ID3D11Device*>(device))) return 0;
-    D3D11_TEXTURE2D_DESC desc{};
-    texture->GetDesc(&desc);
-    *extent = {desc.Width, desc.Height, desc.ArraySize, desc.SampleDesc.Count};
-    return 1;
-}
-
 int32_t dispatch(void* raw, const rsf_motion_decode_resources* resources, void* source_view,
     const void* constants, size_t bytes, uint32_t groups_x, uint32_t groups_y) noexcept try
 {
@@ -138,39 +118,23 @@ int32_t dispatch(void* raw, const rsf_motion_decode_resources* resources, void* 
     std::memcpy(mapped.pData, constants, bytes);
     context->Unmap(resources->constants, 0);
 
-    // Writing the persistent output can unbind its inherited SRV from
-    // any shader stage, so keep the full state snapshot and restore it.
-    rsf_d3d11_state saved{};
-    if (!rsf_d3d11_state_save(context, &saved)) return 0;
-    struct Restore {
-        ID3D11DeviceContext* context;
-        rsf_d3d11_state& state;
-        ~Restore() { rsf_d3d11_state_restore(context, &state); }
-    } restore{context, saved};
-
-    context->SetPredication(nullptr, FALSE);
-    context->OMSetRenderTargets(0, nullptr, nullptr);
+    ID3D11ShaderResourceView* sources[]{static_cast<ID3D11ShaderResourceView*>(source_view)};
+    ID3D11UnorderedAccessView* targets[]{resources->target_view};
     const UINT no_offset = UINT32_MAX;
-    auto* source = static_cast<ID3D11ShaderResourceView*>(source_view);
-    context->CSSetShader(resources->shader, nullptr, 0);
-    context->CSSetShaderResources(0, 1, &source);
-    context->CSSetUnorderedAccessViews(0, 1, &resources->target_view, &no_offset);
-    context->CSSetConstantBuffers(0, 1, &resources->constants);
-    context->Dispatch(groups_x, groups_y, 1);
-    ID3D11UnorderedAccessView* no_target = nullptr;
-    context->CSSetUnorderedAccessViews(0, 1, &no_target, &no_offset);
-    return 1;
+    return rsf::motion11::dispatch(context, resources->shader, resources->constants,
+        sources, targets, &no_offset, groups_x, groups_y);
 } catch (...) { return 0; }
 
 constexpr rsf_motion_decode_platform platform{
-    make_resources, context_matches, describe_source, rsf_d3d11_create_shader_view, dispatch,
+    make_resources, rsf::motion11::context_matches, rsf::motion11::describe_source,
+    rsf::motion11::source_view, dispatch,
     [](rsf_motion_decode_log_fn log, void* user, const char* text) noexcept {
         try { log(user, text); } catch (...) {}
     },
 };
 
 static_assert(sizeof(rsf_motion_decode_platform) == 6 * sizeof(void*));
-static_assert(sizeof(rsf_motion_decode_resources) == 4 * sizeof(void*) && sizeof(rsf_motion_decode_extent) == 16);
+static_assert(sizeof(rsf_motion_decode_resources) == 4 * sizeof(void*) && sizeof(rsf_motion_source_info) == 24);
 static_assert(sizeof(rsf_motion_decode_setup) == 40 && sizeof(rsf_motion_decode_params) == 48 &&
     RSF_MOTION_DECODE_PARAMS_SIZE_V1 == 36);
 static_assert(RSF_MOTION_DECODE_ABI_VERSION == 1 && RSF_MOTION_DECODE_OK == 0 &&

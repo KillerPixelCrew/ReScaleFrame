@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
+use crate::motion_d3d11::{GROUP_EDGE, Handle, MakeView, SourceInfo, SourceViews, copy_params};
 use crate::render_abi::rsf_backend_log_fn as LogFn;
 use crate::sr_session::has_capacity;
 use rsf_game_sys::sr_abi::rsf_motion_decode_params as Params;
@@ -8,15 +9,12 @@ use std::ptr::{self, null_mut};
 use std::sync::{Mutex, TryLockError};
 use windows_sys::Win32::System::SystemInformation::GetTickCount64;
 
-type Handle = *mut c_void;
 const ABI: u32 = 1;
 const OK: i32 = 0;
 const INVALID: i32 = -1;
 const ABI_MISMATCH: i32 = -2;
 const RESOURCE_FAILED: i32 = -4;
 const SOURCE_MISMATCH: i32 = -5;
-const CACHE_IDLE_MS: u64 = 2000;
-const GROUP_EDGE: u32 = 8;
 const PARAMS_V1: usize = std::mem::offset_of!(Params, validity_enabled);
 
 #[repr(C)]
@@ -32,15 +30,6 @@ struct Setup {
 }
 
 type Resources = [Handle; 4];
-
-#[repr(C)]
-#[derive(Default)]
-struct Extent {
-    width: u32,
-    height: u32,
-    slices: u32,
-    samples: u32,
-}
 
 #[repr(C)]
 struct Constants {
@@ -60,27 +49,21 @@ struct Constants {
 struct Platform {
     make: unsafe extern "C" fn(Handle, &Setup, u32, &mut Resources) -> i32,
     context: unsafe extern "C" fn(Handle, Handle) -> i32,
-    describe: unsafe extern "C" fn(Handle, Handle, &mut Extent) -> i32,
-    source_view: unsafe extern "C" fn(Handle, Handle) -> Handle,
+    describe: unsafe extern "C" fn(Handle, Handle, &mut SourceInfo) -> i32,
+    source_view: MakeView,
     dispatch:
         unsafe extern "C" fn(Handle, &Resources, Handle, *const c_void, usize, u32, u32) -> i32,
     log: unsafe extern "C" fn(LogFn, Handle, *const c_char),
 }
 
 const _: () = {
-    assert!(size_of::<Setup>() == 40 && size_of::<Extent>() == 16);
+    assert!(size_of::<Setup>() == 40);
     assert!(size_of::<Constants>() == 64 && PARAMS_V1 == 36);
     assert!(size_of::<Platform>() == 6 * size_of::<Handle>());
 };
 
-struct Source {
-    view: ComRef,
-    texture: ComRef,
-    used: u64,
-}
-
 struct Pass {
-    sources: Mutex<[Option<Source>; 2]>,
+    sources: Mutex<SourceViews<2>>,
     resources: [ComRef; 4],
     device: ComRef,
     setup: Setup,
@@ -95,68 +78,6 @@ impl Pass {
             unsafe { (self.platform.log)(self.setup.log, self.setup.log_user, message.as_ptr()) };
         }
     }
-
-    fn source_view(
-        &self,
-        slots: &mut [Option<Source>; 2],
-        texture: Handle,
-        now: u64,
-    ) -> Option<Handle> {
-        for slot in slots.iter_mut() {
-            if slot
-                .as_ref()
-                .is_some_and(|entry| now.wrapping_sub(entry.used) > CACHE_IDLE_MS)
-            {
-                *slot = None;
-            }
-        }
-        if let Some(entry) = slots
-            .iter_mut()
-            .flatten()
-            .find(|entry| entry.texture.as_ptr() == texture)
-        {
-            entry.used = now;
-            return Some(entry.view.as_ptr());
-        }
-        let slot = slots.iter().position(Option::is_none).unwrap_or_else(|| {
-            usize::from(slots[1].as_ref().unwrap().used < slots[0].as_ref().unwrap().used)
-        });
-        let view = unsafe {
-            ComRef::from_owned((self.platform.source_view)(self.device.as_ptr(), texture))
-        }?;
-        let handle = view.as_ptr();
-        slots[slot] = Some(Source {
-            view,
-            texture: unsafe { ComRef::retain(texture) },
-            used: now,
-        });
-        Some(handle)
-    }
-}
-
-unsafe fn params_copy(input: *const Params) -> Option<Params> {
-    if input.is_null() {
-        return None;
-    }
-    let size = unsafe { input.cast::<u32>().read() } as usize;
-    if size < PARAMS_V1 {
-        return None;
-    }
-    // The original API only reads the validity fields on a complete record.
-    let bytes = if size >= size_of::<Params>() {
-        size_of::<Params>()
-    } else {
-        PARAMS_V1
-    };
-    let mut params = Params::default();
-    unsafe {
-        ptr::copy_nonoverlapping(
-            input.cast::<u8>(),
-            ptr::from_mut(&mut params).cast::<u8>(),
-            bytes,
-        );
-    }
-    Some(params)
 }
 
 fn constants(params: Params, width: u32, height: u32) -> Option<Constants> {
@@ -217,7 +138,7 @@ unsafe extern "C" fn rsf_core_motion_decode_create(
         return RESOURCE_FAILED;
     };
     let owner = crate::allocate_handle(Pass {
-        sources: Mutex::new([None, None]),
+        sources: Mutex::new(SourceViews::new()),
         resources: [shader, target, uav, constants],
         device: unsafe { ComRef::retain(device) },
         setup: *setup,
@@ -247,7 +168,7 @@ unsafe extern "C" fn rsf_core_motion_decode_run(
     if context.is_null() || texture.is_null() {
         return INVALID;
     }
-    let Some(params) = (unsafe { params_copy(params) }) else {
+    let Some(params) = (unsafe { copy_params(params, PARAMS_V1) }) else {
         return INVALID;
     };
     let platform = pass.platform;
@@ -259,13 +180,12 @@ unsafe extern "C" fn rsf_core_motion_decode_run(
     let Some(constants) = constants(params, width, height) else {
         return INVALID;
     };
-    let mut extent = Extent::default();
+    let mut extent = SourceInfo::default();
     if unsafe { (platform.describe)(device, texture, &mut extent) } == 0 {
         pass.say("source belongs to another device");
         return SOURCE_MISMATCH;
     }
-    if extent.width != width || extent.height != height || extent.slices != 1 || extent.samples != 1
-    {
+    if extent.width != width || extent.height != height || !extent.single_surface() {
         pass.say(&format!(
             "source is {}x{} but this pass was built for {width}x{height}",
             extent.width, extent.height
@@ -278,7 +198,7 @@ unsafe extern "C" fn rsf_core_motion_decode_run(
         Err(TryLockError::WouldBlock) => return RESOURCE_FAILED,
     };
     let now = unsafe { GetTickCount64() };
-    let Some(view) = pass.source_view(&mut sources, texture, now) else {
+    let Some(view) = (unsafe { sources.get(device, texture, 0, now, platform.source_view) }) else {
         drop(sources);
         pass.say("source view could not be created");
         return RESOURCE_FAILED;
@@ -288,7 +208,7 @@ unsafe extern "C" fn rsf_core_motion_decode_run(
         (platform.dispatch)(
             context,
             &resources,
-            view,
+            view.as_ptr(),
             ptr::from_ref(&constants).cast(),
             size_of::<Constants>(),
             width.div_ceil(GROUP_EDGE),
@@ -328,7 +248,7 @@ mod tests {
             validity_threshold: f32::NAN,
             ..Params::default()
         };
-        let copied = unsafe { params_copy(&input) }.unwrap();
+        let copied = unsafe { copy_params(&input, PARAMS_V1) }.unwrap();
         let values = constants(copied, 16, 8).unwrap();
         assert_eq!(values.zero_means_unwritten, 1);
         assert_eq!(values.validity_enabled, 0);
@@ -337,6 +257,6 @@ mod tests {
             struct_size: size_of::<Params>() as u32,
             ..input
         };
-        assert!(constants(unsafe { params_copy(&full) }.unwrap(), 16, 8).is_none());
+        assert!(constants(unsafe { copy_params(&full, PARAMS_V1) }.unwrap(), 16, 8).is_none());
     }
 }
