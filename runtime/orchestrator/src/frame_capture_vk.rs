@@ -107,21 +107,28 @@ struct Readback {
     discarded: bool,
 }
 
+// The bounded legacy capture window shared with the D3D12 owner.
 #[derive(Default)]
-struct Legacy {
-    directory: Option<PathBuf>,
-    first: u64,
-    count: u64,
+pub(crate) struct Legacy {
+    pub(crate) directory: Option<PathBuf>,
+    pub(crate) first: u64,
+    pub(crate) count: u64,
 }
 
 impl Legacy {
     fn from_environment() -> Self {
+        Self::from_variable("RSF_VULKAN_FRAME_CAPTURE_DIR")
+    }
+
+    /// The directory variable plus `RSF_FRAME_CAPTURE_FIRST` and
+    /// `RSF_FRAME_CAPTURE_COUNT`, read with the C++ owners' limits.
+    pub(crate) fn from_variable(variable: &str) -> Self {
         let mut legacy = Self {
             directory: None,
             first: 30,
             count: 4,
         };
-        let Some(directory) = std::env::var_os("RSF_VULKAN_FRAME_CAPTURE_DIR")
+        let Some(directory) = std::env::var_os(variable)
             .filter(|path| !path.is_empty() && path.encode_wide_len() < 32768)
         else {
             return legacy;
@@ -139,11 +146,11 @@ impl Legacy {
         legacy
     }
 
-    fn enabled(&self) -> bool {
+    pub(crate) fn enabled(&self) -> bool {
         self.directory.is_some() && self.count != 0
     }
 
-    fn wants(&self, frame: u64) -> bool {
+    pub(crate) fn wants(&self, frame: u64) -> bool {
         self.enabled() && frame >= self.first && frame - self.first < self.count
     }
 
@@ -178,7 +185,7 @@ impl WideLength for std::ffi::OsStr {
 }
 
 /// `wcstoull(value, nullptr, 10)` over a 32-character environment buffer.
-fn parse_count(value: &std::ffi::OsStr) -> u64 {
+pub(crate) fn parse_count(value: &std::ffi::OsStr) -> u64 {
     if value.encode_wide_len() >= 32 {
         return 0;
     }
@@ -567,8 +574,13 @@ struct Provider {
 }
 
 /// C++ iostream `std::setprecision(9)` default float formatting (`%.9g`).
-fn general(value: f64) -> String {
-    const PRECISION: i32 = 9;
+pub(crate) fn general(value: f64) -> String {
+    general_precision(value, 9)
+}
+
+/// C++ iostream default float formatting at a stream precision (`%.Ng`).
+pub(crate) fn general_precision(value: f64, precision: i32) -> String {
+    let precision = precision.max(1);
     if value.is_nan() {
         return "nan".into();
     }
@@ -578,7 +590,7 @@ fn general(value: f64) -> String {
     if value == 0.0 {
         return if value.is_sign_negative() { "-0" } else { "0" }.into();
     }
-    let scientific = format!("{:.*e}", (PRECISION - 1) as usize, value);
+    let scientific = format!("{:.*e}", (precision - 1) as usize, value);
     let (mantissa, exponent) = scientific.split_once('e').expect("exponent");
     let exponent: i32 = exponent.parse().expect("exponent digits");
     let trim = |text: &str| -> String {
@@ -588,13 +600,13 @@ fn general(value: f64) -> String {
             text.to_owned()
         }
     };
-    if !(-4..PRECISION).contains(&exponent) {
+    if !(-4..precision).contains(&exponent) {
         let sign = if exponent < 0 { '-' } else { '+' };
         format!("{}e{sign}{:02}", trim(mantissa), exponent.abs())
     } else {
         trim(&format!(
             "{:.*}",
-            (PRECISION - 1 - exponent) as usize,
+            (precision - 1 - exponent) as usize,
             value
         ))
     }

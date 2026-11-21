@@ -1231,6 +1231,16 @@ remaining capture ticket and releases its readback after the caller's
 drain. The regression checks that this path never maps the readback.
 See [the Vulkan readback audit](research/rust-vulkan-readback-owner.md).
 
+The shared D3D12 readback owner now manages selection, pending identity,
+buffer and fence leases, completion and publication in Rust. SR12,
+FG12, FSR3, Godot and the Runtime capture API use the same owner.
+Destruction fails any remaining capture ticket after the caller drains
+its work. The worker passed 20 new synthetic cases, 13 focused MSVC
+Release contracts and seven Debug contracts. The Runtime and four
+linked consumers retained their Release export inventories. The
+device fixture built and its device execution remains pending.
+[D3D12 readback audit](research/rust-d3d12-readback-owner.md)
+
 The Vulkan sharpening owner now admits passes, selects the filter and
 holds command slots through retirement in Rust. The native leaves
 reuse the existing SPIR-V and constant packing. The CPU fixture

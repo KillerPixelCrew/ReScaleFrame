@@ -77,6 +77,8 @@ mod fg_session;
 mod fg_status;
 #[cfg(windows)]
 mod frame_assembly;
+#[cfg(windows)]
+mod frame_capture12;
 mod frame_capture_vk;
 mod frame_sequencer;
 #[cfg(windows)]
