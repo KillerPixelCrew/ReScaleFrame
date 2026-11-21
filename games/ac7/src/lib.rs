@@ -27,6 +27,8 @@ mod scope_abi;
 mod sites;
 mod sites_abi;
 mod truesky;
+mod view;
+mod view_abi;
 
 #[cfg(test)]
 mod fake_code;

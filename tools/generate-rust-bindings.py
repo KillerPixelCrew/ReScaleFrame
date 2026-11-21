@@ -102,6 +102,9 @@ generate("games/ac7/src/scope_abi.rs", "games/ac7/src/ac7_scope_owner.h",
          ["-Isdk/game/include", "-Igames/ac7/include"],
          ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]",
           "--raw-line", "use crate::platform_abi::{rsf_ac7_render_scope, rsf_ac7_render_scope_fn};"])
+generate("games/ac7/src/view_abi.rs", "games/ac7/include/rescaleframe/ac7_view.h",
+         "rsf_ac7_view(_result)?", "RSF_AC7_VIEW_.*", [],
+         ["--with-derive-default", "--raw-line", "#![allow(dead_code)]"])
 generate("games/minecraft/native/platform_abi.rs", "games/minecraft/native/minecraft_platform.h",
          "rsf_(minecraft_(platform|configuration|message_fn)|gl_pipeline(_(setup|options|surfaces|status))?|"
          "native_fg_(options|status)|fg_status|sharpening_options|native_(latency_status|cpu_counters)|"

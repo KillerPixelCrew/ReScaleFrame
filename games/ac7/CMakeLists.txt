@@ -1,8 +1,8 @@
-# The view buffer reader is a library rather than part of the plugin so it can be tested without
-# loading a DLL, and so the orchestrator can use it once the two are wired together.
-add_library(rsf_ac7_view STATIC src/view_uniforms.cpp)
-target_include_directories(rsf_ac7_view PUBLIC include)
-target_link_libraries(rsf_ac7_view PRIVATE rsf_build_options)
+# The plugin and linked carriers call the same Rust reader through the existing view C ABI.
+rsf_add_rust_static(rsf_ac7_rust rsf_rust_ac7 rsf-ac7 rsf_ac7)
+add_library(rsf_ac7_view INTERFACE)
+target_include_directories(rsf_ac7_view INTERFACE include)
+target_link_libraries(rsf_ac7_view INTERFACE rsf_ac7_rust)
 add_library(ReScaleFrame::AC7View ALIAS rsf_ac7_view)
 
 # Exact-build identity, the GameSDK table and the renderer lifecycle are the Rust crate rsf-ac7
@@ -12,14 +12,12 @@ add_library(ReScaleFrame::AC7View ALIAS rsf_ac7_view)
 # TrueSky patches and relays (src/sites.rs, patches.rs, guards.rs, renderer.rs, truesky.rs),
 # which native_renderer.cpp calls through
 # src/ac7_sites.h with its native leaves, so the Rust archive follows the render scope
-# on the link line. Only this DLL and the native graph fixture pull native_renderer.cpp; the
-# carriers link rsf_ac7_render_scope without it and are unchanged.
+# on the link line. Only this DLL and the native graph fixture pull native_renderer.cpp.
 # The crate also owns the queued render scopes (src/render_scope.rs) and exports
 # ac7_render_scope.h except its two create calls, which render_scope.cpp keeps to lend its
 # exception leaves (src/ac7_scope_owner.h). Every target that calls that header links
 # rsf_ac7_rust after rsf_ac7_render_scope: this DLL and the render scope, D3D11 present bridge and
-# native graph fixtures. No carrier calls it, so no carrier pulls render_scope.cpp.
-rsf_add_rust_static(rsf_ac7_rust rsf_rust_ac7 rsf-ac7 rsf_ac7)
+# native graph fixtures. The carriers use the crate through AC7View without pulling render_scope.cpp.
 add_library(rsf_game_ac7 SHARED src/plugin.cpp)
 target_link_libraries(rsf_game_ac7 PRIVATE ReScaleFrame::GameSDK rsf_ac7_view rsf_ac7_render_scope rsf_ac7_rust rsf_build_options)
 set_target_properties(rsf_game_ac7 PROPERTIES OUTPUT_NAME "ReScaleFrame.Game.AC7")

@@ -245,6 +245,13 @@ scope without reporting a completed pass. A failed end resolve also
 retires the scope and restores enclosing state when needed. Native link,
 fixtures and in-game retirement verification remain open.
 
+The AC7 view-uniform reader and jitter removal now use the Rust view
+owner in the game DLL and both linked carriers. The same offsets and
+ABI remain in use. The reader handles unaligned buffers and refuses
+nonfinite view data without overwriting the caller's earlier result.
+The two-Rust-archive carrier links and captured-buffer fixtures remain
+unverified.
+
 ## Rust orchestrator and first Anomaly port
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.

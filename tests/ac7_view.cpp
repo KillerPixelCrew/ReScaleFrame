@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -224,6 +225,22 @@ int main(int argc, char* argv[])
     check_near(view.clip_to_prev_clip[11], 17.49332f, 1e-4f, "ClipToPrevClip is read as stored.");
     check_inverse(view);
     check(view.has_jitter == 0u, "A buffer without a jitter must not claim one.");
+
+    Buffer nonfinite = good;
+    nonfinite.put(kClipToView, {std::numeric_limits<float>::quiet_NaN()});
+    auto retained = view;
+    check(rsf_ac7_view_read(nonfinite.bytes(), RSF_AC7_VIEW_BUFFER_BYTES,
+                            RSF_AC7_VIEW_ABI_VERSION, &retained) == RSF_AC7_VIEW_ERROR_NOT_A_VIEW_BUFFER,
+          "A projection inverse with a NaN must be refused.");
+    check(retained.view_width == view.view_width && retained.clip_to_view[0] == view.clip_to_view[0],
+          "A refused read must preserve the previous output.");
+
+    std::vector<unsigned char> unaligned(RSF_AC7_VIEW_BUFFER_BYTES + 1);
+    std::memcpy(unaligned.data() + 1, good.bytes(), RSF_AC7_VIEW_BUFFER_BYTES);
+    check(rsf_ac7_view_read(unaligned.data() + 1, RSF_AC7_VIEW_BUFFER_BYTES,
+                            RSF_AC7_VIEW_ABI_VERSION, &retained) == RSF_AC7_VIEW_OK &&
+              retained.view_width == view.view_width,
+          "A view buffer need not be aligned for float loads.");
 
     // The jitter as the running game produced it, from capture10: the engine writes the same clip
     // space offset into TemporalAAJitter and into two elements of the projection.
