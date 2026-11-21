@@ -84,7 +84,7 @@ fn exports(module: HMODULE) -> rsf_overlay_host_panel {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_overlay_panel_open(
+pub(crate) unsafe extern "C" fn rsf_core_overlay_panel_open(
     out: *mut rsf_overlay_host_panel,
     error: *mut u32,
     returned_module: *mut HMODULE,
@@ -114,12 +114,12 @@ unsafe extern "C" fn rsf_core_overlay_panel_open(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_overlay_panel_release(module: HMODULE) {
+pub(crate) unsafe extern "C" fn rsf_core_overlay_panel_release(module: HMODULE) {
     unsafe { FreeLibrary(module) };
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_overlay_panel_retain(module: HMODULE) {
+pub(crate) unsafe extern "C" fn rsf_core_overlay_panel_retain(module: HMODULE) {
     {
         let mut published = PUBLISHED.lock().unwrap();
         if !published.contains(&module.addr()) {

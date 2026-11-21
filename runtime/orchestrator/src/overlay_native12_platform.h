@@ -25,8 +25,10 @@ typedef struct rsf_overlay12_draw {
 } rsf_overlay12_draw;
 
 typedef struct rsf_overlay12_platform {
-    /* On success, transfers the renderer and one fence reference to the Rust owner. */
-    void* (*initialize)(void* device, void* queue, void* chain, rsf_overlay12_log, void* user, void** fence);
+    void* (*window)(void* chain);
+    /* On success, transfers the native renderer and one fence reference to the Rust owner. */
+    void* (*initialize)(void* device, void* queue, void** fence);
+    uint32_t (*install_input)(void* window, rsf_overlay12_log, void* user);
     uint32_t (*stop_input)(void);
     void (*destroy)(void* panel);
     uint32_t (*visible)(void);
@@ -38,11 +40,7 @@ typedef struct rsf_overlay12_platform {
     /* Return one owned reference. Upload creation also reports its actual capacity. */
     void* (*create_pipeline)(void* panel, uint32_t format);
     void* (*create_upload)(void* panel, uint64_t bytes, uint64_t* capacity);
-    /* The panel lends its draw data until the next layout. */
-    uint32_t (*layout)(void* panel, uint32_t width, uint32_t height,
-        float elapsed, float hint_alpha, const rsf_overlay_stats*, rsf_overlay_intent*, rsf_overlay_draw_data*);
-    uint32_t (*updates)(void* panel, rsf_overlay_texture_update*, uint32_t capacity);
-    uint32_t (*frees)(void* panel, uint64_t*, uint32_t capacity);
+    uint32_t (*collect_input)(rsf_overlay_input*, uint32_t width, uint32_t height, float elapsed);
     /* Both return one owned D3D12 resource reference. */
     void* (*create_texture)(void* panel, uint32_t width, uint32_t height);
     void* (*upload_texture)(void* panel, uint32_t slot, void* resource, const rsf_overlay_texture_update*);

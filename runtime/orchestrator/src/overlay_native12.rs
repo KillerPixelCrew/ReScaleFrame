@@ -2,15 +2,23 @@
 use crate::com_ref::ComRef;
 use crate::overlay_abi::{rsf_overlay_intent, rsf_overlay_stats, rsf_overlay_texture_update};
 use crate::overlay_geometry::{borrowed_draw_slice, patch_fits, valid_indices, valid_texture};
-use crate::overlay_host_abi::{rsf_overlay_draw_data as DrawData, rsf_overlay_vertex};
+use crate::overlay_host_abi::{
+    RSF_OVERLAY_ABI_VERSION, RSF_OVERLAY_HOST_PANEL_LOADED, rsf_overlay,
+    rsf_overlay_draw_data as DrawData, rsf_overlay_host_panel, rsf_overlay_input,
+    rsf_overlay_vertex,
+};
 use crate::overlay_native12_abi::{
     RSF_OVERLAY12_TEXTURE_LIMIT, rsf_overlay12_draw as Draw, rsf_overlay12_draw_call as DrawCall,
     rsf_overlay12_log, rsf_overlay12_platform as Platform, rsf_overlay12_target as Target,
+};
+use crate::overlay_panel::{
+    rsf_core_overlay_panel_open, rsf_core_overlay_panel_release, rsf_core_overlay_panel_retain,
 };
 use crate::owned_win32_handle;
 use crate::sr_session::has_capacity;
 use std::ffi::{CStr, c_void};
 use std::os::windows::io::{AsRawHandle, OwnedHandle};
+use std::ptr::{NonNull, null_mut};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use windows_sys::Win32::{
@@ -27,6 +35,50 @@ const ATLAS_BATCH: usize = 32;
 const STARTUP_MS: u64 = 8000;
 const STARTUP_FADE_MS: u64 = 1000;
 const FENCE_WAIT_MS: u32 = 5000;
+
+struct Ui {
+    api: rsf_overlay_host_panel,
+    handle: NonNull<rsf_overlay>,
+    module: *mut c_void,
+}
+
+// The panel lock serializes all calls into this instance.
+unsafe impl Send for Ui {}
+
+impl Ui {
+    fn open() -> Option<Self> {
+        let mut api = rsf_overlay_host_panel::default();
+        let mut module = null_mut();
+        if unsafe { rsf_core_overlay_panel_open(&mut api, null_mut(), &mut module) }
+            != RSF_OVERLAY_HOST_PANEL_LOADED as u32
+        {
+            return None;
+        }
+        let handle = unsafe { (api.create.unwrap())(RSF_OVERLAY_ABI_VERSION) };
+        let Some(handle) = NonNull::new(handle) else {
+            unsafe { rsf_core_overlay_panel_release(module) };
+            return None;
+        };
+        Some(Self {
+            api,
+            handle,
+            module,
+        })
+    }
+
+    fn publish(&mut self) {
+        unsafe { rsf_core_overlay_panel_retain(std::mem::replace(&mut self.module, null_mut())) };
+    }
+}
+
+impl Drop for Ui {
+    fn drop(&mut self) {
+        unsafe { (self.api.destroy.unwrap())(self.handle.as_ptr()) };
+        if !self.module.is_null() {
+            unsafe { rsf_core_overlay_panel_release(self.module) };
+        }
+    }
+}
 
 #[derive(Default)]
 struct Ring {
@@ -332,6 +384,7 @@ impl Atlas {
         &mut self,
         platform: &Platform,
         native: *mut c_void,
+        ui: &Ui,
         slot: usize,
         binding: &Draw,
         data: &DrawData,
@@ -339,7 +392,11 @@ impl Atlas {
         let mut batch = [rsf_overlay_texture_update::default(); ATLAS_BATCH];
         loop {
             let count = unsafe {
-                (platform.updates.unwrap())(native, batch.as_mut_ptr(), ATLAS_BATCH as u32)
+                (ui.api.texture_updates.unwrap())(
+                    ui.handle.as_ptr(),
+                    batch.as_mut_ptr(),
+                    ATLAS_BATCH as u32,
+                )
             };
             if count == 0 {
                 break;
@@ -372,8 +429,13 @@ impl Atlas {
 
         let mut ids = [0; ATLAS_BATCH];
         loop {
-            let count =
-                unsafe { (platform.frees.unwrap())(native, ids.as_mut_ptr(), ATLAS_BATCH as u32) };
+            let count = unsafe {
+                (ui.api.textures_to_free.unwrap())(
+                    ui.handle.as_ptr(),
+                    ids.as_mut_ptr(),
+                    ATLAS_BATCH as u32,
+                )
+            };
             if count == 0 {
                 return Some(());
             }
@@ -401,6 +463,7 @@ impl Drop for Renderer {
 }
 
 struct Panel {
+    ui: Option<Ui>,
     native: Option<Renderer>,
     device: usize,
     queue: usize,
@@ -420,6 +483,7 @@ struct Panel {
 
 static READY: AtomicBool = AtomicBool::new(false);
 static PANEL: Mutex<Panel> = Mutex::new(Panel {
+    ui: None,
     native: None,
     device: 0,
     queue: 0,
@@ -442,6 +506,45 @@ static PANEL: Mutex<Panel> = Mutex::new(Panel {
 });
 
 impl Panel {
+    fn initialize(
+        &mut self,
+        platform: &Platform,
+        device: *mut c_void,
+        queue: *mut c_void,
+        chain: *mut c_void,
+    ) -> Option<()> {
+        let window = unsafe { (platform.window.unwrap())(chain) };
+        if window.is_null() {
+            return None;
+        }
+        let mut ui = Ui::open()?;
+        let mut fence = null_mut();
+        let native = unsafe { (platform.initialize.unwrap())(device, queue, &mut fence) };
+        let fence = unsafe { ComRef::from_owned(fence) };
+        let renderer = Renderer {
+            handle: NonNull::new(native)?,
+            destroy: platform.destroy.unwrap(),
+        };
+        let reference = fence?;
+        let user = self.log_user as *mut c_void;
+        if unsafe { (platform.install_input.unwrap())(window, self.logger, user) } == 0 {
+            return None;
+        }
+        ui.publish();
+        self.ui = Some(ui);
+        self.native = Some(renderer);
+        self.fence = Some(Fence {
+            reference,
+            event: None,
+            armed: false,
+        });
+        self.device = device as usize;
+        self.queue = queue as usize;
+        self.started = unsafe { GetTickCount64() };
+        self.previous = self.started;
+        Some(())
+    }
+
     fn log(&self, message: &CStr) {
         if let Some(call) = self.logger {
             unsafe { call(self.log_user as *mut c_void, message.as_ptr()) };
@@ -495,6 +598,7 @@ impl Panel {
         }
         self.atlas = Atlas::new();
         self.graphics = Graphics::new();
+        self.ui = None;
         self.native = None;
         self.fence = None;
     }
@@ -550,29 +654,9 @@ unsafe extern "C" fn rsf_core_overlay12_present(
     if panel.native.is_none() {
         panel.logger = logger;
         panel.log_user = user as usize;
-        let mut fence = std::ptr::null_mut();
-        let native = unsafe {
-            (platform.initialize.unwrap())(device, queue, chain, logger, user, &mut fence)
-        };
-        let Some(handle) = std::ptr::NonNull::new(native) else {
+        if panel.initialize(platform, device, queue, chain).is_none() {
             return panel.fail(platform);
-        };
-        panel.native = Some(Renderer {
-            handle,
-            destroy: platform.destroy.unwrap(),
-        });
-        panel.device = device as usize;
-        panel.queue = queue as usize;
-        let Some(reference) = (unsafe { ComRef::from_owned(fence) }) else {
-            return panel.fail(platform);
-        };
-        panel.fence = Some(Fence {
-            reference,
-            event: None,
-            armed: false,
-        });
-        panel.started = unsafe { GetTickCount64() };
-        panel.previous = panel.started;
+        }
         READY.store(true, Ordering::Release);
         panel.log(
             c"RSF native D3D12 overlay ready; Insert opens settings. No D3D11-on-12 resources.",
@@ -644,18 +728,20 @@ unsafe extern "C" fn rsf_core_overlay12_present(
         struct_size: size_of::<DrawData>() as u32,
         ..Default::default()
     };
+    let mut input = rsf_overlay_input {
+        struct_size: size_of::<rsf_overlay_input>() as u32,
+        ..Default::default()
+    };
+    if unsafe { (platform.collect_input.unwrap())(&mut input, frame.width, frame.height, elapsed) }
+        == 0
+    {
+        return panel.fail(platform);
+    }
+    input.startup_hint_alpha = hint_alpha;
+    let ui = panel.ui.as_ref().unwrap();
     if unsafe {
-        (platform.layout.unwrap())(
-            native,
-            frame.width,
-            frame.height,
-            elapsed,
-            hint_alpha,
-            stats,
-            &mut decided,
-            &mut data,
-        )
-    } == 0
+        (ui.api.frame.unwrap())(ui.handle.as_ptr(), &input, stats, &mut data, &mut decided)
+    } != 0
     {
         return panel.fail(platform);
     }
@@ -684,7 +770,19 @@ unsafe extern "C" fn rsf_core_overlay12_present(
     {
         return panel.fail(platform);
     }
-    if unsafe { panel.atlas.record(platform, native, slot, &binding, &data) }.is_none() {
+    let Panel { ui, atlas, .. } = &mut *panel;
+    if unsafe {
+        atlas.record(
+            platform,
+            native,
+            ui.as_ref().unwrap(),
+            slot,
+            &binding,
+            &data,
+        )
+    }
+    .is_none()
+    {
         return panel.fail(platform);
     }
     let Some(value) = panel
@@ -743,11 +841,11 @@ mod tests {
     };
 
     unsafe extern "C" fn updates(
-        native: *mut c_void,
+        ui: *mut rsf_overlay,
         out: *mut rsf_overlay_texture_update,
         _: u32,
     ) -> u32 {
-        let fixture = unsafe { &mut *native.cast::<AtlasFixture>() };
+        let fixture = unsafe { &mut *ui.cast::<AtlasFixture>() };
         if std::mem::take(&mut fixture.pending) {
             unsafe { out.write(UPDATE) };
             1
@@ -756,8 +854,8 @@ mod tests {
         }
     }
 
-    unsafe extern "C" fn frees(native: *mut c_void, out: *mut u64, _: u32) -> u32 {
-        let fixture = unsafe { &mut *native.cast::<AtlasFixture>() };
+    unsafe extern "C" fn frees(ui: *mut rsf_overlay, out: *mut u64, _: u32) -> u32 {
+        let fixture = unsafe { &mut *ui.cast::<AtlasFixture>() };
         if std::mem::take(&mut fixture.free) {
             unsafe { out.write(UPDATE.id) };
             1
@@ -809,7 +907,9 @@ mod tests {
     }
 
     const PLATFORM: Platform = Platform {
+        window: None,
         initialize: None,
+        install_input: None,
         stop_input: None,
         destroy: None,
         visible: None,
@@ -819,15 +919,28 @@ mod tests {
         begin: None,
         create_pipeline: None,
         create_upload: None,
-        layout: None,
-        updates: Some(updates),
-        frees: Some(frees),
+        collect_input: None,
         create_texture: Some(create),
         upload_texture: Some(upload),
         record: Some(draw),
         execute: None,
         signal: None,
     };
+
+    unsafe extern "C" fn destroy_ui(_: *mut rsf_overlay) {}
+
+    fn fake_ui(native: *mut c_void) -> Ui {
+        Ui {
+            api: rsf_overlay_host_panel {
+                destroy: Some(destroy_ui),
+                texture_updates: Some(updates),
+                textures_to_free: Some(frees),
+                ..Default::default()
+            },
+            handle: NonNull::new(native.cast()).unwrap(),
+            module: null_mut(),
+        }
+    }
 
     fn fixture() -> AtlasFixture {
         AtlasFixture {
@@ -878,11 +991,17 @@ mod tests {
         };
         let mut atlas = Atlas::new();
         let native = from_mut(&mut fixture).cast();
-        assert!(unsafe { atlas.record(&PLATFORM, native, 0, &binding, &data) }.is_some());
+        assert!(
+            unsafe { atlas.record(&PLATFORM, native, &fake_ui(native), 0, &binding, &data) }
+                .is_some()
+        );
         fixture.pending = true;
         fixture.free = true;
         let native = from_mut(&mut fixture).cast();
-        assert!(unsafe { atlas.record(&PLATFORM, native, 1, &binding, &data) }.is_some());
+        assert!(
+            unsafe { atlas.record(&PLATFORM, native, &fake_ui(native), 1, &binding, &data) }
+                .is_some()
+        );
         assert!(atlas.textures.is_empty());
         assert_eq!(fixture.textures[0].refs.get(), 3);
         assert_eq!(fixture.textures[1].refs.get(), 3);

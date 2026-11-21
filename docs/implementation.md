@@ -4,6 +4,15 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The Rust D3D12 overlay owns the UI instance and panel DLL lease,
+calls the panel's frame and texture APIs directly, and publishes only
+after renderer and input startup succeed. A refused startup drops
+the unpublished panel, renderer and fence. Failure retirement still
+waits for the graphics fence and input uninstall before releasing the
+UI and GPU resources. The native leaves retain the D3D12 calls and
+window input bridge. The private ABI was regenerated and reviewed.
+Build and device validation remain open for this revision.
+
 Anomaly's overlay finishes discovering hook targets before it
 registers any. It shares the Rust cleanup for never-enabled hooks
 and the native MinHook calls with the engine hooks. A refused create

@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 #include "overlay_native12_platform.h"
-#include "overlay_panel.h"
 #include <rescaleframe/overlay_input.h>
 #include <windows.h>
 #include <d3d12.h>
@@ -10,7 +9,6 @@
 #include <array>
 #include <cstring>
 #include <memory>
-#include <utility>
 namespace {
 using Microsoft::WRL::ComPtr;
 constexpr char shader[] = R"(
@@ -26,10 +24,7 @@ struct Frame {
     ComPtr<ID3D12GraphicsCommandList> commands;
     ComPtr<ID3D12DescriptorHeap> srv, rtv;
 };
-struct Panel {
-    void* module{};
-    rsf_overlay_host_panel api{};
-    rsf_overlay* ui{};
+struct Renderer {
     ComPtr<ID3D12Device> device;
     ComPtr<ID3D12CommandQueue> queue;
     ComPtr<ID3D12RootSignature> root;
@@ -37,10 +32,6 @@ struct Panel {
     std::array<Frame,3> frames;
     UINT stride{};
 
-    ~Panel() {
-        if (ui) api.destroy(ui);
-        if (module) rsf_core_overlay_panel_release(module);
-    }
 };
 void transition(ID3D12GraphicsCommandList* commands, ID3D12Resource* resource,
     D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after)
@@ -52,7 +43,7 @@ void transition(ID3D12GraphicsCommandList* commands, ID3D12Resource* resource,
 void* create_upload(void* native, uint64_t size, uint64_t* capacity)
 {
     if (!size || size>UINT64_MAX-65535) return nullptr;
-    auto& p=*static_cast<Panel*>(native);
+    auto& p=*static_cast<Renderer*>(native);
     D3D12_HEAP_PROPERTIES heap{}; heap.Type=D3D12_HEAP_TYPE_UPLOAD;
     D3D12_RESOURCE_DESC desc{}; desc.Dimension=D3D12_RESOURCE_DIMENSION_BUFFER;
     desc.Width=(size+65535)&~uint64_t(65535); desc.Height=1;desc.DepthOrArraySize=1;desc.MipLevels=1;
@@ -63,11 +54,8 @@ void* create_upload(void* native, uint64_t size, uint64_t* capacity)
     if (capacity) *capacity=desc.Width;
     return buffer.Detach();
 }
-bool initialize(Panel& p, ID3D12Device* device, ID3D12CommandQueue* queue, HWND window, rsf_overlay12_log logger, void* user,
-    void** completion)
+bool initialize(Renderer& p, ID3D12Device* device, ID3D12CommandQueue* queue, void** completion)
 {
-    if (rsf_core_overlay_panel_open(&p.api, nullptr, &p.module)!=RSF_OVERLAY_HOST_PANEL_LOADED) return false;
-    if (!(p.ui=p.api.create(RSF_OVERLAY_ABI_VERSION))) return false;
     p.device=device;p.queue=queue;p.stride=device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     ComPtr<ID3D12Fence> fence;
     if (FAILED(device->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&fence)))) return false;
@@ -98,15 +86,12 @@ bool initialize(Panel& p, ID3D12Device* device, ID3D12CommandQueue* queue, HWND 
         heap.Type=D3D12_DESCRIPTOR_HEAP_TYPE_RTV;heap.NumDescriptors=1;heap.Flags=D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
         if (FAILED(device->CreateDescriptorHeap(&heap,IID_PPV_ARGS(&frame.rtv)))) return false;
     }
-    const rsf_overlay_input_options input{sizeof(input),RSF_OVERLAY_INPUT_ABI_VERSION,0,logger,user};
-    if (rsf_overlay_input_install(window,&input)!=RSF_OVERLAY_INPUT_OK) return false;
-    rsf_core_overlay_panel_retain(std::exchange(p.module, nullptr));
     *completion=fence.Detach();
     return true;
 }
 void* create_pipeline(void* native, uint32_t format)
 {
-    auto& p=*static_cast<Panel*>(native);
+    auto& p=*static_cast<Renderer*>(native);
     D3D12_INPUT_ELEMENT_DESC layout[]{
         {"POSITION",0,DXGI_FORMAT_R32G32_FLOAT,0,0,D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,0},
         {"TEXCOORD",0,DXGI_FORMAT_R32G32_FLOAT,0,8,D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,0},
@@ -130,7 +115,7 @@ void* create_pipeline(void* native, uint32_t format)
 }
 void* create_texture(void* native, uint32_t width, uint32_t height)
 {
-    auto& p=*static_cast<Panel*>(native);
+    auto& p=*static_cast<Renderer*>(native);
     D3D12_RESOURCE_DESC desc{};desc.Dimension=D3D12_RESOURCE_DIMENSION_TEXTURE2D;
     desc.Width=width;desc.Height=height;desc.DepthOrArraySize=1;desc.MipLevels=1;
     desc.Format=DXGI_FORMAT_R8G8B8A8_UNORM;desc.SampleDesc.Count=1;
@@ -141,7 +126,7 @@ void* create_texture(void* native, uint32_t width, uint32_t height)
 }
 void* upload_texture(void* native, uint32_t slot, void* resource, const rsf_overlay_texture_update* patch)
 {
-    auto& p=*static_cast<Panel*>(native);
+    auto& p=*static_cast<Renderer*>(native);
     auto& frame=p.frames[slot];
     const auto& update=*patch;
     auto* destination=static_cast<ID3D12Resource*>(resource);
@@ -163,7 +148,7 @@ void* upload_texture(void* native, uint32_t slot, void* resource, const rsf_over
     transition(frame.commands.Get(),destination,D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     return upload.Detach();
 }
-bool draw(Panel& p, Frame& frame, const rsf_overlay12_draw& binding,
+bool draw(Renderer& p, Frame& frame, const rsf_overlay12_draw& binding,
     void* const* textures, UINT texture_count, const rsf_overlay12_draw_call* calls, UINT call_count)
 {
     const auto [target_resource,pipeline,vertex_resource,index_resource,vertex_data,index_data,width,height,vertex_bytes,index_bytes]=binding;
@@ -199,21 +184,29 @@ bool draw(Panel& p, Frame& frame, const rsf_overlay12_draw& binding,
     }
     transition(commands,target,D3D12_RESOURCE_STATE_RENDER_TARGET,D3D12_RESOURCE_STATE_PRESENT);return true;
 }
-void* create_panel(void* device, void* queue, void* chain, rsf_overlay12_log logger, void* user, void** fence) noexcept try {
+void* output_window(void* chain) {
     DXGI_SWAP_CHAIN_DESC desc{};
-    if (FAILED(static_cast<IDXGISwapChain*>(chain)->GetDesc(&desc))) return nullptr;
-    auto panel=std::make_unique<Panel>();
-    return initialize(*panel, static_cast<ID3D12Device*>(device), static_cast<ID3D12CommandQueue*>(queue),
-        desc.OutputWindow, logger, user, fence) ? panel.release() : nullptr;
+    return SUCCEEDED(static_cast<IDXGISwapChain*>(chain)->GetDesc(&desc)) ? desc.OutputWindow : nullptr;
+}
+
+void* create_renderer(void* device, void* queue, void** fence) noexcept try {
+    auto renderer=std::make_unique<Renderer>();
+    return initialize(*renderer, static_cast<ID3D12Device*>(device), static_cast<ID3D12CommandQueue*>(queue), fence)
+        ? renderer.release() : nullptr;
 } catch (...) { return nullptr; }
+
+uint32_t install_input(void* window, rsf_overlay12_log logger, void* user) noexcept try {
+    const rsf_overlay_input_options input{sizeof(input),RSF_OVERLAY_INPUT_ABI_VERSION,0,logger,user};
+    return rsf_overlay_input_install(window, &input) == RSF_OVERLAY_INPUT_OK;
+} catch (...) { return 0; }
 
 uint32_t stop_input() {
     const auto result=rsf_overlay_input_uninstall();
     return result==RSF_OVERLAY_INPUT_OK || result==RSF_OVERLAY_INPUT_ERROR_NOT_INSTALLED;
 }
 
-void destroy_panel(void* native) {
-    delete static_cast<Panel*>(native);
+void destroy_renderer(void* native) {
+    delete static_cast<Renderer*>(native);
 }
 
 uint64_t completed(void* fence) {
@@ -225,8 +218,8 @@ uint32_t arm(void* fence, void* event, uint64_t value) {
 }
 
 void* begin_frame(void* native, uint32_t slot, void* chain, rsf_overlay12_target* out) noexcept try {
-    auto& panel=*static_cast<Panel*>(native);
-    auto& frame=panel.frames[slot];
+    auto& renderer=*static_cast<Renderer*>(native);
+    auto& frame=renderer.frames[slot];
     if (FAILED(frame.allocator->Reset())||FAILED(frame.commands->Reset(frame.allocator.Get(),nullptr))) return nullptr;
     ComPtr<IDXGISwapChain3> swapchain;ComPtr<ID3D12Resource> target;
     if (FAILED(static_cast<IDXGISwapChain*>(chain)->QueryInterface(IID_PPV_ARGS(&swapchain)))||
@@ -237,46 +230,32 @@ void* begin_frame(void* native, uint32_t slot, void* chain, rsf_overlay12_target
     return target.Detach();
 } catch (...) { return nullptr; }
 
-uint32_t layout(void* native, uint32_t width, uint32_t height, float elapsed,
-    float hint_alpha, const rsf_overlay_stats* stats, rsf_overlay_intent* decided, rsf_overlay_draw_data* data) noexcept try {
-    auto& panel=*static_cast<Panel*>(native);
-    rsf_overlay_input input{};input.struct_size=sizeof(input);
-    if (rsf_overlay_input_collect(&input,width,height,elapsed)!=RSF_OVERLAY_INPUT_OK) return 0;
-    input.startup_hint_alpha=hint_alpha;
-    return panel.api.frame(panel.ui,&input,stats,data,decided)==RSF_OVERLAY_OK;
+uint32_t collect_input(rsf_overlay_input* input, uint32_t width, uint32_t height, float elapsed) noexcept try {
+    return rsf_overlay_input_collect(input, width, height, elapsed) == RSF_OVERLAY_INPUT_OK;
 } catch (...) { return 0; }
-
-uint32_t updates(void* native, rsf_overlay_texture_update* output, uint32_t capacity) {
-    auto& panel=*static_cast<Panel*>(native);
-    return panel.api.texture_updates(panel.ui,output,capacity);
-}
-
-uint32_t frees(void* native, uint64_t* output, uint32_t capacity) {
-    auto& panel=*static_cast<Panel*>(native);
-    return panel.api.textures_to_free(panel.ui,output,capacity);
-}
 
 uint32_t record(void* native, uint32_t slot, const rsf_overlay12_draw* binding,
     void* const* textures, uint32_t texture_count, const rsf_overlay12_draw_call* calls, uint32_t call_count) noexcept try {
-    auto& panel=*static_cast<Panel*>(native);
-    auto& frame=panel.frames[slot];
-    return draw(panel,frame,*binding,textures,texture_count,calls,call_count) &&
+    auto& renderer=*static_cast<Renderer*>(native);
+    auto& frame=renderer.frames[slot];
+    return draw(renderer,frame,*binding,textures,texture_count,calls,call_count) &&
         SUCCEEDED(frame.commands->Close());
 } catch (...) { return 0; }
 
 void execute(void* native, uint32_t slot) {
-    auto& panel=*static_cast<Panel*>(native);
-    ID3D12CommandList* lists[]{panel.frames[slot].commands.Get()};
-    panel.queue->ExecuteCommandLists(1,lists);
+    auto& renderer=*static_cast<Renderer*>(native);
+    ID3D12CommandList* lists[]{renderer.frames[slot].commands.Get()};
+    renderer.queue->ExecuteCommandLists(1,lists);
 }
 
 uint32_t signal(void* native, void* fence, uint64_t value) {
-    return SUCCEEDED(static_cast<Panel*>(native)->queue->Signal(static_cast<ID3D12Fence*>(fence),value));
+    return SUCCEEDED(static_cast<Renderer*>(native)->queue->Signal(static_cast<ID3D12Fence*>(fence),value));
 }
 
 constexpr rsf_overlay12_platform platform{
-    create_panel, stop_input, destroy_panel, rsf_overlay_input_visible, rsf_overlay_input_set_visible,
-    completed, arm, begin_frame, create_pipeline, create_upload, layout, updates, frees, create_texture, upload_texture, record, execute, signal,
+    output_window, create_renderer, install_input, stop_input, destroy_renderer, rsf_overlay_input_visible,
+    rsf_overlay_input_set_visible, completed, arm, begin_frame, create_pipeline, create_upload, collect_input,
+    create_texture, upload_texture, record, execute, signal,
 };
 }
 
