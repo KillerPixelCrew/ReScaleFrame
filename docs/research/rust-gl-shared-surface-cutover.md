@@ -124,3 +124,27 @@ and `eng/verify.ps1`. The recovery paths are synthetic-tested only. If a lost
 device keeps refusing queue signals, drain and close keep refusing and the
 owner retains its resources, because completion cannot be proven. Results of
 the GL semaphore signal and wait calls are still unchecked, as before.
+
+## Context capability and adapter setup
+
+The follow-up to `038f0650` moves the 13 ordered WGL lookups and the
+two Win32 extension checks into the sharing owner. It keeps the
+first-miss result and rejects the same null, 1, 2, 3 and -1 lookup
+sentinels. The native leaf still asks for the extension count before
+each scan, then lends each indexed string from the active WGL context
+for immediate comparison.
+
+For a caller without a supplied device, Rust now owns the temporary
+DXGI factory and adapter references. The native leaves create the
+factory, enumerate the exact OpenGL LUID, and create the D3D12 device
+at feature level 11.0. Rust releases the adapter and factory before
+queue creation and retains the same `NOT_SUPPORTED` result on setup
+refusal. A successful status with a missing COM reference now refuses
+before the next call.
+
+The 34 private callback slots, the 13 GL entry names and the public
+open wrapper were compared in source. The existing synthetic fixture
+now covers lookup sentinel refusal, short-circuiting, and release of
+partial adapter setup. Pinned formatting, locked offline metadata and
+whitespace checks passed. Native linkage, fixtures and device behavior
+remain unverified on this change.

@@ -11,6 +11,7 @@
 #include <d3d12.h>
 #include <dxgi1_4.h>
 #include <wrl/client.h>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 using Microsoft::WRL::ComPtr;
@@ -20,6 +21,7 @@ static_assert(DXGI_FORMAT_R16G16B16A16_FLOAT == 10 && DXGI_FORMAT_R16G16_FLOAT =
               DXGI_FORMAT_R8G8B8A8_UNORM == 28);
 static_assert(sizeof(GLuint) == sizeof(uint32_t) && sizeof(GLenum) == sizeof(uint32_t) && sizeof(LUID) == 8);
 static_assert(sizeof(HRESULT) == sizeof(int32_t));
+static_assert(D3D_FEATURE_LEVEL_11_0 == 0xb000);
 
 namespace {
 constexpr GLenum luid_query = 0x9599, memory_dedicated = 0x9581, d3d12_resource = 0x958a;
@@ -43,41 +45,24 @@ struct Gl {
 };
 static_assert(sizeof(Gl) == 13 * sizeof(void*));
 
-template<class T> bool resolve(T& target, const char* name)
+const void* gl_lookup(const char* name)
 {
-    target = reinterpret_cast<T>(wglGetProcAddress(name));
-    return target && reinterpret_cast<uintptr_t>(target) > 3 && reinterpret_cast<intptr_t>(target) != -1;
+    return reinterpret_cast<const void*>(wglGetProcAddress(name));
 }
 
-bool extension(const Gl& gl, const char* name)
+int32_t gl_extension_count()
 {
     GLint count = 0;
-    glGetIntegerv(0x821d, &count);
-    for (GLint i = 0; i < count; ++i) {
-        const auto* value = gl.string_index(GL_EXTENSIONS, static_cast<GLuint>(i));
-        if (value && std::strcmp(reinterpret_cast<const char*>(value), name) == 0) return true;
-    }
-    return false;
+    glGetIntegerv(0x821d, &count); // GL_NUM_EXTENSIONS
+    return count;
+}
+
+const char* gl_extension_at(const Gl* gl, uint32_t index)
+{
+    return reinterpret_cast<const char*>(gl->string_index(GL_EXTENSIONS, index));
 }
 
 void* gl_current() { return wglGetCurrentContext(); }
-
-// Resolves the entry points and requires both Win32 interop extensions.
-int gl_load(Gl* gl)
-{
-    *gl = {};
-    return resolve(gl->string_index, "glGetStringi") && resolve(gl->luid, "glGetUnsignedBytevEXT") &&
-           resolve(gl->create_memory, "glCreateMemoryObjectsEXT") &&
-           resolve(gl->delete_memory, "glDeleteMemoryObjectsEXT") &&
-           resolve(gl->memory_parameter, "glMemoryObjectParameterivEXT") &&
-           resolve(gl->import_memory, "glImportMemoryWin32HandleEXT") &&
-           resolve(gl->texture_storage, "glTexStorageMem2DEXT") && resolve(gl->create_semaphore, "glGenSemaphoresEXT") &&
-           resolve(gl->delete_semaphore, "glDeleteSemaphoresEXT") &&
-           resolve(gl->import_semaphore, "glImportSemaphoreWin32HandleEXT") &&
-           resolve(gl->semaphore_parameter, "glSemaphoreParameterui64vEXT") &&
-           resolve(gl->signal, "glSignalSemaphoreEXT") && resolve(gl->wait, "glWaitSemaphoreEXT") &&
-           extension(*gl, "GL_EXT_memory_object_win32") && extension(*gl, "GL_EXT_semaphore_win32");
-}
 
 uint32_t gl_error() { return glGetError(); }
 void gl_luid(const Gl* gl, uint8_t* luid) { gl->luid(luid_query, luid); }
@@ -135,19 +120,22 @@ void acquire(const Gl* gl, uint32_t semaphore, uint64_t value, uint32_t count, c
 }
 void finish() { glFinish(); }
 
-int32_t device_create(const uint8_t* luid, void** out)
+int32_t factory_create(void** out)
 {
-    *out = nullptr;
+    return CreateDXGIFactory1(__uuidof(IDXGIFactory4), out);
+}
+
+int32_t adapter_find(void* factory, const uint8_t* luid, void** out)
+{
     LUID adapter_luid{};
     std::memcpy(&adapter_luid, luid, sizeof(adapter_luid));
-    ComPtr<IDXGIFactory4> factory;
-    ComPtr<IDXGIAdapter1> adapter;
-    ComPtr<ID3D12Device> device;
-    auto result = CreateDXGIFactory1(IID_PPV_ARGS(&factory));
-    if (SUCCEEDED(result)) result = factory->EnumAdapterByLuid(adapter_luid, IID_PPV_ARGS(&adapter));
-    if (SUCCEEDED(result)) result = D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device));
-    if (SUCCEEDED(result)) *out = device.Detach();
-    return result;
+    return static_cast<IDXGIFactory4*>(factory)->EnumAdapterByLuid(adapter_luid, __uuidof(IDXGIAdapter1), out);
+}
+
+int32_t device_create(void* adapter, uint32_t feature_level, void** out)
+{
+    return D3D12CreateDevice(static_cast<IDXGIAdapter1*>(adapter), static_cast<D3D_FEATURE_LEVEL>(feature_level),
+        __uuidof(ID3D12Device), out);
 }
 int32_t queue_create(void* device, void** out)
 {
@@ -251,7 +239,9 @@ int32_t resource_create(void* device, uint32_t width, uint32_t height, uint32_t 
 // Field order matches `Leaves` in gl_shared_surface.rs.
 struct Leaves {
     decltype(&gl_current) gl_current;
-    decltype(&gl_load) gl_load;
+    decltype(&gl_lookup) gl_lookup;
+    decltype(&gl_extension_count) gl_extension_count;
+    decltype(&gl_extension_at) gl_extension_at;
     decltype(&gl_error) gl_error;
     decltype(&gl_luid) gl_luid;
     decltype(&semaphore_import) semaphore_import;
@@ -263,6 +253,8 @@ struct Leaves {
     decltype(&release) release;
     decltype(&acquire) acquire;
     decltype(&finish) finish;
+    decltype(&factory_create) factory_create;
+    decltype(&adapter_find) adapter_find;
     decltype(&device_create) device_create;
     decltype(&queue_create) queue_create;
     decltype(&device_luid) device_luid;
@@ -281,11 +273,14 @@ struct Leaves {
     decltype(&queue_signal) queue_signal;
     decltype(&resource_create) resource_create;
 };
+static_assert(sizeof(Leaves) == 34 * sizeof(void*) && offsetof(Leaves, gl_lookup) == sizeof(void*) &&
+    offsetof(Leaves, factory_create) == 15 * sizeof(void*) && offsetof(Leaves, resource_create) == 33 * sizeof(void*));
 
 constexpr Leaves leaves{
-    gl_current,   gl_load,      gl_error,       gl_luid,      semaphore_import, semaphore_delete,
+    gl_current,   gl_lookup,    gl_extension_count, gl_extension_at,
+    gl_error,     gl_luid,      semaphore_import, semaphore_delete,
     memory_import, memory_delete, texture_store, texture_delete, release,        acquire,
-    finish,       device_create, queue_create,  device_luid,  queue_device,     fence_create,
+    finish,       factory_create, adapter_find, device_create, queue_create, device_luid, queue_device, fence_create,
     shared_handle, event_create, handle_close,  slot_create,  slot_reset,       list_close,
     fence_completed, fence_wait, queue_wait,    queue_execute, queue_signal,    resource_create,
 };

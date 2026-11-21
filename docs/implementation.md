@@ -3464,6 +3464,13 @@ kept their export names and ordinals. The device fixture built and
 device recovery remains unverified.
 [OpenGL shared surface audit](research/rust-gl-shared-surface-cutover.md)
 
+OpenGL sharing now admits the WGL entry points and Win32 extensions
+in Rust, then acquires the D3D12 device for the exact WGL adapter.
+Typed graphics calls remain in native leaves. Source checks matched
+the lookup and adapter setup order. The expanded fixture, binary
+linkage and device checks remain open.
+[Context setup](research/rust-gl-shared-surface-cutover.md#context-capability-and-adapter-setup)
+
 The integrated build passed all 371 locked Rust tests, formatting,
 Clippy and eight MSVC Release contracts. The test gate skipped the
 OpenGL device fixture. Runtime, AC7, Loader, its two aliases, Minecraft,

@@ -378,6 +378,18 @@ Win32 leaves and public input declarations match the existing caller
 paths. Live input and native linkage remain open.
 [Window message routing](research/rust-overlay-host.md#window-message-routing)
 
+The OpenGL shared-surface owner now resolves WGL entries, admits the
+two Win32 sharing extensions and acquires the device for the active
+context's adapter in Rust. Native callbacks still perform the typed
+GL and COM calls. The expanded fixture and device checks remain open.
+[Context setup](research/rust-gl-shared-surface-cutover.md#context-capability-and-adapter-setup)
+
+The source comparison after `038f0650` still matches the public
+Runtime and GameSDK headers and the carrier export definitions at
+`2ceec77`. All 99 Runtime Rust export directives have corresponding
+function definitions in the orchestrator crate. The current DLL and
+linked binaries still need their export and linkage checks.
+
 ## Verification coverage
 
 | Requirement | Recorded evidence | Still open |

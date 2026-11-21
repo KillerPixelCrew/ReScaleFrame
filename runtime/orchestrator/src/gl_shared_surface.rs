@@ -16,7 +16,7 @@ use crate::gl_pipeline_abi::{
 };
 use crate::render_abi::rsf_backend_log_fn;
 use crate::sr_session::has_capacity;
-use std::ffi::{CString, c_int, c_void};
+use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::mem::MaybeUninit;
 use std::ptr::{self, NonNull};
 use std::sync::{Mutex, MutexGuard, TryLockError};
@@ -49,21 +49,40 @@ const GL_RGBA16F: u32 = 0x881a;
 const GL_R32F: u32 = 0x822e;
 const GL_RG16F: u32 = 0x822f;
 const GL_RGBA8: u32 = 0x8058;
+const FEATURE_LEVEL_11_0: u32 = 0xb000;
+
+// Order is the typed Gl table in gl_shared_surface.cpp.
+const GL_ENTRY_POINTS: [&CStr; 13] = [
+    c"glGetStringi",
+    c"glGetUnsignedBytevEXT",
+    c"glCreateMemoryObjectsEXT",
+    c"glDeleteMemoryObjectsEXT",
+    c"glMemoryObjectParameterivEXT",
+    c"glImportMemoryWin32HandleEXT",
+    c"glTexStorageMem2DEXT",
+    c"glGenSemaphoresEXT",
+    c"glDeleteSemaphoresEXT",
+    c"glImportSemaphoreWin32HandleEXT",
+    c"glSemaphoreParameterui64vEXT",
+    c"glSignalSemaphoreEXT",
+    c"glWaitSemaphoreEXT",
+];
 
 type Handle = *mut c_void;
 type Log = rsf_backend_log_fn;
 
-// Storage for the resolved GL extension entry points. Only the native leaves read it; its size
-// matches `Gl` in gl_shared_surface.cpp.
+// Native leaves borrow the resolved entry points as Gl in gl_shared_surface.cpp.
 #[repr(C)]
-pub(crate) struct GlProcs([*const c_void; 13]);
+pub(crate) struct GlProcs([*const c_void; GL_ENTRY_POINTS.len()]);
 
 // Field order matches `Leaves` in gl_shared_surface.cpp. GL leaves return glGetError after their
 // call. D3D12 and DXGI leaves return an HRESULT; created COM interfaces carry one reference.
 #[repr(C)]
 pub(crate) struct Leaves {
     gl_current: unsafe extern "C" fn() -> Handle,
-    gl_load: unsafe extern "C" fn(*mut GlProcs) -> c_int,
+    gl_lookup: unsafe extern "C" fn(*const c_char) -> *const c_void,
+    gl_extension_count: unsafe extern "C" fn() -> i32,
+    gl_extension_at: unsafe extern "C" fn(*const GlProcs, u32) -> *const c_char,
     gl_error: unsafe extern "C" fn() -> u32,
     gl_luid: unsafe extern "C" fn(*const GlProcs, *mut u8),
     semaphore_import: unsafe extern "C" fn(*const GlProcs, Handle, *mut u32) -> u32,
@@ -75,7 +94,9 @@ pub(crate) struct Leaves {
     release: unsafe extern "C" fn(*const GlProcs, u32, u64, u32, *const u32, *const u32),
     acquire: unsafe extern "C" fn(*const GlProcs, u32, u64, u32, *const u32, *const u32),
     finish: unsafe extern "C" fn(),
-    device_create: unsafe extern "C" fn(*const u8, *mut Handle) -> i32,
+    factory_create: unsafe extern "C" fn(*mut Handle) -> i32,
+    adapter_find: unsafe extern "C" fn(Handle, *const u8, *mut Handle) -> i32,
+    device_create: unsafe extern "C" fn(Handle, u32, *mut Handle) -> i32,
     queue_create: unsafe extern "C" fn(Handle, *mut Handle) -> i32,
     device_luid: unsafe extern "C" fn(Handle, *mut u8),
     queue_device: unsafe extern "C" fn(Handle, *mut Handle) -> i32,
@@ -92,6 +113,39 @@ pub(crate) struct Leaves {
     queue_execute: unsafe extern "C" fn(Handle, Handle),
     queue_signal: unsafe extern "C" fn(Handle, Handle, u64) -> i32,
     resource_create: unsafe extern "C" fn(Handle, u32, u32, u32, *mut Handle) -> i32,
+}
+
+const _: () = {
+    assert!(size_of::<GlProcs>() == 13 * size_of::<usize>());
+    assert!(size_of::<Leaves>() == 34 * size_of::<usize>());
+    assert!(std::mem::offset_of!(Leaves, gl_lookup) == size_of::<usize>());
+    assert!(std::mem::offset_of!(Leaves, factory_create) == 15 * size_of::<usize>());
+    assert!(std::mem::offset_of!(Leaves, resource_create) == 33 * size_of::<usize>());
+};
+
+impl GlProcs {
+    fn load(leaves: &Leaves) -> Option<Self> {
+        let mut gl = Self([ptr::null(); GL_ENTRY_POINTS.len()]);
+        for (slot, name) in gl.0.iter_mut().zip(GL_ENTRY_POINTS) {
+            let entry = unsafe { (leaves.gl_lookup)(name.as_ptr()) };
+            // Drivers can report a WGL miss as null, 1, 2, 3 or -1.
+            if entry.addr() <= 3 || entry.addr() == usize::MAX {
+                return None;
+            }
+            *slot = entry;
+        }
+        for name in [c"GL_EXT_memory_object_win32", c"GL_EXT_semaphore_win32"] {
+            let count = unsafe { (leaves.gl_extension_count)() };
+            let found = (0..count).any(|index| {
+                let entry = unsafe { (leaves.gl_extension_at)(&gl, index as u32) };
+                !entry.is_null() && unsafe { CStr::from_ptr(entry) } == name
+            });
+            if !found {
+                return None;
+            }
+        }
+        Some(gl)
+    }
 }
 
 fn failed(result: i32) -> bool {
@@ -440,14 +494,34 @@ impl Context {
     }
 }
 
+fn create_context_device(leaves: &Leaves, luid: &[u8; 8]) -> Result<ComRef, i32> {
+    let mut factory = ptr::null_mut();
+    let result = unsafe { (leaves.factory_create)(&mut factory) };
+    let factory = unsafe { ComRef::from_owned(factory) }
+        .filter(|_| !failed(result))
+        .ok_or(NOT_SUPPORTED)?;
+
+    let mut adapter = ptr::null_mut();
+    let result = unsafe { (leaves.adapter_find)(factory.as_ptr(), luid.as_ptr(), &mut adapter) };
+    let adapter = unsafe { ComRef::from_owned(adapter) }
+        .filter(|_| !failed(result))
+        .ok_or(NOT_SUPPORTED)?;
+
+    let mut device = ptr::null_mut();
+    let result =
+        unsafe { (leaves.device_create)(adapter.as_ptr(), FEATURE_LEVEL_11_0, &mut device) };
+    unsafe { ComRef::from_owned(device) }
+        .filter(|_| !failed(result))
+        .ok_or(NOT_SUPPORTED)
+}
+
 fn open(setup: &rsf_gl_setup, leaves: &'static Leaves, gl_context: Handle) -> Result<Context, i32> {
     let l = leaves;
     let say = |text: &str| message(setup.log, setup.user, text);
-    let mut gl = GlProcs([ptr::null(); 13]);
-    if unsafe { (l.gl_load)(&mut gl) } == 0 {
+    let Some(gl) = GlProcs::load(l) else {
         say("OpenGL sharing requires EXT_memory_object_win32 and EXT_semaphore_win32.");
         return Err(NOT_SUPPORTED);
-    }
+    };
     let mut luid = [0u8; 8];
     unsafe { (l.gl_luid)(&gl, luid.as_mut_ptr()) };
     if unsafe { (l.gl_error)() } != GL_NO_ERROR {
@@ -466,11 +540,7 @@ fn open(setup: &rsf_gl_setup, leaves: &'static Leaves, gl_context: Handle) -> Re
         }
         (device, queue)
     } else {
-        let mut device = ptr::null_mut();
-        let created = unsafe { (l.device_create)(luid.as_ptr(), &mut device) };
-        let device = unsafe { ComRef::from_owned(device) }
-            .filter(|_| !failed(created))
-            .ok_or(NOT_SUPPORTED)?;
+        let device = create_context_device(l, &luid)?;
         let mut queue = ptr::null_mut();
         let created = unsafe { (l.queue_create)(device.as_ptr(), &mut queue) };
         let queue = unsafe { ComRef::from_owned(queue) }

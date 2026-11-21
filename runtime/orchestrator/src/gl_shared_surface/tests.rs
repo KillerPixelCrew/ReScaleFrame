@@ -6,7 +6,6 @@
 use super::*;
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
-use std::ffi::c_char;
 
 const E_FAIL: i32 = 0x8000_4005_u32 as i32;
 const GL_CONTEXT: Handle = 0x77 as Handle;
@@ -55,10 +54,13 @@ static VTABLE: Vtable = Vtable {
 fn com(kind: &str) -> Handle {
     let name = world(|world| {
         world.next += 1;
-        let name = format!("{kind}{}", world.next);
-        world.com.insert(name.clone());
-        name
+        format!("{kind}{}", world.next)
     });
+    named_com(name)
+}
+
+fn named_com(name: String) -> Handle {
+    world(|world| assert!(world.com.insert(name.clone())));
     Box::into_raw(Box::new(Fake {
         vtable: &VTABLE,
         refs: Cell::new(1),
@@ -85,6 +87,9 @@ struct World {
     handles: HashSet<usize>,
     context: usize,
     missing_extension: bool,
+    bad_entry: Option<usize>,
+    looked_up: Vec<String>,
+    adapter_refused: bool,
     gl_errors: Vec<u32>,
     device_luid: [u8; 8],
     queue_owner: usize,
@@ -135,8 +140,30 @@ fn names(count: u32, names: *const u32) -> String {
 unsafe extern "C" fn gl_current() -> Handle {
     world(|world| world.context) as Handle
 }
-unsafe extern "C" fn gl_load(_: *mut GlProcs) -> c_int {
-    c_int::from(!world(|world| world.missing_extension))
+unsafe extern "C" fn gl_lookup(name: *const c_char) -> *const c_void {
+    let name = unsafe { CStr::from_ptr(name) };
+    let address = world(|world| {
+        let index = world.looked_up.len() % GL_ENTRY_POINTS.len();
+        assert_eq!(name, GL_ENTRY_POINTS[index]);
+        world.looked_up.push(name.to_string_lossy().into_owned());
+        if index == 2 {
+            return world.bad_entry.unwrap_or(4 + index);
+        }
+        4 + index
+    });
+    ptr::without_provenance(address)
+}
+unsafe extern "C" fn gl_extension_count() -> i32 {
+    2
+}
+unsafe extern "C" fn gl_extension_at(gl: *const GlProcs, index: u32) -> *const c_char {
+    assert_eq!(unsafe { (*gl).0[0].addr() }, 4);
+    match index {
+        0 => c"GL_EXT_memory_object_win32".as_ptr(),
+        1 if !world(|world| world.missing_extension) => c"GL_EXT_semaphore_win32".as_ptr(),
+        1 => ptr::null(),
+        _ => unreachable!(),
+    }
 }
 unsafe extern "C" fn gl_error() -> u32 {
     world(|world| world.gl_errors.pop()).unwrap_or(GL_NO_ERROR)
@@ -219,8 +246,22 @@ unsafe extern "C" fn gl_acquire(
 unsafe extern "C" fn finish() {
     event("finish".into());
 }
-unsafe extern "C" fn device_create(luid: *const u8, out: *mut Handle) -> i32 {
+unsafe extern "C" fn factory_create(out: *mut Handle) -> i32 {
+    unsafe { out.write(named_com("factory setup".into())) };
+    OK
+}
+unsafe extern "C" fn adapter_find(factory: Handle, luid: *const u8, out: *mut Handle) -> i32 {
+    assert_eq!(com_name(factory), "factory setup");
     assert_eq!(unsafe { std::slice::from_raw_parts(luid, 8) }, LUID);
+    unsafe { out.write(named_com("adapter setup".into())) };
+    if world(|world| world.adapter_refused) {
+        return E_FAIL;
+    }
+    OK
+}
+unsafe extern "C" fn device_create(adapter: Handle, level: u32, out: *mut Handle) -> i32 {
+    assert_eq!(com_name(adapter), "adapter setup");
+    assert_eq!(level, FEATURE_LEVEL_11_0);
     unsafe { out.write(com("device")) };
     OK
 }
@@ -331,7 +372,9 @@ unsafe extern "C" fn resource_create(
 
 static LEAVES: Leaves = Leaves {
     gl_current,
-    gl_load,
+    gl_lookup,
+    gl_extension_count,
+    gl_extension_at,
     gl_error,
     gl_luid,
     semaphore_import,
@@ -343,6 +386,8 @@ static LEAVES: Leaves = Leaves {
     release: gl_release,
     acquire: gl_acquire,
     finish,
+    factory_create,
+    adapter_find,
     device_create,
     queue_create,
     device_luid,
@@ -809,11 +854,34 @@ fn open_validates_setup_and_releases_partial_state() {
         world(|world| world.logs.clone()),
         ["OpenGL sharing requires EXT_memory_object_win32 and EXT_semaphore_win32."]
     );
+    assert_eq!(world(|world| world.looked_up.len()), GL_ENTRY_POINTS.len());
+
+    for address in [0, 1, 2, 3, usize::MAX] {
+        reset();
+        world(|world| world.bad_entry = Some(address));
+        assert_eq!(open_with(&setup()), (NOT_SUPPORTED, ptr::null_mut()));
+        assert_eq!(world(|world| world.looked_up.len()), 3);
+        assert!(events().is_empty());
+    }
+
+    reset();
+    world(|world| world.adapter_refused = true);
+    assert_eq!(open_with(&setup()), (NOT_SUPPORTED, ptr::null_mut()));
+    assert_eq!(events(), ["release adapter setup", "release factory setup"]);
+    assert!(world(|world| world.com.is_empty()));
 
     reset();
     world(|world| world.fail_semaphore = true);
     assert_eq!(open_with(&setup()).0, FEATURE_FAILED);
-    assert_eq!(&events()[..2], ["import semaphore 1", "delete semaphore 1"]);
+    assert_eq!(
+        &events()[..4],
+        [
+            "release adapter setup",
+            "release factory setup",
+            "import semaphore 1",
+            "delete semaphore 1",
+        ]
+    );
     world(|world| {
         assert!(world.com.is_empty(), "{:?}", world.com);
         assert!(world.handles.is_empty());
