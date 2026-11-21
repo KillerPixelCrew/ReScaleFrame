@@ -4,6 +4,7 @@ use std::ffi::{c_char, c_void};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use crate::native_hooks::{HookOps, Target, enable_batch, transaction};
+use crate::runtime_module::Module;
 
 const MAX_HOOKS: usize = 32;
 
@@ -12,7 +13,7 @@ type Address = usize;
 type SinkCallback = unsafe extern "C" fn(*mut c_void, *mut c_void);
 type InputObserver = unsafe extern "C" fn(u8);
 type Add = unsafe extern "C" fn(*mut c_void, Address, Address, u32, *mut Reason) -> bool;
-type Probe = unsafe extern "C" fn(*mut c_void, Add, *mut Reason) -> bool;
+type Probe = unsafe extern "C" fn(*mut c_void, Add, *mut Reason, *mut *mut c_void) -> bool;
 
 #[derive(Clone, Copy)]
 struct PresentSink {
@@ -35,6 +36,8 @@ struct Hook {
 
 struct State {
     hooks: Vec<Hook>,
+    // Once activation can reach a trampoline, keep its source library mapped.
+    modules: [Option<Module>; 2],
     input_attempted: bool,
     present_attempted: bool,
     gate: Address,
@@ -53,6 +56,7 @@ impl Hooks {
             installation: Mutex::new(()),
             state: Mutex::new(State {
                 hooks: Vec::new(),
+                modules: [None, None],
                 input_attempted: false,
                 present_attempted: false,
                 gate: 0,
@@ -95,13 +99,18 @@ impl Hooks {
             pending: [Pending::default(); MAX_HOOKS],
             count: 0,
         };
-        if !unsafe {
+        let mut handle = std::ptr::null_mut();
+        let discovered = unsafe {
             probe(
                 (&mut registration as *mut Registration<'_>).cast(),
                 add,
                 &mut reason,
+                &mut handle,
             )
-        } {
+        };
+        // A probe transfers its successful LoadLibrary reference even on refusal.
+        let module = unsafe { Module::from_owned(handle) };
+        if !discovered {
             return Err(reason);
         }
 
@@ -141,6 +150,7 @@ impl Hooks {
                     original: original.expose_provenance(),
                     method: hook.method,
                 }));
+            state.modules[usize::from(matches!(binding, Binding::Present(_)))] = module;
             state.publish(binding, true);
         }
         if !enable_batch(
@@ -381,15 +391,30 @@ mod tests {
         })
     }
 
-    unsafe extern "C" fn input(registration: *mut c_void, add: Add, reason: *mut Reason) -> bool {
+    unsafe extern "C" fn input(
+        registration: *mut c_void,
+        add: Add,
+        reason: *mut Reason,
+        _: *mut *mut c_void,
+    ) -> bool {
         unsafe { add(registration, 11, 1, 0, reason) && add(registration, 11, 1, 0, reason) }
     }
 
-    unsafe extern "C" fn present(registration: *mut c_void, add: Add, reason: *mut Reason) -> bool {
+    unsafe extern "C" fn present(
+        registration: *mut c_void,
+        add: Add,
+        reason: *mut Reason,
+        _: *mut *mut c_void,
+    ) -> bool {
         unsafe { add(registration, 21, 1, 6, reason) && add(registration, 22, 1, 7, reason) }
     }
 
-    unsafe extern "C" fn aliased(registration: *mut c_void, add: Add, reason: *mut Reason) -> bool {
+    unsafe extern "C" fn aliased(
+        registration: *mut c_void,
+        add: Add,
+        reason: *mut Reason,
+        _: *mut *mut c_void,
+    ) -> bool {
         unsafe { add(registration, 21, 1, 6, reason) && add(registration, 21, 1, 7, reason) }
     }
 

@@ -1,20 +1,16 @@
 // SPDX-License-Identifier: MIT
+use crate::runtime_module::Module;
 use std::collections::HashMap;
 use std::ffi::{CStr, c_char, c_void};
 use std::fs::File;
 use std::io::{ErrorKind, Read};
 use std::os::windows::io::FromRawHandle;
-use std::ptr::{NonNull, null, null_mut};
+use std::ptr::{null, null_mut};
 use std::sync::Mutex;
 use windows_sys::Win32::Foundation::{
-    E_FAIL, E_INVALIDARG, E_OUTOFMEMORY, FARPROC, FreeLibrary, HANDLE, S_FALSE, S_OK,
-};
-use windows_sys::Win32::System::LibraryLoader::{
-    GetModuleHandleExW, GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
+    E_FAIL, E_INVALIDARG, E_OUTOFMEMORY, FARPROC, HANDLE, S_FALSE, S_OK,
 };
 use windows_sys::core::{HRESULT, w};
-
-struct Module(NonNull<c_void>);
 
 fn allocate<T>(value: T) -> *mut T {
     const { assert!(size_of::<T>() != 0) }
@@ -25,39 +21,19 @@ fn allocate<T>(value: T) -> *mut T {
     raw
 }
 
-impl Module {
-    unsafe fn loaded(name: *const u16) -> Option<Self> {
-        let mut handle = null_mut();
-        // The original by-name lookup, with a reference acquired in the same call.
-        if unsafe { GetModuleHandleExW(0, name, &mut handle) } == 0 {
-            return None;
-        }
-        NonNull::new(handle).map(Self)
-    }
-
-    unsafe fn system(name: *const u16) -> Option<Self> {
-        let handle = unsafe { LoadLibraryExW(name, null_mut(), LOAD_LIBRARY_SEARCH_SYSTEM32) };
-        NonNull::new(handle).map(Self)
-    }
-
-    fn export(self, name: &CStr) -> Option<ModuleExport> {
-        let entry = unsafe { GetProcAddress(self.0.as_ptr(), name.as_ptr().cast()) }?;
-        Some(ModuleExport {
-            _module: self,
-            entry,
-        })
-    }
-}
-
-impl Drop for Module {
-    fn drop(&mut self) {
-        unsafe { FreeLibrary(self.0.as_ptr()) };
-    }
-}
-
 struct ModuleExport {
     _module: Module,
     entry: unsafe extern "system" fn() -> isize,
+}
+
+impl ModuleExport {
+    fn new(module: Module, name: &CStr) -> Option<Self> {
+        let entry = module.symbol(name)?;
+        Some(Self {
+            _module: module,
+            entry,
+        })
+    }
 }
 
 #[derive(Default)]
@@ -75,10 +51,10 @@ impl Modules {
         if compiler.is_none() && allow_system_fallback {
             compiler = unsafe { Module::system(name) };
         }
-        let compiler = compiler.and_then(|module| module.export(c"D3DCompile"));
+        let compiler = compiler.and_then(|module| ModuleExport::new(module, c"D3DCompile"));
         // _43 exposes an older reflection IID. Reflect with _47 for the current SDK interface.
         let reflector = unsafe { Module::system(w!("d3dcompiler_47.dll")) }
-            .and_then(|module| module.export(c"D3DReflect"));
+            .and_then(|module| ModuleExport::new(module, c"D3DReflect"));
         Self {
             compiler,
             reflector,

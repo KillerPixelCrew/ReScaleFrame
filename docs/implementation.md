@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Anomaly's DirectInput and DXGI probes now transfer their counted
+System32 DLL references to the Rust hook registry. Discovery and
+unqueued creation refusals release the reference. Once a batch can
+activate, Rust keeps the reference with its trampolines. The shader
+compiler uses the same adapter module lease. Source review checked
+the transfer and refusal order. Live hook installation and rollback
+remain unverified for this revision.
+
 The D3D12 FSR and XeSS frame-generation bindings now own their
 SDK module references in Rust. The shared owner releases the typed
 native bindings before unloading FidelityFX, XeSS FG or XeLL. The

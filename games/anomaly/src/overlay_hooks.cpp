@@ -9,7 +9,7 @@
 using HookAddress = uintptr_t;
 using HookReason = const char*;
 using AddHook = bool (*)(void*, HookAddress, HookAddress, uint32_t, HookReason*) noexcept;
-using ProbeHooks = bool (*)(void*, AddHook, HookReason*) noexcept;
+using ProbeHooks = bool (*)(void*, AddHook, HookReason*, void**) noexcept;
 using InputObserver = void (*)(rsf::anomaly::overlay::DeviceKind) noexcept;
 using PresentCallback = void (*)(void*, IDXGISwapChain*) noexcept;
 
@@ -147,7 +147,7 @@ HRESULT STDMETHODCALLTYPE hook_set_cooperative_level(void* self, HWND window, DW
     return result;
 }
 
-bool probe_input(void* registry, AddHook add, HookReason* reason) noexcept {
+bool probe_input(void* registry, AddHook add, HookReason* reason, void** owned_module) noexcept {
     const Collector collect{registry, add};
     wchar_t path[MAX_PATH]{};
     const UINT length = GetSystemDirectoryW(path, MAX_PATH);
@@ -157,6 +157,7 @@ bool probe_input(void* registry, AddHook add, HookReason* reason) noexcept {
     // The same absolute path the carrier forwards to, so these are the engine's DirectInput classes.
     HMODULE module = LoadLibraryExW(path, nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
     if (!module) { *reason = "system dinput8.dll could not be loaded"; return false; }
+    *owned_module = module;
     using Create = HRESULT (WINAPI*)(HINSTANCE, DWORD, REFIID, LPVOID*, LPUNKNOWN);
     const auto create = reinterpret_cast<Create>(reinterpret_cast<void*>(GetProcAddress(module, "DirectInput8Create")));
     if (!create) { *reason = "system DirectInput8Create missing"; return false; }
@@ -231,9 +232,10 @@ struct DummyChain {
     }
 };
 
-bool probe_present(void* registry, AddHook add, HookReason* reason) noexcept {
+bool probe_present(void* registry, AddHook add, HookReason* reason, void** owned_module) noexcept {
     const Collector collect{registry, add};
     HMODULE d3d11 = LoadLibraryExW(L"d3d11.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    *owned_module = d3d11;
     const auto create = d3d11 ? reinterpret_cast<PFN_D3D11_CREATE_DEVICE_AND_SWAP_CHAIN>(
         reinterpret_cast<void*>(GetProcAddress(d3d11, "D3D11CreateDeviceAndSwapChain"))) : nullptr;
     if (!create) { *reason = "d3d11.dll unavailable"; return false; }

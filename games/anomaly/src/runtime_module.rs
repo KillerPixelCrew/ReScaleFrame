@@ -1,9 +1,49 @@
 // SPDX-License-Identifier: MIT
-//! By-name access to the Runtime already loaded by Anomaly's carrier.
-use std::ffi::{CStr, c_char};
-use windows_sys::Win32::Foundation::{FARPROC, HMODULE};
-use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+//! Windows module leases and by-name access to the Runtime already loaded by Anomaly's carrier.
+use std::ffi::{CStr, c_char, c_void};
+use std::ptr::{NonNull, null_mut};
+use windows_sys::Win32::Foundation::{FARPROC, FreeLibrary, HMODULE};
+use windows_sys::Win32::System::LibraryLoader::{
+    GetModuleHandleExW, GetModuleHandleW, GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32,
+    LoadLibraryExW,
+};
 use windows_sys::core::w;
+
+pub(crate) struct Module(NonNull<c_void>);
+
+// A counted Windows module reference can be released from another thread.
+unsafe impl Send for Module {}
+
+impl Module {
+    /// Adopt one reference transferred by a successful Windows loader call.
+    pub(crate) unsafe fn from_owned(handle: HMODULE) -> Option<Self> {
+        NonNull::new(handle).map(Self)
+    }
+
+    pub(crate) unsafe fn loaded(name: *const u16) -> Option<Self> {
+        let mut handle = null_mut();
+        // Lookup the named module and acquire its reference in the same call.
+        if unsafe { GetModuleHandleExW(0, name, &mut handle) } == 0 {
+            return None;
+        }
+        unsafe { Self::from_owned(handle) }
+    }
+
+    pub(crate) unsafe fn system(name: *const u16) -> Option<Self> {
+        let handle = unsafe { LoadLibraryExW(name, null_mut(), LOAD_LIBRARY_SEARCH_SYSTEM32) };
+        unsafe { Self::from_owned(handle) }
+    }
+
+    pub(crate) fn symbol(&self, name: &CStr) -> FARPROC {
+        unsafe { GetProcAddress(self.0.as_ptr(), name.as_ptr().cast()) }
+    }
+}
+
+impl Drop for Module {
+    fn drop(&mut self) {
+        unsafe { FreeLibrary(self.0.as_ptr()) };
+    }
+}
 
 #[unsafe(no_mangle)]
 pub(crate) extern "C" fn rsf_anomaly_runtime_module() -> HMODULE {
