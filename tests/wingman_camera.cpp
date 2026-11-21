@@ -33,6 +33,9 @@ int main()
     const float current_translation[3]={-1,0,0};
     store(view.data(),0x600,current_translation);
     if (!rsf::wingman::read_camera(view.data(),pass) || !close(pass.camera.clip_to_previous_clip[8],0.1f)) return 1;
+    pass.render_rect[0] = 101;
+    if (rsf::wingman::read_camera(view.data(),pass) || pass.camera_valid) return 1;
+    pass.render_rect[0] = 0;
     const uint32_t unknown=UINT32_MAX; store(family.data(),0x5c,unknown);
     if (rsf::wingman::read_camera(view.data(),pass) || pass.camera_valid) return 1;
     store(family.data(),0x5c,frame);

@@ -28,7 +28,8 @@ generate("runtime/backends/fsr/compat/src/abi.rs", "runtime/backends/fsr/src/fsr
          "rsf_fsr4_compat_.*", "RSF_FSR4_COMPAT_PLATFORM_ABI_VERSION", [])
 generate("sdk/game/src/lib.rs", "sdk/game/include/rescaleframe/game_api.h",
          "rsf_(get_game_plugin_api_fn|frame_record|game_cpu_(source|receipt)_event)", "RSF_.*",
-         ["-Isdk/game/include"], ["--raw-line", "pub mod sr_abi;", "--raw-line", "pub mod shader_patch_abi;"])
+         ["-Isdk/game/include"], ["--raw-line", "pub mod camera_math;",
+          "--raw-line", "pub mod shader_patch_abi;", "--raw-line", "pub mod sr_abi;"])
 generate("sdk/game/src/shader_patch_abi.rs", "runtime/shader_patch/include/rescaleframe/shader_patch.h",
          "rsf_(get_shader_patch_api_fn|shader_patch_api|patch_.*)", "RSF_(SHADER_PATCH_VERSION|PATCH_.*)", [],
          ["--with-derive-default"])

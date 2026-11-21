@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "native_observer.h"
 #include "native_execution.h"
+#include "native_read.h"
 #include <rescaleframe/game_plugin_util.h>
 #include <rescaleframe/log.h>
 #include <rescaleframe/sha256_file.h>
@@ -38,23 +39,6 @@ const char* reason = "Native temporal pass observer has not been prepared.";
 struct Sample { uintptr_t owner = 0; ULONGLONG last = 0; Rect input{}, output{}; };
 std::array<Sample, 16> samples{};
 uint64_t serial = 0;
-
-bool copy(void* output, const void* input, size_t bytes) noexcept
-{
-    if (!input) return false;
-#if defined(_MSC_VER)
-    __try { std::memcpy(output, input, bytes); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
-#else
-    MEMORY_BASIC_INFORMATION memory{};
-    if (!VirtualQuery(input, &memory, sizeof(memory)) || memory.State != MEM_COMMIT ||
-        (memory.Protect & (PAGE_NOACCESS | PAGE_GUARD)) ||
-        uintptr_t(input) + bytes > uintptr_t(memory.BaseAddress) + memory.RegionSize) return false;
-    std::memcpy(output, input, bytes); return true;
-#endif
-}
-template<class T> bool read(const void* base, size_t offset, T& value) noexcept
-{ return base && copy(&value, static_cast<const unsigned char*>(base) + offset, sizeof(value)); }
 
 void observe(void* graph, const void* view, const Inputs* input, void** output,
              Rect* output_rect, void** half, Rect* half_rect) noexcept try

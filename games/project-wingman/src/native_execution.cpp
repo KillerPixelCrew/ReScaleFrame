@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "native_execution.h"
 #include "native_camera.h"
+#include "native_read.h"
 #include <rescaleframe/log.h>
 #include <MinHook.h>
 #include <d3d11.h>
@@ -51,23 +52,6 @@ struct Pending {
 };
 thread_local Pending* construction = nullptr;
 std::unordered_map<const void*, Pending> pending;
-
-bool copy(void* output, const void* input, size_t bytes) noexcept
-{
-    if (!input) return false;
-#if defined(_MSC_VER)
-    __try { std::memcpy(output, input, bytes); return true; }
-    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
-#else
-    MEMORY_BASIC_INFORMATION page{};
-    if (!VirtualQuery(input, &page, sizeof(page)) || page.State != MEM_COMMIT ||
-        (page.Protect & (PAGE_GUARD | PAGE_NOACCESS)) ||
-        uintptr_t(input) + bytes > uintptr_t(page.BaseAddress) + page.RegionSize) return false;
-    std::memcpy(output, input, bytes); return true;
-#endif
-}
-template<class T> bool read(const void* base, size_t offset, T& value) noexcept
-{ return base && copy(&value, static_cast<const unsigned char*>(base) + offset, sizeof(value)); }
 
 // UE4.27 inserts GetSizeXYZ before GetNativeResource. Calling the 4.18 slot would
 // use a different return ABI; this getter is slot 0x38 in the matched branch.

@@ -5,6 +5,7 @@
 #![allow(clippy::needless_range_loop)]
 
 use crate::layout::view;
+use rsf_game_sys::camera_math::inverse_4x4 as inverse;
 use rsf_game_sys::{RSF_GAME_CAMERA_ABI_VERSION, rsf_camera_frame};
 use std::ffi::c_void;
 use std::slice;
@@ -63,43 +64,6 @@ fn multiply(a: &Matrix, b: &Matrix) -> Matrix {
         }
     }
     result
-}
-
-fn inverse(input: &Matrix) -> Option<Matrix> {
-    let mut rows = [[0.0f64; 8]; 4];
-    for (r, row) in rows.iter_mut().enumerate() {
-        row[..4].copy_from_slice(&input[r * 4..r * 4 + 4]);
-        row[r + 4] = 1.0;
-    }
-    for c in 0..4 {
-        let mut pivot = c;
-        for r in c + 1..4 {
-            if rows[r][c].abs() > rows[pivot][c].abs() {
-                pivot = r;
-            }
-        }
-        if !rows[pivot][c].is_finite() || rows[pivot][c].abs() < 1e-12 {
-            return None;
-        }
-        rows.swap(c, pivot);
-        let divisor = rows[c][c];
-        for value in &mut rows[c] {
-            *value /= divisor;
-        }
-        for r in 0..4 {
-            if r != c {
-                let scale = rows[r][c];
-                for k in 0..8 {
-                    rows[r][k] -= scale * rows[c][k];
-                }
-            }
-        }
-    }
-    let mut output = [0.0; 16];
-    for (r, row) in rows.iter().enumerate() {
-        output[r * 4..r * 4 + 4].copy_from_slice(&row[4..]);
-    }
-    Some(output)
 }
 
 fn scalar(bytes: &[u8], offset: usize) -> f32 {
