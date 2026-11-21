@@ -19,7 +19,6 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -212,15 +211,6 @@ bool hooked_should(void* primitive, void* view, bool check_visibility)
     return accepted;
 }
 
-template<size_t N> void floats(std::ostream& out, const float (&values)[N])
-{
-    out << '[';
-    for (size_t i = 0; i < N; ++i) {
-        if (i) out << ',';
-        if (std::isfinite(values[i])) out << values[i]; else out << "null";
-    }
-    out << ']';
-}
 uint32_t save_blob(std::vector<unsigned char> bytes)
 {
     auto& s = state();
@@ -794,55 +784,33 @@ void compute_capture(void*, void* context, uint32_t x, uint32_t y, uint32_t z, v
 }
 catch (...) { capture_failed(); }
 
-bool write_file(const std::string& name, const void* data, size_t bytes)
+bool write_file(const char* path, const unsigned char* data, size_t bytes) noexcept
 {
-    FILE* f = std::fopen(name.c_str(), "wb");
+    FILE* f = std::fopen(path, "wb");
     if (!f) return false;
-    const bool ok = std::fwrite(data, 1, bytes, f) == bytes;
+    const bool ok = bytes == 0 || std::fwrite(data, 1, bytes, f) == bytes;
     return std::fclose(f) == 0 && ok;
 }
-bool write_blobs(const std::string& prefix, const std::vector<std::vector<unsigned char>>& blobs)
+
+template<class List> MotionArtifactList byte_artifacts(const List& list) noexcept
 {
-    bool ok = true;
-    for (size_t i = 0; i < blobs.size(); ++i)
-        ok = write_file(prefix + "\\cb_" + std::to_string(i + 1) + ".bin", blobs[i].data(), blobs[i].size()) && ok;
-    return ok;
+    return {&list, list.size(), [](const void* user, size_t index) noexcept -> MotionArtifact {
+        const auto& bytes = (*static_cast<const List*>(user))[index];
+        return {reinterpret_cast<const unsigned char*>(bytes.data()), bytes.size(), 0, 0};
+    }};
 }
-std::string roots_json(const RootRecord* records, size_t count)
+MotionArtifactList shader_artifacts(const std::vector<Shader>& shaders) noexcept
 {
-    std::ostringstream roots;
-    for (size_t i = 0; i < count; ++i) {
-        const auto& r = records[i];
-        roots << "{\"kind\":\"" << rsf_ac7_capture_root_kind(r.kind)
-            << "\",\"id\":" << r.id << ",\"parent\":" << r.parent
-            << ",\"qpc\":" << r.qpc << ",\"thread\":" << r.thread << ",\"interval\":" << r.interval
-            << ",\"owner\":" << r.owner << ",\"command_list\":" << r.command_list
-            << ",\"view\":" << r.view << ",\"view_blob\":" << r.view_blob
-            << ",\"context\":" << r.context << ",\"input_node\":" << r.input_node
-            << ",\"output_node\":" << r.output_node << ",\"velocity_node\":" << r.velocity_node
-            << ",\"vtable\":" << r.vtable << ",\"node_blob\":" << r.node_blob
-            << ",\"family\":" << r.family << ",\"native_frame\":" << r.native_frame
-            << ",\"process_fn\":" << r.process_fn << ",\"desc_fn\":" << r.desc_fn
-            << ",\"output_id\":" << r.output_id << ",\"output_name\":\"" << r.output_name
-            << "\",\"output_valid\":" << r.output_valid << ",\"output_extent\":[" << r.width << ',' << r.height
-            << "],\"output_format\":" << r.format << ",\"pooled_target\":" << r.pooled_target
-            << ",\"queue_begin\":" << r.queue_begin << ",\"queue_end\":" << r.queue_end
-            << ",\"queue_uid\":" << r.queue_uid << ",\"commands\":" << r.commands
-            << ",\"velocity_reference\":" << r.velocity_reference << ",\"velocity_rhi\":" << r.velocity_rhi
-            << ",\"execution_scope\":" << r.execution_scope << ",\"native_role\":" << r.native_role
-            << ",\"color_input\":" << r.color_input << ",\"color_output\":" << r.color_output
-            << ",\"depth\":" << r.depth << ",\"motion\":" << r.motion
-            << ",\"fields_valid\":" << r.fields_valid << ",\"draw_size\":[" << r.draw_size[0] << ',' << r.draw_size[1]
-            << "],\"widget\":" << r.widget << ",\"target\":" << r.target
-            << ",\"downsample\":" << r.downsample << ",\"blur_x\":" << r.blur_x
-            << ",\"blur_y\":" << r.blur_y << ",\"glow\":" << r.glow << "}\n";
-    }
-    return roots.str();
+    return {&shaders, shaders.size(), [](const void* user, size_t index) noexcept -> MotionArtifact {
+        const auto& shader = (*static_cast<const std::vector<Shader>*>(user))[index];
+        return {shader.data.data(), shader.data.size(), shader.stage, shader.hash};
+    }};
 }
-bool copy_checkpoint_roots(void* user, const NativeRecordsView* records) noexcept try
+
+bool copy_checkpoint_roots(void* user, const RootRecord* records, size_t count) noexcept try
 {
     auto& roots = *static_cast<std::vector<RootRecord>*>(user);
-    if (records->counts.roots) roots.assign(records->roots, records->roots + records->counts.roots);
+    roots.assign(records, records + count);
     return true;
 }
 catch (...) { return false; }
@@ -858,97 +826,42 @@ void checkpoint_native() noexcept
             std::lock_guard<std::mutex> lock(s.guard);
             if (!s.active.load()) return;
             prefix = s.prefix;
-            copied = rsf_ac7_capture_read_records(&roots, copy_checkpoint_roots);
+            copied = rsf_ac7_capture_copy_roots(&roots, copy_checkpoint_roots);
             if (copied) blobs = s.blobs;
         }
         if (!copied) { capture_failed(); return; }
-        const auto text = roots_json(roots.data(), roots.size());
-        bool ok = write_file(prefix + "\\native.partial.jsonl", text.data(), text.size());
-        ok = write_blobs(prefix, blobs) && ok;
-        if (!ok) say("motion capture: native checkpoint could not be fully written");
+        const auto files = byte_artifacts(blobs);
+        const auto result = rsf_ac7_capture_publish_checkpoint(prefix.c_str(), write_file,
+            roots.data(), roots.size(), &files);
+        if (result == publication_failed) capture_failed();
+        else if (result == publication_partial) say("motion capture: native checkpoint could not be fully written");
     } catch (...) { capture_failed(); }
 }
-struct FinishNative {
-    const std::string& prefix;
-    NativeRecordCounts counts{};
-    bool ok = true;
-};
-bool write_native_records(void* user, const NativeRecordsView* records) noexcept try
+
+MotionArtifactStats finish_stats(const void* user) noexcept
 {
-    auto& native = *static_cast<FinishNative*>(user);
-    native.counts = records->counts;
-    std::ostringstream engine; engine.precision(9);
-    for (size_t i = 0; i < native.counts.engine; ++i) {
-        const auto& e = records->engine[i];
-        const auto& f = e.facts;
-        engine << "{\"qpc\":" << e.qpc << ",\"interval\":" << e.interval << ",\"thread\":" << e.thread
-            << ",\"primitive\":" << e.primitive << ",\"proxy\":" << e.proxy << ",\"view\":" << e.view
-            << ",\"component\":" << e.component << ",\"index\":" << e.index << ",\"accepted\":" << f.accepted
-            << ",\"reason\":\"" << rsf_ac7_velocity_reason(&f) << "\",\"mobility\":" << f.mobility
-            << ",\"relevance\":" << f.relevance << ",\"fields_valid\":" << f.fields_valid
-            << ",\"visible\":" << f.visible << ",\"camera_cut\":" << f.camera_cut
-            << ",\"always_velocity\":" << f.always_velocity
-            << ",\"has_velocity_called\":" << f.has_velocity_called << ",\"has_velocity\":" << f.has_velocity
-            << ",\"selection_metrics\":";
-        const float metrics[] = {f.radius, f.distance_squared, f.lod_factor, f.minimum_size};
-        floats(engine, metrics);
-        engine << ",\"camera\":"; floats(engine, e.camera);
-        engine << ",\"origin\":"; floats(engine, e.origin);
-        engine << ",\"current\":"; floats(engine, e.current);
-        engine << ",\"history_checked\":" << f.history_checked << ",\"history_found\":" << f.history_found
-            << ",\"previous\":"; floats(engine, e.previous); engine << "}\n";
-    }
-    const std::string engine_text = engine.str();
-    native.ok = write_file(native.prefix + "\\engine.jsonl", engine_text.data(), engine_text.size());
-    const std::string roots_text = roots_json(records->roots, native.counts.roots);
-    native.ok = write_file(native.prefix + "\\native.jsonl", roots_text.data(), roots_text.size()) && native.ok;
-    return true;
+    const auto& s = *static_cast<const Capture*>(user);
+    LARGE_INTEGER frequency{}; QueryPerformanceFrequency(&frequency);
+    return {frequency.QuadPart, s.installed.load(), s.roots_installed.load(), s.counters.draw_dropped,
+        s.counters.blob_dropped, s.shaders_dropped, s.counters.readbacks, s.counters.readback_failed,
+        s.counters.colour_readbacks, s.counters.colour_readback_failed, s.failures.load()};
 }
-catch (...) { return false; }
 void finish()
 {
     auto& s = state();
     s.active.store(false, std::memory_order_release);
     rsf_frame_tap_set_research_callbacks(nullptr, nullptr, nullptr);
     std::unique_lock<std::mutex> lock(s.guard);
-    FinishNative native{s.prefix};
-    if (!rsf_ac7_capture_read_records(&native, write_native_records)) {
+    const MotionFinalArtifacts files{
+        byte_artifacts(s.draws), byte_artifacts(s.blobs), shader_artifacts(s.shaders), &s, finish_stats};
+    const auto result = rsf_ac7_capture_publish_finish(s.prefix.c_str(), write_file, &files);
+    if (result == publication_failed) {
         lock.unlock();
         capture_failed();
         return;
     }
-    bool ok = native.ok;
-    std::string draw_text; for (const auto& line : s.draws) { draw_text += line; draw_text += '\n'; }
-    ok = write_file(s.prefix + "\\draws.jsonl", draw_text.data(), draw_text.size()) && ok;
-    ok = write_blobs(s.prefix, s.blobs) && ok;
-    for (size_t i = 0; i < s.shaders.size(); ++i) {
-        const auto& shader = s.shaders[i];
-        const std::string path = s.prefix + "\\shader_" + std::to_string(shader.stage) + "_" +
-                                 std::to_string(i + 1) + "_" + std::to_string(shader.hash) + ".dxbc";
-        ok = write_file(path, shader.data.data(), shader.data.size()) && ok;
-    }
-    LARGE_INTEGER frequency{}; QueryPerformanceFrequency(&frequency);
-    std::ostringstream summary;
-    summary << "{\"schema\":1,\"qpc_frequency\":" << frequency.QuadPart << ",\"engine_hooks\":" << s.installed.load()
-        << ",\"renderer_root_hooks\":" << s.roots_installed.load() << ",\"root_records\":" << native.counts.roots
-        << ",\"root_dropped\":" << native.counts.roots_dropped
-        << ",\"command_associations\":" << native.counts.commands << ",\"command_associations_dropped\":" << native.counts.commands_dropped
-        << ",\"intervals\":60,\"engine_records\":" << native.counts.engine << ",\"draw_records\":" << s.draws.size()
-        << ",\"engine_dropped\":" << native.counts.engine_dropped << ",\"draw_dropped\":" << s.counters.draw_dropped
-        << ",\"blob_dropped\":" << s.counters.blob_dropped << ",\"shader_creation_dropped\":" << s.shaders_dropped
-        << ",\"readbacks\":" << s.counters.readbacks << ",\"readback_failures\":" << s.counters.readback_failed
-        << ",\"colour_readbacks\":" << s.counters.colour_readbacks << ",\"colour_readback_failures\":" << s.counters.colour_readback_failed
-        << ",\"capture_failures\":" << s.failures.load()
-        << ",\"files_written\":" << (ok ? "true" : "false")
-        << ",\"timing\":\"present intervals and QPC; CPU selection may precede GPU execution\""
-        << ",\"draw_state\":\"shadow draw facts are game-requested; live resources and targets are post-draw bindings; temporary constant-buffer overrides restored\""
-        << ",\"gpu_context\":\"installed immediate context; deferred command lists not decomposed\""
-        << ",\"native_scope\":\"thread-local engine call scope only; zero outside it. CPU scopes are not GPU frame identity. view_blob uses cb_<id>.bin and AC7 stride 0x27c0\""
-        << ",\"queued_scope\":\"candidate graph-to-RHI command match by pointer and execute thunk, bounded to sampled native calls; validates neither GPU completion nor Present identity\""
-        << ",\"selection_metric_order\":[\"bounds_radius\",\"distance_squared\",\"lod_factor\",\"minimum_size\"]}\n";
-    const std::string summary_text = summary.str();
-    ok = write_file(s.prefix + "\\session.json", summary_text.data(), summary_text.size()) && ok;
-    say((std::string("motion capture finished: ") + s.prefix + (ok ? "" : " (some writes failed)")).c_str());
+    say((std::string("motion capture finished: ") + s.prefix +
+         (result == publication_complete ? "" : " (some writes failed)")).c_str());
 }
 } // namespace
 

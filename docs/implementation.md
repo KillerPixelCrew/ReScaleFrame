@@ -482,10 +482,13 @@ AC7 motion capture now stores its bounded engine and renderer-root
 records and associates native queued commands in Rust. The typed
 detours and guarded reads stay native. Unwinding restores the nested
 observation scope, and a refused record allocation follows the
-existing capture failure path. Native artifact publication still
-uses the same JSONL fields. Build and captured-frame verification
-remain open.
+existing capture failure path. Rust also formats the checkpoint and
+final artifacts using the original fields and write order. Native
+file calls keep the existing narrow path behavior. Publication runs
+after the Rust record lock is released. Build and captured-frame
+verification remain open.
 [Renderer root evidence](research/ac7-renderer-roots-20260930.md)
+[Motion artifact audit](research/rust-ac7-motion-artifacts.md)
 
 ## Rust orchestrator and first Anomaly port
 
