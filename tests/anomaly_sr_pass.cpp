@@ -231,11 +231,6 @@ void settings_and_plans() {
     for (uint32_t q = 0; q < 5; ++q) CHECK(adapter_quality(q));            // Native .. Ultra performance
     CHECK(!adapter_quality(5) && !adapter_quality(6));
     const SrSettings current{true, backend_xess, 2, 0};
-    // Vendor directories: the carrier's long-path INI name must not reach Streamline (wave 7 c1: no plugin loaded).
-    CHECK(plain_directory(LR"(\\?\D:\Anomaly 1.5.3\bin\ReScaleFrame\streamline)") == LR"(D:\Anomaly 1.5.3\bin\ReScaleFrame\streamline)");
-    CHECK(plain_directory(LR"(\\?\UNC\server\share\rsf\xess\)") == LR"(\\server\share\rsf\xess)");
-    CHECK(plain_directory(L"D:/Games/Anomaly/bin/ReScaleFrame/fidelityfx/") == LR"(D:\Games\Anomaly\bin\ReScaleFrame\fidelityfx)");
-    CHECK(plain_directory(LR"(D:\)") == LR"(D:\)" && plain_directory(LR"(C:\sl)") == LR"(C:\sl)");
     auto s = sanitize({false, 2, 5, 3}, current);                           // FSR2 and quality 5 refused, field by field
     CHECK(!s.enabled && s.backend == backend_xess && s.quality == 2 && s.preset == 3);
     s = sanitize({true, backend_fsr3, 0, 0}, current);

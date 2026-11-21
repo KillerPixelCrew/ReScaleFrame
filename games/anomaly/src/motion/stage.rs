@@ -296,7 +296,7 @@ impl Stage {
         self.attach();
         let settings = lock(&self.settings).capture;
         if settings.enabled {
-            lock(&self.render).capture = Capture::bind(p, settings, hash, log);
+            lock(&self.render).capture = Capture::bind(settings, hash, log);
         }
         log.say(format!(
             "Anomaly motion hooks installed: create_shader, phase_scene_begin/end, constants.flush slot; MotionInvalidate={} \

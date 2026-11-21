@@ -2,8 +2,9 @@
 #pragma once
 // The private boundary between the Rust SR stage driver (sr_stage.rs) and its native leaves (sr_stage.cpp).
 // Rust owns the lifecycle, view admission, frame preparation and seam ordering, jitter and camera publication,
-// capture and burst bookkeeping, options and status. The leaves keep guarded engine reads, the stage hooks and
-// trampolines, the SwapController and its D3D11 host, and the C++ TemporalDriver facade.
+// capture and burst bookkeeping, the retained configuration (INI path, vendor directories, live options) and status.
+// The leaves keep guarded engine reads, the stage hooks and trampolines, the SwapController and its D3D11 host, typed
+// INI and file calls, and the C++ TemporalDriver facade.
 // Every callback runs on the calling thread; none of them re-enters the Rust stage lock except the seam passes,
 // which receive the locked state as `cookie` from the seam or prepare call that holds it.
 #include <stdbool.h>
@@ -21,7 +22,8 @@ typedef struct rsf_anomaly_sr_settings {
     uint32_t backend, quality, preset;
 } rsf_anomaly_sr_settings;
 
-// The scalar part of StageOptions (sr_stage.h). Paths stay with the native options.
+// The [Anomaly] SR keys sr_stage.rs reads (sr_stage.h describes the stages). The Rust stage also keeps the INI path
+// and the vendor runtime directories; this record is its scalar part, copied out for the contract fixtures.
 typedef struct rsf_anomaly_sr_stage_config {
     uint32_t stage;
     float scale;
@@ -224,6 +226,16 @@ typedef struct rsf_anomaly_sr_timer {
     bool device;
 } rsf_anomaly_sr_timer;
 
+// TemporalOptions (sr_temporal.h) for Stages 4 and 5. The UTF-8 vendor directories are borrowed for the call.
+typedef struct rsf_anomaly_sr_driver_config {
+    uint32_t stage;
+    bool exposure_auto, colour_transport, first_person_zero, require_signature;
+    rsf_anomaly_sr_settings initial;
+    const char* streamline;
+    const char* fidelityfx;
+    const char* xess;
+} rsf_anomaly_sr_driver_config;
+
 typedef struct rsf_anomaly_sr_stage_platform {
     // Guarded engine reads and engine identity.
     void (*frame_facts)(void* self, bool world_window, bool temporal, rsf_anomaly_sr_frame_facts* out);
@@ -298,17 +310,20 @@ typedef struct rsf_anomaly_sr_stage_platform {
     void (*disable_hooks)(void);
     void (*set_rm_near)(bool);
     bool (*remove_hooks)(void);
-    // Options: the INI, persistence through the adapter option path and the vendor runtime directories.
+    // Options: [Anomaly] INI reads (`ini` is a NUL-terminated UTF-16 path), persistence through the adapter option
+    // path, the Runtime's colour transport and a file probe for the vendor runtimes (a UTF-16 path).
     int32_t (*ini_int)(const void* ini, const char* key, int32_t fallback);
     uint32_t (*ini_text)(const void* ini, const char* key, const char* fallback, uint16_t* out, uint32_t capacity);
-    const void* (*configured_ini)(void);
     void (*persist_int)(const char* key, int32_t value);
     void (*persist_text)(const char* key, const char* value);
     void (*apply_colour_transport)(bool);
-    bool (*vendor_file)(uint32_t directory, const char* name);   // 0 Streamline, 1 FidelityFX, 2 XeSS
+    bool (*file_exists)(const uint16_t* path);
+    // An accepted configuration: the log the D3D11 host reports through and, for Stages 4 and 5, the TemporalDriver
+    // options (null otherwise).
+    void (*configured)(rsf_anomaly_sr_log log, void* user, const rsf_anomaly_sr_driver_config* driver);
 } rsf_anomaly_sr_stage_platform;
 
-// Live options, in registration order.
+// Live panel options, in registration order (sr_stage.rs registers them with the overlay service).
 #define RSF_ANOMALY_SR_OPTION_COLOUR_TRANSPORT 0
 #define RSF_ANOMALY_SR_OPTION_EXPOSURE_AUTO 1
 #define RSF_ANOMALY_SR_OPTION_FIRST_PERSON_ZERO 2

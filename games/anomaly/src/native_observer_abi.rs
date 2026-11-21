@@ -149,7 +149,6 @@ pub struct rsf_anomaly_observer_platform {
         unsafe extern "C" fn(arg1: *const rsf_anomaly_observer_engine) -> bool,
     >,
     pub disable_geometry: ::core::option::Option<unsafe extern "C" fn() -> bool>,
-    pub sr_selected: ::core::option::Option<unsafe extern "C" fn() -> bool>,
     pub install_sr: ::core::option::Option<
         unsafe extern "C" fn(arg1: *const rsf_anomaly_observer_engine) -> bool,
     >,
@@ -196,7 +195,7 @@ pub struct rsf_anomaly_observer_platform {
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
     ["Size of rsf_anomaly_observer_platform"]
-        [::core::mem::size_of::<rsf_anomaly_observer_platform>() - 200usize];
+        [::core::mem::size_of::<rsf_anomaly_observer_platform>() - 192usize];
     ["Alignment of rsf_anomaly_observer_platform"]
         [::core::mem::align_of::<rsf_anomaly_observer_platform>() - 8usize];
     ["Offset of field: rsf_anomaly_observer_platform::identify"]
@@ -209,44 +208,42 @@ const _: () = {
         [::core::mem::offset_of!(rsf_anomaly_observer_platform, install_geometry) - 24usize];
     ["Offset of field: rsf_anomaly_observer_platform::disable_geometry"]
         [::core::mem::offset_of!(rsf_anomaly_observer_platform, disable_geometry) - 32usize];
-    ["Offset of field: rsf_anomaly_observer_platform::sr_selected"]
-        [::core::mem::offset_of!(rsf_anomaly_observer_platform, sr_selected) - 40usize];
     ["Offset of field: rsf_anomaly_observer_platform::install_sr"]
-        [::core::mem::offset_of!(rsf_anomaly_observer_platform, install_sr) - 48usize];
+        [::core::mem::offset_of!(rsf_anomaly_observer_platform, install_sr) - 40usize];
     ["Offset of field: rsf_anomaly_observer_platform::quiesce_sr"]
-        [::core::mem::offset_of!(rsf_anomaly_observer_platform, quiesce_sr) - 56usize];
+        [::core::mem::offset_of!(rsf_anomaly_observer_platform, quiesce_sr) - 48usize];
     ["Offset of field: rsf_anomaly_observer_platform::install_motion"]
-        [::core::mem::offset_of!(rsf_anomaly_observer_platform, install_motion) - 64usize];
+        [::core::mem::offset_of!(rsf_anomaly_observer_platform, install_motion) - 56usize];
     ["Offset of field: rsf_anomaly_observer_platform::quiesce_motion"]
-        [::core::mem::offset_of!(rsf_anomaly_observer_platform, quiesce_motion) - 72usize];
+        [::core::mem::offset_of!(rsf_anomaly_observer_platform, quiesce_motion) - 64usize];
     ["Offset of field: rsf_anomaly_observer_platform::enable_input"]
-        [::core::mem::offset_of!(rsf_anomaly_observer_platform, enable_input) - 80usize];
+        [::core::mem::offset_of!(rsf_anomaly_observer_platform, enable_input) - 72usize];
     ["Offset of field: rsf_anomaly_observer_platform::disable_input"]
-        [::core::mem::offset_of!(rsf_anomaly_observer_platform, disable_input) - 88usize];
+        [::core::mem::offset_of!(rsf_anomaly_observer_platform, disable_input) - 80usize];
     ["Offset of field: rsf_anomaly_observer_platform::input_idle"]
-        [::core::mem::offset_of!(rsf_anomaly_observer_platform, input_idle) - 96usize];
+        [::core::mem::offset_of!(rsf_anomaly_observer_platform, input_idle) - 88usize];
     ["Offset of field: rsf_anomaly_observer_platform::read_frame"]
-        [::core::mem::offset_of!(rsf_anomaly_observer_platform, read_frame) - 104usize];
+        [::core::mem::offset_of!(rsf_anomaly_observer_platform, read_frame) - 96usize];
     ["Offset of field: rsf_anomaly_observer_platform::read_camera"]
-        [::core::mem::offset_of!(rsf_anomaly_observer_platform, read_camera) - 112usize];
+        [::core::mem::offset_of!(rsf_anomaly_observer_platform, read_camera) - 104usize];
     ["Offset of field: rsf_anomaly_observer_platform::render_begin"]
-        [::core::mem::offset_of!(rsf_anomaly_observer_platform, render_begin) - 120usize];
+        [::core::mem::offset_of!(rsf_anomaly_observer_platform, render_begin) - 112usize];
     ["Offset of field: rsf_anomaly_observer_platform::sr_frame_end"]
-        [::core::mem::offset_of!(rsf_anomaly_observer_platform, sr_frame_end) - 128usize];
+        [::core::mem::offset_of!(rsf_anomaly_observer_platform, sr_frame_end) - 120usize];
     ["Offset of field: rsf_anomaly_observer_platform::end_before"]
-        [::core::mem::offset_of!(rsf_anomaly_observer_platform, end_before) - 136usize];
+        [::core::mem::offset_of!(rsf_anomaly_observer_platform, end_before) - 128usize];
     ["Offset of field: rsf_anomaly_observer_platform::end_after"]
-        [::core::mem::offset_of!(rsf_anomaly_observer_platform, end_after) - 144usize];
+        [::core::mem::offset_of!(rsf_anomaly_observer_platform, end_after) - 136usize];
     ["Offset of field: rsf_anomaly_observer_platform::camera"]
-        [::core::mem::offset_of!(rsf_anomaly_observer_platform, camera) - 152usize];
+        [::core::mem::offset_of!(rsf_anomaly_observer_platform, camera) - 144usize];
     ["Offset of field: rsf_anomaly_observer_platform::ui_boundary"]
-        [::core::mem::offset_of!(rsf_anomaly_observer_platform, ui_boundary) - 160usize];
+        [::core::mem::offset_of!(rsf_anomaly_observer_platform, ui_boundary) - 152usize];
     ["Offset of field: rsf_anomaly_observer_platform::scope_frame"]
-        [::core::mem::offset_of!(rsf_anomaly_observer_platform, scope_frame) - 168usize];
+        [::core::mem::offset_of!(rsf_anomaly_observer_platform, scope_frame) - 160usize];
     ["Offset of field: rsf_anomaly_observer_platform::device_reset"]
-        [::core::mem::offset_of!(rsf_anomaly_observer_platform, device_reset) - 176usize];
+        [::core::mem::offset_of!(rsf_anomaly_observer_platform, device_reset) - 168usize];
     ["Offset of field: rsf_anomaly_observer_platform::log"]
-        [::core::mem::offset_of!(rsf_anomaly_observer_platform, log) - 184usize];
+        [::core::mem::offset_of!(rsf_anomaly_observer_platform, log) - 176usize];
     ["Offset of field: rsf_anomaly_observer_platform::report_stages"]
-        [::core::mem::offset_of!(rsf_anomaly_observer_platform, report_stages) - 192usize];
+        [::core::mem::offset_of!(rsf_anomaly_observer_platform, report_stages) - 184usize];
 };

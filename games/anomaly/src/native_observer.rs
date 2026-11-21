@@ -169,7 +169,7 @@ impl Observer {
         }
         control.geometry_installed = unsafe { (platform.install_geometry.unwrap())(engine) };
         let sr_refused =
-            unsafe { (platform.sr_selected.unwrap())() && !(platform.install_sr.unwrap())(engine) };
+            crate::sr_stage::STAGE.selected() && !unsafe { (platform.install_sr.unwrap())(engine) };
         let motion_refused = !unsafe { (platform.install_motion.unwrap())(engine) };
         let input_enabled = unsafe { (platform.enable_input.unwrap())() };
         let geometry_installed = control.geometry_installed;

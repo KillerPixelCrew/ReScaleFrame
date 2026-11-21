@@ -88,9 +88,8 @@ struct MotionPlatform {
     bool (*foliage_layout)(void*, uint8_t, FoliageLayout*);
     bool (*link_shaders)(const void*, const void*, const void*, const void*);
     void* (*create_shader)(void*, void*, void*, void*, bool, bool*);
-    bool (*sr_capture)();
 };
-inline constexpr uint32_t motion_platform_abi = 3;
+inline constexpr uint32_t motion_platform_abi = 4;
 
 extern "C" {
 void rsf_anomaly_motion_stage_configure(const MotionPlatform*, const wchar_t*, rsf_dump_log_fn, void*) noexcept;

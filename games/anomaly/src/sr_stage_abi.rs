@@ -892,6 +892,53 @@ const _: () = {
         [::core::mem::offset_of!(rsf_anomaly_sr_timer, device) - 56usize];
 };
 #[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_anomaly_sr_driver_config {
+    pub stage: u32,
+    pub exposure_auto: bool,
+    pub colour_transport: bool,
+    pub first_person_zero: bool,
+    pub require_signature: bool,
+    pub initial: rsf_anomaly_sr_settings,
+    pub streamline: *const ::core::ffi::c_char,
+    pub fidelityfx: *const ::core::ffi::c_char,
+    pub xess: *const ::core::ffi::c_char,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_anomaly_sr_driver_config"]
+        [::core::mem::size_of::<rsf_anomaly_sr_driver_config>() - 48usize];
+    ["Alignment of rsf_anomaly_sr_driver_config"]
+        [::core::mem::align_of::<rsf_anomaly_sr_driver_config>() - 8usize];
+    ["Offset of field: rsf_anomaly_sr_driver_config::stage"]
+        [::core::mem::offset_of!(rsf_anomaly_sr_driver_config, stage) - 0usize];
+    ["Offset of field: rsf_anomaly_sr_driver_config::exposure_auto"]
+        [::core::mem::offset_of!(rsf_anomaly_sr_driver_config, exposure_auto) - 4usize];
+    ["Offset of field: rsf_anomaly_sr_driver_config::colour_transport"]
+        [::core::mem::offset_of!(rsf_anomaly_sr_driver_config, colour_transport) - 5usize];
+    ["Offset of field: rsf_anomaly_sr_driver_config::first_person_zero"]
+        [::core::mem::offset_of!(rsf_anomaly_sr_driver_config, first_person_zero) - 6usize];
+    ["Offset of field: rsf_anomaly_sr_driver_config::require_signature"]
+        [::core::mem::offset_of!(rsf_anomaly_sr_driver_config, require_signature) - 7usize];
+    ["Offset of field: rsf_anomaly_sr_driver_config::initial"]
+        [::core::mem::offset_of!(rsf_anomaly_sr_driver_config, initial) - 8usize];
+    ["Offset of field: rsf_anomaly_sr_driver_config::streamline"]
+        [::core::mem::offset_of!(rsf_anomaly_sr_driver_config, streamline) - 24usize];
+    ["Offset of field: rsf_anomaly_sr_driver_config::fidelityfx"]
+        [::core::mem::offset_of!(rsf_anomaly_sr_driver_config, fidelityfx) - 32usize];
+    ["Offset of field: rsf_anomaly_sr_driver_config::xess"]
+        [::core::mem::offset_of!(rsf_anomaly_sr_driver_config, xess) - 40usize];
+};
+impl Default for rsf_anomaly_sr_driver_config {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
 #[derive(Default, Copy, Clone)]
 pub struct rsf_anomaly_sr_stage_platform {
     pub frame_facts: ::core::option::Option<
@@ -1049,16 +1096,19 @@ pub struct rsf_anomaly_sr_stage_platform {
             capacity: u32,
         ) -> u32,
     >,
-    pub configured_ini:
-        ::core::option::Option<unsafe extern "C" fn() -> *const ::core::ffi::c_void>,
     pub persist_int:
         ::core::option::Option<unsafe extern "C" fn(key: *const ::core::ffi::c_char, value: i32)>,
     pub persist_text: ::core::option::Option<
         unsafe extern "C" fn(key: *const ::core::ffi::c_char, value: *const ::core::ffi::c_char),
     >,
     pub apply_colour_transport: ::core::option::Option<unsafe extern "C" fn(arg1: bool)>,
-    pub vendor_file: ::core::option::Option<
-        unsafe extern "C" fn(directory: u32, name: *const ::core::ffi::c_char) -> bool,
+    pub file_exists: ::core::option::Option<unsafe extern "C" fn(path: *const u16) -> bool>,
+    pub configured: ::core::option::Option<
+        unsafe extern "C" fn(
+            log: rsf_anomaly_sr_log,
+            user: *mut ::core::ffi::c_void,
+            driver: *const rsf_anomaly_sr_driver_config,
+        ),
     >,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
@@ -1205,14 +1255,14 @@ const _: () = {
         [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, ini_int) - 536usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::ini_text"]
         [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, ini_text) - 544usize];
-    ["Offset of field: rsf_anomaly_sr_stage_platform::configured_ini"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, configured_ini) - 552usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::persist_int"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, persist_int) - 560usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, persist_int) - 552usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::persist_text"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, persist_text) - 568usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, persist_text) - 560usize];
     ["Offset of field: rsf_anomaly_sr_stage_platform::apply_colour_transport"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, apply_colour_transport) - 576usize];
-    ["Offset of field: rsf_anomaly_sr_stage_platform::vendor_file"]
-        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, vendor_file) - 584usize];
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, apply_colour_transport) - 568usize];
+    ["Offset of field: rsf_anomaly_sr_stage_platform::file_exists"]
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, file_exists) - 576usize];
+    ["Offset of field: rsf_anomaly_sr_stage_platform::configured"]
+        [::core::mem::offset_of!(rsf_anomaly_sr_stage_platform, configured) - 584usize];
 };

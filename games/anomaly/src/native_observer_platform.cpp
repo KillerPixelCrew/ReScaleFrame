@@ -206,7 +206,6 @@ const rsf_anomaly_observer_platform platform{
         return geometry::install_native_geometry(static_cast<std::byte*>(engine->image), build.image_size(), build);
     },
     geometry::disable_native_geometry,
-    [] { return sr::options().selected(); },
     [](const rsf_anomaly_observer_engine* engine) {
         const auto& build = build_profiles[engine->build];
         return sr::install(static_cast<std::byte*>(engine->image), build.image_size(), build);

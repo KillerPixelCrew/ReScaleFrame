@@ -25,6 +25,7 @@ struct Fake {
     hooks_created: bool,
     passes: Vec<rsf_anomaly_sr_pass>,
     logs: Vec<String>,
+    files: Vec<String>,
 }
 
 thread_local! {
@@ -296,8 +297,42 @@ unsafe extern "C" fn persist_text(key: *const c_char, value: *const c_char) {
 extern "C" fn apply_colour_transport(transport: bool) {
     record(format!("transport {transport}"));
 }
-unsafe extern "C" fn vendor_file(directory: u32, _: *const c_char) -> bool {
-    directory == 2
+unsafe fn text_at(path: *const u16) -> String {
+    let mut length = 0;
+    while unsafe { path.add(length).read() } != 0 {
+        length += 1;
+    }
+    String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(path, length) })
+}
+unsafe extern "C" fn file_exists(path: *const u16) -> bool {
+    // Path::join separates with '/' off Windows.
+    let path = unsafe { text_at(path) }.replace('/', "\\");
+    fake(|f| f.files.contains(&path))
+}
+unsafe extern "C" fn configured(
+    _: rsf_anomaly_sr_log,
+    _: *mut c_void,
+    driver: *const rsf_anomaly_sr_driver_config,
+) {
+    let text = match unsafe { driver.as_ref() } {
+        None => "configured".to_owned(),
+        Some(d) => {
+            let text = |value: *const c_char| unsafe { CStr::from_ptr(value) }.to_string_lossy();
+            format!(
+                "configured stage={} sl={} ffx={} xess={} exposure={} transport={} zero={} signature={} backend={}",
+                d.stage,
+                text(d.streamline),
+                text(d.fidelityfx),
+                text(d.xess),
+                d.exposure_auto,
+                d.colour_transport,
+                d.first_person_zero,
+                d.require_signature,
+                d.initial.backend
+            )
+        }
+    };
+    record(text);
 }
 unsafe extern "C" fn log(_: *mut c_void, text: *const c_char) {
     let text = unsafe { CStr::from_ptr(text) }
@@ -349,7 +384,8 @@ fn platform() -> Box<Platform> {
         persist_int: Some(persist_int),
         persist_text: Some(persist_text),
         apply_colour_transport: Some(apply_colour_transport),
-        vendor_file: Some(vendor_file),
+        file_exists: Some(file_exists),
+        configured: Some(configured),
         ..Default::default()
     })
 }
@@ -363,7 +399,11 @@ fn installed(stage: u32, table: &Platform) -> Stage {
         stage,
         ..default_config()
     };
-    assert!(driver.configure(&config, Some(log), null_mut()));
+    let paths = Paths {
+        ini: Vec::new(),
+        vendors: [r"V:\sl", r"V:\ffx", r"V:\xess"].map(PathBuf::from),
+    };
+    assert!(driver.configure(&config, paths, Some(log), null_mut()));
     assert!(driver.install(0x10000 as *mut c_void, 64, 64, 0x20 as *const c_void));
     assert!(driver.active());
     calls();
@@ -702,13 +742,20 @@ fn live_options_apply_and_persist_through_the_adapter_path() {
     driver.set_option(RSF_ANOMALY_SR_OPTION_EXPOSURE_AUTO, 1);
     assert_eq!(calls(), ["save SRExposure=auto"]);
     // Configuration is refused while the hooks are installed.
-    assert!(!driver.configure(&default_config(), None, null_mut()));
+    assert!(!driver.configure(&default_config(), Paths::default(), None, null_mut()));
+    assert!(calls().is_empty());
 }
 
 #[test]
 fn overlay_offers_only_present_runtimes_and_a_reachable_default() {
     let table = platform();
     let driver = installed(5, &table);
+    fake(|f| {
+        f.files = vec![
+            r"V:\xess\libxess.dll".into(),
+            r"V:\sl\nvngx_dlss.dll".into(),
+        ]
+    });
     let choices = driver.choices();
     assert_eq!(choices.backends, 1 << BACKEND_XESS);
     assert!(!choices.preset);
@@ -734,4 +781,257 @@ fn report_emits_deltas_and_survives_a_timer_reset() {
     lines.clear();
     driver.report(&mut |line| lines.push(line.to_owned()));
     assert!(lines[0].starts_with("Anomaly SR stage window frames=0 no_world=0 "));
+}
+
+#[cfg(windows)]
+#[test]
+fn the_cold_entry_keeps_only_a_selected_configuration() {
+    let table = platform();
+    let driver = Stage::new();
+    driver.register(&*table);
+    calls();
+    let ini = units(Path::new(r"D:\Anomaly\bin\rsf.ini"));
+    assert!(!unsafe {
+        rsf_anomaly_sr_stage_configure_ini(std::ptr::null(), true, Some(log), null_mut())
+    });
+    fake(|f| f.ini = vec![("SRStage", "0")]);
+    assert!(!driver.configure_ini(&ini, true, Some(log), null_mut()));
+    // SRStageCapture alone selects the hooks; a read without `apply` keeps nothing.
+    fake(|f| f.ini = vec![("SRStage", "0"), ("SRStageCapture", "1")]);
+    assert!(driver.configure_ini(&ini, false, Some(log), null_mut()));
+    assert!(calls().is_empty());
+    assert!(!driver.selected() && !driver.capture());
+    assert!(driver.configure_ini(&ini, true, Some(log), null_mut()));
+    // Below Stage 4 the TemporalDriver gets no options.
+    assert_eq!(calls(), ["configured"]);
+    assert!(driver.selected() && driver.capture());
+    assert_eq!(driver.choices().backends, 0);
+}
+
+#[cfg(windows)]
+#[test]
+fn vendor_directories_default_beside_the_ini_and_follow_overrides() {
+    let table = platform();
+    let driver = Stage::new();
+    driver.register(&*table);
+    calls();
+    fake(|f| {
+        f.ini = vec![("SRStage", "5"), ("SRBackend", "5"), ("SRExposure", "auto")];
+        f.files.clear();
+    });
+    // The carrier can pass a long-path INI name; the vendor directories must not keep the prefix.
+    let ini = units(Path::new(r"\\?\D:\Anomaly 1.5.3\bin\rsf.ini"));
+    assert!(driver.configure_ini(&ini, true, Some(log), null_mut()));
+    let beside = r"D:\Anomaly 1.5.3\bin\ReScaleFrame";
+    assert_eq!(
+        calls(),
+        [format!(
+            r"configured stage=5 sl={beside}\streamline ffx={beside}\fidelityfx xess={beside}\xess exposure=true transport=false zero=true signature=false backend=5"
+        )]
+    );
+    assert_eq!(driver.choices().backends, 0); // no runtime present
+    fake(|f| f.files = vec![format!(r"{beside}\xess\libxess.dll")]);
+    assert_eq!(driver.choices().backends, 1 << BACKEND_XESS);
+    // Explicit directories win as plain directories; a UNC long path keeps its server.
+    fake(|f| {
+        f.ini.push(("SRStreamlineDir", "C:/sl/"));
+        f.ini.push(("SRXeSSDir", r"\\?\UNC\server\share\rsf\xess\"));
+        f.files.push(r"C:\sl\sl.interposer.dll".into());
+        f.files.push(r"C:\sl\nvngx_dlss.dll".into());
+    });
+    assert!(driver.configure_ini(&ini, true, Some(log), null_mut()));
+    assert_eq!(
+        calls(),
+        [format!(
+            r"configured stage=5 sl=C:\sl ffx={beside}\fidelityfx xess=\\server\share\rsf\xess exposure=true transport=false zero=true signature=false backend=5"
+        )]
+    );
+    let choices = driver.choices();
+    assert_eq!(choices.backends, 1 << BACKEND_DLSS);
+    // SRBackend=5 is not offered here, so the panel's default moves to an offered backend.
+    assert_eq!(choices.defaults.backend, BACKEND_DLSS);
+}
+
+#[test]
+fn a_device_reset_rereads_srscale_from_the_kept_ini() {
+    let table = platform();
+    let driver = Stage::new();
+    driver.register(&*table);
+    fake(|f| {
+        f.hooks_created = false;
+        f.generation = 1;
+        f.ini = vec![("SRStage", "2"), ("SRScale", "0.5")];
+        f.logs.clear();
+    });
+    let ini = units(Path::new(r"D:\Anomaly\bin\rsf.ini"));
+    assert!(driver.configure_ini(&ini, true, Some(log), null_mut()));
+    assert!(driver.install(0x10000 as *mut c_void, 64, 64, 0x20 as *const c_void));
+    driver.prepare(null_mut());
+    fake(|f| {
+        f.ini = vec![("SRStage", "2"), ("SRScale", "0.75")];
+        f.generation = 2;
+    });
+    driver.prepare(null_mut());
+    let reread = "Anomaly SR stage 2: SRScale 0.500 -> 0.750 after a device reset.";
+    assert!(fake(|f| f.logs.iter().any(|l| l == reread)));
+    // A stage configured without an INI keeps its scale.
+    let other = installed(2, &table);
+    fake(|f| {
+        f.logs.clear();
+        f.generation = 3;
+    });
+    other.prepare(null_mut());
+    fake(|f| f.generation = 4);
+    other.prepare(null_mut());
+    assert!(!fake(|f| f.logs.iter().any(|l| l.contains("device reset"))));
+}
+
+#[test]
+fn vendor_directories_are_plain_win32_paths() {
+    let plain = |text: &str| String::from_utf16(&plain_directory(&wide_text(text))).unwrap();
+    // The carrier's long-path INI name must not reach Streamline (wave 7 c1: no plugin loaded).
+    assert_eq!(
+        plain(r"\\?\D:\Anomaly 1.5.3\bin\ReScaleFrame\streamline"),
+        r"D:\Anomaly 1.5.3\bin\ReScaleFrame\streamline"
+    );
+    assert_eq!(
+        plain(r"\\?\UNC\server\share\rsf\xess\"),
+        r"\\server\share\rsf\xess"
+    );
+    assert_eq!(
+        plain("D:/Games/Anomaly/bin/ReScaleFrame/fidelityfx/"),
+        r"D:\Games\Anomaly\bin\ReScaleFrame\fidelityfx"
+    );
+    assert_eq!(plain(r"\??\C:\sl"), r"C:\sl");
+    assert_eq!(plain(r"D:\"), r"D:\");
+    assert_eq!(plain(r"C:\sl"), r"C:\sl");
+    // Windows keeps an unpaired surrogate through the kept path.
+    #[cfg(windows)]
+    {
+        let odd = [u16::from(b'C'), u16::from(b':'), u16::from(b'\\'), 0xd800];
+        assert_eq!(units(&path_of(&plain_directory(&odd))), odd);
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn live_options_keep_their_panel_labels_and_ranges() {
+    let options = live_options();
+    let rows: Vec<_> = options
+        .iter()
+        .map(|o| {
+            let label = unsafe { CStr::from_ptr(o.label) }.to_str().unwrap();
+            let bound = o.get.is_some() && o.set.is_some();
+            (
+                label, o.toggle, o.restart, o.minimum, o.maximum, o.step, o.divisor, bound,
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("DLSS input: linear HDR colour", 1, 0, 0, 1, 1, 1, true),
+            ("DLSS auto exposure", 1, 0, 0, 1, 1, 1, true),
+            ("First-person pixels: zero motion", 1, 0, 0, 1, 1, 1, true),
+            (
+                "Subpixel jitter (SR needs it; off = no upscaling)",
+                1,
+                0,
+                0,
+                1,
+                1,
+                1,
+                true
+            ),
+            ("Texture mip bias", 1, 0, 0, 1, 1, 1, true),
+            ("Mip bias offset", 0, 0, -20, 0, 1, 10, true),
+        ]
+    );
+    // Each getter reads its own live value of the process stage (the INI defaults until configured).
+    let values = options.map(|o| unsafe { o.get.unwrap()() });
+    assert_eq!(values, [1, 0, 1, 1, 1, 0]);
+}
+
+// The real Win32 INI and file calls the native leaves make, against a package on disk.
+#[cfg(windows)]
+mod win32 {
+    use super::*;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_DIRECTORY, GetFileAttributesW, INVALID_FILE_ATTRIBUTES,
+    };
+    use windows_sys::Win32::System::WindowsProgramming::{
+        GetPrivateProfileIntW, GetPrivateProfileStringW,
+    };
+    use windows_sys::core::w;
+
+    fn key(text: *const c_char) -> Vec<u16> {
+        let text = unsafe { CStr::from_ptr(text) }.to_string_lossy();
+        text.encode_utf16().chain([0]).collect()
+    }
+    unsafe extern "C" fn ini_int(ini: *const c_void, name: *const c_char, fallback: i32) -> i32 {
+        (unsafe { GetPrivateProfileIntW(w!("Anomaly"), key(name).as_ptr(), fallback, ini.cast()) })
+            as i32
+    }
+    unsafe extern "C" fn ini_text(
+        ini: *const c_void,
+        name: *const c_char,
+        fallback: *const c_char,
+        out: *mut u16,
+        capacity: u32,
+    ) -> u32 {
+        let (name, fallback) = (key(name), key(fallback));
+        unsafe {
+            GetPrivateProfileStringW(
+                w!("Anomaly"),
+                name.as_ptr(),
+                fallback.as_ptr(),
+                out,
+                capacity,
+                ini.cast(),
+            )
+        }
+    }
+    unsafe extern "C" fn file_exists(path: *const u16) -> bool {
+        let attributes = unsafe { GetFileAttributesW(path) };
+        attributes != INVALID_FILE_ATTRIBUTES && attributes & FILE_ATTRIBUTE_DIRECTORY == 0
+    }
+
+    #[test]
+    fn the_package_beside_a_real_ini_and_an_explicit_directory() {
+        let root = std::env::temp_dir().join(format!("rsf-sr-config-{}", std::process::id()));
+        let package = root.join("ReScaleFrame");
+        std::fs::create_dir_all(package.join("xess")).unwrap();
+        std::fs::write(package.join("xess").join("libxess.dll"), b"").unwrap();
+        // A directory named like a runtime is not the runtime.
+        std::fs::create_dir_all(package.join("streamline").join("sl.interposer.dll")).unwrap();
+        std::fs::write(package.join("streamline").join("nvngx_dlss.dll"), b"").unwrap();
+        let ini = root.join("rsf.ini");
+        std::fs::write(&ini, "[Anomaly]\r\nSRStage=5\r\n").unwrap();
+        let table = Platform {
+            ini_int: Some(ini_int),
+            ini_text: Some(ini_text),
+            file_exists: Some(file_exists),
+            ..Default::default()
+        };
+        let driver = Stage::new();
+        driver.register(&table);
+        let path = units(&ini);
+        assert!(driver.configure_ini(&path, true, None, null_mut()));
+        assert_eq!(driver.choices().backends, 1 << BACKEND_XESS);
+        let streamline = root.join("sl");
+        std::fs::create_dir_all(&streamline).unwrap();
+        std::fs::write(streamline.join("sl.interposer.dll"), b"").unwrap();
+        std::fs::write(streamline.join("nvngx_dlss.dll"), b"").unwrap();
+        let text = format!(
+            "[Anomaly]\r\nSRStage=5\r\nSRStreamlineDir={}/\r\n",
+            streamline.display()
+        );
+        std::fs::write(&ini, text).unwrap();
+        assert!(driver.configure_ini(&path, true, None, null_mut()));
+        assert_eq!(
+            driver.choices().backends,
+            (1 << BACKEND_DLSS) | (1 << BACKEND_XESS)
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

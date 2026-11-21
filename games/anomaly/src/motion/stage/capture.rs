@@ -46,8 +46,8 @@ struct Active {
 }
 
 impl Capture {
-    pub fn bind(p: &Platform, settings: Schedule, hash: *const c_char, log: Log) -> Option<Self> {
-        if unsafe { (p.sr_capture)() } {
+    pub fn bind(settings: Schedule, hash: *const c_char, log: Log) -> Option<Self> {
+        if crate::sr_stage::STAGE.capture() {
             log.text(c"Anomaly motion capture refused: SRStageCapture owns the frame dump service this run.");
             return None;
         }

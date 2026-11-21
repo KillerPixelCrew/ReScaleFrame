@@ -37,11 +37,7 @@
 #include <cstring>
 #include <string>
 
-// ---- test doubles for the engine-side stages fg_stage reads (only these two entries) ------------------------------
-namespace rsf::anomaly::sr {
-StageOptions test_stage{};
-const StageOptions& options() noexcept { return test_stage; }
-}
+// ---- test double for the engine-side stage fg_stage reads ---------------------------------------------------------
 namespace rsf::anomaly::motion {
 FrameTarget test_target{};
 FrameTarget frame_target() noexcept { return test_target; }
@@ -220,7 +216,6 @@ int main(int argc, char** argv) {
     HMODULE runtime = GetModuleHandleW(L"ReScaleFrame.Runtime.dll");
     if (!runtime || !fg::install(runtime, rsf::anomaly::standard_build)) { std::puts("FAIL: the bridge did not install"); return 1; }
     fg::set_overlay_sink({&overlay_sink, nullptr, nullptr});
-    sr::test_stage.stage = stage5 ? 5u : 0u;
 
     sr::TemporalDriver driver;
     if (stage5) {
