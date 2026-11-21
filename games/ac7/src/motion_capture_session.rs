@@ -122,7 +122,7 @@ extern "C" fn rsf_ac7_capture_sample() -> CaptureInterval {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_capture_current(session: u32) -> bool {
+pub(super) extern "C" fn rsf_ac7_capture_current(session: u32) -> bool {
     let observed = CaptureInterval::load();
     observed.active() && observed.session == session
 }

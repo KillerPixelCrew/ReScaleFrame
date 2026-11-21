@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! Native CPU observations, candidate graph-to-RHI associations and capture publication.
-//! The C++ capture owns guarded engine reads, GPU data and narrow file effects.
+//! The C++ capture owns guarded engine reads, typed GPU effects and narrow file effects.
 
 mod artifacts;
+mod draws;
 
 use rsf_game_sys::rsf_game_render_pass;
 use std::cell::{Cell, RefCell};
@@ -169,6 +170,7 @@ struct NativeRecordCounts {
     engine_dropped: u32,
     roots_dropped: u32,
     commands_dropped: u32,
+    draw_dropped: u32,
 }
 
 #[repr(u32)]
@@ -197,9 +199,11 @@ struct Records {
     engine: Vec<EngineRecord>,
     roots: Vec<RootRecord>,
     commands: HashMap<u64, Association>,
+    draws: Vec<Vec<u8>>,
     engine_dropped: u32,
     roots_dropped: u32,
     commands_dropped: u32,
+    draw_dropped: u32,
 }
 
 static RECORDS: LazyLock<Mutex<Records>> = LazyLock::new(|| Mutex::new(Records::default()));
@@ -549,7 +553,9 @@ pub(super) fn reset_records() {
     records.engine.clear();
     records.roots.clear();
     records.commands.clear();
+    records.draws.clear();
     records.engine_dropped = 0;
     records.roots_dropped = 0;
     records.commands_dropped = 0;
+    records.draw_dropped = 0;
 }

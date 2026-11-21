@@ -32,7 +32,6 @@
 using Microsoft::WRL::ComPtr;
 
 namespace {
-constexpr uint32_t max_draws = 12000;
 constexpr uint32_t max_blobs = 4096;
 constexpr size_t blob_budget = 32u * 1024u * 1024u;
 constexpr uint32_t cloud_composite_shader = 0x83524e47u;
@@ -42,7 +41,7 @@ constexpr uint32_t contact_light_phased_shader = 4154163049u; // AC7 transform: 
 
 // Counters for the typed graphics effects.
 struct SessionCounters {
-    uint32_t draw_dropped = 0, blob_dropped = 0;
+    uint32_t blob_dropped = 0;
     uint32_t lighting_interval = UINT32_MAX;
     bool lighting_after_pending = false;
     uint32_t colour_readbacks = 0, colour_readback_failed = 0;
@@ -54,7 +53,6 @@ struct Capture {
     std::string directory, prefix;
     rsf_ac7_capture_log_fn log = nullptr;
     void* user = nullptr;
-    std::vector<std::string> draws;
     std::vector<std::vector<unsigned char>> blobs;
     uint32_t geometry_interval = UINT32_MAX;
     std::array<uint32_t,5> geometry_reads{};
@@ -385,15 +383,19 @@ void hooked_graph_process(void* graph, void* output_reference, void* context)
     if (r.fields_valid && r.output_node) { graph_output(r); associate_commands(r); }
     record_root(r);
 }
+MotionQueuedDraw queued_draw()
+{
+    MotionQueuedDraw draw{};
+    if (state().roots_installed && copy_memory(&draw.command, current_rhi_command_address, sizeof(draw.command)) &&
+        draw.command && read(draw.command, 8, draw.execute)) {
+        auto& s = state(); std::lock_guard<std::mutex> lock(s.guard);
+        draw.scope = rsf_ac7_capture_queued_scope(draw.command, draw.execute, true);
+    } else draw.scope = rsf_ac7_capture_queued_scope(draw.command, draw.execute, false);
+    return draw;
+}
 void queued_scope(std::ostream& out)
 {
-    uint64_t command = 0, execute = 0;
-    QueuedScope scope;
-    if (state().roots_installed && copy_memory(&command, current_rhi_command_address, sizeof(command)) && command &&
-        read(command, 8, execute)) {
-        auto& s = state(); std::lock_guard<std::mutex> lock(s.guard);
-        scope = rsf_ac7_capture_queued_scope(command, execute, true);
-    } else scope = rsf_ac7_capture_queued_scope(command, execute, false);
+    const auto [command, execute, scope] = queued_draw();
     out << ",\"rhi_command\":" << command << ",\"rhi_execute\":" << execute
         << ",\"queued_native_scope\":" << scope.scope << ",\"queued_native_view\":" << scope.view
         << ",\"queued_native_family\":" << scope.family << ",\"queued_native_frame\":" << scope.native_frame
@@ -454,10 +456,10 @@ bool copy_upload(void* user, const unsigned char* bytes, size_t size) noexcept t
 }
 catch (...) { return false; }
 
-void constants(MotionCaptureInterval capture, std::ostream& out, ID3D11DeviceContext* context, void* const* buffers,
-               uint32_t mask, bool lighting = false)
+template<class Visit>
+void visit_constants(MotionCaptureInterval capture, ID3D11DeviceContext* context, void* const* buffers,
+                     uint32_t mask, bool lighting, Visit visit)
 {
-    out << '['; bool first = true;
     for (uint32_t slot = 0; slot < 14; ++slot) {
         if (!buffers[slot] || !(mask & (1u << slot))) continue;
         std::vector<unsigned char> bytes;
@@ -482,11 +484,19 @@ void constants(MotionCaptureInterval capture, std::ostream& out, ID3D11DeviceCon
             }
         }
         const uint32_t id = bytes.empty() ? 0 : save_blob(capture, std::move(bytes));
-        if (!first) out << ','; first = false;
-        out << "{\"slot\":" << slot << ",\"buffer\":" << record.buffer
-            << ",\"blob\":" << id << ",\"upload_serial\":" << record.upload_serial
-            << ",\"readback\":" << (fallback ? 1 : 0) << '}';
+        visit(MotionBoundConstant{record.buffer, record.upload_serial, slot, id, uint32_t(fallback)});
     }
+}
+void constants(MotionCaptureInterval capture, std::ostream& out, ID3D11DeviceContext* context, void* const* buffers,
+               uint32_t mask, bool lighting = false)
+{
+    out << '['; bool first = true;
+    visit_constants(capture, context, buffers, mask, lighting, [&](const MotionBoundConstant& record) {
+        if (!first) out << ','; first = false;
+        out << "{\"slot\":" << record.slot << ",\"buffer\":" << record.buffer
+            << ",\"blob\":" << record.blob << ",\"upload_serial\":" << record.upload_serial
+            << ",\"readback\":" << record.readback << '}';
+    });
     out << ']';
 }
 uint32_t shader_hash(void* pointer, uint32_t stage) { return rsf_ac7_capture_shader_facts(pointer, stage).hash; }
@@ -507,43 +517,54 @@ uint32_t disassemble_constants(const void* bytes, size_t size) noexcept
     }
     return rsf_ac7_capture_declared_constants(nullptr, 0);
 }
-void resource(std::ostream& out, ID3D11Resource* r)
+// These dimension values select the same optional fields in the Rust dispatch writer.
+static_assert(D3D11_RESOURCE_DIMENSION_TEXTURE2D == 3 && D3D11_RESOURCE_DIMENSION_TEXTURE3D == 4);
+MotionResource resource_facts(ID3D11Resource* r)
 {
     D3D11_RESOURCE_DIMENSION dimension{}; r->GetType(&dimension);
-    out << "{\"resource\":" << uint64_t(uintptr_t(r)) << ",\"dimension\":" << uint32_t(dimension);
+    MotionResource facts{uint64_t(uintptr_t(r)), uint32_t(dimension), 0, 0, 0, 0};
     if (dimension == D3D11_RESOURCE_DIMENSION_TEXTURE2D) {
         D3D11_TEXTURE2D_DESC d{}; static_cast<ID3D11Texture2D*>(r)->GetDesc(&d);
-        out << ",\"width\":" << d.Width << ",\"height\":" << d.Height << ",\"format\":" << uint32_t(d.Format);
+        facts.width = d.Width; facts.height = d.Height; facts.format = uint32_t(d.Format);
     } else if (dimension == D3D11_RESOURCE_DIMENSION_TEXTURE3D) {
         D3D11_TEXTURE3D_DESC d{}; static_cast<ID3D11Texture3D*>(r)->GetDesc(&d);
-        out << ",\"width\":" << d.Width << ",\"height\":" << d.Height << ",\"depth\":" << d.Depth << ",\"format\":" << uint32_t(d.Format);
+        facts.width = d.Width; facts.height = d.Height; facts.depth = d.Depth; facts.format = uint32_t(d.Format);
+    }
+    return facts;
+}
+void resource(std::ostream& out, const MotionResource& facts)
+{
+    out << "{\"resource\":" << facts.resource << ",\"dimension\":" << facts.dimension;
+    if (facts.dimension == D3D11_RESOURCE_DIMENSION_TEXTURE2D ||
+        facts.dimension == D3D11_RESOURCE_DIMENSION_TEXTURE3D) {
+        out << ",\"width\":" << facts.width << ",\"height\":" << facts.height;
+        if (facts.dimension == D3D11_RESOURCE_DIMENSION_TEXTURE3D) out << ",\"depth\":" << facts.depth;
+        out << ",\"format\":" << facts.format;
     }
     out << '}';
+}
+void resource(std::ostream& out, ID3D11Resource* r) { resource(out, resource_facts(r)); }
+
+template<class View, size_t N, class Visit> void visit_bound_views(View* (&views)[N], Visit visit)
+{
+    for (size_t i = 0; i < N; ++i) {
+        if (!views[i]) continue;
+        ComPtr<ID3D11Resource> r; views[i]->GetResource(&r);
+        visit(MotionBoundView{resource_facts(r.Get()), uint32_t(i)});
+        views[i]->Release();
+    }
 }
 template<class View, size_t N> void bound_views(std::ostream& out, View* (&views)[N])
 {
     bool first = true;
-    for (size_t i = 0; i < N; ++i) {
-        if (!views[i]) continue;
-        ComPtr<ID3D11Resource> r; views[i]->GetResource(&r);
+    visit_bound_views(views, [&](const MotionBoundView& view) {
         if (!first) out << ','; first = false;
-        out << "{\"slot\":" << i << ",\"view\":"; resource(out, r.Get()); out << '}';
-        views[i]->Release();
-    }
+        out << "{\"slot\":" << view.slot << ",\"view\":"; resource(out, view.resource); out << '}';
+    });
 }
-void record_draw(MotionCaptureInterval capture, std::string text)
+void record_draw(MotionCaptureInterval capture, const std::string& text)
 {
-    auto& s = state(); std::lock_guard<std::mutex> lock(s.guard);
-    if (!rsf_ac7_capture_current(capture.session)) return;
-    if (s.draws.size() < max_draws) s.draws.push_back(std::move(text)); else ++s.counters.draw_dropped;
-}
-bool can_record_draw(MotionCaptureInterval capture)
-{
-    auto& s = state(); std::lock_guard<std::mutex> lock(s.guard);
-    if (!rsf_ac7_capture_current(capture.session)) return false;
-    if (s.draws.size() < max_draws) return true;
-    ++s.counters.draw_dropped;
-    return false;
+    if (!rsf_ac7_capture_record_draw(capture, text.data(), text.size())) capture_failed(capture);
 }
 const char* colour_stage(uint32_t hash)
 {
@@ -680,7 +701,7 @@ void before_draw_capture(MotionCaptureInterval capture, const rsf_frame_tap_targ
 catch (...) { capture_failed(capture); }
 void draw_capture(MotionCaptureInterval capture, const rsf_frame_tap_target_draw* d) try
 {
-    if (!capture || !can_record_draw(capture)) return;
+    if (!capture || !rsf_ac7_capture_can_record_draw(capture)) return;
     auto* c = static_cast<ID3D11DeviceContext*>(d->context);
     const uint32_t ps = shader_hash(d->pixel_shader, 1);
     bool light_after = false;
@@ -749,28 +770,28 @@ void draw_capture(MotionCaptureInterval capture, const rsf_frame_tap_target_draw
 catch (...) { capture_failed(capture); }
 void compute_capture(MotionCaptureInterval capture, void* context, uint32_t x, uint32_t y, uint32_t z, void* indirect, uint32_t offset) try
 {
-    if (!capture || !can_record_draw(capture)) return;
+    if (!capture || !rsf_ac7_capture_can_record_draw(capture)) return;
     auto* c = static_cast<ID3D11DeviceContext*>(context);
     ComPtr<ID3D11ComputeShader> shader; c->CSGetShader(&shader, nullptr, nullptr);
-    std::ostringstream out;
-    const auto scope = rsf_ac7_capture_root_scope();
-    out << "{\"kind\":\"dispatch\",\"qpc\":" << tick() << ",\"interval\":" << capture.interval
-        << ",\"thread\":" << GetCurrentThreadId() << ",\"native_scope\":" << scope.id
-        << ",\"native_view\":" << scope.view
-        << ",\"groups\":[" << x << ',' << y << ',' << z << "],\"indirect\":" << uint64_t(uintptr_t(indirect))
-        << ",\"offset\":" << offset << ",\"cs_hash\":" << shader_hash(shader.Get(), 5) << ",\"inputs\":[";
+    MotionDispatch dispatch{};
+    dispatch.root = rsf_ac7_capture_root_scope();
+    dispatch.qpc = tick();
+    dispatch.thread = GetCurrentThreadId();
+    dispatch.groups[0] = x; dispatch.groups[1] = y; dispatch.groups[2] = z;
+    dispatch.indirect = uint64_t(uintptr_t(indirect));
+    dispatch.offset = offset;
+    dispatch.cs_hash = shader_hash(shader.Get(), 5);
     ID3D11ShaderResourceView* views[128]{}; c->CSGetShaderResources(0, 128, views);
-    bound_views(out, views);
-    out << "],\"outputs\":[";
+    visit_bound_views(views, [&](const MotionBoundView& view) { dispatch.inputs[dispatch.input_count++] = view; });
     ID3D11UnorderedAccessView* outputs[8]{}; c->CSGetUnorderedAccessViews(0, 8, outputs);
-    bound_views(out, outputs);
-    out << "],\"cs_cb\":";
+    visit_bound_views(outputs, [&](const MotionBoundView& view) { dispatch.outputs[dispatch.output_count++] = view; });
     ID3D11Buffer* cb[14]{}; void* borrowed[14]{}; c->CSGetConstantBuffers(0, 14, cb);
     for (uint32_t i = 0; i < 14; ++i) borrowed[i] = cb[i];
-    constants(capture, out, c, borrowed, shader_constants(shader.Get(), 5));
+    visit_constants(capture, c, borrowed, shader_constants(shader.Get(), 5), false,
+        [&](const MotionBoundConstant& record) { dispatch.constants[dispatch.constant_count++] = record; });
     for (auto* b : cb) if (b) b->Release();
-    queued_scope(out);
-    out << '}'; record_draw(capture, out.str());
+    dispatch.queued = queued_draw();
+    if (!rsf_ac7_capture_record_dispatch(capture, &dispatch)) capture_failed(capture);
 }
 catch (...) { capture_failed(capture); }
 
@@ -826,15 +847,14 @@ MotionArtifactStats finish_stats(const void* user) noexcept
 {
     const auto& s = *static_cast<const Capture*>(user);
     LARGE_INTEGER frequency{}; QueryPerformanceFrequency(&frequency);
-    return {frequency.QuadPart, s.installed.load(), s.roots_installed.load(), s.counters.draw_dropped,
-        s.counters.blob_dropped,
+    return {frequency.QuadPart, s.installed.load(), s.roots_installed.load(), s.counters.blob_dropped,
         s.counters.colour_readbacks, s.counters.colour_readback_failed, rsf_ac7_capture_failures()};
 }
 void finish() noexcept try
 {
     auto& s = state();
     std::unique_lock<std::mutex> lock(s.guard);
-    const MotionFinalArtifacts files{byte_artifacts(s.draws), byte_artifacts(s.blobs), &s, finish_stats};
+    const MotionFinalArtifacts files{byte_artifacts(s.blobs), &s, finish_stats};
     const auto result = rsf_ac7_capture_publish_finish(s.prefix.c_str(), write_file, &files);
     if (result == publication_failed) {
         lock.unlock();
@@ -870,7 +890,7 @@ bool prepare_capture(uint32_t session) noexcept try
     }
     std::lock_guard<std::mutex> lock(s.guard);
     s.prefix = std::move(path);
-    s.draws.clear(); s.blobs.clear(); s.blob_bytes = 0;
+    s.blobs.clear(); s.blob_bytes = 0;
     s.counters = {};
     s.geometry_interval = UINT32_MAX;
     s.geometry_reads.fill(0);
