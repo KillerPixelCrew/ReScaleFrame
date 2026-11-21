@@ -127,3 +127,22 @@ exceeded the inspection interval without yielding a stack. The engine
 and DLL identities, package and differential logs are under
 `.local/godot/preflight/`. These checks cover staging and native class
 registration. Real Vulkan WSI output still requires the windowed run.
+
+The rebuilt editor at `ed1daf0bf001b61586d9930840f2f1394092c079`
+reproduced Windows status `0xc0000005` after extension discovery and editor
+layout loading. A separate headless run registered `ReScaleFrameEffect`
+and exited normally. The debugger reproduced the stop without a usable
+stack. The [Godot issue tracker](https://github.com/godotengine/godot/issues/124853)
+describes a similar editor-only crash with a different extension and OS.
+The local fault site remains unknown.
+
+The visual fixture stages only text scenes and scripts. It now writes the
+single extension path to the same project list the editor generated and
+checks the entry script in headless game mode before enabling the Runtime.
+On the rebuilt standard editor, the actual capture script's preflight
+exited zero without starting Streamline. An independent script also
+confirmed native class registration from a fresh seeded list. The Mono
+variant and windowed Vulkan output are still open. Receipts are in
+`.local/godot/preflight/fresh-engine-exact/`,
+`.local/godot/preflight/seeded-extension-list/` and
+`.local/godot/visual/rust-cutover-headless-combined/`.
