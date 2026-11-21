@@ -186,6 +186,31 @@ The raw captures and game logs are in `moving-sr-capture-avx-bf12517`
 and `moving-sr-consecutive-avx-bf12517` under the isolated clone's
 `evidence/` directory.
 
+## Camera pans without history reset
+
+The merged AVX run at `d0cc7ad` reduced mouse sensitivity from 0.12 to
+0.012 in the isolated clone so mouse drags would produce smaller turns.
+It captured consecutive evaluations and matched Presents from frame
+1082 through 1097 after resize to 1600×900. Frame 1085 rotated 26.1°
+and frame 1095 rotated 14.8° relative to their preceding frames. Both
+retained DLSS history. The Runtime's clip-to-previous matrices matched
+the recorded camera data.
+
+All 640,200 submitted RG16F motion vectors were finite and nonzero
+on each of the two moving frames. The adapter and Runtime dumps
+matched byte for byte for raw input color, depth, game motion and
+SR output. The final backbuffer images showed the updated room view
+and intact HUD at both frames. DLSS-G stayed active and the final
+complete SR report showed 2,489 evaluations with zero refusals.
+The engine shut down Direct3D and exited with code 0. The runner
+restored the isolated payload and mouse setting.
+
+The verifier, transcript and 192 raw hashes are under
+`.local/rust-1.94.1-verification/avx-continuous-pan-audit-d0cc7ad/`.
+Logs and captured images are in `avx-continuous-pan-d0cc7ad` under
+the clone's `evidence/` directory. This run covers the sampled room
+and camera motion. Independently moving object quality remains open.
+
 ## Vulkan Streamline-disabled verification
 
 The merged core also built without the corrected Vulkan Streamline SDK.
