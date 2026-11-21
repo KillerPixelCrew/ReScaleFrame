@@ -327,6 +327,17 @@ gate, enabled and disabled wrappers and linked consumers. Build,
 binary export and device checks remain open.
 [Streamline startup](research/rust-d3d12-streamline-host-startup.md)
 
+The plain D3D12 physical swapchain plan in the shared presentation
+bridge now comes from Rust. Compared with `d1f40c73`, the plan keeps
+flip discard, applies only the supported tearing flag, and selects
+the same direct or native queue. Native D3D12 retains the application
+buffer count and usage. The D3D11 facade still uses three physical
+buffers with render-target usage. The typed DXGI create, interface
+query, error receipt and borrowed queue handoff match the previous
+source. The private 24-byte record, pinned formatting, locked
+Windows metadata and whitespace checks passed. Device fixtures
+remain unrun.
+
 ## Verification coverage
 
 | Requirement | Recorded evidence | Still open |

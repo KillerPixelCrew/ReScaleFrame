@@ -38,6 +38,13 @@ typedef struct rsf_d3d11p_facts {
     uint32_t buffer_usage;
 } rsf_d3d11p_facts;
 
+/* The plain physical chain's creation queue and DXGI overrides.
+   Zero buffer_count or buffer_usage preserves the application's value. */
+typedef struct rsf_d3d11p_plain_plan {
+    void* queue;
+    uint32_t swap_effect, flags, buffer_count, buffer_usage;
+} rsf_d3d11p_plain_plan;
+
 typedef struct rsf_d3d11p_adapter {
     uint32_t vendor, device, default_backend, reserved;
 } rsf_d3d11p_adapter;
@@ -105,7 +112,7 @@ typedef struct rsf_d3d11p_platform {
     /* Creation returns an owned IDXGISwapChain4 reference. The plain creation queue
        is borrowed from the initialized facade/host. Callers lease the physical
        chain and its creation queue for the remaining operations. */
-    int32_t (*create_plain)(void* bridge, void** physical, void** queue);
+    int32_t (*create_plain)(void* bridge, const rsf_d3d11p_plain_plan*, void** physical, void** queue);
     int32_t (*query_chain4)(void* chain, void** physical);
     int32_t (*get_fullscreen)(void* physical, int32_t* fullscreen);
     int32_t (*set_fullscreen)(void* physical, int32_t fullscreen, void* target);

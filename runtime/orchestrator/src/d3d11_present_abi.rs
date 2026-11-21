@@ -69,6 +69,20 @@ pub(crate) struct rsf_d3d11p_facts {
 }
 
 #[repr(C)]
+pub(crate) struct rsf_d3d11p_plain_plan {
+    pub queue: Raw,
+    pub swap_effect: u32,
+    pub flags: u32,
+    pub buffer_count: u32,
+    pub buffer_usage: u32,
+}
+
+const _: () = {
+    assert!(size_of::<rsf_d3d11p_plain_plan>() == 24);
+    assert!(offset_of!(rsf_d3d11p_plain_plan, swap_effect) == 8);
+};
+
+#[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub(crate) struct rsf_d3d11p_adapter {
     pub vendor: u32,
@@ -126,7 +140,7 @@ pub(crate) struct rsf_d3d11p_platform {
     pub shared_surface_platform: unsafe extern "C" fn() -> *const shared_surface::Platform,
     pub create_render_buffer: unsafe extern "C" fn(Raw, u32, u32, u32, *mut Raw) -> i32,
 
-    pub create_plain: unsafe extern "C" fn(Raw, *mut Raw, *mut Raw) -> i32,
+    pub create_plain: unsafe extern "C" fn(Raw, &rsf_d3d11p_plain_plan, *mut Raw, *mut Raw) -> i32,
     pub query_chain4: unsafe extern "C" fn(Raw, *mut Raw) -> i32,
     pub get_fullscreen: unsafe extern "C" fn(Raw, *mut i32) -> i32,
     pub set_fullscreen: unsafe extern "C" fn(Raw, i32, Raw) -> i32,

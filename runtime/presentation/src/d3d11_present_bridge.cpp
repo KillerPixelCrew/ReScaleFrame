@@ -24,6 +24,7 @@ static_assert(sizeof(rsf_d3d11p_request) == 48 && offsetof(rsf_d3d11p_request, r
 static_assert(sizeof(rsf_d3d11p_facts) == 120 && offsetof(rsf_d3d11p_facts, graphics) == 40 &&
     offsetof(rsf_d3d11p_facts, direct_queue) == 88 && offsetof(rsf_d3d11p_facts, device11) == 104 &&
     offsetof(rsf_d3d11p_facts, buffer_usage) == 112);
+static_assert(sizeof(rsf_d3d11p_plain_plan) == 24 && offsetof(rsf_d3d11p_plain_plan, swap_effect) == 8);
 static_assert(sizeof(rsf_d3d11p_adapter) == 16);
 static_assert(sizeof(rsf_d3d11p_platform) == 71 * sizeof(void*));
 static_assert(offsetof(rsf_d3d11p_platform, bridge_new) == 15 * sizeof(void*) &&
@@ -42,6 +43,8 @@ static_assert(DXGI_FORMAT_R8G8B8A8_UNORM == 28 && DXGI_FORMAT_B8G8R8A8_UNORM == 
     DXGI_FORMAT_R10G10B10A2_UNORM == 24 && DXGI_FORMAT_R16G16B16A16_FLOAT == 10);
 static_assert(DXGI_PRESENT_TEST == 1 && DXGI_PRESENT_ALLOW_TEARING == 0x200 &&
     DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT == 64 && DXGI_USAGE_UNORDERED_ACCESS == 0x400);
+static_assert(DXGI_SWAP_EFFECT_FLIP_DISCARD == 4 && DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING == 2048 &&
+    DXGI_USAGE_RENDER_TARGET_OUTPUT == 0x20);
 static_assert(RSF_FG_BACKEND_DLSS == 1 && RSF_FG_BACKEND_FSR3 == 3 && RSF_FG_BACKEND_FSR4 == 4 &&
     RSF_FG_BACKEND_XESS == 5 && RSF_FG_BACKEND_AUTO == 7 && RSF_PACING_ANTILAG2 == 3 &&
     RSF_LATENCY_INPUT_SAMPLE == 6 && RSF_UI_MODE_NONE == 1);
@@ -458,15 +461,15 @@ int32_t create_render_buffer(void* b, uint32_t width, uint32_t height, uint32_t 
     return hr;
 }
 
-int32_t create_plain(void* b, void** physical, void** queue) {
-    auto& self = *as_bridge(b); const auto& description = self.description;
-    auto desc = description; desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD; desc.BufferCount = self.native12 ? description.BufferCount : 3u;
-    desc.Flags = self.tearing_supported ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
-    // D3D11 application bindings belong to the shared virtual buffers.
-    // This private D3D12 chain receives copies and presents them.
-    if (!self.native12) desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+int32_t create_plain(void* b, const rsf_d3d11p_plain_plan* plan, void** physical, void** queue) {
+    auto& self = *as_bridge(b);
+    auto desc = self.description;
+    desc.SwapEffect = static_cast<DXGI_SWAP_EFFECT>(plan->swap_effect);
+    desc.Flags = plan->flags;
+    if (plan->buffer_count) desc.BufferCount = plan->buffer_count;
+    if (plan->buffer_usage) desc.BufferUsage = plan->buffer_usage;
     ComPtr<IDXGISwapChain> plain;
-    auto* owner_queue = self.native12 ? self.direct_queue.Get() : static_cast<ID3D12CommandQueue*>(self.graphics.native_queue);
+    auto* owner_queue = static_cast<ID3D12CommandQueue*>(plan->queue);
     const HRESULT created = original_create ? original_create(self.parent.Get(), owner_queue, &desc, &plain) :
         self.parent->CreateSwapChain(owner_queue, &desc, &plain);
     if (FAILED(created)) {

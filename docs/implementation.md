@@ -851,6 +851,12 @@ and remains unrun. Build and live observer verification remain open.
 
 ## Rust orchestrator and first Anomaly port
 
+The shared presentation bridge now selects the plain physical
+swapchain's queue, flip effect, tearing flag and buffer overrides
+in Rust. The native DXGI create and interface query retain their
+existing order and status. The device fixture remains unrun.
+[Source comparison](rust-migration.md#native-policy-cutover)
+
 XeSS Vulkan SR now admits its ten required SDK exports in Rust.
 The native leaf binds the complete typed table and still publishes
 the session only after pinning the module. The source comparison

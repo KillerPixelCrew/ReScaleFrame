@@ -550,15 +550,35 @@ fn assert_queue(queue: Raw) {
     });
 }
 
-unsafe extern "C" fn create_plain(_: Raw, physical: *mut Raw, queue: *mut Raw) -> i32 {
+unsafe extern "C" fn create_plain(
+    _: Raw,
+    plan: &rsf_d3d11p_plain_plan,
+    physical: *mut Raw,
+    queue: *mut Raw,
+) -> i32 {
     call("plain");
     with(|fake| {
-        if fake.plain_result >= 0 {
-            let owner_queue = if fake.native12 {
-                com_raw(&fake.direct_queue)
+        let (owner_queue, count, usage) = if fake.native12 {
+            (com_raw(&fake.direct_queue), 0, 0)
+        } else {
+            (
+                com_raw(&fake.native_queue),
+                3,
+                DXGI_USAGE_RENDER_TARGET_OUTPUT,
+            )
+        };
+        assert_eq!(plan.queue, owner_queue);
+        assert_eq!(plan.swap_effect, DXGI_SWAP_EFFECT_FLIP_DISCARD);
+        assert_eq!(
+            plan.flags,
+            if fake.tearing {
+                DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING
             } else {
-                com_raw(&fake.native_queue)
-            };
+                0
+            }
+        );
+        assert_eq!((plan.buffer_count, plan.buffer_usage), (count, usage));
+        if fake.plain_result >= 0 {
             let chain = stage_physical(fake, owner_queue);
             unsafe {
                 give_ref(chain, physical);

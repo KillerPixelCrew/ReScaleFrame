@@ -40,6 +40,9 @@ pub(crate) const DXGI_ERROR_WAS_STILL_DRAWING: i32 = 0x887A_000A_u32 as i32;
 const DXGI_PRESENT_TEST: u32 = 0x1;
 const DXGI_PRESENT_ALLOW_TEARING: u32 = 0x200;
 const DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT: u32 = 64;
+const DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING: u32 = 2048;
+const DXGI_SWAP_EFFECT_FLIP_DISCARD: u32 = 4;
+const DXGI_USAGE_RENDER_TARGET_OUTPUT: u32 = 0x20;
 const DXGI_USAGE_UNORDERED_ACCESS: u32 = 0x400;
 const FORMATS: [u32; 4] = [28, 87, 24, 10]; // R8G8B8A8, B8G8R8A8, R10G10B10A2 UNORM, R16G16B16A16 FLOAT
 
@@ -725,9 +728,33 @@ impl Owner {
     fn create_physical(&self, backend: u32) -> i32 {
         let p = self.p();
         if backend == 0 {
+            let facts = self.facts();
+            // D3D11 application bindings belong to the virtual buffers. The plain physical
+            // D3D12 chain only presents copies. Native D3D12 keeps its application buffer shape.
+            let (creation_queue, buffer_count, buffer_usage) = if facts.native12 != 0 {
+                (facts.direct_queue, 0, 0)
+            } else {
+                (
+                    facts.graphics.native_queue,
+                    3,
+                    DXGI_USAGE_RENDER_TARGET_OUTPUT,
+                )
+            };
+            let plan = rsf_d3d11p_plain_plan {
+                queue: creation_queue,
+                swap_effect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
+                flags: if facts.tearing != 0 {
+                    DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING
+                } else {
+                    0
+                },
+                buffer_count,
+                buffer_usage,
+            };
             let mut queue = null_mut();
-            let chain =
-                acquire_resource(|out| unsafe { (p.create_plain)(self.b(), out, &mut queue) });
+            let chain = acquire_resource(|out| unsafe {
+                (p.create_plain)(self.b(), &plan, out, &mut queue)
+            });
             return self.publish_physical(chain, queue);
         }
         let setup = self.generation_setup(backend);
