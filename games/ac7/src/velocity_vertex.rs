@@ -1,0 +1,492 @@
+// SPDX-License-Identifier: MIT
+//! AC7 translucent velocity vertex shader admission and assembly.
+
+use crate::dxbc_chunks::Chunk;
+use crate::velocity_container::{
+    AppendSemantic, Resize, Semantic, borrowed, chunk_index, chunks, native_output, read_signature,
+    resize_bytes, shader_index, valid_container_size, write_container, write_signature,
+};
+use crate::velocity_tokens::{
+    DCL_TEMPS, Instruction, MAX_TEMPS, OperandEdit, append_words, instructions, read_operands,
+    rewrite_operands, temp_count, write_instructions,
+};
+use std::ffi::{c_char, c_void};
+use std::ptr;
+
+const VERTEX_PROFILE: u32 = 0x10050;
+const REGISTER_COUNT: usize = 32;
+const POSITION: u32 = 1;
+const FLOAT32: u32 = 3;
+
+const CALL: u32 = 4;
+const CALLC: u32 = 5;
+const RET: u32 = 62;
+const RETC: u32 = 63;
+const DCL_INPUT: u32 = 95;
+const DCL_INPUT_SIV: u32 = 97;
+const DCL_OUTPUT: u32 = 101;
+const DCL_OUTPUT_SIV: u32 = 103;
+const DCL_GLOBAL_FLAGS: u32 = 106;
+
+const TEMP: u32 = 0;
+const INPUT: u32 = 1;
+const OUTPUT: u32 = 2;
+
+const GENERIC_SOURCE: &str = r#"
+struct O {float4 p:SV_Position;float4 key:RSFKEY0;float4 centre:RSFCENTRE0;float4 old:RSFOLD0;float4 lookup:RSFLOOKUP0;};
+O main(uint vertex:SV_VertexID,uint instance:SV_InstanceID) {O o;o.p=float4(0,0,0,1);
+o.key=float4(float(vertex),float(instance),0,0);o.lookup=o.key;o.centre=0;o.old=0;return o;}"#;
+
+const SPRITE_SOURCE: &str = r#"
+struct O {float4 p:SV_Position;float4 key:RSFKEY0;float4 centre:RSFCENTRE0;float4 old:RSFOLD0;float4 lookup:RSFLOOKUP0;};
+O main(float4 centre:ATTRIBUTE0,float4 old:ATTRIBUTE1,float2 corner:ATTRIBUTE4) {
+O o;o.p=float4(0,0,0,1);o.key=float4(corner,old.w,1);o.centre=float4(centre.xyz,1);
+o.old=float4(old.xyz,1);o.lookup=o.key;return o;}"#;
+
+const MESH_SOURCE: &str = r#"
+Buffer<float4> Previous:register(t127);
+struct O {float4 p:SV_Position;float4 key:RSFKEY0;float4 centre:RSFCENTRE0;float4 old:RSFOLD0;float4 lookup:RSFLOOKUP0;};
+uint2 pose_hash(float4 a,float4 b,float4 c) {
+    uint2 value=uint2(2166136261,2246822519);
+    [unroll]for(uint row=0;row<3;row++) {
+        uint4 bits=asuint(row==0 ? a : row==1 ? b : c);
+        [unroll]for(uint i=0;i<4;i++) {value=(value^bits[i])*uint2(16777619,3266489917);}
+    }
+    return value;
+}
+O main(float4 a:ATTRIBUTE8,float4 b:ATTRIBUTE9,float4 c:ATTRIBUTE10,
+       uint vertex:SV_VertexID,uint instance:SV_InstanceID) {
+    O o;o.p=float4(0,0,0,1);uint2 now=pose_hash(a,b,c);
+    o.key=float4(float(vertex),asfloat(now.x),asfloat(now.y),2);o.centre=float4(a.w,b.w,c.w,1);
+    uint count;Previous.GetDimensions(count);o.lookup=float4(float(vertex),0,0,3);o.old=o.centre;
+    if(instance<count/3) {
+        float4 pa=Previous[instance*3],pb=Previous[instance*3+1],pc=Previous[instance*3+2];
+        if(any(pa.xyz!=0) && any(pb.xyz!=0) && any(pc.xyz!=0)) {
+            uint2 old=pose_hash(pa,pb,pc);o.lookup=float4(float(vertex),asfloat(old.x),asfloat(old.y),2);
+            o.old=float4(pa.w,pb.w,pc.w,1);
+        }
+    }
+    return o;
+}"#;
+
+const BEAM_SOURCE: &str = r#"
+struct O {float4 p:SV_Position;float4 key:RSFKEY0;float4 centre:RSFCENTRE0;float4 old:RSFOLD0;float4 lookup:RSFLOOKUP0;};
+O main(float4 p:ATTRIBUTE0,float4 old:ATTRIBUTE1,float4 size:ATTRIBUTE2,float4 uv:ATTRIBUTE3) {
+ O o;o.p=float4(0,0,0,1);o.key=0;o.lookup=float4(0,0,0,3);o.centre=0;o.old=0;
+ uint3 bits=asuint(float3(p.w,old.w,size.w));
+ uint3 words=(bits&0x1fffffff)|((bits>>2)&0x20000000);uint sample=words.z&4095,intervals=(words.z>>12)&4095;
+ if(all((bits&0x60000000)==0x20000000) && words.x>>28<=2 && words.z>>24==0 && intervals!=0 && sample<=intervals && (uv.y==0 || uv.y==1)) {
+  float u=float(sample)/float(intervals);o.key=float4(p.w,old.w,floor(u*128),uv.y+4);
+  o.lookup=o.key;o.centre=float4(u,0,0,1);o.old=o.centre;
+ }
+ return o;
+}"#;
+
+#[repr(u32)]
+enum Particle {
+    Generic = 0,
+    Sprite = 1,
+    Mesh = 2,
+    Beam = 3,
+}
+
+#[repr(C)]
+struct ShaderSource {
+    text: *const c_char,
+    length: usize,
+}
+
+#[repr(C)]
+struct VertexMetadata {
+    particle: u32,
+    position_register: u32,
+}
+
+const _: () = {
+    assert!(size_of::<ShaderSource>() == 16);
+    assert!(size_of::<VertexMetadata>() == 8);
+};
+
+type CompileHelper =
+    unsafe extern "C" fn(*const ShaderSource, u32, *mut *const u8, *mut usize) -> bool;
+
+struct Stage<'a> {
+    shader: usize,
+    input: usize,
+    output: usize,
+    code: Vec<Instruction>,
+    inputs: Vec<Semantic<'a>>,
+    outputs: Vec<Semantic<'a>>,
+}
+
+fn signature(bytes: &[u8]) -> Option<Vec<Semantic<'_>>> {
+    let mut semantics = Vec::new();
+    read_signature(bytes, false, |semantic| {
+        if semantic.reg as usize >= REGISTER_COUNT {
+            return None;
+        }
+        semantics.try_reserve(1).ok()?;
+        semantics.push(semantic);
+        Some(())
+    })?;
+    Some(semantics)
+}
+
+fn stage<'a>(chunks: &[Chunk<'a>]) -> Option<Stage<'a>> {
+    let shader = shader_index(chunks)?;
+    let input = chunk_index(chunks, b"ISGN")?;
+    let output = chunk_index(chunks, b"OSGN")?;
+    Some(Stage {
+        shader,
+        input,
+        output,
+        code: instructions(chunks[shader].data, VERTEX_PROFILE)?,
+        inputs: signature(chunks[input].data)?,
+        outputs: signature(chunks[output].data)?,
+    })
+}
+
+fn particle_mode(inputs: &[Semantic<'_>], beam: bool) -> Particle {
+    let mut position = None;
+    let mut old = false;
+    let mut corner = false;
+    let mut beam_old = false;
+    let mut beam_size = false;
+    let mut beam_uv = false;
+    let mut mesh_rows = [false; 3];
+    for s in inputs {
+        if !s.name.eq_ignore_ascii_case(b"ATTRIBUTE") {
+            continue;
+        }
+        match (s.index, s.mask) {
+            (0, 15) => position = Some(s),
+            (1, 15) => old = true,
+            (1, 7) => beam_old = true,
+            (2, 15) if s.used & 8 == 0 => beam_size = true,
+            (3, 15) => beam_uv = true,
+            (4, 3) => corner = true,
+            (8..=10, 15) => mesh_rows[(s.index - 8) as usize] = true,
+            _ => {}
+        }
+    }
+    if mesh_rows == [true; 3] {
+        Particle::Mesh
+    } else if position.is_some() && old && corner {
+        Particle::Sprite
+    } else if beam && position.is_some_and(|s| s.used & 8 == 0) && beam_old && beam_size && beam_uv
+    {
+        Particle::Beam
+    } else {
+        Particle::Generic
+    }
+}
+
+fn position_register(outputs: &[Semantic<'_>], tessellation: bool) -> Option<u32> {
+    if outputs.iter().any(|s| s.name.starts_with(b"RSF")) {
+        return None;
+    }
+    outputs
+        .iter()
+        .rfind(|s| {
+            s.system == POSITION
+                || (tessellation
+                    && s.name.eq_ignore_ascii_case(b"VS_To_DS_Position")
+                    && s.mask == 15
+                    && s.ty == FLOAT32)
+        })
+        .map(|s| s.reg)
+}
+
+fn next_register(semantics: &[Semantic<'_>]) -> u32 {
+    semantics.iter().map(|s| s.reg + 1).max().unwrap_or(0)
+}
+
+type RegisterMap = [Option<u32>; REGISTER_COUNT];
+
+struct Link {
+    inputs: RegisterMap,
+    outputs: RegisterMap,
+    dummy_position: u32,
+}
+
+fn link_signatures<'a>(
+    native: &mut Stage<'a>,
+    helper_inputs: Vec<Semantic<'a>>,
+    helper_outputs: Vec<Semantic<'a>>,
+) -> Option<Link> {
+    let mut inputs = [None; REGISTER_COUNT];
+    let mut outputs = [None; REGISTER_COUNT];
+    let mut next_input = next_register(&native.inputs);
+    let mut next_output = next_register(&native.outputs);
+    let mut dummy_position = None;
+    native.inputs.try_reserve(helper_inputs.len()).ok()?;
+    native.outputs.try_reserve(helper_outputs.len()).ok()?;
+    for mut s in helper_inputs {
+        let source = s.reg as usize;
+        if let Some(matched) = native
+            .inputs
+            .iter_mut()
+            .find(|input| input.index == s.index && input.name.eq_ignore_ascii_case(s.name))
+        {
+            inputs[source] = Some(matched.reg);
+            matched.used |= s.used;
+            matched.mask |= s.mask;
+        } else {
+            if s.system == 0 || next_input as usize >= REGISTER_COUNT {
+                return None;
+            }
+            s.reg = next_input;
+            inputs[source] = Some(next_input);
+            next_input += 1;
+            native.inputs.push(s);
+        }
+    }
+    for mut s in helper_outputs {
+        if s.system == POSITION {
+            dummy_position = Some(s.reg);
+            continue;
+        }
+        if next_output as usize >= REGISTER_COUNT {
+            return None;
+        }
+        outputs[s.reg as usize] = Some(next_output);
+        s.reg = next_output;
+        next_output += 1;
+        native.outputs.push(s);
+    }
+    Some(Link {
+        inputs,
+        outputs,
+        dummy_position: dummy_position?,
+    })
+}
+
+fn mapped(registers: &RegisterMap, register: u32) -> Option<u32> {
+    registers.get(register as usize).copied().flatten()
+}
+
+// VS declarations in these opcode ranges have one direct register and, for system
+// values, a trailing name token. Validate the shape before editing the register or mask.
+fn declaration_register(inst: &Instruction, kind: u32) -> Option<usize> {
+    let count = if matches!(inst.opcode, DCL_INPUT | DCL_OUTPUT) {
+        3
+    } else {
+        4
+    };
+    if inst.words.len() != count || inst.words[0] & 0x8000_0000 != 0 {
+        return None;
+    }
+    let operand = inst.words[1];
+    let register = inst.words[2] as usize;
+    (operand & 0x81f0_0000 == 0x0010_0000
+        && (operand >> 12) & 255 == kind
+        && register < REGISTER_COUNT)
+        .then_some(register)
+}
+
+fn assemble(native: &[Instruction], added: Vec<Instruction>, link: &Link) -> Option<Vec<u32>> {
+    let base = temp_count(native);
+    let helper_temps = temp_count(&added);
+    let total = base + helper_temps;
+    if total > MAX_TEMPS
+        || !native.iter().any(|inst| inst.opcode == RET)
+        || native
+            .iter()
+            .any(|inst| matches!(inst.opcode, CALL | CALLC | RETC))
+    {
+        return None;
+    }
+
+    let mut code = Vec::new();
+    append_words(&mut code, &[VERTEX_PROFILE, 0])?;
+    let mut input_declarations = [None; REGISTER_COUNT];
+    let mut temps_declared = false;
+    for inst in native.iter().filter(|inst| inst.declaration) {
+        match inst.opcode {
+            DCL_TEMPS => {
+                append_words(&mut code, &[inst.words[0], total])?;
+                temps_declared = true;
+                continue;
+            }
+            DCL_INPUT..=DCL_INPUT_SIV => {
+                let register = declaration_register(inst, INPUT)?;
+                input_declarations[register] = Some(code.len() + 1);
+            }
+            _ => {}
+        }
+        append_words(&mut code, &inst.words)?;
+    }
+
+    let mut injection = Vec::new();
+    for mut inst in added {
+        match inst.opcode {
+            DCL_TEMPS | DCL_GLOBAL_FLAGS | RET => continue,
+            DCL_INPUT..=DCL_INPUT_SIV => {
+                let source = declaration_register(&inst, INPUT)?;
+                let register = link.inputs[source]?;
+                if let Some(mask) = input_declarations[register as usize] {
+                    code[mask] |= inst.words[1] & 0xf0;
+                    continue;
+                }
+                inst.words[2] = register;
+            }
+            DCL_OUTPUT..=DCL_OUTPUT_SIV => {
+                let source = declaration_register(&inst, OUTPUT)?;
+                if source as u32 == link.dummy_position {
+                    continue;
+                }
+                inst.words[2] = link.outputs[source]?;
+            }
+            _ => {}
+        }
+        if inst.declaration {
+            append_words(&mut code, &inst.words)?;
+            continue;
+        }
+        if let Some(dest) = read_operands(&inst.words)?.next()
+            && dest.kind == OUTPUT
+            && dest.direct_register() == Some(link.dummy_position)
+        {
+            continue;
+        }
+        let rewritten = rewrite_operands(&inst.words, false, |operand| {
+            let register = match operand.kind {
+                TEMP => {
+                    let register = operand.direct_register()?;
+                    if register >= helper_temps {
+                        return None;
+                    }
+                    base + register
+                }
+                INPUT => mapped(&link.inputs, operand.direct_register()?)?,
+                OUTPUT => mapped(&link.outputs, operand.direct_register()?)?,
+                _ => return Some(OperandEdit::KEEP),
+            };
+            Some(OperandEdit::register(operand.kind, register))
+        })?;
+        append_words(&mut injection, &rewritten)?;
+    }
+
+    if !temps_declared {
+        append_words(&mut code, &[(2 << 24) | DCL_TEMPS, total])?;
+    }
+    // The helper contributes keys and history inputs at each native return.
+    for inst in native.iter().filter(|inst| !inst.declaration) {
+        if inst.opcode == RET {
+            append_words(&mut code, &injection)?;
+        }
+        append_words(&mut code, &inst.words)?;
+    }
+    Some(code)
+}
+
+fn patch<'a, 'output>(
+    bytes: &'a [u8],
+    tessellation: bool,
+    beam: bool,
+    compile: impl FnOnce(u32) -> Option<&'a [u8]>,
+    allocate: impl FnOnce(usize) -> Option<&'output mut [u8]>,
+) -> Option<(VertexMetadata, Vec<Semantic<'a>>)> {
+    let native_chunks = chunks(bytes)?;
+    let mut native = stage(&native_chunks)?;
+    let particle = particle_mode(&native.inputs, beam) as u32;
+    let position_register = position_register(&native.outputs, tessellation)?;
+    if next_register(&native.outputs) as usize + 4 > REGISTER_COUNT {
+        return None;
+    }
+
+    let helper = stage(&chunks(compile(particle)?)?)?;
+    let link = link_signatures(&mut native, helper.inputs, helper.outputs)?;
+    let code = assemble(&native.code, helper.code, &link)?;
+    let mut shader_bytes = Vec::new();
+    let mut input_bytes = Vec::new();
+    let mut output_bytes = Vec::new();
+    let shader = &mut shader_bytes;
+    write_instructions(&code, move |size| resize_bytes(shader, size))?;
+    let input = &mut input_bytes;
+    write_signature(&native.inputs, false, move |size| resize_bytes(input, size))?;
+    let output = &mut output_bytes;
+    write_signature(&native.outputs, false, move |size| {
+        resize_bytes(output, size)
+    })?;
+
+    let mut output_chunks = Vec::new();
+    output_chunks.try_reserve_exact(native_chunks.len()).ok()?;
+    for (i, chunk) in native_chunks.iter().enumerate() {
+        let data = if i == native.shader {
+            shader_bytes.as_slice()
+        } else if i == native.input {
+            input_bytes.as_slice()
+        } else if i == native.output {
+            output_bytes.as_slice()
+        } else {
+            chunk.data
+        };
+        output_chunks.push(Chunk {
+            tag: chunk.tag,
+            data,
+        });
+    }
+    write_container(&output_chunks, allocate)?;
+    Some((
+        VertexMetadata {
+            particle,
+            position_register,
+        },
+        native.outputs,
+    ))
+}
+
+/// The compiler borrows four sources in particle-mode order and returns immutable cached
+/// bytecode. Resizing borrows a separate native destination, and append copies each semantic.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_ac7_velocity_vertex_shader(
+    bytes: *const u8,
+    size: usize,
+    tessellation: bool,
+    beam: bool,
+    compile: CompileHelper,
+    user: *mut c_void,
+    resize: Resize,
+    append: AppendSemantic,
+    metadata: *mut VertexMetadata,
+) -> bool {
+    if !valid_container_size(size) || metadata.is_null() {
+        return false;
+    }
+    let Some(bytes) = (unsafe { borrowed(bytes, size) }) else {
+        return false;
+    };
+    let Some((value, outputs)) = patch(
+        bytes,
+        tessellation,
+        beam,
+        |particle| {
+            let sources = [GENERIC_SOURCE, SPRITE_SOURCE, MESH_SOURCE, BEAM_SOURCE].map(|source| {
+                ShaderSource {
+                    text: source.as_ptr().cast(),
+                    length: source.len(),
+                }
+            });
+            let mut helper = ptr::null();
+            let mut size = 0;
+            if !unsafe { compile(sources.as_ptr(), particle, &mut helper, &mut size) }
+                || !valid_container_size(size)
+            {
+                return None;
+            }
+            unsafe { borrowed(helper, size) }
+        },
+        |size| unsafe { native_output(user, resize, size) },
+    ) else {
+        return false;
+    };
+    // Keep the link order in the metadata passed to downstream stages.
+    for semantic in outputs {
+        if !unsafe { append(user, &semantic.view()) } {
+            return false;
+        }
+    }
+    unsafe { metadata.write(value) };
+    true
+}

@@ -19,7 +19,7 @@ struct ChunkView {
 }
 
 #[repr(C)]
-struct SemanticView {
+pub(crate) struct SemanticView {
     name: *const c_char,
     name_size: usize,
     index: u32,
@@ -36,7 +36,7 @@ const _: () = {
 };
 
 type AppendChunk = unsafe extern "C" fn(*mut c_void, *const ChunkView) -> bool;
-type AppendSemantic = unsafe extern "C" fn(*mut c_void, *const SemanticView) -> bool;
+pub(crate) type AppendSemantic = unsafe extern "C" fn(*mut c_void, *const SemanticView) -> bool;
 pub(crate) type Resize = unsafe extern "C" fn(*mut c_void, usize) -> *mut u8;
 
 pub(crate) struct Semantic<'a> {
@@ -47,6 +47,21 @@ pub(crate) struct Semantic<'a> {
     pub(crate) reg: u32,
     pub(crate) mask: u8,
     pub(crate) used: u8,
+}
+
+impl Semantic<'_> {
+    pub(crate) fn view(&self) -> SemanticView {
+        SemanticView {
+            name: self.name.as_ptr().cast(),
+            name_size: self.name.len(),
+            index: self.index,
+            system: self.system,
+            ty: self.ty,
+            reg: self.reg,
+            mask: self.mask,
+            used: self.used,
+        }
+    }
 }
 
 pub(crate) fn valid_container_size(size: usize) -> bool {
@@ -139,6 +154,24 @@ pub(crate) fn read_container<'a>(
     Some(())
 }
 
+pub(crate) fn chunks(bytes: &[u8]) -> Option<Vec<Chunk<'_>>> {
+    let mut chunks = Vec::new();
+    read_container(bytes, |chunk| {
+        chunks.try_reserve(1).ok()?;
+        chunks.push(chunk);
+        Some(())
+    })?;
+    Some(chunks)
+}
+
+pub(crate) fn chunk_index(chunks: &[Chunk<'_>], tag: &[u8; 4]) -> Option<usize> {
+    chunks.iter().position(|chunk| chunk.tag == tag)
+}
+
+pub(crate) fn shader_index(chunks: &[Chunk<'_>]) -> Option<usize> {
+    chunk_index(chunks, b"SHEX").or_else(|| chunk_index(chunks, b"SHDR"))
+}
+
 /// The caller lends each chunk and a callback returning a nonoverlapping writable output.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_ac7_velocity_write_container(
@@ -219,17 +252,7 @@ unsafe extern "C" fn rsf_core_ac7_velocity_read_signature(
         return false;
     };
     read_signature(bytes, streams, |semantic| {
-        let view = SemanticView {
-            name: semantic.name.as_ptr().cast(),
-            name_size: semantic.name.len(),
-            index: semantic.index,
-            system: semantic.system,
-            ty: semantic.ty,
-            reg: semantic.reg,
-            mask: semantic.mask,
-            used: semantic.used,
-        };
-        unsafe { append(user, &view) }.then_some(())
+        unsafe { append(user, &semantic.view()) }.then_some(())
     })
     .is_some()
 }

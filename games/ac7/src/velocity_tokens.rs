@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //! AC7 velocity SHEX/SHDR framing, operand decoding and immediate register edits.
-//! Used by Rust pixel assembly and the native transforms of the other stages.
+//! Used by Rust pixel and vertex assembly and the native transforms of the other stages.
 
 use crate::dxbc_chunks::word;
 use crate::velocity_container::{Resize, borrowed, native_output};
@@ -8,7 +8,7 @@ use std::borrow::Cow;
 use std::ffi::c_void;
 
 const CUSTOM_DATA: u32 = 53;
-const DCL_TEMPS: u32 = 104;
+pub(crate) const DCL_TEMPS: u32 = 104;
 pub(crate) const MAX_TEMPS: u32 = 4096;
 const MAX_INSTRUCTION_WORDS: usize = 127;
 const OPCODE_MASK: u32 = 0x7ff;
@@ -143,6 +143,40 @@ pub(crate) fn read_instructions(
         remaining = &remaining[words.len()..];
     }
     Some(())
+}
+
+pub(crate) struct Instruction {
+    pub(crate) words: Vec<u32>,
+    pub(crate) opcode: u32,
+    pub(crate) declaration: bool,
+}
+
+pub(crate) fn instructions(bytes: &[u8], profile: u32) -> Option<Vec<Instruction>> {
+    let mut code = Vec::new();
+    read_instructions(bytes, profile, |opcode, words, declaration| {
+        let mut tokens = Vec::new();
+        append_words(&mut tokens, words)?;
+        code.try_reserve(1).ok()?;
+        code.push(Instruction {
+            words: tokens,
+            opcode,
+            declaration,
+        });
+        Some(())
+    })?;
+    Some(code)
+}
+
+pub(crate) fn append_words(code: &mut Vec<u32>, words: &[u32]) -> Option<()> {
+    code.try_reserve(words.len()).ok()?;
+    code.extend_from_slice(words);
+    Some(())
+}
+
+pub(crate) fn temp_count(code: &[Instruction]) -> u32 {
+    code.iter()
+        .find(|inst| inst.opcode == DCL_TEMPS)
+        .map_or(0, |inst| inst.words[1])
 }
 
 /// The caller lends a stream beginning with its shader profile and a count placeholder.
