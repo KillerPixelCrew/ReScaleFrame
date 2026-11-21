@@ -670,6 +670,12 @@ Runtime declarations stay the same. Build and binary export verification
 remain open.
 [Current source ABI check](rust-migration.md#c-abi-comparison)
 
+Anomaly's non-MSVC native copy helper now uses a checked Win32 copy.
+The previous path used an unguarded `memcpy`. The helper refuses
+inaccessible input or output and preserves last error. The existing
+native hooks fixture now covers both refusals. The fixture remains
+unrun on this revision.
+
 ## Rust orchestrator and first Anomaly port
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.

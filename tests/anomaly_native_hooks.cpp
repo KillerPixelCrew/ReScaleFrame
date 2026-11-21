@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "native_hooks.h"
 #include "build_profile.h"
+#include "native_memory.h"
 #include <windows.h>
 #include <array>
 #include <atomic>
@@ -48,6 +49,23 @@ struct Image {
         return dos;
     }
 };
+
+bool guarded_copy_contract() {
+    SYSTEM_INFO system{};
+    GetSystemInfo(&system);
+    const Image inaccessible{system.dwPageSize, PAGE_NOACCESS};
+    CHECK(inaccessible.base);
+    const std::byte value{0x73};
+    std::byte copied{};
+    CHECK(guarded_copy(&copied, &value, sizeof(value)) && copied == value);
+    SetLastError(0x525346u);
+    CHECK(!guarded_copy(&copied, inaccessible.base, sizeof(copied)));
+    CHECK(!guarded_copy(inaccessible.base, &value, sizeof(value)));
+#ifndef _MSC_VER
+    CHECK(GetLastError() == 0x525346u);
+#endif
+    return true;
+}
 
 HookSite fixture_site(const std::byte* base, Function function, void** trampoline) {
     const auto* address = reinterpret_cast<const std::byte*>(reinterpret_cast<void*>(function));
@@ -205,7 +223,7 @@ bool profile_contract(const BuildProfile& profile) {
 }
 
 int main() {
-    if (!hook_contract() || !mapping_contract()) return 1;
+    if (!guarded_copy_contract() || !hook_contract() || !mapping_contract()) return 1;
     for (const auto& profile : build_profiles) {
         std::printf("Anomaly HookSet profile: %s\n", profile.label);
         if (!profile_contract(profile)) return 1;
