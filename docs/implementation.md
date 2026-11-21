@@ -63,6 +63,8 @@ labels and motion units are preserved. Vulkan rejects overflowing
 capture sizes before allocating or recording a GPU copy and owns the
 failure notification for any ticket it reserved. The public capture
 headers are unchanged.
+Vulkan SR builds its capture metadata in the same Rust owner as the
+public SR metadata entry. The typed bridge binds the capture platform.
 
 Rust now owns native D3D12 DLSS SR device registration, context
 lifetime and frame ordering for owned, shared and engine-borrowed

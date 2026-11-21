@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "input_dump_platform.h"
+#include <rescaleframe/capture_names.h>
 #include <rescaleframe/input_dump_d3d12.h>
 #include "../../backends/common/frame_capture12.h"
 #include <rescaleframe/sha256_file.h>
@@ -99,6 +100,16 @@ void bind_platform()
     static const bool bound = (rsf_core_dump_bind_platform(&platform), true);
     (void)bound;
 }
+}
+
+extern "C" void rsf_core_dump_capture_sr_parameters(const rsf_frame_record*, uint32_t,
+    float, float, float, uint32_t);
+
+void rsf::capture_sr_parameters(const rsf_frame_record& record, uint32_t backend, float x,
+    float y, float exposure, uint32_t reset)
+{
+    bind_platform();
+    rsf_core_dump_capture_sr_parameters(&record, backend, x, y, exposure, reset);
 }
 
 // Forward the public symbols through this archive so embedded and DLL builds

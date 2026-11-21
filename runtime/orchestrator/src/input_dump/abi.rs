@@ -479,6 +479,15 @@ unsafe extern "C" fn rsf_core_dump_sr_frame(
     let Some(record) = (unsafe { record(frame.record) }) else {
         return;
     };
+    publish_sr_parameters(frame, record, backend, input_sdr);
+}
+
+fn publish_sr_parameters(
+    frame: &rsf_sr_frame,
+    record: &rsf_frame_record,
+    backend: u32,
+    input_sdr: u32,
+) {
     owner(|owner| {
         if let Some(capture) = owner
             .capture
@@ -488,4 +497,31 @@ unsafe extern "C" fn rsf_core_dump_sr_frame(
             let _ = metadata::sr_parameters(&capture.bundle, frame, record, backend, input_sdr);
         }
     });
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_dump_capture_sr_parameters(
+    input: *const rsf_frame_record,
+    backend: u32,
+    motion_x: f32,
+    motion_y: f32,
+    exposure: f32,
+    reset: u32,
+) {
+    let Some(record) = (unsafe { record(input) }) else {
+        return;
+    };
+    let frame = rsf_sr_frame {
+        struct_size: size_of::<rsf_sr_frame>() as u32,
+        record,
+        jitter_x: record.camera.jitter_pixels[0],
+        jitter_y: record.camera.jitter_pixels[1],
+        motion_scale_x: motion_x,
+        motion_scale_y: motion_y,
+        pre_exposure: exposure,
+        reset,
+        view_space_to_meters: 1.0,
+        ..unsafe { std::mem::zeroed() }
+    };
+    publish_sr_parameters(&frame, record, backend, 0);
 }
