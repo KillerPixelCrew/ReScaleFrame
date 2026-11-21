@@ -311,7 +311,7 @@ add_executable(rsf_fallout4_worker_handoff fallout4_worker_handoff.cpp)
 target_link_libraries(rsf_fallout4_worker_handoff PRIVATE ReScaleFrame::GameSDK rsf_build_options)
 add_test(NAME fallout4_worker_handoff_contract COMMAND rsf_fallout4_worker_handoff)
 add_executable(rsf_skyrim_input skyrim_input.cpp ../games/skyrim-se/src/cpu_events.cpp)
-target_link_libraries(rsf_skyrim_input PRIVATE ReScaleFrame::GameSDK minhook rsf_build_options)
+target_link_libraries(rsf_skyrim_input PRIVATE rsf_skyrim_se_rust ReScaleFrame::GameSDK minhook rsf_build_options)
 add_test(NAME skyrim_input_contract COMMAND rsf_skyrim_input)
 
 add_executable(rsf_native_cpu_reservation_test native_cpu_reservation.cpp)

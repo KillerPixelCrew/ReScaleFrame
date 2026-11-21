@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 #include <rescaleframe/game_api.h>
+#include <cstddef>
 
 namespace rsf::skyrim {
 struct NativeScreenFacts {
@@ -8,15 +9,17 @@ struct NativeScreenFacts {
     uint32_t pause_count{}, requested_mode{}, running_mode{};
     bool freeze_time{}, parent_cell{};
 };
+static_assert(sizeof(NativeScreenFacts) == 24 && offsetof(NativeScreenFacts, pause_count) == 8);
+}
+
+extern "C" rsf_screen_class rsf_skyrim_classify_screen(const rsf::skyrim::NativeScreenFacts*) noexcept;
+extern "C" bool rsf_skyrim_rendered_source_eligible(bool, uint32_t, rsf_screen_class) noexcept;
+
+namespace rsf::skyrim {
 inline rsf_screen_class classify_screen(const NativeScreenFacts& facts) noexcept {
-    if (!facts.readable || !facts.owned_main) return RSF_SCREEN_UNKNOWN;
-    if (facts.loading_menu) return RSF_SCREEN_LOADING;
-    if (facts.main_menu || facts.pause_count || facts.frozen_background) return RSF_SCREEN_MENU;
-    if (!facts.primary_world || facts.freeze_time || !facts.parent_cell ||
-        facts.requested_mode > 1 || facts.running_mode > 1) return RSF_SCREEN_UNKNOWN;
-    return RSF_SCREEN_GAMEPLAY;
+    return rsf_skyrim_classify_screen(&facts);
 }
 inline bool rendered_source_eligible(bool active_scope, uint32_t primary_world_entries, rsf_screen_class screen) noexcept {
-    return active_scope && primary_world_entries == 1 && screen == RSF_SCREEN_GAMEPLAY;
+    return rsf_skyrim_rendered_source_eligible(active_scope, primary_world_entries, screen);
 }
 }

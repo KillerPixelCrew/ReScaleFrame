@@ -3,11 +3,14 @@
 //! `ReScaleFrame.Game.SkyrimSE.dll`. Rust owns the GameSDK table and observer admission
 //! (`plugin.rs`), the lifecycle with its process-lived Runtime session, DPI startup and subsystem
 //! order (`session.rs`), the observer hook transactions (`observers.rs`) and cold native creation
-//! with Steam Present cooperation (`creation.rs`). Native code lends the typed detours, MinHook,
-//! exception guards and the C++ render, CPU and compatibility subsystems.
+//! with Steam Present cooperation (`creation.rs`). `cpu_policy.rs` and `cpu_sources.rs` own CPU
+//! event records, scoped render facts and prospective source transitions. Native code lends the
+//! typed detours, MinHook, exception guards and native input producer observations.
 mod auxiliary;
 mod camera;
 mod compatibility;
+mod cpu_policy;
+mod cpu_sources;
 mod creation;
 mod layout;
 mod observers;

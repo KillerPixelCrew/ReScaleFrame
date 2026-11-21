@@ -2,9 +2,10 @@
 #pragma once
 #include <rescaleframe/game_api.h>
 #include <cstdint>
+struct rsf_skyrim_creation_platform;
 namespace rsf::skyrim {
-bool cpu_prepare(const rsf_game_host_services&);
-bool cpu_start();
+bool cpu_prepare(const rsf_game_host_services&, const rsf_skyrim_creation_platform*);
+bool cpu_start(const rsf_skyrim_creation_platform*);
 void cpu_quiesce();
 // Disable and drain while retaining prepared services for retry.
 bool cpu_disable();

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "cpu_events.h"
+#include "cpu_policy.h"
 #include "input_ownership.h"
-#include "screen_classification.h"
 #include <MinHook.h>
 #include <windows.h>
 #include <array>
@@ -13,18 +13,70 @@
 #endif
 
 namespace rsf::skyrim {
+extern "C" {
+void* rsf_skyrim_sources_new() noexcept;
+void rsf_skyrim_sources_free(void*) noexcept;
+void rsf_skyrim_sources_reserve(const void*, ProspectiveSources::Reserve*, uint64_t source,
+    uint64_t predecessor, uint64_t session, uint64_t job_generation, uint64_t poll_generation) noexcept;
+bool rsf_skyrim_sources_still_reserved(const void*, uint64_t) noexcept;
+bool rsf_skyrim_sources_sample(const void*, uint64_t, bool, uint32_t) noexcept;
+uint64_t rsf_skyrim_sources_withdraw_pending(const void*, uint64_t) noexcept;
+void rsf_skyrim_sources_adopt(const void*, ProspectiveSources::Reservation*, uint64_t, uint64_t) noexcept;
+bool rsf_skyrim_sources_bind(const void*, uint64_t, uint64_t) noexcept;
+void rsf_skyrim_sources_owned(const void*, ProspectiveSources::Reservation*) noexcept;
+void rsf_skyrim_sources_release(const void*, ProspectiveSources::Reservation*, uint64_t) noexcept;
+void rsf_skyrim_sources_reset(const void*) noexcept;
+uint32_t rsf_skyrim_bind_refusal(bool, bool, bool, bool) noexcept;
+}
+
+ProspectiveSources::ProspectiveSources() noexcept : store_(rsf_skyrim_sources_new()) {}
+ProspectiveSources::~ProspectiveSources() { if (store_) rsf_skyrim_sources_free(store_); }
+ProspectiveSources::Reserve ProspectiveSources::reserve(uint64_t source, uint64_t predecessor, uint64_t session,
+    uint64_t job_generation, uint64_t poll_generation) noexcept {
+    Reserve out{};
+    rsf_skyrim_sources_reserve(store_, &out, source, predecessor, session, job_generation, poll_generation);
+    return out;
+}
+bool ProspectiveSources::still_reserved(uint64_t source) const noexcept {
+    return rsf_skyrim_sources_still_reserved(store_, source);
+}
+bool ProspectiveSources::sample(uint64_t source, bool produced, uint32_t kinds) noexcept {
+    return rsf_skyrim_sources_sample(store_, source, produced, kinds);
+}
+uint64_t ProspectiveSources::withdraw_pending(uint64_t source) noexcept {
+    return rsf_skyrim_sources_withdraw_pending(store_, source);
+}
+ProspectiveSources::Reservation ProspectiveSources::adopt(uint64_t session, uint64_t joined) noexcept {
+    Reservation out{};
+    rsf_skyrim_sources_adopt(store_, &out, session, joined);
+    return out;
+}
+bool ProspectiveSources::bind(uint64_t source, uint64_t completed) noexcept {
+    return rsf_skyrim_sources_bind(store_, source, completed);
+}
+ProspectiveSources::Reservation ProspectiveSources::owned() const noexcept {
+    Reservation out{};
+    rsf_skyrim_sources_owned(store_, &out);
+    return out;
+}
+ProspectiveSources::Reservation ProspectiveSources::release(uint64_t source) noexcept {
+    Reservation out{};
+    rsf_skyrim_sources_release(store_, &out, source);
+    return out;
+}
+void ProspectiveSources::reset() noexcept { rsf_skyrim_sources_reset(store_); }
+BindRefusal bind_refusal(bool readable, bool queued_move, bool consumed_before_bind, bool free_camera) noexcept {
+    return static_cast<BindRefusal>(rsf_skyrim_bind_refusal(readable, queued_move, consumed_before_bind, free_camera));
+}
+
 namespace {
 struct Frame {
     rsf_game_host_services host{};
     uint64_t source{};
-    uint64_t render_scope{};
-    uint32_t primary_count{};
-    bool sampled{}, render_entered{}, simulation_ended{};
+    rsf_skyrim_cpu_render_state render{};
     InputOwnership::Stamp consumed{};
     uint32_t camera_updates{};
     bool input_ambiguous{};
-    rsf_screen_class screen{RSF_SCREEN_UNKNOWN};
-    uint32_t primary_world_entries{};
     NativeJobOwnership::Ticket jobs{};
     void* main{};
     uint32_t movement_calls{}, player_update_calls{};
@@ -34,8 +86,6 @@ struct Frame {
     BindRefusal refusal{BindRefusal::none};
 };
 thread_local Frame* current{};
-std::atomic<uint64_t> next_source{1};
-std::atomic<uint64_t> next_render_scope{1};
 std::atomic<uint32_t> entered{};
 std::atomic<bool> active{};
 std::atomic<uint32_t> poll_samples{};
@@ -47,7 +97,7 @@ thread_local NativeJobOwnership::Ticket named_poll_jobs{};
 struct PollScope { InputOwnership::Poll ticket{}; void* manager{}; bool produced{}; uint32_t kinds{}; };
 thread_local PollScope* current_poll{};
 thread_local void* dispatched_list{};
-ProspectiveSources prospective;
+ProspectiveSources prospective{ProspectiveSources::Storage::process};
 // Diagnostic call envelopes inside the bound source's own native job generation, on any
 // thread. They do not prove complete movement/derived-state coverage and are never reported
 // to the runtime as consumption.
@@ -64,12 +114,8 @@ void emit_source(const rsf_game_host_services& host, uint32_t stage, uint64_t so
     if (!host.cpu_event || !source) return;
     LARGE_INTEGER now{}; QueryPerformanceCounter(&now);
     rsf_game_cpu_source_event event{};
-    event.header.struct_size = sizeof(event); event.header.stage = stage; event.header.session_id = host.session_id;
-    event.header.source_frame_id = source; event.header.timestamp_qpc = uint64_t(now.QuadPart);
-    event.header.qpc_frequency = frequency; event.header.event_version = RSF_GAME_CPU_EVENT_VERSION_SOURCE;
-    event.header.flags = flags; event.header.input_kind = kinds;
-    event.predecessor_source_id = predecessor; event.native_generation = generation; event.reason = reason;
-    event.poll_begin_qpc = poll_begin;
+    rsf_skyrim_cpu_source_event(&event, stage, host.session_id, source, uint64_t(now.QuadPart), frequency,
+        predecessor, generation, flags, kinds, reason, poll_begin);
     try { host.cpu_event(host.user, &event.header); } catch (...) {}
 }
 void abort_source(const rsf_game_host_services& host, uint64_t source, uint32_t reason)
@@ -81,12 +127,8 @@ void emit(Frame& frame, uint32_t stage)
     if (!frame.host.cpu_event) return;
     LARGE_INTEGER now{}; QueryPerformanceCounter(&now);
     rsf_game_cpu_event event{};
-    event.struct_size = sizeof(event); event.stage = stage; event.session_id = frame.host.session_id;
-    event.source_frame_id = frame.source; event.timestamp_qpc = uint64_t(now.QuadPart);
-    event.qpc_frequency = frequency; event.event_version = RSF_GAME_CPU_EVENT_VERSION;
-    event.flags = RSF_GAME_CPU_INPUT_KEYED;
-    if (stage == RSF_GAME_CPU_FRAME_END && !frame.render_entered) event.flags |= RSF_GAME_CPU_RENDER_SKIPPED;
-    event.render_expected = frame.primary_count;
+    rsf_skyrim_cpu_frame_event(&event, &frame.render, stage, frame.host.session_id, frame.source,
+        uint64_t(now.QuadPart), frequency);
     try { frame.host.cpu_event(frame.host.user, &event); } catch (...) {}
 }
 short tick(void*);
@@ -126,11 +168,6 @@ std::array<Hook, 13> hooks{{
     {0x745200, {0x48,0x8b,0xc4,0x55,0x56,0x57,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57,0x48,0x8d,0xa8,0x98,0xfe}, reinterpret_cast<void*>(&player_update)},
     // TESCamera::Update(this) -> current state vfunc +0x18; void, RCX only.
     {0x558e70, {0x40,0x57,0x48,0x83,0xec,0x30,0x48,0xc7,0x44,0x24,0x20,0xfe,0xff,0xff,0xff,0x48,0x89,0x5c,0x24}, reinterpret_cast<void*>(&player_camera_update)}
-}};
-struct NativeQueryGuard { uint32_t rva; std::array<unsigned char, 19> bytes; };
-constexpr std::array<NativeQueryGuard, 2> screen_query_guards{{
-    {0x1169530, {0x40,0x53,0x48,0x83,0xec,0x40,0x48,0xc7,0x44,0x24,0x20,0xfe,0xff,0xff,0xff,0x33,0xc0,0x48,0x89}},
-    {0x1169590, {0x48,0x89,0x5c,0x24,0x10,0x48,0x89,0x6c,0x24,0x18,0x48,0x89,0x74,0x24,0x20,0x57,0x41,0x56,0x41}}
 }};
 bool copy_input(void* out, const void* pointer, size_t size) noexcept {
 #if defined(_MSC_VER)
@@ -266,61 +303,22 @@ uintptr_t named_poll(void* data)
     named_poll_jobs = previous;
     return result;
 }
-rsf_screen_class native_screen(void* main, bool primary_world) noexcept {
-    const auto base = uintptr_t(GetModuleHandleW(nullptr));
-    struct State {
-        uintptr_t main{}, ui{}, names{}, player{}, manager{}, cell{}, loading_name{}, main_name{};
-        uint32_t pause{}, requested{}, running{};
-        uint8_t freeze{};
-        bool read(uintptr_t module) noexcept {
-            const auto load = [](auto& value, uintptr_t address) {
-                return copy_input(&value, reinterpret_cast<const void*>(address), sizeof(value));
-            };
-            return load(main, module + 0x3230530) && main &&
-                load(ui, module + 0x219e5c0) && ui && load(names, module + 0x21a05c8) && names &&
-                load(loading_name, names + 0xe8) && loading_name && load(main_name, names + 0xa8) && main_name &&
-                load(player, module + 0x3230778) && player && load(manager, module + 0x3220a90) && manager &&
-                load(cell, player + 0x60) && load(pause, ui + 0x160) && load(freeze, main + 0x16) &&
-                load(requested, manager + 0x68) && load(running, manager + 0x6c);
-        }
-        bool same(const State& other) const noexcept {
-            return main == other.main && ui == other.ui && names == other.names && player == other.player &&
-                manager == other.manager && cell == other.cell && pause == other.pause && freeze == other.freeze &&
-                requested == other.requested && running == other.running &&
-                loading_name == other.loading_name && main_name == other.main_name;
-        }
-    } before{}, after{};
-    if (!before.read(base) || before.main != uintptr_t(main)) return RSF_SCREEN_UNKNOWN;
-    // Native lookup retains/releases the menu under its own map synchronization.
-    // Borrow the engine's interned BSFixedStrings; do not traverse a mutable stack.
-    const auto open = reinterpret_cast<bool (*)(void*, const void*)>(base + 0x1169530);
-    NativeScreenFacts facts{};
-    facts.loading_menu = open(reinterpret_cast<void*>(before.ui), reinterpret_cast<const void*>(before.names + 0xe8));
-    facts.main_menu = open(reinterpret_cast<void*>(before.ui), reinterpret_cast<const void*>(before.names + 0xa8));
-    facts.frozen_background = reinterpret_cast<bool (*)(void*)>(base + 0x1169590)(reinterpret_cast<void*>(before.ui));
-    if (!after.read(base) || !before.same(after)) return RSF_SCREEN_UNKNOWN;
-    facts.readable = facts.owned_main = true;
-    facts.primary_world = primary_world;
-    facts.pause_count = before.pause; facts.freeze_time = before.freeze != 0;
-    facts.parent_cell = before.cell != 0;
-    facts.requested_mode = before.requested; facts.running_mode = before.running;
-    return classify_screen(facts);
+bool query_menus(uintptr_t open_address, uintptr_t frozen_address, uintptr_t ui, uintptr_t loading_name,
+    uintptr_t main_name, NativeScreenFacts* facts) noexcept {
+    const auto open = reinterpret_cast<bool (*)(void*, const void*)>(open_address);
+    const auto frozen = reinterpret_cast<bool (*)(void*)>(frozen_address);
+    auto* owner = reinterpret_cast<void*>(ui);
+    try {
+        facts->loading_menu = open(owner, reinterpret_cast<const void*>(loading_name));
+        facts->main_menu = open(owner, reinterpret_cast<const void*>(main_name));
+        facts->frozen_background = frozen(owner);
+        return true;
+    } catch (...) { return false; }
 }
 rsf_game_render_pass render_fact(uint32_t role) {
     rsf_game_render_pass pass{}; pass.struct_size = sizeof(pass); pass.role = role;
     if (!current || !current->host.render_pass || !cpu_render_identity(pass)) return pass;
-    pass.session_id = current->host.session_id;
-    pass.flags |= RSF_GAME_RENDER_PRIMARY;
-    const auto base = uintptr_t(GetModuleHandleW(nullptr));
-    uintptr_t window{}, root{}, camera{};
-    (void)copy_input(&pass.native_frame, reinterpret_cast<const void*>(base + 0x33363f4), sizeof(uint32_t));
-    if (copy_input(&root, reinterpret_cast<const void*>(base + 0x3230740), sizeof(root)) && root)
-        (void)copy_input(&camera, reinterpret_cast<const void*>(root + 296), sizeof(camera));
-    pass.family_key = pass.view_key = pass.history_key = camera;
-    if (copy_input(&window, reinterpret_cast<const void*>(base + 0x3330198), sizeof(window)) && window) {
-        pass.viewport_key = pass.window_key = pass.rhi_viewport_key = window;
-        (void)copy_input(&pass.swapchain, reinterpret_cast<const void*>(window + 0x18), sizeof(pass.swapchain));
-    }
+    rsf_skyrim_cpu_render_fact(&pass, current->host.session_id);
     return pass;
 }
 void report_render(const rsf_game_render_pass& pass, uint32_t begin) {
@@ -336,45 +334,21 @@ uintptr_t world(void* main, uint32_t output, uint8_t flags) {
     const auto caller = uintptr_t(__builtin_return_address(0));
 #endif
     auto pass = render_fact(RSF_GAME_RENDER_SUBMISSION);
-    const bool primary = caller == uintptr_t(GetModuleHandleW(nullptr)) + 0x656e32 && output == 0 &&
-        pass.source_frame_id && pass.view_key && pass.swapchain;
+    const auto base = uintptr_t(GetModuleHandleW(nullptr));
+    const bool primary = current && rsf_skyrim_cpu_begin_world(&current->render, &pass, base, caller, output);
     if (primary) {
-        ++current->primary_world_entries;
-        current->screen = native_screen(main, true);
-        if (current->primary_world_entries != 1) current->screen = RSF_SCREEN_UNKNOWN;
-        pass.screen = current->screen;
+        const auto screen = rsf_skyrim_cpu_screen(uintptr_t(main), true, query_menus);
+        rsf_skyrim_cpu_world_screen(&current->render, screen);
         (void)cpu_render_identity(pass);
         report_render(pass, 1);
     }
     const auto result = reinterpret_cast<uintptr_t (*)(void*, uint32_t, uint8_t)>(hooks[4].original)(main, output, flags);
     if (primary) {
-        ++current->primary_count;
+        rsf_skyrim_cpu_end_world(&current->render);
         (void)cpu_render_identity(pass);
         report_render(pass, 0);
     }
     return result;
-}
-uint32_t input_kinds(const void* list) noexcept {
-    struct Event { uintptr_t vtable; uint32_t device, type; uintptr_t next; };
-    static_assert(sizeof(Event) == 0x18);
-    uintptr_t next{};
-    if (!list || !copy_input(&next, list, sizeof(next))) return 0;
-    uint32_t kinds{};
-    // Native events are borrowed until PollDevices clears its queue after dispatch.
-    // Keep only kinds, never buttons, text, deltas or native event pointers.
-    for (unsigned count = 0; next && count < 128; ++count) {
-        Event event{};
-        if (!copy_input(&event, reinterpret_cast<const void*>(next), sizeof(event))) return 0;
-        if (event.type == 0) {
-            if (event.device == 0 || event.device == 3) kinds |= RSF_GAME_INPUT_KEYBOARD;
-            else if (event.device == 1) kinds |= RSF_GAME_INPUT_MOUSE;
-            else if (event.device == 2) kinds |= RSF_GAME_INPUT_CONTROLLER;
-        } else if (event.type == 1 && event.device == 1) kinds |= RSF_GAME_INPUT_MOUSE;
-        else if (event.type == 2 && (event.device == 0 || event.device == 3)) kinds |= RSF_GAME_INPUT_KEYBOARD;
-        else if (event.type == 3 && event.device == 2) kinds |= RSF_GAME_INPUT_CONTROLLER;
-        next = event.next;
-    }
-    return next ? 0 : kinds; // Cyclic or excessive lists do not publish partial activity.
 }
 int dispatch(void* manager, void* list) {
     Entry lease;
@@ -384,14 +358,10 @@ int dispatch(void* manager, void* list) {
     uintptr_t native_manager{};
     if (active.load(std::memory_order_acquire) && copy_input(&native_manager, base + 0x3204b30, sizeof(native_manager)) &&
         uintptr_t(manager) == native_manager) {
-        event.input_kind = input_kinds(list);
-        if (event.input_kind) {
+        if (const auto kinds = cpu_input_kinds(list)) {
             host = services;
             LARGE_INTEGER now{}; QueryPerformanceCounter(&now);
-            event.struct_size = sizeof(event); event.stage = RSF_GAME_CPU_INPUT_EVENT;
-            event.session_id = host.session_id; event.timestamp_qpc = uint64_t(now.QuadPart);
-            event.qpc_frequency = frequency; event.event_version = RSF_GAME_CPU_EVENT_VERSION;
-            event.flags = RSF_GAME_CPU_INPUT_UNFRAMED;
+            rsf_skyrim_cpu_input_event(&event, host.session_id, kinds, uint64_t(now.QuadPart), frequency);
         }
     }
     auto* previous_list = dispatched_list;
@@ -443,7 +413,7 @@ short tick(void* main)
     } else {
         if (const auto withdrawn = prospective.withdraw_pending())
             abort_source(frame.host, withdrawn, RSF_GAME_CPU_ABORT_STATE_CHANGED);
-        frame.source = next_source.fetch_add(1);
+        frame.source = rsf_skyrim_cpu_next_source();
     }
     current = &frame;
     emit(frame, RSF_GAME_CPU_FRAME_BEGIN);
@@ -501,7 +471,7 @@ uintptr_t poll(void* manager, float timestep)
         if (scheduled) {
             // The verified mode1 late poll of the submitting source's generation. Its consumer
             // is a later tick; reserve that future identity before the unchanged native call.
-            const auto source = next_source.fetch_add(1);
+            const auto source = rsf_skyrim_cpu_next_source();
             const auto reservation = prospective.reserve(source, provenance.submitting_source_frame_id,
                 provenance.session_id, provenance.native_job_generation, provenance.poll_generation);
             if (reservation.withdrawn) abort_source(host, reservation.withdrawn,
@@ -526,8 +496,7 @@ uintptr_t poll(void* manager, float timestep)
         }
     }
     // A scheduled late poll never samples the tick that happens to run it.
-    if (current && !current->sampled && !scheduled) {
-        current->sampled = true;
+    if (current && !scheduled && rsf_skyrim_cpu_sample_tick(&current->render)) {
         emit(*current, RSF_GAME_CPU_INPUT_SAMPLE);
     }
     // The actual sample time: after the synchronous RESERVE callback (and anything the runtime
@@ -650,13 +619,10 @@ void player_camera_update(void* camera)
 uintptr_t render(void* main)
 {
     Entry lease;
-    const auto previous_scope = current ? current->render_scope : 0;
+    const auto previous_scope = current ? current->render.scope : 0;
     if (current) {
-        current->screen = native_screen(main, false);
-        current->render_scope = next_render_scope.fetch_add(1);
-        current->render_entered = true;
-        if (!current->simulation_ended) {
-            current->simulation_ended = true;
+        const auto screen = rsf_skyrim_cpu_screen(uintptr_t(main), false, query_menus);
+        if (rsf_skyrim_cpu_begin_render(&current->render, screen)) {
             emit(*current, RSF_GAME_CPU_SIMULATION_END);
         }
     }
@@ -665,20 +631,19 @@ uintptr_t render(void* main)
     const auto result = reinterpret_cast<uintptr_t (*)(void*)>(hooks[2].original)(main);
     if (current) (void)cpu_render_identity(pass);
     report_render(pass, 0);
-    if (current) current->render_scope = previous_scope;
+    if (current) rsf_skyrim_cpu_end_render(&current->render, previous_scope);
     return result;
 }
 }
 
-bool cpu_prepare(const rsf_game_host_services& host)
+bool cpu_prepare(const rsf_game_host_services& host, const rsf_skyrim_creation_platform* platform)
 {
     if (active.load() || entered.load()) return false;
     auto* base = reinterpret_cast<unsigned char*>(GetModuleHandleW(nullptr));
     uintptr_t named_callback{};
     if (!copy_input(&named_callback, base + 0x20b5130, sizeof(named_callback)) ||
         named_callback != uintptr_t(base + 0x6e6030)) return false;
-    for (const auto& query : screen_query_guards)
-        if (std::memcmp(base + query.rva, query.bytes.data(), query.bytes.size())) return false;
+    if (rsf_skyrim_cpu_bad_screen_query(platform, uintptr_t(base))) return false;
     for (auto& hook : hooks) {
         hook.target = base + hook.rva;
         if (std::memcmp(hook.target, hook.bytes.data(), hook.bytes.size())) return false;
@@ -698,7 +663,7 @@ bool cpu_prepare(const rsf_game_host_services& host)
     frequency = uint64_t(value.QuadPart); services = host;
     return true;
 }
-bool cpu_start()
+bool cpu_start(const rsf_skyrim_creation_platform* platform)
 {
     const auto refused = [](const char* stage, uint32_t rva, int status = 0) {
         if (services.log) {
@@ -716,8 +681,8 @@ bool cpu_start()
     uintptr_t named_callback{};
     if (!copy_input(&named_callback, base + 0x20b5130, sizeof(named_callback)) ||
         named_callback != uintptr_t(base + 0x6e6030)) return refused("named callback", 0x20b5130);
-    for (const auto& query : screen_query_guards)
-        if (std::memcmp(base + query.rva, query.bytes.data(), query.bytes.size())) return refused("screen query bytes", query.rva);
+    if (const auto rva = rsf_skyrim_cpu_bad_screen_query(platform, uintptr_t(base)))
+        return refused("screen query bytes", rva);
     for (const auto& hook : hooks)
         if (std::memcmp(hook.target, hook.bytes.data(), hook.bytes.size())) return refused("hook bytes", hook.rva);
     job_ownership.reset();
@@ -757,17 +722,12 @@ bool cpu_stop()
 bool cpu_busy() { return entered.load(std::memory_order_acquire) != 0; }
 uint64_t cpu_source() { return current ? current->source : 0; }
 bool cpu_render_identity(rsf_game_render_pass& pass) {
-    if (!current || !current->render_scope || !current->simulation_ended) return false;
-    pass.source_frame_id = current->source;
-    pass.submission_id = pass.scope_id = current->render_scope;
-    pass.screen = current->screen;
-    pass.flags |= RSF_GAME_RENDER_AFTER_SIMULATION | RSF_GAME_RENDER_NO_FG;
-    if (cpu_rendered_source_eligible()) pass.flags &= ~RSF_GAME_RENDER_NO_FG;
-    return true;
+    return current && rsf_skyrim_cpu_render_identity(&current->render, &pass, current->source,
+        active.load(std::memory_order_acquire));
 }
 bool cpu_rendered_source_eligible() noexcept {
-    return current && rendered_source_eligible(active.load(std::memory_order_acquire) && current->render_scope,
-        current->primary_world_entries, current->screen);
+    return current && rendered_source_eligible(active.load(std::memory_order_acquire) && current->render.scope,
+        current->render.primary_world_entries, current->render.screen);
 }
 void cpu_render_diagnostic(const char* stage, const rsf_game_render_pass& pass) {
     if (!current || !current->host.log || (current->source > 8 && current->source % 128 != 0)) return;
@@ -780,16 +740,20 @@ void cpu_render_diagnostic(const char* stage, const rsf_game_render_pass& pass) 
         "Skyrim render producer stage=%s source=%llu cpu_source=%llu native=%llu scope=%llu cpu_scope=%llu flags=0x%x screen=%u cpu_screen=%u active=%u world_entries=%u eligible=%u render_entered=%u simulation_ended=%u primary_count=%u reservation=%llu owned_source=%llu owned_phase=%u bound=%u refusal=%u poll=%llu job=%llu entry_readable=%u queued_move=%u input_ambiguous=%u; diagnostic only",
         stage, static_cast<unsigned long long>(pass.source_frame_id), static_cast<unsigned long long>(frame.source),
         static_cast<unsigned long long>(pass.native_frame), static_cast<unsigned long long>(pass.scope_id),
-        static_cast<unsigned long long>(frame.render_scope), pass.flags, unsigned(pass.screen), unsigned(frame.screen),
-        unsigned(active.load(std::memory_order_acquire)), frame.primary_world_entries, unsigned(cpu_rendered_source_eligible()),
-        unsigned(frame.render_entered), unsigned(frame.simulation_ended), frame.primary_count,
+        static_cast<unsigned long long>(frame.render.scope), pass.flags, unsigned(pass.screen), unsigned(frame.render.screen),
+        unsigned(active.load(std::memory_order_acquire)), frame.render.primary_world_entries, unsigned(cpu_rendered_source_eligible()),
+        unsigned(frame.render.render_entered), unsigned(frame.render.simulation_ended), frame.render.primary_count,
         static_cast<unsigned long long>(frame.reservation.source), static_cast<unsigned long long>(owned.source), unsigned(owned.phase),
         unsigned(owned.source == frame.source && owned.phase == ProspectiveSources::bound), unsigned(frame.refusal),
         static_cast<unsigned long long>(frame.reservation.poll_generation), static_cast<unsigned long long>(frame.reservation.job_generation),
         unsigned(frame.entry_readable), unsigned(frame.queued_move), unsigned(frame.input_ambiguous));
     try { frame.host.log(frame.host.user, message); } catch (...) {}
 }
-uint32_t cpu_input_kinds(const void* list) noexcept { return input_kinds(list); }
+uint32_t cpu_input_kinds(const void* list) noexcept {
+    return rsf_skyrim_cpu_input_kinds(uintptr_t(list), [](uintptr_t address, void* out, size_t size) noexcept {
+        return copy_input(out, reinterpret_cast<const void*>(address), size);
+    });
+}
 bool cpu_input_consumption(CpuInputConsumption& result) noexcept {
     result = {};
     if (!active.load(std::memory_order_acquire) || !current || current->input_ambiguous ||
