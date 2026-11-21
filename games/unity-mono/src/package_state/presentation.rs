@@ -3,9 +3,9 @@
 //! its streamline, fidelityfx and xess directories and the Streamline interposer, Unity's version
 //! and the project id), the one generation install, and the provider request of every window
 //! pass. The identity comes from [UnitySR] when the plugin loads and from rsfu_initialize for each
-//! session; SR views read it for their contexts. package.cpp keeps the window guard, the log and
-//! the DXGI adapter lookup behind Auto, and lends rsf_fg12_install and the presentation host's
-//! calls as leaves. The provider choice for Auto is the Runtime's rsf_fg_default_backend, reached
+//! session; SR views read it for their contexts. package.cpp keeps the window guard and the DXGI
+//! adapter lookup behind Auto, and lends rsf_fg12_install, the presentation host's calls and the
+//! package log in the Runtime's form as leaves. The provider choice for Auto is the Runtime's rsf_fg_default_backend, reached
 //! through that leaf; nothing here selects a vendor.
 use super::{BACKEND_OK, Leaves, PACKAGE, Package};
 use crate::generation::{self, Sources};
@@ -197,27 +197,38 @@ impl Package {
     }
 }
 
-/// Reads the identity from [UnitySR]: Runtime resolved like every [UnitySR] path, EngineVersion
-/// and ProjectId as written, at most 255 characters each as the C++ read them.
+/// Plugin load. Reads the identity from [UnitySR]: Runtime resolved like every [UnitySR] path,
+/// EngineVersion and ProjectId as written, at most 255 characters each as the C++ read them.
+/// Then the session services open the [UnitySR] Log path, resolved the same way, and the player
+/// installs generation (services.rs).
 ///
 /// # Safety
-/// `ini` is null or a NUL-terminated UTF-16 path.
+/// `ini` is null or a NUL-terminated UTF-16 path; `platform` is null or package.cpp's table.
 #[cfg(windows)]
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_package_load(ini: *const u16) {
+unsafe extern "C" fn rsf_unity_package_load(
+    ini: *const u16,
+    editor: u32,
+    platform: *const rsf_unity_package_platform,
+) {
     use crate::runtime_config::{Ini, path_setting, string_setting, utf8};
     use windows_sys::core::w;
     const PROFILE_TEXT: usize = 256;
 
-    let Some(ini) = (unsafe { Ini::new(ini) }) else {
+    let Some(leaves) = (unsafe { Leaves::adopt(platform) }) else {
         return;
     };
-    let root = utf8(&path_setting(&ini, w!("Runtime")));
-    let version = utf8(&string_setting(&ini, w!("EngineVersion"), PROFILE_TEXT));
-    let project = utf8(&string_setting(&ini, w!("ProjectId"), PROFILE_TEXT));
-    PACKAGE
-        .presentation
-        .set_identity(Identity::new(&root, &version, &project));
+    let mut log = Vec::new();
+    if let Some(ini) = unsafe { Ini::new(ini) } {
+        let root = utf8(&path_setting(&ini, w!("Runtime")));
+        let version = utf8(&string_setting(&ini, w!("EngineVersion"), PROFILE_TEXT));
+        let project = utf8(&string_setting(&ini, w!("ProjectId"), PROFILE_TEXT));
+        PACKAGE
+            .presentation
+            .set_identity(Identity::new(&root, &version, &project));
+        log = path_setting(&ini, w!("Log"));
+    }
+    PACKAGE.loaded(&leaves, editor != 0, &log);
 }
 
 #[unsafe(no_mangle)]

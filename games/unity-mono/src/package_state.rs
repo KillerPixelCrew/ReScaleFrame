@@ -3,12 +3,14 @@
 //! (integrations/unity/native/package.cpp): the stored settings and their validation, the status
 //! snapshot, the render plan, temporal readiness, the pending reconfiguration, the session
 //! lifecycle with its result codes, the sequencing of the render callback's D3D12 SR views
-//! (their table and slot rules are package_views.rs), and the presentation: the package identity,
-//! the generation install and the window pass's provider request (presentation.rs). package.cpp
-//! keeps the Unity, DXGI, Vulkan and preview work, the render callback's routing, the window
-//! guard, the input window and the log, and lends the SDK and Runtime calls through
-//! rsf_unity_package_platform (integrations/unity/native/package_state.h); nothing here loads a
-//! Runtime or references its exports.
+//! (their table and slot rules are package_views.rs), the presentation: the package identity,
+//! the generation install and the window pass's provider request (presentation.rs), and the
+//! session services: each session's host services and bridge API, the log, the input window and
+//! the routing of CPU events, window messages and rsfu_input (services.rs). package.cpp keeps the
+//! Unity, DXGI, Vulkan and preview work, the render callback's routing and the window guard, and
+//! lends the Unity, Win32, SDK and Runtime calls through rsf_unity_package_platform
+//! (integrations/unity/native/package_state.h); nothing here loads a Runtime or references its
+//! exports.
 //!
 //! package.cpp's mutex still serializes the exports and the SR pass where it did. The state lock
 //! here only makes the state sound for the callers that never took that mutex (Unity's device
@@ -16,10 +18,13 @@
 //! window pass's provider request), and it is never held across a leaf. The view lock is held
 //! across the SR leaves, which never re-enter, so Unity's device shutdown cannot destroy a
 //! context mid-evaluation; the presentation lock is held across the install leaf. Both are always
-//! taken before the state lock.
+//! taken before the state lock. The log and input-window locks are innermost: they are held
+//! across their own leaves only.
 mod presentation;
+mod services;
 
 use self::presentation::{Identity, Presentation};
+use self::services::Services;
 use crate::package_abi::{
     RSF_FG_STAT_TOTAL_PRESENTED, RSF_SR_NONE, RSF_UNITY_SETTINGS_ABI_VERSION,
     rsf_native_fg_options, rsf_native_fg_status, rsf_native_latency_status, rsf_sharpening_options,
@@ -27,14 +32,16 @@ use crate::package_abi::{
     rsf_unity_package_status, rsf_unity_package_view_setup,
 };
 use crate::package_views::{View, Views};
+use crate::plugin_abi::rsf_unity_native_api;
 use crate::runtime_abi::{
     RSF_FG_BACKEND_AUTO, RSF_FG_BACKEND_DLSS, RSF_FG_BACKEND_FSR3, RSF_FG_BACKEND_FSR4,
     RSF_FG_BACKEND_XESS, RSF_FG_FIXED, RSF_SR_AUTO, RSF_SR_DLSS, RSF_SR_SPATIAL, rsf_fg12_setup,
 };
 use rsf_game_sys::{
-    RSF_GAME_RENDER_RECONFIGURE, rsf_camera_frame, rsf_game_render_config, rsf_game_render_pass,
+    RSF_GAME_RENDER_RECONFIGURE, rsf_camera_frame, rsf_game_cpu_event, rsf_game_host_services,
+    rsf_game_render_config, rsf_game_render_pass,
 };
-use std::ffi::{CStr, CString, c_char, c_int, c_void};
+use std::ffi::{CStr, c_char, c_int, c_void};
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering::SeqCst};
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -127,10 +134,9 @@ struct Leaves {
     present_backend: unsafe extern "C" fn() -> u32,
     present_switch_result: unsafe extern "C" fn() -> i32,
     present_generation: unsafe extern "C" fn() -> u64,
-    open: unsafe extern "C" fn() -> u32,
     bridge_activate: unsafe extern "C" fn(u32),
     bridge_drained: unsafe extern "C" fn() -> u32,
-    end_session: unsafe extern "C" fn() -> u32,
+    end_session: unsafe extern "C" fn(u64) -> u32,
     sr_default_backend: unsafe extern "C" fn(*mut c_void, *mut u32) -> u32,
     sr_create: unsafe extern "C" fn(
         *mut c_void,
@@ -144,7 +150,6 @@ struct Leaves {
     sr_evaluate:
         unsafe extern "C" fn(*mut rsf_sr12, *mut c_void, *const rsf_game_render_pass, u32) -> i32,
     sr_destroy: unsafe extern "C" fn(*mut rsf_sr12),
-    log: unsafe extern "C" fn(*const c_char),
     bridge_release: unsafe extern "C" fn(),
     accept_window: unsafe extern "C" fn(*mut c_void, *mut c_void) -> c_int,
     backend_log: unsafe extern "C" fn(*mut c_void, *const c_char),
@@ -152,7 +157,31 @@ struct Leaves {
     present_has_owner: unsafe extern "C" fn() -> u32,
     present_request: unsafe extern "C" fn(u32) -> i32,
     fg_default_backend: unsafe extern "C" fn(*mut u32) -> u32,
+    vulkan_surface: unsafe extern "C" fn() -> u32,
+    session_seed: unsafe extern "C" fn() -> u64,
+    render_pass: RenderPass,
+    render_config: RenderConfig,
+    bridge_prepare:
+        unsafe extern "C" fn(*const rsf_game_host_services, *mut rsf_unity_native_api) -> u32,
+    local_app_data: unsafe extern "C" fn(*mut u16, u32) -> u32,
+    create_directory: unsafe extern "C" fn(*const u16),
+    log_open: unsafe extern "C" fn(*const u16) -> *mut c_void,
+    log_write: unsafe extern "C" fn(*mut c_void, *const c_char),
+    log_close: unsafe extern "C" fn(*mut c_void),
+    player_window: unsafe extern "C" fn() -> *mut c_void,
+    preview_parent: unsafe extern "C" fn() -> *mut c_void,
+    subclass: unsafe extern "C" fn(*mut c_void) -> *mut c_void,
+    restore: unsafe extern "C" fn(*mut c_void, *mut c_void),
+    raw_input_type: unsafe extern "C" fn(isize, *mut u32) -> u32,
+    timestamp: unsafe extern "C" fn(*mut u64, *mut u64),
+    cpu: unsafe extern "C" fn(*const rsf_game_cpu_event),
+    /// The table itself, package.cpp's constant: the user pointer of a session's host services.
+    table: *const rsf_unity_package_platform,
 }
+
+/// rsf_game_host_services' render callback and render plan, package.cpp's leaves.
+type RenderPass = unsafe extern "C" fn(*mut c_void, *mut c_void, *const rsf_game_render_pass, u32);
+type RenderConfig = unsafe extern "C" fn(*mut c_void, *mut rsf_game_render_config) -> c_int;
 
 // SAFETY for every call below: the leaves are package.cpp's noexcept functions and borrow their
 // pointer arguments for the call only.
@@ -173,7 +202,6 @@ impl Leaves {
             present_backend: p.present_backend?,
             present_switch_result: p.present_switch_result?,
             present_generation: p.present_generation?,
-            open: p.open?,
             bridge_activate: p.bridge_activate?,
             bridge_drained: p.bridge_drained?,
             end_session: p.end_session?,
@@ -184,7 +212,6 @@ impl Leaves {
             sr_set_sharpening: p.sr_set_sharpening?,
             sr_evaluate: p.sr_evaluate?,
             sr_destroy: p.sr_destroy?,
-            log: p.log?,
             bridge_release: p.bridge_release?,
             accept_window: p.accept_window?,
             backend_log: p.backend_log?,
@@ -192,6 +219,24 @@ impl Leaves {
             present_has_owner: p.present_has_owner?,
             present_request: p.present_request?,
             fg_default_backend: p.fg_default_backend?,
+            vulkan_surface: p.vulkan_surface?,
+            session_seed: p.session_seed?,
+            render_pass: p.render_pass?,
+            render_config: p.render_config?,
+            bridge_prepare: p.bridge_prepare?,
+            local_app_data: p.local_app_data?,
+            create_directory: p.create_directory?,
+            log_open: p.log_open?,
+            log_write: p.log_write?,
+            log_close: p.log_close?,
+            player_window: p.player_window?,
+            preview_parent: p.preview_parent?,
+            subclass: p.subclass?,
+            restore: p.restore?,
+            raw_input_type: p.raw_input_type?,
+            timestamp: p.timestamp?,
+            cpu: p.cpu?,
+            table: platform,
         })
     }
 
@@ -235,15 +280,12 @@ impl Leaves {
     fn present_generation(&self) -> u64 {
         unsafe { (self.present_generation)() }
     }
-    fn open(&self) -> bool {
-        unsafe { (self.open)() != 0 }
-    }
     fn bridge_activate(&self, enabled: bool) {
         unsafe { (self.bridge_activate)(u32::from(enabled)) }
     }
     /// Drained, then the Runtime's session retired, in that order and only if drained.
-    fn drained_and_ended(&self) -> bool {
-        unsafe { (self.bridge_drained)() != 0 && (self.end_session)() != 0 }
+    fn drained_and_ended(&self, session: u64) -> bool {
+        unsafe { (self.bridge_drained)() != 0 && (self.end_session)(session) != 0 }
     }
     fn bridge_drained(&self) -> bool {
         unsafe { (self.bridge_drained)() != 0 }
@@ -296,11 +338,6 @@ impl Leaves {
     fn sr_destroy(&self, sr: *mut rsf_sr12) {
         unsafe { (self.sr_destroy)(sr) }
     }
-    fn log(&self, text: &str) {
-        if let Ok(text) = CString::new(text) {
-            unsafe { (self.log)(text.as_ptr()) }
-        }
-    }
     fn bridge_release(&self) {
         unsafe { (self.bridge_release)() }
     }
@@ -319,6 +356,7 @@ struct Package {
     state: Mutex<State>,
     views: Mutex<Views>,
     presentation: Presentation,
+    services: Services,
     temporal_ready: AtomicBool,
     /// A renderer bridge failure, reported as the SR result until the next session.
     bridge_result: AtomicI32,
@@ -352,6 +390,7 @@ impl Package {
             }),
             views: Mutex::new(Views::new()),
             presentation: Presentation::new(),
+            services: Services::new(),
             temporal_ready: AtomicBool::new(false),
             bridge_result: AtomicI32::new(0),
         }
@@ -468,11 +507,12 @@ impl Package {
     }
 
     /// The session's identity replaces the loaded one before open, which may install from it.
-    fn initialize(&self, leaves: &Leaves, identity: Identity) -> i32 {
+    /// The bridge's managed API is returned once the session has started.
+    fn initialize(&self, leaves: &Leaves, identity: Identity) -> Result<rsf_unity_native_api, i32> {
         let started = self.lock().started;
         if started {
-            if !leaves.drained_and_ended() {
-                return code::BUSY;
+            if !leaves.drained_and_ended(self.services.session()) {
+                return Err(code::BUSY);
             }
             self.retire(leaves);
         }
@@ -484,19 +524,19 @@ impl Package {
             state.status.requested_sr = state.settings.sr_backend;
         }
         self.presentation.set_identity(identity);
-        if !leaves.open() {
-            return code::FAILED;
+        if !self.open(leaves) {
+            return Err(code::FAILED);
         }
         let settings = self.lock().settings;
         leaves.set_engine_spatial(settings.sr_backend == RSF_SR_SPATIAL, settings.quality);
         leaves.bridge_activate(true);
         self.lock().started = true;
-        code::STARTED
+        Ok(self.services.api())
     }
 
     fn quiesce(&self, leaves: &Leaves) -> bool {
         leaves.bridge_activate(false);
-        leaves.drained_and_ended()
+        leaves.drained_and_ended(self.services.session())
     }
 
     fn retire(&self, leaves: &Leaves) {
@@ -657,10 +697,13 @@ impl Package {
         let mut view = View::created(sr, backend, output);
         view.render = leaves.sr_plan(sr);
         self.view_planned(backend, output, view.render);
-        leaves.log(&format!(
-            "URP SR requested={} active={backend} result={created} {}x{} -> {}x{}",
-            settings.sr_backend, view.render.0, view.render.1, output.0, output.1
-        ));
+        self.log(
+            leaves,
+            &format!(
+                "URP SR requested={} active={backend} result={created} {}x{} -> {}x{}",
+                settings.sr_backend, view.render.0, view.render.1, output.0, output.1
+            ),
+        );
         Some(view)
     }
 }
@@ -753,17 +796,24 @@ unsafe extern "C" fn rsf_unity_package_initialize(
     runtime: *const c_char,
     engine: *const c_char,
     project: *const c_char,
+    output: *mut rsf_unity_native_api,
     platform: *const rsf_unity_package_platform,
 ) -> c_int {
     let Some(leaves) = (unsafe { Leaves::adopt(platform) }) else {
         return code::FAILED;
     };
-    if runtime.is_null() || engine.is_null() || project.is_null() {
+    if runtime.is_null() || engine.is_null() || project.is_null() || output.is_null() {
         return code::FAILED;
     }
     let text = |value: *const c_char| unsafe { CStr::from_ptr(value) }.to_bytes();
     let identity = Identity::new(text(runtime), text(engine), text(project));
-    PACKAGE.initialize(&leaves, identity)
+    match PACKAGE.initialize(&leaves, identity) {
+        Ok(api) => {
+            unsafe { output.write(api) };
+            code::STARTED
+        }
+        Err(result) => result,
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -833,7 +883,19 @@ mod tests {
         preset_valid: bool,
         drained: bool,
         ended: bool,
-        opened: bool,
+        /// The bridge accepts the session's host services.
+        prepared: bool,
+        /// The Vulkan surface, where there is one, was created.
+        surface: bool,
+        /// %LOCALAPPDATA%.
+        local: Option<&'static str>,
+        /// log_open's handle; 0 is a refusal.
+        file: usize,
+        /// The player's Unity window and the Editor preview's parent; 0 is none.
+        player: usize,
+        parent: usize,
+        /// A WM_INPUT header's device type; None when it cannot be read.
+        raw: Option<u32>,
         last_result: i32,
         switch_result: i32,
         latency: bool,
@@ -860,7 +922,13 @@ mod tests {
         preset_valid: true,
         drained: true,
         ended: true,
-        opened: true,
+        prepared: true,
+        surface: true,
+        local: Some("L"),
+        file: 0x10,
+        player: 0x20,
+        parent: 0x40,
+        raw: Some(1),
         last_result: 0,
         switch_result: -7,
         latency: true,
@@ -963,10 +1031,6 @@ mod tests {
         call("generation".into());
         77
     }
-    unsafe extern "C" fn open() -> u32 {
-        call("open".into());
-        fake().opened.into()
-    }
     unsafe extern "C" fn bridge_activate(enabled: u32) {
         call(format!("activate {enabled}"));
     }
@@ -974,8 +1038,8 @@ mod tests {
         call("drained".into());
         fake().drained.into()
     }
-    unsafe extern "C" fn end_session() -> u32 {
-        call("end".into());
+    unsafe extern "C" fn end_session(session: u64) -> u32 {
+        call(format!("end {session}"));
         fake().ended.into()
     }
     unsafe extern "C" fn sr_default_backend(_: *mut c_void, backend: *mut u32) -> u32 {
@@ -1067,12 +1131,6 @@ mod tests {
     unsafe extern "C" fn sr_destroy(sr: *mut rsf_sr12) {
         call(format!("destroy {:#x}", sr as usize));
     }
-    unsafe extern "C" fn log(text: *const c_char) {
-        call(format!(
-            "log {}",
-            unsafe { CStr::from_ptr(text) }.to_str().unwrap()
-        ));
-    }
     unsafe extern "C" fn bridge_release() {
         call("release".into());
     }
@@ -1135,44 +1193,188 @@ mod tests {
         unsafe { backend.write(adapter) };
         1
     }
-
-    fn platform() -> rsf_unity_package_platform {
-        rsf_unity_package_platform {
-            sharpening_valid: Some(sharpening_valid),
-            dlss_preset_valid: Some(dlss_preset_valid),
-            set_engine_spatial: Some(set_engine_spatial),
-            fg_options: Some(fg_options),
-            fg_status: Some(fg_status),
-            latency_status: Some(latency_status),
-            present_backend: Some(present_backend),
-            present_switch_result: Some(present_switch_result),
-            present_generation: Some(present_generation),
-            open: Some(open),
-            bridge_activate: Some(bridge_activate),
-            bridge_drained: Some(bridge_drained),
-            end_session: Some(end_session),
-            sr_default_backend: Some(sr_default_backend),
-            sr_create: Some(sr_create),
-            sr_plan: Some(sr_plan),
-            sharpening_defaults: Some(sharpening_defaults),
-            sr_set_sharpening: Some(sr_set_sharpening),
-            sr_evaluate: Some(sr_evaluate),
-            sr_destroy: Some(sr_destroy),
-            log: Some(log),
-            bridge_release: Some(bridge_release),
-            accept_window: Some(accept_window),
-            backend_log: Some(backend_log),
-            fg_install: Some(fg_install),
-            present_has_owner: Some(present_has_owner),
-            present_request: Some(present_request),
-            fg_default_backend: Some(fg_default_backend),
+    unsafe extern "C" fn vulkan_surface() -> u32 {
+        call("surface".into());
+        fake().surface.into()
+    }
+    unsafe extern "C" fn session_seed() -> u64 {
+        call("seed".into());
+        41
+    }
+    unsafe extern "C" fn render(
+        _: *mut c_void,
+        _: *mut c_void,
+        _: *const rsf_game_render_pass,
+        _: u32,
+    ) {
+        call("render".into());
+    }
+    unsafe extern "C" fn render_config(_: *mut c_void, _: *mut rsf_game_render_config) -> c_int {
+        call("render config".into());
+        1
+    }
+    /// Checks the host services and writes the API a bridge writes on success.
+    unsafe extern "C" fn bridge_prepare(
+        services: *const rsf_game_host_services,
+        api: *mut rsf_unity_native_api,
+    ) -> u32 {
+        let s = unsafe { *services };
+        call(format!("prepare {}", s.session_id));
+        assert_eq!((s.struct_size, s.abi_version), (104, 24));
+        assert_eq!(s.user, (&raw const PLATFORM).cast_mut().cast());
+        assert!(s.render_pass.map(|f| f as usize) == Some(render as usize));
+        assert!(s.render_config.map(|f| f as usize) == Some(render_config as usize));
+        assert!(s.log.is_some() && s.cpu_event.is_some());
+        assert!(s.scope_state.is_none() && s.process_upscale.is_none() && s.submit.is_none());
+        assert!(s.present.is_none() && s.process_latency.is_none() && s.render_feedback.is_none());
+        if !fake().prepared {
+            return 0;
+        }
+        unsafe {
+            (*api).struct_size = 72;
+            (*api).session_id = s.session_id;
+        }
+        1
+    }
+    fn wide(path: *const u16) -> String {
+        let length = (0..).take_while(|&i| unsafe { *path.add(i) } != 0).count();
+        String::from_utf16(unsafe { std::slice::from_raw_parts(path, length) }).unwrap()
+    }
+    fn handle(value: usize) -> *mut c_void {
+        without_provenance_mut(value)
+    }
+    unsafe extern "C" fn local_app_data(output: *mut u16, capacity: u32) -> u32 {
+        call("local".into());
+        assert_eq!(capacity, 32768);
+        let Some(local) = fake().local else {
+            return 0;
+        };
+        let local: Vec<u16> = local.encode_utf16().collect();
+        unsafe { output.copy_from_nonoverlapping(local.as_ptr(), local.len()) };
+        local.len() as u32
+    }
+    unsafe extern "C" fn create_directory(path: *const u16) {
+        call(format!("mkdir {}", wide(path)));
+    }
+    unsafe extern "C" fn log_open(path: *const u16) -> *mut c_void {
+        call(format!("open {}", wide(path)));
+        handle(fake().file)
+    }
+    unsafe extern "C" fn log_write(file: *mut c_void, text: *const c_char) {
+        let text = unsafe { CStr::from_ptr(text) }.to_str().unwrap();
+        call(if file.is_null() {
+            format!("log {text}")
+        } else {
+            format!("log {:#x} {text}", file as usize)
+        });
+    }
+    unsafe extern "C" fn log_close(file: *mut c_void) {
+        call(format!("close {:#x}", file as usize));
+    }
+    unsafe extern "C" fn player_window() -> *mut c_void {
+        call("player".into());
+        handle(fake().player)
+    }
+    unsafe extern "C" fn preview_parent() -> *mut c_void {
+        call("parent".into());
+        handle(fake().parent)
+    }
+    /// The previous procedure is 0x30 above the window.
+    unsafe extern "C" fn subclass(window: *mut c_void) -> *mut c_void {
+        call(format!("subclass {:#x}", window as usize));
+        handle(window as usize + 0x30)
+    }
+    unsafe extern "C" fn restore(window: *mut c_void, previous: *mut c_void) {
+        call(format!(
+            "restore {:#x} {:#x}",
+            window as usize, previous as usize
+        ));
+    }
+    unsafe extern "C" fn raw_input_type(lparam: isize, device: *mut u32) -> u32 {
+        call(format!("raw {lparam}"));
+        let Some(raw) = fake().raw else {
+            return 0;
+        };
+        unsafe { device.write(raw) };
+        1
+    }
+    unsafe extern "C" fn timestamp(counter: *mut u64, frequency: *mut u64) {
+        unsafe {
+            counter.write(1000);
+            frequency.write(10);
         }
     }
+    unsafe extern "C" fn cpu(event: *const rsf_game_cpu_event) {
+        let e = unsafe { *event };
+        call(format!(
+            "cpu {} {} {} {}/{} {} {:#x} {} {}",
+            e.stage,
+            e.session_id,
+            e.source_frame_id,
+            e.timestamp_qpc,
+            e.qpc_frequency,
+            e.input_kind,
+            e.message_id,
+            e.flags,
+            e.event_version
+        ));
+    }
+
+    /// The table every test adopts, at a fixed address like package.cpp's constant.
+    static PLATFORM: rsf_unity_package_platform = TABLE;
+    fn platform() -> rsf_unity_package_platform {
+        TABLE
+    }
+    const TABLE: rsf_unity_package_platform = rsf_unity_package_platform {
+        sharpening_valid: Some(sharpening_valid),
+        dlss_preset_valid: Some(dlss_preset_valid),
+        set_engine_spatial: Some(set_engine_spatial),
+        fg_options: Some(fg_options),
+        fg_status: Some(fg_status),
+        latency_status: Some(latency_status),
+        present_backend: Some(present_backend),
+        present_switch_result: Some(present_switch_result),
+        present_generation: Some(present_generation),
+        bridge_activate: Some(bridge_activate),
+        bridge_drained: Some(bridge_drained),
+        end_session: Some(end_session),
+        sr_default_backend: Some(sr_default_backend),
+        sr_create: Some(sr_create),
+        sr_plan: Some(sr_plan),
+        sharpening_defaults: Some(sharpening_defaults),
+        sr_set_sharpening: Some(sr_set_sharpening),
+        sr_evaluate: Some(sr_evaluate),
+        sr_destroy: Some(sr_destroy),
+        bridge_release: Some(bridge_release),
+        accept_window: Some(accept_window),
+        backend_log: Some(backend_log),
+        fg_install: Some(fg_install),
+        present_has_owner: Some(present_has_owner),
+        present_request: Some(present_request),
+        fg_default_backend: Some(fg_default_backend),
+        vulkan_surface: Some(vulkan_surface),
+        session_seed: Some(session_seed),
+        render_pass: Some(render),
+        render_config: Some(render_config),
+        bridge_prepare: Some(bridge_prepare),
+        local_app_data: Some(local_app_data),
+        create_directory: Some(create_directory),
+        log_open: Some(log_open),
+        log_write: Some(log_write),
+        log_close: Some(log_close),
+        player_window: Some(player_window),
+        preview_parent: Some(preview_parent),
+        subclass: Some(subclass),
+        restore: Some(restore),
+        raw_input_type: Some(raw_input_type),
+        timestamp: Some(timestamp),
+        cpu: Some(cpu),
+    };
     /// Fresh fakes and an empty call record for this test.
     fn leaves() -> Leaves {
         FAKE.with(|cell| cell.set(READY));
         calls();
-        unsafe { Leaves::adopt(&platform()) }.unwrap()
+        unsafe { Leaves::adopt(&PLATFORM) }.unwrap()
     }
 
     #[test]
@@ -1407,6 +1609,30 @@ mod tests {
         );
     }
 
+    /// open's calls in the player: the first session opens the process log and hooks the player
+    /// window, every session checks the Vulkan surface and prepares the bridge.
+    fn opened(first: bool) -> Vec<String> {
+        let mut calls = Vec::new();
+        if first {
+            let log = format!("open L\\ReScaleFrame\\Unity\\{}.log", std::process::id());
+            calls.extend([
+                "local".into(),
+                "mkdir L\\ReScaleFrame".into(),
+                "mkdir L\\ReScaleFrame\\Unity".into(),
+                log,
+                "player".into(),
+                "subclass 0x20".into(),
+            ]);
+        }
+        calls.extend(["surface", "seed", "prepare 42"].map(String::from));
+        calls
+    }
+    fn started(package: &Package, leaves: &Leaves, identity: Identity) -> Result<u64, i32> {
+        package
+            .initialize(leaves, identity)
+            .map(|api| api.session_id)
+    }
+
     #[test]
     fn sessions_start_retire_and_refuse_while_busy() {
         let package = Package::new();
@@ -1414,33 +1640,52 @@ mod tests {
         package.lock().settings.quality = 2;
         package.bridge_failed(-4);
         let session = || Identity::new(b"R", b"6000", b"P");
-        assert_eq!(package.initialize(&leaves, session()), code::STARTED);
-        assert_eq!(calls(), ["open", "spatial 0 2", "activate 1"]);
+        // The bridge's API, with the session id of the host services, is handed out.
+        assert_eq!(started(&package, &leaves, session()), Ok(42));
+        assert_eq!(
+            calls(),
+            [
+                opened(true),
+                vec!["spatial 0 2".into(), "activate 1".into()]
+            ]
+            .concat()
+        );
+        assert_eq!(package.services.session(), 42);
         assert_eq!(package.bridge_result.load(SeqCst), 0);
         assert!(package.lock().started);
         assert_eq!(package.presentation.identity().xess.to_bytes(), b"R/xess");
-        // A started session only restarts once drained and ended.
+        // A started session only restarts once drained and its own session ended.
         package.view_planned(3, (8, 8), (4, 4));
         package.lock_views().entry(1).sr = without_provenance_mut(0x300);
         package.lock().status.evaluated_frames = 5;
         set(|f| f.drained = false);
         // A busy restart keeps the running session's identity.
         assert_eq!(
-            package.initialize(&leaves, Identity::new(b"Q", b"1", b"P")),
-            code::BUSY
+            started(&package, &leaves, Identity::new(b"Q", b"1", b"P")),
+            Err(code::BUSY)
         );
         assert_eq!(calls(), ["drained"]);
         assert_eq!(package.presentation.identity().root.to_bytes(), b"R");
         set(|f| f.drained = true);
         set(|f| f.ended = false);
-        assert_eq!(package.initialize(&leaves, session()), code::BUSY);
-        assert_eq!(calls(), ["drained", "end"]);
+        assert_eq!(started(&package, &leaves, session()), Err(code::BUSY));
+        assert_eq!(calls(), ["drained", "end 42"]);
         set(|f| f.ended = true);
-        set(|f| f.opened = false);
-        assert_eq!(package.initialize(&leaves, session()), code::FAILED);
+        set(|f| f.prepared = false);
+        assert_eq!(started(&package, &leaves, session()), Err(code::FAILED));
+        // The log and the input window outlive the session.
         assert_eq!(
             calls(),
-            ["drained", "end", "destroy 0x300", "release", "open"]
+            [
+                vec![
+                    "drained".into(),
+                    "end 42".into(),
+                    "destroy 0x300".into(),
+                    "release".into()
+                ],
+                opened(false)
+            ]
+            .concat()
         );
         {
             let state = package.lock();
@@ -1448,10 +1693,17 @@ mod tests {
             assert_eq!((state.status.evaluated_frames, state.plan.enabled), (0, 0));
         }
         assert!(!package.temporal_ready.load(SeqCst));
-        set(|f| f.opened = true);
+        set(|f| f.prepared = true);
         package.lock().settings.sr_backend = RSF_SR_SPATIAL;
-        assert_eq!(package.initialize(&leaves, session()), code::STARTED);
-        assert_eq!(calls(), ["open", "spatial 1 2", "activate 1"]);
+        assert_eq!(started(&package, &leaves, session()), Ok(42));
+        assert_eq!(
+            calls(),
+            [
+                opened(false),
+                vec!["spatial 1 2".into(), "activate 1".into()]
+            ]
+            .concat()
+        );
         assert_eq!(package.lock().status.requested_sr, RSF_SR_SPATIAL);
         // rsfu_shutdown's unlocked half, then its locked half.
         set(|f| f.drained = false);
@@ -1459,7 +1711,7 @@ mod tests {
         assert_eq!(calls(), ["activate 0", "drained"]);
         set(|f| f.drained = true);
         assert!(package.quiesce(&leaves));
-        assert_eq!(calls(), ["activate 0", "drained", "end"]);
+        assert_eq!(calls(), ["activate 0", "drained", "end 42"]);
         package.retire(&leaves);
         assert_eq!(calls(), ["release"]);
         assert!(!package.lock().started);
@@ -1791,24 +2043,178 @@ mod tests {
         }
         assert!(calls().is_empty());
         let (text, none) = (c"x".as_ptr(), std::ptr::null());
+        // SAFETY: integers, nullable function pointers and a nullable pointer.
+        let mut api: rsf_unity_native_api = unsafe { std::mem::zeroed() };
+        let output = &raw mut api;
         unsafe {
             assert_eq!(
-                rsf_unity_package_initialize(text, text, text, std::ptr::null()),
+                rsf_unity_package_initialize(text, text, text, output, std::ptr::null()),
                 code::FAILED
             );
             assert_eq!(
-                rsf_unity_package_initialize(none, text, text, &table),
+                rsf_unity_package_initialize(none, text, text, output, &table),
                 code::FAILED
             );
             assert_eq!(
-                rsf_unity_package_initialize(text, none, text, &table),
+                rsf_unity_package_initialize(text, none, text, output, &table),
                 code::FAILED
             );
             assert_eq!(
-                rsf_unity_package_initialize(text, text, none, &table),
+                rsf_unity_package_initialize(text, text, none, output, &table),
+                code::FAILED
+            );
+            assert_eq!(
+                rsf_unity_package_initialize(text, text, text, std::ptr::null_mut(), &table),
                 code::FAILED
             );
         }
         assert!(calls().is_empty());
+        assert_eq!(api.struct_size, 0);
+    }
+
+    fn wide_text(text: &str) -> Vec<u16> {
+        text.encode_utf16().collect()
+    }
+
+    #[test]
+    fn the_player_loads_its_log_and_installs_once() {
+        let package = Package::new();
+        let leaves = leaves();
+        package
+            .presentation
+            .set_identity(Identity::new(b"R", b"6000", b"P"));
+        package.loaded(&leaves, false, &wide_text("C:\\rsf.log"));
+        let loaded = calls();
+        assert_eq!(loaded[0], "open C:\\rsf.log");
+        assert!(loaded[1].starts_with("install 152 7 "));
+        assert_eq!(loaded.len(), 2);
+        // The configured log stands in for the process log; lines reach both outputs.
+        package.log(&leaves, "hello");
+        assert_eq!(calls(), ["log 0x10 hello"]);
+        assert!(package.open(&leaves));
+        assert_eq!(
+            calls(),
+            ["player", "subclass 0x20", "surface", "seed", "prepare 42"]
+        );
+        // Messages are forwarded to the hooked window's previous procedure.
+        assert_eq!(package.window_message(&leaves, 0x000f, 0), handle(0x50));
+        calls();
+        // Unload restores the procedure and closes the log; later lines reach the debugger only.
+        package.unload(&leaves);
+        assert_eq!(calls(), ["restore 0x20 0x50", "close 0x10"]);
+        package.log(&leaves, "late");
+        assert_eq!(calls(), ["log late"]);
+        assert!(package.window_message(&leaves, 0x000f, 0).is_null());
+        calls();
+        package.unload(&leaves);
+        assert!(calls().is_empty());
+        // The player has no preview input.
+        package.preview_input(&leaves);
+        assert!(calls().is_empty());
+    }
+
+    #[test]
+    fn the_editor_installs_per_session_and_hooks_the_preview() {
+        let package = Package::new();
+        let leaves = leaves();
+        package
+            .presentation
+            .set_identity(Identity::new(b"R", b"6000", b"P"));
+        package.loaded(&leaves, true, &[]);
+        assert!(calls().is_empty());
+        // No player window and no Vulkan surface: the preview presents in the Editor.
+        assert!(package.open(&leaves));
+        let opened = calls();
+        assert_eq!(opened[0], "local");
+        assert!(opened[4].starts_with("install 152 7 "));
+        assert_eq!(opened[5..], ["seed", "prepare 42"]);
+        // The preview's parent is hooked once it exists, then kept.
+        set(|f| f.parent = 0);
+        package.preview_input(&leaves);
+        assert_eq!(calls(), ["parent"]);
+        set(|f| f.parent = 0x40);
+        package.preview_input(&leaves);
+        assert_eq!(calls(), ["parent", "subclass 0x40"]);
+        package.preview_input(&leaves);
+        assert!(calls().is_empty());
+        assert!(package.open(&leaves));
+        assert_eq!(calls(), ["seed", "prepare 42"]);
+    }
+
+    #[test]
+    fn a_refused_log_or_surface_is_retried_by_the_next_session() {
+        let package = Package::new();
+        let leaves = leaves();
+        set(|f| f.file = 0);
+        package.loaded(&leaves, false, &wide_text("C:\\rsf.log"));
+        assert_eq!(calls(), ["open C:\\rsf.log"]);
+        set(|f| f.surface = false);
+        assert!(!package.open(&leaves));
+        let mut refused = opened(true);
+        refused.truncate(refused.len() - 2);
+        refused.push(
+            "log Unity Vulkan presentation surface could not initialize on the window thread."
+                .into(),
+        );
+        assert_eq!(calls(), refused);
+        // Without %LOCALAPPDATA% there is no process log; the window stays hooked.
+        set(|f| f.surface = true);
+        set(|f| f.local = None);
+        assert!(package.open(&leaves));
+        assert_eq!(calls(), ["local", "surface", "seed", "prepare 42"]);
+    }
+
+    #[test]
+    fn received_input_is_keyed_to_the_cpu_frame_in_progress() {
+        use rsf_game_sys::{RSF_GAME_CPU_FRAME_BEGIN, RSF_GAME_CPU_FRAME_END};
+        let package = Package::new();
+        let leaves = leaves();
+        package.services.session.store(42, SeqCst);
+        let frame = |stage, source| rsf_game_cpu_event {
+            struct_size: 64,
+            stage,
+            session_id: 42,
+            source_frame_id: source,
+            timestamp_qpc: 5,
+            qpc_frequency: 10,
+            render_expected: 1,
+            input_kind: 0,
+            message_id: 0,
+            event_version: 1,
+            flags: 0,
+        };
+        // Outside a frame a keyed message is unframed; any other message carries no kind.
+        assert!(package.window_message(&leaves, 0x0100, 0).is_null());
+        assert_eq!(calls(), ["cpu 5 42 0 1000/10 1 0x100 21 1"]);
+        package.window_message(&leaves, 0x000f, 0);
+        assert_eq!(calls(), ["cpu 5 42 0 1000/10 0 0xf 5 1"]);
+        // The bridge's events reach the Runtime unchanged.
+        package.cpu_event(&leaves, &frame(RSF_GAME_CPU_FRAME_BEGIN, 7));
+        assert_eq!(calls(), ["cpu 0 42 7 5/10 0 0x0 0 1"]);
+        package.window_message(&leaves, 0x020e, 0);
+        assert_eq!(calls(), ["cpu 5 42 7 1000/10 2 0x20e 5 1"]);
+        // WM_INPUT carries its raw device's kind.
+        for (raw, kind) in [(Some(1), 1), (Some(0), 2), (Some(2), 0), (None, 0)] {
+            set(|f| f.raw = raw);
+            package.window_message(&leaves, 0x00ff, 9);
+            assert_eq!(
+                calls(),
+                [
+                    "raw 9".into(),
+                    format!("cpu 5 42 7 1000/10 {kind} 0xff 5 1")
+                ]
+            );
+        }
+        // Managed input is keyed to its frame only while that frame is in progress.
+        assert_eq!(package.input(&leaves, 7, 3), BACKEND_OK);
+        assert_eq!(calls(), ["cpu 5 42 7 1000/10 3 0x0 1 1"]);
+        package.input(&leaves, 6, 4);
+        assert_eq!(calls(), ["cpu 5 42 0 1000/10 4 0x0 17 1"]);
+        package.cpu_event(&leaves, &frame(RSF_GAME_CPU_FRAME_END, 7));
+        assert_eq!(calls(), ["cpu 4 42 7 5/10 0 0x0 0 1"]);
+        package.input(&leaves, 7, 1);
+        assert_eq!(calls(), ["cpu 5 42 0 1000/10 1 0x0 17 1"]);
+        package.window_message(&leaves, 0x0109, 0);
+        assert_eq!(calls(), ["cpu 5 42 0 1000/10 1 0x109 21 1"]);
     }
 }

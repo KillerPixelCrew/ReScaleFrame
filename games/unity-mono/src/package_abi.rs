@@ -2,8 +2,13 @@
 
 #![allow(non_camel_case_types)]
 #![allow(dead_code)]
+type wchar_t = u16;
+use crate::plugin_abi::rsf_unity_native_api;
 use crate::runtime_abi::rsf_fg12_setup;
-use rsf_game_sys::rsf_game_render_pass;
+use rsf_game_sys::{
+    rsf_game_cpu_event, rsf_game_host_services, rsf_game_render_config_fn, rsf_game_render_pass,
+    rsf_game_render_pass_fn,
+};
 
 pub const RSF_FG_OFF: u32 = 0;
 pub const RSF_FG_STAT_TOTAL_PRESENTED: u32 = 1;
@@ -601,10 +606,9 @@ pub struct rsf_unity_package_platform {
     pub present_backend: ::core::option::Option<unsafe extern "C" fn() -> u32>,
     pub present_switch_result: ::core::option::Option<unsafe extern "C" fn() -> i32>,
     pub present_generation: ::core::option::Option<unsafe extern "C" fn() -> u64>,
-    pub open: ::core::option::Option<unsafe extern "C" fn() -> u32>,
     pub bridge_activate: ::core::option::Option<unsafe extern "C" fn(enabled: u32)>,
     pub bridge_drained: ::core::option::Option<unsafe extern "C" fn() -> u32>,
-    pub end_session: ::core::option::Option<unsafe extern "C" fn() -> u32>,
+    pub end_session: ::core::option::Option<unsafe extern "C" fn(session: u64) -> u32>,
     pub sr_default_backend: ::core::option::Option<
         unsafe extern "C" fn(commands: *mut ::core::ffi::c_void, backend: *mut u32) -> u32,
     >,
@@ -633,7 +637,6 @@ pub struct rsf_unity_package_platform {
         ) -> i32,
     >,
     pub sr_destroy: ::core::option::Option<unsafe extern "C" fn(sr: *mut rsf_sr12)>,
-    pub log: ::core::option::Option<unsafe extern "C" fn(text: *const ::core::ffi::c_char)>,
     pub bridge_release: ::core::option::Option<unsafe extern "C" fn()>,
     pub accept_window: ::core::option::Option<
         unsafe extern "C" fn(
@@ -649,11 +652,44 @@ pub struct rsf_unity_package_platform {
     pub present_has_owner: ::core::option::Option<unsafe extern "C" fn() -> u32>,
     pub present_request: ::core::option::Option<unsafe extern "C" fn(backend: u32) -> i32>,
     pub fg_default_backend: ::core::option::Option<unsafe extern "C" fn(backend: *mut u32) -> u32>,
+    pub vulkan_surface: ::core::option::Option<unsafe extern "C" fn() -> u32>,
+    pub session_seed: ::core::option::Option<unsafe extern "C" fn() -> u64>,
+    pub render_pass: rsf_game_render_pass_fn,
+    pub render_config: rsf_game_render_config_fn,
+    pub bridge_prepare: ::core::option::Option<
+        unsafe extern "C" fn(
+            services: *const rsf_game_host_services,
+            api: *mut rsf_unity_native_api,
+        ) -> u32,
+    >,
+    pub local_app_data:
+        ::core::option::Option<unsafe extern "C" fn(output: *mut wchar_t, capacity: u32) -> u32>,
+    pub create_directory: ::core::option::Option<unsafe extern "C" fn(path: *const wchar_t)>,
+    pub log_open: ::core::option::Option<
+        unsafe extern "C" fn(path: *const wchar_t) -> *mut ::core::ffi::c_void,
+    >,
+    pub log_write: ::core::option::Option<
+        unsafe extern "C" fn(file: *mut ::core::ffi::c_void, text: *const ::core::ffi::c_char),
+    >,
+    pub log_close: ::core::option::Option<unsafe extern "C" fn(file: *mut ::core::ffi::c_void)>,
+    pub player_window: ::core::option::Option<unsafe extern "C" fn() -> *mut ::core::ffi::c_void>,
+    pub preview_parent: ::core::option::Option<unsafe extern "C" fn() -> *mut ::core::ffi::c_void>,
+    pub subclass: ::core::option::Option<
+        unsafe extern "C" fn(window: *mut ::core::ffi::c_void) -> *mut ::core::ffi::c_void,
+    >,
+    pub restore: ::core::option::Option<
+        unsafe extern "C" fn(window: *mut ::core::ffi::c_void, previous: *mut ::core::ffi::c_void),
+    >,
+    pub raw_input_type:
+        ::core::option::Option<unsafe extern "C" fn(lparam: isize, type_: *mut u32) -> u32>,
+    pub timestamp:
+        ::core::option::Option<unsafe extern "C" fn(counter: *mut u64, frequency: *mut u64)>,
+    pub cpu: ::core::option::Option<unsafe extern "C" fn(event: *const rsf_game_cpu_event)>,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
     ["Size of rsf_unity_package_platform"]
-        [::core::mem::size_of::<rsf_unity_package_platform>() - 224usize];
+        [::core::mem::size_of::<rsf_unity_package_platform>() - 344usize];
     ["Alignment of rsf_unity_package_platform"]
         [::core::mem::align_of::<rsf_unity_package_platform>() - 8usize];
     ["Offset of field: rsf_unity_package_platform::sharpening_valid"]
@@ -674,42 +710,72 @@ const _: () = {
         [::core::mem::offset_of!(rsf_unity_package_platform, present_switch_result) - 56usize];
     ["Offset of field: rsf_unity_package_platform::present_generation"]
         [::core::mem::offset_of!(rsf_unity_package_platform, present_generation) - 64usize];
-    ["Offset of field: rsf_unity_package_platform::open"]
-        [::core::mem::offset_of!(rsf_unity_package_platform, open) - 72usize];
     ["Offset of field: rsf_unity_package_platform::bridge_activate"]
-        [::core::mem::offset_of!(rsf_unity_package_platform, bridge_activate) - 80usize];
+        [::core::mem::offset_of!(rsf_unity_package_platform, bridge_activate) - 72usize];
     ["Offset of field: rsf_unity_package_platform::bridge_drained"]
-        [::core::mem::offset_of!(rsf_unity_package_platform, bridge_drained) - 88usize];
+        [::core::mem::offset_of!(rsf_unity_package_platform, bridge_drained) - 80usize];
     ["Offset of field: rsf_unity_package_platform::end_session"]
-        [::core::mem::offset_of!(rsf_unity_package_platform, end_session) - 96usize];
+        [::core::mem::offset_of!(rsf_unity_package_platform, end_session) - 88usize];
     ["Offset of field: rsf_unity_package_platform::sr_default_backend"]
-        [::core::mem::offset_of!(rsf_unity_package_platform, sr_default_backend) - 104usize];
+        [::core::mem::offset_of!(rsf_unity_package_platform, sr_default_backend) - 96usize];
     ["Offset of field: rsf_unity_package_platform::sr_create"]
-        [::core::mem::offset_of!(rsf_unity_package_platform, sr_create) - 112usize];
+        [::core::mem::offset_of!(rsf_unity_package_platform, sr_create) - 104usize];
     ["Offset of field: rsf_unity_package_platform::sr_plan"]
-        [::core::mem::offset_of!(rsf_unity_package_platform, sr_plan) - 120usize];
+        [::core::mem::offset_of!(rsf_unity_package_platform, sr_plan) - 112usize];
     ["Offset of field: rsf_unity_package_platform::sharpening_defaults"]
-        [::core::mem::offset_of!(rsf_unity_package_platform, sharpening_defaults) - 128usize];
+        [::core::mem::offset_of!(rsf_unity_package_platform, sharpening_defaults) - 120usize];
     ["Offset of field: rsf_unity_package_platform::sr_set_sharpening"]
-        [::core::mem::offset_of!(rsf_unity_package_platform, sr_set_sharpening) - 136usize];
+        [::core::mem::offset_of!(rsf_unity_package_platform, sr_set_sharpening) - 128usize];
     ["Offset of field: rsf_unity_package_platform::sr_evaluate"]
-        [::core::mem::offset_of!(rsf_unity_package_platform, sr_evaluate) - 144usize];
+        [::core::mem::offset_of!(rsf_unity_package_platform, sr_evaluate) - 136usize];
     ["Offset of field: rsf_unity_package_platform::sr_destroy"]
-        [::core::mem::offset_of!(rsf_unity_package_platform, sr_destroy) - 152usize];
-    ["Offset of field: rsf_unity_package_platform::log"]
-        [::core::mem::offset_of!(rsf_unity_package_platform, log) - 160usize];
+        [::core::mem::offset_of!(rsf_unity_package_platform, sr_destroy) - 144usize];
     ["Offset of field: rsf_unity_package_platform::bridge_release"]
-        [::core::mem::offset_of!(rsf_unity_package_platform, bridge_release) - 168usize];
+        [::core::mem::offset_of!(rsf_unity_package_platform, bridge_release) - 152usize];
     ["Offset of field: rsf_unity_package_platform::accept_window"]
-        [::core::mem::offset_of!(rsf_unity_package_platform, accept_window) - 176usize];
+        [::core::mem::offset_of!(rsf_unity_package_platform, accept_window) - 160usize];
     ["Offset of field: rsf_unity_package_platform::backend_log"]
-        [::core::mem::offset_of!(rsf_unity_package_platform, backend_log) - 184usize];
+        [::core::mem::offset_of!(rsf_unity_package_platform, backend_log) - 168usize];
     ["Offset of field: rsf_unity_package_platform::fg_install"]
-        [::core::mem::offset_of!(rsf_unity_package_platform, fg_install) - 192usize];
+        [::core::mem::offset_of!(rsf_unity_package_platform, fg_install) - 176usize];
     ["Offset of field: rsf_unity_package_platform::present_has_owner"]
-        [::core::mem::offset_of!(rsf_unity_package_platform, present_has_owner) - 200usize];
+        [::core::mem::offset_of!(rsf_unity_package_platform, present_has_owner) - 184usize];
     ["Offset of field: rsf_unity_package_platform::present_request"]
-        [::core::mem::offset_of!(rsf_unity_package_platform, present_request) - 208usize];
+        [::core::mem::offset_of!(rsf_unity_package_platform, present_request) - 192usize];
     ["Offset of field: rsf_unity_package_platform::fg_default_backend"]
-        [::core::mem::offset_of!(rsf_unity_package_platform, fg_default_backend) - 216usize];
+        [::core::mem::offset_of!(rsf_unity_package_platform, fg_default_backend) - 200usize];
+    ["Offset of field: rsf_unity_package_platform::vulkan_surface"]
+        [::core::mem::offset_of!(rsf_unity_package_platform, vulkan_surface) - 208usize];
+    ["Offset of field: rsf_unity_package_platform::session_seed"]
+        [::core::mem::offset_of!(rsf_unity_package_platform, session_seed) - 216usize];
+    ["Offset of field: rsf_unity_package_platform::render_pass"]
+        [::core::mem::offset_of!(rsf_unity_package_platform, render_pass) - 224usize];
+    ["Offset of field: rsf_unity_package_platform::render_config"]
+        [::core::mem::offset_of!(rsf_unity_package_platform, render_config) - 232usize];
+    ["Offset of field: rsf_unity_package_platform::bridge_prepare"]
+        [::core::mem::offset_of!(rsf_unity_package_platform, bridge_prepare) - 240usize];
+    ["Offset of field: rsf_unity_package_platform::local_app_data"]
+        [::core::mem::offset_of!(rsf_unity_package_platform, local_app_data) - 248usize];
+    ["Offset of field: rsf_unity_package_platform::create_directory"]
+        [::core::mem::offset_of!(rsf_unity_package_platform, create_directory) - 256usize];
+    ["Offset of field: rsf_unity_package_platform::log_open"]
+        [::core::mem::offset_of!(rsf_unity_package_platform, log_open) - 264usize];
+    ["Offset of field: rsf_unity_package_platform::log_write"]
+        [::core::mem::offset_of!(rsf_unity_package_platform, log_write) - 272usize];
+    ["Offset of field: rsf_unity_package_platform::log_close"]
+        [::core::mem::offset_of!(rsf_unity_package_platform, log_close) - 280usize];
+    ["Offset of field: rsf_unity_package_platform::player_window"]
+        [::core::mem::offset_of!(rsf_unity_package_platform, player_window) - 288usize];
+    ["Offset of field: rsf_unity_package_platform::preview_parent"]
+        [::core::mem::offset_of!(rsf_unity_package_platform, preview_parent) - 296usize];
+    ["Offset of field: rsf_unity_package_platform::subclass"]
+        [::core::mem::offset_of!(rsf_unity_package_platform, subclass) - 304usize];
+    ["Offset of field: rsf_unity_package_platform::restore"]
+        [::core::mem::offset_of!(rsf_unity_package_platform, restore) - 312usize];
+    ["Offset of field: rsf_unity_package_platform::raw_input_type"]
+        [::core::mem::offset_of!(rsf_unity_package_platform, raw_input_type) - 320usize];
+    ["Offset of field: rsf_unity_package_platform::timestamp"]
+        [::core::mem::offset_of!(rsf_unity_package_platform, timestamp) - 328usize];
+    ["Offset of field: rsf_unity_package_platform::cpu"]
+        [::core::mem::offset_of!(rsf_unity_package_platform, cpu) - 336usize];
 };

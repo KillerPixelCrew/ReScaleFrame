@@ -1,0 +1,508 @@
+// SPDX-License-Identifier: MIT
+//! The Unity package's session services behind package.cpp: the host services and managed bridge
+//! API of each session, the package log, the input window's registration and retirement, and the
+//! routing of the bridge's CPU events, the input window's messages and rsfu_input into the
+//! Runtime. package.cpp keeps the Win32, Unity and Runtime calls as leaves: the file, window,
+//! raw-input and clock calls, the Vulkan surface, the render callback and plan, the bridge's
+//! preparation and rsf_fg12_cpu.
+//!
+//! Everything reported here is a fact from a callback that happened: a CPU event the bridge
+//! received, a message the input window dequeued or a managed rsfu_input call, stamped when it
+//! arrives and keyed to the CPU frame in progress. What the Runtime makes of it (pacing, markers,
+//! latency) is its own decision.
+//!
+//! The log lock is held across the log leaves and the input-window lock across the window leaves;
+//! neither leaf calls back. The message and CPU paths take neither lock, so a message the window
+//! dispatches while it is being hooked cannot wait on the hook.
+use super::{BACKEND_OK, Leaves, PACKAGE, Package};
+use crate::package_abi::rsf_unity_package_platform;
+use crate::plugin_abi::rsf_unity_native_api;
+use crate::runtime_config::{PATH_CAPACITY, terminated};
+use rsf_game_sys::{
+    RSF_GAME_ABI_VERSION, RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_FRAME_BEGIN,
+    RSF_GAME_CPU_FRAME_END, RSF_GAME_CPU_INPUT_EVENT, RSF_GAME_CPU_INPUT_KEYED,
+    RSF_GAME_CPU_INPUT_UNFRAMED, RSF_GAME_CPU_WINDOW_MESSAGE, RSF_GAME_INPUT_CONTROLLER,
+    RSF_GAME_INPUT_KEYBOARD, RSF_GAME_INPUT_MOUSE, rsf_game_cpu_event, rsf_game_host_services,
+};
+use std::ffi::{CStr, CString, c_char, c_int, c_void};
+use std::ptr::null_mut;
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering::SeqCst};
+use std::sync::{Mutex, MutexGuard, PoisonError};
+
+/// RSF_BACKEND_ERROR_INVALID_ARGUMENT and RSF_BACKEND_ERROR_FEATURE_FAILED, cast macros;
+/// package.cpp asserts them.
+const BACKEND_INVALID_ARGUMENT: i32 = -1;
+const BACKEND_FEATURE_FAILED: i32 = -9;
+/// The kinds rsfu_input accepts.
+const INPUT_KINDS: u32 = RSF_GAME_INPUT_KEYBOARD | RSF_GAME_INPUT_MOUSE | RSF_GAME_INPUT_CONTROLLER;
+/// winuser.h's message ranges and raw-input device types; package.cpp asserts them.
+const WM_INPUT: u32 = 0x00ff;
+const WM_KEYFIRST: u32 = 0x0100;
+const WM_KEYLAST: u32 = 0x0109;
+const WM_MOUSEFIRST: u32 = 0x0200;
+const WM_MOUSELAST: u32 = 0x020e;
+const RIM_TYPEMOUSE: u32 = 0;
+const RIM_TYPEKEYBOARD: u32 = 1;
+
+const SURFACE_REFUSED: &str =
+    "Unity Vulkan presentation surface could not initialize on the window thread.";
+
+/// A file, window or window procedure that only package.cpp's leaves interpret.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) struct Handle(pub(super) *mut c_void);
+// SAFETY: a Win32 handle or procedure address, usable from any thread and never dereferenced
+// here.
+unsafe impl Send for Handle {}
+
+impl Handle {
+    pub(super) const NONE: Self = Self(null_mut());
+
+    fn is_none(self) -> bool {
+        self.0.is_null()
+    }
+}
+
+/// The bridge's managed API, handed to rsfu_initialize's caller.
+pub(super) struct Api(pub(super) rsf_unity_native_api);
+// SAFETY: the bridge's process-lifetime functions and render event, never dereferenced here.
+unsafe impl Send for Api {}
+
+const fn empty_api() -> rsf_unity_native_api {
+    // SAFETY: integers, nullable function pointers and a nullable pointer, for which zero is
+    // valid.
+    unsafe { std::mem::zeroed() }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+pub(super) struct Services {
+    /// Unity.exe hosts the package: generation installs per session and input comes from the
+    /// preview's parent window.
+    pub(super) editor: AtomicBool,
+    /// The open log file, NONE while there is none; held across every write, open and close.
+    pub(super) log: Mutex<Handle>,
+    /// The hooked input window, NONE until one is found; it stays hooked across sessions.
+    pub(super) window: Mutex<Handle>,
+    /// The hooked window's previous procedure, read by every message without the lock.
+    pub(super) previous: AtomicPtr<c_void>,
+    /// The CPU frame between its begin and end events, 0 outside one.
+    pub(super) input_frame: AtomicU64,
+    /// The bridge's API as its last preparation wrote it.
+    pub(super) api: Mutex<Api>,
+    /// That API's session id, read by the input paths without the lock.
+    pub(super) session: AtomicU64,
+}
+
+impl Services {
+    pub(super) const fn new() -> Self {
+        Self {
+            editor: AtomicBool::new(false),
+            log: Mutex::new(Handle::NONE),
+            window: Mutex::new(Handle::NONE),
+            previous: AtomicPtr::new(null_mut()),
+            input_frame: AtomicU64::new(0),
+            api: Mutex::new(Api(empty_api())),
+            session: AtomicU64::new(0),
+        }
+    }
+
+    pub(super) fn session(&self) -> u64 {
+        self.session.load(SeqCst)
+    }
+
+    pub(super) fn api(&self) -> rsf_unity_native_api {
+        lock(&self.api).0
+    }
+
+    /// A received-input fact for this session, stamped `now`.
+    fn received(
+        &self,
+        source: u64,
+        (now, frequency): (u64, u64),
+        kind: u32,
+        message: u32,
+        flags: u32,
+    ) -> rsf_game_cpu_event {
+        rsf_game_cpu_event {
+            struct_size: size_of::<rsf_game_cpu_event>() as u32,
+            stage: RSF_GAME_CPU_INPUT_EVENT,
+            session_id: self.session(),
+            source_frame_id: source,
+            timestamp_qpc: now,
+            qpc_frequency: frequency,
+            render_expected: 0,
+            input_kind: kind,
+            message_id: message,
+            event_version: RSF_GAME_CPU_EVENT_VERSION,
+            flags,
+        }
+    }
+}
+
+// SAFETY for every call below: package.cpp's noexcept leaves, borrowing their pointer arguments
+// for the call only. Paths are terminated here.
+impl Leaves {
+    fn vulkan_surface(&self) -> bool {
+        unsafe { (self.vulkan_surface)() != 0 }
+    }
+    fn session_seed(&self) -> u64 {
+        unsafe { (self.session_seed)() }
+    }
+    fn bridge_prepare(
+        &self,
+        services: &rsf_game_host_services,
+        api: &mut rsf_unity_native_api,
+    ) -> bool {
+        unsafe { (self.bridge_prepare)(services, api) != 0 }
+    }
+    /// %LOCALAPPDATA%; None when it is unset, empty or longer than a path buffer.
+    fn local_app_data(&self) -> Option<Vec<u16>> {
+        let mut value = vec![0u16; PATH_CAPACITY];
+        let length = unsafe { (self.local_app_data)(value.as_mut_ptr(), PATH_CAPACITY as u32) };
+        let length = length as usize;
+        (length != 0 && length < PATH_CAPACITY).then(|| {
+            value.truncate(length);
+            value
+        })
+    }
+    fn create_directory(&self, path: &[u16]) {
+        let path = terminated(path.to_vec());
+        unsafe { (self.create_directory)(path.as_ptr()) }
+    }
+    fn log_open(&self, path: &[u16]) -> Handle {
+        let path = terminated(path.to_vec());
+        Handle(unsafe { (self.log_open)(path.as_ptr()) })
+    }
+    fn log_write(&self, file: Handle, text: &CStr) {
+        unsafe { (self.log_write)(file.0, text.as_ptr()) }
+    }
+    fn log_close(&self, file: Handle) {
+        unsafe { (self.log_close)(file.0) }
+    }
+    fn player_window(&self) -> Handle {
+        Handle(unsafe { (self.player_window)() })
+    }
+    fn preview_parent(&self) -> Handle {
+        Handle(unsafe { (self.preview_parent)() })
+    }
+    fn subclass(&self, window: Handle) -> *mut c_void {
+        unsafe { (self.subclass)(window.0) }
+    }
+    fn restore(&self, window: Handle, previous: *mut c_void) {
+        unsafe { (self.restore)(window.0, previous) }
+    }
+    fn raw_input_type(&self, lparam: isize) -> Option<u32> {
+        let mut device = 0u32;
+        (unsafe { (self.raw_input_type)(lparam, &mut device) } != 0).then_some(device)
+    }
+    fn timestamp(&self) -> (u64, u64) {
+        let (mut now, mut frequency) = (0u64, 0u64);
+        unsafe { (self.timestamp)(&mut now, &mut frequency) };
+        (now, frequency)
+    }
+    fn cpu(&self, event: &rsf_game_cpu_event) {
+        unsafe { (self.cpu)(event) }
+    }
+}
+
+impl Package {
+    /// Plugin load, after the identity: the [UnitySR] Log path when one is set, and the player's
+    /// generation install. The Editor installs from each session's open instead.
+    pub(super) fn loaded(&self, leaves: &Leaves, editor: bool, log: &[u16]) {
+        self.services.editor.store(editor, SeqCst);
+        if !log.is_empty() {
+            let mut file = lock(&self.services.log);
+            if file.is_none() {
+                *file = leaves.log_open(log);
+            }
+        }
+        if !editor {
+            self.install(leaves);
+        }
+    }
+
+    /// `%LOCALAPPDATA%\ReScaleFrame\Unity\<process id>.log` unless a log is open, its directories
+    /// created first. A refusal is retried by the next session.
+    fn open_process_log(&self, leaves: &Leaves) {
+        let mut file = lock(&self.services.log);
+        if !file.is_none() {
+            return;
+        }
+        let Some(mut path) = leaves.local_app_data() else {
+            return;
+        };
+        for directory in ["\\ReScaleFrame", "\\Unity"] {
+            path.extend(directory.encode_utf16());
+            leaves.create_directory(&path);
+        }
+        path.extend(format!("\\{}.log", std::process::id()).encode_utf16());
+        *file = leaves.log_open(&path);
+    }
+
+    /// One line to the debugger and the open log, serialized with its open and close.
+    pub(super) fn log(&self, leaves: &Leaves, text: &str) {
+        if let Ok(text) = CString::new(text) {
+            self.log_text(leaves, &text);
+        }
+    }
+
+    fn log_text(&self, leaves: &Leaves, text: &CStr) {
+        let file = lock(&self.services.log);
+        leaves.log_write(*file, text);
+    }
+
+    /// A new session's services, in the C++ order: the process log, the Editor's install or the
+    /// player's input window, the player's Vulkan surface, then the bridge prepared with this
+    /// session's host services. Their user pointer is the platform table, which the log and
+    /// CPU-event services adopt again on each call.
+    pub(super) fn open(&self, leaves: &Leaves) -> bool {
+        self.open_process_log(leaves);
+        let editor = self.services.editor.load(SeqCst);
+        if editor {
+            self.install(leaves);
+        } else {
+            self.hook(leaves, Leaves::player_window);
+        }
+        if !editor && !leaves.vulkan_surface() {
+            self.log(leaves, SURFACE_REFUSED);
+            return false;
+        }
+        let services = rsf_game_host_services {
+            struct_size: size_of::<rsf_game_host_services>() as u32,
+            abi_version: RSF_GAME_ABI_VERSION,
+            session_id: leaves.session_seed().wrapping_add(1),
+            log: Some(host_log),
+            render_pass: Some(leaves.render_pass),
+            user: leaves.table.cast_mut().cast(),
+            render_config: Some(leaves.render_config),
+            cpu_event: Some(host_cpu_event),
+            scope_state: None,
+            process_upscale: None,
+            submit: None,
+            present: None,
+            process_latency: None,
+            render_feedback: None,
+        };
+        // The bridge writes into the stored API, as it wrote into the C++ global.
+        let mut api = self.services.api();
+        let prepared = leaves.bridge_prepare(&services, &mut api);
+        lock(&self.services.api).0 = api;
+        self.services.session.store(api.session_id, SeqCst);
+        prepared
+    }
+
+    /// Hooks the window `find` names while none is hooked. A window that is not found yet is
+    /// looked for again by the next call.
+    fn hook(&self, leaves: &Leaves, find: fn(&Leaves) -> Handle) {
+        let mut window = lock(&self.services.window);
+        if !window.is_none() {
+            return;
+        }
+        let found = find(leaves);
+        if found.is_none() {
+            return;
+        }
+        *window = found;
+        self.services.previous.store(leaves.subclass(found), SeqCst);
+    }
+
+    /// rsfu_preview_region's Editor input: the preview's parent once it exists.
+    pub(super) fn preview_input(&self, leaves: &Leaves) {
+        if self.services.editor.load(SeqCst) {
+            self.hook(leaves, Leaves::preview_parent);
+        }
+    }
+
+    /// Plugin unload, after Unity's device shutdown: the input window gets its procedure back
+    /// while ours is still installed, then the log closes. Later lines reach the debugger only.
+    pub(super) fn unload(&self, leaves: &Leaves) {
+        {
+            let mut window = lock(&self.services.window);
+            let previous = self.services.previous.load(SeqCst);
+            if !window.is_none() && !previous.is_null() {
+                leaves.restore(*window, previous);
+            }
+            *window = Handle::NONE;
+            self.services.previous.store(null_mut(), SeqCst);
+        }
+        let mut file = lock(&self.services.log);
+        if !file.is_none() {
+            leaves.log_close(*file);
+            *file = Handle::NONE;
+        }
+    }
+
+    /// The bridge's CPU events reach the Runtime unchanged; a frame's begin and end bracket the
+    /// frame received input is keyed to.
+    pub(super) fn cpu_event(&self, leaves: &Leaves, event: &rsf_game_cpu_event) {
+        if event.stage == RSF_GAME_CPU_FRAME_BEGIN {
+            self.services
+                .input_frame
+                .store(event.source_frame_id, SeqCst);
+        }
+        leaves.cpu(event);
+        if event.stage == RSF_GAME_CPU_FRAME_END {
+            self.services.input_frame.store(0, SeqCst);
+        }
+    }
+
+    /// Every message the input window dequeues, classified by its range and WM_INPUT by its raw
+    /// device. A keyed one outside a CPU frame is unframed. Returns the procedure to forward to.
+    pub(super) fn window_message(
+        &self,
+        leaves: &Leaves,
+        message: u32,
+        lparam: isize,
+    ) -> *mut c_void {
+        let mut kind = 0;
+        if (WM_KEYFIRST..=WM_KEYLAST).contains(&message) {
+            kind = RSF_GAME_INPUT_KEYBOARD;
+        }
+        if (WM_MOUSEFIRST..=WM_MOUSELAST).contains(&message) {
+            kind = RSF_GAME_INPUT_MOUSE;
+        }
+        if message == WM_INPUT
+            && let Some(device) = leaves.raw_input_type(lparam)
+        {
+            kind = match device {
+                RIM_TYPEKEYBOARD => RSF_GAME_INPUT_KEYBOARD,
+                RIM_TYPEMOUSE => RSF_GAME_INPUT_MOUSE,
+                _ => 0,
+            };
+        }
+        let now = leaves.timestamp();
+        let source = self.services.input_frame.load(SeqCst);
+        let mut flags = RSF_GAME_CPU_INPUT_KEYED | RSF_GAME_CPU_WINDOW_MESSAGE;
+        if source == 0 && kind != 0 {
+            flags |= RSF_GAME_CPU_INPUT_UNFRAMED;
+        }
+        leaves.cpu(&self.services.received(source, now, kind, message, flags));
+        self.services.previous.load(SeqCst)
+    }
+
+    /// rsfu_input after its argument checks: managed received input, keyed to `frame` while it
+    /// is the CPU frame in progress and unframed otherwise.
+    pub(super) fn input(&self, leaves: &Leaves, frame: u64, kinds: u32) -> i32 {
+        let now = leaves.timestamp();
+        let source = if self.services.input_frame.load(SeqCst) == frame {
+            frame
+        } else {
+            0
+        };
+        let mut flags = RSF_GAME_CPU_INPUT_KEYED;
+        if source == 0 {
+            flags |= RSF_GAME_CPU_INPUT_UNFRAMED;
+        }
+        leaves.cpu(&self.services.received(source, now, kinds, 0, flags));
+        BACKEND_OK
+    }
+}
+
+/// rsf_game_host_services::log; user is the platform table.
+unsafe extern "C" fn host_log(user: *mut c_void, text: *const c_char) {
+    unsafe { rsf_unity_package_log(text, user.cast()) }
+}
+
+/// rsf_game_host_services::cpu_event; user is the platform table.
+unsafe extern "C" fn host_cpu_event(user: *mut c_void, event: *const rsf_game_cpu_event) {
+    if event.is_null() {
+        return;
+    }
+    if let Some(leaves) = unsafe { Leaves::adopt(user.cast()) } {
+        PACKAGE.cpu_event(&leaves, unsafe { &*event });
+    }
+}
+
+/// The package log in every form package.cpp lends it.
+///
+/// # Safety
+/// `text` is null or NUL-terminated; `platform` is null or package.cpp's table.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_unity_package_log(
+    text: *const c_char,
+    platform: *const rsf_unity_package_platform,
+) {
+    if text.is_null() {
+        return;
+    }
+    if let Some(leaves) = unsafe { Leaves::adopt(platform) } {
+        PACKAGE.log_text(&leaves, unsafe { CStr::from_ptr(text) });
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_unity_package_window_message(
+    message: u32,
+    lparam: isize,
+    platform: *const rsf_unity_package_platform,
+) -> *mut c_void {
+    match unsafe { Leaves::adopt(platform) } {
+        Some(leaves) => PACKAGE.window_message(&leaves, message, lparam),
+        None => PACKAGE.services.previous.load(SeqCst),
+    }
+}
+
+/// rsfu_input's checks come first, as they did; nothing is reported for no kinds.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_unity_package_input(
+    frame: u64,
+    kinds: u32,
+    platform: *const rsf_unity_package_platform,
+) -> c_int {
+    if frame == 0 || kinds & !INPUT_KINDS != 0 {
+        return BACKEND_INVALID_ARGUMENT;
+    }
+    if kinds == 0 {
+        return BACKEND_OK;
+    }
+    match unsafe { Leaves::adopt(platform) } {
+        Some(leaves) => PACKAGE.input(&leaves, frame, kinds),
+        None => BACKEND_FEATURE_FAILED,
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_unity_package_preview_input(platform: *const rsf_unity_package_platform) {
+    if let Some(leaves) = unsafe { Leaves::adopt(platform) } {
+        PACKAGE.preview_input(&leaves);
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_unity_package_unload(platform: *const rsf_unity_package_platform) {
+    if let Some(leaves) = unsafe { Leaves::adopt(platform) } {
+        PACKAGE.unload(&leaves);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rsfu_input_checks_its_arguments_first() {
+        unsafe {
+            assert_eq!(
+                rsf_unity_package_input(0, 1, std::ptr::null()),
+                BACKEND_INVALID_ARGUMENT
+            );
+            assert_eq!(
+                rsf_unity_package_input(1, 8, std::ptr::null()),
+                BACKEND_INVALID_ARGUMENT
+            );
+            assert_eq!(rsf_unity_package_input(1, 0, std::ptr::null()), BACKEND_OK);
+            assert_eq!(
+                rsf_unity_package_input(1, 7, std::ptr::null()),
+                BACKEND_FEATURE_FAILED
+            );
+            // A null text or table is ignored.
+            rsf_unity_package_log(std::ptr::null(), std::ptr::null());
+            rsf_unity_package_log(c"x".as_ptr(), std::ptr::null());
+            host_cpu_event(null_mut(), std::ptr::null());
+            rsf_unity_package_preview_input(std::ptr::null());
+            rsf_unity_package_unload(std::ptr::null());
+        }
+    }
+}

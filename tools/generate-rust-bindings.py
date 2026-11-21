@@ -201,9 +201,12 @@ generate("games/unity-mono/src/package_abi.rs", "integrations/unity/native/packa
          ["-include", "rescaleframe/native_fg.h", "-include", "rescaleframe/native_cpu.h",
           "-include", "rescaleframe/sr_session.h", "-Iruntime/orchestrator/include", "-Iruntime/contract/include",
           "-Iruntime/backends/dlss/include", "-Iruntime/graphics/include", "-Iruntime/presentation/include",
-          "-Isdk/game/include"],
+          "-Isdk/game/include", "-Igames/unity-mono/include"],
          ["--no-recursive-allowlist", "--with-derive-default", "--raw-line", "#![allow(dead_code)]",
-          "--raw-line", "use rsf_game_sys::rsf_game_render_pass;",
+          "--raw-line", "type wchar_t = u16;",
+          "--raw-line", "use rsf_game_sys::{rsf_game_cpu_event, rsf_game_host_services, "
+          "rsf_game_render_config_fn, rsf_game_render_pass, rsf_game_render_pass_fn};",
+          "--raw-line", "use crate::plugin_abi::rsf_unity_native_api;",
           "--raw-line", "use crate::runtime_abi::rsf_fg12_setup;"])
 generate("runtime/orchestrator/src/render_abi.rs", "runtime/orchestrator/include/rescaleframe/frame_assembly.h",
          "rsf_(frame_resources|pipeline_camera_frame|dlss_frame|fg_choice|render_link|sr_session_setup|sr_session_status|sr_provider|fg_host|fg_session_status|generation_provider|native_fg_status|motion_resolve_params|render_settings|sharpening_options)",
