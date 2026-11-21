@@ -40,12 +40,27 @@ and kept its embedded Runtime linkage.
 
 Callers still need to account for documented behavior changes. Frame assembly requires the output record to advertise its capacity and refuses a zero or short capacity before writing. Overlay settings callbacks can read the committed values, and a second write returns `BUSY` while the first is active. Vulkan capture and SR recording require completion proof before readbacks can be published or reused. The [implementation tracker](implementation.md) records the fixture coverage for those changes.
 
+## Remaining native owners
+
+The Runtime DLL publishes the generic shader patch service through
+`rsf_get_shader_patch_api`. Anomaly borrows that table from the
+carrier-loaded Runtime. The Anomaly manifest port owns the adapter's
+admitted rows and lookup, while the Runtime service still owns the
+shared pack rules, claims registry, compilation cache and interception
+inventory in C++. Those service owners are part of the remaining
+core port. [Runtime shader patching](research/runtime-shader-patching.md)
+
+Anomaly's Rust SR stage also has a second configuration record in the
+native stage facade. The facade mirrors live settings and keeps the
+INI and vendor paths for resets and availability checks. The remaining
+stage port moves that retained configuration to the Rust owner.
+
 ## Verification coverage
 
 | Requirement | Recorded evidence | Still open |
 | --- | --- | --- |
 | Core ownership | Rust owns plugin sessions, frame assembly, capture, provider admission, latency and pacing, presentation buffers, readbacks, paired physical DXGI swapchain and queue, and shared D3D11 panel state. The OpenGL and FidelityFX Vulkan WSI routes also use Rust ownership. The merged Standard clone exercised native rendering, DLSS SR and a DLSS-G to FSR3 and back provider transition. [Implementation tracker](implementation.md) · [Shared overlay host evidence](research/rust-overlay-host.md#integrated-runtime-and-standard-game-run) | Complete the ownership audit and independent device checks. Fullscreen and D3D11-on-12 overlay wrapping remain open. |
-| Stable C ABI and linked consumers | The GameSDK and contract headers match the baseline. The merged overlay host kept all eight checked PE export inventories and the Anomaly DLL's by-name Runtime lookup. Its Vulkan Streamline-disabled build kept all four checked inventories and passed 13 CPU and ABI contracts and the direct stub probe. [Implementation tracker](implementation.md) | Recheck the final artifacts after any remaining ownership changes. |
+| Stable C ABI and linked consumers | The GameSDK and contract headers match the baseline. The merged overlay host kept all eight checked Release PE inventories and Anomaly's by-name Runtime lookup. The enabled Debug build matched the four checked core inventories and Anomaly and passed 11 contracts. The Vulkan Streamline-disabled Release build kept all four checked inventories and passed 13 contracts and the direct stub probe. [Implementation tracker](implementation.md) | Recheck the final artifacts after the remaining ownership changes. |
 | C++ Anomaly baseline | Standard and AVX ran the existing C++ adapter with the Rust Runtime. Standard exercised the overlay, held-key gameplay, SR switching and DLSS-G. Both shut down through the engine. [C++ adapter baseline](research/rust-anomaly-cpp-baseline.md) | The baseline covers the exact recorded executable and payload hashes. |
 | Rust Anomaly game acceptance | Both profiles reloaded the Rust manifest in the foreground and drew the merged overlay through resize. Standard switched native and DLSS SR and changed FG providers. AVX switched SR providers with DLSS-G active and returned gameplay mouse input after closing the panel. Both shut down cleanly. Earlier Standard evidence covers refused-SR spatial recovery. [Rust adapter game evidence](research/rust-anomaly-sr-pass.md) · [AVX foreground reload](research/rust-anomaly-shader-manifest.md#avx-foreground-settings-and-pack-reload) · [Merged overlay host](research/rust-overlay-host.md#integrated-runtime-and-standard-game-run) | Verify held-key gameplay and repeat affected paths after any remaining ownership changes. |
 | Device and shader evidence | Offscreen SR and sharpening runs, exact Vulkan capture readbacks and live Anomaly results are recorded separately from synthetic contracts. [SR device results](research/rust-anomaly-sr-pass.md#offscreen-device-acceptance) · [Vulkan capture results](research/rust-vulkan-readback-owner.md#offscreen-device-acceptance) · [Vulkan sharpening results](research/rust-vulkan-sharpening-cutover.md#offscreen-device-acceptance) | The OpenGL sharing and D3D12 readback device fixtures and a windowed Vulkan DLSS-G capture remain unverified. |

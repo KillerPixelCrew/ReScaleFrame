@@ -139,3 +139,16 @@ probe still received `NOT_SUPPORTED` from Streamline initialization
 and `NOT_COMPILED` from DLSS-G creation. The latter cleared both
 outputs and made no host callbacks. Logs are under
 `.local/rust-1.94.1-verification/integrated-streamline-disabled-9e2cd87/`.
+
+## Integrated Debug verification
+
+The enabled MSVC Debug build at `8268cb9` passed all 11 focused
+contracts. The selection covers the Runtime overlay C++ and C11
+clients, the no-SR client, Anomaly bootstrap, embedded render and
+callback host clients, D3D11 host, Vulkan export and latency checks,
+FidelityFX WSI, and the shared shim. Runtime, AC7, Loader and Minecraft
+matched the recorded name and ordinal inventories. Anomaly matched its
+three staged entry points and retained by-name Runtime discovery.
+The GameSDK and runtime contract headers matched the baseline byte for
+byte. Build and test logs are under
+`.local/rust-1.94.1-verification/merged-core-debug-8268cb9-*`.
