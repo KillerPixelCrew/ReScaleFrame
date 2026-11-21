@@ -433,6 +433,13 @@ the facade. The merged queue and command-list queries hold the read
 lease through the native lookup and refuse during retirement.
 See [the D3D11 presentation audit](research/rust-d3d11-present-cutover.md).
 
+The scoped owner check now queries the caller's live COM receiver for
+its canonical identity and compares that address with the published
+facade. It rechecks publication after the query. The synthetic scoped
+contract unpublishes the alias during lookup and verifies refusal.
+All 371 pinned Rust tests and eight focused MSVC Release contracts
+passed. The linked bridge fixture built and its device run is pending.
+
 The combined bridge build passed 15 focused CPU and ABI contracts in
 Debug and Release, and all 290 locked Rust tests, formatting and Clippy.
 Both configurations match the reference Runtime, AC7, Loader and
@@ -1073,6 +1080,11 @@ contracts passed in the worker build. The matching Release binaries
 kept their export names and ordinals. The device fixture built and
 device recovery remains unverified.
 [OpenGL shared surface audit](research/rust-gl-shared-surface-cutover.md)
+
+The integrated build passed all 371 locked Rust tests, formatting,
+Clippy and eight MSVC Release contracts. The test gate skipped the
+OpenGL device fixture. Runtime, AC7, Loader, its two aliases, Minecraft,
+Godot and Anomaly retained their export names and ordinals.
 
 Rust now owns D3D12 FG source identity, copied resources and retirement.
 Unity confirms its recorded sources at the flush event before the DXGI

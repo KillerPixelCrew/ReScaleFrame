@@ -355,7 +355,11 @@ uint32_t client_size(void* window, uint32_t* width, uint32_t* height) {
     RECT rect{}; if (!GetClientRect(static_cast<HWND>(window), &rect)) return 0;
     *width = UINT(rect.right); *height = UINT(rect.bottom); return 1;
 }
-int32_t identity(void* left, void* right) { return same_identity(static_cast<IUnknown*>(left), static_cast<IUnknown*>(right)) ? 1 : 0; }
+void* canonical_identity(void* receiver) {
+    ComPtr<IUnknown> identity;
+    return SUCCEEDED(static_cast<IUnknown*>(receiver)->QueryInterface(IID_PPV_ARGS(&identity)))
+        ? identity.Get() : nullptr;
+}
 void add_ref(void* object) { static_cast<IUnknown*>(object)->AddRef(); }
 void release(void* object) { static_cast<IUnknown*>(object)->Release(); }
 rsf_streamline_host* sl(void* host) { return static_cast<rsf_streamline_host*>(host); }
@@ -760,7 +764,7 @@ int32_t verify_outer(void* inner, void* window, void* device, void* context, voi
 
 const rsf_d3d11p_platform platform{
     .provider_table = leaf::provider_table, .observer_present = leaf::observer_present,
-    .window_valid = leaf::window_valid, .client_size = leaf::client_size, .same_identity = leaf::identity,
+    .window_valid = leaf::window_valid, .client_size = leaf::client_size, .canonical_identity = leaf::canonical_identity,
     .add_ref = leaf::add_ref, .release = leaf::release,
     .host_sleep = leaf::host_sleep, .host_marker = leaf::host_marker, .host_acquire = leaf::host_acquire,
     .host_input = leaf::host_input, .host_abort = leaf::host_abort, .host_reflex_off = leaf::host_reflex_off,

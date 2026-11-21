@@ -58,7 +58,8 @@ typedef struct rsf_d3d11p_platform {
     void (*observer_present)(rsf_observer_present_event* event);
     uint32_t (*window_valid)(void* window);
     uint32_t (*client_size)(void* window, uint32_t* width, uint32_t* height);
-    int32_t (*same_identity)(void* left, void* right);
+    /* Compare the returned address only. The caller holds the live receiver. */
+    void* (*canonical_identity)(void* receiver);
     void (*add_ref)(void* object);
     void (*release)(void* object);
     /* Streamline host. */

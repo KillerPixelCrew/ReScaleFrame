@@ -2059,9 +2059,17 @@ pub(crate) unsafe extern "C" fn rsf_core_d3d11p_is_owner(
     if active == swapchain {
         return 1;
     }
+    if OUTER_ALIAS.load(Ordering::Acquire) != swapchain {
+        return 0;
+    }
+    // The facade publishes its canonical COM interface address. Query only the
+    // caller's live receiver, since the cached address can retire during the call.
+    let identity = unsafe { (p.canonical_identity)(swapchain) };
     i32::from(
-        OUTER_ALIAS.load(Ordering::Acquire) == swapchain
-            && unsafe { (p.same_identity)(swapchain, active) } != 0,
+        identity == active
+            && ACTIVE_BRIDGE.load(Ordering::Acquire) == active
+            && OUTER_ALIAS.load(Ordering::Acquire) == swapchain
+            && rsf_core_d3d11p_has_owner() != 0,
     )
 }
 

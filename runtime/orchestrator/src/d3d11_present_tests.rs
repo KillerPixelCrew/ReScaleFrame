@@ -39,6 +39,7 @@ struct Fake {
     drain_result: i32,
     retirement_result: i32,
     verify_result: i32,
+    unpublish_alias_on_lookup: bool,
     referenced: bool,
     client: (u32, u32),
     remake_result: i32,
@@ -82,6 +83,7 @@ impl Fake {
             drain_result: S_OK,
             retirement_result: OK,
             verify_result: S_OK,
+            unpublish_alias_on_lookup: false,
             referenced: false,
             client: (800, 600),
             remake_result: S_OK,
@@ -225,8 +227,15 @@ unsafe extern "C" fn client_size(_: Raw, width: *mut u32, height: *mut u32) -> u
     }
     1
 }
-unsafe extern "C" fn same_identity(_: Raw, _: Raw) -> i32 {
-    1
+unsafe extern "C" fn canonical_identity(receiver: Raw) -> Raw {
+    if receiver != OUTER_ALIAS.load(Ordering::Acquire) {
+        return null_mut();
+    }
+    let identity = ACTIVE_BRIDGE.load(Ordering::Acquire);
+    if with(|fake| fake.unpublish_alias_on_lookup) {
+        OUTER_ALIAS.store(null_mut(), Ordering::Release);
+    }
+    identity
 }
 unsafe extern "C" fn add_ref(_: Raw) {
     with(|fake| fake.refs += 1);
@@ -525,7 +534,7 @@ static PLATFORM: Platform = Platform {
     observer_present,
     window_valid,
     client_size,
-    same_identity,
+    canonical_identity,
     add_ref,
     release,
     host_sleep,
@@ -1478,6 +1487,12 @@ fn scoped_creation_admits_only_the_verified_outer_chain() {
     );
     assert_eq!(unsafe { rsf_core_d3d11p_is_owner(&PLATFORM, bridge) }, 1);
     assert_eq!(unsafe { rsf_core_d3d11p_is_owner(&PLATFORM, outer) }, 1);
+    with(|fake| fake.unpublish_alias_on_lookup = true);
+    assert_eq!(
+        unsafe { rsf_core_d3d11p_is_owner(&PLATFORM, outer) },
+        0,
+        "the alias was unpublished while its identity query ran"
+    );
     assert_eq!(rsf_core_d3d11p_dispatch_admit(bridge), 1);
     unsafe { bridge_release_owned(bridge) };
 

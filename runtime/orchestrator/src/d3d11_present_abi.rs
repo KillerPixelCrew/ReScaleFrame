@@ -92,7 +92,7 @@ pub(crate) struct rsf_d3d11p_platform {
     pub observer_present: unsafe extern "C" fn(*mut rsf_observer_present_event),
     pub window_valid: unsafe extern "C" fn(Raw) -> u32,
     pub client_size: unsafe extern "C" fn(Raw, *mut u32, *mut u32) -> u32,
-    pub same_identity: unsafe extern "C" fn(Raw, Raw) -> i32,
+    pub canonical_identity: unsafe extern "C" fn(Raw) -> Raw,
     pub add_ref: unsafe extern "C" fn(Raw),
     pub release: unsafe extern "C" fn(Raw),
     pub host_sleep: unsafe extern "C" fn(Raw, u64) -> i32,
