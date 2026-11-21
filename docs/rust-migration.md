@@ -238,6 +238,11 @@ create, requirements, memory choice, allocate and bind sequence in
 Rust. The shared typed Vulkan leaves keep the same descriptors.
 [Image allocation source comparison](research/rust-vulkan-ffx-sr-images.md)
 
+The FidelityFX Vulkan SR owner also records first-use mask and output
+initialization and output copy-back in Rust. It preserves the narrower
+shader and transfer access masks, the exact allocation extent and the
+failed-dispatch history behavior. [FFX image recording](research/rust-vulkan-ffx-sr-images.md#first-use-initialization-and-output-publication)
+
 The integrated and standalone XeSS Vulkan bridge use the same Rust
 Present input checks and resource transition and tag sequence. The
 native leaves retain typed D3D12 and SDK calls. The source comparison

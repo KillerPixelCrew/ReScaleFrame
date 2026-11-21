@@ -851,6 +851,12 @@ and remains unrun. Build and live observer verification remain open.
 
 ## Rust orchestrator and first Anomaly port
 
+FidelityFX Vulkan SR now records its first-use mask clear and
+output copy-back in Rust. Source comparison matched the five
+barriers, narrower shader and transfer access masks, capture order
+and public SRVK forwarding. Builds and device checks remain open.
+[FidelityFX SR recording](research/rust-vulkan-ffx-sr-images.md#first-use-initialization-and-output-publication)
+
 The shared presentation bridge now selects the plain physical
 swapchain's queue, flip effect, tearing flag and buffer overrides
 in Rust. The native DXGI create and interface query retain their
