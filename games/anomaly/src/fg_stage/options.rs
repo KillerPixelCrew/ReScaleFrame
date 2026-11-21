@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use super::Frontend;
 use crate::fg_stage_abi::*;
+use crate::ini;
 use std::ffi::{CString, OsString};
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::PathBuf;
@@ -8,12 +9,7 @@ use std::sync::Mutex;
 use std::{ptr, slice};
 use windows_sys::Win32::Foundation::{MAX_PATH, SYSTEMTIME};
 use windows_sys::Win32::System::SystemInformation::GetLocalTime;
-use windows_sys::Win32::System::WindowsProgramming::{
-    GetPrivateProfileIntW, GetPrivateProfileStringW,
-};
 use windows_sys::core::{PCWSTR, w};
-
-const SECTION: PCWSTR = w!("Anomaly");
 
 #[derive(Clone, Copy)]
 pub(super) struct CaptureSettings {
@@ -33,9 +29,8 @@ impl CaptureSettings {
         }
     }
 
-    pub(super) fn read(ini: PCWSTR) -> Self {
-        let get =
-            |key, fallback| unsafe { GetPrivateProfileIntW(SECTION, key, fallback, ini) as u32 };
+    pub(super) unsafe fn read(path: PCWSTR) -> Self {
+        let get = |key, fallback| unsafe { ini::read_int(path, key, fallback) as u32 };
         Self::new(
             get(w!("FGCapture"), 0) != 0,
             get(w!("FGCaptureStart"), 600),
@@ -118,10 +113,9 @@ pub(super) struct Options {
 
 impl Options {
     pub(super) fn read(ini: PCWSTR) -> Self {
-        let number =
-            |key, fallback| unsafe { GetPrivateProfileIntW(SECTION, key, fallback, ini) as u32 };
+        let number = |key, fallback| unsafe { ini::read_int(ini, key, fallback) as u32 };
         let enabled = number(w!("FG"), 0) != 0;
-        let capture = CaptureSettings::read(ini);
+        let capture = unsafe { CaptureSettings::read(ini) };
         let native = rsf_anomaly_fg_config {
             // The panel can enable generation live only with a bridge installed at startup.
             bridge: enabled || number(w!("FGBridge"), 1) != 0,
@@ -145,11 +139,9 @@ impl Options {
             .unwrap_or_else(|| std::path::Path::new(""));
         let text = |key, fallback: PathBuf| {
             let mut buffer = [0u16; MAX_PATH as usize];
-            let len = unsafe {
-                GetPrivateProfileStringW(SECTION, key, w!(""), buffer.as_mut_ptr(), MAX_PATH, ini)
-            };
+            let len = unsafe { ini::read_text(ini, key, w!(""), &mut buffer) };
             if len > 0 {
-                String::from_utf16_lossy(&buffer[..len as usize])
+                String::from_utf16_lossy(&buffer[..len])
             } else {
                 String::from_utf16_lossy(&fallback.as_os_str().encode_wide().collect::<Vec<_>>())
             }

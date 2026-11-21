@@ -26,10 +26,7 @@ use windows_sys::Win32::System::LibraryLoader::{
 use windows_sys::Win32::System::Performance::QueryPerformanceCounter;
 use windows_sys::Win32::System::SystemInformation::GetTickCount64;
 use windows_sys::Win32::System::Threading::GetCurrentProcessId;
-use windows_sys::Win32::System::WindowsProgramming::{
-    GetPrivateProfileIntW, GetPrivateProfileStringW,
-};
-use windows_sys::core::{PCWSTR, w};
+use windows_sys::core::w;
 
 // rsf_anomaly_start status values. The carrier logs them; they are unchanged from the C++ entry.
 const READY: u32 = 0;
@@ -46,7 +43,6 @@ const OVERLAY_REFUSED: u32 = 9;
 const RSF_OK: i32 = 0;
 const SESSION_ABI_VERSION: u32 = 1;
 const PATH_CAPACITY: usize = 32768;
-const SECTION: PCWSTR = w!("Anomaly");
 
 /// The C++ owners this entry orders, supplied by the export in bootstrap.cpp. Every leaf is noexcept, runs under the
 /// entry lock and takes a build index this module selected from `builds`.
@@ -56,7 +52,6 @@ pub(crate) struct Leaves {
     build_count: usize,
     label: unsafe extern "C" fn(usize) -> *const c_char,
     sha256: unsafe extern "C" fn(*const u16, *mut c_char) -> bool,
-    register_options: unsafe extern "C" fn(*const u16),
     /// Returns whether SR is selected; configures it only when the flag is set.
     sr: unsafe extern "C" fn(*const u16, bool, rsf_game_log_fn) -> bool,
     motion: unsafe extern "C" fn(*const u16, rsf_game_log_fn),
@@ -175,17 +170,6 @@ fn log_result(operation: &str, result: i32) {
 }
 
 /// The NUL-terminated wide string at `text`, or None when it is null or empty.
-unsafe fn wide_z<'a>(text: *const u16) -> Option<&'a [u16]> {
-    if text.is_null() {
-        return None;
-    }
-    let mut length = 0;
-    while unsafe { *text.add(length) } != 0 {
-        length += 1;
-    }
-    (length != 0).then(|| unsafe { slice::from_raw_parts(text, length + 1) })
-}
-
 fn module_path(module: HMODULE) -> Option<Vec<u16>> {
     let mut path = vec![0u16; PATH_CAPACITY];
     let length =
@@ -230,16 +214,7 @@ fn select_build(builds: &[BuildIdentity], executable: &[u16], leaves: &Leaves) -
 
 fn observe_selected(ini: &[u16]) -> bool {
     let mut mode = [0u16; 64];
-    let length = unsafe {
-        GetPrivateProfileStringW(
-            SECTION,
-            w!("Mode"),
-            w!(""),
-            mode.as_mut_ptr(),
-            64,
-            ini.as_ptr(),
-        )
-    } as usize;
+    let length = unsafe { crate::ini::read_text(ini.as_ptr(), w!("Mode"), w!(""), &mut mode) };
     mode[..length.min(mode.len())]
         .iter()
         .copied()
@@ -247,7 +222,7 @@ fn observe_selected(ini: &[u16]) -> bool {
 }
 
 unsafe fn enter(configuration: *const u16, leaves: &Leaves) -> u32 {
-    let Some(ini) = (unsafe { wide_z(configuration) }) else {
+    let Some(ini) = (unsafe { crate::ini::path(configuration) }) else {
         return CONFIGURATION_REFUSED;
     };
     let attributes = unsafe { GetFileAttributesW(ini.as_ptr()) };
@@ -284,7 +259,7 @@ unsafe fn enter(configuration: *const u16, leaves: &Leaves) -> u32 {
     );
     let observe = observe_selected(ini);
     // Overlay=1 is independent of Mode: it wires only the shared overlay, never SR or FG.
-    let overlay = unsafe { GetPrivateProfileIntW(SECTION, w!("Overlay"), 0, ini.as_ptr()) } != 0;
+    let overlay = unsafe { crate::ini::read_int(ini.as_ptr(), w!("Overlay"), 0) } != 0;
     if !observe && !overlay {
         write_log(b"Anomaly startup refused: only explicitly selected Observe mode or Overlay=1 is currently validated; SR/FG is not implemented.");
         return MODE_REFUSED;
@@ -300,12 +275,24 @@ unsafe fn enter(configuration: *const u16, leaves: &Leaves) -> u32 {
         observe,
         overlay,
     };
-    orchestrate(&mut entry, leaves, &request, &runtime)
+    orchestrate(
+        &mut entry,
+        leaves,
+        &request,
+        &runtime,
+        crate::adapter_options::register,
+    )
 }
 
 /// The cold-start order: restart options, SR, motion, the FG bridge and input facts before the engine creates its
 /// device, then the Observe session, then the overlay. A retry repeats only the steps that have not completed.
-fn orchestrate(entry: &mut Entry, leaves: &Leaves, request: &Request, runtime: &Runtime) -> u32 {
+fn orchestrate(
+    entry: &mut Entry,
+    leaves: &Leaves,
+    request: &Request,
+    runtime: &Runtime,
+    register_options: fn(&[u16]),
+) -> u32 {
     let ini = request.ini.as_ptr();
     // A refused prepare or start can leave a session the Runtime still owns. Nothing starts or reconfigures beside it.
     if request.observe && !entry.observed && !entry.session.is_null() {
@@ -313,7 +300,7 @@ fn orchestrate(entry: &mut Entry, leaves: &Leaves, request: &Request, runtime: &
         return PREPARE_REFUSED;
     }
     if !entry.options_registered {
-        unsafe { (leaves.register_options)(ini) };
+        register_options(request.ini);
         entry.options_registered = true;
     }
     if !entry.stages_configured {

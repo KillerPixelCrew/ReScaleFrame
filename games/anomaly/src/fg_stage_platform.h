@@ -60,9 +60,6 @@ bool rsf_anomaly_fg_install(void* runtime, uint32_t depth_rva, const rsf_anomaly
 bool rsf_anomaly_fg_install_with(const rsf_d3d11_present_api*, const rsf_d3d11_fg_api*,
     const rsf_anomaly_fg_platform*) noexcept;
 bool rsf_anomaly_fg_installed() noexcept;
-uint32_t rsf_anomaly_fg_get_scope_hold(uint32_t fallback) noexcept;
-void rsf_anomaly_fg_set_scope_hold(uint32_t frames) noexcept;
-void rsf_anomaly_fg_reload_capture(const wchar_t* ini) noexcept;
 void rsf_anomaly_fg_set_depth_source(rsf_anomaly_fg_depth_source) noexcept;
 void rsf_anomaly_fg_set_overlay_sink(rsf_anomaly_fg_overlay_present, void*) noexcept;
 void rsf_anomaly_fg_stage_camera(const float*, const float*) noexcept;

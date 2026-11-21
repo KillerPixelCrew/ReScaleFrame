@@ -598,7 +598,7 @@ impl Default for State {
     }
 }
 
-// The options the panel changes while the game runs (adapter_options.h). Read on the render thread without the lock.
+// The options the panel changes while the game runs. Read on the render thread without the lock.
 struct Live {
     colour_transport: AtomicBool,
     exposure_auto: AtomicBool,

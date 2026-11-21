@@ -2,10 +2,9 @@
 // Native leaves of the SR stage driver. sr_stage.rs owns the lifecycle, view admission, the H1 and seam ordering,
 // jitter and camera publication, capture and burst bookkeeping, the configuration (INI path, vendor directories, live
 // panel options) and status (sr_stage_platform.h). This file keeps the guarded engine reads, the stage hooks and
-// trampolines, the SwapController with its D3D11 host, typed INI and file calls and the TemporalDriver facade.
+// trampolines, the SwapController with its D3D11 host, the vendor file probe and the TemporalDriver facade.
 #include "sr_stage.h"
 #include "sr_stage_platform.h"
-#include "adapter_options.h"
 #include "engine_slots.h"
 #include "native_geometry.h"
 #include "native_hooks.h"
@@ -30,12 +29,16 @@
 #include <cmath>
 #include <cstring>
 #include <cwchar>
-#include <string>
 #include <string_view>
+#include <utility>
 
 namespace rsf { uint32_t texture_pixel_bytes(DXGI_FORMAT format); }
 
 extern "C" {
+int32_t rsf_anomaly_sr_ini_int(const void*, const char*, int32_t) noexcept;
+uint32_t rsf_anomaly_sr_ini_text(const void*, const char*, const char*, uint16_t*, uint32_t) noexcept;
+void rsf_anomaly_sr_persist_int(const char*, int32_t) noexcept;
+void rsf_anomaly_sr_persist_text(const char*, const char*) noexcept;
 void rsf_anomaly_sr_stage_register(const rsf_anomaly_sr_stage_platform*) noexcept;
 void rsf_anomaly_sr_stage_read_options(const void*, rsf_anomaly_sr_stage_config*) noexcept;
 float rsf_anomaly_sr_stage_read_scale(const void*, bool*) noexcept;
@@ -283,12 +286,6 @@ JitterState to_native(const rsf_anomaly_sr_jitter_state& s) noexcept {
     return out;
 }
 SrSettings to_native(const rsf_anomaly_sr_settings& s) noexcept { return {s.enabled, s.backend, s.quality, s.preset}; }
-std::wstring widen(const char* text) {
-    std::wstring out;
-    for (; text && *text; ++text) out.push_back(static_cast<unsigned char>(*text));
-    return out;
-}
-
 // ---- guards and hooks -----------------------------------------------------------------------------------------------
 // The original can re-enter draw callbacks, so the stage lock is held only while changing the camera.
 // Scope cleanup also restores the camera if an engine C++ exception leaves the original.
@@ -648,21 +645,10 @@ const rsf_anomaly_sr_stage_platform platform{
         const bool disabled = hooks.disable();
         return restored && disabled;
     },
-    .ini_int = [](const void* ini, const char* key, int32_t fallback) {
-        try {
-            return static_cast<int32_t>(GetPrivateProfileIntW(L"Anomaly", widen(key).c_str(), fallback, static_cast<const wchar_t*>(ini)));
-        } catch (...) { return fallback; }
-    },
-    .ini_text = [](const void* ini, const char* key, const char* fallback, uint16_t* out, uint32_t capacity) -> uint32_t {
-        try {
-            return GetPrivateProfileStringW(L"Anomaly", widen(key).c_str(), widen(fallback).c_str(), reinterpret_cast<wchar_t*>(out),
-                capacity, static_cast<const wchar_t*>(ini));
-        } catch (...) { return 0; }
-    },
-    .persist_int = [](const char* key, int32_t value) { try { options::write_int(widen(key).c_str(), value); } catch (...) {} },
-    .persist_text = [](const char* key, const char* value) {
-        try { options::write_text(widen(key).c_str(), widen(value).c_str()); } catch (...) {}
-    },
+    .ini_int = rsf_anomaly_sr_ini_int,
+    .ini_text = rsf_anomaly_sr_ini_text,
+    .persist_int = rsf_anomaly_sr_persist_int,
+    .persist_text = rsf_anomaly_sr_persist_text,
     .apply_colour_transport = rsf_anomaly_runtime_set_colour_transport,
     .file_exists = [](const uint16_t* path) {
         const DWORD attributes = GetFileAttributesW(reinterpret_cast<const wchar_t*>(path));

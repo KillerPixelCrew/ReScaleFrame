@@ -13,7 +13,6 @@
 #include "native_geometry.h"
 #include "native_hooks.h"
 #include "sr_stage.h"
-#include "adapter_options.h"
 
 #include <windows.h>
 #include <cstdio>

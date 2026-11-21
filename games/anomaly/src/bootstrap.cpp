@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 // The cold entry's native leaves. bootstrap.rs owns the entry: build selection, the Runtime borrow, the plugin session,
-// the step order, retries, refusals and the adapter log. Each leaf forwards to the C++ owner of its options and hooks.
-#include "adapter_options.h"
+// the step order, retries, refusals and the adapter log.
 #include "build_profile.h"
 #include "fg_stage.h"
 #include "input_hooks.h"
@@ -19,7 +18,6 @@ struct rsf_anomaly_bootstrap_leaves {
     size_t build_count;
     const char* (*label)(size_t build) noexcept;
     bool (*sha256)(const wchar_t* path, char* hex65) noexcept;
-    void (*register_options)(const wchar_t* ini) noexcept;
     bool (*sr)(const wchar_t* ini, bool configure, rsf_game_log_fn log) noexcept;
     void (*motion)(const wchar_t* ini, rsf_game_log_fn log) noexcept;
     bool (*fg)(const wchar_t* ini, bool configure, HMODULE runtime, size_t build, rsf_game_log_fn log) noexcept;
@@ -43,7 +41,6 @@ constexpr rsf_anomaly_bootstrap_leaves leaves{
             return true;
         } catch (...) { return false; }
     },
-    [](const wchar_t* ini) noexcept { options::register_restart_options(ini); fg::register_options(); },
     [](const wchar_t* ini, bool configure, rsf_game_log_fn log) noexcept { return sr::configure(ini, configure, log, nullptr); },
     [](const wchar_t* ini, rsf_game_log_fn log) noexcept {
         motion::configure(ini, log, nullptr);

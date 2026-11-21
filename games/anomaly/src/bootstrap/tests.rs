@@ -22,7 +22,7 @@ unsafe extern "C" fn label(_: usize) -> *const c_char {
 unsafe extern "C" fn sha256(_: *const u16, _: *mut c_char) -> bool {
     false
 }
-unsafe extern "C" fn register_options(_: *const u16) {
+fn register_options(_: &[u16]) {
     REGISTERED.fetch_add(1, SeqCst);
 }
 unsafe extern "C" fn sr(_: *const u16, configure: bool, _: rsf_game_log_fn) -> bool {
@@ -112,7 +112,6 @@ fn retry_repeats_only_unfinished_steps() {
         build_count: builds.len(),
         label,
         sha256,
-        register_options,
         sr,
         motion,
         fg,
@@ -137,12 +136,15 @@ fn retry_repeats_only_unfinished_steps() {
 
     let mut entry = Entry::new();
     assert_eq!(
-        orchestrate(&mut entry, &leaves, &request, &runtime),
+        orchestrate(&mut entry, &leaves, &request, &runtime, register_options),
         OVERLAY_REFUSED
     );
     assert_eq!(counts(), [1, 1, 1, 1, 1, 1, 1, 1, 0]);
     OVERLAY_ACCEPTS.store(true, SeqCst);
-    assert_eq!(orchestrate(&mut entry, &leaves, &request, &runtime), READY);
+    assert_eq!(
+        orchestrate(&mut entry, &leaves, &request, &runtime, register_options),
+        READY
+    );
     assert!(entry.started && entry.observed);
     assert_eq!(counts(), [1, 1, 1, 1, 1, 1, 1, 2, 1]);
     assert!(OPTIONS_VALID.load(SeqCst));
@@ -150,13 +152,13 @@ fn retry_repeats_only_unfinished_steps() {
     PREPARE_RESULT.store(-4, SeqCst);
     let mut entry = Entry::new();
     assert_eq!(
-        orchestrate(&mut entry, &leaves, &request, &runtime),
+        orchestrate(&mut entry, &leaves, &request, &runtime, register_options),
         PREPARE_REFUSED
     );
     assert!(!entry.session.is_null() && !entry.observed);
     assert_eq!(counts(), [2, 2, 2, 2, 2, 2, 1, 2, 1]);
     assert_eq!(
-        orchestrate(&mut entry, &leaves, &request, &runtime),
+        orchestrate(&mut entry, &leaves, &request, &runtime, register_options),
         PREPARE_REFUSED
     );
     assert_eq!(counts(), [2, 2, 2, 2, 2, 2, 1, 2, 1]);

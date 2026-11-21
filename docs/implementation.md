@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now owns Anomaly's startup and FG overlay controls and the INI path
+used by their setters and the SR panel. The ten controls keep their
+order, ranges, defaults and restart behavior. FG still reloads capture
+settings only after a successful save. Bootstrap, SR, FG, motion and
+overlay share the same Win32 INI calls for the Anomaly section. The
+public plugin ABI is unchanged. This increment was reviewed at source
+level. Build and runtime validation remain open.
+
 The Anomaly motion loader now holds the Rust pack directly. Rust
 assembles patch requests and keeps the include buffer alive until
 the Runtime copies it. An opened engine include is closed even when

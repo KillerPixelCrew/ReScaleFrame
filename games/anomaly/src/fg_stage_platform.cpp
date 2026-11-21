@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: MIT
 #include "fg_stage.h"
-#include "adapter_options.h"
 #include "motion_stage.h"
 #include "sr_pass.h"
 #include "sr_stage.h"
 #include <d3d11.h>
 #include <wrl/client.h>
-#include <algorithm>
+#include <cstddef>
 #include <cstring>
 
 extern "C" bool rsf_anomaly_sr_stage_owns_depth(uint32_t native_frame) noexcept;
@@ -14,14 +13,6 @@ extern "C" bool rsf_anomaly_sr_stage_owns_depth(uint32_t native_frame) noexcept;
 namespace rsf::anomaly::fg {
 namespace {
 using Microsoft::WRL::ComPtr;
-
-int32_t capture_number(const wchar_t* key, int32_t fallback, uint32_t low, uint32_t high) noexcept {
-    return static_cast<int32_t>(std::clamp(static_cast<uint32_t>(options::read_int(key, fallback)), low, high));
-}
-
-void save_capture_option(const wchar_t* key, int32_t value) noexcept {
-    if (options::write_int(key, value)) rsf_anomaly_fg_reload_capture(options::ini_path().c_str());
-}
 
 // The caller passes HW.pBaseZB from the exact executable profile the carrier selected.
 void* engine_depth_view(uint32_t rva) noexcept {
@@ -78,36 +69,6 @@ const rsf_anomaly_fg_platform& platform() noexcept {
 bool configure_ini(const wchar_t* ini, bool apply, HMODULE runtime, const BuildProfile& build,
     rsf_game_log_fn log) noexcept {
     return rsf_anomaly_fg_configure_ini(ini, apply, runtime, build.sr->hw_base_zb_rva, log, &platform());
-}
-
-void register_options() noexcept {
-    options::add({"Frame generation scope hold (frames)", false, 1, 64, 1, 1, false,
-        []() noexcept {
-            return static_cast<int32_t>(rsf_anomaly_fg_get_scope_hold(
-                static_cast<uint32_t>(options::read_int(L"FGScopeHold", 4))));
-        },
-        [](int32_t value) noexcept {
-            if (value >= 1 && value <= 64 && options::write_int(L"FGScopeHold", value))
-                rsf_anomaly_fg_set_scope_hold(static_cast<uint32_t>(value));
-        }});
-    options::add({"Frame generation debug logging", true, 0, 1, 1, 1, true,
-        []() noexcept { return options::read_int(L"FGDebug", 0) != 0 ? 1 : 0; },
-        [](int32_t value) noexcept { options::write_int(L"FGDebug", value != 0 ? 1 : 0); }});
-    options::add({"Frame generation development runtime", true, 0, 1, 1, 1, true,
-        []() noexcept { return options::read_int(L"FGDevelopment", 0) != 0 ? 1 : 0; },
-        [](int32_t value) noexcept { options::write_int(L"FGDevelopment", value != 0 ? 1 : 0); }});
-    options::add({"Capture frame generation inputs", true, 0, 1, 1, 1, false,
-        []() noexcept { return options::read_int(L"FGCapture", 0) != 0 ? 1 : 0; },
-        [](int32_t value) noexcept { save_capture_option(L"FGCapture", value != 0 ? 1 : 0); }});
-    options::add({"FG capture start frame", false, 0, INT32_MAX, 1, 1, false,
-        []() noexcept { return capture_number(L"FGCaptureStart", 600, 0, INT32_MAX); },
-        [](int32_t value) noexcept { save_capture_option(L"FGCaptureStart", value); }});
-    options::add({"FG capture frame count", false, 0, 16, 1, 1, false,
-        []() noexcept { return capture_number(L"FGCaptureCount", 3, 0, 16); },
-        [](int32_t value) noexcept { save_capture_option(L"FGCaptureCount", value); }});
-    options::add({"FG capture interval (frames)", false, 1, INT32_MAX, 1, 1, false,
-        []() noexcept { return capture_number(L"FGCaptureInterval", 300, 1, INT32_MAX); },
-        [](int32_t value) noexcept { save_capture_option(L"FGCaptureInterval", value); }});
 }
 
 void configure(const Options& options, rsf_game_log_fn log, void* user) noexcept {

@@ -12,7 +12,7 @@ enum {
     RSF_ANOMALY_OVERLAY_API_REFUSED, RSF_ANOMALY_OVERLAY_CONFIGURE_REFUSED, RSF_ANOMALY_OVERLAY_HOOKS_REFUSED,
 };
 
-// One adapter option as the panel shows it (adapter_options.h). get and set run on the Present-owner thread.
+// One adapter option as the panel shows it. get and set run on the Present-owner thread.
 typedef struct rsf_anomaly_overlay_option {
     const char* label;
     uint32_t toggle, restart;

@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: MIT
 use super::capture::Schedule;
 use super::*;
+use crate::ini;
 use crate::overlay::rsf_anomaly_overlay_option_add;
 use crate::overlay_abi::rsf_anomaly_overlay_option as OptionEntry;
 use std::cell::UnsafeCell;
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
-use windows_sys::Win32::System::WindowsProgramming::{
-    GetPrivateProfileIntW, WritePrivateProfileStringW,
-};
 use windows_sys::core::w;
 
 #[derive(Default)]
@@ -25,15 +23,12 @@ impl Settings {
         if self.ini.is_empty() {
             return fallback as u32;
         }
-        unsafe { GetPrivateProfileIntW(w!("Anomaly"), key, fallback, self.ini.as_ptr()) as u32 }
+        unsafe { ini::read_int(self.ini.as_ptr(), key, fallback) as u32 }
     }
 
     fn save(&self, key: *const u16, value: i32) {
         if !self.ini.is_empty() {
-            let value: Vec<u16> = value.to_string().encode_utf16().chain([0]).collect();
-            unsafe {
-                WritePrivateProfileStringW(w!("Anomaly"), key, value.as_ptr(), self.ini.as_ptr())
-            };
+            unsafe { ini::write_int(self.ini.as_ptr(), key, value) };
         }
     }
 }

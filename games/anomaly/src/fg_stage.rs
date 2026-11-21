@@ -747,16 +747,14 @@ extern "C" fn rsf_anomaly_fg_installed() -> bool {
     installed().is_some()
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_fg_get_scope_hold(fallback: u32) -> u32 {
+pub(crate) fn scope_hold(fallback: u32) -> u32 {
     installed().map_or_else(
         || fallback.clamp(1, 64),
         |stage| stage.engine.lock().unwrap().policy.scope_hold(),
     )
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_fg_set_scope_hold(frames: u32) {
+pub(crate) fn set_scope_hold(frames: u32) {
     if let Some(stage) = installed() {
         stage
             .engine
@@ -767,10 +765,10 @@ extern "C" fn rsf_anomaly_fg_set_scope_hold(frames: u32) {
     }
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_fg_reload_capture(ini: *const u16) {
-    if let Some(stage) = installed().filter(|_| !ini.is_null()) {
-        let settings = CaptureSettings::read(ini);
+// The overlay caller holds the NUL-terminated path through the reload.
+pub(crate) unsafe fn reload_capture(ini: *const u16) {
+    if let Some(stage) = installed() {
+        let settings = unsafe { CaptureSettings::read(ini) };
         stage.options.capture.lock().unwrap().configure(settings);
     }
 }

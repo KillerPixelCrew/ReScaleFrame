@@ -97,7 +97,7 @@ impl Log {
 
 // ---- adapter options ---------------------------------------------------------------------------------------------
 
-/// One option the stages registered (adapter_options.h). The label and both callbacks live for the process.
+/// One option the adapter registered. The label and both callbacks live for the process.
 #[derive(Clone, Copy)]
 struct AdapterOption {
     label: *const c_char,
@@ -854,7 +854,7 @@ impl Overlay {
                 c"the overlay hooks were refused earlier in this process",
             ));
         }
-        let Some(ini) = (unsafe { win32::wide_z(options.configuration) }) else {
+        let Some(ini) = (unsafe { crate::ini::path(options.configuration) }) else {
             return Err(Refusal::new(
                 CONFIGURE_REFUSED,
                 c"no adapter configuration path",
@@ -1102,20 +1102,17 @@ unsafe extern "C" fn option_label(_: *mut c_void, index: u32) -> *const c_char {
 // ---- Win32 leaves ------------------------------------------------------------------------------------------------
 
 mod win32 {
-    use std::{mem, slice};
+    use crate::ini;
+    use std::mem;
     use windows_sys::Win32::Foundation::SYSTEMTIME;
     use windows_sys::Win32::System::SystemInformation::GetLocalTime;
     use windows_sys::Win32::System::Threading::GetCurrentProcessId;
-    use windows_sys::Win32::System::WindowsProgramming::{
-        GetPrivateProfileIntW, GetPrivateProfileStringW,
-    };
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_INSERT};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetClassNameW, GetForegroundWindow, GetWindowThreadProcessId, IsWindow,
     };
     use windows_sys::core::{PCWSTR, w};
 
-    const SECTION: PCWSTR = w!("Anomaly");
     // xrEngine Device_Initialize.cpp
     const ENGINE_WINDOW_CLASS: &str = "_XRAY_1.5";
     const MAX_PATH: usize = 260;
@@ -1145,34 +1142,13 @@ mod win32 {
             && unsafe { GetForegroundWindow() } == window
     }
 
-    /// The NUL-terminated wide string at `text`, or None when it is null or empty.
-    pub(super) unsafe fn wide_z<'a>(text: *const u16) -> Option<&'a [u16]> {
-        if text.is_null() {
-            return None;
-        }
-        let mut length = 0;
-        while unsafe { *text.add(length) } != 0 {
-            length += 1;
-        }
-        (length != 0).then(|| unsafe { slice::from_raw_parts(text, length + 1) })
-    }
-
     pub(super) fn ini_int(ini: &[u16], key: PCWSTR, fallback: i32) -> i32 {
-        unsafe { GetPrivateProfileIntW(SECTION, key, fallback, ini.as_ptr()) as i32 }
+        unsafe { ini::read_int(ini.as_ptr(), key, fallback) }
     }
 
     pub(super) fn ini_text(ini: &[u16], key: PCWSTR) -> Vec<u16> {
         let mut text = [0u16; MAX_PATH];
-        let length = unsafe {
-            GetPrivateProfileStringW(
-                SECTION,
-                key,
-                w!(""),
-                text.as_mut_ptr(),
-                text.len() as u32,
-                ini.as_ptr(),
-            )
-        } as usize;
+        let length = unsafe { ini::read_text(ini.as_ptr(), key, w!(""), &mut text) };
         text[..length.min(MAX_PATH)].to_vec()
     }
 

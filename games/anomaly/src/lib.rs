@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #[cfg(windows)]
+mod adapter_options;
+#[cfg(windows)]
 mod bootstrap;
 mod camera;
 #[cfg(windows)]
@@ -19,6 +21,8 @@ mod fg_stage_abi;
 mod frame_dump;
 mod geometry_registry;
 mod geometry_registry_abi;
+#[cfg(windows)]
+mod ini;
 mod input;
 mod lease;
 mod motion;
