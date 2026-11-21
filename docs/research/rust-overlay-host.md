@@ -231,6 +231,33 @@ under the isolated clone's `evidence/` directory. A matched draw
 capture is still needed to identify the exact mesh and shader in
 that region. Animated character and larger moving-object quality remain open.
 
+## Animated first-person inputs
+
+The isolated AVX run temporarily bound slot 6 to the middle mouse
+button. The game equipped the bolt and the consecutive SR burst
+recorded frames 1682 through 1697 with the hands visible. The
+first-person depth band below 0.02 contained valid producer motion.
+Of those samples, every nonzero vector tested reached the SR handoff
+with identical XY and valid marking, then reached the actual DLSS
+submission as finite nonzero RG16F. The zero-fill option was enabled
+and kept the valid producer vectors.
+
+Frames 1696 and 1697 kept the same world-to-view matrix as their
+preceding frames while the first-person mask changed. They carried
+50,430 and 51,819 nonzero producer vectors through the handoff and
+submission, respectively. The backbuffers show the held item, hands
+and HUD. All 16 frames matched successful evaluations and Presents.
+The final SR report showed 3,089 evaluations and zero refusals, with
+DLSS-G active. The game destroyed Direct3D, exited with code 0, and
+the runner restored both bindings and the original payload.
+
+The verifier, transcript and 208 hashes are under
+`.local/rust-1.94.1-verification/avx-first-person-audit-d0cc7ad/`.
+The images, inputs and logs are under `avx-first-person-band-d0cc7ad`
+in the clone's `evidence/` directory. A capture with unwritten
+first-person pixels is still needed to measure the zero-fill fallback.
+Moving world characters remain open.
+
 ## Vulkan Streamline-disabled verification
 
 The merged core also built without the corrected Vulkan Streamline SDK.
