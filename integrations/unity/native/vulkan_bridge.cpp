@@ -2,11 +2,13 @@
 // The Unity package's Vulkan bridge: Unity's Vulkan images are copied into same-adapter D3D12
 // resources for the render pass, and Unity's present is replaced by this bridge's DXGI swap chain.
 // Shared device readiness, the fault, queued render events and their packets, present and surface
-// entries, the window frame identity and the checked release are Rust (vulkan_state.rs). The
-// command slot rotation and shared fence values are the package bridge's submission ring
-// (bridge_interop.rs). This file keeps the Unity interfaces, Vulkan, D3D12 and DXGI objects and
-// calls, images, command buffers, slot fences, waits, copies, barriers, the swapchain interception
-// and the window.
+// entries, the window frame identity, whether the DXGI swap chain exists and the checked release
+// are Rust (vulkan_state.rs), as are the intercepted swapchains with their images and present-ready
+// semaphores, the presentation window's identity and the presentation lease. The command slot
+// rotation and shared fence values are the package bridge's submission ring (bridge_interop.rs).
+// This file keeps the Unity interfaces, Vulkan, D3D12 and DXGI objects and calls, images, command
+// buffers, slot fences, waits, copies, barriers, swapchain and semaphore creation and destruction,
+// the window and its swap chain.
 #include "vulkan_bridge.h"
 #include "vulkan_state.h"
 #include "bridge_interop.h"
@@ -21,9 +23,9 @@
 #include <array>
 #include <algorithm>
 #include <cstring>
-#include <mutex>
-#include <unordered_map>
 #include <vector>
+
+static_assert(sizeof(rsf_unity_vulkan_present_source) == 24, "vulkan_state.rs PresentSource");
 
 namespace {
 using Microsoft::WRL::ComPtr;
@@ -39,7 +41,6 @@ PFN_vkDestroySwapchainKHR original_destroy_swapchain = nullptr;
 PFN_vkQueuePresentKHR original_present = nullptr;
 PFN_vkImportSemaphoreWin32HandleKHR import_semaphore = nullptr;
 bool external_extensions = false;
-HWND window = nullptr;
 ComPtr<ID3D12Device> device;
 ComPtr<ID3D12CommandQueue> queue;
 ComPtr<ID3D12Fence> shared_fence;
@@ -65,15 +66,19 @@ struct Slot {
 std::array<Slot, RSF_UNITY_FRAMES_SLOTS> slots;
 // Unity's images for each queued render event, indexed by its event slot (vulkan_state.h).
 std::array<std::array<UnityVulkanImage, 4>, RSF_UNITY_FRAMES_PACKETS> event_images{};
-struct Swapchain {
-    VkDevice device = VK_NULL_HANDLE;
-    VkExtent2D extent{};
-    VkFormat format = VK_FORMAT_UNDEFINED;
-    std::vector<VkImage> images;
-    std::vector<VkSemaphore> present_ready;
+// Vulkan non-dispatchable handles cross to vulkan_state.rs as 64-bit identity.
+template <class Handle> uint64_t handle_id(Handle handle) { return reinterpret_cast<uint64_t>(handle); }
+template <class Handle> Handle from_id(uint64_t id) { return reinterpret_cast<Handle>(id); }
+HWND surface_window() { return static_cast<HWND>(rsf_unity_vulkan_surface_window()); }
+// Ends the presentation lease (vulkan_state.h) the caller took.
+struct PresentationLease {
+    bool held = true;
+    PresentationLease() = default;
+    explicit PresentationLease(bool taken) : held(taken) {}
+    PresentationLease(const PresentationLease&) = delete;
+    PresentationLease& operator=(const PresentationLease&) = delete;
+    ~PresentationLease() { if (held) rsf_unity_vulkan_presentation_end(); }
 };
-std::mutex swapchain_guard;
-std::unordered_map<VkSwapchainKHR, Swapchain> swapchains;
 void log(const char* text) { if (host.log) host.log(host.user, text); else { OutputDebugStringA(text); OutputDebugStringA("\n"); } }
 // Stops the bridge until release. The first fault is reported, so the package status and the
 // managed jitter gate see it instead of a silent stop.
@@ -394,7 +399,8 @@ BOOL CALLBACK find_window(HWND candidate, LPARAM result)
     }
     return TRUE;
 }
-bool configure_chain(uint32_t width, uint32_t height)
+// Creates or resizes the bridge's swap chain, with the presentation lease and an entry held.
+bool configure_chain(HWND window, uint32_t width, uint32_t height)
 {
     if (!window) return false;
     if (!chain) {
@@ -404,6 +410,7 @@ bool configure_chain(uint32_t width, uint32_t height)
         desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD; desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
         if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))) || FAILED(factory->CreateSwapChainForHwnd(queue.Get(), window, &desc, nullptr, nullptr, &created)) ||
             FAILED(created.As(&chain))) return false;
+        rsf_unity_vulkan_surface_created();
     } else {
         DXGI_SWAP_CHAIN_DESC1 desc{}; chain->GetDesc1(&desc);
         if ((desc.Width != width || desc.Height != height) &&
@@ -416,23 +423,27 @@ VKAPI_ATTR VkResult VKAPI_CALL intercept_present(VkQueue vk_queue, const VkPrese
     if (!original_present || !info) return VK_ERROR_INITIALIZATION_FAILED;
     BridgeEntry entry; rsf_unity_packet frame{};
     const auto unchanged = [&] { return original_present(vk_queue, info); };
+    const HWND window = surface_window();
     if (!window || !entry.admitted || !rsf_unity_vulkan_window(&frame) || info->swapchainCount != 1 || initialize() != SharedDevice::ready) return unchanged();
-    std::lock_guard<std::mutex> lock(swapchain_guard);
-    auto found = swapchains.find(info->pSwapchains[0]);
-    if (found == swapchains.end()) return unchanged();
-    auto& source = found->second; const uint32_t index = info->pImageIndices[0];
-    if (index >= source.images.size() || !configure_chain(source.extent.width, source.extent.height) ||
-        !create_image(5, source.extent.width, source.extent.height, VK_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM)) return unchanged();
+    // The lease is held from the lookup through the forwarded Present, also when the swapchain is
+    // unknown or the index out of range and the Present is forwarded unchanged.
+    rsf_unity_vulkan_present_source source{};
+    const bool found = rsf_unity_vulkan_present_begin(handle_id(info->pSwapchains[0]), info->pImageIndices[0], &source) != 0;
+    PresentationLease lease;
+    const VkImage presented = from_id<VkImage>(source.image);
+    const VkSemaphore present_ready = from_id<VkSemaphore>(source.present_ready);
+    if (!found || !configure_chain(window, source.width, source.height) ||
+        !create_image(5, source.width, source.height, VK_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM)) return unchanged();
     const uint32_t ring = rsf_unity_interop_slot(nullptr);
     if (ring >= slots.size()) return unchanged();
     auto& slot = slots[ring]; if (!begin(slot)) return unchanged();
     acquire_image(slot.vk[0], images[5], false);
-    image_barrier(slot.vk[0], source.images[index], VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+    image_barrier(slot.vk[0], presented, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
         VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, 0, VK_ACCESS_TRANSFER_READ_BIT);
     VkImageBlit blit{}; blit.srcSubresource = blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    blit.srcOffsets[1] = blit.dstOffsets[1] = {static_cast<int32_t>(source.extent.width), static_cast<int32_t>(source.extent.height), 1};
-    vkCmdBlitImage(slot.vk[0], source.images[index], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, images[5].image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
-    image_barrier(slot.vk[0], source.images[index], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+    blit.srcOffsets[1] = blit.dstOffsets[1] = {static_cast<int32_t>(source.width), static_cast<int32_t>(source.height), 1};
+    vkCmdBlitImage(slot.vk[0], presented, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, images[5].image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
+    image_barrier(slot.vk[0], presented, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
         VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, VK_ACCESS_TRANSFER_READ_BIT, 0);
     release_image(slot.vk[0], images[5], false);
     if (!upload(slot, info->pWaitSemaphores, info->waitSemaphoreCount)) { stop("Unity Vulkan present upload failed; the bridge stopped."); return VK_ERROR_DEVICE_LOST; }
@@ -445,10 +456,9 @@ VKAPI_ATTR VkResult VKAPI_CALL intercept_present(VkQueue vk_queue, const VkPrese
     dx_barrier(slot.commands.Get(), images[5].resource.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
     rsf_game_render_pass pass{}; make_pass(frame, pass); pass.role = RSF_GAME_RENDER_WINDOW; pass.swapchain = chain.Get();
     host.render_pass(host.user, queue.Get(), &pass, 1);
-    if (!submit(slot, ring, source.present_ready[index])) { stop("Unity Vulkan present submission failed; the bridge stopped."); return VK_ERROR_DEVICE_LOST; }
-    const HRESULT presented = chain->Present(0, 0);
-    if (SUCCEEDED(presented)) ShowWindowAsync(window, SW_SHOWNOACTIVATE);
-    auto forwarded = *info; forwarded.waitSemaphoreCount = 1; forwarded.pWaitSemaphores = &source.present_ready[index];
+    if (!submit(slot, ring, present_ready)) { stop("Unity Vulkan present submission failed; the bridge stopped."); return VK_ERROR_DEVICE_LOST; }
+    if (SUCCEEDED(chain->Present(0, 0))) ShowWindowAsync(window, SW_SHOWNOACTIVATE);
+    auto forwarded = *info; forwarded.waitSemaphoreCount = 1; forwarded.pWaitSemaphores = &present_ready;
     rsf_unity_interop_advance(ring);
     return original_present(vk_queue, &forwarded);
 } catch (...) { stop("Unity Vulkan present interception failed; the bridge stopped."); return VK_ERROR_DEVICE_LOST; }
@@ -476,7 +486,8 @@ VKAPI_ATTR VkResult VKAPI_CALL intercept_create_swapchain(VkDevice vk_device, co
     if (!destroy) return original_create_swapchain(vk_device, info, allocator, output);
 
     auto request = *info; request.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-    Swapchain source; source.device = vk_device; source.extent = request.imageExtent; source.format = request.imageFormat;
+    std::vector<VkImage> images;
+    std::vector<VkSemaphore> present_ready;
     struct PendingSwapchain {
         VkDevice device;
         const VkAllocationCallbacks* allocator;
@@ -490,7 +501,7 @@ VKAPI_ATTR VkResult VKAPI_CALL intercept_create_swapchain(VkDevice vk_device, co
                 if (semaphore) vkDestroySemaphore(device, semaphore, nullptr);
             destroy(device, chain, allocator);
         }
-    } pending{vk_device, allocator, destroy, source.present_ready};
+    } pending{vk_device, allocator, destroy, present_ready};
 
     *output = VK_NULL_HANDLE;
     VkSwapchainKHR created = VK_NULL_HANDLE;
@@ -500,37 +511,45 @@ VKAPI_ATTR VkResult VKAPI_CALL intercept_create_swapchain(VkDevice vk_device, co
     uint32_t count = 0;
     if (vkGetSwapchainImagesKHR(vk_device, pending.chain, &count, nullptr) != VK_SUCCESS || !count)
         return VK_ERROR_INITIALIZATION_FAILED;
-    source.images.resize(count);
-    if (vkGetSwapchainImagesKHR(vk_device, pending.chain, &count, source.images.data()) != VK_SUCCESS || !count)
+    images.resize(count);
+    if (vkGetSwapchainImagesKHR(vk_device, pending.chain, &count, images.data()) != VK_SUCCESS || !count)
         return VK_ERROR_INITIALIZATION_FAILED;
-    source.images.resize(count);
-    source.present_ready.resize(count);
+    images.resize(count);
+    present_ready.resize(count);
     VkSemaphoreCreateInfo semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
-    for (auto& ready : source.present_ready) {
+    for (auto& ready : present_ready) {
         VkSemaphore semaphore = VK_NULL_HANDLE;
         if (vkCreateSemaphore(vk_device, &semaphore_info, nullptr, &semaphore) != VK_SUCCESS)
             return VK_ERROR_OUT_OF_DEVICE_MEMORY;
         ready = semaphore;
     }
-    std::lock_guard<std::mutex> lock(swapchain_guard);
-    if (!swapchains.try_emplace(pending.chain, std::move(source)).second) return VK_ERROR_INITIALIZATION_FAILED;
+    std::vector<uint64_t> image_ids(count), ready_ids(count);
+    for (uint32_t i = 0; i < count; ++i) { image_ids[i] = handle_id(images[i]); ready_ids[i] = handle_id(present_ready[i]); }
+    // A refused publication (a handle already published) rolls back like any other step.
+    if (!rsf_unity_vulkan_swapchain_register(handle_id(pending.chain), request.imageExtent.width, request.imageExtent.height,
+        image_ids.data(), ready_ids.data(), count)) return VK_ERROR_INITIALIZATION_FAILED;
     *output = pending.chain;
     pending.chain = VK_NULL_HANDLE;
     return result;
 } catch (...) { return VK_ERROR_OUT_OF_HOST_MEMORY; }
+// Destroys a retired swapchain's present-ready semaphores. Runs with the presentation lease held, so
+// no present interception submits to or presents on the device's queues while vkDeviceWaitIdle
+// waits for them.
+void retire_present_ready(void* context, const uint64_t* present_ready, uint32_t count) noexcept
+{
+    const auto vk_device = static_cast<VkDevice>(context);
+    vkDeviceWaitIdle(vk_device);
+    for (uint32_t i = 0; i < count; ++i) vkDestroySemaphore(vk_device, from_id<VkSemaphore>(present_ready[i]), nullptr);
+}
 VKAPI_ATTR void VKAPI_CALL intercept_destroy_swapchain(VkDevice vk_device, VkSwapchainKHR swapchain, const VkAllocationCallbacks* allocator)
 {
-    { std::lock_guard<std::mutex> lock(swapchain_guard);
-      auto found = swapchains.find(swapchain);
-      if (found != swapchains.end()) {
-          vkDeviceWaitIdle(vk_device);
-          for (auto ready : found->second.present_ready) vkDestroySemaphore(vk_device, ready, nullptr);
-          swapchains.erase(found);
-      } }
-    original_destroy_swapchain(vk_device, swapchain, allocator);
+    (void)rsf_unity_vulkan_swapchain_retire(handle_id(swapchain), retire_present_ready, vk_device);
+    if (original_destroy_swapchain) original_destroy_swapchain(vk_device, swapchain, allocator);
 }
 PFN_vkVoidFunction intercept(const char* name, PFN_vkVoidFunction original)
 {
+    // A function the loader does not provide stays absent, and its resolved original is kept.
+    if (!original) return nullptr;
     if (std::strcmp(name, "vkCreateDevice") == 0) { original_create_device = reinterpret_cast<PFN_vkCreateDevice>(original); return reinterpret_cast<PFN_vkVoidFunction>(intercept_create_device); }
     if (std::strcmp(name, "vkCreateSwapchainKHR") == 0) { original_create_swapchain = reinterpret_cast<PFN_vkCreateSwapchainKHR>(original); return reinterpret_cast<PFN_vkVoidFunction>(intercept_create_swapchain); }
     if (std::strcmp(name, "vkDestroySwapchainKHR") == 0) { original_destroy_swapchain = reinterpret_cast<PFN_vkDestroySwapchainKHR>(original); return reinterpret_cast<PFN_vkVoidFunction>(intercept_destroy_swapchain); }
@@ -541,6 +560,7 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL get_device_proc(VkDevice vk_device, con
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL get_instance_proc(VkInstance vk_instance, const char* name)
 {
     auto original = original_gipa(vk_instance, name);
+    if (!original) return nullptr;
     if (std::strcmp(name, "vkGetDeviceProcAddr") == 0) { original_gdpa = reinterpret_cast<PFN_vkGetDeviceProcAddr>(original); return reinterpret_cast<PFN_vkVoidFunction>(get_device_proc); }
     return intercept(name, original);
 }
@@ -571,17 +591,29 @@ void rsf_uvk_load(IUnityInterfaces* interfaces, int event_id)
 }
 bool rsf_uvk_create_window()
 {
-    if (window) return true;
-    HWND parent = nullptr; EnumWindows(find_window, reinterpret_cast<LPARAM>(&parent));
-    if (!parent || GetWindowThreadProcessId(parent, nullptr) != GetCurrentThreadId()) return false;
-    WNDCLASSW type{}; type.lpfnWndProc = window_proc; type.hInstance = GetModuleHandleW(nullptr); type.lpszClassName = L"ReScaleFrame.Unity.Presentation";
-    if (!RegisterClassW(&type) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return false;
-    RECT client{}; GetClientRect(parent, &client);
-    window = CreateWindowExW(WS_EX_NOACTIVATE | WS_EX_TRANSPARENT, type.lpszClassName, L"", WS_CHILD | WS_CLIPSIBLINGS,
-        0, 0, client.right, client.bottom, parent, nullptr, type.hInstance, nullptr);
-    return window && rsf_uvk_update_window(static_cast<uint32_t>(client.right), static_cast<uint32_t>(client.bottom));
+    HWND window = surface_window();
+    if (!window) {
+        HWND parent = nullptr; EnumWindows(find_window, reinterpret_cast<LPARAM>(&parent));
+        if (!parent || GetWindowThreadProcessId(parent, nullptr) != GetCurrentThreadId()) return false;
+        WNDCLASSW type{}; type.lpfnWndProc = window_proc; type.hInstance = GetModuleHandleW(nullptr); type.lpszClassName = L"ReScaleFrame.Unity.Presentation";
+        if (!RegisterClassW(&type) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return false;
+        RECT client{}; GetClientRect(parent, &client);
+        window = CreateWindowExW(WS_EX_NOACTIVATE | WS_EX_TRANSPARENT, type.lpszClassName, L"", WS_CHILD | WS_CLIPSIBLINGS,
+            0, 0, client.right, client.bottom, parent, nullptr, type.hInstance, nullptr);
+        if (!window) return false;
+        if (!rsf_unity_vulkan_set_surface_window(window)) { DestroyWindow(window); window = surface_window(); }
+    }
+    // A release keeps the window but destroys its swap chain, so a later start creates it again
+    // instead of reporting the surface ready without one.
+    RECT client{};
+    return window && GetClientRect(window, &client) &&
+        rsf_uvk_update_window(static_cast<uint32_t>(client.right), static_cast<uint32_t>(client.bottom));
 }
-bool rsf_uvk_owns_window(void* candidate) { return window && candidate == window; }
+bool rsf_uvk_owns_window(void* candidate)
+{
+    const HWND window = surface_window();
+    return window && candidate == window;
+}
 bool rsf_uvk_graphics(void** owning_device, void** owning_queue)
 {
     if (!owning_device || !owning_queue || !rsf_unity_vulkan_ready()) return false;
@@ -589,6 +621,7 @@ bool rsf_uvk_graphics(void** owning_device, void** owning_queue)
 }
 bool rsf_uvk_update_window(uint32_t width, uint32_t height)
 {
+    const HWND window = surface_window();
     if (!window || !width || !height || GetWindowThreadProcessId(window, nullptr) != GetCurrentThreadId()) return false;
     RECT client{}; if (!GetClientRect(window, &client)) return false;
     if ((client.right != static_cast<LONG>(width) || client.bottom != static_cast<LONG>(height)) &&
@@ -596,7 +629,12 @@ bool rsf_uvk_update_window(uint32_t width, uint32_t height)
     // Establish the shared SDK owner before SR can register a standalone instance. Initial
     // DXGI creation runs on the window thread; subsequent GPU-drained resize stays in Present.
     BridgeEntry entry;
-    return entry.admitted && (chain || (initialize() == SharedDevice::ready && configure_chain(width, height)));
+    if (!entry.admitted) return false;
+    if (rsf_unity_vulkan_surface_ready()) return true;
+    // The swap chain is created under the presentation lease. The window thread does not wait for
+    // a present interception holding it; that Present creates the swap chain itself.
+    PresentationLease lease{rsf_unity_vulkan_surface_begin() != 0};
+    return lease.held && (chain || (initialize() == SharedDevice::ready && configure_chain(window, width, height)));
 }
 bool rsf_uvk_render(int event_id, const rsf_unity_packet& packet, const rsf_game_host_services& services, bool reconfigure)
 {

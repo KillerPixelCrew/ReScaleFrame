@@ -28,13 +28,20 @@ extents up to 16384.
 The Vulkan bridge's state is Rust too (`vulkan_state.rs`): the shared device's readiness and its
 single creator, the permanent fault, the render events queued to Unity with their packets, the
 present interceptions and surface updates in progress, the player window frame identity the
-present renders under, and a release that first closes the bridge to new work. Its command slots
-and shared fence values use the same submission ring (`bridge_interop.rs`).
+present renders under, whether its DXGI swap chain exists, and a release that first closes the
+bridge to new work. Its command slots and shared fence values use the same submission ring
+(`bridge_interop.rs`). The presentation is Rust as well and outlives a release: Unity's
+intercepted swapchains with their images and the present-ready semaphores the bridge made for
+them, the presentation window's identity, and one exclusive presentation lease. A Present holds
+the lease from the swapchain lookup through native forwarding, swapchain destruction holds it
+through `vkDeviceWaitIdle` and the semaphore destruction, and the window thread takes it without
+waiting to create the DXGI swap chain.
 `integrations/unity/native/vulkan_bridge.cpp` keeps the Unity Vulkan interfaces, the Vulkan,
 D3D12 and DXGI objects and calls, shared images, command buffers, slot fences, waits, copies and
-barriers, the device and swapchain interception, the presentation window and its swap chain.
-An admitted Present holds its entry through native forwarding. Swapchain setup publishes only a
-complete chain and rolls back earlier semaphores if a later step refuses.
+barriers, the device and swapchain interception with semaphore creation and destruction, the
+presentation window and its swap chain. An admitted Present holds its entry through native
+forwarding. Swapchain setup publishes only a complete chain and rolls back earlier semaphores if a
+later step or the publication refuses.
 
 The Runtime setup behind the loader entry `rsf_unity_start` and `rsf_unity_fg_start`,
 `rsf_unity_sr_start` and `rsf_unity_sr_stop` is Rust as well (`runtime_setup.rs`): the

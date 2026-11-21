@@ -1,17 +1,20 @@
 /* SPDX-License-Identifier: MIT */
 #pragma once
 /* Internal boundary between the Unity package's Vulkan bridge (integrations/unity/native/
-   vulkan_bridge.cpp) and its Rust state (vulkan_state.rs). Not a DLL ABI; its only structure is
-   the packet bridge_abi.rs already binds, so it has no generated bindings of its own.
+   vulkan_bridge.cpp) and its Rust state (vulkan_state.rs). Not a DLL ABI and without generated
+   bindings: it passes the packet bridge_abi.rs already binds and rsf_unity_vulkan_present_source,
+   which vulkan_state.rs mirrors with a size assertion and vulkan_bridge.cpp checks the same way.
 
    Rust owns the shared device's readiness and its single creator, the bridge's permanent fault,
    the render events queued to Unity and their packets, the present interceptions and surface
-   updates in progress, the player window frame the present renders under, and the checked close
-   and release. The command slot rotation and the shared D3D12 fence values are the package
-   bridge's submission ring (bridge_interop.h); a process has one Unity renderer, so the D3D11 and
-   Vulkan bridges never use it at once. vulkan_bridge.cpp keeps the Unity interfaces, the Vulkan,
-   D3D12 and DXGI objects and calls, images, command buffers, slot fences, waits, copies, barriers,
-   the swapchain interception and the window.
+   updates in progress, the player window frame the present renders under, whether the DXGI swap
+   chain exists, the checked close and release, and the presentation: Unity's intercepted
+   swapchains with their images and present-ready semaphores, the presentation window's identity
+   and the presentation lease. The command slot rotation and the shared D3D12 fence values are the
+   package bridge's submission ring (bridge_interop.h); a process has one Unity renderer, so the
+   D3D11 and Vulkan bridges never use it at once. vulkan_bridge.cpp keeps the Unity interfaces, the
+   Vulkan, D3D12 and DXGI objects and calls, images, command buffers, slot fences, waits, copies,
+   barriers, swapchain and semaphore creation and destruction, the window and its swap chain.
 
    Event slots number RSF_UNITY_FRAMES_PACKETS: each event carries one packet taken from the
    shared store. vulkan_bridge.cpp sizes its image arrays to match. */
@@ -71,8 +74,45 @@ uint32_t rsf_unity_vulkan_idle(uint32_t* ready);
 uint32_t rsf_unity_vulkan_close(void);
 /* Reopens a closed bridge whose GPU work did not drain. */
 void rsf_unity_vulkan_reopen(void);
-/* Forgets the device readiness, fault, events and window frame, and opens the bridge. */
+/* Forgets the device readiness, fault, events, window frame and swap chain, and opens the bridge. */
 void rsf_unity_vulkan_release(void);
+/* The bridge's DXGI swap chain was created; release forgets it with the other objects. */
+void rsf_unity_vulkan_surface_created(void);
+uint32_t rsf_unity_vulkan_surface_ready(void);
+
+/* Presentation: Unity's intercepted swapchains, the presentation window and the presentation lease
+   outlive release. Vulkan handles are passed as uint64_t identity. The lease is exclusive: a
+   present interception holds it from lookup through the forwarded vkQueuePresentKHR, swapchain
+   retirement through vkDeviceWaitIdle and semaphore destruction, and the window thread while it
+   creates the DXGI swap chain. */
+
+/* Keeps the first presentation window. Non-zero when window is the kept one. */
+uint32_t rsf_unity_vulkan_set_surface_window(void* window);
+void* rsf_unity_vulkan_surface_window(void);
+
+/* Publishes a complete swapchain with one present-ready semaphore per image, waiting for the lease
+   to end. Zero for a null handle or array, no images or a handle already published; the caller then
+   destroys what it created. */
+uint32_t rsf_unity_vulkan_swapchain_register(uint64_t chain, uint32_t width, uint32_t height,
+    const uint64_t* images, const uint64_t* present_ready, uint32_t count);
+/* Waits for the lease, forgets chain and, holding the lease, hands retire its present-ready
+   semaphores to destroy. Zero, without calling retire, for an unknown chain or a null retire. */
+typedef void (*rsf_unity_vulkan_retire_fn)(void* context, const uint64_t* present_ready, uint32_t count);
+uint32_t rsf_unity_vulkan_swapchain_retire(uint64_t chain, rsf_unity_vulkan_retire_fn retire, void* context);
+
+typedef struct rsf_unity_vulkan_present_source {
+    uint64_t image;         /* VkImage at the presented index */
+    uint64_t present_ready; /* VkSemaphore the forwarded present waits on */
+    uint32_t width;
+    uint32_t height;
+} rsf_unity_vulkan_present_source;
+/* Waits for and takes the lease, which the caller always ends with
+   rsf_unity_vulkan_presentation_end. Non-zero, with source filled, when chain is published and
+   index names one of its images. */
+uint32_t rsf_unity_vulkan_present_begin(uint64_t chain, uint32_t index, rsf_unity_vulkan_present_source* source);
+/* Takes the lease without waiting; zero while it is held. */
+uint32_t rsf_unity_vulkan_surface_begin(void);
+void rsf_unity_vulkan_presentation_end(void);
 #ifdef __cplusplus
 }
 #endif

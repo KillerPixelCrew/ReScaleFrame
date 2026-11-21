@@ -248,6 +248,12 @@ semaphores and the new chain if setup fails. The native queue drain
 still needs live synchronization verification. Builds and player
 checks remain open.
 
+Unity's Vulkan swapchain records and presentation lease are
+Rust-owned. The lease serializes native Present, resize and
+semaphore retirement. Registration allocates fallibly, so native
+rollback still owns partial setup if allocation refuses. The Vulkan
+queue drain, native builds and player verification remain open.
+
 AC7's Rust renderer transaction owns prepare, start, quiesce and stop.
 Failed activation keeps any renderer with reachable callbacks, and a
 refused hook disable or removal keeps the renderer available for retry.
