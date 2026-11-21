@@ -41,8 +41,12 @@ struct RsfSlFgOptions {
     uint32_t count, width, height, format, backBuffers;
 };
 static_assert(sizeof(RsfSlFgOptions) == 5 * sizeof(uint32_t));
-using RsfSlFgSetOptions = int32_t (*)(uint32_t enabled, const RsfSlFgOptions*);
-using RsfSlFgFreeResources = int32_t (*)();
+struct RsfSlFgPlatform {
+    uint32_t (*optionsBound)();
+    int32_t (*apply)(uint32_t enabled, const RsfSlFgOptions*);
+    int32_t (*release)();
+};
+static_assert(sizeof(RsfSlFgPlatform) == 3 * sizeof(void*));
 static_assert(static_cast<int32_t>(sl::Result::eOk) == 0);
 static_assert(static_cast<int32_t>(sl::Result::eWarnOutOfVRAM) == 39);
 
@@ -59,9 +63,10 @@ void* rsf_slvk_life_interposer_symbol(const char*);
 void* rsf_slvk_life_common_symbol(const char*);
 void rsf_slvk_fg_swapchain_created(uint64_t);
 void rsf_slvk_fg_swapchain_destroyed(uint64_t);
-int32_t rsf_slvk_fg_set(RsfSlFgSetOptions, int32_t, const RsfSlFgOptions*);
-int32_t rsf_slvk_fg_disable(RsfSlFgSetOptions);
-int32_t rsf_slvk_fg_free(uint32_t, RsfSlFgFreeResources);
+int32_t rsf_slvk_fg_set(const RsfSlFgPlatform*, int32_t, const RsfSlFgOptions*);
+int32_t rsf_slvk_fg_disable(const RsfSlFgPlatform*);
+int32_t rsf_slvk_fg_free(const RsfSlFgPlatform*);
+int32_t rsf_slvk_fg_sdk_call(int32_t (*)(void*), void*, int32_t inactive);
 }
 
 namespace {
@@ -243,6 +248,9 @@ void onPresentError(const sl::APIError& error) {
     lastPresentError.store(static_cast<int>(error.vkRes), std::memory_order_relaxed);
 }
 
+// Rust invokes these leaves only while holding the initialized SDK session.
+uint32_t fgOptionsBound() noexcept { return fgOptions != nullptr; }
+
 int32_t applyFgOptions(uint32_t enabled, const RsfSlFgOptions* request) noexcept try {
     sl::DLSSGOptions options{};
     options.mode = enabled ? sl::DLSSGMode::eOn : sl::DLSSGMode::eOff;
@@ -259,9 +267,23 @@ int32_t applyFgOptions(uint32_t enabled, const RsfSlFgOptions* request) noexcept
 }
 
 int32_t releaseFgResources() noexcept try {
+    if (!freeResources) return -1;
     return static_cast<int32_t>(freeResources(sl::kFeatureDLSS_G, viewport));
 } catch (...) {
     return static_cast<int32_t>(sl::Result::eErrorExceptionHandler);
+}
+
+constexpr RsfSlFgPlatform fgPlatform{fgOptionsBound, applyFgOptions, releaseFgResources};
+
+// The Rust call is synchronous. It pins the SDK session for the borrowed callback.
+template<class Call> int32_t callFgSdk(Call call, int32_t inactive = -1) {
+    return rsf_slvk_fg_sdk_call([](void* user) noexcept -> int32_t {
+        try {
+            return (*static_cast<Call*>(user))();
+        } catch (...) {
+            return static_cast<int32_t>(sl::Result::eErrorExceptionHandler);
+        }
+    }, &call, inactive);
 }
 
 /// @brief Writes SDK warnings/errors and enabled verbose messages to stderr.
@@ -510,10 +532,13 @@ RSF_SL_VK_EXPORT VkResult VulkanStorySlDeviceWaitIdle(VkDevice device) {
 /// @details Feature functions are queried after the proxy has observed device creation.
 /// @return Native Streamline support result, or -1 when unavailable.
 RSF_SL_VK_EXPORT int VulkanStorySlIsFrameGenerationSupported(VkPhysicalDevice physical) {
-    if (!isFeatureSupported || !physical) return -1;
-    sl::AdapterInfo adapter{};
-    adapter.vkPhysicalDevice = physical;
-    return static_cast<int>(isFeatureSupported(sl::kFeatureDLSS_G, adapter));
+    if (!physical) return -1;
+    return callFgSdk([&] {
+        if (!isFeatureSupported) return -1;
+        sl::AdapterInfo adapter{};
+        adapter.vkPhysicalDevice = physical;
+        return static_cast<int>(isFeatureSupported(sl::kFeatureDLSS_G, adapter));
+    });
 }
 /// @brief Resolves Reflex options, sleep and state entry points for the initialized device.
 /// @return Zero when all required functions resolve, otherwise a negative local code.
@@ -530,12 +555,14 @@ RSF_SL_VK_EXPORT int VulkanStorySlBindReflex() {
 /// @brief Resolves DLSS-G option and state entry points for the initialized device.
 /// @return Zero on success, otherwise a negative local code.
 RSF_SL_VK_EXPORT int VulkanStorySlBindFrameGeneration() {
-    void* function{};
-    if (!loadFeature(sl::kFeatureDLSS_G, "slDLSSGSetOptions", function)) return -4;
-    fgOptions = reinterpret_cast<PFun_slDLSSGSetOptions*>(function);
-    if (!loadFeature(sl::kFeatureDLSS_G, "slDLSSGGetState", function)) return -5;
-    fgState = reinterpret_cast<PFun_slDLSSGGetState*>(function);
-    return 0;
+    return callFgSdk([] {
+        void* function{};
+        if (!loadFeature(sl::kFeatureDLSS_G, "slDLSSGSetOptions", function)) return -4;
+        fgOptions = reinterpret_cast<PFun_slDLSSGSetOptions*>(function);
+        if (!loadFeature(sl::kFeatureDLSS_G, "slDLSSGGetState", function)) return -5;
+        fgState = reinterpret_cast<PFun_slDLSSGGetState*>(function);
+        return 0;
+    }, -4);
 }
 /// @brief Queries distinct low-latency and latency-report availability flags.
 /// @details Outputs are written only after a successful SDK query.
@@ -697,7 +724,7 @@ RSF_SL_VK_EXPORT int VulkanStorySlInvalidateFrameTags() {
 RSF_SL_VK_EXPORT int VulkanStorySlSetFrameGeneration(int enabled, uint32_t count,
     uint32_t width, uint32_t height, uint32_t colorFormat, uint32_t backBuffers) {
     const RsfSlFgOptions request{count, width, height, colorFormat, backBuffers};
-    return rsf_slvk_fg_set(fgOptions ? applyFgOptions : nullptr, enabled, &request);
+    return rsf_slvk_fg_set(&fgPlatform, enabled, &request);
 }
 // Called after FG is off and the proxy's DeviceWaitIdle has drained presentation.
 // Direct NGX SR shutdown must not precede release of Streamline's FG handle.
@@ -705,13 +732,13 @@ RSF_SL_VK_EXPORT int VulkanStorySlSetFrameGeneration(int enabled, uint32_t count
 /// @details Unused or already disabled features return zero without configuring another provider's presentation.
 /// @return SDK option result, or zero when no disable is required.
 RSF_SL_VK_EXPORT int VulkanStorySlDisableFrameGenerationForRelease() {
-    return rsf_slvk_fg_disable(fgOptions ? applyFgOptions : nullptr);
+    return rsf_slvk_fg_disable(&fgPlatform);
 }
 /// @brief Frees known DLSS-G resources after enablement is Off and the host has drained proxy GPU/present work.
 /// @details Resource-ownership state clears only when slFreeResources succeeds.
 /// @return SDK result, zero for no resources, or -1 when release prerequisites are missing.
 RSF_SL_VK_EXPORT int VulkanStorySlFreeFrameGenerationResources() {
-    return rsf_slvk_fg_free(fgOptions != nullptr, freeResources ? releaseFgResources : nullptr);
+    return rsf_slvk_fg_free(&fgPlatform);
 }
 /// @brief Atomically consumes the latest recorded asynchronous presentation error.
 /// @return Recorded Vulkan error code, or zero when none is pending.
@@ -723,15 +750,18 @@ RSF_SL_VK_EXPORT int VulkanStorySlTakePresentError() {
 /// @return SDK result, or -1 for unavailable state/null outputs.
 RSF_SL_VK_EXPORT int VulkanStorySlGetFrameGenerationState(uint32_t* status,
     uint32_t* presented, uint32_t* maxGenerated) {
-    if (!fgState || !status || !presented || !maxGenerated) return -1;
-    sl::DLSSGState state{};
-    auto result = fgState(viewport, state, nullptr);
-    if (result == sl::Result::eOk) {
-        *status = static_cast<uint32_t>(state.status);
-        *presented = state.numFramesActuallyPresented;
-        *maxGenerated = state.numFramesToGenerateMax;
-    }
-    return static_cast<int>(result);
+    if (!status || !presented || !maxGenerated) return -1;
+    return callFgSdk([&] {
+        if (!fgState) return -1;
+        sl::DLSSGState state{};
+        const auto result = fgState(viewport, state, nullptr);
+        if (result == sl::Result::eOk) {
+            *status = static_cast<uint32_t>(state.status);
+            *presented = state.numFramesActuallyPresented;
+            *maxGenerated = state.numFramesToGenerateMax;
+        }
+        return static_cast<int>(result);
+    });
 }
 /// @brief Queries the six-word frame-generation capability/state ABI.
 /// @details Words contain status, actual presents, maximum generated count, minimum size, VSync availability and dynamic-MFG support in that order.
@@ -739,17 +769,20 @@ RSF_SL_VK_EXPORT int VulkanStorySlGetFrameGenerationState(uint32_t* status,
 /// @param count Must equal six.
 /// @return SDK result, or -1 for unavailable state/invalid output storage.
 RSF_SL_VK_EXPORT int VulkanStorySlGetFrameGenerationStateDetails(uint32_t* values, uint32_t count) {
-    if (!fgState || !values || count != 6) return -1;
-    sl::DLSSGState state{};
-    const auto result = fgState(viewport, state, nullptr);
-    if (result == sl::Result::eOk) {
-        values[0] = static_cast<uint32_t>(state.status);
-        values[1] = state.numFramesActuallyPresented;
-        values[2] = state.numFramesToGenerateMax;
-        values[3] = state.minWidthOrHeight;
-        values[4] = static_cast<uint32_t>(state.bIsVsyncSupportAvailable);
-        values[5] = static_cast<uint32_t>(state.bIsDynamicMFGSupported);
-    }
-    return static_cast<int>(result);
+    if (!values || count != 6) return -1;
+    return callFgSdk([&] {
+        if (!fgState) return -1;
+        sl::DLSSGState state{};
+        const auto result = fgState(viewport, state, nullptr);
+        if (result == sl::Result::eOk) {
+            values[0] = static_cast<uint32_t>(state.status);
+            values[1] = state.numFramesActuallyPresented;
+            values[2] = state.numFramesToGenerateMax;
+            values[3] = state.minWidthOrHeight;
+            values[4] = static_cast<uint32_t>(state.bIsVsyncSupportAvailable);
+            values[5] = static_cast<uint32_t>(state.bIsDynamicMFGSupported);
+        }
+        return static_cast<int>(result);
+    });
 }
 }

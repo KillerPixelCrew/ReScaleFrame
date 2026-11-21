@@ -3,7 +3,7 @@
 //! leaves are supplied by the caller.
 
 #[cfg(windows)]
-use crate::frame_generation::FrameGeneration;
+use crate::frame_generation::{FrameGeneration, Swapchain};
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr::{NonNull, null, null_mut, without_provenance_mut};
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
@@ -20,9 +20,8 @@ const LOAD_FAILED: i32 = -3;
 const MISSING_EXPORT: i32 = -4;
 const UNVERIFIED: i32 = -5;
 const OTHER_DIRECTORY: i32 = -6;
-// Another start, shutdown or unload holds the session. SDK callbacks can run
-// host code on SDK threads while slInit or slShutdown holds the lock, so an
-// overlapping call is refused instead of waiting.
+// A lifecycle operation or DLSS-G SDK call holds the session. SDK callbacks
+// can run host code on SDK threads, so overlapping calls refuse instead of waiting.
 const BUSY: i32 = -7;
 
 // The bridge formatted the interposer path into a MAX_PATH buffer.
@@ -99,6 +98,8 @@ struct Session {
     shutdown_attempted: bool,
     shutdown_result: i32,
     paths: Option<Box<Paths>>,
+    #[cfg(windows)]
+    frame_generation: FrameGeneration,
 }
 
 // The module handle and path pointers name process-wide loader and heap state.
@@ -117,7 +118,7 @@ struct Published {
 pub(crate) struct Lifecycle {
     session: Mutex<Session>,
     #[cfg(windows)]
-    frame_generation: Mutex<FrameGeneration>,
+    swapchain: Mutex<Swapchain>,
     published: Published,
     // sl.common.dll path for presentation lookups, held only around loader queries.
     common: Mutex<Vec<u16>>,
@@ -162,9 +163,11 @@ impl Lifecycle {
                 shutdown_attempted: false,
                 shutdown_result: 0,
                 paths: None,
+                #[cfg(windows)]
+                frame_generation: FrameGeneration::new(),
             }),
             #[cfg(windows)]
-            frame_generation: Mutex::new(FrameGeneration::new()),
+            swapchain: Mutex::new(Swapchain::new()),
             published: Published {
                 module: AtomicPtr::new(null_mut()),
                 initialized: AtomicBool::new(false),
@@ -185,17 +188,33 @@ impl Lifecycle {
     }
 
     #[cfg(windows)]
-    pub(crate) fn frame_generation(&self) -> MutexGuard<'_, FrameGeneration> {
-        self.frame_generation
+    pub(crate) fn swapchain(&self) -> MutexGuard<'_, Swapchain> {
+        self.swapchain
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn reset_frame_generation(&self) {
-        #[cfg(windows)]
-        {
-            *self.frame_generation() = FrameGeneration::new();
+    #[cfg(windows)]
+    pub(crate) fn with_frame_generation(
+        &self,
+        inactive: i32,
+        call: impl FnOnce(&mut FrameGeneration, u64) -> i32,
+    ) -> i32 {
+        let Some(mut session) = self.session() else {
+            return BUSY;
+        };
+        if !session.initialized {
+            return inactive;
         }
+        // Release the WSI guard before the SDK can call back on any thread.
+        let revision = self.swapchain().revision;
+        call(&mut session.frame_generation, revision)
+    }
+
+    #[cfg(windows)]
+    fn reset_frame_generation(&self, session: &mut Session) {
+        session.frame_generation = FrameGeneration::new();
+        *self.swapchain() = Swapchain::new();
     }
 
     pub(crate) unsafe fn initialize(
@@ -297,7 +316,8 @@ impl Lifecycle {
         session.initialized = false;
         self.published.initialized.store(false, Ordering::Release);
         // Only the Vulkan dispatch entry points remain valid after slShutdown.
-        self.reset_frame_generation();
+        #[cfg(windows)]
+        self.reset_frame_generation(&mut session);
         unsafe { (platform.clear)(1) };
         session.shutdown_result
     }
@@ -336,7 +356,8 @@ impl Lifecycle {
         self.published.device.store(null_mut(), Ordering::Release);
         self.published.module.store(null_mut(), Ordering::Release);
         if let Some(module) = session.module.take() {
-            self.reset_frame_generation();
+            #[cfg(windows)]
+            self.reset_frame_generation(session);
             unsafe { (platform.clear)(0) };
             unsafe { system.free(module) };
         }
