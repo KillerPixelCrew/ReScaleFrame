@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::com_ref::ComRef;
 use crate::d3d11_output_abi::rsf_d3d11_state as State;
+use crate::dxgi_format::{D32_FLOAT_S8X24_UINT, R32G8X24_TYPELESS};
 use std::ffi::c_void;
 use std::mem::MaybeUninit;
 use std::ptr::null_mut;
@@ -10,8 +11,6 @@ type Handle = *mut c_void;
 type Resources = [Handle; 3];
 
 // D3D11 values, asserted beside the native leaves.
-const DEPTH_TYPELESS: u32 = 19;
-const DEPTH_VIEW_FORMAT: u32 = 20;
 const VIEW_TEXTURE2D: u32 = 3;
 const READ_ONLY_DEPTH: u32 = 1;
 const TRIANGLE_LIST: u32 = 4;
@@ -49,7 +48,7 @@ struct Candidate {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct Detail {
     draw_width: u32,
     draw_height: u32,
@@ -66,28 +65,6 @@ struct Detail {
     context: Handle,
     draws: u32,
     refused: u32,
-}
-
-impl Default for Detail {
-    fn default() -> Self {
-        Self {
-            draw_width: 0,
-            draw_height: 0,
-            draw_samples: 0,
-            dsv_format: 0,
-            dsv_dimension: 0,
-            dsv_flags: 0,
-            source_width: 0,
-            source_height: 0,
-            source_format: 0,
-            source_samples: 0,
-            layer: null_mut(),
-            source: null_mut(),
-            context: null_mut(),
-            draws: 0,
-            refused: 0,
-        }
-    }
 }
 
 #[repr(C)]
@@ -235,7 +212,7 @@ impl DepthReplay {
         detail.draw_height = candidate.height;
         detail.draw_samples = candidate.samples;
         // Sticky from here: these describe the frame rather than one draw.
-        if view.format != DEPTH_VIEW_FORMAT
+        if view.format != D32_FLOAT_S8X24_UINT
             || view.dimension != VIEW_TEXTURE2D
             || view.mip_slice != 0
             || view.flags & READ_ONLY_DEPTH == 0
@@ -255,7 +232,7 @@ impl DepthReplay {
         detail.source_samples = info.samples;
         if info.width != self.width
             || info.height != self.height
-            || info.format != DEPTH_TYPELESS
+            || info.format != R32G8X24_TYPELESS
             || info.samples != 1
             || info.quality != 0
             || info.mips != 1
@@ -292,8 +269,11 @@ impl DepthReplay {
         let resources: Resources = std::array::from_fn(|i| self.resources[i].as_ptr());
         // A narrow scope: output targets, depth state and pixel shader only.
         let mut saved = MaybeUninit::<State>::uninit();
+        if unsafe { (platform.save)(context, saved.as_mut_ptr()) } == 0 {
+            frame.last_reject = PIPELINE;
+            return 0;
+        }
         unsafe {
-            (platform.save)(context, saved.as_mut_ptr());
             (platform.unbind)(context);
             if frame.draws == 0 {
                 (platform.copy)(context, resources[0], source);
@@ -301,7 +281,7 @@ impl DepthReplay {
             (platform.draw)(context, &resources, candidate.geometry);
             (platform.restore)(context, saved.as_mut_ptr());
         }
-        frame.draws += 1;
+        frame.draws = frame.draws.saturating_add(1);
         1
     }
 }

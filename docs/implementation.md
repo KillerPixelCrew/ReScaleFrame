@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now owns the D3D11 depth rescale transaction and the depth replay
+frame. The port keeps the original shader and native draw calls,
+including the order of depth and stencil writes. A replay with a
+missing depth resource or a refused state snapshot leaves the context
+untouched. The depth scale and replay signatures are unchanged, and
+the replay header documents the existing diagnostic codes. Source
+checks and the remaining verification are recorded in commit `02c26ac`.
+
 Rust now owns D3D11 colour transport and fidelity, including resource
 leases and dispatch order, using the shared view cache and context
 restore helper. A refused resize leaves the last encoded target
