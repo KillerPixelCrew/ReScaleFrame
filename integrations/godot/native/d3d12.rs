@@ -500,8 +500,9 @@ impl D3d12 {
     }
 }
 
-/// The requested sharpening, or the Runtime defaults when none was requested.
-fn sharpening(platform: &Platform, settings: &Settings) -> Sharpening {
+/// The requested sharpening, or the Runtime defaults when none was requested. The Vulkan SR
+/// owner (`vulkan/sr.rs`) applies the same rule.
+pub(crate) fn sharpening(platform: &Platform, settings: &Settings) -> Sharpening {
     if settings.sharpening.struct_size != 0 {
         settings.sharpening
     } else {

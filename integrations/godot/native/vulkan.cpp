@@ -28,21 +28,29 @@ struct rsf_fsr4vk;
 
 // The boot state, session identity, requested settings and their generation, the status record,
 // configure admission and the presenter, FG and SR accounting are owned by the Rust Vulkan session
-// (native/vulkan.rs). This file keeps the guard, the Vulkan, Streamline, XeSS, FidelityFX,
-// presenter and capture calls, and the SR contexts; under the guard it reads the session through
-// rsf_godot_vk_view_get and reports each transition. Lock order: guard, then the Rust state.
+// (native/vulkan.rs), and the SR contexts, their retirement, creation, plan, evaluate and fallback
+// sequencing by its SR context owner (native/vulkan/sr.rs). This file keeps the guard, the Vulkan,
+// Streamline, XeSS, FidelityFX, presenter, capture and SR provider calls; under the guard it reads
+// the session through rsf_godot_vk_view_get and reports each transition. Lock order: guard, then
+// the Rust state.
 static_assert(sizeof(rsf_godot_vk_facts) == 40 && sizeof(rsf_godot_vk_latency_facts) == 40 &&
     offsetof(rsf_godot_vk_latency_facts, sleep_calls) == 24);
 static_assert(sizeof(rsf_godot_vk_view) == 136 && offsetof(rsf_godot_vk_view, generation) == 104 &&
     offsetof(rsf_godot_vk_view, fg_result) == 132);
 static_assert(sizeof(rsf_godot_vk_fg_pass) == 48 && offsetof(rsf_godot_vk_fg_pass, options_result) == 36);
-static_assert(sizeof(rsf_godot_vk_present_facts) == 32 && sizeof(rsf_godot_vk_sr_frame) == 40 &&
-    offsetof(rsf_godot_vk_sr_frame, source_frame_id) == 32);
+static_assert(sizeof(rsf_godot_vk_present_facts) == 32);
+static_assert(sizeof(rsf_godot_vk_sr_pass) == 72 && offsetof(rsf_godot_vk_sr_pass, output_width) == 32 &&
+    offsetof(rsf_godot_vk_sr_pass, source_frame_id) == 40 && offsetof(rsf_godot_vk_sr_pass, handoff) == 56 &&
+    sizeof(rsf_godot_vk_sr_create) == 8 && sizeof(rsf_godot_vk_sr_context) == 16 &&
+    offsetof(rsf_godot_vk_sr_context, result) == 8);
 static_assert(RSF_BACKEND_ERROR_NOT_SUPPORTED == -7 && RSF_BACKEND_ERROR_NOT_READY == -8 &&
     RSF_SCREEN_FLIGHT == 4 && RSF_GAME_RENDER_SR == 1 && RSF_SR_FSR3 == 3 && RSF_SR_FSR4 == 4 &&
     RSF_SR_XESS == 5 && RSF_SR_AUTO == 7 && RSF_FG_BACKEND_DLSS == 1 && RSF_FG_BACKEND_FSR3 == 3 &&
     RSF_FG_BACKEND_FSR4 == 4 && RSF_GODOT_ABI_VERSION == 3,
     "native/vulkan.rs mirrors these Runtime constants");
+static_assert(RSF_BACKEND_OK == 0 && RSF_BACKEND_ERROR_INVALID_ARGUMENT == -1 &&
+    RSF_BACKEND_ERROR_NOT_COMPILED == -3 && RSF_SR_NONE == 0 && RSF_SR_DLSS == 1 && RSF_SR_SPATIAL == 6,
+    "native/vulkan/sr.rs mirrors these Runtime constants");
 
 namespace {
 std::mutex guard;
@@ -52,16 +60,8 @@ std::string fsr4_directory;
 std::wstring intel_directory;
 void* primary_window = nullptr;
 uint64_t render_source_frame = 0;
-rsf_srvk* context = nullptr;
-rsf_fsr4vk* fsr4_context = nullptr;
-bool context_ready = false;
-void* device = nullptr;
-rsf_godot_vk_proc device_proc = nullptr;
-uint64_t context_generation = 0;
-uint32_t context_backend = 0;
 rsf_game_log_fn logger = nullptr;
 void* logger_user = nullptr;
-uint32_t diagnostics = 0;
 rsf_fgvk* presentation = nullptr;
 // Device/proc callback borrows remain valid while the presentation owner lives.
 // This copy never retains caller create-info or runtime-directory pointers.
@@ -147,20 +147,47 @@ void capture_present_impl(rsf_fgvk* owner, const void* native_info, int32_t resu
     if (code && logger) logger(logger_user, "Core frame dump: final Vulkan image could not be read; see the bundle's missing stage.");
 }
 #endif
-bool retire() {
-    if (!context && !fsr4_context) return true;
-    if (presentation && rsf_fgvk_drain(presentation) != RSF_BACKEND_OK) return false;
-    using WaitIdle = int32_t (*)(void*);
-    auto wait = device_proc ? reinterpret_cast<WaitIdle>(device_proc(device, "vkDeviceWaitIdle")) : nullptr;
-    if (!wait || wait(device) != 0) return false;
-#if defined(RSF_VULKAN_FSR4_ENABLED)
-    if (fsr4_context && rsf_fsr4vk_destroy(fsr4_context) != 0) return false;
-#endif
-    fsr4_context = nullptr;
-    if (context && rsf_srvk_destroy(context) != RSF_BACKEND_OK) return false;
-    context = nullptr;
-    context_ready = false;
-    return true;
+rsf_srvk_image image(const rsf_godot_vk_packet* packet, const rsf_godot_vk_image& value, uint32_t layout) {
+    return rsf_srvk_image{packet->device, value.image, value.format, value.width, value.height, layout, value.copy_source};
+}
+// One SR pass as the SR leaves see it. The Rust owner holds only its address for the call.
+struct sr_call {
+    void* commands;
+    void** continuation;
+    const rsf_godot_vk_packet* packet;
+    const rsf_godot_vk_handoff* handoff;
+    rsf_frame_record* record;
+    rsf_srvk_frame frame; // the last evaluated frame, for the input refusal log
+    uint32_t plan_width, plan_height;
+    int fsr4_code;
+};
+sr_call& pass_of(void* call) { return *static_cast<sr_call*>(call); }
+rsf_srvk_setup sr_setup(const sr_call& call, const rsf_godot_vk_sr_create& request) {
+    const auto* packet = call.packet;
+    const auto& camera = packet->pass.camera;
+    rsf_srvk_setup setup{}; setup.struct_size = sizeof(setup); setup.abi_version = RSF_SRVK_ABI_VERSION;
+    setup.instance = packet->instance; setup.physical_device = packet->physical_device; setup.device = packet->device;
+    setup.instance_proc = reinterpret_cast<rsf_vk_get_proc>(packet->instance_proc);
+    setup.device_proc = reinterpret_cast<rsf_vk_get_proc>(packet->device_proc);
+    setup.backend = request.backend; setup.quality = request.quality; setup.output_width = camera.output_width; setup.output_height = camera.output_height;
+    setup.depth_inverted = camera.depth_inverted;
+    // The pinned Godot producer supplies finite z_far; camera ABI 1 has no infinite-depth promise.
+    setup.depth_infinite = 0;
+    setup.motion_jittered = camera.motion_jittered; setup.runtime_directory_utf8 = directory.c_str();
+    return setup;
+}
+rsf_srvk_frame sr_frame(const sr_call& call, const rsf_sharpening_options& sharpening) {
+    const auto* packet = call.packet;
+    const auto& pass = packet->pass;
+    const auto& camera = pass.camera;
+    rsf_srvk_frame frame{}; frame.struct_size = sizeof(frame); frame.abi_version = RSF_SRVK_ABI_VERSION; frame.record = call.record;
+    // Vulkan SHADER_READ_ONLY_OPTIMAL = 5, TRANSFER_DST_OPTIMAL = 7.
+    frame.sharpening = sharpening;
+    frame.log=logger;frame.log_user=logger_user;
+    frame.color = image(packet, packet->color, 5); frame.depth = image(packet, packet->depth, 5); frame.motion = image(packet, packet->motion, 5); frame.output = image(packet, packet->output, 7);
+    frame.motion_scale_x = -float(camera.render_width) * pass.motion_to_uv[0];
+    frame.motion_scale_y = -float(camera.render_height) * pass.motion_to_uv[1]; frame.pre_exposure = 1;
+    return frame;
 }
 }
 namespace rsf::godot_vk {
@@ -200,7 +227,6 @@ int32_t leaf_start(const rsf_godot_setup* setup) try {
     directory = std::string(setup->runtime_directory) + "/fidelityfx-vulkan";
     fsr4_directory = std::string(setup->runtime_directory) + "/fidelityfx";
     logger = setup->log; logger_user = setup->log_user;
-    diagnostics = 0;
     streamline_directory = std::string(setup->runtime_directory) + "/streamline-vulkan";
     const rsf_slvk_setup latency{sizeof(latency), RSF_SLVK_ABI_VERSION, streamline_directory.c_str(), setup->project_id, RSF_SLVK_DLSS_SR | RSF_SLVK_DLSS_FG};
     const auto latency_result = rsf_slvk_initialize(&latency);
@@ -225,11 +251,7 @@ int32_t leaf_start(const rsf_godot_setup* setup) try {
     return 1;
 } catch (...) { return 0; }
 int32_t leaf_stop() try {
-    if (presentation) {
-        (void)rsf_fgvk_enable(presentation, 0);
-        if (rsf_fgvk_drain(presentation) != RSF_BACKEND_OK) return 0;
-    }
-    if (!retire()) return 0;
+    // The owner already disabled and drained the presenter and retired the SR contexts.
 #if defined(RSF_FRAME_DUMP_VULKAN)
     if (release_capture(dump_setup.user) != RSF_BACKEND_OK) return 0;
 #endif
@@ -243,7 +265,7 @@ int32_t leaf_stop() try {
 } catch (...) { return 0; }
 void leaf_release(uint64_t session_id) try {
     rsf_input_dump_cancel(session_id);
-    device = nullptr; device_proc = nullptr; directory.clear();
+    directory.clear();
 } catch (...) {}
 void leaf_facts(rsf_godot_vk_facts* facts) try {
     *facts = {};
@@ -282,6 +304,141 @@ uint32_t leaf_fsr4_fg_probe() try {
 int32_t leaf_latency_options(uint32_t mode, uint32_t frame_limit_us) try {
     return rsf_latencyvk_options(mode, frame_limit_us);
 } catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
+
+// SR context leaves for native/vulkan/sr.rs. Each runs with the guard held and decides nothing.
+int32_t leaf_presenter_drain(uint32_t disable) try {
+    if (!presentation) return RSF_BACKEND_OK;
+    if (disable) (void)rsf_fgvk_enable(presentation, 0);
+    return rsf_fgvk_drain(presentation);
+} catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
+uint32_t leaf_device_idle(void* device, rsf_godot_vk_proc device_proc) try {
+    using WaitIdle = int32_t (*)(void*);
+    auto wait = device_proc ? reinterpret_cast<WaitIdle>(device_proc(device, "vkDeviceWaitIdle")) : nullptr;
+    return wait && wait(device) == 0 ? 1u : 0u;
+} catch (...) { return 0; }
+int32_t leaf_sr_destroy(void* context) try {
+    return rsf_srvk_destroy(static_cast<rsf_srvk*>(context));
+} catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
+int32_t leaf_fsr4_destroy(void* context) try {
+#if defined(RSF_VULKAN_FSR4_ENABLED)
+    return rsf_fsr4vk_destroy(static_cast<rsf_fsr4vk*>(context));
+#else
+    (void)context; // Never created without the provider.
+    return 0;
+#endif
+} catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
+uint32_t leaf_sr_create(void* call, const rsf_godot_vk_sr_create* request, rsf_godot_vk_sr_context* created) try {
+    auto setup = sr_setup(pass_of(call), *request);
+    rsf_srvk* context = nullptr;
+    created->result = rsf_srvk_create(&setup, &context);
+    created->handle = context;
+    return 1;
+} catch (...) { return 0; }
+uint32_t leaf_fsr4_create(void* call, const rsf_godot_vk_sr_create* request, rsf_godot_vk_sr_context* created) try {
+#if defined(RSF_VULKAN_FSR4_ENABLED)
+    const auto& value = pass_of(call);
+    const auto* handoff = value.handoff;
+    auto setup = sr_setup(value, *request);
+    setup.runtime_directory_utf8 = fsr4_directory.c_str();
+    const rsf_fsr4vk_handoff exchange{sizeof(exchange), 1, handoff->timeline_enabled, handoff->queue_family,
+        handoff->user, handoff->split_record};
+    rsf_fsr4vk* context = nullptr;
+    const int code = rsf_fsr4vk_create(&setup, &exchange, &context);
+    created->handle = context;
+    created->result = code == 0 ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_INIT_FAILED;
+    if (logger) {
+        char message[160]; std::snprintf(message, sizeof(message), "Godot Vulkan FSR4 interop context: create=%d retained=%u", code, context ? 1u : 0u);
+        logger(logger_user, message);
+    }
+#else
+    (void)call; (void)request;
+    created->result = RSF_BACKEND_ERROR_NOT_COMPILED;
+#endif
+    return 1;
+} catch (...) { return 0; }
+uint32_t leaf_dlss_preset(void* context, uint32_t preset) try {
+    (void)rsf_srvk_dlss_preset(static_cast<rsf_srvk*>(context), preset);
+    return 1;
+} catch (...) { return 0; }
+uint32_t leaf_sr_plan(void* call, void* context, uint32_t* width, uint32_t* height) try {
+    auto& value = pass_of(call);
+    uint32_t planned_width = 0, planned_height = 0;
+    (void)rsf_srvk_plan(static_cast<rsf_srvk*>(context), &planned_width, &planned_height);
+    *width = value.plan_width = planned_width; *height = value.plan_height = planned_height;
+    return 1;
+} catch (...) { return 0; }
+uint32_t leaf_fsr4_plan(void* call, void* context, uint32_t* width, uint32_t* height) try {
+    auto& value = pass_of(call);
+    uint32_t planned_width = 0, planned_height = 0;
+#if defined(RSF_VULKAN_FSR4_ENABLED)
+    (void)rsf_fsr4vk_plan(static_cast<rsf_fsr4vk*>(context), &planned_width, &planned_height);
+#else
+    (void)context;
+#endif
+    *width = value.plan_width = planned_width; *height = value.plan_height = planned_height;
+    return 1;
+} catch (...) { return 0; }
+uint32_t leaf_sr_evaluate(void* call, void* context, const rsf_sharpening_options* sharpening, int32_t* result) try {
+    auto& value = pass_of(call);
+    value.frame = sr_frame(value, *sharpening);
+    *result = rsf_srvk_evaluate(static_cast<rsf_srvk*>(context), value.commands, &value.frame);
+    return 1;
+} catch (...) { return 0; }
+uint32_t leaf_fsr4_evaluate(void* call, void* context, const rsf_sharpening_options* sharpening, int32_t* result,
+    void** next) try {
+    auto& value = pass_of(call);
+    value.frame = sr_frame(value, *sharpening);
+#if defined(RSF_VULKAN_FSR4_ENABLED)
+    void* following = value.commands;
+    const int code = rsf_fsr4vk_evaluate(static_cast<rsf_fsr4vk*>(context), value.commands, &value.frame, &following);
+    value.commands = following; *value.continuation = following;
+    value.fsr4_code = code;
+    *result = code == 0 ? RSF_BACKEND_OK :
+        (code == RSF_FSR4_BRIDGE_INVALID_ARGUMENT ? RSF_BACKEND_ERROR_INVALID_ARGUMENT : RSF_BACKEND_ERROR_FEATURE_FAILED);
+#else
+    (void)context;
+    *result = RSF_BACKEND_ERROR_NOT_COMPILED;
+#endif
+    *next = value.commands;
+    return 1;
+} catch (...) { return 0; }
+uint32_t leaf_sr_fallback(void* call, int32_t* result) try {
+    const auto& value = pass_of(call);
+    const auto* packet = value.packet;
+    rsf_srvk_fallback fallback{}; fallback.struct_size = sizeof(fallback); fallback.abi_version = RSF_SRVK_ABI_VERSION;
+    fallback.instance = packet->instance; fallback.physical_device = packet->physical_device; fallback.device = packet->device;
+    fallback.instance_proc = reinterpret_cast<rsf_vk_get_proc>(packet->instance_proc);
+    fallback.device_proc = reinterpret_cast<rsf_vk_get_proc>(packet->device_proc); fallback.command_buffer = value.commands;
+    fallback.color = image(packet, packet->color, 5); fallback.output = image(packet, packet->output, 7);
+    *result = rsf_srvk_spatial_fallback(&fallback);
+    return 1;
+} catch (...) { return 0; }
+uint32_t leaf_sr_log(void* call, uint32_t kind, int32_t provider_result, int32_t fallback_result) try {
+    if (!logger) return 1;
+    const auto& value = pass_of(call);
+    if (kind == RSF_GODOT_VK_LOG_REJECTED) {
+        char message[128]; std::snprintf(message, sizeof(message), "Vulkan SR rejected: provider=%d spatial fallback=%d", provider_result, fallback_result);
+        logger(logger_user, message);
+    } else if (kind == RSF_GODOT_VK_LOG_FSR4_DISPATCH) {
+        char message[160]; std::snprintf(message, sizeof(message), "Godot Vulkan FSR4 dispatch: result=%d continuation=%u", value.fsr4_code, value.commands ? 1u : 0u);
+        logger(logger_user, message);
+    } else if (kind == RSF_GODOT_VK_LOG_INPUT_REFUSAL) {
+        const auto& record = *value.record;
+        const auto& frame = value.frame;
+        char message[512];
+        std::snprintf(message, sizeof(message), "Vulkan SR input refusal: frame=%llu render=%ux%u plan=%ux%u output=%ux%u formats=%u/%u/%u/%u sizes=%ux%u/%ux%u/%ux%u/%ux%u ms=%.3f near=%.3f far=%.3f fov=%.3f",
+            static_cast<unsigned long long>(record.frame_id), record.render_width, record.render_height, value.plan_width, value.plan_height, record.output_width, record.output_height,
+            frame.color.format, frame.depth.format, frame.motion.format, frame.output.format,
+            frame.color.width, frame.color.height, frame.depth.width, frame.depth.height, frame.motion.width, frame.motion.height, frame.output.width, frame.output.height,
+            record.frame_time_ms, record.camera.near_plane, record.camera.far_plane, record.camera.vertical_fov_radians);
+        logger(logger_user, message);
+    }
+    return 1;
+} catch (...) { return 0; }
+uint32_t leaf_sr_dump_result(void* call, uint32_t backend, int32_t result) try {
+    rsf_input_dump_result(pass_of(call).record, "sr", backend, result);
+    return 1;
+} catch (...) { return 0; }
 }
 extern "C" rsf_godot_vk_proc rsfg_vk_resolver() {
     return resolver;
@@ -396,9 +553,12 @@ extern "C" int32_t rsfg_vk_present(void* value, const void* info) try {
 } catch (...) { return -3; }
 extern "C" void rsfg_vk_recording_begin(void* commands) try {
     std::lock_guard lock(guard);
-    if (context) rsf_srvk_retire_commands(context,commands);
+    void* context = nullptr;
+    void* fsr4_context = nullptr;
+    rsf_godot_vk_sr_contexts(&context, &fsr4_context);
+    if (context) rsf_srvk_retire_commands(static_cast<rsf_srvk*>(context),commands);
 #if defined(RSF_VULKAN_FSR4_ENABLED)
-    if (fsr4_context) rsf_srvk_fsr4_retire_commands(fsr4_context,commands);
+    if (fsr4_context) rsf_srvk_fsr4_retire_commands(static_cast<rsf_fsr4vk*>(fsr4_context),commands);
 #endif
 } catch (...) {}
 extern "C" void rsfg_vk_submitted(void* const* commands, uint32_t count) try {
@@ -439,7 +599,6 @@ int render_vulkan_impl(void* commands, const rsf_godot_vk_packet* packet,
     if (rsf_game_depth_domains_requested(&pass.depth_domains)) return 0;
     rsf_godot_vk_view view{};
     (void)rsf_godot_vk_view_get(&view);
-    const auto& requested = view.settings;
     const auto& camera = pass.camera;
     rsf_frame_record record{}; record.struct_size = sizeof(record); record.abi_version = RSF_GAME_FRAME_ABI_VERSION;
     record.session_id = pass.session_id; record.frame_id = pass.source_frame_id; record.view_id = static_cast<uint32_t>(pass.view_key);
@@ -447,17 +606,14 @@ int render_vulkan_impl(void* commands, const rsf_godot_vk_packet* packet,
     record.render_width = camera.render_width; record.render_height = camera.render_height;
     record.output_width = camera.output_width; record.output_height = camera.output_height;
     record.flags = pass.flags & RSF_GAME_RENDER_RESET ? RSF_FRAME_FLAG_RESET : 0;
-    auto image = [packet](const rsf_godot_vk_image& value, uint32_t layout) {
-        return rsf_srvk_image{packet->device, value.image, value.format, value.width, value.height, layout, value.copy_source};
-    };
 #if defined(RSF_FRAME_DUMP_VULKAN)
     dump_record = record;
-    if (pass.role == RSF_GAME_RENDER_SR) (void)rsf_input_dump_begin_record(&record, requested.sr_backend);
+    if (pass.role == RSF_GAME_RENDER_SR) (void)rsf_input_dump_begin_record(&record, view.settings.sr_backend);
     (void)dump_stages.wants(record.frame_id); // Poll completed snapshots even after the selected frame.
     if (rsf_input_dump_wants(&record)) {
         rsf_input_dump_pass_metadata(&pass);
         if (pass.role == RSF_GAME_RENDER_FINAL_SCENE)
-            (void)dump_stages.record(static_cast<VkCommandBuffer>(commands), image(packet->color, 5), record, "hudless_color", record.flags);
+            (void)dump_stages.record(static_cast<VkCommandBuffer>(commands), image(packet, packet->color, 5), record, "hudless_color", record.flags);
     }
 #endif
     if (presentation) {
@@ -465,7 +621,7 @@ int render_vulkan_impl(void* commands, const rsf_godot_vk_packet* packet,
         rsf_godot_vk_fg_begin(&fg_pass);
         fg_pass.options_result = rsf_fgvk_enable_options(presentation, fg_pass.enabled, fg_pass.generated_frames);
         rsf_fgvk_frame fg{}; fg.struct_size = sizeof(fg); fg.abi_version = RSF_FGVK_ABI_VERSION; fg.record = &record;
-        fg.depth = image(packet->depth, 5); fg.motion = image(packet->motion, 5); fg.hudless = image(packet->color, 5);
+        fg.depth = image(packet, packet->depth, 5); fg.motion = image(packet, packet->motion, 5); fg.hudless = image(packet, packet->color, 5);
         fg.motion_scale_x = -float(camera.render_width) * pass.motion_to_uv[0]; fg.motion_scale_y = -float(camera.render_height) * pass.motion_to_uv[1];
         fg_pass.backend_valid = rsf_fgvk_backend(presentation, &fg_pass.backend) == RSF_BACKEND_OK ? 1u : 0u;
         if (rsf_godot_vk_fg_admit(&fg_pass)) {
@@ -479,115 +635,20 @@ int render_vulkan_impl(void* commands, const rsf_godot_vk_packet* packet,
         (void)rsf_godot_vk_view_get(&after);
         return after.fg_result == RSF_BACKEND_OK ? 1 : 0;
     }
-    // Every SR outcome below is reported once; the session derives the status from it.
-    rsf_godot_vk_sr_frame sr{};
-    sr.outcome = RSF_GODOT_VK_SR_UNCOUNTED;
-    auto report = [&sr](int value) { rsf_godot_vk_sr_frame_report(&sr); return value; };
-    auto fallback = [&]() {
-        rsf_srvk_fallback call{}; call.struct_size = sizeof(call); call.abi_version = RSF_SRVK_ABI_VERSION;
-        call.instance = packet->instance; call.physical_device = packet->physical_device; call.device = packet->device;
-        call.instance_proc = reinterpret_cast<rsf_vk_get_proc>(packet->instance_proc);
-        call.device_proc = reinterpret_cast<rsf_vk_get_proc>(packet->device_proc); call.command_buffer = commands;
-        call.color = image(packet->color, 5); call.output = image(packet->output, 7);
-        if (!commands) return report(0);
-        const auto result = rsf_srvk_spatial_fallback(&call);
-        sr.outcome = RSF_GODOT_VK_SR_REFUSED;
-        if (diagnostics++ < 4 && logger) {
-            char message[128]; std::snprintf(message, sizeof(message), "Vulkan SR rejected: provider=%d spatial fallback=%d", sr.result, result);
-            logger(logger_user, message);
-        }
-        return report(result == RSF_BACKEND_OK ? 1 : 0);
-    };
-    const uint32_t backend = view.sr_backend;
-    if ((context || fsr4_context) && (!context_ready || view.generation != context_generation || packet->device != device ||
-        view.output_width != camera.output_width || view.output_height != camera.output_height)) {
-        if (!retire()) { sr.result = RSF_BACKEND_ERROR_NOT_READY; return fallback(); }
-    }
-    sr.identity = 1;
+    // The SR context owner (native/vulkan/sr.rs) retires, creates, plans and evaluates through the
+    // leaves below this call, takes the spatial fallback and reports the outcome once.
+    sr_call call{commands, continuation, packet, handoff, &record, {}, 0, 0, 0};
+    rsf_godot_vk_sr_pass sr{};
+    sr.call = &call; sr.commands = commands; sr.device = packet->device; sr.device_proc = packet->device_proc;
     sr.output_width = camera.output_width; sr.output_height = camera.output_height;
-    sr.render_width = camera.render_width; sr.render_height = camera.render_height;
     sr.source_frame_id = pass.source_frame_id;
-    if (backend == 0 || backend == 6) {
-        sr.backend = backend; sr.result = RSF_BACKEND_OK; sr.outcome = RSF_GODOT_VK_SR_EVALUATED;
-        return report(1);
-    }
-    if (!context && !fsr4_context) {
-        context_ready = false;
-        device = packet->device; device_proc = packet->device_proc;
-        rsf_srvk_setup setup{}; setup.struct_size = sizeof(setup); setup.abi_version = RSF_SRVK_ABI_VERSION;
-        setup.instance = packet->instance; setup.physical_device = packet->physical_device; setup.device = packet->device;
-        setup.instance_proc = reinterpret_cast<rsf_vk_get_proc>(packet->instance_proc);
-        setup.device_proc = reinterpret_cast<rsf_vk_get_proc>(packet->device_proc);
-        setup.backend = backend; setup.quality = requested.quality; setup.output_width = camera.output_width; setup.output_height = camera.output_height;
-        setup.depth_inverted = camera.depth_inverted;
-        // The pinned Godot producer supplies finite z_far; camera ABI 1 has no infinite-depth promise.
-        setup.depth_infinite = 0;
-        setup.motion_jittered = camera.motion_jittered; setup.runtime_directory_utf8 = directory.c_str();
-        if (backend == 4) {
+    sr.render_width = camera.render_width; sr.render_height = camera.render_height;
+    sr.handoff = handoff ? 1u : 0u; sr.split_record = handoff && handoff->split_record ? 1u : 0u;
+    sr.continuation = continuation ? 1u : 0u;
 #if defined(RSF_VULKAN_FSR4_ENABLED)
-            if (!handoff || !handoff->split_record || !continuation) { sr.result = RSF_BACKEND_ERROR_NOT_READY; return fallback(); }
-            setup.runtime_directory_utf8 = fsr4_directory.c_str();
-            const rsf_fsr4vk_handoff exchange{sizeof(exchange), 1, handoff->timeline_enabled, handoff->queue_family,
-                handoff->user, handoff->split_record};
-            const int code = rsf_fsr4vk_create(&setup, &exchange, &fsr4_context);
-            sr.result = code == 0 ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_INIT_FAILED;
-            if (logger) {
-                char message[160]; std::snprintf(message, sizeof(message), "Godot Vulkan FSR4 interop context: create=%d retained=%u", code, fsr4_context ? 1u : 0u);
-                logger(logger_user, message);
-            }
-#else
-            sr.result = RSF_BACKEND_ERROR_NOT_COMPILED;
+    sr.fsr4_compiled = 1;
 #endif
-        } else sr.result = rsf_srvk_create(&setup, &context);
-        if (!context && !fsr4_context) return fallback();
-        if (sr.result != RSF_BACKEND_OK) return fallback();
-        if (backend == 1) (void)rsf_srvk_dlss_preset(context, requested.dlss_preset);
-        device = packet->device; device_proc = packet->device_proc;
-        context_generation = view.generation; context_backend = backend;
-        context_ready = true;
-    }
-    uint32_t width = 0, height = 0;
-#if defined(RSF_VULKAN_FSR4_ENABLED)
-    if (fsr4_context) (void)rsf_fsr4vk_plan(fsr4_context, &width, &height); else
-#endif
-    (void)rsf_srvk_plan(context, &width, &height);
-    sr.render_width = width; sr.render_height = height;
-    rsf_srvk_frame frame{}; frame.struct_size = sizeof(frame); frame.abi_version = RSF_SRVK_ABI_VERSION; frame.record = &record;
-    // Vulkan SHADER_READ_ONLY_OPTIMAL = 5, TRANSFER_DST_OPTIMAL = 7.
-    frame.sharpening=requested.sharpening.struct_size?requested.sharpening:rsf_sharpening_defaults();
-    frame.log=logger;frame.log_user=logger_user;
-    frame.color = image(packet->color, 5); frame.depth = image(packet->depth, 5); frame.motion = image(packet->motion, 5); frame.output = image(packet->output, 7);
-    frame.motion_scale_x = -float(camera.render_width) * pass.motion_to_uv[0];
-    frame.motion_scale_y = -float(camera.render_height) * pass.motion_to_uv[1]; frame.pre_exposure = 1;
-    if (backend == 4) {
-#if defined(RSF_VULKAN_FSR4_ENABLED)
-        if (!handoff || !continuation) { sr.result = RSF_BACKEND_ERROR_NOT_READY; return fallback(); }
-        void* next = commands;
-        const int code = rsf_fsr4vk_evaluate(fsr4_context, commands, &frame, &next);
-        commands = next; *continuation = next;
-        sr.result = code == 0 ? RSF_BACKEND_OK :
-            (code == RSF_FSR4_BRIDGE_INVALID_ARGUMENT ? RSF_BACKEND_ERROR_INVALID_ARGUMENT : RSF_BACKEND_ERROR_FEATURE_FAILED);
-        if (code && diagnostics++ < 4 && logger) {
-            char message[160]; std::snprintf(message, sizeof(message), "Godot Vulkan FSR4 dispatch: result=%d continuation=%u", code, next ? 1u : 0u);
-            logger(logger_user, message);
-        }
-#else
-        sr.result = RSF_BACKEND_ERROR_NOT_COMPILED;
-#endif
-    } else sr.result = rsf_srvk_evaluate(context, commands, &frame);
-    rsf_input_dump_result(&record, "sr", context_backend, sr.result);
-    if (sr.result == RSF_BACKEND_ERROR_INVALID_ARGUMENT && diagnostics++ < 4 && logger) {
-        char message[512];
-        std::snprintf(message, sizeof(message), "Vulkan SR input refusal: frame=%llu render=%ux%u plan=%ux%u output=%ux%u formats=%u/%u/%u/%u sizes=%ux%u/%ux%u/%ux%u/%ux%u ms=%.3f near=%.3f far=%.3f fov=%.3f",
-            static_cast<unsigned long long>(record.frame_id), record.render_width, record.render_height, width, height, record.output_width, record.output_height,
-            frame.color.format, frame.depth.format, frame.motion.format, frame.output.format,
-            frame.color.width, frame.color.height, frame.depth.width, frame.depth.height, frame.motion.width, frame.motion.height, frame.output.width, frame.output.height,
-            record.frame_time_ms, record.camera.near_plane, record.camera.far_plane, record.camera.vertical_fov_radians);
-        logger(logger_user, message);
-    }
-    if (sr.result != RSF_BACKEND_OK) return fallback();
-    sr.backend = context_backend; sr.outcome = RSF_GODOT_VK_SR_EVALUATED;
-    return report(1);
+    return rsf_godot_vk_sr_render(rsf_godot_platform_leaves(), &sr);
 } catch (...) { return 0; }
 } // namespace
 extern "C" int rsfg_render_vulkan(void* commands, const rsf_godot_vk_packet* packet) {

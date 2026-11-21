@@ -2,8 +2,8 @@
 //! Test leaves. Recorded calls are thread-local, so parallel tests do not share them.
 use super::{
     FgFacts, FgInstall, FgOptions, InputFacts, LatencyFacts, LockedBody, PLATFORM_VERSION,
-    Platform, Setup, Sharpening, SrContext, SrCreate, SrEvaluate, VkFacts, VkLatencyFacts,
-    WindowFacts,
+    Platform, Setup, Sharpening, SrContext, SrCreate, SrEvaluate, VkFacts, VkLatencyFacts, VkProc,
+    VkSrContext, VkSrCreate, WindowFacts,
 };
 use rsf_game_sys::rsf_game_render_pass;
 use std::cell::{Cell, RefCell};
@@ -47,6 +47,22 @@ thread_local! {
     /// The last Present pass: source frame, session, role, screen, swapchain and colour input.
     pub(crate) static WINDOW: Cell<Option<(u64, u64, u32, u32, usize, usize)>> =
         const { Cell::new(None) };
+    /// The Vulkan SR context leaves in call order, each with its main argument.
+    static VK_SR_CALLS: RefCell<Vec<(&'static str, u64)>> = const { RefCell::new(Vec::new()) };
+    pub(crate) static VK_DRAIN: Cell<i32> = const { Cell::new(0) };
+    pub(crate) static VK_IDLE: Cell<u32> = const { Cell::new(1) };
+    pub(crate) static VK_DESTROY: Cell<i32> = const { Cell::new(0) };
+    /// The next creation: its result and whether it returns a handle.
+    pub(crate) static VK_CREATE: Cell<(i32, bool)> = const { Cell::new((0, true)) };
+    static VK_CONTEXTS: Cell<usize> = const { Cell::new(0) };
+    pub(crate) static VK_PLAN: Cell<(u32, u32)> = const { Cell::new((1280, 720)) };
+    pub(crate) static VK_EVALUATED: Cell<i32> = const { Cell::new(0) };
+    /// The command buffer an FSR4 evaluate continues on.
+    pub(crate) static VK_NEXT: Cell<usize> = const { Cell::new(0x7000) };
+    pub(crate) static VK_FALLBACK: Cell<i32> = const { Cell::new(0) };
+    pub(crate) static VK_SHARPENING: Cell<Option<Sharpening>> = const { Cell::new(None) };
+    /// A leaf that reports an exception.
+    pub(crate) static VK_THROWS: Cell<Option<&'static str>> = const { Cell::new(None) };
 }
 
 /// `rsf_sharpening_defaults()` as `sharpening_settings.h` defines it.
@@ -367,6 +383,146 @@ unsafe extern "C" fn d3d12_release(context: *mut c_void, _: u64) -> u32 {
     1
 }
 
+/// Records the call; zero when the test made it throw.
+fn vk_sr(call: &'static str, argument: u64) -> u32 {
+    VK_SR_CALLS.with_borrow_mut(|calls| calls.push((call, argument)));
+    u32::from(VK_THROWS.get() != Some(call))
+}
+
+/// The Vulkan SR leaf calls since the last take.
+pub(crate) fn take_vk_sr_calls() -> Vec<(&'static str, u64)> {
+    VK_SR_CALLS.take()
+}
+
+/// The handle of the nth Vulkan SR context the fake created.
+pub(crate) const fn vk_context_handle(nth: usize) -> u64 {
+    (nth * 0x10000) as u64
+}
+
+unsafe extern "C" fn vulkan_presenter_drain(disable: u32) -> i32 {
+    vk_sr("drain", disable.into());
+    VK_DRAIN.get()
+}
+
+unsafe extern "C" fn vulkan_device_idle(device: *mut c_void, proc: Option<VkProc>) -> u32 {
+    vk_sr("idle", device.addr() as u64);
+    VK_IDLE.get() * u32::from(proc.is_some())
+}
+
+unsafe extern "C" fn vulkan_sr_destroy(context: *mut c_void) -> i32 {
+    vk_sr("destroy", context.addr() as u64);
+    VK_DESTROY.get()
+}
+
+unsafe extern "C" fn vulkan_fsr4_destroy(context: *mut c_void) -> i32 {
+    vk_sr("fsr4_destroy", context.addr() as u64);
+    0
+}
+
+fn vk_create(name: &'static str, request: *const VkSrCreate, created: *mut VkSrContext) -> u32 {
+    // SAFETY: the owner passes live records.
+    let (request, created) = unsafe { (&*request, &mut *created) };
+    let completed = vk_sr(name, request.backend.into());
+    let (result, handle) = VK_CREATE.get();
+    if handle {
+        VK_CONTEXTS.set(VK_CONTEXTS.get() + 1);
+        created.handle = ptr::without_provenance_mut(vk_context_handle(VK_CONTEXTS.get()) as usize);
+    }
+    created.result = result;
+    completed
+}
+
+unsafe extern "C" fn vulkan_sr_create(
+    _: *mut c_void,
+    request: *const VkSrCreate,
+    created: *mut VkSrContext,
+) -> u32 {
+    vk_create("create", request, created)
+}
+
+unsafe extern "C" fn vulkan_fsr4_create(
+    _: *mut c_void,
+    request: *const VkSrCreate,
+    created: *mut VkSrContext,
+) -> u32 {
+    vk_create("fsr4_create", request, created)
+}
+
+unsafe extern "C" fn vulkan_dlss_preset(_: *mut c_void, preset: u32) -> u32 {
+    vk_sr("preset", preset.into())
+}
+
+fn vk_plan(name: &'static str, context: *mut c_void, width: *mut u32, height: *mut u32) -> u32 {
+    let (planned_width, planned_height) = VK_PLAN.get();
+    // SAFETY: the owner passes writable extents.
+    unsafe {
+        width.write(planned_width);
+        height.write(planned_height);
+    }
+    vk_sr(name, context.addr() as u64)
+}
+
+unsafe extern "C" fn vulkan_sr_plan(
+    _: *mut c_void,
+    context: *mut c_void,
+    width: *mut u32,
+    height: *mut u32,
+) -> u32 {
+    vk_plan("plan", context, width, height)
+}
+
+unsafe extern "C" fn vulkan_fsr4_plan(
+    _: *mut c_void,
+    context: *mut c_void,
+    width: *mut u32,
+    height: *mut u32,
+) -> u32 {
+    vk_plan("fsr4_plan", context, width, height)
+}
+
+unsafe extern "C" fn vulkan_sr_evaluate(
+    _: *mut c_void,
+    context: *mut c_void,
+    sharpening: *const Sharpening,
+    result: *mut i32,
+) -> u32 {
+    // SAFETY: the owner passes live records.
+    unsafe {
+        VK_SHARPENING.set(Some(*sharpening));
+        result.write(VK_EVALUATED.get());
+    }
+    vk_sr("evaluate", context.addr() as u64)
+}
+
+unsafe extern "C" fn vulkan_fsr4_evaluate(
+    _: *mut c_void,
+    context: *mut c_void,
+    _: *const Sharpening,
+    result: *mut i32,
+    next: *mut *mut c_void,
+) -> u32 {
+    // SAFETY: the owner passes writable records.
+    unsafe {
+        result.write(VK_EVALUATED.get());
+        next.write(ptr::without_provenance_mut(VK_NEXT.get()));
+    }
+    vk_sr("fsr4_evaluate", context.addr() as u64)
+}
+
+unsafe extern "C" fn vulkan_sr_fallback(_: *mut c_void, result: *mut i32) -> u32 {
+    // SAFETY: the owner passes a writable result.
+    unsafe { result.write(VK_FALLBACK.get()) };
+    vk_sr("fallback", 0)
+}
+
+unsafe extern "C" fn vulkan_sr_log(_: *mut c_void, kind: u32, _: i32, _: i32) -> u32 {
+    vk_sr("log", kind.into())
+}
+
+unsafe extern "C" fn vulkan_sr_dump_result(_: *mut c_void, backend: u32, _: i32) -> u32 {
+    vk_sr("dump", backend.into())
+}
+
 pub(crate) static LEAVES: Platform = Platform {
     struct_size: size_of::<Platform>() as u32,
     version: PLATFORM_VERSION,
@@ -410,4 +566,18 @@ pub(crate) static LEAVES: Platform = Platform {
     present_window,
     fg_end_session,
     d3d12_release,
+    vulkan_presenter_drain,
+    vulkan_device_idle,
+    vulkan_sr_destroy,
+    vulkan_fsr4_destroy,
+    vulkan_sr_create,
+    vulkan_fsr4_create,
+    vulkan_dlss_preset,
+    vulkan_sr_plan,
+    vulkan_fsr4_plan,
+    vulkan_sr_evaluate,
+    vulkan_fsr4_evaluate,
+    vulkan_sr_fallback,
+    vulkan_sr_log,
+    vulkan_sr_dump_result,
 };

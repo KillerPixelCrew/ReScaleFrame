@@ -43,9 +43,11 @@ static_assert(sizeof(rsf_godot_sr_create) == 88 && offsetof(rsf_godot_sr_create,
     sizeof(rsf_godot_sr_context) == 24 && offsetof(rsf_godot_sr_context, desired_width) == 12 &&
     sizeof(rsf_godot_sr_evaluate) == 64);
 static_assert(sizeof(rsf_godot_option_field) == 16 && sizeof(rsf_godot_option_value) == 24);
-static_assert(sizeof(rsf_godot_platform) == 328 && offsetof(rsf_godot_platform, vulkan_locked) == 88 &&
+static_assert(sizeof(rsf_godot_platform) == 440 && offsetof(rsf_godot_platform, vulkan_locked) == 88 &&
     offsetof(rsf_godot_platform, latency_facts) == 176 && offsetof(rsf_godot_platform, d3d12_bind) == 184 &&
-    offsetof(rsf_godot_platform, sr_evaluate) == 256 && offsetof(rsf_godot_platform, d3d12_release) == 320);
+    offsetof(rsf_godot_platform, sr_evaluate) == 256 && offsetof(rsf_godot_platform, d3d12_release) == 320 &&
+    offsetof(rsf_godot_platform, vulkan_presenter_drain) == 328 && offsetof(rsf_godot_platform, vulkan_sr_create) == 360 &&
+    offsetof(rsf_godot_platform, vulkan_sr_evaluate) == 400 && offsetof(rsf_godot_platform, vulkan_sr_dump_result) == 432);
 static_assert(RSF_SR_AUTO == 7 && RSF_SR_SPATIAL == 6 && RSF_SR_DLSS == 1 && RSF_FG_BACKEND_AUTO == 7 &&
     RSF_FG_OFF == 0 && RSF_FG_FIXED == 1 && RSF_REFLEX_OFF == 0 && RSF_UI_MODE_BACKBUFFER_HUDLESS == 4 &&
     RSF_DLSS_ENGINE_CUSTOM == 0 && RSF_FG_STAT_TOTAL_PRESENTED == 1 && RSF_BACKEND_OK == 0,
@@ -303,7 +305,10 @@ const rsf_godot_platform platform{sizeof(platform), RSF_GODOT_PLATFORM_VERSION, 
     leaf_d3d12_bind, leaf_d3d12_wait, leaf_d3d12_signal, leaf_sr_default_backend, leaf_fg_default_backend,
     leaf_present_owner, leaf_present_request, leaf_sr_create, leaf_sr_destroy, leaf_sr_evaluate, leaf_sr_refusal_log,
     leaf_capture_sr_begin, leaf_final_scene, leaf_fg_submitted, leaf_render_begin, leaf_present_window,
-    leaf_fg_end_session, leaf_d3d12_release};
+    leaf_fg_end_session, leaf_d3d12_release, vk::leaf_presenter_drain, vk::leaf_device_idle, vk::leaf_sr_destroy,
+    vk::leaf_fsr4_destroy, vk::leaf_sr_create, vk::leaf_fsr4_create, vk::leaf_dlss_preset, vk::leaf_sr_plan,
+    vk::leaf_fsr4_plan, vk::leaf_sr_evaluate, vk::leaf_fsr4_evaluate, vk::leaf_sr_fallback, vk::leaf_sr_log,
+    vk::leaf_sr_dump_result};
 bool booted() { return rsf_godot_booted() != 0; }
 }
 

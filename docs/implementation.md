@@ -156,6 +156,12 @@ typed native leaves. Shutdown rechecks the live session under the guard
 so an overlapping caller cannot release it twice. Build, device and
 Godot player verification remain open.
 
+The Godot Vulkan SR context owner now handles creation, retirement,
+evaluation, fallback and FSR4 continuation in Rust. It keeps the
+provider calls and exact command buffer handoff in typed native leaves.
+The existing FSR3 Auto behavior and previous-device retirement order are
+preserved. Device replacement, FSR4 and DLSS still need live verification.
+
 Godot's D3D12 SR context, recording slots and submission ledger are Rust-owned.
 Pending recordings keep their slot and context until the engine reports a
 submission and the queue accepts a fence. A later submission on that queue

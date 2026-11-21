@@ -2,13 +2,14 @@
 //! Godot Vulkan session state formerly held by `vulkan.cpp`: the boot state and session identity,
 //! the requested settings and their generation, the status record (ABI 3) with its latency
 //! overlay, the configure admission, the presenter currency rule for acquire, the FG enable rule,
-//! the fixed-guide retirement and the SR and FG accounting.
+//! the fixed-guide retirement and the SR and FG accounting. The SR context owner of
+//! `rsfg_render_vulkan` is the `sr` child module.
 //!
 //! `vulkan.cpp` keeps its guard and every Vulkan, Streamline, XeSS, FidelityFX, presenter,
-//! capture and SR context call. Each transition that ran under that guard still does: boot,
+//! capture and SR provider call. Each transition that ran under that guard still does: boot,
 //! shutdown and configure run inside `Platform::vulkan_locked`, and the render, presentation and
 //! capture leaves call the `rsf_godot_vk_*` exports while they hold it. The lock order is the
-//! guard, then `state`; no leaf runs while `state` is held.
+//! guard, then `state` or `contexts`; no leaf runs while either is held.
 //!
 //! The Vulkan admission stays distinct from the D3D12 one: the shared `rsfg_configure` refusal
 //! rules in `control.rs` run first, then these device, provider and presenter checks, and the
@@ -94,6 +95,7 @@ fn initial_status() -> Status {
 pub(crate) struct Vulkan {
     active: AtomicBool,
     state: Mutex<State>,
+    contexts: Mutex<sr::Contexts>,
 }
 
 impl Vulkan {
@@ -107,6 +109,7 @@ impl Vulkan {
                 presenter_generation: 0,
                 guides: None,
             }),
+            contexts: Mutex::new(sr::Contexts::default()),
         }
     }
 
@@ -135,6 +138,8 @@ impl Vulkan {
                 state.status.session_id = platform.tick_count().wrapping_add(1);
                 state.status.fg_result = BACKEND_ERROR_NOT_SUPPORTED;
             }
+            // Each session logs its own refusals, as the start leaf's reset did.
+            self.contexts().reset_diagnostics();
             if platform.vulkan_start(setup) == 0 {
                 return 0;
             }
@@ -143,13 +148,18 @@ impl Vulkan {
         })
     }
 
-    /// The caller found the session booted. A refused stop keeps it booted.
+    /// The caller found the session booted. The presenter is disabled and drained, then the SR
+    /// contexts retire before the capture, XeSS and SDK stop. A refused step keeps the session
+    /// booted.
     pub(crate) fn shutdown(&self, platform: &Platform) -> c_int {
         platform.vulkan_locked(|| {
             if !self.booted() {
                 return 1;
             }
-            if platform.vulkan_stop() == 0 {
+            if platform.vulkan_presenter_drain(true) != BACKEND_OK
+                || !self.retire_contexts(platform)
+                || platform.vulkan_stop() == 0
+            {
                 return 0;
             }
             self.active.store(false, Ordering::Release);
@@ -159,6 +169,8 @@ impl Vulkan {
                 state.status.sr_result = BACKEND_ERROR_NOT_READY;
                 state.status.session_id
             };
+            // The device borrow ends with the session.
+            self.contexts().release_device();
             platform.vulkan_release(session);
             1
         })
@@ -422,6 +434,8 @@ fn apply_latency(status: &mut Status, latency: &VkLatencyFacts) {
     status.marker_calls = latency.marker_calls;
     status.latency_owner = latency.owner;
 }
+
+mod sr;
 
 #[cfg(test)]
 mod tests;
