@@ -53,9 +53,15 @@ verification remain open.
 The RDR2 game DLL uses Rust for exact-build admission, SR input routing,
 camera decode, scene facts and its lifecycle. The engine entry export and
 typed native leaves remain available. Stop returns `BUSY` on refused hook
-retirement and retains its services until a later stop succeeds. The ASI
-and attach helper still need ports. The RDR2 plugin and camera builds and
-game verification remain unrun on this revision.
+retirement and retains its services until a later stop succeeds. The RDR2
+plugin and camera builds and game verification remain unrun on this revision.
+
+RDR2's ASI now admits the exact executable and sequences its configuration,
+ForceD3D12 and engine settings hooks in Rust. The ASI loader entry, Runtime
+session worker and attach helper retain their existing paths. The native
+settings fixture now calls the Rust policy through its existing facade.
+Source checks cover ABI and hook fields. Builds and ASI verification remain
+open.
 
 Fallout 4 now owns exact-build identity, GameSDK lifecycle, Runtime
 session setup and cold D3D11 creation in Rust. The creation owner

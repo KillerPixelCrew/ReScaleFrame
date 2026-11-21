@@ -6,9 +6,11 @@ target_link_libraries(rsf_game_rdr2 PRIVATE rsf_rdr2_rust ReScaleFrame::GameSDK 
 set_target_properties(rsf_game_rdr2 PROPERTIES OUTPUT_NAME "ReScaleFrame.Game.RDR2")
 
 # Loaded by the game's ASI loader, so the file name is not a system DLL and nothing is forwarded.
-add_library(rsf_asi_rdr2 SHARED src/asi_entry.cpp src/social_club.cpp src/camera_probe.cpp src/native_capture.cpp src/script_input.cpp src/native_settings.cpp src/engine_settings.cpp)
+# Startup admission, configuration gates, ForceD3D12 and engine-settings ownership are the same Rust
+# archive; asi_entry.cpp lends it the ASI's own leaf table (asi_platform.h) and keeps the runtime session worker.
+add_library(rsf_asi_rdr2 SHARED src/asi_entry.cpp src/social_club.cpp src/camera_probe.cpp src/native_capture.cpp src/script_input.cpp src/native_settings.cpp)
 target_include_directories(rsf_asi_rdr2 PRIVATE ../../runtime/orchestrator/include)
-target_link_libraries(rsf_asi_rdr2 PRIVATE
+target_link_libraries(rsf_asi_rdr2 PRIVATE rsf_rdr2_rust
     ReScaleFrame::GameSDK ReScaleFrame::RuntimeCommon ReScaleFrame::Contract ReScaleFrame::LoaderDiagnostics
     ReScaleFrame::VendorCensus minhook dxgi rsf_build_options)
 target_compile_definitions(rsf_asi_rdr2 PRIVATE _CRT_SECURE_NO_WARNINGS)

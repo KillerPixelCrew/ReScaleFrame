@@ -195,6 +195,152 @@ pub(crate) mod d3d {
     pub(crate) const MAX_EXTENT: u64 = 16384;
 }
 
+/// Facts used by `ReScaleFrame.RDR2.asi` during startup, before the game reads its settings.
+/// Sources: docs/research/rdr2-renderer.md, engine.json and RESEARCH-HANDOFF.md.
+pub(crate) mod asi {
+    use super::Site;
+
+    /// Engine string parameter read before the saved API setting; "d3d12" selects D3D12.
+    pub(crate) const API_OVERRIDE: u32 = 0x57a_bf10;
+    /// Every engine read of the parameter: `mov r64, [rip + disp32]` resolving to `API_OVERRIDE`.
+    /// Settings load, adapter manager API selection, device settings adapter resolution and saved
+    /// API level application.
+    pub(crate) const API_OVERRIDE_READS: [(u32, [u8; 3]); 4] = [
+        (0x2c6_5575, [0x48, 0x8b, 0x1d]),
+        (0x26b_8ebb, [0x48, 0x8b, 0x05]),
+        (0x22_a5f8, [0x48, 0x8b, 0x0d]),
+        (0x2c6_62f6, [0x48, 0x8b, 0x05]),
+    ];
+    /// The D3D12 HRESULT check helper observed by the opt-in trace.
+    pub(crate) const RESULT_CHECK: Site = Site {
+        rva: 0x268_b5c0,
+        expected: [
+            0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x8d, 0x81, 0xfb, 0xff, 0x85, 0x77, 0x8b, 0xd9,
+            0x83, 0xf8,
+        ],
+    };
+    /// Social Club backbuffer dispatcher armed by social_club.cpp; named in the startup report.
+    pub(crate) const SOCIAL_CLUB_DISPATCHER: u32 = 0x27f_09e8;
+
+    /// rage settings collection copy, settings-owner load and apply.
+    pub(crate) const COPY: Site = Site {
+        rva: 0x20_b7f8,
+        expected: [
+            0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x0f, 0x10, 0x02, 0x48,
+            0x8b, 0xd9,
+        ],
+    };
+    pub(crate) const LOAD: Site = Site {
+        rva: 0x2c7_c9a4,
+        expected: [
+            0x48, 0x8b, 0xc4, 0x48, 0x89, 0x58, 0x08, 0x48, 0x89, 0x70, 0x10, 0x48, 0x89, 0x78,
+            0x18, 0x4c,
+        ],
+    };
+    pub(crate) const APPLY: Site = Site {
+        rva: 0x2c7_e6c0,
+        expected: [
+            0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9, 0xe8, 0xca, 0xba, 0xff, 0xff,
+            0x48, 0x8b,
+        ],
+    };
+    /// DLSS optimal-settings table producer, used by allocations and NGX feature setup.
+    pub(crate) const OPTIMAL: Site = Site {
+        rva: 0x26f_5270,
+        expected: [
+            0x48, 0x89, 0x5c, 0x24, 0x08, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56,
+            0x41, 0x57,
+        ],
+    };
+    /// FSR2 render-dimension producer.
+    pub(crate) const FSR_DIMENSIONS: Site = Site {
+        rva: 0x26e_cc3c,
+        expected: [
+            0x48, 0x8b, 0xc4, 0x48, 0x89, 0x58, 0x08, 0x48, 0x89, 0x70, 0x10, 0x48, 0x89, 0x78,
+            0x18, 0x55,
+        ],
+    };
+    /// Renderer dimension refresh after a graphics reset.
+    pub(crate) const REFRESH_DIMENSIONS: Site = Site {
+        rva: 0x58_a908,
+        expected: [
+            0x48, 0x81, 0xec, 0x38, 0x01, 0x00, 0x00, 0x48, 0x8d, 0x4c, 0x24, 0x20, 0xe8, 0xcf,
+            0xd7, 0xfc,
+        ],
+    };
+    /// Settings manager graphics reconfiguration (state 9), also reached by stock Apply.
+    pub(crate) const RECONFIGURE: Site = Site {
+        rva: 0x2c7_e8f4,
+        expected: [
+            0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0xba, 0x09, 0x00, 0x00, 0x00, 0x48, 0x8b, 0xd9,
+            0x39, 0x91,
+        ],
+    };
+
+    /// Engine functions the quality request calls, each checked in full before any hook.
+    pub(crate) struct Function {
+        pub(crate) rva: usize,
+        pub(crate) expected: &'static [u8],
+    }
+    /// Settings manager accessor: `mov rax, [rip + disp]; ret`.
+    pub(crate) const MANAGER: Function = Function {
+        rva: 0x2cf_31f8,
+        expected: &[0x48, 0x8b, 0x05, 0xe9, 0xac, 0x1c, 0x01, 0xc3],
+    };
+    /// Active settings owner of a manager.
+    pub(crate) const OWNER: Function = Function {
+        rva: 0x2c7_6114,
+        expected: &[
+            0x4c, 0x8b, 0xdc, 0x53, 0x48, 0x81, 0xec, 0xb0, 0x00, 0x00, 0x00, 0x49, 0x8d, 0x43,
+            0x08,
+        ],
+    };
+    /// Pending settings owner lookup by id path.
+    pub(crate) const FIND: Function = Function {
+        rva: 0x2c7_36f4,
+        expected: &[
+            0x40, 0x53, 0x48, 0x83, 0xec, 0x30, 0x48, 0x83, 0x7a, 0x08, 0x00, 0x49, 0x8b, 0xc0,
+        ],
+    };
+
+    /// rage::fwuiSystemSettingsCollection offsets from its generated parser tables. Graphics group
+    /// at +b4: dlssIndex +34, dlssQuality +38, fsr2Index +40. Video group at +124: refresh rate
+    /// numerator +24 and denominator +28, ReflexSettings +38.
+    pub(crate) mod collection {
+        pub(crate) const BYTES: usize = 0x180;
+        pub(crate) const DLSS: usize = 0xe8;
+        pub(crate) const DLSS_QUALITY: usize = 0xec;
+        pub(crate) const FSR: usize = 0xf4;
+        pub(crate) const VIDEO_ADAPTER: usize = 0x124;
+        pub(crate) const REFRESH_NUMERATOR: usize = 0x148;
+        pub(crate) const REFRESH_DENOMINATOR: usize = 0x14c;
+        pub(crate) const REFLEX: usize = 0x15c;
+        /// Native defaults have version 0; a loaded 1491.50 collection has version 37. The two
+        /// bytes after it are padding.
+        pub(crate) const VERSION: usize = 0x178;
+        pub(crate) const VERSIONS: [u16; 2] = [0, 37];
+    }
+
+    /// Settings owner and manager layout.
+    pub(crate) mod manager {
+        /// Collections inside a settings owner.
+        pub(crate) const OWNER_COLLECTION: usize = 0xb0;
+        pub(crate) const PENDING_SECOND_COLLECTION: usize = 0x240;
+        /// Scratch argument of the pending lookup; Apply copies the pending values from here.
+        pub(crate) const PENDING_SCRATCH: usize = 0xb8;
+        pub(crate) const GRAPHICS_ID: u32 = 0x8c46_3422;
+        pub(crate) const STAGE: usize = 0x2c8;
+        /// Active capability list of DLSS modes and its count.
+        pub(crate) const DLSS_CHOICES: usize = 0x410;
+        pub(crate) const DLSS_CHOICE_COUNT: usize = 0x42c;
+        pub(crate) const DLSS_CHOICE_LIMIT: usize = 7;
+    }
+
+    /// Renderer dimension globals: input width/height and output width/height.
+    pub(crate) const RENDER_INPUT: usize = 0x3f0_db38;
+    pub(crate) const RENDER_OUTPUT: usize = 0x3f0_db30;
+}
+
 /// Direct-resource descriptor constructed by +26f3f10 and consumed by +26f3a3c. Its full native size
 /// is kept so a fallback can reset history without changing the caller's stack descriptor.
 #[derive(Clone, Copy)]
