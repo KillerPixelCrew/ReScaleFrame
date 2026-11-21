@@ -184,13 +184,15 @@ extern "C" fn rsf_anomaly_geometry_foliage() -> bool {
     FOLIAGE.load(Ordering::Relaxed)
 }
 
-fn report_retired(key: *const Key) {
+fn report_retired(key: &Key) {
     COUNTERS.models_retired.increment();
-    RETIRED.call(key.cast());
+    #[cfg(windows)]
+    crate::motion::record_retirement(*key);
+    RETIRED.call(ptr::from_ref(key).cast());
 }
 
 unsafe extern "C" fn visit_retired(_: *mut c_void, key: *const Key) {
-    report_retired(key);
+    report_retired(unsafe { &*key });
 }
 
 fn reset_registry() {

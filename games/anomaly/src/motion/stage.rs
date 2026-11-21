@@ -15,6 +15,7 @@ use self::options::Settings;
 use self::report::Counters;
 use self::shaders::{Creation, Loader, Registry};
 use super::{foliage, window, *};
+use crate::geometry_registry::RetirementQueue;
 use crate::lease::Lease;
 use crate::motion_device::*;
 use crate::motion_device_abi::{
@@ -201,6 +202,7 @@ struct Stage {
     settings: Mutex<Settings>,
     logger: Mutex<Log>,
     render: Mutex<Render>,
+    retirements: RetirementQueue,
     loader: Mutex<Loader>,
     registry: Mutex<Registry>,
     previous_report: Mutex<Counters>,
@@ -215,6 +217,15 @@ struct Stage {
 
 static STAGE: OnceLock<Stage> = OnceLock::new();
 
+pub(crate) fn record_retirement(key: InstanceKey) {
+    if let Some(stage) = STAGE.get().filter(|stage| stage.active.load(Acquire)) {
+        let mut queue = lock(&stage.retirements);
+        if stage.active.load(Acquire) {
+            queue.enqueue(key);
+        }
+    }
+}
+
 impl Stage {
     fn get(platform: &'static Platform) -> &'static Self {
         STAGE.get_or_init(|| Self {
@@ -224,6 +235,7 @@ impl Stage {
             settings: Default::default(),
             logger: Default::default(),
             render: Default::default(),
+            retirements: Default::default(),
             loader: Default::default(),
             registry: Default::default(),
             previous_report: Default::default(),
@@ -283,11 +295,8 @@ impl Stage {
         }
         self.active.store(true, Release);
         if !unsafe { (p.install_hooks)(build.image(), size, build.profile()) } {
-            self.active.store(false, Release);
-            unsafe {
-                (p.observe_flush)(false);
-                (p.foliage_identity)(false);
-            }
+            self.stop_observing();
+            lock(&self.render).reset_history();
             log.text(
                 c"Anomaly motion refused: guarded detour installation failed; shaders stay stock.",
             );
@@ -311,22 +320,28 @@ impl Stage {
         if lock(&self.build).is_none() {
             return true;
         }
-        self.active.store(false, Release);
-        let p = self.platform;
-        unsafe {
-            (p.observe_flush)(false);
-            (p.foliage_identity)(false);
-        }
-        let disabled = unsafe { (p.disable_hooks)() };
+        self.stop_observing();
+        let disabled = unsafe { (self.platform.disable_hooks)() };
         self.cancel_draw();
         let mut render = lock(&self.render);
         window::reset(&mut render.window);
+        // Models can retire while motion is inactive. Restart without borrowing old history.
+        render.reset_history();
         if let Some(mut capture) = render.capture.take() {
             capture.cancel(&mut render.counters);
         }
         // Trampolines and cached shader/device leases survive quiesce, as
         // the engine can still have a draw callback in flight.
         disabled
+    }
+
+    fn stop_observing(&self) {
+        self.active.store(false, Release);
+        drop(lock(&self.retirements).take());
+        unsafe {
+            (self.platform.observe_flush)(false);
+            (self.platform.foliage_identity)(false);
+        }
     }
 
     fn attach(&self) {
@@ -394,8 +409,11 @@ impl Stage {
         );
         let mut target_ok = render.window.target_ok;
         if fresh {
-            let count = unsafe { (p.drain)(retire, ptr::from_mut(&mut render.history).cast()) };
-            render.counters.retirements += count as u64;
+            let retired = lock(&self.retirements).take();
+            render.counters.retirements += retired.len() as u64;
+            for key in retired {
+                render.history.retire(key);
+            }
             let mut desc = MaybeUninit::uninit();
             let observed = unsafe { (p.target_facts)(facts.position_surface, desc.as_mut_ptr()) };
             let result = if observed == RSF_MOTION_READY {
@@ -556,10 +574,6 @@ impl Stage {
             }
         }
     }
-}
-
-unsafe extern "C" fn retire(user: Raw, key: &InstanceKey) {
-    unsafe { &mut *user.cast::<MotionHistoryState>() }.retire(*key);
 }
 
 unsafe fn checked_platform(platform: *const Platform) -> Option<&'static Platform> {

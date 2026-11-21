@@ -10,7 +10,7 @@ use std::mem;
 use std::sync::Mutex;
 
 pub(crate) type IdentityRegistry = Mutex<Registry>;
-type RetirementQueue = Mutex<Queue>;
+pub(crate) type RetirementQueue = Mutex<Queue>;
 
 #[derive(Default)]
 pub(crate) struct Registry {
@@ -29,9 +29,23 @@ impl Registry {
 }
 
 #[derive(Default)]
-struct Queue {
+pub(crate) struct Queue {
     pending: Vec<Key>,
     dropped: u64,
+}
+
+impl Queue {
+    pub(crate) fn enqueue(&mut self, key: Key) {
+        if self.pending.try_reserve(1).is_ok() {
+            self.pending.push(key);
+        } else {
+            self.dropped = self.dropped.saturating_add(1);
+        }
+    }
+
+    pub(crate) fn take(&mut self) -> Vec<Key> {
+        mem::take(&mut self.pending)
+    }
 }
 
 unsafe fn deliver(
@@ -203,12 +217,7 @@ unsafe extern "C" fn rsf_anomaly_geometry_retirements_destroy(queue: *mut Retire
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_geometry_enqueue(queue: &RetirementQueue, key: &Key) {
-    let mut queue = queue.lock().unwrap();
-    if queue.pending.try_reserve(1).is_ok() {
-        queue.pending.push(*key);
-    } else {
-        queue.dropped = queue.dropped.saturating_add(1);
-    }
+    queue.lock().unwrap().enqueue(*key);
 }
 
 #[unsafe(no_mangle)]
@@ -217,7 +226,7 @@ unsafe extern "C" fn rsf_anomaly_geometry_drain(
     retired: Retired,
     user: *mut c_void,
 ) -> usize {
-    let batch = mem::take(&mut queue.lock().unwrap().pending);
+    let batch = queue.lock().unwrap().take();
     unsafe { deliver(batch.into_iter(), retired, user) }
 }
 

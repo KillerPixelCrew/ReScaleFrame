@@ -13,8 +13,7 @@ use std::ffi::c_char;
 
 pub(super) type Raw = *mut std::ffi::c_void;
 pub(super) type Redraw = unsafe extern "C" fn(Raw, Raw);
-pub(super) const PLATFORM_ABI: u32 = 5;
-type Retire = unsafe extern "C" fn(Raw, &InstanceKey);
+pub(super) const PLATFORM_ABI: u32 = 6;
 
 #[repr(C)]
 pub(super) struct WindowFacts {
@@ -128,7 +127,6 @@ pub(super) struct Platform {
     pub replay: unsafe extern "C" fn(&DeviceView, Raw, Redraw, Raw) -> u8,
     pub camera: unsafe extern "C" fn(&mut [f32; 16], &mut [f32; 16]) -> bool,
     pub world: unsafe extern "C" fn(&mut [f32; 16]) -> bool,
-    pub drain: unsafe extern "C" fn(Retire, Raw) -> usize,
     pub read_constant: unsafe extern "C" fn(u32, u32, u32, Raw, u32) -> bool,
     pub write_constant: unsafe extern "C" fn(u32, u32, u32, *const std::ffi::c_void, u32) -> bool,
     pub draw_state: unsafe extern "C" fn(Raw, &mut DrawState),
@@ -197,8 +195,8 @@ const _: () = {
     assert!(size_of::<FoliageLayout>() == 108);
     assert!(std::mem::offset_of!(FoliageLayout, usable) == 104);
     assert!(size_of::<FrameTarget>() == 24);
-    assert!(size_of::<Platform>() == 328);
+    assert!(size_of::<Platform>() == 320);
     assert!(std::mem::offset_of!(Platform, guards) == 40);
-    assert!(std::mem::offset_of!(Platform, frame_layout) == 272);
-    assert!(std::mem::offset_of!(Platform, create_shader) == 320);
+    assert!(std::mem::offset_of!(Platform, frame_layout) == 264);
+    assert!(std::mem::offset_of!(Platform, create_shader) == 312);
 };

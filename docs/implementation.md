@@ -4,6 +4,15 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Anomaly geometry retirements now go straight to the Rust motion
+stage's queue. The stage drains its own queue before updating draw
+history. Stopping motion closes admission, discards pending keys, and
+resets history so a later start cannot use snapshots from before the
+stop. The native geometry fixture retains its callback seam. Source
+review matched the smaller private motion table and traced lock
+ordering between geometry retirement and motion quiesce. Actual
+hook disable and restart remain unverified for this revision.
+
 The Vulkan latency host now releases the process pacing claim. An
 AMD device retirement releases it after outstanding calls drain if
 AMD still holds it and no Streamline pacing call is active. A live

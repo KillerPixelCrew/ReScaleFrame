@@ -3,7 +3,6 @@
 #include "motion_stage_platform.h"
 #include "engine_guards.h"
 #include "geometry_feed.h"
-#include "geometry_retirement.h"
 #include "motion_d3d11.h"
 #include "motion_foliage.h"
 #include "native_hooks.h"
@@ -33,7 +32,6 @@ template<class T> bool read_global(uint32_t rva, T& value) noexcept { return ima
 
 HookSet hooks;
 std::array<void*, motion_site_count> originals{};
-geometry::RetirementQueue retirements;
 using Unary = void(__fastcall*)(void*);
 using CreateShader = long long(__fastcall*)(const char*, const void*, unsigned, const char*, void**, char);
 
@@ -299,10 +297,7 @@ const MotionPlatform platform{
             ? nullptr : failed;
     },
     geometry::geometry_hooks_active,
-    [](bool enabled) {
-        if (enabled) geometry::geometry_set_sink({&retirements, &geometry::RetirementQueue::sink});
-        geometry::geometry_set_flush_callback(enabled ? flush : nullptr);
-    },
+    [](bool enabled) { geometry::geometry_set_flush_callback(enabled ? flush : nullptr); },
     geometry::geometry_enable_foliage_identity, install_hooks, [] { return hooks.disable(); }, [] { return hooks.created(); },
     install_draw_hooks, window_facts, target_facts, backend, hw_context, hw_device,
     [](void* c, void* rtv) {
@@ -315,14 +310,6 @@ const MotionPlatform platform{
             [&](ID3D11DeviceContext* context) { draw(user, context); }));
     },
     camera, [](float (*world)[16]) { return geometry::read_world_matrix(*world); },
-    [](Retire apply, void* user) -> size_t {
-        struct Sink { Retire apply; void* user; } sink{apply, user};
-        return retirements.drain([](void* u, temporal::InstanceKey key) {
-            const auto& s = *static_cast<const Sink*>(u);
-            const auto native = geometry::geometry_key(key);
-            s.apply(s.user, &native);
-        }, &sink);
-    },
     geometry::read_vertex_constants, geometry::write_vertex_constants,
     [](void* raw, MotionDrawState* out) {
         D3D11_VIEWPORT viewport{};
@@ -364,8 +351,8 @@ const MotionPlatform platform{
 static_assert(sizeof(WindowFacts) == 56 && sizeof(DrawFacts) == 32);
 static_assert(sizeof(ShaderObjects) == 40 && sizeof(ShaderResult) == 32 && sizeof(PackInfo) == 8);
 static_assert(sizeof(FoliageLayout) == 108 && offsetof(FoliageLayout, xform) == 4 && offsetof(FoliageLayout, usable) == 104);
-static_assert(sizeof(MotionPlatform) == 328 && offsetof(MotionPlatform, guards) == 40 &&
-    offsetof(MotionPlatform, frame_layout) == 272 && offsetof(MotionPlatform, create_shader) == 320);
+static_assert(sizeof(MotionPlatform) == 320 && offsetof(MotionPlatform, guards) == 40 &&
+    offsetof(MotionPlatform, frame_layout) == 264 && offsetof(MotionPlatform, create_shader) == 312);
 static_assert(sizeof(FrameTarget) == 24 && offsetof(FrameTarget, main) == 20);
 static_assert(static_cast<uint8_t>(ReplayResult::Done) == 0 && static_cast<uint8_t>(ReplayResult::SkippedNoDepthWrite) == 1);
 static_assert(RSF_PHASE_RENDER_SUBMIT == 2 && RSF_DUMP_VIEW_DENSE_MOTION == 7);

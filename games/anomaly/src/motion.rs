@@ -11,6 +11,8 @@ mod stage;
 mod window;
 
 use crate::geometry_registry_abi::rsf_anomaly_geometry_key as InstanceKey;
+#[cfg(windows)]
+pub(crate) use stage::record_retirement;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, btree_map::Entry};
 use std::ffi::c_char;

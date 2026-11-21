@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-#include "geometry_registry_platform.h"
 #include "motion_device_platform.h"
 #include "motion_target_platform.h"
 #include "shader_loader_platform.h"
@@ -45,7 +44,6 @@ struct ShaderResult {
 struct PackInfo { const rsf_anomaly_shader_admitted* manifest; };
 struct PatchCounters { uint64_t intercepted, built, cache_hits, refused, refusals[11]; };
 using Redraw = void (*)(void*, void*);
-using Retire = void (*)(void*, const rsf_anomaly_geometry_key*);
 struct MotionPlatform {
     uint32_t struct_size, abi_version;
     const rsf_anomaly_motion_device_platform* device;
@@ -70,7 +68,6 @@ struct MotionPlatform {
     uint8_t (*replay)(const rsf_anomaly_motion_device_view*, void*, Redraw, void*);
     bool (*camera)(float (*)[16], float (*)[16]);
     bool (*world)(float (*)[16]);
-    size_t (*drain)(Retire, void*);
     bool (*read_constant)(uint32_t, uint32_t, uint32_t, void*, uint32_t);
     bool (*write_constant)(uint32_t, uint32_t, uint32_t, const void*, uint32_t);
     void (*draw_state)(void*, MotionDrawState*);
@@ -88,7 +85,7 @@ struct MotionPlatform {
     bool (*link_shaders)(const void*, const void*, const void*, const void*);
     void* (*create_shader)(void*, const char*, void*, void*, bool, bool*);
 };
-inline constexpr uint32_t motion_platform_abi = 5;
+inline constexpr uint32_t motion_platform_abi = 6;
 
 extern "C" {
 void rsf_anomaly_motion_stage_configure(const MotionPlatform*, const wchar_t*, rsf_dump_log_fn, void*) noexcept;
