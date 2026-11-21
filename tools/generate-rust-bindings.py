@@ -228,7 +228,7 @@ generate("runtime/orchestrator/src/vulkan_sr_abi.rs", "runtime/orchestrator/incl
          ["--no-recursive-allowlist", "--raw-line", "use crate::render_abi::rsf_sharpening_options;",
           "--raw-line", "use rsf_game_sys::rsf_frame_record;"])
 generate("runtime/orchestrator/src/gl_pipeline_abi.rs", "runtime/orchestrator/include/rescaleframe/gl_pipeline.h",
-         "rsf_(gl_pipeline_(setup|options|surfaces|status)|gl_texture_info|sr12_setup|dlss_setup)",
+         "rsf_(gl_pipeline_(setup|options|surfaces|status)|gl_(setup|texture_info)|sr12_setup|dlss_setup)",
          "RSF_(GL_(RGBA16F|R32F|RG16F|RGBA8)|UI_MODE_BACKBUFFER_HUDLESS)",
          ["-include", "rescaleframe/native_sr_d3d12.h", "-include", "rescaleframe/native_fg_d3d12.h",
           "-Iruntime/orchestrator/include", "-Iruntime/backends/dlss/include", "-Iruntime/graphics/include",

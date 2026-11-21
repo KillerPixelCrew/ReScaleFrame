@@ -157,6 +157,39 @@ impl Default for rsf_sr12_setup {
     }
 }
 #[repr(C)]
+pub struct rsf_gl_setup {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    pub device: *mut ::core::ffi::c_void,
+    pub queue: *mut ::core::ffi::c_void,
+    pub log: rsf_backend_log_fn,
+    pub user: *mut ::core::ffi::c_void,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_gl_setup"][::core::mem::size_of::<rsf_gl_setup>() - 40usize];
+    ["Alignment of rsf_gl_setup"][::core::mem::align_of::<rsf_gl_setup>() - 8usize];
+    ["Offset of field: rsf_gl_setup::struct_size"]
+        [::core::mem::offset_of!(rsf_gl_setup, struct_size) - 0usize];
+    ["Offset of field: rsf_gl_setup::abi_version"]
+        [::core::mem::offset_of!(rsf_gl_setup, abi_version) - 4usize];
+    ["Offset of field: rsf_gl_setup::device"]
+        [::core::mem::offset_of!(rsf_gl_setup, device) - 8usize];
+    ["Offset of field: rsf_gl_setup::queue"]
+        [::core::mem::offset_of!(rsf_gl_setup, queue) - 16usize];
+    ["Offset of field: rsf_gl_setup::log"][::core::mem::offset_of!(rsf_gl_setup, log) - 24usize];
+    ["Offset of field: rsf_gl_setup::user"][::core::mem::offset_of!(rsf_gl_setup, user) - 32usize];
+};
+impl Default for rsf_gl_setup {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
 #[derive(Copy, Clone)]
 pub struct rsf_gl_texture_info {
     pub struct_size: u32,
