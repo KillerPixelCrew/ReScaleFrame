@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now owns overlay cursor capture policy and its remembered clip,
+frozen position, logical ShowCursor count and suppression counters.
+The native bridge supplies typed cursor reads and effects. Closing the
+panel balances the ShowCursor calls made on open and restores the
+recorded clip for a live window. A refused position read leaves no
+frozen position. Public C headers are unchanged. Build and runtime
+validation remain open.
+
 Rust now owns installation, forwarding and retirement for the seven
 overlay cursor detours. The cursor switches to the native entry after
 disable, and any caller still using the trampoline delays removal.

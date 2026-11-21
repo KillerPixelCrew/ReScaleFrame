@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 #include <rescaleframe/overlay_input.h>
+#include "overlay_cursor_capture.h"
 #include "overlay_cursor_platform.h"
 #include "overlay_pointer_platform.h"
 #include "overlay_visibility_platform.h"
@@ -15,39 +16,15 @@
 #include <rescaleframe/log.h>
 
 #include <atomic>
-#include <climits>
 #include <cstddef>
 #include <initializer_list>
-#include <mutex>
 
 namespace {
 
 constexpr size_t raw_mouse_bytes = offsetof(RAWINPUT, data) + sizeof(RAWMOUSE);
 static_assert(sizeof(rsf_overlay_client_point) == 16 && RSF_OVERLAY_MOUSE_LEFT == 1);
 
-// A cursor the user can see is not solved here, and this is the wrong module to solve it in.
-//
-// A game that plays with a mouse hides the system cursor once and keeps it hidden, usually with
-// ShowCursor and often with ClipCursor holding it inside the client area, and some re-apply both
-// every frame from their own input tick. Calling ShowCursor(TRUE) from here would fight that loop
-// and lose, and the ShowCursor counter is process wide, so getting the count wrong leaves the game
-// with a permanently visible cursor after the overlay closes.
-//
-// What would solve it, in rough order of how invasive each is: draw the pointer as part of the
-// overlay from the position collected here, which needs a cursor in the egui side and no Win32
-// calls at all; answer WM_SETCURSOR while the overlay is visible so the game's own handler never
-// runs; hook ShowCursor, SetCursor and ClipCursor for the duration. The first is the one that does
-// not depend on how the game manages its cursor, and it is the one to try first.
-
 struct State {
-    std::mutex cursor_guard;
-    RECT last_clip{};
-    bool have_clip = false;
-    POINT frozen{};
-    bool have_frozen = false;
-    int cursor_shows = 0;
-    std::atomic<unsigned long> swallowed_warps{0};
-    std::atomic<unsigned long> swallowed_hides{0};
     /* Diagnostics only, counted while the overlay is visible so the hidden path stays free of them.
        They answer "did the panel's window receive pointer input and keep it from the game", which
        a screenshot cannot when the panel itself cannot be captured. */
@@ -78,11 +55,6 @@ template<class Fn, class... Args> auto cursor_call(uint32_t index, Fn entry, Arg
     const CursorCall lifetime;
     const auto original = reinterpret_cast<Fn>(rsf_core_overlay_cursor_forward(index));
     return (original ? original : entry)(args...);
-}
-
-bool cursor_captured()
-{
-    return rsf_core_overlay_cursor_ready() && rsf_core_overlay_visible();
 }
 
 uint32_t overlay_button_bit(uint32_t virtual_key)
@@ -171,71 +143,35 @@ void seed_cursor_position()
 
 BOOL WINAPI hooked_set_cursor_pos(int x, int y)
 {
-    State& self = state();
-    if (cursor_captured()) {
-        // The warp to the centre. Swallowed, and the game is told it worked.
-        self.swallowed_warps.fetch_add(1, std::memory_order_relaxed);
-        return TRUE;
-    }
+    if (rsf_core_overlay_cursor_swallow_warp()) return TRUE;
     return cursor_call(RSF_CURSOR_SET_POS, &SetCursorPos, x, y);
 }
 
 BOOL WINAPI hooked_clip_cursor(const RECT* rect)
 {
-    State& self = state();
-    {
-        std::lock_guard<std::mutex> lock(self.cursor_guard);
-        if (rect) {
-            self.last_clip = *rect;
-            self.have_clip = true;
-        } else {
-            self.have_clip = false;
-        }
-    }
-    if (cursor_captured()) {
-        // Some games clip to a single pixel to keep the pointer still. Lifted for the panel; what
-        // the game asked for is remembered and put back on close.
-        return cursor_call(RSF_CURSOR_CLIP, &ClipCursor, nullptr);
-    }
-    return cursor_call(RSF_CURSOR_CLIP, &ClipCursor, rect);
+    const auto captured = rsf_core_overlay_cursor_clip_request(rect);
+    return cursor_call(RSF_CURSOR_CLIP, &ClipCursor, captured ? nullptr : rect);
 }
 
 BOOL WINAPI hooked_get_cursor_pos(LPPOINT point)
 {
-    State& self = state();
-    if (point && cursor_captured()) {
-        std::lock_guard<std::mutex> lock(self.cursor_guard);
-        if (self.have_frozen) {
-            // The game sees the pointer where it was when the panel opened, so nothing it derives
-            // from the position moves while the panel is used.
-            *point = self.frozen;
-            return TRUE;
-        }
-    }
+    if (rsf_core_overlay_cursor_frozen(point)) return TRUE;
     return cursor_call(RSF_CURSOR_GET_POS, &GetCursorPos, point);
 }
 
+int32_t show_cursor_native(int32_t show) noexcept try
+{
+    return cursor_call(RSF_CURSOR_SHOW, &ShowCursor, show);
+} catch (...) { return 0; }
+
 int WINAPI hooked_show_cursor(BOOL show)
 {
-    State& self = state();
-    thread_local int game_count = 0;
-    if (cursor_captured()) {
-        // RAGE loops until ShowCursor(FALSE) returns negative (+263cf2a..34).
-        // Querying the real counter with a show/hide pair leaves the overlay's
-        // visible counter unchanged, so that loop never terminates. Keep the
-        // game's logical counter separately and never touch user32 in this path.
-        if (show) { if (game_count < INT_MAX) ++game_count; }
-        else { if (game_count > INT_MIN) --game_count;
-            self.swallowed_hides.fetch_add(1, std::memory_order_relaxed); }
-        return game_count;
-    }
-    game_count = cursor_call(RSF_CURSOR_SHOW, &ShowCursor, show);
-    return game_count;
+    return rsf_core_overlay_cursor_show(show, show_cursor_native);
 }
 
 HCURSOR WINAPI hooked_set_cursor(HCURSOR handle)
 {
-    if (cursor_captured() && !handle) {
+    if (rsf_core_overlay_cursor_captured() && !handle) {
         // A null cursor is the other way a game hides it. The panel wants an arrow.
         return cursor_call(RSF_CURSOR_SET, &SetCursor, LoadCursorW(nullptr, MAKEINTRESOURCEW(32512)));
     }
@@ -259,7 +195,7 @@ UINT WINAPI hooked_get_raw_input_data(HRAWINPUT handle, UINT command, LPVOID dat
 {
     const UINT result = cursor_call(RSF_CURSOR_RAW_DATA, &GetRawInputData, handle, command, data, size, header_size);
     if (result != static_cast<UINT>(-1) && data && command == RID_INPUT &&
-        cursor_captured()) {
+        rsf_core_overlay_cursor_captured()) {
         neutralise_raw_mouse(static_cast<RAWINPUT*>(data), result);
     }
     return result;
@@ -269,7 +205,7 @@ UINT WINAPI hooked_get_raw_input_buffer(PRAWINPUT data, PUINT size, UINT header_
 {
     const UINT result = cursor_call(RSF_CURSOR_RAW_BUFFER, &GetRawInputBuffer, data, size, header_size);
     if (result == static_cast<UINT>(-1) || !data || result == 0 ||
-        !cursor_captured()) {
+        !rsf_core_overlay_cursor_captured()) {
         return result;
     }
     using QWORD = UINT64; // NEXTRAWINPUTBLOCK expects the name
@@ -319,60 +255,27 @@ void install_cursor_hooks()
     rsf_core_overlay_cursor_install(detours, &cursor_ops);
 }
 
-// Take the cursor for the panel, or give it back. Always through the genuine functions.
-void set_cursor_capture(State& self, bool on, bool restore_clip = true)
-{
-    if (!rsf_core_overlay_cursor_ready()) {
-        return;
-    }
-    if (on) {
-        POINT point{};
-        if (cursor_call(RSF_CURSOR_GET_POS, &GetCursorPos, &point)) {
-            std::lock_guard<std::mutex> lock(self.cursor_guard);
-            self.frozen = point;
-            self.have_frozen = true;
-        }
-        cursor_call(RSF_CURSOR_CLIP, &ClipCursor, nullptr);
-        int count = cursor_call(RSF_CURSOR_SHOW, &ShowCursor, TRUE);
-        int shows = 1;
-        while (count < 0 && shows < 64) {
-            count = cursor_call(RSF_CURSOR_SHOW, &ShowCursor, TRUE);
-            ++shows;
-        }
-        self.cursor_shows = shows;
-        cursor_call(RSF_CURSOR_SET, &SetCursor, LoadCursorW(nullptr, MAKEINTRESOURCEW(32512)));
-        self.swallowed_warps.store(0, std::memory_order_relaxed);
-        self.swallowed_hides.store(0, std::memory_order_relaxed);
-        rsf::say(log_to_rust, nullptr, "overlay input: cursor freed for the panel, shown after %d call%s", shows,
-            shows == 1 ? "" : "s");
-    } else {
-        for (int index = 0; index < self.cursor_shows; ++index) {
-            cursor_call(RSF_CURSOR_SHOW, &ShowCursor, FALSE);
-        }
-        self.cursor_shows = 0;
-        RECT clip{};
-        bool restore = false;
-        {
-            std::lock_guard<std::mutex> lock(self.cursor_guard);
-            self.have_frozen = false;
-            restore = self.have_clip;
-            clip = self.last_clip;
-        }
-        if (restore && restore_clip) {
-            cursor_call(RSF_CURSOR_CLIP, &ClipCursor, &clip);
-        }
-        rsf::say(log_to_rust, nullptr, "overlay input: cursor returned to the game; swallowed %lu warps and %lu hides "
-                  "while the panel was open",
-            self.swallowed_warps.load(std::memory_order_relaxed),
-            self.swallowed_hides.load(std::memory_order_relaxed));
-    }
-}
+constexpr rsf_overlay_cursor_effects cursor_effects{
+    [](POINT* point) noexcept -> int32_t {
+        try { return cursor_call(RSF_CURSOR_GET_POS, &GetCursorPos, point); }
+        catch (...) { return 0; }
+    },
+    [](const RECT* rect) noexcept {
+        try { cursor_call(RSF_CURSOR_CLIP, &ClipCursor, rect); } catch (...) {}
+    },
+    show_cursor_native,
+    []() noexcept {
+        try { cursor_call(RSF_CURSOR_SET, &SetCursor, LoadCursorW(nullptr, MAKEINTRESOURCEW(32512))); }
+        catch (...) {}
+    },
+};
+static_assert(sizeof(POINT) == 8 && sizeof(RECT) == 16);
+static_assert(sizeof(rsf_overlay_cursor_effects) == 4 * sizeof(void*));
 
 void apply_visibility_change(uint32_t visible, uint32_t route) noexcept try
 {
-    auto& self = state();
     rsf_core_overlay_pointer_clear();
-    set_cursor_capture(self, visible != 0);
+    rsf_core_overlay_cursor_capture(visible, 1, &cursor_effects);
     if (visible) {
         seed_cursor_position();
     }
@@ -697,13 +600,9 @@ constexpr rsf_overlay_window_ops window_ops{
         try { install_cursor_hooks(); } catch (...) {}
     },
     [](uint32_t visible, uint32_t window_alive) noexcept -> int32_t {
-        auto& self = state();
-        if (visible) {
-            try { set_cursor_capture(self, false, window_alive != 0); } catch (...) {}
-        }
+        if (visible) rsf_core_overlay_cursor_capture(0, window_alive, &cursor_effects);
         const auto retired = rsf_core_overlay_cursor_retire(&cursor_ops);
-        std::lock_guard<std::mutex> cursor_lock(self.cursor_guard);
-        self.have_clip = false;
+        rsf_core_overlay_cursor_reset_capture();
         return retired;
     },
     [](rsf_overlay_input_log_fn log, void* user, const char* message) noexcept {

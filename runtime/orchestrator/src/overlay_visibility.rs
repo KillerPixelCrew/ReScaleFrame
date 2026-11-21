@@ -102,7 +102,7 @@ fn apply_changes(mut change: Option<Change>, apply: Apply) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay_visible() -> u32 {
+pub(super) extern "C" fn rsf_core_overlay_visible() -> u32 {
     VISIBLE.load(Ordering::Acquire).into()
 }
 

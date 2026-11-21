@@ -173,7 +173,7 @@ extern "C" fn rsf_core_overlay_cursor_retire(platform: &Platform) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_core_overlay_cursor_ready() -> u32 {
+pub(super) extern "C" fn rsf_core_overlay_cursor_ready() -> u32 {
     READY.load(Ordering::Acquire).into()
 }
 
