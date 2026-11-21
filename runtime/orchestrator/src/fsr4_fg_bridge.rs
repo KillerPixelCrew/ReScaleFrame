@@ -33,6 +33,15 @@ const TEXTURE_2D: u32 = 3; // D3D12_RESOURCE_DIMENSION_TEXTURE2D
 const BGRA8_UNORM: u32 = 87;
 const R32_FLOAT: u32 = 41;
 const RG16_FLOAT: u32 = 34;
+const FEATURE_LEVEL_12_0: u32 = 0xc000;
+const COMMAND_LIST_DIRECT: u32 = 0;
+const QUEUE_PRIORITY_NORMAL: i32 = 0;
+const QUEUE_FLAGS_NONE: u32 = 0;
+const FENCE_FLAGS_NONE: u32 = 0;
+const SWAPCHAIN_RENDER_TARGET_OUTPUT: u32 = 0x20;
+const SWAPCHAIN_SCALING_STRETCH: u32 = 0;
+const SWAPCHAIN_FLIP_DISCARD: u32 = 4;
+const SWAPCHAIN_ALPHA_UNSPECIFIED: u32 = 0;
 const MAX_DIRECTORY: usize = 32700;
 const PROVIDER_DLL: &str = "amd_fidelityfx_framegeneration_dx12.dll";
 const PROVIDER_PATH_CAPACITY: usize = MAX_DIRECTORY + 1 + PROVIDER_DLL.len() + 1;
@@ -100,6 +109,30 @@ struct Texture {
     samples: u32,
 }
 
+#[repr(C)]
+struct QueueDesc {
+    list_type: u32,
+    priority: i32,
+    flags: u32,
+    node_mask: u32,
+}
+
+#[repr(C)]
+struct SwapchainDesc {
+    width: u32,
+    height: u32,
+    format: u32,
+    stereo: u32,
+    sample_count: u32,
+    sample_quality: u32,
+    buffer_usage: u32,
+    buffer_count: u32,
+    scaling: u32,
+    swap_effect: u32,
+    alpha_mode: u32,
+    flags: u32,
+}
+
 type GeneratedFn = unsafe extern "C" fn(Handle, i32, u32);
 type StatusOp = unsafe extern "C" fn(Handle) -> i32;
 type VoidOp = unsafe extern "C" fn(Handle);
@@ -109,14 +142,21 @@ type FenceOp = unsafe extern "C" fn(Handle, u64) -> i32;
 struct Platform {
     allocate: unsafe extern "C" fn(Handle, GeneratedFn) -> Handle,
     release: VoidOp,
-    open_device: unsafe extern "C" fn(Handle, u64, *mut u32) -> i32,
+    create_factory: unsafe extern "C" fn(Handle, u32) -> i32,
+    find_adapter: unsafe extern "C" fn(Handle, u64) -> i32,
+    get_adapter_vendor: unsafe extern "C" fn(Handle, *mut u32) -> i32,
+    create_device: unsafe extern "C" fn(Handle, u32) -> i32,
     load: unsafe extern "C" fn(Handle, *const u16) -> i32,
     versions: unsafe extern "C" fn(Handle, *mut Version, *mut u64) -> i32,
     create_generation: unsafe extern "C" fn(Handle, *const BridgeCreate, u64) -> i32,
     get_provider: unsafe extern "C" fn(Handle, *mut u64) -> i32,
-    create_commands: StatusOp,
+    create_queue: unsafe extern "C" fn(Handle, *const QueueDesc) -> i32,
+    create_allocator: unsafe extern "C" fn(Handle, u32) -> i32,
+    create_command_list: unsafe extern "C" fn(Handle, u32, u32) -> i32,
+    create_completion_fence: unsafe extern "C" fn(Handle, u64, u32) -> i32,
+    create_event: unsafe extern "C" fn(Handle, u32, u32) -> i32,
     objects: unsafe extern "C" fn(Handle) -> u32,
-    start: unsafe extern "C" fn(Handle, Handle, u32, u32) -> i32,
+    create_swapchain: unsafe extern "C" fn(Handle, Handle, *const SwapchainDesc, u32) -> i32,
     create_image: unsafe extern "C" fn(Handle, u32, u32, u32, *mut Handle, *mut Handle) -> i32,
     create_fence: unsafe extern "C" fn(Handle, *mut Handle) -> i32,
     describe_texture: unsafe extern "C" fn(Handle, *mut Texture),
@@ -139,13 +179,25 @@ struct Platform {
 }
 
 const _: () = {
-    assert!(size_of::<Platform>() == 29 * size_of::<Handle>());
+    assert!(size_of::<Platform>() == 36 * size_of::<Handle>());
+    assert!(std::mem::offset_of!(Platform, create_factory) == 2 * size_of::<Handle>());
+    assert!(std::mem::offset_of!(Platform, load) == 6 * size_of::<Handle>());
+    assert!(std::mem::offset_of!(Platform, create_queue) == 10 * size_of::<Handle>());
+    assert!(std::mem::offset_of!(Platform, create_swapchain) == 16 * size_of::<Handle>());
+    assert!(std::mem::offset_of!(Platform, close_commands) == 21 * size_of::<Handle>());
     assert!(size_of::<BridgeCreate>() == 48);
     assert!(size_of::<BridgeInfo>() == 32);
     assert!(size_of::<BridgeFrame>() == 80);
     assert!(size_of::<BridgeStatus>() == 32);
     assert!(size_of::<Texture>() == 32);
     assert!(std::mem::offset_of!(Texture, dimension) == 16);
+    assert!(size_of::<QueueDesc>() == 16 && align_of::<QueueDesc>() == 4);
+    assert!(std::mem::offset_of!(QueueDesc, priority) == 4);
+    assert!(std::mem::offset_of!(QueueDesc, node_mask) == 12);
+    assert!(size_of::<SwapchainDesc>() == 48 && align_of::<SwapchainDesc>() == 4);
+    assert!(std::mem::offset_of!(SwapchainDesc, sample_count) == 16);
+    assert!(std::mem::offset_of!(SwapchainDesc, buffer_count) == 28);
+    assert!(std::mem::offset_of!(SwapchainDesc, flags) == 44);
 };
 
 #[derive(Default)]
@@ -176,6 +228,7 @@ struct Bridge {
     depth_infinite: bool,
     motion_jittered: bool,
     admitted: bool,
+    swapchain_attempted: bool,
     configured: bool,
     prepared_destroy: bool,
     sequence: u64,
@@ -215,6 +268,7 @@ impl Bridge {
             depth_infinite: false,
             motion_jittered: false,
             admitted: false,
+            swapchain_attempted: false,
             configured: false,
             prepared_destroy: false,
             sequence: 0,
@@ -236,11 +290,22 @@ impl Bridge {
         Ok(bridge)
     }
 
+    fn open_device(&mut self) -> Result<(), i32> {
+        let p = self.ops;
+        let native = self.native;
+        unsafe {
+            checked((p.create_factory)(native, 0))?;
+            checked((p.find_adapter)(native, self.luid))?;
+            checked((p.get_adapter_vendor)(native, &mut self.vendor))?;
+            checked((p.create_device)(native, FEATURE_LEVEL_12_0))
+        }
+    }
+
     fn discover(&mut self, directory: *const u16) -> Result<(), i32> {
         let mut versions = [Version::default(); MAX_VERSIONS];
         let mut count = MAX_VERSIONS as u64;
         let ops = self.ops;
-        checked(unsafe { (ops.open_device)(self.native, self.luid, &mut self.vendor) })?;
+        self.open_device()?;
         let mut path = [0; PROVIDER_PATH_CAPACITY];
         provider_path(directory, &mut path)?;
         unsafe {
@@ -259,6 +324,25 @@ impl Bridge {
         Ok(())
     }
 
+    fn create_commands(&self) -> Result<(), i32> {
+        let queue = QueueDesc {
+            list_type: COMMAND_LIST_DIRECT,
+            priority: QUEUE_PRIORITY_NORMAL,
+            flags: QUEUE_FLAGS_NONE,
+            node_mask: 0,
+        };
+        let p = self.ops;
+        let native = self.native;
+        unsafe {
+            checked((p.create_queue)(native, &queue))?;
+            checked((p.create_allocator)(native, COMMAND_LIST_DIRECT))?;
+            checked((p.create_command_list)(native, 0, COMMAND_LIST_DIRECT))?;
+            checked((p.close_commands)(native))?;
+            checked((p.create_completion_fence)(native, 0, FENCE_FLAGS_NONE))?;
+            checked((p.create_event)(native, 0, 0))
+        }
+    }
+
     fn initialize(&mut self, setup: &BridgeCreate) -> Result<(), i32> {
         self.output = [setup.width, setup.height];
         self.depth_inverted = setup.depth_inverted != 0;
@@ -272,8 +356,8 @@ impl Bridge {
             if (ops.get_provider)(self.native, &mut actual) != 0 || actual != self.provider {
                 return Err(UNSUPPORTED);
             }
-            checked((ops.create_commands)(self.native))?;
         }
+        self.create_commands()?;
         self.admitted = true;
         Ok(())
     }
@@ -301,7 +385,26 @@ impl Bridge {
             return INVALID;
         }
         let [width, height] = self.output;
-        let code = unsafe { (self.ops.start)(self.native, window, width, height) };
+        let desc = SwapchainDesc {
+            width,
+            height,
+            format: BGRA8_UNORM,
+            stereo: 0,
+            sample_count: 1,
+            sample_quality: 0,
+            buffer_usage: SWAPCHAIN_RENDER_TARGET_OUTPUT,
+            buffer_count: 3,
+            scaling: SWAPCHAIN_SCALING_STRETCH,
+            swap_effect: SWAPCHAIN_FLIP_DISCARD,
+            alpha_mode: SWAPCHAIN_ALPHA_UNSPECIFIED,
+            flags: 0,
+        };
+        // The SDK can write to the retained DXGI description. Refresh only the
+        // fields the original bridge set on each attempt when retrying.
+        let first_attempt = u32::from(!self.swapchain_attempted);
+        self.swapchain_attempted = true;
+        let code =
+            unsafe { (self.ops.create_swapchain)(self.native, window, &desc, first_attempt) };
         if code == 0 && !self.has(CHAIN) {
             return UNEXPECTED;
         }
