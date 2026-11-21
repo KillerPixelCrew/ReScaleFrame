@@ -18,7 +18,7 @@ use rsf_game_sys::{
 };
 use std::ffi::c_void;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
 const RSF_DLSSGVK_ABI_VERSION: u32 = 1;
 const OK: i32 = 0;
@@ -70,6 +70,18 @@ unsafe extern "C" {
 }
 
 static OCCUPIED: AtomicBool = AtomicBool::new(false);
+// Streamline's API error callback supplies neither a viewport nor a frame.
+// The singleton owner consumes the latest code at its Present boundary.
+static API_ERROR: AtomicI32 = AtomicI32::new(0);
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_core_dlgvk_report_api_error(error: i32) {
+    API_ERROR.store(error, Ordering::SeqCst);
+}
+
+fn take_api_error() -> i32 {
+    API_ERROR.swap(0, Ordering::SeqCst)
+}
 
 struct Claim;
 
@@ -521,6 +533,7 @@ impl Owner {
             let off = self.configure(false, None);
             self.status.sdk_result = configuration_sdk;
             if off != OK {
+                self.status.asynchronous_present_result = take_api_error();
                 return WSI_ERROR;
             }
         }
@@ -560,7 +573,7 @@ impl Owner {
         if configuration != OK {
             self.status.sdk_result = configuration_sdk;
         }
-        let error = unsafe { (self.platform.take_error)() };
+        let error = take_api_error();
         self.status.asynchronous_present_result = error;
         rsf_core_fgvk_presented(&mut self.timeline, &slot.frame, id, identity);
         self.status.presentation.source_frame = if active { id } else { 0 };
@@ -731,8 +744,8 @@ unsafe extern "C" fn rsf_core_dlgvk_create(
         return result;
     }
     owner.status.presentation.available = 1;
+    take_api_error();
     unsafe {
-        (platform.take_error)();
         chain.write(native_chain);
         out.write(Box::into_raw(owner));
     }

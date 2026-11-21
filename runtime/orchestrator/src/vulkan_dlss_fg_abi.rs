@@ -62,11 +62,10 @@ pub(super) struct Platform {
     pub timeout_epoch: unsafe extern "C" fn() -> u64,
     pub idle: unsafe extern "C" fn(Handle) -> i32,
     pub wait_inputs: unsafe extern "C" fn(Handle, u64, u64) -> i32,
-    pub take_error: unsafe extern "C" fn() -> i32,
 }
 
 const _: () = {
     assert!(size_of::<Sample>() == 40);
     assert!(size_of::<SdkCall>() == 88);
-    assert!(size_of::<Platform>() == 200);
+    assert!(size_of::<Platform>() == 192);
 };

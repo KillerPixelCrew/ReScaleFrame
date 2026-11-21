@@ -7,6 +7,8 @@ struct Harness {
     captures: Vec<(u64, u32)>,
     fence_result: i32,
     present_result: i32,
+    configure_result: i32,
+    configure_api_error: i32,
     detach_result: i32,
     release_result: i32,
     sdk_value: u64,
@@ -91,10 +93,12 @@ unsafe extern "C" fn sdk_initialize(_: Handle, _: usize, _: Handle) -> i32 {
 
 unsafe extern "C" fn sdk_configure(_: Handle, _: usize, user: Handle) -> i32 {
     let call = unsafe { &*user.cast::<SdkCall>() };
-    unsafe { harness(call.native) }
-        .events
-        .push(if call.count == 0 { "off" } else { "on" });
-    OK
+    let test = unsafe { harness(call.native) };
+    test.events.push(if call.count == 0 { "off" } else { "on" });
+    if test.configure_api_error != 0 {
+        rsf_core_dlgvk_report_api_error(test.configure_api_error);
+    }
+    test.configure_result
 }
 
 unsafe extern "C" fn sdk_sample(_: Handle, _: usize, user: Handle) -> i32 {
@@ -151,9 +155,6 @@ unsafe extern "C" fn wait_inputs(user: Handle, semaphore: u64, value: u64) -> i3
     test.events.push("wait SDK");
     OK
 }
-unsafe extern "C" fn take_error() -> i32 {
-    0
-}
 unsafe extern "C" fn lock(_: Handle) {}
 unsafe extern "C" fn proc(_: Handle, _: *const std::ffi::c_char) -> Option<unsafe extern "C" fn()> {
     None
@@ -187,7 +188,6 @@ const PLATFORM: Platform = Platform {
     timeout_epoch: epoch,
     idle,
     wait_inputs,
-    take_error,
 };
 
 fn create(test: &mut Harness) -> *mut Owner {
@@ -302,4 +302,26 @@ fn submission_proof_and_refused_teardown_keep_the_owner_live() {
     assert!(!test.events.contains(&"close"));
     // Test callbacks have no GPU work. Drop the quarantined synthetic owner.
     drop(unsafe { Box::from_raw(owner) });
+
+    let mut test = Harness {
+        configure_result: FEATURE_FAILED,
+        configure_api_error: -4,
+        ..Default::default()
+    };
+    let owner = create(&mut test);
+    assert_eq!(
+        unsafe { rsf_core_dlgvk_present(owner, info, ptr::null(), 0) },
+        WSI_ERROR
+    );
+    assert_eq!(unsafe { (*owner).status.asynchronous_present_result }, -4);
+
+    test.configure_result = OK;
+    test.configure_api_error = 0;
+    assert_eq!(
+        unsafe { rsf_core_dlgvk_present(owner, info, ptr::null(), 0) },
+        OK
+    );
+    assert_eq!(unsafe { (*owner).status.asynchronous_present_result }, 0);
+    assert_eq!(unsafe { (*owner).status.presentation.result }, OK);
+    assert_eq!(unsafe { rsf_core_dlgvk_destroy(owner) }, OK);
 }

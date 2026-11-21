@@ -8,7 +8,6 @@
 #include <sl.h>
 #include <sl_dlss_g.h>
 #include <DirectXMath.h>
-#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -28,9 +27,8 @@ sl::float4x4 matrix(const float* values) {
 }
 
 using Image = rsf_vkfg_image;
-std::atomic<int32_t> asynchronous_error{0};
 const sl::ViewportHandle viewport(0);
-void on_error(const sl::APIError& error) { asynchronous_error = static_cast<int32_t>(error.vkRes); }
+void on_error(const sl::APIError& error) { rsf_core_dlgvk_report_api_error(static_cast<int32_t>(error.vkRes)); }
 
 struct Native {
     rsf_fgvk_setup setup{};
@@ -63,7 +61,7 @@ struct Native {
 
 static_assert(sizeof(rsf_dlgvk_sample) == 40);
 static_assert(sizeof(rsf_dlgvk_sdk_call) == 88);
-static_assert(sizeof(rsf_dlgvk_platform) == 200);
+static_assert(sizeof(rsf_dlgvk_platform) == 192);
 
 rsf_backend_result sdk_result(rsf_dlgvk_sdk_call& call, sl::Result result) {
     call.result = static_cast<int32_t>(result);
@@ -330,7 +328,6 @@ constexpr rsf_dlgvk_platform platform{
         info.semaphoreCount = 1; info.pSemaphores = &handle; info.pValues = &value;
         return self.wait_semaphores(self.device(), &info, 15000000000ull);
     },
-    [] { return asynchronous_error.exchange(0); },
 };
 }
 #endif

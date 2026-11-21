@@ -960,6 +960,20 @@ The corrected Streamline runtime receipt was unavailable. SDK execution,
 GPU completion, capture pixels and gameplay remain unverified.
 See [the Vulkan DLSS FG cutover audit](research/rust-vulkan-dlss-fg-cutover.md).
 
+The Vulkan DLSS-G API error latch now lives in Rust. The native callback
+forwards the SDK code. The owner consumes it when it reports the Present
+attempt, including when options and the Off fallback both fail before
+WSI. The synthetic lifecycle fixture verifies that this failure cannot
+taint the next successful Present. The callback supplies no frame or
+viewport identity, so the status reports the latest SDK code.
+
+All 371 locked Rust tests, formatting and Clippy passed on Rust 1.94.1.
+Four Streamline-enabled MSVC Release contracts passed, and the Runtime
+and linked export inventories matched. The SDK-disabled Runtime
+passed its DLL export contract and returned `NOT_COMPILED` with cleared
+outputs and no callbacks for a valid DLSS-G setup. These are CPU and
+ABI checks. Logs are under `.local/rust-1.94.1-verification/`.
+
 Vulkan FidelityFX 3 FG now owns source admission, slot reuse and
 checked teardown in Rust. It fences GPU consumers even if Present
 returns an older asynchronous error. Refused creation cleanup retains

@@ -40,10 +40,10 @@ struct rsf_dlgvk_platform {
     uint64_t (*timeout_epoch)();
     int32_t (*idle)(void*);
     int32_t (*wait_inputs)(void*, uint64_t, uint64_t);
-    int32_t (*take_error)();
 };
 
 extern "C" {
+void rsf_core_dlgvk_report_api_error(int32_t error);
 rsf_backend_result rsf_core_dlgvk_create(const rsf_dlgvk_platform*, const rsf_fgvk_setup*, rsf_dlssgvk**, uint64_t*);
 int32_t rsf_core_dlgvk_images(rsf_dlssgvk*, uint32_t*, uint64_t*);
 int32_t rsf_core_dlgvk_acquire(rsf_dlssgvk*, uint64_t, uint64_t, uint64_t, uint32_t*);
