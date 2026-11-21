@@ -10,6 +10,8 @@ unsafe extern "C" {
 
 // Owns one reference to a live COM interface. Returned COM getters transfer
 // a retained reference to this type without incrementing it again.
+// Transparent, so Option<ComRef> is a nullable interface pointer in C structures.
+#[repr(transparent)]
 pub(super) struct ComRef(pub(super) NonNull<c_void>);
 
 impl ComRef {

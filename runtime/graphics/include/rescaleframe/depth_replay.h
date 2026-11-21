@@ -11,23 +11,25 @@ typedef struct rsf_depth_replay rsf_depth_replay;
    The owner serializes setup/destruction with callbacks and keeps the object for the session. */
 rsf_depth_replay* rsf_depth_replay_create(void* device, uint32_t width, uint32_t height);
 
-/* Why the last draw was not replayed, or zero if the last one was.
+/* Why the most recent refused draw was not replayed, or zero before any refusal. A successful
+   draw or a new frame does not clear it.
 
-   A replay that draws nothing looks identical to one that was never asked, and five separate tests
-   can reject a draw. This says which:
+   A replay that draws nothing looks identical to one that was never asked, and several separate
+   tests can reject a draw. This says which:
 
      1  nothing usable in the report
      2  a different size than this replay was built for
      3  this draw's shape: primitive kind, topology, no vertex shader, no elements
-     4  the depth view's format, dimension or read-only flag
+     4  the depth view's format, dimension, mip or read-only flag
      5  the depth view's resource is not a 2D texture
-     6  that texture's size, format or sample count
-     7  the pipeline has a stage or binding this cannot reproduce
-     8  the depth stencil state is not the translucency one
-     9  the copy or the draw itself failed
+     6  that texture's size, format, sample count, mips or array size
+     7  a different depth source, layer or context than the frame's first accepted draw
+     8  a hull, domain or geometry stage, stream output, an output UAV, or a depth stencil state
+        that is not the translucency one
+     9  the viewport is not the single full-size one
 
    Reasons 4 and above stop the replay for the rest of the frame, because they describe the frame
-   rather than the draw. Reasons 2 and 3 skip one draw and let the next be judged on its own. */
+   rather than the draw. Reasons 1 to 3 skip one draw and let the next be judged on its own. */
 uint32_t rsf_depth_replay_last_reject(const rsf_depth_replay* replay);
 
 /* What the last candidate actually looked like, so a refusal can be read instead of guessed at.

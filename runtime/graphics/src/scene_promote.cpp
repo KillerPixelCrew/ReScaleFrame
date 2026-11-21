@@ -1,98 +1,39 @@
 // SPDX-License-Identifier: MIT
+#include "device_owner.h"
 
-#include <rescaleframe/scene_promote.h>
 #include <rescaleframe/fullscreen_pass.h>
 #include <rescaleframe/log.h>
+#include <rescaleframe/scene_promote.h>
 #include <rescaleframe/srv_format.h>
 
-#include <windows.h>
-
-#include <d3d11.h>
 #include <wrl/client.h>
 
-#include <new>
-
-// The plan has to hold every promoted surface at once: the composite, the scene colour, and both
-// sets. A plan that describes the frame correctly and is refused for being one entry too long is
-// the worst kind of failure, because it reports itself on, and it has happened once.
-static_assert(5u + RSF_PROMOTE_MAX_UI_TARGETS + RSF_PROMOTE_MAX_CHAIN_TARGETS <=
-                  RSF_FRAME_TAP_MAX_SUBSTITUTIONS,
-              "the frame tap's plan cannot hold everything promotion may name");
-
-namespace {
-
-// One texture promoted to output resolution, with the views the substitution binds in its place.
-//
-// Both views exist even where only one is used. A render target view and a shader resource view on
-// the same texture cost nothing to hold, the composite genuinely needs both, and a replacement that
-// could only be written or only be read would fail the first time the frame did the other.
-struct Replacement {
-    // The game's texture this stands in for, held by address only. Comparing is all this does with
-    // it, and retaining a pooled engine target would change when the engine may reuse it.
-    ID3D11Texture2D* original = nullptr;
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
-    Microsoft::WRL::ComPtr<ID3D11RenderTargetView> target_view;
-    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> shader_view;
+struct rsf_promote_resources {
+    ID3D11Texture2D* texture;
+    ID3D11RenderTargetView* target;
+    ID3D11ShaderResourceView* view;
+    uint32_t format;
 };
 
-void release_replacement(Replacement& replacement)
-{
-    replacement = Replacement{};
-}
-
-void release_set(Replacement* set, uint32_t& count)
-{
-    for (uint32_t index = 0; index < count; ++index) {
-        release_replacement(set[index]);
-    }
-    count = 0;
-}
-
-} // namespace
-
-struct rsf_promote {
-    Microsoft::WRL::ComPtr<ID3D11Device> device;
-    uint32_t output_width = 0;
-    uint32_t output_height = 0;
-    rsf_promote_log_fn log = nullptr;
-    void* log_user = nullptr;
-
-    Replacement composite;
-    // The recombine route: the recombined target and scene colour as a whole surface, and the pass
-    // that seeds scene colour's stand-in with the reconstruction.
-    Replacement composed;
-    Replacement scene;
-    // Where the game's own writes into scene colour go after the recombine: temporal AA's output,
-    // which the reconstruction replaces. Never read.
-    Replacement scratch;
-    // The layer and what stands in for its reads, both the caller's.
-    ID3D11Texture2D* layer = nullptr;
-    ID3D11ShaderResourceView* layer_view = nullptr;
-    rsf_fullscreen_pass* seed_pass = nullptr;
-    Replacement ui_targets[RSF_PROMOTE_MAX_UI_TARGETS];
-    uint32_t ui_target_count = 0;
-    Replacement chain_targets[RSF_PROMOTE_MAX_CHAIN_TARGETS];
-    uint32_t chain_target_count = 0;
-
-    // Not a replacement: the reconstruction already exists at output resolution and belongs to
-    // whoever produced it. All this owns is a way to read it.
-    ID3D11Texture2D* scene_color = nullptr;
-    ID3D11Texture2D* reconstruction = nullptr;
-    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> reconstruction_view;
-    // The recombine route's fallback: the game's own scene colour, readable, for a frame without a
-    // reconstruction.
-    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> scene_source_view;
-
-    uint32_t render_width = 0;
-    uint32_t render_height = 0;
-    bool ready = false;
+struct rsf_promote_platform {
+    void (*make_replacement)(const rsf_promote_setup*, void*, uint32_t, const char*, rsf_promote_resources*);
+    void* (*make_view)(void*, void*, uint32_t);
+    uint32_t (*copy)(void*, void*, void*, void*);
+    rsf_fullscreen_pass* (*create_blit)(void*);
+    uint32_t (*draw_blit)(rsf_fullscreen_pass*, void*, void*, void*, uint32_t, uint32_t);
+    void (*destroy_blit)(rsf_fullscreen_pass*);
+    void (*log)(rsf_promote_log_fn, void*, const char*);
 };
 
-namespace {
+static_assert(sizeof(rsf_promote_resources) == 32 &&
+    sizeof(rsf_promote_platform) == 7 * sizeof(void*));
+static_assert(sizeof(rsf_promote_setup) == 40 && sizeof(rsf_promote_frame_tail) == 144 &&
+    sizeof(rsf_promote_status) == 36 && sizeof(rsf_frame_tap_plan) == 424);
+static_assert(RSF_PROMOTE_OK == 0 && RSF_PROMOTE_ERROR_INVALID_ARGUMENT == -1 &&
+    RSF_PROMOTE_ERROR_ABI_MISMATCH == -2 && RSF_PROMOTE_ERROR_RESOURCE_FAILED == -3 &&
+    RSF_PROMOTE_ERROR_NOT_SCALED == -4);
 
-// The format a view on a texture takes: the one the game binds with, where the tail says, and
-// otherwise the texture's own format with a typeless family resolved to its plain UNORM member,
-// because a view on a typeless texture has to name one.
+namespace {
 // The typeless family a format belongs to, or the format itself when it has none.
 DXGI_FORMAT typeless_family(DXGI_FORMAT format)
 {
@@ -144,422 +85,163 @@ DXGI_FORMAT typed_view_format(DXGI_FORMAT texture_format, uint32_t hint)
     return rsf::srv_format(texture_format);
 }
 
-// Build an output resolution stand-in for one of the game's render resolution targets.
-//
-// The format is copied from the original rather than chosen. What goes into these targets is the
-// game's own tonemapped output and its own interface, drawn by the game's own shaders, so the
-// target they write has to be the one they expect in everything except its size. The views are
-// typed, see `typed_view_format`: the first Windows run refused every promotion because a view on
-// a typeless texture cannot be created without a format.
-bool build_replacement(rsf_promote* promote, ID3D11Texture2D* original, Replacement& out,
-                       const char* what, uint32_t view_format_hint)
+void make_replacement(const rsf_promote_setup* setup, void* raw, uint32_t hint, const char* role,
+                      rsf_promote_resources* out) try
 {
-    release_replacement(out);
-    if (!original) {
-        return true;  // not identified, which is a stated outcome rather than a failure
-    }
-
-    D3D11_TEXTURE2D_DESC description{};
-    original->GetDesc(&description);
-    rsf::say(promote->log, promote->log_user,
-             "promote: the %s %p, %ux%u format %u, becomes %ux%u", what,
-             static_cast<void*>(original), description.Width, description.Height,
-             unsigned(description.Format), promote->output_width, promote->output_height);
-
-    description.Width = promote->output_width;
-    description.Height = promote->output_height;
-    description.MipLevels = 1;
-    description.ArraySize = 1;
-    description.SampleDesc.Count = 1;
-    description.SampleDesc.Quality = 0;
-    description.Usage = D3D11_USAGE_DEFAULT;
-    // Both, whatever the original declared. The composite is written by the tonemap and read by the
-    // last draw, and a replacement that inherited a write-only original could not be read back.
-    description.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
-    description.CPUAccessFlags = 0;
-    description.MiscFlags = 0;
-
-    if (FAILED(promote->device->CreateTexture2D(&description, nullptr, &out.texture)) ||
-        !out.texture) {
-        rsf::say(promote->log, promote->log_user,
-                 "promote: the %s replacement could not be created", what);
-        release_replacement(out);
-        return false;
-    }
-    const DXGI_FORMAT view_format = typed_view_format(description.Format, view_format_hint);
-    D3D11_RENDER_TARGET_VIEW_DESC target_description{};
-    target_description.Format = view_format;
-    target_description.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
-    D3D11_SHADER_RESOURCE_VIEW_DESC shader_description{};
-    shader_description.Format = view_format;
-    shader_description.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-    shader_description.Texture2D.MipLevels = 1;
-    if (FAILED(promote->device->CreateRenderTargetView(out.texture.Get(), &target_description,
-                                                       &out.target_view)) ||
-        FAILED(promote->device->CreateShaderResourceView(out.texture.Get(), &shader_description,
-                                                         &out.shader_view))) {
-        rsf::say(promote->log, promote->log_user,
-                 "promote: the %s replacement views could not be created with view format %u",
-                 what, unsigned(view_format));
-        release_replacement(out);
-        return false;
-    }
-    out.original = original;
-    return true;
-}
-
-// Build replacements for a whole set, skipping null entries and refusing duplicates, which a caller
-// collecting targets from several frames can easily hand over twice.
-bool build_set(rsf_promote* promote, void* const* originals, uint32_t offered, Replacement* set,
-               uint32_t capacity, uint32_t& count, const char* what, uint32_t view_format_hint)
-{
-    release_set(set, count);
-    for (uint32_t index = 0; index < offered && index < capacity; ++index) {
-        auto* original = static_cast<ID3D11Texture2D*>(originals[index]);
-        if (!original) {
-            continue;
-        }
-        bool seen = false;
-        for (uint32_t previous = 0; previous < count; ++previous) {
-            if (set[previous].original == original) {
-                seen = true;
-                break;
-            }
-        }
-        if (seen) {
-            continue;
-        }
-        if (!build_replacement(promote, original, set[count], what, view_format_hint)) {
-            release_set(set, count);
-            return false;
-        }
-        ++count;
-    }
-    return true;
-}
-
-void release_everything(rsf_promote* promote)
-{
-    promote->reconstruction_view.Reset();
-    promote->scene_source_view.Reset();
-    release_set(promote->ui_targets, promote->ui_target_count);
-    release_set(promote->chain_targets, promote->chain_target_count);
-    release_replacement(promote->composite);
-    release_replacement(promote->composed);
-    release_replacement(promote->scene);
-    release_replacement(promote->scratch);
-    promote->ready = false;
-}
-
-void add_promoted(rsf_frame_tap_plan* plan, const Replacement* set, uint32_t count, void* gate = nullptr)
-{
-    for (uint32_t index = 0; index < count && plan->count < RSF_FRAME_TAP_MAX_SUBSTITUTIONS;
-         ++index) {
-        if (!set[index].original) {
-            continue;
-        }
-        rsf_frame_tap_substitution& item = plan->items[plan->count++];
-        item.texture = set[index].original;
-        item.shader_view = set[index].shader_view.Get();
-        item.render_view = set[index].target_view.Get();
-        item.after_target = gate;
-    }
-}
-
-} // namespace
-
-extern "C" rsf_promote_result rsf_promote_create(const rsf_promote_setup* setup,
-                                                 rsf_promote** out)
-{
-    if (!setup || !out || setup->struct_size < sizeof(rsf_promote_setup) || !setup->device ||
-        setup->output_width == 0 || setup->output_height == 0) {
-        return RSF_PROMOTE_ERROR_INVALID_ARGUMENT;
-    }
-    if (setup->abi_version != RSF_PROMOTE_ABI_VERSION) {
-        return RSF_PROMOTE_ERROR_ABI_MISMATCH;
-    }
-    auto* promote = new (std::nothrow) rsf_promote{};
-    if (!promote) {
-        return RSF_PROMOTE_ERROR_RESOURCE_FAILED;
-    }
-    promote->device = static_cast<ID3D11Device*>(setup->device);
-    promote->output_width = setup->output_width;
-    promote->output_height = setup->output_height;
-    promote->log = setup->log;
-    promote->log_user = setup->log_user;
-    *out = promote;
-    return RSF_PROMOTE_OK;
-}
-
-extern "C" rsf_promote_result rsf_promote_prepare(rsf_promote* promote,
-                                                  const rsf_promote_frame_tail* tail)
-{
-    if (!promote || !tail || tail->struct_size < sizeof(rsf_promote_frame_tail) ||
-        !tail->composite || !tail->scene_color || !tail->reconstruction ||
-        tail->render_width == 0 || tail->render_height == 0) {
-        return RSF_PROMOTE_ERROR_INVALID_ARGUMENT;
-    }
-    // Native/DLAA still replaces the scene with a temporal resolve. Allow equal extents and the
-    // engine's four-pixel pool padding, but do not silently turn this into a downsampling route.
-    if (tail->render_width > ((promote->output_width + 3u) & ~3u) ||
-        tail->render_height > ((promote->output_height + 3u) & ~3u)) {
-        rsf::say(promote->log, promote->log_user,
-                 "promote: the game is rendering at %ux%u against an output of %ux%u, so there is "
-                 "nothing to promote",
-                 tail->render_width, tail->render_height, promote->output_width,
-                 promote->output_height);
-        return RSF_PROMOTE_ERROR_NOT_SCALED;
-    }
-
-    release_everything(promote);
-
-    if (!build_replacement(promote, static_cast<ID3D11Texture2D*>(tail->composite),
-                           promote->composite, "composite", tail->composite_view_format)) {
-        return RSF_PROMOTE_ERROR_RESOURCE_FAILED;
-    }
-    if (!build_set(promote, tail->ui_targets, tail->ui_target_count, promote->ui_targets,
-                   RSF_PROMOTE_MAX_UI_TARGETS, promote->ui_target_count, "interface layer",
-                   tail->ui_target_view_format) ||
-        !build_set(promote, tail->chain_targets, tail->chain_target_count, promote->chain_targets,
-                   RSF_PROMOTE_MAX_CHAIN_TARGETS, promote->chain_target_count, "chain target",
-                   tail->chain_view_format)) {
-        release_everything(promote);
-        return RSF_PROMOTE_ERROR_RESOURCE_FAILED;
-    }
-    promote->layer = nullptr;
-    promote->layer_view = nullptr;
-    if (tail->composed && tail->struct_size >= sizeof(rsf_promote_frame_tail) && tail->layer &&
-        tail->layer_view) {
-        promote->layer = static_cast<ID3D11Texture2D*>(tail->layer);
-        promote->layer_view = static_cast<ID3D11ShaderResourceView*>(tail->layer_view);
-    }
-    if (tail->composed) {
-        if (!build_replacement(promote, static_cast<ID3D11Texture2D*>(tail->composed),
-                               promote->composed, "recombined colour", 0) ||
-            !build_replacement(promote, static_cast<ID3D11Texture2D*>(tail->scene_color),
-                               promote->scene, "scene colour", 0) ||
-            !build_replacement(promote, static_cast<ID3D11Texture2D*>(tail->scene_color),
-                               promote->scratch, "scene colour's discarded writes", 0)) {
-            release_everything(promote);
-            return RSF_PROMOTE_ERROR_RESOURCE_FAILED;
-        }
-        D3D11_TEXTURE2D_DESC scene_description{};
-        static_cast<ID3D11Texture2D*>(tail->scene_color)->GetDesc(&scene_description);
-        D3D11_SHADER_RESOURCE_VIEW_DESC source_description{};
-        source_description.Format = typed_view_format(scene_description.Format, 0);
-        source_description.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-        source_description.Texture2D.MipLevels = 1;
-        if (FAILED(promote->device->CreateShaderResourceView(
-                static_cast<ID3D11Resource*>(tail->scene_color), &source_description,
-                &promote->scene_source_view))) {
-            rsf::say(promote->log, promote->log_user,
-                     "promote: scene colour could not be made readable for the fallback seed");
-            release_everything(promote);
-            return RSF_PROMOTE_ERROR_RESOURCE_FAILED;
-        }
-        if (!promote->seed_pass) {
-            rsf_fullscreen_setup pass{};
-            pass.struct_size = sizeof(pass);
-            pass.abi_version = RSF_FULLSCREEN_PASS_ABI_VERSION;
-            if (rsf_fullscreen_pass_create(promote->device.Get(), &pass, &promote->seed_pass) !=
-                RSF_FULLSCREEN_OK) {
-                rsf::say(promote->log, promote->log_user,
-                         "promote: the seed pass could not be created");
-                release_everything(promote);
-                return RSF_PROMOTE_ERROR_RESOURCE_FAILED;
-            }
-        }
-    }
-    if (promote->ui_target_count == 0) {
-        rsf::say(promote->log, promote->log_user,
-                 "promote: no interface layer has been named, so the interface is magnified with the "
-                 "scene rather than drawn at output resolution");
-    }
-    if (promote->chain_target_count == 0) {
-        rsf::say(promote->log, promote->log_user,
-                 "promote: no chain target has been named, so the scene is downsampled between the "
-                 "tonemap and the interface composite and the composite's promotion buys nothing "
-                 "visible");
-    }
-
-    if (FAILED(promote->device->CreateShaderResourceView(
-            static_cast<ID3D11Resource*>(tail->reconstruction), nullptr,
-            &promote->reconstruction_view))) {
-        rsf::say(promote->log, promote->log_user,
-                 "promote: the reconstruction could not be made readable");
-        release_everything(promote);
-        return RSF_PROMOTE_ERROR_RESOURCE_FAILED;
-    }
-
-    promote->scene_color = static_cast<ID3D11Texture2D*>(tail->scene_color);
-    promote->reconstruction = static_cast<ID3D11Texture2D*>(tail->reconstruction);
-    promote->render_width = tail->render_width;
-    promote->render_height = tail->render_height;
-    promote->ready = true;
-    rsf::say(promote->log, promote->log_user,
-             "promote: ready, %ux%u up to %ux%u, %u interface layer%s, %u chain target%s",
-             tail->render_width, tail->render_height, promote->output_width, promote->output_height,
-             promote->ui_target_count, promote->ui_target_count == 1 ? "" : "s",
-             promote->chain_target_count, promote->chain_target_count == 1 ? "" : "s");
-    return RSF_PROMOTE_OK;
-}
-
-extern "C" rsf_promote_result rsf_promote_fill_plan(rsf_promote* promote, rsf_frame_tap_plan* plan)
-{
-    if (!promote || !plan || plan->struct_size < sizeof(rsf_frame_tap_plan)) {
-        return RSF_PROMOTE_ERROR_INVALID_ARGUMENT;
-    }
-    if (!promote->ready) {
-        return RSF_PROMOTE_ERROR_INVALID_ARGUMENT;
-    }
-
-    const uint32_t size = plan->struct_size;
-    *plan = rsf_frame_tap_plan{};
-    plan->struct_size = size;
-    plan->viewport_scale_x = float(promote->output_width) / float(promote->render_width);
-    plan->viewport_scale_y = float(promote->output_height) / float(promote->render_height);
-
-    // A pooled tonemap allocation can be GBuffer A earlier in this frame. Its reads must stay
-    // native until the single-target post-process binding starts its new lifetime.
-    rsf_frame_tap_substitution& composite = plan->items[plan->count++];
-    composite.texture = promote->composite.original;
-    composite.shader_view = promote->composite.shader_view.Get();
-    composite.render_view = promote->composite.target_view.Get();
-    composite.after_target = promote->composite.original;
-
-    // UI writes precede tonemapping. Chain allocations can alias other GBuffers before it.
-    add_promoted(plan, promote->ui_targets, promote->ui_target_count);
-    add_promoted(plan, promote->chain_targets, promote->chain_target_count, promote->composite.original);
-
-    // Scene colour last and gated on the composite, because the scene passes read scene colour
-    // while they are still writing it. An ungated substitution here hands a lighting pass a
-    // reconstruction of the frame it has not finished, which is a feedback loop rather than an
-    // upscale, and it would look like a smear that gets worse the longer the camera holds still.
-    if (promote->composed.original && promote->scene.original) {
-        // The recombine route. The recombined target is promoted from the start of the frame, like
-        // the composite. Scene colour becomes its stand-in once the recombined target is bound: the
-        // gate is where the reconstruction runs and is drawn into that stand-in, so the recombine
-        // reads it, the game's copy of the recombined result back into scene colour lands in it,
-        // and the tonemap reads output resolution colour with full-size translucency on top.
-        rsf_frame_tap_substitution& composed = plan->items[plan->count++];
-        composed.texture = promote->composed.original;
-        composed.shader_view = promote->composed.shader_view.Get();
-        composed.render_view = promote->composed.target_view.Get();
-        rsf_frame_tap_substitution& scene = plan->items[plan->count++];
-        scene.texture = promote->scene.original;
-        scene.shader_view = promote->scene.shader_view.Get();
-        scene.render_view = promote->scratch.target_view.Get();
-        scene.after_target = promote->composed.original;
-        // A gate and nothing else: keyed on the scratch texture, which the game never binds, and
-        // opened when the composite is bound for the tonemap. That is where `rsf_promote_finish`
-        // puts the recombined result into scene colour's stand-in.
-        rsf_frame_tap_substitution& finish = plan->items[plan->count++];
-        finish.texture = promote->scratch.texture.Get();
-        finish.shader_view = promote->scratch.shader_view.Get();
-        finish.after_target = promote->composite.original;
-        // The layer's reads, from the recombine onward, go to its integrated twin. Reads only:
-        // the game keeps drawing into the layer itself.
-        if (promote->layer && promote->layer_view) {
-            rsf_frame_tap_substitution& layer = plan->items[plan->count++];
-            layer.texture = promote->layer;
-            layer.shader_view = promote->layer_view;
-            layer.after_target = promote->composed.original;
-        }
-        return RSF_PROMOTE_OK;
-    }
-    rsf_frame_tap_substitution& scene = plan->items[plan->count++];
-    scene.texture = promote->scene_color;
-    scene.shader_view = promote->reconstruction_view.Get();
-    scene.after_target = promote->composite.original;
-    return RSF_PROMOTE_OK;
-}
-
-extern "C" rsf_promote_result rsf_promote_seed(rsf_promote* promote, void* context,
-                                               uint32_t reconstructed)
-{
-    if (!promote || !context || !promote->ready) {
-        return RSF_PROMOTE_ERROR_INVALID_ARGUMENT;
-    }
-    ID3D11ShaderResourceView* source =
-        reconstructed ? promote->reconstruction_view.Get() : promote->scene_source_view.Get();
-    if (!promote->scene.target_view || !promote->seed_pass || !source) {
-        return RSF_PROMOTE_OK;
-    }
-    rsf_fullscreen_draw draw{};
-    draw.struct_size = sizeof(draw);
-    draw.mode = RSF_FULLSCREEN_COPY;
-    return rsf_fullscreen_pass_draw(promote->seed_pass, context, promote->scene.target_view.Get(),
-                                    source, &draw) == RSF_FULLSCREEN_OK
-               ? RSF_PROMOTE_OK
-               : RSF_PROMOTE_ERROR_RESOURCE_FAILED;
-}
-
-extern "C" rsf_promote_result rsf_promote_finish(rsf_promote* promote, void* context)
-{
-    if (!promote || !context || !promote->ready) {
-        return RSF_PROMOTE_ERROR_INVALID_ARGUMENT;
-    }
-    if (!promote->scene.texture || !promote->composed.texture) {
-        return RSF_PROMOTE_OK;
-    }
-    D3D11_TEXTURE2D_DESC scene{};
-    D3D11_TEXTURE2D_DESC composed{};
-    promote->scene.texture->GetDesc(&scene);
-    promote->composed.texture->GetDesc(&composed);
-    if (scene.Format == composed.Format) {
-        static_cast<ID3D11DeviceContext*>(context)->CopyResource(promote->scene.texture.Get(),
-                                                                 promote->composed.texture.Get());
-        return RSF_PROMOTE_OK;
-    }
-    if (!promote->seed_pass || !promote->scene.target_view || !promote->composed.shader_view) {
-        return RSF_PROMOTE_OK;
-    }
-    rsf_fullscreen_draw draw{};
-    draw.struct_size = sizeof(draw);
-    draw.mode = RSF_FULLSCREEN_COPY;
-    return rsf_fullscreen_pass_draw(promote->seed_pass, context, promote->scene.target_view.Get(),
-                                    promote->composed.shader_view.Get(), &draw) == RSF_FULLSCREEN_OK
-               ? RSF_PROMOTE_OK
-               : RSF_PROMOTE_ERROR_RESOURCE_FAILED;
-}
-
-extern "C" rsf_promote_result rsf_promote_get_stand_ins(rsf_promote* promote, void** scene,
-                                                       void** composed)
-{
-    if (!promote || !scene || !composed) {
-        return RSF_PROMOTE_ERROR_INVALID_ARGUMENT;
-    }
-    *scene = promote->ready ? promote->scene.texture.Get() : nullptr;
-    *composed = promote->ready ? promote->composed.texture.Get() : nullptr;
-    return RSF_PROMOTE_OK;
-}
-
-extern "C" rsf_promote_result rsf_promote_get_status(rsf_promote* promote,
-                                                     rsf_promote_status* status)
-{
-    if (!promote || !status || status->struct_size < sizeof(rsf_promote_status)) {
-        return RSF_PROMOTE_ERROR_INVALID_ARGUMENT;
-    }
-    status->ready = promote->ready ? 1u : 0u;
-    status->ui_targets_promoted = promote->ui_target_count;
-    status->chain_targets_promoted = promote->chain_target_count;
-    status->at_recombine = (promote->composed.original && promote->scene.original) ? 1u : 0u;
-    status->render_width = promote->render_width;
-    status->render_height = promote->render_height;
-    status->output_width = promote->output_width;
-    status->output_height = promote->output_height;
-    return RSF_PROMOTE_OK;
-}
-
-extern "C" void rsf_promote_destroy(rsf_promote* promote)
-{
-    if (!promote) {
+    auto* device = static_cast<ID3D11Device*>(setup->device);
+    auto* original = static_cast<ID3D11Texture2D*>(raw);
+    if (!rsf::same_device(original, device)) {
+        rsf::say(setup->log, setup->log_user, "promote: the %s belongs to another device", role);
         return;
     }
-    // The caller clears the tap's plan before this, which the header says. Nothing here can check
-    // it: the views are the tap's to stop using, and releasing them while a plan still names them
-    // would take the game down inside a binding call rather than here.
-    release_everything(promote);
-    rsf_fullscreen_pass_destroy(promote->seed_pass);
-    delete promote;
+
+    D3D11_TEXTURE2D_DESC original_desc{};
+    original->GetDesc(&original_desc);
+    rsf::say(setup->log, setup->log_user,
+             "promote: the %s %p, %ux%u format %u, becomes %ux%u", role, raw,
+             original_desc.Width, original_desc.Height, unsigned(original_desc.Format),
+             setup->output_width, setup->output_height);
+    D3D11_TEXTURE2D_DESC desc{};
+    desc.Width = setup->output_width;
+    desc.Height = setup->output_height;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = original_desc.Format;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
+    if (FAILED(device->CreateTexture2D(&desc, nullptr, &texture)) || !texture) {
+        rsf::say(setup->log, setup->log_user, "promote: the %s replacement could not be created", role);
+        return;
+    }
+    const auto format = typed_view_format(desc.Format, hint);
+    D3D11_RENDER_TARGET_VIEW_DESC target_desc{};
+    target_desc.Format = format;
+    target_desc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+    D3D11_SHADER_RESOURCE_VIEW_DESC view_desc{};
+    view_desc.Format = format;
+    view_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+    view_desc.Texture2D.MipLevels = 1;
+    Microsoft::WRL::ComPtr<ID3D11RenderTargetView> target;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> view;
+    if (FAILED(device->CreateRenderTargetView(texture.Get(), &target_desc, &target)) || !target ||
+        FAILED(device->CreateShaderResourceView(texture.Get(), &view_desc, &view)) || !view) {
+        rsf::say(setup->log, setup->log_user,
+                 "promote: the %s replacement views could not be created with view format %u",
+                 role, unsigned(format));
+        return;
+    }
+    *out = {texture.Detach(), target.Detach(), view.Detach(), uint32_t(desc.Format)};
+} catch (...) {}
+
+void* make_view(void* raw_device, void* raw_texture, uint32_t typed)
+{
+    auto* device = static_cast<ID3D11Device*>(raw_device);
+    auto* texture = static_cast<ID3D11Texture2D*>(raw_texture);
+    if (!rsf::same_device(texture, device)) return nullptr;
+    D3D11_SHADER_RESOURCE_VIEW_DESC view_desc{};
+    if (typed) {
+        D3D11_TEXTURE2D_DESC desc{};
+        texture->GetDesc(&desc);
+        view_desc.Format = typed_view_format(desc.Format, 0);
+        view_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        view_desc.Texture2D.MipLevels = 1;
+    }
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> view;
+    if (FAILED(device->CreateShaderResourceView(texture, typed ? &view_desc : nullptr, &view))) {
+        return nullptr;
+    }
+    return view.Detach();
+}
+
+uint32_t copy(void* device, void* raw_context, void* target, void* source)
+{
+    auto* context = static_cast<ID3D11DeviceContext*>(raw_context);
+    if (context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE ||
+        !rsf::same_device(context, static_cast<ID3D11Device*>(device))) return 0;
+    context->CopyResource(static_cast<ID3D11Texture2D*>(target), static_cast<ID3D11Texture2D*>(source));
+    return 1;
+}
+
+rsf_fullscreen_pass* create_blit(void* device)
+{
+    rsf_fullscreen_setup setup{};
+    setup.struct_size = sizeof(setup);
+    setup.abi_version = RSF_FULLSCREEN_PASS_ABI_VERSION;
+    rsf_fullscreen_pass* pass = nullptr;
+    return rsf_fullscreen_pass_create(device, &setup, &pass) == RSF_FULLSCREEN_OK ? pass : nullptr;
+}
+
+uint32_t draw_blit(rsf_fullscreen_pass* pass, void* context, void* target, void* source,
+                   uint32_t width, uint32_t height)
+{
+    rsf_fullscreen_draw draw{};
+    draw.struct_size = sizeof(draw);
+    draw.mode = RSF_FULLSCREEN_COPY;
+    draw.width = width;
+    draw.height = height;
+    return rsf_fullscreen_pass_draw(pass, context, target, source, &draw) == RSF_FULLSCREEN_OK;
+}
+
+void emit_log(rsf_promote_log_fn sink, void* user, const char* text) try
+{
+    if (sink) sink(user, text);
+} catch (...) {}
+
+constexpr rsf_promote_platform platform{make_replacement, make_view, copy, create_blit, draw_blit,
+    rsf_fullscreen_pass_destroy, emit_log};
+}
+
+extern "C" {
+rsf_promote_result rsf_core_promote_create(const rsf_promote_setup*, rsf_promote**,
+    const rsf_promote_platform*);
+rsf_promote_result rsf_core_promote_prepare(const rsf_promote*, const rsf_promote_frame_tail*);
+rsf_promote_result rsf_core_promote_fill_plan(const rsf_promote*, rsf_frame_tap_plan*);
+rsf_promote_result rsf_core_promote_seed(const rsf_promote*, void*, uint32_t);
+rsf_promote_result rsf_core_promote_finish(const rsf_promote*, void*);
+rsf_promote_result rsf_core_promote_get_stand_ins(const rsf_promote*, void**, void**);
+rsf_promote_result rsf_core_promote_get_status(const rsf_promote*, rsf_promote_status*);
+void rsf_core_promote_destroy(rsf_promote*);
+
+rsf_promote_result rsf_promote_create(const rsf_promote_setup* setup, rsf_promote** out)
+{
+    return rsf_core_promote_create(setup, out, &platform);
+}
+
+rsf_promote_result rsf_promote_prepare(rsf_promote* promote, const rsf_promote_frame_tail* tail)
+{
+    return rsf_core_promote_prepare(promote, tail);
+}
+
+rsf_promote_result rsf_promote_fill_plan(rsf_promote* promote, rsf_frame_tap_plan* plan)
+{
+    return rsf_core_promote_fill_plan(promote, plan);
+}
+
+rsf_promote_result rsf_promote_seed(rsf_promote* promote, void* context, uint32_t reconstructed)
+{
+    return rsf_core_promote_seed(promote, context, reconstructed);
+}
+
+rsf_promote_result rsf_promote_finish(rsf_promote* promote, void* context)
+{
+    return rsf_core_promote_finish(promote, context);
+}
+
+rsf_promote_result rsf_promote_get_stand_ins(rsf_promote* promote, void** scene, void** composed)
+{
+    return rsf_core_promote_get_stand_ins(promote, scene, composed);
+}
+
+rsf_promote_result rsf_promote_get_status(rsf_promote* promote, rsf_promote_status* status)
+{
+    return rsf_core_promote_get_status(promote, status);
+}
+
+void rsf_promote_destroy(rsf_promote* promote)
+{
+    rsf_core_promote_destroy(promote);
+}
 }

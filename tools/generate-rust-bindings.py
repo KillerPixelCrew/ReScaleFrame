@@ -44,6 +44,16 @@ generate("sdk/game/src/sr_abi.rs", "runtime/orchestrator/include/rescaleframe/d3
          ["--no-recursive-allowlist", "--with-derive-default",
           "--raw-line", "use crate::{rsf_game_render_pass, rsf_result};",
           "--raw-line", "type rsf_sharpening_options = ::core::ffi::c_void;"])
+generate("runtime/orchestrator/src/dlss_streamline_abi.rs", "runtime/backends/dlss/include/rescaleframe/dlss.h",
+         "rsf_dlss_(plan|support|quality)", "NOTHING", ["-Iruntime/backends/dlss/include"],
+         ["--no-recursive-allowlist"])
+generate("runtime/orchestrator/src/resource_roles_abi.rs", "runtime/graphics/include/rescaleframe/resource_roles.h",
+         "rsf_(texture_facts|frame_shape|resource_role|role_(table|rule|verdict|confidence))",
+         "RSF_ROLE_RULE_.*", [], ["--no-recursive-allowlist"])
+generate("runtime/orchestrator/src/scene_promote_abi.rs", "runtime/graphics/include/rescaleframe/scene_promote.h",
+         "rsf_(promote_(setup|frame_tail|status|log_fn)|frame_tap_(plan|substitution|gate_fn))",
+         "RSF_(PROMOTE_(ABI_VERSION|MAX_(UI|CHAIN)_TARGETS)|FRAME_TAP_MAX_SUBSTITUTIONS)",
+         ["-Iruntime/graphics/include"], ["--no-recursive-allowlist", "--with-derive-default"])
 generate("games/anomaly/src/fg_inputs_abi.rs", "games/anomaly/src/fg_inputs_platform.h",
          "rsf_anomaly_input_(log|frame|desc|targets|constants|platform)", "NOTHING", [],
          ["--no-recursive-allowlist", "--with-derive-default"])
@@ -243,6 +253,10 @@ generate("runtime/orchestrator/src/shader_patch_abi.rs", "runtime/shader_patch/s
          ["-Iruntime/shader_patch/include"],
          ["--no-recursive-allowlist", "--with-derive-default", "--raw-line", "#![allow(dead_code)]",
           "--raw-line", "pub(crate) use rsf_game_sys::shader_patch_abi::*;"])
+generate("runtime/orchestrator/src/ui_identify_abi.rs", "runtime/graphics/include/rescaleframe/ui_identify.h",
+         "rsf_ui_(set|result|registry_counters)", "RSF_UI_(IDENTIFY_ABI_VERSION|MAX_.*)", [])
+generate("runtime/orchestrator/src/ui_layer_abi.rs", "runtime/graphics/include/rescaleframe/ui_layer.h",
+         "rsf_ui_layer_(setup|status|result|log_fn)", "RSF_UI_LAYER_(ABI_VERSION|RING)", [])
 generate("runtime/orchestrator/src/vulkan_sr_abi.rs", "runtime/orchestrator/include/rescaleframe/native_sr_split_vulkan.h",
          "rsf_(srvk_(setup|frame|image|fallback|fsr4_provider_info)|fsr4vk_handoff|vk_(function|get_proc)|input_dump_vk_setup)",
          "RSF_(SRVK_(ABI_VERSION|SPLIT_ABI_VERSION|SPLIT_TRACKED_ABI_VERSION|FSR4_INFO_ABI_VERSION)|SR_(DLSS|FSR2|FSR3|FSR4|XESS)|FSR4_BRIDGE_(INVALID_ARGUMENT|ABI_MISMATCH))",

@@ -5,6 +5,10 @@
 // handoff of accepted normalized depth and motion to the D3D12 frame generation owner.
 // sr12_platform.cpp supplies one call per D3D12, vendor, capture or sharpening operation.
 use crate::com_ref::ComRef;
+use crate::dxgi_format::{
+    D24_UNORM_S8_UINT, D32_FLOAT, D32_FLOAT_S8X24_UINT, R24_UNORM_X8_TYPELESS, R24G8_TYPELESS,
+    R32_TYPELESS, R32G8X24_TYPELESS, half_to_f32,
+};
 use crate::gl_pipeline_abi::{rsf_dlss_setup, rsf_sr12_setup as Setup};
 use crate::render_abi::*;
 use rsf_game_sys::{
@@ -37,17 +41,10 @@ const MAX_QUALITY: u32 = 5;
 const RGBA32_FLOAT: u32 = 2;
 const RGBA16_FLOAT: u32 = 10;
 const RG32_FLOAT: u32 = 16;
-const R32G8X24_TYPELESS: u32 = 19;
-const D32_FLOAT_S8X24_UINT: u32 = 20;
 const R32_FLOAT_X8X24_TYPELESS: u32 = 21;
 const R11G11B10_FLOAT: u32 = 26;
 const RG16_FLOAT: u32 = 34;
-const R32_TYPELESS: u32 = 39;
-const D32_FLOAT: u32 = 40;
 const R32_FLOAT: u32 = 41;
-const R24G8_TYPELESS: u32 = 44;
-const D24_UNORM_S8_UINT: u32 = 45;
-const R24_UNORM_X8_TYPELESS: u32 = 46;
 const R16_FLOAT: u32 = 54;
 
 const RENDER_TARGET: u32 = 0x4;
@@ -255,20 +252,6 @@ fn tile_origin(tile: u32, width: u32, height: u32) -> (u32, u32) {
         quarter(width, tile % 2 == 1),
         quarter(height, tile / 2 == 1),
     )
-}
-
-fn half_to_f32(half: u16) -> f32 {
-    let sign = u32::from(half & 0x8000) << 16;
-    let exponent = u32::from((half >> 10) & 0x1f);
-    let mantissa = u32::from(half & 0x3ff);
-    match exponent {
-        0 => {
-            let magnitude = mantissa as f32 / 16_777_216.0;
-            if sign != 0 { -magnitude } else { magnitude }
-        }
-        0x1f => f32::from_bits(sign | 0x7f80_0000 | (mantissa << 13)),
-        _ => f32::from_bits(sign | ((exponent + 112) << 23) | (mantissa << 13)),
-    }
 }
 
 // Mean and maximum pixel-vector magnitude and the count of non-finite samples.

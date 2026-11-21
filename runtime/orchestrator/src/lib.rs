@@ -7,7 +7,13 @@ mod auxiliary_sr_abi;
 #[cfg(windows)]
 mod callback_host;
 #[cfg(windows)]
+mod colour_d3d11;
+#[cfg(windows)]
 mod com_ref;
+#[cfg(windows)]
+mod constant_buffer_read;
+#[cfg(windows)]
+mod constant_twins;
 #[cfg(windows)]
 mod cpu_abi;
 #[cfg(windows)]
@@ -37,11 +43,21 @@ mod d3d11_present;
 #[cfg(windows)]
 mod d3d11_present_abi;
 #[cfg(windows)]
+mod d3d11_state;
+#[cfg(windows)]
 mod d3d12_observer;
+#[cfg(windows)]
+mod depth_replay;
+#[cfg(windows)]
+mod depth_scale;
 #[cfg(windows)]
 mod dlss_pipeline;
 #[cfg(windows)]
 mod dlss_pipeline_abi;
+#[cfg(windows)]
+mod dlss_streamline;
+#[cfg(windows)]
+mod dlss_streamline_abi;
 #[cfg(windows)]
 mod dlss_vulkan_capture;
 #[cfg(windows)]
@@ -50,6 +66,8 @@ mod dlss_vulkan_capture_ledger;
 mod dx12_vulkan_interop;
 #[cfg(windows)]
 mod dx12_vulkan_interop_abi;
+#[cfg(windows)]
+mod dxgi_format;
 #[cfg(windows)]
 mod motion_d3d11;
 #[cfg(windows)]
@@ -170,9 +188,17 @@ mod render_host;
 #[cfg(windows)]
 mod render_links;
 #[cfg(windows)]
+mod resource_roles;
+#[cfg(windows)]
+mod resource_roles_abi;
+#[cfg(windows)]
 mod sampler_bias;
 #[cfg(windows)]
 mod scene_abi;
+#[cfg(windows)]
+mod scene_promote;
+#[cfg(windows)]
+mod scene_promote_abi;
 #[cfg(windows)]
 mod settings_store;
 #[cfg(windows)]
@@ -190,6 +216,16 @@ mod sr_history;
 mod sr_legacy;
 #[cfg(windows)]
 mod sr_session;
+#[cfg(windows)]
+mod texture_dump;
+#[cfg(windows)]
+mod ui_identify;
+#[cfg(windows)]
+mod ui_identify_abi;
+#[cfg(windows)]
+mod ui_layer;
+#[cfg(windows)]
+mod ui_layer_abi;
 #[cfg(windows)]
 mod vulkan_antilag;
 #[cfg(windows)]

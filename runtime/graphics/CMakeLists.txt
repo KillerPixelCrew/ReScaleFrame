@@ -1,5 +1,4 @@
 add_library(rsf_graphics STATIC
-    src/texture_dump_raw.cpp
     src/texture_dump.cpp
     src/motion_decode.cpp
     src/motion_resolve.cpp
@@ -7,7 +6,6 @@ add_library(rsf_graphics STATIC
     src/sharpening/d3d12.cpp
     src/colour_fidelity.cpp
     src/colour_transport.cpp
-    src/resource_roles.cpp
     src/constant_buffer_read.cpp
     src/resource_ref.cpp
     src/frame_tap.cpp
@@ -20,7 +18,6 @@ add_library(rsf_graphics STATIC
     src/ui_layer.cpp
     src/overlay_renderer.cpp
     src/overlay_input.cpp
-    src/ui_identify.cpp
     src/constant_twin.cpp
     src/d3d11_observer.cpp)
 target_sources(rsf_graphics PRIVATE src/d3d12_observer.cpp)

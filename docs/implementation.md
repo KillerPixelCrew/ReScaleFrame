@@ -4,6 +4,81 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now owns D3D11 state snapshots, their COM leases and the full,
+independent, depth and draw restore paths. The native bridge keeps the
+typed context calls. The public and private save/restore signatures
+are unchanged. Source checks covered the shared layouts and binding
+order. The standalone Anomaly link still needs build verification
+with its Rust archive and the shared Graphics Rust archive.
+
+Rust now owns shared D3D11 texture dump readback, preview encoding,
+statistics and publication. The native bridge retains WIC, file and
+D3D11 calls. Input capture and Anomaly staging use the same pixel-stride
+table. The four dump C signatures and the header are unchanged, and
+the finite ranges for the two preview channels are tracked separately.
+Source checks and the remaining verification are recorded in commit
+`1f3bb2e`.
+
+Rust now owns the legacy Streamline SR session, including its owned and
+borrowed host routes, device leases, viewport option cache and the
+token, constants, options, tags and evaluate order. The native bridge
+keeps SDK types, entry points and signature verification. Replacing a
+registered D3D11 device releases the previous lease, and diagnostics
+no longer read stale driver fields when requirements are unavailable.
+The public declarations and SDK-disabled stubs are unchanged.
+
+Rust now owns D3D11 constant-buffer readback admission, the staging
+lease and the caller's byte copy. The native bridge checks the
+resource type before reading its descriptor, and the Rust path
+checks both device identities. Deferred contexts report map failure
+before a copy can enter their command lists. The public C signature
+and result values are unchanged.
+
+Rust now owns the D3D11 depth rescale transaction and the depth replay
+frame. The port keeps the original shader and native draw calls,
+including the order of depth and stencil writes. A replay with a
+missing depth resource or a refused state snapshot leaves the context
+untouched. The depth scale and replay signatures are unchanged, and
+the replay header documents the existing diagnostic codes. Source
+checks and the remaining verification are recorded in commit `02c26ac`.
+
+Rust now owns D3D11 colour transport and fidelity, including resource
+leases and dispatch order, using the shared view cache and context
+restore helper. A refused resize leaves the last encoded target
+intact, and leased views survive further cache lookups. The two C
+headers and both HLSL programs match the previous implementation.
+See the source checks in commit `50f4378`.
+
+Rust now owns the D3D11 UI layer ring and identity registry. The layer
+keeps its sharing retry, format choices and clear order. Forgetting a
+recycled identity preserves the recency of the surviving entries, so
+the next insertion evicts the oldest one. The 17 C signatures are
+unchanged, and the header comments clarify the borrow lifetimes.
+See commit `164885d` for the source checks and the unrun regression.
+
+The shared texture-role classifier is now a single Rust C entry point.
+It still evaluates the caller's rules in order and rejects short
+records before writing a verdict. The render-size fallback uses
+widened aspect arithmetic so large extents cannot overflow. D3D11
+regions, D3D12 SR and the classifier share the same DXGI depth format
+values. The frame tap and the standalone fixture retain their C calls.
+
+Rust now owns the 32-slot D3D11 constant-buffer twin cache. It preserves
+write recency and rejects stale matches against the live buffer's
+descriptor. The upload runs without the cache lock and publishes its
+pairing only after a successful write. Forgetting the original during
+an upload prevents publication. The native bridge checks the context
+device before mapping the buffer. All five C signatures are unchanged.
+
+Rust now owns D3D11 scene promotion, including stand-in texture leases,
+rebuild admission, substitution order, gate selection and fallback.
+The same fullscreen pass seeds scene colour on the recombine route.
+The native bridge creates typed views and issues the direct copy when
+the stand-ins have the same format. Promotion refuses foreign source
+textures during allocation, and the direct copy requires an immediate
+context on the promotion device. The public C headers are unchanged.
+Source checks covered the ABI bindings and both substitution routes.
+
 Rust now owns the shared D3D11 fullscreen pass and Present blit through
 one handle. Foreign and deferred contexts are refused, and automatic
 viewport sizing uses the RTV's mip. The native draw takes an independent
