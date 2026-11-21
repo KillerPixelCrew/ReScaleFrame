@@ -38,6 +38,12 @@ retirement and retains its services until a later stop succeeds. The ASI
 and attach helper still need ports. The RDR2 plugin and camera builds and
 game verification remain unrun on this revision.
 
+Fallout 4 now owns exact-build identity, GameSDK lifecycle, Runtime
+session setup and cold D3D11 creation in Rust. The creation owner
+checks the final outer swapchain slot before binding presentation, and
+keeps the existing Steam facade and typed native call. The rendering and
+CPU producers still need ports. Link, fixture and game checks remain open.
+
 ## Rust orchestrator and first Anomaly port
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
