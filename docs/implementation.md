@@ -4,6 +4,13 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now owns D3D11 state snapshots, their COM leases and the full,
+independent, depth and draw restore paths. The native bridge keeps the
+typed context calls. The public and private save/restore signatures
+are unchanged. Source checks covered the shared layouts and binding
+order. The standalone Anomaly link still needs build verification
+with its Rust archive and the shared Graphics Rust archive.
+
 Rust now owns shared D3D11 texture dump readback, preview encoding,
 statistics and publication. The native bridge retains WIC, file and
 D3D11 calls. Input capture and Anomaly staging use the same pixel-stride
