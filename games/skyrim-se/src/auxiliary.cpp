@@ -24,7 +24,7 @@ struct rsf_skyrim_auxiliary_observation {
 struct rsf_skyrim_auxiliary_leaves {
     bool (*ready)();
     bool (*enter)();
-    void (*leave)();
+    bool (*leave)();
     uint32_t (*thread)();
     void (*hold)(void*, rsf_skyrim_auxiliary_texture*);
     void (*release)(void*);
@@ -110,7 +110,7 @@ void observe(void* context, const rsf_game_render_pass* pass, const rsf_game_hos
 constexpr rsf_skyrim_auxiliary_leaves leaves{
     []() noexcept { return output_resolution_ready(); },
     []() noexcept { return enter_output_resolution(); },
-    []() noexcept { leave_output_resolution(); },
+    []() noexcept { return leave_output_resolution(); },
     []() noexcept { return uint32_t(GetCurrentThreadId()); },
     [](void* texture, rsf_skyrim_auxiliary_texture* facts) noexcept {
         auto* resource = static_cast<ID3D11Texture2D*>(texture);

@@ -69,7 +69,7 @@ struct Observation {
 struct Leaves {
     ready: unsafe extern "C" fn() -> bool,
     enter: unsafe extern "C" fn() -> bool,
-    leave: unsafe extern "C" fn(),
+    leave: unsafe extern "C" fn() -> bool,
     thread: unsafe extern "C" fn() -> u32,
     hold: unsafe extern "C" fn(*mut c_void, *mut TextureFacts),
     release: unsafe extern "C" fn(*mut c_void),
@@ -142,6 +142,7 @@ struct Receipt {
     scope: Scope,
     restore: usize,
     entered: bool,
+    restored: bool,
 }
 
 enum State {
@@ -284,25 +285,30 @@ fn apply(
         scope,
         restore,
         entered,
+        restored: false,
     })
 }
 
-fn retire(leaves: &Leaves, host: &rsf_game_host_services, receipt: Receipt) {
-    if !unsafe { (leaves.restore)(receipt.restore, host.user, &receipt.scope) } {
+fn retire(leaves: &Leaves, host: &rsf_game_host_services, mut receipt: Receipt) {
+    if !receipt.restored {
+        if !unsafe { (leaves.restore)(receipt.restore, host.user, &receipt.scope) } {
+            *state() = State::Pending(receipt);
+            return;
+        }
+        receipt.restored = true;
+        if host.log.is_some()
+            && RESTORE_REPORTS
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+                    (n < 4).then_some(n + 1)
+                })
+                .is_ok()
+        {
+            unsafe { (leaves.report)(host, receipt.scope.native_frame) };
+        }
+    }
+    if receipt.entered && !unsafe { (leaves.leave)() } {
         *state() = State::Pending(receipt);
         return;
-    }
-    if host.log.is_some()
-        && RESTORE_REPORTS
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
-                (n < 4).then_some(n + 1)
-            })
-            .is_ok()
-    {
-        unsafe { (leaves.report)(host, receipt.scope.native_frame) };
-    }
-    if receipt.entered {
-        unsafe { (leaves.leave)() }
     }
     *state() = State::Idle;
 }

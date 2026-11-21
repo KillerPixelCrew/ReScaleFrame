@@ -260,6 +260,14 @@ output resolution only if that scope entered it. Native leaves still
 make the COM and Runtime calls. Source and layout checks passed.
 Build and live auxiliary restoration remain unverified.
 
+Skyrim SE's resolution owner now retains the native ratio and lock
+snapshot, produces the same Halton jitter, and controls the temporary
+output viewport in Rust. Native leaves keep the constant upload before
+the viewport call. If output restoration must retry, the auxiliary
+owner retains its receipt and skips the Runtime restore it already
+completed. Source checks matched the engine fields and call sites.
+Build and in-game resize and fallback verification remain open.
+
 Unity package D3D12 SR contexts and their recording slots are Rust-owned.
 The existing Unity bridge still provides recording and completion facts.
 The view owner preserves reconfiguration, spatial fallback and retirement

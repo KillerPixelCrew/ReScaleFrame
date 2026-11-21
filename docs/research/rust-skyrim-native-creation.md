@@ -114,9 +114,9 @@ Still C++ in `rsf_game_skyrim_se`, in suggested order:
 3. `cpu_events.cpp` with `input_ownership.h` and `screen_classification.h`: CPU frame, input
    ownership, prospective source and screen classification (one hook, about forty RVAs). Its
    fixture `tests/skyrim_input.cpp` compiles the source directly.
-4. `presentation_inputs.cpp`, `resolution.cpp`, `render_inputs.cpp`: pre-HDR inputs,
-   reduced-resolution ownership and SR reconstruction. Rust now owns the sampler hook
-   at `+1010de0`, interface hook at `+116ac80` and auxiliary reconstruction and diagnostics.
+4. `presentation_inputs.cpp` and `render_inputs.cpp` still supply pre-HDR textures
+   and deliver native SR. Rust owns the sampler hook at `+1010de0`, interface hook
+   at `+116ac80`, resolution planning and auxiliary reconstruction and diagnostics.
 5. `camera.rs` owns the native camera conversion for both SR and presentation. It
    uses the shared GameSDK inverse with the old float output and double accumulation
    rules. The adapter still supplies the same copied row-vector cache. Refusals clear
@@ -162,6 +162,21 @@ Output resolution is restored only for a successful entry. Guarded reads
 now cover the diagnostic selector and target records. The selected DOF
 alias remains descriptor-only, because capture reads subresource zero.
 Source and layout comparisons passed. Builds and GPU validation remain open.
+
+## Resolution and viewport state
+
+`resolution.rs` owns the native ratio and lock snapshots, synchronized
+extent publication, Halton sample and temporary output viewport receipt.
+It keeps the original reconfigure pass and callback order, prepares
+jitter in the same two native fields, and preserves the renderer-thread
+upload flags. The production evidence and offsets remain in
+[the integration report](skyrim-se-integration.md#reduced-sr-auxiliary-handoff-and-zoom-correction-15-november-2026).
+Native callbacks apply the exact field writes and upload constants before
+calling the viewport routine. The guarded history read refuses an invalid
+pointer. If the renderer cannot restore producer ratios immediately, the
+matching auxiliary receipt records whether Runtime restoration already
+completed, so a retry only performs the remaining output restore. Source
+and layout checks passed. Builds and live quality switches remain open.
 
 ## Sampler hook
 

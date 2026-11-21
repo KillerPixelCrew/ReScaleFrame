@@ -226,7 +226,7 @@ void observe_jitter(void* state) noexcept
 
 void observe_resolution(void* state) noexcept {
     calls.fetch_add(1, std::memory_order_acq_rel);
-    if (uintptr_t(state) != uintptr_t(GetModuleHandleW(nullptr)) + 0x33363a0 || !rsf::skyrim::resolution_owned()) original_resolution(state);
+    if (!rsf::skyrim::resolution_controls(state)) original_resolution(state);
     calls.fetch_sub(1, std::memory_order_acq_rel);
 }
 

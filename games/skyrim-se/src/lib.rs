@@ -13,6 +13,7 @@ mod observers;
 mod platform;
 mod plugin;
 mod presentation;
+mod resolution;
 mod sampling;
 mod session;
 
