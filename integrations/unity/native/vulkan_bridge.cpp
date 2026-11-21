@@ -21,11 +21,12 @@
 #include <IUnityGraphicsVulkan.h>
 #include <rescaleframe/native_fg_d3d12.h>
 #include <array>
-#include <atomic>
 #include <cstddef>
 #include <algorithm>
 #include <cstring>
 #include <vector>
+
+#include "../../../games/unity-mono/src/vulkan_resolver.h"
 
 static_assert(sizeof(rsf_unity_vulkan_present_source) == 24, "vulkan_state.rs PresentSource");
 static_assert(sizeof(rsf_unity_vulkan_frame) == sizeof(rsf_unity_packet) + sizeof(rsf_game_host_services));
@@ -36,13 +37,10 @@ using Microsoft::WRL::ComPtr;
 IUnityGraphicsVulkanV2* unity = nullptr;
 UnityVulkanInstance instance{};
 int base_event = 0;
-PFN_vkGetInstanceProcAddr original_gipa = nullptr;
-PFN_vkGetDeviceProcAddr original_gdpa = nullptr;
-PFN_vkCreateDevice original_create_device = nullptr;
-PFN_vkCreateSwapchainKHR original_create_swapchain = nullptr;
-PFN_vkDestroySwapchainKHR original_destroy_swapchain = nullptr;
-PFN_vkQueuePresentKHR original_present = nullptr;
-std::atomic<bool> external_extensions{false};
+template <class Function> Function saved_proc(uint32_t slot)
+{
+    return reinterpret_cast<Function>(rsf_unity_vk_resolver_original(slot));
+}
 ComPtr<ID3D12Device> device;
 ComPtr<ID3D12CommandQueue> queue;
 ComPtr<ID3D12Fence> shared_fence;
@@ -178,11 +176,13 @@ bool create_image(uint32_t index, uint32_t width, uint32_t height, VkFormat form
 bool create_shared(const rsf_game_host_services* services)
 {
     instance = unity->Instance(); if (!instance.device) return false;
+    const bool external_extensions = rsf_unity_vk_interop_enabled(instance.device) ||
+        (vkGetDeviceProcAddr(instance.device, "vkImportSemaphoreWin32HandleKHR") &&
+            vkGetDeviceProcAddr(instance.device, "vkGetMemoryWin32HandlePropertiesKHR"));
     if (!external_extensions) {
-        external_extensions = vkGetDeviceProcAddr(instance.device, "vkImportSemaphoreWin32HandleKHR") &&
-            vkGetDeviceProcAddr(instance.device, "vkGetMemoryWin32HandlePropertiesKHR");
+        log(services, "Unity Vulkan device lacks enabled Win32 external-memory/semaphore extensions.");
+        return false;
     }
-    if (!external_extensions) { log(services, "Unity Vulkan device lacks enabled Win32 external-memory/semaphore extensions."); return false; }
     VkPhysicalDeviceIDProperties id{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
     VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2}; properties.pNext = &id;
     vkGetPhysicalDeviceProperties2(instance.physicalDevice, &properties);
@@ -430,6 +430,7 @@ bool configure_chain(HWND window, uint32_t width, uint32_t height)
 }
 VKAPI_ATTR VkResult VKAPI_CALL intercept_present(VkQueue vk_queue, const VkPresentInfoKHR* info) noexcept try
 {
+    const auto original_present = saved_proc<PFN_vkQueuePresentKHR>(RSF_UNITY_VK_PRESENT);
     if (!original_present || !info) return VK_ERROR_INITIALIZATION_FAILED;
     BridgeEntry entry; rsf_unity_vulkan_frame frame{};
     const auto unchanged = [&] { return original_present(vk_queue, info); };
@@ -473,27 +474,67 @@ VKAPI_ATTR VkResult VKAPI_CALL intercept_present(VkQueue vk_queue, const VkPrese
     rsf_unity_interop_advance(ring);
     return original_present(vk_queue, &forwarded);
 } catch (...) { stop("Unity Vulkan present interception failed; the bridge stopped."); return VK_ERROR_DEVICE_LOST; }
-VKAPI_ATTR VkResult VKAPI_CALL intercept_create_device(VkPhysicalDevice physical, const VkDeviceCreateInfo* info, const VkAllocationCallbacks* allocator, VkDevice* output)
+struct DeviceRequest {
+    VkPhysicalDevice physical;
+    const VkDeviceCreateInfo* info;
+    const VkAllocationCallbacks* allocator;
+    VkDevice* output;
+};
+
+bool device_extensions(void* context, const char* const* names, uint32_t name_count) noexcept try
 {
-    if (!original_create_device) return VK_ERROR_INITIALIZATION_FAILED;
-    uint32_t count = 0; vkEnumerateDeviceExtensionProperties(physical, nullptr, &count, nullptr);
-    std::vector<VkExtensionProperties> available(count); vkEnumerateDeviceExtensionProperties(physical, nullptr, &count, available.data());
-    std::vector<const char*> extensions(info->ppEnabledExtensionNames, info->ppEnabledExtensionNames + info->enabledExtensionCount);
-    for (const char* name : {VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME, VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME}) {
-        if (std::none_of(available.begin(), available.end(), [name](const auto& item) { return std::strcmp(item.extensionName, name) == 0; }))
-            return original_create_device(physical, info, allocator, output);
-        if (std::none_of(extensions.begin(), extensions.end(), [name](const char* item) { return std::strcmp(item, name) == 0; })) extensions.push_back(name);
+    const auto& request = *static_cast<const DeviceRequest*>(context);
+    uint32_t count = 0;
+    if (vkEnumerateDeviceExtensionProperties(request.physical, nullptr, &count, nullptr) != VK_SUCCESS)
+        return false;
+    std::vector<VkExtensionProperties> available(count);
+    if (vkEnumerateDeviceExtensionProperties(request.physical, nullptr, &count, available.data()) != VK_SUCCESS ||
+        count > available.size()) return false;
+    available.resize(count);
+    for (uint32_t i = 0; i < name_count; ++i) {
+        if (std::none_of(available.begin(), available.end(), [&](const auto& item) {
+                return std::strcmp(item.extensionName, names[i]) == 0;
+            })) return false;
     }
-    auto request = *info; request.enabledExtensionCount = static_cast<uint32_t>(extensions.size()); request.ppEnabledExtensionNames = extensions.data();
-    const auto result = original_create_device(physical, &request, allocator, output);
-    external_extensions = result == VK_SUCCESS; return result;
+    return true;
+} catch (...) { return false; }
+
+int32_t create_device(void* context, PFN_vkVoidFunction original, const char* const* names,
+    uint32_t count, void** created) noexcept
+{
+    const auto& request = *static_cast<const DeviceRequest*>(context);
+    const VkDeviceCreateInfo* info = request.info;
+    VkDeviceCreateInfo configured{};
+    if (names) {
+        configured = *info;
+        configured.enabledExtensionCount = count;
+        configured.ppEnabledExtensionNames = names;
+        info = &configured;
+    }
+    const auto create = reinterpret_cast<PFN_vkCreateDevice>(original);
+    const auto result = create(request.physical, info, request.allocator, request.output);
+    if (result == VK_SUCCESS) *created = *request.output;
+    return result;
+}
+
+static_assert(VK_SUCCESS == 0 && VK_ERROR_OUT_OF_HOST_MEMORY == -1 && VK_ERROR_INITIALIZATION_FAILED == -3);
+
+VKAPI_ATTR VkResult VKAPI_CALL intercept_create_device(VkPhysicalDevice physical, const VkDeviceCreateInfo* info,
+    const VkAllocationCallbacks* allocator, VkDevice* output) noexcept
+{
+    if (!info || !output) return VK_ERROR_INITIALIZATION_FAILED;
+    DeviceRequest request{physical, info, allocator, output};
+    return static_cast<VkResult>(rsf_unity_vk_resolver_create_device(info->ppEnabledExtensionNames,
+        info->enabledExtensionCount, &request, device_extensions, create_device));
 }
 VKAPI_ATTR VkResult VKAPI_CALL intercept_create_swapchain(VkDevice vk_device, const VkSwapchainCreateInfoKHR* info, const VkAllocationCallbacks* allocator, VkSwapchainKHR* output) noexcept try
 {
+    const auto original_create_swapchain = saved_proc<PFN_vkCreateSwapchainKHR>(RSF_UNITY_VK_CREATE_SWAPCHAIN);
     if (!original_create_swapchain || !info || !output) return VK_ERROR_INITIALIZATION_FAILED;
-    auto destroy = original_destroy_swapchain;
-    if (!destroy && original_gdpa)
-        destroy = reinterpret_cast<PFN_vkDestroySwapchainKHR>(original_gdpa(vk_device, "vkDestroySwapchainKHR"));
+    auto destroy = saved_proc<PFN_vkDestroySwapchainKHR>(RSF_UNITY_VK_DESTROY_SWAPCHAIN);
+    const auto gdpa = saved_proc<PFN_vkGetDeviceProcAddr>(RSF_UNITY_VK_DEVICE_PROC);
+    if (!destroy && gdpa)
+        destroy = reinterpret_cast<PFN_vkDestroySwapchainKHR>(gdpa(vk_device, "vkDestroySwapchainKHR"));
     if (!destroy) return original_create_swapchain(vk_device, info, allocator, output);
 
     auto request = *info; request.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
@@ -555,27 +596,40 @@ void retire_present_ready(void* context, const uint64_t* present_ready, uint32_t
 VKAPI_ATTR void VKAPI_CALL intercept_destroy_swapchain(VkDevice vk_device, VkSwapchainKHR swapchain, const VkAllocationCallbacks* allocator)
 {
     (void)rsf_unity_vulkan_swapchain_retire(handle_id(swapchain), retire_present_ready, vk_device);
-    if (original_destroy_swapchain) original_destroy_swapchain(vk_device, swapchain, allocator);
+    const auto destroy = saved_proc<PFN_vkDestroySwapchainKHR>(RSF_UNITY_VK_DESTROY_SWAPCHAIN);
+    if (destroy) destroy(vk_device, swapchain, allocator);
 }
-PFN_vkVoidFunction intercept(const char* name, PFN_vkVoidFunction original)
+
+VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL get_device_proc(VkDevice vk_device, const char* name);
+
+PFN_vkVoidFunction intercept(const char* name, PFN_vkVoidFunction original, bool from_instance)
 {
-    // A function the loader does not provide stays absent, and its resolved original is kept.
-    if (!original) return nullptr;
-    if (std::strcmp(name, "vkCreateDevice") == 0) { original_create_device = reinterpret_cast<PFN_vkCreateDevice>(original); return reinterpret_cast<PFN_vkVoidFunction>(intercept_create_device); }
-    if (std::strcmp(name, "vkCreateSwapchainKHR") == 0) { original_create_swapchain = reinterpret_cast<PFN_vkCreateSwapchainKHR>(original); return reinterpret_cast<PFN_vkVoidFunction>(intercept_create_swapchain); }
-    if (std::strcmp(name, "vkDestroySwapchainKHR") == 0) { original_destroy_swapchain = reinterpret_cast<PFN_vkDestroySwapchainKHR>(original); return reinterpret_cast<PFN_vkVoidFunction>(intercept_destroy_swapchain); }
-    if (std::strcmp(name, "vkQueuePresentKHR") == 0) { original_present = reinterpret_cast<PFN_vkQueuePresentKHR>(original); return reinterpret_cast<PFN_vkVoidFunction>(intercept_present); }
-    return original;
+    switch (rsf_unity_vk_resolver_route(name, original, from_instance)) {
+    case RSF_UNITY_VK_DEVICE_PROC: return reinterpret_cast<PFN_vkVoidFunction>(get_device_proc);
+    case RSF_UNITY_VK_CREATE_DEVICE: return reinterpret_cast<PFN_vkVoidFunction>(intercept_create_device);
+    case RSF_UNITY_VK_CREATE_SWAPCHAIN: return reinterpret_cast<PFN_vkVoidFunction>(intercept_create_swapchain);
+    case RSF_UNITY_VK_DESTROY_SWAPCHAIN: return reinterpret_cast<PFN_vkVoidFunction>(intercept_destroy_swapchain);
+    case RSF_UNITY_VK_PRESENT: return reinterpret_cast<PFN_vkVoidFunction>(intercept_present);
+    default: return original;
+    }
 }
-VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL get_device_proc(VkDevice vk_device, const char* name) { return intercept(name, original_gdpa(vk_device, name)); }
+
+VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL get_device_proc(VkDevice vk_device, const char* name)
+{
+    const auto get = saved_proc<PFN_vkGetDeviceProcAddr>(RSF_UNITY_VK_DEVICE_PROC);
+    return get && name ? intercept(name, get(vk_device, name), false) : nullptr;
+}
+
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL get_instance_proc(VkInstance vk_instance, const char* name)
 {
-    auto original = original_gipa(vk_instance, name);
-    if (!original) return nullptr;
-    if (std::strcmp(name, "vkGetDeviceProcAddr") == 0) { original_gdpa = reinterpret_cast<PFN_vkGetDeviceProcAddr>(original); return reinterpret_cast<PFN_vkVoidFunction>(get_device_proc); }
-    return intercept(name, original);
+    const auto get = saved_proc<PFN_vkGetInstanceProcAddr>(RSF_UNITY_VK_INSTANCE_PROC);
+    return get && name ? intercept(name, get(vk_instance, name), true) : nullptr;
 }
-PFN_vkGetInstanceProcAddr UNITY_INTERFACE_API initialize_intercept(PFN_vkGetInstanceProcAddr original, void*) { original_gipa = original; return get_instance_proc; }
+
+PFN_vkGetInstanceProcAddr UNITY_INTERFACE_API initialize_intercept(PFN_vkGetInstanceProcAddr original, void*)
+{
+    return rsf_unity_vk_bind_resolver(reinterpret_cast<PFN_vkVoidFunction>(original)) ? get_instance_proc : original;
+}
 // Every slot fence signalled. Slot fences exist only while the shared device is ready, and only
 // release replaces them.
 bool slots_retired()

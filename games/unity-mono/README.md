@@ -45,6 +45,10 @@ later step or the publication refuses.
 Each Vulkan event and window frame keeps the host services it was admitted with.
 Drain probes hold an entry while reading native slot fences. The Unity instance
 belongs to the shared-device creation and release path.
+The Vulkan loader's original-function slots and the Win32 interop extension
+request are Rust-owned (`vulkan_resolver.rs`). Native code still invokes the typed
+Vulkan functions. The extension request falls back unchanged when preflight
+cannot supply both names, and readiness is attached to the created device.
 
 The Editor preview uses the same Rust submission-ring logic with its own fence and slots
 (`preview.rs`). Rust selects the containing editor window, tracks visibility and admits

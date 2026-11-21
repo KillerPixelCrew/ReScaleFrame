@@ -30,6 +30,7 @@ mod runtime_abi;
 mod runtime_config;
 #[cfg(windows)]
 mod runtime_setup;
+mod vulkan_resolver;
 mod vulkan_state;
 
 use rsf_game_sys::{rsf_detection, rsf_game_probe};

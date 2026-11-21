@@ -267,6 +267,12 @@ checks. Shared-device creation publishes its instance only with the
 associated objects, and release clears it. Native queue synchronization,
 borrowed device use and live teardown still need verification.
 
+Unity Vulkan resolver slots and Win32 extension admission now live in
+Rust. The resolver preserves native passthrough when either required
+extension is unavailable and records interop readiness for the device
+that was actually created. Native leaves still resolve typed functions
+and create the device. Build and runtime verification remain open.
+
 AC7's Rust renderer transaction owns prepare, start, quiesce and stop.
 Failed activation keeps any renderer with reachable callbacks, and a
 refused hook disable or removal keeps the renderer available for retry.
