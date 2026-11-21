@@ -18,9 +18,13 @@
 // The Rust owner relies on these Vulkan values and on the ops layout.
 static_assert(VK_FORMAT_R8G8B8A8_UNORM == 37 && VK_FORMAT_B8G8R8A8_UNORM == 44 && VK_FORMAT_R16G16_SFLOAT == 83 &&
     VK_FORMAT_R32_SFLOAT == 100 && VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL == 5 && VK_COLOR_SPACE_SRGB_NONLINEAR_KHR == 0);
+static_assert(VK_IMAGE_LAYOUT_UNDEFINED == 0 && VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL == 6 && VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL == 7);
+static_assert(VK_QUEUE_FAMILY_IGNORED == ~0u && VK_ACCESS_MEMORY_READ_BIT == 0x8000 && VK_ACCESS_MEMORY_WRITE_BIT == 0x10000 &&
+    VK_PIPELINE_STAGE_ALL_COMMANDS_BIT == 0x10000);
 static_assert(VK_SUCCESS == 0 && VK_INCOMPLETE == 5 && VK_SUBOPTIMAL_KHR == 1000001003 && VK_ERROR_INITIALIZATION_FAILED == -3);
 static_assert(FFX_API_RETURN_OK == 0);
-static_assert(sizeof(rsf_ffxgvk_swapchain) == 32 && sizeof(rsf_ffxgvk_ops) == 26 * sizeof(void*));
+static_assert(sizeof(rsf_ffxgvk_swapchain) == 32 && sizeof(rsf_ffxgvk_ops) == 27 * sizeof(void*));
+static_assert(sizeof(rsf_ffxgvk_barrier) == 40 && sizeof(rsf_ffxgvk_image_copy) == 32);
 
 extern "C" const char* rsf_core_vk_promoted_device_proc_alias(const char* name);
 
@@ -148,15 +152,6 @@ struct QueueLock {
 };
 template<class T> T handle(uint64_t value) { return reinterpret_cast<T>(static_cast<uintptr_t>(value)); }
 template<class T> uint64_t handle_value(T value) { return static_cast<uint64_t>(reinterpret_cast<uintptr_t>(value)); }
-void transition(rsf_ffxgvk_native& self, VkCommandBuffer commands, VkImage image, VkImageLayout from, VkImageLayout to) {
-    VkImageMemoryBarrier data{}; data.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    data.oldLayout = from; data.newLayout = to;
-    data.srcAccessMask = from == VK_IMAGE_LAYOUT_UNDEFINED ? 0 : VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-    data.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-    data.srcQueueFamilyIndex = data.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    data.image = image; data.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    self.barrier(commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 1, &data);
-}
 FfxApiResource resource(const rsf_srvk_image& image) {
     FfxApiResource value{}; value.resource = handle<void*>(image.image);
     value.description.type = FFX_API_RESOURCE_TYPE_TEXTURE2D;
@@ -317,15 +312,22 @@ int32_t prepare(rsf_ffxgvk_native* self, void* commands, const rsf_fgvk_frame* f
     data.depth = resource(frame->depth); data.motionVectors = resource(frame->motion);
     return rsf::vk_timed_call("ffx_prepare_sdk", record.frame_id, [&] { return int32_t(self->sdk.dispatch(&self->effect, &data.header)); });
 }
-void copy(rsf_ffxgvk_native* self, void* commands, const rsf_srvk_image* source, uint64_t target, uint32_t initialized) noexcept {
-    const auto list = static_cast<VkCommandBuffer>(commands);
-    const auto input = handle<VkImage>(source->image), output = handle<VkImage>(target);
-    transition(*self, list, input, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-    transition(*self, list, output, initialized ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-    VkImageCopy region{}; region.srcSubresource = region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}; region.extent = {self->width, self->height, 1};
-    self->copy(list, input, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, output, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-    transition(*self, list, input, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    transition(*self, list, output, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+void record_barrier(rsf_ffxgvk_native* self, void* commands, const rsf_ffxgvk_barrier* plan) noexcept {
+    VkImageMemoryBarrier data{}; data.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    data.oldLayout = static_cast<VkImageLayout>(plan->old_layout);
+    data.newLayout = static_cast<VkImageLayout>(plan->new_layout);
+    data.srcAccessMask = plan->source_access; data.dstAccessMask = plan->target_access;
+    data.srcQueueFamilyIndex = plan->source_family; data.dstQueueFamilyIndex = plan->target_family;
+    data.image = handle<VkImage>(plan->image); data.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    self->barrier(static_cast<VkCommandBuffer>(commands), plan->source_stages, plan->target_stages,
+        0, 0, nullptr, 0, nullptr, 1, &data);
+}
+void record_copy(rsf_ffxgvk_native* self, void* commands, const rsf_ffxgvk_image_copy* plan) noexcept {
+    VkImageCopy region{};
+    region.srcSubresource = region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.extent = {plan->width, plan->height, 1};
+    self->copy(static_cast<VkCommandBuffer>(commands), handle<VkImage>(plan->source), static_cast<VkImageLayout>(plan->source_layout),
+        handle<VkImage>(plan->target), static_cast<VkImageLayout>(plan->target_layout), 1, &region);
 }
 int32_t configure(rsf_ffxgvk_native* self, uint32_t enabled, uint64_t color, uint64_t frame, const char* stage) noexcept {
     ffxConfigureDescFrameGeneration config{}; config.header.type = FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION;
@@ -360,7 +362,7 @@ void capture_flush(rsf_ffxgvk_native* self) noexcept try {
 constexpr rsf_ffxgvk_ops operations{
     rsf_vk_sdk_system_loader, open, [](rsf_ffxgvk_native* self) { delete self; }, set_wsi,
     create_swapchain, query_swapchain, create_effect, query_provider, destroy_effect, destroy_chain, destroy_swapchain,
-    images, acquire, prepare, copy, configure, present, drain,
+    images, acquire, prepare, record_barrier, record_copy, configure, present, drain,
     [](rsf_ffxgvk_native* self, uint64_t frame) -> uint32_t { return self->capture.wants(frame) ? 1u : 0u; },
     [](rsf_ffxgvk_native* self, void* commands, const rsf_srvk_image* image, const rsf_frame_record* record, const char* role) {
         record_capture(*self, static_cast<VkCommandBuffer>(commands), *image, *record, role, record->flags & RSF_FRAME_FLAG_RESET);
