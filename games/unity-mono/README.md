@@ -10,9 +10,11 @@ and built-in rendering require separate adapters. IL2CPP is outside the initial 
 
 Build detection, the renderer lifecycle and the Mono helper bootstrap are Rust (`rsf-unity-mono`,
 linked as a staticlib). `plugin.cpp` keeps the stable `rsf_get_game_plugin_api` export and lends
-the native D3D12 bridge through `rsf_unity_plugin_platform`. The bridge, the Unity graphics
-interfaces and the `rsf_unity_*` runtime host exports remain native; the Unity package compiles
-the same `bridge.cpp`.
+the native D3D12 bridge through `rsf_unity_plugin_platform`. The bridge's frame state is Rust
+too (`bridge_state.rs`): packet validation and storage, the policy generation, admission into
+the command ring, source-submission bookkeeping and retirement. `bridge.cpp` keeps the Unity
+graphics interfaces, D3D12 commands, resource leases, CPU input events and the `rsf_unity_*`
+exports. The Unity package compiles the same `bridge.cpp` and links the same archive.
 
 Detection currently requires the exact x64 Drag'n Wash executable name and SHA256. A different
 build remains unknown, including other Unity Mono games. Recognition only establishes identity.

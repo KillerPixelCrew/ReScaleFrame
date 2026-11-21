@@ -1,7 +1,8 @@
 set(RSF_UNITY_NATIVE_INCLUDE "${CMAKE_SOURCE_DIR}/vendor/unity-native/include" CACHE PATH
     "Unity native-plugin headers; untracked, see docs/dependencies.md")
 add_library(rsf_game_unity_mono SHARED src/plugin.cpp src/bridge.cpp src/runtime_host.cpp src/runtime_config.cpp)
-# Detection, the renderer lifecycle and the Mono helper bootstrap are Rust; plugin.cpp lends the bridge.
+# Detection, the renderer lifecycle, the Mono helper bootstrap and the D3D12 bridge frame state are
+# Rust; plugin.cpp lends the bridge. integrations/unity links the same archive for bridge.cpp.
 rsf_add_rust_static(rsf_unity_mono_rust rsf_rust_unity_mono rsf-unity-mono rsf_unity_mono)
 target_include_directories(rsf_game_unity_mono PRIVATE include)
 target_link_libraries(rsf_game_unity_mono PRIVATE rsf_unity_mono_rust ReScaleFrame::GameSDK ReScaleFrame::RuntimeCommon rsf_build_options)
