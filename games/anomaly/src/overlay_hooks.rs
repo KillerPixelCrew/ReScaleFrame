@@ -1,8 +1,15 @@
 // SPDX-License-Identifier: MIT
 use std::cell::Cell;
-use std::ffi::{c_char, c_void};
+use std::ffi::{CStr, c_char, c_void};
+use std::ptr::{null, null_mut};
 use std::sync::{Mutex, MutexGuard, PoisonError};
+use windows_sys::Win32::Foundation::{HWND, MAX_PATH};
+use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
+use windows_sys::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, WS_POPUP};
+use windows_sys::core::{GUID, HRESULT, w};
 
+use crate::lease::Lease;
 use crate::native_hooks::{HookOps, Target, enable_batch, transaction};
 use crate::runtime_module::Module;
 
@@ -10,10 +17,223 @@ const MAX_HOOKS: usize = 32;
 
 type Reason = *const c_char;
 type Address = usize;
+type Object = *mut c_void;
+type Symbol = unsafe extern "system" fn() -> isize;
 type SinkCallback = unsafe extern "C" fn(*mut c_void, *mut c_void);
 type InputObserver = unsafe extern "C" fn(u8);
-type Add = unsafe extern "C" fn(*mut c_void, Address, Address, u32, *mut Reason) -> bool;
-type Probe = unsafe extern "C" fn(*mut c_void, Add, *mut Reason, *mut *mut c_void) -> bool;
+type Refusal = &'static CStr;
+
+// Method IDs are used by the native DXGI detours to look up their trampolines.
+#[derive(Clone, Copy)]
+#[repr(u32)]
+enum Method {
+    CreateDevice = 0,
+    Acquire,
+    Unacquire,
+    GetState,
+    GetData,
+    Cooperative,
+    Present,
+    Present1,
+    ResizeBuffers,
+    ResizeTarget,
+}
+
+const SLOT_CREATE_DEVICE: usize = 3;
+const SLOT_ACQUIRE: usize = 7;
+const SLOT_UNACQUIRE: usize = 8;
+const SLOT_GET_STATE: usize = 9;
+const SLOT_GET_DATA: usize = 10;
+const SLOT_COOPERATIVE: usize = 13;
+const SLOT_PRESENT: usize = 8;
+const SLOT_RESIZE_BUFFERS: usize = 13;
+const SLOT_RESIZE_TARGET: usize = 14;
+const SLOT_PRESENT1: usize = 22;
+
+const IID_DIRECT_INPUT8_A: GUID = GUID::from_u128(0xbf798030_483a_4da2_aa99_5d64ed369700);
+const IID_DIRECT_INPUT8_W: GUID = GUID::from_u128(0xbf798031_483a_4da2_aa99_5d64ed369700);
+const GUID_SYS_MOUSE: GUID = GUID::from_u128(0x6f1d2b60_d5a0_11cf_bfc7_444553540000);
+const GUID_SYS_KEYBOARD: GUID = GUID::from_u128(0x6f1d2b61_d5a0_11cf_bfc7_444553540000);
+
+#[repr(C)]
+struct ComProbeOps {
+    slot: unsafe extern "C" fn(Object, usize) -> Address,
+    release: unsafe extern "C" fn(Object),
+}
+
+impl ComProbeOps {
+    fn lease(&self, object: Object) -> Option<Lease> {
+        Lease::new(object, self.release)
+    }
+
+    fn slot(&self, object: &Lease, slot: usize) -> Address {
+        unsafe { (self.slot)(object.as_ptr(), slot) }
+    }
+}
+
+#[repr(C)]
+struct InputProbeOps {
+    com: ComProbeOps,
+    create_input: unsafe extern "C" fn(Symbol, *const GUID, u32) -> Object,
+    create_device: unsafe extern "C" fn(Object, *const GUID) -> Object,
+    create_device_detour: Address,
+    acquire: Address,
+    unacquire: Address,
+    get_state: Address,
+    get_data: Address,
+    cooperative: Address,
+}
+
+#[derive(Default)]
+#[repr(C)]
+struct ChainObjects {
+    chain: Object,
+    context: Object,
+    device: Object,
+}
+
+#[repr(C)]
+struct PresentProbeOps {
+    com: ComProbeOps,
+    create_warp_chain: unsafe extern "C" fn(Symbol, HWND, u32, *mut ChainObjects) -> HRESULT,
+    query_chain1: unsafe extern "C" fn(Object) -> Object,
+    present: Address,
+    present1: Address,
+    resize_buffers: Address,
+    resize_target: Address,
+}
+
+const _: () = {
+    assert!(size_of::<GUID>() == 16 && std::mem::offset_of!(GUID, data4) == 8);
+    assert!(size_of::<ComProbeOps>() == 16 && size_of::<ChainObjects>() == 24);
+    assert!(
+        size_of::<InputProbeOps>() == 80
+            && std::mem::offset_of!(InputProbeOps, create_device_detour) == 32
+    );
+    assert!(
+        size_of::<PresentProbeOps>() == 64 && std::mem::offset_of!(PresentProbeOps, present) == 32
+    );
+};
+
+fn probe_input(
+    registration: &mut Registration<'_>,
+    ops: &InputProbeOps,
+) -> Result<Module, Refusal> {
+    const SUFFIX: &str = "\\dinput8.dll\0";
+    let mut path = [0u16; MAX_PATH as usize];
+    let length = unsafe { GetSystemDirectoryW(path.as_mut_ptr(), MAX_PATH) } as usize;
+    if length == 0 || length > path.len() - SUFFIX.len() {
+        return Err(c"System32 directory unavailable");
+    }
+    for (unit, value) in path[length..].iter_mut().zip(SUFFIX.encode_utf16()) {
+        *unit = value;
+    }
+    // The carrier forwards to the same absolute system path.
+    let module = unsafe { Module::system(path.as_ptr()) }
+        .ok_or(c"system dinput8.dll could not be loaded")?;
+    let create = module
+        .symbol(c"DirectInput8Create")
+        .ok_or(c"system DirectInput8Create missing")?;
+
+    let mut devices = 0;
+    for iid in [&IID_DIRECT_INPUT8_A, &IID_DIRECT_INPUT8_W] {
+        let input = unsafe { (ops.create_input)(create, iid, 0x0800) };
+        let Some(input) = ops.com.lease(input) else {
+            continue;
+        };
+        let create_device = ops.com.slot(&input, SLOT_CREATE_DEVICE);
+        registration.add(
+            create_device,
+            ops.create_device_detour,
+            Method::CreateDevice,
+        )?;
+        for guid in [&GUID_SYS_MOUSE, &GUID_SYS_KEYBOARD] {
+            let device = unsafe { (ops.create_device)(input.as_ptr(), guid) };
+            let Some(device) = ops.com.lease(device) else {
+                continue;
+            };
+            for (slot, detour, method) in [
+                (SLOT_ACQUIRE, ops.acquire, Method::Acquire),
+                (SLOT_UNACQUIRE, ops.unacquire, Method::Unacquire),
+                (SLOT_GET_STATE, ops.get_state, Method::GetState),
+                (SLOT_GET_DATA, ops.get_data, Method::GetData),
+                (SLOT_COOPERATIVE, ops.cooperative, Method::Cooperative),
+            ] {
+                registration.add(ops.com.slot(&device, slot), detour, method)?;
+            }
+            devices += 1;
+        }
+    }
+    if devices == 0 {
+        return Err(c"no DirectInput mouse or keyboard device could be probed");
+    }
+    Ok(module)
+}
+
+unsafe extern "C" fn destroy_dummy_window(window: Object) {
+    unsafe { DestroyWindow(window) };
+}
+
+fn probe_present(
+    registration: &mut Registration<'_>,
+    ops: &PresentProbeOps,
+) -> Result<Module, Refusal> {
+    const EXTENT: i32 = 8;
+    let module = unsafe { Module::system(w!("d3d11.dll")) }.ok_or(c"d3d11.dll unavailable")?;
+    let create = module
+        .symbol(c"D3D11CreateDeviceAndSwapChain")
+        .ok_or(c"d3d11.dll unavailable")?;
+    let window = unsafe {
+        CreateWindowExW(
+            0,
+            w!("STATIC"),
+            w!(""),
+            WS_POPUP,
+            0,
+            0,
+            EXTENT,
+            EXTENT,
+            null_mut(),
+            null_mut(),
+            GetModuleHandleW(null()),
+            null(),
+        )
+    };
+    let window = Lease::new(window, destroy_dummy_window).ok_or(c"dummy window creation failed")?;
+    let mut objects = ChainObjects::default();
+    let result =
+        unsafe { (ops.create_warp_chain)(create, window.as_ptr(), EXTENT as u32, &mut objects) };
+    // Release all returned objects in reverse order before destroying the window, even on failure.
+    let _device = ops.com.lease(objects.device);
+    let _context = ops.com.lease(objects.context);
+    let chain = ops.com.lease(objects.chain);
+    const CHAIN_FAILED: Refusal = c"dummy swap chain creation failed";
+    if result < 0 {
+        return Err(CHAIN_FAILED);
+    }
+    let chain = chain.ok_or(CHAIN_FAILED)?;
+
+    let chain1 = unsafe { (ops.query_chain1)(chain.as_ptr()) };
+    let present1 = ops
+        .com
+        .lease(chain1)
+        .map_or(0, |chain1| ops.com.slot(&chain1, SLOT_PRESENT1));
+    for (slot, detour, method) in [
+        (SLOT_PRESENT, ops.present, Method::Present),
+        (
+            SLOT_RESIZE_BUFFERS,
+            ops.resize_buffers,
+            Method::ResizeBuffers,
+        ),
+        (SLOT_RESIZE_TARGET, ops.resize_target, Method::ResizeTarget),
+    ] {
+        registration.add(ops.com.slot(&chain, slot), detour, method)?;
+    }
+    if present1 != 0 {
+        registration.add(present1, ops.present1, Method::Present1)?;
+    }
+    Ok(module)
+}
 
 #[derive(Clone, Copy)]
 struct PresentSink {
@@ -70,9 +290,14 @@ impl Hooks {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn install(&self, binding: Binding, platform: &HookOps, probe: Probe) -> Result<(), Reason> {
+    fn install(
+        &self,
+        binding: Binding,
+        platform: &HookOps,
+        probe: impl FnOnce(&mut Registration<'_>) -> Result<Option<Module>, Refusal>,
+    ) -> Result<(), Refusal> {
         let Ok(_installation) = self.installation.try_lock() else {
-            return Err(c"another overlay hook installation is in progress".as_ptr());
+            return Err(c"another overlay hook installation is in progress");
         };
         {
             let mut state = self.state();
@@ -81,50 +306,36 @@ impl Hooks {
                     return if state.gate == gate {
                         Ok(())
                     } else if state.gate == 0 {
-                        Err(c"input hook installation already failed".as_ptr())
+                        Err(c"input hook installation already failed")
                     } else {
-                        Err(c"input hooks already own a different gate".as_ptr())
+                        Err(c"input hooks already own a different gate")
                     };
                 }
                 Binding::Input(_) => state.input_attempted = true,
                 Binding::Present(_) if state.present_attempted => {
-                    return Err(c"Present hook installation already attempted".as_ptr());
+                    return Err(c"Present hook installation already attempted");
                 }
                 Binding::Present(_) => state.present_attempted = true,
             }
         }
-        let mut reason = c"overlay hook discovery failed".as_ptr();
         let mut registration = Registration {
             hooks: self,
             pending: [Pending::default(); MAX_HOOKS],
             count: 0,
         };
-        let mut handle = std::ptr::null_mut();
-        let discovered = unsafe {
-            probe(
-                (&mut registration as *mut Registration<'_>).cast(),
-                add,
-                &mut reason,
-                &mut handle,
-            )
-        };
-        // A probe transfers its successful LoadLibrary reference even on refusal.
-        let module = unsafe { Module::from_owned(handle) };
-        if !discovered {
-            return Err(reason);
-        }
+        let module = probe(&mut registration)?;
 
         let batch = &registration.pending[..registration.count];
         if batch.is_empty() {
-            return Err(c"no overlay hook targets found".as_ptr());
+            return Err(c"no overlay hook targets found");
         }
         self.state()
             .hooks
             .try_reserve_exact(batch.len())
-            .map_err(|_| c"overlay hook table allocation failed".as_ptr())?;
+            .map_err(|_| c"overlay hook table allocation failed")?;
         let _transaction = transaction();
         if !unsafe { (platform.initialize)() } {
-            return Err(c"MinHook initialization failed".as_ptr());
+            return Err(c"MinHook initialization failed");
         }
         let mut targets = [std::ptr::null_mut(); MAX_HOOKS];
         let mut originals = [std::ptr::null_mut(); MAX_HOOKS];
@@ -138,7 +349,7 @@ impl Hooks {
             };
         }
         if !unsafe { platform.create_unqueued(&sites[..batch.len()]) } {
-            return Err(c"MinHook refused to create a hook".as_ptr());
+            return Err(c"MinHook refused to create a hook");
         }
         // Publish only after the full batch exists, before any detour can run.
         {
@@ -161,7 +372,7 @@ impl Hooks {
                 self.state().publish(binding, false);
             },
         ) {
-            return Err(c"MinHook refused to enable the overlay hook batch".as_ptr());
+            return Err(c"MinHook refused to enable the overlay hook batch");
         }
         Ok(())
     }
@@ -189,50 +400,41 @@ struct Pending {
     method: u32,
 }
 
-unsafe extern "C" fn add(
-    registration: *mut c_void,
-    target: Address,
-    detour: Address,
-    method: u32,
-    reason: *mut Reason,
-) -> bool {
-    let registration = unsafe { &mut *registration.cast::<Registration<'_>>() };
-    let result = {
-        let state = registration.hooks.state();
+impl Registration<'_> {
+    fn add(&mut self, target: Address, detour: Address, method: Method) -> Result<(), Refusal> {
         if target == 0 || detour == 0 {
-            Err(c"a hook target resolved to null")
-        } else {
+            return Err(c"a hook target resolved to null");
+        }
+        let method = method as u32;
+        {
+            let state = self.hooks.state();
             let existing = state
                 .hooks
                 .iter()
                 .map(|hook| (hook.target, hook.method))
                 .chain(
-                    registration.pending[..registration.count]
+                    self.pending[..self.count]
                         .iter()
                         .map(|hook| (hook.target, hook.method)),
                 )
                 .find(|&(address, _)| address == target);
             match existing {
-                Some((_, mapped)) if mapped == method => return true,
-                Some(_) => Err(c"two different methods share one code address"),
-                None if state.hooks.len() + registration.count == MAX_HOOKS => {
-                    Err(c"hook table is full")
+                Some((_, mapped)) if mapped == method => return Ok(()),
+                Some(_) => return Err(c"two different methods share one code address"),
+                None if state.hooks.len() + self.count == MAX_HOOKS => {
+                    return Err(c"hook table is full");
                 }
-                None => Ok(()),
+                None => (),
             }
         }
-    };
-    if let Err(message) = result {
-        unsafe { reason.write(message.as_ptr()) };
-        return false;
+        self.pending[self.count] = Pending {
+            target,
+            detour,
+            method,
+        };
+        self.count += 1;
+        Ok(())
     }
-    registration.pending[registration.count] = Pending {
-        target,
-        detour,
-        method,
-    };
-    registration.count += 1;
-    true
 }
 
 static HOOKS: Hooks = Hooks::new();
@@ -244,13 +446,15 @@ thread_local! {
 unsafe extern "C" fn rsf_anomaly_overlay_install_input(
     gate: Address,
     platform: &HookOps,
-    probe: Probe,
+    probe: &InputProbeOps,
     reason: &mut Reason,
 ) -> bool {
-    match HOOKS.install(Binding::Input(gate), platform, probe) {
+    match HOOKS.install(Binding::Input(gate), platform, |registration| {
+        probe_input(registration, probe).map(Some)
+    }) {
         Ok(()) => true,
         Err(message) => {
-            *reason = message;
+            *reason = message.as_ptr();
             false
         }
     }
@@ -262,7 +466,7 @@ unsafe extern "C" fn rsf_anomaly_overlay_install_present(
     resize: Option<SinkCallback>,
     user: Address,
     platform: &HookOps,
-    probe: Probe,
+    probe: &PresentProbeOps,
     reason: &mut Reason,
 ) -> bool {
     let Some(before_present) = before_present else {
@@ -274,10 +478,12 @@ unsafe extern "C" fn rsf_anomaly_overlay_install_present(
         resize,
         user,
     };
-    match HOOKS.install(Binding::Present(sink), platform, probe) {
+    match HOOKS.install(Binding::Present(sink), platform, |registration| {
+        probe_present(registration, probe).map(Some)
+    }) {
         Ok(()) => true,
         Err(message) => {
-            *reason = message;
+            *reason = message.as_ptr();
             false
         }
     }
@@ -346,8 +552,6 @@ unsafe extern "C" fn rsf_anomaly_overlay_before_resize(chain: *mut c_void) {
 mod tests {
     use super::*;
     use std::cell::RefCell;
-    use std::ffi::CStr;
-    use std::ptr::null_mut;
 
     thread_local! {
         static CALLS: RefCell<Vec<(char, Address)>> = const { RefCell::new(Vec::new()) };
@@ -391,31 +595,22 @@ mod tests {
         })
     }
 
-    unsafe extern "C" fn input(
-        registration: *mut c_void,
-        add: Add,
-        reason: *mut Reason,
-        _: *mut *mut c_void,
-    ) -> bool {
-        unsafe { add(registration, 11, 1, 0, reason) && add(registration, 11, 1, 0, reason) }
+    fn input(registration: &mut Registration<'_>) -> Result<Option<Module>, Refusal> {
+        registration.add(11, 1, Method::CreateDevice)?;
+        registration.add(11, 1, Method::CreateDevice)?;
+        Ok(None)
     }
 
-    unsafe extern "C" fn present(
-        registration: *mut c_void,
-        add: Add,
-        reason: *mut Reason,
-        _: *mut *mut c_void,
-    ) -> bool {
-        unsafe { add(registration, 21, 1, 6, reason) && add(registration, 22, 1, 7, reason) }
+    fn present(registration: &mut Registration<'_>) -> Result<Option<Module>, Refusal> {
+        registration.add(21, 1, Method::Present)?;
+        registration.add(22, 1, Method::Present1)?;
+        Ok(None)
     }
 
-    unsafe extern "C" fn aliased(
-        registration: *mut c_void,
-        add: Add,
-        reason: *mut Reason,
-        _: *mut *mut c_void,
-    ) -> bool {
-        unsafe { add(registration, 21, 1, 6, reason) && add(registration, 21, 1, 7, reason) }
+    fn aliased(registration: &mut Registration<'_>) -> Result<Option<Module>, Refusal> {
+        registration.add(21, 1, Method::Present)?;
+        registration.add(21, 1, Method::Present1)?;
+        Ok(None)
     }
 
     unsafe extern "C" fn callback(_user: *mut c_void, _chain: *mut c_void) {
@@ -464,10 +659,7 @@ mod tests {
         assert!(HOOKS.install(Binding::Input(9), &PLATFORM, input).is_ok());
         assert!(HOOKS.install(Binding::Input(9), &PLATFORM, input).is_ok());
         let refusal = HOOKS.install(PRESENT, &PLATFORM, present).unwrap_err();
-        assert_eq!(
-            unsafe { CStr::from_ptr(refusal) },
-            c"MinHook refused to enable the overlay hook batch"
-        );
+        assert_eq!(refusal, c"MinHook refused to enable the overlay hook batch");
         assert!(HOOKS.state().sink.is_none());
         assert_eq!(rsf_anomaly_overlay_input_gate(), 9);
         assert_eq!(rsf_anomaly_overlay_original(11), 111);
