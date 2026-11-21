@@ -6,7 +6,7 @@
 #include "sr_stage.h"
 #include "sr_stage_platform.h"
 #include "adapter_options.h"
-#include "engine_guards.h"
+#include "engine_slots.h"
 #include "native_geometry.h"
 #include "native_hooks.h"
 #include "native_observer.h"
@@ -297,7 +297,7 @@ SwapController controller{host};
 HookSet hooks;
 TemporalDriver driver;
 
-std::array<void*, 6> originals{};
+std::array<void*, 5> originals{};
 using Unary = void(__fastcall*)(void*);
 
 // ---- conversions between the native types and the Rust boundary --------------------------------------------------
@@ -334,34 +334,19 @@ void __fastcall prepare_hook(void* self) {
     rsf_anomaly_sr_stage_prepared();   // Stage 2: the viewport now describes the render-size targets
 }
 void __fastcall position_setup_hook(void* self, void* constant) {
-    reinterpret_cast<void(__fastcall*)(void*, void*)>(originals[5])(self, constant);
-    rsf_anomaly_sr_stage_position_setup(constant);
+    const auto original = rsf_anomaly_slot_original(RSF_ANOMALY_POSITION_SLOT);
+    reinterpret_cast<void(__fastcall*)(void*, void*)>(original)(self, constant);
+    if (rsf_anomaly_position_slot_active()) rsf_anomaly_sr_stage_position_setup(constant);
 }
 // cl_pos_decompress_params::setup is only ever reached through the binder's vtable (R_constant_setup::setup, slot 0).
 // The AVX build's body has a VEX instruction (vmovss) seven bytes in, which MinHook's decoder cannot relocate
 // (MH_ERROR_UNSUPPORTED_FUNCTION on the real executable; the SSE build is fine). So this site swaps the vtable slot on
 // both builds instead of detouring the body. The slot must hold the profiled function, and the function its guard.
-void** position_slot{};
-bool set_position_slot(void* value) noexcept {
-    DWORD old{};
-    if (!position_slot || !VirtualProtect(position_slot, sizeof(void*), PAGE_READWRITE, &old)) return false;
-    *position_slot = value;
-    DWORD ignored{};
-    VirtualProtect(position_slot, sizeof(void*), old, &ignored);
-    return true;
-}
 bool install_position_slot(std::byte* module) noexcept {
     const auto& site = srp().sr_function_sites[site_position_setup];
-    auto* function = module + site.rva;
-    auto* slot = reinterpret_cast<void**>(module + srp().position_setup_vtable_rva);
-    if (position_slot == slot && *slot == reinterpret_cast<void*>(&position_setup_hook)) return true;   // already swapped
-    if (*slot != function || std::memcmp(function, site.expected.data(), site.expected.size()) != 0) return false;
-    originals[5] = function;
-    position_slot = slot;
-    return set_position_slot(reinterpret_cast<void*>(&position_setup_hook));
-}
-void remove_position_slot() noexcept {
-    if (position_slot && *position_slot == reinterpret_cast<void*>(&position_setup_hook)) (void)set_position_slot(originals[5]);
+    const auto checked = guard_image(module, build->image_size());
+    return matches(checked, site) && rsf_anomaly_slot_install(RSF_ANOMALY_POSITION_SLOT, &checked,
+        srp().position_setup_vtable_rva, site.rva, 0, reinterpret_cast<void*>(&position_setup_hook), compare_slot);
 }
 void __fastcall sun_cascades_hook(void* self) {
     SunCameraScope camera;
@@ -696,12 +681,16 @@ const rsf_anomaly_sr_stage_platform platform{
     },
     .install_hooks = [] { return install_hooks(); },
     .install_position_slot = [] { return image && install_position_slot(image); },
-    .disable_hooks = [] { (void)hooks.disable(); },
+    .disable_hooks = [] {
+        (void)rsf_anomaly_slot_set(RSF_ANOMALY_POSITION_SLOT, false);
+        (void)hooks.disable();
+    },
     .set_rm_near = [](bool on) { geometry::geometry_set_rm_near_callback(on ? &rm_near_callback : nullptr); },
     .remove_hooks = [] {
         geometry::geometry_set_rm_near_callback(nullptr);
-        remove_position_slot();
-        return hooks.disable();
+        const bool restored = rsf_anomaly_slot_set(RSF_ANOMALY_POSITION_SLOT, false);
+        const bool disabled = hooks.disable();
+        return restored && disabled;
     },
     .ini_int = [](const void* ini, const char* key, int32_t fallback) {
         try {

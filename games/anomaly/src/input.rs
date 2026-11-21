@@ -5,9 +5,9 @@
 //! devices from it. This module owns the state of both boundaries: admission of an `OnFrame` call,
 //! the in-flight count a quiesce waits on, the thread that is polling, the routing of hardware
 //! records the gate returned to the engine, and the per-device gate state. The native leaves in
-//! `input_hooks.cpp` and `overlay_hooks.cpp` keep the guarded vtable edit, the detour that calls the
-//! original, the engine frame read and the trampolines; this module calls only the device methods it
-//! is handed and `GetTickCount`.
+//! `input_hooks.cpp` and `overlay_hooks.cpp` keep the guarded slot exchange, the detour that calls
+//! the original, the engine frame read and the trampolines. The adapter's Rust slot owner manages
+//! the exchange and publishes input admission.
 
 use rsf_game_sys::{RSF_GAME_INPUT_KEYBOARD, RSF_GAME_INPUT_MOUSE};
 use std::cell::Cell;
@@ -57,7 +57,7 @@ extern "C" fn rsf_anomaly_input_frame_exit(ticket: u32) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_input_activate(active: bool) {
+pub(crate) extern "C" fn rsf_anomaly_input_activate(active: bool) {
     ACTIVE.store(active, Ordering::Release);
 }
 

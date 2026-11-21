@@ -4,6 +4,16 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The Anomaly input frame hook and SR position binder share one Rust
+vtable slot owner. It checks image bounds, publishes the original
+before installing the detour, and uses the native guarded
+compare-and-swap. If page protection cannot be restored, the slot
+owner keeps the original protection for retry and leaves the detour
+inactive. The SR teardown now reports a refused slot restoration
+instead of discarding that result. The input hook also skips frame
+reporting when the guarded counter read fails. Build and runtime
+validation remain open.
+
 XeSS Vulkan SR now uses the Rust SDK module owner shared with
 FidelityFX. Rust resolves the absolute payload path, owns the loaded
 module and pins it after the native entry table is validated. The pin

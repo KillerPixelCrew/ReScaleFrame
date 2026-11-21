@@ -2,10 +2,10 @@
 use std::ffi::{CStr, c_char, c_void};
 
 #[repr(C)]
-struct Image {
+pub(super) struct Image {
     base: *const u8,
     size: u32,
-    read: unsafe extern "C" fn(*mut c_void, *const c_void, usize) -> bool,
+    pub(super) read: unsafe extern "C" fn(*mut c_void, *const c_void, usize) -> bool,
 }
 
 const _: () = {
@@ -14,7 +14,7 @@ const _: () = {
 };
 
 impl Image {
-    fn address(&self, rva: u32, length: usize) -> Option<*const u8> {
+    pub(super) fn address(&self, rva: u32, length: usize) -> Option<*const u8> {
         if self.base.is_null() || length == 0 {
             return None;
         }
@@ -26,7 +26,7 @@ impl Image {
         Some(self.base.wrapping_add(rva as usize))
     }
 
-    fn copy<const N: usize>(&self, rva: u32) -> Option<[u8; N]> {
+    pub(super) fn copy<const N: usize>(&self, rva: u32) -> Option<[u8; N]> {
         let address = self.address(rva, N)?;
         let mut bytes = [0; N];
         // Native owns the exception guard for mapped executable memory.
