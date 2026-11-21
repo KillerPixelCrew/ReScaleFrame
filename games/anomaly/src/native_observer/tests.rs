@@ -61,6 +61,22 @@ fn lifecycle_and_status_refuse_reentry_while_the_owner_is_locked() {
 }
 
 #[test]
+fn window_facts_share_observer_admission_and_retirement() {
+    let observer = Observer::new(|| false, || true);
+    let mut reports = 0;
+    observer.observe_window(|| reports += 1);
+    observer.activity.store(ACTIVE, Ordering::Relaxed);
+    observer.observe_window(|| {
+        assert_eq!(observer.activity.load(Ordering::Relaxed), ACTIVE | 1);
+        observer.activity.fetch_and(!ACTIVE, Ordering::AcqRel);
+        reports += 1;
+    });
+    observer.observe_window(|| reports += 1);
+    assert_eq!(reports, 1);
+    assert_eq!(observer.activity.load(Ordering::Relaxed), 0);
+}
+
+#[test]
 fn stop_drains_native_and_input_invocations_before_retiring_the_stages() {
     let observer = Observer::new(|| FG_FRAME_OPEN.load(Ordering::Relaxed), retire_fg_inputs);
     lock(&observer.state).session = Some(Session {

@@ -62,7 +62,7 @@ unsafe extern "system" fn subclass(
     _: usize,
 ) -> LRESULT {
     // The Runtime recognizes its own PCL message. The adapter reports actual delivered message IDs.
-    rsf_anomaly_fg_stage_input_received(0, message);
+    crate::native_observer::observe_window(|| rsf_anomaly_fg_stage_input_received(0, message));
     let result = unsafe { DefSubclassProc(window, message, wparam, lparam) };
     if matches!(message, WM_DWMNCRENDERINGCHANGED | WM_WINDOWPOSCHANGED) {
         CORRECTING.with(|correcting| {

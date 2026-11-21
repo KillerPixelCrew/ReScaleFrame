@@ -123,6 +123,17 @@ impl Observer {
         self.activity.load(Ordering::Acquire) & ACTIVE != 0
     }
 
+    fn observe_window(&self, report: impl FnOnce()) {
+        if !self.active() {
+            return;
+        }
+        let observing = self.enter();
+        let _flight = Flight(self);
+        if observing {
+            report();
+        }
+    }
+
     fn session(&self) -> Option<Session> {
         lock(&self.state).session
     }
@@ -450,6 +461,10 @@ impl Drop for Flight<'_> {
     fn drop(&mut self) {
         self.0.leave();
     }
+}
+
+pub(crate) fn observe_window(report: impl FnOnce()) {
+    OBSERVER.observe_window(report);
 }
 
 unsafe fn validate<T>(value: *const T, abi: u32) -> Result<(), rsf_result> {

@@ -4,6 +4,12 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Anomaly's window subclass reports delivered input messages only while
+the observer admits callbacks. In-flight reports hold the same lease as
+native observations, so quiesce waits for them. The subclass continues
+to forward window messages. Source review checked the callback path.
+The synthetic admission case remains unrun.
+
 The Streamline Vulkan bridge tracks FG options, swapchain changes and
 resource release in Rust. The interposer lifecycle guard serializes
 these SDK calls with shutdown. A swapchain change during an SDK call
