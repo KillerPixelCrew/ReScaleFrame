@@ -1,8 +1,8 @@
 // Streamline's Vulkan entry points must come from sl.interposer.dll.  Keep its
-// C++ ABI and frame tokens on this side of the managed/native boundary.
+// C++ ABI and typed frame token access in this file.
 // The Rust lifecycle owner (runtime/vulkan/streamline/lifecycle) admits, loads,
 // initializes, shuts down and unloads the interposer and tracks the legacy FG
-// configuration. This file keeps the exports, typed SDK calls and file check.
+// configuration and current token. This file keeps the exports, typed SDK calls and file check.
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -67,6 +67,9 @@ int32_t rsf_slvk_fg_set(const RsfSlFgPlatform*, int32_t, const RsfSlFgOptions*);
 int32_t rsf_slvk_fg_disable(const RsfSlFgPlatform*);
 int32_t rsf_slvk_fg_free(const RsfSlFgPlatform*);
 int32_t rsf_slvk_fg_sdk_call(int32_t (*)(void*), void*, int32_t inactive);
+int32_t rsf_slvk_token_begin(int32_t (*)(uint32_t, uintptr_t*), uint32_t);
+uintptr_t rsf_slvk_token_current();
+int32_t rsf_slvk_token_call(uintptr_t, int32_t (*)(uintptr_t, void*), void*, int32_t inactive);
 }
 
 namespace {
@@ -79,14 +82,13 @@ PFun_slSetTagForFrame* setTagForFrame{};
 PFun_slSetConstants* setConstants{};
 PFun_slFreeResources* freeResources{};
 PFun_slReflexSetOptions* reflexOptions{};
-PFun_slReflexSleep* reflexSleep{};
+std::atomic<PFun_slReflexSleep*> reflexSleep{};
 PFun_slReflexGetState* reflexState{};
-PFun_slPCLSetMarker* pclMarker{};
+std::atomic<PFun_slPCLSetMarker*> pclMarker{};
 PFun_slPCLGetState* pclState{};
 PFun_slPCLSetOptions* pclOptions{};
 PFun_slDLSSGSetOptions* fgOptions{};
 PFun_slDLSSGGetState* fgState{};
-sl::FrameToken* frameToken{};
 std::atomic<int> lastPresentError{0};
 std::atomic<uint64_t> workerTimeoutEpoch{0};
 bool verboseLog{};
@@ -113,14 +115,14 @@ template<class T> T deviceCall(VkDevice device, const char* name) {
     return resolve ? reinterpret_cast<T>(resolve(device, name)) : nullptr;
 }
 
-/// @brief Clears the SDK entry points and frame token that slShutdown, a failed slInit or unload invalidates.
+/// @brief Clears the SDK entry points that slShutdown, a failed slInit or unload invalidates.
 /// @details The Vulkan dispatch entry points are owned by the Rust lifecycle and stay until the module is unloaded.
 void clearSdkFunctions() {
     init = nullptr; shutdown = nullptr; featureFunction = nullptr; newFrameToken = nullptr;
     isFeatureSupported = nullptr; setTagForFrame = nullptr; setConstants = nullptr; freeResources = nullptr;
     reflexOptions = nullptr; reflexSleep = nullptr; reflexState = nullptr; pclMarker = nullptr;
     pclState = nullptr; pclOptions = nullptr;
-    fgOptions = nullptr; fgState = nullptr; frameToken = nullptr;
+    fgOptions = nullptr; fgState = nullptr;
 }
 
 /// @brief Resolves one feature function only when Streamline reports success and a nonnull address.
@@ -286,6 +288,35 @@ template<class Call> int32_t callFgSdk(Call call, int32_t inactive = -1) {
     }, &call, inactive);
 }
 
+int32_t acquireFrameToken(uint32_t index, uintptr_t* token) noexcept try {
+    if (!newFrameToken) return -1;
+    sl::FrameToken* frame{};
+    const auto result = newFrameToken(frame, &index);
+    *token = reinterpret_cast<uintptr_t>(frame);
+    return static_cast<int32_t>(result);
+} catch (...) {
+    return static_cast<int32_t>(sl::Result::eErrorExceptionHandler);
+}
+
+// Rust snapshots the current token when explicitToken is zero, and pins the
+// initialized SDK until this synchronous callback returns.
+template<class Call> int32_t withFrameToken(uintptr_t explicitToken, Call call, int32_t inactive = -1) {
+    return rsf_slvk_token_call(explicitToken, [](uintptr_t token, void* user) noexcept -> int32_t {
+        try {
+            return (*static_cast<Call*>(user))(*reinterpret_cast<sl::FrameToken*>(token));
+        } catch (...) {
+            return static_cast<int32_t>(sl::Result::eErrorExceptionHandler);
+        }
+    }, &call, inactive);
+}
+
+int32_t emitFrameMarker(uintptr_t token, uint32_t marker) {
+    return withFrameToken(token, [marker](const sl::FrameToken& frame) {
+        const auto call = pclMarker.load();
+        return call ? static_cast<int32_t>(call(static_cast<sl::PCLMarker>(marker), frame)) : -1;
+    });
+}
+
 /// @brief Writes SDK warnings/errors and enabled verbose messages to stderr.
 void onStreamlineMessage(sl::LogType type, const char* message) {
     if (message && std::strstr(message, "Worker thread '") && std::strstr(message, "' timed out"))
@@ -388,7 +419,7 @@ RSF_SL_VK_EXPORT void* VulkanStorySlModule() { return rsf_slvk_life_module(); }
 RSF_SL_VK_EXPORT uint64_t VulkanStorySlWorkerTimeoutEpoch() { return workerTimeoutEpoch.load(std::memory_order_relaxed); }
 
 /// @brief Shuts down Streamline and clears SDK function pointers/state while retaining the interposer module.
-/// @details Call after provider work is retired. Vulkan dispatch pointers can still reference interposer code until Vulkan devices/instances are destroyed. The first result is sticky; a nonzero result refuses later initialization and unload. After success, a later VulkanStorySlInitialize re-runs slInit.
+/// @details Call after provider work is retired. In-flight token calls return busy and allow retry. Vulkan dispatch pointers can still reference interposer code until Vulkan devices/instances are destroyed. The SDK shutdown result is sticky; a nonzero result refuses later initialization and unload. After success, a later VulkanStorySlInitialize re-runs slInit.
 RSF_SL_VK_EXPORT int VulkanStorySlShutdownChecked() {
     return rsf_slvk_life_shutdown(&lifecycle);
 }
@@ -615,51 +646,47 @@ RSF_SL_VK_EXPORT int VulkanStorySlSetReflex(int mode, uint32_t maxFps) {
     return VulkanStorySlSetReflexInterval(mode, maxFps ? 1000000u / maxFps : 0);
 }
 /// @brief Obtains the current Streamline frame token for the supplied 32-bit renderer frame identity.
-/// @details The bridge stores the SDK-owned token pointer; new-frame acquisition replaces that borrowed pointer.
-/// @return SDK result, or -1 without token acquisition.
+/// @details Successful acquisition replaces the Rust lifecycle's borrowed pointer.
+/// @return SDK result, -1 without token acquisition or -7 for an overlapping acquisition.
 RSF_SL_VK_EXPORT int VulkanStorySlBeginFrame(uint32_t frameIndex) {
-    if (!newFrameToken) return -1;
-    return static_cast<int>(newFrameToken(frameToken, &frameIndex));
+    return rsf_slvk_token_begin(acquireFrameToken, frameIndex);
 }
 /// @brief Returns the borrowed pointer to the most recently acquired SDK frame token.
 /// @details The caller must not free the token and must retain it only within the SDK frame lifetime.
 /// @return Token address, or zero before acquisition/after shutdown.
 RSF_SL_VK_EXPORT uintptr_t VulkanStorySlCurrentFrameToken() {
-    return reinterpret_cast<uintptr_t>(frameToken);
+    return rsf_slvk_token_current();
 }
 RSF_SL_VK_EXPORT int VulkanStorySlTokenMatches(uintptr_t token, uint32_t index) {
-    return token && static_cast<uint32_t>(*reinterpret_cast<sl::FrameToken*>(token)) == index;
+    if (!token) return 0;
+    return withFrameToken(token, [index](const sl::FrameToken& frame) {
+        return static_cast<uint32_t>(frame) == index ? 1 : 0;
+    }, 0) == 1;
 }
 /// @brief Runs Reflex sleep for the current borrowed frame token before host input polling.
 /// @return SDK result, or -1 without sleep/token availability.
 RSF_SL_VK_EXPORT int VulkanStorySlReflexSleep() {
-    return reflexSleep && frameToken ? static_cast<int>(reflexSleep(*frameToken)) : -1;
+    return withFrameToken(0, [](const sl::FrameToken& frame) {
+        const auto call = reflexSleep.load();
+        return call ? static_cast<int32_t>(call(frame)) : -1;
+    });
 }
 /// @brief Emits a PCL marker for the current borrowed frame token.
 /// @return SDK result, or -1 when the marker/token is unavailable.
 RSF_SL_VK_EXPORT int VulkanStorySlMarker(uint32_t marker) {
-    return pclMarker && frameToken ? static_cast<int>(pclMarker(static_cast<sl::PCLMarker>(marker), *frameToken)) : -1;
+    return emitFrameMarker(0, marker);
 }
 /// @brief Emits a PCL marker for an explicitly retained token during asynchronous presentation.
 /// @details The token is borrowed and must remain within its SDK lifetime; this call does not replace current frame state.
 /// @return SDK result, or -1 for unavailable markers/a zero token.
 RSF_SL_VK_EXPORT int VulkanStorySlMarkerForToken(uintptr_t token, uint32_t marker) {
-    auto* frame = reinterpret_cast<sl::FrameToken*>(token);
-    return pclMarker && frame ? static_cast<int>(pclMarker(static_cast<sl::PCLMarker>(marker), *frame)) : -1;
+    return token ? emitFrameMarker(token, marker) : -1;
 }
-/// @brief Sets matching camera constants and tags depth, motion, HUD-free color and UI on the current token.
-/// @details Input resources use eOnlyValidNow so the SDK records copies on commandBuffer before renderer staging images are reused. Full-window rendering leaves backbuffer size to the SDK, which resolves it after any deferred swapchain recreation; client backbuffer tags are needed only for subregions.
-/// @param commandBuffer Borrowed recording Vulkan command buffer used for immediate resource copies.
-/// @param depth Borrowed depth metadata.
-/// @param motion Borrowed motion-vector metadata.
-/// @param hudless Borrowed HUD-free color metadata.
-/// @param ui Borrowed premultiplied UI metadata.
-/// @param camera Borrowed matching constants/matrix pointers.
-/// @return SDK result, or -1 for missing required bindings/pointers.
-RSF_SL_VK_EXPORT int VulkanStorySlTagFrame(VkCommandBuffer commandBuffer,
+
+static int tagFrame(const sl::FrameToken& frame, VkCommandBuffer commandBuffer,
     const TaggedImage* depth, const TaggedImage* motion, const TaggedImage* hudless,
     const TaggedImage* ui, const FrameCamera* camera) {
-    if (!setTagForFrame || !setConstants || !frameToken || !depth || !motion ||
+    if (!setTagForFrame || !setConstants || !depth || !motion ||
         !hudless || !ui || !camera || !camera->viewToClip || !camera->clipToView ||
         !camera->clipToPrevClip || !camera->prevClipToClip) return -1;
 
@@ -684,7 +711,7 @@ RSF_SL_VK_EXPORT int VulkanStorySlTagFrame(VkCommandBuffer commandBuffer,
     constants.cameraMotionIncluded = sl::Boolean::eTrue;
     constants.motionVectors3D = sl::Boolean::eFalse;
     constants.reset = camera->reset ? sl::Boolean::eTrue : sl::Boolean::eFalse;
-    auto result = setConstants(constants, *frameToken, viewport);
+    auto result = setConstants(constants, frame, viewport);
     if (result != sl::Result::eOk) return static_cast<int>(result);
 
     sl::Resource d = resource(*depth), m = resource(*motion), h = resource(*hudless), u = resource(*ui);
@@ -702,21 +729,39 @@ RSF_SL_VK_EXPORT int VulkanStorySlTagFrame(VkCommandBuffer commandBuffer,
           {&h, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eOnlyValidNow, &colorExtent},
           {&u, sl::kBufferTypeUIColorAndAlpha, sl::ResourceLifecycle::eOnlyValidNow, &uiExtent},
       };
-    return static_cast<int>(setTagForFrame(*frameToken, viewport, tags, 4,
+    return static_cast<int>(setTagForFrame(frame, viewport, tags, 4,
         reinterpret_cast<sl::CommandBuffer*>(commandBuffer)));
+}
+/// @brief Sets matching camera constants and tags depth, motion, HUD-free color and UI on the current token.
+/// @details Input resources use eOnlyValidNow so the SDK records copies on commandBuffer before renderer staging images are reused. Full-window rendering leaves backbuffer size to the SDK, which resolves it after any deferred swapchain recreation; client backbuffer tags are needed only for subregions.
+/// @param commandBuffer Borrowed recording Vulkan command buffer used for immediate resource copies.
+/// @param depth Borrowed depth metadata.
+/// @param motion Borrowed motion-vector metadata.
+/// @param hudless Borrowed HUD-free color metadata.
+/// @param ui Borrowed premultiplied UI metadata.
+/// @param camera Borrowed matching constants/matrix pointers.
+/// @return SDK result, or -1 for missing required bindings/pointers.
+RSF_SL_VK_EXPORT int VulkanStorySlTagFrame(VkCommandBuffer commandBuffer,
+    const TaggedImage* depth, const TaggedImage* motion, const TaggedImage* hudless,
+    const TaggedImage* ui, const FrameCamera* camera) {
+    return withFrameToken(0, [&](const sl::FrameToken& frame) {
+        return tagFrame(frame, commandBuffer, depth, motion, hudless, ui, camera);
+    });
 }
 /// @brief Clears scene resource tags for the current frame token.
 /// @details Use at non-scene frames or before resources/provider state change. The SDK resolves the full backbuffer after deferred swapchain recreation; no client subregion is supplied.
 /// @return SDK result, or -1 without tagging/token availability.
 RSF_SL_VK_EXPORT int VulkanStorySlInvalidateFrameTags() {
-    if (!setTagForFrame || !frameToken) return -1;
-    sl::ResourceTag tags[] = {
-        {nullptr, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilPresent, nullptr},
-        {nullptr, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilPresent, nullptr},
-        {nullptr, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent, nullptr},
-        {nullptr, sl::kBufferTypeUIColorAndAlpha, sl::ResourceLifecycle::eValidUntilPresent, nullptr},
-    };
-    return static_cast<int>(setTagForFrame(*frameToken, viewport, tags, 4, nullptr));
+    return withFrameToken(0, [](const sl::FrameToken& frame) {
+        if (!setTagForFrame) return -1;
+        sl::ResourceTag tags[] = {
+            {nullptr, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilPresent, nullptr},
+            {nullptr, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilPresent, nullptr},
+            {nullptr, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent, nullptr},
+            {nullptr, sl::kBufferTypeUIColorAndAlpha, sl::ResourceLifecycle::eValidUntilPresent, nullptr},
+        };
+        return static_cast<int>(setTagForFrame(frame, viewport, tags, 4, nullptr));
+    });
 }
 /// @brief Applies DLSS-G enablement, interpolation count and presentation-resource metadata.
 /// @details Successful identical options are reused. An Off out-of-VRAM warning clears configuration without proving release; the host must drain and explicitly free resources.

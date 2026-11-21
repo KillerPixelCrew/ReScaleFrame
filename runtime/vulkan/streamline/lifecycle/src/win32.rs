@@ -147,3 +147,30 @@ unsafe extern "C" fn rsf_slvk_fg_sdk_call(
 ) -> i32 {
     LIFECYCLE.with_frame_generation(inactive, |_, _| unsafe { call(user) })
 }
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_slvk_token_begin(
+    acquire: unsafe extern "C" fn(u32, *mut usize) -> i32,
+    index: u32,
+) -> i32 {
+    LIFECYCLE
+        .frame_token
+        .begin(|token| unsafe { acquire(index, token) })
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_slvk_token_current() -> usize {
+    LIFECYCLE.frame_token.current()
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_slvk_token_call(
+    explicit: usize,
+    call: unsafe extern "C" fn(usize, *mut c_void) -> i32,
+    user: *mut c_void,
+    inactive: i32,
+) -> i32 {
+    LIFECYCLE
+        .frame_token
+        .with_token(explicit, inactive, |token| unsafe { call(token, user) })
+}

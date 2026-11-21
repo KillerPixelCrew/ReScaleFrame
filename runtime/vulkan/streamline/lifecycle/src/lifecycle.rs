@@ -4,6 +4,8 @@
 
 #[cfg(windows)]
 use crate::frame_generation::{FrameGeneration, Swapchain};
+#[cfg(windows)]
+use crate::frame_token::FrameToken;
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr::{NonNull, null, null_mut, without_provenance_mut};
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
@@ -20,9 +22,9 @@ const LOAD_FAILED: i32 = -3;
 const MISSING_EXPORT: i32 = -4;
 const UNVERIFIED: i32 = -5;
 const OTHER_DIRECTORY: i32 = -6;
-// A lifecycle operation or DLSS-G SDK call holds the session. SDK callbacks
-// can run host code on SDK threads, so overlapping calls refuse instead of waiting.
-const BUSY: i32 = -7;
+// SDK callbacks can run host code on SDK threads. Lifecycle operations
+// refuse overlapping SDK calls instead of waiting.
+pub(crate) const BUSY: i32 = -7;
 
 // The bridge formatted the interposer path into a MAX_PATH buffer.
 const MAX_PATH: usize = 260;
@@ -67,8 +69,8 @@ pub(crate) struct Platform {
     /// Calls slShutdown when it was resolved and writes its result. Returns
     /// nonzero when the SDK was called.
     pub shutdown: unsafe extern "C" fn(*mut i32) -> u32,
-    /// Clears the SDK entry points and frame token. Nonzero also clears the
-    /// pending presentation error.
+    /// Clears the typed SDK entry points. Nonzero also clears the pending
+    /// presentation error.
     pub clear: unsafe extern "C" fn(u32),
 }
 
@@ -119,6 +121,8 @@ pub(crate) struct Lifecycle {
     session: Mutex<Session>,
     #[cfg(windows)]
     swapchain: Mutex<Swapchain>,
+    #[cfg(windows)]
+    pub frame_token: FrameToken,
     published: Published,
     // sl.common.dll path for presentation lookups, held only around loader queries.
     common: Mutex<Vec<u16>>,
@@ -168,6 +172,8 @@ impl Lifecycle {
             }),
             #[cfg(windows)]
             swapchain: Mutex::new(Swapchain::new()),
+            #[cfg(windows)]
+            frame_token: FrameToken::new(),
             published: Published {
                 module: AtomicPtr::new(null_mut()),
                 initialized: AtomicBool::new(false),
@@ -290,6 +296,8 @@ impl Lifecycle {
         session.initialized = true;
         session.shutdown_attempted = false;
         session.shutdown_result = 0;
+        #[cfg(windows)]
+        self.frame_token.open();
         self.published.initialized.store(true, Ordering::Release);
         0
     }
@@ -303,6 +311,10 @@ impl Lifecycle {
         }
         if session.shutdown_attempted {
             return session.shutdown_result;
+        }
+        #[cfg(windows)]
+        if !self.frame_token.try_close() {
+            return BUSY;
         }
         // An SDK failure may follow partial plugin destruction. Spend the attempt
         // before calling it; neither feature entry points nor retries remain valid.
@@ -329,6 +341,10 @@ impl Lifecycle {
             return;
         };
         if session.shutdown_attempted && session.shutdown_result != 0 {
+            return;
+        }
+        #[cfg(windows)]
+        if !self.frame_token.try_close() {
             return;
         }
         session.initialized = false;
