@@ -50,10 +50,31 @@ struct Constants {
 }
 
 #[repr(C)]
+#[derive(Default)]
+struct TargetFacts {
+    width: u32,
+    height: u32,
+    mip: u32,
+}
+
+impl TargetFacts {
+    fn extent(&self) -> Option<[u32; 2]> {
+        if self.width == 0 || self.height == 0 {
+            return None;
+        }
+        Some([
+            self.width.checked_shr(self.mip)?.max(1),
+            self.height.checked_shr(self.mip)?.max(1),
+        ])
+    }
+}
+
+#[repr(C)]
 struct Platform {
     make: unsafe extern "C" fn(Handle, &Setup, u32, &mut Resources) -> i32,
-    admit: unsafe extern "C" fn(Handle, Handle, Handle, Handle) -> i32,
-    extent: unsafe extern "C" fn(Handle, &mut [u32; 2]) -> i32,
+    immediate: unsafe extern "C" fn(Handle) -> i32,
+    same_device: unsafe extern "C" fn(Handle, Handle) -> i32,
+    target_facts: unsafe extern "C" fn(Handle, &mut TargetFacts) -> i32,
     draw: unsafe extern "C" fn(
         Handle,
         Handle,
@@ -79,7 +100,8 @@ struct Present {
 const _: () = {
     assert!(size_of::<Setup>() == 24 && size_of::<Draw>() == 20);
     assert!(size_of::<Constants>() == 16);
-    assert!(size_of::<Platform>() == 5 * size_of::<Handle>());
+    assert!(size_of::<TargetFacts>() == 12 && std::mem::offset_of!(TargetFacts, mip) == 8);
+    assert!(size_of::<Platform>() == 6 * size_of::<Handle>());
     assert!(size_of::<Present>() == 3 * size_of::<Handle>());
 };
 
@@ -93,17 +115,27 @@ struct Pass {
 
 impl Pass {
     fn draw(&self, context: Handle, target: Handle, source: Handle, parameters: &Draw) -> i32 {
+        let device = self.device.as_ptr();
         if parameters.mode > COPY_RGBA
-            || unsafe { (self.platform.admit)(self.device.as_ptr(), context, target, source) } == 0
+            || unsafe { (self.platform.immediate)(context) } == 0
+            || [context, target, source]
+                .into_iter()
+                .any(|child| unsafe { (self.platform.same_device)(device, child) } == 0)
         {
             return INVALID;
         }
-        let mut size = [parameters.width, parameters.height];
-        if (size[0] == 0 || size[1] == 0)
-            && unsafe { (self.platform.extent)(target, &mut size) } == 0
-        {
-            return INVALID;
-        }
+        let size = if parameters.width != 0 && parameters.height != 0 {
+            [parameters.width, parameters.height]
+        } else {
+            let mut facts = TargetFacts::default();
+            if unsafe { (self.platform.target_facts)(target, &mut facts) } == 0 {
+                return INVALID;
+            }
+            let Some(size) = facts.extent() else {
+                return INVALID;
+            };
+            size
+        };
         let _drawing = match self.drawing.try_lock() {
             Ok(drawing) => drawing,
             Err(TryLockError::Poisoned(error)) => error.into_inner(),

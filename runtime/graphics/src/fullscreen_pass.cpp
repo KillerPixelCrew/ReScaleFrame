@@ -11,6 +11,7 @@
 #include <d3d11.h>
 
 #include <wrl/client.h>
+#include <cstddef>
 #include <cstring>
 
 namespace {
@@ -176,17 +177,17 @@ int32_t make_resources(void* raw, const rsf_fullscreen_setup* setup, uint32_t co
     return RSF_FULLSCREEN_OK;
 } catch (...) { return RSF_FULLSCREEN_ERROR_RESOURCE_FAILED; }
 
-int32_t admit(void* raw, void* ctx, void* target, void* source)
+int32_t immediate(void* context)
 {
-    auto* device = static_cast<ID3D11Device*>(raw);
-    auto* context = static_cast<ID3D11DeviceContext*>(ctx);
-    return context->GetType() == D3D11_DEVICE_CONTEXT_IMMEDIATE &&
-        rsf::same_device(context, device) &&
-        rsf::same_device(static_cast<ID3D11RenderTargetView*>(target), device) &&
-        rsf::same_device(static_cast<ID3D11ShaderResourceView*>(source), device);
+    return static_cast<ID3D11DeviceContext*>(context)->GetType() == D3D11_DEVICE_CONTEXT_IMMEDIATE;
 }
 
-int32_t extent(void* raw, uint32_t* size)
+int32_t same_device(void* device, void* child)
+{
+    return rsf::same_device(static_cast<ID3D11DeviceChild*>(child), static_cast<ID3D11Device*>(device));
+}
+
+int32_t target_facts(void* raw, rsf_fullscreen_target_facts* facts)
 {
     auto* target = static_cast<ID3D11RenderTargetView*>(raw);
     Microsoft::WRL::ComPtr<ID3D11Resource> resource;
@@ -199,11 +200,7 @@ int32_t extent(void* raw, uint32_t* size)
     texture->GetDesc(&desc);
     const UINT mip = view.ViewDimension == D3D11_RTV_DIMENSION_TEXTURE2D ? view.Texture2D.MipSlice :
         view.ViewDimension == D3D11_RTV_DIMENSION_TEXTURE2DARRAY ? view.Texture2DArray.MipSlice : 0;
-    if (mip >= 32 || desc.Width == 0 || desc.Height == 0) return 0;
-    const auto width = desc.Width >> mip;
-    const auto height = desc.Height >> mip;
-    size[0] = width ? width : 1u;
-    size[1] = height ? height : 1u;
+    *facts = {desc.Width, desc.Height, mip};
     return 1;
 }
 
@@ -259,13 +256,14 @@ int32_t draw(void* raw, void* target, void* source, const rsf_fullscreen_resourc
 } catch (...) { return 0; }
 
 constexpr rsf_fullscreen_platform platform{
-    make_resources, admit, extent, draw,
+    make_resources, immediate, same_device, target_facts, draw,
     [](rsf_fullscreen_log_fn log, void* user, const char* message) noexcept {
         try { log(user, message); } catch (...) {}
     },
 };
 static_assert(sizeof(rsf_fullscreen_resources) == 9 * sizeof(void*));
-static_assert(sizeof(rsf_fullscreen_platform) == 5 * sizeof(void*));
+static_assert(sizeof(rsf_fullscreen_target_facts) == 12 && offsetof(rsf_fullscreen_target_facts, mip) == 8);
+static_assert(sizeof(rsf_fullscreen_platform) == 6 * sizeof(void*));
 static_assert(sizeof(rsf_fullscreen_setup) == 24 && sizeof(rsf_fullscreen_draw) == 20);
 static_assert(RSF_FULLSCREEN_PASS_ABI_VERSION == 1 && RSF_FULLSCREEN_OK == 0 &&
     RSF_FULLSCREEN_ERROR_INVALID_ARGUMENT == -1 && RSF_FULLSCREEN_ERROR_ABI_MISMATCH == -2 &&

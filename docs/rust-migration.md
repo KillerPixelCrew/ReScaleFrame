@@ -149,8 +149,8 @@ predate the merged policy cutover.
 ## Native policy cutover
 
 The source audit of the Runtime and combined carriers identified input
-receipt routing and D3D11 capture budgets as the last native policy
-helpers in the production core. The rights holder confirmed both helpers
+receipt routing and D3D11 capture budgets as native policy helpers
+in the production core. The rights holder confirmed both helpers
 were written for ReScaleFrame and authorized MIT. Commit `b2b1c5a` records
 that authorization. The D3D11 host owns the capture budgets in Rust.
 The Rust CPU dispatcher owns receipt replay, and FG frame routing uses
@@ -184,6 +184,16 @@ the descriptor values and allocation order, and the 11 private table
 entries. The public C declarations and existing `scene_promote`
 device fixture are unchanged. Pinned format, locked Windows metadata
 and whitespace checks passed. Link and device verification remain open.
+
+The Rust fullscreen pass and present blit now decide draw admission and
+derive the target extent from the texture and view facts. The D3D11
+context type and device queries run in the original order. Sizing still
+uses both explicit dimensions when supplied, refuses a zero base extent
+or an out-of-range mip, and clamps smaller mip dimensions to one.
+Source comparison against `a5867f2f` matched the six private callbacks,
+the 12-byte fact record, the HLSL, command order and public entry points.
+Pinned formatting, locked Windows Cargo metadata and whitespace passed.
+The existing `fullscreen_pass` device fixture remains unrun.
 
 The retained standalone FSR3 Vulkan bridge now binds the SDK and owns
 SR contexts in Rust. The managed caller still resolves the same

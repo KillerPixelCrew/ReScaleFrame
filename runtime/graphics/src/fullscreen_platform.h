@@ -16,10 +16,15 @@ struct rsf_fullscreen_resources {
     ID3D11Buffer* constants;
 };
 
+struct rsf_fullscreen_target_facts {
+    uint32_t width, height, mip;
+};
+
 struct rsf_fullscreen_platform {
     int32_t (*make)(void* device, const rsf_fullscreen_setup*, uint32_t constant_bytes, rsf_fullscreen_resources*);
-    int32_t (*admit)(void* device, void* context, void* target, void* source);
-    int32_t (*extent)(void* target, uint32_t* width_height);
+    int32_t (*immediate)(void* context);
+    int32_t (*same_device)(void* device, void* child);
+    int32_t (*target_facts)(void* target, rsf_fullscreen_target_facts*);
     int32_t (*draw)(void* context, void* target, void* source, const rsf_fullscreen_resources*,
         uint32_t width, uint32_t height, uint32_t linear, uint32_t blend, const void* constants, uint32_t bytes);
     void (*log)(rsf_fullscreen_log_fn, void* user, const char*);
