@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 //! DXBC containers and signatures for AC7's velocity shader transforms.
 //! The native callers keep their vectors and their typed compiler and shader operations.
-use crate::dxbc_chunks::{chunk_at, word};
+use crate::dxbc_chunks::{Chunk, chunk_at, word};
 use crate::shader_hash::{dxbc_checksum, dxbc_digest_bytes};
 use std::ffi::{c_char, c_void};
 use std::slice;
 
 const HEADER: usize = 32;
-const MAX_READ: usize = 8 * 1024 * 1024;
+const MAX_CONTAINER_SIZE: usize = 8 * 1024 * 1024;
 const SIGNATURE_HEADER: usize = 8;
 const MAX_SEMANTICS: usize = 64;
 
@@ -39,6 +39,20 @@ type AppendChunk = unsafe extern "C" fn(*mut c_void, *const ChunkView) -> bool;
 type AppendSemantic = unsafe extern "C" fn(*mut c_void, *const SemanticView) -> bool;
 pub(crate) type Resize = unsafe extern "C" fn(*mut c_void, usize) -> *mut u8;
 
+pub(crate) struct Semantic<'a> {
+    pub(crate) name: &'a [u8],
+    pub(crate) index: u32,
+    pub(crate) system: u32,
+    pub(crate) ty: u32,
+    pub(crate) reg: u32,
+    pub(crate) mask: u8,
+    pub(crate) used: u8,
+}
+
+pub(crate) fn valid_container_size(size: usize) -> bool {
+    (HEADER..=MAX_CONTAINER_SIZE).contains(&size)
+}
+
 /// The caller lends a readable span for the call. An empty vector may lend null.
 pub(crate) unsafe fn borrowed<'a, T>(ptr: *const T, len: usize) -> Option<&'a [T]> {
     if len == 0 {
@@ -48,6 +62,30 @@ pub(crate) unsafe fn borrowed<'a, T>(ptr: *const T, len: usize) -> Option<&'a [T
         return None;
     }
     Some(unsafe { slice::from_raw_parts(ptr, len) })
+}
+
+/// The callback must lend a writable span, separate from the inputs, through encoding.
+pub(crate) unsafe fn native_output<'a>(
+    user: *mut c_void,
+    resize: Resize,
+    size: usize,
+) -> Option<&'a mut [u8]> {
+    if size > isize::MAX as usize {
+        return None;
+    }
+    let bytes = unsafe { resize(user, size) };
+    if bytes.is_null() {
+        return None;
+    }
+    Some(unsafe { slice::from_raw_parts_mut(bytes, size) })
+}
+
+pub(crate) fn resize_bytes(bytes: &mut Vec<u8>, size: usize) -> Option<&mut [u8]> {
+    bytes
+        .try_reserve_exact(size.saturating_sub(bytes.len()))
+        .ok()?;
+    bytes.resize(size, 0);
+    Some(bytes.as_mut_slice())
 }
 
 fn store(bytes: &mut [u8], offset: usize, value: u32) {
@@ -62,40 +100,43 @@ unsafe extern "C" fn rsf_core_ac7_velocity_read_container(
     user: *mut c_void,
     append: AppendChunk,
 ) -> bool {
-    if !(HEADER..=MAX_READ).contains(&size) {
+    if !valid_container_size(size) {
         return false;
     }
     let Some(bytes) = (unsafe { borrowed(bytes.cast::<u8>(), size) }) else {
         return false;
     };
-    if &bytes[..4] != b"DXBC" {
-        return false;
-    }
-    let (Some(total), Some(count)) = (word(bytes, 24), word(bytes, 28)) else {
-        return false;
-    };
-    let (total, count) = (total as usize, count as usize);
-    if total > size || total < HEADER || count > 32 || count * 4 > total - HEADER {
-        return false;
-    }
-    let bytes = &bytes[..total];
-    let table_end = HEADER + count * 4;
-    for index in 0..count {
-        let Some(chunk) = word(bytes, HEADER + index * 4)
-            .and_then(|offset| chunk_at(bytes, table_end, offset as usize))
-        else {
-            return false;
-        };
+    read_container(bytes, |chunk| {
         let view = ChunkView {
             tag: *chunk.tag,
             bytes: chunk.data.as_ptr(),
             size: chunk.data.len(),
         };
-        if !unsafe { append(user, &view) } {
-            return false;
-        }
+        unsafe { append(user, &view) }.then_some(())
+    })
+    .is_some()
+}
+
+pub(crate) fn read_container<'a>(
+    bytes: &'a [u8],
+    mut visit: impl FnMut(Chunk<'a>) -> Option<()>,
+) -> Option<()> {
+    if !valid_container_size(bytes.len()) || &bytes[..4] != b"DXBC" {
+        return None;
     }
-    true
+    let total = word(bytes, 24)? as usize;
+    let count = word(bytes, 28)? as usize;
+    let size = bytes.len();
+    if total > size || total < HEADER || count > 32 || count * 4 > total - HEADER {
+        return None;
+    }
+    let bytes = &bytes[..total];
+    let table_end = HEADER + count * 4;
+    for index in 0..count {
+        let offset = word(bytes, HEADER + index * 4)? as usize;
+        visit(chunk_at(bytes, table_end, offset)?)?;
+    }
+    Some(())
 }
 
 /// The caller lends each chunk and a callback returning a nonoverlapping writable output.
@@ -109,28 +150,36 @@ unsafe extern "C" fn rsf_core_ac7_velocity_write_container(
     let Some(chunks) = (unsafe { borrowed(chunks, count) }) else {
         return false;
     };
-    let Some(table_end) = count
-        .checked_mul(4)
-        .and_then(|size| HEADER.checked_add(size))
-    else {
-        return false;
-    };
-    let Some(size) = chunks.iter().try_fold(table_end, |size, chunk| {
-        if chunk.size != 0 && chunk.bytes.is_null() {
-            return None;
-        }
-        size.checked_add(8)?.checked_add(chunk.size)
-    }) else {
-        return false;
-    };
-    let Ok(total) = u32::try_from(size) else {
-        return false;
-    };
-    let bytes = unsafe { resize(user, size) };
-    if bytes.is_null() {
+    let mut borrowed_chunks = Vec::new();
+    if borrowed_chunks.try_reserve_exact(count).is_err() {
         return false;
     }
-    let output = unsafe { slice::from_raw_parts_mut(bytes, size) };
+    for chunk in chunks {
+        let Some(data) = (unsafe { borrowed(chunk.bytes, chunk.size) }) else {
+            return false;
+        };
+        borrowed_chunks.push(Chunk {
+            tag: &chunk.tag,
+            data,
+        });
+    }
+    write_container(&borrowed_chunks, |size| unsafe {
+        native_output(user, resize, size)
+    })
+    .is_some()
+}
+
+pub(crate) fn write_container<'a>(
+    chunks: &[Chunk<'_>],
+    allocate: impl FnOnce(usize) -> Option<&'a mut [u8]>,
+) -> Option<()> {
+    let count = chunks.len();
+    let table_end = HEADER.checked_add(count.checked_mul(4)?)?;
+    let size = chunks.iter().try_fold(table_end, |size, chunk| {
+        size.checked_add(8)?.checked_add(chunk.data.len())
+    })?;
+    let total = u32::try_from(size).ok()?;
+    let output = allocate(size)?.get_mut(..size)?;
     output[..table_end].fill(0);
     output[..4].copy_from_slice(b"DXBC");
     store(output, 20, 1);
@@ -139,21 +188,17 @@ unsafe extern "C" fn rsf_core_ac7_velocity_write_container(
 
     let mut offset = table_end;
     for (index, chunk) in chunks.iter().enumerate() {
-        let Some(data) = (unsafe { borrowed(chunk.bytes, chunk.size) }) else {
-            return false;
-        };
+        let data = chunk.data;
         store(output, HEADER + index * 4, offset as u32);
-        output[offset..offset + 4].copy_from_slice(&chunk.tag);
-        store(output, offset + 4, chunk.size as u32);
+        output[offset..offset + 4].copy_from_slice(chunk.tag);
+        store(output, offset + 4, data.len() as u32);
         offset += 8;
         output[offset..offset + data.len()].copy_from_slice(data);
         offset += data.len();
     }
-    let Some(checksum) = dxbc_checksum(&output[20..]) else {
-        return false;
-    };
+    let checksum = dxbc_checksum(&output[20..])?;
     output[4..20].copy_from_slice(&dxbc_digest_bytes(checksum));
-    true
+    Some(())
 }
 
 fn signature_layout(streams: bool) -> (usize, usize) {
@@ -173,48 +218,58 @@ unsafe extern "C" fn rsf_core_ac7_velocity_read_signature(
     let Some(bytes) = (unsafe { borrowed(bytes, size) }) else {
         return false;
     };
-    let Some(count) = word(bytes, 0) else {
-        return false;
-    };
-    let count = count as usize;
+    read_signature(bytes, streams, |semantic| {
+        let view = SemanticView {
+            name: semantic.name.as_ptr().cast(),
+            name_size: semantic.name.len(),
+            index: semantic.index,
+            system: semantic.system,
+            ty: semantic.ty,
+            reg: semantic.reg,
+            mask: semantic.mask,
+            used: semantic.used,
+        };
+        unsafe { append(user, &view) }.then_some(())
+    })
+    .is_some()
+}
+
+pub(crate) fn read_signature<'a>(
+    bytes: &'a [u8],
+    streams: bool,
+    mut visit: impl FnMut(Semantic<'a>) -> Option<()>,
+) -> Option<()> {
+    let count = word(bytes, 0)? as usize;
     if count > MAX_SEMANTICS {
-        return false;
+        return None;
     }
     let (stride, fields_offset) = signature_layout(streams);
     let table_end = SIGNATURE_HEADER + count * stride;
-    if table_end > size {
-        return false;
+    if table_end > bytes.len() {
+        return None;
     }
     for i in 0..count {
         let record = SIGNATURE_HEADER + i * stride;
         if streams && word(bytes, record) != Some(0) {
-            return false;
+            return None;
         }
         let offset = record + fields_offset;
         let fields = &bytes[offset..offset + 24];
         let value = |at| word(fields, at).unwrap_or(0);
         let name = value(0) as usize;
-        let Some(text) = bytes.get(name..) else {
-            return false;
-        };
-        let Some(end) = text.iter().position(|&byte| byte == 0) else {
-            return false;
-        };
-        let view = SemanticView {
-            name: text.as_ptr().cast(),
-            name_size: end,
+        let text = bytes.get(name..)?;
+        let end = text.iter().position(|&byte| byte == 0)?;
+        visit(Semantic {
+            name: &text[..end],
             index: value(4),
             system: value(8),
             ty: value(12),
             reg: value(16),
             mask: fields[20],
             used: fields[21],
-        };
-        if !unsafe { append(user, &view) } {
-            return false;
-        }
+        })?;
     }
-    true
+    Some(())
 }
 
 /// The caller lends the semantic records and a nonoverlapping native output allocation.
@@ -229,40 +284,52 @@ unsafe extern "C" fn rsf_core_ac7_velocity_write_signature(
     let Some(semantics) = (unsafe { borrowed(semantics, count) }) else {
         return false;
     };
-    let (stride, fields_offset) = signature_layout(streams);
-    let Some(table_end) = count
-        .checked_mul(stride)
-        .and_then(|size| SIGNATURE_HEADER.checked_add(size))
-    else {
+    let mut borrowed_semantics = Vec::new();
+    if borrowed_semantics.try_reserve_exact(count).is_err() {
         return false;
-    };
-    let Some(size) = semantics
+    }
+    for semantic in semantics {
+        let Some(name) = (unsafe { borrowed(semantic.name.cast::<u8>(), semantic.name_size) })
+        else {
+            return false;
+        };
+        borrowed_semantics.push(Semantic {
+            name,
+            index: semantic.index,
+            system: semantic.system,
+            ty: semantic.ty,
+            reg: semantic.reg,
+            mask: semantic.mask,
+            used: semantic.used,
+        });
+    }
+    write_signature(&borrowed_semantics, streams, |size| unsafe {
+        native_output(user, resize, size)
+    })
+    .is_some()
+}
+
+pub(crate) fn write_signature<'a>(
+    semantics: &[Semantic<'_>],
+    streams: bool,
+    allocate: impl FnOnce(usize) -> Option<&'a mut [u8]>,
+) -> Option<()> {
+    let count = semantics.len();
+    let (stride, fields_offset) = signature_layout(streams);
+    let table_end = SIGNATURE_HEADER.checked_add(count.checked_mul(stride)?)?;
+    let size = semantics
         .iter()
         .try_fold(table_end, |size, semantic| {
-            if semantic.name_size != 0 && semantic.name.is_null() {
-                return None;
-            }
-            size.checked_add(semantic.name_size)?.checked_add(1)
+            size.checked_add(semantic.name.len())?.checked_add(1)
         })
         .and_then(|size| size.checked_add(3))
-        .map(|size| size & !3)
-    else {
-        return false;
-    };
-    if u32::try_from(size).is_err() {
-        return false;
-    }
+        .map(|size| size & !3)?;
+    u32::try_from(size).ok()?;
     let mut order = Vec::new();
-    if order.try_reserve_exact(count).is_err() {
-        return false;
-    }
+    order.try_reserve_exact(count).ok()?;
     order.extend(0..count);
     order.sort_unstable_by_key(|&i| (semantics[i].reg, semantics[i].mask, i));
-    let bytes = unsafe { resize(user, size) };
-    if bytes.is_null() {
-        return false;
-    }
-    let output = unsafe { slice::from_raw_parts_mut(bytes, size) };
+    let output = allocate(size)?.get_mut(..size)?;
     output.fill(0);
     store(output, 0, count as u32);
     store(output, 4, SIGNATURE_HEADER as u32);
@@ -277,12 +344,9 @@ unsafe extern "C" fn rsf_core_ac7_velocity_write_signature(
         store(output, offset + 16, semantic.reg);
         output[offset + 20] = semantic.mask;
         output[offset + 21] = semantic.used;
-        let Some(name) = (unsafe { borrowed(semantic.name.cast::<u8>(), semantic.name_size) })
-        else {
-            return false;
-        };
+        let name = semantic.name;
         output[cursor..cursor + name.len()].copy_from_slice(name);
         cursor += name.len() + 1;
     }
-    true
+    Some(())
 }
