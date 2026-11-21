@@ -13,7 +13,7 @@ use self::abi::*;
 use self::capture::Capture;
 use self::options::Settings;
 use self::report::Counters;
-use self::shaders::{Creation, Loader, Pack, Registry};
+use self::shaders::{Loader, Pack, Registry};
 use super::{foliage, window, *};
 use crate::geometry_registry::RetirementQueue;
 use crate::lease::Lease;
@@ -28,7 +28,6 @@ use crate::motion_target_abi::{
     RSF_ANOMALY_MOTION_BIND_CONFLICT as CONFLICT, RSF_ANOMALY_MOTION_BIND_FAULT as FAULT,
     RSF_ANOMALY_MOTION_BIND_UNBOUND as UNBOUND, rsf_anomaly_motion_bind_state as BindState,
 };
-use crate::shader_loader::Bytes;
 use crate::sr_stage::DX10_MSAA;
 use rsf_game_sys::rsf_game_log_fn;
 use std::ffi::{CStr, CString};
@@ -690,11 +689,6 @@ extern "C" fn rsf_anomaly_motion_stage_quiesce() -> bool {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_anomaly_motion_stage_admits() -> bool {
-    STAGE.get().is_some_and(|stage| stage.active.load(Acquire))
-}
-
-#[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_motion_stage_enabled() -> bool {
     STAGE
         .get()
@@ -766,26 +760,10 @@ extern "C" fn rsf_anomaly_motion_stage_attach() {
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_anomaly_motion_stage_shader(
-    stage_id: u8,
-    target: *const c_char,
-    bytecode: Raw,
-    size: u32,
-    file: Bytes,
-    stock: Raw,
-    return_address: Raw,
-    stack: Raw,
-) {
-    if let Some(stage) = STAGE.get().filter(|stage| stage.active.load(Acquire)) {
-        stage.shader_created(Creation {
-            stage: stage_id,
-            target,
-            bytecode,
-            size,
-            file: unsafe { file.as_slice() },
-            stock,
-            return_address,
-            stack,
-        });
+extern "C" fn rsf_anomaly_motion_stage_shader(creation: &ShaderCreation) {
+    if creation.status >= 0
+        && let Some(stage) = STAGE.get().filter(|stage| stage.active.load(Acquire))
+    {
+        stage.admit_shader_creation(creation);
     }
 }

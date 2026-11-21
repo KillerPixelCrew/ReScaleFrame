@@ -1060,6 +1060,13 @@ frame facts. The motion target leases, history and capture sequence
 match in source. Device and game checks remain open.
 [Motion window admission](research/rust-anomaly-motion-stage.md#motion-window-admission)
 
+Anomaly now admits successful stock shader creation and reads its
+guarded interface and filename in Rust. The native detour still
+supplies its own return address and stack to the compiler-frame
+check. Source checks matched the verified offsets and shader
+pack. Builds, fixtures and live shader checks remain open.
+[Stock shader creation](research/rust-anomaly-motion-stage.md#stock-shader-creation-admission)
+
 The standalone NGX shim publishes its module and 12 resolved symbols
 from Rust while the C wrappers call NGX from the same native frames.
 The Vulkan-to-D3D12 FG port moves transfer, barrier and placeholder-clear

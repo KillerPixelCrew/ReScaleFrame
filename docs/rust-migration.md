@@ -427,6 +427,12 @@ resource leases and capture sequence match the existing paths in
 source. Motion device and game verification remain open.
 [Motion window admission](research/rust-anomaly-motion-stage.md#motion-window-admission)
 
+Anomaly's Rust motion owner now admits the stock shader creation
+record and reads its interface and filename through the guarded
+leaf. The same native detour frame supplies caller identity.
+Builds, fixtures, live reload and motion checks remain open.
+[Stock shader creation](research/rust-anomaly-motion-stage.md#stock-shader-creation-admission)
+
 ## Verification coverage
 
 | Requirement | Recorded evidence | Still open |

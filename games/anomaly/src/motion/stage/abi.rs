@@ -69,6 +69,18 @@ pub(super) struct ShaderResult {
     pub outcome: u8,
 }
 
+#[repr(C)]
+pub(super) struct ShaderCreation {
+    pub target: *const c_char,
+    pub bytecode: *const std::ffi::c_void,
+    pub file: *const c_char,
+    pub result: *const Raw,
+    pub return_address: *const std::ffi::c_void,
+    pub stack: *const std::ffi::c_void,
+    pub status: i32,
+    pub size: u32,
+}
+
 impl Default for ShaderResult {
     fn default() -> Self {
         Self {
@@ -190,6 +202,9 @@ const _: () = {
     assert!(size_of::<DrawFacts>() == 32);
     assert!(size_of::<ShaderObjects>() == 40);
     assert!(size_of::<ShaderResult>() == 32);
+    assert!(size_of::<ShaderCreation>() == 56);
+    assert!(std::mem::offset_of!(ShaderCreation, return_address) == 32);
+    assert!(std::mem::offset_of!(ShaderCreation, status) == 48);
     assert!(size_of::<PackInfo>() == 8);
     assert!(size_of::<FoliageLayout>() == 108);
     assert!(std::mem::offset_of!(FoliageLayout, usable) == 104);

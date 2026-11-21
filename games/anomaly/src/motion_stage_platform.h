@@ -31,6 +31,16 @@ struct ShaderResult {
     int32_t skin;
     uint8_t outcome;
 };
+struct ShaderCreation {
+    const char* target;
+    const void* bytecode;
+    const char* file;
+    void* const* result;
+    const void* return_address;
+    const void* stack;
+    int32_t status;
+    uint32_t size;
+};
 // The pack's Rust-admitted manifest, owned by the pack until close_pack.
 struct PackInfo { const rsf_anomaly_shader_admitted* manifest; };
 struct PatchCounters { uint64_t intercepted, built, cache_hits, refused, refusals[11]; };
@@ -86,7 +96,6 @@ extern "C" {
 void rsf_anomaly_motion_stage_configure(const MotionPlatform*, const wchar_t*, rsf_dump_log_fn, void*) noexcept;
 bool rsf_anomaly_motion_stage_install(const MotionPlatform*, void*, uint32_t, const void*, uint32_t, const char*) noexcept;
 bool rsf_anomaly_motion_stage_quiesce() noexcept;
-bool rsf_anomaly_motion_stage_admits() noexcept;
 bool rsf_anomaly_motion_stage_enabled() noexcept;
 void rsf_anomaly_motion_stage_report(rsf_dump_log_fn, void*) noexcept;
 void rsf_anomaly_motion_stage_frame_target(FrameTarget*) noexcept;
@@ -96,7 +105,6 @@ void rsf_anomaly_motion_stage_open(void*) noexcept;
 void rsf_anomaly_motion_stage_close() noexcept;
 void rsf_anomaly_motion_stage_flush(const DrawFacts*) noexcept;
 void rsf_anomaly_motion_stage_attach() noexcept;
-void rsf_anomaly_motion_stage_shader(uint8_t, const char*, const void*, uint32_t, rsf_anomaly_shader_bytes,
-    void*, const void*, const void*) noexcept;
+void rsf_anomaly_motion_stage_shader(const ShaderCreation*) noexcept;
 }
 }

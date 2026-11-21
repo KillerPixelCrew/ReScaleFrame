@@ -5,11 +5,14 @@ use crate::shader_loader::{
     DecodedFrame, Entry, FrameLayout, Manifest, Reflection, RuntimePack, decode_frame,
 };
 use std::collections::HashMap;
+use std::ffi::c_void;
 use std::sync::Arc;
 
 const NOT_ALLOWLISTED: u8 = 0;
 const CREATE_FAILED: u8 = 9;
 const NAMES_LIMIT: usize = 16_384;
+const SHADER_OBJECT_OFFSET: usize = 0x10;
+const FILENAME_CAPACITY: usize = 520;
 
 pub(super) const OUTCOME_NAMES: [&str; 10] = [
     "not_allowlisted",
@@ -64,16 +67,7 @@ impl Request {
     ) -> Option<Self> {
         let mut target = [0; 17];
         // Leave the final byte zero for the Runtime's C-string input.
-        for (i, slot) in target[..16].iter_mut().enumerate() {
-            let mut byte = [0];
-            let Some(address) = (call.target as usize).checked_add(i) else {
-                break;
-            };
-            if !read(address, &mut byte) || byte[0] == 0 {
-                break;
-            }
-            *slot = byte[0];
-        }
+        read_prefix(call.target as usize, &mut target[..16], &read);
         let size = call.size as usize;
         let address = call.bytecode as usize;
         if size == 0 || address == 0 || address.checked_add(size - 1).is_none() {
@@ -505,15 +499,75 @@ impl Replacement {
     }
 }
 
-pub(super) struct Creation<'a> {
-    pub stage: u8,
-    pub target: *const c_char,
-    pub bytecode: Raw,
-    pub size: u32,
-    pub file: &'a [u8],
-    pub stock: Raw,
-    pub return_address: Raw,
-    pub stack: Raw,
+fn read_prefix(address: usize, out: &mut [u8], read: impl Fn(usize, &mut [u8]) -> bool) -> usize {
+    for (index, slot) in out.iter_mut().enumerate() {
+        let Some(address) = address.checked_add(index).filter(|&address| address != 0) else {
+            return index;
+        };
+        let mut byte = [0];
+        if !read(address, &mut byte) || byte[0] == 0 {
+            return index;
+        }
+        *slot = byte[0];
+    }
+    out.len()
+}
+
+struct Creation<'a> {
+    stage: u8,
+    target: *const c_char,
+    bytecode: *const c_void,
+    size: u32,
+    file: &'a [u8],
+    stock: Raw,
+    return_address: *const c_void,
+    stack: *const c_void,
+}
+
+impl<'a> Creation<'a> {
+    fn read(
+        native: &ShaderCreation,
+        filename: &'a mut [u8; FILENAME_CAPACITY],
+        read: impl Fn(usize, &mut [u8]) -> bool,
+    ) -> Option<Self> {
+        let mut stage = [0];
+        if native.target.is_null()
+            || !read(native.target.addr(), &mut stage)
+            || !matches!(stage[0], b'v' | b'p' | b'h' | b'd')
+            || native.bytecode.is_null()
+            || native.size == 0
+            || native.result.is_null()
+        {
+            return None;
+        }
+        let mut object = [0; size_of::<usize>()];
+        if !read(native.result.addr(), &mut object) {
+            return None;
+        }
+        let object = usize::from_ne_bytes(object);
+        let address = object
+            .checked_add(SHADER_OBJECT_OFFSET)
+            .filter(|_| object != 0)?;
+        let mut stock = [0; size_of::<usize>()];
+        if !read(address, &mut stock) {
+            return None;
+        }
+        let stock = ptr::with_exposed_provenance_mut(usize::from_ne_bytes(stock));
+        if stock.is_null() {
+            return None;
+        }
+        let length = read_prefix(native.file.addr(), filename, read);
+        Some(Self {
+            stage: stage[0],
+            target: native.target,
+            bytecode: native.bytecode,
+            size: native.size,
+            file: &filename[..length],
+            stock,
+            return_address: native.return_address,
+            stack: native.stack,
+        })
+    }
 }
 
 impl Stage {
@@ -615,7 +669,19 @@ impl Stage {
         Ok((pack, next))
     }
 
-    pub(super) fn shader_created(&self, call: Creation<'_>) {
+    pub(super) fn admit_shader_creation(&self, native: &ShaderCreation) {
+        let mut filename = [0; FILENAME_CAPACITY];
+        let call = Creation::read(native, &mut filename, |address, bytes| unsafe {
+            (self.platform.read_engine)(ptr::null(), address, bytes.as_mut_ptr(), bytes.len())
+        });
+        if let Some(call) = call
+            && self.active.load(Acquire)
+        {
+            self.shader_created(call);
+        }
+    }
+
+    fn shader_created(&self, call: Creation<'_>) {
         let p = self.platform;
         lock(&self.registry).remember(call.stock, call.file);
         let mut guard = lock(&self.loader);
@@ -715,9 +781,58 @@ impl Stage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
 
     fn raw(value: usize) -> Raw {
         value as Raw
+    }
+
+    #[test]
+    fn native_shader_creation_borrows_verified_stock_and_keeps_readable_filename_prefix() {
+        let native = ShaderCreation {
+            target: raw(1).cast(),
+            bytecode: raw(2),
+            file: raw(0x200).cast(),
+            result: raw(3).cast(),
+            return_address: raw(4),
+            stack: raw(5),
+            status: 0,
+            size: 12,
+        };
+        let reads = RefCell::new(Vec::new());
+        let read = |address, out: &mut [u8]| {
+            reads.borrow_mut().push(address);
+            match address {
+                1 => out.copy_from_slice(b"h"),
+                3 => out.copy_from_slice(&0x100usize.to_ne_bytes()),
+                0x110 => out.copy_from_slice(&0x150usize.to_ne_bytes()),
+                0x200 => out.copy_from_slice(b"a"),
+                0x201 => out.copy_from_slice(b"b"),
+                _ => return false,
+            }
+            true
+        };
+        let mut name = [0; FILENAME_CAPACITY];
+        let call = Creation::read(&native, &mut name, read).unwrap();
+        assert_eq!(call.stage, b'h');
+        assert_eq!(call.stock.addr(), 0x150);
+        assert_eq!(call.file, b"ab");
+        assert_eq!(call.return_address, native.return_address);
+        assert_eq!(call.stack, native.stack);
+        assert_eq!(
+            reads.borrow().as_slice(),
+            &[1, 3, 0x110, 0x200, 0x201, 0x202]
+        );
+
+        let read = |address, out: &mut [u8]| {
+            match address {
+                1 => out.copy_from_slice(b"d"),
+                3 => out.copy_from_slice(&usize::MAX.to_ne_bytes()),
+                _ => panic!("an overflowing object must refuse before the stock read"),
+            }
+            true
+        };
+        assert!(Creation::read(&native, &mut name, read).is_none());
     }
 
     unsafe extern "C" fn release(_: Raw) {}

@@ -169,3 +169,26 @@ Source comparison covered the callback positions, the short-circuit
 reads and public declarations. Pinned formatting, locked offline
 metadata and whitespace passed. Native linkage, fixtures, and
 Standard and AVX motion and fallback checks remain open.
+
+## Stock shader creation admission
+
+Compared with `9c64d6d6`, the detour still attaches the device before
+the engine call. It returns the original result and lends the signed
+low 32 bits, target, bytecode, output object, return address, and
+caller stack to Rust. The stack still starts eight bytes after
+`_AddressOfReturnAddress` on the native detour frame.
+
+Rust checks the successful result and active stage before reading
+engine memory. It admits the same vertex, pixel, hull and domain
+targets, then reads the stock interface at the verified object
+offset `0x10`. An overflowing address now refuses before the
+guarded read. The filename keeps the readable prefix of at most
+520 bytes. The original compiler-frame decode and stock-bytecode
+copy still use guarded reads, and the request target retains its
+reserved terminator.
+
+The private creation record is 56 bytes on x64. Source review covered
+the detour, reader order, ABI declarations and unchanged Standard
+and AVX profiles. The added fixture covers hull admission, a partial
+filename and overflowing object addresses. Compile and link, fixture
+execution, live shader reload and motion checks remain open.

@@ -129,9 +129,6 @@ const char* guard_failure(void* module, uint32_t image_size, const void* selecte
     return rsf_anomaly_motion_guard_failure(&checked, &guards);
 }
 
-rsf_anomaly_shader_bytes bytes(std::string_view s) noexcept {
-    return {reinterpret_cast<const uint8_t*>(s.data()), s.size()};
-}
 rsf_anomaly_shader_bytes bytes(std::span<const std::byte> s) noexcept {
     return {reinterpret_cast<const uint8_t*>(s.data()), s.size()};
 }
@@ -147,29 +144,15 @@ void* hw_context() noexcept {
 }
 void* backend() noexcept { return image ? image + srp().backend_rva : nullptr; }
 
-void shader_created(const char* target, const void* buffer, unsigned size, const char* file,
-    void** result, const void* return_address, const void* caller_rsp) noexcept {
-    char stage{};
-    if (!guarded_copy(&stage, target, 1) || (stage != 'v' && stage != 'p' && stage != 'h' && stage != 'd') ||
-        !buffer || !size) return;
-    void* engine_object{};
-    void* stock{};
-    if (!guarded_copy(&engine_object, result, sizeof(engine_object)) || !engine_object ||
-        !guarded_copy(&stock, static_cast<std::byte*>(engine_object) + shader_object_offset, sizeof(stock)) || !stock) return;
-    char filename[520];
-    std::size_t len = 0;
-    if (file) for (; len < sizeof(filename); ++len)
-        if (!guarded_copy(filename + len, file + len, 1) || !filename[len]) break;
-    rsf_anomaly_motion_stage_shader(static_cast<uint8_t>(stage), target, buffer, size, bytes(std::string_view(filename, len)),
-        stock, return_address, caller_rsp);
-}
+static_assert(shader_object_offset == 0x10 && sizeof(ShaderCreation) == 56 &&
+    offsetof(ShaderCreation, return_address) == 32 && offsetof(ShaderCreation, status) == 48);
 long long __fastcall create_shader_hook(const char* target, const void* buffer, unsigned size, const char* file,
     void** result, char disasm) {
     rsf_anomaly_motion_stage_attach();
     const auto hr = reinterpret_cast<CreateShader>(originals[site_create_shader])(target, buffer, size, file, result, disasm);
-    if (static_cast<int32_t>(hr) >= 0 && rsf_anomaly_motion_stage_admits())
-        shader_created(target, buffer, size, file, result, _ReturnAddress(),
-            static_cast<const std::byte*>(_AddressOfReturnAddress()) + 8);
+    const ShaderCreation creation{target, buffer, file, result, _ReturnAddress(),
+        static_cast<const std::byte*>(_AddressOfReturnAddress()) + 8, static_cast<int32_t>(hr), size};
+    rsf_anomaly_motion_stage_shader(&creation);
     return hr;
 }
 void __fastcall scene_begin_hook(void* self) {
