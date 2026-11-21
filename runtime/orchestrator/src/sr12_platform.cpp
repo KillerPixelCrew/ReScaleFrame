@@ -32,6 +32,7 @@ static_assert(D3D12_RESOURCE_STATE_RENDER_TARGET == 0x4 && D3D12_RESOURCE_STATE_
               D3D12_RESOURCE_STATE_COPY_SOURCE == 0x800 && D3D12_RESOURCE_DIMENSION_TEXTURE2D == 3);
 static_assert(RSF_SR_DLSS == 1 && RSF_SR_XESS == 5 && RSF_API_D3D12 == 2);
 static_assert(RSF_DUMP_VIEW_RAW == 0 && RSF_DUMP_VIEW_HDR == 3);
+static_assert(D3D12_TEXTURE_DATA_PITCH_ALIGNMENT == 256);
 
 namespace {
 struct TextureDesc {
@@ -107,25 +108,45 @@ void* create_texture(void* device, uint32_t width, uint32_t height, uint32_t for
     return rsf::create_uav_texture(static_cast<ID3D12Device*>(device), width, height,
         static_cast<DXGI_FORMAT>(format), &texture) ? texture : nullptr;
 }
-// A 1x1 R32_FLOAT in COPY_DEST and an upload row holding 1.0.
-int create_unit_exposure(void* device, void** texture_out, void** upload_out)
+// The SDR exposure texture starts in COPY_DEST.
+void* create_exposure_texture(void* device)
 {
     auto* owner = static_cast<ID3D12Device*>(device);
     D3D12_HEAP_PROPERTIES heap{}; heap.Type = D3D12_HEAP_TYPE_DEFAULT;
     D3D12_RESOURCE_DESC desc{}; desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
     desc.Width = 1; desc.Height = 1; desc.DepthOrArraySize = 1; desc.MipLevels = 1; desc.SampleDesc.Count = 1;
     desc.Format = DXGI_FORMAT_R32_FLOAT;
-    ComPtr<ID3D12Resource> texture, upload;
-    if (FAILED(owner->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
-        D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&texture)))) return 0;
-    heap.Type = D3D12_HEAP_TYPE_UPLOAD; desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-    desc.Width = 256; desc.Format = DXGI_FORMAT_UNKNOWN; desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-    if (FAILED(owner->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
-        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&upload)))) return 0;
+    ID3D12Resource* texture = nullptr;
+    const auto result = owner->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
+        D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&texture));
+    return transfer(result, texture);
+}
+
+void* create_exposure_upload(void* device, uint64_t bytes)
+{
+    auto* owner = static_cast<ID3D12Device*>(device);
+    D3D12_HEAP_PROPERTIES heap{}; heap.Type = D3D12_HEAP_TYPE_UPLOAD;
+    D3D12_RESOURCE_DESC desc{}; desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    desc.Width = bytes; desc.Height = 1; desc.DepthOrArraySize = 1; desc.MipLevels = 1; desc.SampleDesc.Count = 1;
+    desc.Format = DXGI_FORMAT_UNKNOWN; desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    ID3D12Resource* upload = nullptr;
+    const auto result = owner->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
+        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&upload));
+    return transfer(result, upload);
+}
+
+int write_exposure_upload(void* resource, float value)
+{
+    auto* upload = static_cast<ID3D12Resource*>(resource);
     void* mapped = nullptr; D3D12_RANGE read{0, 0};
     if (FAILED(upload->Map(0, &read, &mapped))) return 0;
-    *static_cast<float*>(mapped) = 1.0f; D3D12_RANGE written{0, sizeof(float)}; upload->Unmap(0, &written);
-    *texture_out = texture.Detach(); *upload_out = upload.Detach();
+    if (!mapped) {
+        upload->Unmap(0, &read);
+        return 0;
+    }
+    *static_cast<float*>(mapped) = value;
+    const D3D12_RANGE written{0, sizeof(float)};
+    upload->Unmap(0, &written);
     return 1;
 }
 // Created in COPY_DEST.
@@ -201,7 +222,7 @@ void copy_region(void* list, void* target, void* source, uint32_t width, uint32_
 void copy_unit_exposure(void* list, void* target, void* upload)
 {
     D3D12_TEXTURE_COPY_LOCATION from{}; from.pResource = static_cast<ID3D12Resource*>(upload); from.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-    from.PlacedFootprint.Footprint = {DXGI_FORMAT_R32_FLOAT, 1, 1, 1, 256};
+    from.PlacedFootprint.Footprint = {DXGI_FORMAT_R32_FLOAT, 1, 1, 1, D3D12_TEXTURE_DATA_PITCH_ALIGNMENT};
     D3D12_TEXTURE_COPY_LOCATION to{}; to.pResource = static_cast<ID3D12Resource*>(target); to.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
     static_cast<ID3D12GraphicsCommandList*>(list)->CopyTextureRegion(&to, 0, 0, 0, &from, nullptr);
 }
@@ -300,7 +321,9 @@ struct Platform {
     decltype(&create_pipeline) create_pipeline;
     decltype(&create_heap) create_heap;
     decltype(&create_texture) create_texture;
-    decltype(&create_unit_exposure) create_unit_exposure;
+    decltype(&create_exposure_texture) create_exposure_texture;
+    decltype(&create_exposure_upload) create_exposure_upload;
+    decltype(&write_exposure_upload) write_exposure_upload;
     decltype(&create_readback) create_readback;
     decltype(&describe) describe;
     decltype(&owned_by) owned_by;
@@ -342,7 +365,8 @@ constexpr Platform platform{
     rsf_dlss_native12_plan, rsf_dlss_native12_set_sdr, rsf_dlss_native12_evaluate,
     rsf_dlss_native12_evaluate_borrowed, rsf_dlss_native12_present, rsf_dlss_native12_destroy,
     rsf_sr_session_create, rsf_sr_session_select, rsf_sr_session_get_status, rsf_sr_session_evaluate,
-    rsf_sr_session_destroy, create_pipeline, create_heap, create_texture, create_unit_exposure, create_readback,
+    rsf_sr_session_destroy, create_pipeline, create_heap, create_texture, create_exposure_texture,
+    create_exposure_upload, write_exposure_upload, create_readback,
     describe, owned_by, write_srv, write_uav, dispatch, transition, copy_region, copy_unit_exposure,
     copy_motion_tile, map, unmap, depth_domains, capture_create, capture_destroy, capture_enabled,
     capture_configure, capture_flush, capture_record, capture_event, capture_wants, capture_force_reset,

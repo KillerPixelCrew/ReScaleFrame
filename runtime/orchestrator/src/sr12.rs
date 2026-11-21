@@ -68,6 +68,7 @@ const NORMALIZED_FORMATS: [u32; 3] = [RGBA16_FLOAT, R32_FLOAT, RG16_FLOAT];
 const EXPOSURE_SRV: u32 = 3;
 const NORMALIZED_UAV: u32 = 4;
 const EXPOSURE_UAV: u32 = 7;
+const EXPOSURE_UPLOAD_BYTES: u64 = 256;
 
 // Four 8x8 RG16F tiles, each in a 256-byte row pitch footprint.
 const TILE: u32 = 8;
@@ -114,7 +115,9 @@ pub(crate) struct Platform {
         unsafe extern "C" fn(Handle, rsf_backend_log_fn, Handle, *mut Handle, *mut Handle) -> i32,
     create_heap: unsafe extern "C" fn(Handle) -> Handle,
     create_texture: unsafe extern "C" fn(Handle, u32, u32, u32) -> Handle,
-    create_unit_exposure: unsafe extern "C" fn(Handle, *mut Handle, *mut Handle) -> i32,
+    create_exposure_texture: unsafe extern "C" fn(Handle) -> Handle,
+    create_exposure_upload: unsafe extern "C" fn(Handle, u64) -> Handle,
+    write_exposure_upload: unsafe extern "C" fn(Handle, f32) -> i32,
     create_readback: unsafe extern "C" fn(Handle, u64) -> Handle,
     describe: unsafe extern "C" fn(Handle, *mut TextureDesc),
     owned_by: unsafe extern "C" fn(Handle, Handle) -> i32,
@@ -546,14 +549,14 @@ unsafe fn create_gpu(
     {
         // SDR has no changing pre-exposure. XeSS requires an exposure texture when auto
         // exposure is disabled; feed the actual constant scale, not HDR adaptation.
-        let (mut texture, mut upload) = (ptr::null_mut(), ptr::null_mut());
-        let made = unsafe { (p.create_unit_exposure)(device, &mut texture, &mut upload) };
-        let texture = unsafe { ComRef::from_owned(texture) };
-        let upload = unsafe { ComRef::from_owned(upload) };
-        if made == 0 {
+        let texture = unsafe { ComRef::from_owned((p.create_exposure_texture)(device)) }?;
+        let upload = unsafe {
+            ComRef::from_owned((p.create_exposure_upload)(device, EXPOSURE_UPLOAD_BYTES))
+        }?;
+        if unsafe { (p.write_exposure_upload)(upload.as_ptr(), 1.0) } == 0 {
             return None;
         }
-        (exposure, exposure_upload) = (Some(texture?), Some(upload?));
+        (exposure, exposure_upload) = (Some(texture), Some(upload));
     }
     if external_exposure {
         exposure = Some(texture(1, 1, R32_FLOAT)?);

@@ -843,6 +843,12 @@ and remains unrun. Build and live observer verification remain open.
 
 ## Rust orchestrator and first Anomaly port
 
+D3D12 SR now owns the constant SDR exposure texture and upload row
+through allocation, initialization and rollback in Rust. A null
+mapped address is refused without publishing either reference. The
+linked and DLL SR12 fixtures remain unrun.
+[Source comparison](rust-migration.md#native-policy-cutover)
+
 Vulkan-to-D3D12 interop now admits its required dispatch table in
 Rust. The native capsule binds the same 13 entries after successful
 resolution, with the original lookup order and error status.

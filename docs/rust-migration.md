@@ -255,6 +255,16 @@ against `aa66153c` matched the names, scopes and slots and left
 the public ABI, image and semaphore calls and device fixture
 unchanged. Pinned formatting and locked Windows metadata passed.
 
+The D3D12 SR owner now creates and owns the constant SDR exposure
+texture and upload row through separate native allocation and write
+leaves. Source comparison against `f446c181` matched the selection
+gate, both resource descriptors, the 256-byte pitch, the 1.0 value,
+the 53 private callback slots and the public C entry points. A
+successful Map with a null address now unmaps and refuses the
+allocation. Pinned formatting, locked Windows metadata and
+whitespace checks passed. The linked and DLL SR12 fixtures remain
+unrun.
+
 The legacy D3D11 Streamline SR owner now selects the required
 interposer and DLSS feature lookups in Rust. It shares the seven
 common lookups and adds the five owner-only lookups for a session
