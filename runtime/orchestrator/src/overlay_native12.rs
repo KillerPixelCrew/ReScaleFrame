@@ -5,11 +5,19 @@ use crate::overlay_native12_abi::{
     RSF_OVERLAY12_TEXTURE_LIMIT, rsf_overlay12_log, rsf_overlay12_platform as Platform,
     rsf_overlay12_texture,
 };
+use crate::owned_win32_handle;
 use crate::sr_session::has_capacity;
 use std::ffi::{CStr, c_void};
+use std::os::windows::io::{AsRawHandle, OwnedHandle};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
-use windows_sys::Win32::System::SystemInformation::GetTickCount64;
+use windows_sys::Win32::{
+    Foundation::WAIT_OBJECT_0,
+    System::{
+        SystemInformation::GetTickCount64,
+        Threading::{CreateEventW, WaitForSingleObject},
+    },
+};
 
 const SLOTS: usize = 3;
 const TEXTURES: usize = RSF_OVERLAY12_TEXTURE_LIMIT as usize;
@@ -17,6 +25,7 @@ const TEXTURE_EDGE: u32 = 16384;
 const ATLAS_BATCH: usize = 32;
 const STARTUP_MS: u64 = 8000;
 const STARTUP_FADE_MS: u64 = 1000;
+const FENCE_WAIT_MS: u32 = 5000;
 
 #[derive(Default)]
 struct Ring {
@@ -48,6 +57,36 @@ impl Ring {
         self.completions[slot] = value;
         self.cursor = (slot + 1) % SLOTS;
         self.serial = value;
+    }
+}
+
+struct Fence {
+    reference: ComRef,
+    event: Option<OwnedHandle>,
+}
+
+// D3D12 fences and Win32 event handles can be moved between threads. PANEL serializes waits and signals.
+unsafe impl Send for Fence {}
+
+impl Fence {
+    fn completed(&self, platform: &Platform) -> u64 {
+        unsafe { (platform.completed.unwrap())(self.reference.as_ptr()) }
+    }
+
+    fn wait_for_slot(&mut self, platform: &Platform, value: u64) -> bool {
+        if self.event.is_none() {
+            let event = unsafe { CreateEventW(std::ptr::null(), 0, 0, std::ptr::null()) };
+            self.event = unsafe { owned_win32_handle(event) };
+        }
+        let Some(event) = &self.event else {
+            return false;
+        };
+        let event = event.as_raw_handle();
+        let armed = unsafe { (platform.arm.unwrap())(self.reference.as_ptr(), event, value) } != 0;
+        // Keep the event with its fence after a timeout. A later GPU signal may still reach it.
+        armed
+            && unsafe { WaitForSingleObject(event, FENCE_WAIT_MS) } == WAIT_OBJECT_0
+            && Ring::slot_ready(self.completed(platform), value)
     }
 }
 
@@ -213,6 +252,7 @@ struct Panel {
     device: usize,
     queue: usize,
     failed: bool,
+    fence: Option<Fence>,
     ring: Ring,
     atlas: Atlas,
     started: u64,
@@ -229,6 +269,7 @@ static PANEL: Mutex<Panel> = Mutex::new(Panel {
     device: 0,
     queue: 0,
     failed: false,
+    fence: None,
     ring: Ring {
         completions: [0; SLOTS],
         cursor: 0,
@@ -287,7 +328,12 @@ unsafe extern "C" fn rsf_core_overlay12_present(
     logger: rsf_overlay12_log,
     user: *mut c_void,
 ) -> i32 {
-    if device.is_null() || queue.is_null() || chain.is_null() || !unsafe { has_capacity(stats) } {
+    if device.is_null()
+        || queue.is_null()
+        || chain.is_null()
+        || !unsafe { has_capacity(stats) }
+        || (!intent.is_null() && !unsafe { has_capacity(intent) })
+    {
         return 0;
     }
     let Ok(mut panel) = PANEL.try_lock() else {
@@ -299,10 +345,20 @@ unsafe extern "C" fn rsf_core_overlay12_present(
     if panel.native == 0 {
         panel.logger = logger;
         panel.log_user = user as usize;
-        let native = unsafe { (platform.initialize.unwrap())(device, queue, chain, logger, user) };
+        let mut fence = std::ptr::null_mut();
+        let native = unsafe {
+            (platform.initialize.unwrap())(device, queue, chain, logger, user, &mut fence)
+        };
         if native.is_null() {
             return panel.fail(platform);
         }
+        let Some(reference) = (unsafe { ComRef::from_owned(fence) }) else {
+            return panel.fail(platform);
+        };
+        panel.fence = Some(Fence {
+            reference,
+            event: None,
+        });
         panel.native = native as usize;
         panel.device = device as usize;
         panel.queue = queue as usize;
@@ -323,18 +379,20 @@ unsafe extern "C" fn rsf_core_overlay12_present(
         return 0;
     }
     let native = panel.native as *mut c_void;
-    let completed = unsafe { (platform.completed.unwrap())(native) };
+    let completed = panel.fence.as_ref().unwrap().completed(platform);
     if completed == u64::MAX {
         return panel.fail(platform);
     }
     let (slot, wait_for) = panel.ring.select(completed);
-    if wait_for != 0 {
-        // Only already-submitted overlay work can block slot reuse.
-        if unsafe { (platform.wait.unwrap())(native, wait_for) } == 0
-            || !Ring::slot_ready(unsafe { (platform.completed.unwrap())(native) }, wait_for)
-        {
-            return panel.fail(platform);
-        }
+    // Only already-submitted overlay work can block slot reuse.
+    if wait_for != 0
+        && !panel
+            .fence
+            .as_mut()
+            .unwrap()
+            .wait_for_slot(platform, wait_for)
+    {
+        return panel.fail(platform);
     }
     panel.atlas.retained[slot].clear();
     let mut width = 0;
@@ -407,7 +465,9 @@ unsafe extern "C" fn rsf_core_overlay12_present(
     if trace {
         panel.log(c"Overlay12: queue submission begin");
     }
-    if unsafe { (platform.submit.unwrap())(native, slot_index, value) } == 0 {
+    let fence = panel.fence.as_ref().unwrap().reference.as_ptr();
+    unsafe { (platform.execute.unwrap())(native, slot_index) };
+    if unsafe { (platform.signal.unwrap())(native, fence, value) } == 0 {
         // Execute may already have succeeded. Keep the whole native owner
         // alive and refuse future reuse because the retirement is unknown.
         return panel.fail(platform);
@@ -520,7 +580,7 @@ mod tests {
         visible: None,
         set_visible: None,
         completed: None,
-        wait: None,
+        arm: None,
         begin: None,
         layout: None,
         updates: Some(updates),
@@ -528,7 +588,8 @@ mod tests {
         create_texture: Some(create),
         upload_texture: Some(upload),
         record: Some(draw),
-        submit: None,
+        execute: None,
+        signal: None,
     };
 
     fn fixture() -> AtlasFixture {

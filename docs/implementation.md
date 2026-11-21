@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The native D3D12 overlay now keeps its completion fence and wait event
+in Rust. Rust orders command execution, signalling and slot publication.
+The slot becomes reusable only after the fence proves completion. If a
+wait fails, the existing disabled state retains the event because the
+GPU can still signal it. The overlay also checks the capacity of a
+non-null intent output before writing it. The private bindings were
+regenerated. Build and device validation remain open.
+
 The Anomaly temporal driver builds its Runtime setup and motion decode
 parameters in Rust. It takes the stage's existing configuration directly
 and copies each vendor directory once into the driver that owns it. The

@@ -10,11 +10,12 @@ typedef struct rsf_overlay12_texture {
 } rsf_overlay12_texture;
 
 typedef struct rsf_overlay12_platform {
-    void* (*initialize)(void* device, void* queue, void* chain, rsf_overlay12_log, void* user);
+    /* On success, transfers one fence reference to the Rust owner. */
+    void* (*initialize)(void* device, void* queue, void* chain, rsf_overlay12_log, void* user, void** fence);
     uint32_t (*visible)(void);
     void (*set_visible)(uint32_t);
-    uint64_t (*completed)(void* panel);
-    uint32_t (*wait)(void* panel, uint64_t value);
+    uint64_t (*completed)(void* fence);
+    uint32_t (*arm)(void* fence, void* event, uint64_t value);
     /* The returned backbuffer carries one reference through submission. */
     void* (*begin)(void* panel, uint32_t slot, void* chain, uint32_t* width, uint32_t* height);
     uint32_t (*layout)(void* panel, uint32_t slot, uint32_t width, uint32_t height,
@@ -26,7 +27,8 @@ typedef struct rsf_overlay12_platform {
     void* (*upload_texture)(void* panel, uint32_t slot, void* resource, const rsf_overlay_texture_update*);
     uint32_t (*record)(void* panel, uint32_t slot, void* target, uint32_t width, uint32_t height,
         const rsf_overlay12_texture*, uint32_t texture_count);
-    uint32_t (*submit)(void* panel, uint32_t slot, uint64_t value);
+    void (*execute)(void* panel, uint32_t slot);
+    uint32_t (*signal)(void* panel, void* fence, uint64_t value);
 } rsf_overlay12_platform;
 
 #ifdef __cplusplus
