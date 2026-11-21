@@ -638,6 +638,13 @@ dispatch arguments and blob IDs. Build and captured artifact parity
 remain open.
 [Dispatch record audit](research/rust-ac7-motion-dispatch.md)
 
+AC7 F9 ordinary draws, colour admission and contact-light pairing now
+use Rust ownership. The writer preserves the shared row cap and blob
+references, and encodes nonfinite viewport origins as JSON null.
+The ordered fields match the six archived fixture rows. Fresh capture,
+build and device verification remain open.
+[Draw record audit](research/rust-ac7-motion-draws.md)
+
 The AC7 adapter now owns the carrier's executable and window identity,
 GameSDK probe, guarded patch bytes and post-decryption install order.
 Both carriers keep their native forwarding, the guarded patch leaf
@@ -660,6 +667,13 @@ record capacity and commit state now belong to Rust. Native D3D11
 effects consume those decisions during the same observed draws.
 Build, replay and moving-game validation remain open.
 [Velocity history audit](research/rust-ac7-velocity-history.md)
+
+The AC7 velocity stream owner now checks draw and indirect arguments,
+sets stream and record bounds and packs the existing 112-byte b13
+record in Rust. Zero and overflowing expansions refuse explicitly.
+Native effects still consume the same shader parameters. Build and
+replay verification remain open.
+[Stream policy audit](research/rust-ac7-velocity-stream.md)
 
 The Godot compositor probe now keeps requests, snapshots and motion
 classification per effect instance in Rust. The typed godot-cpp

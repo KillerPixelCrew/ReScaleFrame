@@ -7,6 +7,7 @@
 #include "velocity_shader.h"
 #include "velocity_pass_cache.h"
 #include "velocity_history.h"
+#include "velocity_stream.h"
 #include <d3d11.h>
 #include <wrl/client.h>
 #include <algorithm>
@@ -14,7 +15,6 @@
 #include <map>
 #include <span>
 #include <memory>
-#include <cstring>
 #include <cstdio>
 using Microsoft::WRL::ComPtr;
 namespace {
@@ -52,11 +52,8 @@ bool raw_buffer(ID3D11Device* device,uint32_t records,bool output,Buffer& result
         FAILED(device->CreateUnorderedAccessView(made.buffer.Get(),&uav,&made.write))) return false;
     made.count=records;result=std::move(made);return true;
 }
-struct Parameters {
-    float rect[4]{},jitter[4]{};float cutoff=0;uint32_t history=0,mask=0,padding=0;
-    float matrix[16]{};
-};
-static_assert(sizeof(Parameters)==112);
+// Draw admission, record bounds, buffer sizing, the argument range and both cbuffers' contents
+// are velocity_stream.rs; VelocityDrawParameters is the generated shaders' b13 layout.
 constexpr char hash_source[]=R"(
 ByteAddressBuffer Source:register(t0);ByteAddressBuffer Arguments:register(t1);
 RWByteAddressBuffer Destination:register(u0);
@@ -176,7 +173,7 @@ struct Renderer {
             FAILED(device->CreateVertexShader(bytes.data(),bytes.size(),nullptr,&fullscreen))) return false;
         if (!rsf::compile_shader(indirect_source,"ac7-indirect-geometry-bounds","main","cs_5_0",bytes) ||
             FAILED(device->CreateComputeShader(bytes.data(),bytes.size(),nullptr,&validate_indirect))) return false;
-        D3D11_BUFFER_DESC desc{};desc.ByteWidth=sizeof(Parameters);desc.BindFlags=D3D11_BIND_CONSTANT_BUFFER;
+        D3D11_BUFFER_DESC desc{};desc.ByteWidth=sizeof(VelocityDrawParameters);desc.BindFlags=D3D11_BIND_CONSTANT_BUFFER;
         if (FAILED(device->CreateBuffer(&desc,nullptr,&parameters))) return false;
         desc.ByteWidth=16;if (FAILED(device->CreateBuffer(&desc,nullptr,&hash_parameters))) return false;
         D3D11_BUFFER_DESC arguments{};arguments.ByteWidth=64;
@@ -199,17 +196,16 @@ struct Renderer {
         return SUCCEEDED(device->CreateDepthStencilState(&depth_desc,&depth_state)) &&
             SUCCEEDED(device->CreateBlendState(&blend_desc,&blend)) && SUCCEEDED(device->CreateRasterizerState(&raster_desc,&raster));
     }
-    bool prepare_indirect(ID3D11DeviceContext* c,const rsf_frame_tap_geometry& g,uint32_t capacity,
-        uint32_t output_capacity,uint32_t packing,uint32_t points) {
+    bool prepare_indirect(ID3D11DeviceContext* c,const rsf_frame_tap_geometry& g,const VelocityIndirectBounds& bounds) {
         auto* source=static_cast<ID3D11Buffer*>(g.indirect_buffer);
-        if (!source || !capacity) return false;
+        if (!source || !bounds.vertices) return false;
         D3D11_BUFFER_DESC desc{};source->GetDesc(&desc);
-        const uint32_t bytes=g.kind==5 ? 20u : 16u;
-        if (g.indirect_offset>desc.ByteWidth || bytes>desc.ByteWidth-g.indirect_offset || g.indirect_offset%4) return false;
+        const uint32_t end=rsf_ac7_velocity_indirect_end(g.kind,g.indirect_offset,desc.ByteWidth);
+        if (!end) return false;
         ComPtr<ID3D11Device> owner;source->GetDevice(&owner);if (owner.Get()!=device.Get()) return false;
-        const D3D11_BOX box{g.indirect_offset,0,0,g.indirect_offset+bytes,1,1};
+        const D3D11_BOX box{g.indirect_offset,0,0,end,1,1};
         c->CopySubresourceRegion(indirect.buffer.Get(),0,0,0,0,source,0,&box);
-        const uint32_t bounds[]{capacity,output_capacity,packing,points};c->UpdateSubresource(hash_parameters.Get(),0,nullptr,bounds,0,0);
+        c->UpdateSubresource(hash_parameters.Get(),0,nullptr,&bounds,0,0);
         ID3D11Buffer* cb=hash_parameters.Get();c->CSSetConstantBuffers(0,1,&cb);
         ID3D11UnorderedAccessView* uav=indirect.write.Get();c->CSSetUnorderedAccessViews(0,1,&uav,nullptr);
         c->CSSetShader(validate_indirect.Get(),nullptr,0);c->Dispatch(1,1,1);
@@ -300,16 +296,15 @@ struct Renderer {
     }
     void build(ID3D11DeviceContext* c,Buffer& source,Buffer& destination,uint32_t count,uint32_t mode,
         bool dynamic=false,ID3D11Predicate* predicate=nullptr,BOOL predicate_value=FALSE) {
-        if (!count) return;
-        const uint32_t groups=(count+63)/64,width=std::min(groups,65535u);
-        const uint32_t params[]{count,destination.count-1,mode,dynamic ? 0u : width};
-        c->UpdateSubresource(hash_parameters.Get(),0,nullptr,params,0,0);
+        VelocityHashDispatch dispatch{};
+        if (!rsf_ac7_velocity_hash_dispatch(count,destination.count,mode,dynamic ? 1u : 0u,&dispatch)) return;
+        c->UpdateSubresource(hash_parameters.Get(),0,nullptr,&dispatch.parameters,0,0);
         ID3D11Buffer* cb=hash_parameters.Get();c->CSSetConstantBuffers(0,1,&cb);
         ID3D11ShaderResourceView* bound_sources[]{source.view.Get(),dynamic ? indirect.view.Get() : nullptr};c->CSSetShaderResources(0,2,bound_sources);
         ID3D11UnorderedAccessView* uav=destination.write.Get();c->CSSetUnorderedAccessViews(0,1,&uav,nullptr);
         c->CSSetShader(hash.Get(),nullptr,0);c->SetPredication(predicate,predicate_value);
         if (dynamic) c->DispatchIndirect(indirect.buffer.Get(),36);
-        else c->Dispatch(width,(groups+width-1)/width,1);
+        else c->Dispatch(dispatch.groups[0],dispatch.groups[1],1);
         c->SetPredication(nullptr,FALSE);
         bound_sources[0]=bound_sources[1]=nullptr;uav=nullptr;c->CSSetShaderResources(0,2,bound_sources);c->CSSetUnorderedAccessViews(0,1,&uav,nullptr);
     }
@@ -411,16 +406,16 @@ extern "C" void rsf_ac7_velocity_scope(const rsf_game_render_pass* scope)
 {current=scope && scope->struct_size>=sizeof(current) ? *scope : rsf_game_render_pass{};}
 extern "C" void rsf_ac7_velocity_geometry(const rsf_frame_tap_geometry* pointer) try
 {
-    if (!pointer || current.role!=RSF_GAME_RENDER_TRANSLUCENT_MESH || !current.camera_valid ||
-        !(current.flags&RSF_GAME_RENDER_PRIMARY)) return;
+    if (!rsf_ac7_velocity_stream_draw(&current,pointer)) return;
     const auto& g=*pointer;auto* c=static_cast<ID3D11DeviceContext*>(g.context);
-    if (!c || c->GetType()!=D3D11_DEVICE_CONTEXT_IMMEDIATE || !g.depth_view || g.samples!=1 ||
-        g.kind>6 || (g.kind<4 && !g.count)) return;
+    if (c->GetType()!=D3D11_DEVICE_CONTEXT_IMMEDIATE) return;
     const double entered_ms=cpu_clock_ms();
     ComPtr<ID3D11GeometryShader> existing;ComPtr<ID3D11HullShader> hull;ComPtr<ID3D11DomainShader> domain;
     c->GSGetShader(&existing,nullptr,nullptr);c->HSGetShader(&hull,nullptr,nullptr);c->DSGetShader(&domain,nullptr,nullptr);
-    if ((hull && !domain) || (domain && !hull) || (hull && existing)) {refused("incomplete tessellation pipeline or combined native GS/tessellation requires a matching route");return;}
-    if (!hull && g.topology!=D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST && g.topology!=D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP) return;
+    const uint32_t stages=(existing ? VELOCITY_STAGE_GEOMETRY : 0u)|(hull ? VELOCITY_STAGE_HULL : 0u)|(domain ? VELOCITY_STAGE_DOMAIN : 0u);
+    const uint32_t route=rsf_ac7_velocity_stream_route(g.topology,stages);
+    if (route==VELOCITY_ROUTE_MISMATCHED) {refused("incomplete tessellation pipeline or combined native GS/tessellation requires a matching route");return;}
+    if (route!=VELOCITY_ROUTE_ADMITTED) return;
     ComPtr<ID3D11Device> device;c->GetDevice(&device);
     if (!renderer || renderer->device.Get()!=device.Get()) {
         auto made=std::make_unique<Renderer>(device.Get());if (!made->initialize()) {refused("device-side pass initialization failed");return;}
@@ -431,20 +426,14 @@ extern "C" void rsf_ac7_velocity_geometry(const rsf_frame_tap_geometry* pointer)
     uint32_t vertex_hash=0;auto* variant=renderer->variant(g,native_pixel.Get(),existing.Get(),hull.Get(),domain.Get(),vertex_hash);
     timing.phase=cpu_clock_ms();timing.shader_ms=timing.phase-entered_ms;
     if (!variant) return;
-    if (hull && g.topology!=D3D11_PRIMITIVE_TOPOLOGY_1_CONTROL_POINT_PATCHLIST+variant->input_points-1) return;
-    const uint64_t count64=g.kind>=4 ? uint64_t(current.geometry_capacity)*(hull ? variant->input_points : 3u)/3u :
-        uint64_t(g.count)*(g.kind>=2 ? g.instances : 1u);
-    // A triangle strip can expand to three SO records per emitted vertex. Input vertex
-    // capacity already includes three vertices per primitive, so this bound covers it.
-    const uint32_t expansion=variant->maximum_vertices*(g.topology==D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP ? 3u : 1u);
-    if (!count64 || count64>uint64_t(UINT32_MAX/128)/expansion) return;
-    const uint32_t count=uint32_t(count64*expansion);
+    VelocityStreamPlan plan{};
+    if (!rsf_ac7_velocity_stream_plan(&g,stages,current.geometry_capacity,variant->maximum_vertices,variant->input_points,&plan)) return;
+    const uint32_t count=plan.bounds.records;
     timing.records=count;
     State saved(c);if (!saved.context) return;
     ComPtr<ID3D11Predicate> predicate;BOOL predicate_value=FALSE;c->GetPredication(&predicate,&predicate_value);
     c->SetPredication(nullptr,FALSE);
-    const uint32_t packing=existing ? 4u : hull ? 3u : g.topology==D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP ? 2u : 1u;
-    if (g.kind>=5 && !renderer->prepare_indirect(c,g,uint32_t(count64),count,packing,variant->input_points)) {
+    if (g.kind>=5 && !renderer->prepare_indirect(c,g,plan.bounds)) {
         refused("indirect argument buffer or native mesh capacity is invalid");return;
     }
     const uint32_t view_slot=renderer->view(c,g);
@@ -458,9 +447,7 @@ extern "C" void rsf_ac7_velocity_geometry(const rsf_frame_tap_geometry* pointer)
     if (!renderer->captured.buffer || renderer->captured.count<count) {
         // SO cannot share the raw UAV contract, but it can expose a raw read-only SRV.
         // Keep a separate zero source for variable emissions and read completed SO directly.
-        Buffer captured;
-        uint32_t capacity=1024;
-        while (capacity<count) capacity*=2;
+        Buffer captured;const uint32_t capacity=plan.capacity;
         D3D11_BUFFER_DESC capture{};capture.ByteWidth=capacity*64;
         capture.BindFlags=D3D11_BIND_STREAM_OUTPUT|D3D11_BIND_SHADER_RESOURCE;
         capture.MiscFlags=D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
@@ -475,11 +462,9 @@ extern "C" void rsf_ac7_velocity_geometry(const rsf_frame_tap_geometry* pointer)
     }
     // Native GS emission and DrawAuto have no readable record count. Fixed vertex/patch
     // producers use the actual direct or validated GPU indirect count and need no tail clear.
-    if (existing || g.kind==4) {
+    if (plan.zero_source) {
         if (renderer->stream.count<count) {
-            uint32_t capacity=1024;
-            while (capacity<count) capacity*=2;
-            if (!raw_buffer(device.Get(),capacity,false,renderer->stream)) {refused("generated-geometry zero allocation failed");return;}
+            if (!raw_buffer(device.Get(),plan.capacity,false,renderer->stream)) {refused("generated-geometry zero allocation failed");return;}
             const UINT zero[4]{};c->ClearUnorderedAccessViewUint(renderer->stream.write.Get(),zero);
         }
         const D3D11_BOX capture_box{0,0,0,count*64,1,1};
@@ -487,7 +472,7 @@ extern "C" void rsf_ac7_velocity_geometry(const rsf_frame_tap_geometry* pointer)
     }
     timing.resource_ms=cpu_clock_ms()-timing.phase;
     if (existing || hull) {
-        const Parameters empty{};c->UpdateSubresource(renderer->parameters.Get(),0,nullptr,&empty,0,0);
+        const VelocityDrawParameters empty{};c->UpdateSubresource(renderer->parameters.Get(),0,nullptr,&empty,0,0);
         ID3D11Buffer* cb=renderer->parameters.Get();c->GSSetConstantBuffers(13,1,&cb);
         ID3D11ShaderResourceView* unavailable=nullptr;c->GSSetShaderResources(127,1,&unavailable);
         c->DSSetConstantBuffers(13,1,&cb);c->DSSetShaderResources(127,1,&unavailable);
@@ -499,19 +484,10 @@ extern "C" void rsf_ac7_velocity_geometry(const rsf_frame_tap_geometry* pointer)
     ID3D11Buffer* stream=renderer->captured.buffer.Get();const UINT offset=0;c->SOSetTargets(1,&stream,&offset);
     c->SetPredication(predicate.Get(),predicate_value);draw(c,g,renderer->indirect.buffer.Get());c->SetPredication(nullptr,FALSE);c->SOSetTargets(0,nullptr,nullptr);
     D3D11_VIEWPORT viewport{};UINT viewports=1;c->RSGetViewports(&viewports,&viewport);
-    if (viewports!=1 || viewport.Width<=0 || viewport.Height<=0) return;
-    Parameters parameters{};parameters.rect[0]=viewport.TopLeftX;parameters.rect[1]=viewport.TopLeftY;
-    parameters.rect[2]=viewport.Width;parameters.rect[3]=viewport.Height;
-    parameters.jitter[0]=current.camera.jitter_pixels[0]*2/viewport.Width;
-    parameters.jitter[1]=current.camera.jitter_pixels[1]*-2/viewport.Height;
-    parameters.jitter[2]=current.camera.previous_jitter_pixels[0]*2/viewport.Width;
-    parameters.jitter[3]=current.camera.previous_jitter_pixels[1]*-2/viewport.Height;
-    // UE4.27 clips translucent/additive/modulate opacity, while AlphaComposite has no
-    // opacity discard in GetMaterialClippingVelocity. Its native opacity is saturated.
-    parameters.cutoff=current.material_blend==5 ? -1.f : current.material_opacity_clip+1.f/255.f;
-    parameters.history=usable && model->previous.buffer ? 1u : 0u;
-    parameters.mask=model->previous.count ? model->previous.count-1 : 0;
-    std::memcpy(parameters.matrix,current.camera.clip_to_previous_clip,sizeof(parameters.matrix));
+    const float rect[4]{viewport.TopLeftX,viewport.TopLeftY,viewport.Width,viewport.Height};
+    // A history buffer's count is nonzero exactly when it exists.
+    VelocityDrawParameters parameters{};
+    if (!rsf_ac7_velocity_draw_parameters(&current,viewports,&rect,usable ? 1u : 0u,model->previous.count,&parameters)) return;
     c->UpdateSubresource(renderer->parameters.Get(),0,nullptr,&parameters,0,0);
     ID3D11Buffer* cb=renderer->parameters.Get();c->GSSetConstantBuffers(13,1,&cb);c->PSSetConstantBuffers(13,1,&cb);
     ID3D11ShaderResourceView* previous=model->previous.view.Get();c->GSSetShaderResources(variant->history_slot,1,&previous);
@@ -525,13 +501,7 @@ extern "C" void rsf_ac7_velocity_geometry(const rsf_frame_tap_geometry* pointer)
     c->SetPredication(predicate.Get(),predicate_value);draw(c,g,renderer->indirect.buffer.Get());c->SetPredication(nullptr,FALSE);rsf_ac7_velocity_view_written(view_slot);
     previous=nullptr;c->GSSetShaderResources(variant->history_slot,1,&previous);c->OMSetRenderTargets(0,nullptr,nullptr);
     if (hull) c->DSSetShaderResources(127,1,&previous);
-    uint32_t records=count;
-    if (!existing && g.kind<4) {
-        const uint32_t instances=g.kind>=2 ? g.instances : 1u;
-        records=hull ? (g.count/variant->input_points)*3*instances :
-            g.topology==D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP ? (std::max(g.count,2u)-2)*3*instances : uint32_t(count64);
-    }
-    renderer->build(c,renderer->captured,model->now,records,0,g.kind>=5,predicate.Get(),predicate_value);
+    renderer->build(c,renderer->captured,model->now,plan.built,0,g.kind>=5,predicate.Get(),predicate_value);
 } catch (...) {}
 extern "C" int rsf_ac7_velocity_commit(void* context,const rsf_game_render_pass* pass) try
 {

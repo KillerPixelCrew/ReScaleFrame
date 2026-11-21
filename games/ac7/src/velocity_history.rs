@@ -16,9 +16,11 @@ const NO_FRAME: u32 = u32::MAX;
 const FIRST_EPOCH: u64 = 1;
 // An entry survives the frame end it was used in and the one after.
 const RETAINED_EPOCHS: u64 = 2;
-const MIN_CAPACITY: u32 = 1024;
-// Records are 64 bytes and the hash table keeps twice the records.
-const RECORD_LIMIT: u32 = u32::MAX / 128;
+// The smallest history, capture and zero-source buffer, in records. velocity_stream.rs shares it.
+pub(crate) const MIN_CAPACITY: u32 = 1024;
+// Records are 64 bytes and the hash table keeps twice the records. This also bounds one draw's
+// stream-output records in velocity_stream.rs.
+pub(crate) const RECORD_LIMIT: u32 = u32::MAX / 128;
 
 // View actions.
 const VIEW_UNAVAILABLE: u32 = 0;

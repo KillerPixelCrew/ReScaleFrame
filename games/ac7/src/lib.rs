@@ -10,8 +10,9 @@
 //! create calls, which render_scope.cpp keeps to lend its exception leaves (ac7_scope_owner.h).
 //! The translucent velocity pass's shader and layout observations and its variant admission are
 //! `velocity_pass_cache.rs`, and its model and view history identity, validity, commit state and
-//! epoch retirement are `velocity_history.rs`; velocity_pass.cpp keeps its D3D11 work and the
-//! resources at those history slots, and lends the variant builder.
+//! epoch retirement are `velocity_history.rs`, and its draw admission, record bounds, buffer
+//! sizing, indirect range and cbuffer packing are `velocity_stream.rs`; velocity_pass.cpp keeps
+//! its D3D11 work and the resources at those history slots, and lends the variant builder.
 //!
 //! The rest of the native renderer stays C++ (native_renderer.cpp and the render-scope library):
 //! the five exported renderer calls as wrappers, the renderer object and its fields, MinHook
@@ -52,6 +53,7 @@ mod velocity_history;
 mod velocity_pass_cache;
 mod velocity_pixel;
 mod velocity_stage;
+mod velocity_stream;
 mod velocity_tessellation;
 mod velocity_tokens;
 mod velocity_vertex;

@@ -85,4 +85,5 @@ and game runs are user-owned and not done.
 Capture and stream buffer sizing, indirect argument validation, record counts and packing,
 per-draw parameter packing (rect, jitter, opacity cutoff, history flag and mask), the commit's
 native depth, format and device checks and merge, CPU profiling, the device renderer lifecycle and
-every D3D11 call and HLSL source.
+every D3D11 call and HLSL source. [The stream policy port](rust-ac7-velocity-stream.md) later
+moved the sizing, indirect range, record counts, packing and parameter packing.

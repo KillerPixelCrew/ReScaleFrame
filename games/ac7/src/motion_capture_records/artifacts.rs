@@ -108,7 +108,7 @@ fn trim_fraction(text: &str) -> &str {
     }
 }
 
-fn write_float(out: &mut Bytes, value: f32) -> fmt::Result {
+pub(super) fn write_float(out: &mut Bytes, value: f32) -> fmt::Result {
     if !value.is_finite() {
         return out.write_str("null");
     }
@@ -278,8 +278,6 @@ struct Stats {
     engine_hooks: u32,
     renderer_root_hooks: u32,
     blob_dropped: u32,
-    colour_readbacks: u32,
-    colour_readback_failures: u32,
     capture_failures: u32,
 }
 
@@ -292,7 +290,7 @@ struct FinalArtifacts {
 
 const _: () = {
     assert!(size_of::<Artifact>() == 16 && size_of::<ArtifactList>() == 24);
-    assert!(size_of::<Stats>() == 32 && offset_of!(Stats, capture_failures) == 28);
+    assert!(size_of::<Stats>() == 24 && offset_of!(Stats, capture_failures) == 20);
     assert!(size_of::<FinalArtifacts>() == 40 && offset_of!(FinalArtifacts, stats) == 32);
 };
 
@@ -305,6 +303,7 @@ fn write_summary(
     files_written: bool,
 ) -> fmt::Result {
     let (readbacks, readback_failures) = observations.constant_readback_counts();
+    let (colour_readbacks, colour_readback_failures) = observations.colour_readback_counts();
     writeln!(
         out,
         concat!(
@@ -336,8 +335,8 @@ fn write_summary(
         observations.shaders_dropped,
         readbacks,
         readback_failures,
-        stats.colour_readbacks,
-        stats.colour_readback_failures,
+        colour_readbacks,
+        colour_readback_failures,
         stats.capture_failures,
         files_written,
     )
