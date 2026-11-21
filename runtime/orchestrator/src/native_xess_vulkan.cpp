@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-// XeSS Vulkan SR leaves. Rust (vulkan_sr/xess.rs) owns the SDK session, context
-// lifetime, admission, sizing, history, capture order and teardown. These
-// functions resolve typed SDK exports, call them and record Vulkan commands.
+// XeSS Vulkan SR leaves. Rust (vulkan_sr/xess.rs) owns SDK export lookup, the
+// SDK session, context lifetime, admission, sizing, history, capture order and
+// teardown. These functions bind typed SDK exports and record Vulkan commands.
 #include "native_xess_vulkan.h"
 #include "vulkan_sdk_native.h"
 #include <rescaleframe/native_xess_vulkan_requirements.h>
@@ -51,6 +51,7 @@ struct Library {
     decltype(&xessSetVelocityScale) velocity = nullptr;
     decltype(&xessGetVersion) version = nullptr;
 };
+using Entries = void*[10];
 struct Native {
     const Library* sdk = nullptr;
     xess_context_handle_t context = nullptr;
@@ -64,7 +65,7 @@ struct Native {
 };
 struct Ops {
     rsf_vk_sdk_loader loader;
-    int32_t (*resolve)(void*, Library**);
+    int32_t (*allocate_table)(Library**);
     uint32_t (*pin)(void*);
     void (*drop_table)(Library*);
     int32_t (*instance_requirements)(Library*, uint32_t*, const char* const**, uint32_t*);
@@ -92,10 +93,14 @@ struct Ops {
     void (*capture_parameters)(const rsf_srvk_frame*, uint32_t, uint32_t);
     void (*retire_commands)(Native*, void*);
     void (*flush_capture)(Native*);
+    void (*bind_entries)(Library*, const Entries*);
+    void* (*lookup)(void*, const char*);
 };
-static_assert(sizeof(Ops) == 30 * sizeof(void*) && sizeof(rsf_xessvk_setup) == 16 && sizeof(Init) == 16);
+static_assert(sizeof(Ops) == 32 * sizeof(void*) && sizeof(rsf_xessvk_setup) == 16 && sizeof(Init) == 16);
 static_assert(offsetof(Ops, barrier) == 19 * sizeof(void*) && offsetof(Ops, copy) == 20 * sizeof(void*) &&
     offsetof(Ops, execute) == 21 * sizeof(void*) && offsetof(Ops, sharpen) == 22 * sizeof(void*));
+static_assert(offsetof(Ops, bind_entries) == 30 * sizeof(void*) && offsetof(Ops, lookup) == 31 * sizeof(void*));
+static_assert(sizeof(Entries) == 10 * sizeof(void*));
 static_assert(sizeof(Texture) == 32);
 static_assert(sizeof(Execute) == 152 && offsetof(Execute, reset) == 148);
 // Values mirrored by the Rust owner.
@@ -112,25 +117,25 @@ static_assert(VK_IMAGE_LAYOUT_GENERAL == 1 && VK_IMAGE_USAGE_TRANSFER_SRC_BIT ==
     VK_IMAGE_USAGE_SAMPLED_BIT == 4 && VK_IMAGE_USAGE_STORAGE_BIT == 8);
 
 namespace {
-int32_t resolve(void* module, Library** out) noexcept try {
-    auto sdk = std::make_unique<Library>();
-#define RSF_XESS_LOAD(member, name) \
-    sdk->member = reinterpret_cast<decltype(sdk->member)>(GetProcAddress(static_cast<HMODULE>(module), #name)); \
-    if (!sdk->member) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT
-    RSF_XESS_LOAD(instance, xessVKGetRequiredInstanceExtensions);
-    RSF_XESS_LOAD(device, xessVKGetRequiredDeviceExtensions);
-    RSF_XESS_LOAD(features, xessVKGetRequiredDeviceFeatures);
-    RSF_XESS_LOAD(create, xessVKCreateContext);
-    RSF_XESS_LOAD(initialize, xessVKInit);
-    RSF_XESS_LOAD(execute, xessVKExecute);
-    RSF_XESS_LOAD(destroy, xessDestroyContext);
-    RSF_XESS_LOAD(resolution, xessGetOptimalInputResolution);
-    RSF_XESS_LOAD(velocity, xessSetVelocityScale);
-    RSF_XESS_LOAD(version, xessGetVersion);
-#undef RSF_XESS_LOAD
-    *out = sdk.release();
+int32_t allocate_table(Library** out) noexcept try {
+    *out = new Library{};
     return RSF_BACKEND_OK;
 } catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
+
+void bind_entries(Library* sdk, const Entries* entries) noexcept {
+    const auto& [instance, device, features, create, initialize, execute, destroy, resolution, velocity, version] =
+        *entries;
+    sdk->instance = reinterpret_cast<decltype(sdk->instance)>(instance);
+    sdk->device = reinterpret_cast<decltype(sdk->device)>(device);
+    sdk->features = reinterpret_cast<decltype(sdk->features)>(features);
+    sdk->create = reinterpret_cast<decltype(sdk->create)>(create);
+    sdk->initialize = reinterpret_cast<decltype(sdk->initialize)>(initialize);
+    sdk->execute = reinterpret_cast<decltype(sdk->execute)>(execute);
+    sdk->destroy = reinterpret_cast<decltype(sdk->destroy)>(destroy);
+    sdk->resolution = reinterpret_cast<decltype(sdk->resolution)>(resolution);
+    sdk->velocity = reinterpret_cast<decltype(sdk->velocity)>(velocity);
+    sdk->version = reinterpret_cast<decltype(sdk->version)>(version);
+}
 
 int32_t instance_requirements(Library* sdk, uint32_t* count, const char* const** names, uint32_t* minimum) noexcept {
     return sdk->instance(count, names, minimum);
@@ -270,7 +275,7 @@ void retire_commands(Native* native, void* commands) noexcept {
 }
 
 extern const Ops native_ops{
-    rsf_vk_sdk_system_loader, resolve, rsf_core_vk_sdk_pin, [](Library* sdk) noexcept { delete sdk; },
+    rsf_vk_sdk_system_loader, allocate_table, rsf_core_vk_sdk_pin, [](Library* sdk) noexcept { delete sdk; },
     instance_requirements, device_extensions, device_features, version,
     open, [](Native* native) noexcept { delete native; }, create_context, initialize, resolution, destroy_context,
     bind_device, [](Native* native) -> void* { return &native->gpu; }, &rsf::vkfg::platform,
@@ -279,6 +284,7 @@ extern const Ops native_ops{
     [](Native* native, uint64_t provider, uint32_t backend) noexcept { native->capture.set_provider(provider, backend); },
     capture_record, capture_parameters, retire_commands,
     [](Native* native) noexcept { (void)native->capture.flush(); },
+    bind_entries, nullptr,
 };
 }
 #endif

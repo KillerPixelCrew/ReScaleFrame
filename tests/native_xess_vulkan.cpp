@@ -47,9 +47,29 @@ xess_result_t destroy(xess_context_handle_t context) {
     CHECK(context == reinterpret_cast<xess_context_handle_t>(0x40)); ++destroyed_contexts; return XESS_RESULT_SUCCESS;
 }
 xess_result_t version(xess_version_t* value) { *value = {2, 1, 3, 4}; return XESS_RESULT_SUCCESS; }
-rsf::xess_vk::Library sdk;
-int32_t resolve(void*, rsf::xess_vk::Library** out) { *out = &sdk; return RSF_BACKEND_OK; }
-void drop_table(rsf::xess_vk::Library*) {}
+xess_result_t instance_extensions(uint32_t*, const char* const**, uint32_t*) { return XESS_RESULT_SUCCESS; }
+xess_result_t device_extensions(VkInstance, VkPhysicalDevice, uint32_t*, const char* const**) { return XESS_RESULT_SUCCESS; }
+xess_result_t device_features(VkInstance, VkPhysicalDevice, void**) { return XESS_RESULT_SUCCESS; }
+unsigned sdk_lookups{}, sdk_pins{};
+bool omit_create = true;
+void* sdk_lookup(void* module, const char* name) {
+    const struct { const char* name; void* address; } exports[] = {
+        {"xessVKGetRequiredInstanceExtensions", reinterpret_cast<void*>(instance_extensions)},
+        {"xessVKGetRequiredDeviceExtensions", reinterpret_cast<void*>(device_extensions)},
+        {"xessVKGetRequiredDeviceFeatures", reinterpret_cast<void*>(device_features)},
+        {"xessVKCreateContext", reinterpret_cast<void*>(create)},
+        {"xessVKInit", reinterpret_cast<void*>(initialize)},
+        {"xessVKExecute", reinterpret_cast<void*>(execute)},
+        {"xessDestroyContext", reinterpret_cast<void*>(destroy)},
+        {"xessGetOptimalInputResolution", reinterpret_cast<void*>(resolution)},
+        {"xessSetVelocityScale", reinterpret_cast<void*>(velocity)},
+        {"xessGetVersion", reinterpret_cast<void*>(version)},
+    };
+    CHECK(module == &sdk_lookups && sdk_lookups < sizeof(exports) / sizeof(exports[0]));
+    const auto& expected = exports[sdk_lookups++];
+    CHECK(std::strcmp(name, expected.name) == 0);
+    return omit_create && sdk_lookups == 4 ? nullptr : expected.address;
+}
 VKAPI_ATTR VkResult VKAPI_CALL create_image(VkDevice, const VkImageCreateInfo* info, const VkAllocationCallbacks*, VkImage* out) {
     CHECK((info->extent.width == 1280 && info->extent.height == 720 && info->usage == 6) ||
         (info->extent.width == 1920 && info->extent.height == 1080 && info->usage == 15));
@@ -91,15 +111,17 @@ rsf_vk_function instance_proc(void*, const char* name) {
 }
 }
 int main() {
-    sdk.create = create; sdk.initialize = initialize; sdk.resolution = resolution; sdk.velocity = velocity;
-    sdk.execute = execute; sdk.destroy = destroy; sdk.version = version;
     auto ops = rsf::xess_vk::native_ops;
-    ops.loader = {[](const uint16_t*) -> void* { return &sdk; }, [](void*) {}};
-    ops.resolve = resolve;
-    ops.pin = [](void*) -> uint32_t { return 1; };
-    ops.drop_table = drop_table;
+    ops.loader = {[](const uint16_t*) -> void* { return &sdk_lookups; }, [](void*) {}};
+    ops.lookup = sdk_lookup;
+    ops.pin = [](void*) -> uint32_t { ++sdk_pins; return 1; };
     const rsf_xessvk_setup session{sizeof(session), RSF_XESSVK_REQUIREMENTS_ABI_VERSION, "C:\\fake"};
+    CHECK(rsf_core_xessvk_initialize(&ops, &session) == RSF_BACKEND_ERROR_MISSING_ENTRY_POINT);
+    CHECK(sdk_lookups == 4 && sdk_pins == 0);
+    omit_create = false;
+    sdk_lookups = 0;
     CHECK(rsf_core_xessvk_initialize(&ops, &session) == RSF_BACKEND_OK);
+    CHECK(sdk_lookups == 10 && sdk_pins == 1);
     void* const device = reinterpret_cast<void*>(1);
     rsf_srvk_setup setup{sizeof(setup), RSF_SRVK_ABI_VERSION, device, device, device, instance_proc, device_proc,
         RSF_SR_XESS, 1, 1920, 1080, 0, 0, 0, "C:\\fake"};

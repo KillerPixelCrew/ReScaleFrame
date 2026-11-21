@@ -106,3 +106,46 @@ locked offline Cargo metadata and Git whitespace checks passed. Enabled and
 disabled compilation and linking, binary export checks, Clippy, fixture
 execution, GPU execution and capture, and game acceptance remain unverified
 for this change. The producer and shader coverage limits above still apply.
+
+## Required SDK exports in the Rust owner
+
+The transfer port at `af5e2b51` left the required export list in
+`native_xess_vulkan.cpp`. The initialization owner in `vulkan_sr/xess.rs` now
+checks that list through the existing `SdkModule::symbol` lookup on its
+`libxess.dll` handle. The native leaf still allocates the capsule before the
+first lookup and returns `INIT_FAILED` if that allocation fails. It uses XeSS
+header types to bind the complete address array after Rust accepts it.
+
+Source comparison matched all ten lookups, in order, against the original
+`RSF_XESS_LOAD` calls and their corresponding capsule members.
+
+1. `xessVKGetRequiredInstanceExtensions`
+2. `xessVKGetRequiredDeviceExtensions`
+3. `xessVKGetRequiredDeviceFeatures`
+4. `xessVKCreateContext`
+5. `xessVKInit`
+6. `xessVKExecute`
+7. `xessDestroyContext`
+8. `xessGetOptimalInputResolution`
+9. `xessSetVelocityScale`
+10. `xessGetVersion`
+
+The first absent export yields `MISSING_ENTRY_POINT` and drops the capsule
+before releasing the module reference. A complete table reaches the existing
+module pin, whose refusal yields `LOAD_FAILED` through the same cleanup. Only
+a successful pin publishes the session. The session lock and context-held
+references still govern requirements, live-context shutdown refusal and final
+cleanup. The private `Ops` table grows from 240 to 256 bytes on x64 for its
+typed binder and fixture lookup override. Both declarations assert the address
+array size and the binder, lookup and rendering leaf offsets.
+
+The source comparison also checked the public requirement ABI 1 and SRVK ABI 2
+paths, including setup validation and `NOT_COMPILED` with the disabled XeSS
+table. The context flags, SDK calls, frame and image handling, transfer
+recording and SDK package pin match the transfer port. The existing native
+range fixture now drives the typed binder with inert exports and checks
+refusal at the fourth symbol before pinning, then retries all ten in order.
+The Rust owner fixture supplies its existing fake handles through the private
+lookup slot. Rust 1.94.1 formatting, locked offline Windows Cargo metadata and
+Git whitespace checks passed. Compile and link, Clippy, fixtures, device and
+game verification remain pending for this port.
