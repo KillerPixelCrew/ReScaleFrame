@@ -109,6 +109,10 @@ generate("games/ac7/src/ui_abi.rs", "games/ac7/include/rescaleframe/ac7_ui_rules
          "rsf_ac7_(draw_(class|facts|input)|layout_(kind|element)|texture_facts|ui_registry)",
          "RSF_AC7_(BLEND|FORMAT|UI|DRAW|LAYOUT)_.*", [],
          ["--raw-line", "#![allow(dead_code)]"])
+generate("games/ac7/src/scene_color_abi.rs", "games/ac7/include/rescaleframe/ac7_scene_color.h",
+         "rsf_(ac7_scene_color|frame_tap_(input|target_draw|geometry))", "RSF_FRAME_TAP_MAX_INPUTS",
+         ["-Iruntime/graphics/include"],
+         ["--no-recursive-allowlist", "--with-derive-default", "--raw-line", "#![allow(dead_code)]"])
 generate("games/minecraft/native/platform_abi.rs", "games/minecraft/native/minecraft_platform.h",
          "rsf_(minecraft_(platform|configuration|message_fn)|gl_pipeline(_(setup|options|surfaces|status))?|"
          "native_fg_(options|status)|fg_status|sharpening_options|native_(latency_status|cpu_counters)|"

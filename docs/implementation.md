@@ -265,6 +265,13 @@ classifier still only reads the frame tap's facts and leaves diversion
 to the Runtime. Fixture and gameplay verification remain open.
 [UI extraction evidence](research/ac7-ui-extraction.md)
 
+AC7's capture-derived scene colour selector and layer leases are
+Rust-owned. Resource retain and release use the existing native calls.
+The selector keeps the single-recombine and byte-colour boundary rules,
+uses overflow-safe aspect checks and refuses short or truncated draws.
+Builds, frame-tap fixtures and replay remain open.
+[Scene colour evidence](research/ac7-composed-scene-color.md)
+
 ## Rust orchestrator and first Anomaly port
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.

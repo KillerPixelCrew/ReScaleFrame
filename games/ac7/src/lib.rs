@@ -23,6 +23,8 @@ mod patches;
 mod platform_abi;
 mod render_scope;
 mod renderer;
+mod scene_color;
+mod scene_color_abi;
 mod scope_abi;
 mod sites;
 mod sites_abi;

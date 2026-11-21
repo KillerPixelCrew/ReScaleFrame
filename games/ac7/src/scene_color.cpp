@@ -4,156 +4,39 @@
 
 #include <dxgiformat.h>
 
-// The layers the recombine reads. The depth of field layers are half size; separate translucency is
-// whatever size it is told to render at, which is the presented size when it stays out of the
-// reconstruction, so anything from half to four times the scene's size with its aspect counts.
-// Native translucency exceeds twice the scene at Ultra Performance; the scale patch caps at four.
-// The pool rounds rows up to a multiple of four, hence the tolerance on the aspect.
-static bool layer_size_fits(uint32_t width, uint32_t height, uint32_t scene_width,
-                            uint32_t scene_height)
-{
-    if (width == 0 || height == 0 || scene_width == 0 || scene_height == 0) {
-        return false;
-    }
-    if (width < (scene_width + 1) / 2 || uint64_t(width) > uint64_t(scene_width) * 4 ||
-        height < (scene_height + 1) / 2 || uint64_t(height) > uint64_t(scene_height) * 4 + 4) {
-        return false;
-    }
-    const uint64_t cross_a = uint64_t(width) * scene_height;
-    const uint64_t cross_b = uint64_t(height) * scene_width;
-    const uint64_t difference = cross_a > cross_b ? cross_a - cross_b : cross_b - cross_a;
-    return difference * 50u <= cross_b;
-}
+static_assert(DXGI_FORMAT_R16G16B16A16_FLOAT == 10 && DXGI_FORMAT_R11G11B10_FLOAT == 26);
+static_assert(DXGI_FORMAT_R8G8B8A8_UNORM == 28 && DXGI_FORMAT_R8G8B8A8_UNORM_SRGB == 29);
 
-static void release_layers(rsf_ac7_scene_color* state)
-{
-    for (uint32_t i = 0; i < state->composed_layer_count; ++i) {
-        rsf_resource_release(state->composed_layers[i]);
-        state->composed_layers[i] = nullptr;
-    }
-    state->composed_layer_count = 0;
-}
+struct rsf_ac7_scene_resource_calls {
+    void (*retain)(void*);
+    void (*release)(void*);
+};
+static_assert(sizeof(rsf_ac7_scene_resource_calls) == 16);
+static constexpr rsf_ac7_scene_resource_calls calls{rsf_resource_retain, rsf_resource_release};
 
-extern "C" void rsf_ac7_scene_color_clear(rsf_ac7_scene_color* state)
-{
-    rsf_resource_release(state->source);
-    rsf_resource_release(state->composed);
-    release_layers(state);
-    *state = rsf_ac7_scene_color{};
-}
+extern "C" {
+void rsf_core_ac7_scene_color_clear(rsf_ac7_scene_color*, const rsf_ac7_scene_resource_calls*);
+int rsf_core_ac7_scene_color_source(rsf_ac7_scene_color*, void*, void*, uint32_t, uint32_t,
+    const rsf_ac7_scene_resource_calls*);
+void rsf_core_ac7_scene_color_draw(rsf_ac7_scene_color*, const rsf_frame_tap_target_draw*,
+    const rsf_ac7_scene_resource_calls*);
+void rsf_core_ac7_scene_color_end_frame(rsf_ac7_scene_color*, const rsf_ac7_scene_resource_calls*);
 
-extern "C" int rsf_ac7_scene_color_source(rsf_ac7_scene_color* state, void* source, void* context,
-                                          uint32_t width, uint32_t height)
+void rsf_ac7_scene_color_clear(rsf_ac7_scene_color* state)
 {
-    if (state->source == source && state->context == context && state->width == width &&
-        state->height == height) {
-        return 0;
-    }
-    // Retain first: source may still be the same allocation when only the context changed.
-    rsf_resource_retain(source);
-    rsf_ac7_scene_color_clear(state);
-    state->source = source;
-    state->context = context;
-    state->width = width;
-    state->height = height;
-    return 1;
+    rsf_core_ac7_scene_color_clear(state, &calls);
 }
-
-extern "C" void rsf_ac7_scene_color_draw(rsf_ac7_scene_color* state,
-                                         const rsf_frame_tap_target_draw* draw)
+int rsf_ac7_scene_color_source(rsf_ac7_scene_color* state, void* source, void* context,
+    uint32_t width, uint32_t height)
 {
-    // A single hop from the identified input, never a walk through successive post-process outputs.
-    // The captured AC7 tonemap writes byte-format colour; only its earlier linear recombine shape
-    // qualifies here. See docs/research/ac7-composed-scene-color.md for limits of this inference.
-    if (!state->source || state->composed_this_frame || state->search_closed ||
-        draw->context != state->context ||
-        !draw->render_target || draw->render_target == state->source || draw->depth_bound ||
-        draw->target_count != 1 || draw->target_samples != 1 || draw->inputs_truncated ||
-        draw->element_count != 3 ||
-        draw->target_width != state->width || draw->target_height != state->height ||
-        draw->viewport_width != state->width || draw->viewport_height != state->height ||
-        draw->viewport_x != 0.0f || draw->viewport_y != 0.0f) {
-        return;
-    }
-    bool reads_source = false;
-    bool reads_layer = false;
-    void* candidates[8] = {};
-    uint32_t candidate_count = 0;
-    for (uint32_t i = 0; i < draw->input_count; ++i) {
-        const rsf_frame_tap_input& input = draw->inputs[i];
-        if (input.texture == state->source && input.format == DXGI_FORMAT_R11G11B10_FLOAT &&
-            input.width == state->width && input.height == state->height) {
-            reads_source = true;
-        }
-        if (input.texture && input.texture != state->source &&
-            input.format == DXGI_FORMAT_R16G16B16A16_FLOAT &&
-            layer_size_fits(input.width, input.height, state->width, state->height)) {
-            reads_layer = true;
-            bool already = false;
-            for (uint32_t seen = 0; seen < candidate_count; ++seen) {
-                already = already || candidates[seen] == input.texture;
-            }
-            if (!already && candidate_count < 8) {
-                candidates[candidate_count++] = input.texture;
-            }
-        }
-    }
-    // The captured tonemap/composite boundary is byte-format colour. Close discovery when a
-    // full-size consumer reaches it, so a later float target cannot reopen the scene chain.
-    if (reads_source && (draw->target_format == DXGI_FORMAT_B8G8R8A8_UNORM ||
-                         draw->target_format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB ||
-                         draw->target_format == DXGI_FORMAT_R8G8B8A8_UNORM ||
-                         draw->target_format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB)) {
-        state->search_closed = 1;
-        return;
-    }
-    if (!reads_source || !reads_layer || draw->target_format != DXGI_FORMAT_R11G11B10_FLOAT) {
-        return;
-    }
-    if (state->composed != draw->render_target) {
-        rsf_resource_retain(draw->render_target);
-        rsf_resource_release(state->composed);
-        state->composed = draw->render_target;
-    }
-    release_layers(state);
-    state->composed_layer_count = candidate_count;
-    for (uint32_t i = 0; i < candidate_count; ++i) {
-        rsf_resource_retain(candidates[i]);
-        state->composed_layers[i] = candidates[i];
-    }
-    state->composed_this_frame = 1;
+    return rsf_core_ac7_scene_color_source(state, source, context, width, height, &calls);
 }
-
-extern "C" void* rsf_ac7_scene_color_selected(const rsf_ac7_scene_color* state, void* source)
+void rsf_ac7_scene_color_draw(rsf_ac7_scene_color* state, const rsf_frame_tap_target_draw* draw)
 {
-    return state->source == source && state->composed_this_frame ? state->composed : source;
+    rsf_core_ac7_scene_color_draw(state, draw, &calls);
 }
-
-extern "C" void rsf_ac7_scene_color_end_frame(rsf_ac7_scene_color* state)
+void rsf_ac7_scene_color_end_frame(rsf_ac7_scene_color* state)
 {
-    release_layers(state);
-    state->composed_this_frame = 0;
-    state->search_closed = 0;
+    rsf_core_ac7_scene_color_end_frame(state, &calls);
 }
-
-extern "C" int rsf_ac7_scene_depth_candidate(const rsf_frame_tap_geometry* draw)
-{
-    // Briefing capture 1486-2015: one full-size RGBA16F target, geometry with read-only scene
-    // depth. Identity is confirmed later by the recombine reading this exact target.
-    return draw && draw->target && draw->depth_view && draw->samples == 1 &&
-           draw->format == DXGI_FORMAT_R16G16B16A16_FLOAT;
-}
-
-extern "C" int rsf_ac7_separate_translucency_draw(const rsf_frame_tap_target_draw* draw)
-{
-    // Apply before rasterization, including the first draw into a newly allocated layer.
-    // This remains the captured pass shape, not a material/shader identity claim.
-    return draw && draw->render_target && draw->depth_bound && draw->target_count == 1 &&
-           draw->target_samples == 1 && draw->target_format == DXGI_FORMAT_R16G16B16A16_FLOAT;
-}
-
-extern "C" float rsf_ac7_translucency_scale(uint32_t render_percent, uint32_t target_percent)
-{
-    return target_percent == 0 ? 1.0f :
-        float(target_percent) / float(render_percent == 0 ? 100 : render_percent);
 }
