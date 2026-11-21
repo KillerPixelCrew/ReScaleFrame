@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 // GameSDK export and native leaves of the Rust Fallout 4 owner (lib.rs). Rust owns the exact
-// build identity, the lifecycle and its Runtime session, DPI startup and the cold creation
-// sequence. This file supplies MinHook, exception guards, the shared file hash, the shared Steam
-// chain facade and the C++ render and CPU subsystems.
+// build identity, the lifecycle and its Runtime session, DPI startup, the cold creation
+// sequence and the CPU event owner. This file supplies MinHook, exception guards, the shared file
+// hash, the shared Steam chain facade and the C++ render subsystem; cpu_events.cpp supplies the
+// CPU leaves.
 #include "fallout4_platform.h"
 #include "native_creation.h"
 #include "cpu_events.h"
@@ -29,15 +30,10 @@ bool subsystem(uint32_t operation, const rsf_game_host_services* services, bool*
         switch (operation) {
         case RSF_FALLOUT4_VERIFY_RENDER: *value = verify_render_hooks() && verify_render_inputs(); break;
         case RSF_FALLOUT4_PREPARE_RENDER: *value = services && prepare_render_hooks(*services); break;
-        case RSF_FALLOUT4_PREPARE_CPU: *value = services && prepare_cpu_events(*services); break;
         case RSF_FALLOUT4_START_RENDER: *value = start_render_hooks(); break;
-        case RSF_FALLOUT4_START_CPU: *value = start_cpu_events(); break;
         case RSF_FALLOUT4_QUIESCE_RENDER: quiesce_render_hooks(); *value = true; break;
-        case RSF_FALLOUT4_QUIESCE_CPU: quiesce_cpu_events(); *value = true; break;
         case RSF_FALLOUT4_STOP_RENDER: *value = stop_render_hooks(); break;
-        case RSF_FALLOUT4_STOP_CPU: *value = stop_cpu_events(); break;
         case RSF_FALLOUT4_RENDER_BUSY: *value = render_hooks_busy(); break;
-        case RSF_FALLOUT4_CPU_BUSY: *value = cpu_events_busy(); break;
         default: *value = false; break;
         }
     });
@@ -90,5 +86,7 @@ constexpr rsf_fallout4_platform platform{
 };
 }
 extern "C" __declspec(dllexport) rsf_result rsf_get_game_plugin_api(uint32_t requested_abi, rsf_game_plugin_api* api) noexcept {
+    // The CPU leaves are constant and complete; prepare refuses CPU hooks if they are unbound.
+    (void)rsf_fallout4_cpu_publish(rsf::fallout4::cpu_event_platform());
     return rsf_fallout4_publish_api(requested_abi, api, &platform);
 }

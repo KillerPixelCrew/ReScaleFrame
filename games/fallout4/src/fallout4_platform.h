@@ -38,18 +38,15 @@ typedef struct rsf_fallout4_create_call {
     void** immediate_context;
 } rsf_fallout4_create_call;
 
-// Native render and CPU subsystems that remain C++ (render_hooks, render_inputs, cpu_events).
+// Native render subsystem that remains C++ (render_hooks, render_inputs). The CPU event owner is
+// Rust (cpu_events.rs) with its own leaves in cpu_events_platform.h; values 2, 4, 6, 8 and 10
+// were its retired operations.
 #define RSF_FALLOUT4_VERIFY_RENDER 0u  /* verify_render_hooks() && verify_render_inputs() */
 #define RSF_FALLOUT4_PREPARE_RENDER 1u /* prepare_render_hooks(services) */
-#define RSF_FALLOUT4_PREPARE_CPU 2u    /* prepare_cpu_events(services) */
 #define RSF_FALLOUT4_START_RENDER 3u
-#define RSF_FALLOUT4_START_CPU 4u
 #define RSF_FALLOUT4_QUIESCE_RENDER 5u /* value is always true */
-#define RSF_FALLOUT4_QUIESCE_CPU 6u    /* value is always true */
 #define RSF_FALLOUT4_STOP_RENDER 7u
-#define RSF_FALLOUT4_STOP_CPU 8u
 #define RSF_FALLOUT4_RENDER_BUSY 9u
-#define RSF_FALLOUT4_CPU_BUSY 10u
 
 // Leaves the Rust owner cannot express without C++, MinHook or a typed native call. A guarded
 // leaf returns false only when its native call threw; its result goes to the out parameter.

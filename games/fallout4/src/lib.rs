@@ -1,14 +1,18 @@
 // SPDX-License-Identifier: MIT
 //! Fallout 4 AE 1.11.240 adapter policy: the exact recognized build, the GameSDK table, the plugin
-//! lifecycle with its process-lived Runtime session, DPI startup and the cold native D3D11
-//! creation and presentation binding sequence.
+//! lifecycle with its process-lived Runtime session, DPI startup, the cold native D3D11
+//! creation and presentation binding sequence, and the CPU event owner (poll and worker source
+//! handoff, input receipts and their GameSDK facts).
 //!
 //! Native leaves stay in C++ and reach this crate through rsf_fallout4_platform
-//! (fallout4_platform.h): MinHook, the typed creation call and its return address, exception
-//! guards, the shared file hash, the Steam chain facade and the render and CPU subsystems.
+//! (fallout4_platform.h) and rsf_fallout4_cpu_platform (cpu_events_platform.h): MinHook, the
+//! typed detour shells with their return addresses and trampoline calls, exception guards, the
+//! shared file hash, the Steam chain facade and the render subsystem.
 //! The Runtime decides vendors, presentation and pacing; this crate reports native facts only.
 #![cfg(windows)]
 
+mod cpu_abi;
+mod cpu_events;
 mod creation;
 mod dpi;
 mod platform_abi;
@@ -232,6 +236,10 @@ impl Ops {
 /// # Safety
 /// Implementors must accept any byte contents.
 pub(crate) unsafe trait Plain: Copy {}
+unsafe impl Plain for u8 {}
+unsafe impl Plain for i32 {}
+unsafe impl Plain for u32 {}
+unsafe impl Plain for u64 {}
 unsafe impl Plain for usize {}
 unsafe impl<const N: usize> Plain for [u8; N] {}
 
