@@ -4,6 +4,12 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now owns the D3D11 observer's on-disk module image and PE64 byte
+lookup. Truncated section tables and virtual section tails are refused.
+Only successfully parsed files are cached. Native hook setup uses
+the Windows module extent and the same route and trampoline code.
+The public observer ABI is unchanged.
+
 The D3D12 and standalone Vulkan FSR4 paths now share one Rust INT8
 compatibility owner. The device lease, exact SDK fingerprints and
 entry-byte checks retain their existing scope. The standalone bridge

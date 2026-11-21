@@ -6,6 +6,7 @@
 #include <rescaleframe/texture_dump.h>
 
 #include <windows.h>
+#include <psapi.h>
 
 #include <d3d11.h>
 #include <dxgi1_2.h>
@@ -19,11 +20,12 @@
 #include <cstring>
 #include <cwchar>
 #include <mutex>
-#include <vector>
+#include <memory>
 
 #include "d3d11_observer_callbacks.h"
 #include "d3d11_observer_capture.h"
 #include "d3d11_observer_hooks.h"
+#include "d3d11_observer_module.h"
 #include "d3d11_observer_present.h"
 
 namespace {
@@ -339,17 +341,16 @@ HRESULT STDMETHODCALLTYPE hooked_present1(IDXGISwapChain1* swapchain, UINT inter
 // `dxgi.dll`, so the slot's unrelocated value can be read from the file at the same RVA and
 // relocated to the loaded base. `current` is what the slot held before this module patched it;
 // it is returned as-is when it already lies inside the owning module.
-// A module's file, read whole, with the module's loaded base and image size beside it.
+// The loaded module is queried by Windows. The on-disk bytes and section table belong to Rust.
+using DiskImage = std::unique_ptr<rsf_observer11_module_file, decltype(&rsf_core_observer11_module_close)>;
 struct ModuleImage {
     HMODULE module = nullptr;
     const unsigned char* base = nullptr;
     size_t image_size = 0;
-    uint64_t preferred_base = 0;
     wchar_t path[MAX_PATH] = L"?";
-    std::vector<unsigned char> bytes;
+    DiskImage file{nullptr, rsf_core_observer11_module_close};
 };
 
-// The loaded module around an address and its extent. Reads nothing from disk.
 bool locate_module(const void* inside, ModuleImage& out, char* message, size_t size)
 {
     HMODULE module = nullptr;
@@ -360,84 +361,55 @@ bool locate_module(const void* inside, ModuleImage& out, char* message, size_t s
         return false;
     }
     if (out.module != module) {
+        MODULEINFO info{};
+        if (!GetModuleInformation(GetCurrentProcess(), module, &info, sizeof(info)) ||
+            !info.lpBaseOfDll || !info.SizeOfImage) {
+            std::snprintf(message, size, "%p has no usable module extent", inside);
+            return false;
+        }
         out = ModuleImage{};
         out.module = module;
+        out.base = static_cast<const unsigned char*>(info.lpBaseOfDll);
+        out.image_size = info.SizeOfImage;
     }
-    out.base = reinterpret_cast<const unsigned char*>(out.module);
-    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(out.base);
-    const auto* headers = reinterpret_cast<const IMAGE_NT_HEADERS64*>(out.base + dos->e_lfanew);
-    out.image_size = headers->OptionalHeader.SizeOfImage;
     return true;
 }
 
-// The module's file, read whole, once per `out`: a second call for the same module reuses it.
+// Only a parsed file is cached. A later lookup retries an earlier refusal.
 bool read_module_image(const void* inside, ModuleImage& out, char* message, size_t size)
 {
-    if (!locate_module(inside, out, message, size)) {
-        return false;
-    }
-    if (!out.bytes.empty()) {
-        return true;
-    }
-    if (!GetModuleFileNameW(out.module, out.path, MAX_PATH)) {
+    if (!locate_module(inside, out, message, size)) return false;
+    if (out.file) return true;
+    const auto length = GetModuleFileNameW(out.module, out.path, MAX_PATH);
+    if (!length || length >= MAX_PATH) {
         std::snprintf(message, size, "the module's path could not be read");
         return false;
     }
-    HANDLE file = CreateFileW(out.path, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0,
-                              nullptr);
-    if (file == INVALID_HANDLE_VALUE) {
+    rsf_observer11_module_file* file = nullptr;
+    switch (rsf_core_observer11_module_open(out.path, length, &file)) {
+    case RSF_OBSERVER11_MODULE_OK:
+        out.file.reset(file);
+        return true;
+    case RSF_OBSERVER11_MODULE_OPEN_FAILED:
         std::snprintf(message, size, "%ls could not be opened", out.path);
         return false;
-    }
-    LARGE_INTEGER length{};
-    if (GetFileSizeEx(file, &length) && length.QuadPart > 0 && length.QuadPart < (1 << 28)) {
-        out.bytes.resize(static_cast<size_t>(length.QuadPart));
-        DWORD read = 0;
-        if (!ReadFile(file, out.bytes.data(), static_cast<DWORD>(out.bytes.size()), &read,
-                      nullptr) ||
-            read != out.bytes.size()) {
-            out.bytes.clear();
-        }
-    }
-    CloseHandle(file);
-    if (out.bytes.size() < sizeof(IMAGE_DOS_HEADER)) {
+    case RSF_OBSERVER11_MODULE_INVALID_HEADERS:
+        std::snprintf(message, size, "%ls has no usable headers", out.path);
+        return false;
+    default:
         std::snprintf(message, size, "%ls could not be read", out.path);
         return false;
     }
-    const auto* file_dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(out.bytes.data());
-    if (static_cast<size_t>(file_dos->e_lfanew) + sizeof(IMAGE_NT_HEADERS64) > out.bytes.size()) {
-        std::snprintf(message, size, "%ls has no usable headers", out.path);
-        return false;
-    }
-    const auto* file_headers =
-        reinterpret_cast<const IMAGE_NT_HEADERS64*>(out.bytes.data() + file_dos->e_lfanew);
-    out.preferred_base = file_headers->OptionalHeader.ImageBase;
-    return true;
 }
 
-// The file's bytes for `count` bytes at a loaded address, or null when no section covers them.
 const unsigned char* disk_bytes(const ModuleImage& image, const void* address, size_t count)
 {
-    const auto* file_dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(image.bytes.data());
-    const auto* file_headers =
-        reinterpret_cast<const IMAGE_NT_HEADERS64*>(image.bytes.data() + file_dos->e_lfanew);
-    const IMAGE_SECTION_HEADER* section = IMAGE_FIRST_SECTION(file_headers);
-    const uintptr_t rva = static_cast<const unsigned char*>(address) - image.base;
-    for (WORD index = 0; index < file_headers->FileHeader.NumberOfSections; ++index, ++section) {
-        const uintptr_t start = section->VirtualAddress;
-        const uintptr_t extent = section->Misc.VirtualSize > section->SizeOfRawData
-                                     ? section->Misc.VirtualSize
-                                     : section->SizeOfRawData;
-        if (rva < start || rva + count > start + extent) {
-            continue;
-        }
-        const size_t offset = rva - start + section->PointerToRawData;
-        if (offset + count > image.bytes.size()) {
-            return nullptr;
-        }
-        return image.bytes.data() + offset;
-    }
-    return nullptr;
+    const auto loaded = reinterpret_cast<uintptr_t>(address);
+    const auto base = reinterpret_cast<uintptr_t>(image.base);
+    if (!image.file || loaded < base) return nullptr;
+    const auto rva = loaded - base;
+    if (rva >= image.image_size || count > image.image_size - rva) return nullptr;
+    return rsf_core_observer11_module_span(image.file.get(), rva, count);
 }
 
 void* genuine_slot(ModuleImage& image, void** vtable, size_t slot, void* current, char* message, size_t size)
@@ -446,8 +418,9 @@ void* genuine_slot(ModuleImage& image, void** vtable, size_t slot, void* current
     if (!locate_module(vtable, image, message, size)) {
         return nullptr;
     }
-    const auto* candidate = static_cast<const unsigned char*>(current);
-    if (candidate >= image.base && candidate < image.base + image.image_size) {
+    const auto candidate = reinterpret_cast<uintptr_t>(current);
+    const auto base = reinterpret_cast<uintptr_t>(image.base);
+    if (candidate >= base && candidate - base < image.image_size) {
         return current;
     }
     if (!read_module_image(vtable, image, message, size)) {
@@ -460,13 +433,13 @@ void* genuine_slot(ModuleImage& image, void** vtable, size_t slot, void* current
     }
     uint64_t unrelocated = 0;
     std::memcpy(&unrelocated, stored, sizeof(unrelocated));
-    if (unrelocated < image.preferred_base ||
-        unrelocated - image.preferred_base >= image.image_size) {
+    const auto preferred_base = rsf_core_observer11_module_preferred_base(image.file.get());
+    if (unrelocated < preferred_base || unrelocated - preferred_base >= image.image_size) {
         std::snprintf(message, size, "%ls holds 0x%llx in that slot, which is not inside it",
                       image.path, static_cast<unsigned long long>(unrelocated));
         return nullptr;
     }
-    return const_cast<unsigned char*>(image.base + (unrelocated - image.preferred_base));
+    return const_cast<unsigned char*>(image.base + (unrelocated - preferred_base));
 }
 
 // The target and length of a jump another hook wrote at a function's entry. `bytes` are the
