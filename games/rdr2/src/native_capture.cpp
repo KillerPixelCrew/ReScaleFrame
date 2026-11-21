@@ -137,7 +137,6 @@ rsf_rdr2_capture_progress capture_progress() noexcept
     return status;
 }
 bool read_local(uint64_t address, void* out, size_t bytes);
-std::mutex bind_mutex;
 void log(const char* format, ...) noexcept
 {
     FILE* f = _wfopen(g->log, L"ab");
@@ -156,15 +155,28 @@ uint32_t crc(const D3D12_SHADER_BYTECODE& code) noexcept
     }
     return ~value;
 }
-template<class F> void bind(void* object, size_t slot, void* replacement, F& original)
+static_assert(MH_OK == 0 && MH_ERROR_ENABLED == 5 && MH_UNKNOWN == -1);
+constexpr rsf_rdr2_capture_hook_ops hook_ops{
+    [](void* object, uint32_t slot) noexcept { return (*static_cast<void***>(object))[slot]; },
+    [](void* target, const void* detour, void** original) noexcept {
+        return static_cast<int32_t>(MH_CreateHook(target, const_cast<void*>(detour), original));
+    },
+    [](void* target) noexcept { return static_cast<int32_t>(MH_EnableHook(target)); },
+    [](uint32_t slot, void* target, int32_t result) noexcept {
+        log("hook slot=%zu target=%p result=%s", static_cast<size_t>(slot), target, MH_StatusToString(static_cast<MH_STATUS>(result)));
+    },
+};
+
+template<class Detour> void bind(rsf_rdr2_capture_hook role, void* object, Detour detour) noexcept
 {
-    std::lock_guard<std::mutex> lock(bind_mutex);
-    if (original) return;
-    void* address = (*static_cast<void***>(object))[slot];
-    const auto made = MH_CreateHook(address, replacement, reinterpret_cast<void**>(&original));
-    const auto enabled = made == MH_OK ? MH_EnableHook(address) : made;
-    log("hook slot=%zu target=%p result=%s", slot, address, MH_StatusToString(enabled));
+    rsf_rdr2_capture_bind_hook(&hook_ops, static_cast<uint32_t>(role), object, reinterpret_cast<const void*>(detour));
 }
+
+template<class Original> Original original(rsf_rdr2_capture_hook role) noexcept
+{
+    return reinterpret_cast<Original>(rsf_rdr2_capture_hook_original(static_cast<uint32_t>(role)));
+}
+
 using CreatePso = HRESULT (STDMETHODCALLTYPE*)(ID3D12Device*, const D3D12_GRAPHICS_PIPELINE_STATE_DESC*, REFIID, void**);
 using CreateList = HRESULT (STDMETHODCALLTYPE*)(ID3D12Device*, UINT, D3D12_COMMAND_LIST_TYPE, ID3D12CommandAllocator*, ID3D12PipelineState*, REFIID, void**);
 using CreateRtv = void (STDMETHODCALLTYPE*)(ID3D12Device*, ID3D12Resource*, const D3D12_RENDER_TARGET_VIEW_DESC*, D3D12_CPU_DESCRIPTOR_HANDLE);
@@ -183,15 +195,6 @@ using CreateCommitted = HRESULT (STDMETHODCALLTYPE*)(ID3D12Device*, const D3D12_
 using CreatePlaced = HRESULT (STDMETHODCALLTYPE*)(ID3D12Device*, ID3D12Heap*, UINT64,
     const D3D12_RESOURCE_DESC*, D3D12_RESOURCE_STATES, const D3D12_CLEAR_VALUE*, REFIID, void**);
 using SetHdr = HRESULT (STDMETHODCALLTYPE*)(IDXGISwapChain4*, DXGI_HDR_METADATA_TYPE, UINT, void*);
-CreatePso original_create_pso{}; CreateList original_create_list{}; CreateRtv original_create_rtv{};
-CreateLibrary original_create_library{}; LoadPso original_load_pso{};
-CreateStreamPso original_create_stream_pso{}; LoadStreamPso original_load_stream_pso{};
-Reset original_reset{}; SetPso original_set_pso{}; SetRtv original_set_rtv{};
-Draw original_draw{}; DrawIndexed original_draw_indexed{};
-Barrier original_barrier{};
-CreateCommitted original_create_committed{}; CreatePlaced original_create_placed{};
-SetHdr original_set_hdr{};
-
 // D3D12 streams align each tagged subobject to a pointer, with natural payload alignment.
 template<class T> struct StreamPayload { D3D12_PIPELINE_STATE_SUBOBJECT_TYPE type; T value; };
 template<class T> union StreamItem { StreamPayload<T> payload; void* alignment; };
@@ -261,14 +264,14 @@ void remember_stream(const D3D12_PIPELINE_STATE_STREAM_DESC* desc, void* result)
 HRESULT STDMETHODCALLTYPE create_stream_pso(ID3D12Device2* device,
     const D3D12_PIPELINE_STATE_STREAM_DESC* desc, REFIID iid, void** out)
 {
-    const auto hr = original_create_stream_pso(device, desc, iid, out);
+    const auto hr = original<CreateStreamPso>(RSF_RDR2_CAPTURE_CREATE_STREAM_PSO)(device, desc, iid, out);
     if (SUCCEEDED(hr) && out) remember_stream(desc, *out);
     return hr;
 }
 HRESULT STDMETHODCALLTYPE load_stream_pso(ID3D12PipelineLibrary1* library, LPCWSTR name,
     const D3D12_PIPELINE_STATE_STREAM_DESC* desc, REFIID iid, void** out)
 {
-    const auto hr = original_load_stream_pso(library, name, desc, iid, out);
+    const auto hr = original<LoadStreamPso>(RSF_RDR2_CAPTURE_LOAD_STREAM_PSO)(library, name, desc, iid, out);
     if (SUCCEEDED(hr) && out) remember_stream(desc, *out);
     return hr;
 }
@@ -282,32 +285,32 @@ void remember_pso(const D3D12_GRAPHICS_PIPELINE_STATE_DESC* desc, void* result)
 }
 HRESULT STDMETHODCALLTYPE create_pso(ID3D12Device* d, const D3D12_GRAPHICS_PIPELINE_STATE_DESC* desc, REFIID iid, void** out)
 {
-    const auto hr = original_create_pso(d, desc, iid, out);
+    const auto hr = original<CreatePso>(RSF_RDR2_CAPTURE_CREATE_PSO)(d, desc, iid, out);
     if (SUCCEEDED(hr) && out) remember_pso(desc, *out);
     return hr;
 }
 HRESULT STDMETHODCALLTYPE load_pso(ID3D12PipelineLibrary* library, LPCWSTR name,
     const D3D12_GRAPHICS_PIPELINE_STATE_DESC* desc, REFIID iid, void** out)
 {
-    const auto hr = original_load_pso(library, name, desc, iid, out);
+    const auto hr = original<LoadPso>(RSF_RDR2_CAPTURE_LOAD_PSO)(library, name, desc, iid, out);
     if (SUCCEEDED(hr) && out) remember_pso(desc, *out);
     return hr;
 }
 HRESULT STDMETHODCALLTYPE create_library(ID3D12Device1* d, const void* blob, SIZE_T size, REFIID iid, void** out)
 {
-    const auto hr = original_create_library(d, blob, size, iid, out);
+    const auto hr = original<CreateLibrary>(RSF_RDR2_CAPTURE_CREATE_LIBRARY)(d, blob, size, iid, out);
     if (SUCCEEDED(hr) && out && *out) {
-        bind(*out, 9, reinterpret_cast<void*>(&load_pso), original_load_pso);
+        bind(RSF_RDR2_CAPTURE_LOAD_PSO, *out, &load_pso);
         ComPtr<ID3D12PipelineLibrary1> library1;
         if (SUCCEEDED(static_cast<IUnknown*>(*out)->QueryInterface(IID_PPV_ARGS(&library1))))
-            bind(library1.Get(), 13, reinterpret_cast<void*>(&load_stream_pso), original_load_stream_pso);
+            bind(RSF_RDR2_CAPTURE_LOAD_STREAM_PSO, library1.Get(), &load_stream_pso);
     }
     return hr;
 }
 void STDMETHODCALLTYPE create_rtv(ID3D12Device* d, ID3D12Resource* resource,
     const D3D12_RENDER_TARGET_VIEW_DESC* desc, D3D12_CPU_DESCRIPTOR_HANDLE handle)
 {
-    original_create_rtv(d, resource, desc, handle);
+    original<CreateRtv>(RSF_RDR2_CAPTURE_CREATE_RTV)(d, resource, desc, handle);
     std::lock_guard<std::mutex> lock(g->mutex);
     g->rtvs[handle.ptr] = resource;
 }
@@ -315,7 +318,7 @@ HRESULT STDMETHODCALLTYPE create_committed(ID3D12Device* d, const D3D12_HEAP_PRO
     D3D12_HEAP_FLAGS flags, const D3D12_RESOURCE_DESC* desc, D3D12_RESOURCE_STATES state,
     const D3D12_CLEAR_VALUE* clear, REFIID iid, void** out)
 {
-    const auto hr = original_create_committed(d, heap, flags, desc, state, clear, iid, out);
+    const auto hr = original<CreateCommitted>(RSF_RDR2_CAPTURE_CREATE_COMMITTED)(d, heap, flags, desc, state, clear, iid, out);
     if (!recording_copy && SUCCEEDED(hr) && out && *out) {
         std::lock_guard<std::mutex> lock(g->mutex);
         rsf_rdr2_capture_initial_state(g->capture, *out, static_cast<uint32_t>(state));
@@ -326,7 +329,7 @@ HRESULT STDMETHODCALLTYPE create_placed(ID3D12Device* d, ID3D12Heap* heap, UINT6
     const D3D12_RESOURCE_DESC* desc, D3D12_RESOURCE_STATES state, const D3D12_CLEAR_VALUE* clear,
     REFIID iid, void** out)
 {
-    const auto hr = original_create_placed(d, heap, offset, desc, state, clear, iid, out);
+    const auto hr = original<CreatePlaced>(RSF_RDR2_CAPTURE_CREATE_PLACED)(d, heap, offset, desc, state, clear, iid, out);
     if (!recording_copy && SUCCEEDED(hr) && out && *out) {
         std::lock_guard<std::mutex> lock(g->mutex);
         rsf_rdr2_capture_initial_state(g->capture, *out, static_cast<uint32_t>(state));
@@ -335,7 +338,7 @@ HRESULT STDMETHODCALLTYPE create_placed(ID3D12Device* d, ID3D12Heap* heap, UINT6
 }
 void STDMETHODCALLTYPE barriers(ID3D12GraphicsCommandList* list, UINT count, const D3D12_RESOURCE_BARRIER* items)
 {
-    original_barrier(list, count, items);
+    original<Barrier>(RSF_RDR2_CAPTURE_BARRIER)(list, count, items);
     if (recording_copy) return;
     std::lock_guard<std::mutex> lock(g->mutex);
     for (UINT i = 0; i < count; ++i) {
@@ -351,7 +354,7 @@ void STDMETHODCALLTYPE barriers(ID3D12GraphicsCommandList* list, UINT count, con
 }
 HRESULT STDMETHODCALLTYPE reset(ID3D12GraphicsCommandList* list, ID3D12CommandAllocator* allocator, ID3D12PipelineState* pso)
 {
-    const auto hr = original_reset(list, allocator, pso);
+    const auto hr = original<Reset>(RSF_RDR2_CAPTURE_RESET)(list, allocator, pso);
     if (SUCCEEDED(hr)) {
         std::lock_guard<std::mutex> lock(g->mutex);
         auto& state = g->lists[list];
@@ -362,13 +365,13 @@ HRESULT STDMETHODCALLTYPE reset(ID3D12GraphicsCommandList* list, ID3D12CommandAl
 }
 void STDMETHODCALLTYPE set_pso(ID3D12GraphicsCommandList* list, ID3D12PipelineState* pso)
 {
-    original_set_pso(list, pso);
+    original<SetPso>(RSF_RDR2_CAPTURE_SET_PSO)(list, pso);
     std::lock_guard<std::mutex> lock(g->mutex); g->lists[list].pso = pso;
 }
 void STDMETHODCALLTYPE set_rtv(ID3D12GraphicsCommandList* list, UINT count,
     const D3D12_CPU_DESCRIPTOR_HANDLE* handles, BOOL contiguous, const D3D12_CPU_DESCRIPTOR_HANDLE* depth)
 {
-    original_set_rtv(list, count, handles, contiguous, depth);
+    original<SetRtv>(RSF_RDR2_CAPTURE_SET_RTV)(list, count, handles, contiguous, depth);
     std::lock_guard<std::mutex> lock(g->mutex);
     auto found = count && handles ? g->rtvs.find(handles[0].ptr) : g->rtvs.end();
     g->lists[list].target = found != g->rtvs.end() ? found->second : nullptr;
@@ -572,26 +575,26 @@ catch (...) { log("snapshot failed"); }
 void STDMETHODCALLTYPE draw(ID3D12GraphicsCommandList* list, UINT vertices, UINT instances, UINT first, UINT instance)
 {
     DrawScope scope;
-    original_draw(list, vertices, instances, first, instance);
+    original<Draw>(RSF_RDR2_CAPTURE_DRAW)(list, vertices, instances, first, instance);
     if (scope.outer) snapshot(list, vertices, instances, _ReturnAddress());
 }
 void STDMETHODCALLTYPE draw_indexed(ID3D12GraphicsCommandList* list, UINT indices, UINT instances, UINT first, INT base, UINT instance)
 {
     DrawScope scope;
-    original_draw_indexed(list, indices, instances, first, base, instance);
+    original<DrawIndexed>(RSF_RDR2_CAPTURE_DRAW_INDEXED)(list, indices, instances, first, base, instance);
     if (scope.outer) snapshot(list, indices, instances, _ReturnAddress());
 }
 HRESULT STDMETHODCALLTYPE create_list(ID3D12Device* d, UINT node, D3D12_COMMAND_LIST_TYPE type,
     ID3D12CommandAllocator* allocator, ID3D12PipelineState* pso, REFIID iid, void** out)
 {
-    const auto hr = original_create_list(d, node, type, allocator, pso, iid, out);
+    const auto hr = original<CreateList>(RSF_RDR2_CAPTURE_CREATE_LIST)(d, node, type, allocator, pso, iid, out);
     if (SUCCEEDED(hr) && out && *out && type == D3D12_COMMAND_LIST_TYPE_DIRECT) {
-        bind(*out, 10, reinterpret_cast<void*>(&reset), original_reset);
-        bind(*out, 12, reinterpret_cast<void*>(&draw), original_draw);
-        bind(*out, 13, reinterpret_cast<void*>(&draw_indexed), original_draw_indexed);
-        bind(*out, 25, reinterpret_cast<void*>(&set_pso), original_set_pso);
-        bind(*out, 26, reinterpret_cast<void*>(&barriers), original_barrier);
-        bind(*out, 46, reinterpret_cast<void*>(&set_rtv), original_set_rtv);
+        bind(RSF_RDR2_CAPTURE_RESET, *out, &reset);
+        bind(RSF_RDR2_CAPTURE_DRAW, *out, &draw);
+        bind(RSF_RDR2_CAPTURE_DRAW_INDEXED, *out, &draw_indexed);
+        bind(RSF_RDR2_CAPTURE_SET_PSO, *out, &set_pso);
+        bind(RSF_RDR2_CAPTURE_BARRIER, *out, &barriers);
+        bind(RSF_RDR2_CAPTURE_SET_RTV, *out, &set_rtv);
         std::lock_guard<std::mutex> lock(g->mutex);
         auto* list = static_cast<ID3D12GraphicsCommandList*>(*out);
         auto& state = g->lists[list];
@@ -603,17 +606,17 @@ HRESULT STDMETHODCALLTYPE create_list(ID3D12Device* d, UINT node, D3D12_COMMAND_
 void device_created(void* pointer) noexcept try
 {
     auto* device = static_cast<ID3D12Device*>(pointer);
-    bind(device, 10, reinterpret_cast<void*>(&create_pso), original_create_pso);
-    bind(device, 12, reinterpret_cast<void*>(&create_list), original_create_list);
-    bind(device, 20, reinterpret_cast<void*>(&create_rtv), original_create_rtv);
-    bind(device, 27, reinterpret_cast<void*>(&create_committed), original_create_committed);
-    bind(device, 29, reinterpret_cast<void*>(&create_placed), original_create_placed);
+    bind(RSF_RDR2_CAPTURE_CREATE_PSO, device, &create_pso);
+    bind(RSF_RDR2_CAPTURE_CREATE_LIST, device, &create_list);
+    bind(RSF_RDR2_CAPTURE_CREATE_RTV, device, &create_rtv);
+    bind(RSF_RDR2_CAPTURE_CREATE_COMMITTED, device, &create_committed);
+    bind(RSF_RDR2_CAPTURE_CREATE_PLACED, device, &create_placed);
     ComPtr<ID3D12Device1> device1;
     if (SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&device1))))
-        bind(device1.Get(), 44, reinterpret_cast<void*>(&create_library), original_create_library);
+        bind(RSF_RDR2_CAPTURE_CREATE_LIBRARY, device1.Get(), &create_library);
     ComPtr<ID3D12Device2> device2;
     if (SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&device2))))
-        bind(device2.Get(), 47, reinterpret_cast<void*>(&create_stream_pso), original_create_stream_pso);
+        bind(RSF_RDR2_CAPTURE_CREATE_STREAM_PSO, device2.Get(), &create_stream_pso);
 }
 catch (...) { log("device observation failed"); }
 void* identity(void* pointer)
@@ -630,7 +633,7 @@ void color_space_set(void* pointer, uint32_t space) noexcept try
 catch (...) { log("color space observation failed"); }
 HRESULT STDMETHODCALLTYPE set_hdr(IDXGISwapChain4* swapchain, DXGI_HDR_METADATA_TYPE type, UINT size, void* metadata)
 {
-    const auto result = original_set_hdr(swapchain, type, size, metadata);
+    const auto result = original<SetHdr>(RSF_RDR2_CAPTURE_SET_HDR)(swapchain, type, size, metadata);
     if (SUCCEEDED(result)) {
         auto* key = identity(swapchain);
         std::lock_guard<std::mutex> lock(g->mutex);
@@ -647,7 +650,7 @@ void swapchain_created(void* pointer) noexcept try
     auto* swapchain = static_cast<IDXGISwapChain*>(pointer);
     ComPtr<IDXGISwapChain4> sc4;
     if (SUCCEEDED(swapchain->QueryInterface(IID_PPV_ARGS(&sc4))))
-        bind(sc4.Get(), 40, reinterpret_cast<void*>(&set_hdr), original_set_hdr);
+        bind(RSF_RDR2_CAPTURE_SET_HDR, sc4.Get(), &set_hdr);
     DXGI_SWAP_CHAIN_DESC desc{};
     if (SUCCEEDED(swapchain->GetDesc(&desc))) {
         auto* key = identity(swapchain);

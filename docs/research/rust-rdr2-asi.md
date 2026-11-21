@@ -115,3 +115,13 @@ its actual output list to the generation reset, correcting an undefined
 identifier in the prior source. Capture receipts and artifacts keep their
 existing fields. Source and layout checks passed. Build, resize and GPU
 fixture verification remain open.
+
+The native capture probe lends MinHook creation and activation, typed
+trampolines and the same 16 D3D12 and DXGI detours to
+`capture_state/hooks.rs`. The owner publishes each original before
+enabling its hook and retains it for the pinned probe's lifetime. A
+failed enable used to suppress all later attempts because the original
+pointer was already non-null. It now allows a retry for the same target
+and detour only. Source comparison matched every role, vtable slot,
+callback and forwarded argument. The new refusal case and GPU fixtures
+remain unrun. Native resource observations still supply capture metadata.

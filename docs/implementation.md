@@ -212,6 +212,12 @@ swapchain and selected buffer. Idle leases drop outside the capture
 mutex. The native list-creation hook now resets the generation for
 the actual returned list. Builds and GPU fixtures remain unrun.
 
+Rust now owns the RDR2 capture probe's 16 hook registrations and
+trampolines. A refused enable keeps the created trampoline and retries
+only when the same vtable target returns. The native detours still call
+their originals with the same typed arguments. Source comparison
+matched every slot and call. The refusal regression remains unrun.
+
 RDR2's Rust diagnostic workers preserve the module sampling marks,
 dump policy, census summary and optional RenderDoc request loop. Native
 leaves retain the existing diagnostics ABI. The RenderDoc trigger still

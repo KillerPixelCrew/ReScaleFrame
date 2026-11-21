@@ -11,6 +11,7 @@ mod artifacts;
 #[cfg(windows)]
 mod bundle;
 mod gpu_leases;
+mod hooks;
 mod recordings;
 use gpu_leases::Gpu;
 use recordings::Recordings;

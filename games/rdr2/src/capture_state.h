@@ -7,6 +7,20 @@
 typedef struct rsf_rdr2_capture_state rsf_rdr2_capture_state;
 typedef struct rsf_rdr2_capture_submission rsf_rdr2_capture_submission;
 typedef struct rsf_rdr2_capture_gpu_retired rsf_rdr2_capture_gpu_retired;
+typedef enum rsf_rdr2_capture_hook {
+    RSF_RDR2_CAPTURE_CREATE_PSO, RSF_RDR2_CAPTURE_CREATE_LIST, RSF_RDR2_CAPTURE_CREATE_RTV,
+    RSF_RDR2_CAPTURE_CREATE_LIBRARY, RSF_RDR2_CAPTURE_LOAD_PSO, RSF_RDR2_CAPTURE_CREATE_STREAM_PSO,
+    RSF_RDR2_CAPTURE_LOAD_STREAM_PSO, RSF_RDR2_CAPTURE_RESET, RSF_RDR2_CAPTURE_SET_PSO,
+    RSF_RDR2_CAPTURE_SET_RTV, RSF_RDR2_CAPTURE_DRAW, RSF_RDR2_CAPTURE_DRAW_INDEXED,
+    RSF_RDR2_CAPTURE_BARRIER, RSF_RDR2_CAPTURE_CREATE_COMMITTED, RSF_RDR2_CAPTURE_CREATE_PLACED,
+    RSF_RDR2_CAPTURE_SET_HDR, RSF_RDR2_CAPTURE_HOOK_COUNT
+} rsf_rdr2_capture_hook;
+typedef struct rsf_rdr2_capture_hook_ops {
+    void* (*target)(void* object, uint32_t slot);
+    int32_t (*create)(void* target, const void* detour, void** original);
+    int32_t (*enable)(void* target);
+    void (*report)(uint32_t slot, void* target, int32_t result);
+} rsf_rdr2_capture_hook_ops;
 typedef struct rsf_rdr2_capture_gpu_ops {
     void (*retain)(void*);
     void (*release)(void*);
@@ -157,6 +171,8 @@ bool rsf_rdr2_capture_readback_awaits_fence(const rsf_rdr2_capture_readback*, vo
 bool rsf_rdr2_capture_fence_readback(rsf_rdr2_capture_readback*, void* queue, uint64_t value);
 uint64_t rsf_rdr2_capture_after_submit(rsf_rdr2_capture_state*, rsf_rdr2_capture_submission*);
 void rsf_rdr2_capture_discard_submission(rsf_rdr2_capture_submission*);
+void rsf_rdr2_capture_bind_hook(const rsf_rdr2_capture_hook_ops*, uint32_t role, void* object, const void* detour);
+uintptr_t rsf_rdr2_capture_hook_original(uint32_t role);
 bool rsf_rdr2_capture_gpu_adopt(rsf_rdr2_capture_gpu_leases*, void* buffer, const rsf_rdr2_capture_gpu_ops*);
 void rsf_rdr2_capture_gpu_bind_queue(rsf_rdr2_capture_gpu_leases*, void* queue);
 void rsf_rdr2_capture_gpu_bind_fence(rsf_rdr2_capture_gpu_leases*, void* fence);
@@ -177,6 +193,7 @@ static_assert(sizeof(rsf_rdr2_capture_progress) == 32);
 static_assert(sizeof(rsf_rdr2_capture_readback) == 48 && offsetof(rsf_rdr2_capture_readback, list) == 24);
 static_assert(sizeof(rsf_rdr2_capture_gpu_ops) == 40 && sizeof(rsf_rdr2_capture_gpu_leases) == 32);
 static_assert(sizeof(rsf_rdr2_capture_gpu_proof) == 16);
+static_assert(RSF_RDR2_CAPTURE_HOOK_COUNT == 16 && sizeof(rsf_rdr2_capture_hook_ops) == 32);
 static_assert(sizeof(rsf_rdr2_capture_pipeline) == 40);
 static_assert(sizeof(rsf_rdr2_capture_image) == 160);
 static_assert(sizeof(rsf_rdr2_capture_draw) == 192 && offsetof(rsf_rdr2_capture_draw, stack) == 88);
