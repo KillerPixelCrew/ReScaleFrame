@@ -301,6 +301,13 @@ Failed activation disables the hooks and retains their pinned
 trampolines. The native code keeps the file mapping and typed calls.
 Build and live coexistence remain open.
 
+Skyrim's CPU source reservations, input classification and scoped
+render admission are Rust-owned. The adapter still reports the same
+native tick, poll, simulation and World callback facts through the
+GameSDK. Native job-generation proof and hook teardown remain in
+C++. The expanded input fixture remains unrun.
+[Skyrim CPU ownership audit](research/rust-skyrim-cpu-ownership.md)
+
 Unity package D3D12 SR contexts and their recording slots are Rust-owned.
 The existing Unity bridge still provides recording and completion facts.
 The view owner preserves reconfiguration, spatial fallback and retirement
@@ -506,6 +513,14 @@ after the Rust record lock is released. Build and captured-frame
 verification remain open.
 [Renderer root evidence](research/ac7-renderer-roots-20260930.md)
 [Motion artifact audit](research/rust-ac7-motion-artifacts.md)
+
+The AC7 F9 session now schedules capture intervals and retires
+records in Rust. The trigger and paired samples remain at `f000`,
+`f030` and `f059`. Scoped failures and late observations cannot
+retire or append to a newer session. The native layer supplies
+window, clock, frame-tap and directory effects. Build and captured
+artifact verification remain open.
+[F9 session audit](research/rust-ac7-motion-session.md)
 
 ## Rust orchestrator and first Anomaly port
 

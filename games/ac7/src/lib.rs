@@ -25,6 +25,7 @@ mod dxbc_chunks;
 mod guards;
 mod lifecycle;
 mod motion_capture_records;
+mod motion_capture_session;
 mod patches;
 mod platform_abi;
 mod render_scope;

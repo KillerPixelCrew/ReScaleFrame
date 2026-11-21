@@ -347,8 +347,8 @@ bool subsystem(uint32_t operation, const rsf_game_host_services* services, int32
         pass_observations.store(0, std::memory_order_relaxed);
         flag(true);
         break;
-    case RSF_SKYRIM_CPU_PREPARE: flag(services && cpu_prepare(*services)); break;
-    case RSF_SKYRIM_CPU_START: flag(cpu_start()); break;
+    case RSF_SKYRIM_CPU_PREPARE: flag(services && cpu_prepare(*services, creation_platform())); break;
+    case RSF_SKYRIM_CPU_START: flag(cpu_start(creation_platform())); break;
     case RSF_SKYRIM_CPU_QUIESCE: cpu_quiesce(); flag(true); break;
     case RSF_SKYRIM_CPU_DISABLE: flag(cpu_disable()); break;
     case RSF_SKYRIM_CPU_STOP: flag(cpu_stop()); break;

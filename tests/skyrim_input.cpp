@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "../games/skyrim-se/src/cpu_events.h"
+#include "../games/skyrim-se/src/cpu_policy.h"
 #include "../games/skyrim-se/src/input_ownership.h"
 #include "../games/skyrim-se/src/screen_classification.h"
 #include <windows.h>
@@ -12,8 +13,67 @@ int failures{};
 void check(bool passed, const char* label) {
     if (!passed) { ++failures; std::printf("FAIL %s\n", label); }
 }
+
+void check_render_scope() {
+    constexpr uintptr_t base = 0x10000000;
+    constexpr uintptr_t caller = base + 0x656e32;
+    constexpr uint64_t session = 9, source = 17;
+    rsf_skyrim_cpu_render_state state{};
+    rsf_game_render_pass pass{};
+    rsf_game_cpu_event event{};
+    rsf_skyrim_cpu_frame_event(&event, &state, RSF_GAME_CPU_FRAME_END, session, source, 20, 50);
+    check(event.flags == (RSF_GAME_CPU_INPUT_KEYED | RSF_GAME_CPU_RENDER_SKIPPED) && event.render_expected == 0,
+        "skipped render closes the CPU frame without a completed World");
+    check(!rsf_skyrim_cpu_render_identity(&state, &pass, source, true), "identity requires RenderEntry");
+    check(rsf_skyrim_cpu_begin_render(&state, RSF_SCREEN_UNKNOWN), "first RenderEntry closes simulation");
+    const auto scope = state.scope;
+    check(rsf_skyrim_cpu_render_identity(&state, &pass, source, true) && scope && pass.scope_id == scope &&
+        pass.submission_id == scope && pass.source_frame_id == source && (pass.flags & RSF_GAME_RENDER_NO_FG),
+        "frame pass is scoped and refuses FG before a primary World");
+    int chain{};
+    pass.swapchain = &chain;
+    pass.view_key = 1;
+    check(!rsf_skyrim_cpu_begin_world(&state, &pass, base, caller + 1, 0) &&
+        !rsf_skyrim_cpu_begin_world(&state, &pass, base, caller, 1) && state.primary_world_entries == 0,
+        "foreign callers and non-primary outputs do not enter the primary World");
+    check(rsf_skyrim_cpu_begin_world(&state, &pass, base, caller, 0), "mapped World caller enters the source");
+    rsf_skyrim_cpu_world_screen(&state, RSF_SCREEN_GAMEPLAY);
+    check(rsf_skyrim_cpu_render_identity(&state, &pass, source, true) && !(pass.flags & RSF_GAME_RENDER_NO_FG) &&
+        pass.screen == RSF_SCREEN_GAMEPLAY && pass.scope_id == scope, "gameplay World admits its render scope");
+    check(rsf_skyrim_cpu_render_identity(&state, &pass, source, false) && (pass.flags & RSF_GAME_RENDER_NO_FG),
+        "inactive observer still labels the scope and refuses FG");
+    rsf_skyrim_cpu_end_world(&state);
+    check(rsf_skyrim_cpu_begin_world(&state, &pass, base, caller, 0), "duplicate World is observed");
+    rsf_skyrim_cpu_world_screen(&state, RSF_SCREEN_GAMEPLAY);
+    check(rsf_skyrim_cpu_render_identity(&state, &pass, source, true) && (pass.flags & RSF_GAME_RENDER_NO_FG) &&
+        pass.screen == RSF_SCREEN_UNKNOWN, "duplicate World withdraws gameplay admission");
+    rsf_skyrim_cpu_end_world(&state);
+    check(!rsf_skyrim_cpu_begin_render(&state, RSF_SCREEN_UNKNOWN) && state.scope != scope,
+        "nested RenderEntry starts a distinct scope without repeating simulation end");
+    rsf_skyrim_cpu_end_render(&state, scope);
+    check(rsf_skyrim_cpu_render_identity(&state, &pass, source, true) && pass.scope_id == scope,
+        "leaving a nested RenderEntry restores its enclosing scope");
+    rsf_skyrim_cpu_end_render(&state, 0);
+    check(!rsf_skyrim_cpu_render_identity(&state, &pass, source, true), "closed render has no live identity");
+    rsf_skyrim_cpu_frame_event(&event, &state, RSF_GAME_CPU_FRAME_END, session, source, 30, 50);
+    check(event.render_expected == 2 && event.flags == RSF_GAME_CPU_INPUT_KEYED && event.session_id == session &&
+        event.source_frame_id == source && event.timestamp_qpc == 30 && event.qpc_frequency == 50,
+        "CPU frame end counts returned Worlds and preserves the callback clock");
+    check(rsf_skyrim_cpu_sample_tick(&state) && !rsf_skyrim_cpu_sample_tick(&state),
+        "tick reports the unreserved native sample once");
+
+    rsf_game_cpu_source_event sample{};
+    rsf_skyrim_cpu_source_event(&sample, RSF_GAME_CPU_SOURCE_SAMPLED, session, source, 30, 50,
+        0, 8, RSF_GAME_CPU_SOURCE_PRODUCED, RSF_GAME_INPUT_MOUSE, 0, 20);
+    check(sample.header.struct_size == sizeof(sample) && sample.header.event_version == RSF_GAME_CPU_EVENT_VERSION_SOURCE &&
+        sample.header.stage == RSF_GAME_CPU_SOURCE_SAMPLED && sample.header.source_frame_id == source &&
+        sample.header.timestamp_qpc == 30 && sample.poll_begin_qpc == 20 && sample.native_generation == 8 &&
+        sample.header.input_kind == RSF_GAME_INPUT_MOUSE && sample.header.flags == RSF_GAME_CPU_SOURCE_PRODUCED,
+        "sample receipt preserves both native poll and publication timestamps");
+}
 }
 int main() {
+    check_render_scope();
     rsf::skyrim::NativeJobOwnership jobs;
     check(!jobs.snapshot().generation, "no native submission has no job ownership");
     check(!jobs.publish(0, 11, 22).generation, "null manager refuses publication");
