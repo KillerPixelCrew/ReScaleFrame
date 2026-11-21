@@ -4,6 +4,13 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The Rust D3D11 overlay renderer now owns the bindings saved around each
+draw and restores them before releasing the COM references. Its narrow
+native read and restore calls leave the caller's render targets and UAVs
+bound. Source comparison checked the getter and setter order, private
+x64 layout, shader bytes and public entry points. Build and device
+validation remain open for this revision.
+
 Anomaly retries a refused Observe start with the session that successfully
 prepared. It leaves the previous stage configuration in place. A session
 retained after refused prepare remains ineligible for start. The updated
