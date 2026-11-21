@@ -480,6 +480,21 @@ pub(crate) struct Physical {
 unsafe impl Send for Physical {}
 unsafe impl Sync for Physical {}
 
+// One direct allocator and closed list on the graphics device (Streamline's proxy device when a
+// host exists). The list is declared first so it releases before its allocator.
+struct Commands {
+    list: ComRef,
+    allocator: ComRef,
+}
+
+// The slot pairs in slot order, fewer than SLOTS only after a refused initialization.
+struct CommandSlots(Vec<Commands>);
+
+// Created before publication, recorded and submitted under Present's pin, and released or
+// retained by the facade's final Release, when no pin remains.
+unsafe impl Send for CommandSlots {}
+unsafe impl Sync for CommandSlots {}
+
 // DXGI serializes the application's frame calls. Provider callbacks and the retire
 // lease can reenter on the same thread.
 pub(crate) struct Owner {
@@ -496,6 +511,7 @@ pub(crate) struct Owner {
     serial: AtomicU64,
     next_slot: AtomicU32,
     slot_fences: [AtomicU64; SLOTS],
+    commands: Mutex<Option<Arc<CommandSlots>>>,
     buffers: Mutex<ApplicationBuffers>,
     render_index: AtomicU32,
     application_serial: AtomicU64,
@@ -528,6 +544,7 @@ impl Owner {
             serial: AtomicU64::new(0),
             next_slot: AtomicU32::new(0),
             slot_fences: Default::default(),
+            commands: Mutex::default(),
             buffers: Mutex::default(),
             render_index: AtomicU32::new(0),
             application_serial: AtomicU64::new(0),
@@ -942,6 +959,55 @@ impl Owner {
             .cloned()
     }
 
+    // Creates the slot pairs in slot order. A refusal keeps the earlier pairs, which teardown
+    // releases or retains with the rest of the unpublished facade.
+    fn create_command_slots(&self) -> i32 {
+        let p = self.p();
+        let mut pairs = Vec::with_capacity(SLOTS);
+        let mut result = S_OK;
+        while pairs.len() < SLOTS {
+            let (mut allocator, mut list) = (null_mut(), null_mut());
+            let created = unsafe { (p.create_slot)(self.b(), &mut allocator, &mut list) };
+            let list = unsafe { ComRef::from_owned(list) };
+            let allocator = unsafe { ComRef::from_owned(allocator) };
+            match (list, allocator) {
+                (Some(list), Some(allocator)) if !failed(created) => {
+                    pairs.push(Commands { list, allocator });
+                }
+                _ => {
+                    result = E_FAIL;
+                    break;
+                }
+            }
+        }
+        *lock(&self.commands) = Some(Arc::new(CommandSlots(pairs)));
+        result
+    }
+
+    // Pins the slot pairs for one Present. Publication requires all three.
+    fn command_slots(&self) -> Option<Arc<CommandSlots>> {
+        lock(&self.commands)
+            .clone()
+            .filter(|slots| slots.0.len() == SLOTS)
+    }
+
+    fn take_command_slots(&self) -> Option<Arc<CommandSlots>> {
+        lock(&self.commands).take()
+    }
+
+    // The facade's last reference is gone, so Present holds no pin. Each list releases before
+    // its allocator, in slot order or last slot first.
+    fn release_command_slots(&self, last_first: bool) {
+        if let Some(slots) = self.take_command_slots()
+            && let Ok(CommandSlots(mut pairs)) = Arc::try_unwrap(slots)
+        {
+            if last_first {
+                pairs.reverse();
+            }
+            drop(pairs);
+        }
+    }
+
     fn reset_application_frames(&self) {
         self.render_index.store(0, Ordering::Relaxed);
         self.application_serial.store(0, Ordering::Relaxed);
@@ -1078,7 +1144,7 @@ impl Owner {
             }
             self.render_index.store(0, Ordering::Relaxed);
         }
-        if failed(unsafe { (p.create_slots)(b) }) {
+        if failed(self.create_command_slots()) {
             return E_FAIL;
         }
         if setup.runtime_switching != 0 {
@@ -1445,6 +1511,10 @@ impl Owner {
             Ok(physical) => physical,
             Err(error) => return error,
         };
+        // A published facade has all three pairs. Its final Release comes after this pin ends.
+        let Some(commands) = self.command_slots() else {
+            return E_UNEXPECTED;
+        };
         let chain = physical.chain.as_ptr();
         let queue = physical.queue.as_ptr();
         // Legacy discard chains cannot request the flip-model tearing creation flag. Translate
@@ -1488,6 +1558,8 @@ impl Owner {
         self.next_slot
             .store((index + 1) % SLOTS as u32, Ordering::Relaxed);
         let slot = &self.slot_fences[index as usize];
+        let pair = &commands.0[index as usize];
+        let (allocator, list) = (pair.allocator.as_ptr(), pair.list.as_ptr());
         if self.native12() {
             // Streamline requires CreateCommandQueue through its upgraded device, so its queue is
             // not the engine queue. Join the engine's source work into it, and the copy back out.
@@ -1503,7 +1575,13 @@ impl Owner {
             if source_joined {
                 let mut step_index = 0;
                 stage = unsafe {
-                    (p.slot_reset)(b, index, slot.load(Ordering::Relaxed), &mut step_index)
+                    (p.slot_reset)(
+                        b,
+                        allocator,
+                        list,
+                        slot.load(Ordering::Relaxed),
+                        &mut step_index,
+                    )
                 };
                 step = STEPS[(step_index as usize).min(STEPS.len() - 1)];
             } else {
@@ -1523,10 +1601,10 @@ impl Owner {
                         } else {
                             if let Some(source) = &source {
                                 unsafe {
-                                    (p.record_copy)(b, index, backbuffer.as_ptr(), source.as_ptr())
+                                    (p.record_copy)(b, list, backbuffer.as_ptr(), source.as_ptr())
                                 };
                             }
-                            let command = unsafe { (p.slot_command)(b, queue, index) };
+                            let command = unsafe { (p.command_list)(b, queue, list) };
                             if command.is_null() {
                                 step = "command list unwrap";
                                 stage = E_FAIL;
@@ -1534,7 +1612,7 @@ impl Owner {
                                 self.prepare_callback(null_mut(), command, backbuffer, sync);
                                 self.publish_status();
                                 step = "command list Close";
-                                stage = unsafe { (p.close_execute)(b, queue, index, command) };
+                                stage = unsafe { (p.close_execute)(queue, list, command) };
                             }
                             if !failed(stage) {
                                 if joined
@@ -1608,7 +1686,13 @@ impl Owner {
         self.receipt("d3d11-slot-enter", S_OK);
         let mut step_index = 0;
         if !failed(unsafe {
-            (p.slot_reset)(b, index, slot.load(Ordering::Relaxed), &mut step_index)
+            (p.slot_reset)(
+                b,
+                allocator,
+                list,
+                slot.load(Ordering::Relaxed),
+                &mut step_index,
+            )
         }) {
             if debug {
                 ticks[2] = tick();
@@ -1621,12 +1705,12 @@ impl Owner {
                 && let Some(source) = self.copy_source(0)
             {
                 // The application writes slot zero. Generated frames use the physical backbuffer.
-                unsafe { (p.record_copy)(b, index, backbuffer.as_ptr(), source.as_ptr()) };
-                let command = unsafe { (p.slot_command)(b, queue, index) };
+                unsafe { (p.record_copy)(b, list, backbuffer.as_ptr(), source.as_ptr()) };
+                let command = unsafe { (p.command_list)(b, queue, list) };
                 if !command.is_null() {
                     self.prepare_callback(unsafe { (p.context11)(b) }, command, &backbuffer, sync);
                     self.publish_status();
-                    if !failed(unsafe { (p.close_execute)(b, queue, index, command) })
+                    if !failed(unsafe { (p.close_execute)(queue, list, command) })
                         && !failed(unsafe { (p.upload_return)(b, queue, self.next_serial()) })
                     {
                         result = self.present_physical(
@@ -1921,6 +2005,8 @@ impl Owner {
             log("presentation bridge: retirement failed; retaining provider and shared inputs");
             std::mem::forget(self.take_application_buffers());
             std::mem::forget(self.take_physical());
+            // Submitted lists and their allocators can still be GPU-reachable.
+            std::mem::forget(self.take_command_slots());
             unsafe { (p.retain_all)(b) };
             return;
         }
@@ -1946,11 +2032,20 @@ impl Owner {
         let host = self.host();
         let private = !host.is_null() && ACTIVE_HOST.load(Ordering::Acquire) != host;
         unsafe { (p.release_device)(b, u32::from(private)) };
+        if private {
+            // The slot lists belong to the private host's device and end before the host,
+            // after its interop queue and in slot order.
+            self.release_command_slots(false);
+            unsafe { (p.release_host)(b) };
+        }
         drop(direct_buffers);
         if published {
             CHAIN_GENERATION.fetch_add(1, Ordering::SeqCst);
             RETIREMENT_PENDING.store(false, Ordering::Release);
         }
+        // A shared or absent host outlives the facade. The pairs end where the facade's slot
+        // members were destroyed: after the owner, before its fences, last slot first.
+        self.release_command_slots(true);
     }
 
     fn refuse(&self) {
