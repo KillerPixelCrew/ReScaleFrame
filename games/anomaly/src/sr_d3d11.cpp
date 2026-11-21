@@ -266,10 +266,20 @@ const rsf_sr_d3d11 platform{
     },
 };
 
-rsf_sr_draw_views upscale_views(const UpscaleViews& v, ID3D11ShaderResourceView* reconstructed = nullptr) noexcept {
+}
+
+rsf_sr_draw_views round_trip_views(void* source, uint32_t sw, uint32_t sh, void* target, uint32_t width, uint32_t height) noexcept {
+    return {{width, height}, {sw, sh}, {target}, nullptr, {source}, 0, 0};
+}
+
+rsf_sr_draw_views upscale_views(const UpscaleViews& v, void* reconstructed) noexcept {
     return {{v.width, v.height}, {v.source_width, v.source_height}, {v.colour_target, v.position_target, v.distort_target},
         v.depth_target, {v.colour, v.position, v.distort, v.depth, reconstructed}, 0, 0};
 }
+
+rsf_sr_draw_views prepare_views(const PrepareViews& v) noexcept {
+    return {{v.width, v.height}, {}, {v.colour_target, v.motion_target}, nullptr,
+        {v.colour, v.depth, v.motion}, std::bit_cast<uint32_t>(v.first_person_depth), uint32_t(v.first_person_zero)};
 }
 
 const char* round_trip_source() noexcept { return rsf_sr_roundtrip_hlsl; }
@@ -373,7 +383,7 @@ void RoundTripPass::reset() noexcept { owner_.reset(); }
 
 bool RoundTripPass::run(ID3D11DeviceContext* context, ID3D11ShaderResourceView* source, uint32_t sw, uint32_t sh,
     ID3D11RenderTargetView* target, uint32_t width, uint32_t height) noexcept {
-    const rsf_sr_draw_views view{{width, height}, {sw, sh}, {target}, nullptr, {source}, 0, 0};
+    const auto view = round_trip_views(source, sw, sh, target, width, height);
     return rsf_anomaly_sr_run_pass(owner_.get(), context, RSF_SR_ROUND_TRIP, &view) != 0;
 }
 
@@ -391,8 +401,7 @@ bool UpscalePass::run(ID3D11DeviceContext* context, const UpscaleViews& views) n
 }
 
 bool UpscalePass::prepare(ID3D11DeviceContext* context, const PrepareViews& v) noexcept {
-    const rsf_sr_draw_views view{{v.width, v.height}, {}, {v.colour_target, v.motion_target}, nullptr,
-        {v.colour, v.depth, v.motion}, std::bit_cast<uint32_t>(v.first_person_depth), uint32_t(v.first_person_zero)};
+    const auto view = prepare_views(v);
     return rsf_anomaly_sr_run_pass(owner_.get(), context, RSF_SR_PREPARE, &view) != 0;
 }
 

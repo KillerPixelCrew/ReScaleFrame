@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Anomaly's native SR host now retains a single opaque Rust draw pass.
+Rust selects the round-trip or upscale pass and reuses it for the
+same device and stage. A replacement is published after creation
+succeeds. A refused creation leaves the frame on its existing fallback.
+The production host and the native fixtures share the draw-view
+builders, including the temporal input order. Build and runtime
+validation remain open.
+
 Rust now builds and owns Anomaly's complete SR twin batch. It reuses
 the existing color, depth and scratch allocators and publishes borrowed
 views only after every required allocation succeeds. On refusal, the

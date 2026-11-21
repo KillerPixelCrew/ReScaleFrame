@@ -341,6 +341,33 @@ extern "C" fn rsf_anomaly_sr_create_pass(
 }
 
 #[unsafe(no_mangle)]
+extern "C" fn rsf_anomaly_sr_ensure_pass(
+    owner: &mut *mut Pass,
+    platform: &'static Platform,
+    device: Ptr,
+    stage: u32,
+    log: Log,
+    user: Ptr,
+) -> u32 {
+    let kind = match stage {
+        1 => ROUND_TRIP,
+        2 => UPSCALE,
+        _ => return 0,
+    };
+    if unsafe { owner.as_ref() }
+        .is_some_and(|pass| pass.device.as_ptr() == device && pass.kind == kind)
+    {
+        return 1;
+    }
+    let replacement = rsf_anomaly_sr_create_pass(platform, device, kind, log, user);
+    if replacement.is_null() {
+        return 0;
+    }
+    rsf_anomaly_sr_drop_pass(std::mem::replace(owner, replacement));
+    1
+}
+
+#[unsafe(no_mangle)]
 extern "C" fn rsf_anomaly_sr_drop_pass(owner: *mut Pass) {
     if !owner.is_null() {
         drop(unsafe { Box::from_raw(owner) });

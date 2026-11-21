@@ -108,6 +108,7 @@ uint8_t rsf_anomaly_sr_make_temporal(const rsf_sr_d3d11*, void*, rsf_sr_extent, 
     rsf_sr_temporal_view*) noexcept;
 void rsf_anomaly_sr_drop_temporal(rsf_sr_temporal_targets*) noexcept;
 rsf_sr_pass* rsf_anomaly_sr_create_pass(const rsf_sr_d3d11*, void*, uint32_t, rsf_sr_log, void*) noexcept;
+uint32_t rsf_anomaly_sr_ensure_pass(rsf_sr_pass**, const rsf_sr_d3d11*, void*, uint32_t, rsf_sr_log, void*) noexcept;
 void rsf_anomaly_sr_drop_pass(rsf_sr_pass*) noexcept;
 void* rsf_anomaly_sr_pass_device(const rsf_sr_pass*) noexcept;
 uint32_t rsf_anomaly_sr_temporal_ready(const rsf_sr_pass*) noexcept;

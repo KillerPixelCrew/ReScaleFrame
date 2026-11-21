@@ -164,15 +164,15 @@ uint32_t twin_refs(void* raw) {
 struct Host final : SwapHost {
     RustOwner<rsf_sr_twin_batch, drop_twin_batch> twins;
     void* depth_texture{};
-    RoundTripPass pass;
-    UpscalePass upscale_pass;
+    rsf_sr_pass* pass{};
     uint64_t last_drop_refs{};
     uint64_t twin_bytes{};
     // While controller.seam() runs: the Rust scope lent by the seam call, and the seam being closed.
     void* cookie{};
     const UpscaleViews* seam_views{};
-    const TargetFields* trip_twin{};
-    const TargetFields* trip_engine{};
+    const rsf_sr_draw_views* trip_views{};
+    ~Host() { reset_pass(); }
+    void reset_pass() noexcept { rsf_anomaly_sr_drop_pass(std::exchange(pass, nullptr)); }
     bool read(const void* address, void* output, std::size_t size) noexcept override { return guarded_copy(output, address, size); }
     bool write(void* address, const void* input, std::size_t size) noexcept override { return guarded_copy(address, input, size); }
     ID3D11Device* device() noexcept { ID3D11Device* value{}; return read_global(srp().hw_device_rva, value) ? value : nullptr; }
@@ -180,12 +180,9 @@ struct Host final : SwapHost {
     MakeResult make_twins(const TwinRequest& request, TwinSet& out) noexcept override {
         auto* d3d = device();
         if (!d3d) { say("Anomaly SR stage: HW.pDevice is null; twins not created."); return MakeResult::Failed; }
-        if (request.stage == 1 && (!pass.ready() || pass.device() != d3d) && !pass.create(d3d, log_fn, log_user)) {
-            say("Anomaly SR stage: round-trip shader could not be created.");
-            return MakeResult::Refused;
-        }
-        if (request.stage == 2 && (!upscale_pass.ready() || upscale_pass.device() != d3d) && !upscale_pass.create(d3d, log_fn, log_user)) {
-            say("Anomaly SR stage: upscale shader could not be created.");
+        if (!rsf_anomaly_sr_ensure_pass(&pass, &d3d11_platform(), d3d, request.stage, log_fn, log_user)) {
+            say(request.stage == 1 ? "Anomaly SR stage: round-trip shader could not be created."
+                : "Anomaly SR stage: upscale shader could not be created.");
             return MakeResult::Refused;
         }
         rsf_sr_twin_batch_info info{};
@@ -253,10 +250,10 @@ struct Host final : SwapHost {
     }
     bool round_trip(const TargetFields& twin, const TargetFields& engine) noexcept override {
         const rsf_anomaly_sr_seam seam{twin.surface, engine.surface, twin.width, twin.height, engine.width, engine.height};
-        trip_twin = &twin;
-        trip_engine = &engine;
+        const auto views = round_trip_views(twin.srv, twin.width, twin.height, engine.rtv, engine.width, engine.height);
+        trip_views = &views;
         const bool ok = rsf_anomaly_sr_stage_round_trip(cookie, &seam);
-        trip_twin = trip_engine = nullptr;
+        trip_views = nullptr;
         return ok;
     }
 };
@@ -574,25 +571,22 @@ const rsf_anomaly_sr_stage_platform platform{
             ticks, sizeof(*ticks), D3D11_ASYNC_GETDATA_DONOTFLUSH) == S_OK;
     },
     .host_stats = [](uint64_t* bytes, uint64_t* refs) { *bytes = host.twin_bytes; *refs = host.last_drop_refs; },
-    .host_reset = [] {
-        host.pass.reset();
-        host.upscale_pass.reset();
-    },
+    .host_reset = [] { host.reset_pass(); },
     .staging_copy = [](void* context, void* source) { return staging_copy(context, source); },
     .release = [](void* object) { if (object) static_cast<IUnknown*>(object)->Release(); },
     .map_staging = map_staging,
     .unmap_staging = [](void* context, void* texture) {
         static_cast<ID3D11DeviceContext*>(context)->Unmap(static_cast<ID3D11Texture2D*>(texture), 0);
     },
-    .bilinear = [] { return host.seam_views && host.upscale_pass.run(host.context(), *host.seam_views); },
-    .round_trip = [] {
-        if (!host.trip_twin || !host.trip_engine) return false;
-        const auto& twin = *host.trip_twin;
-        const auto& engine = *host.trip_engine;
-        return host.pass.run(host.context(), static_cast<ID3D11ShaderResourceView*>(twin.srv), twin.width, twin.height,
-            static_cast<ID3D11RenderTargetView*>(engine.rtv), engine.width, engine.height);
+    .bilinear = [] {
+        if (!host.seam_views) return false;
+        const auto views = upscale_views(*host.seam_views);
+        return rsf_anomaly_sr_run_pass(host.pass, host.context(), RSF_SR_UPSCALE, &views) != 0;
     },
-    .temporal_ready = [] { return host.seam_views && host.upscale_pass.temporal_ready() && host.depth_texture; },
+    .round_trip = [] {
+        return host.trip_views && rsf_anomaly_sr_run_pass(host.pass, host.context(), RSF_SR_ROUND_TRIP, host.trip_views) != 0;
+    },
+    .temporal_ready = [] { return host.seam_views && rsf_anomaly_sr_temporal_ready(host.pass) && host.depth_texture; },
     .temporal_platform = []() -> const void* { return &d3d11_platform(); },
     .motion_target = [](rsf_anomaly_sr_motion_target* out) {
         const auto target = motion::frame_target();
@@ -607,12 +601,14 @@ const rsf_anomaly_sr_stage_platform platform{
             views.source_width, views.source_height, static_cast<ID3D11RenderTargetView*>(colour_target),
             static_cast<ID3D11RenderTargetView*>(motion_target), first_person_depth_limit,
             first_person_zero};
-        return host.upscale_pass.prepare(host.context(), prepare);
+        const auto input = prepare_views(prepare);
+        return rsf_anomaly_sr_run_pass(host.pass, host.context(), RSF_SR_PREPARE, &input) != 0;
     },
     .depth_texture = [] { return host.depth_texture; },
     .reinsert = [](void* reconstruction) {
-        return host.seam_views && host.upscale_pass.reinsert(host.context(), *host.seam_views,
-            static_cast<ID3D11ShaderResourceView*>(reconstruction));
+        if (!host.seam_views) return false;
+        const auto views = upscale_views(*host.seam_views, reconstruction);
+        return rsf_anomaly_sr_run_pass(host.pass, host.context(), RSF_SR_REINSERT, &views) != 0;
     },
     .driver_bind = [] { return driver.bind(GetModuleHandleW(L"ReScaleFrame.Runtime.dll")); },
     .driver_enabled = [] { return driver.enabled(); },

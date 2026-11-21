@@ -147,6 +147,10 @@ struct UpscaleViews {
     ID3D11DepthStencilView* depth_target{};      // engine HW.pBaseZB
     uint32_t width{}, height{};
 };
+rsf_sr_draw_views round_trip_views(void* source, uint32_t source_width, uint32_t source_height,
+    void* target, uint32_t width, uint32_t height) noexcept;
+rsf_sr_draw_views upscale_views(const UpscaleViews&, void* reconstruction = nullptr) noexcept;
+rsf_sr_draw_views prepare_views(const PrepareViews&) noexcept;
 class UpscalePass {
 public:
     bool create(ID3D11Device*, void (*log)(void*, const char*) = nullptr, void* user = nullptr) noexcept;
