@@ -49,9 +49,11 @@ these SDK calls with shutdown. A swapchain change during an SDK call
 invalidates the previously applied cache revision. Rust also leases
 the bridge's current SDK token against shutdown. Reflex sleep leaves
 older Present markers free to run, and the latency ledger owns the
-indexed frame associations. Source comparison matched all 45 C export
-signatures. The concurrency fixture, builds and SDK behavior remain
-unverified.
+indexed frame associations. SDK callback diagnostics use Rust atomics
+for verbosity, pending Present errors and worker timeouts. Shutdown
+clears the pending error; the timeout count spans interposer sessions.
+Source comparison matched all 45 C export signatures. The fixtures,
+builds and SDK behavior remain unverified.
 
 Anomaly quiesce now releases the adapter's private FG input pass once
 native callbacks and scopes have drained. It clears camera and input

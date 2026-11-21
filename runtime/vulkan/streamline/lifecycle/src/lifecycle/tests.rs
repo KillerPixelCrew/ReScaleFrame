@@ -103,8 +103,8 @@ unsafe extern "C" fn shutdown(result: *mut i32) -> u32 {
     1
 }
 
-unsafe extern "C" fn clear(presentation: u32) {
-    record(if presentation != 0 { "reset" } else { "clear" });
+unsafe extern "C" fn clear() {
+    record("clear");
 }
 
 const PLATFORM: Platform = Platform {
@@ -182,8 +182,10 @@ fn shutdown_keeps_vulkan_dispatch_until_explicit_unload() {
     let lifecycle = Lifecycle::new();
     assert_eq!(start(&lifecycle, "C:\\sl"), 0);
     take_events();
+    lifecycle.diagnostics.present_error(-3);
     assert_eq!(unsafe { lifecycle.shutdown(&PLATFORM) }, 0);
-    assert_eq!(take_events(), ["shutdown", "reset"]);
+    assert_eq!(take_events(), ["shutdown", "clear"]);
+    assert_eq!(lifecycle.diagnostics.take_present_error(), 0);
     assert!(lifecycle.module().is_null());
     assert_eq!(lifecycle.instance_proc().addr(), PROC);
     assert_eq!(lifecycle.device_proc().addr(), PROC);
@@ -214,7 +216,7 @@ fn failed_shutdown_is_sticky_and_refuses_unload() {
     assert_eq!(unsafe { lifecycle.shutdown(&PLATFORM) }, 5);
     assert_eq!(start(&lifecycle, "C:\\sl"), 5);
     unsafe { lifecycle.unload(&Fake, &PLATFORM) };
-    assert_eq!(take_events(), ["shutdown", "reset"]);
+    assert_eq!(take_events(), ["shutdown", "clear"]);
     assert_eq!(lifecycle.instance_proc().addr(), PROC);
 }
 
@@ -301,7 +303,7 @@ fn reflex_token_borrow_allows_older_present_and_defers_shutdown() {
         );
     });
     assert_eq!(unsafe { lifecycle.shutdown(&PLATFORM) }, 0);
-    assert_eq!(take_events(), ["shutdown", "reset"]);
+    assert_eq!(take_events(), ["shutdown", "clear"]);
     assert_eq!(tokens.current(), 0);
     assert_eq!(tokens.with_token(1, -1, |_| 0), -1);
 }

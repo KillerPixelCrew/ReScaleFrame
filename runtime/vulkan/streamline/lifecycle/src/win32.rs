@@ -3,7 +3,7 @@
 
 use crate::frame_generation::{Options, Platform as FgPlatform};
 use crate::lifecycle::{Lifecycle, Platform, System, feature_mask};
-use std::ffi::{c_char, c_void};
+use std::ffi::{CStr, c_char, c_void};
 use std::ptr::{NonNull, null_mut};
 
 const LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR: u32 = 0x100;
@@ -44,6 +44,35 @@ impl System for Win32 {
 }
 
 static LIFECYCLE: Lifecycle = Lifecycle::new();
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_slvk_diagnostic_present_error(result: i32) {
+    LIFECYCLE.diagnostics.present_error(result);
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_slvk_diagnostic_take_present_error() -> i32 {
+    LIFECYCLE.diagnostics.take_present_error()
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_slvk_diagnostic_worker_timeout_epoch() -> u64 {
+    LIFECYCLE.diagnostics.worker_timeout_epoch()
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_slvk_diagnostic_set_verbose(verbose: u32) {
+    LIFECYCLE.diagnostics.set_verbose(verbose != 0);
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_slvk_diagnostic_message(message: *const c_char, info: u32) -> u32 {
+    if message.is_null() {
+        return 0;
+    }
+    let message = unsafe { CStr::from_ptr(message) };
+    u32::from(LIFECYCLE.diagnostics.message(message.to_bytes(), info != 0))
+}
 
 /// Loads the verified interposer if needed and initializes the selected features.
 #[unsafe(no_mangle)]

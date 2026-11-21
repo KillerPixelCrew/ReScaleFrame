@@ -2,6 +2,7 @@
 //! Portable interposer lifecycle state machine. The loader and the native SDK
 //! leaves are supplied by the caller.
 
+use crate::diagnostics::Diagnostics;
 #[cfg(windows)]
 use crate::frame_generation::{FrameGeneration, Swapchain};
 #[cfg(windows)]
@@ -69,9 +70,8 @@ pub(crate) struct Platform {
     /// Calls slShutdown when it was resolved and writes its result. Returns
     /// nonzero when the SDK was called.
     pub shutdown: unsafe extern "C" fn(*mut i32) -> u32,
-    /// Clears the typed SDK entry points. Nonzero also clears the pending
-    /// presentation error.
-    pub clear: unsafe extern "C" fn(u32),
+    /// Clears the typed SDK entry points.
+    pub clear: unsafe extern "C" fn(),
 }
 
 const _: () = assert!(size_of::<Platform>() == 5 * size_of::<*mut c_void>());
@@ -119,6 +119,7 @@ struct Published {
 
 pub(crate) struct Lifecycle {
     session: Mutex<Session>,
+    pub diagnostics: Diagnostics,
     #[cfg(windows)]
     swapchain: Mutex<Swapchain>,
     #[cfg(windows)]
@@ -170,6 +171,7 @@ impl Lifecycle {
                 #[cfg(windows)]
                 frame_generation: FrameGeneration::new(),
             }),
+            diagnostics: Diagnostics::new(),
             #[cfg(windows)]
             swapchain: Mutex::new(Swapchain::new()),
             #[cfg(windows)]
@@ -330,7 +332,8 @@ impl Lifecycle {
         // Only the Vulkan dispatch entry points remain valid after slShutdown.
         #[cfg(windows)]
         self.reset_frame_generation(&mut session);
-        unsafe { (platform.clear)(1) };
+        unsafe { (platform.clear)() };
+        self.diagnostics.present_error(0);
         session.shutdown_result
     }
 
@@ -361,7 +364,7 @@ impl Lifecycle {
         if loaded_here {
             unsafe { self.release(system, platform, session) };
         } else {
-            unsafe { (platform.clear)(0) };
+            unsafe { (platform.clear)() };
         }
     }
 
@@ -374,7 +377,7 @@ impl Lifecycle {
         if let Some(module) = session.module.take() {
             #[cfg(windows)]
             self.reset_frame_generation(session);
-            unsafe { (platform.clear)(0) };
+            unsafe { (platform.clear)() };
             unsafe { system.free(module) };
         }
     }

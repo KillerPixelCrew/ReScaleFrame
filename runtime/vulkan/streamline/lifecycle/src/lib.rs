@@ -12,6 +12,8 @@
 //! the portable state machine for its synthetic tests and an empty archive
 //! otherwise, so the Cargo workspace stays linkable there.
 
+#[cfg(any(windows, test))]
+mod diagnostics;
 #[cfg(windows)]
 mod frame_generation;
 #[cfg(windows)]

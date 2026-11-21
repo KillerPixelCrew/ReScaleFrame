@@ -14,7 +14,6 @@
 #include <cstdint>
 #include <atomic>
 #include <cstdio>
-#include <cstring>
 #include <vulkan/vulkan.h>
 #include <sl.h>
 #include <sl_dlss_g.h>
@@ -33,7 +32,7 @@ struct RsfSlLifecyclePlatform {
     int32_t (*resolve)(void* module);
     int32_t (*init)(uint32_t features, const char* projectId, const wchar_t** pluginPaths);
     uint32_t (*shutdown)(int32_t* result);
-    void (*clear)(uint32_t presentation);
+    void (*clear)();
 };
 static_assert(sizeof(RsfSlLifecyclePlatform) == 5 * sizeof(void*));
 
@@ -61,6 +60,11 @@ void* rsf_slvk_life_instance_proc();
 void* rsf_slvk_life_device_proc();
 void* rsf_slvk_life_interposer_symbol(const char*);
 void* rsf_slvk_life_common_symbol(const char*);
+void rsf_slvk_diagnostic_present_error(int32_t result);
+int32_t rsf_slvk_diagnostic_take_present_error();
+uint64_t rsf_slvk_diagnostic_worker_timeout_epoch();
+void rsf_slvk_diagnostic_set_verbose(uint32_t verbose);
+uint32_t rsf_slvk_diagnostic_message(const char* message, uint32_t info);
 void rsf_slvk_fg_swapchain_created(uint64_t);
 void rsf_slvk_fg_swapchain_destroyed(uint64_t);
 int32_t rsf_slvk_fg_set(const RsfSlFgPlatform*, int32_t, const RsfSlFgOptions*);
@@ -89,9 +93,6 @@ PFun_slPCLGetState* pclState{};
 PFun_slPCLSetOptions* pclOptions{};
 PFun_slDLSSGSetOptions* fgOptions{};
 PFun_slDLSSGGetState* fgState{};
-std::atomic<int> lastPresentError{0};
-std::atomic<uint64_t> workerTimeoutEpoch{0};
-bool verboseLog{};
 const sl::ViewportHandle viewport(0);
 
 /// @brief Resolves a function from the supplied interposer without acquiring another module reference.
@@ -117,7 +118,7 @@ template<class T> T deviceCall(VkDevice device, const char* name) {
 
 /// @brief Clears the SDK entry points that slShutdown, a failed slInit or unload invalidates.
 /// @details The Vulkan dispatch entry points are owned by the Rust lifecycle and stay until the module is unloaded.
-void clearSdkFunctions() {
+void clearSdkFunctions() noexcept {
     init = nullptr; shutdown = nullptr; featureFunction = nullptr; newFrameToken = nullptr;
     isFeatureSupported = nullptr; setTagForFrame = nullptr; setConstants = nullptr; freeResources = nullptr;
     reflexOptions = nullptr; reflexSleep = nullptr; reflexState = nullptr; pclMarker = nullptr;
@@ -247,7 +248,7 @@ void rowMajor(sl::float4x4& target, const float* columnMajor) {
 /// @brief Publishes the latest asynchronous Vulkan presentation error with an atomic store.
 /// @details Called by Streamline presentation work; host reporting/recovery consumes the error separately.
 void onPresentError(const sl::APIError& error) {
-    lastPresentError.store(static_cast<int>(error.vkRes), std::memory_order_relaxed);
+    rsf_slvk_diagnostic_present_error(static_cast<int32_t>(error.vkRes));
 }
 
 // Rust invokes these leaves only while holding the initialized SDK session.
@@ -319,9 +320,7 @@ int32_t emitFrameMarker(uintptr_t token, uint32_t marker) {
 
 /// @brief Writes SDK warnings/errors and enabled verbose messages to stderr.
 void onStreamlineMessage(sl::LogType type, const char* message) {
-    if (message && std::strstr(message, "Worker thread '") && std::strstr(message, "' timed out"))
-        workerTimeoutEpoch.fetch_add(1, std::memory_order_relaxed);
-    if ((type == sl::LogType::eInfo && !verboseLog) || !message) return;
+    if (!rsf_slvk_diagnostic_message(message, type == sl::LogType::eInfo)) return;
     std::fprintf(stderr, "[Streamline %s] %s\n",
         type == sl::LogType::eError ? "error" : type == sl::LogType::eWarn ? "warning" : "info", message);
 }
@@ -363,8 +362,9 @@ int32_t lifecycleInit(uint32_t mask, const char* projectId, const wchar_t** plug
     preferences.engine = sl::EngineType::eCustom;
     preferences.engineVersion = "0.3";
     preferences.renderAPI = sl::RenderAPI::eVulkan;
-    verboseLog = GetEnvironmentVariableA("VULKANSTORY_STREAMLINE_VERBOSE", nullptr, 0) > 0;
-    if (verboseLog) preferences.logLevel = sl::LogLevel::eVerbose;
+    const bool verbose = GetEnvironmentVariableA("VULKANSTORY_STREAMLINE_VERBOSE", nullptr, 0) > 0;
+    rsf_slvk_diagnostic_set_verbose(verbose);
+    if (verbose) preferences.logLevel = sl::LogLevel::eVerbose;
     preferences.logMessageCallback = onStreamlineMessage;
     preferences.flags = sl::PreferenceFlags::eUseManualHooking |
         sl::PreferenceFlags::eUseFrameBasedResourceTagging;
@@ -387,14 +387,8 @@ uint32_t lifecycleShutdown(int32_t* result) noexcept {
     return 1;
 }
 
-/// @brief Clears SDK entry points, and after slShutdown also the pending present error.
-void lifecycleClear(uint32_t presentation) noexcept {
-    clearSdkFunctions();
-    if (presentation) lastPresentError.store(0, std::memory_order_relaxed);
-}
-
 constexpr RsfSlLifecyclePlatform lifecycle{
-    openVerifiedRelease, lifecycleResolve, lifecycleInit, lifecycleShutdown, lifecycleClear,
+    openVerifiedRelease, lifecycleResolve, lifecycleInit, lifecycleShutdown, clearSdkFunctions,
 };
 }
 
@@ -416,7 +410,7 @@ RSF_SL_VK_EXPORT int VulkanStorySlInitialize(const wchar_t* directory, const cha
     return VulkanStorySlInitializeFeatures(directory, projectId, loadReflex, loadDlssG, 0);
 }
 RSF_SL_VK_EXPORT void* VulkanStorySlModule() { return rsf_slvk_life_module(); }
-RSF_SL_VK_EXPORT uint64_t VulkanStorySlWorkerTimeoutEpoch() { return workerTimeoutEpoch.load(std::memory_order_relaxed); }
+RSF_SL_VK_EXPORT uint64_t VulkanStorySlWorkerTimeoutEpoch() { return rsf_slvk_diagnostic_worker_timeout_epoch(); }
 
 /// @brief Shuts down Streamline and clears SDK function pointers/state while retaining the interposer module.
 /// @details Call after provider work is retired. In-flight token calls return busy and allow retry. Vulkan dispatch pointers can still reference interposer code until Vulkan devices/instances are destroyed. The SDK shutdown result is sticky; a nonzero result refuses later initialization and unload. After success, a later VulkanStorySlInitialize re-runs slInit.
@@ -788,7 +782,7 @@ RSF_SL_VK_EXPORT int VulkanStorySlFreeFrameGenerationResources() {
 /// @brief Atomically consumes the latest recorded asynchronous presentation error.
 /// @return Recorded Vulkan error code, or zero when none is pending.
 RSF_SL_VK_EXPORT int VulkanStorySlTakePresentError() {
-    return lastPresentError.exchange(0, std::memory_order_relaxed);
+    return rsf_slvk_diagnostic_take_present_error();
 }
 /// @brief Queries frame-generation status, actual presents and the generated-frame limit.
 /// @details Output values are written only after a successful SDK state query.
