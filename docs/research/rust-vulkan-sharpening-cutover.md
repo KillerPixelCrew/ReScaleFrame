@@ -112,7 +112,24 @@ enabled the DLSS consumer in the Runtime.
 
 ## Remaining limits
 
-No GPU, visible-window or game fixture ran. Device synchronization, image
-quality and moving-game behaviour of the Rust owner are unverified. The Godot
-extension links the native Vulkan services statically but godot-cpp was absent,
-so it was not built here. The full `eng/verify.ps1` suite was not run.
+Physical GPU synchronization, image quality and moving-game behaviour
+of the Rust owner remain unverified. The Godot extension links the native
+Vulkan services statically. The worker
+configuration lacked the pinned Godot C++ bindings. The full
+`eng/verify.ps1` suite was outside this validation.
+
+## Integrated checks
+
+The Streamline-enabled Release build at `41b6b12d35ea` passed eight
+focused Vulkan CPU contracts, including sharpening admission, DLSS
+present capture and both linkage forms of the shared readback test.
+The Runtime, AC7, Loader and Minecraft DLLs matched all 381, 256, 273
+and 267 recorded export names and ordinals. All 330 locked Rust
+tests, formatting and Clippy passed. The logs and inventories are in
+`build/rust-migration-streamline/evidence/41b6b12d35ea/`.
+
+The same build linked the Godot native extension with the pinned
+godot-cpp revision `8070599885b6df675fcad033dd032ce44be2b850`.
+Its 398 export names and ordinals matched the archived XeSS SR
+inventory, and its import table showed static Runtime linkage.
+The Godot graph handoff and Vulkan creation CPU contracts passed.

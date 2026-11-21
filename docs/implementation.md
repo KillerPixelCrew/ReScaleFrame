@@ -435,7 +435,9 @@ The SR and motion stages share one Rust frame-dump binding. An isolated
 Standard run preserved SR capture priority, and AVX saved motion and
 G-buffer position when motion capture owned the service. Both resized
 and quit normally. Motion headers now carry the reset generation
-already checked by the collector. See [the capture binding results](research/rust-anomaly-sr-pass.md#shared-capture-binding).
+already checked by the collector. The AVX retest captured generation
+0 before resize and generation 1 afterwards.
+See [the capture binding results](research/rust-anomaly-sr-pass.md#shared-capture-binding).
 
 The merged Release sharpening fixtures passed on D3D11, D3D12 and
 Vulkan. The D3D11 fixture checks that Depth RCAS and Depth DAS preserve
@@ -1156,6 +1158,14 @@ complete an exact group or command retirement. Destruction fails any
 remaining capture ticket and releases its readback after the caller's
 drain. The regression checks that this path never maps the readback.
 See [the Vulkan readback audit](research/rust-vulkan-readback-owner.md).
+
+The Vulkan sharpening owner now admits passes, selects the filter and
+holds command slots through retirement in Rust. The native leaves
+reuse the existing SPIR-V and constant packing. The CPU fixture
+reproduced a zero-height dispatch on the old owner and passed with
+the Rust refusal. The integrated SDK-enabled Vulkan CPU contracts
+and export inventories passed, including the 398 exports of the
+statically linked Godot extension. See [the sharpening cutover audit](research/rust-vulkan-sharpening-cutover.md).
 
 The D3D11 translucency owner now keeps its pass order, mask and cloud-depth
 leases, device identity and publication in Rust. Cloud association uses

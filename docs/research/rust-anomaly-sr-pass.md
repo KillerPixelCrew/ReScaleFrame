@@ -272,3 +272,9 @@ The motion collector already receives the observer's reset counter
 and checks it before copying. The frame header now carries that
 same value. The focused motion capture test verifies that the
 reservation receives it.
+
+The AVX retest at `da58f43a56df` saved frame 151 at 853×480 with
+generation 0 and frame 392 at 1067×600 with generation 1. Both bundles
+contained motion and G-buffer position, and the game exited normally.
+The test restored the isolated INI after exit. Its captures and
+comparison are in `evidence/avx-shared-dump-generation/`.

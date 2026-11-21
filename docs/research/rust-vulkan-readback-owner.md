@@ -109,3 +109,8 @@ formatting and Clippy passed. See
 `build/rust-migration-streamline/evidence/57c66151ff65/` and
 `build/rust-migration/worker-evidence/rust-vulkan-readback/` for
 the integrated and worker logs. Hardware Vulkan readback remains open.
+
+After the sharpening merge, the Streamline-enabled Godot extension
+also built with the native Vulkan services linked statically. Its 398
+name and ordinal pairs matched the recorded inventory. The graph handoff
+and Vulkan creation CPU contracts passed.
