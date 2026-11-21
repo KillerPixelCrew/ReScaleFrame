@@ -6,6 +6,7 @@
 #include "motion_stage.h"
 #include "native_geometry.h"
 #include "native_hooks.h"
+#include "native_memory.h"
 #include "sr_stage.h"
 #include <rescaleframe/sha256_file.h>
 #include <windows.h>
@@ -159,16 +160,6 @@ bool enable_hooks(const rsf_anomaly_observer_engine* engine) noexcept {
     return hooks.install(image, build.image_size(), sites);
 }
 
-bool guarded_copy(void* output, const void* input, size_t size) noexcept {
-#ifdef _MSC_VER
-    __try {
-#endif
-        std::memcpy(output, input, size);
-        return true;
-#ifdef _MSC_VER
-    } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
-#endif
-}
 bool read_frame(const rsf_anomaly_observer_engine* engine, rsf_anomaly_observer_frame* out) noexcept {
     const auto* image = static_cast<const std::byte*>(engine->image);
     const auto& profile = *build_profiles[engine->build].native;

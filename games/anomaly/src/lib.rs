@@ -24,6 +24,8 @@ mod motion_target;
 mod motion_target_abi;
 mod native_geometry;
 mod native_geometry_abi;
+#[cfg(any(windows, test))]
+mod native_hooks;
 #[cfg(windows)]
 mod native_observer;
 #[cfg(windows)]
