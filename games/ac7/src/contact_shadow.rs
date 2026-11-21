@@ -184,12 +184,20 @@ unsafe extern "C" fn rsf_core_ac7_contact_shadow_correct(
     }
 }
 
+/// CRC-32C of the declared DXBC container, ignoring any engine trailer. Input shorter than the
+/// header or than its declared size hashes to zero.
+pub(crate) fn container_crc(data: &[u8]) -> u32 {
+    if data.len() < 28 {
+        return 0;
+    }
+    data.get(..word(data, 24) as usize).map_or(0, crc32c)
+}
+
 /// The caller lends the shader bytes, including any engine trailer.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_ac7_contact_shadow_crc(bytes: *const u8, size: usize) -> u32 {
     if bytes.is_null() || size < 28 || size > isize::MAX as usize {
         return 0;
     }
-    let data = unsafe { slice::from_raw_parts(bytes, size) };
-    data.get(..word(data, 24) as usize).map_or(0, crc32c)
+    container_crc(unsafe { slice::from_raw_parts(bytes, size) })
 }

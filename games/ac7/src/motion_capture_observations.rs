@@ -41,14 +41,15 @@ impl Shader {
 }
 
 // The observer already translates the native D3D11 descriptors to this public C structure.
+// The velocity pass cache keeps its own copies of the same observations.
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
-struct LayoutElement {
-    semantic_index: u32,
-    format: u32,
-    input_slot: u32,
-    byte_offset: u32,
-    per_instance: u32,
+pub(crate) struct LayoutElement {
+    pub(crate) semantic_index: u32,
+    pub(crate) format: u32,
+    pub(crate) input_slot: u32,
+    pub(crate) byte_offset: u32,
+    pub(crate) per_instance: u32,
 }
 
 #[repr(C)]

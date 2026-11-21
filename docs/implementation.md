@@ -586,8 +586,17 @@ byte comparison remain open.
 The AC7 adapter now owns the carrier's executable and window identity,
 GameSDK probe, guarded patch bytes and post-decryption install order.
 Both carriers keep their native forwarding, the guarded patch leaf
-and existing exports. Build and game startup verification remain open.
+and existing exports. Rust now also schedules the optional F9 installation
+and publishes carrier readiness after native preparation returns.
+Build and game startup verification remain open.
 [Carrier startup audit](research/rust-ac7-carrier-startup.md)
+
+The AC7 velocity pass now keeps its source, layout and variant admission
+caches in Rust. Variant creation still uses the same native D3D11 objects
+and shader transforms. A reset discards late cache results, and the F9
+capture keeps its own observation rules. Build, replay and moving-game
+verification remain open.
+[Velocity pass audit](research/rust-ac7-velocity-pass-cache.md)
 
 The Godot compositor probe now keeps requests, snapshots and motion
 classification per effect instance in Rust. The typed godot-cpp

@@ -1,0 +1,401 @@
+// SPDX-License-Identifier: MIT
+//! The translucent velocity pass's observed shader sources and input layouts, and its variant
+//! admission: stage-checked source lookup, the beam/trail layout decision, the history identity of
+//! generated geometry, variant identity, reuse and the refusal cache. velocity_pass.cpp keeps the
+//! DXBC transform calls, every typed D3D11 object and the bytecode-keyed object caches in the
+//! builder it lends, and stores each built variant at the slot recorded here.
+
+use crate::contact_shadow::container_crc;
+use crate::motion_capture_observations::LayoutElement;
+use crate::velocity_container::borrowed;
+use std::collections::HashMap;
+use std::ffi::c_void;
+use std::mem::offset_of;
+use std::sync::{LazyLock, Mutex, MutexGuard};
+
+const MAX_SHADER_BYTES: usize = 1024 * 1024;
+const SOURCE_BUDGET: usize = 64 * 1024 * 1024;
+const MAX_LAYOUTS: usize = 4096;
+const MAX_LAYOUT_ELEMENTS: usize = 16;
+const NO_VARIANT: u32 = u32::MAX;
+
+// D3D11 observer stages, also the order in which the builder receives their bytecode.
+const VERTEX: usize = 0;
+const PIXEL: usize = 1;
+const GEOMETRY: usize = 2;
+const HULL: usize = 3;
+const DOMAIN: usize = 4;
+const STAGES: usize = 5;
+
+// Builder outcomes. Anything else leaves the key unrecorded, so a later draw builds again.
+const REFUSED: i32 = 0;
+const BUILT: i32 = 1;
+
+// The beam/trail vertex factory declaration: semantics 0 to 4 once each in stream 0 of an
+// 80-byte vertex, an optional semantic 5 at the start of stream 1, all per vertex, float4 except
+// the float3 semantic 1.
+const BEAM_STRIDE: u32 = 80;
+const BEAM_OFFSETS: [u32; 6] = [0, 16, 32, 64, 48, 0];
+const DXGI_FORMAT_R32G32B32A32_FLOAT: u32 = 2;
+const DXGI_FORMAT_R32G32B32_FLOAT: u32 = 6;
+
+struct Source {
+    stage: u32,
+    hash: u32,
+    bytes: Vec<u8>,
+}
+
+struct Layout {
+    elements: Vec<LayoutElement>,
+    serial: u64,
+}
+
+/// The draw's bound shaders in stage order, its input layout, material blend and first stream
+/// stride. Absent stages are null.
+#[repr(C)]
+#[allow(dead_code)] // constructed by velocity_pass.cpp
+struct VariantRequest {
+    shaders: [*mut c_void; STAGES],
+    layout: *mut c_void,
+    material_blend: u32,
+    stride: u32,
+}
+
+/// Lent to the builder for its call. Absent stages are empty.
+#[repr(C)]
+#[allow(dead_code)] // read by velocity_pass.cpp
+struct VariantSources {
+    bytes: [*const u8; STAGES],
+    sizes: [usize; STAGES],
+    elements: *const LayoutElement,
+    element_count: u32,
+    geometry_hash: u32,
+    beam_layout: bool,
+}
+
+const _: () = {
+    assert!(size_of::<VariantRequest>() == 56 && offset_of!(VariantRequest, stride) == 52);
+    assert!(size_of::<VariantSources>() == 104);
+    assert!(offset_of!(VariantSources, elements) == 80);
+    assert!(offset_of!(VariantSources, beam_layout) == 96);
+};
+
+/// Interface addresses alone are not identity: D3D11 reuses released addresses, so the
+/// bytecode hashes and the layout's creation serial are part of the key.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct VariantKey {
+    shaders: [usize; STAGES],
+    layout: usize,
+    serial: u64,
+    hashes: [u32; STAGES],
+    material_blend: u32,
+}
+
+/// Copies for the builder, which runs after the cache lock is released.
+struct Lease {
+    bytes: [Vec<u8>; STAGES],
+    elements: Vec<LayoutElement>,
+    geometry_hash: u32,
+    beam_layout: bool,
+}
+
+enum Admission {
+    Unavailable,
+    Known(Option<u32>),
+    Build(VariantKey, Lease),
+}
+
+#[derive(Default)]
+struct Cache {
+    sources: HashMap<usize, Source>,
+    source_bytes: usize,
+    layouts: HashMap<usize, Layout>,
+    // Never reset, so a layout observed after a release cannot match an older key.
+    layout_serial: u64,
+    // A slot in the native variant list, or None for a cached refusal.
+    variants: HashMap<VariantKey, Option<u32>>,
+    // Advanced whenever the native variant list is discarded.
+    generation: u64,
+}
+
+static CACHE: LazyLock<Mutex<Cache>> = LazyLock::new(Mutex::default);
+
+fn lock(state: &Mutex<Cache>) -> MutexGuard<'_, Cache> {
+    state.lock().unwrap_or_else(|error| error.into_inner())
+}
+
+fn copy_of<T: Copy>(data: &[T]) -> Option<Vec<T>> {
+    let mut copy = Vec::new();
+    copy.try_reserve_exact(data.len()).ok()?;
+    copy.extend_from_slice(data);
+    Some(copy)
+}
+
+fn beam_layout(stride: u32, elements: &[LayoutElement]) -> bool {
+    if stride != BEAM_STRIDE || !(5..=6).contains(&elements.len()) {
+        return false;
+    }
+    let mut seen = [false; 5];
+    for element in elements {
+        let index = element.semantic_index as usize;
+        let format = if index == 1 {
+            DXGI_FORMAT_R32G32B32_FLOAT
+        } else {
+            DXGI_FORMAT_R32G32B32A32_FLOAT
+        };
+        if index > 5
+            || element.per_instance != 0
+            || element.input_slot != u32::from(index == 5)
+            || element.byte_offset != BEAM_OFFSETS[index]
+            || element.format != format
+        {
+            return false;
+        }
+        if index < 5 {
+            if seen[index] {
+                return false;
+            }
+            seen[index] = true;
+        }
+    }
+    seen.iter().all(|&field| field)
+}
+
+impl Cache {
+    // A replacement always forgets the old bytecode first, even when the new one is refused.
+    fn observe_shader(&mut self, identity: usize, stage: u32, bytes: &[u8]) {
+        if let Some(old) = self.sources.remove(&identity) {
+            self.source_bytes -= old.bytes.len();
+        }
+        if self.source_bytes + bytes.len() > SOURCE_BUDGET || self.sources.try_reserve(1).is_err() {
+            return;
+        }
+        let Some(copy) = copy_of(bytes) else {
+            return;
+        };
+        self.source_bytes += copy.len();
+        let hash = container_crc(bytes);
+        self.sources.insert(
+            identity,
+            Source {
+                stage,
+                hash,
+                bytes: copy,
+            },
+        );
+    }
+
+    // None is a refused descriptor set, which still forgets the address.
+    fn observe_layout(&mut self, identity: usize, elements: Option<&[LayoutElement]>) {
+        self.layouts.remove(&identity);
+        let Some(elements) = elements else {
+            return;
+        };
+        if self.layouts.len() >= MAX_LAYOUTS || self.layouts.try_reserve(1).is_err() {
+            return;
+        }
+        let Some(elements) = copy_of(elements) else {
+            return;
+        };
+        self.layout_serial += 1;
+        let serial = self.layout_serial;
+        self.layouts.insert(identity, Layout { elements, serial });
+    }
+
+    fn source(&self, shader: *mut c_void, stage: usize) -> Option<&Source> {
+        self.sources
+            .get(&shader.addr())
+            .filter(|source| source.stage as usize == stage)
+    }
+
+    fn prepare(&self, request: &VariantRequest, vertex_hash: &mut u32) -> Admission {
+        // A bound native geometry shader, or either tessellation stage, must have its own
+        // observed source. The draw callback already refuses a partial tessellation pipeline.
+        let tessellated = !request.shaders[HULL].is_null() || !request.shaders[DOMAIN].is_null();
+        let mut sources: [Option<&Source>; STAGES] = [None; STAGES];
+        for (stage, slot) in sources.iter_mut().enumerate() {
+            let shader = request.shaders[stage];
+            let required = match stage {
+                VERTEX | PIXEL => true,
+                GEOMETRY => !shader.is_null(),
+                _ => tessellated,
+            };
+            if required {
+                let Some(source) = self.source(shader, stage) else {
+                    return Admission::Unavailable;
+                };
+                *slot = Some(source);
+            }
+        }
+        let hashes = sources.map(|source| source.map_or(0, |source| source.hash));
+        *vertex_hash = hashes[VERTEX];
+
+        let layout = self.layouts.get(&request.layout.addr());
+        let key = VariantKey {
+            shaders: request.shaders.map(|shader| shader.addr()),
+            layout: request.layout.addr(),
+            serial: layout.map_or(0, |layout| layout.serial),
+            hashes,
+            material_blend: request.material_blend,
+        };
+        if let Some(&slot) = self.variants.get(&key) {
+            return Admission::Known(slot);
+        }
+
+        let elements = layout.map_or(&[][..], |layout| layout.elements.as_slice());
+        let mut bytes: [Vec<u8>; STAGES] = Default::default();
+        for (copy, source) in bytes.iter_mut().zip(sources) {
+            if let Some(source) = source {
+                let Some(data) = copy_of(&source.bytes) else {
+                    return Admission::Unavailable;
+                };
+                *copy = data;
+            }
+        }
+        let Some(leased_elements) = copy_of(elements) else {
+            return Admission::Unavailable;
+        };
+        // Generated geometry keeps separate history per native producer.
+        let geometry_hash = match (sources[HULL], sources[DOMAIN], sources[GEOMETRY]) {
+            (Some(hull), Some(domain), _) => hull.hash ^ (domain.hash << 1) ^ (domain.hash >> 31),
+            (_, _, Some(geometry)) => geometry.hash,
+            _ => 0,
+        };
+        Admission::Build(
+            key,
+            Lease {
+                bytes,
+                elements: leased_elements,
+                geometry_hash,
+                beam_layout: beam_layout(request.stride, elements),
+            },
+        )
+    }
+
+    fn record(&mut self, generation: u64, key: VariantKey, slot: Option<u32>) {
+        if self.generation == generation && self.variants.try_reserve(1).is_ok() {
+            self.variants.insert(key, slot);
+        }
+    }
+
+    fn reset_variants(&mut self) {
+        self.variants = HashMap::new();
+        self.generation = self.generation.wrapping_add(1);
+    }
+
+    fn release(&mut self) {
+        self.reset_variants();
+        self.sources = HashMap::new();
+        self.source_bytes = 0;
+        self.layouts = HashMap::new();
+    }
+}
+
+fn admit(
+    state: &Mutex<Cache>,
+    request: &VariantRequest,
+    vertex_hash: &mut u32,
+    build: impl FnOnce(&VariantSources, &mut u32) -> i32,
+) -> u32 {
+    let (generation, key, lease) = {
+        let cache = lock(state);
+        match cache.prepare(request, vertex_hash) {
+            Admission::Unavailable => return NO_VARIANT,
+            Admission::Known(slot) => return slot.unwrap_or(NO_VARIANT),
+            Admission::Build(key, lease) => (cache.generation, key, lease),
+        }
+    };
+    let sources = VariantSources {
+        bytes: lease.bytes.each_ref().map(|bytes| bytes.as_ptr()),
+        sizes: lease.bytes.each_ref().map(Vec::len),
+        elements: lease.elements.as_ptr(),
+        element_count: lease.elements.len() as u32,
+        geometry_hash: lease.geometry_hash,
+        beam_layout: lease.beam_layout,
+    };
+    // The builder creates D3D11 shaders, whose creation callbacks report back into this cache.
+    let mut slot = NO_VARIANT;
+    let entry = match build(&sources, &mut slot) {
+        BUILT if slot != NO_VARIANT => Some(slot),
+        REFUSED => None,
+        _ => return NO_VARIANT,
+    };
+    lock(state).record(generation, key, entry);
+    entry.unwrap_or(NO_VARIANT)
+}
+
+type BuildVariant = unsafe extern "C" fn(*mut c_void, *const VariantSources, *mut u32) -> i32;
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_ac7_velocity_cache_shader(
+    shader: *mut c_void,
+    stage: u32,
+    bytes: *const c_void,
+    size: u32,
+) {
+    let size = size as usize;
+    if shader.is_null() || stage as usize > DOMAIN || !(1..=MAX_SHADER_BYTES).contains(&size) {
+        return;
+    }
+    // SAFETY: The creation callback lends its original bytecode until this call returns.
+    let Some(data) = (unsafe { borrowed(bytes.cast::<u8>(), size) }) else {
+        return;
+    };
+    lock(&CACHE).observe_shader(shader.addr(), stage, data);
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_ac7_velocity_cache_layout(
+    layout: *mut c_void,
+    elements: *const LayoutElement,
+    copied: u32,
+    count: u32,
+) {
+    if layout.is_null() {
+        return;
+    }
+    let len = count as usize;
+    let elements = if !elements.is_null() && copied == count && len <= MAX_LAYOUT_ELEMENTS {
+        // SAFETY: The creation callback lends `copied` translated descriptors for this call.
+        unsafe { borrowed(elements, len) }
+    } else {
+        None
+    };
+    lock(&CACHE).observe_layout(layout.addr(), elements);
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_ac7_velocity_admit_variant(
+    request: *const VariantRequest,
+    user: *mut c_void,
+    build: Option<BuildVariant>,
+    vertex_hash: *mut u32,
+) -> u32 {
+    // SAFETY: The draw callback lends its request and hash output for this call.
+    let (request, vertex_hash) = unsafe { (request.as_ref(), vertex_hash.as_mut()) };
+    let (Some(request), Some(build), Some(vertex_hash)) = (request, build, vertex_hash) else {
+        return NO_VARIANT;
+    };
+    admit(&CACHE, request, vertex_hash, |sources, slot| {
+        // SAFETY: The builder borrows the sources, its context and the slot for this call.
+        unsafe { build(user, sources, slot) }
+    })
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_ac7_velocity_variant_count() -> usize {
+    lock(&CACHE).variants.len()
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_ac7_velocity_reset_variants() {
+    lock(&CACHE).reset_variants();
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_ac7_velocity_cache_release() {
+    lock(&CACHE).release();
+}
+
+#[cfg(test)]
+mod tests;

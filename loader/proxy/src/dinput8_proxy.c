@@ -41,7 +41,6 @@ extern IMAGE_DOS_HEADER __ImageBase;
 
 static HMODULE real_dinput8;
 static wchar_t log_path[MAX_PATH * 2];
-static volatile LONG startup_ready;
 static wchar_t preference_path[MAX_PATH * 2];
 static uint32_t preferred_enabled = 1;
 static uint32_t preferred_quality = 3;
@@ -884,9 +883,10 @@ static void start_generation(void)
 }
 
 _Static_assert(sizeof(wchar_t) == sizeof(uint16_t), "AC7 carrier UTF-16 ABI");
-_Static_assert(sizeof(rsf_ac7_carrier_leaves) == 64, "AC7 carrier ABI");
+_Static_assert(sizeof(rsf_ac7_carrier_leaves) == 72, "AC7 carrier ABI");
 _Static_assert(offsetof(rsf_ac7_carrier_leaves, read_number) == 8, "AC7 carrier ABI");
 _Static_assert(offsetof(rsf_ac7_carrier_leaves, prepare_native_game) == 56, "AC7 carrier ABI");
+_Static_assert(offsetof(rsf_ac7_carrier_leaves, install_motion_capture) == 64, "AC7 carrier ABI");
 static const rsf_ac7_carrier_leaves carrier_leaves = {
     .struct_size = sizeof(rsf_ac7_carrier_leaves),
     .abi_version = RSF_AC7_CARRIER_ABI_VERSION,
@@ -897,6 +897,7 @@ static const rsf_ac7_carrier_leaves carrier_leaves = {
     .set_depth_conformed = set_translucency_depth_conformed,
     .register_translucency_scale = register_translucency_scale,
     .prepare_native_game = prepare_native_game,
+    .install_motion_capture = rsf_ac7_motion_capture_install,
 };
 
 static DWORD WINAPI dump_worker(LPVOID parameter)
@@ -978,10 +979,6 @@ static DWORD WINAPI dump_worker(LPVOID parameter)
     /* Only now: the code was ciphertext until the dump succeeded, so patching earlier would
        write into bytes about to be overwritten. */
     rsf_ac7_carrier_install_decrypted(&carrier_leaves);
-    if (read_number("RSF_MOTION_CAPTURE", 0) != 0) {
-        rsf_ac7_motion_capture_install();
-    }
-    InterlockedExchange(&startup_ready, 1);
     if (!dump_module) {
         note("startup: renderer patches prepared; waiting for a presented frame to start DLSS");
         return 0;
@@ -1389,11 +1386,6 @@ static unsigned long action_reinsert_depth_policy(void)
     return read_number("RSF_REINSERT_DEPTH", 0);
 }
 
-static unsigned long action_startup_ready(void)
-{
-    return (unsigned long)InterlockedCompareExchange(&startup_ready, 0, 0);
-}
-
 static void save_preferences(void)
 {
     if (!rsf_preferences_write(preference_path, preferred_enabled, preferred_quality)) {
@@ -1462,7 +1454,7 @@ static void register_overlay_actions(void)
     actions.set_jitter = action_set_jitter;
     actions.jitter_open = action_jitter_open;
     actions.jitter_available = action_jitter_available;
-    actions.startup_ready = action_startup_ready;
+    actions.startup_ready = rsf_ac7_carrier_startup_ready;
     actions.save_quality = action_save_quality;
     actions.save_dlss_preset = action_save_dlss_preset;
     actions.save_sharpening = action_save_sharpening;

@@ -8,6 +8,8 @@
 //! rollback and retirement (`truesky.rs`), all reached through ac7_sites.h. The queued RHI render
 //! scopes of ac7_render_scope.h (`render_scope.rs`) export that header's calls except the two
 //! create calls, which render_scope.cpp keeps to lend its exception leaves (ac7_scope_owner.h).
+//! The translucent velocity pass's shader and layout observations and its variant admission are
+//! `velocity_pass_cache.rs`; velocity_pass.cpp keeps its D3D11 work and lends the variant builder.
 //!
 //! The rest of the native renderer stays C++ (native_renderer.cpp and the render-scope library):
 //! the five exported renderer calls as wrappers, the renderer object and its fields, MinHook
@@ -44,6 +46,7 @@ mod ui;
 mod ui_abi;
 mod velocity_container;
 mod velocity_geometry;
+mod velocity_pass_cache;
 mod velocity_pixel;
 mod velocity_stage;
 mod velocity_tessellation;
