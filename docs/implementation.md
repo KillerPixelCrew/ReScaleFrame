@@ -1068,6 +1068,14 @@ export inventories matched by name and ordinal. Live FidelityFX generation
 and capture remain unverified for this change.
 [FidelityFX callback follow-up](research/rust-vulkan-ffx-wsi-owner.md#generation-callback-source)
 
+Rust owns the opt-in Vulkan timing CSV path, shared output and per-module
+record limit. FidelityFX scopes, interop waits and Reflex pacing use the
+same logger. The file test verified the header, row format and 2,048-record
+limit. The merged build passed 382 pinned Rust tests, formatting, Clippy
+and eight MSVC CPU and ABI contracts, including Vulkan latency. Runtime
+and linked export inventories matched. The logger has yet to collect
+timing from a live Vulkan frame on this build.
+
 The integrated Vulkan owner build passed 379 pinned Rust tests,
 formatting, Clippy and 13 focused MSVC Release contracts. The Runtime,
 AC7, Loader, Minecraft and Godot export inventories matched, and the

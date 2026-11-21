@@ -55,6 +55,7 @@ void rsf_core_latencyvk_sdk_result(int32_t, uint32_t marker);
 
 #if defined(RSF_HAVE_STREAMLINE_VK)
 #include "native_vulkan_timing.h"
+#include <windows.h>
 #include <string>
 
 extern "C" {

@@ -191,6 +191,8 @@ mod vulkan_sr_abi;
 #[cfg(windows)]
 mod vulkan_sr_split;
 #[cfg(windows)]
+mod vulkan_timing;
+#[cfg(windows)]
 mod vulkan_xess_fg;
 
 #[unsafe(no_mangle)]

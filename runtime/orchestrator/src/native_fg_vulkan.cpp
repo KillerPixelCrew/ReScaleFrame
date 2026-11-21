@@ -12,7 +12,6 @@
 #include "vulkan_fg_resources_native.h"
 #include "../../backends/common/frame_capture_vk.h"
 #include "../../vulkan/fsr3/wsi-dispatch.h"
-#include <atomic>
 #include <cstring>
 #include <filesystem>
 #include <memory>
@@ -389,18 +388,6 @@ int32_t drain(rsf_ffxgvk_native* self) noexcept {
 void capture_flush(rsf_ffxgvk_native* self) noexcept try {
     (void)self->capture.flush();
 } catch (...) {}
-int64_t timing_begin() noexcept {
-    auto& config = rsf::vk_timing_detail::config();
-    if (config.file == INVALID_HANDLE_VALUE || config.records.load(std::memory_order_relaxed) >= 2048) return 0;
-    LARGE_INTEGER now{}; QueryPerformanceCounter(&now);
-    return now.QuadPart;
-}
-void timing_end(const char* stage, uint64_t frame, int64_t start) noexcept {
-    if (!start || !stage) return;
-    LARGE_INTEGER end{}; QueryPerformanceCounter(&end);
-    rsf::vk_timing_detail::config().write(stage, frame, GetCurrentThreadId(), start, end.QuadPart);
-}
-
 constexpr rsf_ffxgvk_ops operations{
     open, [](rsf_ffxgvk_native* self) { delete self; },
     create_swapchain, query_swapchain, create_effect, query_provider, destroy_effect, destroy_chain, destroy_swapchain,
@@ -414,7 +401,7 @@ constexpr rsf_ffxgvk_ops operations{
         self->gpu.wait_label = frame ? "ffx_slot_fence_wait" : nullptr;
         self->gpu.wait_frame = frame;
     },
-    timing_begin, timing_end, &rsf::vkfg::platform,
+    rsf::vk_timing_begin, rsf::vk_timing_end, &rsf::vkfg::platform,
 };
 int32_t ffx_present(rsf_ffxgvk* self, const void* info, const rsf_frame_record* source, uint32_t explicit_source) {
     uint64_t chain = 0;
