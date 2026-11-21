@@ -101,9 +101,10 @@ imagespace, Effects, TAA receipts, Present capture and the post-Swap reset read 
   and after Swap. A FINISH that did not define full output leaves `finished` false and is retried
   at the next point while the producer snapshot and output owner still match. Once `finished`
   is true, a later FINISH answers the World's `full_output_resolved`. The imagespace exit clears
-  that flag after its own retirement attempt, so a RETIRE refused twice inside imagespace is not
-  sent again after Swap: the token stays owned. This matches the C++ source exactly and is kept;
-  it corrects the analysis note's statement that Swap cleanup retries retirement.
+  that flag after its own retirement attempt. In the C++ source, and in `8ca09fef`, retirement went
+  through that answer, so a RETIRE refused twice inside imagespace was not sent again after Swap
+  and the token stayed owned, contrary to the analysis note's statement that Swap cleanup retries
+  retirement. The follow-up below fixes this.
 - **Post-Swap retention.** `finish_render_scope` closes SUBMISSION, WINDOW and FRAME, then
   retires recovery, drains auxiliaries and finishes the resolution source. The World and the Rust
   state reset only when no resolution, auxiliary or token obligation remains. An owned token
@@ -120,5 +121,37 @@ receipt format and the five surface names. Pinned Rust 1.94.1 formatting, locked
 metadata and whitespace checks passed. Build, link, Clippy, tests, the shared host fixture,
 deployment and game checks remain with the user; this is a source port, not a runtime result.
 Open game checks: a reduced quality with temporal SR published, a spatial FINISH after temporal
-refusal, a forced ratio-write failure, a RETIRE refusal inside imagespace (expected to stay owned
-after Swap), quiesce with an owned token, and VATS/Pip-Boy contents after RETIRE.
+refusal, a forced ratio-write failure, a RETIRE refusal inside imagespace, quiesce with an owned
+token, and VATS/Pip-Boy contents after RETIRE.
+
+### Retirement after the imagespace exit
+
+Two answers that the port above shared now stay distinct. `finished` is the token's own record
+that its one FINISH resolved full output; the World's `full_output_resolved` is the per-imagespace
+flag that the TAA gate and receipts read, and the imagespace exit clears it. Standalone FINISH,
+which the SR seam's scope guard calls, still answers the World flag for a finished token. RETIRE
+now reads `finished`: when it is set, RETIRE goes to the host on the same token, surfaces and held
+lease without a second FINISH or any output publication. When it is not set, the guarded FINISH
+admission (seal, current producer snapshot, same output owner, output scope) runs first, as
+before. RETIRE still drops the token and lease only on `RSF_OK` with `NEXT_REDUCTION_ALLOWED`; any
+other answer retains both and keeps the World refused for the source.
+
+Call order against `8ca09fef`, for a token that FINISH resolved at the SR seam:
+
+| Seam | Before | After |
+| --- | --- | --- |
+| Original Effects return | RETIRE (World flag still set). | RETIRE. |
+| Selected imagespace exit | RETIRE if still owned, then auxiliaries, output scope end, flag cleared. | Unchanged. |
+| After Swap | FINISH answers the cleared flag; no RETIRE, token owned for the process. | RETIRE if still owned, then auxiliaries and the resolution source. |
+
+A token whose FINISH did not resolve full output follows the same path as before at every seam.
+The Runtime contract requires only the same owner for RETIRE, including while suspended. The
+post-Swap RETIRE runs after the native consumers and before the World can admit the next producer.
+
+`render_hooks/recovery/tests.rs` adds a focused, unrun regression with fake leaves: a finished
+token retires after the World flag was cleared without another FINISH, standalone FINISH still
+answers the cleared flag, a refused or withholding RETIRE retains the token and the retry sends
+only RETIRE, and an unfinished token still stops at the guarded FINISH. Source review compared the
+three call sites in `render_hooks.cpp`; pinned Rust 1.94.1 formatting and whitespace checks
+passed. Build, tests and game checks remain with the user; the open check is a forced RETIRE
+refusal inside imagespace that drains after Swap, with VATS contents restored correctly.
