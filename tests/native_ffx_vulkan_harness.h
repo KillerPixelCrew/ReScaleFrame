@@ -128,12 +128,19 @@ void VKAPI_PTR destroy_chain(VkDevice, VkSwapchainKHR chain, const VkAllocationC
 }
 uint64_t present_count(VkSwapchainKHR) { return state.present_calls; }
 
+// The leaf the Rust WSI route lends to a hook on the fixture device, or null.
+inline rsf_ffxgvk_native* routed() {
+    auto* native = rsf_core_ffxgvk_wsi_borrow(id<void*>(1), 1);
+    if (native) rsf_core_ffxgvk_wsi_return();
+    return native;
+}
+
 // The fake open replaces module loading, Vulkan entry resolution and WSI
-// registration. Every later native step is the production leaf.
+// registration. Admission is the real Rust route. Every later native step is
+// the production leaf.
 int32_t open(const rsf_fgvk_setup* setup, uint32_t width, uint32_t height, rsf_ffxgvk_native** out, void** resources) {
+    require(!routed(), "Rust publishes the leaf only after open");
     auto* self = new rsf_ffxgvk_native{};
-    rsf_ffxgvk_native* expected = nullptr;
-    if (!owner.compare_exchange_strong(expected, self)) { delete self; return RSF_BACKEND_ERROR_NOT_SUPPORTED; }
     self->setup = *setup; self->width = width; self->height = height;
     self->create = nullptr; self->destroy = destroy_context; self->dispatch = dispatch; self->configure = configure;
     self->barrier = barrier; self->copy = copy; self->idle = idle;

@@ -1037,6 +1037,15 @@ formatting and Clippy passed. The four Release export inventories
 matched. SDK initialization, device behavior and game testing remain
 open. See [the FidelityFX Vulkan FG cutover audit](research/rust-vulkan-ffx-fg-cutover.md).
 
+Rust now also owns the FidelityFX 3 Vulkan WSI route. Each native
+callback borrows its admitted leaf until the callback returns.
+Retirement closes admission and retains the leaf while a borrow
+is active. A successor can register after native close unregisters
+the current route. The worker passed 12 enabled and three disabled
+MSVC Release contracts and matched the Runtime and three linked
+export inventories. The callback-retirement regression is synthetic.
+[FidelityFX WSI ownership audit](research/rust-vulkan-ffx-wsi-owner.md)
+
 The ordinary Vulkan SR owner now manages FidelityFX context selection,
 staging, dispatch, history, output publication and checked teardown in Rust.
 The existing provider boundaries and SRVK ABI remain intact. FSR2/3
