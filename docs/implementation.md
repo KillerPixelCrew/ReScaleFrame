@@ -165,6 +165,12 @@ before the queue call. The native code retains only readbacks matching
 that snapshot. GPU copies, fences and file encoding remain native.
 Builds and the two native capture fixtures remain unrun.
 
+Unity package D3D12 SR contexts and their recording slots are Rust-owned.
+The existing Unity bridge still provides recording and completion facts.
+The view owner preserves reconfiguration, spatial fallback and retirement
+through the shared Runtime. The native setup table was regenerated, and
+build and player verification remain open.
+
 ## Rust orchestrator and first Anomaly port
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.

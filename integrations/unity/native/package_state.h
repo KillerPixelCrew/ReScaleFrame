@@ -8,11 +8,15 @@
    The settings, status and frame-counter structures are the package's managed contract
    (Runtime/Native.cs, rsfu_*) and keep their layout. Rust owns the stored settings and their
    validation, the status snapshot, the render plan, temporal readiness, the pending
-   reconfiguration and the session lifecycle with its result codes. package.cpp keeps the SR
-   views, the Unity, DXGI, Vulkan and preview work and the input window, and lends the typed SDK
-   and Runtime calls through rsf_unity_package_platform. package.cpp's mutex still serializes the
-   exports and the render path; nothing here takes it, and Rust never holds its own state lock
-   while it calls a leaf. */
+   reconfiguration, the session lifecycle with its result codes, and the D3D12 SR views of the
+   render callback (package_views.rs): one Runtime SR context per Unity view key, its backend
+   choice and fallback, its replacement on new extents or reconfiguration, and the recording
+   slots bound to the bridge's command lists. package.cpp keeps the Unity, DXGI, Vulkan and
+   preview work, the render callback's routing and the input window, and lends the typed SDK and
+   Runtime calls through rsf_unity_package_platform. package.cpp's mutex still serializes the
+   exports and the render path; nothing here takes it. Rust never holds its state lock while it
+   calls a leaf; its view lock is held across the SR leaves, which never re-enter, and is always
+   taken before the state lock. */
 #include <rescaleframe/game_renderer.h>
 #include <rescaleframe/sharpening_settings.h>
 #include <stdint.h>
@@ -47,6 +51,17 @@ typedef struct rsf_unity_frame_counters {
 typedef struct rsf_native_fg_options rsf_native_fg_options;
 typedef struct rsf_native_fg_status rsf_native_fg_status;
 typedef struct rsf_native_latency_status rsf_native_latency_status;
+/* Defined by rescaleframe/native_sr_d3d12.h; a Runtime SR context. */
+typedef struct rsf_sr12 rsf_sr12;
+
+/* The Runtime SR context a view asks for: its resolved backend (0 is the spatial or native path),
+   the stored quality and DLSS model, the pass camera's extents and depth convention. package.cpp
+   adds the device, SDK directories, Streamline host and log. */
+typedef struct rsf_unity_package_view_setup {
+    uint32_t backend, quality, dlss_preset;
+    uint32_t output_width, output_height, render_width, render_height;
+    uint32_t inverted_depth;
+} rsf_unity_package_view_setup;
 
 /* package.cpp's typed leaves, all present. No leaf calls back into a rsf_unity_package_* entry
    except open, which may report rsf_unity_package_fg_result; none may throw. */
@@ -71,8 +86,21 @@ typedef struct rsf_unity_package_platform {
     uint32_t (*bridge_drained)(void);
     /* rsf_fg12_end_session for the bridge session's id; non-zero once its tokens are retired. */
     uint32_t (*end_session)(void);
-    /* Destroys every SR view. */
-    void (*destroy_views)(void);
+    /* SR views. commands is the pass's ID3D12GraphicsCommandList. sr_default_backend resolves
+       Auto through rsf_gpu_default_sr_backend for the list's adapter; zero when the device or
+       adapter cannot be read. sr_create is zero when the list has no device, and otherwise stores
+       rsf_sr12_create's result and context (null unless created). The rest are rsf_sr12_plan,
+       rsf_sharpening_defaults, rsf_sr12_set_sharpening, rsf_sr12_evaluate and rsf_sr12_destroy. */
+    uint32_t (*sr_default_backend)(void* commands, uint32_t* backend);
+    uint32_t (*sr_create)(void* commands, const rsf_unity_package_view_setup* setup, int32_t* result,
+        rsf_sr12** output);
+    int32_t (*sr_plan)(const rsf_sr12* sr, uint32_t* width, uint32_t* height);
+    void (*sharpening_defaults)(rsf_sharpening_options* output);
+    int32_t (*sr_set_sharpening)(rsf_sr12* sr, const rsf_sharpening_options* options);
+    int32_t (*sr_evaluate)(rsf_sr12* sr, void* commands, const rsf_game_render_pass* pass, uint32_t slot);
+    void (*sr_destroy)(rsf_sr12* sr);
+    /* The package log. */
+    void (*log)(const char* text);
     void (*bridge_release)(void);
 } rsf_unity_package_platform;
 
@@ -102,18 +130,16 @@ void rsf_unity_package_device_shutdown(const rsf_unity_package_platform* platfor
 
 /* Render path, under package.cpp's mutex. */
 void rsf_unity_package_current(rsf_unity_package_settings* output);
-/* Non-zero while a settings change waits for a reconfiguring pass. */
-uint32_t rsf_unity_package_pending(void);
-/* A reconfiguring pass releases the views, before package.cpp destroys them. */
-void rsf_unity_package_reconfigured(void);
 /* The host render configuration; zero when output is short. */
 int rsf_unity_package_plan(rsf_game_render_config* output);
-/* The first rsf_sr12_create result of a new view. */
-void rsf_unity_package_sr_created(int32_t result);
-/* A view was created with this backend (0 is the spatial or native path) and extents. */
-void rsf_unity_package_view_planned(uint32_t backend, uint32_t output_width, uint32_t output_height,
-    uint32_t render_width, uint32_t render_height);
-void rsf_unity_package_evaluated(int32_t result, uint32_t view_backend);
+/* The render callback's SR pass (begin, role RSF_GAME_RENDER_SR) on the bridge's command list,
+   after the editor preview is prepared. Applies the stored gameplay screen to a copy of the pass,
+   releases every view on a reconfiguring pass, replaces a view whose extents no longer fit,
+   creates a missing one (Auto resolved, a failed vendor backend retried as backend 0) and
+   evaluates it in the slot bound to commands once the camera is valid and no reconfiguration is
+   pending. */
+void rsf_unity_package_render(void* commands, const rsf_game_render_pass* pass,
+    const rsf_unity_package_platform* platform);
 void rsf_unity_package_fg_result(int32_t result);
 /* A renderer bridge failure reported for the rest of the session. */
 void rsf_unity_package_bridge_failed(int32_t result);
