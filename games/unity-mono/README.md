@@ -14,7 +14,16 @@ the native D3D12 bridge through `rsf_unity_plugin_platform`. The bridge's frame 
 too (`bridge_state.rs`): packet validation and storage, the policy generation, admission into
 the command ring, source-submission bookkeeping and retirement. `bridge.cpp` keeps the Unity
 graphics interfaces, D3D12 commands, resource leases, CPU input events and the bridge exports.
-The Unity package compiles the same `bridge.cpp` and links the same archive.
+The Unity package compiles the same `bridge.cpp` and links the same archive. Its own D3D11 and
+Vulkan bridge (`integrations/unity/native/bridge.cpp`) uses the same activity, managed stage,
+callback count, packet store, policy and config; a process has one Unity renderer, so only one
+bridge uses that state. It applies a policy change on its next reconstruction event and clears it
+by generation, so a newer change stays pending. Its D3D12 submission ring, completion counter and
+shared D3D11/D3D12 fence values are Rust as well (`bridge_interop.rs`). That `bridge.cpp` keeps
+the Unity interfaces, D3D11/D3D12/DXGI calls, shared surfaces, fences and waits, D3D11 texture
+leases, render-pass and CPU-event calls and the package's bridge exports. D3D11 and Vulkan packets
+now pass the shared admission rules: the resources each event kind reads and a finite camera with
+extents up to 16384.
 
 The Runtime setup behind the loader entry `rsf_unity_start` and `rsf_unity_fg_start`,
 `rsf_unity_sr_start` and `rsf_unity_sr_stop` is Rust as well (`runtime_setup.rs`): the

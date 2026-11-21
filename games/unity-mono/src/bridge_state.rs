@@ -5,6 +5,12 @@
 //! submission bookkeeping and retirement. bridge.cpp keeps the Unity interfaces, D3D12 objects,
 //! resource leases, render-pass calls and CPU input events, and reads the Unity frame fence.
 //!
+//! The Unity package's D3D11 and Vulkan bridge (integrations/unity/native/bridge.cpp) shares the
+//! activity flag, managed stage, callback count, packet store, policy and config: a process has
+//! one Unity renderer, so only one bridge uses this state. That bridge does not use the D3D12
+//! ring or sources; it applies policy changes through `pending_change` and `settle_change`, and
+//! its own D3D12 submission ring is `bridge_interop.rs`.
+//!
 //! A fence completion of 0 stands for "no fence": every recorded submission is then in flight,
 //! as the C++ check `complete && (!fence || completed < complete)` had it.
 use crate::bridge_abi::{
@@ -202,6 +208,21 @@ impl State {
             policy.pending = true;
         }
         true
+    }
+
+    /// The generation of the pending policy change, for the package's D3D11 and Vulkan events,
+    /// which apply it outside `admit_frame`.
+    fn pending_change(&self) -> Option<u32> {
+        self.policy.pending.then_some(self.policy.generation)
+    }
+
+    /// Clears the pending change once its generation is applied. A newer change stays pending.
+    fn settle_change(&mut self, generation: u32) -> bool {
+        let settled = self.policy.pending && self.policy.generation == generation;
+        if settled {
+            self.policy.pending = false;
+        }
+        settled
     }
 
     /// Render extents, a policy change and output extents change only with the ring idle; a
@@ -450,6 +471,23 @@ extern "C" fn rsf_unity_frames_set_policy(engine_spatial: u32, quality: u32) -> 
 }
 
 #[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_unity_frames_pending_change(generation: *mut u32) -> u32 {
+    if generation.is_null() {
+        return 0;
+    }
+    let Some(pending) = lock().pending_change() else {
+        return 0;
+    };
+    unsafe { generation.write(pending) };
+    1
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_frames_settle_change(generation: u32) -> u32 {
+    u32::from(lock().settle_change(generation))
+}
+
+#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_unity_frames_admit_frame(
     packet: *const rsf_unity_packet,
     completed: u64,
@@ -682,6 +720,22 @@ mod tests {
         // An inactive bridge records the change without a pending reconfiguration.
         assert!(state.set_policy(0, 1, false));
         assert!(!state.policy.pending);
+    }
+
+    #[test]
+    fn a_settled_change_clears_only_its_own_generation() {
+        let mut state = State::new();
+        assert_eq!(state.pending_change(), None);
+        assert!(state.set_policy(1, 2, true));
+        let first = state.pending_change().unwrap();
+        assert_eq!(first, 2);
+        // A newer change arrives while the first is being applied.
+        assert!(state.set_policy(0, 2, true));
+        assert!(!state.settle_change(first));
+        assert_eq!(state.pending_change(), Some(3));
+        assert!(state.settle_change(3));
+        assert_eq!(state.pending_change(), None);
+        assert!(!state.settle_change(3));
     }
 
     #[test]

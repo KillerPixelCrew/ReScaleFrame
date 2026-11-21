@@ -23,7 +23,9 @@ if(EXISTS "${RSF_UNITY_NATIVE_INCLUDE}/IUnityGraphicsD3D12.h")
     target_include_directories(rsf_unity_package PRIVATE native ../../games/unity-mono/include ../../games/unity-mono/src)
     target_include_directories(rsf_unity_package SYSTEM PRIVATE "${RSF_UNITY_NATIVE_INCLUDE}")
     # The shared D3D12 bridge keeps its frame state in the rsf-unity-mono archive (bridge_state.rs),
-    # the same archive the game plugin links, and package.cpp keeps its settings, status, session
+    # the same archive the game plugin links. native/bridge.cpp's D3D11 and Vulkan bridge uses that
+    # packet store, policy and retirement state too, with its D3D12 submission ring in
+    # bridge_interop.rs. package.cpp keeps its settings, status, session
     # state, SR views, presentation and session services there, [UnitySR] paths included
     # (package_state.rs, package_views.rs, package_state/presentation.rs,
     # package_state/services.rs, runtime_config.rs, via native/package_state.h). Only those symbols are
