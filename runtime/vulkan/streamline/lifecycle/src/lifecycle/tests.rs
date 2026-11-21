@@ -14,6 +14,7 @@ struct State {
     shutdown: i32,
     features: u32,
     plugin: Vec<u16>,
+    common: Vec<u16>,
 }
 
 thread_local! {
@@ -26,6 +27,7 @@ thread_local! {
             shutdown: 0,
             features: 0,
             plugin: Vec::new(),
+            common: Vec::new(),
         })
     };
 }
@@ -64,8 +66,10 @@ impl System for Fake {
         without_provenance_mut(PROC)
     }
 
-    unsafe fn loaded(&self, _: *const u16) -> *mut c_void {
-        null_mut()
+    unsafe fn loaded(&self, path: *const u16) -> *mut c_void {
+        let path = unsafe { terminated(path) };
+        STATE.with_borrow_mut(|state| state.common = path);
+        without_provenance_mut(MODULE)
     }
 }
 
@@ -181,14 +185,8 @@ fn shutdown_keeps_vulkan_dispatch_until_explicit_unload() {
     assert_eq!(unsafe { lifecycle.shutdown(&PLATFORM) }, 0);
     assert_eq!(take_events(), ["shutdown", "reset"]);
     assert!(lifecycle.module().is_null());
-    assert_eq!(
-        lifecycle.published.instance.load(Ordering::Acquire).addr(),
-        PROC
-    );
-    assert_eq!(
-        lifecycle.published.device.load(Ordering::Acquire).addr(),
-        PROC
-    );
+    assert_eq!(lifecycle.instance_proc().addr(), PROC);
+    assert_eq!(lifecycle.device_proc().addr(), PROC);
     assert_eq!(unsafe { lifecycle.shutdown(&PLATFORM) }, 0);
     assert!(take_events().is_empty());
 
@@ -201,14 +199,8 @@ fn shutdown_keeps_vulkan_dispatch_until_explicit_unload() {
 
     unsafe { lifecycle.unload(&Fake, &PLATFORM) };
     assert_eq!(take_events(), ["clear", "free"]);
-    assert!(
-        lifecycle
-            .published
-            .instance
-            .load(Ordering::Acquire)
-            .is_null()
-    );
-    assert!(lifecycle.published.device.load(Ordering::Acquire).is_null());
+    assert!(lifecycle.instance_proc().is_null());
+    assert!(lifecycle.device_proc().is_null());
     assert!(lifecycle.published.module.load(Ordering::Acquire).is_null());
 }
 
@@ -223,10 +215,7 @@ fn failed_shutdown_is_sticky_and_refuses_unload() {
     assert_eq!(start(&lifecycle, "C:\\sl"), 5);
     unsafe { lifecycle.unload(&Fake, &PLATFORM) };
     assert_eq!(take_events(), ["shutdown", "reset"]);
-    assert_eq!(
-        lifecycle.published.instance.load(Ordering::Acquire).addr(),
-        PROC
-    );
+    assert_eq!(lifecycle.instance_proc().addr(), PROC);
 }
 
 #[test]
@@ -238,13 +227,7 @@ fn failed_initialization_releases_only_a_module_it_loaded() {
         take_events(),
         ["open", "load", "close", "init", "clear", "free"]
     );
-    assert!(
-        lifecycle
-            .published
-            .instance
-            .load(Ordering::Acquire)
-            .is_null()
-    );
+    assert!(lifecycle.instance_proc().is_null());
 
     configure(|state| state.init = 0);
     assert_eq!(start(&lifecycle, "C:\\sl"), 0);
@@ -261,19 +244,41 @@ fn failed_initialization_releases_only_a_module_it_loaded() {
     configure(|state| state.resolve = -1);
     assert_eq!(start(&lifecycle, "C:\\sl"), MISSING_EXPORT);
     assert_eq!(take_events(), ["clear"]);
-    assert_eq!(
-        lifecycle.published.device.load(Ordering::Acquire).addr(),
-        PROC
-    );
+    assert_eq!(lifecycle.device_proc().addr(), PROC);
 }
 
 #[test]
-fn reentered_lifecycle_call_is_refused() {
+fn overlapping_lifecycle_call_is_refused_without_waiting() {
     let lifecycle = Lifecycle::new();
-    let entry = Entry::enter();
-    assert!(entry.is_some());
-    assert_eq!(start(&lifecycle, "C:\\sl"), REENTERED);
-    assert_eq!(unsafe { lifecycle.shutdown(&PLATFORM) }, REENTERED);
-    drop(entry);
+    let held = lifecycle.session.lock().unwrap();
+    assert_eq!(start(&lifecycle, "C:\\sl"), BUSY);
+    assert_eq!(unsafe { lifecycle.shutdown(&PLATFORM) }, BUSY);
+    unsafe { lifecycle.unload(&Fake, &PLATFORM) };
+    drop(held);
     assert!(take_events().is_empty());
+    assert_eq!(start(&lifecycle, "C:\\sl"), 0);
+}
+
+#[test]
+fn symbol_lookups_follow_the_published_modules() {
+    let lifecycle = Lifecycle::new();
+    let name = c"rsfSlVulkanWsiCall".as_ptr();
+    assert!(unsafe { lifecycle.interposer_symbol(&Fake, name) }.is_null());
+    assert!(unsafe { lifecycle.common_symbol(&Fake, name) }.is_null());
+    assert_eq!(start(&lifecycle, "C:/sl"), 0);
+    assert!(lifecycle.initialized());
+    assert_eq!(
+        unsafe { lifecycle.interposer_symbol(&Fake, name) }.addr(),
+        PROC
+    );
+    assert_eq!(unsafe { lifecycle.common_symbol(&Fake, name) }.addr(), PROC);
+    STATE.with_borrow(|state| {
+        assert_eq!(
+            state.common,
+            wide("C:\\sl\\sl.common.dll").strip_suffix(&[0]).unwrap()
+        )
+    });
+    assert_eq!(unsafe { lifecycle.shutdown(&PLATFORM) }, 0);
+    unsafe { lifecycle.unload(&Fake, &PLATFORM) };
+    assert!(unsafe { lifecycle.interposer_symbol(&Fake, name) }.is_null());
 }

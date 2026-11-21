@@ -13,9 +13,13 @@ SDK shutdown until unload. The C++ bridge keeps every export, the typed
 SDK calls and the signature and hash check. The Runtime and the
 standalone `build.ps1` DLL link the same crate. Native SDK exceptions now
 return the exception-handler result, unload clears stale SDK entry
-points, and reentered lifecycle calls return -7. Unrun Rust fixtures
-cover admission order, sticky refusal, retained dispatch and module
-release on failure. Source and formatting checks passed. Builds, the
+points, and an overlapping start, shutdown or unload is refused with -7
+instead of waiting, because SDK callbacks can run host code on SDK
+threads while slInit or slShutdown holds the session. Only Windows
+links the loader bindings and C entry points, so the Cargo workspace
+stays linkable elsewhere. Unrun Rust fixtures cover admission order,
+sticky refusal, retained dispatch, symbol lookups and module release
+on failure. Source and formatting checks passed. Builds, the
 latency and DLSS SR/FG consumers and SDK runs remain unverified.
 
 The callback render host refuses overlapping lifecycle calls, including
