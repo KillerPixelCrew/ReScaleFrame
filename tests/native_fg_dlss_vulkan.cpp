@@ -128,8 +128,12 @@ VkResult VKAPI_PTR create_fence(VkDevice, const VkFenceCreateInfo*, const VkAllo
     *fence = reinterpret_cast<VkFence>(++next_handle); return VK_SUCCESS;
 }
 VkResult VKAPI_PTR reset_fences(VkDevice, uint32_t, const VkFence*) { return VK_SUCCESS; }
-VkResult VKAPI_PTR wait_fences(VkDevice, uint32_t, const VkFence*, VkBool32, uint64_t) { return VK_SUCCESS; }
-void VKAPI_PTR destroy_fence(VkDevice, VkFence, const VkAllocationCallbacks*) {}
+VkFence waited_fence = VK_NULL_HANDLE, destroyed_fence = VK_NULL_HANDLE;
+uint64_t fence_timeout = 0;
+VkResult VKAPI_PTR wait_fences(VkDevice, uint32_t, const VkFence* fences, VkBool32, uint64_t timeout) {
+    waited_fence = fences[0]; fence_timeout = timeout; return VK_SUCCESS;
+}
+void VKAPI_PTR destroy_fence(VkDevice, VkFence fence, const VkAllocationCallbacks*) { destroyed_fence = fence; }
 VkResult VKAPI_PTR create_image(VkDevice, const VkImageCreateInfo*, const VkAllocationCallbacks*, VkImage* image) {
     *image = reinterpret_cast<VkImage>(++next_handle); return VK_SUCCESS;
 }
@@ -157,8 +161,76 @@ void VKAPI_PTR memory_properties(VkPhysicalDevice, VkPhysicalDeviceMemoryPropert
 VkResult VKAPI_PTR surface_capabilities(VkPhysicalDevice, VkSurfaceKHR, VkSurfaceCapabilitiesKHR* info) {
     *info = {}; info->supportedUsageFlags = VK_IMAGE_USAGE_TRANSFER_DST_BIT; return VK_SUCCESS;
 }
+// Dedicated present capture leaves. The packet functions bypass the SDK proxy.
+const auto capture_pool = reinterpret_cast<VkCommandPool>(0x500);
+const auto capture_commands = reinterpret_cast<VkCommandBuffer>(0x501);
+const auto real_chain = reinterpret_cast<VkSwapchainKHR>(0x33);
+uint32_t pool_family = UINT32_MAX, pool_flags = 0, destroyed_pools = 0, capture_begins = 0, capture_ends = 0;
+uint32_t wsi_calls = 0, real_presents = 0, real_enumerations = 0, real_submits = 0;
+bool in_wsi = false;
+const VkPresentInfoKHR* presented_info = nullptr;
+VkPresentInfoKHR presented{};
+VkSubmitInfo submitted{};
+VkPipelineStageFlags submitted_stages[2]{};
+VkFence submitted_fence = VK_NULL_HANDLE;
+VkCommandBuffer submitted_commands = VK_NULL_HANDLE;
+VkResult VKAPI_PTR create_pool(VkDevice value, const VkCommandPoolCreateInfo* info, const VkAllocationCallbacks*, VkCommandPool* pool) {
+    require(value == device, "capture pools use the owner device");
+    pool_family = info->queueFamilyIndex; pool_flags = info->flags; *pool = capture_pool; return VK_SUCCESS;
+}
+void VKAPI_PTR destroy_pool(VkDevice, VkCommandPool pool, const VkAllocationCallbacks*) {
+    require(pool == capture_pool, "capture destroys its own pool"); ++destroyed_pools;
+}
+VkResult VKAPI_PTR reset_pool(VkDevice, VkCommandPool pool, VkCommandPoolResetFlags) {
+    require(pool == capture_pool, "capture resets its own pool"); return VK_SUCCESS;
+}
+VkResult VKAPI_PTR allocate_commands(VkDevice, const VkCommandBufferAllocateInfo* info, VkCommandBuffer* commands) {
+    require(info->commandPool == capture_pool && info->commandBufferCount == 1 && info->level == VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        "one primary buffer per queue family");
+    *commands = capture_commands; return VK_SUCCESS;
+}
+VkResult VKAPI_PTR begin_commands(VkCommandBuffer commands, const VkCommandBufferBeginInfo* info) {
+    require(commands == capture_commands && info->flags == VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT, "copy is recorded once");
+    ++capture_begins; return VK_SUCCESS;
+}
+VkResult VKAPI_PTR end_commands(VkCommandBuffer commands) {
+    require(commands == capture_commands, "capture ends its own buffer"); ++capture_ends; return VK_SUCCESS;
+}
+int32_t wsi_lease(int32_t (*call)(void*), void* user) {
+    require(!in_wsi, "WSI lease is not nested");
+    in_wsi = true; ++wsi_calls; const auto result = call(user); in_wsi = false; return result;
+}
+VkResult VKAPI_PTR real_present(VkQueue actual, const VkPresentInfoKHR* info) {
+    require(in_wsi && actual == queue, "real Present uses the packet queue under the WSI lease");
+    presented_info = info; presented = *info; ++real_presents; return VK_SUBOPTIMAL_KHR;
+}
+VkResult VKAPI_PTR real_images(VkDevice value, VkSwapchainKHR actual, uint32_t* count, VkImage* images) {
+    require(in_wsi && value == device && actual == real_chain, "real image enumeration uses the WSI lease");
+    ++real_enumerations;
+    if (!images) { *count = 3; return VK_SUCCESS; }
+    for (uint32_t i = 0; i < *count; ++i) images[i] = reinterpret_cast<VkImage>(uintptr_t(0x700 + i));
+    return VK_SUCCESS;
+}
+VkResult VKAPI_PTR real_submit(VkQueue actual, uint32_t count, const VkSubmitInfo* info, VkFence fence) {
+    require(!in_wsi && actual == queue && count == 1 && info->waitSemaphoreCount <= 2, "copy submits on the packet queue outside WSI");
+    submitted = *info; submitted_fence = fence; submitted_commands = info->pCommandBuffers[0]; ++real_submits;
+    for (uint32_t i = 0; i < info->waitSemaphoreCount; ++i) submitted_stages[i] = info->pWaitDstStageMask[i];
+    return VK_SUCCESS;
+}
+rsf_sl_present_capture_callback capture_callback = nullptr;
+void* capture_user = nullptr;
+uint32_t registrations = 0;
+int32_t register_capture(const rsf_sl_present_capture_registration* value) {
+    require(value->struct_size == sizeof(*value) && value->abi_version == RSF_SL_PRESENT_CAPTURE_ABI_VERSION &&
+        value->device == device && value->user && (!capture_user || value->user == capture_user),
+        "registration and clearing name the same device and owner");
+    capture_callback = value->callback; capture_user = value->user; ++registrations; return VK_SUCCESS;
+}
+
 rsf_vk_function device_proc(void*, const char* name) {
 #define MOCK(vk, fn) if (std::strcmp(name, #vk) == 0) return reinterpret_cast<rsf_vk_function>(fn)
+    MOCK(vkCreateCommandPool, create_pool); MOCK(vkDestroyCommandPool, destroy_pool); MOCK(vkResetCommandPool, reset_pool);
+    MOCK(vkAllocateCommandBuffers, allocate_commands); MOCK(vkBeginCommandBuffer, begin_commands); MOCK(vkEndCommandBuffer, end_commands);
     MOCK(vkCreateSwapchainKHR, create_images); MOCK(vkDestroySwapchainKHR, destroy_images);
     MOCK(vkGetSwapchainImagesKHR, enumerate_images); MOCK(vkAcquireNextImageKHR, acquire_image);
     MOCK(vkQueuePresentKHR, publish); MOCK(vkDeviceWaitIdle, idle); MOCK(vkWaitSemaphores, wait_semaphores);
@@ -200,6 +272,98 @@ rsf_dlssgvk_status status(rsf_dlssgvk* owner) {
     rsf_dlssgvk_status result{sizeof(result), RSF_DLSSGVK_ABI_VERSION};
     require(rsf_dlssgvk_get_status(owner, &result) == RSF_BACKEND_OK, "status snapshot is available");
     return result;
+}
+
+// Runs the Rust present capture owner with the real Vulkan, WSI and
+// registration leaves. Only open, frame selection, readback recording and
+// file output are synthetic.
+rsf::CaptureVk* synthetic_capture = nullptr;
+uint64_t capture_readbacks = 0;
+uint32_t capture_flushes = 0, capture_metadata = 0;
+const char* capture_failure = nullptr;
+int32_t capture_failure_result = 0;
+void check_present_capture(const rsf_fgvk_setup& setup) {
+    static const auto synthetic = [] {
+        auto result = rsf::capture_platform;
+        result.open = [](const rsf_fgvk_setup*, void** out) -> rsf_backend_result { *out = synthetic_capture; return RSF_BACKEND_OK; };
+        result.wants = [](void*, uint64_t frame) -> uint32_t { return frame == 42; };
+        result.readbacks = [](void*) -> uint64_t { return capture_readbacks; };
+        result.record = [](void*, void* commands, const rsf_srvk_image* image, const rsf_frame_record* record, int32_t generated) -> uint32_t {
+            require(commands == capture_commands && image->device == device && image->image == 0x701 &&
+                image->format == VK_FORMAT_B8G8R8A8_UNORM && image->width == 1280 && image->height == 720 &&
+                image->layout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR && image->copy_source && record->frame_id == 42 && generated == 2,
+                "readback records the presented real WSI image for the exact source");
+            ++capture_readbacks; return 1;
+        };
+        result.flush = [](void*) -> uint32_t { ++capture_flushes; return 1; };
+        result.failure = [](void*, uint64_t, const char* reason, int32_t value) { capture_failure = reason; capture_failure_result = value; };
+        result.trace = [](void*, const rsf_sl_present_capture_packet*, const rsf_dlss_capture_source*, uint32_t) {};
+        result.metadata = [](void*, const rsf_sl_present_capture_packet*, const rsf_dlss_capture_source* source, uint64_t sequence,
+            int32_t value, uint32_t attempted, uint32_t flushed) {
+            require(source->record.frame_id == 42 && sequence == 1 && value == VK_SUBOPTIMAL_KHR && attempted && flushed,
+                "metadata keeps the native Present result and completion proof");
+            ++capture_metadata;
+        };
+        return result;
+    }();
+    synthetic_capture = new rsf::CaptureVk;
+    auto& vk = *synthetic_capture;
+    vk.setup = setup; vk.registration = register_capture;
+#define CAPTURE_MOCK(member, name) vk.member = reinterpret_cast<PFN_##name>(device_proc(device, #name))
+    CAPTURE_MOCK(create_pool, vkCreateCommandPool); CAPTURE_MOCK(destroy_pool, vkDestroyCommandPool);
+    CAPTURE_MOCK(reset_pool, vkResetCommandPool); CAPTURE_MOCK(allocate_commands, vkAllocateCommandBuffers);
+    CAPTURE_MOCK(begin, vkBeginCommandBuffer); CAPTURE_MOCK(end, vkEndCommandBuffer);
+    CAPTURE_MOCK(create_fence, vkCreateFence); CAPTURE_MOCK(destroy_fence, vkDestroyFence);
+    CAPTURE_MOCK(reset_fences, vkResetFences); CAPTURE_MOCK(wait_fences, vkWaitForFences);
+#undef CAPTURE_MOCK
+    rsf_dlss_capture* capture{};
+    require(rsf_core_dlss_capture_open(&synthetic, &setup, &capture) == RSF_BACKEND_OK && capture &&
+        capture_callback && capture_user == capture && registrations == 1, "capture registers last with its Rust owner");
+
+    Source source(42);
+    rsf_dlssgvk_status sdk{sizeof(sdk), RSF_DLSSGVK_ABI_VERSION};
+    rsf_core_dlss_capture_remember(capture, &source.record, 3, &sdk, 1);
+    VkSwapchainCreateInfoKHR chain_info{VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
+    chain_info.imageUsage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    chain_info.imageFormat = VK_FORMAT_B8G8R8A8_UNORM; chain_info.imageArrayLayers = 1; chain_info.imageExtent = {1280, 720};
+    const VkSemaphore waits[]{reinterpret_cast<VkSemaphore>(0x601), reinterpret_cast<VkSemaphore>(0x602)};
+    const uint32_t indices[]{1};
+    int extension = 0;
+    VkPresentInfoKHR info{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR, &extension, 2, waits, 1, &real_chain, indices};
+    rsf_sl_present_capture_packet packet{sizeof(packet), RSF_SL_PRESENT_CAPTURE_ABI_VERSION, device, queue, &info, &chain_info,
+        reinterpret_cast<uintptr_t>(real_present), 42, 43, 2, 1, 5, reinterpret_cast<uintptr_t>(real_images),
+        reinterpret_cast<uintptr_t>(real_submit), reinterpret_cast<uintptr_t>(wsi_lease)};
+    waited_fence = VK_NULL_HANDLE;
+    require(capture_callback(capture_user, &packet) == VK_SUBOPTIMAL_KHR, "captured Present returns the native result");
+    require(pool_family == 5 && pool_flags == VK_COMMAND_POOL_CREATE_TRANSIENT_BIT && capture_begins == 1 && capture_ends == 1,
+        "copy uses a transient pool for the packet queue family");
+    require(real_submits == 1 && submitted.waitSemaphoreCount == 2 && submitted.pWaitSemaphores == waits &&
+        submitted_stages[0] == VK_PIPELINE_STAGE_ALL_COMMANDS_BIT && submitted_stages[1] == VK_PIPELINE_STAGE_ALL_COMMANDS_BIT &&
+        submitted.commandBufferCount == 1 && submitted_commands == capture_commands && submitted_fence,
+        "copy consumes the Present's original binary waits with its own fence");
+    require(waited_fence == submitted_fence && fence_timeout == 15000000000ull && capture_flushes == 1 && capture_metadata == 1,
+        "own fence completes before the readback flush");
+    require(real_enumerations == 2 && real_presents == 1 && wsi_calls == 3 && presented_info != &info &&
+        presented.waitSemaphoreCount == 0 && !presented.pWaitSemaphores && presented.pNext == &extension &&
+        presented.swapchainCount == 1 && presented.pSwapchains == &real_chain && presented.pImageIndices == indices,
+        "native Present follows the completed copy without its consumed waits");
+
+    packet.source_frame = 7;
+    require(capture_callback(capture_user, &packet) == VK_SUBOPTIMAL_KHR && presented_info == &info && real_submits == 1 &&
+        real_presents == 2, "an unmapped boundary presents the original info once");
+    packet.source_frame = 42; chain_info.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    require(capture_callback(capture_user, &packet) == VK_SUBOPTIMAL_KHR && presented_info == &info && real_enumerations == 2 &&
+        real_submits == 1 && std::strcmp(capture_failure, "real-chain-copy-contract") == 0 &&
+        capture_failure_result == VK_ERROR_FORMAT_NOT_SUPPORTED, "a chain without copy usage presents untouched");
+    packet.native_wsi_call = 0;
+    require(capture_callback(capture_user, &packet) == VK_ERROR_INITIALIZATION_FAILED && real_presents == 3,
+        "an incomplete packet is refused without a Present");
+
+    const auto fence = submitted_fence;
+    require(rsf_core_dlss_capture_detach(capture) == RSF_BACKEND_OK && !capture_callback && registrations == 2,
+        "detach clears the same registration");
+    rsf_core_dlss_capture_close(capture);
+    require(destroyed_pools == 1 && destroyed_fence == fence, "close destroys the family pool and fence");
 }
 }
 extern "C" rsf_backend_result rsf_slvk_invoke(const rsf_slvk_call* call) {
@@ -361,5 +525,7 @@ int main() {
     refuse_create = false; refuse_enumeration = true;
     require(rsf_core_dlgvk_create(&synthetic, &setup, &owner, &chain_out) == RSF_BACKEND_ERROR_INIT_FAILED &&
         !owner && !chain_out && destroyed_chains == 3, "enumeration refusal closes the unpublished proxy");
+    refuse_enumeration = false;
+    check_present_capture(setup);
     std::puts("Synthetic DLSS Vulkan FG identity, MFG and WSI checks passed");
 }

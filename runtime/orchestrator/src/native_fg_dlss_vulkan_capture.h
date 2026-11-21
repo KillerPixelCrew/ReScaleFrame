@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 #include <rescaleframe/native_fg_dlss_vulkan.h>
-#include <memory>
+
+struct rsf_dlss_capture;
 
 namespace rsf {
+// Native handle of the Rust dedicated present capture owner.
 class DlssPresentCapture {
-    struct State;
-    std::unique_ptr<State> state;
+    rsf_dlss_capture* owner = nullptr;
 public:
-    DlssPresentCapture();
+    DlssPresentCapture() = default;
     ~DlssPresentCapture();
     DlssPresentCapture(const DlssPresentCapture&) = delete;
     DlssPresentCapture& operator=(const DlssPresentCapture&) = delete;
