@@ -167,3 +167,36 @@ offline workspace metadata and Git whitespace checks passed. The existing
 descriptor-copy and object-retirement coverage gaps remain. Native
 compilation and linking, tests, Clippy, device fixtures and live capture
 remain user-owned.
+
+## Native capture installation
+
+Compared the ASI and standalone capture fixture with `31a06a94`. The ASI loader enters
+`DllMain` before the engine resolves graphics imports. The Rust attach path admits `RDR2.exe`,
+reads `[RDR2]` beside the ASI, and attempts native capture only with `Enable`, an applied
+`ForceD3D12`, `NativeCapture`, and a nonempty `CameraProbeDirectory`. Registration still precedes
+the separate `Census` install. Capture depends on the census for graphics and NGX observations
+and on its MinHook initialization. The census setting and its hook-family flags keep their
+existing behavior. The standalone fixture calls the same capture installer with its own path
+before it installs the census and creates its D3D12 device.
+
+At the baseline, the C++ installer published `g` and registered both observer families before
+`CreateThread`. A null handle therefore left callbacks and process-lived state installed even
+though it returned false, and `g` then refused a retry. `capture_state/install.rs` now validates
+the private leaf table, enforces the same `MAX_PATH - 64` limit in UTF-16 units, and constructs
+the same `native.request` and `native-probe.log` siblings. The native leaf prepares the capture
+context for the poller. If thread creation fails, Rust discards that context and frees its
+capture state before either observer family is registered. A successful start registers the
+same six D3D12/DXGI and three NGX callbacks in their original order, before the census installs
+any hooks. The owners stay live through process exit. The game closes its thread handle after
+startup. The fixture keeps its handle and now claims it once at stop, asks the poller to exit,
+waits up to the original 5,000 ms, and closes the handle. Stop leaves callback and hook state
+available even if the wait expires.
+
+The C++ leaves still perform native state allocation, executable-base lookup, census registration,
+Win32 thread calls and timestamped log I/O. The poll interval, game and fixture entry points,
+render callbacks, readback leases, metadata and artifact routes retain their existing behavior.
+Source comparison checked the ASI and fixture order, callback lists, paths, native observation
+bodies and the leaf layout. Pinned Rust 1.94.1 formatting, locked offline Windows Cargo metadata
+and Git whitespace passed. Native compilation and linking, Clippy, tests, both D3D12 fixture
+runs and live RDR2 verification remain with the user. The existing native observation coverage
+gaps remain open.

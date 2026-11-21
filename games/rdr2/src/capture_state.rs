@@ -13,6 +13,8 @@ mod artifacts;
 mod bundle;
 mod gpu_leases;
 mod hooks;
+#[cfg(windows)]
+mod install;
 mod metadata;
 mod recordings;
 use gpu_leases::Gpu;
