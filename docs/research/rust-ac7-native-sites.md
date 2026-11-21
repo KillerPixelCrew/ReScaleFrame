@@ -109,7 +109,8 @@ In `native_renderer.cpp`:
 - The rest of prepare and stop: MinHook initialise/install/removal, pinned partial activation,
   render scope creation and destruction, the input hook, controller facts removal, the drain and
   live-counter checks, and the TrueSky restores. A Rust retirement plan over native leaves would
-  own the order.
+  own the order. Done on 21 November; see
+  [the transaction migration note](rust-ac7-renderer-transaction.md).
 - Every detour and engine relay: about sixty `engine<>()` RVAs and layouts used inside hook
   bodies, GEngine `+3CBBC28`, frame identity, the SR graph node and plan, UI producer,
   translucency and particle scopes, beam/trail tagging, Slate window/texture leases, widget

@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 // Internal boundary between native_renderer.cpp and the Rust owner of the exact-build code sites
-// (sites.rs, patches.rs, guards.rs in the rsf-ac7 crate). Not a DLL ABI: both sides link into
-// ReScaleFrame.Game.AC7.dll and the native graph fixture. tools/generate-rust-bindings.py
-// generates src/sites_abi.rs from this header.
+// and the renderer transaction (sites.rs, patches.rs, guards.rs, renderer.rs in the rsf-ac7
+// crate). Not a DLL ABI: both sides link into ReScaleFrame.Game.AC7.dll and the native graph
+// fixture. tools/generate-rust-bindings.py generates src/sites_abi.rs from this header.
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -82,6 +82,71 @@ bool rsf_ac7_engine_patches_apply(rsf_ac7_code_patches* patches, unsigned char* 
     const rsf_ac7_code_leaves* leaves);
 // Retirement: temporal velocity, then scene precision. False, logged, keeps the renderer.
 bool rsf_ac7_engine_patches_restore(rsf_ac7_code_patches* patches, const rsf_ac7_code_leaves* leaves);
+
+// Native leaves of the renderer transaction (renderer.rs), lent by native_renderer.cpp for one
+// call. The renderer object and its fields, MinHook, module pinning, the render scopes, the input
+// hook, the controller facts and the TrueSky plugin patches stay native; the Rust owner decides
+// when each runs. Every entry is required. None of them throws.
+typedef struct rsf_ac7_renderer_leaves {
+    // Admission and engine patch leaves. The owner logs through the renderer options' log and
+    // user, so `code.log` and `code.user` are ignored.
+    rsf_ac7_code_leaves code;
+    unsigned char* base; // the game module
+    // The renderer every hook body reads, and publishing one; null clears it.
+    rsf_ac7_native_renderer* (*installed)(void);
+    void (*install)(rsf_ac7_native_renderer* renderer);
+    // A renderer owning a copy of `options`, or null. `release` deletes it.
+    rsf_ac7_native_renderer* (*create)(const rsf_ac7_native_renderer_options* options);
+    void (*release)(rsf_ac7_native_renderer* renderer);
+    const rsf_ac7_native_renderer_options* (*options)(rsf_ac7_native_renderer* renderer);
+    rsf_ac7_code_patches* (*patches)(rsf_ac7_native_renderer* renderer);
+    bool (*active)(rsf_ac7_native_renderer* renderer);
+    void (*set_active)(rsf_ac7_native_renderer* renderer, bool active);
+    bool (*quiescing)(rsf_ac7_native_renderer* renderer);
+    void (*set_quiescing)(rsf_ac7_native_renderer* renderer);
+    // The pass scopes from the options' session and callbacks with `capacity` queued markers.
+    bool (*scopes_create)(rsf_ac7_native_renderer* renderer, uint32_t capacity);
+    void (*scopes_quiesce)(rsf_ac7_native_renderer* renderer);
+    bool (*scopes_idle)(rsf_ac7_native_renderer* renderer);
+    // Destroys idle scopes and forgets them; true when none remain.
+    bool (*scopes_destroy)(rsf_ac7_native_renderer* renderer);
+    // MH_Initialize (an earlier initialisation is accepted), then the detours are bound.
+    bool (*hooks_initialize)(void);
+    // MinHook per Hook index. A null target leaves the site alone. A created hook keeps its
+    // trampoline (the original) until `hook_remove` succeeds.
+    void (*hook_bind)(uint32_t hook, unsigned char* target);
+    bool (*hook_create)(uint32_t hook);
+    bool (*hook_enable)(uint32_t hook);
+    bool (*hook_created)(uint32_t hook);
+    void (*hook_disable)(uint32_t hook);
+    void (*hook_remove)(uint32_t hook);
+    // Pins this module until process exit.
+    void (*pin)(void);
+    // Releases retired pass leases when called on the render thread.
+    void (*drain)(rsf_ac7_native_renderer* renderer);
+    // Live renderer identities, window or frame tasks, pending uniforms or particle bindings, or
+    // retired pass leases.
+    bool (*outstanding)(rsf_ac7_native_renderer* renderer);
+    bool (*retired)(rsf_ac7_native_renderer* renderer);
+    // Removes the game-thread message hook; false keeps it.
+    bool (*input_unhook)(rsf_ac7_native_renderer* renderer);
+    void (*controller_disable)(void);
+    bool (*controller_remove)(void);
+    // Restores the TrueSky plugin patches and relays in their order; false, logged, keeps the
+    // renderer.
+    bool (*truesky_restore)(rsf_ac7_native_renderer* renderer);
+} rsf_ac7_renderer_leaves;
+
+// The five renderer calls of ac7_native_renderer.h with their former results. Prepare writes
+// `*out` once its arguments are valid and no renderer is installed: the renderer, a pinned
+// inactive renderer after a partial activation that overlapped a hook body (false), or null.
+bool rsf_ac7_renderer_prepare(const rsf_ac7_native_renderer_options* options,
+    rsf_ac7_native_renderer** out, const rsf_ac7_renderer_leaves* leaves);
+bool rsf_ac7_renderer_start(rsf_ac7_native_renderer* renderer, const rsf_ac7_renderer_leaves* leaves);
+bool rsf_ac7_renderer_is_active(rsf_ac7_native_renderer* renderer, const rsf_ac7_renderer_leaves* leaves);
+void rsf_ac7_renderer_quiesce(rsf_ac7_native_renderer* renderer, const rsf_ac7_renderer_leaves* leaves);
+// True when the renderer is retired and deleted (or null). False keeps it for a retry.
+bool rsf_ac7_renderer_stop(rsf_ac7_native_renderer* renderer, const rsf_ac7_renderer_leaves* leaves);
 
 #ifdef __cplusplus
 }

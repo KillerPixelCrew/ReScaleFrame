@@ -109,6 +109,11 @@ The same crate owns the native renderer's exact-build code sites and their admis
 and the hook body guards (`src/guards.rs`). `src/native_renderer.cpp` reaches them through
 `src/ac7_sites.h` and keeps MinHook, the detours, engine relays, SEH reads, protected code writes
 and the TrueSky plugin patches. See [the site migration note](../../docs/research/rust-ac7-native-sites.md).
+The prepare/start/quiesce/stop transaction of those five renderer calls, with the pinned partial
+activation and retirement admission, is `src/renderer.rs`; the five exported calls stay in
+`native_renderer.cpp` as wrappers that lend the renderer object, MinHook, pinning, scopes, input
+hook, controller facts and TrueSky restores as leaves. See
+[the transaction migration note](../../docs/research/rust-ac7-renderer-transaction.md).
 
 The view reader handles the game's 4096-byte uniform buffer. Scene motion needs UE encoding
 removal, and the engine's camera transform supplies camera motion. The native integration sizes the

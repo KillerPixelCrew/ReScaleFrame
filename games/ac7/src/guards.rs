@@ -60,8 +60,9 @@ extern "C" fn rsf_ac7_guard_leave(kind: u32) {
     }
 }
 
+/// Hook bodies running: entry guards, plus outer guards when `outer_too`.
 #[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_guards_held(outer_too: bool) -> u32 {
+pub(crate) extern "C" fn rsf_ac7_guards_held(outer_too: bool) -> u32 {
     fence(Ordering::SeqCst);
     GUARDS.iter().fold(0u32, |total, slot| {
         let total = total.wrapping_add(slot.entry.load(Ordering::Acquire));
