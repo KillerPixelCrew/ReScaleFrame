@@ -571,7 +571,7 @@ int32_t observe(void* native, rsf_slhost_observed* out) noexcept
     out->vsync_supported = sdk.bIsVsyncSupportAvailable == sl::eTrue;
     out->min_dimension = sdk.minWidthOrHeight;
     out->status = static_cast<int32_t>(sdk.status);
-    out->mfg_status = host.mfg.status; out->mfg_maximum = host.mfg.maximum;
+    host.mfg.read_status(out->mfg_status, out->mfg_maximum);
     out->presented = sdk.numFramesActuallyPresented;
     out->fence = sdk.inputsProcessingCompletionFence;
     out->fence_value = sdk.lastPresentInputsProcessingCompletionFenceValue;

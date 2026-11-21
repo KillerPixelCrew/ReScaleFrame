@@ -84,6 +84,8 @@ mod dx12_vulkan_interop_abi;
 #[cfg(windows)]
 mod dxgi_format;
 #[cfg(windows)]
+mod mfg_state;
+#[cfg(windows)]
 mod motion_d3d11;
 #[cfg(windows)]
 mod motion_decode;

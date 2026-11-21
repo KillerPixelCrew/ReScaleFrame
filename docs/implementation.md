@@ -4,6 +4,13 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now owns the DLSS-G compatibility wrapper lease, capacity
+and status. Native code keeps the existing compatibility checks and
+effects. Release shares the transition guard, status reads use one
+snapshot, and diagnostics run after the update guard is released.
+An overlapping update leaves the current state intact. The
+third-party compatibility sources are unchanged.
+
 Rust now serializes D3D11 observer install and uninstall across
 vtable probing, callback registration and hook retirement. The native
 probe still supplies the same slots. Busy or reentrant lifecycle
