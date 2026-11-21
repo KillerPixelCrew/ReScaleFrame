@@ -132,6 +132,8 @@ mod overlay_panel;
 #[cfg(windows)]
 mod overlay_service;
 #[cfg(windows)]
+mod overlay_visibility;
+#[cfg(windows)]
 mod overlay_wrapped12;
 #[cfg(windows)]
 mod plugin_session;

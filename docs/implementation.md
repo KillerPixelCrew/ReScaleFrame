@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now owns shared overlay visibility, the Insert key latch, focus
+edges and the 250 ms debounce. Visibility requests share one decision
+and cursor transitions run in order, including requests made during a
+callback. The bridge reports a refused subclass restore and retires
+cursor hooks when the window has already closed. The public overlay
+input ABI is unchanged. Build and regression test execution remain
+open.
+
 Rust now copies the D3D11 observer options, dispatches creation and
 Present callbacks, and fills the public status record. Creation callbacks
 stay serialized. Each Present uses one registration for its begin and
