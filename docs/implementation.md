@@ -897,6 +897,12 @@ barriers, narrower shader and transfer access masks, capture order
 and public SRVK forwarding. Builds and device checks remain open.
 [FidelityFX SR recording](research/rust-vulkan-ffx-sr-images.md#first-use-initialization-and-output-publication)
 
+FidelityFX Vulkan SR now resolves its SDK and staging dispatch in
+Rust. The context export list is shared with Vulkan FG. The native
+initializer keeps the typed bindings, memory query and capture setup.
+The existing fixture and device checks remain open.
+[FidelityFX Vulkan SR startup](research/rust-vulkan-ffx-sr-images.md#fidelityfx-vulkan-sr-startup)
+
 The shared presentation bridge now selects the plain physical
 swapchain's queue, flip effect, tearing flag and buffer overrides
 in Rust. The native DXGI create and interface query retain their

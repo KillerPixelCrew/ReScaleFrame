@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::{Handle, INIT_FAILED, OK, Setup};
+use crate::sdk_module::FFX_CONTEXT_EXPORTS;
 use crate::vulkan_sr_abi::rsf_vk_function;
 use std::ffi::{CStr, c_char};
 use std::ptr;
@@ -7,13 +8,7 @@ use std::ptr;
 const MISSING_ENTRY_POINT: i32 = -5;
 
 // The native binder gives these entries their SDK function pointer types.
-const SDK_NAMES: [&CStr; 5] = [
-    c"ffxConfigure",
-    c"ffxCreateContext",
-    c"ffxDestroyContext",
-    c"ffxQuery",
-    c"ffxDispatch",
-];
+const SDK_ENTRY_COUNT: usize = 1 + FFX_CONTEXT_EXPORTS.len();
 const DEVICE_NAMES: [&CStr; 3] = [
     c"vkCmdPipelineBarrier",
     c"vkCmdCopyImage",
@@ -27,7 +22,7 @@ const WSI_NAMES: [&CStr; 5] = [
     c"vkDestroySwapchainKHR",
 ];
 
-type CoreEntries = [rsf_vk_function; SDK_NAMES.len() + DEVICE_NAMES.len()];
+type CoreEntries = [rsf_vk_function; SDK_ENTRY_COUNT + DEVICE_NAMES.len()];
 type WsiEntries = [rsf_vk_function; 1 + WSI_NAMES.len()];
 
 #[repr(C)]
@@ -56,14 +51,15 @@ fn checked(result: i32) -> Result<(), i32> {
 
 impl Platform {
     fn prepare(&self, native: Handle, module: Handle) -> Result<Handle, i32> {
-        let mut core = [None; SDK_NAMES.len() + DEVICE_NAMES.len()];
-        for (entry, name) in core.iter_mut().zip(SDK_NAMES) {
+        let mut core = [None; SDK_ENTRY_COUNT + DEVICE_NAMES.len()];
+        core[0] = unsafe { (self.symbol)(module, c"ffxConfigure".as_ptr()) };
+        for (entry, name) in core[1..SDK_ENTRY_COUNT].iter_mut().zip(FFX_CONTEXT_EXPORTS) {
             *entry = unsafe { (self.symbol)(module, name.as_ptr()) };
         }
-        if core[..SDK_NAMES.len()].iter().any(Option::is_none) {
+        if core[..SDK_ENTRY_COUNT].iter().any(Option::is_none) {
             return Err(MISSING_ENTRY_POINT);
         }
-        for (entry, name) in core[SDK_NAMES.len()..].iter_mut().zip(DEVICE_NAMES) {
+        for (entry, name) in core[SDK_ENTRY_COUNT..].iter_mut().zip(DEVICE_NAMES) {
             checked(unsafe { (self.device_proc)(native, name.as_ptr(), 1, entry) })?;
             if entry.is_none() {
                 return Err(MISSING_ENTRY_POINT);

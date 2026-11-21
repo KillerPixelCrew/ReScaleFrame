@@ -15,6 +15,12 @@ use windows_sys::Win32::{
 const INVALID_ARGUMENT: i32 = -1;
 const LOAD_FAILED: i32 = -4;
 pub(super) const FIDELITYFX_DLL: &str = "amd_fidelityfx_vk.dll";
+pub(super) const FFX_CONTEXT_EXPORTS: [&CStr; 4] = [
+    c"ffxCreateContext",
+    c"ffxDestroyContext",
+    c"ffxQuery",
+    c"ffxDispatch",
+];
 
 #[repr(C)]
 #[derive(Clone, Copy)]

@@ -196,10 +196,6 @@ rsf_ffxgvk_native* allocate_native(const rsf_fgvk_setup* setup, uint32_t width, 
 
 void close_native(rsf_ffxgvk_native* self) noexcept { delete self; }
 
-rsf_vk_function module_symbol(void* module, const char* name) noexcept {
-    return reinterpret_cast<rsf_vk_function>(GetProcAddress(static_cast<HMODULE>(module), name));
-}
-
 int32_t lookup_device(rsf_ffxgvk_native* self, const char* name, uint32_t aliases,
     rsf_vk_function* out) noexcept try {
     const auto& graphics = self->setup.graphics;
@@ -258,7 +254,7 @@ void bind_wsi(rsf_ffxgvk_native* self, const rsf_ffxgvk_wsi_entries* entries) no
 }
 
 constexpr rsf_ffxgvk_open_ops open_ops{
-    allocate_native, close_native, module_symbol, lookup_device, lookup_instance,
+    allocate_native, close_native, rsf_vkffx_symbol, lookup_device, lookup_instance,
     bind_core, read_memory, load_resources, initialize_capture, bind_wsi,
 };
 

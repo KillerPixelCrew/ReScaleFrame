@@ -60,6 +60,8 @@ unsafe extern "C" fn proc(_: Handle, _: *const c_char) -> rsf_vk_function {
     None
 }
 
+unsafe extern "C" fn supported_entry() {}
+
 impl Fake {
     fn setup(&mut self, backend: u32) -> Setup {
         let device = ptr::from_mut(self).cast();
@@ -288,12 +290,28 @@ pub(super) static PLATFORM: Platform = Platform {
             load: leaf!(|_: *const u16| -> Handle { ptr::without_provenance_mut(1) }),
             unload: leaf!(|_: Handle| -> () {}),
         },
-        open: leaf!(|setup: &Setup, _: Handle, out: &mut Handle| -> i32 {
-            *out = setup.device;
+        allocate: leaf!(|setup: &Setup| -> Handle { setup.device }),
+        close: leaf!(|handle: Handle| -> () { unsafe { fake(handle).calls.push(Call::Close) } }),
+        symbol: leaf!(|_: Handle, _: *const c_char| -> rsf_vk_function { Some(supported_entry) }),
+        bind_sdk: leaf!(|_: Handle, entries: &FfxExports| -> () {
+            assert!(entries.iter().all(Option::is_some));
+        }),
+        lookup: leaf!(|_: DeviceProc,
+                       _: Handle,
+                       _: *const c_char,
+                       out: *mut rsf_vk_function|
+         -> i32 {
+            unsafe { out.write(Some(supported_entry)) };
+            1
+        }),
+        initialize_graphics: leaf!(|_: Handle,
+                                    _: &Setup,
+                                    entries: &FfxDeviceEntries,
+                                    memory: rsf_vk_function|
+         -> i32 {
+            assert!(entries.iter().all(Option::is_some) && memory.is_some());
             0
         }),
-        close: leaf!(|handle: Handle| -> () { unsafe { fake(handle).calls.push(Call::Close) } }),
-        initialize_graphics: leaf!(|_: Handle, _: &Setup| -> i32 { 0 }),
         versions: leaf!(|_: Handle,
                          versions: &mut [Version; MAX_VERSIONS],
                          count: &mut u64|

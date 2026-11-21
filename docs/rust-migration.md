@@ -446,6 +446,12 @@ table and public declarations match the existing interfaces in
 source. Builds and live checks remain open.
 [FidelityFX Vulkan FG startup](research/rust-vulkan-ffx-fg-copy-plan.md#fidelityfx-vulkan-fg-startup)
 
+FidelityFX Vulkan SR now resolves the shared SDK exports and its
+staging dispatch in Rust. Typed native leaves bind the addresses
+and initialize capture. Source checks matched the enabled and
+disabled declarations. Builds, fixtures and live checks remain open.
+[FidelityFX Vulkan SR startup](research/rust-vulkan-ffx-sr-images.md#fidelityfx-vulkan-sr-startup)
+
 ## D3D11 observer startup probe
 
 Compared with `fe267be4`, the Rust observer owns the temporary

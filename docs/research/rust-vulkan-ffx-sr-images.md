@@ -141,3 +141,24 @@ pinned Rust 1.94.1 formatting, locked offline Windows Cargo metadata and Git whi
 review. Enabled and disabled compilation and linking, binary export checks, Clippy, CPU
 fixtures, Vulkan execution and visual game acceptance remain with the user. The producer and
 shader coverage limits in the [Vulkan SR cutover](rust-vulkan-sr-cutover.md) still apply.
+
+## FidelityFX Vulkan SR startup
+
+Compared with `0681aab6`, the SR owner now resolves the four FidelityFX
+context exports in Rust, using the same ordered list as native Vulkan
+FG. A missing export closes the unpublished capsule before the module
+lease ends. The native resolver method has been removed.
+
+After acquiring the existing device-dispatch lease, Rust resolves the
+nine staging functions through the same alias policy and refuses on the
+first miss. It then resolves the instance memory query and supplies its
+typed address to the native initializer. The initializer binds the
+resolved addresses, reads memory properties, and initializes capture
+as before. Version selection, staging allocations and dispatch retain
+their existing owners and order.
+
+Source comparison matched all 14 names, the 30-slot private FFX table,
+and the public declarations and disabled path. The existing Rust owner
+fixture now exercises startup through fake lookup callbacks. Pinned
+formatting, locked offline metadata and whitespace passed. Native
+linkage, fixtures, and Vulkan device and game verification remain open.

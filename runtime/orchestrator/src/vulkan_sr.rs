@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::ffx_version::{self, MAX_VERSIONS, Version};
 use crate::render_abi::rsf_sharpening_options;
-use crate::sdk_module::{FIDELITYFX_DLL, Loader, SdkModule};
+use crate::sdk_module::{FFX_CONTEXT_EXPORTS, FIDELITYFX_DLL, Loader, SdkModule};
 use crate::sr_session::has_capacity;
 use crate::vulkan_dispatch::promoted_device_proc_alias;
 use crate::vulkan_fg_copy::{Barrier, BarrierFn, CopyFn, ImageCopy, TRANSFER_SRC, UNDEFINED};
@@ -19,6 +19,7 @@ use std::sync::{LazyLock, Mutex};
 const INVALID: i32 = -1;
 const ABI_MISMATCH: i32 = -2;
 const NOT_COMPILED: i32 = -3;
+const MISSING_ENTRY_POINT: i32 = -5;
 const INIT_FAILED: i32 = -6;
 const NOT_SUPPORTED: i32 = -7;
 const WRONG_API: i32 = -12;
@@ -47,6 +48,19 @@ const FFX_JITTER_CANCELLATION: u32 = 4;
 const FFX_INVERTED_DEPTH: u32 = 8;
 const FFX_INFINITE_DEPTH: u32 = 16;
 const FFX_AUTO_EXPOSURE: u32 = 32;
+const FFX_DEVICE_NAMES: [&CStr; 9] = [
+    c"vkCreateImage",
+    c"vkDestroyImage",
+    c"vkGetImageMemoryRequirements",
+    c"vkAllocateMemory",
+    c"vkFreeMemory",
+    c"vkBindImageMemory",
+    c"vkCmdPipelineBarrier",
+    c"vkCmdClearColorImage",
+    c"vkCmdCopyImage",
+];
+type FfxExports = [rsf_vk_function; FFX_CONTEXT_EXPORTS.len()];
+type FfxDeviceEntries = [rsf_vk_function; FFX_DEVICE_NAMES.len()];
 pub(super) const SHARPENING_VENDOR: u32 = 4;
 
 type Setup = rsf_srvk_setup;
@@ -339,9 +353,13 @@ struct Platform {
 #[repr(C)]
 struct FfxOps {
     loader: Loader,
-    open: unsafe extern "C" fn(&Setup, Handle, &mut Handle) -> i32,
+    allocate: unsafe extern "C" fn(&Setup) -> Handle,
     close: unsafe extern "C" fn(Handle),
-    initialize_graphics: unsafe extern "C" fn(Handle, &Setup) -> i32,
+    symbol: unsafe extern "C" fn(Handle, *const c_char) -> rsf_vk_function,
+    bind_sdk: unsafe extern "C" fn(Handle, &FfxExports),
+    lookup: Lookup,
+    initialize_graphics:
+        unsafe extern "C" fn(Handle, &Setup, &FfxDeviceEntries, rsf_vk_function) -> i32,
     versions: unsafe extern "C" fn(Handle, &mut [Version; MAX_VERSIONS], &mut u64) -> i32,
     create_effect: unsafe extern "C" fn(Handle, &Setup, u64, u32) -> i32,
     effective_version: unsafe extern "C" fn(Handle, &mut u64) -> i32,
@@ -388,13 +406,15 @@ struct FfxDispatch<'a> {
 }
 
 const _: () = {
-    assert!(size_of::<FfxOps>() == 27 * size_of::<usize>());
-    assert!(std::mem::offset_of!(FfxOps, barrier) == 14 * 8);
-    assert!(std::mem::offset_of!(FfxOps, clear_color_zero) == 15 * 8);
-    assert!(std::mem::offset_of!(FfxOps, dispatch) == 16 * 8);
-    assert!(std::mem::offset_of!(FfxOps, copy) == 17 * 8);
-    assert!(std::mem::offset_of!(FfxOps, sharpen) == 18 * 8);
-    assert!(size_of::<Platform>() == 272);
+    assert!(size_of::<FfxOps>() == 30 * size_of::<usize>());
+    assert!(size_of::<FfxExports>() == 4 * size_of::<usize>());
+    assert!(size_of::<FfxDeviceEntries>() == 9 * size_of::<usize>());
+    assert!(std::mem::offset_of!(FfxOps, barrier) == 17 * 8);
+    assert!(std::mem::offset_of!(FfxOps, clear_color_zero) == 18 * 8);
+    assert!(std::mem::offset_of!(FfxOps, dispatch) == 19 * 8);
+    assert!(std::mem::offset_of!(FfxOps, copy) == 20 * 8);
+    assert!(std::mem::offset_of!(FfxOps, sharpen) == 21 * 8);
+    assert!(size_of::<Platform>() == 296);
     assert!(size_of::<Blit>() == 24);
     assert!(size_of::<FfxDispatch>() == 144);
     assert!(std::mem::offset_of!(FfxDispatch, reset) == 136);
@@ -497,16 +517,57 @@ fn check(result: i32) -> Result<(), i32> {
     if result == 0 { Ok(()) } else { Err(result) }
 }
 
-impl FidelityFx {
-    unsafe fn create(ops: &'static FfxOps, setup: &Setup) -> Result<(Self, [u32; 2]), i32> {
-        let output = [setup.output_width, setup.output_height];
-        let mut handle = ptr::null_mut();
-        let module =
-            unsafe { SdkModule::open(ops.loader, setup.runtime_directory_utf8, FIDELITYFX_DLL) }?;
-        check(unsafe { (ops.open)(setup, module.as_ptr(), &mut handle) })?;
+impl FfxOps {
+    fn open_sdk(&self, setup: &Setup, module: &SdkModule) -> Result<Handle, i32> {
+        let handle = unsafe { (self.allocate)(setup) };
         if handle.is_null() {
             return Err(INIT_FAILED);
         }
+        let exports = FFX_CONTEXT_EXPORTS
+            .map(|name| unsafe { (self.symbol)(module.as_ptr(), name.as_ptr()) });
+        if exports.iter().any(Option::is_none) {
+            unsafe { (self.close)(handle) };
+            return Err(MISSING_ENTRY_POINT);
+        }
+        unsafe { (self.bind_sdk)(handle, &exports) };
+        Ok(handle)
+    }
+
+    fn prepare_graphics(&self, handle: Handle, setup: &Setup) -> Result<(), i32> {
+        let mut entries = [None; FFX_DEVICE_NAMES.len()];
+        for (slot, name) in entries.iter_mut().zip(FFX_DEVICE_NAMES) {
+            *slot =
+                unsafe { rsf_core_srvk_dispatch_lookup(setup.device, name.as_ptr(), self.lookup) };
+            if slot.is_none() {
+                return Err(MISSING_ENTRY_POINT);
+            }
+        }
+        let mut memory = None;
+        let instance_proc = setup.instance_proc.ok_or(INIT_FAILED)?;
+        if unsafe {
+            (self.lookup)(
+                instance_proc,
+                setup.instance,
+                c"vkGetPhysicalDeviceMemoryProperties".as_ptr(),
+                &mut memory,
+            )
+        } == 0
+        {
+            return Err(INIT_FAILED);
+        }
+        if memory.is_none() {
+            return Err(MISSING_ENTRY_POINT);
+        }
+        check(unsafe { (self.initialize_graphics)(handle, setup, &entries, memory) })
+    }
+}
+
+impl FidelityFx {
+    unsafe fn create(ops: &'static FfxOps, setup: &Setup) -> Result<(Self, [u32; 2]), i32> {
+        let output = [setup.output_width, setup.output_height];
+        let module =
+            unsafe { SdkModule::open(ops.loader, setup.runtime_directory_utf8, FIDELITYFX_DLL) }?;
+        let handle = ops.open_sdk(setup, &module)?;
         let mut owner = Self {
             ops,
             handle,
@@ -521,7 +582,7 @@ impl FidelityFx {
         };
         check(dispatch_register(setup.device, setup.device_proc))?;
         owner.dispatch_lease = Some(DispatchLease(setup.device));
-        check(unsafe { (ops.initialize_graphics)(handle, setup) })?;
+        ops.prepare_graphics(handle, setup)?;
         let mut versions = [Version::default(); MAX_VERSIONS];
         let mut count = 0;
         check(unsafe { (ops.versions)(handle, &mut versions, &mut count) })?;

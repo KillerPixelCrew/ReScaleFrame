@@ -34,7 +34,6 @@ int32_t rsf_core_srvk_spatial_fallback(const Platform*, const rsf_srvk_fallback*
 #include <ffx_api/vk/ffx_api_vk.h>
 #include <cstdio>
 #include <cstring>
-#include <memory>
 
 namespace {
 constexpr auto max_versions = rsf::max_ffx_versions;
@@ -51,11 +50,16 @@ struct FfxDispatch {
     uint32_t reset;
 };
 struct FfxNative;
+using FfxExports = rsf_vk_function[4];
+using FfxDeviceEntries = rsf_vk_function[9];
 struct FfxOps {
     rsf_vk_sdk_loader loader;
-    int32_t (*open)(const rsf_srvk_setup*, void* module, FfxNative**);
+    FfxNative* (*allocate)(const rsf_srvk_setup*);
     void (*close)(FfxNative*);
-    int32_t (*initialize_graphics)(FfxNative*, const rsf_srvk_setup*);
+    rsf_vk_function (*symbol)(void*, const char*);
+    void (*bind_sdk)(FfxNative*, const FfxExports*);
+    int32_t (*lookup)(rsf_vk_get_proc, void*, const char*, rsf_vk_function*);
+    int32_t (*initialize_graphics)(FfxNative*, const rsf_srvk_setup*, const FfxDeviceEntries*, rsf_vk_function);
     int32_t (*versions)(FfxNative*, Version*, uint64_t*);
     int32_t (*create_effect)(FfxNative*, const rsf_srvk_setup*, uint64_t, uint32_t);
     int32_t (*effective_version)(FfxNative*, uint64_t*);
@@ -90,9 +94,10 @@ struct Platform {
     int32_t (*dump_wants)(const rsf_frame_record*);
     void (*dump_result)(const rsf_frame_record*, const char*, uint32_t, int32_t);
 };
-static_assert(sizeof(FfxOps) == 27 * sizeof(void*) && sizeof(Platform) == 272 && sizeof(Blit) == 24);
-static_assert(offsetof(FfxOps, barrier) == 14 * 8 && offsetof(FfxOps, clear_color_zero) == 15 * 8 &&
-    offsetof(FfxOps, dispatch) == 16 * 8 && offsetof(FfxOps, copy) == 17 * 8 && offsetof(FfxOps, sharpen) == 18 * 8);
+static_assert(sizeof(FfxOps) == 30 * sizeof(void*) && sizeof(Platform) == 296 && sizeof(Blit) == 24);
+static_assert(sizeof(FfxExports) == 4 * sizeof(void*) && sizeof(FfxDeviceEntries) == 9 * sizeof(void*));
+static_assert(offsetof(FfxOps, barrier) == 17 * 8 && offsetof(FfxOps, clear_color_zero) == 18 * 8 &&
+    offsetof(FfxOps, dispatch) == 19 * 8 && offsetof(FfxOps, copy) == 20 * 8 && offsetof(FfxOps, sharpen) == 21 * 8);
 static_assert(sizeof(FfxDispatch) == 144 && offsetof(FfxDispatch, reset) == 136);
 static_assert(VK_FORMAT_R8_UNORM == 9 && VK_FORMAT_R16G16_SFLOAT == 83 &&
     VK_FORMAT_R16G16B16A16_SFLOAT == 97 && VK_FORMAT_R32_SFLOAT == 100 && VK_FORMAT_D32_SFLOAT == 126);
@@ -139,35 +144,36 @@ struct FfxNative {
 
 };
 
-int32_t open(const rsf_srvk_setup*, void* module, FfxNative** out) noexcept try
+FfxNative* allocate(const rsf_srvk_setup*) noexcept try
 {
-    auto native = std::make_unique<FfxNative>();
-    if (!native->sdk.resolve(static_cast<HMODULE>(module))) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
-    *out = native.release();
-    return RSF_BACKEND_OK;
+    return new FfxNative{};
 }
-catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
+catch (...) { return nullptr; }
 
-int32_t initialize_graphics(FfxNative* native, const rsf_srvk_setup* setup) noexcept try
+void bind_sdk(FfxNative* native, const FfxExports* exports) noexcept
 {
+    const auto& [create, destroy, query, dispatch] = *exports;
+    native->sdk.create = reinterpret_cast<PfnFfxCreateContext>(create);
+    native->sdk.destroy = reinterpret_cast<PfnFfxDestroyContext>(destroy);
+    native->sdk.query = reinterpret_cast<PfnFfxQuery>(query);
+    native->sdk.dispatch = reinterpret_cast<PfnFfxDispatch>(dispatch);
+}
+
+int32_t initialize_graphics(FfxNative* native, const rsf_srvk_setup* setup,
+    const FfxDeviceEntries* entries, rsf_vk_function memory_properties) noexcept try
+{
+    const auto& [create, destroy, requirements, allocate_memory, free_memory, bind, barrier, clear, copy] = *entries;
     native->device = native->gpu.device = static_cast<VkDevice>(setup->device);
-    // Same entry points, order and dispatch route as before; only the owner of the table moved.
-#define RSF_VK_LOAD(member, function) \
-    native->member = reinterpret_cast<PFN_##function>(sdk_device_proc(native->device, #function)); \
-    if (!native->member) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT
-    RSF_VK_LOAD(gpu.create_image, vkCreateImage);
-    RSF_VK_LOAD(gpu.destroy_image, vkDestroyImage);
-    RSF_VK_LOAD(gpu.requirements, vkGetImageMemoryRequirements);
-    RSF_VK_LOAD(gpu.allocate, vkAllocateMemory);
-    RSF_VK_LOAD(gpu.free_memory, vkFreeMemory);
-    RSF_VK_LOAD(gpu.bind, vkBindImageMemory);
-    RSF_VK_LOAD(barrier, vkCmdPipelineBarrier);
-    RSF_VK_LOAD(clear, vkCmdClearColorImage);
-    RSF_VK_LOAD(copy, vkCmdCopyImage);
-#undef RSF_VK_LOAD
-    auto properties = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties>(
-        setup->instance_proc(setup->instance, "vkGetPhysicalDeviceMemoryProperties"));
-    if (!properties) return RSF_BACKEND_ERROR_MISSING_ENTRY_POINT;
+    native->gpu.create_image = reinterpret_cast<PFN_vkCreateImage>(create);
+    native->gpu.destroy_image = reinterpret_cast<PFN_vkDestroyImage>(destroy);
+    native->gpu.requirements = reinterpret_cast<PFN_vkGetImageMemoryRequirements>(requirements);
+    native->gpu.allocate = reinterpret_cast<PFN_vkAllocateMemory>(allocate_memory);
+    native->gpu.free_memory = reinterpret_cast<PFN_vkFreeMemory>(free_memory);
+    native->gpu.bind = reinterpret_cast<PFN_vkBindImageMemory>(bind);
+    native->barrier = reinterpret_cast<PFN_vkCmdPipelineBarrier>(barrier);
+    native->clear = reinterpret_cast<PFN_vkCmdClearColorImage>(clear);
+    native->copy = reinterpret_cast<PFN_vkCmdCopyImage>(copy);
+    const auto properties = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties>(memory_properties);
     properties(static_cast<VkPhysicalDevice>(setup->physical_device), &native->memory);
     native->gpu.memory_types(native->memory);
     return native->capture.initialize(native->device, setup->device_proc, native->memory)
@@ -383,7 +389,8 @@ catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 constexpr Platform native{
     rsf::dlss_vk::platform,
     rsf::xess_vk::platform,
-    {rsf_vk_sdk_system_loader, open, [](FfxNative* owner) { delete owner; }, initialize_graphics, versions, create_effect,
+    {rsf_vk_sdk_system_loader, allocate, [](FfxNative* owner) { delete owner; }, rsf_vkffx_symbol, bind_sdk,
+        call_device_proc, initialize_graphics, versions, create_effect,
         effective_version, destroy_effect, plan,
         [](FfxNative* owner) -> void* { return &owner->gpu; }, &rsf::vkfg::platform,
         [](FfxNative* owner) { return owner->memory.memoryTypeCount; }, release,
