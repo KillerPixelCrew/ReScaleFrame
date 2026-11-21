@@ -14,6 +14,11 @@ add_library(ReScaleFrame::AC7View ALIAS rsf_ac7_view)
 # src/ac7_sites.h with its native leaves, so the Rust archive follows the render scope
 # on the link line. Only this DLL and the native graph fixture pull native_renderer.cpp; the
 # carriers link rsf_ac7_render_scope without it and are unchanged.
+# The crate also owns the queued render scopes (src/render_scope.rs) and exports
+# ac7_render_scope.h except its two create calls, which render_scope.cpp keeps to lend its
+# exception leaves (src/ac7_scope_owner.h). Every target that calls that header links
+# rsf_ac7_rust after rsf_ac7_render_scope: this DLL and the render scope, D3D11 present bridge and
+# native graph fixtures. No carrier calls it, so no carrier pulls render_scope.cpp.
 rsf_add_rust_static(rsf_ac7_rust rsf_rust_ac7 rsf-ac7 rsf_ac7)
 add_library(rsf_game_ac7 SHARED src/plugin.cpp)
 target_link_libraries(rsf_game_ac7 PRIVATE ReScaleFrame::GameSDK rsf_ac7_view rsf_ac7_render_scope rsf_ac7_rust rsf_build_options)

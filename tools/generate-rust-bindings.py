@@ -97,6 +97,11 @@ generate("games/ac7/src/sites_abi.rs", "games/ac7/src/ac7_sites.h",
          ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]",
           "--raw-line", "use crate::platform_abi::{rsf_ac7_native_renderer, rsf_ac7_native_renderer_options, "
           "rsf_ac7_renderer_log_fn};"])
+generate("games/ac7/src/scope_abi.rs", "games/ac7/src/ac7_scope_owner.h",
+         "rsf_ac7_scope_(lease|calls)", "NOTHING",
+         ["-Isdk/game/include", "-Igames/ac7/include"],
+         ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]",
+          "--raw-line", "use crate::platform_abi::{rsf_ac7_render_scope, rsf_ac7_render_scope_fn};"])
 generate("games/minecraft/native/platform_abi.rs", "games/minecraft/native/minecraft_platform.h",
          "rsf_(minecraft_(platform|configuration|message_fn)|gl_pipeline(_(setup|options|surfaces|status))?|"
          "native_fg_(options|status)|fg_status|sharpening_options|native_(latency_status|cpu_counters)|"

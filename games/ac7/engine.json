@@ -900,5 +900,14 @@
     "remaining": "Relay handlers and their D3D11 checks, truesky_depth.cpp, truesky_motion.cpp, sky detours, relay memory; other AC7 owners. See evidence",
     "validation": "Source review only; byte/text comparison script, rustfmt --edition 2024 check, JSON parse, py_compile and git diff --check. bindgen-cli absent, sites_abi.rs hand-mirrored with layout asserts. Not compiled, linked, Cargo-tested, Clippy-checked, CTest-run, deployed or game-tested",
     "evidence": "docs/research/rust-ac7-truesky-relays.md"
+  },
+  "rust_render_scopes": {
+    "date": "2026-11-21",
+    "owner": "Crate rsf-ac7 owns the queued render scopes (render_scope.rs): admission, capacity 1..4096, identity rules per role, serials, ticket allocation, the native list append (root +0, tail link +8, executing +0x10, NumCommands +0x14; command Next +0, execute +8), the engine-called marker function, the begin/end stack, pass then state callbacks, lease resolve at both markers and release after end, quiesce/idle/destroy. It exports ac7_render_scope.h except create and create_passes, which render_scope.cpp keeps to lend rsf_ac7_scope_calls, the exception-containing calls into consumer callbacks and lease functions",
+    "preserved": "Public C ABI, names and results, list and command layouts and append checks, marker order, deferred output resolution before each marker, callback order and arguments, serial and lease ownership rules, refusal paths, native_renderer.cpp and all callers, carrier link lines",
+    "changed": "The end marker frees its ticket before the owner can report idle (narrowing the window in which stop could unload the module under the RHI thread); a throwing lease release is contained instead of terminating the game. Fixtures ac7_render_scope and d3d11_present_bridge now link rsf_ac7_rust",
+    "remaining": "Non-innermost end still strands its scope (unchanged, no evidence AC7 produces it); unclosed or discarded tickets retain the module by design; other AC7 owners. See evidence",
+    "validation": "Source review only; rustfmt --edition 2024 check, JSON parse, py_compile and git diff --check. bindgen-cli absent, scope_abi.rs hand-mirrored with layout asserts. New Rust tests written but not run. Not compiled, linked, Cargo-tested, Clippy-checked, CTest-run, deployed or game-tested",
+    "evidence": "docs/research/rust-ac7-render-scopes.md"
   }
 }

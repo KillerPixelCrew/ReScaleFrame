@@ -5,12 +5,14 @@
 //! scene-precision and temporal velocity patch transactions (`patches.rs`), the hook body
 //! guards (`guards.rs`), the prepare/start/quiesce/stop transaction with its retirement
 //! admission (`renderer.rs`) and the TrueSky plugin patches and call relays with their admission,
-//! rollback and retirement (`truesky.rs`), all reached through ac7_sites.h.
+//! rollback and retirement (`truesky.rs`), all reached through ac7_sites.h. The queued RHI render
+//! scopes of ac7_render_scope.h (`render_scope.rs`) export that header's calls except the two
+//! create calls, which render_scope.cpp keeps to lend its exception leaves (ac7_scope_owner.h).
 //!
 //! The rest of the native renderer stays C++ (native_renderer.cpp and the render-scope library):
 //! the five exported renderer calls as wrappers, the renderer object and its fields, MinHook
 //! leaves, module pinning, detours, engine relays, the TrueSky relay handlers with their D3D11
-//! checks and shaders, relay memory, RHI scopes, SEH reads and protected code writes. plugin.cpp
+//! checks and shaders, relay memory, pass leases, SEH reads and protected code writes. plugin.cpp
 //! lends its entry points through the
 //! exception-guarded leaf table in ac7_platform.h and keeps the exported
 //! rsf_get_game_plugin_api. The DirectInput carriers, their decryption wait, carrier engine
@@ -19,7 +21,9 @@ mod guards;
 mod lifecycle;
 mod patches;
 mod platform_abi;
+mod render_scope;
 mod renderer;
+mod scope_abi;
 mod sites;
 mod sites_abi;
 mod truesky;
