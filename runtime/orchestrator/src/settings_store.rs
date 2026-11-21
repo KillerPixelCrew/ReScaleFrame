@@ -28,6 +28,7 @@ const NUMBER_CAPACITY: usize = 80;
 // overlay interprets it. A separate key rather than a field of rsf_render_settings, which other
 // ABIs embed; a settings write keeps it because it is not an owned key.
 const OVERLAY_LAYOUT: &str = "OverlayLayout";
+const DLSS_PRESET: &str = "DLSSPreset";
 
 #[derive(Clone, Copy)]
 enum Value {
@@ -40,7 +41,7 @@ enum Value {
 const KEYS: [&str; 22] = [
     "SR",
     "SRBackend",
-    "DLSSPreset",
+    DLSS_PRESET,
     "FG",
     "FGBackend",
     "FGGeneratedFrames",
@@ -267,7 +268,7 @@ fn read_with_fg_mode(file: &File, defaults: &Settings, sharpening: &Sharpening) 
         abi_version: RSF_RENDER_FRONTEND_ABI_VERSION,
         sr_enabled: u32::from(value("SR", defaults.sr_enabled) != 0),
         sr_backend: value("SRBackend", defaults.sr_backend),
-        dlss_preset: value("DLSSPreset", defaults.dlss_preset),
+        dlss_preset: value(DLSS_PRESET, defaults.dlss_preset),
         fg_enabled: u32::from(fg_mode != 0),
         fg_backend: value("FGBackend", defaults.fg_backend),
         generated_frames: value("FGGeneratedFrames", defaults.generated_frames),
@@ -485,17 +486,35 @@ pub(crate) unsafe extern "C" fn rsf_settings_store_write_sharpening(
     })
 }
 
+/// Reads only the DLSS preset key for hosts that own their other SR settings.
+///
+/// # Safety
+/// `ini` and `section` are terminated UTF-16 strings.
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn rsf_settings_store_read_dlss_preset(
+    ini: PCWSTR,
+    section: PCWSTR,
+    fallback: u32,
+) -> u32 {
+    File::new(ini, section).map_or(fallback, |file| file.integer(DLSS_PRESET, fallback))
+}
+
 /// Persists only the DLSS preset key for hosts that own their other SR settings. The caller has
 /// validated `preset`.
 ///
 /// # Safety
 /// `ini` and `section` are terminated UTF-16 strings.
-pub(crate) unsafe fn write_dlss_preset(ini: PCWSTR, section: PCWSTR, preset: u32) -> i32 {
+#[unsafe(export_name = "rsf_settings_store_write_dlss_preset")]
+pub(crate) unsafe extern "C" fn write_dlss_preset(
+    ini: PCWSTR,
+    section: PCWSTR,
+    preset: u32,
+) -> i32 {
     let Some(file) = File::new(ini, section) else {
         return INVALID_ARGUMENT;
     };
-    let value = wide(&preset.to_string());
-    if file.write(&wide(KEYS[2]), value.as_ptr()) {
+    let value = text(Value::Integer(preset));
+    if file.write(&wide(DLSS_PRESET), value.as_ptr()) {
         OK
     } else {
         NOT_READY
@@ -677,19 +696,23 @@ mod tests {
     }
 
     #[test]
-    fn preset_write_replaces_only_the_preset_key() {
+    fn preset_round_trip_keeps_fallback_and_other_keys() {
         let ini = Temporary::new("preset");
         let section = wide("Rendering");
         let file = File::new(ini.0.as_ptr(), section.as_ptr()).unwrap();
+        let read_preset =
+            || unsafe { rsf_settings_store_read_dlss_preset(ini.0.as_ptr(), section.as_ptr(), 4) };
+        assert_eq!(read_preset(), 4);
         // Callback hosts saved the key as DlssPreset; profile keys match case-insensitively.
         assert!(file.write(&wide("DlssPreset"), wide("2").as_ptr()));
+        assert_eq!(read_preset(), 2);
         assert!(file.write(&wide("Sharpness"), wide("0.25").as_ptr()));
         assert_eq!(
             unsafe { write_dlss_preset(ini.0.as_ptr(), section.as_ptr(), 11) },
             OK
         );
         assert_eq!(file.integer("DlssPreset", 0), 11);
-        assert_eq!(file.integer("DLSSPreset", 0), 11);
+        assert_eq!(read_preset(), 11);
         assert_eq!(file.decimal("Sharpness", 0.0), 0.25);
         assert_eq!(
             ini.contents()

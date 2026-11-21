@@ -1638,9 +1638,7 @@ static void load_sharpening(void)
 
 static void action_save_dlss_preset(unsigned long preset)
 {
-    wchar_t text[16];
-    _snwprintf(text, 16, L"%lu", preset);
-    if (!WritePrivateProfileStringW(L"Rendering", L"DlssPreset", text, preference_path))
+    if (rsf_settings_store_write_dlss_preset(preference_path, L"Rendering", (uint32_t)preset) != RSF_OK)
         note("settings: could not save DLSS model preset");
 }
 
@@ -1711,7 +1709,8 @@ static void register_overlay_actions(void)
         preference_path[0] = L'\0';
     }
     {
-        uint32_t preset = GetPrivateProfileIntW(L"Rendering", L"DlssPreset", read_number("RSF_DLSS_PRESET", 0), preference_path);
+        uint32_t preset = rsf_settings_store_read_dlss_preset(preference_path, L"Rendering",
+            (uint32_t)read_number("RSF_DLSS_PRESET", 0));
         rsf_bridge_select_dlss_preset(rsf_dlss_preset_valid(preset) ? preset : 0);
     }
     load_sharpening();

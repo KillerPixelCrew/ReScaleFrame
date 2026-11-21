@@ -112,6 +112,21 @@ They predate the latest bridge, overlay, input and retirement cutovers.
 | Device | Check provider switches, fullscreen and resize, GPU retirement, D3D11 state restoration, OpenGL sharing, capture completion and overlay drawing on the affected APIs. |
 | Game | Use the same candidate on Standard and AVX. Record movement and held input, SR and FG switching, overlay capture and release, resize and fallback, and the observed shutdown sequence. Record an engine quit and explicit plugin retirement separately. |
 
+## Remaining native policy
+
+The source audit of the Runtime and combined carriers found two native
+policy helpers after the shared settings cutover. `input_receipts.h`
+deduplicates input receipts and selects their owning frame through the
+CPU dispatcher and FG callbacks. `failure_capture_policy.h` governs the
+D3D11 host's failure capture budget and diagnostic sequences. Both files
+carry `GPL-3.0-only` identifiers from `ff9df39`. Their identifiers differ
+from the license inventory in [Dependencies](dependencies.md). Resolve
+their provenance and license before translating them.
+
+`rsf_negotiate` in `runtime/contract` has a native fixture and no
+production caller. The running Runtime and adapter use the Rust backend
+and session owners.
+
 ## Verification coverage
 
 | Requirement | Recorded evidence | Still open |

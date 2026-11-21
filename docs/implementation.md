@@ -9,6 +9,9 @@ sharpening keys through the Rust settings store. Reads use the same float
 parser and range checks as the Runtime. Failed writes attempt to restore
 the previous key values and log one error. Source review traced both carrier
 links. Build, export comparison and an AC7 settings round trip remain open.
+The carriers also use the same store for `DLSSPreset`. Their existing
+`RSF_DLSS_PRESET` fallback and preset validation still apply at startup.
+The Runtime callback host uses the same write function.
 
 Anomaly's Rust bootstrap now installs DirectInput observation before
 requesting the engine's guarded `CInput::OnFrame` slot. It handles refusals
