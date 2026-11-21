@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The Rust D3D11-on-12 overlay now resolves and retains the system
+device-creation export. Shared-panel startup and stop require the
+same D3D11 device, so a wrapped overlay cannot claim or stop a panel
+owned by another device. The wrapped owner also refuses a short
+intent output. The private ABI was regenerated, and the updated
+synthetic fixture covers a foreign-device start and stop. Build and
+device validation remain open.
+
 Anomaly's DirectInput and DXGI probes now transfer their counted
 System32 DLL references to the Rust hook registry. Discovery and
 unqueued creation refusals release the reference. Once a batch can

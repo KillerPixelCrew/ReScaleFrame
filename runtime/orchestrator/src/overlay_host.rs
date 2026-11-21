@@ -316,7 +316,7 @@ impl Host {
         user: Handle,
     ) -> i32 {
         if self.started {
-            return 1;
+            return i32::from(self.owns_device(device));
         }
         if device.is_null() || window.is_null() || self.failed {
             return 0;
@@ -324,6 +324,8 @@ impl Host {
         set_logger(log, user);
         let device = unsafe { ComRef::retain(device) };
         if self.build(p, device, || window, Refusals::DEVICE) == 0 {
+            // The wrapped caller owns retry admission for a refused device start.
+            self.failed = false;
             return 0;
         }
         self.hint_begin = unsafe { leaf(p.tick)() };
@@ -698,6 +700,18 @@ impl Host {
         // The panel DLL stays loaded: a window message already inside the input hook can still
         // be on its way into its code.
     }
+
+    fn owns_device(&self, device: Handle) -> bool {
+        self.device
+            .as_ref()
+            .is_some_and(|current| current.as_ptr() == device)
+    }
+
+    fn stop_device(&mut self, p: &Platform, device: Handle) {
+        if self.owns_device(device) {
+            self.stop(p);
+        }
+    }
 }
 
 /* The lines each start path reports when a step refuses. */
@@ -798,9 +812,6 @@ unsafe extern "C" fn rsf_core_overlay_host_start_device(
     log: rsf_overlay_host_log,
     user: Handle,
 ) -> i32 {
-    if STARTED.load(Ordering::Acquire) {
-        return 1;
-    }
     let mut host = hold();
     let result = host.start_device(platform, device, window, log, user);
     publish(&host);
@@ -878,6 +889,13 @@ unsafe extern "C" fn rsf_core_overlay_host_present(
 extern "C" fn rsf_core_overlay_host_stop(platform: &Platform) {
     let mut host = hold();
     host.stop(platform);
+    publish(&host);
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_core_overlay_host_stop_device(platform: &Platform, device: Handle) {
+    let mut host = hold();
+    host.stop_device(platform, device);
     publish(&host);
 }
 

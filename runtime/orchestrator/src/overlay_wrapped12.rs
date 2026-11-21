@@ -5,16 +5,59 @@ use crate::overlay_native12_abi::{
     rsf_overlay11on12_device, rsf_overlay11on12_platform as Platform, rsf_overlay11on12_target,
     rsf_overlay12_log,
 };
+use crate::sdk_module::SdkModule;
 use crate::sr_session::has_capacity;
 use std::ffi::{CStr, c_void};
 use std::ptr;
-use std::sync::Mutex;
-use windows_sys::Win32::System::SystemInformation::GetTickCount64;
+use std::sync::{Mutex, OnceLock};
+use windows_sys::Win32::System::{
+    LibraryLoader::{GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW},
+    SystemInformation::{GetSystemDirectoryW, GetTickCount64},
+};
 
 const STARTUP_HINT_MS: u64 = 8000;
 const NOT_SUPPORTED: i32 = -7;
 
 type Handle = *mut c_void;
+
+struct SystemEntry {
+    _module: SdkModule,
+    create: unsafe extern "system" fn() -> isize,
+}
+
+// The module and export are immutable and retained for the process lifetime.
+unsafe impl Send for SystemEntry {}
+unsafe impl Sync for SystemEntry {}
+
+impl SystemEntry {
+    fn open() -> Option<Self> {
+        let mut path = vec![0; 260];
+        let length = unsafe { GetSystemDirectoryW(path.as_mut_ptr(), path.len() as u32) } as usize;
+        if length == 0 || length >= path.len() {
+            return None;
+        }
+        path.truncate(length);
+        path.extend("\\d3d11.dll".encode_utf16().chain([0]));
+        let module = SdkModule::adopt_system(unsafe {
+            LoadLibraryExW(path.as_ptr(), ptr::null_mut(), LOAD_LIBRARY_SEARCH_SYSTEM32)
+        })?;
+        let create =
+            unsafe { GetProcAddress(module.as_ptr(), c"D3D11On12CreateDevice".as_ptr().cast()) }?;
+        Some(Self {
+            _module: module,
+            create,
+        })
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_core_overlay11on12_create_proc() -> Handle {
+    static ENTRY: OnceLock<Option<SystemEntry>> = OnceLock::new();
+    ENTRY
+        .get_or_init(SystemEntry::open)
+        .as_ref()
+        .map_or(ptr::null_mut(), |entry| entry.create as *const () as Handle)
+}
 
 struct Binding {
     interop: ComRef,
@@ -195,7 +238,11 @@ impl State {
     }
 
     fn stop(&mut self, platform: &Platform) {
-        unsafe { (platform.stop.unwrap())() };
+        if let Some(binding) = &self.binding
+            && binding.started.is_some()
+        {
+            unsafe { (platform.stop.unwrap())(binding.device.as_ptr()) };
+        }
         *self = Self::default();
     }
 }
@@ -211,7 +258,12 @@ unsafe extern "C" fn rsf_core_overlay11on12_frame(
     logger: rsf_overlay12_log,
     user: Handle,
 ) -> i32 {
-    if device.is_null() || queue.is_null() || chain.is_null() || !unsafe { has_capacity(stats) } {
+    if device.is_null()
+        || queue.is_null()
+        || chain.is_null()
+        || !unsafe { has_capacity(stats) }
+        || (!intent.is_null() && !unsafe { has_capacity(intent) })
+    {
         return 0;
     }
     let Ok(mut owner) = OWNER.try_lock() else {
@@ -332,7 +384,7 @@ mod tests {
     unsafe extern "C" fn flush(_: Handle) {
         call("flush");
     }
-    unsafe extern "C" fn stop() {
+    unsafe extern "C" fn stop(_: Handle) {
         call("stop");
     }
 
@@ -365,6 +417,7 @@ mod tests {
             user: ptr::null_mut(),
         };
         let mut owner = State::default();
+        owner.stop(&platform);
         assert_eq!(owner.render(&platform, &frame), 0);
         frame.queue = device;
         assert_eq!(owner.render(&platform, &frame), 0);

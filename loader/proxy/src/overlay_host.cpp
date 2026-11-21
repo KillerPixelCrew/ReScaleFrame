@@ -282,3 +282,8 @@ extern "C" void rsf_overlay_host_stop(void)
 {
     rsf_core_overlay_host_stop(&platform);
 }
+
+extern "C" void rsf_overlay_host_stop_device(void* native_device)
+{
+    rsf_core_overlay_host_stop_device(&platform, native_device);
+}

@@ -28,7 +28,7 @@ typedef struct rsf_overlay11on12_platform {
         const rsf_overlay_stats*, rsf_overlay_intent*);
     void (*release)(void* interop, void* wrapped);
     void (*flush)(void* context);
-    void (*stop)(void);
+    void (*stop)(void* device);
 } rsf_overlay11on12_platform;
 
 #ifdef __cplusplus
@@ -37,6 +37,7 @@ extern "C" {
 int rsf_core_overlay11on12_frame(const rsf_overlay11on12_platform*, void*, void*, void*, const rsf_overlay_stats*,
     rsf_overlay_intent*, rsf_overlay12_log, void*);
 void rsf_core_overlay11on12_stop(const rsf_overlay11on12_platform*);
+void* rsf_core_overlay11on12_create_proc(void);
 #ifdef __cplusplus
 }
 #endif

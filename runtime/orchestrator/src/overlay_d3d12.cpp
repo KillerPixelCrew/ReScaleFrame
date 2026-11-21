@@ -7,31 +7,11 @@
 #include <d3d12.h>
 #include <dxgi1_4.h>
 #include <wrl/client.h>
-#include <string>
 namespace {
 using Microsoft::WRL::ComPtr;
 using CreateOn12 = decltype(&D3D11On12CreateDevice);
-CreateOn12 system_create_on12()
-{
-    // Resolve only when this optional overlay path is used. Local D3D11 wrappers
-    // may expose device creation without exposing the D3D11-on-12 entry point.
-    static const auto create = []() -> CreateOn12 {
-        wchar_t directory[MAX_PATH]{};
-        const UINT length = GetSystemDirectoryW(directory, MAX_PATH);
-        if (!length || length >= MAX_PATH) return nullptr;
-        const std::wstring path = std::wstring(directory, length) + L"\\d3d11.dll";
-        const auto module = LoadLibraryExW(path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
-        if (!module) return nullptr;
-        const auto entry = reinterpret_cast<CreateOn12>(reinterpret_cast<void*>(GetProcAddress(module, "D3D11On12CreateDevice")));
-        if (!entry) { FreeLibrary(module); return nullptr; }
-        // Keep this one reference for the process lifetime: cached entry points,
-        // devices, wrapped resources and their vtables must remain callable.
-        return entry;
-    }();
-    return create;
-}
 int32_t create_wrapped_device(void* device, void* queue, rsf_overlay11on12_device* out) noexcept try {
-    const auto create_on12 = system_create_on12();
+    const auto create_on12 = reinterpret_cast<CreateOn12>(rsf_core_overlay11on12_create_proc());
     if (!create_on12) return RSF_BACKEND_ERROR_NOT_SUPPORTED;
     IUnknown* queues[] = {static_cast<ID3D12CommandQueue*>(queue)};
     ComPtr<ID3D11Device> device11;
@@ -91,7 +71,7 @@ int draw(void* context, void* view, uint32_t width, uint32_t height,
 constexpr rsf_overlay11on12_platform platform{
     create_wrapped_device, window, start, rsf_overlay_host_visible, target, acquire, draw, release,
     [](void* context) { static_cast<ID3D11DeviceContext*>(context)->Flush(); },
-    rsf_overlay_host_stop,
+    rsf_overlay_host_stop_device,
 };
 }
 

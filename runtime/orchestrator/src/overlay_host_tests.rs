@@ -713,6 +713,13 @@ fn draw_target_keeps_the_device_hint_clock_and_retraces_each_opening() {
     assert_eq!(host.hint_begin, 5000);
     calls();
     logs();
+    let foreign = raw(&scene.other);
+    assert_eq!(
+        host.start_device(&p, foreign, 0x40 as Handle, Some(capture), null_mut()),
+        0
+    );
+    host.stop_device(&p, foreign);
+    assert!(host.started && calls().is_empty());
     let context = raw(&scene.context);
     let target = raw(&scene.view);
     let mut intent = rsf_overlay_intent::default();
@@ -754,7 +761,7 @@ fn draw_target_keeps_the_device_hint_clock_and_retraces_each_opening() {
         logs().last().unwrap(),
         "D3D11-on-12 overlay: draw completed result=-4"
     );
-    host.stop(&p);
+    host.stop_device(&p, device);
     assert!(scene.balanced());
 }
 

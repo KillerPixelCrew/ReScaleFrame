@@ -328,7 +328,7 @@ pub struct rsf_overlay11on12_platform {
         unsafe extern "C" fn(interop: *mut ::core::ffi::c_void, wrapped: *mut ::core::ffi::c_void),
     >,
     pub flush: ::core::option::Option<unsafe extern "C" fn(context: *mut ::core::ffi::c_void)>,
-    pub stop: ::core::option::Option<unsafe extern "C" fn()>,
+    pub stop: ::core::option::Option<unsafe extern "C" fn(device: *mut ::core::ffi::c_void)>,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {

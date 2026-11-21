@@ -40,6 +40,7 @@ int rsf_overlay_host_start(void* swapchain, rsf_overlay_host_log_fn log,
                            void* log_user);
 /* Shared UI host endpoints for renderers which already own a device, window and target. */
 int rsf_overlay_host_start_device(void* d3d11_device, void* hwnd, rsf_overlay_host_log_fn log, void* user);
+void rsf_overlay_host_stop_device(void* d3d11_device);
 int rsf_overlay_host_draw_target(void* d3d11_context, void* render_target_view, uint32_t width,
     uint32_t height, const rsf_overlay_stats*, rsf_overlay_intent*);
 

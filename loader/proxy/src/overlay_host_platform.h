@@ -91,6 +91,7 @@ void rsf_core_overlay_host_toggle(const rsf_overlay_host_platform*);
 int rsf_core_overlay_host_present(const rsf_overlay_host_platform*, void* swapchain,
                                   const rsf_overlay_stats* stats, rsf_overlay_intent* intent);
 void rsf_core_overlay_host_stop(const rsf_overlay_host_platform*);
+void rsf_core_overlay_host_stop_device(const rsf_overlay_host_platform*, void* device);
 
 #ifdef __cplusplus
 } /* extern "C" */
