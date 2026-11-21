@@ -164,11 +164,12 @@ uint32_t sr_create(void* commands, const rsf_unity_package_view_setup* view, int
 // Unity's D3D12 device.
 uint32_t fg_default_backend(uint32_t* backend) noexcept
 {
-    void* owning_device = nullptr; void* owning_queue = nullptr;
+    ComPtr<ID3D12Device> owning_device;
+    ComPtr<ID3D12CommandQueue> owning_queue;
     ComPtr<IDXGIFactory4> factory; ComPtr<IDXGIAdapter1> adapter; DXGI_ADAPTER_DESC1 desc{};
-    if (!rsf_unity_package_graphics(&owning_device, &owning_queue) ||
+    if (!rsf_unity_package_graphics(owning_device, owning_queue) ||
         FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))) ||
-        FAILED(factory->EnumAdapterByLuid(static_cast<ID3D12Device*>(owning_device)->GetAdapterLuid(), IID_PPV_ARGS(&adapter))) ||
+        FAILED(factory->EnumAdapterByLuid(owning_device->GetAdapterLuid(), IID_PPV_ARGS(&adapter))) ||
         FAILED(adapter->GetDesc1(&desc))) return 0;
     *backend = rsf_fg_default_backend(desc.VendorId, (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0);
     return 1;
@@ -200,9 +201,10 @@ void render(void*, void* commands, const rsf_game_render_pass* original, uint32_
     }
     if (pass.role == RSF_GAME_RENDER_FINAL_SCENE) { rsf_fg12_hudless(commands, &pass); return; }
     if (editor) {
-        void* owning_device = nullptr; void* owning_queue = nullptr;
-        if (!rsf_unity_package_graphics(&owning_device, &owning_queue) ||
-            !rsf_unity_preview_prepare(owning_device, owning_queue, pass.camera.output_width, pass.camera.output_height)) return;
+        ComPtr<ID3D12Device> owning_device;
+        ComPtr<ID3D12CommandQueue> owning_queue;
+        if (!rsf_unity_package_graphics(owning_device, owning_queue) ||
+            !rsf_unity_preview_prepare(owning_device.Get(), owning_queue.Get(), pass.camera.output_width, pass.camera.output_height)) return;
     }
     render_sr(commands, original);
 }

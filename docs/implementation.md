@@ -330,6 +330,16 @@ consuming Unity's waits. Native leaves still issue the graphics calls.
 Build, linkage and player verification remain open.
 [Command resource audit](research/rust-unity-vulkan-command-resources.md)
 
+Unity Vulkan now publishes its shared D3D12 device, queue and fence,
+imported semaphore and command slots as one Rust-owned record. Both
+submission paths borrow it under the existing admission, and package
+callers hold COM references through adapter lookup and Editor preview
+setup. Retirement refuses the D3D12 device-removal sentinel and keeps
+bridge bookkeeping on a refused release. The DXGI swapchain still has
+a native owner. Build, queue synchronization and player verification
+remain open.
+[Shared device audit](research/rust-unity-vulkan-shared-device.md)
+
 AC7's Rust renderer transaction owns prepare, start, quiesce and stop.
 Failed activation keeps any renderer with reachable callbacks, and a
 refused hook disable or removal keeps the renderer available for retry.
