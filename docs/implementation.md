@@ -522,6 +522,12 @@ window, clock, frame-tap and directory effects. Build and captured
 artifact verification remain open.
 [F9 session audit](research/rust-ac7-motion-session.md)
 
+Rust now owns AC7 F9 shader and input-layout records, including the
+existing cache limits, constant-slot scan and stage/ordinal/hash file
+names. D3DDisassemble and its typed blob lease stay native. The draw
+and geometry captures still consume the same metadata. Source checks
+passed. Build and captured shader verification remain open.
+
 The Godot compositor probe now keeps requests, snapshots and motion
 classification per effect instance in Rust. The typed godot-cpp
 callbacks retain scene reads, the GPU readback pass and the same status

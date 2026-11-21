@@ -91,7 +91,7 @@ extern "C" fn rsf_ac7_capture_enable(enabled: bool) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_ac7_capture_enabled() -> bool {
+pub(super) extern "C" fn rsf_ac7_capture_enabled() -> bool {
     ENABLED.load(Ordering::Acquire)
 }
 

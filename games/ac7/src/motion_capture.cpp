@@ -4,9 +4,8 @@
 #include <rescaleframe/ac7_motion_capture.h>
 #include <rescaleframe/constant_buffer_read.h>
 #include <rescaleframe/frame_tap.h>
-#include <rescaleframe/ui_identify.h>
 #include <rescaleframe/texture_dump.h>
-#include <rescaleframe/d3d11_observer.h>
+#include "motion_capture_observations.h"
 #include "motion_capture_records.h"
 #include "motion_capture_session.h"
 
@@ -21,7 +20,6 @@
 #include <array>
 #include <atomic>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <sstream>
@@ -36,7 +34,6 @@ using Microsoft::WRL::ComPtr;
 namespace {
 constexpr uint32_t max_draws = 12000;
 constexpr uint32_t max_blobs = 4096;
-constexpr size_t shader_budget = 64u * 1024u * 1024u;
 constexpr size_t blob_budget = 32u * 1024u * 1024u;
 constexpr uint32_t cloud_composite_shader = 0x83524e47u;
 // Captured directional light variant: screen-space contact ray and stationary IGN.
@@ -44,11 +41,6 @@ constexpr uint32_t contact_light_shader = 3619939816u;
 constexpr uint32_t contact_light_phased_shader = 4154163049u; // AC7 transform: noise phase and depth quantisation bias
 
 struct Bytes { std::vector<unsigned char> data; uint64_t serial = 0; };
-struct Layout { uint32_t count = 0; std::vector<rsf_observer_layout_element> elements; };
-struct Shader {
-    void* pointer = nullptr; uint32_t stage = 0, hash = 0, constant_mask = 0x3fffu;
-    std::vector<unsigned char> data;
-};
 // Counters for the typed graphics effects.
 struct SessionCounters {
     uint32_t draw_dropped = 0, blob_dropped = 0;
@@ -69,13 +61,10 @@ struct Capture {
     std::vector<std::string> draws;
     std::vector<std::vector<unsigned char>> blobs;
     std::unordered_map<void*, Bytes> buffers;
-    std::unordered_map<void*, Layout> layouts;
     uint32_t geometry_interval = UINT32_MAX;
     std::array<uint32_t,5> geometry_reads{};
     std::array<std::set<std::pair<uint32_t,void*>>,5> geometry_seen;
-    std::vector<Shader> shaders;
-    size_t shader_bytes = 0, blob_bytes = 0;
-    uint32_t shaders_dropped = 0;
+    size_t blob_bytes = 0;
     SessionCounters counters;
 };
 Capture& state() { static Capture s; return s; }
@@ -524,16 +513,9 @@ void constants(MotionCaptureInterval capture, std::ostream& out, ID3D11DeviceCon
     }
     out << ']';
 }
-template<class T> T shader_field(void* pointer, uint32_t stage, T Shader::*field, T fallback)
-{
-    auto& s = state(); std::lock_guard<std::mutex> lock(s.guard);
-    for (const auto& shader : s.shaders)
-        if (shader.pointer == pointer && shader.stage == stage) return shader.*field;
-    return fallback;
-}
-uint32_t shader_hash(void* pointer, uint32_t stage) { return shader_field(pointer, stage, &Shader::hash, 0u); }
-uint32_t shader_constants(void* pointer, uint32_t stage) { return shader_field(pointer, stage, &Shader::constant_mask, 0x3fffu); }
-uint32_t declared_constants(const void* bytes, uint32_t size)
+uint32_t shader_hash(void* pointer, uint32_t stage) { return rsf_ac7_capture_shader_facts(pointer, stage).hash; }
+uint32_t shader_constants(void* pointer, uint32_t stage) { return rsf_ac7_capture_shader_facts(pointer, stage).constant_mask; }
+uint32_t disassemble_constants(const void* bytes, size_t size) noexcept
 {
     // UE strips reflection data. DXBC declarations still name the actual CB slots consumed.
     // Loaded once and kept: this runs on every shader creation, possibly under the loader lock.
@@ -542,20 +524,12 @@ uint32_t declared_constants(const void* bytes, uint32_t size)
         return module ? reinterpret_cast<decltype(&D3DDisassemble)>(
             reinterpret_cast<void*>(GetProcAddress(module, "D3DDisassemble"))) : nullptr;
     }();
-    uint32_t mask = 0x3fffu;
     ComPtr<ID3DBlob> code;
     if (disassemble && SUCCEEDED(disassemble(bytes, size, 0, nullptr, &code)) && code) {
-        mask = 0;
-        const std::string text(static_cast<const char*>(code->GetBufferPointer()), code->GetBufferSize());
-        constexpr char declaration[] = "dcl_constantbuffer CB";
-        size_t offset = 0;
-        while ((offset = text.find(declaration, offset)) != std::string::npos) {
-            offset += sizeof(declaration) - 1;
-            const auto slot = std::strtoul(text.c_str() + offset, nullptr, 10);
-            if (slot < 14) mask |= 1u << slot;
-        }
+        return rsf_ac7_capture_declared_constants(
+            static_cast<const unsigned char*>(code->GetBufferPointer()), code->GetBufferSize());
     }
-    return mask;
+    return rsf_ac7_capture_declared_constants(nullptr, 0);
 }
 void resource(std::ostream& out, ID3D11Resource* r)
 {
@@ -836,14 +810,7 @@ template<class List> MotionArtifactList byte_artifacts(const List& list) noexcep
 {
     return {&list, list.size(), [](const void* user, size_t index) noexcept -> MotionArtifact {
         const auto& bytes = (*static_cast<const List*>(user))[index];
-        return {reinterpret_cast<const unsigned char*>(bytes.data()), bytes.size(), 0, 0};
-    }};
-}
-MotionArtifactList shader_artifacts(const std::vector<Shader>& shaders) noexcept
-{
-    return {&shaders, shaders.size(), [](const void* user, size_t index) noexcept -> MotionArtifact {
-        const auto& shader = (*static_cast<const std::vector<Shader>*>(user))[index];
-        return {shader.data.data(), shader.data.size(), shader.stage, shader.hash};
+        return {reinterpret_cast<const unsigned char*>(bytes.data()), bytes.size()};
     }};
 }
 
@@ -884,15 +851,14 @@ MotionArtifactStats finish_stats(const void* user) noexcept
     const auto& s = *static_cast<const Capture*>(user);
     LARGE_INTEGER frequency{}; QueryPerformanceFrequency(&frequency);
     return {frequency.QuadPart, s.installed.load(), s.roots_installed.load(), s.counters.draw_dropped,
-        s.counters.blob_dropped, s.shaders_dropped, s.counters.readbacks, s.counters.readback_failed,
+        s.counters.blob_dropped, s.counters.readbacks, s.counters.readback_failed,
         s.counters.colour_readbacks, s.counters.colour_readback_failed, rsf_ac7_capture_failures()};
 }
 void finish() noexcept try
 {
     auto& s = state();
     std::unique_lock<std::mutex> lock(s.guard);
-    const MotionFinalArtifacts files{
-        byte_artifacts(s.draws), byte_artifacts(s.blobs), shader_artifacts(s.shaders), &s, finish_stats};
+    const MotionFinalArtifacts files{byte_artifacts(s.draws), byte_artifacts(s.blobs), &s, finish_stats};
     const auto result = rsf_ac7_capture_publish_finish(s.prefix.c_str(), write_file, &files);
     if (result == publication_failed) {
         lock.unlock();
@@ -929,7 +895,7 @@ bool prepare_capture(uint32_t session) noexcept try
     std::lock_guard<std::mutex> lock(s.guard);
     s.prefix = std::move(path);
     s.draws.clear(); s.blobs.clear(); s.blob_bytes = 0;
-    s.buffers.clear(); // Uploads are session-local; creation-time shader and layout metadata persist.
+    s.buffers.clear(); // Uploads are session-local.
     s.counters = {};
     s.geometry_interval = UINT32_MAX;
     s.geometry_reads.fill(0);
@@ -1010,21 +976,10 @@ extern "C" void rsf_ac7_motion_capture_shutdown(void)
     s.roots_installed = false;
     s.installed = false;
 }
-extern "C" void rsf_ac7_motion_capture_shader(void* shader, uint32_t stage, const void* bytes, uint32_t size) try
+extern "C" void rsf_ac7_motion_capture_shader(void* shader, uint32_t stage, const void* bytes, uint32_t size)
 {
-    auto& s = state(); if (!rsf_ac7_capture_enabled() || !shader || !bytes || !size || size > 1024u * 1024u) return;
-    const auto mask = declared_constants(bytes, size);
-    std::lock_guard<std::mutex> lock(s.guard);
-    for (auto i = s.shaders.begin(); i != s.shaders.end(); ++i) {
-        if (i->pointer == shader && i->stage == stage) { s.shader_bytes -= i->data.size(); s.shaders.erase(i); break; }
-    }
-    if (s.shaders.size() >= max_blobs || s.shader_bytes + size > shader_budget) { ++s.shaders_dropped; return; }
-    Shader item; item.pointer = shader; item.stage = stage; item.hash = rsf_ui_shader_hash(bytes, size);
-    item.constant_mask = mask;
-    item.data.assign(static_cast<const unsigned char*>(bytes), static_cast<const unsigned char*>(bytes) + size);
-    s.shader_bytes += size; s.shaders.push_back(std::move(item));
+    if (!rsf_ac7_capture_observe_shader(shader, stage, bytes, size, disassemble_constants)) capture_failed();
 }
-catch (...) { capture_failed(); }
 extern "C" void rsf_ac7_motion_capture_buffer(void*, void* buffer, const void* initial, uint32_t bytes, uint32_t bind_flags) try
 {
     auto& s = state(); if (!rsf_ac7_capture_enabled()) return;
@@ -1046,17 +1001,10 @@ extern "C" void rsf_ac7_motion_capture_upload(void* buffer, const void* bytes, u
     } catch (...) { capture_failed(capture); }
 }
 extern "C" void rsf_ac7_motion_capture_layout(void* layout, const rsf_observer_layout_element* elements,
-    uint32_t copied, uint32_t count) try
+    uint32_t copied, uint32_t count)
 {
-    auto& s = state();
-    if (!rsf_ac7_capture_enabled() || !layout || !elements || !copied || copied > RSF_OBSERVER_MAX_LAYOUT_ELEMENTS) return;
-    std::lock_guard<std::mutex> lock(s.guard);
-    s.layouts.erase(layout); // a newly created object can reuse a retired pointer
-    if (s.layouts.size() >= max_blobs) return;
-    auto& item = s.layouts[layout]; item.count = count;
-    item.elements.assign(elements, elements + copied);
+    if (!rsf_ac7_capture_observe_layout(layout, elements, copied, count)) capture_failed();
 }
-catch (...) { capture_failed(); }
 namespace {
 void capture_geometry(MotionCaptureInterval capture, const rsf_frame_tap_geometry* draw) try
 {
@@ -1070,7 +1018,7 @@ void capture_geometry(MotionCaptureInterval capture, const rsf_frame_tap_geometr
     const auto interval = capture.interval;
     // Bounded samples carry actual OldPosition/particle IDs and mesh vertex histories. Never
     // retain a borrowed buffer expecting a later frame to still contain the same vertices.
-    Layout layout;
+    MotionLayoutSnapshot layout{};
     {
         std::lock_guard<std::mutex> lock(s.guard);
         if (rsf_ac7_capture_interval() != capture) return;
@@ -1079,12 +1027,11 @@ void capture_geometry(MotionCaptureInterval capture, const rsf_frame_tap_geometr
             s.geometry_reads.fill(0);
             for (auto& seen : s.geometry_seen) seen.clear();
         }
-        const auto found = s.layouts.find(draw->input_layout);
-        if (found == s.layouts.end()) return;
-        layout = found->second;
+        if (!rsf_ac7_capture_find_layout(draw->input_layout, &layout)) return;
     }
     uint32_t slots=0;bool fields[16]{};bool old3=false;
-    for (const auto& e:layout.elements) {
+    for (uint32_t i = 0; i < layout.copied; ++i) {
+        const auto& e = layout.elements[i];
         if (e.input_slot<32) slots|=uint32_t(1)<<e.input_slot;
         if (e.semantic_index<16 && e.format==DXGI_FORMAT_R32G32B32A32_FLOAT) fields[e.semantic_index]=true;
         if (e.semantic_index==1 && e.format==DXGI_FORMAT_R32G32B32_FLOAT) old3=true;
@@ -1115,7 +1062,7 @@ void capture_geometry(MotionCaptureInterval capture, const rsf_frame_tap_geometr
         << ",\"start\":" << draw->start << ",\"base_vertex\":" << draw->base_vertex
         << ",\"instances\":" << draw->instances << ",\"start_instance\":" << draw->start_instance
         << ",\"layout_count\":" << layout.count << ",\"elements\":[";
-    for (size_t i = 0; i < layout.elements.size(); ++i) {
+    for (uint32_t i = 0; i < layout.copied; ++i) {
         const auto& e = layout.elements[i];
         if (i) out << ',';
         out << "{\"attribute\":" << e.semantic_index << ",\"format\":" << e.format
