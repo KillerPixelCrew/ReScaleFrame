@@ -314,8 +314,10 @@ Anomaly now keeps the SR configuration, package-relative vendor
 paths and live options in the Rust stage. The native settings mirror
 and its refresh and observer callbacks were removed. The merged
 adapter passed 401 Rust tests and 16 focused MSVC Release contracts.
-Standard verified the default DLSS and XeSS paths. The AVX opt-out
-run reported no SR or FG choices and timed out before the actor update.
+Standard verified the default DLSS and XeSS paths. The AVX candidate
+opt-out run timed out before the actor update. The merged foreground
+retest reached gameplay, resized and exited cleanly. Its native
+backbuffer showed the game and overlay with SR and FG unavailable.
 [SR configuration evidence](research/rust-anomaly-sr-configuration.md#coordinator-integration-and-game-checks)
 
 The shared Runtime shader patch service now owns pack validation,
@@ -327,6 +329,11 @@ ten package tests. The Runtime reused the C++ cache unchanged and
 all checked export inventories matched. In a cold-cache Standard
 run it compiled 79 replacements, resized with DLSS-G active and
 exited cleanly. All 165 original cache files were restored and verified.
+[AVX and build variant evidence](research/rust-shader-patch.md#avx-cold-cache-and-build-variants)
+The AVX cold run also compiled 79 replacements. Its generated
+cache matched the Standard filenames and SHA-256 hashes. Debug
+and Vulkan Streamline-disabled Release each passed seven native
+contracts, the shader CPU fixture and the previous-cache DLL probe.
 [Integrated shader patch evidence](research/rust-shader-patch.md#integrated-runtime-and-cold-cache-standard-run)
 
 The overlay and FG merge passed 17 focused MSVC contracts in Debug

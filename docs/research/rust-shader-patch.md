@@ -114,5 +114,25 @@ The new cache and logs were moved into the evidence directory and all
 165 original cache files were restored and hash-checked. The staged
 DLLs, pack, settings and script were also restored. Evidence is under
 `.local/anomaly/staging/live-58fe95a-stage5/evidence/` in
-`merged-rust-shader-cold-standard-74d4c48`. The AVX cold-cache run,
-licensed corpus parity and shader WARP fixture remain open.
+`merged-rust-shader-cold-standard-74d4c48`.
+
+## AVX cold cache and build variants
+
+The isolated AVX run at `d0cc7ad` also started with an empty motion
+shader cache. It compiled 79 replacements, resized to 1600×900 and kept
+DLSS-G active. The last SR sample recorded 1,289 evaluations with zero
+refusals. The engine shut down Direct3D and returned code 0. The fresh
+Standard and AVX caches matched in all 79 filenames and SHA-256 hashes.
+The runner restored and hash-checked all 165 original cache files and
+restored the staged DLLs, pack, settings and script. The logs and
+generated cache inventory are in `merged-rust-shader-cold-avx-d0cc7ad`
+under the clone's `evidence/` directory.
+
+The combined MSVC Debug and Vulkan Streamline-disabled Release builds
+each passed seven focused native contracts, the shader CPU fixture and
+the public DLL probe that reopens the C++ cache. Both builds matched
+the Runtime, AC7, Loader, Minecraft and Anomaly export inventories.
+Anomaly retained by-name Runtime discovery. The disabled Runtime still
+returned the documented Streamline and DLSS-G stub results. Logs are
+under `.local/rust-1.94.1-verification/shader-patch-integrated-*`.
+Licensed corpus parity and the shader WARP fixture remain open.

@@ -197,6 +197,24 @@ game forward. The background run registered the lifecycle callback
 and reached its time limit before the actor update. The runner stopped
 the isolated instance and restored the files. This run verifies the
 recorded startup settings. Native gameplay and clean engine teardown
-in this opt-out configuration still need a foreground run. Logs are
+in this opt-out configuration still needed a foreground run. Logs are
 in `rust-sr-configuration-optout-avx-346191e9` under the clone's
 `evidence/` directory.
+
+## Merged AVX opt-out retest
+
+The foreground retest at `d0cc7ad` used the merged Rust configuration,
+shader patch Runtime and exact AVX executable. SR, SRStageCapture,
+motion, FG and the FG presentation bridge were disabled for the run.
+The overlay offered zero SR and FG backend choices. Gameplay reached
+the actor update and resized from 1280×720 to 1600×900. Insert opened
+the overlay and the native D3D11 host drew it at the new size.
+
+The desktop screenshot was black. The game's own captured 1600×900
+backbuffer shows the rendered room, hands, HUD and overlay. The panel
+shows upscaling unavailable and FG off. Draw counters showed zero
+motion-window draws and the engine ran its scripted quit, destroyed
+Direct3D and returned code 0. The runner restored all staged files.
+The backbuffer PNGs, their hashes, INI, engine log and payload hashes
+are under `.local/anomaly/staging/live-58fe95a-stage5/evidence/` in
+`merged-optout-avx-d0cc7ad`.
