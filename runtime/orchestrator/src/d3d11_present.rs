@@ -20,7 +20,7 @@ use crate::sr_session::has_capacity;
 use std::cell::Cell;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::fmt::Write as _;
-use std::ptr::{self, null_mut};
+use std::ptr::{self, NonNull, null_mut};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicPtr, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, TryLockError};
 
@@ -498,6 +498,101 @@ struct CommandSlots(Vec<Commands>);
 unsafe impl Send for CommandSlots {}
 unsafe impl Sync for CommandSlots {}
 
+// A Win32 event from the platform leaf. The other handle returned to the application
+// by DuplicateHandle has its own lifetime.
+struct EventLease {
+    handle: NonNull<c_void>,
+    close: unsafe extern "C" fn(Raw),
+}
+
+impl EventLease {
+    fn create(platform: &Platform, initially_signaled: bool) -> Option<Self> {
+        let handle = unsafe { (platform.create_event)(u32::from(initially_signaled)) };
+        NonNull::new(handle).map(|handle| Self {
+            handle,
+            close: platform.close_event,
+        })
+    }
+
+    fn as_ptr(&self) -> Raw {
+        self.handle.as_ptr()
+    }
+}
+
+impl Drop for EventLease {
+    fn drop(&mut self) {
+        unsafe { (self.close)(self.as_ptr()) };
+    }
+}
+
+#[derive(Default)]
+struct PresentationSync {
+    // Borrowed for drain. The facade or its host owns this queue.
+    graphics_queue: Option<NonNull<c_void>>,
+    interop_queue: Option<ComRef>,
+    completion_event: Option<EventLease>,
+    completion_fence: Option<ComRef>,
+    application_ready: Option<EventLease>,
+}
+
+impl PresentationSync {
+    // Store each acquisition before checking the result so an unpublished facade retires
+    // the same partial state as a published one.
+    fn initialize(&mut self, p: &Platform, facts: &rsf_d3d11p_facts, ready: bool) -> i32 {
+        self.graphics_queue = NonNull::new(facts.graphics.queue);
+        if facts.native12 != 0 {
+            self.interop_queue = Some(unsafe { ComRef::retain(facts.direct_queue) });
+        } else {
+            let mut queue = null_mut();
+            let result = unsafe { (p.create_interop_queue)(facts.graphics.device, &mut queue) };
+            self.interop_queue = unsafe { ComRef::from_owned(queue) };
+            if failed(result) {
+                return E_FAIL;
+            }
+        }
+        self.completion_event = EventLease::create(p, false);
+        if self.completion_event.is_none() {
+            return E_FAIL;
+        }
+        let mut fence = null_mut();
+        let result = unsafe { (p.create_completion_fence)(facts.graphics.device, &mut fence) };
+        self.completion_fence = unsafe { ComRef::from_owned(fence) };
+        if failed(result) {
+            return E_FAIL;
+        }
+        if ready {
+            self.application_ready = EventLease::create(p, true);
+            if self.application_ready.is_none() {
+                return E_FAIL;
+            }
+        }
+        S_OK
+    }
+
+    fn queue(&self) -> Raw {
+        self.interop_queue
+            .as_ref()
+            .map_or(null_mut(), ComRef::as_ptr)
+    }
+
+    fn completion(&self) -> (Raw, Raw) {
+        (
+            self.completion_fence
+                .as_ref()
+                .map_or(null_mut(), ComRef::as_ptr),
+            self.completion_event
+                .as_ref()
+                .map_or(null_mut(), EventLease::as_ptr),
+        )
+    }
+
+    fn ready_event(&self) -> Raw {
+        self.application_ready
+            .as_ref()
+            .map_or(null_mut(), EventLease::as_ptr)
+    }
+}
+
 // DXGI serializes the application's frame calls. Provider callbacks and the retire
 // lease can reenter on the same thread.
 pub(crate) struct Owner {
@@ -514,6 +609,7 @@ pub(crate) struct Owner {
     serial: AtomicU64,
     next_slot: AtomicU32,
     slot_fences: [AtomicU64; SLOTS],
+    sync: Mutex<PresentationSync>,
     commands: Mutex<Option<Arc<CommandSlots>>>,
     buffers: Mutex<ApplicationBuffers>,
     render_index: AtomicU32,
@@ -547,6 +643,7 @@ impl Owner {
             serial: AtomicU64::new(0),
             next_slot: AtomicU32::new(0),
             slot_fences: Default::default(),
+            sync: Mutex::default(),
             commands: Mutex::default(),
             buffers: Mutex::default(),
             render_index: AtomicU32::new(0),
@@ -599,7 +696,6 @@ impl Owner {
             tearing: 0,
             graphics: Graphics::EMPTY,
             direct_queue: null_mut(),
-            interop_queue: null_mut(),
             device11: null_mut(),
             buffer_usage: 0,
         };
@@ -809,17 +905,22 @@ impl Owner {
     // Joins the shared queues and the provider's retirement fence.
     fn drain(&self) -> i32 {
         let p = self.p();
-        let b = self.b();
-        let queues = unsafe { (p.drain_queues)(b) };
-        if queues & DRAIN_GRAPHICS == 0 {
+        let (interop, graphics, (fence, event)) = {
+            let sync = lock(&self.sync);
+            (sync.queue(), sync.graphics_queue, sync.completion())
+        };
+        let Some(graphics) = graphics else {
+            return S_OK;
+        };
+        if fence.is_null() {
             return S_OK;
         }
-        if queues & DRAIN_INTEROP != 0
-            && failed(unsafe { (p.signal_wait)(b, 1, self.next_serial()) })
+        if !interop.is_null()
+            && failed(unsafe { (p.signal_wait)(interop, fence, event, self.next_serial()) })
         {
             return E_FAIL;
         }
-        if failed(unsafe { (p.signal_wait)(b, 0, self.next_serial()) }) {
+        if failed(unsafe { (p.signal_wait)(graphics.as_ptr(), fence, event, self.next_serial()) }) {
             return E_FAIL;
         }
         let provider = self.provider();
@@ -836,7 +937,7 @@ impl Owner {
                     call(provider, &mut retirement)
                 });
             if retired != OK
-                || failed(unsafe { (p.wait_fence)(b, retirement.fence, retirement.value) })
+                || failed(unsafe { (p.wait_fence)(retirement.fence, event, retirement.value) })
             {
                 return E_FAIL;
             }
@@ -1041,7 +1142,10 @@ impl Owner {
         for fence in &self.application_fences {
             fence.store(0, Ordering::Relaxed);
         }
-        let _ = unsafe { (self.p().application_ready)(self.b(), 0, 0) };
+        let ready = lock(&self.sync).ready_event();
+        if !ready.is_null() {
+            let _ = unsafe { (self.p().application_ready)(ready, null_mut(), 0) };
+        }
     }
 
     fn initialize(
@@ -1160,7 +1264,10 @@ impl Owner {
         let ready = native12
             && setup.runtime_switching != 0
             && request.flags & DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT != 0;
-        if failed(unsafe { (p.create_queues)(b, u32::from(ready)) }) {
+        let mut sync = PresentationSync::default();
+        let result = sync.initialize(p, &self.facts(), ready);
+        *lock(&self.sync) = sync;
+        if failed(result) {
             return E_FAIL;
         }
         if !native12 {
@@ -1207,8 +1314,9 @@ impl Owner {
         ACTIVE_HOST.store(self.host(), Ordering::Release);
         ACTIVE_SESSION.store(self.provider(), Ordering::Release);
         HOST_PACED.store(self.paced_by_host(), Ordering::SeqCst);
+        let interop_queue = lock(&self.sync).queue();
         lock(&ACTIVE_GRAPHICS).0 = Graphics {
-            queue: facts.interop_queue,
+            queue: interop_queue,
             native_queue: null_mut(),
             ..facts.graphics
         };
@@ -1403,8 +1511,11 @@ impl Owner {
 
     fn application_frame_complete(&self, value: u64) -> i32 {
         let p = self.p();
-        let b = self.b();
-        if unsafe { (p.has_application_ready)(b) } == 0 {
+        let (ready, fence) = {
+            let sync = lock(&self.sync);
+            (sync.ready_event(), sync.completion().0)
+        };
+        if ready.is_null() {
             return S_OK;
         }
         let frame = self.application_serial.fetch_add(1, Ordering::Relaxed) + 1;
@@ -1412,12 +1523,12 @@ impl Owner {
             .store(value, Ordering::Relaxed);
         let latency = u64::from(self.application_latency.load(Ordering::Relaxed));
         if frame < latency {
-            return unsafe { (p.application_ready)(b, 0, 0) };
+            return unsafe { (p.application_ready)(ready, null_mut(), 0) };
         }
         let available = self.application_fences
             [((frame - latency + 1) % APPLICATION_FENCES as u64) as usize]
             .load(Ordering::Relaxed);
-        unsafe { (p.application_ready)(b, 1, available) }
+        unsafe { (p.application_ready)(ready, fence, available) }
     }
 
     fn notify_presented(&self, event: &mut Event, result: i32) {
@@ -1587,23 +1698,29 @@ impl Owner {
         let slot = &self.slot_fences[index as usize];
         let pair = &commands.0[index as usize];
         let (allocator, list) = (pair.allocator.as_ptr(), pair.list.as_ptr());
+        // The facade pins these borrowed references through Present, just like the slot set.
+        let (source_queue, (completion_fence, completion_event)) = {
+            let sync = lock(&self.sync);
+            (sync.queue(), sync.completion())
+        };
         if self.native12() {
             // Streamline requires CreateCommandQueue through its upgraded device, so its queue is
             // not the engine queue. Join the engine's source work into it, and the copy back out.
-            let joined = unsafe { (p.queues_joined)(b, queue) } != 0;
+            let joined = queue != source_queue;
             // Each step before the physical Present keeps its own HRESULT for the failure report.
             // Every failure still completes the application notification and faults the facade.
             let mut step = "source queue join";
             let mut stage = DXGI_ERROR_DEVICE_REMOVED;
             let source_joined = !joined
                 || !failed(unsafe {
-                    (p.join)(b, queue, JOIN_SOURCE_TO_PRESENT, self.next_serial())
+                    (p.join)(source_queue, queue, completion_fence, self.next_serial())
                 });
             if source_joined {
                 let mut step_index = 0;
                 stage = unsafe {
                     (p.slot_reset)(
-                        b,
+                        completion_fence,
+                        completion_event,
                         allocator,
                         list,
                         slot.load(Ordering::Relaxed),
@@ -1645,9 +1762,9 @@ impl Owner {
                                 if joined
                                     && failed(unsafe {
                                         (p.join)(
-                                            b,
                                             queue,
-                                            JOIN_PRESENT_TO_SOURCE,
+                                            source_queue,
+                                            completion_fence,
                                             self.next_serial(),
                                         )
                                     })
@@ -1673,7 +1790,7 @@ impl Owner {
                 }
                 let fence = self.next_serial();
                 slot.store(fence, Ordering::Relaxed);
-                if failed(unsafe { (p.signal_slot)(b, queue, fence) }) {
+                if failed(unsafe { (p.signal_slot)(queue, completion_fence, fence) }) {
                     result = DXGI_ERROR_DEVICE_REMOVED;
                 }
                 drop(backbuffer);
@@ -1714,7 +1831,8 @@ impl Owner {
         let mut step_index = 0;
         if !failed(unsafe {
             (p.slot_reset)(
-                b,
+                completion_fence,
+                completion_event,
                 allocator,
                 list,
                 slot.load(Ordering::Relaxed),
@@ -1752,7 +1870,7 @@ impl Owner {
             }
             let fence = self.next_serial();
             slot.store(fence, Ordering::Relaxed);
-            if failed(unsafe { (p.signal_slot)(b, queue, fence) }) {
+            if failed(unsafe { (p.signal_slot)(queue, completion_fence, fence) }) {
                 result = DXGI_ERROR_DEVICE_REMOVED;
             }
         }
@@ -2034,6 +2152,8 @@ impl Owner {
             std::mem::forget(self.take_physical());
             // Submitted lists and their allocators can still be GPU-reachable.
             std::mem::forget(self.take_command_slots());
+            // A refused wait can leave the completion and application events armed.
+            std::mem::forget(std::mem::take(&mut *lock(&self.sync)));
             unsafe { (p.retain_all)(b) };
             return;
         }
@@ -2058,21 +2178,33 @@ impl Owner {
         // The host also serves SR and CPU callbacks and stays loaded while it is the published one.
         let host = self.host();
         let private = !host.is_null() && ACTIVE_HOST.load(Ordering::Acquire) != host;
-        unsafe { (p.release_device)(b, u32::from(private)) };
+        let mut sync = std::mem::take(&mut *lock(&self.sync));
+        drop(sync.completion_event.take());
+        drop(sync.application_ready.take());
         if private {
             // The slot lists belong to the private host's device and end before the host,
             // after its interop queue and in slot order.
+            drop(sync.interop_queue.take());
             self.release_command_slots(false);
+            drop(sync.completion_fence.take());
             unsafe { (p.release_host)(b) };
+        } else if !host.is_null() {
+            // Shared SR callbacks keep using the process-owned interop queue.
+            std::mem::forget(sync.interop_queue.take());
         }
         drop(direct_buffers);
         if published {
             CHAIN_GENERATION.fetch_add(1, Ordering::SeqCst);
             RETIREMENT_PENDING.store(false, Ordering::Release);
         }
-        // A shared or absent host outlives the facade. The pairs end where the facade's slot
-        // members were destroyed: after the owner, before its fences, last slot first.
-        self.release_command_slots(true);
+        if !private {
+            // Preserve the former reverse member release order after the events close.
+            self.release_command_slots(true);
+            unsafe { (p.release_retire_fence)(b) };
+            drop(sync.completion_fence.take());
+            unsafe { (p.release_direct_graphics)(b) };
+            drop(sync.interop_queue.take());
+        }
     }
 
     fn refuse(&self) {
@@ -2396,10 +2528,7 @@ facade!(
     rsf_core_d3d11p_set_max_latency(value: u32) -> i32,
     DXGI_ERROR_INVALID_CALL,
     |o| {
-        if unsafe { (o.p().has_application_ready)(o.b()) } == 0
-            || value == 0
-            || value as usize > APPLICATION_FENCES
-        {
+        if lock(&o.sync).ready_event().is_null() || value == 0 || value as usize > APPLICATION_FENCES {
             DXGI_ERROR_INVALID_CALL
         } else {
             o.application_latency
@@ -2412,11 +2541,23 @@ facade!(
     rsf_core_d3d11p_max_latency(value: *mut u32) -> i32,
     DXGI_ERROR_INVALID_CALL,
     |o| {
-        if unsafe { (o.p().has_application_ready)(o.b()) } == 0 || value.is_null() {
+        if lock(&o.sync).ready_event().is_null() || value.is_null() {
             DXGI_ERROR_INVALID_CALL
         } else {
             unsafe { *value = o.application_latency.load(Ordering::Relaxed) };
             S_OK
+        }
+    }
+);
+facade!(
+    rsf_core_d3d11p_duplicate_application_ready() -> Raw,
+    null_mut(),
+    |o| {
+        let ready = lock(&o.sync).ready_event();
+        if ready.is_null() {
+            null_mut()
+        } else {
+            unsafe { (o.p().duplicate_event)(ready) }
         }
     }
 );
@@ -2461,7 +2602,10 @@ pub(crate) unsafe extern "C" fn rsf_core_d3d11p_source_queue(platform: *const Pl
         return null_mut();
     };
     match (unsafe { platform.as_ref() }, active()) {
-        (Some(p), Some(owner)) => unsafe { (p.source_queue)(owner.b()) },
+        (Some(p), Some(owner)) => {
+            let queue = lock(&owner.sync).queue();
+            unsafe { (p.source_queue)(owner.b(), queue) }
+        }
         _ => null_mut(),
     }
 }
