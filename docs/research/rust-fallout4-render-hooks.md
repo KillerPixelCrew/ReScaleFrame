@@ -155,3 +155,68 @@ only RETIRE, and an unfinished token still stops at the guarded FINISH. Source r
 three call sites in `render_hooks.cpp`; pinned Rust 1.94.1 formatting and whitespace checks
 passed. Build, tests and game checks remain with the user; the open check is a forced RETIRE
 refusal inside imagespace that drains after Swap, with VATS contents restored correctly.
+
+## SR and HUDless publication in Rust
+
+This source port starts at `8570bec4`, which includes the recovery transaction and the RETIRE
+retry above, and moves the SR seam (`emit_sr`, called before the original imagespace Effects
+range) and the HUDless seam (`emit_hudless`, called after the native HUDless viewport selection)
+from `render_hooks.cpp` into `render_hooks/publication.rs` without new research. The seams, their
+producers and the screen facts are the ones in the [native callback analysis](fallout4-render-integration-20261116.md),
+the [depth-domain notes](fallout4-depth-domains-20261116.md) and the [reduced output scope notes](fallout4-native-reduced-output-scope-20261116.md).
+No option, GPU work, shader, profile, address, Runtime export or GameSDK field changes.
+
+| Owner | Rust (`render_hooks/publication.rs`) | C++ (`render_hooks.cpp`) |
+| --- | --- | --- |
+| SR admission | SEAL before any reader and FINISH when the step returns (after the input lease is released); live, imagespace, source, no published inputs, no raster refusal, no open auxiliaries, bound `process_upscale`; held-recovery resource match; producer LTRB/camera/output extents (`rsf_fallout4_resolution_inputs`); FRAME open with the same native frame, view, window, raw Context and chain; same-source depth snapshot. Every World refusal and its diagnostic text. | The typed producer read on the depth snapshot, the six-resource COM identity against the held recovery lease, the depth-domain composition. |
+| Pass identity | Session, source, submission and scope, primary/after-simulation/NO_FG flags, unknown screen, SR role and pass key `0x21fa283`. The FRAME pass opened at WorldBegin uses the same Rust function. | None. |
+| SR-off and planning | The RECONFIGURE planning copy, the `render_config` verdict (SR off when disabled at the same output size) and its exact place after planning and before the screen gate. | The guarded Runtime calls. A planning throw answers refusal as before; a `render_config` throw, which the C++ owner let reach the Effects detour's catch, answers `failed`, and the detour logs the same callback-failure receipt. |
+| Screen verdict | Unrefused gameplay, current source, unchanged leased screen and camera state, FRAME and SUBMISSION open, else World refusal; `pass.screen` and NO_FG from the World refusal; the eight-row screen receipt. The outer Present revalidation calls the same verdict on the World pass. | `classify_native_screen` against the screen basis, which calls the native menu and camera queries; the leased World screen. |
+| Callback order | FG_INPUTS begin and end on the input Context, source recheck, scalar World identity with every borrowed resource pointer cleared, then the SR-off return, output-ready receipt, evaluation, evaluated receipt, output scope end on failure without a token, publication flags. HUDless: framebuffer read, five identity and extent stages with once-per-stage receipts, screen verdict, FINAL_SCENE begin and end, WINDOW begin. | `host.render_pass` with its catch, `reconstruct` with its auxiliary policy and catch, `begin_output_resolution`, `end_output_resolution`, `report_resolution_state`. |
+| Leases | When to read and release the SR input and framebuffer leases, and which resources the World retains. | `World::sr_inputs` and `World::hudless`, the colour, depth, motion and final-colour retention, World Context and chain, the WINDOW counter. |
+
+The C++ `rsf_fallout4_recovery_seal` and `rsf_fallout4_recovery_finish` exports had no other
+caller and are removed; the SR step calls the Rust functions directly. Publication shares the
+recovery leaves' report, refusal, source and resolve leaves and adds `NativePublicationLeaves`
+(22 entries, size-asserted on both sides).
+
+### Refusal and retirement traces
+
+Source comparison walked every return of the original `emit_sr` and `emit_hudless`.
+
+- **SR refusals without World refusal**: admission, producer read, held-resource mismatch,
+  producer extents (diagnostic), planning throw, screen gate after the verdict already refused,
+  SR off. **With World refusal**: SEAL refused, FRAME lease mismatch and depth mapping
+  (diagnostics), source change after FG_INPUTS, output scope refused (NOT_READY receipt first),
+  failed evaluation without a token whose output scope end is refused. Each keeps its original
+  order of refusal, receipt and return.
+- **FINISH and retirement**: the FINISH guard runs on every return, after the input lease is
+  released, as the C++ scope guard ran after the stack lease. A failed evaluation with a token
+  keeps the output scope for FINISH. RETIRE at the Effects return, the imagespace exit and after
+  Swap is unchanged C++ calling the Rust transaction.
+- **Published SR**: World `published` set; `full_output_resolved` set only without a token, and
+  with a token FINISH then decides both flags, as before.
+- **HUDless**: stages 0 to 5 report once each and never refuse the World; a later screen change
+  refuses the World and the FINAL_SCENE and WINDOW passes carry NO_FG.
+
+### Differences
+
+- The SR input and HUDless framebuffer leases are World fields instead of stack locals, released
+  by drop guards where the stack leases ended. A World reset during either step would end them
+  early; no reentrant path reaches one.
+- `Fallout4 HUDless callback failed; native drawing retained.` is gone. Every call in the
+  original `emit_hudless` was noexcept or guarded, so its catch was unreachable. The SR catch is
+  kept only for the one call that could reach it.
+- The framebuffer extent leaf skips `GetDesc` for a null texture and then refuses at stage 5. A
+  successful framebuffer read always returns a texture, so the original never reached that case.
+- The HUDless receipt formats pointers as sixteen uppercase hex digits, which is MSVC `%p`.
+
+A scripted comparison against `8570bec4` found every SR, HUDless and screen receipt text and all
+six HUDless stage names in the new sources, except the unreachable receipt above.
+`render_hooks/publication/tests.rs` adds unrun fake-leaf checks of the published SR order, SR
+off, a `render_config` throw, the HUDless FINAL_SCENE and WINDOW order and a foreign framebuffer.
+Pinned Rust 1.94.1 formatting, locked offline Cargo metadata and whitespace checks passed. Build,
+link, Clippy, tests, the shared host fixture, deployment and game checks remain with the user;
+this is a source port, not a runtime result. Open game checks: SR published at native and reduced
+quality, SR off with FG inputs, a HUDless refusal stage, and Present revalidation after a screen
+change.

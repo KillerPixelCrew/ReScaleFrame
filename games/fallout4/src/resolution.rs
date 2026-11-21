@@ -849,7 +849,7 @@ pub(crate) extern "C" fn rsf_fallout4_resolution_verify() -> bool {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_resolution_inputs(pass: &rsf_game_render_pass) -> bool {
+pub(crate) extern "C" fn rsf_fallout4_resolution_inputs(pass: &rsf_game_render_pass) -> bool {
     let [left, top, right, bottom] = pass.render_rect;
     let [output_left, output_top, output_right, output_bottom] = pass.output_rect;
     pass.camera_valid != 0

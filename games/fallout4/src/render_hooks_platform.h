@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 // Private boundary between render_hooks.cpp and its Rust owner (render_hooks.rs): the render hook
-// lifecycle, the ordinary World and outer Present guards and the reduced-render recovery
-// transaction (render_hooks/recovery.rs). Not a DLL ABI.
+// lifecycle, the ordinary World and outer Present guards, the reduced-render recovery
+// transaction (render_hooks/recovery.rs) and SR and HUDless publication
+// (render_hooks/publication.rs). Not a DLL ABI.
 #include "cpu_events_platform.h"
 #include "resolution.h"
 #include <cstddef>
@@ -130,6 +131,82 @@ static_assert(sizeof(NativeRecoveryFacts) == 24 && offsetof(NativeRecoveryFacts,
 static_assert(sizeof(NativeRecoveryLease) == 7 * sizeof(void*));
 static_assert(sizeof(NativeRecoveryLeaves) == 15 * sizeof(void*));
 
+// SR and HUDless publication (render_hooks/publication.rs). Rust owns the admission, refusals,
+// pass identity and roles, the SR-off decision, the screen verdict, the callback order and the
+// output resolution calls. C++ keeps the typed native reads, COM identity, the SR input and
+// HUDless framebuffer leases, the engine depth and screen readers, the guarded Runtime calls and
+// the World fields. Rust also uses the recovery leaves' report, refuse, same_source and resolve.
+struct NativeScreen;
+struct NativePublicationWorld {
+    rsf_fallout4_cpu_identity cpu;
+    const rsf_game_render_pass* pass;          // World pass
+    const rsf_game_render_pass* frame_pass;
+    const rsf_game_render_pass* screen_basis;
+    void* context;                             // World Context and outer chain
+    void* chain;
+    bool upscale;                              // process_upscale is bound
+    bool in_imagespace, inputs, window_open, frame_open, submission_open;
+    bool refused, raster_refused, auxiliary_open;
+    bool depth_valid;                          // same-source prepass depth snapshot
+};
+struct NativePublicationInputs {
+    const rsf_game_render_pass* pass;
+    void* context;
+    void* chain;
+};
+struct NativePublicationFramebuffer {
+    void* context;
+    void* chain;
+    void* texture;
+    uint64_t native_frame, window_key;
+};
+struct NativePublicationLeaves {
+    void (*world)(NativePublicationWorld*) noexcept;
+    // The shared bounded diagnostic receipt.
+    void (*diagnostic)(const char*) noexcept;
+    // Replace the SR input lease with a fresh producer read on the depth snapshot.
+    bool (*read_inputs)() noexcept;
+    void (*inputs)(NativePublicationInputs*) noexcept;
+    void (*release_inputs)() noexcept;
+    // The SR input lease names the held recovery colour, depth, motion, Pip-Boy, VATS and
+    // refraction resources.
+    bool (*same_recovery_resources)() noexcept;
+    bool (*depth_domains)(rsf_game_render_pass*) noexcept;
+    // RECONFIGURE planning on the input Context; false when it threw.
+    bool (*plan)(const rsf_game_render_pass*) noexcept;
+    // 1 read, 0 unbound or refused, -1 threw.
+    int32_t (*render_config)(rsf_game_render_config*) noexcept;
+    // Keep the input colour, depth and motion leases and record the screen basis.
+    void (*retain_inputs)(const rsf_game_render_pass* basis) noexcept;
+    // Classify against the screen basis; first records the leased screen.
+    void (*classify)(bool first, NativeScreen* current, NativeScreen* leased) noexcept;
+    void (*notify)(const rsf_game_render_pass*, void* context, uint32_t begin) noexcept;
+    // World pass from the scalar pass, Context and chain from the input lease, inputs set.
+    void (*publish_inputs)(const rsf_game_render_pass* scalar) noexcept;
+    bool (*begin_output)(const rsf_game_render_pass*) noexcept;
+    void (*report_state)(uint32_t stage, const rsf_game_render_pass*, void* context, bool published,
+        int32_t result) noexcept;
+    // Evaluate the input lease; a throw drains auxiliaries and answers RSF_ERROR_NOT_READY.
+    int32_t (*reconstruct)(const rsf_game_render_pass*) noexcept;
+    bool (*end_output)() noexcept;
+    // Replace the framebuffer lease with a fresh logical framebuffer read.
+    bool (*read_framebuffer)() noexcept;
+    void (*framebuffer)(NativePublicationFramebuffer*) noexcept;
+    // Width, height and sample count of the framebuffer texture.
+    void (*framebuffer_extent)(uint32_t extent[3]) noexcept;
+    void (*release_framebuffer)() noexcept;
+    // Final colour lease, World pass and open WINDOW.
+    void (*publish_window)(const rsf_game_render_pass* window) noexcept;
+};
+enum class NativeSrOutcome : uint32_t { refused = 0, published = 1, failed = 2 };
+
+static_assert(sizeof(NativePublicationWorld) == 96 && offsetof(NativePublicationWorld, pass) == 40 &&
+    offsetof(NativePublicationWorld, upscale) == 80 && offsetof(NativePublicationWorld, depth_valid) == 89);
+static_assert(sizeof(NativePublicationInputs) == 3 * sizeof(void*));
+static_assert(sizeof(NativePublicationFramebuffer) == 40 &&
+    offsetof(NativePublicationFramebuffer, native_frame) == 24);
+static_assert(sizeof(NativePublicationLeaves) == 22 * sizeof(void*));
+
 extern "C" {
 // Binds the leaves. The table must be complete and live for the process.
 bool rsf_fallout4_render_publish(const NativeRenderHookLeaves*) noexcept;
@@ -143,15 +220,24 @@ NativePresentAdmission rsf_fallout4_render_admit_present(NativePresentMatch, uin
     const rsf_fallout4_cpu_identity*, RevalidatePresentScreen) noexcept;
 // Preflight, RESERVE and confirmation before the first native ratio write.
 bool rsf_fallout4_recovery_reserve(const NativeRecoveryLeaves*, const rsf_game_render_pass* planned) noexcept;
-// Same-frame producer SEAL before any temporal reader. True without a token or once sealed.
-bool rsf_fallout4_recovery_seal(const NativeRecoveryLeaves*) noexcept;
-// FINISH of a committed token. Answers whether full output is resolved.
-bool rsf_fallout4_recovery_finish(const NativeRecoveryLeaves*) noexcept;
-// CANCEL an uncommitted token, or FINISH then RETIRE a committed one.
+// The SR seam (rsf_fallout4_render_emit_sr) SEALs before any temporal reader and FINISHes as it
+// returns. CANCEL an uncommitted token, or FINISH then RETIRE a committed one.
 bool rsf_fallout4_recovery_retire(const NativeRecoveryLeaves*) noexcept;
 uint64_t rsf_fallout4_recovery_token() noexcept;
 bool rsf_fallout4_recovery_committed() noexcept;
 // Clear with the World; called only where the World resets without a token.
 void rsf_fallout4_recovery_reset() noexcept;
+// The SR seam before the original Effects range. Failed asks the caller for its callback
+// failure receipt.
+NativeSrOutcome rsf_fallout4_render_emit_sr(const NativePublicationLeaves*,
+    const NativeRecoveryLeaves*) noexcept;
+// The HUDless seam after the native HUDless viewport selection.
+void rsf_fallout4_render_emit_hudless(const NativePublicationLeaves*,
+    const NativeRecoveryLeaves*) noexcept;
+// The screen verdict on a World pass.
+void rsf_fallout4_render_screen_facts(const NativePublicationLeaves*, const NativeRecoveryLeaves*,
+    rsf_game_render_pass*, bool first) noexcept;
+// Session, source, submission, scope, primary/after-simulation/NO_FG flags, unknown screen.
+void rsf_fallout4_render_identify(rsf_game_render_pass*, const rsf_fallout4_cpu_identity*) noexcept;
 }
 }

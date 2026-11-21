@@ -95,7 +95,7 @@ impl Surface {
 
 #[repr(C)]
 #[allow(dead_code)] // read by the Runtime
-struct Request {
+pub(super) struct Request {
     struct_size: u32,
     abi_version: u32,
     operation: u32,
@@ -131,7 +131,7 @@ impl Request {
 /// NativeOutputOwner (resolution.h): the native output scope a reservation was made against.
 #[repr(C)]
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
-struct OutputOwner {
+pub(super) struct OutputOwner {
     context: u64,
     manager: u64,
     triangles: [u64; 3],
@@ -139,7 +139,7 @@ struct OutputOwner {
 
 /// NativeRecoveryFacts: the World values each step reads at the moment it runs.
 #[repr(C)]
-struct Facts {
+pub(super) struct Facts {
     context: *mut c_void,
     source: u64,
     exported: bool,
@@ -149,7 +149,7 @@ struct Facts {
 
 /// NativeRecoveryLease: borrowed facts of a C++ lease, valid until that lease is replaced.
 #[repr(C)]
-struct Lease {
+pub(super) struct Lease {
     pass: *const rsf_game_render_pass,
     context: *mut c_void,
     textures: [*mut c_void; SURFACES],
@@ -171,24 +171,26 @@ const _: () = {
 };
 
 /// NativeRecoveryLeaves, constant for the process. Every leaf acts on the calling thread's World.
+/// SR and HUDless publication (publication.rs) share the report, refusal, source and resolve
+/// leaves.
 #[repr(C)]
-struct Leaves {
-    report: unsafe extern "C" fn(*const c_char),
-    refuse: unsafe extern "C" fn(),
-    facts: unsafe extern "C" fn(&mut Facts),
-    same_source: unsafe extern "C" fn() -> bool,
-    resolve: unsafe extern "C" fn(bool, bool),
-    read_raster: unsafe extern "C" fn(bool) -> bool,
-    same_resources: unsafe extern "C" fn(bool) -> bool,
-    adopt: unsafe extern "C" fn(*const i32),
-    discard: unsafe extern "C" fn(),
-    release: unsafe extern "C" fn(),
-    lease: unsafe extern "C" fn(u32, &mut Lease),
-    preflight:
+pub(super) struct Leaves {
+    pub(super) report: unsafe extern "C" fn(*const c_char),
+    pub(super) refuse: unsafe extern "C" fn(),
+    pub(super) facts: unsafe extern "C" fn(&mut Facts),
+    pub(super) same_source: unsafe extern "C" fn() -> bool,
+    pub(super) resolve: unsafe extern "C" fn(bool, bool),
+    pub(super) read_raster: unsafe extern "C" fn(bool) -> bool,
+    pub(super) same_resources: unsafe extern "C" fn(bool) -> bool,
+    pub(super) adopt: unsafe extern "C" fn(*const i32),
+    pub(super) discard: unsafe extern "C" fn(),
+    pub(super) release: unsafe extern "C" fn(),
+    pub(super) lease: unsafe extern "C" fn(u32, &mut Lease),
+    pub(super) preflight:
         unsafe extern "C" fn(*const rsf_game_render_pass, *mut c_void, &mut OutputOwner) -> bool,
-    raster_current: unsafe extern "C" fn() -> bool,
-    begin_output: unsafe extern "C" fn() -> bool,
-    reduce: unsafe extern "C" fn(&mut Request, &mut rsf_result) -> bool,
+    pub(super) raster_current: unsafe extern "C" fn() -> bool,
+    pub(super) begin_output: unsafe extern "C" fn() -> bool,
+    pub(super) reduce: unsafe extern "C" fn(&mut Request, &mut rsf_result) -> bool,
 }
 
 const _: () = assert!(size_of::<Leaves>() == 15 * size_of::<usize>());
@@ -197,8 +199,20 @@ impl Leaves {
     fn report(&self, text: &CStr) {
         unsafe { (self.report)(text.as_ptr()) }
     }
-    fn refuse(&self) {
+    /// Reports a terminated message from `crate::message`.
+    pub(super) fn report_text(&self, text: &[u8]) {
+        unsafe { (self.report)(text.as_ptr().cast()) }
+    }
+    pub(super) fn refuse(&self) {
         unsafe { (self.refuse)() }
+    }
+    /// Sets the World's full-output and temporal publication flags.
+    pub(super) fn resolve(&self, full_output: bool, published: bool) {
+        unsafe { (self.resolve)(full_output, published) }
+    }
+    /// The World's current full-output flag.
+    pub(super) fn full_output_resolved(&self) -> bool {
+        self.facts().full_output_resolved
     }
     fn facts(&self) -> Facts {
         let mut facts = Facts {
@@ -211,7 +225,7 @@ impl Leaves {
         unsafe { (self.facts)(&mut facts) };
         facts
     }
-    fn same_source(&self) -> bool {
+    pub(super) fn same_source(&self) -> bool {
         unsafe { (self.same_source)() }
     }
     fn read_raster(&self, producer: bool) -> bool {
@@ -297,6 +311,11 @@ fn update(change: impl FnOnce(&mut Recovery)) {
 /// A token is owned on some thread.
 pub(super) fn owned() -> bool {
     OWNED.load(Ordering::Acquire) != 0
+}
+
+/// The calling thread's token, zero when none is owned.
+pub(super) fn token() -> u64 {
+    state().token
 }
 
 /// Reports the stage once, refuses the World's temporal output while a reservation or its
@@ -443,7 +462,7 @@ fn reserve(leaves: &Leaves, planned: &rsf_game_render_pass) -> bool {
 
 /// Adopts the same-frame produced resources, which must match the reservation and its output
 /// owner, then SEALs them before any temporal reader.
-fn seal(leaves: &Leaves) -> bool {
+pub(super) fn seal(leaves: &Leaves) -> bool {
     let recovery = state();
     if recovery.token == 0 || recovery.sealed {
         return true;
@@ -472,7 +491,7 @@ fn seal(leaves: &Leaves) -> bool {
 
 /// FINISH a committed token once, inside the full-output scope. Answers whether full output was
 /// resolved; a finished token answers the World's current full-output flag.
-fn finish(leaves: &Leaves) -> bool {
+pub(super) fn finish(leaves: &Leaves) -> bool {
     let recovery = state();
     if recovery.token == 0 || !recovery.committed {
         return true;
@@ -529,16 +548,6 @@ extern "C" fn rsf_fallout4_recovery_reserve(
     planned: &rsf_game_render_pass,
 ) -> bool {
     reserve(leaves, planned)
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_recovery_seal(leaves: &Leaves) -> bool {
-    seal(leaves)
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rsf_fallout4_recovery_finish(leaves: &Leaves) -> bool {
-    finish(leaves)
 }
 
 #[unsafe(no_mangle)]
