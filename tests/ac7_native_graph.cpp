@@ -446,24 +446,31 @@ int main() {
         check(rsf_ac7_guards_held(false) == 1 && rsf_ac7_guards_held(true) == 2, "entry and outer guards are summed separately");
     }
     check(rsf_ac7_guards_held(true) == 0, "guards release their slot");
-    // A call redirected through a relay slot reads back as the native call after restore.
-    auto* code = static_cast<unsigned char*>(VirtualAlloc(nullptr, 4096, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
-    check(code != nullptr, "allocate a code page for the relay");
-    if (code) {
-        const unsigned char native[]{0x41, 0xff, 0x92, 0x48, 0x01, 0x00, 0x00};
-        std::memcpy(code, native, sizeof(native));
-        CallRelay relay;
-        check(make_call_relay(relay, code, native, sizeof(native), code) && relay.slot &&
-            std::memcmp(code, native, sizeof(native)) == 0, "preparing a relay leaves the code alone");
-        if (relay.slot) {
-            check(patch_call_relay(relay) && code[0] == 0xff && code[1] == 0x15 && code[6] == 0x90, "relay call is patched in");
-            int32_t relative = 0; std::memcpy(&relative, code + 2, 4);
-            void* target = nullptr; std::memcpy(&target, code + 6 + relative, sizeof(target));
-            check(target == code, "relay slot holds the handler");
-            check(restore_call_relay(relay) && std::memcmp(code, native, sizeof(native)) == 0 && !relay.call,
-                "restore puts back the native call and releases the slot");
-        }
-        VirtualFree(code, 0, MEM_RELEASE);
+    // TrueSky relays (truesky.rs) through the native leaves on a writable plugin image. The depth
+    // route's code and the shipped effect are absent, so it refuses and only the composite_tile
+    // relay installs; restore puts the native call back and releases the relay memory.
+    auto* plugin = static_cast<unsigned char*>(VirtualAlloc(nullptr, 0xd0000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+    check(plugin != nullptr, "allocate a TrueSky code image");
+    if (plugin) {
+        const unsigned char before[]{0x49,0x8b,0x8e,0x28,0x02,0x00,0x00,0x45,0x8b,0xc4,0x49,0x8b,0xd7,0x48,0x8b,0x01};
+        const unsigned char draw[]{0xff,0x90,0x30,0x01,0x00,0x00,0x49,0x8b,0x9e,0x60,0x02,0x00,0x00,0x48,0x8d,0x0d};
+        auto* call = plugin + 0xabc6b;
+        std::memcpy(call - sizeof(before), before, sizeof(before)); std::memcpy(call, draw, sizeof(draw));
+        rsf_ac7_native_renderer truesky_owner;
+        test_truesky_module = plugin;
+        apply_cloud_resolution_patch(truesky_owner);
+        const auto& owned = truesky_owner.truesky;
+        check(owned.resolution_refused && !owned.depth_call.slot && !owned.depth_branch && owned.motion_call.call == call,
+            "depth route refuses without its code and effect; the composite relay installs");
+        check(call[0] == 0xff && call[1] == 0x15 && std::memcmp(call + 6, draw + 6, sizeof(draw) - 6) == 0,
+            "relay call is patched in over six bytes");
+        int32_t relative = 0; std::memcpy(&relative, call + 2, 4);
+        void* target = nullptr; std::memcpy(&target, call + 6 + relative, sizeof(target));
+        check(target == reinterpret_cast<void*>(&native_cloud_composite_draw), "relay slot holds the handler");
+        check(restore_truesky(truesky_owner) && std::memcmp(call, draw, sizeof(draw)) == 0 &&
+            !owned.motion_call.call && !owned.motion_call.slot, "restore puts back the native call and releases the slot");
+        test_truesky_module = nullptr;
+        VirtualFree(plugin, 0, MEM_RELEASE);
     }
     rsf_ac7_render_scopes_quiesce(renderer.scopes);
     check(rsf_ac7_render_scopes_destroy(renderer.scopes) != 0, "quiescent graph unload"); installed.store(nullptr);

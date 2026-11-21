@@ -200,6 +200,12 @@ refused hook disable or removal keeps the renderer available for retry.
 The native detours and TrueSky operations still use the same interface.
 The binding was regenerated. Builds and live retirement remain open.
 
+The AC7 TrueSky patch owner now manages the verified sites, relay
+installation, rollback and retirement in Rust. Restore holds the cloud
+resolution lock and retains relay slots and D3D11 resources while a
+guarded handler is active. The renderer and shaders still use the
+existing native calls. Builds and live TrueSky verification remain open.
+
 ## Rust orchestrator and first Anomaly port
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.

@@ -82,6 +82,7 @@ struct EntryGuard {
 };
 #if defined(RSF_AC7_GRAPH_TEST)
 unsigned char* test_module = nullptr;
+unsigned char* test_truesky_module = nullptr;
 #endif
 unsigned char* game_module()
 {
@@ -132,36 +133,25 @@ struct WindowSource {
 struct FinalSurfaceSource { uint64_t source = 0, viewport = 0, surface = 0; bool ambiguous = false; };
 struct UniformOwner { uint64_t renderer = 0, view = 0, uniform = 0; };
 struct PixelUniformBinding { uint64_t sequence = 0, context = 0, shader = 0, uniform = 0, command = 0; uint32_t slot = 0; };
-// A `call [reg+disp]` in third-party code redirected through a pointer slot allocated within reach of
-// its `call [rip+rel]` form. Keeps both byte sequences so the restore needs nothing else.
-struct CallRelay {
-    unsigned char* call = nullptr;
-    void* slot = nullptr;
-    unsigned char native[7]{}, relayed[7]{};
-    uint32_t size = 0;
-};
 struct rsf_ac7_native_renderer {
     rsf_ac7_native_renderer_options options{};
     rsf_ac7_render_scopes* scopes = nullptr;
     std::atomic<bool> active{false};
     std::atomic<bool> quiescing{false};
-    unsigned char* cloud_resolution_site = nullptr;
-    CallRelay cloud_depth_call;
-    unsigned char* cloud_depth_branch = nullptr;
-    unsigned char* cloud_depth_format_site = nullptr;
+    // TrueSky plugin patch and relay ownership, changed only by the Rust owner (truesky.rs) under
+    // cloud_resolution_guard.
+    rsf_ac7_truesky_patches truesky{};
     Microsoft::WRL::ComPtr<ID3D11ComputeShader> cloud_depth_shader;
     Microsoft::WRL::ComPtr<ID3D11Device> cloud_depth_device;
     std::atomic<bool> cloud_depth_ready{false};
     std::atomic<uint32_t> cloud_depth_dispatches{0};
     std::atomic<uint32_t> cloud_depth_binding_refusals{0};
-    CallRelay cloud_motion_call;
     rsf_ac7_cloud_depth cloud_motion{};
     std::atomic<uint32_t> cloud_motion_reports{0};
     bool cloud_depth_shader_refused = false;
     // Scene-precision and temporal velocity patch ownership, changed only by the Rust owner
     // (patches.rs) at start and stop.
     rsf_ac7_code_patches patches{};
-    bool cloud_resolution_refused = false;
     std::mutex cloud_resolution_guard;
     std::atomic<uint32_t> render_thread{0};
     std::atomic<PassLease*> retired{nullptr};
@@ -2313,10 +2303,6 @@ void hooked_slate_texture(void* shader, void* list, void* rhi_texture, void* sam
     }
 }
 thread_local bool sky_projection_jitter = false;
-constexpr unsigned char native_cloud_divisor[]{0x8b,0x87,0x10,0x02,0x00,0x00};
-constexpr unsigned char full_cloud_divisor[]{0xb8,0x01,0x00,0x00,0x00,0x90};
-constexpr unsigned char native_cloud_depth_format[]{0x16,0x00,0x00,0x00};
-constexpr unsigned char precise_cloud_depth_format[]{0x05,0x00,0x00,0x00};
 bool write_render_code(unsigned char* site, const unsigned char* expected, const unsigned char* replacement, size_t size)
 {
     if (!size || !bytes_match(site, expected, size)) return false;
@@ -2335,6 +2321,7 @@ rsf_ac7_code_leaves code_leaves(rsf_ac7_renderer_log_fn log, void* user)
         return bytes_match(address, expected, count);
     }, &write_render_code, log, user};
 }
+rsf_ac7_truesky_leaves truesky_leaves(rsf_ac7_native_renderer& self);
 void STDMETHODCALLTYPE native_cloud_depth_dispatch(ID3D11DeviceContext* context, UINT x, UINT y, UINT z)
 {
     OuterGuard outer; EntryGuard entry;
@@ -2410,20 +2397,18 @@ void STDMETHODCALLTYPE native_cloud_depth_dispatch(ID3D11DeviceContext* context,
             unsigned(dst.Format),unsigned(uav.Format),src.Width,src.Height,dst.Width,dst.Height,classes);
         log(*self,message);
     }
-    if (!bindings && self->cloud_resolution_site) {
+    if (!bindings) {
         // Readiness of an earlier frame does not authorize running x2 on this frame's x1 targets.
         // Retire full-grid mode for the next native allocation and reject this unverified dispatch.
-        // The enclosing native function still performs its balanced Unapply/cleanup.
+        // The enclosing native function still performs its balanced Unapply/cleanup. The full-grid
+        // site is read under the lock that every change of it holds (truesky.rs).
         std::lock_guard<std::mutex> lock(self->cloud_resolution_guard);
-        self->cloud_depth_ready.store(false,std::memory_order_release);
-        self->cloud_resolution_refused = true;
-        if (write_render_code(self->cloud_resolution_site,full_cloud_divisor,native_cloud_divisor,sizeof(native_cloud_divisor))) {
-            self->cloud_resolution_site = nullptr;
-            log(*self,"native TrueSky: full-grid depth bindings changed; unsafe dispatch refused, supported cloud grid restored for next native frame");
-        } else {
-            log(*self,"native TrueSky: full-grid depth bindings changed and divisor restore failed; unsafe dispatch refused, renderer retained");
+        if (self->truesky.resolution_site) {
+            self->cloud_depth_ready.store(false,std::memory_order_release);
+            const auto leaves = truesky_leaves(*self);
+            rsf_ac7_truesky_refuse_full_grid(&self->truesky, &leaves);
+            return;
         }
-        return;
     }
     if (full) {
         context->CSSetShader(self->cloud_depth_shader.Get(),nullptr,0);
@@ -2450,95 +2435,6 @@ void* allocate_depth_relay(unsigned char* call)
         }
     }
     return nullptr;
-}
-// Builds the relay for the `size` (6 or 7) byte indirect call at `call`, whose current bytes are
-// `native`: a pointer slot holding `handler`, and the `call [rip+rel]` that reaches it. Writes nothing
-// to the code yet.
-bool make_call_relay(CallRelay& relay, unsigned char* call, const unsigned char* native, uint32_t size, void* handler)
-{
-    if (size < 6 || size > 7) return false;
-    auto* slot = allocate_depth_relay(call);
-    if (!slot) return false;
-    const auto distance = intptr_t(slot) - intptr_t(call + 6);
-    if (distance < INT32_MIN || distance > INT32_MAX) { VirtualFree(slot, 0, MEM_RELEASE); return false; }
-    std::memcpy(slot, &handler, sizeof(handler));
-    const int32_t relative = int32_t(distance);
-    relay = {};
-    relay.call = call; relay.slot = slot; relay.size = size;
-    std::memcpy(relay.native, native, size);
-    relay.relayed[0] = 0xff; relay.relayed[1] = 0x15; relay.relayed[6] = 0x90;
-    std::memcpy(relay.relayed + 2, &relative, 4);
-    return true;
-}
-void release_call_relay(CallRelay& relay)
-{
-    if (relay.slot) VirtualFree(relay.slot, 0, MEM_RELEASE);
-    relay = {};
-}
-// Redirects the call. On failure the slot is released and the relay cleared.
-bool patch_call_relay(CallRelay& relay)
-{
-    if (write_render_code(relay.call, relay.native, relay.relayed, relay.size)) return true;
-    release_call_relay(relay);
-    return false;
-}
-// Puts the native call back and releases the slot. False, with the relay left installed, when the
-// code cannot be restored.
-bool restore_call_relay(CallRelay& relay)
-{
-    if (!relay.call) return true;
-    if (!write_render_code(relay.call, relay.relayed, relay.native, relay.size)) return false;
-    release_call_relay(relay);
-    return true;
-}
-bool depth_effect_fingerprint()
-{
-    wchar_t file[32768]{};
-    if (!GetModuleFileNameW(nullptr,file,32768)) return false;
-    auto* slash = std::wcsrchr(file,L'\\'); if (!slash) return false;
-    *slash = 0;
-    constexpr wchar_t suffix[] = L"\\Engine\\Plugins\\TrueSkyPlugin\\shaderbin\\Win64\\mixed_resolution.fxo";
-    if (std::wcslen(file)+std::wcslen(suffix) >= 32768) return false;
-    std::wcscat(file,suffix);
-    auto* input = _wfopen(file,L"rb"); if (!input) return false;
-    uint32_t crc=0xffffffff, size=0; unsigned char bytes[4096]{};
-    size_t count=0;
-    while ((count=std::fread(bytes,1,sizeof(bytes),input)) != 0 && size < 1048576) {
-        size += uint32_t(count);
-        for (size_t i=0;i<count;++i) {
-            crc ^= bytes[i];
-            for (uint32_t bit=0;bit<8;++bit) crc=(crc>>1) ^ (0xedb88320u & (0u-(crc&1u)));
-        }
-    }
-    const bool read_ok = std::feof(input) && !std::ferror(input); std::fclose(input);
-    return read_ok && size == 45263 && ~crc == 0x78881ef3;
-}
-bool install_depth_dispatch(rsf_ac7_native_renderer& self, unsigned char* module)
-{
-    if (self.cloud_depth_call.call) return self.cloud_depth_format_site != nullptr;
-    auto* call = module+0xc003f; auto* branch=module+0xbff0b;
-    auto* format = module+0xbfc05;
-    constexpr unsigned char call_expected[]{0x41,0xff,0x92,0x48,0x01,0x00,0x00,0x48,0x8b,0x4b,0x08,0x4c,0x8d,0x83,0xb0,0x01};
-    constexpr unsigned char branch_expected[]{0x41,0x83,0xfc,0x02,0x75,0x1d,0x48,0x8b,0x4b,0x08,0x4c,0x8d,0x43,0x18,0x48,0x8b};
-    constexpr unsigned char format_expected[]{0xc7,0x44,0x24,0x20,0x16,0x00,0x00,0x00,0xff,0x50,0x58,0x8b,0x87,0x94,0x00,0x00};
-    if (!bytes_match(call,call_expected,16) || !bytes_match(branch-4,branch_expected,16) ||
-        !bytes_match(format,format_expected,16) || !depth_effect_fingerprint()) return false;
-    CallRelay relay;
-    if (!make_call_relay(relay,call,call_expected,7,reinterpret_cast<void*>(&native_cloud_depth_dispatch))) return false;
-    constexpr unsigned char old_branch[]{0x75}, supported_branch[]{0x77};
-    if (!write_render_code(branch,old_branch,supported_branch,1)) { release_call_relay(relay); return false; }
-    if (!patch_call_relay(relay)) { write_render_code(branch,supported_branch,old_branch,1); return false; }
-    self.cloud_depth_call=relay; self.cloud_depth_branch=branch;
-    // This argument belongs to normalized scene-depth production, not cloud colour or scene Z.
-    // The native ensure2D owner recreates the texture and both views when its format changes.
-    if (!write_render_code(format+4,native_cloud_depth_format,precise_cloud_depth_format,sizeof(native_cloud_depth_format))) {
-        log(self,"native TrueSky precise depth allocation refused at DLL RVA 0xbfc09; full cloud grid remains disabled");
-        return false;
-    }
-    self.cloud_depth_format_site=format+4;
-    log(self,"native TrueSky: normalized scene-depth bounds use R32G32_FLOAT at DLL RVA 0xbfc09; native owner rebuilds matching texture/views");
-    log(self,"native TrueSky depth: guarded one-to-one pass route installed at DLL RVAs 0xbff0b/0xc003f; waiting for GPU shader preparation");
-    return true;
 }
 // composite_tile reaches TrueSky's render platform at DLL RVA 0xabc6b, `call [rax+0x130]` with
 // (platform, deviceContext&, count). The relay forwards it, then reads the pass's still-bound
@@ -2570,48 +2466,45 @@ void native_cloud_composite_draw(void* platform, void* device_context, uint32_t 
     self->options.on_stage(self->options.user, nullptr, &pass, 1);
     if (reports < 3) log(*self, "native TrueSky cloud motion: composite_tile cloud distance converted to scene device depth");
 }
-void install_cloud_motion(rsf_ac7_native_renderer& self, unsigned char* module)
+// The leaves lent to the Rust TrueSky owner (truesky.rs) for one call under cloud_resolution_guard.
+// It owns the sites, bytes, effect fingerprint and the install, rollback and restore order; these
+// keep the module lookup, relay memory, both relay handlers and their D3D11 state.
+rsf_ac7_truesky_leaves truesky_leaves(rsf_ac7_native_renderer& self)
 {
-    if (self.cloud_motion_call.call) return;
-    auto* call = module + 0xabc6b;
-    constexpr unsigned char before[]{0x49,0x8b,0x8e,0x28,0x02,0x00,0x00,0x45,0x8b,0xc4,0x49,0x8b,0xd7,0x48,0x8b,0x01};
-    constexpr unsigned char expected[]{0xff,0x90,0x30,0x01,0x00,0x00,0x49,0x8b,0x9e,0x60,0x02,0x00,0x00,0x48,0x8d,0x0d};
-    if (!bytes_match(call - 16, before, 16) || !bytes_match(call, expected, 16)) {
-        log(self, "native TrueSky cloud motion refused: composite_tile draw bytes differ at DLL RVA 0xabc6b"); return;
-    }
-    CallRelay relay;
-    if (!make_call_relay(relay, call, expected, 6, reinterpret_cast<void*>(&native_cloud_composite_draw)) ||
-        !patch_call_relay(relay)) return;
-    self.cloud_motion_call = relay;
-    log(self, "native TrueSky cloud motion: composite_tile draw relay installed at DLL RVA 0xabc6b");
+    using Renderer = rsf_ac7_native_renderer;
+    rsf_ac7_truesky_leaves leaves{};
+    leaves.code = code_leaves(self.options.log, self.options.user);
+    leaves.renderer = &self;
+    leaves.module = [](const uint16_t* name) noexcept -> unsigned char* {
+#if defined(RSF_AC7_GRAPH_TEST)
+        if (test_truesky_module) return test_truesky_module;
+#endif
+        return reinterpret_cast<unsigned char*>(GetModuleHandleW(reinterpret_cast<const wchar_t*>(name)));
+    };
+    leaves.relay_allocate = [](unsigned char* call, void* handler) noexcept -> void* {
+        auto* slot = allocate_depth_relay(call);
+        if (slot) std::memcpy(slot, &handler, sizeof(handler));
+        return slot;
+    };
+    leaves.relay_release = [](void* slot) noexcept { if (slot) VirtualFree(slot, 0, MEM_RELEASE); };
+    leaves.depth_dispatch = reinterpret_cast<void*>(&native_cloud_depth_dispatch);
+    leaves.composite_draw = reinterpret_cast<void*>(&native_cloud_composite_draw);
+    leaves.depth_ready = [](Renderer* renderer) noexcept {
+        return renderer->cloud_depth_ready.load(std::memory_order_acquire);
+    };
+    leaves.motion_release = [](Renderer* renderer) noexcept { rsf_ac7_cloud_depth_release(renderer->cloud_motion); };
+    leaves.depth_release = [](Renderer* renderer) noexcept {
+        renderer->cloud_depth_shader.Reset(); renderer->cloud_depth_device.Reset();
+        renderer->cloud_depth_ready.store(false);
+    };
+    return leaves;
 }
+// Installs the TrueSky relays and, once the depth relay is ready, the full cloud grid (truesky.rs).
 void apply_cloud_resolution_patch(rsf_ac7_native_renderer& self)
 {
     std::lock_guard<std::mutex> lock(self.cloud_resolution_guard);
-    if (self.cloud_resolution_site || self.cloud_resolution_refused) return;
-    auto* module = reinterpret_cast<unsigned char*>(GetModuleHandleW(L"TrueSkyPluginRender_MT.dll"));
-    if (!module) return;
-    install_cloud_motion(self, module);
-    if (!install_depth_dispatch(self,module)) {
-        self.cloud_resolution_refused=true;
-        log(self,"native TrueSky full-resolution patch refused: depth producer code/effect fingerprint or relay allocation differs");
-        return;
-    }
-    // Run the first depth pass at its supported native divisor. Enable the full grid only after
-    // the replacement kernel has compiled on the actual device; failure keeps stock rendering.
-    if (!self.cloud_depth_ready.load(std::memory_order_acquire)) return;
-    // RenderInterfaceViewFrame passes q.downscale into the native per-view allocator. Patching
-    // this consumer also covers settings the actor or a sequence writes after startup.
-    constexpr unsigned char expected[]{0x8b,0x87,0x10,0x02,0x00,0x00,0x89,0x44,0x24,0x38,0x48,0x8b,0x45,0xd0,0x0f,0x29};
-    auto* site = module + 0x87f6d;
-    if (!bytes_match(site, expected, sizeof(expected)) ||
-        !write_render_code(site, native_cloud_divisor, full_cloud_divisor, sizeof(native_cloud_divisor))) {
-        self.cloud_resolution_refused = true;
-        log(self, "native TrueSky cloud-resolution patch refused: expected bytes differ or code protection failed at DLL RVA 0x87f6d");
-        return;
-    }
-    self.cloud_resolution_site = site;
-    log(self, "native TrueSky: cloud/depth producer uses scene resolution, divisor 1 at DLL RVA 0x87f6d");
+    const auto leaves = truesky_leaves(self);
+    rsf_ac7_truesky_apply(&self.truesky, &leaves);
 }
 void hooked_sky_projection(float* matrix, float units)
 {
@@ -2733,45 +2626,17 @@ void bind_detours()
     };
     for (const auto& binding : bindings) sites[binding.hook].detour = binding.detour;
 }
-// Restores the TrueSky plugin patches and relays in their former order, forgetting each one as it
-// is restored. False, logged, keeps the rest for the next stop.
+// Restores the TrueSky plugin patches and relays (truesky.rs) under the lock every change of them
+// holds, so the depth relay cannot retire the full grid while stop restores it.
 bool restore_truesky(rsf_ac7_native_renderer& self)
 {
-    if (self.cloud_resolution_site) {
-        if (!write_render_code(self.cloud_resolution_site, full_cloud_divisor, native_cloud_divisor, sizeof(native_cloud_divisor))) {
-            log(self, "native TrueSky cloud-resolution patch could not restore; renderer retained"); return false;
-        }
-        self.cloud_resolution_site = nullptr;
-    }
-    if (self.cloud_motion_call.call) {
-        if (!restore_call_relay(self.cloud_motion_call)) {
-            log(self,"native TrueSky cloud motion relay could not restore; renderer retained"); return false;
-        }
-        rsf_ac7_cloud_depth_release(self.cloud_motion);
-    }
-    if (self.cloud_depth_call.call && !restore_call_relay(self.cloud_depth_call)) {
-        log(self,"native TrueSky depth dispatch could not restore; renderer retained"); return false;
-    }
-    if (self.cloud_depth_format_site) {
-        if (!write_render_code(self.cloud_depth_format_site,precise_cloud_depth_format,native_cloud_depth_format,sizeof(native_cloud_depth_format))) {
-            log(self,"native TrueSky depth format could not restore; renderer retained"); return false;
-        }
-        self.cloud_depth_format_site=nullptr;
-    }
-    if (self.cloud_depth_branch) {
-        constexpr unsigned char branch[]{0x77}, original[]{0x75};
-        if (!write_render_code(self.cloud_depth_branch,branch,original,1)) {
-            log(self,"native TrueSky depth pass selector could not restore; renderer retained"); return false;
-        }
-        self.cloud_depth_branch=nullptr;
-    }
-    self.cloud_depth_shader.Reset(); self.cloud_depth_device.Reset();
-    self.cloud_depth_ready.store(false);
-    return true;
+    std::lock_guard<std::mutex> lock(self.cloud_resolution_guard);
+    const auto leaves = truesky_leaves(self);
+    return rsf_ac7_truesky_restore(&self.truesky, &leaves);
 }
 // The native leaves of the renderer transaction (ac7_sites.h). The Rust owner (renderer.rs)
 // decides their order and refusals; each leaf touches only the renderer object, a MinHook record,
-// the module or the TrueSky plugin, and none throws.
+// the module or, through truesky.rs, the TrueSky plugin, and none throws.
 rsf_ac7_renderer_leaves renderer_leaves()
 {
     using Renderer = rsf_ac7_native_renderer;

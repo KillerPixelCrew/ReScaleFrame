@@ -4,8 +4,9 @@
 //!
 //! native_renderer.cpp keeps the five exported calls as wrappers and lends the native leaves
 //! (`rsf_ac7_renderer_leaves`): the renderer object and its fields, MinHook, module pinning, the
-//! render scopes, the input hook, the controller facts and the TrueSky plugin patches. This
-//! module decides their order and refusals. It reuses the existing owners and their state:
+//! render scopes, the input hook, the controller facts and the TrueSky restore, which takes the
+//! renderer's cloud resolution lock and calls truesky.rs. This module decides their order and
+//! refusals. It reuses the existing owners and their state:
 //! admission and the hook table are sites.rs, the engine patches patches.rs with the renderer's
 //! `patches` record, the hook body counts guards.rs, and the installed pointer, flags and MinHook
 //! records stay in the renderer.

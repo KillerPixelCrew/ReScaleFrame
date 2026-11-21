@@ -90,8 +90,9 @@ generate("games/ac7/src/platform_abi.rs", "games/ac7/src/ac7_platform.h",
           "use rsf_game_sys::{rsf_game_cpu_event_fn, rsf_game_render_config_fn, rsf_game_render_pass};",
           "--with-derive-custom-struct", "rsf_ac7_native_renderer_options=Copy,Clone"])
 generate("games/ac7/src/sites_abi.rs", "games/ac7/src/ac7_sites.h",
-         "rsf_ac7_(code_(leaves|patch|patches)|renderer_leaves)",
-         "RSF_AC7_(ROLE_.*|HOOK_SITE_COUNT|PROCESS_HOOKS|EVIDENCE_(FIRST|LAST)|SITE_BYTES|VELOCITY_PATCHES|GUARD_.*)",
+         "rsf_ac7_(code_(leaves|patch|patches)|renderer_leaves|call_relay|truesky_(patches|leaves))",
+         "RSF_AC7_(ROLE_.*|HOOK_SITE_COUNT|PROCESS_HOOKS|EVIDENCE_(FIRST|LAST)|SITE_BYTES|VELOCITY_PATCHES|GUARD_.*|"
+         "RELAY_BYTES)",
          ["-Isdk/game/include", "-Igames/ac7/include"],
          ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]",
           "--raw-line", "use crate::platform_abi::{rsf_ac7_native_renderer, rsf_ac7_native_renderer_options, "

@@ -599,7 +599,7 @@ if(EXISTS "${RSF_NGX_PROBE_INCLUDE}/nvsdk_ngx_params.h")
 endif()
 
 add_executable(rsf_ac7_native_graph_test ac7_native_graph.cpp)
-# native_renderer.cpp calls the rsf-ac7 site, patch, guard and renderer transaction owner
+# native_renderer.cpp calls the rsf-ac7 site, patch, guard, renderer transaction and TrueSky owner
 # (games/ac7/src/ac7_sites.h).
 target_link_libraries(rsf_ac7_native_graph_test PRIVATE ReScaleFrame::AC7RenderScope rsf_ac7_rust rsf_orchestrator minhook rsf_build_options)
 add_test(NAME ac7_native_graph COMMAND rsf_ac7_native_graph_test)

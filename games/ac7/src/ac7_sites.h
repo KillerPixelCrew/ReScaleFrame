@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Internal boundary between native_renderer.cpp and the Rust owner of the exact-build code sites
-// and the renderer transaction (sites.rs, patches.rs, guards.rs, renderer.rs in the rsf-ac7
-// crate). Not a DLL ABI: both sides link into ReScaleFrame.Game.AC7.dll and the native graph
+// Internal boundary between native_renderer.cpp and the Rust owner of the exact-build code sites,
+// the renderer transaction and the TrueSky plugin patches (sites.rs, patches.rs, guards.rs,
+// renderer.rs, truesky.rs in the rsf-ac7 crate). Not a DLL ABI: both sides link into ReScaleFrame.Game.AC7.dll and the native graph
 // fixture. tools/generate-rust-bindings.py generates src/sites_abi.rs from this header.
 #include <stdbool.h>
 #include <stddef.h>
@@ -85,8 +85,8 @@ bool rsf_ac7_engine_patches_restore(rsf_ac7_code_patches* patches, const rsf_ac7
 
 // Native leaves of the renderer transaction (renderer.rs), lent by native_renderer.cpp for one
 // call. The renderer object and its fields, MinHook, module pinning, the render scopes, the input
-// hook, the controller facts and the TrueSky plugin patches stay native; the Rust owner decides
-// when each runs. Every entry is required. None of them throws.
+// hook, the controller facts and the TrueSky lock stay native; the Rust owner decides when each
+// runs. Every entry is required. None of them throws.
 typedef struct rsf_ac7_renderer_leaves {
     // Admission and engine patch leaves. The owner logs through the renderer options' log and
     // user, so `code.log` and `code.user` are ignored.
@@ -132,10 +132,67 @@ typedef struct rsf_ac7_renderer_leaves {
     bool (*input_unhook)(rsf_ac7_native_renderer* renderer);
     void (*controller_disable)(void);
     bool (*controller_remove)(void);
-    // Restores the TrueSky plugin patches and relays in their order; false, logged, keeps the
-    // renderer.
+    // Restores the TrueSky plugin patches and relays (rsf_ac7_truesky_restore under the renderer's
+    // cloud resolution lock); false, logged, keeps the renderer.
     bool (*truesky_restore)(rsf_ac7_native_renderer* renderer);
 } rsf_ac7_renderer_leaves;
+
+// TrueSky plugin (TrueSkyPluginRender_MT.dll) patches and call relays (truesky.rs). The sites,
+// expected bytes, effect fingerprint and the install, rollback and restore order are Rust's; the
+// module lookup, relay memory, D3D11 state and protected writes stay native.
+#define RSF_AC7_RELAY_BYTES 7u
+
+// A `call [reg+disp]` in TrueSky's code redirected through a pointer slot within reach of its
+// `call [rip+rel32]` form. Both byte sequences are kept, so the restore needs nothing else.
+typedef struct rsf_ac7_call_relay {
+    unsigned char* call; // the patched call, or null once its native bytes are back
+    void* slot;          // relay memory holding the handler, or null once released
+    unsigned char native[RSF_AC7_RELAY_BYTES];
+    unsigned char relayed[RSF_AC7_RELAY_BYTES];
+    uint32_t size; // 6 or 7
+} rsf_ac7_call_relay;
+
+// TrueSky patch and relay ownership kept in the native renderer. Only the Rust owner changes it,
+// always under the renderer's cloud resolution lock.
+typedef struct rsf_ac7_truesky_patches {
+    unsigned char* resolution_site;   // cloud divisor 1, or null
+    unsigned char* depth_branch;      // depth pass selector, or null
+    unsigned char* depth_format_site; // RG32F depth bounds request, or null
+    rsf_ac7_call_relay depth_call;    // depth producer dispatch relay
+    rsf_ac7_call_relay motion_call;   // composite_tile draw relay
+    bool resolution_refused;          // the full cloud grid stays off for this renderer
+} rsf_ac7_truesky_patches;
+
+// Native leaves of the TrueSky owner, lent for one call. Every entry is required. None throws.
+typedef struct rsf_ac7_truesky_leaves {
+    // Compares and writes plugin code and logs to the renderer's host log.
+    rsf_ac7_code_leaves code;
+    rsf_ac7_native_renderer* renderer;
+    // Base of the loaded module named `name` (UTF-16, terminated), or null.
+    unsigned char* (*module)(const uint16_t* name);
+    // Relay memory within rel32 search range of `call` holding `handler`, or null.
+    void* (*relay_allocate)(unsigned char* call, void* handler);
+    void (*relay_release)(void* slot);
+    void* depth_dispatch; // relay handler of the depth producer dispatch
+    void* composite_draw; // relay handler of the composite_tile draw
+    // Whether the depth dispatch relay verified its one-to-one shader and bindings on the device.
+    bool (*depth_ready)(rsf_ac7_native_renderer* renderer);
+    // Releases the cloud motion depth resources.
+    void (*motion_release)(rsf_ac7_native_renderer* renderer);
+    // Releases the one-to-one depth shader and its device and clears readiness.
+    void (*depth_release)(rsf_ac7_native_renderer* renderer);
+} rsf_ac7_truesky_leaves;
+
+// Each call runs with the renderer's cloud resolution lock held.
+// Per sky render while active: installs the motion and depth relays, then the full cloud grid once
+// the depth relay is ready. A refusal is logged and keeps the supported native cloud resolution.
+void rsf_ac7_truesky_apply(rsf_ac7_truesky_patches* patches, const rsf_ac7_truesky_leaves* leaves);
+// The depth relay found unverified bindings: the full grid is refused for this renderer and the
+// native divisor restored for the next allocation.
+void rsf_ac7_truesky_refuse_full_grid(rsf_ac7_truesky_patches* patches,
+    const rsf_ac7_truesky_leaves* leaves);
+// Retirement in the former order. False, logged, keeps everything not yet restored for a retry.
+bool rsf_ac7_truesky_restore(rsf_ac7_truesky_patches* patches, const rsf_ac7_truesky_leaves* leaves);
 
 // The five renderer calls of ac7_native_renderer.h with their former results. Prepare writes
 // `*out` once its arguments are valid and no renderer is installed: the renderer, a pinned

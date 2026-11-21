@@ -102,7 +102,8 @@ hooks are disabled leaves `quiescing` set, so start refuses a half-retired rende
 
 In `native_renderer.cpp`: the TrueSky plugin sites (`+87F6D`, `+C003F`, `+BFF0B`, `+BFC09`,
 `+ABC6B`), the `mixed_resolution.fxo` fingerprint, relay allocation and the device-dependent depth
-checks; every detour and engine relay with about sixty `engine<>()` RVAs and layouts, GEngine
+checks (the sites, fingerprint and their transaction later moved to `truesky.rs`, see
+[rust-ac7-truesky-relays.md](rust-ac7-truesky-relays.md)); every detour and engine relay with about sixty `engine<>()` RVAs and layouts, GEngine
 `+3CBBC28`, frame identity, the SR graph node and plan, UI producer, translucency and particle
 scopes, beam/trail tagging, Slate leases, widget targets and view sizing; the renderer object
 itself.
