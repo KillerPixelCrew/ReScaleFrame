@@ -21,7 +21,8 @@ struct VelocityModelDraw {
 struct VelocityModelDecision {
     uint32_t slot, rotate, usable, capacity;
 };
-// width and height are the native depth extent at a draw, unused at a commit.
+// width and height are the native depth extent at a draw. velocity_commit.rs builds a commit's
+// identity itself.
 struct VelocityViewDraw {
     uint64_t session_id, history_key, view_key, family_key;
     uint32_t frame, width, height, padding;
@@ -48,7 +49,7 @@ void rsf_ac7_velocity_view_begin(const VelocityViewDraw* draw, VelocityViewDecis
 // Every target of the slot exists and holds the draw's depth.
 void rsf_ac7_velocity_view_ready(uint32_t slot, const VelocityViewDraw* draw);
 void rsf_ac7_velocity_view_written(uint32_t slot);
-void rsf_ac7_velocity_view_commit(const VelocityViewDraw* pass, VelocityViewDecision* decision);
+// A commit finds its view through rsf_ac7_velocity_commit_view in velocity_commit.h.
 void rsf_ac7_velocity_view_committed(uint32_t slot);
 size_t rsf_ac7_velocity_model_count(void);
 void rsf_ac7_velocity_history_frame_end(void* user, VelocityRetireSlot retire);
