@@ -288,8 +288,7 @@ pub(crate) struct rsf_d3d11h_platform {
     pub pipeline_status: unsafe extern "C" fn(*mut rsf_d3d11h_pipeline_status) -> i32,
     pub pipeline_colour: unsafe extern "C" fn(u32, u32),
     pub pipeline_output: unsafe extern "C" fn() -> Raw,
-    pub sr_evaluate: unsafe extern "C" fn(Raw, *const Pass) -> i32,
-    pub sr_destinations_ordered: unsafe extern "C" fn() -> i32,
+    pub sr_evaluate: unsafe extern "C" fn(Raw, *const Pass, *mut u32) -> i32,
     pub dump_configure: unsafe extern "C" fn(*const rsf_d3d11h_strings, rsf_game_log_fn, Raw),
     pub dump_request: unsafe extern "C" fn(),
     pub dump_requested: unsafe extern "C" fn() -> i32,
@@ -356,5 +355,5 @@ const _: () = {
     assert!(size_of::<rsf_d3d11h_bridge>() == 64);
     assert!(size_of::<rsf_d3d11h_pipeline_start>() == 48);
     assert!(size_of::<rsf_d3d11h_pipeline_status>() == 20);
-    assert!(size_of::<rsf_d3d11h_platform>() == 61 * 8);
+    assert!(size_of::<rsf_d3d11h_platform>() == 60 * 8);
 };

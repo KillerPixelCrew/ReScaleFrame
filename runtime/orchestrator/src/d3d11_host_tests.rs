@@ -12,6 +12,7 @@ thread_local! {
     static DEVICE: Cell<Raw> = const { Cell::new(null_mut()) };
     static CONTEXT: Cell<Raw> = const { Cell::new(null_mut()) };
     static EVALUATE: Cell<i32> = const { Cell::new(0) };
+    static EVALUATE_ORDERED: Cell<u32> = const { Cell::new(1) };
     static RESERVE_OK: Cell<bool> = const { Cell::new(true) };
     static RESERVES: Cell<u32> = const { Cell::new(0) };
     static OWNER_FACADE: Cell<i32> = const { Cell::new(0) };
@@ -120,11 +121,11 @@ unsafe extern "C" fn colour(_: u32, _: u32) {}
 unsafe extern "C" fn output() -> Raw {
     null_mut()
 }
-unsafe extern "C" fn evaluate(_: Raw, _: *const Pass) -> i32 {
+unsafe extern "C" fn evaluate(_: Raw, _: *const Pass, ordered: *mut u32) -> i32 {
+    if !ordered.is_null() {
+        unsafe { ordered.write(EVALUATE_ORDERED.get()) };
+    }
     EVALUATE.get()
-}
-unsafe extern "C" fn ordered() -> i32 {
-    1
 }
 unsafe extern "C" fn dump_configure(_: *const rsf_d3d11h_strings, _: rsf_game_log_fn, _: Raw) {}
 unsafe extern "C" fn nothing() {}
@@ -222,7 +223,6 @@ const PLATFORM: rsf_d3d11h_platform = rsf_d3d11h_platform {
     pipeline_colour: colour,
     pipeline_output: output,
     sr_evaluate: evaluate,
-    sr_destinations_ordered: ordered,
     dump_configure,
     dump_request: nothing,
     dump_requested: zero,
@@ -580,6 +580,34 @@ fn pending_recovery_admits_only_its_sealed_owner() {
         RSF_D3D11_REDUCED_TEMPORAL_ATTEMPTED
     );
     assert_eq!(fixture.reduced(RSF_D3D11_REDUCED_RETIRE, 1, &owner).0, OK);
+}
+
+#[test]
+fn unordered_evaluation_keeps_the_recovery_ticket_owned() {
+    let fixture = Fixture::new();
+    assert_eq!(fixture.evaluate(), OK);
+    let owner = fixture.pass(5);
+    assert_eq!(fixture.reduced(RSF_D3D11_REDUCED_RESERVE, 0, &owner).0, OK);
+    assert_eq!(fixture.reduced(RSF_D3D11_REDUCED_SEAL, 1, &owner).0, OK);
+
+    EVALUATE.set(-7);
+    EVALUATE_ORDERED.set(0);
+    let result = fixture.host.process(fixture.context(), &owner, None);
+    EVALUATE.set(0);
+    EVALUATE_ORDERED.set(1);
+    assert_eq!(result, -7);
+
+    let (result, ticket) = fixture.reduced(RSF_D3D11_REDUCED_FINISH, 1, &owner);
+    assert_eq!(
+        (result, ticket.disposition, ticket.temporal_result),
+        (BUSY, RSF_D3D11_REDUCED_UNSAFE, -7)
+    );
+    assert_eq!(
+        ticket.result_flags & RSF_D3D11_REDUCED_FULL_OUTPUT_DEFINED,
+        0
+    );
+    assert_eq!(fixture.reduced(RSF_D3D11_REDUCED_RETIRE, 1, &owner).0, BUSY);
+    assert_eq!(fixture.input.refs.get(), 2);
 }
 
 #[test]

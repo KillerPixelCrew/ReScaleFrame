@@ -27,6 +27,7 @@ const INVALID: i32 = -1;
 const ABI_MISMATCH: i32 = -2;
 const NOT_READY: i32 = -3;
 const RESOURCE_FAILED: i32 = -7;
+const LEAF_FAULT: i32 = i32::MIN;
 const SR: u32 = 0;
 const FG: u32 = 1;
 type Texture = *mut c_void;
@@ -95,7 +96,9 @@ unsafe fn input_is_local(pass: &Pass, depth_layout: i32) -> bool {
 }
 
 fn discard_history(result: i32) -> i32 {
-    rsf_core_native_sr_reset(SR);
+    if result != LEAF_FAULT {
+        rsf_core_native_sr_reset(SR);
+    }
     result
 }
 
@@ -104,7 +107,20 @@ unsafe extern "C" fn rsf_core_native_sr_evaluate(
     context: *mut c_void,
     pass: *const Pass,
     services: &Services,
+    ordered: *mut u32,
 ) -> i32 {
+    let result = unsafe { evaluate(context, pass, services) };
+    if !ordered.is_null() {
+        unsafe { ordered.write(u32::from(result != LEAF_FAULT)) };
+    }
+    if result == LEAF_FAULT {
+        discard_history(RESOURCE_FAILED)
+    } else {
+        result
+    }
+}
+
+unsafe fn evaluate(context: *mut c_void, pass: *const Pass, services: &Services) -> i32 {
     if context.is_null()
         || pass.is_null()
         || unsafe { pass.cast::<u32>().read() } < size_of::<Pass>() as u32
@@ -124,14 +140,15 @@ unsafe extern "C" fn rsf_core_native_sr_evaluate(
     match unsafe { (services.validate_device)(context, pass) } {
         0 => return INVALID,
         1 => {}
+        LEAF_FAULT => return LEAF_FAULT,
         _ => return RESOURCE_FAILED,
     }
     let depth_layout = unsafe { (services.depth_layout)(pass) };
     if depth_layout < 0 {
-        return if depth_layout == -1 {
-            INVALID
-        } else {
-            RESOURCE_FAILED
+        return match depth_layout {
+            -1 => INVALID,
+            LEAF_FAULT => LEAF_FAULT,
+            _ => RESOURCE_FAILED,
         };
     }
     let Some(_bindings) = (unsafe { SavedBindings::new(context, services.save, services.restore) })
@@ -145,10 +162,12 @@ unsafe extern "C" fn rsf_core_native_sr_evaluate(
     }
 
     let mut textures = [pass.color_input, pass.depth, pass.motion];
-    if !unsafe { input_is_local(pass, depth_layout) }
-        && unsafe { (services.prepare_regions)(context, pass, textures.as_mut_ptr()) } == 0
-    {
-        return RESOURCE_FAILED;
+    if !unsafe { input_is_local(pass, depth_layout) } {
+        match unsafe { (services.prepare_regions)(context, pass, textures.as_mut_ptr()) } {
+            0 => return RESOURCE_FAILED,
+            LEAF_FAULT => return LEAF_FAULT,
+            _ => {}
+        }
     }
     let mut frame = Frame {
         struct_size: size_of::<Frame>() as u32,
@@ -169,6 +188,7 @@ unsafe extern "C" fn rsf_core_native_sr_evaluate(
     match unsafe { (services.take_translucency)(pass, &mut masks) } {
         0 => {}
         -1 => return RESOURCE_FAILED,
+        LEAF_FAULT => return LEAF_FAULT,
         _ => {
             frame.color_before_transparency = masks.color_before_transparency;
             frame.transparency_layer = masks.transparency_layer;
@@ -178,10 +198,12 @@ unsafe extern "C" fn rsf_core_native_sr_evaluate(
             frame.motion_depth_layer = masks.motion_depth;
         }
     }
-    if !pass.temporal_mask.is_null()
-        && unsafe { (services.merge_mask)(context, pass, &mut frame) } == 0
-    {
-        return RESOURCE_FAILED;
+    if !pass.temporal_mask.is_null() {
+        match unsafe { (services.merge_mask)(context, pass, &mut frame) } {
+            0 => return RESOURCE_FAILED,
+            LEAF_FAULT => return LEAF_FAULT,
+            _ => {}
+        }
     }
 
     let result = with_scene(pass, || unsafe {
@@ -192,8 +214,10 @@ unsafe extern "C" fn rsf_core_native_sr_evaluate(
     }
     // The provider output stays private until the current immediate stream
     // publishes it into the adapter's leased native destinations.
-    if unsafe { (services.publish_output)(context, pass) } == 0 {
-        return discard_history(RESOURCE_FAILED);
+    match unsafe { (services.publish_output)(context, pass) } {
+        0 => return discard_history(RESOURCE_FAILED),
+        LEAF_FAULT => return LEAF_FAULT,
+        _ => {}
     }
     commit_history(SR, pass);
     0
@@ -410,10 +434,12 @@ unsafe fn capture_validated(
     match unsafe { (sr.validate_device)(context, pass) } {
         0 => return INVALID,
         1 => {}
+        LEAF_FAULT => return discard_history(NOT_READY),
         _ => return NOT_READY,
     }
     match unsafe { (sr.depth_layout)(pass) } {
         -1 => return INVALID,
+        LEAF_FAULT => return discard_history(NOT_READY),
         n if n < 0 => return NOT_READY,
         _ => {}
     }

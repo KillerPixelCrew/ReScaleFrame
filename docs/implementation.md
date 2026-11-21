@@ -1109,6 +1109,11 @@ all 141 Rust workspace tests and Clippy passed. Release exports matched
 the Runtime and both carriers. Device and in-game validation remain open.
 See [the D3D11 host cutover audit](research/rust-d3d11-host-cutover.md).
 
+The native SR evaluator supplies a per-call ordering receipt to the
+Rust D3D11 host. Unknown leaf failures keep recovery resources leased.
+The focused host regression verifies that an unordered receipt keeps
+the reduced-frame ticket active. The public ABI remains stable.
+
 Rust now owns the shared D3D11 SR pipeline, including provider sessions,
 dispatch, history, quality and backend switching, and output and layer
 lifetime. Resize clears a new target before publishing it. A refused

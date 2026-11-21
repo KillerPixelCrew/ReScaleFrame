@@ -1021,12 +1021,13 @@ impl Host {
                         auxiliary.is_none_or(|surfaces| ticket.products.temporal_prepare(surfaces));
                     ticket.attempted = true;
                     ticket.flags |= RSF_D3D11_REDUCED_TEMPORAL_ATTEMPTED;
+                    let mut ordered = 0;
                     result = if prepared {
-                        unsafe { (p.sr_evaluate)(context, &evaluated) }
+                        unsafe { (p.sr_evaluate)(context, &evaluated, &mut ordered) }
                     } else {
                         NOT_READY
                     };
-                    ticket.ordered = !prepared || unsafe { (p.sr_destinations_ordered)() } != 0;
+                    ticket.ordered = !prepared || ordered != 0;
                     if result == OK && !ticket.products.commit(true) {
                         result = NOT_READY;
                         // A partial native commit remains an owned cleanup obligation.
@@ -1047,7 +1048,7 @@ impl Host {
                         })
                     });
                     result = if prepared {
-                        unsafe { (p.sr_evaluate)(context, &evaluated) }
+                        unsafe { (p.sr_evaluate)(context, &evaluated, null_mut()) }
                     } else {
                         NOT_READY
                     };

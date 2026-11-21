@@ -30,3 +30,21 @@ The recorded capture names, descriptions and log lines are unchanged. Public lay
 - `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings` and `cargo test --workspace --locked` (128 tests, 10 new) passed. The new tests use fake COM identities, a fake leaf table and fake auxiliary products. They cover first-lease configuration, suspended and contended leases, the full reduced ticket, recovery admission of only the sealed owner, the RESERVE regression, owner transfer, refused early planning, failed evaluation reporting, overlay action bounds and report truncation.
 
 Device execution, the D3D11 device fixtures, Skyrim, Fallout 4, Steam and Anomaly game runs remain pending.
+
+## Per-call SR completion receipt
+
+The native SR evaluator now returns its ordering receipt with the
+evaluation result to the Rust host. The earlier C++ thread-local flag
+was separate from the call and could be changed by nested evaluation.
+The native leaves report a private fault when a call throws. Rust
+resets SR history and returns the existing resource failure, with an
+unordered receipt so the host keeps its recovery ticket. Ordinary
+refusals retain their result and ordered receipt. The public SR API
+keeps its existing signature.
+
+The recovery regression verifies that an unordered evaluation leaves
+the lease held and cannot complete spatial recovery or retire the
+ticket. Seven Streamline-enabled Release and three default Debug
+contracts passed, along with all 331 locked Rust tests, formatting
+and Clippy. Release export inventories matched for Runtime, AC7,
+Loader, Minecraft and Godot.

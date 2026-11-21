@@ -64,7 +64,7 @@ static_assert(sizeof(rsf_d3d11_sampler_bias) == 160 && offsetof(rsf_d3d11_sample
     offsetof(rsf_d3d11_sampler_bias, applied_mask) == 152);
 static_assert(sizeof(rsf_d3d11h_strings) == 64 && sizeof(rsf_d3d11h_bridge) == 64 &&
     sizeof(rsf_d3d11h_pipeline_start) == 48 && sizeof(rsf_d3d11h_pipeline_status) == 20);
-static_assert(sizeof(rsf_d3d11h_platform) == 61 * sizeof(void*));
+static_assert(sizeof(rsf_d3d11h_platform) == 60 * sizeof(void*));
 static_assert(RSF_DUMP_VIEW_RAW == 0 && RSF_DUMP_VIEW_HDR == 3 && RSF_DUMP_VIEW_DEPTH == 4 &&
     RSF_DUMP_VIEW_DENSE_MOTION == 7 && DXGI_PRESENT_TEST == 1 && RSF_SCREEN_GAMEPLAY == 8);
 static_assert(RSF_NATIVE_SCENE_PRESENT_NONE == 0 && RSF_SR_DLSS == 1 && RSF_DLSS_OK == 0 && RSF_DLSS_PIPELINE_OK == 0);
@@ -286,14 +286,13 @@ void pipeline_colour(uint32_t transport, uint32_t correction) noexcept try
     rsf_dlss_pipeline_set_colour_correction(correction);
 } catch (...) {}
 void* pipeline_output() noexcept { return rsf_dlss_pipeline_output_texture(); }
-int32_t sr_evaluate(void* context, const rsf_game_render_pass* pass) noexcept try
+int32_t sr_evaluate(void* context, const rsf_game_render_pass* pass, uint32_t* ordered) noexcept try
 {
-    return rsf_native_sr_evaluate(context, pass);
-} catch (...) { return RSF_ERROR_NOT_READY; }
-int32_t sr_destinations_ordered() noexcept try
-{
-    return rsf_native_sr_native_destinations_ordered();
-} catch (...) { return 0; }
+    return rsf_native_sr_evaluate_ordered(context, pass, ordered);
+} catch (...) {
+    if (ordered) *ordered = 0;
+    return RSF_ERROR_NOT_READY;
+}
 
 void dump_configure(const rsf_d3d11h_strings* text, rsf_game_log_fn log, void* user) noexcept try
 {
@@ -412,7 +411,6 @@ const rsf_d3d11h_platform& platform()
         .pipeline_colour = pipeline_colour,
         .pipeline_output = pipeline_output,
         .sr_evaluate = sr_evaluate,
-        .sr_destinations_ordered = sr_destinations_ordered,
         .dump_configure = dump_configure,
         .dump_request = dump_request,
         .dump_requested = dump_requested,

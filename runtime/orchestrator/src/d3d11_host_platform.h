@@ -91,8 +91,7 @@ typedef struct rsf_d3d11h_platform {
     int32_t (*pipeline_status)(rsf_d3d11h_pipeline_status*);
     void (*pipeline_colour)(uint32_t transport, uint32_t correction);
     void* (*pipeline_output)(void);
-    int32_t (*sr_evaluate)(void* context, const rsf_game_render_pass*);
-    int32_t (*sr_destinations_ordered)(void);
+    int32_t (*sr_evaluate)(void* context, const rsf_game_render_pass*, uint32_t* ordered);
     /* Frame capture. */
     void (*dump_configure)(const rsf_d3d11h_strings*, rsf_game_log_fn, void* user);
     void (*dump_request)(void);

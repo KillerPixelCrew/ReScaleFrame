@@ -39,22 +39,14 @@ bool same_device_inputs(void* raw_context, const rsf_game_render_pass& pass) {
     }
     return true;
 }
-thread_local bool native_destinations_ordered = false;
-}
-
-namespace {
-int sr_call_failed() noexcept
-{
-    native_destinations_ordered = false;
-    rsf_core_native_sr_reset(Temporal::Sr);
-    return RSF_DLSS_PIPELINE_ERROR_RESOURCE_FAILED;
-}
+// Private leaf result outside the public result enum.
+constexpr int leaf_fault = INT32_MIN;
 
 int validate_device(void* context, const rsf_game_render_pass* pass) try
 {
     return same_device_inputs(context, *pass);
 }
-catch (...) { (void)sr_call_failed(); return -1; }
+catch (...) { return leaf_fault; }
 
 int depth_layout(const rsf_game_render_pass* pass) try
 {
@@ -64,7 +56,7 @@ int depth_layout(const rsf_game_render_pass* pass) try
         return -1;
     return rsf_game_depth_domains_requested(&pass->depth_domains);
 }
-catch (...) { (void)sr_call_failed(); return -2; }
+catch (...) { return leaf_fault; }
 
 void clear_predication(void* context)
 {
@@ -75,7 +67,7 @@ int resize_output(uint32_t width, uint32_t height) try
 {
     return rsf_dlss_pipeline_resize_output(width, height, nullptr, nullptr);
 }
-catch (...) { return sr_call_failed(); }
+catch (...) { return leaf_fault; }
 
 int prepare_regions(void* context, const rsf_game_render_pass* pass, void** textures) try
 {
@@ -87,13 +79,13 @@ int prepare_regions(void* context, const rsf_game_render_pass* pass, void** text
     textures[0] = color; textures[1] = depth; textures[2] = motion;
     return 1;
 }
-catch (...) { (void)sr_call_failed(); return 0; }
+catch (...) { return leaf_fault; }
 
 int take_translucency(const rsf_game_render_pass* pass, rsf_native_translucency_masks* masks) try
 {
     return rsf_native_translucency_take(pass, masks);
 }
-catch (...) { (void)sr_call_failed(); return -1; }
+catch (...) { return leaf_fault; }
 
 int merge_mask(void* context, const rsf_game_render_pass* pass, rsf_dlss_pipeline_frame* frame) try
 {
@@ -105,13 +97,13 @@ int merge_mask(void* context, const rsf_game_render_pass* pass, rsf_dlss_pipelin
     frame->reactive_mask = reactive; frame->bias_mask = bias;
     return 1;
 }
-catch (...) { (void)sr_call_failed(); return 0; }
+catch (...) { return leaf_fault; }
 
 int evaluate_pipeline(void* context, const rsf_dlss_pipeline_frame* frame) try
 {
     return rsf_dlss_pipeline_on_frame(context, frame);
 }
-catch (...) { return sr_call_failed(); }
+catch (...) { return leaf_fault; }
 
 int publish_output(void* context, const rsf_game_render_pass* pass) try
 {
@@ -120,7 +112,7 @@ int publish_output(void* context, const rsf_game_render_pass* pass) try
         static_cast<ID3D11Texture2D*>(pass->color_output),
         static_cast<ID3D11Texture2D*>(pass->color_output_readable), pass->output_rect);
 }
-catch (...) { (void)sr_call_failed(); return 0; }
+catch (...) { return leaf_fault; }
 
 struct SrServices {
     decltype(&validate_device) validate_device;
@@ -143,17 +135,20 @@ constexpr SrServices sr_services{
 };
 }
 
-extern "C" rsf_dlss_pipeline_result rsf_core_native_sr_evaluate(void*, const rsf_game_render_pass*, const SrServices*);
+extern "C" rsf_dlss_pipeline_result rsf_core_native_sr_evaluate(
+    void*, const rsf_game_render_pass*, const SrServices*, uint32_t*);
+
+rsf_dlss_pipeline_result rsf_native_sr_evaluate_ordered(
+    void* context, const rsf_game_render_pass* pass, uint32_t* ordered)
+{
+    return rsf_core_native_sr_evaluate(context, pass, &sr_services, ordered);
+}
 
 extern "C" RSF_RUNTIME_API rsf_dlss_pipeline_result rsf_native_sr_evaluate(void* context,
     const rsf_game_render_pass* pass)
 {
-    native_destinations_ordered = true;
-    return rsf_core_native_sr_evaluate(context, pass, &sr_services);
+    return rsf_native_sr_evaluate_ordered(context, pass, nullptr);
 }
-
-bool rsf_native_sr_native_destinations_ordered() { return native_destinations_ordered; }
-
 
 namespace {
 rsf_motion_decode* create_decode(void* device, uint32_t width, uint32_t height) try

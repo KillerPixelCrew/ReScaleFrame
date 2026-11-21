@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Synchronous current-thread receipt, not GPU quiescence. Provider writes are
-// isolated to private output; any native writes are ordered on the immediate
-// context. Unknown exceptions return false. The host must also verify device life.
-bool rsf_native_sr_native_destinations_ordered();
+#include <rescaleframe/native_sr.h>
+
+// An ordered receipt means any native writes are ordered on the immediate
+// context. The host still checks device life before retiring resources.
+rsf_dlss_pipeline_result rsf_native_sr_evaluate_ordered(void* context,
+    const rsf_game_render_pass* pass, uint32_t* ordered);
