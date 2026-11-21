@@ -31,6 +31,22 @@ unsafe extern "C" fn disable_geometry() -> bool {
 }
 
 #[test]
+fn lifecycle_and_status_refuse_reentry_while_the_owner_is_locked() {
+    let observer = Observer::new();
+    let platform = Platform::default();
+    let services: rsf_game_host_services = unsafe { std::mem::zeroed() };
+    {
+        let _control = lock(&observer.control);
+        assert_eq!(observer.prepare(&services, &platform), BUSY);
+        assert_eq!(observer.start(&platform), BUSY);
+        assert_eq!(observer.control(&platform, false), BUSY);
+        assert_eq!(observer.control(&platform, true), BUSY);
+        assert!(observer.status().is_none());
+    }
+    assert_eq!(observer.status().unwrap().prepared, 0);
+}
+
+#[test]
 fn stop_drains_native_and_input_invocations_before_retiring_the_stages() {
     let observer = Observer::new();
     lock(&observer.state).session = Some(Session {
@@ -56,8 +72,9 @@ fn stop_drains_native_and_input_invocations_before_retiring_the_stages() {
 
     assert!(observer.enter());
     assert_eq!(observer.control(&platform, true), BUSY);
-    assert_eq!(observer.status().active, 0);
-    assert_eq!(observer.status().prepared, 1);
+    let status = observer.status().unwrap();
+    assert_eq!(status.active, 0);
+    assert_eq!(status.prepared, 1);
     assert!(!observer.enter());
     observer.leave(); // A stock-only trampoline is still tracked.
     observer.leave();
@@ -67,12 +84,12 @@ fn stop_drains_native_and_input_invocations_before_retiring_the_stages() {
     INPUT_IDLE.store(true, Ordering::Relaxed);
     MOTION_REFUSED.store(true, Ordering::Relaxed);
     assert_eq!(observer.control(&platform, true), NATIVE_REFUSED);
-    assert_eq!(observer.status().prepared, 1);
+    assert_eq!(observer.status().unwrap().prepared, 1);
     assert_eq!(*lock(&TEARDOWN), ["input", "SR", "motion"]);
     MOTION_REFUSED.store(false, Ordering::Relaxed);
     assert_eq!(observer.control(&platform, true), OK);
     assert_eq!(observer.control(&platform, true), OK);
-    assert_eq!(observer.status().prepared, 0);
+    assert_eq!(observer.status().unwrap().prepared, 0);
     assert_eq!(
         *lock(&TEARDOWN),
         ["input", "SR", "motion", "motion", "hooks", "geometry"]

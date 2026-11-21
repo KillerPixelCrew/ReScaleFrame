@@ -17,7 +17,7 @@ use rsf_game_sys::{
 use std::ffi::{CStr, CString, c_void};
 use std::ptr;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
 use windows_sys::Win32::System::LibraryLoader::{
     GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_PIN, GetModuleHandleExW,
 };
@@ -121,8 +121,18 @@ impl Observer {
         lock(&self.state).session
     }
 
+    fn try_control(&self) -> Option<MutexGuard<'_, Control>> {
+        match self.control.try_lock() {
+            Ok(control) => Some(control),
+            Err(TryLockError::Poisoned(error)) => Some(error.into_inner()),
+            Err(TryLockError::WouldBlock) => None,
+        }
+    }
+
     fn prepare(&self, host: &rsf_game_host_services, platform: &Platform) -> rsf_result {
-        let mut control = lock(&self.control);
+        let Some(mut control) = self.try_control() else {
+            return BUSY;
+        };
         if self.session().is_some()
             || control.retirement != Retirement::Inactive
             || self.activity.load(Ordering::Acquire) != 0
@@ -146,7 +156,9 @@ impl Observer {
     }
 
     fn start(&self, platform: &Platform) -> rsf_result {
-        let mut control = lock(&self.control);
+        let Some(mut control) = self.try_control() else {
+            return BUSY;
+        };
         let Some(session) = self.session() else {
             return NOT_READY;
         };
@@ -290,7 +302,9 @@ impl Observer {
     }
 
     fn control(&self, platform: &Platform, stop: bool) -> rsf_result {
-        let mut control = lock(&self.control);
+        let Some(mut control) = self.try_control() else {
+            return BUSY;
+        };
         let result = self.quiesce_locked(&mut control, platform);
         if result == OK && stop {
             if !self.idle(platform) {
@@ -304,16 +318,16 @@ impl Observer {
         result
     }
 
-    fn status(&self) -> rsf_game_renderer_status {
-        let control = lock(&self.control);
-        rsf_game_renderer_status {
+    fn status(&self) -> Option<rsf_game_renderer_status> {
+        let control = self.try_control()?;
+        Some(rsf_game_renderer_status {
             struct_size: size_of::<rsf_game_renderer_status>() as u32,
             abi_version: RSF_GAME_ABI_VERSION,
             prepared: u32::from(self.session().is_some()),
             active: u32::from(self.active()),
             rendering_ready: 0,
             reason: control.reason.as_ptr(),
-        }
+        })
     }
 
     fn observation(&self) -> Observation {
@@ -476,7 +490,10 @@ unsafe extern "C" fn rsf_anomaly_observer_status(out: *mut rsf_game_renderer_sta
     if let Err(error) = unsafe { validate(out, RSF_GAME_ABI_VERSION) } {
         return error;
     }
-    unsafe { out.write(OBSERVER.status()) };
+    let Some(status) = OBSERVER.status() else {
+        return BUSY;
+    };
+    unsafe { out.write(status) };
     OK
 }
 

@@ -4,6 +4,12 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Anomaly observer lifecycle and renderer status calls now return busy
+when a startup or teardown callback reenters the observer. The status
+output is written only after a complete snapshot. An unrun fixture
+covers lifecycle and status admission while the owner is locked.
+Source review checked the callback path without changing the ABI.
+
 The Rust Anomaly observer now records completed teardown steps.
 After a refusal it resumes with the first unfinished owner and
 keeps the session available until callbacks drain. A stop after
