@@ -477,6 +477,17 @@ shut down Direct3D, exited with code 0 and the test restored the staged
 inputs. Logs and hashes are in
 `.local/anomaly/staging/live-58fe95a-stage5/evidence/merged-present-buffers-standard/`.
 
+Rust now also owns the physical DXGI swapchain and its creation queue as
+one pair. A live lease defers provider replacement, and reentrant DXGI
+queries can borrow the pair without holding its lock across native calls.
+The merged build passed 381 pinned Rust tests, formatting, Clippy and
+eight focused MSVC Release CPU and ABI contracts. All eight Release
+export inventories matched. The Anomaly DLL retained its three exports
+and dynamic Runtime lookup. The merged pair still needs a game and
+device run for resize, fullscreen and provider transitions. Worker and
+integration logs are in `.local/rust-1.94.1-verification/`.
+[Physical swapchain audit](research/rust-d3d11-present-physical.md)
+
 The combined bridge build passed 15 focused CPU and ABI contracts in
 Debug and Release, and all 290 locked Rust tests, formatting and Clippy.
 Both configurations match the reference Runtime, AC7, Loader and
