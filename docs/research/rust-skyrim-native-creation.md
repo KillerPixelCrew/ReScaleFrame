@@ -117,7 +117,11 @@ Still C++ in `rsf_game_skyrim_se`, in suggested order:
 4. `presentation_inputs.cpp` (hook `+116ac80`), `sampling.cpp` (sampler `+1010de0`),
    `resolution.cpp`, `render_inputs.cpp`, `auxiliary.cpp`: pre-HDR inputs, sampler binding,
    reduced-resolution ownership, SR reconstruction and auxiliary views.
-5. `camera.cpp`: native camera decode, with its fixture `tests/skyrim_camera.cpp`.
+5. `camera.rs` owns the native camera conversion for both SR and presentation. It
+   uses the shared GameSDK inverse with the old float output and double accumulation
+   rules. The adapter still supplies the same copied row-vector cache. Refusals clear
+   the camera output and history flag. `tests/skyrim_camera.cpp` now links the Rust
+   archive. Source comparison and layout review were the scope of this change.
 
 ## Session lifecycle
 

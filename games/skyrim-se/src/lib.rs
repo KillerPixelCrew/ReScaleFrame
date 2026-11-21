@@ -5,6 +5,7 @@
 //! order (`session.rs`), the observer hook transactions (`observers.rs`) and cold native creation
 //! with Steam Present cooperation (`creation.rs`). Native code lends the typed detours, MinHook,
 //! exception guards and the C++ render, CPU and compatibility subsystems.
+mod camera;
 mod creation;
 mod layout;
 mod observers;

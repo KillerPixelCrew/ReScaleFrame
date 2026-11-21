@@ -221,6 +221,13 @@ and teardown in Rust as well. Quiesce withdraws observer admission again
 under the session lock to cover a concurrent start. Build, binary ABI
 and game verification remain open.
 
+Skyrim SE's SR and presentation paths now convert the copied native
+camera cache in Rust. The conversion retains the forward-depth check,
+camera-relative origin correction, pixel jitter and identity fallback
+for invalid history. A refused camera clears the SDK record and history
+flag. The existing camera fixture links the same Rust archive as the
+adapter. It remains unrun.
+
 Unity package D3D12 SR contexts and their recording slots are Rust-owned.
 The existing Unity bridge still provides recording and completion facts.
 The view owner preserves reconfiguration, spatial fallback and retirement
