@@ -469,6 +469,11 @@ lifetime and submission order. Builds, fixtures and live checks
 remain open.
 [SR frame resource tags](research/rust-d3d11-streamline-resolution.md#sr-frame-resource-tags)
 
+D3D11 Streamline SR now selects the frame token and constants
+routes in Rust. Typed leaves preserve the SDK fields and native
+calls. Builds, fixtures and live verification remain open.
+[Frame tokens and constants](research/rust-d3d11-streamline-resolution.md#frame-tokens-and-constants)
+
 ## D3D11 observer startup probe
 
 Compared with `fe267be4`, the Rust observer owns the temporary

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+mod frame;
 mod planning;
 mod tags;
 
@@ -313,8 +314,7 @@ struct Platform {
     startup: &'static Startup,
     planning: &'static planning::Platform,
     present: unsafe extern "C" fn(Handle, Handle, u32, u32, u32) -> i32,
-    token: unsafe extern "C" fn(Handle, Handle, u64, u32) -> Handle,
-    constants: unsafe extern "C" fn(Handle, Handle, Handle, u64, u32, &Frame) -> i32,
+    frame: &'static frame::Platform,
     options: unsafe extern "C" fn(Handle, u32, &Options) -> i32,
     tags: unsafe extern "C" fn(Handle, Handle, Handle, u32, &tags::TagBatch) -> i32,
     evaluate: unsafe extern "C" fn(Handle, Handle, Handle, u32) -> i32,
@@ -329,7 +329,7 @@ const _: () = {
     assert!(size_of::<InitPreferences>() == 64);
     assert!(std::mem::offset_of!(InitPreferences, flags) == 32);
     assert!(size_of::<Startup>() == 12 * size_of::<Handle>());
-    assert!(size_of::<Platform>() == 13 * size_of::<Handle>());
+    assert!(size_of::<Platform>() == 12 * size_of::<Handle>());
 };
 
 enum Route {
@@ -625,12 +625,16 @@ unsafe extern "C" fn rsf_core_dlss_streamline_evaluate(
         return NOT_READY;
     };
     let native = session.native.as_ptr();
-    let token = unsafe { (platform.token)(native, host, source, frame.frame_index) };
+    let token = platform
+        .frame
+        .token(native, host, source, frame.frame_index);
     if token.is_null() {
         return if shared { NOT_READY } else { FEATURE_FAILED };
     }
     let slot = viewport_slot(frame.viewport);
-    let constants = unsafe { (platform.constants)(native, host, token, source, slot, frame) };
+    let constants = platform
+        .frame
+        .set_constants(native, host, token, source, slot, frame);
     if constants != OK {
         return constants;
     }

@@ -1071,6 +1071,12 @@ existing immediate-use lifetime. Builds, fixtures and live checks
 remain open.
 [SR frame resource tags](research/rust-d3d11-streamline-resolution.md#sr-frame-resource-tags)
 
+D3D11 Streamline SR now selects its frame token and constants
+routes in Rust. The shared route preserves the host source and
+original viewport, and the owned route keeps the normalized slot.
+Builds, fixtures and live checks remain open.
+[Frame tokens and constants](research/rust-d3d11-streamline-resolution.md#frame-tokens-and-constants)
+
 Anomaly's Rust motion owner now checks the existing Standard and AVX
 profile guards in the same order. The native leaf supplies the profile
 and the guarded reader. FidelityFX Vulkan SR and FG also share one

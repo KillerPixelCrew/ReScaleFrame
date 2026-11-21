@@ -107,3 +107,21 @@ batch, and the public declarations and disabled stubs. The new
 fixture checks optional ordering, shared states and extents.
 Pinned formatting, locked offline metadata and whitespace passed.
 Builds, fixtures, and Standard and AVX live checks remain open.
+
+## Frame tokens and constants
+
+Compared with `f7110ccf`, Rust chooses the frame token and constants
+routes. The owned path leaves an absent frame index to the SDK and
+uses the normalized viewport slot. Shared SR uses the host source
+token and passes the original viewport to the existing common
+constants entry. The native leaves still assemble the typed SDK
+constants from the borrowed frame, with the same zero pinhole offset
+and 2D motion-vector flag. The caller's matrices, jitter and
+invalid-motion marker retain their existing values.
+
+The private frame table contains four typed callbacks. The main
+table has 12 slots. Source comparison matched the constant fields,
+the public declarations and disabled stubs. The new fixture covers
+the optional index and the viewport distinction. Pinned formatting,
+locked offline metadata and whitespace passed. Builds, fixtures and
+Standard and AVX live verification remain open.

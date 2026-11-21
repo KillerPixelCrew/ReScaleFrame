@@ -89,13 +89,24 @@ struct rsf_streamline_sr_tags {
     rsf_streamline_sr_tag entries[sr_max_tags];
 };
 
+struct rsf_streamline_sr_constants {
+    const rsf_dlss_frame* frame;
+    float camera_pinhole[2];
+    uint32_t motion_vectors_3d;
+};
+struct rsf_streamline_sr_frame_ops {
+    void* (*owned_token)(void*, const uint32_t*);
+    void* (*host_token)(void*, uint64_t);
+    int32_t (*owned_constants)(void*, void*, uint32_t, const rsf_streamline_sr_constants*);
+    int32_t (*host_constants)(void*, uint64_t, uint32_t, const rsf_streamline_sr_constants*);
+};
+
 struct rsf_streamline_sr_platform {
     void* (*load)(const wchar_t*, const rsf_dlss_setup*);
     const rsf_streamline_sr_startup* startup;
     const rsf_streamline_sr_planning* planning;
     int32_t (*present)(void*, void*, uint32_t, uint32_t, uint32_t);
-    void* (*token)(void*, void*, uint64_t, uint32_t);
-    int32_t (*constants)(void*, void*, void*, uint64_t, uint32_t, const rsf_dlss_frame*);
+    const rsf_streamline_sr_frame_ops* frame;
     int32_t (*options)(void*, uint32_t, const rsf_streamline_sr_options*);
     int32_t (*tags)(void*, void*, void*, uint32_t, const rsf_streamline_sr_tags*);
     int32_t (*evaluate)(void*, void*, void*, uint32_t);
@@ -376,28 +387,27 @@ int32_t optimal(void* native, uint32_t mode, uint32_t width, uint32_t height,
     return RSF_DLSS_OK;
 } catch (...) { return RSF_DLSS_ERROR_FEATURE_FAILED; }
 
-void* get_token(void* native, void* host, uint64_t source, uint32_t frame_index) noexcept try
+void* owned_token(void* native, const uint32_t* frame_index) noexcept try
 {
     auto& self = *static_cast<Native*>(native);
-    if (host) return rsf_streamline_host_token(static_cast<rsf_streamline_host*>(host), source);
     sl::FrameToken* token = nullptr;
-    return self.sl.get_new_frame_token(token, frame_index ? &frame_index : nullptr) == sl::Result::eOk
-        ? token : nullptr;
+    return self.sl.get_new_frame_token(token, frame_index) == sl::Result::eOk ? token : nullptr;
 } catch (...) { return nullptr; }
 
-int32_t set_constants(void* native, void* host, void* token, uint64_t source, uint32_t slot,
-    const rsf_dlss_frame* frame) noexcept try
+void* host_token(void* host, uint64_t source) noexcept try
 {
-    auto& self = *static_cast<Native*>(native);
-    sl::Constants constants{};
+    return rsf_streamline_host_token(static_cast<rsf_streamline_host*>(host), source);
+} catch (...) { return nullptr; }
+
+void fill_constants(sl::Constants& constants, const rsf_streamline_sr_constants& input) noexcept
+{
+    const auto* frame = input.frame;
     constants.cameraViewToClip = rsf::sl_matrix(frame->camera_view_to_clip);
     constants.clipToCameraView = rsf::sl_matrix(frame->clip_to_camera_view);
     constants.clipToPrevClip = rsf::sl_matrix(frame->clip_to_prev_clip);
     constants.prevClipToClip = rsf::sl_matrix(frame->prev_clip_to_clip);
     constants.jitterOffset = {frame->jitter_x, frame->jitter_y};
-    // Zero rather than left alone. Streamline warns that an invalid pinhole offset is a mistake,
-    // and the game uses a plain pinhole camera, so zero is the true value rather than a placeholder.
-    constants.cameraPinholeOffset = {0.0f, 0.0f};
+    constants.cameraPinholeOffset = {input.camera_pinhole[0], input.camera_pinhole[1]};
     constants.mvecScale = {frame->motion_scale_x, frame->motion_scale_y};
     constants.cameraPos = {frame->camera_position[0], frame->camera_position[1],
                            frame->camera_position[2]};
@@ -412,19 +422,36 @@ int32_t set_constants(void* native, void* host, void* token, uint64_t source, ui
     constants.cameraAspectRatio = frame->aspect_ratio;
     constants.depthInverted = flag(frame->depth_inverted);
     constants.cameraMotionIncluded = flag(frame->camera_motion_included);
-    constants.motionVectors3D = sl::Boolean::eFalse;
+    constants.motionVectors3D = flag(input.motion_vectors_3d);
     constants.reset = flag(frame->reset);
     // The caller supplies the invalid-motion value for its producer.
     constants.motionVectorsInvalidValue = frame->motion_invalid_value;
 
-    const bool common = host ? rsf_streamline_common_set(static_cast<rsf_streamline_host*>(host), source, frame->viewport, constants) :
-        self.sl.set_constants(constants, *static_cast<sl::FrameToken*>(token), viewport_handle(slot)) == sl::Result::eOk;
-    if (!common) {
+}
+
+int32_t constants_result(bool submitted) noexcept
+{
+    if (!submitted) {
         say("slSetConstants failed");
         return RSF_DLSS_ERROR_FEATURE_FAILED;
     }
-
     return RSF_DLSS_OK;
+}
+
+int32_t owned_constants(void* native, void* token, uint32_t slot, const rsf_streamline_sr_constants* input) noexcept try
+{
+    sl::Constants constants{};
+    fill_constants(constants, *input);
+    auto& self = *static_cast<Native*>(native);
+    return constants_result(
+        self.sl.set_constants(constants, *static_cast<sl::FrameToken*>(token), viewport_handle(slot)) == sl::Result::eOk);
+} catch (...) { return RSF_DLSS_ERROR_FEATURE_FAILED; }
+
+int32_t host_constants(void* host, uint64_t source, uint32_t viewport, const rsf_streamline_sr_constants* input) noexcept try
+{
+    sl::Constants constants{};
+    fill_constants(constants, *input);
+    return constants_result(rsf_streamline_common_set(static_cast<rsf_streamline_host*>(host), source, viewport, constants));
 } catch (...) { return RSF_DLSS_ERROR_FEATURE_FAILED; }
 
 int32_t set_options(void* native, uint32_t slot, const rsf_streamline_sr_options* input) noexcept try
@@ -527,10 +554,13 @@ static_assert(uint32_t(sl::Result::eOk) == 0 && uint32_t(sl::Result::eErrorDrive
 static_assert(uint32_t(sl::DLSSMode::eOff) == 0 && uint32_t(sl::DLSSMode::eMaxPerformance) == 1 &&
     uint32_t(sl::DLSSMode::eBalanced) == 2 && uint32_t(sl::DLSSMode::eMaxQuality) == 3 &&
     uint32_t(sl::DLSSMode::eUltraPerformance) == 4 && uint32_t(sl::DLSSMode::eDLAA) == 6);
+constexpr rsf_streamline_sr_frame_ops frame_ops{owned_token, host_token, owned_constants, host_constants};
+static_assert(sizeof(rsf_streamline_sr_frame_ops) == 4 * sizeof(void*));
+static_assert(sizeof(rsf_streamline_sr_constants) == 24 && offsetof(rsf_streamline_sr_constants, motion_vectors_3d) == 16);
 constexpr rsf_streamline_sr_platform platform{load_owned, &startup, &planning,
-    present, get_token, set_constants, set_options, set_tags, evaluate, drain,
+    present, &frame_ops, set_options, set_tags, evaluate, drain,
     release_viewport, shutdown, destroy};
-static_assert(sizeof(rsf_streamline_sr_platform) == 13 * sizeof(void*));
+static_assert(sizeof(rsf_streamline_sr_platform) == 12 * sizeof(void*));
 static_assert(RSF_DLSS_ERROR_LOAD_FAILED == -4);
 static_assert(sizeof(rsf_streamline_sr_options) == 28);
 static_assert(sizeof(rsf_streamline_sr_tag) == 24 && sizeof(rsf_streamline_sr_tags) == 224 &&
