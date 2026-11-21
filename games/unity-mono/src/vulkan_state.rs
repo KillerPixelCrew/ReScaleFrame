@@ -102,7 +102,30 @@ struct ImageKey {
 #[derive(Clone, Copy)]
 struct Image {
     key: ImageKey,
+    handles: ImageHandles,
     initialized: bool,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct ImageHandles {
+    resource: *mut c_void,
+    image: u64,
+    memory: u64,
+}
+
+const _: () = assert!(size_of::<ImageHandles>() == 24);
+
+impl ImageHandles {
+    const EMPTY: Self = Self {
+        resource: ptr::null_mut(),
+        image: 0,
+        memory: 0,
+    };
+
+    fn complete(self) -> bool {
+        !self.resource.is_null() && self.image != 0 && self.memory != 0
+    }
 }
 
 struct State {
@@ -126,6 +149,7 @@ struct State {
 }
 
 // Packets hold resource addresses as identity only. Host code and user data are process-lived.
+// Owned shared-image handles are passed to native code under presentation or retirement leases.
 unsafe impl Send for State {}
 
 static STATE: Mutex<State> = Mutex::new(State::new());
@@ -402,18 +426,24 @@ extern "C" fn rsf_unity_vulkan_ready() -> u32 {
     u32::from(lock().device == Device::Ready)
 }
 
-type ReplaceImage = unsafe extern "C" fn(u32, u32, u32, u32, u32) -> bool;
+type CreateImage = unsafe extern "C" fn(u32, u32, u32, u32, *mut ImageHandles) -> bool;
+type DestroyImage = unsafe extern "C" fn(*const ImageHandles);
 
 /// The caller holds the presentation lease throughout native replacement.
 #[unsafe(no_mangle)]
-extern "C" fn rsf_unity_vulkan_prepare_image(
+unsafe extern "C" fn rsf_unity_vulkan_prepare_image(
     index: u32,
     width: u32,
     height: u32,
     format: u32,
     dx_format: u32,
-    replace: ReplaceImage,
+    view: *mut ImageHandles,
+    create: CreateImage,
+    destroy: DestroyImage,
 ) -> bool {
+    if view.is_null() {
+        return false;
+    }
     let key = ImageKey {
         width,
         height,
@@ -429,18 +459,38 @@ extern "C" fn rsf_unity_vulkan_prepare_image(
         let Some(current) = state.images.get(index_usize) else {
             return false;
         };
-        if current.is_some_and(|image| image.key == key) {
+        if let Some(image) = current.filter(|image| image.key == key) {
+            unsafe { view.write(image.handles) };
             return true;
         }
     }
-    if !unsafe { replace(index, width, height, format, dx_format) } {
+    let mut handles = ImageHandles::EMPTY;
+    if !unsafe { create(width, height, format, dx_format, &mut handles) } || !handles.complete() {
+        unsafe { destroy(&handles) };
         return false;
     }
-    lock().images[index_usize] = Some(Image {
+    let previous = lock().images[index_usize].replace(Image {
         key,
+        handles,
         initialized: false,
     });
+    if let Some(previous) = previous {
+        unsafe { destroy(&previous.handles) };
+    }
+    unsafe { view.write(handles) };
     true
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_unity_vulkan_clear_images(destroy: DestroyImage) {
+    let images = {
+        let mut state = lock();
+        state.recorded_images = 0;
+        std::mem::take(&mut state.images)
+    };
+    for image in images.into_iter().flatten() {
+        unsafe { destroy(&image.handles) };
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -746,6 +796,7 @@ mod tests {
                 format: 97,
                 dx_format: 10,
             },
+            handles: ImageHandles::EMPTY,
             initialized: false,
         });
         assert!(!state.record_image(0));

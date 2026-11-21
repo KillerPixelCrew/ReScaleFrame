@@ -29,6 +29,7 @@
 #include "../../../games/unity-mono/src/vulkan_resolver.h"
 
 static_assert(sizeof(rsf_unity_vulkan_present_source) == 24, "vulkan_state.rs PresentSource");
+static_assert(sizeof(rsf_unity_vulkan_image_handles) == 24);
 static_assert(sizeof(rsf_unity_vulkan_frame) == sizeof(rsf_unity_packet) + sizeof(rsf_game_host_services));
 static_assert(offsetof(rsf_unity_vulkan_frame, services) == sizeof(rsf_unity_packet));
 
@@ -47,12 +48,12 @@ ComPtr<ID3D12Fence> shared_fence;
 ComPtr<IDXGISwapChain3> chain;
 VkSemaphore semaphore = VK_NULL_HANDLE;
 VkCommandPool command_pool = VK_NULL_HANDLE;
-struct Image {
-    ComPtr<ID3D12Resource> resource;
-    VkImage image = VK_NULL_HANDLE;
-    VkDeviceMemory memory = VK_NULL_HANDLE;
+// Only a view. Rust retains the imported image and D3D12 resource for the GPU lifetime.
+struct ImageView {
+    rsf_unity_vulkan_image_handles handles{};
+    VkImage image() const { return reinterpret_cast<VkImage>(handles.image); }
+    ID3D12Resource* resource() const { return static_cast<ID3D12Resource*>(handles.resource); }
 };
-std::array<Image, 6> images;
 struct Slot {
     ComPtr<ID3D12CommandAllocator> allocator;
     ComPtr<ID3D12GraphicsCommandList> commands;
@@ -114,53 +115,59 @@ bool drain()
     }
     return true;
 }
-void destroy_image(Image& image)
+void destroy_image(const rsf_unity_vulkan_image_handles* image) noexcept
 {
-    if (image.image) vkDestroyImage(instance.device, image.image, nullptr);
-    if (image.memory) vkFreeMemory(instance.device, image.memory, nullptr);
-    image = {};
+    if (image->image) vkDestroyImage(instance.device, from_id<VkImage>(image->image), nullptr);
+    if (image->memory) vkFreeMemory(instance.device, from_id<VkDeviceMemory>(image->memory), nullptr);
+    if (image->resource) static_cast<ID3D12Resource*>(image->resource)->Release();
 }
 // Destroys the shared device's objects. Only their owner calls it: the device's creator before it
 // reports a failure, or release while the bridge is closed.
 void destroy_objects()
 {
-    for (auto& image : images) destroy_image(image);
+    rsf_unity_vulkan_clear_images(destroy_image);
     for (auto& slot : slots) { if (slot.complete) vkDestroyFence(instance.device, slot.complete, nullptr); slot = {}; }
     if (command_pool) vkDestroyCommandPool(instance.device, command_pool, nullptr);
     if (semaphore) vkDestroySemaphore(instance.device, semaphore, nullptr);
     command_pool = VK_NULL_HANDLE; semaphore = VK_NULL_HANDLE; chain.Reset(); shared_fence.Reset(); queue.Reset(); device.Reset();
     instance = {};
 }
-bool replace_image(uint32_t index, uint32_t width, uint32_t height,
-    uint32_t format_value, uint32_t dx_format_value) noexcept
+bool create_shared_image(uint32_t width, uint32_t height, uint32_t format_value,
+    uint32_t dx_format_value, rsf_unity_vulkan_image_handles* output) noexcept
 {
-    auto& image = images[index];
     const auto format = static_cast<VkFormat>(format_value);
     const auto dx_format = static_cast<DXGI_FORMAT>(dx_format_value);
     if (!drain()) return false;
-    Image next;
+    ComPtr<ID3D12Resource> resource;
+    // Only the successfully imported resources are transferred to Rust.
+    struct PendingImage {
+        rsf_unity_vulkan_image_handles handles{};
+        ~PendingImage() { destroy_image(&handles); }
+    } pending;
     D3D12_HEAP_PROPERTIES heap{}; heap.Type = D3D12_HEAP_TYPE_DEFAULT;
     D3D12_RESOURCE_DESC description{}; description.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
     description.Width = width; description.Height = height; description.DepthOrArraySize = description.MipLevels = 1;
     description.Format = dx_format; description.SampleDesc.Count = 1;
     description.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET | D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
     if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_SHARED, &description, D3D12_RESOURCE_STATE_COMMON,
-        nullptr, IID_PPV_ARGS(&next.resource)))) return false;
+        nullptr, IID_PPV_ARGS(&resource)))) return false;
     VkExternalMemoryImageCreateInfo external{VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO};
     external.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT;
     VkImageCreateInfo info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO}; info.pNext = &external;
     info.imageType = VK_IMAGE_TYPE_2D; info.format = format; info.extent = {width, height, 1};
     info.mipLevels = info.arrayLayers = 1; info.samples = VK_SAMPLE_COUNT_1_BIT; info.tiling = VK_IMAGE_TILING_OPTIMAL;
     info.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-    if (vkCreateImage(instance.device, &info, nullptr, &next.image) != VK_SUCCESS) return false;
-    VkMemoryRequirements requirements{}; vkGetImageMemoryRequirements(instance.device, next.image, &requirements);
+    VkImage image = VK_NULL_HANDLE;
+    if (vkCreateImage(instance.device, &info, nullptr, &image) != VK_SUCCESS) return false;
+    pending.handles.image = handle_id(image);
+    VkMemoryRequirements requirements{}; vkGetImageMemoryRequirements(instance.device, image, &requirements);
     VkPhysicalDeviceMemoryProperties properties{}; vkGetPhysicalDeviceMemoryProperties(instance.physicalDevice, &properties);
     uint32_t memory_type = UINT32_MAX;
     for (uint32_t i = 0; i < properties.memoryTypeCount; ++i)
         if ((requirements.memoryTypeBits & (1u << i)) && (properties.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) { memory_type = i; break; }
     HANDLE handle = nullptr;
-    if (memory_type == UINT32_MAX || FAILED(device->CreateSharedHandle(next.resource.Get(), nullptr, GENERIC_ALL, nullptr, &handle))) { destroy_image(next); return false; }
-    VkMemoryDedicatedAllocateInfo dedicated{VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO}; dedicated.image = next.image;
+    if (memory_type == UINT32_MAX || FAILED(device->CreateSharedHandle(resource.Get(), nullptr, GENERIC_ALL, nullptr, &handle))) return false;
+    VkMemoryDedicatedAllocateInfo dedicated{VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO}; dedicated.image = image;
     VkImportMemoryWin32HandleInfoKHR import{VK_STRUCTURE_TYPE_IMPORT_MEMORY_WIN32_HANDLE_INFO_KHR};
     import.pNext = &dedicated; import.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT; import.handle = handle;
     VkMemoryAllocateInfo allocation{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO}; allocation.pNext = &import;
@@ -168,18 +175,20 @@ bool replace_image(uint32_t index, uint32_t width, uint32_t height,
     VkDeviceMemory allocated_memory = VK_NULL_HANDLE;
     const auto allocated = vkAllocateMemory(instance.device, &allocation, nullptr, &allocated_memory);
     CloseHandle(handle);
-    if (allocated != VK_SUCCESS) { destroy_image(next); return false; }
-    next.memory = allocated_memory;
-    if (vkBindImageMemory(instance.device, next.image, next.memory, 0) != VK_SUCCESS) {
-        destroy_image(next); return false;
-    }
-    destroy_image(image); image = std::move(next); return true;
+    if (allocated != VK_SUCCESS) return false;
+    pending.handles.memory = handle_id(allocated_memory);
+    if (vkBindImageMemory(instance.device, image, allocated_memory, 0) != VK_SUCCESS) return false;
+    pending.handles.resource = resource.Detach();
+    *output = pending.handles;
+    pending.handles = {};
+    return true;
 }
 
-bool create_image(uint32_t index, uint32_t width, uint32_t height, VkFormat format, DXGI_FORMAT dx_format)
+bool create_image(uint32_t index, uint32_t width, uint32_t height, VkFormat format,
+    DXGI_FORMAT dx_format, ImageView& view)
 {
-    return rsf_unity_vulkan_prepare_image(index, width, height,
-        static_cast<uint32_t>(format), static_cast<uint32_t>(dx_format), replace_image);
+    return rsf_unity_vulkan_prepare_image(index, width, height, static_cast<uint32_t>(format),
+        static_cast<uint32_t>(dx_format), &view.handles, create_shared_image, destroy_image);
 }
 // Creates the shared D3D12 device, queue, fence, imported semaphore and command slots. A failure
 // may leave some of them; the caller destroys them.
@@ -266,17 +275,17 @@ void image_barrier(VkCommandBuffer commands, VkImage image, VkImageLayout before
     barrier.image = image; barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 }
-void acquire_image(VkCommandBuffer commands, uint32_t index, bool output)
+void acquire_image(VkCommandBuffer commands, uint32_t index, const ImageView& image, bool output)
 {
     const auto old_layout = rsf_unity_vulkan_record_image(index) ?
         VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED;
-    image_barrier(commands, images[index].image, old_layout,
+    image_barrier(commands, image.image(), old_layout,
         output ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
         VK_QUEUE_FAMILY_EXTERNAL, instance.queueFamilyIndex, 0, output ? VK_ACCESS_TRANSFER_READ_BIT : VK_ACCESS_TRANSFER_WRITE_BIT);
 }
-void release_image(VkCommandBuffer commands, Image& image, bool output)
+void release_image(VkCommandBuffer commands, const ImageView& image, bool output)
 {
-    image_barrier(commands, image.image, output ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+    image_barrier(commands, image.image(), output ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
         VK_IMAGE_LAYOUT_GENERAL, instance.queueFamilyIndex, VK_QUEUE_FAMILY_EXTERNAL,
         output ? VK_ACCESS_TRANSFER_READ_BIT : VK_ACCESS_TRANSFER_WRITE_BIT, 0);
 }
@@ -351,6 +360,7 @@ void UNITY_INTERFACE_API execute_queue(int, void* data) noexcept try
     const auto& host = frame.services;
     const auto& packet = frame.packet;
     const auto& textures = event_images[index];
+    std::array<ImageView, 6> images{};
     const bool present = kind == RSF_UNITY_VULKAN_EVENT_WINDOW, hudless = kind == RSF_UNITY_VULKAN_EVENT_HUDLESS;
     const SharedDevice ready = initialize(&host);
     if (ready == SharedDevice::busy) return;
@@ -368,44 +378,44 @@ void UNITY_INTERFACE_API execute_queue(int, void* data) noexcept try
     if (hudless || present) {
         const auto& texture = textures[0];
         const uint32_t target = present ? 5u : 4u;
-        if (!create_image(target, packet.camera.output_width, packet.camera.output_height, VK_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM)) { stop("Unity Vulkan shared image creation failed; the bridge stopped."); return; }
-        acquire_image(slot.vk[0], target, false);
-        copy(slot.vk[0], texture.image, texture.layout, texture.aspect, images[target].image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, packet.camera.output_width, packet.camera.output_height);
+        if (!create_image(target, packet.camera.output_width, packet.camera.output_height, VK_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM, images[target])) { stop("Unity Vulkan shared image creation failed; the bridge stopped."); return; }
+        acquire_image(slot.vk[0], target, images[target], false);
+        copy(slot.vk[0], texture.image, texture.layout, texture.aspect, images[target].image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, packet.camera.output_width, packet.camera.output_height);
         release_image(slot.vk[0], images[target], false);
     } else for (uint32_t i = 0; i < 4; ++i) {
         if (probe && (i == 1 || i == 2)) continue;
         uint32_t width = i == 3 ? packet.camera.output_width : packet.camera.render_width;
         uint32_t height = i == 3 ? packet.camera.output_height : packet.camera.render_height;
-        if (!create_image(i, width, height, formats[i], dx_formats[i])) { stop("Unity Vulkan shared image creation failed; the bridge stopped."); return; }
-        acquire_image(slot.vk[0], i, false);
+        if (!create_image(i, width, height, formats[i], dx_formats[i], images[i])) { stop("Unity Vulkan shared image creation failed; the bridge stopped."); return; }
+        acquire_image(slot.vk[0], i, images[i], false);
         copy(slot.vk[0], textures[i].image, textures[i].layout, textures[i].aspect,
-            images[i].image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, width, height);
+            images[i].image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, width, height);
         release_image(slot.vk[0], images[i], false);
     }
     if (!upload(slot)) { stop("Unity Vulkan upload submission failed; the bridge stopped."); return; }
     rsf_game_render_pass pass{}; make_pass(packet, pass);
     if (reconfigure) { pass.flags |= RSF_GAME_RENDER_RECONFIGURE; pass.camera_valid = 0; }
     if (present) {
-        pass.role = RSF_GAME_RENDER_WINDOW; pass.color_input = images[5].resource.Get(); pass.flags |= RSF_UNITY_PREVIEW_SOURCE_COMMON;
+        pass.role = RSF_GAME_RENDER_WINDOW; pass.color_input = images[5].resource(); pass.flags |= RSF_UNITY_PREVIEW_SOURCE_COMMON;
         host.render_pass(host.user, queue.Get(), &pass, 1);
     } else if (hudless) {
-        pass.role = RSF_GAME_RENDER_FINAL_SCENE; pass.color_input = images[4].resource.Get();
-        dx_barrier(slot.commands.Get(), images[4].resource.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        pass.role = RSF_GAME_RENDER_FINAL_SCENE; pass.color_input = images[4].resource();
+        dx_barrier(slot.commands.Get(), images[4].resource(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_RENDER_TARGET);
         host.render_pass(host.user, slot.commands.Get(), &pass, 1);
-        dx_barrier(slot.commands.Get(), images[4].resource.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COMMON);
+        dx_barrier(slot.commands.Get(), images[4].resource(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COMMON);
     } else {
         void** pointers[] = {&pass.color_input, &pass.depth, &pass.motion, &pass.color_output};
         for (uint32_t i = 0; i < 4; ++i) if (!(probe && (i == 1 || i == 2))) {
-            *pointers[i] = images[i].resource.Get();
-            dx_barrier(slot.commands.Get(), images[i].resource.Get(), D3D12_RESOURCE_STATE_COMMON,
+            *pointers[i] = images[i].resource();
+            dx_barrier(slot.commands.Get(), images[i].resource(), D3D12_RESOURCE_STATE_COMMON,
                 i == 3 ? D3D12_RESOURCE_STATE_COPY_DEST : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         }
         host.render_pass(host.user, slot.commands.Get(), &pass, 1);
         for (uint32_t i = 0; i < 4; ++i) if (!(probe && (i == 1 || i == 2)))
-            dx_barrier(slot.commands.Get(), images[i].resource.Get(), i == 3 ? D3D12_RESOURCE_STATE_COPY_DEST : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON);
+            dx_barrier(slot.commands.Get(), images[i].resource(), i == 3 ? D3D12_RESOURCE_STATE_COPY_DEST : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COMMON);
         if (!probe && !reconfigure) {
-            acquire_image(slot.vk[1], 3, true);
-            copy(slot.vk[1], images[3].image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT,
+            acquire_image(slot.vk[1], 3, images[3], true);
+            copy(slot.vk[1], images[3].image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT,
                 textures[3].image, textures[3].layout, packet.camera.output_width, packet.camera.output_height);
             release_image(slot.vk[1], images[3], true);
         }
@@ -466,28 +476,29 @@ VKAPI_ATTR VkResult VKAPI_CALL intercept_present(VkQueue vk_queue, const VkPrese
     PresentationLease lease;
     const VkImage presented = from_id<VkImage>(source.image);
     const VkSemaphore present_ready = from_id<VkSemaphore>(source.present_ready);
+    ImageView image;
     if (!found || !configure_chain(window, source.width, source.height) ||
-        !create_image(5, source.width, source.height, VK_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM)) return unchanged();
+        !create_image(5, source.width, source.height, VK_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM, image)) return unchanged();
     const uint32_t ring = rsf_unity_interop_slot(nullptr);
     if (ring >= slots.size()) return unchanged();
     auto& slot = slots[ring]; if (!begin(slot)) return unchanged();
-    acquire_image(slot.vk[0], 5, false);
+    acquire_image(slot.vk[0], 5, image, false);
     image_barrier(slot.vk[0], presented, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
         VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, 0, VK_ACCESS_TRANSFER_READ_BIT);
     VkImageBlit blit{}; blit.srcSubresource = blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     blit.srcOffsets[1] = blit.dstOffsets[1] = {static_cast<int32_t>(source.width), static_cast<int32_t>(source.height), 1};
-    vkCmdBlitImage(slot.vk[0], presented, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, images[5].image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
+    vkCmdBlitImage(slot.vk[0], presented, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, image.image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
     image_barrier(slot.vk[0], presented, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
         VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, VK_ACCESS_TRANSFER_READ_BIT, 0);
-    release_image(slot.vk[0], images[5], false);
+    release_image(slot.vk[0], image, false);
     if (!upload(slot, info->pWaitSemaphores, info->waitSemaphoreCount)) { stop("Unity Vulkan present upload failed; the bridge stopped."); return VK_ERROR_DEVICE_LOST; }
     ComPtr<ID3D12Resource> buffer;
     if (FAILED(chain->GetBuffer(chain->GetCurrentBackBufferIndex(), IID_PPV_ARGS(&buffer)))) { stop("Unity Vulkan swap chain buffer was unavailable; the bridge stopped."); return VK_ERROR_DEVICE_LOST; }
-    dx_barrier(slot.commands.Get(), images[5].resource.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_SOURCE);
+    dx_barrier(slot.commands.Get(), image.resource(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_SOURCE);
     dx_barrier(slot.commands.Get(), buffer.Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_DEST);
-    slot.commands->CopyResource(buffer.Get(), images[5].resource.Get());
+    slot.commands->CopyResource(buffer.Get(), image.resource());
     dx_barrier(slot.commands.Get(), buffer.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT);
-    dx_barrier(slot.commands.Get(), images[5].resource.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
+    dx_barrier(slot.commands.Get(), image.resource(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
     rsf_game_render_pass pass{}; make_pass(frame.packet, pass); pass.role = RSF_GAME_RENDER_WINDOW; pass.swapchain = chain.Get();
     frame.services.render_pass(frame.services.user, queue.Get(), &pass, 1);
     if (!submit(slot, ring, present_ready)) { stop("Unity Vulkan present submission failed; the bridge stopped."); return VK_ERROR_DEVICE_LOST; }

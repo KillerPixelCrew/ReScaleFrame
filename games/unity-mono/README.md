@@ -53,6 +53,9 @@ Rust also tracks the shared Vulkan image plans, publishes first-use layout
 only after queue acceptance and refuses retirement for a partially submitted
 round trip. Lifecycle release checks the bridge fences. Native resize and
 swapchain retirement keep their existing wait calls.
+The Rust image records now retain the created graphics handles. Native
+recording borrows them under the presentation lease. A failed import
+cleans up its partial image before the existing Rust record can change.
 
 The Editor preview uses the same Rust submission-ring logic with its own fence and slots
 (`preview.rs`). Rust selects the containing editor window, tracks visibility and admits

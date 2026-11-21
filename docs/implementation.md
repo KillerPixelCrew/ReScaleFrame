@@ -282,6 +282,12 @@ keeps the bridge retained. Swapchain destruction and render-thread
 resize still use native queue waits. Live device and teardown
 verification remain open.
 
+Unity Vulkan's Rust image owner now retains the D3D12 resource, Vulkan
+image and imported memory together. Native queues borrow a view under
+the presentation lease. Resize installs a complete replacement before
+destroying the old handles, and teardown removes the Rust records
+before releasing the device. The device and replay checks remain open.
+
 AC7's Rust renderer transaction owns prepare, start, quiesce and stop.
 Failed activation keeps any renderer with reachable callbacks, and a
 refused hook disable or removal keeps the renderer available for retry.

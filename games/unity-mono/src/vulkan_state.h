@@ -66,12 +66,20 @@ uint32_t rsf_unity_vulkan_claim_device(void);
 void rsf_unity_vulkan_device_created(uint32_t created);
 uint32_t rsf_unity_vulkan_ready(void);
 
-/* Shared-image plans and per-recording ownership. The native replace callback drains and builds
-   a complete replacement before it commits the graphics handles. */
-typedef bool (*rsf_unity_vulkan_replace_image)(uint32_t index, uint32_t width, uint32_t height,
-    uint32_t format, uint32_t dx_format);
+/* Rust owns these handles. A successful prepare lends a view under the caller's presentation
+   lease. The native create leaf drains and transfers a complete image on success. */
+typedef struct rsf_unity_vulkan_image_handles {
+    void* resource;
+    uint64_t image, memory;
+} rsf_unity_vulkan_image_handles;
+typedef bool (*rsf_unity_vulkan_create_image)(uint32_t width, uint32_t height,
+    uint32_t format, uint32_t dx_format, rsf_unity_vulkan_image_handles*);
+typedef void (*rsf_unity_vulkan_destroy_image)(const rsf_unity_vulkan_image_handles*);
 bool rsf_unity_vulkan_prepare_image(uint32_t index, uint32_t width, uint32_t height,
-    uint32_t format, uint32_t dx_format, rsf_unity_vulkan_replace_image replace);
+    uint32_t format, uint32_t dx_format, rsf_unity_vulkan_image_handles* view,
+    rsf_unity_vulkan_create_image create, rsf_unity_vulkan_destroy_image destroy);
+/* Only failed initialization or closed retirement can remove all images. */
+void rsf_unity_vulkan_clear_images(rsf_unity_vulkan_destroy_image destroy);
 /* Returns whether the recorded transition can start in GENERAL. */
 bool rsf_unity_vulkan_record_image(uint32_t index);
 void rsf_unity_vulkan_begin_recording(void);
