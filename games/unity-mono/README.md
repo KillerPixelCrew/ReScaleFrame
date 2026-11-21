@@ -45,9 +45,12 @@ later step or publication refuses.
 Each Vulkan event and window frame keeps the host services it was admitted with.
 Drain probes hold an entry while reading native slot fences. The Unity instance
 belongs to the shared-device creation and release path.
-The Vulkan loader's original-function slots and the Win32 interop extension
-request are Rust-owned (`vulkan_resolver.rs`). Native code still invokes the typed
-Vulkan functions. The extension request falls back unchanged when preflight
+Unity's Vulkan resolver is Rust-owned (`vulkan_resolver.rs`): the resolver keys
+and their separate instance and device routes, the interceptor table registered
+at initialization, the saved loader functions, the swapchain-destroy fallback
+lookup, the Win32 interop extension selection and the interop readiness check.
+Native code keeps the Vulkan types and invokes the typed loader, enumeration and
+create functions. The extension request falls back unchanged when the device
 cannot supply both names, and readiness is attached to the created device.
 Rust also tracks the shared Vulkan image plans, publishes first-use layout
 only after queue acceptance and refuses retirement for a partially submitted
