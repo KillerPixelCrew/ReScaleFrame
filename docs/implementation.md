@@ -24,6 +24,14 @@ See [the Rust migration record](rust-migration.md#native-policy-cutover).
 
 ## Remaining Rust integration ports
 
+Fallout 4 now admits and publishes its SR inputs and HUD-less scene
+in Rust. Source comparison matched the FRAME and SUBMISSION owner
+checks, SR-off path, and FINAL_SCENE and WINDOW order. The typed
+engine reads, COM identity and Runtime calls remain in the native
+leaves. A null framebuffer texture now refuses the extent check.
+The new fixtures and game checks remain unrun.
+[Fallout 4 publication](research/rust-fallout4-render-hooks.md#sr-and-hudless-publication-in-rust)
+
 Fallout 4's Rust recovery transaction now owns the reservation token,
 five-surface plan and checked SEAL, FINISH and RETIRE requests. The
 adapter retains the original raster reads, COM identity checks and

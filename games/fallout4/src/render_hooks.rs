@@ -4,12 +4,14 @@
 //!
 //! Rust owns the eight hook records (RVA, expected entry bytes and created state), the call-site
 //! and instruction guards, Runtime export negotiation, the live flag and the verify, prepare,
-//! start, quiesce, stop and busy decisions, and the reduced-render recovery transaction
-//! (recovery.rs). render_hooks.cpp keeps each typed detour and its typed MinHook trampoline,
-//! which it calls on its own C++ frame, the callback scope counters, the producer bodies and the
-//! recovery leaves (render_hooks_platform.h). Every value belongs to the exact recognized build;
-//! see docs/research/rust-fallout4-render-hooks.md.
+//! start, quiesce, stop and busy decisions, the reduced-render recovery transaction
+//! (recovery.rs) and SR and HUDless publication (publication.rs). render_hooks.cpp keeps each
+//! typed detour and its typed MinHook trampoline, which it calls on its own C++ frame, the
+//! callback scope counters, the remaining producer bodies and the recovery and publication leaves
+//! (render_hooks_platform.h). Every value belongs to the exact recognized build; see
+//! docs/research/rust-fallout4-render-hooks.md.
 
+mod publication;
 mod recovery;
 
 use crate::cpu_abi::rsf_fallout4_cpu_identity as CpuIdentity;

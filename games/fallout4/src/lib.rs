@@ -4,8 +4,8 @@
 //! creation and presentation binding sequence, the CPU event owner (poll and worker source
 //! handoff, input receipts and their GameSDK facts), native depth-domain admission and
 //! composition, native input/output resolution scopes, the render hook lifecycle with World/Present
-//! admission and the reduced-render recovery transaction, and render-input admission with its
-//! camera history and leased passes.
+//! admission, the reduced-render recovery transaction and SR and HUDless publication, and
+//! render-input admission with its camera history and leased passes.
 //!
 //! Native leaves stay in C++ and reach this crate through rsf_fallout4_platform
 //! (fallout4_platform.h), rsf_fallout4_cpu_platform (cpu_events_platform.h), the render hook

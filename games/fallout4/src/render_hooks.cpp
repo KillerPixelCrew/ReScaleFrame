@@ -56,6 +56,10 @@ struct World {
     // Recovery leases. Rust (render_hooks/recovery.rs) owns the token and decides adoption and
     // release; the candidate lives only for one Rust step.
     NativeInputs recovery_inputs{}, recovery_candidate{};
+    // SR input and HUDless framebuffer leases. Rust (render_hooks/publication.rs) releases each
+    // when its step returns, as the former stack leases ended.
+    NativeInputs sr_inputs{};
+    NativeFramebuffer hudless{};
     bool full_output_resolved{};
     rsf_d3d11_auxiliary_scope auxiliary_scope{};
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
@@ -89,14 +93,10 @@ bool same_source() {
 void notify(const rsf_game_render_pass& pass, void* context, uint32_t begin) noexcept {
     if (host.render_pass) try { host.render_pass(host.user, context, &pass, begin); } catch (...) {}
 }
-void identify(rsf_game_render_pass& pass) {
-    pass.session_id = world.cpu.session;
-    pass.source_frame_id = world.cpu.source;
-    pass.submission_id = pass.scope_id = world.cpu.submission;
-    pass.flags |= RSF_GAME_RENDER_PRIMARY | RSF_GAME_RENDER_AFTER_SIMULATION | RSF_GAME_RENDER_NO_FG;
-    pass.screen = RSF_SCREEN_UNKNOWN;
-    // The admitted ordinary WorldBegin follows the native update/redraw work.
-    // This constructor fact does not report a SIM_END or classify gameplay.
+// Rust owns the pass identity (render_hooks/publication.rs).
+void identify(rsf_game_render_pass& pass) noexcept {
+    const auto cpu=cpu_identity_abi(world.cpu);
+    rsf_fallout4_render_identify(&pass,&cpu);
 }
 struct Owner {
     uintptr_t renderer{}, device{}, context{}, chain{}, window{}, graph{}, view{};
@@ -147,24 +147,6 @@ bool begin_render_scope() {
         report("Fallout4 native FRAME/SUBMISSION begin before ordinary WorldBegin; screen/input eligibility not inferred.");
     return true;
 }
-void screen_facts(rsf_game_render_pass& pass, bool first) {
-    const auto facts=classify_native_screen(world.cpu,world.screen_basis,true);
-    if (first) {
-        world.screen=facts;
-        char message[180]{};
-        std::snprintf(message,sizeof(message),"Fallout4 screen facts source=%llu native=%llu screen=%u facts=0x%x refusals=0x%x camera=%u",
-            static_cast<unsigned long long>(world.cpu.source),static_cast<unsigned long long>(pass.native_frame),
-            facts.screen,facts.facts,facts.refusals,facts.camera_index);
-        static std::atomic<uint32_t> receipts{};
-        if (receipts.fetch_add(1, std::memory_order_relaxed) < 8) report(message);
-    }
-    if (facts.refusals || facts.screen!=RSF_SCREEN_GAMEPLAY || !same_source() ||
-        facts.screen!=world.screen.screen || facts.facts!=world.screen.facts || facts.camera_state!=world.screen.camera_state ||
-        !world.frame_open || !world.submission_open) world.refused=true;
-    pass.screen=facts.screen;
-    if (world.refused) pass.flags|=RSF_GAME_RENDER_NO_FG;
-    else pass.flags&=~RSF_GAME_RENDER_NO_FG;
-}
 void close_submission() {
     if (!world.submission_open) return;
     if (world.refused) world.submission_pass.flags|=RSF_GAME_RENDER_NO_FG;
@@ -198,13 +180,16 @@ bool recovery_read_raster(bool producer) noexcept {
     return world.raster_snapshot.raster_valid &&
         read_native_raster_inputs(world.recovery_candidate,world.frame_pass,&world.raster_snapshot);
 }
-bool recovery_same_resources(bool owners) noexcept {
-    const auto& current=world.recovery_candidate;
-    const auto& held=world.recovery_inputs;
+// Colour, depth, motion, Pip-Boy, VATS and refraction COM identity, in that order; owners adds
+// Context and chain first.
+bool same_resources(const NativeInputs& current, const NativeInputs& held, bool owners) noexcept {
     return (!owners || (same_object(current.context.Get(),held.context.Get()) && same_object(current.chain.Get(),held.chain.Get()))) &&
         same_object(current.colour.Get(),held.colour.Get()) && same_object(current.depth.Get(),held.depth.Get()) &&
         same_object(current.motion.Get(),held.motion.Get()) && same_object(current.pipboy.Get(),held.pipboy.Get()) &&
         same_object(current.vats.Get(),held.vats.Get()) && same_object(current.refraction_normals.Get(),held.refraction_normals.Get());
+}
+bool recovery_same_resources(bool owners) noexcept {
+    return same_resources(world.recovery_candidate,world.recovery_inputs,owners);
 }
 void recovery_adopt(const int32_t* render_rect) noexcept {
     auto& current=world.recovery_candidate;
@@ -240,8 +225,6 @@ bool recovery_owned() noexcept { return rsf_fallout4_recovery_token()!=0; }
 bool reserve_recovery(const rsf_game_render_pass& planned) noexcept {
     return rsf_fallout4_recovery_reserve(&recovery_leaves,&planned);
 }
-bool seal_recovery() noexcept { return rsf_fallout4_recovery_seal(&recovery_leaves); }
-bool finish_recovery() noexcept { return rsf_fallout4_recovery_finish(&recovery_leaves); }
 bool retire_recovery() noexcept { return rsf_fallout4_recovery_retire(&recovery_leaves); }
 bool auxiliary_colour(ID3D11Texture2D* texture, const NativeInputs& inputs) {
     if (!texture) return false;
@@ -297,129 +280,94 @@ int32_t reconstruct(NativeInputs& inputs, const rsf_game_render_pass& pass) {
     if (result!=RSF_OK && !recovery_owned()) (void)drain_auxiliaries();
     return result;
 }
-bool emit_sr() {
-    // Seal originals before any temporal reader, CPU attribution or screen gate.
-    const bool sealed=seal_recovery();
-    struct Resolve { ~Resolve() { (void)finish_recovery(); } } resolve;
-    if (!sealed) { world.refused=true; return false; }
-    if (!live() || !world.in_imagespace || !same_source() || world.inputs || world.raster_refused || world.auxiliary_open || !host.process_upscale) return false;
-    NativeInputs inputs;
-    if (!read_native_inputs(inputs, report, &world.depth_snapshot)) return false;
-    if (recovery_owned() && (!same_object(inputs.colour.Get(),world.recovery_inputs.colour.Get()) ||
-        !same_object(inputs.depth.Get(),world.recovery_inputs.depth.Get()) || !same_object(inputs.motion.Get(),world.recovery_inputs.motion.Get()) ||
-        !same_object(inputs.pipboy.Get(),world.recovery_inputs.pipboy.Get()) || !same_object(inputs.vats.Get(),world.recovery_inputs.vats.Get()) ||
-        !same_object(inputs.refraction_normals.Get(),world.recovery_inputs.refraction_normals.Get()))) return false;
-    auto pass = inputs.pass;
-    identify(pass);
-    pass.role = RSF_GAME_RENDER_SR;
-    pass.pass_key = image() + 0x21fa283;
-    if (!native_resolution_inputs(pass)) {
-        diagnostic("Fallout4 SR refused: actual producer LTRB crop/camera/output extents disagree.");
-        return false;
-    }
-    if (!world.frame_open || pass.native_frame!=world.frame_pass.native_frame ||
-        pass.view_key!=world.frame_pass.view_key || pass.window_key!=world.frame_pass.window_key ||
-        inputs.context.Get()!=world.context.Get() || inputs.chain.Get()!=world.chain.Get()) {
-        world.refused=true;
-        diagnostic("Fallout4 SR refused: native lease differs from the pre-world FRAME/SUBMISSION owner.");
-        return false;
-    }
-    if (!world.depth_snapshot.valid ||
-        !make_native_depth_domains(world.depth_snapshot, world.cpu, pass, pass.depth_domains, report)) {
-        world.refused = true;
-        diagnostic("Fallout4 temporal publication refused: same-source native prepass depth mapping unavailable; raw mixed depth not substituted.");
-        return false;
-    }
-    auto planning = pass;
-    planning.flags |= RSF_GAME_RENDER_RECONFIGURE;
-    try { (void)host.process_upscale(host.user, inputs.context.Get(), &planning); } catch (...) { return false; }
-    rsf_game_render_config requested{sizeof(requested)};
-    const bool sr_off=host.render_config && host.render_config(host.user,&requested) && !requested.enabled &&
-        requested.output_width==pass.camera.output_width && requested.output_height==pass.camera.output_height;
-    world.colour=inputs.colour; world.depth=inputs.depth; world.motion=inputs.motion;
-    world.screen_basis=pass;
-    auto fg = pass;
-    screen_facts(fg,true);
-    if (world.screen.refusals || world.screen.screen!=RSF_SCREEN_GAMEPLAY || !same_source()) return false;
-    pass.screen = fg.screen; // SR and diagnostic consumers receive the same verified screen fact.
-    fg.role = RSF_GAME_RENDER_FG_INPUTS;
-    notify(fg, inputs.context.Get(), 1);
-    notify(fg, inputs.context.Get(), 0);
-    if (!same_source()) { world.refused = true; return false; }
-    // The host normalizes and retains these contents synchronously before SR.
-    // No borrowed resource pointer survives in the scalar identity below.
-    world.pass = fg;
-    world.pass.color_input = world.pass.color_output = world.pass.color_output_readable = nullptr;
-    world.pass.depth = world.pass.motion = world.pass.exposure = nullptr;
-    world.pass.swapchain = world.pass.ui_input = world.pass.scene_surface = world.pass.sampled_texture = nullptr;
-    world.pass.native_frame_context = world.pass.temporal_mask = nullptr;
-    world.context = inputs.context;
-    world.chain = inputs.chain;
-    world.inputs = true;
-    if (sr_off) return false; // Keep actual FG/native output facts, with no SR/output-state mutation.
-    if (!begin_output_resolution(world.depth_snapshot,pass)) {
-        report_resolution_state(ResolutionStage::output_ready,pass,inputs.context.Get(),false,RSF_ERROR_NOT_READY,report);
-        world.refused=true; return false;
-    }
-    report_resolution_state(ResolutionStage::output_ready,pass,inputs.context.Get(),false,RSF_OK,report);
-    int32_t result = RSF_ERROR_NOT_READY;
-    try { result = reconstruct(inputs,pass); } catch (...) { (void)drain_auxiliaries(); }
-    report_resolution_state(ResolutionStage::evaluated,pass,inputs.context.Get(),result==RSF_OK,result,report);
-    if (result != RSF_OK) {
-        // A sealed ticket owns rollback/recovery; retain its output scope until
-        // FINISH so spatial resolution is not followed by reduced selectors.
-        if (!recovery_owned() && !end_output_resolution()) world.refused=true;
-        return false;
-    }
-    world.published = true;
-    if (!recovery_owned()) world.full_output_resolved=true;
-    diagnostic("Fallout4 producer-verified SR publication accepted before imagespace; scoped native output/auxiliary consumers active, FG remains unproven.");
+// SR and HUDless publication leaves (render_hooks_platform.h). Rust (render_hooks/publication.rs)
+// sequences both seams and decides every refusal; these read the World, hold the SR input and
+// HUDless framebuffer leases, compare COM identity and guard the Runtime calls.
+static_assert(sizeof(NativeScreen)==24 && offsetof(NativeScreen,camera_state)==16);
+static_assert(int(ResolutionStage::output_ready)==1 && int(ResolutionStage::evaluated)==2);
+void publication_world(NativePublicationWorld* out) noexcept {
+    *out={cpu_identity_abi(world.cpu),&world.pass,&world.frame_pass,&world.screen_basis,world.context.Get(),
+        world.chain.Get(),host.process_upscale!=nullptr,world.in_imagespace,world.inputs,world.window_open,
+        world.frame_open,world.submission_open,world.refused,world.raster_refused,world.auxiliary_open,
+        world.depth_snapshot.valid};
+}
+bool publication_read_inputs() noexcept {
+    world.sr_inputs={};
+    return read_native_inputs(world.sr_inputs,report,&world.depth_snapshot);
+}
+void publication_inputs(NativePublicationInputs* out) noexcept {
+    *out={&world.sr_inputs.pass,world.sr_inputs.context.Get(),world.sr_inputs.chain.Get()};
+}
+void publication_release_inputs() noexcept { world.sr_inputs={}; }
+bool publication_same_recovery_resources() noexcept {
+    return same_resources(world.sr_inputs,world.recovery_inputs,false);
+}
+bool publication_depth_domains(rsf_game_render_pass* pass) noexcept {
+    return make_native_depth_domains(world.depth_snapshot,world.cpu,*pass,pass->depth_domains,report);
+}
+bool publication_plan(const rsf_game_render_pass* planning) noexcept {
+    try { (void)host.process_upscale(host.user,world.sr_inputs.context.Get(),planning); } catch (...) { return false; }
     return true;
 }
-void emit_hudless() {
-    if (!world.in_imagespace || !world.inputs || world.window_open || !same_source()) return;
-    NativeFramebuffer frame;
-    const auto refuse=[&](unsigned stage, const char* name) {
-        static std::atomic<uint32_t> reported{};
-        if (reported.fetch_or(uint32_t(1)<<stage,std::memory_order_relaxed)&(uint32_t(1)<<stage)) return;
-        char message[700]{};
-        std::snprintf(message,sizeof(message),
-            "Fallout4 HUDless stage=%s source=%llu native=%llu/%llu frame_basis=%llu screen_basis=%llu window=%p/%p context=%p/%p outer_chain=%p/%p",
-            name,static_cast<unsigned long long>(world.cpu.source),
-            static_cast<unsigned long long>(frame.native_frame),static_cast<unsigned long long>(world.pass.native_frame),
-            static_cast<unsigned long long>(world.frame_pass.native_frame),static_cast<unsigned long long>(world.screen_basis.native_frame),
-            reinterpret_cast<void*>(frame.window_key),reinterpret_cast<void*>(world.pass.window_key),
-            static_cast<void*>(frame.context.Get()),static_cast<void*>(world.context.Get()),
-            static_cast<void*>(frame.chain.Get()),static_cast<void*>(world.chain.Get()));
-        report(message);
-    };
-    // A failed logical-0 read is not evidence that any identity comparison failed.
-    if (!read_native_framebuffer(frame,report)) { refuse(0,"framebuffer-read"); return; }
-    if (frame.native_frame!=world.pass.native_frame) { refuse(1,"native-frame"); return; }
-    if (frame.window_key!=world.pass.window_key) { refuse(2,"window"); return; }
-    if (frame.context.Get()!=world.context.Get()) { refuse(3,"context"); return; }
-    if (frame.chain.Get()!=world.chain.Get()) { refuse(4,"outer-chain"); return; }
-    D3D11_TEXTURE2D_DESC description{};
-    frame.texture->GetDesc(&description);
-    if (description.Width != world.pass.camera.output_width || description.Height != world.pass.camera.output_height || description.SampleDesc.Count != 1) {
-        refuse(5,"output-extent"); return;
-    }
-    auto final = world.pass;
-    screen_facts(final,false);
-    final.role = RSF_GAME_RENDER_FINAL_SCENE;
-    final.scene_surface = frame.texture.Get();
-    final.swapchain = world.chain.Get();
-    notify(final, world.context.Get(), 1);
-    notify(final, world.context.Get(), 0);
-    world.final_colour = frame.texture;
-    world.pass=final;
-    world.pass.role = RSF_GAME_RENDER_WINDOW;
-    world.pass.swapchain = world.chain.Get();
-    world.pass.scene_surface = nullptr;
-    world.window_open = true;
-    windows.fetch_add(1, std::memory_order_acq_rel);
-    notify(world.pass, world.context.Get(), 1);
+int32_t publication_render_config(rsf_game_render_config* config) noexcept {
+    try { return host.render_config && host.render_config(host.user,config) ? 1 : 0; } catch (...) { return -1; }
 }
+void publication_retain_inputs(const rsf_game_render_pass* basis) noexcept {
+    world.colour=world.sr_inputs.colour; world.depth=world.sr_inputs.depth; world.motion=world.sr_inputs.motion;
+    world.screen_basis=*basis;
+}
+void publication_classify(bool first, NativeScreen* current, NativeScreen* leased) noexcept {
+    *current=classify_native_screen(world.cpu,world.screen_basis,true);
+    if (first) world.screen=*current;
+    *leased=world.screen;
+}
+void publication_notify(const rsf_game_render_pass* pass, void* context, uint32_t begin) noexcept {
+    notify(*pass,context,begin);
+}
+void publication_publish_inputs(const rsf_game_render_pass* scalar) noexcept {
+    world.pass=*scalar;
+    world.context=world.sr_inputs.context;
+    world.chain=world.sr_inputs.chain;
+    world.inputs=true;
+}
+bool publication_begin_output(const rsf_game_render_pass* pass) noexcept {
+    return begin_output_resolution(world.depth_snapshot,*pass);
+}
+void publication_report_state(uint32_t stage, const rsf_game_render_pass* pass, void* context, bool published,
+    int32_t result) noexcept {
+    report_resolution_state(static_cast<ResolutionStage>(stage),*pass,context,published,result,report);
+}
+int32_t publication_reconstruct(const rsf_game_render_pass* pass) noexcept {
+    int32_t result=RSF_ERROR_NOT_READY;
+    try { result=reconstruct(world.sr_inputs,*pass); } catch (...) { (void)drain_auxiliaries(); }
+    return result;
+}
+bool publication_read_framebuffer() noexcept {
+    world.hudless={};
+    return read_native_framebuffer(world.hudless,report);
+}
+void publication_framebuffer(NativePublicationFramebuffer* out) noexcept {
+    *out={world.hudless.context.Get(),world.hudless.chain.Get(),world.hudless.texture.Get(),
+        world.hudless.native_frame,world.hudless.window_key};
+}
+void publication_framebuffer_extent(uint32_t extent[3]) noexcept {
+    D3D11_TEXTURE2D_DESC description{};
+    if (world.hudless.texture) world.hudless.texture->GetDesc(&description);
+    extent[0]=description.Width; extent[1]=description.Height; extent[2]=description.SampleDesc.Count;
+}
+void publication_release_framebuffer() noexcept { world.hudless={}; }
+void publication_publish_window(const rsf_game_render_pass* window) noexcept {
+    world.final_colour=world.hudless.texture;
+    world.pass=*window;
+    world.window_open=true;
+    windows.fetch_add(1,std::memory_order_acq_rel);
+}
+constexpr NativePublicationLeaves publication_leaves{publication_world, diagnostic, publication_read_inputs,
+    publication_inputs, publication_release_inputs, publication_same_recovery_resources, publication_depth_domains,
+    publication_plan, publication_render_config, publication_retain_inputs, publication_classify,
+    publication_notify, publication_publish_inputs, publication_begin_output, publication_report_state,
+    publication_reconstruct, end_output_resolution, publication_read_framebuffer, publication_framebuffer,
+    publication_framebuffer_extent, publication_release_framebuffer, publication_publish_window};
 void observe_viewport(void* manager, bool enabled) {
     Entry entry;
 #if defined(_MSC_VER)
@@ -436,7 +384,7 @@ void observe_viewport(void* manager, bool enabled) {
     if (live() && manager == reinterpret_cast<void*>(image() + 0x2f4d750)) {
         if (caller == image() + 0x21fa2ca) {
             report_resolution_state(ResolutionStage::hudless,world.inputs ? world.pass : world.frame_pass,world.context.Get(),world.published,RSF_OK,report);
-            try { emit_hudless(); } catch (...) { diagnostic("Fallout4 HUDless callback failed; native drawing retained."); }
+            rsf_fallout4_render_emit_hudless(&publication_leaves,&recovery_leaves);
         }
     }
     SetLastError(error);
@@ -583,7 +531,8 @@ void observe_effects(void* manager, uint32_t first, uint32_t last, uint32_t mode
     if ((live() || recovery_owned()) && caller == image() + 0x21fa288 && first == 0 && last == 13 && mode == 1 && flags == 1 &&
         read(image() + 0x3e5e4b0, &native_manager, sizeof(native_manager)) && uintptr_t(manager) == native_manager) {
         report_resolution_state(ResolutionStage::pre_sr,world.frame_pass,world.context.Get(),world.published,RSF_ERROR_NOT_READY,report);
-        try { (void)emit_sr(); } catch (...) { diagnostic("Fallout4 SR callback failed; native imagespace retained."); }
+        if (rsf_fallout4_render_emit_sr(&publication_leaves,&recovery_leaves)==NativeSrOutcome::failed)
+            diagnostic("Fallout4 SR callback failed; native imagespace retained.");
     }
     SetLastError(error);
     effects(manager, first, last, mode, flags);
@@ -650,7 +599,7 @@ void capture_recovery_output() {
     }
 }
 bool revalidate_present_screen() noexcept {
-    if (world.inputs) screen_facts(world.pass,false);
+    if (world.inputs) rsf_fallout4_render_screen_facts(&publication_leaves,&recovery_leaves,&world.pass,false);
     return world.refused;
 }
 void observe_native_present(void* renderer) {
