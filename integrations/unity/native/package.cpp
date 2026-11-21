@@ -1,13 +1,15 @@
 #include <rescaleframe/native_cpu.h>
 // SPDX-License-Identifier: MIT
 // The settings, status snapshot, render plan, temporal readiness, pending reconfiguration,
-// session lifecycle, the D3D12 SR views with their recording slots, and the presentation (the
-// package identity, the generation install and the window pass's provider request) are Rust
-// (games/unity-mono/src/package_state.rs, package_views.rs and package_state/presentation.rs,
-// through package_state.h). This file keeps the Unity, DXGI, Vulkan and preview work, the render
-// callback's routing, the window guard, the input window and the log, and lends the typed SDK
-// and Runtime calls through rsf_unity_package_platform. Its mutex still serializes the exports
-// and the SR pass where it did.
+// session lifecycle, the D3D12 SR views with their recording slots, the presentation (the
+// package identity, the generation install and the window pass's provider request) and the
+// session services (each session's host services and bridge API, the log, the input window and
+// the routing of CPU events, window messages and rsfu_input) are Rust
+// (games/unity-mono/src/package_state.rs, package_views.rs, package_state/presentation.rs and
+// package_state/services.rs, through package_state.h). This file keeps the Unity, DXGI, Vulkan
+// and preview work, the render callback's routing and the window guard, and lends the typed
+// Win32, SDK and Runtime calls through rsf_unity_package_platform. Its mutex still serializes the
+// exports and the SR pass where it did.
 #include "package.h"
 #include "bridge.h"
 #include "vulkan_bridge.h"
@@ -15,7 +17,6 @@
 #include <rescaleframe/native_sr_d3d12.h>
 #include <rescaleframe/native_fg_d3d12.h>
 #include <rescaleframe/gpu_policy.h>
-#include <rescaleframe/unity_runtime_config.h>
 #include <rescaleframe/fg_choice.h>
 #include <windows.h>
 #include <d3d12.h>
@@ -27,7 +28,6 @@
 #include <string>
 #include <cstdio>
 #include <cstring>
-#include <atomic>
 
 extern "C" void UNITY_INTERFACE_API rsf_unity_package_bridge_load(IUnityInterfaces*);
 extern "C" void UNITY_INTERFACE_API rsf_unity_package_bridge_unload();
@@ -35,62 +35,86 @@ extern "C" int rsf_unity_set_engine_spatial(uint32_t, uint32_t) noexcept;
 
 // package_abi.rs mirrors these layouts and constants.
 static_assert(sizeof(rsf_unity_package_settings) == 100 && sizeof(rsf_unity_package_status) == 184);
-static_assert(sizeof(rsf_unity_frame_counters) == 40 && sizeof(rsf_unity_package_platform) == 224);
+static_assert(sizeof(rsf_unity_frame_counters) == 40 && sizeof(rsf_unity_package_platform) == 344);
 static_assert(sizeof(rsf_native_fg_status) == 352 && sizeof(rsf_native_latency_status) == 152);
 static_assert(sizeof(rsf_native_fg_options) == 24 && RSF_BACKEND_OK == 0);
 static_assert(RSF_FG_STAT_TOTAL_PRESENTED == 1 && RSF_SR_NONE == 0);
 static_assert(sizeof(rsf_unity_package_view_setup) == 88 && RSF_SCREEN_MENU == 1 && RSF_SCREEN_FLIGHT == 4);
 // generation.rs builds the install; runtime_abi.rs mirrors rsf_fg12_setup.
 static_assert(sizeof(rsf_fg12_setup) == 152 && RSF_DLSS_ENGINE_UNITY == 2);
+// services.rs mirrors rsfu_input's results, the host services and the input classification.
+static_assert(RSF_BACKEND_ERROR_INVALID_ARGUMENT == -1 && RSF_BACKEND_ERROR_FEATURE_FAILED == -9);
+static_assert(sizeof(rsf_game_host_services) == 104 && sizeof(rsf_unity_native_api) == 72 && sizeof(wchar_t) == 2);
+static_assert(WM_INPUT == 0x00FF && WM_KEYFIRST == 0x0100 && WM_KEYLAST == 0x0109);
+static_assert(WM_MOUSEFIRST == 0x0200 && WM_MOUSELAST == 0x020E && RIM_TYPEMOUSE == 0 && RIM_TYPEKEYBOARD == 1);
 
 namespace {
 using Microsoft::WRL::ComPtr;
 std::mutex guard;
-rsf_unity_native_api api{};
 std::wstring ini;
 bool editor = false;
 IUnityInterfaces* registry = nullptr;
 IUnityGraphics* graphics = nullptr;
-HANDLE log_file = INVALID_HANDLE_VALUE;
-std::mutex logging;
-HWND input_window = nullptr;
-WNDPROC previous_proc = nullptr;
-std::atomic<uint64_t> input_frame{0};
+// The table, defined below; the log, window procedure and exports hand it to Rust.
+const rsf_unity_package_platform* leaves() noexcept;
+// The hooked input window's procedure: services.rs reports the message and names the procedure
+// it goes on to.
 LRESULT CALLBACK input_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 {
-    uint32_t kind=0;
-    if (message>=WM_KEYFIRST && message<=WM_KEYLAST) kind=RSF_GAME_INPUT_KEYBOARD;
-    if (message>=WM_MOUSEFIRST && message<=WM_MOUSELAST) kind=RSF_GAME_INPUT_MOUSE;
-    if (message==WM_INPUT) {
-        RAWINPUTHEADER header{}; UINT bytes=sizeof(header);
-        if (GetRawInputData(reinterpret_cast<HRAWINPUT>(lparam),RID_HEADER,&header,&bytes,sizeof(header))==sizeof(header))
-            kind=header.dwType==RIM_TYPEKEYBOARD ? RSF_GAME_INPUT_KEYBOARD : header.dwType==RIM_TYPEMOUSE ? RSF_GAME_INPUT_MOUSE : 0;
-    }
-    LARGE_INTEGER now{},frequency{}; QueryPerformanceCounter(&now); QueryPerformanceFrequency(&frequency);
-    const auto source=input_frame.load();
-    rsf_game_cpu_event fact{sizeof(fact),RSF_GAME_CPU_INPUT_EVENT,api.session_id,source,uint64_t(now.QuadPart),
-        uint64_t(frequency.QuadPart),0,kind,message,RSF_GAME_CPU_EVENT_VERSION,
-        RSF_GAME_CPU_INPUT_KEYED | RSF_GAME_CPU_WINDOW_MESSAGE | (!source && kind ? RSF_GAME_CPU_INPUT_UNFRAMED : 0u)};
-    rsf_fg12_cpu(&fact);
-    return previous_proc ? CallWindowProcW(previous_proc, hwnd, message, wparam, lparam) : DefWindowProcW(hwnd, message, wparam, lparam);
+    const auto previous = reinterpret_cast<WNDPROC>(rsf_unity_package_window_message(message, lparam, leaves()));
+    return previous ? CallWindowProcW(previous, hwnd, message, wparam, lparam) : DefWindowProcW(hwnd, message, wparam, lparam);
 }
-BOOL CALLBACK find_input_window(HWND hwnd, LPARAM)
+// rsf_unity_package_platform's input-window leaves.
+BOOL CALLBACK find_player_window(HWND hwnd, LPARAM found)
 {
     DWORD process = 0; wchar_t name[64]{}; GetWindowThreadProcessId(hwnd, &process);
     if (process != GetCurrentProcessId() || !GetClassNameW(hwnd, name, 64) || std::wcscmp(name, L"UnityWndClass") != 0) return TRUE;
-    input_window = hwnd;
-    previous_proc = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(input_proc)));
+    *reinterpret_cast<HWND*>(found) = hwnd;
     return FALSE;
 }
-void log(void*, const char* text)
+void* player_window() noexcept
 {
-    if (!text) return;
-    std::lock_guard<std::mutex> lock(logging);
+    HWND found = nullptr; EnumWindows(find_player_window, reinterpret_cast<LPARAM>(&found)); return found;
+}
+void* subclass(void* window) noexcept
+{
+    return reinterpret_cast<void*>(SetWindowLongPtrW(static_cast<HWND>(window), GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(input_proc)));
+}
+void restore(void* window, void* previous) noexcept
+{
+    if (reinterpret_cast<WNDPROC>(GetWindowLongPtrW(static_cast<HWND>(window), GWLP_WNDPROC)) == input_proc)
+        SetWindowLongPtrW(static_cast<HWND>(window), GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(previous));
+}
+uint32_t raw_input_type(intptr_t lparam, uint32_t* type) noexcept
+{
+    RAWINPUTHEADER header{}; UINT bytes = sizeof(header);
+    if (GetRawInputData(reinterpret_cast<HRAWINPUT>(lparam), RID_HEADER, &header, &bytes, sizeof(header)) != sizeof(header)) return 0;
+    *type = header.dwType; return 1;
+}
+void timestamp(uint64_t* counter, uint64_t* frequency) noexcept
+{
+    LARGE_INTEGER now{}, ticks{}; QueryPerformanceCounter(&now); QueryPerformanceFrequency(&ticks);
+    *counter = uint64_t(now.QuadPart); *frequency = uint64_t(ticks.QuadPart);
+}
+// rsf_unity_package_platform's log leaves. log is the package log in the Runtime's form.
+void log(void*, const char* text) { rsf_unity_package_log(text, leaves()); }
+uint32_t local_app_data(wchar_t* output, uint32_t capacity) noexcept
+{
+    const DWORD length = GetEnvironmentVariableW(L"LOCALAPPDATA", output, capacity);
+    return length < capacity ? length : 0;
+}
+void* log_open(const wchar_t* path) noexcept
+{
+    const HANDLE file = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    return file == INVALID_HANDLE_VALUE ? nullptr : file;
+}
+void log_write(void* file, const char* text) noexcept
+{
     OutputDebugStringA(text); OutputDebugStringA("\n");
-    if (log_file != INVALID_HANDLE_VALUE) {
+    if (file) {
         DWORD written = 0;
-        WriteFile(log_file, text, static_cast<DWORD>(std::strlen(text)), &written, nullptr);
-        WriteFile(log_file, "\r\n", 2, &written, nullptr);
+        WriteFile(file, text, static_cast<DWORD>(std::strlen(text)), &written, nullptr);
+        WriteFile(file, "\r\n", 2, &written, nullptr);
     }
 }
 // rsf_unity_package_platform::accept_window, generation's window guard.
@@ -151,7 +175,7 @@ uint32_t fg_default_backend(uint32_t* backend) noexcept
 }
 void render_sr(void* commands, const rsf_game_render_pass* pass);
 void request_generation();
-void install_presentation();
+// rsf_unity_package_platform::render_pass, the host services' render callback.
 void render(void*, void* commands, const rsf_game_render_pass* original, uint32_t begin)
 {
     if (!commands || !original) return;
@@ -182,34 +206,10 @@ void render(void*, void* commands, const rsf_game_render_pass* original, uint32_
     }
     render_sr(commands, original);
 }
-void cpu_event(void*, const rsf_game_cpu_event* event) {
-    if (!event) return;
-    if (event->stage==RSF_GAME_CPU_FRAME_BEGIN) input_frame.store(event->source_frame_id);
-    rsf_fg12_cpu(event);
-    if (event->stage==RSF_GAME_CPU_FRAME_END) input_frame.store(0);
-}
-// rsf_unity_package_platform::open: everything rsfu_initialize set up between storing the
-// session's identity and activating the bridge.
-uint32_t open_session() noexcept try
+// rsf_unity_package_platform::vulkan_surface: services.rs asks only in the player.
+uint32_t vulkan_surface() noexcept try
 {
-    if (log_file == INVALID_HANDLE_VALUE) {
-        wchar_t local[32768]{};
-        if (GetEnvironmentVariableW(L"LOCALAPPDATA", local, 32768)) {
-            std::wstring directory(local); directory += L"\\ReScaleFrame"; CreateDirectoryW(directory.c_str(), nullptr);
-            directory += L"\\Unity"; CreateDirectoryW(directory.c_str(), nullptr);
-            const auto file = directory + L"\\" + std::to_wstring(GetCurrentProcessId()) + L".log";
-            log_file = CreateFileW(file.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-        }
-    }
-    if (editor) install_presentation();
-    if (!editor && !input_window) EnumWindows(find_input_window, 0);
-    if (graphics && graphics->GetRenderer() == kUnityGfxRendererVulkan && !editor && !rsf_uvk_create_window()) {
-        log(nullptr, "Unity Vulkan presentation surface could not initialize on the window thread."); return 0;
-    }
-    rsf_game_host_services services{}; services.struct_size = sizeof(services); services.abi_version = RSF_GAME_ABI_VERSION;
-    services.session_id = GetTickCount64() + 1; services.log = log; services.render_pass = render;
-    services.render_config = configuration; services.cpu_event = cpu_event;
-    return rsf_unity_bridge_prepare(services, &api) ? 1u : 0u;
+    return !(graphics && graphics->GetRenderer() == kUnityGfxRendererVulkan) || rsf_uvk_create_window() ? 1u : 0u;
 } catch (...) { return 0; }
 constexpr rsf_unity_package_platform platform{
     [](const rsf_sharpening_options* options) noexcept -> uint32_t { return rsf::sharpening_settings::valid(*options) ? 1u : 0u; },
@@ -221,10 +221,9 @@ constexpr rsf_unity_package_platform platform{
     []() noexcept { return rsf_d3d11_present_backend(); },
     []() noexcept { return rsf_d3d11_present_switch_result(); },
     []() noexcept { return rsf_d3d11_present_generation(); },
-    open_session,
     [](uint32_t enabled) noexcept { rsf_unity_bridge_activate(enabled != 0); },
     []() noexcept -> uint32_t { return rsf_unity_bridge_drained() ? 1u : 0u; },
-    []() noexcept -> uint32_t { return rsf_fg12_end_session(api.session_id) ? 1u : 0u; },
+    [](uint64_t session) noexcept -> uint32_t { return rsf_fg12_end_session(session) ? 1u : 0u; },
     sr_default_backend,
     sr_create,
     [](const rsf_sr12* sr, uint32_t* width, uint32_t* height) noexcept -> int32_t { return rsf_sr12_plan(sr, width, height); },
@@ -234,7 +233,6 @@ constexpr rsf_unity_package_platform platform{
         return rsf_sr12_evaluate(sr, commands, pass, slot);
     },
     [](rsf_sr12* sr) noexcept { rsf_sr12_destroy(sr); },
-    [](const char* text) noexcept { log(nullptr, text); },
     []() noexcept { rsf_unity_bridge_release(); },
     accept,
     log,
@@ -242,7 +240,27 @@ constexpr rsf_unity_package_platform platform{
     []() noexcept -> uint32_t { return rsf_d3d11_present_has_owner() ? 1u : 0u; },
     [](uint32_t backend) noexcept -> int32_t { return rsf_d3d11_present_request(backend); },
     fg_default_backend,
+    vulkan_surface,
+    []() noexcept -> uint64_t { return GetTickCount64(); },
+    render,
+    configuration,
+    [](const rsf_game_host_services* services, rsf_unity_native_api* api) noexcept -> uint32_t {
+        return rsf_unity_bridge_prepare(*services, api) ? 1u : 0u;
+    },
+    local_app_data,
+    [](const wchar_t* path) noexcept { CreateDirectoryW(path, nullptr); },
+    log_open,
+    log_write,
+    [](void* file) noexcept { CloseHandle(file); },
+    player_window,
+    []() noexcept { return rsf_unity_preview_parent(); },
+    subclass,
+    restore,
+    raw_input_type,
+    timestamp,
+    [](const rsf_game_cpu_event* event) noexcept { rsf_fg12_cpu(event); },
 };
+const rsf_unity_package_platform* leaves() noexcept { return &platform; }
 void render_sr(void* commands, const rsf_game_render_pass* pass)
 {
     std::lock_guard<std::mutex> lock(guard); rsf_unity_package_render(commands, pass, &platform);
@@ -250,7 +268,6 @@ void render_sr(void* commands, const rsf_game_render_pass* pass)
 // The window pass's request stays outside the mutex, which only wrapped its settings read and
 // result store; Rust's state lock covers both now. The Editor's install runs under it from open.
 void request_generation() { rsf_unity_package_request_generation(&platform); }
-void install_presentation() { rsf_unity_package_install(&platform); }
 void UNITY_INTERFACE_API device_event(UnityGfxDeviceEventType type)
 {
     if (type == kUnityGfxDeviceEventInitialize) rsf_unity_package_bridge_load(registry);
@@ -269,11 +286,8 @@ void preload()
     wchar_t executable[32768]{}; GetModuleFileNameW(nullptr, executable, 32768);
     const auto* leaf = std::wcsrchr(executable, L'\\');
     editor = leaf && _wcsicmp(leaf + 1, L"Unity.exe") == 0;
-    rsf_unity_package_load(ini.c_str());
-    const auto log_path = rsf::unity_config::path_setting(ini.c_str(), L"Log");
-    if (!log_path.empty()) log_file = CreateFileW(log_path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
-        nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (!editor) install_presentation();
+    // The identity, the [UnitySR] Log file and the player's install.
+    rsf_unity_package_load(ini.c_str(), editor ? 1u : 0u, &platform);
 }
 }
 
@@ -288,9 +302,7 @@ extern "C" __declspec(dllexport) int rsfu_initialize(const char* runtime, const 
 {
     if (!runtime || !engine || !id || !output) return 0;
     std::lock_guard<std::mutex> lock(guard);
-    const int result = rsf_unity_package_initialize(runtime, engine, id, &platform);
-    if (result == 1) *output = api;
-    return result;
+    return rsf_unity_package_initialize(runtime, engine, id, output, &platform);
 } catch (...) { return 0; }
 
 extern "C" __declspec(dllexport) int rsfu_configure(const rsf_unity_package_settings* input) noexcept try
@@ -311,10 +323,7 @@ extern "C" __declspec(dllexport) int rsfu_surface(uint32_t width, uint32_t heigh
 extern "C" __declspec(dllexport) int rsfu_preview_region(int left, int top, int width, int height, uint32_t visible) noexcept
 {
     const bool configured = rsf_unity_preview_region(left, top, width, height, visible != 0);
-    if (editor && !input_window && rsf_unity_preview_parent()) {
-        input_window = static_cast<HWND>(rsf_unity_preview_parent());
-        previous_proc = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(input_window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(input_proc)));
-    }
+    rsf_unity_package_preview_input(&platform);
     return configured ? 1 : 0;
 }
 extern "C" __declspec(dllexport) int rsfu_frame_counters(rsf_unity_frame_counters* output) noexcept
@@ -327,16 +336,10 @@ extern "C" __declspec(dllexport) int rsfu_status(rsf_unity_package_status* outpu
     std::lock_guard<std::mutex> lock(guard); return rsf_unity_package_status_get(output, &platform);
 } catch (...) { return 0; }
 
-extern "C" __declspec(dllexport) int rsfu_input(uint64_t frame, uint32_t kinds) noexcept try
+extern "C" __declspec(dllexport) int rsfu_input(uint64_t frame, uint32_t kinds) noexcept
 {
-    if (!frame || (kinds & ~7u)) return RSF_BACKEND_ERROR_INVALID_ARGUMENT;
-    if (!kinds) return RSF_BACKEND_OK;
-    LARGE_INTEGER now{},frequency{}; QueryPerformanceCounter(&now); QueryPerformanceFrequency(&frequency);
-    const auto source=input_frame.load()==frame ? frame : 0;
-    rsf_game_cpu_event fact{sizeof(fact),RSF_GAME_CPU_INPUT_EVENT,api.session_id,source,uint64_t(now.QuadPart),
-        uint64_t(frequency.QuadPart),0,kinds,0,RSF_GAME_CPU_EVENT_VERSION,RSF_GAME_CPU_INPUT_KEYED | (!source ? RSF_GAME_CPU_INPUT_UNFRAMED : 0u)};
-    rsf_fg12_cpu(&fact); return RSF_BACKEND_OK;
-} catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
+    return rsf_unity_package_input(frame, kinds, &platform);
+}
 
 extern "C" __declspec(dllexport) int rsfu_shutdown() noexcept try
 {
@@ -357,9 +360,6 @@ extern "C" void UNITY_INTERFACE_EXPORT UNITY_INTERFACE_API UnityPluginUnload()
 {
     if (graphics) graphics->UnregisterDeviceEventCallback(device_event);
     device_event(kUnityGfxDeviceEventShutdown);
-    if (input_window && previous_proc && reinterpret_cast<WNDPROC>(GetWindowLongPtrW(input_window, GWLP_WNDPROC)) == input_proc)
-        SetWindowLongPtrW(input_window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(previous_proc));
-    input_window = nullptr; previous_proc = nullptr;
-    if (log_file != INVALID_HANDLE_VALUE) { CloseHandle(log_file); log_file = INVALID_HANDLE_VALUE; }
+    rsf_unity_package_unload(&platform);
     registry = nullptr; graphics = nullptr;
 }

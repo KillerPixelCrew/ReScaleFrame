@@ -11,17 +11,22 @@
    reconfiguration, the session lifecycle with its result codes, the D3D12 SR views of the
    render callback (package_views.rs): one Runtime SR context per Unity view key, its backend
    choice and fallback, its replacement on new extents or reconfiguration, and the recording
-   slots bound to the bridge's command lists, and the presentation (package_state/presentation.rs):
+   slots bound to the bridge's command lists, the presentation (package_state/presentation.rs):
    the package identity (SDK root and directories, Unity version and project id), the one
-   generation install and the window pass's provider request. package.cpp keeps the Unity, DXGI,
-   Vulkan and preview work, the render callback's routing, the window guard, the input window and
-   the log, and lends the typed SDK and Runtime calls through rsf_unity_package_platform.
-   package.cpp's mutex still serializes the exports and the SR pass; nothing here takes it. Rust
-   never holds its state lock while it calls a leaf; its view lock is held across the SR leaves
-   and its presentation lock across the install leaf, none of which re-enter, and both are always
-   taken before the state lock. */
+   generation install and the window pass's provider request, and the session services
+   (package_state/services.rs): the host services and bridge API of each session, the log file,
+   the input window's registration and retirement, and the routing of CPU events, window messages
+   and rsfu_input into the Runtime. package.cpp keeps the Unity, DXGI, Vulkan and preview work,
+   the render callback's routing and the window guard, and lends the typed Unity, Win32, SDK and
+   Runtime calls through rsf_unity_package_platform. package.cpp's mutex still serializes the
+   exports and the SR pass; nothing here takes it. Rust never holds its state lock while it calls
+   a leaf; its view lock is held across the SR leaves and its presentation lock across the install
+   leaf, none of which re-enter, and both are always taken before the state lock. Its log lock is
+   held across the log leaves only and its input-window lock across the window leaves only; the
+   message and CPU paths take neither. */
 #include <rescaleframe/game_renderer.h>
 #include <rescaleframe/sharpening_settings.h>
+#include <rescaleframe/unity_bridge.h>
 #include <stdint.h>
 #include <wchar.h>
 
@@ -79,7 +84,9 @@ typedef struct rsf_unity_package_view_setup {
 } rsf_unity_package_view_setup;
 
 /* package.cpp's typed leaves, all present. No leaf calls back into a rsf_unity_package_* entry
-   except open, which may call rsf_unity_package_install; none may throw. */
+   except the log, render and Runtime leaves, which may reach rsf_unity_package_log; none may
+   throw. The table is package.cpp's constant: a session's host services carry its address as
+   their user pointer. */
 typedef struct rsf_unity_package_platform {
     /* rsf::sharpening_settings::valid and rsf_dlss_preset_valid are header-inline C/C++. */
     uint32_t (*sharpening_valid)(const rsf_sharpening_options* options);
@@ -93,15 +100,11 @@ typedef struct rsf_unity_package_platform {
     uint32_t (*present_backend)(void);
     int32_t (*present_switch_result)(void);
     uint64_t (*present_generation)(void);
-    /* Session leaves. open opens the per-process log, installs generation in the Editor, hooks
-       the input window, creates the Vulkan surface and prepares the renderer bridge for a new
-       session, after rsf_unity_package_initialize stored the session's identity. Non-zero on
-       success. */
-    uint32_t (*open)(void);
+    /* Session leaves: the renderer bridge's activity and drain. */
     void (*bridge_activate)(uint32_t enabled);
     uint32_t (*bridge_drained)(void);
-    /* rsf_fg12_end_session for the bridge session's id; non-zero once its tokens are retired. */
-    uint32_t (*end_session)(void);
+    /* rsf_fg12_end_session for a session's id; non-zero once its tokens are retired. */
+    uint32_t (*end_session)(uint64_t session);
     /* SR views. commands is the pass's ID3D12GraphicsCommandList. sr_default_backend resolves
        Auto through rsf_gpu_default_sr_backend for the list's adapter; zero when the device or
        adapter cannot be read. sr_create is zero when the list has no device, and otherwise stores
@@ -115,21 +118,53 @@ typedef struct rsf_unity_package_platform {
     int32_t (*sr_set_sharpening)(rsf_sr12* sr, const rsf_sharpening_options* options);
     int32_t (*sr_evaluate)(rsf_sr12* sr, void* commands, const rsf_game_render_pass* pass, uint32_t slot);
     void (*sr_destroy)(rsf_sr12* sr);
-    /* The package log. */
-    void (*log)(const char* text);
     void (*bridge_release)(void);
     /* Generation. accept_window is the package's window guard (the Editor preview, the Vulkan
        surface or this process's Unity player window) and backend_log the package log in the
-       Runtime's form; both go into the install. fg_install is rsf_fg12_install, present_has_owner
-       and present_request are rsf_d3d11_present_has_owner and rsf_d3d11_present_request.
-       fg_default_backend resolves Auto through rsf_fg_default_backend for the adapter of Unity's
-       D3D12 device; zero when the device or adapter cannot be read. */
+       Runtime's form (rsf_unity_package_log); both go into the install. fg_install is
+       rsf_fg12_install, present_has_owner and present_request are rsf_d3d11_present_has_owner
+       and rsf_d3d11_present_request. fg_default_backend resolves Auto through
+       rsf_fg_default_backend for the adapter of Unity's D3D12 device; zero when the device or
+       adapter cannot be read. */
     int (*accept_window)(void* user, void* hwnd);
     void (*backend_log)(void* user, const char* message);
     int32_t (*fg_install)(const rsf_fg12_setup* setup);
     uint32_t (*present_has_owner)(void);
     int32_t (*present_request)(uint32_t backend);
     uint32_t (*fg_default_backend)(uint32_t* backend);
+    /* Session services. vulkan_surface is zero only when Unity renders with Vulkan and the
+       presentation surface could not be created on the window thread. session_seed is
+       GetTickCount64. render_pass and render_config are package.cpp's render callback routing
+       and its locked render plan, handed to the bridge unchanged. bridge_prepare is
+       rsf_unity_bridge_prepare, which writes the managed API into api; non-zero on success. */
+    uint32_t (*vulkan_surface)(void);
+    uint64_t (*session_seed)(void);
+    rsf_game_render_pass_fn render_pass;
+    rsf_game_render_config_fn render_config;
+    uint32_t (*bridge_prepare)(const rsf_game_host_services* services, rsf_unity_native_api* api);
+    /* The log file. local_app_data copies %LOCALAPPDATA% into output and returns its length, zero
+       when it is unset, empty or does not fit. log_open opens path for appending, shared for
+       reading and writing, created when missing; null on failure. log_write writes text and a
+       line break to the debugger output and, when file is not null, text and CRLF to file. */
+    uint32_t (*local_app_data)(wchar_t* output, uint32_t capacity);
+    void (*create_directory)(const wchar_t* path);
+    void* (*log_open)(const wchar_t* path);
+    void (*log_write)(void* file, const char* text);
+    void (*log_close)(void* file);
+    /* The input window. player_window is this process's first UnityWndClass top-level window,
+       null when there is none; preview_parent is the Editor preview's parent window, null before
+       it exists. subclass installs package.cpp's window procedure and returns the previous one;
+       restore puts previous back only while package.cpp's procedure is still installed.
+       raw_input_type reads a WM_INPUT header's dwType; zero when the header cannot be read. */
+    void* (*player_window)(void);
+    void* (*preview_parent)(void);
+    void* (*subclass)(void* window);
+    void (*restore)(void* window, void* previous);
+    uint32_t (*raw_input_type)(intptr_t lparam, uint32_t* type);
+    /* QueryPerformanceCounter, then QueryPerformanceFrequency. */
+    void (*timestamp)(uint64_t* counter, uint64_t* frequency);
+    /* rsf_fg12_cpu. */
+    void (*cpu)(const rsf_game_cpu_event* event);
 } rsf_unity_package_platform;
 
 #ifdef __cplusplus
@@ -146,10 +181,14 @@ uint32_t rsf_unity_package_temporal_ready(void);
 /* Session lifecycle. initialize retires a started session once the bridge has drained and the
    Runtime has ended its session (2 while either is pending), forgets the session's plan, status
    and bridge failure, stores rsfu_initialize's identity (the UTF-8 SDK root, Unity version and
-   project id; 0 when one is null), opens the new session (0 when open fails) and activates the
-   bridge with the persisted reconstruction request (1). Settings persist across sessions. */
+   project id; 0 when one or output is null) and opens the new session: the per-process log
+   unless a log is open, the Editor's generation install, the player's input window while none
+   is hooked, the player's Vulkan surface, and the bridge prepared with this session's host
+   services (0 when the surface or bridge refuses). It then activates the bridge with the
+   persisted reconstruction request and writes the bridge's managed API to output (1). Settings
+   persist across sessions. */
 int rsf_unity_package_initialize(const char* runtime, const char* engine, const char* project,
-    const rsf_unity_package_platform* platform);
+    rsf_unity_native_api* output, const rsf_unity_package_platform* platform);
 /* rsfu_shutdown before its lock: deactivates the bridge; non-zero once it has drained and the
    Runtime has ended the session. */
 uint32_t rsf_unity_package_quiesce(const rsf_unity_package_platform* platform);
@@ -170,10 +209,12 @@ int rsf_unity_package_plan(rsf_game_render_config* output);
 void rsf_unity_package_render(void* commands, const rsf_game_render_pass* pass,
     const rsf_unity_package_platform* platform);
 
-/* Presentation, outside package.cpp's mutex except where a locked export calls it. load reads
-   the identity before any session from [UnitySR] of `ini` (NUL-terminated UTF-16): Runtime,
-   resolved like every [UnitySR] path, and EngineVersion and ProjectId. */
-void rsf_unity_package_load(const wchar_t* ini);
+/* Presentation, outside package.cpp's mutex except where a locked export calls it. load runs at
+   plugin load, before any session: it stores whether this is the Editor, reads the identity from
+   [UnitySR] of `ini` (NUL-terminated UTF-16): Runtime, resolved like every [UnitySR] path, and
+   EngineVersion and ProjectId, opens the [UnitySR] Log path when one is set, and installs
+   generation in the player. */
+void rsf_unity_package_load(const wchar_t* ini, uint32_t editor, const rsf_unity_package_platform* platform);
 /* Installs the shared D3D12 generation once per process, with the Auto provider, generation off
    and runtime switching, when the identity has a root, a version and a project id; a refusal is
    retried by the next call. Its result is the status's generation result. The player installs
@@ -185,6 +226,23 @@ void rsf_unity_package_install(const rsf_unity_package_platform* platform);
 void rsf_unity_package_request_generation(const rsf_unity_package_platform* platform);
 /* A renderer bridge failure reported for the rest of the session. */
 void rsf_unity_package_bridge_failed(int32_t result);
+
+/* Session services, outside package.cpp's mutex. log writes text (ignored when null) to the
+   debugger and the open log file, one line at a time. window_message reports a message dequeued
+   by the hooked input window as an RSF_GAME_CPU_INPUT_EVENT (keyboard and mouse messages, and
+   WM_INPUT by its raw device type, carry their kind; any other message kind 0) stamped now and
+   keyed to the CPU frame in progress, and returns the procedure to forward it to (null for
+   DefWindowProcW). input is rsfu_input's body: RSF_BACKEND_ERROR_INVALID_ARGUMENT for frame 0 or
+   an unknown kind bit, nothing for no kinds, else the kinds reported now as received input,
+   keyed to frame while it is the CPU frame in progress and unframed otherwise.
+   preview_input hooks the Editor preview's parent once it exists while no input window is
+   hooked. unload restores the input window's procedure and closes the log. */
+void rsf_unity_package_log(const char* text, const rsf_unity_package_platform* platform);
+void* rsf_unity_package_window_message(uint32_t message, intptr_t lparam,
+    const rsf_unity_package_platform* platform);
+int rsf_unity_package_input(uint64_t frame, uint32_t kinds, const rsf_unity_package_platform* platform);
+void rsf_unity_package_preview_input(const rsf_unity_package_platform* platform);
+void rsf_unity_package_unload(const rsf_unity_package_platform* platform);
 #ifdef __cplusplus
 }
 #endif

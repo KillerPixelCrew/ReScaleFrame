@@ -214,6 +214,12 @@ requests now use the Rust owner. Both Unity entry routes share the FG
 setup builder and resolve Auto through the Runtime. The private package
 table was regenerated. Build and player verification remain open.
 
+Unity's package session services, log lifetime and input routing are
+Rust-owned. A refused window subclass leaves the next attempt eligible.
+The window callback snapshots its forwarding procedure before reporting
+input. The package entry points still use the same timestamps, frame
+facts and Runtime services. Builds and player verification remain open.
+
 AC7's Rust renderer transaction owns prepare, start, quiesce and stop.
 Failed activation keeps any renderer with reachable callbacks, and a
 refused hook disable or removal keeps the renderer available for retry.

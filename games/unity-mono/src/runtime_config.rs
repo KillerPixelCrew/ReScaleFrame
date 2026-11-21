@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 //! The [UnitySR] settings both Unity routes read: the game plugin's runtime setup and the Unity
 //! package, which links this archive, reads its identity through package_state/presentation.rs
-//! and calls the two exports through unity_runtime_config.h. A relative path therefore resolves
-//! the same way in both.
+//! and its Log path through package_state/services.rs. A relative path therefore resolves the same
+//! way in both. The two exports behind unity_runtime_config.h no longer have a caller in the tree.
 
 const SLASH: u16 = b'/' as u16;
 const BACKSLASH: u16 = b'\\' as u16;
