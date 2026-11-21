@@ -10,6 +10,12 @@ and logging, and the native callbacks install the hooks. Source review
 traced cold entry and quiesce through the existing plugin session ABI.
 The updated bootstrap fixture remains unrun.
 
+The native Anomaly motion facade is linked only by fixtures. The FG
+depth input leaf uses the existing guarded image read for `HW.pBaseZB`.
+If the read fails, the Rust stage skips adapter depth capture through
+its existing missing-view path. Source review traced both call paths.
+Build and device validation remain open.
+
 The D3D11 to D3D12 SR bridge retries a refused frame fence signal on
 the stream that issued the work. It flushes a D3D11 retry before the wait
 and keeps the session and resources alive until retirement is proved.

@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 #include "fg_stage.h"
 #include "motion_stage.h"
+#include "native_memory.h"
 #include "sr_pass.h"
 #include "sr_stage.h"
 #include <d3d11.h>
 #include <wrl/client.h>
 #include <cstddef>
-#include <cstring>
 
 extern "C" bool rsf_anomaly_sr_stage_owns_depth(uint32_t native_frame) noexcept;
 
@@ -18,7 +18,7 @@ using Microsoft::WRL::ComPtr;
 void* engine_depth_view(uint32_t rva) noexcept {
     const auto* image = reinterpret_cast<const std::byte*>(GetModuleHandleW(nullptr));
     void* view = nullptr;
-    if (image && rva) std::memcpy(&view, image + rva, sizeof(view));
+    if (!image || !rva || !guarded_copy(&view, image + rva, sizeof(view))) return nullptr;
     return view;
 }
 
