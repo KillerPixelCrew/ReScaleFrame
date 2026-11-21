@@ -4,16 +4,17 @@
 //! The leaves carry the D3D12 capture owner, the FG presenter install, header-inline Runtime
 //! validators, the Vulkan owner's guard and its device, provider, presenter, SDK and SR context
 //! calls in `vulkan.cpp` (the latter driven by `vulkan/sr.rs`), the status facts, and the D3D12
-//! device, fence, SR context, FG, presentation and capture calls the `d3d12.rs` owner drives;
-//! every decision stays in this crate. The render pass is the generated `rsf_game_render_pass`
-//! binding. The archive imports no native symbol.
+//! device, fence, SR context, FG, presentation and capture calls the `d3d12.rs` owner drives,
+//! and the Win32 window, counter, CPU event, ping and present marker calls `window.rs` drives;
+//! every decision stays in this crate. The render pass and CPU event are the generated
+//! `rsf_game_render_pass` and `rsf_game_cpu_event` bindings. The archive imports no native symbol.
 // Mirrored C layouts: the leaves and the engine module read fields this crate only writes.
 #![allow(dead_code)]
-use rsf_game_sys::{rsf_game_log_fn, rsf_game_render_pass};
+use rsf_game_sys::{rsf_game_cpu_event, rsf_game_log_fn, rsf_game_render_pass};
 use std::ffi::{c_char, c_int, c_void};
 use std::sync::OnceLock;
 
-pub(crate) const PLATFORM_VERSION: u32 = 4;
+pub(crate) const PLATFORM_VERSION: u32 = 5;
 /// `RSF_GODOT_ABI_VERSION`: setup, status, engine services and the Vulkan packet.
 pub(crate) const ABI_VERSION: u32 = 3;
 /// `RSF_GODOT_SETTINGS_ABI_VERSION`.
@@ -199,6 +200,31 @@ pub(crate) struct WindowFacts {
     pub(crate) reserved: u32,
 }
 
+/// `rsf_godot_window_identity`: the owner process and class of a candidate window, as read.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct WindowIdentity {
+    /// `GetWindowThreadProcessId`; zero when the window is not valid.
+    pub(crate) process_id: u32,
+    pub(crate) current_process_id: u32,
+    /// `GetClassNameW` into `class_name`; zero on failure.
+    pub(crate) class_length: u32,
+    pub(crate) reserved: u32,
+    pub(crate) class_name: [u16; 64],
+}
+
+impl Default for WindowIdentity {
+    fn default() -> Self {
+        Self {
+            process_id: 0,
+            current_process_id: 0,
+            class_length: 0,
+            reserved: 0,
+            class_name: [0; 64],
+        }
+    }
+}
+
 /// `rsf_godot_fg_facts`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -296,7 +322,8 @@ pub(crate) struct VkFacts {
     pub(crate) fsr4_fg_compiled: u32,
     pub(crate) xess_fg_compiled: u32,
     pub(crate) presenter: u32,
-    pub(crate) primary_window: u32,
+    /// Formerly `primary_window`; the Vulkan session owns that window now and leaves this zero.
+    pub(crate) reserved: u32,
     pub(crate) presenter_backend: u32,
     pub(crate) sdk_shutdown_pending: u32,
 }
@@ -463,7 +490,7 @@ pub(crate) struct Platform {
     pub(crate) vulkan_fsr4_fg_probe: unsafe extern "C" fn() -> u32,
     pub(crate) vulkan_latency_options: unsafe extern "C" fn(u32, u32) -> i32,
     pub(crate) cpu_counters: unsafe extern "C" fn(*mut InputFacts),
-    pub(crate) window_facts: unsafe extern "C" fn(*mut WindowFacts),
+    pub(crate) window_facts: unsafe extern "C" fn(*mut c_void, *mut WindowFacts),
     pub(crate) fg_facts: unsafe extern "C" fn(*mut FgFacts),
     pub(crate) latency_facts: unsafe extern "C" fn(*mut LatencyFacts) -> u32,
     pub(crate) d3d12_bind: unsafe extern "C" fn(*mut c_void, *mut c_void) -> u32,
@@ -516,6 +543,16 @@ pub(crate) struct Platform {
     pub(crate) vulkan_sr_fallback: unsafe extern "C" fn(*mut c_void, *mut i32) -> u32,
     pub(crate) vulkan_sr_log: unsafe extern "C" fn(*mut c_void, u32, i32, i32) -> u32,
     pub(crate) vulkan_sr_dump_result: unsafe extern "C" fn(*mut c_void, u32, i32) -> u32,
+    pub(crate) window_identity: unsafe extern "C" fn(*mut c_void, *mut WindowIdentity),
+    pub(crate) window_procedure_get: unsafe extern "C" fn(*mut c_void) -> isize,
+    pub(crate) window_procedure_set: unsafe extern "C" fn(*mut c_void, isize) -> isize,
+    pub(crate) window_forward: unsafe extern "C" fn(isize, *mut c_void, u32, usize, isize) -> isize,
+    pub(crate) query_counter: unsafe extern "C" fn(*mut u64, *mut u64),
+    pub(crate) cpu_event: unsafe extern "C" fn(*const rsf_game_cpu_event),
+    pub(crate) vulkan_cpu_event: unsafe extern "C" fn(*const rsf_game_cpu_event),
+    pub(crate) latency_ping: unsafe extern "C" fn(*mut c_void) -> i32,
+    pub(crate) vulkan_latency_ping: unsafe extern "C" fn(*mut c_void) -> i32,
+    pub(crate) vulkan_present_marker: unsafe extern "C" fn(u32),
 }
 
 const _: () = {
@@ -565,7 +602,9 @@ const _: () = {
     assert!(size_of::<VkSrCreate>() == 8);
     assert!(size_of::<VkSrContext>() == 16);
     assert!(offset_of!(VkSrContext, result) == 8);
-    assert!(size_of::<Platform>() == 440);
+    assert!(size_of::<WindowIdentity>() == 144);
+    assert!(offset_of!(WindowIdentity, class_name) == 16);
+    assert!(size_of::<Platform>() == 520);
     assert!(offset_of!(Platform, vulkan_locked) == 88);
     assert!(offset_of!(Platform, latency_facts) == 176);
     assert!(offset_of!(Platform, d3d12_bind) == 184);
@@ -575,6 +614,9 @@ const _: () = {
     assert!(offset_of!(Platform, vulkan_sr_create) == 360);
     assert!(offset_of!(Platform, vulkan_sr_evaluate) == 400);
     assert!(offset_of!(Platform, vulkan_sr_dump_result) == 432);
+    assert!(offset_of!(Platform, window_identity) == 440);
+    assert!(offset_of!(Platform, cpu_event) == 480);
+    assert!(offset_of!(Platform, vulkan_present_marker) == 512);
 };
 
 #[cfg(test)]
@@ -594,6 +636,11 @@ pub(crate) unsafe fn register(table: *const Platform) -> Option<&'static Platfor
     let table: &'static Platform = unsafe { table.as_ref() }?;
     (table.struct_size as usize >= size_of::<Platform>() && table.version == PLATFORM_VERSION)
         .then(|| *PLATFORM.get_or_init(|| table))
+}
+
+/// The table kept by `register`, for the window procedure, which has no table argument.
+pub(crate) fn registered() -> Option<&'static Platform> {
+    PLATFORM.get().copied()
 }
 
 // Each leaf is a complete process-lived entry (register) and catches its own C++ exceptions.
@@ -700,9 +747,10 @@ impl Platform {
         facts
     }
 
-    pub(crate) fn window_facts(&self) -> WindowFacts {
+    /// Foreground process and the visibility of `window`, the admitted input window or null.
+    pub(crate) fn window_facts(&self, window: *mut c_void) -> WindowFacts {
         let mut facts = WindowFacts::default();
-        unsafe { (self.window_facts)(&mut facts) };
+        unsafe { (self.window_facts)(window, &mut facts) };
         facts
     }
 
@@ -931,5 +979,68 @@ impl Platform {
         result: i32,
     ) -> Option<()> {
         (unsafe { (self.vulkan_sr_dump_result)(call, backend, result) } != 0).then_some(())
+    }
+
+    // The Win32 window and input leaves (`window.rs`). Windows are handles passed through; a
+    // procedure is a `WNDPROC` address as `GWLP_WNDPROC` stores it.
+
+    pub(crate) fn window_identity(&self, window: *mut c_void) -> WindowIdentity {
+        let mut identity = WindowIdentity::default();
+        unsafe { (self.window_identity)(window, &mut identity) };
+        identity
+    }
+
+    /// `GetWindowLongPtrW(GWLP_WNDPROC)`; zero on failure.
+    pub(crate) fn window_procedure_get(&self, window: *mut c_void) -> isize {
+        unsafe { (self.window_procedure_get)(window) }
+    }
+
+    /// `SetWindowLongPtrW(GWLP_WNDPROC)`: the replaced procedure, zero on failure.
+    pub(crate) fn window_procedure_set(&self, window: *mut c_void, procedure: isize) -> isize {
+        unsafe { (self.window_procedure_set)(window, procedure) }
+    }
+
+    /// `CallWindowProcW` of `previous`, or `DefWindowProcW` when it is zero.
+    pub(crate) fn window_forward(
+        &self,
+        previous: isize,
+        window: *mut c_void,
+        message: u32,
+        wparam: usize,
+        lparam: isize,
+    ) -> isize {
+        unsafe { (self.window_forward)(previous, window, message, wparam, lparam) }
+    }
+
+    /// `QueryPerformanceCounter` and `QueryPerformanceFrequency`.
+    pub(crate) fn query_counter(&self) -> (u64, u64) {
+        let (mut counter, mut frequency) = (0, 0);
+        unsafe { (self.query_counter)(&mut counter, &mut frequency) };
+        (counter, frequency)
+    }
+
+    /// `rsf_latencyvk_cpu` for a Vulkan session, otherwise `rsf_fg12_cpu`.
+    pub(crate) fn cpu_event(&self, vulkan: bool, event: &rsf_game_cpu_event) {
+        let leaf = if vulkan {
+            self.vulkan_cpu_event
+        } else {
+            self.cpu_event
+        };
+        unsafe { leaf(event) }
+    }
+
+    /// `rsf_latencyvk_ping` for a Vulkan session, otherwise `rsf_native_latency_ping`.
+    pub(crate) fn latency_ping(&self, vulkan: bool, window: *mut c_void) -> c_int {
+        let leaf = if vulkan {
+            self.vulkan_latency_ping
+        } else {
+            self.latency_ping
+        };
+        unsafe { leaf(window) }
+    }
+
+    /// `rsf_latencyvk_present`.
+    pub(crate) fn vulkan_present_marker(&self, begin: u32) {
+        unsafe { (self.vulkan_present_marker)(begin) }
     }
 }

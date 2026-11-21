@@ -28,8 +28,10 @@ struct rsf_fsr4vk;
 
 // The boot state, session identity, requested settings and their generation, the status record,
 // configure admission and the presenter, FG and SR accounting are owned by the Rust Vulkan session
-// (native/vulkan.rs), and the SR contexts, their retirement, creation, plan, evaluate and fallback
-// sequencing by its SR context owner (native/vulkan/sr.rs). This file keeps the guard, the Vulkan,
+// (native/vulkan.rs), which also keeps the engine's primary window, and the SR contexts, their
+// retirement, creation, plan, evaluate and fallback sequencing by its SR context owner
+// (native/vulkan/sr.rs). The CPU events and present markers route through native/window.rs and
+// the leaves in runtime.cpp. This file keeps the guard, the Vulkan,
 // Streamline, XeSS, FidelityFX, presenter, capture and SR provider calls; under the guard it reads
 // the session through rsf_godot_vk_view_get and reports each transition. Lock order: guard, then
 // the Rust state.
@@ -58,7 +60,6 @@ std::string directory;
 std::string streamline_directory;
 std::string fsr4_directory;
 std::wstring intel_directory;
-void* primary_window = nullptr;
 uint64_t render_source_frame = 0;
 rsf_game_log_fn logger = nullptr;
 void* logger_user = nullptr;
@@ -192,8 +193,6 @@ rsf_srvk_frame sr_frame(const sr_call& call, const rsf_sharpening_options& sharp
 }
 namespace rsf::godot_vk {
 bool booted() { return rsf_godot_vk_booted() != 0; }
-void window(void* value) { std::lock_guard lock(guard); primary_window = value; }
-void cpu(const rsf_game_cpu_event* event) { rsf_latencyvk_cpu(event); }
 void render_begin(uint64_t frame) {
     rsf_latencyvk_render(frame);
     std::lock_guard lock(guard); render_source_frame=frame;
@@ -223,7 +222,8 @@ int32_t leaf_locked(int32_t (*body)(void*), void* user) try {
     return body(user);
 } catch (...) { return 0; }
 int32_t leaf_start(const rsf_godot_setup* setup) try {
-    primary_window = nullptr; render_source_frame = 0;
+    // The session cleared its primary window just before this leaf.
+    render_source_frame = 0;
     directory = std::string(setup->runtime_directory) + "/fidelityfx-vulkan";
     fsr4_directory = std::string(setup->runtime_directory) + "/fidelityfx";
     logger = setup->log; logger_user = setup->log_user;
@@ -282,7 +282,6 @@ void leaf_facts(rsf_godot_vk_facts* facts) try {
     facts->xess_fg_compiled = 1;
 #endif
     facts->presenter = presentation ? 1u : 0u;
-    facts->primary_window = primary_window ? 1u : 0u;
     uint32_t owned_backend = 0;
     if (presentation) (void)rsf_fgvk_backend(presentation, &owned_backend);
     facts->presenter_backend = owned_backend;
@@ -482,7 +481,7 @@ extern "C" int32_t rsfg_vk_create(const rsf_fgvk_setup* setup, void** result, ui
 #endif
     value.graphics.runtime_directory_utf8 = selected == 1 ? streamline_directory.c_str() :
         selected == 4 ? fsr4_directory.c_str() : directory.c_str();
-    const rsf_fgvk_host_options host{sizeof(host), RSF_FGVK_HOST_ABI_VERSION, primary_window,
+    const rsf_fgvk_host_options host{sizeof(host), RSF_FGVK_HOST_ABI_VERSION, rsf_godot_vk_primary_window(),
         rsf::godot_vk::interop_device_ready() ? 1u : 0u, reinterpret_cast<const uint16_t*>(intel_directory.c_str())};
     auto code = rsf_fgvk_create_with_host(&value, selected, requested.generated_frames, &host, &presentation, chain);
     *result = presentation;

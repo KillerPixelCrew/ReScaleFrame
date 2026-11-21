@@ -2,8 +2,9 @@
 //! Godot Vulkan session state formerly held by `vulkan.cpp`: the boot state and session identity,
 //! the requested settings and their generation, the status record (ABI 3) with its latency
 //! overlay, the configure admission, the presenter currency rule for acquire, the FG enable rule,
-//! the fixed-guide retirement and the SR and FG accounting. The SR context owner of
-//! `rsfg_render_vulkan` is the `sr` child module.
+//! the fixed-guide retirement, the SR and FG accounting and the engine's primary window. The SR
+//! context owner of `rsfg_render_vulkan` is the `sr` child module. The primary window is an
+//! atomic the guarded paths read; it was a guarded global, written only by `rsfg_vk_window`.
 //!
 //! `vulkan.cpp` keeps its guard and every Vulkan, Streamline, XeSS, FidelityFX, presenter,
 //! capture and SR provider call. Each transition that ran under that guard still does: boot,
@@ -19,8 +20,9 @@ use crate::platform::{
     ABI_VERSION, Platform, Settings, Setup, Status, VkFacts, VkFgPass, VkLatencyFacts,
     VkPresentFacts, VkSrFrame, VkView,
 };
-use std::ffi::c_int;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::ffi::{c_int, c_void};
+use std::ptr;
+use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 const BACKEND_OK: i32 = 0;
@@ -94,6 +96,9 @@ fn initial_status() -> Status {
 
 pub(crate) struct Vulkan {
     active: AtomicBool,
+    /// The engine's primary window as `rsfg_vk_window` last reported it, admitted or not: the FG
+    /// presenter's host window and the FSR4 and XeSS FG precondition. Null from each start.
+    primary_window: AtomicPtr<c_void>,
     state: Mutex<State>,
     contexts: Mutex<sr::Contexts>,
 }
@@ -102,6 +107,7 @@ impl Vulkan {
     pub(crate) fn new() -> Self {
         Self {
             active: AtomicBool::new(false),
+            primary_window: AtomicPtr::new(ptr::null_mut()),
             state: Mutex::new(State {
                 settings: default_settings(),
                 generation: 1,
@@ -119,6 +125,15 @@ impl Vulkan {
 
     pub(crate) fn booted(&self) -> bool {
         self.active.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn primary_window(&self) -> *mut c_void {
+        self.primary_window.load(Ordering::Acquire)
+    }
+
+    /// `rsfg_vk_window` while booted, after the input window admission was asked.
+    pub(crate) fn report_window(&self, window: *mut c_void) {
+        self.primary_window.store(window, Ordering::Release);
     }
 
     /// `setup` passed the size and ABI checks; its strings are borrowed for the call.
@@ -140,6 +155,9 @@ impl Vulkan {
             }
             // Each session logs its own refusals, as the start leaf's reset did.
             self.contexts().reset_diagnostics();
+            // The start leaf cleared the primary window first, also when it then refused.
+            self.primary_window
+                .store(ptr::null_mut(), Ordering::Release);
             if platform.vulkan_start(setup) == 0 {
                 return 0;
             }
@@ -208,6 +226,7 @@ impl Vulkan {
     fn admit(&self, platform: &Platform, value: &Settings) -> bool {
         let facts: VkFacts = platform.vulkan_facts();
         let on = |flag: u32| flag != 0;
+        let primary = !self.primary_window().is_null();
         if value.sr_backend == SR_XESS && !on(facts.xess_device_ready) {
             return false;
         }
@@ -228,7 +247,7 @@ impl Vulkan {
             if !on(facts.fsr4_fg_compiled)
                 || !on(facts.presenter)
                 || !on(facts.interop_device_ready)
-                || !on(facts.primary_window)
+                || !primary
                 || value.generated_frames != 1
             {
                 return false;
@@ -239,9 +258,7 @@ impl Vulkan {
             }
         }
         if selected == FG_XESS
-            && !(on(facts.xess_fg_compiled)
-                && on(facts.interop_device_ready)
-                && on(facts.primary_window))
+            && !(on(facts.xess_fg_compiled) && on(facts.interop_device_ready) && primary)
         {
             return false;
         }

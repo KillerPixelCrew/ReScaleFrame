@@ -162,6 +162,12 @@ provider calls and exact command buffer handoff in typed native leaves.
 The existing FSR3 Auto behavior and previous-device retirement order are
 preserved. Device replacement, FSR4 and DLSS still need live verification.
 
+Godot's window admission, subclass forwarding and input-session
+ownership moved to Rust. A refused restore retains the previous
+window procedure so subsequent messages can still forward. The
+engine's input facts and Runtime pacing calls keep their existing
+contracts. Shutdown with an intervening subclass still needs live verification.
+
 Godot's D3D12 SR context, recording slots and submission ledger are Rust-owned.
 Pending recordings keep their slot and context until the engine reports a
 submission and the queue accepts a fence. A later submission on that queue

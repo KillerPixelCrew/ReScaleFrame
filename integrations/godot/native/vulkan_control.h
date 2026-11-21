@@ -4,8 +4,6 @@
 namespace rsf::godot_vk {
 // The Rust Vulkan session (vulkan.rs) is booted.
 bool booted();
-void window(void*);
-void cpu(const rsf_game_cpu_event*);
 void render_begin(uint64_t);
 void capture_present(const void* present_info, int32_t result, uint32_t begin);
 

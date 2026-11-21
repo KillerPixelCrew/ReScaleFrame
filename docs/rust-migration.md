@@ -18,7 +18,7 @@ Runtime. Preserve the supported paths, feature refusals and package names.
 | Unity Mono and Unity package | Mono loader, plugin lifecycle, shared D3D12 state, Runtime setup, package settings and session services, per-view D3D12 SR, presentation install and provider requests, and input routing are in Rust. Continue preview and Vulkan ownership. |
 | Steam, Fallout 4 and Skyrim SE | The shared Steam chain, both games' cold creation and identity, Fallout 4 lifecycle and Skyrim SE observer admission and hook transactions are in Rust. Continue Skyrim SE session lifecycle and both games' rendering, CPU facts, compatibility and recovery. |
 | AC7 | The game DLL's GameSDK, native site admission, scene and velocity patches, renderer transaction, TrueSky patch and relay ownership, and queued render scopes are in Rust. Continue renderer data ownership and the game-side carrier paths. |
-| Godot | The native control, D3D12 and Vulkan sessions and SR contexts, and D3D12 submission ledger are in Rust. Continue Vulkan Auto provider routing, window input, creation requirements and engine bindings while preserving the GDExtension and compositor contracts. |
+| Godot | The native control, D3D12 and Vulkan sessions and SR contexts, D3D12 submission ledger, and window and input routing are in Rust. Continue Vulkan Auto provider routing, creation requirements and engine bindings while preserving the GDExtension and compositor contracts. |
 | Minecraft | The native session, surface, message observer, frame packets, settings and status are in Rust. The Java mod, typed JNI marshaling and linked Runtime entry points retain their existing contracts. |
 
 Merge coherent ownership changes to the migration branch and remove their

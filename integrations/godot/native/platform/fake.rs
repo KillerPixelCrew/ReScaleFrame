@@ -3,9 +3,9 @@
 use super::{
     FgFacts, FgInstall, FgOptions, InputFacts, LatencyFacts, LockedBody, PLATFORM_VERSION,
     Platform, Setup, Sharpening, SrContext, SrCreate, SrEvaluate, VkFacts, VkLatencyFacts, VkProc,
-    VkSrContext, VkSrCreate, WindowFacts,
+    VkSrContext, VkSrCreate, WindowFacts, WindowIdentity,
 };
-use rsf_game_sys::rsf_game_render_pass;
+use rsf_game_sys::{rsf_game_cpu_event, rsf_game_render_pass};
 use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 use std::ptr;
@@ -63,7 +63,25 @@ thread_local! {
     pub(crate) static VK_SHARPENING: Cell<Option<Sharpening>> = const { Cell::new(None) };
     /// A leaf that reports an exception.
     pub(crate) static VK_THROWS: Cell<Option<&'static str>> = const { Cell::new(None) };
+    /// The window the last status facts described.
+    pub(crate) static FACTS_WINDOW: Cell<Option<usize>> = const { Cell::new(None) };
+    /// The identity every window reports: owner process, current process and class.
+    pub(crate) static IDENTITY: Cell<(u32, u32, &'static str)> =
+        const { Cell::new((10, 10, "Engine")) };
+    /// The window procedure the fake window holds.
+    pub(crate) static PROCEDURE: Cell<isize> = const { Cell::new(ENGINE_PROCEDURE) };
+    /// SetWindowLongPtrW fails.
+    pub(crate) static PROCEDURE_REFUSED: Cell<bool> = const { Cell::new(false) };
+    /// The window, input, ping and marker leaves in call order, each with its main argument.
+    static WINDOW_CALLS: RefCell<Vec<(&'static str, u64)>> = const { RefCell::new(Vec::new()) };
+    /// The CPU events reported: Vulkan, stage, session, message and flags.
+    static CPU_EVENTS: RefCell<Vec<(bool, u32, u64, u32, u32)>> = const { RefCell::new(Vec::new()) };
 }
+
+/// The engine's own window procedure.
+pub(crate) const ENGINE_PROCEDURE: isize = 0x5000;
+/// What the forwarded procedure returns.
+pub(crate) const FORWARDED: isize = 77;
 
 /// `rsf_sharpening_defaults()` as `sharpening_settings.h` defines it.
 pub(crate) fn sharpening_defaults() -> Sharpening {
@@ -222,7 +240,8 @@ unsafe extern "C" fn cpu_counters(facts: *mut InputFacts) {
     unsafe { facts.write(INPUTS) };
 }
 
-unsafe extern "C" fn window_facts(facts: *mut WindowFacts) {
+unsafe extern "C" fn window_facts(window: *mut c_void, facts: *mut WindowFacts) {
+    FACTS_WINDOW.set(Some(window.addr()));
     // SAFETY: the owner passes a writable record.
     unsafe {
         facts.write(WindowFacts {
@@ -523,6 +542,106 @@ unsafe extern "C" fn vulkan_sr_dump_result(_: *mut c_void, backend: u32, _: i32)
     vk_sr("dump", backend.into())
 }
 
+fn window_call(call: &'static str, argument: u64) {
+    WINDOW_CALLS.with_borrow_mut(|calls| calls.push((call, argument)));
+}
+
+/// The window leaf calls since the last take.
+pub(crate) fn take_window_calls() -> Vec<(&'static str, u64)> {
+    WINDOW_CALLS.take()
+}
+
+/// The CPU events since the last take.
+pub(crate) fn take_cpu_events() -> Vec<(bool, u32, u64, u32, u32)> {
+    CPU_EVENTS.take()
+}
+
+unsafe extern "C" fn window_identity(window: *mut c_void, identity: *mut WindowIdentity) {
+    window_call("identity", window.addr() as u64);
+    let (process, current, class) = IDENTITY.get();
+    let mut value = WindowIdentity {
+        process_id: process,
+        current_process_id: current,
+        class_length: class.len() as u32,
+        ..WindowIdentity::default()
+    };
+    for (slot, unit) in value.class_name.iter_mut().zip(class.encode_utf16()) {
+        *slot = unit;
+    }
+    // SAFETY: the owner passes a writable record.
+    unsafe { identity.write(value) };
+}
+
+unsafe extern "C" fn window_procedure_get(_: *mut c_void) -> isize {
+    window_call("get", 0);
+    PROCEDURE.get()
+}
+
+unsafe extern "C" fn window_procedure_set(_: *mut c_void, procedure: isize) -> isize {
+    window_call("set", procedure as u64);
+    if PROCEDURE_REFUSED.get() {
+        return 0;
+    }
+    PROCEDURE.replace(procedure)
+}
+
+unsafe extern "C" fn window_forward(
+    previous: isize,
+    window: *mut c_void,
+    message: u32,
+    _: usize,
+    _: isize,
+) -> isize {
+    window_call("forward", previous as u64);
+    window_call("forward_window", window.addr() as u64);
+    window_call("forward_message", message.into());
+    FORWARDED
+}
+
+unsafe extern "C" fn query_counter(counter: *mut u64, frequency: *mut u64) {
+    // SAFETY: the owner passes writable values.
+    unsafe {
+        counter.write(1000);
+        frequency.write(10_000_000);
+    }
+}
+
+fn cpu(vulkan: bool, event: *const rsf_game_cpu_event) {
+    // SAFETY: the owner passes a live event.
+    let event = unsafe { &*event };
+    CPU_EVENTS.with_borrow_mut(|events| {
+        events.push((
+            vulkan,
+            event.stage,
+            event.session_id,
+            event.message_id,
+            event.flags,
+        ))
+    });
+}
+
+unsafe extern "C" fn cpu_event(event: *const rsf_game_cpu_event) {
+    cpu(false, event);
+}
+
+unsafe extern "C" fn vulkan_cpu_event(event: *const rsf_game_cpu_event) {
+    cpu(true, event);
+}
+
+unsafe extern "C" fn latency_ping(window: *mut c_void) -> i32 {
+    window_call("ping", window.addr() as u64);
+    1
+}
+
+unsafe extern "C" fn vulkan_latency_ping(window: *mut c_void) -> i32 {
+    window_call("vulkan_ping", window.addr() as u64);
+    2
+}
+
+unsafe extern "C" fn vulkan_present_marker(begin: u32) {
+    window_call("marker", begin.into());
+}
+
 pub(crate) static LEAVES: Platform = Platform {
     struct_size: size_of::<Platform>() as u32,
     version: PLATFORM_VERSION,
@@ -580,4 +699,14 @@ pub(crate) static LEAVES: Platform = Platform {
     vulkan_sr_fallback,
     vulkan_sr_log,
     vulkan_sr_dump_result,
+    window_identity,
+    window_procedure_get,
+    window_procedure_set,
+    window_forward,
+    query_counter,
+    cpu_event,
+    vulkan_cpu_event,
+    latency_ping,
+    vulkan_latency_ping,
+    vulkan_present_marker,
 };
