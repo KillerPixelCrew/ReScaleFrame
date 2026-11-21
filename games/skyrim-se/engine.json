@@ -559,5 +559,12 @@
     "cs_comparison": "Working CS DLSS neighborhood conditioning absent in RSF; native TAA mask85 producer observed in22census entries/465draws on[1,85,3] over2frames. PID5484 native readback proves both normalized masks equal clamp(0.1R+G) exactly, matching inspected CS expression; modal-scoped input parity, not proven pickup repair. CS normals.z transparency recipe does not transfer to vanilla zero-packed channel.",
     "user_symptom": "Heavy ghosting only during firewood/log pickup animation; carrying is fine",
     "evidence": "docs/research/skyrim-native-draw-coverage-20261115.md"
+  },
+  "rust_native_creation": {
+    "date": "2026-11-21",
+    "owner": "Crate rsf-skyrim-se (games/skyrim-se/src/creation.rs, layout.rs) owns thunk15B9412 and call1012320/return1012325 guards, the exact Display Tweaks0.5.25 relay profile (DLL27250/272E9/5E168/27334), owner3330188 +56/+64/+72/+96 admission, the cold-owner rule for the shared Steam facade, the mode3 Runtime scope transaction, refusals and receipts; native_creation.cpp keeps fault-guarded reads, Win32, MinHook, exception guards, the Community Shaders gate, the Steam facade call and the return-address detour",
+    "preserved": "DLL name, rsf_get_game_plugin_api export, native_creation_* entry points and plugin.cpp lifecycle order, both creation routes, outer HRESULT/outputs/LastError, refusal texts and native fallback",
+    "validation": "Source review only; rustfmt --edition 2024 check, cargo metadata --locked --offline, JSON parse and git diff --check. Not compiled, linked, Cargo-tested, Clippy-checked, CTest-run, deployed or game-tested",
+    "evidence": "docs/research/rust-skyrim-native-creation.md"
   }
 }

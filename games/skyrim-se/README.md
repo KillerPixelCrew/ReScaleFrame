@@ -35,5 +35,12 @@ outside the update's thread-local scope in the bounded run. Worker handoff and
 input-to-simulation ownership are not verified; the runtime uses explicit missing-
 input substitutes. No vendor pacing or low-latency acceptance is claimed.
 
+The cold native creation root and its Steam Present cooperation are owned by the
+Rust crate `rsf-skyrim-se` (`src/creation.rs`, `src/layout.rs`), linked into the
+same DLL. `src/native_creation.cpp` keeps the native leaves and the C++ entry
+points; GameSDK identity, lifecycle and the other observers remain C++. See
+[the migration note](../../docs/research/rust-skyrim-native-creation.md) for the
+moved behaviour and the remaining Skyrim owners.
+
 See [research](../../docs/research/skyrim-se-integration.md) for fingerprints,
 the source/binary evidence, deployment receipt location and remaining work.
