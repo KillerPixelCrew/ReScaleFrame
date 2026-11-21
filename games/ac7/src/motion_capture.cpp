@@ -36,7 +36,6 @@ constexpr size_t blob_budget = 32u * 1024u * 1024u;
 struct Capture {
     std::mutex guard;
     std::atomic<bool> installed{false};
-    std::atomic<bool> roots_installed{false};
     std::string directory, prefix;
     rsf_ac7_capture_log_fn log = nullptr;
     void* user = nullptr;
@@ -64,8 +63,6 @@ WidgetQueueFn original_widget_queue = nullptr;
 TemporalFn original_add_temporal = nullptr;
 TemporalFn original_temporal_process = nullptr;
 GraphProcessFn original_graph_process = nullptr;
-void* root_targets[6]{};
-void* current_rhi_command_address = nullptr;
 
 uint64_t tick()
 {
@@ -370,41 +367,17 @@ void hooked_graph_process(void* graph, void* output_reference, void* context)
 MotionQueuedDraw queued_draw()
 {
     MotionQueuedDraw draw{};
-    if (state().roots_installed && copy_memory(&draw.command, current_rhi_command_address, sizeof(draw.command)) &&
+    const auto* current_command = rsf_ac7_capture_current_command_address();
+    if (current_command && copy_memory(&draw.command, current_command, sizeof(draw.command)) &&
         draw.command && read(draw.command, 8, draw.execute)) {
         auto& s = state(); std::lock_guard<std::mutex> lock(s.guard);
         draw.scope = rsf_ac7_capture_queued_scope(draw.command, draw.execute, true);
     } else draw.scope = rsf_ac7_capture_queued_scope(draw.command, draw.execute, false);
     return draw;
 }
-void install_roots(unsigned char* base)
+bool install_root_hooks(void* const* targets, uint32_t count)
 {
-    auto& s = state(); if (s.roots_installed) return;
-    // Short stable entry sequences exclude security-cookie RIP displacements. MinHook relocates
-    // complete instructions; these guards establish that each target is the researched entry.
-    const unsigned char expected[][20] = {
-        {0x4c,0x8b,0xdc,0x55,0x49,0x8d,0xab,0xe8,0xfc,0xff,0xff,0x48,0x81,0xec,0x10,0x04,0x00,0x00},
-        {0x4c,0x8b,0xdc,0x55,0x48,0x81,0xec,0x10,0x03,0x00,0x00},
-        {0x40,0x55,0x57,0x48,0x8d,0x6c,0x24,0xa8,0x48,0x81,0xec,0x58,0x01,0x00,0x00},
-        {0x48,0x89,0x5c,0x24,0x10,0x48,0x89,0x7c,0x24,0x18,0x55,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57},
-        {0x40,0x55,0x53,0x56,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57,0x48,0x8d,0xac,0x24,0xf0,0xfd,0xff,0xff},
-        {0x4c,0x89,0x44,0x24,0x18,0x48,0x89,0x4c,0x24,0x08,0x53,0x48,0x83,0xec,0x30}
-    };
-    const size_t lengths[] = {18, 11, 15, 19, 20, 15};
-    const uint32_t rvas[] = {0xffb900, 0x4d69a0, 0x4d6340, 0xff6ad0, 0x10aeca0, 0x10b3f10};
-    unsigned char actual[20]{};
-    if (!base || !copy_memory(actual, base + 0x120e67c, 7) ||
-        std::memcmp(actual, "\x48\x89\x05\xd5\x9c\xa6\x02", 7)) {
-        say("renderer root capture refused: RHI current-command write differs"); return;
-    }
-    const uint32_t first = native_owner.load() ? 1u : 0u;
-    for (size_t i = first; i < 6; ++i) {
-        if (i == 2 && native_owner.load()) continue;
-        if (!base || !copy_memory(actual, base + rvas[i], lengths[i]) ||
-            std::memcmp(actual, expected[i], lengths[i])) {
-            say("renderer root capture refused: expected AC7 entry bytes differ"); return;
-        }
-    }
+    // Slot order matches ROOT_SITES in motion_capture_records/root_hooks.rs.
     void* detours[] = {reinterpret_cast<void*>(&hooked_postprocess),
                       reinterpret_cast<void*>(&hooked_widget_prepare), reinterpret_cast<void*>(&hooked_widget_queue),
                       reinterpret_cast<void*>(&hooked_add_temporal), reinterpret_cast<void*>(&hooked_temporal_process),
@@ -413,17 +386,25 @@ void install_roots(unsigned char* base)
                          reinterpret_cast<void**>(&original_widget_prepare), reinterpret_cast<void**>(&original_widget_queue),
                          reinterpret_cast<void**>(&original_add_temporal), reinterpret_cast<void**>(&original_temporal_process),
                          reinterpret_cast<void**>(&original_graph_process)};
-    for (uint32_t i = first; i < 6; ++i) {
-        if (i == 2 && native_owner.load()) continue;
-        root_targets[i] = base + rvas[i];
-    }
-    if (rsf::ac7::install_hooks(root_targets, detours, originals, 6)) {
-        s.roots_installed = true;
-        current_rhi_command_address = base + 0x3c78358;
+    static_assert(std::size(detours) == 6 && std::size(originals) == 6);
+    return count == 6 && rsf::ac7::install_hooks(targets, detours, originals, count);
+}
+const MotionRootHookEffects root_hook_effects{
+    copy_memory, [] { return native_owner.load(); }, install_root_hooks, rsf::ac7::remove_hooks,
+};
+void install_roots(unsigned char* base)
+{
+    switch (rsf_ac7_capture_install_roots(base, &root_hook_effects)) {
+    case MotionRootInstall::already_installed: return;
+    case MotionRootInstall::rhi_refused:
+        say("renderer root capture refused: RHI current-command write differs"); return;
+    case MotionRootInstall::entry_refused:
+        say("renderer root capture refused: expected AC7 entry bytes differ"); return;
+    case MotionRootInstall::rolled_back:
+        say("renderer root capture failed and was rolled back"); return;
+    case MotionRootInstall::installed:
         say("renderer root capture installed: graph/RHI associations, main temporal graph and widget producers; engine arguments unchanged"); return;
     }
-    std::fill(std::begin(root_targets), std::end(root_targets), nullptr);
-    say("renderer root capture failed and was rolled back");
 }
 bool copy_upload(void* user, const unsigned char* bytes, size_t size) noexcept try
 {
@@ -763,7 +744,8 @@ MotionArtifactStats finish_stats(const void* user) noexcept
 {
     const auto& s = *static_cast<const Capture*>(user);
     LARGE_INTEGER frequency{}; QueryPerformanceFrequency(&frequency);
-    return {frequency.QuadPart, s.installed.load(), s.roots_installed.load(), s.blob_dropped, rsf_ac7_capture_failures()};
+    return {frequency.QuadPart, s.installed.load(), rsf_ac7_capture_current_command_address() != nullptr,
+        s.blob_dropped, rsf_ac7_capture_failures()};
 }
 void finish() noexcept try
 {
@@ -879,8 +861,7 @@ extern "C" void rsf_ac7_motion_capture_shutdown(void)
     auto& s = state();
     rsf_ac7_capture_shutdown(&capture_effects);
     if (s.installed) rsf::ac7::remove_hooks(hook_targets, 3);
-    if (s.roots_installed) rsf::ac7::remove_hooks(root_targets, 6);
-    s.roots_installed = false;
+    rsf_ac7_capture_remove_roots(&root_hook_effects);
     s.installed = false;
 }
 extern "C" void rsf_ac7_motion_capture_shader(void* shader, uint32_t stage, const void* bytes, uint32_t size)

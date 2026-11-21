@@ -4,6 +4,7 @@
 
 mod artifacts;
 mod draws;
+mod root_hooks;
 
 use rsf_game_sys::rsf_game_render_pass;
 use std::cell::{Cell, RefCell};
