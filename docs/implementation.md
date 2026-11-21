@@ -81,11 +81,14 @@ unrun.
 The XeSS Vulkan/DX12 bridge uses one Rust session owner for creation,
 startup, per-frame presentation, completion and checked retirement.
 The integrated Runtime and standalone bridge compile the same source.
-Native leaves retain typed XeSS FG, XeLL, DXGI, D3D12 and Vulkan effects,
-plus diagnostic capture and timing. The integrated Present checks each
-record's size before reading its ABI version. Source comparison matched
-the C exports and private call table. The guard-page fixture, both
-build paths and device behavior remain unverified.
+Rust also owns diagnostic capture admission, source IDs and readbacks.
+Retirement publishes only after the bridge's queue proof. It closes
+capture admission before unregistering SDK callbacks without the lock.
+Native leaves retain typed SDK and graphics effects, fingerprint
+checks, file output and timing. The integrated Present checks record
+sizes before ABI versions. Source comparison matched all 27 C exports
+and checked the private call table. The guard-page fixture, both build
+paths and device behavior remain unverified.
 
 The FidelityFX 4 FG bridge used by Vulkan now owns admission, frame
 validation, queue and fence sequencing, telemetry and checked retirement

@@ -6,8 +6,13 @@ use std::cell::Cell;
 use std::ffi::{CStr, c_char, c_void};
 use std::mem::MaybeUninit;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
-use std::ptr;
+use std::ptr::{self, NonNull};
 use std::sync::atomic::{AtomicI32, Ordering};
+
+#[path = "capture.rs"]
+mod capture;
+
+use capture::{Capture, Desc, Event, Footprint, Image};
 
 type Handle = *mut c_void;
 type Step = unsafe extern "C" fn(Handle) -> i32;
@@ -129,13 +134,14 @@ struct Platform {
     create_completion_fence: Step,
     open_event: unsafe extern "C" fn() -> Handle,
     create_recorders: Step,
-    start_capture: unsafe extern "C" fn(Handle, Handle) -> i32,
+    // Stores the SDK diagnostic setter. Nonzero when the export is missing.
+    find_diagnostics: unsafe extern "C" fn(Handle, Handle) -> i32,
     set_generated: unsafe extern "C" fn(Handle, u32) -> i32,
     read_completion: unsafe extern "C" fn(Handle, *mut u64) -> i32,
     arm_completion: unsafe extern "C" fn(Handle, u64, Handle) -> i32,
     wait_event: unsafe extern "C" fn(Handle, u32) -> i32,
     disable_fg: Step,
-    flush_capture: Step,
+    unregister_diagnostics: Step,
     release_swapchain: unsafe extern "C" fn(Handle),
     destroy_fg: Step,
     destroy_xell: Step,
@@ -161,6 +167,22 @@ struct Platform {
     mark_present_enter: unsafe extern "C" fn(Handle, u32),
     finish_gpu_timing: unsafe extern "C" fn(Handle, u32),
     serialize_enabled: unsafe extern "C" fn() -> u32,
+    // Lends the session's capture owner to the capsule as the SDK callback user.
+    attach_capture: unsafe extern "C" fn(Handle, *const Capture),
+    register_diagnostics: Step,
+    capture_fingerprint: unsafe extern "C" fn(Handle) -> u32,
+    capture_failure: unsafe extern "C" fn(*const u16, *const c_char),
+    capture_describe: unsafe extern "C" fn(Handle, *mut Desc),
+    capture_event: unsafe extern "C" fn(*const u16, *const Event) -> i32,
+    // Writes the footprint, its byte size and a device reference. Nonzero
+    // when the resource has no device.
+    capture_footprint: unsafe extern "C" fn(Handle, *mut Footprint, *mut u64, *mut Handle) -> i32,
+    // A COPY_DEST readback buffer with one reference, or null.
+    capture_readback: unsafe extern "C" fn(Handle, u64) -> Handle,
+    capture_release: unsafe extern "C" fn(Handle),
+    capture_copy: unsafe extern "C" fn(Handle, Handle, Handle, *const Footprint, u32),
+    // Maps one completed readback and writes its raw and JSON files.
+    capture_publish: unsafe extern "C" fn(*const u16, *const Image) -> i32,
 }
 
 const _: () = {
@@ -181,24 +203,31 @@ const _: () = {
     assert!(std::mem::offset_of!(IntegratedStatus, abi_version) == 4);
     assert!(std::mem::offset_of!(IntegratedStatus, result) == 8);
     assert!(std::mem::offset_of!(IntegratedStatus, _reserved) == 20);
-    assert!(size_of::<Platform>() == 424 && align_of::<Platform>() == 8);
+    assert!(size_of::<Platform>() == 512 && align_of::<Platform>() == 8);
     assert!(std::mem::offset_of!(Platform, allocate) == 8);
     assert!(std::mem::offset_of!(Platform, init_swapchain) == 112);
+    assert!(std::mem::offset_of!(Platform, find_diagnostics) == 168);
     assert!(std::mem::offset_of!(Platform, read_completion) == 184);
+    assert!(std::mem::offset_of!(Platform, unregister_diagnostics) == 216);
     assert!(std::mem::offset_of!(Platform, destroy_xell) == 240);
     assert!(std::mem::offset_of!(Platform, has_shared_queue) == 248);
     assert!(std::mem::offset_of!(Platform, wait_shared) == 296);
     assert!(std::mem::offset_of!(Platform, read_present_status) == 344);
     assert!(std::mem::offset_of!(Platform, serialize_enabled) == 416);
+    assert!(std::mem::offset_of!(Platform, attach_capture) == 424);
+    assert!(std::mem::offset_of!(Platform, capture_footprint) == 472);
+    assert!(std::mem::offset_of!(Platform, capture_publish) == 504);
 };
 
-const PLATFORM_ABI_VERSION: u32 = 2;
+const PLATFORM_ABI_VERSION: u32 = 3;
 const BRIDGE_ABI_VERSION: u32 = 1;
 const INVALID_ARGUMENT: i32 = -10001;
 const ABI_MISMATCH: i32 = -10002;
 const WAIT_MS: u32 = 10_000;
 const WAIT_INCOMPLETE: i32 = -3;
 const ALLOCATOR_COUNT: u32 = 3;
+const CAPTURE_FLUSH_FAILED: i32 = -7010;
+const CAPTURE_START_FAILED: i32 = -7011;
 
 thread_local! {
     static CREATE_STAGE: Cell<&'static CStr> = const { Cell::new(c"not attempted") };
@@ -254,6 +283,9 @@ fn advance_timing(ops: &Platform, phase: TimingPhase, start: Option<i64>) -> Opt
 struct Session {
     platform: &'static Platform,
     native: Handle,
+    // Owned. The SDK callbacks and the public capture calls borrow it
+    // through the capsule while the session itself may be borrowed mutably.
+    capture: NonNull<Capture>,
     modules: Modules,
     event: Option<OwnedHandle>,
     max_generated: u32,
@@ -269,6 +301,10 @@ struct Session {
 }
 
 impl Session {
+    fn capture(&self) -> &Capture {
+        unsafe { self.capture.as_ref() }
+    }
+
     fn create_step(&self, stage: &'static CStr, step: Step) -> i32 {
         CREATE_STAGE.set(stage);
         unsafe { step(self.native) }
@@ -381,9 +417,8 @@ impl Session {
             return code;
         }
         self.phase = Phase::PresenterReady;
-        let code = unsafe { (ops.start_capture)(native, self.modules.fg) };
-        if code < 0 {
-            return code;
+        if !self.capture().initialize(native, self.modules.fg) {
+            return CAPTURE_START_FAILED;
         }
         let code = if integrated {
             unsafe { (ops.set_generated)(native, generated) }
@@ -582,9 +617,9 @@ impl Session {
             }
         }
         self.wait(self.completion_value)?;
-        let code = unsafe { (ops.flush_capture)(native) };
-        if code != 0 {
-            return Err(code);
+        // Publication is gated on the drained queue and the completed fence.
+        if !self.capture().flush(native) {
+            return Err(CAPTURE_FLUSH_FAILED);
         }
         // The SDK refuses destruction with an outstanding DXGI wrapper reference.
         unsafe { (ops.release_swapchain)(native) };
@@ -617,6 +652,9 @@ impl Drop for Session {
         if !self.native.is_null() {
             unsafe { (self.platform.release_native)(self.native) };
         }
+        // The capsule no longer lends the capture, and checked retirement
+        // unregistered the SDK callbacks. Remaining readbacks are released.
+        drop(unsafe { Box::from_raw(self.capture.as_ptr()) });
         drop(self.event.take());
         // COM and the native callback storage are gone before the SDK DLLs unload.
         for module in [self.modules.fg, self.modules.xell] {
@@ -652,10 +690,12 @@ unsafe extern "C" fn rsf_core_xess_bridge_create(
     if session.is_null() {
         return -2;
     }
+    let capture = Box::new(Capture::from_environment(platform));
     unsafe {
         session.write(Session {
             platform,
             native: ptr::null_mut(),
+            capture: NonNull::from(Box::leak(capture)),
             modules: Modules {
                 fg: ptr::null_mut(),
                 xell: ptr::null_mut(),
@@ -680,6 +720,7 @@ unsafe extern "C" fn rsf_core_xess_bridge_create(
     }
     let owner = unsafe { &mut *session };
     owner.native = native;
+    unsafe { (platform.attach_capture)(native, owner.capture.as_ptr()) };
     let code = owner.create(luid, directory);
     if code != 0 {
         let stage = CREATE_STAGE.get().as_ptr();
