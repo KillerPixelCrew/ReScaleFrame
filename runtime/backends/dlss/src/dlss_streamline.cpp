@@ -55,6 +55,15 @@ struct rsf_streamline_sr_platform {
     void (*destroy)(void*);
 };
 
+using rsf_streamline_sr_entry_addresses = void*[12];
+
+extern "C" {
+int32_t rsf_core_dlss_streamline_resolve_entries(void*, uint32_t, rsf_streamline_sr_entry_addresses*,
+    void (*)(const char*));
+int32_t rsf_core_dlss_streamline_resolve_features(void*, uint32_t,
+    int32_t (*)(void*, const char*, void**), void (*)(void*, void*, void*), uint32_t*);
+}
+
 // sl_security.h defines globals, so it belongs in exactly one translation unit.
 bool rsf_dlss_verify_runtime_signature(const wchar_t* path)
 {
@@ -133,37 +142,34 @@ void streamline_message(sl::LogType type, const char* message)
     say("streamline %s: %s", type == sl::LogType::eError ? "error" : "warning", message ? message : "");
 }
 
-template <typename T>
-bool resolve(HMODULE module, const char* name, T*& target)
+void missing_entry(const char* name) noexcept
 {
-    target = reinterpret_cast<T*>(reinterpret_cast<void*>(GetProcAddress(module, name)));
-    if (!target) {
-        say("entry point %s is missing from the interposer", name);
-        return false;
-    }
-    return true;
+    say("entry point %s is missing from the interposer", name);
 }
 
-// One resolve chain for both ways in. A Streamline owner loads the interposer itself and needs the
-// whole set; a borrower of the shared D3D12 host gets the module from the host, which has already
-// initialised it and owns the device and the frame tokens.
-bool resolve_entries(HMODULE module, Entries& entries, bool owner)
+bool bind_entries(HMODULE module, Entries& entries, bool owner) noexcept
 {
-    bool resolved = resolve(module, "slIsFeatureSupported", entries.is_feature_supported) &&
-                    resolve(module, "slGetFeatureFunction", entries.get_feature_function) &&
-                    resolve(module, "slGetFeatureRequirements", entries.get_feature_requirements) &&
-                    resolve(module, "slSetConstants", entries.set_constants) &&
-                    resolve(module, "slSetTagForFrame", entries.set_tag_for_frame) &&
-                    resolve(module, "slEvaluateFeature", entries.evaluate_feature) &&
-                    resolve(module, "slFreeResources", entries.free_resources);
-    if (owner) {
-        resolved = resolved && resolve(module, "slInit", entries.init) &&
-                   resolve(module, "slShutdown", entries.shutdown) &&
-                   resolve(module, "slSetD3DDevice", entries.set_device) &&
-                   resolve(module, "slGetNewFrameToken", entries.get_new_frame_token) &&
-                   resolve(module, "slAllocateResources", entries.allocate_resources);
-    }
-    return resolved;
+    rsf_streamline_sr_entry_addresses addresses{};
+    if (rsf_core_dlss_streamline_resolve_entries(module, owner, &addresses, missing_entry) != RSF_DLSS_OK)
+        return false;
+
+    // Keep the vendor function pointer types here. The raw slots follow Rust's ENTRY_NAMES.
+    const auto& [is_feature_supported, get_feature_function, get_feature_requirements, set_constants,
+        set_tag_for_frame, evaluate_feature, free_resources, init, shutdown, set_device,
+        get_new_frame_token, allocate_resources] = addresses;
+    entries.is_feature_supported = reinterpret_cast<PFun_slIsFeatureSupported*>(is_feature_supported);
+    entries.get_feature_function = reinterpret_cast<PFun_slGetFeatureFunction*>(get_feature_function);
+    entries.get_feature_requirements = reinterpret_cast<PFun_slGetFeatureRequirements*>(get_feature_requirements);
+    entries.set_constants = reinterpret_cast<PFun_slSetConstants*>(set_constants);
+    entries.set_tag_for_frame = reinterpret_cast<PFun_slSetTagForFrame*>(set_tag_for_frame);
+    entries.evaluate_feature = reinterpret_cast<PFun_slEvaluateFeature*>(evaluate_feature);
+    entries.free_resources = reinterpret_cast<PFun_slFreeResources*>(free_resources);
+    entries.init = reinterpret_cast<PFun_slInit*>(init);
+    entries.shutdown = reinterpret_cast<PFun_slShutdown*>(shutdown);
+    entries.set_device = reinterpret_cast<PFun_slSetD3DDevice*>(set_device);
+    entries.get_new_frame_token = reinterpret_cast<PFun_slGetNewFrameToken*>(get_new_frame_token);
+    entries.allocate_resources = reinterpret_cast<PFun_slAllocateResources*>(allocate_resources);
+    return true;
 }
 
 sl::Boolean flag(uint32_t value)
@@ -177,20 +183,17 @@ const sl::ViewportHandle& viewport_handle(uint32_t slot)
     return handles[slot];
 }
 
-constexpr uint32_t optimal_feature = 1;
-constexpr uint32_t options_feature = 2;
-
-uint32_t resolve_features(Native& self, bool strict)
+int32_t lookup_dlss_function(void* native, const char* name, void** address) noexcept try
 {
-    void* optimal = nullptr;
-    void* options = nullptr;
-    const auto optimal_result = self.sl.get_feature_function(sl::kFeatureDLSS, "slDLSSGetOptimalSettings", optimal);
-    if (strict && optimal_result != sl::Result::eOk) return 0;
-    const auto options_result = self.sl.get_feature_function(sl::kFeatureDLSS, "slDLSSSetOptions", options);
-    if (strict && options_result != sl::Result::eOk) return 0;
+    const auto result = static_cast<Native*>(native)->sl.get_feature_function(sl::kFeatureDLSS, name, *address);
+    return result == sl::Result::eOk ? RSF_DLSS_OK : RSF_DLSS_ERROR_MISSING_ENTRY_POINT;
+} catch (...) { return RSF_DLSS_ERROR_FEATURE_FAILED; }
+
+void bind_dlss_functions(void* native, void* optimal, void* options) noexcept
+{
+    auto& self = *static_cast<Native*>(native);
     self.get_optimal_settings = reinterpret_cast<PFun_slDLSSGetOptimalSettings*>(optimal);
     self.set_options = reinterpret_cast<PFun_slDLSSSetOptions*>(options);
-    return (optimal ? optimal_feature : 0) | (options ? options_feature : 0);
 }
 
 void* load_owned(const wchar_t* path, const rsf_dlss_setup* setup) noexcept try
@@ -202,7 +205,7 @@ int32_t open_owned(HMODULE module, const rsf_dlss_setup* setup,
     const wchar_t* plugin_directory, const wchar_t* log_directory, void** out)
 {
     auto self = std::make_unique<Native>();
-    if (!resolve_entries(module, self->sl, true)) return RSF_DLSS_ERROR_MISSING_ENTRY_POINT;
+    if (!bind_entries(module, self->sl, true)) return RSF_DLSS_ERROR_MISSING_ENTRY_POINT;
 
     sl::Preferences preferences{};
     // Manual hooking is what makes this integration possible at all. The regular mode expects to
@@ -281,10 +284,12 @@ int32_t borrow_host(void* raw_host, rsf_dlss_log_fn log, void* user, void** out,
         return RSF_DLSS_ERROR_NOT_READY;
     }
     auto self = std::make_unique<Native>();
-    if (!resolve_entries(module, self->sl, false) ||
-        resolve_features(*self, true) != (optimal_feature | options_feature)) {
-        return RSF_DLSS_ERROR_MISSING_ENTRY_POINT;
-    }
+    if (!bind_entries(module, self->sl, false)) return RSF_DLSS_ERROR_MISSING_ENTRY_POINT;
+    uint32_t features = 0;
+    const auto resolved = rsf_core_dlss_streamline_resolve_features(self.get(), 1,
+        lookup_dlss_function, bind_dlss_functions, &features);
+    if (resolved != RSF_DLSS_OK)
+        return resolved == RSF_DLSS_ERROR_FEATURE_FAILED ? RSF_DLSS_ERROR_INIT_FAILED : resolved;
     set_log(log, user);
     *device = graphics.native_device;
     *out = self.release();
@@ -300,12 +305,12 @@ int32_t set_device(void* native, void* device, uint32_t* features) noexcept try
         say("slSetD3DDevice failed with result %u", static_cast<unsigned>(result));
         return RSF_DLSS_ERROR_FEATURE_FAILED;
     }
-    *features = resolve_features(self, false);
-    if (*features != (optimal_feature | options_feature)) {
+    const auto resolved = rsf_core_dlss_streamline_resolve_features(native, 0,
+        lookup_dlss_function, bind_dlss_functions, features);
+    if (resolved == RSF_DLSS_ERROR_MISSING_ENTRY_POINT) {
         say("DLSS feature functions are not available");
-        return RSF_DLSS_ERROR_MISSING_ENTRY_POINT;
     }
-    return RSF_DLSS_OK;
+    return resolved;
 } catch (...) { return RSF_DLSS_ERROR_FEATURE_FAILED; }
 
 int32_t present(void* native, void* swapchain, uint32_t interval, uint32_t flags, uint32_t begin) noexcept try
