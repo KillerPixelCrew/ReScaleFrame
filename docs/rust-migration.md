@@ -231,6 +231,12 @@ create, requirements, memory choice, allocate and bind sequence in
 Rust. The shared typed Vulkan leaves keep the same descriptors.
 [Image allocation source comparison](research/rust-vulkan-ffx-sr-images.md)
 
+The integrated and standalone XeSS Vulkan bridge use the same Rust
+Present input checks and resource transition and tag sequence. The
+native leaves retain typed D3D12 and SDK calls. The source comparison
+includes both HUD-less modes, distinct tags for aliased inputs and
+the original failure cleanup. [XeSS input ownership](research/rust-vulkan-xess-present-inputs.md)
+
 The legacy D3D11 Streamline SR owner now selects the required
 interposer and DLSS feature lookups in Rust. It shares the seven
 common lookups and adds the five owner-only lookups for a session

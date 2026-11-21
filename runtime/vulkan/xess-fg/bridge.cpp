@@ -710,24 +710,12 @@ void HarvestGpuTiming(VulkanStoryXessFg* value, uint32_t slot) {
 }
 }
 
-static int32_t CheckPresentResources(const VulkanStoryXessFrame* frame, uint32_t width,
-    uint32_t height, uint32_t backbufferHudless) {
-    D3D12_RESOURCE_DESC color = frame->color->GetDesc();
-    D3D12_RESOURCE_DESC hudless = frame->hudless->GetDesc();
-    D3D12_RESOURCE_DESC ui = frame->ui ? frame->ui->GetDesc() : D3D12_RESOURCE_DESC{};
-    D3D12_RESOURCE_DESC motion = frame->motion->GetDesc();
-    D3D12_RESOURCE_DESC depth = frame->depth->GetDesc();
-    if (color.Width != width || color.Height != height ||
-        color.Format != DXGI_FORMAT_B8G8R8A8_UNORM ||
-        hudless.Width != width || hudless.Height != height ||
-        hudless.Format != color.Format ||
-        (!backbufferHudless && (ui.Width != width ||
-        ui.Height != height || ui.Format != color.Format)) ||
-        motion.Width != depth.Width || motion.Height != depth.Height ||
-        motion.Format != DXGI_FORMAT_R16G16_FLOAT ||
-        (backbufferHudless ? depth.Format != DXGI_FORMAT_R32_FLOAT :
-            depth.Format != DXGI_FORMAT_D32_FLOAT)) return -2;
-    return 0;
+static_assert(DXGI_FORMAT_B8G8R8A8_UNORM == 87 && DXGI_FORMAT_R16G16_FLOAT == 34 &&
+    DXGI_FORMAT_D32_FLOAT == 40 && DXGI_FORMAT_R32_FLOAT == 41);
+
+static void DescribePresentResource(void* resource, rsf_xess_bridge_resource_desc* output) {
+    const D3D12_RESOURCE_DESC desc = static_cast<ID3D12Resource*>(resource)->GetDesc();
+    *output = {desc.Width, desc.Height, static_cast<uint32_t>(desc.Format)};
 }
 
 static int32_t ResetPresentCommands(VulkanStoryXessFg* value, uint32_t slot) {
@@ -736,63 +724,42 @@ static int32_t ResetPresentCommands(VulkanStoryXessFg* value, uint32_t slot) {
     return static_cast<int32_t>(value->commandList->Reset(value->allocators[slot], nullptr));
 }
 
-// The copy, input tags and state restores borrow the same typed command list
-// and backbuffer reference. On failure, close before returning to the session.
-static int32_t RecordPresentInputs(VulkanStoryXessFg* value, const VulkanStoryXessFrame* frame) {
-    std::array<ID3D12Resource*, 5> inputs = {
-        frame->color, frame->depth, frame->motion, frame->hudless, frame->ui
-    };
-    // Real-frame fallback can use final color as HUD-less. Transition an aliased
-    // resource once while still tagging it for the requested SDK input role.
-    for (size_t i = 0; i < inputs.size(); ++i)
-        for (size_t j = 0; j < i; ++j)
-            if (inputs[i] && inputs[i] == inputs[j]) { inputs[i] = nullptr; break; }
-    for (ID3D12Resource* input : inputs) {
-        if (!input) continue;
-        Transition(value->commandList, input, D3D12_RESOURCE_STATE_COMMON,
-            D3D12_RESOURCE_STATE_COPY_SOURCE);
-    }
-    ID3D12Resource* backbuffer = nullptr;
-    uint32_t backbufferIndex = value->swapchain->GetCurrentBackBufferIndex();
-    const HRESULT result = value->swapchain->GetBuffer(backbufferIndex, IID_PPV_ARGS(&backbuffer));
-    if (FAILED(result)) { value->commandList->Close(); return static_cast<int>(result); }
-    Transition(value->commandList, backbuffer, D3D12_RESOURCE_STATE_PRESENT,
-        D3D12_RESOURCE_STATE_COPY_DEST);
-    value->commandList->CopyResource(backbuffer, frame->color);
+static_assert(D3D12_RESOURCE_STATE_COMMON == 0 && D3D12_RESOURCE_STATE_PRESENT == 0 &&
+    D3D12_RESOURCE_STATE_COPY_DEST == 0x400 && D3D12_RESOURCE_STATE_COPY_SOURCE == 0x800);
 
-    struct Tag { ID3D12Resource* resource; xefg_swapchain_resource_type_t type; };
-    std::array<Tag, 4> tags = {{
-        {frame->depth, XEFG_SWAPCHAIN_RES_DEPTH},
-        {frame->motion, XEFG_SWAPCHAIN_RES_MOTION_VECTOR},
-        {frame->hudless, XEFG_SWAPCHAIN_RES_HUDLESS_COLOR},
-        {frame->ui, XEFG_SWAPCHAIN_RES_UI},
-    }};
-    for (const Tag& tag : tags) {
-        if (!tag.resource) continue;
-        D3D12_RESOURCE_DESC desc = tag.resource->GetDesc();
-        xefg_swapchain_d3d12_resource_data_t data{};
-        data.type = tag.type;
-        data.validity = XEFG_SWAPCHAIN_RV_ONLY_NOW;
-        data.resourceSize = {static_cast<uint32_t>(desc.Width), desc.Height};
-        data.pResource = tag.resource;
-        data.incomingState = D3D12_RESOURCE_STATE_COPY_SOURCE;
-        int code = static_cast<int>(value->tagResource(value->fg, value->commandList,
-            frame->frameId, &data));
-        if (code < 0) {
-            value->commandList->Close();
-            Release(backbuffer);
-            return code;
-        }
-    }
-    for (ID3D12Resource* input : inputs) {
-        if (!input) continue;
-        Transition(value->commandList, input, D3D12_RESOURCE_STATE_COPY_SOURCE,
-            D3D12_RESOURCE_STATE_COMMON);
-    }
-    Transition(value->commandList, backbuffer, D3D12_RESOURCE_STATE_COPY_DEST,
-        D3D12_RESOURCE_STATE_PRESENT);
-    Release(backbuffer);
-    return 0;
+static void TransitionPresentResource(VulkanStoryXessFg* value, void* resource,
+    uint32_t before, uint32_t after) {
+    Transition(value->commandList, static_cast<ID3D12Resource*>(resource),
+        static_cast<D3D12_RESOURCE_STATES>(before), static_cast<D3D12_RESOURCE_STATES>(after));
+}
+
+static int32_t AcquireBackbuffer(VulkanStoryXessFg* value, void** output) {
+    ID3D12Resource* backbuffer = nullptr;
+    const uint32_t backbufferIndex = value->swapchain->GetCurrentBackBufferIndex();
+    const HRESULT result = value->swapchain->GetBuffer(backbufferIndex, IID_PPV_ARGS(&backbuffer));
+    if (SUCCEEDED(result)) *output = backbuffer;
+    return static_cast<int32_t>(result);
+}
+
+static void CopyPresentColor(VulkanStoryXessFg* value, void* backbuffer, void* color) {
+    value->commandList->CopyResource(static_cast<ID3D12Resource*>(backbuffer),
+        static_cast<ID3D12Resource*>(color));
+}
+
+static_assert(XEFG_SWAPCHAIN_RES_HUDLESS_COLOR == 0 && XEFG_SWAPCHAIN_RES_DEPTH == 1 &&
+    XEFG_SWAPCHAIN_RES_MOTION_VECTOR == 2 && XEFG_SWAPCHAIN_RES_UI == 3);
+
+static int32_t TagPresentResource(VulkanStoryXessFg* value, void* resource,
+    uint32_t role, uint32_t frameId) {
+    auto* input = static_cast<ID3D12Resource*>(resource);
+    const D3D12_RESOURCE_DESC desc = input->GetDesc();
+    xefg_swapchain_d3d12_resource_data_t data{};
+    data.type = static_cast<xefg_swapchain_resource_type_t>(role);
+    data.validity = XEFG_SWAPCHAIN_RV_ONLY_NOW;
+    data.resourceSize = {static_cast<uint32_t>(desc.Width), desc.Height};
+    data.pResource = input;
+    data.incomingState = D3D12_RESOURCE_STATE_COPY_SOURCE;
+    return static_cast<int32_t>(value->tagResource(value->fg, value->commandList, frameId, &data));
 }
 
 static int32_t TagPresentConstants(VulkanStoryXessFg* value, const VulkanStoryXessFrame* frame) {
@@ -906,9 +873,13 @@ static constexpr rsf_xess_bridge_platform Platform{
     .has_shared_queue = [](const VulkanStoryXessFg* value) -> uint32_t {
         return value->queue && value->sharedFence;
     },
-    .check_resources = CheckPresentResources,
+    .describe_present_resource = DescribePresentResource,
     .reset_commands = ResetPresentCommands,
-    .record_inputs = RecordPresentInputs,
+    .transition_present_resource = TransitionPresentResource,
+    .acquire_backbuffer = AcquireBackbuffer,
+    .copy_present_color = CopyPresentColor,
+    .tag_present_resource = TagPresentResource,
+    .release_backbuffer = [](void* backbuffer) { static_cast<ID3D12Resource*>(backbuffer)->Release(); },
     .close_commands = [](VulkanStoryXessFg* value) -> int32_t { return value->commandList->Close(); },
     .tag_constants = TagPresentConstants,
     .wait_shared = WaitShared,

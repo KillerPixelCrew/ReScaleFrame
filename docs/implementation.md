@@ -843,6 +843,13 @@ and remains unrun. Build and live observer verification remain open.
 
 ## Rust orchestrator and first Anomaly port
 
+The XeSS Vulkan bridge now admits Present inputs and sequences
+resource transitions, copies and SDK tags in Rust. Aliased inputs
+transition once and still receive each required tag. Source comparison
+matched both HUD-less modes and the 27 C exports. Standalone and
+integrated builds and device checks remain open.
+[XeSS Present inputs](research/rust-vulkan-xess-present-inputs.md)
+
 FidelityFX Vulkan SR staging images now allocate in Rust through
 the shared typed image leaves. The owner selects the first compatible
 device-local memory type, or the last compatible type when there is
