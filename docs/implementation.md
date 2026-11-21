@@ -4,6 +4,14 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The legacy D3D11 Streamline session now owns its interposer reference
+and preference paths in Rust. Native code keeps signature verification,
+export resolution and the typed SDK calls. The module, device and
+borrowed paths stay alive until native shutdown and diagnostic cleanup
+return. Vulkan and Direct3D use the same Rust SDK module lease.
+Source review checked the owned and shared-host paths and the private
+callback table. Build and SDK validation remain open for this revision.
+
 The native D3D12 DLSS registration now acquires and retains the
 Streamline module in Rust. It checks the retained engine module's
 path before using its exports and keeps the plugin search path alive

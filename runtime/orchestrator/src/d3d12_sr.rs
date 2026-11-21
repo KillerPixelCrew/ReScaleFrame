@@ -2,7 +2,7 @@
 //! Shared D3D12 SR provider owners. Native leaves keep the vendor types and COM calls.
 use crate::allocate_handle;
 use crate::render_abi::{rsf_sr_frame as Frame, rsf_sr_open_desc as Open};
-use crate::vulkan_sdk::SdkModule;
+use crate::sdk_module::SdkModule;
 use std::ffi::{c_char, c_void};
 use std::mem::MaybeUninit;
 use std::ptr::null_mut;

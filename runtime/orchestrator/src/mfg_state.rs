@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use crate::vulkan_sdk::SdkModule;
+use crate::sdk_module::SdkModule;
 use std::ffi::{c_char, c_void};
 use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
 

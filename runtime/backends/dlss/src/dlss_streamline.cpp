@@ -31,14 +31,14 @@
 
 #include <cstdio>
 #include <memory>
-#include <string>
 
 struct rsf_streamline_sr_options {
     uint32_t quality, width, height, hdr, auto_exposure, alpha, preset;
 };
 
 struct rsf_streamline_sr_platform {
-    int32_t (*open)(const rsf_dlss_setup*, void**);
+    void* (*load)(const wchar_t*, const rsf_dlss_setup*);
+    int32_t (*start)(void*, const rsf_dlss_setup*, const wchar_t*, const wchar_t*, void**);
     int32_t (*borrow_host)(void*, rsf_dlss_log_fn, void*, void**, void**);
     int32_t (*device)(void*, void*, uint32_t*);
     int32_t (*support)(void*, void*, uint32_t, rsf_dlss_support*);
@@ -90,18 +90,14 @@ struct Native {
     ~Native()
     {
         rsf_core_streamline_log_clear(RSF_STREAMLINE_LOG_LEGACY_SR, 0);
-        if (interposer) FreeLibrary(interposer);
     }
-    HMODULE interposer = nullptr;
     Entries sl{};
     PFun_slDLSSGetOptimalSettings* get_optimal_settings = nullptr;
     PFun_slDLSSSetOptions* set_options = nullptr;
     HRESULT (*present)(IDXGISwapChain*, UINT, UINT, bool&){};
     HRESULT (*after_present)(UINT){};
 
-    // The SDK borrows these arrays and strings until its owned session shuts down.
-    std::wstring plugin_directory;
-    std::wstring log_directory;
+    // The SDK borrows this array and Rust owns the strings through shutdown.
     const wchar_t* plugin_paths[1]{};
 };
 
@@ -197,21 +193,16 @@ uint32_t resolve_features(Native& self, bool strict)
     return (optimal ? optimal_feature : 0) | (options ? options_feature : 0);
 }
 
-int32_t open_owned(const rsf_dlss_setup* setup, void** out)
+void* load_owned(const wchar_t* path, const rsf_dlss_setup* setup) noexcept try
 {
-    if (GetModuleHandleW(L"sl.interposer.dll")) {
-        say("D3D11 DLSS cannot initialize over an existing Streamline owner; use the shared D3D12 host");
-        return RSF_DLSS_ERROR_INIT_FAILED;
-    }
+    return rsf::load_interposer(path, setup->require_signature != 0, setup->log, setup->log_user);
+} catch (...) { return nullptr; }
+
+int32_t open_owned(HMODULE module, const rsf_dlss_setup* setup,
+    const wchar_t* plugin_directory, const wchar_t* log_directory, void** out)
+{
     auto self = std::make_unique<Native>();
-    std::wstring interposer;
-    if (!rsf::widen_utf8(setup->interposer_path_utf8, interposer)) {
-        return RSF_DLSS_ERROR_INVALID_ARGUMENT;
-    }
-    self->interposer = rsf::load_interposer(interposer.c_str(), setup->require_signature != 0,
-        setup->log, setup->log_user);
-    if (!self->interposer) return RSF_DLSS_ERROR_LOAD_FAILED;
-    if (!resolve_entries(self->interposer, self->sl, true)) return RSF_DLSS_ERROR_MISSING_ENTRY_POINT;
+    if (!resolve_entries(module, self->sl, true)) return RSF_DLSS_ERROR_MISSING_ENTRY_POINT;
 
     sl::Preferences preferences{};
     // Manual hooking is what makes this integration possible at all. The regular mode expects to
@@ -232,14 +223,12 @@ int32_t open_owned(const rsf_dlss_setup* setup, void** out)
     preferences.featuresToLoad = features;
     preferences.numFeaturesToLoad = 1;
 
-    if (rsf::widen_utf8(setup->plugin_directory_utf8, self->plugin_directory)) {
-        self->plugin_paths[0] = self->plugin_directory.c_str();
+    if (plugin_directory) {
+        self->plugin_paths[0] = plugin_directory;
         preferences.pathsToPlugins = self->plugin_paths;
         preferences.numPathsToPlugins = 1;
     }
-    if (rsf::widen_utf8(setup->log_directory_utf8, self->log_directory)) {
-        preferences.pathToLogsAndData = self->log_directory.c_str();
-    }
+    preferences.pathToLogsAndData = log_directory;
     // NGX will not start without an identity, and DLSS is an NGX feature, so getting this wrong
     // costs the whole thing: the plugin loads and then reports "Missing NGX context". An injected
     // integration has no application id of its own, since that belongs to the game's publisher, so
@@ -269,10 +258,11 @@ int32_t open_owned(const rsf_dlss_setup* setup, void** out)
     return RSF_DLSS_OK;
 }
 
-int32_t start_owned(const rsf_dlss_setup* setup, void** out) noexcept try
+int32_t start_owned(void* module, const rsf_dlss_setup* setup,
+    const wchar_t* plugins, const wchar_t* logs, void** out) noexcept try
 {
     set_log(setup->log, setup->log_user);
-    const auto result = open_owned(setup, out);
+    const auto result = open_owned(static_cast<HMODULE>(module), setup, plugins, logs, out);
     if (result != RSF_DLSS_OK) set_log(nullptr, nullptr);
     return result;
 } catch (...) {
@@ -580,10 +570,11 @@ void destroy(void* native) noexcept
     delete static_cast<Native*>(native);
 }
 
-constexpr rsf_streamline_sr_platform platform{start_owned, borrow_host, set_device, query_support,
+constexpr rsf_streamline_sr_platform platform{load_owned, start_owned, borrow_host, set_device, query_support,
     render_plan, present, get_token, set_constants, set_options, set_tags, evaluate, drain,
     release_viewport, shutdown, destroy};
-static_assert(sizeof(rsf_streamline_sr_platform) == 15 * sizeof(void*));
+static_assert(sizeof(rsf_streamline_sr_platform) == 16 * sizeof(void*));
+static_assert(RSF_DLSS_ERROR_LOAD_FAILED == -4);
 static_assert(sizeof(rsf_streamline_sr_options) == 28);
 static_assert(sizeof(rsf_dlss_setup) == 88 && sizeof(rsf_dlss_support) == 36 &&
     sizeof(rsf_dlss_plan) == 40 && sizeof(rsf_dlss_frame) == 488);

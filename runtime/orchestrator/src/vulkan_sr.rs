@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 use crate::render_abi::rsf_sharpening_options;
+use crate::sdk_module::{FIDELITYFX_DLL, Loader, SdkModule};
 use crate::sr_session::has_capacity;
-use crate::vulkan_sdk::{FIDELITYFX_DLL, Loader, SdkModule};
 use crate::vulkan_sr_abi::*;
 use crate::vulkan_sr_split::normalize_frame;
 use rsf_game_sys::{

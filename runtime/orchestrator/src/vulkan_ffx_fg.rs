@@ -5,6 +5,7 @@
 // decides admission, including WSI registration and the process-wide route, slot reuse,
 // completion evidence, presentation admission and retirement order.
 use crate::allocate_handle;
+use crate::sdk_module::{FIDELITYFX_DLL, Loader, SdkModule};
 use crate::sr_session::has_capacity;
 use crate::vulkan_fg_abi::{
     RSF_FGVK_ABI_VERSION, RSF_FGVK_FRAME_SLOTS, rsf_fgvk_frame as Frame,
@@ -19,7 +20,6 @@ use crate::vulkan_fg_resources::{
 use crate::vulkan_fg_resources_abi::{
     rsf_vkfg_fences as Fences, rsf_vkfg_image as PrivateImage, rsf_vkfg_platform as Resources,
 };
-use crate::vulkan_sdk::{FIDELITYFX_DLL, Loader, SdkModule};
 use crate::vulkan_sr_abi::{RSF_SRVK_ABI_VERSION, rsf_srvk_image as Image};
 use rsf_game_sys::{
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record as Record,

@@ -2,8 +2,8 @@
 use crate::com_ref::ComRef;
 use crate::gl_pipeline_abi::rsf_dlss_setup as Setup;
 use crate::render_abi::{RSF_DLSS_ABI_VERSION, rsf_sr_frame as Frame};
-use crate::vulkan_sdk::SdkModule;
-use std::ffi::{CStr, c_char, c_void};
+use crate::sdk_module::{SdkModule, wide_path};
+use std::ffi::c_void;
 use std::ptr::{NonNull, null_mut};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -121,14 +121,6 @@ impl Route {
             }
         }
     }
-}
-
-unsafe fn wide_path(path: *const c_char) -> Option<Vec<u16>> {
-    if path.is_null() {
-        return None;
-    }
-    let path = unsafe { CStr::from_ptr(path) }.to_str().ok()?;
-    (!path.is_empty()).then(|| path.encode_utf16().chain([0]).collect())
 }
 
 struct DeviceRegistration {

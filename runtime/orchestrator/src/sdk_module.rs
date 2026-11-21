@@ -24,6 +24,15 @@ pub(super) struct Loader {
 
 const _: () = assert!(size_of::<Loader>() == 2 * size_of::<*mut c_void>());
 
+// The caller lends a NUL-terminated UTF-8 path for this call.
+pub(super) unsafe fn wide_path(path: *const c_char) -> Option<Vec<u16>> {
+    if path.is_null() {
+        return None;
+    }
+    let path = unsafe { CStr::from_ptr(path) }.to_str().ok()?;
+    (!path.is_empty()).then(|| path.encode_utf16().chain([0]).collect())
+}
+
 pub(super) struct SdkModule {
     handle: NonNull<c_void>,
     unload: unsafe extern "C" fn(*mut c_void),

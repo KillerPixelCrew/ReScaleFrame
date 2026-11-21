@@ -219,6 +219,8 @@ mod scene_promote;
 #[cfg(windows)]
 mod scene_promote_abi;
 #[cfg(windows)]
+mod sdk_module;
+#[cfg(windows)]
 mod settings_store;
 #[cfg(windows)]
 mod shader_patch;
@@ -291,8 +293,6 @@ mod vulkan_latency_frames;
 mod vulkan_pcl;
 #[cfg(windows)]
 mod vulkan_presentation;
-#[cfg(windows)]
-mod vulkan_sdk;
 #[cfg(windows)]
 mod vulkan_sharpening;
 #[cfg(windows)]

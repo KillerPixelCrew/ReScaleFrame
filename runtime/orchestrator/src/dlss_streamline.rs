@@ -4,15 +4,19 @@ use crate::diagnostic_output::Output;
 use crate::dlss_streamline_abi::{rsf_dlss_plan as Plan, rsf_dlss_support as Support};
 use crate::gl_pipeline_abi::{rsf_dlss_log_fn as Log, rsf_dlss_setup as Setup};
 use crate::render_abi::{RSF_DLSS_ABI_VERSION, rsf_dlss_frame as Frame};
+use crate::sdk_module::{SdkModule, wide_path};
 use crate::sr_session::has_capacity;
 use std::ffi::c_void;
-use std::ptr::{NonNull, addr_of, null_mut};
+use std::ptr::{NonNull, addr_of, null, null_mut};
 use std::sync::Mutex;
+use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::core::w;
 
 type Handle = *mut c_void;
 const OK: i32 = 0;
 const INVALID: i32 = -1;
 const ABI_MISMATCH: i32 = -2;
+const LOAD_FAILED: i32 = -4;
 const MISSING_ENTRY: i32 = -5;
 const INIT_FAILED: i32 = -6;
 const NOT_READY: i32 = -8;
@@ -34,7 +38,8 @@ struct Options {
 
 #[repr(C)]
 struct Platform {
-    open: unsafe extern "C" fn(&Setup, &mut Handle) -> i32,
+    load: unsafe extern "C" fn(*const u16, &Setup) -> Handle,
+    start: unsafe extern "C" fn(Handle, &Setup, *const u16, *const u16, &mut Handle) -> i32,
     borrow_host: unsafe extern "C" fn(Handle, Log, Handle, &mut Handle, &mut Handle) -> i32,
     device: unsafe extern "C" fn(Handle, Handle, &mut u32) -> i32,
     support: unsafe extern "C" fn(Handle, Handle, u32, *mut Support) -> i32,
@@ -53,7 +58,7 @@ struct Platform {
 
 const _: () = {
     assert!(size_of::<Options>() == 28);
-    assert!(size_of::<Platform>() == 15 * size_of::<Handle>());
+    assert!(size_of::<Platform>() == 16 * size_of::<Handle>());
 };
 
 enum Route {
@@ -85,6 +90,8 @@ struct Session {
     route: Route,
     features: u32,
     applied: [Option<Options>; 2],
+    _module: Option<SdkModule>,
+    _directories: [Option<Vec<u16>>; 2],
 }
 
 // Native calls and access to the borrowed graphics host are serialized here. The caller keeps the
@@ -117,8 +124,34 @@ unsafe extern "C" fn rsf_core_dlss_streamline_load(
     if state.is_some() {
         return OK;
     }
+    if !unsafe { GetModuleHandleW(w!("sl.interposer.dll")) }.is_null() {
+        if let Some(log) = setup.log
+            && let Some(_output) = Output::try_enter()
+        {
+            unsafe {
+                log(setup.log_user, c"D3D11 DLSS cannot initialize over an existing Streamline owner; use the shared D3D12 host".as_ptr());
+            }
+        }
+        return INIT_FAILED;
+    }
+    let Some(path) = (unsafe { wide_path(setup.interposer_path_utf8) }) else {
+        return INVALID;
+    };
+    let Some(module) = SdkModule::adopt_system(unsafe { (platform.load)(path.as_ptr(), setup) })
+    else {
+        return LOAD_FAILED;
+    };
+    let directories = unsafe {
+        [
+            wide_path(setup.plugin_directory_utf8),
+            wide_path(setup.log_directory_utf8),
+        ]
+    };
+    let [plugins, logs] = directories
+        .each_ref()
+        .map(|directory| directory.as_deref().map_or(null(), <[u16]>::as_ptr));
     let mut native = null_mut();
-    let result = unsafe { (platform.open)(setup, &mut native) };
+    let result = unsafe { (platform.start)(module.as_ptr(), setup, plugins, logs, &mut native) };
     if result != OK {
         return result;
     }
@@ -130,6 +163,8 @@ unsafe extern "C" fn rsf_core_dlss_streamline_load(
         route: Route::Owned(None),
         features: 0,
         applied: [None; 2],
+        _module: Some(module),
+        _directories: directories,
     });
     OK
 }
@@ -172,6 +207,8 @@ unsafe extern "C" fn rsf_core_dlss_streamline_share_host(
         },
         features: OPTIMAL | OPTIONS,
         applied: [None; 2],
+        _module: None,
+        _directories: [None, None],
     });
     OK
 }
@@ -389,7 +426,9 @@ unsafe extern "C" fn rsf_core_dlss_streamline_shutdown(platform: &Platform) -> i
             return stopped;
         }
     }
-    drop(state.take());
+    // Keep the COM device, module and borrowed directories through native cleanup.
+    let retired = state.take();
     unsafe { (platform.destroy)(native) };
+    drop(retired);
     OK
 }

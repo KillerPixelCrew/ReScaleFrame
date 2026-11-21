@@ -3,9 +3,9 @@
 //! admission, sizing, the private image cache, history, capture order and
 //! teardown. The native table resolves typed SDK entry points and records Vulkan work.
 use super::*;
+use crate::sdk_module::{Loader, SdkModule};
 use crate::vulkan_fg_resources::{ensure_image, rsf_core_vkfg_release_image};
 use crate::vulkan_fg_resources_abi::{rsf_vkfg_image as OwnedImage, rsf_vkfg_platform as ImageOps};
-use crate::vulkan_sdk::{Loader, SdkModule};
 use std::ffi::CString;
 use std::sync::{Arc, PoisonError};
 
