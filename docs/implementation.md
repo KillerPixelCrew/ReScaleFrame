@@ -4,6 +4,12 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The combined AC7 and Loader carriers read and write the twelve shared
+sharpening keys through the Rust settings store. Reads use the same float
+parser and range checks as the Runtime. Failed writes attempt to restore
+the previous key values and log one error. Source review traced both carrier
+links. Build, export comparison and an AC7 settings round trip remain open.
+
 Anomaly's Rust bootstrap now installs DirectInput observation before
 requesting the engine's guarded `CInput::OnFrame` slot. It handles refusals
 and logging, and the native callbacks install the hooks. Source review
