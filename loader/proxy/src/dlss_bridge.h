@@ -9,14 +9,14 @@
 #define RSF_DLSS_BRIDGE_H
 
 #include <rescaleframe/d3d11_observer.h>
-#include <rescaleframe/game_renderer.h>
+#include <rescaleframe/game_api.h>
 #include <rescaleframe/sharpening_settings.h>
 
 typedef void (*rsf_bridge_log_fn)(void* user, const char* message);
 
 /* Native game-controller lifecycle. Preparation belongs before graphics activation. */
 int rsf_bridge_native_owned(void);
-int rsf_bridge_prepare_game(const wchar_t* plugin_path, const char* executable_sha256,
+int rsf_bridge_prepare_game(const wchar_t* plugin_path, const rsf_game_probe* probe,
                             rsf_bridge_log_fn log, void* log_user);
 
 

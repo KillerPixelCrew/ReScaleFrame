@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <string>
 #include <cwchar>
+#include <rescaleframe/ac7_carrier.h>
 
 extern "C" BOOL WINAPI rsf_ac7_proxy_process_event(HINSTANCE, DWORD, LPVOID);
 
@@ -84,7 +85,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void*)
         static wchar_t executable[32768]{};
         if (GetModuleFileNameW(nullptr, executable, 32768)) {
             const wchar_t* leaf = wcsrchr(executable, L'\\');
-            if (_wcsicmp(leaf ? leaf+1 : executable, L"Ace7Game.exe") == 0)
+            if (_wcsicmp(leaf ? leaf+1 : executable, rsf_ac7_carrier_executable()) == 0)
                 return rsf_ac7_proxy_process_event(instance, reason, nullptr);
             // Unity's crash reporter imports version.dll from this same directory.
             // It needs Windows forwarding, without another renderer/mod startup.

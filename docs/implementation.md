@@ -218,6 +218,13 @@ only when the same vtable target returns. The native detours still call
 their originals with the same typed arguments. Source comparison
 matched every slot and call. The refusal regression remains unrun.
 
+The RDR2 capture owner now stores the observed command-list, RTV and
+pipeline facts and bounded draw records in Rust. Native callbacks still
+lend the same D3D12 descriptors, caller and stack. An unsupported
+successful pipeline result discards stale metadata at that address.
+Descriptor-copy and object-retirement coverage, build and live capture
+remain open.
+
 RDR2's Rust diagnostic workers preserve the module sampling marks,
 dump policy, census summary and optional RenderDoc request loop. Native
 leaves retain the existing diagnostics ABI. The RenderDoc trigger still
@@ -315,6 +322,18 @@ succeeds and restores the enable byte when the same owner survives
 the native call. The trampoline keeps its original five arguments.
 Source and layout checks passed. Build and live fallback remain open.
 
+Skyrim's native job ticket, poll epochs and consumer proof now live in
+Rust. The typed submit, join and PollDevices detours retain their exact
+native observations and GameSDK ordering. Hook effects and guarded engine
+reads remain native. Build and live CPU validation remain open.
+[CPU ownership audit](research/rust-skyrim-cpu-ownership.md#native-job-and-poll-proof-continuation)
+
+Fallout 4's camera and raster math now run in Rust. The port follows the
+previous DirectXMath SSE2 operation order and preserves its determinant
+and refusal rules. The fixture uses the same adapter archive. Bit-level
+parity and builds remain unverified.
+[Camera source comparison](research/rust-fallout4-camera.md)
+
 Unity package D3D12 SR contexts and their recording slots are Rust-owned.
 The existing Unity bridge still provides recording and completion facts.
 The view owner preserves reconfiguration, spatial fallback and retirement
@@ -411,6 +430,13 @@ keeps the live session retryable across shutdown and restart. A physical
 device shutdown or DLL unload initiated by Unity still requires the
 host's lifetime guarantees. Build and live teardown remain open.
 [DXGI ownership audit](research/rust-unity-vulkan-dxgi.md)
+
+Unity's D3D11 bridge now publishes its shared graphics interfaces,
+fences and command slots as a complete Rust-owned record. Failed
+initialization rolls back the partial objects. The existing retirement
+proof covers both completion fences. The six-surface table and typed
+graphics calls stay native. Build and live verification remain open.
+[D3D11 ownership audit](research/rust-unity-d3d11-shared-device.md)
 
 AC7's Rust renderer transaction owns prepare, start, quiesce and stop.
 Failed activation keeps any renderer with reachable callbacks, and a
@@ -534,6 +560,12 @@ existing cache limits, constant-slot scan and stage/ordinal/hash file
 names. D3DDisassemble and its typed blob lease stay native. The draw
 and geometry captures still consume the same metadata. Source checks
 passed. Build and captured shader verification remain open.
+
+The AC7 adapter now owns the carrier's executable and window identity,
+GameSDK probe, guarded patch bytes and post-decryption install order.
+Both carriers keep their native forwarding, the guarded patch leaf
+and existing exports. Build and game startup verification remain open.
+[Carrier startup audit](research/rust-ac7-carrier-startup.md)
 
 The Godot compositor probe now keeps requests, snapshots and motion
 classification per effect instance in Rust. The typed godot-cpp

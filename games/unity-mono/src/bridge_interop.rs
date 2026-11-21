@@ -2,8 +2,9 @@
 //! Submission sequencing of the Unity package's D3D11 bridge (integrations/unity/native/bridge.cpp).
 //! That bridge copies Unity's D3D11 textures into shared surfaces and records the render pass on
 //! its own D3D12 queue. This module owns the command ring's slot rotation and per-slot completion
-//! values, the bridge's completion counter and the shared D3D11/D3D12 fence values. bridge.cpp
-//! keeps the devices, fences, waits, copies and command lists, and reads the completion fence.
+//! values, the bridge's completion counter and the shared D3D11/D3D12 fence values. The devices,
+//! fences and command lists are the D3D11 graphics owner (d3d11_state.rs), which checks this ring
+//! at close and forgets it at release; bridge.cpp keeps the waits, copies and recording.
 //! Packets, policy, activity and callbacks are the shared bridge state (bridge_state.rs).
 //!
 //! The package's Vulkan bridge (vulkan_bridge.cpp, vulkan_state.rs) uses the same ring for its
@@ -169,7 +170,7 @@ extern "C" fn rsf_unity_interop_d3d11_submitted(value: u64) {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_unity_interop_d3d11_drained(completed: u64) -> u32 {
+pub(crate) extern "C" fn rsf_unity_interop_d3d11_drained(completed: u64) -> u32 {
     let ring = lock();
     u32::from(
         !ring.d3d11_unknown

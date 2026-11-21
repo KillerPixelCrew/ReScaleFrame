@@ -4,8 +4,8 @@
 //! (`plugin.rs`), the lifecycle with its process-lived Runtime session, DPI startup and subsystem
 //! order (`session.rs`), the observer hook transactions (`observers.rs`) and cold native creation
 //! with Steam Present cooperation (`creation.rs`). `cpu_policy.rs` and `cpu_sources.rs` own CPU
-//! event records, scoped render facts and prospective source transitions. Native code lends the
-//! typed detours, MinHook, exception guards and native input producer observations.
+//! event records, scoped render facts, native job and poll proof, and prospective source
+//! transitions. Native code keeps typed detours, thread-local scopes, guarded reads and MinHook.
 mod auxiliary;
 mod camera;
 mod compatibility;

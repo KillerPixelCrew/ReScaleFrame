@@ -9,6 +9,7 @@
 //! The Runtime decides vendors, presentation and pacing; this crate reports native facts only.
 #![cfg(windows)]
 
+mod camera;
 mod creation;
 mod dpi;
 mod platform_abi;

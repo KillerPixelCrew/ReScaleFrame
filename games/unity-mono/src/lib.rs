@@ -6,8 +6,9 @@
 //! plugin.cpp lends the bridge through rsf_unity_plugin_platform, and runtime_host.cpp keeps the
 //! exports and lends the typed Runtime calls through rsf_unity_runtime_platform. The Unity package
 //! links this archive for the bridge state (shared by its D3D11 and Vulkan bridge, whose D3D12
-//! submission sequencing is bridge_interop.rs, with the Vulkan bridge's admission, lifecycle and
-//! presentation in vulkan_state.rs), the [UnitySR] path settings and its own settings,
+//! submission sequencing is bridge_interop.rs, with the D3D11 bridge's graphics record and command
+//! slots in d3d11_state.rs and the Vulkan bridge's admission, lifecycle and presentation in
+//! vulkan_state.rs), the [UnitySR] path settings and its own settings,
 //! status, session state, D3D12 SR views, presentation and session services (package_state.rs,
 //! package_views.rs, package_state/presentation.rs, package_state/services.rs), whose leaves stay in
 //! package.cpp. Both routes install generation with the same Unity setup (generation.rs).
@@ -16,6 +17,7 @@
 mod bridge_abi;
 mod bridge_interop;
 mod bridge_state;
+mod d3d11_state;
 mod generation;
 #[cfg(windows)]
 mod lifecycle;

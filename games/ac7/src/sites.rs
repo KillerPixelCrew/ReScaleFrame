@@ -4,8 +4,8 @@
 //!
 //! native_renderer.cpp keeps MinHook, the detours, the original pointers and the SEH-guarded
 //! reads and protected code writes; it lends the reads and writes through `rsf_ac7_code_leaves`.
-//! Every RVA and expected byte below was moved unchanged from native_renderer.cpp. The research
-//! for each site is in docs/research/ue418-hook-map.md and games/ac7/engine.json.
+//! The renderer verifies post-patch depth gates installed by the carrier. The research for these
+//! sites is in docs/research/ue418-hook-map.md and games/ac7/engine.json.
 use crate::sites_abi::{
     RSF_AC7_EVIDENCE_FIRST, RSF_AC7_EVIDENCE_LAST, RSF_AC7_HOOK_SITE_COUNT, RSF_AC7_PROCESS_HOOKS,
     RSF_AC7_ROLE_AA, RSF_AC7_ROLE_COMPOSITE, RSF_AC7_ROLE_HUD, RSF_AC7_ROLE_MATERIAL,
@@ -93,12 +93,24 @@ impl Site {
 /// An in-function branch or comparison that enlarged separate translucency depends on.
 pub(crate) struct Gate {
     pub(crate) rva: u32,
+    pub(crate) native: &'static [u8],
     pub(crate) expected: &'static [u8],
+    pub(crate) description: &'static str,
 }
 
 impl Gate {
-    const fn new<const N: usize>(rva: u32, expected: &'static [u8; N]) -> Self {
-        Self { rva, expected }
+    const fn new<const N: usize>(
+        rva: u32,
+        native: &'static [u8; N],
+        expected: &'static [u8; N],
+        description: &'static str,
+    ) -> Self {
+        Self {
+            rva,
+            native,
+            expected,
+            description,
+        }
     }
 }
 
@@ -213,20 +225,24 @@ pub(crate) static HELPERS: [Site; 26] = [
     Site::new(0x11346d0, b"\x48\x8b\xc4\x55\x56\x57\x41\x56\x41\x57\x48\x8d\x68\xb9\x48\x81"),
 ];
 
+const SHADER_DEPTH_NATIVE: &[u8; 9] = b"\x0f\x2f\x86\x20\x02\x00\x00\x76\x04";
+const SHADER_DEPTH_PATCHED: &[u8; 9] = b"\x0f\x2f\x86\x20\x02\x00\x00\x74\x04";
+
 /// Enlarged separate translucency needs the matching depth and shader-view paths.
 #[rustfmt::skip]
 pub(crate) static DEPTH_GATES: [Gate; 11] = [
-    Gate::new(0x1168f6f, b"\x74\x0e"),
-    Gate::new(0x1097a0c, b"\x74\x17"),
-    Gate::new(0x109d03a, b"\x44\x0f\x45\xf9"),
-    Gate::new(0x109d061, b"\x74\x17"),
-    Gate::new(0x11583a6, b"\x0f\x2f\x80\x20\x02\x00\x00\x74\x0e"),
-    Gate::new(0x1025b12, b"\x0f\x2f\x86\x20\x02\x00\x00\x74\x04"),
-    Gate::new(0x10294d2, b"\x0f\x2f\x86\x20\x02\x00\x00\x74\x04"),
-    Gate::new(0x102ada2, b"\x0f\x2f\x86\x20\x02\x00\x00\x74\x04"),
-    Gate::new(0x102c672, b"\x0f\x2f\x86\x20\x02\x00\x00\x74\x04"),
-    Gate::new(0x102e792, b"\x0f\x2f\x86\x20\x02\x00\x00\x74\x04"),
-    Gate::new(0x1031902, b"\x0f\x2f\x86\x20\x02\x00\x00\x74\x04"),
+    Gate::new(0x1168f6f, b"\x76\x0e", b"\x74\x0e", "the depth allocation and fill"),
+    Gate::new(0x1097a0c, b"\x76\x17", b"\x74\x17", "the depth bind"),
+    Gate::new(0x109d03a, b"\x44\x0f\x47\xf9", b"\x44\x0f\x45\xf9", "the snapshot resolve"),
+    Gate::new(0x109d061, b"\x76\x17", b"\x74\x17", "the resolve"),
+    Gate::new(0x11583a6, b"\x0f\x2f\x80\x20\x02\x00\x00\x76\x0e",
+        b"\x0f\x2f\x80\x20\x02\x00\x00\x74\x0e", "the layer view selection"),
+    Gate::new(0x1025b12, SHADER_DEPTH_NATIVE, SHADER_DEPTH_PATCHED, "shader depth selection 1"),
+    Gate::new(0x10294d2, SHADER_DEPTH_NATIVE, SHADER_DEPTH_PATCHED, "shader depth selection 2"),
+    Gate::new(0x102ada2, SHADER_DEPTH_NATIVE, SHADER_DEPTH_PATCHED, "shader depth selection 3"),
+    Gate::new(0x102c672, SHADER_DEPTH_NATIVE, SHADER_DEPTH_PATCHED, "shader depth selection 4"),
+    Gate::new(0x102e792, SHADER_DEPTH_NATIVE, SHADER_DEPTH_PATCHED, "shader depth selection 5"),
+    Gate::new(0x1031902, SHADER_DEPTH_NATIVE, SHADER_DEPTH_PATCHED, "shader depth selection 6"),
 ];
 
 /// Code at `rva` in the module at `base`. The address is only passed to the native leaves.

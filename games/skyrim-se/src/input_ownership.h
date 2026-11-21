@@ -1,58 +1,33 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-#include <atomic>
 #include <cstddef>
 #include <cstdint>
 
 namespace rsf::skyrim {
-// Scalar observations only. A job's submitting source is not the source that
-// will consume its late input poll. State 1 publishes; state 3 refuses until verified native idle or reset.
+enum class CpuProofStorage { process };
+
+// The process uses Rust statics. The contract fixture owns a separate allocation.
 class NativeJobOwnership {
 public:
     struct Ticket { uint64_t generation{}, source{}, session{}; uintptr_t manager{}; };
-    Ticket publish(uintptr_t manager, uint64_t source, uint64_t session, bool native_idle = false) noexcept {
-        if (!manager || !source || !session) return {};
-        uint64_t empty{};
-        if (!state_.compare_exchange_strong(empty, 1)) {
-            // Recovery requires the caller to have verified requested=running=0.
-            // Never replace a live or publishing generation, even with idle evidence.
-            if (!native_idle || empty != 3 || !state_.compare_exchange_strong(empty, 1)) {
-                invalidate(); return {};
-            }
-        }
-        const auto generation = next_.fetch_add(1) * 4;
-        manager_.store(manager); source_.store(source); session_.store(session);
-        uint64_t publishing = 1;
-        if (!state_.compare_exchange_strong(publishing, generation)) return {};
-        return {generation, source, session, manager};
-    }
-    Ticket snapshot() const noexcept {
-        const auto generation = state_.load();
-        if (generation < 4) return {};
-        Ticket ticket{generation, source_.load(), session_.load(), manager_.load()};
-        return state_.load() == generation ? ticket : Ticket{};
-    }
-    bool matches(Ticket ticket) const noexcept {
-        const auto now = snapshot();
-        return ticket.generation && now.generation == ticket.generation && now.source == ticket.source &&
-            now.session == ticket.session && now.manager == ticket.manager;
-    }
-    bool retire(Ticket ticket) noexcept {
-        if (!matches(ticket)) return false;
-        auto expected = ticket.generation;
-        if (!state_.compare_exchange_strong(expected, 0)) return false;
-        retired_.store(ticket.generation);
-        return true;
-    }
-    // The last generation whose native join completed normally; zero after poisoning.
-    uint64_t retired() const noexcept { return retired_.load(); }
-    void invalidate() noexcept { state_.store(3); retired_.store(0); }
+    NativeJobOwnership() noexcept;
+    constexpr explicit NativeJobOwnership(CpuProofStorage) noexcept {}
+    ~NativeJobOwnership();
+    NativeJobOwnership(const NativeJobOwnership&) = delete;
+    NativeJobOwnership& operator=(const NativeJobOwnership&) = delete;
+    Ticket publish(uintptr_t manager, uint64_t source, uint64_t session, bool native_idle = false) noexcept;
+    Ticket snapshot() const noexcept;
+    bool matches(const Ticket&) const noexcept;
+    bool retire(const Ticket&) noexcept;
+    uint64_t retired() const noexcept;
+    void invalidate() noexcept;
     // Caller must have quiesced all publishing/observing hooks.
-    void reset() noexcept { state_.store(0); retired_.store(0); }
+    void reset() noexcept;
 private:
-    std::atomic<uint64_t> state_{}, next_{1}, source_{}, session_{}, retired_{};
-    std::atomic<uintptr_t> manager_{};
+    void* store_{};
 };
+static_assert(sizeof(NativeJobOwnership::Ticket) == 32 && offsetof(NativeJobOwnership::Ticket, manager) == 24);
+
 // Native view of the Rust source store. The fixture owns an independent store.
 class ProspectiveSources {
 public:
@@ -64,7 +39,7 @@ public:
         uint32_t kinds{};
     };
     struct Reserve { Reservation reserved{}; uint64_t withdrawn{}; bool overlap{}; };
-    enum class Storage { process };
+    using Storage = CpuProofStorage;
     ProspectiveSources() noexcept;
     constexpr explicit ProspectiveSources(Storage) noexcept {}
     ~ProspectiveSources();
@@ -99,34 +74,38 @@ class InputOwnership {
 public:
     struct Stamp { uint64_t revision{}, generation{}; };
     struct Poll { uint64_t generation{}, conflicts{}; bool exclusive{}; };
-    Poll begin_poll() noexcept {
-        begin_write();
-        const auto conflicts = conflicts_.load();
-        const bool exclusive = polls_.fetch_add(1) == 0;
-        if (!exclusive) conflicts_.fetch_add(1);
-        return {next_.fetch_add(1), conflicts, exclusive};
-    }
-    void end_poll(Poll poll, bool produced) noexcept {
-        completed_.store(produced && poll.exclusive && poll.conflicts == conflicts_.load() ? poll.generation : 0);
-        polls_.fetch_sub(1);
-        end_write();
-    }
-    bool owns_poll(Poll poll) const noexcept {
-        return poll.generation && poll.exclusive && polls_.load() == 1 && poll.conflicts == conflicts_.load();
-    }
-    void invalidate() noexcept { begin_write(); conflicts_.fetch_add(1); completed_.store(0); end_write(); }
-    void begin_write() noexcept { writers_.fetch_add(1); revision_.fetch_add(1); }
-    void end_write() noexcept { revision_.fetch_add(1); writers_.fetch_sub(1); }
-    Stamp snapshot() const noexcept {
-        Stamp stamp{revision_.load(), completed_.load()};
-        return unchanged(stamp) ? stamp : Stamp{};
-    }
-    bool unchanged(Stamp stamp) const noexcept {
-        return stamp.generation && !writers_.load() && revision_.load() == stamp.revision;
-    }
+    InputOwnership() noexcept;
+    constexpr explicit InputOwnership(CpuProofStorage) noexcept {}
+    ~InputOwnership();
+    InputOwnership(const InputOwnership&) = delete;
+    InputOwnership& operator=(const InputOwnership&) = delete;
+    Poll begin_poll() noexcept;
+    void end_poll(const Poll&, bool produced) noexcept;
+    bool owns_poll(const Poll&) const noexcept;
+    void invalidate() noexcept;
+    void begin_write() noexcept;
+    void end_write() noexcept;
+    Stamp snapshot() const noexcept;
+    bool unchanged(const Stamp&) const noexcept;
 private:
-    std::atomic<uint64_t> next_{1}, revision_{}, completed_{};
-    std::atomic<uint64_t> conflicts_{};
-    std::atomic<uint32_t> writers_{}, polls_{};
+    void* store_{};
 };
+static_assert(sizeof(InputOwnership::Stamp) == 16 && sizeof(InputOwnership::Poll) == 24);
+static_assert(offsetof(InputOwnership::Poll, exclusive) == 16);
+
+// Stack record lent by the native PollDevices detour. Its TLS pointer is saved and
+// restored by the detour, including for nested polls.
+struct PollScope {
+    InputOwnership::Poll ticket{};
+    uintptr_t manager{};
+    bool produced{};
+    uint32_t kinds{};
+};
+static_assert(sizeof(PollScope) == 40 && offsetof(PollScope, kinds) == 36);
+
+enum class PollSample : uint32_t { none, not_produced, ready };
+
+enum class CpuConsumer : uint32_t { movement, player_update, camera, player_camera };
+struct WorkerCounts { uint32_t movement{}, player_update{}, camera{}, mismatched{}; };
+static_assert(sizeof(WorkerCounts) == 16);
 }

@@ -1,25 +1,11 @@
 // SPDX-License-Identifier: MIT
 //! Bundle publication uses the engine facts lent under the native capture mutex.
 use super::Progress;
-use super::artifacts::{Pipeline, output_directory};
-use std::ffi::{CStr, c_char, c_void};
+use super::artifacts::output_directory;
+use super::recordings::Draw;
+use std::ffi::{CStr, c_char};
 use std::fmt::Write as _;
 use std::{fs, slice, str};
-
-#[repr(C)]
-struct Draw {
-    ordinal: u32,
-    frame: u32,
-    vertices: u32,
-    instances: u32,
-    list: u64,
-    generation: u64,
-    caller: u64,
-    pso: u64,
-    pipeline: Pipeline,
-    stack: [*mut c_void; 12],
-    stack_size: u32,
-}
 
 #[repr(C)]
 struct Temporal {
@@ -79,7 +65,6 @@ struct Bundle {
 }
 
 const _: () = {
-    assert!(size_of::<Draw>() == 192 && std::mem::offset_of!(Draw, stack) == 88);
     assert!(size_of::<Temporal>() == 88);
     assert!(size_of::<Scalar>() == 16);
     assert!(size_of::<TemporalView>() == 32);

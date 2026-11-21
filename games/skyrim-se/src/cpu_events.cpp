@@ -14,6 +14,38 @@
 
 namespace rsf::skyrim {
 extern "C" {
+void* rsf_skyrim_jobs_new() noexcept;
+void rsf_skyrim_jobs_free(void*) noexcept;
+void rsf_skyrim_jobs_publish(const void*, NativeJobOwnership::Ticket*, uintptr_t, uint64_t, uint64_t, bool) noexcept;
+void rsf_skyrim_jobs_snapshot(const void*, NativeJobOwnership::Ticket*) noexcept;
+bool rsf_skyrim_jobs_matches(const void*, const NativeJobOwnership::Ticket*) noexcept;
+bool rsf_skyrim_jobs_retire(const void*, const NativeJobOwnership::Ticket*) noexcept;
+uint64_t rsf_skyrim_jobs_retired(const void*) noexcept;
+void rsf_skyrim_jobs_invalidate(const void*) noexcept;
+void rsf_skyrim_jobs_reset(const void*) noexcept;
+void* rsf_skyrim_epochs_new() noexcept;
+void rsf_skyrim_epochs_free(void*) noexcept;
+void rsf_skyrim_epochs_begin_poll(const void*, InputOwnership::Poll*) noexcept;
+void rsf_skyrim_epochs_end_poll(const void*, const InputOwnership::Poll*, bool) noexcept;
+bool rsf_skyrim_epochs_owns_poll(const void*, const InputOwnership::Poll*) noexcept;
+void rsf_skyrim_epochs_snapshot(const void*, InputOwnership::Stamp*) noexcept;
+bool rsf_skyrim_epochs_unchanged(const void*, const InputOwnership::Stamp*) noexcept;
+void rsf_skyrim_epochs_begin_write(const void*) noexcept;
+void rsf_skyrim_epochs_end_write(const void*) noexcept;
+void rsf_skyrim_epochs_invalidate(const void*) noexcept;
+void rsf_skyrim_poll_begin(PollScope*, uintptr_t manager) noexcept;
+void rsf_skyrim_poll_end(const PollScope*, bool nested) noexcept;
+void rsf_skyrim_poll_record_kinds(PollScope*, uint32_t kinds) noexcept;
+void rsf_skyrim_poll_sink_produced(PollScope*) noexcept;
+bool rsf_skyrim_poll_provenance(CpuPollProvenance*, const PollScope*, const NativeJobOwnership::Ticket*,
+    uintptr_t base, bool (*read_managers)(uintptr_t, uintptr_t, uintptr_t)) noexcept;
+PollSample rsf_skyrim_poll_sample_status(const PollScope*, uint64_t source) noexcept;
+void rsf_skyrim_worker_bind(uint64_t source) noexcept;
+void rsf_skyrim_worker_release() noexcept;
+void rsf_skyrim_worker_intervening_poll() noexcept;
+void rsf_skyrim_worker_record_consumer(const InputOwnership::Stamp*, CpuConsumer) noexcept;
+void rsf_skyrim_worker_counts(WorkerCounts*) noexcept;
+void rsf_skyrim_cpu_clear_proof(bool drained) noexcept;
 void* rsf_skyrim_sources_new() noexcept;
 void rsf_skyrim_sources_free(void*) noexcept;
 void rsf_skyrim_sources_reserve(const void*, ProspectiveSources::Reserve*, uint64_t source,
@@ -28,6 +60,50 @@ void rsf_skyrim_sources_release(const void*, ProspectiveSources::Reservation*, u
 void rsf_skyrim_sources_reset(const void*) noexcept;
 uint32_t rsf_skyrim_bind_refusal(bool, bool, bool, bool) noexcept;
 }
+
+static_assert(sizeof(CpuPollProvenance) == 32 && offsetof(CpuPollProvenance, poll_generation) == 24);
+
+NativeJobOwnership::NativeJobOwnership() noexcept : store_(rsf_skyrim_jobs_new()) {}
+NativeJobOwnership::~NativeJobOwnership() { if (store_) rsf_skyrim_jobs_free(store_); }
+NativeJobOwnership::Ticket NativeJobOwnership::publish(
+    uintptr_t manager, uint64_t source, uint64_t session, bool native_idle) noexcept {
+    Ticket out{};
+    rsf_skyrim_jobs_publish(store_, &out, manager, source, session, native_idle);
+    return out;
+}
+NativeJobOwnership::Ticket NativeJobOwnership::snapshot() const noexcept {
+    Ticket out{};
+    rsf_skyrim_jobs_snapshot(store_, &out);
+    return out;
+}
+bool NativeJobOwnership::matches(const Ticket& ticket) const noexcept {
+    return rsf_skyrim_jobs_matches(store_, &ticket);
+}
+bool NativeJobOwnership::retire(const Ticket& ticket) noexcept { return rsf_skyrim_jobs_retire(store_, &ticket); }
+uint64_t NativeJobOwnership::retired() const noexcept { return rsf_skyrim_jobs_retired(store_); }
+void NativeJobOwnership::invalidate() noexcept { rsf_skyrim_jobs_invalidate(store_); }
+void NativeJobOwnership::reset() noexcept { rsf_skyrim_jobs_reset(store_); }
+
+InputOwnership::InputOwnership() noexcept : store_(rsf_skyrim_epochs_new()) {}
+InputOwnership::~InputOwnership() { if (store_) rsf_skyrim_epochs_free(store_); }
+InputOwnership::Poll InputOwnership::begin_poll() noexcept {
+    Poll out{};
+    rsf_skyrim_epochs_begin_poll(store_, &out);
+    return out;
+}
+void InputOwnership::end_poll(const Poll& poll, bool produced) noexcept {
+    rsf_skyrim_epochs_end_poll(store_, &poll, produced);
+}
+bool InputOwnership::owns_poll(const Poll& poll) const noexcept { return rsf_skyrim_epochs_owns_poll(store_, &poll); }
+InputOwnership::Stamp InputOwnership::snapshot() const noexcept {
+    Stamp out{};
+    rsf_skyrim_epochs_snapshot(store_, &out);
+    return out;
+}
+bool InputOwnership::unchanged(const Stamp& stamp) const noexcept { return rsf_skyrim_epochs_unchanged(store_, &stamp); }
+void InputOwnership::begin_write() noexcept { rsf_skyrim_epochs_begin_write(store_); }
+void InputOwnership::end_write() noexcept { rsf_skyrim_epochs_end_write(store_); }
+void InputOwnership::invalidate() noexcept { rsf_skyrim_epochs_invalidate(store_); }
 
 ProspectiveSources::ProspectiveSources() noexcept : store_(rsf_skyrim_sources_new()) {}
 ProspectiveSources::~ProspectiveSources() { if (store_) rsf_skyrim_sources_free(store_); }
@@ -74,13 +150,9 @@ struct Frame {
     rsf_game_host_services host{};
     uint64_t source{};
     rsf_skyrim_cpu_render_state render{};
-    InputOwnership::Stamp consumed{};
-    uint32_t camera_updates{};
-    bool input_ambiguous{};
+    rsf_skyrim_cpu_frame_input input{};
     NativeJobOwnership::Ticket jobs{};
     void* main{};
-    uint32_t movement_calls{}, player_update_calls{};
-    uint32_t player_camera_updates{}; // TESCamera::Update 0x558e70 on PlayerCamera, any state
     ProspectiveSources::Reservation reservation{}; // adopted at tick entry, if any
     bool entry_readable{}, queued_move{}; // player queued-move gates read at tick entry
     BindRefusal refusal{BindRefusal::none};
@@ -91,20 +163,12 @@ std::atomic<bool> active{};
 std::atomic<uint32_t> poll_samples{};
 rsf_game_host_services services{};
 uint64_t frequency{};
-InputOwnership input_ownership;
-NativeJobOwnership job_ownership;
+InputOwnership input_ownership{CpuProofStorage::process};
+NativeJobOwnership job_ownership{CpuProofStorage::process};
 thread_local NativeJobOwnership::Ticket named_poll_jobs{};
-struct PollScope { InputOwnership::Poll ticket{}; void* manager{}; bool produced{}; uint32_t kinds{}; };
 thread_local PollScope* current_poll{};
 thread_local void* dispatched_list{};
 ProspectiveSources prospective{ProspectiveSources::Storage::process};
-// Diagnostic call envelopes inside the bound source's own native job generation, on any
-// thread. They do not prove complete movement/derived-state coverage and are never reported
-// to the runtime as consumption.
-struct WorkerConsumption {
-    std::atomic<uint64_t> source{};
-    std::atomic<uint32_t> movement{}, player_update{}, camera{}, mismatched{};
-} worker_consumption;
 std::atomic<uint32_t> prospective_reports{};
 struct Entry { Entry() { ++entered; } ~Entry() { --entered; } };
 // Version 2 source lifetime fact. The runtime decides what, if anything, it means.
@@ -194,6 +258,13 @@ struct ManagerState {
             load(requested, manager + 0x68) && load(running, manager + 0x6c);
     }
 };
+bool read_poll_managers(uintptr_t base, uintptr_t job_manager, uintptr_t poll_manager) noexcept {
+    ManagerState native{};
+    uintptr_t input_manager{};
+    return native.read() && native.manager == job_manager && native.requested <= 1 && native.running == 1 &&
+        copy_input(&input_manager, reinterpret_cast<const void*>(base + 0x3204b30), sizeof(input_manager)) &&
+        input_manager && input_manager == poll_manager;
+}
 uint32_t jobs_submit()
 {
     Entry lease;
@@ -222,8 +293,8 @@ uint32_t jobs_submit()
                     camera && copy_input(&state, reinterpret_cast<const void*>(camera + 0x28), sizeof(state)) &&
                     copy_input(&free_state, reinterpret_cast<const void*>(camera + 0xd0), sizeof(free_state));
                 current->refusal = bind_refusal(current->entry_readable && camera_read, current->queued_move,
-                    current->player_update_calls || current->movement_calls || current->camera_updates ||
-                        current->player_camera_updates,
+                    current->input.player_update_calls || current->input.movement_calls ||
+                        current->input.camera_updates || current->input.player_camera_updates,
                     state == free_state); // the native test, including both null
                 const auto stamp = input_ownership.snapshot();
                 if (current->refusal != BindRefusal::none) {
@@ -231,10 +302,7 @@ uint32_t jobs_submit()
                         abort_source(current->host, current->source, RSF_GAME_CPU_ABORT_NOT_CONSUMED);
                     }
                 } else if (prospective.bind(current->source, stamp.generation)) {
-                    worker_consumption.source.store(0);
-                    worker_consumption.movement.store(0); worker_consumption.player_update.store(0);
-                    worker_consumption.camera.store(0); worker_consumption.mismatched.store(0);
-                    worker_consumption.source.store(current->source);
+                    rsf_skyrim_worker_bind(current->source);
                     emit_source(current->host, RSF_GAME_CPU_SOURCE_BIND, current->source, 0, 0, 0, 0, 0);
                 } else if (prospective.release(current->source).source) {
                     abort_source(current->host, current->source, RSF_GAME_CPU_ABORT_STATE_CHANGED);
@@ -365,8 +433,8 @@ int dispatch(void* manager, void* list) {
         }
     }
     auto* previous_list = dispatched_list;
-    dispatched_list = current_poll && current_poll->manager == manager ? list : nullptr;
-    if (dispatched_list) current_poll->kinds |= event.input_kind;
+    dispatched_list = current_poll && current_poll->manager == uintptr_t(manager) ? list : nullptr;
+    if (dispatched_list) rsf_skyrim_poll_record_kinds(current_poll, event.input_kind);
     const auto result = reinterpret_cast<int (*)(void*, void*)>(hooks[3].original)(manager, list);
     dispatched_list = previous_list;
     // Worker polling is not assigned the latest tick. The runtime owns any bounded
@@ -421,21 +489,22 @@ short tick(void* main)
     if (frame.reservation.source) {
         // An adopted, unbound reservation (paused/frozen tick) closes unbound with FRAME_END.
         const auto owned = prospective.release(frame.source);
-        if (owned.phase == ProspectiveSources::bound) worker_consumption.source.store(0);
+        if (owned.phase == ProspectiveSources::bound) rsf_skyrim_worker_release();
         const auto& facts = frame.reservation; // immutable adoption facts, including a refused bind
         if (services.log && prospective_reports.fetch_add(1) < 16) {
             // PlayerCharacter update 0x745200 runs on this thread at 0x659f4d (via 0x659ea0, after
             // the submit) and drives PlayerCamera/camera-state updates; movement runs on workers.
             char message[560]{};
+            WorkerCounts worker{};
+            rsf_skyrim_worker_counts(&worker);
             std::snprintf(message, sizeof(message),
                 "Skyrim prospective source=%llu predecessor=%llu poll_generation=%llu job_generation=%llu bound=%d refusal=%u kinds=0x%x main_player_update=%u main_camera=%u main_player_camera=%u main_movement=%u main_generation_match=%d main_ambiguous=%d worker_movement=%u worker_player_update=%u worker_camera=%u mismatched=%u; input timeline ownership diagnostics",
                 static_cast<unsigned long long>(frame.source), static_cast<unsigned long long>(facts.predecessor),
                 static_cast<unsigned long long>(facts.poll_generation), static_cast<unsigned long long>(facts.job_generation),
                 owned.phase == ProspectiveSources::bound, static_cast<unsigned>(frame.refusal), facts.kinds,
-                frame.player_update_calls, frame.camera_updates, frame.player_camera_updates,
-                frame.movement_calls, frame.consumed.generation == facts.poll_generation, frame.input_ambiguous,
-                worker_consumption.movement.load(), worker_consumption.player_update.load(), worker_consumption.camera.load(),
-                worker_consumption.mismatched.load());
+                frame.input.player_update_calls, frame.input.camera_updates, frame.input.player_camera_updates,
+                frame.input.movement_calls, frame.input.consumed.generation == facts.poll_generation, frame.input.ambiguous,
+                worker.movement, worker.player_update, worker.camera, worker.mismatched);
             try { services.log(services.user, message); } catch (...) {}
         }
     }
@@ -449,8 +518,7 @@ uintptr_t poll(void* manager, float timestep)
     // All native poll paths remain intact, including the independent mode-2 loop.
     PollScope scope{};
     auto* previous_poll = current_poll;
-    scope.ticket = input_ownership.begin_poll();
-    scope.manager = manager;
+    rsf_skyrim_poll_begin(&scope, uintptr_t(manager));
     current_poll = &scope;
     const bool running = active.load(std::memory_order_acquire);
     CpuPollProvenance provenance{};
@@ -492,7 +560,7 @@ uintptr_t poll(void* manager, float timestep)
             // replace the controls any pending reservation sampled.
             if (const auto withdrawn = prospective.withdraw_pending())
                 abort_source(host, withdrawn, RSF_GAME_CPU_ABORT_INTERVENING_POLL);
-            if (worker_consumption.source.load()) worker_consumption.mismatched.fetch_add(1);
+            rsf_skyrim_worker_intervening_poll();
         }
     }
     // A scheduled late poll never samples the tick that happens to run it.
@@ -505,14 +573,14 @@ uintptr_t poll(void* manager, float timestep)
     if (reserved) QueryPerformanceCounter(&poll_begin);
     const auto result = reinterpret_cast<uintptr_t (*)(void*, float)>(hooks[1].original)(manager, timestep);
     current_poll = previous_poll;
-    input_ownership.end_poll(scope.ticket, scope.produced && !previous_poll);
+    rsf_skyrim_poll_end(&scope, previous_poll != nullptr);
     if (reserved) {
         // Produced only when this exact poll left the completed, unchanged control state.
         const auto host = services;
-        const bool produced = input_ownership.snapshot().generation == scope.ticket.generation;
-        if (!produced) {
-            if (prospective.withdraw_pending(reserved)) abort_source(host, reserved, RSF_GAME_CPU_ABORT_NOT_PRODUCED);
-        } else if (prospective.still_reserved(reserved)) {
+        const auto sample = rsf_skyrim_poll_sample_status(&scope, reserved);
+        if (sample == PollSample::not_produced) {
+            abort_source(host, reserved, RSF_GAME_CPU_ABORT_NOT_PRODUCED);
+        } else if (sample == PollSample::ready) {
             // Report before the adapter can adopt it, so the runtime never sees the frame first.
             emit_source(host, RSF_GAME_CPU_SOURCE_SAMPLED, reserved, 0, scope.ticket.generation,
                 RSF_GAME_CPU_SOURCE_PRODUCED, scope.kinds, 0, uint64_t(poll_begin.QuadPart));
@@ -534,30 +602,9 @@ uintptr_t controls(void* owner, void* list, void* source)
     const auto base = uintptr_t(GetModuleHandleW(nullptr));
     if (active.load(std::memory_order_acquire) && current_poll && list && list == dispatched_list &&
         copy_input(&singleton, reinterpret_cast<const void*>(base + 0x31a5698), sizeof(singleton)) &&
-        singleton == uintptr_t(owner)) current_poll->produced = true;
+        singleton == uintptr_t(owner)) rsf_skyrim_poll_sink_produced(current_poll);
     input_ownership.end_write();
     return result;
-}
-void record_consumption(InputOwnership::Stamp stamp, uint32_t& count)
-{
-    ++count;
-    if (!input_ownership.unchanged(stamp) ||
-        (current->consumed.generation && current->consumed.generation != stamp.generation)) {
-        current->input_ambiguous = true;
-    } else current->consumed = stamp;
-}
-// Off the main tick: count only inside the bound source's own published job generation.
-// A different completed poll generation is counted as a mismatch, never as consumption.
-void record_worker_consumption(InputOwnership::Stamp stamp, std::atomic<uint32_t>& count)
-{
-    const auto source = worker_consumption.source.load();
-    if (!source) return;
-    const auto ticket = job_ownership.snapshot();
-    const auto owned = prospective.owned();
-    if (!ticket.generation || ticket.source != source || owned.source != source ||
-        owned.phase != ProspectiveSources::bound) return;
-    if (stamp.generation == owned.poll_generation && input_ownership.unchanged(stamp)) count.fetch_add(1);
-    else worker_consumption.mismatched.fetch_add(1);
 }
 bool is_player(void* actor) noexcept
 {
@@ -573,8 +620,8 @@ void movement(void* actor, float timestep, void* argument, float* output)
     const bool player = is_player(actor);
     reinterpret_cast<void (*)(void*, float, void*, float*)>(hooks[10].original)(actor, timestep, argument, output);
     if (active.load(std::memory_order_acquire) && player && is_player(actor)) {
-        if (current) record_consumption(stamp, current->movement_calls);
-        else record_worker_consumption(stamp, worker_consumption.movement);
+        if (current) rsf_skyrim_cpu_record_consumer(&current->input, &stamp, CpuConsumer::movement, true);
+        else rsf_skyrim_worker_record_consumer(&stamp, CpuConsumer::movement);
     }
 }
 uintptr_t player_update(void* actor, float timestep)
@@ -584,8 +631,8 @@ uintptr_t player_update(void* actor, float timestep)
     const bool player = is_player(actor);
     const auto result = reinterpret_cast<uintptr_t (*)(void*, float)>(hooks[11].original)(actor, timestep);
     if (active.load(std::memory_order_acquire) && player && is_player(actor)) {
-        if (current) record_consumption(stamp, current->player_update_calls);
-        else record_worker_consumption(stamp, worker_consumption.player_update);
+        if (current) rsf_skyrim_cpu_record_consumer(&current->input, &stamp, CpuConsumer::player_update, true);
+        else rsf_skyrim_worker_record_consumer(&stamp, CpuConsumer::player_update);
     }
     return result;
 }
@@ -597,9 +644,10 @@ uintptr_t camera_update(void* state)
     const bool consumes = copy_input(&disabled, static_cast<const unsigned char*>(state) + 0xe0, sizeof(disabled)) && !disabled;
     const auto result = reinterpret_cast<uintptr_t (*)(void*)>(hooks[6].original)(state);
     if (active.load(std::memory_order_acquire) && current) {
-        if (!consumes) current->input_ambiguous = true;
-        record_consumption(stamp, current->camera_updates);
-    } else if (active.load(std::memory_order_acquire) && consumes) record_worker_consumption(stamp, worker_consumption.camera);
+        rsf_skyrim_cpu_record_consumer(&current->input, &stamp, CpuConsumer::camera, consumes);
+    } else if (active.load(std::memory_order_acquire) && consumes) {
+        rsf_skyrim_worker_record_consumer(&stamp, CpuConsumer::camera);
+    }
     return result;
 }
 // Every PlayerCamera state update (first person, third person, furniture, free, load and
@@ -614,7 +662,7 @@ void player_camera_update(void* camera)
         singleton && singleton == uintptr_t(camera);
     reinterpret_cast<void (*)(void*)>(hooks[12].original)(camera);
     if (active.load(std::memory_order_acquire) && current && player_camera)
-        record_consumption(stamp, current->player_camera_updates);
+        rsf_skyrim_cpu_record_consumer(&current->input, &stamp, CpuConsumer::player_camera, true);
 }
 uintptr_t render(void* main)
 {
@@ -685,10 +733,7 @@ bool cpu_start(const rsf_skyrim_creation_platform* platform)
         return refused("screen query bytes", rva);
     for (const auto& hook : hooks)
         if (std::memcmp(hook.target, hook.bytes.data(), hook.bytes.size())) return refused("hook bytes", hook.rva);
-    job_ownership.reset();
-    input_ownership.invalidate();
-    prospective.reset();
-    worker_consumption.source.store(0);
+    rsf_skyrim_cpu_clear_proof(true);
     for (auto& hook : hooks) {
         const auto status = hook.created ? MH_EnableHook(hook.target) : MH_ERROR_NOT_CREATED;
         if (status != MH_OK) {
@@ -701,11 +746,8 @@ bool cpu_start(const rsf_skyrim_creation_platform* platform)
 }
 void cpu_quiesce() {
     active.store(false, std::memory_order_release);
-    job_ownership.invalidate();
-    input_ownership.invalidate();
     // No events here: the runtime closes every reservation when it releases the session.
-    prospective.reset();
-    worker_consumption.source.store(0);
+    rsf_skyrim_cpu_clear_proof(false);
 }
 bool cpu_disable()
 {
@@ -746,7 +788,7 @@ void cpu_render_diagnostic(const char* stage, const rsf_game_render_pass& pass) 
         static_cast<unsigned long long>(frame.reservation.source), static_cast<unsigned long long>(owned.source), unsigned(owned.phase),
         unsigned(owned.source == frame.source && owned.phase == ProspectiveSources::bound), unsigned(frame.refusal),
         static_cast<unsigned long long>(frame.reservation.poll_generation), static_cast<unsigned long long>(frame.reservation.job_generation),
-        unsigned(frame.entry_readable), unsigned(frame.queued_move), unsigned(frame.input_ambiguous));
+        unsigned(frame.entry_readable), unsigned(frame.queued_move), unsigned(frame.input.ambiguous));
     try { frame.host.log(frame.host.user, message); } catch (...) {}
 }
 uint32_t cpu_input_kinds(const void* list) noexcept {
@@ -756,31 +798,23 @@ uint32_t cpu_input_kinds(const void* list) noexcept {
 }
 bool cpu_input_consumption(CpuInputConsumption& result) noexcept {
     result = {};
-    if (!active.load(std::memory_order_acquire) || !current || current->input_ambiguous ||
-        !current->camera_updates || !input_ownership.unchanged(current->consumed)) return false;
+    if (!active.load(std::memory_order_acquire) || !current ||
+        !rsf_skyrim_cpu_consumption_proven(&current->input)) return false;
     result.source_frame_id = current->source;
-    result.poll_generation = current->consumed.generation;
-    result.camera_updates = current->camera_updates;
-    result.movement_calls = current->movement_calls;
-    result.player_update_calls = current->player_update_calls;
+    result.poll_generation = current->input.consumed.generation;
+    result.camera_updates = current->input.camera_updates;
+    result.movement_calls = current->input.movement_calls;
+    result.player_update_calls = current->input.player_update_calls;
     return true;
 }
 bool cpu_poll_provenance(CpuPollProvenance& result) noexcept {
     result = {};
-    ManagerState native{};
-    uintptr_t input_manager{};
+    CpuPollProvenance proof{};
     const auto base = uintptr_t(GetModuleHandleW(nullptr));
-    if (!active.load(std::memory_order_acquire) || !current_poll || !input_ownership.owns_poll(current_poll->ticket) ||
-        !job_ownership.matches(named_poll_jobs) || !native.read() || native.manager != named_poll_jobs.manager ||
-        native.requested > 1 || native.running != 1 ||
-        !copy_input(&input_manager, reinterpret_cast<const void*>(base + 0x3204b30), sizeof(input_manager)) ||
-        !input_manager || input_manager != uintptr_t(current_poll->manager) ||
-        !job_ownership.matches(named_poll_jobs) || !input_ownership.owns_poll(current_poll->ticket) ||
+    if (!active.load(std::memory_order_acquire) || !current_poll ||
+        !rsf_skyrim_poll_provenance(&proof, current_poll, &named_poll_jobs, base, read_poll_managers) ||
         !active.load(std::memory_order_acquire)) return false;
-    result.session_id = named_poll_jobs.session;
-    result.native_job_generation = named_poll_jobs.generation;
-    result.submitting_source_frame_id = named_poll_jobs.source;
-    result.poll_generation = current_poll->ticket.generation;
+    result = proof;
     return true;
 }
 }

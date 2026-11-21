@@ -5,6 +5,11 @@ plugin exception guards. Cargo.lock pins it and its build tools. The guards
 link into the orchestrator static library for both embedded and DLL consumers.
 The Windows build uses Microsoft's `windows-sys` bindings for profile storage.
 
+Fallout 4's camera port derives its matrix operations from the MIT-licensed
+DirectXMath 3.20 headers in Windows SDK 10.0.26100. The Microsoft copyright
+notice and MIT terms accompany the source in [LICENSE](../LICENSE).
+[Camera source comparison](research/rust-fallout4-camera.md)
+
 ## REA development tooling
 
 `tools/rea` pins `rea-agents` 6.4.0 from npm, whose published Git revision is

@@ -2,6 +2,7 @@
 //! CPU and render facts for the matched Skyrim executable. The native detours own the
 //! callback leases and original calls. The host receives these facts at the native boundaries.
 
+use crate::cpu_sources::{self, Consumer, Stamp};
 use crate::platform::{self, Platform};
 use rsf_game_sys::{
     RSF_GAME_CPU_EVENT_VERSION, RSF_GAME_CPU_EVENT_VERSION_SOURCE, RSF_GAME_CPU_FRAME_END,
@@ -81,12 +82,56 @@ struct RenderState {
     sampled: bool,
 }
 
+/// Native consumers lend the tick's input record after their original call returns.
+#[repr(C)]
+struct FrameInput {
+    consumed: Stamp,
+    camera_updates: u32,
+    movement_calls: u32,
+    player_update_calls: u32,
+    player_camera_updates: u32,
+    ambiguous: bool,
+}
+
 const _: () = {
     assert!(size_of::<ScreenFacts>() == 24);
     assert!(std::mem::offset_of!(ScreenFacts, pause_count) == 8);
     assert!(size_of::<RenderState>() == 24);
     assert!(std::mem::offset_of!(RenderState, render_entered) == 20);
+    assert!(size_of::<FrameInput>() == 40);
+    assert!(std::mem::offset_of!(FrameInput, ambiguous) == 32);
 };
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_skyrim_cpu_record_consumer(
+    state: &mut FrameInput,
+    stamp: &Stamp,
+    consumer: Consumer,
+    mapped: bool,
+) {
+    if !mapped {
+        state.ambiguous = true;
+    }
+    let count = match consumer {
+        Consumer::Movement => &mut state.movement_calls,
+        Consumer::PlayerUpdate => &mut state.player_update_calls,
+        Consumer::Camera => &mut state.camera_updates,
+        Consumer::PlayerCamera => &mut state.player_camera_updates,
+    };
+    *count = count.wrapping_add(1);
+    if !cpu_sources::unchanged(*stamp)
+        || (state.consumed.generation != 0 && state.consumed.generation != stamp.generation)
+    {
+        state.ambiguous = true;
+    } else {
+        state.consumed = *stamp;
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_skyrim_cpu_consumption_proven(state: &FrameInput) -> bool {
+    !state.ambiguous && state.camera_updates != 0 && cpu_sources::unchanged(state.consumed)
+}
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_skyrim_cpu_next_source() -> u64 {
