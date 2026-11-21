@@ -76,6 +76,8 @@ thread_local! {
     static WINDOW_CALLS: RefCell<Vec<(&'static str, u64)>> = const { RefCell::new(Vec::new()) };
     /// The CPU events reported: Vulkan, stage, session, message and flags.
     static CPU_EVENTS: RefCell<Vec<(bool, u32, u64, u32, u32)>> = const { RefCell::new(Vec::new()) };
+    static SR_ASKED: Cell<Option<(u32, u32, u32)>> = const { Cell::new(None) };
+    static FG_ASKED: Cell<Option<(u32, u32, u32)>> = const { Cell::new(None) };
 }
 
 /// The engine's own window procedure.
@@ -642,6 +644,45 @@ unsafe extern "C" fn vulkan_present_marker(begin: u32) {
     window_call("marker", begin.into());
 }
 
+/// The last Auto question each policy leaf was asked: vendor, software and choices.
+pub(crate) fn take_auto() -> (Option<(u32, u32, u32)>, Option<(u32, u32, u32)>) {
+    (SR_ASKED.take(), FG_ASKED.take())
+}
+
+/// As `rsf_gpu_select_sr_backend`: NVIDIA DLSS, Intel XeSS, others FSR3 on hardware, none on a
+/// software adapter; then FSR3, then XeSS among `choices`.
+unsafe extern "C" fn sr_select_backend(vendor: u32, software: u32, choices: u32) -> u32 {
+    SR_ASKED.set(Some((vendor, software, choices)));
+    if software != 0 {
+        return 0;
+    }
+    let preferred = match vendor {
+        0x10de => 1,
+        0x8086 => 5,
+        _ => 3,
+    };
+    [preferred, 3, 5]
+        .into_iter()
+        .find(|backend| choices & (1 << backend) != 0)
+        .unwrap_or(0)
+}
+
+/// As `rsf_gpu_select_fg_backend`: the hardware vendor's DLSS, XeSS or FSR3, then FSR3, among
+/// `choices`.
+unsafe extern "C" fn fg_select_backend(vendor: u32, software: u32, choices: u32) -> u32 {
+    FG_ASKED.set(Some((vendor, software, choices)));
+    let preferred = match (software, vendor) {
+        (0, 0x10de) => 1,
+        (0, 0x8086) => 5,
+        (0, 0x1002) => 3,
+        _ => 0,
+    };
+    [preferred, 3]
+        .into_iter()
+        .find(|&backend| backend != 0 && choices & (1 << backend) != 0)
+        .unwrap_or(0)
+}
+
 pub(crate) static LEAVES: Platform = Platform {
     struct_size: size_of::<Platform>() as u32,
     version: PLATFORM_VERSION,
@@ -709,4 +750,6 @@ pub(crate) static LEAVES: Platform = Platform {
     latency_ping,
     vulkan_latency_ping,
     vulkan_present_marker,
+    sr_select_backend,
+    fg_select_backend,
 };

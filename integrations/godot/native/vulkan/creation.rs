@@ -9,6 +9,12 @@
 //! retry and diagnostic, and the XeSS and interop readiness the session's admission and the
 //! presenter host options read.
 //!
+//! It also keeps the adapter facts of the physical device each created device runs on (vendor ID,
+//! device ID and a CPU device type as software), read through `vkGetPhysicalDeviceProperties` of
+//! the owner instance after the device exists. The session's Auto resolution passes them to the
+//! Runtime's adapter policy; this owner only reads them. Like the owner instance, they describe the
+//! live device and survive a new start; each successful device creation replaces them.
+//!
 //! Vulkan structures stay in the leaves (`VkCreationLeaves`): the chain facts and clones, the
 //! request copies, the XeSS and core latency requirement calls and the Vulkan create and destroy
 //! calls. Requests are passed here as addresses. The core latency requirements stay the Runtime's
@@ -22,12 +28,12 @@ use crate::platform::{
     VK_ROUTE_CREATE_DEVICE, VK_ROUTE_CREATE_INSTANCE, VK_ROUTE_DESTROY_DEVICE,
     VK_ROUTE_DEVICE_PROC, VK_ROUTE_FORWARD, VK_ROUTE_NONE, VK_SCOPE_DEVICE, VK_STAGE_INTEROP,
     VK_STAGE_LATENCY, VK_STAGE_XESS, VK_XESS_ENABLED_FEATURES, VK_XESS_FEATURES2,
-    VK_XESS_FLOAT16_INT8, VK_XESS_INTEGER_DOT_PRODUCT, VK_XESS_SCALAR_BLOCK_LAYOUT, VkChainFacts,
-    VkCreationLeaves, VkDeviceCall, VkDeviceDerive, VkFunction, VkInstanceCall, VkProc,
-    extension_list,
+    VK_XESS_FLOAT16_INT8, VK_XESS_INTEGER_DOT_PRODUCT, VK_XESS_SCALAR_BLOCK_LAYOUT, VkAdapter,
+    VkChainFacts, VkCreationLeaves, VkDeviceCall, VkDeviceDerive, VkFunction, VkInstanceCall,
+    VkProc, extension_list,
 };
 use rsf_game_sys::rsf_game_log_fn;
-use std::ffi::{CStr, c_char, c_void};
+use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::{Mutex, PoisonError};
@@ -122,6 +128,9 @@ pub(crate) struct Creation {
     prepare_xess: AtomicBool,
     xess_ready: AtomicBool,
     interop_ready: AtomicBool,
+    /// The physical device facts of the last device created; `None` before one exists or when
+    /// they could not be read.
+    adapter: Mutex<Option<VkAdapter>>,
 }
 
 impl Creation {
@@ -136,6 +145,7 @@ impl Creation {
             prepare_xess: AtomicBool::new(false),
             xess_ready: AtomicBool::new(false),
             interop_ready: AtomicBool::new(false),
+            adapter: Mutex::new(None),
         }
     }
 
@@ -182,10 +192,20 @@ impl Creation {
         self.interop_ready.load(Ordering::Acquire)
     }
 
+    /// The physical device facts of the last device created, if they were read.
+    pub(crate) fn adapter(&self) -> Option<VkAdapter> {
+        *self.adapter.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     #[cfg(test)]
     pub(crate) fn report_ready(&self, xess: bool, interop: bool) {
         self.xess_ready.store(xess, Ordering::Release);
         self.interop_ready.store(interop, Ordering::Release);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn report_adapter(&self, adapter: Option<VkAdapter>) {
+        *self.adapter.lock().unwrap_or_else(PoisonError::into_inner) = adapter;
     }
 
     fn diagnostic(&self, message: &CStr) {
@@ -309,8 +329,37 @@ impl Creation {
     /// The intercepted `vkCreateDevice`. With XeSS prepared, the engine's chain is cloned with the
     /// structures XeSS needs and patched by the SDK; any refusal, of the clone, the SDK or the
     /// driver's feature or extension check, creates the engine's own request instead. Either way
-    /// the interop stage runs next.
+    /// the interop stage runs next. A created device's adapter facts replace the previous ones.
     pub(crate) fn create_device(&self, leaves: &VkCreationLeaves, call: &VkDeviceCall) -> i32 {
+        let result = self.create_stages(leaves, call);
+        if result == VK_SUCCESS {
+            self.read_adapter(leaves, call.physical_device);
+        }
+        result
+    }
+
+    /// `vkGetPhysicalDeviceProperties` of the created device's physical device through the owner
+    /// instance. Without the entry point, or when the leaf threw, no facts are kept rather than a
+    /// previous device's.
+    fn read_adapter(&self, leaves: &VkCreationLeaves, physical_device: *mut c_void) {
+        let properties = self.binding().underlying.and_then(|underlying| {
+            Self::resolve_with(underlying, self.owner(), c"vkGetPhysicalDeviceProperties")
+        });
+        let adapter = properties.and_then(|properties| leaves.adapter(properties, physical_device));
+        *self.adapter.lock().unwrap_or_else(PoisonError::into_inner) = adapter;
+        let message = match adapter {
+            Some(value) => format!(
+                "Vulkan device adapter vendor={:#x} device={:#x} software={}.",
+                value.vendor, value.device, value.software
+            ),
+            None => "Vulkan device adapter facts unavailable.".to_owned(),
+        };
+        if let Ok(message) = CString::new(message) {
+            self.diagnostic(&message);
+        }
+    }
+
+    fn create_stages(&self, leaves: &VkCreationLeaves, call: &VkDeviceCall) -> i32 {
         if call.request.is_null() || call.output.is_null() {
             return VK_ERROR_INITIALIZATION_FAILED;
         }

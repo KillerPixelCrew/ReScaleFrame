@@ -7,6 +7,7 @@
 RSF_EXPORT(rsf_get_runtime_version)
 RSF_EXPORT(rsf_gpu_default_sr_backend)
 RSF_EXPORT(rsf_gpu_select_sr_backend)
+RSF_EXPORT(rsf_gpu_select_fg_backend)
 RSF_EXPORT(rsf_frame_sequencer_create)
 RSF_EXPORT(rsf_frame_sequencer_begin)
 RSF_EXPORT(rsf_frame_sequencer_begin_rendered)

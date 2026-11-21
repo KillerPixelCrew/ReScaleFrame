@@ -12,10 +12,16 @@
 //! lent to each leaf. Every path here runs while `vulkan.cpp` holds its guard; the contexts lock
 //! is never held across a leaf.
 //!
-//! Auto SR stays FSR3 as before (`super::sr_backend`). The Runtime's `rsf_gpu_select_sr_backend`
-//! would match it only on a known hardware adapter and needs the Vulkan vendor id, which the
-//! session does not have when it resolves Auto; see `NATIVE.md`.
-use super::{BACKEND_ERROR_NOT_READY, BACKEND_OK, SR_EVALUATED, SR_FSR4, SR_REFUSED, Vulkan};
+//! The provider is the view's, with Auto already resolved by the Runtime's adapter policy
+//! (`Vulkan::providers`). A context made for another provider is stale, so a changed Auto
+//! resolution retires it like a new request. When the policy serves no provider for Auto (a
+//! software adapter), the pass takes the spatial fallback: the engine still renders at the reduced
+//! extent Auto asked for, so passing its output through as for an explicit Off would leave the
+//! output unwritten.
+use super::{
+    BACKEND_ERROR_NOT_READY, BACKEND_ERROR_NOT_SUPPORTED, BACKEND_OK, SR_AUTO, SR_DLSS,
+    SR_EVALUATED, SR_FSR4, SR_REFUSED, Vulkan,
+};
 use crate::d3d12::sharpening;
 use crate::platform::{
     Platform, VK_LOG_FSR4_DISPATCH, VK_LOG_INPUT_REFUSAL, VK_LOG_REJECTED, VkProc, VkSrCreate,
@@ -27,7 +33,6 @@ use std::sync::{MutexGuard, PoisonError};
 const BACKEND_ERROR_INVALID_ARGUMENT: i32 = -1;
 const BACKEND_ERROR_NOT_COMPILED: i32 = -3;
 const SR_NONE: u32 = 0;
-const SR_DLSS: u32 = 1;
 const SR_SPATIAL: u32 = 6;
 /// Logged refusals per session: rejected passes, FSR4 dispatch failures and input refusals.
 const DIAGNOSTIC_LIMIT: u32 = 4;
@@ -64,11 +69,12 @@ impl Contexts {
         self.sr != 0 || self.fsr4 != 0
     }
 
-    /// A failed creation, a new SR request, another device, or an output other than the last
-    /// reported pass's retires the contexts.
+    /// A failed creation, a new SR request, another resolved provider, another device, or an
+    /// output other than the last reported pass's retires the contexts.
     fn stale(&self, view: &VkView, pass: &VkSrPass) -> bool {
         !self.ready
             || view.generation != self.generation
+            || view.sr_backend != self.backend
             || pass.device as usize != self.device
             || view.output_width != pass.output_width
             || view.output_height != pass.output_height
@@ -128,7 +134,7 @@ impl Vulkan {
     /// its argument, depth-domain and FG checks. Returns the export's result; a leaf exception
     /// returns 0 without a report, as the export's catch did.
     pub(crate) fn sr_render(&self, platform: &Platform, pass: &VkSrPass) -> c_int {
-        let view = self.view().0;
+        let view = self.view(platform).0;
         let mut contexts = *self.contexts();
         let result = self.sr_pass(platform, pass, &view, &mut contexts);
         *self.contexts() = contexts;
@@ -157,6 +163,11 @@ impl Vulkan {
         sr.render_width = pass.render_width;
         sr.render_height = pass.render_height;
         sr.source_frame_id = pass.source_frame_id;
+        // Auto with no servable provider: the engine rendered at Auto's reduced extent.
+        if backend == SR_NONE && view.settings.sr_backend == SR_AUTO {
+            sr.result = BACKEND_ERROR_NOT_SUPPORTED;
+            return self.fallback(platform, call, commands, &mut sr, contexts);
+        }
         // Godot evaluates FSR1 itself; no context passes the engine's output through.
         if backend == SR_NONE || backend == SR_SPATIAL {
             sr.backend = backend;

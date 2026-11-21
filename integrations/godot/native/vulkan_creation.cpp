@@ -16,9 +16,10 @@
 static_assert(sizeof(rsf_godot_vk_chain_facts) == 40 && sizeof(rsf_godot_vk_device_derive) == 40 &&
     offsetof(rsf_godot_vk_device_derive, next) == 24 && sizeof(rsf_godot_vk_latency_requirements) == 24 &&
     sizeof(rsf_godot_vk_instance_call) == 48 && sizeof(rsf_godot_vk_device_call) == 56 &&
-    offsetof(rsf_godot_vk_device_call, extension_count) == 48 && sizeof(rsf_godot_vk_creation_leaves) == 112 &&
+    offsetof(rsf_godot_vk_device_call, extension_count) == 48 && sizeof(rsf_godot_vk_creation_leaves) == 120 &&
     offsetof(rsf_godot_vk_creation_leaves, latency_requirements) == 64 &&
-    offsetof(rsf_godot_vk_creation_leaves, destroy_device) == 104,
+    offsetof(rsf_godot_vk_creation_leaves, destroy_device) == 104 &&
+    offsetof(rsf_godot_vk_creation_leaves, adapter) == 112 && sizeof(rsf_godot_vk_adapter) == 16,
     "native/platform.rs mirrors these layouts");
 
 #if defined(RSF_VULKAN_SR_ENABLED)
@@ -242,11 +243,18 @@ void leaf_latency_destroyed(void* device) noexcept try {
 void leaf_destroy_device(rsf_godot_vk_function destroy, void* device, const void* allocator) noexcept try {
     reinterpret_cast<PFN_vkDestroyDevice>(destroy)(static_cast<VkDevice>(device), static_cast<const VkAllocationCallbacks*>(allocator));
 } catch (...) {}
+uint32_t leaf_adapter(rsf_godot_vk_function function, void* physical, rsf_godot_vk_adapter* adapter) noexcept try {
+    VkPhysicalDeviceProperties properties{};
+    reinterpret_cast<PFN_vkGetPhysicalDeviceProperties>(function)(static_cast<VkPhysicalDevice>(physical), &properties);
+    *adapter = {properties.vendorID, properties.deviceID,
+        properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU ? 1u : 0u, 0};
+    return 1;
+} catch (...) { return 0; }
 
 const rsf_godot_vk_creation_leaves creation_leaves{sizeof(creation_leaves), RSF_GODOT_VK_CREATION_VERSION,
     leaf_xess_instance_requirements, leaf_derive_instance, leaf_create_instance, leaf_chain_facts, leaf_xess_features,
     leaf_xess_device_requirements, leaf_device_extensions, leaf_latency_requirements, leaf_derive_device,
-    leaf_create_device, leaf_latency_created, leaf_latency_destroyed, leaf_destroy_device};
+    leaf_create_device, leaf_latency_created, leaf_latency_destroyed, leaf_destroy_device, leaf_adapter};
 
 // The entry points the resolver hands out. Each forwards to the creation owner with its record.
 VkResult VKAPI_PTR create_instance(const VkInstanceCreateInfo* info, const VkAllocationCallbacks* allocator, VkInstance* output) noexcept try {

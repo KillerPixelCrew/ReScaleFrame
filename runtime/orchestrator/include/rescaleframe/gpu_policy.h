@@ -12,6 +12,11 @@ RSF_RUNTIME_API uint32_t rsf_gpu_default_sr_backend(uint32_t vendor_id, uint32_t
    An unavailable adapter preference falls back to FSR3, then XeSS, otherwise NONE. */
 RSF_RUNTIME_API uint32_t rsf_gpu_select_sr_backend(uint32_t vendor_id, uint32_t software_adapter,
     uint32_t backend_choices);
+/* Resolves the FG Auto setting against the providers a host can serve (bit n = provider n):
+   rsf_fg_default_backend's preference when served, otherwise FSR3 when served, otherwise 0.
+   The generic D3D12 hosts apply the same rule. FSR4 is never chosen automatically. */
+RSF_RUNTIME_API uint32_t rsf_gpu_select_fg_backend(uint32_t vendor_id, uint32_t software_adapter,
+    uint32_t backend_choices);
 #ifdef __cplusplus
 }
 #endif

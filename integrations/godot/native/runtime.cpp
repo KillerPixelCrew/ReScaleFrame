@@ -45,13 +45,14 @@ static_assert(sizeof(rsf_godot_sr_create) == 88 && offsetof(rsf_godot_sr_create,
     sizeof(rsf_godot_sr_context) == 24 && offsetof(rsf_godot_sr_context, desired_width) == 12 &&
     sizeof(rsf_godot_sr_evaluate) == 64);
 static_assert(sizeof(rsf_godot_option_field) == 16 && sizeof(rsf_godot_option_value) == 24);
-static_assert(sizeof(rsf_godot_platform) == 520 && offsetof(rsf_godot_platform, vulkan_locked) == 88 &&
+static_assert(offsetof(rsf_godot_platform, vulkan_locked) == 88 &&
     offsetof(rsf_godot_platform, latency_facts) == 176 && offsetof(rsf_godot_platform, d3d12_bind) == 184 &&
     offsetof(rsf_godot_platform, sr_evaluate) == 256 && offsetof(rsf_godot_platform, d3d12_release) == 320 &&
     offsetof(rsf_godot_platform, vulkan_presenter_drain) == 328 && offsetof(rsf_godot_platform, vulkan_sr_create) == 360 &&
     offsetof(rsf_godot_platform, vulkan_sr_evaluate) == 400 && offsetof(rsf_godot_platform, vulkan_sr_dump_result) == 432 &&
     offsetof(rsf_godot_platform, window_identity) == 440 && offsetof(rsf_godot_platform, cpu_event) == 480 &&
-    offsetof(rsf_godot_platform, vulkan_present_marker) == 512);
+    offsetof(rsf_godot_platform, vulkan_present_marker) == 512 &&
+    offsetof(rsf_godot_platform, sr_select_backend) == 520 && sizeof(rsf_godot_platform) == 536);
 static_assert(sizeof(rsf_godot_window_identity) == 144 && offsetof(rsf_godot_window_identity, class_name) == 16);
 static_assert(sizeof(rsf_game_cpu_event) == 64 && RSF_GAME_CPU_FRAME_BEGIN == 0 && RSF_GAME_CPU_INPUT_EVENT == 5 &&
     RSF_GAME_CPU_EVENT_VERSION == 1 && RSF_GAME_CPU_INPUT_KEYED == 1 && RSF_GAME_CPU_WINDOW_MESSAGE == 4,
@@ -226,6 +227,15 @@ uint32_t leaf_d3d12_signal(uint64_t value)
 }
 uint32_t leaf_sr_default_backend() { return rsf_gpu_default_sr_backend(vendor_id(), false); }
 uint32_t leaf_fg_default_backend() { return rsf_fg_default_backend(vendor_id(), false); }
+// The Runtime's Auto policy for the Vulkan session's adapter facts and servable providers.
+uint32_t leaf_sr_select_backend(uint32_t vendor, uint32_t software, uint32_t choices)
+{
+    return rsf_gpu_select_sr_backend(vendor, software, choices);
+}
+uint32_t leaf_fg_select_backend(uint32_t vendor, uint32_t software, uint32_t choices)
+{
+    return rsf_gpu_select_fg_backend(vendor, software, choices);
+}
 uint32_t leaf_present_owner(uint32_t* backend)
 {
     if (!rsf_d3d11_present_has_owner()) return 0;
@@ -341,7 +351,7 @@ const rsf_godot_platform platform{sizeof(platform), RSF_GODOT_PLATFORM_VERSION, 
     vk::leaf_fsr4_plan, vk::leaf_sr_evaluate, vk::leaf_fsr4_evaluate, vk::leaf_sr_fallback, vk::leaf_sr_log,
     vk::leaf_sr_dump_result, leaf_window_identity, leaf_window_procedure_get, leaf_window_procedure_set,
     leaf_window_forward, leaf_query_counter, leaf_cpu_event, leaf_vulkan_cpu_event, leaf_latency_ping,
-    leaf_vulkan_latency_ping, leaf_vulkan_present_marker};
+    leaf_vulkan_latency_ping, leaf_vulkan_present_marker, leaf_sr_select_backend, leaf_fg_select_backend};
 bool booted() { return rsf_godot_booted() != 0; }
 }
 

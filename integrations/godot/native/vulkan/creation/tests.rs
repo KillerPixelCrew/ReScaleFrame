@@ -37,7 +37,21 @@ thread_local! {
     static INTEROP: Cell<bool> = const { Cell::new(false) };
     static LATENCY: Cell<bool> = const { Cell::new(false) };
     static RESULTS: RefCell<VecDeque<i32>> = const { RefCell::new(VecDeque::new()) };
+    /// The properties leaf's answer; `None` throws.
+    static ADAPTER: Cell<Option<VkAdapter>> = const { Cell::new(Some(NVIDIA)) };
 }
+
+const NVIDIA: VkAdapter = VkAdapter {
+    vendor: 0x10de,
+    device: 0x2684,
+    software: 0,
+    reserved: 0,
+};
+/// The calls a successful device creation ends with after its latency report.
+const ADAPTER_READ: [&str; 2] = [
+    "underlying 0x11 vkGetPhysicalDeviceProperties",
+    "adapter 0x12",
+];
 
 fn record(call: String) {
     CALLS.with_borrow_mut(|calls| calls.push(call));
@@ -70,6 +84,7 @@ fn reset() {
     INTEROP.set(false);
     LATENCY.set(false);
     RESULTS.with_borrow_mut(VecDeque::clear);
+    ADAPTER.set(Some(NVIDIA));
 }
 
 /// The create results in order; success once they run out.
@@ -83,6 +98,7 @@ fn next_result() -> i32 {
 
 unsafe extern "C" fn create_marker() {}
 unsafe extern "C" fn enumerate_marker() {}
+unsafe extern "C" fn properties_marker() {}
 unsafe extern "C" fn destroy_marker() {}
 unsafe extern "C" fn other_marker() {}
 
@@ -109,6 +125,7 @@ unsafe extern "C" fn underlying(object: *mut c_void, name: *const c_char) -> Opt
     let function: VkFunction = match name.as_str() {
         "vkCreateInstance" | "vkCreateDevice" => create_marker,
         "vkEnumerateDeviceExtensionProperties" => enumerate_marker,
+        "vkGetPhysicalDeviceProperties" => properties_marker,
         // SAFETY: the resolver answers vkGetDeviceProcAddr as a void function.
         "vkGetDeviceProcAddr" => unsafe {
             std::mem::transmute::<VkProc, VkFunction>(device_proc as VkProc)
@@ -342,6 +359,21 @@ unsafe extern "C" fn destroy_device(destroy: VkFunction, device: *mut c_void, _:
     record(format!("destroy_device {:#x}", device.addr()));
 }
 
+unsafe extern "C" fn adapter(
+    properties: VkFunction,
+    physical: *mut c_void,
+    output: *mut VkAdapter,
+) -> u32 {
+    assert_eq!(properties as usize, properties_marker as usize);
+    record(format!("adapter {:#x}", physical.addr()));
+    let Some(value) = ADAPTER.get() else {
+        return 0;
+    };
+    // SAFETY: the owner's output.
+    unsafe { output.write(value) };
+    1
+}
+
 static LEAVES: VkCreationLeaves = VkCreationLeaves {
     struct_size: size_of::<VkCreationLeaves>() as u32,
     version: VK_CREATION_VERSION,
@@ -358,6 +390,7 @@ static LEAVES: VkCreationLeaves = VkCreationLeaves {
     latency_created,
     latency_destroyed,
     destroy_device,
+    adapter,
 };
 
 fn begun(xess: bool) -> Creation {
@@ -566,9 +599,12 @@ fn disabled_xess_creates_through_the_interop_and_latency_stages() {
             "latency_requirements 0x11 0x100",
             "create_device 0x100",
             "latency_created 0x13 0x100",
+            ADAPTER_READ[0],
+            ADAPTER_READ[1],
         ]
     );
     assert!(!creation.xess_ready() && !creation.interop_ready());
+    assert_eq!(creation.adapter(), Some(NVIDIA));
 }
 
 #[test]
@@ -610,6 +646,8 @@ fn xess_individual_features_are_added_and_every_stage_merges_its_extensions() {
             "latency_requirements 0x11 0x701".to_owned(),
             "create_device 0x701".to_owned(),
             "latency_created 0x13 0x701".to_owned(),
+            ADAPTER_READ[0].to_owned(),
+            ADAPTER_READ[1].to_owned(),
         ]
     );
     assert!(creation.xess_ready() && creation.interop_ready());
@@ -668,6 +706,8 @@ fn xess_refusals_create_the_engine_request() {
         "latency_requirements 0x11 0x100",
         "create_device 0x100",
         "latency_created 0x13 0x100",
+        ADAPTER_READ[0],
+        ADAPTER_READ[1],
     ];
     // An uncloneable chain, a refused clone and a refused SDK query.
     for case in 0..3 {
@@ -782,13 +822,56 @@ fn latency_requirements_are_optional_and_the_actual_request_is_reported() {
             "create_device 0x702",
             "create_device 0x100",
             "latency_created 0x13 0x100",
+            ADAPTER_READ[0],
+            ADAPTER_READ[1],
         ]
     );
     assert_eq!(creation.create_device(&LEAVES, &call), VK_SUCCESS);
+    let calls = take_calls();
     assert_eq!(
-        take_calls().last().map(String::as_str),
-        Some("latency_created 0x13 0x702")
+        &calls[calls.len() - 3..],
+        [
+            "latency_created 0x13 0x702",
+            ADAPTER_READ[0],
+            ADAPTER_READ[1]
+        ]
     );
+}
+
+#[test]
+fn created_devices_replace_the_adapter_facts_and_failures_keep_them() {
+    let engine = engine_device_names();
+    let mut output = ptr::null_mut();
+    let creation = begun(false);
+    owned(&creation);
+    assert_eq!(creation.adapter(), None);
+    let call = device_call(&raw mut output, &engine);
+    // A failed creation reads nothing.
+    results(&[-2]);
+    assert_eq!(creation.create_device(&LEAVES, &call), -2);
+    assert!(!take_calls().iter().any(|call| call.starts_with("adapter")));
+    assert_eq!(creation.adapter(), None);
+    assert_eq!(creation.create_device(&LEAVES, &call), VK_SUCCESS);
+    assert_eq!(creation.adapter(), Some(NVIDIA));
+    // A later failure keeps the live device's facts; a new start and a stop keep them too.
+    results(&[-2]);
+    assert_eq!(creation.create_device(&LEAVES, &call), -2);
+    creation.stop();
+    assert!(creation.begin(Some(underlying), false, None, ptr::null_mut()));
+    assert_eq!(creation.adapter(), Some(NVIDIA));
+    // A software device, then one whose properties leaf threw, which keeps none.
+    let software = VkAdapter {
+        vendor: 0x10005,
+        device: 0,
+        software: 1,
+        reserved: 0,
+    };
+    ADAPTER.set(Some(software));
+    assert_eq!(creation.create_device(&LEAVES, &call), VK_SUCCESS);
+    assert_eq!(creation.adapter(), Some(software));
+    ADAPTER.set(None);
+    assert_eq!(creation.create_device(&LEAVES, &call), VK_SUCCESS);
+    assert_eq!(creation.adapter(), None);
 }
 
 #[test]

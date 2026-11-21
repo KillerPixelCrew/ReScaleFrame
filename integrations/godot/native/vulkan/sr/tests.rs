@@ -2,7 +2,7 @@
 use super::super::SR_FSR3;
 use super::*;
 use crate::control::default_settings;
-use crate::platform::{ABI_VERSION, Settings, Setup, Status, VkFacts, VkFunction, fake};
+use crate::platform::{ABI_VERSION, Settings, Setup, Status, VkAdapter, VkFacts, VkFunction, fake};
 use std::ffi::c_char;
 use std::ptr;
 
@@ -434,6 +434,8 @@ fn shutdown_retires_the_contexts_between_the_presenter_drain_and_the_stop() {
     render(&vulkan, &pass(DEVICE, OUTPUT));
     let (context, _) = handles(&vulkan);
     fake::take_vk_sr_calls();
+    // The pass read the owner facts to resolve Auto.
+    assert_eq!(fake::take_calls(), ["facts"]);
     fake::VK_DESTROY.set(-9);
     assert_eq!(vulkan.shutdown(&fake::LEAVES), 0);
     assert!(vulkan.booted());
@@ -461,4 +463,72 @@ fn shutdown_retires_the_contexts_between_the_presenter_drain_and_the_stop() {
     assert_eq!(vulkan.shutdown(&fake::LEAVES), 0);
     assert_eq!(fake::take_vk_sr_calls(), [("drain", 1)]);
     fake::VK_DRAIN.set(0);
+}
+
+#[test]
+fn auto_without_a_servable_provider_takes_the_spatial_fallback() {
+    let vulkan = booted();
+    // A software adapter: the Runtime serves no SR provider for Auto.
+    vulkan.creation().report_adapter(Some(VkAdapter {
+        vendor: 0x10005,
+        device: 0,
+        software: 1,
+        reserved: 0,
+    }));
+    assert_eq!(render(&vulkan, &pass(DEVICE, OUTPUT)), 1);
+    assert_eq!(
+        fake::take_vk_sr_calls(),
+        [("fallback", 0), ("log", u64::from(VK_LOG_REJECTED))]
+    );
+    assert_eq!(handles(&vulkan), (0, 0));
+    let value = status(&vulkan);
+    assert_eq!(
+        (
+            value.requested_sr,
+            value.active_sr,
+            value.sr_result,
+            value.refused_frames,
+            value.render_width,
+            value.output_width
+        ),
+        (SR_AUTO, 0, BACKEND_ERROR_NOT_SUPPORTED, 1, 1280, 1920)
+    );
+    // An explicit Off still passes the engine's output through.
+    configure(&vulkan, |s| s.sr_backend = SR_NONE);
+    assert_eq!(render(&vulkan, &pass(DEVICE, OUTPUT)), 1);
+    assert!(fake::take_vk_sr_calls().is_empty());
+    assert_eq!(status(&vulkan).sr_result, BACKEND_OK);
+}
+
+#[test]
+fn a_changed_auto_resolution_retires_the_context() {
+    let vulkan = booted();
+    render(&vulkan, &pass(DEVICE, OUTPUT));
+    let (first, _) = handles(&vulkan);
+    fake::take_vk_sr_calls();
+    // The same request and generation, now resolved for an NVIDIA device with Streamline.
+    vulkan.creation().report_adapter(Some(VkAdapter {
+        vendor: 0x10de,
+        device: 0x2684,
+        software: 0,
+        reserved: 0,
+    }));
+    fake::VK_FACTS.set(VkFacts {
+        streamline_ready: 1,
+        ..fake::VK_FACTS.get()
+    });
+    assert_eq!(render(&vulkan, &pass(DEVICE, OUTPUT)), 1);
+    let calls = fake::take_vk_sr_calls();
+    assert_eq!(
+        calls[..4],
+        [
+            ("drain", 0),
+            ("idle", DEVICE as u64),
+            ("destroy", first),
+            ("create", u64::from(SR_DLSS))
+        ]
+    );
+    // The DLSS context gets the requested preset once, as an explicit request does.
+    assert_eq!(calls[4], ("preset", 0));
+    assert_eq!(status(&vulkan).active_sr, SR_DLSS);
 }

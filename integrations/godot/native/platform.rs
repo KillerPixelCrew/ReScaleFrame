@@ -15,7 +15,7 @@ use rsf_game_sys::{rsf_game_cpu_event, rsf_game_log_fn, rsf_game_render_pass};
 use std::ffi::{c_char, c_int, c_void};
 use std::sync::OnceLock;
 
-pub(crate) const PLATFORM_VERSION: u32 = 5;
+pub(crate) const PLATFORM_VERSION: u32 = 6;
 /// `RSF_GODOT_ABI_VERSION`: setup, status, engine services and the Vulkan packet.
 pub(crate) const ABI_VERSION: u32 = 3;
 /// `RSF_GODOT_SETTINGS_ABI_VERSION`.
@@ -324,8 +324,8 @@ pub(crate) struct VkFacts {
     pub(crate) fsr4_fg_compiled: u32,
     pub(crate) xess_fg_compiled: u32,
     pub(crate) presenter: u32,
-    /// Formerly `primary_window`; the Vulkan session owns that window now and leaves this zero.
-    pub(crate) reserved: u32,
+    /// `rsf_slvk_initialize` with DLSS SR and FG succeeded at this session's start.
+    pub(crate) streamline_ready: u32,
     pub(crate) presenter_backend: u32,
     pub(crate) sdk_shutdown_pending: u32,
 }
@@ -443,7 +443,7 @@ pub(crate) struct VkSrContext {
 }
 
 /// `RSF_GODOT_VK_CREATION_VERSION`.
-pub(crate) const VK_CREATION_VERSION: u32 = 1;
+pub(crate) const VK_CREATION_VERSION: u32 = 2;
 /// `RSF_GODOT_VK_SCOPE_*`.
 pub(crate) const VK_SCOPE_INSTANCE: u32 = 0;
 pub(crate) const VK_SCOPE_DEVICE: u32 = 1;
@@ -491,6 +491,17 @@ pub(crate) struct VkDeviceDerive {
     pub(crate) replace_next: u32,
     pub(crate) next: *mut c_void,
     pub(crate) clear_enabled_features: u32,
+    pub(crate) reserved: u32,
+}
+
+/// `rsf_godot_vk_adapter`: the created device's physical device, as `vkGetPhysicalDeviceProperties`
+/// read it. `software` is a CPU device type.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct VkAdapter {
+    pub(crate) vendor: u32,
+    pub(crate) device: u32,
+    pub(crate) software: u32,
     pub(crate) reserved: u32,
 }
 
@@ -585,6 +596,7 @@ pub(crate) struct VkCreationLeaves {
     ) -> i32,
     pub(crate) latency_destroyed: unsafe extern "C" fn(*mut c_void),
     pub(crate) destroy_device: unsafe extern "C" fn(VkFunction, *mut c_void, *const c_void),
+    pub(crate) adapter: unsafe extern "C" fn(VkFunction, *mut c_void, *mut VkAdapter) -> u32,
 }
 
 /// `RSF_GODOT_EFFECT_VERSION`: the effect leaves and the effect status record.
@@ -816,6 +828,8 @@ pub(crate) struct Platform {
     pub(crate) latency_ping: unsafe extern "C" fn(*mut c_void) -> i32,
     pub(crate) vulkan_latency_ping: unsafe extern "C" fn(*mut c_void) -> i32,
     pub(crate) vulkan_present_marker: unsafe extern "C" fn(u32),
+    pub(crate) sr_select_backend: unsafe extern "C" fn(u32, u32, u32) -> u32,
+    pub(crate) fg_select_backend: unsafe extern "C" fn(u32, u32, u32) -> u32,
 }
 
 const _: () = {
@@ -873,9 +887,11 @@ const _: () = {
     assert!(size_of::<VkInstanceCall>() == 48);
     assert!(size_of::<VkDeviceCall>() == 56);
     assert!(offset_of!(VkDeviceCall, extension_count) == 48);
-    assert!(size_of::<VkCreationLeaves>() == 112);
+    assert!(size_of::<VkCreationLeaves>() == 120);
     assert!(offset_of!(VkCreationLeaves, latency_requirements) == 64);
     assert!(offset_of!(VkCreationLeaves, destroy_device) == 104);
+    assert!(offset_of!(VkCreationLeaves, adapter) == 112);
+    assert!(size_of::<VkAdapter>() == 16);
     assert!(size_of::<EffectFrame>() == 272);
     assert!(offset_of!(EffectFrame, motion_valid) == 36);
     assert!(offset_of!(EffectFrame, camera_transform) == 48);
@@ -893,7 +909,8 @@ const _: () = {
     assert!(offset_of!(EffectLeaves, read_motion) == 24);
     assert!(size_of::<WindowIdentity>() == 144);
     assert!(offset_of!(WindowIdentity, class_name) == 16);
-    assert!(size_of::<Platform>() == 520);
+    assert!(size_of::<Platform>() == 536);
+    assert!(offset_of!(Platform, sr_select_backend) == 520);
     assert!(offset_of!(Platform, vulkan_locked) == 88);
     assert!(offset_of!(Platform, latency_facts) == 176);
     assert!(offset_of!(Platform, d3d12_bind) == 184);
@@ -1332,6 +1349,16 @@ impl Platform {
     pub(crate) fn vulkan_present_marker(&self, begin: u32) {
         unsafe { (self.vulkan_present_marker)(begin) }
     }
+
+    /// `rsf_gpu_select_sr_backend`: the Runtime's SR Auto choice among `choices`.
+    pub(crate) fn sr_select_backend(&self, vendor: u32, software: u32, choices: u32) -> u32 {
+        unsafe { (self.sr_select_backend)(vendor, software, choices) }
+    }
+
+    /// `rsf_gpu_select_fg_backend`: the Runtime's FG Auto choice among `choices`.
+    pub(crate) fn fg_select_backend(&self, vendor: u32, software: u32, choices: u32) -> u32 {
+        unsafe { (self.fg_select_backend)(vendor, software, choices) }
+    }
 }
 
 /// The creation table from `vulkan_creation.cpp`, when its header matches.
@@ -1517,6 +1544,17 @@ impl VkCreationLeaves {
         allocator: *const c_void,
     ) {
         unsafe { (self.destroy_device)(destroy, device, allocator) }
+    }
+
+    /// `properties` is `vkGetPhysicalDeviceProperties`; `None` when the leaf threw.
+    pub(crate) fn adapter(
+        &self,
+        properties: VkFunction,
+        physical_device: *mut c_void,
+    ) -> Option<VkAdapter> {
+        let mut adapter = VkAdapter::default();
+        (unsafe { (self.adapter)(properties, physical_device, &mut adapter) } != 0)
+            .then_some(adapter)
     }
 }
 

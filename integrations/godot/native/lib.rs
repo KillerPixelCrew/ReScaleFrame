@@ -294,11 +294,17 @@ unsafe extern "C" fn rsf_godot_shutdown_vulkan(table: *const Platform) -> c_int 
     unsafe { leaves(table) }.map_or(0, |platform| CONTROL.vulkan.shutdown(platform))
 }
 
+/// The view with Auto resolved through the table the boot registered. Without one (no boot was
+/// ever attempted) nothing is written and zero is returned.
+///
 /// # Safety
 /// `view` is null or writable.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_godot_vk_view_get(view: *mut VkView) -> c_int {
-    let (value, active) = CONTROL.vulkan.view();
+    let Some(platform) = platform::registered() else {
+        return 0;
+    };
+    let (value, active) = CONTROL.vulkan.view(platform);
     if !view.is_null() {
         // SAFETY: the caller's guarantee.
         unsafe { view.write(value) };
@@ -313,9 +319,13 @@ extern "C" fn rsf_godot_vk_presenter_created(ready: u32, backend: u32, max_gener
         .presenter_created(ready != 0, backend, max_generated);
 }
 
+/// Zero, so the engine recreates its WSI owner, also without a registered table (not reachable:
+/// a presenter exists only after a boot registered one).
 #[unsafe(no_mangle)]
 extern "C" fn rsf_godot_vk_presenter_current(backend: u32) -> c_int {
-    CONTROL.vulkan.presenter_current(backend).into()
+    platform::registered()
+        .is_some_and(|platform| CONTROL.vulkan.presenter_current(platform, backend))
+        .into()
 }
 
 /// # Safety
