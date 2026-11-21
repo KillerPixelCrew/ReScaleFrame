@@ -3,12 +3,12 @@
 
 use crate::dxbc_chunks::Chunk;
 use crate::velocity_container::{
-    Resize, Semantic, borrowed, native_output, read_container, read_signature, resize_bytes,
-    valid_container_size, write_container, write_signature,
+    Resize, Semantic, borrowed, chunk_index, chunks, native_output, read_signature, resize_bytes,
+    shader_index, valid_container_size, write_container, write_signature,
 };
 use crate::velocity_tokens::{
-    MAX_TEMPS, OperandEdit, OperandView, read_instructions, read_operands, rewrite_operands,
-    write_instructions,
+    DCL_TEMPS, Instruction, MAX_TEMPS, OperandEdit, OperandView, append_words, instructions,
+    read_operands, rewrite_operands, temp_count, write_instructions,
 };
 use std::borrow::Cow;
 use std::ffi::{c_char, c_void};
@@ -31,7 +31,6 @@ const DCL_CONSTANT_BUFFER: u32 = 89;
 const DCL_INPUT_PS: u32 = 98;
 const DCL_INPUT_PS_SIV: u32 = 100;
 const DCL_OUTPUT: u32 = 101;
-const DCL_TEMPS: u32 = 104;
 const DCL_GLOBAL_FLAGS: u32 = 106;
 
 const TEMP: u32 = 0;
@@ -52,12 +51,6 @@ float4 main(float4 current_clip:RSFCUR0,float4 previous:RSFPREV0,float4 colour:R
 
 type CompileHelper = unsafe extern "C" fn(*const c_char, usize, *mut *const u8, *mut usize) -> bool;
 
-struct Instruction {
-    words: Vec<u32>,
-    opcode: u32,
-    declaration: bool,
-}
-
 impl Instruction {
     fn operand_mask(&self, operand: &OperandView) -> u32 {
         (self.words[operand.token] >> 4) & 15
@@ -66,52 +59,6 @@ impl Instruction {
     fn scalar_swizzle(&self, operand: &OperandView) -> u32 {
         (self.words[operand.token] >> 4) & 255
     }
-}
-
-fn instructions(bytes: &[u8]) -> Option<Vec<Instruction>> {
-    let mut code = Vec::new();
-    read_instructions(bytes, PIXEL_PROFILE, |opcode, words, declaration| {
-        let mut tokens = Vec::new();
-        append_words(&mut tokens, words)?;
-        code.try_reserve(1).ok()?;
-        code.push(Instruction {
-            words: tokens,
-            opcode,
-            declaration,
-        });
-        Some(())
-    })?;
-    Some(code)
-}
-
-fn chunks(bytes: &[u8]) -> Option<Vec<Chunk<'_>>> {
-    let mut chunks = Vec::new();
-    read_container(bytes, |chunk| {
-        chunks.try_reserve(1).ok()?;
-        chunks.push(chunk);
-        Some(())
-    })?;
-    Some(chunks)
-}
-
-fn chunk_index(chunks: &[Chunk<'_>], tag: &[u8; 4]) -> Option<usize> {
-    chunks.iter().position(|chunk| chunk.tag == tag)
-}
-
-fn shader_index(chunks: &[Chunk<'_>]) -> Option<usize> {
-    chunk_index(chunks, b"SHEX").or_else(|| chunk_index(chunks, b"SHDR"))
-}
-
-fn append_words(code: &mut Vec<u32>, words: &[u32]) -> Option<()> {
-    code.try_reserve(words.len()).ok()?;
-    code.extend_from_slice(words);
-    Some(())
-}
-
-fn temp_count(code: &[Instruction]) -> u32 {
-    code.iter()
-        .find(|inst| inst.opcode == DCL_TEMPS)
-        .map_or(0, |inst| inst.words[1])
 }
 
 fn native_inputs(
@@ -417,8 +364,8 @@ fn patch<'a>(
     let target = chunk_index(native, b"OSGN")?;
     let extra_shader = shader_index(helper)?;
     let extra_input = chunk_index(helper, b"ISGN")?;
-    let original = instructions(native[shader].data)?;
-    let added = instructions(helper[extra_shader].data)?;
+    let original = instructions(native[shader].data, PIXEL_PROFILE)?;
+    let added = instructions(helper[extra_shader].data, PIXEL_PROFILE)?;
     let (inputs, previous, current) = native_inputs(native[input].data, previous, current)?;
     native_target(native[target].data)?;
     let extra_inputs = helper_inputs(helper[extra_input].data)?;

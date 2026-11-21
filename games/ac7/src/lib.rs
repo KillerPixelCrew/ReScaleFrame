@@ -41,6 +41,7 @@ mod ui_abi;
 mod velocity_container;
 mod velocity_pixel;
 mod velocity_tokens;
+mod velocity_vertex;
 mod view;
 mod view_abi;
 

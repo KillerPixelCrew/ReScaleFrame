@@ -365,6 +365,14 @@ additive opacity and injects at native unconditional returns. It also
 keeps aliased input alive and refuses shaders with no injection site.
 Emitted bytecode parity, builds and GPU replay remain open.
 
+The AC7 velocity vertex stage uses the same Rust DXBC codecs for
+particle classification, signature linking and injection at native
+returns. Source comparison matched all four helper HLSL sources and
+compiler requests. The C++ wrapper keeps the typed compiler cache and
+retains aliased input through reconstruction. Malformed declarations
+and missing return sites now refuse. Hull, domain and geometry stage
+assembly remain native. Build, bytecode parity and gameplay remain open.
+
 ## Rust orchestrator and first Anomaly port
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.

@@ -47,18 +47,19 @@ struct Container {
 };
 
 using Semantic=rsf_ac7_velocity_semantic;
+bool append_semantic(void* user, const rsf_ac7_velocity_semantic_view* view) noexcept
+try {
+    auto& semantics = *static_cast<std::vector<Semantic>*>(user);
+    semantics.push_back({std::string(view->name, view->name_size),
+        view->index, view->system, view->type, view->reg, view->mask, view->used});
+    return true;
+} catch (...) { return false; }
+
 bool read_signature(const Chunk& chunk, std::vector<Semantic>& result)
 {
     const bool streams = std::memcmp(chunk.tag.data(), "OSG5", 4) == 0;
     return rsf_core_ac7_velocity_read_signature(chunk.bytes.data(), chunk.bytes.size(), streams, &result,
-        [](void* user, const rsf_ac7_velocity_semantic_view* view) noexcept {
-            try {
-                auto& semantics = *static_cast<std::vector<Semantic>*>(user);
-                semantics.push_back({std::string(view->name, view->name_size),
-                    view->index, view->system, view->type, view->reg, view->mask, view->used});
-                return true;
-            } catch (...) { return false; }
-        });
+        append_semantic);
 }
 
 void write_signature(Chunk& chunk, const std::vector<Semantic>& semantics)
@@ -163,11 +164,49 @@ try {
     *size = bytecode.size();
     return !bytecode.empty();
 } catch (...) { return false; }
+
+struct VertexShaderSource {
+    const char* text;
+    size_t length;
+};
+struct VertexMetadata {
+    uint32_t particle;
+    uint32_t position_register;
+};
+static_assert(sizeof(VertexShaderSource) == 16);
+static_assert(sizeof(VertexMetadata) == 8);
+
+bool compile_vertex_helper(const VertexShaderSource* sources, uint32_t particle,
+    const uint8_t** bytes, size_t* size) noexcept
+try {
+    if (particle >= 4) return false;
+    const auto compile = [sources](size_t index, const char* name) {
+        const auto& source = sources[index];
+        std::vector<uint8_t> result;
+        rsf::compile_shader(source.text, source.length, name, "main", "vs_5_0", result);
+        return result;
+    };
+    // Keep the original initialization order and lend bytecode owned by this module.
+    static const auto generic = compile(0, "ac7-geometry-key");
+    static const auto sprite = compile(1, "ac7-particle-key");
+    static const auto mesh = compile(2, "ac7-mesh-particle-pose-key");
+    static const auto beam = compile(3, "ac7-beam-sample-key");
+    const std::vector<uint8_t>* const helpers[]{&generic, &sprite, &mesh, &beam};
+    const auto& helper = *helpers[particle];
+    *bytes = helper.data();
+    *size = helper.size();
+    return !helper.empty();
+} catch (...) { return false; }
 }
 
 extern "C" bool rsf_core_ac7_velocity_pixel_shader(const uint8_t*, size_t, uint32_t blend,
     uint32_t previous, uint32_t current, bool (*compile_helper)(const char*, size_t, const uint8_t**, size_t*),
     void* user, uint8_t* (*resize)(void*, size_t)) noexcept;
+
+extern "C" bool rsf_core_ac7_velocity_vertex_shader(const uint8_t*, size_t, bool tessellation, bool beam,
+    bool (*compile_helper)(const VertexShaderSource*, uint32_t, const uint8_t**, size_t*), void* user,
+    uint8_t* (*resize)(void*, size_t), bool (*append)(void*, const rsf_ac7_velocity_semantic_view*),
+    VertexMetadata*) noexcept;
 
 rsf_ac7_velocity_shader_result rsf_ac7_velocity_pixel_shader(const void* bytes, size_t size,
     uint32_t blend, std::vector<uint8_t>& output, uint32_t previous_register, uint32_t current_register) noexcept
@@ -197,172 +236,31 @@ bool rsf_ac7_velocity_signature(const void* bytes,size_t size,bool output,
 rsf_ac7_velocity_shader_result rsf_ac7_velocity_vertex_shader(const void* bytes,size_t size,
     std::vector<uint8_t>& output,rsf_ac7_velocity_vertex_info& info,bool tessellation,bool beam) noexcept
 {
-    output.clear(); info={};
-    try {
-        Container native;
-        if (!native.read(bytes,size)) return rsf_ac7_velocity_shader_result::refused;
-        auto* shader=native.find("SHEX"); if (!shader) shader=native.find("SHDR");
-        auto* input=native.find("ISGN"); auto* out=native.find("OSGN");
-        std::vector<Instruction> original;
-        std::vector<Semantic> inputs,outputs;
-        if (!shader || !input || !out || !instructions(*shader,original,0x10050) ||
-            !read_signature(*input,inputs) || !read_signature(*out,outputs)) return rsf_ac7_velocity_shader_result::refused;
-        uint32_t next_input=0,next_output=0;
-        const Semantic *position=nullptr,*old=nullptr,*corner=nullptr,*beam_old=nullptr,*beam_size=nullptr,*beam_uv=nullptr;
-        bool mesh_rows[3]{};
-        for (const auto& s:inputs) {
-            next_input=std::max(next_input,s.reg+1);
-            if (!_stricmp(s.name.c_str(),"ATTRIBUTE")) {
-                if (!s.index && s.mask==15) position=&s;
-                if (s.index==1 && s.mask==15) old=&s;
-                if (s.index==1 && s.mask==7) beam_old=&s;
-                if (s.index==2 && s.mask==15 && !(s.used&8)) beam_size=&s;
-                if (s.index==3 && s.mask==15) beam_uv=&s;
-                if (s.index==4 && s.mask==3) corner=&s;
-                if (s.index>=8 && s.index<=10 && s.mask==15) mesh_rows[s.index-8]=true;
-            }
-        }
-        info.particle=mesh_rows[0] && mesh_rows[1] && mesh_rows[2] ? 2u : position && old && corner ? 1u :
-            beam && position && !(position->used&8) && beam_old && beam_size && beam_uv ? 3u : 0u;
-        bool has_position=false;
-        for (const auto& s:outputs) {
-            next_output=std::max(next_output,s.reg+1);
-            if (s.system==1) { info.position_register=s.reg; has_position=true; }
-            if (tessellation && !_stricmp(s.name.c_str(),"VS_To_DS_Position") && s.mask==15 && s.type==3) {
-                info.position_register=s.reg;has_position=true;
-            }
-            if (s.name.starts_with("RSF")) return rsf_ac7_velocity_shader_result::refused;
-        }
-        if (!has_position || next_output+4>32) return rsf_ac7_velocity_shader_result::refused;
-        static constexpr char generic_source[]=R"(
-struct O {float4 p:SV_Position;float4 key:RSFKEY0;float4 centre:RSFCENTRE0;float4 old:RSFOLD0;float4 lookup:RSFLOOKUP0;};
-O main(uint vertex:SV_VertexID,uint instance:SV_InstanceID) {O o;o.p=float4(0,0,0,1);
-o.key=float4(float(vertex),float(instance),0,0);o.lookup=o.key;o.centre=0;o.old=0;return o;})";
-        static constexpr char particle_source[]=R"(
-struct O {float4 p:SV_Position;float4 key:RSFKEY0;float4 centre:RSFCENTRE0;float4 old:RSFOLD0;float4 lookup:RSFLOOKUP0;};
-O main(float4 centre:ATTRIBUTE0,float4 old:ATTRIBUTE1,float2 corner:ATTRIBUTE4) {
-O o;o.p=float4(0,0,0,1);o.key=float4(corner,old.w,1);o.centre=float4(centre.xyz,1);
-o.old=float4(old.xyz,1);o.lookup=o.key;return o;})";
-        static constexpr char mesh_source[]=R"(
-Buffer<float4> Previous:register(t127);
-struct O {float4 p:SV_Position;float4 key:RSFKEY0;float4 centre:RSFCENTRE0;float4 old:RSFOLD0;float4 lookup:RSFLOOKUP0;};
-uint2 pose_hash(float4 a,float4 b,float4 c) {
-    uint2 value=uint2(2166136261,2246822519);
-    [unroll]for(uint row=0;row<3;row++) {
-        uint4 bits=asuint(row==0 ? a : row==1 ? b : c);
-        [unroll]for(uint i=0;i<4;i++) {value=(value^bits[i])*uint2(16777619,3266489917);}
-    }
-    return value;
-}
-O main(float4 a:ATTRIBUTE8,float4 b:ATTRIBUTE9,float4 c:ATTRIBUTE10,
-       uint vertex:SV_VertexID,uint instance:SV_InstanceID) {
-    O o;o.p=float4(0,0,0,1);uint2 now=pose_hash(a,b,c);
-    o.key=float4(float(vertex),asfloat(now.x),asfloat(now.y),2);o.centre=float4(a.w,b.w,c.w,1);
-    uint count;Previous.GetDimensions(count);o.lookup=float4(float(vertex),0,0,3);o.old=o.centre;
-    if(instance<count/3) {
-        float4 pa=Previous[instance*3],pb=Previous[instance*3+1],pc=Previous[instance*3+2];
-        if(any(pa.xyz!=0) && any(pb.xyz!=0) && any(pc.xyz!=0)) {
-            uint2 old=pose_hash(pa,pb,pc);o.lookup=float4(float(vertex),asfloat(old.x),asfloat(old.y),2);
-            o.old=float4(pa.w,pb.w,pc.w,1);
-        }
-    }
-    return o;
-})";
-        static constexpr char beam_source[]=R"(
-struct O {float4 p:SV_Position;float4 key:RSFKEY0;float4 centre:RSFCENTRE0;float4 old:RSFOLD0;float4 lookup:RSFLOOKUP0;};
-O main(float4 p:ATTRIBUTE0,float4 old:ATTRIBUTE1,float4 size:ATTRIBUTE2,float4 uv:ATTRIBUTE3) {
- O o;o.p=float4(0,0,0,1);o.key=0;o.lookup=float4(0,0,0,3);o.centre=0;o.old=0;
- uint3 bits=asuint(float3(p.w,old.w,size.w));
- uint3 words=(bits&0x1fffffff)|((bits>>2)&0x20000000);uint sample=words.z&4095,intervals=(words.z>>12)&4095;
- if(all((bits&0x60000000)==0x20000000) && words.x>>28<=2 && words.z>>24==0 && intervals!=0 && sample<=intervals && (uv.y==0 || uv.y==1)) {
-  float u=float(sample)/float(intervals);o.key=float4(p.w,old.w,floor(u*128),uv.y+4);
-  o.lookup=o.key;o.centre=float4(u,0,0,1);o.old=o.centre;
- }
- return o;
-})";
-        static const auto generic=[] {std::vector<uint8_t> code;rsf::compile_shader(generic_source,"ac7-geometry-key","main","vs_5_0",code);return code;}();
-        static const auto particle=[] {std::vector<uint8_t> code;rsf::compile_shader(particle_source,"ac7-particle-key","main","vs_5_0",code);return code;}();
-        static const auto mesh=[] {std::vector<uint8_t> code;rsf::compile_shader(mesh_source,"ac7-mesh-particle-pose-key","main","vs_5_0",code);return code;}();
-        static const auto beam_code=[] {std::vector<uint8_t> code;rsf::compile_shader(beam_source,"ac7-beam-sample-key","main","vs_5_0",code);return code;}();
-        const auto& helper_bytes=info.particle==3 ? beam_code : info.particle==2 ? mesh : info.particle ? particle : generic;
-        Container extra; if (!extra.read(helper_bytes.data(),helper_bytes.size())) return rsf_ac7_velocity_shader_result::refused;
-        auto* helper_shader=extra.find("SHEX"); if (!helper_shader) helper_shader=extra.find("SHDR");
-        auto* helper_input=extra.find("ISGN"); auto* helper_output=extra.find("OSGN");
-        std::vector<Instruction> added; std::vector<Semantic> add_inputs,add_outputs;
-        if (!helper_shader || !helper_input || !helper_output || !instructions(*helper_shader,added,0x10050) ||
-            !read_signature(*helper_input,add_inputs) || !read_signature(*helper_output,add_outputs))
-            return rsf_ac7_velocity_shader_result::refused;
-        std::map<uint32_t,uint32_t> input_map,output_map;
-        uint32_t dummy_position=UINT32_MAX;
-        for (const auto& s:add_inputs) {
-            auto found=std::find_if(inputs.begin(),inputs.end(),[&](const auto& native_input) {
-                return !_stricmp(native_input.name.c_str(),s.name.c_str()) && native_input.index==s.index;
-            });
-            if (found!=inputs.end()) { input_map[s.reg]=found->reg; found->used|=s.used;found->mask|=s.mask; }
-            else {
-                if (!s.system || next_input>=32) return rsf_ac7_velocity_shader_result::refused;
-                auto appended=s; appended.reg=next_input++; input_map[s.reg]=appended.reg; inputs.push_back(std::move(appended));
-            }
-        }
-        for (const auto& s:add_outputs) {
-            if (s.system==1) { dummy_position=s.reg; continue; }
-            auto appended=s; appended.reg=next_output++; output_map[s.reg]=appended.reg;
-            outputs.push_back(std::move(appended));
-        }
-        const uint32_t base=temp_count(original),total=base+temp_count(added);
-        if (total>4096) return rsf_ac7_velocity_shader_result::refused;
-        std::vector<uint32_t> declarations,injection;
-        std::vector<Instruction> body;
-        auto append=[](auto& into,const auto& values) { into.insert(into.end(),values.begin(),values.end()); };
-        std::map<uint32_t,size_t> input_declarations;
-        bool temps=false;
-        for (auto i:original) {
-            if (i.op==4 || i.op==5 || i.op==63) return rsf_ac7_velocity_shader_result::refused;
-            if (i.op==104) {i.words[1]=total;temps=true;append(declarations,i.words);continue;}
-            if (i.declaration) {
-                if (i.op>=95 && i.op<=97 && i.words.size()>2) input_declarations[i.words[2]]=declarations.size()+1;
-                append(declarations,i.words);
-            } else body.push_back(std::move(i));
-        }
-        for (auto i:added) {
-            if (i.op==104 || i.op==106 || i.op==62) continue;
-            if (i.op>=95 && i.op<=97) {
-                if (i.words.size()<3 || !input_map.contains(i.words[2])) return rsf_ac7_velocity_shader_result::refused;
-                const uint32_t reg=input_map[i.words[2]];
-                const auto found=input_declarations.find(reg);
-                if (found!=input_declarations.end()) declarations[found->second]|=i.words[1]&0xf0;
-                else {i.words[2]=reg;append(declarations,i.words);}
-                continue;
-            }
-            if (i.op>=101 && i.op<=103) {
-                if (i.words.size()<3) return rsf_ac7_velocity_shader_result::refused;
-                if (i.words[2]==dummy_position) continue;
-                if (!output_map.contains(i.words[2])) return rsf_ac7_velocity_shader_result::refused;
-                i.words[2]=output_map[i.words[2]]; append(declarations,i.words); continue;
-            }
-            if (i.declaration) {append(declarations,i.words);continue;}
-            std::vector<Operand> operands;
-            if (!i.operands(operands)) return rsf_ac7_velocity_shader_result::refused;
-            if (!operands.empty() && operands[0].type==2 && operands[0].direct(1) && operands[0].reg()==dummy_position) continue;
-            if (!i.rewrite([&](const Operand& o, OperandEdit& edit) {
-                if (o.type==0) return rebase_temp(o,edit,base);
-                if (o.type==1) edit.remap(o,input_map.at(o.reg()));
-                if (o.type==2) edit.remap(o,output_map.at(o.reg()));
-                return true;
-            })) return rsf_ac7_velocity_shader_result::refused;
-            append(injection,i.words);
-        }
-        if (!temps) {declarations.push_back(0x02000068u);declarations.push_back(total);}
-        std::vector<uint32_t> code{0x10050,0}; append(code,declarations);
-        for (const auto& i:body) {
-            if (i.op==62) append(code,injection);
-            append(code,i.words);
-        }
-        write_instructions(*shader,code);
-        write_signature(*input,inputs);write_signature(*out,outputs);native.write(output);info.outputs=std::move(outputs);
+    // Keep caller-owned input live even when it points into the destination vector.
+    struct Destination {
+        std::vector<uint8_t> bytes;
+        rsf_ac7_velocity_vertex_info info;
+    } patched;
+    VertexMetadata metadata{};
+    if (rsf_core_ac7_velocity_vertex_shader(static_cast<const uint8_t*>(bytes), size, tessellation,
+            beam, compile_vertex_helper, &patched,
+            [](void* user, size_t count) noexcept {
+                return rsf::ac7::resize_shader_bytes(&static_cast<Destination*>(user)->bytes, count);
+            },
+            [](void* user, const rsf_ac7_velocity_semantic_view* view) noexcept {
+                return append_semantic(&static_cast<Destination*>(user)->info.outputs, view);
+            }, &metadata)) {
+        patched.info.particle = metadata.particle;
+        patched.info.position_register = metadata.position_register;
+        output.swap(patched.bytes);
+        info = std::move(patched.info);
         return rsf_ac7_velocity_shader_result::patched;
-    } catch (...) {output.clear();info={};return rsf_ac7_velocity_shader_result::refused;}
+    }
+    output.clear();
+    info = {};
+    return rsf_ac7_velocity_shader_result::refused;
 }
+
 static bool compile_geometry_template(const rsf_ac7_velocity_vertex_info& info,
     std::vector<uint8_t>& bytecode,uint32_t& previous_register,uint32_t& current_register) noexcept
 {
