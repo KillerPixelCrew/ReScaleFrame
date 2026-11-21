@@ -531,11 +531,11 @@ exported players, NVIDIA, Intel, AMD and software-device runs, and the visual ha
 2. `effect.cpp` keeps no owner state after the seventh slice. Its class registration, callback
    contract, typed scene reads, readback compute pass and Dictionary keys are godot-cpp leaves.
    Residual: the readback's extent check against a velocity override (see that slice).
-3. The SCons engine module's C++ still holds the primary viewport, status-based extent updates,
-   the remaining history reset heuristics (request flag, color, size, 0.25 s frame gap, camera
-   jump), camera matrices, motion resolve and the direct Dictionary option parser in
-   `ReScaleFrameBridge::configure`. CPU frame lifecycle and render frame identity are in
-   `frame.rs` (see below). Native callbacks supply CPU facts to the Rust record builder before
+3. The SCons engine module's C++ still holds the status-based extent updates, the camera
+   matrices and the previous camera they and the camera jump distance come from, motion resolve
+   and the direct Dictionary option parser in `ReScaleFrameBridge::configure`. CPU frame
+   lifecycle and render frame identity are in `frame.rs`; primary viewport and target identity,
+   render admission and the history reset rules are in `primary.rs` (see below). Native callbacks supply CPU facts to the Rust record builder before
    passing them to `window.rs` through `rsfg_cpu`. The window handle passed to `rsfg_vk_window`
    and each Vulkan surface's `rescaleframe_window` are engine module facts too.
 4. The addon (`settings.gd`, `controller.gd`, `csharp/ReScaleFrame.cs`) keeps its own option
@@ -670,6 +670,85 @@ the pinned 1.94.1 toolchain is not installed here) `--edition 2024 --check`, loc
 Windows Cargo metadata and `git diff --check`. Not run: SCons compilation and linkage, the
 `-Dwarnings` Rust object build, symbol checks, Clippy, Cargo tests, CTest, editor and exported
 player runs, and callback order capture in a live session.
+
+## Engine module primary viewport identity and render admission
+
+Relative to RSF `f9a36d38`, `primary.rs` in the same private SCons object owns the identity and
+per-frame decisions `bridge.cpp` kept in globals: the primary viewport and render target, the
+resource generation, the history reset request, the last recorded SR pass's color texture,
+internal extent and source frame, and the admission of the sizing, camera, SR and final-scene
+hooks. `primary.h` declares the private C linkage and asserts the three record layouts, which
+`primary.rs` asserts too. RIDs cross as `RID::get_id()`; `RID` equality and `is_valid` are
+comparisons of that 64-bit `_id` (`core/templates/rid.h`), so storing it is exact. The C++ keeps
+every typed RID, Godot read and call, `ready` and `enabled`, the thread handoff, the packet,
+`driver_callback_add`, the previous camera transform and projection, and `last_pass`. The
+`frame.rs` evaluation and retarget entries are now crate functions called from `primary.rs`;
+nothing new is exported from the Godot executable or the native DLL, and no `rsfg_*` call,
+status, backend choice, scaling mode or scale changed.
+
+Callback triggers, in the order they run at Godot `ed1daf0bf001b61586d9930840f2f1394092c079`
+with `eng/patch-godot.py` applied:
+
+1. `ReScaleFrameBridge::configure` (the singleton call, or the GDExtension through
+   `configure_from_extension`), after `rsfg_configure` accepts: `call_on_render_thread(set_primary)`
+   runs `rsf_godot_primary_set` on the rendering server thread (identity stored, generation
+   incremented, `frame.rs` evaluation cleared). The main thread then issues
+   `viewport_set_scaling_3d_mode` and `viewport_set_scaling_3d_scale`, `FUNC2` commands queued
+   behind it, or run directly after the queue flush when the caller is the server thread. A
+   changed scale reaches `_configure_3d_render_buffers`, whose patched sizing hook calls
+   `RSFGodot::render_size`, admitted by `rsf_godot_primary_sizing`. `enabled` is stored on the
+   main thread after these calls, as before, so with a separate render thread the first sizing
+   hook can still see the host inactive.
+2. Each presenting or non-presenting `Main::iteration` draw: `queue_frame` queues
+   `set_render_frame` before `RenderingServer::draw`. On the server thread it stores the render
+   frame, calls `rsfg_render_begin`, reads `rsf_godot_primary_viewport` as a typed RID and, for a
+   temporal request with a matching status, calls `viewport_set_scaling_3d_scale` directly. A
+   changed clamped scale runs the sizing hook (step 1's admission) before the draw.
+3. `RenderingServer::draw`, queued after step 2: `_draw_viewport` creates missing 3D render
+   buffers through `_configure_3d_render_buffers` (sizing hook again), then each scene render
+   reaches `RenderForwardClustered::_render_scene`. With valid scene buffer data,
+   `RSFGodot::upscale` runs after Godot's temporal pass and `_debug_draw_cluster`, before the
+   `Tonemap` timestamp, and `RSFGodot::hudless` right after
+   `_render_buffers_post_process_and_tonemap`. Every scene render reaches both hooks, so
+   admission refuses other viewports, probes and multiview by its facts.
+4. `RendererViewport::viewport_attach_camera`, a server-thread command in queue order with steps
+   1 to 3, when the camera differs: `RSFGodot::camera_changed` calls `rsf_godot_camera_changed`.
+5. `ReScaleFrame.reset_history()` and the GDExtension's reset service on the caller's thread:
+   `rsf_godot_reset_request`, a sequentially consistent store as before.
+
+Preserved per hook, compared line by line with `f9a36d38`:
+
+- Admission: host ready and enabled, nonzero source frame, valid render buffers, their render
+  target equal to the primary target, one view, and a `d3d12` or `vulkan` rendering driver. The
+  final-scene hook also requires the last recorded SR pass to carry the current source frame.
+- SR hook after admission and valid color, depth, motion and output textures: a color texture
+  other than the last recorded one increments the generation first, and the pass carries the
+  generation after it. Reset is the consumed request, then a different color texture, a different
+  internal extent, the `frame.rs` sequence break, a frame interval above 0.25 s, or a camera
+  origin more than 20 units from the last recorded one. The request is consumed by every pass
+  that reaches this point, including passes later refused for an invalid resolved motion or
+  depth texture, which also keep their generation increment and record nothing.
+- Recording, after the resolved textures are valid: internal extent, color texture, `frame.rs`
+  evaluation and the recorded source frame, at the point the C++ stored them and `last_pass`.
+- Sizing and camera hooks: ready and enabled and the primary target, as before. Initial state:
+  generation 1, a pending reset, no primary, no recorded color, extent or source.
+
+Intentional differences: the admission facts are read before the decision instead of in its
+short-circuit order, so the driver name, buffer validity, render target and view count are read
+for each scene render even while the host is inactive, and the camera distance is computed even
+when an earlier reset term holds. All are pure queries. The final scene reads the slice of the
+admitted buffers' render target, which admission proved equal to the primary target, and compares
+the recorded source kept in Rust, assigned at the same point as `last_pass`. The pass generation
+is assigned once. The rendering server thread is the only writer and reader of the primary state,
+held in relaxed atomics where the C++ used plain globals.
+
+This is a source port with no new experiment. Checks: rustfmt 1.11.0 `--edition 2024 --check`
+of the object's crate root (the pinned 1.94.1 toolchain is not installed), locked offline Cargo
+metadata and `git diff --check`. The SCons command still compiles `viewport.rs` from the
+repository root, and `primary.rs` is listed as an explicit source dependency beside `frame.rs` and
+`cpu_facts.rs`; `primary.h` is reached by the C++ scanner. Not run: SCons compilation and
+linkage, the `-Dwarnings` Rust object build, symbol checks, Clippy, Cargo tests, CTest, editor and
+exported player runs, and a live capture of the trigger order above.
 
 ## Build requirements
 
