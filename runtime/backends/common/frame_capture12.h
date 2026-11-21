@@ -30,13 +30,12 @@ struct rsf_core_capture12_platform {
     void* (*signal)(void* queue);
     uint64_t (*completed)(void* fence);
     uint64_t (*drain)(void* queue);
-    uint32_t (*name)(const char* role, uint32_t ordinal, char* name, uint32_t capacity, uint32_t* view, float* scale);
     int (*wants)(const rsf_frame_record*);
     uint64_t (*reserve)(const rsf_frame_record*, const char*, const char*, rsf_dump_view, float);
     void (*failed)(uint64_t, const char*, int32_t);
     int (*pixels)(uint64_t, const char*, const rsf_dump_pixels*, uint32_t, uint32_t);
 };
-static_assert(sizeof(rsf_core_capture12_platform) == 12 * sizeof(void*));
+static_assert(sizeof(rsf_core_capture12_platform) == 11 * sizeof(void*));
 static_assert(sizeof(rsf_core_capture12_layout) == 32 && sizeof(rsf_dump_pixels) == 40);
 rsf_core_capture12* rsf_core_capture12_create(uint32_t environment, const rsf_core_capture12_platform*);
 void rsf_core_capture12_destroy(rsf_core_capture12*);
@@ -122,20 +121,10 @@ class FrameCapture12 {
         CloseHandle(event);
         return complete ? fence->GetCompletedValue() : 0;
     }
-    static uint32_t name_leaf(const char* role, uint32_t ordinal, char* out, uint32_t capacity, uint32_t* view, float* scale) noexcept try {
-        const auto name = capture_name(role, ordinal);
-        if (name.size() >= UINT32_MAX) return 0;
-        const auto size = uint32_t(name.size() + 1);
-        if (size <= capacity) {
-            std::memcpy(out, name.c_str(), size);
-            *view = capture_view(name); *scale = capture_scale(role);
-        }
-        return size;
-    } catch (...) { return 0; }
 public:
     static const rsf_core_capture12_platform* native_platform() noexcept {
         static const rsf_core_capture12_platform value{allocate_leaf, copy_leaf, map_leaf, unmap_leaf, signal_leaf,
-            completed_leaf, drain_leaf, name_leaf, rsf_input_dump_wants, rsf_input_dump_reserve, rsf_input_dump_failed,
+            completed_leaf, drain_leaf, rsf_input_dump_wants, rsf_input_dump_reserve, rsf_input_dump_failed,
             rsf_input_dump_pixels};
         return &value;
     }

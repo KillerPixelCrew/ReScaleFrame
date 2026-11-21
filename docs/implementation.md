@@ -4,6 +4,13 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+D3D12 and Vulkan readbacks now use one Rust implementation for capture
+names, aliases, preview views and scale. The existing names, description
+labels and motion units are preserved. Vulkan rejects overflowing
+capture sizes before allocating or recording a GPU copy and owns the
+failure notification for any ticket it reserved. The public capture
+headers are unchanged.
+
 Rust now owns native D3D12 DLSS SR device registration, context
 lifetime and frame ordering for owned, shared and engine-borrowed
 Streamline handles. Rust frees viewport resources only for a context

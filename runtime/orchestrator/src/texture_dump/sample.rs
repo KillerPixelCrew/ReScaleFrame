@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use crate::capture_names::{ALPHA, DENSE_MOTION, DEPTH, HDR, SCALAR};
 use crate::dxgi_format::{
     D24_UNORM_S8_UINT, D32_FLOAT, D32_FLOAT_S8X24_UINT, R24G8_TYPELESS, R32_TYPELESS,
     R32G8X24_TYPELESS, half_to_f32,
@@ -6,11 +7,6 @@ use crate::dxgi_format::{
 
 const VELOCITY: u32 = 1;
 const DECODED_MOTION: u32 = 2;
-const HDR: u32 = 3;
-const DEPTH: u32 = 4;
-const SCALAR: u32 = 5;
-const ALPHA: u32 = 6;
-const DENSE_MOTION: u32 = 7;
 
 // These parameters implement the existing ABI view when explicitly requested.
 const VELOCITY_SCALE: f32 = 0.499 * 0.5;

@@ -6,6 +6,7 @@ mod auxiliary_sr;
 mod auxiliary_sr_abi;
 #[cfg(windows)]
 mod callback_host;
+mod capture_names;
 #[cfg(windows)]
 mod colour_d3d11;
 #[cfg(windows)]

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use crate::capture_names::{ALPHA, DENSE_MOTION, DEPTH, HDR, SCALAR};
 use crate::com_ref::ComRef;
 use crate::render_abi::{rsf_backend_log_fn, rsf_dlss_frame, rsf_fg_frame, rsf_sr_frame};
 use rsf_game_sys::{
@@ -23,11 +24,6 @@ const ABI_MISMATCH: i32 = -2;
 const WRITE_FAILED: i32 = -6;
 const RAW: u32 = 0;
 pub(super) const DECODED_MOTION: u32 = 2;
-const HDR: u32 = 3;
-const DEPTH: u32 = 4;
-const SCALAR: u32 = 5;
-const ALPHA: u32 = 6;
-const DENSE_MOTION: u32 = 7;
 const D3D11: u32 = 1;
 const MAX_IMAGES: usize = 96;
 pub(super) const MAX_IMAGE_BYTES: u64 = 256 * 1024 * 1024;

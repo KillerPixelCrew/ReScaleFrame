@@ -107,26 +107,6 @@ unsafe extern "C" fn release(_: Handle, allocation: *const Allocation) {
     });
 }
 
-unsafe extern "C" fn name(
-    role: *const c_char,
-    out: *mut c_char,
-    capacity: u32,
-    view: *mut u32,
-    scale: *mut f32,
-) -> i32 {
-    let name = unsafe { text(role) }.replace('-', "_");
-    if name.len() + 1 > capacity as usize {
-        return 0;
-    }
-    unsafe {
-        std::ptr::copy_nonoverlapping(name.as_ptr().cast(), out, name.len());
-        out.add(name.len()).write(0);
-        view.write(3);
-        scale.write(1.0);
-    }
-    1
-}
-
 unsafe extern "C" fn wants(_: *const Record) -> i32 {
     world(|w| i32::from(w.core))
 }
@@ -187,7 +167,6 @@ static OPS: Platform = Platform {
     map,
     unmap,
     release,
-    name,
     wants,
     wants_frame,
     reserve,
@@ -275,12 +254,39 @@ fn unrequested_frame_does_no_gpu_work() {
 }
 
 #[test]
+fn overflowing_capture_extent_fails_the_exact_ticket_once() {
+    core();
+    let owner = owner(false, Legacy::default());
+    let mut image = image(37);
+    image.width = u32::MAX;
+    image.height = u32::MAX;
+    let mut ticket = 0;
+    assert!(!owner.record(
+        1,
+        &image,
+        &frame(9),
+        c"sr-motion-uv",
+        0,
+        true,
+        &mut ticket,
+        1,
+    ));
+    assert_ne!(ticket, 0);
+    assert!(owner.lock().pending.is_empty());
+    world(|w| {
+        assert_eq!(w.reserved, [(ticket, "sr_motion".into(), 7, 8.0)]);
+        assert_eq!(w.failed, [(ticket, "sr_motion".into(), UNSUPPORTED_FORMAT)]);
+        assert!(w.encoded.is_empty() && w.next_handle == 100);
+    });
+}
+
+#[test]
 fn shared_ticket_waits_for_shared_completion_proof() {
     core();
     let owner = owner(false, Legacy::default());
     let (done, ticket) = record(&owner, 1, c"sr-linear-color", 0);
     assert!(done && ticket != 0);
-    world(|w| assert_eq!(w.reserved, vec![(ticket, "sr_linear_color".into(), 3, 1.0)]));
+    world(|w| assert_eq!(w.reserved, vec![(ticket, "sr_color".into(), 3, 1.0)]));
     // Queries before the watermark certify the reservation must not map.
     assert!(poll(&owner));
     assert!(poll(&owner));

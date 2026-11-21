@@ -100,15 +100,10 @@ int32_t submit(Submit callback, void* user, VkCommandBuffer commands, uint64_t f
 
 int32_t record(Vulkan* vk, VkCommandBuffer commands, const rsf_srvk_image* image,
     const rsf_frame_record* frame, const char* name, uint64_t group) noexcept try {
-    uint64_t ticket = 0;
     const auto recorded = vk->capture.record(commands, *image, *frame, name,
-        frame->flags & RSF_FRAME_FLAG_RESET, true, &ticket, group);
-    const bool added = vk->capture.pending_count() != 0;
-    if (recorded) return added ? 1 : 0;
-    // If the helper failed before inserting the allocation, there is no group entry to discard.
-    if (!added && ticket)
-        rsf_input_dump_failed(ticket, rsf::capture_name(name).c_str(), RSF_TEXTURE_ERROR_STAGING_FAILED);
-    return -1;
+        frame->flags & RSF_FRAME_FLAG_RESET, true, nullptr, group);
+    // The capture owner reports any refusal before insertion. A recorded group retires in Rust.
+    return recorded ? (vk->capture.pending_count() != 0 ? 1 : 0) : -1;
 } catch (...) { return -1; }
 
 struct Platform {

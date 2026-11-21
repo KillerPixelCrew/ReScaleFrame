@@ -27,7 +27,6 @@ struct rsf_core_capture_vk_platform {
     int32_t (*map)(void* native, uint64_t memory, uint64_t bytes, void** data);
     void (*unmap)(void* native, uint64_t memory);
     void (*release)(void* native, const rsf_core_capture_vk_allocation*);
-    int32_t (*name)(const char* role, char* name, uint32_t capacity, uint32_t* view, float* scale);
     int (*wants)(const rsf_frame_record*);
     int (*wants_frame)(uint64_t);
     uint64_t (*reserve)(const rsf_frame_record*, const char*, const char*, rsf_dump_view, float);
@@ -35,7 +34,7 @@ struct rsf_core_capture_vk_platform {
     int (*pixels)(uint64_t, const char*, const rsf_dump_pixels*, uint32_t, uint32_t);
     int (*gpu_ready)(uint64_t, const char*, uint32_t, void*);
 };
-static_assert(sizeof(rsf_core_capture_vk_platform) == 13 * sizeof(void*));
+static_assert(sizeof(rsf_core_capture_vk_platform) == 12 * sizeof(void*));
 static_assert(sizeof(rsf_core_capture_vk_allocation) == 24 && sizeof(rsf_dump_pixels) == 40);
 rsf_core_capture_vk* rsf_core_capture_vk_create(uint32_t command_completion, void* native, const rsf_core_capture_vk_platform*);
 void rsf_core_capture_vk_destroy(rsf_core_capture_vk*);
@@ -152,16 +151,9 @@ class FrameCaptureVk {
         if (value->buffer) vk.destroy_buffer(vk.device, typed<VkBuffer>(value->buffer), nullptr);
         if (value->memory) vk.free_memory(vk.device, typed<VkDeviceMemory>(value->memory), nullptr);
     }
-    static int32_t name_leaf(const char* role, char* out, uint32_t capacity, uint32_t* view, float* scale) noexcept try {
-        const auto name = capture_name(role);
-        if (name.size() + 1 > capacity) return 0;
-        std::memcpy(out, name.c_str(), name.size() + 1);
-        *view = capture_view(name); *scale = capture_scale(role);
-        return 1;
-    } catch (...) { return 0; }
     static const rsf_core_capture_vk_platform* platform() noexcept {
         static const rsf_core_capture_vk_platform value{allocate_leaf, encode_leaf, event_set_leaf, map_leaf,
-            unmap_leaf, release_leaf, name_leaf, rsf_input_dump_wants, rsf_input_dump_wants_frame,
+            unmap_leaf, release_leaf, rsf_input_dump_wants, rsf_input_dump_wants_frame,
             rsf_input_dump_reserve, rsf_input_dump_failed, rsf_input_dump_pixels, rsf_input_dump_gpu_ready};
         return &value;
     }

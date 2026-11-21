@@ -4,7 +4,8 @@
 //! Rust owns frame selection, capture records, completion proof, pending
 //! allocation lifetime, refusal and abandon handling, and publishing. The C++
 //! façade supplies narrow leaves for Vulkan buffer, memory, event and command
-//! calls, the shared capture naming, and the existing input dump C ABI.
+//! calls and the existing input dump C ABI.
+use crate::capture_names::CaptureName;
 use crate::vulkan_sr_abi::rsf_srvk_image as Image;
 use rsf_game_sys::rsf_frame_record as Record;
 use std::ffi::{CStr, CString, c_char, c_void};
@@ -22,6 +23,7 @@ const MAP_FAILED: i32 = -5;
 const VULKAN_API: u32 = 3;
 const MAX_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_FRAMES: u64 = 16;
+const NAME_CAPACITY: usize = 128;
 
 /// Non-dispatchable handles created for one readback. Zero means absent.
 #[repr(C)]
@@ -54,8 +56,6 @@ pub struct Platform {
     pub map: unsafe extern "C" fn(Handle, u64, u64, *mut *mut c_void) -> i32,
     pub unmap: unsafe extern "C" fn(Handle, u64),
     pub release: unsafe extern "C" fn(Handle, *const Allocation),
-    /// Shared capture naming: writes a NUL-terminated name, its view and scale.
-    pub name: unsafe extern "C" fn(*const c_char, *mut c_char, u32, *mut u32, *mut f32) -> i32,
     pub wants: unsafe extern "C" fn(*const Record) -> i32,
     pub wants_frame: unsafe extern "C" fn(u64) -> i32,
     pub reserve: unsafe extern "C" fn(*const Record, *const c_char, *const c_char, u32, f32) -> u64,
@@ -65,7 +65,7 @@ pub struct Platform {
 }
 
 const _: () = {
-    assert!(size_of::<Platform>() == 13 * size_of::<Handle>());
+    assert!(size_of::<Platform>() == 12 * size_of::<Handle>());
     assert!(size_of::<Allocation>() == 24);
     assert!(size_of::<Pixels>() == 40);
 };
@@ -340,22 +340,13 @@ impl Owner {
             discarded: false,
         };
         if core_source && unsafe { (self.ops.wants)(identity) } != 0 {
-            let mut name = [0 as c_char; 128];
-            let (mut view, mut scale) = (0u32, 1.0f32);
-            if unsafe {
-                (self.ops.name)(
-                    role.as_ptr(),
-                    name.as_mut_ptr(),
-                    name.len() as u32,
-                    &mut view,
-                    &mut scale,
-                )
-            } == 0
-            {
+            let Some(CaptureName { name, view, scale }) =
+                CaptureName::for_role(role, 0, NAME_CAPACITY)
+            else {
                 state.legacy.failure(&owned.role, frame);
                 return false;
-            }
-            owned.name = unsafe { CStr::from_ptr(name.as_ptr()) }.to_owned();
+            };
+            owned.name = name;
             owned.ticket = unsafe {
                 (self.ops.reserve)(identity, owned.name.as_ptr(), role.as_ptr(), view, scale)
             };
@@ -364,11 +355,14 @@ impl Owner {
         if !owned.legacy && owned.ticket == 0 {
             return true;
         }
-        owned.bytes = u64::from(image.width) * u64::from(image.height) * u64::from(pixel_bytes);
-        if owned.bytes == 0 || owned.bytes > MAX_BYTES {
+        let Some(bytes) = (u64::from(image.width) * u64::from(image.height))
+            .checked_mul(u64::from(pixel_bytes))
+            .filter(|&bytes| (1..=MAX_BYTES).contains(&bytes))
+        else {
             self.fail(&owned, UNSUPPORTED_FORMAT);
             return false;
-        }
+        };
+        owned.bytes = bytes;
         // Retain even a partial allocation. A failed recording has no GPU copy;
         // a recorded copy keeps its allocation until proven retirement or drain.
         state.pending.push(owned);

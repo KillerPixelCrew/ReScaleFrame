@@ -32,7 +32,6 @@ struct World {
     refuse_map: bool,
     mapped: Vec<usize>,
     unmapped: u32,
-    refuse_name: bool,
 }
 
 thread_local! {
@@ -139,33 +138,6 @@ unsafe extern "C" fn drain(queue: Handle) -> u64 {
     })
 }
 
-unsafe extern "C" fn name(
-    role: *const c_char,
-    ordinal: u32,
-    out: *mut c_char,
-    capacity: u32,
-    view: *mut u32,
-    scale: *mut f32,
-) -> u32 {
-    if world(|w| w.refuse_name) {
-        return 0;
-    }
-    let mut name = unsafe { text(role) }.replace('-', "_");
-    if ordinal != 0 {
-        name += &format!("_{ordinal}");
-    }
-    let size = name.len() as u32 + 1;
-    if size <= capacity {
-        unsafe {
-            std::ptr::copy_nonoverlapping(name.as_ptr().cast(), out, name.len());
-            out.add(name.len()).write(0);
-            view.write(3);
-            scale.write(1.0);
-        }
-    }
-    size
-}
-
 unsafe extern "C" fn wants(_: *const Record) -> i32 {
     world(|w| i32::from(w.core))
 }
@@ -221,7 +193,6 @@ static OPS: Platform = Platform {
     signal,
     completed,
     drain,
-    name,
     wants,
     reserve,
     failed,
@@ -339,10 +310,8 @@ fn refused_reservation_releases_the_readback() {
     let owner = owner();
     let source = object();
     assert!(!record(&owner, source, c"sr-depth", 0));
-    world(|w| w.refuse_name = true);
-    assert!(!record(&owner, source, c"sr-depth", 0));
     let buffers: Vec<usize> = world(|w| w.memory.keys().copied().collect());
-    assert_eq!(buffers.len(), 2);
+    assert_eq!(buffers.len(), 1);
     for buffer in buffers {
         assert_eq!(refs(buffer), 0);
     }
@@ -360,13 +329,7 @@ fn core_ticket_waits_for_its_submitted_fence() {
     world(|w| {
         assert_eq!(
             w.reserved,
-            vec![(
-                8,
-                "sr_linear_color".into(),
-                "sr-linear-color".into(),
-                3,
-                1.0
-            )]
+            vec![(8, "sr_color".into(), "sr-linear-color".into(), 3, 1.0)]
         );
         assert_eq!(w.copies, vec![(LIST, source, 0x40, readback)]);
     });
@@ -385,7 +348,7 @@ fn core_ticket_waits_for_its_submitted_fence() {
         let (ticket, name, format, pitch, size, bytes) = &w.published[0];
         assert_eq!(
             (*ticket, name.as_str(), *format, *pitch, *size),
-            (8, "sr_linear_color", RGBA8, 256, 264)
+            (8, "sr_color", RGBA8, 256, 264)
         );
         assert!(bytes.iter().all(|&b| b == COPIED));
         assert_eq!(w.unmapped, 1);

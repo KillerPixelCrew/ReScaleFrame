@@ -4,7 +4,8 @@
 //! Rust owns configuration, admission, pending identity, slot and fence
 //! completion, retirement, core ticket refusal and publishing, and the
 //! readback buffer, source and fence leases. The C++ façade supplies typed
-//! D3D12/Win32 leaves, capture naming and the public symbol forwards.
+//! D3D12/Win32 leaves and the public symbol forwards.
+use crate::capture_names::CaptureName;
 use crate::com_ref::ComRef;
 use crate::frame_capture_vk::{Legacy, Pixels, general, general_precision};
 use crate::sr_session::has_capacity;
@@ -62,9 +63,6 @@ pub struct Platform {
     /// Signals the queue and waits at most 15 seconds. Returns the fence
     /// value on a completed wait, or zero if the wait was refused.
     pub drain: unsafe extern "C" fn(Handle) -> u64,
-    /// Shared capture naming. Returns the name's size with its terminator,
-    /// writing it, its view and scale only when it fits; zero on failure.
-    pub name: unsafe extern "C" fn(*const c_char, u32, *mut c_char, u32, *mut u32, *mut f32) -> u32,
     pub wants: unsafe extern "C" fn(*const Record) -> i32,
     pub reserve: unsafe extern "C" fn(*const Record, *const c_char, *const c_char, u32, f32) -> u64,
     pub failed: unsafe extern "C" fn(u64, *const c_char, i32),
@@ -72,7 +70,7 @@ pub struct Platform {
 }
 
 const _: () = {
-    assert!(size_of::<Platform>() == 12 * size_of::<Handle>());
+    assert!(size_of::<Platform>() == 11 * size_of::<Handle>());
     assert!(size_of::<Layout>() == 32);
 };
 
@@ -187,32 +185,6 @@ impl Owner {
         true
     }
 
-    // Name, view and scale from the shared capture naming. Caller overrides win.
-    fn core_name(&self, role: &CStr, ordinal: u32) -> Option<(CString, u32, f32)> {
-        let (mut view, mut scale) = (0u32, 1.0f32);
-        let mut name = vec![0 as c_char; 128];
-        loop {
-            let size = unsafe {
-                (self.ops.name)(
-                    role.as_ptr(),
-                    ordinal,
-                    name.as_mut_ptr(),
-                    name.len() as u32,
-                    &mut view,
-                    &mut scale,
-                )
-            } as usize;
-            if size == 0 {
-                return None;
-            }
-            if size <= name.len() {
-                let name = unsafe { CStr::from_ptr(name.as_ptr()) }.to_owned();
-                return Some((name, view, scale));
-            }
-            name.resize(size, 0);
-        }
-    }
-
     #[allow(clippy::too_many_arguments)]
     pub(super) fn record(
         &self,
@@ -255,7 +227,9 @@ impl Owner {
             completion: None,
         };
         if core {
-            let Some((name, view, scale)) = self.core_name(role, ordinal) else {
+            let Some(CaptureName { name, view, scale }) =
+                CaptureName::for_role(role, ordinal, u32::MAX as usize)
+            else {
                 return false;
             };
             let view = if preview == DEFAULT_VIEW {
