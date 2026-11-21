@@ -7,6 +7,41 @@ See [the Rust migration record](rust-migration.md#native-policy-cutover).
 
 ## Remaining Rust integration ports
 
+The source integration at `17904281` brings the following owners into
+the migration branch. Pinned Rust 1.94.1 formatting, locked offline
+Windows Cargo metadata, and Git whitespace checks passed. Builds, binary
+ABI checks and fixture, device and game runs for these ports remain open.
+
+- Fallout 4's Rust render-input owner applies the 21 guards and owns
+  resource admission, camera history and pass construction. Rust also owns
+  World and Present admission. Typed native calls keep their existing
+  trampoline frames and CPU Present receipt. Reduced-render recovery and
+  the remaining hook lifecycle are native.
+  [Render inputs](research/rust-fallout4-render-inputs.md) ·
+  [Render hooks](research/rust-fallout4-render-hooks.md)
+- AC7's Rust F9 path admits geometry reads and writes the existing JSONL
+  schema. The velocity owner admits commit targets and applies the
+  existing profile and log limits. D3D11 readback, blob deduplication,
+  velocity merge, and cloud and contact-light before-draw rows remain native.
+  [Geometry](research/rust-ac7-motion-geometry.md) ·
+  [Velocity commit](research/rust-ac7-velocity-commit.md)
+- Unity's Rust D3D11 pass owner selects the route, plans input surfaces and
+  copy-back, and decides retirement from completion and hand-back facts.
+  The typed graphics calls and managed ABI remain in place.
+  [D3D11 pass plan](research/rust-unity-d3d11-pass-plan.md)
+- RDR2's Rust capture owner selects ready readbacks using the exact
+  submitted fence and value and sequences manifest publication. The
+  poller retains its 100 ms interval. Descriptor-copy and object-retirement
+  observations remain unverified.
+  [Capture drain](research/rust-rdr2-asi.md#native-capture-readback-drain)
+- Godot's private Rust SCons object assembles CPU event records. The engine
+  callbacks still supply the timestamps, frame identity and input kinds.
+  [Godot native migration](../integrations/godot/NATIVE.md)
+- Anomaly's existing Rust reflection owner now enumerates signatures,
+  resources and constant buffers through typed D3D leaves. The row order,
+  partial results and dynamic Runtime lookup were compared in source.
+  [Reflection owner](../games/anomaly/src/shader_loader/reflection.rs)
+
 The [integration migration scope](rust-migration.md#remaining-integration-ports)
 covers the existing game and engine adapters beyond Anomaly. Project Wingman
 now publishes its GameSDK table and exact build identity from Rust. The
