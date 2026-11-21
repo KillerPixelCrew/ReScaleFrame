@@ -219,6 +219,12 @@ generate("runtime/orchestrator/src/overlay_native12_abi.rs", "runtime/orchestrat
          ["-Iruntime/orchestrator/include", "-Iui/overlay/include", "-Isdk/game/include"],
          ["--no-recursive-allowlist", "--raw-line",
           "use crate::overlay_abi::{rsf_overlay_intent, rsf_overlay_stats, rsf_overlay_texture_update};"])
+generate("runtime/orchestrator/src/overlay_host_abi.rs", "loader/proxy/src/overlay_host_platform.h",
+         "rsf_overlay(_result|_input|_draw_data|_vertex|_draw_call|_host_(log|panel|texture_desc|targets|platform))?",
+         "RSF_OVERLAY_(ABI_VERSION|HOST_PANEL_.*)",
+         ["-Iui/overlay/include"],
+         ["--no-recursive-allowlist", "--with-derive-default", "--raw-line",
+          "use crate::overlay_abi::{rsf_overlay_intent, rsf_overlay_stats, rsf_overlay_texture_update};"])
 generate("runtime/orchestrator/src/vulkan_sr_abi.rs", "runtime/orchestrator/include/rescaleframe/native_sr_split_vulkan.h",
          "rsf_(srvk_(setup|frame|image|fallback|fsr4_provider_info)|fsr4vk_handoff|vk_(function|get_proc)|input_dump_vk_setup)",
          "RSF_(SRVK_(ABI_VERSION|SPLIT_ABI_VERSION|SPLIT_TRACKED_ABI_VERSION|FSR4_INFO_ABI_VERSION)|SR_(DLSS|FSR2|FSR3|FSR4|XESS)|FSR4_BRIDGE_(INVALID_ARGUMENT|ABI_MISMATCH))",
