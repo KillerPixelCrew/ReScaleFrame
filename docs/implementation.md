@@ -4,6 +4,13 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+The Rust plugin session constructs the versioned lifecycle arguments and
+checks the detection result. The C++ bridge catches native plugin
+exceptions and returns them as `NOT_READY`. Source review matched the
+new private signatures to GameSDK ABI 24. The updated lifetime fixture
+covers the lifecycle record headers and DLL release after an unknown
+or throwing detection callback. The fixture remains unrun.
+
 The Runtime keeps a refused plugin quiesce in progress. Start cannot
 report success while the plugin may have partially retired, and
 stop still requires quiesce to finish. The DLL remains leased through

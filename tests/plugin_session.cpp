@@ -42,6 +42,13 @@ int main(int argc, char** argv) {
     ++options.abi_version;
     CHECK(rsf_plugin_session_prepare(&options, &session) == RSF_ERROR_ABI_MISMATCH && !session);
     --options.abi_version;
+    probe.pe_machine = 1;
+    CHECK(rsf_plugin_session_prepare(&options, &session) == RSF_ERROR_NATIVE_REFUSED && !session);
+    CHECK(!GetModuleHandleW(name.c_str()));
+    probe.pe_machine = 2;
+    CHECK(rsf_plugin_session_prepare(&options, &session) == RSF_ERROR_NOT_READY && !session);
+    CHECK(!GetModuleHandleW(name.c_str()));
+    probe.pe_machine = 0;
     CHECK(rsf_plugin_session_prepare(&options, &session) == RSF_OK && session);
     options.services.log = nullptr; // Plugin must retain the runtime's copy.
     CHECK(rsf_plugin_session_start(session) == RSF_OK);

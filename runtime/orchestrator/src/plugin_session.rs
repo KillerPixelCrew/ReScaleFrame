@@ -15,6 +15,13 @@ const INVALID_ARGUMENT: i32 = -1;
 const ABI_MISMATCH: i32 = -2;
 const NOT_READY: i32 = -3;
 const BUSY: i32 = -4;
+const NATIVE_REFUSED: i32 = -5;
+const GAME_RECOGNIZED: rsf_detection = 1;
+
+const CONTROL_ARGS: rsf_game_control_args = rsf_game_control_args {
+    struct_size: size_of::<rsf_game_control_args>() as u32,
+    abi_version: RSF_GAME_ABI_VERSION,
+};
 
 #[repr(C)]
 struct Options {
@@ -29,15 +36,23 @@ type Control = Option<unsafe extern "C" fn(*const rsf_game_control_args) -> i32>
 unsafe extern "C" {
     fn rsf_plugin_call_query(
         entry: rsf_get_game_plugin_api_fn,
+        version: u32,
         api: *mut rsf_game_plugin_api,
     ) -> i32;
-    fn rsf_plugin_call_detect(detect: rsf_detect_game_fn, probe: *const rsf_game_probe) -> i32;
+    fn rsf_plugin_call_detect(
+        detect: rsf_detect_game_fn,
+        probe: *const rsf_game_probe,
+        detection: *mut rsf_detection,
+    ) -> i32;
     fn rsf_plugin_call_prepare(
         hooks: *const rsf_game_hooks_api,
-        services: *const rsf_game_host_services,
+        args: *const rsf_game_prepare_args,
     ) -> i32;
-    fn rsf_plugin_call_start(hooks: *const rsf_game_hooks_api) -> i32;
-    fn rsf_plugin_call_control(callback: Control) -> i32;
+    fn rsf_plugin_call_start(
+        hooks: *const rsf_game_hooks_api,
+        args: *const rsf_game_start_args,
+    ) -> i32;
+    fn rsf_plugin_call_control(callback: Control, args: *const rsf_game_control_args) -> i32;
     fn rsf_plugin_call_status(
         hooks: *const rsf_game_hooks_api,
         out: *mut rsf_game_renderer_status,
@@ -116,16 +131,23 @@ unsafe extern "C" fn rsf_plugin_session_prepare(
     }
     let mut api: rsf_game_plugin_api = unsafe { std::mem::zeroed() };
     api.struct_size = size_of_val(&api) as u32;
-    let result = unsafe { rsf_plugin_call_query(entry, &mut api) };
+    let result = unsafe { rsf_plugin_call_query(entry, RSF_GAME_ABI_VERSION, &mut api) };
     if result != 0 {
         return result;
     }
     if (api.struct_size as usize) < size_of_val(&api) || api.abi_version != RSF_GAME_ABI_VERSION {
         return ABI_MISMATCH;
     }
-    let result = unsafe { rsf_plugin_call_detect(api.detect, options.probe) };
+    if api.detect.is_none() {
+        return NATIVE_REFUSED;
+    }
+    let mut detection = 0;
+    let result = unsafe { rsf_plugin_call_detect(api.detect, options.probe, &mut detection) };
     if result != 0 {
         return result;
+    }
+    if detection != GAME_RECOGNIZED {
+        return NATIVE_REFUSED;
     }
     let h = &api.hooks;
     if h.prepare.is_none()
@@ -150,7 +172,12 @@ unsafe extern "C" fn rsf_plugin_session_prepare(
     }
     // Keep the allocation at the same address throughout the plugin's lease.
     let session = unsafe { &*raw };
-    let result = unsafe { rsf_plugin_call_prepare(&session.hooks, &session.services) };
+    let args = rsf_game_prepare_args {
+        struct_size: size_of::<rsf_game_prepare_args>() as u32,
+        abi_version: RSF_GAME_ABI_VERSION,
+        host: &session.services,
+    };
+    let result = unsafe { rsf_plugin_call_prepare(&session.hooks, &args) };
     let result = if result == 0 {
         *session.phase.write().unwrap() = Phase::Prepared;
         0
@@ -178,7 +205,11 @@ unsafe extern "C" fn rsf_plugin_session_start(raw: *const Session) -> i32 {
         Phase::Prepared => (),
         _ => return NOT_READY,
     }
-    let result = unsafe { rsf_plugin_call_start(&session.hooks) };
+    let args = rsf_game_start_args {
+        struct_size: size_of::<rsf_game_start_args>() as u32,
+        abi_version: RSF_GAME_ABI_VERSION,
+    };
+    let result = unsafe { rsf_plugin_call_start(&session.hooks, &args) };
     if result == 0 {
         *phase = Phase::Started;
     }
@@ -199,7 +230,7 @@ unsafe extern "C" fn rsf_plugin_session_quiesce(raw: *const Session) -> i32 {
     // A refusal may leave some producers closed. Only another quiesce can
     // finish the transition. Do not tell a caller that this session started.
     *phase = Phase::Quiescing;
-    let result = unsafe { rsf_plugin_call_control(session.hooks.quiesce) };
+    let result = unsafe { rsf_plugin_call_control(session.hooks.quiesce, &CONTROL_ARGS) };
     if result == 0 {
         *phase = Phase::Quiesced;
     }
@@ -239,7 +270,7 @@ unsafe extern "C" fn rsf_plugin_session_stop(raw: *mut Session) -> i32 {
     if *phase != Phase::Quiesced {
         return BUSY;
     }
-    let result = unsafe { rsf_plugin_call_control(session.hooks.stop) };
+    let result = unsafe { rsf_plugin_call_control(session.hooks.stop, &CONTROL_ARGS) };
     if result == 0 {
         // The caller serializes final stop with any new uses of this handle.
         drop(phase);
