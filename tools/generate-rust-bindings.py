@@ -43,6 +43,9 @@ generate("games/rdr2/src/runtime_worker_abi.rs", "games/rdr2/src/runtime_setup.h
          "RSF_(RENDER_HOST_(ABI_VERSION|OWNS_PRESENTATION)|UI_MODE_BACKBUFFER_HUDLESS)",
          ["-Isdk/game/include", "-Iruntime/orchestrator/include", "-Iruntime/contract/include"],
          ["--no-recursive-allowlist", "--raw-line", "type wchar_t = u16;"])
+generate("games/rdr2/src/script_input_abi.rs", "runtime/orchestrator/include/rescaleframe/render_frontend.h",
+         "rsf_render_settings", "RSF_RENDER_FRONTEND_ABI_VERSION", ["-Iruntime/orchestrator/include"],
+         ["--no-recursive-allowlist"])
 generate("ui/overlay/src/host_option_limit.rs", "runtime/orchestrator/include/rescaleframe/overlay_api.h",
          "NOTHING", "RSF_OVERLAY_SERVICE_OPTION_LIMIT",
          ["-Isdk/game/include", "-Iruntime/orchestrator/include", "-Iruntime/contract/include",

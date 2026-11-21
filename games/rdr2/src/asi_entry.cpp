@@ -28,7 +28,6 @@
 #include "social_club.h"
 #include "camera_probe.h"
 #include "native_capture.h"
-#include "script_input.h"
 #include "native_settings.h"
 
 namespace {
@@ -212,9 +211,6 @@ constexpr rsf_rdr2_runtime_leaves runtime_leaves{
     rsf_rdr2_fingerprint,
     start_diagnostics,
     [](const wchar_t* path) noexcept { return rsf_rdr2_native_settings_probe(path, log, nullptr); },
-    [](void* runtime, const wchar_t* configuration) noexcept {
-        return rsf_rdr2_start_script_input(self, static_cast<HMODULE>(runtime), configuration, log, nullptr);
-    },
 };
 
 DWORD WINAPI startup(void*) noexcept

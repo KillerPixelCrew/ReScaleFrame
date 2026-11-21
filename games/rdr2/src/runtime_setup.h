@@ -11,7 +11,6 @@ typedef struct rsf_rdr2_runtime_leaves {
     rsf_rdr2_fingerprint_fn fingerprint;
     void (*diagnostics)(const wchar_t* modules_path, const wchar_t* dump_directory);
     bool (*native_settings)(const wchar_t* path);
-    bool (*script_input)(void* runtime, const wchar_t* configuration);
 } rsf_rdr2_runtime_leaves;
 
 #ifdef __cplusplus

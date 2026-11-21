@@ -80,17 +80,11 @@ pub struct rsf_rdr2_runtime_leaves {
         unsafe extern "C" fn(modules_path: *const wchar_t, dump_directory: *const wchar_t),
     >,
     pub native_settings: ::core::option::Option<unsafe extern "C" fn(path: *const wchar_t) -> bool>,
-    pub script_input: ::core::option::Option<
-        unsafe extern "C" fn(
-            runtime: *mut ::core::ffi::c_void,
-            configuration: *const wchar_t,
-        ) -> bool,
-    >,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
     ["Size of rsf_rdr2_runtime_leaves"]
-        [::core::mem::size_of::<rsf_rdr2_runtime_leaves>() - 32usize];
+        [::core::mem::size_of::<rsf_rdr2_runtime_leaves>() - 24usize];
     ["Alignment of rsf_rdr2_runtime_leaves"]
         [::core::mem::align_of::<rsf_rdr2_runtime_leaves>() - 8usize];
     ["Offset of field: rsf_rdr2_runtime_leaves::fingerprint"]
@@ -99,6 +93,4 @@ const _: () = {
         [::core::mem::offset_of!(rsf_rdr2_runtime_leaves, diagnostics) - 8usize];
     ["Offset of field: rsf_rdr2_runtime_leaves::native_settings"]
         [::core::mem::offset_of!(rsf_rdr2_runtime_leaves, native_settings) - 16usize];
-    ["Offset of field: rsf_rdr2_runtime_leaves::script_input"]
-        [::core::mem::offset_of!(rsf_rdr2_runtime_leaves, script_input) - 24usize];
 };

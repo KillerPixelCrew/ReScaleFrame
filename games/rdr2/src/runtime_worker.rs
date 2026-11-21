@@ -4,7 +4,7 @@ use crate::runtime_worker_abi::{
     RSF_RENDER_HOST_ABI_VERSION, RSF_RENDER_HOST_OWNS_PRESENTATION, RSF_UI_MODE_BACKBUFFER_HUDLESS,
     rsf_rdr2_fingerprint_fn, rsf_rdr2_runtime_leaves, rsf_render_host_setup,
 };
-use crate::{OK, asi, engine_settings, layout};
+use crate::{OK, asi, engine_settings, layout, script_input};
 use rsf_game_sys::plugin_session_abi::{
     RSF_PLUGIN_SESSION_ABI_VERSION, rsf_plugin_session_options,
 };
@@ -43,7 +43,7 @@ fn set_log_path(path: &[u16]) {
     let _ = LOG_PATH.set(PathBuf::from(OsString::from_wide(path)));
 }
 
-fn log(message: impl AsRef<[u8]>) {
+pub(crate) fn log(message: impl AsRef<[u8]>) {
     let Some(path) = LOG_PATH.get() else { return };
     let _writer = LOG_WRITE.lock().unwrap_or_else(PoisonError::into_inner);
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
@@ -72,7 +72,7 @@ fn module_path(module: HMODULE) -> Option<Vec<u16>> {
     Some(path)
 }
 
-fn append_path(parent: &[u16], suffix: &str) -> Vec<u16> {
+pub(crate) fn append_path(parent: &[u16], suffix: &str) -> Vec<u16> {
     parent
         .iter()
         .copied()
@@ -156,7 +156,7 @@ unsafe extern "C" fn rsf_rdr2_fill_runtime_setup(
     }
 }
 
-unsafe fn export<F: Copy>(runtime: HMODULE, name: PCSTR) -> Option<F> {
+pub(crate) unsafe fn export<F: Copy>(runtime: HMODULE, name: PCSTR) -> Option<F> {
     const { assert!(size_of::<F>() == size_of::<usize>()) };
     let function = unsafe { GetProcAddress(runtime, name) }?;
     Some(unsafe { std::mem::transmute_copy(&function) })
@@ -168,7 +168,7 @@ fn run_session(
     directory: &[u16],
     plugin: &[u16],
     fingerprint: Fingerprint,
-    asi: Option<&rsf_rdr2_runtime_leaves>,
+    asi: Option<(HMODULE, &rsf_rdr2_runtime_leaves)>,
 ) -> u32 {
     let (Some(prepare), Some(start)) = (
         unsafe { export::<Prepare>(runtime, s!("rsf_plugin_session_prepare")) },
@@ -219,7 +219,7 @@ fn run_session(
         return 1;
     };
     let created = unsafe { create(&host_setup, &mut options.services) };
-    if let Some(asi) = asi {
+    if let Some((_, asi)) = asi {
         if created != OK {
             log("RDR2 SR runtime host initialization refused.");
             return 1;
@@ -256,12 +256,8 @@ fn run_session(
     }
     let started = unsafe { start(session) };
     log(format!("{prefix} start result={started}"));
-    if let Some(asi) = asi {
-        if started == OK
-            && !asi
-                .script_input
-                .is_some_and(|input| unsafe { input(runtime, config.as_ptr()) })
-        {
+    if let Some((module, _)) = asi {
+        if started == OK && !script_input::start(module, runtime, config) {
             log(
                 "RDR2 ScriptHook input guard unavailable; shared overlay still uses its window input hook.",
             );
@@ -335,7 +331,7 @@ unsafe extern "C" fn rsf_rdr2_asi_start_runtime(
         &append_path(directory, ""),
         &plugin,
         fingerprint,
-        Some(leaves),
+        Some((module, leaves)),
     )
 }
 

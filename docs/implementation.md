@@ -80,6 +80,12 @@ The Unity SR fixture uses the same RDR2 setup through its native facade.
 Path bounds, ABI and link wiring were checked in source. Builds,
 fixture execution and game validation remain open.
 
+RDR2's optional ScriptHook input guard runs in Rust on the same game
+fiber. It polls Runtime settings, detects F7 and the two-stick chord,
+and suppresses gameplay actions while the shared overlay is visible.
+The binding table is complete before registration can call the fiber.
+Build and live input verification remain open.
+
 Fallout 4 now owns exact-build identity, GameSDK lifecycle, Runtime
 session setup and cold D3D11 creation in Rust. The creation owner
 checks the final outer swapchain slot before binding presentation, and

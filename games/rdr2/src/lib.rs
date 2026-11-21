@@ -17,6 +17,10 @@ mod runtime_worker;
 #[cfg(windows)]
 mod runtime_worker_abi;
 mod scene;
+#[cfg(windows)]
+mod script_input;
+#[cfg(windows)]
+mod script_input_abi;
 
 use platform::Platform;
 use rsf_game_sys::{
