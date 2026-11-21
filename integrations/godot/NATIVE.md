@@ -526,9 +526,8 @@ exported players, NVIDIA, Intel, AMD and software-device runs, and the visual ha
 ## Remaining Godot ownership slices
 
 1. Vulkan Auto SR and FG resolution moved to the Runtime policy in the eighth slice. Residual:
-   DLSS-G stays out of Vulkan FG Auto until its secondary-window retirement is proven safe; the
-   D3D12 hosts still carry their own copies of the FSR3 fallback `rsf_fg_select_auto_backend`
-   now provides; and the Godot D3D12 leaves still pass software as false.
+   DLSS-G stays out of Vulkan FG Auto until its secondary-window retirement is proven safe, and
+   the Godot D3D12 leaves still pass software as false.
 2. `effect.cpp` keeps no owner state after the seventh slice. Its class registration, callback
    contract, typed scene reads, readback compute pass and Dictionary keys are godot-cpp leaves.
    Residual: the readback's extent check against a velocity override (see that slice).

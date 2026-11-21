@@ -41,11 +41,10 @@ pub(crate) fn allowed(backend: u32, choices: u32) -> bool {
 
 /// FG Auto among the providers a host can serve (`choices`, bit n = provider n): the adapter's
 /// `preferred` provider (`rsf_fg_default_backend`, zero for none) when served, otherwise FSR3 when
-/// served, otherwise zero. The generic D3D12 hosts apply the same fallback (`render_host.rs` poll,
-/// `d3d11_present.rs` Auto). Declared in the private `fg_auto_choice.h` for statically linked
-/// consumers and deliberately not a Runtime DLL export (`rust_exports.c`).
+/// served, otherwise zero. The private `fg_auto_choice.h` declares the C entry point for
+/// statically linked consumers.
 #[unsafe(no_mangle)]
-extern "C" fn rsf_fg_select_auto_backend(preferred: u32, choices: u32) -> u32 {
+pub(crate) extern "C" fn rsf_fg_select_auto_backend(preferred: u32, choices: u32) -> u32 {
     [preferred, FSR3]
         .into_iter()
         .find(|&backend| backend != 0 && backend != AUTO && allowed(backend, choices))
