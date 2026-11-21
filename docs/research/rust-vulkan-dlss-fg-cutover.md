@@ -124,3 +124,62 @@ All 413 locked Rust tests, formatting and Clippy passed on Rust 1.94.1.
 The enabled fixture uses synthetic Vulkan and SDK entry points. Hardware
 activation, real-scene tagging, visual quality and pacing remain open
 for this change.
+
+## Guide and HUD-less staging commands
+
+Baseline `f446c181f675173ddfa820ecd2568d7024625bee`. This port moves the command
+choices from `native_fg_dlss_vulkan.cpp`'s `stage` and `transition` into the
+Rust recording path. DLSS records one transfer for each accepted source, using
+the source image handle and its width and height. Prepare records R32F depth and
+then RG16F motion at render size. HUD-less records RGBA8 at output size. Each
+uses its own retained slot image and that image's existing initialization flag.
+
+| Order | Vulkan command | Access masks |
+| --- | --- | --- |
+| 1 | Source `SHADER_READ_ONLY_OPTIMAL` → `TRANSFER_SRC_OPTIMAL` | Both `MEMORY_READ \| MEMORY_WRITE` |
+| 2 | Retained image `UNDEFINED` on first use or `SHADER_READ_ONLY_OPTIMAL` on reuse → `TRANSFER_DST_OPTIMAL` | Source zero from `UNDEFINED`, otherwise `MEMORY_READ \| MEMORY_WRITE`. Destination `MEMORY_READ \| MEMORY_WRITE`. |
+| 3 | Copy from source to retained image in their transfer layouts | One color region at zero offsets, extent `{source.width, source.height, 1}` |
+| 4 | Source `TRANSFER_SRC_OPTIMAL` → `SHADER_READ_ONLY_OPTIMAL` | Both `MEMORY_READ \| MEMORY_WRITE` |
+| 5 | Retained image `TRANSFER_DST_OPTIMAL` → `SHADER_READ_ONLY_OPTIMAL` | Both `MEMORY_READ \| MEMORY_WRITE` |
+
+Each barrier uses `ALL_COMMANDS` (`0x10000`) for both stages, ignored queue families,
+zero dependency flags and one color image barrier. Barriers and copies cover mip 0
+and layer 0, with one level and one layer. Layouts 0, 5, 6 and 7, memory access
+bits `0x8000` and `0x10000`, and ignored queue family `0xffffffff` match the local
+Vulkan SDK 1.4.357.0 header and are asserted by the typed native recorder.
+
+Native FidelityFX FG uses the same layouts, access, stages and command order for
+its HUD-less staging copy, so the two owners share the Rust command sequence and
+native descriptor marshalling. FidelityFX still supplies its swapchain extent and
+captures the retained image. DLSS supplies the leased producer extent and captures
+the producer. The Vulkan-to-D3D12 path keeps its own copy, blit and clear plan. Its
+shared images acquire and release external queue ownership, use `GENERAL` between
+uses and need separate source and target extents. See the prior source reviews for
+[FidelityFX](rust-vulkan-ffx-fg-copy-plan.md) and [D3D12 interop](rust-vulkan-dx12-copy-plan.md).
+
+DLSS still records inside the synchronous Streamline callback after token admission
+and, for prepare, after constants succeed. Each image is marked initialized after
+its restore barriers. Typed tags use the retained images and the original token.
+Successful tags trigger producer capture in the existing recording group. A tag
+failure still leaves copies marked recorded for submission or discard. Discard
+clears initialization and cancels the capture group. The same source and consumer
+fences and SDK timeline value govern reuse and retirement, and Present still uses the
+accepted frame identity and existing queue path.
+
+The DLSS private platform table replaces `stage` with `barrier` and `copy` after
+`release`, growing from 224 to 232 bytes on x64. The shared barrier and copy records
+are 40 and 32 bytes. FidelityFX keeps its 27-pointer table with the same slot order
+and record layout. Public ABI versions and entry points keep their existing signatures.
+
+Source review checked the old Vulkan command sequence against the Rust recorder
+and typed leaves, and compared the private ABI fields, table initializers and Rust
+fixture callbacks. The DLSS native fixture copies the production table and exercises
+the original token, typed tags, copy handles, reuse gates and failed-tag retirement.
+Its barrier mock discards parameters and its copy mock checks handles, so the exact
+layout, access, stages and extent were checked by source comparison. The FidelityFX
+native fixture also keeps the production recording leaves. Both disabled create
+branches still pass a null table to their Rust validation path before reporting
+`NOT_COMPILED` on valid inputs. Rust 1.94.1 workspace formatting, locked offline
+Cargo metadata and Git whitespace checks passed. Enabled and disabled builds,
+Clippy, fixture execution, Vulkan device and game verification, deployment and push
+remain user-owned.

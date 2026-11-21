@@ -288,6 +288,8 @@ mod vulkan_fg;
 #[cfg(windows)]
 mod vulkan_fg_abi;
 #[cfg(windows)]
+mod vulkan_fg_copy;
+#[cfg(windows)]
 mod vulkan_fg_frames;
 #[cfg(windows)]
 mod vulkan_fg_resources;

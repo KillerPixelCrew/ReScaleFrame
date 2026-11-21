@@ -7,6 +7,7 @@ use crate::vulkan_fg_abi::{
     rsf_fgvk_status as Presentation, rsf_fgvk_submit_plan as SubmitPlan,
     rsf_fgvk_timeline as Timeline,
 };
+use crate::vulkan_fg_copy::{SHADER_READ, TRANSFER_SRC, record_shader_read_copy};
 use crate::vulkan_fg_frames::*;
 use crate::vulkan_fg_resources_abi::{
     rsf_vkfg_fences as Fences, rsf_vkfg_image as Image, rsf_vkfg_platform as Gpu,
@@ -33,8 +34,6 @@ const FEATURE_FAILED: i32 = -9;
 const WSI_ERROR: i32 = -3;
 const INCOMPLETE: i32 = 5;
 const SUBOPTIMAL: i32 = 1000001003;
-const TRANSFER_SRC: u32 = 6;
-const SHADER_READ: u32 = 5;
 const USAGE_TRANSFER_SRC: u32 = 1;
 const USAGE_TRANSFER_DST: u32 = 2;
 const R32F: u32 = 100;
@@ -241,7 +240,17 @@ unsafe extern "C" fn record_inputs(module: Handle, token: usize, user: Handle) -
         }
     }
     for (source, image) in work.sources.iter().zip(work.images.iter_mut()) {
-        unsafe { (work.platform.stage)(sdk.native, sdk.commands, source, image) };
+        unsafe {
+            record_shader_read_copy(
+                work.platform.barrier,
+                work.platform.copy,
+                sdk.native,
+                sdk.commands,
+                source.image,
+                image,
+                [source.width, source.height],
+            )
+        };
         image.initialized = 1;
     }
     work.staged = true;
