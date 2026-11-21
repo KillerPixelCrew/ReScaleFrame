@@ -4,6 +4,12 @@
 
 The [migration plan](rust-migration.md) records the baseline and cutover order.
 
+Rust now owns the optional NVAPI Reflex audit hook transaction. It pins
+the native modules before enabling the hooks. A partial enable disables
+the batch and retains its trampolines, so an already-entered call keeps
+its original. Source review checked the native call table. The new
+rollback fixture and SDK validation remain unrun.
+
 Anomaly's SR stage lends its logger through the private prepare call.
 The native twin-allocation host uses it for that synchronous operation
 and the Rust configuration keeps the stored callback. The private

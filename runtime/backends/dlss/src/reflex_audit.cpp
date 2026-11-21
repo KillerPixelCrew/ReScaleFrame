@@ -23,8 +23,25 @@ struct rsf_reflex_sync_report {
 };
 static_assert(sizeof(rsf_reflex_sync_report) == 48 && NVAPI_OK == 0);
 
+struct rsf_reflex_audit_hook {
+    void* target;
+    void* detour;
+    void** original;
+};
+struct rsf_reflex_audit_platform {
+    uint32_t (*discover)(rsf_reflex_audit_hook*);
+    uint32_t (*initialize)();
+    uint32_t (*create)(const rsf_reflex_audit_hook*);
+    uint32_t (*pin)(void*);
+    uint32_t (*enable)(void*);
+    void (*disable)(void*);
+    void (*remove)(void*);
+};
+static_assert(sizeof(rsf_reflex_audit_hook) == 3 * sizeof(void*));
+static_assert(sizeof(rsf_reflex_audit_platform) == 7 * sizeof(void*));
+
 extern "C" {
-void rsf_core_reflex_audit_start(rsf_backend_log_fn, void*, uint32_t (*)(), RsfReflexAuditEmit);
+void rsf_core_reflex_audit_start(rsf_backend_log_fn, void*, const rsf_reflex_audit_platform*, RsfReflexAuditEmit);
 void rsf_core_reflex_audit_stop();
 void rsf_core_reflex_audit_event(uintptr_t, uintptr_t, uint32_t, uint64_t, const void*, RsfReflexAuditEmit);
 void rsf_core_reflex_audit_sync(const rsf_reflex_sync_report*, uint32_t, uint32_t);
@@ -172,35 +189,35 @@ NvAPI_Status __cdecl observe_async(ID3D12CommandQueue* queue, NV_ASYNC_FRAME_MAR
     return result;
 }
 
-enum InstallResult : uint32_t { silent_failure = 0, installed = 1, module_missing = 2, hook_refused = 3 };
-uint32_t install()
+uint32_t discover(rsf_reflex_audit_hook* hooks)
 {
     const auto query = rsf_nvapi_query();
-    if (!query) return module_missing;
-    const auto init = MH_Initialize();
-    if (init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) return silent_failure;
-    void* targets[]{query(0xac1ca9e0u), query(0xd9984c05u), query(0xb9f6faffu), query(0x13c98f73u)};
-    void* hooks[]{reinterpret_cast<void*>(&observe_mode), reinterpret_cast<void*>(&observe_marker),
-        reinterpret_cast<void*>(&observe_sync), reinterpret_cast<void*>(&observe_async)};
-    void** originals[]{reinterpret_cast<void**>(&original_mode), reinterpret_cast<void**>(&original_marker),
-        reinterpret_cast<void**>(&original_sync), reinterpret_cast<void**>(&original_async)};
-    uint32_t made = 0;
-    for (; made < 4; ++made) if (!targets[made] || MH_CreateHook(targets[made], hooks[made], originals[made]) != MH_OK) break;
-    bool enabled = made == 4;
-    for (uint32_t i = 0; enabled && i < made; ++i) enabled = MH_EnableHook(targets[i]) == MH_OK;
-    if (!enabled) {
-        for (uint32_t i = 0; i < made; ++i) { MH_DisableHook(targets[i]); MH_RemoveHook(targets[i]); }
-        return hook_refused;
-    }
-    // External tools may attach after us and retain our entry as their original. Both
-    // target and observer code must therefore remain resident until process exit.
-    HMODULE pinned = nullptr;
-    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN | GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
-        reinterpret_cast<LPCWSTR>(targets[0]), &pinned);
-    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN | GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
-        reinterpret_cast<LPCWSTR>(&observe_mode), &pinned);
-    return installed;
+    if (!query) return 0;
+    hooks[0] = {query(0xac1ca9e0u), reinterpret_cast<void*>(&observe_mode), reinterpret_cast<void**>(&original_mode)};
+    hooks[1] = {query(0xd9984c05u), reinterpret_cast<void*>(&observe_marker), reinterpret_cast<void**>(&original_marker)};
+    hooks[2] = {query(0xb9f6faffu), reinterpret_cast<void*>(&observe_sync), reinterpret_cast<void**>(&original_sync)};
+    hooks[3] = {query(0x13c98f73u), reinterpret_cast<void*>(&observe_async), reinterpret_cast<void**>(&original_async)};
+    return 1;
 }
+
+constexpr rsf_reflex_audit_platform platform{
+    discover,
+    []() -> uint32_t {
+        const auto result = MH_Initialize();
+        return result == MH_OK || result == MH_ERROR_ALREADY_INITIALIZED;
+    },
+    [](const rsf_reflex_audit_hook* hook) -> uint32_t {
+        return MH_CreateHook(hook->target, hook->detour, hook->original) == MH_OK;
+    },
+    [](void* address) -> uint32_t {
+        HMODULE module = nullptr;
+        return GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN | GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+            reinterpret_cast<LPCWSTR>(address), &module) != 0;
+    },
+    [](void* target) -> uint32_t { return MH_EnableHook(target) == MH_OK; },
+    [](void* target) { MH_DisableHook(target); },
+    [](void* target) { MH_RemoveHook(target); },
+};
 } // namespace
 
 RsfNvapiQuery rsf_nvapi_query()
@@ -210,7 +227,7 @@ RsfNvapiQuery rsf_nvapi_query()
 }
 void rsf_reflex_audit_start(rsf_backend_log_fn log, void* user)
 {
-    rsf_core_reflex_audit_start(log, user, install, emit_text);
+    rsf_core_reflex_audit_start(log, user, &platform, emit_text);
 }
 void rsf_reflex_audit_stop() { rsf_core_reflex_audit_stop(); }
 void rsf_reflex_audit_report() { rsf_core_reflex_audit_report(emit_sync); }

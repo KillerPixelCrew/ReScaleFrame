@@ -8,9 +8,77 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 type Emit = unsafe extern "C" fn(Log, *mut c_void, *const c_void);
 const SOURCES: usize = 64;
 const LINE_LIMIT: u32 = 192;
-const INSTALLED: u32 = 1;
-const MODULE_MISSING: u32 = 2;
-const HOOK_REFUSED: u32 = 3;
+const HOOKS: usize = 4;
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct Hook {
+    target: *mut c_void,
+    detour: *mut c_void,
+    original: *mut *mut c_void,
+}
+
+#[repr(C)]
+struct Platform {
+    discover: unsafe extern "C" fn(*mut Hook) -> u32,
+    initialize: unsafe extern "C" fn() -> u32,
+    create: unsafe extern "C" fn(&Hook) -> u32,
+    pin: unsafe extern "C" fn(*mut c_void) -> u32,
+    enable: unsafe extern "C" fn(*mut c_void) -> u32,
+    disable: unsafe extern "C" fn(*mut c_void),
+    remove: unsafe extern "C" fn(*mut c_void),
+}
+
+const _: () = {
+    assert!(size_of::<Hook>() == 3 * size_of::<*mut c_void>());
+    assert!(size_of::<Platform>() == 7 * size_of::<*mut c_void>());
+};
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Install {
+    Retry,
+    Installed,
+    Missing,
+    Refused,
+    Retained,
+}
+
+fn install(platform: &Platform) -> Install {
+    let mut hooks = [Hook::default(); HOOKS];
+    if unsafe { (platform.discover)(hooks.as_mut_ptr()) } == 0 {
+        return Install::Missing;
+    }
+    if unsafe { (platform.initialize)() } == 0 {
+        return Install::Retry;
+    }
+    let made = hooks
+        .iter()
+        .take_while(|hook| !hook.target.is_null() && unsafe { (platform.create)(hook) } != 0)
+        .count();
+    let pinned = made == HOOKS
+        && hooks
+            .iter()
+            .all(|hook| unsafe { (platform.pin)(hook.target) } != 0)
+        && unsafe { (platform.pin)(hooks[0].detour) } != 0;
+    if !pinned {
+        for hook in &hooks[..made] {
+            unsafe { (platform.remove)(hook.target) };
+        }
+        return Install::Refused;
+    }
+    if hooks
+        .iter()
+        .all(|hook| unsafe { (platform.enable)(hook.target) } != 0)
+    {
+        return Install::Installed;
+    }
+    // A failed enable can follow a reachable hook. Leave the pinned original
+    // trampolines in place even if every target now disables successfully.
+    for hook in &hooks {
+        unsafe { (platform.disable)(hook.target) };
+    }
+    Install::Retained
+}
 
 #[derive(Clone, Copy)]
 struct Listener {
@@ -54,7 +122,7 @@ const _: () = assert!(size_of::<SyncReport>() == 48);
 
 struct Audit {
     listener: Listener,
-    installed: bool,
+    install: Install,
     seen: [Option<(Source, u64)>; SOURCES],
     lines: u32,
     sync: Option<SyncReport>,
@@ -80,7 +148,7 @@ impl Audit {
 
 static AUDIT: Mutex<Audit> = Mutex::new(Audit {
     listener: Listener::NONE,
-    installed: false,
+    install: Install::Retry,
     seen: [None; SOURCES],
     lines: 0,
     sync: None,
@@ -94,36 +162,46 @@ fn audit() -> MutexGuard<'static, Audit> {
 unsafe extern "C" fn rsf_core_reflex_audit_start(
     log: Log,
     user: *mut c_void,
-    install: unsafe extern "C" fn() -> u32,
+    platform: &Platform,
     text: Emit,
 ) {
     let Some(_output) = Output::enter() else {
         return;
     };
+    let listener = Listener {
+        log,
+        user: user as usize,
+    };
     {
         let mut audit = audit();
-        audit.listener = Listener {
-            log,
-            user: user as usize,
-        };
+        if audit.install == Install::Retained {
+            return;
+        }
+        audit.listener = listener;
         audit.seen = [None; SOURCES];
         audit.lines = 0;
         audit.sync = None;
-        if audit.installed {
+        if audit.install == Install::Installed {
             return;
         }
     }
-    let status = unsafe { install() };
-    let message = match status {
-        INSTALLED => {
-            audit().installed = true;
+    let result = install(platform);
+    let mut state = audit();
+    state.install = result;
+    if result == Install::Retained {
+        state.listener = Listener::NONE;
+    }
+    drop(state);
+    let message = match result {
+        Install::Installed => {
             c"Reflex API audit installed: observing mode, sync and marker callers without filtering"
         }
-        MODULE_MISSING => c"Reflex API audit unavailable: NVAPI module/export absent",
-        HOOK_REFUSED => c"Reflex API audit refused: existing entry cannot be chained safely",
+        Install::Missing => c"Reflex API audit unavailable: NVAPI module/export absent",
+        Install::Refused | Install::Retained => {
+            c"Reflex API audit refused: existing entry cannot be chained safely"
+        }
         _ => return,
     };
-    let listener = audit().listener;
     unsafe { listener.emit(message.as_ptr().cast(), text) };
 }
 
@@ -194,5 +272,82 @@ unsafe extern "C" fn rsf_core_reflex_audit_report(emit: Emit) {
     };
     if let Some(report) = report.filter(|report| report.caller != 0) {
         unsafe { listener.emit(ptr::from_ref(&report).cast(), emit) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    thread_local! {
+        static STEPS: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
+    }
+
+    fn record(step: &'static str) {
+        STEPS.with_borrow_mut(|steps| steps.push(step));
+    }
+
+    unsafe extern "C" fn discover(output: *mut Hook) -> u32 {
+        for index in 0..HOOKS {
+            unsafe {
+                output.add(index).write(Hook {
+                    target: ptr::without_provenance_mut(index + 1),
+                    detour: ptr::without_provenance_mut(index + 5),
+                    original: ptr::null_mut(),
+                });
+            }
+        }
+        1
+    }
+
+    unsafe extern "C" fn initialize() -> u32 {
+        1
+    }
+
+    unsafe extern "C" fn create(_: &Hook) -> u32 {
+        record("create");
+        1
+    }
+
+    unsafe extern "C" fn pin(_: *mut c_void) -> u32 {
+        record("pin");
+        1
+    }
+
+    unsafe extern "C" fn enable(target: *mut c_void) -> u32 {
+        record("enable");
+        u32::from(target.addr() == 1)
+    }
+
+    unsafe extern "C" fn disable(_: *mut c_void) {
+        record("disable");
+    }
+
+    unsafe extern "C" fn remove(_: *mut c_void) {
+        record("remove");
+    }
+
+    #[test]
+    fn partially_exposed_hooks_disable_without_removing_trampolines() {
+        let platform = Platform {
+            discover,
+            initialize,
+            create,
+            pin,
+            enable,
+            disable,
+            remove,
+        };
+        assert!(matches!(install(&platform), Install::Retained));
+        STEPS.with_borrow(|steps| {
+            assert_eq!(
+                *steps,
+                [
+                    "create", "create", "create", "create", "pin", "pin", "pin", "pin", "pin",
+                    "enable", "enable", "disable", "disable", "disable", "disable"
+                ],
+            );
+        });
     }
 }
