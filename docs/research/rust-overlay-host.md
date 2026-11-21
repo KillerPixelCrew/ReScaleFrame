@@ -285,6 +285,26 @@ The captured inputs, images and logs are under
 `avx-first-person-zero-fill-d0cc7ad` in the isolated clone's
 `evidence/` directory.
 
+## Pointer-bound movement attempt
+
+The isolated AVX clone contains an indoor autosave. To look for a
+world character without changing that save, the test temporarily bound
+Forward to the left mouse button and released the conflicting fire
+binding. The game saved the temporary binding in its run settings.
+The supported mouse drags changed the viewed angle outside the
+capture burst. In the 16 matched frames from 2432 through 2447, the
+camera orientation stayed fixed and the maximum change in eye position
+was 0.00003 m. The player remained indoors.
+
+The engine shut down Direct3D and exited with code 0. The runner
+restored the bindings and checked all three autosave files against
+their backup hashes. The source data are under
+`avx-pointer-walk-d0cc7ad` in the clone's `evidence/` directory,
+and the verifier and hashes are under
+`.local/rust-1.94.1-verification/avx-pointer-walk-audit-d0cc7ad/`.
+Held-key movement and an outdoor moving-character scene still need
+a foreground gameplay run with sustained movement input.
+
 ## Vulkan Streamline-disabled verification
 
 The merged core also built without the corrected Vulkan Streamline SDK.
