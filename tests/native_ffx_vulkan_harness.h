@@ -23,7 +23,7 @@ struct State {
     uint32_t effects_destroyed = 0, swapchains_destroyed = 0, chains_destroyed = 0;
     uint32_t destroyed_images = 0, freed_memories = 0, destroyed_fences = 0;
     bool reject_prepare = false, reject_wait = false, reject_bind = false, reject_drain = false, reject_effect_destroy = false;
-    bool reject_swapchain_destroy = false, check_reset = false, expected_reset = false, enabled = false;
+    bool reject_swapchain_destroy = false, reject_generate = false, check_reset = false, expected_reset = false, enabled = false;
     uint64_t configured_frame = 0, generated_frame = 0;
     VkResult present_result = VK_SUCCESS;
     FfxApiFrameGenerationDispatchFunc callback = nullptr;
@@ -71,6 +71,7 @@ ffxReturnCode_t dispatch(ffxContext* context, const ffxDispatchDescHeader* heade
     case FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATION: {
         const auto& request = *reinterpret_cast<const ffxDispatchDescFrameGeneration*>(header);
         if (state.check_reset) require(request.reset == state.expected_reset, "camera reset reaches SDK dispatch without changing activation");
+        if (state.reject_generate) return FFX_API_RETURN_ERROR;
         state.generated_frame = request.frameID;
         ++state.generated; return FFX_API_RETURN_OK;
     }
@@ -110,8 +111,13 @@ VkResult VKAPI_PTR present(VkQueue queue, const VkPresentInfoKHR*) {
     if (state.enabled) {
         // FrameInterpolationSwapChainVK calls the generation callback inside queuePresent.
         ffxDispatchDescFrameGeneration request{}; request.header.type = FFX_API_DISPATCH_DESC_TYPE_FRAMEGENERATION;
+        request.frameID = state.configured_frame + 1;
+        require(state.callback(&request, state.context) == FFX_API_RETURN_ERROR_PARAMETER,
+            "generation callback refuses a different frame than the configured source");
         request.frameID = state.configured_frame; request.numGeneratedFrames = 1;
-        require(state.callback(&request, state.context) == FFX_API_RETURN_OK, "SDK callback accepts the leased source frame");
+        const ffxReturnCode_t expected = state.reject_generate ? FFX_API_RETURN_ERROR : FFX_API_RETURN_OK;
+        require(state.callback(&request, state.context) == expected,
+            "generation callback returns the SDK result for the leased source frame");
     }
     return state.present_result;
 }

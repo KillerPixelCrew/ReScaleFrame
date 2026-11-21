@@ -151,6 +151,25 @@ main checkout after checking all three SHA-256 values in `yyjson.lock.json`.
   `native_vulkan_dll_exports`, `native_vulkan_contract` and
   `native_fg_vulkan_dispatch_contract`.
 
+## Generation callback source
+
+The pinned SDK calls the generation callback synchronously from
+`queuePresent` on the presenting thread. The Rust owner serializes configure,
+Present and teardown. The route publishes a copy of the prepared frame record
+only after configure succeeds and clears it on disable or effect destruction.
+The callback reads the record for its native context and exact frame ID.
+It releases the route lock before the native layer applies the reset flag,
+dispatches the SDK and records any generated image. A successful dispatch
+increments the status counter for that owner. Route release clears the count.
+
+The MSVC Release reset fixture invokes the production native callback from its
+fake SDK Present. It checks wrong-frame refusal, reset and exact-source
+behavior, and the status count after an SDK dispatch failure. It passed
+alongside six focused WSI, dispatch and export contracts. All 379 workspace
+tests passed with pinned Rust 1.94.1, formatting and Clippy. Runtime, AC7,
+Loader, Minecraft and Godot export names and ordinals matched the recorded
+baselines. This check used no device or game.
+
 ## Validation gaps
 
 No device, window, game or full `eng/verify.ps1` run, and no Debug MSVC build.

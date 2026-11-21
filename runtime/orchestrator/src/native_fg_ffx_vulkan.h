@@ -49,12 +49,9 @@ struct rsf_ffxgvk_ops {
     int32_t (*acquire)(rsf_ffxgvk_native*, uint64_t timeout, uint64_t semaphore, uint64_t fence, uint32_t*, uint64_t frame);
     int32_t (*prepare)(rsf_ffxgvk_native*, void* commands, const rsf_fgvk_frame*);
     void (*copy)(rsf_ffxgvk_native*, void* commands, const rsf_srvk_image* source, uint64_t target, uint32_t initialized);
-    /* A null lease disables generation. Otherwise the record is the admitted
-       source the SDK callback may generate from until the next configure. */
-    int32_t (*configure)(rsf_ffxgvk_native*, const rsf_frame_record* lease, uint64_t color, uint64_t frame, const char* stage);
+    int32_t (*configure)(rsf_ffxgvk_native*, uint32_t enabled, uint64_t color, uint64_t frame, const char* stage);
     int32_t (*present)(rsf_ffxgvk_native*, const void* info, uint64_t frame, uint64_t* present_count);
     int32_t (*drain)(rsf_ffxgvk_native*);
-    uint64_t (*generated)(rsf_ffxgvk_native*);
     uint32_t (*capture_wants)(rsf_ffxgvk_native*, uint64_t frame);
     void (*capture_record)(rsf_ffxgvk_native*, void* commands, const rsf_srvk_image*, const rsf_frame_record*, const char* role);
     void (*capture_flush)(rsf_ffxgvk_native*);
@@ -83,4 +80,8 @@ rsf_backend_result rsf_core_ffxgvk_destroy(rsf_ffxgvk*);
    device. Pair each non-null result with one rsf_core_ffxgvk_wsi_return. */
 rsf_ffxgvk_native* rsf_core_ffxgvk_wsi_borrow(const void* device, uint32_t match_device);
 void rsf_core_ffxgvk_wsi_return();
+/* Invoked by the SDK generation callback within Present. Copies the source
+   record for this leaf and frame, then counts dispatch only when it succeeds. */
+uint32_t rsf_core_ffxgvk_generation_record(const rsf_ffxgvk_native*, uint64_t frame, rsf_frame_record*);
+void rsf_core_ffxgvk_note_generated(const rsf_ffxgvk_native*);
 }

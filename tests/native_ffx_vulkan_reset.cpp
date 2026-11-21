@@ -64,6 +64,12 @@ int main() {
         rsf_ffxgvk_get_status(self, &status) == RSF_BACKEND_OK && status.source_frame == 9,
         "the matching identity still generates after a refused one");
 
+    const auto refused = record(7, 10, 2); complete(self, refused, a, a); rsf_ffxgvk_submitted(self, &a, 1);
+    state.reject_generate = true;
+    require(rsf_ffxgvk_present_source(self, &info, &refused) == VK_SUCCESS &&
+        rsf_ffxgvk_get_status(self, &status) == RSF_BACKEND_OK && status.generated_callbacks == generated + 1,
+        "a failed SDK dispatch does not increment the generation count");
+
     require(rsf_ffxgvk_destroy(self) == RSF_BACKEND_OK && !state.enabled && !routed(),
         "teardown disables generation before releasing the presenter");
     std::puts("PASS: FFX camera resets preserve presenter activation, SDK reset dispatch and exact source identity");

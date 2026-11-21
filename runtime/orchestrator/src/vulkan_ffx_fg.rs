@@ -89,10 +89,9 @@ struct Ops {
     acquire: unsafe extern "C" fn(Handle, u64, u64, u64, *mut u32, u64) -> i32,
     prepare: unsafe extern "C" fn(Handle, Handle, *const Frame) -> i32,
     copy: unsafe extern "C" fn(Handle, Handle, *const Image, u64, u32),
-    configure: unsafe extern "C" fn(Handle, *const Record, u64, u64, *const c_char) -> i32,
+    configure: unsafe extern "C" fn(Handle, u32, u64, u64, *const c_char) -> i32,
     present: unsafe extern "C" fn(Handle, *const c_void, u64, *mut u64) -> i32,
     drain: unsafe extern "C" fn(Handle) -> i32,
-    generated: unsafe extern "C" fn(Handle) -> u64,
     capture_wants: unsafe extern "C" fn(Handle, u64) -> u32,
     capture_record:
         unsafe extern "C" fn(Handle, Handle, *const Image, *const Record, *const c_char),
@@ -105,20 +104,23 @@ struct Ops {
 
 const _: () = {
     assert!(size_of::<Swapchain>() == 32);
-    assert!(size_of::<Ops>() == 24 * size_of::<Handle>());
+    assert!(size_of::<Ops>() == 23 * size_of::<Handle>());
 };
 
 /// The process-wide WSI route. The corrected SDK keeps one WSI dispatch table
 /// whose hooks carry no user pointer, so one owner holds the route from
 /// admission until its native leaf is closed. A hook borrows the published
-/// leaf for one callback. The lock covers only these fields and is never held
-/// across a native, Vulkan, Streamline or SDK call.
+/// leaf for one callback. The synchronous generation callback also uses this
+/// route to look up its configured source and count successful dispatches.
+/// This lock is never held across a native, Vulkan or SDK call.
 struct Route {
     owner: usize,
     device: usize,
     native: usize,
     borrows: usize,
     closing: bool,
+    source: Option<Record>,
+    generated_callbacks: u64,
 }
 
 impl Route {
@@ -128,6 +130,8 @@ impl Route {
         native: 0,
         borrows: 0,
         closing: false,
+        source: None,
+        generated_callbacks: 0,
     };
 
     fn admit(&mut self, owner: usize, device: usize) -> bool {
@@ -158,6 +162,10 @@ impl Route {
 
     fn give_back(&mut self) {
         self.borrows = self.borrows.saturating_sub(1);
+    }
+
+    fn matches_native(&self, native: Handle) -> bool {
+        self.native != 0 && self.native == native.addr() && !self.closing
     }
 
     /// Refuses new borrows and reports whether none is still active.
@@ -233,8 +241,8 @@ impl Default for Slot {
 }
 
 // The shared primary owner in vulkan_fg.rs serializes every call. The SDK's
-// generation callback runs inside the native present call and reads only the
-// lease that configure handed to the native leaf, never this owner.
+// generation callback runs inside the native present call and takes a copy
+// of the configured source from the route without borrowing this owner.
 struct Owner {
     ops: &'static Ops,
     native: Handle,
@@ -583,12 +591,12 @@ impl Owner {
             Some(index) => {
                 let slot = &self.slots[index];
                 (
-                    &raw const slot.state.record,
+                    Some(slot.state.record),
                     slot.color.image,
                     slot.state.record.frame_id,
                 )
             }
-            None => (ptr::null(), 0, self.timeline.last_prepared.frame_id),
+            None => (None, 0, self.timeline.last_prepared.frame_id),
         };
         let stage = match (slot.is_some(), self.configured) {
             (true, true) => c"ffx_configure_update",
@@ -596,11 +604,24 @@ impl Owner {
             (false, true) => c"ffx_configure_disable",
             (false, false) => c"ffx_configure_disabled",
         };
-        if unsafe { (self.ops.configure)(self.native, record, color, frame, stage.as_ptr()) } != OK
+        let enabled = record.is_some();
+        if unsafe {
+            (self.ops.configure)(
+                self.native,
+                u32::from(enabled),
+                color,
+                frame,
+                stage.as_ptr(),
+            )
+        } != OK
         {
             return FEATURE_FAILED;
         }
-        self.configured = slot.is_some();
+        let mut route = route();
+        if route.matches_native(self.native) {
+            route.source = record;
+        }
+        self.configured = enabled;
         OK
     }
 
@@ -717,6 +738,10 @@ impl Owner {
                 return FEATURE_FAILED;
             }
             self.effect = false;
+            let mut route = route();
+            if route.matches_native(native) {
+                route.source = None;
+            }
         }
         if self.chain != 0 {
             unsafe { (ops.destroy_chain)(native) };
@@ -970,6 +995,31 @@ unsafe extern "C" fn rsf_core_ffxgvk_present(
 }
 
 #[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_core_ffxgvk_generation_record(
+    native: Handle,
+    frame: u64,
+    out: *mut Record,
+) -> u32 {
+    let route = route();
+    if out.is_null() || !route.matches_native(native) {
+        return 0;
+    }
+    let Some(record) = route.source.filter(|record| record.frame_id == frame) else {
+        return 0;
+    };
+    unsafe { out.write(record) };
+    1
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_core_ffxgvk_note_generated(native: Handle) {
+    let mut route = route();
+    if route.matches_native(native) {
+        route.generated_callbacks = route.generated_callbacks.wrapping_add(1);
+    }
+}
+
+#[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_core_ffxgvk_status(owner: *const Owner, status: *mut Status) -> i32 {
     let Some(owner) = (unsafe { owner.as_ref() }) else {
         return INVALID;
@@ -981,8 +1031,11 @@ unsafe extern "C" fn rsf_core_ffxgvk_status(owner: *const Owner, status: *mut St
         return ABI_MISMATCH;
     }
     let mut value = owner.status;
-    if !owner.native.is_null() {
-        value.generated_callbacks = unsafe { (owner.ops.generated)(owner.native) };
+    {
+        let route = route();
+        if route.owner == owner.id() {
+            value.generated_callbacks = route.generated_callbacks;
+        }
     }
     unsafe { status.write(value) };
     OK
@@ -1127,14 +1180,12 @@ mod tests {
     unsafe extern "C" fn copy(_: Handle, _: Handle, _: *const Image, _: u64, _: u32) {}
     unsafe extern "C" fn configure(
         _: Handle,
-        lease: *const Record,
+        enabled: u32,
         _: u64,
         frame: u64,
         _: *const c_char,
     ) -> i32 {
-        let leased = unsafe { lease.as_ref() }.map_or(0, |record| record.frame_id);
-        assert!(leased == 0 || leased == frame);
-        calls(|c| c.configures.push(leased));
+        calls(|c| c.configures.push(if enabled == 0 { 0 } else { frame }));
         OK
     }
     unsafe extern "C" fn present(_: Handle, _: *const c_void, _: u64, count: *mut u64) -> i32 {
@@ -1149,9 +1200,6 @@ mod tests {
             c.drains += 1;
             if c.fail_drain { NOT_READY } else { OK }
         })
-    }
-    unsafe extern "C" fn generated(_: Handle) -> u64 {
-        0
     }
     unsafe extern "C" fn wants(_: Handle, _: u64) -> u32 {
         0
@@ -1247,7 +1295,6 @@ mod tests {
         configure,
         present,
         drain,
-        generated,
         capture_wants: wants,
         capture_record: record,
         capture_flush: flush,

@@ -22,7 +22,7 @@ static_assert(VK_FORMAT_R8G8B8A8_UNORM == 37 && VK_FORMAT_B8G8R8A8_UNORM == 44 &
     VK_FORMAT_R32_SFLOAT == 100 && VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL == 5 && VK_COLOR_SPACE_SRGB_NONLINEAR_KHR == 0);
 static_assert(VK_SUCCESS == 0 && VK_INCOMPLETE == 5 && VK_SUBOPTIMAL_KHR == 1000001003 && VK_ERROR_INITIALIZATION_FAILED == -3);
 static_assert(FFX_API_RETURN_OK == 0);
-static_assert(sizeof(rsf_ffxgvk_swapchain) == 32 && sizeof(rsf_ffxgvk_ops) == 24 * sizeof(void*));
+static_assert(sizeof(rsf_ffxgvk_swapchain) == 32 && sizeof(rsf_ffxgvk_ops) == 23 * sizeof(void*));
 
 struct rsf_ffxgvk_native {
     rsf_fgvk_setup setup{};
@@ -50,9 +50,6 @@ struct rsf_ffxgvk_native {
     uint32_t width = 0, height = 0;
     // The source Rust admitted at the last successful configure. The SDK calls
     // the generation callback synchronously inside queuePresent.
-    bool leased = false;
-    rsf_frame_record lease{};
-    std::atomic<uint64_t> callbacks{0};
     rsf::FrameCaptureVk capture;
     // Rust destroys the effect, the swapchain and the slot resources first and
     // has closed its WSI route, so no hook borrows this storage. Rust holds
@@ -194,19 +191,21 @@ void record_capture(rsf_ffxgvk_native& self, VkCommandBuffer commands, const rsf
     (void)self.capture.record(commands, image, record, role, reset);
 } catch (...) {}
 ffxReturnCode_t generate(ffxDispatchDescFrameGeneration* data, void* userdata) {
-    auto& self = *static_cast<rsf_ffxgvk_native*>(userdata);
-    if (!data || !self.leased || self.lease.frame_id != data->frameID) return FFX_API_RETURN_ERROR_PARAMETER;
-    data->reset |= (self.lease.flags & RSF_FRAME_FLAG_RESET) != 0;
+    auto* native = static_cast<rsf_ffxgvk_native*>(userdata);
+    rsf_frame_record record{};
+    if (!data || !rsf_core_ffxgvk_generation_record(native, data->frameID, &record)) return FFX_API_RETURN_ERROR_PARAMETER;
+    auto& self = *native;
+    data->reset |= (record.flags & RSF_FRAME_FLAG_RESET) != 0;
     auto result = self.dispatch(&self.effect, &data->header);
     if (result == FFX_API_RETURN_OK) {
-        ++self.callbacks;
+        rsf_core_ffxgvk_note_generated(native);
         if (self.capture.wants(data->frameID)) for (uint32_t i = 0; i < data->numGeneratedFrames && i < 4; ++i) {
             const auto& source = data->outputs[i];
             rsf_srvk_image image{self.setup.graphics.device, handle_value(source.resource),
                 uint32_t(VK_FORMAT_R8G8B8A8_UNORM), source.description.width, source.description.height, VK_IMAGE_LAYOUT_GENERAL, 1};
             // The generated output uses the actual swapchain channel order.
             if (source.description.format == FFX_API_SURFACE_FORMAT_B8G8R8A8_UNORM) image.format = VK_FORMAT_B8G8R8A8_UNORM;
-            (void)self.capture.record(static_cast<VkCommandBuffer>(data->commandList), image, self.lease, "fg-generated-before-ui", data->reset, false);
+            (void)self.capture.record(static_cast<VkCommandBuffer>(data->commandList), image, record, "fg-generated-before-ui", data->reset, false);
         }
     }
     return result;
@@ -311,7 +310,7 @@ int32_t query_provider(rsf_ffxgvk_native* self) noexcept {
 }
 int32_t destroy_effect(rsf_ffxgvk_native* self) noexcept {
     if (self->effect && self->destroy(&self->effect, nullptr) != FFX_API_RETURN_OK) return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    self->effect = nullptr; self->leased = false;
+    self->effect = nullptr;
     return RSF_BACKEND_OK;
 }
 void destroy_chain(rsf_ffxgvk_native* self) noexcept {
@@ -360,21 +359,18 @@ void copy(rsf_ffxgvk_native* self, void* commands, const rsf_srvk_image* source,
     transition(*self, list, input, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     transition(*self, list, output, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 }
-int32_t configure(rsf_ffxgvk_native* self, const rsf_frame_record* lease, uint64_t color, uint64_t frame, const char* stage) noexcept {
+int32_t configure(rsf_ffxgvk_native* self, uint32_t enabled, uint64_t color, uint64_t frame, const char* stage) noexcept {
     ffxConfigureDescFrameGeneration config{}; config.header.type = FFX_API_CONFIGURE_DESC_TYPE_FRAMEGENERATION;
     config.swapChain = self->chain;
-    config.frameGenerationEnabled = lease != nullptr;
+    config.frameGenerationEnabled = enabled != 0;
     config.allowAsyncWorkloads = false;
     config.frameGenerationCallback = generate; config.frameGenerationCallbackUserContext = self;
     config.frameID = frame;
     config.generationRect = {0, 0, int32_t(self->width), int32_t(self->height)};
-    if (lease) config.HUDLessColor = resource({self->setup.graphics.device, color, VK_FORMAT_R8G8B8A8_UNORM,
+    if (config.frameGenerationEnabled) config.HUDLessColor = resource({self->setup.graphics.device, color, VK_FORMAT_R8G8B8A8_UNORM,
         self->width, self->height, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1});
     const auto result = rsf::vk_timed_call(stage, frame, [&] { return self->configure(&self->effect, &config.header); });
-    if (result != FFX_API_RETURN_OK) return RSF_BACKEND_ERROR_FEATURE_FAILED;
-    self->leased = lease != nullptr;
-    self->lease = lease ? *lease : rsf_frame_record{};
-    return RSF_BACKEND_OK;
+    return result == FFX_API_RETURN_OK ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
 }
 int32_t present(rsf_ffxgvk_native* self, const void* info, uint64_t frame, uint64_t* count) noexcept {
     const auto result = rsf::vk_timed_call("ffx_queue_present", frame, [&] {
@@ -409,7 +405,6 @@ constexpr rsf_ffxgvk_ops operations{
     open, [](rsf_ffxgvk_native* self) { delete self; },
     create_swapchain, query_swapchain, create_effect, query_provider, destroy_effect, destroy_chain, destroy_swapchain,
     images, acquire, prepare, copy, configure, present, drain,
-    [](rsf_ffxgvk_native* self) -> uint64_t { return self->callbacks.load(); },
     [](rsf_ffxgvk_native* self, uint64_t frame) -> uint32_t { return self->capture.wants(frame) ? 1u : 0u; },
     [](rsf_ffxgvk_native* self, void* commands, const rsf_srvk_image* image, const rsf_frame_record* record, const char* role) {
         record_capture(*self, static_cast<VkCommandBuffer>(commands), *image, *record, role, record->flags & RSF_FRAME_FLAG_RESET);

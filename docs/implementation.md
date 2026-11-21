@@ -1046,6 +1046,17 @@ MSVC Release contracts and matched the Runtime and three linked
 export inventories. The callback-retirement regression is synthetic.
 [FidelityFX WSI ownership audit](research/rust-vulkan-ffx-wsi-owner.md)
 
+The FidelityFX generation callback now reads the exact configured frame
+record from the Rust WSI route. Rust publishes the record only after SDK
+configure succeeds and counts only successful dispatches. The native callback
+still supplies the SDK reset flag and records the generated image. All 379
+locked Rust tests, formatting, Clippy and seven focused MSVC Release
+contracts passed. The native fixture rejects a mismatched frame and checks
+that SDK dispatch failure leaves the count unchanged. All five checked DLL
+export inventories matched by name and ordinal. Live FidelityFX generation
+and capture remain unverified for this change.
+[FidelityFX callback follow-up](research/rust-vulkan-ffx-wsi-owner.md#generation-callback-source)
+
 The integrated Vulkan owner build passed 379 pinned Rust tests,
 formatting, Clippy and 13 focused MSVC Release contracts. The Runtime,
 AC7, Loader, Minecraft and Godot export inventories matched, and the
