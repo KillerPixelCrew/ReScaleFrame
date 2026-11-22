@@ -102,7 +102,7 @@ constexpr SrServices sr_services{
 extern "C" rsf_dlss_pipeline_result rsf_core_native_sr_evaluate(
     void*, const rsf_game_render_pass*, const SrServices*, uint32_t*);
 
-rsf_dlss_pipeline_result rsf_native_sr_evaluate_ordered(
+static rsf_dlss_pipeline_result rsf_native_sr_evaluate_ordered(
     void* context, const rsf_game_render_pass* pass, uint32_t* ordered)
 {
     return rsf_core_native_sr_evaluate(context, pass, &sr_services, ordered);

@@ -1058,7 +1058,7 @@ Port generic SR setup, legacy bridging and auxiliary reconstruction. Trace the p
 - [x] [runtime/orchestrator/src/auxiliary_sr_platform.h](runtime/orchestrator/src/auxiliary_sr_platform.h)
 - [x] [runtime/orchestrator/src/d3d11_sr_api.cpp](runtime/orchestrator/src/d3d11_sr_api.cpp)
 - [ ] [runtime/orchestrator/src/native_sr.cpp](runtime/orchestrator/src/native_sr.cpp)
-- [ ] [runtime/orchestrator/src/native_sr_completion.h](runtime/orchestrator/src/native_sr_completion.h)
+- [x] [runtime/orchestrator/src/native_sr_completion.h](runtime/orchestrator/src/native_sr_completion.h)
 - [x] [runtime/orchestrator/src/sr_bridge_platform.cpp](runtime/orchestrator/src/sr_bridge_platform.cpp)
 - [x] [runtime/orchestrator/src/sr_legacy_adapter.cpp](runtime/orchestrator/src/sr_legacy_adapter.cpp)
 - [x] [runtime/orchestrator/src/sr_legacy_adapter.h](runtime/orchestrator/src/sr_legacy_adapter.h)
