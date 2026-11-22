@@ -9,10 +9,14 @@ use crate::vulkan_fg_abi::{
 };
 use crate::vulkan_fg_copy::{SHADER_READ, TRANSFER_SRC, record_shader_read_copy};
 use crate::vulkan_fg_frames::*;
+use crate::vulkan_fg_resources::{
+    rsf_core_vkfg_ensure_image, rsf_core_vkfg_fence_submission, rsf_core_vkfg_prepare_fences,
+    rsf_core_vkfg_release_fences, rsf_core_vkfg_release_image,
+};
 use crate::vulkan_fg_resources_abi::{
     rsf_vkfg_fences as Fences, rsf_vkfg_image as Image, rsf_vkfg_platform as Gpu,
 };
-use crate::vulkan_latency_abi::{RSF_SLVK_ABI_VERSION, rsf_slvk_call, rsf_slvk_callback};
+use crate::vulkan_latency_abi::{rsf_slvk_call, rsf_slvk_callback};
 use crate::vulkan_sr_abi::{RSF_SRVK_ABI_VERSION, rsf_srvk_image as SourceImage};
 use rsf_game_sys::{
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_FRAME_ABI_VERSION, rsf_frame_record as Record,
@@ -43,33 +47,6 @@ const RG16F: u32 = 83;
 const RGBA8: u32 = 37;
 const BGRA8: u32 = 44;
 const SLOTS: usize = RSF_FGVK_FRAME_SLOTS as usize;
-
-unsafe extern "C" {
-    fn rsf_core_vkfg_release_image(platform: *const Gpu, user: Handle, image: &mut Image);
-    fn rsf_core_vkfg_ensure_image(
-        platform: *const Gpu,
-        user: Handle,
-        image: &mut Image,
-        width: u32,
-        height: u32,
-        format: u32,
-        with_view: u32,
-    ) -> u32;
-    fn rsf_core_vkfg_release_fences(platform: *const Gpu, user: Handle, fences: &mut Fences);
-    fn rsf_core_vkfg_prepare_fences(
-        platform: *const Gpu,
-        user: Handle,
-        slot: &mut Recording,
-        fences: &mut Fences,
-    ) -> i32;
-    fn rsf_core_vkfg_fence_submission(
-        platform: *const Gpu,
-        user: Handle,
-        slot: &mut Recording,
-        fences: &Fences,
-        consumer: u32,
-    );
-}
 
 static OCCUPIED: AtomicBool = AtomicBool::new(false);
 // Streamline's API error callback supplies neither a viewport nor a frame.
@@ -166,6 +143,7 @@ impl Slot {
 struct Owner {
     _claim: Claim,
     platform: &'static Platform,
+    gpu_platform: &'static Gpu,
     native: Handle,
     gpu: Handle,
     chain: u64,
@@ -184,11 +162,9 @@ impl Drop for Owner {
         if !self.gpu.is_null() {
             for slot in &mut self.slots {
                 for image in &mut slot.images {
-                    unsafe { rsf_core_vkfg_release_image(self.platform.gpu, self.gpu, image) };
+                    rsf_core_vkfg_release_image(self.gpu_platform, self.gpu, image);
                 }
-                unsafe {
-                    rsf_core_vkfg_release_fences(self.platform.gpu, self.gpu, &mut slot.fences)
-                };
+                rsf_core_vkfg_release_fences(self.gpu_platform, self.gpu, &mut slot.fences);
             }
         }
         if self.chain != 0 {
@@ -204,14 +180,7 @@ fn invoke(
     user: Handle,
     source: Option<&Record>,
 ) -> i32 {
-    let call = rsf_slvk_call {
-        struct_size: size_of::<rsf_slvk_call>() as u32,
-        abi_version: RSF_SLVK_ABI_VERSION,
-        session_id: source.map_or(0, |record| record.session_id),
-        frame_id: source.map_or(0, |record| record.frame_id),
-        callback,
-        user,
-    };
+    let call = rsf_slvk_call::for_record(source, callback, user);
     // The Streamline worker invokes the callback synchronously with the exact token.
     unsafe { (platform.invoke)(&call) }
 }
@@ -441,14 +410,12 @@ impl Owner {
             {
                 return NOT_READY;
             }
-            let result = unsafe {
-                rsf_core_vkfg_prepare_fences(
-                    self.platform.gpu,
-                    self.gpu,
-                    &mut slot.frame,
-                    &mut slot.fences,
-                )
-            };
+            let result = rsf_core_vkfg_prepare_fences(
+                self.gpu_platform,
+                self.gpu,
+                &mut slot.frame,
+                &mut slot.fences,
+            );
             if result != OK {
                 return result;
             }
@@ -458,9 +425,8 @@ impl Owner {
                 (rw, rh, RG16F),
                 (width, height, RGBA8),
             ]) {
-                if unsafe {
-                    rsf_core_vkfg_ensure_image(self.platform.gpu, self.gpu, image, w, h, format, 1)
-                } == 0
+                if rsf_core_vkfg_ensure_image(self.gpu_platform, self.gpu, image, w, h, format, 1)
+                    == 0
                 {
                     return INIT_FAILED;
                 }
@@ -551,15 +517,13 @@ impl Owner {
                 }
             }
             if plan.fences & bit != 0 {
-                unsafe {
-                    rsf_core_vkfg_fence_submission(
-                        self.platform.gpu,
-                        self.gpu,
-                        &mut slot.frame,
-                        &slot.fences,
-                        0,
-                    )
-                };
+                rsf_core_vkfg_fence_submission(
+                    self.gpu_platform,
+                    self.gpu,
+                    &mut slot.frame,
+                    &slot.fences,
+                    0,
+                );
             }
         }
     }
@@ -602,15 +566,13 @@ impl Owner {
         let accepted = matches!(result, OK | SUBOPTIMAL);
         if active && accepted {
             let slot = &mut self.slots[index];
-            unsafe {
-                rsf_core_vkfg_fence_submission(
-                    self.platform.gpu,
-                    self.gpu,
-                    &mut slot.frame,
-                    &slot.fences,
-                    1,
-                )
-            };
+            rsf_core_vkfg_fence_submission(
+                self.gpu_platform,
+                self.gpu,
+                &mut slot.frame,
+                &slot.fences,
+                1,
+            );
         }
         let (state, sample) = self.sample();
         let slot = &mut self.slots[index];
@@ -753,6 +715,9 @@ unsafe extern "C" fn rsf_core_dlgvk_create(
     let Some(platform) = (unsafe { platform.as_ref() }) else {
         return NOT_COMPILED;
     };
+    let Some(gpu_platform) = (unsafe { platform.gpu.as_ref() }) else {
+        return NOT_COMPILED;
+    };
     let mut description = Swapchain::default();
     unsafe { (platform.describe)(setup.create_info, &mut description) };
     if description.has_surface == 0
@@ -777,6 +742,7 @@ unsafe extern "C" fn rsf_core_dlgvk_create(
     let mut owner = Box::new(Owner {
         _claim: claim,
         platform,
+        gpu_platform,
         native,
         gpu: ptr::null_mut(),
         chain: 0,
