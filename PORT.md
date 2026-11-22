@@ -1982,7 +1982,7 @@ Port geometry admission, observation and retirement together with their contract
 
 **Port files (8)**
 
-- [ ] [games/anomaly/src/geometry_feed.cpp](games/anomaly/src/geometry_feed.cpp)
+- [x] [games/anomaly/src/geometry_feed.cpp](games/anomaly/src/geometry_feed.cpp)
 - [ ] [games/anomaly/src/geometry_feed.h](games/anomaly/src/geometry_feed.h)
 - [ ] [games/anomaly/src/geometry_profile.h](games/anomaly/src/geometry_profile.h)
 - [x] [games/anomaly/src/geometry_registry_platform.h](games/anomaly/src/geometry_registry_platform.h)
