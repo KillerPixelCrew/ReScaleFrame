@@ -30,7 +30,7 @@ pub struct Compiler(HMODULE);
 
 impl Compiler {
     pub fn system(name: &str) -> Option<Self> {
-        let name: Vec<_> = name.encode_utf16().chain([0]).collect();
+        let name = rsf_game_sys::ffi_util::wide(name);
         let module =
             unsafe { LoadLibraryExW(name.as_ptr(), ptr::null_mut(), LOAD_LIBRARY_SEARCH_SYSTEM32) };
         (!module.is_null()).then(|| Self(module))

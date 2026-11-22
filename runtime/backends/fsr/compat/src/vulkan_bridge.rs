@@ -211,9 +211,7 @@ fn provider_path(directory: *const u16) -> Option<Vec<u16>> {
     if last != u16::from(b'\\') && last != u16::from(b'/') {
         path.push(u16::from(b'\\'));
     }
-    path.extend(PROVIDER_DLL.encode_utf16());
-    path.push(0);
-    Some(path)
+    Some(rsf_game_sys::ffi_util::wide_path(&path, PROVIDER_DLL))
 }
 
 /// Checks a size-checked call structure. `abi_version` is read only after
@@ -958,7 +956,7 @@ mod tests {
 
     #[test]
     fn requires_an_absolute_directory() {
-        let path = |text: &str| text.encode_utf16().chain([0]).collect::<Vec<_>>();
+        let path = rsf_game_sys::ffi_util::wide;
         for good in ["C:\\Game", "d:/runtime", "\\\\server\\share"] {
             assert!(
                 unsafe { absolute_wide_path(path(good).as_ptr(), 32767) },

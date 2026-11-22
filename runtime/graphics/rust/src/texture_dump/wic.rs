@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use rsf_game_sys::ffi_util::wide;
 use std::ffi::CStr;
 use std::ptr;
 use windows::Win32::Foundation::{GENERIC_WRITE, RPC_E_CHANGED_MODE};
@@ -20,7 +21,7 @@ impl Drop for Apartment {
 }
 
 pub(super) fn write_png(path: &CStr, width: u32, height: u32, bgra: &[u8]) -> Option<()> {
-    let path: Vec<u16> = path.to_str().ok()?.encode_utf16().chain([0]).collect();
+    let path = wide(path.to_str().ok()?);
     let initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
     if initialized.is_err() && initialized != RPC_E_CHANGED_MODE {
         return None;

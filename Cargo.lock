@@ -873,6 +873,7 @@ version = "0.1.2"
 name = "rsf-shader-compiler"
 version = "0.1.2"
 dependencies = [
+ "rsf-game-sys",
  "windows",
  "windows-sys",
 ]
@@ -907,6 +908,7 @@ dependencies = [
  "ash",
  "cc",
  "rsf-bindgen",
+ "rsf-game-sys",
  "windows-sys",
 ]
 

@@ -26,5 +26,8 @@ windows-sys = { workspace = true, features = [
   "Win32_System_LibraryLoader",
 ] }
 
+[dev-dependencies]
+rsf-game-sys = { path = "../../../../sdk/game" }
+
 [lints]
 workspace = true

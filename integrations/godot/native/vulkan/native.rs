@@ -9,7 +9,7 @@ use crate::sys::*;
 use crate::vulkan::handle;
 use crate::{CONTROL, rsf_godot_vk_creation_resolver};
 use ash::vk;
-use rsf_game_sys::ffi_util::ascii_wide;
+use rsf_game_sys::ffi_util::{ascii_wide, wide};
 use rsf_game_sys::win32::typed_export;
 use rsf_game_sys::{
     RSF_FRAME_FLAG_RESET, RSF_GAME_FRAME_ABI_VERSION, RSF_GAME_RENDER_FINAL_SCENE,
@@ -161,7 +161,7 @@ impl Platform {
         };
         let latency_result = unsafe { rsf_slvk_initialize(&latency) };
         let Ok(intel) = xess.to_str() else { return 0 };
-        state().intel = intel.encode_utf16().chain(Some(0)).collect();
+        state().intel = wide(intel);
         let xess = rsf_xessvk_setup {
             struct_size: size_of::<rsf_xessvk_setup>() as u32,
             abi_version: RSF_XESSVK_REQUIREMENTS_ABI_VERSION,

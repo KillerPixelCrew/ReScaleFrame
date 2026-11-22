@@ -4,6 +4,7 @@ use crate::asi::{DiagnosticHook, DiagnosticInstall, install_diagnostic_hooks};
 use crate::layout::{self, FRAME_COUNTER, TLS_INDEX, block, camera_probe};
 use crate::platform::{self, lock, read_bytes, read_value, trampoline, worker_tls_slots};
 use crate::script_input::ScriptHook;
+use rsf_game_sys::ffi_util::wide;
 use std::ffi::{OsString, c_void};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -255,7 +256,7 @@ fn capture(provider: u32, context: *const c_void, parameters: *const c_void, cal
             probe.index,
             output.display()
         );
-        let debug: Vec<u16> = message.encode_utf16().chain([0]).collect();
+        let debug = wide(&message);
         unsafe { OutputDebugStringW(debug.as_ptr()) };
         crate::runtime_worker::log(message);
         probe.remaining = 0;

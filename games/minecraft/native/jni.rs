@@ -9,6 +9,7 @@ use jni_sys::{
     JNIEnv, JNINativeInterface_, jboolean, jclass, jfloatArray, jint, jintArray, jlong, jlongArray,
     jobject, jstring,
 };
+use rsf_game_sys::ffi_util::wide;
 use rsf_game_sys::rsf_game_render_pass;
 use rsf_game_sys::{
     rsf_gl_pipeline, rsf_gl_pipeline_abort, rsf_gl_pipeline_close,
@@ -310,7 +311,7 @@ unsafe extern "system" fn open_settings(
         return -1;
     }
     settings.push(0);
-    let section: Vec<u16> = "Render".encode_utf16().chain([0]).collect();
+    let section = wide("Render");
     let options = frame::options(&configuration);
     unsafe {
         rsf_gl_pipeline_settings_open(

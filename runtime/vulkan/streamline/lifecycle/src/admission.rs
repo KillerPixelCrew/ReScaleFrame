@@ -578,10 +578,7 @@ pub(crate) unsafe fn open_by_digest(path: *const u16) -> HANDLE {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn wide(text: &str) -> Vec<u16> {
-        text.encode_utf16().chain([0]).collect()
-    }
+    use rsf_game_sys::ffi_util::wide;
 
     fn interposer() -> Option<std::path::PathBuf> {
         let directory = std::env::var_os("RSF_STREAMLINE_BIN")?;
