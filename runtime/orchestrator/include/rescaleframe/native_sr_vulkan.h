@@ -63,6 +63,7 @@ extern "C" {
 /* DLSS requires an early shared rsf_slvk_initialize session with DLSS SR
    selected. Its inputs must support transfer-source usage; depth is R32F.
    Only one DLSS SR owner is admitted per SDK session, on viewport one. */
+// On failure a non-null output is cleanup-only. Retain it until rsf_srvk_destroy succeeds.
 RSF_RUNTIME_API rsf_backend_result rsf_srvk_create(const rsf_srvk_setup*, rsf_srvk**);
 RSF_RUNTIME_API rsf_backend_result rsf_srvk_plan(const rsf_srvk*, uint32_t* width, uint32_t* height);
 /* DLSS model request, applied on subsequent evaluations. The owner serializes

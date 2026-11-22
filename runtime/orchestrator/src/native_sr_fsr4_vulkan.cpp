@@ -161,3 +161,10 @@ const rsf_fsr4vk_platform& platform() {
 int32_t rsf_fsr4vk_create(const rsf_srvk_setup* setup, const rsf_fsr4vk_handoff* handoff, rsf_fsr4vk** out) {
     return rsf_core_fsr4vk_create(&platform(), setup, handoff, out);
 }
+
+extern "C" int32_t rsf_core_fsr4vk_create_admitted(const rsf_fsr4vk_platform*, const rsf_srvk_setup*,
+    const rsf_fsr4vk_handoff*, rsf_fsr4vk**);
+
+int32_t rsf_fsr4vk_create_admitted(const rsf_srvk_setup* setup, const rsf_fsr4vk_handoff* handoff, rsf_fsr4vk** out) {
+    return rsf_core_fsr4vk_create_admitted(&platform(), setup, handoff, out);
+}

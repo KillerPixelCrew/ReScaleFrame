@@ -61,11 +61,10 @@ struct FfxOps {
     int32_t (*effective_version)(FfxNative*, uint64_t*);
     int32_t (*destroy_effect)(FfxNative*);
     int32_t (*plan)(FfxNative*, const rsf_srvk_setup*, uint32_t*, uint32_t*);
-    // Rust (vulkan_sr.rs) sequences image creation, memory choice, allocation and binding.
+    // The Rust image owner sequences allocation and binding.
     void* (*image_user)(FfxNative*);
     const rsf_vkfg_platform* images;
     uint32_t (*memory_type_count)(FfxNative*);
-    void (*release)(FfxNative*, uint64_t, uint64_t);
     void (*barrier)(FfxNative*, void*, const rsf_vkfg_barrier*);
     void (*clear_color_zero)(FfxNative*, void*, uint64_t, uint32_t);
     int32_t (*dispatch)(FfxNative*, void*, const FfxDispatch*);
@@ -89,10 +88,10 @@ struct Platform {
     int32_t (*dump_wants)(const rsf_frame_record*);
     void (*dump_result)(const rsf_frame_record*, const char*, uint32_t, int32_t);
 };
-static_assert(sizeof(FfxOps) == 29 * sizeof(void*) && sizeof(Platform) == 288 && sizeof(Blit) == 24);
+static_assert(sizeof(FfxOps) == 28 * sizeof(void*) && sizeof(Platform) == 280 && sizeof(Blit) == 24);
 static_assert(sizeof(FfxExports) == 4 * sizeof(void*) && sizeof(FfxDeviceEntries) == 9 * sizeof(void*));
-static_assert(offsetof(FfxOps, barrier) == 17 * 8 && offsetof(FfxOps, clear_color_zero) == 18 * 8 &&
-    offsetof(FfxOps, dispatch) == 19 * 8 && offsetof(FfxOps, copy) == 20 * 8 && offsetof(FfxOps, sharpen) == 21 * 8);
+static_assert(offsetof(FfxOps, barrier) == 16 * 8 && offsetof(FfxOps, clear_color_zero) == 17 * 8 &&
+    offsetof(FfxOps, dispatch) == 18 * 8 && offsetof(FfxOps, copy) == 19 * 8 && offsetof(FfxOps, sharpen) == 20 * 8);
 static_assert(sizeof(FfxDispatch) == 144 && offsetof(FfxDispatch, reset) == 136);
 static_assert(VK_FORMAT_R8_UNORM == 9 && VK_FORMAT_R16G16_SFLOAT == 83 &&
     VK_FORMAT_R16G16B16A16_SFLOAT == 97 && VK_FORMAT_R32_SFLOAT == 100 && VK_FORMAT_D32_SFLOAT == 126);
@@ -250,12 +249,6 @@ int32_t plan(FfxNative* native, const rsf_srvk_setup* setup, uint32_t* width, ui
 }
 catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
 
-void release(FfxNative* native, uint64_t image, uint64_t memory) noexcept
-{
-    if (image) native->gpu.destroy_image(native->device, reinterpret_cast<VkImage>(image), nullptr);
-    if (memory) native->gpu.free_memory(native->device, reinterpret_cast<VkDeviceMemory>(memory), nullptr);
-}
-
 VkImageMemoryBarrier image_barrier(VkImage image, VkImageLayout from, VkImageLayout to,
     VkAccessFlags source, VkAccessFlags target) noexcept
 {
@@ -388,7 +381,7 @@ constexpr Platform native{
         call_device_proc, initialize_graphics, versions, create_effect,
         effective_version, destroy_effect, plan,
         [](FfxNative* owner) -> void* { return &owner->gpu; }, &rsf::vkfg::platform,
-        [](FfxNative* owner) { return owner->memory.memoryTypeCount; }, release,
+        [](FfxNative* owner) { return owner->memory.memoryTypeCount; },
         record_barrier, clear_color_zero, dispatch, record_copy,
         [](FfxNative* owner, const rsf_srvk_setup* setup, void* commands, const rsf_srvk_frame* frame, uint64_t output) -> int32_t {
             return owner->sharpen.run(*setup, commands, *frame, reinterpret_cast<VkImage>(output));

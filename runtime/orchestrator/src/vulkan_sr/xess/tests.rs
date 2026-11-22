@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: MIT
+use super::super::owner_tests::PLATFORM;
 use super::*;
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::cell::RefCell;
 
 // The SDK session is process-wide. Serialize the tests that load it.
 static SERIAL: Mutex<()> = Mutex::new(());
 
 type Edit = fn(&mut Frame);
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 enum Call {
     Load,
     Unload,
@@ -63,21 +64,20 @@ impl Default for Fake {
     }
 }
 
-static STATE: AtomicPtr<Fake> = AtomicPtr::new(ptr::null_mut());
+thread_local! {
+    static STATE: RefCell<Fake> = RefCell::new(Fake::default());
+}
 
-fn state<'a>() -> &'a mut Fake {
-    unsafe { &mut *STATE.load(Ordering::Relaxed) }
+fn edit_state<R>(edit: impl FnOnce(&mut Fake) -> R) -> R {
+    STATE.with(|state| edit(&mut state.borrow_mut()))
+}
+
+fn calls() -> Vec<Call> {
+    edit_state(|fake| fake.calls.clone())
 }
 
 fn push(call: Call) {
-    state().calls.push(call);
-}
-
-macro_rules! leaf {
-    (|$($arg:tt: $ty:ty),*| -> $ret:ty $body:block) => {{
-        unsafe extern "C" fn callback($($arg: $ty),*) -> $ret $body
-        callback
-    }};
+    edit_state(|fake| fake.calls.push(call));
 }
 
 fn handle() -> Handle {
@@ -93,14 +93,16 @@ static IMAGES: ImageOps = ImageOps {
                               usage: u32,
                               image: *mut u64|
      -> i32 {
-        let state = state();
-        let id = 10
-            + state
-                .calls
-                .iter()
-                .filter(|call| matches!(call, Call::Allocate(..)))
-                .count() as u64;
-        state.calls.push(Call::Allocate(id, width, height, usage));
+        let id = edit_state(|state| {
+            let id = 10
+                + state
+                    .calls
+                    .iter()
+                    .filter(|call| matches!(call, Call::Allocate(..)))
+                    .count() as u64;
+            state.calls.push(Call::Allocate(id, width, height, usage));
+            id
+        });
         unsafe { image.write(id) };
         0
     })),
@@ -128,7 +130,7 @@ static IMAGES: ImageOps = ImageOps {
                              _: u32,
                              view: *mut u64|
      -> i32 {
-        if state().fail_allocation as u64 == image {
+        if edit_state(|fake| fake.fail_allocation) as u64 == image {
             return -2;
         }
         unsafe { view.write(image + 200) };
@@ -174,13 +176,13 @@ pub(in crate::vulkan_sr) static OPS: XessOps = XessOps {
             count.write(2);
             minimum.write(7);
         }
-        state().requirements
+        edit_state(|fake| fake.requirements)
     }),
     device_extensions: leaf!(
         |_: Handle, _: Handle, _: Handle, count: *mut u32, _: Names| -> i32 {
             push(Call::Requirements);
             unsafe { count.write(3) };
-            state().requirements
+            edit_state(|fake| fake.requirements)
         }
     ),
     device_features: leaf!(|_: Handle, _: Handle, _: Handle, _: *mut Handle| -> i32 {
@@ -206,12 +208,12 @@ pub(in crate::vulkan_sr) static OPS: XessOps = XessOps {
         XESS_SUCCESS
     }),
     resolution: leaf!(|_: Handle, _: &XessInit, range: &mut [u32; 6]| -> i32 {
-        *range = state().range;
+        *range = edit_state(|fake| fake.range);
         XESS_SUCCESS
     }),
     destroy_context: leaf!(|_: Handle| -> i32 {
         push(Call::Destroy);
-        state().destroy
+        edit_state(|fake| fake.destroy)
     }),
     bind_device: leaf!(|_: Handle, _: &Setup| -> i32 {
         push(Call::Bind);
@@ -221,7 +223,7 @@ pub(in crate::vulkan_sr) static OPS: XessOps = XessOps {
     images: &IMAGES,
     velocity: leaf!(|_: Handle, _: f32, _: f32| -> i32 {
         push(Call::Velocity);
-        state().velocity
+        edit_state(|fake| fake.velocity)
     }),
     barrier: leaf!(|_: Handle, _: Handle, plan: *const Barrier| -> () {
         push(Call::Barrier(unsafe { *plan }));
@@ -243,13 +245,13 @@ pub(in crate::vulkan_sr) static OPS: XessOps = XessOps {
             call.output.height,
             call.reset,
         ));
-        state().execute
+        edit_state(|fake| fake.execute)
     }),
     sharpen: leaf!(
         |_: Handle, _: &Setup, _: Handle, _: &Frame, output: u64| -> i32 {
             assert_eq!(output, 13);
             push(Call::Sharpen);
-            state().sharpen
+            edit_state(|fake| fake.sharpen)
         }
     ),
     clear_sharpen: leaf!(|_: Handle| -> () { push(Call::Clear) }),
@@ -380,17 +382,15 @@ fn frame(record: &rsf_frame_record) -> Frame {
     }
 }
 
-fn with_state(test: impl FnOnce(&mut Fake)) {
+fn with_state(test: impl FnOnce()) {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
-    let mut fake = Fake::default();
-    STATE.store(&mut fake, Ordering::Relaxed);
-    test(&mut fake);
-    STATE.store(ptr::null_mut(), Ordering::Relaxed);
+    edit_state(|fake| *fake = Fake::default());
+    test();
 }
 
 #[test]
 fn session_admits_one_sdk_and_maps_requirement_results() {
-    with_state(|fake| unsafe {
+    with_state(|| unsafe {
         let mut setup = requirements();
         setup.struct_size -= 1;
         assert_eq!(rsf_core_xessvk_initialize(Some(&OPS), ptr::null()), INVALID);
@@ -426,13 +426,13 @@ fn session_admits_one_sdk_and_maps_requirement_results() {
         );
         assert_eq!((count, minimum), (2, 7));
         // Warnings are not success for the creation chain.
-        fake.requirements = 1;
+        edit_state(|fake| fake.requirements = 1);
         assert_eq!(
             rsf_core_xessvk_instance_requirements(Some(&OPS), &mut count, &mut names, &mut minimum),
             INIT_FAILED
         );
         let mut features = ptr::null_mut();
-        fake.requirements = XESS_UNSUPPORTED_DRIVER;
+        edit_state(|fake| fake.requirements = XESS_UNSUPPORTED_DRIVER);
         let (instance, physical) = (handle(), handle());
         assert_eq!(
             rsf_core_xessvk_device_requirements(
@@ -445,7 +445,7 @@ fn session_admits_one_sdk_and_maps_requirement_results() {
             ),
             NOT_SUPPORTED
         );
-        fake.requirements = XESS_SUCCESS;
+        edit_state(|fake| fake.requirements = XESS_SUCCESS);
         assert_eq!(
             rsf_core_xessvk_device_requirements(
                 Some(&OPS),
@@ -472,7 +472,7 @@ fn session_admits_one_sdk_and_maps_requirement_results() {
         assert_eq!(rsf_core_xessvk_shutdown(Some(&OPS)), 0);
         assert_eq!(rsf_core_xessvk_shutdown(Some(&OPS)), 0);
         assert_eq!(
-            fake.calls,
+            calls(),
             [
                 Call::Load,
                 Call::Requirements,
@@ -488,23 +488,20 @@ fn session_admits_one_sdk_and_maps_requirement_results() {
 
 #[test]
 fn owner_sizes_the_cache_and_keys_history_on_identity_and_extent() {
-    with_state(|fake| unsafe {
+    with_state(|| unsafe {
         let mut owner = ptr::null_mut();
         let setup = setup();
         assert_eq!(
-            rsf_core_xessvk_create(Some(&OPS), &setup, &mut owner),
+            rsf_core_srvk_create(Some(&PLATFORM), &setup, &mut owner),
             NOT_READY
         );
         assert!(owner.is_null());
         assert_eq!(rsf_core_xessvk_initialize(Some(&OPS), &requirements()), 0);
+        assert_eq!(rsf_core_srvk_create(None, &setup, &mut owner), NOT_COMPILED);
+        edit_state(|fake| fake.calls.clear());
+        assert_eq!(rsf_core_srvk_create(Some(&PLATFORM), &setup, &mut owner), 0);
         assert_eq!(
-            rsf_core_xessvk_create(None, &setup, &mut owner),
-            NOT_COMPILED
-        );
-        fake.calls.clear();
-        assert_eq!(rsf_core_xessvk_create(Some(&OPS), &setup, &mut owner), 0);
-        assert_eq!(
-            fake.calls,
+            calls(),
             [
                 Call::Open,
                 Call::Create,
@@ -519,22 +516,22 @@ fn owner_sizes_the_cache_and_keys_history_on_identity_and_extent() {
         );
         assert_eq!(rsf_core_xessvk_shutdown(Some(&OPS)), NOT_READY);
         let (mut width, mut height) = (0, 0);
-        assert_eq!(rsf_core_xessvk_plan(owner, &mut width, &mut height), 0);
+        assert_eq!(rsf_core_srvk_plan(owner.cast(), &mut width, &mut height), 0);
         assert_eq!((width, height), (1130, 636));
 
         let commands = ptr::dangling_mut::<u16>().cast();
-        let run = |fake: &mut Fake, extent, id, edit: &dyn Fn(&mut Frame)| {
+        let run = |extent, id, edit: &dyn Fn(&mut Frame)| {
             let record = record(extent, id);
             let mut input = frame(&record);
             edit(&mut input);
-            fake.calls.clear();
-            rsf_core_xessvk_evaluate(owner, commands, &input)
+            edit_state(|fake| fake.calls.clear());
+            rsf_core_srvk_evaluate(owner.cast(), commands, &input)
         };
         let extent = [1128, 632];
         let output_copy = ImageCopy::transfer(13, 23, [1920, 1080]);
-        assert_eq!(run(fake, extent, 1, &|_| {}), 0);
+        assert_eq!(run(extent, 1, &|_| {}), 0);
         assert_eq!(
-            fake.calls,
+            calls(),
             [
                 Call::Log(
                     "XeSS input range recommended 1130x636 minimum 1024x576 maximum 1280x720 actual 1128x632"
@@ -563,38 +560,41 @@ fn owner_sizes_the_cache_and_keys_history_on_identity_and_extent() {
                 Call::Capture("sr-linear-color".into(), 20),
                 Call::Capture("sr-depth".into(), 21),
                 Call::Capture("sr-motion-uv".into(), 22),
-                Call::Sharpen,
                 Call::Capture("sr-output-linear".into(), 13),
+                Call::Sharpen,
                 Call::Barrier(Barrier::new(13, GENERAL, TRANSFER_SRC)),
                 Call::Copy(output_copy),
                 Call::Barrier(Barrier::new(13, TRANSFER_SRC, GENERAL)),
             ]
         );
-        assert_eq!(run(fake, extent, 2, &|_| {}), 0);
+        assert_eq!(run(extent, 2, &|_| {}), 0);
+        assert!(calls().contains(&Call::Execute(1128, 632, 1920, 1080, 0)));
         assert!(
-            fake.calls
-                .contains(&Call::Execute(1128, 632, 1920, 1080, 0))
-        );
-        assert!(
-            fake.calls
-                .contains(&Call::Barrier(Barrier::new(10, SHADER_READ, TRANSFER_DST)))
-                && fake
-                    .calls
-                    .contains(&Call::Barrier(Barrier::new(13, GENERAL, GENERAL)))
+            calls().contains(&Call::Barrier(Barrier::new(10, SHADER_READ, TRANSFER_DST)))
+                && calls().contains(&Call::Barrier(Barrier::new(13, GENERAL, GENERAL)))
         );
         // A changed active extent inside the SDK range resets history.
-        assert_eq!(run(fake, [1280, 720], 3, &|_| {}), 0);
-        assert!(
-            fake.calls
-                .contains(&Call::Execute(1280, 720, 1920, 1080, 1))
-        );
+        assert_eq!(run([1280, 720], 3, &|_| {}), 0);
+        assert!(calls().contains(&Call::Execute(1280, 720, 1920, 1080, 1)));
 
-        let refusals: [([u32; 2], Edit); 10] = [
+        let refusals: [([u32; 2], Edit); 15] = [
             ([1023, 632], |_| {}),
             ([1128, 575], |_| {}),
             ([1281, 632], |_| {}),
             ([1128, 721], |_| {}),
             ([1128, 632], |frame| frame.depth.width -= 1),
+            ([1128, 632], |frame| frame.motion.height -= 1),
+            ([1128, 632], |frame| frame.color.format = R8_UNORM),
+            ([1128, 632], |frame| frame.output.layout = GENERAL),
+            ([1128, 632], |frame| {
+                frame.reactive = Image {
+                    image: 24,
+                    format: R8_UNORM,
+                    width: 1,
+                    ..frame.color
+                };
+            }),
+            ([1128, 632], |frame| frame.record = ptr::null()),
             ([1128, 632], |frame| frame.depth.format = D32_FLOAT),
             ([1128, 632], |frame| frame.motion.copy_source = 0),
             ([1128, 632], |frame| frame.motion.image = frame.depth.image),
@@ -602,66 +602,62 @@ fn owner_sizes_the_cache_and_keys_history_on_identity_and_extent() {
             ([1128, 632], |frame| frame.pre_exposure = f32::from_bits(1)),
         ];
         for (extent, edit) in refusals {
-            assert_eq!(run(fake, extent, 4, &edit), INVALID);
-            assert!(fake.calls.is_empty());
+            assert_eq!(run(extent, 4, &edit), INVALID);
+            assert!(calls().is_empty());
         }
         let mut jitter = record([1128, 632], 4);
         jitter.camera.jitter_pixels[0] = 0.51;
         let input = frame(&jitter);
-        assert_eq!(rsf_core_xessvk_evaluate(owner, commands, &input), INVALID);
         assert_eq!(
-            rsf_core_xessvk_evaluate(owner, ptr::null_mut(), &input),
+            rsf_core_srvk_evaluate(owner.cast(), commands, &input),
+            INVALID
+        );
+        assert_eq!(
+            rsf_core_srvk_evaluate(owner.cast(), ptr::null_mut(), &input),
             INVALID
         );
 
         // Velocity refusal records nothing and keeps history.
-        fake.velocity = -4;
-        assert_eq!(run(fake, [1280, 720], 4, &|_| {}), FEATURE_FAILED);
-        assert_eq!(fake.calls, [Call::Velocity]);
-        fake.velocity = XESS_SUCCESS;
-        fake.execute = -6;
-        assert_eq!(run(fake, [1280, 720], 4, &|_| {}), FEATURE_FAILED);
+        edit_state(|fake| fake.velocity = -4);
+        assert_eq!(run([1280, 720], 4, &|_| {}), FEATURE_FAILED);
+        assert_eq!(calls(), [Call::Velocity]);
+        edit_state(|fake| fake.velocity = XESS_SUCCESS);
+        edit_state(|fake| fake.execute = -6);
+        assert_eq!(run([1280, 720], 4, &|_| {}), FEATURE_FAILED);
         assert_eq!(
-            fake.calls.last(),
+            calls().last(),
             Some(&Call::Execute(1280, 720, 1920, 1080, 0)),
         );
         // A refused dispatch forgets history, even for the next sequential frame.
-        fake.execute = XESS_SUCCESS;
-        fake.sharpen = 0;
-        assert_eq!(run(fake, [1280, 720], 5, &|_| {}), 0);
-        assert!(
-            fake.calls
-                .contains(&Call::Execute(1280, 720, 1920, 1080, 1))
-        );
-        assert!(fake.calls.contains(&Call::Copy(output_copy)));
-        assert_eq!(run(fake, [1280, 720], 6, &|_| {}), 0);
-        assert!(fake.calls.contains(&Call::Copy(output_copy)));
-        assert!(
-            fake.calls
-                .contains(&Call::Execute(1280, 720, 1920, 1080, 0))
-        );
-        let mut flagged = |frame: u64| {
+        edit_state(|fake| fake.execute = XESS_SUCCESS);
+        edit_state(|fake| fake.sharpen = 0);
+        assert_eq!(run([1280, 720], 5, &|_| {}), 0);
+        assert!(calls().contains(&Call::Execute(1280, 720, 1920, 1080, 1)));
+        assert!(calls().contains(&Call::Copy(output_copy)));
+        assert_eq!(run([1280, 720], 6, &|_| {}), 0);
+        assert!(calls().contains(&Call::Copy(output_copy)));
+        assert!(calls().contains(&Call::Execute(1280, 720, 1920, 1080, 0)));
+        let flagged = |frame: u64| {
             let mut value = record([1280, 720], frame);
             value.flags = RSF_FRAME_FLAG_RESET;
             let input = frame_input(&value);
-            fake.calls.clear();
-            assert_eq!(rsf_core_xessvk_evaluate(owner, commands, &input), 0);
-            fake.calls
-                .contains(&Call::Execute(1280, 720, 1920, 1080, 1))
+            edit_state(|fake| fake.calls.clear());
+            assert_eq!(rsf_core_srvk_evaluate(owner.cast(), commands, &input), 0);
+            calls().contains(&Call::Execute(1280, 720, 1920, 1080, 1))
         };
         assert!(flagged(7));
 
-        rsf_core_xessvk_retire_commands(owner, commands);
-        assert_eq!(fake.calls.last(), Some(&Call::Retire(commands as usize)));
-        fake.calls.clear();
-        fake.destroy = -6;
-        assert_eq!(rsf_core_xessvk_destroy(owner), FEATURE_FAILED);
-        assert_eq!(fake.calls, [Call::Flush, Call::Destroy]);
-        fake.destroy = XESS_SUCCESS;
-        fake.calls.clear();
-        assert_eq!(rsf_core_xessvk_destroy(owner), 0);
+        rsf_core_srvk_retire_commands(owner.cast(), commands);
+        assert_eq!(calls().last(), Some(&Call::Retire(commands as usize)));
+        edit_state(|fake| fake.calls.clear());
+        edit_state(|fake| fake.destroy = -6);
+        assert_eq!(rsf_core_srvk_destroy(owner.cast()), FEATURE_FAILED);
+        assert_eq!(calls(), [Call::Flush, Call::Destroy]);
+        edit_state(|fake| fake.destroy = XESS_SUCCESS);
+        edit_state(|fake| fake.calls.clear());
+        assert_eq!(rsf_core_srvk_destroy(owner.cast()), 0);
         assert_eq!(
-            fake.calls,
+            calls(),
             [
                 Call::Flush,
                 Call::Destroy,
@@ -691,47 +687,41 @@ fn frame_input(record: &rsf_frame_record) -> Frame {
 
 #[test]
 fn refused_creation_unwinds_partial_state_and_releases_the_sdk_reference() {
-    with_state(|fake| unsafe {
+    with_state(|| unsafe {
         assert_eq!(rsf_core_xessvk_initialize(Some(&OPS), &requirements()), 0);
         let mut owner = ptr::null_mut();
-        let mut setup = setup();
-        setup.backend = RSF_SR_FSR3;
-        assert_eq!(
-            rsf_core_xessvk_create(Some(&OPS), &setup, &mut owner),
-            INVALID
-        );
-        setup.backend = RSF_SR_XESS;
+        let setup = setup();
         // The recommendation must sit inside the SDK's own range.
-        fake.range = [1000, 636, 1024, 576, 1280, 720];
-        fake.calls.clear();
+        edit_state(|fake| fake.range = [1000, 636, 1024, 576, 1280, 720]);
+        edit_state(|fake| fake.calls.clear());
         assert_eq!(
-            rsf_core_xessvk_create(Some(&OPS), &setup, &mut owner),
+            rsf_core_srvk_create(Some(&PLATFORM), &setup, &mut owner),
             INIT_FAILED
         );
         assert_eq!(
-            fake.calls,
+            calls(),
             [
                 Call::Open,
                 Call::Create,
                 Call::Init(104, XESS_AUTOEXPOSURE | XESS_INVERTED_DEPTH),
-                Call::Clear,
                 Call::Destroy,
+                Call::Clear,
                 Call::Close,
             ]
         );
-        fake.range = Fake::default().range;
-        fake.fail_allocation = 12;
-        fake.calls.clear();
+        edit_state(|fake| fake.range = Fake::default().range);
+        edit_state(|fake| fake.fail_allocation = 12);
+        edit_state(|fake| fake.calls.clear());
         assert_eq!(
-            rsf_core_xessvk_create(Some(&OPS), &setup, &mut owner),
+            rsf_core_srvk_create(Some(&PLATFORM), &setup, &mut owner),
             INIT_FAILED
         );
         assert!(owner.is_null());
-        assert!(fake.calls.ends_with(&[
+        assert!(calls().ends_with(&[
             Call::ReleaseImage(12),
             Call::ReleaseMemory(112),
-            Call::Clear,
             Call::Destroy,
+            Call::Clear,
             Call::ReleaseView(210),
             Call::ReleaseImage(10),
             Call::ReleaseMemory(110),
@@ -740,19 +730,46 @@ fn refused_creation_unwinds_partial_state_and_releases_the_sdk_reference() {
             Call::ReleaseMemory(111),
             Call::Close,
         ]));
-        // No context keeps the SDK reference after a refused creation.
+        edit_state(|fake| {
+            fake.calls.clear();
+            fake.destroy = -6;
+        });
+        assert_eq!(
+            rsf_core_srvk_create(Some(&PLATFORM), &setup, &mut owner),
+            INIT_FAILED
+        );
+        assert!(!owner.is_null());
+        assert_eq!(calls().last(), Some(&Call::Destroy));
+        assert!(!calls().contains(&Call::Close));
+        assert!(!calls().contains(&Call::ReleaseImage(10)));
+        assert_eq!(rsf_core_xessvk_shutdown(Some(&OPS)), NOT_READY);
+
+        let record = record([1128, 632], 1);
+        let input = frame(&record);
+        let (mut width, mut height) = (0, 0);
+        assert_eq!(
+            rsf_core_srvk_plan(owner.cast(), &mut width, &mut height),
+            NOT_READY
+        );
+        assert_eq!(
+            rsf_core_srvk_evaluate(owner.cast(), handle(), &input),
+            NOT_READY
+        );
+        edit_state(|fake| fake.destroy = XESS_SUCCESS);
+        assert_eq!(rsf_core_srvk_destroy(owner.cast()), 0);
+        assert_eq!(calls().last(), Some(&Call::Close));
+        // Cleanup released the last reference to the SDK context.
         assert_eq!(rsf_core_xessvk_shutdown(Some(&OPS)), 0);
     });
 }
 
 #[test]
 fn shared_srvk_owner_routes_xess_and_refuses_presets() {
-    with_state(|fake| unsafe {
-        let platform = &super::super::owner_tests::PLATFORM;
+    with_state(|| unsafe {
         assert_eq!(rsf_core_xessvk_initialize(Some(&OPS), &requirements()), 0);
         let mut owner = ptr::null_mut();
         assert_eq!(
-            rsf_core_srvk_create(Some(platform), &setup(), &mut owner),
+            rsf_core_srvk_create(Some(&PLATFORM), &setup(), &mut owner),
             0
         );
         let owner = owner.cast::<Owner>();
@@ -761,18 +778,19 @@ fn shared_srvk_owner_routes_xess_and_refuses_presets() {
         assert_eq!((width, height), (1130, 636));
         assert_eq!(rsf_core_srvk_dlss_preset(owner, 1), NOT_SUPPORTED);
         let record = record([1100, 600], 1);
-        let input = frame(&record);
-        fake.calls.clear();
+        let mut input = frame(&record);
+        edit_state(|fake| fake.calls.clear());
         let commands = ptr::dangling_mut::<u32>().cast();
+        input.sharpening.struct_size = 1;
+        assert_eq!(rsf_core_srvk_evaluate(owner, commands, &input), INVALID);
+        assert!(calls().is_empty());
+        input.sharpening.struct_size = 0;
         assert_eq!(rsf_core_srvk_evaluate(owner, commands, &input), 0);
-        assert!(
-            fake.calls
-                .contains(&Call::Execute(1100, 600, 1920, 1080, 1))
-        );
+        assert!(calls().contains(&Call::Execute(1100, 600, 1920, 1080, 1)));
         rsf_core_srvk_retire_commands(owner, commands);
-        assert_eq!(fake.calls.last(), Some(&Call::Retire(commands as usize)));
+        assert_eq!(calls().last(), Some(&Call::Retire(commands as usize)));
         assert_eq!(rsf_core_srvk_destroy(owner), 0);
-        assert_eq!(fake.calls.last(), Some(&Call::Close));
+        assert_eq!(calls().last(), Some(&Call::Close));
         assert_eq!(rsf_core_xessvk_shutdown(Some(&OPS)), 0);
     });
 }

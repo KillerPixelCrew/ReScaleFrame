@@ -5,7 +5,10 @@ use crate::sharpening_policy;
 use crate::sr_session::has_capacity;
 use crate::vulkan_dispatch::promoted_device_proc_alias;
 use crate::vulkan_fg_copy::{Barrier, BarrierFn, CopyFn, ImageCopy, TRANSFER_SRC, UNDEFINED};
-use crate::vulkan_fg_resources_abi::rsf_vkfg_platform as ImageOps;
+use crate::vulkan_fg_resources::{
+    MemoryChoice, ensure_image_with_memory, rsf_core_vkfg_release_image,
+};
+use crate::vulkan_fg_resources_abi::{rsf_vkfg_image as OwnedImage, rsf_vkfg_platform as ImageOps};
 use crate::vulkan_sr_abi::*;
 use crate::vulkan_sr_split::normalize_frame;
 use rsf_game_sys::{
@@ -22,6 +25,7 @@ const NOT_COMPILED: i32 = -3;
 const MISSING_ENTRY_POINT: i32 = -5;
 const INIT_FAILED: i32 = -6;
 const NOT_SUPPORTED: i32 = -7;
+const NOT_READY: i32 = -8;
 const WRONG_API: i32 = -12;
 
 // Vulkan C ABI values, checked against the native headers at the graphics bridge.
@@ -366,11 +370,10 @@ struct FfxOps {
     destroy_effect: unsafe extern "C" fn(Handle) -> i32,
     plan: unsafe extern "C" fn(Handle, &Setup, &mut u32, &mut u32) -> i32,
     // Typed vkCreateImage/requirements/vkAllocateMemory/vkBindImageMemory leaves and the
-    // device-local mask over the owner's device; Rust sequences them in StagingImage::allocate.
+    // device-local mask over the owner's device.
     image_user: unsafe extern "C" fn(Handle) -> Handle,
     images: &'static ImageOps,
     memory_type_count: unsafe extern "C" fn(Handle) -> u32,
-    release: unsafe extern "C" fn(Handle, u64, u64),
     barrier: BarrierFn,
     clear_color_zero: unsafe extern "C" fn(Handle, Handle, u64, u32),
     dispatch: unsafe extern "C" fn(Handle, Handle, &FfxDispatch) -> i32,
@@ -405,89 +408,52 @@ struct FfxDispatch<'a> {
 }
 
 const _: () = {
-    assert!(size_of::<FfxOps>() == 29 * size_of::<usize>());
+    assert!(size_of::<FfxOps>() == 28 * size_of::<usize>());
     assert!(size_of::<FfxExports>() == 4 * size_of::<usize>());
     assert!(size_of::<FfxDeviceEntries>() == 9 * size_of::<usize>());
-    assert!(std::mem::offset_of!(FfxOps, barrier) == 17 * 8);
-    assert!(std::mem::offset_of!(FfxOps, clear_color_zero) == 18 * 8);
-    assert!(std::mem::offset_of!(FfxOps, dispatch) == 19 * 8);
-    assert!(std::mem::offset_of!(FfxOps, copy) == 20 * 8);
-    assert!(std::mem::offset_of!(FfxOps, sharpen) == 21 * 8);
-    assert!(size_of::<Platform>() == 288);
+    assert!(std::mem::offset_of!(FfxOps, barrier) == 16 * 8);
+    assert!(std::mem::offset_of!(FfxOps, clear_color_zero) == 17 * 8);
+    assert!(std::mem::offset_of!(FfxOps, dispatch) == 18 * 8);
+    assert!(std::mem::offset_of!(FfxOps, copy) == 19 * 8);
+    assert!(std::mem::offset_of!(FfxOps, sharpen) == 20 * 8);
+    assert!(size_of::<Platform>() == 280);
     assert!(size_of::<Blit>() == 24);
     assert!(size_of::<FfxDispatch>() == 144);
     assert!(std::mem::offset_of!(FfxDispatch, reset) == 136);
 };
 
-struct StagingImage {
-    description: Image,
-    memory: u64,
+fn image_descriptor(device: Device, image: &OwnedImage, layout: u32) -> Image {
+    Image {
+        device,
+        image: image.image,
+        width: image.width,
+        height: image.height,
+        format: image.format,
+        layout,
+        copy_source: u32::from(image.usage & TRANSFER_SRC_USAGE != 0),
+    }
 }
 
-impl StagingImage {
-    fn new(device: Device, [width, height]: [u32; 2], format: u32, layout: u32) -> Self {
+struct CreateError<T> {
+    status: i32,
+    cleanup: Option<T>,
+}
+
+impl<T> From<i32> for CreateError<T> {
+    fn from(status: i32) -> Self {
         Self {
-            description: Image {
-                device,
-                image: 0,
-                width,
-                height,
-                format,
-                layout,
-                copy_source: 0,
-            },
-            memory: 0,
+            status,
+            cleanup: None,
         }
-    }
-
-    /// Creates the 2D optimal-tiling image, then allocates and binds dedicated memory.
-    /// Each handle is published as soon as it exists, so a failed later step leaves it
-    /// for the owner's `release`. Every Vulkan failure reports `INIT_FAILED`.
-    unsafe fn allocate(&mut self, ops: &FfxOps, handle: Handle, usage: u32) -> Result<(), i32> {
-        let images = ops.images;
-        let user = unsafe { (ops.image_user)(handle) };
-        let description = &mut self.description;
-        let mut image = 0;
-        let result = unsafe {
-            (images.create_image.unwrap())(
-                user,
-                description.width,
-                description.height,
-                description.format,
-                usage,
-                &mut image,
-            )
-        };
-        if result != 0 {
-            return Err(INIT_FAILED);
-        }
-        description.image = image;
-        let (mut size, mut required) = (0, 0);
-        unsafe { (images.requirements.unwrap())(user, image, &mut size, &mut required) };
-        let kind = memory_type(
-            required,
-            unsafe { (ops.memory_type_count)(handle) },
-            unsafe { (images.local_memory_types.unwrap())(user) },
-        )
-        .ok_or(INIT_FAILED)?;
-        let mut memory = 0;
-        if unsafe { (images.allocate.unwrap())(user, size, kind, &mut memory) } != 0 {
-            return Err(INIT_FAILED);
-        }
-        self.memory = memory;
-        if unsafe { (images.bind.unwrap())(user, image, memory) } != 0 {
-            return Err(INIT_FAILED);
-        }
-        Ok(())
     }
 }
 
-/// The first compatible device-local memory type, else the last compatible type.
-fn memory_type(required: u32, count: u32, device_local: u32) -> Option<u32> {
-    let compatible = required & 1u32.checked_shl(count).map_or(u32::MAX, |bit| bit - 1);
-    match compatible & device_local {
-        0 => compatible.checked_ilog2(),
-        preferred => Some(preferred.trailing_zeros()),
+impl<T> CreateError<T> {
+    fn map<U>(self, wrap: impl FnOnce(T) -> U) -> CreateError<U> {
+        CreateError {
+            status: self.status,
+            cleanup: self.cleanup.map(wrap),
+        }
     }
 }
 
@@ -503,11 +469,11 @@ struct FidelityFx {
     ops: &'static FfxOps,
     handle: Handle,
     dispatch_lease: Option<DispatchLease>,
-    module: Option<SdkModule>,
+    _module: SdkModule,
     effect_live: bool,
     initialized: bool,
-    output: StagingImage,
-    zero_mask: StagingImage,
+    output: OwnedImage,
+    zero_mask: OwnedImage,
     history: History,
 }
 
@@ -561,24 +527,38 @@ impl FfxOps {
 }
 
 impl FidelityFx {
-    unsafe fn create(ops: &'static FfxOps, setup: &Setup) -> Result<(Self, [u32; 2]), i32> {
+    unsafe fn create(
+        ops: &'static FfxOps,
+        setup: &Setup,
+    ) -> Result<(Box<Self>, [u32; 2]), CreateError<Box<Self>>> {
         let output = [setup.output_width, setup.output_height];
         let module =
             unsafe { SdkModule::open(ops.loader, setup.runtime_directory_utf8, FIDELITYFX_DLL) }?;
         let handle = ops.open_sdk(setup, &module)?;
-        let mut owner = Self {
+        let mut owner = Box::new(Self {
             ops,
             handle,
             dispatch_lease: None,
-            module: Some(module),
+            _module: module,
             effect_live: false,
             initialized: false,
-            output: StagingImage::new(setup.device, output, RGBA16_FLOAT, GENERAL),
-            zero_mask: StagingImage::new(setup.device, [0, 0], R8_UNORM, SHADER_READ),
+            output: OwnedImage::default(),
+            zero_mask: OwnedImage::default(),
             history: History::default(),
-        };
+        });
+        match unsafe { owner.initialize(setup, output) } {
+            Ok(plan) => Ok((owner, plan)),
+            Err(status) => {
+                let cleanup = (owner.effect_live && owner.destroy_effect() != 0).then_some(owner);
+                Err(CreateError { status, cleanup })
+            }
+        }
+    }
+
+    unsafe fn initialize(&mut self, setup: &Setup, output: [u32; 2]) -> Result<[u32; 2], i32> {
+        let (ops, handle) = (self.ops, self.handle);
         check(dispatch_register(setup.device, setup.device_proc))?;
-        owner.dispatch_lease = Some(DispatchLease(setup.device));
+        self.dispatch_lease = Some(DispatchLease(setup.device));
         ops.prepare_graphics(handle, setup)?;
         let mut versions = [Version::default(); MAX_VERSIONS];
         let mut count = 0;
@@ -597,7 +577,7 @@ impl FidelityFx {
             | (setup.depth_infinite * FFX_INFINITE_DEPTH)
             | (setup.motion_jittered * FFX_JITTER_CANCELLATION);
         // Creation can leave a partial context for the cleanup leaf.
-        owner.effect_live = true;
+        self.effect_live = true;
         check(unsafe { (ops.create_effect)(handle, setup, version, flags) })?;
         let mut effective = 0;
         check(unsafe { (ops.effective_version)(handle, &mut effective) })?;
@@ -616,20 +596,26 @@ impl FidelityFx {
         if plan.contains(&0) {
             return Err(INIT_FAILED);
         }
-        [
-            owner.zero_mask.description.width,
-            owner.zero_mask.description.height,
-        ] = plan;
         let mask_usage = TRANSFER_DST_USAGE | SAMPLED_USAGE;
         let output_usage = mask_usage | STORAGE_USAGE | TRANSFER_SRC_USAGE;
-        for (image, usage) in [
-            (&mut owner.output, output_usage),
-            (&mut owner.zero_mask, mask_usage),
+        let user = unsafe { (ops.image_user)(handle) };
+        let type_count = unsafe { (ops.memory_type_count)(handle) };
+        for (image, extent, format, usage) in [
+            (&mut self.output, output, RGBA16_FLOAT, output_usage),
+            (&mut self.zero_mask, plan, R8_UNORM, mask_usage),
         ] {
-            image.description.copy_source = u32::from(usage & TRANSFER_SRC_USAGE != 0);
-            unsafe { image.allocate(ops, handle, usage) }?;
+            ensure_image_with_memory(
+                ops.images,
+                user,
+                image,
+                extent,
+                format,
+                usage,
+                (false, MemoryChoice::PreferDeviceLocal { type_count }),
+            )
+            .map_err(|_| INIT_FAILED)?;
         }
-        Ok((owner, plan))
+        Ok(plan)
     }
 
     fn record_capture(
@@ -673,8 +659,8 @@ impl FidelityFx {
                 }
             }
         }
-        let output = self.output.description;
-        let zero = self.zero_mask.description;
+        let output = image_descriptor(setup.device, &self.output, GENERAL);
+        let zero = image_descriptor(setup.device, &self.zero_mask, SHADER_READ);
         let barrier = |image, from, to, source_access, target_access| {
             let plan = Barrier::with_access(image, from, to, source_access, target_access);
             unsafe { (ops.barrier)(handle, commands, &plan) };
@@ -738,8 +724,8 @@ impl FidelityFx {
             self.history = History::default();
             return result;
         }
-        unsafe { (ops.sharpen)(handle, setup, commands, frame, output.image) };
         self.record_capture(commands, &output, record, c"sr-output-linear", reset);
+        unsafe { (ops.sharpen)(handle, setup, commands, frame, output.image) };
         barrier(
             output.image,
             GENERAL,
@@ -772,6 +758,10 @@ impl FidelityFx {
     fn destroy(&mut self) -> i32 {
         // The ABI requires the caller to drain all work referencing this owner.
         unsafe { (self.ops.flush_capture)(self.handle) };
+        self.destroy_effect()
+    }
+
+    fn destroy_effect(&mut self) -> i32 {
         let result = unsafe { (self.ops.destroy_effect)(self.handle) };
         if result == 0 {
             self.effect_live = false;
@@ -782,18 +772,15 @@ impl FidelityFx {
 
 impl Drop for FidelityFx {
     fn drop(&mut self) {
-        // Public destruction drops this owner after the SDK accepts it. A failed constructor
-        // has no public handle to return, so if rollback refuses, keep the native leaf,
-        // module and device dispatch alive instead of unloading live SDK code.
+        // Checked destruction and constructor rollback clear the effect first.
+        debug_assert!(!self.effect_live);
         unsafe {
-            if self.effect_live && (self.ops.destroy_effect)(self.handle) != 0 {
-                std::mem::forget(self.dispatch_lease.take());
-                std::mem::forget(self.module.take());
-                return;
-            }
             (self.ops.clear_sharpen)(self.handle);
-            for image in [&self.output, &self.zero_mask] {
-                (self.ops.release)(self.handle, image.description.image, image.memory);
+            if self.output.image != 0 || self.zero_mask.image != 0 {
+                let user = (self.ops.image_user)(self.handle);
+                for image in [&mut self.output, &mut self.zero_mask] {
+                    rsf_core_vkfg_release_image(self.ops.images, user, image);
+                }
             }
             (self.ops.close)(self.handle);
         }
@@ -802,7 +789,7 @@ impl Drop for FidelityFx {
 
 enum Backend {
     Dlss(Box<crate::vulkan_dlss_sr::Owner>),
-    Ffx(FidelityFx),
+    Ffx(Box<FidelityFx>),
     Xess(Box<xess::XessOwner>),
 }
 
@@ -814,32 +801,43 @@ struct Owner {
 }
 
 impl Owner {
-    unsafe fn create(platform: &'static Platform, mut setup: Setup) -> Result<Self, i32> {
-        let (backend, render) = match setup.backend {
-            RSF_SR_DLSS => {
-                let ops = platform.dlss.ok_or(NOT_COMPILED)?;
-                let owner = crate::vulkan_dlss_sr::Owner::create(ops, &setup)?;
-                let plan = owner.plan();
-                (Backend::Dlss(owner), plan)
-            }
-            RSF_SR_XESS => {
-                let ops = platform.xess.ok_or(NOT_COMPILED)?;
-                let owner = unsafe { xess::XessOwner::create(ops, &setup) }?;
-                let plan = owner.plan();
-                (Backend::Xess(Box::new(owner)), plan)
-            }
-            _ => {
-                let (owner, render) = unsafe { FidelityFx::create(&platform.ffx, &setup) }?;
-                (Backend::Ffx(owner), render)
-            }
-        };
+    unsafe fn create(
+        platform: &'static Platform,
+        mut setup: Setup,
+    ) -> Result<Self, CreateError<Self>> {
+        let result = (|| -> Result<_, CreateError<Backend>> {
+            let (backend, render) = match setup.backend {
+                RSF_SR_DLSS => {
+                    let ops = platform.dlss.ok_or(NOT_COMPILED)?;
+                    let owner = crate::vulkan_dlss_sr::Owner::create(ops, &setup)?;
+                    let plan = owner.plan();
+                    (Backend::Dlss(owner), plan)
+                }
+                RSF_SR_XESS => {
+                    let ops = platform.xess.ok_or(NOT_COMPILED)?;
+                    let owner = unsafe { xess::XessOwner::create(ops, &setup) }
+                        .map_err(|e| e.map(Backend::Xess))?;
+                    let plan = owner.plan();
+                    (Backend::Xess(owner), plan)
+                }
+                _ => {
+                    let (owner, render) = unsafe { FidelityFx::create(&platform.ffx, &setup) }
+                        .map_err(|e| e.map(Backend::Ffx))?;
+                    (Backend::Ffx(owner), render)
+                }
+            };
+            Ok((backend, render))
+        })();
         setup.runtime_directory_utf8 = ptr::null();
-        Ok(Self {
+        let wrap = |backend, render| Self {
             setup,
             platform,
             backend,
             render,
-        })
+        };
+        result
+            .map(|(backend, render)| wrap(backend, render))
+            .map_err(|e| e.map(|backend| wrap(backend, [0; 2])))
     }
 }
 
@@ -865,7 +863,12 @@ unsafe extern "C" fn rsf_core_srvk_create(
             unsafe { out.write(Box::into_raw(Box::new(owner)).cast()) };
             0
         }
-        Err(error) => error,
+        Err(error) => {
+            if let Some(cleanup) = error.cleanup {
+                unsafe { out.write(Box::into_raw(Box::new(cleanup)).cast()) };
+            }
+            error.status
+        }
     }
 }
 
@@ -880,6 +883,9 @@ unsafe extern "C" fn rsf_core_srvk_plan(
     };
     if width.is_null() || height.is_null() {
         return INVALID;
+    }
+    if owner.render == [0; 2] {
+        return NOT_READY;
     }
     unsafe {
         width.write(owner.render[0]);
@@ -905,6 +911,9 @@ unsafe extern "C" fn rsf_core_srvk_evaluate(
         return INVALID;
     }
     let owner = unsafe { &mut *owner };
+    if owner.render == [0; 2] {
+        return NOT_READY;
+    }
     let admission = unsafe { frame_admit(&owner.setup, &frame, owner.render) };
     if admission != 0 {
         return admission;
@@ -926,6 +935,9 @@ unsafe extern "C" fn rsf_core_srvk_retire_commands(owner: *mut Owner, commands: 
         return;
     }
     if let Some(owner) = unsafe { owner.as_mut() } {
+        if owner.render == [0; 2] {
+            return;
+        }
         match &mut owner.backend {
             Backend::Dlss(dlss) => dlss.retire_commands(commands),
             Backend::Ffx(ffx) => ffx.retire_commands(commands),
@@ -955,6 +967,9 @@ unsafe extern "C" fn rsf_core_srvk_dlss_preset(owner: *mut Owner, preset: u32) -
     let Some(owner) = (unsafe { owner.as_mut() }) else {
         return INVALID;
     };
+    if owner.render == [0; 2] {
+        return NOT_READY;
+    }
     if let Backend::Dlss(dlss) = &mut owner.backend {
         return dlss.set_preset(preset);
     }
@@ -1102,6 +1117,14 @@ mod tests {
             unsafe { rsf_core_srvk_dispatch_lookup(device, c"vkOther".as_ptr(), call) }.is_none()
         );
     }
+}
+
+#[cfg(test)]
+macro_rules! leaf {
+    (|$($arg:tt: $ty:ty),*| -> $ret:ty $body:block) => {{
+        unsafe extern "C" fn callback($($arg: $ty),*) -> $ret $body
+        callback
+    }};
 }
 
 #[cfg(test)]

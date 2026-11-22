@@ -4,6 +4,7 @@
 //! order and teardown. Rust plans transfers and the native table performs the
 //! typed Vulkan and SDK calls.
 use super::*;
+use crate::frame_capture_vk::sr_capture_inputs;
 use crate::sdk_module::{Loader, SdkModule};
 use crate::vulkan_fg_copy::{
     Barrier, BarrierFn, CopyFn, ImageCopy, TRANSFER_SRC, UNDEFINED, record_shader_read_copy,
@@ -15,7 +16,6 @@ use std::sync::{Arc, PoisonError};
 
 const LOAD_FAILED: i32 = -4;
 const MISSING_ENTRY: i32 = -5;
-const NOT_READY: i32 = -8;
 const FEATURE_FAILED: i32 = -9;
 
 // SDK C ABI values, checked against xess.h by the native leaf.
@@ -329,36 +329,13 @@ unsafe extern "C" fn rsf_core_xessvk_shutdown(ops: Option<&'static XessOps>) -> 
     0
 }
 
-// A private image and the native objects behind it.
-struct Private {
-    description: Image,
-    allocation: OwnedImage,
-}
-
-impl Private {
-    fn new(device: Device, [width, height]: [u32; 2], format: u32) -> Self {
-        Self {
-            description: Image {
-                device,
-                image: 0,
-                width,
-                height,
-                format,
-                layout: GENERAL,
-                copy_source: 1,
-            },
-            allocation: OwnedImage::default(),
-        }
-    }
-
-    fn texture(&self, [width, height]: [u32; 2]) -> XessTexture {
-        XessTexture {
-            image: self.description.image,
-            view: self.allocation.view,
-            width,
-            height,
-            format: self.description.format,
-        }
+fn texture(image: &OwnedImage) -> XessTexture {
+    XessTexture {
+        image: image.image,
+        view: image.view,
+        width: image.width,
+        height: image.height,
+        format: image.format,
     }
 }
 
@@ -373,27 +350,29 @@ pub(super) struct XessOwner {
     active: [u32; 2],
     history: History,
     range_logged: bool,
-    color: Private,
-    depth: Private,
-    motion: Private,
-    output: Private,
+    color: OwnedImage,
+    depth: OwnedImage,
+    motion: OwnedImage,
+    output: OwnedImage,
     // Dropped after the native owner, which copied this SDK's entry points.
     _library: Arc<Library>,
 }
 
 impl XessOwner {
-    pub(super) unsafe fn create(ops: &'static XessOps, setup: &Setup) -> Result<Self, i32> {
+    pub(super) unsafe fn create(
+        ops: &'static XessOps,
+        setup: &Setup,
+    ) -> Result<Box<Self>, CreateError<Box<Self>>> {
         let library = session().clone().ok_or(NOT_READY)?;
         let mut native = ptr::null_mut();
         check(unsafe { (ops.open)(library.handle, &mut native) })?;
         if native.is_null() {
-            return Err(INIT_FAILED);
+            return Err(INIT_FAILED.into());
         }
-        let device = setup.device;
         let output = [setup.output_width, setup.output_height];
         let mut setup = *setup;
         setup.runtime_directory_utf8 = ptr::null();
-        let mut owner = Self {
+        let mut owner = Box::new(Self {
             ops,
             native,
             setup,
@@ -404,12 +383,23 @@ impl XessOwner {
             active: [0; 2],
             history: History::default(),
             range_logged: false,
-            color: Private::new(device, [0; 2], RGBA16_FLOAT),
-            depth: Private::new(device, [0; 2], R32_FLOAT),
-            motion: Private::new(device, [0; 2], RG16_FLOAT),
-            output: Private::new(device, output, RGBA16_FLOAT),
+            color: OwnedImage::default(),
+            depth: OwnedImage::default(),
+            motion: OwnedImage::default(),
+            output: OwnedImage::default(),
             _library: library,
-        };
+        });
+        match unsafe { owner.initialize(output) } {
+            Ok(()) => Ok(owner),
+            Err(status) => {
+                let cleanup = (owner.destroy_context() != 0).then_some(owner);
+                Err(CreateError { status, cleanup })
+            }
+        }
+    }
+
+    unsafe fn initialize(&mut self, output: [u32; 2]) -> Result<(), i32> {
+        let (ops, native, setup) = (self.ops, self.native, self.setup);
         // A refused creation can leave a partial context for the cleanup leaf.
         sdk(unsafe { (ops.create_context)(native, &setup) }, INIT_FAILED)?;
         let init = XessInit {
@@ -436,40 +426,27 @@ impl XessOwner {
         {
             return Err(INIT_FAILED);
         }
-        (owner.plan, owner.minimum, owner.maximum) = (plan, minimum, maximum);
+        (self.plan, self.minimum, self.maximum) = (plan, minimum, maximum);
         check(unsafe { (ops.bind_device)(native, &setup) })?;
         let mut version = [0; 4];
         // A missing version leaves an unidentified provider in capture metadata.
-        let _ = unsafe { (ops.version)(owner._library.handle, &mut version) };
+        let _ = unsafe { (ops.version)(self._library.handle, &mut version) };
         let provider = version
             .iter()
             .fold(0u64, |value, &part| (value << 16) | u64::from(part));
         unsafe { (ops.capture_provider)(native, provider, RSF_SR_XESS) };
         // Inputs cover the SDK maximum; each frame names its active subrectangle.
-        for image in [&mut owner.color, &mut owner.depth, &mut owner.motion] {
-            [image.description.width, image.description.height] = maximum;
-        }
         let image_user = unsafe { (ops.image_user)(native) };
-        for (image, usage) in [
-            (&mut owner.color, INPUT_USAGE),
-            (&mut owner.depth, INPUT_USAGE),
-            (&mut owner.motion, INPUT_USAGE),
-            (&mut owner.output, OUTPUT_USAGE),
+        for (image, extent, format, usage) in [
+            (&mut self.color, maximum, RGBA16_FLOAT, INPUT_USAGE),
+            (&mut self.depth, maximum, R32_FLOAT, INPUT_USAGE),
+            (&mut self.motion, maximum, RG16_FLOAT, INPUT_USAGE),
+            (&mut self.output, output, RGBA16_FLOAT, OUTPUT_USAGE),
         ] {
-            let desc = &mut image.description;
-            ensure_image(
-                ops.images,
-                image_user,
-                &mut image.allocation,
-                [desc.width, desc.height],
-                desc.format,
-                usage,
-                true,
-            )
-            .map_err(|_| INIT_FAILED)?;
-            desc.image = image.allocation.image;
+            ensure_image(ops.images, image_user, image, extent, format, usage, true)
+                .map_err(|_| INIT_FAILED)?;
         }
-        Ok(owner)
+        Ok(())
     }
 
     pub(super) fn plan(&self) -> [u32; 2] {
@@ -542,21 +519,21 @@ impl XessOwner {
                     native,
                     commands,
                     source.image,
-                    &target.allocation,
+                    target,
                     [source.width, source.height],
                 )
             };
-            target.allocation.initialized = 1;
+            target.initialized = 1;
         }
-        let output_image = self.output.description.image;
-        let output_before = if self.output.allocation.initialized == 0 {
+        let output_image = self.output.image;
+        let output_before = if self.output.initialized == 0 {
             UNDEFINED
         } else {
             GENERAL
         };
         let barrier = |plan: Barrier| unsafe { (ops.barrier)(native, commands, &plan) };
         barrier(Barrier::new(output_image, output_before, GENERAL));
-        self.output.allocation.initialized = 1;
+        self.output.initialized = 1;
 
         let render = [record.render_width, record.render_height];
         let output = [record.output_width, record.output_height];
@@ -565,7 +542,7 @@ impl XessOwner {
             color: self.color.texture(self.maximum),
             depth: self.depth.texture(self.maximum),
             motion: self.motion.texture(self.maximum),
-            output: self.output.texture(output),
+            output: texture(&self.output),
             jitter: record.camera.jitter_pixels,
             exposure_scale: 1.0 / frame.pre_exposure,
             input_width: render[0],
@@ -577,21 +554,12 @@ impl XessOwner {
             return FEATURE_FAILED;
         }
         unsafe { (ops.capture_parameters)(frame, RSF_SR_XESS, reset) };
-        for (image, role) in [
-            (&frame.color, c"sr-source-jittered"),
-            (&frame.color, c"sr-linear-color"),
-            (&frame.depth, c"sr-depth"),
-            (&frame.motion, c"sr-motion-uv"),
-        ] {
+        for (image, role) in sr_capture_inputs(frame) {
             self.record_capture(commands, image, record, role, reset);
         }
-        let private = Image {
-            width: output[0],
-            height: output[1],
-            ..self.output.description
-        };
-        unsafe { (ops.sharpen)(native, &self.setup, commands, frame, private.image) };
+        let private = image_descriptor(self.setup.device, &self.output, GENERAL);
         self.record_capture(commands, &private, record, c"sr-output-linear", reset);
+        unsafe { (ops.sharpen)(native, &self.setup, commands, frame, private.image) };
         // The caller already supplied its output in TRANSFER_DST_OPTIMAL.
         barrier(Barrier::new(output_image, GENERAL, TRANSFER_SRC));
         unsafe {
@@ -628,6 +596,10 @@ impl XessOwner {
     pub(super) fn destroy(&mut self) -> i32 {
         // The ABI requires the caller to drain all work referencing this owner.
         unsafe { (self.ops.flush_capture)(self.native) };
+        self.destroy_context()
+    }
+
+    fn destroy_context(&mut self) -> i32 {
         if self.context_live {
             if unsafe { (self.ops.destroy_context)(self.native) } != XESS_SUCCESS {
                 return FEATURE_FAILED;
@@ -640,14 +612,10 @@ impl XessOwner {
 
 impl Drop for XessOwner {
     fn drop(&mut self) {
-        // Public destruction drops the owner only after the SDK accepted it.
-        // The remaining best-effort SDK cleanup is for refused construction.
+        debug_assert!(!self.context_live);
         let ops = self.ops;
         unsafe {
             (ops.clear_sharpen)(self.native);
-            if self.context_live {
-                (ops.destroy_context)(self.native);
-            }
             let image_user = (ops.image_user)(self.native);
             for image in [
                 &mut self.color,
@@ -655,114 +623,11 @@ impl Drop for XessOwner {
                 &mut self.motion,
                 &mut self.output,
             ] {
-                rsf_core_vkfg_release_image(ops.images, image_user, &mut image.allocation);
+                rsf_core_vkfg_release_image(ops.images, image_user, image);
             }
             (ops.close)(self.native);
         }
     }
-}
-
-unsafe fn owner_admit(
-    owner: &XessOwner,
-    commands: Handle,
-    frame: *const Frame,
-) -> Result<Frame, i32> {
-    if commands.is_null() {
-        return Err(INVALID);
-    }
-    let frame = unsafe { normalize_frame(frame) }?;
-    check(unsafe { frame_admit(&owner.setup, &frame, owner.plan) })?;
-    Ok(frame)
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_xessvk_create(
-    ops: Option<&'static XessOps>,
-    setup: *const Setup,
-    out: *mut *mut XessOwner,
-) -> i32 {
-    if out.is_null() {
-        return INVALID;
-    }
-    unsafe { out.write(ptr::null_mut()) };
-    let admission = unsafe { setup_admit(setup) };
-    if admission != 0 {
-        return admission;
-    }
-    if unsafe { (*setup).backend } != RSF_SR_XESS {
-        return INVALID;
-    }
-    let Some(ops) = ops else {
-        return NOT_COMPILED;
-    };
-    match unsafe { XessOwner::create(ops, &*setup) } {
-        Ok(owner) => {
-            let raw = crate::allocate_handle(owner);
-            if raw.is_null() {
-                return INIT_FAILED;
-            }
-            unsafe { out.write(raw) };
-            0
-        }
-        Err(error) => error,
-    }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_xessvk_plan(
-    owner: *const XessOwner,
-    width: *mut u32,
-    height: *mut u32,
-) -> i32 {
-    let Some(owner) = (unsafe { owner.as_ref() }) else {
-        return INVALID;
-    };
-    if width.is_null() || height.is_null() {
-        return INVALID;
-    }
-    let [w, h] = owner.plan();
-    unsafe {
-        width.write(w);
-        height.write(h);
-    }
-    0
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_xessvk_evaluate(
-    owner: *mut XessOwner,
-    commands: Handle,
-    frame: *const Frame,
-) -> i32 {
-    let Some(owner) = (unsafe { owner.as_mut() }) else {
-        return INVALID;
-    };
-    match unsafe { owner_admit(owner, commands, frame) } {
-        Ok(frame) => owner.evaluate(commands, &frame),
-        Err(error) => error,
-    }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_xessvk_retire_commands(owner: *mut XessOwner, commands: Handle) {
-    if commands.is_null() {
-        return;
-    }
-    if let Some(owner) = unsafe { owner.as_ref() } {
-        owner.retire_commands(commands);
-    }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_xessvk_destroy(owner: *mut XessOwner) -> i32 {
-    let Some(raw) = NonNull::new(owner) else {
-        return 0;
-    };
-    let result = unsafe { &mut *owner }.destroy();
-    if result == 0 {
-        drop(unsafe { Box::from_raw(raw.as_ptr()) });
-    }
-    result
 }
 
 #[cfg(test)]

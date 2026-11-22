@@ -130,3 +130,18 @@ unsafe extern "C" fn rsf_core_vk_sdk_pin(module: *mut c_void) -> u32 {
         } != 0,
     )
 }
+
+// Shared C callback for the FidelityFX SR and FG platform tables.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_vkffx_symbol(
+    module: *mut c_void,
+    name: *const c_char,
+) -> crate::vulkan_sr_abi::rsf_vk_function {
+    // Windows x64 uses the same ABI for system and C procedure pointers.
+    unsafe {
+        std::mem::transmute::<FARPROC, crate::vulkan_sr_abi::rsf_vk_function>(GetProcAddress(
+            module,
+            name.cast(),
+        ))
+    }
+}

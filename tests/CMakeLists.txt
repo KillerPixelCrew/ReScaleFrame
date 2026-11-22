@@ -3,11 +3,26 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/d3d11_host_rendered_fg_device.cmake")
 # Explicit regression investigation only: requires a scratch vendor-SDK root and NVIDIA GPU.
 add_executable(rsf_d3d11_host_shared_sr_device EXCLUDE_FROM_ALL d3d11_host_shared_sr_device.cpp)
 target_link_libraries(rsf_d3d11_host_shared_sr_device PRIVATE rsf_orchestrator rsf_build_options d3d11 dxgi)
-add_executable(rsf_native_vulkan_exports_test native_vulkan_exports.cpp)
-target_link_libraries(rsf_native_vulkan_exports_test PRIVATE rsf_build_options)
+find_program(RSF_TEST_RUSTC rustc REQUIRED)
+if(MSVC)
+    set(rsf_test_rust_target x86_64-pc-windows-msvc)
+else()
+    set(rsf_test_rust_target x86_64-pc-windows-gnu)
+endif()
+set(rsf_vulkan_exports_dir "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>")
+set(rsf_vulkan_exports_exe "${rsf_vulkan_exports_dir}/rsf_native_vulkan_exports_test.exe")
+set(rsf_vulkan_exports_source "${CMAKE_CURRENT_SOURCE_DIR}/native_vulkan_exports.rs")
+add_custom_command(OUTPUT "${rsf_vulkan_exports_exe}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${rsf_vulkan_exports_dir}"
+    COMMAND "${RSF_TEST_RUSTC}" --edition=2024 --target "${rsf_test_rust_target}"
+        -D warnings "${rsf_vulkan_exports_source}" -o "${rsf_vulkan_exports_exe}"
+    DEPENDS "${rsf_vulkan_exports_source}"
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    VERBATIM)
+add_custom_target(rsf_native_vulkan_exports_test ALL DEPENDS "${rsf_vulkan_exports_exe}")
 add_dependencies(rsf_native_vulkan_exports_test rsf_orchestrator)
-add_test(NAME native_vulkan_dll_exports COMMAND rsf_native_vulkan_exports_test
-    "$<TARGET_FILE:rsf_orchestrator>")
+add_test(NAME native_vulkan_dll_exports COMMAND ${CMAKE_CROSSCOMPILING_EMULATOR}
+    "${rsf_vulkan_exports_exe}" "$<TARGET_FILE:rsf_orchestrator>")
 add_executable(rsf_shader_patch_test shader_patch_main.c)
 target_link_libraries(rsf_shader_patch_test PRIVATE rsf_shader_patch rsf_build_options)
 add_executable(rsf_shader_patch_device_test shader_patch_main.c)
@@ -658,7 +673,7 @@ if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_XESS_VK_INCL
     target_include_directories(rsf_native_xess_vulkan_test SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}")
 endif()
 add_test(NAME native_xess_vulkan_contract COMMAND rsf_native_xess_vulkan_test)
-if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_XESS_VK_INCLUDE}/xess/xess_vk.h")
+if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_XESS_VK_INCLUDE}/xess/xess_vk.h" AND EXISTS "${RSF_FFX_VK_INCLUDE}/ffx_api/vk/ffx_api_vk.h")
     add_executable(rsf_native_xess_input_range_test native_xess_vulkan.cpp)
     target_compile_definitions(rsf_native_xess_input_range_test PRIVATE RSF_TEST_XESS_INPUT_RANGE RSF_HAVE_XESS_VK RSF_RUNTIME_BUILD)
     target_include_directories(rsf_native_xess_input_range_test SYSTEM PRIVATE "${RSF_VULKAN_INCLUDE}" "${RSF_XESS_VK_INCLUDE}")

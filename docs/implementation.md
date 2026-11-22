@@ -7495,3 +7495,15 @@ PCL telemetry: overlay ABI18 now carries actual keyboard/mouse/controller receip
 NVIDIA PCL tools located in official Reflex revision c2522cee75be7a952ab29281c4cf6d978c5e2e0e. PrintPCL failed FvSDK_CreateSession -1; full validation requires FrameView SDK setup/system restart per consumed NVIDIA guide. No installer, setup batch, reboot or vendor-tool acceptance performed.
 
 Session stopped at user request. User accepts the deployed SR/FG state as sufficient. PCL overlay ABI18 is built and CPU-tested; new overlay and XeLL settings guard were staged in trial235214, but gameplay/UI/settings verification was interrupted and remains incomplete. The stopped trial's21 manifest entries were restored and hash-verified by tools/restore-capture-trial.ps1 (resumed-restoration-20261116-235448-824.json). No FrameView installer, verification setup, reboot, full eng/verify.ps1 suite, release or readiness promotion performed. All current tracked changes and source diagnostics are checkpointed; licensed binaries, external references and captures remain ignored.
+
+
+### Vulkan SR provider admission (V01)
+
+Rust shares FidelityFX staging allocation with the Vulkan resource owner and
+preserves cleanup-only owners after refused FidelityFX or XeSS rollback. Vulkan
+SR captures the SDK output before RSF sharpening. The split FSR4 dispatcher
+uses its admitted records to create the owner. The XeSS fixtures exercise the
+production dispatcher, and a Rust fixture checks the Runtime DLL export
+inventory. [V01 port evidence](research/vulkan-sr-provider-admission-port.md)
+records the source checks, fixture changes and remaining C++ paths. Build,
+test, lint and device validation are pending.
