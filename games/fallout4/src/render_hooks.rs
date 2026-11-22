@@ -26,15 +26,14 @@ use crate::build_layout::{
 use crate::cpu_events::{
     begin_render as cpu_begin_render, rsf_fallout4_cpu_render_source_is_current,
 };
-use crate::creation::{ExactBuild, accept_window};
-use crate::render_inputs::verify_for_build;
+use crate::creation::accept_window;
 use crate::resolution::is_busy as resolution_busy;
 use crate::sys::rsf_fallout4_cpu_identity as CpuIdentity;
 use crate::sys::{
     NativeRenderExports as RenderExports, NativeRenderScopeKey as ScopeKey, NativeWorld as World,
     NativeWorldAdmission as WorldAdmission,
 };
-use crate::{MH_OK, image, read};
+use crate::{MH_OK, guard, image, read};
 use rsf_game_sys::{rsf_game_host_services, rsf_game_render_pass};
 use std::ffi::{CStr, c_void};
 use std::mem::offset_of;
@@ -242,11 +241,6 @@ const WORLD_CALLS: [(usize, usize); 8] = [
     IMAGESPACE_CALLS[2],
 ];
 
-/// An instruction guard of at most 16 bytes at `rva`.
-fn guard(rva: usize, expected: &[u8]) -> bool {
-    crate::matches_bytes::<16>(image() + rva, expected)
-}
-
 /// The rel32 call at `rva` targets `target`.
 fn call(rva: usize, target: usize) -> bool {
     let Some(bytes) = read::<[u8; REL32_CALL_SIZE]>(image() + rva) else {
@@ -261,9 +255,7 @@ fn call(rva: usize, target: usize) -> bool {
 /// sites and Present instructions, in the original order.
 pub(crate) fn verify() -> bool {
     let base = image();
-    HOOKS
-        .iter()
-        .all(|hook| crate::matches_bytes::<32>(base + hook.rva, hook.entry))
+    HOOKS.iter().all(|hook| guard(hook.rva, hook.entry))
         && crate::resolution::verify()
         && crate::screen::verify_queries()
         && crate::depth_domains::verify()
@@ -279,8 +271,8 @@ pub(crate) fn verify() -> bool {
 }
 
 /// The render hook guards, then the render-input reader guards.
-pub(crate) fn verify_with_inputs(build: &ExactBuild) -> bool {
-    verify() && verify_for_build(build)
+pub(crate) fn verify_with_inputs() -> bool {
+    verify() && crate::render_inputs::verify()
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -354,13 +346,8 @@ pub(crate) fn busy() -> bool {
 /// Checks the guards and the synchronous services, negotiates the Runtime exports and creates
 /// every missing detour disabled. A creation failure removes the hooks this call created, in
 /// reverse order; a removal MinHook refuses keeps its record and trampoline.
-pub(crate) fn prepare(services: &rsf_game_host_services, build: &ExactBuild) -> bool {
-    if live()
-        || busy()
-        || services.process_upscale.is_none()
-        || services.render_pass.is_none()
-        || !verify_with_inputs(build)
-    {
+pub(crate) fn prepare(services: &rsf_game_host_services) -> bool {
+    if live() || busy() || services.process_upscale.is_none() || services.render_pass.is_none() {
         return false;
     }
     let runtime = unsafe { GetModuleHandleW(w!("ReScaleFrame.Runtime.dll")) };

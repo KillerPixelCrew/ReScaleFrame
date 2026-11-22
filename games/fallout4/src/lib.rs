@@ -212,15 +212,31 @@ pub(crate) fn bind_presentation(
 
 pub(crate) use rsf_game_sys::win32::{Plain, read};
 
-/// Compares an entire guarded instruction span within the caller's byte limit.
-fn matches_bytes<const N: usize>(address: usize, expected: &[u8]) -> bool {
-    let mut actual = [0u8; N];
-    let Some(actual) = actual.get_mut(..expected.len()) else {
-        return false;
-    };
+/// Guarded read of `address` into `into`, left unchanged when the read fails.
+pub(crate) fn load<T: Plain>(address: usize, into: &mut T) -> bool {
+    read(address).map(|value| *into = value).is_some()
+}
+
+/// The guarded image bytes at `rva` equal `expected`. Startup verification only.
+pub(crate) fn guard(rva: usize, expected: &[u8]) -> bool {
+    let mut actual = vec![0u8; expected.len()];
     (unsafe {
-        rsf_game_sys::win32::read_process(address, actual.as_mut_ptr().cast(), actual.len())
-    }) && *actual == *expected
+        rsf_game_sys::win32::read_process(
+            image().wrapping_add(rva),
+            actual.as_mut_ptr().cast(),
+            actual.len(),
+        )
+    }) && actual == expected
+}
+
+/// Float arrays compared by bit pattern.
+pub(crate) fn bits<const N: usize>(values: &[f32; N]) -> [u32; N] {
+    values.map(f32::to_bits)
+}
+
+/// Two canonical identities of live objects name the same object.
+pub(crate) fn same_object(a: u64, b: u64) -> bool {
+    a != 0 && b != 0 && a == b
 }
 
 pub(crate) fn image() -> usize {

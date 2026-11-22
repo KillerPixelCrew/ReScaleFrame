@@ -2,7 +2,7 @@
 //! Fallout 4 AE 1.11.240 CPU event layout: hook and caller RVAs, the expected instruction bytes,
 //! and the guarded input-state snapshot. Every value belongs to the exact recognized build; the
 //! evidence is in games/fallout4/engine.json and docs/research/fallout4-*.
-use crate::{Plain, image, read};
+use crate::{guard, image, load, read};
 
 // Hooked functions, in RSF_FALLOUT4_CPU_HOOK_* order.
 pub(super) const HOOK_ENTRIES: [(usize, &[u8]); 10] = [
@@ -90,22 +90,6 @@ pub(super) const WORKER_RUNNING: usize = 0x6e;
 pub(super) const QUEUE_SEQUENCE: usize = 0x1490;
 pub(super) const RECEIVER_CURSOR: usize = 8;
 
-/// Loads `address` into `slot`, leaving it unchanged when the read fails.
-pub(super) fn load<T: Plain>(slot: &mut T, address: usize) -> bool {
-    match read::<T>(address) {
-        Some(value) => {
-            *slot = value;
-            true
-        }
-        None => false,
-    }
-}
-
-/// `expected` matches the image bytes at `rva`.
-pub(super) fn bytes(rva: usize, expected: &[u8]) -> bool {
-    crate::matches_bytes::<16>(image() + rva, expected)
-}
-
 /// The eligible Main/input owner snapshot.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) struct InputState {
@@ -182,47 +166,47 @@ pub(super) fn state(value: &mut InputState, main: usize) -> StateRead {
         return StateRead::IdleMain;
     }
     let base = image();
-    if !load(&mut value.main, base + MAIN) {
+    if !load(base + MAIN, &mut value.main) {
         return StateRead::MainRead;
     }
     if value.main != main {
         return StateRead::MainMatch;
     }
-    if !load(&mut value.manager, base + MANAGER) {
+    if !load(base + MANAGER, &mut value.manager) {
         return StateRead::ManagerRead;
     }
     if value.manager == 0 {
         return StateRead::ManagerNull;
     }
-    if !load(&mut value.polling_enabled, value.manager + MANAGER_POLLING) {
+    if !load(value.manager + MANAGER_POLLING, &mut value.polling_enabled) {
         return StateRead::PollingRead;
     }
     if value.polling_enabled == 0 {
         return StateRead::PollingDisabled;
     }
-    if !load(&mut value.queue, base + QUEUE) {
+    if !load(base + QUEUE, &mut value.queue) {
         return StateRead::QueueRead;
     }
     if value.queue == 0 {
         return StateRead::QueueNull;
     }
-    if !load(&mut value.receiver, base + RECEIVER) {
+    if !load(base + RECEIVER, &mut value.receiver) {
         return StateRead::ReceiverRead;
     }
     if value.receiver == 0 {
         return StateRead::ReceiverNull;
     }
     let mut vtable = 0usize;
-    if !load(&mut vtable, value.receiver) {
+    if !load(value.receiver, &mut vtable) {
         return StateRead::VtableRead;
     }
     if vtable != base + RECEIVER_VTABLE {
         return StateRead::VtableMatch;
     }
-    if !load(&mut value.flags, value.main + MAIN_FLAGS) {
+    if !load(value.main + MAIN_FLAGS, &mut value.flags) {
         return StateRead::FlagsRead;
     }
-    if !load(&mut value.menu, value.main + MAIN_MENU) {
+    if !load(value.main + MAIN_MENU, &mut value.menu) {
         return StateRead::MenuRead;
     }
     let flags = value.flags;
@@ -258,9 +242,9 @@ pub(super) fn controller_delivered(events: usize) -> bool {
     let mut count = 0u32;
     while node != 0 && count < 256 {
         let (mut device, mut kind, mut next) = (0i32, 0i32, 0usize);
-        if !load(&mut device, node + 8)
-            || !load(&mut kind, node + 0x10)
-            || !load(&mut next, node + 0x18)
+        if !load(node + 8, &mut device)
+            || !load(node + 0x10, &mut kind)
+            || !load(node + 0x18, &mut next)
             || !(0..=2).contains(&device)
             || !(0..=6).contains(&kind)
         {
@@ -328,7 +312,7 @@ pub(super) fn guards() -> bool {
         && read::<usize>(base + 0x255e3b0) == Some(base + 0x29c88d8)
         && read::<usize>(base + WORKER_VTABLE) == Some(base + WORKER_DESTRUCTOR)
         && read::<usize>(base + 0x255e3c0) == Some(base + WORKER_ENTRY)
-        && CHECKS.iter().all(|&(rva, expected)| bytes(rva, expected))
+        && CHECKS.iter().all(|&(rva, expected)| guard(rva, expected))
 }
 
 /// The PeekMessageA call sites and their import, and the PlayerControls and queue dispatch
@@ -385,7 +369,7 @@ pub(super) fn notification_guards() -> bool {
         (0x16742d4, &[0xe8, 0x37, 0x03, 0x00, 0x00]),
         (0x1677bb7, &[0xff, 0x25, 0x53, 0x93, 0xdc, 0x00]),
     ];
-    if !CHECKS.iter().all(|&(rva, expected)| bytes(rva, expected)) {
+    if !CHECKS.iter().all(|&(rva, expected)| guard(rva, expected)) {
         return false;
     }
     let base = image();
@@ -393,6 +377,6 @@ pub(super) fn notification_guards() -> bool {
         && read::<u32>(base + 0x2ed10a4) == Some(0x2ed3736)
         && read::<u32>(base + 0x2ed10a8) == Some(0x2440a70)
         && read::<u64>(base + 0x2ed1d88) == Some(0x2ed35fe)
-        && bytes(0x2ed3736, b"USER32.dll\0")
-        && bytes(0x2ed3600, b"PeekMessageA\0")
+        && guard(0x2ed3736, b"USER32.dll\0")
+        && guard(0x2ed3600, b"PeekMessageA\0")
 }

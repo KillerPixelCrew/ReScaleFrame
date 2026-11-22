@@ -50,7 +50,7 @@ const ZERO_BOUND: CameraDepthBound = CameraDepthBound {
 
 // Ordered comparisons that are false for NaN, spelled as calls so `!above(x, 0.0)` keeps the
 // C++ `!(x>0)` meaning.
-fn above(value: f32, bound: f32) -> bool {
+pub(crate) fn above(value: f32, bound: f32) -> bool {
     value > bound
 }
 

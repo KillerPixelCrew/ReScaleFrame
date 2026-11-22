@@ -19,13 +19,13 @@ use crate::build_layout::{
     RENDERER_WINDOW,
 };
 use crate::camera::xm::{self, Matrix};
-use crate::camera::{self, CameraDepthBound, CameraRaster};
+use crate::camera::{self, CameraDepthBound, CameraRaster, above};
 use crate::cpu_events::{current_identity, render_source_is_current};
 use crate::d3d11::same_native;
 use crate::sys::rsf_fallout4_cpu_identity;
 pub(crate) use crate::sys::{NativeDepthCamera as DepthCamera, NativeDepthSnapshot as Snapshot};
 use crate::sys::{NativeDepthMaps as Maps, NativeDepthMathFailure as MathFailure};
-use crate::{Plain, image, read};
+use crate::{bits, guard, image, load, same_object};
 use rsf_game_sys::{
     RSF_DEPTH_DOMAIN_INCLUDE_MAX, RSF_DEPTH_DOMAIN_INCLUDE_MIN, RSF_DEPTH_DOMAINS_VERSION,
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_RENDER_PRIMARY, RSF_GAME_RENDER_SR,
@@ -334,43 +334,9 @@ const NAMES: [&CStr; 35] = [
 ];
 const _: () = assert!(Stage::NearBasis as usize + 1 == NAMES.len() && NAMES.len() <= 64);
 
-/// Two canonical identities of live objects name the same object.
-fn same_object(a: u64, b: u64) -> bool {
-    a != 0 && b != 0 && a == b
-}
-
-// `!above(a, b)` keeps the C++ `!(a>b)` meaning for NaN.
-fn above(value: f32, bound: f32) -> bool {
-    value > bound
-}
-
-/// The C++ `read(address, field)`: the whole value into `into`, or nothing and false. Address 0
-/// is refused before the read, as the C++ did.
-fn load<T: Plain>(address: usize, into: &mut T) -> bool {
-    if address == 0 {
-        return false;
-    }
-    match read::<T>(address) {
-        Some(value) => {
-            *into = value;
-            true
-        }
-        None => false,
-    }
-}
-
 /// `key + offset` with the C++ unsigned wraparound.
 fn at(key: u64, offset: usize) -> usize {
     (key as usize).wrapping_add(offset)
-}
-
-fn guard<const N: usize>(rva: usize, expected: &[u8; N]) -> bool {
-    let mut actual = [0u8; N];
-    load(image().wrapping_add(rva), &mut actual) && actual == *expected
-}
-
-fn bits<const N: usize>(values: &[f32; N]) -> [u32; N] {
-    values.map(f32::to_bits)
 }
 
 /// `memcmp` equality of two cameras.

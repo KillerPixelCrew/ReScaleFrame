@@ -178,12 +178,12 @@ impl Session {
         if self.prepared || self.busy() {
             return Ok(RSF_ERROR_BUSY);
         }
-        let Some(build) = creation::admit_build() else {
+        if !creation::admit_build() {
             return self.refuse(
                 host,
                 c"Fallout4 cold creation refused: executable identity mismatch.",
             );
-        };
+        }
         if !creation::preflight() {
             return self.refuse(
                 host,
@@ -195,7 +195,7 @@ impl Session {
             crate::log_host(host, refusal)?;
             return Ok(RSF_ERROR_NATIVE_REFUSED);
         }
-        if !render_hooks::verify_with_inputs(&build) {
+        if !render_hooks::verify_with_inputs() {
             return self.refuse(
                 host,
                 c"Fallout4 render preparation refused: native call, TAA, resource, camera or depth-domain guard mismatch.",
@@ -239,19 +239,19 @@ impl Session {
         };
         self.host = Some(bound);
         let services = bound.services;
-        if !creation::prepare(&services, &build) {
+        if !creation::prepare(&services) {
             return self.refuse(
                 host,
                 c"Fallout4 cold creation refused: native bytes, owner, Steam forwarding or scoped services unavailable.",
             );
         }
-        if !render_hooks::prepare(&services, &build) {
+        if !render_hooks::prepare(&services) {
             return self.refuse(
                 host,
                 c"Fallout4 render preparation refused: native guards, synchronous services or hook creation unavailable.",
             );
         }
-        if !cpu_events::prepare(&services, &build) {
+        if !cpu_events::prepare(&services) {
             return self.refuse(
                 host,
                 c"Fallout4 CPU preparation refused: guarded Swap/input callbacks or source services unavailable.",

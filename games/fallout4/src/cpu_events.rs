@@ -26,11 +26,11 @@ use crate::sys::{
     RSF_FALLOUT4_CPU_HOOK_WORKER_JOIN, RSF_FALLOUT4_CPU_HOOK_WRAPPER, RSF_FALLOUT4_CPU_SCOPE_WORDS,
     rsf_fallout4_cpu_identity, rsf_fallout4_cpu_scope,
 };
-use crate::{MH_CreateHook, MH_OK, MH_RemoveHook, creation, image, message, pin, read};
+use crate::{MH_CreateHook, MH_OK, MH_RemoveHook, image, load, message, pin, read};
 use handoff::{
     CpuIdentity, Phase, WorkerCycle, WorkerTicket, active_join_matches, invalidates_render_source,
 };
-use native::{InputState, StateRead, load};
+use native::{InputState, StateRead};
 use rsf_game_sys::{
     RSF_GAME_ABI_VERSION, RSF_GAME_CPU_ABORT_INTERVENING_POLL, RSF_GAME_CPU_ABORT_NOT_CONSUMED,
     RSF_GAME_CPU_ABORT_OVERLAP, RSF_GAME_CPU_ABORT_QUIESCE, RSF_GAME_CPU_ABORT_STATE_CHANGED,
@@ -471,49 +471,49 @@ fn native_cycle(
     let (mut running, mut exiting, mut mode) = (0u8, 0u8, 0u32);
     let state_stage = snapshot(native, proof.main);
     let proved = t.test(0, state_stage == StateRead::Eligible)
-        && t.test(1, load(&mut worker_address, base + native::WORKER))
+        && t.test(1, load(base + native::WORKER, &mut worker_address))
         && t.test(2, worker_address == base + native::WORKER_OBJECT)
-        && t.test(3, load(&mut vtable, worker_address))
+        && t.test(3, load(worker_address, &mut vtable))
         && t.test(4, vtable == base + native::WORKER_VTABLE)
-        && t.test(5, load(&mut destructor, vtable))
+        && t.test(5, load(vtable, &mut destructor))
         && t.test(6, destructor == base + native::WORKER_DESTRUCTOR)
-        && t.test(7, load(&mut entry, vtable + 8))
+        && t.test(7, load(vtable + 8, &mut entry))
         && t.test(8, entry == base + native::WORKER_ENTRY)
         && t.test(
             9,
             load(
-                &mut proof.start_event,
                 worker_address + native::WORKER_START,
+                &mut proof.start_event,
             ),
         )
         && t.test(10, proof.start_event != 0)
         && t.test(
             11,
             load(
-                &mut proof.complete_event,
                 worker_address + native::WORKER_COMPLETE,
+                &mut proof.complete_event,
             ),
         )
         && t.test(12, proof.complete_event != 0)
-        && t.test(13, load(&mut mode, worker_address + native::WORKER_MODE))
+        && t.test(13, load(worker_address + native::WORKER_MODE, &mut mode))
         && t.test(14, mode == 1 || (joining && mode == 0))
         && t.test(
             15,
-            load(&mut running, worker_address + native::WORKER_RUNNING),
+            load(worker_address + native::WORKER_RUNNING, &mut running),
         )
         && t.test(16, running != 0)
         && t.test(
             17,
-            load(&mut exiting, worker_address + native::WORKER_EXITING),
+            load(worker_address + native::WORKER_EXITING, &mut exiting),
         )
         && t.test(18, exiting == 0)
-        && t.test(19, load(&mut window, native.main + native::MAIN_WINDOW))
+        && t.test(19, load(native.main + native::MAIN_WINDOW, &mut window))
         && t.test(20, window != 0)
-        && t.test(21, load(&mut renderer, base + RENDERER_POINTER))
+        && t.test(21, load(base + RENDERER_POINTER, &mut renderer))
         && t.test(22, renderer == base + RENDERER_OBJECT)
-        && t.test(23, load(&mut proof.window, renderer + RENDERER_WINDOW))
+        && t.test(23, load(renderer + RENDERER_WINDOW, &mut proof.window))
         && t.test(24, proof.window == window)
-        && t.test(25, load(&mut proof.frame, base + native::NATIVE_FRAME));
+        && t.test(25, load(base + native::NATIVE_FRAME, &mut proof.frame));
     if proved {
         proof.main = native.main;
         proof.worker = worker_address;
@@ -899,7 +899,7 @@ fn bound_current_valid(c: &RenderCycle, strict_raw: bool) -> bool {
     let mut cycle_state = InputState::ZERO;
     let (mut cursor, mut queued) = (0u32, 0u32);
     let state_valid = eligible(&mut native, c.key.main) && native == c.state;
-    let cursor_read = state_valid && load(&mut cursor, native.receiver + native::RECEIVER_CURSOR);
+    let cursor_read = state_valid && load(native.receiver + native::RECEIVER_CURSOR, &mut cursor);
     let mut proof = c.key;
     let cycle_valid = native_cycle(
         &mut proof,
@@ -908,7 +908,7 @@ fn bound_current_valid(c: &RenderCycle, strict_raw: bool) -> bool {
         CyclePhase::BoundCurrent,
     ) && proof == c.key
         && cycle_state == c.state;
-    let queue_read = cycle_valid && load(&mut queued, cycle_state.queue + native::QUEUE_SEQUENCE);
+    let queue_read = cycle_valid && load(cycle_state.queue + native::QUEUE_SEQUENCE, &mut queued);
     let w = worker();
     let current = &w.current;
     if !enabled()
@@ -1226,8 +1226,8 @@ fn reserve_worker_poll(
         || (c.binding.bound
             && c.binding.source == c.cpu.source
             && c.binding.state == native
-            && load(&mut queued, native.queue + native::QUEUE_SEQUENCE)
-            && load(&mut consumed, native.receiver + native::RECEIVER_CURSOR)
+            && load(native.queue + native::QUEUE_SEQUENCE, &mut queued)
+            && load(native.receiver + native::RECEIVER_CURSOR, &mut consumed)
             && consumed == c.binding.queue_generation);
     let frequency = if native_valid_before {
         qpc_frequency()
@@ -1399,7 +1399,7 @@ fn sample_worker_poll(generation: u64, began: u64) {
         && native == f.state
         && POLLS.load(SeqCst) == 1
         && RAW_WRITERS.load(SeqCst) == 0
-        && load(&mut cursor, native.queue + native::QUEUE_SEQUENCE);
+        && load(native.queue + native::QUEUE_SEQUENCE, &mut cursor);
     let mut sampled = None;
     {
         let mut w = worker();
@@ -1459,12 +1459,12 @@ fn worker_consumer_proof(
         return false;
     }
     let mut queue = trace.queue;
-    let queue_read = load(&mut queue, native.queue + native::QUEUE_SEQUENCE);
+    let queue_read = load(native.queue + native::QUEUE_SEQUENCE, &mut queue);
     trace.queue = queue;
     if !trace.test(7, queue_read) || !trace.test(8, !before_bind || trace.queue == f.facts.cursor) {
         return false;
     }
-    let cursor_read = load(cursor, native.receiver + native::RECEIVER_CURSOR);
+    let cursor_read = load(native.receiver + native::RECEIVER_CURSOR, cursor);
     trace.test(9, cursor_read) && trace.test(10, *cursor == f.facts.cursor)
 }
 
@@ -2023,7 +2023,7 @@ unsafe extern "C" fn rsf_fallout4_cpu_poll_exit(
             let unchanged = RAW_REVISION.load(SeqCst) == p.raw
                 && eligible(&mut after, 0)
                 && before == after
-                && load(&mut queue_generation, before.queue + native::QUEUE_SEQUENCE);
+                && load(before.queue + native::QUEUE_SEQUENCE, &mut queue_generation);
             update_pending(|p| p.queue_generation = queue_generation);
             if unchanged {
                 update_pending(|p| {
@@ -2048,8 +2048,8 @@ unsafe extern "C" fn rsf_fallout4_cpu_poll_exit(
 fn sampled_sequence(p: &Pending) -> bool {
     let mut queue_generation = 0u32;
     load(
-        &mut queue_generation,
         p.state.queue + native::QUEUE_SEQUENCE,
+        &mut queue_generation,
     ) && queue_generation == p.queue_generation
 }
 
@@ -2406,11 +2406,11 @@ fn claim_future(main: usize) {
         && trace.test(4, native == f.state)
         && trace.test(
             5,
-            load(&mut cursor, native.receiver + native::RECEIVER_CURSOR),
+            load(native.receiver + native::RECEIVER_CURSOR, &mut cursor),
         )
         && trace.test(
             6,
-            load(&mut sequence, native.queue + native::QUEUE_SEQUENCE),
+            load(native.queue + native::QUEUE_SEQUENCE, &mut sequence),
         )
         && trace.test(7, cursor == f.facts.cursor)
         && trace.test(8, POLLS.load(SeqCst) == 0);
@@ -2528,7 +2528,7 @@ unsafe extern "C" fn rsf_fallout4_cpu_job_end_exit(scope: *mut rsf_fallout4_cpu_
             }
             && trace.test(
                 5,
-                load(&mut cursor, native.receiver + native::RECEIVER_CURSOR),
+                load(native.receiver + native::RECEIVER_CURSOR, &mut cursor),
             )
             && trace.test(6, cursor == f.facts.cursor);
         let mut refused = false;
@@ -2579,7 +2579,7 @@ unsafe extern "C" fn rsf_fallout4_cpu_wrapper_enter(
         JOB_SELECTED.get()
             && WRAPPER_DEPTH.get() == 1
             && caller == image() + native::WRAPPER_CALLER
-            && load(&mut actual_main, image() + native::MAIN)
+            && load(image() + native::MAIN, &mut actual_main)
             && actual_main == main as usize,
     );
     open_scope(
@@ -2690,17 +2690,17 @@ unsafe extern "C" fn rsf_fallout4_cpu_worker_join_exit(
             native_cycle(&mut proof, &mut native, true, CyclePhase::JoinReturn),
         )
         && trace.test(4, proof == key)
-        && trace.test(5, load(&mut mode, proof.worker + native::WORKER_MODE))
+        && trace.test(5, load(proof.worker + native::WORKER_MODE, &mut mode))
         && trace.test(6, mode == 0)
         && trace.test(7, native == f.state)
         && trace.test(
             8,
-            load(&mut cursor, native.receiver + native::RECEIVER_CURSOR),
+            load(native.receiver + native::RECEIVER_CURSOR, &mut cursor),
         )
         && trace.test(9, cursor == f.facts.cursor)
         && trace.test(
             10,
-            load(&mut sequence, native.queue + native::QUEUE_SEQUENCE),
+            load(native.queue + native::QUEUE_SEQUENCE, &mut sequence),
         )
         && {
             trace.generation = POLL_GENERATION.load(SeqCst);
@@ -2881,9 +2881,9 @@ pub(crate) fn render_source_is_current(expected: &CpuIdentity) -> bool {
         && c.cpu.session == expected.session
         && c.cpu.source == expected.source
         && c.cpu.submission == expected.submission
-        && load(&mut native_frame, base + native::NATIVE_FRAME)
+        && load(base + native::NATIVE_FRAME, &mut native_frame)
         && native_frame == c.key.frame
-        && load(&mut main, base + native::MAIN)
+        && load(base + native::MAIN, &mut main)
         && main == c.key.main
 }
 
@@ -2939,11 +2939,11 @@ pub(crate) fn begin_render() -> bool {
         && trace.test(3, POLLS.load(SeqCst) == 0)
         && trace.test(
             4,
-            load(&mut cursor, native.receiver + native::RECEIVER_CURSOR),
+            load(native.receiver + native::RECEIVER_CURSOR, &mut cursor),
         )
         && trace.test(
             5,
-            load(&mut sequence, native.queue + native::QUEUE_SEQUENCE),
+            load(native.queue + native::QUEUE_SEQUENCE, &mut sequence),
         )
         && trace.test(6, cursor == f.facts.cursor);
     trace.queue = sequence;
@@ -3189,7 +3189,7 @@ fn prepare_peek(event: CpuEvent) -> bool {
         || cell.protection_pending
         || thunk == 0
         || !native::notification_guards()
-        || !load(&mut current, image() + native::PEEK_SLOT)
+        || !load(image() + native::PEEK_SLOT, &mut current)
         || current == 0
         || current == thunk
     {
@@ -3278,7 +3278,7 @@ pub(crate) fn busy() -> bool {
 }
 
 /// Checks the build, the guards and the services, then creates every detour disabled.
-pub(crate) fn prepare(services: &rsf_game_host_services, _build: &creation::ExactBuild) -> bool {
+pub(crate) fn prepare(services: &rsf_game_host_services) -> bool {
     if services.struct_size < size_of::<rsf_game_host_services>() as u32
         || services.abi_version != RSF_GAME_ABI_VERSION
         || services.session_id == 0

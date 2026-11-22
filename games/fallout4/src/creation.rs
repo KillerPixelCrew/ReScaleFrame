@@ -159,11 +159,8 @@ fn executable_name(leaf: &[u16]) -> bool {
         })
 }
 
-/// Proof that this preparation admitted the running Fallout4.exe.
-pub(crate) struct ExactBuild(());
-
-/// Checks the executable name and recognized SHA-256 once for the calling transaction.
-pub(crate) fn admit_build() -> Option<ExactBuild> {
+/// Checks the executable name and recognized SHA-256 once for the preparing transaction.
+pub(crate) fn admit_build() -> bool {
     unsafe extern "C" {
         fn rsf_common_sha256_file_hex(path: *const u16, output: *mut [u8; 64]) -> u32;
     }
@@ -171,7 +168,7 @@ pub(crate) fn admit_build() -> Option<ExactBuild> {
     let length = unsafe { GetModuleFileNameW(std::ptr::null_mut(), path.as_mut_ptr(), 32768) };
     let length = length as usize;
     if length == 0 || length >= path.len() {
-        return None;
+        return false;
     }
     let name = &path[..length];
     let leaf = name
@@ -179,11 +176,11 @@ pub(crate) fn admit_build() -> Option<ExactBuild> {
         .rposition(|&unit| unit == u16::from(b'\\'))
         .map_or(name, |separator| &name[separator + 1..]);
     if !executable_name(leaf) {
-        return None;
+        return false;
     }
     let mut digest = [0; 64];
     let hashed = unsafe { rsf_common_sha256_file_hex(path.as_ptr(), &raw mut digest) } != 0;
-    (hashed && digest == *EXECUTABLE_SHA256.to_bytes()).then_some(ExactBuild(()))
+    hashed && digest == *EXECUTABLE_SHA256.to_bytes()
 }
 
 pub(crate) fn preflight() -> bool {
@@ -199,7 +196,7 @@ pub(crate) fn busy() -> bool {
 
 /// Resolves the Runtime creation exports, prepares Steam's chain forwarding and creates the
 /// disabled creation hook.
-pub(crate) fn prepare(services: &rsf_game_host_services, _build: &ExactBuild) -> bool {
+pub(crate) fn prepare(services: &rsf_game_host_services) -> bool {
     if !preflight() {
         return false;
     }

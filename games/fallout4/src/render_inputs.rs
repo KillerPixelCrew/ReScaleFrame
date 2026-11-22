@@ -27,7 +27,7 @@ use crate::sys::{
     native_input_pipboy as SLOT_PIPBOY, native_input_refraction_normals as SLOT_REFRACTION_NORMALS,
     native_input_vats as SLOT_VATS,
 };
-use crate::{Plain, image, read};
+use crate::{Plain, bits, guard, image, load, read, same_object};
 use rsf_game_sys::RSF_SCREEN_UNKNOWN;
 use rsf_game_sys::{
     RSF_GAME_RENDER_NO_FG, RSF_GAME_RENDER_RESET, RSF_GAME_RENDER_SR, rsf_game_render_pass,
@@ -294,35 +294,6 @@ const FRAMEBUFFER_NAMES: [&CStr; 19] = [
 const _: () = assert!(
     Framebuffer::Accepted as usize + 1 == FRAMEBUFFER_NAMES.len() && FRAMEBUFFER_NAMES.len() <= 32
 );
-
-/// Two canonical identities of live objects name the same object.
-fn same_object(a: u64, b: u64) -> bool {
-    a != 0 && b != 0 && a == b
-}
-
-/// The C++ `read(address, field)`: the whole value into `into`, or nothing and false. Address 0
-/// is refused before the read, as the C++ did.
-fn load<T: Plain>(address: usize, into: &mut T) -> bool {
-    if address == 0 {
-        return false;
-    }
-    match read::<T>(address) {
-        Some(value) => {
-            *into = value;
-            true
-        }
-        None => false,
-    }
-}
-
-fn guard<const N: usize>(rva: usize, expected: &[u8; N]) -> bool {
-    let mut actual = [0u8; N];
-    load(image().wrapping_add(rva), &mut actual) && actual == *expected
-}
-
-fn bits<const N: usize>(values: &[f32; N]) -> [u32; N] {
-    values.map(f32::to_bits)
-}
 
 /// The platform target record for a platform slot.
 fn target_at(renderer: usize, platform: u32) -> usize {
@@ -717,10 +688,9 @@ fn receipt(report: Report, stage: Stage, reading: &mut Reading) {
     };
 }
 
-fn verify(admit: impl FnOnce() -> bool) -> bool {
+pub(crate) fn verify() -> bool {
     VERIFIED.store(false, Ordering::Release);
-    let okay = admit()
-        && guard(0x18a246, b"\x48\x8d\x1d\xc3\xba\x89\x03")
+    let okay = guard(0x18a246, b"\x48\x8d\x1d\xc3\xba\x89\x03")
         && guard(0x18a28c, b"\x48\x89\x1d\x0d\x71\x75\x03")
         && guard(
             0xc37dd0,
@@ -1435,10 +1405,6 @@ fn framebuffer_receipt(
             r,
         )
     };
-}
-
-pub(crate) fn verify_for_build(_build: &creation::ExactBuild) -> bool {
-    verify(|| true)
 }
 
 /// The reader's exception receipt is due: its stage bit was not yet spent.

@@ -4,7 +4,7 @@
 use crate::cpu_events::render_source_is_current;
 pub(crate) use crate::sys::NativeScreen;
 use crate::sys::rsf_fallout4_cpu_identity;
-use crate::{image, matches_bytes, read};
+use crate::{guard, image, read};
 use rsf_game_sys::{
     RSF_GAME_CAMERA_ABI_VERSION, RSF_GAME_RENDER_AFTER_SIMULATION, RSF_GAME_RENDER_PRIMARY,
     rsf_game_render_pass,
@@ -137,38 +137,30 @@ const _: () = {
 
 static VERIFIED_IMAGE: AtomicUsize = AtomicUsize::new(0);
 
-fn matches<const N: usize>(base: usize, rva: usize, expected: &[u8; N]) -> bool {
-    read::<[u8; N]>(base + rva).as_ref() == Some(expected)
-}
-
 pub(crate) fn verify_queries() -> bool {
     VERIFIED_IMAGE.store(0, Ordering::Release);
     let base = image();
     let valid = base != 0
         && MENUS.iter().all(|menu| {
-            matches(base, menu.entry, &[0x40, 0x53, 0x48, 0x83, 0xec, 0x20])
-                && matches(base, menu.literal_lea, &menu.literal_bytes)
-                && matches(base, menu.return_lea, &menu.return_bytes)
-                && matches_bytes::<20>(base + menu.literal, menu.name.to_bytes_with_nul())
+            guard(menu.entry, &[0x40, 0x53, 0x48, 0x83, 0xec, 0x20])
+                && guard(menu.literal_lea, &menu.literal_bytes)
+                && guard(menu.return_lea, &menu.return_bytes)
+                && guard(menu.literal, menu.name.to_bytes_with_nul())
         })
-        && matches(
-            base,
+        && guard(
             MENU_OPEN,
             &[0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x40],
         )
-        && matches(base, 0x1a8_0377, &[0xf6, 0x41, 0x58, 0x40])
-        && matches(
-            base,
+        && guard(0x1a8_0377, &[0xf6, 0x41, 0x58, 0x40])
+        && guard(
             FREEZE_BACKGROUND,
             &[0x83, 0xb9, 0xec, 0x01, 0, 0, 0, 0x0f, 0x97, 0xc0, 0xc3],
         )
-        && matches(
-            base,
+        && guard(
             FREEZE_PAUSE,
             &[0x83, 0xb9, 0xf0, 0x01, 0, 0, 0, 0x0f, 0x97, 0xc0, 0xc3],
         )
-        && matches(
-            base,
+        && guard(
             CAMERA_EQUALS,
             &[
                 0x4c, 0x8b, 0x41, 0x28, 0x4d, 0x85, 0xc0, 0x74, 0x0f, 0x8b, 0xc2, 0x4c, 0x3b, 0x84,
