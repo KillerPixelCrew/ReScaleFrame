@@ -42,7 +42,9 @@ use std::ffi::c_void;
 use std::ptr;
 use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 
-#[cfg(all(windows, not(feature = "mono-plugin")))]
+// Vulkan routing over the Unity SDK leaves in integrations/unity/native, which need the untracked
+// Unity native headers; unit tests cover the packet state above it.
+#[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
 #[path = "vulkan_bridge.rs"]
 mod bridge;
 
@@ -84,7 +86,7 @@ struct Event {
     kind: u32,
     reconfigure: bool,
     stage: Stage,
-    #[cfg(all(windows, not(feature = "mono-plugin")))]
+    #[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
     textures: bridge::Textures,
 }
 
@@ -93,7 +95,7 @@ const FREE: Event = Event {
     kind: 0,
     reconfigure: false,
     stage: Stage::Free,
-    #[cfg(all(windows, not(feature = "mono-plugin")))]
+    #[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
     textures: bridge::Textures::EMPTY,
 };
 
@@ -199,7 +201,7 @@ struct SharedDevice {
     pool: u64,
     slots: [CommandSlot; SLOTS],
     epoch: u64,
-    #[cfg(all(windows, not(feature = "mono-plugin")))]
+    #[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
     recordings: [u64; SLOTS],
 }
 
@@ -211,7 +213,7 @@ impl SharedDevice {
             pool: 0,
             slots: [CommandSlot::EMPTY; SLOTS],
             epoch: 0,
-            #[cfg(all(windows, not(feature = "mono-plugin")))]
+            #[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
             recordings: [0; SLOTS],
         }
     }
@@ -362,7 +364,7 @@ impl State {
             kind,
             reconfigure,
             stage: Stage::Queued,
-            #[cfg(all(windows, not(feature = "mono-plugin")))]
+            #[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
             textures: bridge::Textures::EMPTY,
         };
         Some(slot)
@@ -758,13 +760,13 @@ unsafe extern "C" fn rsf_unity_vulkan_prepare_image(
     true
 }
 
-#[cfg(all(windows, not(feature = "mono-plugin")))]
+#[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
 pub(super) fn record_image(index: u32) -> bool {
     lock().record_image(index as usize)
 }
 
 /// Called after the Vulkan slot fence completed and all command buffers and lists reset.
-#[cfg(all(windows, not(feature = "mono-plugin")))]
+#[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
 pub(super) fn begin_recording(index: u32) -> Option<(u64, u64)> {
     let mut state = lock();
     state.recorded_images = 0;
@@ -774,12 +776,12 @@ pub(super) fn begin_recording(index: u32) -> Option<(u64, u64)> {
     (device.epoch != 0).then_some((device.epoch, *serial))
 }
 
-#[cfg(all(windows, not(feature = "mono-plugin")))]
+#[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
 pub(super) fn upload_submitted() {
     lock().upload_submitted();
 }
 
-#[cfg(all(windows, not(feature = "mono-plugin")))]
+#[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
 pub(super) fn handback_fenced() {
     lock().handback_fenced();
 }

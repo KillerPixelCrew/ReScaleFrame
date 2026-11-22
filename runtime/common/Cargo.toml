@@ -6,8 +6,9 @@ rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
 
+# The rlib serves unit tests of crates whose CMake binaries link the archive.
 [lib]
-crate-type = ["staticlib"]
+crate-type = ["rlib", "staticlib"]
 
 [lints]
 workspace = true

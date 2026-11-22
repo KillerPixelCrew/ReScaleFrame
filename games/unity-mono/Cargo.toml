@@ -51,5 +51,10 @@ features = [
 [build-dependencies]
 rsf-bindgen = { path = "../../tools/bindgen" }
 
+# Unit tests link the Runtime the plugins get from CMake.
+[target."cfg(windows)".dev-dependencies]
+rsf-orchestrator = { path = "../../runtime/orchestrator" }
+rsf-runtime-common = { path = "../../runtime/common" }
+
 [lints]
 workspace = true

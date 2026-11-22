@@ -34,6 +34,12 @@ pub mod sys {
     pub use rsf_game_sys::*;
     include!(concat!(env!("OUT_DIR"), "/sys.rs"));
 }
+// The adapter DLL gets rsf_compile_system_shader and the D3D11 state leaves from their CMake
+// archives; unit tests link the crates directly.
+#[cfg(all(test, windows))]
+use rsf_graphics as _;
+#[cfg(all(test, windows))]
+use rsf_shader_compiler as _;
 mod carrier;
 mod cloud_depth;
 #[cfg(windows)]

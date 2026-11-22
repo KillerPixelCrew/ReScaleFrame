@@ -46,6 +46,13 @@ mod resolution;
 mod screen;
 mod session;
 
+// The adapter DLL gets the common helpers and the Steam chain from their CMake archives; unit tests
+// link the crates directly.
+#[cfg(all(test, windows))]
+use rsf_runtime_common as _;
+#[cfg(all(test, windows))]
+use rsf_steam as _;
+
 use crate::sys::{
     rsf_d3d11_creation_scope, rsf_d3d11_host_setup, rsf_d3d11_native_chain,
     rsf_d3d11_presentation_binding,

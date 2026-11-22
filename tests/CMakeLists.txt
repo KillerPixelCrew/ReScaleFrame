@@ -142,10 +142,14 @@ add_dependencies(rsf_orchestrator_domains rsf_orchestrator rsf_game_unity_mono)
 add_test(NAME orchestrator_domain_contract COMMAND rsf_orchestrator_domains)
 add_executable(rsf_d3d12_observer_test d3d12_observer.c)
 set_target_properties(rsf_d3d12_observer_test PROPERTIES LINKER_LANGUAGE CXX)
-target_link_libraries(rsf_d3d12_observer_test PRIVATE ReScaleFrame::Graphics rsf_build_options d3d12)
+# The D3D12 observer is implemented in the Runtime archive.
+target_link_libraries(rsf_d3d12_observer_test PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics rsf_build_options d3d12)
 add_test(NAME d3d12_observer_contract COMMAND rsf_d3d12_observer_test)
 add_executable(rsf_exposure_normalization_test exposure_normalization_main.c)
-target_link_libraries(rsf_exposure_normalization_test PRIVATE rsf_orchestrator ReScaleFrame::Graphics rsf_build_options d3d12 dxgi)
+# The fixture is in the Runtime archive, whose member also defines the SR owner entries it is
+# handed; the DLL would define them a second time, so the test links the archive alone.
+target_link_libraries(rsf_exposure_normalization_test PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics
+    rsf_build_options d3d12 dxgi)
 add_test(NAME native_exposure_normalization COMMAND rsf_exposure_normalization_test)
 add_executable(rsf_gpu_policy_test generation/main.c)
 target_compile_definitions(rsf_gpu_policy_test PRIVATE RSF_GENERATION_FIXTURE=rsf_test_gpu_policy)
@@ -235,7 +239,7 @@ function(rsf_add_capture_fixture target entry feature source)
 endfunction()
 
 rsf_add_capture_fixture(rsf_texture_dump rsf_fixture_texture_dump texture capture_fixture_main.c)
-target_link_libraries(rsf_texture_dump PRIVATE ReScaleFrame::Graphics rsf_build_options)
+target_link_libraries(rsf_texture_dump PRIVATE ReScaleFrame::GraphicsLeaves ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME texture_dump COMMAND rsf_texture_dump "${CMAKE_CURRENT_BINARY_DIR}")
 
 rsf_add_capture_fixture(rsf_input_dump_test rsf_fixture_input_dump_d3d11 d3d11 capture_fixture_main.c)
@@ -287,15 +291,17 @@ set_target_properties(rsf_ac7_velocity_shader_test PROPERTIES LINKER_LANGUAGE CX
 if(MINGW)
     target_link_options(rsf_ac7_velocity_shader_test PRIVATE -municode)
 endif()
-target_link_libraries(rsf_ac7_velocity_shader_test PRIVATE ReScaleFrame::AC7RenderScope ReScaleFrame::AC7VelocityPass ReScaleFrame::RuntimeCommon rsf_build_options d3d11)
+target_link_libraries(rsf_ac7_velocity_shader_test PRIVATE ReScaleFrame::AC7RenderScope ReScaleFrame::AC7VelocityPass ReScaleFrame::RuntimeCommon
+    ReScaleFrame::GraphicsLeaves rsf_build_options d3d11)
 add_test(NAME ac7_velocity_shader COMMAND rsf_ac7_velocity_shader_test)
 set_tests_properties(ac7_velocity_shader PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
 rsf_add_rust_static(rsf_ac7_capture_fixture_rust rsf_rust_ac7_capture_fixture
     rsf-ac7-capture-fixture rsf_ac7_capture_fixture)
 add_executable(rsf_ac7_capture_io ac7-capture/src/main.c)
+# The fixture installs the Runtime's D3D11 observer, so the Runtime archive also supplies the leaves.
 target_link_libraries(rsf_ac7_capture_io PRIVATE rsf_ac7_capture_fixture_rust
-    ReScaleFrame::AC7MotionCapture rsf_build_options d3dcompiler)
+    ReScaleFrame::AC7MotionCapture rsf_orchestrator_rust rsf_build_options d3dcompiler)
 add_test(NAME ac7_capture_io COMMAND rsf_ac7_capture_io)
 set_tests_properties(ac7_capture_io PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
@@ -327,7 +333,7 @@ endfunction()
 rsf_ac7_fixture_object(ac7_view_probe_object ac7_view_probe)
 add_executable(rsf_ac7_view_test ac7_view.c "${ac7_view_probe_object}")
 set_target_properties(rsf_ac7_view_test PROPERTIES LINKER_LANGUAGE CXX)
-target_link_libraries(rsf_ac7_view_test PRIVATE ReScaleFrame::AC7View rsf_build_options)
+target_link_libraries(rsf_ac7_view_test PRIVATE ReScaleFrame::AC7View ReScaleFrame::GraphicsLeaves rsf_build_options)
 add_test(NAME ac7_view COMMAND rsf_ac7_view_test)
 
 set(ac7_session_object "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/rsf_ac7_session.obj")
@@ -343,7 +349,7 @@ add_custom_command(OUTPUT "${ac7_session_object}"
 set_source_files_properties("${ac7_session_object}" PROPERTIES GENERATED TRUE EXTERNAL_OBJECT TRUE)
 add_executable(rsf_ac7_session ac7_session.c "${ac7_session_object}" ../loader/proxy/src/preferences.c)
 set_target_properties(rsf_ac7_session PROPERTIES LINKER_LANGUAGE CXX)
-target_link_libraries(rsf_ac7_session PRIVATE ReScaleFrame::AC7SceneColor rsf_build_options)
+target_link_libraries(rsf_ac7_session PRIVATE ReScaleFrame::AC7SceneColor ReScaleFrame::GraphicsLeaves rsf_build_options)
 add_test(NAME ac7_session COMMAND rsf_ac7_session)
 
 include(g02/fixture.cmake)
@@ -355,7 +361,7 @@ set_tests_properties(constant_override PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 7
 # No device: the classifier is a pure function over shadowed facts, which is the point of it.
 add_executable(rsf_ac7_ui_rules_test ac7_ui_rules.c)
 set_target_properties(rsf_ac7_ui_rules_test PROPERTIES LINKER_LANGUAGE CXX)
-target_link_libraries(rsf_ac7_ui_rules_test PRIVATE ReScaleFrame::AC7UIRules rsf_build_options)
+target_link_libraries(rsf_ac7_ui_rules_test PRIVATE ReScaleFrame::AC7UIRules ReScaleFrame::GraphicsLeaves rsf_build_options)
 add_test(NAME ac7_ui_rules COMMAND rsf_ac7_ui_rules_test)
 
 # A vendor that is not compiled in still has to answer, and has to answer differently from one
@@ -380,14 +386,14 @@ set_tests_properties(shared_surface PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 # The layer, and the alpha accumulation that decides whether diverting into it works at all.
 add_executable(rsf_ui_layer graphics_fixture_main.c)
 target_compile_definitions(rsf_ui_layer PRIVATE RSF_GRAPHICS_FIXTURE=rsf_ui_layer_fixture)
-target_link_libraries(rsf_ui_layer PRIVATE ReScaleFrame::Graphics rsf_build_options)
+target_link_libraries(rsf_ui_layer PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME ui_layer COMMAND rsf_ui_layer)
 set_tests_properties(ui_layer PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
 # The composite's arithmetic, which nothing covered while it lived in present_blit.
 add_executable(rsf_fullscreen_pass graphics_fixture_main.c)
 target_compile_definitions(rsf_fullscreen_pass PRIVATE RSF_GRAPHICS_FIXTURE=rsf_fullscreen_pass_fixture)
-target_link_libraries(rsf_fullscreen_pass PRIVATE ReScaleFrame::Graphics rsf_build_options)
+target_link_libraries(rsf_fullscreen_pass PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME fullscreen_pass COMMAND rsf_fullscreen_pass)
 set_tests_properties(fullscreen_pass PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
@@ -401,7 +407,7 @@ set_tests_properties(native_reinsert_device PROPERTIES TIMEOUT 120 SKIP_RETURN_C
 
 add_executable(rsf_depth_scale graphics_fixture_main.c)
 target_compile_definitions(rsf_depth_scale PRIVATE RSF_GRAPHICS_FIXTURE=rsf_depth_scale_fixture)
-target_link_libraries(rsf_depth_scale PRIVATE ReScaleFrame::Graphics rsf_build_options)
+target_link_libraries(rsf_depth_scale PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME depth_scale_device COMMAND rsf_depth_scale)
 set_tests_properties(depth_scale_device PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
@@ -413,7 +419,7 @@ set_tests_properties(auxiliary_sr_device PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 
 
 add_executable(rsf_skyrim_input skyrim_input_main.c ../games/skyrim-se/src/guarded_read.c)
 set_target_properties(rsf_skyrim_input PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON LINKER_LANGUAGE CXX)
-target_link_libraries(rsf_skyrim_input PRIVATE rsf_skyrim_se_rust ReScaleFrame::GameSDK rsf_steam_d3d11_chain minhook rsf_build_options)
+target_link_libraries(rsf_skyrim_input PRIVATE rsf_skyrim_se_rust ReScaleFrame::GameSDK rsf_steam_native minhook rsf_build_options)
 add_test(NAME skyrim_input_contract COMMAND rsf_skyrim_input)
 
 add_executable(rsf_native_cpu_reservation_test game-sdk/cpu_fixture_main.c)
@@ -448,24 +454,26 @@ add_test(NAME d3d11_host_contract COMMAND rsf_d3d11_host_test)
 
 add_executable(rsf_resource_roles graphics_fixture_main.c)
 target_compile_definitions(rsf_resource_roles PRIVATE RSF_GRAPHICS_FIXTURE=rsf_resource_roles_fixture)
-target_link_libraries(rsf_resource_roles PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics rsf_build_options
+target_link_libraries(rsf_resource_roles PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME resource_roles COMMAND rsf_resource_roles)
 
 add_executable(rsf_motion_decode graphics_fixture_main.c)
 target_compile_definitions(rsf_motion_decode PRIVATE RSF_GRAPHICS_FIXTURE=rsf_motion_decode_fixture)
-target_link_libraries(rsf_motion_decode PRIVATE ReScaleFrame::Graphics rsf_build_options)
+target_link_libraries(rsf_motion_decode PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME motion_decode COMMAND rsf_motion_decode)
 set_tests_properties(motion_decode PROPERTIES TIMEOUT 120)
 
 add_executable(rsf_frame_tap frame_tap.c)
 set_target_properties(rsf_frame_tap PROPERTIES LINKER_LANGUAGE CXX)
-target_link_libraries(rsf_frame_tap PRIVATE ReScaleFrame::AC7SceneColor ReScaleFrame::Graphics rsf_build_options)
+# The frame tap's depth replay is Runtime code, so the Runtime archive also supplies the leaves.
+target_link_libraries(rsf_frame_tap PRIVATE ReScaleFrame::AC7SceneColor rsf_orchestrator_rust ReScaleFrame::Graphics
+    rsf_build_options)
 add_test(NAME frame_tap COMMAND rsf_frame_tap)
 set_tests_properties(frame_tap PROPERTIES TIMEOUT 120)
 
 add_executable(rsf_d3d11_state graphics_fixture_main.c)
 target_compile_definitions(rsf_d3d11_state PRIVATE RSF_GRAPHICS_FIXTURE=rsf_d3d11_state_fixture)
-target_link_libraries(rsf_d3d11_state PRIVATE ReScaleFrame::Graphics rsf_build_options)
+target_link_libraries(rsf_d3d11_state PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME d3d11_state COMMAND rsf_d3d11_state)
 set_tests_properties(d3d11_state PROPERTIES TIMEOUT 120)
 
@@ -476,7 +484,8 @@ set_tests_properties(scene_promote PROPERTIES TIMEOUT 120)
 
 add_executable(rsf_d3d11_observer d3d11_observer.c)
 set_target_properties(rsf_d3d11_observer PROPERTIES LINKER_LANGUAGE CXX)
-target_link_libraries(rsf_d3d11_observer PRIVATE ReScaleFrame::Graphics rsf_build_options)
+# The observer is implemented in the Runtime archive.
+target_link_libraries(rsf_d3d11_observer PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME d3d11_observer COMMAND rsf_d3d11_observer "${CMAKE_CURRENT_BINARY_DIR}")
 # These touch a graphics runtime and patch vtables, so a deadlock is a plausible failure. Fail in
 # a couple of minutes rather than hanging the suite.
@@ -559,13 +568,13 @@ add_test(NAME sr_session COMMAND rsf_sr_session_test)
 
 add_executable(rsf_motion_resolve_test graphics_fixture_main.c)
 target_compile_definitions(rsf_motion_resolve_test PRIVATE RSF_GRAPHICS_FIXTURE=rsf_motion_resolve_fixture)
-target_link_libraries(rsf_motion_resolve_test PRIVATE ReScaleFrame::Graphics rsf_build_options)
+target_link_libraries(rsf_motion_resolve_test PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME motion_resolve COMMAND rsf_motion_resolve_test)
 set_tests_properties(motion_resolve PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
 
 add_executable(rsf_colour_transport_test graphics_fixture_main.c)
 target_compile_definitions(rsf_colour_transport_test PRIVATE RSF_GRAPHICS_FIXTURE=rsf_colour_transport_fixture)
-target_link_libraries(rsf_colour_transport_test PRIVATE ReScaleFrame::Graphics rsf_build_options)
+target_link_libraries(rsf_colour_transport_test PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME colour_transport COMMAND rsf_colour_transport_test)
 set_tests_properties(colour_transport PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
 rsf_add_rust_static(rsf_translucency_fixtures_rust rsf_rust_translucency_fixtures
@@ -785,7 +794,7 @@ set_tests_properties(render_links PROPERTIES TIMEOUT 120)
 
 rsf_ac7_fixture_object(ac7_scope_fixture_object ac7_render_scope ac7_render_scope_fixture_abi.rs)
 add_executable(rsf_ac7_render_scope_test ac7_render_scope.c "${ac7_scope_fixture_object}")
-target_link_libraries(rsf_ac7_render_scope_test PRIVATE ReScaleFrame::AC7RenderScope rsf_ac7_rust rsf_build_options)
+target_link_libraries(rsf_ac7_render_scope_test PRIVATE ReScaleFrame::AC7RenderScope rsf_ac7_rust ReScaleFrame::GraphicsLeaves rsf_build_options)
 add_test(NAME ac7_render_scope COMMAND rsf_ac7_render_scope_test)
 set_tests_properties(ac7_render_scope PROPERTIES TIMEOUT 120)
 
@@ -825,7 +834,7 @@ set_source_files_properties("${ac7_view_fixture_object}" PROPERTIES GENERATED TR
 # rsf-ac7 crate builds with its warp-fixture feature beside games/ac7/src/native_renderer.rs.
 add_executable(rsf_ac7_native_graph_test ac7_native_graph.c "${ac7_view_fixture_object}")
 set_target_properties(rsf_ac7_native_graph_test PROPERTIES LINKER_LANGUAGE CXX)
-target_link_libraries(rsf_ac7_native_graph_test PRIVATE ReScaleFrame::AC7RenderScope rsf_ac7_rust rsf_orchestrator minhook rsf_build_options)
+target_link_libraries(rsf_ac7_native_graph_test PRIVATE ReScaleFrame::AC7RenderScope rsf_ac7_rust ReScaleFrame::GraphicsLeaves rsf_orchestrator minhook rsf_build_options)
 add_test(NAME ac7_native_graph COMMAND rsf_ac7_native_graph_test)
 set_tests_properties(ac7_native_graph PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
 
@@ -889,6 +898,12 @@ set_target_properties(rsf_native_fg_vulkan_dispatch_fsr4_test PROPERTIES C_STAND
 target_compile_definitions(rsf_native_fg_vulkan_dispatch_fsr4_test PRIVATE RSF_RUNTIME_BUILD RSF_HAVE_FSR4_FG_VK=1)
 target_include_directories(rsf_native_fg_vulkan_dispatch_fsr4_test PRIVATE ../runtime/orchestrator/include)
 target_link_libraries(rsf_native_fg_vulkan_dispatch_fsr4_test PRIVATE rsf_vulkan_dispatch_fixtures_rust rsf_orchestrator_rust ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_build_options)
+# The Runtime archive defines the production rsf_fsr4gvk_* entries (vulkan_fsr4_fg.rs), so the
+# fixture's fakes carry a fixture prefix and this build of the dispatch calls them by that name.
+foreach(rsf_fsr4_entry create enable_options max_generated status images acquire prepare hudless submitted present_source present destroy drain)
+    target_compile_definitions(rsf_native_fg_vulkan_dispatch_fsr4_test PRIVATE
+        rsf_fsr4gvk_${rsf_fsr4_entry}=rsf_fixture_fsr4gvk_${rsf_fsr4_entry})
+endforeach()
 add_test(NAME native_fg_vulkan_dispatch_fsr4_contract COMMAND rsf_native_fg_vulkan_dispatch_fsr4_test)
 if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h" AND EXISTS "${RSF_FFX_INCLUDE}/dx12/ffx_api_dx12.h" AND EXISTS "${RSF_FFX_INCLUDE}/../../framegeneration/include/ffx_framegeneration.h")
     add_executable(rsf_native_fsr4_fg_bridge_test presentation/fsr4_fg_bridge_main.c)
@@ -1061,13 +1076,14 @@ endif()
 
 add_executable(rsf_sharpening_test graphics_fixture_main.c)
 target_compile_definitions(rsf_sharpening_test PRIVATE RSF_GRAPHICS_FIXTURE=rsf_sharpening_fixture)
-target_link_libraries(rsf_sharpening_test PRIVATE ReScaleFrame::Graphics rsf_build_options)
+target_link_libraries(rsf_sharpening_test PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME sharpening COMMAND rsf_sharpening_test)
 set_tests_properties(sharpening PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
 
 add_executable(rsf_sharpening_settings_test sharpening_settings_native.c)
 set_target_properties(rsf_sharpening_settings_test PROPERTIES LINKER_LANGUAGE CXX)
-target_link_libraries(rsf_sharpening_settings_test PRIVATE rsf_orchestrator rsf_build_options)
+# The settings fixture and rsf_ffx_sharpening are Runtime internals, not DLL exports.
+target_link_libraries(rsf_sharpening_settings_test PRIVATE rsf_orchestrator_rust rsf_build_options)
 if(EXISTS "${CMAKE_SOURCE_DIR}/vendor/fidelityfx/Kits/FidelityFX/upscalers/include/ffx_upscale.h")
     target_include_directories(rsf_sharpening_settings_test SYSTEM PRIVATE "${CMAKE_SOURCE_DIR}/vendor/fidelityfx/Kits/FidelityFX/upscalers/include")
     target_compile_definitions(rsf_sharpening_settings_test PRIVATE RSF_SHARPENING_FFX_HEADER)
@@ -1076,7 +1092,7 @@ add_test(NAME sharpening_settings COMMAND rsf_sharpening_settings_test)
 
 add_executable(rsf_sharpening_d3d12_test graphics_fixture_main.c)
 target_compile_definitions(rsf_sharpening_d3d12_test PRIVATE RSF_GRAPHICS_FIXTURE=rsf_sharpening_d3d12_fixture)
-target_link_libraries(rsf_sharpening_d3d12_test PRIVATE ReScaleFrame::Graphics rsf_build_options)
+target_link_libraries(rsf_sharpening_d3d12_test PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics rsf_build_options)
 add_test(NAME sharpening_d3d12 COMMAND rsf_sharpening_d3d12_test)
 set_tests_properties(sharpening_d3d12 PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
 

@@ -24,5 +24,11 @@ windows = { version = "=0.62.2", default-features = false, features = [
   "Win32_UI_WindowsAndMessaging",
 ] }
 
+# Unit tests link the crates whose archives the fixture executable gets from CMake.
+[target."cfg(windows)".dev-dependencies]
+rsf-orchestrator = { path = "../../runtime/orchestrator" }
+rsf-runtime-common = { path = "../../runtime/common" }
+rsf-shader-compiler = { path = "../../runtime/shader_patch/compiler" }
+
 [lints]
 workspace = true

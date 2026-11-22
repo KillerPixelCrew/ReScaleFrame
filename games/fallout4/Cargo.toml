@@ -36,7 +36,13 @@ features = [
   "Win32_UI_WindowsAndMessaging",
 ]
 
+# Unit tests link the crates whose archives the adapter DLL gets from CMake.
+[target."cfg(windows)".dev-dependencies]
+rsf-runtime-common = { path = "../../runtime/common" }
+rsf-steam = { path = "../../integrations/steam" }
+
 [build-dependencies]
+cc = "1"
 rsf-bindgen = { path = "../../tools/bindgen" }
 
 [lints]

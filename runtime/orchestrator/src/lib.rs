@@ -16,6 +16,10 @@ pub mod sys {
     include!(concat!(env!("OUT_DIR"), "/sys.rs"));
 }
 
+// The Runtime DLL gets rsf_common_sha256_file from the common archive; unit tests link the crate.
+#[cfg(all(test, windows))]
+use rsf_runtime_common as _;
+
 #[cfg(windows)]
 mod auxiliary_sr;
 #[cfg(windows)]

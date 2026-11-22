@@ -123,11 +123,11 @@ frame_callbacks!(
 );
 frame_callbacks!(
     rsf_fsr4gvk,
-    rsf_fsr4gvk_prepare,
-    rsf_fsr4gvk_hudless,
-    rsf_fsr4gvk_submitted,
-    rsf_fsr4gvk_present,
-    rsf_fsr4gvk_present_source,
+    rsf_fixture_fsr4gvk_prepare,
+    rsf_fixture_fsr4gvk_hudless,
+    rsf_fixture_fsr4gvk_submitted,
+    rsf_fixture_fsr4gvk_present,
+    rsf_fixture_fsr4gvk_present_source,
     4096,
     SUBOPTIMAL
 );
@@ -177,7 +177,7 @@ unsafe extern "C" fn rsf_dlssgvk_create(
     FIXTURE_OK
 }
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_fsr4gvk_create(
+unsafe extern "C" fn rsf_fixture_fsr4gvk_create(
     setup: *const rsf_fgvk_setup,
     options: &rsf_fsr4gvk_options,
     out: *mut *mut rsf_fsr4gvk,
@@ -240,7 +240,7 @@ macro_rules! images {
 }
 images!(rsf_ffxgvk_images, rsf_ffxgvk, FFX, 3);
 images!(rsf_dlssgvk_images, rsf_dlssgvk, DLSS, 4);
-images!(rsf_fsr4gvk_images, rsf_fsr4gvk, FSR4, 3);
+images!(rsf_fixture_fsr4gvk_images, rsf_fsr4gvk, FSR4, 3);
 images!(rsf_xessgvk_images, rsf_xessgvk, XESS, 3);
 
 macro_rules! acquire {
@@ -263,7 +263,7 @@ macro_rules! acquire {
 }
 acquire!(rsf_ffxgvk_acquire, rsf_ffxgvk, true, 2, 2);
 acquire!(rsf_dlssgvk_acquire, rsf_dlssgvk, false, 1, SUBOPTIMAL);
-acquire!(rsf_fsr4gvk_acquire, rsf_fsr4gvk, true, 1, 2);
+acquire!(rsf_fixture_fsr4gvk_acquire, rsf_fsr4gvk, true, 1, 2);
 acquire!(rsf_xessgvk_acquire, rsf_xessgvk, false, 2, 2);
 
 fn enabled(value: u32, count: u32) -> i32 {
@@ -286,7 +286,11 @@ extern "C" fn rsf_dlssgvk_enable(_: *mut rsf_dlssgvk, value: u32, count: u32) ->
     }
 }
 #[unsafe(no_mangle)]
-extern "C" fn rsf_fsr4gvk_enable_options(_: *mut rsf_fsr4gvk, value: u32, count: u32) -> i32 {
+extern "C" fn rsf_fixture_fsr4gvk_enable_options(
+    _: *mut rsf_fsr4gvk,
+    value: u32,
+    count: u32,
+) -> i32 {
     assert_eq!(count, 1);
     enabled(value, count)
 }
@@ -299,7 +303,7 @@ extern "C" fn rsf_xessgvk_enable_options(_: *mut rsf_xessgvk, value: u32, count:
     }
 }
 #[unsafe(no_mangle)]
-extern "C" fn rsf_fsr4gvk_max_generated(_: *const rsf_fsr4gvk) -> u32 {
+extern "C" fn rsf_fixture_fsr4gvk_max_generated(_: *const rsf_fsr4gvk) -> u32 {
     1
 }
 #[unsafe(no_mangle)]
@@ -325,7 +329,7 @@ macro_rules! status {
     };
 }
 status!(rsf_ffxgvk_get_status, rsf_ffxgvk, 30, None);
-status!(rsf_fsr4gvk_status, rsf_fsr4gvk, 40, Some(-77));
+status!(rsf_fixture_fsr4gvk_status, rsf_fsr4gvk, 40, Some(-77));
 status!(rsf_xessgvk_status, rsf_xessgvk, 50, Some(-77));
 
 #[unsafe(no_mangle)]
@@ -385,12 +389,12 @@ extern "C" fn rsf_dlssgvk_destroy(_: *mut rsf_dlssgvk) -> i32 {
     retire()
 }
 #[unsafe(no_mangle)]
-extern "C" fn rsf_fsr4gvk_destroy(owner: *mut rsf_fsr4gvk) -> i32 {
+extern "C" fn rsf_fixture_fsr4gvk_destroy(owner: *mut rsf_fsr4gvk) -> i32 {
     assert_eq!(owner as usize, FSR4);
     refusal(-77)
 }
 #[unsafe(no_mangle)]
-extern "C" fn rsf_fsr4gvk_drain(_: *mut rsf_fsr4gvk) -> i32 {
+extern "C" fn rsf_fixture_fsr4gvk_drain(_: *mut rsf_fsr4gvk) -> i32 {
     refusal(-77)
 }
 #[unsafe(no_mangle)]

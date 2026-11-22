@@ -782,3 +782,16 @@ unsafe fn capture_texture(
     let result = unsafe { write_texture(&work, context, texture.source, true) };
     owner(|owner| owner.finish_image(&work, result))
 }
+
+/// The GameSDK depth-domain predicate for native callers: the capture services in input_dump.c
+/// and the DLL export. It is defined here, not in rsf-game-sys, so a binary that links several
+/// Rust archives defines it once.
+///
+/// # Safety
+/// The pointer must refer to a readable, aligned depth-domain record.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn rsf_game_depth_domains_requested(
+    value: *const rsf_game_sys::rsf_game_depth_domains,
+) -> u32 {
+    u32::from(rsf_game_sys::depth_domains_requested(unsafe { &*value }))
+}

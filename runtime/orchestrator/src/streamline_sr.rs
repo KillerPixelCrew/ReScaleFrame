@@ -4,7 +4,8 @@ use rsf_game_sys::rsf_frame_record as Record;
 use std::ffi::c_void;
 use std::ptr::null_mut;
 
-#[cfg(not(test))]
+// The SDK loader entries serve the D3D11/D3D12 SR APIs, which unit tests do not build.
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) mod native;
 pub(crate) mod signature;
 // The typed SDK call tables are compiled out of unit tests, which leaves their constants unused.

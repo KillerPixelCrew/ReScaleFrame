@@ -77,11 +77,12 @@ add_executable(rsf_anomaly_sr_hooks_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_h
 target_compile_options(rsf_anomaly_sr_hooks_test PRIVATE $<$<AND:$<COMPILE_LANGUAGE:C>,$<NOT:$<C_COMPILER_ID:MSVC>>>:-fexceptions>)
 target_include_directories(rsf_anomaly_sr_hooks_test PRIVATE "${RSF_ANOMALY_SR_SRC}" "${PROJECT_SOURCE_DIR}/runtime/orchestrator/include")
 target_link_libraries(rsf_anomaly_sr_hooks_test PRIVATE ReScaleFrame::GameSDK ReScaleFrame::Contract ReScaleFrame::RuntimeCommon
-    ReScaleFrame::Graphics minhook d3d11 rsf_build_options)
+    ReScaleFrame::GraphicsLeaves ReScaleFrame::Graphics minhook d3d11 rsf_build_options)
 add_test(NAME anomaly_sr_hooks_contract COMMAND rsf_anomaly_sr_hooks_test)
 add_executable(rsf_anomaly_sr_roundtrip_test "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_roundtrip.c" "${RSF_ANOMALY_SR_SRC}/sr_d3d11_platform.c")
 target_include_directories(rsf_anomaly_sr_roundtrip_test PRIVATE "${RSF_ANOMALY_SR_SRC}")
-target_link_libraries(rsf_anomaly_sr_roundtrip_test PRIVATE rsf_anomaly_sr_fixture_rust ReScaleFrame::Graphics d3d11 dxgi rsf_build_options)
+target_link_libraries(rsf_anomaly_sr_roundtrip_test PRIVATE rsf_anomaly_sr_fixture_rust ReScaleFrame::GraphicsLeaves
+    ReScaleFrame::Graphics d3d11 dxgi rsf_build_options)
 add_test(NAME anomaly_sr_roundtrip_device COMMAND rsf_anomaly_sr_roundtrip_test)
 set_tests_properties(anomaly_sr_roundtrip_device PROPERTIES SKIP_RETURN_CODE 77)
 set_tests_properties(anomaly_sr_swap_contract anomaly_sr_swap_unknown_selection anomaly_sr_hooks_contract
@@ -193,18 +194,20 @@ foreach(rsf_sr5_client rsf_anomaly_sr_runtime_api_test rsf_anomaly_sr_temporal_d
     if(rsf_sr5_client STREQUAL "rsf_anomaly_sr_runtime_api_test")
         add_executable(${rsf_sr5_client} "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_runtime_api_bridge.c")
         set_target_properties(${rsf_sr5_client} PROPERTIES LINKER_LANGUAGE CXX)
-        target_link_libraries(${rsf_sr5_client} PRIVATE rsf_anomaly_sr_fixture_rust)
+        target_link_libraries(${rsf_sr5_client} PRIVATE rsf_anomaly_sr_fixture_rust "$<TARGET_LINKER_FILE:rsf_orchestrator>")
+        add_dependencies(${rsf_sr5_client} rsf_orchestrator)
     else()
         add_executable(${rsf_sr5_client} "${CMAKE_CURRENT_LIST_DIR}/anomaly_sr_temporal_device.c"
             "${RSF_ANOMALY_SR_SRC}/sr_d3d11_platform.c")
-        target_link_libraries(${rsf_sr5_client} PRIVATE rsf_anomaly_sr_fixture_rust ReScaleFrame::Graphics d3d11 dxgi)
+        # The fixture calls the Runtime's motion passes directly, which only the Runtime archive
+        # defines; that archive also defines the SR API, so this test links it instead of the DLL.
+        target_link_libraries(${rsf_sr5_client} PRIVATE rsf_anomaly_sr_fixture_rust rsf_orchestrator_rust
+            ReScaleFrame::Graphics d3d11 dxgi)
     endif()
     target_include_directories(${rsf_sr5_client} PRIVATE "${RSF_ANOMALY_SR_SRC}"
         "${PROJECT_SOURCE_DIR}/runtime/backends/dlss/include"
         "$<TARGET_PROPERTY:rsf_orchestrator,INTERFACE_INCLUDE_DIRECTORIES>")
-    target_link_libraries(${rsf_sr5_client} PRIVATE "$<TARGET_LINKER_FILE:rsf_orchestrator>" ReScaleFrame::GameSDK ReScaleFrame::Contract
-        rsf_build_options)
-    add_dependencies(${rsf_sr5_client} rsf_orchestrator)
+    target_link_libraries(${rsf_sr5_client} PRIVATE ReScaleFrame::GameSDK ReScaleFrame::Contract rsf_build_options)
 endforeach()
 add_test(NAME anomaly_sr_runtime_api_contract COMMAND rsf_anomaly_sr_runtime_api_test)
 add_test(NAME anomaly_sr_temporal_device COMMAND rsf_anomaly_sr_temporal_device_test)
@@ -225,7 +228,9 @@ if(RSF_ANOMALY_SR_VENDOR_ROOT AND EXISTS "${RSF_ANOMALY_SR_VENDOR_ROOT}/streamli
 endif()
 # Backend switching through the shared pipeline on hardware (generic runtime behaviour, driven by the same vendor root).
 add_executable(rsf_sr_backend_switch_device_test "${CMAKE_CURRENT_LIST_DIR}/sr_backend_switch_device_main.c")
-target_link_libraries(rsf_sr_backend_switch_device_test PRIVATE rsf_orchestrator rsf_orchestrator_rust ReScaleFrame::Graphics rsf_build_options)
+# The fixture is in the Runtime archive and loads the Runtime DLL it switches; it links no import library.
+target_link_libraries(rsf_sr_backend_switch_device_test PRIVATE rsf_orchestrator_rust ReScaleFrame::Graphics rsf_build_options)
+add_dependencies(rsf_sr_backend_switch_device_test rsf_orchestrator)
 if(RSF_ANOMALY_SR_VENDOR_ROOT AND EXISTS "${RSF_ANOMALY_SR_VENDOR_ROOT}/streamline/sl.interposer.dll")
     foreach(rsf_switch_mode baseline select select+exposure)
         add_test(NAME sr_backend_switch_${rsf_switch_mode}

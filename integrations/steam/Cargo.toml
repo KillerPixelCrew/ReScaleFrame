@@ -7,7 +7,8 @@ publish.workspace = true
 license.workspace = true
 
 [lib]
-crate-type = ["staticlib"]
+# rlib: the Skyrim SE archive embeds it, so its DLL carries one copy of rsf-windows.
+crate-type = ["rlib", "staticlib"]
 
 [dependencies]
 rsf-game-sys = { path = "../../sdk/game" }
@@ -23,6 +24,9 @@ features = [
   "Win32_System_SystemInformation",
   "Win32_System_Threading",
 ]
+
+[build-dependencies]
+cc = "1"
 
 [lints]
 workspace = true

@@ -36,7 +36,9 @@ use std::ffi::c_void;
 use std::ptr;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-#[cfg(all(windows, not(feature = "mono-plugin")))]
+// D3D11 recording over the Unity SDK leaves in integrations/unity/native, which need the untracked
+// Unity native headers; unit tests cover the slot state above it.
+#[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
 #[path = "bridge_d3d11.rs"]
 pub(crate) mod graphics;
 
@@ -454,7 +456,7 @@ fn rsf_unity_d3d11_surfaces_begin() -> bool {
     lock().begin_surfaces()
 }
 
-#[cfg(all(windows, not(feature = "mono-plugin")))]
+#[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
 fn rsf_unity_d3d11_surfaces_end() {
     lock().end_surfaces();
 }
@@ -559,7 +561,7 @@ unsafe fn rsf_unity_d3d11_prepare_surface(
 
 /// A frame callback's wait for the completion fence to reach `value`, through the record's wait
 /// leaf outside the state mutex. The callback keeps the record published. False without one.
-#[cfg(all(windows, not(feature = "mono-plugin")))]
+#[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
 pub(crate) fn wait_completion(value: u64) -> bool {
     let Some((handles, ops)) = lock().waiter() else {
         return false;
@@ -569,6 +571,7 @@ pub(crate) fn wait_completion(value: u64) -> bool {
 
 /// Fence reads run outside the state mutex. The closed callback admission and this close keep
 /// the record alive and prevent new submissions.
+#[cfg_attr(test, allow(dead_code))] // Called by the D3D11 graphics glue only.
 pub(crate) fn try_close() -> bool {
     let Some(proof) = lock().close() else {
         return false;
@@ -581,6 +584,7 @@ pub(crate) fn try_close() -> bool {
 
 /// The package's checked close still holds the proof. The destruction leaves are infallible.
 /// Surfaces go first, then the slots and the shared graphics (`SharedDevice::drop`).
+#[cfg_attr(test, allow(dead_code))] // Called by the D3D11 graphics glue only.
 pub(crate) fn release() -> bool {
     let Some(device) = lock().take_for_release() else {
         return false;
@@ -591,6 +595,7 @@ pub(crate) fn release() -> bool {
     true
 }
 
+#[cfg_attr(test, allow(dead_code))] // Called by the D3D11 graphics glue only.
 pub(crate) fn open() {
     lock().open();
 }

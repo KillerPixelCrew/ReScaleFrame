@@ -7,7 +7,8 @@ publish.workspace = true
 license.workspace = true
 
 [lib]
-# rlib so the test crates and the standalone fixtures can use the bindings this crate owns.
+# rlib so the test crates and the standalone fixtures can use the bindings this crate owns, and for
+# the unit tests of adapters whose CMake binaries link the Runtime.
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
@@ -15,11 +16,13 @@ rsf-fsr4-compat = { path = "../backends/fsr/compat" }
 rsf-game-sys = { path = "../../sdk/game" }
 rsf-streamline-vk = { path = "../vulkan/streamline/lifecycle" }
 rsf-graphics = { path = "../graphics/rust" }
-rsf-runtime-submission = { path = "../graphics/submission" }
 rsf-minhook-sys = { path = "../../third_party/minhook" }
+rsf-runtime-submission = { path = "../graphics/submission" }
 
 [dev-dependencies]
 rsf-graphics = { path = "../graphics/rust", features = ["test-support"] }
+# Unit tests link the common helpers the Runtime DLL gets from its CMake archive.
+rsf-runtime-common = { path = "../common" }
 
 [build-dependencies]
 cc = "1"

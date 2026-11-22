@@ -85,6 +85,91 @@ fn plugin_callbacks() {
         .compile("rsf_plugin_callbacks");
 }
 
+// The native leaves CMake links beside the Runtime archive (rsf_runtime_leaves and the FrameDump,
+// Graphics, Presentation, FSR and XeSS C sources they call), for the executables Cargo links (unit
+// tests). Each group is linked without bundling, so the staticlib CMake links never carries it:
+// CMake builds the same files as its own libraries. Defines follow each CMake target; the vendor
+// SDK headers are not used, which compiles the same NOT_COMPILED paths as a checkout without them.
+fn native_leaf(name: &str, files: &[&str], defines: &[&str]) {
+    let minhook = std::env::var("DEP_MINHOOK_INCLUDE").expect("rsf-minhook-sys include directory");
+    let mut build = cc::Build::new();
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        build.flags(["/Zl", "/std:c11"]);
+    }
+    for define in defines {
+        build.define(define, None);
+    }
+    build
+        .includes([
+            "include",
+            "src",
+            "../graphics/include",
+            "../graphics/src",
+            "../presentation/include",
+            "../presentation/src",
+            "../backends/dlss/include",
+            "../backends/fsr/include",
+            "../backends/xess/include",
+            "../contract/include",
+            "../common/include",
+            "../../sdk/game/include",
+            "../../ui/overlay/include",
+            minhook.as_str(),
+        ])
+        .files(files)
+        .warnings_into_errors(true)
+        .cargo_metadata(false)
+        .compile(name);
+    for file in files {
+        println!("cargo:rerun-if-changed={file}");
+    }
+    println!("cargo:rustc-link-lib=static:-bundle={name}");
+}
+
+fn native_leaves() {
+    let out = std::env::var("OUT_DIR").expect("Cargo output directory");
+    println!("cargo:rustc-link-search=native={out}");
+    native_leaf(
+        "rsf_runtime_leaves",
+        &[
+            "src/fg12_platform.c",
+            "src/native_composition_unload.c",
+            "src/gl_pipeline_contract.c",
+            "src/render_host_platform.c",
+            "src/d3d11_host_foreign.c",
+            "../graphics/src/observer_exception_guards.c",
+        ],
+        &["RSF_RUNTIME_BUILD", "RSF_STREAMLINE_HOST_BUILD"],
+    );
+    native_leaf(
+        "rsf_frame_dump",
+        &["src/input_dump.c"],
+        &["RSF_RUNTIME_BUILD"],
+    );
+    native_leaf("rsf_graphics", &["../graphics/src/texture_dump.c"], &[]);
+    native_leaf(
+        "rsf_presentation",
+        &["../presentation/src/d3d11_present_bridge.c"],
+        &["RSF_STREAMLINE_HOST_BUILD"],
+    );
+    native_leaf(
+        "rsf_fsr",
+        &[
+            "../backends/fsr/src/fsr_backend.c",
+            "../backends/fsr/src/fsr_generation.c",
+        ],
+        &[],
+    );
+    native_leaf(
+        "rsf_xess",
+        &[
+            "../backends/xess/src/xess_backend.c",
+            "../backends/xess/src/xess_generation.c",
+        ],
+        &[],
+    );
+}
+
 // SEH containment for the Streamline call leaves, under the Runtime's own name
 // so the standalone lifecycle archive can link beside it.
 fn streamline_guard() {
@@ -180,6 +265,10 @@ fn bindings() {
 
 fn main() {
     bindings();
+    // mfg_provider.rs references the version API without dllimport; CMake links version.lib.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        println!("cargo:rustc-link-lib=version");
+    }
     println!("cargo::rustc-check-cfg=cfg(rsf_streamline_core)");
     println!("cargo:rustc-cfg=rsf_streamline_core");
     println!("cargo:rerun-if-changed=src/plugin_callbacks.c");
@@ -192,5 +281,6 @@ fn main() {
         sharpening_payload();
         plugin_callbacks();
         streamline_guard();
+        native_leaves();
     }
 }

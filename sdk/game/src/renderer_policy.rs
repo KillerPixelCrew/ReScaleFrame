@@ -13,12 +13,3 @@ pub fn depth_domains_requested(value: &rsf_game_depth_domains) -> bool {
     };
     bytes.iter().any(|&byte| byte != 0)
 }
-
-/// # Safety
-/// The pointer must refer to a readable, aligned depth-domain record.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn rsf_game_depth_domains_requested(
-    value: *const rsf_game_depth_domains,
-) -> u32 {
-    u32::from(depth_domains_requested(unsafe { &*value }))
-}

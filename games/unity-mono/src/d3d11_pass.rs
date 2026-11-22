@@ -77,13 +77,13 @@ pub(crate) fn build_d3d12_pass(packet: &rsf_unity_packet) -> rsf_game_render_pas
 #[cfg(any(test, all(windows, not(feature = "mono-plugin"))))]
 mod d3d11 {
     use super::{base_pass, rsf_game_render_pass, rsf_unity_packet};
-    #[cfg(all(windows, not(feature = "mono-plugin")))]
+    #[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
     use crate::bridge_interop::D3D11;
-    #[cfg(all(windows, not(feature = "mono-plugin")))]
+    #[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
     use crate::bridge_state::{
         rsf_unity_frames_activate, rsf_unity_frames_pending_change, rsf_unity_frames_settle_change,
     };
-    #[cfg(all(windows, not(feature = "mono-plugin")))]
+    #[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
     use crate::d3d11_state::wait_completion;
     use crate::sys::RSF_UNITY_PREVIEW_SOURCE_COMMON;
     use rsf_game_sys::{
@@ -282,7 +282,7 @@ mod d3d11 {
     }
 
     /// The caller holds a frame callback, which keeps the graphics record published for the wait.
-    #[cfg(all(windows, not(feature = "mono-plugin")))]
+    #[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
     pub(crate) fn apply_pending_change(plan: &mut PassPlan) -> bool {
         apply_change(
             plan,
@@ -301,7 +301,7 @@ mod d3d11 {
         )
     }
 
-    #[cfg(all(windows, not(feature = "mono-plugin")))]
+    #[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
     pub(crate) fn retire_submission(signalled: bool, handed_back: bool) -> u32 {
         let verdict = retire(signalled, handed_back);
         if verdict != RETIRED {
@@ -313,7 +313,7 @@ mod d3d11 {
 
 #[cfg(test)]
 pub(crate) use d3d11::EVENT_WINDOW;
-#[cfg(all(windows, not(feature = "mono-plugin")))]
+#[cfg(all(windows, not(feature = "mono-plugin"), not(test)))]
 pub(crate) use d3d11::{
     HANDBACK_FAILED, PassPlan, RETIRED, ROUTE_NONE, ROUTE_PREVIEW, ROUTE_WINDOW,
     apply_pending_change, retire_submission,

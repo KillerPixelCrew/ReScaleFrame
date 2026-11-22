@@ -1,16 +1,29 @@
 // SPDX-License-Identifier: MIT
 // Provider eligibility and retention adapted from MFG-Unlocker 2b52823e.
 use super::{Handle, retain_module};
+use std::ffi::c_void;
 use std::mem::forget;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use windows_sys::Win32::{
-    Storage::FileSystem::{
-        GetFileVersionInfoSizeW, GetFileVersionInfoW, VS_FFI_SIGNATURE, VS_FIXEDFILEINFO,
-        VerQueryValueW,
-    },
+    Storage::FileSystem::{VS_FFI_SIGNATURE, VS_FIXEDFILEINFO},
     System::LibraryLoader::{GetModuleFileNameW, GetProcAddress},
 };
+
+// Plain (not dllimport) references, as the C++ provider policy made them: version.lib resolves
+// them, and the dinput8 proxy, which forwards version.dll itself, resolves them to its own
+// forwarders. The windows-sys bindings import them through raw-dylib members inside this archive,
+// which define the forwarders' names a second time.
+unsafe extern "system" {
+    fn GetFileVersionInfoSizeW(path: *const u16, handle: *mut u32) -> u32;
+    fn GetFileVersionInfoW(path: *const u16, handle: u32, bytes: u32, data: *mut c_void) -> i32;
+    fn VerQueryValueW(
+        block: *const c_void,
+        sub_block: *const u16,
+        buffer: *mut *mut c_void,
+        bytes: *mut u32,
+    ) -> i32;
+}
 
 struct Version {
     major: u16,

@@ -21,7 +21,6 @@ use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::FARPROC;
 
 mod generation;
-#[cfg(not(test))]
 mod native;
 mod startup;
 #[cfg(test)]

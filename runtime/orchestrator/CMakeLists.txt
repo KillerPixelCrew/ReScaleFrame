@@ -18,18 +18,31 @@ add_library(rsf_native_cpu INTERFACE)
 target_include_directories(rsf_native_cpu INTERFACE include)
 target_link_libraries(rsf_native_cpu INTERFACE ReScaleFrame::GameSDK)
 
-add_library(rsf_orchestrator_core OBJECT
+# The native leaves the Rust core calls back into. Everything that links the Rust core links them,
+# so Runtime tests and embedded hosts resolve the same functions the DLL does.
+add_library(rsf_runtime_leaves STATIC
     src/fg12_platform.c
     src/native_composition_unload.c
     src/gl_pipeline_contract.c
-    src/rust_exports.c
     src/render_host_platform.c
+    src/d3d11_host_foreign.c
+    ../graphics/src/observer_exception_guards.c
+)
+target_include_directories(rsf_runtime_leaves PUBLIC include)
+target_compile_definitions(rsf_runtime_leaves PUBLIC RSF_RUNTIME_BUILD PRIVATE RSF_STREAMLINE_HOST_BUILD)
+target_link_libraries(rsf_runtime_leaves PUBLIC rsf_native_cpu ReScaleFrame::GameSDK ReScaleFrame::DLSS
+    ReScaleFrame::Graphics ReScaleFrame::FSR ReScaleFrame::XeSS ReScaleFrame::Presentation
+    ReScaleFrame::FrameDump PRIVATE rsf_build_options d3dcompiler bcrypt)
+
+add_library(rsf_orchestrator_core OBJECT
+    src/rust_exports.c
 )
 target_include_directories(rsf_orchestrator_core PUBLIC include)
 target_compile_definitions(rsf_orchestrator_core PUBLIC RSF_RUNTIME_BUILD)
-target_link_libraries(rsf_orchestrator_core PUBLIC rsf_native_cpu)
+target_link_libraries(rsf_orchestrator_core PUBLIC rsf_native_cpu rsf_runtime_leaves)
 rsf_add_rust_static(rsf_orchestrator_rust rsf_rust_core rsf-orchestrator rsf_orchestrator)
-target_link_libraries(rsf_orchestrator_rust INTERFACE minhook)
+# version: the provider version reads in mfg_provider.rs (forwarded by the dinput8 proxy itself).
+target_link_libraries(rsf_orchestrator_rust INTERFACE minhook rsf_runtime_leaves version)
 target_link_libraries(rsf_orchestrator_core PUBLIC rsf_orchestrator_rust)
 target_link_libraries(rsf_native_cpu INTERFACE rsf_orchestrator_rust)
 target_link_libraries(rsf_frame_dump PRIVATE rsf_orchestrator_rust)
@@ -139,14 +152,20 @@ if(RSF_FRAME_DUMP_VULKAN_INCLUDE)
 endif()
 
 add_library(rsf_orchestrator SHARED $<TARGET_OBJECTS:rsf_orchestrator_core>)
-target_link_libraries(rsf_orchestrator PUBLIC rsf_orchestrator_core)
+target_link_libraries(rsf_orchestrator PRIVATE rsf_orchestrator_core)
+# Consumers link the DLL's exports. They get the core's headers and definitions, not its static
+# archives, which would define the same exports a second time.
+target_include_directories(rsf_orchestrator INTERFACE
+    $<TARGET_PROPERTY:rsf_orchestrator_core,INTERFACE_INCLUDE_DIRECTORIES>)
+target_compile_definitions(rsf_orchestrator INTERFACE
+    $<TARGET_PROPERTY:rsf_orchestrator_core,INTERFACE_COMPILE_DEFINITIONS>)
 # Native Vulkan services are public C entry points used by external engines.
 # Keep every service object in the DLL even when no embedded host references it.
 target_link_libraries(rsf_orchestrator PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,rsf_native_vulkan>")
 target_link_libraries(rsf_orchestrator PRIVATE rsf_build_options)
 set_target_properties(rsf_orchestrator PROPERTIES OUTPUT_NAME "ReScaleFrame.Runtime")
 target_sources(rsf_orchestrator PRIVATE src/d3d11_present_api.c src/dll_exports.c)
-target_sources(rsf_orchestrator PRIVATE src/d3d11_host_foreign.c src/d3d11_host_exports.c)
+target_sources(rsf_orchestrator PRIVATE src/d3d11_host_exports.c)
 add_subdirectory(../shader_patch "${CMAKE_CURRENT_BINARY_DIR}/shader_patch")
 
 # Anti-Lag 2 driver calls are Rust (src/latency_antilag_sdk.rs); no SDK headers are needed.

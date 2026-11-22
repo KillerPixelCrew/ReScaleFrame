@@ -7,7 +7,8 @@ publish.workspace = true
 license.workspace = true
 
 [lib]
-# rlib so tests/ac7-capture and the standalone AC7 fixtures can use the bindings it owns.
+# rlib so tests/ac7-capture and the standalone AC7 fixtures can use the bindings it owns, and for
+# the capture fixture's unit-test link.
 crate-type = ["staticlib", "rlib"]
 
 [features]
@@ -15,8 +16,11 @@ warp-fixture = []
 
 [dependencies]
 rsf-game-sys = { path = "../../sdk/game" }
+# MinHook.h for the capture trampolines; the adapter DLL links CMake's MinHook.
+rsf-minhook-sys = { path = "../../third_party/minhook" }
 
 [build-dependencies]
+cc = "1"
 rsf-bindgen = { path = "../../tools/bindgen" }
 
 [target."cfg(windows)".dependencies]
@@ -38,6 +42,11 @@ windows = { version = "=0.62.2", default-features = false, features = [
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_UI_WindowsAndMessaging",
 ] }
+
+[target."cfg(windows)".dev-dependencies]
+# Unit tests link the shader compiler and the D3D11 leaves the adapter DLL gets from CMake.
+rsf-graphics = { path = "../../runtime/graphics/rust" }
+rsf-shader-compiler = { path = "../../runtime/shader_patch/compiler" }
 
 [lints]
 workspace = true

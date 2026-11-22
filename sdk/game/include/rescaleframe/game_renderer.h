@@ -42,7 +42,7 @@ typedef struct rsf_game_depth_domains {
    Viewport unmapping permits at most one source-format quantization step at endpoints.
    CPU bounds validation guarantees finite arithmetic and positive W; Z/W is explicitly
    clipped to [0,1]. Unknown versions/partial coverage refuse, never fall back to raw.
-   Link this predicate from a GameSDK archive consumer or the Runtime. */
+   The Runtime defines this predicate; Rust callers use rsf_game_sys::depth_domains_requested. */
 uint32_t rsf_game_depth_domains_requested(const rsf_game_depth_domains* value);
 
 /* Copied engine rendering identity. Keys identify owners and must not be dereferenced by a host.
