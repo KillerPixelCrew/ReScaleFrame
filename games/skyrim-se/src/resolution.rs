@@ -138,7 +138,7 @@ fn reconfigure(
     output: [u32; 2],
     host: &rsf_game_host_services,
     leaves: &Leaves,
-) -> Option<rsf_game_render_config> {
+) -> Option<[u32; 2]> {
     if !unsafe { (leaves.renderer_thread)() }
         || host.process_upscale.is_none()
         || host.render_config.is_none()
@@ -167,23 +167,9 @@ fn reconfigure(
         [pass.camera.output_width, pass.camera.output_height] = output;
         unsafe { (leaves.prepare)(host, ptr::with_exposed_provenance_mut(context), &pass) };
     }
-    let mut config = rsf_game_render_config {
-        struct_size: size_of::<rsf_game_render_config>() as u32,
-        enabled: 0,
-        output_width: 0,
-        output_height: 0,
-        render_width: 0,
-        render_height: 0,
-    };
+    let mut config = rsf_game_render_config::request();
     unsafe { (leaves.config)(host, &mut config) };
-    let render = [config.render_width, config.render_height];
-    (config.enabled != 0
-        && [config.output_width, config.output_height] == output
-        && render
-            .into_iter()
-            .zip(output)
-            .all(|(render, output)| (1..=output).contains(&render)))
-    .then_some(config)
+    config.checked_render_extent(output)
 }
 
 fn configure(
@@ -199,7 +185,7 @@ fn configure(
     }
     let output = words::<2>(platform, pointer + 0x24)?;
     let previous = state().owner;
-    let Some(config) = reconfigure(platform, base, output, host, leaves) else {
+    let Some(render) = reconfigure(platform, base, output, host, leaves) else {
         if let Some(previous) = previous {
             // After restoring the saved fields, the native resolver can resume ownership.
             unsafe {
@@ -216,7 +202,6 @@ fn configure(
         return Some(());
     };
     let [frame] = words(platform, base + NATIVE_FRAME)?;
-    let render = [config.render_width, config.render_height];
     let ratios = [
         render[0] as f32 / output[0] as f32,
         render[1] as f32 / output[1] as f32,

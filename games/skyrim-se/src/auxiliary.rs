@@ -2,6 +2,11 @@
 //! Native auxiliary surface selection and the scoped handoff to the Runtime.
 
 use crate::platform::{self, Platform};
+use rsf_game_sys::d3d11_host_abi::{
+    RSF_D3D11_AUXILIARY_COLOUR, RSF_D3D11_AUXILIARY_DEPTH_STENCIL,
+    RSF_D3D11_AUXILIARY_RESTORE_CONTENTS, rsf_d3d11_auxiliary_pass as Pass,
+    rsf_d3d11_auxiliary_scope as Scope, rsf_d3d11_auxiliary_surface as Surface,
+};
 use rsf_game_sys::{rsf_game_host_services, rsf_game_render_pass};
 use std::ffi::{c_char, c_void};
 use std::ptr;
@@ -12,38 +17,6 @@ const TARGETS: usize = 0x333_1f40 + 0xa58;
 const TARGET_STRIDE: usize = 0x30;
 const DOF_SELECTOR: usize = 0x343_6358;
 const FORMATS: [u32; 4] = [44, 28, 34, 61]; // R24G8, RGBA8, RG16F, R8
-
-#[repr(C)]
-struct Surface {
-    struct_size: u32,
-    kind: u32,
-    texture: *mut c_void,
-    source_rect: [f32; 4],
-    output_rect: [i32; 4],
-    jitter_pixels: [f32; 2],
-    name: *const c_char,
-    source_name: *const c_char,
-    flags: u32,
-}
-
-#[repr(C)]
-struct Pass {
-    struct_size: u32,
-    abi_version: u32,
-    pass: *const rsf_game_render_pass,
-    surface_count: u32,
-    surfaces: *const Surface,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct Scope {
-    struct_size: u32,
-    abi_version: u32,
-    session_id: u64,
-    native_frame: u64,
-    view_key: u64,
-}
 
 #[repr(C)]
 struct TextureFacts {
@@ -194,7 +167,11 @@ fn surface(
     let render = [camera.render_width as f32, camera.render_height as f32];
     let mut surface = Surface {
         struct_size: size_of::<Surface>() as u32,
-        kind: u32::from(index != 0),
+        kind: if index == 0 {
+            RSF_D3D11_AUXILIARY_DEPTH_STENCIL
+        } else {
+            RSF_D3D11_AUXILIARY_COLOUR
+        },
         texture: facts.texture,
         source_rect: [0.0, 0.0, render[0], render[1]],
         output_rect: [
@@ -211,7 +188,11 @@ fn surface(
             _ => ptr::null(),
         },
         // DOF clears the half-size underwater mask. A successful scope must preserve that clear.
-        flags: u32::from(!mask),
+        flags: if mask {
+            0
+        } else {
+            RSF_D3D11_AUXILIARY_RESTORE_CONTENTS
+        },
     };
     for i in 0..2 {
         if mask {

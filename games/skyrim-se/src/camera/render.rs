@@ -4,6 +4,7 @@
 use super::{Matrix, NativeCamera, decode};
 use crate::platform::Platform;
 use crate::taa;
+use rsf_game_sys::camera_math::finite_matrix_close;
 use rsf_game_sys::{RSF_GAME_RENDER_RESET, rsf_game_render_pass};
 use std::sync::{Mutex, PoisonError};
 
@@ -130,12 +131,6 @@ fn read_cache(
     ))
 }
 
-fn same_matrix(a: Matrix, b: Matrix) -> bool {
-    a.into_iter()
-        .zip(b)
-        .all(|(a, b)| a.is_finite() && b.is_finite() && (a - b).abs() <= 0.001)
-}
-
 pub(crate) fn read_frame(
     platform: &Platform,
     leaves: &Leaves,
@@ -198,7 +193,11 @@ pub(crate) fn read_frame(
         && previous.camera == facts.camera
         && facts.frame == previous.frame.wrapping_add(1)
         && previous.render == facts.render
-        && same_matrix(native.previous_view_projection, previous.view_projection)
+        && finite_matrix_close(
+            &native.previous_view_projection,
+            &previous.view_projection,
+            0.001,
+        )
         && native.previous_origin.map(f32::to_bits) == previous.origin_bits
     {
         camera.previous_jitter_pixels = previous.jitter;

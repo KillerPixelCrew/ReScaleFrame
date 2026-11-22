@@ -3,6 +3,7 @@
 
 use crate::platform::{self, Platform};
 use crate::render_hook::RenderHook;
+use rsf_game_sys::d3d11_host_abi::rsf_d3d11_host_capture as Capture;
 use rsf_game_sys::{
     RSF_GAME_RENDER_FG_INPUTS, RSF_GAME_RENDER_FINAL_SCENE, RSF_GAME_RENDER_NO_FG,
     RSF_GAME_RENDER_WINDOW, rsf_game_host_services, rsf_game_render_pass,
@@ -20,20 +21,6 @@ const PRIMARY_UI: usize = 0x219_e5c0;
 const NATIVE_FRAME: usize = 0x333_63f4;
 const ACTIVE_WINDOW: usize = 0x333_0198;
 const IMMEDIATE_CONTEXT: usize = 0x333_1f30;
-
-#[repr(C)]
-struct Capture {
-    struct_size: u32,
-    abi_version: u32,
-    session_id: u64,
-    native_frame: u64,
-    view_key: u64,
-    name: *const c_char,
-    description: *const c_char,
-    texture: *mut c_void,
-    view: u32,
-    scale: f32,
-}
 
 #[repr(C)]
 struct Buffer {

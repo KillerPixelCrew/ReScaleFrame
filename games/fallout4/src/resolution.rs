@@ -400,25 +400,11 @@ fn configured_targets(
     if !unsafe { (leaves.reconfigure)(host, context, &planning) } {
         return None;
     }
-    let mut config = rsf_game_render_config {
-        struct_size: size_of::<rsf_game_render_config>() as u32,
-        enabled: 0,
-        output_width: 0,
-        output_height: 0,
-        render_width: 0,
-        render_height: 0,
-    };
+    let mut config = rsf_game_render_config::request();
     if !unsafe { (leaves.render_config)(host, &mut config) } {
         return None;
     }
-    let render = [config.render_width, config.render_height];
-    (config.enabled != 0
-        && [config.output_width, config.output_height] == size
-        && render[0] != 0
-        && render[1] != 0
-        && render[0] <= size[0]
-        && render[1] <= size[1])
-        .then_some(render)
+    config.checked_render_extent(size)
 }
 
 fn preflight(

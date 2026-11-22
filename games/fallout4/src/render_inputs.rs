@@ -596,9 +596,7 @@ fn same_raster(a: &CameraRaster, b: &CameraRaster) -> bool {
 }
 
 fn close_matrix(a: &Flat, b: &Flat) -> bool {
-    a.iter()
-        .zip(b)
-        .all(|(&a, &b)| a.is_finite() && b.is_finite() && (a - b).abs() <= 0.001)
+    rsf_game_sys::camera_math::finite_matrix_close(a, b, 0.001)
 }
 
 /// The renderer owner, device, context, window, chain, native frame and output size.
