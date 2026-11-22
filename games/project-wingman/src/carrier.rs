@@ -27,6 +27,29 @@ type Fingerprint = unsafe extern "C" fn(*const u16, *mut c_char) -> bool;
 
 static LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
 static LOG_WRITE: Mutex<()> = Mutex::new(());
+static SESSION: Mutex<Option<Session>> = Mutex::new(None);
+
+struct Session {
+    handle: std::ptr::NonNull<c_void>,
+    quiesce: Start,
+    stop: Start,
+    active: bool,
+}
+
+// Access is serialized through SESSION. Runtime operations use an opaque session handle.
+unsafe impl Send for Session {}
+
+fn retire(session: &mut Option<Session>) -> i32 {
+    let Some(pending) = session.as_ref() else {
+        return 0;
+    };
+    unsafe { (pending.quiesce)(pending.handle.as_ptr()) };
+    let result = unsafe { (pending.stop)(pending.handle.as_ptr()) };
+    if result == 0 {
+        *session = None;
+    }
+    result
+}
 
 fn module_path(module: HMODULE) -> Option<Vec<u16>> {
     let mut buffer = vec![0; 32768];
@@ -93,6 +116,15 @@ unsafe extern "C" fn rsf_wingman_carrier_start(module: HMODULE, fingerprint: Fin
     )));
     write_log(b"XInput carrier started; Windows controller forwarding remains independent.");
 
+    let mut owner = SESSION.lock().unwrap_or_else(PoisonError::into_inner);
+    if owner.as_ref().is_some_and(|session| session.active) {
+        return 0;
+    }
+    let cleanup = retire(&mut owner);
+    if cleanup != 0 {
+        return cleanup as u32;
+    }
+
     let runtime_path = path_with(parent, "ReScaleFrame\\ReScaleFrame.Runtime.dll");
     let runtime = unsafe {
         LoadLibraryExW(
@@ -107,13 +139,18 @@ unsafe extern "C" fn rsf_wingman_carrier_start(module: HMODULE, fingerprint: Fin
     }
     let prepare = unsafe { GetProcAddress(runtime, s!("rsf_plugin_session_prepare")) };
     let start = unsafe { GetProcAddress(runtime, s!("rsf_plugin_session_start")) };
-    let (Some(prepare), Some(start)) = (prepare, start) else {
+    let quiesce = unsafe { GetProcAddress(runtime, s!("rsf_plugin_session_quiesce")) };
+    let stop = unsafe { GetProcAddress(runtime, s!("rsf_plugin_session_stop")) };
+    let (Some(prepare), Some(start), Some(quiesce), Some(stop)) = (prepare, start, quiesce, stop)
+    else {
         write_log(b"Runtime plugin lifecycle exports are unavailable.");
         return 1;
     };
-    // Both names are the Runtime's public C session entry points.
+    // These names are the Runtime's public C session entry points.
     let prepare: Prepare = unsafe { std::mem::transmute(prepare) };
     let start: Start = unsafe { std::mem::transmute(start) };
+    let quiesce: Start = unsafe { std::mem::transmute(quiesce) };
+    let stop: Start = unsafe { std::mem::transmute(stop) };
 
     let Some(mut executable) = module_path(null_mut()) else {
         return 1;
@@ -136,7 +173,7 @@ unsafe extern "C" fn rsf_wingman_carrier_start(module: HMODULE, fingerprint: Fin
     let mut services: rsf_game_host_services = unsafe { std::mem::zeroed() };
     services.struct_size = size_of::<rsf_game_host_services>() as u32;
     services.abi_version = RSF_GAME_ABI_VERSION;
-    services.session_id = unsafe { GetTickCount64() }.wrapping_add(1);
+    services.session_id = unsafe { GetTickCount64() }.saturating_add(1);
     services.log = Some(host_log);
     let options = rsf_plugin_session_options {
         struct_size: size_of::<rsf_plugin_session_options>() as u32,
@@ -148,11 +185,37 @@ unsafe extern "C" fn rsf_wingman_carrier_start(module: HMODULE, fingerprint: Fin
     let mut session = null_mut();
     let prepared = unsafe { prepare(&options, &mut session) } as u32;
     write_log(format!("Project Wingman observer prepare result={prepared}").as_bytes());
+    if let Some(handle) = std::ptr::NonNull::new(session) {
+        *owner = Some(Session {
+            handle,
+            quiesce,
+            stop,
+            active: false,
+        });
+    }
     if prepared != 0 {
+        let cleanup = retire(&mut owner);
+        if cleanup != 0 {
+            write_log(
+                format!("Project Wingman observer cleanup pending result={cleanup}").as_bytes(),
+            );
+        }
         return prepared;
     }
+    let Some(admitted) = owner.as_mut() else {
+        return 1;
+    };
     let started = unsafe { start(session) } as u32;
+    admitted.active = started == 0;
     write_log(format!("Project Wingman observer start result={started}; graph facts only, SR/FG/latency not implemented.").as_bytes());
+    if started != 0 {
+        let cleanup = retire(&mut owner);
+        if cleanup != 0 {
+            write_log(
+                format!("Project Wingman observer cleanup pending result={cleanup}").as_bytes(),
+            );
+        }
+    }
     // The loaded Runtime and admitted session stay valid until process exit.
     started
 }
