@@ -20,7 +20,7 @@ pub(crate) mod session_records_abi;
 #[path = "../timeline_pair.rs"]
 mod timeline_pair;
 #[path = "timing.rs"]
-mod timing;
+pub(crate) mod timing;
 
 use bridge_abi::{
     RSF_XESS_BRIDGE_ABI_MISMATCH as ABI_MISMATCH,

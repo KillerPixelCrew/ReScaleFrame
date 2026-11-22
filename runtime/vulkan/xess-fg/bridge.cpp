@@ -18,6 +18,7 @@
 #define RSF_XESS_BRIDGE_BUILD
 #include "session_abi.h"
 #include "diagnostic-capture.h"
+#include "dx12-runtime.h"
 
 static_assert(XEFG_SWAPCHAIN_USE_MAX_SUPPORTED_INTERPOLATED_FRAMES == UINT32_MAX);
 static_assert(sizeof(xefg_swapchain_d3d12_init_params_t) == 72 &&
@@ -30,8 +31,24 @@ static_assert(sizeof(xefg_swapchain_present_status_t) == 12 && sizeof(xell_sleep
 
 /// @brief Releases a local COM reference and clears its pointer without GPU waiting.
 template<typename T> static void Release(T*& value) {
-    if (value) { value->Release(); value = nullptr; }
+    if (value) {
+#if defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
+        rsf_xess_capture::rsf_core_xess_d3d12_capture_release(value);
+#else
+        value->Release();
+#endif
+        value = nullptr;
+    }
 }
+
+#if defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
+template<typename T, typename Fn> static int32_t BindCom(T*& value, Fn bind) {
+    void* result = nullptr;
+    const int32_t code = bind(&result);
+    value = static_cast<T*>(result);
+    return code;
+}
+#endif
 
 // Native clock and stderr leaves for the Rust timing owner. The diagnostic
 // setting is sampled at bridge load, and does not affect pacing or Present.
@@ -87,7 +104,10 @@ struct rsf_vk_xess_fg {
     ID3D12GraphicsCommandList* commandList = nullptr;
     ID3D12Fence* completionFence = nullptr;
     bool allowTearing = false;
-    // Timing only (VULKANSTORY_XESS_FG_TIMING): two timestamps per allocator slot.
+#if defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
+    rsf_xess_dx12_timestamps* timestamps = nullptr;
+#else
+    // Timing only (VULKANSTORY_XESS_FG_TIMING): three timestamps per allocator slot.
     ID3D12QueryHeap* queryHeap = nullptr;
     ID3D12Resource* queryReadback = nullptr;
     std::array<ID3D12CommandAllocator*, RSF_XESS_BRIDGE_ALLOCATOR_COUNT> postAllocators{};
@@ -96,6 +116,7 @@ struct rsf_vk_xess_fg {
     std::array<int64_t, RSF_XESS_BRIDGE_ALLOCATOR_COUNT> presentEnter{};
     std::array<int64_t, RSF_XESS_BRIDGE_ALLOCATOR_COUNT> presentExit{};
     std::array<bool, RSF_XESS_BRIDGE_ALLOCATOR_COUNT> slotTimed{};
+#endif
     xell_context_handle_t xell = nullptr;
     xefg_swapchain_handle_t fg = nullptr;
 
@@ -198,10 +219,14 @@ static rsf_vk_xess_fg* Allocate(rsf_xess_bridge_session* session, const rsf_xess
 static void ReleaseNative(rsf_vk_xess_fg* value) {
     Release(value->commandList);
     for (auto*& allocator : value->allocators) Release(allocator);
+#if defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
+    rsf_xess_dx12::rsf_core_xess_dx12_timestamps_destroy(value->timestamps);
+#else
     Release(value->postList);
     for (auto*& allocator : value->postAllocators) Release(allocator);
     Release(value->queryReadback);
     Release(value->queryHeap);
+#endif
     Release(value->completionFence);
     Release(value->sharedFence);
     Release(value->queue);
@@ -212,25 +237,41 @@ static void ReleaseNative(rsf_vk_xess_fg* value) {
 }
 
 static int32_t CreateFactory(rsf_vk_xess_fg* value) {
+#if defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
+    return BindCom(value->factory, [&](void** out) { return rsf_xess_dx12::rsf_core_xess_dx12_factory(out); });
+#else
     return FAILED(CreateDXGIFactory2(0, IID_PPV_ARGS(&value->factory))) ? -4 : 0;
+#endif
 }
 
 static int32_t FindAdapter(rsf_vk_xess_fg* value, uint64_t adapterLuid) {
+#if defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
+    return BindCom(value->adapter, [&](void** out) { return rsf_xess_dx12::rsf_core_xess_dx12_adapter(value->factory, adapterLuid, out); });
+#else
     LUID luid{};
     luid.LowPart = static_cast<DWORD>(adapterLuid);
     luid.HighPart = static_cast<LONG>(adapterLuid >> 32);
     return FAILED(value->factory->EnumAdapterByLuid(luid, IID_PPV_ARGS(&value->adapter))) ? -5 : 0;
+#endif
 }
 
 static int32_t CreateDevice(rsf_vk_xess_fg* value) {
+#if defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
+    return BindCom(value->device, [&](void** out) { return rsf_xess_dx12::rsf_core_xess_dx12_device(value->adapter, out); });
+#else
     return FAILED(D3D12CreateDevice(value->adapter, D3D_FEATURE_LEVEL_11_0,
         IID_PPV_ARGS(&value->device))) ? -6 : 0;
+#endif
 }
 
 static int32_t CreateQueue(rsf_vk_xess_fg* value) {
+#if defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
+    return BindCom(value->queue, [&](void** out) { return rsf_xess_dx12::rsf_core_xess_dx12_queue(value->device, out); });
+#else
     D3D12_COMMAND_QUEUE_DESC queue{};
     queue.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
     return FAILED(value->device->CreateCommandQueue(&queue, IID_PPV_ARGS(&value->queue))) ? -7 : 0;
+#endif
 }
 
 static int32_t CreateXell(rsf_vk_xess_fg* value) {
@@ -265,9 +306,13 @@ static void LogCreateError(const char* stage, int32_t error, int32_t cleanup) {
 }
 
 static int32_t ReadCompletion(rsf_vk_xess_fg* value, uint64_t* completed) {
+#if defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
+    return rsf_xess_dx12::rsf_core_xess_dx12_completed(value->completionFence, completed);
+#else
     if (!value->completionFence) return static_cast<int32_t>(E_UNEXPECTED);
     *completed = value->completionFence->GetCompletedValue();
     return *completed == UINT64_MAX ? static_cast<int32_t>(DXGI_ERROR_DEVICE_REMOVED) : 0;
+#endif
 }
 
 static int32_t DestroyFg(rsf_vk_xess_fg* value) {
@@ -337,6 +382,11 @@ extern "C" __declspec(dllexport) int rsf_vk_xess_fg_create_from_vulkan(
     if (!output) return -1;
     *output = nullptr;
     if (!physical) return -1;
+#if defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
+    uint64_t luid = 0;
+    const int32_t status = rsf_xess_dx12::rsf_core_xess_dx12_vulkan_luid(physical, &luid);
+    if (status) return status;
+#else
     HMODULE loader = GetModuleHandleW(L"vulkan-1.dll");
     auto properties = loader ? reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
         GetProcAddress(loader, "vkGetPhysicalDeviceProperties2")) : nullptr;
@@ -350,6 +400,7 @@ extern "C" __declspec(dllexport) int rsf_vk_xess_fg_create_from_vulkan(
     if (!id.deviceLUIDValid) return -11;
     uint64_t luid = 0;
     std::memcpy(&luid, id.deviceLUID, VK_LUID_SIZE);
+#endif
     return rsf_vk_xess_fg_create(luid, output);
 }
 
@@ -357,6 +408,11 @@ extern "C" __declspec(dllexport) int rsf_vk_xess_fg_create_from_vulkan(
 // is applied by the native presentation path.
 static int32_t InitSwapchain(rsf_vk_xess_fg* value, void* window, uint32_t width,
     uint32_t height, const xefg_swapchain_d3d12_init_params_t* params) {
+    DXGI_SWAP_CHAIN_DESC1 desc{};
+#if defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
+    value->allowTearing = rsf_xess_dx12::rsf_core_xess_dx12_tearing(value->factory) != 0;
+    rsf_xess_dx12::rsf_core_xess_dx12_swapchain_desc(&desc, width, height, value->allowTearing);
+#else
     IDXGIFactory5* factory5 = nullptr;
     if (SUCCEEDED(value->factory->QueryInterface(IID_PPV_ARGS(&factory5)))) {
         BOOL supported = FALSE;
@@ -364,7 +420,6 @@ static int32_t InitSwapchain(rsf_vk_xess_fg* value, void* window, uint32_t width
             DXGI_FEATURE_PRESENT_ALLOW_TEARING, &supported, sizeof(supported))) && supported;
         Release(factory5);
     }
-    DXGI_SWAP_CHAIN_DESC1 desc{};
     desc.Width = width;
     desc.Height = height;
     desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
@@ -373,6 +428,7 @@ static int32_t InitSwapchain(rsf_vk_xess_fg* value, void* window, uint32_t width
     desc.BufferCount = 3;
     desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
     desc.Flags = value->allowTearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
+#endif
     return static_cast<int32_t>(value->initSwapchain(value->fg, static_cast<HWND>(window),
         &desc, nullptr, value->queue, value->factory, params));
 }
@@ -384,6 +440,15 @@ static int32_t GetSwapchain(rsf_vk_xess_fg* value) {
 }
 
 static int32_t CreateRecorders(rsf_vk_xess_fg* value) {
+#if defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
+    void* allocators[RSF_XESS_BRIDGE_ALLOCATOR_COUNT]{};
+    const int32_t code = BindCom(value->commandList, [&](void** out) {
+        return rsf_xess_dx12::rsf_core_xess_dx12_recorders(value->device, &allocators, out);
+    });
+    for (size_t i = 0; i < std::size(allocators); ++i)
+        value->allocators[i] = static_cast<ID3D12CommandAllocator*>(allocators[i]);
+    return code;
+#else
     HRESULT result;
     for (auto*& allocator : value->allocators) {
         result = value->device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
@@ -394,6 +459,7 @@ static int32_t CreateRecorders(rsf_vk_xess_fg* value) {
         value->allocators[0], nullptr, IID_PPV_ARGS(&value->commandList));
     if (FAILED(result)) return static_cast<int>(result);
     return static_cast<int>(value->commandList->Close());
+#endif
 }
 
 // The session admits the exact SDK binary before resolving its private setter.
@@ -552,21 +618,39 @@ extern "C" __declspec(dllexport) int rsf_vk_xess_fg_create_shared_fence(
     if (!value || !value->device || !sharedHandle) return -1;
     *sharedHandle = nullptr;
     if (!value->sharedFence) {
+#if defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
+        const int32_t result = BindCom(value->sharedFence, [&](void** out) {
+            return rsf_xess_dx12::rsf_core_xess_dx12_fence(value->device, 1, out);
+        });
+#else
         HRESULT result = value->device->CreateFence(0, D3D12_FENCE_FLAG_SHARED,
             IID_PPV_ARGS(&value->sharedFence));
+#endif
         if (FAILED(result)) return static_cast<int>(result);
     }
+#if defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
+    return rsf_xess_dx12::rsf_core_xess_dx12_share_fence(value->device, value->sharedFence, sharedHandle);
+#else
     HRESULT result = value->device->CreateSharedHandle(value->sharedFence, nullptr,
         GENERIC_ALL, nullptr, sharedHandle);
     return FAILED(result) ? static_cast<int>(result) : 0;
+#endif
 }
 
 static int32_t WaitShared(rsf_vk_xess_fg* value, uint64_t target) {
+#if defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
+    return rsf_xess_dx12::rsf_core_xess_dx12_wait(value->queue, value->sharedFence, target);
+#else
     return static_cast<int32_t>(value->queue->Wait(value->sharedFence, target));
+#endif
 }
 
 static int32_t SignalDone(rsf_vk_xess_fg* value, uint64_t target) {
+#if defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
+    return rsf_xess_dx12::rsf_core_xess_dx12_signal(value->queue, value->sharedFence, target);
+#else
     return static_cast<int32_t>(value->queue->Signal(value->sharedFence, target));
+#endif
 }
 
 /// @brief Queues a DX12 GPU wait for the borrowed shared-fence value.
@@ -604,6 +688,7 @@ static void Transition(ID3D12GraphicsCommandList* list, ID3D12Resource* resource
 
 #endif
 
+#if !defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
 namespace {
 /// @brief Lazily creates opt-in timestamp queries, readback storage and post-present command lists.
 /// @details Objects remain owned by the context and are released during checked destruction; a false result disables that timing sample.
@@ -656,6 +741,8 @@ void HarvestGpuTiming(rsf_vk_xess_fg* value, uint32_t slot) {
 }
 }
 
+#endif
+
 static_assert(DXGI_FORMAT_B8G8R8A8_UNORM == 87 && DXGI_FORMAT_R16G16_FLOAT == 34 &&
     DXGI_FORMAT_D32_FLOAT == 40 && DXGI_FORMAT_R32_FLOAT == 41);
 
@@ -668,9 +755,13 @@ static void DescribePresentResource(void* resource, rsf_xess_bridge_resource_des
 #endif
 
 static int32_t ResetPresentCommands(rsf_vk_xess_fg* value, uint32_t slot) {
+#if defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
+    return rsf_xess_dx12::rsf_core_xess_dx12_reset(value->allocators[slot], value->commandList);
+#else
     const HRESULT result = value->allocators[slot]->Reset();
     if (FAILED(result)) return static_cast<int32_t>(result);
     return static_cast<int32_t>(value->commandList->Reset(value->allocators[slot], nullptr));
+#endif
 }
 
 static_assert(D3D12_RESOURCE_STATE_COMMON == 0 && D3D12_RESOURCE_STATE_PRESENT == 0 &&
@@ -687,11 +778,15 @@ static void TransitionPresentResource(rsf_vk_xess_fg* value, void* resource,
 }
 
 static int32_t AcquireBackbuffer(rsf_vk_xess_fg* value, void** output) {
+#if defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
+    return rsf_xess_dx12::rsf_core_xess_dx12_backbuffer(value->swapchain, output);
+#else
     ID3D12Resource* backbuffer = nullptr;
     const uint32_t backbufferIndex = value->swapchain->GetCurrentBackBufferIndex();
     const HRESULT result = value->swapchain->GetBuffer(backbufferIndex, IID_PPV_ARGS(&backbuffer));
     if (SUCCEEDED(result)) *output = backbuffer;
     return static_cast<int32_t>(result);
+#endif
 }
 
 static void CopyPresentColor(rsf_vk_xess_fg* value, void* backbuffer, void* color) {
@@ -704,26 +799,46 @@ static void CopyPresentColor(rsf_vk_xess_fg* value, void* backbuffer, void* colo
 }
 
 static void ExecutePresentCommands(rsf_vk_xess_fg* value) {
+#if defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
+    rsf_xess_dx12::rsf_core_xess_dx12_execute(value->queue, value->commandList);
+#else
     ID3D12CommandList* lists[] = {value->commandList};
     value->queue->ExecuteCommandLists(1, lists);
+#endif
 }
 
 static int32_t PresentSwapchain(rsf_vk_xess_fg* value, uint32_t vsync) {
+#if defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
+    return rsf_xess_dx12::rsf_core_xess_dx12_present(value->swapchain, vsync, value->allowTearing);
+#else
     const uint32_t flags = !vsync && value->allowTearing ? DXGI_PRESENT_ALLOW_TEARING : 0;
     return static_cast<int32_t>(value->swapchain->Present(vsync ? 1 : 0, flags));
+#endif
 }
 
 static uint32_t BeginGpuTiming(rsf_vk_xess_fg* value, uint32_t slot) {
+#if defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
+    return rsf_xess_dx12::rsf_core_xess_dx12_timestamps_begin(&value->timestamps, value->device,
+        value->queue, slot, value->timing, timing_frequency);
+#else
     if (!EnsureGpuTiming(value)) return 0;
     HarvestGpuTiming(value, slot);
     return 1;
+#endif
 }
 
 static void TimestampCopies(rsf_vk_xess_fg* value, uint32_t slot, uint32_t index) {
+#if defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
+    rsf_xess_dx12::rsf_core_xess_dx12_timestamps_copy(value->timestamps, value->commandList, slot, index);
+#else
     value->commandList->EndQuery(value->queryHeap, D3D12_QUERY_TYPE_TIMESTAMP, slot * 3 + index);
+#endif
 }
 
 static void FinishGpuTiming(rsf_vk_xess_fg* value, uint32_t slot) {
+#if defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
+    rsf_xess_dx12::rsf_core_xess_dx12_timestamps_finish(value->timestamps, value->queue, slot, TimingNow());
+#else
     value->presentExit[slot] = TimingNow();
     if (SUCCEEDED(value->postAllocators[slot]->Reset()) &&
         SUCCEEDED(value->postList->Reset(value->postAllocators[slot], nullptr))) {
@@ -736,6 +851,7 @@ static void FinishGpuTiming(rsf_vk_xess_fg* value, uint32_t slot) {
             value->slotTimed[slot] = true;
         }
     }
+#endif
 }
 
 static constexpr rsf_xess_bridge_platform Platform{
@@ -767,7 +883,13 @@ static constexpr rsf_xess_bridge_platform Platform{
         return value->setUi(value->fg, XEFG_SWAPCHAIN_UI_COMPOSITION_STATE_ENABLED);
     },
     .create_completion_fence = [](rsf_vk_xess_fg* value) -> int32_t {
+#if defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
+        return BindCom(value->completionFence, [&](void** out) {
+            return rsf_xess_dx12::rsf_core_xess_dx12_fence(value->device, 0, out);
+        });
+#else
         return value->device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&value->completionFence));
+#endif
     },
     .open_event = []() -> void* { return CreateEventW(nullptr, FALSE, FALSE, nullptr); },
     .create_recorders = CreateRecorders,
@@ -775,7 +897,11 @@ static constexpr rsf_xess_bridge_platform Platform{
     .set_generated = SetGenerated,
     .read_completion = ReadCompletion,
     .arm_completion = [](rsf_vk_xess_fg* value, uint64_t target, void* event) -> int32_t {
+#if defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
+        return rsf_xess_dx12::rsf_core_xess_dx12_arm(value->completionFence, target, event);
+#else
         return value->completionFence->SetEventOnCompletion(target, event);
+#endif
     },
     .wait_event = [](void* event, uint32_t timeout) -> int32_t {
         return WaitForSingleObject(event, timeout) == WAIT_OBJECT_0 ? 0 : -3;
@@ -803,8 +929,17 @@ static constexpr rsf_xess_bridge_platform Platform{
         const xefg_swapchain_d3d12_resource_data_t* data) -> int32_t {
         return value->tagResource(value->fg, value->commandList, frameId, data);
     },
-    .release_backbuffer = [](void* backbuffer) { static_cast<ID3D12Resource*>(backbuffer)->Release(); },
-    .close_commands = [](rsf_vk_xess_fg* value) -> int32_t { return value->commandList->Close(); },
+    .release_backbuffer = [](void* backbuffer) {
+        auto* resource = static_cast<ID3D12Resource*>(backbuffer);
+        Release(resource);
+    },
+    .close_commands = [](rsf_vk_xess_fg* value) -> int32_t {
+#if defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
+        return rsf_xess_dx12::rsf_core_xess_dx12_close(value->commandList);
+#else
+        return value->commandList->Close();
+#endif
+    },
     .tag_constants = [](rsf_vk_xess_fg* value, uint32_t frameId,
         const xefg_swapchain_frame_constant_data_t* data) -> int32_t {
         return value->tagConstants(value->fg, frameId, data);
@@ -817,7 +952,11 @@ static constexpr rsf_xess_bridge_platform Platform{
     .present = PresentSwapchain,
     .signal_done = SignalDone,
     .signal_completion = [](rsf_vk_xess_fg* value, uint64_t target) -> int32_t {
+#if defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
+        return rsf_xess_dx12::rsf_core_xess_dx12_signal(value->queue, value->completionFence, target);
+#else
         return value->queue->Signal(value->completionFence, target);
+#endif
     },
     .read_present_status = [](rsf_vk_xess_fg* value, xefg_swapchain_present_status_t* status) -> int32_t {
         return value->presentStatus(value->fg, status);
@@ -829,7 +968,11 @@ static constexpr rsf_xess_bridge_platform Platform{
     .begin_gpu_timing = BeginGpuTiming,
     .timestamp_copies = TimestampCopies,
     .mark_present_enter = [](rsf_vk_xess_fg* value, uint32_t slot) {
+#if defined(RSF_XESS_BRIDGE_RUNTIME_D3D12)
+        rsf_xess_dx12::rsf_core_xess_dx12_timestamps_enter(value->timestamps, slot, TimingNow());
+#else
         value->presentEnter[slot] = TimingNow();
+#endif
     },
     .finish_gpu_timing = FinishGpuTiming,
     .serialize_enabled = []() -> uint32_t {

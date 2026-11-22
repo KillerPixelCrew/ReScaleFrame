@@ -9,6 +9,8 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT, DXGI_SAMPLE_DESC};
 use windows::core::{IUnknown, Interface, PCWSTR};
 
+mod context;
+
 const _: () = {
     assert!(size_of::<D3D12_PLACED_SUBRESOURCE_FOOTPRINT>() == 32);
     assert!(std::mem::offset_of!(D3D12_PLACED_SUBRESOURCE_FOOTPRINT, Footprint) == 8);

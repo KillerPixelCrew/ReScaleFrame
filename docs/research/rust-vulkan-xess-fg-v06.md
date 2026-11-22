@@ -210,3 +210,40 @@ C++ syntax for both bridge modes, the SR adapter and CPU mock, the SR
 launcher modes, and the Present window leaf. Source comparison checked
 the export lists, typed mock, V02/V03 owners and fixture queue order.
 Build, test and device results remain pending.
+
+## Integrated context and retirement from `f4871e47`
+
+The integrated bridge now creates the DXGI factory, selects the adapter
+by LUID, creates the D3D12 device and direct queue, builds the swapchain
+descriptor, and creates its recorders and fences through typed Rust calls.
+The bridge exports shared fence handles through the same device. The Rust
+calls also cover completion polling and arming, queue waits and signals,
+backbuffer acquisition, command submission and DXGI Present. The DXGI
+Present HRESULT is passed through verbatim. The C++ SDK seam keeps Intel
+context creation, configuration, markers and the original swapchain
+initialization call and swapchain interface request.
+
+The existing session remains the sole retirement authority. Release uses
+the existing Rust COM reference helper after session retirement permits it.
+The session still retains the native owner on failed retirement and unloads
+the vendor modules after the native resources are gone. Vulkan adapter
+matching in the integrated route uses the same already-loaded Vulkan
+module and resolves the same typed entry point.
+
+Integrated timestamp state now owns its query heap, readback, post-list
+and allocator slots in Rust. It uses three timestamps per slot, the
+presenting queue, the original QPC entry and exit samples, and the same
+clock calibration. It reads the slot only after the existing allocator
+completion wait. The post-list is submitted before the two existing
+queue signals and marks the sample submitted only when its list closes
+and queues successfully. Failed timestamp initialization drops its partial
+objects and retries on a later frame. The standalone bridge keeps the
+existing C++ DXGI, D3D12, and timestamp leaves. Both builds retain the
+native SDK binding, clock and logging entry points.
+
+The two bridge configurations passed MinGW syntax checks. The standalone
+route retains the existing Vulkan FARPROC cast warning. Rust 1.94.1
+formatting, bindgen 0.72.1 regeneration of the local and vendor XeSS
+records, and locked offline Windows metadata passed. The export lists,
+SDK marker names, session retirement order, and bridge ABI were checked
+against the base.
