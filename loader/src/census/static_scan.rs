@@ -2,17 +2,15 @@
 // Static findings identify possible vendor call sites in the loaded executable.
 use super::session::add_finding;
 use rsf_game_sys::pe32_plus::Mapped;
+use rsf_game_sys::win32::read_process;
 use std::mem::size_of;
 use windows_sys::Win32::System::{
     Diagnostics::Debug::{
         IMAGE_DIRECTORY_ENTRY_EXCEPTION, IMAGE_RUNTIME_FUNCTION_ENTRY,
         IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ,
-        ReadProcessMemory,
     },
     LibraryLoader::GetModuleHandleW,
-    Threading::{
-        GetCurrentProcess, GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
-    },
+    Threading::{GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL},
 };
 
 const MAX_STRINGS: usize = 400;
@@ -118,12 +116,7 @@ struct Image(usize);
 
 impl Image {
     fn read(&self, offset: usize, target: *mut std::ffi::c_void, len: usize) -> Option<()> {
-        let address = self.0.checked_add(offset)?;
-        let mut read = 0;
-        (unsafe { ReadProcessMemory(GetCurrentProcess(), address as _, target, len, &mut read) }
-            != 0
-            && read == len)
-            .then_some(())
+        unsafe { read_process(self.0.checked_add(offset)?, target, len) }.then_some(())
     }
 
     fn section(&self, rva: u32, size: u32, image_size: u32) -> Option<Vec<u8>> {

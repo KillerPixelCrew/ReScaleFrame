@@ -2,6 +2,7 @@
 use crate::sdk_module::SdkModule;
 use crate::sync::lock;
 use crate::sys::rsf_backend_log_fn as Log;
+use rsf_game_sys::win32::read_process;
 use std::ffi::{CStr, CString, c_void};
 use std::ptr::null_mut;
 use std::sync::{Mutex, MutexGuard};
@@ -11,7 +12,7 @@ use windows_sys::Win32::{
         Diagnostics::{
             Debug::{
                 FlushInstructionCache, IMAGE_NT_HEADERS64, IMAGE_NT_OPTIONAL_HDR64_MAGIC,
-                IMAGE_SCN_MEM_EXECUTE, IMAGE_SECTION_HEADER, ReadProcessMemory,
+                IMAGE_SCN_MEM_EXECUTE, IMAGE_SECTION_HEADER,
             },
             ToolHelp::{
                 CreateToolhelp32Snapshot, MODULEENTRY32W, Module32FirstW, Module32NextW,
@@ -122,11 +123,7 @@ impl ModuleImage {
 
     fn read(&self, offset: usize, out: Handle, size: usize) -> Option<()> {
         let address = self.address(offset, size)?;
-        let mut copied = 0;
-        let result = unsafe {
-            ReadProcessMemory(GetCurrentProcess(), address.cast(), out, size, &mut copied)
-        };
-        (result != 0 && copied == size).then_some(())
+        unsafe { read_process(address as usize, out, size) }.then_some(())
     }
 
     fn record<T: Default>(&self, offset: usize) -> Option<T> {
@@ -450,11 +447,7 @@ pub(crate) unsafe fn rsf_core_mfg_prepare(
     }
 }
 
-pub(crate) unsafe fn rsf_core_mfg_status(
-    owner: *const Owner,
-    status: &mut u32,
-    maximum: &mut u32,
-) {
+pub(crate) unsafe fn rsf_core_mfg_status(owner: *const Owner, status: &mut u32, maximum: &mut u32) {
     if let Some(owner) = unsafe { owner.as_ref() } {
         let state = owner.state();
         *status = state.status;

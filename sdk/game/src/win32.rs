@@ -86,6 +86,12 @@ pub unsafe extern "C" fn read_process(address: usize, out: *mut c_void, size: us
         && copied == size
 }
 
+/// A guarded read of `out.len()` bytes of this process at `address`: all of them, or false.
+pub fn read_bytes(address: usize, out: &mut [u8]) -> bool {
+    // SAFETY: out is writable for its length.
+    unsafe { read_process(address, out.as_mut_ptr().cast(), out.len()) }
+}
+
 /// Plain data that every bit pattern of its size represents.
 ///
 /// # Safety

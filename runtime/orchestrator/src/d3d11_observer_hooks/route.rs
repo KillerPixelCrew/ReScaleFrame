@@ -3,6 +3,7 @@
 use super::{Handle, ROUTES, probe};
 use crate::d3d11_observer_callbacks::snapshot;
 use crate::d3d11_observer_module::ModuleFile;
+use rsf_game_sys::win32::read;
 use rsf_minhook_sys::hde::{
     F_DISP32, F_ERROR, F_IMM8, F_IMM16, F_IMM32, F_IMM64, F_MODRM, F_PREFIX_67, F_RELATIVE,
     hde64_disasm, hde64s,
@@ -12,7 +13,7 @@ use std::ptr::{self, null_mut, without_provenance_mut};
 use windows_sys::Win32::{
     Foundation::{HMODULE, MAX_PATH},
     System::{
-        Diagnostics::Debug::{FlushInstructionCache, ReadProcessMemory},
+        Diagnostics::Debug::FlushInstructionCache,
         LibraryLoader::{
             GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
             GetModuleFileNameW, GetModuleHandleExW,
@@ -127,7 +128,7 @@ impl ModuleImage {
             .ok_or("invalid table slot")?;
         self.locate(table)?;
         let current = usize::from_le_bytes(
-            read::<{ size_of::<Handle>() }>(slot).ok_or("the Present slot could not be read")?,
+            read::<[u8; size_of::<Handle>()]>(slot).ok_or("the Present slot could not be read")?,
         );
         if current
             .checked_sub(self.base)
@@ -158,21 +159,6 @@ impl ModuleImage {
     }
 }
 
-fn read<const N: usize>(address: usize) -> Option<[u8; N]> {
-    let mut bytes = [0u8; N];
-    let mut read = 0;
-    let ok = unsafe {
-        ReadProcessMemory(
-            GetCurrentProcess(),
-            ptr::without_provenance(address),
-            bytes.as_mut_ptr().cast(),
-            N,
-            &mut read,
-        )
-    };
-    (ok != 0 && read == N).then_some(bytes)
-}
-
 fn relative(address: usize, length: usize, displacement: [u8; 4]) -> Option<usize> {
     address
         .checked_add(length)?
@@ -180,13 +166,13 @@ fn relative(address: usize, length: usize, displacement: [u8; 4]) -> Option<usiz
 }
 
 fn decode_jump(address: usize) -> Option<usize> {
-    match read::<2>(address)? {
-        [0xe9, _] => relative(address, 5, read::<4>(address.checked_add(1)?)?),
+    match read::<[u8; 2]>(address)? {
+        [0xe9, _] => relative(address, 5, read::<[u8; 4]>(address.checked_add(1)?)?),
         [0xff, 0x25] => {
-            let indirect = relative(address, 6, read::<4>(address.checked_add(2)?)?)?;
+            let indirect = relative(address, 6, read::<[u8; 4]>(address.checked_add(2)?)?)?;
             Some(usize::from_le_bytes(read(indirect)?))
         }
-        [0x48, 0xb8] if read::<2>(address.checked_add(10)?)? == [0xff, 0xe0] => {
+        [0x48, 0xb8] if read::<[u8; 2]>(address.checked_add(10)?)? == [0xff, 0xe0] => {
             Some(usize::from_le_bytes(read(address.checked_add(2)?)?))
         }
         _ => None,
@@ -345,7 +331,7 @@ fn install(
     let stored = image
         .disk(genuine, FILE_WINDOW)
         .ok_or_else(|| format!("no section of {} covers Present", image.path))?;
-    let loaded = read::<FILE_WINDOW>(genuine).ok_or("the Present entry could not be read")?;
+    let loaded = read::<[u8; FILE_WINDOW]>(genuine).ok_or("the Present entry could not be read")?;
     let patched = loaded.as_slice() != stored;
     let trampoline = Trampoline::build(genuine, stored)?;
     let (target, owner, hops) = if patched {

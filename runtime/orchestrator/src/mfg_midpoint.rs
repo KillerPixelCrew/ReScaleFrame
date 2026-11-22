@@ -7,6 +7,7 @@
 use super::gate::protection_matches;
 use super::{Handle, provider, retain_module};
 use crate::sync::lock;
+use rsf_game_sys::win32::read_bytes;
 use std::ffi::c_void;
 use std::mem::forget;
 use std::ptr::null_mut;
@@ -22,8 +23,7 @@ use windows_sys::Win32::{
     System::{
         Diagnostics::Debug::{
             IMAGE_NT_HEADERS64, IMAGE_NT_OPTIONAL_HDR64_MAGIC, IMAGE_SCN_MEM_EXECUTE,
-            IMAGE_SCN_MEM_READ, IMAGE_SCN_MEM_WRITE, IMAGE_SECTION_HEADER, ReadProcessMemory,
-            WriteProcessMemory,
+            IMAGE_SCN_MEM_READ, IMAGE_SCN_MEM_WRITE, IMAGE_SECTION_HEADER, WriteProcessMemory,
         },
         LibraryLoader::{LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW},
         Memory::{
@@ -331,33 +331,16 @@ fn sha256_equals(bytes: &[u8], expected: &str) -> bool {
             .eq(expected.bytes())
 }
 
-// Fault-tolerant copy from process memory. A failed read refuses the caller's check.
-fn read_guarded(address: usize, out: &mut [u8]) -> bool {
-    let mut copied = 0;
-    address != 0
-        && !out.is_empty()
-        && unsafe {
-            ReadProcessMemory(
-                GetCurrentProcess(),
-                address as *const c_void,
-                out.as_mut_ptr().cast(),
-                out.len(),
-                &mut copied,
-            )
-        } != 0
-        && copied == out.len()
-}
-
 fn read_usize(address: usize) -> Option<usize> {
     let mut value = [0u8; 8];
-    read_guarded(address, &mut value).then(|| usize::from_le_bytes(value))
+    read_bytes(address, &mut value).then(|| usize::from_le_bytes(value))
 }
 
 fn read_record<T: Default>(address: usize) -> Option<T> {
     let mut record = T::default();
     let bytes =
         unsafe { std::slice::from_raw_parts_mut((&raw mut record).cast::<u8>(), size_of::<T>()) };
-    read_guarded(address, bytes).then_some(record)
+    read_bytes(address, bytes).then_some(record)
 }
 
 // Copies of the read-only sections serve the table scan, so each probe does
@@ -382,7 +365,7 @@ impl Image {
                 return true;
             }
         }
-        read_guarded(address, out)
+        read_bytes(address, out)
     }
 
     fn pointer(&self, address: usize) -> Option<usize> {
@@ -544,7 +527,7 @@ fn find_descriptor_entry(base: usize, size: usize, profile: &Profile) -> Option<
             continue;
         }
         bytes.extend(std::iter::repeat_n(0, length));
-        if read_guarded(begin, &mut bytes) {
+        if read_bytes(begin, &mut bytes) {
             image.sections.push((begin, bytes));
         }
     }
@@ -1100,7 +1083,7 @@ pub(super) fn patch_provider(module: Handle, supplied_path: *const u16) -> bool 
     let Some(original) = read_usize(entry).filter(|&original| {
         original >= base
             && original <= end - DESCRIPTOR_BYTES
-            && read_guarded(original, &mut descriptor)
+            && read_bytes(original, &mut descriptor)
     }) else {
         return fail(Failure::ProviderLayout);
     };
@@ -1138,7 +1121,7 @@ pub(super) fn patch_provider(module: Handle, supplied_path: *const u16) -> bool 
     let (cloned_descriptor, rest) = memory.split_at_mut(DESCRIPTOR_BYTES);
     let (cloned_fatbin, scratch) = rest.split_at_mut(OUTPUT_CAPACITY);
     cloned_descriptor.copy_from_slice(&descriptor);
-    if !read_guarded(original_fatbin, &mut cloned_fatbin[..source_bytes])
+    if !read_bytes(original_fatbin, &mut cloned_fatbin[..source_bytes])
         || !sha256_equals(&cloned_fatbin[..source_bytes], profile.source_fatbin_sha256)
     {
         return free(Failure::SourceIdentity);
@@ -1253,7 +1236,7 @@ mod tests {
         assert!(read_only_image_address(base, entry));
         let original = read_usize(entry).expect("descriptor");
         let mut descriptor = [0u8; DESCRIPTOR_BYTES];
-        assert!(read_guarded(original, &mut descriptor));
+        assert!(read_bytes(original, &mut descriptor));
         // The provider records the size during its own initialization, which
         // this mapping skips. Publication refuses that state as not ready.
         let supplied = u64::from(u32_at(&descriptor, 0x10));
@@ -1261,7 +1244,7 @@ mod tests {
         let source = profile.source_fatbin_bytes as usize;
         let mut fatbin = vec![0u8; OUTPUT_CAPACITY];
         let mut scratch = vec![0u8; SCRATCH_CAPACITY];
-        assert!(read_guarded(
+        assert!(read_bytes(
             u64_at(&descriptor, 8) as usize,
             &mut fatbin[..source]
         ));
