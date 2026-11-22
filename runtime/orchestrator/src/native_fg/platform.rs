@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-use super::{DlssFrame, Handle, Log, Pass, Platform, Provider, rsf_fg_frame, rsf_nfg_cpu_platform};
+use super::{DlssFrame, Handle, Log, Pass, Platform, Provider, rsf_fg_frame};
 use crate::com_ref::ComRef;
 use crate::d3d11_present::{rsf_core_d3d11p_graphics, rsf_core_d3d11p_host};
 use crate::d3d11_present_abi::rsf_streamline_graphics;
@@ -7,6 +7,7 @@ use crate::d3d12_fence::rsf_core_d3d12_wait_fence;
 use crate::fg_leases::rsf_d3d12_fence_completed;
 use crate::fg_session::rsf_core_frame_allows_fg;
 use crate::native_fg_abi::*;
+use crate::native_fg_cpu::rsf_native_fg_cpu_platform;
 use crate::native_scene::{rsf_native_scene_classify_present, rsf_native_scene_for_window};
 use crate::native_window::rsf_native_window_match;
 use crate::shared_surface::{
@@ -52,7 +53,6 @@ const _: () = {
 };
 
 unsafe extern "C" {
-    static rsf_native_fg_cpu_platform: rsf_nfg_cpu_platform;
     fn rsf_d3d11_present_has_owner() -> i32;
     fn rsf_d3d11_present_is_owner(chain: Handle) -> i32;
     fn rsf_d3d11_present_provider() -> *const Provider;
@@ -81,7 +81,7 @@ unsafe extern "C" {
 }
 
 pub(super) static NATIVE_PLATFORM: Platform = Platform {
-    cpu: unsafe { &rsf_native_fg_cpu_platform },
+    cpu: &rsf_native_fg_cpu_platform,
     present_has_owner: rsf_d3d11_present_has_owner,
     present_is_owner: rsf_d3d11_present_is_owner,
     present_host: rsf_core_d3d11p_host,

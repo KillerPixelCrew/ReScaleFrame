@@ -63,8 +63,11 @@ and exact C calls to the presentation bridge and frame dump services. Failed
 COM outputs retain an owner until release. The session's C ABI entry and fence
 query are Rust. The small runtime/orchestrator/src/fg_frame_policy.c leaf uses
 the GameSDK's original inline admission predicates, which native backends also
-use. The C05 platform in runtime/orchestrator/src/native_fg.cpp continues to
-bridge DXGI adapter discovery, Streamline and presentation callbacks.
+use. The follow-up also removes runtime/orchestrator/src/native_fg.cpp. Its
+Rust platform keeps the native CPU callback table layout for the C05 fixture,
+preserves the direct presentation-bridge operations and uses the same typed
+DXGI hardware lookup. The Anti-Lag SDK factory remains a native leaf. The
+CPU dispatcher, graphics and latency exports retain their existing signatures.
 
 - tests/d3d11_fg_api.cpp retains independent C++ DLL import and typed callback
   identity checks alongside the separate C11 import fixture.

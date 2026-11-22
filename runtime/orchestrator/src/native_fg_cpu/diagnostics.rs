@@ -423,7 +423,7 @@ pub(crate) fn stage(
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_core_native_fg_stage(
+pub(super) unsafe extern "C" fn rsf_core_native_fg_stage(
     name: *const c_char,
     source: u64,
     native: u64,

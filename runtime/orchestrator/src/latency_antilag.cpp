@@ -70,3 +70,7 @@ AntiLagContext* create_native_antilag_context() noexcept {
 #endif
 }
 }
+
+extern "C" void* rsf_native_antilag_context_create() noexcept {
+    return rsf::latency::create_native_antilag_context();
+}
