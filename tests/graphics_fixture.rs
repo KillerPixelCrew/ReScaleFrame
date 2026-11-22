@@ -12,6 +12,8 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 mod colour_transport;
 #[path = "depth_scale.rs"]
 mod depth_scale;
+#[path = "exposure_normalization.rs"]
+mod exposure_normalization;
 #[path = "fullscreen_pass.rs"]
 mod fullscreen_pass;
 #[path = "motion_decode.rs"]
