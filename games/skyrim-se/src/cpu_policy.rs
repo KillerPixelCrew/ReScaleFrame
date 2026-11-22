@@ -99,6 +99,73 @@ const _: () = {
     assert!(std::mem::offset_of!(FrameInput, ambiguous) == 32);
 };
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn screen_and_render_admission_require_native_gameplay_evidence() {
+        let mut facts = ScreenFacts::default();
+        assert_eq!(rsf_skyrim_classify_screen(&facts), SCREEN_UNKNOWN);
+        facts.readable = true;
+        facts.owned_main = true;
+        facts.parent_cell = true;
+        assert_eq!(rsf_skyrim_classify_screen(&facts), SCREEN_UNKNOWN);
+        facts.primary_world = true;
+        assert_eq!(rsf_skyrim_classify_screen(&facts), SCREEN_GAMEPLAY);
+        facts.freeze_time = true;
+        assert_eq!(rsf_skyrim_classify_screen(&facts), SCREEN_UNKNOWN);
+        facts.pause_count = 1;
+        assert_eq!(rsf_skyrim_classify_screen(&facts), SCREEN_MENU);
+        facts.loading_menu = true;
+        assert_eq!(rsf_skyrim_classify_screen(&facts), SCREEN_LOADING);
+        facts.loading_menu = false;
+        facts.pause_count = 0;
+        facts.freeze_time = false;
+        facts.main_menu = true;
+        assert_eq!(rsf_skyrim_classify_screen(&facts), SCREEN_MENU);
+        facts.main_menu = false;
+        facts.frozen_background = true;
+        assert_eq!(rsf_skyrim_classify_screen(&facts), SCREEN_MENU);
+        facts.frozen_background = false;
+        facts.parent_cell = false;
+        assert_eq!(rsf_skyrim_classify_screen(&facts), SCREEN_UNKNOWN);
+        facts.parent_cell = true;
+        facts.requested_mode = 2;
+        assert_eq!(rsf_skyrim_classify_screen(&facts), SCREEN_UNKNOWN);
+        facts.requested_mode = 0;
+        facts.running_mode = 2;
+        assert_eq!(rsf_skyrim_classify_screen(&facts), SCREEN_UNKNOWN);
+        facts.running_mode = 0;
+        facts.owned_main = false;
+        facts.loading_menu = true;
+        assert_eq!(rsf_skyrim_classify_screen(&facts), SCREEN_UNKNOWN);
+        assert!(rsf_skyrim_rendered_source_eligible(
+            true,
+            1,
+            SCREEN_GAMEPLAY
+        ));
+        assert!(!rsf_skyrim_rendered_source_eligible(
+            true,
+            0,
+            SCREEN_GAMEPLAY
+        ));
+        assert!(!rsf_skyrim_rendered_source_eligible(
+            true,
+            2,
+            SCREEN_GAMEPLAY
+        ));
+        assert!(!rsf_skyrim_rendered_source_eligible(
+            false,
+            1,
+            SCREEN_GAMEPLAY
+        ));
+        for screen in [SCREEN_UNKNOWN, SCREEN_MENU, SCREEN_LOADING] {
+            assert!(!rsf_skyrim_rendered_source_eligible(true, 1, screen));
+        }
+    }
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn rsf_skyrim_cpu_record_consumer(
     state: &mut FrameInput,

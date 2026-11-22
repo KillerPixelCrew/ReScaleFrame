@@ -58,6 +58,25 @@ struct State {
     withdraw: Option<Withdraw>,
 }
 
+impl State {
+    fn capture(&mut self, module: usize, original: usize) -> bool {
+        if self.phase == Phase::Armed {
+            self.module = module;
+            self.original = original;
+            self.phase = Phase::Captured;
+        }
+        self.module == module && self.original == original
+    }
+
+    fn claim_initializer(&mut self) -> Option<(usize, usize, usize)> {
+        if self.phase != Phase::Captured {
+            return None;
+        }
+        self.phase = Phase::Initializing;
+        Some((self.module, self.original, self.callout))
+    }
+}
+
 static STATE: Mutex<State> = Mutex::new(State {
     phase: Phase::Unarmed,
     reason: None,
@@ -257,13 +276,7 @@ unsafe extern "C" fn rsf_skyrim_cs_resolved(
         return result;
     }
     // This may run in a loader callout. Publish scalars only and keep all effects outside the lock.
-    let mut state = state();
-    if state.phase == Phase::Armed {
-        state.module = module;
-        state.original = result;
-        state.phase = Phase::Captured;
-    }
-    if state.module == module && state.original == result {
+    if state().capture(module, result) {
         leaves.initialize_detour
     } else {
         result
@@ -294,13 +307,9 @@ fn retain_original(
 }
 
 fn initialize(platform: &Platform, leaves: &Leaves, skse: *const c_void) -> bool {
-    let (module, original, callout) = {
-        let mut state = state();
-        if state.phase != Phase::Captured {
-            return false;
-        }
-        state.phase = Phase::Initializing;
-        (state.module, state.original, state.callout)
+    let claim = state().claim_initializer();
+    let Some((module, original, callout)) = claim else {
+        return false;
     };
     if callout == 0 || unsafe { (leaves.loader_callout)(callout) } {
         refuse(
@@ -384,6 +393,36 @@ fn initialize(platform: &Platform, leaves: &Leaves, skse: *const c_void) -> bool
         state.reason = Some(EXCLUDED);
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repeated_initializer_lookups_remain_wrapped_with_one_invocation() {
+        let mut state = State {
+            phase: Phase::Armed,
+            reason: None,
+            module: 0,
+            original: 0,
+            callout: 3,
+            withdraw: None,
+        };
+        assert!(state.capture(7, 11));
+        assert!(state.capture(7, 11));
+        assert!(!state.capture(8, 11));
+        assert!(!state.capture(7, 12));
+        assert_eq!(state.claim_initializer(), Some((7, 11, 3)));
+        assert!(state.capture(7, 11));
+        assert!(state.claim_initializer().is_none());
+        state.phase = Phase::Excluded;
+        assert!(state.capture(7, 11));
+        assert!(state.claim_initializer().is_none());
+        state.phase = Phase::Refused;
+        assert!(state.capture(7, 11));
+        assert!(state.claim_initializer().is_none());
+    }
 }
 
 #[unsafe(no_mangle)]

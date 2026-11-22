@@ -869,6 +869,171 @@ mod tests {
     use super::*;
 
     #[test]
+    fn submission_proof_survives_only_the_matching_native_join() {
+        let jobs = NativeJobs::new();
+        assert_eq!(jobs.snapshot().generation, 0);
+        assert_eq!(jobs.publish(0, 11, 22, false).generation, 0);
+        let first = jobs.publish(0x1234, 11, 22, false);
+        assert!(jobs.matches(first));
+        let foreign = JobTicket {
+            source: 99,
+            ..first
+        };
+        assert!(!jobs.matches(foreign) && !jobs.retire(foreign));
+        assert!(jobs.retire(first));
+        assert_eq!(jobs.snapshot().generation, 0);
+        let next = jobs.publish(0x1234, 12, 22, false);
+        assert!(next.generation > first.generation && !jobs.retire(first));
+        assert_eq!(jobs.publish(0x1234, 13, 22, false).generation, 0);
+        assert_eq!(jobs.snapshot().generation, 0);
+        assert_eq!(jobs.publish(0x1234, 14, 22, false).generation, 0);
+        let recovered = jobs.publish(0x1234, 14, 22, true);
+        assert!(jobs.matches(recovered));
+        assert_eq!(jobs.publish(0x1234, 15, 22, true).generation, 0);
+        assert!(!jobs.matches(recovered));
+        jobs.reset();
+        let restarted = jobs.publish(0x1234, 15, 23, false);
+        assert!(jobs.matches(restarted));
+        jobs.invalidate();
+        assert!(!jobs.matches(restarted) && !jobs.retire(restarted));
+        assert_eq!(jobs.retired.load(SeqCst), 0);
+        jobs.reset();
+        let joined = jobs.publish(0x1234, 16, 23, false);
+        assert!(jobs.retire(joined));
+        assert_eq!(jobs.retired.load(SeqCst), joined.generation);
+    }
+
+    #[test]
+    fn prospective_sources_require_matching_sample_join_and_bind() {
+        let mut ledger = Sources::EMPTY;
+        let reserve = |source, job_generation, poll_generation| Reservation {
+            source,
+            predecessor: source - 1,
+            session: 23,
+            job_generation,
+            poll_generation,
+            phase: Phase::Polling,
+            ..Reservation::EMPTY
+        };
+        let first = ledger.reserve(reserve(17, 4, 5));
+        assert_eq!((first.reserved.source, first.withdrawn), (17, 0));
+        assert_eq!(ledger.adopt(23, 4).source, 0);
+        assert!(ledger.pending.polling(17));
+        assert!(ledger.sample(17, true, rsf_game_sys::RSF_GAME_INPUT_MOUSE));
+        assert_eq!(ledger.adopt(24, 4).source, 0);
+        assert_eq!(ledger.adopt(23, 8).source, 0);
+        let adopted = ledger.adopt(23, 4);
+        assert_eq!((adopted.source, adopted.predecessor), (17, 16));
+        assert!(adopted.phase == Phase::Adopted);
+        assert!(!ledger.bind(17, 6));
+        assert!(ledger.bind(17, 5) && ledger.owned.phase == Phase::Bound);
+        assert!(!ledger.bind(17, 5));
+        let pending = ledger.reserve(reserve(18, 8, 6));
+        assert_eq!(
+            (
+                pending.reserved.source,
+                pending.withdrawn,
+                ledger.owned.source
+            ),
+            (18, 0, 17)
+        );
+        assert!(ledger.release(17).phase == Phase::Bound);
+        assert_eq!(ledger.owned.source, 0);
+        let overlap = ledger.reserve(reserve(19, 8, 7));
+        assert_eq!(
+            (overlap.reserved.source, overlap.withdrawn, overlap.overlap),
+            (0, 18, true)
+        );
+        ledger.reserve(reserve(20, 8, 8));
+        assert!(ledger.sample(20, true, 0));
+        let next = ledger.reserve(reserve(21, 8, 9));
+        assert_eq!(
+            (next.reserved.source, next.withdrawn, next.overlap),
+            (21, 20, false)
+        );
+        assert_eq!(ledger.withdraw_pending(0), 21);
+        assert_eq!(ledger.withdraw_pending(0), 0);
+        ledger.reserve(reserve(22, 8, 10));
+        assert_eq!(ledger.withdraw_pending(23), 0);
+        assert_eq!(ledger.withdraw_pending(22), 22);
+        ledger.reserve(reserve(24, 8, 11));
+        assert!(ledger.sample(24, false, 0));
+        assert_eq!(ledger.adopt(23, 8).source, 0);
+        ledger = Sources::EMPTY;
+        assert_eq!(ledger.withdraw_pending(0), 0);
+        assert_eq!(ledger.owned.source, 0);
+        assert_eq!(ledger.reserve(reserve(25, 0, 12)).reserved.source, 0);
+        assert_eq!(ledger.reserve(reserve(25, 4, 0)).reserved.source, 0);
+    }
+
+    #[test]
+    fn binding_requires_the_unconsumed_gameplay_envelope() {
+        assert_eq!(
+            rsf_skyrim_bind_refusal(true, false, false, false),
+            BindRefusal::None as u32
+        );
+        assert_eq!(
+            rsf_skyrim_bind_refusal(false, false, false, false),
+            BindRefusal::Unreadable as u32
+        );
+        assert_eq!(
+            rsf_skyrim_bind_refusal(true, true, false, false),
+            BindRefusal::QueuedMove as u32
+        );
+        assert_eq!(
+            rsf_skyrim_bind_refusal(true, false, true, false),
+            BindRefusal::ConsumedBeforeBind as u32
+        );
+        assert_eq!(
+            rsf_skyrim_bind_refusal(true, false, false, true),
+            BindRefusal::FreeCamera as u32
+        );
+    }
+
+    #[test]
+    fn exclusive_poll_proof_is_lost_on_writes_overlap_and_invalidation() {
+        let epochs = InputEpochs::new();
+        assert_eq!(epochs.snapshot().generation, 0);
+        let poll = epochs.begin_poll();
+        assert!(epochs.owns_poll(poll));
+        assert_eq!(epochs.snapshot().generation, 0);
+        epochs.end_poll(poll, true);
+        let consumed = epochs.snapshot();
+        assert_eq!(consumed.generation, poll.generation);
+        assert!(epochs.unchanged(consumed));
+        let poll = epochs.begin_poll();
+        assert!(!epochs.unchanged(consumed));
+        epochs.end_poll(poll, false);
+        assert_eq!(epochs.snapshot().generation, 0);
+        for overlapping_finishes_first in [true, false] {
+            let poll = epochs.begin_poll();
+            let overlap = epochs.begin_poll();
+            assert!(!epochs.owns_poll(poll) && !epochs.owns_poll(overlap));
+            let (first, second) = if overlapping_finishes_first {
+                (overlap, poll)
+            } else {
+                (poll, overlap)
+            };
+            epochs.end_poll(first, true);
+            epochs.end_poll(second, true);
+            assert_eq!(epochs.snapshot().generation, 0);
+        }
+        let poll = epochs.begin_poll();
+        epochs.invalidate();
+        epochs.end_poll(poll, true);
+        assert_eq!(epochs.snapshot().generation, 0);
+        let poll = epochs.begin_poll();
+        epochs.end_poll(poll, true);
+        let before_write = epochs.snapshot();
+        epochs.begin_write();
+        assert_eq!(epochs.snapshot().generation, 0);
+        epochs.end_write();
+        assert!(!epochs.unchanged(before_write));
+        epochs.invalidate();
+        assert_eq!(epochs.snapshot().generation, 0);
+    }
+
+    #[test]
     fn another_poll_cannot_enter_between_the_overlap_check_and_commit() {
         use std::sync::{Barrier, TryLockError};
 
