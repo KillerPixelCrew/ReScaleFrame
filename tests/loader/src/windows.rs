@@ -7,6 +7,10 @@ mod census_facts_abi;
 mod census_modes;
 #[cfg(target_env = "msvc")]
 mod census_present;
+#[cfg(target_env = "msvc")]
+mod census_process;
+#[cfg(target_env = "msvc")]
+mod census_warp;
 mod fixture;
 mod forwarding;
 mod module_dump;

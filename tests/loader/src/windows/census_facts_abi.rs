@@ -5,11 +5,10 @@ use super::vendor_census_asi_abi::{rsf_census_counters, rsf_census_options};
 
 pub type rsf_census_result = i32;
 #[repr(C)]
-#[derive(Default, Copy, Clone)]
+#[derive(Copy, Clone)]
 pub struct rsf_test_census_functional_facts {
     pub dispatch_calls: u64,
-    pub anchor_rva: u64,
-    pub image_size: u32,
+    pub anchor: *const ::core::ffi::c_void,
     pub had_dxgi: u32,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
@@ -20,13 +19,20 @@ const _: () = {
         [::core::mem::align_of::<rsf_test_census_functional_facts>() - 8usize];
     ["Offset of field: rsf_test_census_functional_facts::dispatch_calls"]
         [::core::mem::offset_of!(rsf_test_census_functional_facts, dispatch_calls) - 0usize];
-    ["Offset of field: rsf_test_census_functional_facts::anchor_rva"]
-        [::core::mem::offset_of!(rsf_test_census_functional_facts, anchor_rva) - 8usize];
-    ["Offset of field: rsf_test_census_functional_facts::image_size"]
-        [::core::mem::offset_of!(rsf_test_census_functional_facts, image_size) - 16usize];
+    ["Offset of field: rsf_test_census_functional_facts::anchor"]
+        [::core::mem::offset_of!(rsf_test_census_functional_facts, anchor) - 8usize];
     ["Offset of field: rsf_test_census_functional_facts::had_dxgi"]
-        [::core::mem::offset_of!(rsf_test_census_functional_facts, had_dxgi) - 20usize];
+        [::core::mem::offset_of!(rsf_test_census_functional_facts, had_dxgi) - 16usize];
 };
+impl Default for rsf_test_census_functional_facts {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
 #[repr(C)]
 #[derive(Default, Copy, Clone)]
 pub struct rsf_test_census_native {

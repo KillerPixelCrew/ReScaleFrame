@@ -20,7 +20,6 @@
 #include <cstdio>
 #include <cstring>
 #include <cwchar>
-#include <string>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -32,6 +31,9 @@
 
 extern "C" {
 int rsf_test_census_main(int argc, char** argv, const rsf_test_census_native* native);
+HMODULE rsf_test_census_load_fixture(const wchar_t* file);
+HMODULE rsf_test_census_loaded_module(const wchar_t* name);
+bool rsf_test_census_warp(const void* payload, void (*dispatch)(const void*), uint64_t* calls, int* failures);
 __declspec(dllimport) int ffxFsr2ContextDispatch(void* context, const void* desc);
 __declspec(dllimport) int ffxFsr2GetJitterOffset(float* x, float* y, int index, int phase_count);
 __declspec(dllimport) float ffxFsr2GetUpscaleRatioFromQualityMode(int mode);
@@ -58,21 +60,6 @@ int g_failures = 0;
             ++g_failures;                                                                      \
         }                                                                                      \
     } while (0)
-
-std::wstring exe_dir() {
-    wchar_t path[MAX_PATH];
-    GetModuleFileNameW(nullptr, path, MAX_PATH);
-    wchar_t* slash = std::wcsrchr(path, L'\\');
-    if (slash) *slash = 0;
-    return path;
-}
-
-uint32_t image_size() {
-    auto* base = reinterpret_cast<const uint8_t*>(GetModuleHandleW(nullptr));
-    auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
-    auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
-    return nt->OptionalHeader.SizeOfImage;
-}
 
 // ---- A fake ID3D12Resource ---------------------------------------------------------------------
 class FakeResource final : public ID3D12Resource {
@@ -274,8 +261,7 @@ T proc(HMODULE m, const char* name) {
 }
 
 HMODULE load_fixture(const wchar_t* file) {
-    std::wstring path = exe_dir() + L"\\" + file;
-    HMODULE m = LoadLibraryW(path.c_str());
+    HMODULE m = rsf_test_census_load_fixture(file);
     if (!m) std::printf("cannot load fixture %ls (error %lu)\n", file, GetLastError());
     return m;
 }
@@ -346,7 +332,7 @@ int run_fsr2(Frame& frame, uint64_t& dispatch_calls) {
     ++dispatch_calls;
 
     // Through GetProcAddress: the pointer is the detoured export.
-    HMODULE m = GetModuleHandleW(L"ffx_fsr2_api_x64.dll");
+    HMODULE m = rsf_test_census_loaded_module(L"ffx_fsr2_api_x64.dll");
     CHECK(m != nullptr);
     auto via = proc<int (*)(void*, const void*)>(m, "ffxFsr2ContextDispatch");
     CHECK(via != nullptr);
@@ -529,85 +515,15 @@ void run_xess(Frame& frame) {
     CHECK(execute(ctx, nullptr, &e) == 0x78);
 }
 
-// Real DXGI and D3D12 on the WARP adapter. Returns false when the machine cannot run it.
+// The Rust WARP driver borrows this independent native input and caller probe.
+void dispatch_warp(const void* description) {
+    dispatch_site(static_cast<const Fsr2Dispatch*>(description));
+}
+
 bool run_dxgi(uint64_t& dispatch_calls, Frame& frame) {
-    HMODULE dxgi = LoadLibraryW(L"dxgi.dll");
-    HMODULE d3d12 = LoadLibraryW(L"d3d12.dll");
-    if (!dxgi || !d3d12) return false;
-    auto create_factory = proc<HRESULT(WINAPI*)(REFIID, void**)>(dxgi, "CreateDXGIFactory1");
-    auto create_device = proc<PFN_D3D12_CREATE_DEVICE>(d3d12, "D3D12CreateDevice");
-    if (!create_factory || !create_device) return false;
-
-    IDXGIFactory4* factory = nullptr;
-    if (FAILED(create_factory(__uuidof(IDXGIFactory4), reinterpret_cast<void**>(&factory)))) return false;
-    IDXGIAdapter* warp = nullptr;
-    if (FAILED(factory->EnumWarpAdapter(__uuidof(IDXGIAdapter), reinterpret_cast<void**>(&warp)))) return false;
-    ID3D12Device* device = nullptr;
-    if (FAILED(create_device(warp, D3D_FEATURE_LEVEL_11_0, __uuidof(ID3D12Device), reinterpret_cast<void**>(&device)))) {
-        return false;
-    }
-    D3D12_COMMAND_QUEUE_DESC qd{};
-    qd.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-    ID3D12CommandQueue* queue = nullptr;
-    CHECK(SUCCEEDED(device->CreateCommandQueue(&qd, __uuidof(ID3D12CommandQueue), reinterpret_cast<void**>(&queue))));
-    if (!queue) return false;
-    ID3D12CommandAllocator* alloc = nullptr;
-    ID3D12GraphicsCommandList* list = nullptr;
-    CHECK(SUCCEEDED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, __uuidof(ID3D12CommandAllocator),
-                                                   reinterpret_cast<void**>(&alloc))));
-    CHECK(SUCCEEDED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, alloc, nullptr,
-                                              __uuidof(ID3D12GraphicsCommandList), reinterpret_cast<void**>(&list))));
-    if (!alloc || !list) return false;
-    list->Close();
-
-    HWND hwnd = CreateWindowExW(0, L"STATIC", L"census", WS_OVERLAPPED, 0, 0, 640, 360, nullptr, nullptr, nullptr, nullptr);
-    if (!hwnd) return false;
-    DXGI_SWAP_CHAIN_DESC1 sd{};
-    sd.Width = 640;
-    sd.Height = 360;
-    sd.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-    sd.SampleDesc.Count = 1;
-    sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-    sd.BufferCount = 2;
-    sd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-    IDXGISwapChain1* sc1 = nullptr;
-    HRESULT hr = factory->CreateSwapChainForHwnd(queue, hwnd, &sd, nullptr, nullptr, &sc1);
-    CHECK(SUCCEEDED(hr));
-    if (FAILED(hr)) return false;
-    IDXGISwapChain3* sc3 = nullptr;
-    sc1->QueryInterface(__uuidof(IDXGISwapChain3), reinterpret_cast<void**>(&sc3));
-    if (sc3) sc3->SetColorSpace1(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
-
-    Fsr2Dispatch d;
-    make_dispatch(d, frame);
-    ID3D12CommandList* lists[] = {list};
-    for (int f = 0; f < 3; ++f) {
-        dispatch_site(&d);
-        dispatch_site(&d);
-        dispatch_calls += 2;
-        queue->ExecuteCommandLists(1, lists);
-        queue->ExecuteCommandLists(1, lists);
-        if (f == 1) {
-            DXGI_PRESENT_PARAMETERS pp{};
-            CHECK(SUCCEEDED(sc1->Present1(0, 0, &pp)));
-        } else {
-            CHECK(SUCCEEDED(sc1->Present(0, 0)));
-        }
-    }
-    // A test present must not advance the present index.
-    sc1->Present(0, DXGI_PRESENT_TEST);
-    CHECK(SUCCEEDED(sc3 ? sc3->ResizeBuffers(0, 320, 180, DXGI_FORMAT_UNKNOWN, 0) : S_OK));
-
-    if (sc3) sc3->Release();
-    sc1->Release();
-    DestroyWindow(hwnd);
-    list->Release();
-    alloc->Release();
-    queue->Release();
-    device->Release();
-    warp->Release();
-    factory->Release();
-    return true;
+    Fsr2Dispatch description;
+    make_dispatch(description, frame);
+    return rsf_test_census_warp(&description, dispatch_warp, &dispatch_calls, &g_failures);
 }
 
 int probe_vtable() {
@@ -636,9 +552,7 @@ int probe_functional(rsf_test_census_functional_facts* facts) {
     if (!had_dxgi) std::printf("SKIPPED: DXGI/D3D12 WARP path unavailable on this machine\n");
     facts->dispatch_calls = dispatch_calls;
     facts->had_dxgi = had_dxgi ? 1u : 0u;
-    facts->image_size = image_size();
-    facts->anchor_rva = reinterpret_cast<uintptr_t>(&static_anchor) -
-                        reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+    facts->anchor = reinterpret_cast<const void*>(&static_anchor);
     return g_failures;
 }
 

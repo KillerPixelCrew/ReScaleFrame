@@ -4,6 +4,7 @@ use super::{
     entries, exe_name, hex, includes, rsf_census_counters, rsf_census_options,
 };
 use crate::windows::census_facts_abi::rsf_test_census_functional_facts;
+use crate::windows::census_process::executable_anchor;
 use serde_json::Value;
 use std::ffi::c_char;
 use windows_sys::Win32::System::Threading::Sleep;
@@ -469,14 +470,17 @@ pub(super) unsafe fn rsf_test_census_functional(
         let executable = exe_name();
         expect!(checks, executable.is_some());
         let executable = executable.as_deref().unwrap_or("");
-        fsr_records(&mut checks, &rows, executable, facts.image_size);
+        let image = executable_anchor(facts.anchor);
+        expect!(checks, image.is_some());
+        let (image_size, anchor_rva) = image.unwrap_or_default();
+        fsr_records(&mut checks, &rows, executable, image_size);
         ngx_records(&mut checks, &rows, executable);
         other_records(&mut checks, &rows);
         check_summary(&mut checks, &summary, executable, &facts);
         if facts.had_dxgi != 0 {
             dxgi_records(&mut checks, &rows, &summary);
         }
-        static_findings(&mut checks, &summary, facts.anchor_rva);
+        static_findings(&mut checks, &summary, anchor_rva);
         counters(&mut checks, &snapshot, &rows);
         expect!(checks, unsafe { shutdown() } == 0);
         expect!(checks, unsafe { after_shutdown() } == 0x1234_abcd);
