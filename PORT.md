@@ -347,17 +347,17 @@ Port CPU event admission, input receipts, vendor latency and pacing decisions, i
 - [x] [runtime/orchestrator/src/latency_policy.h](runtime/orchestrator/src/latency_policy.h)
 - [x] [runtime/orchestrator/src/native_fg_cpu_platform.h](runtime/orchestrator/src/native_fg_cpu_platform.h)
 - [ ] [runtime/orchestrator/src/native_latency_vulkan.cpp](runtime/orchestrator/src/native_latency_vulkan.cpp)
-- [ ] [runtime/orchestrator/src/native_latency_vulkan_presentation.h](runtime/orchestrator/src/native_latency_vulkan_presentation.h)
+- [x] [runtime/orchestrator/src/native_latency_vulkan_presentation.h](runtime/orchestrator/src/native_latency_vulkan_presentation.h)
 
 **Fixtures (8)**
 
 - [x] [tests/input_receipts.cpp](tests/input_receipts.cpp)
 - [x] [tests/latency_antilag.cpp](tests/latency_antilag.cpp)
 - [x] [tests/latency_event_contract.cpp](tests/latency_event_contract.cpp)
-- [ ] [tests/native_antilag_vulkan.cpp](tests/native_antilag_vulkan.cpp)
+- [x] [tests/native_antilag_vulkan.cpp](tests/native_antilag_vulkan.cpp)
 - [x] [tests/native_cpu_reservation.cpp](tests/native_cpu_reservation.cpp)
-- [ ] [tests/native_fg_cpu.cpp](tests/native_fg_cpu.cpp)
-- [ ] [tests/native_latency_vulkan.cpp](tests/native_latency_vulkan.cpp)
+- [x] [tests/native_fg_cpu.cpp](tests/native_fg_cpu.cpp)
+- [x] [tests/native_latency_vulkan.cpp](tests/native_latency_vulkan.cpp)
 - [ ] [tests/xell_sleep_concurrency.cpp](tests/xell_sleep_concurrency.cpp)
 
 **Rust review findings (12)**
@@ -1389,14 +1389,14 @@ Port common frame-generation resources, transfers, submission and swapchain life
 
 **Port files (9)**
 
-- [ ] [runtime/orchestrator/include/rescaleframe/native_fg_vulkan.h](runtime/orchestrator/include/rescaleframe/native_fg_vulkan.h)
-- [ ] [runtime/orchestrator/src/native_fg_ffx_vulkan.h](runtime/orchestrator/src/native_fg_ffx_vulkan.h)
+- [x] [runtime/orchestrator/include/rescaleframe/native_fg_vulkan.h](runtime/orchestrator/include/rescaleframe/native_fg_vulkan.h)
+- [x] [runtime/orchestrator/src/native_fg_ffx_vulkan.h](runtime/orchestrator/src/native_fg_ffx_vulkan.h)
 - [ ] [runtime/orchestrator/src/native_fg_vulkan.cpp](runtime/orchestrator/src/native_fg_vulkan.cpp)
 - [ ] [runtime/orchestrator/src/native_fg_vulkan_dispatch.cpp](runtime/orchestrator/src/native_fg_vulkan_dispatch.cpp)
-- [ ] [runtime/orchestrator/src/native_fg_vulkan_platform.h](runtime/orchestrator/src/native_fg_vulkan_platform.h)
-- [ ] [runtime/orchestrator/src/vulkan_fg_copy.h](runtime/orchestrator/src/vulkan_fg_copy.h)
-- [ ] [runtime/orchestrator/src/vulkan_fg_frames.h](runtime/orchestrator/src/vulkan_fg_frames.h)
-- [ ] [runtime/orchestrator/src/vulkan_fg_resources.h](runtime/orchestrator/src/vulkan_fg_resources.h)
+- [x] [runtime/orchestrator/src/native_fg_vulkan_platform.h](runtime/orchestrator/src/native_fg_vulkan_platform.h)
+- [x] [runtime/orchestrator/src/vulkan_fg_copy.h](runtime/orchestrator/src/vulkan_fg_copy.h)
+- [x] [runtime/orchestrator/src/vulkan_fg_frames.h](runtime/orchestrator/src/vulkan_fg_frames.h)
+- [x] [runtime/orchestrator/src/vulkan_fg_resources.h](runtime/orchestrator/src/vulkan_fg_resources.h)
 - [ ] [runtime/orchestrator/src/vulkan_fg_resources_native.h](runtime/orchestrator/src/vulkan_fg_resources_native.h)
 
 **Fixtures (6)**
@@ -1713,14 +1713,14 @@ Port scoped render commands, view data, UI, scene colour, contact shadows and Tr
 - [x] [games/ac7/include/rescaleframe/ac7_view.h](games/ac7/include/rescaleframe/ac7_view.h)
 - [ ] [games/ac7/src/ac7_scope_owner.h](games/ac7/src/ac7_scope_owner.h)
 - [ ] [games/ac7/src/cloud_depth_platform.h](games/ac7/src/cloud_depth_platform.h)
-- [ ] [games/ac7/src/contact_shadow.cpp](games/ac7/src/contact_shadow.cpp)
+- [x] [games/ac7/src/contact_shadow.cpp](games/ac7/src/contact_shadow.cpp)
 - [ ] [games/ac7/src/contact_shadow.h](games/ac7/src/contact_shadow.h)
 - [ ] [games/ac7/src/render_scope.cpp](games/ac7/src/render_scope.cpp)
-- [ ] [games/ac7/src/scene_color.cpp](games/ac7/src/scene_color.cpp)
-- [ ] [games/ac7/src/truesky_depth.cpp](games/ac7/src/truesky_depth.cpp)
-- [ ] [games/ac7/src/truesky_depth.h](games/ac7/src/truesky_depth.h)
-- [ ] [games/ac7/src/truesky_motion.cpp](games/ac7/src/truesky_motion.cpp)
-- [ ] [games/ac7/src/truesky_motion.h](games/ac7/src/truesky_motion.h)
+- [x] [games/ac7/src/scene_color.cpp](games/ac7/src/scene_color.cpp)
+- [x] [games/ac7/src/truesky_depth.cpp](games/ac7/src/truesky_depth.cpp)
+- [x] [games/ac7/src/truesky_depth.h](games/ac7/src/truesky_depth.h)
+- [x] [games/ac7/src/truesky_motion.cpp](games/ac7/src/truesky_motion.cpp)
+- [x] [games/ac7/src/truesky_motion.h](games/ac7/src/truesky_motion.h)
 - [x] [games/ac7/src/ui_rules.cpp](games/ac7/src/ui_rules.cpp)
 
 **Fixtures (4)**
@@ -1728,7 +1728,7 @@ Port scoped render commands, view data, UI, scene colour, contact shadows and Tr
 - [ ] [tests/ac7_render_scope.cpp](tests/ac7_render_scope.cpp)
 - [ ] [tests/ac7_ui_rules.cpp](tests/ac7_ui_rules.cpp)
 - [ ] [tests/ac7_view.cpp](tests/ac7_view.cpp)
-- [ ] [tests/ac7_view_fixture.h](tests/ac7_view_fixture.h)
+- [x] [tests/ac7_view_fixture.h](tests/ac7_view_fixture.h)
 
 **Rust review findings (8)**
 
