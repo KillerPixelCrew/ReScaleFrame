@@ -21,3 +21,4 @@ __pycache__/
 /ghidra_projects/
 /tools/rea/node_modules/
 /.claude/skills/reverse-engineer-anything/
+tests/**/bin/

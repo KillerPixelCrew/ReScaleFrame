@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: MIT
 """Capture and classify four ready SR sources in an explicitly selected live Runtime."""
 import argparse
 import importlib.util

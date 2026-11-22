@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: MIT
 """Send one held scan-code key only to an explicitly selected foreground process."""
 import argparse
 import ctypes as c
