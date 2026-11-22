@@ -310,7 +310,7 @@ fn texture(image: &OwnedImage) -> XessTexture {
         image: image.image as Handle,
         imageView: image.view as Handle,
         subresourceRange: VkImageSubresourceRange {
-            aspectMask: 1, // VK_IMAGE_ASPECT_COLOR_BIT
+            aspectMask: ash::vk::ImageAspectFlags::COLOR.as_raw(),
             baseMipLevel: 0,
             levelCount: 1,
             baseArrayLayer: 0,

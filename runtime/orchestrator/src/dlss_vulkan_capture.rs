@@ -3,6 +3,7 @@
 // per-queue-family command pools and fences, orders submission and retires
 // the readbacks. The production leaves for typed Vulkan, WSI, Streamline
 // registration and file output are in leaves.rs.
+use ash::vk;
 use crate::allocate_handle;
 use crate::dlss_vulkan_capture_ledger::{AMBIGUOUS, Ledger};
 use crate::sys::rsf_srvk_image as Image;
@@ -20,10 +21,10 @@ use std::sync::{Mutex, PoisonError};
 const VK_SUCCESS: i32 = 0;
 const VK_INITIALIZATION_FAILED: i32 = -3;
 const VK_FORMAT_NOT_SUPPORTED: i32 = -11;
-const TRANSFER_SOURCE: u32 = 1;
-const RGBA8: u32 = 37;
+const TRANSFER_SOURCE: u32 = vk::ImageUsageFlags::TRANSFER_SRC.as_raw();
+const RGBA8: u32 = vk::Format::R8G8B8A8_UNORM.as_raw() as u32;
 const BGRA8: u32 = 44;
-const PRESENT_LAYOUT: u32 = 1_000_001_002;
+const PRESENT_LAYOUT: u32 = vk::ImageLayout::PRESENT_SRC_KHR.as_raw() as u32;
 const WAIT_NS: u64 = 15_000_000_000;
 const PACKET_ABI_VERSION: u32 = 1;
 

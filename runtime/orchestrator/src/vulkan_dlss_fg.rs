@@ -42,11 +42,11 @@ const FEATURE_FAILED: i32 = -9;
 
 const WSI_ERROR: i32 = -3;
 const SUBOPTIMAL: i32 = 1000001003;
-const USAGE_TRANSFER_SRC: u32 = 1;
-const USAGE_TRANSFER_DST: u32 = 2;
-const R32F: u32 = 100;
-const RG16F: u32 = 83;
-const RGBA8: u32 = 37;
+const USAGE_TRANSFER_SRC: u32 = vk::ImageUsageFlags::TRANSFER_SRC.as_raw();
+const USAGE_TRANSFER_DST: u32 = vk::ImageUsageFlags::TRANSFER_DST.as_raw();
+const R32F: u32 = vk::Format::R32_SFLOAT.as_raw() as u32;
+const RG16F: u32 = vk::Format::R16G16_SFLOAT.as_raw() as u32;
+const RGBA8: u32 = vk::Format::R8G8B8A8_UNORM.as_raw() as u32;
 const SLOTS: usize = RSF_FGVK_FRAME_SLOTS as usize;
 
 static OCCUPIED: AtomicBool = AtomicBool::new(false);

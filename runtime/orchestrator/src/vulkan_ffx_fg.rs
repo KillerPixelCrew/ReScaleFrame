@@ -37,16 +37,16 @@ use std::ffi::{CStr, c_char, c_void};
 use std::ptr;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-const VK_SUCCESS: i32 = 0;
-const VK_SUBOPTIMAL: i32 = 1_000_001_003;
-const VK_INITIALIZATION_FAILED: i32 = -3;
+const VK_SUCCESS: i32 = vk::Result::SUCCESS.as_raw();
+const VK_SUBOPTIMAL: i32 = vk::Result::SUBOPTIMAL_KHR.as_raw();
+const VK_INITIALIZATION_FAILED: i32 = vk::Result::ERROR_INITIALIZATION_FAILED.as_raw();
 // rsfFfxSetVulkanWsiDispatch has no table for this device when it returns -3.
 const WSI_FOREIGN_DEVICE: i32 = -3;
-const RGBA8: u32 = 37;
-const BGRA8: u32 = 44;
-const RG16F: u32 = 83;
-const R32F: u32 = 100;
-const SRGB_NONLINEAR: u32 = 0;
+const RGBA8: u32 = vk::Format::R8G8B8A8_UNORM.as_raw() as u32;
+const BGRA8: u32 = vk::Format::B8G8R8A8_UNORM.as_raw() as u32;
+const RG16F: u32 = vk::Format::R16G16_SFLOAT.as_raw() as u32;
+const R32F: u32 = vk::Format::R32_SFLOAT.as_raw() as u32;
+const SRGB_NONLINEAR: u32 = vk::ColorSpaceKHR::SRGB_NONLINEAR.as_raw() as u32;
 const SLOT_COUNT: usize = RSF_FGVK_FRAME_SLOTS as usize;
 
 type Handle = *mut c_void;

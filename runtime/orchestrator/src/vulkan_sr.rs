@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use ash::vk;
 use crate::ffx_version::{self, MAX_VERSIONS, Version};
 use crate::sdk_module::{FFX_CONTEXT_EXPORTS, FIDELITYFX_DLL, Loader, SdkModule};
 use crate::sharpening_policy;
@@ -25,22 +26,22 @@ use std::ptr::{self, NonNull};
 use std::sync::{LazyLock, Mutex};
 
 // Vulkan C ABI values, checked against the native headers at the graphics bridge.
-const R8_UNORM: u32 = 9;
-pub(super) const RG16_FLOAT: u32 = 83;
-pub(super) const RGBA16_FLOAT: u32 = 97;
-pub(super) const R32_FLOAT: u32 = 100;
-const D32_FLOAT: u32 = 126;
-pub(super) const SHADER_READ: u32 = 5;
-pub(super) const TRANSFER_DST: u32 = 7;
-pub(super) const GENERAL: u32 = 1;
-pub(super) const TRANSFER_SRC_USAGE: u32 = 1;
-pub(super) const TRANSFER_DST_USAGE: u32 = 2;
-pub(super) const SAMPLED_USAGE: u32 = 4;
-pub(super) const STORAGE_USAGE: u32 = 8;
-const SHADER_READ_ACCESS: u32 = 0x20;
-const SHADER_WRITE_ACCESS: u32 = 0x40;
-const TRANSFER_READ_ACCESS: u32 = 0x800;
-const TRANSFER_WRITE_ACCESS: u32 = 0x1000;
+const R8_UNORM: u32 = vk::Format::R8_UNORM.as_raw() as u32;
+pub(super) const RG16_FLOAT: u32 = vk::Format::R16G16_SFLOAT.as_raw() as u32;
+pub(super) const RGBA16_FLOAT: u32 = vk::Format::R16G16B16A16_SFLOAT.as_raw() as u32;
+pub(super) const R32_FLOAT: u32 = vk::Format::R32_SFLOAT.as_raw() as u32;
+const D32_FLOAT: u32 = vk::Format::D32_SFLOAT.as_raw() as u32;
+pub(super) const SHADER_READ: u32 = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL.as_raw() as u32;
+pub(super) const TRANSFER_DST: u32 = vk::ImageLayout::TRANSFER_DST_OPTIMAL.as_raw() as u32;
+pub(super) const GENERAL: u32 = vk::ImageLayout::GENERAL.as_raw() as u32;
+pub(super) const TRANSFER_SRC_USAGE: u32 = vk::ImageUsageFlags::TRANSFER_SRC.as_raw();
+pub(super) const TRANSFER_DST_USAGE: u32 = vk::ImageUsageFlags::TRANSFER_DST.as_raw();
+pub(super) const SAMPLED_USAGE: u32 = vk::ImageUsageFlags::SAMPLED.as_raw();
+pub(super) const STORAGE_USAGE: u32 = vk::ImageUsageFlags::STORAGE.as_raw();
+const SHADER_READ_ACCESS: u32 = vk::AccessFlags::SHADER_READ.as_raw();
+const SHADER_WRITE_ACCESS: u32 = vk::AccessFlags::SHADER_WRITE.as_raw();
+const TRANSFER_READ_ACCESS: u32 = vk::AccessFlags::TRANSFER_READ.as_raw();
+const TRANSFER_WRITE_ACCESS: u32 = vk::AccessFlags::TRANSFER_WRITE.as_raw();
 
 const FFX_HDR: u32 = 1;
 const FFX_JITTER_CANCELLATION: u32 = 4;

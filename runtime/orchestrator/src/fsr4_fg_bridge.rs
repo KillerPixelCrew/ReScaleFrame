@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: MIT
+use windows::Win32::Graphics::Dxgi::Common::{
+    DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R16G16_FLOAT, DXGI_FORMAT_R32_FLOAT,
+};
 use crate::allocate_handle;
 use crate::dx12_vulkan_interop::{
     BGRA8_UNORM as VK_BGRA8_UNORM, R32_FLOAT as VK_R32_FLOAT, RG16_FLOAT as VK_RG16_FLOAT, checked,
@@ -41,9 +44,9 @@ const LOCAL_FENCE: u32 = 1 << 4;
 const SHARED_FENCE: u32 = 1 << 5;
 
 const TEXTURE_2D: u32 = 3; // D3D12_RESOURCE_DIMENSION_TEXTURE2D
-const BGRA8_UNORM: u32 = 87;
-const R32_FLOAT: u32 = 41;
-const RG16_FLOAT: u32 = 34;
+const BGRA8_UNORM: u32 = DXGI_FORMAT_B8G8R8A8_UNORM.0 as u32;
+const R32_FLOAT: u32 = DXGI_FORMAT_R32_FLOAT.0 as u32;
+const RG16_FLOAT: u32 = DXGI_FORMAT_R16G16_FLOAT.0 as u32;
 const FEATURE_LEVEL_12_0: u32 = 0xc000;
 const COMMAND_LIST_DIRECT: u32 = 0;
 const QUEUE_PRIORITY_NORMAL: i32 = 0;

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use ash::vk;
 use super::{Dispatch, Handle, Texture, dx12, sdk};
 use crate::ffx_abi::{FFX_API_RESOURCE_STATE_COMPUTE_READ, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS, PfnFfxDispatch, ffxContext};
 use crate::ffx_resource;
@@ -154,6 +155,12 @@ pub(super) unsafe fn describe(image: Handle) -> Texture {
     }
 }
 
+// The Vulkan formats a caller can import, as their VkFormat values.
+const VK_RGBA16_FLOAT: u32 = vk::Format::R16G16B16A16_SFLOAT.as_raw() as u32;
+const VK_RG16_FLOAT: u32 = vk::Format::R16G16_SFLOAT.as_raw() as u32;
+const VK_R32_FLOAT: u32 = vk::Format::R32_SFLOAT.as_raw() as u32;
+const VK_D32_FLOAT: u32 = vk::Format::D32_SFLOAT.as_raw() as u32;
+
 pub(super) unsafe fn shared_image(
     device: Handle,
     width: u32,
@@ -164,10 +171,10 @@ pub(super) unsafe fn shared_image(
     resource: *mut Handle,
 ) -> i32 {
     let (format, mut flags) = match vk_format {
-        97 => (DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_FLAG_NONE),
-        83 => (DXGI_FORMAT_R16G16_FLOAT, D3D12_RESOURCE_FLAG_NONE),
-        100 => (DXGI_FORMAT_R32_FLOAT, D3D12_RESOURCE_FLAG_NONE),
-        126 => (
+        VK_RGBA16_FLOAT => (DXGI_FORMAT_R16G16B16A16_FLOAT, D3D12_RESOURCE_FLAG_NONE),
+        VK_RG16_FLOAT => (DXGI_FORMAT_R16G16_FLOAT, D3D12_RESOURCE_FLAG_NONE),
+        VK_R32_FLOAT => (DXGI_FORMAT_R32_FLOAT, D3D12_RESOURCE_FLAG_NONE),
+        VK_D32_FLOAT => (
             DXGI_FORMAT_D32_FLOAT,
             D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL,
         ),

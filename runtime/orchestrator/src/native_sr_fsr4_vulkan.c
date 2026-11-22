@@ -40,14 +40,7 @@ _Static_assert(sizeof(rsf_fsr4_bridge_frame) == 112 && offsetof(rsf_fsr4_bridge_
 _Static_assert(sizeof(rsf_fsr4_bridge_info) == sizeof(rsf_srvk_fsr4_provider_info) &&
     offsetof(rsf_fsr4_bridge_info, provider_version) == offsetof(rsf_srvk_fsr4_provider_info, provider_version),
     "bridge info matches the public provider info");
-_Static_assert(VK_FORMAT_R16G16B16A16_SFLOAT == 97 && VK_FORMAT_R32_SFLOAT == 100 && VK_FORMAT_R16G16_SFLOAT == 83,
-    "Vulkan formats used by vulkan_fsr4_sr.rs");
-_Static_assert(RSF_FSR4_BRIDGE_ABI_VERSION == 1 && VK_NOT_READY == 1 && VK_ERROR_OUT_OF_HOST_MEMORY == -1 &&
-    VK_ERROR_INITIALIZATION_FAILED == -3 && VK_ERROR_UNKNOWN == -13, "Vulkan results used by vulkan_fsr4_sr.rs");
-_Static_assert(VK_IMAGE_LAYOUT_UNDEFINED == 0 && VK_IMAGE_LAYOUT_GENERAL == 1 &&
-    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL == 5 && VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL == 6 &&
-    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL == 7 && VK_IMAGE_USAGE_SAMPLED_BIT == 4 && VK_IMAGE_USAGE_STORAGE_BIT == 8,
-    "Vulkan layouts and usages used by vulkan_fsr4_sr.rs");
+_Static_assert(RSF_FSR4_BRIDGE_ABI_VERSION == 1, "bridge ABI version");
 
 static int32_t open_graphics(const rsf_srvk_setup* setup, void** out)
 {

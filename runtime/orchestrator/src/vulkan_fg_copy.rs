@@ -74,14 +74,14 @@ pub(super) unsafe extern "C" fn rsf_core_vkfg_record_copy(
     }
 }
 
-pub(super) const UNDEFINED: u32 = 0;
-pub(super) const SHADER_READ: u32 = 5;
-pub(super) const TRANSFER_SRC: u32 = 6;
-const TRANSFER_DST: u32 = 7;
-pub(super) const FAMILY_IGNORED: u32 = !0;
-pub(super) const FAMILY_EXTERNAL: u32 = !1;
+pub(super) const UNDEFINED: u32 = vk::ImageLayout::UNDEFINED.as_raw() as u32;
+pub(super) const SHADER_READ: u32 = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL.as_raw() as u32;
+pub(super) const TRANSFER_SRC: u32 = vk::ImageLayout::TRANSFER_SRC_OPTIMAL.as_raw() as u32;
+const TRANSFER_DST: u32 = vk::ImageLayout::TRANSFER_DST_OPTIMAL.as_raw() as u32;
+pub(super) const FAMILY_IGNORED: u32 = vk::QUEUE_FAMILY_IGNORED;
+pub(super) const FAMILY_EXTERNAL: u32 = vk::QUEUE_FAMILY_EXTERNAL;
 // VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT.
-pub(super) const MEMORY_ACCESS: u32 = 0x8000 | 0x1_0000;
+pub(super) const MEMORY_ACCESS: u32 = (vk::AccessFlags::MEMORY_READ.as_raw() | vk::AccessFlags::MEMORY_WRITE.as_raw());
 pub(super) const ALL_COMMANDS: u32 = 0x1_0000;
 
 type Handle = *mut c_void;

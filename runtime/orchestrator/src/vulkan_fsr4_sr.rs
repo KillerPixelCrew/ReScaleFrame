@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use ash::vk;
 use crate::allocate_handle;
 use crate::dx12_vulkan_interop::{Owner as Interop, Platform as InteropPlatform, checked};
 use crate::frame_capture_vk::sr_capture_inputs;
@@ -36,12 +37,12 @@ type Record = rsf_game_sys::rsf_frame_record;
 type Image = rsf_srvk_image;
 type SharedImage = rsf_dx12vk_shared_image;
 
-const OUT_OF_HOST_MEMORY: i32 = -1;
-const INITIALIZATION_FAILED: i32 = -3;
-const NOT_READY: i32 = 1;
-const UNKNOWN: i32 = -13;
-const UNDEFINED: u32 = 0;
-const TRANSFER_SRC: u32 = 6;
+const OUT_OF_HOST_MEMORY: i32 = vk::Result::ERROR_OUT_OF_HOST_MEMORY.as_raw();
+const INITIALIZATION_FAILED: i32 = vk::Result::ERROR_INITIALIZATION_FAILED.as_raw();
+const NOT_READY: i32 = vk::Result::NOT_READY.as_raw();
+const UNKNOWN: i32 = vk::Result::ERROR_UNKNOWN.as_raw();
+const UNDEFINED: u32 = vk::ImageLayout::UNDEFINED.as_raw() as u32;
+const TRANSFER_SRC: u32 = vk::ImageLayout::TRANSFER_SRC_OPTIMAL.as_raw() as u32;
 const WAIT_NS: u64 = 10_000_000_000;
 const INPUT_FORMATS: [u32; 3] = [RGBA16_FLOAT, R32_FLOAT, RG16_FLOAT];
 

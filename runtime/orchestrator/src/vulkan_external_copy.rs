@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
 
+use ash::vk;
 use crate::vulkan_fg_copy::TRANSFER_SRC;
 pub(super) use crate::vulkan_fg_copy::{
     ALL_COMMANDS, Barrier, FAMILY_EXTERNAL, FAMILY_IGNORED, UNDEFINED,
 };
 
-pub(super) const GENERAL: u32 = 1;
-pub(super) const TRANSFER_DST: u32 = 7;
+pub(super) const GENERAL: u32 = vk::ImageLayout::GENERAL.as_raw() as u32;
+pub(super) const TRANSFER_DST: u32 = vk::ImageLayout::TRANSFER_DST_OPTIMAL.as_raw() as u32;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

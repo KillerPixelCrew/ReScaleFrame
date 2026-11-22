@@ -20,7 +20,6 @@ _Static_assert(sizeof(xess_vk_init_params_t) == 64 && offsetof(xess_vk_init_para
 _Static_assert(sizeof(xess_vk_execute_params_t) == 360 && offsetof(xess_vk_execute_params_t, resetHistory) == 300,
     "XeSS execute layout");
 _Static_assert(sizeof(xess_version_t) == 8 && sizeof(xess_2d_t) == 8, "XeSS value layouts");
-_Static_assert(VK_IMAGE_ASPECT_COLOR_BIT == 1, "Vulkan colour aspect");
 /* Values mirrored by the Rust owner. */
 _Static_assert(XESS_RESULT_SUCCESS == 0 && XESS_RESULT_ERROR_UNSUPPORTED_DEVICE == -1 &&
     XESS_RESULT_ERROR_UNSUPPORTED_DRIVER == -2 && XESS_RESULT_ERROR_NOT_IMPLEMENTED == -7 &&
@@ -31,9 +30,4 @@ _Static_assert(XESS_QUALITY_SETTING_AA == 106 && XESS_QUALITY_SETTING_QUALITY ==
     XESS_QUALITY_SETTING_BALANCED == 102 && XESS_QUALITY_SETTING_PERFORMANCE == 101 &&
     XESS_QUALITY_SETTING_ULTRA_PERFORMANCE == 100 && XESS_QUALITY_SETTING_ULTRA_QUALITY == 104,
     "XeSS quality values");
-_Static_assert(VK_FORMAT_R16G16_SFLOAT == 83 && VK_FORMAT_R16G16B16A16_SFLOAT == 97 && VK_FORMAT_R32_SFLOAT == 100,
-    "Vulkan formats");
-_Static_assert(VK_IMAGE_LAYOUT_GENERAL == 1 && VK_IMAGE_USAGE_TRANSFER_SRC_BIT == 1 &&
-    VK_IMAGE_USAGE_TRANSFER_DST_BIT == 2 && VK_IMAGE_USAGE_SAMPLED_BIT == 4 && VK_IMAGE_USAGE_STORAGE_BIT == 8,
-    "Vulkan layouts and usage");
 #endif

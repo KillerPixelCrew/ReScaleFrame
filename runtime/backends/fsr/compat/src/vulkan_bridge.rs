@@ -8,6 +8,9 @@
 use crate::ffx_version::{self, MAX_VERSIONS, Version};
 use core::ffi::{CStr, c_void};
 use core::ptr;
+use windows::Win32::Graphics::Dxgi::Common::{
+    DXGI_FORMAT_R16G16_FLOAT, DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R32_FLOAT,
+};
 use rsf_game_sys::windows_path::absolute_wide_path;
 use rsf_game_sys::ffi_util::try_box;
 
@@ -25,8 +28,8 @@ mod sdk;
 mod standalone;
 
 type Handle = *mut c_void;
-const UNEXPECTED: i32 = 0x8000_ffff_u32 as i32; // E_UNEXPECTED
-const DEVICE_REMOVED: i32 = 0x887a_0005_u32 as i32; // DXGI_ERROR_DEVICE_REMOVED
+const UNEXPECTED: i32 = windows::Win32::Foundation::E_UNEXPECTED.0;
+const DEVICE_REMOVED: i32 = windows::Win32::Graphics::Dxgi::DXGI_ERROR_DEVICE_REMOVED.0;
 
 // Local result codes kept from the previous C++ owner.
 const FAILED: i32 = -1;
@@ -55,9 +58,9 @@ const DEPTH_INFINITE: u32 = 1 << 1;
 const MOTION_JITTERED: u32 = 1 << 2;
 
 // DXGI_FORMAT values the public frame accepts.
-const RGBA16_FLOAT: u32 = 10;
-const RG16_FLOAT: u32 = 34;
-const R32_FLOAT: u32 = 41;
+const RGBA16_FLOAT: u32 = DXGI_FORMAT_R16G16B16A16_FLOAT.0 as u32;
+const RG16_FLOAT: u32 = DXGI_FORMAT_R16G16_FLOAT.0 as u32;
+const R32_FLOAT: u32 = DXGI_FORMAT_R32_FLOAT.0 as u32;
 
 const AMD: u32 = 0x1002;
 const NVIDIA: u32 = 0x10de;

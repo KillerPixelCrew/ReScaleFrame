@@ -24,24 +24,6 @@ const BACKEND_DX12: u64 = 0x2; // FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_DX12
 const UPSCALER_VERSION: u32 = 0x0100_1002; // FFX_UPSCALER_VERSION (4.1.2)
 const ALLOCATORS: usize = 3;
 
-// The values owner.rs and sdk_commands.rs repeat from DXGI, Win32 and Vulkan.
-const _: () = {
-    use super::{DEVICE_REMOVED, R32_FLOAT, RG16_FLOAT, RGBA16_FLOAT, UNEXPECTED};
-    use ash::vk::Format;
-    use windows::Win32::{
-        Foundation::E_UNEXPECTED,
-        Graphics::Dxgi::{Common::*, DXGI_ERROR_DEVICE_REMOVED},
-    };
-    assert!(RGBA16_FLOAT == DXGI_FORMAT_R16G16B16A16_FLOAT.0 as u32);
-    assert!(
-        RG16_FLOAT == DXGI_FORMAT_R16G16_FLOAT.0 as u32
-            && R32_FLOAT == DXGI_FORMAT_R32_FLOAT.0 as u32
-    );
-    assert!(UNEXPECTED == E_UNEXPECTED.0 && DEVICE_REMOVED == DXGI_ERROR_DEVICE_REMOVED.0);
-    assert!(Format::R16G16B16A16_SFLOAT.as_raw() == 97 && Format::R16G16_SFLOAT.as_raw() == 83);
-    assert!(Format::R32_SFLOAT.as_raw() == 100 && Format::D32_SFLOAT.as_raw() == 126);
-};
-
 /// ffxCreateBackendDX12Desc: the header and the borrowed device.
 #[repr(C)]
 struct BackendDesc {

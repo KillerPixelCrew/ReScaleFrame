@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+use ash::vk;
 use crate::allocate_handle;
 use crate::owned_win32_handle;
 use crate::sr_session::has_capacity;
@@ -12,11 +13,11 @@ const OUT_OF_HOST_MEMORY: i32 = -1;
 const INITIALIZATION_FAILED: i32 = -3;
 const INCOMPATIBLE_DRIVER: i32 = -9;
 const TOO_MANY_OBJECTS: i32 = -10;
-const FORMAT_NOT_SUPPORTED: i32 = -11;
-const INVALID_EXTERNAL_HANDLE: i32 = -1_000_072_003;
-pub(super) const BGRA8_UNORM: u32 = 44;
-pub(super) const RG16_FLOAT: u32 = 83;
-pub(super) const R32_FLOAT: u32 = 100;
+const FORMAT_NOT_SUPPORTED: i32 = vk::Result::ERROR_FORMAT_NOT_SUPPORTED.as_raw();
+const INVALID_EXTERNAL_HANDLE: i32 = vk::Result::ERROR_INVALID_EXTERNAL_HANDLE.as_raw();
+pub(super) const BGRA8_UNORM: u32 = vk::Format::B8G8R8A8_UNORM.as_raw() as u32;
+pub(super) const RG16_FLOAT: u32 = vk::Format::R16G16_SFLOAT.as_raw() as u32;
+pub(super) const R32_FLOAT: u32 = vk::Format::R32_SFLOAT.as_raw() as u32;
 const IMAGE_SLOTS: usize = 24;
 
 type Handle = *mut c_void;

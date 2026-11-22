@@ -13,8 +13,8 @@
 // and every later step takes a shared reference.
 use super::startup::{self, CoreEntries, Platform, WsiEntries};
 use super::{
-    BGRA8, FEATURE_FAILED, Frame, Handle, INIT_FAILED, Image, OK, Ops, R32F, RG16F, RGBA8, Record,
-    SRGB_NONLINEAR, Setup, VK_INITIALIZATION_FAILED, VK_SUBOPTIMAL,
+    BGRA8, FEATURE_FAILED, Frame, Handle, INIT_FAILED, Image, OK, Ops, RGBA8, Record,
+    Setup,
 };
 use crate::frame_capture_vk::{
     Owner as Capture, rsf_core_capture_vk_create, rsf_core_capture_vk_destroy,
@@ -81,17 +81,7 @@ const SHADER_READ: u32 = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL.as_raw() as u
 const GENERAL: u32 = vk::ImageLayout::GENERAL.as_raw() as u32;
 const COMMAND_RETIREMENT: u32 = 1;
 
-// The owner's admission constants are the Vulkan and SDK values used here.
-const _: () = {
-    assert!(vk::Format::R8G8B8A8_UNORM.as_raw() == RGBA8 as i32);
-    assert!(vk::Format::B8G8R8A8_UNORM.as_raw() == BGRA8 as i32);
-    assert!(vk::Format::R16G16_SFLOAT.as_raw() == RG16F as i32);
-    assert!(vk::Format::R32_SFLOAT.as_raw() == R32F as i32);
-    assert!(vk::ColorSpaceKHR::SRGB_NONLINEAR.as_raw() == SRGB_NONLINEAR as i32);
-    assert!(vk::Result::SUBOPTIMAL_KHR.as_raw() == VK_SUBOPTIMAL);
-    assert!(vk::Result::ERROR_INITIALIZATION_FAILED.as_raw() == VK_INITIALIZATION_FAILED);
-    assert!(FFX_API_RETURN_OK == 0);
-};
+const _: () = assert!(FFX_API_RETURN_OK == 0);
 
 /// Host services from native_fg_vulkan.c (rsf_ffxgvk_host). The table outlives
 /// every owner created with it.
