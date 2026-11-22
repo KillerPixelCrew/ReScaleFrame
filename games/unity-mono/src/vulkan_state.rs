@@ -19,8 +19,8 @@
 //! the forwarded vkQueuePresentKHR, and retirement keeps it through vkDeviceWaitIdle and the
 //! semaphore destruction, which need host access to the device's queues.
 //!
-//! vulkan_bridge.cpp keeps Unity interface access and typed graphics and Win32 calls. Native
-//! callbacks use explicit handles and run outside the state mutex.
+//! vulkan_platform.rs executes GPU operations through the borrowed device view. Unity interface
+//! access and window-thread handling stay in C++. Callbacks run outside the state mutex.
 //! The orchestrator's Vulkan frame-generation swapchain owners have their own presentation
 //! tables and this crate does not link them, so the registry here is the bridge's own.
 //!
@@ -30,6 +30,11 @@
 use crate::bridge_abi::{RSF_UNITY_FRAMES_PACKETS, RSF_UNITY_FRAMES_SLOTS, rsf_unity_packet};
 use crate::bridge_interop::VULKAN;
 use crate::device_creation::{Claim, Creation};
+pub(super) use crate::vulkan_handles::{
+    rsf_unity_vulkan_command_handles as CommandSlot,
+    rsf_unity_vulkan_device_handles as DeviceHandles,
+    rsf_unity_vulkan_image_handles as ImageHandles,
+};
 use rsf_game_sys::rsf_game_host_services;
 use std::ffi::c_void;
 use std::ptr;
@@ -100,16 +105,6 @@ struct Image {
     initialized: bool,
 }
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct ImageHandles {
-    resource: *mut c_void,
-    image: u64,
-    memory: u64,
-}
-
-const _: () = assert!(size_of::<ImageHandles>() == 24);
-
 impl ImageHandles {
     const EMPTY: Self = Self {
         resource: ptr::null_mut(),
@@ -122,24 +117,7 @@ impl ImageHandles {
     }
 }
 
-/// The pool owns the two Vulkan buffers. This record also carries one Vulkan fence and two
-/// transferred COM references. A copied record is a borrowed view under the presentation lease.
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct CommandSlot {
-    allocator: *mut c_void,
-    commands: *mut c_void,
-    vk: [u64; 2],
-    complete: u64,
-}
-
-const _: () = assert!(
-    size_of::<CommandSlot>() == 40
-        && std::mem::offset_of!(CommandSlot, commands) == 8
-        && std::mem::offset_of!(CommandSlot, vk) == 16
-        && std::mem::offset_of!(CommandSlot, complete) == 32
-);
-
+// The pool owns the two Vulkan buffers. The slot owns the fence and the COM references.
 impl CommandSlot {
     const EMPTY: Self = Self {
         allocator: ptr::null_mut(),
@@ -156,27 +134,8 @@ impl CommandSlot {
     }
 }
 
-/// The COM references and imported semaphore transfer to Rust. Unity owns the Vulkan device and
-/// queue. The native leaves and bridge callbacks borrow this view for the duration of their hold.
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct DeviceHandles {
-    device: *mut c_void,
-    queue: *mut c_void,
-    fence: *mut c_void,
-    vk_device: u64,
-    vk_physical_device: u64,
-    vk_queue: u64,
-    vk_semaphore: u64,
-    vk_queue_family: u32,
-}
-
-const _: () = assert!(
-    size_of::<DeviceHandles>() == 64
-        && std::mem::offset_of!(DeviceHandles, vk_device) == 24
-        && std::mem::offset_of!(DeviceHandles, vk_queue_family) == 56
-);
-
+// The COM references, dispatch and imported semaphore transfer to Rust. Unity lends the
+// Vulkan device and queue for the duration of the shared-device owner.
 impl DeviceHandles {
     const EMPTY: Self = Self {
         device: ptr::null_mut(),
@@ -187,6 +146,7 @@ impl DeviceHandles {
         vk_queue: 0,
         vk_semaphore: 0,
         vk_queue_family: 0,
+        dispatch: ptr::null_mut(),
     };
 
     fn complete(self) -> bool {
@@ -776,37 +736,29 @@ unsafe extern "C" fn rsf_unity_vulkan_prepare_image(
     true
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_vulkan_record_image(index: u32) -> bool {
+#[cfg(windows)]
+pub(super) fn record_image(index: u32) -> bool {
     lock().record_image(index as usize)
 }
 
 /// Called after the Vulkan slot fence completed and all command buffers and lists reset.
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_unity_vulkan_begin_recording(index: u32, epoch: *mut u64) -> u64 {
+#[cfg(windows)]
+pub(super) fn begin_recording(index: u32) -> Option<(u64, u64)> {
     let mut state = lock();
     state.recorded_images = 0;
-    let Some(device) = &mut state.creation.device else {
-        return 0;
-    };
-    let Some(serial) = device.recordings.get_mut(index as usize) else {
-        return 0;
-    };
-    let Some(next) = serial.checked_add(1) else {
-        return 0;
-    };
-    *serial = next;
-    unsafe { epoch.write(device.epoch) };
-    next
+    let device = state.creation.device.as_mut()?;
+    let serial = device.recordings.get_mut(index as usize)?;
+    *serial = serial.checked_add(1)?;
+    (device.epoch != 0).then_some((device.epoch, *serial))
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_vulkan_upload_submitted() {
+#[cfg(windows)]
+pub(super) fn upload_submitted() {
     lock().upload_submitted();
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rsf_unity_vulkan_handback_fenced() {
+#[cfg(windows)]
+pub(super) fn handback_fenced() {
     lock().handback_fenced();
 }
 

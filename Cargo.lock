@@ -643,9 +643,11 @@ dependencies = [
 name = "rsf-unity-mono"
 version = "0.1.2"
 dependencies = [
+ "ash",
  "rsf-game-sys",
  "rsf-runtime-submission",
  "rsf-windows",
+ "windows",
  "windows-sys",
 ]
 

@@ -28,6 +28,9 @@ mod runtime_config;
 mod runtime_setup;
 #[cfg(any(test, all(windows, feature = "mono-plugin")))]
 mod startup_policy;
+mod vulkan_handles;
+#[cfg(windows)]
+mod vulkan_platform;
 mod vulkan_resolver;
 mod vulkan_state;
 

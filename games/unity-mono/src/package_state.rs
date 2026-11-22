@@ -468,7 +468,7 @@ extern "C" fn rsf_unity_package_sr_ring_begin() -> u64 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rsf_unity_package_sr_recording(
+pub(super) extern "C" fn rsf_unity_package_sr_recording(
     commands: *mut c_void,
     epoch: u64,
     slot: u32,

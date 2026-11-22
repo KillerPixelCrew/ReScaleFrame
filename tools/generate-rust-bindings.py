@@ -349,6 +349,10 @@ generate("games/unity-mono/src/bridge_abi.rs", "games/unity-mono/src/bridge_stat
          ["--no-recursive-allowlist", "--raw-line", "#![allow(dead_code)]",
           "--raw-line", "use rsf_game_sys::rsf_camera_frame;",
           "--with-derive-custom-struct", "rsf_unity_packet=Copy,Clone"])
+generate("games/unity-mono/src/vulkan_handles.rs", "games/unity-mono/src/vulkan_state.h",
+         "rsf_unity_vulkan_(device|command|image)_handles", "NOTHING",
+         ["-Igames/unity-mono/include", "-Isdk/game/include"],
+         ["--no-recursive-allowlist"])
 generate("games/unity-mono/src/runtime_abi.rs", "runtime/orchestrator/include/rescaleframe/native_fg_d3d12.h",
          "rsf_(fg12_setup|fg_choice|native_fg_options|backend_result|backend_log_fn)|wchar_t",
          "RSF_(FG_BACKEND_(DLSS|FSR3|FSR4|XESS|AUTO|ALL)|FG_FIXED|REFLEX_OFF|UI_MODE_BACKBUFFER_HUDLESS|"

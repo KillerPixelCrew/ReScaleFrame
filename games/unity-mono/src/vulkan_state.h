@@ -1,9 +1,9 @@
 /* SPDX-License-Identifier: MIT */
 #pragma once
 /* Internal boundary between the Unity package's Vulkan bridge (integrations/unity/native/
-   vulkan_bridge.cpp) and its Rust state (vulkan_state.rs). Not a DLL ABI and without generated
-   bindings: it passes the packet bridge_abi.rs already binds and rsf_unity_vulkan_present_source,
-   which vulkan_state.rs mirrors with a size assertion and vulkan_bridge.cpp checks the same way.
+   vulkan_bridge.cpp) and its Rust state (vulkan_state.rs). The GPU handle records are
+   generated in vulkan_handles.rs. The frame and presentation records use the existing
+   packet bindings and layout assertions.
 
    Rust owns the shared device's readiness and its single creator, the bridge's permanent fault,
    the render events queued to Unity and their packets, the present interceptions and surface
@@ -13,8 +13,8 @@
    and the presentation lease. The command slot rotation and the shared D3D12 fence values are the
    package bridge's submission ring (bridge_interop.h); a process has one Unity renderer, so the
    D3D11 and Vulkan bridges never use it at once. Rust owns the shared graphics device record,
-   command pool, per-slot handles and imported images. vulkan_bridge.cpp keeps Unity interface
-   access and typed graphics and Win32 calls.
+   Vulkan dispatch, command pool, per-slot handles and imported images. vulkan_platform.rs
+   executes the graphics operations. vulkan_bridge.cpp keeps Unity and Win32 presentation access.
 
    Event slots number RSF_UNITY_FRAMES_PACKETS: each event carries one packet taken from the
    shared store. vulkan_bridge.cpp sizes its image arrays to match. */
@@ -63,6 +63,7 @@ typedef struct rsf_unity_vulkan_device_handles {
     void* fence;
     uint64_t vk_device, vk_physical_device, vk_queue, vk_semaphore;
     uint32_t vk_queue_family;
+    void* dispatch; /* Owned by the shared device, borrowed with this record. */
 } rsf_unity_vulkan_device_handles;
 
 /* A view borrowed under the presentation lease. The pool owns both VkCommandBuffers. */
@@ -108,13 +109,6 @@ uint32_t rsf_unity_vulkan_initialize(const rsf_game_host_services*, const rsf_un
 bool rsf_unity_vulkan_device_view(rsf_unity_vulkan_device_handles* view);
 bool rsf_unity_vulkan_prepare_image(uint32_t index, uint32_t width, uint32_t height,
     uint32_t format, uint32_t dx_format, rsf_unity_vulkan_image_handles* view);
-/* Returns whether the recorded transition can start in GENERAL. */
-bool rsf_unity_vulkan_record_image(uint32_t index);
-uint64_t rsf_unity_vulkan_begin_recording(uint32_t index, uint64_t* epoch);
-/* Called only after the native queue accepted the upload or the fenced hand-back. */
-void rsf_unity_vulkan_upload_submitted(void);
-void rsf_unity_vulkan_handback_fenced(void);
-
 /* Stops the bridge until release. Non-zero for the first fault, which the caller reports. */
 uint32_t rsf_unity_vulkan_fault(void);
 uint32_t rsf_unity_vulkan_faulted(void);

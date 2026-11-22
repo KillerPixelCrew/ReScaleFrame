@@ -828,6 +828,13 @@ device shutdown or DLL unload initiated by Unity still requires the
 host's lifetime guarantees. Build and live teardown remain open.
 [DXGI ownership audit](research/rust-unity-vulkan-dxgi.md)
 
+Unity Vulkan now runs shared-device and image import, command recording
+and submission, and the HWND swapchain calls in Rust. Unity texture and
+queue access, window-thread handling and Present forwarding remain at the
+native package boundary. Source review covers the receipts, per-view SR
+epoch and resize and release proofs. Build and device validation remain open.
+[U04 source audit](research/rust-unity-vulkan-platform.md)
+
 Unity's D3D11 bridge now publishes its shared graphics interfaces,
 fences and command slots as a complete Rust-owned record. Failed
 initialization rolls back the partial objects. The existing retirement
