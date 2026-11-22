@@ -331,6 +331,18 @@ generate("games/unity-mono/src/package_abi.rs", "integrations/unity/native/packa
           "--raw-line", "use crate::runtime_abi::rsf_fg12_setup;",
           "--raw-line", "pub use rsf_game_sys::sharpening_abi::rsf_sharpening_options;",
           "--with-derive-custom-struct", "rsf_unity_package_platform=Copy,Clone"])
+generate("tests/engine_sharpening_abi.rs", "integrations/unity/native/package_state.h",
+         "rsf_(godot_settings|unity_package_settings|srvk_(frame|image))",
+         "RSF_(GODOT_ABI_VERSION|GODOT_SETTINGS_ABI_VERSION|UNITY_SETTINGS_ABI_VERSION|SRVK_ABI_VERSION)",
+         ["-include", "rescaleframe/native_fg.h", "-include", "rescaleframe/native_cpu.h",
+          "-include", "rescaleframe/sr_session.h", "-include", "integrations/godot/native/api.h",
+          "-Iruntime/orchestrator/include",
+          "-Iruntime/contract/include", "-Iruntime/backends/dlss/include", "-Iruntime/graphics/include",
+          "-Iruntime/presentation/include", "-Isdk/game/include", "-Igames/unity-mono/include"],
+         ["--no-recursive-allowlist", "--with-derive-default",
+          "--raw-line", "use crate::sharpening_abi::rsf_sharpening_options;",
+          "--raw-line", "type rsf_frame_record = ::core::ffi::c_void;",
+          "--with-derive-custom-struct", "rsf_(godot_settings|unity_package_settings)=PartialEq"])
 generate("runtime/orchestrator/src/render_abi.rs", "runtime/orchestrator/include/rescaleframe/frame_assembly.h",
          "rsf_(frame_resources|pipeline_camera_frame|dlss_frame|fg_choice|render_link|sr_session_setup|sr_session_status|sr_provider|fg_host|fg_session_status|generation_provider|native_fg_status|motion_resolve_params|render_settings)",
          "RSF_(FRAME_ASSEMBLY_ABI_VERSION|DLSS_ABI_VERSION|FG_(BACKEND_(AUTO|ALL)|ABI_VERSION|OFF|FIXED|AUTO|DYNAMIC|STAT_(TOTAL_PRESENTED|GENERATED_PRESENTED|PRESENT_CALLBACKS|ACTIVITY))|NATIVE_FG_REASON_NONE|PACING_(NONE|REFLEX|XELL)|REFLEX_(OFF|BOOST)|RENDER_LINK_ABI_VERSION|SR_SESSION_ABI_VERSION|BACKEND_ABI_VERSION|API_D3D12|SR_(FSR2|XESS)|RENDER_FRONTEND_ABI_VERSION|SHARPENING_ABI_VERSION)",

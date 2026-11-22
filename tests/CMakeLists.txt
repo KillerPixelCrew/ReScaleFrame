@@ -907,11 +907,19 @@ if(EXISTS "${RSF_VULKAN_INCLUDE}/vulkan/vulkan.h")
 endif()
 
 if(TARGET rsf_godot AND TARGET rsf_unity_package)
-    add_executable(rsf_engine_sharpening_test engine_sharpening.cpp)
-    target_link_libraries(rsf_engine_sharpening_test PRIVATE ReScaleFrame::NativeVulkan rsf_build_options)
-    target_include_directories(rsf_engine_sharpening_test PRIVATE ../runtime/orchestrator/include ../games/unity-mono/include)
+    set(rsf_engine_sharpening_exe "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/rsf_engine_sharpening_test.exe")
+    set(rsf_engine_sharpening_source "${CMAKE_CURRENT_SOURCE_DIR}/engine_sharpening.rs")
+    add_custom_command(OUTPUT "${rsf_engine_sharpening_exe}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>"
+        COMMAND "${RSF_TEST_RUSTC}" --edition=2024 --target "${rsf_test_rust_target}"
+            -D warnings "${rsf_engine_sharpening_source}" -o "${rsf_engine_sharpening_exe}"
+        DEPENDS "${rsf_engine_sharpening_source}" engine_sharpening_abi.rs ../sdk/game/src/sharpening_abi.rs
+        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+        VERBATIM)
+    add_custom_target(rsf_engine_sharpening_test ALL DEPENDS "${rsf_engine_sharpening_exe}")
     add_dependencies(rsf_engine_sharpening_test rsf_godot rsf_unity_package)
-    add_test(NAME engine_sharpening_settings COMMAND rsf_engine_sharpening_test "$<TARGET_FILE:rsf_godot>" "$<TARGET_FILE:rsf_unity_package>")
+    add_test(NAME engine_sharpening_settings COMMAND ${CMAKE_CROSSCOMPILING_EMULATOR}
+        "${rsf_engine_sharpening_exe}" "$<TARGET_FILE:rsf_godot>" "$<TARGET_FILE:rsf_unity_package>")
 endif()
 
 
