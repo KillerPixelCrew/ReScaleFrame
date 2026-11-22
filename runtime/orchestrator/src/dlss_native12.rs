@@ -134,7 +134,7 @@ struct Platform {
     lookup_feature: FeatureLookup,
     bind_features: unsafe extern "C" fn(Handle, &FeatureEntries, u32),
     report_support: unsafe extern "C" fn(&Setup, u32) -> i32,
-    shutdown: unsafe extern "C" fn(Handle),
+    shutdown: unsafe extern "C" fn(Handle) -> i32,
     close: unsafe extern "C" fn(Handle),
     present: unsafe extern "C" fn(Handle, Handle, u32, u32, u32) -> i32,
     plan: unsafe extern "C" fn(Handle, u32, u32, u32, &mut u32, &mut u32) -> i32,
@@ -225,15 +225,19 @@ impl Route {
     }
 }
 
-struct DeviceRegistration {
-    platform: &'static Platform,
-    native: NonNull<c_void>,
+struct RegistrationResources {
     device: ComRef,
-    route: Route,
-    initialized: bool,
     _module: Option<SdkModule>,
     // The typed Streamline preferences borrow the directory through SDK shutdown.
     _directory: Vec<u16>,
+}
+
+struct DeviceRegistration {
+    platform: &'static Platform,
+    native: NonNull<c_void>,
+    route: Route,
+    initialized: bool,
+    resources: Option<RegistrationResources>,
 }
 
 // The registration is immutable once published, with a retained D3D12 device and module lease
@@ -242,6 +246,14 @@ unsafe impl Send for DeviceRegistration {}
 unsafe impl Sync for DeviceRegistration {}
 
 impl DeviceRegistration {
+    fn device(&self) -> Handle {
+        self.resources
+            .as_ref()
+            .expect("live registration")
+            .device
+            .as_ptr()
+    }
+
     unsafe fn open(
         platform: &'static Platform,
         device: Handle,
@@ -276,11 +288,13 @@ impl DeviceRegistration {
         let mut registration = Self {
             platform,
             native,
-            device: unsafe { ComRef::retain(device) },
             route,
             initialized: false,
-            _module: lease,
-            _directory: directory,
+            resources: Some(RegistrationResources {
+                device: unsafe { ComRef::retain(device) },
+                _module: lease,
+                _directory: directory,
+            }),
         };
         let owned = matches!(registration.route, Route::Owned);
         if owned {
@@ -365,8 +379,11 @@ impl Drop for DeviceRegistration {
     fn drop(&mut self) {
         let native = self.native.as_ptr();
         unsafe {
-            if self.initialized {
-                (self.platform.shutdown)(native);
+            if self.initialized && (self.platform.shutdown)(native) != OK {
+                // Shutdown can fail after partial teardown. With a void public
+                // destroy entry, retain the SDK and its dependencies for the process.
+                std::mem::forget(self.resources.take());
+                return;
             }
             (self.platform.close)(native);
         }
@@ -457,7 +474,7 @@ extern "C" fn rsf_core_dlss_native12_create_registered(
     registration: &Registration,
     out: &mut *mut Context,
 ) -> i32 {
-    if registration.0.device.as_ptr() != device {
+    if registration.0.device() != device {
         return INVALID;
     }
     if setup.abi_version != RSF_DLSS_ABI_VERSION {
@@ -546,7 +563,7 @@ unsafe extern "C" fn rsf_core_dlss_native12_evaluate(
         return INVALID;
     }
     let platform = registration.platform;
-    let validated = unsafe { (platform.validate)(registration.device.as_ptr(), frame) };
+    let validated = unsafe { (platform.validate)(registration.device(), frame) };
     if validated != OK {
         return validated;
     }

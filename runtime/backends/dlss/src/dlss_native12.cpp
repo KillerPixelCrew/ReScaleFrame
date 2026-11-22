@@ -168,10 +168,11 @@ rsf_backend_result native_report_support(const rsf_dlss_setup* setup, uint32_t r
     return RSF_BACKEND_OK;
 } catch (...) { return RSF_BACKEND_ERROR_INIT_FAILED; }
 
-void native_shutdown(void* handle) noexcept try
+rsf_backend_result native_shutdown(void* handle) noexcept try
 {
-    (void)static_cast<Native*>(handle)->shutdown();
-} catch (...) {}
+    return static_cast<Native*>(handle)->shutdown() == sl::Result::eOk
+        ? RSF_BACKEND_OK : RSF_BACKEND_ERROR_FEATURE_FAILED;
+} catch (...) { return RSF_BACKEND_ERROR_FEATURE_FAILED; }
 
 void native_close(void* handle) noexcept { delete static_cast<Native*>(handle); }
 

@@ -25,6 +25,12 @@ which also decides adapter support and frame constants. Typed
 entry binding, the SDK calls and the DirectXMath inverse stay native.
 Previous build and game results retain their recorded scope.
 
+Owned native D3D12 DLSS retirement now checks the SDK shutdown
+result. A refusal retains the native capsule, device, module and
+plugin path for the process. This also covers startup rollback
+after successful SDK initialization. Borrowed routes still leave
+SDK shutdown to their owner. Public destroy signatures are unchanged.
+
 ## Remaining integration ports
 
 Carry the same Rust ownership and public C ABI through every in-tree game

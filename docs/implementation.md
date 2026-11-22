@@ -1,5 +1,11 @@
 # Implementation tracker
 
+Native D3D12 DLSS retains its owned Streamline registration and
+dependencies if SDK shutdown fails, including during startup rollback.
+Source review confirmed the public destroy signature and borrowed-owner
+route. Formatting and locked metadata passed. Build and shutdown behavior
+remain unverified. [Retirement and verification](rust-migration.md#fast-path-to-a-verified-candidate)
+
 Native D3D12 DLSS now shares Rust tag assembly and quality mapping
 with the D3D11 route. Native D3D12 keeps colour, depth, motion and
 output in order, with optional exposure covering the entire resource.
