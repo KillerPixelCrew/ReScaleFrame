@@ -5,11 +5,9 @@ use super::json::{
     rsf_census_json_u64,
 };
 use super::platform;
+use super::rsf_census_json;
 use super::session::{append_line, drop_line};
-use crate::sys::rsf_census_json;
-use crate::sys::{
-    RSF_CENSUS_RECORD_BODY_MAX, RSF_CENSUS_RECORD_STACK_FRAMES, rsf_census_queued_record,
-};
+use super::{RSF_CENSUS_RECORD_BODY_MAX, RSF_CENSUS_RECORD_STACK_FRAMES, rsf_census_queued_record};
 use std::cell::UnsafeCell;
 use std::ffi::{CStr, c_char};
 use std::io::Write;
@@ -22,8 +20,7 @@ use std::sync::{
 };
 
 const SLOTS: usize = 1024;
-const LINE_BYTES: usize =
-    RSF_CENSUS_RECORD_BODY_MAX as usize + 768 + RSF_CENSUS_RECORD_STACK_FRAMES as usize * 192;
+const LINE_BYTES: usize = RSF_CENSUS_RECORD_BODY_MAX + 768 + RSF_CENSUS_RECORD_STACK_FRAMES * 192;
 
 struct Slot {
     stamp: AtomicUsize,

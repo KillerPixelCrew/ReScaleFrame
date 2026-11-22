@@ -12,9 +12,6 @@
 
 #include "rescaleframe/vendor_census.h"
 #include "census_platform.h"
-#include "record_platform.h"
-#include "session_platform.h"
-#include "stats_platform.h"
 
 /* ---- Intercepted functions ------------------------------------------------------------------ */
 /* X(id, api, export name or NULL, modules). `modules` is a '|' separated list of lowercase

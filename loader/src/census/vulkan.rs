@@ -5,13 +5,13 @@ use super::json::{
     rsf_census_json_string, rsf_census_json_u64,
 };
 use super::platform;
+use super::rsf_census_call_state;
+use super::rsf_census_json;
 use super::session::{rsf_census_active, rsf_census_call_begin, rsf_census_call_finish};
 use super::stats::{
     rsf_census_present_enter, rsf_census_present_leave, rsf_census_stats_queue_describe,
     rsf_census_stats_queue_submit,
 };
-use crate::sys::rsf_census_call_state;
-use crate::sys::rsf_census_json;
 use crate::sys::*;
 use std::ffi::{CStr, c_char, c_void};
 use std::marker::PhantomData;

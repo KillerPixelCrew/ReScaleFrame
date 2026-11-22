@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#![allow(non_camel_case_types)]
 mod d3d;
 mod decode;
 mod fsr;
@@ -34,4 +35,59 @@ fn platform() -> &'static rsf_census_platform {
         .get()
         .expect("the census platform is published at install")
         .0
+}
+
+const RSF_CENSUS_RECORD_BODY_MAX: usize = 6144;
+const RSF_CENSUS_RECORD_STACK_FRAMES: usize = 32;
+const RSF_CENSUS_RECORD_THREAD_NAME: usize = 40;
+
+/// A JSON writer over a caller's buffer.
+#[derive(Clone, Copy)]
+struct rsf_census_json {
+    buffer: *mut std::ffi::c_char,
+    capacity: usize,
+    length: usize,
+    comma: u32,
+    depth: u32,
+    overflow: bool,
+}
+
+/// One full call record, queued for the writer thread.
+struct rsf_census_queued_record {
+    len: u32,
+    fn_: u16,
+    t_us: u64,
+    present: u64,
+    ord: u64,
+    site_ord: u64,
+    base: u64,
+    ret: u64,
+    rva: u32,
+    tid: u32,
+    stack_n: u32,
+    stack: [*mut std::ffi::c_void; RSF_CENSUS_RECORD_STACK_FRAMES],
+    thread: [std::ffi::c_char; RSF_CENSUS_RECORD_THREAD_NAME],
+    body: [std::ffi::c_char; RSF_CENSUS_RECORD_BODY_MAX],
+}
+
+/// A wrapper's call in flight: its identity, stack and argument JSON.
+struct rsf_census_call_state {
+    fn_: u16,
+    full: bool,
+    rva: u32,
+    tid: u32,
+    base: u64,
+    site_ord: u64,
+    ord: u64,
+    t_us: u64,
+    stack: [*mut std::ffi::c_void; RSF_CENSUS_RECORD_STACK_FRAMES],
+    stack_n: u32,
+    json: rsf_census_json,
+    body: [std::ffi::c_char; RSF_CENSUS_RECORD_BODY_MAX],
+}
+
+#[derive(Clone, Copy)]
+struct rsf_census_sample {
+    ordinal: u64,
+    site_ordinal: u64,
 }

@@ -9,9 +9,9 @@ use super::json::{
     rsf_census_json_u64, rsf_census_json_wide,
 };
 use super::platform;
+use super::rsf_census_call_state;
+use super::rsf_census_json;
 use super::session::{rsf_census_call_begin, rsf_census_call_finish};
-use crate::sys::rsf_census_call_state;
-use crate::sys::rsf_census_json;
 use crate::sys::*;
 use std::ffi::{CStr, c_char, c_void};
 use std::mem::{MaybeUninit, transmute};

@@ -10,12 +10,12 @@ use super::json::{
 };
 use super::output::*;
 use super::record::*;
+use super::rsf_census_sample;
 use super::static_scan::rsf_census_static_scan;
 use super::stats::*;
-use crate::sys::rsf_census_json;
-use crate::sys::rsf_census_sample;
+use super::{RSF_CENSUS_RECORD_BODY_MAX, RSF_CENSUS_RECORD_STACK_FRAMES};
+use super::{rsf_census_call_state, rsf_census_json};
 use crate::sys::*;
-use crate::sys::{RSF_CENSUS_RECORD_BODY_MAX, RSF_CENSUS_RECORD_STACK_FRAMES};
 use std::ffi::{CStr, c_char, c_void};
 use std::mem::MaybeUninit;
 use std::ptr::{self, null, null_mut};
@@ -50,7 +50,7 @@ const HOOK_ERROR: i32 = -6;
 const PATH_CAP: usize = MAX_PATH as usize;
 const SUMMARY_BYTES: usize = 4 << 20;
 const FINDING_CAP: usize = 192;
-const STACK_FRAMES: usize = RSF_CENSUS_RECORD_STACK_FRAMES as usize;
+const STACK_FRAMES: usize = RSF_CENSUS_RECORD_STACK_FRAMES;
 
 struct Writer {
     summary: Vec<u8>,
@@ -429,7 +429,7 @@ pub(super) unsafe fn rsf_census_call_begin(
         );
         (*state).json = rsf_census_json {
             buffer: (&raw mut (*state).body).cast(),
-            capacity: RSF_CENSUS_RECORD_BODY_MAX as usize,
+            capacity: RSF_CENSUS_RECORD_BODY_MAX,
             length: 0,
             comma: 0,
             depth: 0,

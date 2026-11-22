@@ -2,7 +2,7 @@
 use super::json::{
     rsf_census_json_close, rsf_census_json_open, rsf_census_json_string, rsf_census_json_u64,
 };
-use crate::sys::rsf_census_json;
+use super::rsf_census_json;
 use std::cell::Cell;
 use std::ffi::{c_char, c_void};
 use std::io::Write;

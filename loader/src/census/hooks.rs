@@ -3,9 +3,9 @@ use super::json::{
     rsf_census_json_close, rsf_census_json_i64, rsf_census_json_open, rsf_census_json_raw,
     rsf_census_json_string, rsf_census_json_u64,
 };
+use super::rsf_census_json;
 use super::session::rsf_census_active;
 use super::vendor::register_vendors;
-use crate::sys::rsf_census_json;
 use crate::sys::*;
 use std::cell::Cell;
 use std::ffi::{CStr, c_char, c_void};

@@ -3,10 +3,8 @@
 //! public census and module-dump headers come from rsf-game-sys.
 
 fn main() {
-    let census = [
-        "census", "json", "wrapper", "record", "stats", "session", "d3d", "misc", "fsr",
-    ]
-    .map(|name| format!("loader/census/src/{name}_platform.h"));
+    let census = ["census", "wrapper", "d3d", "misc", "fsr"]
+        .map(|name| format!("loader/census/src/{name}_platform.h"));
     let headers: Vec<&str> = census
         .iter()
         .map(String::as_str)

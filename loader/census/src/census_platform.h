@@ -5,7 +5,9 @@
 #ifndef RSF_CENSUS_PLATFORM_H
 #define RSF_CENSUS_PLATFORM_H
 
-#include "json_platform.h"
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <rescaleframe/vendor_census.h>
 
 #define RSF_CENSUS_NGX_ENTRIES 42

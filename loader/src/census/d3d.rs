@@ -6,6 +6,8 @@ use super::json::{
     rsf_census_json_raw, rsf_census_json_string, rsf_census_json_u64,
 };
 use super::platform;
+use super::rsf_census_call_state;
+use super::rsf_census_json;
 use super::session::{
     rsf_census_active, rsf_census_call_begin, rsf_census_call_finish, rsf_census_flags,
 };
@@ -14,8 +16,6 @@ use super::stats::{
     rsf_census_stats_queue_submit,
 };
 use crate::sys::RSF_CENSUS_FLAG_D3D12_DEBUG_ONLY;
-use crate::sys::rsf_census_call_state;
-use crate::sys::rsf_census_json;
 use crate::sys::*;
 use std::ffi::{CStr, c_char, c_void};
 use std::io::Write;
