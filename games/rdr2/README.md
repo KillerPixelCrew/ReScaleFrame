@@ -1,8 +1,8 @@
 # Red Dead Redemption 2
 
 Read [RESEARCH-HANDOFF.md](RESEARCH-HANDOFF.md) before continuing integration or requesting
-captures. It retains the Mor3a reference findings, measured camera/HUD evidence, current probe
-and deployment state, failed approaches, and remaining work from 26 October.
+captures. It retains the Mor3a reference findings, measured camera/HUD evidence and failed
+approaches from 26 October.
 
 The Windows x64 plugin recognizes the fingerprinted Steam executable and exposes game-plugin
 ABI 18. Its guarded native DLSS and FSR paths feed a common SR adapter; preparation refuses

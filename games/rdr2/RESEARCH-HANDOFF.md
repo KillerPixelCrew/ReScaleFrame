@@ -1,8 +1,9 @@
 # RDR2 integration: retained findings and current handoff
 
-Updated 26 October 2026. Read this before requesting another game run or rediscovering the
-camera/HUD path. This file records source evidence, measured captures, failed approaches, current
-deployment, and unfinished implementation. It is not a claim that RSF SR or FG works in RDR2.
+Dated 26 October 2026. Read this before rediscovering the camera/HUD path or requesting another game
+run. This file records source evidence, measured captures and failed approaches. Session state
+(process IDs, installed hashes, pending human actions, orchestration handles) was removed; current
+acceptance is in `engine.json` `current_validation` and `docs/current-status.md`.
 
 ### Current checkpoint: runtime quality presets and shared overlay
 
@@ -60,23 +61,6 @@ live in the shared Rust overlay. Keep forced DX12, Social Club correction, RTSS 
 
 ### Historical checkpoint before the successful22:13 deployment
 
-**CURRENT TASK: shared RSF overlay and enforced engine input settings.** The human explicitly
-cancelled native UI integration and clarified: RSF owns DLSS/FSR/Reflex internally; controls live
-in the shared overlay. Force a carrier on even after native Off/Apply, including non-NVIDIA
-systems (the human explicitly accepted native FSR2 there). Do not resume stock RSF-row work.
-No new agents were authorized or spawned. The old menu-research worker remains settled.
-
-**Critical current checkpoint, after the shared overlay hang:** the installed game files are
-still the OLD crashing interop build: ASIc6f5e5b7...3ba19db4, Runtime2cd10ba6...242da05,
-Gamefa254ce3...48abdb, Rust overlay ABI13 acc4e639...021e7. The repaired native12/cursor build
-has NOT been deployed yet. Game PID124784 was accidentally relaunched when a deployment guard
-failed but orchestration continued to a separate launch call. Do not repeat that construction:
-make launch conditional on successful deployment. The game's window was not initially exposed
-through Process.MainWindowHandle. Win32 WM_CLOSE was posted to its PID-validated sgaWindow;
-closing its hung overlay through the verified rsf_rdr2_overlay_toggle export resumed rendering,
-then CloseMainWindow succeeded. PID124784 subsequently exited (Orca app_not_found confirmed).
-Check process absence again before deployment. Do not replace loaded DLLs.
-
 The ACTUAL hang cause is now measured, not inferred: `old-overlay-hang-stacks.txt/.dmp` shows
 a RAGE worker at RDR2+263cf32 in the ShowCursor(FALSE) loop. Exact game bytes at263cf2a:
 `33 c9 ff 15 26 56 9f 03 85 c0 79 f4`; JNS repeats until a negative return. Our old shared
@@ -107,21 +91,6 @@ and ctor+2c5eb34; policy tests preserve all unrelated bytes and exercise NVIDIA/
 ASI installs exact-byte-guarded collection-copy+20b7f8, load+2c7c9a4, refresh+2c7e6c0 hooks
 early after forced-DX12 validation. The refresh was initially called Apply in source research;
 its tail rebuilds available quality choices. Typed collection copy also covers native application.
-
-**Next:** collect exec session68794: full Release VS2026 gate to
-`.local/rdr2-tools/rdr2-overlay-cursor-final-verify.log`. Earlier gate96 discovered/11 skips
-passed, including cursor regression, before the final opt-in probe refinements. Rust workspace
-41+19 tests passed and release panel already built (ABI13 unchanged). Once the gate passes,
-run the opt-in RDR2 GPU fixture once with RSF_RDR2_TEST_OVERLAY=1 and the real Rust DLL, then
-back up/hash-deploy ASI+Runtime ONLY (Rust acc4... and Gamefa25... already match).
-Enable one-shot [RDR2] OverlayProbe=1. Host clears it to0 at startup; process opens panel after60
-Presents, executes a bounded ShowCursor hide test, closes after120 ACTUAL additional Presents.
-Probe only advances if panel visible. `.local/rdr2-tools/watch-overlay-probe.ps1` captures CDB
-thread stacks/minidump on stalled probe progress and exits after success/120s. Start it BEFORE
-the game, but only AFTER verified deployment; do not launch if deployment fails. Keep every
-wait under60s and report meaningful progress. Ensure other heavy builds are not active; a Godot
-Vulkan/capture build was active earlier and is now finished. Normal reusable MSBuild nodes are
-not active compilation. No test/game/Java jobs from this turn should remain except gate68794.
 
 Orca computer CLI now WORKS, unlike the old CUA pipe. Loaded skill via
 `orca skills get computer-use`. However get-app-state --restore-window for RDR2 returned an
@@ -232,15 +201,6 @@ seconds after the first real world input, with game foreground. Both diagnostics
 the final INI. Next: collect latest gate, back up/deploy ABI19 ASI/Game/Runtime together, use one
 live pass for overlay/menu and native value-source evidence, then finish the stock rows and
 their proper Apply/Cancel handlers. Never claim native row replacement from the shortcut.
-
-**CURRENT FINAL DEPLOYMENT,18:13:** the human closed AD normally. The permanent token-retirement
-build is now backed up and hash-verified into the game, receipt
-`native-adapter-game-ad-20261026/permanent-deployment.json`; backup
-`.local/deploy-backups/rdr2-fg-permanent-20261026-181334/`. Runtime is
-**`9a9d0fccb82b53dece1ab7c3595e37d2d1e8077f5821fdf2f3deb953b7d055ac`**; ASI and Game DLL
-remain6a5994e0/0754f198. INI is diagnostics-off, SR1/DLSS1, FG1/DLSS1/generated1, Latency1,
-FrameLimitUs0, no temporary SRCaptureDirectory. No cache changes, commits or pushes.
-RDR2 is currently CLOSED. No build, monitor or diagnostic helper process remains owned.
 
 The human explicitly said **"You can close the game on your own."** Future required normal
 RDR2 closure is authorized; do not ask them to close it again. Steam launches remain authorized.
@@ -388,12 +348,6 @@ context switching. It is not FG or complete visual/performance acceptance. Evide
 provider-cycle-ready.txt; game `ReScaleFrame/rdr2.log` holds current logs. The provider-cycle
 exec session88069 has completed; no monitors/builds are still owned/running.
 
-**Current INI:** SR=1, SRBackend=1, all normal diagnostics zero; temporary SRCaptureDirectory
-points at AC pixels. After normal game exit restore AC `diagnostics-off.ini` (retain desired SR
-settings), and back up any later replacements. Never replace running files or manipulate caches.
-No pending native source changes since this deployed/verified lifetime fix. Documentation has
-older wrong RVA/status paragraphs below; the current checkpoint and source supersede them.
-
 **Native menu:** ONE agent was requested, completed, accepted and released. Its report is
 `games/rdr2/NATIVE-OPTIONS-RESEARCH.md`, now appended with coordinator live metadata proof.
 Read-only memory copying resolved **system/graphics = 8c463422/bc098ed9**, 29 graphics rows.
@@ -461,32 +415,12 @@ graphics replacement is unproven; native row IDs and apply/backout handlers stil
 Dispatch `ctx_4fc9e9fc3521` is released; delivery `delivery_7c6f40dfa086` was acknowledged.
 No workers remain owned. Do not poll/restart it or create another agent without authorization.
 
-**Latest coordinator state, 14:17:** the human requested ONE background Orca agent to investigate
-stock graphics-menu replacement, preferably through ScriptHook. It is running under
-Run `run_ad8cd967d63e`, Task `task_542320f302f3`, Dispatch `ctx_4fc9e9fc3521`, worker handle
-`structworker_d26c912b-79eb-4f1c-b7a2-8b87b61112b0`. Current coordinator caller remains
-`orca_session_id:666a44fe-2f73-4955-b33e-202413c72e2d`; the new Run's coordinator handle is
-`structworker_473e0472-9e9a-4f78-a509-858bbc822315`. Use the exact CLI
-`C:\Users\N1GHT\AppData\Local\Programs\orca\resources\bin\orca.exe`. The version-matched
-orchestration guide was read. Check/handle/ack its deliveries at natural checkpoints and accept
-the result, then release the settled worker before ending. Do not reuse any old settled task IDs.
-Brief `.local/rdr2-tools/native-options-task.txt`; exclusive report ownership is
-`games/rdr2/NATIVE-OPTIONS-RESEARCH.md`. Worker must not touch builds, game memory/installation,
-desktop or other source. No further agents authorized. Primary work remains direct, as requested.
-
 Live PID126676 now has **20** automatically captured SR outputs: DLSS, FSR3, FSR4 INT8, XeSS,
 then DLSS again, all in session336880188 without restart. `SR=0` retained native evaluation for
 roughly 144 seconds (tick337386625 to337530984), after which SR=1/backend1 resumed accepted
 output. Existing logs do not explicitly record the native vendor return code, so process survival
 alone is not complete native-pixel acceptance. The human identified FSR4/XeSS first-use pauses
 as model loading; retain the measured cold-load timing without inventing a redesign requirement.
-
-**Pending human action:** async question asks for ONE native Graphics menu switch from DLSS to
-FSR2, Apply, return to gameplay. RSF stays SR=1/backend1; this verifies normalization of the
-native FSR selection into RSF, not native FSR2 execution. Do not request another restart or F10.
-On reply, force a backend/context transition if needed to obtain four new automatic input/output
-captures from that native route, and inspect results. The game is still running; the corrected
-plugin is attached from .local and must be deployed into the installation after normal exit.
 
 **Live AB checkpoint, approximately 14:12:** RDR2 PID **126676** remains running in Story.
 Startup refused the first SR adapter with `prepare=-5`: the FSR import thunk RVA had been
@@ -934,7 +868,7 @@ An actively visible Social Club overlay was not separately pixel-validated in Z.
   Capstone path: `.local/ac7-motion-tools`. RenderDoc: `C:\Program Files\RenderDoc`, version 1.46.
   Serialize RenderDoc replay helpers using `rd-request.json`; stop heavy jobs before game launch.
 
-## Remaining work, in order
+## Remaining work, in order (26 October; SR and FG have since been implemented, see `engine.json`)
 
 1. Use the Mor3a contracts above to finish the single bounded DX12 capture bundle. Capture real
    DLSS inputs and output, actual resource states/rectangles, exact same-call camera/parameters,
