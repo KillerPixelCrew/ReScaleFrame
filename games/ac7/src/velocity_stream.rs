@@ -385,5 +385,24 @@ unsafe extern "C" fn rsf_ac7_velocity_hash_dispatch(
     }
 }
 
+#[unsafe(no_mangle)]
+extern "C" fn rsf_ac7_velocity_indirect_source() -> *const std::ffi::c_char {
+    cr#"
+RWByteAddressBuffer Arguments:register(u0);
+cbuffer Parameters:register(b0) {uint Capacity;uint OutputCapacity;uint Packing;uint Points;};
+[numthreads(1,1,1)]void main(uint3 id:SV_DispatchThreadID) {
+    uint vertices=Arguments.Load(0),instances=Arguments.Load(4);
+    if(vertices==0 || instances>Capacity/vertices) {Arguments.Store(4,0);instances=0;}
+    uint records=0;
+    if(instances!=0) {
+        records=Packing==4 ? OutputCapacity : Packing==3 ? (vertices/max(Points,1))*3*instances :
+            Packing==2 ? (max(vertices,2)-2)*3*instances : vertices*instances;
+        if(records>OutputCapacity) {Arguments.Store(4,0);records=0;}
+    }
+    uint groups=(records+63)/64;
+    Arguments.Store(32,records);Arguments.Store3(36,uint3(min(groups,65535),(groups+65534)/65535,1));
+}"#.as_ptr()
+}
+
 #[cfg(test)]
 mod tests;

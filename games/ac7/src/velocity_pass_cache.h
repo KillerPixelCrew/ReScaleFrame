@@ -15,7 +15,7 @@ struct VelocityVariantRequest {
     void* layout;
     uint32_t material_blend, stride;
 };
-// Lent to the builder for its call: copies of the admitted bytecode in the same stage order,
+// Lent to the builder for its call: retained bytecode in the same stage order,
 // empty for absent stages, the layout descriptors (none when unobserved), the history identity of
 // generated geometry and whether the layout is the beam/trail factory declaration.
 struct VelocityVariantSources {
@@ -32,9 +32,6 @@ constexpr uint32_t VELOCITY_NO_VARIANT = UINT32_MAX;
 using VelocityBuildVariant = int32_t (*)(void* user, const VelocityVariantSources* sources, uint32_t* slot);
 
 extern "C" {
-void rsf_ac7_velocity_cache_shader(void* shader, uint32_t stage, const void* bytes, uint32_t size);
-void rsf_ac7_velocity_cache_layout(void* layout, const rsf_observer_layout_element* elements,
-    uint32_t copied, uint32_t count);
 // The slot of a reusable variant, or VELOCITY_NO_VARIANT. Writes the vertex bytecode hash once
 // the vertex and pixel sources are admitted. The builder runs without the cache lock.
 uint32_t rsf_ac7_velocity_admit_variant(const VelocityVariantRequest* request, void* user,

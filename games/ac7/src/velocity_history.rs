@@ -332,9 +332,8 @@ impl History {
         if count > u32::MAX - model.records || model.records + count > RECORD_LIMIT {
             return (false, decision);
         }
-        model.records += count;
         let mut capacity = MIN_CAPACITY;
-        while capacity < model.records * 2 {
+        while capacity < (model.records + count) * 2 {
             if capacity > u32::MAX / 2 {
                 return (false, decision);
             }
@@ -344,13 +343,25 @@ impl History {
         (true, decision)
     }
 
+    fn record_model(&mut self, slot: u32, frame: u32, records: u32) {
+        if let Some(model) = self.models.get_mut(slot)
+            && model.frame == frame
+            && records <= RECORD_LIMIT - model.records
+        {
+            model.records += records;
+        }
+    }
+
     /// `width` and `height` are the native depth extent the draw already matched.
     fn begin_view(&mut self, draw: &ViewDraw) -> ViewDecision {
         let key = ViewKey::of(draw.session_id, draw.history_key, draw.view_key);
         let Some((slot, view)) = self.views.find_or_insert(key) else {
             return UNAVAILABLE_VIEW;
         };
-        let action = if view.frame == draw.frame {
+        let action = if view.allocated && view.frame == draw.frame {
+            if !view.matches(draw) || view.width != draw.width || view.height != draw.height {
+                return UNAVAILABLE_VIEW;
+            }
             VIEW_SAME_FRAME
         } else if !view.allocated || view.width != draw.width || view.height != draw.height {
             // The native slot is discarded; it stays unready until every target exists.
@@ -394,19 +405,12 @@ impl History {
     fn commit_view(&self, pass: &ViewDraw) -> ViewDecision {
         let key = ViewKey::of(pass.session_id, pass.history_key, pass.view_key);
         match self.views.find(&key) {
-            Some((slot, view))
-                if view.written
-                    && view.frame == pass.frame
-                    && view.view == pass.view_key
-                    && view.family == pass.family_key =>
-            {
-                ViewDecision {
-                    slot,
-                    action: VIEW_COMMIT,
-                    width: view.width,
-                    height: view.height,
-                }
-            }
+            Some((slot, view)) if view.written && view.matches(pass) => ViewDecision {
+                slot,
+                action: VIEW_COMMIT,
+                width: view.width,
+                height: view.height,
+            },
             _ => UNAVAILABLE_VIEW,
         }
     }
@@ -416,6 +420,12 @@ impl History {
         let epoch = self.epoch;
         self.models.retire(epoch, RETIRE_MODEL, retired);
         self.views.retire(epoch, RETIRE_VIEW, retired);
+    }
+}
+
+impl View {
+    fn matches(&self, draw: &ViewDraw) -> bool {
+        self.frame == draw.frame && self.view == draw.view_key && self.family == draw.family_key
     }
 }
 
@@ -440,6 +450,11 @@ unsafe extern "C" fn rsf_ac7_velocity_model_begin(
     let (admitted, made) = lock().begin_model(draw);
     *decision = made;
     i32::from(admitted)
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_ac7_velocity_model_record(slot: u32, frame: u32, records: u32) {
+    lock().record_model(slot, frame, records);
 }
 
 #[unsafe(no_mangle)]

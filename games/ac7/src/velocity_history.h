@@ -43,8 +43,10 @@ constexpr uint32_t VELOCITY_NO_SLOT = UINT32_MAX;
 using VelocityRetireSlot = void (*)(void* user, uint32_t kind, uint32_t slot);
 
 extern "C" {
-// Nonzero when the records fit. The decision is filled either way.
+// Nonzero when the records fit. The decision is filled either way. This does not charge records.
 int32_t rsf_ac7_velocity_model_begin(const VelocityModelDraw* draw, VelocityModelDecision* decision);
+// Charge the records once the draw has prepared its buffers and queued the history write.
+void rsf_ac7_velocity_model_record(uint32_t slot, uint32_t frame, uint32_t records);
 void rsf_ac7_velocity_view_begin(const VelocityViewDraw* draw, VelocityViewDecision* decision);
 // Every target of the slot exists and holds the draw's depth.
 void rsf_ac7_velocity_view_ready(uint32_t slot, const VelocityViewDraw* draw);

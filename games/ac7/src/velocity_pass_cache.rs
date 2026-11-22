@@ -11,9 +11,8 @@ use crate::velocity_container::borrowed;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::mem::offset_of;
-use std::sync::{LazyLock, Mutex, MutexGuard};
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 
-const MAX_SHADER_BYTES: usize = 1024 * 1024;
 const SOURCE_BUDGET: usize = 64 * 1024 * 1024;
 const MAX_LAYOUTS: usize = 4096;
 const MAX_LAYOUT_ELEMENTS: usize = 16;
@@ -42,7 +41,7 @@ const DXGI_FORMAT_R32G32B32_FLOAT: u32 = 6;
 struct Source {
     stage: u32,
     hash: u32,
-    bytes: Vec<u8>,
+    bytes: Arc<Vec<u8>>,
 }
 
 struct Layout {
@@ -89,11 +88,12 @@ struct VariantKey {
     serial: u64,
     hashes: [u32; STAGES],
     material_blend: u32,
+    beam_layout: bool,
 }
 
-/// Copies for the builder, which runs after the cache lock is released.
+/// Retains the original bytecode for the builder after the cache lock is released.
 struct Lease {
-    bytes: [Vec<u8>; STAGES],
+    bytes: [Option<Arc<Vec<u8>>>; STAGES],
     elements: Vec<LayoutElement>,
     geometry_hash: u32,
     beam_layout: bool,
@@ -163,26 +163,19 @@ fn beam_layout(stride: u32, elements: &[LayoutElement]) -> bool {
 
 impl Cache {
     // A replacement always forgets the old bytecode first, even when the new one is refused.
-    fn observe_shader(&mut self, identity: usize, stage: u32, bytes: &[u8]) {
+    fn observe_shader(&mut self, identity: usize, stage: u32, bytes: Option<Arc<Vec<u8>>>) {
         if let Some(old) = self.sources.remove(&identity) {
             self.source_bytes -= old.bytes.len();
         }
+        let Some(bytes) = bytes else {
+            return;
+        };
         if self.source_bytes + bytes.len() > SOURCE_BUDGET || self.sources.try_reserve(1).is_err() {
             return;
         }
-        let Some(copy) = copy_of(bytes) else {
-            return;
-        };
-        self.source_bytes += copy.len();
-        let hash = container_crc(bytes);
-        self.sources.insert(
-            identity,
-            Source {
-                stage,
-                hash,
-                bytes: copy,
-            },
-        );
+        self.source_bytes += bytes.len();
+        let hash = container_crc(&bytes);
+        self.sources.insert(identity, Source { stage, hash, bytes });
     }
 
     // None is a refused descriptor set, which still forgets the address.
@@ -231,27 +224,21 @@ impl Cache {
         *vertex_hash = hashes[VERTEX];
 
         let layout = self.layouts.get(&request.layout.addr());
+        let elements = layout.map_or(&[][..], |layout| layout.elements.as_slice());
+        let beam_layout = beam_layout(request.stride, elements);
         let key = VariantKey {
             shaders: request.shaders.map(|shader| shader.addr()),
             layout: request.layout.addr(),
             serial: layout.map_or(0, |layout| layout.serial),
             hashes,
             material_blend: request.material_blend,
+            beam_layout,
         };
         if let Some(&slot) = self.variants.get(&key) {
             return Admission::Known(slot);
         }
 
-        let elements = layout.map_or(&[][..], |layout| layout.elements.as_slice());
-        let mut bytes: [Vec<u8>; STAGES] = Default::default();
-        for (copy, source) in bytes.iter_mut().zip(sources) {
-            if let Some(source) = source {
-                let Some(data) = copy_of(&source.bytes) else {
-                    return Admission::Unavailable;
-                };
-                *copy = data;
-            }
-        }
+        let bytes = sources.map(|source| source.map(|source| Arc::clone(&source.bytes)));
         let Some(leased_elements) = copy_of(elements) else {
             return Admission::Unavailable;
         };
@@ -267,15 +254,19 @@ impl Cache {
                 bytes,
                 elements: leased_elements,
                 geometry_hash,
-                beam_layout: beam_layout(request.stride, elements),
+                beam_layout,
             },
         )
     }
 
-    fn record(&mut self, generation: u64, key: VariantKey, slot: Option<u32>) {
-        if self.generation == generation && self.variants.try_reserve(1).is_ok() {
+    fn record(&mut self, generation: u64, key: VariantKey, slot: Option<u32>) -> u32 {
+        if self.generation != generation {
+            return NO_VARIANT;
+        }
+        if self.variants.try_reserve(1).is_ok() {
             self.variants.insert(key, slot);
         }
+        slot.unwrap_or(NO_VARIANT)
     }
 
     fn reset_variants(&mut self) {
@@ -305,9 +296,13 @@ fn admit(
             Admission::Build(key, lease) => (cache.generation, key, lease),
         }
     };
+    let stages = lease.bytes.each_ref().map(|bytes| {
+        // The stage interfaces accept an empty span backed by a non-null pointer.
+        bytes.as_deref().map_or(&[][..], Vec::as_slice)
+    });
     let sources = VariantSources {
-        bytes: lease.bytes.each_ref().map(|bytes| bytes.as_ptr()),
-        sizes: lease.bytes.each_ref().map(Vec::len),
+        bytes: stages.map(<[u8]>::as_ptr),
+        sizes: stages.map(<[u8]>::len),
         elements: lease.elements.as_ptr(),
         element_count: lease.elements.len() as u32,
         geometry_hash: lease.geometry_hash,
@@ -320,32 +315,23 @@ fn admit(
         REFUSED => None,
         _ => return NO_VARIANT,
     };
-    lock(state).record(generation, key, entry);
-    entry.unwrap_or(NO_VARIANT)
+    lock(state).record(generation, key, entry)
 }
 
 type BuildVariant = unsafe extern "C" fn(*mut c_void, *const VariantSources, *mut u32) -> i32;
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_velocity_cache_shader(
-    shader: *mut c_void,
-    stage: u32,
-    bytes: *const c_void,
-    size: u32,
-) {
-    let size = size as usize;
-    if shader.is_null() || stage as usize > DOMAIN || !(1..=MAX_SHADER_BYTES).contains(&size) {
-        return;
+pub(crate) fn observes_stage(stage: u32) -> bool {
+    stage as usize <= DOMAIN
+}
+
+pub(crate) fn observe_shader(identity: usize, stage: u32, bytes: Option<Arc<Vec<u8>>>) {
+    if observes_stage(stage) {
+        lock(&CACHE).observe_shader(identity, stage, bytes);
     }
-    // SAFETY: The creation callback lends its original bytecode until this call returns.
-    let Some(data) = (unsafe { borrowed(bytes.cast::<u8>(), size) }) else {
-        return;
-    };
-    lock(&CACHE).observe_shader(shader.addr(), stage, data);
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "C" fn rsf_ac7_velocity_cache_layout(
+unsafe extern "C" fn rsf_ac7_velocity_layout_seen(
     layout: *mut c_void,
     elements: *const LayoutElement,
     copied: u32,

@@ -8,6 +8,8 @@ extern "C" {
 struct rsf_frame_tap_geometry;
 struct rsf_observer_layout_element;
 void rsf_ac7_velocity_set_log(void (*log)(void*,const char*),void* user);
+// Velocity-only shader observation entry used by fixtures. The carrier fans out shader
+// creation through rsf_ac7_motion_capture_shader.
 void rsf_ac7_velocity_shader_seen(void* shader,uint32_t stage,const void* bytes,uint32_t size);
 void rsf_ac7_velocity_layout_seen(void* layout,const struct rsf_observer_layout_element* elements,uint32_t copied,uint32_t count);
 void rsf_ac7_velocity_scope(const rsf_game_render_pass* scope);

@@ -243,5 +243,24 @@ pub(crate) fn reset_profile() {
     lock().profile = Profile::default();
 }
 
+#[unsafe(no_mangle)]
+extern "C" fn rsf_ac7_velocity_merge_source() -> *const std::ffi::c_char {
+    cr#"
+Texture2D<float2> Native:register(t0);Texture2D<float2> Layer:register(t1);
+float2 main(float4 pixel:SV_Position):SV_Target0 {
+    int3 address=int3(int2(pixel.xy),0);float2 layer=Layer.Load(address);
+    return layer.x>0 ? layer : Native.Load(address);
+}"#
+    .as_ptr()
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn rsf_ac7_velocity_fullscreen_source() -> *const std::ffi::c_char {
+    cr#"
+float4 main(uint id:SV_VertexID):SV_Position {return float4(id==2?3:-1,id==1?3:-1,0,1);}
+"#
+    .as_ptr()
+}
+
 #[cfg(test)]
 mod tests;

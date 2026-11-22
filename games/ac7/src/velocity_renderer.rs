@@ -4,6 +4,8 @@
 //! the history, variant and profile resets that follow a publication, and teardown at release.
 //! velocity_pass.cpp lends the leaves that create and destroy the native renderer, which keeps
 //! its D3D11 objects, HLSL, variant list and the resources at the history slots.
+//! The native replay lock spans admission through the last renderer use. A replacement or release
+//! can therefore only retire the renderer after all native borrows have ended.
 
 use crate::{velocity_commit, velocity_history, velocity_pass_cache};
 use std::ffi::c_void;

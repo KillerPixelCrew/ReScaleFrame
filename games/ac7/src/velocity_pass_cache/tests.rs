@@ -46,10 +46,14 @@ const HS: usize = 0x400;
 const DS: usize = 0x500;
 const LAYOUT: usize = 0x600;
 
+fn observe(cache: &mut Cache, identity: usize, stage: u32, bytes: &[u8]) {
+    cache.observe_shader(identity, stage, Some(Arc::new(bytes.to_vec())));
+}
+
 fn observed() -> Cache {
     let mut cache = Cache::default();
     for (identity, stage, fill) in [(VS, 0, 1), (PS, 1, 2), (GS, 2, 3), (HS, 3, 4), (DS, 4, 5)] {
-        cache.observe_shader(identity, stage, &container(64, fill));
+        observe(&mut cache, identity, stage, &container(64, fill));
     }
     cache
 }
@@ -68,30 +72,30 @@ fn shader_hash_is_the_declared_container_crc() {
     let mut bytes = container(64, 7);
     bytes.extend_from_slice(&[9; 16]);
     let mut cache = Cache::default();
-    cache.observe_shader(VS, 0, &bytes);
+    observe(&mut cache, VS, 0, &bytes);
     let source = &cache.sources[&VS];
     assert_eq!(source.hash, crc32c(&bytes[..64]));
-    assert_eq!(source.bytes, bytes);
+    assert_eq!(*source.bytes, bytes);
     assert_eq!(cache.source_bytes, 80);
 
-    cache.observe_shader(PS, 1, &[1; 20]);
+    observe(&mut cache, PS, 1, &[1; 20]);
     assert_eq!(cache.sources[&PS].hash, 0);
 }
 
 #[test]
 fn replacement_forgets_first_and_budget_refuses() {
     let mut cache = Cache::default();
-    cache.observe_shader(VS, 0, &container(64, 1));
-    cache.observe_shader(VS, 1, &container(32, 2));
+    observe(&mut cache, VS, 0, &container(64, 1));
+    observe(&mut cache, VS, 1, &container(32, 2));
     assert_eq!(cache.sources.len(), 1);
     assert_eq!(cache.sources[&VS].stage, 1);
     assert_eq!(cache.source_bytes, 32);
 
     cache.source_bytes = SOURCE_BUDGET - 32 + 1;
-    cache.observe_shader(PS, 1, &container(32, 3));
+    observe(&mut cache, PS, 1, &container(32, 3));
     assert!(!cache.sources.contains_key(&PS));
     // The refused replacement still removes the old bytecode and its budget.
-    cache.observe_shader(VS, 0, &container(64, 4));
+    observe(&mut cache, VS, 0, &container(64, 4));
     assert!(!cache.sources.contains_key(&VS));
     assert_eq!(cache.source_bytes, SOURCE_BUDGET - 64 + 1);
 }
@@ -248,6 +252,54 @@ fn unstored_outcomes_build_again() {
 }
 
 #[test]
+fn beam_classification_separates_variants_for_the_same_layout() {
+    let mut cache = observed();
+    cache.observe_layout(LAYOUT, Some(&beam(false)));
+    let state = Mutex::new(cache);
+    let mut hash = 0;
+    let mut draw = request([VS, PS, 0, 0, 0], LAYOUT, 0);
+    draw.stride = 64;
+    assert_eq!(
+        admit(&state, &draw, &mut hash, |source, _| {
+            assert!(!source.beam_layout);
+            REFUSED
+        }),
+        NO_VARIANT
+    );
+    draw.stride = BEAM_STRIDE;
+    assert_eq!(
+        admit(&state, &draw, &mut hash, |source, slot| {
+            assert!(source.beam_layout);
+            *slot = 0;
+            BUILT
+        }),
+        0
+    );
+}
+
+#[test]
+fn builder_leases_payload_across_replacement() {
+    let mut cache = observed();
+    let bytes = cache.sources[&VS].bytes.as_ptr();
+    let state = Mutex::new(cache);
+    let draw = request([VS, PS, 0, 0, 0], 0, 0);
+    let mut hash = 0;
+    admit(&state, &draw, &mut hash, |source, _| {
+        lock(&state).observe_shader(VS, VERTEX as u32, None);
+        assert_eq!(source.bytes[VERTEX], bytes);
+        // SAFETY: The callback still holds the lease after the cache forgot the source.
+        let lent =
+            unsafe { std::slice::from_raw_parts(source.bytes[VERTEX], source.sizes[VERTEX]) };
+        assert_eq!(lent, container(64, 1));
+        REFUSED
+    });
+    assert_eq!(
+        admit(&state, &draw, &mut hash, |_, _| panic!("old source")),
+        NO_VARIANT
+    );
+}
+
+#[test]
 fn generated_geometry_history_identity() {
     let cache = observed();
     let (gs, hs, ds) = (
@@ -293,7 +345,7 @@ fn reset_discards_slots_and_late_results() {
         *slot = 0;
         BUILT
     });
-    assert_eq!(slot, 0);
+    assert_eq!(slot, NO_VARIANT);
     assert!(lock(&state).variants.is_empty());
 
     admit(&state, &plain, &mut hash, |_, slot| {
@@ -319,8 +371,7 @@ fn reset_discards_slots_and_late_results() {
 fn ffi_rejects_null_arguments() {
     // Every call returns before it touches the process cache.
     unsafe {
-        rsf_ac7_velocity_cache_shader(null_mut(), 0, [0u8; 32].as_ptr().cast(), 32);
-        rsf_ac7_velocity_cache_layout(null_mut(), null(), 0, 0);
+        rsf_ac7_velocity_layout_seen(null_mut(), null(), 0, 0);
         assert_eq!(
             rsf_ac7_velocity_admit_variant(null(), null_mut(), None, null_mut()),
             NO_VARIANT
