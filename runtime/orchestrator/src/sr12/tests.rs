@@ -412,7 +412,7 @@ unsafe extern "C" fn dump_result(
         event(format!("ambiguous result {}", record.frame_id));
     }
 }
-unsafe extern "C" fn fg_bind() {
+unsafe fn fg_handoff(_: Handle, _: &rsf_frame_record, _: Handle, _: Handle) {
     event("fg-handoff".into());
 }
 
@@ -467,7 +467,7 @@ static PLATFORM: Platform = Platform {
     dump_pass_metadata,
     dump_sr_frame,
     dump_result,
-    fg_bind,
+    fg_handoff,
 };
 
 unsafe extern "C" fn log(user: *mut c_void, message: *const c_char) {

@@ -1198,7 +1198,6 @@ fn stop() -> u32 {
 #[cfg(not(test))]
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_callback_host_start(setup: *const Setup) -> u32 {
-    crate::fg12::bind_native_platform();
     unsafe { start(setup, &PLATFORM) }
 }
 

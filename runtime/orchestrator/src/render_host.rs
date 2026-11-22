@@ -1879,7 +1879,6 @@ impl Host {
 #[cfg(not(test))]
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_render_host_create(setup: *const Setup, services: *mut Services) -> i32 {
-    crate::fg12::bind_native_platform();
     unsafe { create(setup, services, &PLATFORM) }
 }
 

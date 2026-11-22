@@ -134,6 +134,7 @@ pub(super) static PLATFORM: Platform = Platform {
     map: rsf_fg12_platform_map,
     unmap: rsf_fg12_platform_unmap,
     depth_domains: crate::d3d12_host::pass_depth_domains,
+    fg_handoff: crate::fg12::handoff_inputs,
     capture_create,
     capture_destroy,
     capture_enabled,
@@ -150,7 +151,6 @@ pub(super) static PLATFORM: Platform = Platform {
     dump_pass_metadata: rsf_input_dump_pass_metadata,
     dump_sr_frame: rsf_input_dump_sr_frame,
     dump_result: rsf_input_dump_result,
-    fg_bind,
 };
 
 unsafe extern "C" fn write_exposure_upload(resource: Handle, value: f32) -> i32 {
@@ -362,10 +362,6 @@ unsafe extern "C" fn copy_motion_tile(
         back: 1,
     };
     unsafe { commands.CopyTextureRegion(&to, 0, 0, 0, &from, Some(&rectangle)) };
-}
-
-extern "C" fn fg_bind() {
-    crate::fg12::bind_native_platform();
 }
 
 extern "C" fn capture_create() -> Handle {

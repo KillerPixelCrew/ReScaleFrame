@@ -194,31 +194,26 @@ unsafe extern "C" fn dump_submitted(queue: *mut c_void, record: *const rsf_frame
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fg12_install(request: *const rsf_fg12_setup) -> i32 {
-    bind_native_platform();
     unsafe { rsf_core_fg12_install(request) }
 }
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fg12_install_explicit(request: *const rsf_fg12_setup) -> i32 {
-    bind_native_platform();
     unsafe { rsf_core_fg12_install_explicit(request) }
 }
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fg12_cpu(event: *const rsf_game_cpu_event) {
-    bind_native_platform();
     unsafe { rsf_core_fg12_cpu(event) }
 }
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fg12_latency(event: *const rsf_game_latency_event) -> i32 {
-    bind_native_platform();
     unsafe { rsf_core_fg12_latency(event) }
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_fg12_render_begin(session: u64, id: u64) -> i32 {
-    bind_native_platform();
     rsf_core_fg12_render_begin(session, id)
 }
 
@@ -229,55 +224,46 @@ unsafe extern "C" fn rsf_fg12_capture(
     depth: *mut c_void,
     motion: *mut c_void,
 ) {
-    bind_native_platform();
     unsafe { rsf_core_fg12_capture(list, record, depth, motion) }
 }
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fg12_hudless(list: *mut c_void, pass: *const rsf_game_render_pass) {
-    bind_native_platform();
     unsafe { rsf_core_fg12_hudless(list, pass) }
 }
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fg12_submitted(session: u64, id: u64) {
-    bind_native_platform();
     unsafe { rsf_core_fg12_submitted(session, id) }
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn rsf_fg12_end_session(session: u64) -> i32 {
-    bind_native_platform();
     rsf_core_fg12_end_session(session)
 }
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fg12_window(pass: *const rsf_game_render_pass) {
-    bind_native_platform();
     unsafe { rsf_core_fg12_window(pass) }
 }
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fg12_status(output: *mut rsf_native_fg_status) -> i32 {
-    bind_native_platform();
     unsafe { rsf_core_fg12_status(output) }
 }
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fg12_status_try(output: *mut rsf_native_fg_status) -> i32 {
-    bind_native_platform();
     unsafe { rsf_core_fg12_status_try(output) }
 }
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fg12_options(request: *const rsf_native_fg_options) {
-    bind_native_platform();
     unsafe { rsf_core_fg12_options(request) }
 }
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rsf_fg12_capture_outputs(directory: *const c_char) -> i32 {
-    bind_native_platform();
     unsafe { rsf_core_fg12_capture_outputs(directory) }
 }
 

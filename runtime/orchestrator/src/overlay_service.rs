@@ -1142,7 +1142,6 @@ type FgStatusGet = unsafe extern "C" fn(*mut FgStatus) -> i32;
 
 #[cfg(not(test))]
 unsafe extern "C" fn bound_status(out: *mut FgStatus) -> i32 {
-    crate::fg12::bind_native_platform();
     unsafe { crate::fg12::rsf_core_fg12_status(out) }
 }
 

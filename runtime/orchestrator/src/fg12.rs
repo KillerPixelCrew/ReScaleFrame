@@ -31,7 +31,8 @@ use std::ptr::null_mut;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-// The bind entry publishes this fully linked Rust table.
+// The linked native calls. Unit tests do not link the native leaves and never reach them.
+#[cfg_attr(test, allow(dead_code))]
 struct Platform {
     buffer_index: unsafe extern "C" fn(*mut c_void) -> u32,
     install: unsafe extern "C" fn(*const rsf_d3d11_present_setup, i32) -> i32,
@@ -93,19 +94,22 @@ struct Platform {
     dump_result: unsafe extern "C" fn(*const rsf_frame_record, *const c_char, u32, i32),
 }
 
-static PLATFORM: OnceLock<&'static Platform> = OnceLock::new();
-
 #[cfg(not(test))]
 mod native;
 
 #[cfg(not(test))]
-pub(super) fn bind_native_platform() {
-    PLATFORM.get_or_init(|| &native::CALLS);
-}
-
 macro_rules! native {
     ($operation:ident($($argument:expr),* $(,)?)) => {
-        (PLATFORM.get().unwrap().$operation)($($argument),*)
+        ($crate::fg12::native::CALLS.$operation)($($argument),*)
+    };
+}
+
+#[cfg(test)]
+macro_rules! native {
+    ($operation:ident($($argument:expr),* $(,)?)) => {
+        (None::<&$crate::fg12::Platform>
+            .expect("fg12 native calls are not linked into unit tests")
+            .$operation)($($argument),*)
     };
 }
 
@@ -695,17 +699,15 @@ unsafe extern "C" fn rsf_core_fg12_capture(
     start_render(&mut owner.cpu[frame.index(CPU_SLOTS)], frame);
 }
 
-// The D3D12 SR owner hands its accepted normalized depth and motion over inside the core after
-// binding the platform table. An unbound table means no presentation owner can exist.
+// The D3D12 SR owner hands its accepted normalized depth and motion over inside the core.
+#[cfg(not(test))]
 pub(crate) unsafe fn handoff_inputs(
     list: *mut c_void,
     record: &rsf_frame_record,
     depth: *mut c_void,
     motion: *mut c_void,
 ) {
-    if PLATFORM.get().is_some() {
-        unsafe { rsf_core_fg12_capture(list, record, depth, motion) };
-    }
+    unsafe { rsf_core_fg12_capture(list, record, depth, motion) };
 }
 
 #[unsafe(no_mangle)]

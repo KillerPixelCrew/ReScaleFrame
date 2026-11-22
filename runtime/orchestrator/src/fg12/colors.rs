@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 use super::{
-    ComRef, FencePoint, FenceState, PLATFORM, PRESENT_STATE, Present, SHADER_READ, log,
-    texture_desc,
+    ComRef, FencePoint, FenceState, PRESENT_STATE, Present, SHADER_READ, log, texture_desc,
 };
 use crate::sys::*;
 use std::ffi::c_void;

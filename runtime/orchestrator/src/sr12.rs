@@ -137,6 +137,8 @@ pub(crate) struct Platform {
     map: unsafe extern "C" fn(Handle, u64) -> *const u8,
     unmap: unsafe extern "C" fn(Handle),
     depth_domains: unsafe extern "C" fn(*const Pass) -> u32,
+    // Hands the accepted normalized depth and motion to the FG owner.
+    fg_handoff: unsafe fn(Handle, &rsf_frame_record, Handle, Handle),
     capture_create: unsafe extern "C" fn() -> Handle,
     capture_destroy: unsafe extern "C" fn(Handle),
     capture_enabled: unsafe extern "C" fn(Handle) -> i32,
@@ -178,7 +180,6 @@ pub(crate) struct Platform {
     dump_pass_metadata: unsafe extern "C" fn(*const Pass),
     dump_sr_frame: unsafe extern "C" fn(*const rsf_sr_frame, u32, u32),
     dump_result: unsafe extern "C" fn(*const rsf_frame_record, *const c_char, u32, i32),
-    fg_bind: unsafe extern "C" fn(),
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -1127,8 +1128,7 @@ impl Sr12 {
             // the vendor read them and before sharpening or reinsertion. The FG owner holds
             // them until the producer's submission confirmation and queue retirement.
             unsafe {
-                (p.fg_bind)();
-                crate::fg12::handoff_inputs(list, &record, normalized[DEPTH], normalized[MOTION]);
+                (p.fg_handoff)(list, &record, normalized[DEPTH], normalized[MOTION]);
             }
         }
         if result == OK && self.backend != RSF_SR_NONE {

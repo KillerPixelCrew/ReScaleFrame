@@ -37,7 +37,6 @@ unsafe extern "C" fn gl_open(log: Log, user: Handle, out: *mut Handle) -> i32 {
 }
 
 unsafe extern "C" fn fg_install(setup: *const rsf_fg12_setup) -> i32 {
-    fg12::bind_native_platform();
     unsafe { fg12::rsf_core_fg12_install_explicit(setup) }
 }
 
