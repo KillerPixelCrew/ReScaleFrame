@@ -97,14 +97,6 @@ fn copy_text(out: &mut [c_char], text: &str) {
     out[count] = 0;
 }
 
-#[repr(u8)]
-enum ApiStatus {
-    // Status 0: reported when the query succeeds, so it is never constructed as an error.
-    #[allow(dead_code)]
-    Bound,
-    Missing,
-    Refused,
-}
 
 type LegacyStart = unsafe extern "C" fn(Raw, *const rsf_dlss_pipeline_setup) -> i32;
 type Select = unsafe extern "C" fn(u32, *mut u32, *mut u32) -> i32;
@@ -158,12 +150,9 @@ fn validate_api(table: rsf_d3d11_sr_api) -> Result<RuntimeApi, &'static CStr> {
 
 fn query_api(
     query: rsf_get_d3d11_sr_api_fn,
-) -> Result<(RuntimeApi, rsf_d3d11_sr_api), (ApiStatus, &'static CStr)> {
+) -> Result<(RuntimeApi, rsf_d3d11_sr_api), &'static CStr> {
     let Some(query) = query else {
-        return Err((
-            ApiStatus::Missing,
-            c"the Runtime does not export rsf_get_d3d11_sr_api",
-        ));
+        return Err(c"the Runtime does not export rsf_get_d3d11_sr_api");
     };
     let mut table = rsf_d3d11_sr_api {
         struct_size: size_of::<rsf_d3d11_sr_api>() as u32,
@@ -172,14 +161,9 @@ fn query_api(
     };
     // The resolver supplies the carrier-loaded Runtime's versioned query.
     match unsafe { query(&mut table) } {
-        OK => validate_api(table)
-            .map(|api| (api, table))
-            .map_err(|reason| (ApiStatus::Refused, reason)),
-        -2 => Err((
-            ApiStatus::Refused,
-            c"the Runtime's SR API version does not match",
-        )),
-        _ => Err((ApiStatus::Refused, c"the Runtime refused the SR API query")),
+        OK => validate_api(table).map(|api| (api, table)),
+        -2 => Err(c"the Runtime's SR API version does not match"),
+        _ => Err(c"the Runtime refused the SR API query"),
     }
 }
 
@@ -223,7 +207,6 @@ enum Refusal {
 }
 
 #[derive(Clone, Copy, Default)]
-#[repr(C)]
 struct Counters {
     evaluated: [u64; 8],
     refused: [u64; 6],
@@ -249,7 +232,6 @@ struct Counters {
 }
 
 #[derive(Clone, Copy)]
-#[repr(C)]
 struct Status {
     bound: bool,
     running: bool,
@@ -258,7 +240,6 @@ struct Status {
     requested: Settings,
     start_result: i32,
     select_result: i32,
-    quality_result: i32,
     last_evaluated: bool,
     last_backend: u32,
     last_render_width: u32,
@@ -282,7 +263,6 @@ impl Default for Status {
             requested: DEFAULT_SETTINGS,
             start_result: OK,
             select_result: OK,
-            quality_result: OK,
             last_evaluated: false,
             last_backend: 0,
             last_render_width: 0,
@@ -311,14 +291,6 @@ impl Status {
     }
 }
 
-const _: () = {
-    assert!(size_of::<Settings>() == 16);
-    assert!(std::mem::offset_of!(Settings, backend) == 4);
-    assert!(size_of::<ResetFacts>() == 5);
-    assert!(size_of::<Counters>() == 432);
-    assert!(size_of::<Status>() == 288);
-    assert!(std::mem::offset_of!(Status, reason) == 188);
-};
 
 #[derive(Default)]
 struct Published {
@@ -628,7 +600,6 @@ impl Driver {
             let result = unsafe { (api.set_quality)(wanted.quality, &mut size[0], &mut size[1]) };
             let mut published = self.published();
             published.counters.qualities += 1;
-            published.status.quality_result = result;
             if result == OK {
                 render.applied.quality = wanted.quality;
                 render.resets.settings = true;
@@ -880,9 +851,7 @@ unsafe extern "C" fn rsf_anomaly_sr_bind_runtime(driver: &Driver, runtime: Raw) 
         )
     };
     let admission = unsafe { admission_export(runtime) };
-    let result = query_api(query)
-        .map_err(|(_, reason)| reason)
-        .and_then(|(api, _)| {
+    let result = query_api(query).and_then(|(api, _)| {
             let (Some(start), Some(admit)) = (start_backend, admission) else {
                 return Err(c"Runtime SR admission or selected-provider startup export missing");
             };

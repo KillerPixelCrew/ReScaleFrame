@@ -15,6 +15,12 @@ const NOT_RUNNING: i32 = -4;
 const TABLE_SIZE: usize = size_of::<rsf_d3d11_sr_api>();
 type Query = unsafe extern "C" fn(*mut rsf_d3d11_sr_api) -> rsf_result;
 
+enum ApiStatus {
+    Bound,
+    Missing,
+    Refused,
+}
+
 unsafe fn rsf_anomaly_sr_query(
     query: rsf_get_d3d11_sr_api_fn,
     out: &mut rsf_d3d11_sr_api,
@@ -25,11 +31,15 @@ unsafe fn rsf_anomaly_sr_query(
             *out = table;
             ApiStatus::Bound
         }
-        Err((status, text)) => {
+        Err(text) => {
             if !reason.is_null() {
                 unsafe { reason.write(text.as_ptr()) };
             }
-            status
+            if query.is_none() {
+                ApiStatus::Missing
+            } else {
+                ApiStatus::Refused
+            }
         }
     }
 }
