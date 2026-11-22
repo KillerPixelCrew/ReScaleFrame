@@ -165,6 +165,7 @@ generate("sdk/game/src/lib.rs", "sdk/game/include/rescaleframe/game_api.h",
           "--raw-line", "pub mod profile_text;",
           "--raw-line", "pub mod recording_slots;",
           "--raw-line", "mod render_config;",
+          "--raw-line", "pub mod render_host_abi;",
           "--raw-line", "mod render_pass;",
           "--raw-line", "pub mod sampling;",
           "--raw-line", "pub mod session;",
@@ -948,5 +949,7 @@ generate("tests/game-sdk/src/render_host_fixture_abi.rs", "tests/game-sdk/render
          ["--no-recursive-allowlist", "--with-derive-default",
           "--allowlist-function", "rsf_(callback_host_(start|stop)|native_scene_(pass|reset|texture_binding)|"
           "native_window_(scope|match|present|last_present|reset)|render_(host_create|settings_(get|apply)|status_get|links_.*))",
-          "--raw-line", "use rsf_game_sys::{rsf_game_host_services, rsf_game_render_pass, callback_host_abi::rsf_callback_host_setup, render_host_abi::rsf_render_host_setup};",
+          "--raw-line", "use rsf_game_sys::{\n"
+          "    callback_host_abi::rsf_callback_host_setup, render_host_abi::rsf_render_host_setup,\n"
+          "    rsf_game_host_services, rsf_game_render_pass,\n};",
           "--raw-line", "type rsf_backend_result = i32;"])
