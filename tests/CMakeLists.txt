@@ -836,8 +836,9 @@ if(TARGET rsf_vendor_census)
         set_tests_properties(rdr2_capture rdr2_capture_rgb10 PROPERTIES TIMEOUT 60)
     endif()
     # Hardware and desktop reproduction of the census next to an injected overlay; run by hand.
-    add_executable(rsf_census_present_coexistence census_present_coexistence.cpp)
-    target_link_libraries(rsf_census_present_coexistence PRIVATE ReScaleFrame::VendorCensus d3d12 dxgi rsf_build_options)
+    add_executable(rsf_census_present_coexistence loader/census_present_main.c)
+    target_link_libraries(rsf_census_present_coexistence PRIVATE
+        rsf_loader_fixtures_rust ReScaleFrame::VendorCensus d3d12 dxgi user32 rsf_build_options)
 
     # The census restates vendor structure layouts so it builds without the vendor headers. These
     # tests compare the restated offsets with the headers where an untracked checkout provides them.

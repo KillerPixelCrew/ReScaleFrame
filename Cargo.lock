@@ -488,6 +488,7 @@ dependencies = [
 name = "rsf-loader-fixtures"
 version = "0.1.2"
 dependencies = [
+ "windows",
  "windows-sys",
 ]
 

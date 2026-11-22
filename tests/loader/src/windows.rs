@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+#[cfg(target_env = "msvc")]
+mod census_present;
 mod fixture;
 mod forwarding;
 mod module_dump;

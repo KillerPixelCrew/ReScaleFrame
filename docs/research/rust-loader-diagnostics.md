@@ -113,3 +113,12 @@ the PE header and live range before sampling. The poll uses the 64-bit tick coun
 the full 32-bit timeout range and preserves the consecutive-sample threshold and zero timeout.
 The native writer still owns dump publication and updates only the existing timeout report
 field. The public header retains all declarations and layout.
+
+## Desktop coexistence fixture
+
+`tests/census_present_coexistence.cpp` is replaced by Rust with a C entry stub for the census
+callbacks. The fixture retains its opt-in command, debug-layer message 904 counter, hardware
+adapter filter, visible triple-buffered flip-discard chain, per-buffer transitions, Present
+and fence ordering, and summary fields. The COM calls use the generated Windows bindings.
+Setup failures and a failed fence wait now produce a failure result instead of proceeding
+with an unavailable resource. The build and desktop run remain user-owned.
