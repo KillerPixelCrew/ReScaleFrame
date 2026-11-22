@@ -496,10 +496,12 @@ generate("ui/overlay/src/fg_reason_codes.rs", "runtime/orchestrator/include/resc
          ["-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Iruntime/presentation/include",
           "-Iruntime/graphics/include", "-Iruntime/backends/dlss/include", "-Isdk/game/include"])
 generate("tests/overlay-service/src/abi.rs", "runtime/orchestrator/include/rescaleframe/overlay_api.h",
-         "rsf_(overlay_api|overlay_service_setup|render_status)",
-         "RSF_(OVERLAY_API_VERSION|RENDER_FRONTEND_ABI_VERSION|FG_BACKEND_AUTO|REFLEX_OFF)",
-         ["-include", "rescaleframe/frame_generation.h",
-          "-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Isdk/game/include"],
+         "rsf_(overlay_api|overlay_service_setup|overlay_diagnostics|render_status|native_fg_status)",
+         "RSF_(OVERLAY_(API_VERSION|CAPTURE_.*|NOTIFY_.*|SERVICE_OPTION_.*|SR_INPUT_.*)|RENDER_FRONTEND_ABI_VERSION|"
+         "FG_(BACKEND_(AUTO|FSR3|DLSS)|FIXED)|REFLEX_(OFF|ON|BOOST))",
+         ["-include", "rescaleframe/native_fg.h",
+          "-Iruntime/orchestrator/include", "-Iruntime/contract/include", "-Iruntime/presentation/include",
+          "-Iruntime/graphics/include", "-Iruntime/backends/dlss/include", "-Isdk/game/include"],
          ["--with-derive-default", "--raw-line", "#![allow(dead_code)]"])
 
 # Match the overlay's existing std paths and import types that other modules already own.

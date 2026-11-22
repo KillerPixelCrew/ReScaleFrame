@@ -3,14 +3,206 @@
 #![allow(non_camel_case_types)]
 #![allow(dead_code)]
 
+pub const RSF_FG_BACKEND_DLSS: u32 = 1;
+pub const RSF_FG_BACKEND_FSR3: u32 = 3;
 pub const RSF_FG_BACKEND_AUTO: u32 = 7;
+pub const RSF_FG_FIXED: u32 = 1;
 pub const RSF_REFLEX_OFF: u32 = 0;
+pub const RSF_REFLEX_ON: u32 = 1;
+pub const RSF_REFLEX_BOOST: u32 = 2;
 pub const RSF_RENDER_FRONTEND_ABI_VERSION: u32 = 3;
 pub const RSF_OVERLAY_API_VERSION: u32 = 4;
+pub const RSF_OVERLAY_CAPTURE_MOUSE: u32 = 1;
+pub const RSF_OVERLAY_CAPTURE_KEYBOARD: u32 = 2;
+pub const RSF_OVERLAY_NOTIFY_RESIZE: u32 = 1;
+pub const RSF_OVERLAY_NOTIFY_DEVICE_RESET: u32 = 2;
+pub const RSF_OVERLAY_SR_INPUT_COLOR: u32 = 1;
+pub const RSF_OVERLAY_SR_INPUT_DEPTH: u32 = 2;
+pub const RSF_OVERLAY_SR_INPUT_MOTION: u32 = 4;
+pub const RSF_OVERLAY_SR_INPUT_EXPOSURE: u32 = 8;
+pub const RSF_OVERLAY_SR_INPUT_JITTER: u32 = 16;
+pub const RSF_OVERLAY_SERVICE_OPTION_TOGGLE: u32 = 0;
+pub const RSF_OVERLAY_SERVICE_OPTION_NUMBER: u32 = 1;
+pub const RSF_OVERLAY_SERVICE_OPTION_LIMIT: u32 = 40;
 pub type wchar_t = ::core::ffi::c_ushort;
 pub type rsf_game_log_fn = ::core::option::Option<
     unsafe extern "C" fn(user: *mut ::core::ffi::c_void, message: *const ::core::ffi::c_char),
 >;
+pub type rsf_fg_mode = u32;
+pub type rsf_pacing_owner = u32;
+pub type rsf_reflex_mode = u32;
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_fg_status {
+    pub struct_size: u32,
+    pub supported: u32,
+    pub active: u32,
+    pub max_generated_frames: u32,
+    pub dynamic_supported: u32,
+    pub vsync_supported: u32,
+    pub min_dimension: u32,
+    pub effective_generated_frames: u32,
+    pub effective_mode: rsf_fg_mode,
+    pub pacing_owner: rsf_pacing_owner,
+    pub effective_reflex: rsf_reflex_mode,
+    pub low_latency_available: u32,
+    pub valid_statistics: u32,
+    pub total_presented: u64,
+    pub generated_presented: u64,
+    pub version_id: u64,
+    pub vendor_status: i32,
+    pub version_name: [::core::ffi::c_char; 128usize],
+    pub auto_supported: u32,
+    pub configured_mode: rsf_fg_mode,
+    pub present_callbacks: u64,
+    pub generated_callbacks: u64,
+    pub mfg_unlock_status: u32,
+    pub latency_paced_frames: u64,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_fg_status"][::core::mem::size_of::<rsf_fg_status>() - 256usize];
+    ["Alignment of rsf_fg_status"][::core::mem::align_of::<rsf_fg_status>() - 8usize];
+    ["Offset of field: rsf_fg_status::struct_size"]
+        [::core::mem::offset_of!(rsf_fg_status, struct_size) - 0usize];
+    ["Offset of field: rsf_fg_status::supported"]
+        [::core::mem::offset_of!(rsf_fg_status, supported) - 4usize];
+    ["Offset of field: rsf_fg_status::active"]
+        [::core::mem::offset_of!(rsf_fg_status, active) - 8usize];
+    ["Offset of field: rsf_fg_status::max_generated_frames"]
+        [::core::mem::offset_of!(rsf_fg_status, max_generated_frames) - 12usize];
+    ["Offset of field: rsf_fg_status::dynamic_supported"]
+        [::core::mem::offset_of!(rsf_fg_status, dynamic_supported) - 16usize];
+    ["Offset of field: rsf_fg_status::vsync_supported"]
+        [::core::mem::offset_of!(rsf_fg_status, vsync_supported) - 20usize];
+    ["Offset of field: rsf_fg_status::min_dimension"]
+        [::core::mem::offset_of!(rsf_fg_status, min_dimension) - 24usize];
+    ["Offset of field: rsf_fg_status::effective_generated_frames"]
+        [::core::mem::offset_of!(rsf_fg_status, effective_generated_frames) - 28usize];
+    ["Offset of field: rsf_fg_status::effective_mode"]
+        [::core::mem::offset_of!(rsf_fg_status, effective_mode) - 32usize];
+    ["Offset of field: rsf_fg_status::pacing_owner"]
+        [::core::mem::offset_of!(rsf_fg_status, pacing_owner) - 36usize];
+    ["Offset of field: rsf_fg_status::effective_reflex"]
+        [::core::mem::offset_of!(rsf_fg_status, effective_reflex) - 40usize];
+    ["Offset of field: rsf_fg_status::low_latency_available"]
+        [::core::mem::offset_of!(rsf_fg_status, low_latency_available) - 44usize];
+    ["Offset of field: rsf_fg_status::valid_statistics"]
+        [::core::mem::offset_of!(rsf_fg_status, valid_statistics) - 48usize];
+    ["Offset of field: rsf_fg_status::total_presented"]
+        [::core::mem::offset_of!(rsf_fg_status, total_presented) - 56usize];
+    ["Offset of field: rsf_fg_status::generated_presented"]
+        [::core::mem::offset_of!(rsf_fg_status, generated_presented) - 64usize];
+    ["Offset of field: rsf_fg_status::version_id"]
+        [::core::mem::offset_of!(rsf_fg_status, version_id) - 72usize];
+    ["Offset of field: rsf_fg_status::vendor_status"]
+        [::core::mem::offset_of!(rsf_fg_status, vendor_status) - 80usize];
+    ["Offset of field: rsf_fg_status::version_name"]
+        [::core::mem::offset_of!(rsf_fg_status, version_name) - 84usize];
+    ["Offset of field: rsf_fg_status::auto_supported"]
+        [::core::mem::offset_of!(rsf_fg_status, auto_supported) - 212usize];
+    ["Offset of field: rsf_fg_status::configured_mode"]
+        [::core::mem::offset_of!(rsf_fg_status, configured_mode) - 216usize];
+    ["Offset of field: rsf_fg_status::present_callbacks"]
+        [::core::mem::offset_of!(rsf_fg_status, present_callbacks) - 224usize];
+    ["Offset of field: rsf_fg_status::generated_callbacks"]
+        [::core::mem::offset_of!(rsf_fg_status, generated_callbacks) - 232usize];
+    ["Offset of field: rsf_fg_status::mfg_unlock_status"]
+        [::core::mem::offset_of!(rsf_fg_status, mfg_unlock_status) - 240usize];
+    ["Offset of field: rsf_fg_status::latency_paced_frames"]
+        [::core::mem::offset_of!(rsf_fg_status, latency_paced_frames) - 248usize];
+};
+impl Default for rsf_fg_status {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[repr(C)]
+#[derive(Default, Copy, Clone)]
+pub struct rsf_native_fg_options {
+    pub struct_size: u32,
+    pub mode: u32,
+    pub generated_frames: u32,
+    pub reflex_mode: u32,
+    pub frame_limit_us: u32,
+    pub debug: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_native_fg_options"][::core::mem::size_of::<rsf_native_fg_options>() - 24usize];
+    ["Alignment of rsf_native_fg_options"]
+        [::core::mem::align_of::<rsf_native_fg_options>() - 4usize];
+    ["Offset of field: rsf_native_fg_options::struct_size"]
+        [::core::mem::offset_of!(rsf_native_fg_options, struct_size) - 0usize];
+    ["Offset of field: rsf_native_fg_options::mode"]
+        [::core::mem::offset_of!(rsf_native_fg_options, mode) - 4usize];
+    ["Offset of field: rsf_native_fg_options::generated_frames"]
+        [::core::mem::offset_of!(rsf_native_fg_options, generated_frames) - 8usize];
+    ["Offset of field: rsf_native_fg_options::reflex_mode"]
+        [::core::mem::offset_of!(rsf_native_fg_options, reflex_mode) - 12usize];
+    ["Offset of field: rsf_native_fg_options::frame_limit_us"]
+        [::core::mem::offset_of!(rsf_native_fg_options, frame_limit_us) - 16usize];
+    ["Offset of field: rsf_native_fg_options::debug"]
+        [::core::mem::offset_of!(rsf_native_fg_options, debug) - 20usize];
+};
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct rsf_native_fg_status {
+    pub struct_size: u32,
+    pub requested: rsf_native_fg_options,
+    pub vendor: rsf_fg_status,
+    pub available: u32,
+    pub reason: u32,
+    pub last_result: i32,
+    pub source_frame_id: u64,
+    pub tagged_frames: u64,
+    pub source_provenance: u32,
+    pub input_qpc: u64,
+    pub source_qpc: u64,
+    pub source_qpc_frequency: u64,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_native_fg_status"][::core::mem::size_of::<rsf_native_fg_status>() - 352usize];
+    ["Alignment of rsf_native_fg_status"][::core::mem::align_of::<rsf_native_fg_status>() - 8usize];
+    ["Offset of field: rsf_native_fg_status::struct_size"]
+        [::core::mem::offset_of!(rsf_native_fg_status, struct_size) - 0usize];
+    ["Offset of field: rsf_native_fg_status::requested"]
+        [::core::mem::offset_of!(rsf_native_fg_status, requested) - 4usize];
+    ["Offset of field: rsf_native_fg_status::vendor"]
+        [::core::mem::offset_of!(rsf_native_fg_status, vendor) - 32usize];
+    ["Offset of field: rsf_native_fg_status::available"]
+        [::core::mem::offset_of!(rsf_native_fg_status, available) - 288usize];
+    ["Offset of field: rsf_native_fg_status::reason"]
+        [::core::mem::offset_of!(rsf_native_fg_status, reason) - 292usize];
+    ["Offset of field: rsf_native_fg_status::last_result"]
+        [::core::mem::offset_of!(rsf_native_fg_status, last_result) - 296usize];
+    ["Offset of field: rsf_native_fg_status::source_frame_id"]
+        [::core::mem::offset_of!(rsf_native_fg_status, source_frame_id) - 304usize];
+    ["Offset of field: rsf_native_fg_status::tagged_frames"]
+        [::core::mem::offset_of!(rsf_native_fg_status, tagged_frames) - 312usize];
+    ["Offset of field: rsf_native_fg_status::source_provenance"]
+        [::core::mem::offset_of!(rsf_native_fg_status, source_provenance) - 320usize];
+    ["Offset of field: rsf_native_fg_status::input_qpc"]
+        [::core::mem::offset_of!(rsf_native_fg_status, input_qpc) - 328usize];
+    ["Offset of field: rsf_native_fg_status::source_qpc"]
+        [::core::mem::offset_of!(rsf_native_fg_status, source_qpc) - 336usize];
+    ["Offset of field: rsf_native_fg_status::source_qpc_frequency"]
+        [::core::mem::offset_of!(rsf_native_fg_status, source_qpc_frequency) - 344usize];
+};
+impl Default for rsf_native_fg_status {
+    fn default() -> Self {
+        let mut s = ::core::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::core::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
 #[repr(C)]
 #[derive(Default, Copy, Clone)]
 pub struct rsf_render_settings {
@@ -508,4 +700,81 @@ const _: () = {
         [::core::mem::offset_of!(rsf_overlay_api, settings_get) - 72usize];
     ["Offset of field: rsf_overlay_api::settings_apply"]
         [::core::mem::offset_of!(rsf_overlay_api, settings_apply) - 80usize];
+};
+#[repr(C)]
+#[derive(Default, Copy, Clone)]
+pub struct rsf_overlay_diagnostics {
+    pub struct_size: u32,
+    pub started: u32,
+    pub visible: u32,
+    pub chain_width: u32,
+    pub chain_height: u32,
+    pub presents: u64,
+    pub presents_drawn: u64,
+    pub apply_attempts: u32,
+    pub apply_refused: u32,
+    pub last_apply_result: i32,
+    pub input_installed: u32,
+    pub cursor_freed: u32,
+    pub pointer_received: u64,
+    pub pointer_consumed: u64,
+    pub button_downs_consumed: u64,
+    pub wheel_consumed: u64,
+    pub raw_mouse_reports: u64,
+    pub keys_consumed: u64,
+    pub frames_visible: u64,
+    pub frames_with_button: u64,
+    pub last_pointer_x: u32,
+    pub last_pointer_y: u32,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of rsf_overlay_diagnostics"]
+        [::core::mem::size_of::<rsf_overlay_diagnostics>() - 136usize];
+    ["Alignment of rsf_overlay_diagnostics"]
+        [::core::mem::align_of::<rsf_overlay_diagnostics>() - 8usize];
+    ["Offset of field: rsf_overlay_diagnostics::struct_size"]
+        [::core::mem::offset_of!(rsf_overlay_diagnostics, struct_size) - 0usize];
+    ["Offset of field: rsf_overlay_diagnostics::started"]
+        [::core::mem::offset_of!(rsf_overlay_diagnostics, started) - 4usize];
+    ["Offset of field: rsf_overlay_diagnostics::visible"]
+        [::core::mem::offset_of!(rsf_overlay_diagnostics, visible) - 8usize];
+    ["Offset of field: rsf_overlay_diagnostics::chain_width"]
+        [::core::mem::offset_of!(rsf_overlay_diagnostics, chain_width) - 12usize];
+    ["Offset of field: rsf_overlay_diagnostics::chain_height"]
+        [::core::mem::offset_of!(rsf_overlay_diagnostics, chain_height) - 16usize];
+    ["Offset of field: rsf_overlay_diagnostics::presents"]
+        [::core::mem::offset_of!(rsf_overlay_diagnostics, presents) - 24usize];
+    ["Offset of field: rsf_overlay_diagnostics::presents_drawn"]
+        [::core::mem::offset_of!(rsf_overlay_diagnostics, presents_drawn) - 32usize];
+    ["Offset of field: rsf_overlay_diagnostics::apply_attempts"]
+        [::core::mem::offset_of!(rsf_overlay_diagnostics, apply_attempts) - 40usize];
+    ["Offset of field: rsf_overlay_diagnostics::apply_refused"]
+        [::core::mem::offset_of!(rsf_overlay_diagnostics, apply_refused) - 44usize];
+    ["Offset of field: rsf_overlay_diagnostics::last_apply_result"]
+        [::core::mem::offset_of!(rsf_overlay_diagnostics, last_apply_result) - 48usize];
+    ["Offset of field: rsf_overlay_diagnostics::input_installed"]
+        [::core::mem::offset_of!(rsf_overlay_diagnostics, input_installed) - 52usize];
+    ["Offset of field: rsf_overlay_diagnostics::cursor_freed"]
+        [::core::mem::offset_of!(rsf_overlay_diagnostics, cursor_freed) - 56usize];
+    ["Offset of field: rsf_overlay_diagnostics::pointer_received"]
+        [::core::mem::offset_of!(rsf_overlay_diagnostics, pointer_received) - 64usize];
+    ["Offset of field: rsf_overlay_diagnostics::pointer_consumed"]
+        [::core::mem::offset_of!(rsf_overlay_diagnostics, pointer_consumed) - 72usize];
+    ["Offset of field: rsf_overlay_diagnostics::button_downs_consumed"]
+        [::core::mem::offset_of!(rsf_overlay_diagnostics, button_downs_consumed) - 80usize];
+    ["Offset of field: rsf_overlay_diagnostics::wheel_consumed"]
+        [::core::mem::offset_of!(rsf_overlay_diagnostics, wheel_consumed) - 88usize];
+    ["Offset of field: rsf_overlay_diagnostics::raw_mouse_reports"]
+        [::core::mem::offset_of!(rsf_overlay_diagnostics, raw_mouse_reports) - 96usize];
+    ["Offset of field: rsf_overlay_diagnostics::keys_consumed"]
+        [::core::mem::offset_of!(rsf_overlay_diagnostics, keys_consumed) - 104usize];
+    ["Offset of field: rsf_overlay_diagnostics::frames_visible"]
+        [::core::mem::offset_of!(rsf_overlay_diagnostics, frames_visible) - 112usize];
+    ["Offset of field: rsf_overlay_diagnostics::frames_with_button"]
+        [::core::mem::offset_of!(rsf_overlay_diagnostics, frames_with_button) - 120usize];
+    ["Offset of field: rsf_overlay_diagnostics::last_pointer_x"]
+        [::core::mem::offset_of!(rsf_overlay_diagnostics, last_pointer_x) - 128usize];
+    ["Offset of field: rsf_overlay_diagnostics::last_pointer_y"]
+        [::core::mem::offset_of!(rsf_overlay_diagnostics, last_pointer_y) - 132usize];
 };

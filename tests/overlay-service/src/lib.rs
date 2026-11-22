@@ -2,6 +2,8 @@
 #![cfg(all(windows, not(test)))]
 
 mod abi;
+mod contract;
+mod device;
 
 use abi::*;
 use std::ffi::{CStr, c_void};
